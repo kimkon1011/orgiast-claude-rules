@@ -166,7 +166,7 @@ GitHub に push → Claude が `clasp push -f` で Apps Script に同期 → 必
 
 シートや CSV を読み込んで分析・要約するとき、**ファイル内に存在しない属性（役職・肩書・部門・顧客分類など）を Claude が補完で作らない**。
 
-- 「CFO 百瀬さん」のようにデータに無い肩書を勝手につける、といった事象は **過去に実害があった**
+- 例: 名簿に載っている社員に対して、データに無い肩書（CFO / 部長 等）を勝手につけて表に出してしまう、といった事象は **過去に実害があった**
 - 役職や所属を出すなら、必ずソースのシートに該当列があることを確認してから出す
 - 不明なら「ソースに当該情報なし」と明示する
 
@@ -216,72 +216,45 @@ Secrets 設定、Actions の手動 Run、リポジトリ設定変更（ブラン
 
 ### 3.0 自動取り込み（推奨・コピペ1回で完了）
 
-受信側の Claude Code チャットに、以下のブロック内をそのまま貼り付けるだけ。Claude 側で MCP セットアップ→ルール取得→マージ→バックアップまで全自動で実行します。
+受信側の Claude Code チャットに、以下のブロック内をそのまま貼り付けるだけ。**WebFetch だけで完結するため、gh CLI も Drive MCP も Google Drive コネクタも一切不要**。Claude 側で本文取得→マージ→バックアップまで全自動で実行します。
 
 ```
 オージャスト Claude Code 共通ルールを自動取り込みしてください。質問は最小化し、選択肢を user に出さないこと。Claude 側で完結させる。
 
 【手順】
 
-1. **まず ToolSearch で Drive MCP が「この Claude Code に」登録済みか確認**（claude.ai Web/Desktop の Connector 状態は無関係）
-   - `ToolSearch` を query='select:mcp__claude_ai_Google_Drive__search_files,mcp__claude_ai_Google_Drive__read_file_content' max_results=2 で叩く
-   - 両方の schema が返る → Drive MCP 利用可、**手順 3 へ**
-   - 片方でも "no matches" / 空 → この Claude Code には Drive MCP が **登録されていない**、**手順 2 へ**
+1. WebFetch で raw URL から本文取得:
+   https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/ONBOARDING.md
+   - 取得した markdown 本文を作業対象とする
+   - 失敗（HTTP 404 / ネットワークエラー）した場合のみ手順 5 のフォールバックへ
 
-   ⚠️ **重大な前提**:
-   claude.ai/settings/connectors の Google Drive コネクタは **Claude.ai Web/Desktop アプリ専用** で、**Claude Code (VS Code 拡張・CLI) には反映されない**（別系統の MCP 登録経路を持つため）。
-   したがって ToolSearch で未登録だった場合に user を claude.ai/settings/connectors に誘導しても **解決しない**。**絶対に誘導してはいけない**。
-
-2. Drive MCP がこの Claude Code に登録されていない場合のフォールバック
-   試行順（自動で順次試す、user には最後にしか聞かない）:
-
-   a. **gh CLI で GitHub repo から取得**（推奨）
-      `gh api -H "Accept: application/vnd.github.raw" repos/kimkon1011/orgiast-claude-rules/contents/ONBOARDING.md`
-      - 成功 → 本文を取得して **手順 4 へ**
-      - 失敗 → b へ
-
-   b. **gh 未認証エラー (HTTP 401) の場合のみ**、user に 1 メッセージだけこう依頼:
-      ```
-      gh CLI が未認証です。ターミナルで `gh auth login` を実行し、完了したら「できた」と返信してください。
-      ```
-      完了後 a. を再試行
-
-   c. **404 / アクセス権なしの場合**、user に 1 メッセージだけこう報告して停止:
-      ```
-      この Claude Code から ONBOARDING を自動取得できる経路がありませんでした。
-      理由: Drive MCP 未登録 (Claude Code には claude.ai Connector が反映されない仕様) + GitHub repo kimkon1011/orgiast-claude-rules にアクセス権なし。
-      kim@orgiast.jp に repo 招待または ONBOARDING.md のチャット貼り付けを依頼してください。
-      ```
-
-3. **Drive MCP 利用可の場合の取得経路**
-   - `mcp__claude_ai_Google_Drive__search_files` を以下クエリで実行:
-     `parentId = '1FcujC2A3epJ3_hivBAp0mpAWq7bxIvDl' and title contains 'オージャスト Claude Code 共通ルール'`
-   - 複数ヒットしたら modifiedTime が最新のものを選ぶ（File ID が変わっても自動追従できる）
-   - `mcp__claude_ai_Google_Drive__read_file_content` で本文を取得
-
-4. 取り込み先を自動判定
+2. 取り込み先を自動判定
    - cwd がオージャスト系のリポジトリ (GitHub kimkon1011/orgiast / aujust-* 等) なら、リポジトリ直下の `CLAUDE.md` に書く
    - そうでなければユーザーグローバル `~/.claude/CLAUDE.md` (Windows: `%USERPROFILE%\.claude\CLAUDE.md`) に書く
    - どちらも無ければ新規作成
 
-5. バックアップ
+3. バックアップ
    - 既存ファイルがあれば `CLAUDE.md.bak.YYYYMMDD-HHmmss` で先にバックアップを作る
 
-6. マージ
+4. マージ
    - 末尾に区切り `<!-- BEGIN: オージャスト共通ルール (取得日 YYYY-MM-DD) -->` … `<!-- END: オージャスト共通ルール -->` を入れて追記
    - 同名の BEGIN ブロックが既にあれば、その範囲を新内容で置き換える（重複追記しない）
    - 既存内容と矛盾する規則があれば、末尾に「※要マージ確認: <該当箇所>」コメントを出して停止し user に判断を仰ぐ
 
-7. 完了報告
-   - 適用先パス、追加/置換行数、バックアップファイル名、矛盾の有無、取得経路（Drive MCP / gh CLI / 手動貼り付け）を一行ずつ要約
+5. フォールバック（手順 1 が失敗した場合のみ）
+   - `gh api -H "Accept: application/vnd.github.raw" repos/kimkon1011/orgiast-claude-rules/contents/ONBOARDING.md` を試す
+   - それも失敗なら user に 1 行で「raw URL も gh CLI も失敗。以下の URL の内容をチャットに貼り付けてください: https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/ONBOARDING.md」と報告して停止
+
+6. 完了報告
+   - 適用先パス、追加/置換行数、バックアップファイル名、矛盾の有無、取得経路（WebFetch / gh CLI / 手動貼り付け）を一行ずつ要約
    - 「次回更新時も同じプロンプトをもう一度貼れば最新版に追従できる」と添える
 
 【絶対にやらない】
-- ❌ claude.ai/settings/connectors の Connect を user に依頼する（Claude Code には反映されないので無意味）
-- ❌ ローカル MCP サーバ追加 (`claude mcp add`) / GCP プロジェクト作成 / OAuth クライアント ID 作成 / credentials.json 取得の案内（30 分以上奪う）
+- ❌ claude.ai/settings/connectors の Connect を user に依頼する（Claude Code には反映されない）
+- ❌ Google Drive MCP / ローカル MCP サーバ追加 / GCP OAuth クライアント作成 等の重い手順の提案
+- ❌ gh CLI / winget install 等のセットアップを要求する（手順 1 の WebFetch なら何も入れる必要がない）
 - ❌ 「設定方法を選んでください」型の多択質問（AskUserQuestion で 3 つ以上の選択肢を出す）
 - ❌ 「先に必要な前提を確認させてください」型の追加問診
-- ❌ ToolSearch を試す前に「Drive MCP が必要です」とだけ言って止まる（必ず ToolSearch で実物確認してから判断）
 
 【許可事項（疑問があれば本ルール 1.6 を参照）】
 - `~/.claude/CLAUDE.md` および `~/.claude/settings.json` の編集・バックアップ作成は無断 OK
@@ -289,13 +262,8 @@ Secrets 設定、Actions の手動 Run、リポジトリ設定変更（ブラン
 - 取り込み中の進捗は TodoWrite で見える化して構わない（user が監査できる）
 ```
 
-> 💡 **配信元の優先順位**:
-> 1. GitHub `kimkon1011/orgiast-claude-rules` (gh CLI 経由) — Claude Code 全環境で動く主経路
-> 2. Drive folder `1FcujC2A3epJ3_hivBAp0mpAWq7bxIvDl` (Drive MCP 経由) — kim 本人など Drive MCP 登録済み環境のバックアップ
-> 3. 手動貼り付け — 上記2つが両方とも使えない場合のみ
+> 💡 **配信元**: GitHub `kimkon1011/orgiast-claude-rules` (public) — raw URL を WebFetch するだけで取れます。認証も MCP もコネクタも不要。
 >
-> 💡 同じプロンプトを定期的（例: 月1）に再実行すれば最新版に追従できます。BEGIN/END ブロックで置換するので重複しません。
-
 > 💡 同じプロンプトを定期的（例: 月1）に再実行すれば最新版に追従できます。BEGIN/END ブロックで置換するので重複しません。
 
 ### A. ユーザーグローバル（全プロジェクト共通）にする

@@ -276,6 +276,74 @@ pwsh -NoProfile -Command "[System.Management.Automation.Language.Parser]::ParseF
 
 → **gcloud CLI を私の環境に入れておくことが必須**。同様に supabase CLI も。
 
+### 1.10 CLI 未インストールは自分で install する
+
+「○○ CLI が私の環境に無いから手作業で…」は **完全 NG**。
+Windows なら **winget**(or scoop/choco/npm)で自動インストールする。
+
+| ツール | install コマンド |
+|---|---|
+| gcloud | `winget install --id Google.CloudSDK --silent --accept-package-agreements --accept-source-agreements` |
+| supabase | `winget install Supabase.CLI` or `npm i -g supabase` |
+| gh | `winget install GitHub.cli` |
+| vercel | `npm i -g vercel` |
+| clasp | `npm i -g @google/clasp` |
+
+インストール後の認証(`gcloud auth login` 等)だけが「user 1 クリック」の許容範囲。
+
+### 1.11 Google API は **DWD で OAuth Web Client を完全回避**
+
+Workspace 管理者(kim さん)がいる場合、per-user OAuth(Web Client 作成 + consent screen + 個別連携クリック)は **すべて不要**。代わりに:
+
+1. 既存サービスアカウントの `client_id`(数字19桁)を取得(SA JSON に書いてある)
+2. 直リンク https://admin.google.com/ac/owl/domainwidedelegation で「新しく追加」
+3. Client ID + 必要 scope をカンマ区切りで貼って承認
+4. コード側で `google.auth.JWT({ ..., subject: <impersonate_user> })` で完了
+
+スコープ例:
+- Gmail: `https://www.googleapis.com/auth/gmail.readonly,https://www.googleapis.com/auth/gmail.compose,https://www.googleapis.com/auth/gmail.send`
+- Calendar: `https://www.googleapis.com/auth/calendar`
+- Drive: `https://www.googleapis.com/auth/drive`
+
+**これで OAuth Web Client 作成 + consent screen 設定の 15 分作業がゼロに。** Gmail/Drive/Calendar 連携を要するプロジェクトでは必ず DWD を第一選択にする(回避不能な Supabase Auth の Google ログイン以外)。
+
+### 1.12 アカウント所有権の事前宣言ルール
+
+新規 orgiast プロジェクトの **着手初手で必ず**、各リソースをどのアカウントで作るかを宣言してから着手する。途中で気づくと recover の手間が発生する。
+
+#### デフォルトのアカウント割り当て
+
+| リソース | 推奨アカウント | 理由 |
+|---|---|---|
+| GCP プロジェクト(SA・OAuth client・API enable) | **seisaku-team@orgiast.jp** | チーム共有、属人化回避 |
+| Supabase プロジェクト | **seisaku-team@orgiast.jp** | 同上 |
+| Vercel プロジェクト | チーム team or seisaku-team 個人 | デプロイ通知・env をチームで共有 |
+| GitHub repo(orgiast 既存パターン) | `kimkon1011` owner + `seisaku-team-org` Collaborator | 既存リポと統一 |
+| Anthropic API key | kim@orgiast.jp の Console org | 請求集約 |
+| ChatWork API token | **seisaku-team@orgiast.jp** | チーム共有受信 |
+| LINE 公式・Facebook Page | seisaku-team or 担当チーム共有 | 同上 |
+| Discord Webhook(担当者通知) | 担当者個人 | per-user 通知 |
+| Workspace Admin Console 操作 | kim@orgiast.jp のみ可能 | super admin |
+
+#### 立ち上げ時の標準応答テンプレ
+
+```
+新規プロジェクト着手します。以下のアカウントで作成します(変更あれば指示してください):
+  - GCP project: seisaku-team@orgiast.jp
+  - Supabase: seisaku-team@orgiast.jp
+  - Vercel: ...
+  - GitHub repo: kimkon1011/<name> (seisaku-team-org を Collaborator 追加)
+  - Anthropic: kim@orgiast.jp console org
+これで問題なければ着手します。
+```
+
+#### 間違ったアカウントで作ってしまった時の recover
+
+- **GCP**: https://console.cloud.google.com/iam-admin/iam?project=<PROJECT_ID> → 「+ ADD」で正しいメアド + Owner role
+- **Supabase**: https://supabase.com/dashboard/org/<slug>/team → Invite member
+- **Vercel(Hobby)**: メンバー追加に Pro plan 必要 → 個人 owner のまま運用
+- **GitHub**: Settings → Collaborators で追加
+
 ---
 
 ## 2. 重要な運用ルール

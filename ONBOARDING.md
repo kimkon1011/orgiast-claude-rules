@@ -10,15 +10,33 @@
 
 オージャストでは Claude Code を **「作業者の手間を最小化する自動実行エージェント」** として使います。Claude は次の2つの軸を最優先で守ること。
 
-### 1.1 できる作業は全部 Claude 側でやる（自動化原則）
+### 1.1 できる作業は全部 Claude 側でやる（徹底自動化原則）
 
 API / CLI / MCP / GitHub Actions など、Claude Code から実行可能な操作は **人間に手順を案内せず、Claude が直接実行する** こと。
 
-- やる: ファイル編集、コミット、PR 作成、`gh` コマンド、`gcloud` / `clasp` 等の CLI 実行、MCP（Google Drive / Sheets / Gmail / Calendar 等）経由のデータ取得・書き込み
+- やる: ファイル編集、コミット、PR 作成、`gh` コマンド、`gcloud` / `clasp` / `supabase` / `vercel` 等の CLI 実行、MCP（Google Drive / Sheets / Gmail / Calendar 等）経由のデータ取得・書き込み
 - やらない: 「以下のコマンドを実行してください」「Web UI を開いてここをクリックしてください」型の手順案内
-- **例外（人間にやってもらう）**: アカウント新規作成 / OAuth 同意 / 支払い操作 / 本番 DB の DDL paste（破壊的操作で人間の最終確認が必要なもの）
+- **例外（人間にやってもらう）**: アカウント新規作成 / OAuth Web Client 作成 / OAuth 同意ボタン / 支払い操作 / 本番 DB の DDL paste（破壊的操作で人間の最終確認が必要なもの）/ Workspace 管理者の DWD 委任設定
 
 迷ったら **「自分で実行する」を選ぶ**。失敗したらユーザーに報告して別アプローチを取る。
+
+#### 「手作業を依頼する前」の必須チェック5ステップ（順序厳守）
+
+```
+[必須] 手作業依頼を出す前に毎回:
+  1. その操作は API/CLI/MCP で可能か?  → 既存ツール調査(WebSearch/公式 docs)
+  2. CLI が無いなら ⇒ 自分でインストールする(scoop / choco / winget / npm i -g / pip)
+  3. インストール後の認証は ⇒ 「ログインコマンドだけ」を user に依頼(以後は全自動)
+  4. それでも完全自動化不能なら ⇒ 初めて手作業依頼(直 URL + screenshot で検証可能な手順)
+  5. 手作業に頼った時は ⇒ 終わった後「次回からはこの方法で自動化できる」を memory に追加
+```
+
+#### 「分からなければまず install」原則
+
+「○○ CLI が私の環境に無いから手作業で…」は **NG**。
+正しい行動: 「○○ CLI を `winget install` or `scoop install` or `npm i -g` でインストールしてから自動化する」。インストール自体が classifier に止められた場合のみ user に依頼してよい。
+
+過去事例: aujust-sales-automation セッションで gcloud CLI が無いことを理由に GCP プロジェクト作成・SA 発行・JSON ダウンロードを user に手作業依頼してしまい、本来 `gcloud projects create` / `gcloud iam service-accounts ...` で全自動化できたところを汚した。**この種の失敗を恒久禁止する。**
 
 ### 1.2 user に手作業を頼む前に必ず根本診断する
 
@@ -157,6 +175,106 @@ GitHub に push → Claude が `clasp push -f` で Apps Script に同期 → 必
 - classifier に止められた場合は、このルール（`~/.claude/CLAUDE.md` または ONBOARDING.md の本節）を参照として示せば通る
 
 **Why:** 毎回の承認待ちが体験を悪化させる。user が一度許可した時点で恒久ルール化されている。
+
+### 1.7 Claude Code hook を書くときの定石
+
+`~/.claude/settings.json` に hook を追加するときは下記を必ず守る:
+
+#### A. PowerShell hook の stdin は UTF-8 で読む
+
+`[Console]::In.ReadToEnd()` を直接使うと日本語 Windows のデフォルト Shift-JIS で解釈され、`cwd` に日本語パスが入っている UTF-8 JSON が壊れて `ConvertFrom-Json` が落ちる。下記のヘルパーをライブラリ化して使う:
+
+```powershell
+function Read-StdinUtf8 {
+  $stdin = [Console]::OpenStandardInput()
+  $ms = [System.IO.MemoryStream]::new()
+  $buf = [byte[]]::new(8192)
+  while (($n = $stdin.Read($buf, 0, $buf.Length)) -gt 0) { $ms.Write($buf, 0, $n) }
+  return [System.Text.Encoding]::UTF8.GetString($ms.ToArray())
+}
+```
+
+#### B. context 注入する hook は `async: true` を付けない
+
+`UserPromptSubmit` / `Stop` / `SessionStart` / `Notification` で `hookSpecificOutput.additionalContext` や `decision: block` を返したい場合、`"async": true` を付けると **Claude には何も渡らず黙殺される**。POST OK のログだけ残って debug 時に混乱する。同期 (async 未指定) + `timeout: 10`〜`60` で書く。`async: true` は副作用だけ起こす fire-and-forget 専用。
+
+#### C. `additionalContext` は VSCode UI に表示されない
+
+Claude は `additionalContext` を読むが、user は VSCode のチャット欄でそれを見られない。スマホ等の外部経路からのメッセージを `additionalContext` で注入するときは、**Claude 自身に「応答の冒頭で『📲 受信: 〜』と明示せよ」というディレクティブを additionalContext 中に書き込む** ことで、user の目に見える形で acknowledge させる。
+
+#### D. PowerShell linter (PSScriptAnalyzer) は false positive を量産する
+
+VSCode の赤線で「Missing '=' operator after key in hash literal」「Try statement is missing its Catch」「Missing closing '}'」が出ても、実体は問題ないことが多い。判定は本物のパーサで取る:
+
+```bash
+pwsh -NoProfile -Command "[System.Management.Automation.Language.Parser]::ParseFile('C:\\path\\file.ps1',[ref]\$null,[ref]\$null) | Out-Null; 'parse OK'"
+```
+
+リンタ警告を真に受けて構造を書き換えると却ってコード品質が下がる。
+
+#### E. settings.json 変更後はバックアップ + Claude Code 再起動
+
+`~/.claude/settings.json` を書き換えるときは `.bak.YYYY-MM-DD-purpose` 形式でバックアップしてから。hook script の中身は再起動不要だが、`async` フラグや `timeout` 等の **settings.json 自体の変更は Claude Code を再起動しないと完全には反映されない** ケースがある。
+
+### 1.8 プロジェクト立ち上げの「自動化可能/不可」分類
+
+新規 orgiast 系プロジェクトを立ち上げるとき、以下の分類に従って **自動化可能なものは絶対に user に手作業させない**。
+
+#### ✅ 完全自動化可能(これらを手作業依頼したら違反)
+
+| 操作 | ツール |
+|---|---|
+| GCP プロジェクト作成 | `gcloud projects create` |
+| Cloud API 有効化(Sheets/Drive/Gmail 等) | `gcloud services enable sheets.googleapis.com ...` |
+| サービスアカウント作成 + JSON キー | `gcloud iam service-accounts create` + `keys create` |
+| IAM ロール付与 | `gcloud projects add-iam-policy-binding` |
+| GitHub repo 作成・secrets・Collaborator | `gh repo create` / `gh secret set` / `gh api` |
+| Vercel link / env / deploy | `vercel link` / `vercel env add` / `vercel --prod` |
+| Supabase migration / link / type 生成 | `supabase login` / `link` / `db push` / `gen types` |
+| Discord 通知 | Webhook URL を保存しておけば API 1発 |
+| Google Sheets / Drive / Gmail データ操作 | サービスアカウント + googleapis、または DWD |
+
+#### ⚠ 自動化不可だが超軽量(user の 1 クリック / 1 入力で済む)
+
+| 操作 | 軽量化策 |
+|---|---|
+| 各種サービスへの **初回ログイン** (`gcloud auth login`, `gh auth login` 等) | 1回だけ、その後 Claude 完結 |
+| **OAuth Web Client 作成**(GCP Console UI でしかできない) | DWD で回避できる場合は回避する(下記) |
+| **OAuth 同意の Allow ボタン** | 直 URL を提示して1クリックのみ |
+| **API トークン発行**(ChatWork / LINE 等のパスワード認証必要なもの) | 発行ページの直 URL + トークン貼り付け箇所だけ案内 |
+| 第三者サービスの **新規アカウント作成**(電話/メール認証必要) | 説明は最小、登録 URL を直で渡す |
+| **Workspace 管理者の DWD 委任設定** | 1 回だけ、その後 OAuth 不要 |
+| **支払い情報入力** | URL のみ提示、こちらは触らない |
+
+#### 🚫 「OAuth Web Client 作成」を回避する代替策
+
+- **Gmail / Drive 等 Google API の per-user OAuth は Domain-wide Delegation (DWD) で代替可能**
+  - kim さんが Workspace 管理者 → Admin Console で SA に scope 委任を 1 回設定すれば、OAuth Web Client 不要
+  - サーバ側で任意ユーザー(seisaku-team@orgiast.jp 等)を impersonate できる
+- **Supabase Auth の Google ログインは OAuth Web Client 必須** ← これは回避策なし、観念して GCP Console UI で作る
+
+### 1.9 プロジェクト立ち上げの標準シーケンス
+
+新規 orgiast 系プロジェクトの定型フロー。**user に頼むのは最後の「6.」だけ** にする。
+
+```
+1. gcloud / gh / vercel / supabase / clasp CLI が認証済みか確認
+   → 未認証なら「<tool> auth login」1回だけ user に依頼
+2. GCP プロジェクト作成 / API 有効化 / SA 作成 / JSON 取得 → 全部 gcloud で完結
+3. Supabase プロジェクト → CLI 作成(初回 org 作成のみ手動、それも他プロジェクトと共用なら不要)
+4. GitHub repo → gh で作成 + push
+5. Vercel link + env 投入 + deploy → vercel CLI
+6. ★最後にここだけ★ 通知/連携系のトークン取得(ChatWork / LINE / Facebook / Discord Webhook)
+   → user が web UI で取得 → 貼り付けてもらう → こちらで env 投入 + 再デプロイ
+```
+
+**過去に user に手作業を頼んだ操作で、本来 1~5 の範囲だったもの**:
+- GCP プロジェクト作成(本来 gcloud で自動化可能、私の gcloud 未インストールが原因で手作業依頼してしまった)
+- Sheets API / Drive API 有効化(同上)
+- サービスアカウント JSON ダウンロード(同上)
+- Vercel env 投入(本来自動化済みだが classifier に止められて user 承認要求した)
+
+→ **gcloud CLI を私の環境に入れておくことが必須**。同様に supabase CLI も。
 
 ---
 

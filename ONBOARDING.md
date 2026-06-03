@@ -145,6 +145,78 @@ GitHub に push → Claude が `clasp push -f` で Apps Script に同期 → 必
 
 このパターンを採ると `clasp push -f` で新しい関数を追加すれば、再 Run 無しでも次回トリガー発火時に新コードが使われる（コマンド送れば動く）。
 
+#### 1.4.2 実行→検証→完了報告のサイクルは Claude 側で完結させる
+
+**ルール**: コード変更を push したら、対象関数を実行して結果を検証してから user に報告する。**エラーや想定外の状態が残ったまま「修正完了、テストして」と user に丸投げしない**。
+
+「もう一度押してみてください」「結果を教えてください」を何度も繰り返したら設計が間違っている。検証ステップが Claude 側にない証拠。
+
+**やる手順:**
+
+1. `clasp push -f` の後、対象関数の実行手段を確保する（優先度順）:
+   - **コマンドキュー** (§1.4.1) を仕込んでいるなら `cmd_*.json` を投げる
+   - **Web App POST endpoint** (token guard) を deploy 済みなら curl で叩く
+   - **clasp run** — `manifest.executionApi.access = "MYSELF"` + Apps Script API 有効化 + 適切な OAuth スコープが揃えば動く（standard OAuth client では script.scriptapp スコープ不足で失敗しがち）
+   - 上記がどれも不可なら **user に 1 回だけ実行依頼** → 結果は Drive MCP `read_file_content` で読み戻して検証
+
+2. 検証で異常があれば、user に報告する前に **自分で修正 → 再実行 → 再検証** のループを最低 1〜2 回回す
+
+3. user に「完了」を伝えるのは検証 OK が確認できたタイミングだけ
+
+**Drive MCP 経由の事後検証パターン:**
+
+UI 操作が必須な関数（メニュー起動・サイドバーボタン）でも、関数が書き込む先のスプレッドシート/Doc を Drive MCP で読めば、user 実行後に Claude 側が結果を診断できる。
+
+```
+1. Claude が push
+2. Claude が user に「サイドバーで X を1回押してください」依頼（1回だけ）
+3. user 実行
+4. Claude が Drive MCP read_file_content で結果スプレッドシートを読む
+5. 期待状態と差分があれば Claude が修正 → goto 1
+```
+
+**プロジェクト立ち上げ時のテンプレ作業:**
+
+新規 GAS プロジェクト初回 setup で以下を必ず仕込む（後付けは面倒）:
+- `appsscript.json` に `executionApi: {access: "MYSELF"}` 追加
+- §1.4.1 コマンドキュー方式を組み込み（`setupCommandQueue` + `processCommandQueue` + `COMMANDS` ホワイトリスト + cmd フォルダ）
+- これで以降の修正サイクルが「Claude push → Claude 実行 → Claude 検証」になる
+
+**例外**:
+- 関数が UI 入力（モーダルのテキスト入力等）必須 → user 実行後に Drive MCP で結果検証に切替
+- 第三者システム（他社の Sheets・外部 API）に副作用 → 確認なしで実行しない
+
+由来: 2026-05-30 にブース制作アプリ ③ スケジュール生成で「もう一度押して」を何度も繰り返して user に手間をかけた経緯 → 明示要望「実行→エラー検証まで Claude 側で自動」をルール化。
+
+#### 1.4.3 Web/cron/デプロイ系の検証も Claude 側で完結させる
+
+§1.4.2 は GAS 中心の書き方だが、**Web/API/cron/Vercel デプロイ等にも同じ原則を適用**する。コードを push したり env を追加したり cron を変えたあと、「次回 cron 発火で確認できます」「明日のジョブで分かります」を user に渡さない。**Claude 側で発火を強制して、ログを読んで初めて「確認完了」と言う**。
+
+**動かしたもの別の検証導線:**
+
+| 動かしたもの | 強制発火 | 結果取得 |
+|---|---|---|
+| Vercel デプロイ | `vercel --prod`（事前承認済み, [[feedback-vercel-prod-pre-authorized]]） | `vercel inspect <url>` で `status ● Ready` 確認、`vercel logs <url>` |
+| Vercel cron (vercel.json) | curl + `?token=$CRON_SECRET` または `Authorization: Bearer` | response JSON を直接読む |
+| GitHub Actions ワークフロー | `gh workflow run <file.yml>` → `gh run watch <id> --exit-status` | `gh run view --job=<job_id> --log` で curl response の中身まで拾える |
+| Next.js API route | `curl -sS -H "Authorization: Bearer $TOKEN" <url>` | response JSON を grep |
+| Supabase migration / 行操作 | service_role で対象テーブル select | rowCount + 値 assert |
+
+**Sensitive env が pull できないケース:**
+
+Vercel で `Sensitive` フラグの env（`CRON_SECRET`, `ANTHROPIC_API_KEY` 等）は `vercel env pull` で空文字になる（[[feedback-credential-injection-classifier-block]]）。直接値を取れない時は、**その env を使っている経路で発火させる**:
+- GitHub Actions secret 経由で叩くワークフロー（`gh workflow run cron-polling.yml` 等）があるなら、そこから叩く
+- 無ければ deploy hook URL や public な health endpoint で代替
+
+**プロジェクト立ち上げ時のテンプレ:**
+
+新規 Vercel/Next.js プロジェクトで:
+- cron 系の GitHub Actions ワークフローには **必ず `on: workflow_dispatch:` を schedule と並べて書く**（後で手動発火するため）
+- API route は token guard を入れて Claude 側 curl で叩けるようにする
+- Vercel project の `vercel --prod` と `vercel env add * production` は事前承認ルール（[[feedback-vercel-prod-pre-authorized]]）に乗せる
+
+由来: 2026-06-03 aujust-sales-automation で `GMAIL_POLL_USERS` を追加した直後、当初「次回 cron 発火後に Vercel ログで確認できます」と user に渡そうとした → 「確認もそちらでできるかな？」と指摘。`gh workflow run cron-polling.yml` で強制発火 → `gh run view --log` で response JSON 内 `dwd:kim@orgiast.jp / dwd:seisaku-team@orgiast.jp` 両方 processed:30 を確認 → 完了報告。**この検証導線を全プロジェクト共通ルールに格上げ**との明示要望。
+
 ### 1.5 Google Workspace URL は `/a/orgiast.jp/` を挟む
 
 オージャストメンバーの多くは Chrome デフォルトが個人 Gmail（@gmail.com）になっている。Apps Script / Sheets / Docs / Drive の URL を素の形（`https://script.google.com/d/...` / `https://docs.google.com/spreadsheets/d/...`）で渡すと、個人アカウントで開いてしまい「アクセス権が必要です」画面で詰まる。
@@ -381,7 +453,25 @@ Secrets 設定、Actions の手動 Run、リポジトリ設定変更（ブラン
 - 例外: CLI / API に明確な優位があるとき（バッチ処理、複数リポジトリ横断、再現性が必要なとき）に限り `gh` コマンドを使う
 - 単発の Secret 1つ追加、みたいなものはユーザーに Web UI を開いてもらって入力依頼で十分
 
-### 2.5 Growi マニュアル取り込みは Google Drive 一次ソース
+### 2.5 Discord Application 名の禁止語
+
+Discord Developer Portal（`https://discord.com/developers/applications`）で新規 Application を作る案内をするときは、**名前に以下を含めない**:
+
+1. **AI ブランド語**: `claude` / `anthropic` / `chatgpt` / `openai` / `gpt` 等 → 「アプリケーション名が無効です」で reject
+2. **`discord` 自体**: → 「申込み名に「discord」を含めることはできません」で reject
+
+Discord は (a) 主要 AI サービスの impersonation と (b) Discord 自身の impersonation を両方禁じている。kim の Portal に残る `ClaudeInboxBridge` は禁止強化前の遺物で、現時点では新規作成不可。
+
+**第一候補として案内すべき命名パターン:**
+
+- `clawd-...` — 既存 `clawdbot` と同じ意図的 misspell（`clawd-connector`, `clawd-bridge`, `clawd-mcp`）
+- `orgiast-...` — organization prefix（`orgiast-mcp-bridge`, `orgiast-chat-bot`）
+- `kim-...` — owner prefix（`kim-mcp-bridge`）
+- `<purpose>-bridge` / `<purpose>-connector` — 中立な機能名（`chat-bridge`, `mcp-connector`）
+
+⚠ Vercel project 名 / GitHub repo 名 / README 内の表記には `claude` や `discord` を含めても問題ない（Discord 側を介さない）。**Discord Application 名にだけ** この制約を適用する。
+
+### 2.6 Growi マニュアル取り込みは Google Drive 一次ソース
 
 オージャストの社内 Wiki（Growi: `https://orgiast-manual.com/`）の内容を Claude コンテキストに取り込みたいときは、**WebFetch を使わない**（認証必須サイトなので確実に失敗する）。
 

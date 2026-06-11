@@ -187,6 +187,8 @@ GitHub に push → Claude が `clasp push -f` で Apps Script に同期 → 必
 
 過去事例 (2026-06-11): 学会DB同期 GAS で `setupColumns` と `installCommandQueue` を別関数として用意 → ユーザーから「**全ルール共通の絶対ルールにしてください**」と要望 → `setupOnce()` 1 つに統合 + 全プロジェクト必須に格上げ。
 
+過去事例 (2026-06-11): 決算書リンク取込 GAS (Gmail添付の決算書PDF→Drive保存→共有リンク→決算管理シート書込み) で、Claude がキュー未組込のまま push し `importAndInspect` を **2回 ▶要求** → さらに `clasp run-function` を試して "deploy as API executable" 失敗 → 事後でキューを retrofit し **計3クリック** させてしまった。ユーザー「**そちらでできないのかな**」「**今後はすべてに適用されるルールに**」。**教訓: 最初の push にキューを含め、初回作業 (取込・書込み等) を `setupOnce` に畳めば 1 クリックで完結した。「まず動かして後でキュー」は retrofit であり禁止。GAS で関数実行が要る時点で、設計の最初からキュー前提で書く。**
+
 ##### 必須実装テンプレ (新規 GAS プロジェクトで必ずコピー)
 
 ```javascript
@@ -301,6 +303,23 @@ mcp__claude_ai_Google_Drive__create_file({
 - 1 分より短いトリガー間隔
 - **`setupOnce` を分割して 2 click にする** (1.4.1 違反)
 - **コマンドキュー組み込みを「事後対応」「優先度低」として後回しにする** (絶対ルール違反)
+- **`ScriptApp.getProjectTriggers().forEach(deleteTrigger)` を無条件で実行する** (processCommandQueue トリガーを巻き添え削除 → キュー死亡 → user に追加 ▶ click を要求するハメに)
+
+##### トリガー削除は必ず handlerFunction 名でフィルタする
+
+別の自動同期トリガー (例: `installTriggers` で 1 時間毎の `syncAll` を入れ替える) を仕込む関数では、**ホワイトリストで対象関数だけを削除**する。`processCommandQueue` トリガーは絶対に巻き添えにしてはいけない。
+
+```javascript
+// ❌ NG: 全削除 (processCommandQueue まで消える)
+ScriptApp.getProjectTriggers().forEach(function(t) { ScriptApp.deleteTrigger(t); });
+
+// ✅ OK: handlerFunction 名でフィルタ
+ScriptApp.getProjectTriggers().forEach(function(t) {
+  if (t.getHandlerFunction() === 'syncAll') ScriptApp.deleteTrigger(t);
+});
+```
+
+過去事例 (2026-06-11): 学会DB同期 GAS の `installTriggers` が `ScriptApp.getProjectTriggers().forEach(deleteTrigger)` で全削除 → cmd queue の 1分トリガーまで消えてキュー死亡 → 復旧で user に追加 1 click を要求 → §1.4.1 の「1 click のみ」ルール違反。
 
 #### 1.4.2 実行→検証→完了報告のサイクルは Claude 側で完結させる
 

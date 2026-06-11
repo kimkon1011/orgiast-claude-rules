@@ -174,47 +174,133 @@ GitHub に push → Claude が `clasp push -f` で Apps Script に同期 → 必
 
 「1回 Run を押してください」までは許容。「2回目以降も毎回 Run を押してください」になっていたら設計が間違っている → トリガー or 別ファイル経由に組み直す。
 
-#### 1.4.1 標準実装: コマンドキュー方式（全GAS共通）
+#### 1.4.1 Drive コマンドキュー方式は **全 GAS プロジェクト必須** (絶対ルール、2026-06-11 強化)
 
-「1回 Run」で済ませる標準実装。**全 GAS プロジェクトでこのパターンを組み込む**。
+**新規 GAS プロジェクト立ち上げ時、コマンドキュー方式を必ず組み込む**。「事後で組み込む」「優先度低い」は禁止。プロジェクトの最初の clasp push に含めること。
 
 仕組み:
 - スクリプト側に **1分ごとの time-based トリガー** を仕込み、専用 Drive フォルダの `cmd_*.json` を見張る
 - Claude が Drive MCP で `cmd_*.json` を投げる → 1分以内にトリガーが拾って実行 → 結果を `result_*.txt` で同フォルダに書き戻し
-- 初回 1 クリック (`setupCommandQueue` の ▶実行) で OAuth 同意 → 以降は **手作業ゼロ**
+- 初回 1 クリック (`setupOnce` の ▶実行) で OAuth 同意 + フォルダ作成 + トリガー設置 → 以降は **手作業ゼロ**
 
-要素:
+**初回 1 click をさらに減らす方法は無い** (Apps Script の OAuth 同意モデルは編集画面でのユーザー操作必須)。逆に言えば、この 1 click を最大限活用するため、**`setupOnce()` 1 つに全プロジェクト初期化を集約** すること。「先に setupColumns、次に setupCommandQueue」のように分けてはいけない。
 
-1. **専用 Drive フォルダ**: プロジェクトごとに `claude-<project-slug>-cmds`（例: `claude-orgiast-kado-cmds`）。folder ID を `Code.gs` に定数として埋め込む
-2. **`COMMANDS` ホワイトリスト**: 実行可能関数名 → 関数オブジェクトのマップ。**動的呼び出し (eval / `this[name]()`) 禁止**、明示登録だけ
-3. **`setupCommandQueue()`**: ユーザーが 1 回だけ ▶実行 する関数。中で `ScriptApp.newTrigger('processCommandQueue').timeBased().everyMinutes(1).create()` を打つ。「今すぐ走らせたい処理」も同じ Run で実行
-4. **`processCommandQueue()`**: トリガーが 1 分ごと発火。フォルダ内 `cmd_*.json` を全部読み、ホワイトリストの関数だけ実行、結果を `result_<id>.txt` で書き戻し、`cmd_*.json` は `setTrashed(true)`
-5. **`appsscript.json` の `oauthScopes`**: 最低限 `spreadsheets`, `drive`, `script.scriptapp` を宣言
+過去事例 (2026-06-11): 学会DB同期 GAS で `setupColumns` と `installCommandQueue` を別関数として用意 → ユーザーから「**全ルール共通の絶対ルールにしてください**」と要望 → `setupOnce()` 1 つに統合 + 全プロジェクト必須に格上げ。
 
-ファイル形式（Drive MCP からの投げ方）:
+##### 必須実装テンプレ (新規 GAS プロジェクトで必ずコピー)
 
-```json
-// cmd_<unique>.json (text/plain, disableConversionToGoogleType: true で投げる)
-{"command": "fix_kp_new_schema", "args": []}
+```javascript
+// Setup.gs
+const CMD_FOLDER_NAME = 'claude-<project-slug>-cmds';
+
+function _COMMANDS_() {
+  return {
+    bootstrap: function(args) { return bootstrap(args[0], args[1]); },
+    // ... プロジェクト固有のホワイトリスト関数をここに登録
+  };
+}
+
+function setupOnce() {
+  // 1. プロジェクト固有のセットアップ (シート列追加など)
+  const projResult = doProjectSpecificSetup_();
+  // 2. コマンドキュー (絶対に省略しない)
+  const queueResult = installCommandQueue();
+  return { project: projResult, cmd_queue: queueResult };
+}
+
+function installCommandQueue() {
+  const folders = DriveApp.getFoldersByName(CMD_FOLDER_NAME);
+  const folder = folders.hasNext() ? folders.next() : DriveApp.createFolder(CMD_FOLDER_NAME);
+  PropertiesService.getScriptProperties().setProperty('CMD_FOLDER_ID', folder.getId());
+  ScriptApp.getProjectTriggers().forEach(function(t) {
+    if (t.getHandlerFunction() === 'processCommandQueue') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('processCommandQueue').timeBased().everyMinutes(1).create();
+  return { folder_id: folder.getId(), folder_url: 'https://drive.google.com/a/orgiast.jp/drive/folders/' + folder.getId() };
+}
+
+function processCommandQueue() {
+  const folderId = PropertiesService.getScriptProperties().getProperty('CMD_FOLDER_ID');
+  if (!folderId) return;
+  const folder = DriveApp.getFolderById(folderId);
+  const files = folder.getFiles();
+  const commands = _COMMANDS_();
+  while (files.hasNext()) {
+    const file = files.next();
+    if (file.getName().indexOf('cmd_') !== 0) continue;
+    let result;
+    try {
+      const cmd = JSON.parse(file.getBlob().getDataAsString());
+      const fn = commands[cmd.command];
+      if (!fn) throw new Error('Unknown command: ' + cmd.command);
+      result = { ok: true, command: cmd.command, result: fn(cmd.args || []), ts: new Date().toISOString() };
+    } catch (e) {
+      result = { ok: false, error: String(e), stack: e.stack, ts: new Date().toISOString() };
+    }
+    const resultName = 'result_' + file.getName().replace(/^cmd_/, '').replace(/\.json$/, '.txt');
+    folder.createFile(resultName, JSON.stringify(result, null, 2), MimeType.PLAIN_TEXT);
+    file.setTrashed(true);
+  }
+}
 ```
 
+##### `appsscript.json` 必須 scope
+
 ```json
+{
+  "oauthScopes": [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/script.scriptapp",
+    "https://www.googleapis.com/auth/script.external_request"
+  ]
+}
+```
+
+##### kim 側の手作業 (各プロジェクトで 1 回だけ)
+
+[GAS エディタ](https://script.google.com/a/orgiast.jp/d/<SCRIPT_ID>/edit) を開く → 関数選択 **`setupOnce`** → ▶ 実行 → OAuth 承認
+
+これで OAuth + フォルダ + トリガー が一気に揃う。2 回目以降の ▶ 実行は不要。
+
+##### Claude 側の運用 (2 回目以降)
+
+```javascript
+// 例: bootstrap を呼ぶ
+mcp__claude_ai_Google_Drive__create_file({
+  parentId: '<CMD_FOLDER_ID>',
+  name: 'cmd_bootstrap.json',
+  mimeType: 'text/plain',
+  textContent: JSON.stringify({command: 'bootstrap', args: ['ref', 'sbp_...']}),
+  disableConversionToGoogleType: true
+});
+// 1 分待って result_bootstrap.txt を read_file_content で読む
+```
+
+##### ファイル形式
+
+```json
+// cmd_<unique>.json
+{"command": "syncAll", "args": []}
+
 // result_<unique>.txt
-{"ok": true, "result": {...}, "ts": "2026-05-25T11:35:36Z"}
+{"ok": true, "command": "syncAll", "result": {...}, "ts": "2026-06-11T..."}
 ```
 
-セキュリティ:
-- ホワイトリスト方式で実行可能関数を制限（任意関数呼び出し不可）
-- フォルダはオーナーだけが書き込み権限を持つ（公開しない）
-- コマンドは JSON のみ、コード文字列は受け取らない
-- 機密データ（API キー等）はコマンドファイルに含めない（Script Properties から読む）
+##### セキュリティ
 
-やってはいけない:
-- ホワイトリストに無い関数を `eval` や `this[name]()` で呼ぶ
+- **ホワイトリスト方式**: `_COMMANDS_()` に登録された関数しか呼べない。任意コード実行不可
+- フォルダはオーナーだけが書き込み権限、公開しない
+- 機密データ (API キー等) はコマンドに含めない、**Script Properties から読む**
+- 1 分より短いトリガー間隔は使わない (Apps Script の trigger quota を消費)
+
+##### やってはいけない
+
+- ホワイトリストに無い関数を `eval` / `this[name]()` で呼ぶ
 - フォルダを「リンクを知っている全員」共有にする
-- 1 分より短いトリガー間隔（Apps Script の trigger quota を消費）
-
-このパターンを採ると `clasp push -f` で新しい関数を追加すれば、再 Run 無しでも次回トリガー発火時に新コードが使われる（コマンド送れば動く）。
+- 1 分より短いトリガー間隔
+- **`setupOnce` を分割して 2 click にする** (1.4.1 違反)
+- **コマンドキュー組み込みを「事後対応」「優先度低」として後回しにする** (絶対ルール違反)
 
 #### 1.4.2 実行→検証→完了報告のサイクルは Claude 側で完結させる
 

@@ -737,6 +737,62 @@ user に手作業を依頼する全ての step で、以下の 4 要素を **省
 
 **過去事例 (2026-06-17):** aujust-sales-automation の Discord bot 追加で、 user から「メンバーとロール どっちも入れる？」「権限はどれを設定？」と 2 回の逆質問が来た。 ルール化前のため Claude 側が ステップ案内で メンバー/ロール の選択や 「触らない項目」 を書いていなかったのが原因。
 
+#### 1.5.3 共有 config (DwD/IAM/DNS/Secrets/SaaS) を変更する手順を user に渡す前に 「既存があるか」 を必ず確認する (絶対ルール、2026-06-23 新設)
+
+複数の機能が **同じリソースを共有** する設定 — Workspace Domain-wide Delegation の Client ID、 GCP IAM の Role binding、 GitHub Secrets、 DNS レコード、 Slack/Discord 連携設定、 Vercel env var、 Supabase RLS policy、 Drive ファイル共有、 等 — を変更する手順を user に渡す前に、 **既存エントリの有無と内容を確認** する。
+
+**目的**: user が手順通りに進めて 「上書き」 系の UI に遭遇したり、 既存設定を壊したりするのを防ぐ。
+
+**ルール**:
+
+1. **可能なら API で先に取得**: 例 GitHub Secrets は `gh secret list`、 Vercel env は `vercel env ls`、 Drive 共有は `permissions.list`、 Supabase policy は `pg_policies` query、 IAM は `gcloud projects get-iam-policy`
+2. **API が無い手作業領域** (Workspace DwD など) は user に **先に既存状態のスクショ送付を依頼**してから手順を作る
+3. **常に 「上書き禁止 / merge せよ」 を冒頭に明示**: 「すでに同 ID が登録されている可能性があるので、 そのときは『上書き』 ではなく以下の手順で…」 と事前に書く
+4. **手順内で 「上書き」 系 UI トグルに遭遇したら、 デフォルト OFF のまま放置」 を §1.5.2 の 「触らない項目」 として列挙**
+5. **scope/policy の APPEND は merge 後の完全リストを Claude が作る**。 user に 「既存 X + 新 Y を合わせてください」 と丸投げしない
+
+**判定: 「既存がある可能性」 の高い操作 (必ず事前確認):**
+
+- Workspace Domain-wide Delegation (1 つの SA が複数アプリで使われがち)
+- GCP IAM Role binding (1 user/SA が複数 role 持つ)
+- GitHub repo Secrets (CI で既に使われている可能性)
+- Vercel env var (同名 key が既存)
+- Drive ファイル/フォルダ共有 (権限重複)
+- Cloudflare/Route53 DNS レコード (同 host で複数レコード)
+- Slack/Discord 連携設定 (既存 bot/webhook の上書き)
+
+**やってはいけない例 (2026-06-23 過去事例: DwD Client ID 追加で 「すでに存在します」 警告):**
+
+```
+❌ 「Workspace admin で Client ID 110910358431552197763 を追加してください。
+   Scope は: ...」
+   (既存に同 ID が 別アプリ (drivecopy) で登録されている可能性を未確認)
+   → user が dialog で 「すでに存在します」 警告に遭遇 → 「これは？」 と確認往復が発生
+   → さらに 上書きトグルを ON にすると 既存 scope (gmail.compose 等) が消えて drivecopy が壊れる
+```
+
+```
+✅ 「Workspace admin で Client ID 110910358431552197763 の DwD scope を追加します。
+    まず https://admin.google.com/ac/owl/domainwidedelegation を開き、
+    同じ ID で登録されている既存行があれば その行をクリック → 既存 scope のスクショを送付。
+    こちらで 既存 + 新規 を merge した 完全 scope リスト を作成して差し戻します。
+    既存行が無ければそのまま追加。
+    どちらの場合も dialog 内の 『既存のクライアント ID を上書きする』 トグルは絶対に OFF のまま」
+```
+
+**手順テンプレ** (共有 config 変更で user に依頼する時の冒頭):
+
+```
+※ この設定はすでに別アプリで使われている可能性があるので、 手順実行前に下記 1 ステップ:
+1. <URL> を開く
+2. 同じ ID/Key を持つ既存行があれば、 その行をクリック → 内容スクショで送付
+3. スクショ受領後、 こちらで merge 後の完全な値を作成 → STEP 4 以降を案内
+
+既存行が無ければ そのまま追加で OK (この場合 STEP 2 はスキップ)。
+```
+
+**Why**: 共有 config の 「上書き」 トグルは UI 上はクリック 1 つだが、 既存依存サービスを silent break する破壊力がある。 「user が手順通りに進めた結果、 別アプリが壊れる」 のは Claude 側の事前確認漏れの責任。 §1.5.2 が 「触らない項目を明示」 で迷いを減らすルールに対して、 §1.5.3 は 「既存があるかの確認を case by case で先回り」 で破壊リスクを潰すルール。
+
 ### 1.6 Claude 設定ファイル (`~/.claude/settings.json` 等) は無断編集してよい
 
 `~/.claude/settings.json`、`~/.claude/settings.local.json`、`~/.claude/CLAUDE.md`、およびプロジェクト配下の hooks 設定ファイルは、**user の明示承認なしで Claude が直接編集してよい**（フック追加、permissions 追加、MCP サーバ登録、env 変数追加、等）。

@@ -143,6 +143,15 @@ const auth = getGoogleAuthClient(process.env.GOOGLE_IMPERSONATE_EMAIL);
 - ❌ scope を `drive.file` にする → DWD では権限不足、`drive` フル必須
 - ❌ `cachedClient` で subject 違いを使い回す → 別 user impersonate が前回 user で動く事故。subject ごとに Map キャッシュ
 - ❌ Workspace Admin 操作を「過剰な依頼」と勘違いして避ける → DWD は Workspace Admin にしかできない、本当の例外
+- ❌ **subject 付き JWT に DWD 未許可の scope を含める**（2026-06-29 追加）
+  - DWD authorization は **要求された全 scope が許可リストに含まれている**ことを要求する厳格マッチ
+  - `calendar.events.readonly` 等が DWD 未許可なのに JWT scope に含まれてた → `unauthorized_client: ... not authorized for any of the scopes requested` で全 API call が即失敗
+  - 対策: `getGoogleAuthClient(subject)` で **subject あり時は DWD 許可 scope のみ**、なし時は通常 SA 全 scope を使い分ける
+    ```typescript
+    const scopes = subject
+      ? ['drive', 'spreadsheets']  // DWD 許可分のみ
+      : ['drive', 'spreadsheets', 'calendar.events.readonly'];  // SA 自身は全 scope OK
+    ```
 
 ##### 過去事例（2026-06-29）
 

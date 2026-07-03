@@ -1,0 +1,13 @@
+{
+  "name": "orgiast",
+  "owner": {
+    "name": "kimkon1011"
+  },
+  "plugins": [
+    {
+      "name": "orgiast-rules",
+      "source": "./",
+      "description": "オージャスト全社共通の Claude Code スキル集（GAS コマンドキュー立ち上げ / Growi 取り込み / 2段検証）"
+    }
+  ]
+}

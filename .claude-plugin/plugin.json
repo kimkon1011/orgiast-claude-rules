@@ -1,0 +1,8 @@
+{
+  "name": "orgiast-rules",
+  "description": "オージャスト全社共通の Claude Code スキル集: GAS 立ち上げ(コマンドキュー)、Growi マニュアル取り込み、変更後2段検証",
+  "version": "1.0.0",
+  "author": {
+    "name": "orgiast.jp"
+  }
+}

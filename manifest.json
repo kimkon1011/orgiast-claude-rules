@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "updatedAt": "2026-07-06",
+  "hubFolderId": "1RLYbK6CKyPWRJsG6LY0WB9OzlbFYSFvw",
+  "folders": {
+    "rules": "1cNOSlo8pcrhXiRMRK_WD3O5IW-K9lYX4",
+    "skills": "1oSlYjJdlIy5GRYa3-AasAeybARKh4v-E",
+    "knowledgeInbox": "1AyZcrlK9JCNPUkhKCBOezet9a2QoSwK2"
+  },
+  "files": [
+    { "title": "ONBOARDING.md", "in": "hub", "localTarget": "ONBOARDING ローカルマスター" },
+    { "title": "CLAUDE.md.template", "in": "hub", "localTarget": "~/.claude/CLAUDE.md (無い場合のみ)" },
+    { "title": "gas.md", "in": "rules", "localTarget": "~/.claude/rules/gas.md" },
+    { "title": "gas-project-setup.md", "in": "skills", "localTarget": "~/.claude/skills/gas-project-setup/SKILL.md" },
+    { "title": "growi-fetch.md", "in": "skills", "localTarget": "~/.claude/skills/growi-fetch/SKILL.md" },
+    { "title": "deploy-verify.md", "in": "skills", "localTarget": "~/.claude/skills/deploy-verify/SKILL.md" },
+    { "title": "rules-sync.md", "in": "skills", "localTarget": "~/.claude/skills/rules-sync/SKILL.md" },
+    { "title": "share-knowledge.md", "in": "skills", "localTarget": "~/.claude/skills/share-knowledge/SKILL.md" }
+  ],
+  "convention": "同タイトルが複数ある場合は modifiedTime 最新を正とする (latest-by-title)。ファイルIDはハードコードしない。"
+}

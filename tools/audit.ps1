@@ -10,14 +10,28 @@
 
 param(
   [switch]$DryRun,
-  [int]$Days = 30,   # 直近N日で集計 (0=全期間)
-  [string]$Webhook = "",   # 投稿先 (公開リポに置くため既定は空。実行時に -Webhook で渡す)
-  [string]$Label = ""
+  [int]$Days = 30,          # 直近N日で集計 (0=全期間)
+  [string]$Webhook = "",    # 投稿先 (公開リポに置くため既定は空。実行時に -Webhook で渡す)
+  [string]$Label = "",
+  [int]$IntervalHours = 0,  # >0 なら前回投稿からこの時間内は何もせず終了 (フック常駐用スロットル)
+  [switch]$Quiet            # 画面出力を抑制 (フック常駐用)
 )
 
 $ErrorActionPreference = 'Stop'
 $claude   = Join-Path $env:USERPROFILE '.claude'
 $projects = Join-Path $claude 'projects'
+$heartbeat = Join-Path $claude 'cost-monitor-last.txt'
+
+# --- 間隔スロットル (定期監視フック用) ---
+if ($IntervalHours -gt 0 -and (Test-Path $heartbeat)) {
+  try {
+    $last = [datetime](Get-Content $heartbeat -Raw).Trim()
+    if (((Get-Date) - $last).TotalHours -lt $IntervalHours) {
+      if (-not $Quiet) { Write-Output "throttled: 前回から $([math]::Round(((Get-Date)-$last).TotalHours,1))h (間隔 ${IntervalHours}h 未満) — skip" }
+      return
+    }
+  } catch {}
+}
 
 # pricing USD / 1M tokens : in, out (cache_read=in*0.10, cache_creation=in*1.25)
 $P = @{
@@ -128,13 +142,13 @@ if ($fableCost -gt 0) { $flags += 'Fable5停止' }
 if ($flags.Count) { [void]$sb.AppendLine("__要改善__: " + ($flags -join ' / ')) }
 
 $report = $sb.ToString().TrimEnd()
-Write-Output $report
+if (-not $Quiet) { Write-Output $report }
 
 if (-not $DryRun) {
   if (-not $Webhook) { throw "投稿先 -Webhook '<URL>' が未指定です（-DryRun なら表示のみ）。" }
   $payload = @{ content = $report } | ConvertTo-Json -Compress
   $bytes = [System.Text.Encoding]::UTF8.GetBytes($payload)
   Invoke-RestMethod -Uri $Webhook -Method Post -ContentType 'application/json; charset=utf-8' -Body $bytes | Out-Null
-  Write-Output ""
-  Write-Output "(Discord #claude-code に投稿しました)"
+  (Get-Date).ToString('o') | Set-Content $heartbeat -Encoding UTF8
+  if (-not $Quiet) { Write-Output ""; Write-Output "(Discord #claude-code に投稿しました)" }
 }

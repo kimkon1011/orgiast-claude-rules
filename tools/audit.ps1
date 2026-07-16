@@ -23,7 +23,8 @@ param(
   [string]$Webhook = "",    # 投稿先 (公開リポに置くため既定は空。実行時に -Webhook で渡す)
   [string]$Label = "",
   [int]$IntervalHours = 0,  # >0 なら前回投稿からこの時間内は何もせず終了 (フック常駐用スロットル)
-  [switch]$Quiet            # 画面出力を抑制 (フック常駐用)
+  [switch]$Quiet,           # 画面出力を抑制 (フック常駐用)
+  [switch]$Redact           # 開発(cwd)名を「開発#N」に伏せて送る (機密な案件名フォルダ対策)
 )
 
 $ErrorActionPreference = 'Stop'
@@ -140,7 +141,8 @@ if ($fableCost -gt 0) { [void]$sb.AppendLine("⚠️ Fable5使用 推定`$$([mat
 $n = 0
 foreach ($r in $rows) {
   if ($n -ge 8) { break }
-  [void]$sb.AppendLine("- $($r.Project): `$$([math]::Round($r.Cost,2)) [$($r.Models)]")
+  $label = if ($Redact) { "開発#$($n + 1)" } else { $r.Project }
+  [void]$sb.AppendLine("- ${label}: `$$([math]::Round($r.Cost,2)) [$($r.Models)]")
   $n++
 }
 $flags = @()

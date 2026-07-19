@@ -64,11 +64,14 @@ $byCwd = @{}
 $grand = 0.0
 $fableCost = 0.0
 $cutoff = if ($Days -gt 0) { (Get-Date).AddDays(-$Days) } else { $null }
+$envMissing = $false
+$jsonlCount = 0
 
 if (Test-Path $projects) {
   foreach ($d in Get-ChildItem $projects -Directory) {
     $lastCwd = $d.Name
     foreach ($f in (Get-ChildItem $d.FullName -Filter *.jsonl -ErrorAction SilentlyContinue)) {
+      $jsonlCount++
       foreach ($line in [System.IO.File]::ReadLines($f.FullName)) {
         if ($line -notmatch '"usage"') { continue }
         if ($cutoff -and ($line -match '"timestamp":"([^"]+)"')) {
@@ -93,7 +96,10 @@ if (Test-Path $projects) {
       }
     }
   }
+} else {
+  $envMissing = $true
 }
+if ($jsonlCount -eq 0) { $envMissing = $true }
 
 $rows = foreach ($k in $byCwd.Keys) {
   $b = $byCwd[$k]
@@ -137,6 +143,7 @@ $win = if ($Days -gt 0) { "直近${Days}日" } else { "全期間" }
 [void]$sb.AppendLine("推定合計(ローカルCLI): **`$$([math]::Round($grand,2))** ※API定価換算の目安・比較用")
 [void]$sb.AppendLine("設定: effort=**$effort** / 既定model=**$defModel** / CLAUDE.md=**${cmLines}行/${cmKB}KB** / hooks=$hooks")
 if ($fableCost -gt 0) { [void]$sb.AppendLine("⚠️ Fable5使用 推定`$$([math]::Round($fableCost,2)) (§1.16 全面禁止)") }
+if ($envMissing) { [void]$sb.AppendLine("ℹ️ このPCではClaude Code CLIの記録が見つかりません（claude.aiチャットで実行された可能性）。Claude Codeを使っていなければ `$0 で正常です。") }
 [void]$sb.AppendLine("__開発別 推定コスト TOP8__")
 $n = 0
 foreach ($r in $rows) {

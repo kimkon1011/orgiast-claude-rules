@@ -1671,6 +1671,43 @@ claude-common-rules/
 >
 > 💡 同じプロンプトを定期的（例: 月1）に再実行すれば最新版に追従できます。BEGIN/END ブロックで置換するので重複しません。
 
+### 3.0.1 完全自動巡回（推奨・これで以後は手動再実行が不要になる）
+
+3.0 は「毎回貼り付ける」手動プル方式。**毎回貼らなくても、Claude Code セッションを開くたびに自動で最新版をチェックして反映する**ようにできる（1日1回まで、差分がある時だけ静かに更新）。
+
+受信側の Claude Code チャットに、以下をそのまま貼り付ける（3.0 実行後、または単独でもOK）:
+
+```
+オージャスト共通ルールの自動巡回を設定してください。Claude 側で完結させる。
+
+1. GitHub raw から hook スクリプトを取得して保存:
+   https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/tools/onboarding-sync.ps1
+   → WebFetch で本文取得 → ~/.claude/hooks/onboarding-sync.ps1 として UTF-8 BOM付きで保存
+   （BOM必須: 日本語コメントを含むPowerShellスクリプトのため。保存後 python 等で先頭に \xEF\xBB\xBF が無ければ付与する）
+
+2. 保存したスクリプトを pwsh の Parser でパースして構文チェック:
+   pwsh -NoProfile -Command "[System.Management.Automation.Language.Parser]::ParseFile('<フルパス>',[ref]$null,[ref]$null) | Out-Null; 'parse OK'"
+
+3. ~/.claude/settings.json の SessionStart hooks 配列に以下を追加（既存の hooks 配列は消さず追記、追加前に settings.json.bak.<日付> でバックアップ、本ルール1.6により無断編集可）:
+   {
+     "hooks": [
+       {
+         "type": "command",
+         "command": "pwsh -NoProfile -NonInteractive -File \"<ユーザーのhomeディレクトリ>\\.claude\\hooks\\onboarding-sync.ps1\"",
+         "timeout": 20,
+         "async": true
+       }
+     ]
+   }
+
+4. 動作確認として一度 -Force 付きで手動実行し、~/.claude/CLAUDE.md に §1.17.1 等の最新見出しが入ることを確認する
+   （本番ファイルを直接いじる前に、テスト用の一時ファイルに -TargetPath で向けて動作確認してから本番実行するとより安全）
+
+5. 完了報告: hook登録済み・動作確認PASSであることを一行で報告する
+```
+
+**仕組み**: SessionStart のたびに GitHub の ONBOARDING.md を取得 → 前回チェックから20時間以上経っていて、かつ内容差分がある時だけ `~/.claude/CLAUDE.md` の `<!-- BEGIN: オージャスト共通ルール -->`〜`<!-- END: オージャスト共通ルール -->` ブロックを置換（マーカーが行全体で完全一致する場合のみ判定、更新前に必ずバックアップ）。オフライン時やGitHub到達不能時は静かに諦めてセッションを妨げない。これで **3.0 の貼り付け作業自体が不要**になり、Claude Code を開くだけで常に最新ルールが反映される。
+
 ### A. ユーザーグローバル（全プロジェクト共通）にする
 
 このファイルの内容（または抜粋）を以下に追記する:

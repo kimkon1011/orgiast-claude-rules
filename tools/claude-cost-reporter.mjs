@@ -40,10 +40,14 @@ const PRICING = {
   'claude-sonnet-5': { in: 3, out: 15, cacheWrite: 3.75, cacheRead: 0.3 },
   'claude-opus-4-7': { in: 5, out: 25, cacheWrite: 6.25, cacheRead: 0.5 },
   'claude-opus-4-8': { in: 5, out: 25, cacheWrite: 6.25, cacheRead: 0.5 },
+  'claude-opus-5': { in: 5, out: 25, cacheWrite: 6.25, cacheRead: 0.5 },   // Opus5(GA・Opus4.8と同単価)
   'claude-fable-5': { in: 10, out: 50, cacheWrite: 12.5, cacheRead: 1.0 }, // §1.16禁止、検出したら警告
 };
 function priceOf(model) {
-  return PRICING[model] || null; // 未知モデルはコスト$0扱い(クラッシュさせない)、レポートに「未知」として出す
+  if (PRICING[model]) return PRICING[model];
+  // 日付サフィックス付きID(例: claude-haiku-4-5-20251001)は末尾-YYYYMMDDを剥がして再照合
+  const stripped = String(model).replace(/-\d{8}$/, '');
+  return PRICING[stripped] || null; // それでも未知ならコスト$0扱い(クラッシュさせない)、レポートに「未知」として出す
 }
 
 // --- ~/.claude/projects 配下の *.jsonl を再帰列挙 ---
@@ -139,6 +143,10 @@ function main() {
   let msg = `**💻 Claude Code ローカル利用コスト推定** — ${label}\n`;
   msg += `対象: ${monthStart} 〜 現在\n`;
   msg += `MTD概算合計: **$${total.toFixed(2)}** (全トークンをAPI従量課金換算した理論値。Teamプランの月間バンドル分を差し引いていないため実請求額より大きく出ます。PC間・人間の相対比較用の指標です)\n`;
+  // しきい値アラート(全社¥150k≈$1000上限に対する1PAの配分。§1.17.1)
+  const WARN_MTD = 150, CRIT_MTD = 300;
+  if (total > CRIT_MTD) msg += `🚨 **当月 $${total.toFixed(0)} 超($${CRIT_MTD}超)**: 使い過ぎ警告。§1.13ルーティング(Opus5指揮官/生成Sonnet/軽処理Haiku/実装Codex)・§1.17.1費用対効果を再確認\n`;
+  else if (total > WARN_MTD) msg += `⚠️ 当月 $${total.toFixed(0)}($${WARN_MTD}超): 要注視。モデル選択がコスト最適か確認\n`;
   if (fableUsed) msg += `🚨 このPCでFable5(§1.16禁止)の使用を検出しました\n`;
   if (sorted.length > 0) {
     msg += `__モデル別__\n`;

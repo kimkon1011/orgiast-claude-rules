@@ -96,7 +96,14 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
 
 - 出力はCaveman風: 前置きなし、完了報告1〜3行
 - CLAUDE.mdには恒久ルールだけ書く（進行中タスク・今日の数字は書かない、キャッシュ5分TTLを壊すため）。上部ほど静的に
-- モデルルーティング: 単純作業→Sonnet/Haiku、設計・横断調査→Opus。**Fable5は使わない**（§1.16）
+- モデルルーティング（費用対効果ファースト、実測ベース v2 / 2026-07）:
+  - **指揮官・判断・設計 → Opus5**（GA・$5/$25・Opus4.8の2倍性能で同単価。アーキ設計/根本原因分析/横断一貫性/経営判断/タスク分解・レビュー）
+  - **生成（顧客向け文章・返信・要約）→ Sonnet**（default、§1.18）
+  - **軽処理（分類・抽出・OCR）→ Haiku**
+  - **コード実装 → Codex**（定額枠、§1.17）
+  - **社内推論（議事録採点・出展予測など出力が構造化JSON）→ 原則 Sonnet**（最高価値判断のみOpus5）。Kimi K2.6は品質・コストは良好だが**1件278秒＝Sonnetの9倍遅く**、serverless/cronのタイムアウトを破る＋Sonnet比の節約は2割のみ。→ **標準枠に入れない。「レイテンシ無関係なオフライン大量推論」限定の実験枠**（2026-07 A/B実測）
+  - **文章生成にKimiは不可**が確定（全トークンを内部推論に消費し本文が空／2026-07 A/B）
+  - **Fable5は全用途禁止**（§1.16、別課金）
 - 重い探索はAgentツール(Explore/general-purpose)に委譲し「結果を200字以内・コード本体は含めない」と指定
 
 詳細・Why: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/token-model-cost-routing.md`

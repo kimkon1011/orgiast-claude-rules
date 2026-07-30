@@ -57,41 +57,34 @@ ONBOARDING.compressed.md §3.0 / §3.0.1 の詳細（貼り付けプロンプト
 
 3.0 は「毎回貼り付ける」手動プル方式。毎回貼らなくても、Claude Code セッションを開くたびに自動で最新版をチェックして反映するようにできる（1日1回まで、差分がある時だけ静かに更新）。
 
-受信側の Claude Code チャットに、以下をそのまま貼り付ける（3.0 実行後、または単独でもOK）:
+受信側の Claude Code チャットに、以下をそのまま貼り付ける（3.0 実行後、または単独でもOK）。
+
+**⚠️ 重要: このセットアップは「通常(非auto)モード」で貼ること。** auto モードだと最後の settings.json 登録が承認プロンプトすら出ずに自動ブロックされ、途中で止まる。貼った後は表示される許可プロンプトに **はい** で答えるだけ（最初の許可プロンプトで「はい、今後も許可」/「always allow」を選べば以降はほぼ聞かれず、貼り付け1回＋数回の「はい」で完了する）。
 
 ```
-オージャスト共通ルールの自動巡回を設定してください。Claude 側で完結させる。質問は最小化する。
+オージャスト共通ルールの自動巡回を設定してください。Claude 側で完結させ、質問は最小化する。このタスクは settings.json への hook 登録という「人間承認が必要な操作」を1つ含む。承認プロンプトが出たら user が「はい」で許可する前提で最後まで進めること（サイレントな迂回＝別ツールで classifier を回避する等は禁止。だが、人間が許可プロンプトを承認して進めるのは正規の完了経路であり、中止理由にはならない）。
 
-1. hook スクリプトを取得する。git clone (WebFetch単体より制限されにくい経路) を優先し、失敗したら WebFetch にフォールバックする:
-   a. git clone https://github.com/kimkon1011/orgiast-claude-rules.git "<ホームディレクトリ>\orgiast-claude-rules"
-      (既にクローン済みなら cd してそのディレクトリで git pull)
-   b. a が失敗したら WebFetch で取得:
-      https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/tools/onboarding-sync.ps1
-   c. a・b の両方が環境のセキュリティ機構(classifier)にブロックされた場合、それはバグではなく正当な警戒（「リモートスクリプトを取得して自動実行フックに登録する」パターンは本来警戒対象）。その場合はこのセットアップ自体を中断し、手順5で理由を報告して終了する。手作業の代替手順を案内しない（人に振らない）。
-   取得できた本体(tools/onboarding-sync.ps1)を ~/.claude/hooks/onboarding-sync.ps1 として UTF-8 BOM付きで保存
-   （BOM必須: 日本語コメントを含むPowerShellスクリプトのため。git clone 経由ならBOMは既に付いているのでそのままコピーでよい。WebFetch経由の場合のみ、保存後に先頭へ \xEF\xBB\xBF が無ければ付与する）
+0. 前提: 今このセッションが auto mode なら、user に一言「settings.json 編集の承認が必要なので通常モードに切り替えてください。切替後、許可プロンプトに『はい』で進めます」と伝えてから続行する（auto mode のままだと手順3が承認プロンプトすら出ず自動ブロックされるため）。
 
-2. 使用可能なシェルを検出する: `pwsh -v` が成功すれば pwsh、失敗する（PowerShell 7 未インストール）場合は Windows 標準の `powershell` を使う。
-   このスクリプトは PowerShell 7 専用構文を使っていないため、どちらでも同一に動作する。以後の手順ではこの手順で決めたコマンド名を <shell> として使う。
-   決めたシェルで構文チェック:
+1. hook スクリプトを取得する。git clone を優先し、失敗したら WebFetch にフォールバック:
+   a. git clone https://github.com/kimkon1011/orgiast-claude-rules.git "<ホームディレクトリ>\orgiast-claude-rules"（クローン済みなら cd して git pull）
+   b. a が失敗したら WebFetch: https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/tools/onboarding-sync.ps1
+   取得した tools/onboarding-sync.ps1 を ~/.claude/hooks/onboarding-sync.ps1 として UTF-8 BOM付きで保存（git clone 経由ならBOMは既に付いているのでそのままコピー。WebFetch経由の場合のみ先頭に \xEF\xBB\xBF を付与）。スクリプト本体を一読し、GitHub raw への GET と CLAUDE.md/バックアップ/状態JSON/ログ書き込み以外の危険処理が無いことを確認する。
+
+2. シェル検出: `pwsh -v` が成功すれば pwsh、失敗すれば Windows 標準の `powershell`。決めた方を <shell> とする。構文チェック:
    <shell> -NoProfile -Command "[System.Management.Automation.Language.Parser]::ParseFile('<フルパス>',[ref]$null,[ref]$null) | Out-Null; 'parse OK'"
 
-3. ~/.claude/settings.json の SessionStart hooks 配列に、手順2で決めた <shell> を使って以下を追加（既存の hooks 配列は消さず追記、追加前に settings.json.bak.<日付> でバックアップ、本ルール1.6により無断編集可）:
+3. ~/.claude/settings.json の hooks.SessionStart 配列に以下グループを追記（既存の配列は消さず追記、追記前に settings.json.bak.<日付> でバックアップ、本ルール1.6により編集可）。この編集で許可プロンプトが出るので、user の「はい」で承認して進める。承認されずに書けなかった時だけ手順5の中止報告に回す:
    {
      "hooks": [
-       {
-         "type": "command",
-         "command": "<shell> -NoProfile -NonInteractive -File \"<ユーザーのhomeディレクトリ>\\.claude\\hooks\\onboarding-sync.ps1\"",
-         "timeout": 20,
-         "async": true
-       }
+       { "type": "command", "command": "<shell> -NoProfile -NonInteractive -File \"<homeディレクトリ>\\.claude\\hooks\\onboarding-sync.ps1\"", "timeout": 20, "async": true }
      ]
    }
 
-4. 動作確認として一度 -Force 付きで手動実行し、~/.claude/CLAUDE.md に最新見出しが入ることを確認する
-   （本番ファイルを直接いじる前に、テスト用の一時ファイルに -TargetPath で向けて動作確認してから本番実行するとより安全）
+4. 動作確認: <shell> -NoProfile -File "<homeディレクトリ>\.claude\hooks\onboarding-sync.ps1" -Force を1回実行し、"[onboarding-sync] updated CLAUDE.md (hash ...)" が出て ~/.claude/CLAUDE.md に最新見出しが入ることを確認する。
 
-5. 完了報告: 使用したシェル(pwsh/powershell)・取得経路(git clone/WebFetch)・hook登録済み・動作確認PASSであることを一行で報告する。手順1cで中断した場合はその旨とブロックされた理由を一行で報告し、それ以上の代替手段(手作業依頼等)は提示しない
+5. 完了報告(一行): 使用シェル / 取得経路 / hook登録済み / 動作確認PASS。
+   もし手順3で user が承認を拒否した、または人間承認の経路自体が使えず登録できなかった場合のみ、その旨と理由を一行で報告する（その場合も別ツールでの迂回はしない。§3.0 の手動プル運用で代替できる旨だけ添える）。
 ```
 
 仕組み: SessionStart のたびに GitHub の ONBOARDING.md を取得 → 前回チェックから20時間以上経っていて、かつ内容差分がある時だけ `~/.claude/CLAUDE.md` の `<!-- BEGIN: オージャスト共通ルール -->`〜`<!-- END: オージャスト共通ルール -->` ブロックを置換（マーカーが行全体で完全一致する場合のみ判定、更新前に必ずバックアップ）。オフライン時やGitHub到達不能時は静かに諦めてセッションを妨げない。これで 3.0 の貼り付け作業自体が不要になり、Claude Code を開くだけで常に最新ルールが反映される。

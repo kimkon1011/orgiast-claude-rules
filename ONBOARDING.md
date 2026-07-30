@@ -96,7 +96,12 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
 
 - 出力はCaveman風: 前置きなし、完了報告1〜3行
 - CLAUDE.mdには恒久ルールだけ書く（進行中タスク・今日の数字は書かない、キャッシュ5分TTLを壊すため）。上部ほど静的に
-- モデルルーティング（費用対効果ファースト、実測ベース v2 / 2026-07）:
+- **実行者ルーティング（まず「LLMに直接やらせる」以外の適材を選ぶ、費用対効果ファースト）**:
+  - **コード実装 → Codex**（ChatGPT定額枠、§1.17。従量トークンを使わない主経路）
+  - **外部事実のWeb調査・属性エンリッチ（多段・根拠URL要。例: 企業の上場/設立日/出展歴）→ Manus**（`src/lib/manus.ts` パターン。専用エージェント枠で、Claudeのweb_searchループにトークンを燃やすより適・精度も高い。sources必ず保持）
+  - **定型・確定処理（集計・整形・置換・スクレイプ）→ ローカルスクリプト**（Python/Node、トークン消費ゼロ）
+  - 上記で済むものをLLMの従量トークンで代替しない（§1.17.1）
+- モデル（認知）ルーティング（費用対効果ファースト、実測ベース v2 / 2026-07）:
   - **指揮官・判断・設計 → Opus5**（GA・$5/$25・Opus4.8の2倍性能で同単価。アーキ設計/根本原因分析/横断一貫性/経営判断/タスク分解・レビュー）
   - **生成（顧客向け文章・返信・要約）→ Sonnet**（default、§1.18）
   - **軽処理（分類・抽出・OCR）→ Haiku**
@@ -126,7 +131,7 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
 
 ### 1.17.1 費用対効果ファースト — 追加費用ゼロの経路を先に必ず検討する（絶対ルール）
 
-従量課金トークンを使う前に必ず: ①定額枠内の代替があるか（Codex/ローカルスクリプト/既存自動化） ②「ツール未導入だから従量経路で」は理由にならない（自分でinstall） ③従量課金しか無ければモデル最小化（分類=Haiku、量産=Sonnet、Opusは品質差実測時のみ） ④大量トークン消費が見込まれる判断は着手前に費用見込みを1行提示。優先順位: 既存活用→Codex→Haiku→Sonnet→Opus（要正当化）→Fable5（禁止）。詳細・過去事例: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/token-model-cost-routing.md`
+従量課金トークンを使う前に必ず: ①定額枠内・トークン消費ゼロの代替があるか（ローカルスクリプト/既存自動化/Codex/Manus） ②「ツール未導入だから従量経路で」は理由にならない（自分でinstall） ③従量課金しか無ければモデル最小化（分類=Haiku、量産=Sonnet、Opusは品質差実測時のみ） ④大量トークン消費が見込まれる判断は着手前に費用見込みを1行提示。優先順位: 既存自動化・ローカルスクリプト（消費ゼロ）→Codex（コード・定額）／Manus（Web調査・エンリッチ・専用枠）→Haiku→Sonnet→Opus5（要正当化）→Fable5（禁止）。詳細・過去事例: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/token-model-cost-routing.md`
 
 ### 1.18 Opus vs Sonnet の default は Sonnet
 

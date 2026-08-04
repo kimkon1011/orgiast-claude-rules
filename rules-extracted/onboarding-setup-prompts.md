@@ -141,26 +141,28 @@ ONBOARDING.compressed.md §3.0 / §3.0.1 の詳細（貼り付けプロンプト
 
 ## 3.0.3 Gemini CLI 連携（超大規模文脈分析・Google検索を Gemini に委譲）
 
-Claude Code から MCP 経由で Gemini CLI を呼び、**コードベース全体の読み込み・長大ログ/PDF/動画の分析・Google検索**など「Claude単体だとトークンを大量に食う処理」を Gemini(1M文脈・Code Assist無料枠)に逃がす。実行者ルーティング(§1.13)の一員。ツール: `googleSearch`（Gemini経由Google検索）/ `geminiChat`（大規模文脈Q&A）。追加課金なし（Googleアカウント認証の無料枠）。
+Claude Code から MCP 経由で Gemini CLI を呼び、**コードベース全体の読み込み・長大ログ/PDF/動画の分析・Google検索**など「Claude単体だとトークンを大量に食う処理」を Gemini(1M文脈)に逃がす。実行者ルーティング(§1.13)の一員。ツール: `googleSearch`（Gemini経由Google検索）/ `geminiChat`（大規模文脈Q&A）。
 
-**認証は各PCが自分の orgiast.jp アカウントで行う**（seisaku-team 運用PCは seisaku-team@orgiast.jp、nishi PCは nishi@…、というように運用者自身のGoogleアカウント。共有しない）。
+**⚠️ 認証は GEMINI_API_KEY（Google AI Studio 無料枠）を使う。** 「gemini でログイン(Login with Google / Code Assist 無料枠)」は **2026-07 に Google が個人無料枠を廃止**し `IneligibleTierError: UNSUPPORTED_CLIENT` で弾かれる（実測確認済。OAuth自体は通るが API 呼出が不可）。→ AI Studio の API キーを使う。**各PCが自分の orgiast.jp アカウントで発行**（seisaku-team 運用PCは seisaku-team@orgiast.jp で、他も運用者自身のアカウント。共有しない）。AI Studio 無料枠は追加課金なし（レート/日次上限あり）。
 
-受信側の Claude Code チャットに以下を貼る（settings.json/MCP登録の承認が要る場合は §3.0.1 手順0と同じく通常モードで「はい」承認、サイレント迂回は禁止）:
+受信側の Claude Code チャットに以下を貼る（MCP登録=~/.claude.json編集の承認が要る場合は §3.0.1 手順0と同じく通常モードで「はい」承認、サイレント迂回は禁止）:
 
 ```
-Gemini CLI 連携をセットアップして。Claude側で完結させ、質問は最小化する。OAuth ログインだけは human の1回操作(例外)。
+Gemini CLI 連携をセットアップして。Claude側で完結させ、質問は最小化する。API キーの発行(ブラウザ)だけが human の1回操作＝そこも「発行ページを開いてキーをコピーするだけ」の状態まで Claude が用意する(§1.1 最上位原則)。
 
 1. Gemini CLI 導入: `npm i -g @google/gemini-cli` を実行し `gemini --version` で確認（既に入っていればスキップ）。
 
-2. MCP 登録: ~/.claude.json の トップレベル `mcpServers` に以下を追記（既存 mcpServers は消さず追記、事前に ~/.claude.json.bak.<日付> をバックアップ。`claude` バイナリがPATHにあれば代わりに `claude mcp add -s user gemini-cli -- npx -y @choplin/mcp-gemini-cli --allow-npx` でも可）:
-   "gemini-cli": { "type": "stdio", "command": "npx", "args": ["-y", "@choplin/mcp-gemini-cli", "--allow-npx"] }
+2. GEMINI_API_KEY の受け皿を用意し、human には発行だけさせる:
+   - user に直リンクを渡す:「https://aistudio.google.com/apikey を【このPCの運用 orgiast.jp アカウント】で開き、『Create API key / APIキーを作成』→ キーをコピーしてここに1回だけ貼ってください」
+   - 受領したキーは即 ~/.gemini/.env に `GEMINI_API_KEY=<値>` として保存し永続化（以降は二度と聞かない。[[credentials-never-reask]]）。既存の環境変数 GEMINI_API_KEY があればそれを使い発行不要。
 
-3. Gemini の Google 認証（human の1回操作。ここだけ user に依頼してよい＝OAuth初回同意の例外）:
-   user に「ターミナルで `gemini` と打ち、認証方法の選択で『Login with Google』を選び、開いたブラウザで【このPCの運用 orgiast.jp アカウント】でログインしてください。完了すると ~/.gemini/ に資格情報が保存されます」と伝える。共有アカウントを使わず、そのPCの運用者自身の orgiast.jp アカウントで認証する。
+3. MCP 登録: ~/.claude.json の トップレベル `mcpServers` に以下を追記（既存 mcpServers は消さず追記、事前に ~/.claude.json.bak.<日付> をバックアップ）。**env で GEMINI_API_KEY を渡す**ので MCP 経由の gemini もキーで動く:
+   "gemini-cli": { "type": "stdio", "command": "npx", "args": ["-y", "@choplin/mcp-gemini-cli", "--allow-npx"], "env": { "GEMINI_API_KEY": "<手順2のキー>" } }
+   （`claude` バイナリがPATHにあれば `claude mcp add -s user gemini-cli -e GEMINI_API_KEY=<キー> -- npx -y @choplin/mcp-gemini-cli --allow-npx` でも同等）
 
-4. 反映と確認: MCP サーバはセッション開始時に読み込まれるため、登録後は **Claude Code の再起動が必要**。再起動後、`gemini-cli` の `googleSearch` か `geminiChat` を軽く1回呼んで疎通確認する（例: googleSearch で「今日の日付 ニュース」等の軽い検索）。
+4. 疎通確認: `GEMINI_API_KEY=<キー> gemini -p "reply PONG"` を1回叩き応答が返ることを確認（IneligibleTierError が出るならそれは無料OAuth経路。APIキーが正しく渡っているか再確認）。MCPサーバはセッション開始時ロードのため、登録後は **Claude Code の再起動が必要**。
 
-5. 完了報告(一行): gemini CLI版 / MCP登録済み / 認証アカウント(どの orgiast.jp か) / 再起動後の疎通PASS。OAuth 未完で保留した場合はその旨だけ報告。
+5. 完了報告(一行): gemini CLI版 / APIキー保存先 / MCP登録済み / 疎通PONG / 再起動要否。キー未発行で保留ならその旨だけ報告。
 ```
 
 使いどころ（§1.13）: コードベース全体を読ませて設計マップ、長大PDF/動画/音声の要約、最新情報のGoogle検索 等、Claudeの従量トークンを節約したい大規模処理。逆に、少量の事実確認や通常のコード実装(Codex)・多段Web調査+根拠URL(Manus)は各担当のまま。

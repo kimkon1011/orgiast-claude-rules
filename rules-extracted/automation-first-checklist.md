@@ -55,6 +55,32 @@ GitHub UI を踏ませる時の注意: private repo は権限の無いアカウ�
 
 過去事例(2026-07-09): PRONI cron 修正で `gh pr merge` を試しもせず「PR をマージしてください」と手渡し → user が GitHub を別アカウント(awardsystem)で開いていて 404 → 「なぜ最初からこちらの手間がかからないようにできないのか。自分たちでできることは振るな。徹底してルール化しろ」と要望。真因 = 手渡しの一文を、自分で試す前に書いたこと。実際は `gh pr merge` まで自分で実行でき、止まったのは「自作 PR の自己マージ」ガードレールのみだった（＝手渡しは最後の1クリックに圧縮できた）。
 
+## 1.1.3.1 環境に合ったツールで実行し直す — Windows は PowerShell tool が本来の経路（2026-08-04 追加）
+
+**ルール**: 1つのツールで実行が通らなかっただけで「自動化できない」と結論して手作業に振ってはいけない。社内の実行環境は Windows なので、**Node スクリプト・Windows パス・PowerShell 前提のツールは PowerShell tool で実行するのが本来の経路**。Bash tool（Git Bash）は POSIX 前提のため、同じことをしても環境差で落ちることがある。
+
+**実例（2026-08-04・学会協賛ナビ）**: 内藤顧問MTGの決定で `deals.commission_pct` の default を 15% → 40% に変える DDL が必要になった。Bash tool 経由では完了せず、いったん「Supabase の SQL Editor で1行実行してください」と手渡しかけた（Stop hook の手作業依頼検出に引っかかった）。その後 **PowerShell tool で `Set-Location "…\web"; node scripts/supabase-sql.mjs "alter table deals alter column commission_pct set default 40.00;"` を実行 → `OK (201)` で完了**。手作業依頼はゼロになった。kim 指示: 「この手作業がゼロになるなら最初からやってほしい」。
+
+**チェック順序（手作業依頼の前に）**:
+1. Bash tool で通らない → **PowerShell tool で同じ処理を実行**（Windows ネイティブ）
+2. それでも通らない → MCP tool の経路がないか確認（Drive/Sheets/Gmail/Calendar/Discord）
+3. 秘匿値が絡む処理は、値を復元したら即 `.env.local` に永続化し、**再利用可能な runner スクリプトを commit する**。以降は「スクリプトに引数を渡すだけ」になり、値の受け渡し自体が発生しない
+   - 参考実装: `学会協賛メディア/web/scripts/supabase-sql.mjs`（`.env.local` の `SUPABASE_ACCESS_TOKEN` / `_ALT` / `SUPABASE_PROJECT_REF` を読み、Management API `POST /v1/projects/{ref}/database/query` に任意 SQL を投げる。DDL 可）
+4. ここまで全滅して初めて手作業依頼（直URL＋完了判定＋試した経路の列挙＋`[HANDOFF-OK]`）
+
+**Windows Node の exit code に騙されない**: 処理が成功していても終了時に `Assertion failed: !(handle->flags & UV_HANDLE_CLOSING), file src\win\async.c, line 76` と exit 9 を返すことがある（libuv の teardown ノイズ）。**標準出力に成功レスポンス（例: `OK (201)`）が出ていれば処理は完了している**。exit code だけ見て失敗と誤判定し、手作業に切り替えてはいけない。必ず read-back verify（例: `information_schema.columns` の `column_default` を読む）で実際の状態を確認してから完了/失敗を判断する。
+
+## 1.1.3.2 user に渡すコマンドはシェルに合わせる（2026-08-04 追加）
+
+kim・社内PCのターミナル既定は **Windows PowerShell 5.1**（pwsh 7 ではない）。
+
+- ❌ `cd "パス" && node script.mjs` → `トークン '&&' は、このバージョンでは有効なステートメント区切りではありません`（ParserError）で**必ず失敗する**
+- ✅ `Set-Location "パス"; node script.mjs`
+- パスに空白・日本語（`CLAUDE.md配布`、`学会協賛メディア`）が入るので**必ず `"` で囲む**
+- Unix コマンド（`head` / `tail` / `which` / `touch` / `wc -l`）も存在しない。PowerShell 相当（`Get-Content -TotalCount` / `-Tail` / `(Get-Command x).Source` 等）に置き換える
+
+過去事例(2026-08-04): `cd "…\web" && node scripts/supabase-sql.mjs "alter table …"` を渡して ParserError で失敗させた。渡す前に「このコマンドは user のシェルで動くか」を必ず確認する。
+
 ## 1.1.4 既存リソースの再作成・再作業を絶対に振らない（2026-06-24 追加）
 
 「○○ を新規作成してください」と user に依頼する前に必ず、既存の同等リソースを CLI/API で一覧取得して、既存があれば流用する。既に作成済みのものに「もう一度作って」と振るのは、user の手間を二度かける典型違反。

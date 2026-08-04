@@ -138,3 +138,29 @@ ONBOARDING.compressed.md §3.0 / §3.0.1 の詳細（貼り付けプロンプト
 これで「中央=組織合計(GH Actions日次) + 各PC=当月概算の自己申告(日次・しきい値アラート付き)」の二層監査が全PCで揃う。会話内容は送らず集計値のみ（memory `feedback-no-blind-exfil-telemetry` の原則: read-only・集計値のみ・review-first を満たす）。
 
 > 限界(把握しておく): 概算はローカルセッション記録(*.jsonl)ベースなので Cowork/claude.ai(web)利用は捕捉外。また表示$は「全トークンをAPI従量換算した理論値」でTeamバンドル分を引いていないため実請求より大きく出る＝PC間の相対比較・急増検知用の指標。正確な実額はAnthropic管理コンソール併用。
+
+## 3.0.3 Gemini CLI 連携（超大規模文脈分析・Google検索を Gemini に委譲）
+
+Claude Code から MCP 経由で Gemini CLI を呼び、**コードベース全体の読み込み・長大ログ/PDF/動画の分析・Google検索**など「Claude単体だとトークンを大量に食う処理」を Gemini(1M文脈・Code Assist無料枠)に逃がす。実行者ルーティング(§1.13)の一員。ツール: `googleSearch`（Gemini経由Google検索）/ `geminiChat`（大規模文脈Q&A）。追加課金なし（Googleアカウント認証の無料枠）。
+
+**認証は各PCが自分の orgiast.jp アカウントで行う**（seisaku-team 運用PCは seisaku-team@orgiast.jp、nishi PCは nishi@…、というように運用者自身のGoogleアカウント。共有しない）。
+
+受信側の Claude Code チャットに以下を貼る（settings.json/MCP登録の承認が要る場合は §3.0.1 手順0と同じく通常モードで「はい」承認、サイレント迂回は禁止）:
+
+```
+Gemini CLI 連携をセットアップして。Claude側で完結させ、質問は最小化する。OAuth ログインだけは human の1回操作(例外)。
+
+1. Gemini CLI 導入: `npm i -g @google/gemini-cli` を実行し `gemini --version` で確認（既に入っていればスキップ）。
+
+2. MCP 登録: ~/.claude.json の トップレベル `mcpServers` に以下を追記（既存 mcpServers は消さず追記、事前に ~/.claude.json.bak.<日付> をバックアップ。`claude` バイナリがPATHにあれば代わりに `claude mcp add -s user gemini-cli -- npx -y @choplin/mcp-gemini-cli --allow-npx` でも可）:
+   "gemini-cli": { "type": "stdio", "command": "npx", "args": ["-y", "@choplin/mcp-gemini-cli", "--allow-npx"] }
+
+3. Gemini の Google 認証（human の1回操作。ここだけ user に依頼してよい＝OAuth初回同意の例外）:
+   user に「ターミナルで `gemini` と打ち、認証方法の選択で『Login with Google』を選び、開いたブラウザで【このPCの運用 orgiast.jp アカウント】でログインしてください。完了すると ~/.gemini/ に資格情報が保存されます」と伝える。共有アカウントを使わず、そのPCの運用者自身の orgiast.jp アカウントで認証する。
+
+4. 反映と確認: MCP サーバはセッション開始時に読み込まれるため、登録後は **Claude Code の再起動が必要**。再起動後、`gemini-cli` の `googleSearch` か `geminiChat` を軽く1回呼んで疎通確認する（例: googleSearch で「今日の日付 ニュース」等の軽い検索）。
+
+5. 完了報告(一行): gemini CLI版 / MCP登録済み / 認証アカウント(どの orgiast.jp か) / 再起動後の疎通PASS。OAuth 未完で保留した場合はその旨だけ報告。
+```
+
+使いどころ（§1.13）: コードベース全体を読ませて設計マップ、長大PDF/動画/音声の要約、最新情報のGoogle検索 等、Claudeの従量トークンを節約したい大規模処理。逆に、少量の事実確認や通常のコード実装(Codex)・多段Web調査+根拠URL(Manus)は各担当のまま。

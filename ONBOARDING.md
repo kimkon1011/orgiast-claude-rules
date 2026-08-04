@@ -100,6 +100,7 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
   - **コード実装 → Codex**（ChatGPT定額枠、§1.17。従量トークンを使わない主経路）
   - **外部事実のWeb調査・属性エンリッチ（多段・根拠URL要。例: 企業の上場/設立日/出展歴）→ Manus**（`src/lib/manus.ts` パターン。専用エージェント枠で、Claudeのweb_searchループにトークンを燃やすより適・精度も高い。sources必ず保持）
   - **定型・確定処理（集計・整形・置換・スクレイプ）→ ローカルスクリプト**（Python/Node、トークン消費ゼロ）
+  - **超大規模コンテキスト分析（コードベース全体・長大ログ/PDF/動画）／Google検索 → Gemini CLI（MCP `gemini-cli` 経由）**（Googleアカウント認証のCode Assist無料枠＝追加課金なし・1M文脈。Claudeのトークンを大量に食う「全体読み込み」やWeb検索を委譲しClaudeのcontextを節約。ツール: `googleSearch`/`geminiChat`。**各PCは自分のorgiast.jpアカウントで認証**（seisaku-team運用PCはseisaku-team、他も同様）。§3.0.3セットアップ）
   - 上記で済むものをLLMの従量トークンで代替しない（§1.17.1）
 - モデル（認知）ルーティング（費用対効果ファースト、実測ベース v2 / 2026-07）:
   - **指揮官・判断・設計 → Opus5**（GA・$5/$25・Opus4.8の2倍性能で同単価。アーキ設計/根本原因分析/横断一貫性/経営判断/タスク分解・レビュー）

@@ -166,3 +166,24 @@ Gemini CLI 連携をセットアップして。Claude側で完結させ、質問
 ```
 
 使いどころ（§1.13）: コードベース全体を読ませて設計マップ、長大PDF/動画/音声の要約、最新情報のGoogle検索 等、Claudeの従量トークンを節約したい大規模処理。逆に、少量の事実確認や通常のコード実装(Codex)・多段Web調査+根拠URL(Manus)は各担当のまま。
+
+## 3.0.4 ツール採用チェック（Codex/Gemini/Kimi/Manus が実際に使われているか定期点検・自動修復）
+
+「Codex/Geminiを使え」というルールは"実際に使われて"初めてコスト削減になる。導入したのに使われず Claude の従量トークンを燃やし続ける状態を早期検知するため、各PCが `tools/tool-adoption-check.mjs` で定期点検し Discord に報告する。判定は**セッションファイルのmtime・キー有無・MCP登録・transcript内のツール名シグネチャだけ**（会話内容は読まない）。`--fix` で自動修復（Gemini MCP未登録の再登録等）、人手が要る分（Codex/Gemini認証）だけ最小1操作で報告。
+
+前提: §3.0.1 実行済み（リポjが clone 済み）＋ §3.0.2 の cost-reporter.env（webhook/label 流用）。
+
+受信側の Claude Code チャットに貼る（auto mode なら §3.0.1 手順0で解除案内→承認で進める）:
+
+```
+ツール採用チェックをこのPCに登録して。Claude側で完結、settings.json編集の承認は「はい」で通す(サイレント迂回禁止)。
+
+1. <ホーム>\orgiast-claude-rules\tools\tool-adoption-check.mjs の存在確認（無ければ git pull で最新化）。
+2. 動作確認: node "<ホーム>\orgiast-claude-rules\tools\tool-adoption-check.mjs" --dry-run を実行し、Codex/Gemini/Kimi/Manus の健全性・使用状況が表示されることを確認。
+3. ~/.claude/settings.json の hooks.SessionStart に追記(既存配列は消さず、事前 bak):
+   { "hooks": [ { "type": "command", "command": "node \"<ホーム>\orgiast-claude-rules\tools\tool-adoption-check.mjs\" --fix", "timeout": 30, "async": true } ] }
+   (日次ガード内蔵。--fix で自動修復、直せない認証等は報告のみ)
+4. 完了報告(一行): 配置/--dry-run結果/hook登録済み。
+```
+
+これで「各PCで実際にコスト削減ツールが使われているか」を日次で監査でき、未使用・設定破損を早期に潰せる。未使用⚠️が続く＝ルーティング(§1.13)が守られていない兆候。

@@ -30,6 +30,12 @@ API/CLI/MCP/GitHub Actions で実行可能な操作は、手順案内せず Clau
 
 **依頼前の必須5ステップ**（順序厳守）: ①API/CLI/MCPで可能か調査 → ②CLIが無ければ自分でinstall(winget/scoop/npm) → ③認証だけ1回user依頼 → ④それでも無理なら初めて手作業依頼(直URL+完了判定つき) → ⑤手作業に頼った場合は次回に活かす学びをmemoryへ。詳細・過去事例: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/automation-first-checklist.md`
 
+**★ 環境に合ったツールで実行する（2026-08-04 kim指示）**: 社内の実行環境は Windows。Node スクリプト・Windows パス・PowerShell 前提のツールは **PowerShell tool で実行するのが本来の経路**で、Bash tool（Git Bash）だと環境差で落ちることがある。**1つのツールで落ちただけで「自動化できない」と結論して手作業に振らない**。実測: Supabase Management API へ DDL を投げる処理が Bash tool では完了せず、**PowerShell tool（`Set-Location "…"; node scripts/xxx.mjs "…"`）で実行したら `OK (201)` で完了**し、手作業依頼1件が不要になった。
+- 秘匿値は復元したら即 `.env.local` に永続化し、**再利用可能な runner スクリプトを commit する**（例: `web/scripts/supabase-sql.mjs` に SQL 文字列を渡すだけで DDL が通る）。次回以降は値の受け渡しそのものが発生しない。
+- 注意: Windows の Node は終了時に `Assertion failed: !(handle->flags & UV_HANDLE_CLOSING), file src\win\async.c` と exit 9 を返すことがある。**標準出力に成功レスポンスが出ていれば処理は成功している**（libuv の teardown ノイズ）。exit code だけ見て失敗と誤判定して手作業に切り替えず、read-back verify で実際の状態を確認して判断する。
+
+**userに渡すコマンドはシェルに合わせる（絶対）**: kim・社内PCの既定は **Windows PowerShell 5.1**。`cmd1 && cmd2` は `トークン '&&' は、このバージョンでは有効なステートメント区切りではありません` で必ず失敗する。**`;` 区切りで書く**（`Set-Location "パス"; node script.mjs`）。パスに空白・日本語が入るので必ず `"` で囲む。2026-08-04 に実際に `&&` を渡して失敗させた。
+
 **git/PRフローも同様**: commit→push→`gh pr create`→`gh pr merge`まで自分でやる。「マージお願いします」で止めない。唯一の例外は「自作PRの自己マージ」ガードレール（レビュー観点+直URL+アカウント切替注意を添えて手渡し）。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/automation-first-checklist.md`
 
 **既存リソースの再作成を絶対に振らない**: 「○○を新規作成してください」の前に必ずCLI/APIで一覧確認（GCP SA/Vercel env/GitHub secret/Drive/Discord等）。既にあれば流用。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/automation-first-checklist.md`

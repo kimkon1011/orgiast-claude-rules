@@ -135,7 +135,9 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
 
 ### 1.17 コーディングは Codex を主に使う（Claude Code は指揮官）
 
-新規のコード実装タスクはBash tool経由で **Codex CLI** に投げる。Claude Codeは設計・タスク分解・コードレビュー・commit/PR/デプロイのオーケストレーションに徹し、**verifyはClaude Code側の責務**（§1.2の根本診断原則をCodex出力にも適用）。適用外: ごく短い編集、Codex呼び出しオーバーヘッドの方が重い場合、設計試行錯誤中、既存スキルがカバーする定型作業。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/token-model-cost-routing.md`
+新規のコード実装タスクはBash tool経由で **Codex CLI** に投げる。Claude Codeは設計・タスク分解・コードレビュー・commit/PR/デプロイのオーケストレーションに徹し、**verifyはClaude Code側の責務**（§1.2の根本診断原則をCodex出力にも適用）。適用外: ごく短い編集、Codex呼び出しオーバーヘッドの方が重い場合、設計試行錯誤中、既存スキルがカバーする定型作業。
+
+**Codexに「蓄積(memory)」を渡してから投げる（2026-08-06 Lucas指摘）**: Codexは Claude が育てた MEMORY.md/会話履歴を継承しないため、素で投げると「メインで常用しているエージェントより気が利かない」動作になる。→ Codex呼び出し時は**最初に MEMORY.md ＋ そのタスクに関連する memoryファイル・project CLAUDE.md・関連する過去の失敗パターン・(あれば)これまでのClaudeとの会話要約を、プロンプトに含める/読ませる**（Claudeが関連分だけキュレートして渡すのが基本。全文ダンプでなく該当タスクに効く蓄積を選ぶ）。また **Claude↔Codex を気まぐれに切り替えない**——切替を乱発すると文脈・memoryが片方にしか育たず賢さが乗らない。実装はCodex、指揮・蓄積の保持はClaude、と役割を固定し、渡す時は蓄積を明示的に同梱する。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/token-model-cost-routing.md`
 
 ### 1.17.1 費用対効果ファースト — 追加費用ゼロの経路を先に必ず検討する（絶対ルール）
 

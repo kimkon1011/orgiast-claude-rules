@@ -143,13 +143,13 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
 
 従量課金トークンを使う前に必ず: ①定額枠内・トークン消費ゼロの代替があるか（ローカルスクリプト/既存自動化/Codex/Manus） ②「ツール未導入だから従量経路で」は理由にならない（自分でinstall） ③従量課金しか無ければモデル最小化（分類=Haiku、量産=Sonnet、Opusは品質差実測時のみ） ④大量トークン消費が見込まれる判断は着手前に費用見込みを1行提示。優先順位: 既存自動化・ローカルスクリプト（消費ゼロ）→Codex（コード・定額）／Manus（Web調査・エンリッチ・専用枠）→Haiku→Sonnet→Opus5（要正当化）→Fable5（禁止）。詳細・過去事例: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/token-model-cost-routing.md`
 
-### 1.18 指揮官は委譲する・自分で挽かない（Sonnet床＋複雑時のみOpus指揮官）
+### 1.18 監督(Opus)は最小限だけ動き、実働はCodex/Sonnet/Geminiに委譲する
 
-**真のコストレバーは Opus/Sonnet の別ではなく「指揮官が実装を自分で手打ちせず委譲しているか」**（2026-08-06 kim指摘＋実測。この長大セッションで Opus 4.8 が委譲せず何時間も直接編集・push を挽き続けたのがコスト高騰の主因＝反面教師）。方針:
-- **既定は Sonnet 床**（定型・軽作業はSonnetで手戻りしない）。subagentも`model:"sonnet"`明示。
-- **複雑な設計/根本原因/横断一貫性/経営判断のときだけ意識的にOpus指揮官へ切替**。ただし**Opusは"考える・分解する・指示する・verifyする"だけ**で、大きな実装は自分で書かない（Opusを常時既定にして挽くと今回の失敗を繰り返す）。
-- **実装本体は必ず Codex(WSL・定額枠) に委譲**（§1.17）。生成・調査・大量処理は Sonnet、超大規模文脈・Web検索は Gemini(無料枠)。指揮官が大きなコードを手打ちしそうになったら Codex へ回す。
-- verify は指揮官の責務（§1.2・§1.4／Opusの判断が最も効く所）。
+**方針（2026-08-06 kim確定）: Opusを"監督"に置き、監督は最小限しか動かない。実働を Codex/Sonnet/Gemini にうまく流すことでコストを下げ品質を上げる。** 真のコストレバーは Opus/Sonnet の既定の別ではなく「**監督が実装を自分で手打ちせず委譲しているか**」（この長大セッションで Opus 4.8 が委譲せず何時間も直接編集・push を挽いたのが高騰の主因＝反面教師）。
+- **監督(指揮官)＝Opus**：複雑な設計/根本原因/横断一貫性/経営判断/タスク分解/レビュー/verify という"頭"はOpus。ただし**最小限＝考える・分解する・指示する・検証するだけ。大きな実装は絶対に自分で書かない**（挽きそうになったら即Codexへ）。
+- **床(定型・軽作業・量産)＝Sonnet**：ルーチンはSonnetで手戻りしない。subagentは`model:"sonnet"`明示。※組織設定「既定Sonnet」はこの"床"として満たす（監督までSonnetに落とす意味ではない。複雑監督時はOpusを意識的に使う）。
+- **実装本体＝Codex(WSL・定額枠)** に必ず委譲（§1.17）。**生成・調査・大量処理＝Sonnet**、**超大規模文脈・Web検索＝Gemini(無料枠)**。
+- verify は監督の責務（§1.2・§1.4／Opusの判断が最も効く所）。
 - 効果は per-PC コストレポーターのモデル別内訳で実測して調整（憶測で決めない）。
 
 詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/token-model-cost-routing.md`

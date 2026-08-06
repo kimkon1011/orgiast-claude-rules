@@ -135,7 +135,7 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
 
 ### 1.17 コーディングは Codex を主に使う（Claude Code は指揮官）
 
-新規のコード実装タスクはBash tool経由で **Codex CLI** に投げる。Claude Codeは設計・タスク分解・コードレビュー・commit/PR/デプロイのオーケストレーションに徹し、**verifyはClaude Code側の責務**（§1.2の根本診断原則をCodex出力にも適用）。適用外: ごく短い編集、Codex呼び出しオーバーヘッドの方が重い場合、設計試行錯誤中、既存スキルがカバーする定型作業。
+新規のコード実装タスクはBash tool経由で **Codex CLI** に投げる。Claude Codeは設計・タスク分解・コードレビュー・commit/PR/デプロイのオーケストレーションに徹し、**verifyはClaude Code側の責務**（§1.2の根本診断原則をCodex出力にも適用）。**指揮官(main loop)が大きな実装を自分で手打ちしないこと＝これが最大のコストレバー**（§1.18。Opus/Sonnetいずれで動いていても、実装を挽くと手戻り＋高トークンになる。挽きそうになったらCodexへ回す）。適用外: ごく短い編集、Codex呼び出しオーバーヘッドの方が重い場合、設計試行錯誤中、既存スキルがカバーする定型作業。
 
 **Codexに「蓄積(memory)」を渡してから投げる（2026-08-06 Lucas指摘）**: Codexは Claude が育てた MEMORY.md/会話履歴を継承しないため、素で投げると「メインで常用しているエージェントより気が利かない」動作になる。→ Codex呼び出し時は**最初に MEMORY.md ＋ そのタスクに関連する memoryファイル・project CLAUDE.md・関連する過去の失敗パターン・(あれば)これまでのClaudeとの会話要約を、プロンプトに含める/読ませる**（Claudeが関連分だけキュレートして渡すのが基本。全文ダンプでなく該当タスクに効く蓄積を選ぶ）。また **Claude↔Codex を気まぐれに切り替えない**——切替を乱発すると文脈・memoryが片方にしか育たず賢さが乗らない。実装はCodex、指揮・蓄積の保持はClaude、と役割を固定し、渡す時は蓄積を明示的に同梱する。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/token-model-cost-routing.md`
 
@@ -143,9 +143,16 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
 
 従量課金トークンを使う前に必ず: ①定額枠内・トークン消費ゼロの代替があるか（ローカルスクリプト/既存自動化/Codex/Manus） ②「ツール未導入だから従量経路で」は理由にならない（自分でinstall） ③従量課金しか無ければモデル最小化（分類=Haiku、量産=Sonnet、Opusは品質差実測時のみ） ④大量トークン消費が見込まれる判断は着手前に費用見込みを1行提示。優先順位: 既存自動化・ローカルスクリプト（消費ゼロ）→Codex（コード・定額）／Manus（Web調査・エンリッチ・専用枠）→Haiku→Sonnet→Opus5（要正当化）→Fable5（禁止）。詳細・過去事例: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/token-model-cost-routing.md`
 
-### 1.18 Opus vs Sonnet の default は Sonnet
+### 1.18 指揮官は委譲する・自分で挽かない（Sonnet床＋複雑時のみOpus指揮官）
 
-**Sonnetをdefaultモデル**とする。新規タスクはまずSonnetで実行→品質差が体感で分からなければSonnet継続→明らかに劣化した種別だけOpusに切替（以後その種別は最初からOpus）。複雑なリファクタ設計・未知の根本原因分析・大規模一貫性保証・経営意思決定材料整理はOpus対象。subagent呼び出しも`model:"sonnet"`を明示する。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/token-model-cost-routing.md`
+**真のコストレバーは Opus/Sonnet の別ではなく「指揮官が実装を自分で手打ちせず委譲しているか」**（2026-08-06 kim指摘＋実測。この長大セッションで Opus 4.8 が委譲せず何時間も直接編集・push を挽き続けたのがコスト高騰の主因＝反面教師）。方針:
+- **既定は Sonnet 床**（定型・軽作業はSonnetで手戻りしない）。subagentも`model:"sonnet"`明示。
+- **複雑な設計/根本原因/横断一貫性/経営判断のときだけ意識的にOpus指揮官へ切替**。ただし**Opusは"考える・分解する・指示する・verifyする"だけ**で、大きな実装は自分で書かない（Opusを常時既定にして挽くと今回の失敗を繰り返す）。
+- **実装本体は必ず Codex(WSL・定額枠) に委譲**（§1.17）。生成・調査・大量処理は Sonnet、超大規模文脈・Web検索は Gemini(無料枠)。指揮官が大きなコードを手打ちしそうになったら Codex へ回す。
+- verify は指揮官の責務（§1.2・§1.4／Opusの判断が最も効く所）。
+- 効果は per-PC コストレポーターのモデル別内訳で実測して調整（憶測で決めない）。
+
+詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/token-model-cost-routing.md`
 
 ---
 

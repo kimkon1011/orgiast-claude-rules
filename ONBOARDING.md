@@ -30,12 +30,6 @@ API/CLI/MCP/GitHub Actions で実行可能な操作は、手順案内せず Clau
 
 **依頼前の必須5ステップ**（順序厳守）: ①API/CLI/MCPで可能か調査 → ②CLIが無ければ自分でinstall(winget/scoop/npm) → ③認証だけ1回user依頼 → ④それでも無理なら初めて手作業依頼(直URL+完了判定つき) → ⑤手作業に頼った場合は次回に活かす学びをmemoryへ。詳細・過去事例: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/automation-first-checklist.md`
 
-**★ 環境に合ったツールで実行する（2026-08-04 kim指示）**: 社内の実行環境は Windows。Node スクリプト・Windows パス・PowerShell 前提のツールは **PowerShell tool で実行するのが本来の経路**で、Bash tool（Git Bash）だと環境差で落ちることがある。**1つのツールで落ちただけで「自動化できない」と結論して手作業に振らない**。実測: Supabase Management API へ DDL を投げる処理が Bash tool では完了せず、**PowerShell tool（`Set-Location "…"; node scripts/xxx.mjs "…"`）で実行したら `OK (201)` で完了**し、手作業依頼1件が不要になった。
-- 秘匿値は復元したら即 `.env.local` に永続化し、**再利用可能な runner スクリプトを commit する**（例: `web/scripts/supabase-sql.mjs` に SQL 文字列を渡すだけで DDL が通る）。次回以降は値の受け渡しそのものが発生しない。
-- 注意: Windows の Node は終了時に `Assertion failed: !(handle->flags & UV_HANDLE_CLOSING), file src\win\async.c` と exit 9 を返すことがある。**標準出力に成功レスポンスが出ていれば処理は成功している**（libuv の teardown ノイズ）。exit code だけ見て失敗と誤判定して手作業に切り替えず、read-back verify で実際の状態を確認して判断する。
-
-**userに渡すコマンドはシェルに合わせる（絶対）**: kim・社内PCの既定は **Windows PowerShell 5.1**。`cmd1 && cmd2` は `トークン '&&' は、このバージョンでは有効なステートメント区切りではありません` で必ず失敗する。**`;` 区切りで書く**（`Set-Location "パス"; node script.mjs`）。パスに空白・日本語が入るので必ず `"` で囲む。2026-08-04 に実際に `&&` を渡して失敗させた。
-
 **git/PRフローも同様**: commit→push→`gh pr create`→`gh pr merge`まで自分でやる。「マージお願いします」で止めない。唯一の例外は「自作PRの自己マージ」ガードレール（レビュー観点+直URL+アカウント切替注意を添えて手渡し）。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/automation-first-checklist.md`
 
 **既存リソースの再作成を絶対に振らない**: 「○○を新規作成してください」の前に必ずCLI/APIで一覧確認（GCP SA/Vercel env/GitHub secret/Drive/Discord等）。既にあれば流用。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/automation-first-checklist.md`
@@ -160,18 +154,6 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
 
 詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/token-model-cost-routing.md`
 
-### 1.19 「ChatGPTでデザインして」と言われたら Claude が上書きしない
-
-見た目のデザインを「ChatGPTで作って」と依頼されたら、**実際にOpenAIの画像生成に作らせ、その見た目に忠実に実装する**。Claude Codeが自分のCSSの好みで再解釈・簡略化するのは禁止（配色・レイアウト・アイコン・画像は生成結果に追従し、Claudeはテキスト・構成・データ配線に徹する）。
-
-- **Codex CLIで代用しない**。ChatGPTアカウントでログインしていてもCodexは**コード専用で画像を作れない**。画像は `gpt-image-1`（`/v1/images/generations`、または `/v1/responses` の `image_generation` tool）を直接叩く。chatgpt.comと同じ「スクショを見せて反復修正」は `/v1/responses` + `previous_response_id` で再現する
-- **複数枚が要る時は1枚のコンタクトシートを生成して切り出す**。1枚ずつ個別生成すると照明・色味がバラバラになり「同じブランドの写真」に見えない。「3列×2行、全パネル同一トンマナ」で1枚生成→`sharp`でcrop/composite
-- **生成画像は表示枠のアスペクト比に合わせる**。`object-cover`ははみ出しを問答無用で切るため、比がズレると主要被写体が枠外に消える。枠の実寸比を先に計算し、`gpt-image-1`のsize（1:1 / 1.5:1 / 0.67:1）から近いものを選び枠側も合わせる。検証は「画像が読めたか」では不十分で、**枠の実寸比と`naturalWidth/Height`を比較しcrop率を数値でassert**する
-- モックアップ内の数値（導入社数・満足度%・料金）は**AIの創作**なので実装時は必ず正直な表現に置換する（§2.1）。ただしレイアウトやトーンは変えない
-- **Codexに投げる時**: ブリーフはファイルに書いてファイル名だけ渡す（`codex exec "$(cat brief.md)"` はbashがバッククォートを食いコードブロックが空になる）。「コマンド実行禁止」と書くと`cat`すら拒否されるので、禁止対象は`npm`/`node`/ビルドだけと明記する（/mnt/c上でLinux側からnodeを走らせるとWindowsネイティブバイナリが壊れるのが理由。生成スクリプトは書かせるだけにして実行はWindows側から）
-
-**Why:** 2026-08-05〜06、あるLP制作で「ChatGPTで作ったものと違う／デザインレベルが落ちた」と4回連続で指摘された。原因は毎回Claude自身が最終的な見た目の決定権を握っていたこと（Codexでrewrite→抽象アートのみ生成→生成物を見て独自Tailwindに再構成→個別生成でトンマナ崩壊→アスペクト比不一致で主要被写体が42%切れる）。
-
 ---
 
 ## 2. 重要な運用ルール
@@ -209,6 +191,14 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
 ### 2.8 API（LLM）コスト最適化
 
 タスク難易度でモデル階層化（分類・抽出=Haiku、顧客向け生成=Sonnet、経営判断=Opus）。prompt cachingは5分TTL内に同一prefixが再送される場合だけ有効（単発cronには付けない）。非同期でよい一括生成はBatch API（50%オフ）。`max_tokens`は用途相応の最小に、contextは必要分だけ送る。**スプレッドシートのタブ参照はURLのgidより名前を優先**（URLは古い可能性が常にあるため、user言及のタブ名と実際のタブ一覧を必ず突き合わせる）。詳細・現状適用状況・past case: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/api-cost-optimization.md`
+
+### 2.8.1 夜間バッチ・作り置き(prerender)原則（表示時間↓・コスト↓は全部夜間へ / 2026-08-10 kim指示）
+
+**遅延を許容できるシステム作業は全部夜間に回し、日中は"作り置きを読むだけ"にする。** 表示時間短縮・API呼び出し削減・コスト削減につながるものは原則すべて夜間バッチ化する。
+- 対象: 大量生成/属性エンリッチ(Manus)/重いcron/バックフィル/日報・ダッシュボード・サマリーの事前整形/毎回同じレシピで組み立てている表示データ。
+- **prerenderパターン**: 毎晩バッチで「Claudeが毎回ゼロから組み立てる表示」をMarkdown等に完成形で書き出し、`<!-- ...-START -->`〜`<!-- ...-END -->`マーカーで囲む。日中はそのブロックを**読むだけ**（組み立て時間ゼロ・API呼び出しゼロ・待ち時間ゼロ）。起動が体感で数倍速くなる。
+- **Batch API(50%オフ)** を使えるバッチは使う。夜間スケジュールは GHA cron / Vercel cron / OSのスケジューラ等（Windowsタスク登録はclassifierが止めるので ps1書出し+user 1行実行）。
+- 判断: 新しい定型表示/一括処理を作るとき「これは夜間に作り置きして日中は読むだけにできないか」を先に問う。※Obsidian等のアプリは任意。memoryファイル群(既に`[[wikilink]]`のMarkdown)やDrive Docへ書き出せば同じ効果。
 
 ### 2.9 Google Drive 運用ルール
 

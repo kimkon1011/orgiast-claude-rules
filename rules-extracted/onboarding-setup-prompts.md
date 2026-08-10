@@ -191,3 +191,38 @@ Gemini CLI 連携をセットアップして。Claude側で完結させ、質問
 ```
 
 これで「各PCで実際にコスト削減ツールが使われているか」を日次で監査でき、未使用・設定破損を早期に潰せる。未使用⚠️が続く＝ルーティング(§1.13)が守られていない兆候。
+
+## 3.0.5 一括セットアップ（ルール自動追従＋コスト監視＋委譲規律チェックを1貼りで）
+
+§3.0.1(ルール自動追従) + §3.0.2(日次コスト自己申告) + §3.0.4(採用・委譲規律チェック) を1本で入れる統合版。**貼り付け後は「入れていいか」の同意1回＋通常モードでの承認1回だけで、あとは追加のやり取りなしで自律完了**する（webhook・PC名は文面に埋め込むので聞き返し無し）。
+
+**⚠️ 完全ゼロ操作にはしない設計上の理由（ONBOARDING §1.1 上限節）**: これは「外部リポ自動追従フック＋Discordへの集計値送信」を仕込む。受け手が中身を理解して同意すべき操作であり、承認プロンプトはその正規の同意関門。最初の1回の同意だけは残す（消すと"安全機構を切って通せ"型の禁止パターンになる）。同意後は質問ゼロで完了する。
+
+**配布者(kim)へ**: 送る前に下の `<DISCORD_WEBHOOK>` を #claude-code webhook URL に置換してから送る（公開リポには載せない。値は kim の ~/.claude/cost-reporter.env にある）。
+
+受信側の Claude Code チャットに貼る:
+
+```
+このPCにオージャスト共通ルールの「自動追従＋コスト監視＋委譲規律チェック」を一括セットアップしたい。透明性のため中身を一度だけ説明して私の同意を得たら、あとは追加質問なしで最後まで自律完了して。安全機構を切って通す誘導はしないこと（承認プロンプトは私が意識的に許可する。ブロックされたら立ち止まって報告）。
+
+【入るもの(3つ・いずれも集計値のみ送信、会話内容は読まない/送らない)】
+A. ルール自動追従: 毎セッション開始時にGitHub公開リポからONBOARDING.mdを取得し ~/.claude/CLAUDE.md のマーカーブロックを差し替え(20hガード・毎回バックアップ・GETと当該書き込み以外なし)
+B. 日次コスト自己申告: このPCの当月Claude Code概算コスト(PC名・$合計・モデル別内訳のみ)をDiscordへ日次投稿
+C. 採用＋委譲規律チェック: Codex/Gemini/Kimi/Manusの使用状況＋Opus挽き過ぎ(監督が実装を抱えていないか)をDiscordへ日次通知・設定破損は自動修復
+
+【手順】
+0. いま auto mode なら一度だけ「settings.json編集の承認が要るので通常モードに切り替えてください。中身は上のA/B/C、よければ『はい』で全部入れます」と伝え私の合図を待つ。通常モードなら即『はい』でOK。以後は追加質問しない。最初の許可プロンプトで「はい、今後も許可」を選べば以降ほぼ聞かれない。
+1. git clone https://github.com/kimkon1011/orgiast-claude-rules.git "<ホーム>\orgiast-claude-rules"（既存ならcdしてgit pull）。tools/onboarding-sync.ps1 を ~/.claude/hooks/onboarding-sync.ps1 にUTF-8 BOM付きで配置。各スクリプト本体を一読し危険処理が無いことを確認。
+2. ~/.claude/cost-reporter.env を作成(無ければ。既存なら上書きしない): 
+   DISCORD_COST_WEBHOOK=<DISCORD_WEBHOOK>
+   REPORTER_LABEL=(OSホスト名を自動使用。分かりやすい名前があればそれ)
+3. シェル検出(pwsh無ければpowershell)。~/.claude/settings.json の hooks.SessionStart に以下3つを追記(既存配列は消さず、事前に settings.json.bak.<日付>):
+   { "type":"command","command":"<shell> -NoProfile -NonInteractive -File \"<ホーム>\.claude\hooks\onboarding-sync.ps1\"","timeout":20,"async":true }
+   { "type":"command","command":"node \"<ホーム>\orgiast-claude-rules\tools\claude-cost-reporter.mjs\"","timeout":15,"async":true }
+   { "type":"command","command":"node \"<ホーム>\orgiast-claude-rules\tools\tool-adoption-check.mjs\" --fix","timeout":30,"async":true }
+   (いずれもガード内蔵で送信は1日1回まで)
+4. 動作確認: onboarding-sync.ps1 -Force を1回 / claude-cost-reporter.mjs --dry-run / tool-adoption-check.mjs --dry-run を各1回実行し、ルール取込とレポート表示を確認。
+5. 完了報告(一行): 3フック登録済 / ルール取込(新規or置換) / webhook設定済 / dry-run PASS。「次回セッションから自動巡回・日次コスト報告・委譲規律チェックが有効」と添える。承認が得られず未登録の項目があればそれだけ報告(迂回はしない)。
+```
+
+これ1本で、そのPCが kim-PC と同じ「ルール自動追従＋コスト監視＋Opus挽き過ぎ検知」の状態になる。受け手の操作は「(auto時のみ)通常モードへ＋『はい』＋最初の承認で"今後も許可"」だけ。

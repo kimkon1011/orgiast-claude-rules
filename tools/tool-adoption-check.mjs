@@ -153,6 +153,47 @@ function checkManus() {
     role: 'Web調査・属性エンリッチ(多段・根拠URL要/aujust埋込・専用枠)', appEmbedded: true, envHit };
 }
 
+// ---- 監督(Opus)委譲規律チェック(§1.18): Opus高消費なのにCodex未使用=監督が実装を抱えている疑い ----
+const PRICE = { opus: [5, 25], sonnet: [3, 15], haiku: [1, 5], fable: [10, 50] };
+function modelFamily(m) { m = String(m || ''); if (/opus/i.test(m)) return 'opus'; if (/sonnet/i.test(m)) return 'sonnet'; if (/haiku/i.test(m)) return 'haiku'; if (/fable/i.test(m)) return 'fable'; return null; }
+function mtdCostByModel() {
+  const root = path.join(HOME, '.claude', 'projects');
+  const d = new Date(now); const monthStart = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+  const by = {};
+  (function walk(dir) {
+    let ents; try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of ents) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (e.name.endsWith('.jsonl')) {
+        let raw; try { raw = fs.readFileSync(p, 'utf-8'); } catch { continue; }
+        for (const line of raw.split('\n')) {
+          if (line.indexOf('"usage"') < 0) continue;
+          let o; try { o = JSON.parse(line); } catch { continue; }
+          if (o.type !== 'assistant' || !o.message || !o.message.usage) continue;
+          if (!o.timestamp || o.timestamp < monthStart) continue;
+          const fam = modelFamily(o.message.model); if (!fam || !PRICE[fam]) continue;
+          const u = o.message.usage;
+          by[fam] = (by[fam] || 0) + ((u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0)) / 1e6 * PRICE[fam][0] + (u.output_tokens || 0) / 1e6 * PRICE[fam][1];
+        }
+      }
+    }
+  })(root);
+  return by;
+}
+function supervisorDiscipline(codexUsed) {
+  const by = mtdCostByModel();
+  const total = Object.values(by).reduce((a, b) => a + b, 0);
+  const opus = by.opus || 0; const share = total > 0 ? opus / total : 0;
+  const pct = Math.round(share * 100);
+  if (total < 30) return { icon: '☑️', note: `当月消費小(概算$${total.toFixed(0)})で判定保留` };
+  // 最小限監督ならOpus絶対額は小さく収まるはず。$300超=明確に挽いている(全社¥150k≈$1000の1/3を1PCの監督が消費)
+  if (opus >= 300) return { icon: '🚨', note: `Opus当月概算$${opus.toFixed(0)}(全体の${pct}%)=最小限監督の水準を大きく超過。監督が実装を挽いている。実装を即Codexへ委譲(§1.17/§1.18)${codexUsed ? '' : '／かつ直近Codex未使用'}` };
+  if (!codexUsed && opus >= 50) return { icon: '🚨', note: `Opus $${opus.toFixed(0)}消費だが直近${USAGE_WINDOW_DAYS}日Codex未使用=委譲されていない疑い。実装はCodexへ(§1.17/§1.18)` };
+  if (opus >= 100 || share >= 0.7) return { icon: '⚠️', note: `Opus当月$${opus.toFixed(0)}・比率${pct}%=監督が挽き気味の可能性。実装のCodex委譲を確認(§1.18)` };
+  return { icon: '✅', note: `委譲規律OK (Opus概算$${opus.toFixed(0)}/${pct}%・Codex${codexUsed ? '使用あり' : '低Opusで問題なし'})` };
+}
+
 const checks = [checkCodex(), checkGemini(), checkKimi(), checkManus()];
 
 // ---- レポート組み立て ----
@@ -170,6 +211,11 @@ for (const c of checks) {
   else { icon = '✅'; note = `使用あり(${Number.isFinite(c.usedDays) ? Math.floor(c.usedDays) + '日前' : '痕跡あり'})`; }
   msg += `${icon} **${c.name}** ${c.version} — ${note}\n   用途: ${c.role}\n`;
 }
+// 監督(Opus)委譲規律
+const codexUsed = (checks.find((c) => c.name === 'Codex') || {}).used;
+const disc = supervisorDiscipline(codexUsed);
+msg += `${disc.icon} **監督委譲規律(§1.18)** — ${disc.note}\n`;
+
 if (fixes.length) msg += `\n🔧 自動修復: ${fixes.join(' / ')}\n`;
 if (human.length) msg += `\n🙋 要人手(最小1操作): ${human.join(' / ')}\n`;
 if (!fixes.length && !human.length) msg += `\n(健全性OK。未使用⚠️があればルーティング(§1.13)を意識)\n`;

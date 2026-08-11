@@ -144,3 +144,72 @@ assert('decoded equals source', Buffer.from(b64, 'base64').equals(sample));
 W3C 標準 API (readAsDataURL / Blob / fetch / URL / FormData 等) の native 挙動は spec 信頼可だが、 その出力を受けるロジック と 「使い方を間違えていないか」 と 「既知の bug パターン」 は 必ず Node test に落とす。
 
 `node test/xxx.test.js` で assert pass しない frontend 変更は 「未完了 todo」 として残す。 user に「dialog を開き直してください」「ハードリロードしてください」 を完了報告の代わりにしない。
+
+---
+
+## 1.4.4.z 人が読む「配信」は届いた実物を見るまで完了と言わない (絶対ルール / 2026-08-11 実害)
+
+### 何が起きたか
+
+`orgiast-weekly-bot`（毎週月曜 09:00 JST に週次経営指示を Discord #オージャスト社員 へ配信）で、2本の障害が同時に露出した。
+
+**① schedule 実行が3週間まるごと死んでいた（2026-07-27 / 08-03 / 08-10）**
+
+`preflight` job が `gh run list --workflow=weekly.yml` を叩くのに、`GITHUB_TOKEN` の既定権限が Contents / Metadata / Packages: read のみで `actions` が無く:
+
+```
+HTTP 403: Resource not accessible by integration
+##[error]Process completed with exit code 1
+```
+
+`shell: bash -e` なので即 exit 1 → `needs: preflight` の本体 job が一切走らず、Discord 投稿も artifact 生成もゼロ。
+**発覚が遅れた構造**: preflight は `if [ "$event_name" != "schedule" ]` で即 exit 0 するため、`workflow_dispatch`（手動）だけは成功し続けた。「手で叩けば動く」ので壊れていないように見えた。
+
+**② 復旧して流したら、投稿本文が全文 mojibake だった**
+
+`_parse_json_lenient` の regex フォールバックが `decode("unicode_escape")` を使っていた。`unicode_escape` は bytes を **latin-1** として解釈するため UTF-8 の日本語が 1バイト=1文字 に化ける（`【` = `E3 80 90` → `U+00E3 U+0080 U+0090`）。
+さらにこの経路は `discord_message` 以外の全フィールドを捨てるため `top5_priorities` 等が失われ、それを読む秘書PCダッシュボードの週次分析ウィジェットも中身が欠けた。
+入力 `context.json` は正常（日本語 128,739 文字・mojibake 0）で、壊れたのは**出力パース段だけ**だった。
+
+**③ Claude 自身の誤判定（最も再発させたくない点）**
+
+Claude は MCP `list_messages` で読んだ本文が化けているのを見て「MCP のデコード問題で、Discord 上の表示は問題ありません」と報告した。根拠は「同レスポンス内の embed タイトルは正常」「同チャンネルの過去投稿は `search_messages` 経由では正常」。**この推論は成立していたが結論は誤りで、実際の Discord クライアントでも化けていた**（user のスクショで判明）。実物を見ずに「表示の問題」と断定したことで、社員が読めない投稿が放置される一歩手前だった。
+
+### ルール
+
+1. **送信側コードに送信前ガードを必ず実装する**（人が読む配信すべて: Discord / メール / LINE / Slack / Web push）
+   - 文字化け判定: 本文が必ず日本語を含む前提なら「CJK 0文字 かつ U+0080-U+00FF が多数」で mojibake とみなす
+   - 空本文 / `XX`・`〇〇`・`TODO` 等テンプレプレースホルダ残り も同様に弾く
+   - 検知したら**送らずに例外で job を落とす**。読めない投稿を全社チャンネルに流すより、落として気付ける方が良い
+
+   ```python
+   def looks_mojibake(text: str) -> bool:
+       cjk = sum(1 for ch in text if 0x3040 <= ord(ch) <= 0x30FF or 0x4E00 <= ord(ch) <= 0x9FFF)
+       latin_supp = sum(1 for ch in text if 0x0080 <= ord(ch) <= 0x00FF)
+       return cjk == 0 and latin_supp > 20
+   ```
+
+2. **Claude は投稿後に実チャンネルを読み返してから完了と言う**
+   - MCP/API 経由で取得した本文が化けていたら、**「ツール側の表示問題」と断定してはいけない**
+   - 実クライアントのスクショ、別 MCP ツール、artifact の生バイト確認（コードポイント列を見る）など**独立した2経路**で突き合わせる
+   - 生バイト確認の実例: `[...s].map(c=>c.codePointAt(0).toString(16))` が `e3 80 90` のように UTF-8 バイト並びになっていたら、文字列自体が壊れている（表示の問題ではない）
+
+3. **Python で JSON 文字列を復元するとき `decode("unicode_escape")` は禁止**
+   - 代わりに `json.loads(f'"{raw}"', strict=False)`
+   - そもそも「生の改行が混じって malformed」なら `json.loads(text, strict=False)` を先に試す。フォールバックに落ちなければ全フィールドを失わない
+
+4. **cron の生存は `--event=schedule` の直近成功日時で見る。手動実行の成功は生存証明にならない**
+
+   ```bash
+   gh run list --repo <owner>/<repo> --workflow <wf>.yml \
+     --event=schedule --limit 15 --json createdAt,conclusion
+   ```
+
+   - `gh run list` / Actions API を叩く job には `permissions: {actions: read, contents: read}` を明示（無いと 403 で schedule だけ全滅）
+   - 権限が効いたかは run ログの `##[group]GITHUB_TOKEN Permissions` に `Actions: read` が出るかで確認できる（次の schedule を待たなくてよい）
+
+5. **定期配信を持つリポには push/PR で回る最小 CI を併設する**（配信当日ではなく push 時点で壊れを止める）
+   - 今回追加したのは `.github/workflows/test.yml` + `tests/test_parse_and_mojibake.py` 4本（実際に化けた artifact を食わせて検出できることまでテスト）
+
+6. **他システムが artifact を読む設計なら `retention-days` 失効も同時に効く**
+   - 秘書PCダッシュボードは weekly-bot の artifact `result.json` を `gh run download` するため、配信停止＋retention 30日失効の二重で 502 (`no valid artifacts found to download`) になった

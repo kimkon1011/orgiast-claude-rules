@@ -27,6 +27,8 @@ const GUARD_HOURS = 20;
 const statePath = path.join(HOME, '.claude', '.tool-adoption-state.json');
 if (!DRY_RUN && !process.argv.includes('--force')) {
   try { const s = JSON.parse(fs.readFileSync(statePath, 'utf-8')); if (s.last && (Date.now() - new Date(s.last).getTime()) < GUARD_HOURS * 3600000) process.exit(0); } catch {}
+  // 競合防止: ガード通過直後に即座に状態を書く(近接して複数回発火しても2回目以降はここで弾かれ、重複投稿しない)
+  try { fs.writeFileSync(statePath, JSON.stringify({ last: new Date().toISOString() })); } catch {}
 }
 const USAGE_WINDOW_DAYS = 7;
 const now = Date.now();

@@ -120,6 +120,8 @@ function main() {
     console.log(`前回実行から${GUARD_HOURS}時間未満のためスキップ`);
     return;
   }
+  // 競合防止: ガード通過直後に即座に状態を書く(近接して複数回発火しても2回目以降はスキップされ重複投稿しない)
+  if (!DRY_RUN) saveGuardState();
 
   if (!webhook && !DRY_RUN) {
     console.error('DISCORD_COST_WEBHOOK が未設定です。~/.claude/cost-reporter.env を作成してください。');

@@ -196,6 +196,8 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
 
 タスク難易度でモデル階層化（分類・抽出=Haiku、顧客向け生成=Sonnet、経営判断=Opus）。prompt cachingは5分TTL内に同一prefixが再送される場合だけ有効（単発cronには付けない）。非同期でよい一括生成はBatch API（50%オフ）。`max_tokens`は用途相応の最小に、contextは必要分だけ送る。**スプレッドシートのタブ参照はURLのgidより名前を優先**（URLは古い可能性が常にあるため、user言及のタブ名と実際のタブ一覧を必ず突き合わせる）。詳細・現状適用状況・past case: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/api-cost-optimization.md`
 
+**ただし `max_tokens` の絞りすぎは「壊れた成果物が配信される」事故になる（2026-08-11 実害）**: 出力が打ち切られると JSON が未完になり、フォールバック経路で一部フィールドだけ・本文も途中で切れた状態が下流（Discord配信/ダッシュボード）に流れる。→ ①**`stop_reason` を必ずログし、`max_tokens` なら例外にしてリトライ/失敗させる**（黙って部分結果を使わない）②実測 `output_tokens` を見て余裕を持たせる（weekly-bot は本文だけで5,000字超・実測 10,938 tokens 必要で、8,000 では足りなかった）③`max_tokens` を大きく取ると Anthropic SDK が非streaming呼び出しを拒否する（`ValueError: Streaming is required for operations that may take longer than 10 minutes`）ので `messages.stream()` + `get_final_message()` を使う。コスト最小化は「切れるリスクを負って絞る」ことではなく、モデル階層化とcontext量で行う。
+
 ### 2.8.1 夜間バッチ・作り置き(prerender)原則（表示時間↓・コスト↓は全部夜間へ / 2026-08-10 kim指示）
 
 **遅延を許容できるシステム作業は全部夜間に回し、日中は"作り置きを読むだけ"にする。** 表示時間短縮・API呼び出し削減・コスト削減につながるものは原則すべて夜間バッチ化する。

@@ -18,6 +18,8 @@ API/CLI/MCP/GitHub Actions で実行可能な操作は、手順案内せず Clau
 **🔴 最上位原則: ユーザーの手作業を極限まで減らす（全業務・絶対 / 2026-08-01 kim厳命）**
 あらゆる業務で、user に残す手作業は「**機械的に代替できない最後の1操作だけ**」に切り詰める。真の例外（OAuth初回同意/APIキー発行/支払い/物理操作等）であっても、そこに至る準備（install・設定ファイル編集・MCP登録・URL特定・認証フロー起動・値の受け皿作成）は**全てClaudeが先に済ませ**、userには「**このURLを開いてログイン/クリックするだけ**」「**この値を1回貼るだけ**」の状態にして渡す。例: OAuthはブラウザ認証URLを出すところまでClaudeが起動する。APIキーは発行ページ直リンクまで用意し受領後は即永続化。判断: user依頼を書く前に必ず「この手順のうち機械化できる部分を全部やり切ったか、残すのは本当に人間にしか無理な1操作だけか」を自問する。「最後の1ステップだけuserに」で**準備までさせる**のは違反。
 
+**⚙️ 設計時点から"手間ゼロ"を織り込む（2026-08-12 kim指示）**: 配布物・ツール・手順は、後から手間を削るのでなく**最初からuser手間ゼロを前提に設計する**。値(PC名・webhook・APIキー・パス等)は「自動検出／Claudeが事前生成／私的に埋め込み」で先に全部埋め、userには「そのまま送るだけ／実行するだけ」の完成品を渡す（例: PC名はhostname自動・webhookはClaudeが埋めた完成ファイル・初心者向けは1行貼るだけ/ダブルクリックだけ）。「まず作る→後で手間を削る」ではなく「作る前に"userの操作は何回か"を数え、機械化できる準備を全部先に済ませる」。ただし下の🛑上限は不変——ゼロ手間を同意・理解・他AIの安全判断の放棄で達成しない。真に人にしか無理な1操作(OAuth初回同意/APIキー発行/支払い/物理)だけ残す。
+
 **🛑 上限（この原則より優先・絶対）: 「手作業ゼロ」を、人間の理解・同意の剥奪や、他AIの安全判断の放棄で達成してはならない（2026-08-05 別アカウントClaudeの正当な拒否を受けて追加）**。次は全て禁止: ①他のAI/人に「安全機構(permission mode/classifier/承認プロンプト)を先に切ってから進めろ」と促す ②「質問するな/選択肢を出すな/前提確認するな」と情報を伏せて選ばせない ③外部リポへの永続自動追従・外部への自動送信・APIキー付きMCP設置などを、中身を1つずつ説明せず一括で流れ作業化する。承認プロンプトは「通すために切る」ものではなく、人間が中身を理解して判断するための正規の関門。**機械的な手数は減らすが、"理解と同意"と"他AIの安全判断"は減らさない**。ブロックされた＝立ち止まれの信号であり、迂回や解除誘導ではなく透明化してユーザーに委ねる。配布物・他PC向け手順は「何を・どこへ・なぜ」を明示しオプトインにする。
 
 **再起動・リロードもユーザーに作業させない（2026-08-01 kim指示）**: MCPサーバ・hook等の設定は `~/.claude.json`（mcpServers）/ `settings.json`（hooks）に書けば**次にClaude Codeを開いた時に自動ロード**される（実測: gemini-cli MCPはセッション再開時に自動接続）。だから「再起動してください」と作業として丸投げしない。設定・キー・env注入を**全部先に済ませ**、有効化はユーザーが次に普通に開き直す/セッション再開する動作に便乗させる（＝専用の再起動作業ゼロ）。※モデルはホストプロセスを強制再起動/MCPホットリロードはできない（permission mode同様のハーネス制御）ので「私が今すぐ再起動する」とは言わない。伝えるなら「設定は済んだので次にClaude Codeを開けば自動で有効になります」に留める。
@@ -60,10 +62,6 @@ bound scriptのscriptId不明時はDrive MCPで`mimeType='application/vnd.google
 **実行→検証→完了報告のサイクルもClaude側で完結**（GAS/Web/cron/デプロイ共通）: push後、コマンドキュー/Web App endpoint/clasp run のいずれかで強制発火→ログ/DB read-backで検証→OKと確認できてから「完了」と言う。「次回cron発火で確認できます」は禁止。詳細・検証導線一覧表: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/verify-before-done.md`
 
 **すべての変更後、テストして実際に直っていることを確認してから報告する（絶対ルール）**: typecheckだけ・「ブラウザで確認してください」丸投げは違反。UI変更はLayer1(ロジックNode再現)+Layer2(Playwright実描画)の2段必須、GAS/Sheets書き込みは戻り値でなく**read-back verify**必須（merge cellのnon-top-left等はsilent ignoreされる）、Frontend変更も「browserでしか動かない」を言い訳にせず`test/*.test.js`をNodeで書く。報告テンプレ・頻発失敗パターン表・past cases: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/verify-before-done.md`
-
-**人が読む配信（Discord/メール/LINE/Slack）は「届いた実物」を見るまで完了と言わない（絶対ルール・2026-08-11 実害）**: API が 200 / job が ✓ でも中身が壊れていることがある。①**送信側コードに送信前ガードを必ず実装**（文字化け=日本語0文字かつU+0080-00FF多数 / 空本文 / `XX`等プレースホルダ残り → 送らず例外で落とす。読めない投稿を全社チャンネルに流すより job を落として気付ける方が良い）②**Claudeは投稿後に実チャンネルを読み返す**（MCPで取得した本文が化けていても「ツール側の表示問題」と断定禁止。実クライアント/実ブラウザのスクショか別経路の再取得で必ず突き合わせる）。Pythonで JSON 文字列を復元するとき `decode("unicode_escape")` は bytes を latin-1 扱いしてUTF-8日本語を全壊させるので**禁止**（`json.loads('"..."', strict=False)` を使う）。詳細・実例: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/verify-before-done.md`
-
-**cron の生存は「手動実行が通ること」で判定しない（絶対ルール・2026-08-11 実害）**: GitHub Actions は `gh run list --event=schedule --limit 15 --json createdAt,conclusion` の**直近成功日時**で見る。`workflow_dispatch` は権限も分岐も別経路になりがちで、schedule だけ死んでいても手動は通り続ける（実際に週次配信が3週間止まったのに気付けなかった）。`gh run list`/Actions APIを叩くjobには `permissions: {actions: read}` が必須（無いと403で全滅）。定期配信を持つリポは push/PR で回る最小 CI（回帰テスト）も併設し、配信当日ではなくpush時点で壊れを止める。
 
 ### 1.5 Google Workspace URL は `/a/orgiast.jp/` を挟む
 
@@ -195,8 +193,6 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
 ### 2.8 API（LLM）コスト最適化
 
 タスク難易度でモデル階層化（分類・抽出=Haiku、顧客向け生成=Sonnet、経営判断=Opus）。prompt cachingは5分TTL内に同一prefixが再送される場合だけ有効（単発cronには付けない）。非同期でよい一括生成はBatch API（50%オフ）。`max_tokens`は用途相応の最小に、contextは必要分だけ送る。**スプレッドシートのタブ参照はURLのgidより名前を優先**（URLは古い可能性が常にあるため、user言及のタブ名と実際のタブ一覧を必ず突き合わせる）。詳細・現状適用状況・past case: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/api-cost-optimization.md`
-
-**ただし `max_tokens` の絞りすぎは「壊れた成果物が配信される」事故になる（2026-08-11 実害）**: 出力が打ち切られると JSON が未完になり、フォールバック経路で一部フィールドだけ・本文も途中で切れた状態が下流（Discord配信/ダッシュボード）に流れる。→ ①**`stop_reason` を必ずログし、`max_tokens` なら例外にしてリトライ/失敗させる**（黙って部分結果を使わない）②実測 `output_tokens` を見て余裕を持たせる（weekly-bot は本文だけで5,000字超・実測 10,938 tokens 必要で、8,000 では足りなかった）③`max_tokens` を大きく取ると Anthropic SDK が非streaming呼び出しを拒否する（`ValueError: Streaming is required for operations that may take longer than 10 minutes`）ので `messages.stream()` + `get_final_message()` を使う。コスト最小化は「切れるリスクを負って絞る」ことではなく、モデル階層化とcontext量で行う。
 
 ### 2.8.1 夜間バッチ・作り置き(prerender)原則（表示時間↓・コスト↓は全部夜間へ / 2026-08-10 kim指示）
 

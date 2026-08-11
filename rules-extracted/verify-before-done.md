@@ -213,3 +213,24 @@ Claude は MCP `list_messages` で読んだ本文が化けているのを見て�
 
 6. **他システムが artifact を読む設計なら `retention-days` 失効も同時に効く**
    - 秘書PCダッシュボードは weekly-bot の artifact `result.json` を `gh run download` するため、配信停止＋retention 30日失効の二重で 502 (`no valid artifacts found to download`) になった
+
+### 追記: max_tokens 打ち切りが「欠けた成果物の配信」を生む (2026-08-11/12 実害)
+
+文字化けを直した後も weekly-bot は2回連続で壊れた配信を出した。真因は `max_tokens=8000` の不足。
+
+- 出力が途中で打ち切られる → JSON 未完 → regex フォールバックが `discord_message` だけ救出 → `top5_priorities` 等が欠落（ダッシュボードも欠損）、しかも**本文自体が「約5件（」で途中終了**した状態で社員チャンネルに投稿された
+- 実測 `output_tokens=10938`。本文だけで5,000字超あり 8,000 では収まらなかった
+
+対処（3点セットで入れる）:
+
+1. `stop_reason` と `output_tokens` を必ずログする。`stop_reason == "max_tokens"` なら例外にしてリトライ→駄目なら job を失敗させる。**黙って部分結果を下流に流さない**
+2. パース失敗の痕跡（`_parse_error` 等）が残っている結果は**配信しない**。artifact は残して原因を見てから再実行する
+3. `max_tokens` を大きくすると Anthropic SDK が非streamingを拒否する
+
+   ```
+   ValueError: Streaming is required for operations that may take longer than 10 minutes
+   ```
+
+   → `client.messages.create()` ではなく `with client.messages.stream(...) as s: resp = s.get_final_message()` を使う。`stop_reason` / `usage` は最終メッセージから同様に取れる
+
+**副産物として学んだこと**: 2 で入れたガードは、3 の streaming エラーで job が落ちたときに実際に機能し、Discord へは何も投稿されなかった。「壊れていたら送らずに落とす」設計は、直した直後の別バグに対しても効く。

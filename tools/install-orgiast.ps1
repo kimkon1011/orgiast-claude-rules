@@ -56,6 +56,9 @@ New-Item -ItemType Directory -Force -Path $HOOKS | Out-Null
 $src = Join-Path $REPO 'tools\onboarding-sync.ps1'
 $dst = Join-Path $HOOKS 'onboarding-sync.ps1'
 if (Test-Path $src) { Copy-Item $src $dst -Force; OK "配置: $dst" } else { Warn "onboarding-sync.ps1 が見つかりません" }
+$srcW = Join-Path $REPO 'tools\pretooluse-delegation-warn.ps1'
+$dstW = Join-Path $HOOKS 'pretooluse-delegation-warn.ps1'
+if (Test-Path $srcW) { Copy-Item $srcW $dstW -Force; OK "配置: 委譲警告フック" }
 
 # --- cost-reporter.env ---
 Step "コスト報告の設定"
@@ -89,6 +92,18 @@ foreach ($cmd in $wanted) {
   OK "追加: $key"
 }
 $json.hooks.SessionStart = $existing
+# PreToolUse: 委譲警告フック(アプリ実装コードの直接編集時にCodex委譲をリマインド・警告のみ/§1.18)
+if (Test-Path $dstW) {
+  if (-not $json.hooks.PreToolUse) { $json.hooks | Add-Member -NotePropertyName PreToolUse -NotePropertyValue @() -Force }
+  $pre = @($json.hooks.PreToolUse)
+  $already = $pre | ForEach-Object { $_.hooks } | ForEach-Object { $_.command } | Where-Object { $_ -match 'pretooluse-delegation-warn' }
+  if ($already) { OK "委譲警告フック 登録済(スキップ)" }
+  else {
+    $pre += [pscustomobject]@{ matcher='Write|Edit|MultiEdit'; hooks=@([pscustomobject]@{ type='command'; command="$shell -NoProfile -File `"$h\.claude\hooks\pretooluse-delegation-warn.ps1`"" }) }
+    $json.hooks.PreToolUse = $pre
+    OK "委譲警告フック PreToolUse 登録"
+  }
+}
 ($json | ConvertTo-Json -Depth 20) | Set-Content $setPath -Encoding UTF8
 OK "settings.json 更新(バックアップ済)"
 

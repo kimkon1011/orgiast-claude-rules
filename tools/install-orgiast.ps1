@@ -59,6 +59,9 @@ if (Test-Path $src) { Copy-Item $src $dst -Force; OK "配置: $dst" } else { War
 $srcW = Join-Path $REPO 'tools\pretooluse-delegation-warn.ps1'
 $dstW = Join-Path $HOOKS 'pretooluse-delegation-warn.ps1'
 if (Test-Path $srcW) { Copy-Item $srcW $dstW -Force; OK "配置: 委譲警告フック" }
+$srcV = Join-Path $REPO 'tools\verify-before-done-detector.ps1'
+$dstV = Join-Path $HOOKS 'verify-before-done-detector.ps1'
+if (Test-Path $srcV) { Copy-Item $srcV $dstV -Force; OK "配置: テスト忘れ防止フック" }
 
 # --- cost-reporter.env ---
 Step "コスト報告の設定"
@@ -102,6 +105,18 @@ if (Test-Path $dstW) {
     $pre += [pscustomobject]@{ matcher='Write|Edit|MultiEdit'; hooks=@([pscustomobject]@{ type='command'; command="$shell -NoProfile -File `"$h\.claude\hooks\pretooluse-delegation-warn.ps1`"" }) }
     $json.hooks.PreToolUse = $pre
     OK "委譲警告フック PreToolUse 登録"
+  }
+}
+# Stop: テスト忘れ防止フック(コード変更を完了報告する前に実行テストを促す・警告のみ/§1.18)
+if (Test-Path $dstV) {
+  if (-not $json.hooks.Stop) { $json.hooks | Add-Member -NotePropertyName Stop -NotePropertyValue @() -Force }
+  $stp = @($json.hooks.Stop)
+  $sAlready = $stp | ForEach-Object { $_.hooks } | ForEach-Object { $_.command } | Where-Object { $_ -match 'verify-before-done' }
+  if ($sAlready) { OK "テスト忘れ防止フック 登録済(スキップ)" }
+  else {
+    $stp += [pscustomobject]@{ hooks=@([pscustomobject]@{ type='command'; command="$shell -NoProfile -File `"$h\.claude\hooks\verify-before-done-detector.ps1`"" }) }
+    $json.hooks.Stop = $stp
+    OK "テスト忘れ防止フック Stop 登録"
   }
 }
 ($json | ConvertTo-Json -Depth 20) | Set-Content $setPath -Encoding UTF8

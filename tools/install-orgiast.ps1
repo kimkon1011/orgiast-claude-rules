@@ -4,8 +4,9 @@
 # 実行するのは"あなた(このPCの持ち主)"。途中で「続けますか?」を1回だけ聞きます。中身に納得してから y を押してください。
 # 冪等(何度実行してもOK)。settings.json は毎回バックアップ。
 param(
-  [string]$Webhook = $env:ORGIAST_WEBHOOK,   # #claude-code webhook (配布者が埋め込み)
-  [string]$Label   = $env:ORGIAST_LABEL,     # このPCの表示名(空ならPC名)
+  [string]$Webhook  = $env:ORGIAST_WEBHOOK,    # #claude-code webhook (配布者が埋め込み)
+  [string]$Label    = $env:ORGIAST_LABEL,      # このPCの表示名(空ならPC名)
+  [string]$ManusKey = $env:ORGIAST_MANUS_KEY,  # Manus APIキー(Web調査委譲用・配布者が埋め込み・任意)
   [switch]$Yes                                # 確認を省略(配布ランチャーから)
 )
 $ErrorActionPreference = 'Stop'
@@ -69,6 +70,13 @@ $envPath = Join-Path $HOMEDIR '.claude\cost-reporter.env'
 if (Test-Path $envPath) { OK "既存の設定を使用(上書きしません)" }
 elseif ($Webhook) { "DISCORD_COST_WEBHOOK=$Webhook`r`nREPORTER_LABEL=$Label" | Set-Content -Path $envPath -Encoding UTF8; OK "作成: $envPath" }
 else { Warn "Discord webhook 未指定。コスト報告は送信されません(配布者にwebhook入りランチャーをもらってください)" }
+
+# --- Manus(Web調査委譲)キー ---
+Step "Manus(Web調査委譲)の設定"
+$manusEnv = Join-Path $HOMEDIR '.claude\manus.env'
+if (Test-Path $manusEnv) { OK "Manusキー 既存(上書きしません)" }
+elseif ($ManusKey) { "MANUS_API_KEY=$ManusKey" | Set-Content -Path $manusEnv -Encoding UTF8; OK "Manusキー設定(Web調査を Manus へ委譲可能に)" }
+else { Warn "Manusキー未指定(Web調査委譲は無効。他機能は動作)" }
 
 # --- settings.json に3フック登録(バックアップ+マージ) ---
 Step "自動実行フックの登録 (毎日1回まで/裏で静かに動作)"

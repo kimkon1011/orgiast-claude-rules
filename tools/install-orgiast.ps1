@@ -8,6 +8,8 @@ param(
   [string]$Label    = $env:ORGIAST_LABEL,      # このPCの表示名(空ならPC名)
   [string]$ManusKey = $env:ORGIAST_MANUS_KEY,  # Manus APIキー(Web調査委譲用・配布者が埋め込み・任意)
   [string]$DeepSeekKey = $env:ORGIAST_DEEPSEEK_KEY, # DeepSeek APIキー(安い推論委譲用・任意)
+  [string]$GrokKey = $env:ORGIAST_GROK_KEY,    # xAI Grok APIキー(任意)
+  [switch]$NoOllama,                           # Ollama(無料ローカル)導入をスキップ
   [switch]$Yes                                # 確認を省略(配布ランチャーから)
 )
 $ErrorActionPreference = 'Stop'
@@ -85,6 +87,31 @@ $dsEnv = Join-Path $HOMEDIR '.claude\deepseek.env'
 if (Test-Path $dsEnv) { OK "DeepSeekキー 既存(上書きしません)" }
 elseif ($DeepSeekKey) { "DEEPSEEK_API_KEY=$DeepSeekKey" | Set-Content -Path $dsEnv -Encoding UTF8; OK "DeepSeekキー設定(安い推論/生成を DeepSeek へ委譲可能に)" }
 else { Warn "DeepSeekキー未指定(委譲は無効。他機能は動作)" }
+
+# --- Grok(xAI)キー ---
+Step "Grok(xAI)の設定"
+$xaiEnv = Join-Path $HOMEDIR '.claude\xai.env'
+if (Test-Path $xaiEnv) { OK "Grokキー 既存(上書きしません)" }
+elseif ($GrokKey) { "XAI_API_KEY=$GrokKey" | Set-Content -Path $xaiEnv -Encoding UTF8; OK "Grokキー設定" }
+else { Warn "Grokキー未指定(Grok委譲は無効。他機能は動作)" }
+
+# --- Ollama(無料ローカルAI)導入 ---
+if (-not $NoOllama) {
+  Step "Ollama(無料ローカルAI・大量の軽作業用)の導入"
+  $ollamaExe = Join-Path $env:LOCALAPPDATA 'Programs\Ollama\ollama.exe'
+  if (-not (Test-Path $ollamaExe) -and -not (Have ollama)) {
+    Warn "Ollama を導入します(初回はDL数分)"
+    try { winget install --id Ollama.Ollama -e --accept-package-agreements --accept-source-agreements | Out-Null } catch {}
+  }
+  if (-not (Test-Path $ollamaExe)) { $ollamaExe = 'ollama' }
+  try {
+    # 既定モデル(軽量) 未取得なら取得
+    $has = (& $ollamaExe list 2>$null | Out-String)
+    if ($has -notmatch 'qwen2\.5:3b') { Warn "モデル qwen2.5:3b を取得(~1.9GB・数分)"; & $ollamaExe pull qwen2.5:3b 2>$null | Out-Null }
+    "OLLAMA_MODEL=qwen2.5:3b" | Set-Content -Path (Join-Path $HOMEDIR '.claude\ollama.env') -Encoding UTF8
+    OK "Ollama 導入+モデル取得(無料・CPU実行。node <repo>\tools\ollama-ask.mjs で利用)"
+  } catch { Warn "Ollama 設定に一部失敗(他機能は動作)。後で会社担当に相談" }
+} else { OK "Ollama はスキップ(-NoOllama)" }
 
 # --- settings.json に3フック登録(バックアップ+マージ) ---
 Step "自動実行フックの登録 (毎日1回まで/裏で静かに動作)"

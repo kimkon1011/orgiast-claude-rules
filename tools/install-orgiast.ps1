@@ -9,6 +9,7 @@ param(
   [string]$ManusKey = $env:ORGIAST_MANUS_KEY,  # Manus APIキー(Web調査委譲用・配布者が埋め込み・任意)
   [string]$DeepSeekKey = $env:ORGIAST_DEEPSEEK_KEY, # DeepSeek APIキー(安い推論委譲用・任意)
   [string]$GrokKey = $env:ORGIAST_GROK_KEY,    # xAI Grok APIキー(任意)
+  [string]$GeminiKey = $env:ORGIAST_GEMINI_KEY, # Gemini APIキー(配布者が埋め込み→鍵作成画面を省略・任意)
   [switch]$NoOllama,                           # Ollama(無料ローカル)導入をスキップ
   [switch]$Yes                                # 確認を省略(配布ランチャーから)
 )
@@ -196,6 +197,13 @@ Step "Gemini のAPIキー設定 (検索・大きな資料用・無料枠)"
 $geminiKey = ''
 $gEnv = Join-Path $HOMEDIR '.gemini\.env'
 if (Test-Path $gEnv) { $line = (Get-Content $gEnv | Where-Object { $_ -like 'GEMINI_API_KEY=*' } | Select-Object -First 1); if ($line) { $geminiKey = $line.Split('=',2)[1] } }
+# 配布者が埋め込んだ共有キーがあれば、それを使って鍵作成画面を丸ごと省略
+if (-not $geminiKey -and $GeminiKey) {
+  $geminiKey = $GeminiKey.Trim()
+  New-Item -ItemType Directory -Force -Path (Split-Path $gEnv) | Out-Null
+  "GEMINI_API_KEY=$geminiKey`r`nGEMINI_CLI_TRUST_WORKSPACE=true" | Set-Content $gEnv -Encoding UTF8
+  OK "Gemini APIキー(会社共有)を設定しました(鍵作成の操作は不要)"
+}
 if ($geminiKey) { OK "Gemini APIキーは設定済み(スキップ)" }
 else {
   Say "  これから APIキー作成ページをブラウザで開きます。会社のGoogle(orgiast.jp)でログインしてください。" 'Gray'
@@ -227,14 +235,13 @@ Say "`n============================================================" 'Green'
 Say " ほぼ完了！ 最後に『Codexのログイン』1つだけお願いします" 'Green'
 Say "============================================================" 'Green'
 Say @"
-Codex(コードを速く安く作るツール・無料枠)を使うにはログインが要ります。
-このあと Codex のログイン画面を起動します。ブラウザが開いたら ChatGPT アカウントでログインしてください。
-(ログインが終わったら、その画面は閉じてOKです)
+Codex(コードを速く安く作るツール・定額枠)を使うにはログインが要ります。
+今からログイン画面を自動で開きます。ブラウザが開いたら、会社共有の ChatGPT アカウント
+【seisaku-team@orgiast.jp】でログイン(またはそのアカウントを選ぶ)だけでOKです。
+(ログインが終わったら、その黒い画面は閉じて大丈夫です。パスワードが分からなければ kim に聞いてください)
 "@ 'Gray'
-$doCodex = Read-Host "Codexのログインを今すぐ始めますか? (y/n)"
-if ($doCodex -eq 'y' -or $doCodex -eq 'Y') {
-  try { Start-Process -FilePath 'cmd.exe' -ArgumentList '/k','codex' } catch { Warn "起動できませんでした。PowerShellに codex と打って手動でログインしてください" }
-} else { Say "  後で: PowerShellに『codex』と打てばログインできます。" 'Gray' }
+try { Start-Process -FilePath 'cmd.exe' -ArgumentList '/k','codex login' ; OK "Codexログイン画面を開きました(ブラウザで seisaku-team@orgiast.jp を選ぶだけ)" }
+catch { Warn "自動起動できませんでした。青い画面に『codex login』と打ってEnterしてログインしてください" }
 
 Say "`nセットアップ完了。次にClaude Codeを開くと、共通ルール自動更新・日次コスト報告・使い過ぎチェックが自動で回ります。" 'Green'
 Say "分からないことがあれば、この画面の内容をそのまま kim に送ってください。ウィンドウは閉じて大丈夫です。" 'Green'

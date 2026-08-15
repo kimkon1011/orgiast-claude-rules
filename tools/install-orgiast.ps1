@@ -218,17 +218,38 @@ else {
 }
 
 # --- Gemini MCP 登録(キーを反映) ---
+# 注意: PS5.1 の ConvertFrom-Json は約2MB超のJSONで落ちる(maxJsonLength)。~/.claude.json は履歴で肥大するため
+#       JavaScriptSerializer(上限解除)で読み書きする。書き込みはBOM無しUTF-8(NodeのJSON.parseはBOMで壊れるため)。
 Step "Gemini 連携(MCP)の登録"
 $cj = Join-Path $HOMEDIR '.claude.json'
+$mcpVal = @{ type = 'stdio'; command = 'npx'; args = @('-y', '@choplin/mcp-gemini-cli', '--allow-npx'); env = @{ GEMINI_API_KEY = $geminiKey; GEMINI_CLI_TRUST_WORKSPACE = 'true' } }
 try {
   if (-not (Test-Path $cj)) { '{}' | Set-Content $cj -Encoding UTF8 }
   Copy-Item $cj ($cj + '.bak.' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-installer') -Force
-  $cjson = Get-Content $cj -Raw | ConvertFrom-Json
-  if (-not $cjson.mcpServers) { $cjson | Add-Member -NotePropertyName mcpServers -NotePropertyValue ([pscustomobject]@{}) -Force }
-  $cjson.mcpServers | Add-Member -NotePropertyName 'gemini-cli' -NotePropertyValue ([pscustomobject]@{ type='stdio'; command='npx'; args=@('-y','@choplin/mcp-gemini-cli','--allow-npx'); env=[pscustomobject]@{ GEMINI_API_KEY=$geminiKey; GEMINI_CLI_TRUST_WORKSPACE='true' } }) -Force
-  ($cjson | ConvertTo-Json -Depth 20) | Set-Content $cj -Encoding UTF8
-  OK "gemini-cli MCP 登録完了"
-} catch { Warn "MCP登録に失敗(後で会社担当に相談)" }
+  $raw = Get-Content $cj -Raw; if (-not $raw -or -not $raw.Trim()) { $raw = '{}' }
+  $done = $false
+  # 方法1: ConvertFrom-Json (PS7は無制限/PS5.1も小さいファイルなら成功)
+  try {
+    $cjson = $raw | ConvertFrom-Json
+    if (-not $cjson.mcpServers) { $cjson | Add-Member -NotePropertyName mcpServers -NotePropertyValue ([pscustomobject]@{}) -Force }
+    $cjson.mcpServers | Add-Member -NotePropertyName 'gemini-cli' -NotePropertyValue ([pscustomobject]$mcpVal) -Force
+    $out = $cjson | ConvertTo-Json -Depth 100
+    [System.IO.File]::WriteAllText($cj, $out, (New-Object System.Text.UTF8Encoding($false)))
+    $done = $true
+  } catch { }
+  # 方法2: PS5.1で大きい.claude.json(約2MB超)がConvertFrom-Jsonの上限で落ちた場合 → JavaScriptSerializer(上限解除)
+  if (-not $done) {
+    Add-Type -AssemblyName System.Web.Extensions
+    $ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
+    $ser.MaxJsonLength = [int]::MaxValue
+    $obj = $ser.DeserializeObject($raw); if ($null -eq $obj) { $obj = @{} }
+    if (-not $obj.ContainsKey('mcpServers') -or $null -eq $obj['mcpServers']) { $obj['mcpServers'] = @{} }
+    $obj['mcpServers']['gemini-cli'] = $mcpVal
+    [System.IO.File]::WriteAllText($cj, $ser.Serialize($obj), (New-Object System.Text.UTF8Encoding($false)))
+    $done = $true
+  }
+  if ($done) { OK "gemini-cli MCP 登録完了" }
+} catch { Warn ("MCP自動登録に失敗(他ツールは動作): " + $_.Exception.Message) }
 
 # --- Codex ログイン案内(最後の1操作) ---
 Say "`n============================================================" 'Green'

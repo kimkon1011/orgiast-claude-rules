@@ -36,10 +36,7 @@ Say @"
 ※会話の中身は読みませんし送りません。送るのは数字の集計だけです。
 ※最後に「Codexのログイン」「GeminiのAPIキー」の2つだけ、あなたの操作をお願いします(自動化できない部分)。
 "@ 'Gray'
-if (-not $Yes) {
-  $ans = Read-Host "続けてよければ y を入力して Enter (やめる場合は n)"
-  if ($ans -ne 'y' -and $ans -ne 'Y') { Say "中止しました。何も変更していません。" 'Yellow'; exit 0 }
-}
+Say "上記の内容で自動セットアップを始めます(入力は不要)。途中でブラウザが開いたら会社アカウントでログインしてください。" 'Gray'
 
 # --- 前提ツール(git/node)を用意 ---
 Step "必要なツールの確認 (git / Node.js)"
@@ -119,22 +116,17 @@ if (Test-Path $xaiEnv) { OK "Grokキー 既存(上書きしません)" }
 elseif ($GrokKey) { "XAI_API_KEY=$GrokKey" | Set-Content -Path $xaiEnv -Encoding UTF8; OK "Grokキー設定" }
 else { Warn "Grokキー未指定(Grok委譲は無効。他機能は動作)" }
 
-# --- Ollama(無料ローカルAI)導入 ---
+# --- Ollama(無料ローカルAI)導入: 裏側プロセスで非ブロッキング実行(DLで画面を止めない) ---
 if (-not $NoOllama) {
   Step "Ollama(無料ローカルAI・大量の軽作業用)の導入"
-  $ollamaExe = Join-Path $env:LOCALAPPDATA 'Programs\Ollama\ollama.exe'
-  if (-not (Test-Path $ollamaExe) -and -not (Have ollama)) {
-    Warn "Ollama を導入します(初回はDL数分)"
-    try { winget install --id Ollama.Ollama -e --accept-package-agreements --accept-source-agreements | Out-Null } catch {}
-  }
-  if (-not (Test-Path $ollamaExe)) { $ollamaExe = 'ollama' }
+  "OLLAMA_MODEL=qwen2.5:3b" | Set-Content -Path (Join-Path $HOMEDIR '.claude\ollama.env') -Encoding UTF8
+  $ollExe = Join-Path $env:LOCALAPPDATA 'Programs\Ollama\ollama.exe'
+  # winget導入(未導入時)→モデル取得 を1つの隠しcmdで直列実行。メイン処理はブロックせず次へ進む。
+  $ollCmd = 'winget install --id Ollama.Ollama -e --accept-package-agreements --accept-source-agreements & "' + $ollExe + '" pull qwen2.5:3b'
   try {
-    # 既定モデル(軽量) 未取得なら取得
-    $has = (& $ollamaExe list 2>$null | Out-String)
-    if ($has -notmatch 'qwen2\.5:3b') { Warn "モデル qwen2.5:3b を取得(~1.9GB・数分)"; & $ollamaExe pull qwen2.5:3b 2>$null | Out-Null }
-    "OLLAMA_MODEL=qwen2.5:3b" | Set-Content -Path (Join-Path $HOMEDIR '.claude\ollama.env') -Encoding UTF8
-    OK "Ollama 導入+モデル取得(無料・CPU実行。node <repo>\tools\ollama-ask.mjs で利用)"
-  } catch { Warn "Ollama 設定に一部失敗(他機能は動作)。後で会社担当に相談" }
+    Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', $ollCmd -WindowStyle Hidden | Out-Null
+    OK "Ollama は裏でダウンロード中(数分)。この画面は止めずに次へ進みます(完了後 node <repo>\tools\ollama-ask.mjs で利用可)"
+  } catch { Warn "Ollama の裏実行を起動できませんでした(他機能は動作)。後で会社担当に相談" }
 } else { OK "Ollama はスキップ(-NoOllama)" }
 
 # --- settings.json に3フック登録(バックアップ+マージ) ---

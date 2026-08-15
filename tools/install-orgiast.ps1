@@ -185,9 +185,23 @@ OK "settings.json 更新(バックアップ済)"
 
 # --- 開発ツール導入 ---
 Step "開発ツール Codex / Gemini の導入 (コスト削減用)"
-if (Have node) {
-  try { npm i -g @openai/codex @google/gemini-cli 2>$null | Out-Null; OK "Codex / Gemini CLI 導入完了" } catch { Warn "CLI導入に一部失敗。後で会社担当に相談" }
-} else { Warn "Node.js が無いためスキップ" }
+# 直前にwingetで入れたNodeを"同一セッション"で使えるよう、PATHをレジストリから再読込(未反映だとnpm/codexが見つからず失敗する)
+try {
+  $npmBin = Join-Path $env:APPDATA 'npm'
+  $paths = @([Environment]::GetEnvironmentVariable('Path','Machine'), [Environment]::GetEnvironmentVariable('Path','User'), 'C:\Program Files\nodejs', $npmBin) | Where-Object { $_ }
+  $env:Path = ($paths -join ';')
+} catch {}
+if (Have npm) {
+  foreach ($pkg in @('@openai/codex', '@google/gemini-cli')) {
+    $ok = $false
+    for ($i = 1; $i -le 2 -and -not $ok; $i++) {
+      try { & npm i -g $pkg --no-fund --no-audit 2>&1 | Out-Null; if ($LASTEXITCODE -eq 0) { $ok = $true } } catch {}
+    }
+    if ($ok) { OK "$pkg 導入完了" } else { Warn "$pkg の導入に失敗(再起動後にもう一度コマンドを実行すると入ります)" }
+  }
+  # このあとの codex login 用に npm グローバルbin を現セッションPATHへ
+  if ((Test-Path $npmBin) -and ($env:Path -notlike "*$npmBin*")) { $env:Path += ";$npmBin" }
+} else { Warn "npm が見つからないためCLI導入をスキップ(PC再起動後にコマンドを再実行してください)" }
 
 # --- 初回実行(共通ルール取込) ---
 Step "共通ルールの初回取込(動作確認)"

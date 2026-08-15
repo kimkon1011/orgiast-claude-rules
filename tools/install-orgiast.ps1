@@ -7,6 +7,7 @@ param(
   [string]$Webhook  = $env:ORGIAST_WEBHOOK,    # #claude-code webhook (配布者が埋め込み)
   [string]$Label    = $env:ORGIAST_LABEL,      # このPCの表示名(空ならPC名)
   [string]$ManusKey = $env:ORGIAST_MANUS_KEY,  # Manus APIキー(Web調査委譲用・配布者が埋め込み・任意)
+  [string]$DeepSeekKey = $env:ORGIAST_DEEPSEEK_KEY, # DeepSeek APIキー(安い推論委譲用・任意)
   [switch]$Yes                                # 確認を省略(配布ランチャーから)
 )
 $ErrorActionPreference = 'Stop'
@@ -77,6 +78,13 @@ $manusEnv = Join-Path $HOMEDIR '.claude\manus.env'
 if (Test-Path $manusEnv) { OK "Manusキー 既存(上書きしません)" }
 elseif ($ManusKey) { "MANUS_API_KEY=$ManusKey" | Set-Content -Path $manusEnv -Encoding UTF8; OK "Manusキー設定(Web調査を Manus へ委譲可能に)" }
 else { Warn "Manusキー未指定(Web調査委譲は無効。他機能は動作)" }
+
+# --- DeepSeek(安い推論委譲)キー ---
+Step "DeepSeek(安い推論委譲)の設定"
+$dsEnv = Join-Path $HOMEDIR '.claude\deepseek.env'
+if (Test-Path $dsEnv) { OK "DeepSeekキー 既存(上書きしません)" }
+elseif ($DeepSeekKey) { "DEEPSEEK_API_KEY=$DeepSeekKey" | Set-Content -Path $dsEnv -Encoding UTF8; OK "DeepSeekキー設定(安い推論/生成を DeepSeek へ委譲可能に)" }
+else { Warn "DeepSeekキー未指定(委譲は無効。他機能は動作)" }
 
 # --- settings.json に3フック登録(バックアップ+マージ) ---
 Step "自動実行フックの登録 (毎日1回まで/裏で静かに動作)"

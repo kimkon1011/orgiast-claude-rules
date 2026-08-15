@@ -11,6 +11,7 @@ param(
   [string]$GrokKey = $env:ORGIAST_GROK_KEY,    # xAI Grok APIキー(任意)
   [string]$GeminiKey = $env:ORGIAST_GEMINI_KEY, # Gemini APIキー(配布者が埋め込み→鍵作成画面を省略・任意)
   [switch]$NoOllama,                           # Ollama(無料ローカル)導入をスキップ
+  [switch]$NoReboot,                           # 最後の自動再起動をスキップ
   [switch]$Yes                                # 確認を省略(配布ランチャーから)
 )
 $ErrorActionPreference = 'Stop'
@@ -264,5 +265,21 @@ Codex(コードを速く安く作るツール・定額枠)を使うにはログ�
 try { Start-Process -FilePath 'cmd.exe' -ArgumentList '/k','codex login' ; OK "Codexログイン画面を開きました(ブラウザで seisaku-team@orgiast.jp を選ぶだけ)" }
 catch { Warn "自動起動できませんでした。青い画面に『codex login』と打ってEnterしてログインしてください" }
 
-Say "`nセットアップ完了。次にClaude Codeを開くと、共通ルール自動更新・日次コスト報告・使い過ぎチェックが自動で回ります。" 'Green'
-Say "分からないことがあれば、この画面の内容をそのまま kim に送ってください。ウィンドウは閉じて大丈夫です。" 'Green'
+Say "`nセットアップ完了。設定を反映するため、このあと自動でPCを再起動します。" 'Green'
+
+# --- 反映のため自動再起動(設定/PATHを確実に有効化)。猶予つき・中止可 ---
+if ($NoReboot) {
+  Say "自動再起動はスキップ(-NoReboot)。手動でPCを再起動すると全て有効になります。" 'Yellow'
+} else {
+  $sec = 180
+  Say "`n============================================================" 'Cyan'
+  Say " 【重要】約3分後にこのPCを自動で再起動します" 'Cyan'
+  Say "============================================================" 'Cyan'
+  Say " ・先に、開いたブラウザで seisaku-team@orgiast.jp を選び Codexログインを済ませてください" 'Gray'
+  Say " ・他アプリで保存していない作業があれば保存してください" 'Gray'
+  Say " ・すぐ再起動したい → 青い画面に『shutdown /r /t 0』と打つ" 'Gray'
+  Say " ・再起動をやめたい → 青い画面に『shutdown /a』と打つ(その場合はあとで手動で再起動)" 'Gray'
+  try { shutdown /r /t $sec /c "オージャストAI設定の反映のためPCを再起動します(中止: shutdown /a)" | Out-Null }
+  catch { Warn "自動再起動を予約できませんでした。手動でPCを再起動してください。" }
+}
+Say "`n分からないことがあれば、この画面の内容をそのまま kim に送ってください。" 'Green'

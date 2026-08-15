@@ -110,7 +110,10 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
   - **外部事実のWeb調査・属性エンリッチ（多段・根拠URL要。例: 企業の上場/設立日/出展歴）→ Manus**（`src/lib/manus.ts` パターン。専用エージェント枠で、Claudeのweb_searchループにトークンを燃やすより適・精度も高い。sources必ず保持）
   - **定型・確定処理（集計・整形・置換・スクレイプ）→ ローカルスクリプト**（Python/Node、トークン消費ゼロ）
   - **超大規模コンテキスト分析（コードベース全体・長大ログ/PDF/動画）／Google検索 → Gemini CLI（MCP `gemini-cli` 経由）**（**GEMINI_API_KEY**＝Google AI Studio無料枠・1M文脈。※「gemini でGoogleログイン(Code Assist個人無料枠)」は2026-07にGoogle廃止＝IneligibleTierErrorで不可、APIキーを使う。Claudeのトークンを大量に食う「全体読み込み」やWeb検索を委譲しcontextを節約。ツール: `googleSearch`/`geminiChat`。**各PCは自分のorgiast.jpアカウントでキー発行**、共有しない。§3.0.3セットアップ）
-  - 上記で済むものをLLMの従量トークンで代替しない（§1.17.1）
+  - **安い推論・分類・抽出・下書き（品質は中でよくコストを抑えたい）→ DeepSeek**（`orgiast-claude-rules/tools/deepseek-ask.mjs "指示"`・Claude従量の約1/15。難しい推論は `--reasoner`。要 ~/.claude/deepseek.env の DEEPSEEK_API_KEY）
+  - **大量の軽作業（分類・整形・簡単生成）をオフライン無料で → Ollama**（`tools/ollama-ask.mjs "指示"`・ローカル実行でAPI課金ゼロ・CPU固定。品質はSonnet未満なので"軽作業限定"、難しい判断には使わない）
+  - （補助）Grok＝`tools/grok-ask.mjs`（xAI。対話・X最新情報向け。開発ROIは低いので常用しない）
+  - 上記で済むものをLLMの従量トークンで代替しない（§1.17.1）。実装本体はCodex、生成・推論の"あふれ"はDeepSeek、無料で済む軽作業はOllama、大文脈・検索はGemini、と徹底的に安い/無料枠へ流す
 - モデル（認知）ルーティング（費用対効果ファースト、実測ベース v2 / 2026-07）:
   - **指揮官・判断・設計 → Opus5**（GA・$5/$25・Opus4.8の2倍性能で同単価。アーキ設計/根本原因分析/横断一貫性/経営判断/タスク分解・レビュー）
   - **生成（顧客向け文章・返信・要約）→ Sonnet**（default、§1.18）

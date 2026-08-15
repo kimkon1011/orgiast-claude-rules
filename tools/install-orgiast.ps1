@@ -49,10 +49,34 @@ if (Have git) { OK "git あり" } else { Warn "git が入りませんでした�
 if (-not (Have node)) { Warn "Node.js が無いので導入します"; try { winget install --id OpenJS.NodeJS.LTS -e --source winget --accept-package-agreements --accept-source-agreements | Out-Null } catch {} ; $env:Path += ';C:\Program Files\nodejs' }
 if (Have node) { OK ("Node.js あり (" + (node -v) + ")") } else { Warn "Node.js が入りませんでした。会社担当(kim)に連絡してください" }
 
-# --- リポ取得 ---
+# --- リポ取得(ZIP優先: git の pack ロック/Defender 干渉を回避) ---
 Step "共通ルール一式のダウンロード"
-if (Test-Path $REPO) { try { git -C $REPO pull --quiet; OK "最新に更新" } catch { Warn "更新に失敗(既存を使用)" } }
-else { git clone --quiet https://github.com/kimkon1011/orgiast-claude-rules.git $REPO; OK "ダウンロード完了" }
+$gotRepo = $false
+try {
+  $zip = Join-Path $env:TEMP 'orgiast-rules.zip'
+  $ext = Join-Path $env:TEMP ('orgiast-rules-ext-' + [guid]::NewGuid().ToString('N'))
+  Invoke-WebRequest -UseBasicParsing 'https://github.com/kimkon1011/orgiast-claude-rules/archive/refs/heads/main.zip' -OutFile $zip
+  Expand-Archive -Path $zip -DestinationPath $ext -Force
+  $src = Join-Path $ext 'orgiast-claude-rules-main'
+  if (Test-Path $src) {
+    if (Test-Path $REPO) { Remove-Item $REPO -Recurse -Force -ErrorAction SilentlyContinue }
+    Move-Item $src $REPO -Force
+    if (Test-Path (Join-Path $REPO 'tools')) { $gotRepo = $true; OK "ダウンロード完了(zip)" }
+  }
+  Remove-Item $zip -Force -ErrorAction SilentlyContinue
+  Remove-Item $ext -Recurse -Force -ErrorAction SilentlyContinue
+} catch { Warn "zip取得に失敗、gitで再試行します" }
+if (-not $gotRepo -and (Test-Path (Join-Path $REPO '.git'))) {
+  try { git -C $REPO pull --quiet; if (Test-Path (Join-Path $REPO 'tools')) { $gotRepo = $true; OK "最新に更新" } } catch { if (Test-Path (Join-Path $REPO 'tools')) { $gotRepo = $true; Warn "更新失敗(既存を使用)" } }
+}
+if (-not $gotRepo) {
+  if (Test-Path $REPO) { Remove-Item $REPO -Recurse -Force -ErrorAction SilentlyContinue }
+  for ($i = 1; $i -le 3 -and -not $gotRepo; $i++) {
+    try { git clone --depth 1 --quiet https://github.com/kimkon1011/orgiast-claude-rules.git $REPO; if (Test-Path (Join-Path $REPO 'tools')) { $gotRepo = $true; OK "ダウンロード完了(git)" } }
+    catch { Warn ("git clone 失敗 (試行 " + $i + "/3)"); if (Test-Path $REPO) { Remove-Item $REPO -Recurse -Force -ErrorAction SilentlyContinue } }
+  }
+}
+if (-not $gotRepo) { Warn "共通ルールの取得に失敗。ネット接続を確認して、青い画面を閉じてもう一度コマンドを貼り付けてください(それでも駄目なら kim に連絡)" }
 
 # --- onboarding-sync.ps1 を hooks へ配置(BOM付き) ---
 Step "ルール自動追従スクリプトの配置"

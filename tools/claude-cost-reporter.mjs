@@ -1,10 +1,10 @@
-// Claude Code ローカル利用コスト推定レポーター。
+// Claude Code ローカル利用トークンレポーター（list価格換算は相対指標として併記）。
 //
 // 何をするか: このPC上の ~/.claude/projects/**/*.jsonl (Claude Code のセッション記録) から
-// トークン使用量とモデル名「だけ」を読み、公開料金表で概算コストを計算して Discord に通知する。
+// トークン使用量とモデル名「だけ」を読み、利用量を集計して Discord に通知する。
 //
 // 何をしないか: 会話内容(message.content / thinking / tool_use 等)は一切読まない・送らない。
-// 送信されるのは「PC名・当月合計$・モデル別内訳」という集計値のみ。
+// 送信されるのは「PC名・当月トークン量・モデル別内訳・list価格換算」という集計値のみ。
 //
 // 実行: node claude-cost-reporter.mjs           → 実際に Discord へ送信
 //       node claude-cost-reporter.mjs --dry-run  → 送信内容を表示するだけ(送信しない)
@@ -94,7 +94,11 @@ function processFile(filePath, monthStart, byModel, unknownModels) {
     } else {
       unknownModels.add(model);
     }
-    byModel[model] = (byModel[model] || 0) + cost;
+    const usage = byModel[model] || { cost: 0, inTok: 0, outTok: 0 };
+    usage.cost += cost;
+    usage.inTok += inTok + cacheWriteTok + cacheReadTok;
+    usage.outTok += outTok;
+    byModel[model] = usage;
   }
 }
 
@@ -138,21 +142,23 @@ function main() {
   const unknownModels = new Set();
   for (const f of files) processFile(f, monthStart, byModel, unknownModels);
 
-  const total = Object.values(byModel).reduce((a, b) => a + b, 0);
-  const sorted = Object.entries(byModel).sort((a, b) => b[1] - a[1]);
+  const total = Object.values(byModel).reduce((a, b) => a + b.cost, 0);
+  const totalIn = Object.values(byModel).reduce((a, b) => a + b.inTok, 0);
+  const totalOut = Object.values(byModel).reduce((a, b) => a + b.outTok, 0);
+  const sorted = Object.entries(byModel).sort((a, b) => b[1].outTok - a[1].outTok);
   const fableUsed = sorted.some(([m]) => /fable/i.test(m));
+  const opusOut = sorted.filter(([m]) => /opus/i.test(m)).reduce((a, [, v]) => a + v.outTok, 0);
+  const opusRatio = totalOut ? opusOut / totalOut : 0;
 
-  let msg = `**💻 Claude Code ローカル利用コスト推定** — ${label}\n`;
+  let msg = `**💻 Claude Code ローカル利用トークン** — ${label}\n`;
   msg += `対象: ${monthStart} 〜 現在\n`;
-  msg += `MTD概算合計: **$${total.toFixed(2)}** (全トークンをAPI従量課金換算した理論値。Teamプランの月間バンドル分を差し引いていないため実請求額より大きく出ます。PC間・人間の相対比較用の指標です)\n`;
-  // しきい値アラート(全社¥150k≈$1000上限に対する1PAの配分。§1.17.1)
-  const WARN_MTD = 150, CRIT_MTD = 300;
-  if (total > CRIT_MTD) msg += `🚨 **当月 $${total.toFixed(0)} 超($${CRIT_MTD}超)**: 使い過ぎ警告。§1.13ルーティング(Opus5指揮官/生成Sonnet/軽処理Haiku/実装Codex)・§1.17.1費用対効果を再確認\n`;
-  else if (total > WARN_MTD) msg += `⚠️ 当月 $${total.toFixed(0)}($${WARN_MTD}超): 要注視。モデル選択がコスト最適か確認\n`;
+  msg += `MTD 出力トークン: **${(totalOut / 1e6).toFixed(1)}M** / 入力(cache込) **${(totalIn / 1e6).toFixed(1)}M**\n`;
+  msg += `参考: list価格換算 $${total.toFixed(2)} ※Claude Codeは定額シート課金のため請求書には乗りません。実額の正本は console.anthropic.com(Dev API) / claude.ai 請求(シート)\n`;
+  if (opusRatio > 0.5) msg += `⚠️ Opus比率高(${(opusRatio * 100).toFixed(0)}%)。監督は最小限に、実装/生成は委譲(§1.18)\n`;
   if (fableUsed) msg += `🚨 このPCでFable5(§1.16禁止)の使用を検出しました\n`;
   if (sorted.length > 0) {
     msg += `__モデル別__\n`;
-    for (const [m, v] of sorted) msg += `- ${m}: $${v.toFixed(2)}\n`;
+    for (const [m, v] of sorted) msg += `- ${m}: 出力 ${(v.outTok / 1000).toFixed(0)}k tok (参考: list価格換算 $${v.cost.toFixed(2)})\n`;
   } else {
     msg += `(今月の利用記録なし)\n`;
   }

@@ -33,7 +33,8 @@ let total = 0; const byModel = {}, byDay = {};
 for (const b of buckets) {
   const day = String(typeof b.starting_at === 'string' ? b.starting_at : new Date(b.starting_at).toISOString()).slice(0, 10);
   for (const res of (b.results || [])) {
-    const amt = parseFloat(res.amount) || 0;
+    // 公式仕様: "Cost amount in lowest currency units (e.g. cents) as a decimal string."
+    const amt = (parseFloat(res.amount) || 0) / 100;
     total += amt;
     const mdl = modelOf(res.description);
     byModel[mdl] = (byModel[mdl] || 0) + amt;
@@ -47,10 +48,13 @@ const top = Object.entries(byModel).sort((a, b) => b[1] - a[1]).slice(0, 6);
 let msg = `**💰 Claude API課金 日次監視** (Developer Platform / MTD ${monthStart}〜)\n`;
 msg += `MTD合計: **$${total.toFixed(2)}** ／ 前日 ${yst}: **$${ystCost.toFixed(2)}**\n`;
 if (fable > 0) msg += `🚨 **Fable5(§1.16 禁止) MTD $${fable.toFixed(2)} = ${total ? (fable / total * 100).toFixed(0) : 0}%** → アプリのFable5全廃deployで消える\n`;
-if (ystCost > 200) msg += `⚠️ 前日 $${ystCost.toFixed(2)} が高水準（>$200）\n`;
+if (ystCost > 50) msg += `🚨 前日 $${ystCost.toFixed(2)} が危険水準（>$50）\n`;
+else if (ystCost > 20) msg += `⚠️ 前日 $${ystCost.toFixed(2)} が高水準（>$20）\n`;
+if (total > 500) msg += `🚨 MTD $${total.toFixed(2)} が危険水準（>$500）\n`;
+else if (total > 200) msg += `⚠️ MTD $${total.toFixed(2)} が高水準（>$200）\n`;
 msg += `__モデル別 MTD TOP__\n`;
 for (const [k, v] of top) msg += `- ${k}: $${v.toFixed(2)}\n`;
-msg += `※Developer Platform(デプロイ済みアプリのAPI)分。Claude Codeシート利用は管理コンソール参照。`;
+msg += `※この額は Admin cost_report(セント建てをUSD換算)。正本は console.anthropic.com の請求ページ。Claude Code のシート利用は含まれない（定額）。`;
 
 const post = await fetch(HOOK, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: msg.slice(0, 1950) }) });
 console.log(msg);

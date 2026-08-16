@@ -4,7 +4,9 @@
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $ErrorActionPreference = 'SilentlyContinue'
 $H = $env:USERPROFILE
-$loop = Join-Path $H 'orgiast-claude-rules\tools\cost-work-loop.mjs'
+# リポの場所はPCで異なる(配布先=~/orgiast-claude-rules / kim開発機=~/Downloads/orgiast-claude-rules)。候補を探索。
+$loop = $null
+foreach ($c in @((Join-Path $H 'orgiast-claude-rules\tools\cost-work-loop.mjs'), (Join-Path $H 'Downloads\orgiast-claude-rules\tools\cost-work-loop.mjs'))) { if (Test-Path $c) { $loop = $c; break } }
 $guard = Join-Path $H '.claude\.cost-loop-guard'
 # 1日1回だけ計測。ガードは実行前に先に書く(並行SessionStartの二重起動防止)。
 $due = $true

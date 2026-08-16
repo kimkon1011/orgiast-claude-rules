@@ -40,7 +40,7 @@ Say @"
   4) 開発時の"うっかり"防止リマインド(実装は安いツールへ/完了前にテスト)
 ※会話の中身は読みませんし送りません。送るのは数字の集計だけです。
 ※Gemini鍵は会社共有分を自動設定。あなたの操作は「最後のCodexログイン(会社アカウントを選ぶ1クリック)」だけです。
-※完了後、設定反映のため約3分後にPCが自動再起動します(中止は shutdown /a)。
+※最後にCodexログインの完了を確認してから自動再起動します(未ログインなら再起動しません)。完了後は全設定の適用チェックも自動表示。
 "@ 'Gray'
 Say "上記の内容で自動セットアップを始めます(入力は不要)。途中でブラウザが開いたら会社共有アカウント(seisaku-team@orgiast.jp)を選んでください。" 'Gray'
 
@@ -329,24 +329,37 @@ Codex(コードを速く安く作るツール・定額枠)を使うにはログ�
 【seisaku-team@orgiast.jp】でログイン(またはそのアカウントを選ぶ)だけでOKです。
 (ログインが終わったら、その黒い画面は閉じて大丈夫です。パスワードが分からなければ kim に聞いてください)
 "@ 'Gray'
-try { Start-Process -FilePath 'cmd.exe' -ArgumentList '/k','codex login' ; OK "Codexログイン画面を開きました(ブラウザで seisaku-team@orgiast.jp を選ぶだけ)" }
+# Codexログイン完了の判定: ~/.codex/auth.json に有効なトークンが入ったか
+$authFile = Join-Path $env:USERPROFILE '.codex\auth.json'
+function Test-CodexLogin { if (-not (Test-Path $authFile)) { return $false }; try { $x = Get-Content $authFile -Raw | ConvertFrom-Json; return [bool]($x.tokens.id_token) } catch { return $false } }
+$beforeLogin = if (Test-Path $authFile) { (Get-Item $authFile).LastWriteTimeUtc } else { [datetime]::MinValue }
+$alreadyIn = Test-CodexLogin
+try { Start-Process -FilePath 'cmd.exe' -ArgumentList '/k', 'codex login' ; OK "Codexログイン画面を開きました(ブラウザで seisaku-team@orgiast.jp を選ぶだけ)" }
 catch { Warn "自動起動できませんでした。青い画面に『codex login』と打ってEnterしてログインしてください" }
 
-Say "`nセットアップ完了。設定を反映するため、このあと自動でPCを再起動します。" 'Green'
+# --- ログイン完了を"確認してから"再起動する(未完了で再起動しない) ---
+Say "`nCodexのログイン完了を待っています(最大10分)。ブラウザで seisaku-team@orgiast.jp を選んでください..." 'Cyan'
+$loggedIn = $false
+$deadline = (Get-Date).AddMinutes(10)
+while ((Get-Date) -lt $deadline) {
+  Start-Sleep -Seconds 5
+  if (Test-CodexLogin) { $now = (Get-Item $authFile).LastWriteTimeUtc; if ($alreadyIn -or $now -gt $beforeLogin) { $loggedIn = $true; break } }
+}
+# 全設定の適用状況を総合チェックして表示(何がOK/NGか一目で分かる)
+Say "`n--- 適用状況の総合チェック ---" 'Cyan'
+try { $vs = Join-Path $REPO 'tools\verify-setup.ps1'; if (Test-Path $vs) { & $vs } } catch { Warn "総合チェック実行失敗(手動で verify-setup.ps1 を実行してください)" }
 
-# --- 反映のため自動再起動(設定/PATHを確実に有効化)。猶予つき・中止可 ---
-if ($NoReboot) {
-  Say "自動再起動はスキップ(-NoReboot)。手動でPCを再起動すると全て有効になります。" 'Yellow'
+if ($loggedIn) {
+  OK "Codexログイン確認OK(auth.json にトークンを検出)"
+  if ($NoReboot) { Say "自動再起動はスキップ(-NoReboot)。手動でPCを再起動すると全て有効になります。" 'Yellow' }
+  else {
+    Say "`nセットアップ完了。設定反映のため 30秒後に再起動します(中止したい場合は 青い画面に『shutdown /a』)。" 'Green'
+    try { shutdown /r /t 30 /c "オージャストAI設定の反映のためPCを再起動します(中止: shutdown /a)" | Out-Null }
+    catch { Warn "自動再起動を予約できませんでした。手動でPCを再起動してください。" }
+  }
 } else {
-  $sec = 180
-  Say "`n============================================================" 'Cyan'
-  Say " 【重要】約3分後にこのPCを自動で再起動します" 'Cyan'
-  Say "============================================================" 'Cyan'
-  Say " ・先に、開いたブラウザで seisaku-team@orgiast.jp を選び Codexログインを済ませてください" 'Gray'
-  Say " ・他アプリで保存していない作業があれば保存してください" 'Gray'
-  Say " ・すぐ再起動したい → 青い画面に『shutdown /r /t 0』と打つ" 'Gray'
-  Say " ・再起動をやめたい → 青い画面に『shutdown /a』と打つ(その場合はあとで手動で再起動)" 'Gray'
-  try { shutdown /r /t $sec /c "オージャストAI設定の反映のためPCを再起動します(中止: shutdown /a)" | Out-Null }
-  catch { Warn "自動再起動を予約できませんでした。手動でPCを再起動してください。" }
+  Warn "10分待ちましたがCodexログインが未完了です。自動再起動はしません。"
+  Say " → ブラウザで seisaku-team@orgiast.jp のログインを完了してから、手動でPCを再起動してください(スタート→電源→再起動)。設定はログイン後の再起動で有効になります。" 'Yellow'
+  Say " → 後でログインし直す場合: 青い画面に『codex login』と打つ。ログイン確認: 『Test-Path $env:USERPROFILE\.codex\auth.json』" 'Gray'
 }
 Say "`n分からないことがあれば、この画面の内容をそのまま kim に送ってください。" 'Green'

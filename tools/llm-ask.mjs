@@ -63,5 +63,11 @@ if (P.special === 'kimi') { payload.reasoning_effort = 'none'; payload.temperatu
     const secs = ((Date.now() - start) / 1000).toFixed(1);
     console.log((text.trim()) || '(出力なし)');
     console.error(`[${provider}:${model}] ${secs}秒 in=${u.prompt_tokens || 0} out=${u.completion_tokens || 0}tok`);
+    // コスト管理ループ用に使用実績を台帳へ追記(provider/model/tokensのみ・内容は記録しない)
+    try {
+      const ledger = path.join(os.homedir(), '.claude', 'executor-usage.jsonl');
+      const rec = { t: new Date().toISOString(), provider, model, in: u.prompt_tokens || 0, out: u.completion_tokens || 0, secs: Number(secs) };
+      fs.appendFileSync(ledger, JSON.stringify(rec) + '\n');
+    } catch {}
   } catch (e) { console.error(`${provider} 例外: ${e.message}`); process.exitCode = 1; }
 })();

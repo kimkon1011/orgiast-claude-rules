@@ -10,6 +10,11 @@ $ErrorActionPreference = 'SilentlyContinue'
 $H = $env:USERPROFILE
 $repo = @("$H\orgiast-claude-rules", "$H\Downloads\orgiast-claude-rules") | Where-Object { Test-Path $_ } | Select-Object -First 1
 
+# 自己修復: 設定ファイルの先頭BOMを除去(BOM付きだとClaude Code/nodeがJSON.parse・env読取に失敗して起動不能になるため。schtask実行なのでClaude Codeが壊れていても直せる)
+foreach ($bf in @("$H\.claude\settings.json", "$H\.claude.json", "$H\.gemini\.env", "$H\.claude\cost-reporter.env", "$H\.claude\manus.env", "$H\.claude\deepseek.env", "$H\.claude\xai.env", "$H\.claude\openrouter.env", "$H\.claude\groq.env", "$H\.claude\mistral.env", "$H\.claude\ollama.env")) {
+  try { if (Test-Path $bf) { $bc = [System.IO.File]::ReadAllText($bf); if ($bc.Length -gt 0 -and $bc[0] -eq [char]0xFEFF) { [System.IO.File]::WriteAllText($bf, $bc.TrimStart([char]0xFEFF), (New-Object System.Text.UTF8Encoding($false))) } } } catch {}
+}
+
 # ラベル / webhook を cost-reporter.env から
 $label = $env:COMPUTERNAME
 $wh = ''

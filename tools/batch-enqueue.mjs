@@ -34,4 +34,6 @@ try {
 } catch {}
 const job = { id: `${stamp}-${String(seq).padStart(3, '0')}`, provider, model, system, prompt, max, enqueuedAt: new Date().toISOString() };
 fs.appendFileSync(pending, JSON.stringify(job) + '\n');
-console.log(`${job.id} を追加しました (${provider}:${model})`);
+console.log(`${job.id} を夜間バッチに追加 (${provider}:${model})`);
+console.log(`→ 毎日03:00のoff-peak帯に半額(約50%off)で実行されます。結果は ~/.claude/batch-queue/results-<日付>.jsonl。`);
+console.log(`→ 今すぐ実行したい場合: node batch-run.mjs --force`);

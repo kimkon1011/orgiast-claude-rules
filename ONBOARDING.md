@@ -113,7 +113,13 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
   - **安い推論・分類・抽出・下書き（品質は中でよくコストを抑えたい）→ DeepSeek**（`orgiast-claude-rules/tools/deepseek-ask.mjs "指示"`・Claude従量の約1/15。難しい推論は `--reasoner`。要 ~/.claude/deepseek.env の DEEPSEEK_API_KEY）
   - **大量の軽作業（分類・整形・簡単生成）をオフライン無料で → Ollama**（`tools/ollama-ask.mjs "指示"`・ローカル実行でAPI課金ゼロ・CPU固定。品質はSonnet未満なので"軽作業限定"、難しい判断には使わない）
   - （補助）Grok＝`tools/grok-ask.mjs`（xAI。対話・X最新情報向け。開発ROIは低いので常用しない）
-  - 上記で済むものをLLMの従量トークンで代替しない（§1.17.1）。実装本体はCodex、生成・推論の"あふれ"はDeepSeek、無料で済む軽作業はOllama、大文脈・検索はGemini、と徹底的に安い/無料枠へ流す
+  - **統合ヘルパー `tools/llm-ask.mjs --provider <name> "指示"` で多プロバイダを1本委譲**（2026-08-16実測）:
+    - **超高速な分類・抽出・量産 → Groq**（`--provider groq`・LPUで**0.6秒級**・激安。Kimi/Ollamaが遅い問題を解消。大量軽作業の主力）
+    - **最安で足りるモデルへ何でも → OpenRouter**（`--provider openrouter`・1キーで**413モデル/無料19本**・`--model`で任意=deepseek/qwen/llama/`*:free`。汎用の逃がし先）
+    - **長文脈・大資料の要約/整形 → Gemini Flash**（`--provider gemini`・現行 `gemini-3.7-flash`・激安1M文脈。無料枠MCPの429を回避したい量産に）
+    - **安いコード補助 → Mistral/Codestral**（`--provider mistral`。Codexの下位・些末なコード）
+    - **別課金プールへ逃がす → Kimi K3**（`--provider kimi`・`reasoning_effort=none`自動で1.3秒/Sonnet並。月のTeamクレジット上限が律速の時のオフライン/夜間バッチ用。対話・顧客向けには使わない）
+  - 上記で済むものをLLMの従量トークンで代替しない（§1.17.1）。実装本体はCodex、量産・分類はGroq、汎用の安い逃がしはOpenRouter、長文脈はGemini Flash、大文脈読み/検索はGemini(MCP)、と徹底的に安い/無料/定額枠へ流す
 - モデル（認知）ルーティング（費用対効果ファースト、実測ベース v2 / 2026-07）:
   - **指揮官・判断・設計 → Opus5**（GA・$5/$25・Opus4.8の2倍性能で同単価。アーキ設計/根本原因分析/横断一貫性/経営判断/タスク分解・レビュー）
   - **生成（顧客向け文章・返信・要約）→ Sonnet**（default、§1.18）

@@ -85,7 +85,25 @@ ${flags.map(f => '- ' + f).join('\n')}
 <!-- COST-DIRECTIVE-END -->
 `;
 fs.writeFileSync(path.join(HOME, '.claude', 'cost-directive.md'), md);
-fs.writeFileSync(stateF, JSON.stringify({ t: new Date().toISOString(), totalUSD, claudeUSD, execUSD, work, delegRatio }));
+
+// --- 1週間観察→改善しなければハードブロックへ昇格(kim 2026-08-16) ---
+const today = new Date().toISOString().slice(0, 10);
+let hist = (prev && Array.isArray(prev.history)) ? prev.history : [];
+if (!hist.length || hist[hist.length - 1].date !== today) hist.push({ date: today, delegRatio, claudeUSD }); else hist[hist.length - 1] = { date: today, delegRatio, claudeUSD };
+while (hist.length > 14) hist.shift();
+const obsStart = (prev && prev.obsStart) ? prev.obsStart : today;
+const daysObserved = Math.round((Date.now() - new Date(obsStart + 'T00:00:00Z').getTime()) / 864e5);
+let enforce = 'warn', ereason = '観察中';
+if (daysObserved >= 7 && claudeUSD >= 30 && delegRatio < TARGET_DELEG) {
+  const avg = a => a.length ? a.reduce((s, x) => s + (x.delegRatio || 0), 0) / a.length : 0;
+  const early = hist.slice(0, Math.max(1, Math.floor(hist.length / 2)));
+  const recent = hist.slice(-3);
+  if (avg(recent) <= avg(early) + 0.05) { enforce = 'block'; ereason = `${daysObserved}日観察して委譲率が改善せず(${(avg(early) * 100).toFixed(0)}%→${(avg(recent) * 100).toFixed(0)}%)。ハードブロック昇格`; }
+  else { ereason = `改善傾向あり(${(avg(early) * 100).toFixed(0)}%→${(avg(recent) * 100).toFixed(0)}%)=警告継続`; }
+}
+fs.writeFileSync(path.join(HOME, '.claude', 'cost-enforce.json'), JSON.stringify({ mode: enforce, reason: ereason, since: obsStart, daysObserved, delegRatio, target: TARGET_DELEG }, null, 2));
+fs.writeFileSync(stateF, JSON.stringify({ t: new Date().toISOString(), totalUSD, claudeUSD, execUSD, work, delegRatio, obsStart, history: hist }));
+if (enforce === 'block') console.log(`\n🔒 ハードブロック昇格: ${ereason}（アプリ実装コードの直接編集をpretooluseフックが拒否します）`);
 console.log(md);
 
 if (POST) {

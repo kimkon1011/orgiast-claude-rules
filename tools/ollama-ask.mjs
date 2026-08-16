@@ -33,5 +33,6 @@ messages.push({ role: 'user', content: prompt });
     const text = j.message?.content ?? '';
     console.log((text || '(出力なし)').trim());
     console.error(`[ollama ${model}] 無料(ローカル) eval=${j.eval_count || 0}tok`);
+    try { fs.appendFileSync(path.join(os.homedir(), '.claude', 'executor-usage.jsonl'), JSON.stringify({ t: new Date().toISOString(), provider: 'ollama', model, in: j.prompt_eval_count || 0, out: j.eval_count || 0 }) + '\n'); } catch {}
   } catch (e) { console.error(`Ollama接続失敗: ${e.message} (Ollamaが起動しているか確認)`); process.exitCode = 1; }
 })();

@@ -50,5 +50,6 @@ messages.push({ role: 'user', content: prompt });
     const [pin, pout] = useReasoner ? [0.55, 2.19] : [0.27, 1.10];
     const cost = ((u.prompt_tokens || 0) * pin + (u.completion_tokens || 0) * pout) / 1e6;
     console.error(`[deepseek ${useReasoner ? 'reasoner' : 'chat'}] in=${u.prompt_tokens || 0} out=${u.completion_tokens || 0} 概算$${cost.toFixed(5)}`);
+    try { fs.appendFileSync(path.join(os.homedir(), '.claude', 'executor-usage.jsonl'), JSON.stringify({ t: new Date().toISOString(), provider: 'deepseek', model: useReasoner ? 'deepseek-reasoner' : 'deepseek-chat', in: u.prompt_tokens || 0, out: u.completion_tokens || 0 }) + '\n'); } catch {}
   } catch (e) { console.error('DeepSeek例外:', e.message); process.exitCode = 1; }
 })();

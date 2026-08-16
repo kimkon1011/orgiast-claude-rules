@@ -251,18 +251,19 @@ try {
   $env:Path = ($paths -join ';')
 } catch {}
 if (Have npm) {
-  # Codex は必須(codex login で使う)。失敗時のみ警告。
-  $codexOk = $false
-  for ($i = 1; $i -le 2 -and -not $codexOk; $i++) {
-    try { & npm i -g '@openai/codex' --no-fund --no-audit 2>&1 | Out-Null; if ($LASTEXITCODE -eq 0) { $codexOk = $true } } catch {}
+  # npm i -g をタイムアウト付きで実行(遅い/ハングするネットでも固まらない)。導入判定はコマンドの有無で。
+  function NpmInstallTO($pkg, $sec) {
+    try {
+      $pr = Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', ('npm i -g ' + $pkg + ' --no-fund --no-audit') -NoNewWindow -PassThru
+      if (-not $pr.WaitForExit($sec * 1000)) { try { $pr.Kill() } catch {} }
+    } catch {}
   }
-  if ($codexOk) { OK "Codex CLI 導入完了" } else { Warn "Codex CLI の導入に失敗(再起動後にコマンド再実行で入ります)" }
-  # Gemini CLI は"任意"。MCPが --allow-npx で必要時に自動取得するので、グローバル導入が失敗しても Gemini は動く。
-  $gemOk = $false
-  for ($i = 1; $i -le 2 -and -not $gemOk; $i++) {
-    try { & npm i -g '@google/gemini-cli' --no-fund --no-audit 2>&1 | Out-Null; if ($LASTEXITCODE -eq 0) { $gemOk = $true } } catch {}
-  }
-  if ($gemOk) { OK "Gemini CLI 導入完了" } else { OK "Gemini CLIのグローバル導入はスキップ(GeminiはMCP経由=npxで自動取得されるので問題ありません)" }
+  # Codex(必須・codex loginで使う): 180秒でタイムアウト
+  NpmInstallTO '@openai/codex' 180
+  if (Have codex) { OK "Codex CLI 導入完了" } else { Warn "Codex CLI が時間内に入りませんでした(ネット状況次第)。後で青い画面に『npm i -g @openai/codex』で導入可。他機能は動作" }
+  # Gemini(任意・MCPが--allow-npxで自動取得): 120秒でタイムアウト
+  NpmInstallTO '@google/gemini-cli' 120
+  if (Have gemini) { OK "Gemini CLI 導入完了" } else { OK "Gemini CLIのグローバル導入はスキップ(GeminiはMCP経由=npxで自動取得されるので問題ありません)" }
   # このあとの codex login 用に npm グローバルbin を現セッションPATHへ
   if ((Test-Path $npmBin) -and ($env:Path -notlike "*$npmBin*")) { $env:Path += ";$npmBin" }
 } else { Warn "npm が見つからないためCLI導入をスキップ(PC再起動後にコマンドを再実行してください)" }
@@ -332,47 +333,46 @@ try {
   if ($done) { OK "gemini-cli MCP 登録完了" }
 } catch { Warn ("MCP自動登録に失敗(他ツールは動作): " + $_.Exception.Message) }
 
-# --- Codex ログイン案内(最後の1操作) ---
+# --- 設定ファイルのBOM除去(PS5.1のSet-Content -Encoding UTF8はBOMを付ける。node/Claude CodeのJSON.parse・env読取がBOMで壊れるため全部no-BOM化) ---
+$bomFix = @((Join-Path $HOMEDIR '.claude\settings.json'), (Join-Path $HOMEDIR '.claude.json'), (Join-Path $HOMEDIR '.gemini\.env'), $envPath, $manusEnv, $dsEnv, $xaiEnv, $orEnv, $grqEnv, $msEnv, (Join-Path $HOMEDIR '.claude\ollama.env'))
+foreach ($bf in $bomFix) { try { if ($bf -and (Test-Path $bf)) { $bc = [System.IO.File]::ReadAllText($bf); if ($bc.Length -gt 0 -and $bc[0] -eq [char]0xFEFF) { [System.IO.File]::WriteAllText($bf, $bc.TrimStart([char]0xFEFF), (New-Object System.Text.UTF8Encoding($false))) } } } catch {} }
+
+# --- Codex ログイン(Codex導入済みの時だけ・未導入なら待たずにスキップ) ---
 Say "`n============================================================" 'Green'
-Say " ほぼ完了！ 最後に『Codexのログイン』1つだけお願いします" 'Green'
-Say "============================================================" 'Green'
-Say @"
+$codexCmd = (Get-Command codex -ErrorAction SilentlyContinue)
+if (-not $codexCmd) {
+  Say " ほぼ完了！ (ただし Codex CLI が未導入)" 'Yellow'
+  Say "============================================================" 'Green'
+  Warn "Codex未導入のためログインはスキップ(待ちません)。ネット改善後に青い画面で『npm i -g @openai/codex』→『codex login』(seisaku-team@orgiast.jp)を。"
+  Say "`n--- 適用状況の総合チェック ---" 'Cyan'
+  try { $vs = Join-Path $REPO 'tools\verify-setup.ps1'; if (Test-Path $vs) { & $vs } } catch {}
+  Say "`nCodex以外は設定済み。Codex導入+ログイン後に手動でPC再起動してください(自動再起動はしません)。" 'Yellow'
+}
+else {
+  Say " ほぼ完了！ 最後に『Codexのログイン』1つだけお願いします" 'Green'
+  Say "============================================================" 'Green'
+  Say @"
 Codex(コードを速く安く作るツール・定額枠)を使うにはログインが要ります。
 今からログイン画面を自動で開きます。ブラウザが開いたら、会社共有の ChatGPT アカウント
 【seisaku-team@orgiast.jp】でログイン(またはそのアカウントを選ぶ)だけでOKです。
-(ログインが終わったら、その黒い画面は閉じて大丈夫です。パスワードが分からなければ kim に聞いてください)
 "@ 'Gray'
-# Codexログイン完了の判定: ~/.codex/auth.json に有効なトークンが入ったか
-$authFile = Join-Path $env:USERPROFILE '.codex\auth.json'
-function Test-CodexLogin { if (-not (Test-Path $authFile)) { return $false }; try { $x = Get-Content $authFile -Raw | ConvertFrom-Json; return [bool]($x.tokens.id_token) } catch { return $false } }
-$beforeLogin = if (Test-Path $authFile) { (Get-Item $authFile).LastWriteTimeUtc } else { [datetime]::MinValue }
-$alreadyIn = Test-CodexLogin
-try { Start-Process -FilePath 'cmd.exe' -ArgumentList '/k', 'codex login' ; OK "Codexログイン画面を開きました(ブラウザで seisaku-team@orgiast.jp を選ぶだけ)" }
-catch { Warn "自動起動できませんでした。青い画面に『codex login』と打ってEnterしてログインしてください" }
-
-# --- ログイン完了を"確認してから"再起動する(未完了で再起動しない) ---
-Say "`nCodexのログイン完了を待っています(最大10分)。ブラウザで seisaku-team@orgiast.jp を選んでください..." 'Cyan'
-$loggedIn = $false
-$deadline = (Get-Date).AddMinutes(10)
-while ((Get-Date) -lt $deadline) {
-  Start-Sleep -Seconds 5
-  if (Test-CodexLogin) { $now = (Get-Item $authFile).LastWriteTimeUtc; if ($alreadyIn -or $now -gt $beforeLogin) { $loggedIn = $true; break } }
-}
-# 全設定の適用状況を総合チェックして表示(何がOK/NGか一目で分かる)
-Say "`n--- 適用状況の総合チェック ---" 'Cyan'
-try { $vs = Join-Path $REPO 'tools\verify-setup.ps1'; if (Test-Path $vs) { & $vs } } catch { Warn "総合チェック実行失敗(手動で verify-setup.ps1 を実行してください)" }
-
-if ($loggedIn) {
-  OK "Codexログイン確認OK(auth.json にトークンを検出)"
-  if ($NoReboot) { Say "自動再起動はスキップ(-NoReboot)。手動でPCを再起動すると全て有効になります。" 'Yellow' }
-  else {
-    Say "`nセットアップ完了。設定反映のため 30秒後に再起動します(中止したい場合は 青い画面に『shutdown /a』)。" 'Green'
-    try { shutdown /r /t 30 /c "オージャストAI設定の反映のためPCを再起動します(中止: shutdown /a)" | Out-Null }
-    catch { Warn "自動再起動を予約できませんでした。手動でPCを再起動してください。" }
+  $authFile = Join-Path $env:USERPROFILE '.codex\auth.json'
+  function Test-CodexLogin { if (-not (Test-Path $authFile)) { return $false }; try { $x = Get-Content $authFile -Raw | ConvertFrom-Json; return [bool]($x.tokens.id_token) } catch { return $false } }
+  $beforeLogin = if (Test-Path $authFile) { (Get-Item $authFile).LastWriteTimeUtc } else { [datetime]::MinValue }
+  $alreadyIn = Test-CodexLogin
+  # フルパスで起動(新しいcmdがnpmのグローバルbinをPATHに持たず『codexは認識されていません』となる対策)
+  try { Start-Process -FilePath 'cmd.exe' -ArgumentList '/k', ('"' + $codexCmd.Source + '" login') ; OK "Codexログイン画面を開きました(ブラウザで seisaku-team@orgiast.jp を選ぶだけ)" }
+  catch { Warn "自動起動できませんでした。青い画面に『codex login』と打ってください" }
+  Say "`nCodexのログイン完了を待っています(最大10分)。ブラウザで seisaku-team@orgiast.jp を選んでください..." 'Cyan'
+  $loggedIn = $false; $deadline = (Get-Date).AddMinutes(10)
+  while ((Get-Date) -lt $deadline) { Start-Sleep -Seconds 5; if (Test-CodexLogin) { $now = (Get-Item $authFile).LastWriteTimeUtc; if ($alreadyIn -or $now -gt $beforeLogin) { $loggedIn = $true; break } } }
+  Say "`n--- 適用状況の総合チェック ---" 'Cyan'
+  try { $vs = Join-Path $REPO 'tools\verify-setup.ps1'; if (Test-Path $vs) { & $vs } } catch {}
+  if ($loggedIn) {
+    OK "Codexログイン確認OK(auth.json にトークンを検出)"
+    if ($NoReboot) { Say "自動再起動はスキップ(-NoReboot)。手動で再起動を。" 'Yellow' }
+    else { Say "`nセットアップ完了。30秒後に再起動します(中止: 青い画面に『shutdown /a』)。" 'Green'; try { shutdown /r /t 30 /c "オージャストAI設定の反映のため再起動します(中止: shutdown /a)" | Out-Null } catch {} }
   }
-} else {
-  Warn "10分待ちましたがCodexログインが未完了です。自動再起動はしません。"
-  Say " → ブラウザで seisaku-team@orgiast.jp のログインを完了してから、手動でPCを再起動してください(スタート→電源→再起動)。設定はログイン後の再起動で有効になります。" 'Yellow'
-  Say " → 後でログインし直す場合: 青い画面に『codex login』と打つ。ログイン確認: 『Test-Path $env:USERPROFILE\.codex\auth.json』" 'Gray'
+  else { Warn "10分待ちましたがCodexログインが未完了。自動再起動はしません。ログイン完了後に手動でPC再起動を。" }
 }
 Say "`n分からないことがあれば、この画面の内容をそのまま kim に送ってください。" 'Green'

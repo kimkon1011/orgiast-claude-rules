@@ -32,6 +32,14 @@ Chk 'SessionStart: 委譲/使い過ぎチェック' ($sraw -match 'tool-adoption
 Chk 'SessionStart: コスト×作業量ループ' ($sraw -match 'cost-loop')
 Chk 'PreToolUse: 委譲警告/ハードブロック' ($sraw -match 'pretooluse-delegation-warn')
 Chk 'Stop: テスト忘れ防止' ($sraw -match 'verify-before-done')
+# 設定JSONが壊れていない(BOM無し/parse可)か = Claude Codeが起動できるか(BOM混入で起動不能になった事故の再発検知)
+$sjOk = $true; $cjOk = $true
+if (Have node) {
+  try { & node -e "JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'))" "$H\.claude\settings.json" 2>$null | Out-Null; $sjOk = ($LASTEXITCODE -eq 0) } catch { $sjOk = $false }
+  try { & node -e "JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'))" "$H\.claude.json" 2>$null | Out-Null; $cjOk = ($LASTEXITCODE -eq 0) } catch { $cjOk = $false }
+}
+Chk 'settings.json 妥当(BOM無/parse可=Claude Code起動可)' $sjOk
+Chk '.claude.json 妥当(parse可)' $cjOk
 # Gemini MCP
 Chk 'Gemini MCP 登録(.claude.json)' ((Get-Content "$H\.claude.json" -Raw -ErrorAction SilentlyContinue) -match 'gemini-cli')
 # 夜間バッチ定時タスク

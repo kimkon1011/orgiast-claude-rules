@@ -361,7 +361,10 @@ Codex(コードを速く安く作るツール・定額枠)を使うにはログ�
   $beforeLogin = if (Test-Path $authFile) { (Get-Item $authFile).LastWriteTimeUtc } else { [datetime]::MinValue }
   $alreadyIn = Test-CodexLogin
   # フルパスで起動(新しいcmdがnpmのグローバルbinをPATHに持たず『codexは認識されていません』となる対策)
-  try { Start-Process -FilePath 'cmd.exe' -ArgumentList '/k', ('"' + $codexCmd.Source + '" login') ; OK "Codexログイン画面を開きました(ブラウザで seisaku-team@orgiast.jp を選ぶだけ)" }
+  # cmd内でnpmグローバルbinをPATHに足してから "codex login"(=codex.cmdが解決される)。
+  # ※$codexCmd.Sourceを直接渡すとnpmのcodex.ps1が解決され、cmdが.ps1を"開く"→「どのアプリで開くか」ダイアログになるため使わない。
+  $npmBin2 = Join-Path $env:APPDATA 'npm'
+  try { Start-Process -FilePath 'cmd.exe' -ArgumentList '/k', ('set "PATH=%PATH%;' + $npmBin2 + '" && codex login') ; OK "Codexログイン画面を開きました(ブラウザで seisaku-team@orgiast.jp を選ぶだけ)" }
   catch { Warn "自動起動できませんでした。青い画面に『codex login』と打ってください" }
   Say "`nCodexのログイン完了を待っています(最大10分)。ブラウザで seisaku-team@orgiast.jp を選んでください..." 'Cyan'
   $loggedIn = $false; $deadline = (Get-Date).AddMinutes(10)

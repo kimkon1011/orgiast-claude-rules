@@ -44,5 +44,6 @@ messages.push({ role: 'user', content: prompt });
     const u = j.usage ?? {};
     console.log(text.trim() || '(出力なし)');
     console.error(`[grok ${model}] in=${u.prompt_tokens || 0} out=${u.completion_tokens || 0}`);
+    try { fs.appendFileSync(path.join(os.homedir(), '.claude', 'executor-usage.jsonl'), JSON.stringify({ t: new Date().toISOString(), provider: 'grok', model, in: u.prompt_tokens || 0, out: u.completion_tokens || 0 }) + '\n'); } catch {}
   } catch (e) { console.error('Grok例外:', e.message); process.exitCode = 1; }
 })();

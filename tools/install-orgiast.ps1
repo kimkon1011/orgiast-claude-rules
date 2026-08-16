@@ -193,13 +193,18 @@ try {
   $env:Path = ($paths -join ';')
 } catch {}
 if (Have npm) {
-  foreach ($pkg in @('@openai/codex', '@google/gemini-cli')) {
-    $ok = $false
-    for ($i = 1; $i -le 2 -and -not $ok; $i++) {
-      try { & npm i -g $pkg --no-fund --no-audit 2>&1 | Out-Null; if ($LASTEXITCODE -eq 0) { $ok = $true } } catch {}
-    }
-    if ($ok) { OK "$pkg 導入完了" } else { Warn "$pkg の導入に失敗(再起動後にもう一度コマンドを実行すると入ります)" }
+  # Codex は必須(codex login で使う)。失敗時のみ警告。
+  $codexOk = $false
+  for ($i = 1; $i -le 2 -and -not $codexOk; $i++) {
+    try { & npm i -g '@openai/codex' --no-fund --no-audit 2>&1 | Out-Null; if ($LASTEXITCODE -eq 0) { $codexOk = $true } } catch {}
   }
+  if ($codexOk) { OK "Codex CLI 導入完了" } else { Warn "Codex CLI の導入に失敗(再起動後にコマンド再実行で入ります)" }
+  # Gemini CLI は"任意"。MCPが --allow-npx で必要時に自動取得するので、グローバル導入が失敗しても Gemini は動く。
+  $gemOk = $false
+  for ($i = 1; $i -le 2 -and -not $gemOk; $i++) {
+    try { & npm i -g '@google/gemini-cli' --no-fund --no-audit 2>&1 | Out-Null; if ($LASTEXITCODE -eq 0) { $gemOk = $true } } catch {}
+  }
+  if ($gemOk) { OK "Gemini CLI 導入完了" } else { OK "Gemini CLIのグローバル導入はスキップ(GeminiはMCP経由=npxで自動取得されるので問題ありません)" }
   # このあとの codex login 用に npm グローバルbin を現セッションPATHへ
   if ((Test-Path $npmBin) -and ($env:Path -notlike "*$npmBin*")) { $env:Path += ";$npmBin" }
 } else { Warn "npm が見つからないためCLI導入をスキップ(PC再起動後にコマンドを再実行してください)" }
@@ -213,9 +218,11 @@ Step "Gemini のAPIキー設定 (検索・大きな資料用・無料枠)"
 $geminiKey = ''
 $gEnv = Join-Path $HOMEDIR '.gemini\.env'
 if (Test-Path $gEnv) { $line = (Get-Content $gEnv | Where-Object { $_ -like 'GEMINI_API_KEY=*' } | Select-Object -First 1); if ($line) { $geminiKey = $line.Split('=',2)[1] } }
-# 配布者が埋め込んだ共有キーがあれば、それを使って鍵作成画面を丸ごと省略
-if (-not $geminiKey -and $GeminiKey) {
-  $geminiKey = $GeminiKey.Trim()
+# 配布者が埋め込んだ共有キーがあれば鍵作成画面を丸ごと省略。
+# param束縛が揺れるケースがあるため env:ORGIAST_GEMINI_KEY も直接フォールバック参照する(堅牢化)。
+$embedKey = if ($GeminiKey) { $GeminiKey } elseif ($env:ORGIAST_GEMINI_KEY) { $env:ORGIAST_GEMINI_KEY } else { '' }
+if (-not $geminiKey -and $embedKey) {
+  $geminiKey = $embedKey.Trim()
   New-Item -ItemType Directory -Force -Path (Split-Path $gEnv) | Out-Null
   "GEMINI_API_KEY=$geminiKey`r`nGEMINI_CLI_TRUST_WORKSPACE=true" | Set-Content $gEnv -Encoding UTF8
   OK "Gemini APIキー(会社共有)を設定しました(鍵作成の操作は不要)"

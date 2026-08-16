@@ -211,6 +211,8 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
 - **prerenderパターン**: 毎晩バッチで「Claudeが毎回ゼロから組み立てる表示」をMarkdown等に完成形で書き出し、`<!-- ...-START -->`〜`<!-- ...-END -->`マーカーで囲む。日中はそのブロックを**読むだけ**（組み立て時間ゼロ・API呼び出しゼロ・待ち時間ゼロ）。起動が体感で数倍速くなる。
 - **Batch API(50%オフ)** を使えるバッチは使う。夜間スケジュールは GHA cron / Vercel cron / OSのスケジューラ等（Windowsタスク登録はclassifierが止めるので ps1書出し+user 1行実行）。
 - 判断: 新しい定型表示/一括処理を作るとき「これは夜間に作り置きして日中は読むだけにできないか」を先に問う。※Obsidian等のアプリは任意。memoryファイル群(既に`[[wikilink]]`のMarkdown)やDrive Docへ書き出せば同じ効果。
+- **即時 vs 夜間の切り分け(一言ルール)**: 「このセッション中に結果が要る？人が待つ？」→ **YES=即時**（`llm-ask`/`groq`等を同期実行）、**NO=夜間キュー**（後でいい・遅延許容・大量>20件・コスト大）。即時＝顧客返信/対話中の分析/ブロッキング処理。夜間＝大量生成/エンリッチ/日次ダイジェスト/prerender/バックフィル。
+- **実装済みツール(2026-08-16)**: `tools/batch-enqueue.mjs --provider <deepseek|gemini|openrouter|groq> "指示"` で夜間キューに積む → 毎日03:00の定時起動(`OrgiastNightlyBatch`スケジュールタスク=install-orgiast.ps1が自動登録)で `batch-run.mjs` が **off-peak帯(UTC16:30-00:30)にDeepSeek自動50%off＋Gemini Batch API 50%off** で実行。SessionStart(cost-loop.ps1)も off-peak帯なら裏で消化(best-effort)。※定時登録はメンバーPCはインストーラが自動、kim開発機のみ手動1行(classifierが私の登録を止めるため)。
 
 ### 2.9 Google Drive 運用ルール
 

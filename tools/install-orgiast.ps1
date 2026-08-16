@@ -229,6 +229,19 @@ try {
   } else { Warn "nightly-batch.ps1 未取得=定時起動スキップ(他機能は動作)" }
 } catch { Warn ("定時起動の登録に失敗(他機能は動作。後で会社担当に相談): " + $_.Exception.Message) }
 
+# --- フリートポーラーの定時起動(毎日03:15・夜間1回=コスト最小/LLM呼び出しゼロ) ---
+Step "フリート自己点検の定時起動を登録 (毎日03:15)"
+try {
+  $fp = Join-Path $REPO 'tools\fleet-poller.ps1'
+  if (Test-Path $fp) {
+    $fact = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $fp + '"')
+    $ftrg = New-ScheduledTaskTrigger -Daily -At 3:15am
+    $fset = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+    Register-ScheduledTask -TaskName 'OrgiastFleetPoller' -Action $fact -Trigger $ftrg -Settings $fset -Force -ErrorAction Stop | Out-Null
+    OK "フリート自己点検 登録完了(毎日03:15・設定チェック結果をDiscordへ自己報告+承認済みタスク処理)"
+  } else { Warn "fleet-poller.ps1 未取得=スキップ(他機能は動作)" }
+} catch { Warn ("フリート点検の登録に失敗(他機能は動作): " + $_.Exception.Message) }
+
 # --- 開発ツール導入 ---
 Step "開発ツール Codex / Gemini の導入 (コスト削減用)"
 # 直前にwingetで入れたNodeを"同一セッション"で使えるよう、PATHをレジストリから再読込(未反映だとnpm/codexが見つからず失敗する)

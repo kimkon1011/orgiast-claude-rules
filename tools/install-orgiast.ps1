@@ -93,6 +93,9 @@ if (Test-Path $srcW) { Copy-Item $srcW $dstW -Force; OK "配置: 委譲警告フ
 $srcV = Join-Path $REPO 'tools\verify-before-done-detector.ps1'
 $dstV = Join-Path $HOOKS 'verify-before-done-detector.ps1'
 if (Test-Path $srcV) { Copy-Item $srcV $dstV -Force; OK "配置: テスト忘れ防止フック" }
+$srcC = Join-Path $REPO 'tools\cost-loop.ps1'
+$dstC = Join-Path $HOOKS 'cost-loop.ps1'
+if (Test-Path $srcC) { Copy-Item $srcC $dstC -Force; OK "配置: コスト×作業量ループフック" }
 
 # --- cost-reporter.env ---
 Step "コスト報告の設定"
@@ -197,6 +200,17 @@ if (Test-Path $dstV) {
     $stp += [pscustomobject]@{ hooks=@([pscustomobject]@{ type='command'; command="$shell -NoProfile -File `"$h\.claude\hooks\verify-before-done-detector.ps1`"" }) }
     $json.hooks.Stop = $stp
     OK "テスト忘れ防止フック Stop 登録"
+  }
+}
+# SessionStart: コスト×作業量ループ(指示書を毎回注入)。context注入なので async は付けない(付けると黙殺される)
+if (Test-Path $dstC) {
+  $ss2 = @($json.hooks.SessionStart)
+  $cAlready = $ss2 | ForEach-Object { $_.hooks } | ForEach-Object { $_.command } | Where-Object { $_ -match 'cost-loop' }
+  if ($cAlready) { OK "コスト×作業量ループ 登録済(スキップ)" }
+  else {
+    $ss2 += [pscustomobject]@{ hooks = @([pscustomobject]@{ type='command'; command="$shell -NoProfile -NonInteractive -File `"$h\.claude\hooks\cost-loop.ps1`""; timeout=15 }) }
+    $json.hooks.SessionStart = $ss2
+    OK "コスト×作業量ループ SessionStart 登録(毎回指示注入+日次計測)"
   }
 }
 ($json | ConvertTo-Json -Depth 20) | Set-Content $setPath -Encoding UTF8

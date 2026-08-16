@@ -9,6 +9,9 @@ param(
   [string]$ManusKey = $env:ORGIAST_MANUS_KEY,  # Manus APIキー(Web調査委譲用・配布者が埋め込み・任意)
   [string]$DeepSeekKey = $env:ORGIAST_DEEPSEEK_KEY, # DeepSeek APIキー(安い推論委譲用・任意)
   [string]$GrokKey = $env:ORGIAST_GROK_KEY,    # xAI Grok APIキー(任意)
+  [string]$OpenRouterKey = $env:ORGIAST_OPENROUTER_KEY, # OpenRouter(1キーで413モデル/無料19本・任意)
+  [string]$GroqKey = $env:ORGIAST_GROQ_KEY,    # Groq(超高速LPU・量産向け・任意)
+  [string]$MistralKey = $env:ORGIAST_MISTRAL_KEY, # Mistral/Codestral(安いコード補助・任意)
   [string]$GeminiKey = $env:ORGIAST_GEMINI_KEY, # Gemini APIキー(配布者が埋め込み→鍵作成画面を省略・任意)
   [switch]$NoOllama,                           # Ollama(無料ローカル)導入をスキップ
   [switch]$NoReboot,                           # 最後の自動再起動をスキップ
@@ -33,7 +36,7 @@ Say @"
 このツールは、あなたのPCのClaudeを次のようにします(すべて自動):
   1) 会社の共通ルールを毎回自動で最新化(元に戻せるようバックアップ付き)
   2) このPCのClaude利用コスト概算($と使用モデルだけ)を社内Discordへ毎日報告/使い過ぎチェック
-  3) 開発を安く速くするAIを導入: Codex・Gemini・Manus・DeepSeek・Grok・Ollama(無料)
+  3) 開発を安く速くする多数のAIを導入: Codex・Gemini・Manus・DeepSeek・Grok・Ollama(無料)・OpenRouter(413モデル)・Groq(超高速)・Mistral
   4) 開発時の"うっかり"防止リマインド(実装は安いツールへ/完了前にテスト)
 ※会話の中身は読みませんし送りません。送るのは数字の集計だけです。
 ※Gemini鍵は会社共有分を自動設定。あなたの操作は「最後のCodexログイン(会社アカウントを選ぶ1クリック)」だけです。
@@ -118,6 +121,21 @@ $xaiEnv = Join-Path $HOMEDIR '.claude\xai.env'
 if (Test-Path $xaiEnv) { OK "Grokキー 既存(上書きしません)" }
 elseif ($GrokKey) { "XAI_API_KEY=$GrokKey" | Set-Content -Path $xaiEnv -Encoding UTF8; OK "Grokキー設定" }
 else { Warn "Grokキー未指定(Grok委譲は無効。他機能は動作)" }
+
+# --- OpenRouter / Groq / Mistral キー(統合ヘルパー llm-ask.mjs 用) ---
+Step "OpenRouter/Groq/Mistral の設定 (多モデル・超高速・安コード)"
+$orEnv = Join-Path $HOMEDIR '.claude\openrouter.env'
+if (Test-Path $orEnv) { OK "OpenRouterキー 既存(上書きしません)" }
+elseif ($OpenRouterKey) { "OPENROUTER_API_KEY=$OpenRouterKey" | Set-Content -Path $orEnv -Encoding UTF8; OK "OpenRouterキー設定(1キーで413モデル/無料19本に委譲可能に)" }
+else { Warn "OpenRouterキー未指定(他機能は動作)" }
+$grqEnv = Join-Path $HOMEDIR '.claude\groq.env'
+if (Test-Path $grqEnv) { OK "Groqキー 既存(上書きしません)" }
+elseif ($GroqKey) { "GROQ_API_KEY=$GroqKey" | Set-Content -Path $grqEnv -Encoding UTF8; OK "Groqキー設定(超高速な分類/量産を Groq へ委譲可能に)" }
+else { Warn "Groqキー未指定(他機能は動作)" }
+$msEnv = Join-Path $HOMEDIR '.claude\mistral.env'
+if (Test-Path $msEnv) { OK "Mistralキー 既存(上書きしません)" }
+elseif ($MistralKey) { "MISTRAL_API_KEY=$MistralKey" | Set-Content -Path $msEnv -Encoding UTF8; OK "Mistralキー設定(安いコード補助 Codestral を利用可能に)" }
+else { Warn "Mistralキー未指定(他機能は動作)" }
 
 # --- Ollama(無料ローカルAI)導入: 裏側プロセスで非ブロッキング実行(DLで画面を止めない) ---
 if (-not $NoOllama) {

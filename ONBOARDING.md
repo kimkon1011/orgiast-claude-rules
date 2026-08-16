@@ -204,7 +204,7 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
 
 ### 2.8 API（LLM）コスト最適化
 
-タスク難易度でモデル階層化（分類・抽出=Haiku、顧客向け生成=Sonnet、経営判断=Opus）。prompt cachingは5分TTL内に同一prefixが再送される場合だけ有効（単発cronには付けない）。非同期でよい一括生成はBatch API（50%オフ）。`max_tokens`は用途相応の最小に、contextは必要分だけ送る。**スプレッドシートのタブ参照はURLのgidより名前を優先**（URLは古い可能性が常にあるため、user言及のタブ名と実際のタブ一覧を必ず突き合わせる）。詳細・現状適用状況・past case: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/api-cost-optimization.md`
+タスク難易度でモデル階層化（分類・抽出=Haiku、顧客向け生成=Sonnet、経営判断=Opus）。**Anthropic APIを呼ぶアプリは、繰り返し送る大きな前置き（systemプロンプト/共通の長い文脈/フュー샷）に必ず `cache_control:{type:"ephemeral"}` を付ける＝prompt caching必須**（2026-08-16 Anthropic公式が「cache hit率が低い→直接API費用を最大42%削減可」と通知。cache読取は入力単価の約1/10）。有効なのは5分TTL内に同一prefixが再送される場合＝ステップメール一括生成/分類ループ/同一systemの連続呼び出し等（単発cronには付けない）。新規にAPIアプリを作る/既存を触る時は「この前置きは繰り返し送るか？→YESならcache_control」を必ず確認。※Claude Code(シート利用)は自動キャッシュ管理なので対象外＝この話はデプロイ済みアプリのAPI呼び出し限定。非同期でよい一括生成はBatch API（50%オフ）。`max_tokens`は用途相応の最小に、contextは必要分だけ送る。**スプレッドシートのタブ参照はURLのgidより名前を優先**（URLは古い可能性が常にあるため、user言及のタブ名と実際のタブ一覧を必ず突き合わせる）。詳細・現状適用状況・past case: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/api-cost-optimization.md`
 
 ### 2.8.1 夜間バッチ・作り置き(prerender)原則（表示時間↓・コスト↓は全部夜間へ / 2026-08-10 kim指示）
 

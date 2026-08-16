@@ -216,6 +216,19 @@ if (Test-Path $dstC) {
 ($json | ConvertTo-Json -Depth 20) | Set-Content $setPath -Encoding UTF8
 OK "settings.json 更新(バックアップ済)"
 
+# --- 夜間バッチの定時起動(毎日03:00・off-peak帯にキュー消化=50%off) ---
+Step "夜間バッチの定時起動を登録 (毎日03:00)"
+try {
+  $nb = Join-Path $REPO 'tools\nightly-batch.ps1'
+  if (Test-Path $nb) {
+    $act = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $nb + '"')
+    $trg = New-ScheduledTaskTrigger -Daily -At 3:00am
+    $set = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+    Register-ScheduledTask -TaskName 'OrgiastNightlyBatch' -Action $act -Trigger $trg -Settings $set -Force -ErrorAction Stop | Out-Null
+    OK "定時起動 登録完了(毎日03:00 OrgiastNightlyBatch・夜間バッチ半額実行)"
+  } else { Warn "nightly-batch.ps1 未取得=定時起動スキップ(他機能は動作)" }
+} catch { Warn ("定時起動の登録に失敗(他機能は動作。後で会社担当に相談): " + $_.Exception.Message) }
+
 # --- 開発ツール導入 ---
 Step "開発ツール Codex / Gemini の導入 (コスト削減用)"
 # 直前にwingetで入れたNodeを"同一セッション"で使えるよう、PATHをレジストリから再読込(未反映だとnpm/codexが見つからず失敗する)

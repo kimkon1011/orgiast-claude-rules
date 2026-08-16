@@ -1,0 +1,8 @@
+{
+  "runId": "init-2026-08-16",
+  "task": "",
+  "targets": "all",
+  "_note": "全PCへ承認済みタスクを配る中央キュー。kim/Claudeが task と runId(毎回ユニーク) を更新→各PCが夜間03:15の実行時に1回だけ処理しDiscordへ結果を返す。task を空にすると何もしない。",
+  "_allowed_tasks": ["verify-setup", "rules-resync", "cost-report"],
+  "_targets": "all=全PC / PC名の一部文字列=そのPCだけ"
+}

@@ -81,6 +81,23 @@ function transcriptHits(regex, windowDays) {
   return hit;
 }
 
+function codexSessionDirs() {
+  if (process.env.CODEX_SESSIONS_DIRS !== undefined) return process.env.CODEX_SESSIONS_DIRS.split(path.delimiter).filter(Boolean);
+  const dirs = [path.join(HOME, '.codex', 'sessions')];
+  const addUsers = (root) => {
+    let users = []; try { users = fs.readdirSync(root, { withFileTypes: true }); } catch { return; }
+    for (const user of users) if (user.isDirectory()) dirs.push(path.join(root, user.name, '.codex', 'sessions'));
+  };
+  // `//wsl.localhost/` のルートは列挙できない(ENOENT)。ディストリ名は wsl.exe から取る(出力はUTF-16LE)。
+  if (process.platform === 'win32') {
+    let distros = [];
+    try { distros = execSync('wsl.exe -l -q', { stdio: ['ignore', 'pipe', 'ignore'], timeout: 15000 }).toString('utf16le').split(/\r?\n/).map((s) => s.trim()).filter(Boolean); } catch { }
+    for (const distro of distros) addUsers(`//wsl.localhost/${distro}/home`);
+  }
+  if (process.platform === 'linux') addUsers('/home');
+  return [...new Set(dirs)];
+}
+
 const ledgerPath = path.join(HOME, '.claude', 'executor-usage.jsonl');
 function readLedger(windowDays) {
   if (!fs.existsSync(ledgerPath)) return null;
@@ -125,10 +142,14 @@ const human = [];   // 人手が要る残タスク(最小1操作)
 
 // ---- Codex ----
 function checkCodex() {
-  const installed = cmdOk('codex --version');
-  const version = installed ? cmdOut('codex --version') : '';
+  let installed = cmdOk('codex --version');
+  let version = installed ? cmdOut('codex --version') : '';
+  if (!installed && process.platform === 'win32') {
+    version = cmdOut('wsl -- codex --version');
+    installed = !!version;
+  }
   const authed = fs.existsSync(path.join(HOME, '.codex', 'auth.json'));
-  const lastUsed = newestMtime(path.join(HOME, '.codex', 'sessions'), '.jsonl');
+  const lastUsed = Math.max(0, ...codexSessionDirs().map((dir) => newestMtime(dir, '.jsonl')));
   const usedDays = lastUsed ? daysAgo(lastUsed) : Infinity;
   const used = usedDays <= USAGE_WINDOW_DAYS;
   if (!installed && DO_FIX) { if (cmdOk('npm i -g @openai/codex')) fixes.push('Codex CLI を npm install'); else human.push('Codex CLI 導入失敗→手動 `npm i -g @openai/codex`'); }

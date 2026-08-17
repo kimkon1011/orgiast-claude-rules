@@ -21,6 +21,24 @@ function tier(m) { m = (m || '').toLowerCase(); if (m.includes('opus')) return '
 
 // ---- 1) Claude Code トークン/$ ----
 function walk(dir, out) { let e = []; try { e = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; } for (const d of e) { const p = path.join(dir, d.name); if (d.isDirectory()) walk(p, out); else if (d.name.endsWith('.jsonl')) out.push(p); } }
+// Codex は Windows ネイティブ/WSL のどちらからも使われる。明示指定時はその候補だけを使う。
+function codexSessionDirs() {
+  if (process.env.CODEX_SESSIONS_DIRS !== undefined) return process.env.CODEX_SESSIONS_DIRS.split(path.delimiter).filter(Boolean);
+  const dirs = [path.join(HOME, '.codex', 'sessions')];
+  const addUsers = (root) => {
+    let users = []; try { users = fs.readdirSync(root, { withFileTypes: true }); } catch { return; }
+    for (const user of users) if (user.isDirectory()) dirs.push(path.join(root, user.name, '.codex', 'sessions'));
+  };
+  // `//wsl.localhost/` のルートは列挙できない(ENOENT)。ディストリ名は wsl.exe から取る(出力はUTF-16LE)。
+  if (process.platform === 'win32') {
+    let distros = [];
+    try { distros = execSync('wsl.exe -l -q', { stdio: ['ignore', 'pipe', 'ignore'], timeout: 15000 }).toString('utf16le').split(/\r?\n/).map((s) => s.trim()).filter(Boolean); } catch { }
+    for (const distro of distros) addUsers(`//wsl.localhost/${distro}/home`);
+  }
+  // このスクリプト自体が WSL 上で動く場合、UNC と同じ実体を Linux パスから参照する。
+  if (process.platform === 'linux') addUsers('/home');
+  return [...new Set(dirs)];
+}
 let claudeOut = 0, claudeUSD = 0, claudeByModel = {};
 {
   const files = []; walk(path.join(HOME, '.claude', 'projects'), files);
@@ -41,7 +59,22 @@ let claudeOut = 0, claudeUSD = 0, claudeByModel = {};
     }
   }
 }
-// ---- 2) 安いAI実行者 台帳 ----
+// ---- 2) Codex(定額枠) ----
+let codexOut = 0, codexSessions = 0;
+{
+  const files = [];
+  for (const dir of codexSessionDirs()) walk(dir, files);
+  for (const f of new Set(files)) {
+    let st; try { st = fs.statSync(f); } catch { continue; }
+    if (st.mtimeMs < since) continue;
+    let raw; try { raw = fs.readFileSync(f, 'utf-8'); } catch { continue; }
+    // total_token_usage は累積値なので、ファイル内の最後の output_tokens をセッション総計にする。
+    const re = /"total_token_usage"\s*:\s*\{[^{}]*?"output_tokens"\s*:\s*(\d+)/g;
+    let match, last = null; while ((match = re.exec(raw)) !== null) last = Number(match[1]);
+    if (last !== null) { codexOut += last; codexSessions++; }
+  }
+}
+// ---- 3) 安いAI実行者 台帳 ----
 let execOut = 0, execUSD = 0, execByProv = {};
 {
   const led = path.join(HOME, '.claude', 'executor-usage.jsonl');
@@ -49,7 +82,7 @@ let execOut = 0, execUSD = 0, execByProv = {};
   const EP = { groq: [0.6, 0.8], openrouter: [0.3, 0.6], gemini: [0.1, 0.4], kimi: [3, 15], mistral: [2, 6], deepseek: [0.27, 1.1], grok: [3, 15], ollama: [0, 0] };
   for (const ln of lines) { if (!ln.trim()) continue; let r; try { r = JSON.parse(ln); } catch { continue; } if (new Date(r.t).getTime() < since) continue; const [pi, po] = EP[r.provider] || [1, 3]; execUSD += ((r.in || 0) * pi + (r.out || 0) * po) / 1e6; execOut += (r.out || 0); execByProv[r.provider] = (execByProv[r.provider] || 0) + 1; }
 }
-// ---- 3) 作業量プロキシ(gitコミット) ----
+// ---- 4) 作業量プロキシ(gitコミット) ----
 let work = 0, workKind = 'commits';
 try {
   const dirs = (process.env.COST_WORK_REPOS || '').split(path.delimiter).filter(Boolean);
@@ -60,14 +93,15 @@ if (work === 0) { workKind = 'sessions(代替)'; try { const files = []; walk(pa
 
 // ---- 判定 ----
 const totalUSD = claudeUSD + execUSD;
-const delegRatio = (execOut + claudeOut) > 0 ? execOut / (execOut + claudeOut) : 0;
+const delegRatio = (execOut + codexOut + claudeOut) > 0 ? (execOut + codexOut) / (execOut + codexOut + claudeOut) : 0;
 const outPerWork = claudeOut / Math.max(work, 1);
 // 前回スナップショットで傾向
 const stateF = path.join(HOME, '.claude', 'cost-loop-state.json');
 let prev = null; try { prev = JSON.parse(fs.readFileSync(stateF, 'utf-8')); } catch { }
 const flags = [];
 const TARGET_DELEG = 0.30;
-if (claudeOut >= 1e6 && delegRatio < TARGET_DELEG) flags.push(`🚨 委譲不足: Claude出力${(claudeOut / 1000).toFixed(0)}k tokなのに委譲率${(delegRatio * 100).toFixed(0)}%(目標${TARGET_DELEG * 100}%↑)。実装→Codex/量産→Groq/汎用安→OpenRouter へ回す`);
+if (claudeOut >= 1e6 && delegRatio < TARGET_DELEG) flags.push(`🚨 委譲不足: Claude出力${(claudeOut / 1000).toFixed(0)}k tokなのに委譲率${(delegRatio * 100).toFixed(0)}%(目標${TARGET_DELEG * 100}%↑、Codex分は計上済み)。実装→Codex/量産→Groq/汎用安→OpenRouter/中量級の生成・推論→Kimi K3(別課金プール) へ回す`);
+if (codexSessions === 0) flags.push('⚠️ Codex未使用=実装を監督が抱えている疑い。実装はCodexへ委譲する');
 if (prev && typeof prev.claudeOut === 'number' && claudeOut > prev.claudeOut * 1.15 && work <= prev.work) flags.push(`🚨 利用効率悪化: Claude出力 ${(prev.claudeOut / 1000).toFixed(0)}k→${(claudeOut / 1000).toFixed(0)}k tok 増だが作業量(${workKind}) ${prev.work}→${work} 増えず。誤ルーティング/やり直し/呼びすぎを点検`);
 if (claudeByModel.opus && claudeOut && (claudeByModel.opus / claudeOut) > 0.5) flags.push(`⚠️ Opus比率高(${((claudeByModel.opus / claudeOut) * 100).toFixed(0)}%)。監督は最小限に、実装/生成は委譲(§1.18)`);
 if (!flags.length) flags.push('✅ 委譲・コスト効率は許容範囲。この調子で。');
@@ -80,8 +114,9 @@ const md = `<!-- COST-DIRECTIVE-START -->
 - Claude Code利用: **out ${(claudeOut / 1000).toFixed(0)}k tok** ${arrow} (${claudeModelLine}) ※定額シート課金＝請求$は発生しない
 - (参考: list価格換算 $${claudeUSD.toFixed(1)} — 実請求ではない)
 - 安いAI実行者: **実額 $${execUSD.toFixed(2)}**（従量課金）— ${execLine}
+- Codex(定額枠・実装の主経路): **out ${(codexOut / 1000).toFixed(0)}k tok** / ${codexSessions}セッション ※従量課金なし
 - 作業量(${workKind}): ${work} / **作業あたり 出力 ${(outPerWork / 1000).toFixed(0)}k tok**
-- 委譲率(安いAIへ逃がせた割合): **${(delegRatio * 100).toFixed(0)}%**
+- 委譲率(安いAI/Codexへ逃がせた割合): **${(delegRatio * 100).toFixed(0)}%**
 ### 指示
 ${flags.map(f => '- ' + f).join('\n')}
 <!-- COST-DIRECTIVE-END -->
@@ -105,7 +140,7 @@ if (daysObserved >= 7 && claudeOut >= 1e6 && delegRatio < TARGET_DELEG) {
   else { ereason = `改善傾向あり(${(avg(early) * 100).toFixed(0)}%→${(avg(recent) * 100).toFixed(0)}%)=警告継続`; }
 }
 fs.writeFileSync(path.join(HOME, '.claude', 'cost-enforce.json'), JSON.stringify({ mode: enforce, reason: ereason, since: obsStart, daysObserved, delegRatio, target: TARGET_DELEG }, null, 2));
-fs.writeFileSync(stateF, JSON.stringify({ t: new Date().toISOString(), totalUSD, claudeUSD, claudeOut, execUSD, work, delegRatio, obsStart, history: hist }));
+fs.writeFileSync(stateF, JSON.stringify({ t: new Date().toISOString(), totalUSD, claudeUSD, claudeOut, codexOut, codexSessions, execUSD, work, delegRatio, obsStart, history: hist }));
 if (enforce === 'block') console.log(`\n🔒 ハードブロック昇格: ${ereason}（アプリ実装コードの直接編集をpretooluseフックが拒否します）`);
 console.log(md);
 

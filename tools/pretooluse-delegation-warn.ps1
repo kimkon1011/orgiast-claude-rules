@@ -1,8 +1,6 @@
 ﻿# pretooluse-delegation-warn.ps1 — 監督(main loop)がアプリ実装コードを"直接"編集しようとしたら警告する(§1.18)。
 # 警告方式: 絶対にブロックしない(必ず exit 0)。編集は通るが「Codexへ委譲を」とリマインドを注入する。
-# 対象=アプリの実装ソース(.ts/.py 等)。対象外=memory/設定(.json/.md/.env)/ルールリポ/docs/tools/node_modules/テスト。
-# stdin(UTF-8) から PreToolUse の JSON を受け取る。
-# 出力も必ず UTF-8(BOM無し)で。JP Windows 既定コードページだと日本語/絵文字が文字化けするため。
+# stdin(UTF-8) から PreToolUse の JSON を受け取り、出力も UTF-8(BOM無し)にする。
 try { [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false) } catch {}
 try {
   $stdin = [Console]::OpenStandardInput()
@@ -16,36 +14,37 @@ try {
   if (-not $fp) { exit 0 }
   $lower = $fp.ToLower()
 
-  # 対象外パス(実装コードでない/触ってよいもの)
-  $exclude = @('\memory\','\.claude\','rules-extracted','onboarding-compress','\docs\','node_modules','\tools\','\.git\','scratchpad','\test\','\tests\','\__tests__\','.test.','.spec.','.stories.')
+  # 対象外パス(実装コードでない/監督が直接触ってよいもの)
+  $exclude = @('\memory\','settings.json','.bak','rules-extracted','onboarding-compress','\docs\','node_modules','\.git\','scratchpad','\test\','\tests\','\__tests__\','.test.','.spec.','.stories.')
   foreach ($x in $exclude) { if ($lower.Contains($x)) { exit 0 } }
 
   # アプリ実装コードの拡張子のみ対象(設定/ドキュメント/データは対象外)
-  $codeExt = @('.ts','.tsx','.js','.jsx','.mjs','.cjs','.py','.go','.rs','.java','.gs','.vue','.svelte','.php','.rb','.cs','.kt','.swift')
+  $codeExt = @('.ts','.tsx','.js','.jsx','.mjs','.cjs','.ps1','.py','.go','.rs','.java','.gs','.vue','.svelte','.php','.rb','.cs','.kt','.swift')
   $ext = [System.IO.Path]::GetExtension($lower)
   if ($codeExt -notcontains $ext) { exit 0 }
 
-  $name = [System.IO.Path]::GetFileName($fp)
-  # コスト×作業量ループが「1週間改善せず」でblock昇格していれば、"まとまった実装"の直接編集を拒否する(kim 2026-08-16)
-  $mode = 'warn'
-  try { $ef = Join-Path $env:USERPROFILE '.claude\cost-enforce.json'; if (Test-Path $ef) { $mode = ([string]((Get-Content $ef -Raw | ConvertFrom-Json).mode)) } } catch {}
-  # オーバーライド: このファイルがあれば拒否しない(正当に直接編集が必要な時に自分で作る)
-  $override = Test-Path (Join-Path $env:USERPROFILE '.claude\cost-enforce-override')
-  # "まとまった実装"か: Write/MultiEdit、または Edit で新規文字列が長い(600字超)
-  $substantial = $false
-  if ($tool -eq 'Write' -or $tool -eq 'MultiEdit') { $substantial = $true }
-  elseif ($tool -eq 'Edit') { $ns = [string]$j.tool_input.new_string; if ($ns.Length -gt 600) { $substantial = $true } }
-
-  if ($mode -eq 'block' -and $substantial -and -not $override) {
-    $deny = "🔒 委譲ハードブロック(§1.18): 直近1週間、安いAIへの委譲率が改善しなかったため、アプリ実装コード($name)のまとまった直接編集を停止します。この実装は Codex(定額枠 `codex exec`)へ委譲し、結果を verify してください。どうしても直接編集が必要なら ~/.claude/cost-enforce-override ファイルを作成(または委譲率を上げれば自動解除)。"
-    $out = @{ hookSpecificOutput = @{ hookEventName = 'PreToolUse'; permissionDecision = 'deny'; permissionDecisionReason = $deny } } | ConvertTo-Json -Compress
-    Write-Output $out
-    exit 0
+  # 実際に追加する内容を合算し、短い修正は警告しない。
+  $parts = @()
+  if ($tool -eq 'Write') {
+    $parts += [string]$j.tool_input.content
+  } elseif ($tool -eq 'Edit') {
+    $parts += [string]$j.tool_input.new_string
+  } else {
+    foreach ($edit in @($j.tool_input.edits)) { $parts += [string]$edit.new_string }
   }
-  $msg = "⚠️ 委譲規律(§1.18): これはアプリ実装コード($name)の直接編集です。監督(main loop)は大きな実装を手打ちせず、原則 Codex(定額枠)へ委譲してください。ごく短い修正(数行/typo/import)なら続行可。まとまった実装なら、この編集を止めて `codex exec` に投げ、結果を verify する方が安く速く正確です。"
-  $out = @{ hookSpecificOutput = @{ hookEventName = 'PreToolUse'; additionalContext = $msg } } | ConvertTo-Json -Compress
+  $charCount = 0
+  $lineCount = 0
+  foreach ($part in $parts) {
+    $charCount += $part.Length
+    if ($part.Length -gt 0) { $lineCount += @($part -split "`r?`n").Count }
+  }
+  if ($lineCount -lt 60 -and $charCount -lt 2500) { exit 0 }
+
+  $name = [System.IO.Path]::GetFileName($fp)
+  $msg = "⚠️ 委譲規律(§1.18): アプリ実装コード($name) を $lineCount 行 直接書き込もうとしています。この規模は Codex(定額枠)へ委譲すべき規模です。監督(main loop)は実装を手打ちせず、`codex exec` に投げて結果を verify してください。"
+  $out = @{ hookSpecificOutput = @{ hookEventName = 'PreToolUse'; additionalContext = $msg } } | ConvertTo-Json -Compress -Depth 5
   Write-Output $out
 } catch {
-  # 例外時はブロックしない(安全側=作業を止めない)
+  # 例外時もユーザー操作をブロックしない。
 }
 exit 0

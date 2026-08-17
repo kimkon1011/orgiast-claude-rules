@@ -165,6 +165,8 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
 - **委譲規律の"仕組み化"**: 監督が実装を抱えていないか(Opus高消費×Codex未使用)を per-PC の tool-adoption-check が日次で🚨検知（§3.0.4）。🚨が出たら即、実装をCodexへ移す。監視だけで是正しないのは違反。
 - 効果は per-PC コストレポーターのモデル別内訳で実測して調整（憶測で決めない）。
 - ※各PCの既定モデルは settings.json `"model"` と claude.ai 組織設定の両方が効く。組織設定側の「既定モデル/カスタム指示」も管理者kimが Opus 監督方針に合わせて更新すること（配布ルールだけでは system-prompt 側の旧記述は変わらない）。
+- **この規律は hook で機械的に強制される**: UserPromptSubmit の delegation-gate が実装依頼を検知し、応答冒頭での `[委譲判定]` 宣言を要求する（宣言せず実装を書き始めるのは違反）。PreToolUse の pretooluse-delegation-warn は60行/2500文字を超える実装コードの直接書き込みを検知して警告する。どちらも警告のみでブロックはしない。
+- セッションを閉じる時は `/session-close` skill で 成果要約→commit/PR→memory永続化→残TODO→次セッション用テンプレ→`/clear`促し まで完結させる。1セッション=1目的を守り、長い会話に複数タスクを積まない（文脈肥大は精度低下とコスト増を招く）。
 
 詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/token-model-cost-routing.md`
 

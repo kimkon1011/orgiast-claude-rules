@@ -28,7 +28,7 @@ try {
   backup(settingsFile);
   const settings = load(settingsFile);
   if (!settings.hooks || typeof settings.hooks !== 'object' || Array.isArray(settings.hooks)) settings.hooks = {};
-  for (const event of ['SessionStart', 'PreToolUse', 'Stop']) if (!Array.isArray(settings.hooks[event])) settings.hooks[event] = [];
+  for (const event of ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'Stop']) if (!Array.isArray(settings.hooks[event])) settings.hooks[event] = [];
   const command = (name, extra = '') => `node "${path.join(repo, 'tools', name)}"${extra}`;
   const session = [
     ['onboarding-sync.mjs', 20, true, ''],
@@ -41,6 +41,7 @@ try {
     if (async) hook.async = true;
     add(settings.hooks.SessionStart, name, { hooks: [hook] });
   }
+  add(settings.hooks.UserPromptSubmit, 'delegation-gate.mjs', { hooks: [{ type: 'command', command: command('delegation-gate.mjs') }] });
   add(settings.hooks.PreToolUse, 'pretooluse-delegation-warn.mjs', { matcher: 'Write|Edit|MultiEdit', hooks: [{ type: 'command', command: command('pretooluse-delegation-warn.mjs') }] });
   add(settings.hooks.Stop, 'verify-before-done-detector.mjs', { hooks: [{ type: 'command', command: command('verify-before-done-detector.mjs') }] });
   write(settingsFile, settings);

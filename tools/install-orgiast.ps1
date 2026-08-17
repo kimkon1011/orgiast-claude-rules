@@ -90,6 +90,9 @@ if (Test-Path $src) { Copy-Item $src $dst -Force; OK "配置: $dst" } else { War
 $srcW = Join-Path $REPO 'tools\pretooluse-delegation-warn.ps1'
 $dstW = Join-Path $HOOKS 'pretooluse-delegation-warn.ps1'
 if (Test-Path $srcW) { Copy-Item $srcW $dstW -Force; OK "配置: 委譲警告フック" }
+$srcG = Join-Path $REPO 'tools\delegation-gate.ps1'
+$dstG = Join-Path $HOOKS 'delegation-gate.ps1'
+if (Test-Path $srcG) { Copy-Item $srcG $dstG -Force; OK "配置: 委譲ゲートフック" }
 $srcV = Join-Path $REPO 'tools\verify-before-done-detector.ps1'
 $dstV = Join-Path $HOOKS 'verify-before-done-detector.ps1'
 if (Test-Path $srcV) { Copy-Item $srcV $dstV -Force; OK "配置: テスト忘れ防止フック" }
@@ -188,6 +191,18 @@ if (Test-Path $dstW) {
     $pre += [pscustomobject]@{ matcher='Write|Edit|MultiEdit'; hooks=@([pscustomobject]@{ type='command'; command="$shell -NoProfile -File `"$h\.claude\hooks\pretooluse-delegation-warn.ps1`"" }) }
     $json.hooks.PreToolUse = $pre
     OK "委譲警告フック PreToolUse 登録"
+  }
+}
+# UserPromptSubmit: 委譲ゲート(実装依頼を検知しCodex委譲判定を強制・§1.18)
+if (Test-Path $dstG) {
+  if (-not $json.hooks.UserPromptSubmit) { $json.hooks | Add-Member -NotePropertyName UserPromptSubmit -NotePropertyValue @() -Force }
+  $ups = @($json.hooks.UserPromptSubmit)
+  $gAlready = $ups | ForEach-Object { $_.hooks } | ForEach-Object { $_.command } | Where-Object { $_ -match 'delegation-gate' }
+  if ($gAlready) { OK "委譲ゲートフック 登録済(スキップ)" }
+  else {
+    $ups += [pscustomobject]@{ hooks=@([pscustomobject]@{ type='command'; command="$shell -NoProfile -NonInteractive -File `"$h\.claude\hooks\delegation-gate.ps1`"" }) }
+    $json.hooks.UserPromptSubmit = $ups
+    OK "委譲ゲートフック UserPromptSubmit 登録"
   }
 }
 # Stop: テスト忘れ防止フック(コード変更を完了報告する前に実行テストを促す・警告のみ/§1.18)

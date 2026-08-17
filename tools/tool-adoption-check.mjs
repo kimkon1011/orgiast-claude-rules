@@ -81,6 +81,45 @@ function transcriptHits(regex, windowDays) {
   return hit;
 }
 
+const ledgerPath = path.join(HOME, '.claude', 'executor-usage.jsonl');
+function readLedger(windowDays) {
+  if (!fs.existsSync(ledgerPath)) return null;
+  const cutoff = now - windowDays * 86400000;
+  let fallbackTime = 0;
+  try { fallbackTime = fs.statSync(ledgerPath).mtimeMs; } catch {}
+  const rows = [];
+  let raw; try { raw = fs.readFileSync(ledgerPath, 'utf-8'); } catch { return []; }
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let row; try { row = JSON.parse(line); } catch { continue; }
+    const value = row.t ?? row.ts ?? row.time ?? row.timestamp;
+    const parsed = typeof value === 'number' ? (value < 1e12 ? value * 1000 : value) : Date.parse(value);
+    const time = Number.isFinite(parsed) ? parsed : fallbackTime;
+    if (time >= cutoff) rows.push(row);
+  }
+  return rows;
+}
+function ledgerUsed(providerRegex, windowDays) {
+  const rows = readLedger(windowDays);
+  if (rows === null) return null;
+  return rows.some((row) => providerRegex.test(String(row.provider ?? row.tool ?? '')));
+}
+function ledgerCount(providerRegex, windowDays) {
+  const rows = readLedger(windowDays);
+  if (rows === null) return null;
+  return rows.filter((row) => providerRegex.test(String(row.provider ?? row.tool ?? ''))).length;
+}
+function ledgerCounts(windowDays) {
+  const rows = readLedger(windowDays);
+  if (rows === null) return null;
+  const counts = {};
+  for (const row of rows) {
+    const provider = String(row.provider ?? row.tool ?? '').trim().toLowerCase();
+    if (provider) counts[provider] = (counts[provider] || 0) + 1;
+  }
+  return counts;
+}
+
 const fixes = [];   // 自動適用した修復
 const human = [];   // 人手が要る残タスク(最小1操作)
 
@@ -141,24 +180,26 @@ function checkGemini() {
 function checkKimi() {
   const key = loadEnv(path.join(HOME, '.claude', 'kimi-api.env')).MOONSHOT_API_KEY || '';
   const keyed = !!key;
-  const used = transcriptHits(/moonshot|kimi-k[23]|MOONSHOT_API_KEY/, USAGE_WINDOW_DAYS);
-  return { name: 'Kimi', installed: keyed, version: keyed ? 'key有' : '', keyed, used, usedDays: used ? 0 : Infinity, role: 'オフライン大量推論限定(標準枠外・非使用は想定内)', offlineOnly: true };
+  const count = ledgerCount(/kimi|moonshot/i, USAGE_WINDOW_DAYS);
+  const traceUsed = count === null && transcriptHits(/moonshot|kimi-k[23]|MOONSHOT_API_KEY/, USAGE_WINDOW_DAYS);
+  const used = count === null ? traceUsed : count > 0;
+  return { name: 'Kimi', installed: keyed, version: keyed ? 'key有' : '', keyed, used, count, traceOnly: traceUsed, usedDays: used ? 0 : Infinity, role: '中量級の生成・推論の逃がし先(別課金プール・K3/reasoning_effort=none)' };
 }
 
 // ---- Manus (アプリ埋め込み型: aujust の src/lib/manus.ts 経由。CLI/セッションdirは無い) ----
 function checkManus() {
   // 使用痕跡: transcript内の manus 呼び出し or manus-poll cron 言及
-  const used = transcriptHits(/manus|MANUS_API|createEnrichmentTask|manus-poll/i, USAGE_WINDOW_DAYS);
+  const ledger = ledgerUsed(/manus/i, USAGE_WINDOW_DAYS);
+  const used = ledger === null ? transcriptHits(/manus|MANUS_API|createEnrichmentTask|manus-poll/i, USAGE_WINDOW_DAYS) : ledger;
   // 健全性: 環境に MANUS の鍵/参照があるか(アプリ側 .env は各リポなのでPCローカルの痕跡のみ緩く判定)
   const envHit = !!(process.env.MANUS_API_KEY);
-  return { name: 'Manus', installed: true, version: 'アプリ埋込', keyed: true, used, usedDays: used ? 0 : Infinity,
+  return { name: 'Manus', installed: true, version: 'アプリ埋込', keyed: true, used, traceOnly: ledger === null && used, usedDays: used ? 0 : Infinity,
     role: 'Web調査・属性エンリッチ(多段・根拠URL要/aujust埋込・専用枠)', appEmbedded: true, envHit };
 }
 
 // ---- 監督(Opus)委譲規律チェック(§1.18): Opus高消費なのにCodex未使用=監督が実装を抱えている疑い ----
-const PRICE = { opus: [5, 25], sonnet: [3, 15], haiku: [1, 5], fable: [10, 50] };
 function modelFamily(m) { m = String(m || ''); if (/opus/i.test(m)) return 'opus'; if (/sonnet/i.test(m)) return 'sonnet'; if (/haiku/i.test(m)) return 'haiku'; if (/fable/i.test(m)) return 'fable'; return null; }
-function mtdCostByModel() {
+function mtdOutputByModel() {
   const root = path.join(HOME, '.claude', 'projects');
   const d = new Date(now); const monthStart = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
   const by = {};
@@ -174,26 +215,26 @@ function mtdCostByModel() {
           let o; try { o = JSON.parse(line); } catch { continue; }
           if (o.type !== 'assistant' || !o.message || !o.message.usage) continue;
           if (!o.timestamp || o.timestamp < monthStart) continue;
-          const fam = modelFamily(o.message.model); if (!fam || !PRICE[fam]) continue;
+          const fam = modelFamily(o.message.model); if (!fam) continue;
           const u = o.message.usage;
-          by[fam] = (by[fam] || 0) + ((u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0)) / 1e6 * PRICE[fam][0] + (u.output_tokens || 0) / 1e6 * PRICE[fam][1];
+          by[fam] = (by[fam] || 0) + (u.output_tokens || 0);
         }
       }
     }
   })(root);
   return by;
 }
+function formatTokens(value) { return value >= 1e6 ? `${(value / 1e6).toFixed(1)}M tok` : `${Math.round(value / 1000)}k tok`; }
 function supervisorDiscipline(codexUsed) {
-  const by = mtdCostByModel();
+  const by = mtdOutputByModel();
   const total = Object.values(by).reduce((a, b) => a + b, 0);
   const opus = by.opus || 0; const share = total > 0 ? opus / total : 0;
   const pct = Math.round(share * 100);
-  if (total < 30) return { icon: '☑️', note: `当月消費小(概算$${total.toFixed(0)})で判定保留` };
-  // 最小限監督ならOpus絶対額は小さく収まるはず。$300超=明確に挽いている(全社¥150k≈$1000の1/3を1PCの監督が消費)
-  if (opus >= 300) return { icon: '🚨', note: `Opus当月概算$${opus.toFixed(0)}(全体の${pct}%)=最小限監督の水準を大きく超過。監督が実装を挽いている。実装を即Codexへ委譲(§1.17/§1.18)${codexUsed ? '' : '／かつ直近Codex未使用'}` };
-  if (!codexUsed && opus >= 50) return { icon: '🚨', note: `Opus $${opus.toFixed(0)}消費だが直近${USAGE_WINDOW_DAYS}日Codex未使用=委譲されていない疑い。実装はCodexへ(§1.17/§1.18)` };
-  if (opus >= 100 || share >= 0.7) return { icon: '⚠️', note: `Opus当月$${opus.toFixed(0)}・比率${pct}%=監督が挽き気味の可能性。実装のCodex委譲を確認(§1.18)` };
-  return { icon: '✅', note: `委譲規律OK (Opus概算$${opus.toFixed(0)}/${pct}%・Codex${codexUsed ? '使用あり' : '低Opusで問題なし'})` };
+  if (total < 100000) return { icon: '☑️', note: `当月の出力が少ない(${formatTokens(total)})ため判定保留` };
+  if (opus >= 3000000 && (share >= 0.5 || !codexUsed)) return { icon: '🚨', note: `Opus当月出力 ${formatTokens(opus)}(全体の${pct}%)=最小限監督の水準を大きく超過。監督が実装を挽いている。実装を即Codexへ委譲(§1.17/§1.18)${codexUsed ? '' : `／かつ直近${USAGE_WINDOW_DAYS}日Codex未使用`}` };
+  if (!codexUsed && opus >= 500000) return { icon: '🚨', note: `Opus出力 ${formatTokens(opus)} だが直近${USAGE_WINDOW_DAYS}日Codex未使用=委譲されていない疑い。実装はCodexへ(§1.17/§1.18)` };
+  if (opus >= 1000000 || share >= 0.7) return { icon: '⚠️', note: `Opus当月出力 ${formatTokens(opus)}・比率${pct}%=監督が挽き気味の可能性。実装のCodex委譲を確認(§1.18)` };
+  return { icon: '✅', note: `委譲規律OK (Opus出力 ${formatTokens(opus)}/${pct}%・Codex${codexUsed ? '使用あり' : '低Opusで問題なし'})` };
 }
 
 const checks = [checkCodex(), checkGemini(), checkKimi(), checkManus()];
@@ -203,8 +244,10 @@ const label = loadEnv(path.join(HOME, '.claude', 'cost-reporter.env')).REPORTER_
 let msg = `**🛠️ ツール採用チェック** — ${label} (直近${USAGE_WINDOW_DAYS}日)\n`;
 for (const c of checks) {
   let icon, note;
-  if (c.offlineOnly) { icon = c.keyed ? '☑️' : '⚠️'; note = c.keyed ? `キーOK(${c.used ? '使用あり' : '非使用=想定内'})` : 'キー無し'; }
-  else if (c.appEmbedded) { icon = c.used ? '✅' : '☑️'; note = c.used ? '使用あり(直近)' : '直近痕跡なし(aujust未実行なら想定内)'; }
+  if (c.name === 'Kimi' && !c.keyed) { icon = '🚨'; note = 'APIキー未設定→~/.claude/kimi-api.env に MOONSHOT_API_KEY= を設定'; }
+  else if (c.name === 'Kimi' && c.used) { icon = '✅'; note = c.count === null ? '使用あり(痕跡のみ)' : `使用あり(${c.count}回)`; }
+  else if (c.name === 'Kimi') { icon = '⚠️'; note = '未使用=Claude従量を別課金プールへ逃がせていない(§1.13)。量産・分類・中量級生成は `node tools/llm-ask.mjs --provider kimi "…"` へ'; }
+  else if (c.appEmbedded) { icon = c.used ? '✅' : '☑️'; note = c.used ? `使用あり(直近)${c.traceOnly ? '(痕跡のみ)' : ''}` : '未使用(aujust未実行なら想定内)'; }
   else if (!c.installed) { icon = '🚨'; note = '未導入'; }
   else if (c.name === 'Codex' && !c.authed) { icon = '🚨'; note = '未認証'; }
   else if (c.name === 'Gemini' && !c.keyed) { icon = '🚨'; note = 'APIキー未設定'; }
@@ -217,6 +260,10 @@ for (const c of checks) {
 const codexUsed = (checks.find((c) => c.name === 'Codex') || {}).used;
 const disc = supervisorDiscipline(codexUsed);
 msg += `${disc.icon} **監督委譲規律(§1.18)** — ${disc.note}\n`;
+msg += `※料金の正本は同時投稿の「Claude Code ローカル利用トークン」(list価格換算)を参照\n`;
+const providerCounts = ledgerCounts(USAGE_WINDOW_DAYS);
+const ledgerSummary = providerCounts === null ? '台帳なし' : (Object.entries(providerCounts).sort((a, b) => b[1] - a[1]).map(([p, n]) => `${p} ${n}`).join(' / ') || '呼び出しなし');
+msg += `📒 安いAI実行者(直近${USAGE_WINDOW_DAYS}日・実呼び出し): ${ledgerSummary}\n`;
 
 if (fixes.length) msg += `\n🔧 自動修復: ${fixes.join(' / ')}\n`;
 if (human.length) msg += `\n🙋 要人手(最小1操作): ${human.join(' / ')}\n`;

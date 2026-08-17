@@ -1,5 +1,5 @@
 // batch-enqueue.mjs — 夜間バッチ用ジョブを ~/.claude/batch-queue/pending.jsonl へ追加する。
-// 使い方: node batch-enqueue.mjs --provider <deepseek|gemini|openrouter|groq> "指示" [--model X] [--system S] [--max N]
+// 使い方: node batch-enqueue.mjs --provider <deepseek|gemini|openrouter|groq|kimi> "指示" [--model X] [--system S] [--max N]
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
 
 const PROVIDERS = {
@@ -7,13 +7,14 @@ const PROVIDERS = {
   gemini: { model: 'gemini-3.7-flash' },
   openrouter: { model: 'meta-llama/llama-3.3-70b-instruct' },
   groq: { model: 'llama-3.3-70b-versatile' },
+  kimi: { model: 'kimi-k3' },
 };
 
 const args = process.argv.slice(2);
 function opt(name, def) { const i = args.indexOf(name); return (i >= 0 && args[i + 1]) ? args[i + 1] : def; }
 const provider = (opt('--provider', '') || '').toLowerCase();
 const P = PROVIDERS[provider];
-if (!P) { console.error('使い方: node batch-enqueue.mjs --provider <deepseek|gemini|openrouter|groq> "指示" [--model X] [--system S] [--max N]'); process.exit(2); }
+if (!P) { console.error('使い方: node batch-enqueue.mjs --provider <deepseek|gemini|openrouter|groq|kimi> "指示" [--model X] [--system S] [--max N]'); process.exit(2); }
 const model = opt('--model', P.model);
 const system = opt('--system', '');
 const max = parseInt(opt('--max', '4000'), 10) || 4000;
@@ -35,5 +36,7 @@ try {
 const job = { id: `${stamp}-${String(seq).padStart(3, '0')}`, provider, model, system, prompt, max, enqueuedAt: new Date().toISOString() };
 fs.appendFileSync(pending, JSON.stringify(job) + '\n');
 console.log(`${job.id} を夜間バッチに追加 (${provider}:${model})`);
-console.log(`→ 毎日03:00のoff-peak帯に半額(約50%off)で実行されます。結果は ~/.claude/batch-queue/results-<日付>.jsonl。`);
+console.log(job.provider === 'kimi'
+  ? `→ Kimiは割引待ちせず次回実行時に処理されます。結果は ~/.claude/batch-queue/results-<日付>.jsonl。`
+  : `→ 毎日03:00のoff-peak帯に半額(約50%off)で実行されます。結果は ~/.claude/batch-queue/results-<日付>.jsonl。`);
 console.log(`→ 今すぐ実行したい場合: node batch-run.mjs --force`);

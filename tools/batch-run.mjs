@@ -7,6 +7,7 @@ const PROVIDERS = {
   gemini: { base: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', keyEnv: 'GEMINI_API_KEY', keyFile: 'gemini.env', model: 'gemini-3.7-flash' },
   openrouter: { base: 'https://openrouter.ai/api/v1/chat/completions', keyEnv: 'OPENROUTER_API_KEY', keyFile: 'openrouter.env', model: 'meta-llama/llama-3.3-70b-instruct', extraHeaders: { 'HTTP-Referer': 'https://orgiast.jp', 'X-Title': 'orgiast' } },
   groq: { base: 'https://api.groq.com/openai/v1/chat/completions', keyEnv: 'GROQ_API_KEY', keyFile: 'groq.env', model: 'llama-3.3-70b-versatile' },
+  kimi: { base: 'https://api.moonshot.ai/v1/chat/completions', keyEnv: 'MOONSHOT_API_KEY', keyFile: 'kimi-api.env', model: 'kimi-k3' },
 };
 
 const args = process.argv.slice(2);
@@ -52,7 +53,9 @@ async function runStandard(job) {
   const P = PROVIDERS[job.provider];
   const key = loadKey(job.provider);
   if (!key) throw new Error(`${P.keyEnv} 未設定`);
-  const r = await fetch(P.base, { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', ...(P.extraHeaders || {}) }, body: JSON.stringify({ model: job.model || P.model, messages: messages(job), max_tokens: job.max || 4000, stream: false }) });
+  const payload = { model: job.model || P.model, messages: messages(job), max_tokens: job.max || 4000, stream: false };
+  if (job.provider === 'kimi') Object.assign(payload, { reasoning_effort: 'none', temperature: 0.6 });
+  const r = await fetch(P.base, { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', ...(P.extraHeaders || {}) }, body: JSON.stringify(payload) });
   if (!r.ok) throw new Error(`${r.status}: ${(await r.text().catch(() => '')).slice(0, 400)}`);
   const j = await r.json();
   return { text: j.choices?.[0]?.message?.content ?? '', usage: j.usage ?? {}, mode: 'standard' };

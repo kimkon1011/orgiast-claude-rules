@@ -15,7 +15,7 @@ Windowsの手順(PowerShell)とは別物なので混ぜないでください。
 配布者は `<配布者が埋める>` の部分を実際の値に置き換えてから渡してください。APIキーをこの文書へ直接保存しないでください。
 
 ```bash
-export ORGIAST_WEBHOOK='<配布者が埋める>'; export ORGIAST_LABEL='<配布者が埋める・空でも可>'; export ORGIAST_MANUS_KEY='<配布者が埋める>'; export ORGIAST_DEEPSEEK_KEY='<配布者が埋める>'; export ORGIAST_GROK_KEY='<配布者が埋める>'; export ORGIAST_OPENROUTER_KEY='<配布者が埋める>'; export ORGIAST_GROQ_KEY='<配布者が埋める>'; export ORGIAST_MISTRAL_KEY='<配布者が埋める>'; export ORGIAST_GEMINI_KEY='<配布者が埋める>'; /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/tools/install-orgiast.sh)"
+export ORGIAST_WEBHOOK='<配布者が埋める>'; export ORGIAST_LABEL='<配布者が埋める・空でも可>'; export ORGIAST_MANUS_KEY='<配布者が埋める>'; export ORGIAST_DEEPSEEK_KEY='<配布者が埋める>'; export ORGIAST_GROK_KEY='<配布者が埋める>'; export ORGIAST_OPENROUTER_KEY='<配布者が埋める>'; export ORGIAST_GROQ_KEY='<配布者が埋める>'; export ORGIAST_MISTRAL_KEY='<配布者が埋める>'; export ORGIAST_KIMI_KEY='<配布者が埋める>'; export ORGIAST_GEMINI_KEY='<配布者が埋める>'; /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/tools/install-orgiast.sh)"
 ```
 
 ## 終了後

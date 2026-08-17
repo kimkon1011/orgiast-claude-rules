@@ -31,22 +31,33 @@ Set-Content -LiteralPath $guard -Value (Get-Date -Format o) -Encoding UTF8
 
 $txt = Get-Content -LiteralPath $md -Raw -Encoding UTF8
 $items = @()
+# 列は固定位置で読まない。session-triage.mjs 側に列が増えた時に黙ってズレる(実測: cwd欄に検索語が出た)ため、
+# ヘッダー行の見出し名から列番号を引く。
+$colIndex = @{}
 foreach ($line in ($txt -split "`r?`n")) {
+  if ($colIndex.Count -eq 0 -and $line -match '^\s*\|\s*分類\s*\|') {
+    $headers = @($line -split '(?<!\\)\|' | ForEach-Object { $_.Trim() })
+    for ($i = 0; $i -lt $headers.Count; $i++) { if ($headers[$i]) { $colIndex[$headers[$i]] = $i } }
+    continue
+  }
   if ($items.Count -ge 5) { break }
   if ($line -notmatch '^\s*\|\s*🔴\s+要対応\s*\|') { continue }
+  if ($colIndex.Count -eq 0) { continue }
   $cols = @($line -split '(?<!\\)\|' | ForEach-Object { $_.Trim().Replace('\|', '|') })
-  if ($cols.Count -lt 10) { continue }
-  $rawTitle = $cols[3]
-  $title = $rawTitle
+  $get = {
+    param($name)
+    $i = $colIndex[$name]
+    if ($null -ne $i -and $i -lt $cols.Count) { $cols[$i] } else { '' }
+  }
+  $title = & $get '表示名'
   if ($title.Length -gt 40) { $title = $title.Substring(0, 39) + '…' }
-  $updated = $cols[4]
-  $sessionCwd = $cols[5]
-  $next = $cols[7]
-  $resume = $cols[8].Trim('`')
-  # VSCodeサイドバーの検索はセッション名(=最初のプロンプト原文)にしか当たらない。
-  # 言い換えた見出しを渡すと「見つからない」になるため、原文の先頭を検索語として必ず添える。
-  $searchKey = $rawTitle
-  if ($searchKey.Length -gt 14) { $searchKey = $searchKey.Substring(0, 14) }
+  $updated = & $get '更新'
+  $sessionCwd = & $get 'cwd'
+  $next = & $get '次アクション'
+  $resume = (& $get '再開').Trim('`')
+  # 検索対象はサイドバーの表示名(custom-title > ai-title > summary > 最初のプロンプト)。
+  # 最初のプロンプトを渡すと名前付きセッションで検索が外れる(実測)。
+  $searchKey = & $get '検索語'
   $items += "🔴 [$updated] $title — $next / 検索語「$searchKey」 / $resume / cwd: $sessionCwd"
 }
 

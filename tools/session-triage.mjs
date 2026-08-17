@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Claude Code の transcript を先頭64 KiB・末尾256 KiBだけ読んで未完了度を判定する。
+// Claude Code の transcript を VSCode 拡張と同じ 65536 byte 窓で読み、未完了度を判定する。
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 
 const execFileAsync = promisify(execFile);
 const HEAD_BYTES = 64 * 1024;
-const TAIL_BYTES = 256 * 1024;
+const TAIL_BYTES = 64 * 1024;
 const DAY_MS = 86_400_000;
 const args = process.argv.slice(2);
 
@@ -76,6 +76,10 @@ function shorten(s, n) {
   return value.length > n ? `${value.slice(0, n - 1)}…` : value;
 }
 
+function searchTerm(s) {
+  return String(s || '').trim().slice(0, 14);
+}
+
 async function readWindow(file, size, fromTail) {
   const length = Math.min(size, file.size);
   if (!length) return '';
@@ -84,11 +88,7 @@ async function readWindow(file, size, fromTail) {
   try {
     const buffer = Buffer.alloc(length);
     const { bytesRead } = await handle.read(buffer, 0, length, offset);
-    let value = buffer.subarray(0, bytesRead).toString('utf8');
-    // UTF-8途中開始の置換文字と、窓の境界にある不完全JSONL行を捨てる。
-    if (fromTail && offset > 0) value = value.slice(value.indexOf('\n') + 1);
-    if (!fromTail && length < file.size) value = value.slice(0, value.lastIndexOf('\n') + 1);
-    return value;
+    return buffer.subarray(0, bytesRead).toString('utf8');
   } finally {
     await handle.close();
   }
@@ -103,6 +103,27 @@ function parseLines(value) {
     try { events.push(JSON.parse(line)); } catch { stats.corruptLines++; }
   }
   return { events, bytes };
+}
+
+function lastStringField(raw, key) {
+  const pattern = new RegExp(`"${key}"\\s*:\\s*("(?:\\\\.|[^"\\\\])*")`, 'g');
+  let value = '';
+  for (const match of raw.matchAll(pattern)) {
+    try { value = JSON.parse(match[1]); } catch { /* 窓境界の不完全な値は無視。 */ }
+  }
+  return typeof value === 'string' ? value : '';
+}
+
+function firstPromptFromHead(raw) {
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line.includes('"type":"user"') || line.includes('tool_result') || line.includes('"isMeta":true') || line.includes('"isCompactSummary":true')) continue;
+    try {
+      const event = JSON.parse(line);
+      const value = cleanPrompt(textOf(event?.message?.content));
+      if (value) return value;
+    } catch { /* head 末尾の不完全行は無視。 */ }
+  }
+  return '';
 }
 
 function isActualUser(event) {
@@ -120,17 +141,27 @@ function statusFor(score) {
   return { emoji: '🗑', name: '短命/雑談' };
 }
 
-function analyze(file, headEvents, tailEvents, tailBytes) {
+function analyze(file, headRaw, tailRaw, headEvents, tailEvents, tailBytes) {
   const combined = headEvents.concat(tailEvents);
-  let title = '';
+  let firstPrompt = '';
   let cwd = '';
   let gitBranch = '';
   const sessionId = path.basename(file.path, '.jsonl');
   for (const event of combined) {
     cwd ||= event?.cwd || '';
     gitBranch ||= event?.gitBranch || '';
-    if (!title && isActualUser(event)) title = cleanPrompt(textOf(event.message.content));
+    if (!firstPrompt && isActualUser(event)) firstPrompt = cleanPrompt(textOf(event.message.content));
   }
+  const candidates = [
+    ['custom', lastStringField(tailRaw, 'customTitle') || lastStringField(headRaw, 'customTitle')],
+    ['ai', lastStringField(tailRaw, 'aiTitle') || lastStringField(headRaw, 'aiTitle')],
+    ['lastPrompt', lastStringField(tailRaw, 'lastPrompt')],
+    ['summary', lastStringField(tailRaw, 'summary')],
+    ['firstPrompt', firstPromptFromHead(headRaw)],
+  ];
+  const selectedTitle = candidates.find(([, value]) => value);
+  const displayTitle = selectedTitle?.[1] || '(タイトルなし)';
+  const titleSource = selectedTitle?.[0] || 'none';
 
   let lastTs = '';
   let lastRole = '';
@@ -190,7 +221,8 @@ function analyze(file, headEvents, tailEvents, tailBytes) {
   return {
     sessionId, file: file.path, cwd, projectDir: path.basename(path.dirname(file.path)),
     mtime: new Date(file.mtimeMs).toISOString(), sizeMB: Number((file.size / 1024 / 1024).toFixed(2)),
-    gitBranch, title: shorten(title || '(タイトルなし)', 80), llmTitle: shorten(title || '(タイトルなし)', 1500), lastTs, lastRole,
+    gitBranch, displayTitle, titleSource,
+    firstPrompt: shorten(firstPrompt || '(プロンプトなし)', 1500), llmTitle: shorten(firstPrompt || '(プロンプトなし)', 1500), lastTs, lastRole,
     lastAssistantText: shorten(lastAssistantText, 1500), ageDays: Number(ageDays.toFixed(1)),
     messageCountEstimate: messageCount, score, status: status.name, emoji: status.emoji, reasons,
     signals: {
@@ -244,11 +276,15 @@ async function inspect(file) {
   if (!file.size) { stats.emptyFiles++; return null; }
   try {
     const [headRaw, tailRaw] = await Promise.all([readWindow(file, HEAD_BYTES, false), readWindow(file, TAIL_BYTES, true)]);
-    const head = parseLines(headRaw);
-    const tail = parseLines(tailRaw);
+    // イベント解析では窓境界の不完全JSONL行だけを捨てる。タイトル抽出には生の窓を使う。
+    const headParseRaw = file.size > HEAD_BYTES ? headRaw.slice(0, headRaw.lastIndexOf('\n') + 1) : headRaw;
+    const firstTailNewline = tailRaw.indexOf('\n');
+    const tailParseRaw = file.size > TAIL_BYTES && firstTailNewline >= 0 ? tailRaw.slice(firstTailNewline + 1) : tailRaw;
+    const head = parseLines(headParseRaw);
+    const tail = parseLines(tailParseRaw);
     if (!head.events.length && !tail.events.length) { stats.emptyFiles++; return null; }
     stats.scanned++;
-    return analyze(file, head.events, tail.events, tail.bytes);
+    return analyze(file, headRaw, tailRaw, head.events, tail.events, tail.bytes);
   } catch { stats.readErrors++; return null; }
 }
 
@@ -373,7 +409,10 @@ function ageLabel(daysValue) {
 function terminalText(records, summary) {
   const lines = [];
   for (const r of records) {
-    lines.push(`${r.emoji} [${ageLabel(r.ageDays)}] ${r.title}`);
+    lines.push(`${r.emoji} [${ageLabel(r.ageDays)}] ${r.displayTitle}${r.titleSource === 'none' ? ' ※一覧に出ません(--resumeのみ)' : ''}`);
+    lines.push(`   titleSource: ${r.titleSource}`);
+    lines.push(`   最初のプロンプト: 「${shorten(r.firstPrompt, 120)}」`);
+    if (r.titleSource !== 'none') lines.push(`   検索語: ${searchTerm(r.displayTitle)}`);
     lines.push(`   cwd: ${r.cwd || '(不明)'}  (score ${r.score}: ${r.reasons.join(', ') || 'シグナルなし'})`);
     lines.push(`   最後: 「${shorten(r.lastAssistantText || '(assistantテキストなし)', 120)}」`);
     if (r.nextAction) lines.push(`   次アクション: ${r.nextAction}`);
@@ -391,9 +430,9 @@ function terminalText(records, summary) {
 
 function markdown(records, summary) {
   const esc = (s) => String(s || '').replace(/\|/g, '\\|').replace(/\r?\n/g, '<br>');
-  const rows = records.map((r) => `| ${r.emoji} ${r.status} | ${r.score} | ${esc(r.title)} | ${ageLabel(r.ageDays)} | ${esc(r.cwd || '(不明)')} | ${esc(r.reasons.join(', ') || 'シグナルなし')} | ${esc(r.nextAction || (r.status === '完了っぽい' ? 'なし（完了）' : '要確認'))} | \`claude --resume ${r.sessionId}\` |`);
+  const rows = records.map((r) => `| ${r.emoji} ${r.status} | ${r.score} | ${esc(r.displayTitle)}${r.titleSource === 'none' ? ' ※一覧に出ません(--resumeのみ)' : ''} | ${r.titleSource} | ${esc(shorten(r.firstPrompt, 120))} | ${r.titleSource === 'none' ? '(一覧に出ない)' : esc(searchTerm(r.displayTitle))} | ${ageLabel(r.ageDays)} | ${esc(r.cwd || '(不明)')} | ${esc(r.reasons.join(', ') || 'シグナルなし')} | ${esc(r.nextAction || (r.status === '完了っぽい' ? 'なし（完了）' : '要確認'))} | \`claude --resume ${r.sessionId}\` |`);
   const llmLine = summary.llm ? `\nLLM判定: 成功${summary.llm.success}件 / 失敗${summary.llm.failure}件\n` : '';
-  return `<!-- SESSION-TRIAGE-START -->\n# Claude Code セッショントリアージ\n\n🔴 ${summary.counts['要対応']}本 / 🟡 ${summary.counts['要確認']}本 / 生成時刻 ${new Date().toISOString()}\n\n走査: ${summary.scanned}本\n${llmLine}\n| 分類 | score | タイトル | 更新 | cwd | 理由 | 次アクション | 再開 |\n|---|---:|---|---|---|---|---|---|\n${rows.join('\n')}\n<!-- SESSION-TRIAGE-END -->\n`;
+  return `<!-- SESSION-TRIAGE-START -->\n# Claude Code セッショントリアージ\n\n🔴 ${summary.counts['要対応']}本 / 🟡 ${summary.counts['要確認']}本 / 生成時刻 ${new Date().toISOString()}\n\n走査: ${summary.scanned}本\n${llmLine}\n| 分類 | score | 表示名 | titleSource | 最初のプロンプト | 検索語 | 更新 | cwd | 理由 | 次アクション | 再開 |\n|---|---:|---|---|---|---|---|---|---|---|---|\n${rows.join('\n')}\n<!-- SESSION-TRIAGE-END -->\n`;
 }
 
 try {

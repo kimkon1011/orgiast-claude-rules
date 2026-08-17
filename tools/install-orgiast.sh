@@ -116,19 +116,41 @@ npm_install_timeout() {
   wait "$PID"; STATUS=$?; kill "$WATCH" >/dev/null 2>&1; wait "$WATCH" 2>/dev/null
   return "$STATUS"
 }
-step "開発ツール Codex / Gemini の導入"
-if have npm; then
-  # 利用者が設定済みのprefixは維持し、未設定の場合だけユーザー専用prefixを使う。
-  NPM_HOME="$(npm config get prefix 2>/dev/null)"
-  if [ -z "$NPM_HOME" ] || [ "$NPM_HOME" = "undefined" ]; then
-    NPM_HOME="$ORGIAST_USER_HOME/.orgiast/npm"
-    npm config set prefix "$NPM_HOME" >/dev/null 2>&1
-  fi
-  mkdir -p "$NPM_HOME"
+npm_prefix_is_writable() {
+  PREFIX_TO_CHECK="$1"
+  [ -n "$PREFIX_TO_CHECK" ] && [ "$PREFIX_TO_CHECK" != "undefined" ] && [ -d "$PREFIX_TO_CHECK/lib/node_modules" ] && [ -w "$PREFIX_TO_CHECK/lib/node_modules" ]
+}
+use_npm_prefix() {
+  NPM_HOME="$1"
+  mkdir -p "$NPM_HOME" || return 1
   export PATH="$NPM_HOME/bin:$PATH"
   NPM_PATH_LINE="export PATH=\"$NPM_HOME/bin:\$PATH\""
   if ! grep -Fqx "$NPM_PATH_LINE" "$ORGIAST_USER_HOME/.zshrc" 2>/dev/null; then printf '\n%s\n' "$NPM_PATH_LINE" >> "$ORGIAST_USER_HOME/.zshrc"; fi
+}
+step "開発ツール Codex / Gemini の導入"
+if have npm; then
+  # npm は未設定でも /usr/local 等の既定値を返すため、設定の有無ではなく実際の書込権限で判定する。
+  PREFIX_CUR="$(npm config get prefix 2>/dev/null)"
+  NPM_PREFIX_SWITCHED=0
+  if npm_prefix_is_writable "$PREFIX_CUR"; then
+    NPM_HOME="$PREFIX_CUR"
+  else
+    NPM_HOME="$ORGIAST_USER_HOME/.orgiast/npm"
+    mkdir -p "$NPM_HOME/lib/node_modules"
+    npm config set prefix "$NPM_HOME" >/dev/null 2>&1
+    NPM_PREFIX_SWITCHED=1
+  fi
+  use_npm_prefix "$NPM_HOME"
   npm_install_timeout '@openai/codex' 180 || warn "Codex CLI が時間内に入りませんでした"
+  if ! have codex && [ "$NPM_PREFIX_SWITCHED" -eq 0 ]; then
+    NPM_HOME="$ORGIAST_USER_HOME/.orgiast/npm"
+    mkdir -p "$NPM_HOME/lib/node_modules"
+    if npm config set prefix "$NPM_HOME" >/dev/null 2>&1 && use_npm_prefix "$NPM_HOME"; then
+      NPM_PREFIX_SWITCHED=1
+      warn "Codex CLI をユーザー専用 npm prefix で再試行します"
+      npm_install_timeout '@openai/codex' 180 || warn "Codex CLI の再試行が時間内に完了しませんでした"
+    fi
+  fi
   if have codex; then ok "Codex CLI 導入完了"; else warn "Codex CLI 未導入。後で npm i -g @openai/codex を実行してください"; fi
   npm_install_timeout '@google/gemini-cli' 120 || warn "Gemini CLIグローバル導入失敗(MCPはnpxで取得するため続行)"
 else warn "npm が無いためCLI導入をスキップ"; fi

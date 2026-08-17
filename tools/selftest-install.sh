@@ -4,6 +4,7 @@ ORGIAST_USER_HOME="${ORGIAST_HOME:-$HOME}"
 REPO="$ORGIAST_USER_HOME/orgiast-claude-rules"
 OK_COUNT=0; NG_COUNT=0
 check() { if [ "$2" -eq 0 ]; then echo "[OK] $1"; OK_COUNT=$((OK_COUNT + 1)); else echo "[NG] $1"; NG_COUNT=$((NG_COUNT + 1)); fi; }
+notice() { echo "[注意] $1"; }
 have_version() { if command -v "$1" >/dev/null 2>&1; then VERSION="$($1 --version 2>/dev/null | head -n 1)"; echo "[OK] $2 ($VERSION)"; OK_COUNT=$((OK_COUNT + 1)); else echo "[NG] $2"; NG_COUNT=$((NG_COUNT + 1)); fi; }
 json_ok() { node -e "JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'))" "$1" >/dev/null 2>&1; }
 json_has() { node - "$1" "$2" <<'NODE' >/dev/null 2>&1
@@ -25,7 +26,7 @@ json_has "$ORGIAST_USER_HOME/.claude/settings.json" verify-before-done-detector.
 for FILE in cost-reporter.env manus.env deepseek.env xai.env openrouter.env groq.env mistral.env; do [ -f "$ORGIAST_USER_HOME/.claude/$FILE" ]; check "env: $FILE" $?; done
 grep -q '^GEMINI_API_KEY=.' "$ORGIAST_USER_HOME/.gemini/.env" 2>/dev/null; check "Geminiキー(~/.gemini/.env)" $?
 launchctl list 2>/dev/null | grep -q 'jp.orgiast.nightly-batch'; check "launchd: 夜間バッチ(03:00)" $?
-launchctl list 2>/dev/null | grep -q 'jp.orgiast.fleet-poller'; check "launchd: フリート点検(03:15・mjs無ければ未登録)" $?
+if launchctl list 2>/dev/null | grep -q 'jp.orgiast.fleet-poller'; then check "launchd: フリート点検(03:15)" 0; else notice "launchd: フリート点検(03:15) 未登録"; fi
 node -e "try{process.exit(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).tokens?.id_token?0:1)}catch{process.exit(1)}" "$ORGIAST_USER_HOME/.codex/auth.json" 2>/dev/null; check "Codexログイン済(auth.json)" $?
 echo
 echo "===== 結果: OK $OK_COUNT / NG $NG_COUNT ====="

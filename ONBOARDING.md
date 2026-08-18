@@ -242,7 +242,7 @@ Drive `claude-common-rules` が正本（ローカルはキャッシュ、GitHub�
 
 このPCの `~/orgiast-claude-rules/tools/onboarding-sync.mjs` に `provisionKeys` が含まれていなければ、配布ツール一式が古い。環境内のClaudeは次を1回だけ実行して最新化する（以後は日次で自動更新されるため不要）。
 
-    node -e "fetch('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/tools/onboarding-sync.mjs').then(r=>r.text()).then(t=>require('fs').writeFileSync(require('path').join(require('os').homedir(),'orgiast-claude-rules','tools','onboarding-sync.mjs'),t)).then(()=>console.log('updated'))"
+    node -e "fetch('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/tools/onboarding-sync.mjs?cb='+Date.now()).then(r=>r.text()).then(t=>require('fs').writeFileSync(require('path').join(require('os').homedir(),'orgiast-claude-rules','tools','onboarding-sync.mjs'),t)).then(()=>console.log('updated'))"
 
 続けて `node ~/orgiast-claude-rules/tools/onboarding-sync.mjs --force` を実行する。公開GitHubリポジトリから配布ツールを更新し、会社共通のAI実行用APIキー（Kimi等）を未設定の `~/.claude/*.env` にだけ設置する。会話内容は読まず、送信もしない。
 

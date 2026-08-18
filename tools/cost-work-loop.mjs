@@ -11,7 +11,8 @@
 // 出力: ~/.claude/cost-directive.md (SessionStartで毎回私が読む=修正が行動に反映) + 任意でDiscord。
 //   実行: node cost-work-loop.mjs [--post] [--days 7]
 import fs from 'node:fs'; import path from 'node:path'; import os from 'node:os'; import { execSync } from 'node:child_process';
-const HOME = os.homedir();
+import { recommendations } from './eval-harness.mjs';
+const nativeHome = os.homedir(); const HOME = process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || nativeHome;
 const DAYS = parseInt((process.argv.find(a => a.startsWith('--days=')) || '').split('=')[1] || '7', 10) || 7;
 const POST = process.argv.includes('--post');
 const since = Date.now() - DAYS * 864e5;
@@ -39,7 +40,7 @@ function codexSessionDirs() {
   if (process.platform === 'linux') addUsers('/home');
   return [...new Set(dirs)];
 }
-let claudeOut = 0, claudeUSD = 0, claudeByModel = {};
+let claudeOut = 0, claudeUSD = 0, claudeByModel = {}, cacheBase = 0, cacheRead = 0, cacheWrite = 0;
 {
   const files = []; walk(path.join(HOME, '.claude', 'projects'), files);
   for (const f of files) {
@@ -53,6 +54,7 @@ let claudeOut = 0, claudeUSD = 0, claudeByModel = {};
       const u = j?.message?.usage; const model = j?.message?.model; if (!u) continue;
       // 正しいキャッシュ単価: 通常入力=1x / キャッシュ書込=1.25x / キャッシュ読取=0.1x / 出力=出力単価
       const baseIn = u.input_tokens || 0, cr = u.cache_read_input_tokens || 0, cc = u.cache_creation_input_tokens || 0;
+      cacheBase += baseIn; cacheRead += cr; cacheWrite += cc;
       const outT = u.output_tokens || 0; const t = tier(model);
       const [pi, po] = PRICE[t]; claudeUSD += (baseIn * pi + cc * pi * 1.25 + cr * pi * 0.1 + outT * po) / 1e6; claudeOut += outT;
       claudeByModel[t] = (claudeByModel[t] || 0) + outT;
@@ -109,6 +111,10 @@ if (!flags.length) flags.push('✅ 委譲・コスト効率は許容範囲。こ
 const arrow = prev && typeof prev.claudeOut === 'number' ? (claudeOut > prev.claudeOut ? '↑' : claudeOut < prev.claudeOut ? '↓' : '→') : '';
 const execLine = Object.keys(execByProv).length ? Object.entries(execByProv).map(([k, v]) => `${k}:${v}回`).join(' / ') : '(なし=安いAI未使用)';
 const claudeModelLine = Object.keys(claudeByModel).length ? Object.entries(claudeByModel).map(([k, v]) => k + ' ' + (v / 1000).toFixed(0) + 'k').join('/') : '内訳なし';
+const cacheTarget = cacheRead + cacheWrite + cacheBase, cacheRate = cacheTarget ? cacheRead / cacheTarget : 0;
+const cacheLine = `${cacheTarget > 1_000_000 ? (cacheRate < 0.2 ? '🚨 ' : cacheRate < 0.5 ? '⚠️ ' : '✅ ') : ''}プロンプトキャッシュヒット率 ${(cacheRate * 100).toFixed(1)}% (対象 ${(cacheTarget / 1e6).toFixed(1)}M${cacheTarget <= 1_000_000 ? '・判定対象外' : ''})${cacheTarget > 1_000_000 && cacheRate < 0.2 ? ' — system 内に日時/ID などの動的値が入っている・JSON が非ソート・tools 定義が毎回変わる、を疑う' : ''}`;
+const qualityLines = recommendations();
+if (!qualityLines.length) qualityLines.push(fs.existsSync(path.join(HOME, '.claude', 'eval-results.jsonl')) ? '有効な計測なし（再計測が必要）' : 'eval 未実行 (node tools/eval-harness.mjs --all で計測)');
 const md = `<!-- COST-DIRECTIVE-START -->
 ## 📊 Claude Code out ${(claudeOut / 1000).toFixed(0)}k tok / 委譲率 ${(delegRatio * 100).toFixed(0)}% (直近${DAYS}日 / このPC)
 - Claude Code利用: **out ${(claudeOut / 1000).toFixed(0)}k tok** ${arrow} (${claudeModelLine}) ※定額シート課金＝請求$は発生しない
@@ -117,8 +123,11 @@ const md = `<!-- COST-DIRECTIVE-START -->
 - Codex(定額枠・実装の主経路): **out ${(codexOut / 1000).toFixed(0)}k tok** / ${codexSessions}セッション ※従量課金なし
 - 作業量(${workKind}): ${work} / **作業あたり 出力 ${(outPerWork / 1000).toFixed(0)}k tok**
 - 委譲率(安いAI/Codexへ逃がせた割合): **${(delegRatio * 100).toFixed(0)}%**
+- ${cacheLine}
 ### 指示
 ${flags.map(f => '- ' + f).join('\n')}
+### 品質ゲート
+${qualityLines.map((x) => '- ' + x).join('\n')}
 <!-- COST-DIRECTIVE-END -->
 `;
 fs.mkdirSync(path.join(HOME, '.claude'), { recursive: true });

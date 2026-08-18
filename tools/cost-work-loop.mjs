@@ -11,8 +11,11 @@
 // 出力: ~/.claude/cost-directive.md (SessionStartで毎回私が読む=修正が行動に反映) + 任意でDiscord。
 //   実行: node cost-work-loop.mjs [--post] [--days 7]
 import fs from 'node:fs'; import path from 'node:path'; import os from 'node:os'; import { execSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { recommendations } from './eval-harness.mjs';
-const nativeHome = os.homedir(); const HOME = process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || nativeHome;
+const nativeHome = os.homedir();
+function defaultHome() { return process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || nativeHome; }
+const HOME = defaultHome();
 const DAYS = parseInt((process.argv.find(a => a.startsWith('--days=')) || '').split('=')[1] || '7', 10) || 7;
 const POST = process.argv.includes('--post');
 const since = Date.now() - DAYS * 864e5;
@@ -23,9 +26,9 @@ function tier(m) { m = (m || '').toLowerCase(); if (m.includes('opus')) return '
 // ---- 1) Claude Code トークン/$ ----
 function walk(dir, out) { let e = []; try { e = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; } for (const d of e) { const p = path.join(dir, d.name); if (d.isDirectory()) walk(p, out); else if (d.name.endsWith('.jsonl')) out.push(p); } }
 // Codex は Windows ネイティブ/WSL のどちらからも使われる。明示指定時はその候補だけを使う。
-function codexSessionDirs() {
+export function codexSessionDirs(home = defaultHome()) {
   if (process.env.CODEX_SESSIONS_DIRS !== undefined) return process.env.CODEX_SESSIONS_DIRS.split(path.delimiter).filter(Boolean);
-  const dirs = [path.join(HOME, '.codex', 'sessions')];
+  const dirs = [path.join(home, '.codex', 'sessions')];
   const addUsers = (root) => {
     let users = []; try { users = fs.readdirSync(root, { withFileTypes: true }); } catch { return; }
     for (const user of users) if (user.isDirectory()) dirs.push(path.join(root, user.name, '.codex', 'sessions'));
@@ -40,6 +43,23 @@ function codexSessionDirs() {
   if (process.platform === 'linux') addUsers('/home');
   return [...new Set(dirs)];
 }
+export function collectCodexUsage({ home = defaultHome(), days = 7, now = Date.now() } = {}) {
+  const cutoff = now - days * 864e5;
+  let outputTokens = 0, sessions = 0;
+  const files = [];
+  for (const dir of codexSessionDirs(home)) walk(dir, files);
+  for (const file of new Set(files)) {
+    let stat; try { stat = fs.statSync(file); } catch { continue; }
+    if (stat.mtimeMs < cutoff) continue;
+    let raw; try { raw = fs.readFileSync(file, 'utf8'); } catch { continue; }
+    const re = /"total_token_usage"\s*:\s*\{[^{}]*?"output_tokens"\s*:\s*(\d+)/g;
+    let match, last = null; while ((match = re.exec(raw)) !== null) last = Number(match[1]);
+    if (last !== null) { outputTokens += last; sessions++; }
+  }
+  return { outputTokens, sessions };
+}
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+if (isMain) {
 let claudeOut = 0, claudeUSD = 0, claudeByModel = {}, cacheBase = 0, cacheRead = 0, cacheWrite = 0;
 {
   const files = []; walk(path.join(HOME, '.claude', 'projects'), files);
@@ -62,20 +82,7 @@ let claudeOut = 0, claudeUSD = 0, claudeByModel = {}, cacheBase = 0, cacheRead =
   }
 }
 // ---- 2) Codex(定額枠) ----
-let codexOut = 0, codexSessions = 0;
-{
-  const files = [];
-  for (const dir of codexSessionDirs()) walk(dir, files);
-  for (const f of new Set(files)) {
-    let st; try { st = fs.statSync(f); } catch { continue; }
-    if (st.mtimeMs < since) continue;
-    let raw; try { raw = fs.readFileSync(f, 'utf-8'); } catch { continue; }
-    // total_token_usage は累積値なので、ファイル内の最後の output_tokens をセッション総計にする。
-    const re = /"total_token_usage"\s*:\s*\{[^{}]*?"output_tokens"\s*:\s*(\d+)/g;
-    let match, last = null; while ((match = re.exec(raw)) !== null) last = Number(match[1]);
-    if (last !== null) { codexOut += last; codexSessions++; }
-  }
-}
+const { outputTokens: codexOut, sessions: codexSessions } = collectCodexUsage({ home: HOME, days: DAYS });
 // ---- 3) 安いAI実行者 台帳 ----
 let execOut = 0, execUSD = 0, execByProv = {};
 {
@@ -116,13 +123,13 @@ const cacheLine = `${cacheTarget > 1_000_000 ? (cacheRate < 0.2 ? '🚨 ' : cach
 const qualityLines = recommendations();
 if (!qualityLines.length) qualityLines.push(fs.existsSync(path.join(HOME, '.claude', 'eval-results.jsonl')) ? '有効な計測なし（再計測が必要）' : 'eval 未実行 (node tools/eval-harness.mjs --all で計測)');
 const md = `<!-- COST-DIRECTIVE-START -->
-## 📊 Claude Code out ${(claudeOut / 1000).toFixed(0)}k tok / 委譲率 ${(delegRatio * 100).toFixed(0)}% (直近${DAYS}日 / このPC)
+## 📊 Claude Code out ${(claudeOut / 1000).toFixed(0)}k tok / 委譲率 ${(delegRatio * 100).toFixed(1)}% (直近${DAYS}日 / このPC)
 - Claude Code利用: **out ${(claudeOut / 1000).toFixed(0)}k tok** ${arrow} (${claudeModelLine}) ※定額シート課金＝請求$は発生しない
 - (参考: list価格換算 $${claudeUSD.toFixed(1)} — 実請求ではない)
 - 安いAI実行者: **実額 $${execUSD.toFixed(2)}**（従量課金）— ${execLine}
-- Codex(定額枠・実装の主経路): **out ${(codexOut / 1000).toFixed(0)}k tok** / ${codexSessions}セッション ※従量課金なし
+- Codex(定額枠・実装の主経路): **out ${codexOut.toLocaleString('ja-JP')} tok** / ${codexSessions}セッション ※従量課金なし
 - 作業量(${workKind}): ${work} / **作業あたり 出力 ${(outPerWork / 1000).toFixed(0)}k tok**
-- 委譲率(安いAI/Codexへ逃がせた割合): **${(delegRatio * 100).toFixed(0)}%**
+- 委譲率(安いAI/Codexへ逃がせた割合): **${(delegRatio * 100).toFixed(1)}%**
 - ${cacheLine}
 ### 指示
 ${flags.map(f => '- ' + f).join('\n')}
@@ -130,8 +137,10 @@ ${flags.map(f => '- ' + f).join('\n')}
 ${qualityLines.map((x) => '- ' + x).join('\n')}
 <!-- COST-DIRECTIVE-END -->
 `;
-fs.mkdirSync(path.join(HOME, '.claude'), { recursive: true });
-fs.writeFileSync(path.join(HOME, '.claude', 'cost-directive.md'), md);
+try {
+  fs.mkdirSync(path.join(HOME, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(HOME, '.claude', 'cost-directive.md'), md);
+} catch { }
 
 // --- 1週間観察→改善しなければハードブロックへ昇格(kim 2026-08-16) ---
 const today = new Date().toISOString().slice(0, 10);
@@ -148,8 +157,8 @@ if (daysObserved >= 7 && claudeOut >= 1e6 && delegRatio < TARGET_DELEG) {
   if (avg(recent) <= avg(early) + 0.05) { enforce = 'block'; ereason = `${daysObserved}日観察して委譲率が改善せず(${(avg(early) * 100).toFixed(0)}%→${(avg(recent) * 100).toFixed(0)}%)。ハードブロック昇格`; }
   else { ereason = `改善傾向あり(${(avg(early) * 100).toFixed(0)}%→${(avg(recent) * 100).toFixed(0)}%)=警告継続`; }
 }
-fs.writeFileSync(path.join(HOME, '.claude', 'cost-enforce.json'), JSON.stringify({ mode: enforce, reason: ereason, since: obsStart, daysObserved, delegRatio, target: TARGET_DELEG }, null, 2));
-fs.writeFileSync(stateF, JSON.stringify({ t: new Date().toISOString(), totalUSD, claudeUSD, claudeOut, codexOut, codexSessions, execUSD, work, delegRatio, obsStart, history: hist }));
+try { fs.writeFileSync(path.join(HOME, '.claude', 'cost-enforce.json'), JSON.stringify({ mode: enforce, reason: ereason, since: obsStart, daysObserved, delegRatio, target: TARGET_DELEG }, null, 2)); } catch { }
+try { fs.writeFileSync(stateF, JSON.stringify({ t: new Date().toISOString(), totalUSD, claudeUSD, claudeOut, codexOut, codexSessions, execUSD, work, delegRatio, obsStart, history: hist })); } catch { }
 if (enforce === 'block') console.log(`\n🔒 ハードブロック昇格: ${ereason}（アプリ実装コードの直接編集をpretooluseフックが拒否します）`);
 console.log(md);
 
@@ -157,4 +166,5 @@ if (POST) {
   const wh = (() => { try { for (const l of fs.readFileSync(path.join(HOME, '.claude', 'cost-reporter.env'), 'utf-8').split(/\r?\n/)) if (l.startsWith('COST_WEBHOOK=') || l.startsWith('DISCORD_COST_WEBHOOK=')) return l.split('=').slice(1).join('=').trim(); } catch { } return process.env.COST_WEBHOOK || ''; })();
   if (wh) { const label = process.env.REPORTER_LABEL || os.hostname(); try { await fetch(wh, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: `**${label}** コスト×作業量ループ\n${md.replace(/<!--.*?-->/g, '').trim()}` }) }); console.error('Discord送信OK'); } catch (e) { console.error('Discord送信失敗:', e.message); } }
   else console.error('COST_WEBHOOK未設定=送信スキップ');
+}
 }

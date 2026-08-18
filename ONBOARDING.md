@@ -227,6 +227,20 @@ Claude新規作成は標準フォルダ「作業ファイル」直下（既存�
 Drive `claude-common-rules` が正本（ローカルはキャッシュ、GitHubはミラー）。下り=`/rules-sync`(pull)、上り=`/share-knowledge`（knowledge-inbox投稿）、統合=kim環境の`/rules-sync`(merge)。本文取得は`download_file_content`必須（`read_file_content`は文字エスケープで壊れる）。正本編集・version管理はkim環境限定。詳細・ディレクトリ構成: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/multi-account-knowledge-hub.md`
 
 ---
+### 2.11 社内アプリには「不具合・要望フォーム」を標準搭載する（全社標準機能 / 2026-08-18 kim指示）
+
+**社員が使う自社 Web アプリは、アプリ内から不具合・要望を投稿できる窓口を必ず持たせる**（社員→kim→開発者 の手動橋渡しを廃止するため）。新規アプリを作る時・既存アプリを触る時に未搭載なら、その場で導入する。実装は都度書かず**標準パッケージ `packages/feedback-widget/`** を使う（ドロップイン・npm依存ゼロ・Tailwind非依存のinline style・Supabase無しでもDiscord通知のみで動く3モード）。
+
+1行導入（アプリのリポジトリ直下で実行。SHA固定しない=常に最新）:
+
+```
+node -e "fetch('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/packages/feedback-widget/install.mjs?cb='+Date.now()).then(r=>r.text()).then(t=>require('fs').writeFileSync('install-feedback.mjs',t))" && node install-feedback.mjs --app-name "<アプリ名>"
+```
+
+導入後は `node verify.mjs --url <本番URL>` で実投稿+read-back検証まで通してから完了とする（§1.4）。開発側の対応キューは `node scripts/list-feedback.mjs`。**任意staffの自由記述が本番コードを無人で駆動しない**（実装はkimトリガ or レビューゲート付き）。仕様・手移植手順（Pages Router/Remix等）: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/packages/feedback-widget/INSTALL.md`
+
+---
+
 
 ## 3. セットアップ手順
 

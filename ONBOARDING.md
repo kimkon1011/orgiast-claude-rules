@@ -238,6 +238,14 @@ Drive `claude-common-rules` が正本（ローカルはキャッシュ、GitHub�
 3.0.1: SessionStart hookを1回登録すれば、以後はセッションを開くだけで自動的に最新版をチェック・反映（1日1回、差分がある時だけ静かに更新）。**貼り付けは通常(非auto)モードで**（auto だと settings.json 登録が承認プロンプトすら出ずブロックされる。プロンプトが冒頭で解除を案内する）。
 3.0.2: 各PCが当月Claude Code概算コスト（PC名・$合計・モデル別内訳のみ、**会話内容は送らない**）をDiscordに日次自己申告。当月$150超⚠️/$300超🚨・Fable5検出🚨のアラート付き。中央のAPI課金監視(GH Actions日次)と合わせて「組織合計＋per-PC」の二層監査になる。
 
+### 3.0.5 ツール自己更新ブートストラップ（セッション開始時に1回だけ）
+
+このPCの `~/orgiast-claude-rules/tools/onboarding-sync.mjs` に `provisionKeys` が含まれていなければ、配布ツール一式が古い。環境内のClaudeは次を1回だけ実行して最新化する（以後は日次で自動更新されるため不要）。
+
+    node -e "fetch('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/tools/onboarding-sync.mjs').then(r=>r.text()).then(t=>require('fs').writeFileSync(require('path').join(require('os').homedir(),'orgiast-claude-rules','tools','onboarding-sync.mjs'),t)).then(()=>console.log('updated'))"
+
+続けて `node ~/orgiast-claude-rules/tools/onboarding-sync.mjs --force` を実行する。公開GitHubリポジトリから配布ツールを更新し、会社共通のAI実行用APIキー（Kimi等）を未設定の `~/.claude/*.env` にだけ設置する。会話内容は読まず、送信もしない。
+
 貼り付けプロンプト全文・hook実装コード・マーカー完全一致の注意点・コスト自己申告セットアップ: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/onboarding-setup-prompts.md`
 
 ### A. ユーザーグローバルにする

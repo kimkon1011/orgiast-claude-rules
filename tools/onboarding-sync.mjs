@@ -14,9 +14,11 @@ const home = process.env.ORGIAST_HOME || os.homedir();
 const target = targetArg ? targetArg.slice(9) : path.join(home, '.claude', 'CLAUDE.md');
 const statePath = path.join(home, '.claude', '.onboarding-sync-state.json');
 const repoStatePath = path.join(home, '.claude', '.repo-sync-state.json');
+const keysStatePath = path.join(home, '.claude', '.keys-sync-state.json');
 const repoPath = path.join(home, 'orgiast-claude-rules');
 const logPath = path.join(home, '.claude', 'hooks', 'onboarding-sync.log');
 const rawUrl = process.env.ORGIAST_ONBOARDING_URL || 'https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/ONBOARDING.md';
+const keyserveUrl = process.env.ORGIAST_KEYSERVE_URL || 'https://orgiast-keyserve.vercel.app/api/keys';
 const beginPrefix = '<!-- BEGIN: オージャスト共通ルール';
 const endMarker = '<!-- END: オージャスト共通ルール -->';
 
@@ -32,6 +34,7 @@ function log(message) {
 }
 function state() { try { return JSON.parse(fs.readFileSync(statePath, 'utf8')); } catch { return null; } }
 function repoState() { try { return JSON.parse(fs.readFileSync(repoStatePath, 'utf8')); } catch { return null; } }
+function keysState() { try { return JSON.parse(fs.readFileSync(keysStatePath, 'utf8')); } catch { return null; } }
 function saveRepoState(now) {
   if (dryRun) return;
   try { fs.mkdirSync(path.dirname(repoStatePath), { recursive: true }); fs.writeFileSync(repoStatePath, `${JSON.stringify({ last: now.toISOString() }, null, 2)}\n`, 'utf8'); } catch {}
@@ -80,6 +83,57 @@ async function syncRepository(now) {
     if (changed) { console.log('[onboarding-sync] updated repository tools/rules/skills'); log('updated repository tools/rules/skills'); }
   } catch (e) { log(`repo sync failed: ${e.message}`); }
 }
+function readEnvValue(file, name) {
+  try {
+    for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+      const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
+      if (!match || match[1] !== name) continue;
+      const value = match[2];
+      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) return value.slice(1, -1);
+      return value;
+    }
+  } catch {}
+  return '';
+}
+function saveKeysState(now) {
+  try {
+    fs.mkdirSync(path.dirname(keysStatePath), { recursive: true });
+    fs.writeFileSync(keysStatePath, `${JSON.stringify({ last: now.toISOString() }, null, 2)}\n`, 'utf8');
+  } catch {}
+}
+async function provisionKeys(now) {
+  if (dryRun) return;
+  const previous = keysState();
+  if (!force && previous?.last && now - new Date(previous.last) < 24 * 60 * 60 * 1000) return;
+  const secret = readEnvValue(path.join(home, '.claude', 'cost-reporter.env'), 'DISCORD_COST_WEBHOOK');
+  if (!secret) return;
+  try {
+    const ts = Math.floor(Date.now() / 1000).toString();
+    const auth = crypto.createHmac('sha256', secret).update(ts).digest('hex');
+    const response = await fetch(keyserveUrl, {
+      method: 'POST',
+      headers: { 'x-orgiast-ts': ts, 'x-orgiast-auth': auth },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const payload = await response.json();
+    if (!payload || typeof payload.files !== 'object' || payload.files === null || Array.isArray(payload.files)) throw new Error('invalid response');
+    const provisioned = [];
+    for (const [name, contents] of Object.entries(payload.files)) {
+      if (!/^[A-Za-z0-9._-]+$/.test(name) || name.includes('..') || typeof contents !== 'string') continue;
+      const destination = path.join(home, '.claude', name);
+      if (fs.existsSync(destination)) continue;
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      fs.writeFileSync(destination, contents, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+      provisioned.push(name);
+      log(`provisioned: ${name}`);
+    }
+    saveKeysState(now);
+    if (provisioned.length) console.log(`[onboarding-sync] provisioned: ${provisioned.join(', ')}`);
+  } catch (e) {
+    log(`key provisioning failed: ${e.message}`);
+  }
+}
 function save(hash, now) {
   if (dryRun) return;
   try { fs.mkdirSync(path.dirname(statePath), { recursive: true }); fs.writeFileSync(statePath, `${JSON.stringify({ lastCheck: now.toISOString(), hash }, null, 2)}\n`, 'utf8'); } catch {}
@@ -102,6 +156,7 @@ function build(current, body, label) {
 try {
   const now = new Date();
   await syncRepository(now);
+  await provisionKeys(now);
   const oldState = state();
   if (!force && !dryRun && oldState?.lastCheck && now - new Date(oldState.lastCheck) < 20 * 60 * 60 * 1000) process.exit(0);
   let body;

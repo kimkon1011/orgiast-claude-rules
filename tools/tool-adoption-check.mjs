@@ -20,7 +20,7 @@ import { execSync } from 'node:child_process';
 
 const DRY_RUN = process.argv.includes('--dry-run');
 const DO_FIX = process.argv.includes('--fix');
-const HOME = os.homedir();
+const HOME = process.env.ORGIAST_HOME || os.homedir();
 
 // 日次ガード(SessionStartフックから毎回呼ばれても送信は最大1日1回)。--dry-run/--fix時はスキップしない。
 const GUARD_HOURS = 20;
@@ -245,6 +245,29 @@ function mtdOutputByModel() {
   })(root);
   return by;
 }
+function recentFableOutput(windowDays) {
+  const root = path.join(HOME, '.claude', 'projects');
+  const cutoff = now - windowDays * 86400000;
+  let count = 0;
+  (function walk(dir) {
+    let ents; try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of ents) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (e.name.endsWith('.jsonl')) {
+        try { if (fs.statSync(p).mtimeMs < cutoff) continue; } catch { continue; }
+        let raw; try { raw = fs.readFileSync(p, 'utf8'); } catch { continue; }
+        for (const line of raw.split('\n')) {
+          let row; try { row = JSON.parse(line); } catch { continue; }
+          const timestamp = Date.parse(row.timestamp || '');
+          if (Number.isFinite(timestamp) && timestamp < cutoff) continue;
+          if (modelFamily(row?.message?.model) === 'fable') count += row?.message?.usage?.output_tokens || 1;
+        }
+      }
+    }
+  })(root);
+  return count;
+}
 function formatTokens(value) { return value >= 1e6 ? `${(value / 1e6).toFixed(1)}M tok` : `${Math.round(value / 1000)}k tok`; }
 function supervisorDiscipline(codexUsed) {
   const by = mtdOutputByModel();
@@ -285,6 +308,26 @@ msg += `※料金の正本は同時投稿の「Claude Code ローカル利用ト
 const providerCounts = ledgerCounts(USAGE_WINDOW_DAYS);
 const ledgerSummary = providerCounts === null ? '台帳なし' : (Object.entries(providerCounts).sort((a, b) => b[1] - a[1]).map(([p, n]) => `${p} ${n}`).join(' / ') || '呼び出しなし');
 msg += `📒 安いAI実行者(直近${USAGE_WINDOW_DAYS}日・実呼び出し): ${ledgerSummary}\n`;
+
+// ---- 決めた施策が実際に使われたか ----
+const wantedProviders = ['kimi', 'groq', 'openrouter', 'gemini', 'deepseek'];
+const adoptionCounts = Object.fromEntries(wantedProviders.map((provider) => [provider, providerCounts?.[provider] || 0]));
+let batchCount = 0;
+try {
+  const queueDir = path.join(HOME, '.claude', 'batch-queue');
+  for (const name of fs.readdirSync(queueDir)) {
+    if (name !== 'pending.jsonl' && !/^results-.*\.jsonl$/.test(name)) continue;
+    const file = path.join(queueDir, name);
+    if (fs.statSync(file).mtimeMs < now - USAGE_WINDOW_DAYS * 86400000) continue;
+    batchCount += fs.readFileSync(file, 'utf8').split(/\r?\n/).filter((line) => line.trim()).length;
+  }
+} catch {}
+const fableCount = recentFableOutput(USAGE_WINDOW_DAYS);
+msg += `\n**決めた施策が実際に使われたか（直近${USAGE_WINDOW_DAYS}日）**\n`;
+msg += `| 実行者/施策 | 使用回数 | 判定 |\n|---|---:|---|\n`;
+for (const provider of wantedProviders) msg += `| ${provider} | ${adoptionCounts[provider]} | ${adoptionCounts[provider] ? '✅' : '⚠️ 使用0'} |\n`;
+msg += `| 夜間バッチ投入/結果 | ${batchCount} | ${batchCount ? '✅' : '⚠️ 使用0'} |\n`;
+msg += `| Fable5 (§1.16) | ${fableCount ? formatTokens(fableCount) : '0'} | ${fableCount ? '🚨 検出' : '✅ 未検出'} |\n`;
 
 if (fixes.length) msg += `\n🔧 自動修復: ${fixes.join(' / ')}\n`;
 if (human.length) msg += `\n🙋 要人手(最小1操作): ${human.join(' / ')}\n`;

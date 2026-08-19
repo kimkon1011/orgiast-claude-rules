@@ -20,6 +20,8 @@ function backup(file) { if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.
 function write(file, value) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, 'utf8'); }
 function commands(groups) { return groups.flatMap((g) => Array.isArray(g?.hooks) ? g.hooks : []).map((h) => String(h?.command || '')); }
 function add(groups, scriptName, group) {
+  // リポの同期が遅れている環境で、存在しないスクリプトを登録して毎回 ENOENT を出すのを防ぐ。
+  if (scriptName.endsWith('.mjs') && !fs.existsSync(path.join(repo, 'tools', scriptName))) return false;
   // 既存PCは .ps1 版が登録済みのことがある(Windows install)。拡張子を無視して重複判定しないと
   // .mjs と .ps1 の二重登録になり、同じ context が2回注入される。
   const base = scriptName.replace(/\.(mjs|ps1)$/, '');

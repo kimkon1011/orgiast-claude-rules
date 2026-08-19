@@ -201,10 +201,55 @@ try {
     Write-SyncLog "unexpected error: $($_.Exception.Message)"
 }
 
+try {
+    $homeRoot = if ($env:ORGIAST_HOME) { $env:ORGIAST_HOME } elseif ($env:USERPROFILE) { $env:USERPROFILE } else { [Environment]::GetFolderPath('UserProfile') }
+    # このスクリプトは ~/.claude/hooks/ にも配置されるため、$PSScriptRoot の親では repo に辿り着かない。
+    $repoRoot = if ($env:ORGIAST_REPO) { $env:ORGIAST_REPO }
+        elseif (Test-Path -LiteralPath (Join-Path $homeRoot 'orgiast-claude-rules\tools')) { Join-Path $homeRoot 'orgiast-claude-rules' }
+        else { Split-Path -Parent $PSScriptRoot }
+    if (Test-Path -LiteralPath (Join-Path $repoRoot 'tools')) {
+        $repoStatePath = Join-Path $homeRoot '.claude\.repo-sync-state.json'
+        $shouldSyncRepo = $true
+        try {
+            $repoState = Get-Content -LiteralPath $repoStatePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+            $lastRepoSync = [datetime]::Parse($repoState.last, $null, [System.Globalization.DateTimeStyles]::RoundtripKind)
+            if (((Get-Date) - $lastRepoSync).TotalHours -lt 24) { $shouldSyncRepo = $false }
+        } catch {}
+        if ($shouldSyncRepo) {
+            $repoSyncMethod = $null
+            $repoSyncTemp = $null
+            try {
+                if ((Test-Path -LiteralPath (Join-Path $repoRoot '.git')) -and (Get-Command git -ErrorAction SilentlyContinue)) {
+                    & git -C $repoRoot pull --ff-only 2>$null | Out-Null
+                    if ($LASTEXITCODE -ne 0) { throw "git pull failed (exit $LASTEXITCODE)" }
+                    $repoSyncMethod = 'git'
+                } else {
+                    $repoSyncTemp = Join-Path ([System.IO.Path]::GetTempPath()) ("orgiast-repo-sync-" + [guid]::NewGuid().ToString('N'))
+                    New-Item -ItemType Directory -Path $repoSyncTemp -Force | Out-Null
+                    $repoZip = Join-Path $repoSyncTemp 'main.zip'; $repoExpanded = Join-Path $repoSyncTemp 'expanded'
+                    Invoke-WebRequest -Uri 'https://github.com/kimkon1011/orgiast-claude-rules/archive/refs/heads/main.zip' -OutFile $repoZip -UseBasicParsing
+                    Expand-Archive -LiteralPath $repoZip -DestinationPath $repoExpanded -Force
+                    $repoSource = Join-Path $repoExpanded 'orgiast-claude-rules-main'; foreach ($name in @('tools', 'rules-extracted', 'skills')) {
+                        $source = Join-Path $repoSource $name
+                        if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination $repoRoot -Recurse -Force }
+                    }
+                    $repoSyncMethod = 'zip'
+                }
+                New-Item -ItemType Directory -Path (Split-Path -Parent $repoStatePath) -Force | Out-Null
+                @{ last = (Get-Date).ToString('o') } | ConvertTo-Json -Compress | Set-Content -LiteralPath $repoStatePath -Encoding UTF8
+                Write-SyncLog "repo updated ($repoSyncMethod)"
+            } catch { Write-SyncLog "repo sync failed: $($_.Exception.Message)" }
+            finally { if ($repoSyncTemp -and (Test-Path -LiteralPath $repoSyncTemp)) { Remove-Item -LiteralPath $repoSyncTemp -Recurse -Force -ErrorAction SilentlyContinue } }
+        }
+    }
+} catch { Write-SyncLog "repo sync failed: $($_.Exception.Message)" }
+
 # 日次同期の成否・差分有無にかかわらず、後から追加された必須hookを自己修復する。
 try {
-    $repoRoot = if ($env:ORGIAST_REPO) { $env:ORGIAST_REPO } else { Split-Path -Parent $PSScriptRoot }
     $homeRoot = if ($env:ORGIAST_HOME) { $env:ORGIAST_HOME } elseif ($env:USERPROFILE) { $env:USERPROFILE } else { [Environment]::GetFolderPath('UserProfile') }
+    $repoRoot = if ($env:ORGIAST_REPO) { $env:ORGIAST_REPO }
+        elseif (Test-Path -LiteralPath (Join-Path $homeRoot 'orgiast-claude-rules\tools')) { Join-Path $homeRoot 'orgiast-claude-rules' }
+        else { Split-Path -Parent $PSScriptRoot }
     $env:ORGIAST_HOME = $homeRoot
     $env:ORGIAST_REPO = $repoRoot
     $registrar = Join-Path $repoRoot 'tools\register-hooks.mjs'

@@ -29,6 +29,40 @@ $dir = Join-Path $H '.claude\cost-directive.md'
 if (Test-Path $dir) {
   $txt = Get-Content $dir -Raw
   $ctx = "【コスト×作業量ループ｜監督への自己指示】前回計測の結果は下記。委譲率が低い/コスト効率が悪化している時は、作業前に必ず: 実装→Codex(定額) / 量産・分類→Groq / 汎用の安い推論→OpenRouter / 長文脈→Gemini / 別課金へ逃がす→Kimi、へ回す。監督(Opus)は最小限にとどめ大きな実装を抱えない(§1.18)。`n`n$txt"
+  # 夜間バッチ: 未読の結果と保留件数を監督に見せる (結果が results-*.jsonl に埋もれて誰も読まないのを防ぐ)
+  try {
+    $bq = Join-Path $H '.claude\batch-queue'
+    $seenFile = Join-Path $H '.claude\.batch-results-seen'
+    if (Test-Path $seenFile) { $since = (Get-Item $seenFile).LastWriteTime } else { $since = (Get-Date).AddDays(-2) }
+    $newRes = @()
+    if (Test-Path $bq) {
+      foreach ($f in (Get-ChildItem -Path $bq -Filter 'results-*.jsonl' -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt $since })) {
+        foreach ($l in (Get-Content $f.FullName -ErrorAction SilentlyContinue)) {
+          if (-not $l -or -not $l.Trim()) { continue }
+          try {
+            $j = $l | ConvertFrom-Json
+            $t = [string]$j.text -replace '\s+', ' '
+            if ($t.Length -gt 90) { $t = $t.Substring(0, 90) + '…' }
+            $newRes += ("  - {0} [{1}:{2}] {3}" -f $j.id, $j.provider, $j.model, $t)
+          } catch {}
+        }
+      }
+    }
+    $pendCount = 0
+    $pf = Join-Path $bq 'pending.jsonl'
+    if (Test-Path $pf) { $pendCount = @((Get-Content $pf -ErrorAction SilentlyContinue) | Where-Object { $_.Trim() }).Count }
+    $nb = @()
+    if ($newRes.Count -gt 0) {
+      $nb += ('🌙 夜間バッチの新しい結果 ' + $newRes.Count + ' 件(まだ依頼主へ報告していない)。内容を確認して報告するか、続きの作業に使うこと:')
+      $nb += $newRes
+      $nb += ('  全文: ' + $bq + '\results-<日付>.jsonl')
+    }
+    if ($pendCount -gt 0) {
+      $nb += ('🌙 夜間バッチ保留 ' + $pendCount + ' 件。次回 03:00(JST) に半額で自動実行される。今すぐ要るなら node tools/batch-run.mjs --force')
+    }
+    if ($nb.Count -gt 0) { $ctx = $ctx + "`n`n" + ($nb -join "`n") }
+    if ($newRes.Count -gt 0) { Set-Content -Path $seenFile -Value (Get-Date -Format o) -Encoding UTF8 }
+  } catch {}
   $out = @{ hookSpecificOutput = @{ hookEventName = 'SessionStart'; additionalContext = $ctx } } | ConvertTo-Json -Depth 6 -Compress
   Write-Output $out
 }

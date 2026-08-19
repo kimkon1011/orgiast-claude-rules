@@ -1,5 +1,6 @@
 // batch-run.mjs — pending.jsonl を実行し、成功結果と使用量を記録する夜間バッチ実行器。
 // DeepSeekはUTC 16:30〜00:30だけ実行。--force で時間帯を無視、--dry で対象表示のみ。
+// --fallback-standard 指定時だけ、Anthropic Batch失敗後に通常APIで再実行する。
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
 
 const PROVIDERS = {
@@ -8,14 +9,23 @@ const PROVIDERS = {
   openrouter: { base: 'https://openrouter.ai/api/v1/chat/completions', keyEnv: 'OPENROUTER_API_KEY', keyFile: 'openrouter.env', model: 'meta-llama/llama-3.3-70b-instruct', extraHeaders: { 'HTTP-Referer': 'https://orgiast.jp', 'X-Title': 'orgiast' } },
   groq: { base: 'https://api.groq.com/openai/v1/chat/completions', keyEnv: 'GROQ_API_KEY', keyFile: 'groq.env', model: 'llama-3.3-70b-versatile' },
   kimi: { base: 'https://api.moonshot.ai/v1/chat/completions', keyEnv: 'MOONSHOT_API_KEY', keyFile: 'kimi-api.env', model: 'kimi-k3' },
+  anthropic: { base: 'https://api.anthropic.com/v1/messages', keyEnv: 'ANTHROPIC_API_KEY', keyFile: 'anthropic.env', model: 'claude-haiku-4-5-20251001' },
 };
 
 const args = process.argv.slice(2);
 const force = args.includes('--force');
 const dry = args.includes('--dry');
-const dir = path.join(os.homedir(), '.claude', 'batch-queue');
+const fallbackStandard = args.includes('--fallback-standard');
+if (args.includes('--help')) {
+  console.log('使い方: node tools/batch-run.mjs [--dry] [--force] [--fallback-standard]');
+  console.log('  --fallback-standard  Anthropic Batch失敗時のみ、通常APIで単発再実行する');
+  process.exit(0);
+}
+function userHome() { const h = os.homedir(), m = process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i); return process.env.USERPROFILE || m?.[1] || h; }
+const home = userHome();
+const dir = path.join(home, '.claude', 'batch-queue');
 const pending = path.join(dir, 'pending.jsonl');
-const ledger = path.join(os.homedir(), '.claude', 'executor-usage.jsonl');
+const ledger = path.join(home, '.claude', 'executor-usage.jsonl');
 fs.mkdirSync(dir, { recursive: true });
 
 function offPeak(now = new Date()) {
@@ -25,8 +35,8 @@ function offPeak(now = new Date()) {
 function loadKey(provider) {
   const P = PROVIDERS[provider];
   if (process.env[P.keyEnv]) return process.env[P.keyEnv];
-  const files = [path.join(os.homedir(), '.claude', P.keyFile)];
-  if (provider === 'gemini') files.unshift(path.join(os.homedir(), '.gemini', '.env'));
+  const files = [path.join(home, '.claude', P.keyFile)];
+  if (provider === 'gemini') files.unshift(path.join(home, '.gemini', '.env'));
   for (const f of files) {
     try { for (const l of fs.readFileSync(f, 'utf-8').split(/\r?\n/)) { if (l.startsWith(P.keyEnv + '=')) return l.slice(P.keyEnv.length + 1).trim(); } } catch {}
   }
@@ -39,8 +49,8 @@ function messages(job) {
   return out;
 }
 function usageRecord(provider, model, usage = {}) {
-  const input = usage.prompt_tokens ?? usage.promptTokenCount ?? 0;
-  const output = usage.completion_tokens ?? usage.candidatesTokenCount ?? 0;
+  const input = usage.prompt_tokens ?? usage.promptTokenCount ?? usage.input_tokens ?? 0;
+  const output = usage.completion_tokens ?? usage.candidatesTokenCount ?? usage.output_tokens ?? 0;
   try { fs.appendFileSync(ledger, JSON.stringify({ t: new Date().toISOString(), provider, model, in: input, out: output }) + '\n'); } catch {}
   return { in: input, out: output };
 }
@@ -60,6 +70,10 @@ async function runStandard(job) {
   const j = await r.json();
   return { text: j.choices?.[0]?.message?.content ?? '', usage: j.usage ?? {}, mode: 'standard' };
 }
+async function retryFetch(url, init, label) { let last; for (let i = 0; i < 3; i++) { const r = await fetch(url, init); if (r.status !== 429 && r.status < 500) return r; last = r; if (i < 2) await delay(1000 * 2 ** i); } return last; }
+function anthropicHeaders(key) { return { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }; }
+function anthropicParams(job) { const p = { model: job.model || PROVIDERS.anthropic.model, max_tokens: job.max || 4000, messages: [{ role: 'user', content: job.prompt }] }; if (job.system) p.system = job.system; return p; }
+async function runAnthropicStandard(job) { const P = PROVIDERS.anthropic, key = loadKey('anthropic'); if (!key) throw new Error(`${P.keyEnv} 未設定。環境変数または ~/.claude/${P.keyFile} に ${P.keyEnv}=値 を置いてください`); const r = await retryFetch(P.base, { method: 'POST', headers: anthropicHeaders(key), body: JSON.stringify(anthropicParams(job)) }, 'Anthropic'); if (!r.ok) throw new Error(`${r.status}: ${(await r.text().catch(() => '')).slice(0, 400)}`); const j = await r.json(); return { text: (j.content || []).map((x) => x.text || '').join(''), usage: j.usage || {}, mode: 'standard' }; }
 function geminiRequest(job) {
   const request = { contents: [{ role: 'user', parts: [{ text: job.prompt }] }], generationConfig: { maxOutputTokens: job.max || 4000 } };
   if (job.system) request.systemInstruction = { parts: [{ text: job.system }] };
@@ -95,6 +109,7 @@ async function runGeminiBatch(jobs) {
     return { text, usage: response.usageMetadata || {}, mode: 'gemini-batch' };
   });
 }
+async function runAnthropicBatch(jobs) { const P = PROVIDERS.anthropic, key = loadKey('anthropic'); if (!key) throw new Error(`${P.keyEnv} 未設定。環境変数または ~/.claude/${P.keyFile} に ${P.keyEnv}=値 を置いてください`); const base = 'https://api.anthropic.com/v1/messages/batches'; const made = await retryFetch(base, { method: 'POST', headers: anthropicHeaders(key), body: JSON.stringify({ requests: jobs.map((j) => ({ custom_id: j.id, params: anthropicParams(j) })) }) }, 'Anthropic Batch作成'); if (!made.ok) throw new Error(`Batch作成 ${made.status}: ${(await made.text().catch(() => '')).slice(0, 400)}`); let batch = await made.json(), wait = 5000; if (!batch.id) throw new Error('Batch IDが応答にありません'); while (batch.processing_status !== 'ended') { await delay(wait); wait = Math.min(wait * 2, 60000); const p = await retryFetch(`${base}/${encodeURIComponent(batch.id)}`, { headers: anthropicHeaders(key) }, 'Anthropic Batch確認'); if (!p.ok) throw new Error(`Batch確認 ${p.status}: ${(await p.text().catch(() => '')).slice(0, 400)}`); batch = await p.json(); } const resultUrl = batch.results_url || `${base}/${encodeURIComponent(batch.id)}/results`; const got = await retryFetch(resultUrl, { headers: anthropicHeaders(key) }, 'Anthropic Batch結果'); if (!got.ok) throw new Error(`Batch結果 ${got.status}: ${(await got.text().catch(() => '')).slice(0, 400)}`); const map = new Map(); for (const line of (await got.text()).split(/\r?\n/).filter(Boolean)) { let row; try { row = JSON.parse(line); } catch { continue; } const type = row.result?.type; if (type !== 'succeeded') { map.set(row.custom_id, { error: row.result?.error?.message || `Anthropic Batch内エラー (${type || 'unknown'})` }); continue; } const msg = row.result.message || {}; map.set(row.custom_id, { text: (msg.content || []).map((x) => x.text || '').join(''), usage: msg.usage || {}, mode: 'batch' }); } return jobs.map((j) => map.get(j.id) || { error: 'Anthropic Batch結果がありません' }); }
 
 let raw = '';
 try { raw = fs.readFileSync(pending, 'utf-8'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
@@ -116,6 +131,9 @@ for (const job of runnable.filter((j) => j.provider === 'gemini')) {
   if (!geminiGroups.has(key)) geminiGroups.set(key, []);
   geminiGroups.get(key).push(job);
 }
+const anthropicGroups = new Map();
+for (const job of runnable.filter((j) => j.provider === 'anthropic')) { const key = job.model || PROVIDERS.anthropic.model; if (!anthropicGroups.has(key)) anthropicGroups.set(key, []); anthropicGroups.get(key).push(job); }
+for (const jobsOfModel of anthropicGroups.values()) for (let start = 0; start < jobsOfModel.length; start += 100) { const group = jobsOfModel.slice(start, start + 100); try { const outputs = await runAnthropicBatch(group); for (let i = 0; i < group.length; i++) { const job = group[i], out = outputs[i]; if (out.error) { console.error(`FAIL ${job.id}: ${out.error}`); continue; } const usage = usageRecord(job.provider, job.model, out.usage); saveResult(job, out.text, usage, 'batch'); completed.add(job.id); console.log(`OK ${job.id} batch`); } } catch (e) { console.error(`Anthropic Batch失敗: ${e.message}`); if (fallbackStandard) { console.error('Anthropic通常APIへ切替'); for (const job of group) { try { const out = await runAnthropicStandard(job); const usage = usageRecord(job.provider, job.model, out.usage); saveResult(job, out.text, usage, out.mode); completed.add(job.id); console.log(`OK ${job.id} standard`); } catch (err) { console.error(`FAIL ${job.id}: ${err.message}`); } } } } }
 for (const group of geminiGroups.values()) {
   try {
     const outputs = await runGeminiBatch(group);
@@ -136,7 +154,7 @@ for (const group of geminiGroups.values()) {
     }
   }
 }
-for (const job of runnable.filter((j) => j.provider !== 'gemini')) {
+for (const job of runnable.filter((j) => j.provider !== 'gemini' && j.provider !== 'anthropic')) {
   try { const out = await runStandard(job); const usage = usageRecord(job.provider, job.model, out.usage); saveResult(job, out.text, usage, out.mode); completed.add(job.id); console.log(`OK ${job.id} standard`); }
   catch (e) { console.error(`FAIL ${job.id}: ${e.message}`); }
 }

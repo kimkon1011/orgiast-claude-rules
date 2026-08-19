@@ -25,10 +25,35 @@ Claude API 従量課金を「機能・品質を保ったまま」下げるため
 - 実装: 安定プレフィックス（システムプロンプト・固定 DB・テンプレ・マニュアル本文）を先頭に置き、その最後のブロックに `cache_control: {type:'ephemeral'}`。動的値（日時/ID/ユーザー入力）は必ず後ろ。
 - 検証: `usage.cache_read_input_tokens` が 0 のままなら silent invalidator（system 内の `Date.now()`、非ソート JSON、tools 変更）を疑う。
 
+- 監査ツール: `node tools/cache-audit.mjs <dir>` で「system/tools が 4000 文字以上あるのに `cache_control` が無い」呼び出しを静的検出できる。識別子経由（`const SYSTEM = …; system: SYSTEM`）も追える。
+- ヒット率の常時監視: `tools/claude-cost-reporter.mjs` がヒット率を出し、50% 未満で ⚠️、20% 未満で 🚨 を出す（対象トークンが十分ある時だけ評価）。2026-08-18 実測はヒット率 94.4%。
+
 ### 2.8.3 非同期でよい一括生成は Batch API（50%オフ）
 
 - 応答を即時に要さない生成（一括告知文・大量分類・埋め込み）は `messages.batches` で全トークン半額。EOラーニングの4チャネル告知文が実例（submitBatch/pollBatch）。
 - リアルタイム UI 応答が要るものは通常 API、裏の一括処理は Batch、と使い分ける。
+
+- 夜間キューから流す: `node tools/batch-enqueue.mjs --provider anthropic "指示"` で積み、`tools/batch-run.mjs` が Message Batches API でまとめて処理する（100件ごとに分割、常時50%オフなので off-peak 判定の対象外）。
+
+### 2.8.3.1 成功率とコストを毎回測ってから落とす（パレート最適）
+
+Anthropic 公式 cookbook `cost_optimization` の考え方。**モデル格下げ・委譲先変更は最後**にやる施策であり、
+その前に「成功率が落ちないこと」を数字で確認する。`node tools/eval-harness.mjs` がその計測を行う。
+
+- `--provider <name>` … ゴールデンタスク15問を実行し、`成功率 / 1タスクあたり$ / 平均ms` を出す。
+- `--all` … `tools/eval-providers.json` の全候補を回す。キーが無い provider はスキップ。
+- `--pareto` … パレート表と、カテゴリ別の「落として安全な最安/最速」推奨を出す。
+  同じ推奨が `~/.claude/cost-directive.md` の `### 品質ゲート` にも入り、SessionStart で監督が毎回読む。
+- タスクセットは `tools/eval-tasks.seed.jsonl` が正本で、`~/.claude/eval/tasks.jsonl` へ3方向マージで自動同期される
+  （手で直したタスクは据え置き、未編集のものだけ更新）。`--refresh-tasks` で全面上書き。
+
+**計測を歪める3つの罠**（2026-08-18 に実際に踏んだ。必ず分けて数えること）:
+1. **API エラー（429/404/503）を品質不合格に混ぜない。** 混ぜると gemini 13.3% / mistral 26.7% のような
+   偽の低スコアが出て、安く十分な委譲先を誤って排除する（正しく測ると 100% / 91.7%）。
+2. **出力の切断（`max_tokens` 不足）を品質不合格に混ぜない。** reasoning 系モデルは本文の前に思考トークンを
+   吐くので、`max` が小さいと本文が0トークンになる。`finish_reason` を見て `切断` として別立てにする。
+3. **期待値が正解を弾いていないか疑う。** 全モデルが必ず落ちる設問は識別力ゼロ。個票
+   `~/.claude/eval/runs/*.jsonl` にモデル出力と judge の判定理由を残し、必ず中身を見て切り分ける。
 
 ### 2.8.4 入力トークンを削る
 

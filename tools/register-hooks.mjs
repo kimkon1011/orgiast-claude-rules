@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+const hooksOnly = process.argv.includes('--hooks-only');
 const home = process.env.ORGIAST_HOME || os.homedir();
 const repo = process.env.ORGIAST_REPO || path.join(home, 'orgiast-claude-rules');
 const geminiKey = process.env.ORGIAST_GEMINI_KEY || readGeminiKey();
@@ -19,14 +20,32 @@ function backup(file) { if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.
 function write(file, value) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, 'utf8'); }
 function commands(groups) { return groups.flatMap((g) => Array.isArray(g?.hooks) ? g.hooks : []).map((h) => String(h?.command || '')); }
 function add(groups, scriptName, group) {
-  if (commands(groups).some((cmd) => cmd.includes(scriptName))) return false;
+  // リポの同期が遅れている環境で、存在しないスクリプトを登録して毎回 ENOENT を出すのを防ぐ。
+  if (scriptName.endsWith('.mjs') && !fs.existsSync(path.join(repo, 'tools', scriptName))) return false;
+  // 既存PCは .ps1 版が登録済みのことがある(Windows install)。拡張子を無視して重複判定しないと
+  // .mjs と .ps1 の二重登録になり、同じ context が2回注入される。
+  const base = scriptName.replace(/\.(mjs|ps1)$/, '');
+  if (commands(groups).some((cmd) => cmd.includes(base))) return false;
   groups.push(group); return true;
+}
+function migrate(groups, oldName, newName, newCommand) {
+  let changed = 0;
+  for (const group of groups) for (const hook of (Array.isArray(group?.hooks) ? group.hooks : [])) {
+    if (String(hook.command || '').includes(oldName)) { hook.command = newCommand; changed += 1; }
+  }
+  // 旧hookが複数あった環境でも、新hookは1本だけに正規化する。
+  let seen = false;
+  for (let i = groups.length - 1; i >= 0; i--) {
+    if (!commands([groups[i]]).some((cmd) => cmd.includes(newName))) continue;
+    if (seen) { groups.splice(i, 1); changed += 1; } else seen = true;
+  }
+  return changed;
 }
 
 try {
   const settingsFile = path.join(home, '.claude', 'settings.json');
-  backup(settingsFile);
   const settings = load(settingsFile);
+  let added = 0;
   if (!settings.hooks || typeof settings.hooks !== 'object' || Array.isArray(settings.hooks)) settings.hooks = {};
   for (const event of ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'Stop']) if (!Array.isArray(settings.hooks[event])) settings.hooks[event] = [];
   const command = (name, extra = '') => `node "${path.join(repo, 'tools', name)}"${extra}`;
@@ -39,12 +58,20 @@ try {
   for (const [name, timeout, async, extra] of session) {
     const hook = { type: 'command', command: command(name, extra), timeout };
     if (async) hook.async = true;
-    add(settings.hooks.SessionStart, name, { hooks: [hook] });
+    if (add(settings.hooks.SessionStart, name, { hooks: [hook] })) added += 1;
   }
-  add(settings.hooks.UserPromptSubmit, 'delegation-gate.mjs', { hooks: [{ type: 'command', command: command('delegation-gate.mjs') }] });
-  add(settings.hooks.PreToolUse, 'pretooluse-delegation-warn.mjs', { matcher: 'Write|Edit|MultiEdit', hooks: [{ type: 'command', command: command('pretooluse-delegation-warn.mjs') }] });
-  add(settings.hooks.Stop, 'verify-before-done-detector.mjs', { hooks: [{ type: 'command', command: command('verify-before-done-detector.mjs') }] });
-  write(settingsFile, settings);
+  if (add(settings.hooks.SessionStart, 'hook-selfcheck.mjs', { hooks: [{ type: 'command', command: command('hook-selfcheck.mjs'), timeout: 10 }] })) added += 1;
+  // 1セッション=1目的ゲート: SessionStart で目的宣言を要求し、UserPromptSubmit で目的ドリフト/肥大をナッジする(context注入のため async 禁止)
+  if (add(settings.hooks.SessionStart, 'session-purpose-gate.mjs', { hooks: [{ type: 'command', command: command('session-purpose-gate.mjs'), timeout: 5 }] })) added += 1;
+  if (add(settings.hooks.UserPromptSubmit, 'session-purpose-gate.mjs', { hooks: [{ type: 'command', command: command('session-purpose-gate.mjs'), timeout: 5 }] })) added += 1;
+  added += migrate(settings.hooks.UserPromptSubmit, 'delegation-gate', 'cost-routing-gate.mjs', command('cost-routing-gate.mjs'));
+  if (add(settings.hooks.UserPromptSubmit, 'cost-routing-gate.mjs', { hooks: [{ type: 'command', command: command('cost-routing-gate.mjs') }] })) added += 1;
+  if (add(settings.hooks.PreToolUse, 'pretooluse-delegation-warn.mjs', { matcher: 'Write|Edit|MultiEdit', hooks: [{ type: 'command', command: command('pretooluse-delegation-warn.mjs') }] })) added += 1;
+  if (add(settings.hooks.PreToolUse, 'model-agent-guard.mjs', { matcher: 'Agent|Task', hooks: [{ type: 'command', command: command('model-agent-guard.mjs') }] })) added += 1;
+  if (add(settings.hooks.Stop, 'verify-before-done-detector.mjs', { hooks: [{ type: 'command', command: command('verify-before-done-detector.mjs') }] })) added += 1;
+  // 差分が無い時は書かない(日次実行で .bak が積み上がるのを防ぐ)
+  if (added) { backup(settingsFile); write(settingsFile, settings); }
+  if (hooksOnly) { console.log(added ? `  [OK] settings.json に hook を ${added} 件追加(バックアップ済)` : '  [OK] hook は既に登録済み(変更なし)'); process.exit(0); }
 
   const claudeFile = path.join(home, '.claude.json');
   backup(claudeFile);
@@ -52,7 +79,7 @@ try {
   if (!claude.mcpServers || typeof claude.mcpServers !== 'object' || Array.isArray(claude.mcpServers)) claude.mcpServers = {};
   claude.mcpServers['gemini-cli'] = { type: 'stdio', command: 'npx', args: ['-y', '@choplin/mcp-gemini-cli', '--allow-npx'], env: { GEMINI_API_KEY: geminiKey, GEMINI_CLI_TRUST_WORKSPACE: 'true' } };
   write(claudeFile, claude);
-  console.log('  [OK] settings.json / .claude.json 更新(バックアップ済)');
+  console.log(`  [OK] settings.json${added ? '(hook ' + added + '件追加)' : '(変更なし)'} / .claude.json 更新`);
 } catch (e) {
   console.error(`  [注意] 設定登録に失敗: ${e.message}`);
   process.exitCode = 1;

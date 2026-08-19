@@ -170,6 +170,8 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
 
 `claude-fable-5` / `model:"fable"` は**すべての用途で禁止**（別課金枠、追加コスト）。サブエージェント・直接呼び出し・SDK経由すべて対象。生成品質はOpus、速度・単純タスクはSonnet/Haiku、コーディングはCodex（§1.17）で代替。ユーザーが明示的に「Fable5で」と言った時のみ例外。
 
+この規律は hook で機械的に強制され、Agent/Task の Fable5 指定は PreToolUse が deny する。**例外もhookが自動で扱う**: user が「Fable5で〜」と明示指定したプロンプトを UserPromptSubmit が検知して 60分・同一セッション限りの許可トークン(`~/.claude/fable-allow.json`)を発行し、その間だけ deny を通す（時間経過とセッション変更で自動失効。「Fable5は使うな」等の否定文脈では発行しない）。user 側の手作業・設定変更は不要。必須hookの欠落は SessionStart の `hook-selfcheck` が自動修復する。
+
 ### 1.17 コーディングは Codex を主に使う（Claude Code は指揮官）
 
 新規のコード実装タスクはBash tool経由で **Codex CLI** に投げる。Claude Codeは設計・タスク分解・コードレビュー・commit/PR/デプロイのオーケストレーションに徹し、**verifyはClaude Code側の責務**（§1.2の根本診断原則をCodex出力にも適用）。**指揮官(main loop)が大きな実装を自分で手打ちしないこと＝これが最大のコストレバー**（§1.18。Opus/Sonnetいずれで動いていても、実装を挽くと手戻り＋高トークンになる。挽きそうになったらCodexへ回す）。適用外: ごく短い編集、Codex呼び出しオーバーヘッドの方が重い場合、設計試行錯誤中、既存スキルがカバーする定型作業。
@@ -182,6 +184,8 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
 
 ### 1.18 監督(Opus)は最小限だけ動き、実働はCodex/Sonnet/Geminiに委譲する
 
+実装サブエージェントへの委譲は PreToolUse で warn し、観測条件を満たすと block へ昇格する。必須hookの欠落は SessionStart の `hook-selfcheck` が自動修復する。
+
 **方針（2026-08-06 管理者kim決定・既定変更）: 既定の"監督(main loop)"は Opus。監督は最小限しか動かず、実働を Codex/Sonnet/Gemini にうまく流すことでコストを下げ品質を上げる。**（旧「既定Sonnet」から変更。真のコストレバーは Opus/Sonnet の別ではなく「監督が実装を自分で手打ちせず委譲しているか」＝この長大セッションで Opus 4.8 が委譲せず直接編集・pushを挽いたのが高騰の主因＝反面教師。）
 - **監督(既定・指揮官)＝Opus**：設計/根本原因/横断一貫性/経営判断/タスク分解/レビュー/verify という"頭"。ただし**最小限＝考える・分解する・指示する・検証するだけ。大きな実装は絶対に自分で書かない**（挽きそうになったら即Codexへ）。この規律が崩れるとOpus既定は高コスト化するので per-PC コストレポーターで常時監視し逸脱を検知する。
 - **実装本体＝Codex(WSL・定額枠)** に必ず委譲（§1.17）。**生成・返信・要約・量産・分類抽出＝Sonnet/Haiku**（subagentは`model:"sonnet"`等を明示）。**超大規模文脈・Web検索＝Gemini(無料枠)**。定型・軽作業は監督が抱えずSonnetに流す。
@@ -190,6 +194,7 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
 - 効果は per-PC コストレポーターのモデル別内訳で実測して調整（憶測で決めない）。
 - ※各PCの既定モデルは settings.json `"model"` と claude.ai 組織設定の両方が効く。組織設定側の「既定モデル/カスタム指示」も管理者kimが Opus 監督方針に合わせて更新すること（配布ルールだけでは system-prompt 側の旧記述は変わらない）。
 - **この規律は hook で機械的に強制される**: UserPromptSubmit の delegation-gate が実装依頼を検知し、応答冒頭での `[委譲判定]` 宣言を要求する（宣言せず実装を書き始めるのは違反）。PreToolUse の pretooluse-delegation-warn は60行/2500文字を超える実装コードの直接書き込みを検知して警告する。どちらも警告のみでブロックはしない。
+- **1セッション=1目的は hook で機械的に担保する**: SessionStart の `session-purpose-gate` が「このセッションの目的を1行宣言せよ」と要求し、最初の依頼をそのセッションの目的として記録する。以後 UserPromptSubmit で**目的ドリフト**（別目的の依頼＝キーワードの重なりが薄い／「別件」「ところで」「次は」等）を検知したら、**着手前に**『ここで /session-close して新セッションで』と1行提案することを強制する（ブロックはしない。userが「続けて」と言えばそのまま継続）。16ターンを超えたセッションには区切り提案のナッジも出る。判定は純ローカル（API課金ゼロ・状態は `~/.claude/session-purpose/<session_id>.json`）。
 - セッションを閉じる時は `/session-close` skill で 成果要約→commit/PR→memory永続化→残TODO→次セッション用テンプレ→`/clear`促し まで完結させる。1セッション=1目的を守り、長い会話に複数タスクを積まない（文脈肥大は精度低下とコスト増を招く）。
 
 詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/token-model-cost-routing.md`
@@ -235,6 +240,7 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
 ### 2.8.1 夜間バッチ・作り置き(prerender)原則（表示時間↓・コスト↓は全部夜間へ / 2026-08-10 kim指示）
 
 **遅延を許容できるシステム作業は全部夜間に回し、日中は"作り置きを読むだけ"にする。** 表示時間短縮・API呼び出し削減・コスト削減につながるものは原則すべて夜間バッチ化する。
+夜間バッチ判定と Kimi・Groq へのルーティングは UserPromptSubmit hook が該当プロンプトのたびに注入し、欠落時は SessionStart の `hook-selfcheck` が自動修復する。
 - 対象: 大量生成/属性エンリッチ(Manus)/重いcron/バックフィル/日報・ダッシュボード・サマリーの事前整形/毎回同じレシピで組み立てている表示データ。
 - **prerenderパターン**: 毎晩バッチで「Claudeが毎回ゼロから組み立てる表示」をMarkdown等に完成形で書き出し、`<!-- ...-START -->`〜`<!-- ...-END -->`マーカーで囲む。日中はそのブロックを**読むだけ**（組み立て時間ゼロ・API呼び出しゼロ・待ち時間ゼロ）。起動が体感で数倍速くなる。
 - **Batch API(50%オフ)** を使えるバッチは使う。夜間スケジュールは GHA cron / Vercel cron / OSのスケジューラ等（Windowsタスク登録はclassifierが止めるので ps1書出し+user 1行実行）。

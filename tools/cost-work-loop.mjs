@@ -88,7 +88,7 @@ let execOut = 0, execUSD = 0, execByProv = {};
 {
   const led = path.join(HOME, '.claude', 'executor-usage.jsonl');
   let lines = []; try { lines = fs.readFileSync(led, 'utf-8').split('\n'); } catch { }
-  const EP = { groq: [0.6, 0.8], openrouter: [0.3, 0.6], gemini: [0.1, 0.4], kimi: [3, 15], mistral: [2, 6], deepseek: [0.27, 1.1], grok: [3, 15], ollama: [0, 0] };
+  const EP = { groq: [0.6, 0.8], openrouter: [0.3, 0.6], gemini: [0.1, 0.4], kimi: [3, 15], mistral: [2, 6], deepseek: [0.27, 1.1], grok: [3, 15], ollama: [0, 0], codex: [0, 0] };
   for (const ln of lines) { if (!ln.trim()) continue; let r; try { r = JSON.parse(ln); } catch { continue; } if (new Date(r.t).getTime() < since) continue; const [pi, po] = EP[r.provider] || [1, 3]; execUSD += ((r.in || 0) * pi + (r.out || 0) * po) / 1e6; execOut += (r.out || 0); execByProv[r.provider] = (execByProv[r.provider] || 0) + 1; }
 }
 // ---- 4) 作業量プロキシ(gitコミット) ----
@@ -113,6 +113,21 @@ if (claudeOut >= 1e6 && delegRatio < TARGET_DELEG) flags.push(`🚨 委譲不足
 if (codexSessions === 0) flags.push('⚠️ Codex未使用=実装を監督が抱えている疑い。実装はCodexへ委譲する');
 if (prev && typeof prev.claudeOut === 'number' && claudeOut > prev.claudeOut * 1.15 && work <= prev.work) flags.push(`🚨 利用効率悪化: Claude出力 ${(prev.claudeOut / 1000).toFixed(0)}k→${(claudeOut / 1000).toFixed(0)}k tok 増だが作業量(${workKind}) ${prev.work}→${work} 増えず。誤ルーティング/やり直し/呼びすぎを点検`);
 if (claudeByModel.opus && claudeOut && (claudeByModel.opus / claudeOut) > 0.5) flags.push(`⚠️ Opus比率高(${((claudeByModel.opus / claudeOut) * 100).toFixed(0)}%)。監督は最小限に、実装/生成は委譲(§1.18)`);
+const unused = [];
+if (!execByProv.kimi) unused.push('kimi(中量級生成)');
+if (!execByProv.groq) unused.push('groq(量産分類)');
+if (!execByProv.gemini) unused.push('gemini(長文脈)');
+let batchUsed = false;
+try {
+  const queueDir = path.join(HOME, '.claude', 'batch-queue');
+  for (const name of fs.readdirSync(queueDir)) {
+    if (name !== 'pending.jsonl' && !/^results-.*\.jsonl$/.test(name)) continue;
+    const file = path.join(queueDir, name);
+    if (fs.statSync(file).mtimeMs >= since && fs.readFileSync(file, 'utf8').trim()) { batchUsed = true; break; }
+  }
+} catch {}
+if (!batchUsed) unused.push('夜間バッチ(batch-enqueue)');
+flags.push(`⚠️ 未活用: ${unused.length ? unused.join(' / ') : 'なし'} — 該当作業が来たらここへ流す`);
 if (!flags.length) flags.push('✅ 委譲・コスト効率は許容範囲。この調子で。');
 
 const arrow = prev && typeof prev.claudeOut === 'number' ? (claudeOut > prev.claudeOut ? '↑' : claudeOut < prev.claudeOut ? '↓' : '→') : '';
@@ -150,7 +165,9 @@ while (hist.length > 14) hist.shift();
 const obsStart = (prev && prev.obsStart) ? prev.obsStart : today;
 const daysObserved = Math.round((Date.now() - new Date(obsStart + 'T00:00:00Z').getTime()) / 864e5);
 let enforce = 'warn', ereason = '観察中';
-if (daysObserved >= 7 && claudeOut >= 1e6 && delegRatio < TARGET_DELEG) {
+if (delegRatio < TARGET_DELEG / 3 && daysObserved >= 2 && claudeOut >= 1e6) {
+  enforce = 'block'; ereason = `委譲率${(delegRatio * 100).toFixed(1)}%=目標の1/3未満。2日で昇格`;
+} else if (daysObserved >= 7 && claudeOut >= 1e6 && delegRatio < TARGET_DELEG) {
   const avg = a => a.length ? a.reduce((s, x) => s + (x.delegRatio || 0), 0) / a.length : 0;
   const early = hist.slice(0, Math.max(1, Math.floor(hist.length / 2)));
   const recent = hist.slice(-3);

@@ -236,6 +236,15 @@ if (Test-Path $dstC) {
 ($json | ConvertTo-Json -Depth 20) | Set-Content $setPath -Encoding UTF8
 OK "settings.json 更新(バックアップ済)"
 
+# .mjs を正として必須hookを一括登録。旧個別hookと共存しても register-hooks 側で重複を防ぎ、
+# delegation-gate は cost-routing-gate へ移行する。
+try {
+  $env:ORGIAST_HOME = $HOMEDIR
+  $env:ORGIAST_REPO = $REPO
+  & node (Join-Path $REPO 'tools\register-hooks.mjs') --hooks-only
+  if ($LASTEXITCODE -eq 0) { OK "必須コスト規律hookを登録/自己修復" } else { Warn "必須hook登録に失敗(既存hookは維持)" }
+} catch { Warn ("必須hook登録に失敗(既存hookは維持): " + $_.Exception.Message) }
+
 # --- 夜間バッチの定時起動(毎日03:00・off-peak帯にキュー消化=50%off) ---
 Step "夜間バッチの定時起動を登録 (毎日03:00)"
 try {

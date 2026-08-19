@@ -3,6 +3,7 @@
 // --fallback-standard 指定時だけ、Anthropic Batch失敗後に通常APIで再実行する。
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
 import { readEnvValue } from './env-kv.mjs';
+import { callWithFallback, classifyFailure, FALLBACK_CHAIN } from './llm-fallback.mjs';
 
 const PROVIDERS = {
   deepseek: { base: 'https://api.deepseek.com/chat/completions', keyEnv: 'DEEPSEEK_API_KEY', keyFile: 'deepseek.env', model: 'deepseek-chat' },
@@ -49,29 +50,41 @@ function messages(job) {
   out.push({ role: 'user', content: job.prompt });
   return out;
 }
-function usageRecord(provider, model, usage = {}) {
+function usageRecord(provider, model, usage = {}, extra = {}) {
   const input = usage.prompt_tokens ?? usage.promptTokenCount ?? usage.input_tokens ?? 0;
   const output = usage.completion_tokens ?? usage.candidatesTokenCount ?? usage.output_tokens ?? 0;
-  try { fs.appendFileSync(ledger, JSON.stringify({ t: new Date().toISOString(), provider, model, in: input, out: output }) + '\n'); } catch {}
+  if (!usage.__attemptRecorded) try { fs.appendFileSync(ledger, JSON.stringify({ t: new Date().toISOString(), provider, model, in: input, out: output, status: 'ok', attempt: 0, failover: false, ...extra }) + '\n'); } catch {}
   return { in: input, out: output };
 }
-function saveResult(job, text, usage, mode = 'standard') {
+function saveResult(job, text, usage, mode = 'standard', executedBy) {
   const date = new Date().toISOString().slice(0, 10);
-  const rec = { id: job.id, provider: job.provider, model: job.model, text, usage, mode, completedAt: new Date().toISOString() };
+  const rec = { id: job.id, provider: executedBy?.provider || job.provider, model: executedBy?.model || job.model, text, usage, mode, completedAt: new Date().toISOString() };
   fs.appendFileSync(path.join(dir, `results-${date}.jsonl`), JSON.stringify(rec) + '\n');
 }
 async function runStandard(job) {
-  const P = PROVIDERS[job.provider];
-  const key = loadKey(job.provider);
-  if (!key) throw new Error(`${P.keyEnv} 未設定`);
-  const payload = { model: job.model || P.model, messages: messages(job), max_tokens: job.max || 4000, stream: false };
-  if (job.provider === 'kimi') Object.assign(payload, { reasoning_effort: 'none', temperature: 0.6 });
-  const r = await fetch(P.base, { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', ...(P.extraHeaders || {}) }, body: JSON.stringify(payload) });
-  if (!r.ok) throw new Error(`${r.status}: ${(await r.text().catch(() => '')).slice(0, 400)}`);
-  const j = await r.json();
-  return { text: j.choices?.[0]?.message?.content ?? '', usage: j.usage ?? {}, mode: 'standard' };
+  const start = { provider: job.provider, model: job.model || PROVIDERS[job.provider].model };
+  const result = await callWithFallback({
+    start, chain: FALLBACK_CHAIN,
+    payloadFor(candidate) {
+      const P = PROVIDERS[candidate.provider]; const key = P && loadKey(candidate.provider);
+      if (!P || !key) return null;
+      const payload = { model: candidate.model || P.model, messages: messages(job), max_tokens: job.max || 4000, stream: false };
+      if (candidate.provider === 'kimi') Object.assign(payload, { reasoning_effort: 'none', temperature: 0.6 });
+      return { url: P.base, init: { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', ...(P.extraHeaders || {}) }, body: JSON.stringify(payload) } };
+    },
+    async onAttempt(info) {
+      let usage = {};
+      if (info.status === 'ok') usage = (await info.response.clone().json().catch(() => ({}))).usage || {};
+      usageRecord(info.candidate.provider, info.candidate.model, usage, { status: info.status, attempt: info.attempt, failover: info.failover, secs: Number(info.secs.toFixed(3)) });
+    },
+    onFailover({ from, to, reason }) { console.error(`[failover] ${from.provider}:${from.model} ${reason} → ${to.provider}:${to.model}`); },
+  });
+  const j = await result.response.json();
+  const usage = j.usage ?? {};
+  Object.defineProperty(usage, '__attemptRecorded', { value: true });
+  return { text: j.choices?.[0]?.message?.content ?? '', usage, mode: result.failover ? 'standard-failover' : 'standard', provider: result.candidate.provider, model: result.candidate.model };
 }
-async function retryFetch(url, init, label) { let last; for (let i = 0; i < 3; i++) { const r = await fetch(url, init); if (r.status !== 429 && r.status < 500) return r; last = r; if (i < 2) await delay(1000 * 2 ** i); } return last; }
+async function retryFetch(url, init, label) { let last; for (let i = 0; i < 3; i++) { const r = await fetch(url, init); if (r.ok || classifyFailure(r.status) === 'next') return r; last = r; if (i < 2) await delay(1000 * 2 ** i); } return last; }
 function anthropicHeaders(key) { return { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }; }
 function anthropicParams(job) { const p = { model: job.model || PROVIDERS.anthropic.model, max_tokens: job.max || 4000, messages: [{ role: 'user', content: job.prompt }] }; if (job.system) p.system = job.system; return p; }
 async function runAnthropicStandard(job) { const P = PROVIDERS.anthropic, key = loadKey('anthropic'); if (!key) throw new Error(`${P.keyEnv} 未設定。環境変数または ~/.claude/${P.keyFile} に ${P.keyEnv}=値 を置いてください`); const r = await retryFetch(P.base, { method: 'POST', headers: anthropicHeaders(key), body: JSON.stringify(anthropicParams(job)) }, 'Anthropic'); if (!r.ok) throw new Error(`${r.status}: ${(await r.text().catch(() => '')).slice(0, 400)}`); const j = await r.json(); return { text: (j.content || []).map((x) => x.text || '').join(''), usage: j.usage || {}, mode: 'standard' }; }
@@ -141,7 +154,7 @@ for (const group of geminiGroups.values()) {
     for (let i = 0; i < outputs.length; i++) {
       const job = group[i]; const out = outputs[i];
       if (out.error) {
-        try { const fallback = await runStandard(job); const usage = usageRecord(job.provider, job.model, fallback.usage); saveResult(job, fallback.text, usage, fallback.mode); completed.add(job.id); console.log(`OK ${job.id} standard`); }
+        try { const fallback = await runStandard(job); const usage = usageRecord(job.provider, job.model, fallback.usage); saveResult(job, fallback.text, usage, fallback.mode, fallback); completed.add(job.id); console.log(`OK ${job.id} standard`); }
         catch (err) { console.error(`FAIL ${job.id}: ${out.error}; fallback: ${err.message}`); }
       } else {
         const usage = usageRecord(job.provider, job.model, out.usage); saveResult(job, out.text, usage, out.mode); completed.add(job.id); console.log(`OK ${job.id} gemini-batch`);
@@ -150,13 +163,13 @@ for (const group of geminiGroups.values()) {
   } catch (e) {
     console.error(`Gemini Batch不可、通常APIへ切替: ${e.message}`);
     for (const job of group) {
-      try { const out = await runStandard(job); const usage = usageRecord(job.provider, job.model, out.usage); saveResult(job, out.text, usage, out.mode); completed.add(job.id); console.log(`OK ${job.id} standard`); }
+      try { const out = await runStandard(job); const usage = usageRecord(job.provider, job.model, out.usage); saveResult(job, out.text, usage, out.mode, out); completed.add(job.id); console.log(`OK ${job.id} standard`); }
       catch (err) { console.error(`FAIL ${job.id}: ${err.message}`); }
     }
   }
 }
 for (const job of runnable.filter((j) => j.provider !== 'gemini' && j.provider !== 'anthropic')) {
-  try { const out = await runStandard(job); const usage = usageRecord(job.provider, job.model, out.usage); saveResult(job, out.text, usage, out.mode); completed.add(job.id); console.log(`OK ${job.id} standard`); }
+  try { const out = await runStandard(job); const usage = usageRecord(job.provider, job.model, out.usage); saveResult(job, out.text, usage, out.mode, out); completed.add(job.id); console.log(`OK ${job.id} standard`); }
   catch (e) { console.error(`FAIL ${job.id}: ${e.message}`); }
 }
 

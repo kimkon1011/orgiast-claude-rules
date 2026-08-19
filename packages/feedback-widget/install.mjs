@@ -51,7 +51,7 @@ async function template(name) {
   }
   throw new Error(`テンプレート取得失敗: ${name} (${lastStatus}) — GitHub raw の一時障害の可能性があります。数分おいて再実行してください`);
 }
-function tokens(text) { return text.replaceAll("{{APP_NAME}}", options.appName.replaceAll('"', '\\"')).replaceAll("{{DISCORD_CHANNEL_ID}}", options.channel).replaceAll("{{IMPORT_PREFIX}}", alias ? "@" : "relative"); }
+function tokens(text) { return text.replaceAll("{{APP_NAME}}", options.appName.replaceAll('"', '\\"')).replaceAll("{{DISCORD_CHANNEL_ID}}", options.channel).replaceAll("{{ADMIN_PAGE}}", options.admin ? "true" : "false").replaceAll("{{IMPORT_PREFIX}}", alias ? "@" : "relative"); }
 
 const destinations = [
   ["api-route.ts", join(appRoot, "api/feedback/route.ts")], ["FeedbackWidget.tsx", join(componentRoot, "FeedbackWidget.tsx")], ["FeedbackTriggerButton.tsx", join(componentRoot, "FeedbackTriggerButton.tsx")], ["list-feedback.mjs", join(options.target, "scripts/list-feedback.mjs")],

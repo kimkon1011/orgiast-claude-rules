@@ -6,6 +6,8 @@ export const dynamic = "force-dynamic";
 const APP_NAME = "{{APP_NAME}}";
 // 社員チャンネル。非秘匿 ID であり、環境変数で上書きできます。
 const DEFAULT_CHANNEL_ID = "{{DISCORD_CHANNEL_ID}}";
+// 管理画面 /feedback を入れなかった構成では、通知に存在しないリンクを出さない。
+const ADMIN_PAGE = {{ADMIN_PAGE}};
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_TITLE = 200;
 const MAX_BODY = 4000;
@@ -103,15 +105,27 @@ async function signedUrl(url: string, path: string, expiresIn: number): Promise<
   } catch { return null; }
 }
 
-async function notifyDiscord(content: string): Promise<boolean> {
+async function notifyDiscord(content: string, image: { name: string; type: string; data: Buffer } | null): Promise<boolean> {
   const token = process.env.DISCORD_BOT_TOKEN;
   const channel = process.env.DISCORD_FEEDBACK_CHANNEL_ID || DEFAULT_CHANNEL_ID;
   const webhook = process.env.FEEDBACK_DISCORD_WEBHOOK_URL;
+  const endpoint = token && channel ? `https://discord.com/api/v10/channels/${channel}/messages` : webhook || "";
+  if (!endpoint) return false;
+  const headers: Record<string, string> = token && channel ? { Authorization: `Bot ${token}` } : {};
+  const payload = { content, allowed_mentions: { parse: [] as string[] } };
   try {
-    const response = token && channel
-      ? await fetch(`https://discord.com/api/v10/channels/${channel}/messages`, { method: "POST", headers: { Authorization: `Bot ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ content, allowed_mentions: { parse: [] } }) })
-      : webhook ? await fetch(webhook, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content }) }) : null;
-    return response?.ok === true;
+    // 画像は Discord へ直接添付する。DB を使わない構成でもスクショが失われないようにするため
+    // (以前は Supabase 未設定時にフォームの添付が黙って捨てられていた)。
+    if (image) {
+      const form = new FormData();
+      form.set("payload_json", JSON.stringify(payload));
+      form.set("files[0]", new File([new Uint8Array(image.data)], image.name || "screenshot.png", { type: image.type || "image/png" }));
+      const response = await fetch(endpoint, { method: "POST", headers, body: form });
+      if (response.ok) return true;
+      // 添付付きが弾かれた場合は本文だけでも通知する。
+    }
+    const response = await fetch(endpoint, { method: "POST", headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    return response.ok;
   } catch { return false; }
 }
 
@@ -133,7 +147,10 @@ export async function POST(request: NextRequest) {
     const email = hasDb ? await authEmail(request, url) : null;
     const submitter = email || clientSubmitter;
     const screenshot = form.get("screenshot");
-    const screenshotPath = hasDb && screenshot instanceof File ? await uploadImage(url, screenshot) : null;
+    const upload = screenshot instanceof File && screenshot.size > 0 && screenshot.size <= MAX_IMAGE_BYTES && screenshot.type.startsWith("image/") ? screenshot : null;
+    const screenshotPath = hasDb && upload ? await uploadImage(url, upload) : null;
+    // DB へ入れられない構成でも Discord に添付するため、バイト列を保持する。
+    const attachment = upload && !screenshotPath ? { name: upload.name, type: upload.type, data: Buffer.from(await upload.arrayBuffer()) } : null;
     let id: string | null = null;
     let db = false;
     if (hasDb) {
@@ -145,8 +162,8 @@ export async function POST(request: NextRequest) {
     }
     const screenshotLink = screenshotPath ? await signedUrl(url, screenshotPath, 60 * 60 * 24 * 7) : null;
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL || request.nextUrl.origin;
-    const content = [`🐛 **[${APP_NAME}] ${kind === "bug" ? "不具合" : "要望"}: ${title}**`, body.slice(0, 300), `提出者: ${submitter || "不明"}`, `画面: ${pagePath || "不明"}`, `管理画面: ${baseUrl}/feedback`, screenshotLink ? `📎 スクショ: ${screenshotLink}` : null].filter(Boolean).join("\n");
-    const discord = await notifyDiscord(content);
+    const content = [`🐛 **[${APP_NAME}] ${kind === "bug" ? "不具合" : "要望"}: ${title}**`, body.slice(0, 300), `提出者: ${submitter || "不明"}`, `画面: ${pagePath || "不明"}`, ADMIN_PAGE ? `管理画面: ${baseUrl}/feedback` : `提出元: ${baseUrl}${pagePath || "/"}`, screenshotLink ? `📎 スクショ: ${screenshotLink}` : null].filter(Boolean).join("\n");
+    const discord = await notifyDiscord(content, attachment);
     if (!db && !discord) return NextResponse.json({ ok: false, error: hasDb ? "DB保存とDiscord通知の両方に失敗しました" : "保存先が未設定です。SupabaseまたはDiscordを設定してください" }, { status: 503 });
     return NextResponse.json({ ok: true, id, sinks: { db, discord }, note: !db ? "記録は Discord のみ" : undefined });
   } catch (cause) {

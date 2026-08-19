@@ -24,6 +24,21 @@ const DRY_RUN = process.argv.includes('--dry-run');
 const DO_FIX = process.argv.includes('--fix');
 const HOME = process.env.ORGIAST_HOME || os.homedir();
 const FORCE_MISSING = new Set((process.env.TOOL_ADOPTION_FORCE_MISSING || '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean));
+const FORCE_TIMEOUT = new Set((process.env.TOOL_ADOPTION_FORCE_TIMEOUT || '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean));
+const FORCE_ABSENT = new Set((process.env.TOOL_ADOPTION_FORCE_ABSENT || '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean));
+const FORCE_PRESENT = new Set((process.env.TOOL_ADOPTION_FORCE_PRESENT || '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean));
+
+const LOCAL_TIMEOUT_MS = 15000;
+const NODE_CLI_TIMEOUT_MS = 30000;
+const WSL_TIMEOUT_MS = 60000;
+const STARTED_AT = Date.now();
+const parsedDeadline = Number(process.env.TOOL_ADOPTION_DEADLINE_MS || 20000);
+const DEADLINE_MS = Number.isFinite(parsedDeadline) && parsedDeadline >= 0 ? parsedDeadline : 20000;
+// レポート組み立て・stdout/Discord投稿へ必ず到達するため、全体期限の末尾を外部プローブに使わない。
+const REPORT_RESERVE_MS = Math.min(1500, DEADLINE_MS);
+let deadlineSkipped = false;
+function remainingMs() { return Math.max(0, DEADLINE_MS - REPORT_RESERVE_MS - (Date.now() - STARTED_AT)); }
+function deadlineExceeded() { if (remainingMs() > 0) return false; deadlineSkipped = true; return true; }
 
 // 日次ガード(SessionStartフックから毎回呼ばれても送信は最大1日1回)。--dry-run/--fix時はスキップしない。
 const GUARD_HOURS = 20;
@@ -44,22 +59,55 @@ function loadEnv(file) {
   try { return parseEnvText(fs.readFileSync(file, 'utf8')); } catch { return {}; }
 }
 
-function cmdOk(cmd) { try { execSync(cmd, { stdio: 'pipe', timeout: 15000 }); return true; } catch { return false; } }
-function cmdOut(cmd) { try { return execSync(cmd, { stdio: 'pipe', timeout: 15000 }).toString().trim(); } catch { return ''; } }
+function failureReason(error) {
+  const detail = `${error?.message || ''}\n${error?.stderr?.toString?.() || ''}`;
+  if (error?.signal === 'SIGTERM' || error?.code === 'ETIMEDOUT' || error?.killed) return 'timeout';
+  if (error?.code === 'ENOENT' || error?.status === 127 || /is not recognized|command not found|not found/i.test(detail)) return 'notfound';
+  return 'error';
+}
+function cmdProbe(cmd, timeout = LOCAL_TIMEOUT_MS) {
+  const remaining = remainingMs();
+  if (remaining <= 0) { deadlineSkipped = true; return { ok: false, stdout: '', reason: 'deadline' }; }
+  try { return { ok: true, stdout: execSync(cmd, { stdio: ['ignore', 'pipe', 'pipe'], timeout: Math.max(1, Math.min(timeout, remaining)) }).toString().trim(), reason: 'ok' }; }
+  catch (error) { return { ok: false, stdout: '', reason: failureReason(error) }; }
+}
 function wslDistros() {
   if (process.platform !== 'win32') return [];
-  try { return execSync('wsl.exe -l -q', { stdio: ['ignore', 'pipe', 'ignore'], timeout: 15000 }).toString('utf16le').split(/\r?\n/).map((s) => s.replace(/\0/g, '').trim()).filter(Boolean); } catch { return []; }
+  const remaining = remainingMs();
+  if (remaining <= 0) { deadlineSkipped = true; return []; }
+  try { return execSync('wsl.exe -l -q', { stdio: ['ignore', 'pipe', 'ignore'], timeout: Math.max(1, Math.min(WSL_TIMEOUT_MS, remaining)) }).toString('utf16le').split(/\r?\n/).map((s) => s.replace(/\0/g, '').trim()).filter(Boolean); } catch { return []; }
 }
 function preferredDistro() { const all = wslDistros(); return all.find((x) => x.toLowerCase() === 'ubuntu') || all[0] || ''; }
 // wsl -d に引用符付きで渡すと cmd.exe 経由で壊れて必ず失敗する(実測)。shellを介さず配列で渡す。
 function wslRun(distro, argv) {
   const tries = distro ? [['-d', distro, '--', ...argv], ['--', ...argv]] : [['--', ...argv]];
+  let lastReason = 'notfound';
   for (const args of tries) {
-    try { return execFileSync('wsl.exe', args, { stdio: ['ignore', 'pipe', 'ignore'], timeout: 15000 }).toString().trim() || 'ok'; } catch {}
+    const remaining = remainingMs();
+    if (remaining <= 0) { deadlineSkipped = true; return { ok: false, stdout: '', reason: 'deadline' }; }
+    try { return { ok: true, stdout: execFileSync('wsl.exe', args, { stdio: ['ignore', 'pipe', 'pipe'], timeout: Math.max(1, Math.min(WSL_TIMEOUT_MS, remaining)) }).toString().trim(), reason: 'ok' }; }
+    catch (error) { lastReason = failureReason(error); if (lastReason === 'timeout') break; }
   }
-  return '';
+  return { ok: false, stdout: '', reason: lastReason };
 }
 function wslCodexVersion(distro) { return wslRun(distro, ['codex', '--version']); }
+
+function npmGlobalPackageExists(packageName) {
+  const root = cmdProbe('npm root -g');
+  return root.ok && fs.existsSync(path.join(root.stdout, ...packageName.split('/')));
+}
+function nativeCommandExists(command, packageName) {
+  if (process.platform === 'win32') {
+    const appData = process.env.ORGIAST_HOME ? path.join(HOME, 'AppData', 'Roaming') : (process.env.APPDATA || path.join(HOME, 'AppData', 'Roaming'));
+    if (fs.existsSync(path.join(appData, 'npm', `${command}.cmd`))) return true;
+  } else {
+    const found = cmdProbe(`command -v ${command}`);
+    if (found.ok && !!found.stdout) return true;
+    if (fs.existsSync(`/usr/bin/${command}`)) return true;
+  }
+  return npmGlobalPackageExists(packageName);
+}
+function wslCodexExists(distro) { return wslRun(distro, ['sh', '-lc', 'command -v codex']); }
 
 function clearInstallStateIfTarget(target) {
   try {
@@ -73,7 +121,7 @@ function installRecentlyStarted(target) {
     return state.target === target && Date.now() - Date.parse(state.started) < INSTALL_DEDUP_MS;
   } catch { return false; }
 }
-function startCodexInstall(target, distro = '') {
+function startCodexInstall(target, distro = '', packageName = '@openai/codex') {
   if (installRecentlyStarted(target)) return false;
   const claudeDir = path.join(HOME, '.claude');
   fs.mkdirSync(claudeDir, { recursive: true });
@@ -81,7 +129,7 @@ function startCodexInstall(target, distro = '') {
   const logFd = fs.openSync(installLogPath, 'a');
   const override = process.env.TOOL_ADOPTION_INSTALL_CMD;
   const command = override || (distro ? 'wsl.exe' : 'npm');
-  const args = override ? [] : (distro ? ['-d', distro, '--', 'npm', 'i', '-g', '@openai/codex'] : ['i', '-g', '@openai/codex']);
+  const args = override ? [] : (distro ? ['-d', distro, '--', 'npm', 'i', '-g', packageName] : ['i', '-g', packageName]);
   try {
     const child = spawn(command, args, { detached: true, shell: !!override, stdio: ['ignore', logFd, logFd] });
     child.unref();
@@ -91,13 +139,18 @@ function startCodexInstall(target, distro = '') {
     return false;
   } finally { fs.closeSync(logFd); }
 }
+function startGeminiInstall() {
+  return startCodexInstall('gemini-native', '', '@google/gemini-cli');
+}
 
 // 再帰で最新mtime(ms)を返す。無ければ0。
 function newestMtime(dir, filterExt) {
   let newest = 0;
   (function walk(d) {
+    if (deadlineExceeded()) return;
     let ents; try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
     for (const e of ents) {
+      if (deadlineExceeded()) return;
       const p = path.join(d, e.name);
       if (e.isDirectory()) walk(p);
       else if (!filterExt || e.name.endsWith(filterExt)) { try { const m = fs.statSync(p).mtimeMs; if (m > newest) newest = m; } catch {} }
@@ -112,10 +165,10 @@ function transcriptHits(regex, windowDays) {
   const cutoff = now - windowDays * 86400000;
   let hit = false;
   (function walk(d) {
-    if (hit) return;
+    if (hit || deadlineExceeded()) return;
     let ents; try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
     for (const e of ents) {
-      if (hit) return;
+      if (hit || deadlineExceeded()) return;
       const p = path.join(d, e.name);
       if (e.isDirectory()) walk(p);
       else if (e.name.endsWith('.jsonl')) {
@@ -135,6 +188,7 @@ function readLedger(windowDays) {
   const rows = [];
   let raw; try { raw = fs.readFileSync(ledgerPath, 'utf-8'); } catch { return []; }
   for (const line of raw.split(/\r?\n/)) {
+    if (deadlineExceeded()) break;
     if (!line.trim()) continue;
     let row; try { row = JSON.parse(line); } catch { continue; }
     const value = row.t ?? row.ts ?? row.time ?? row.timestamp;
@@ -177,29 +231,39 @@ function checkCodex() {
   // 「WSL未導入」分岐に落ちて detached 導入経路が検証できない(実測でテストが落ちた)。
   // テストを速く決定的にしたい時は TOOL_ADOPTION_FAKE_DISTRO で明示指定する。
   const distro = process.env.TOOL_ADOPTION_FAKE_DISTRO !== undefined ? process.env.TOOL_ADOPTION_FAKE_DISTRO : preferredDistro();
-  const nativeVersion = forceMissing ? '' : cmdOut('codex --version');
-  let version = forceMissing ? '' : (process.platform === 'win32' ? wslCodexVersion(distro) : nativeVersion);
-  let installed = !!version;
+  const forcedTimeout = FORCE_TIMEOUT.has('codex');
+  const nativeProbe = forceMissing ? { ok: false, stdout: '', reason: 'notfound' }
+    : forcedTimeout ? { ok: false, stdout: '', reason: 'timeout' } : cmdProbe('codex --version');
+  const codexProbe = forceMissing ? { ok: false, stdout: '', reason: 'notfound' }
+    : forcedTimeout ? { ok: false, stdout: '', reason: 'timeout' }
+      : (process.platform === 'win32' ? wslCodexVersion(distro) : nativeProbe);
+  const presence = forceMissing || FORCE_ABSENT.has('codex') ? { ok: false, stdout: '', reason: 'notfound' }
+    : FORCE_PRESENT.has('codex') ? { ok: true, stdout: '', reason: 'ok' }
+      : (process.platform === 'win32' ? wslCodexExists(distro) : { ok: nativeCommandExists('codex', '@openai/codex'), stdout: '', reason: 'ok' });
+  const installed = codexProbe.ok || presence.ok;
+  const indeterminate = !installed && codexProbe.reason !== 'notfound';
+  const version = codexProbe.stdout || (installed && codexProbe.reason === 'timeout' ? '(バージョン取得はタイムアウト)' : '');
   const installTarget = process.platform === 'win32' && distro ? 'wsl' : 'native';
   if (installed) clearInstallStateIfTarget(installTarget);
-  const nativeOnly = process.platform === 'win32' && !!nativeVersion && !installed;
+  const nativePresent = forceMissing || FORCE_ABSENT.has('codex') ? false : (nativeProbe.ok || nativeCommandExists('codex', '@openai/codex'));
+  const nativeOnly = process.platform === 'win32' && nativePresent && !installed && !indeterminate;
   const authed = fs.existsSync(path.join(HOME, '.codex', 'auth.json'));
   const lastUsed = Math.max(0, ...codexSessionDirs(HOME).map((dir) => newestMtime(dir, '.jsonl')));
   const usedDays = lastUsed ? daysAgo(lastUsed) : Infinity;
   const used = usedDays <= USAGE_WINDOW_DAYS;
-  if (!installed && DO_FIX && distro) {
+  if (!installed && !indeterminate && DO_FIX && distro) {
     if (startCodexInstall(installTarget, distro)) installStarts.push(`🔧 WSL(${distro}) への Codex 導入をバックグラウンドで開始しました（数分後・次回セッションで有効。ログ: ~/.claude/tool-adoption-install.log）`);
   }
-  if (!installed && process.platform === 'win32') {
+  if (!installed && !indeterminate && process.platform === 'win32') {
     if (distro) {
       if (!(DO_FIX && installRecentlyStarted(installTarget))) human.push(`Windows版codexはread-onlyサンドボックス固定で実装に使えない。\`wsl -d ${distro} -- npm i -g @openai/codex\` で WSL 側に入れる（\`--fix\` で自動実行）`);
     } else human.push('WSLディストロ未導入→管理者ターミナルで `wsl --install -d Ubuntu`（再起動が必要）');
-  } else if (!installed && DO_FIX) {
+  } else if (!installed && !indeterminate && DO_FIX) {
     if (startCodexInstall(installTarget)) installStarts.push('🔧 native環境への Codex 導入をバックグラウンドで開始しました（数分後・次回セッションで有効。ログ: ~/.claude/tool-adoption-install.log）');
     else if (!installRecentlyStarted(installTarget)) human.push('Codex CLI のバックグラウンド導入を開始できませんでした→手動 `npm i -g @openai/codex`');
   }
   if (installed && !authed) human.push('Codex 未認証→`codex` 実行しChatGPTでログイン(1回)');
-  return { name: 'Codex', installed, nativeOnly, version, authed, used, usedDays, role: 'コード実装の主経路(定額枠)' };
+  return { name: 'Codex', installed, indeterminate, nativeOnly, version, authed, used, usedDays, role: 'コード実装の主経路(定額枠)' };
 }
 
 // ---- Gemini ----
@@ -224,13 +288,22 @@ function ensureGeminiMcp() {
   return false;
 }
 function checkGemini() {
-  const installed = cmdOk('gemini --version');
-  const version = installed ? cmdOut('gemini --version') : '';
+  const forceMissing = FORCE_MISSING.has('gemini');
+  const probe = forceMissing ? { ok: false, stdout: '', reason: 'notfound' }
+    : FORCE_TIMEOUT.has('gemini') ? { ok: false, stdout: '', reason: 'timeout' }
+      : cmdProbe('gemini --version', NODE_CLI_TIMEOUT_MS);
+  const present = !forceMissing && !FORCE_ABSENT.has('gemini') && (FORCE_PRESENT.has('gemini') || nativeCommandExists('gemini', '@google/gemini-cli'));
+  const installed = probe.ok || present;
+  const indeterminate = !installed && probe.reason !== 'notfound';
+  const version = probe.stdout || (installed && probe.reason === 'timeout' ? '(バージョン取得はタイムアウト)' : '');
   const key = loadEnv(path.join(HOME, '.gemini', '.env')).GEMINI_API_KEY || process.env.GEMINI_API_KEY || '';
   const keyed = !!key;
   let mcpReg = false;
   try { const d = JSON.parse(fs.readFileSync(path.join(HOME, '.claude.json'), 'utf-8')); mcpReg = !!(d.mcpServers && d.mcpServers['gemini-cli'] && d.mcpServers['gemini-cli'].env && d.mcpServers['gemini-cli'].env.GEMINI_API_KEY); } catch {}
-  if (!installed && DO_FIX) { if (cmdOk('npm i -g @google/gemini-cli')) fixes.push('Gemini CLI を npm install'); else human.push('Gemini CLI 導入失敗→手動 `npm i -g @google/gemini-cli`'); }
+  if (!installed && !indeterminate && DO_FIX) {
+    if (startGeminiInstall()) installStarts.push('🔧 native環境への Gemini CLI 導入をバックグラウンドで開始しました（数分後・次回セッションで有効。ログ: ~/.claude/tool-adoption-install.log）');
+    else if (!installRecentlyStarted('gemini-native')) human.push('Gemini CLI のバックグラウンド導入を開始できませんでした→手動 `npm i -g @google/gemini-cli`');
+  }
   if (keyed && !mcpReg) ensureGeminiMcp();
   else if (!keyed) ensureGeminiMcp(); // human タスク追加のため
   // 使用痕跡: gemini tmp のmtime or transcript の MCP呼び出し
@@ -239,7 +312,7 @@ function checkGemini() {
   const lastUsed = tmpUsed;
   const usedDays = lastUsed ? daysAgo(lastUsed) : Infinity;
   const used = trUsed || usedDays <= USAGE_WINDOW_DAYS;
-  return { name: 'Gemini', installed, version, keyed, mcpReg: mcpReg || (DO_FIX && keyed), used, usedDays, role: '超大規模文脈・Google検索(無料枠でトークン節約)' };
+  return { name: 'Gemini', installed, indeterminate, version, keyed, mcpReg: mcpReg || (DO_FIX && keyed), used, usedDays, role: '超大規模文脈・Google検索(無料枠でトークン節約)' };
 }
 
 // ---- Kimi ----
@@ -270,13 +343,16 @@ function mtdOutputByModel() {
   const d = new Date(now); const monthStart = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
   const by = {};
   (function walk(dir) {
+    if (deadlineExceeded()) return;
     let ents; try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
     for (const e of ents) {
+      if (deadlineExceeded()) return;
       const p = path.join(dir, e.name);
       if (e.isDirectory()) walk(p);
       else if (e.name.endsWith('.jsonl')) {
         let raw; try { raw = fs.readFileSync(p, 'utf-8'); } catch { continue; }
         for (const line of raw.split('\n')) {
+          if (deadlineExceeded()) return;
           if (line.indexOf('"usage"') < 0) continue;
           let o; try { o = JSON.parse(line); } catch { continue; }
           if (o.type !== 'assistant' || !o.message || !o.message.usage) continue;
@@ -295,14 +371,17 @@ function recentFableOutput(windowDays) {
   const cutoff = now - windowDays * 86400000;
   let count = 0;
   (function walk(dir) {
+    if (deadlineExceeded()) return;
     let ents; try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
     for (const e of ents) {
+      if (deadlineExceeded()) return;
       const p = path.join(dir, e.name);
       if (e.isDirectory()) walk(p);
       else if (e.name.endsWith('.jsonl')) {
         try { if (fs.statSync(p).mtimeMs < cutoff) continue; } catch { continue; }
         let raw; try { raw = fs.readFileSync(p, 'utf8'); } catch { continue; }
         for (const line of raw.split('\n')) {
+          if (deadlineExceeded()) return;
           let row; try { row = JSON.parse(line); } catch { continue; }
           const timestamp = Date.parse(row.timestamp || '');
           if (Number.isFinite(timestamp) && timestamp < cutoff) continue;
@@ -337,6 +416,7 @@ for (const c of checks) {
   else if (c.name === 'Kimi' && c.used) { icon = '✅'; note = c.count === null ? '使用あり(痕跡のみ)' : `使用あり(${c.count}回)`; }
   else if (c.name === 'Kimi') { icon = '⚠️'; note = '未使用=Claude従量を別課金プールへ逃がせていない(§1.13)。量産・分類・中量級生成は `node tools/llm-ask.mjs --provider kimi "…"` へ'; }
   else if (c.appEmbedded) { icon = c.used ? '✅' : '☑️'; note = c.used ? `使用あり(直近)${c.traceOnly ? '(痕跡のみ)' : ''}` : '未使用(aujust未実行なら想定内)'; }
+  else if (c.indeterminate) { icon = '⚠️'; note = '判定不能(プローブがタイムアウト・次回再判定)'; }
   else if (c.name === 'Codex' && c.nativeOnly) { icon = '🚨'; note = 'Windows版codexはread-onlyサンドボックス固定で実装に使えない。WSL側への導入が必要'; }
   else if (!c.installed) { icon = '🚨'; note = '未導入'; }
   else if (c.name === 'Codex' && !c.authed) { icon = '🚨'; note = '未認証'; }
@@ -374,6 +454,7 @@ msg += `| 実行者/施策 | 使用回数 | 判定 |\n|---|---:|---|\n`;
 for (const provider of wantedProviders) msg += `| ${provider} | ${adoptionCounts[provider]} | ${adoptionCounts[provider] ? '✅' : '⚠️ 使用0'} |\n`;
 msg += `| 夜間バッチ投入/結果 | ${batchCount} | ${batchCount ? '✅' : '⚠️ 使用0'} |\n`;
 msg += `| Fable5 (§1.16) | ${fableCount ? formatTokens(fableCount) : '0'} | ${fableCount ? '🚨 検出' : '✅ 未検出'} |\n`;
+if (deadlineSkipped) msg += `※一部の判定はデッドライン超過でスキップしました(次回再判定)\n`;
 
 if (fixes.length) msg += `\n🔧 自動修復: ${fixes.join(' / ')}\n`;
 if (installStarts.length) msg += `\n${installStarts.join('\n')}\n`;

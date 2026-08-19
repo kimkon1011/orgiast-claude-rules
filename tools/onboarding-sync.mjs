@@ -92,6 +92,9 @@ async function syncRepository(now) {
       for (const old of olds.slice(0, Math.max(0, olds.length - 3))) fs.rmSync(path.join(backupRoot, old), { recursive: true, force: true });
     } catch {}
     let changed = false;
+    // 取得の失敗(未追跡ファイル衝突/ネット断/認証切れ)で skill 配布と hook 登録まで巻き添えにしない。
+    // ここを1つの try に入れていたため、pull が1回失敗した PC は配布が静かに止まっていた(実測 2026-08-19)。
+    try {
     if (fs.existsSync(path.join(repoPath, '.git'))) {
       const before = execFileSync('git', ['-C', repoPath, 'rev-parse', 'HEAD'], { encoding: 'utf8', timeout: 60000 }).trim();
       execFileSync('git', ['-C', repoPath, 'pull', '--ff-only'], { stdio: 'pipe', timeout: 60000 });
@@ -109,6 +112,7 @@ async function syncRepository(now) {
       for (const name of ['tools', 'rules-extracted', 'skills']) if (fs.existsSync(path.join(root, name))) copyTree(path.join(root, name), path.join(repoPath, name));
       changed = true;
     }
+    } catch (e) { console.log(`[onboarding-sync] リポ取得に失敗（skill配布とhook登録は続行）: ${e.message.split('\n')[0]}`); log(`repo fetch failed(continue): ${e.message}`); }
     if (changed) { console.log('[onboarding-sync] updated repository tools/rules/skills'); log('updated repository tools/rules/skills'); }
     const skills = deploySkills(repoPath, home, { now, onError: (e) => log(`skill deployment failed: ${e.message}`) });
     if (skills.length) log(`skills updated: ${skills.join(', ')}`);

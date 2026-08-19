@@ -30,11 +30,21 @@ API/CLI/MCP/GitHub Actions で実行可能な操作は、手順案内せず Clau
 - ✅ 確認（質問・選択肢提示・状態スクショ依頼）は OK
 - ❌ 作業（SQL実行・UIクリック・保存・送信）は絶対NG。「最後の1ステップだけ」の妥協も違反
 - 認証情報が無くて自動化不能 → 「1回だけ」貼ってもらい即座に永続化。以降は完全自動化（毎回paste依頼は禁止）
-- 例外（真に人間にしかできない）: アカウント新規作成 / OAuth初回同意ボタン / 支払い操作 / Workspace管理者のDWD委任設定 / 物理操作 / 権限の無い他社リソース / **自作PRの自己マージ**（人間レビューが必要な唯一の1クリック）
+- 例外（真に人間にしかできない）: アカウント新規作成 / OAuth初回同意ボタン / 支払い操作 / Workspace管理者のDWD委任設定 / 物理操作 / 権限の無い他社リソース ※**自作PRのマージは2026-08-19にこの例外から外した**（下記「PRは自分でマージする」）
 
 **依頼前の必須5ステップ**（順序厳守）: ①API/CLI/MCPで可能か調査 → ②CLIが無ければ自分でinstall(winget/scoop/npm) → ③認証だけ1回user依頼 → ④それでも無理なら初めて手作業依頼(直URL+完了判定つき) → ⑤手作業に頼った場合は次回に活かす学びをmemoryへ。詳細・過去事例: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/automation-first-checklist.md`
 
-**git/PRフローも同様**: commit→push→`gh pr create`→`gh pr merge`まで自分でやる。「マージお願いします」で止めない。唯一の例外は「自作PRの自己マージ」ガードレール（レビュー観点+直URL+アカウント切替注意を添えて手渡し）。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/automation-first-checklist.md`
+**git/PRフローも同様 — PRは自分でマージする（2026-08-19 kim決定・全アカウント共通）**: commit→push→`gh pr create`→**`gh pr merge --squash --delete-branch` まで自分で完結**する。「マージお願いします」で止めない。旧ルールの「自作PRのマージだけは人間の1クリック」は**廃止**（kimに毎回1クリックを残すこと自体が§1.1最上位原則に反し、実運用で「マージ待ち」の滞留を生んでいたため）。
+
+**人間レビューを外す代わりに、CIをゲートにする**。`orgiast-claude-rules` では main に branch protection を設定し、CIジョブ `test` が green でなければマージできない（`.github/workflows/ci.yml`＝全 `*.test.mjs` + `selftest-guards.mjs` + 全 `.mjs` の構文チェック）。**新しくこの方式にするリポジトリでは、先にCIを用意してから auto-merge を有効化すること**。CIが無いまま自動マージすると検証層がゼロになり、手渡しより悪化する。
+
+そのうえで**マージ前に必ず次を満たす**:
+1. **テストを実際に実行して通ることを確認**する（§1.4。「たぶん通る」でマージしない）。`gh pr checks <PR>` が全green
+2. **依頼スコープ内**であることを diff の**削除行まで**読んで確認。スコープ外の挙動変更が混じっていたらマージせず報告（Codex実装時に頻発）
+3. **破壊的・不可逆でない**こと。DBマイグレーション/本番データ削除/秘匿値ローテーション/課金設定/全PCへ配布される破壊的変更 は、マージ前にuser確認
+4. マージ後は**マージ済みである旨とコミットURL**を報告に必ず含める（＝レビューを無くすのではなく事後レビューに移す）
+
+`gh pr merge` が classifier に実際にブロックされた時だけ、直URL+レビュー観点+アカウント切替注意を添えて手渡す。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/automation-first-checklist.md`
 
 **既存リソースの再作成を絶対に振らない**: 「○○を新規作成してください」の前に必ずCLI/APIで一覧確認（GCP SA/Vercel env/GitHub secret/Drive/Discord等）。既にあれば流用。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/automation-first-checklist.md`
 

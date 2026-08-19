@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import vm from 'node:vm';
 import { parseEnvText } from './env-kv.mjs';
 
 const repo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -285,6 +286,100 @@ test('hook-selfcheck: makimono-gate の欠落を自動登録する', () => {
   const after = JSON.parse(fs.readFileSync(path.join(claude, 'settings.json'), 'utf8'));
   const commands = (after.hooks?.UserPromptSubmit || []).flatMap((g) => (g.hooks || []).map((h) => String(h.command || '')));
   assert(commands.some((c) => c.includes('makimono-gate.mjs')), JSON.stringify(commands));
+});
+function makeFleetReportHome(prefix, withEnv = true) {
+  const home = makeTempHome(prefix); const claude = path.join(home, '.claude'); fs.mkdirSync(claude, { recursive: true });
+  if (withEnv) {
+    fs.writeFileSync(path.join(claude, 'fleet-sheet.env'), '\uFEFFexport FLEET_SHEET_URL=https://example.invalid/report\r\nFLEET_SHEET_TOKEN=test-token\r\n');
+    fs.writeFileSync(path.join(claude, 'cost-reporter.env'), 'REPORTER_LABEL=selftest-known\n');
+  }
+  return { home, claude };
+}
+test('fleet-sheet-report: URL/TOKEN未設定なら無言exit 0', () => {
+  const { home } = makeFleetReportHome('orgiast-fleet-no-env-', false);
+  const r = run('fleet-sheet-report.mjs', undefined, ['--dry-run'], { ORGIAST_HOME: home });
+  assert(r.status === 0 && r.stdout === '' && r.stderr === '', JSON.stringify(r));
+});
+test('fleet-sheet-report: stateから必要フィールドを組み立てる', () => {
+  const { home, claude } = makeFleetReportHome('orgiast-fleet-state-');
+  fs.writeFileSync(path.join(claude, 'cost-loop-state.json'), JSON.stringify({ t: '2026-08-19T00:00:00Z', claudeUSD: 12.3, delegRatio: 0.42 }));
+  fs.writeFileSync(path.join(claude, 'cost-enforce.json'), JSON.stringify({ mode: 'warn', reason: 'selftest', delegRatio: 0.42, target: 0.3 }));
+  fs.writeFileSync(path.join(claude, '.tool-adoption-state.json'), JSON.stringify({ codexAuthed: true, fable5OutTok: 0 }));
+  fs.writeFileSync(path.join(claude, '.cost-reporter-state.json'), JSON.stringify({ topModels: [{ model: 'claude-opus-5', outTok: 10, usd: 1 }], fable5Detected: false }));
+  fs.writeFileSync(path.join(claude, 'executor-usage.jsonl'), '{"provider":"kimi"}\n{"provider":"kimi"}\n{"provider":"groq"}\n');
+  const r = run('fleet-sheet-report.mjs', undefined, ['--dry-run'], { ORGIAST_HOME: home }); const payload = JSON.parse(r.stdout);
+  for (const key of ['token','label','mappedName','hostname','reportedAt','claudeUsd','mainModel','delegRatio','cheapAiUse','codexLogin','fable5','disciplineAlert']) assert(Object.hasOwn(payload, key), `不足: ${key}`);
+  assert(payload.claudeUsd === 12.3 && payload.mainModel === 'claude-opus-5' && payload.cheapAiUse.includes('kimi:2'), r.stdout);
+});
+test('fleet-sheet-report: 未登録ラベルを推測せずmappedName null', () => {
+  const { home } = makeFleetReportHome('orgiast-fleet-unmapped-');
+  const r = run('fleet-sheet-report.mjs', undefined, ['--dry-run'], { ORGIAST_HOME: home });
+  assert(r.status === 0 && JSON.parse(r.stdout).mappedName === null, r.stdout || r.stderr);
+});
+test('fleet-sheet-report: state欠損・破損でも既定値で継続', () => {
+  const { home, claude } = makeFleetReportHome('orgiast-fleet-broken-');
+  fs.writeFileSync(path.join(claude, 'cost-loop-state.json'), '{broken');
+  fs.writeFileSync(path.join(claude, 'executor-usage.jsonl'), 'broken\n');
+  const r = run('fleet-sheet-report.mjs', undefined, ['--dry-run'], { ORGIAST_HOME: home }); const payload = JSON.parse(r.stdout);
+  assert(r.status === 0 && payload.claudeUsd === 0 && payload.codexLogin === '判定不能', r.stdout || r.stderr);
+});
+test('fleet upsert純関数: 保護列・連投・未マッピング・ヘッダ並替え', () => {
+  const source = fs.readFileSync(path.join(repo, 'gas', 'fleet-status-sheet', 'UpsertLogic.gs'), 'utf8');
+  const context = {}; vm.createContext(context); vm.runInContext(source.replace(/\bconst\s+/g, 'var '), context);
+  const headers = Object.values(context.FLEET_HEADERS_); const c = context.fleetResolveColumns(headers);
+  const base = headers.map(() => ''); base[c.staff] = '人'; base[c.selfPc] = '申告PC'; base[c.memo] = '保護'; base[c.hostname] = 'host'; base[c.consistency] = 'kim本人・要委譲徹底';
+  const payload = { label: 'host', mappedName: '申告PC', hostname: 'ignored-hostname', reportedAt: 'now', claudeUsd: 1, mainModel: 'model', delegRatio: 0.5, cheapAiUse: 'kimi:1', codexLogin: '済', fable5: '未検出', disciplineAlert: 'warn' };
+  const first = context.fleetPlanUpsert(headers, [base], payload); const second = context.fleetPlanUpsert(headers, [base], payload);
+  assert(first.action === 'updated' && second.rowIndex === 0 && !Object.hasOwn(first.values, String(c.staff)) && !Object.hasOwn(first.values, String(c.memo)) && !Object.hasOwn(first.values, String(c.consistency)), JSON.stringify(first));
+  const unmapped = context.fleetPlanUpsert(headers, [base], { ...payload, label: 'new-host', mappedName: null });
+  assert(unmapped.action === 'appended' && unmapped.values[c.consistency] === '未マッピング(要 fleet-pc-map.json 追記)', JSON.stringify(unmapped));
+  const reordered = [...headers].reverse(); const rc = context.fleetResolveColumns(reordered); const planned = context.fleetPlanUpsert(reordered, [], { ...payload, mappedName: null });
+  assert(planned.values[rc.hostname] === 'host' && rc.hostname !== c.hostname, JSON.stringify(planned));
+});
+test('fleet upsert純関数: 紐付いた既存行のO列(kim手書き)は map 未登録でも保持し、空labelで行を奪わない', () => {
+  const source = fs.readFileSync(path.join(repo, 'gas', 'fleet-status-sheet', 'UpsertLogic.gs'), 'utf8');
+  const context = {}; vm.createContext(context); vm.runInContext(source.replace(/\bconst\s+/g, 'var '), context);
+  const headers = Object.values(context.FLEET_HEADERS_); const c = context.fleetResolveColumns(headers);
+  // fleet-pc-map.json が空(={})の初期状態では mappedName が常に null になる。
+  // それでも F列一致で既存行に紐付いたなら O列の手書きメモを潰してはいけない。
+  const mapped = headers.map(() => ''); mapped[c.selfPc] = '金功勇PC'; mapped[c.hostname] = 'kim-PC'; mapped[c.consistency] = 'kim本人・要委譲徹底';
+  const kept = context.fleetPlanUpsert(headers, [mapped], { label: 'kim-PC', mappedName: null });
+  assert(kept.action === 'updated' && !Object.hasOwn(kept.values, String(c.consistency)), JSON.stringify(kept));
+  // label が空でも「F列が空の行」に一致して他PCの行を奪わないこと(新規追記になる)。
+  const blank = headers.map(() => ''); blank[c.selfPc] = '別PC';
+  const noHijack = context.fleetPlanUpsert(headers, [blank], { label: '', mappedName: null });
+  assert(noHijack.action === 'appended' && noHijack.rowIndex === 1, JSON.stringify(noHijack));
+});
+test('fleet upsert純関数: ヘッダの全角半角・空白差でも列を解決できる', () => {
+  const source = fs.readFileSync(path.join(repo, 'gas', 'fleet-status-sheet', 'UpsertLogic.gs'), 'utf8');
+  const context = {}; vm.createContext(context); vm.runInContext(source.replace(/\bconst\s+/g, 'var '), context);
+  const canonical = Object.values(context.FLEET_HEADERS_);
+  // 実セルが全角括弧・前後空白・全角英数で書かれていても解決できること(実表記は目視できない)。
+  const messy = canonical.map(function (h) { return ' ' + h.split('(').join('（').split(')').join('）') + ' '; });
+  const c = context.fleetResolveColumns(messy);
+  assert(Object.keys(c).length === canonical.length, JSON.stringify(c));
+  const planned = context.fleetPlanUpsert(messy, [], { label: 'host-x', mappedName: null });
+  assert(planned.action === 'appended' && planned.values[c.hostname] === 'host-x', JSON.stringify(planned));
+});
+test('fleet upsert純関数: D列重複でもF列labelで別行に入り他PCの行を奪わない', () => {
+  const source = fs.readFileSync(path.join(repo, 'gas', 'fleet-status-sheet', 'UpsertLogic.gs'), 'utf8');
+  const context = {}; vm.createContext(context); vm.runInContext(source.replace(/\bconst\s+/g, 'var '), context);
+  const headers = Object.values(context.FLEET_HEADERS_); const c = context.fleetResolveColumns(headers);
+  const row1 = headers.map(() => ''); row1[c.selfPc] = '金功勇PC'; row1[c.hostname] = 'kim-PC';
+  const row2 = headers.map(() => ''); row2[c.selfPc] = '金功勇PC'; row2[c.hostname] = 'kimko-PC';
+  const payload = { label: 'kimko-PC', mappedName: '金功勇PC' };
+  const existing = context.fleetPlanUpsert(headers, [row1, row2], payload);
+  assert(existing.action === 'updated' && existing.rowIndex === 1, JSON.stringify(existing));
+  const newPc = context.fleetPlanUpsert(headers, [row1, row2], { label: 'third-PC', mappedName: '金功勇PC' });
+  assert(newPc.action === 'appended' && newPc.rowIndex === 2, JSON.stringify(newPc));
+  const blank = headers.map(() => ''); blank[c.selfPc] = '金功勇PC';
+  const bindBlank = context.fleetPlanUpsert(headers, [row1, blank], { label: 'third-PC', mappedName: '金功勇PC' });
+  assert(bindBlank.action === 'updated' && bindBlank.rowIndex === 1 && bindBlank.values[c.hostname] === 'third-PC', JSON.stringify(bindBlank));
+});
+test('fleet WebApp: ヘッダタブ解決キャッシュとScriptLockを使う', () => {
+  const source = fs.readFileSync(path.join(repo, 'gas', 'fleet-status-sheet', 'WebApp.gs'), 'utf8');
+  assert(source.includes("getProperty('SHEET_TAB_NAME')") && source.includes('spreadsheet.getSheets()') && source.includes("throw new Error('fleet status tab not found')"), 'タブ解決要件が不足');
+  assert(source.includes('LockService.getScriptLock()') && source.includes('tryLock(20000)') && source.includes("status: 503, error: 'busy'") && source.includes('lock.releaseLock()'), 'ロック要件が不足');
 });
 
 if (failed) { console.log(`\n${failed} FAIL`); process.exit(1); }

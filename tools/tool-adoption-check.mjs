@@ -49,7 +49,10 @@ const INSTALL_DEDUP_MS = 30 * 60 * 1000;
 if (!DRY_RUN && !process.argv.includes('--force')) {
   try { const s = JSON.parse(fs.readFileSync(statePath, 'utf-8')); if (s.last && (Date.now() - new Date(s.last).getTime()) < GUARD_HOURS * 3600000) process.exit(0); } catch {}
   // 競合防止: ガード通過直後に即座に状態を書く(近接して複数回発火しても2回目以降はここで弾かれ、重複投稿しない)
-  try { fs.writeFileSync(statePath, JSON.stringify({ last: new Date().toISOString() })); } catch {}
+  try {
+    let current = {}; try { current = JSON.parse(fs.readFileSync(statePath, 'utf8')); } catch {}
+    fs.writeFileSync(statePath, JSON.stringify({ ...current, last: new Date().toISOString() }));
+  } catch {}
 }
 const USAGE_WINDOW_DAYS = 7;
 const now = Date.now();
@@ -463,8 +466,20 @@ if (!fixes.length && !installStarts.length && !human.length) msg += `\n(健全�
 msg += `※使用痕跡はセッションファイル/キー/MCP登録のみ判定。会話内容は読んでいません。`;
 
 console.log(msg);
+const adoptionState = {
+  last: new Date(now).toISOString(),
+  codexInstalled: Boolean(checks.find((c) => c.name === 'Codex')?.installed),
+  codexAuthed: Boolean(checks.find((c) => c.name === 'Codex')?.authed),
+  geminiInstalled: Boolean(checks.find((c) => c.name === 'Gemini')?.installed),
+  cheapAiCounts: providerCounts || {},
+  fable5OutTok: fableCount,
+  verdicts: Object.fromEntries(checks.map((c) => [c.name.toLowerCase(), { installed: Boolean(c.installed), used: Boolean(c.used), indeterminate: Boolean(c.indeterminate) }]).concat([['discipline', disc]])),
+};
 if (DRY_RUN) { console.log('\n--dry-run: Discord未送信'); process.exit(0); }
-try { fs.writeFileSync(statePath, JSON.stringify({ last: new Date(now).toISOString() })); } catch {}
+try {
+  let previous = {}; try { previous = JSON.parse(fs.readFileSync(statePath, 'utf8')); } catch {}
+  fs.writeFileSync(statePath, JSON.stringify({ ...previous, ...adoptionState }));
+} catch {}
 const webhook = loadEnv(path.join(HOME, '.claude', 'cost-reporter.env')).DISCORD_COST_WEBHOOK;
 if (!webhook) { console.error('DISCORD_COST_WEBHOOK未設定'); process.exit(1); }
 fetch(webhook, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: msg.slice(0, 1950) }) })

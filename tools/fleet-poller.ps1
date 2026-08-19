@@ -50,6 +50,7 @@ if ($dueDaily -and $repo) {
     $emoji = if ($ng -eq 0) { [char]0x2705 } else { [char]0x26A0 }
     $tail = ''; if ($ng -gt 0) { $tail = " … NG: $ngItems" }
     Post "$emoji **[$label]** 日次設定チェック: OK $ok / NG $ng$tail"
+    try { & node (Join-Path $repo 'tools\fleet-sheet-report.mjs') *> $null } catch {}
   }
 }
 

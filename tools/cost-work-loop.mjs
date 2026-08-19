@@ -11,7 +11,11 @@
 // 出力: ~/.claude/cost-directive.md (SessionStartで毎回私が読む=修正が行動に反映) + 任意でDiscord。
 //   実行: node cost-work-loop.mjs [--post] [--days 7]
 import fs from 'node:fs'; import path from 'node:path'; import os from 'node:os'; import { execSync } from 'node:child_process';
-const HOME = os.homedir();
+import { pathToFileURL } from 'node:url';
+import { recommendations } from './eval-harness.mjs';
+const nativeHome = os.homedir();
+function defaultHome() { return process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || nativeHome; }
+const HOME = defaultHome();
 const DAYS = parseInt((process.argv.find(a => a.startsWith('--days=')) || '').split('=')[1] || '7', 10) || 7;
 const POST = process.argv.includes('--post');
 const since = Date.now() - DAYS * 864e5;
@@ -22,9 +26,9 @@ function tier(m) { m = (m || '').toLowerCase(); if (m.includes('opus')) return '
 // ---- 1) Claude Code トークン/$ ----
 function walk(dir, out) { let e = []; try { e = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; } for (const d of e) { const p = path.join(dir, d.name); if (d.isDirectory()) walk(p, out); else if (d.name.endsWith('.jsonl')) out.push(p); } }
 // Codex は Windows ネイティブ/WSL のどちらからも使われる。明示指定時はその候補だけを使う。
-function codexSessionDirs() {
+export function codexSessionDirs(home = defaultHome()) {
   if (process.env.CODEX_SESSIONS_DIRS !== undefined) return process.env.CODEX_SESSIONS_DIRS.split(path.delimiter).filter(Boolean);
-  const dirs = [path.join(HOME, '.codex', 'sessions')];
+  const dirs = [path.join(home, '.codex', 'sessions')];
   const addUsers = (root) => {
     let users = []; try { users = fs.readdirSync(root, { withFileTypes: true }); } catch { return; }
     for (const user of users) if (user.isDirectory()) dirs.push(path.join(root, user.name, '.codex', 'sessions'));
@@ -39,7 +43,24 @@ function codexSessionDirs() {
   if (process.platform === 'linux') addUsers('/home');
   return [...new Set(dirs)];
 }
-let claudeOut = 0, claudeUSD = 0, claudeByModel = {};
+export function collectCodexUsage({ home = defaultHome(), days = 7, now = Date.now() } = {}) {
+  const cutoff = now - days * 864e5;
+  let outputTokens = 0, sessions = 0;
+  const files = [];
+  for (const dir of codexSessionDirs(home)) walk(dir, files);
+  for (const file of new Set(files)) {
+    let stat; try { stat = fs.statSync(file); } catch { continue; }
+    if (stat.mtimeMs < cutoff) continue;
+    let raw; try { raw = fs.readFileSync(file, 'utf8'); } catch { continue; }
+    const re = /"total_token_usage"\s*:\s*\{[^{}]*?"output_tokens"\s*:\s*(\d+)/g;
+    let match, last = null; while ((match = re.exec(raw)) !== null) last = Number(match[1]);
+    if (last !== null) { outputTokens += last; sessions++; }
+  }
+  return { outputTokens, sessions };
+}
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+if (isMain) {
+let claudeOut = 0, claudeUSD = 0, claudeByModel = {}, cacheBase = 0, cacheRead = 0, cacheWrite = 0;
 {
   const files = []; walk(path.join(HOME, '.claude', 'projects'), files);
   for (const f of files) {
@@ -53,6 +74,7 @@ let claudeOut = 0, claudeUSD = 0, claudeByModel = {};
       const u = j?.message?.usage; const model = j?.message?.model; if (!u) continue;
       // 正しいキャッシュ単価: 通常入力=1x / キャッシュ書込=1.25x / キャッシュ読取=0.1x / 出力=出力単価
       const baseIn = u.input_tokens || 0, cr = u.cache_read_input_tokens || 0, cc = u.cache_creation_input_tokens || 0;
+      cacheBase += baseIn; cacheRead += cr; cacheWrite += cc;
       const outT = u.output_tokens || 0; const t = tier(model);
       const [pi, po] = PRICE[t]; claudeUSD += (baseIn * pi + cc * pi * 1.25 + cr * pi * 0.1 + outT * po) / 1e6; claudeOut += outT;
       claudeByModel[t] = (claudeByModel[t] || 0) + outT;
@@ -60,26 +82,13 @@ let claudeOut = 0, claudeUSD = 0, claudeByModel = {};
   }
 }
 // ---- 2) Codex(定額枠) ----
-let codexOut = 0, codexSessions = 0;
-{
-  const files = [];
-  for (const dir of codexSessionDirs()) walk(dir, files);
-  for (const f of new Set(files)) {
-    let st; try { st = fs.statSync(f); } catch { continue; }
-    if (st.mtimeMs < since) continue;
-    let raw; try { raw = fs.readFileSync(f, 'utf-8'); } catch { continue; }
-    // total_token_usage は累積値なので、ファイル内の最後の output_tokens をセッション総計にする。
-    const re = /"total_token_usage"\s*:\s*\{[^{}]*?"output_tokens"\s*:\s*(\d+)/g;
-    let match, last = null; while ((match = re.exec(raw)) !== null) last = Number(match[1]);
-    if (last !== null) { codexOut += last; codexSessions++; }
-  }
-}
+const { outputTokens: codexOut, sessions: codexSessions } = collectCodexUsage({ home: HOME, days: DAYS });
 // ---- 3) 安いAI実行者 台帳 ----
 let execOut = 0, execUSD = 0, execByProv = {};
 {
   const led = path.join(HOME, '.claude', 'executor-usage.jsonl');
   let lines = []; try { lines = fs.readFileSync(led, 'utf-8').split('\n'); } catch { }
-  const EP = { groq: [0.6, 0.8], openrouter: [0.3, 0.6], gemini: [0.1, 0.4], kimi: [3, 15], mistral: [2, 6], deepseek: [0.27, 1.1], grok: [3, 15], ollama: [0, 0] };
+  const EP = { groq: [0.6, 0.8], openrouter: [0.3, 0.6], gemini: [0.1, 0.4], kimi: [3, 15], mistral: [2, 6], deepseek: [0.27, 1.1], grok: [3, 15], ollama: [0, 0], codex: [0, 0] };
   for (const ln of lines) { if (!ln.trim()) continue; let r; try { r = JSON.parse(ln); } catch { continue; } if (new Date(r.t).getTime() < since) continue; const [pi, po] = EP[r.provider] || [1, 3]; execUSD += ((r.in || 0) * pi + (r.out || 0) * po) / 1e6; execOut += (r.out || 0); execByProv[r.provider] = (execByProv[r.provider] || 0) + 1; }
 }
 // ---- 4) 作業量プロキシ(gitコミット) ----
@@ -104,25 +113,49 @@ if (claudeOut >= 1e6 && delegRatio < TARGET_DELEG) flags.push(`🚨 委譲不足
 if (codexSessions === 0) flags.push('⚠️ Codex未使用=実装を監督が抱えている疑い。実装はCodexへ委譲する');
 if (prev && typeof prev.claudeOut === 'number' && claudeOut > prev.claudeOut * 1.15 && work <= prev.work) flags.push(`🚨 利用効率悪化: Claude出力 ${(prev.claudeOut / 1000).toFixed(0)}k→${(claudeOut / 1000).toFixed(0)}k tok 増だが作業量(${workKind}) ${prev.work}→${work} 増えず。誤ルーティング/やり直し/呼びすぎを点検`);
 if (claudeByModel.opus && claudeOut && (claudeByModel.opus / claudeOut) > 0.5) flags.push(`⚠️ Opus比率高(${((claudeByModel.opus / claudeOut) * 100).toFixed(0)}%)。監督は最小限に、実装/生成は委譲(§1.18)`);
+const unused = [];
+if (!execByProv.kimi) unused.push('kimi(中量級生成)');
+if (!execByProv.groq) unused.push('groq(量産分類)');
+if (!execByProv.gemini) unused.push('gemini(長文脈)');
+let batchUsed = false;
+try {
+  const queueDir = path.join(HOME, '.claude', 'batch-queue');
+  for (const name of fs.readdirSync(queueDir)) {
+    if (name !== 'pending.jsonl' && !/^results-.*\.jsonl$/.test(name)) continue;
+    const file = path.join(queueDir, name);
+    if (fs.statSync(file).mtimeMs >= since && fs.readFileSync(file, 'utf8').trim()) { batchUsed = true; break; }
+  }
+} catch {}
+if (!batchUsed) unused.push('夜間バッチ(batch-enqueue)');
+flags.push(`⚠️ 未活用: ${unused.length ? unused.join(' / ') : 'なし'} — 該当作業が来たらここへ流す`);
 if (!flags.length) flags.push('✅ 委譲・コスト効率は許容範囲。この調子で。');
 
 const arrow = prev && typeof prev.claudeOut === 'number' ? (claudeOut > prev.claudeOut ? '↑' : claudeOut < prev.claudeOut ? '↓' : '→') : '';
 const execLine = Object.keys(execByProv).length ? Object.entries(execByProv).map(([k, v]) => `${k}:${v}回`).join(' / ') : '(なし=安いAI未使用)';
 const claudeModelLine = Object.keys(claudeByModel).length ? Object.entries(claudeByModel).map(([k, v]) => k + ' ' + (v / 1000).toFixed(0) + 'k').join('/') : '内訳なし';
+const cacheTarget = cacheRead + cacheWrite + cacheBase, cacheRate = cacheTarget ? cacheRead / cacheTarget : 0;
+const cacheLine = `${cacheTarget > 1_000_000 ? (cacheRate < 0.2 ? '🚨 ' : cacheRate < 0.5 ? '⚠️ ' : '✅ ') : ''}プロンプトキャッシュヒット率 ${(cacheRate * 100).toFixed(1)}% (対象 ${(cacheTarget / 1e6).toFixed(1)}M${cacheTarget <= 1_000_000 ? '・判定対象外' : ''})${cacheTarget > 1_000_000 && cacheRate < 0.2 ? ' — system 内に日時/ID などの動的値が入っている・JSON が非ソート・tools 定義が毎回変わる、を疑う' : ''}`;
+const qualityLines = recommendations();
+if (!qualityLines.length) qualityLines.push(fs.existsSync(path.join(HOME, '.claude', 'eval-results.jsonl')) ? '有効な計測なし（再計測が必要）' : 'eval 未実行 (node tools/eval-harness.mjs --all で計測)');
 const md = `<!-- COST-DIRECTIVE-START -->
-## 📊 Claude Code out ${(claudeOut / 1000).toFixed(0)}k tok / 委譲率 ${(delegRatio * 100).toFixed(0)}% (直近${DAYS}日 / このPC)
+## 📊 Claude Code out ${(claudeOut / 1000).toFixed(0)}k tok / 委譲率 ${(delegRatio * 100).toFixed(1)}% (直近${DAYS}日 / このPC)
 - Claude Code利用: **out ${(claudeOut / 1000).toFixed(0)}k tok** ${arrow} (${claudeModelLine}) ※定額シート課金＝請求$は発生しない
 - (参考: list価格換算 $${claudeUSD.toFixed(1)} — 実請求ではない)
 - 安いAI実行者: **実額 $${execUSD.toFixed(2)}**（従量課金）— ${execLine}
-- Codex(定額枠・実装の主経路): **out ${(codexOut / 1000).toFixed(0)}k tok** / ${codexSessions}セッション ※従量課金なし
+- Codex(定額枠・実装の主経路): **out ${codexOut.toLocaleString('ja-JP')} tok** / ${codexSessions}セッション ※従量課金なし
 - 作業量(${workKind}): ${work} / **作業あたり 出力 ${(outPerWork / 1000).toFixed(0)}k tok**
-- 委譲率(安いAI/Codexへ逃がせた割合): **${(delegRatio * 100).toFixed(0)}%**
+- 委譲率(安いAI/Codexへ逃がせた割合): **${(delegRatio * 100).toFixed(1)}%**
+- ${cacheLine}
 ### 指示
 ${flags.map(f => '- ' + f).join('\n')}
+### 品質ゲート
+${qualityLines.map((x) => '- ' + x).join('\n')}
 <!-- COST-DIRECTIVE-END -->
 `;
-fs.mkdirSync(path.join(HOME, '.claude'), { recursive: true });
-fs.writeFileSync(path.join(HOME, '.claude', 'cost-directive.md'), md);
+try {
+  fs.mkdirSync(path.join(HOME, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(HOME, '.claude', 'cost-directive.md'), md);
+} catch { }
 
 // --- 1週間観察→改善しなければハードブロックへ昇格(kim 2026-08-16) ---
 const today = new Date().toISOString().slice(0, 10);
@@ -132,15 +165,17 @@ while (hist.length > 14) hist.shift();
 const obsStart = (prev && prev.obsStart) ? prev.obsStart : today;
 const daysObserved = Math.round((Date.now() - new Date(obsStart + 'T00:00:00Z').getTime()) / 864e5);
 let enforce = 'warn', ereason = '観察中';
-if (daysObserved >= 7 && claudeOut >= 1e6 && delegRatio < TARGET_DELEG) {
+if (delegRatio < TARGET_DELEG / 3 && daysObserved >= 2 && claudeOut >= 1e6) {
+  enforce = 'block'; ereason = `委譲率${(delegRatio * 100).toFixed(1)}%=目標の1/3未満。2日で昇格`;
+} else if (daysObserved >= 7 && claudeOut >= 1e6 && delegRatio < TARGET_DELEG) {
   const avg = a => a.length ? a.reduce((s, x) => s + (x.delegRatio || 0), 0) / a.length : 0;
   const early = hist.slice(0, Math.max(1, Math.floor(hist.length / 2)));
   const recent = hist.slice(-3);
   if (avg(recent) <= avg(early) + 0.05) { enforce = 'block'; ereason = `${daysObserved}日観察して委譲率が改善せず(${(avg(early) * 100).toFixed(0)}%→${(avg(recent) * 100).toFixed(0)}%)。ハードブロック昇格`; }
   else { ereason = `改善傾向あり(${(avg(early) * 100).toFixed(0)}%→${(avg(recent) * 100).toFixed(0)}%)=警告継続`; }
 }
-fs.writeFileSync(path.join(HOME, '.claude', 'cost-enforce.json'), JSON.stringify({ mode: enforce, reason: ereason, since: obsStart, daysObserved, delegRatio, target: TARGET_DELEG }, null, 2));
-fs.writeFileSync(stateF, JSON.stringify({ t: new Date().toISOString(), totalUSD, claudeUSD, claudeOut, codexOut, codexSessions, execUSD, work, delegRatio, obsStart, history: hist }));
+try { fs.writeFileSync(path.join(HOME, '.claude', 'cost-enforce.json'), JSON.stringify({ mode: enforce, reason: ereason, since: obsStart, daysObserved, delegRatio, target: TARGET_DELEG }, null, 2)); } catch { }
+try { fs.writeFileSync(stateF, JSON.stringify({ t: new Date().toISOString(), totalUSD, claudeUSD, claudeOut, codexOut, codexSessions, execUSD, work, delegRatio, obsStart, history: hist })); } catch { }
 if (enforce === 'block') console.log(`\n🔒 ハードブロック昇格: ${ereason}（アプリ実装コードの直接編集をpretooluseフックが拒否します）`);
 console.log(md);
 
@@ -148,4 +183,5 @@ if (POST) {
   const wh = (() => { try { for (const l of fs.readFileSync(path.join(HOME, '.claude', 'cost-reporter.env'), 'utf-8').split(/\r?\n/)) if (l.startsWith('COST_WEBHOOK=') || l.startsWith('DISCORD_COST_WEBHOOK=')) return l.split('=').slice(1).join('=').trim(); } catch { } return process.env.COST_WEBHOOK || ''; })();
   if (wh) { const label = process.env.REPORTER_LABEL || os.hostname(); try { await fetch(wh, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: `**${label}** コスト×作業量ループ\n${md.replace(/<!--.*?-->/g, '').trim()}` }) }); console.error('Discord送信OK'); } catch (e) { console.error('Discord送信失敗:', e.message); } }
   else console.error('COST_WEBHOOK未設定=送信スキップ');
+}
 }

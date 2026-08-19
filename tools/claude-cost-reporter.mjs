@@ -18,10 +18,11 @@ import path from 'node:path';
 import os from 'node:os';
 
 const DRY_RUN = process.argv.includes('--dry-run');
+const nativeHome = os.homedir(); const HOME = process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || nativeHome;
 
 // --- 設定読み込み (~/.claude/cost-reporter.env) ---
 function loadEnv() {
-  const envPath = path.join(os.homedir(), '.claude', 'cost-reporter.env');
+  const envPath = path.join(HOME, '.claude', 'cost-reporter.env');
   const env = {};
   if (fs.existsSync(envPath)) {
     const raw = fs.readFileSync(envPath, 'utf-8');
@@ -67,7 +68,7 @@ function findTranscripts(root) {
 }
 
 // --- 1ファイルを1行ずつ処理。usage/model/timestamp だけ抜き、contentは触らない ---
-function processFile(filePath, monthStart, byModel, unknownModels) {
+function processFile(filePath, monthStart, byModel, unknownModels, cache) {
   let raw;
   try { raw = fs.readFileSync(filePath, 'utf-8'); } catch { return; }
   for (const line of raw.split('\n')) {
@@ -84,6 +85,7 @@ function processFile(filePath, monthStart, byModel, unknownModels) {
     const outTok = u.output_tokens || 0;
     const cacheWriteTok = u.cache_creation_input_tokens || 0;
     const cacheReadTok = u.cache_read_input_tokens || 0;
+    cache.base += inTok; cache.write += cacheWriteTok; cache.read += cacheReadTok;
     let cost = 0;
     if (price) {
       cost =
@@ -103,7 +105,7 @@ function processFile(filePath, monthStart, byModel, unknownModels) {
 }
 
 const GUARD_HOURS = 6;
-function statePath() { return path.join(os.homedir(), '.claude', '.cost-reporter-state.json'); }
+function statePath() { return path.join(HOME, '.claude', '.cost-reporter-state.json'); }
 function shouldSkipByGuard() {
   try {
     const s = JSON.parse(fs.readFileSync(statePath(), 'utf-8'));
@@ -135,12 +137,13 @@ function main() {
   const now = new Date();
   const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
 
-  const root = path.join(os.homedir(), '.claude', 'projects');
+  const root = path.join(HOME, '.claude', 'projects');
   const files = findTranscripts(root);
 
   const byModel = {};
   const unknownModels = new Set();
-  for (const f of files) processFile(f, monthStart, byModel, unknownModels);
+  const cache = { base: 0, write: 0, read: 0 };
+  for (const f of files) processFile(f, monthStart, byModel, unknownModels, cache);
 
   const total = Object.values(byModel).reduce((a, b) => a + b.cost, 0);
   const totalIn = Object.values(byModel).reduce((a, b) => a + b.inTok, 0);
@@ -153,6 +156,9 @@ function main() {
   let msg = `**💻 Claude Code ローカル利用トークン** — ${label}\n`;
   msg += `対象: ${monthStart} 〜 現在\n`;
   msg += `MTD 出力トークン: **${(totalOut / 1e6).toFixed(1)}M** / 入力(cache込) **${(totalIn / 1e6).toFixed(1)}M**\n`;
+  const cacheTarget = cache.read + cache.write + cache.base; const cacheRate = cacheTarget ? cache.read / cacheTarget : 0;
+  const cacheIcon = cacheTarget > 1_000_000 ? (cacheRate < 0.2 ? '🚨 ' : cacheRate < 0.5 ? '⚠️ ' : '✅ ') : '';
+  msg += `${cacheIcon}プロンプトキャッシュヒット率: **${(cacheRate * 100).toFixed(1)}%** (read ${(cache.read / 1e6).toFixed(1)}M / 対象 ${(cacheTarget / 1e6).toFixed(1)}M${cacheTarget <= 1_000_000 ? '・判定対象外' : ''})${cacheTarget > 1_000_000 && cacheRate < 0.2 ? ' — system 内に日時/ID などの動的値が入っている・JSON が非ソート・tools 定義が毎回変わる、を疑う' : ''}\n`;
   msg += `参考: list価格換算 $${total.toFixed(2)} ※Claude Codeは定額シート課金のため請求書には乗りません。実額の正本は console.anthropic.com(Dev API) / claude.ai 請求(シート)\n`;
   if (opusRatio > 0.5) msg += `⚠️ Opus比率高(${(opusRatio * 100).toFixed(0)}%)。監督は最小限に、実装/生成は委譲(§1.18)\n`;
   if (fableUsed) msg += `🚨 このPCでFable5(§1.16禁止)の使用を検出しました\n`;

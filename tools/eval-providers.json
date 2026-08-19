@@ -1,0 +1,10 @@
+[
+  {"provider":"groq","model":"openai/gpt-oss-120b","params":{"reasoning_effort":"low"}},
+  {"provider":"openrouter","model":"meta-llama/llama-3.3-70b-instruct"},
+  {"provider":"gemini","model":"gemini-3.7-flash","concurrency":1,"minIntervalMs":4000},
+  {"provider":"deepseek","model":"deepseek-chat"},
+  {"provider":"kimi","model":"kimi-k3","params":{"reasoning_effort":"none","temperature":0.6}},
+  {"provider":"mistral","model":"mistral-large-latest","concurrency":1,"minIntervalMs":4000},
+  {"provider":"ollama","model":"","skip":true},
+  {"provider":"anthropic","model":"claude-haiku-4-5-20251001"}
+]

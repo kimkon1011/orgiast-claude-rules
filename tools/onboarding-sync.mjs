@@ -81,6 +81,14 @@ async function syncRepository(now) {
       changed = true;
     }
     if (changed) { console.log('[onboarding-sync] updated repository tools/rules/skills'); log('updated repository tools/rules/skills'); }
+    // 新しく配布された hook を全PCへ自動登録する(add-only・差分が無ければ何も書かない)。
+    try {
+      const registrar = path.join(repoPath, 'tools', 'register-hooks.mjs');
+      if (fs.existsSync(registrar)) {
+        const out = execFileSync(process.execPath, [registrar, '--hooks-only'], { encoding: 'utf8', timeout: 20000, env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repoPath } }).trim();
+        if (out.includes('追加')) { console.log(`[onboarding-sync] ${out.trim()}`); log(out.replace(/\s+/g, ' ')); }
+      }
+    } catch (e) { log(`hook registration failed: ${e.message}`); }
   } catch (e) { log(`repo sync failed: ${e.message}`); }
 }
 function readEnvValue(file, name) {
@@ -105,7 +113,12 @@ async function provisionKeys(now) {
   if (dryRun) return;
   const previous = keysState();
   if (!force && previous?.last && now - new Date(previous.last) < 24 * 60 * 60 * 1000) return;
-  const secret = readEnvValue(path.join(home, '.claude', 'cost-reporter.env'), 'DISCORD_COST_WEBHOOK');
+  let secret = process.env.ORGIAST_KEYSERVE_SECRET || '';
+  if (!secret) secret = readEnvValue(path.join(home, '.claude', 'keyserve.env'), 'ORGIAST_KEYSERVE_SECRET');
+  if (!secret) {
+    secret = readEnvValue(path.join(home, '.claude', 'cost-reporter.env'), 'DISCORD_COST_WEBHOOK');
+    if (secret) log('legacy secret を使用中（keyserve.env 未受領）');
+  }
   if (!secret) return;
   try {
     const ts = Math.floor(Date.now() / 1000).toString();

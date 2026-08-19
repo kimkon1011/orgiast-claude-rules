@@ -27,7 +27,12 @@ try {
 function Post($msg) {
   if ($Dry) { Write-Host "[DRY POST] $msg"; return }
   if (-not $wh) { return }
-  try { Invoke-RestMethod -Uri $wh -Method Post -ContentType 'application/json' -Body (@{ content = $msg } | ConvertTo-Json) | Out-Null } catch {}
+  # 日本語が ? に化けるのを防ぐ: PS5.1 は -Body に文字列を渡すと非ASCIIを ? に落とすため、必ずUTF-8バイト列で送る
+  try {
+    $payload = @{ content = $msg } | ConvertTo-Json -Compress
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($payload)
+    Invoke-RestMethod -Uri $wh -Method Post -ContentType 'application/json; charset=utf-8' -Body $bytes | Out-Null
+  } catch {}
 }
 function RunPs($path, $extra) { if (Test-Path $path) { return (& powershell -NoProfile -ExecutionPolicy Bypass -File $path @extra 2>&1 | Out-String) } return '' }
 

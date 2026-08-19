@@ -138,9 +138,43 @@ test('codex-do: --cwd 省略でも指示文が消えない', () => {
 function makeToolAdoptionTestEnv(prefix) {
   const home = makeTempHome(prefix);
   const bin = path.join(home, 'bin'); fs.mkdirSync(bin, { recursive: true });
-  const gemini = path.join(bin, 'gemini'); fs.writeFileSync(gemini, '#!/bin/sh\necho gemini-test\n'); fs.chmodSync(gemini, 0o755);
-  return { home, env: { ORGIAST_HOME: home, PATH: bin, DISCORD_COST_WEBHOOK: '' } };
+  for (const tool of ['codex', 'gemini']) {
+    const shim = path.join(bin, tool); fs.writeFileSync(shim, `#!/bin/sh\necho ${tool}-test\n`); fs.chmodSync(shim, 0o755);
+    if (process.platform === 'win32') fs.writeFileSync(path.join(bin, `${tool}.cmd`), `@echo ${tool}-test\r\n`);
+  }
+  return { home, env: { ORGIAST_HOME: home, PATH: bin + path.delimiter + (process.env.PATH || ''), DISCORD_COST_WEBHOOK: '' } };
 }
+test('tool-adoption-check: timeoutは未導入や手動installにしない', () => {
+  const home = makeTempHome('orgiast-adoption-timeout-test-');
+  const bin = path.join(home, 'bin'); fs.mkdirSync(bin, { recursive: true });
+  const r = run('tool-adoption-check.mjs', undefined, ['--fix', '--dry-run'], {
+    ORGIAST_HOME: home, PATH: bin, DISCORD_COST_WEBHOOK: '', TOOL_ADOPTION_FORCE_TIMEOUT: 'codex,gemini', TOOL_ADOPTION_FORCE_ABSENT: 'codex,gemini', TOOL_ADOPTION_FAKE_DISTRO: '',
+  });
+  assert(r.status === 0 && (r.stdout.match(/判定不能\(プローブがタイムアウト・次回再判定\)/g) || []).length === 2, r.stdout || r.stderr);
+  assert(!r.stdout.includes('未導入') && !r.stdout.includes('npm i -g'), r.stdout);
+  assert(!fs.existsSync(path.join(home, '.claude', 'tool-adoption-install.state')), 'timeoutで自動導入が開始された');
+});
+test('tool-adoption-check: FORCE_MISSINGは未導入と導入導線を維持', () => {
+  const home = makeTempHome('orgiast-adoption-missing-test-');
+  const bin = path.join(home, 'bin'); fs.mkdirSync(bin, { recursive: true });
+  const r = run('tool-adoption-check.mjs', undefined, ['--fix', '--dry-run'], {
+    ORGIAST_HOME: home, PATH: bin + path.delimiter + (process.env.PATH || ''), DISCORD_COST_WEBHOOK: '', TOOL_ADOPTION_FORCE_MISSING: 'codex,gemini', TOOL_ADOPTION_FAKE_DISTRO: 'Ubuntu', TOOL_ADOPTION_INSTALL_CMD: 'echo install-test',
+  });
+  assert(r.status === 0 && (r.stdout.match(/未導入/g) || []).length >= 2, r.stdout || r.stderr);
+  assert(r.stdout.includes('Codex 導入をバックグラウンドで開始') && r.stdout.includes('Gemini CLI 導入をバックグラウンドで開始'), r.stdout);
+});
+test('tool-adoption-check: timeoutでも存在フォールバックで導入済み', () => {
+  const { home, env } = makeToolAdoptionTestEnv('orgiast-adoption-presence-test-');
+  const r = run('tool-adoption-check.mjs', undefined, ['--dry-run'], { ...env, TOOL_ADOPTION_FORCE_TIMEOUT: 'codex,gemini', TOOL_ADOPTION_FORCE_PRESENT: 'codex,gemini', TOOL_ADOPTION_FAKE_DISTRO: '' });
+  assert(r.status === 0 && !r.stdout.includes('未導入') && !r.stdout.includes('判定不能'), r.stdout || r.stderr);
+  assert((r.stdout.match(/バージョン取得はタイムアウト/g) || []).length === 2, r.stdout);
+});
+test('tool-adoption-check: 全体デッドライン超過でもレポートを完走', () => {
+  const { env } = makeToolAdoptionTestEnv('orgiast-adoption-deadline-test-');
+  const r = run('tool-adoption-check.mjs', undefined, ['--dry-run'], { ...env, TOOL_ADOPTION_DEADLINE_MS: '1' });
+  assert(r.status === 0 && r.stdout.includes('※一部の判定はデッドライン超過でスキップしました(次回再判定)'), r.stdout || r.stderr);
+  assert(r.stdout.includes('※使用痕跡はセッションファイル/キー/MCP登録のみ判定。会話内容は読んでいません。') && r.stdout.includes('--dry-run: Discord未送信'), r.stdout);
+});
 test('tool-adoption-check: 新しい同一target stateなら導入をスキップ', () => {
   const { home, env } = makeToolAdoptionTestEnv('orgiast-adoption-state-test-');
   const claude = path.join(home, '.claude'); fs.mkdirSync(claude, { recursive: true });

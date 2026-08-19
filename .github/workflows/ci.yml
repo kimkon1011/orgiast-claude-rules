@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run Node.js tests
+        run: node --test tools/*.test.mjs
+
+      - name: Run guard self-tests
+        run: node tools/selftest-guards.mjs
+
+      - name: Check JavaScript syntax
+        run: find . -type f -name '*.mjs' -not -path './.git/*' -print0 | xargs -0 -n1 node --check

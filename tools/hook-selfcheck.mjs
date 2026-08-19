@@ -10,6 +10,7 @@ export const REQUIRED_HOOKS = [
   ['PreToolUse', 'model-agent-guard.mjs'],
   ['UserPromptSubmit', 'cost-routing-gate.mjs'],
   ['UserPromptSubmit', 'session-purpose-gate.mjs'],
+  ['UserPromptSubmit', 'makimono-gate.mjs'],
   ['SessionStart', 'hook-selfcheck.mjs'],
 ];
 try {

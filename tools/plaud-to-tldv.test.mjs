@@ -34,7 +34,7 @@ test('署名 URL のパスから拡張子を安全に判定する', () => {
   assert.equal(extensionFromUrl('https://s3.example/audio.M4A?X-Amz-Signature=secret'), '.m4a');
   assert.equal(isTldvSupportedUrl('https://s3.example/audio.M4A?x=1'), true);
   assert.equal(extensionFromUrl('https://s3.example/audio?x=1'), '');
-  assert.equal(isTldvSupportedUrl('https://s3.example/audio.opus?x=1'), false);
+  assert.equal(isTldvSupportedUrl('https://s3.example/audio.txt?x=1'), false);
 });
 
 test('リージョン不一致 envelope の api host を逆引きする', () => {
@@ -128,4 +128,10 @@ test('中継URLは900文字以内で、鍵が違えば別物になる', () => {
   assert.ok(a.length <= 900, `URL が長すぎる: ${a.length}`);
   assert.match(a, /^https:\/\/p\.example\.com\/a\/[\w-]+\/audio\.ogg$/);
   assert.notEqual(a, buildProxyUrl({ ...args, secret: 's2' }));
+});
+
+test('中継URLの .ogg は tl;dv 対応形式として扱う(実測で確認済み)', () => {
+  assert.equal(isTldvSupportedUrl('https://p.example.com/a/tok/audio.ogg'), true);
+  assert.equal(isTldvSupportedUrl('https://p.example.com/a/tok/audio.mp3'), true);
+  assert.equal(isTldvSupportedUrl('https://p.example.com/a/tok/audio.txt'), false);
 });

@@ -16,7 +16,9 @@ export const REGION_BASES = Object.freeze({
 });
 const TLDV_BASE = 'https://pasta.tldv.io';
 const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
-const SUPPORTED_EXTENSIONS = new Set(['.mp3', '.mp4', '.wav', '.m4a', '.mkv', '.mov', '.avi', '.wma', '.flac']);
+// tl;dv の公式ドキュメントは .ogg/.opus を挙げていないが、中継URL経由で実際に
+// 取り込めることを実測で確認した(2026-08-19、21分の .ogg が正常に処理された)。
+const SUPPORTED_EXTENSIONS = new Set(['.mp3', '.mp4', '.wav', '.m4a', '.mkv', '.mov', '.avi', '.wma', '.flac', '.ogg', '.opus']);
 const FIVE_MINUTES = 5 * 60;
 const THREE_HOURS = 3 * 60 * 60;
 
@@ -318,7 +320,8 @@ function plainDateName(name) {
 }
 
 function meetingName(record, iso) {
-  const raw = String(record.fullname || record.filename || '').trim();
+  // fullname は S3 のキー(ハッシュ.ogg)で、人が付けた題名は filename の方。
+  const raw = String(record.filename || '').trim();
   if (!plainDateName(raw)) return raw;
   const date = iso ? new Date(iso) : new Date();
   const parts = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Tokyo', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(date);
@@ -490,7 +493,7 @@ export async function run(argv = process.argv.slice(2), dependencies = {}) {
       if (!decision.import) {
         summary.skipped += 1;
         if (record?.id && decision.reason !== 'imported') state.skipped[record.id] = { reason: decision.reason, at: Date.now() };
-        if (decision.reason === 'over-three-hours') log.warn(`${record.fullname || record.filename || record.id} は3時間超のため除外しました`);
+        if (decision.reason === 'over-three-hours') log.warn(`${record.filename || record.id} は3時間超のため除外しました`);
         continue;
       }
       if (attempted >= options.limit) { summary.skipped += 1; continue; }
@@ -506,7 +509,7 @@ export async function run(argv = process.argv.slice(2), dependencies = {}) {
           : tempUrl;
         if (!options.allowUnsupported && !isTldvSupportedUrl(targetUrl)) {
           const extension = extensionFromUrl(targetUrl) || '(拡張子なし)';
-          log.warn(`${record.fullname || record.filename || record.id}: 非対応拡張子 ${extension}`);
+          log.warn(`${record.filename || record.id}: 非対応拡張子 ${extension}`);
           state.skipped[record.id] = { reason: `unsupported-extension:${extension}`, at: Date.now() }; summary.skipped += 1; continue;
         }
         const happenedAt = epochToIso(record.start_time);
@@ -518,7 +521,7 @@ export async function run(argv = process.argv.slice(2), dependencies = {}) {
         summary.imported += 1;
         if (!options.dryRun) { state.imported[record.id] = { jobId: body.jobId || '', name: payload.name, at: Date.now() }; persist(); }
         log.verbose(`${payload.name} を import しました jobId=${body.jobId || ''}`);
-      } catch (error) { summary.failed += 1; log.warn(`${record.fullname || record.filename || record.id}: ${error.message}`); }
+      } catch (error) { summary.failed += 1; log.warn(`${record.filename || record.id}: ${error.message}`); }
     }
     if (!options.dryRun) { state.lastRun = Date.now(); persist(); }
     console.log(options.json ? JSON.stringify(summary) : `imported=${summary.imported} skipped=${summary.skipped} failed=${summary.failed}`);

@@ -46,7 +46,7 @@ test('llm-ask: BOM付きenvのキー状態を値なしで診断', () => {
 test('hook-selfcheck: BOMを修復し、正常時はBOM報告なし', () => {
   const temp = makeTempHome('orgiast-hook-bom-test-'); const claude = path.join(temp, '.claude'); fs.mkdirSync(claude, { recursive: true });
   // 必須hookを登録済みにしてBOMメッセージだけを観測する。
-  const hooks = {}; for (const [event, script] of [['PreToolUse','model-agent-guard.mjs'],['UserPromptSubmit','cost-routing-gate.mjs'],['UserPromptSubmit','session-purpose-gate.mjs'],['SessionStart','hook-selfcheck.mjs']]) (hooks[event] ||= []).push({ hooks: [{ command: script }] }); fs.writeFileSync(path.join(claude, 'settings.json'), JSON.stringify({ hooks }));
+  const hooks = {}; for (const [event, script] of [['PreToolUse','model-agent-guard.mjs'],['UserPromptSubmit','cost-routing-gate.mjs'],['UserPromptSubmit','session-purpose-gate.mjs'],['SessionStart','hook-selfcheck.mjs'],['UserPromptSubmit','makimono-gate.mjs']]) (hooks[event] ||= []).push({ hooks: [{ command: script }] }); fs.writeFileSync(path.join(claude, 'settings.json'), JSON.stringify({ hooks }));
   const file = path.join(claude, 'groq.env'); fs.writeFileSync(file, '\uFEFFGROQ_API_KEY=x\n'); const first = run('hook-selfcheck.mjs', undefined, [], { ORGIAST_HOME: temp, ORGIAST_REPO: repo }); assert(first.stdout.includes('BOM を除去しました(1件)') && !fs.readFileSync(file).subarray(0,3).equals(Buffer.from([0xef,0xbb,0xbf])), first.stdout || first.stderr);
   const second = run('hook-selfcheck.mjs', undefined, [], { ORGIAST_HOME: temp, ORGIAST_REPO: repo }); assert(!second.stdout.includes('BOM を除去'), second.stdout || second.stderr);
 });
@@ -208,6 +208,83 @@ test('codex-do: dry-run に MEMORY.md を同梱', () => {
   fs.writeFileSync(path.join(memoryDir, 'MEMORY.md'), 'SELFTEST_MEMORY_MARKER\n');
   const r = run('codex-do.mjs', undefined, ['テスト実装', '--cwd', target, '--dry-run'], { ORGIAST_HOME: temp });
   assert(r.status === 0 && r.stdout.includes('SELFTEST_MEMORY_MARKER'), r.stdout || r.stderr);
+});
+
+
+// ---- マキモノ連携 ----
+// gate は UserPromptSubmit hook。top-level await の中で process.exit() を呼ぶと Windows の Node が
+// `Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)` で異常終了する(v24.14.1 実測・3/3再現)。
+// stdout に候補を書けていても exit!=0 だと Claude Code が hook 失敗として扱い注入が丸ごと捨てられ、
+// しかも落ちるのはキャッシュ切れ(24h毎)の初回プロンプトだけなので、気付かないまま機能が死ぬ。
+test('makimono-gate: process.exit を使わない(Windowsでhookが落ちて注入が捨てられる)', () => {
+  const source = fs.readFileSync(path.join(toolsDir, 'makimono-gate.mjs'), 'utf8');
+  assert(!/process\.exit\s*\(/.test(source), 'process.exit が残っている(top-level awaitと併用するとWindowsで落ちる)');
+  assert(/await main\(\)/.test(source), 'main() を await していない');
+});
+
+// カタログを事前投入して fetch させない(ネットワークとマキモノ本番APIに依存しないため)。
+const MAKIMONO_ITEM = {
+  slug: 'selftest-discord-bot', title: 'Discord 日報Bot 開発指示書', summary: 'KPIを毎朝通知する',
+  category: '業務自動化', tags: ['discord', 'bot'], is_free: true, price: 0, content_tokens: 300, roi: 600,
+  links: { raw: '/api/v1/files/selftest-discord-bot/raw' },
+};
+function seedMakimonoCatalog(prefix, items = [MAKIMONO_ITEM]) {
+  const home = makeTempHome(prefix);
+  const claude = path.join(home, '.claude'); fs.mkdirSync(claude, { recursive: true });
+  fs.writeFileSync(path.join(claude, '.makimono-cache.json'), JSON.stringify({ __catalog__: { at: new Date().toISOString(), items } }));
+  return home;
+}
+test('makimono-gate: キャッシュ済み候補を注入して exit 0', () => {
+  const home = seedMakimonoCatalog('orgiast-makimono-gate-test-');
+  const r = run('makimono-gate.mjs', { session_id: 'selftest-1', prompt: 'Discordに毎朝KPIを通知するbotを作って' }, [], { ORGIAST_HOME: home });
+  assert(r.status === 0 && !r.stderr.includes('Assertion failed'), `status=${r.status} ${r.stderr}`);
+  const output = JSON.parse(r.stdout);
+  assert(output.hookSpecificOutput?.hookEventName === 'UserPromptSubmit', r.stdout);
+  assert(output.hookSpecificOutput.additionalContext.includes('Discord 日報Bot 開発指示書'), r.stdout);
+});
+test('makimono-gate: 無関係なプロンプトには何も注入しない', () => {
+  const home = seedMakimonoCatalog('orgiast-makimono-quiet-test-');
+  const r = run('makimono-gate.mjs', { session_id: 'selftest-2', prompt: '今日の天気はどう?' }, [], { ORGIAST_HOME: home });
+  assert(r.status === 0 && r.stdout.trim() === '', r.stdout || r.stderr);
+});
+test('makimono-gate: 同一セッションで同じ指示書を再提案しない', () => {
+  const home = seedMakimonoCatalog('orgiast-makimono-dedupe-test-');
+  const input = { session_id: 'selftest-3', prompt: 'Discordに通知するbotを作って' };
+  const first = run('makimono-gate.mjs', input, [], { ORGIAST_HOME: home });
+  const second = run('makimono-gate.mjs', input, [], { ORGIAST_HOME: home });
+  assert(first.stdout.includes('selftest-discord-bot'), first.stdout || first.stderr);
+  assert(second.status === 0 && second.stdout.trim() === '', second.stdout || second.stderr);
+});
+test('makimono-publish: 秘匿値・社内固有名は送信せず下書きへ退避し、値を伏せる', () => {
+  const home = makeTempHome('orgiast-makimono-publish-test-');
+  const file = path.join(home, 'draft.md');
+  fs.writeFileSync(file, ['# 手順', 'オージャストの案件を通知する。', 'APIキー: sk-selftestSECRETVALUE0123456789', ''].join('\n'));
+  const r = run('makimono-publish.mjs', undefined, ['--file', file, '--submit', '--title', 'テスト指示書', '--summary', '20文字以上のサマリーをここに書いておく', '--category', '業務自動化'], { ORGIAST_HOME: home });
+  assert(r.status === 2, `status=${r.status} ${r.stdout} ${r.stderr}`);
+  assert(r.stderr.includes('送信せず下書きへ退避'), r.stderr || r.stdout);
+  assert(!r.stderr.includes('selftestSECRETVALUE'), '秘匿値がそのまま出力された');
+  assert(!fs.existsSync(path.join(home, '.claude', 'makimono-submissions.json')), '送信ログが作られた(送信された疑い)');
+  const drafts = path.join(home, '.claude', 'makimono-drafts');
+  assert(fs.existsSync(drafts) && fs.readdirSync(drafts).length === 1, '下書きへ退避されていない');
+});
+test('makimono-publish: 一般化済み本文は送信禁止パターン0件', () => {
+  const home = makeTempHome('orgiast-makimono-clean-test-');
+  const file = path.join(home, 'clean.md');
+  fs.writeFileSync(file, ['# チャットへ日次通知する', 'メール例: <user>@<example.com>', '手順: 集計して通知チャンネルへ送る。', ''].join('\n'));
+  const r = run('makimono-publish.mjs', undefined, ['--file', file, '--scan'], { ORGIAST_HOME: home });
+  assert(r.status === 0 && r.stdout.includes('送信禁止パターン: 0件'), r.stdout || r.stderr);
+});
+test('hook-selfcheck: makimono-gate の欠落を自動登録する', () => {
+  const home = makeTempHome('orgiast-makimono-hook-test-');
+  const claude = path.join(home, '.claude'); fs.mkdirSync(claude, { recursive: true });
+  const hooks = {};
+  for (const [event, script] of [['PreToolUse', 'model-agent-guard.mjs'], ['UserPromptSubmit', 'cost-routing-gate.mjs'], ['UserPromptSubmit', 'session-purpose-gate.mjs'], ['SessionStart', 'hook-selfcheck.mjs']]) (hooks[event] ||= []).push({ hooks: [{ command: script }] });
+  fs.writeFileSync(path.join(claude, 'settings.json'), JSON.stringify({ hooks }));
+  const r = run('hook-selfcheck.mjs', undefined, [], { ORGIAST_HOME: home, ORGIAST_REPO: repo });
+  assert(r.stdout.includes('makimono-gate.mjs'), `自動登録メッセージなし stdout=${JSON.stringify(r.stdout)} stderr=${r.stderr}`);
+  const after = JSON.parse(fs.readFileSync(path.join(claude, 'settings.json'), 'utf8'));
+  const commands = (after.hooks?.UserPromptSubmit || []).flatMap((g) => (g.hooks || []).map((h) => String(h.command || '')));
+  assert(commands.some((c) => c.includes('makimono-gate.mjs')), JSON.stringify(commands));
 });
 
 if (failed) { console.log(`\n${failed} FAIL`); process.exit(1); }

@@ -6,11 +6,13 @@ import { spawn, spawnSync } from 'node:child_process';
 
 const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
+const forceNative = args.includes('--force-native');
 const cwdIndex = args.indexOf('--cwd');
 const cwd = path.resolve(cwdIndex >= 0 && args[cwdIndex + 1] ? args[cwdIndex + 1] : process.cwd());
 // cwdIndex が -1 のとき cwdIndex+1 が 0 になり、指示文(第1引数)を捨ててしまうので条件付きで除外する。
 const omitted = new Set();
 if (dryRun) omitted.add(args.indexOf('--dry-run'));
+if (forceNative) omitted.add(args.indexOf('--force-native'));
 if (cwdIndex >= 0) { omitted.add(cwdIndex); omitted.add(cwdIndex + 1); }
 const instruction = args.filter((_, index) => !omitted.has(index)).join(' ').trim();
 if (!instruction) { console.error('使い方: node tools/codex-do.mjs "<指示>" [--cwd <path>] [--dry-run]'); process.exit(2); }
@@ -63,24 +65,47 @@ if (dryRun) { console.log(prompt); process.exit(0); }
 const started = Date.now();
 function execute(command, commandArgs, options = {}) {
   return new Promise((resolve) => {
-    let outputChars = 0;
+    let outputChars = 0, output = '';
     const child = spawn(command, commandArgs, { ...options, stdio: ['pipe', 'pipe', 'pipe'] });
-    child.stdout.on('data', (chunk) => { outputChars += chunk.length; process.stdout.write(chunk); });
+    child.stdout.on('data', (chunk) => { outputChars += chunk.length; output += chunk.toString(); process.stdout.write(chunk); });
     child.stderr.on('data', (chunk) => { process.stderr.write(chunk); });
-    child.on('error', (error) => resolve({ status: null, error, outputChars }));
-    child.on('close', (status) => resolve({ status, outputChars }));
+    child.on('error', (error) => resolve({ status: null, error, outputChars, output }));
+    child.on('close', (status) => resolve({ status, outputChars, output }));
     child.stdin.end(prompt);
   });
 }
 let result;
-if (process.platform === 'win32') {
-  result = await execute('wsl', ['-d', 'Ubuntu', '--cd', cwd, '--', 'codex', 'exec', '-']);
-  if (result.error || result.status !== 0) result = await execute('codex', ['exec', '-'], { cwd });
+if (process.platform === 'win32' && !forceNative) {
+  const listed = spawnSync('wsl', ['-l', '-q'], { encoding: 'utf16le', timeout: 15000 });
+  const distros = listed.status === 0 ? listed.stdout.split(/\r?\n/).map((x) => x.replace(/\0/g, '').trim()).filter(Boolean) : [];
+  const distro = distros.find((x) => x.toLowerCase() === 'ubuntu') || distros[0];
+  let usable = false;
+  if (distro) {
+    usable = spawnSync('wsl', ['-d', distro, '--', 'codex', '--version'], { stdio: 'ignore', timeout: 15000 }).status === 0;
+    if (!usable) {
+      console.error(`WSL ${distro} に Codex がないため自動インストールを試します`);
+      spawnSync('wsl', ['-d', distro, '--', 'npm', 'i', '-g', '@openai/codex'], { stdio: 'inherit', timeout: 120000 });
+      usable = spawnSync('wsl', ['-d', distro, '--', 'codex', '--version'], { stdio: 'ignore', timeout: 15000 }).status === 0;
+    }
+  }
+  if (usable) result = await execute('wsl', ['-d', distro, '--cd', cwd, '--', 'codex', 'exec', '-s', 'workspace-write', '-']);
+  else {
+    console.error('⚠️ WSL 経路が使えないためネイティブ Windows codex で実行します。\nWindows 版は read-only サンドボックス固定でファイルを書けない既知の不具合(openai/codex#35428)があり、編集が保存されない可能性が高い。WSL の導入を推奨');
+    result = await execute('codex', ['exec', '-s', 'workspace-write', '-'], { cwd });
+  }
 } else {
-  result = await execute('codex', ['exec', '-'], { cwd });
+  if (process.platform === 'win32') console.error('⚠️ --force-native によりネイティブ Windows codex で実行します。編集が保存されない可能性があります');
+  result = await execute('codex', ['exec', '-s', 'workspace-write', '-'], { cwd });
 }
 const secs = (Date.now() - started) / 1000;
-spawnSync('git', ['-C', cwd, 'diff', '--stat'], { stdio: ['ignore', 'inherit', 'inherit'] });
+const diff = spawnSync('git', ['-C', cwd, 'diff', '--stat'], { encoding: 'utf8' });
+if (diff.stdout) process.stdout.write(diff.stdout);
+// 読み取り専用の質問(説明して/調べて)では空diffが正常なので、指示自体が実装系のときだけ判定する。
+const wantedEdit = /実装|作って|修正|直して|追加して|リファクタ|refactor|fix|implement/i.test(instruction);
+if (wantedEdit && !diff.stdout.trim() && /実装|変更|修正|implemented|updated|modified/i.test(result.output || '')) {
+  console.error('🚨 Codex は変更を書き込めていません（read-only サンドボックスの疑い）。WSL 経路で再実行してください');
+  result.status = 1;
+}
 try {
   const ledger = path.join(home, '.claude', 'executor-usage.jsonl');
   fs.mkdirSync(path.dirname(ledger), { recursive: true });

@@ -16,7 +16,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
+import { parseEnvText } from './env-kv.mjs';
+import { codexSessionDirs } from './cost-work-loop.mjs';
 
 const DRY_RUN = process.argv.includes('--dry-run');
 const DO_FIX = process.argv.includes('--fix');
@@ -35,17 +37,25 @@ const now = Date.now();
 const daysAgo = (ms) => (now - ms) / 86400000;
 
 function loadEnv(file) {
-  const env = {};
-  try {
-    for (const line of fs.readFileSync(file, 'utf-8').split(/\r?\n/)) {
-      const i = line.indexOf('='); if (i > 0 && !line.trim().startsWith('#')) env[line.slice(0, i).trim()] = line.slice(i + 1).trim();
-    }
-  } catch { /* no file */ }
-  return env;
+  try { return parseEnvText(fs.readFileSync(file, 'utf8')); } catch { return {}; }
 }
 
 function cmdOk(cmd) { try { execSync(cmd, { stdio: 'pipe', timeout: 15000 }); return true; } catch { return false; } }
 function cmdOut(cmd) { try { return execSync(cmd, { stdio: 'pipe', timeout: 15000 }).toString().trim(); } catch { return ''; } }
+function wslDistros() {
+  if (process.platform !== 'win32') return [];
+  try { return execSync('wsl.exe -l -q', { stdio: ['ignore', 'pipe', 'ignore'], timeout: 15000 }).toString('utf16le').split(/\r?\n/).map((s) => s.replace(/\0/g, '').trim()).filter(Boolean); } catch { return []; }
+}
+function preferredDistro() { const all = wslDistros(); return all.find((x) => x.toLowerCase() === 'ubuntu') || all[0] || ''; }
+// wsl -d に引用符付きで渡すと cmd.exe 経由で壊れて必ず失敗する(実測)。shellを介さず配列で渡す。
+function wslRun(distro, argv) {
+  const tries = distro ? [['-d', distro, '--', ...argv], ['--', ...argv]] : [['--', ...argv]];
+  for (const args of tries) {
+    try { return execFileSync('wsl.exe', args, { stdio: ['ignore', 'pipe', 'ignore'], timeout: 120000 }).toString().trim() || 'ok'; } catch {}
+  }
+  return '';
+}
+function wslCodexVersion(distro) { return wslRun(distro, ['codex', '--version']); }
 
 // 再帰で最新mtime(ms)を返す。無ければ0。
 function newestMtime(dir, filterExt) {
@@ -79,23 +89,6 @@ function transcriptHits(regex, windowDays) {
     }
   })(root);
   return hit;
-}
-
-function codexSessionDirs() {
-  if (process.env.CODEX_SESSIONS_DIRS !== undefined) return process.env.CODEX_SESSIONS_DIRS.split(path.delimiter).filter(Boolean);
-  const dirs = [path.join(HOME, '.codex', 'sessions')];
-  const addUsers = (root) => {
-    let users = []; try { users = fs.readdirSync(root, { withFileTypes: true }); } catch { return; }
-    for (const user of users) if (user.isDirectory()) dirs.push(path.join(root, user.name, '.codex', 'sessions'));
-  };
-  // `//wsl.localhost/` のルートは列挙できない(ENOENT)。ディストリ名は wsl.exe から取る(出力はUTF-16LE)。
-  if (process.platform === 'win32') {
-    let distros = [];
-    try { distros = execSync('wsl.exe -l -q', { stdio: ['ignore', 'pipe', 'ignore'], timeout: 15000 }).toString('utf16le').split(/\r?\n/).map((s) => s.trim()).filter(Boolean); } catch { }
-    for (const distro of distros) addUsers(`//wsl.localhost/${distro}/home`);
-  }
-  if (process.platform === 'linux') addUsers('/home');
-  return [...new Set(dirs)];
 }
 
 const ledgerPath = path.join(HOME, '.claude', 'executor-usage.jsonl');
@@ -142,19 +135,27 @@ const human = [];   // 人手が要る残タスク(最小1操作)
 
 // ---- Codex ----
 function checkCodex() {
-  let installed = cmdOk('codex --version');
-  let version = installed ? cmdOut('codex --version') : '';
-  if (!installed && process.platform === 'win32') {
-    version = cmdOut('wsl -- codex --version');
-    installed = !!version;
-  }
+  const distro = preferredDistro();
+  const nativeVersion = cmdOut('codex --version');
+  let version = process.platform === 'win32' ? wslCodexVersion(distro) : nativeVersion;
+  let installed = !!version;
+  const nativeOnly = process.platform === 'win32' && !!nativeVersion && !installed;
   const authed = fs.existsSync(path.join(HOME, '.codex', 'auth.json'));
-  const lastUsed = Math.max(0, ...codexSessionDirs().map((dir) => newestMtime(dir, '.jsonl')));
+  const lastUsed = Math.max(0, ...codexSessionDirs(HOME).map((dir) => newestMtime(dir, '.jsonl')));
   const usedDays = lastUsed ? daysAgo(lastUsed) : Infinity;
   const used = usedDays <= USAGE_WINDOW_DAYS;
-  if (!installed && DO_FIX) { if (cmdOk('npm i -g @openai/codex')) fixes.push('Codex CLI を npm install'); else human.push('Codex CLI 導入失敗→手動 `npm i -g @openai/codex`'); }
+  if (!installed && DO_FIX && distro) {
+    if (wslRun(distro, ['npm', 'i', '-g', '@openai/codex'])) { fixes.push(`Codex CLI を WSL(${distro}) に npm install`); version = wslCodexVersion(distro); installed = !!version; }
+    else human.push(`Codex CLI 導入失敗→手動 \`wsl -d ${distro} -- npm i -g @openai/codex\``);
+  }
+  if (!installed && process.platform === 'win32') {
+    if (distro) human.push(`Windows版codexはread-onlyサンドボックス固定で実装に使えない。\`wsl -d ${distro} -- npm i -g @openai/codex\` で WSL 側に入れる（\`--fix\` で自動実行）`);
+    else human.push('WSLディストロ未導入→管理者ターミナルで `wsl --install -d Ubuntu`（再起動が必要）');
+  } else if (!installed && DO_FIX) {
+    if (cmdOk('npm i -g @openai/codex')) fixes.push('Codex CLI を npm install'); else human.push('Codex CLI 導入失敗→手動 `npm i -g @openai/codex`');
+  }
   if (installed && !authed) human.push('Codex 未認証→`codex` 実行しChatGPTでログイン(1回)');
-  return { name: 'Codex', installed, version, authed, used, usedDays, role: 'コード実装の主経路(定額枠)' };
+  return { name: 'Codex', installed, nativeOnly, version, authed, used, usedDays, role: 'コード実装の主経路(定額枠)' };
 }
 
 // ---- Gemini ----
@@ -292,6 +293,7 @@ for (const c of checks) {
   else if (c.name === 'Kimi' && c.used) { icon = '✅'; note = c.count === null ? '使用あり(痕跡のみ)' : `使用あり(${c.count}回)`; }
   else if (c.name === 'Kimi') { icon = '⚠️'; note = '未使用=Claude従量を別課金プールへ逃がせていない(§1.13)。量産・分類・中量級生成は `node tools/llm-ask.mjs --provider kimi "…"` へ'; }
   else if (c.appEmbedded) { icon = c.used ? '✅' : '☑️'; note = c.used ? `使用あり(直近)${c.traceOnly ? '(痕跡のみ)' : ''}` : '未使用(aujust未実行なら想定内)'; }
+  else if (c.name === 'Codex' && c.nativeOnly) { icon = '🚨'; note = 'Windows版codexはread-onlyサンドボックス固定で実装に使えない。WSL側への導入が必要'; }
   else if (!c.installed) { icon = '🚨'; note = '未導入'; }
   else if (c.name === 'Codex' && !c.authed) { icon = '🚨'; note = '未認証'; }
   else if (c.name === 'Gemini' && !c.keyed) { icon = '🚨'; note = 'APIキー未設定'; }

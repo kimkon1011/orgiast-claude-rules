@@ -14,6 +14,7 @@
 //   REPORTER_LABEL=任意のPC識別名(省略時はOSのホスト名)
 
 import fs from 'node:fs';
+import { parseEnvText } from './env-kv.mjs';
 import path from 'node:path';
 import os from 'node:os';
 
@@ -23,15 +24,7 @@ const nativeHome = os.homedir(); const HOME = process.env.USERPROFILE || process
 // --- 設定読み込み (~/.claude/cost-reporter.env) ---
 function loadEnv() {
   const envPath = path.join(HOME, '.claude', 'cost-reporter.env');
-  const env = {};
-  if (fs.existsSync(envPath)) {
-    const raw = fs.readFileSync(envPath, 'utf-8');
-    for (const line of raw.split(/\r?\n/)) {
-      const i = line.indexOf('=');
-      if (i > 0 && !line.trim().startsWith('#')) env[line.slice(0, i).trim()] = line.slice(i + 1).trim();
-    }
-  }
-  return env;
+  try { return parseEnvText(fs.readFileSync(envPath, 'utf8')); } catch { return {}; }
 }
 
 // --- 料金表 (USD / 1M tokens)。2026-07時点の公開価格。新モデルが出たら追記する ---

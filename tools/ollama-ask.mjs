@@ -3,12 +3,13 @@
 // 使い方: node ollama-ask.mjs "指示"  [--model qwen2.5:3b] [--system "..."]
 // 前提: Ollamaが導入済み(ollama serve 稼働・localhost:11434)。既定モデル qwen2.5:3b。
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
+import { readEnvValue } from './env-kv.mjs';
 const HOST = process.env.OLLAMA_HOST || 'http://localhost:11434';
 
 const args = process.argv.slice(2);
 function opt(name, def) { const i = args.indexOf(name); return (i >= 0 && args[i + 1]) ? args[i + 1] : def; }
 // 既定モデル: env OLLAMA_MODEL → --model → ~/.claude/ollama.env → qwen2.5:3b
-function fileModel() { try { for (const l of fs.readFileSync(path.join(os.homedir(), '.claude', 'ollama.env'), 'utf-8').split(/\r?\n/)) { if (l.startsWith('OLLAMA_MODEL=')) return l.slice('OLLAMA_MODEL='.length).trim(); } } catch {} return ''; }
+function fileModel() { return readEnvValue(path.join(os.homedir(), '.claude', 'ollama.env'), 'OLLAMA_MODEL'); }
 const model = opt('--model', process.env.OLLAMA_MODEL || fileModel() || 'qwen2.5:3b');
 const system = opt('--system', '');
 const flagIdx = new Set();

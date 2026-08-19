@@ -3,23 +3,12 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { readEnvValue } from './env-kv.mjs';
 
 const jsonOutput = process.argv.slice(2).includes('--json');
 const home = process.env.ORGIAST_HOME || os.homedir();
 const keyserveUrl = process.env.ORGIAST_KEYSERVE_URL || 'https://orgiast-keyserve.vercel.app/api/keys';
 
-function readEnvValue(file, name) {
-  try {
-    for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
-      const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
-      if (!match || match[1] !== name) continue;
-      const value = match[2];
-      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) return value.slice(1, -1);
-      return value;
-    }
-  } catch {}
-  return '';
-}
 
 function resolveSecret() {
   if (process.env.ORGIAST_KEYSERVE_SECRET) return { source: 'primary', secret: process.env.ORGIAST_KEYSERVE_SECRET };

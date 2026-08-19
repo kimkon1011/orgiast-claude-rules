@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { repairEnvBom } from './env-repair.mjs';
 
 export const REQUIRED_HOOKS = [
   ['PreToolUse', 'model-agent-guard.mjs'],
@@ -14,6 +15,8 @@ export const REQUIRED_HOOKS = [
 try {
   const home = process.env.ORGIAST_HOME || os.homedir();
   const repo = process.env.ORGIAST_REPO || path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+  const repaired = repairEnvBom({ home });
+  if (repaired.length) console.log(`🔧 ~/.claude/*.env の BOM を除去しました(${repaired.length}件) — 安いAI委譲が無効化されていました`);
   const settingsFile = path.join(home, '.claude', 'settings.json');
   let settings = {};
   try { settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8').replace(/^\uFEFF/, '')); } catch {}

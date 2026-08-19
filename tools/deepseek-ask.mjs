@@ -5,16 +5,12 @@
 //   --system "..." でシステムプロンプト。--max <tokens>(既定4000)。
 // 認証: DEEPSEEK_API_KEY (env もしくは ~/.claude/deepseek.env)。
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
+import { readEnvValue } from './env-kv.mjs';
 const BASE = 'https://api.deepseek.com/chat/completions';
 
 function loadKey() {
   if (process.env.DEEPSEEK_API_KEY) return process.env.DEEPSEEK_API_KEY;
-  try {
-    for (const l of fs.readFileSync(path.join(os.homedir(), '.claude', 'deepseek.env'), 'utf-8').split(/\r?\n/)) {
-      if (l.startsWith('DEEPSEEK_API_KEY=')) return l.slice('DEEPSEEK_API_KEY='.length).trim();
-    }
-  } catch {}
-  return '';
+  return readEnvValue(path.join(os.homedir(), '.claude', 'deepseek.env'), 'DEEPSEEK_API_KEY');
 }
 
 const args = process.argv.slice(2);

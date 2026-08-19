@@ -2,6 +2,7 @@
 // DeepSeekはUTC 16:30〜00:30だけ実行。--force で時間帯を無視、--dry で対象表示のみ。
 // --fallback-standard 指定時だけ、Anthropic Batch失敗後に通常APIで再実行する。
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
+import { readEnvValue } from './env-kv.mjs';
 
 const PROVIDERS = {
   deepseek: { base: 'https://api.deepseek.com/chat/completions', keyEnv: 'DEEPSEEK_API_KEY', keyFile: 'deepseek.env', model: 'deepseek-chat' },
@@ -38,7 +39,7 @@ function loadKey(provider) {
   const files = [path.join(home, '.claude', P.keyFile)];
   if (provider === 'gemini') files.unshift(path.join(home, '.gemini', '.env'));
   for (const f of files) {
-    try { for (const l of fs.readFileSync(f, 'utf-8').split(/\r?\n/)) { if (l.startsWith(P.keyEnv + '=')) return l.slice(P.keyEnv.length + 1).trim(); } } catch {}
+    const value = readEnvValue(f, P.keyEnv); if (value) return value;
   }
   return '';
 }

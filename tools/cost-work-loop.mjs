@@ -13,6 +13,7 @@
 import fs from 'node:fs'; import path from 'node:path'; import os from 'node:os'; import { execSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { recommendations } from './eval-harness.mjs';
+import { readEnvValue } from './env-kv.mjs';
 const nativeHome = os.homedir();
 function defaultHome() { return process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || nativeHome; }
 const HOME = defaultHome();
@@ -37,7 +38,10 @@ export function codexSessionDirs(home = defaultHome()) {
   if (process.platform === 'win32') {
     let distros = [];
     try { distros = execSync('wsl.exe -l -q', { stdio: ['ignore', 'pipe', 'ignore'], timeout: 15000 }).toString('utf16le').split(/\r?\n/).map((s) => s.trim()).filter(Boolean); } catch { }
-    for (const distro of distros) addUsers(`//wsl.localhost/${distro}/home`);
+    for (const distro of distros) {
+      addUsers(`//wsl.localhost/${distro}/home`);
+      addUsers(`//wsl$/${distro}/home`);
+    }
   }
   // このスクリプト自体が WSL 上で動く場合、UNC と同じ実体を Linux パスから参照する。
   if (process.platform === 'linux') addUsers('/home');
@@ -181,7 +185,7 @@ if (enforce === 'block') console.log(`\n🔒 ハードブロック昇格: ${erea
 console.log(md);
 
 if (POST) {
-  const wh = (() => { try { for (const l of fs.readFileSync(path.join(HOME, '.claude', 'cost-reporter.env'), 'utf-8').split(/\r?\n/)) if (l.startsWith('COST_WEBHOOK=') || l.startsWith('DISCORD_COST_WEBHOOK=')) return l.split('=').slice(1).join('=').trim(); } catch { } return process.env.COST_WEBHOOK || ''; })();
+  const wh = readEnvValue(path.join(HOME, '.claude', 'cost-reporter.env'), 'COST_WEBHOOK') || readEnvValue(path.join(HOME, '.claude', 'cost-reporter.env'), 'DISCORD_COST_WEBHOOK') || process.env.COST_WEBHOOK || '';
   if (wh) { const label = process.env.REPORTER_LABEL || os.hostname(); try { await fetch(wh, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: `**${label}** コスト×作業量ループ\n${md.replace(/<!--.*?-->/g, '').trim()}` }) }); console.error('Discord送信OK'); } catch (e) { console.error('Discord送信失敗:', e.message); } }
   else console.error('COST_WEBHOOK未設定=送信スキップ');
 }

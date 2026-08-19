@@ -2,16 +2,12 @@
 // 使い方: node grok-ask.mjs "質問"  [--model grok-3] [--system "..."] [--max 4000]
 // 認証: XAI_API_KEY (env もしくは ~/.claude/xai.env)。
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
+import { readEnvValue } from './env-kv.mjs';
 const BASE = 'https://api.x.ai/v1/chat/completions';
 
 function loadKey() {
   if (process.env.XAI_API_KEY) return process.env.XAI_API_KEY;
-  try {
-    for (const l of fs.readFileSync(path.join(os.homedir(), '.claude', 'xai.env'), 'utf-8').split(/\r?\n/)) {
-      if (l.startsWith('XAI_API_KEY=')) return l.slice('XAI_API_KEY='.length).trim();
-    }
-  } catch {}
-  return '';
+  return readEnvValue(path.join(os.homedir(), '.claude', 'xai.env'), 'XAI_API_KEY');
 }
 
 const args = process.argv.slice(2);

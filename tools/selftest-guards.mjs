@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { parseEnvText } from './env-kv.mjs';
 
 const repo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const toolsDir = path.join(repo, 'tools');
@@ -27,6 +28,28 @@ function writeCostEnforce(home, mode) {
   fs.mkdirSync(claude, { recursive: true });
   fs.writeFileSync(path.join(claude, 'cost-enforce.json'), JSON.stringify({ mode }));
 }
+
+test('parseEnvText: BOM・表記ゆれ・重複・CRLF', () => {
+  const parsed = parseEnvText('\uFEFF# comment\r\n export A=v1\r\n B = "v2"\r\n   C = \'v3\' \r\nA=last\r\n');
+  assert(parsed.A === 'last' && parsed.B === 'v2' && parsed.C === 'v3', JSON.stringify(parsed));
+});
+test('env-repair: checkは非破壊、通常実行はbackup付き修復', () => {
+  const temp = makeTempHome('orgiast-env-repair-test-'); const claude = path.join(temp, '.claude'); fs.mkdirSync(claude, { recursive: true });
+  const file = path.join(claude, 'groq.env'); const original = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('GROQ_API_KEY=secret\r\n')]); fs.writeFileSync(file, original);
+  const check = run('env-repair.mjs', undefined, ['--check'], { ORGIAST_HOME: temp }); assert(check.stdout.includes('BOM検出: 1件'), check.stdout || check.stderr); assert(fs.readFileSync(file).equals(original), '--checkが書き換えた');
+  const repair = run('env-repair.mjs', undefined, [], { ORGIAST_HOME: temp }); const data = fs.readFileSync(file); assert(repair.stdout.includes('BOM修復: 1件') && data.toString() === 'GROQ_API_KEY=secret\r\n', repair.stdout || repair.stderr); assert(fs.readdirSync(claude).some((x) => x.endsWith('-bom')), 'backupなし');
+});
+test('llm-ask: BOM付きenvのキー状態を値なしで診断', () => {
+  const temp = makeTempHome('orgiast-llm-key-test-'); const claude = path.join(temp, '.claude'); fs.mkdirSync(claude, { recursive: true }); fs.writeFileSync(path.join(claude, 'groq.env'), '\uFEFF export GROQ_API_KEY = "secret-value"\r\n');
+  const r = run('llm-ask.mjs', undefined, ['--provider', 'groq', '--print-key-status'], { ORGIAST_HOME: temp, GROQ_API_KEY: '' }); assert(r.status === 0 && r.stdout.includes('設定済み') && !r.stdout.includes('secret-value'), r.stdout || r.stderr);
+});
+test('hook-selfcheck: BOMを修復し、正常時はBOM報告なし', () => {
+  const temp = makeTempHome('orgiast-hook-bom-test-'); const claude = path.join(temp, '.claude'); fs.mkdirSync(claude, { recursive: true });
+  // 必須hookを登録済みにしてBOMメッセージだけを観測する。
+  const hooks = {}; for (const [event, script] of [['PreToolUse','model-agent-guard.mjs'],['UserPromptSubmit','cost-routing-gate.mjs'],['UserPromptSubmit','session-purpose-gate.mjs'],['SessionStart','hook-selfcheck.mjs']]) (hooks[event] ||= []).push({ hooks: [{ command: script }] }); fs.writeFileSync(path.join(claude, 'settings.json'), JSON.stringify({ hooks }));
+  const file = path.join(claude, 'groq.env'); fs.writeFileSync(file, '\uFEFFGROQ_API_KEY=x\n'); const first = run('hook-selfcheck.mjs', undefined, [], { ORGIAST_HOME: temp, ORGIAST_REPO: repo }); assert(first.stdout.includes('BOM を除去しました(1件)') && !fs.readFileSync(file).subarray(0,3).equals(Buffer.from([0xef,0xbb,0xbf])), first.stdout || first.stderr);
+  const second = run('hook-selfcheck.mjs', undefined, [], { ORGIAST_HOME: temp, ORGIAST_REPO: repo }); assert(!second.stdout.includes('BOM を除去'), second.stdout || second.stderr);
+});
 
 test('model-agent-guard: Fable5 deny', () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'orgiast-fable-deny-test-'));

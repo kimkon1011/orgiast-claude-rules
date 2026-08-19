@@ -6,6 +6,7 @@
 //       node llm-ask.mjs --provider openrouter --model deepseek/deepseek-chat "下書きして"
 // 認証: 各プロバイダのキーを env もしくは ~/.claude/<file> から読む(下表)。
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
+import { readEnvValue } from './env-kv.mjs';
 
 const PROVIDERS = {
   // 1キーで413モデル+無料19本。既定は安く賢いLlama3.3-70b。--modelで任意(例 deepseek/deepseek-chat, qwen/qwen-2.5-72b-instruct, *:free)
@@ -35,14 +36,16 @@ const prompt = args.filter((a, i) => !a.startsWith('--') && !skip.has(i)).join('
 
 function loadKey() {
   if (process.env[P.keyEnv]) return process.env[P.keyEnv];
-  const files = [path.join(os.homedir(), '.claude', P.keyFile)];
-  if (provider === 'gemini') files.unshift(path.join(os.homedir(), '.gemini', '.env')); // Geminiキーは ~/.gemini/.env にある
+  const home = process.env.ORGIAST_HOME || os.homedir();
+  const files = [path.join(home, '.claude', P.keyFile)];
+  if (provider === 'gemini') files.unshift(path.join(home, '.gemini', '.env')); // Geminiキーは ~/.gemini/.env にある
   for (const f of files) {
-    try { for (const l of fs.readFileSync(f, 'utf-8').split(/\r?\n/)) { if (l.startsWith(P.keyEnv + '=')) return l.slice(P.keyEnv.length + 1).trim(); } } catch {}
+    const value = readEnvValue(f, P.keyEnv); if (value) return value;
   }
   return '';
 }
 const KEY = loadKey();
+if (args.includes('--print-key-status')) { console.log(KEY ? `${P.keyEnv}: 設定済み` : `${P.keyEnv}: 未設定`); process.exit(KEY ? 0 : 2); }
 if (!KEY) { console.error(`${P.keyEnv} 未設定 (env もしくは ~/.claude/${P.keyFile}${provider === 'gemini' ? ' か ~/.gemini/.env' : ''})`); process.exit(2); }
 if (!prompt) { console.error('指示テキストがありません'); process.exit(2); }
 

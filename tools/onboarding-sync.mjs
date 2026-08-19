@@ -5,6 +5,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { readEnvValue } from './env-kv.mjs';
+import { repairEnvBom } from './env-repair.mjs';
 
 const args = process.argv.slice(2);
 const force = args.includes('--force');
@@ -46,6 +49,31 @@ function copyTree(source, destination) {
     if (entry.isDirectory()) copyTree(from, to); else if (entry.isFile()) fs.copyFileSync(from, to);
   }
 }
+export function deploySkills(sourceRepo, targetHome, options = {}) {
+  const updated = new Set();
+  try {
+    const source = path.join(sourceRepo, 'skills');
+    if (!fs.existsSync(source)) return [];
+    const iso = (options.now || new Date()).toISOString();
+    const stamp = `${iso.slice(0, 10).replace(/-/g, '')}-${iso.slice(11, 19).replace(/:/g, '')}`;
+    const copyChanged = (fromDir, toDir, skill) => {
+      fs.mkdirSync(toDir, { recursive: true });
+      for (const entry of fs.readdirSync(fromDir, { withFileTypes: true })) {
+        const from = path.join(fromDir, entry.name), to = path.join(toDir, entry.name);
+        if (entry.isDirectory()) copyChanged(from, to, skill);
+        else if (entry.isFile()) {
+          const same = fs.existsSync(to) && fs.readFileSync(from).equals(fs.readFileSync(to));
+          if (same) continue;
+          if (fs.existsSync(to)) fs.copyFileSync(to, `${to}.bak.${stamp}`);
+          fs.copyFileSync(from, to); updated.add(skill);
+        }
+      }
+    };
+    for (const entry of fs.readdirSync(source, { withFileTypes: true })) if (entry.isDirectory()) copyChanged(path.join(source, entry.name), path.join(targetHome, '.claude', 'skills', entry.name), entry.name);
+    if (updated.size && !options.quiet) console.log(`[onboarding-sync] skills updated: ${[...updated].join(', ')}`);
+    return [...updated];
+  } catch (e) { if (options.onError) options.onError(e); return []; }
+}
 async function syncRepository(now) {
   try {
     if (!fs.existsSync(repoPath)) return;
@@ -81,6 +109,8 @@ async function syncRepository(now) {
       changed = true;
     }
     if (changed) { console.log('[onboarding-sync] updated repository tools/rules/skills'); log('updated repository tools/rules/skills'); }
+    const skills = deploySkills(repoPath, home, { now, onError: (e) => log(`skill deployment failed: ${e.message}`) });
+    if (skills.length) log(`skills updated: ${skills.join(', ')}`);
     // 新しく配布された hook を全PCへ自動登録する(add-only・差分が無ければ何も書かない)。
     try {
       const registrar = path.join(repoPath, 'tools', 'register-hooks.mjs');
@@ -90,18 +120,6 @@ async function syncRepository(now) {
       }
     } catch (e) { log(`hook registration failed: ${e.message}`); }
   } catch (e) { log(`repo sync failed: ${e.message}`); }
-}
-function readEnvValue(file, name) {
-  try {
-    for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
-      const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
-      if (!match || match[1] !== name) continue;
-      const value = match[2];
-      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) return value.slice(1, -1);
-      return value;
-    }
-  } catch {}
-  return '';
 }
 function saveKeysState(now) {
   try {
@@ -137,10 +155,11 @@ async function provisionKeys(now) {
       const destination = path.join(home, '.claude', name);
       if (fs.existsSync(destination)) continue;
       fs.mkdirSync(path.dirname(destination), { recursive: true });
-      fs.writeFileSync(destination, contents, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+      fs.writeFileSync(destination, contents.replace(/^\uFEFF/, ''), { encoding: 'utf8', flag: 'wx', mode: 0o600 });
       provisioned.push(name);
       log(`provisioned: ${name}`);
     }
+    repairEnvBom({ home });
     saveKeysState(now);
     if (provisioned.length) console.log(`[onboarding-sync] provisioned: ${provisioned.join(', ')}`);
   } catch (e) {
@@ -166,7 +185,7 @@ function build(current, body, label) {
   return { updated: `${current.replace(/[\r\n]+$/, '')}\n\n${block}`, action: 'マーカーなし/不完全のため末尾へ追記' };
 }
 
-try {
+async function main() { try {
   const now = new Date();
   await syncRepository(now);
   await provisionKeys(now);
@@ -196,4 +215,6 @@ try {
     console.log(`[onboarding-sync] updated CLAUDE.md (hash ${hash.slice(0, 8)})`);
     log(`updated (hash ${hash.slice(0, 8)})`);
   }
-} catch (e) { log(`unexpected error: ${e.message}`); }
+} catch (e) { log(`unexpected error: ${e.message}`); } }
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) await main();

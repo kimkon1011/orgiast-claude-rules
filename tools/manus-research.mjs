@@ -6,17 +6,12 @@
 // 動作: POST /v1/tasks で作成 → GET /v1/tasks/{id} を完了までポーリング → assistant出力を表示。
 //   --json 出力に task_url も含める。--timeout <秒>(既定360)。
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
+import { readEnvValue } from './env-kv.mjs';
 const BASE = 'https://api.manus.ai';
 
 function loadKey() {
   if (process.env.MANUS_API_KEY) return process.env.MANUS_API_KEY;
-  try {
-    const f = path.join(os.homedir(), '.claude', 'manus.env');
-    for (const line of fs.readFileSync(f, 'utf-8').split(/\r?\n/)) {
-      if (line.startsWith('MANUS_API_KEY=')) return line.slice('MANUS_API_KEY='.length).trim();
-    }
-  } catch { /* none */ }
-  return '';
+  return readEnvValue(path.join(os.homedir(), '.claude', 'manus.env'), 'MANUS_API_KEY');
 }
 
 const args = process.argv.slice(2);

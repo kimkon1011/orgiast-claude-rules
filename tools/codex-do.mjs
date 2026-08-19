@@ -8,7 +8,10 @@ const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
 const cwdIndex = args.indexOf('--cwd');
 const cwd = path.resolve(cwdIndex >= 0 && args[cwdIndex + 1] ? args[cwdIndex + 1] : process.cwd());
-const omitted = new Set([dryRun ? args.indexOf('--dry-run') : -1, cwdIndex, cwdIndex + 1]);
+// cwdIndex が -1 のとき cwdIndex+1 が 0 になり、指示文(第1引数)を捨ててしまうので条件付きで除外する。
+const omitted = new Set();
+if (dryRun) omitted.add(args.indexOf('--dry-run'));
+if (cwdIndex >= 0) { omitted.add(cwdIndex); omitted.add(cwdIndex + 1); }
 const instruction = args.filter((_, index) => !omitted.has(index)).join(' ').trim();
 if (!instruction) { console.error('使い方: node tools/codex-do.mjs "<指示>" [--cwd <path>] [--dry-run]'); process.exit(2); }
 

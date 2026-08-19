@@ -57,6 +57,12 @@ test('hook-selfcheck: 偽HOMEで欠落を自動修復', () => {
   assert(r.stdout.includes('欠落していたため自動登録'), r.stdout || r.stderr);
   assert(JSON.stringify(settings).includes('model-agent-guard.mjs') && JSON.stringify(settings).includes('cost-routing-gate.mjs'), '必須hookが登録されていない');
 });
+test('codex-do: --cwd 省略でも指示文が消えない', () => {
+  const r = run('codex-do.mjs', undefined, ['ログイン機能を実装して', '--dry-run'], {});
+  assert(r.status !== 2 && !/使い方:/.test(r.stderr || ''), '第1引数が捨てられている');
+  assert(/ログイン機能を実装して/.test(r.stdout || ''), '指示文がプロンプトに含まれない');
+});
+
 test('codex-do: dry-run に MEMORY.md を同梱', () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'orgiast-codex-test-'));
   const target = path.join(temp, 'target'); fs.mkdirSync(target, { recursive: true });

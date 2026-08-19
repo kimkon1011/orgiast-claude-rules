@@ -1,5 +1,6 @@
 [
   {"provider":"groq","model":"openai/gpt-oss-120b","params":{"reasoning_effort":"low"}},
+  {"provider":"openrouter","model":"qwen/qwen3-coder-flash"},
   {"provider":"openrouter","model":"meta-llama/llama-3.3-70b-instruct"},
   {"provider":"gemini","model":"gemini-3.7-flash","concurrency":1,"minIntervalMs":4000},
   {"provider":"deepseek","model":"deepseek-chat"},

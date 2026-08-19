@@ -9,7 +9,7 @@ import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'
 
 const PROVIDERS = {
   // 1キーで413モデル+無料19本。既定は安く賢いLlama3.3-70b。--modelで任意(例 deepseek/deepseek-chat, qwen/qwen-2.5-72b-instruct, *:free)
-  openrouter: { base: 'https://openrouter.ai/api/v1/chat/completions', keyEnv: 'OPENROUTER_API_KEY', keyFile: 'openrouter.env', model: 'meta-llama/llama-3.3-70b-instruct', extraHeaders: { 'HTTP-Referer': 'https://orgiast.jp', 'X-Title': 'orgiast' } },
+  openrouter: { base: 'https://openrouter.ai/api/v1/chat/completions', keyEnv: 'OPENROUTER_API_KEY', keyFile: 'openrouter.env', model: 'qwen/qwen3-coder-flash', extraHeaders: { 'HTTP-Referer': 'https://orgiast.jp', 'X-Title': 'orgiast' } },
   // 超高速(LPU)・安。分類/抽出/量産向け。
   groq: { base: 'https://api.groq.com/openai/v1/chat/completions', keyEnv: 'GROQ_API_KEY', keyFile: 'groq.env', model: 'llama-3.3-70b-versatile' },
   // Gemini Flash(激安・1M文脈・高速)。キーは ~/.gemini/.env の GEMINI_API_KEY を流用。

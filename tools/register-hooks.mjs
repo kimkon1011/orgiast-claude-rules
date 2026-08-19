@@ -41,6 +41,13 @@ function migrate(groups, oldName, newName, newCommand) {
   }
   return changed;
 }
+function setTimeoutFor(groups, scriptName, timeout) {
+  let changed = 0;
+  for (const group of groups) for (const hook of (Array.isArray(group?.hooks) ? group.hooks : [])) {
+    if (String(hook.command || '').includes(scriptName) && hook.timeout !== timeout) { hook.timeout = timeout; changed += 1; }
+  }
+  return changed;
+}
 
 try {
   const settingsFile = path.join(home, '.claude', 'settings.json');
@@ -52,7 +59,7 @@ try {
   const session = [
     ['onboarding-sync.mjs', 20, true, ''],
     ['claude-cost-reporter.mjs', 15, true, ''],
-    ['tool-adoption-check.mjs', 30, true, ' --fix'],
+    ['tool-adoption-check.mjs', 60, true, ' --fix'],
     ['cost-loop.mjs', 15, false, ''],
   ];
   for (const [name, timeout, async, extra] of session) {
@@ -60,6 +67,7 @@ try {
     if (async) hook.async = true;
     if (add(settings.hooks.SessionStart, name, { hooks: [hook] })) added += 1;
   }
+  added += setTimeoutFor(settings.hooks.SessionStart, 'tool-adoption-check', 60);
   if (add(settings.hooks.SessionStart, 'hook-selfcheck.mjs', { hooks: [{ type: 'command', command: command('hook-selfcheck.mjs'), timeout: 10 }] })) added += 1;
   // 1セッション=1目的ゲート: SessionStart で目的宣言を要求し、UserPromptSubmit で目的ドリフト/肥大をナッジする(context注入のため async 禁止)
   if (add(settings.hooks.SessionStart, 'session-purpose-gate.mjs', { hooks: [{ type: 'command', command: command('session-purpose-gate.mjs'), timeout: 5 }] })) added += 1;

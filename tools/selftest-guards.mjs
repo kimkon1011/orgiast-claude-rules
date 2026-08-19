@@ -135,6 +135,37 @@ test('codex-do: --cwd 省略でも指示文が消えない', () => {
   assert(/ログイン機能を実装して/.test(r.stdout || ''), '指示文がプロンプトに含まれない');
 });
 
+function makeToolAdoptionTestEnv(prefix) {
+  const home = makeTempHome(prefix);
+  const bin = path.join(home, 'bin'); fs.mkdirSync(bin, { recursive: true });
+  const gemini = path.join(bin, 'gemini'); fs.writeFileSync(gemini, '#!/bin/sh\necho gemini-test\n'); fs.chmodSync(gemini, 0o755);
+  return { home, env: { ORGIAST_HOME: home, PATH: bin, DISCORD_COST_WEBHOOK: '' } };
+}
+test('tool-adoption-check: 新しい同一target stateなら導入をスキップ', () => {
+  const { home, env } = makeToolAdoptionTestEnv('orgiast-adoption-state-test-');
+  const claude = path.join(home, '.claude'); fs.mkdirSync(claude, { recursive: true });
+  // 導入先は win32 だと 'wsl'、それ以外は 'native'。'native' 固定で書くと Windows で
+  // 重複判定が外れて導入が走り、テストが環境依存で落ちる(実測)。
+  const expectedTarget = process.platform === 'win32' ? 'wsl' : 'native';
+  fs.writeFileSync(path.join(claude, 'tool-adoption-install.state'), JSON.stringify({ started: new Date().toISOString(), target: expectedTarget }));
+  const r = run('tool-adoption-check.mjs', undefined, ['--fix', '--dry-run'], { ...env, TOOL_ADOPTION_FORCE_MISSING: 'codex', TOOL_ADOPTION_FAKE_DISTRO: 'Ubuntu', TOOL_ADOPTION_INSTALL_CMD: '/bin/echo should-not-run' });
+  assert(r.status === 0 && !r.stdout.includes('バックグラウンドで開始しました'), r.stdout || r.stderr);
+  assert(!fs.existsSync(path.join(claude, 'tool-adoption-install.log')), '重複導入プロセスが起動された');
+});
+test('tool-adoption-check: detached導入は同期的にブロックしない', () => {
+  const { home, env } = makeToolAdoptionTestEnv('orgiast-adoption-detached-test-');
+  const adoptionEnv = { ...env, TOOL_ADOPTION_FORCE_MISSING: 'codex', TOOL_ADOPTION_FAKE_DISTRO: 'Ubuntu', TOOL_ADOPTION_INSTALL_CMD: '/bin/sleep 5' };
+  const started = Date.now();
+  const r = run('tool-adoption-check.mjs', undefined, ['--fix', '--dry-run'], adoptionEnv);
+  const elapsed = Date.now() - started;
+  assert(r.status === 0 && r.stdout.includes('バックグラウンドで開始しました'), r.stdout || r.stderr);
+  assert(elapsed < 3000, `detached起動が ${elapsed}ms ブロックした`);
+  const state = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'tool-adoption-install.state'), 'utf8'));
+  assert(state.target === 'wsl' || state.target === 'native', JSON.stringify(state));
+  const second = run('tool-adoption-check.mjs', undefined, ['--fix', '--dry-run'], adoptionEnv);
+  assert(second.status === 0 && !second.stdout.includes('バックグラウンドで開始しました'), second.stdout || second.stderr);
+});
+
 test('codex-do: dry-run に MEMORY.md を同梱', () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'orgiast-codex-test-'));
   const target = path.join(temp, 'target'); fs.mkdirSync(target, { recursive: true });

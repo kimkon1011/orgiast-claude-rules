@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  apiBaseFor, regionFromToken, durationToSeconds, epochToIso, extensionFromUrl, isTldvSupportedUrl, meetsMinimumDuration,
+  apiBaseFor, regionFromToken, isWorkspaceTokenExpired, durationToSeconds, epochToIso, extensionFromUrl, isTldvSupportedUrl, meetsMinimumDuration,
   mergeState, readState, redactSecret, regionFromRedirect, selectPlaudCookies, shouldImport,
 } from './plaud-to-tldv.mjs';
 
@@ -103,4 +103,13 @@ test('リージョンは JWT の region クレームと未知ホストの両方�
   assert.equal(apiBaseFor(raw), 'https://api-apne9.plaud.ai');
   // 無関係なホストへは飛ばさない
   assert.equal(regionFromRedirect({ status: -302, data: { domains: { api: 'https://evil.example.com' } } }), undefined);
+});
+
+
+test('WT 失効は envelope status -419 と文言の双方で検出する', () => {
+  const withEnvelope = (envelope) => Object.assign(new Error('録音一覧失敗'), { envelope });
+  assert.equal(isWorkspaceTokenExpired(withEnvelope({ status: -419, msg: 'workspace token expired' })), true);
+  assert.equal(isWorkspaceTokenExpired(withEnvelope({ status: -1, msg: 'workspace token invalid' })), true);
+  assert.equal(isWorkspaceTokenExpired(withEnvelope({ status: -1, msg: 'something else' })), false);
+  assert.equal(isWorkspaceTokenExpired(new Error('network')), false);
 });

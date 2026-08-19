@@ -142,7 +142,20 @@ export function writeStateAtomic(statePath, state) {
   fs.mkdirSync(path.dirname(statePath), { recursive: true });
   const temp = `${statePath}.tmp-${process.pid}-${Date.now()}`;
   fs.writeFileSync(temp, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
-  fs.renameSync(temp, statePath);
+  // Windows では上書き rename が EPERM で弾かれることがある(ウイルス対策や
+  // インデクサが一瞬ハンドルを掴む)。取りこぼすと import 済みの記録が消えて
+  // 二重投入を招くので、短い再試行 → コピーへのフォールバックまで面倒を見る。
+  for (let attempt = 0; ; attempt += 1) {
+    try { fs.renameSync(temp, statePath); return; } catch (error) {
+      const retriable = error?.code === 'EPERM' || error?.code === 'EACCES' || error?.code === 'EBUSY';
+      if (!retriable) { try { fs.unlinkSync(temp); } catch {} throw error; }
+      if (attempt >= 4) {
+        try { fs.copyFileSync(temp, statePath); } finally { try { fs.unlinkSync(temp); } catch {} }
+        return;
+      }
+      const until = Date.now() + 60; while (Date.now() < until) { /* 短い同期待機 */ }
+    }
+  }
 }
 
 export function jwtExp(token) {
@@ -227,6 +240,18 @@ function envelopeError(body, label) {
   const error = new Error(`${label}失敗: status=${body?.status ?? '不明'} ${body?.msg || ''}`.trim());
   error.envelope = body;
   throw error;
+}
+
+/**
+ * WT(workspace token) の失効を表す封筒か。Plaud は exp を待たずに古い WT を
+ * 無効化することがある(別クライアントが mint し直した時など)ので、exp だけを
+ * 見ていると -419 で落ちる。実測で確認したコード/文言を拾う。
+ */
+export function isWorkspaceTokenExpired(error) {
+  const status = Number(error?.envelope?.status);
+  if (status === -419) return true;
+  const msg = String(error?.envelope?.msg || error?.message || '');
+  return /workspace token (expired|invalid)/i.test(msg);
 }
 
 function authHeaders(token, extra = {}) {
@@ -330,6 +355,18 @@ async function ensureWorkspace(state, client, persist) {
   state.session.wtExp = jwtExp(state.session.wt); persist();
 }
 
+/** WT を使う呼び出しを、失効時に mint し直して1度だけ再試行する。 */
+async function withFreshWorkspaceToken(state, client, persist, run) {
+  try {
+    return await run();
+  } catch (error) {
+    if (!isWorkspaceTokenExpired(error)) throw error;
+    state.session.wt = ''; state.session.wtExp = 0;
+    await ensureWorkspace(state, client, persist);
+    return run();
+  }
+}
+
 async function listRecordings(state, client) {
   const all = [];
   for (let page = 0; page < 20; page += 1) {
@@ -404,7 +441,7 @@ export async function run(argv = process.argv.slice(2), dependencies = {}) {
       return 0;
     }
 
-    const records = await listRecordings(state, client);
+    const records = await withFreshWorkspaceToken(state, client, persist, () => listRecordings(state, client));
     const firstRun = !state.firstSeenAt;
     if (firstRun && !options.backfill) {
       const now = Date.now();
@@ -430,7 +467,7 @@ export async function run(argv = process.argv.slice(2), dependencies = {}) {
       if (attempted >= options.limit) { summary.skipped += 1; continue; }
       attempted += 1;
       try {
-        const { body: urlBody } = await client.call(`/file/temp-url/${encodeURIComponent(record.id)}`, { headers: authHeaders(state.session.wt) }, '音声URL取得');
+        const { body: urlBody } = await withFreshWorkspaceToken(state, client, persist, () => client.call(`/file/temp-url/${encodeURIComponent(record.id)}`, { headers: authHeaders(state.session.wt) }, '音声URL取得'));
         const tempUrl = urlBody.temp_url;
         if (!options.allowUnsupported && !isTldvSupportedUrl(tempUrl)) {
           const extension = extensionFromUrl(tempUrl) || '(拡張子なし)';

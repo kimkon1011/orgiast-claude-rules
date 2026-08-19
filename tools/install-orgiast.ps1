@@ -180,8 +180,13 @@ $existing = @($json.hooks.SessionStart)
 $existingCmds = $existing | ForEach-Object { $_.hooks } | ForEach-Object { $_.command }
 foreach ($cmd in $wanted) {
   $key = ($cmd -split '\\')[-1]
-  if ($existingCmds -match [regex]::Escape($key.Split('"')[0])) { OK "登録済(スキップ): $key" ; continue }
-  $to = if ($cmd -match 'tool-adoption') { 30 } elseif ($cmd -match 'onboarding-sync') { 20 } else { 15 }
+  if ($existingCmds -match [regex]::Escape($key.Split('"')[0])) {
+    if ($cmd -match 'tool-adoption') {
+      foreach ($group in $existing) { foreach ($hook in @($group.hooks)) { if ($hook.command -match 'tool-adoption') { $hook.timeout = 60 } } }
+    }
+    OK "登録済(スキップ): $key" ; continue
+  }
+  $to = if ($cmd -match 'tool-adoption') { 60 } elseif ($cmd -match 'onboarding-sync') { 20 } else { 15 }
   $existing += [pscustomobject]@{ hooks = @([pscustomobject]@{ type='command'; command=$cmd; timeout=$to; async=$true }) }
   OK "追加: $key"
 }

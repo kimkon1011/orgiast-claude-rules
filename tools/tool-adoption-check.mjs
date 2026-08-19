@@ -16,17 +16,21 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execSync, execFileSync } from 'node:child_process';
+import { execSync, execFileSync, spawn } from 'node:child_process';
 import { parseEnvText } from './env-kv.mjs';
 import { codexSessionDirs } from './cost-work-loop.mjs';
 
 const DRY_RUN = process.argv.includes('--dry-run');
 const DO_FIX = process.argv.includes('--fix');
 const HOME = process.env.ORGIAST_HOME || os.homedir();
+const FORCE_MISSING = new Set((process.env.TOOL_ADOPTION_FORCE_MISSING || '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean));
 
 // 日次ガード(SessionStartフックから毎回呼ばれても送信は最大1日1回)。--dry-run/--fix時はスキップしない。
 const GUARD_HOURS = 20;
 const statePath = path.join(HOME, '.claude', '.tool-adoption-state.json');
+const installStatePath = path.join(HOME, '.claude', 'tool-adoption-install.state');
+const installLogPath = path.join(HOME, '.claude', 'tool-adoption-install.log');
+const INSTALL_DEDUP_MS = 30 * 60 * 1000;
 if (!DRY_RUN && !process.argv.includes('--force')) {
   try { const s = JSON.parse(fs.readFileSync(statePath, 'utf-8')); if (s.last && (Date.now() - new Date(s.last).getTime()) < GUARD_HOURS * 3600000) process.exit(0); } catch {}
   // 競合防止: ガード通過直後に即座に状態を書く(近接して複数回発火しても2回目以降はここで弾かれ、重複投稿しない)
@@ -51,11 +55,42 @@ function preferredDistro() { const all = wslDistros(); return all.find((x) => x.
 function wslRun(distro, argv) {
   const tries = distro ? [['-d', distro, '--', ...argv], ['--', ...argv]] : [['--', ...argv]];
   for (const args of tries) {
-    try { return execFileSync('wsl.exe', args, { stdio: ['ignore', 'pipe', 'ignore'], timeout: 120000 }).toString().trim() || 'ok'; } catch {}
+    try { return execFileSync('wsl.exe', args, { stdio: ['ignore', 'pipe', 'ignore'], timeout: 15000 }).toString().trim() || 'ok'; } catch {}
   }
   return '';
 }
 function wslCodexVersion(distro) { return wslRun(distro, ['codex', '--version']); }
+
+function clearInstallStateIfTarget(target) {
+  try {
+    const state = JSON.parse(fs.readFileSync(installStatePath, 'utf8'));
+    if (state.target === target) fs.unlinkSync(installStatePath);
+  } catch {}
+}
+function installRecentlyStarted(target) {
+  try {
+    const state = JSON.parse(fs.readFileSync(installStatePath, 'utf8'));
+    return state.target === target && Date.now() - Date.parse(state.started) < INSTALL_DEDUP_MS;
+  } catch { return false; }
+}
+function startCodexInstall(target, distro = '') {
+  if (installRecentlyStarted(target)) return false;
+  const claudeDir = path.join(HOME, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(installStatePath, JSON.stringify({ started: new Date().toISOString(), target }));
+  const logFd = fs.openSync(installLogPath, 'a');
+  const override = process.env.TOOL_ADOPTION_INSTALL_CMD;
+  const command = override || (distro ? 'wsl.exe' : 'npm');
+  const args = override ? [] : (distro ? ['-d', distro, '--', 'npm', 'i', '-g', '@openai/codex'] : ['i', '-g', '@openai/codex']);
+  try {
+    const child = spawn(command, args, { detached: true, shell: !!override, stdio: ['ignore', logFd, logFd] });
+    child.unref();
+    return true;
+  } catch {
+    try { fs.unlinkSync(installStatePath); } catch {}
+    return false;
+  } finally { fs.closeSync(logFd); }
+}
 
 // 再帰で最新mtime(ms)を返す。無ければ0。
 function newestMtime(dir, filterExt) {
@@ -131,28 +166,37 @@ function ledgerCounts(windowDays) {
 }
 
 const fixes = [];   // 自動適用した修復
+const installStarts = []; // 完了待ちせずバックグラウンドで開始した導入
 const human = [];   // 人手が要る残タスク(最小1操作)
 
 // ---- Codex ----
 function checkCodex() {
-  const distro = preferredDistro();
-  const nativeVersion = cmdOut('codex --version');
-  let version = process.platform === 'win32' ? wslCodexVersion(distro) : nativeVersion;
+  // テスト用フック指定時は version/WSL の外部プローブ自体を行わない。
+  const forceMissing = FORCE_MISSING.has('codex');
+  // FORCE_MISSING はバージョン検出だけを偽装する。ここでディストロまで空にすると
+  // 「WSL未導入」分岐に落ちて detached 導入経路が検証できない(実測でテストが落ちた)。
+  // テストを速く決定的にしたい時は TOOL_ADOPTION_FAKE_DISTRO で明示指定する。
+  const distro = process.env.TOOL_ADOPTION_FAKE_DISTRO !== undefined ? process.env.TOOL_ADOPTION_FAKE_DISTRO : preferredDistro();
+  const nativeVersion = forceMissing ? '' : cmdOut('codex --version');
+  let version = forceMissing ? '' : (process.platform === 'win32' ? wslCodexVersion(distro) : nativeVersion);
   let installed = !!version;
+  const installTarget = process.platform === 'win32' && distro ? 'wsl' : 'native';
+  if (installed) clearInstallStateIfTarget(installTarget);
   const nativeOnly = process.platform === 'win32' && !!nativeVersion && !installed;
   const authed = fs.existsSync(path.join(HOME, '.codex', 'auth.json'));
   const lastUsed = Math.max(0, ...codexSessionDirs(HOME).map((dir) => newestMtime(dir, '.jsonl')));
   const usedDays = lastUsed ? daysAgo(lastUsed) : Infinity;
   const used = usedDays <= USAGE_WINDOW_DAYS;
   if (!installed && DO_FIX && distro) {
-    if (wslRun(distro, ['npm', 'i', '-g', '@openai/codex'])) { fixes.push(`Codex CLI を WSL(${distro}) に npm install`); version = wslCodexVersion(distro); installed = !!version; }
-    else human.push(`Codex CLI 導入失敗→手動 \`wsl -d ${distro} -- npm i -g @openai/codex\``);
+    if (startCodexInstall(installTarget, distro)) installStarts.push(`🔧 WSL(${distro}) への Codex 導入をバックグラウンドで開始しました（数分後・次回セッションで有効。ログ: ~/.claude/tool-adoption-install.log）`);
   }
   if (!installed && process.platform === 'win32') {
-    if (distro) human.push(`Windows版codexはread-onlyサンドボックス固定で実装に使えない。\`wsl -d ${distro} -- npm i -g @openai/codex\` で WSL 側に入れる（\`--fix\` で自動実行）`);
-    else human.push('WSLディストロ未導入→管理者ターミナルで `wsl --install -d Ubuntu`（再起動が必要）');
+    if (distro) {
+      if (!(DO_FIX && installRecentlyStarted(installTarget))) human.push(`Windows版codexはread-onlyサンドボックス固定で実装に使えない。\`wsl -d ${distro} -- npm i -g @openai/codex\` で WSL 側に入れる（\`--fix\` で自動実行）`);
+    } else human.push('WSLディストロ未導入→管理者ターミナルで `wsl --install -d Ubuntu`（再起動が必要）');
   } else if (!installed && DO_FIX) {
-    if (cmdOk('npm i -g @openai/codex')) fixes.push('Codex CLI を npm install'); else human.push('Codex CLI 導入失敗→手動 `npm i -g @openai/codex`');
+    if (startCodexInstall(installTarget)) installStarts.push('🔧 native環境への Codex 導入をバックグラウンドで開始しました（数分後・次回セッションで有効。ログ: ~/.claude/tool-adoption-install.log）');
+    else if (!installRecentlyStarted(installTarget)) human.push('Codex CLI のバックグラウンド導入を開始できませんでした→手動 `npm i -g @openai/codex`');
   }
   if (installed && !authed) human.push('Codex 未認証→`codex` 実行しChatGPTでログイン(1回)');
   return { name: 'Codex', installed, nativeOnly, version, authed, used, usedDays, role: 'コード実装の主経路(定額枠)' };
@@ -332,8 +376,9 @@ msg += `| 夜間バッチ投入/結果 | ${batchCount} | ${batchCount ? '✅' : 
 msg += `| Fable5 (§1.16) | ${fableCount ? formatTokens(fableCount) : '0'} | ${fableCount ? '🚨 検出' : '✅ 未検出'} |\n`;
 
 if (fixes.length) msg += `\n🔧 自動修復: ${fixes.join(' / ')}\n`;
+if (installStarts.length) msg += `\n${installStarts.join('\n')}\n`;
 if (human.length) msg += `\n🙋 要人手(最小1操作): ${human.join(' / ')}\n`;
-if (!fixes.length && !human.length) msg += `\n(健全性OK。未使用⚠️があればルーティング(§1.13)を意識)\n`;
+if (!fixes.length && !installStarts.length && !human.length) msg += `\n(健全性OK。未使用⚠️があればルーティング(§1.13)を意識)\n`;
 msg += `※使用痕跡はセッションファイル/キー/MCP登録のみ判定。会話内容は読んでいません。`;
 
 console.log(msg);

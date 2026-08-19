@@ -1,0 +1,35 @@
+# 配布ツールの回帰テスト。
+# なぜ windows-latest を必須ジョブにするか: メンバーPCはほぼ Windows で、
+# 実際に落ちたバグ(2026-08-19)は Windows 固有だった(テストが実機の %APPDATA%\npm を拾う / PATH 差し替えで wsl.exe が解決できない)。
+# Linux だけで回すと同じ見逃しが再発する。
+# ジョブ id は `test` 固定。main のブランチ保護が必須コンテキスト `test` を要求しているため、
+# 名前を変えると保護が永久に満たされなくなる(matrix にすると `test (windows-latest)` になり不一致)。
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    name: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: selftest-guards (Windows)
+        run: node tools/selftest-guards.mjs
+
+  test-posix:
+    name: test-posix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: selftest-guards (Linux/macOS 相当)
+        run: node tools/selftest-guards.mjs

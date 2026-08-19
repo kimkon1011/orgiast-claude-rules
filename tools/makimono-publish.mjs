@@ -6,6 +6,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { redactSecrets } from './redact-secrets.mjs';
+import { isEntry } from './is-entry.mjs';
 
 const BASE = 'https://makimono-md.vercel.app';
 const home = process.env.ORGIAST_HOME || os.homedir();
@@ -70,4 +71,4 @@ async function main() {
   logs.push({ at: new Date().toISOString(), title, category, submissionId: data.submissionId, status: data.status, email: auth.email, sha256: hash }); fs.mkdirSync(path.dirname(logFile), { recursive: true }); fs.writeFileSync(logFile, `${JSON.stringify(logs, null, 2)}\n`);
   console.log(JSON.stringify({ submissionId: data.submissionId, status: data.status })); console.log('確認: https://makimono-md.vercel.app/contribute');
 }
-if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) main().catch((e) => { console.error(e.message); process.exitCode = 1; });
+if (isEntry(import.meta.url)) main().catch((e) => { console.error(e.message); process.exitCode = 1; });

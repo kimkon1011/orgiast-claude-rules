@@ -14,6 +14,7 @@ import fs from 'node:fs'; import path from 'node:path'; import os from 'node:os'
 import { pathToFileURL } from 'node:url';
 import { recommendations } from './eval-harness.mjs';
 import { readEnvValue } from './env-kv.mjs';
+import { isEntry } from './is-entry.mjs';
 const nativeHome = os.homedir();
 function defaultHome() { return process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || nativeHome; }
 const HOME = defaultHome();
@@ -62,7 +63,7 @@ export function collectCodexUsage({ home = defaultHome(), days = 7, now = Date.n
   }
   return { outputTokens, sessions };
 }
-const isMain = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+const isMain = isEntry(import.meta.url);
 if (isMain) {
 let claudeOut = 0, claudeUSD = 0, claudeByModel = {}, cacheBase = 0, cacheRead = 0, cacheWrite = 0;
 {

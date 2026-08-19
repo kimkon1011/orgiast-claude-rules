@@ -1,5 +1,6 @@
 // eval-harness.mjs — 成功率・実測コスト・速度を同じゴールデンタスクで比較する。
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'; import { isDeepStrictEqual } from 'node:util'; import { fileURLToPath, pathToFileURL } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 const HERE = path.dirname(fileURLToPath(import.meta.url)); function userHome() { const h = os.homedir(), m = process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i); return process.env.USERPROFILE || m?.[1] || h; } const HOME = userHome(); const EVAL_DIR = path.join(HOME, '.claude', 'eval'); const TASKS = path.join(EVAL_DIR, 'tasks.jsonl'); const SEED = path.join(HERE, 'eval-tasks.seed.jsonl'); const SEED_SYNCED = path.join(EVAL_DIR, '.seed-synced.jsonl'); const RESULTS = path.join(HOME, '.claude', 'eval-results.jsonl');
 const PRICE = { groq: [0.15, 0.60], openrouter: [0.59, 0.79], gemini: [0.10, 0.40], deepseek: [0.27, 1.10], kimi: [3, 15], mistral: [2, 6], ollama: [0, 0], anthropic: [1, 5] };
 const PROVIDERS = {
@@ -96,4 +97,4 @@ async function runOne(name, model, cfg = {}) { let tasks = readJsonl(TASKS); con
 const requested = (opt('--provider', '') || '').toLowerCase(); let targets; if (has('--all')) targets = readConfig(); else { if (!PROVIDERS[requested]) { console.error('使い方: node tools/eval-harness.mjs --provider <groq|openrouter|gemini|deepseek|kimi|mistral|ollama|anthropic> [--model X] [--limit N] [--category X] [--concurrency N] [--refresh-tasks|--no-sync] / --all / --pareto'); process.exit(2); } targets = [{ ...providerConfig(requested), provider: requested, model: opt('--model', providerConfig(requested).model || PROVIDERS[requested].model) }]; }
 for (const x of targets) { if (!PROVIDERS[x.provider]) { console.log(`SKIP ${x.provider}: 未対応provider`); continue; } if (x.skip) { console.log(`SKIP ${x.provider}: モデル未導入のためスキップ`); continue; } if (!loadKey(x.provider)) { const P = PROVIDERS[x.provider]; console.log(`SKIP ${x.provider}: ${P.keyEnv} 未設定（env または ~/.claude/${P.keyFile}）`); continue; } const model = x.model || PROVIDERS[x.provider].model; if (x.provider === 'ollama' && (!model || !(await ollamaHasModel(model)))) { console.log('SKIP ollama: モデル未導入のためスキップ'); continue; } try { await runOne(x.provider, model, x); } catch (e) { console.error(`${x.provider} 実行失敗: ${e.message}`); if (!has('--all')) process.exitCode = 1; } }
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) await main();
+if (isEntry(import.meta.url)) await main();

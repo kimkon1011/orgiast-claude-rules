@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 
 const REDACTED = '***REDACTED***';
 
@@ -40,7 +41,7 @@ function selftest() {
   } else console.log(`redact-secrets selftest: OK (${samples.length} samples)`);
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+if (isEntry(import.meta.url)) {
   if (process.argv.includes('--selftest')) selftest();
   else {
     console.error('使い方: node tools/redact-secrets.mjs --selftest');

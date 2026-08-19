@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 
 export function envFiles(home = process.env.ORGIAST_HOME || os.homedir()) {
   let files = [];
@@ -26,7 +27,7 @@ export function repairEnvBom({ home = process.env.ORGIAST_HOME || os.homedir(), 
   return found;
 }
 
-const isMain = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+const isMain = isEntry(import.meta.url);
 if (isMain) {
   const found = repairEnvBom({ check: process.argv.includes('--check') });
   if (found.length) console.log(`${process.argv.includes('--check') ? 'BOM検出' : 'BOM修復'}: ${found.length}件`);

@@ -8,6 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { readEnvValue } from './env-kv.mjs';
 import { repairEnvBom } from './env-repair.mjs';
+import { isEntry } from './is-entry.mjs';
 
 const args = process.argv.slice(2);
 const force = args.includes('--force');
@@ -217,4 +218,4 @@ async function main() { try {
   }
 } catch (e) { log(`unexpected error: ${e.message}`); } }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) await main();
+if (isEntry(import.meta.url)) await main();

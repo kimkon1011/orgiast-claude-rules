@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 
 const BASE = 'https://makimono-md.vercel.app';
 const STOPWORDS = new Set(['ください', 'お願い', 'して', 'したい', '作って', '作成', 'よろしく', 'ほしい', '欲しい']);
@@ -120,4 +121,4 @@ async function cli() {
   for (const x of data.results || []) console.log(`${x.slug}\t${x.title}\t${x.score ?? '-'}\t${x.roi ?? x.saved_tokens ?? '-'}\t${x.content_tokens ?? '-'} tok\t${x.is_free ? '無料' : `¥${x.price ?? '-'}`}\t${x.links?.raw ? new URL(x.links.raw, BASE) : ''}`);
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) cli().catch((e) => { console.error(`マキモノAPIエラー: ${e.message}`); process.exitCode = 1; });
+if (isEntry(import.meta.url)) cli().catch((e) => { console.error(`マキモノAPIエラー: ${e.message}`); process.exitCode = 1; });

@@ -14,6 +14,8 @@ node -e "fetch('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rule
 | discord-only | Supabase が無い、またはテーブル未作成 | Discord のみ |
 | both（既定） | Supabase と Discord の両方が利用可能 | DB + Discord |
 
+ログイン不要の公開サイトにも設置できます（ハニーポット・IP レート制限・入力長上限が常時有効。詳細は [INSTALL.md](./INSTALL.md)）。
+
 ## 導入状況
 
 | アプリ | 状況 |

@@ -54,6 +54,8 @@ export function FeedbackWidget({ appName = "{{APP_NAME}}", hideFloatingButton = 
         <h2 id="feedback-title" style={{ margin: "0 32px 4px 0", fontSize: 19 }}>{appName} 不具合・要望</h2>
         <form onSubmit={submit}>
           <input type="hidden" name="page_path" value={path} />
+          {/* ハニーポット: 人間には見えない欄。bot が埋めると API 側で捨てる(display:none は見抜かれるので使わない)。 */}
+          <input type="text" name="company" tabIndex={-1} autoComplete="off" aria-hidden="true" style={{ position: "absolute", left: -9999, top: 0, width: 1, height: 0, opacity: 0 }} />
           <label style={label}>種別<select name="kind" style={field}><option value="bug">不具合</option><option value="request">要望</option></select></label>
           <label style={label}>タイトル<input name="title" required style={field} /></label>
           <label style={label}>内容<textarea name="body" required rows={5} style={{ ...field, resize: "vertical" }} /></label>

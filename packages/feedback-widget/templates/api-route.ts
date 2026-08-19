@@ -7,6 +7,35 @@ const APP_NAME = "{{APP_NAME}}";
 // 社員チャンネル。非秘匿 ID であり、環境変数で上書きできます。
 const DEFAULT_CHANNEL_ID = "{{DISCORD_CHANNEL_ID}}";
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+const MAX_TITLE = 200;
+const MAX_BODY = 4000;
+
+// 公開サイト(未認証で誰でも POST できる)向けの最低限の濫用対策。
+// サーバーレスでは実行インスタンスごとの計数になるため完全な制限にはならない。
+// 「無いよりは遥かに良い」レベルの防御であり、厳密に止めたい場合は前段(Cloudflare 等)を併用する。
+const hits = new Map<string, number[]>();
+
+function clientIp(request: NextRequest): string {
+  const forwarded = request.headers.get("x-forwarded-for");
+  if (forwarded) return forwarded.split(",")[0].trim();
+  return request.headers.get("x-real-ip")?.trim() || "unknown";
+}
+
+function rateLimited(request: NextRequest): boolean {
+  const limit = Number(process.env.FEEDBACK_RATE_LIMIT || 5);
+  const windowMs = Number(process.env.FEEDBACK_RATE_WINDOW_MIN || 10) * 60 * 1000;
+  if (!Number.isFinite(limit) || limit <= 0) return false;
+  const now = Date.now();
+  const key = clientIp(request);
+  const recent = (hits.get(key) || []).filter((at) => now - at < windowMs);
+  if (recent.length >= limit) { hits.set(key, recent); return true; }
+  recent.push(now);
+  hits.set(key, recent);
+  // Map が無限に育たないよう、ウィンドウ外だけになったキーを掃除する。
+  if (hits.size > 500) for (const [other, times] of hits) { if (!times.some((at) => now - at < windowMs)) hits.delete(other); }
+  return false;
+}
+
 
 function supabaseHeaders(extra: Record<string, string> = {}) {
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
@@ -90,10 +119,13 @@ export async function POST(request: NextRequest) {
   try {
     const form = await request.formData();
     const kind = String(form.get("kind") || "bug") === "request" ? "request" : "bug";
-    const title = String(form.get("title") || "").trim();
-    const body = String(form.get("body") || "").trim();
+    const title = String(form.get("title") || "").trim().slice(0, MAX_TITLE);
+    const body = String(form.get("body") || "").trim().slice(0, MAX_BODY);
     const pagePath = String(form.get("page_path") || "").trim() || null;
+    // ハニーポット: 人間には見えない欄。埋まっていれば bot なので、気付かせないよう成功を装って捨てる。
+    if (String(form.get("company") || "").trim()) return NextResponse.json({ ok: true, id: null, sinks: { db: false, discord: false } });
     if (!title || !body) return NextResponse.json({ ok: false, error: "タイトルと内容は必須です" }, { status: 400 });
+    if (rateLimited(request)) return NextResponse.json({ ok: false, error: "送信が続いています。しばらく待ってから再度お試しください" }, { status: 429 });
 
     const url = (process.env.NEXT_PUBLIC_SUPABASE_URL || "").replace(/\/$/, "");
     const hasDb = Boolean(url && process.env.SUPABASE_SERVICE_ROLE_KEY);

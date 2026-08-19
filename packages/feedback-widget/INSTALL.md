@@ -29,6 +29,16 @@ node -e "fetch('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rule
 
 Discord 本文は `[アプリ名] 種別: タイトル`、本文先頭300字、提出者、画面、`/feedback`、7日署名スクショURLの順です。Bot token + channel を webhook より優先します。
 
+## 公開サイト（ログイン不要のアプリ）へ設置する場合
+
+未認証の誰でも POST できるため、次の対策が**常時有効**です（社内アプリでも副作用はありません）。
+
+- **ハニーポット**: フォームに人間には見えない `company` 欄があり、埋まっている投稿は保存も通知もせず、成功レスポンスを返して静かに捨てます。
+- **レート制限**: 同一 IP（`x-forwarded-for` の先頭）から既定 **10分あたり5件**。超過は 429 と日本語の案内文を返します。`FEEDBACK_RATE_LIMIT`（件数）と `FEEDBACK_RATE_WINDOW_MIN`（分）で変更できます。
+- **入力長**: `title` 200 字 / `body` 4000 字を超える分は切り詰めて保存します（エラーにはしません）。画像は `image/*`・8MB まで。
+
+レート制限は**実行インスタンスごとの計数**なので、サーバーレスでは厳密な上限になりません（無いよりは遥かに良い、というレベルの防御です）。荒らしが実際に来る規模なら、Cloudflare 等の前段レート制限や Turnstile を併用してください。提出者は未認証だと `null` になるため、`/feedback` 側では画面パスと本文で判断します。
+
 ## 手移植
 
 Next.js App Router では templates の API Route、Widget、Trigger、管理ページ、更新Routeを対応する `app/api/feedback/route.ts`、components、`app/feedback/page.tsx`、`app/api/feedback/update/route.ts` へ置き、root または認証済み layout に import と `<FeedbackWidget />` を追加します。SQLを Supabase SQL Editor で実行し、環境変数を本番にも設定します。

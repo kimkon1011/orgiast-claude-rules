@@ -52,22 +52,14 @@ async function template(name) {
   throw new Error(`テンプレート取得失敗: ${name} (${lastStatus}) — GitHub raw の一時障害の可能性があります。数分おいて再実行してください`);
 }
 function tokens(text) { return text.replaceAll("{{APP_NAME}}", options.appName.replaceAll('"', '\\"')).replaceAll("{{DISCORD_CHANNEL_ID}}", options.channel).replaceAll("{{IMPORT_PREFIX}}", alias ? "@" : "relative"); }
-function javascript(text, name) {
-  if (name === "FeedbackTriggerButton.tsx") return text.replace(/import type .*\n\n/, "").replace(/type Props =.*\n\n/, "").replace(/\(\{ children = "🐛 不具合・要望", onClick, \.\.\.props \}: Props\)/, '({ children = "🐛 不具合・要望", onClick, ...props })');
-  if (name === "FeedbackWidget.tsx") return text.replace(/, type CSSProperties, type FormEvent/, "").replace(/type Props =.*\n/, "").replace(/: CSSProperties/g, "").replace(/: Props\)/, ")").replace(/event: FormEvent<HTMLFormElement>/, "event").replace(/event: KeyboardEvent/, "event");
-  if (name === "api-route.ts") return text.replace(', type NextRequest', '').replace(/: NextRequest/g, '').replace(/: Record<string, string>/g, '').replace(/new Map<string, Array<\{ index: number; value: string \}>>\(\)/g, 'new Map()').replace(/: string\[\]/g, '').replace(/: Promise<string \| null>/g, '').replace(/: string \| null/g, '').replace(/: string/g, '').replace(/: number/g, '');
-  if (name === "feedback-update-route.ts") return text.replace(', type NextRequest', '').replace(/: NextRequest/g, '');
-  if (name === "feedback-admin-page.tsx") return text.replace(/type Row = .*\n/, '').replace(/: Record<string, string>/g, '').replace(/ as const/g, '').replace(/: Promise<Row\[]>/g, '').replace(/ as Row\[]/g, '').replace(/\(\{ rows \}: \{ rows: Row\[] \}\)/g, '({ rows })');
-  return text;
-}
 
 const destinations = [
-  ["api-route.ts", join(appRoot, `api/feedback/route.${ts ? "ts" : "js"}`)], ["FeedbackWidget.tsx", join(componentRoot, ts ? "FeedbackWidget.tsx" : "FeedbackWidget.jsx")], ["FeedbackTriggerButton.tsx", join(componentRoot, ts ? "FeedbackTriggerButton.tsx" : "FeedbackTriggerButton.jsx")], ["list-feedback.mjs", join(options.target, "scripts/list-feedback.mjs")],
-  ...(options.admin ? [["feedback-admin-page.tsx", join(appRoot, `feedback/page.${ts ? "tsx" : "jsx"}`)], ["feedback-update-route.ts", join(appRoot, `api/feedback/update/route.${ts ? "ts" : "js"}`)]] : []),
+  ["api-route.ts", join(appRoot, "api/feedback/route.ts")], ["FeedbackWidget.tsx", join(componentRoot, "FeedbackWidget.tsx")], ["FeedbackTriggerButton.tsx", join(componentRoot, "FeedbackTriggerButton.tsx")], ["list-feedback.mjs", join(options.target, "scripts/list-feedback.mjs")],
+  ...(options.admin ? [["feedback-admin-page.tsx", join(appRoot, "feedback/page.tsx")], ["feedback-update-route.ts", join(appRoot, "api/feedback/update/route.ts")]] : []),
 ];
 // 取得はすべて先に済ませる。途中で落ちても対象リポジトリに中途半端な導入状態を残さない。
 const prepared = [];
-for (const [name, path] of destinations) { let content = tokens(await template(name)); if (!ts && (name.endsWith(".tsx") || name.endsWith(".ts"))) content = javascript(content, name); prepared.push([path, content]); }
+for (const [name, path] of destinations) { prepared.push([path, tokens(await template(name))]); }
 const migrationSource = tokens(await template("migration_app_feedback.sql"));
 for (const [path, content] of prepared) put(path, content);
 
@@ -94,6 +86,9 @@ if (layout) {
   }
 } else pending.push(`レイアウト注入: ${appRoot} 配下の layout に <FeedbackWidget /> を追加してください`);
 
+// テンプレートは TypeScript のまま配置する(正規表現で型を剥がすと壊れるため)。
+// TS 構成でないリポジトリでは Next.js が初回の dev/build 時に typescript と型定義を自動追加する。
+if (!ts) pending.push("このリポジトリは TypeScript 構成ではないため .ts/.tsx を追加した。次回の `next dev` / `next build` で Next.js が typescript と @types を自動セットアップする(実行して完了を確認すること)");
 const migrationDir = join(options.target, "supabase/migrations"); const existing = existsSync(migrationDir) ? readdirSync(migrationDir) : [];
 const numbers = existing.map((name) => Number(name.match(/^(\d+)/)?.[1])).filter(Number.isFinite); const width = Math.max(4, ...existing.map((name) => name.match(/^(\d+)/)?.[1].length || 0)); const nextNumber = String((numbers.length ? Math.max(...numbers) : 0) + 1).padStart(width, "0");
 const migrationFile = join(migrationDir, `${nextNumber}_app_feedback.sql`); const migrationSql = migrationSource; put(migrationFile, migrationSql);

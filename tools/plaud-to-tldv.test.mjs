@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  durationToSeconds, epochToIso, extensionFromUrl, isTldvSupportedUrl, meetsMinimumDuration,
+  apiBaseFor, regionFromToken, durationToSeconds, epochToIso, extensionFromUrl, isTldvSupportedUrl, meetsMinimumDuration,
   mergeState, readState, redactSecret, regionFromRedirect, selectPlaudCookies, shouldImport,
 } from './plaud-to-tldv.mjs';
 
@@ -88,4 +88,19 @@ test('duration の単位は start_time/end_time の差分から実測で決ま�
   // start/end が無ければ従来の閾値フォールバック
   assert.equal(durationToSeconds(300), 300);
   assert.equal(durationToSeconds(300_000), 300);
+});
+
+test('リージョンは JWT の region クレームと未知ホストの両方を解決できる', () => {
+  const jwt = (payload) => `x.${Buffer.from(JSON.stringify(payload)).toString('base64url')}.y`;
+  assert.equal(regionFromToken(jwt({ region: 'aws:ap-northeast-1' })), 'aws:ap-northeast-1');
+  assert.equal(regionFromToken(jwt({ region: 'aws:mars-1' })), '');
+  assert.equal(regionFromToken('not-a-jwt'), '');
+  assert.equal(apiBaseFor('aws:ap-northeast-1'), 'https://api-apne1.plaud.ai');
+  assert.equal(apiBaseFor(undefined), 'https://api.plaud.ai');
+  // 表に無いリージョンが増えても plaud.ai 配下なら追従する
+  const raw = regionFromRedirect({ status: -302, data: { domains: { api: 'https://api-apne9.plaud.ai' } } });
+  assert.equal(raw, 'https://api-apne9.plaud.ai');
+  assert.equal(apiBaseFor(raw), 'https://api-apne9.plaud.ai');
+  // 無関係なホストへは飛ばさない
+  assert.equal(regionFromRedirect({ status: -302, data: { domains: { api: 'https://evil.example.com' } } }), undefined);
 });

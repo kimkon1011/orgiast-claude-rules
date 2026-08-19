@@ -9,6 +9,9 @@ export const REGION_BASES = Object.freeze({
   'aws:us-west-2': 'https://api.plaud.ai',
   'aws:eu-central-1': 'https://api-euc1.plaud.ai',
   'aws:ap-southeast-1': 'https://api-apse1.plaud.ai',
+  // 東京。applaud の表には無いが、日本のアカウントの JWT は region=aws:ap-northeast-1 を
+  // 持ち workspaceList の domain も api-apne1 を指す（2026-08-19 実機確認）。
+  'aws:ap-northeast-1': 'https://api-apne1.plaud.ai',
 });
 const TLDV_BASE = 'https://pasta.tldv.io';
 const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
@@ -66,7 +69,28 @@ export function isTldvSupportedUrl(value) {
 export function regionFromRedirect(envelope) {
   if (Number(envelope?.status) !== -302) return undefined;
   const api = String(envelope?.data?.domains?.api || '').toLowerCase().replace(/^https?:\/\//, '').replace(/\/$/, '');
-  return Object.entries(REGION_BASES).find(([, base]) => new URL(base).host.toLowerCase() === api)?.[0];
+  if (!api) return undefined;
+  const known = Object.entries(REGION_BASES).find(([, base]) => new URL(base).host.toLowerCase() === api)?.[0];
+  if (known) return known;
+  // Plaud が表に無いリージョンを増やしても止まらないよう、plaud.ai 配下のホストなら
+  // そのまま base URL として受け入れる（region キーの代わりに URL を state に持つ）。
+  return /^api[a-z0-9-]*\.plaud\.ai$/.test(api) ? `https://${api}` : undefined;
+}
+
+/** region キー、もしくは regionFromRedirect が返した生の base URL を解決する。 */
+export function apiBaseFor(region) {
+  if (REGION_BASES[region]) return REGION_BASES[region];
+  if (typeof region === 'string' && /^https:\/\/api[a-z0-9-]*\.plaud\.ai$/.test(region)) return region;
+  return REGION_BASES['aws:us-west-2'];
+}
+
+/** UT(JWT) の region クレームからリージョンを読む。リダイレクトを待たずに正しい API へ当てるため。 */
+export function regionFromToken(token) {
+  try {
+    const payload = JSON.parse(Buffer.from(String(token).split('.')[1], 'base64url').toString('utf8'));
+    const region = String(payload.region || '');
+    return REGION_BASES[region] ? region : '';
+  } catch { return ''; }
 }
 
 export function redactSecret(value) {
@@ -151,7 +175,7 @@ async function fetchWithRetry(url, init = {}, fetchImpl = fetch) {
 }
 
 function parseArgs(argv) {
-  const options = { dryRun: false, minMinutes: 5, backfill: false, since: null, limit: 10, doctor: false, json: false, verbose: false };
+  const options = { dryRun: false, minMinutes: 5, backfill: false, since: null, limit: 10, doctor: false, json: false, verbose: false, allowUnsupported: false };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--dry-run') options.dryRun = true;
@@ -159,6 +183,9 @@ function parseArgs(argv) {
     else if (arg === '--doctor') options.doctor = true;
     else if (arg === '--json') options.json = true;
     else if (arg === '--verbose') options.verbose = true;
+    // tl;dv の対応拡張子ゲートを外して投入する検証用。Plaud の .ogg/.opus を
+    // tl;dv 側がデコードできるかを実測するために使う。
+    else if (arg === '--allow-unsupported') options.allowUnsupported = true;
     else if (arg === '--min-minutes') options.minMinutes = Number(argv[++i]);
     else if (arg === '--limit') options.limit = Number(argv[++i]);
     else if (arg === '--since') {
@@ -218,7 +245,7 @@ async function responseJson(response, label) {
 
 function makePlaudClient(state, persist, log, fetchImpl = fetch) {
   async function call(endpoint, init, label, allowRedirect = true) {
-    const base = REGION_BASES[state.session.region] || REGION_BASES['aws:us-west-2'];
+    const base = apiBaseFor(state.session.region);
     const response = await fetchWithRetry(`${base}${endpoint}`, init, fetchImpl);
     const body = await responseJson(response, label);
     const redirectedRegion = regionFromRedirect(body);
@@ -250,7 +277,7 @@ async function refreshTokens(state, client, persist, fetchImpl) {
   let response;
   let body;
   for (let regionAttempt = 0; regionAttempt < 2; regionAttempt += 1) {
-    const base = REGION_BASES[state.session.region] || REGION_BASES['aws:us-west-2'];
+    const base = apiBaseFor(state.session.region);
     response = await fetchWithRetry(`${base}/auth/refresh-user-token`, {
       method: 'POST', headers: { accept: 'application/json', 'user-agent': USER_AGENT, cookie: `pld_ut=${state.session.ut}; pld_urt=${state.session.urt}`, 'content-type': 'application/json' }, body: '{}',
     }, fetchImpl);
@@ -349,13 +376,24 @@ export async function run(argv = process.argv.slice(2), dependencies = {}) {
     const loaded = readState(statePath, config.session);
     const state = loaded.state;
     if (loaded.corruptPath) log.warn(`壊れた state を ${loaded.corruptPath} に退避しました`);
-    if (!state.session.ut || !state.session.urt) {
-      console.error('PLAUD_UT / PLAUD_URT がありません。plaud.ai にログインし、Cookie の pld_ut と pld_urt を ~/.claude/plaud.env に保存してください。'); return 2;
+    if (!state.session.ut) {
+      console.error('PLAUD_UT がありません。web.plaud.ai にログインし、Cookie の pld_ut を ~/.claude/plaud.env に保存してください。'); return 2;
     }
+    // JWT の region クレームが最も確実な接続先。-302 リダイレクトを待たずに合わせる。
+    if (!state.session.utExp) state.session.utExp = jwtExp(state.session.ut);
+    const tokenRegion = regionFromToken(state.session.ut);
+    if (tokenRegion && tokenRegion !== state.session.region) { state.session.region = tokenRegion; }
     const persist = () => writeStateAtomic(statePath, state);
     const fetchImpl = dependencies.fetch || fetch;
     const client = makePlaudClient(state, persist, log, fetchImpl);
-    if (needsRefresh(state.session.utExp)) await refreshTokens(state, client, persist, fetchImpl);
+    if (needsRefresh(state.session.utExp)) {
+      if (!state.session.urt) {
+        // URT(30日) が無いアカウントでは UT を自力更新できない。無音で腐らせず明示的に止める。
+        console.error('Plaud の pld_ut が期限切れで、更新用の pld_urt もありません。web.plaud.ai で pld_ut を取り直して ~/.claude/plaud.env を更新してください。');
+        return 1;
+      }
+      await refreshTokens(state, client, persist, fetchImpl);
+    }
     await ensureWorkspace(state, client, persist);
 
     if (options.doctor) {
@@ -394,7 +432,7 @@ export async function run(argv = process.argv.slice(2), dependencies = {}) {
       try {
         const { body: urlBody } = await client.call(`/file/temp-url/${encodeURIComponent(record.id)}`, { headers: authHeaders(state.session.wt) }, '音声URL取得');
         const tempUrl = urlBody.temp_url;
-        if (!isTldvSupportedUrl(tempUrl)) {
+        if (!options.allowUnsupported && !isTldvSupportedUrl(tempUrl)) {
           const extension = extensionFromUrl(tempUrl) || '(拡張子なし)';
           log.warn(`${record.fullname || record.filename || record.id}: 非対応拡張子 ${extension}`);
           state.skipped[record.id] = { reason: `unsupported-extension:${extension}`, at: Date.now() }; summary.skipped += 1; continue;

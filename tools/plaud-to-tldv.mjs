@@ -95,14 +95,22 @@ export function regionFromToken(token) {
 }
 
 /**
- * tl;dv に渡す中継URLを組む。tl;dv は取得前に HEAD を打つが Plaud の署名URLは
- * HEAD に 403 を返すため、素の署名URLを渡すと無言で取り込みに失敗する(実測)。
- * 中継は HEAD/GET の両方に応答し、拡張子も明示できる。
+ * tl;dv に渡す中継URLを組む。理由は2つある。
+ * 1) tl;dv は取得前に HEAD を打つが Plaud の署名URLは HEAD に 403 を返す(GET は 206)。
+ *    素の署名URLを渡すと success:true が返るのに会議が作られない無言の失敗になる。
+ * 2) tl;dv は約2077文字を超える URL を 400 で拒否する。署名URLは 1534 文字あり、
+ *    埋め込むと超過する。そこで workspace token と fileId だけを載せ、署名URLは
+ *    中継側が都度取り直す。workspace token は AES-256-GCM で暗号化して載せる
+ *    (tl;dv 側のログに残っても悪用できないようにするため)。
  */
-export function buildProxyUrl({ base, secret, upstreamUrl, ext, ttlSeconds = 7200, now = Date.now() }) {
-  const payload = Buffer.from(JSON.stringify({ u: upstreamUrl, x: Math.floor(now / 1000) + ttlSeconds })).toString('base64url');
-  const signature = crypto.createHmac('sha256', secret).update(payload).digest('base64url');
-  return `${String(base).replace(/\/$/, '')}/a/${payload}.${signature}/audio.${ext}`;
+export function buildProxyUrl({ base, secret, apiBase, workspaceToken, fileId, ext, ttlSeconds = 7200, now = Date.now(), iv }) {
+  const key = crypto.createHash('sha256').update(secret).digest();
+  const nonce = iv || crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, nonce);
+  const plain = JSON.stringify({ b: apiBase, w: workspaceToken, f: fileId, x: Math.floor(now / 1000) + ttlSeconds });
+  const body = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()]);
+  const token = Buffer.concat([nonce, cipher.getAuthTag(), body]).toString('base64url');
+  return `${String(base).replace(/\/$/, '')}/a/${token}/audio.${ext}`;
 }
 
 /** 上流の拡張子から中継URLの拡張子を決める。ogg/opus だけは実測で切り替えたいので可変。 */
@@ -494,7 +502,7 @@ export async function run(argv = process.argv.slice(2), dependencies = {}) {
         // 403 になり取り込まれないため、設定がある限りこちらを優先する。
         const useProxy = Boolean(config.proxyBase && config.proxySecret);
         const targetUrl = useProxy
-          ? buildProxyUrl({ base: config.proxyBase, secret: config.proxySecret, upstreamUrl: tempUrl, ext: proxyExtensionFor(tempUrl, options.proxyExt) })
+          ? buildProxyUrl({ base: config.proxyBase, secret: config.proxySecret, apiBase: apiBaseFor(state.session.region), workspaceToken: state.session.wt, fileId: record.id, ext: proxyExtensionFor(tempUrl, options.proxyExt) })
           : tempUrl;
         if (!options.allowUnsupported && !isTldvSupportedUrl(targetUrl)) {
           const extension = extensionFromUrl(targetUrl) || '(拡張子なし)';

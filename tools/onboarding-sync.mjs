@@ -195,17 +195,17 @@ async function main() { try {
   await syncRepository(now);
   await provisionKeys(now);
   const oldState = state();
-  if (!force && !dryRun && oldState?.lastCheck && now - new Date(oldState.lastCheck) < 20 * 60 * 60 * 1000) process.exit(0);
+  if (!force && !dryRun && oldState?.lastCheck && now - new Date(oldState.lastCheck) < 20 * 60 * 60 * 1000) return;
   let body;
   try {
     const response = await fetch(rawUrl, { signal: AbortSignal.timeout(15000) });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     body = await response.text();
-  } catch (e) { log(`fetch failed: ${e.message}`); process.exit(0); }
-  if (!body) { log('fetch returned empty body, skip'); process.exit(0); }
+  } catch (e) { log(`fetch failed: ${e.message}`); return; }
+  if (!body) { log('fetch returned empty body, skip'); return; }
   body = body.replace(/\r\n/g, '\n');
   const hash = crypto.createHash('sha256').update(body, 'utf8').digest('hex');
-  if (!dryRun && oldState?.hash === hash) { save(hash, now); process.exit(0); }
+  if (!dryRun && oldState?.hash === hash) { save(hash, now); return; }
   const current = fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : null;
   const result = build(current, body.replace(/\n$/, ''), now.toISOString().slice(0, 10));
   if (dryRun) {

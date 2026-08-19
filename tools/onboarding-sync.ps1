@@ -201,4 +201,18 @@ try {
     Write-SyncLog "unexpected error: $($_.Exception.Message)"
 }
 
+# 日次同期の成否・差分有無にかかわらず、後から追加された必須hookを自己修復する。
+try {
+    $repoRoot = if ($env:ORGIAST_REPO) { $env:ORGIAST_REPO } else { Split-Path -Parent $PSScriptRoot }
+    $homeRoot = if ($env:ORGIAST_HOME) { $env:ORGIAST_HOME } elseif ($env:USERPROFILE) { $env:USERPROFILE } else { [Environment]::GetFolderPath('UserProfile') }
+    $env:ORGIAST_HOME = $homeRoot
+    $env:ORGIAST_REPO = $repoRoot
+    $registrar = Join-Path $repoRoot 'tools\register-hooks.mjs'
+    if ((Get-Command node -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath $registrar)) {
+        & node $registrar --hooks-only 2>$null | Out-Null
+    }
+} catch {
+    Write-SyncLog "hook registration failed: $($_.Exception.Message)"
+}
+
 exit 0

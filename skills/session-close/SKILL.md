@@ -13,7 +13,7 @@ description: セッションを綺麗に閉じて次に引き継ぐ。「終わ�
 ## 2. 未コミット差分の確認
 
 - `git status --short` を実行する。
-- 差分があれば commit → push → PR まで自分で行い、差分を放置して閉じない。自作PRの自己マージだけ user に渡す。
+- 差分があれば commit → push → PR → **マージ**まで自分で行い、差分を放置して閉じない（2026-08-19 以降は自作PRのマージも Claude が行う。`gh pr checks` が全green・スコープ内・非破壊 を確認してから `gh pr merge --squash --delete-branch`）。
 
 ## 3. memory へ永続化
 

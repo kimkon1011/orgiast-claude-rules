@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  apiBaseFor, regionFromToken, isWorkspaceTokenExpired, durationToSeconds, epochToIso, extensionFromUrl, isTldvSupportedUrl, meetsMinimumDuration,
+  apiBaseFor, regionFromToken, isWorkspaceTokenExpired, buildProxyUrl, proxyExtensionFor, durationToSeconds, epochToIso, extensionFromUrl, isTldvSupportedUrl, meetsMinimumDuration,
   mergeState, readState, redactSecret, regionFromRedirect, selectPlaudCookies, shouldImport,
 } from './plaud-to-tldv.mjs';
 
@@ -112,4 +112,18 @@ test('WT 失効は envelope status -419 と文言の双方で検出する', () =
   assert.equal(isWorkspaceTokenExpired(withEnvelope({ status: -1, msg: 'workspace token invalid' })), true);
   assert.equal(isWorkspaceTokenExpired(withEnvelope({ status: -1, msg: 'something else' })), false);
   assert.equal(isWorkspaceTokenExpired(new Error('network')), false);
+});
+
+test('中継URLは決定的で、secret が違えば署名も変わる', () => {
+  const args = { base: 'https://p.example.com/', secret: 's1', upstreamUrl: 'https://x.s3.amazonaws.com/a.ogg?Signature=z', ext: 'ogg', now: 1_700_000_000_000 };
+  const a = buildProxyUrl(args);
+  assert.equal(a, buildProxyUrl(args));
+  assert.match(a, /^https:\/\/p\.example\.com\/a\/[\w-]+\.[\w-]+\/audio\.ogg$/);
+  assert.notEqual(a, buildProxyUrl({ ...args, secret: 's2' }));
+});
+
+test('中継URLの拡張子は上流に従い、ogg/opus だけ切り替えられる', () => {
+  assert.equal(proxyExtensionFor('https://x.s3.amazonaws.com/a.mp3?s=1'), 'mp3');
+  assert.equal(proxyExtensionFor('https://x.s3.amazonaws.com/a.ogg?s=1'), 'ogg');
+  assert.equal(proxyExtensionFor('https://x.s3.amazonaws.com/a.opus?s=1', 'mp3'), 'mp3');
 });

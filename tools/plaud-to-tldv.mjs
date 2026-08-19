@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import crypto from 'node:crypto';
 import { readEnvValue } from './env-kv.mjs';
 
 export const REGION_BASES = Object.freeze({
@@ -91,6 +92,23 @@ export function regionFromToken(token) {
     const region = String(payload.region || '');
     return REGION_BASES[region] ? region : '';
   } catch { return ''; }
+}
+
+/**
+ * tl;dv に渡す中継URLを組む。tl;dv は取得前に HEAD を打つが Plaud の署名URLは
+ * HEAD に 403 を返すため、素の署名URLを渡すと無言で取り込みに失敗する(実測)。
+ * 中継は HEAD/GET の両方に応答し、拡張子も明示できる。
+ */
+export function buildProxyUrl({ base, secret, upstreamUrl, ext, ttlSeconds = 7200, now = Date.now() }) {
+  const payload = Buffer.from(JSON.stringify({ u: upstreamUrl, x: Math.floor(now / 1000) + ttlSeconds })).toString('base64url');
+  const signature = crypto.createHmac('sha256', secret).update(payload).digest('base64url');
+  return `${String(base).replace(/\/$/, '')}/a/${payload}.${signature}/audio.${ext}`;
+}
+
+/** 上流の拡張子から中継URLの拡張子を決める。ogg/opus だけは実測で切り替えたいので可変。 */
+export function proxyExtensionFor(upstreamUrl, oggAs = 'ogg') {
+  const ext = extensionFromUrl(upstreamUrl).replace('.', '') || 'mp3';
+  return (ext === 'ogg' || ext === 'opus') ? oggAs : ext;
 }
 
 export function redactSecret(value) {
@@ -188,7 +206,7 @@ async function fetchWithRetry(url, init = {}, fetchImpl = fetch) {
 }
 
 function parseArgs(argv) {
-  const options = { dryRun: false, minMinutes: 5, backfill: false, since: null, limit: 10, doctor: false, json: false, verbose: false, allowUnsupported: false };
+  const options = { dryRun: false, minMinutes: 5, backfill: false, since: null, limit: 10, doctor: false, json: false, verbose: false, allowUnsupported: false, proxyExt: 'ogg' };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--dry-run') options.dryRun = true;
@@ -199,6 +217,7 @@ function parseArgs(argv) {
     // tl;dv の対応拡張子ゲートを外して投入する検証用。Plaud の .ogg/.opus を
     // tl;dv 側がデコードできるかを実測するために使う。
     else if (arg === '--allow-unsupported') options.allowUnsupported = true;
+    else if (arg === '--proxy-ext') options.proxyExt = String(argv[++i] || 'ogg').toLowerCase();
     else if (arg === '--min-minutes') options.minMinutes = Number(argv[++i]);
     else if (arg === '--limit') options.limit = Number(argv[++i]);
     else if (arg === '--since') {
@@ -395,6 +414,8 @@ function bootstrapValues() {
       region: process.env.PLAUD_REGION || readEnvValue(plaudFile, 'PLAUD_REGION') || 'aws:us-west-2',
       workspaceId: process.env.PLAUD_WORKSPACE_ID || readEnvValue(plaudFile, 'PLAUD_WORKSPACE_ID'),
     },
+    proxyBase: process.env.PLAUD_PROXY_BASE || readEnvValue(plaudFile, 'PLAUD_PROXY_BASE'),
+    proxySecret: process.env.PLAUD_PROXY_SECRET || readEnvValue(plaudFile, 'PLAUD_PROXY_SECRET'),
     statePath: path.join(claudeDir, 'plaud-to-tldv-state.json'),
   };
 }
@@ -469,13 +490,19 @@ export async function run(argv = process.argv.slice(2), dependencies = {}) {
       try {
         const { body: urlBody } = await withFreshWorkspaceToken(state, client, persist, () => client.call(`/file/temp-url/${encodeURIComponent(record.id)}`, { headers: authHeaders(state.session.wt) }, '音声URL取得'));
         const tempUrl = urlBody.temp_url;
-        if (!options.allowUnsupported && !isTldvSupportedUrl(tempUrl)) {
-          const extension = extensionFromUrl(tempUrl) || '(拡張子なし)';
+        // 中継が設定されていれば、tl;dv に渡すのは中継URL。素の署名URLは HEAD で
+        // 403 になり取り込まれないため、設定がある限りこちらを優先する。
+        const useProxy = Boolean(config.proxyBase && config.proxySecret);
+        const targetUrl = useProxy
+          ? buildProxyUrl({ base: config.proxyBase, secret: config.proxySecret, upstreamUrl: tempUrl, ext: proxyExtensionFor(tempUrl, options.proxyExt) })
+          : tempUrl;
+        if (!options.allowUnsupported && !isTldvSupportedUrl(targetUrl)) {
+          const extension = extensionFromUrl(targetUrl) || '(拡張子なし)';
           log.warn(`${record.fullname || record.filename || record.id}: 非対応拡張子 ${extension}`);
           state.skipped[record.id] = { reason: `unsupported-extension:${extension}`, at: Date.now() }; summary.skipped += 1; continue;
         }
         const happenedAt = epochToIso(record.start_time);
-        const payload = { name: meetingName(record, happenedAt), url: tempUrl };
+        const payload = { name: meetingName(record, happenedAt), url: targetUrl };
         if (happenedAt) payload.happenedAt = happenedAt;
         if (options.dryRun) payload.dryRun = true;
         const { response, body } = await tldvRequest(config.apiKey, '/v1alpha1/meetings/import', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }, fetchImpl);

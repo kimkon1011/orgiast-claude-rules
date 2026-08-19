@@ -33,7 +33,24 @@ options.channel ||= String(env.DISCORD_FEEDBACK_CHANNEL_ID || "");
 const changed = []; const skipped = []; const pending = [];
 function log(line = "") { console.log(line); }
 function put(path, content, updateExisting = false) { const rel = relative(options.target, path); if (existsSync(path) && !options.force && !updateExisting) { skipped.push(rel); return; } changed.push(rel); if (!options.dryRun) { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, content.replace(/\r\n/g, "\n"), "utf8"); } }
-async function template(name) { const local = join(dirname(fileURLToPath(import.meta.url)), "templates", name); if (existsSync(local)) return readFileSync(local, "utf8"); const response = await fetch(`${RAW}/${name}?cb=${Date.now()}`); if (!response.ok) throw new Error(`テンプレート取得失敗: ${name} (${response.status})`); return response.text(); }
+const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+// raw.githubusercontent.com は一時的に 429/5xx を返すことがある。配布側で吸収する(部分適用を作らないため取得は先に全件行う)。
+async function template(name) {
+  const local = join(dirname(fileURLToPath(import.meta.url)), "templates", name);
+  if (existsSync(local)) return readFileSync(local, "utf8");
+  const waits = [500, 1500, 3500];
+  let lastStatus = "network";
+  for (let attempt = 0; attempt <= waits.length; attempt++) {
+    try {
+      const response = await fetch(`${RAW}/${name}?cb=${Date.now()}`);
+      if (response.ok) return await response.text();
+      lastStatus = String(response.status);
+      if (response.status === 404) break;
+    } catch (error) { lastStatus = error instanceof Error ? error.message : "network"; }
+    if (attempt < waits.length) await sleep(waits[attempt]);
+  }
+  throw new Error(`テンプレート取得失敗: ${name} (${lastStatus}) — GitHub raw の一時障害の可能性があります。数分おいて再実行してください`);
+}
 function tokens(text) { return text.replaceAll("{{APP_NAME}}", options.appName.replaceAll('"', '\\"')).replaceAll("{{DISCORD_CHANNEL_ID}}", options.channel).replaceAll("{{IMPORT_PREFIX}}", alias ? "@" : "relative"); }
 function javascript(text, name) {
   if (name === "FeedbackTriggerButton.tsx") return text.replace(/import type .*\n\n/, "").replace(/type Props =.*\n\n/, "").replace(/\(\{ children = "🐛 不具合・要望", onClick, \.\.\.props \}: Props\)/, '({ children = "🐛 不具合・要望", onClick, ...props })');
@@ -48,7 +65,11 @@ const destinations = [
   ["api-route.ts", join(appRoot, `api/feedback/route.${ts ? "ts" : "js"}`)], ["FeedbackWidget.tsx", join(componentRoot, ts ? "FeedbackWidget.tsx" : "FeedbackWidget.jsx")], ["FeedbackTriggerButton.tsx", join(componentRoot, ts ? "FeedbackTriggerButton.tsx" : "FeedbackTriggerButton.jsx")], ["list-feedback.mjs", join(options.target, "scripts/list-feedback.mjs")],
   ...(options.admin ? [["feedback-admin-page.tsx", join(appRoot, `feedback/page.${ts ? "tsx" : "jsx"}`)], ["feedback-update-route.ts", join(appRoot, `api/feedback/update/route.${ts ? "ts" : "js"}`)]] : []),
 ];
-for (const [name, path] of destinations) { let content = tokens(await template(name)); if (!ts && (name.endsWith(".tsx") || name.endsWith(".ts"))) content = javascript(content, name); put(path, content); }
+// 取得はすべて先に済ませる。途中で落ちても対象リポジトリに中途半端な導入状態を残さない。
+const prepared = [];
+for (const [name, path] of destinations) { let content = tokens(await template(name)); if (!ts && (name.endsWith(".tsx") || name.endsWith(".ts"))) content = javascript(content, name); prepared.push([path, content]); }
+const migrationSource = tokens(await template("migration_app_feedback.sql"));
+for (const [path, content] of prepared) put(path, content);
 
 function walkLayouts(dir, depth = 0) { if (depth > 5 || !existsSync(dir)) return []; const result = []; for (const item of readdirSync(dir, { withFileTypes: true })) { if (item.name.startsWith(".") || ["node_modules", "api"].includes(item.name)) continue; const path = join(dir, item.name); if (item.isDirectory()) result.push(...walkLayouts(path, depth + 1)); else if (/^layout\.(tsx|jsx)$/.test(item.name)) result.push(path); } return result; }
 function addImport(source, importLine) {
@@ -75,7 +96,7 @@ if (layout) {
 
 const migrationDir = join(options.target, "supabase/migrations"); const existing = existsSync(migrationDir) ? readdirSync(migrationDir) : [];
 const numbers = existing.map((name) => Number(name.match(/^(\d+)/)?.[1])).filter(Number.isFinite); const width = Math.max(4, ...existing.map((name) => name.match(/^(\d+)/)?.[1].length || 0)); const nextNumber = String((numbers.length ? Math.max(...numbers) : 0) + 1).padStart(width, "0");
-const migrationFile = join(migrationDir, `${nextNumber}_app_feedback.sql`); const migrationSql = tokens(await template("migration_app_feedback.sql")); put(migrationFile, migrationSql);
+const migrationFile = join(migrationDir, `${nextNumber}_app_feedback.sql`); const migrationSql = migrationSource; put(migrationFile, migrationSql);
 
 function commandExists(command) { try { execFileSync(process.platform === "win32" ? "where" : "which", [command], { stdio: "ignore" }); return true; } catch { return false; } }
 let migrationApplied = false;

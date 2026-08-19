@@ -105,7 +105,12 @@ async function provisionKeys(now) {
   if (dryRun) return;
   const previous = keysState();
   if (!force && previous?.last && now - new Date(previous.last) < 24 * 60 * 60 * 1000) return;
-  const secret = readEnvValue(path.join(home, '.claude', 'cost-reporter.env'), 'DISCORD_COST_WEBHOOK');
+  let secret = process.env.ORGIAST_KEYSERVE_SECRET || '';
+  if (!secret) secret = readEnvValue(path.join(home, '.claude', 'keyserve.env'), 'ORGIAST_KEYSERVE_SECRET');
+  if (!secret) {
+    secret = readEnvValue(path.join(home, '.claude', 'cost-reporter.env'), 'DISCORD_COST_WEBHOOK');
+    if (secret) log('legacy secret を使用中（keyserve.env 未受領）');
+  }
   if (!secret) return;
   try {
     const ts = Math.floor(Date.now() / 1000).toString();

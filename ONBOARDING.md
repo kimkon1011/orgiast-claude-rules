@@ -145,7 +145,7 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
 
 `claude-fable-5` / `model:"fable"` は**すべての用途で禁止**（別課金枠、追加コスト）。サブエージェント・直接呼び出し・SDK経由すべて対象。生成品質はOpus、速度・単純タスクはSonnet/Haiku、コーディングはCodex（§1.17）で代替。ユーザーが明示的に「Fable5で」と言った時のみ例外。
 
-この規律は hook で機械的に強制され、Agent/Task の Fable5 指定は PreToolUse が常時 deny する。必須hookの欠落は SessionStart の `hook-selfcheck` が自動修復する。
+この規律は hook で機械的に強制され、Agent/Task の Fable5 指定は PreToolUse が deny する。**例外もhookが自動で扱う**: user が「Fable5で〜」と明示指定したプロンプトを UserPromptSubmit が検知して 60分・同一セッション限りの許可トークン(`~/.claude/fable-allow.json`)を発行し、その間だけ deny を通す（時間経過とセッション変更で自動失効。「Fable5は使うな」等の否定文脈では発行しない）。user 側の手作業・設定変更は不要。必須hookの欠落は SessionStart の `hook-selfcheck` が自動修復する。
 
 ### 1.17 コーディングは Codex を主に使う（Claude Code は指揮官）
 

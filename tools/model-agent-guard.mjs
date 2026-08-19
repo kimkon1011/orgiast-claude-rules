@@ -13,6 +13,17 @@ try {
   if (!/^(Agent|Task)$/.test(String(input.tool_name || ''))) process.exit(0);
   const toolInput = input.tool_input || {};
   if (/fable/i.test(`${toolInput.model || ''} ${toolInput.subagent_type || ''}`)) {
+    const home = process.env.ORGIAST_HOME || os.homedir();
+    try {
+      const allow = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'fable-allow.json'), 'utf8'));
+      const unexpired = Date.parse(allow.until) > Date.now();
+      const sameSession = !allow.sessionId || allow.sessionId === input.session_id;
+      if (unexpired && sameSession) {
+        const context = `§1.16例外を適用: user明示指定によりFable5を許可(別課金枠・期限 ${allow.until})`;
+        console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: context } }));
+        process.exit(0);
+      }
+    } catch {}
     const reason = '組織ポリシー §1.16 で Fable5(claude-fable-5)は全用途禁止(別課金枠)。model を省略(監督継承)か "sonnet"(生成/量産)/"haiku"(分類)に変えて再実行。実装なら Codex(`node tools/codex-do.mjs`)へ。';
     console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason } }));
     process.exit(0);

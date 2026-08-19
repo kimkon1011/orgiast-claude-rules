@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -15,6 +17,22 @@ try {
   const ask = `node "${path.join(repo, 'tools', 'llm-ask.mjs')}"`;
   const enqueue = `node "${path.join(repo, 'tools', 'batch-enqueue.mjs')}"`;
   const parts = [];
+  const fableExplicit = /fable\s*-?\s*5|fable5|claude-fable-5|fable\s*(?:で|を使)/i;
+  const fableNegative = /(?:fable\s*-?\s*5|fable5|claude-fable-5|fable)\s*(?:は|を)?\s*(?:使うな|使わない|使わず|使わなく|使わん|使用しない|利用しない|禁止|使用中止|不可)/i;
+  if (fableExplicit.test(prompt) && !fableNegative.test(prompt)) {
+    const home = process.env.ORGIAST_HOME || os.homedir();
+    const allow = {
+      until: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      ...(input.session_id ? { sessionId: input.session_id } : {}),
+      prompt: prompt.slice(0, 120),
+    };
+    try {
+      const claudeDir = path.join(home, '.claude');
+      fs.mkdirSync(claudeDir, { recursive: true });
+      fs.writeFileSync(path.join(claudeDir, 'fable-allow.json'), `${JSON.stringify(allow, null, 2)}\n`);
+    } catch {}
+    parts.push('§1.16の例外: userが明示指定したため今回に限りFable5使用可(60分/このセッション限り・別課金枠なので当該タスクのみ)');
+  }
   const implementationPattern = /実装|作って|作成して|書いて|追加して|直して|修正|治して|リファクタ|refactor|バグ|bug|fix|implement|コード|関数|スクリプト|hook作|ツール作|アプリ作|新規作成|作り直|置き換え|移行|デバッグ|debug|エラーを|動かない|動くように/i;
   const questionPattern = /どう思う|教えて|説明して|とは|なぜ|理由|どっち|比較|調べて|確認して|見て/i;
   const strongImplementation = /実装|作って|書いて|直して|修正|fix|implement/i;

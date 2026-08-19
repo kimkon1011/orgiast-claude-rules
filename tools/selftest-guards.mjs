@@ -21,8 +21,33 @@ function test(name, fn) {
 function assert(condition, message) { if (!condition) throw new Error(message); }
 
 test('model-agent-guard: Fable5 deny', () => {
-  const r = run('model-agent-guard.mjs', { tool_name: 'Agent', tool_input: { model: 'fable', prompt: 'x' } });
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'orgiast-fable-deny-test-'));
+  const r = run('model-agent-guard.mjs', { tool_name: 'Agent', tool_input: { model: 'fable', prompt: 'x' } }, [], { ORGIAST_HOME: temp });
   const output = JSON.parse(r.stdout); assert(output.hookSpecificOutput.permissionDecision === 'deny', r.stdout || r.stderr);
+});
+test('Fable5明示指定: allow作成後は同一セッションで許可', () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'orgiast-fable-allow-test-'));
+  const sessionId = 'selftest-fable-session';
+  const gate = run('cost-routing-gate.mjs', { prompt: 'Fable5で要約して', session_id: sessionId }, [], { ORGIAST_HOME: temp });
+  const allowPath = path.join(temp, '.claude', 'fable-allow.json');
+  assert(fs.existsSync(allowPath), gate.stdout || gate.stderr || 'allowファイルが作成されない');
+  const allow = JSON.parse(fs.readFileSync(allowPath, 'utf8'));
+  assert(allow.sessionId === sessionId && Date.parse(allow.until) > Date.now(), JSON.stringify(allow));
+  const guard = run('model-agent-guard.mjs', { session_id: sessionId, tool_name: 'Agent', tool_input: { model: 'fable', prompt: '要約して' } }, [], { ORGIAST_HOME: temp });
+  const output = JSON.parse(guard.stdout);
+  assert(output.hookSpecificOutput.permissionDecision !== 'deny' && output.hookSpecificOutput.additionalContext.includes('§1.16例外'), guard.stdout || guard.stderr);
+});
+test('Fable5例外: 期限切れallowはdeny', () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'orgiast-fable-expired-test-'));
+  const claude = path.join(temp, '.claude'); fs.mkdirSync(claude, { recursive: true });
+  fs.writeFileSync(path.join(claude, 'fable-allow.json'), JSON.stringify({ until: new Date(Date.now() - 1000).toISOString(), sessionId: 'expired' }));
+  const r = run('model-agent-guard.mjs', { session_id: 'expired', tool_name: 'Agent', tool_input: { model: 'fable', prompt: 'x' } }, [], { ORGIAST_HOME: temp });
+  const output = JSON.parse(r.stdout); assert(output.hookSpecificOutput.permissionDecision === 'deny', r.stdout || r.stderr);
+});
+test('Fable5否定指定: allowを作成しない', () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'orgiast-fable-negative-test-'));
+  const r = run('cost-routing-gate.mjs', { prompt: 'Fable5は使うな', session_id: 'negative' }, [], { ORGIAST_HOME: temp });
+  assert(!fs.existsSync(path.join(temp, '.claude', 'fable-allow.json')), r.stdout || r.stderr);
 });
 test('model-agent-guard: 実装は warn', () => {
   const r = run('model-agent-guard.mjs', { tool_name: 'Agent', tool_input: { model: 'sonnet', prompt: 'ログイン機能を実装して' } });

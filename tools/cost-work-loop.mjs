@@ -21,7 +21,7 @@ const POST = process.argv.includes('--post');
 const since = Date.now() - DAYS * 864e5;
 // 概算単価($/1M tok) — 傾向把握用の粗い値
 const PRICE = { opus: [5, 25], sonnet: [3, 15], haiku: [0.8, 4], default: [3, 15] };
-function tier(m) { m = (m || '').toLowerCase(); if (m.includes('opus')) return 'opus'; if (m.includes('haiku')) return 'haiku'; if (m.includes('sonnet')) return 'sonnet'; return 'default'; }
+function tier(m) { m = (m || '').toLowerCase(); if (m.includes('fable')) return 'fable'; if (m.includes('opus')) return 'opus'; if (m.includes('haiku')) return 'haiku'; if (m.includes('sonnet')) return 'sonnet'; return 'default'; }
 
 // ---- 1) Claude Code トークン/$ ----
 function walk(dir, out) { let e = []; try { e = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; } for (const d of e) { const p = path.join(dir, d.name); if (d.isDirectory()) walk(p, out); else if (d.name.endsWith('.jsonl')) out.push(p); } }
@@ -76,7 +76,7 @@ let claudeOut = 0, claudeUSD = 0, claudeByModel = {}, cacheBase = 0, cacheRead =
       const baseIn = u.input_tokens || 0, cr = u.cache_read_input_tokens || 0, cc = u.cache_creation_input_tokens || 0;
       cacheBase += baseIn; cacheRead += cr; cacheWrite += cc;
       const outT = u.output_tokens || 0; const t = tier(model);
-      const [pi, po] = PRICE[t]; claudeUSD += (baseIn * pi + cc * pi * 1.25 + cr * pi * 0.1 + outT * po) / 1e6; claudeOut += outT;
+      const [pi, po] = PRICE[t] || PRICE.default; claudeUSD += (baseIn * pi + cc * pi * 1.25 + cr * pi * 0.1 + outT * po) / 1e6; claudeOut += outT;
       claudeByModel[t] = (claudeByModel[t] || 0) + outT;
     }
   }
@@ -109,6 +109,7 @@ const stateF = path.join(HOME, '.claude', 'cost-loop-state.json');
 let prev = null; try { prev = JSON.parse(fs.readFileSync(stateF, 'utf-8')); } catch { }
 const flags = [];
 const TARGET_DELEG = 0.30;
+if (claudeByModel.fable > 0) flags.push(`🚨 Fable5使用を検出(out ${(claudeByModel.fable / 1000).toFixed(0)}k tok)=§1.16 全用途禁止(別課金枠)。user明示指定が無ければ即停止し Opus/Sonnet/Haiku/Codex へ切替`);
 if (claudeOut >= 1e6 && delegRatio < TARGET_DELEG) flags.push(`🚨 委譲不足: Claude出力${(claudeOut / 1000).toFixed(0)}k tokなのに委譲率${(delegRatio * 100).toFixed(0)}%(目標${TARGET_DELEG * 100}%↑、Codex分は計上済み)。実装→Codex/量産→Groq/汎用安→OpenRouter/中量級の生成・推論→Kimi K3(別課金プール) へ回す`);
 if (codexSessions === 0) flags.push('⚠️ Codex未使用=実装を監督が抱えている疑い。実装はCodexへ委譲する');
 if (prev && typeof prev.claudeOut === 'number' && claudeOut > prev.claudeOut * 1.15 && work <= prev.work) flags.push(`🚨 利用効率悪化: Claude出力 ${(prev.claudeOut / 1000).toFixed(0)}k→${(claudeOut / 1000).toFixed(0)}k tok 増だが作業量(${workKind}) ${prev.work}→${work} 増えず。誤ルーティング/やり直し/呼びすぎを点検`);

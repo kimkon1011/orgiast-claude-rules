@@ -19,6 +19,14 @@ function test(name, fn) {
   catch (error) { failed += 1; console.log(`FAIL ${name}: ${error.message}`); }
 }
 function assert(condition, message) { if (!condition) throw new Error(message); }
+function makeTempHome(prefix) {
+  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+}
+function writeCostEnforce(home, mode) {
+  const claude = path.join(home, '.claude');
+  fs.mkdirSync(claude, { recursive: true });
+  fs.writeFileSync(path.join(claude, 'cost-enforce.json'), JSON.stringify({ mode }));
+}
 
 test('model-agent-guard: Fable5 deny', () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'orgiast-fable-deny-test-'));
@@ -50,27 +58,42 @@ test('Fable5否定指定: allowを作成しない', () => {
   assert(!fs.existsSync(path.join(temp, '.claude', 'fable-allow.json')), r.stdout || r.stderr);
 });
 test('model-agent-guard: 実装は warn', () => {
-  const r = run('model-agent-guard.mjs', { tool_name: 'Agent', tool_input: { model: 'sonnet', prompt: 'ログイン機能を実装して' } });
-  const output = JSON.parse(r.stdout); assert(output.hookSpecificOutput.additionalContext, r.stdout || r.stderr);
+  const temp = makeTempHome('orgiast-model-agent-warn-test-');
+  writeCostEnforce(temp, 'warn');
+  const r = run('model-agent-guard.mjs', { tool_name: 'Agent', tool_input: { model: 'sonnet', prompt: 'ログイン機能を実装して' } }, [], { ORGIAST_HOME: temp });
+  const output = JSON.parse(r.stdout);
+  assert(output.hookSpecificOutput.additionalContext && !output.hookSpecificOutput.permissionDecision, r.stdout || r.stderr);
+});
+test('model-agent-guard: block昇格時は実装委譲を deny', () => {
+  const temp = makeTempHome('orgiast-model-agent-block-test-');
+  writeCostEnforce(temp, 'block');
+  const r = run('model-agent-guard.mjs', { tool_name: 'Agent', tool_input: { model: 'sonnet', prompt: 'ログイン機能を実装して' } }, [], { ORGIAST_HOME: temp });
+  const output = JSON.parse(r.stdout);
+  assert(output.hookSpecificOutput.permissionDecision === 'deny', r.stdout || r.stderr);
 });
 test('model-agent-guard: Explore 調査は無出力', () => {
-  const r = run('model-agent-guard.mjs', { tool_name: 'Agent', tool_input: { subagent_type: 'Explore', prompt: '設定を調査して' } });
+  const temp = makeTempHome('orgiast-model-agent-explore-test-');
+  const r = run('model-agent-guard.mjs', { tool_name: 'Agent', tool_input: { subagent_type: 'Explore', prompt: '設定を調査して' } }, [], { ORGIAST_HOME: temp });
   assert(r.stdout === '', `stdout=${r.stdout}`);
 });
 test('model-agent-guard: Write は無出力', () => {
-  const r = run('model-agent-guard.mjs', { tool_name: 'Write', tool_input: {} });
+  const temp = makeTempHome('orgiast-model-agent-write-test-');
+  const r = run('model-agent-guard.mjs', { tool_name: 'Write', tool_input: {} }, [], { ORGIAST_HOME: temp });
   assert(r.stdout === '', `stdout=${r.stdout}`);
 });
 test('cost-routing-gate: 実装宣言', () => {
-  const r = run('cost-routing-gate.mjs', { prompt: 'ログイン機能を実装して' });
+  const temp = makeTempHome('orgiast-routing-implementation-test-');
+  const r = run('cost-routing-gate.mjs', { prompt: 'ログイン機能を実装して' }, [], { ORGIAST_HOME: temp });
   JSON.parse(r.stdout); assert(r.stdout.includes('[委譲判定]'), r.stdout || r.stderr);
 });
 test('cost-routing-gate: 300件は夜間バッチ', () => {
-  const r = run('cost-routing-gate.mjs', { prompt: '300件の会社を分類して' });
+  const temp = makeTempHome('orgiast-routing-batch-test-');
+  const r = run('cost-routing-gate.mjs', { prompt: '300件の会社を分類して' }, [], { ORGIAST_HOME: temp });
   assert(r.stdout.includes('夜間バッチ') && r.stdout.includes('§2.8.1') && r.stdout.includes('batch-enqueue'), r.stdout || r.stderr);
 });
 test('cost-routing-gate: codex語で全体を無効化しない', () => {
-  const r = run('cost-routing-gate.mjs', { prompt: 'Codexとか使ってやすくしてる？' });
+  const temp = makeTempHome('orgiast-routing-codex-test-');
+  const r = run('cost-routing-gate.mjs', { prompt: 'Codexとか使ってやすくしてる？' }, [], { ORGIAST_HOME: temp });
   assert(r.stdout.includes('additionalContext') && r.stdout.includes('監督の担当'), r.stdout || r.stderr);
 });
 test('hook-selfcheck: 偽HOMEで欠落を自動修復', () => {
@@ -83,7 +106,8 @@ test('hook-selfcheck: 偽HOMEで欠落を自動修復', () => {
   assert(JSON.stringify(settings).includes('model-agent-guard.mjs') && JSON.stringify(settings).includes('cost-routing-gate.mjs'), '必須hookが登録されていない');
 });
 test('codex-do: --cwd 省略でも指示文が消えない', () => {
-  const r = run('codex-do.mjs', undefined, ['ログイン機能を実装して', '--dry-run'], {});
+  const temp = makeTempHome('orgiast-codex-args-test-');
+  const r = run('codex-do.mjs', undefined, ['ログイン機能を実装して', '--dry-run'], { ORGIAST_HOME: temp });
   assert(r.status !== 2 && !/使い方:/.test(r.stderr || ''), '第1引数が捨てられている');
   assert(/ログイン機能を実装して/.test(r.stdout || ''), '指示文がプロンプトに含まれない');
 });

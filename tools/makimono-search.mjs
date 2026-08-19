@@ -36,8 +36,9 @@ export async function search(query, options = {}) {
   return { ...data, results: select(data.results) };
 }
 
-// サーバーの q は複数語ANDが厳しすぎ0件になり、sort は関連度を無視するため、
-// 全件取得＋ローカル採点にする。
+// サーバーの q は助詞込みの全語ANDなので依頼文をそのまま渡すと必ず0件、かつ sort=roi/savings は
+// 関連度を捨てて無関係な高ROI出品を上位に出す(実測)。hook は依頼文をそのまま扱うため、
+// 全件取得＋ローカル採点にする(24hキャッシュで実質ネットワークゼロ)。
 export async function catalog(options = {}) {
   const cache = readCache();
   const hit = cache.__catalog__;

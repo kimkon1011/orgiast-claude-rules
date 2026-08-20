@@ -4,15 +4,18 @@
 # 各メンバーの ~/.claude/CLAUDE.md に自動反映する(1日1回まで、失敗は静かに無視)。
 
 param(
-    [string]$TargetPath = (Join-Path $env:USERPROFILE '.claude\CLAUDE.md'),
+    [string]$TargetPath = '',
     [switch]$Force
 )
 
 $ErrorActionPreference = 'Stop'
 
-$RawUrl      = 'https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/ONBOARDING.md'
-$StatePath   = Join-Path $env:USERPROFILE '.claude\.onboarding-sync-state.json'
-$LogPath     = Join-Path $env:USERPROFILE '.claude\hooks\onboarding-sync.log'
+$SyncHome    = if ($env:ORGIAST_HOME) { $env:ORGIAST_HOME } elseif ($env:USERPROFILE) { $env:USERPROFILE } else { [Environment]::GetFolderPath('UserProfile') }
+if (-not $TargetPath) { $TargetPath = Join-Path $SyncHome '.claude\CLAUDE.md' }
+$RawUrl      = if ($env:ORGIAST_ONBOARDING_URL) { $env:ORGIAST_ONBOARDING_URL } else { 'https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/ONBOARDING.md' }
+$StatePath   = Join-Path $SyncHome '.claude\.onboarding-sync-state.json'
+$LogPath     = Join-Path $SyncHome '.claude\hooks\onboarding-sync.log'
+$RulesPath   = Join-Path $SyncHome '.claude\rules\orgiast-onboarding.md'
 $BeginMarkerPrefix = '<!-- BEGIN: オージャスト共通ルール'
 $EndMarker         = '<!-- END: オージャスト共通ルール -->'
 $GuardHours  = 20
@@ -82,6 +85,28 @@ function Get-Sha256Hex {
     }
 }
 
+function New-OnboardingIndex {
+    param([string]$Body)
+    $result = [System.Collections.Generic.List[string]]::new()
+    $result.Add('全文は ~/.claude/rules/orgiast-onboarding.md（および https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/ONBOARDING.md ）。判断に迷ったら該当節の全文を読むこと')
+    $lines = $Body -split "`r`n|`n"
+    for ($i = 0; $i -lt $lines.Length; $i++) {
+        $line = $lines[$i]
+        if ($line -match '^#{1,3}(?:\s|$)') {
+            $result.Add($line)
+            for ($j = $i + 1; $j -lt $lines.Length -and $lines[$j] -notmatch '^#{1,3}(?:\s|$)'; $j++) {
+                $candidate = $lines[$j].Trim()
+                if (-not $candidate) { continue }
+                $period = $candidate.IndexOf('。')
+                $result.Add($(if ($period -ge 0) { $candidate.Substring(0, $period + 1) } else { $candidate }))
+                break
+            }
+        }
+        if ($line -match '^(?:🔴|🛑|⚙️|🔁|\*\*🔴)' -and $result[$result.Count - 1] -ne $line) { $result.Add($line) }
+    }
+    return $result -join "`n"
+}
+
 function Update-TargetFile {
     param([string]$NewBody, [string]$TodayLabel)
 
@@ -89,32 +114,20 @@ function Update-TargetFile {
 
     if (Test-Path -LiteralPath $TargetPath) {
         # 書き換え前に必ずバックアップ
-        $backupPath = "{0}.bak.{1}" -f $TargetPath, (Get-Date -Format 'yyyyMMdd-HHmmss')
+        $backupPath = "{0}.bak.{1}-onboarding-index" -f $TargetPath, (Get-Date -Format 'yyyy-MM-dd')
         Copy-Item -LiteralPath $TargetPath -Destination $backupPath -Force
 
         $current = Get-Content -LiteralPath $TargetPath -Raw -Encoding UTF8
-        # 行単位でマーカーを探す(部分文字列一致だと、ONBOARDING本文が自分自身の
-        # マーカー形式を「地の文」として説明している箇所に誤爆するため、
-        # 行全体が完全にマーカーと一致する場合のみ本物として扱う)
-        $lines = $current -split "`r`n|`n"
-        $beginLineIdx = -1
-        $endLineIdx = -1
-        for ($i = 0; $i -lt $lines.Length; $i++) {
-            $trimmed = $lines[$i].Trim()
-            if ($beginLineIdx -lt 0 -and $trimmed.StartsWith($BeginMarkerPrefix) -and $trimmed.EndsWith('-->')) {
-                $beginLineIdx = $i
-                continue
+        # Multiline の行完全一致だけを対象にし、前後は Substring で一切変換しない。
+        $beginMatch = [regex]::Match($current, '(?m)^<!-- BEGIN: オージャスト共通ルール \(自動同期 \d{4}-\d{2}-\d{2}\) -->\r?$')
+        if ($beginMatch.Success) {
+            $endRegex = [regex]::new('(?m)^<!-- END: オージャスト共通ルール -->\r?$')
+            $endMatch = $endRegex.Match($current, $beginMatch.Index + $beginMatch.Length)
+            if ($endMatch.Success -and $endMatch.Index -gt $beginMatch.Index) {
+                $updated = $current.Substring(0, $beginMatch.Index) + $newBlock + $current.Substring($endMatch.Index + $endMatch.Length)
+            } else {
+                $updated = $current.TrimEnd("`r", "`n") + "`r`n`r`n" + $newBlock
             }
-            if ($beginLineIdx -ge 0 -and $endLineIdx -lt 0 -and $trimmed -eq $EndMarker) {
-                $endLineIdx = $i
-                break
-            }
-        }
-
-        if ($beginLineIdx -ge 0 -and $endLineIdx -ge 0) {
-            $before = if ($beginLineIdx -gt 0) { ($lines[0..($beginLineIdx - 1)] -join "`r`n") + "`r`n" } else { '' }
-            $after = if ($endLineIdx -lt ($lines.Length - 1)) { "`r`n" + ($lines[($endLineIdx + 1)..($lines.Length - 1)] -join "`r`n") } else { '' }
-            $updated = $before + $newBlock + $after
         } else {
             # マーカーが無い、または対応する END が見当たらない -> 安全側で末尾追記に倒す
             $updated = $current.TrimEnd("`r", "`n") + "`r`n`r`n" + $newBlock
@@ -152,35 +165,33 @@ function Main {
     }
 
     # 2. 最新 ONBOARDING.md を取得(失敗時はサイレントに終了、オフライン時にセッションを妨げない)
-    $body = $null
+    $bodyBytes = $null
     try {
-        $resp = Invoke-WebRequest -Uri $RawUrl -TimeoutSec 15 -UseBasicParsing
-        $body = $resp.Content
+        $client = [System.Net.Http.HttpClient]::new()
+        $client.Timeout = [TimeSpan]::FromSeconds(15)
+        try { $bodyBytes = $client.GetByteArrayAsync($RawUrl).GetAwaiter().GetResult() } finally { $client.Dispose() }
     } catch {
         Write-SyncLog "fetch failed: $($_.Exception.Message)"
         return
     }
 
-    if ([string]::IsNullOrEmpty($body)) {
+    if (-not $bodyBytes -or $bodyBytes.Length -eq 0) {
         Write-SyncLog 'fetch returned empty body, skip'
         return
     }
 
     # 改行を LF に正規化してからハッシュ計算(取得経路による改行差でハッシュが揺れないように)
+    $body = [System.Text.Encoding]::UTF8.GetString($bodyBytes)
     $normalizedBody = $body -replace "`r`n", "`n"
     $hash = Get-Sha256Hex -Text $normalizedBody
 
-    # 3. 差分が無ければ lastCheck だけ更新して終了
-    $state = Get-SyncState
-    if ($state -and $state.hash -eq $hash) {
-        Save-SyncState -Hash $hash -CheckedAt $now
-        return
-    }
-
-    # 4. 差分あり -> CLAUDE.md を更新
+    # 3. CLAUDE.md の索引と全文ファイルを更新
     try {
         $todayLabel = $now.ToString('yyyy-MM-dd')
-        $blockBody = $normalizedBody -replace "`n", "`r`n"
+        $rulesDir = Split-Path -Parent $RulesPath
+        if (-not (Test-Path -LiteralPath $rulesDir)) { New-Item -ItemType Directory -Path $rulesDir -Force | Out-Null }
+        [System.IO.File]::WriteAllBytes($RulesPath, $bodyBytes)
+        $blockBody = New-OnboardingIndex -Body $body
         Update-TargetFile -NewBody $blockBody -TodayLabel $todayLabel
         Save-SyncState -Hash $hash -CheckedAt $now
 

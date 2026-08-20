@@ -26,6 +26,7 @@ const rawUrl = process.env.ORGIAST_ONBOARDING_URL || 'https://raw.githubusercont
 const keyserveUrl = process.env.ORGIAST_KEYSERVE_URL || 'https://orgiast-keyserve.vercel.app/api/keys';
 const beginPrefix = '<!-- BEGIN: オージャスト共通ルール';
 const endMarker = '<!-- END: オージャスト共通ルール -->';
+const indexLead = '全文は ~/.claude/rules/orgiast-onboarding.md（および https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/ONBOARDING.md ）。判断に迷ったら該当節の全文を読むこと';
 
 function log(message) {
   if (dryRun) return;
@@ -211,18 +212,44 @@ function save(hash, now) {
   if (dryRun) return;
   try { fs.mkdirSync(path.dirname(statePath), { recursive: true }); fs.writeFileSync(statePath, `${JSON.stringify({ lastCheck: now.toISOString(), hash }, null, 2)}\n`, 'utf8'); } catch {}
 }
-function build(current, body, label) {
+export function makeIndex(body) {
+  const lines = body.replace(/\r\n/g, '\n').split('\n');
+  const kept = [indexLead];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^#{1,3}(?:\s|$)/.test(line)) {
+      kept.push(line);
+      for (let j = i + 1; j < lines.length && !/^#{1,3}(?:\s|$)/.test(lines[j]); j++) {
+        const candidate = lines[j].trim();
+        if (!candidate) continue;
+        const end = candidate.indexOf('。');
+        kept.push(end >= 0 ? candidate.slice(0, end + 1) : candidate);
+        break;
+      }
+    }
+    // 絶対ルール・上限規定の行は全文のまま残す。原文は `**🛑 上限…` のように強調記号が先に来るので
+    // 先頭の `*` を許容する(ここを `**🔴` だけにすると 🛑/⚙️/🔁 の4行が索引から落ちる)。
+    if (/^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u.test(line) && kept.at(-1) !== line) kept.push(line);
+  }
+  return kept.join('\n');
+}
+export function build(current, body, label) {
   const block = `${beginPrefix} (自動同期 ${label}) -->\n${body}\n${endMarker}`;
   if (current === null) return { updated: block, action: '新規作成' };
-  const lines = current.split(/\r?\n/);
-  let begin = -1, end = -1;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
-    // 行全体が開始マーカー形式そのものである場合だけ対象にする。
-    if (begin < 0 && line.startsWith(beginPrefix) && line.endsWith('-->')) { begin = i; continue; }
-    if (begin >= 0 && line === endMarker) { end = i; break; }
+  // 行全体が開始マーカー形式そのものである場合だけ対象にする(部分一致は自己言及文書に誤爆する)。
+  // ラベル部分の形式は縛らない: 日付形式を固定すると、別形式で導入されたPCで置換に失敗し
+  // 「末尾へ追記」に落ちてブロックが二重になる。
+  const isBegin = (line) => line.startsWith(beginPrefix) && line.endsWith('-->');
+  const matches = [...current.matchAll(/^.*$/gm)];
+  const begin = matches.find((match) => isBegin(match[0].replace(/\r$/, '').trim()));
+  if (begin) {
+    const afterBegin = begin.index + begin[0].length + (current[begin.index + begin[0].length] === '\n' ? 1 : 0);
+    const end = matches.find((match) => match.index >= afterBegin && match[0].replace(/\r$/, '') === endMarker);
+    if (end) {
+      const afterEnd = end.index + end[0].length;
+      return { updated: current.slice(0, begin.index) + block + current.slice(afterEnd), action: '既存ブロックを置換' };
+    }
   }
-  if (begin >= 0 && end >= 0) return { updated: [...lines.slice(0, begin), block, ...lines.slice(end + 1)].join('\n'), action: `行 ${begin + 1}-${end + 1} を置換` };
   return { updated: `${current.replace(/[\r\n]+$/, '')}\n\n${block}`, action: 'マーカーなし/不完全のため末尾へ追記' };
 }
 
@@ -232,25 +259,29 @@ async function main() { try {
   await provisionKeys(now);
   const oldState = state();
   if (!force && !dryRun && oldState?.lastCheck && now - new Date(oldState.lastCheck) < 20 * 60 * 60 * 1000) return;
-  let body;
+  let bodyBytes;
   try {
     const response = await fetch(rawUrl, { signal: AbortSignal.timeout(15000) });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    body = await response.text();
+    bodyBytes = Buffer.from(await response.arrayBuffer());
   } catch (e) { log(`fetch failed: ${e.message}`); return; }
-  if (!body) { log('fetch returned empty body, skip'); return; }
-  body = body.replace(/\r\n/g, '\n');
-  const hash = crypto.createHash('sha256').update(body, 'utf8').digest('hex');
-  if (!dryRun && oldState?.hash === hash) { save(hash, now); return; }
+  if (!bodyBytes?.length) { log('fetch returned empty body, skip'); return; }
+  const hash = crypto.createHash('sha256').update(bodyBytes).digest('hex');
+  const body = bodyBytes.toString('utf8');
   const current = fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : null;
-  const result = build(current, body.replace(/\n$/, ''), now.toISOString().slice(0, 10));
+  const result = build(current, makeIndex(body), now.toISOString().slice(0, 10));
+  const rulesPath = path.join(home, '.claude', 'rules', 'orgiast-onboarding.md');
+  const rulesCurrent = fs.existsSync(rulesPath) ? fs.readFileSync(rulesPath) : null;
+  if (!dryRun && current === result.updated && rulesCurrent?.equals(bodyBytes)) { save(hash, now); return; }
   if (dryRun) {
     console.log(`[dry-run] 対象: ${target}`);
     console.log(`[dry-run] 変更: ${result.action}`);
     console.log(`[dry-run] hash: ${hash.slice(0, 8)} / 書き込み・バックアップ・state更新なし`);
   } else {
     fs.mkdirSync(path.dirname(target), { recursive: true });
-    if (current !== null) fs.copyFileSync(target, `${target}.bak.${now.toISOString().replace(/[-:T]/g, '').slice(0, 15)}`);
+    fs.mkdirSync(path.dirname(rulesPath), { recursive: true });
+    fs.writeFileSync(rulesPath, bodyBytes);
+    if (current !== null) fs.copyFileSync(target, `${target}.bak.${now.toISOString().slice(0, 10)}-onboarding-index`);
     fs.writeFileSync(target, result.updated, 'utf8');
     save(hash, now);
     console.log(`[onboarding-sync] updated CLAUDE.md (hash ${hash.slice(0, 8)})`);

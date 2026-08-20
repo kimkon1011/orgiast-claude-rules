@@ -34,6 +34,12 @@ API/CLI/MCP/GitHub Actions で実行可能な操作は、手順案内せず Clau
 
 **依頼前の必須5ステップ**（順序厳守）: ①API/CLI/MCPで可能か調査 → ②CLIが無ければ自分でinstall(winget/scoop/npm) → ③認証だけ1回user依頼 → ④それでも無理なら初めて手作業依頼(直URL+完了判定つき) → ⑤手作業に頼った場合は次回に活かす学びをmemoryへ。詳細・過去事例: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/automation-first-checklist.md`
 
+**★ 環境に合ったツールで実行する（2026-08-20 kim指示「この手作業がゼロになるなら最初からやってほしい」）**: 社内の実行環境は Windows。Node スクリプト・Windows パス・PowerShell 前提の処理は **PowerShell tool で実行するのが本来の経路**で、Bash tool（Git Bash）だと環境差で落ちることがある。**1つのツールで落ちただけで「自動化できない」と結論して手作業に振らない**。実測: Supabase Management API へ DDL を投げる処理が Bash tool では完了せず、**PowerShell tool（`Set-Location "…"; node scripts/xxx.mjs "…"`）で実行したら `OK (201)` で完了**し、手作業依頼1件が不要になった。
+- 秘匿値は復元したら即 `.env.local` に永続化し、**再利用可能な runner スクリプトを commit する**（例: `web/scripts/supabase-sql.mjs` に SQL 文字列を渡すだけで DDL が通る）。次回以降は値の受け渡しそのものが発生しない。**まず `.env.local` と `scripts/` を見る**——既に永続化済のキーを transcript から再復元しようとして遠回りするのが頻発。
+- 注意: Windows の Node は終了時に `Assertion failed: !(handle->flags & UV_HANDLE_CLOSING), file src\winsync.c` と exit 9 を返すことがある。**標準出力に成功レスポンス（例 `OK (201)`）が出ていれば処理は完了している**（libuv の teardown ノイズ）。exit code だけ見て失敗と誤判定して手作業に切り替えず、read-back verify で実際の状態を確認して判断する。
+
+**userに渡すコマンドはシェルに合わせる（絶対）**: kim・社内PCのターミナル既定は **Windows PowerShell 5.1**（Claude 側の PowerShell tool は pwsh 7 なので同じ書き方が通ってしまう＝油断しやすい）。`cd "パス" && node script.mjs` は `トークン '&&' は、このバージョンでは有効なステートメント区切りではありません` で**必ず失敗する**。**`;` 区切り**（`Set-Location "パス"; node script.mjs`）で書き、空白・日本語を含むパスは必ず `"` で囲む。`head`/`tail`/`which`/`touch`/`wc -l` も存在しない。2026-08-20 に実際に `&&` を渡して失敗させた。
+
 **git/PRフローも同様 — PRは自分でマージする（2026-08-19 kim決定・全アカウント共通）**: commit→push→`gh pr create`→**`gh pr merge --squash --delete-branch` まで自分で完結**する。「マージお願いします」で止めない。旧ルールの「自作PRのマージだけは人間の1クリック」は**廃止**（kimに毎回1クリックを残すこと自体が§1.1最上位原則に反し、実運用で「マージ待ち」の滞留を生んでいたため）。
 
 **人間レビューを外す代わりに、CIをゲートにする**。`orgiast-claude-rules` では main に branch protection を設定し、CIジョブ `test` が green でなければマージできない（`.github/workflows/ci.yml`＝全 `*.test.mjs` + `selftest-guards.mjs` + 全 `.mjs` の構文チェック）。**新しくこの方式にするリポジトリでは、先にCIを用意してから auto-merge を有効化すること**。CIが無いまま自動マージすると検証層がゼロになり、手渡しより悪化する。

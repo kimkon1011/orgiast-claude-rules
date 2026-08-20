@@ -3,11 +3,17 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { pathToFileURL } from 'node:url';
+import { callWithFallback, FALLBACK_CHAIN } from './llm-fallback.mjs';
 
 const CATEGORIES = new Set(['cost', 'quality', 'model-release', 'tool', 'prompt-technique', 'other']);
 const PROVIDERS = {
   groq: { url: 'https://api.groq.com/openai/v1/chat/completions', env: 'GROQ_API_KEY', file: 'groq.env', model: 'openai/gpt-oss-120b' },
+  cerebras: { url: 'https://api.cerebras.ai/v1/chat/completions', env: 'CEREBRAS_API_KEY', file: 'cerebras.env', model: 'zai-glm-4.7' },
   deepseek: { url: 'https://api.deepseek.com/chat/completions', env: 'DEEPSEEK_API_KEY', file: 'deepseek.env', model: 'deepseek-chat' },
+  openrouter: { url: 'https://openrouter.ai/api/v1/chat/completions', env: 'OPENROUTER_API_KEY', file: 'openrouter.env', model: 'openai/gpt-oss-120b', extraHeaders: { 'HTTP-Referer': 'https://orgiast.jp', 'X-Title': 'orgiast' } },
+  gemini: { url: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', env: 'GEMINI_API_KEY', file: 'gemini.env', model: 'gemini-3.7-flash' },
+  kimi: { url: 'https://api.moonshot.ai/v1/chat/completions', env: 'MOONSHOT_API_KEY', file: 'kimi-api.env', model: 'kimi-k3', special: 'kimi' },
+  grok: { url: 'https://api.x.ai/v1/chat/completions', env: 'XAI_API_KEY', file: 'xai.env', model: 'grok-3' },
 };
 
 export function parseEnvText(text) {
@@ -139,32 +145,32 @@ function loadKey(home, provider) {
 
 export function createLlmClient({ home = os.homedir(), fetchImpl = fetch, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), usageFile } = {}) {
   return async ({ provider, messages, maxTokens = 4000, responseFormat }) => {
-    const order = [provider, provider === 'groq' ? 'deepseek' : 'groq'];
-    const failures = [];
-    for (const name of order) {
-      const p = PROVIDERS[name], key = loadKey(home, name);
-      if (!key) { failures.push(`${name}: APIキー未設定`); continue; }
-      let useResponseFormat = Boolean(responseFormat), retriedWithoutResponseFormat = false;
-      for (let attempt = 0; attempt < 3; attempt++) {
-        const began = Date.now(); let response;
-        const body = { model: p.model, messages, max_tokens: maxTokens, stream: false };
-        if (useResponseFormat) body.response_format = responseFormat;
-        try { response = await fetchImpl(p.url, { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); } catch (e) { failures.push(`${name}: ${e.message}`); }
-        if (response?.ok) {
-          const json = await response.json();
-          const usage = json.usage || {};
-          const rec = { t: new Date().toISOString(), tool: 'line-digest', provider: name, model: p.model, in: usage.prompt_tokens || 0, out: usage.completion_tokens || 0, secs: Number(((Date.now() - began) / 1000).toFixed(3)), ok: true };
-          try { fs.mkdirSync(path.dirname(usageFile), { recursive: true }); fs.appendFileSync(usageFile, `${JSON.stringify(rec)}\n`); } catch {}
-          return { text: String(json.choices?.[0]?.message?.content || ''), provider: name, model: p.model };
-        }
-        const status = response?.status;
-        failures.push(`${name}: HTTP ${status ?? 'network'}`);
-        if (status === 400 && useResponseFormat && !retriedWithoutResponseFormat) { useResponseFormat = false; retriedWithoutResponseFormat = true; attempt--; continue; }
-        if ([401, 402, 403].includes(status) || (status !== 429 && !(status >= 500))) break;
-        if (attempt < 2) await sleep(1000 * 2 ** attempt);
-      }
+    const run = async (format) => callWithFallback({
+      start: { provider, model: PROVIDERS[provider]?.model }, chain: FALLBACK_CHAIN, fetchImpl, sleepImpl: sleep, ledgerFile: usageFile,
+      cooldownFile: path.join(home, '.claude', 'provider-cooldown.json'),
+      payloadFor(candidate) {
+        const p = PROVIDERS[candidate.provider], key = p && loadKey(home, candidate.provider);
+        if (!p || !key) return null;
+        const body = { model: candidate.model || p.model, messages, max_tokens: maxTokens, stream: false };
+        if (format) body.response_format = format;
+        if (p.special === 'kimi') Object.assign(body, { reasoning_effort: 'none', temperature: 0.6 });
+        return { url: p.url, init: { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', ...(p.extraHeaders || {}) }, body: JSON.stringify(body) } };
+      },
+      async onAttempt(info) {
+        const usage = info.status === 'ok' ? (await info.response.clone().json().catch(() => ({}))).usage || {} : {};
+        const rec = { t: new Date().toISOString(), tool: 'line-digest', provider: info.candidate.provider, model: info.candidate.model, in: usage.prompt_tokens || 0, out: usage.completion_tokens || 0, secs: Number(info.secs.toFixed(3)), status: info.status, attempt: info.attempt, failover: info.failover, ok: info.status === 'ok' };
+        try { fs.mkdirSync(path.dirname(usageFile), { recursive: true }); fs.appendFileSync(usageFile, `${JSON.stringify(rec)}\n`); } catch {}
+      },
+    });
+    let result;
+    try { result = await run(responseFormat); }
+    catch (error) {
+      const has400 = error.failures?.some(({ reason }) => /^HTTP400\b/.test(reason));
+      if (!responseFormat || !has400) throw error;
+      result = await run(undefined);
     }
-    throw new Error(`LLM呼び出し失敗: ${failures.join(', ')}`);
+    const json = await result.response.json();
+    return { text: String(json.choices?.[0]?.message?.content || ''), provider: result.candidate.provider, model: result.candidate.model };
   };
 }
 

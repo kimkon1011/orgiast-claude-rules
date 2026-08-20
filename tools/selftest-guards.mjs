@@ -50,6 +50,18 @@ test('hook-selfcheck: BOMを修復し、正常時はBOM報告なし', () => {
   const file = path.join(claude, 'groq.env'); fs.writeFileSync(file, '\uFEFFGROQ_API_KEY=x\n'); const first = run('hook-selfcheck.mjs', undefined, [], { ORGIAST_HOME: temp, ORGIAST_REPO: repo }); assert(first.stdout.includes('BOM を除去しました(1件)') && !fs.readFileSync(file).subarray(0,3).equals(Buffer.from([0xef,0xbb,0xbf])), first.stdout || first.stderr);
   const second = run('hook-selfcheck.mjs', undefined, [], { ORGIAST_HOME: temp, ORGIAST_REPO: repo }); assert(!second.stdout.includes('BOM を除去'), second.stdout || second.stderr);
 });
+test('register-hooks: BOM付き settings.json でも登録でき、BOM が除去される', () => {
+  const temp = makeTempHome('orgiast-settings-bom-test-'); const claude = path.join(temp, '.claude'); fs.mkdirSync(claude, { recursive: true });
+  const file = path.join(claude, 'settings.json'); fs.writeFileSync(file, '\uFEFF{"hooks":{}}');
+  const r = run('register-hooks.mjs', undefined, ['--hooks-only'], { ORGIAST_HOME: temp, ORGIAST_REPO: repo }); const data = fs.readFileSync(file);
+  assert(r.status === 0 && r.stdout.includes('追加'), r.stdout || r.stderr); assert(!data.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf])), 'BOMが残っている'); JSON.parse(data.toString('utf8'));
+});
+test('hook-selfcheck: BOM付き settings.json でクラッシュしない', () => {
+  const temp = makeTempHome('orgiast-selfcheck-settings-bom-test-'); const claude = path.join(temp, '.claude'); fs.mkdirSync(claude, { recursive: true });
+  fs.writeFileSync(path.join(claude, 'settings.json'), '\uFEFF{"hooks":{}}');
+  const r = run('hook-selfcheck.mjs', undefined, [], { ORGIAST_HOME: temp, ORGIAST_REPO: repo });
+  assert(r.status === 0 && !`${r.stdout}${r.stderr}`.includes('Unexpected token'), r.stdout || r.stderr);
+});
 
 test('model-agent-guard: Fable5 deny', () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'orgiast-fable-deny-test-'));

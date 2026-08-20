@@ -43,7 +43,7 @@ function walk(dir, accept, out = []) {
   }
   return out;
 }
-function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } }
+function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')); } catch { return null; } }
 function readJsonl(file) {
   let raw = ''; try { raw = fs.readFileSync(file, 'utf8'); } catch { return []; }
   return raw.split(/\r?\n/).filter(Boolean).flatMap((line) => { try { return [JSON.parse(line)]; } catch { return []; } });

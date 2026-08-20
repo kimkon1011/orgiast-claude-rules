@@ -32,7 +32,7 @@ const env = envFiles();
 options.channel ||= String(env.DISCORD_FEEDBACK_CHANNEL_ID || "");
 const changed = []; const skipped = []; const pending = [];
 function log(line = "") { console.log(line); }
-function put(path, content, updateExisting = false) { const rel = relative(options.target, path); if (existsSync(path) && !options.force && !updateExisting) { skipped.push(rel); return; } changed.push(rel); if (!options.dryRun) { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, content.replace(/\r\n/g, "\n"), "utf8"); } }
+function put(path, content, updateExisting = false) { const rel = relative(options.target, path); const normalized = content.replace(/\r\n/g, "\n"); if (existsSync(path) && readFileSync(path, "utf8").replace(/\r\n/g, "\n") === normalized) return; if (existsSync(path) && !options.force && !updateExisting) { skipped.push(rel); return; } changed.push(rel); if (!options.dryRun) { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, normalized, "utf8"); } }
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 // raw.githubusercontent.com は一時的に 429/5xx を返すことがある。配布側で吸収する(部分適用を作らないため取得は先に全件行う)。
 async function template(name) {
@@ -91,7 +91,8 @@ if (layout) {
 if (!ts) pending.push("このリポジトリは TypeScript 構成ではないため .ts/.tsx を追加した。次回の `next dev` / `next build` で Next.js が typescript と @types を自動セットアップする(実行して完了を確認すること)");
 const migrationDir = join(options.target, "supabase/migrations"); const existing = existsSync(migrationDir) ? readdirSync(migrationDir) : [];
 const numbers = existing.map((name) => Number(name.match(/^(\d+)/)?.[1])).filter(Number.isFinite); const width = Math.max(4, ...existing.map((name) => name.match(/^(\d+)/)?.[1].length || 0)); const nextNumber = String((numbers.length ? Math.max(...numbers) : 0) + 1).padStart(width, "0");
-const migrationFile = join(migrationDir, `${nextNumber}_app_feedback.sql`); const migrationSql = migrationSource; put(migrationFile, migrationSql);
+const feedbackMigrations = existing.flatMap((name) => { const match = name.match(/^(\d+)_app_feedback\.sql$/); return match ? [{ name, number: Number(match[1]) }] : []; }).sort((a, b) => a.number - b.number || a.name.localeCompare(b.name));
+const migrationFile = join(migrationDir, feedbackMigrations[0]?.name || `${nextNumber}_app_feedback.sql`); const migrationSql = migrationSource; put(migrationFile, migrationSql);
 
 function commandExists(command) { try { execFileSync(process.platform === "win32" ? "where" : "which", [command], { stdio: "ignore" }); return true; } catch { return false; } }
 let migrationApplied = false;

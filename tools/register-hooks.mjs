@@ -13,7 +13,7 @@ function readGeminiKey() {
 }
 function load(file) {
   if (!fs.existsSync(file)) return {};
-  const raw = fs.readFileSync(file, 'utf8');
+  const raw = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
   return raw.trim() ? JSON.parse(raw) : {};
 }
 function backup(file) { if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.bak.${stamp}-installer`); }
@@ -51,6 +51,7 @@ function setTimeoutFor(groups, scriptName, timeout) {
 
 try {
   const settingsFile = path.join(home, '.claude', 'settings.json');
+  const settingsHadBom = fs.existsSync(settingsFile) && fs.readFileSync(settingsFile, 'utf8').startsWith('\uFEFF');
   const settings = load(settingsFile);
   let added = 0;
   if (!settings.hooks || typeof settings.hooks !== 'object' || Array.isArray(settings.hooks)) settings.hooks = {};
@@ -80,7 +81,8 @@ try {
   if (add(settings.hooks.PreToolUse, 'model-agent-guard.mjs', { matcher: 'Agent|Task', hooks: [{ type: 'command', command: command('model-agent-guard.mjs') }] })) added += 1;
   if (add(settings.hooks.Stop, 'verify-before-done-detector.mjs', { hooks: [{ type: 'command', command: command('verify-before-done-detector.mjs') }] })) added += 1;
   // 差分が無い時は書かない(日次実行で .bak が積み上がるのを防ぐ)
-  if (added) { backup(settingsFile); write(settingsFile, settings); }
+  if (added || settingsHadBom) { backup(settingsFile); write(settingsFile, settings); }
+  if (settingsHadBom) console.log('[register-hooks] settings.json の BOM を除去しました');
   if (hooksOnly) { console.log(added ? `  [OK] settings.json に hook を ${added} 件追加(バックアップ済)` : '  [OK] hook は既に登録済み(変更なし)'); process.exit(0); }
 
   const claudeFile = path.join(home, '.claude.json');

@@ -79,6 +79,7 @@ write_env_if_missing "$CLAUDE_DIR/xai.env" "${ORGIAST_GROK_KEY:+XAI_API_KEY=$ORG
 write_env_if_missing "$CLAUDE_DIR/openrouter.env" "${ORGIAST_OPENROUTER_KEY:+OPENROUTER_API_KEY=$ORGIAST_OPENROUTER_KEY}" "OpenRouterキー設定" "OpenRouterキー未指定(他機能は動作)"
 write_env_if_missing "$CLAUDE_DIR/groq.env" "${ORGIAST_GROQ_KEY:+GROQ_API_KEY=$ORGIAST_GROQ_KEY}" "Groqキー設定" "Groqキー未指定(他機能は動作)"
 write_env_if_missing "$CLAUDE_DIR/cerebras.env" "${ORGIAST_CEREBRAS_KEY:+CEREBRAS_API_KEY=$ORGIAST_CEREBRAS_KEY}" "Cerebrasキー設定" "Cerebrasキー未指定(他機能は動作)"
+write_env_if_missing "$CLAUDE_DIR/zai.env" "${ORGIAST_ZAI_KEY:+ZAI_API_KEY=$ORGIAST_ZAI_KEY}" "Z.aiキー設定(GLM Coding Plan定額枠へ委譲可能に)" "Z.aiキー未指定(他機能は動作)"
 write_env_if_missing "$CLAUDE_DIR/mistral.env" "${ORGIAST_MISTRAL_KEY:+MISTRAL_API_KEY=$ORGIAST_MISTRAL_KEY}" "Mistralキー設定" "Mistralキー未指定(他機能は動作)"
 write_env_if_missing "$CLAUDE_DIR/kimi-api.env" "${ORGIAST_KIMI_KEY:+MOONSHOT_API_KEY=$ORGIAST_KIMI_KEY}" "Kimi K3キー設定(中量級の生成/量産を別課金プールへ委譲可能に)" "Kimiキー未指定(他機能は動作)"
 write_env_if_missing "$ORGIAST_USER_HOME/.gemini/.env" "${ORGIAST_GEMINI_KEY:+GEMINI_API_KEY=$ORGIAST_GEMINI_KEY

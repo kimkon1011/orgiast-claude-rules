@@ -11,8 +11,9 @@ const requestFor = () => ({ url: 'https://example.invalid', init: {} });
 
 test('フォールバック候補は指定された順序である', () => {
   const providers = FALLBACK_CHAIN.map(({ provider }) => provider);
-  assert.deepEqual(providers, ['groq', 'cerebras', 'deepseek', 'openrouter', 'gemini', 'grok', 'kimi']);
-  assert.equal(providers[1], 'cerebras', '定額のCerebrasは従量プロバイダより先に試す');
+  assert.deepEqual(providers, ['groq', 'glm', 'cerebras', 'deepseek', 'openrouter', 'gemini', 'grok', 'kimi']);
+  assert.equal(providers[1], 'glm', '無料のGroqの次に定額のGLMを試す');
+  assert.equal(providers[2], 'cerebras', '定額のCerebrasは従量プロバイダより先に試す');
   assert.ok(providers.indexOf('grok') < providers.indexOf('kimi'));
   // 実測(2026-08-20)で openrouter 402・gemini 429 が常態化していたため、
   // 実際に生きている最安の前払い(deepseek)を死んでいる無料枠より前に出す。

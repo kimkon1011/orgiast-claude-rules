@@ -4,6 +4,8 @@ import path from 'node:path';
 
 export const FALLBACK_CHAIN = Object.freeze([
   { provider: 'groq', model: 'openai/gpt-oss-120b' },
+  // 無料の Groq、定額の GLM、以降の従量プロバイダの順で費用を抑える。
+  { provider: 'glm', model: 'glm-5.2' },
   { provider: 'cerebras', model: 'zai-glm-4.7' },
   { provider: 'deepseek', model: 'deepseek-chat' },
   { provider: 'openrouter', model: 'openai/gpt-oss-120b' },

@@ -8,6 +8,7 @@
 //
 // 実行: node claude-cost-reporter.mjs           → 実際に Discord へ送信
 //       node claude-cost-reporter.mjs --dry-run  → 送信内容を表示するだけ(送信しない)
+//       node claude-cost-reporter.mjs --force    → 6時間ガードを無視して実行する(検証用)
 //
 // 設定: ~/.claude/cost-reporter.env に以下を書く(このファイルは配布物に含めない、各PC個別設定):
 //   DISCORD_COST_WEBHOOK=https://discord.com/api/webhooks/...
@@ -19,6 +20,8 @@ import path from 'node:path';
 import os from 'node:os';
 
 const DRY_RUN = process.argv.includes('--dry-run');
+// 6時間ガードを明示的に飛ばす(検証・手動実行用)。tool-adoption-check.mjs と同じ挙動。
+const FORCE = process.argv.includes('--force');
 const nativeHome = os.homedir(); const HOME = process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || nativeHome;
 
 // --- 設定読み込み (~/.claude/cost-reporter.env) ---
@@ -106,8 +109,10 @@ function shouldSkipByGuard() {
   } catch { /* no state yet */ }
   return false;
 }
-function saveGuardState() {
-  try { fs.writeFileSync(statePath(), JSON.stringify({ lastRun: new Date().toISOString() })); } catch { /* ignore */ }
+function saveGuardState(fields = {}) {
+  let current = {};
+  try { current = JSON.parse(fs.readFileSync(statePath(), 'utf-8')); } catch { /* no state yet */ }
+  try { fs.writeFileSync(statePath(), JSON.stringify({ ...current, lastRun: new Date().toISOString(), ...fields })); } catch { /* ignore */ }
 }
 
 function main() {
@@ -115,7 +120,7 @@ function main() {
   const webhook = env.DISCORD_COST_WEBHOOK;
   const label = env.REPORTER_LABEL || os.hostname();
 
-  if (!DRY_RUN && shouldSkipByGuard()) {
+  if (!DRY_RUN && !FORCE && shouldSkipByGuard()) {
     console.log(`前回実行から${GUARD_HOURS}時間未満のためスキップ`);
     return;
   }
@@ -145,6 +150,13 @@ function main() {
   const fableUsed = sorted.some(([m]) => /fable/i.test(m));
   const opusOut = sorted.filter(([m]) => /opus/i.test(m)).reduce((a, [, v]) => a + v.outTok, 0);
   const opusRatio = totalOut ? opusOut / totalOut : 0;
+  const reportState = {
+    mtdUsd: total,
+    topModels: sorted.map(([model, value]) => ({ model, outTok: value.outTok, usd: value.cost })),
+    fable5Detected: fableUsed,
+    opusRatio,
+  };
+  if (!DRY_RUN) saveGuardState(reportState);
 
   let msg = `**💻 Claude Code ローカル利用トークン** — ${label}\n`;
   msg += `対象: ${monthStart} 〜 現在\n`;
@@ -178,7 +190,7 @@ function main() {
   })
     .then((r) => console.log(r.ok ? 'posted to Discord' : `Discord POST failed ${r.status}`))
     .catch((e) => console.error('Discord POST error:', e.message))
-    .finally(() => saveGuardState());
+    .finally(() => saveGuardState(reportState));
 }
 
 main();

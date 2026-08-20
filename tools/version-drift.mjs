@@ -114,6 +114,11 @@ function metadata(repo, upstreamTree, statusPaths) {
 }
 
 export async function checkVersionDrift(options = {}) {
+  // テストからGitHub APIを叩かせないための逃げ道(未認証は 60req/h でレート制限に当たる)。
+  // 本番では設定しない。スキップ時は formatDriftLine が空文字を返し、呼び出し側は行を出さない。
+  if (process.env.VERSION_DRIFT_SKIP === '1' && options.tree === undefined) {
+    return { status: 'skipped', repo: resolveRepo(options.repo), checked: 0, drifted: [], wip: [], stale: false, method: 'content', note: 'VERSION_DRIFT_SKIP=1' };
+  }
   const repo = resolveRepo(options.repo);
   const now = options.now ?? Date.now();
   const ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
@@ -175,6 +180,7 @@ export async function checkVersionDrift(options = {}) {
 
 export function formatDriftLine(result) {
   let line;
+  if (result.status === 'skipped') return '';
   if (result.status === 'drift') {
     const shown = result.drifted.slice(0, 5).map((item) => `${item.path}(${item.reason})`);
     if (result.drifted.length > 5) shown.push(`他${result.drifted.length - 5}件`);
@@ -184,7 +190,8 @@ export function formatDriftLine(result) {
   } else if (result.status === 'ok') {
     line = `✅ **配布物の版一致**（origin/main と ${result.checked} ファイル一致）`;
   } else {
-    line = '⚠️ **配布物の版**判定不能（GitHub API 到達不可・キャッシュ無し）';
+    // 文言に「判定不能(プローブが…)」を使わない。ツール採用チェック側の既存判定と衝突する。
+    line = '⚠️ **配布物の版**照合できず（GitHub API 到達不可・キャッシュ無し。次回再判定）';
   }
   return result.stale ? `${line}（キャッシュ判定）` : line;
 }

@@ -45,14 +45,14 @@ test('API失敗かつキャッシュ無しは unknown', async (t) => {
   const { repo } = fixture(); t.after(() => fs.rmSync(repo, { recursive: true, force: true }));
   const cacheFile = path.join(repo, 'missing-cache.json');
   const result = await checkVersionDrift({ repo, cacheFile, fetchTree: async () => { throw new Error('offline'); } });
-  assert.equal(result.status, 'unknown'); assert.match(formatDriftLine(result), /判定不能/);
+  assert.equal(result.status, 'unknown'); assert.match(formatDriftLine(result), /照合できず/);
 });
 
 test('formatDriftLine は4分岐のアイコンを返す', () => {
   assert.match(formatDriftLine({ status: 'drift', drifted: [{ path: 'tools/a.mjs', reason: '旧版' }] }), /^🚨/);
   assert.match(formatDriftLine({ status: 'wip', wip: ['tools/a.mjs'] }), /^⚠️/);
   assert.match(formatDriftLine({ status: 'ok', checked: 1 }), /^✅/);
-  assert.match(formatDriftLine({ status: 'unknown' }), /^⚠️.*判定不能/);
+  assert.match(formatDriftLine({ status: "unknown" }), /^⚠️.*照合できず/);
 });
 
 test('blob SHA は git 互換の既知値', () => {
@@ -94,4 +94,13 @@ test('ヌルバイト入りの不一致は LF 正規化しない', async (t) => 
   fs.writeFileSync(path.join(repo, 'tools', 'a.mjs'), Buffer.from([0x61, 0x0d, 0x0a, 0x00]));
   const result = await checkVersionDrift({ repo, tree, statusPaths: [], indexShas: new Map() });
   assert.equal(result.status, 'drift');
+});
+
+test('VERSION_DRIFT_SKIP=1 は照合せず、行も出さない', async () => {
+  process.env.VERSION_DRIFT_SKIP = '1';
+  try {
+    const result = await checkVersionDrift({ fetchTree: async () => { throw new Error('叩いてはいけない'); } });
+    assert.equal(result.status, 'skipped');
+    assert.equal(formatDriftLine(result), '');
+  } finally { delete process.env.VERSION_DRIFT_SKIP; }
 });

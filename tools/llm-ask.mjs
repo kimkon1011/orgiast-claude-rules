@@ -7,6 +7,8 @@ const PROVIDERS = {
   // 実測で精度が高く、llama-3.3-70b より安価な共通既定モデル。
   openrouter: { base: 'https://openrouter.ai/api/v1/chat/completions', keyEnv: 'OPENROUTER_API_KEY', keyFile: 'openrouter.env', model: 'openai/gpt-oss-120b', extraHeaders: { 'HTTP-Referer': 'https://orgiast.jp', 'X-Title': 'orgiast' } },
   groq: { base: 'https://api.groq.com/openai/v1/chat/completions', keyEnv: 'GROQ_API_KEY', keyFile: 'groq.env', model: 'openai/gpt-oss-120b' },
+  // Cerebras Code(定額サブスク・GLM-4.7・24M tok/日)。従量プロバイダより先に使いたいので連鎖では groq の直後。
+  cerebras: { base: 'https://api.cerebras.ai/v1/chat/completions', keyEnv: 'CEREBRAS_API_KEY', keyFile: 'cerebras.env', model: 'zai-glm-4.7' },
   gemini: { base: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', keyEnv: 'GEMINI_API_KEY', keyFile: 'gemini.env', model: 'gemini-3.7-flash' },
   deepseek: { base: 'https://api.deepseek.com/chat/completions', keyEnv: 'DEEPSEEK_API_KEY', keyFile: 'deepseek.env', model: 'deepseek-chat' },
   grok: { base: 'https://api.x.ai/v1/chat/completions', keyEnv: 'XAI_API_KEY', keyFile: 'xai.env', model: 'grok-3' },
@@ -18,7 +20,7 @@ const args = process.argv.slice(2);
 function opt(name, def) { const i = args.indexOf(name); return (i >= 0 && args[i + 1]) ? args[i + 1] : def; }
 const provider = (opt('--provider', '') || '').toLowerCase();
 const selected = PROVIDERS[provider];
-if (!selected) { console.error('使い方: node llm-ask.mjs --provider <openrouter|groq|gemini|deepseek|grok|kimi|mistral> "指示" [--model X] [--system S] [--max N] [--no-fallback]'); process.exit(2); }
+if (!selected) { console.error('使い方: node llm-ask.mjs --provider <openrouter|groq|cerebras|gemini|deepseek|grok|kimi|mistral> "指示" [--model X] [--system S] [--max N] [--no-fallback]'); process.exit(2); }
 const model = opt('--model', selected.model);
 const system = opt('--system', '');
 const maxTok = parseInt(opt('--max', '4000'), 10) || 4000;

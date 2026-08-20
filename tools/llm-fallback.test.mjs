@@ -8,7 +8,8 @@ const requestFor = () => ({ url: 'https://example.invalid', init: {} });
 
 test('フォールバック候補は指定された順序である', () => {
   const providers = FALLBACK_CHAIN.map(({ provider }) => provider);
-  assert.deepEqual(providers, ['groq', 'openrouter', 'gemini', 'deepseek', 'grok', 'kimi']);
+  assert.deepEqual(providers, ['groq', 'cerebras', 'openrouter', 'gemini', 'deepseek', 'grok', 'kimi']);
+  assert.equal(providers[1], 'cerebras', '定額のCerebrasは従量プロバイダより先に試す');
   assert.ok(providers.indexOf('grok') < providers.indexOf('kimi'));
 });
 

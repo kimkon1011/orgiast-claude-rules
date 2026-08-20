@@ -11,6 +11,7 @@ param(
   [string]$GrokKey = $env:ORGIAST_GROK_KEY,    # xAI Grok APIキー(任意)
   [string]$OpenRouterKey = $env:ORGIAST_OPENROUTER_KEY, # OpenRouter(1キーで413モデル/無料19本・任意)
   [string]$GroqKey = $env:ORGIAST_GROQ_KEY,    # Groq(超高速LPU・量産向け・任意)
+  [string]$CerebrasKey = $env:ORGIAST_CEREBRAS_KEY, # Cerebras Code(定額サブスク・GLM-4.7・量産/コード・任意)
   [string]$MistralKey = $env:ORGIAST_MISTRAL_KEY, # Mistral/Codestral(安いコード補助・任意)
   [string]$KimiKey = $env:ORGIAST_KIMI_KEY,  # Kimi K3(別課金プール・中量級生成/量産の逃がし先・任意)
   [string]$GeminiKey = $env:ORGIAST_GEMINI_KEY, # Gemini APIキー(配布者が埋め込み→鍵作成画面を省略・任意)
@@ -139,6 +140,11 @@ $grqEnv = Join-Path $HOMEDIR '.claude\groq.env'
 if (Test-Path $grqEnv) { OK "Groqキー 既存(上書きしません)" }
 elseif ($GroqKey) { "GROQ_API_KEY=$GroqKey" | Set-Content -Path $grqEnv -Encoding UTF8; OK "Groqキー設定(超高速な分類/量産を Groq へ委譲可能に)" }
 else { Warn "Groqキー未指定(他機能は動作)" }
+$cbEnv = Join-Path $HOMEDIR '.claude\cerebras.env'
+$cbKey = if ($CerebrasKey) { $CerebrasKey } else { $env:ORGIAST_CEREBRAS_KEY }
+if (Test-Path $cbEnv) { OK "Cerebrasキー 既存(上書きしません)" }
+elseif ($cbKey) { [System.IO.File]::WriteAllText($cbEnv, "CEREBRAS_API_KEY=$cbKey", (New-Object System.Text.UTF8Encoding($false))); OK "Cerebrasキー設定(定額枠で量産/コードを委譲可能に)" }
+else { Warn "Cerebrasキー未指定(他機能は動作)" }
 $msEnv = Join-Path $HOMEDIR '.claude\mistral.env'
 if (Test-Path $msEnv) { OK "Mistralキー 既存(上書きしません)" }
 elseif ($MistralKey) { "MISTRAL_API_KEY=$MistralKey" | Set-Content -Path $msEnv -Encoding UTF8; OK "Mistralキー設定(安いコード補助 Codestral を利用可能に)" }
@@ -368,7 +374,7 @@ try {
 } catch { Warn ("MCP自動登録に失敗(他ツールは動作): " + $_.Exception.Message) }
 
 # --- 設定ファイルのBOM除去(PS5.1のSet-Content -Encoding UTF8はBOMを付ける。node/Claude CodeのJSON.parse・env読取がBOMで壊れるため全部no-BOM化) ---
-$bomFix = @((Join-Path $HOMEDIR '.claude\settings.json'), (Join-Path $HOMEDIR '.claude.json'), (Join-Path $HOMEDIR '.gemini\.env'), $envPath, $manusEnv, $dsEnv, $xaiEnv, $orEnv, $grqEnv, $msEnv, (Join-Path $HOMEDIR '.claude\ollama.env'))
+$bomFix = @((Join-Path $HOMEDIR '.claude\settings.json'), (Join-Path $HOMEDIR '.claude.json'), (Join-Path $HOMEDIR '.gemini\.env'), $envPath, $manusEnv, $dsEnv, $xaiEnv, $orEnv, $grqEnv, $cbEnv, $msEnv, $kimiEnv, (Join-Path $HOMEDIR '.claude\ollama.env'))
 foreach ($bf in $bomFix) { try { if ($bf -and (Test-Path $bf)) { $bc = [System.IO.File]::ReadAllText($bf); if ($bc.Length -gt 0 -and $bc[0] -eq [char]0xFEFF) { [System.IO.File]::WriteAllText($bf, $bc.TrimStart([char]0xFEFF), (New-Object System.Text.UTF8Encoding($false))) } } } catch {} }
 
 # --- Codex ログイン(Codex導入済みの時だけ・未導入なら待たずにスキップ) ---

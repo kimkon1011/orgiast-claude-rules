@@ -27,6 +27,15 @@ function cheapAiCounts(file) {
   return counts;
 }
 
+// G列は「最終報告(JST)」。UTC の ISO 文字列をそのまま入れると列の意味と食い違うため JST に整形する。
+function toJst(value) {
+  const d = value ? new Date(value) : new Date();
+  if (Number.isNaN(d.getTime())) return "";
+  const jst = new Date(d.getTime() + 9 * 60 * 60 * 1000);
+  const p2 = (n) => String(n).padStart(2, "0");
+  return `${jst.getUTCFullYear()}-${p2(jst.getUTCMonth() + 1)}-${p2(jst.getUTCDate())} ${p2(jst.getUTCHours())}:${p2(jst.getUTCMinutes())}`;
+}
+
 async function main() {
   const claudeDir = path.join(home, '.claude');
   const fleetEnv = readEnv(path.join(claudeDir, 'fleet-sheet.env'));
@@ -51,10 +60,11 @@ async function main() {
     label,
     mappedName,
     hostname: os.hostname(),
-    reportedAt: cost.t || adoption.last || reporter.lastRun || new Date().toISOString(),
+    reportedAt: toJst(cost.t || adoption.last || reporter.lastRun),
     claudeUsd: Math.round((Number.isFinite(Number(cost.claudeUSD)) ? Number(cost.claudeUSD) : Number(reporter.mtdUsd || 0)) * 100) / 100,
     mainModel: topModel,
-    delegRatio: Math.round((Number.isFinite(Number(cost.delegRatio)) ? Number(cost.delegRatio) : Number(enforce.delegRatio || 0)) * 10000) / 10000,
+    // 既存行が "0%" 表記なので、人が読む列で表記が混ざらないようパーセント文字列にする。
+    delegRatio: `${(Math.round((Number.isFinite(Number(cost.delegRatio)) ? Number(cost.delegRatio) : Number(enforce.delegRatio || 0)) * 1000) / 10).toFixed(1)}%`,
     cheapAiUse: Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([provider, count]) => `${provider}:${count}`).join(', ') || 'なし',
     codexLogin: adoption.codexAuthed === true ? '済' : adoption.codexAuthed === false ? '未' : '判定不能',
     fable5: fableDetected ? '検出' : fableKnown ? '未検出' : '判定不能',

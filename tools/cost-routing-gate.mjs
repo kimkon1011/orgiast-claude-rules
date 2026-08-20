@@ -49,8 +49,12 @@ try {
     parts.push('[長文脈ルーティング] MCP `gemini-cli` の `googleSearch`/`geminiChat`(無料枠1M)へ委譲。探索は Agent(Explore)に「結果200字・コード本体なし」で。');
   }
   const countMatch = prompt.match(/(\d{2,})\s*(件|社|行|本|通|人|個|ファイル)/);
-  if ((countMatch && Number(countMatch[1]) >= 20) || /一括生成|全件|バックフィル|エンリッチ|洗い出して全部|棚卸し|全部に対して|再生成/.test(prompt)) {
-    parts.push(`[夜間バッチ §2.8.1] この作業は遅延許容なら夜間バッチ(半額)が既定。\`${enqueue} --provider <deepseek|gemini|openrouter|groq> "指示"\` で投入すれば毎日03:00の定時実行で off-peak(DeepSeek 50%off / Gemini Batch 50%off)処理。黙って遅延させず、user に「夜間(半額・翌朝結果)でよいか、今すぐ必要か」を必ず一言確認し、今すぐなら同期実行(llm-ask)に切替える。`);
+  if (!prompt.includes('[夜間判定]') && ((countMatch && Number(countMatch[1]) >= 20) || /一括生成|全件|バックフィル|エンリッチ|洗い出して全部|棚卸し|全部に対して|再生成/.test(prompt))) {
+    if (/今すぐ|すぐに|至急|急ぎ|今日中|即時|リアルタイム|いま必要|今必要/.test(prompt)) {
+      parts.push(`[夜間バッチ §2.8.1] 応答冒頭に必ず1行で \`**[夜間判定]** 即時実行（理由: user が急ぎと明示）\` と宣言し、同期実行(\`${ask}\`)へ回す。`);
+    } else {
+      parts.push(`[夜間バッチ §2.8.1] 応答冒頭に必ず1行で \`**[夜間判定]** 夜間バッチ(半額・翌朝03:00) — 投入: ${enqueue} --provider <deepseek|gemini|openrouter|groq> "指示"\` または \`**[夜間判定]** 即時実行（理由: user が待っている / ブロッキング / 20件未満相当）\` と宣言。宣言せずに着手するのは §2.8.1 違反。夜間に落とすなら黙って遅延させず、user に「夜間(半額・翌朝結果)でよいか、今すぐ必要か」を伝え、今すぐと言われたら同期実行(\`${ask}\`)に切替える。`);
+    }
   }
   // "codex" という語だけでは処理全体をバイパスしない。分類なしの場合も監督責務を注入する。
   parts.push('[監督の担当] 設計・分解・指示・レビュー・verify。実働は用途別の安い/定額経路へ流す(§1.18)。');

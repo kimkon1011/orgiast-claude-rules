@@ -126,6 +126,26 @@ test('cost-routing-gate: 300件は夜間バッチ', () => {
   const r = run('cost-routing-gate.mjs', { prompt: '300件の会社を分類して' }, [], { ORGIAST_HOME: temp });
   assert(r.stdout.includes('夜間バッチ') && r.stdout.includes('§2.8.1') && r.stdout.includes('batch-enqueue'), r.stdout || r.stderr);
 });
+test('cost-routing-gate: 夜間トリガーは夜間判定宣言を要求', () => {
+  const temp = makeTempHome('orgiast-routing-nightly-declaration-test-');
+  const r = run('cost-routing-gate.mjs', { prompt: '300件の会社を分類して' }, [], { ORGIAST_HOME: temp });
+  assert(r.stdout.includes('[夜間判定]'), r.stdout || r.stderr);
+});
+test('cost-routing-gate: 夜間判定済みなら再注入しない', () => {
+  const temp = makeTempHome('orgiast-routing-nightly-declared-test-');
+  const r = run('cost-routing-gate.mjs', { prompt: '[夜間判定] 300件の会社を分類して' }, [], { ORGIAST_HOME: temp });
+  assert(!r.stdout.includes('§2.8.1'), r.stdout || r.stderr);
+});
+test('cost-routing-gate: 急ぎ明示は即時実行', () => {
+  const temp = makeTempHome('orgiast-routing-nightly-urgent-test-');
+  const r = run('cost-routing-gate.mjs', { prompt: '500件を今すぐ分類して' }, [], { ORGIAST_HOME: temp });
+  assert(r.stdout.includes('[夜間判定]') && r.stdout.includes('即時実行') && !r.stdout.includes('batch-enqueue'), r.stdout || r.stderr);
+});
+test('cost-routing-gate: 小規模は夜間判定を注入しない', () => {
+  const temp = makeTempHome('orgiast-routing-nightly-small-test-');
+  const r = run('cost-routing-gate.mjs', { prompt: '1件だけ分類して' }, [], { ORGIAST_HOME: temp });
+  assert(!r.stdout.includes('§2.8.1'), r.stdout || r.stderr);
+});
 test('cost-routing-gate: codex語で全体を無効化しない', () => {
   const temp = makeTempHome('orgiast-routing-codex-test-');
   const r = run('cost-routing-gate.mjs', { prompt: 'Codexとか使ってやすくしてる？' }, [], { ORGIAST_HOME: temp });

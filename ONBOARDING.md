@@ -258,7 +258,7 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
 ### 2.8.1 夜間バッチ・作り置き(prerender)原則（表示時間↓・コスト↓は全部夜間へ / 2026-08-10 kim指示）
 
 **遅延を許容できるシステム作業は全部夜間に回し、日中は"作り置きを読むだけ"にする。** 表示時間短縮・API呼び出し削減・コスト削減につながるものは原則すべて夜間バッチ化する。
-夜間バッチ判定と Kimi・Groq へのルーティングは UserPromptSubmit hook が該当プロンプトのたびに注入し、欠落時は SessionStart の `hook-selfcheck` が自動修復する。
+夜間バッチ判定と Kimi・Groq へのルーティングは UserPromptSubmit hook が該当プロンプトのたびに注入し、応答冒頭の `**[夜間判定]**` 宣言を強制する。hook 欠落時は SessionStart の `hook-selfcheck` が自動修復する。
 - 対象: 大量生成/属性エンリッチ(Manus)/重いcron/バックフィル/日報・ダッシュボード・サマリーの事前整形/毎回同じレシピで組み立てている表示データ。
 - **prerenderパターン**: 毎晩バッチで「Claudeが毎回ゼロから組み立てる表示」をMarkdown等に完成形で書き出し、`<!-- ...-START -->`〜`<!-- ...-END -->`マーカーで囲む。日中はそのブロックを**読むだけ**（組み立て時間ゼロ・API呼び出しゼロ・待ち時間ゼロ）。起動が体感で数倍速くなる。
 - **Batch API(50%オフ)** を使えるバッチは使う。夜間スケジュールは GHA cron / Vercel cron / OSのスケジューラ等（Windowsタスク登録はclassifierが止めるので ps1書出し+user 1行実行）。

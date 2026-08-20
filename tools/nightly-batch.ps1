@@ -32,6 +32,22 @@ try {
         }
     }
 
+    # LINEオープンチャットの取り込み分を選別・要約して作り置きを更新する。
+    # batch-queue が空でも実行したいので、下の early exit より前に置くこと。
+    $digest = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\line-digest.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $digest = $candidate; break }
+    }
+    if ($digest) {
+        try {
+            & $node.Source $digest
+            if ($LASTEXITCODE -ne 0) { Write-Warning ("nightly-batch: line-digest exited " + $LASTEXITCODE) }
+        } catch {
+            Write-Warning ("nightly-batch: line-digest: " + $_.Exception.Message)
+        }
+    }
+
     $pending = Join-Path $HOME '.claude\batch-queue\pending.jsonl'
     if (-not (Test-Path -LiteralPath $pending -PathType Leaf)) { exit 0 }
     if ((Get-Item -LiteralPath $pending).Length -eq 0) { exit 0 }

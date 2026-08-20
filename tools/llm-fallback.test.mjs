@@ -1,10 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { callWithFallback } from './llm-fallback.mjs';
+import { callWithFallback, FALLBACK_CHAIN } from './llm-fallback.mjs';
 
 const start = { provider: 'groq', model: 'model-a' };
 const second = { provider: 'openrouter', model: 'model-b' };
 const requestFor = () => ({ url: 'https://example.invalid', init: {} });
+
+test('フォールバック候補は指定された順序である', () => {
+  const providers = FALLBACK_CHAIN.map(({ provider }) => provider);
+  assert.deepEqual(providers, ['groq', 'openrouter', 'gemini', 'deepseek', 'grok', 'kimi']);
+  assert.ok(providers.indexOf('grok') < providers.indexOf('kimi'));
+});
 
 test('429 は同一候補で2回リトライしてから次候補へ進む', async () => {
   const calls = []; const waits = [];

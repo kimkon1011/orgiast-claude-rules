@@ -73,6 +73,8 @@ try {
   // 1セッション=1目的ゲート: SessionStart で目的宣言を要求し、UserPromptSubmit で目的ドリフト/肥大をナッジする(context注入のため async 禁止)
   if (add(settings.hooks.SessionStart, 'session-purpose-gate.mjs', { hooks: [{ type: 'command', command: command('session-purpose-gate.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.UserPromptSubmit, 'session-purpose-gate.mjs', { hooks: [{ type: 'command', command: command('session-purpose-gate.mjs'), timeout: 5 }] })) added += 1;
+  if (add(settings.hooks.SessionStart, 'fable-session-guard.mjs', { hooks: [{ type: 'command', command: command('fable-session-guard.mjs'), timeout: 5 }] })) added += 1;
+  if (add(settings.hooks.UserPromptSubmit, 'fable-session-guard.mjs', { hooks: [{ type: 'command', command: command('fable-session-guard.mjs'), timeout: 5 }] })) added += 1;
   added += migrate(settings.hooks.UserPromptSubmit, 'delegation-gate', 'cost-routing-gate.mjs', command('cost-routing-gate.mjs'));
   if (add(settings.hooks.UserPromptSubmit, 'cost-routing-gate.mjs', { hooks: [{ type: 'command', command: command('cost-routing-gate.mjs') }] })) added += 1;
   // 完成済み指示書の候補を同期注入するため async は付けない。

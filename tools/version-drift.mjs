@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
 
 const TREE_URL = 'https://api.github.com/repos/kimkon1011/orgiast-claude-rules/git/trees/main?recursive=1';
-const DEFAULT_TTL_MS = 6 * 60 * 60 * 1000;
+const DEFAULT_TTL_MS = 60 * 60 * 1000;
 
 function scriptRepo() {
   let pathname = decodeURIComponent(new URL(import.meta.url).pathname);
@@ -41,6 +41,18 @@ function selectedBlobs(tree) {
 function gitOutput(repo, args) {
   try { return execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); }
   catch { return ''; }
+}
+
+function defaultLsRemote(repo, timeoutMs) {
+  try {
+    return execFileSync('git', ['-C', repo, 'ls-remote', 'origin', 'refs/heads/main'], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: timeoutMs,
+    }).trim();
+  } catch { return ''; }
+}
+
+function parseHeadSha(output) {
+  return String(output || '').trim().split(/\s+/)[0] || '';
 }
 
 function readStatusPaths(repo) {
@@ -93,14 +105,22 @@ function readCache(cacheFile, now, ttlMs) {
   try {
     const stat = fs.statSync(cacheFile);
     if (now - stat.mtimeMs > ttlMs) return null;
-    return JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+    const cached = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+    return Object.hasOwn(cached, 'headSha') && cached.tree ? cached : null;
   } catch { return null; }
 }
 
-function writeCache(cacheFile, tree) {
+function readAnyCache(cacheFile) {
+  try {
+    const cached = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+    return Object.hasOwn(cached, 'headSha') && cached.tree ? cached : null;
+  } catch { return null; }
+}
+
+function writeCache(cacheFile, headSha, tree) {
   try {
     fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
-    fs.writeFileSync(cacheFile, JSON.stringify(tree));
+    fs.writeFileSync(cacheFile, JSON.stringify({ headSha, tree }));
   } catch {}
 }
 
@@ -117,7 +137,7 @@ export async function checkVersionDrift(options = {}) {
   // テストからGitHub APIを叩かせないための逃げ道(未認証は 60req/h でレート制限に当たる)。
   // 本番では設定しない。スキップ時は formatDriftLine が空文字を返し、呼び出し側は行を出さない。
   if (process.env.VERSION_DRIFT_SKIP === '1' && options.tree === undefined) {
-    return { status: 'skipped', repo: resolveRepo(options.repo), checked: 0, drifted: [], wip: [], stale: false, method: 'content', note: 'VERSION_DRIFT_SKIP=1' };
+    return { status: 'skipped', repo: resolveRepo(options.repo), checked: 0, drifted: [], wip: [], stale: false, headSha: undefined, method: 'content', note: 'VERSION_DRIFT_SKIP=1' };
   }
   const repo = resolveRepo(options.repo);
   const now = options.now ?? Date.now();
@@ -127,18 +147,30 @@ export async function checkVersionDrift(options = {}) {
   let tree = options.tree;
   let stale = false;
   let note = '';
+  let headSha;
 
   if (!tree) {
+    let lsRemoteOutput = '';
+    try {
+      lsRemoteOutput = options.lsRemote
+        ? await options.lsRemote(8000)
+        : defaultLsRemote(repo, 8000);
+    } catch {}
+    const currentHeadSha = parseHeadSha(lsRemoteOutput);
     const cached = readCache(cacheFile, now, ttlMs);
-    if (cached) tree = cached;
+    if (cached && (!currentHeadSha || cached.headSha === currentHeadSha)) {
+      tree = cached.tree;
+      headSha = cached.headSha || undefined;
+    }
     else {
       try {
         tree = await (options.fetchTree || defaultFetchTree)(options.timeoutMs ?? 8000);
-        writeCache(cacheFile, tree);
+        headSha = currentHeadSha || undefined;
+        writeCache(cacheFile, currentHeadSha, tree);
       } catch (error) {
-        const fallback = (() => { try { return JSON.parse(fs.readFileSync(cacheFile, 'utf8')); } catch { return null; } })();
-        if (fallback) { tree = fallback; stale = true; note = 'GitHub API取得失敗のためキャッシュを使用'; }
-        else return { status: 'unknown', repo, checked: 0, drifted: [], wip: [], stale: false, treeMatches: undefined, ahead: undefined, behind: undefined, dirty: undefined, method: 'content', note: 'GitHub API 到達不可・キャッシュ無し' };
+        const fallback = readAnyCache(cacheFile);
+        if (fallback) { tree = fallback.tree; headSha = fallback.headSha || undefined; stale = true; note = 'GitHub API取得失敗のためキャッシュを使用'; }
+        else return { status: 'unknown', repo, checked: 0, drifted: [], wip: [], stale: false, headSha: currentHeadSha || undefined, treeMatches: undefined, ahead: undefined, behind: undefined, dirty: undefined, method: 'content', note: 'GitHub API 到達不可・キャッシュ無し' };
       }
     }
   }
@@ -175,7 +207,7 @@ export async function checkVersionDrift(options = {}) {
   const extra = metadata(repo, tree, normalizedStatusPaths);
   const status = drifted.length ? 'drift' : wip.length ? 'wip' : 'ok';
   const method = usedIndex && usedContent ? 'mixed' : usedIndex ? 'index' : 'content';
-  return { status, repo, checked: blobs.length, drifted, wip, stale, ...extra, method, note };
+  return { status, repo, checked: blobs.length, drifted, wip, stale, headSha, ...extra, method, note };
 }
 
 export function formatDriftLine(result) {

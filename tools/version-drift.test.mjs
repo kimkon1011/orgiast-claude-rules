@@ -104,3 +104,47 @@ test('VERSION_DRIFT_SKIP=1 は照合せず、行も出さない', async () => {
     assert.equal(formatDriftLine(result), '');
   } finally { delete process.env.VERSION_DRIFT_SKIP; }
 });
+
+test('headSha が一致するキャッシュは fetchTree を呼ばず使う', async (t) => {
+  const { repo, tree } = fixture(); t.after(() => fs.rmSync(repo, { recursive: true, force: true }));
+  const cacheFile = path.join(repo, 'cache.json');
+  fs.writeFileSync(cacheFile, JSON.stringify({ headSha: 'abc123', tree }));
+  const result = await checkVersionDrift({ repo, cacheFile, statusPaths: [], lsRemote: async () => 'abc123\trefs/heads/main', fetchTree: async () => { throw new Error('呼んではいけない'); } });
+  assert.equal(result.status, 'ok'); assert.equal(result.headSha, 'abc123');
+});
+
+test('headSha が不一致なら TTL 内でも新しいツリーを取得する', async (t) => {
+  const { repo, tree } = fixture(); t.after(() => fs.rmSync(repo, { recursive: true, force: true }));
+  const cacheFile = path.join(repo, 'cache.json');
+  const oldTree = { ...tree, tree: [{ ...tree.tree[0], sha: gitBlobSha('old\n') }] };
+  fs.writeFileSync(cacheFile, JSON.stringify({ headSha: 'old', tree: oldTree }));
+  let fetched = 0;
+  const result = await checkVersionDrift({ repo, cacheFile, statusPaths: [], lsRemote: async () => 'new\trefs/heads/main', fetchTree: async () => { fetched += 1; return tree; } });
+  assert.equal(fetched, 1); assert.equal(result.status, 'ok'); assert.equal(result.headSha, 'new');
+  assert.deepEqual(JSON.parse(fs.readFileSync(cacheFile, 'utf8')), { headSha: 'new', tree });
+});
+
+test('旧形式キャッシュは無視して再取得する', async (t) => {
+  const { repo, tree } = fixture(); t.after(() => fs.rmSync(repo, { recursive: true, force: true }));
+  const cacheFile = path.join(repo, 'cache.json');
+  fs.writeFileSync(cacheFile, JSON.stringify(tree));
+  let fetched = 0;
+  const result = await checkVersionDrift({ repo, cacheFile, statusPaths: [], lsRemote: async () => 'new\trefs/heads/main', fetchTree: async () => { fetched += 1; return tree; } });
+  assert.equal(fetched, 1); assert.equal(result.status, 'ok');
+});
+
+test('lsRemote が空なら TTL 内のキャッシュを使う', async (t) => {
+  const { repo, tree } = fixture(); t.after(() => fs.rmSync(repo, { recursive: true, force: true }));
+  const cacheFile = path.join(repo, 'cache.json');
+  fs.writeFileSync(cacheFile, JSON.stringify({ headSha: 'cached', tree }));
+  const result = await checkVersionDrift({ repo, cacheFile, statusPaths: [], lsRemote: async () => '', fetchTree: async () => { throw new Error('呼んではいけない'); } });
+  assert.equal(result.status, 'ok'); assert.equal(result.headSha, 'cached');
+});
+
+test('lsRemote のタイムアウトは 8000ms', async (t) => {
+  const { repo, tree } = fixture(); t.after(() => fs.rmSync(repo, { recursive: true, force: true }));
+  const cacheFile = path.join(repo, 'cache.json');
+  let receivedTimeout;
+  await checkVersionDrift({ repo, cacheFile, statusPaths: [], lsRemote: async (timeoutMs) => { receivedTimeout = timeoutMs; return ''; }, fetchTree: async () => tree });
+  assert.equal(receivedTimeout, 8000);
+});

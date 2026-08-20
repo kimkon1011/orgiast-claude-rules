@@ -19,6 +19,7 @@ import path from 'node:path';
 import { execSync, execFileSync, spawn } from 'node:child_process';
 import { parseEnvText } from './env-kv.mjs';
 import { codexSessionDirs } from './cost-work-loop.mjs';
+import { checkVersionDrift, formatDriftLine } from './version-drift.mjs';
 
 const DRY_RUN = process.argv.includes('--dry-run');
 const DO_FIX = process.argv.includes('--fix');
@@ -410,9 +411,19 @@ function supervisorDiscipline(codexUsed) {
 
 const checks = [checkCodex(), checkGemini(), checkKimi(), checkManus()];
 
+let driftLine = '';
+if (remainingMs() < 2000) {
+  deadlineSkipped = true;
+  driftLine = '⚠️ **配布物の版**判定不能（デッドライン超過でスキップ・次回再判定）';
+} else {
+  try { driftLine = formatDriftLine(await checkVersionDrift({ timeoutMs: Math.min(8000, remainingMs()) })); }
+  catch { driftLine = '⚠️ **配布物の版**判定不能（次回再判定）'; }
+}
+
 // ---- レポート組み立て ----
 const label = loadEnv(path.join(HOME, '.claude', 'cost-reporter.env')).REPORTER_LABEL || os.hostname();
 let msg = `**🛠️ ツール採用チェック** — ${label} (直近${USAGE_WINDOW_DAYS}日)\n`;
+msg += `${driftLine}\n`;
 for (const c of checks) {
   let icon, note;
   if (c.name === 'Kimi' && !c.keyed) { icon = '🚨'; note = 'APIキー未設定→~/.claude/kimi-api.env に MOONSHOT_API_KEY= を設定'; }

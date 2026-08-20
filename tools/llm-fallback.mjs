@@ -1,5 +1,6 @@
 export const FALLBACK_CHAIN = Object.freeze([
   { provider: 'groq', model: 'openai/gpt-oss-120b' },
+  { provider: 'cerebras', model: 'zai-glm-4.7' },
   { provider: 'openrouter', model: 'openai/gpt-oss-120b' },
   { provider: 'gemini', model: 'gemini-3.7-flash' },
   { provider: 'deepseek', model: 'deepseek-chat' },

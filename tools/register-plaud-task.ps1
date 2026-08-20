@@ -1,4 +1,4 @@
-﻿# Plaud -> tl;dv jidou import wo maiban 3:00 ni 1 kai jikkou suru task wo touroku suru.
+﻿# Plaud -> tl;dv jidou import wo 1 jikan goto ni jikkou suru task wo touroku suru.
 # Jikkou: powershell -ExecutionPolicy Bypass -File "<kono file>"
 # Nando jikkou shitemo onaji task wo uwagaki suru dake (-Force). Hoka no task ni wa furenai.
 #
@@ -14,14 +14,14 @@ if (-not (Test-Path $script)) { throw "script not found: $script" }
 $node = (Get-Command node -ErrorAction SilentlyContinue).Source
 if (-not $node) { throw 'node not found. Install Node.js first.' }
 
-# 1 nichi 1 kai nano de, 1 kai atari no jougen wo agete okanai to kako bun ga owaranai.
+# --limit 50: kako bun no toriKomi ga nokotte iru aida mo 1 kai de susumeru tame.
 $argument = '"{0}" --limit 50' -f $script
 $action = New-ScheduledTaskAction -Execute $node -Argument $argument -WorkingDirectory $repo
-$trigger = New-ScheduledTaskTrigger -Daily -At 3am
-# PC ga suimin/denngen off datta bawai wa, tsugi ni okita toki ni oikake de jikkou suru.
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 2)
+$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).Date -RepetitionInterval (New-TimeSpan -Hours 1)
+# PC ga suimin/dengen off datta bawai wa tsugi ni okita toki ni oikake de jikkou suru.
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
 
-Register-ScheduledTask -TaskName 'OrgiastPlaudToTldv' -Action $action -Trigger $trigger -Settings $settings -Description 'Import new Plaud recordings into tl;dv (daily 03:00)' -Force | Out-Null
+Register-ScheduledTask -TaskName 'OrgiastPlaudToTldv' -Action $action -Trigger $trigger -Settings $settings -Description 'Import new Plaud recordings into tl;dv (hourly)' -Force | Out-Null
 
-Write-Host 'OK: task OrgiastPlaudToTldv registered (daily at 03:00)'
+Write-Host 'OK: task OrgiastPlaudToTldv registered (every hour)'
 Get-ScheduledTask -TaskName 'OrgiastPlaudToTldv' | Select-Object TaskName, State

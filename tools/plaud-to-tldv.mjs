@@ -133,6 +133,61 @@ export function proxyExtensionFor(upstreamUrl, oggAs = 'ogg') {
   return (ext === 'ogg' || ext === 'opus') ? oggAs : ext;
 }
 
+/**
+ * 更新トークンの期限切れは「気付けないまま止まる」のが最悪なので Discord に出す。
+ * 15分ごとに走るので同じ用件は24時間に1回だけ送る。
+ */
+export function shouldNotify(state, reason, now = Date.now(), intervalMs = 24 * 60 * 60 * 1000) {
+  const last = Number(state?.notifiedAt?.[reason] || 0);
+  return !last || now - last >= intervalMs;
+}
+
+const CONSOLE_SNIPPET = "fetch('https://api-apne1.plaud.ai/auth/refresh-user-token',{method:'POST',credentials:'include',headers:{'content-type':'application/json'},body:'{}'}).then(r=>r.json()).then(j=>console.log('COPY:'+JSON.stringify({a:j.access_token,r:j.refresh_token})))";
+
+/** 取り直しが必要な時の通知本文。手順を本文に全部入れる(リンクを辿らせない)。 */
+export function renewalMessage(kind, daysLeft) {
+  const head = kind === 'expired'
+    ? '🚨 **Plaud→tl;dv の自動取り込みが停止しました**（接続トークンが失効）'
+    : `⚠️ **Plaud→tl;dv の接続トークンが残り ${daysLeft} 日です**（切れると自動取り込みが止まります）`;
+  return [head, '',
+    '復旧手順（1回だけ・2分）:',
+    '1. https://web.plaud.ai を開く（ログイン済みの状態で）',
+    '2. F12 → Console タブ',
+    '3. 貼り付けを拒否されたら、手入力で `allow pasting` → Enter',
+    '4. 次の1行を貼って Enter:',
+    '```', CONSOLE_SNIPPET, '```',
+    '5. 出てきた `COPY:{...}` の行を Claude に渡す',
+  ].join('\n');
+}
+
+/**
+ * 取り直しが必要になったことを Claude Code 側に置き手紙する。15分ごとのタスクの
+ * 標準出力は誰も読まないので、kim が毎日触る場所(セッション開始時の通知)に出す。
+ * 健全になったら消す。ここが実際の復旧作業をする場所でもある。
+ */
+export function renewalNoticePath() {
+  return path.join(os.homedir(), '.claude', 'plaud-renewal-needed.md');
+}
+
+export function writeRenewalNotice(kind, daysLeft) {
+  try {
+    fs.writeFileSync(renewalNoticePath(), renewalMessage(kind, daysLeft) + '\n', 'utf8');
+  } catch { /* 通知は best-effort。本処理は止めない */ }
+}
+
+export function clearRenewalNotice() {
+  try { fs.unlinkSync(renewalNoticePath()); } catch { /* 無ければ何もしない */ }
+}
+
+/** Discord へ送る。webhook が無ければ黙って諦める(通知が無いだけで本処理は止めない)。 */
+async function notifyDiscord(webhook, content, fetchImpl = fetch) {
+  if (!webhook) return false;
+  try {
+    const res = await fetchImpl(webhook, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ content: content.slice(0, 1900) }) });
+    return res.ok || res.status === 204;
+  } catch { return false; }
+}
+
 export function redactSecret(value) {
   const text = String(value ?? '');
   if (!text) return '(empty)';
@@ -140,7 +195,7 @@ export function redactSecret(value) {
 }
 
 export function defaultState() {
-  return { version: 1, session: { ut: '', utExp: 0, urt: '', urtExp: 0, region: 'aws:us-west-2', workspaceId: '', wt: '', wtExp: 0 }, firstSeenAt: 0, imported: {}, skipped: {}, lastRun: 0 };
+  return { version: 1, session: { ut: '', utExp: 0, urt: '', urtExp: 0, region: 'aws:us-west-2', workspaceId: '', wt: '', wtExp: 0 }, firstSeenAt: 0, imported: {}, skipped: {}, notifiedAt: {}, lastRun: 0 };
 }
 
 export function mergeState(raw = {}, bootstrap = {}) {
@@ -151,6 +206,7 @@ export function mergeState(raw = {}, bootstrap = {}) {
     session: { ...base.session, ...bootstrap, ...session },
     imported: raw.imported && typeof raw.imported === 'object' && !Array.isArray(raw.imported) ? raw.imported : {},
     skipped: raw.skipped && typeof raw.skipped === 'object' && !Array.isArray(raw.skipped) ? raw.skipped : {},
+    notifiedAt: raw.notifiedAt && typeof raw.notifiedAt === 'object' && !Array.isArray(raw.notifiedAt) ? raw.notifiedAt : {},
   };
 }
 
@@ -439,6 +495,10 @@ function bootstrapValues() {
     },
     proxyBase: process.env.PLAUD_PROXY_BASE || readEnvValue(plaudFile, 'PLAUD_PROXY_BASE'),
     proxySecret: process.env.PLAUD_PROXY_SECRET || readEnvValue(plaudFile, 'PLAUD_PROXY_SECRET'),
+    // 専用 webhook が無ければ kim が毎日見ているコスト通知チャンネルに相乗りする
+    webhook: process.env.PLAUD_DISCORD_WEBHOOK || readEnvValue(plaudFile, 'PLAUD_DISCORD_WEBHOOK')
+      || readEnvValue(path.join(claudeDir, 'cost-reporter.env'), 'DISCORD_COST_WEBHOOK')
+      || readEnvValue(path.join(claudeDir, 'cost-monitor.env'), 'DISCORD_COST_WEBHOOK'),
     statePath: path.join(claudeDir, 'plaud-to-tldv-state.json'),
   };
 }
@@ -452,6 +512,8 @@ export async function run(argv = process.argv.slice(2), dependencies = {}) {
   const statePath = config.statePath;
   const lockPath = `${statePath}.lock`;
   let lockFd;
+  // 認証が飛んだ時は catch 側からも通知したいので、state を外に出しておく。
+  let notifyCtx = null;
   try { lockFd = acquireLock(lockPath); } catch (error) { console.error(error.message); return 1; }
   try {
     const loaded = readState(statePath, config.session);
@@ -465,18 +527,30 @@ export async function run(argv = process.argv.slice(2), dependencies = {}) {
     const tokenRegion = regionFromToken(state.session.ut);
     if (tokenRegion && tokenRegion !== state.session.region) { state.session.region = tokenRegion; }
     const persist = () => writeStateAtomic(statePath, state);
+    notifyCtx = { state, persist };
     const fetchImpl = dependencies.fetch || fetch;
     const client = makePlaudClient(state, persist, log, fetchImpl);
     // URT が切れると自力更新できず、ブラウザからの取り直しが必要になる。
     // 黙って止まらないよう、余裕のあるうちから警告を出す。
     const urtDaysLeft = state.session.urtExp ? (Number(state.session.urtExp) * 1000 - Date.now()) / 86400000 : 0;
+    if (state.session.urt && urtDaysLeft >= 7) clearRenewalNotice();
     if (state.session.urt && urtDaysLeft > 0 && urtDaysLeft < 7) {
       log.warn(`Plaud の更新トークンの残り ${Math.floor(urtDaysLeft)} 日。切れる前に web.plaud.ai から取り直しが必要です`);
+      writeRenewalNotice('warning', Math.floor(urtDaysLeft));
+      if (shouldNotify(state, 'renewal')) {
+        const sent = await notifyDiscord(config.webhook, renewalMessage('warning', Math.floor(urtDaysLeft)), fetchImpl);
+        if (sent) { state.notifiedAt.renewal = Date.now(); persist(); }
+      }
     }
     if (needsRefresh(state.session.utExp)) {
       if (!state.session.urt) {
-        // URT(30日) が無いアカウントでは UT を自力更新できない。無音で腐らせず明示的に止める。
-        console.error('Plaud の pld_ut が期限切れで、更新用の pld_urt もありません。web.plaud.ai で pld_ut を取り直して ~/.claude/plaud.env を更新してください。');
+        // URT が無いと UT を自力更新できない。無音で腐らせず、止まったことを Discord にも出す。
+        console.error('Plaud の pld_ut が期限切れで、更新用の pld_urt もありません。web.plaud.ai で pld_ut を取り直してください。');
+        writeRenewalNotice('expired');
+        if (shouldNotify(state, 'expired')) {
+          const sent = await notifyDiscord(config.webhook, renewalMessage('expired'), fetchImpl);
+          if (sent) { state.notifiedAt.expired = Date.now(); persist(); }
+        }
         return 1;
       }
       await refreshTokens(state, client, persist, fetchImpl);
@@ -545,8 +619,15 @@ export async function run(argv = process.argv.slice(2), dependencies = {}) {
     console.log(options.json ? JSON.stringify(summary) : `imported=${summary.imported} skipped=${summary.skipped} failed=${summary.failed}`);
     return summary.failed ? 1 : 0;
   } catch (error) {
-    if (error?.status === 401) console.error('Plaud 認証が失効しました。plaud.ai に再ログインして pld_ut / pld_urt を取り直し、~/.claude/plaud.env を更新してください。');
-    else console.error(`plaud-to-tldv 失敗: ${error.message}`);
+    if (error?.status === 401) {
+      console.error('Plaud 認証が失効しました。web.plaud.ai で取り直しが必要です。');
+      // 15分ごとに無音で失敗し続けるのが最悪なので Discord に出す。
+      writeRenewalNotice('expired');
+      if (notifyCtx && shouldNotify(notifyCtx.state, 'expired')) {
+        const sent = await notifyDiscord(config.webhook, renewalMessage('expired'), dependencies.fetch || fetch);
+        if (sent) { notifyCtx.state.notifiedAt.expired = Date.now(); notifyCtx.persist(); }
+      }
+    } else console.error(`plaud-to-tldv 失敗: ${error.message}`);
     return 1;
   } finally { releaseLock(lockPath, lockFd); }
 }

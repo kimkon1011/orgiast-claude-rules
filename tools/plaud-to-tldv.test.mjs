@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  apiBaseFor, regionFromToken, isWorkspaceTokenExpired, buildProxyUrl, proxyExtensionFor, tokensFromRefresh, durationToSeconds, epochToIso, extensionFromUrl, isTldvSupportedUrl, meetsMinimumDuration,
+  apiBaseFor, regionFromToken, isWorkspaceTokenExpired, buildProxyUrl, proxyExtensionFor, tokensFromRefresh, shouldNotify, renewalMessage, renewalNoticePath, durationToSeconds, epochToIso, extensionFromUrl, isTldvSupportedUrl, meetsMinimumDuration,
   mergeState, readState, redactSecret, regionFromRedirect, selectPlaudCookies, shouldImport,
 } from './plaud-to-tldv.mjs';
 
@@ -143,4 +143,27 @@ test('リフレッシュ応答は Set-Cookie でも body でもトークンを�
   assert.deepEqual(tokensFromRefresh(['pld_ut=C; Path=/'], { access_token: 'A' }, { urt: 'old' }), { ut: 'C', urt: 'old' });
   // どちらにも無ければ手元の値を維持する(片方だけ返る挙動への備え)
   assert.deepEqual(tokensFromRefresh([], {}, { ut: 'u', urt: 'r' }), { ut: 'u', urt: 'r' });
+});
+
+test('同じ通知は24時間に1回だけ送る(15分ごとに走るため)', () => {
+  const now = 1_700_000_000_000;
+  assert.equal(shouldNotify({ notifiedAt: {} }, 'renewal', now), true);
+  assert.equal(shouldNotify({ notifiedAt: { renewal: now - 60_000 } }, 'renewal', now), false);
+  assert.equal(shouldNotify({ notifiedAt: { renewal: now - 25 * 3600_000 } }, 'renewal', now), true);
+  assert.equal(shouldNotify({ notifiedAt: { expired: now } }, 'renewal', now), true, '用件ごとに独立');
+});
+
+test('通知本文は手順とコマンドを本文に含む(リンクを辿らせない)', () => {
+  const warn = renewalMessage('warning', 5);
+  assert.match(warn, /残り 5 日/);
+  assert.match(warn, /https:\/\/web\.plaud\.ai/);
+  assert.match(warn, /allow pasting/);
+  assert.match(warn, /refresh-user-token/);
+  assert.match(renewalMessage('expired'), /停止しました/);
+});
+
+test('置き手紙は ~/.claude 配下に出す(セッション開始時に読ませるため)', () => {
+  const p = renewalNoticePath();
+  assert.match(p, /plaud-renewal-needed\.md$/);
+  assert.ok(p.includes('.claude'), '~/.claude 配下であること');
 });

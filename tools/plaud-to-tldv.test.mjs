@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  apiBaseFor, regionFromToken, isWorkspaceTokenExpired, buildProxyUrl, proxyExtensionFor, durationToSeconds, epochToIso, extensionFromUrl, isTldvSupportedUrl, meetsMinimumDuration,
+  apiBaseFor, regionFromToken, isWorkspaceTokenExpired, buildProxyUrl, proxyExtensionFor, tokensFromRefresh, durationToSeconds, epochToIso, extensionFromUrl, isTldvSupportedUrl, meetsMinimumDuration,
   mergeState, readState, redactSecret, regionFromRedirect, selectPlaudCookies, shouldImport,
 } from './plaud-to-tldv.mjs';
 
@@ -134,4 +134,13 @@ test('中継URLの .ogg は tl;dv 対応形式として扱う(実測で確認済
   assert.equal(isTldvSupportedUrl('https://p.example.com/a/tok/audio.ogg'), true);
   assert.equal(isTldvSupportedUrl('https://p.example.com/a/tok/audio.mp3'), true);
   assert.equal(isTldvSupportedUrl('https://p.example.com/a/tok/audio.txt'), false);
+});
+
+test('リフレッシュ応答は Set-Cookie でも body でもトークンを拾える', () => {
+  // 実測(2026-08-20)では Set-Cookie は空で body にだけ入っていた
+  assert.deepEqual(tokensFromRefresh([], { access_token: 'A', refresh_token: 'R' }), { ut: 'A', urt: 'R' });
+  // Set-Cookie がある場合はそちらを優先
+  assert.deepEqual(tokensFromRefresh(['pld_ut=C; Path=/'], { access_token: 'A' }, { urt: 'old' }), { ut: 'C', urt: 'old' });
+  // どちらにも無ければ手元の値を維持する(片方だけ返る挙動への備え)
+  assert.deepEqual(tokensFromRefresh([], {}, { ut: 'u', urt: 'r' }), { ut: 'u', urt: 'r' });
 });

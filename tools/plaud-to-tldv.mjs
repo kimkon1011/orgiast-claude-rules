@@ -33,6 +33,18 @@ export function selectPlaudCookies(setCookies, current = {}) {
   return selected;
 }
 
+/**
+ * リフレッシュ応答から新トークンを取り出す。Plaud は Set-Cookie で返すことも
+ * body の access_token / refresh_token で返すこともある(2026-08-20 実測では
+ * body のみだった)。片方しか無い場合は手元の値を流用する。
+ */
+export function tokensFromRefresh(setCookies, body, current = {}) {
+  const fromCookie = selectPlaudCookies(setCookies, {});
+  const ut = fromCookie.ut || (typeof body?.access_token === 'string' ? body.access_token : '') || current.ut || '';
+  const urt = fromCookie.urt || (typeof body?.refresh_token === 'string' ? body.refresh_token : '') || current.urt || '';
+  return { ut, urt };
+}
+
 export function epochToIso(value) {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 1e9) return undefined;
@@ -346,7 +358,7 @@ async function refreshTokens(state, client, persist, fetchImpl) {
     envelopeError(body, 'UT更新');
     break;
   }
-  const tokens = selectPlaudCookies(getSetCookies(response.headers), state.session);
+  const tokens = tokensFromRefresh(getSetCookies(response.headers), body, state.session);
   state.session.ut = tokens.ut; state.session.urt = tokens.urt;
   state.session.utExp = jwtExp(tokens.ut); state.session.urtExp = jwtExp(tokens.urt);
   state.session.wt = ''; state.session.wtExp = 0;
@@ -455,6 +467,12 @@ export async function run(argv = process.argv.slice(2), dependencies = {}) {
     const persist = () => writeStateAtomic(statePath, state);
     const fetchImpl = dependencies.fetch || fetch;
     const client = makePlaudClient(state, persist, log, fetchImpl);
+    // URT が切れると自力更新できず、ブラウザからの取り直しが必要になる。
+    // 黙って止まらないよう、余裕のあるうちから警告を出す。
+    const urtDaysLeft = state.session.urtExp ? (Number(state.session.urtExp) * 1000 - Date.now()) / 86400000 : 0;
+    if (state.session.urt && urtDaysLeft > 0 && urtDaysLeft < 7) {
+      log.warn(`Plaud の更新トークンの残り ${Math.floor(urtDaysLeft)} 日。切れる前に web.plaud.ai から取り直しが必要です`);
+    }
     if (needsRefresh(state.session.utExp)) {
       if (!state.session.urt) {
         // URT(30日) が無いアカウントでは UT を自力更新できない。無音で腐らせず明示的に止める。

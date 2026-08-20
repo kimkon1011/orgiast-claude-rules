@@ -182,6 +182,8 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
 
 この規律は hook で機械的に強制され、Agent/Task の Fable5 指定は PreToolUse が deny する。**例外もhookが自動で扱う**: user が「Fable5で〜」と明示指定したプロンプトを UserPromptSubmit が検知して 60分・同一セッション限りの許可トークン(`~/.claude/fable-allow.json`)を発行し、その間だけ deny を通す（時間経過とセッション変更で自動失効。「Fable5は使うな」等の否定文脈では発行しない）。user 側の手作業・設定変更は不要。必須hookの欠落は SessionStart の `hook-selfcheck` が自動修復する。
 
+セッション固定モデル（`/model` で fable を選んだまま）は PreToolUse では止められないため、`fable-session-guard.mjs` が UserPromptSubmit / SessionStart で自分の transcript を読み、検知して警告する。
+
 ### 1.17 コーディングは Codex を主に使う（Claude Code は指揮官）
 
 新規のコード実装タスクはBash tool経由で **Codex CLI** に投げる。Claude Codeは設計・タスク分解・コードレビュー・commit/PR/デプロイのオーケストレーションに徹し、**verifyはClaude Code側の責務**（§1.2の根本診断原則をCodex出力にも適用）。**指揮官(main loop)が大きな実装を自分で手打ちしないこと＝これが最大のコストレバー**（§1.18。Opus/Sonnetいずれで動いていても、実装を挽くと手戻り＋高トークンになる。挽きそうになったらCodexへ回す）。適用外: ごく短い編集、Codex呼び出しオーバーヘッドの方が重い場合、設計試行錯誤中、既存スキルがカバーする定型作業。

@@ -65,12 +65,13 @@ export function collectCodexUsage({ home = defaultHome(), days = 7, now = Date.n
 }
 const isMain = isEntry(import.meta.url);
 if (isMain) {
-let claudeOut = 0, claudeUSD = 0, claudeByModel = {}, cacheBase = 0, cacheRead = 0, cacheWrite = 0;
+let claudeOut = 0, claudeUSD = 0, claudeByModel = {}, cacheBase = 0, cacheRead = 0, cacheWrite = 0, topFableSource = null;
 {
   const files = []; walk(path.join(HOME, '.claude', 'projects'), files);
   for (const f of files) {
     let st; try { st = fs.statSync(f); } catch { continue; } if (st.mtimeMs < since) continue;
     let lines = []; try { lines = fs.readFileSync(f, 'utf-8').split('\n'); } catch { continue; }
+    let fileFableOut = 0, fileFableLatest = 0;
     for (const ln of lines) {
       if (!ln.includes('"usage"')) continue;
       let j; try { j = JSON.parse(ln); } catch { continue; }
@@ -83,7 +84,9 @@ let claudeOut = 0, claudeUSD = 0, claudeByModel = {}, cacheBase = 0, cacheRead =
       const outT = u.output_tokens || 0; const t = tier(model);
       const [pi, po] = PRICE[t] || PRICE.default; claudeUSD += (baseIn * pi + cc * pi * 1.25 + cr * pi * 0.1 + outT * po) / 1e6; claudeOut += outT;
       claudeByModel[t] = (claudeByModel[t] || 0) + outT;
+      if (t === 'fable') { fileFableOut += outT; fileFableLatest = Math.max(fileFableLatest, ts || st.mtimeMs); }
     }
+    if (fileFableOut > (topFableSource?.outputTokens || 0)) topFableSource = { sessionId: path.basename(f, '.jsonl'), outputTokens: fileFableOut, latest: fileFableLatest };
   }
 }
 // ---- 2) Codex(定額枠) ----
@@ -114,7 +117,11 @@ const stateF = path.join(HOME, '.claude', 'cost-loop-state.json');
 let prev = null; try { prev = JSON.parse(fs.readFileSync(stateF, 'utf-8')); } catch { }
 const flags = [];
 const TARGET_DELEG = 0.30;
-if (claudeByModel.fable > 0) flags.push(`🚨 Fable5使用を検出(out ${(claudeByModel.fable / 1000).toFixed(0)}k tok)=§1.16 全用途禁止(別課金枠)。user明示指定が無ければ即停止し Opus/Sonnet/Haiku/Codex へ切替`);
+if (claudeByModel.fable > 0) {
+  const latest = new Date(topFableSource?.latest || Date.now()); const pad = (n) => String(n).padStart(2, '0');
+  const latestText = `${latest.getFullYear()}-${pad(latest.getMonth() + 1)}-${pad(latest.getDate())} ${pad(latest.getHours())}:${pad(latest.getMinutes())}`;
+  flags.push(`🚨 Fable5使用を検出(out ${(claudeByModel.fable / 1000).toFixed(0)}k tok)=§1.16 全用途禁止(別課金枠)。発生元: ${topFableSource?.sessionId || '特定不能'}（最終 ${latestText}）— そのセッションで /model opus か /session-close。user明示指定が無ければ即停止`);
+}
 if (claudeOut >= 1e6 && delegRatio < TARGET_DELEG) flags.push(`🚨 委譲不足: Claude出力${(claudeOut / 1000).toFixed(0)}k tokなのに委譲率${(delegRatio * 100).toFixed(0)}%(目標${TARGET_DELEG * 100}%↑、Codex分は計上済み)。実装→Codex/量産→Groq/汎用安→OpenRouter/中量級の生成・推論→Kimi K3(別課金プール) へ回す`);
 if (codexSessions === 0) flags.push('⚠️ Codex未使用=実装を監督が抱えている疑い。実装はCodexへ委譲する');
 if (prev && typeof prev.claudeOut === 'number' && claudeOut > prev.claudeOut * 1.15 && work <= prev.work) flags.push(`🚨 利用効率悪化: Claude出力 ${(prev.claudeOut / 1000).toFixed(0)}k→${(claudeOut / 1000).toFixed(0)}k tok 増だが作業量(${workKind}) ${prev.work}→${work} 増えず。誤ルーティング/やり直し/呼びすぎを点検`);

@@ -12,6 +12,8 @@ export const REQUIRED_HOOKS = [
   ['UserPromptSubmit', 'expensive-session-guard.mjs'],
   ['UserPromptSubmit', 'session-purpose-gate.mjs'],
   ['UserPromptSubmit', 'makimono-gate.mjs'],
+  ['UserPromptSubmit', 'fable-session-guard.mjs'],
+  ['SessionStart', 'fable-session-guard.mjs'],
   ['SessionStart', 'hook-selfcheck.mjs'],
 ];
 try {

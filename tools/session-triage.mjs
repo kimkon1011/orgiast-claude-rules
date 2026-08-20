@@ -354,13 +354,9 @@ async function addLlmJudgments(records) {
     for (const record of records) failRecord(record, 'tools/llm-ask.mjs が見つかりません');
     return llmStats;
   }
-  const providers = (provider || process.env.SESSION_TRIAGE_LLM_PROVIDERS || 'groq,openrouter,gemini')
-    .split(',').map((value) => value.trim()).filter(Boolean);
-  const disabledProviders = new Set();
-  const notedProviders = new Set();
-  const isRateLimit = (error) => /(?:\b429\b|rate.?limit|too many requests|TP[DM])/i.test(String(error?.stderr || error?.message || error));
+  const selectedProvider = (provider || process.env.SESSION_TRIAGE_LLM_PROVIDERS || 'groq')
+    .split(',').map((value) => value.trim()).filter(Boolean)[0] || 'groq';
   const errorDetail = (error) => String(error?.stderr || error?.message || error).trim().split('\n').slice(-1)[0].slice(0, 200);
-  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   let cursor = 0;
   async function worker() {
     while (cursor < records.length) {
@@ -380,39 +376,20 @@ async function addLlmJudgments(records) {
       // 外部プロバイダへ渡す直前にも必ず全ペイロードを再マスクする。
       prompt = redactSecrets(prompt);
       let result;
-      const errors = [];
-      for (const provider of providers) {
-        if (disabledProviders.has(provider)) continue;
-        for (let attempt = 0; attempt < 2; attempt++) {
-          try {
-            const { stdout } = await execFileAsync(process.execPath, [helper, '--provider', provider, '--max', '200', prompt], { timeout: 15_000, maxBuffer: 256 * 1024 });
-            result = parseLlmResult(stdout);
-            if (process.env.SESSION_TRIAGE_DEBUG) console.error(`DBG ${record.sessionId.slice(0, 8)} provider=${provider} promptLen=${prompt.length} raw=${JSON.stringify(String(stdout).slice(0, 300))}`);
-            break;
-          } catch (error) {
-            const rateLimited = isRateLimit(error);
-            errors.push(`${provider}: ${errorDetail(error)}`);
-            if (rateLimited && attempt === 0) {
-              await wait(300);
-              continue;
-            }
-            if (rateLimited) {
-              disabledProviders.add(provider);
-              if (!notedProviders.has(provider)) {
-                notedProviders.add(provider);
-                llmStats.providerNotes.push(`${provider}:429でスキップ`);
-              }
-            }
-            break;
-          }
-        }
-        if (result) break;
+      let failure = '';
+      try {
+        const { stdout } = await execFileAsync(process.execPath, [helper, '--provider', selectedProvider, '--max', '200', prompt], { timeout: 60_000, maxBuffer: 256 * 1024 });
+        result = parseLlmResult(stdout);
+        if (process.env.SESSION_TRIAGE_DEBUG) console.error(`DBG ${record.sessionId.slice(0, 8)} provider=${selectedProvider} promptLen=${prompt.length} raw=${JSON.stringify(String(stdout).slice(0, 300))}`);
+      } catch (error) {
+        failure = errorDetail(error);
+        if (failure && !llmStats.providerNotes.includes(failure)) llmStats.providerNotes.push(failure);
       }
       if (result) {
         applyLlmResult(record, result);
         llmStats.success++;
       } else {
-        failRecord(record, errors.at(-1) || '利用可能なLLMプロバイダがありません');
+        failRecord(record, failure || '利用可能なLLMプロバイダがありません');
       }
     }
   }

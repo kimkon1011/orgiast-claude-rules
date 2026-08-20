@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { readEnvValue } from './env-kv.mjs';
 import { repairEnvBom } from './env-repair.mjs';
 import { isEntry } from './is-entry.mjs';
+import { buildKeyserveAlert, shouldAlert } from './keyserve-alert.mjs';
 
 const args = process.argv.slice(2);
 const force = args.includes('--force');
@@ -132,6 +133,36 @@ function saveKeysState(now) {
     fs.writeFileSync(keysStatePath, `${JSON.stringify({ last: now.toISOString() }, null, 2)}\n`, 'utf8');
   } catch {}
 }
+function saveKeysAlertState(previous, now) {
+  try {
+    fs.mkdirSync(path.dirname(keysStatePath), { recursive: true });
+    fs.writeFileSync(keysStatePath, `${JSON.stringify({ ...(previous || {}), lastAlert: now.toISOString() }, null, 2)}\n`, 'utf8');
+  } catch {}
+}
+async function alertKeyserveFailure(previous, now, status) {
+  const visible = `[onboarding-sync] keyserve から鍵が受け取れていません (HTTP status: ${status ?? '不明'})`;
+  console.log(visible);
+  if (dryRun || !shouldAlert(previous, now)) return;
+  const reporterEnv = path.join(home, '.claude', 'cost-reporter.env');
+  const webhook = readEnvValue(reporterEnv, 'DISCORD_COST_WEBHOOK');
+  if (!webhook) return;
+  const content = buildKeyserveAlert({
+    label: readEnvValue(reporterEnv, 'REPORTER_LABEL'),
+    hostname: os.hostname(),
+    status,
+    command: 'node ~/orgiast-claude-rules/tools/onboarding-sync.mjs --force',
+  });
+  try {
+    const response = await fetch(webhook, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'User-Agent': 'orgiast-keyserve-alert/1.0' },
+      body: JSON.stringify({ content }),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!response.ok) return;
+    saveKeysAlertState(previous, now);
+  } catch {}
+}
 async function provisionKeys(now) {
   if (dryRun) return;
   const previous = keysState();
@@ -151,7 +182,11 @@ async function provisionKeys(now) {
       headers: { 'x-orgiast-ts': ts, 'x-orgiast-auth': auth },
       signal: AbortSignal.timeout(15000),
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) {
+      const error = new Error(`HTTP ${response.status}`);
+      error.status = response.status;
+      throw error;
+    }
     const payload = await response.json();
     if (!payload || typeof payload.files !== 'object' || payload.files === null || Array.isArray(payload.files)) throw new Error('invalid response');
     const provisioned = [];
@@ -169,6 +204,7 @@ async function provisionKeys(now) {
     if (provisioned.length) console.log(`[onboarding-sync] provisioned: ${provisioned.join(', ')}`);
   } catch (e) {
     log(`key provisioning failed: ${e.message}`);
+    await alertKeyserveFailure(previous, now, e.status);
   }
 }
 function save(hash, now) {

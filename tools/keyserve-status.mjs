@@ -52,4 +52,5 @@ if (jsonOutput) {
   else console.log('keyserve: 未実行（秘密が未設定）');
   console.log(`配布ファイル: ${result.files.length ? result.files.join(', ') : 'なし'}`);
   if (result.error) console.log(`エラー: ${result.error}`);
+  if (result.status === 401) console.log('401 = この PC の秘密が keyserve に登録されていません。kim に enroll トークンの発行を依頼してください。');
 }

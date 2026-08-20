@@ -300,6 +300,8 @@ node -e "fetch('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rule
 3.0: WebFetchでGitHub raw URLから`ONBOARDING.md`を取得→取り込み先自動判定→バックアップ→BEGIN/ENDマーカーでマージ→完了報告、という貼り付けプロンプトで完結（gh CLI/Drive MCP/コネクタ不要）。
 3.0.1: SessionStart hookを1回登録すれば、以後はセッションを開くだけで自動的に最新版をチェック・反映（1日1回、差分がある時だけ静かに更新）。**貼り付けは通常(非auto)モードで**（auto だと settings.json 登録が承認プロンプトすら出ずブロックされる。プロンプトが冒頭で解除を案内する）。
 3.0.2: 各PCが当月Claude Code概算コスト（PC名・$合計・モデル別内訳のみ、**会話内容は送らない**）をDiscordに日次自己申告。当月$150超⚠️/$300超🚨・Fable5検出🚨のアラート付き。中央のAPI課金監視(GH Actions日次)と合わせて「組織合計＋per-PC」の二層監査になる。
+日次点検は各PCの配布物（`tools/` 等）の blob SHA を origin/main と突き合わせ、一致しないファイルがあれば 🚨 を出す。
+復旧は `node ~/orgiast-claude-rules/tools/onboarding-sync.mjs --force`。それでも直らない場合は共有作業ツリーの汚れ/divergeを解消する。
 
 ### 3.0.5 ツール自己更新ブートストラップ（セッション開始時に1回だけ）
 

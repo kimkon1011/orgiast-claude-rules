@@ -11,8 +11,11 @@ const repo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const toolsDir = path.join(repo, 'tools');
 let failed = 0;
 function run(script, input, args = [], env = {}) {
+  // 既定で版ドリフト照合を止める。テストごとに GitHub API を叩くと未認証の 60req/h に当たり、
+  // 「照合できず」がレポートに混ざって無関係な assert を落とす。実 fetch を通したい
+  // テストだけ VERSION_DRIFT_SKIP: '' を明示的に渡す。
   const result = spawnSync(process.execPath, [path.join(toolsDir, script), ...args], {
-    input: input === undefined ? undefined : JSON.stringify(input), encoding: 'utf8', env: { ...process.env, ...env }, cwd: repo,
+    input: input === undefined ? undefined : JSON.stringify(input), encoding: 'utf8', env: { VERSION_DRIFT_SKIP: '1', ...process.env, ...env }, cwd: repo,
   });
   return { stdout: result.stdout || '', stderr: result.stderr || '', status: result.status };
 }
@@ -186,6 +189,15 @@ test('tool-adoption-check: timeoutは未導入や手動installにしない', () 
   assert(r.status === 0 && (r.stdout.match(/判定不能\(プローブがタイムアウト・次回再判定\)/g) || []).length === 2, r.stdout || r.stderr);
   assert(!r.stdout.includes('未導入') && !r.stdout.includes('npm i -g'), r.stdout);
   assert(!fs.existsSync(path.join(home, '.claude', 'tool-adoption-install.state')), 'timeoutで自動導入が開始された');
+});
+// 版ドリフト判定で top-level await が入ったため、末尾の process.exit() が Windows で
+// libuv assertion クラッシュ(0xC0000409)を起こす。出力は正常に見えるので exit code で縛る。
+test('tool-adoption-check: --dry-run は exit 0 (top-level await後のprocess.exitを禁止)', () => {
+  const { home, env } = makeToolAdoptionTestEnv('orgiast-adoption-exit-test-');
+  // ここだけ VERSION_DRIFT_SKIP を外して実 fetch を通す(pending handle が無いと再現しない)。
+  const r = run('tool-adoption-check.mjs', undefined, ['--dry-run'], { ...env, VERSION_DRIFT_SKIP: '', TOOL_ADOPTION_FORCE_PRESENT: 'codex,gemini', TOOL_ADOPTION_FAKE_DISTRO: '' });
+  assert(r.status === 0, `exit=${r.status} (Windowsのlibuv assertionは 3221226505)\n${r.stderr.slice(-200)}`);
+  assert(fs.existsSync(home), 'テスト用HOMEが消えている');
 });
 test('tool-adoption-check: FORCE_MISSINGは未導入と導入導線を維持', () => {
   const home = makeTempHome('orgiast-adoption-missing-test-');

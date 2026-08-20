@@ -19,6 +19,7 @@ import path from 'node:path';
 import { execSync, execFileSync, spawn } from 'node:child_process';
 import { parseEnvText } from './env-kv.mjs';
 import { codexSessionDirs } from './cost-work-loop.mjs';
+import { checkVersionDrift, formatDriftLine } from './version-drift.mjs';
 
 const DRY_RUN = process.argv.includes('--dry-run');
 const DO_FIX = process.argv.includes('--fix');
@@ -410,9 +411,19 @@ function supervisorDiscipline(codexUsed) {
 
 const checks = [checkCodex(), checkGemini(), checkKimi(), checkManus()];
 
+let driftLine = '';
+if (remainingMs() < 2000) {
+  deadlineSkipped = true;
+  driftLine = '⚠️ **配布物の版**照合できず（デッドライン超過でスキップ・次回再判定）';
+} else {
+  try { driftLine = formatDriftLine(await checkVersionDrift({ timeoutMs: Math.min(8000, remainingMs()) })); }
+  catch { driftLine = '⚠️ **配布物の版**照合できず（次回再判定）'; }
+}
+
 // ---- レポート組み立て ----
 const label = loadEnv(path.join(HOME, '.claude', 'cost-reporter.env')).REPORTER_LABEL || os.hostname();
 let msg = `**🛠️ ツール採用チェック** — ${label} (直近${USAGE_WINDOW_DAYS}日)\n`;
+if (driftLine) msg += `${driftLine}\n`;
 for (const c of checks) {
   let icon, note;
   if (c.name === 'Kimi' && !c.keyed) { icon = '🚨'; note = 'APIキー未設定→~/.claude/kimi-api.env に MOONSHOT_API_KEY= を設定'; }
@@ -475,12 +486,21 @@ const adoptionState = {
   fable5OutTok: fableCount,
   verdicts: Object.fromEntries(checks.map((c) => [c.name.toLowerCase(), { installed: Boolean(c.installed), used: Boolean(c.used), indeterminate: Boolean(c.indeterminate) }]).concat([['discipline', disc]])),
 };
-if (DRY_RUN) { console.log('\n--dry-run: Discord未送信'); process.exit(0); }
-try {
-  let previous = {}; try { previous = JSON.parse(fs.readFileSync(statePath, 'utf8')); } catch {}
-  fs.writeFileSync(statePath, JSON.stringify({ ...previous, ...adoptionState }));
-} catch {}
-const webhook = loadEnv(path.join(HOME, '.claude', 'cost-reporter.env')).DISCORD_COST_WEBHOOK;
-if (!webhook) { console.error('DISCORD_COST_WEBHOOK未設定'); process.exit(1); }
-fetch(webhook, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: msg.slice(0, 1950) }) })
-  .then((r) => console.log(r.ok ? 'posted' : `discord ${r.status}`)).catch((e) => console.error(e.message));
+// 版ドリフト判定で top-level await を使うようになったため、ここで process.exit() を呼ぶと
+// 残っている fetch ハンドルのせいで Windows の Node が
+// `Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)` で異常終了する(exit 0xC0000409)。
+// 出力は全部書けているのに呼び出し側が失敗扱いにするので、終了は exitCode で表す。
+if (DRY_RUN) {
+  console.log('\n--dry-run: Discord未送信');
+} else {
+  try {
+    let previous = {}; try { previous = JSON.parse(fs.readFileSync(statePath, 'utf8')); } catch {}
+    fs.writeFileSync(statePath, JSON.stringify({ ...previous, ...adoptionState }));
+  } catch {}
+  const webhook = loadEnv(path.join(HOME, '.claude', 'cost-reporter.env')).DISCORD_COST_WEBHOOK;
+  if (!webhook) { console.error('DISCORD_COST_WEBHOOK未設定'); process.exitCode = 1; }
+  else {
+    await fetch(webhook, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: msg.slice(0, 1950) }) })
+      .then((r) => console.log(r.ok ? 'posted' : `discord ${r.status}`)).catch((e) => console.error(e.message));
+  }
+}

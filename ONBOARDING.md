@@ -81,6 +81,10 @@ bound scriptのscriptId不明時はDrive MCPで`mimeType='application/vnd.google
 
 **すべての変更後、テストして実際に直っていることを確認してから報告する（絶対ルール）**: typecheckだけ・「ブラウザで確認してください」丸投げは違反。UI変更はLayer1(ロジックNode再現)+Layer2(Playwright実描画)の2段必須、GAS/Sheets書き込みは戻り値でなく**read-back verify**必須（merge cellのnon-top-left等はsilent ignoreされる）、Frontend変更も「browserでしか動かない」を言い訳にせず`test/*.test.js`をNodeで書く。報告テンプレ・頻発失敗パターン表・past cases: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/verify-before-done.md`
 
+**人が読む配信（Discord/メール/LINE/Slack）は「届いた実物」を見るまで完了と言わない（絶対ルール・2026-08-11 実害）**: API が 200 / job が ✓ でも中身が壊れていることがある。①**送信側コードに送信前ガードを必ず実装**（文字化け=日本語0文字かつU+0080-00FF多数 / 空本文 / `XX`等プレースホルダ残り → 送らず例外で落とす。読めない投稿を全社チャンネルに流すより job を落として気付ける方が良い）②**Claudeは投稿後に実チャンネルを読み返す**（MCPで取得した本文が化けていても「ツール側の表示問題」と断定禁止。実クライアント/実ブラウザのスクショか別経路の再取得で必ず突き合わせる）。Pythonで JSON 文字列を復元するとき `decode("unicode_escape")` は bytes を latin-1 扱いしてUTF-8日本語を全壊させるので**禁止**（`json.loads('"..."', strict=False)` を使う）。詳細・実例: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/verify-before-done.md`
+
+**cron の生存は「手動実行が通ること」で判定しない（絶対ルール・2026-08-11 実害）**: GitHub Actions は `gh run list --event=schedule --limit 15 --json createdAt,conclusion` の**直近成功日時**で見る。`workflow_dispatch` は権限も分岐も別経路になりがちで、schedule だけ死んでいても手動は通り続ける（実際に週次配信が3週間止まったのに気付けなかった）。`gh run list`/Actions APIを叩くjobには `permissions: {actions: read}` が必須（無いと403で全滅）。定期配信を持つリポは push/PR で回る最小 CI（回帰テスト）も併設し、配信当日ではなくpush時点で壊れを止める。
+
 ### 1.5 Google Workspace URL は `/a/orgiast.jp/` を挟む
 
 素URLは個人Gmailアカウントで開いて404/アクセス権エラーになる。Apps Script/Sheets/Docs/Slides/Formsは `/a/orgiast.jp/` を挟む。**Drive（file/folder）だけは `/a/` 非対応**なので `?authuser={運用者自身のorgiast.jpメール}` を付ける（他人に渡すリンクにはauthuser付けない→ファイル共有＋アカウント切替案内に切替）。特定個人メールをハードコードしない（配布物のため）。モバイルはURLよりドライブアプリ+ファイル名検索が確実。例外: `/home/...`系ページは素URL+アカウント切替案内。詳細・past cases: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/url-and-handoff-format.md`
@@ -279,6 +283,8 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
 ### 2.8 API（LLM）コスト最適化
 
 タスク難易度でモデル階層化（分類・抽出=Haiku、顧客向け生成=Sonnet、経営判断=Opus）。**Anthropic APIを呼ぶアプリは、繰り返し送る大きな前置き（systemプロンプト/共通の長い文脈/フュー샷）に必ず `cache_control:{type:"ephemeral"}` を付ける＝prompt caching必須**（2026-08-16 Anthropic公式が「cache hit率が低い→直接API費用を最大42%削減可」と通知。cache読取は入力単価の約1/10）。有効なのは5分TTL内に同一prefixが再送される場合＝ステップメール一括生成/分類ループ/同一systemの連続呼び出し等（単発cronには付けない）。新規にAPIアプリを作る/既存を触る時は「この前置きは繰り返し送るか？→YESならcache_control」を必ず確認。※Claude Code(シート利用)は自動キャッシュ管理なので対象外＝この話はデプロイ済みアプリのAPI呼び出し限定。非同期でよい一括生成はBatch API（50%オフ）。`max_tokens`は用途相応の最小に、contextは必要分だけ送る。**スプレッドシートのタブ参照はURLのgidより名前を優先**（URLは古い可能性が常にあるため、user言及のタブ名と実際のタブ一覧を必ず突き合わせる）。詳細・現状適用状況・past case: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/api-cost-optimization.md`
+
+**ただし `max_tokens` の絞りすぎは「壊れた成果物が配信される」事故になる（2026-08-11 実害）**: 出力が打ち切られると JSON が未完になり、フォールバック経路で一部フィールドだけ・本文も途中で切れた状態が下流（Discord配信/ダッシュボード）に流れる。→ ①**`stop_reason` を必ずログし、`max_tokens` なら例外にしてリトライ/失敗させる**（黙って部分結果を使わない）②実測 `output_tokens` を見て余裕を持たせる（weekly-bot は本文だけで5,000字超・実測 10,938 tokens 必要で、8,000 では足りなかった）③`max_tokens` を大きく取ると Anthropic SDK が非streaming呼び出しを拒否する（`ValueError: Streaming is required for operations that may take longer than 10 minutes`）ので `messages.stream()` + `get_final_message()` を使う。コスト最小化は「切れるリスクを負って絞る」ことではなく、モデル階層化とcontext量で行う。
 
 ### 2.8.1 夜間バッチ・作り置き(prerender)原則（表示時間↓・コスト↓は全部夜間へ / 2026-08-10 kim指示）
 

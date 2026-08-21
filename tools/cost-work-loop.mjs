@@ -10,8 +10,8 @@
 //   B) Claude出力が前回比↑ なのに 作業量↑でない → 「逃がしたのに利用量増(誤ルーティング/やり直し/呼びすぎ)」🚨
 // 出力: ~/.claude/cost-directive.md (SessionStartで毎回私が読む=修正が行動に反映) + 任意でDiscord。
 //   実行: node cost-work-loop.mjs [--post] [--days 7]
-import fs from 'node:fs'; import path from 'node:path'; import os from 'node:os'; import { execSync } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
+import fs from 'node:fs'; import path from 'node:path'; import os from 'node:os'; import { execSync, spawnSync } from 'node:child_process';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { recommendations } from './eval-harness.mjs';
 import { readEnvValue } from './env-kv.mjs';
 import { isEntry } from './is-entry.mjs';
@@ -116,6 +116,22 @@ const outPerWork = claudeOut / Math.max(work, 1);
 const stateF = path.join(HOME, '.claude', 'cost-loop-state.json');
 let prev = null; try { prev = JSON.parse(fs.readFileSync(stateF, 'utf-8')); } catch { }
 const flags = [];
+// 日次ループのたびにschedule実績を更新する。gh未導入・認証失敗・cron停止でも本体は継続する。
+spawnSync(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta.url)), 'cron-liveness-check.mjs')], {
+  env: { ...process.env, ORGIAST_HOME: HOME }, stdio: 'ignore',
+});
+const cronLivenessFile = path.join(HOME, '.claude', 'cron-liveness.json');
+let cronLiveness = null;
+try { cronLiveness = JSON.parse(fs.readFileSync(cronLivenessFile, 'utf8')); } catch { }
+const cronCheckedAt = Date.parse(cronLiveness?.t || '');
+if (!Number.isFinite(cronCheckedAt) || Date.now() - cronCheckedAt >= 2 * 864e5) {
+  flags.push('⚠️ cron生存点検が未実行(node tools/cron-liveness-check.mjs)');
+} else {
+  for (const result of cronLiveness?.results || []) {
+    if (result.status === 'never') flags.push(`🚨 cron停止: ${result.label} — schedule の成功履歴なし。gh run list --event=schedule で確認し permissions:{actions:read} を点検`);
+    if (result.status === 'stale') flags.push(`🚨 cron停止: ${result.label} — schedule の最終成功 ${String(result.lastSuccess).slice(0, 10)}(${Math.floor(result.ageDays)}日前)。gh run list --event=schedule で確認し permissions:{actions:read} を点検`);
+  }
+}
 const TARGET_DELEG = 0.30;
 if (claudeByModel.fable > 0) {
   const latest = new Date(topFableSource?.latest || Date.now()); const pad = (n) => String(n).padStart(2, '0');

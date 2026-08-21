@@ -1,0 +1,72 @@
+#!/usr/bin/env node
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { isEntry } from './is-entry.mjs';
+
+const DAY_MS = 864e5;
+
+export function evaluate(entries, lastSuccessByKey, nowMs) {
+  return entries.map((entry) => {
+    const key = `${entry.repo}#${entry.workflow}`;
+    const raw = lastSuccessByKey[key];
+    let lastSuccess = raw ?? null;
+    let ageDays = null;
+    let status;
+    if (raw === undefined) status = 'unknown';
+    else if (raw === null) status = 'never';
+    else {
+      const timestamp = Date.parse(raw);
+      if (!Number.isFinite(timestamp)) {
+        lastSuccess = null;
+        status = 'never';
+      } else {
+        ageDays = Math.max(0, (nowMs - timestamp) / DAY_MS);
+        status = ageDays > entry.everyDays * 1.5 ? 'stale' : 'ok';
+      }
+    }
+
+    const days = ageDays === null ? null : Math.floor(ageDays);
+    let line;
+    if (status === 'unknown') line = `⚠️ ${entry.label}: schedule の成功履歴を取得できません`;
+    else if (status === 'never') line = `🚨 ${entry.label}: schedule の成功履歴なし`;
+    else if (status === 'stale') line = `🚨 ${entry.label}: schedule の最終成功 ${lastSuccess.slice(0, 10)} (${days}日前)`;
+    else line = `✅ ${entry.label}: schedule の最終成功 ${lastSuccess.slice(0, 10)} (${days}日前)`;
+    return { key, label: entry.label, lastSuccess, ageDays, status, line };
+  });
+}
+
+function fetchLastSuccess(entry) {
+  const result = spawnSync('gh', [
+    'run', 'list', '--repo', entry.repo, '--workflow', entry.workflow,
+    '--event=schedule', '--status', 'success', '--limit', '1', '--json', 'updatedAt',
+  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  if (result.error || result.status !== 0) return undefined;
+  try {
+    const runs = JSON.parse(result.stdout);
+    return Array.isArray(runs) && runs.length ? runs[0]?.updatedAt ?? null : null;
+  } catch {
+    return undefined;
+  }
+}
+
+function main() {
+  const toolsDir = path.dirname(fileURLToPath(import.meta.url));
+  const entries = JSON.parse(fs.readFileSync(path.join(toolsDir, 'cron-watch.json'), 'utf8'));
+  const lastSuccessByKey = {};
+  for (const entry of entries) lastSuccessByKey[`${entry.repo}#${entry.workflow}`] = fetchLastSuccess(entry);
+  const nowMs = Date.now();
+  const results = evaluate(entries, lastSuccessByKey, nowMs);
+  const home = process.env.ORGIAST_HOME || os.homedir();
+  const outputDir = path.join(home, '.claude');
+  try {
+    fs.mkdirSync(outputDir, { recursive: true });
+    fs.writeFileSync(path.join(outputDir, 'cron-liveness.json'), JSON.stringify({ t: new Date(nowMs).toISOString(), results }, null, 2));
+  } catch { }
+  for (const result of results) console.log(result.line);
+  process.exitCode = results.some((result) => result.status === 'stale' || result.status === 'never') ? 1 : 0;
+}
+
+if (isEntry(import.meta.url)) main();

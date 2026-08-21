@@ -36,8 +36,13 @@ function migrate(groups, oldName, newName, newCommand) {
   // 旧hookが複数あった環境でも、新hookは1本だけに正規化する。
   let seen = false;
   for (let i = groups.length - 1; i >= 0; i--) {
-    if (!commands([groups[i]]).some((cmd) => cmd.includes(newName))) continue;
-    if (seen) { groups.splice(i, 1); changed += 1; } else seen = true;
+    const hooks = Array.isArray(groups[i]?.hooks) ? groups[i].hooks : [];
+    for (let j = hooks.length - 1; j >= 0; j--) {
+      if (!String(hooks[j]?.command || '').includes(newName)) continue;
+      if (seen) { hooks.splice(j, 1); changed += 1; } else seen = true;
+    }
+    // 複数hookを同じgroupに入れている利用者の無関係なhookは残す。
+    if (hooks.length === 0) groups.splice(i, 1);
   }
   return changed;
 }
@@ -63,6 +68,13 @@ try {
     ['tool-adoption-check.mjs', 60, true, ' --fix'],
     ['cost-loop.mjs', 15, false, ''],
   ];
+  // Windows旧版はコピー済み .ps1 に固定されるため、リポに新実装が届いた時点で正本 .mjs へ移行する。
+  if (fs.existsSync(path.join(repo, 'tools', 'onboarding-sync.mjs'))) {
+    added += migrate(settings.hooks.SessionStart, 'onboarding-sync.ps1', 'onboarding-sync.mjs', command('onboarding-sync.mjs'));
+    for (const group of settings.hooks.SessionStart) for (const hook of (Array.isArray(group?.hooks) ? group.hooks : [])) {
+      if (String(hook.command || '').includes('onboarding-sync.mjs')) { hook.timeout = 20; hook.async = true; }
+    }
+  }
   for (const [name, timeout, async, extra] of session) {
     const hook = { type: 'command', command: command(name, extra), timeout };
     if (async) hook.async = true;

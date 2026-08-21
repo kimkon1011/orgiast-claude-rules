@@ -5,6 +5,7 @@
 $H = $env:USERPROFILE
 $ok = 0; $ng = 0
 function Chk($name, $cond) { if ($cond) { $s = 'OK '; $script:ok++ } else { $s = 'NG '; $script:ng++ }; Write-Host ("[{0}] {1}" -f $s, $name) }
+function Notice($name) { Write-Host ("[注意] {0}" -f $name) }
 function Have($c) { [bool](Get-Command $c -ErrorAction SilentlyContinue) }
 
 Write-Host "===== オージャストAI設定 総合チェック ====="
@@ -20,6 +21,7 @@ $cm = "$H\.claude\CLAUDE.md"
 Chk '共通ルール取込(CLAUDE.md)' ((Test-Path $cm) -and ((Get-Content $cm -Raw -ErrorAction SilentlyContinue) -match 'orgiast'))
 # 各種キー
 Chk 'コスト報告Webhook' (Test-Path "$H\.claude\cost-reporter.env")
+if (Test-Path "$H\.claude\fleet-sheet.env") { Chk 'フリートシート報告(fleet-sheet.env)' $true } else { Notice 'fleet-sheet.env 未設定(シート報告は無効)' }
 foreach ($k in 'manus.env', 'deepseek.env', 'xai.env', 'openrouter.env', 'groq.env', 'cerebras.env', 'zai.env', 'mistral.env') { Chk ("キー: $k") (Test-Path "$H\.claude\$k") }
 Chk 'Geminiキー(~/.gemini/.env)' ((Test-Path "$H\.gemini\.env") -and ((Get-Content "$H\.gemini\.env" -Raw -ErrorAction SilentlyContinue) -match 'GEMINI_API_KEY=.'))
 # hooks配置

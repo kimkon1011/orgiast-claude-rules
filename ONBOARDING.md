@@ -340,7 +340,7 @@ node -e "fetch('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rule
 
     node -e "fetch('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/tools/onboarding-sync.mjs?cb='+Date.now()).then(r=>r.text()).then(t=>require('fs').writeFileSync(require('path').join(require('os').homedir(),'orgiast-claude-rules','tools','onboarding-sync.mjs'),t)).then(()=>console.log('updated'))"
 
-続けて `node ~/orgiast-claude-rules/tools/onboarding-sync.mjs --force` を実行する。公開GitHubリポジトリから配布ツールを更新し、会社共通のAI実行用APIキー（Kimi等）を未設定の `~/.claude/*.env` にだけ設置する。会話内容は読まず、送信もしない。
+続けて SessionStart の登録を確認する。`tools/onboarding-sync.mjs` ではなく `~/.claude/hooks/onboarding-sync.ps1` が登録されている環境は、配布物の自動更新と会社共通AIキーの配布が届いていない。上記の `?cb=` 付き raw 取り直しを先に済ませ、その環境のClaudeは `node ~/orgiast-claude-rules/tools/register-hooks.mjs --hooks-only`、続けて `node ~/orgiast-claude-rules/tools/onboarding-sync.mjs --force` を1回だけ実行して自己修復する。公開GitHubリポジトリから配布ツールを更新し、会社共通のAI実行用APIキー（Kimi等）を未設定の `~/.claude/*.env` にだけ設置する。会話内容は読まず、送信もしない。
 
 貼り付けプロンプト全文・hook実装コード・マーカー完全一致の注意点・コスト自己申告セットアップ: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/onboarding-setup-prompts.md`
 

@@ -159,7 +159,16 @@ if have npm; then
 else warn "npm が無いためCLI導入をスキップ"; fi
 
 step "共通ルールの初回取込"
-if have node && [ -f "$REPO/tools/onboarding-sync.mjs" ]; then ORGIAST_HOME="$ORGIAST_USER_HOME" node "$REPO/tools/onboarding-sync.mjs" --force >/dev/null && ok "共通ルールを取り込みました"; else warn "取込は次回Claude Code起動時に実行されます"; fi
+if have node && [ -f "$REPO/tools/onboarding-sync.mjs" ]; then
+  if ORGIAST_HOME="$ORGIAST_USER_HOME" node "$REPO/tools/onboarding-sync.mjs" --force >/dev/null; then
+    ok "共通ルールを取り込みました"
+    ok "会社共通AIキーを設定"
+  else
+    warn "取込は次回Claude Code起動時に実行されます"
+  fi
+else
+  warn "取込は次回Claude Code起動時に実行されます"
+fi
 
 if have codex; then
   echo; echo "Codexログイン画面では 【seisaku-team@orgiast.jp】 を選んでください。"

@@ -24,6 +24,7 @@ for NAME in onboarding-sync.mjs claude-cost-reporter.mjs tool-adoption-check.mjs
 json_has "$ORGIAST_USER_HOME/.claude/settings.json" pretooluse-delegation-warn.mjs; check "PreToolUse: 委譲警告" $?
 json_has "$ORGIAST_USER_HOME/.claude/settings.json" verify-before-done-detector.mjs; check "Stop: テスト忘れ防止" $?
 for FILE in cost-reporter.env manus.env deepseek.env xai.env openrouter.env groq.env mistral.env; do [ -f "$ORGIAST_USER_HOME/.claude/$FILE" ]; check "env: $FILE" $?; done
+if [ -f "$ORGIAST_USER_HOME/.claude/fleet-sheet.env" ]; then check "env: fleet-sheet.env(シート報告)" 0; else notice "env: fleet-sheet.env 未設定(シート報告は無効)"; fi
 grep -q '^GEMINI_API_KEY=.' "$ORGIAST_USER_HOME/.gemini/.env" 2>/dev/null; check "Geminiキー(~/.gemini/.env)" $?
 launchctl list 2>/dev/null | grep -q 'jp.orgiast.nightly-batch'; check "launchd: 夜間バッチ(03:00)" $?
 if launchctl list 2>/dev/null | grep -q 'jp.orgiast.fleet-poller'; then check "launchd: フリート点検(03:15)" 0; else notice "launchd: フリート点検(03:15) 未登録"; fi

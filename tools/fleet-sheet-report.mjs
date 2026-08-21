@@ -39,7 +39,10 @@ function toJst(value) {
 async function main() {
   const claudeDir = path.join(home, '.claude');
   const fleetEnv = readEnv(path.join(claudeDir, 'fleet-sheet.env'));
-  if (!fleetEnv.FLEET_SHEET_URL || !fleetEnv.FLEET_SHEET_TOKEN) return;
+  if (!fleetEnv.FLEET_SHEET_URL || !fleetEnv.FLEET_SHEET_TOKEN) {
+    if (!dryRun) console.error('fleet-sheet: FLEET_SHEET_URL/TOKEN 未設定のため送信しません(~/.claude/fleet-sheet.env)');
+    return;
+  }
   const reporterEnv = readEnv(path.join(claudeDir, 'cost-reporter.env'));
 
   const cost = readJson(path.join(claudeDir, 'cost-loop-state.json'));

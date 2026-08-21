@@ -316,7 +316,18 @@ if (Have npm) {
 
 # --- 初回実行(共通ルール取込) ---
 Step "共通ルールの初回取込(動作確認)"
-try { & $shell -NoProfile -File $dst -Force | Out-Null; OK "共通ルールを取り込みました" } catch { Warn "ルール取込は次回起動時に自動実行されます" }
+try {
+  if ((Have node) -and (Test-Path (Join-Path $REPO 'tools\onboarding-sync.mjs'))) {
+    $env:ORGIAST_HOME = $HOMEDIR
+    & node (Join-Path $REPO 'tools\onboarding-sync.mjs') --force | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "onboarding-sync.mjs exit $LASTEXITCODE" }
+    OK "共通ルールを取り込みました"
+    OK "会社共通AIキーを設定"
+  } else {
+    & $shell -NoProfile -File $dst -Force | Out-Null
+    OK "共通ルールを取り込みました(Node.js未導入のため互換版を使用)"
+  }
+} catch { Warn "ルール取込は次回起動時に自動実行されます" }
 
 # --- Gemini APIキーをこの画面で取得(ページ自動オープン→貼り付け) ---
 Step "Gemini のAPIキー設定 (検索・大きな資料用・無料枠)"

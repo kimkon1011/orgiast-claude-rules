@@ -16,14 +16,14 @@ try {
   const lower = fp.toLowerCase().replaceAll('/', '\\');
   const exclude = ['\\memory\\','\\.claude\\','rules-extracted','onboarding-compress','\\docs\\','node_modules','\\tools\\','\\.git\\','scratchpad','\\test\\','\\tests\\','\\__tests__\\','.test.','.spec.','.stories.'];
   if (exclude.some((x) => lower.includes(x))) process.exit(0);
-  const codeExt = ['.ts','.tsx','.js','.jsx','.mjs','.cjs','.py','.go','.rs','.java','.gs','.vue','.svelte','.php','.rb','.cs','.kt','.swift'];
+  const codeExt = ['.ts','.tsx','.js','.jsx','.mjs','.cjs','.py','.go','.rs','.java','.gs','.vue','.svelte','.php','.rb','.cs','.kt','.swift','.ps1'];
   if (!codeExt.includes(path.extname(lower))) process.exit(0);
   const name = path.basename(fp);
   const home = process.env.ORGIAST_HOME || os.homedir();
   let mode = 'warn';
   try { mode = String(JSON.parse(fs.readFileSync(path.join(home, '.claude', 'cost-enforce.json'), 'utf8')).mode); } catch {}
   const override = fs.existsSync(path.join(home, '.claude', 'cost-enforce-override'));
-  const substantial = tool === 'Write' || tool === 'MultiEdit' || (tool === 'Edit' && String(j.tool_input?.new_string || '').length > 600);
+  const substantial = tool === 'Write' || tool === 'MultiEdit' || (tool === 'Edit' && String(j.tool_input?.new_string || '').length > 400);
   if (mode === 'block' && substantial && !override) {
     const deny = `🔒 委譲ハードブロック(§1.18): 直近1週間、安いAIへの委譲率が改善しなかったため、アプリ実装コード(${name})のまとまった直接編集を停止します。この実装は Codex(定額枠 \`codex exec\`)へ委譲し、結果を verify してください。どうしても直接編集が必要なら ~/.claude/cost-enforce-override ファイルを作成(または委譲率を上げれば自動解除)。`;
     console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: deny } }));

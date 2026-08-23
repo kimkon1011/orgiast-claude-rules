@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { repairEnvBom } from './env-repair.mjs';
 
 export const REQUIRED_HOOKS = [
+  ['PreToolUse', 'pretooluse-bash-delegation.mjs'],
   ['PreToolUse', 'model-agent-guard.mjs'],
   ['UserPromptSubmit', 'cost-routing-gate.mjs'],
   ['UserPromptSubmit', 'expensive-session-guard.mjs'],

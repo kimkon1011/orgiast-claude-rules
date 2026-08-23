@@ -19,6 +19,29 @@ import { calculateDelegation, collectClaudeStats, collectCodexUsage, formatBlock
 export { codexSessionDirs, collectCodexUsage } from './usage-stats.mjs';
 const nativeHome = os.homedir();
 function defaultHome() { return process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || nativeHome; }
+export function decideEnforcement({ delegRatio, daysObserved, claudeOut, history, target, pilot, previousMode }) {
+  if (!pilot) {
+    const demotion = previousMode === 'block' ? '既存blockをwarnへ降格。' : '';
+    return { mode: 'warn', reason: `${demotion}block昇格はパイロット機のみ有効(~/.claude/cost-enforce-pilot が無い)。目標50%の指示書と可視化は有効` };
+  }
+
+  let mode = 'warn', reason = '観察中';
+  if (delegRatio < target / 3 && daysObserved >= 2 && claudeOut >= 1e6) {
+    mode = 'block'; reason = `委譲率${(delegRatio * 100).toFixed(1)}%=目標の1/3未満。2日で昇格`;
+  } else if (daysObserved >= 3 && claudeOut >= 1e6 && delegRatio < target / 2) {
+    mode = 'block'; reason = `委譲率${(delegRatio * 100).toFixed(1)}%=目標の半分未満。3日でトレンドに関わらず昇格`;
+  } else if (daysObserved >= 7 && claudeOut >= 1e6 && delegRatio < target) {
+    const avg = a => a.length ? a.reduce((s, x) => s + (x.delegRatio || 0), 0) / a.length : 0;
+    const early = history.slice(0, Math.max(1, Math.floor(history.length / 2)));
+    const recent = history.slice(-3);
+    if (avg(recent) <= avg(early) + 0.05) {
+      mode = 'block'; reason = `${daysObserved}日観察して委譲率が改善せず(${(avg(early) * 100).toFixed(0)}%→${(avg(recent) * 100).toFixed(0)}%)。ハードブロック昇格`;
+    } else {
+      reason = `改善傾向あり(${(avg(early) * 100).toFixed(0)}%→${(avg(recent) * 100).toFixed(0)}%)=警告継続`;
+    }
+  }
+  return { mode, reason };
+}
 const HOME = defaultHome();
 const DAYS = parseInt((process.argv.find(a => a.startsWith('--days=')) || '').split('=')[1] || '7', 10) || 7;
 const POST = process.argv.includes('--post');
@@ -163,19 +186,14 @@ if (!hist.length || hist[hist.length - 1].date !== today) hist.push({ date: toda
 while (hist.length > 14) hist.shift();
 const obsStart = (prev && prev.obsStart) ? prev.obsStart : today;
 const daysObserved = Math.round((Date.now() - new Date(obsStart + 'T00:00:00Z').getTime()) / 864e5);
-let enforce = 'warn', ereason = '観察中';
-if (delegRatio < TARGET_DELEG / 3 && daysObserved >= 2 && claudeOut >= 1e6) {
-  enforce = 'block'; ereason = `委譲率${(delegRatio * 100).toFixed(1)}%=目標の1/3未満。2日で昇格`;
-} else if (daysObserved >= 3 && claudeOut >= 1e6 && delegRatio < TARGET_DELEG / 2) {
-  enforce = 'block'; ereason = `委譲率${(delegRatio * 100).toFixed(1)}%=目標の半分未満。3日でトレンドに関わらず昇格`;
-} else if (daysObserved >= 7 && claudeOut >= 1e6 && delegRatio < TARGET_DELEG) {
-  const avg = a => a.length ? a.reduce((s, x) => s + (x.delegRatio || 0), 0) / a.length : 0;
-  const early = hist.slice(0, Math.max(1, Math.floor(hist.length / 2)));
-  const recent = hist.slice(-3);
-  if (avg(recent) <= avg(early) + 0.05) { enforce = 'block'; ereason = `${daysObserved}日観察して委譲率が改善せず(${(avg(early) * 100).toFixed(0)}%→${(avg(recent) * 100).toFixed(0)}%)。ハードブロック昇格`; }
-  else { ereason = `改善傾向あり(${(avg(early) * 100).toFixed(0)}%→${(avg(recent) * 100).toFixed(0)}%)=警告継続`; }
-}
-try { fs.writeFileSync(path.join(HOME, '.claude', 'cost-enforce.json'), JSON.stringify({ mode: enforce, reason: ereason, since: obsStart, daysObserved, delegRatio, target: TARGET_DELEG }, null, 2)); } catch { }
+const enforceFile = path.join(HOME, '.claude', 'cost-enforce.json');
+let previousMode = 'warn';
+try { previousMode = String(JSON.parse(fs.readFileSync(enforceFile, 'utf8')).mode || 'warn'); } catch { }
+const { mode: enforce, reason: ereason } = decideEnforcement({
+  delegRatio, daysObserved, claudeOut, history: hist, target: TARGET_DELEG,
+  pilot: fs.existsSync(path.join(HOME, '.claude', 'cost-enforce-pilot')), previousMode,
+});
+try { fs.writeFileSync(enforceFile, JSON.stringify({ mode: enforce, reason: ereason, since: obsStart, daysObserved, delegRatio, target: TARGET_DELEG }, null, 2)); } catch { }
 try { fs.writeFileSync(stateF, JSON.stringify({ t: new Date().toISOString(), totalUSD, claudeUSD, claudeOut, codexOut, codexSessions, execUSD, work, delegRatio, obsStart, history: hist })); } catch { }
 if (enforce === 'block') console.log(`\n🔒 ハードブロック昇格: ${ereason}（アプリ実装コードの直接編集をpretooluseフックが拒否します）`);
 console.log(md);

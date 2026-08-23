@@ -15,8 +15,33 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { recommendations } from './eval-harness.mjs';
 import { readEnvValue } from './env-kv.mjs';
 import { isEntry } from './is-entry.mjs';
+import { calculateDelegation, collectClaudeStats, collectCodexUsage, formatBlockSource } from './usage-stats.mjs';
+export { codexSessionDirs, collectCodexUsage } from './usage-stats.mjs';
 const nativeHome = os.homedir();
 function defaultHome() { return process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || nativeHome; }
+export function decideEnforcement({ delegRatio, daysObserved, claudeOut, history, target, pilot, previousMode }) {
+  if (!pilot) {
+    const demotion = previousMode === 'block' ? '既存blockをwarnへ降格。' : '';
+    return { mode: 'warn', reason: `${demotion}block昇格はパイロット機のみ有効(~/.claude/cost-enforce-pilot が無い)。目標50%の指示書と可視化は有効` };
+  }
+
+  let mode = 'warn', reason = '観察中';
+  if (delegRatio < target / 3 && daysObserved >= 2 && claudeOut >= 1e6) {
+    mode = 'block'; reason = `委譲率${(delegRatio * 100).toFixed(1)}%=目標の1/3未満。2日で昇格`;
+  } else if (daysObserved >= 3 && claudeOut >= 1e6 && delegRatio < target / 2) {
+    mode = 'block'; reason = `委譲率${(delegRatio * 100).toFixed(1)}%=目標の半分未満。3日でトレンドに関わらず昇格`;
+  } else if (daysObserved >= 7 && claudeOut >= 1e6 && delegRatio < target) {
+    const avg = a => a.length ? a.reduce((s, x) => s + (x.delegRatio || 0), 0) / a.length : 0;
+    const early = history.slice(0, Math.max(1, Math.floor(history.length / 2)));
+    const recent = history.slice(-3);
+    if (avg(recent) <= avg(early) + 0.05) {
+      mode = 'block'; reason = `${daysObserved}日観察して委譲率が改善せず(${(avg(early) * 100).toFixed(0)}%→${(avg(recent) * 100).toFixed(0)}%)。ハードブロック昇格`;
+    } else {
+      reason = `改善傾向あり(${(avg(early) * 100).toFixed(0)}%→${(avg(recent) * 100).toFixed(0)}%)=警告継続`;
+    }
+  }
+  return { mode, reason };
+}
 const HOME = defaultHome();
 const DAYS = parseInt((process.argv.find(a => a.startsWith('--days=')) || '').split('=')[1] || '7', 10) || 7;
 const POST = process.argv.includes('--post');
@@ -27,42 +52,6 @@ function tier(m) { m = (m || '').toLowerCase(); if (m.includes('fable')) return 
 
 // ---- 1) Claude Code トークン/$ ----
 function walk(dir, out) { let e = []; try { e = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; } for (const d of e) { const p = path.join(dir, d.name); if (d.isDirectory()) walk(p, out); else if (d.name.endsWith('.jsonl')) out.push(p); } }
-// Codex は Windows ネイティブ/WSL のどちらからも使われる。明示指定時はその候補だけを使う。
-export function codexSessionDirs(home = defaultHome()) {
-  if (process.env.CODEX_SESSIONS_DIRS !== undefined) return process.env.CODEX_SESSIONS_DIRS.split(path.delimiter).filter(Boolean);
-  const dirs = [path.join(home, '.codex', 'sessions')];
-  const addUsers = (root) => {
-    let users = []; try { users = fs.readdirSync(root, { withFileTypes: true }); } catch { return; }
-    for (const user of users) if (user.isDirectory()) dirs.push(path.join(root, user.name, '.codex', 'sessions'));
-  };
-  // `//wsl.localhost/` のルートは列挙できない(ENOENT)。ディストリ名は wsl.exe から取る(出力はUTF-16LE)。
-  if (process.platform === 'win32') {
-    let distros = [];
-    try { distros = execSync('wsl.exe -l -q', { stdio: ['ignore', 'pipe', 'ignore'], timeout: 15000 }).toString('utf16le').split(/\r?\n/).map((s) => s.trim()).filter(Boolean); } catch { }
-    for (const distro of distros) {
-      addUsers(`//wsl.localhost/${distro}/home`);
-      addUsers(`//wsl$/${distro}/home`);
-    }
-  }
-  // このスクリプト自体が WSL 上で動く場合、UNC と同じ実体を Linux パスから参照する。
-  if (process.platform === 'linux') addUsers('/home');
-  return [...new Set(dirs)];
-}
-export function collectCodexUsage({ home = defaultHome(), days = 7, now = Date.now() } = {}) {
-  const cutoff = now - days * 864e5;
-  let outputTokens = 0, sessions = 0;
-  const files = [];
-  for (const dir of codexSessionDirs(home)) walk(dir, files);
-  for (const file of new Set(files)) {
-    let stat; try { stat = fs.statSync(file); } catch { continue; }
-    if (stat.mtimeMs < cutoff) continue;
-    let raw; try { raw = fs.readFileSync(file, 'utf8'); } catch { continue; }
-    const re = /"total_token_usage"\s*:\s*\{[^{}]*?"output_tokens"\s*:\s*(\d+)/g;
-    let match, last = null; while ((match = re.exec(raw)) !== null) last = Number(match[1]);
-    if (last !== null) { outputTokens += last; sessions++; }
-  }
-  return { outputTokens, sessions };
-}
 const isMain = isEntry(import.meta.url);
 if (isMain) {
 let claudeOut = 0, claudeUSD = 0, claudeByModel = {}, cacheBase = 0, cacheRead = 0, cacheWrite = 0, topFableSource = null;
@@ -110,7 +99,8 @@ if (work === 0) { workKind = 'sessions(代替)'; try { const files = []; walk(pa
 
 // ---- 判定 ----
 const totalUSD = claudeUSD + execUSD;
-const delegRatio = (execOut + codexOut + claudeOut) > 0 ? (execOut + codexOut) / (execOut + codexOut + claudeOut) : 0;
+const delegation = calculateDelegation({ execOut, codexOut, byModel: claudeByModel });
+const { delegRatio } = delegation;
 const outPerWork = claudeOut / Math.max(work, 1);
 // 前回スナップショットで傾向
 const stateF = path.join(HOME, '.claude', 'cost-loop-state.json');
@@ -132,7 +122,7 @@ if (!Number.isFinite(cronCheckedAt) || Date.now() - cronCheckedAt >= 2 * 864e5) 
     if (result.status === 'stale') flags.push(`🚨 cron停止: ${result.label} — schedule の最終成功 ${String(result.lastSuccess).slice(0, 10)}(${Math.floor(result.ageDays)}日前)。gh run list --event=schedule で確認し permissions:{actions:read} を点検`);
   }
 }
-const TARGET_DELEG = 0.30;
+const TARGET_DELEG = 0.50;
 if (claudeByModel.fable > 0) {
   const latest = new Date(topFableSource?.latest || Date.now()); const pad = (n) => String(n).padStart(2, '0');
   const latestText = `${latest.getFullYear()}-${pad(latest.getMonth() + 1)}-${pad(latest.getDate())} ${pad(latest.getHours())}:${pad(latest.getMinutes())}`;
@@ -165,6 +155,7 @@ const claudeModelLine = Object.keys(claudeByModel).length ? Object.entries(claud
 const cacheTarget = cacheRead + cacheWrite + cacheBase, cacheRate = cacheTarget ? cacheRead / cacheTarget : 0;
 const cacheLine = `${cacheTarget > 1_000_000 ? (cacheRate < 0.2 ? '🚨 ' : cacheRate < 0.5 ? '⚠️ ' : '✅ ') : ''}プロンプトキャッシュヒット率 ${(cacheRate * 100).toFixed(1)}% (対象 ${(cacheTarget / 1e6).toFixed(1)}M${cacheTarget <= 1_000_000 ? '・判定対象外' : ''})${cacheTarget > 1_000_000 && cacheRate < 0.2 ? ' — system 内に日時/ID などの動的値が入っている・JSON が非ソート・tools 定義が毎回変わる、を疑う' : ''}`;
 const qualityLines = recommendations();
+const blockSourceLine = formatBlockSource(collectClaudeStats({ home: HOME, days: DAYS }).blocks);
 if (!qualityLines.length) qualityLines.push(fs.existsSync(path.join(HOME, '.claude', 'eval-results.jsonl')) ? '有効な計測なし（再計測が必要）' : 'eval 未実行 (node tools/eval-harness.mjs --all で計測)');
 const md = `<!-- COST-DIRECTIVE-START -->
 ## 📊 Claude Code out ${(claudeOut / 1000).toFixed(0)}k tok / 委譲率 ${(delegRatio * 100).toFixed(1)}% (直近${DAYS}日 / このPC)
@@ -173,7 +164,9 @@ const md = `<!-- COST-DIRECTIVE-START -->
 - 安いAI実行者: **実額 $${execUSD.toFixed(2)}**（従量課金）— ${execLine}
 - Codex(定額枠・実装の主経路): **out ${codexOut.toLocaleString('ja-JP')} tok** / ${codexSessions}セッション ※従量課金なし
 - 作業量(${workKind}): ${work} / **作業あたり 出力 ${(outPerWork / 1000).toFixed(0)}k tok**
-- 委譲率(安いAI/Codexへ逃がせた割合): **${(delegRatio * 100).toFixed(1)}%**
+- 委譲率(Codex/Sonnet/Haiku/安いAIへ逃がせた割合): **${(delegRatio * 100).toFixed(1)}%**
+- 内訳 codex ${(codexOut / 1000).toFixed(0)}k / sonnet+haiku ${(delegation.sonnetHaikuOut / 1000).toFixed(0)}k / 安いAI ${(execOut / 1000).toFixed(0)}k / 監督(opus+fable+default) ${(delegation.supervisorOut / 1000).toFixed(0)}k
+- 🔍 監督の出力の出どころ: ${blockSourceLine}
 - ${cacheLine}
 ### 指示
 ${flags.map(f => '- ' + f).join('\n')}
@@ -193,17 +186,14 @@ if (!hist.length || hist[hist.length - 1].date !== today) hist.push({ date: toda
 while (hist.length > 14) hist.shift();
 const obsStart = (prev && prev.obsStart) ? prev.obsStart : today;
 const daysObserved = Math.round((Date.now() - new Date(obsStart + 'T00:00:00Z').getTime()) / 864e5);
-let enforce = 'warn', ereason = '観察中';
-if (delegRatio < TARGET_DELEG / 3 && daysObserved >= 2 && claudeOut >= 1e6) {
-  enforce = 'block'; ereason = `委譲率${(delegRatio * 100).toFixed(1)}%=目標の1/3未満。2日で昇格`;
-} else if (daysObserved >= 7 && claudeOut >= 1e6 && delegRatio < TARGET_DELEG) {
-  const avg = a => a.length ? a.reduce((s, x) => s + (x.delegRatio || 0), 0) / a.length : 0;
-  const early = hist.slice(0, Math.max(1, Math.floor(hist.length / 2)));
-  const recent = hist.slice(-3);
-  if (avg(recent) <= avg(early) + 0.05) { enforce = 'block'; ereason = `${daysObserved}日観察して委譲率が改善せず(${(avg(early) * 100).toFixed(0)}%→${(avg(recent) * 100).toFixed(0)}%)。ハードブロック昇格`; }
-  else { ereason = `改善傾向あり(${(avg(early) * 100).toFixed(0)}%→${(avg(recent) * 100).toFixed(0)}%)=警告継続`; }
-}
-try { fs.writeFileSync(path.join(HOME, '.claude', 'cost-enforce.json'), JSON.stringify({ mode: enforce, reason: ereason, since: obsStart, daysObserved, delegRatio, target: TARGET_DELEG }, null, 2)); } catch { }
+const enforceFile = path.join(HOME, '.claude', 'cost-enforce.json');
+let previousMode = 'warn';
+try { previousMode = String(JSON.parse(fs.readFileSync(enforceFile, 'utf8')).mode || 'warn'); } catch { }
+const { mode: enforce, reason: ereason } = decideEnforcement({
+  delegRatio, daysObserved, claudeOut, history: hist, target: TARGET_DELEG,
+  pilot: fs.existsSync(path.join(HOME, '.claude', 'cost-enforce-pilot')), previousMode,
+});
+try { fs.writeFileSync(enforceFile, JSON.stringify({ mode: enforce, reason: ereason, since: obsStart, daysObserved, delegRatio, target: TARGET_DELEG }, null, 2)); } catch { }
 try { fs.writeFileSync(stateF, JSON.stringify({ t: new Date().toISOString(), totalUSD, claudeUSD, claudeOut, codexOut, codexSessions, execUSD, work, delegRatio, obsStart, history: hist })); } catch { }
 if (enforce === 'block') console.log(`\n🔒 ハードブロック昇格: ${ereason}（アプリ実装コードの直接編集をpretooluseフックが拒否します）`);
 console.log(md);

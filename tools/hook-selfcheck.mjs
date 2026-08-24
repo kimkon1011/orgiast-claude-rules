@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { repairEnvBom } from './env-repair.mjs';
 import { isEntry } from './is-entry.mjs';
+import { deploySkills } from './onboarding-sync.mjs';
 
 export const REQUIRED_HOOKS = [
   ['PreToolUse', 'pretooluse-bash-delegation.mjs'],
@@ -53,8 +54,13 @@ if (isMain) try {
   }
   const skills = missingSkills({ home, repo });
   if (skills.length) {
-    spawnSync(process.execPath, [path.join(repo, 'tools', 'onboarding-sync.mjs'), '--force'], { encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo } });
-    console.log(`🚨 skill が ${skills.length} 本未配備だったため再配布しました: ${skills.join(', ')}`);
+    // onboarding-sync --force を spawn しない: あちらの repoPath は home から導出され ORGIAST_REPO を
+    // 見ないため、配布が1件も起きていないのに成功したように見える(実測)。deploySkills を直接呼び、
+    // 配布後にもう一度数え直して「実際に配備できたか」で報告を分ける。
+    const deployed = deploySkills(repo, home, { quiet: true });
+    const still = missingSkills({ home, repo });
+    if (still.length) console.log(`🚨 skill ${still.length} 本が未配備のままです(配布失敗): ${still.join(', ')} — node ${path.join(repo, 'tools', 'onboarding-sync.mjs')} --force を実行してください`);
+    else console.log(`🚨 skill が ${skills.length} 本未配備だったため再配布しました: ${deployed.join(', ')}`);
   }
 } catch {}
 if (isMain) process.exit(0);

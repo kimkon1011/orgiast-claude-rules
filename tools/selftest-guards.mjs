@@ -33,6 +33,26 @@ function writeCostEnforce(home, mode) {
   fs.writeFileSync(path.join(claude, 'cost-enforce.json'), JSON.stringify({ mode }));
 }
 
+test('onboarding-sync.ps1: hooks配下の自分自身を更新する', () => {
+  const source = fs.readFileSync(path.join(toolsDir, 'onboarding-sync.ps1'), 'utf8');
+  const updateBlock = source.slice(source.indexOf('Write-SyncLog "repo updated ($repoSyncMethod)"'), source.indexOf('} catch { Write-SyncLog "repo sync failed:', source.indexOf('Write-SyncLog "repo updated ($repoSyncMethod)"')));
+  assert(updateBlock.includes("'.claude\\hooks\\onboarding-sync.ps1'") && updateBlock.includes('Copy-Item') && updateBlock.includes('Get-FileHash'), '自己更新のバイト同一判定またはコピー処理が不足');
+});
+test('onboarding-sync.ps1: PowerShell 5.1 でも ONBOARDING を取得できる', () => {
+  // pwsh が無いPCの hook は powershell(5.1) で起動され、5.1 は [System.Net.Http.HttpClient] を
+  // 解決できずルール同期だけが静かに止まる。HttpClient 失敗時の代替経路を必須にする。
+  const source = fs.readFileSync(path.join(toolsDir, 'onboarding-sync.ps1'), 'utf8');
+  const at = source.indexOf('[System.Net.Http.HttpClient]::new()');
+  const block = source.slice(at, source.indexOf('if (-not $bodyBytes', at));
+  assert(at >= 0 && block.includes('Invoke-WebRequest') && block.includes('RawContentStream'), 'HttpClient 失敗時のフォールバック取得が無い');
+});
+test('install-orgiast.ps1: 未コミットの作業ツリーを削除しない', () => {
+  const source = fs.readFileSync(path.join(toolsDir, 'install-orgiast.ps1'), 'utf8');
+  const statusAt = source.indexOf('status --porcelain');
+  const removeAt = source.indexOf('Remove-Item $REPO -Recurse');
+  assert(statusAt >= 0 && removeAt > statusAt && source.slice(statusAt, removeAt).includes('$gotRepo = $true'), '未コミット判定が削除より前にない');
+});
+
 test('parseEnvText: BOM・表記ゆれ・重複・CRLF', () => {
   const parsed = parseEnvText('\uFEFF# comment\r\n export A=v1\r\n B = "v2"\r\n   C = \'v3\' \r\nA=last\r\n');
   assert(parsed.A === 'last' && parsed.B === 'v2' && parsed.C === 'v3', JSON.stringify(parsed));

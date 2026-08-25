@@ -171,8 +171,16 @@ function Main {
         $client.Timeout = [TimeSpan]::FromSeconds(15)
         try { $bodyBytes = $client.GetByteArrayAsync($RawUrl).GetAwaiter().GetResult() } finally { $client.Dispose() }
     } catch {
-        Write-SyncLog "fetch failed: $($_.Exception.Message)"
-        return
+        # Windows PowerShell 5.1 は System.Net.Http が既定でロードされておらず [HttpClient] を解決できない。
+        # hook は pwsh が無いPCでは powershell(5.1) で起動されるため、そのPCではルール同期だけが
+        # 静かに止まっていた(2026-08-25 実測: "fetch failed: Unable to find type [System.Net.Http.HttpClient]")。
+        try {
+            try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
+            $bodyBytes = (Invoke-WebRequest -Uri $RawUrl -UseBasicParsing -TimeoutSec 15).RawContentStream.ToArray()
+        } catch {
+            Write-SyncLog "fetch failed: $($_.Exception.Message)"
+            return
+        }
     }
 
     if (-not $bodyBytes -or $bodyBytes.Length -eq 0) {
@@ -249,6 +257,20 @@ try {
                 New-Item -ItemType Directory -Path (Split-Path -Parent $repoStatePath) -Force | Out-Null
                 @{ last = (Get-Date).ToString('o') } | ConvertTo-Json -Compress | Set-Content -LiteralPath $repoStatePath -Encoding UTF8
                 Write-SyncLog "repo updated ($repoSyncMethod)"
+                try {
+                    $selfUpdateSource = Join-Path $repoRoot 'tools\onboarding-sync.ps1'
+                    $selfUpdateTarget = Join-Path $homeRoot '.claude\hooks\onboarding-sync.ps1'
+                    if ((Test-Path -LiteralPath $selfUpdateSource) -and (Test-Path -LiteralPath $selfUpdateTarget)) {
+                        $sourceHash = (Get-FileHash -LiteralPath $selfUpdateSource -Algorithm SHA256).Hash
+                        $targetHash = (Get-FileHash -LiteralPath $selfUpdateTarget -Algorithm SHA256).Hash
+                        if ($sourceHash -ne $targetHash) {
+                            Copy-Item -LiteralPath $selfUpdateSource -Destination $selfUpdateTarget -Force
+                            Write-SyncLog "onboarding-sync hook updated (effective from next session)"
+                        }
+                    }
+                } catch {
+                    Write-SyncLog "onboarding-sync hook update failed: $($_.Exception.Message)"
+                }
             } catch { Write-SyncLog "repo sync failed: $($_.Exception.Message)" }
             finally { if ($repoSyncTemp -and (Test-Path -LiteralPath $repoSyncTemp)) { Remove-Item -LiteralPath $repoSyncTemp -Recurse -Force -ErrorAction SilentlyContinue } }
         }

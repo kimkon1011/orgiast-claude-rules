@@ -58,7 +58,17 @@ if (Have node) { OK ("Node.js あり (" + (node -v) + ")") } else { Warn "Node.j
 # --- リポ取得(ZIP優先: git の pack ロック/Defender 干渉を回避) ---
 Step "共通ルール一式のダウンロード"
 $gotRepo = $false
-try {
+if ((Have git) -and (Test-Path (Join-Path $REPO '.git'))) {
+  try {
+    $repoStatus = @(git -C $REPO status --porcelain 2>$null)
+    if ($LASTEXITCODE -eq 0 -and $repoStatus.Count -gt 0) {
+      try { git -C $REPO pull --ff-only | Out-Null } catch {}
+      $gotRepo = $true
+      Warn "未コミットの変更があるため既存リポジトリを保持しました(削除せず pull のみ)"
+    }
+  } catch {}
+}
+if (-not $gotRepo) { try {
   $zip = Join-Path $env:TEMP 'orgiast-rules.zip'
   $ext = Join-Path $env:TEMP ('orgiast-rules-ext-' + [guid]::NewGuid().ToString('N'))
   Invoke-WebRequest -UseBasicParsing 'https://github.com/kimkon1011/orgiast-claude-rules/archive/refs/heads/main.zip' -OutFile $zip
@@ -71,7 +81,7 @@ try {
   }
   Remove-Item $zip -Force -ErrorAction SilentlyContinue
   Remove-Item $ext -Recurse -Force -ErrorAction SilentlyContinue
-} catch { Warn "zip取得に失敗、gitで再試行します" }
+} catch { Warn "zip取得に失敗、gitで再試行します" } }
 if (-not $gotRepo -and (Test-Path (Join-Path $REPO '.git'))) {
   try { git -C $REPO pull --quiet; if (Test-Path (Join-Path $REPO 'tools')) { $gotRepo = $true; OK "最新に更新" } } catch { if (Test-Path (Join-Path $REPO 'tools')) { $gotRepo = $true; Warn "更新失敗(既存を使用)" } }
 }

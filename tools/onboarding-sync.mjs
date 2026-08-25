@@ -141,7 +141,11 @@ function saveKeysAlertState(previous, now) {
   } catch {}
 }
 async function alertKeyserveFailure(previous, now, status) {
-  const visible = `[onboarding-sync] keyserve から鍵が受け取れていません (HTTP status: ${status ?? '不明'})`;
+  const keyserveEnvExists = fs.existsSync(path.join(home, '.claude', 'keyserve.env'));
+  const rotationHint = status === 401 && keyserveEnvExists
+    ? ' (この PC は既存 keyserve.env の秘密で認証を試みています。サーバ側で秘密がローテーションされた可能性があります)'
+    : '';
+  const visible = `[onboarding-sync] keyserve から鍵が受け取れていません (HTTP status: ${status ?? '不明'})${rotationHint}`;
   console.log(visible);
   if (dryRun || !shouldAlert(previous, now)) return;
   const reporterEnv = path.join(home, '.claude', 'cost-reporter.env');
@@ -191,18 +195,28 @@ async function provisionKeys(now) {
     const payload = await response.json();
     if (!payload || typeof payload.files !== 'object' || payload.files === null || Array.isArray(payload.files)) throw new Error('invalid response');
     const provisioned = [];
+    const refreshed = [];
     for (const [name, contents] of Object.entries(payload.files)) {
       if (!/^[A-Za-z0-9._-]+$/.test(name) || name.includes('..') || typeof contents !== 'string') continue;
       const destination = path.join(home, '.claude', name);
-      if (fs.existsSync(destination)) continue;
+      const cleanedContents = contents.replace(/^\uFEFF/, '');
+      if (fs.existsSync(destination)) {
+        if (name !== 'keyserve.env' || fs.readFileSync(destination, 'utf8') === cleanedContents) continue;
+        fs.writeFileSync(destination, cleanedContents, { encoding: 'utf8', mode: 0o600 });
+        fs.chmodSync(destination, 0o600);
+        refreshed.push(name);
+        log(`refreshed: ${name}`);
+        continue;
+      }
       fs.mkdirSync(path.dirname(destination), { recursive: true });
-      fs.writeFileSync(destination, contents.replace(/^\uFEFF/, ''), { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+      fs.writeFileSync(destination, cleanedContents, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
       provisioned.push(name);
       log(`provisioned: ${name}`);
     }
     repairEnvBom({ home });
     saveKeysState(now);
     if (provisioned.length) console.log(`[onboarding-sync] provisioned: ${provisioned.join(', ')}`);
+    if (refreshed.length) console.log(`[onboarding-sync] refreshed: ${refreshed.join(', ')}`);
   } catch (e) {
     log(`key provisioning failed: ${e.message}`);
     await alertKeyserveFailure(previous, now, e.status);

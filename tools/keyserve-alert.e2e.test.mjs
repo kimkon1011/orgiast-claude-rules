@@ -55,6 +55,7 @@ test('keyserve 401 を実経路で Discord webhook へ通報し24時間抑止す
       `DISCORD_COST_WEBHOOK=${webhookUrl}\nREPORTER_LABEL=E2E-TEST-PC\n`,
       'utf8',
     );
+    fs.writeFileSync(path.join(claudeDir, 'keyserve.env'), `ORGIAST_KEYSERVE_SECRET=${secret}\n`, { mode: 0o600 });
 
     const args = [syncScript, '--force', `--target=${path.join(tempHome, 'CLAUDE.md')}`];
     const env = {
@@ -67,7 +68,9 @@ test('keyserve 401 を実経路で Discord webhook へ通報し24時間抑止す
     };
     const runSync = () => execFileAsync(process.execPath, args, { env, timeout: 4_000 });
 
-    await runSync();
+    const firstRun = await runSync();
+    assert.match(firstRun.stdout, /この PC は既存 keyserve\.env の秘密で認証を試みています/);
+    assert.match(firstRun.stdout, /サーバ側で秘密がローテーションされた可能性があります/);
     assert.equal(requests.keys.length, 1);
     assert.equal(requests.keys[0].method, 'POST');
     assert.equal(requests.hooks.length, 1);

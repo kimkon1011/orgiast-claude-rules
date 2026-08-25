@@ -417,10 +417,10 @@ function makeFleetReportHome(prefix, withEnv = true) {
   }
   return { home, claude };
 }
-test('fleet-sheet-report: URL/TOKEN未設定なら無言exit 0', () => {
+test('fleet-sheet-report: URL/TOKEN未設定ならstderr 1行でexit 0', () => {
   const { home } = makeFleetReportHome('orgiast-fleet-no-env-', false);
   const r = run('fleet-sheet-report.mjs', undefined, ['--dry-run'], { ORGIAST_HOME: home });
-  assert(r.status === 0 && r.stdout === '' && r.stderr === '', JSON.stringify(r));
+  assert(r.status === 0 && r.stdout === '' && r.stderr.trim().split(/\r?\n/).length === 1 && r.stderr.includes('FLEET_SHEET_URL/TOKEN 未設定'), JSON.stringify(r));
 });
 test('fleet-sheet-report: stateから必要フィールドを組み立てる', () => {
   const { home, claude } = makeFleetReportHome('orgiast-fleet-state-');

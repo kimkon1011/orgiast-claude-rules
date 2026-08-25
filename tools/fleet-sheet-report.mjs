@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseEnvText } from './env-kv.mjs';
+import { scanBrowserExtensions } from './browser-extension-audit.mjs';
 
 const dryRun = process.argv.includes('--dry-run');
 const home = process.env.ORGIAST_HOME || os.homedir();
@@ -40,7 +41,7 @@ async function main() {
   const claudeDir = path.join(home, '.claude');
   const fleetEnv = readEnv(path.join(claudeDir, 'fleet-sheet.env'));
   if (!fleetEnv.FLEET_SHEET_URL || !fleetEnv.FLEET_SHEET_TOKEN) {
-    if (!dryRun) console.error('fleet-sheet: FLEET_SHEET_URL/TOKEN 未設定のため送信しません(~/.claude/fleet-sheet.env)');
+    console.error('fleet-sheet: FLEET_SHEET_URL/TOKEN 未設定のため送信しません(~/.claude/fleet-sheet.env)');
     return;
   }
   const reporterEnv = readEnv(path.join(claudeDir, 'cost-reporter.env'));
@@ -73,15 +74,32 @@ async function main() {
     fable5: fableDetected ? '検出' : fableKnown ? '未検出' : '判定不能',
     disciplineAlert: enforce.mode ? `${enforce.mode}${enforce.reason ? ': ' + enforce.reason : ''}` : '判定不能',
   };
+  const audit = scanBrowserExtensions();
+  const extensionPayload = {
+    token: fleetEnv.FLEET_SHEET_TOKEN, kind: 'extensions', label, hostname: os.hostname(), reportedAt: payload.reportedAt,
+    rows: audit.rows.filter((row) => !(row.risk === 'low' && row.builtin)).map(({ browser, profile, account, name, id, version, enabled, risk, builtin, broadHost, keyPerms }) => ({ browser, profile, account, name, id, version, enabled, risk, builtin, broadHost, keyPerms })),
+  };
   if (dryRun) {
     // 秘匿値は出さない(状態だけ見せる)。ログ・CI・端末履歴に残るため。
     const shown = payload.token ? "<設定あり:" + payload.token.length + "文字>" : "<未設定>";
-    console.log(JSON.stringify({ ...payload, token: shown }, null, 2));
+    console.log(JSON.stringify({ ...payload, token: shown, extensionAudit: { ...extensionPayload, token: shown } }, null, 2));
     return;
   }
-  await fetch(fleetEnv.FLEET_SHEET_URL, {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload), signal: AbortSignal.timeout(20_000), redirect: 'follow',
-  });
+  // 2本は独立して送る。1本目が落ちたら2本目も送られない(かつ main の catch が
+  // 握り潰す)と、拡張監査が「一度も届いていないのに誰も気付かない」状態になる。
+  await post(fleetEnv.FLEET_SHEET_URL, 'status', payload);
+  await post(fleetEnv.FLEET_SHEET_URL, 'extensions', extensionPayload);
+}
+
+async function post(url, kind, body) {
+  try {
+    const response = await fetch(url, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(20_000), redirect: 'follow',
+    });
+    if (!response.ok) console.error(`fleet-sheet: ${kind} の送信が HTTP ${response.status}`);
+  } catch (error) {
+    console.error(`fleet-sheet: ${kind} の送信に失敗 (${error?.name || 'error'})`);
+  }
 }
 
 main().catch(() => {});

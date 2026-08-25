@@ -27,6 +27,42 @@ function extPlanReplace(headers, rows, payload) {
   return { deleteRowNumbers: deleteRowNumbers, appendRows: appendRows };
 }
 
+function extSummarize(headers, rows) {
+  const labelColumn = fleetFindHeaderIndex(headers, EXT_HEADERS_.label);
+  if (labelColumn < 0) throw new Error('required header not found: ' + EXT_HEADERS_.label);
+  const riskColumn = fleetFindHeaderIndex(headers, EXT_HEADERS_.risk);
+  const reportedAtColumn = fleetFindHeaderIndex(headers, EXT_HEADERS_.reportedAt);
+  const byLabel = {};
+  let totalRows = 0;
+  rows.forEach(function(row) {
+    const label = String(row[labelColumn] == null ? '' : row[labelColumn]).trim();
+    if (!label) return;
+    if (!byLabel[label]) byLabel[label] = { rows: 0, high: 0, reportedAt: '' };
+    const summary = byLabel[label];
+    summary.rows += 1;
+    totalRows += 1;
+    if (riskColumn >= 0 && String(row[riskColumn]).toLowerCase() === 'high') summary.high += 1;
+    const reportedAt = reportedAtColumn >= 0 ? String(row[reportedAtColumn] == null ? '' : row[reportedAtColumn]) : '';
+    if (reportedAt > summary.reportedAt) summary.reportedAt = reportedAt;
+  });
+  return { pcCount: Object.keys(byLabel).length, totalRows: totalRows, byLabel: byLabel };
+}
+
+function describeExtensionAudit() {
+  const properties = PropertiesService.getScriptProperties();
+  const id = properties.getProperty('SHEET_ID');
+  if (!id) throw new Error('SHEET_ID is not configured');
+  const spreadsheet = SpreadsheetApp.openById(id);
+  const sheet = spreadsheet.getSheetByName(EXT_SHEET_NAME_);
+  if (!sheet) return { ok: true, tab: EXT_SHEET_NAME_, exists: false, pcCount: 0, totalRows: 0, byLabel: {} };
+  const lastColumn = sheet.getLastColumn();
+  const lastRow = sheet.getLastRow();
+  const headers = lastColumn > 0 ? sheet.getRange(1, 1, 1, lastColumn).getDisplayValues()[0] : [];
+  const rows = lastRow > 1 ? sheet.getRange(2, 1, lastRow - 1, lastColumn).getValues() : [];
+  const summary = extSummarize(headers, rows);
+  return { ok: true, tab: EXT_SHEET_NAME_, exists: true, pcCount: summary.pcCount, totalRows: summary.totalRows, byLabel: summary.byLabel };
+}
+
 function replaceExtensionAudit(payload) {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(20000)) return { ok: false, status: 503, error: 'busy' };

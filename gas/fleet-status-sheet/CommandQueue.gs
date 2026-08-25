@@ -1,7 +1,7 @@
 const CMD_FOLDER_NAME_ = 'claude-fleet-status-cmds';
 
 function _COMMANDS_() {
-  return { upsertFleetStatus: upsertFleetStatus, setFleetToken: setFleetToken, describeFleetConfig: describeFleetConfig };
+  return { upsertFleetStatus: upsertFleetStatus, setFleetToken: setFleetToken, describeFleetConfig: describeFleetConfig, describeExtensionAudit: describeExtensionAudit };
 }
 
 // 共有シークレットは Claude 側で生成してここに流し込む。GAS から外へ出さない(戻り値もマスクする)。

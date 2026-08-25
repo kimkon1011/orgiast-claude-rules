@@ -35,7 +35,7 @@ function doPost(e) {
   const expected = PropertiesService.getScriptProperties().getProperty('FLEET_TOKEN');
   if (!expected || payload.token !== expected) return _fleetJson_({ ok: false, status: 401, error: 'unauthorized' });
   if (payload.kind === 'extensions' && (typeof payload.label !== 'string' || payload.label.trim() === '')) return _fleetJson_({ ok: false, status: 400, error: 'label_required' });
-  try { return _fleetJson_(payload.kind === 'extensions' ? replaceExtensionAudit(payload) : upsertFleetStatus(payload)); }
+  try { return _fleetJson_(payload.kind === 'extensions-describe' ? describeExtensionAudit() : payload.kind === 'extensions' ? replaceExtensionAudit(payload) : upsertFleetStatus(payload)); }
   catch (error) { return _fleetJson_({ ok: false, status: 500, error: error.message }); }
 }
 

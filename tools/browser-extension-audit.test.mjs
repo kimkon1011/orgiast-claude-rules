@@ -51,6 +51,31 @@ test('extPlanReplaceは同一PCだけ置換し空labelを拒否する', () => {
   assert.throws(() => context.extPlanReplace(h.slice(0, -1), [], payload), /required header not found/);
 });
 
+test('extSummarizeはPC別の行数・high件数・最終報告を集計する', () => {
+  const source = fs.readFileSync(new URL('../gas/fleet-status-sheet/ExtensionAudit.gs', import.meta.url), 'utf8');
+  const helpers = fs.readFileSync(new URL('../gas/fleet-status-sheet/UpsertLogic.gs', import.meta.url), 'utf8');
+  const context = {}; vm.createContext(context); vm.runInContext((helpers + '\n' + source).replace(/\bconst\s+/g, 'var '), context);
+  const headers = Object.values(context.EXT_HEADERS_);
+  const makeRow = (label, risk, reportedAt) => headers.map((header) => {
+    if (header === context.EXT_HEADERS_.label) return label;
+    if (header === context.EXT_HEADERS_.risk) return risk;
+    if (header === context.EXT_HEADERS_.reportedAt) return reportedAt;
+    return 'sensitive-cell';
+  });
+  const summary = context.extSummarize(headers, [
+    makeRow('pc-a', 'high', '2026-08-24T10:00:00+09:00'),
+    makeRow('pc-a', 'low', '2026-08-25T10:00:00+09:00'),
+    makeRow('pc-b', 'high', '2026-08-23T10:00:00+09:00'),
+    makeRow('  ', 'high', '2026-08-26T10:00:00+09:00')
+  ]);
+  assert.equal(summary.pcCount, 2);
+  assert.equal(summary.totalRows, 3);
+  assert.deepEqual({ ...summary.byLabel['pc-a'] }, { rows: 2, high: 1, reportedAt: '2026-08-25T10:00:00+09:00' });
+  assert.deepEqual({ ...summary.byLabel['pc-b'] }, { rows: 1, high: 1, reportedAt: '2026-08-23T10:00:00+09:00' });
+  assert.equal(summary.byLabel[''], undefined);
+  assert.throws(() => context.extSummarize(headers.filter((header) => header !== context.EXT_HEADERS_.label), []), /required header not found: PC名\/ホスト名/);
+});
+
 test('拡張0本のプロファイルは読み取り失敗と分けて数える', () => {
   const root = fixture();
   const dir = path.join(root, 'Profile 5'); fs.mkdirSync(dir, { recursive: true });

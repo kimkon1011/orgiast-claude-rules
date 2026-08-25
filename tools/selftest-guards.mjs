@@ -33,6 +33,16 @@ function writeCostEnforce(home, mode) {
   fs.writeFileSync(path.join(claude, 'cost-enforce.json'), JSON.stringify({ mode }));
 }
 
+test('fleet-poller: rules-resync はリポの .mjs を優先する', () => {
+  // 凍結コピー(~/.claude/hooks/onboarding-sync.ps1)を先に叩くと、中央キューから配っても
+  // 古い実装が動くだけで配布が届かない端末を治せない。
+  const source = fs.readFileSync(path.join(toolsDir, 'fleet-poller.mjs'), 'utf8');
+  const at = source.indexOf("task === 'rules-resync'");
+  const block = source.slice(at, source.indexOf("task === 'cost-report'", at));
+  const mjsAt = block.indexOf("'onboarding-sync.mjs'");
+  const ps1At = block.indexOf("'onboarding-sync.ps1'");
+  assert(at >= 0 && mjsAt >= 0 && (ps1At < 0 || mjsAt < ps1At), 'rules-resync が凍結 .ps1 を先に実行している');
+});
 test('onboarding-sync.ps1: hooks配下の自分自身を更新する', () => {
   const source = fs.readFileSync(path.join(toolsDir, 'onboarding-sync.ps1'), 'utf8');
   const updateBlock = source.slice(source.indexOf('Write-SyncLog "repo updated ($repoSyncMethod)"'), source.indexOf('} catch { Write-SyncLog "repo sync failed:', source.indexOf('Write-SyncLog "repo updated ($repoSyncMethod)"')));

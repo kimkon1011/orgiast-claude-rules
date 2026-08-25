@@ -56,9 +56,13 @@ function taskOutput(task) {
   if (!repo) return '';
   if (task === 'verify-setup') return verifySetup();
   if (task === 'rules-resync') {
-    return process.platform === 'win32'
-      ? run('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(home, '.claude', 'hooks', 'onboarding-sync.ps1'), '-Force'])
-      : run('node', [path.join(repo, 'tools', 'onboarding-sync.mjs'), '--force']);
+    // リポの .mjs を最優先。Windows で `~/.claude/hooks/onboarding-sync.ps1` を叩くと
+    // 「install時にコピーされて以後一度も更新されない凍結コピー」を実行することになり、
+    // 中央キューから配っても古い実装のまま＝配布が届かない端末を治せない(2026-08-25 実測)。
+    const mjs = path.join(repo, 'tools', 'onboarding-sync.mjs');
+    if (fs.existsSync(mjs)) return run('node', [mjs, '--force']);
+    if (process.platform === 'win32') return run('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(home, '.claude', 'hooks', 'onboarding-sync.ps1'), '-Force']);
+    return '';
   }
   if (task === 'cost-report') return run('node', [path.join(repo, 'tools', 'claude-cost-reporter.mjs')]);
   return '';

@@ -41,11 +41,22 @@ function resolveName(root, profile, id, manifest) {
   const match = /^__MSG_(.+)__$/.exec(raw);
   if (!match) return raw;
   const locales = ['ja', 'en', 'en_US', manifest?.default_locale].filter(Boolean);
-  for (const locale of [...new Set(locales)]) {
-    const file = path.join(root, profile, 'Extensions', id, String(manifest?.version || ''), '_locales', locale, 'messages.json');
-    const parsed = readJson(file).value;
-    const message = parsed?.[match[1]]?.message;
-    if (typeof message === 'string' && message) return message;
+  // 実際の Chrome は Extensions/<id>/<version>_0/ のようにサフィックス付きで置く。
+  // manifest.version をそのままディレクトリ名にすると名前解決が必ず失敗して
+  // 人が読めない `__MSG_appName__` の表になるため、実ディレクトリを列挙して当てる。
+  const extensionDir = path.join(root, profile, 'Extensions', id);
+  const version = String(manifest?.version || '');
+  let candidates = [];
+  try { candidates = fs.readdirSync(extensionDir).filter((name) => name === version || name.startsWith(`${version}_`)).sort().reverse(); } catch {}
+  if (!candidates.length) { try { candidates = fs.readdirSync(extensionDir).sort().reverse(); } catch {} }
+  if (!candidates.length && version) candidates = [version];
+  for (const dir of candidates) {
+    for (const locale of [...new Set(locales)]) {
+      const file = path.join(extensionDir, dir, '_locales', locale, 'messages.json');
+      const parsed = readJson(file).value;
+      const message = parsed?.[match[1]]?.message;
+      if (typeof message === 'string' && message) return message;
+    }
   }
   return raw;
 }
@@ -62,6 +73,7 @@ function enabledValue(setting) {
 export function scanBrowserExtensions({ roots = browserRoots() } = {}) {
   const rows = [];
   let unreadableProfiles = 0;
+  let emptyProfiles = 0;
   for (const { browser, root } of roots) {
     if (!fs.existsSync(root)) continue;
     const localState = readJson(path.join(root, 'Local State')).value || {};
@@ -75,7 +87,9 @@ export function scanBrowserExtensions({ roots = browserRoots() } = {}) {
       if (!parsed.value && !parsed.failed) parsed = readJson(fallbackFile);
       if (parsed.failed || !parsed.value) { unreadableProfiles += 1; continue; }
       const settings = parsed.value?.extensions?.settings;
-      if (!settings || typeof settings !== 'object') { unreadableProfiles += 1; continue; }
+      // 拡張が0本のプロファイルは「読めなかった」ではない。混ぜると
+      // 読み取り失敗の警告が常時点灯して意味を失うため別に数える。
+      if (!settings || typeof settings !== 'object') { emptyProfiles += 1; continue; }
       for (const [id, setting] of Object.entries(settings)) {
         const manifest = setting?.manifest || {};
         const perms = permissionData(setting || {});
@@ -91,14 +105,20 @@ export function scanBrowserExtensions({ roots = browserRoots() } = {}) {
   rows.sort((a, b) => RISK_ORDER[a.risk] - RISK_ORDER[b.risk] || a.name.localeCompare(b.name, 'ja') || a.browser.localeCompare(b.browser) || a.profile.localeCompare(b.profile) || a.id.localeCompare(b.id));
   const summary = { high: 0, medium: 0, low: 0, builtin: 0 };
   for (const row of rows) { summary[row.risk] += 1; if (row.builtin) summary.builtin += 1; }
-  return { rows, summary, unreadableProfiles };
+  return { rows, summary, unreadableProfiles, emptyProfiles };
+}
+
+// enabled は true/false/'判定不能' の3値。人が読む表に true/false を出すと
+// 「有効」と「判定できなかった」の区別が伝わらないので日本語に寄せる。
+export function enabledLabel(value) {
+  return value === true ? '有効' : value === false ? '無効' : '判定不能';
 }
 
 export function formatHuman(result) {
   const lines = ['リスク\t名前\tブラウザ\tプロファイル(アカウント)\tバージョン\t有効\t広域\t主要権限'];
-  for (const r of result.rows) lines.push([r.risk, r.name, r.browser, `${r.profile}${r.account ? ` (${r.account})` : ''}`, r.version, String(r.enabled), r.broadHost ? 'あり' : 'なし', r.keyPerms.join(',') || '-'].join('\t'));
+  for (const r of result.rows) lines.push([r.risk, r.name, r.browser, `${r.profile}${r.account ? ` (${r.account})` : ''}`, r.version, enabledLabel(r.enabled), r.broadHost ? 'あり' : 'なし', r.keyPerms.join(',') || '-'].join('\t'));
   lines.push(`件数: high=${result.summary.high} medium=${result.summary.medium} low=${result.summary.low} builtin=${result.summary.builtin}`);
-  lines.push(`読めなかったプロファイル: ${result.unreadableProfiles}`);
+  lines.push(`読めなかったプロファイル: ${result.unreadableProfiles} / 拡張0本のプロファイル: ${result.emptyProfiles}`);
   return lines.join('\n');
 }
 

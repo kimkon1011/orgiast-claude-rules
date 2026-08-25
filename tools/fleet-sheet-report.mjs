@@ -85,12 +85,21 @@ async function main() {
     console.log(JSON.stringify({ ...payload, token: shown, extensionAudit: { ...extensionPayload, token: shown } }, null, 2));
     return;
   }
-  await fetch(fleetEnv.FLEET_SHEET_URL, {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload), signal: AbortSignal.timeout(20_000), redirect: 'follow',
-  });
-  await fetch(fleetEnv.FLEET_SHEET_URL, {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(extensionPayload), signal: AbortSignal.timeout(20_000), redirect: 'follow',
-  });
+  // 2本は独立して送る。1本目が落ちたら2本目も送られない(かつ main の catch が
+  // 握り潰す)と、拡張監査が「一度も届いていないのに誰も気付かない」状態になる。
+  await post(fleetEnv.FLEET_SHEET_URL, 'status', payload);
+  await post(fleetEnv.FLEET_SHEET_URL, 'extensions', extensionPayload);
+}
+
+async function post(url, kind, body) {
+  try {
+    const response = await fetch(url, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(20_000), redirect: 'follow',
+    });
+    if (!response.ok) console.error(`fleet-sheet: ${kind} の送信が HTTP ${response.status}`);
+  } catch (error) {
+    console.error(`fleet-sheet: ${kind} の送信に失敗 (${error?.name || 'error'})`);
+  }
 }
 
 main().catch(() => {});

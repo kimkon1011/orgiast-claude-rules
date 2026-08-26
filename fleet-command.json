@@ -1,7 +1,8 @@
 {
-  "runId": "init-2026-08-16",
-  "task": "",
+  "runId": "rules-resync-2026-08-26-skills",
+  "task": "rules-resync",
   "targets": "all",
+  "_why": "skill(session / session-start 等)と tools/*.mjs が一度も配られていない端末を一斉に復旧する(2026-08-25 実測で発覚)。各PCは1回だけ onboarding-sync --force を実行し、結果を Discord へ返す。破壊的操作なし。止めるときは task を \"\" に戻す。",
   "_note": "全PCへ承認済みタスクを配る中央キュー。kim/Claudeが task と runId(毎回ユニーク) を更新→各PCが夜間03:15の実行時に1回だけ処理しDiscordへ結果を返す。task を空にすると何もしない。",
   "_allowed_tasks": ["verify-setup", "rules-resync", "cost-report"],
   "_targets": "all=全PC / PC名の一部文字列=そのPCだけ"

@@ -59,15 +59,23 @@ async function main() {
   try {
     const url = new URL(sheetUrl);
     url.searchParams.set('token', token);
-    const response = await fetch(url, { signal: AbortSignal.timeout(20_000), redirect: 'follow' });
-    if (!response.ok) {
-      console.error(`fleet-triage: シート取得が HTTP ${response.status}`);
-      return;
+    // GAS Web App は redirect(script.googleusercontent.com)＋コールドスタートで遅く、
+    // GitHub Runner からは 20 秒では届かなかった(実測 TimeoutError)。余裕を持たせて2回試す。
+    let response = null;
+    let lastError = null;
+    for (let attempt = 1; attempt <= 2 && !response; attempt += 1) {
+      try {
+        response = await fetch(url, { signal: AbortSignal.timeout(60_000), redirect: 'follow' });
+      } catch (error) {
+        lastError = error;
+        if (attempt === 2) throw error;
+      }
     }
+    if (!response) throw lastError || new Error('no response');
+    if (!response.ok) throw new Error(`シート取得が HTTP ${response.status}`);
     const payload = await response.json();
     if (!payload?.ok || !Array.isArray(payload.rows)) {
-      console.error('fleet-triage: シート応答の形式が不正です');
-      return;
+      throw new Error(`シート応答の形式が不正 (ok=${payload?.ok})`);
     }
     const { text } = buildDigest(payload.rows, new Date());
     const webhook = process.env.DISCORD_COST_WEBHOOK;
@@ -81,9 +89,28 @@ async function main() {
       body: JSON.stringify({ content: text }),
       signal: AbortSignal.timeout(20_000),
     });
-    if (!posted.ok) console.error(`fleet-triage: Discord送信が HTTP ${posted.status}`);
+    if (!posted.ok) {
+      console.error(`fleet-triage: Discord送信が HTTP ${posted.status}`);
+      process.exitCode = 1;
+    }
   } catch (error) {
-    console.error(`fleet-triage: 実行に失敗 (${error?.name || 'error'})`);
+    // 失敗を握り潰して exit 0 にすると、Actions は success なのに投稿ゼロになり
+    // 「digest が来ない」ことに誰も気づけない(実測: TimeoutError で success 表示)。
+    // Discord にも失敗を出し、ジョブは赤くする。
+    const reason = `${error?.name || 'error'}${error?.message ? `: ${error.message}` : ''}`;
+    console.error(`fleet-triage: 実行に失敗 (${reason})`);
+    process.exitCode = 1;
+    const webhook = process.env.DISCORD_COST_WEBHOOK;
+    if (webhook && !process.argv.includes('--dry-run')) {
+      try {
+        await fetch(webhook, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'User-Agent': 'orgiast-fleet-triage/1.0' },
+          body: JSON.stringify({ content: `🚨 **フリート生存digest 取得失敗** — ${reason}（フリートシートの doGet を確認してください）` }),
+          signal: AbortSignal.timeout(20_000),
+        });
+      } catch {}
+    }
   }
 }
 

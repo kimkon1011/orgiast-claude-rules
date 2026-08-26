@@ -1,0 +1,90 @@
+#!/usr/bin/env node
+import { isEntry } from './is-entry.mjs';
+
+function parseJst(value) {
+  const match = String(value ?? '').trim().match(/^(\d{4})-(\d{2})-(\d{2})(?: (\d{2}):(\d{2}))?$/);
+  if (!match) return null;
+  const [, year, month, day, hour = '00', minute = '00'] = match;
+  const time = Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour) - 9, Number(minute));
+  const check = new Date(time + 9 * 60 * 60 * 1000);
+  if (check.getUTCFullYear() !== Number(year) || check.getUTCMonth() + 1 !== Number(month)
+      || check.getUTCDate() !== Number(day) || check.getUTCHours() !== Number(hour)
+      || check.getUTCMinutes() !== Number(minute)) return null;
+  return time;
+}
+
+function displayName(row) {
+  const pcName = String(row?.pcName ?? '').trim();
+  const label = String(row?.label ?? '').trim();
+  if (pcName && label) return `${pcName}(${label})`;
+  return pcName || label || '(名称未設定)';
+}
+
+function jstDate(now) {
+  const date = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+  const two = (value) => String(value).padStart(2, '0');
+  return `${date.getUTCFullYear()}-${two(date.getUTCMonth() + 1)}-${two(date.getUTCDate())}`;
+}
+
+export function buildDigest(rows, now = new Date()) {
+  const current = now instanceof Date ? now : new Date(now);
+  const nowMs = current.getTime();
+  if (Number.isNaN(nowMs)) throw new TypeError('now must be a valid date');
+  const result = { fresh: [], stale: [], silent: [] };
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const reported = parseJst(row?.reportedAt);
+    const age = reported == null ? Infinity : nowMs - reported;
+    if (age >= 0 && age <= 24 * 60 * 60 * 1000) result.fresh.push(row);
+    else if (age > 24 * 60 * 60 * 1000 && age <= 72 * 60 * 60 * 1000) result.stale.push(row);
+    else result.silent.push(row);
+  }
+  const lines = [`**🖥 フリート生存digest** (${jstDate(current)})`];
+  const add = (items, label) => {
+    if (items.length) lines.push(`${label}: ${items.length}台 — ${items.map(displayName).join(' / ')}`);
+  };
+  add(result.fresh, '✅ 24h以内に報告');
+  add(result.stale, '⚠️ 24〜72h');
+  add(result.silent, '🚨 72h超/未報告');
+  return { ...result, text: lines.join('\n') };
+}
+
+async function main() {
+  const sheetUrl = process.env.FLEET_SHEET_URL;
+  const token = process.env.FLEET_SHEET_TOKEN;
+  if (!sheetUrl || !token) {
+    console.error('fleet-triage: FLEET_SHEET_URL/TOKEN 未設定のため実行しません');
+    return;
+  }
+
+  try {
+    const url = new URL(sheetUrl);
+    url.searchParams.set('token', token);
+    const response = await fetch(url, { signal: AbortSignal.timeout(20_000), redirect: 'follow' });
+    if (!response.ok) {
+      console.error(`fleet-triage: シート取得が HTTP ${response.status}`);
+      return;
+    }
+    const payload = await response.json();
+    if (!payload?.ok || !Array.isArray(payload.rows)) {
+      console.error('fleet-triage: シート応答の形式が不正です');
+      return;
+    }
+    const { text } = buildDigest(payload.rows, new Date());
+    const webhook = process.env.DISCORD_COST_WEBHOOK;
+    if (process.argv.includes('--dry-run') || !webhook) {
+      console.log(text);
+      return;
+    }
+    const posted = await fetch(webhook, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'User-Agent': 'orgiast-fleet-triage/1.0' },
+      body: JSON.stringify({ content: text }),
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!posted.ok) console.error(`fleet-triage: Discord送信が HTTP ${posted.status}`);
+  } catch (error) {
+    console.error(`fleet-triage: 実行に失敗 (${error?.name || 'error'})`);
+  }
+}
+
+if (isEntry(import.meta.url)) await main();

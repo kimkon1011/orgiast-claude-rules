@@ -33,3 +33,14 @@ test('pilot remains warn at 60% delegation', () => {
   const result = decideEnforcement({ ...base, delegRatio: 0.6, daysObserved: 10, pilot: true });
   assert.equal(result.mode, 'warn');
 });
+
+test('enforcement uses delegation ratio including preparation', () => {
+  const result = decideEnforcement({ ...base, delegRatio: 0.1, delegRatioWithPrep: 0.6, daysObserved: 10, pilot: true });
+  assert.equal(result.mode, 'warn');
+});
+
+test('enforcement trend supports adjusted and legacy history entries', () => {
+  const history = [{ delegRatio: 0.1 }, { delegRatio: 0.1, delegRatioWithPrep: 0.3 }, { delegRatio: 0.1, delegRatioWithPrep: 0.4 }];
+  const result = decideEnforcement({ ...base, delegRatioWithPrep: 0.4, history, daysObserved: 10, pilot: true });
+  assert.equal(result.mode, 'warn');
+});

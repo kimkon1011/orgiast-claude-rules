@@ -15,23 +15,24 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { recommendations } from './eval-harness.mjs';
 import { readEnvValue } from './env-kv.mjs';
 import { isEntry } from './is-entry.mjs';
-import { calculateDelegation, collectClaudeStats, collectCodexUsage, formatBlockSource } from './usage-stats.mjs';
+import { calculateDelegation, collectBashProfile, collectClaudeStats, collectCodexUsage, estimateSpecAuthoringTokens, formatBlockSource } from './usage-stats.mjs';
 export { codexSessionDirs, collectCodexUsage } from './usage-stats.mjs';
 const nativeHome = os.homedir();
 function defaultHome() { return process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || nativeHome; }
-export function decideEnforcement({ delegRatio, daysObserved, claudeOut, history, target, pilot, previousMode }) {
+export function decideEnforcement({ delegRatioWithPrep, delegRatio, daysObserved, claudeOut, history, target, pilot, previousMode }) {
+  const enforcementRatio = delegRatioWithPrep ?? delegRatio ?? 0;
   if (!pilot) {
     const demotion = previousMode === 'block' ? '既存blockをwarnへ降格。' : '';
     return { mode: 'warn', reason: `${demotion}block昇格はパイロット機のみ有効(~/.claude/cost-enforce-pilot が無い)。目標50%の指示書と可視化は有効` };
   }
 
   let mode = 'warn', reason = '観察中';
-  if (delegRatio < target / 3 && daysObserved >= 2 && claudeOut >= 1e6) {
-    mode = 'block'; reason = `委譲率${(delegRatio * 100).toFixed(1)}%=目標の1/3未満。2日で昇格`;
-  } else if (daysObserved >= 3 && claudeOut >= 1e6 && delegRatio < target / 2) {
-    mode = 'block'; reason = `委譲率${(delegRatio * 100).toFixed(1)}%=目標の半分未満。3日でトレンドに関わらず昇格`;
-  } else if (daysObserved >= 7 && claudeOut >= 1e6 && delegRatio < target) {
-    const avg = a => a.length ? a.reduce((s, x) => s + (x.delegRatio || 0), 0) / a.length : 0;
+  if (enforcementRatio < target / 3 && daysObserved >= 2 && claudeOut >= 1e6) {
+    mode = 'block'; reason = `委譲率${(enforcementRatio * 100).toFixed(1)}%=目標の1/3未満。2日で昇格`;
+  } else if (daysObserved >= 3 && claudeOut >= 1e6 && enforcementRatio < target / 2) {
+    mode = 'block'; reason = `委譲率${(enforcementRatio * 100).toFixed(1)}%=目標の半分未満。3日でトレンドに関わらず昇格`;
+  } else if (daysObserved >= 7 && claudeOut >= 1e6 && enforcementRatio < target) {
+    const avg = a => a.length ? a.reduce((s, x) => s + (x.delegRatioWithPrep ?? x.delegRatio ?? 0), 0) / a.length : 0;
     const early = history.slice(0, Math.max(1, Math.floor(history.length / 2)));
     const recent = history.slice(-3);
     if (avg(recent) <= avg(early) + 0.05) {
@@ -99,8 +100,11 @@ if (work === 0) { workKind = 'sessions(代替)'; try { const files = []; walk(pa
 
 // ---- 判定 ----
 const totalUSD = claudeUSD + execUSD;
-const delegation = calculateDelegation({ execOut, codexOut, byModel: claudeByModel });
-const { delegRatio } = delegation;
+const claudeStats = collectClaudeStats({ home: HOME, days: DAYS });
+const bashProfile = collectBashProfile({ home: HOME, days: DAYS });
+const specAuthoringOut = estimateSpecAuthoringTokens({ blocks: claudeStats.blocks, profile: bashProfile });
+const delegation = calculateDelegation({ execOut, codexOut, byModel: claudeByModel, specAuthoringOut });
+const { delegRatio, delegRatioWithPrep } = delegation;
 const outPerWork = claudeOut / Math.max(work, 1);
 // 前回スナップショットで傾向
 const stateF = path.join(HOME, '.claude', 'cost-loop-state.json');
@@ -155,7 +159,7 @@ const claudeModelLine = Object.keys(claudeByModel).length ? Object.entries(claud
 const cacheTarget = cacheRead + cacheWrite + cacheBase, cacheRate = cacheTarget ? cacheRead / cacheTarget : 0;
 const cacheLine = `${cacheTarget > 1_000_000 ? (cacheRate < 0.2 ? '🚨 ' : cacheRate < 0.5 ? '⚠️ ' : '✅ ') : ''}プロンプトキャッシュヒット率 ${(cacheRate * 100).toFixed(1)}% (対象 ${(cacheTarget / 1e6).toFixed(1)}M${cacheTarget <= 1_000_000 ? '・判定対象外' : ''})${cacheTarget > 1_000_000 && cacheRate < 0.2 ? ' — system 内に日時/ID などの動的値が入っている・JSON が非ソート・tools 定義が毎回変わる、を疑う' : ''}`;
 const qualityLines = recommendations();
-const blockSourceLine = formatBlockSource(collectClaudeStats({ home: HOME, days: DAYS }).blocks);
+const blockSourceLine = formatBlockSource(claudeStats.blocks);
 if (!qualityLines.length) qualityLines.push(fs.existsSync(path.join(HOME, '.claude', 'eval-results.jsonl')) ? '有効な計測なし（再計測が必要）' : 'eval 未実行 (node tools/eval-harness.mjs --all で計測)');
 const md = `<!-- COST-DIRECTIVE-START -->
 ## 📊 Claude Code out ${(claudeOut / 1000).toFixed(0)}k tok / 委譲率 ${(delegRatio * 100).toFixed(1)}% (直近${DAYS}日 / このPC)
@@ -165,6 +169,8 @@ const md = `<!-- COST-DIRECTIVE-START -->
 - Codex(定額枠・実装の主経路): **out ${codexOut.toLocaleString('ja-JP')} tok** / ${codexSessions}セッション ※従量課金なし
 - 作業量(${workKind}): ${work} / **作業あたり 出力 ${(outPerWork / 1000).toFixed(0)}k tok**
 - 委譲率(Codex/Sonnet/Haiku/安いAIへ逃がせた割合): **${(delegRatio * 100).toFixed(1)}%**
+- 委譲率(委譲の準備込み・強制判定に使う値): **${(delegRatioWithPrep * 100).toFixed(1)}%**
+- うち委譲の準備(仕様書執筆): **${specAuthoringOut.toLocaleString('ja-JP', { maximumFractionDigits: 0 })} tok**
 - 内訳 codex ${(codexOut / 1000).toFixed(0)}k / sonnet+haiku ${(delegation.sonnetHaikuOut / 1000).toFixed(0)}k / 安いAI ${(execOut / 1000).toFixed(0)}k / 監督(opus+fable+default) ${(delegation.supervisorOut / 1000).toFixed(0)}k
 - 🔍 監督の出力の出どころ: ${blockSourceLine}
 - ${cacheLine}
@@ -182,7 +188,7 @@ try {
 // --- 1週間観察→改善しなければハードブロックへ昇格(kim 2026-08-16) ---
 const today = new Date().toISOString().slice(0, 10);
 let hist = (prev && Array.isArray(prev.history)) ? prev.history : [];
-if (!hist.length || hist[hist.length - 1].date !== today) hist.push({ date: today, delegRatio, claudeOut }); else hist[hist.length - 1] = { date: today, delegRatio, claudeOut };
+if (!hist.length || hist[hist.length - 1].date !== today) hist.push({ date: today, delegRatio, delegRatioWithPrep, claudeOut }); else hist[hist.length - 1] = { date: today, delegRatio, delegRatioWithPrep, claudeOut };
 while (hist.length > 14) hist.shift();
 const obsStart = (prev && prev.obsStart) ? prev.obsStart : today;
 const daysObserved = Math.round((Date.now() - new Date(obsStart + 'T00:00:00Z').getTime()) / 864e5);
@@ -190,11 +196,12 @@ const enforceFile = path.join(HOME, '.claude', 'cost-enforce.json');
 let previousMode = 'warn';
 try { previousMode = String(JSON.parse(fs.readFileSync(enforceFile, 'utf8')).mode || 'warn'); } catch { }
 const { mode: enforce, reason: ereason } = decideEnforcement({
-  delegRatio, daysObserved, claudeOut, history: hist, target: TARGET_DELEG,
+  delegRatioWithPrep, daysObserved, claudeOut, history: hist, target: TARGET_DELEG,
   pilot: fs.existsSync(path.join(HOME, '.claude', 'cost-enforce-pilot')), previousMode,
 });
-try { fs.writeFileSync(enforceFile, JSON.stringify({ mode: enforce, reason: ereason, since: obsStart, daysObserved, delegRatio, target: TARGET_DELEG }, null, 2)); } catch { }
-try { fs.writeFileSync(stateF, JSON.stringify({ t: new Date().toISOString(), totalUSD, claudeUSD, claudeOut, codexOut, codexSessions, execUSD, work, delegRatio, obsStart, history: hist })); } catch { }
+// 判定に使ったのは調整後(委譲の準備込み)の値。名前を delegRatio にすると将来の診断で生の値と取り違えるので両方を明示して書く。
+try { fs.writeFileSync(enforceFile, JSON.stringify({ mode: enforce, reason: ereason, since: obsStart, daysObserved, delegRatio, delegRatioWithPrep, decidedBy: 'delegRatioWithPrep', target: TARGET_DELEG }, null, 2)); } catch { }
+try { fs.writeFileSync(stateF, JSON.stringify({ t: new Date().toISOString(), totalUSD, claudeUSD, claudeOut, codexOut, codexSessions, execUSD, work, delegRatio, delegRatioWithPrep, obsStart, history: hist })); } catch { }
 if (enforce === 'block') console.log(`\n🔒 ハードブロック昇格: ${ereason}（アプリ実装コードの直接編集をpretooluseフックが拒否します）`);
 console.log(md);
 

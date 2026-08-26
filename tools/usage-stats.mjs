@@ -208,10 +208,23 @@ export function collectLandedLines(options = {}) {
 export function calculateLinesDelegation({ codexLines = 0, landedLines = 0 } = {}) {
   return landedLines > 0 ? Math.min(1, codexLines / landedLines) : null;
 }
-export function calculateDelegation({ codexOut = 0, execOut = 0, byModel = {} } = {}) {
+export function calculateDelegation({ codexOut = 0, execOut = 0, byModel = {}, specAuthoringOut = 0 } = {}) {
   const sonnetHaikuOut = (byModel.sonnet || 0) + (byModel.haiku || 0), supervisorOut = (byModel.opus || 0) + (byModel.fable || 0) + (byModel.default || 0);
   const delegated = codexOut + execOut + sonnetHaikuOut, total = delegated + supervisorOut;
-  return { codexOut, execOut, sonnetHaikuOut, supervisorOut, delegated, total, delegRatio: total ? delegated / total : 0 };
+  const delegRatio = total ? delegated / total : 0;
+  return { codexOut, execOut, sonnetHaikuOut, supervisorOut, delegated, total, delegRatio, delegRatioWithPrep: total ? (delegated + specAuthoringOut) / total : 0, specAuthoringOut };
+}
+/**
+ * Estimate spec-authoring output tokens by apportioning Bash/PowerShell tool-use
+ * tokens according to their share of Bash/PowerShell command characters. This
+ * is a character-ratio estimate, not an exact token measurement.
+ */
+export function estimateSpecAuthoringTokens({ blocks = {}, profile = {} } = {}) {
+  const totalBashChars = Number(profile.totalChars) || 0;
+  if (!totalBashChars) return 0;
+  const bashOutputTokens = (Number(blocks?.tools?.Bash) || 0) + (Number(blocks?.tools?.PowerShell) || 0);
+  const specAuthoringChars = Number(profile?.byCategory?.['spec-authoring']?.chars) || 0;
+  return bashOutputTokens * (specAuthoringChars / totalBashChars);
 }
 export function formatBlockSource(blocks) {
   const entries = [['tool_use', blocks.tool_use || 0], ['text', blocks.text || 0], ['thinking', blocks.thinking || 0], ['unattributed', blocks.unattributed || 0]].filter(([, value]) => value > 0);

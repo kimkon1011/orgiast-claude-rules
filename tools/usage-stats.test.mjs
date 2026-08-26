@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { calculateDelegation, calculateLinesDelegation, classifyBashCommand, collectBashProfile, collectClaudeStats, collectCodexOutput, collectLandedLines, collectLedger, countPatchLines, formatBashProfile } from './usage-stats.mjs';
+import { calculateDelegation, calculateLinesDelegation, classifyBashCommand, collectBashProfile, collectClaudeStats, collectCodexOutput, collectLandedLines, collectLedger, countPatchLines, estimateSpecAuthoringTokens, formatBashProfile } from './usage-stats.mjs';
 
 function fixture() { const home = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-stats-')), dir = path.join(home, '.claude', 'projects', 'p'); fs.mkdirSync(dir, { recursive: true }); return { home, file: path.join(dir, 'session.jsonl') }; }
 test('sessions uses row timestamps and splits main/sub/model', () => { const { home, file } = fixture(), now = Date.parse('2026-08-23T00:00:00Z'); const row = (timestamp, output_tokens, model, isSidechain = false) => JSON.stringify({ timestamp, isSidechain, message: { model, usage: { output_tokens }, content: [{ type: 'text', text: 'abc' }] } }); fs.writeFileSync(file, [row('2026-08-22T00:00:00Z', 100, 'claude-opus'), row('2026-08-21T00:00:00Z', 40, 'claude-sonnet', true), row('2026-07-01T00:00:00Z', 9999, 'claude-opus')].join('\n')); fs.utimesSync(file, new Date(now), new Date(now)); const x = collectClaudeStats({ home, days: 7, now }); assert.deepEqual(x.totals, { outputTokens: 140, main: 100, sub: 40 }); assert.deepEqual(x.byModel, { opus: 100, sonnet: 40 }); });
@@ -42,6 +42,18 @@ test('bash classifier distinguishes authored specs from inline programs', () => 
 });
 test('ledger uses t and status ok', () => { const { home } = fixture(), now = Date.now(); fs.writeFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), [JSON.stringify({ t: new Date(now).toISOString(), provider: 'groq', status: 'ok', in: 3, out: 5 }), JSON.stringify({ t: new Date(now).toISOString(), provider: 'groq', status: 'error', out: 2 }), JSON.stringify({ t: '2020-01-01T00:00:00Z', provider: 'groq', status: 'ok', out: 99 })].join('\n')); const x = collectLedger({ home, now }); assert.deepEqual(x.totals, { calls: 2, success: 1, failure: 1, outputTokens: 7 }); });
 test('delegation counts sonnet and haiku in numerator', () => { const x = calculateDelegation({ codexOut: 10, execOut: 5, byModel: { sonnet: 20, haiku: 5, opus: 40, fable: 10, default: 10 } }); assert.equal(x.delegated, 40); assert.equal(x.supervisorOut, 60); assert.equal(x.delegRatio, 0.4); });
+test('delegation preparation is optional and adds to the adjusted numerator', () => {
+  const raw = calculateDelegation({ codexOut: 10, byModel: { opus: 90 } });
+  assert.equal(raw.delegRatioWithPrep, raw.delegRatio);
+  const adjusted = calculateDelegation({ codexOut: 10, byModel: { opus: 90 }, specAuthoringOut: 20 });
+  assert.equal(adjusted.delegRatio, 0.1);
+  assert.equal(adjusted.delegRatioWithPrep, 0.3);
+  assert.equal(adjusted.specAuthoringOut, 20);
+});
+test('spec-authoring tokens use Bash and PowerShell character share and tolerate zero chars', () => {
+  assert.equal(estimateSpecAuthoringTokens({ blocks: { tools: { Bash: 80, PowerShell: 20 } }, profile: { totalChars: 200, byCategory: { 'spec-authoring': { chars: 50 } } } }), 25);
+  assert.equal(estimateSpecAuthoringTokens({ blocks: { tools: { Bash: 100 } }, profile: { totalChars: 0, byCategory: { 'spec-authoring': { chars: 1 } } } }), 0);
+});
 test('deleg command source counts latest cumulative Codex usage per session', () => { const { home } = fixture(), dir = path.join(home, '.codex', 'sessions'), previous = process.env.CODEX_SESSIONS_DIRS; fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, 'x.jsonl'), '{"total_token_usage":{"output_tokens":3}}\n{"total_token_usage":{"output_tokens":8}}'); process.env.CODEX_SESSIONS_DIRS = dir; try { assert.deepEqual(collectCodexOutput({ home }), { outputTokens: 8, sessions: 1 }); } finally { if (previous === undefined) delete process.env.CODEX_SESSIONS_DIRS; else process.env.CODEX_SESSIONS_DIRS = previous; } });
 test('countPatchLines counts patch changes but not headers or non-apply_patch commands', () => {
   const patch = '*** Begin Patch\n--- old/file\n+++ new/file\n@@ -1 +1 @@\n-old\n+new\n+added\n*** End Patch';

@@ -86,12 +86,13 @@ description: セッションを綺麗に閉じて次に引き継ぐ。「終わ�
 
 ## 7. セッションを一覧から自動で消す（`/clear` は不要）
 
-- 最後に次のコマンドを実行する。
+- hook が出した `[session] このセッションのIDは …` の ID を使い、最後に次のコマンドを実行する。
 
 ```bash
-node "$HOME/orgiast-claude-rules/tools/close-session.mjs"
+node "$HOME/orgiast-claude-rules/tools/close-session.mjs" --session <このセッションのID>
 ```
 
+- ID が分からない場合だけ引数なしで実行してよいが、並行セッションがある場合は誤退避を防ぐため安全に停止する。
 - 45秒ほどで `_deleted-backup/_closed/` へ退避されて一覧から消える。`/clear` は不要。
 - 実体は削除せず move するため復元できる。
 - 積み残しは `/session-triage` で後から拾える。

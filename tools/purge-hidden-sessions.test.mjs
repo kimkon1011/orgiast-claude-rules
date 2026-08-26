@@ -64,3 +64,42 @@ test('closed/hidden セッションを削除せず安全な退避先へ move す
   assert.ok(!fs.existsSync(path.join(project, `${ids.closed}.jsonl`)) && fs.existsSync(closedDest));
   assert.ok(!fs.existsSync(path.join(project, `${ids.hiddenEmpty}.jsonl`)) && fs.existsSync(hiddenDest));
 });
+
+test('並行する稼働中セッションを両方保護し、明示的に closed のものだけ move する', (t) => {
+  const python = resolvePython();
+  if (!python) return t.skip('Python interpreter is not available');
+
+  const fakehome = fs.mkdtempSync(path.join(os.tmpdir(), 'purge-hidden-sessions-parallel-'));
+  t.after(() => fs.rmSync(fakehome, { recursive: true, force: true }));
+  const claude = path.join(fakehome, '.claude');
+  const project = path.join(claude, 'projects', 'testproj');
+  const currentSessions = path.join(claude, 'current-sessions');
+  fs.mkdirSync(currentSessions, { recursive: true });
+  fs.mkdirSync(project, { recursive: true });
+
+  const first = '55555555-5555-4555-8555-555555555555';
+  const second = '66666666-6666-4666-8666-666666666666';
+  const old = new Date(Date.now() - 300_000);
+  const now = new Date().toISOString();
+  for (const id of [first, second]) {
+    const jsonl = path.join(project, `${id}.jsonl`);
+    fs.writeFileSync(jsonl, EMPTY_JSONL);
+    fs.utimesSync(jsonl, old, old);
+    fs.writeFileSync(path.join(currentSessions, `${id}.json`), JSON.stringify({ sessionId: id, at: now }));
+  }
+  fs.writeFileSync(path.join(claude, 'hidden-sessions-ledger.json'), JSON.stringify({ ids: [first, second] }));
+
+  const env = { ...process.env, HOME: fakehome, USERPROFILE: fakehome };
+  let result = spawnSync(python, [purgeScript], { encoding: 'utf8', env });
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(fs.existsSync(path.join(project, `${first}.jsonl`)), '1件目の稼働中セッションは残る');
+  assert.ok(fs.existsSync(path.join(project, `${second}.jsonl`)), '2件目の稼働中セッションも残る');
+
+  fs.writeFileSync(path.join(claude, 'closed-sessions.json'), JSON.stringify({ ids: [first] }));
+  result = spawnSync(python, [purgeScript], { encoding: 'utf8', env });
+  assert.equal(result.status, 0, result.stderr);
+  const closedDest = path.join(claude, 'projects', '_deleted-backup', '_closed', 'testproj', `${first}.jsonl`);
+  assert.ok(fs.existsSync(closedDest), '明示的に closed の稼働中セッションは退避される');
+  assert.ok(!fs.existsSync(path.join(project, `${first}.jsonl`)), 'closed 側は元の場所から move される');
+  assert.ok(fs.existsSync(path.join(project, `${second}.jsonl`)), 'closed でない稼働中セッションは残る');
+});

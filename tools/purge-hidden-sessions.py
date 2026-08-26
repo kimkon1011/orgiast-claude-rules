@@ -33,6 +33,7 @@ LOG = os.path.join(HOME, ".claude", "purge-hidden-sessions.log")
 LEDGER = os.path.join(HOME, ".claude", "hidden-sessions-ledger.json")
 CLOSED = os.path.join(HOME, ".claude", "closed-sessions.json")
 CURRENT = os.path.join(HOME, ".claude", "current-session.json")
+CURRENT_SESSIONS = os.path.join(HOME, ".claude", "current-sessions")
 HEARTBEAT = os.path.join(HOME, ".claude", "hidden-sessions-watcher.heartbeat")
 if sys.platform == "win32":
     DB_DIR = os.path.join(os.environ.get("APPDATA", ""), "Code", "User", "globalStorage")
@@ -112,15 +113,26 @@ def drop_closed(sid):
         json.dump({"ids": sorted(ids)}, f, indent=0)
     os.replace(tmp, CLOSED)
 
-def live_session_id():
-    try:
-        current = json.load(open(CURRENT, encoding="utf-8"))
-        at = datetime.fromisoformat(current["at"].replace("Z", "+00:00")).timestamp()
-        if time.time() - at < SKIP_RECENT_SEC:
-            return current["sessionId"]
-    except Exception:
-        pass
-    return None
+def live_session_ids():
+    ids = set()
+    paths = []
+    if os.path.isdir(CURRENT_SESSIONS):
+        try:
+            paths = [os.path.join(CURRENT_SESSIONS, name) for name in os.listdir(CURRENT_SESSIONS)
+                     if name.endswith(".json")]
+        except OSError:
+            paths = []
+    else:
+        paths = [CURRENT]
+    for path in paths:
+        try:
+            current = json.load(open(path, encoding="utf-8"))
+            at = datetime.fromisoformat(current["at"].replace("Z", "+00:00")).timestamp()
+            if time.time() - at < SKIP_RECENT_SEC:
+                ids.add(current["sessionId"])
+        except Exception:
+            pass
+    return ids
 
 def save_ledger(ids):
     tmp = LEDGER + ".tmp"
@@ -217,7 +229,7 @@ def run_pass(state):
 
     now = time.time()
     moved = 0
-    live_sid = live_session_id()
+    live_sids = live_session_ids()
 
     def archive(proj, sid, dest_root, tag):
         dest_dir = os.path.join(dest_root, proj)
@@ -255,7 +267,7 @@ def run_pass(state):
                 drop_closed(sid)
         # (1) 台帳/hidden ベースの退避（ユーザーが削除したセッション）
         for sid in ledger:
-            if sid in closed or sid == live_sid:
+            if sid in closed or sid in live_sids:
                 continue
             src = os.path.join(pd, sid + ".jsonl")
             if not os.path.exists(src):
@@ -278,7 +290,7 @@ def run_pass(state):
             sid = f[:-6]
             if sid in ledger or sid in closed:
                 continue  # (1) で処理済み
-            if sid == live_sid:
+            if sid in live_sids:
                 continue
             src = os.path.join(pd, f)
             age = now - os.path.getmtime(src)

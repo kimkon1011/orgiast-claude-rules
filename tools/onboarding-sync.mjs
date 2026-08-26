@@ -49,7 +49,7 @@ export function mergeEnvFile(existingText, incomingText, preserveKeys = PRESERVE
   });
 
   const additions = Object.keys(incomingValues)
-    .filter((key) => !handled.has(key))
+    .filter((key) => !handled.has(key) && !preserved.has(key))
     .map((key) => `${key}=${incomingValues[key]}`);
   if (!additions.length) return updatedLines.join(newline);
   if (updatedLines.length === 1 && updatedLines[0] === '') return additions.join(newline);

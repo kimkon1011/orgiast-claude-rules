@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseEnvText } from './env-kv.mjs';
 import { scanBrowserExtensions } from './browser-extension-audit.mjs';
+import { machineIdentity } from './machine-identity.mjs';
 
 const dryRun = process.argv.includes('--dry-run');
 const home = process.env.ORGIAST_HOME || os.homedir();
@@ -55,6 +56,7 @@ async function main() {
   const counts = cheapAiCounts(path.join(claudeDir, 'executor-usage.jsonl'));
   const mappedName = Object.prototype.hasOwnProperty.call(map, label) && typeof map[label] === 'string' ? map[label] : null;
   const topModel = Array.isArray(reporter.topModels) && reporter.topModels[0] ? reporter.topModels[0].model : '';
+  const identity = machineIdentity();
   // Fable5(§1.16 全用途禁止)は「データが無い」を「未検出」と断定しない。
   // 判定できないのに合格扱いにするのは「timeout を未導入と誤報告」と同じ誤り。
   const fableKnown = reporter.fable5Detected !== undefined || adoption.fable5OutTok !== undefined;
@@ -63,7 +65,9 @@ async function main() {
     token: fleetEnv.FLEET_SHEET_TOKEN,
     label,
     mappedName,
-    hostname: os.hostname(),
+    hostname: identity.hostname,
+    username: identity.username,
+    gitEmail: identity.gitEmail,
     reportedAt: toJst(cost.t || adoption.last || reporter.lastRun),
     claudeUsd: Math.round((Number.isFinite(Number(cost.claudeUSD)) ? Number(cost.claudeUSD) : Number(reporter.mtdUsd || 0)) * 100) / 100,
     mainModel: topModel,

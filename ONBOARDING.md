@@ -339,6 +339,15 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
 
 **正しい実装の参照**: `gas/fleet-status-sheet/CommandQueue.gs` — payload を読んだ直後に `setTrashed(true)` してから処理するため、失敗しても再実行されない。`LockService.tryLock(0)` で多重起動も防ぐ。GAS のコマンドキューはこの形を踏襲すること（§1.4）。
 
+### 2.8.3 残TODOの無人消化（auto-session）
+
+- 各PCが**自分の `~/.claude/next-session.md` の残TODO**を毎日03:20に1件だけ無人消化する。
+- 除外: 取り消し線 / 判断待ち・未決 / ブロック中 / 他セッションが着手中 / 未来日ゲート（`YYYY-MM-DD 以降`）。
+- 止め方: `~/.claude/auto-session/disabled` という空ファイルを作る。
+- 手動実行: `tools\auto-session.cmd` をダブルクリックする（`--list` で採用/除外だけ確認できる）。
+- 履歴は VSCode の `/resume` に出る。ログは `~/.claude/auto-session/runs/` に保存し、Discord通知には transcript パスと `claude --resume <ID>` が入る。
+- `--permission-mode` は**渡さない**（`acceptEdits` は Bash を承認待ちで止めるため、既定の `auto` を継承する）。
+
 ### 2.9 Google Drive 運用ルール
 
 Claude新規作成は標準フォルダ「作業ファイル」直下（既存自動化フォルダは例外）。**`copy_file`を移動の代用にしない**（新IDの複製が残る）。実際の移動はkimのUI ドラッグのみ。絶対に動かさないもの（weekly-bot参照フォルダ、GASコマンドキュー、bound script付きSheet等）。マイドライブ⇔共有ドライブ跨ぎの移動は禁止。移動後はClaudeがread-back検証。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/drive-operations.md`

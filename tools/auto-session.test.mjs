@@ -6,7 +6,8 @@ import path from 'node:path';
 
 const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-session-test-'));
 process.env.ORGIAST_HOME = isolatedHome;
-const { HISTORY_CWD, parseHandoff, todoExclusionReason, filterTodos, pickCwd, pickHistoryCwd, buildChildArgs, buildPrompt, resolveClaudeExe, decideRun, markTodoDone, extractSessionId, transcriptPath } = await import('./auto-session.mjs');
+const { DEFAULT_REPO, loadConfig, detectHistoryCwd, parseHandoff, todoExclusionReason, filterTodos, pickCwd, buildChildArgs, buildPrompt, resolveClaudeExe, decideRun, markTodoDone, extractSessionId, transcriptPath } = await import('./auto-session.mjs');
+const historyCwd = String.raw`c:\Users\example\Downloads\work`;
 test.after(() => fs.rmSync(isolatedHome, { recursive: true, force: true }));
 
 const sample = `前書き\n<!-- NEXT-SESSION v1 -->\n## 対象\nrepo A\n## 残TODO\n1. 実装する\n2. ~~完了済み~~\n3. 要判断: 色\n4. ブロック中: API\n## 完了条件\nテスト green\n<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. 歴史上のTODO\n`;
@@ -44,35 +45,65 @@ test('未来日の以降ゲートだけを固定日付基準で除外する', ()
 });
 
 test('pickCwd は実在しない判定先を既存の標準リポジトリへフォールバックする', () => {
-  const fallback = path.resolve(import.meta.dirname, '..');
   const exists = () => false;
-  assert.equal(pickCwd('ブース制作を直す', exists), fallback);
-  assert.equal(pickCwd('aujustを直す', exists), fallback);
-  assert.equal(pickCwd('その他', exists), fallback);
+  assert.equal(pickCwd('案件Aを直す', exists, { 案件A: '/missing' }), DEFAULT_REPO);
+  assert.equal(pickCwd('その他', exists, {}), DEFAULT_REPO);
 });
 
 test('pickCwd は注入された存在判定で候補と標準リポジトリを選ぶ', () => {
-  const booth = String.raw`C:\Users\uers\Downloads\ブース制作アプリ`;
-  const rules = String.raw`C:\Users\uers\Downloads\orgiast-claude-rules`;
-  assert.equal(pickCwd('ブース制作を直す', (candidate) => candidate === booth), booth);
-  assert.equal(pickCwd('その他', (candidate) => candidate === rules), rules);
+  const repo = '/repos/project-a';
+  assert.equal(pickCwd('案件Aを直す', (candidate) => candidate === repo, { 案件A: repo }), repo);
+  assert.equal(pickCwd('その他', () => true, {}), DEFAULT_REPO);
 });
 
-test('pickHistoryCwd は履歴 cwd が存在すれば小文字ドライブの固定パスを返す', () => {
-  const repoCwd = String.raw`C:\Users\uers\Downloads\orgiast-claude-rules`;
-  assert.equal(pickHistoryCwd((candidate) => candidate === HISTORY_CWD, repoCwd), HISTORY_CWD);
+test('loadConfig は設定なし・破損時に空設定を返す', () => {
+  assert.deepEqual(loadConfig('/home/x', () => { throw new Error('ENOENT'); }), { historyCwd: '', repoByKeyword: {} });
+  assert.deepEqual(loadConfig('/home/x', () => '{broken'), { historyCwd: '', repoByKeyword: {} });
 });
 
-test('pickHistoryCwd は履歴 cwd が存在しなければ repoCwd へフォールバックする', () => {
-  const repoCwd = String.raw`C:\Users\uers\Downloads\orgiast-claude-rules`;
-  assert.equal(pickHistoryCwd(() => false, repoCwd), repoCwd);
+test('loadConfig は正常な設定を読む', () => {
+  const config = loadConfig('/home/x', () => JSON.stringify({ historyCwd: '/history', repoByKeyword: { 案件A: '/repo-a' } }));
+  assert.deepEqual(config, { historyCwd: '/history', repoByKeyword: { 案件A: '/repo-a' } });
+});
+
+function historyDeps(items, existing = new Set(items.map((item) => item.cwd))) {
+  return {
+    projectsDir: '/projects',
+    listDirs: () => items.map((item) => `/projects/${item.bucket}`),
+    newestTranscript: (bucket) => {
+      const item = items.find((candidate) => bucket.endsWith(candidate.bucket));
+      return { path: `${bucket}/latest.jsonl`, mtimeMs: item.mtimeMs };
+    },
+    readCwd: (file) => items.find((item) => file.includes(item.bucket)).cwd,
+    exists: (candidate) => existing.has(candidate),
+  };
+}
+
+test('detectHistoryCwd はバケット名と cwd スラッグが一致する最新候補を返す', () => {
+  const cwd = '/Users/example/work';
+  assert.equal(detectHistoryCwd(historyDeps([{ bucket: '-Users-example-work', cwd, mtimeMs: 2 }])), cwd);
+});
+
+test('detectHistoryCwd はドライブレターの大小を反転して既存バケットに合わせる', () => {
+  const recorded = String.raw`C:\Users\example\Downloads\work`;
+  const expected = String.raw`c:\Users\example\Downloads\work`;
+  assert.equal(detectHistoryCwd(historyDeps([{ bucket: 'c--Users-example-Downloads-work', cwd: recorded, mtimeMs: 2 }], new Set([expected]))), expected);
+});
+
+test('detectHistoryCwd は実在しない候補を飛ばし、全滅時はリポジトリルートへ戻る', () => {
+  const items = [
+    { bucket: '-missing', cwd: '/missing', mtimeMs: 3 },
+    { bucket: '-valid', cwd: '/valid', mtimeMs: 2 },
+  ];
+  assert.equal(detectHistoryCwd(historyDeps(items, new Set(['/valid']))), '/valid');
+  assert.equal(detectHistoryCwd(historyDeps(items, new Set())), DEFAULT_REPO);
 });
 
 test('buildChildArgs は cwd が異なる場合だけ --add-dir を2つ渡す', () => {
   const repoCwd = String.raw`C:\repo`;
-  const different = buildChildArgs(repoCwd, HISTORY_CWD);
+  const different = buildChildArgs(repoCwd, historyCwd);
   const same = buildChildArgs(repoCwd, repoCwd);
-  assert.deepEqual(different.slice(-4), ['--add-dir', repoCwd, '--add-dir', HISTORY_CWD]);
+  assert.deepEqual(different.slice(-4), ['--add-dir', repoCwd, '--add-dir', historyCwd]);
   assert.equal(different.filter((arg) => arg === '--add-dir').length, 2);
   assert.equal(same.filter((arg) => arg === '--add-dir').length, 1);
   assert.deepEqual(same.slice(-2), ['--add-dir', repoCwd]);
@@ -85,6 +116,12 @@ test('resolveClaudeExe はバージョンを数値セグメントで比較する
   const newExe = String.raw`C:\Users\x\.vscode\extensions\anthropic.claude-code-2.1.245-win32-x64\resources\native-binary\claude.exe`;
   assert.equal(resolveClaudeExe([oldExe, newExe]), newExe);
   assert.equal(resolveClaudeExe([]), 'claude');
+});
+
+test('resolveClaudeExe は任意のプラットフォーム接尾辞を扱い CLAUDE_CLI を優先する', () => {
+  const darwin = '/Users/x/.vscode/extensions/anthropic.claude-code-2.2.1-darwin-arm64/resources/native-binary/claude';
+  assert.equal(resolveClaudeExe([darwin]), darwin);
+  assert.equal(resolveClaudeExe([darwin], '/opt/claude-custom'), '/opt/claude-custom');
 });
 
 test('extractSessionId は正常な JSON から session_id を抽出する', () => {
@@ -103,19 +140,19 @@ test('extractSessionId は UUID が見つからなければ空文字を返す', 
 test('transcriptPath は Windows cwd をスラッグ化して隔離 HOME 配下の絶対パスを返す', () => {
   const sessionId = '123e4567-e89b-42d3-a456-426614174000';
   assert.equal(
-    transcriptPath(String.raw`C:\Users\uers\Downloads\orgiast-claude-rules`, sessionId),
-    path.resolve(isolatedHome, '.claude', 'projects', 'C--Users-uers-Downloads-orgiast-claude-rules', `${sessionId}.jsonl`),
+    transcriptPath(String.raw`C:\Users\example\Downloads\repo`, sessionId),
+    path.resolve(isolatedHome, '.claude', 'projects', 'C--Users-example-Downloads-repo', `${sessionId}.jsonl`),
   );
-  assert.equal(transcriptPath(String.raw`C:\Users\uers`, ''), '');
+  assert.equal(transcriptPath(String.raw`C:\Users\example`, ''), '');
 });
 
-test('transcriptPath は小文字ドライブの既存 CLAUDE.md配布 バケットを指す', () => {
+test('transcriptPath は小文字ドライブのバケットを維持する', () => {
   const sessionId = '123e4567-e89b-42d3-a456-426614174000';
-  assert.ok(transcriptPath(HISTORY_CWD, sessionId).includes('c--Users-uers-Downloads-CLAUDE-md--'));
+  assert.ok(transcriptPath(historyCwd, sessionId).includes('c--Users-example-Downloads-work'));
 });
 
 test('buildPrompt は実リポジトリで git -C を使うよう指示する', () => {
-  const repoCwd = String.raw`C:\Users\uers\Downloads\orgiast-claude-rules`;
+  const repoCwd = String.raw`C:\Users\example\Downloads\repo`;
   const prompt = buildPrompt('実装する', {}, repoCwd, new Date('2026-08-26T00:00:00Z'));
   assert.ok(prompt.includes(`git -C ${repoCwd}`));
   assert.ok(prompt.includes(`--cwd ${repoCwd}`));

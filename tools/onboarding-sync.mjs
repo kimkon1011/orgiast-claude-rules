@@ -26,7 +26,7 @@ const rawUrl = process.env.ORGIAST_ONBOARDING_URL || 'https://raw.githubusercont
 const keyserveUrl = process.env.ORGIAST_KEYSERVE_URL || 'https://orgiast-keyserve.vercel.app/api/keys';
 const beginPrefix = '<!-- BEGIN: オージャスト共通ルール';
 const endMarker = '<!-- END: オージャスト共通ルール -->';
-const indexLead = '全文は ~/.claude/rules/orgiast-onboarding.md（および https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/ONBOARDING.md ）。判断に迷ったら該当節の全文を読むこと';
+const indexLead = '全文は ~/.claude/orgiast-onboarding.md（および https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/ONBOARDING.md ）。このファイルは自動ロードされない。判断に迷ったら Read ツールで該当節を読むこと';
 
 function log(message) {
   if (dryRun) return;
@@ -269,6 +269,17 @@ export function build(current, body, label) {
 
 async function main() { try {
   const now = new Date();
+  // rules/ 配下は paths: が無いと全リクエストで自動ロードされる(実測 23,288 tok/req)。
+  // 日次ガードより前に自己修復する。削除ではなく移動にするのは、次の同期まで最大20時間
+  // 全文がローカルから消える窓を作らないため。
+  const oldRulesPath = path.join(home, '.claude', 'rules', 'orgiast-onboarding.md');
+  const rulesPath = path.join(home, '.claude', 'orgiast-onboarding.md');
+  if (!dryRun && fs.existsSync(oldRulesPath)) {
+    try {
+      if (fs.existsSync(rulesPath)) fs.rmSync(oldRulesPath, { force: true });
+      else { fs.mkdirSync(path.dirname(rulesPath), { recursive: true }); fs.renameSync(oldRulesPath, rulesPath); }
+    } catch {}
+  }
   await syncRepository(now);
   await provisionKeys(now);
   const oldState = state();
@@ -284,7 +295,6 @@ async function main() { try {
   const body = bodyBytes.toString('utf8');
   const current = fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : null;
   const result = build(current, makeIndex(body), now.toISOString().slice(0, 10));
-  const rulesPath = path.join(home, '.claude', 'rules', 'orgiast-onboarding.md');
   const rulesCurrent = fs.existsSync(rulesPath) ? fs.readFileSync(rulesPath) : null;
   if (!dryRun && current === result.updated && rulesCurrent?.equals(bodyBytes)) { save(hash, now); return; }
   if (dryRun) {

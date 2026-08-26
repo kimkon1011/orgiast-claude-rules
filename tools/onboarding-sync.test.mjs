@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { makeIndex } from './onboarding-sync.mjs';
 
 const script = path.join(path.dirname(fileURLToPath(import.meta.url)), 'onboarding-sync.mjs');
 const source = Buffer.from('# 見出し\r\n最初の文。二番目。\r\n本文\r\n🔴 絶対ルール全文\r\n## 次\r\n説明だけ\r\n🛑 上限規定', 'utf8');
@@ -15,9 +16,9 @@ function setup(initial) {
   if (initial !== null) fs.writeFileSync(target, initial);
   return { home, target };
 }
-function run(f) {
+function run(f, extraArgs = [], envOverrides = {}) {
   const url = `data:text/markdown;base64,${source.toString('base64')}`;
-  return spawnSync(process.execPath, [script, '--force', `--target=${f.target}`], { encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: f.home, ORGIAST_ONBOARDING_URL: url, ORGIAST_KEYSERVE_SECRET: '', ORGIAST_REPO: path.join(f.home, 'absent') } });
+  return spawnSync(process.execPath, [script, '--force', ...extraArgs, `--target=${f.target}`], { encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: f.home, ORGIAST_ONBOARDING_URL: url, ORGIAST_KEYSERVE_SECRET: '', ORGIAST_REPO: path.join(f.home, 'absent'), ...envOverrides } });
 }
 
 test('preserves bytes outside existing markers', () => {
@@ -29,7 +30,41 @@ test('preserves bytes outside existing markers', () => {
 });
 test('stores fetched onboarding byte-for-byte', () => {
   const f = setup(null); run(f);
-  assert.ok(fs.readFileSync(path.join(f.home, '.claude', 'rules', 'orgiast-onboarding.md')).equals(source));
+  assert.ok(fs.readFileSync(path.join(f.home, '.claude', 'orgiast-onboarding.md')).equals(source));
+});
+test('removes the legacy rules path', () => {
+  const f = setup(null);
+  const oldPath = path.join(f.home, '.claude', 'rules', 'orgiast-onboarding.md');
+  fs.mkdirSync(path.dirname(oldPath), { recursive: true }); fs.writeFileSync(oldPath, source);
+  assert.equal(run(f).status, 0); assert.equal(fs.existsSync(oldPath), false);
+});
+test('removes the legacy rules path even when synchronized content is unchanged', () => {
+  const f = setup(null); assert.equal(run(f).status, 0);
+  const oldPath = path.join(f.home, '.claude', 'rules', 'orgiast-onboarding.md');
+  fs.mkdirSync(path.dirname(oldPath), { recursive: true }); fs.writeFileSync(oldPath, source);
+  assert.equal(run(f).status, 0); assert.equal(fs.existsSync(oldPath), false);
+});
+test('dry-run does not remove the legacy rules path', () => {
+  const f = setup(null);
+  const oldPath = path.join(f.home, '.claude', 'rules', 'orgiast-onboarding.md');
+  fs.mkdirSync(path.dirname(oldPath), { recursive: true }); fs.writeFileSync(oldPath, source);
+  assert.equal(run(f, ['--dry-run']).status, 0); assert.equal(fs.existsSync(oldPath), true);
+});
+test('moves the legacy file instead of losing it when the fetch fails', () => {
+  const f = setup(null);
+  const oldPath = path.join(f.home, '.claude', 'rules', 'orgiast-onboarding.md');
+  const newPath = path.join(f.home, '.claude', 'orgiast-onboarding.md');
+  fs.mkdirSync(path.dirname(oldPath), { recursive: true }); fs.writeFileSync(oldPath, source);
+  assert.equal(run(f, [], { ORGIAST_ONBOARDING_URL: 'https://127.0.0.1:9/absent' }).status, 0);
+  assert.equal(fs.existsSync(oldPath), false);
+  assert.ok(fs.readFileSync(newPath).equals(source));
+});
+test('index lead points to the non-auto-loaded path', () => {
+  const lead = makeIndex(source.toString('utf8')).split('\n')[0];
+  assert.match(lead, /~\/.claude\/orgiast-onboarding\.md/);
+  assert.doesNotMatch(lead, /~\/.claude\/rules\//);
+  assert.match(lead, /自動ロードされない/);
+  assert.match(lead, /Read ツール/);
 });
 test('index retains critical emoji lines', () => {
   const f = setup(null); run(f); const output = fs.readFileSync(f.target, 'utf8');

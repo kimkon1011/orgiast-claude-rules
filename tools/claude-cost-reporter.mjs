@@ -19,6 +19,7 @@ import { parseEnvText } from './env-kv.mjs';
 import path from 'node:path';
 import os from 'node:os';
 import { machineIdentity } from './machine-identity.mjs';
+import { resolveReporterLabel } from './reporter-label.mjs';
 
 const DRY_RUN = process.argv.includes('--dry-run');
 // 6時間ガードを明示的に飛ばす(検証・手動実行用)。tool-adoption-check.mjs と同じ挙動。
@@ -27,8 +28,7 @@ const nativeHome = os.homedir(); const HOME = process.env.USERPROFILE || process
 
 // --- 設定読み込み (~/.claude/cost-reporter.env) ---
 function loadEnv() {
-  const envPath = path.join(HOME, '.claude', 'cost-reporter.env');
-  try { return parseEnvText(fs.readFileSync(envPath, 'utf8')); } catch { return {}; }
+  try { return fs.readFileSync(path.join(HOME, '.claude', 'cost-reporter.env'), 'utf8'); } catch { return ''; }
 }
 
 // --- 料金表 (USD / 1M tokens)。2026-07時点の公開価格。新モデルが出たら追記する ---
@@ -117,9 +117,19 @@ function saveGuardState(fields = {}) {
 }
 
 function main() {
-  const env = loadEnv();
+  const envPath = path.join(HOME, '.claude', 'cost-reporter.env');
+  const envText = loadEnv();
+  const env = parseEnvText(envText);
   const webhook = env.DISCORD_COST_WEBHOOK;
-  const label = env.REPORTER_LABEL || os.hostname();
+  const hostname = os.hostname();
+  const labelResolution = resolveReporterLabel({ envText, hostname });
+  const { label } = labelResolution;
+  if (labelResolution.nextEnvText !== envText) {
+    try {
+      fs.writeFileSync(envPath, labelResolution.nextEnvText, { encoding: 'utf8', mode: 0o600 });
+      fs.chmodSync(envPath, 0o600);
+    } catch { /* レポート送信は止めない */ }
+  }
   const identity = machineIdentity();
 
   if (!DRY_RUN && !FORCE && shouldSkipByGuard()) {
@@ -163,6 +173,7 @@ function main() {
   let msg = `**💻 Claude Code ローカル利用トークン** — ${label}\n`;
   // 識別行はヘッダ直後に置く。本文は 1950 文字で切って送るため、末尾だとモデル一覧が長いPCで欠落する。
   msg += `🖥 hostname=${identity.hostname} / user=${identity.username} / git=${identity.gitEmail}\n`;
+  if (labelResolution.reason === 'copied-from-other-host') msg += `⚠️ 設定ファイルが他PCからコピーされていたため、このPCの名前(${hostname})に自動修正しました\n`;
   msg += `対象: ${monthStart} 〜 現在\n`;
   msg += `MTD 出力トークン: **${(totalOut / 1e6).toFixed(1)}M** / 入力(cache込) **${(totalIn / 1e6).toFixed(1)}M**\n`;
   const cacheTarget = cache.read + cache.write + cache.base; const cacheRate = cacheTarget ? cache.read / cacheTarget : 0;

@@ -27,7 +27,7 @@ const keyserveUrl = process.env.ORGIAST_KEYSERVE_URL || 'https://orgiast-keyserv
 const beginPrefix = '<!-- BEGIN: オージャスト共通ルール';
 const endMarker = '<!-- END: オージャスト共通ルール -->';
 const indexLead = '全文は ~/.claude/orgiast-onboarding.md（および https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/ONBOARDING.md ）。このファイルは自動ロードされない。判断に迷ったら Read ツールで該当節を読むこと';
-export const PRESERVE_LOCAL_KEYS = new Set(['REPORTER_LABEL']);
+export const PRESERVE_LOCAL_KEYS = new Set(['REPORTER_LABEL', 'REPORTER_HOST']);
 
 export function mergeEnvFile(existingText, incomingText, preserveKeys = PRESERVE_LOCAL_KEYS) {
   const existing = String(existingText ?? '');

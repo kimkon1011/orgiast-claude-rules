@@ -31,6 +31,9 @@ export function upsertEnvValue(text, key, value) {
     return source.slice(0, match.index) + replacement + source.slice(match.index + match[0].length);
   }
   if (!source) return replacement;
-  const separator = source.endsWith('\n') || source.endsWith('\r') ? '' : newline;
-  return `${source}${separator}${replacement}`;
+  // 末尾改行があったファイルは改行付きで返す。落とすと、後から別ツールが1行追記したときに
+  // `LAST=v` + `NEXT=w` が同じ行に連結して env が壊れる。
+  const endsWithNewline = source.endsWith('\n') || source.endsWith('\r');
+  const separator = endsWithNewline ? '' : newline;
+  return `${source}${separator}${replacement}${endsWithNewline ? newline : ''}`;
 }

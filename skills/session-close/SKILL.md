@@ -84,10 +84,17 @@ description: セッションを綺麗に閉じて次に引き継ぐ。「終わ�
 
 - 書いたら「次は新しいセッションで `/session-start` と打つだけです」と1行で伝える。
 
-## 7. `/clear` を促す
+## 7. セッションを一覧から自動で消す（`/clear` は不要）
 
-- 「ここで `/clear` してください。継続は memory が担保しているので履歴は惜しまなくていい」と1行で伝える。
-- 積み残しは `/session-triage` で後から拾えることも添える。
+- 最後に次のコマンドを実行する。
+
+```bash
+node "$HOME/orgiast-claude-rules/tools/close-session.mjs"
+```
+
+- 45秒ほどで `_deleted-backup/_closed/` へ退避されて一覧から消える。`/clear` は不要。
+- 実体は削除せず move するため復元できる。
+- 積み残しは `/session-triage` で後から拾える。
 
 ## 注意
 

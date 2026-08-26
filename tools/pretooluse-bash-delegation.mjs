@@ -3,15 +3,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { classifyBashCommand } from './usage-stats.mjs';
 
 try {
   let raw = ''; process.stdin.setEncoding('utf8'); for await (const chunk of process.stdin) raw += chunk;
   const j = JSON.parse(raw), tool = String(j.tool_name || ''); if (!/^(Bash|PowerShell)$/.test(tool)) process.exit(0);
   const command = String(j.tool_input?.command || '');
-  if (/llm-ask\.mjs|codex-do\.mjs|batch-enqueue\.mjs|usage-stats\.mjs|glm-code\.mjs|deepseek-ask\.mjs|grok-ask\.mjs|ollama-ask\.mjs|manus-research\.mjs|scratchpad/i.test(command)) process.exit(0);
-  const marker = command.match(/node\s+(?:-e|--eval|-p|--print)\b|python3?\s+-c\b|ruby\s+-e\b|perl\s+-e\b|<<\s*'?[A-Za-z_]*EOF\b/i) || (tool === 'PowerShell' && /\r?\n/.test(command) ? command.match(/-Command\b/i) : null);
-  if (!marker) process.exit(0);
-  const program = command.slice((marker.index || 0) + marker[0].length).trim(), size = program.length, lines = program.split(/\r?\n/).length;
+  if (classifyBashCommand(command) !== 'inline-program') process.exit(0);
+  const size = command.length, lines = command.split(/\r?\n/).length;
   if (size < 900 && lines < 25) process.exit(0);
   const home = process.env.ORGIAST_HOME || os.homedir(), repo = process.env.ORGIAST_REPO || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   let mode = 'warn'; try { mode = String(JSON.parse(fs.readFileSync(path.join(home, '.claude', 'cost-enforce.json'), 'utf8')).mode); } catch {}

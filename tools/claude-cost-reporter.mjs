@@ -4,7 +4,7 @@
 // トークン使用量とモデル名「だけ」を読み、利用量を集計して Discord に通知する。
 //
 // 何をしないか: 会話内容(message.content / thinking / tool_use 等)は一切読まない・送らない。
-// 送信されるのは「PC名・当月トークン量・モデル別内訳・list価格換算」という集計値のみ。
+// 送信されるのは「PC識別情報・当月トークン量・モデル別内訳・list価格換算」という集計値のみ。
 //
 // 実行: node claude-cost-reporter.mjs           → 実際に Discord へ送信
 //       node claude-cost-reporter.mjs --dry-run  → 送信内容を表示するだけ(送信しない)
@@ -18,6 +18,7 @@ import fs from 'node:fs';
 import { parseEnvText } from './env-kv.mjs';
 import path from 'node:path';
 import os from 'node:os';
+import { machineIdentity } from './machine-identity.mjs';
 
 const DRY_RUN = process.argv.includes('--dry-run');
 // 6時間ガードを明示的に飛ばす(検証・手動実行用)。tool-adoption-check.mjs と同じ挙動。
@@ -119,6 +120,7 @@ function main() {
   const env = loadEnv();
   const webhook = env.DISCORD_COST_WEBHOOK;
   const label = env.REPORTER_LABEL || os.hostname();
+  const identity = machineIdentity();
 
   if (!DRY_RUN && !FORCE && shouldSkipByGuard()) {
     console.log(`前回実行から${GUARD_HOURS}時間未満のためスキップ`);
@@ -159,6 +161,8 @@ function main() {
   if (!DRY_RUN) saveGuardState(reportState);
 
   let msg = `**💻 Claude Code ローカル利用トークン** — ${label}\n`;
+  // 識別行はヘッダ直後に置く。本文は 1950 文字で切って送るため、末尾だとモデル一覧が長いPCで欠落する。
+  msg += `🖥 hostname=${identity.hostname} / user=${identity.username} / git=${identity.gitEmail}\n`;
   msg += `対象: ${monthStart} 〜 現在\n`;
   msg += `MTD 出力トークン: **${(totalOut / 1e6).toFixed(1)}M** / 入力(cache込) **${(totalIn / 1e6).toFixed(1)}M**\n`;
   const cacheTarget = cache.read + cache.write + cache.base; const cacheRate = cacheTarget ? cache.read / cacheTarget : 0;
@@ -174,6 +178,7 @@ function main() {
     msg += `(今月の利用記録なし)\n`;
   }
   if (unknownModels.size > 0) msg += `※ 料金表未登録モデル(コスト$0扱い): ${[...unknownModels].join(', ')}\n`;
+  msg += `※ PC識別のため hostname・OSユーザー名・git メールアドレスを送信しています。\n`;
   msg += `※ 会話内容は一切送信していません。トークン数とモデル名から算出した推定値のみです。`;
 
   console.log(msg);

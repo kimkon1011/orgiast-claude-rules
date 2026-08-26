@@ -15,7 +15,8 @@ if (-not $TargetPath) { $TargetPath = Join-Path $SyncHome '.claude\CLAUDE.md' }
 $RawUrl      = if ($env:ORGIAST_ONBOARDING_URL) { $env:ORGIAST_ONBOARDING_URL } else { 'https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/ONBOARDING.md' }
 $StatePath   = Join-Path $SyncHome '.claude\.onboarding-sync-state.json'
 $LogPath     = Join-Path $SyncHome '.claude\hooks\onboarding-sync.log'
-$RulesPath   = Join-Path $SyncHome '.claude\rules\orgiast-onboarding.md'
+$RulesPath   = Join-Path $SyncHome '.claude\orgiast-onboarding.md'
+$OldRulesPath = Join-Path $SyncHome '.claude\rules\orgiast-onboarding.md'
 $BeginMarkerPrefix = '<!-- BEGIN: オージャスト共通ルール'
 $EndMarker         = '<!-- END: オージャスト共通ルール -->'
 $GuardHours  = 20
@@ -88,7 +89,7 @@ function Get-Sha256Hex {
 function New-OnboardingIndex {
     param([string]$Body)
     $result = [System.Collections.Generic.List[string]]::new()
-    $result.Add('全文は ~/.claude/rules/orgiast-onboarding.md（および https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/ONBOARDING.md ）。判断に迷ったら該当節の全文を読むこと')
+    $result.Add('全文は ~/.claude/orgiast-onboarding.md（および https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/ONBOARDING.md ）。このファイルは自動ロードされない。判断に迷ったら Read ツールで該当節を読むこと')
     $lines = $Body -split "`r`n|`n"
     for ($i = 0; $i -lt $lines.Length; $i++) {
         $line = $lines[$i]
@@ -148,6 +149,19 @@ function Update-TargetFile {
 
 function Main {
     $now = Get-Date
+
+    # 旧 rules/ 配下の全文は全リクエストで自動ロードされるため、日次ガードより前に自己修復する。
+    # 削除でなく移動にするのは、次の同期まで全文がローカルから消える窓を作らないため。
+    try {
+        if (Test-Path -LiteralPath $OldRulesPath) {
+            if (Test-Path -LiteralPath $RulesPath) {
+                Remove-Item -LiteralPath $OldRulesPath -Force
+            } else {
+                New-Item -ItemType Directory -Force -Path (Split-Path -Parent $RulesPath) | Out-Null
+                Move-Item -LiteralPath $OldRulesPath -Destination $RulesPath -Force
+            }
+        }
+    } catch {}
 
     # 1. 日次ガード: 前回チェックから20時間未満なら -Force が無い限りサイレントに終了
     if (-not $Force) {

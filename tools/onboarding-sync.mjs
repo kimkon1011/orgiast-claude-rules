@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { readEnvValue } from './env-kv.mjs';
+import { parseEnvText, readEnvValue } from './env-kv.mjs';
 import { repairEnvBom } from './env-repair.mjs';
 import { isEntry } from './is-entry.mjs';
 import { buildKeyserveAlert, shouldAlert } from './keyserve-alert.mjs';
@@ -27,6 +27,36 @@ const keyserveUrl = process.env.ORGIAST_KEYSERVE_URL || 'https://orgiast-keyserv
 const beginPrefix = '<!-- BEGIN: オージャスト共通ルール';
 const endMarker = '<!-- END: オージャスト共通ルール -->';
 const indexLead = '全文は ~/.claude/orgiast-onboarding.md（および https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/ONBOARDING.md ）。このファイルは自動ロードされない。判断に迷ったら Read ツールで該当節を読むこと';
+export const PRESERVE_LOCAL_KEYS = new Set(['REPORTER_LABEL']);
+
+export function mergeEnvFile(existingText, incomingText, preserveKeys = PRESERVE_LOCAL_KEYS) {
+  const existing = String(existingText ?? '');
+  const incoming = String(incomingText ?? '').replace(/^\uFEFF/, '');
+  const incomingValues = parseEnvText(incoming);
+  const existingValues = parseEnvText(existing);
+  const preserved = preserveKeys instanceof Set ? preserveKeys : new Set(preserveKeys);
+  const newline = existing.includes('\r\n') ? '\r\n' : '\n';
+  const lines = existing.split(/\r?\n/);
+  const handled = new Set();
+
+  const updatedLines = lines.map((line) => {
+    const match = line.match(/^(\s*(?:export\s+)?)([A-Za-z_][A-Za-z0-9_]*)(\s*=\s*)(.*)$/);
+    if (!match || !Object.prototype.hasOwnProperty.call(incomingValues, match[2])) return line;
+    const key = match[2];
+    handled.add(key);
+    if (preserved.has(key) || existingValues[key] === incomingValues[key]) return line;
+    return `${match[1]}${key}${match[3]}${incomingValues[key]}`;
+  });
+
+  const additions = Object.keys(incomingValues)
+    .filter((key) => !handled.has(key))
+    .map((key) => `${key}=${incomingValues[key]}`);
+  if (!additions.length) return updatedLines.join(newline);
+  if (updatedLines.length === 1 && updatedLines[0] === '') return additions.join(newline);
+  if (updatedLines.at(-1) === '') updatedLines.splice(updatedLines.length - 1, 0, ...additions);
+  else updatedLines.push(...additions);
+  return updatedLines.join(newline);
+}
 
 function log(message) {
   if (dryRun) return;
@@ -201,8 +231,10 @@ async function provisionKeys(now) {
       const destination = path.join(home, '.claude', name);
       const cleanedContents = contents.replace(/^\uFEFF/, '');
       if (fs.existsSync(destination)) {
-        if (name !== 'keyserve.env' || fs.readFileSync(destination, 'utf8') === cleanedContents) continue;
-        fs.writeFileSync(destination, cleanedContents, { encoding: 'utf8', mode: 0o600 });
+        const existing = fs.readFileSync(destination, 'utf8');
+        const updated = mergeEnvFile(existing, cleanedContents);
+        if (updated === existing) continue;
+        fs.writeFileSync(destination, updated, { encoding: 'utf8', mode: 0o600 });
         fs.chmodSync(destination, 0o600);
         refreshed.push(name);
         log(`refreshed: ${name}`);

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { makeIndex } from './onboarding-sync.mjs';
+import { makeIndex, mergeEnvFile, PRESERVE_LOCAL_KEYS } from './onboarding-sync.mjs';
 
 const script = path.join(path.dirname(fileURLToPath(import.meta.url)), 'onboarding-sync.mjs');
 const source = Buffer.from('# 見出し\r\n最初の文。二番目。\r\n本文\r\n🔴 絶対ルール全文\r\n## 次\r\n説明だけ\r\n🛑 上限規定', 'utf8');
@@ -77,4 +77,19 @@ test('two runs are idempotent', () => {
 test('CLAUDE.md without markers is preserved and receives one block', () => {
   const f = setup(Buffer.from('個人ルール\r\nそのまま', 'utf8')); run(f); const output = fs.readFileSync(f.target, 'utf8');
   assert.ok(output.startsWith('個人ルール\r\nそのまま')); assert.equal((output.match(/BEGIN: オージャスト共通ルール/g) || []).length, 1);
+});
+
+test('mergeEnvFile updates distributed keys and preserves local values and layout', () => {
+  const existing = '# PC specific\r\nDISCORD_COST_WEBHOOK=dummy-old\r\nREPORTER_LABEL=local-pc\r\nLOCAL_ONLY=keep-me\r\n';
+  const incoming = 'DISCORD_COST_WEBHOOK=dummy-new\nREPORTER_LABEL=central-label\nNEW_SHARED=dummy-value\n';
+  assert.equal(
+    mergeEnvFile(existing, incoming, PRESERVE_LOCAL_KEYS),
+    '# PC specific\r\nDISCORD_COST_WEBHOOK=dummy-new\r\nREPORTER_LABEL=local-pc\r\nLOCAL_ONLY=keep-me\r\nNEW_SHARED=dummy-value\r\n',
+  );
+});
+
+test('mergeEnvFile returns identical text when effective values do not change', () => {
+  const existing = '# keep\nexport SHARED = "dummy-value"\nREPORTER_LABEL=local-pc\n';
+  const incoming = 'SHARED=dummy-value\nREPORTER_LABEL=central-label\n';
+  assert.equal(mergeEnvFile(existing, incoming), existing);
 });

@@ -18,3 +18,19 @@ export function parseEnvText(text) {
 export function readEnvValue(file, key) {
   try { return parseEnvText(fs.readFileSync(file, 'utf8'))[key] ?? ''; } catch { return ''; }
 }
+
+export function upsertEnvValue(text, key, value) {
+  const source = String(text ?? '');
+  const newline = source.includes('\r\n') ? '\r\n' : '\n';
+  const keyPattern = String(key).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const linePattern = new RegExp(`^(?:export\\s+)?${keyPattern}\\s*=.*$`, 'm');
+  const replacement = `${key}=${value}`;
+  const match = source.match(linePattern);
+  if (match) {
+    if (parseEnvText(match[0])[key] === String(value)) return source;
+    return source.slice(0, match.index) + replacement + source.slice(match.index + match[0].length);
+  }
+  if (!source) return replacement;
+  const separator = source.endsWith('\n') || source.endsWith('\r') ? '' : newline;
+  return `${source}${separator}${replacement}`;
+}

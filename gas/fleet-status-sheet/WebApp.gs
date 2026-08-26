@@ -39,6 +39,31 @@ function doPost(e) {
   catch (error) { return _fleetJson_({ ok: false, status: 500, error: error.message }); }
 }
 
+function doGet(e) {
+  const expected = PropertiesService.getScriptProperties().getProperty('FLEET_TOKEN');
+  const token = e && e.parameter ? e.parameter.token : '';
+  if (!expected || token !== expected) return _fleetJson_({ ok: false, status: 401, error: 'unauthorized' });
+  try {
+    const sheet = _fleetSheet_();
+    const lastColumn = sheet.getLastColumn();
+    const lastRow = sheet.getLastRow();
+    const headers = sheet.getRange(1, 1, 1, lastColumn).getDisplayValues()[0];
+    const columns = fleetResolveColumns(headers);
+    const values = lastRow > 1 ? sheet.getRange(2, 1, lastRow - 1, lastColumn).getDisplayValues() : [];
+    const rows = values.map(function(row) {
+      return {
+        pcName: row[columns.selfPc] || '',
+        label: row[columns.hostname] || '',
+        reportedAt: row[columns.reportedAt] || '',
+        note: row[columns.consistency] || ''
+      };
+    });
+    return _fleetJson_({ ok: true, rows: rows, count: rows.length });
+  } catch (error) {
+    return _fleetJson_({ ok: false, status: 500, error: error.message });
+  }
+}
+
 function upsertFleetStatus(payload) {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(20000)) return { ok: false, status: 503, error: 'busy' };

@@ -1,0 +1,28 @@
+name: Fleet triage digest
+
+on:
+  schedule:
+    - cron: '23 0 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Post fleet triage digest
+        run: node tools/fleet-triage-report.mjs
+        env:
+          FLEET_SHEET_URL: ${{ secrets.FLEET_SHEET_URL }}
+          FLEET_SHEET_TOKEN: ${{ secrets.FLEET_SHEET_TOKEN }}
+          DISCORD_COST_WEBHOOK: ${{ secrets.DISCORD_COST_WEBHOOK }}

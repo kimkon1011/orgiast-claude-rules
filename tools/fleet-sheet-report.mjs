@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { parseEnvText } from './env-kv.mjs';
 import { scanBrowserExtensions } from './browser-extension-audit.mjs';
 import { machineIdentity } from './machine-identity.mjs';
+import { resolveReporterLabel } from './reporter-label.mjs';
 
 const dryRun = process.argv.includes('--dry-run');
 const home = process.env.ORGIAST_HOME || os.homedir();
@@ -16,6 +17,9 @@ function readJson(file, fallback = {}) {
 }
 function readEnv(file) {
   try { return parseEnvText(fs.readFileSync(file, 'utf8')); } catch { return {}; }
+}
+function readText(file) {
+  try { return fs.readFileSync(file, 'utf8'); } catch { return ''; }
 }
 function cheapAiCounts(file) {
   const counts = {};
@@ -45,14 +49,22 @@ async function main() {
     console.error('fleet-sheet: FLEET_SHEET_URL/TOKEN 未設定のため送信しません(~/.claude/fleet-sheet.env)');
     return;
   }
-  const reporterEnv = readEnv(path.join(claudeDir, 'cost-reporter.env'));
+  const reporterEnvPath = path.join(claudeDir, 'cost-reporter.env');
+  const reporterEnvText = readText(reporterEnvPath);
+  const labelResolution = resolveReporterLabel({ envText: reporterEnvText, hostname: os.hostname() });
+  if (labelResolution.nextEnvText !== reporterEnvText) {
+    try {
+      fs.writeFileSync(reporterEnvPath, labelResolution.nextEnvText, { encoding: 'utf8', mode: 0o600 });
+      fs.chmodSync(reporterEnvPath, 0o600);
+    } catch { /* レポート送信は止めない */ }
+  }
 
   const cost = readJson(path.join(claudeDir, 'cost-loop-state.json'));
   const enforce = readJson(path.join(claudeDir, 'cost-enforce.json'));
   const adoption = readJson(path.join(claudeDir, '.tool-adoption-state.json'));
   const reporter = readJson(path.join(claudeDir, '.cost-reporter-state.json'));
   const map = readJson(path.join(repo, 'fleet-pc-map.json'));
-  const label = reporterEnv.REPORTER_LABEL || (process.platform === 'win32' ? process.env.COMPUTERNAME : os.hostname()) || 'unknown';
+  const label = labelResolution.label || 'unknown';
   const counts = cheapAiCounts(path.join(claudeDir, 'executor-usage.jsonl'));
   const mappedName = Object.prototype.hasOwnProperty.call(map, label) && typeof map[label] === 'string' ? map[label] : null;
   const topModel = Array.isArray(reporter.topModels) && reporter.topModels[0] ? reporter.topModels[0].model : '';

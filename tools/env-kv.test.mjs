@@ -5,7 +5,8 @@ import { upsertEnvValue } from './env-kv.mjs';
 test('upsertEnvValue updates or appends one env value without disturbing other text', () => {
   assert.equal(upsertEnvValue('', 'KEY', 'value'), 'KEY=value');
   assert.equal(upsertEnvValue('KEY=old\n', 'KEY', ''), 'KEY=\n');
-  assert.equal(upsertEnvValue('OTHER=keep\n', 'KEY', 'value'), 'OTHER=keep\nKEY=value');
+  // 末尾改行のあるファイルは改行付きで返す（後続の追記が同じ行に連結しないため）
+  assert.equal(upsertEnvValue('OTHER=keep\n', 'KEY', 'value'), 'OTHER=keep\nKEY=value\n');
   assert.equal(upsertEnvValue('KEY=old\r\nOTHER=keep\r\n', 'KEY', 'new'), 'KEY=new\r\nOTHER=keep\r\n');
   assert.equal(upsertEnvValue('OTHER=keep', 'KEY', 'value'), 'OTHER=keep\nKEY=value');
   assert.equal(upsertEnvValue('KEY=old\n', 'KEY', 'a=b=c'), 'KEY=a=b=c\n');

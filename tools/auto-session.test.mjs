@@ -6,7 +6,7 @@ import path from 'node:path';
 
 const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-session-test-'));
 process.env.ORGIAST_HOME = isolatedHome;
-const { parseHandoff, todoExclusionReason, filterTodos, pickCwd, resolveClaudeExe, decideRun, markTodoDone, extractSessionId, transcriptPath } = await import('./auto-session.mjs');
+const { HISTORY_CWD, parseHandoff, todoExclusionReason, filterTodos, pickCwd, pickHistoryCwd, buildChildArgs, buildPrompt, resolveClaudeExe, decideRun, markTodoDone, extractSessionId, transcriptPath } = await import('./auto-session.mjs');
 test.after(() => fs.rmSync(isolatedHome, { recursive: true, force: true }));
 
 const sample = `前書き\n<!-- NEXT-SESSION v1 -->\n## 対象\nrepo A\n## 残TODO\n1. 実装する\n2. ~~完了済み~~\n3. 要判断: 色\n4. ブロック中: API\n## 完了条件\nテスト green\n<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. 歴史上のTODO\n`;
@@ -58,6 +58,28 @@ test('pickCwd は注入された存在判定で候補と標準リポジトリを
   assert.equal(pickCwd('その他', (candidate) => candidate === rules), rules);
 });
 
+test('pickHistoryCwd は履歴 cwd が存在すれば小文字ドライブの固定パスを返す', () => {
+  const repoCwd = String.raw`C:\Users\uers\Downloads\orgiast-claude-rules`;
+  assert.equal(pickHistoryCwd((candidate) => candidate === HISTORY_CWD, repoCwd), HISTORY_CWD);
+});
+
+test('pickHistoryCwd は履歴 cwd が存在しなければ repoCwd へフォールバックする', () => {
+  const repoCwd = String.raw`C:\Users\uers\Downloads\orgiast-claude-rules`;
+  assert.equal(pickHistoryCwd(() => false, repoCwd), repoCwd);
+});
+
+test('buildChildArgs は cwd が異なる場合だけ --add-dir を2つ渡す', () => {
+  const repoCwd = String.raw`C:\repo`;
+  const different = buildChildArgs(repoCwd, HISTORY_CWD);
+  const same = buildChildArgs(repoCwd, repoCwd);
+  assert.deepEqual(different.slice(-4), ['--add-dir', repoCwd, '--add-dir', HISTORY_CWD]);
+  assert.equal(different.filter((arg) => arg === '--add-dir').length, 2);
+  assert.equal(same.filter((arg) => arg === '--add-dir').length, 1);
+  assert.deepEqual(same.slice(-2), ['--add-dir', repoCwd]);
+  assert.equal(different.includes('--permission-mode'), false);
+  assert.equal(same.includes('--permission-mode'), false);
+});
+
 test('resolveClaudeExe はバージョンを数値セグメントで比較する', () => {
   const oldExe = String.raw`C:\Users\x\.vscode\extensions\anthropic.claude-code-2.1.9-win32-x64\resources\native-binary\claude.exe`;
   const newExe = String.raw`C:\Users\x\.vscode\extensions\anthropic.claude-code-2.1.245-win32-x64\resources\native-binary\claude.exe`;
@@ -85,6 +107,19 @@ test('transcriptPath は Windows cwd をスラッグ化して隔離 HOME 配下�
     path.resolve(isolatedHome, '.claude', 'projects', 'C--Users-uers-Downloads-orgiast-claude-rules', `${sessionId}.jsonl`),
   );
   assert.equal(transcriptPath(String.raw`C:\Users\uers`, ''), '');
+});
+
+test('transcriptPath は小文字ドライブの既存 CLAUDE.md配布 バケットを指す', () => {
+  const sessionId = '123e4567-e89b-42d3-a456-426614174000';
+  assert.ok(transcriptPath(HISTORY_CWD, sessionId).includes('c--Users-uers-Downloads-CLAUDE-md--'));
+});
+
+test('buildPrompt は実リポジトリで git -C を使うよう指示する', () => {
+  const repoCwd = String.raw`C:\Users\uers\Downloads\orgiast-claude-rules`;
+  const prompt = buildPrompt('実装する', {}, repoCwd, new Date('2026-08-26T00:00:00Z'));
+  assert.ok(prompt.includes(`git -C ${repoCwd}`));
+  assert.ok(prompt.includes(`--cwd ${repoCwd}`));
+  assert.ok(prompt.indexOf('セッションの作業ディレクトリは履歴を揃えるため') < prompt.indexOf('実装本体は'));
 });
 
 test('decideRun は kill switch・有効ロック・stale lock を判定する', () => {

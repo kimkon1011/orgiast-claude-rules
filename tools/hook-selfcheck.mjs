@@ -16,7 +16,9 @@ export const REQUIRED_HOOKS = [
   ['UserPromptSubmit', 'session-purpose-gate.mjs'],
   ['UserPromptSubmit', 'makimono-gate.mjs'],
   ['UserPromptSubmit', 'fable-session-guard.mjs'],
+  ['UserPromptSubmit', 'current-session.mjs'],
   ['SessionStart', 'fable-session-guard.mjs'],
+  ['SessionStart', 'session-list-tidy.mjs'],
   ['SessionStart', 'hook-selfcheck.mjs'],
   // 旧Windows機は SessionStart に凍結コピーの onboarding-sync.ps1 が居座り、リポ自己更新も
   // keyserve の鍵配布(provisionKeys)も走らない。ここで「欠落」と判定させて register-hooks に

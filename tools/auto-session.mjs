@@ -8,6 +8,7 @@ import { isEntry } from './is-entry.mjs';
 const MARKER = '<!-- NEXT-SESSION v1 -->';
 const SIX_HOURS = 6 * 60 * 60 * 1000;
 const DEFAULT_REPO = String.raw`C:\Users\uers\Downloads\orgiast-claude-rules`;
+export const HISTORY_CWD = String.raw`c:\Users\uers\Downloads\CLAUDE.md配布`;
 const CWD_RULES = [
   ['ブース制作', String.raw`C:\Users\uers\Downloads\ブース制作アプリ`],
   ['aujust', String.raw`C:\Users\uers\Downloads\aujust-sales-automation`],
@@ -98,6 +99,18 @@ export function pickCwd(todoText, exists = fs.existsSync) {
   return existingOrDefault(candidate, exists);
 }
 
+export function pickHistoryCwd(exists = fs.existsSync, repoCwd) {
+  return exists(HISTORY_CWD) ? HISTORY_CWD : repoCwd;
+}
+
+export function buildChildArgs(repoCwd, historyCwd) {
+  // 2026-08-26 実測: acceptEdits はファイル編集だけを自動承認し、Bash は承認待ちで無人実行が最初のコマンドで止まる。
+  // --permission-mode を渡さず ~/.claude/settings.json の既定 auto を継承すると、Bash（git -C ... rev-parse）も通る。
+  const args = ['-p', '', '--output-format', 'json', '--model', 'opus', '--add-dir', repoCwd];
+  if (historyCwd !== repoCwd) args.push('--add-dir', historyCwd);
+  return args;
+}
+
 function numericVersion(entry) {
   const normalized = String(entry).replace(/\\/g, '/');
   const match = normalized.match(/anthropic\.claude-code-([0-9]+(?:\.[0-9]+)*)-win32-x64(?:\/|$)/i);
@@ -138,7 +151,7 @@ export function markTodoDone(md, todoText, note) {
   return source.slice(0, start) + changed + source.slice(end);
 }
 
-export function buildPrompt(todo, sections, cwd, date = new Date()) {
+export function buildPrompt(todo, sections, repoCwd, date = new Date()) {
   const attached = ['対象', '完了条件', '触る前に読む memory'].map((name) => sections[name]).filter(Boolean).join('\n\n');
   const day = date.toISOString().slice(0, 10).replaceAll('-', '');
   return [
@@ -146,7 +159,8 @@ export function buildPrompt(todo, sections, cwd, date = new Date()) {
     `## 目的\n${todo}`,
     attached,
     `## 固定の作業規約
-- 実装本体は \`node tools/codex-do.mjs "<指示>" --cwd ${cwd}\` で Codex に委譲する（§1.18）。監督は設計・レビュー・検証だけ。
+- セッションの作業ディレクトリは履歴を揃えるため CLAUDE.md配布 になっている。実際の作業対象リポジトリは ${repoCwd} であり、CLAUDE.md配布 は git リポジトリではない。git は必ず \`git -C ${repoCwd}\` の形で実行し、codex-do.mjs は \`--cwd ${repoCwd}\` を付ける。裸の \`git status\` / \`git checkout\` は使わない。
+- 実装本体は \`node tools/codex-do.mjs "<指示>" --cwd ${repoCwd}\` で Codex に委譲する（§1.18）。監督は設計・レビュー・検証だけ。
 - 他セッションと作業ツリーを共有している。\`git add -A\` / \`git commit -a\` / \`git stash\` / \`git checkout -- .\` は禁止。自分が作成・変更したファイルだけをパス指定で \`git add\` する。着手前とコミット直前に \`git status --porcelain\` を撮り、差分が自分の変更だけであることを確認する。
 - ブランチは必ず main から切る。ブランチ名は \`auto/${day}-<短いスラグ>\`。
 - \`node --test tools/*.test.mjs\` が緑になるまで直す。
@@ -209,11 +223,11 @@ function extensionExecutables() {
   } catch { return []; }
 }
 
-function runChild(executable, prompt, cwd, timeoutMs) {
+function runChild(executable, prompt, repoCwd, historyCwd, timeoutMs) {
   return new Promise((resolve) => {
     const startedAt = new Date();
-    const child = spawn(executable, ['-p', '', '--output-format', 'json', '--model', 'opus', '--permission-mode', 'acceptEdits', '--add-dir', cwd], {
-      cwd, env: { ...process.env, CLAUDE_HEADLESS: '1' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
+    const child = spawn(executable, buildChildArgs(repoCwd, historyCwd), {
+      cwd: historyCwd, env: { ...process.env, CLAUDE_HEADLESS: '1' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
     });
     let stdout = '';
     let stderr = '';
@@ -297,8 +311,9 @@ export async function main(argv = process.argv.slice(2)) {
   if (!selected.length) { console.log('auto-session: 実行可能な TODO はありません'); return 0; }
   if (options.dry) {
     for (const todo of selected) {
-      const cwd = pickCwd(todo);
-      console.log(`TODO: ${todo}\nCWD: ${cwd}\n\n${buildPrompt(todo, parsed.sections, cwd)}`);
+      const repoCwd = pickCwd(todo);
+      const historyCwd = pickHistoryCwd(fs.existsSync, repoCwd);
+      console.log(`TODO: ${todo}\nREPO CWD: ${repoCwd}\nHISTORY CWD: ${historyCwd}\n\n${buildPrompt(todo, parsed.sections, repoCwd)}`);
     }
     return 0;
   }
@@ -312,12 +327,13 @@ export async function main(argv = process.argv.slice(2)) {
   try {
     const executable = resolveClaudeExe(extensionExecutables());
     for (const todo of selected) {
-      const cwd = pickCwd(todo);
-      const result = await runChild(executable, buildPrompt(todo, parsed.sections, cwd), cwd, options.timeoutMin * 60_000);
+      const repoCwd = pickCwd(todo);
+      const historyCwd = pickHistoryCwd(fs.existsSync, repoCwd);
+      const result = await runChild(executable, buildPrompt(todo, parsed.sections, repoCwd), repoCwd, historyCwd, options.timeoutMin * 60_000);
       const sessionId = extractSessionId(result.stdout);
-      const transcript = transcriptPath(cwd, sessionId);
+      const transcript = transcriptPath(historyCwd, sessionId);
       const resumeCommand = sessionId ? `claude --resume ${sessionId}` : '';
-      const record = { todo, cwd, sessionId, transcript, resumeCommand, ...result };
+      const record = { todo, cwd: repoCwd, repoCwd, historyCwd, sessionId, transcript, resumeCommand, ...result };
       results.push(record);
       const day = result.startedAt.slice(0, 10);
       let n = 1;

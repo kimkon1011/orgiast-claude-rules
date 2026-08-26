@@ -354,11 +354,25 @@ node -e "fetch('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rule
 
 ### 3.0.5 ツール自己更新ブートストラップ（セッション開始時に1回だけ）
 
-このPCの `~/orgiast-claude-rules/tools/onboarding-sync.mjs` に `provisionKeys` が含まれていなければ、配布ツール一式が古い。環境内のClaudeは次を1回だけ実行して最新化する（以後は日次で自動更新されるため不要）。
+**この節は「そのPCのClaudeが自分で実行する」もの。userには何も頼まない**（§1.1）。userは普通に Claude Code を開くだけで、以下は全部Claude側で完結する。
 
-    node -e "fetch('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/tools/onboarding-sync.mjs?cb='+Date.now()).then(r=>r.text()).then(t=>require('fs').writeFileSync(require('path').join(require('os').homedir(),'orgiast-claude-rules','tools','onboarding-sync.mjs'),t)).then(()=>console.log('updated'))"
+**判定（セッション開始時に1回だけ・3点すべて確認する）**。1つでも欠けていたら「配布が届いていない端末」なので下の復旧を実行する。
+1. `<HOME>/.claude/skills/session-start/SKILL.md` が存在するか（skillが一度も配られていない端末が実在した／2026-08-25 実測）
+2. `<HOME>/orgiast-claude-rules/tools/onboarding-sync.mjs` が存在し、中に `provisionKeys` が含まれるか（無い＝配布コピーが古い／`.ps1` しか無い端末が実在した）
+3. `<HOME>/.claude/settings.json` の SessionStart に `onboarding-sync.mjs` が登録されているか（`onboarding-sync.ps1` だけの端末は、その凍結コピーが自分自身を更新しないため配布も鍵配布も永久に届かない）
 
-続けて SessionStart の登録を確認する。`tools/onboarding-sync.mjs` ではなく `~/.claude/hooks/onboarding-sync.ps1` が登録されている環境は、配布物の自動更新と会社共通AIキーの配布が届いていない。上記の `?cb=` 付き raw 取り直しを先に済ませ、その環境のClaudeは `node ~/orgiast-claude-rules/tools/register-hooks.mjs --hooks-only`、続けて `node ~/orgiast-claude-rules/tools/onboarding-sync.mjs --force` を1回だけ実行して自己修復する。公開GitHubリポジトリから配布ツールを更新し、会社共通のAI実行用APIキー（Kimi等）を未設定の `~/.claude/*.env` にだけ設置する。会話内容は読まず、送信もしない。
+**復旧（Windows。1コマンドで完結。公式インストーラを取り直して実行する）**
+
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=Join-Path $env:TEMP 'install-orgiast.ps1'; Invoke-WebRequest -UseBasicParsing ('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/tools/install-orgiast.ps1?cb='+[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) -OutFile $p; & $p -NoOllama"
+
+macOS/Linux は `install-orgiast.sh` を同様に取得して `bash` で実行する。インストーラはリポ取得(zip→git)・hook登録(`register-hooks.mjs --hooks-only`)・初回取込(`onboarding-sync.mjs --force`)まで一括で行う。**未コミットの変更がある git 作業ツリーは削除せず `pull` のみ**に退避するので、開発機で実行しても作業は消えない。
+
+**注意（実測で踏んだ罠）**
+- **コマンド中に `~` を使わない**。PowerShell は引数中の `~` を展開しないので `node ~/orgiast-claude-rules/tools/x.mjs` は必ず失敗する。`$env:USERPROFILE` か、node 内で `os.homedir()` を使う。
+- 個別ファイルを raw から1本ずつ取ると依存（`env-kv.mjs` / `env-repair.mjs` / `is-entry.mjs` / `keyserve-alert.mjs`）で連鎖的に落ちる。**一式を入れ直すインストーラ経由が確実**。
+- 復旧後は `<HOME>/.claude/skills/` に `session` `session-start` 等が並ぶことを確認してから完了と報告する（read-back verify・§1.4）。
+
+公開GitHubリポジトリから配布ツールを更新し、会社共通のAI実行用APIキー（Kimi等）を未設定の `~/.claude/*.env` にだけ設置する。会話内容は読まず、送信もしない。
 
 貼り付けプロンプト全文・hook実装コード・マーカー完全一致の注意点・コスト自己申告セットアップ: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/onboarding-setup-prompts.md`
 

@@ -163,6 +163,24 @@ function homeDir() {
   return process.env.ORGIAST_HOME || os.homedir();
 }
 
+const UUID_PATTERN = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
+
+export function extractSessionId(stdout) {
+  const text = String(stdout ?? '');
+  try {
+    const parsed = JSON.parse(text);
+    if (typeof parsed?.session_id === 'string' && new RegExp(`^${UUID_PATTERN}$`).test(parsed.session_id)) return parsed.session_id;
+  } catch {}
+  const matches = [...text.matchAll(new RegExp(`"session_id"\\s*:\\s*"(${UUID_PATTERN})"`, 'g'))];
+  return matches.at(-1)?.[1] ?? '';
+}
+
+export function transcriptPath(cwd, sessionId) {
+  if (!sessionId) return '';
+  const slug = String(cwd ?? '').replace(/[^A-Za-z0-9]/g, '-');
+  return path.resolve(homeDir(), '.claude', 'projects', slug, `${sessionId}.jsonl`);
+}
+
 function parseArgs(argv) {
   const options = { count: 1, timeoutMin: 45, dry: false, list: false };
   for (let i = 0; i < argv.length; i += 1) {
@@ -243,7 +261,8 @@ function findWebhook(claudeDir) {
 }
 
 async function notify(webhook, content) {
-  if (!webhook) { console.log(content); return; }
+  console.log(content);
+  if (!webhook) return;
   try {
     const response = await fetch(webhook, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ content: content.slice(0, 1900) }), signal: AbortSignal.timeout(20_000) });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -295,7 +314,10 @@ export async function main(argv = process.argv.slice(2)) {
     for (const todo of selected) {
       const cwd = pickCwd(todo);
       const result = await runChild(executable, buildPrompt(todo, parsed.sections, cwd), cwd, options.timeoutMin * 60_000);
-      const record = { todo, cwd, ...result };
+      const sessionId = extractSessionId(result.stdout);
+      const transcript = transcriptPath(cwd, sessionId);
+      const resumeCommand = sessionId ? `claude --resume ${sessionId}` : '';
+      const record = { todo, cwd, sessionId, transcript, resumeCommand, ...result };
       results.push(record);
       const day = result.startedAt.slice(0, 10);
       let n = 1;
@@ -309,7 +331,7 @@ export async function main(argv = process.argv.slice(2)) {
   for (const result of results) {
     const minutes = Math.max(0, Math.round((Date.parse(result.endedAt) - Date.parse(result.startedAt)) / 60_000));
     const pr = prNumber(result.stdout);
-    lines.push(`- ${result.todo} | ${result.status}${pr ? ` | PR #${pr}` : ''} | ${minutes}分`);
+    lines.push(`- ${result.todo} | ${result.status}${pr ? ` | PR #${pr}` : ''} | ${minutes}分 | transcript: ${result.transcript || '(取得できず)'} | resume: ${result.resumeCommand || '(取得できず)'}`);
   }
   await notify(findWebhook(claudeDir), lines.join('\n'));
   return results.some((result) => result.status === 'failure') ? 1 : 0;

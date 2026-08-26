@@ -6,7 +6,7 @@ import path from 'node:path';
 
 const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-session-test-'));
 process.env.ORGIAST_HOME = isolatedHome;
-const { parseHandoff, todoExclusionReason, filterTodos, pickCwd, resolveClaudeExe, decideRun, markTodoDone } = await import('./auto-session.mjs');
+const { parseHandoff, todoExclusionReason, filterTodos, pickCwd, resolveClaudeExe, decideRun, markTodoDone, extractSessionId, transcriptPath } = await import('./auto-session.mjs');
 test.after(() => fs.rmSync(isolatedHome, { recursive: true, force: true }));
 
 const sample = `前書き\n<!-- NEXT-SESSION v1 -->\n## 対象\nrepo A\n## 残TODO\n1. 実装する\n2. ~~完了済み~~\n3. 要判断: 色\n4. ブロック中: API\n## 完了条件\nテスト green\n<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. 歴史上のTODO\n`;
@@ -63,6 +63,28 @@ test('resolveClaudeExe はバージョンを数値セグメントで比較する
   const newExe = String.raw`C:\Users\x\.vscode\extensions\anthropic.claude-code-2.1.245-win32-x64\resources\native-binary\claude.exe`;
   assert.equal(resolveClaudeExe([oldExe, newExe]), newExe);
   assert.equal(resolveClaudeExe([]), 'claude');
+});
+
+test('extractSessionId は正常な JSON から session_id を抽出する', () => {
+  assert.equal(extractSessionId('{"session_id":"123e4567-e89b-42d3-a456-426614174000","result":"ok"}'), '123e4567-e89b-42d3-a456-426614174000');
+});
+
+test('extractSessionId はゴミや複数行が混ざっても最後の session_id を抽出する', () => {
+  const stdout = 'warning\n{"session_id":"123e4567-e89b-42d3-a456-426614174000"}\nnoise {"session_id": "987e6543-e21b-42d3-a456-426614174999"}';
+  assert.equal(extractSessionId(stdout), '987e6543-e21b-42d3-a456-426614174999');
+});
+
+test('extractSessionId は UUID が見つからなければ空文字を返す', () => {
+  assert.equal(extractSessionId('{"session_id":"not-a-uuid"}\ngarbage'), '');
+});
+
+test('transcriptPath は Windows cwd をスラッグ化して隔離 HOME 配下の絶対パスを返す', () => {
+  const sessionId = '123e4567-e89b-42d3-a456-426614174000';
+  assert.equal(
+    transcriptPath(String.raw`C:\Users\uers\Downloads\orgiast-claude-rules`, sessionId),
+    path.resolve(isolatedHome, '.claude', 'projects', 'C--Users-uers-Downloads-orgiast-claude-rules', `${sessionId}.jsonl`),
+  );
+  assert.equal(transcriptPath(String.raw`C:\Users\uers`, ''), '');
 });
 
 test('decideRun は kill switch・有効ロック・stale lock を判定する', () => {

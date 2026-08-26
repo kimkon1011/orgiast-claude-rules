@@ -298,6 +298,17 @@ try {
   } else { Warn "fleet-poller.ps1 未取得=スキップ(他機能は動作)" }
 } catch { Warn ("フリート点検の登録に失敗(他機能は動作): " + $_.Exception.Message) }
 
+# --- 残TODOの無人消化(毎日03:20・各PCのnext-session.mdから1件) ---
+Step "残TODOの無人消化を登録 (毎日03:20)"
+try {
+  $as = Join-Path $REPO 'tools\register-auto-session.ps1'
+  if (Test-Path $as) {
+    & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $as
+    if ($LASTEXITCODE -ne 0) { throw "register-auto-session.ps1 exit $LASTEXITCODE" }
+    OK "残TODOの無人消化 登録完了(毎日03:20 OrgiastAutoSession・各PCの残TODOを1件処理)"
+  } else { Warn "register-auto-session.ps1 未取得=スキップ(他機能は動作)" }
+} catch { Warn ("残TODOの無人消化の登録に失敗(他機能は動作): " + $_.Exception.Message) }
+
 # --- 開発ツール導入 ---
 Step "開発ツール Codex / Gemini の導入 (コスト削減用)"
 # 直前にwingetで入れたNodeを"同一セッション"で使えるよう、PATHをレジストリから再読込(未反映だとnpm/codexが見つからず失敗する)

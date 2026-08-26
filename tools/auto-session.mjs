@@ -7,12 +7,7 @@ import { isEntry } from './is-entry.mjs';
 
 const MARKER = '<!-- NEXT-SESSION v1 -->';
 const SIX_HOURS = 6 * 60 * 60 * 1000;
-const DEFAULT_REPO = String.raw`C:\Users\uers\Downloads\orgiast-claude-rules`;
-export const HISTORY_CWD = String.raw`c:\Users\uers\Downloads\CLAUDE.md配布`;
-const CWD_RULES = [
-  ['ブース制作', String.raw`C:\Users\uers\Downloads\ブース制作アプリ`],
-  ['aujust', String.raw`C:\Users\uers\Downloads\aujust-sales-automation`],
-];
+export const DEFAULT_REPO = path.resolve(import.meta.dirname, '..');
 
 function firstBlockBounds(md) {
   const first = md.indexOf(MARKER);
@@ -89,18 +84,75 @@ export function filterTodos(todos, today = new Date()) {
 
 function existingOrDefault(candidate, exists) {
   if (exists(candidate)) return candidate;
-  if (exists(DEFAULT_REPO)) return DEFAULT_REPO;
-  return path.resolve(import.meta.dirname, '..');
+  return DEFAULT_REPO;
 }
 
-export function pickCwd(todoText, exists = fs.existsSync) {
+export function loadConfig(homeDir, readFile = fs.readFileSync) {
+  try {
+    const parsed = JSON.parse(readFile(path.join(homeDir, '.claude', 'auto-session.json'), 'utf8'));
+    const repoByKeyword = Object.fromEntries(Object.entries(parsed?.repoByKeyword ?? {}).filter(([key, value]) => key && typeof value === 'string'));
+    return { historyCwd: typeof parsed?.historyCwd === 'string' ? parsed.historyCwd : '', repoByKeyword };
+  } catch {
+    return { historyCwd: '', repoByKeyword: {} };
+  }
+}
+
+export function pickCwd(todoText, exists = fs.existsSync, rules = {}) {
   const text = String(todoText);
-  const candidate = CWD_RULES.find(([keyword]) => text.includes(keyword))?.[1] ?? DEFAULT_REPO;
+  const candidate = Object.entries(rules).find(([keyword]) => text.includes(keyword))?.[1] ?? DEFAULT_REPO;
   return existingOrDefault(candidate, exists);
 }
 
-export function pickHistoryCwd(exists = fs.existsSync, repoCwd) {
-  return exists(HISTORY_CWD) ? HISTORY_CWD : repoCwd;
+function cwdSlug(cwd) {
+  return String(cwd ?? '').replace(/[^A-Za-z0-9]/g, '-');
+}
+
+function defaultListDirs(projectsDir) {
+  return fs.readdirSync(projectsDir, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => path.join(projectsDir, entry.name));
+}
+
+function defaultNewestTranscript(bucket) {
+  return fs.readdirSync(bucket).filter((name) => name.endsWith('.jsonl')).map((name) => {
+    const file = path.join(bucket, name);
+    return { path: file, mtimeMs: fs.statSync(file).mtimeMs };
+  }).sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
+}
+
+function defaultReadCwd(file) {
+  const content = fs.readFileSync(file, 'utf8');
+  const match = content.match(/"cwd"\s*:\s*("(?:\\.|[^"\\])*")/);
+  if (!match) return '';
+  try { return JSON.parse(match[1]); } catch { return ''; }
+}
+
+export function detectHistoryCwd({
+  projectsDir,
+  listDirs = defaultListDirs,
+  newestTranscript = defaultNewestTranscript,
+  readCwd = defaultReadCwd,
+  exists = fs.existsSync,
+}) {
+  let buckets = [];
+  try {
+    buckets = listDirs(projectsDir).map((entry) => {
+      const bucket = typeof entry === 'string' ? entry : entry.path;
+      let transcript;
+      try { transcript = newestTranscript(bucket); } catch { transcript = null; }
+      if (typeof transcript === 'string') transcript = { path: transcript, mtimeMs: 0 };
+      return { bucket, transcript };
+    }).filter(({ transcript }) => transcript?.path).sort((a, b) => (b.transcript.mtimeMs ?? 0) - (a.transcript.mtimeMs ?? 0));
+  } catch { return DEFAULT_REPO; }
+
+  for (const { bucket, transcript } of buckets) {
+    let cwd;
+    try { cwd = readCwd(transcript.path); } catch { continue; }
+    const bucketName = path.basename(bucket);
+    const alternatives = [cwd];
+    if (/^[A-Za-z]:[\\/]/.test(cwd)) alternatives.push(`${cwd[0] === cwd[0].toLowerCase() ? cwd[0].toUpperCase() : cwd[0].toLowerCase()}${cwd.slice(1)}`);
+    const matched = alternatives.find((candidate) => cwdSlug(candidate) === bucketName);
+    if (matched && exists(matched)) return matched;
+  }
+  return DEFAULT_REPO;
 }
 
 export function buildChildArgs(repoCwd, historyCwd) {
@@ -113,7 +165,7 @@ export function buildChildArgs(repoCwd, historyCwd) {
 
 function numericVersion(entry) {
   const normalized = String(entry).replace(/\\/g, '/');
-  const match = normalized.match(/anthropic\.claude-code-([0-9]+(?:\.[0-9]+)*)-win32-x64(?:\/|$)/i);
+  const match = normalized.match(/anthropic\.claude-code-([0-9]+(?:\.[0-9]+)*)(?:-[^/]+)?(?:\/|$)/i);
   return match ? match[1].split('.').map(Number) : null;
 }
 
@@ -125,7 +177,8 @@ function compareVersion(a, b) {
   return 0;
 }
 
-export function resolveClaudeExe(entries) {
+export function resolveClaudeExe(entries = extensionExecutables(), claudeCli = process.env.CLAUDE_CLI) {
+  if (claudeCli) return claudeCli;
   const candidates = entries
     .map((entry) => ({ entry, version: numericVersion(entry) }))
     .filter(({ version }) => version);
@@ -159,7 +212,7 @@ export function buildPrompt(todo, sections, repoCwd, date = new Date()) {
     `## 目的\n${todo}`,
     attached,
     `## 固定の作業規約
-- セッションの作業ディレクトリは履歴を揃えるため CLAUDE.md配布 になっている。実際の作業対象リポジトリは ${repoCwd} であり、CLAUDE.md配布 は git リポジトリではない。git は必ず \`git -C ${repoCwd}\` の形で実行し、codex-do.mjs は \`--cwd ${repoCwd}\` を付ける。裸の \`git status\` / \`git checkout\` は使わない。
+- セッションの作業ディレクトリは履歴を揃えるためのフォルダであり、実際の作業対象リポジトリは ${repoCwd} である。git は必ず \`git -C ${repoCwd}\` の形で実行し、codex-do.mjs は \`--cwd ${repoCwd}\` を付ける。裸の \`git status\` / \`git checkout\` は使わない。
 - 実装本体は \`node tools/codex-do.mjs "<指示>" --cwd ${repoCwd}\` で Codex に委譲する（§1.18）。監督は設計・レビュー・検証だけ。
 - 他セッションと作業ツリーを共有している。\`git add -A\` / \`git commit -a\` / \`git stash\` / \`git checkout -- .\` は禁止。自分が作成・変更したファイルだけをパス指定で \`git add\` する。着手前とコミット直前に \`git status --porcelain\` を撮り、差分が自分の変更だけであることを確認する。
 - ブランチは必ず main から切る。ブランチ名は \`auto/${day}-<短いスラグ>\`。
@@ -191,7 +244,7 @@ export function extractSessionId(stdout) {
 
 export function transcriptPath(cwd, sessionId) {
   if (!sessionId) return '';
-  const slug = String(cwd ?? '').replace(/[^A-Za-z0-9]/g, '-');
+  const slug = cwdSlug(cwd);
   return path.resolve(homeDir(), '.claude', 'projects', slug, `${sessionId}.jsonl`);
 }
 
@@ -217,8 +270,8 @@ function extensionExecutables() {
   const root = path.join(profile, '.vscode', 'extensions');
   try {
     return fs.readdirSync(root, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory() && /^anthropic\.claude-code-.*-win32-x64$/i.test(entry.name))
-      .map((entry) => path.join(root, entry.name, 'resources', 'native-binary', 'claude.exe'))
+      .filter((entry) => entry.isDirectory() && /^anthropic\.claude-code-/i.test(entry.name))
+      .map((entry) => path.join(root, entry.name, 'resources', 'native-binary', process.platform === 'win32' ? 'claude.exe' : 'claude'))
       .filter((entry) => fs.existsSync(entry));
   } catch { return []; }
 }
@@ -291,7 +344,9 @@ function prNumber(output) {
 
 export async function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
-  const claudeDir = path.join(homeDir(), '.claude');
+  const home = homeDir();
+  const claudeDir = path.join(home, '.claude');
+  const config = loadConfig(home);
   const autoDir = path.join(claudeDir, 'auto-session');
   const lockFile = path.join(autoDir, '.lock');
   const disabled = fs.existsSync(path.join(autoDir, 'disabled'));
@@ -302,7 +357,9 @@ export async function main(argv = process.argv.slice(2)) {
   if (!decision.run) { console.log(`auto-session: 起動しません (${decision.reason})`); return 0; }
 
   const nextFile = path.join(claudeDir, 'next-session.md');
+  if (!fs.existsSync(nextFile)) { console.log('auto-session: next-session.md がありません'); return 0; }
   const parsed = parseHandoff(fs.readFileSync(nextFile, 'utf8'));
+  const detectedHistoryCwd = config.historyCwd || detectHistoryCwd({ projectsDir: path.join(claudeDir, 'projects') });
   if (options.list) {
     parsed.todos.forEach((todo, i) => console.log(`${i + 1}. ${todoExclusionReason(todo) ? `除外: ${todoExclusionReason(todo)}` : '採用'} | ${todo}`));
     return 0;
@@ -311,8 +368,8 @@ export async function main(argv = process.argv.slice(2)) {
   if (!selected.length) { console.log('auto-session: 実行可能な TODO はありません'); return 0; }
   if (options.dry) {
     for (const todo of selected) {
-      const repoCwd = pickCwd(todo);
-      const historyCwd = pickHistoryCwd(fs.existsSync, repoCwd);
+      const repoCwd = pickCwd(todo, fs.existsSync, config.repoByKeyword);
+      const historyCwd = fs.existsSync(detectedHistoryCwd) ? detectedHistoryCwd : repoCwd;
       console.log(`TODO: ${todo}\nREPO CWD: ${repoCwd}\nHISTORY CWD: ${historyCwd}\n\n${buildPrompt(todo, parsed.sections, repoCwd)}`);
     }
     return 0;
@@ -325,10 +382,10 @@ export async function main(argv = process.argv.slice(2)) {
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { cleanup(); process.exit(130); });
   const results = [];
   try {
-    const executable = resolveClaudeExe(extensionExecutables());
+    const executable = resolveClaudeExe();
     for (const todo of selected) {
-      const repoCwd = pickCwd(todo);
-      const historyCwd = pickHistoryCwd(fs.existsSync, repoCwd);
+      const repoCwd = pickCwd(todo, fs.existsSync, config.repoByKeyword);
+      const historyCwd = fs.existsSync(detectedHistoryCwd) ? detectedHistoryCwd : repoCwd;
       const result = await runChild(executable, buildPrompt(todo, parsed.sections, repoCwd), repoCwd, historyCwd, options.timeoutMin * 60_000);
       const sessionId = extractSessionId(result.stdout);
       const transcript = transcriptPath(historyCwd, sessionId);

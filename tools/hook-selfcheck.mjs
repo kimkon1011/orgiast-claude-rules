@@ -26,6 +26,64 @@ export const REQUIRED_HOOKS = [
   ['SessionStart', 'onboarding-sync.mjs'],
 ];
 
+export const REQUIRED_TASKS = [
+  ['OrgiastAutoSession', 'tools/register-auto-session.ps1'],
+];
+
+const TASK_SELFCHECK_INTERVAL_MS = 20 * 60 * 60 * 1000;
+
+function normalizedTaskName(name) {
+  return String(name).trim().replace(/^\\+/, '').toLowerCase();
+}
+
+export function missingScheduledTasks(existingNames, required = REQUIRED_TASKS) {
+  const existing = new Set(existingNames.map(normalizedTaskName));
+  return required.filter(([name]) => !existing.has(normalizedTaskName(name)));
+}
+
+export function shouldRunTaskSelfcheck(lastRun, now = Date.now(), intervalMs = TASK_SELFCHECK_INTERVAL_MS) {
+  const lastRunMs = Number(lastRun);
+  return !Number.isFinite(lastRunMs) || lastRunMs > now || now - lastRunMs >= intervalMs;
+}
+
+function scheduledTaskNames(csv) {
+  return String(csv).split(/\r?\n/).map((line) => {
+    const match = line.match(/^"((?:[^"]|"")*)"/);
+    return match ? match[1].replace(/""/g, '"') : '';
+  }).filter(Boolean);
+}
+
+function repairScheduledTasks({ home, repo }) {
+  if (process.platform !== 'win32') return;
+  const stampFile = path.join(home, '.claude', '.task-selfcheck-stamp');
+  let lastRun;
+  try { lastRun = fs.readFileSync(stampFile, 'utf8').trim(); } catch {}
+  if (!shouldRunTaskSelfcheck(lastRun)) return;
+
+  const query = spawnSync('schtasks.exe', ['/Query', '/FO', 'CSV', '/NH'], {
+    encoding: 'utf8',
+    timeout: 15_000,
+    windowsHide: true,
+  });
+  if (query.error || query.status !== 0) return;
+
+  try {
+    fs.mkdirSync(path.dirname(stampFile), { recursive: true });
+    fs.writeFileSync(stampFile, String(Date.now()));
+  } catch {}
+
+  const missing = missingScheduledTasks(scheduledTaskNames(query.stdout));
+  for (const [name, script] of missing) {
+    const result = spawnSync('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy', 'Bypass',
+      '-File', path.join(repo, script),
+    ], { encoding: 'utf8', timeout: 15_000, windowsHide: true });
+    if (!result.error && result.status === 0) console.log(`🚨 必須スケジュールタスク ${name} が欠落していたため自動登録しました`);
+  }
+}
+
 export function missingSkills({ home, repo }) {
   try {
     return fs.readdirSync(path.join(repo, 'skills'), { withFileTypes: true })
@@ -64,5 +122,6 @@ if (isMain) try {
     if (still.length) console.log(`🚨 skill ${still.length} 本が未配備のままです(配布失敗): ${still.join(', ')} — node ${path.join(repo, 'tools', 'onboarding-sync.mjs')} --force を実行してください`);
     else console.log(`🚨 skill が ${skills.length} 本未配備だったため再配布しました: ${deployed.join(', ')}`);
   }
+  repairScheduledTasks({ home, repo });
 } catch {}
 if (isMain) process.exit(0);

@@ -7,7 +7,7 @@ import path from 'node:path';
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hook-selfcheck-'));
 const originalHome = process.env.ORGIAST_HOME;
 process.env.ORGIAST_HOME = path.join(root, 'home');
-const { missingSkills } = await import('./hook-selfcheck.mjs');
+const { missingScheduledTasks, missingSkills, shouldRunTaskSelfcheck } = await import('./hook-selfcheck.mjs');
 
 after(() => {
   if (originalHome === undefined) delete process.env.ORGIAST_HOME;
@@ -55,4 +55,27 @@ test('repo に skills ディレクトリがなくても空配列を返す', () =
   const { repo, home } = fixture('no-skills');
   assert.doesNotThrow(() => missingSkills({ home, repo }));
   assert.deepEqual(missingSkills({ home, repo }), []);
+});
+
+test('登録済みタスクから欠落している必須タスクだけを返す', () => {
+  const required = [
+    ['OrgiastAutoSession', 'tools/register-auto-session.ps1'],
+    ['OrgiastNightlyBatch', 'tools/nightly-batch.ps1'],
+  ];
+  assert.deepEqual(missingScheduledTasks(['OrgiastAutoSession'], required), [required[1]]);
+});
+
+test('必須タスクがすべて登録済みなら空配列を返す', () => {
+  assert.deepEqual(missingScheduledTasks(['OrgiastAutoSession']), []);
+});
+
+test('タスク名は大文字小文字と schtasks の先頭バックスラッシュを区別しない', () => {
+  assert.deepEqual(missingScheduledTasks(['\\ORGIASTAUTOSESSION']), []);
+});
+
+test('タスク自己チェックは最終実行から20時間以内ならスキップする', () => {
+  const now = Date.UTC(2026, 7, 26, 12);
+  assert.equal(shouldRunTaskSelfcheck(now - (20 * 60 * 60 * 1000) + 1, now), false);
+  assert.equal(shouldRunTaskSelfcheck(now - (20 * 60 * 60 * 1000), now), true);
+  assert.equal(shouldRunTaskSelfcheck(undefined, now), true);
 });

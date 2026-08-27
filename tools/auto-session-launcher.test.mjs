@@ -25,6 +25,11 @@ test('専用 tree がない場合は detached worktree を追加する', () => {
 
 test('既存の専用 tree は origin/main へ reset して残骸を clean する', () => {
   const commands = planCommands({ sharedRepo, pinnedTree, treeExists: true });
+  const order = commands.filter(({ cwd }) => cwd === pinnedTree).map(({ args }) => args[0]);
+  // reset がブランチ ref を巻き込まないよう、必ず detach が先に来る。
+  assert.deepEqual(order, ['checkout', 'reset', 'clean']);
+  assert.ok(commands.some((command) => command.cwd === pinnedTree
+    && command.args.join(' ') === 'checkout --detach origin/main --quiet'));
   assert.ok(commands.some((command) => command.cwd === pinnedTree
     && command.args.join(' ') === 'reset --hard origin/main --quiet'));
   assert.ok(commands.some((command) => command.cwd === pinnedTree

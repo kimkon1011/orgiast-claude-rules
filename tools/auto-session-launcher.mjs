@@ -23,6 +23,10 @@ export function planCommands({ sharedRepo, pinnedTree, treeExists }) {
   } else {
     // hard reset と clean は、誰も手で編集しない専用 tree にだけ限定する。
     commands.push(
+      // 前回の夜間セッションが作業ブランチを checkout したまま終わっていることがある。
+      // その状態で reset --hard すると「そのブランチの ref ごと」origin/main へ動いてしまうので、
+      // 先に detach して、reset がどのブランチも巻き込まないようにする。
+      { label: 'detach pinned worktree', cwd: pinnedTree, args: ['checkout', '--detach', 'origin/main', '--quiet'] },
       { label: 'reset pinned worktree', cwd: pinnedTree, args: ['reset', '--hard', 'origin/main', '--quiet'] },
       { label: 'clean pinned worktree', cwd: pinnedTree, args: ['clean', '-fd', '--quiet'] },
     );

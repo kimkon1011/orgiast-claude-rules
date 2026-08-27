@@ -112,6 +112,53 @@ Codex に渡す情報:
 - 参照ファイルパス / 既存コード抜粋（Codex は Claude Code の context を継承しないため必要）
 - 本 ONBOARDING の関連セクション（Codex は CLAUDE.md を自動読み込みしないので、守らせたいルールは呼び出し時に明示）
 
+### 渡し方（2026-08-26 の実害を受けた絶対ルール）
+
+**指示は必ずファイルで渡す。argv で渡さない。TTY を渡さない。上限時間を必ず付ける。**
+
+```
+node ~/orgiast-claude-rules/tools/codex-do.mjs --prompt-file <指示ファイル> --cwd <対象パス> --timeout 1800
+```
+
+直に叩く場合のみ:
+
+```
+wsl -d Ubuntu --cd "<path>" -- timeout 1800 codex exec -s workspace-write - < prompt.md
+```
+
+**何が起きたか（2026-08-26）**: Codex への委譲が **丸1日 hang** し、翌日まで気付けなかった。
+同型の hang が他に2本（1日 / 19時間）過去セッションから生き残っていた＝**前から起きていたのに
+誰も気付いていなかった**。死因は Codex 側ではなく呼び出し方で、3つ同時に起きていた。
+
+1. **argv で渡すとシェルがプロンプトを実行する**。`bash -lc 'codex exec "$(cat prompt.md)"'` の形で
+   渡したところ、プロンプト中のバッククォート（`` `scripts/xxx.mjs` `` `` `booth_customer_aliases` `` 等）が
+   **コマンド置換として実行**された。Codex に実際に届いたのは「新規ファイル　を1つだけ作成する」＝
+   **作るべきファイル名が消えた**指示で、さらに参照用に名前を書いただけの既存スクリプトが**起動**し、
+   その出力 `◇ injected env (30) from .env.local` が**プロンプト本文に混入**していた。
+   ログには `bash: command substitution: syntax error` / `bash: line 1: booth_customer_aliases: command not found` が並ぶ。
+   `"$(cat f)"` は理屈上は再展開されないが、`wsl` → `bash -lc` と層が重なると**実際に展開された**。
+   理屈で安全と判断せず、**シェルを1層も通さない経路**にすること。
+2. **TTY 付きで起動すると stdin 待ちで永久に眠る**。`ps` の `stat` が **`Ssl+`**（`+` = TTY の
+   フォアグラウンド）で、`Reading additional input from stdin...` を出したまま `1-00:57` 経過していた。
+3. **`| tail -N` でパイプするとバッファされ**、完了まで1行も出ない。hang と実行中の区別がつかなくなる。
+   背景実行してログファイルを直接読むこと。
+
+**返ってこない時の診断**:
+
+```
+wsl -d Ubuntu -- bash -lc "ps -eo pid,etime,stat,args | grep '[c]odex'"
+```
+
+`stat` に `+` が付いていて `etime` が長ければ TTY 待ちの hang。古いものは kill してよい。
+
+**機械的強制**: PreToolUse の `pretooluse-codex-invocation` が、argv 渡し・`bash -lc` 経由・
+`| tail`・`--timeout` 無しを検出して警告する（ブロックはしない）。hook の欠落は SessionStart の
+`hook-selfcheck` が自動修復する。
+
+**生成物は必ずレビューする**。今回も Codex は指示した「必須ヘッダから外す」をやらず、定数配列に
+残したままフォールバックを書いて**死にコード**にしていた（「Codex はスコープ外も書き換える／
+半端に直す」と同型）。
+
 Why: Codex は並列コード生成が得意で、大量実装・A/B 比較・OpenAI 系推論モデル特性が必要なタスクに向く。Claude Code のオーケストレーション能力（MCP・hook・memory・徹底自動化ルール群）と組み合わせるのが最適。ただし verify は Claude Code 側の責務（§1.2 の根本診断原則を Codex 出力にも適用）。
 
 適用外（Claude Code が自分で書いてよいケース）:

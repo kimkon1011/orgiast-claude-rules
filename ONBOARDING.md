@@ -238,6 +238,15 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
 
 新規のコード実装タスクはBash tool経由で **Codex CLI** に投げる。Claude Codeは設計・タスク分解・コードレビュー・commit/PR/デプロイのオーケストレーションに徹し、**verifyはClaude Code側の責務**（§1.2の根本診断原則をCodex出力にも適用）。**指揮官(main loop)が大きな実装を自分で手打ちしないこと＝これが最大のコストレバー**（§1.18。Opus/Sonnetいずれで動いていても、実装を挽くと手戻り＋高トークンになる。挽きそうになったらCodexへ回す）。適用外: ごく短い編集、Codex呼び出しオーバーヘッドの方が重い場合、設計試行錯誤中、既存スキルがカバーする定型作業。
 
+**🔴 Codex への指示は必ずファイルで渡す。argv と TTY が委譲を静かに殺す（2026-08-26 実害・全アカウント絶対）**: 委譲が**丸1日(1-00:57) hang** し、翌日まで誰も気付かなかった。同型の hang が他に2本(1日 / 19時間)過去セッションから生き残っていた＝**前から起きていたのに気付けていなかった**。死因は Codex 側ではなく**呼び出し方**で、次の3つが同時に起きていた。①**argv で渡すとシェルがプロンプトを実行する**——`bash -lc 'codex exec "$(cat prompt.md)"'` の形でバッククォート（`` `scripts/xxx.mjs` `` 等）が**コマンド置換として実行**され、Codex に届いた指示から**作るべきファイル名が消え**、参照用に名前を書いただけの既存スクリプトが**起動してその出力が本文に混入**した（ログには `bash: command substitution: syntax error` が並ぶ）。`"$(cat f)"` は理屈上は再展開されないが `wsl`→`bash -lc` と層が重なると**実際に展開された**——理屈で安全と判断せず**シェルを1層も通さない**こと。②**TTY 付き起動は stdin 待ちで永久に眠る**（`Reading additional input from stdin...`、`ps` の `stat` が `Ssl+`）。③**`| tail` でパイプするとバッファされ**、hang と実行中の区別がつかない。
+
+- **既定の経路: `node ~/orgiast-claude-rules/tools/codex-do.mjs --prompt-file <指示ファイル> --cwd <対象パス> --timeout 1800`**。この wrapper は指示を stdin で渡して**必ず閉じ**、stdio を全て pipe にして TTY を渡さない。**argv で指示文を渡す形は使わない**
+- 直に叩くなら `wsl -d Ubuntu --cd "<path>" -- timeout 1800 codex exec -s workspace-write - < prompt.md`。**`bash -lc` を挟まない／リダイレクトで EOF を渡す**の2点が要
+- **`--timeout` を必ず付ける（既定1800秒）**。無限に待って気付かないより、切って原因を見に行くほうが安い
+- **`| tail -N` でパイプしない**。背景実行してログファイルを直接読む
+- 返ってこない時は `wsl -d Ubuntu -- bash -lc "ps -eo pid,etime,stat,args | grep '[c]odex'"` で `etime` と `stat` を見る。`+`（TTY フォアグラウンド）付きで `etime` が長ければ TTY 待ちの hang。古いものは kill してよい
+- この規律は **PreToolUse の `pretooluse-codex-invocation` が機械的に警告**する（argv 渡し・`bash -lc` 経由・`| tail`・`--timeout` 無しを検出）。hook の欠落は SessionStart の `hook-selfcheck` が自動修復する
+
 **Codexに「蓄積(memory)」を渡してから投げる（2026-08-06 Lucas指摘）**: Codexは Claude が育てた MEMORY.md/会話履歴を継承しないため、素で投げると「メインで常用しているエージェントより気が利かない」動作になる。→ Codex呼び出し時は**最初に MEMORY.md ＋ そのタスクに関連する memoryファイル・project CLAUDE.md・関連する過去の失敗パターン・(あれば)これまでのClaudeとの会話要約を、プロンプトに含める/読ませる**（Claudeが関連分だけキュレートして渡すのが基本。全文ダンプでなく該当タスクに効く蓄積を選ぶ）。また **Claude↔Codex を気まぐれに切り替えない**——切替を乱発すると文脈・memoryが片方にしか育たず賢さが乗らない。実装はCodex、指揮・蓄積の保持はClaude、と役割を固定し、渡す時は蓄積を明示的に同梱する。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/token-model-cost-routing.md`
 
 ### 1.17.1 費用対効果ファースト — 追加費用ゼロの経路を先に必ず検討する（絶対ルール）

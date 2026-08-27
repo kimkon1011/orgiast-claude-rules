@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
 
@@ -155,11 +156,12 @@ export function detectHistoryCwd({
   return DEFAULT_REPO;
 }
 
-export function buildChildArgs(repoCwd, historyCwd) {
+export function buildChildArgs(repoCwd, historyCwd, sessionId) {
   // 2026-08-26 実測: acceptEdits はファイル編集だけを自動承認し、Bash は承認待ちで無人実行が最初のコマンドで止まる。
   // --permission-mode を渡さず ~/.claude/settings.json の既定 auto を継承すると、Bash（git -C ... rev-parse）も通る。
   const args = ['-p', '', '--output-format', 'json', '--model', 'opus', '--add-dir', repoCwd];
   if (historyCwd !== repoCwd) args.push('--add-dir', historyCwd);
+  if (sessionId) args.push('--session-id', sessionId);
   return args;
 }
 
@@ -219,6 +221,7 @@ export function buildPrompt(todo, sections, repoCwd, date = new Date()) {
 - \`node --test tools/*.test.mjs\` が緑になるまで直す。
 - PR を作り、CI green を確認してから \`gh pr merge --squash\` でマージする。CI が赤なら直し、3回直して赤のままならマージせず PR を残して理由を書いて終了する。
 - マージ後、変更が実際に効いているかを実物で検証する。検証できていないものを「完了」と書かない。
+- 外部の定期実行(cron/GitHub Actions のスケジュール)の次回発火を待つな。待ちが必要な検証は next-session.md に残して終了しろ。
 - 終了時は ~/.claude/next-session.md の先頭ブロックの該当 TODO 行だけを \`~~…~~ → ✅ <日付> 完了（PR #N）\` に行単位で置換し、ファイル全体を上書きしない。
 - 秘匿値を出力しない。
 - 外部への送信（メール、社外向け Discord、SNS、顧客連絡）は行わない。`,
@@ -248,13 +251,37 @@ export function transcriptPath(cwd, sessionId) {
   return path.resolve(homeDir(), '.claude', 'projects', slug, `${sessionId}.jsonl`);
 }
 
+export function localDate(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function safeStderrTail(stderr) {
+  const redacted = String(stderr ?? '')
+    .replace(/https:\/\/discord(?:app)?\.com\/api\/webhooks\/[^\s]+/gi, '[REDACTED_WEBHOOK]')
+    .replace(/\b(?:sk-ant-|ghp_|github_pat_|Bearer\s+)[A-Za-z0-9._-]+/gi, '[REDACTED_TOKEN]')
+    .replace(/\b([A-Za-z_][A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY))\s*[=:]\s*\S+/gi, '$1=[REDACTED]')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return redacted.slice(-200);
+}
+
+export function notificationLine(result) {
+  const minutes = Math.max(0, Math.round((Date.parse(result.endedAt) - Date.parse(result.startedAt)) / 60_000));
+  const pr = prNumber(result.stdout);
+  const reason = result.status === 'success' ? '' : safeStderrTail(result.stderr);
+  return `- ${result.todo} | ${result.status}${pr ? ` | PR #${pr}` : ''} | ${minutes}分 | transcript: ${result.transcript || '(取得できず)'} | resume: ${result.resumeCommand || '(取得できず)'}${reason ? ` | 理由: ${reason}` : ''}`;
+}
+
 function parseArgs(argv) {
-  const options = { count: 1, timeoutMin: 45, dry: false, list: false };
+  const options = { count: 1, timeoutMin: 150, dry: false, list: false };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === '--dry') options.dry = true;
     else if (argv[i] === '--list') options.list = true;
     else if (argv[i] === '--count') options.count = Math.min(3, Math.max(1, Number(argv[++i]) || 1));
-    else if (argv[i] === '--timeout-min') options.timeoutMin = Math.max(1, Number(argv[++i]) || 45);
+    else if (argv[i] === '--timeout-min') options.timeoutMin = Math.max(1, Number(argv[++i]) || 150);
     else throw new Error(`不明な引数: ${argv[i]}`);
   }
   return options;
@@ -276,10 +303,10 @@ function extensionExecutables() {
   } catch { return []; }
 }
 
-function runChild(executable, prompt, repoCwd, historyCwd, timeoutMs) {
+function runChild(executable, prompt, repoCwd, historyCwd, sessionId, timeoutMs) {
   return new Promise((resolve) => {
     const startedAt = new Date();
-    const child = spawn(executable, buildChildArgs(repoCwd, historyCwd), {
+    const child = spawn(executable, buildChildArgs(repoCwd, historyCwd, sessionId), {
       cwd: historyCwd, env: { ...process.env, CLAUDE_HEADLESS: '1' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
     });
     let stdout = '';
@@ -386,25 +413,29 @@ export async function main(argv = process.argv.slice(2)) {
     for (const todo of selected) {
       const repoCwd = pickCwd(todo, fs.existsSync, config.repoByKeyword);
       const historyCwd = fs.existsSync(detectedHistoryCwd) ? detectedHistoryCwd : repoCwd;
-      const result = await runChild(executable, buildPrompt(todo, parsed.sections, repoCwd), repoCwd, historyCwd, options.timeoutMin * 60_000);
-      const sessionId = extractSessionId(result.stdout);
+      const sessionId = randomUUID();
       const transcript = transcriptPath(historyCwd, sessionId);
-      const resumeCommand = sessionId ? `claude --resume ${sessionId}` : '';
-      const record = { todo, cwd: repoCwd, repoCwd, historyCwd, sessionId, transcript, resumeCommand, ...result };
-      results.push(record);
-      const day = result.startedAt.slice(0, 10);
+      const resumeCommand = `claude --resume ${sessionId}`;
+      const startedAt = new Date();
+      const record = { todo, cwd: repoCwd, repoCwd, historyCwd, sessionId, transcript, resumeCommand, startedAt: startedAt.toISOString(), status: 'running' };
+      const day = localDate(startedAt);
       let n = 1;
       while (fs.existsSync(path.join(autoDir, 'runs', `${day}-${n}.json`))) n += 1;
-      fs.writeFileSync(path.join(autoDir, 'runs', `${day}-${n}.json`), JSON.stringify(record, null, 2));
+      const runFile = path.join(autoDir, 'runs', `${day}-${n}.json`);
+      fs.writeFileSync(runFile, JSON.stringify(record, null, 2));
+      const result = await runChild(executable, buildPrompt(todo, parsed.sections, repoCwd), repoCwd, historyCwd, sessionId, options.timeoutMin * 60_000);
+      const stdoutSessionId = extractSessionId(result.stdout);
+      if (stdoutSessionId && stdoutSessionId !== sessionId) console.warn(`session_id mismatch: generated=${sessionId} stdout=${stdoutSessionId}; generated UUID を使用します`);
+      Object.assign(record, result, { sessionId, transcript, resumeCommand });
+      results.push(record);
+      fs.writeFileSync(runFile, JSON.stringify(record, null, 2));
     }
   } finally { cleanup(); }
 
-  const day = new Date().toISOString().slice(0, 10);
+  const day = localDate();
   const lines = [`自動セッション ${day}`];
   for (const result of results) {
-    const minutes = Math.max(0, Math.round((Date.parse(result.endedAt) - Date.parse(result.startedAt)) / 60_000));
-    const pr = prNumber(result.stdout);
-    lines.push(`- ${result.todo} | ${result.status}${pr ? ` | PR #${pr}` : ''} | ${minutes}分 | transcript: ${result.transcript || '(取得できず)'} | resume: ${result.resumeCommand || '(取得できず)'}`);
+    lines.push(notificationLine(result));
   }
   await notify(findWebhook(claudeDir), lines.join('\n'));
   return results.some((result) => result.status === 'failure') ? 1 : 0;

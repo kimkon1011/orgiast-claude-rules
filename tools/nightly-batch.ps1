@@ -32,6 +32,17 @@ try {
         }
     }
 
+    # LINEトーク履歴エクスポート(inbox の .txt)を先に取り込む。claude-mobile が無いPCでは静かにスキップする。
+    $lineImport = Join-Path $HOME 'Downloads\claude-mobile\scripts\import-line-export.mjs'
+    if (Test-Path -LiteralPath $lineImport -PathType Leaf) {
+        try {
+            & $node.Source $lineImport
+            if ($LASTEXITCODE -ne 0) { Write-Warning ("nightly-batch: import-line-export exited " + $LASTEXITCODE) }
+        } catch {
+            Write-Warning ("nightly-batch: import-line-export: " + $_.Exception.Message)
+        }
+    }
+
     # LINEオープンチャットの取り込み分を選別・要約して作り置きを更新する。
     # batch-queue が空でも実行したいので、下の early exit より前に置くこと。
     $digest = $null

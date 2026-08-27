@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { calculateDelegation, calculateLinesDelegation, classifyBashCommand, collectBashProfile, collectClaudeStats, collectCodexOutput, collectLandedLines, collectLedger, countPatchLines, estimateSpecAuthoringTokens, formatBashProfile } from './usage-stats.mjs';
+import { calculateDelegation, calculateLinesDelegation, classifyBashCommand, collectBashProfile, collectClaudeLines, collectClaudeStats, collectCodexOutput, collectLandedLines, collectLedger, countPatchLines, estimateSpecAuthoringTokens, extractInlineProgram, formatBashProfile } from './usage-stats.mjs';
 
 function fixture() { const home = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-stats-')), dir = path.join(home, '.claude', 'projects', 'p'); fs.mkdirSync(dir, { recursive: true }); return { home, file: path.join(dir, 'session.jsonl') }; }
 test('sessions uses row timestamps and splits main/sub/model', () => { const { home, file } = fixture(), now = Date.parse('2026-08-23T00:00:00Z'); const row = (timestamp, output_tokens, model, isSidechain = false) => JSON.stringify({ timestamp, isSidechain, message: { model, usage: { output_tokens }, content: [{ type: 'text', text: 'abc' }] } }); fs.writeFileSync(file, [row('2026-08-22T00:00:00Z', 100, 'claude-opus'), row('2026-08-21T00:00:00Z', 40, 'claude-sonnet', true), row('2026-07-01T00:00:00Z', 9999, 'claude-opus')].join('\n')); fs.utimesSync(file, new Date(now), new Date(now)); const x = collectClaudeStats({ home, days: 7, now }); assert.deepEqual(x.totals, { outputTokens: 140, main: 100, sub: 40 }); assert.deepEqual(x.byModel, { opus: 100, sonnet: 40 }); });
@@ -63,9 +63,22 @@ test('countPatchLines counts patch changes but not headers or non-apply_patch co
   ].join('\n');
   assert.deepEqual(countPatchLines(text), { added: 2, deleted: 1 });
 });
-test('calculateLinesDelegation handles no landed lines and clips ratios', () => {
-  assert.equal(calculateLinesDelegation({ codexLines: 10, landedLines: 0 }), null);
-  assert.equal(calculateLinesDelegation({ codexLines: 15, landedLines: 10 }), 1);
+test('calculateLinesDelegation uses authored lines and returns null for an empty denominator', () => {
+  assert.equal(calculateLinesDelegation({ codexLines: 0, claudeLines: 0 }), null);
+  assert.equal(calculateLinesDelegation({ codexLines: 15, claudeLines: 10 }), 0.6);
+});
+test('Claude authored lines count editing tools and inline programs without the hook threshold', () => {
+  const { home, file } = fixture(), now = Date.now();
+  const content = [
+    { type: 'tool_use', name: 'Edit', input: { new_string: 'a\nb' } },
+    { type: 'tool_use', name: 'Write', input: { content: 'c\nd\ne' } },
+    { type: 'tool_use', name: 'MultiEdit', input: { edits: [{ new_string: 'f' }, { new_string: 'g\nh' }] } },
+    { type: 'tool_use', name: 'Bash', input: { command: 'python - <<\'PY\'\ni = 1\nprint(i)\nPY' } },
+    { type: 'tool_use', name: 'Bash', input: { command: 'node tools/codex-do.mjs "node -e ignored"' } },
+  ];
+  fs.writeFileSync(file, JSON.stringify({ timestamp: new Date(now).toISOString(), type: 'assistant', message: { role: 'assistant', content } }));
+  assert.equal(collectClaudeLines({ home, now }), 10);
+  assert.equal(extractInlineProgram('node tools/codex-do.mjs "node -e ignored"'), null);
 });
 test('collectLandedLines sums numstat from two commits', { skip: process.env.PATH?.split(path.delimiter).every((dir) => !fs.existsSync(path.join(dir, process.platform === 'win32' ? 'git.exe' : 'git'))) }, (t) => {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'landed-lines-'));

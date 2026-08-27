@@ -87,7 +87,9 @@ const workRepos = repoDirs.length ? repoDirs : [process.cwd()];
 const gitActivity = collectGitActivity({ repos: workRepos, days: DAYS });
 const codexLines = codexUsage.added + codexUsage.deleted;
 const landedLines = gitActivity.added + gitActivity.deleted;
-const linesRatio = calculateLinesDelegation({ codexLines, landedLines });
+const claudeStats = collectClaudeStats({ home: HOME, days: DAYS });
+const claudeLines = claudeStats.authoredLines;
+const linesRatio = calculateLinesDelegation({ codexLines, claudeLines });
 // ---- 3) 安いAI実行者 台帳 ----
 let execOut = 0, execUSD = 0, execByProv = {};
 {
@@ -103,7 +105,6 @@ if (work === 0) { workKind = 'sessions(代替)'; try { const files = []; walk(pa
 
 // ---- 判定 ----
 const totalUSD = claudeUSD + execUSD;
-const claudeStats = collectClaudeStats({ home: HOME, days: DAYS });
 const bashProfile = collectBashProfile({ home: HOME, days: DAYS });
 const specAuthoringOut = estimateSpecAuthoringTokens({ blocks: claudeStats.blocks, profile: bashProfile });
 const delegation = calculateDelegation({ execOut, codexOut, byModel: claudeByModel, specAuthoringOut });
@@ -164,8 +165,8 @@ const cacheLine = `${cacheTarget > 1_000_000 ? (cacheRate < 0.2 ? '🚨 ' : cach
 const qualityLines = recommendations();
 const blockSourceLine = formatBlockSource(claudeStats.blocks);
 const linesDelegationLine = linesRatio === null
-  ? '計測不能(対象リポ未設定 or 変更なし)'
-  : `**${(linesRatio * 100).toFixed(1)}%** (Codexが書いた ±${codexLines.toLocaleString('ja-JP')}行 / 実際に入った ±${landedLines.toLocaleString('ja-JP')}行)`;
+  ? '計測不能(Codex/Claudeともに実装行なし)'
+  : `**${(linesRatio * 100).toFixed(1)}%** (Codex ±${codexLines.toLocaleString('ja-JP')}行 / Claude手打ち ±${claudeLines.toLocaleString('ja-JP')}行)`;
 if (!qualityLines.length) qualityLines.push(fs.existsSync(path.join(HOME, '.claude', 'eval-results.jsonl')) ? '有効な計測なし（再計測が必要）' : 'eval 未実行 (node tools/eval-harness.mjs --all で計測)');
 const md = `<!-- COST-DIRECTIVE-START -->
 ## 📊 Claude Code out ${(claudeOut / 1000).toFixed(0)}k tok / 委譲率 ${(delegRatio * 100).toFixed(1)}% (直近${DAYS}日 / このPC)
@@ -195,7 +196,7 @@ try {
 // --- 1週間観察→改善しなければハードブロックへ昇格(kim 2026-08-16) ---
 const today = new Date().toISOString().slice(0, 10);
 let hist = (prev && Array.isArray(prev.history)) ? prev.history : [];
-if (!hist.length || hist[hist.length - 1].date !== today) hist.push({ date: today, delegRatio, delegRatioWithPrep, linesRatio, claudeOut }); else hist[hist.length - 1] = { date: today, delegRatio, delegRatioWithPrep, linesRatio, claudeOut };
+if (!hist.length || hist[hist.length - 1].date !== today) hist.push({ date: today, delegRatio, delegRatioWithPrep, linesRatio, codexLines, claudeLines, claudeOut }); else hist[hist.length - 1] = { date: today, delegRatio, delegRatioWithPrep, linesRatio, codexLines, claudeLines, claudeOut };
 while (hist.length > 14) hist.shift();
 const obsStart = (prev && prev.obsStart) ? prev.obsStart : today;
 const daysObserved = Math.round((Date.now() - new Date(obsStart + 'T00:00:00Z').getTime()) / 864e5);
@@ -208,7 +209,7 @@ const { mode: enforce, reason: ereason } = decideEnforcement({
 });
 // 判定に使ったのは調整後(委譲の準備込み)の値。名前を delegRatio にすると将来の診断で生の値と取り違えるので両方を明示して書く。
 try { fs.writeFileSync(enforceFile, JSON.stringify({ mode: enforce, reason: ereason, since: obsStart, daysObserved, delegRatio, delegRatioWithPrep, decidedBy: 'delegRatioWithPrep', target: TARGET_DELEG }, null, 2)); } catch { }
-try { fs.writeFileSync(stateF, JSON.stringify({ t: new Date().toISOString(), totalUSD, claudeUSD, claudeOut, codexOut, codexSessions, execUSD, work, delegRatio, delegRatioWithPrep, linesRatio, codexLines, landedLines, obsStart, history: hist })); } catch { }
+try { fs.writeFileSync(stateF, JSON.stringify({ t: new Date().toISOString(), totalUSD, claudeUSD, claudeOut, codexOut, codexSessions, execUSD, work, delegRatio, delegRatioWithPrep, linesRatio, codexLines, claudeLines, landedLines, obsStart, history: hist })); } catch { }
 if (enforce === 'block') console.log(`\n🔒 ハードブロック昇格: ${ereason}（アプリ実装コードの直接編集をpretooluseフックが拒否します）`);
 console.log(md);
 

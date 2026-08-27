@@ -5,6 +5,8 @@ import path from 'node:path';
 import { execSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
+import { extractInlineProgram, isExcludedInlineProgramCommand } from './inline-program.mjs';
+export { extractInlineProgram } from './inline-program.mjs';
 
 const DAY = 864e5;
 // Japanese prose is close to one token per character, while code/JSON is much
@@ -32,15 +34,21 @@ function recentRows(file, cutoff) {
   return rows;
 }
 export function collectClaudeStats({ home = process.env.ORGIAST_HOME || os.homedir(), days = 7, now = Date.now() } = {}) {
-  const cutoff = now - days * DAY, sessions = [], byModel = {}, blocks = { thinking: 0, text: 0, tool_use: 0, unattributed: 0, tools: {} };
+  const cutoff = now - days * DAY, sessions = [], byModel = {}, blocks = { thinking: 0, text: 0, tool_use: 0, unattributed: 0, tools: {} }; let authoredLines = 0;
   for (const file of walkJsonl(path.join(home, '.claude', 'projects'))) {
+    let st; try { st = fs.statSync(file); } catch { continue; }
+    if (st.mtimeMs < cutoff) continue;
     let outputTokens = 0, sideOutput = 0, mainOutput = 0;
     for (const row of recentRows(file, cutoff)) {
+      const rowContent = Array.isArray(row?.message?.content) ? row.message.content : [];
+      if ((!row?.type || row.type === 'assistant') && (!row?.message?.role || row.message.role === 'assistant')) {
+        for (const block of rowContent) authoredLines += authoredLinesFromToolUse(block);
+      }
       const usage = row?.message?.usage; if (!usage) continue;
       const out = Number(usage.output_tokens) || 0, tier = modelTier(row?.message?.model);
       outputTokens += out; byModel[tier] = (byModel[tier] || 0) + out;
       if (row.isSidechain) sideOutput += out; else mainOutput += out;
-      const content = Array.isArray(row?.message?.content) ? row.message.content : [];
+      const content = rowContent;
       const weighted = content.map((b) => {
         const type = b?.type === 'tool_use' ? 'tool_use' : b?.type === 'thinking' ? 'thinking' : 'text';
         const chars = type === 'tool_use' ? JSON.stringify(b?.input ?? '').length : String(b?.text ?? b?.thinking ?? (typeof b === 'string' ? b : '')).length;
@@ -65,14 +73,13 @@ export function collectClaudeStats({ home = process.env.ORGIAST_HOME || os.homed
   }
   sessions.sort((a, b) => b.outputTokens - a.outputTokens);
   const total = sessions.reduce((s, x) => s + x.outputTokens, 0), main = sessions.reduce((s, x) => s + x.mainOutput, 0), sub = sessions.reduce((s, x) => s + x.subOutput, 0);
-  return { sessions, totals: { outputTokens: total, main, sub }, byModel, blocks };
+  return { sessions, totals: { outputTokens: total, main, sub }, byModel, blocks, authoredLines };
 }
 export function classifyBashCommand(command) {
   command = String(command || '');
-  if (/\b(?:llm-ask|codex-do|batch-enqueue|usage-stats|glm-code|deepseek-ask|grok-ask|ollama-ask|manus-research|scratchpad)\b/i.test(command)) return 'delegated';
+  if (isExcludedInlineProgramCommand(command)) return 'delegated';
   const heredoc = /<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1/;
-  const interpreterHeredoc = /\b(?:node|python3?|ruby|perl)\b[^\r\n;&|]*<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1/i;
-  if (/(?:\bnode\s+(?:-e|--eval)\b|\bpython(?:3)?\s+-c\b|\bruby\s+-e\b|\bperl\s+-e\b)/i.test(command) || interpreterHeredoc.test(command)) return 'inline-program';
+  if (extractInlineProgram(command)) return 'inline-program';
   if (heredoc.test(command) || /(?:^|\s)(?:>|>>)(?![>&])\s*[^\s;&|]+/.test(command)) return 'spec-authoring';
   if (/^\s*git(?:\s|$)/i.test(command)) return 'git';
   if (/^\s*(?:cat|head|tail|sed\s+-n|grep|ls|wc|find)(?:\s|$)/i.test(command) && !/(?:^|[^<])>{1,2}/.test(command)) return 'read-only';
@@ -205,8 +212,27 @@ export function collectLandedLines(options = {}) {
   const { added, deleted, repos } = collectGitActivity(options);
   return { added, deleted, repos };
 }
-export function calculateLinesDelegation({ codexLines = 0, landedLines = 0 } = {}) {
-  return landedLines > 0 ? Math.min(1, codexLines / landedLines) : null;
+export function countAuthoredLines(value) {
+  if (Array.isArray(value)) return value.reduce((sum, item) => sum + countAuthoredLines(item), 0);
+  const text = typeof value === 'string' ? value : '';
+  return text.length ? text.split(/\r?\n/).length : 0;
+}
+function authoredLinesFromToolUse(block) {
+  if (block?.type !== 'tool_use') return 0;
+  const input = block.input || {};
+  if (block.name === 'Edit') return countAuthoredLines(input.new_string);
+  if (block.name === 'MultiEdit') return (Array.isArray(input.edits) ? input.edits : []).reduce((sum, edit) => sum + countAuthoredLines(edit?.new_string), 0);
+  if (block.name === 'Write') return countAuthoredLines(input.content);
+  if (block.name === 'NotebookEdit') return countAuthoredLines(input.new_source);
+  if (block.name === 'Bash' || block.name === 'PowerShell') return extractInlineProgram(input.command)?.lines || 0;
+  return 0;
+}
+export function collectClaudeLines({ home = process.env.ORGIAST_HOME || os.homedir(), days = 7, now = Date.now() } = {}) {
+  return collectClaudeStats({ home, days, now }).authoredLines;
+}
+export function calculateLinesDelegation({ codexLines = 0, claudeLines = 0 } = {}) {
+  const total = codexLines + claudeLines;
+  return total > 0 ? codexLines / total : null;
 }
 export function calculateDelegation({ codexOut = 0, execOut = 0, byModel = {}, specAuthoringOut = 0 } = {}) {
   const sonnetHaikuOut = (byModel.sonnet || 0) + (byModel.haiku || 0), supervisorOut = (byModel.opus || 0) + (byModel.fable || 0) + (byModel.default || 0);

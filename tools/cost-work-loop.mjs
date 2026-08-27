@@ -10,12 +10,12 @@
 //   B) Claude出力が前回比↑ なのに 作業量↑でない → 「逃がしたのに利用量増(誤ルーティング/やり直し/呼びすぎ)」🚨
 // 出力: ~/.claude/cost-directive.md (SessionStartで毎回私が読む=修正が行動に反映) + 任意でDiscord。
 //   実行: node cost-work-loop.mjs [--post] [--days 7]
-import fs from 'node:fs'; import path from 'node:path'; import os from 'node:os'; import { execSync, spawnSync } from 'node:child_process';
+import fs from 'node:fs'; import path from 'node:path'; import os from 'node:os'; import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { recommendations } from './eval-harness.mjs';
 import { readEnvValue } from './env-kv.mjs';
 import { isEntry } from './is-entry.mjs';
-import { calculateDelegation, collectBashProfile, collectClaudeStats, collectCodexUsage, estimateSpecAuthoringTokens, formatBlockSource } from './usage-stats.mjs';
+import { calculateDelegation, calculateLinesDelegation, collectBashProfile, collectClaudeStats, collectCodexUsage, collectGitActivity, estimateSpecAuthoringTokens, formatBlockSource } from './usage-stats.mjs';
 export { codexSessionDirs, collectCodexUsage } from './usage-stats.mjs';
 const nativeHome = os.homedir();
 function defaultHome() { return process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || nativeHome; }
@@ -80,7 +80,14 @@ let claudeOut = 0, claudeUSD = 0, claudeByModel = {}, cacheBase = 0, cacheRead =
   }
 }
 // ---- 2) Codex(定額枠) ----
-const { outputTokens: codexOut, sessions: codexSessions } = collectCodexUsage({ home: HOME, days: DAYS });
+const codexUsage = collectCodexUsage({ home: HOME, days: DAYS, includePatchLines: true });
+const { outputTokens: codexOut, sessions: codexSessions } = codexUsage;
+const repoDirs = (process.env.COST_WORK_REPOS || '').split(path.delimiter).filter(Boolean);
+const workRepos = repoDirs.length ? repoDirs : [process.cwd()];
+const gitActivity = collectGitActivity({ repos: workRepos, days: DAYS });
+const codexLines = codexUsage.added + codexUsage.deleted;
+const landedLines = gitActivity.added + gitActivity.deleted;
+const linesRatio = calculateLinesDelegation({ codexLines, landedLines });
 // ---- 3) 安いAI実行者 台帳 ----
 let execOut = 0, execUSD = 0, execByProv = {};
 {
@@ -91,11 +98,7 @@ let execOut = 0, execUSD = 0, execByProv = {};
 }
 // ---- 4) 作業量プロキシ(gitコミット) ----
 let work = 0, workKind = 'commits';
-try {
-  const dirs = (process.env.COST_WORK_REPOS || '').split(path.delimiter).filter(Boolean);
-  const scan = dirs.length ? dirs : [process.cwd()];
-  for (const d of scan) { try { const n = execSync(`git -C "${d}" log --since="${DAYS} days ago" --oneline`, { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); work += n ? n.split('\n').length : 0; } catch { } }
-} catch { }
+work = gitActivity.commits;
 if (work === 0) { workKind = 'sessions(代替)'; try { const files = []; walk(path.join(HOME, '.claude', 'projects'), files); const days = new Set(); for (const f of files) { const st = fs.statSync(f); if (st.mtimeMs >= since) days.add(new Date(st.mtimeMs).toDateString()); } work = days.size; } catch { } }
 
 // ---- 判定 ----
@@ -160,6 +163,9 @@ const cacheTarget = cacheRead + cacheWrite + cacheBase, cacheRate = cacheTarget 
 const cacheLine = `${cacheTarget > 1_000_000 ? (cacheRate < 0.2 ? '🚨 ' : cacheRate < 0.5 ? '⚠️ ' : '✅ ') : ''}プロンプトキャッシュヒット率 ${(cacheRate * 100).toFixed(1)}% (対象 ${(cacheTarget / 1e6).toFixed(1)}M${cacheTarget <= 1_000_000 ? '・判定対象外' : ''})${cacheTarget > 1_000_000 && cacheRate < 0.2 ? ' — system 内に日時/ID などの動的値が入っている・JSON が非ソート・tools 定義が毎回変わる、を疑う' : ''}`;
 const qualityLines = recommendations();
 const blockSourceLine = formatBlockSource(claudeStats.blocks);
+const linesDelegationLine = linesRatio === null
+  ? '計測不能(対象リポ未設定 or 変更なし)'
+  : `**${(linesRatio * 100).toFixed(1)}%** (Codexが書いた ±${codexLines.toLocaleString('ja-JP')}行 / 実際に入った ±${landedLines.toLocaleString('ja-JP')}行)`;
 if (!qualityLines.length) qualityLines.push(fs.existsSync(path.join(HOME, '.claude', 'eval-results.jsonl')) ? '有効な計測なし（再計測が必要）' : 'eval 未実行 (node tools/eval-harness.mjs --all で計測)');
 const md = `<!-- COST-DIRECTIVE-START -->
 ## 📊 Claude Code out ${(claudeOut / 1000).toFixed(0)}k tok / 委譲率 ${(delegRatio * 100).toFixed(1)}% (直近${DAYS}日 / このPC)
@@ -171,6 +177,7 @@ const md = `<!-- COST-DIRECTIVE-START -->
 - 委譲率(Codex/Sonnet/Haiku/安いAIへ逃がせた割合): **${(delegRatio * 100).toFixed(1)}%**
 - 委譲率(委譲の準備込み・強制判定に使う値): **${(delegRatioWithPrep * 100).toFixed(1)}%**
 - うち委譲の準備(仕様書執筆): **${specAuthoringOut.toLocaleString('ja-JP', { maximumFractionDigits: 0 })} tok**
+- 委譲率(行ベース・実装の実体): ${linesDelegationLine} ※参考値・判定にはまだ使わない
 - 内訳 codex ${(codexOut / 1000).toFixed(0)}k / sonnet+haiku ${(delegation.sonnetHaikuOut / 1000).toFixed(0)}k / 安いAI ${(execOut / 1000).toFixed(0)}k / 監督(opus+fable+default) ${(delegation.supervisorOut / 1000).toFixed(0)}k
 - 🔍 監督の出力の出どころ: ${blockSourceLine}
 - ${cacheLine}
@@ -188,7 +195,7 @@ try {
 // --- 1週間観察→改善しなければハードブロックへ昇格(kim 2026-08-16) ---
 const today = new Date().toISOString().slice(0, 10);
 let hist = (prev && Array.isArray(prev.history)) ? prev.history : [];
-if (!hist.length || hist[hist.length - 1].date !== today) hist.push({ date: today, delegRatio, delegRatioWithPrep, claudeOut }); else hist[hist.length - 1] = { date: today, delegRatio, delegRatioWithPrep, claudeOut };
+if (!hist.length || hist[hist.length - 1].date !== today) hist.push({ date: today, delegRatio, delegRatioWithPrep, linesRatio, claudeOut }); else hist[hist.length - 1] = { date: today, delegRatio, delegRatioWithPrep, linesRatio, claudeOut };
 while (hist.length > 14) hist.shift();
 const obsStart = (prev && prev.obsStart) ? prev.obsStart : today;
 const daysObserved = Math.round((Date.now() - new Date(obsStart + 'T00:00:00Z').getTime()) / 864e5);
@@ -201,7 +208,7 @@ const { mode: enforce, reason: ereason } = decideEnforcement({
 });
 // 判定に使ったのは調整後(委譲の準備込み)の値。名前を delegRatio にすると将来の診断で生の値と取り違えるので両方を明示して書く。
 try { fs.writeFileSync(enforceFile, JSON.stringify({ mode: enforce, reason: ereason, since: obsStart, daysObserved, delegRatio, delegRatioWithPrep, decidedBy: 'delegRatioWithPrep', target: TARGET_DELEG }, null, 2)); } catch { }
-try { fs.writeFileSync(stateF, JSON.stringify({ t: new Date().toISOString(), totalUSD, claudeUSD, claudeOut, codexOut, codexSessions, execUSD, work, delegRatio, delegRatioWithPrep, obsStart, history: hist })); } catch { }
+try { fs.writeFileSync(stateF, JSON.stringify({ t: new Date().toISOString(), totalUSD, claudeUSD, claudeOut, codexOut, codexSessions, execUSD, work, delegRatio, delegRatioWithPrep, linesRatio, codexLines, landedLines, obsStart, history: hist })); } catch { }
 if (enforce === 'block') console.log(`\n🔒 ハードブロック昇格: ${ereason}（アプリ実装コードの直接編集をpretooluseフックが拒否します）`);
 console.log(md);
 

@@ -6,7 +6,7 @@ import path from 'node:path';
 
 const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-session-test-'));
 process.env.ORGIAST_HOME = isolatedHome;
-const { DEFAULT_REPO, loadConfig, detectHistoryCwd, parseHandoff, todoExclusionReason, filterTodos, pickCwd, buildChildArgs, buildPrompt, resolveClaudeExe, decideRun, markTodoDone, extractSessionId, transcriptPath } = await import('./auto-session.mjs');
+const { DEFAULT_REPO, loadConfig, detectHistoryCwd, parseHandoff, todoExclusionReason, filterTodos, pickCwd, buildChildArgs, buildPrompt, resolveClaudeExe, decideRun, markTodoDone, extractSessionId, transcriptPath, recoverSessionId, appendClosedSession } = await import('./auto-session.mjs');
 const historyCwd = String.raw`c:\Users\example\Downloads\work`;
 test.after(() => fs.rmSync(isolatedHome, { recursive: true, force: true }));
 
@@ -153,10 +153,67 @@ test('transcriptPath は小文字ドライブのバケットを維持する', ()
 
 test('buildPrompt は実リポジトリで git -C を使うよう指示する', () => {
   const repoCwd = String.raw`C:\Users\example\Downloads\repo`;
-  const prompt = buildPrompt('実装する', {}, repoCwd, new Date('2026-08-26T00:00:00Z'));
+  const prompt = buildPrompt('実装する', {}, repoCwd, '/tmp/run.summary.md', 60, new Date('2026-08-26T00:00:00Z'));
   assert.ok(prompt.includes(`git -C ${repoCwd}`));
   assert.ok(prompt.includes(`--cwd ${repoCwd}`));
   assert.ok(prompt.indexOf('セッションの作業ディレクトリは履歴を揃えるため') < prompt.indexOf('実装本体は'));
+});
+
+test('buildPrompt は逐次サマリと長時間ポーリング禁止を指示する', () => {
+  const summaryFile = String.raw`C:\Users\example\.claude\auto-session\runs\2026-08-27-1.summary.md`;
+  const prompt = buildPrompt('実装する', {}, String.raw`C:\repo`, summaryFile, 60);
+  assert.ok(prompt.includes(summaryFile));
+  assert.ok(prompt.includes('5分を超えるポーリングをしてはいけない'));
+  assert.ok(prompt.includes('開始から 50 分でまとめに入'));
+});
+
+test('recoverSessionId は実行時間窓の外に作られた jsonl を選ばない', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'recover-session-'));
+  const id = '123e4567-e89b-42d3-a456-426614174000';
+  fs.writeFileSync(path.join(dir, `${id}.jsonl`), '{}');
+  const birthtime = fs.statSync(path.join(dir, `${id}.jsonl`)).birthtimeMs;
+  assert.equal(recoverSessionId({
+    dir,
+    startedAt: new Date(birthtime + 120_000).toISOString(),
+    endedAt: new Date(birthtime + 180_000).toISOString(),
+  }), '');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('recoverSessionId は UUID でないファイル名を除外する', () => {
+  const now = Date.now();
+  assert.equal(recoverSessionId({
+    dir: '/projects', startedAt: new Date(now - 1_000), endedAt: new Date(now + 1_000),
+    readdir: () => ['agent-latest.jsonl'], stat: () => ({ birthtimeMs: now }),
+  }), '');
+});
+
+test('recoverSessionId は候補ゼロや読み取り失敗で空文字を返す', () => {
+  assert.equal(recoverSessionId({ dir: '/empty', startedAt: new Date(), endedAt: new Date(), readdir: () => [] }), '');
+  assert.equal(recoverSessionId({ dir: '/missing', startedAt: new Date(), endedAt: new Date(), readdir: () => { throw new Error('ENOENT'); } }), '');
+});
+
+test('appendClosedSession は既存 ID を保持したまま追記し、同じ ID は二重追加しない', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'closed-session-'));
+  const file = path.join(dir, 'closed-sessions.json');
+  const existing = '123e4567-e89b-42d3-a456-426614174000';
+  const added = '987e6543-e21b-42d3-a456-426614174999';
+  fs.writeFileSync(file, JSON.stringify({ ids: [existing] }));
+  assert.equal(appendClosedSession(file, added), true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).ids, [existing, added]);
+  assert.equal(appendClosedSession(file, added), false);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).ids, [existing, added]);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('appendClosedSession は壊れた JSON から安全に新しい一覧を作る', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'closed-session-broken-'));
+  const file = path.join(dir, 'closed-sessions.json');
+  const id = '123e4567-e89b-42d3-a456-426614174000';
+  fs.writeFileSync(file, '{broken');
+  assert.doesNotThrow(() => appendClosedSession(file, id));
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { ids: [id] });
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('decideRun は kill switch・有効ロック・stale lock を判定する', () => {

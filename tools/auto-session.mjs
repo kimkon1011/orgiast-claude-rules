@@ -9,6 +9,13 @@ const MARKER = '<!-- NEXT-SESSION v1 -->';
 const SIX_HOURS = 6 * 60 * 60 * 1000;
 export const DEFAULT_REPO = path.resolve(import.meta.dirname, '..');
 
+export function localDate(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 function firstBlockBounds(md) {
   const first = md.indexOf(MARKER);
   if (first < 0) return { start: 0, end: md.length };
@@ -206,7 +213,7 @@ export function markTodoDone(md, todoText, note) {
 
 export function buildPrompt(todo, sections, repoCwd, summaryFile, timeoutMin = 60, date = new Date()) {
   const attached = ['対象', '完了条件', '触る前に読む memory'].map((name) => sections[name]).filter(Boolean).join('\n\n');
-  const day = date.toISOString().slice(0, 10).replaceAll('-', '');
+  const day = localDate(date).replaceAll('-', '');
   return [
     'あなたは無人で起動された自動セッションです。人間は見ていません。質問せず、完了まで自分で進めてください。',
     `## 目的\n${todo}`,
@@ -379,6 +386,21 @@ function prNumber(output) {
   return last?.match(/\d+/)?.[0] ?? '';
 }
 
+function failureReason(result) {
+  if (!['timeout', 'failure'].includes(result.status) || !String(result.stderr ?? '').trim()) return '';
+  const sanitized = String(result.stderr)
+    .replace(/\r?\n/g, ' ')
+    .replace(/(authorization\s*:\s*bearer\s+)\S+/gi, '$1[REDACTED]')
+    .replace(/((?:token|secret|password|api[_-]?key)\s*[=:]\s*)\S+/gi, '$1[REDACTED]')
+    .replace(/https:\/\/discord(?:app)?\.com\/api\/webhooks\/\S+/gi, '[REDACTED_WEBHOOK]')
+    .trim();
+  return sanitized ? ` | 理由: ${sanitized.slice(-200)}` : '';
+}
+
+export function formatResultLine(result, minutes, pr = '') {
+  return `- ${result.todo} | ${result.status}${pr ? ` | PR #${pr}` : ''} | ${minutes}分 | transcript: ${result.transcript || '(取得できず)'} | resume: ${result.resumeCommand || '(取得できず)'}${failureReason(result)}`;
+}
+
 export async function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
   const home = homeDir();
@@ -424,7 +446,7 @@ export async function main(argv = process.argv.slice(2)) {
     for (const todo of selected) {
       const repoCwd = pickCwd(todo, fs.existsSync, config.repoByKeyword);
       const historyCwd = fs.existsSync(detectedHistoryCwd) ? detectedHistoryCwd : repoCwd;
-      const day = new Date().toISOString().slice(0, 10);
+      const day = localDate();
       let n = 1;
       let runFile;
       let summaryFile;
@@ -459,14 +481,14 @@ export async function main(argv = process.argv.slice(2)) {
     }
   } finally { cleanup(); }
 
-  const day = new Date().toISOString().slice(0, 10);
+  const day = localDate();
   const lines = [`自動セッション ${day}`];
   for (const result of results) {
     const minutes = Math.max(0, Math.round((Date.parse(result.endedAt) - Date.parse(result.startedAt)) / 60_000));
     // timeout で kill されると stdout は丸ごと失われるので、生き残るサマリ側も併せて走査する。
     const pr = prNumber(`${result.stdout}
 ${result.summary ?? ''}`);
-    lines.push(`- ${result.todo} | ${result.status}${pr ? ` | PR #${pr}` : ''} | ${minutes}分 | transcript: ${result.transcript || '(取得できず)'} | resume: ${result.resumeCommand || '(取得できず)'}\n${result.summary ? `summary:\n${result.summary.slice(0, 700)}` : 'summary: (記録なし)'}`);
+    lines.push(`${formatResultLine(result, minutes, pr)}\n${result.summary ? `summary:\n${result.summary.slice(0, 700)}` : 'summary: (記録なし)'}`);
   }
   await notify(findWebhook(claudeDir), lines.join('\n'));
   return results.some((result) => result.status === 'failure') ? 1 : 0;

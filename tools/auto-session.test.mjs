@@ -6,7 +6,7 @@ import path from 'node:path';
 
 const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-session-test-'));
 process.env.ORGIAST_HOME = isolatedHome;
-const { DEFAULT_REPO, loadConfig, detectHistoryCwd, parseHandoff, todoExclusionReason, filterTodos, pickCwd, buildChildArgs, buildPrompt, resolveClaudeExe, decideRun, markTodoDone, extractSessionId, transcriptPath, recoverSessionId, appendClosedSession } = await import('./auto-session.mjs');
+const { DEFAULT_REPO, localDate, loadConfig, detectHistoryCwd, parseHandoff, todoExclusionReason, filterTodos, pickCwd, buildChildArgs, buildPrompt, resolveClaudeExe, decideRun, markTodoDone, extractSessionId, transcriptPath, recoverSessionId, appendClosedSession, formatResultLine } = await import('./auto-session.mjs');
 const historyCwd = String.raw`c:\Users\example\Downloads\work`;
 test.after(() => fs.rmSync(isolatedHome, { recursive: true, force: true }));
 
@@ -157,6 +157,26 @@ test('buildPrompt は実リポジトリで git -C を使うよう指示する', 
   assert.ok(prompt.includes(`git -C ${repoCwd}`));
   assert.ok(prompt.includes(`--cwd ${repoCwd}`));
   assert.ok(prompt.indexOf('セッションの作業ディレクトリは履歴を揃えるため') < prompt.indexOf('実装本体は'));
+});
+
+test('localDate は Date のローカル日付を YYYY-MM-DD で返す', () => {
+  const date = new Date('2026-08-26T18:20:00Z');
+  const expected = [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0'),
+  ].join('-');
+  assert.equal(localDate(date), expected);
+});
+
+test('timeout と failure の行だけ stderr 末尾の理由を付ける', () => {
+  const base = { todo: '実装する', transcript: '', resumeCommand: '' };
+  const timeout = formatResultLine({ ...base, status: 'timeout', stderr: '一行目\nタイムアウトしました' }, 60);
+  const failure = formatResultLine({ ...base, status: 'failure', stderr: 'x'.repeat(210) }, 1);
+  const success = formatResultLine({ ...base, status: 'success', stderr: '表示しない' }, 1);
+  assert.ok(timeout.includes(' | 理由: 一行目 タイムアウトしました'));
+  assert.ok(failure.endsWith(` | 理由: ${'x'.repeat(200)}`));
+  assert.ok(!success.includes(' | 理由:'));
 });
 
 test('buildPrompt は逐次サマリと長時間ポーリング禁止を指示する', () => {

@@ -36,7 +36,14 @@ try {
   const implementationPattern = /実装|作って|作成して|書いて|追加して|直して|修正|治して|リファクタ|refactor|バグ|bug|fix|implement|コード|関数|スクリプト|hook作|ツール作|アプリ作|新規作成|作り直|置き換え|移行|デバッグ|debug|エラーを|動かない|動くように/i;
   const questionPattern = /どう思う|教えて|説明して|とは|なぜ|理由|どっち|比較|調べて|確認して|見て/i;
   const strongImplementation = /実装|作って|書いて|直して|修正|fix|implement/i;
+  let suggestCodexDelegation = null;
   if (!prompt.includes('[委譲判定]') && implementationPattern.test(prompt) && (!questionPattern.test(prompt) || strongImplementation.test(prompt))) {
+    const codexCmd = `node "${path.join(repo, 'tools', 'codex-do.mjs')}" "prompt: user指示\ncontext: 自動委譲"`;
+    suggestCodexDelegation = {
+      action: 'suggest_codex_delegation',
+      command: codexCmd,
+      reason: '実装タスク=Codex に委譲（定額枠）'
+    };
     parts.push(`[実装ルーティング §1.18] 応答冒頭に必ず1行で \`**[委譲判定]** 実装=Codex（理由: …）\` または \`**[委譲判定]** 自分で実施（理由: 数行/設定/設計試行錯誤中）\` と宣言。推奨: \`${codex}\``);
   }
   if (/分類|抽出|仕分け|タグ付け|整形|正規化|一括|まとめて|全部の|それぞれの|各社|各件/.test(prompt)) {
@@ -58,6 +65,10 @@ try {
   }
   // "codex" という語だけでは処理全体をバイパスしない。分類なしの場合も監督責務を注入する。
   parts.push('[監督の担当] 設計・分解・指示・レビュー・verify。実働は用途別の安い/定額経路へ流す(§1.18)。');
-  console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: parts.join('\n') } }));
+  const output = { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: parts.join('\n') } };
+  if (suggestCodexDelegation) {
+    output.hookSpecificOutput.suggestCodexDelegation = suggestCodexDelegation;
+  }
+  console.log(JSON.stringify(output));
 } catch {}
 process.exit(0);

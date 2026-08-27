@@ -24,7 +24,7 @@ import { resolveReporterLabel } from './reporter-label.mjs';
 const DRY_RUN = process.argv.includes('--dry-run');
 // 6時間ガードを明示的に飛ばす(検証・手動実行用)。tool-adoption-check.mjs と同じ挙動。
 const FORCE = process.argv.includes('--force');
-const nativeHome = os.homedir(); const HOME = process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || nativeHome;
+const nativeHome = os.homedir(); const HOME = process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || nativeHome;
 
 // --- 設定読み込み (~/.claude/cost-reporter.env) ---
 function loadEnv() {
@@ -141,7 +141,7 @@ function main() {
 
   if (!webhook && !DRY_RUN) {
     console.error('DISCORD_COST_WEBHOOK が未設定です。~/.claude/cost-reporter.env を作成してください。');
-    process.exit(1);
+    return;
   }
 
   const now = new Date();

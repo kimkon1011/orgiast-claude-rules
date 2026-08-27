@@ -90,6 +90,28 @@ test('register-hooks: BOM付き settings.json でも登録でき、BOM が除去
   const r = run('register-hooks.mjs', undefined, ['--hooks-only'], { ORGIAST_HOME: temp, ORGIAST_REPO: repo }); const data = fs.readFileSync(file);
   assert(r.status === 0 && r.stdout.includes('追加'), r.stdout || r.stderr); assert(!data.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf])), 'BOMが残っている'); JSON.parse(data.toString('utf8'));
 });
+test('register-hooks: 旧PCを .mjs へ移行し、独自設定を保ったまま冪等', () => {
+  const temp = makeTempHome('orgiast-hooks-upgrade-test-'); const claude = path.join(temp, '.claude'); fs.mkdirSync(claude, { recursive: true });
+  const file = path.join(claude, 'settings.json');
+  const legacy = { model: 'opus', hooks: { SessionStart: [
+    { hooks: [{ type: 'command', command: 'pwsh -NoProfile -File "C:\\Users\\old\\.claude\\hooks\\onboarding-sync.ps1"', timeout: 20 }] },
+    { hooks: [{ type: 'command', command: 'echo user-hook' }] },
+  ] } };
+  fs.writeFileSync(file, `${JSON.stringify(legacy, null, 2)}\n`);
+  // 旧 .ps1 しかない状態を onboarding-sync.mjs の欠落として検知できなければ、移行処理は発火しない。
+  const selfcheck = run('hook-selfcheck.mjs', undefined, [], { ORGIAST_HOME: temp, ORGIAST_REPO: repo });
+  assert(selfcheck.status === 0 && selfcheck.stdout.includes('SessionStart/onboarding-sync.mjs') && selfcheck.stdout.includes('欠落していたため自動登録'), selfcheck.stdout || selfcheck.stderr);
+  const first = run('register-hooks.mjs', undefined, ['--hooks-only'], { ORGIAST_HOME: temp, ORGIAST_REPO: repo });
+  assert(first.status === 0, first.stdout || first.stderr);
+  const after = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const sessionCommands = (after.hooks?.SessionStart || []).flatMap((group) => (group.hooks || []).map((hook) => String(hook.command || '')));
+  assert(sessionCommands.filter((command) => command.includes('onboarding-sync.mjs')).length === 1, JSON.stringify(sessionCommands));
+  assert(!sessionCommands.some((command) => command.includes('onboarding-sync.ps1')), JSON.stringify(sessionCommands));
+  assert(sessionCommands.includes('echo user-hook') && after.model === 'opus', 'ユーザー独自フックまたは独自キーが失われた');
+  const stable = fs.readFileSync(file, 'utf8');
+  const second = run('register-hooks.mjs', undefined, ['--hooks-only'], { ORGIAST_HOME: temp, ORGIAST_REPO: repo });
+  assert(second.status === 0 && fs.readFileSync(file, 'utf8') === stable, second.stdout || second.stderr || '2回目で settings.json が変化した');
+});
 test('hook-selfcheck: BOM付き settings.json でクラッシュしない', () => {
   const temp = makeTempHome('orgiast-selfcheck-settings-bom-test-'); const claude = path.join(temp, '.claude'); fs.mkdirSync(claude, { recursive: true });
   fs.writeFileSync(path.join(claude, 'settings.json'), '\uFEFF{"hooks":{}}');
@@ -431,6 +453,50 @@ test('fleet-sheet-report: URL/TOKEN未設定ならstderr 1行でexit 0', () => {
   const { home } = makeFleetReportHome('orgiast-fleet-no-env-', false);
   const r = run('fleet-sheet-report.mjs', undefined, ['--dry-run'], { ORGIAST_HOME: home });
   assert(r.status === 0 && r.stdout === '' && r.stderr.trim().split(/\r?\n/).length === 1 && r.stderr.includes('FLEET_SHEET_URL/TOKEN 未設定'), JSON.stringify(r));
+});
+test('install/verify: 配布する ~/.claude/*.env を両方の総合チェックが網羅', () => {
+  const psInstall = fs.readFileSync(path.join(toolsDir, 'install-orgiast.ps1'), 'utf8');
+  const shInstall = fs.readFileSync(path.join(toolsDir, 'install-orgiast.sh'), 'utf8');
+  const distributed = new Set();
+  const psVars = new Map();
+  for (const match of psInstall.matchAll(/\$(\w+)\s*=\s*Join-Path\s+\$HOMEDIR\s+['"]\.claude[\\/]([^'"\\/]+\.env)['"]/gi)) psVars.set(match[1], match[2]);
+  for (const [variable, name] of psVars) {
+    const write = new RegExp(`(?:Set-Content[^\\r\\n]*\\$${variable}\\b|\\$${variable}[^\\r\\n]*\\|\\s*Set-Content)`, 'i');
+    if (write.test(psInstall)) distributed.add(name);
+  }
+  for (const match of psInstall.matchAll(/Set-Content[^\r\n]*Join-Path\s+\$HOMEDIR\s+['"]\.claude[\\/]([^'"\\/]+\.env)['"]/gi)) distributed.add(match[1]);
+  for (const line of shInstall.split(/\r?\n/)) if (/write_env_if_missing|>\s*"\$CLAUDE_DIR\//.test(line)) {
+    for (const match of line.matchAll(/\$CLAUDE_DIR\/([^"'\s/]+\.env)/g)) distributed.add(match[1]);
+  }
+  assert(distributed.size > 0, 'installer から ~/.claude/*.env を1件も抽出できなかった');
+  const missing = [];
+  for (const [checker, source] of [
+    ['verify-setup.ps1', fs.readFileSync(path.join(toolsDir, 'verify-setup.ps1'), 'utf8')],
+    ['selftest-install.sh', fs.readFileSync(path.join(toolsDir, 'selftest-install.sh'), 'utf8')],
+  ]) for (const name of [...distributed].sort()) if (!source.includes(name)) missing.push(`${name} -> ${checker}`);
+  assert(missing.length === 0, `総合チェックに未掲載: ${missing.join(', ')}`);
+});
+test('外部送受信ツール: 設定不足をstderr 1行以上で観測可能にしてexit 0', () => {
+  // 第3要素 quietStdout: stdout が「呼び出し側が解釈する経路」のツールだけ true。
+  // cost-work-loop は指示書本文を stdout に出すのが正常動作なので、そこを空だと要求すると
+  // 本番側を黙らせる誤修正を誘発する(実際に一度そうなった)。観測点は stderr に統一する。
+  const targets = [
+    ['fleet-sheet-report.mjs', ['--dry-run'], true],
+    ['fleet-triage-report.mjs', [], true],
+    ['claude-cost-reporter.mjs', ['--force'], true],
+    ['cost-work-loop.mjs', ['--post', '--days', '1'], false],
+  ];
+  for (const [script, args, quietStdout] of targets) {
+    if (!fs.existsSync(path.join(toolsDir, script))) continue;
+    const home = makeTempHome(`orgiast-silent-${script.replace(/\W/g, '-')}-`);
+    const r = run(script, undefined, args, {
+      ORGIAST_HOME: home, USERPROFILE: home, FLEET_SHEET_URL: '', FLEET_SHEET_TOKEN: '',
+      DISCORD_COST_WEBHOOK: '', COST_WEBHOOK: '', COST_WORK_REPOS: home,
+    });
+    assert(r.status === 0, `${script}: exit=${r.status}\n${r.stderr}`);
+    if (quietStdout) assert(r.stdout === '', `${script}: stdoutを汚している: ${JSON.stringify(r.stdout.slice(0, 200))}`);
+    assert(r.stderr.trim() !== '' && r.stderr.trim().split(/\r?\n/).length >= 1, `${script}: 設定不足なのにstderrが無い`);
+  }
 });
 test('fleet-sheet-report: stateから必要フィールドを組み立てる', () => {
   const { home, claude } = makeFleetReportHome('orgiast-fleet-state-');

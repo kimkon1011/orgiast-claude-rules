@@ -23,7 +23,7 @@ json_ok "$ORGIAST_USER_HOME/.claude.json"; check ".claude.json 妥当(BOM無/par
 for NAME in onboarding-sync.mjs claude-cost-reporter.mjs tool-adoption-check.mjs cost-loop.mjs; do json_has "$ORGIAST_USER_HOME/.claude/settings.json" "$NAME"; check "SessionStart: $NAME" $?; done
 json_has "$ORGIAST_USER_HOME/.claude/settings.json" pretooluse-delegation-warn.mjs; check "PreToolUse: 委譲警告" $?
 json_has "$ORGIAST_USER_HOME/.claude/settings.json" verify-before-done-detector.mjs; check "Stop: テスト忘れ防止" $?
-for FILE in cost-reporter.env manus.env deepseek.env xai.env openrouter.env groq.env mistral.env; do [ -f "$ORGIAST_USER_HOME/.claude/$FILE" ]; check "env: $FILE" $?; done
+for FILE in cost-reporter.env manus.env deepseek.env xai.env openrouter.env groq.env cerebras.env zai.env mistral.env kimi-api.env ollama.env; do [ -f "$ORGIAST_USER_HOME/.claude/$FILE" ]; check "env: $FILE" $?; done
 if [ -f "$ORGIAST_USER_HOME/.claude/fleet-sheet.env" ]; then check "env: fleet-sheet.env(シート報告)" 0; else notice "env: fleet-sheet.env 未設定(シート報告は無効)"; fi
 grep -q '^GEMINI_API_KEY=.' "$ORGIAST_USER_HOME/.gemini/.env" 2>/dev/null; check "Geminiキー(~/.gemini/.env)" $?
 launchctl list 2>/dev/null | grep -q 'jp.orgiast.nightly-batch'; check "launchd: 夜間バッチ(03:00)" $?

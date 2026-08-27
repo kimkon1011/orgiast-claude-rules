@@ -22,7 +22,7 @@ Chk '共通ルール取込(CLAUDE.md)' ((Test-Path $cm) -and ((Get-Content $cm -
 # 各種キー
 Chk 'コスト報告Webhook' (Test-Path "$H\.claude\cost-reporter.env")
 if (Test-Path "$H\.claude\fleet-sheet.env") { Chk 'フリートシート報告(fleet-sheet.env)' $true } else { Notice 'fleet-sheet.env 未設定(シート報告は無効)' }
-foreach ($k in 'manus.env', 'deepseek.env', 'xai.env', 'openrouter.env', 'groq.env', 'cerebras.env', 'zai.env', 'mistral.env') { Chk ("キー: $k") (Test-Path "$H\.claude\$k") }
+foreach ($k in 'manus.env', 'deepseek.env', 'xai.env', 'openrouter.env', 'groq.env', 'cerebras.env', 'zai.env', 'mistral.env', 'kimi-api.env', 'ollama.env') { Chk ("キー: $k") (Test-Path "$H\.claude\$k") }
 Chk 'Geminiキー(~/.gemini/.env)' ((Test-Path "$H\.gemini\.env") -and ((Get-Content "$H\.gemini\.env" -Raw -ErrorAction SilentlyContinue) -match 'GEMINI_API_KEY=.'))
 # hooks配置
 foreach ($hk in 'onboarding-sync.ps1', 'pretooluse-delegation-warn.ps1', 'verify-before-done-detector.ps1', 'cost-loop.ps1') { Chk ("hook配置: $hk") (Test-Path "$H\.claude\hooks\$hk") }

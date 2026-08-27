@@ -8,14 +8,39 @@ const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
 const forceNative = args.includes('--force-native');
 const cwdIndex = args.indexOf('--cwd');
+const promptFileIndex = args.indexOf('--prompt-file');
+const timeoutIndex = args.indexOf('--timeout');
 const cwd = path.resolve(cwdIndex >= 0 && args[cwdIndex + 1] ? args[cwdIndex + 1] : process.cwd());
 // cwdIndex が -1 のとき cwdIndex+1 が 0 になり、指示文(第1引数)を捨ててしまうので条件付きで除外する。
 const omitted = new Set();
 if (dryRun) omitted.add(args.indexOf('--dry-run'));
 if (forceNative) omitted.add(args.indexOf('--force-native'));
 if (cwdIndex >= 0) { omitted.add(cwdIndex); omitted.add(cwdIndex + 1); }
-const instruction = args.filter((_, index) => !omitted.has(index)).join(' ').trim();
-if (!instruction) { console.error('使い方: node tools/codex-do.mjs "<指示>" [--cwd <path>] [--dry-run]'); process.exit(2); }
+if (promptFileIndex >= 0) { omitted.add(promptFileIndex); omitted.add(promptFileIndex + 1); }
+if (timeoutIndex >= 0) { omitted.add(timeoutIndex); omitted.add(timeoutIndex + 1); }
+const usage = '使い方: node tools/codex-do.mjs "<指示>" [--cwd <path>] [--prompt-file <file>] [--timeout <秒>] [--dry-run]';
+
+// タイムアウト既定30分。無限に待って気付かないより、切って原因を見に行くほうが安い。
+const timeoutSeconds = timeoutIndex >= 0 ? Number(args[timeoutIndex + 1]) : 1800;
+if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
+  console.error(`--timeout は正の秒数で指定してください\n${usage}`);
+  process.exit(2);
+}
+
+// 指示文はファイルから読むのを既定にする。argv で渡すとシェルがバッククォートを
+// コマンド置換として実行し、仕様の一部が消えたプロンプトが Codex に届く(2026-08-26 実害)。
+let instruction = args.filter((_, index) => !omitted.has(index)).join(' ').trim();
+if (promptFileIndex >= 0) {
+  const promptFile = args[promptFileIndex + 1];
+  if (!promptFile) { console.error(`--prompt-file にファイルパスが必要です\n${usage}`); process.exit(2); }
+  try {
+    instruction = fs.readFileSync(promptFile, 'utf8').trim();
+  } catch (error) {
+    console.error(`--prompt-file を読めません: ${promptFile} (${error.code || error.message})`);
+    process.exit(2);
+  }
+}
+if (!instruction) { console.error(usage); process.exit(2); }
 
 const home = process.env.ORGIAST_HOME || os.homedir();
 const slug = cwd.replace(/[^a-z0-9]/gi, '-').toLowerCase();
@@ -65,12 +90,22 @@ if (dryRun) { console.log(prompt); process.exit(0); }
 const started = Date.now();
 function execute(command, commandArgs, options = {}) {
   return new Promise((resolve) => {
-    let outputChars = 0, output = '';
+    let outputChars = 0, output = '', timedOut = false;
+    // stdio を全て pipe にして TTY を渡さない。TTY 付きで起動すると codex が端末入力を
+    // 待ったまま眠り続ける(2026-08-26 に 1日00:57 hang した実害)。
     const child = spawn(command, commandArgs, { ...options, stdio: ['pipe', 'pipe', 'pipe'] });
+    const timer = setTimeout(() => {
+      timedOut = true;
+      console.error(`\n⏱ Codex が ${timeoutSeconds} 秒で応答を終えなかったので停止しました。--timeout で延長できます`);
+      child.kill('SIGKILL');
+    }, timeoutSeconds * 1000);
+    timer.unref?.();
     child.stdout.on('data', (chunk) => { outputChars += chunk.length; output += chunk.toString(); process.stdout.write(chunk); });
     child.stderr.on('data', (chunk) => { process.stderr.write(chunk); });
-    child.on('error', (error) => resolve({ status: null, error, outputChars, output }));
-    child.on('close', (status) => resolve({ status, outputChars, output }));
+    child.on('error', (error) => { clearTimeout(timer); resolve({ status: null, error, outputChars, output }); });
+    child.on('close', (status) => { clearTimeout(timer); resolve({ status: timedOut ? 124 : status, outputChars, output, timedOut }); });
+    // 指示は stdin で渡し、必ず閉じる。閉じないと codex が
+    // "Reading additional input from stdin..." のまま永久に待つ。
     child.stdin.end(prompt);
   });
 }
@@ -102,7 +137,7 @@ const diff = spawnSync('git', ['-C', cwd, 'diff', '--stat'], { encoding: 'utf8' 
 if (diff.stdout) process.stdout.write(diff.stdout);
 // 読み取り専用の質問(説明して/調べて)では空diffが正常なので、指示自体が実装系のときだけ判定する。
 const wantedEdit = /実装|作って|修正|直して|追加して|リファクタ|refactor|fix|implement/i.test(instruction);
-if (wantedEdit && !diff.stdout.trim() && /実装|変更|修正|implemented|updated|modified/i.test(result.output || '')) {
+if (wantedEdit && !result.timedOut && !diff.stdout.trim() && /実装|変更|修正|implemented|updated|modified/i.test(result.output || '')) {
   console.error('🚨 Codex は変更を書き込めていません（read-only サンドボックスの疑い）。WSL 経路で再実行してください');
   result.status = 1;
 }

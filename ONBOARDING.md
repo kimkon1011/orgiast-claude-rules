@@ -312,6 +312,14 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
 
 `discord-mcp-connector`（Vercelデプロイ、kim管理、16 tools）を必ず使う。自前Bot・`discord.py`ローカル実行は禁止。URL・承認password・セットアップ手順・FAQ: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/discord-integration.md`
 
+**ただし「まとめ読み」は `list_messages` を使わず `tools/discord-digest.mjs` を使う（2026-08-27 実測に基づく）**。
+直近30日の transcript を実測したところ、**context へ一括データを貼っている最大の発生源が `list_messages`** だった
+（8回で生 56,667 tok、**以降の全リクエストで再送される分を含めた増幅後 13,123,596 tok = 一括貼り全体の29%**）。
+`node tools/discord-digest.mjs --limit 100 [--channel <id>] [--since 7d] [--grep <正規表現>] [--raw-out <path>]` は
+投稿者別件数・添付/リンク数・直近N件（1通200字上限）だけを返し、**全文は `--raw-out` でファイルへ落として context に入れない**。
+同一の100件で実測 **23,209 tok → 774 tok（96.7%削減）**。
+個別スレッドの精読や返信など「少数を正確に読む」用途は従来どおり MCP を使う。
+
 ### 2.7 Growi マニュアル取り込みは Google Drive 一次ソース
 
 社内Wiki（Growi）はWebFetch禁止（認証必須で確実に失敗）。一次ソース = Drive `社内マニュアル_NotebookLM連携`（13分割Docs）をDrive MCPで読み、鮮度チェック必須（3ヶ月超で古ければuserに確認）。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/growi-fetch-detail.md`

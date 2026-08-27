@@ -15,13 +15,20 @@ const args = process.argv.slice(2);
 function opt(name, def) { const i = args.indexOf(name); return (i >= 0 && args[i + 1]) ? args[i + 1] : def; }
 const provider = (opt('--provider', '') || '').toLowerCase();
 const P = PROVIDERS[provider];
-if (!P) { console.error('使い方: node batch-enqueue.mjs --provider <deepseek|gemini|openrouter|groq|kimi|anthropic> "指示" [--model X] [--system S] [--max N]'); process.exit(2); }
+if (!P) { console.error('使い方: node batch-enqueue.mjs --provider <deepseek|gemini|openrouter|groq|kimi|anthropic> "指示"|--prompt-file <path> [--model X] [--system S] [--max N]'); process.exit(2); }
 const model = opt('--model', P.model);
 const system = opt('--system', '');
 const max = parseInt(opt('--max', '4000'), 10) || 4000;
 const skip = new Set();
-['--provider', '--model', '--system', '--max'].forEach((f) => { const i = args.indexOf(f); if (i >= 0) { skip.add(i); skip.add(i + 1); } });
-const prompt = args.filter((a, i) => !a.startsWith('--') && !skip.has(i)).join(' ').trim();
+['--provider', '--model', '--system', '--max', '--prompt-file'].forEach((f) => { const i = args.indexOf(f); if (i >= 0) { skip.add(i); skip.add(i + 1); } });
+// 長い指示は argv で渡さない。シェルがバッククォートをコマンド置換として実行して
+// 仕様の一部が消えるうえ、Windows は argv 長の上限が短い(Codex 側で実害あり)。
+const promptFile = opt('--prompt-file', '');
+let prompt = args.filter((a, i) => !a.startsWith('--') && !skip.has(i)).join(' ').trim();
+if (promptFile) {
+  try { prompt = fs.readFileSync(promptFile, 'utf-8').trim(); }
+  catch (error) { console.error(`--prompt-file を読めません: ${promptFile} (${error.code || error.message})`); process.exit(2); }
+}
 if (!prompt) { console.error('指示テキストがありません'); process.exit(2); }
 
 const nativeHome = os.homedir(); const home = process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || nativeHome;

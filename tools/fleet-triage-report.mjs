@@ -48,6 +48,29 @@ export function buildDigest(rows, now = new Date()) {
   return { ...result, text: lines.join('\n') };
 }
 
+export async function fetchFleetSheetRows({ sheetUrl, token, fetchImpl = globalThis.fetch }) {
+  if (!sheetUrl || !token) throw new Error('FLEET_SHEET_URL/TOKEN 未設定');
+  const url = new URL(sheetUrl);
+  url.searchParams.set('token', token);
+  let response = null;
+  let lastError = null;
+  for (let attempt = 1; attempt <= 2 && !response; attempt += 1) {
+    try {
+      response = await fetchImpl(url, { signal: AbortSignal.timeout(60_000), redirect: 'follow' });
+    } catch (error) {
+      lastError = error;
+      if (attempt === 2) throw error;
+    }
+  }
+  if (!response) throw lastError || new Error('no response');
+  if (!response.ok) throw new Error(`シート取得が HTTP ${response.status}`);
+  const payload = await response.json();
+  if (!payload?.ok || !Array.isArray(payload.rows)) {
+    throw new Error(`シート応答の形式が不正 (ok=${payload?.ok})`);
+  }
+  return payload.rows;
+}
+
 async function main() {
   const sheetUrl = process.env.FLEET_SHEET_URL;
   const token = process.env.FLEET_SHEET_TOKEN;
@@ -57,27 +80,8 @@ async function main() {
   }
 
   try {
-    const url = new URL(sheetUrl);
-    url.searchParams.set('token', token);
-    // GAS Web App は redirect(script.googleusercontent.com)＋コールドスタートで遅く、
-    // GitHub Runner からは 20 秒では届かなかった(実測 TimeoutError)。余裕を持たせて2回試す。
-    let response = null;
-    let lastError = null;
-    for (let attempt = 1; attempt <= 2 && !response; attempt += 1) {
-      try {
-        response = await fetch(url, { signal: AbortSignal.timeout(60_000), redirect: 'follow' });
-      } catch (error) {
-        lastError = error;
-        if (attempt === 2) throw error;
-      }
-    }
-    if (!response) throw lastError || new Error('no response');
-    if (!response.ok) throw new Error(`シート取得が HTTP ${response.status}`);
-    const payload = await response.json();
-    if (!payload?.ok || !Array.isArray(payload.rows)) {
-      throw new Error(`シート応答の形式が不正 (ok=${payload?.ok})`);
-    }
-    const { text } = buildDigest(payload.rows, new Date());
+    const rows = await fetchFleetSheetRows({ sheetUrl, token });
+    const { text } = buildDigest(rows, new Date());
     const webhook = process.env.DISCORD_COST_WEBHOOK;
     if (process.argv.includes('--dry-run') || !webhook) {
       console.log(text);

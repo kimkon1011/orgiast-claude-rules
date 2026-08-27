@@ -2,6 +2,24 @@ function _fleetJson_(value) {
   return ContentService.createTextOutput(JSON.stringify(value)).setMimeType(ContentService.MimeType.JSON);
 }
 
+// 既存列は動かさず、機械の自己申告列だけを右端へ補う。配列だけで計画できるようにして冪等性を検証可能にする。
+function fleetPlanHeaders(headers) {
+  const planned = headers.slice();
+  FLEET_OPTIONAL_HEADERS_.forEach(function(key) {
+    if (fleetFindHeaderIndex(planned, FLEET_HEADERS_[key]) < 0) planned.push(FLEET_HEADERS_[key]);
+  });
+  return planned;
+}
+
+function _fleetEnsureIdentityHeaders_(sheet) {
+  const lastColumn = sheet.getLastColumn();
+  const headers = lastColumn > 0 ? sheet.getRange(1, 1, 1, lastColumn).getDisplayValues()[0] : [];
+  const planned = fleetPlanHeaders(headers);
+  if (planned.length > headers.length) {
+    sheet.getRange(1, lastColumn + 1, 1, planned.length - headers.length).setValues([planned.slice(headers.length)]);
+  }
+}
+
 function _fleetSheet_() {
   const properties = PropertiesService.getScriptProperties();
   const id = properties.getProperty('SHEET_ID');
@@ -13,7 +31,10 @@ function _fleetSheet_() {
     if (cachedSheet) return cachedSheet;
   }
 
-  const requiredHeaders = Object.keys(FLEET_HEADERS_).map(function(key) { return FLEET_HEADERS_[key]; });
+  // 新列追加前のシートも発見対象にする。発見後、書き込みロック内で不足列を補う。
+  const requiredHeaders = Object.keys(FLEET_HEADERS_).filter(function(key) {
+    return FLEET_OPTIONAL_HEADERS_.indexOf(key) < 0;
+  }).map(function(key) { return FLEET_HEADERS_[key]; });
   const sheets = spreadsheet.getSheets();
   for (let i = 0; i < sheets.length; i += 1) {
     const sheet = sheets[i];
@@ -69,6 +90,8 @@ function upsertFleetStatus(payload) {
   if (!lock.tryLock(20000)) return { ok: false, status: 503, error: 'busy' };
   try {
     const sheet = _fleetSheet_();
+    // 新列の追加失敗は既存の点検書き込みを止めない。fleetPlanUpsert は不足した新列を無視できる。
+    try { _fleetEnsureIdentityHeaders_(sheet); } catch (error) { /* 従来列のみで継続 */ }
     const lastColumn = sheet.getLastColumn();
     const lastRow = sheet.getLastRow();
     const headers = sheet.getRange(1, 1, 1, lastColumn).getDisplayValues()[0];

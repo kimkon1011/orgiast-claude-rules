@@ -7,8 +7,10 @@ import { parseEnvText } from './env-kv.mjs';
 import { scanBrowserExtensions } from './browser-extension-audit.mjs';
 import { machineIdentity } from './machine-identity.mjs';
 import { resolveReporterLabel } from './reporter-label.mjs';
+import { buildSpecPayload, collectHardwareSpec } from './hardware-spec.mjs';
 
 const dryRun = process.argv.includes('--dry-run');
+const includeSpecs = process.argv.includes('--specs');
 const home = process.env.ORGIAST_HOME || os.homedir();
 const repo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -90,6 +92,8 @@ async function main() {
     fable5: fableDetected ? '検出' : fableKnown ? '未検出' : '判定不能',
     disciplineAlert: enforce.mode ? `${enforce.mode}${enforce.reason ? ': ' + enforce.reason : ''}` : '判定不能',
   };
+  if (includeSpecs) payload.spec = buildSpecPayload(collectHardwareSpec(), identity.hostname).spec;
+  if (includeSpecs) payload.kind = 'pc-spec';
   const audit = scanBrowserExtensions();
   const extensionPayload = {
     token: fleetEnv.FLEET_SHEET_TOKEN, kind: 'extensions', label, hostname: os.hostname(), reportedAt: payload.reportedAt,

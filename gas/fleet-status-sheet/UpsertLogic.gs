@@ -1,8 +1,11 @@
 const FLEET_HEADERS_ = {
   staff: 'スタッフ名(記入)', done: '実行済み(記入:済/未)', executed: '実行日(記入)', selfPc: '自己申告PC名(記入)', memo: 'メモ(記入)',
   hostname: '【自動検知】PC名/ホスト名', reportedAt: '最終報告(JST)', claudeUsd: 'Claude概算$', mainModel: '主なモデル', delegRatio: '委譲率(安いAIへ)',
-  cheapAiUse: '安いAI使用', codexLogin: 'Codexログイン', fable5: 'Fable5検出', disciplineAlert: '委譲規律アラート', consistency: '整合性(自己申告↔検知)'
+  cheapAiUse: '安いAI使用', codexLogin: 'Codexログイン', fable5: 'Fable5検出', disciplineAlert: '委譲規律アラート', consistency: '整合性(自己申告↔検知)',
+  osUser: 'OSユーザー名', realHostname: '実ホスト名', gitEmail: 'Gitメール'
 };
+
+const FLEET_OPTIONAL_HEADERS_ = ['osUser', 'realHostname', 'gitEmail'];
 
 // ヘッダ照合は正規化してから行う。全角/半角の括弧・英数、前後の空白、改行の違いで
 // 「タブが見つからない」と誤判定するのを防ぐ(実セルの表記は目視できないため厳密一致に賭けない)。
@@ -22,7 +25,7 @@ function fleetResolveColumns(headers) {
   const columns = {};
   Object.keys(FLEET_HEADERS_).forEach(function(key) {
     const index = fleetFindHeaderIndex(headers, FLEET_HEADERS_[key]);
-    if (index < 0) throw new Error('required header not found: ' + FLEET_HEADERS_[key]);
+    if (index < 0 && FLEET_OPTIONAL_HEADERS_.indexOf(key) < 0) throw new Error('required header not found: ' + FLEET_HEADERS_[key]);
     columns[key] = index;
   });
   return columns;
@@ -53,6 +56,9 @@ function fleetPlanUpsert(headers, rows, payload) {
   values[columns.codexLogin] = payload.codexLogin || '';
   values[columns.fable5] = payload.fable5 || '';
   values[columns.disciplineAlert] = payload.disciplineAlert || '';
+  if (columns.osUser >= 0) values[columns.osUser] = payload.username || '';
+  if (columns.realHostname >= 0) values[columns.realHostname] = payload.hostname || '';
+  if (columns.gitEmail >= 0) values[columns.gitEmail] = payload.gitEmail == null ? '' : payload.gitEmail;
   if (appended) values[columns.consistency] = '未マッピング(要 fleet-pc-map.json 追記)';
   return { action: index >= 0 ? 'updated' : 'appended', rowIndex: index >= 0 ? index : rows.length, columns: columns, values: values };
 }

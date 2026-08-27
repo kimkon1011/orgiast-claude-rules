@@ -1,1 +1,14 @@
-{}
+{
+  "_note": "Discordラベル → シートD列表記 / hostname / 担当者 の対応表。fleet-liveness.mjs が同一PCの二重計上を防ぐために使う。証拠のあるものだけを書く（推測でマージすると他PCのシート行を奪う）。証拠 = ①報告本文の `🖥 hostname=…` ②ラベル名がシートD列と一致 ③申告日と同日のラベル初登場。",
+  "_pending": "kim の判断待ち: シートの `作業用004民泊用` 行に hostname DESKTOP-2D0R4LI（=kim開発機の実hostname）が入っており、一方 `金功勇PC` 行の hostname は空。どちらが現在の開発機の行か決められないため kim-PC は sheetName 未設定のまま。決まり次第 sheetName を入れて重複を解消する。",
+  "kim-PC": {
+    "hostname": "DESKTOP-2D0R4LI",
+    "person": "金功勇",
+    "_evidence": "報告本文の 🖥 hostname=DESKTOP-2D0R4LI / user=uers / git=kim@orgiast.jp（2026-08-27 実測）"
+  },
+  "HP": {
+    "sheetName": "東邦2階HP",
+    "person": "木下真弓",
+    "_evidence": "ラベル名がシートD列『東邦2階HP』と一致。8/17申告と同日にラベル初登場。2026-08-18 を最後に停止（webhook削除と同時期）"
+  }
+}

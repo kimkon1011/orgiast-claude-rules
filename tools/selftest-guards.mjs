@@ -506,7 +506,7 @@ test('fleet-sheet-report: stateから必要フィールドを組み立てる', (
   fs.writeFileSync(path.join(claude, '.cost-reporter-state.json'), JSON.stringify({ topModels: [{ model: 'claude-opus-5', outTok: 10, usd: 1 }], fable5Detected: false }));
   fs.writeFileSync(path.join(claude, 'executor-usage.jsonl'), '{"provider":"kimi"}\n{"provider":"kimi"}\n{"provider":"groq"}\n');
   const r = run('fleet-sheet-report.mjs', undefined, ['--dry-run'], { ORGIAST_HOME: home }); const payload = JSON.parse(r.stdout);
-  for (const key of ['token','label','mappedName','hostname','reportedAt','claudeUsd','mainModel','delegRatio','cheapAiUse','codexLogin','fable5','disciplineAlert']) assert(Object.hasOwn(payload, key), `不足: ${key}`);
+  for (const key of ['token','label','mappedName','hostname','username','gitEmail','reportedAt','claudeUsd','mainModel','delegRatio','cheapAiUse','codexLogin','fable5','disciplineAlert']) assert(Object.hasOwn(payload, key), `不足: ${key}`);
   assert(payload.claudeUsd === 12.3 && payload.mainModel === 'claude-opus-5' && payload.cheapAiUse.includes('kimi:2'), r.stdout);
 });
 test('fleet-sheet-report: 未登録ラベルを推測せずmappedName null', () => {
@@ -533,6 +533,26 @@ test('fleet upsert純関数: 保護列・連投・未マッピング・ヘッダ
   assert(unmapped.action === 'appended' && unmapped.values[c.consistency] === '未マッピング(要 fleet-pc-map.json 追記)', JSON.stringify(unmapped));
   const reordered = [...headers].reverse(); const rc = context.fleetResolveColumns(reordered); const planned = context.fleetPlanUpsert(reordered, [], { ...payload, mappedName: null });
   assert(planned.values[rc.hostname] === 'host' && rc.hostname !== c.hostname, JSON.stringify(planned));
+});
+test('fleet upsert純関数: 自己申告3列を書き、A〜E列とO列を保護してヘッダ並替えに追従', () => {
+  const source = fs.readFileSync(path.join(repo, 'gas', 'fleet-status-sheet', 'UpsertLogic.gs'), 'utf8');
+  const context = {}; vm.createContext(context); vm.runInContext(source.replace(/\bconst\s+/g, 'var '), context);
+  const headers = Object.values(context.FLEET_HEADERS_).reverse(); const c = context.fleetResolveColumns(headers);
+  const row = headers.map(() => '');
+  for (const key of ['staff', 'done', 'executed', 'selfPc', 'memo']) row[c[key]] = `保護-${key}`;
+  row[c.hostname] = 'host'; row[c.consistency] = 'kim手書き';
+  const plan = context.fleetPlanUpsert(headers, [row], { label: 'host', username: 'os-user', hostname: 'real-host', gitEmail: '未設定' });
+  assert(plan.values[c.osUser] === 'os-user' && plan.values[c.realHostname] === 'real-host' && plan.values[c.gitEmail] === '未設定', JSON.stringify(plan));
+  for (const key of ['staff', 'done', 'executed', 'selfPc', 'memo', 'consistency']) assert(!Object.hasOwn(plan.values, String(c[key])), `${key}列を上書き`);
+});
+test('fleet WebApp: 不足する自己申告ヘッダだけを右端に冪等追加', () => {
+  const logic = fs.readFileSync(path.join(repo, 'gas', 'fleet-status-sheet', 'UpsertLogic.gs'), 'utf8');
+  const webapp = fs.readFileSync(path.join(repo, 'gas', 'fleet-status-sheet', 'WebApp.gs'), 'utf8');
+  const context = {}; vm.createContext(context); vm.runInContext((logic + '\n' + webapp).replace(/\bconst\s+/g, 'var '), context);
+  const original = Object.values(context.FLEET_HEADERS_).filter((header) => !['OSユーザー名', '実ホスト名', 'Gitメール'].includes(header));
+  const once = context.fleetPlanHeaders(original); const twice = context.fleetPlanHeaders(once);
+  assert(JSON.stringify(once) === JSON.stringify(twice), JSON.stringify({ once, twice }));
+  assert(JSON.stringify(once.slice(0, original.length)) === JSON.stringify(original) && once.slice(-3).join('|') === 'OSユーザー名|実ホスト名|Gitメール', JSON.stringify(once));
 });
 test('fleet upsert純関数: 紐付いた既存行のO列(kim手書き)は map 未登録でも保持し、空labelで行を奪わない', () => {
   const source = fs.readFileSync(path.join(repo, 'gas', 'fleet-status-sheet', 'UpsertLogic.gs'), 'utf8');

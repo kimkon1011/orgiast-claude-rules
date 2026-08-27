@@ -267,6 +267,10 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
 
 **出品（session-close で自動）**: セッション終了時、汎用的に再利用できる知見は `makimono-publish.mjs --submit` で自動出品する（価格は常に無料・必ず審査キュー pending 止まり）。秘密値・社内固有情報のスキャン該当時は送信せず `~/.claude/makimono-drafts/` へ退避。**社名・顧客名・ID・URL・ローカルパスを一般名へ置換する一般化が絶対条件**。社内データ集計・特定顧客対応は出品しない。
 
+出品後は必ず `makimono-publish.mjs --check --notify` で公開状況と滞留を確認し、pending の報告だけで終わらせない。報告には `出品: <title> → pending (sub_xxx) / 未公開の滞留 M件` と滞留件数を含め、既定3日を超えた審査待ちがあれば kim へ明記する。
+
+**マキモノ本体のリポがあるPCでは `docs/makimono-auto-approve.md` を実行する**（2026-08-27 実測でAPI出品58件に対し本文一致の公開は0件＝審査キューが一度も処理されていない）。自社の信頼済みキーからの出品だけを自動承認し、第三者出品と秘密情報スキャンは緩めない。本体リポが無いPCでは何もしない（判定手順は同ファイル冒頭）。
+
 **APIキーは自動発行**: `~/.claude/makimono.env` に保存されるメールアドレス紐づきの決定的キーで、人間の作業はゼロ。サイト/API: [マキモノ](https://makimono-md.vercel.app) / [llms.txt](https://makimono-md.vercel.app/llms.txt) / [API docs](https://makimono-md.vercel.app/docs/api)
 
 ---

@@ -26,6 +26,26 @@ function Say($m,$c='White'){ Write-Host $m -ForegroundColor $c }
 function OK($m){ Say "  [OK] $m" 'Green' }
 function Warn($m){ Say "  [注意] $m" 'Yellow' }
 function Step($m){ Say "`n■ $m" 'Cyan' }
+function Test-ApiKeyConfigured($keyName) {
+  $found = [System.Environment]::GetEnvironmentVariable($keyName)
+  if ($found) { return $true }
+  $envFiles = @(
+    (Join-Path $env:USERPROFILE '.claude\gemini.env'),
+    (Join-Path $env:USERPROFILE '.claude\kimi-api.env'),
+    (Join-Path $env:USERPROFILE '.claude\openrouter.env'),
+    (Join-Path $env:USERPROFILE '.claude\groq.env'),
+    (Join-Path $env:USERPROFILE '.claude\.env.local')
+  )
+  foreach ($f in $envFiles) {
+    if (Test-Path $f) {
+      $content = Get-Content $f -Raw
+      if ($content -match "(?:export\s+)?$keyName\s*=") {
+        return $true
+      }
+    }
+  }
+  return $false
+}
 
 $HOMEDIR = $env:USERPROFILE
 $REPO    = Join-Path $HOMEDIR 'orgiast-claude-rules'
@@ -271,6 +291,39 @@ try {
   & node (Join-Path $REPO 'tools\register-hooks.mjs') --hooks-only
   if ($LASTEXITCODE -eq 0) { OK "必須コスト規律hookを登録/自己修復" } else { Warn "必須hook登録に失敗(既存hookは維持)" }
 } catch { Warn ("必須hook登録に失敗(既存hookは維持): " + $_.Exception.Message) }
+
+# --- 環境変数の復元 ~/.claude/.env.local から ---
+Step "利用可能なAIプロバイダの確認と環境変数復元"
+$envLocalPath = Join-Path $HOMEDIR '.claude\.env.local'
+if (Test-Path $envLocalPath) {
+  $content = Get-Content $envLocalPath -Raw
+  $lines = @($content -split "`n" | Where-Object { $_.Trim() -and -not $_.Trim().StartsWith('#') })
+  foreach ($line in $lines) {
+    if ($line -match "^export\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*['\"]?([^'`"`r`n]+?)['`"]?$") {
+      $varName = $matches[1]
+      $varValue = $matches[2]
+      Set-Item "env:$varName" $varValue
+      OK "環境変数復元: $varName"
+    }
+    elseif ($line -match "^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*['\"]?([^'`"`r`n]+?)['`"]?$") {
+      $varName = $matches[1]
+      $varValue = $matches[2]
+      Set-Item "env:$varName" $varValue
+      OK "環境変数復元: $varName"
+    }
+  }
+} else {
+  Warn "~/.claude/.env.local が見つかりません(オプション・後で設定できます)"
+}
+
+Say "`n[プロバイダ状況]" 'Cyan'
+if (Test-ApiKeyConfigured 'GROQ_API_KEY') { OK "Groq API key configured — Ready" } else { Warn "Groq API key not found — Configure to enable groq-cli / fast categorization" }
+if (Test-ApiKeyConfigured 'OPENROUTER_API_KEY') { OK "OpenRouter API key configured — Ready (413 models available)" } else { Warn "OpenRouter API key not found — Configure to enable multi-model routing" }
+if (Test-ApiKeyConfigured 'GEMINI_API_KEY') { OK "Gemini API key configured — Ready" } else { Warn "Gemini API key not found — Configure to enable gemini-cli MCP / web search" }
+if (Test-ApiKeyConfigured 'MOONSHOT_API_KEY') { OK "Moonshot(Kimi) API key configured — Ready" } else { Warn "Moonshot(Kimi) API key not found — Configure to enable Kimi K3 routing / mid-scale generation" }
+if (Test-ApiKeyConfigured 'DEEPSEEK_API_KEY') { OK "DeepSeek API key configured — Ready" } else { Warn "DeepSeek API key not found — Configure to enable cheap reasoning delegation" }
+if (Test-ApiKeyConfigured 'XAI_API_KEY') { OK "Grok(xAI) API key configured — Ready" } else { Warn "Grok(xAI) API key not found — Configure to enable Grok routing" }
+if (Test-ApiKeyConfigured 'MANUS_API_KEY') { OK "Manus API key configured — Ready" } else { Warn "Manus API key not found — Configure to enable web research delegation" }
 
 # --- 夜間バッチの定時起動(毎日03:00・off-peak帯にキュー消化=50%off) ---
 Step "夜間バッチの定時起動を登録 (毎日03:00)"

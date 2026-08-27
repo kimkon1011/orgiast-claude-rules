@@ -204,7 +204,7 @@ export function markTodoDone(md, todoText, note) {
   return source.slice(0, start) + changed + source.slice(end);
 }
 
-export function buildPrompt(todo, sections, repoCwd, date = new Date()) {
+export function buildPrompt(todo, sections, repoCwd, summaryFile, timeoutMin = 60, date = new Date()) {
   const attached = ['対象', '完了条件', '触る前に読む memory'].map((name) => sections[name]).filter(Boolean).join('\n\n');
   const day = date.toISOString().slice(0, 10).replaceAll('-', '');
   return [
@@ -219,6 +219,9 @@ export function buildPrompt(todo, sections, repoCwd, date = new Date()) {
 - \`node --test tools/*.test.mjs\` が緑になるまで直す。
 - PR を作り、CI green を確認してから \`gh pr merge --squash\` でマージする。CI が赤なら直し、3回直して赤のままならマージせず PR を残して理由を書いて終了する。
 - マージ後、変更が実際に効いているかを実物で検証する。検証できていないものを「完了」と書かない。
+- 進捗は節目ごと（ブランチ作成 / PR 作成 / CI green / マージ / 検証結果 / 残ったこと）に ${summaryFile} へ追記する。このファイルだけは強制終了されても残るので、「やったことは必ずここに書く」。追記は \`>>\` 相当とし、全文を上書きしない。
+- 外部の定期実行（GitHub Actions の schedule など）の結果を待つ場合、5分を超えるポーリングをしてはいけない。待ちが必要なら ${summaryFile} に「検証は次回の自動セッションで行う」と追記し、~/.claude/next-session.md の残TODO先頭に検証だけの1行を追加して終了する。
+- 開始から ${Math.max(0, timeoutMin - 10)} 分でまとめに入り、サマリ追記と残TODO更新を先に済ませる。
 - 終了時は ~/.claude/next-session.md の先頭ブロックの該当 TODO 行だけを \`~~…~~ → ✅ <日付> 完了（PR #N）\` に行単位で置換し、ファイル全体を上書きしない。
 - 秘匿値を出力しない。
 - 外部への送信（メール、社外向け Discord、SNS、顧客連絡）は行わない。`,
@@ -248,13 +251,47 @@ export function transcriptPath(cwd, sessionId) {
   return path.resolve(homeDir(), '.claude', 'projects', slug, `${sessionId}.jsonl`);
 }
 
+export function recoverSessionId({ dir, startedAt, endedAt, readdir = fs.readdirSync, stat = fs.statSync }) {
+  try {
+    const lower = Date.parse(startedAt) - 60_000;
+    const upper = Date.parse(endedAt) + 60_000;
+    if (!Number.isFinite(lower) || !Number.isFinite(upper)) return '';
+    return readdir(dir)
+      .filter((name) => new RegExp(`^${UUID_PATTERN}\\.jsonl$`).test(name))
+      .map((name) => ({ name, birthtimeMs: stat(path.join(dir, name)).birthtimeMs }))
+      .filter(({ birthtimeMs }) => birthtimeMs >= lower && birthtimeMs <= upper)
+      .sort((a, b) => b.birthtimeMs - a.birthtimeMs)[0]?.name.replace(/\.jsonl$/, '') ?? '';
+  } catch { return ''; }
+}
+
+export function appendClosedSession(file, sessionId, io = {}) {
+  if (!new RegExp(`^${UUID_PATTERN}$`).test(String(sessionId))) return false;
+  const read = io.read ?? fs.readFileSync;
+  const write = io.write ?? fs.writeFileSync;
+  const rename = io.rename ?? fs.renameSync;
+  const temporary = `${file}.tmp${process.pid}`;
+  try {
+    let parsed;
+    // close-session と並行していても古いメモリ上の値で上書きしないよう、書く直前に必ず実ファイルを読む。
+    try { parsed = JSON.parse(read(file, 'utf8')); } catch { parsed = { ids: [] }; }
+    const ids = Array.isArray(parsed?.ids) ? parsed.ids : [];
+    if (ids.includes(sessionId)) return false;
+    write(temporary, JSON.stringify({ ids: [...ids, sessionId] }, null, 2));
+    rename(temporary, file);
+    return true;
+  } catch {
+    try { fs.unlinkSync(temporary); } catch {}
+    return false;
+  }
+}
+
 function parseArgs(argv) {
-  const options = { count: 1, timeoutMin: 45, dry: false, list: false };
+  const options = { count: 1, timeoutMin: 60, dry: false, list: false };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === '--dry') options.dry = true;
     else if (argv[i] === '--list') options.list = true;
     else if (argv[i] === '--count') options.count = Math.min(3, Math.max(1, Number(argv[++i]) || 1));
-    else if (argv[i] === '--timeout-min') options.timeoutMin = Math.max(1, Number(argv[++i]) || 45);
+    else if (argv[i] === '--timeout-min') options.timeoutMin = Math.max(1, Number(argv[++i]) || 60);
     else throw new Error(`不明な引数: ${argv[i]}`);
   }
   return options;
@@ -367,10 +404,11 @@ export async function main(argv = process.argv.slice(2)) {
   const selected = filterTodos(parsed.todos).slice(0, options.count);
   if (!selected.length) { console.log('auto-session: 実行可能な TODO はありません'); return 0; }
   if (options.dry) {
-    for (const todo of selected) {
+    for (const [index, todo] of selected.entries()) {
       const repoCwd = pickCwd(todo, fs.existsSync, config.repoByKeyword);
       const historyCwd = fs.existsSync(detectedHistoryCwd) ? detectedHistoryCwd : repoCwd;
-      console.log(`TODO: ${todo}\nREPO CWD: ${repoCwd}\nHISTORY CWD: ${historyCwd}\n\n${buildPrompt(todo, parsed.sections, repoCwd)}`);
+      const summaryFile = path.join(autoDir, 'runs', `dry-${index + 1}.summary.md`);
+      console.log(`TODO: ${todo}\nREPO CWD: ${repoCwd}\nHISTORY CWD: ${historyCwd}\n\n${buildPrompt(todo, parsed.sections, repoCwd, summaryFile, options.timeoutMin)}`);
     }
     return 0;
   }
@@ -386,16 +424,38 @@ export async function main(argv = process.argv.slice(2)) {
     for (const todo of selected) {
       const repoCwd = pickCwd(todo, fs.existsSync, config.repoByKeyword);
       const historyCwd = fs.existsSync(detectedHistoryCwd) ? detectedHistoryCwd : repoCwd;
-      const result = await runChild(executable, buildPrompt(todo, parsed.sections, repoCwd), repoCwd, historyCwd, options.timeoutMin * 60_000);
-      const sessionId = extractSessionId(result.stdout);
+      const day = new Date().toISOString().slice(0, 10);
+      let n = 1;
+      let runFile;
+      let summaryFile;
+      // サマリ自体を排他的に作ることで、子を起動する前に同日の番号を確実に所有する。
+      while (true) {
+        runFile = path.join(autoDir, 'runs', `${day}-${n}.json`);
+        summaryFile = path.join(autoDir, 'runs', `${day}-${n}.summary.md`);
+        if (fs.existsSync(runFile)) { n += 1; continue; }
+        try { fs.writeFileSync(summaryFile, '', { flag: 'wx' }); break; } catch (error) {
+          if (error?.code !== 'EEXIST') throw error;
+          n += 1;
+        }
+      }
+      const result = await runChild(executable, buildPrompt(todo, parsed.sections, repoCwd, summaryFile, options.timeoutMin), repoCwd, historyCwd, options.timeoutMin * 60_000);
+      const stdoutSessionId = extractSessionId(result.stdout);
+      const transcriptDir = path.dirname(transcriptPath(historyCwd, '00000000-0000-0000-0000-000000000000'));
+      const recoveredSessionId = stdoutSessionId ? '' : recoverSessionId({ dir: transcriptDir, startedAt: result.startedAt, endedAt: result.endedAt });
+      const sessionId = stdoutSessionId || recoveredSessionId;
+      const sessionIdSource = stdoutSessionId ? 'stdout' : recoveredSessionId ? 'recovered' : '';
       const transcript = transcriptPath(historyCwd, sessionId);
       const resumeCommand = sessionId ? `claude --resume ${sessionId}` : '';
-      const record = { todo, cwd: repoCwd, repoCwd, historyCwd, sessionId, transcript, resumeCommand, ...result };
+      let summary = '';
+      try { summary = fs.readFileSync(summaryFile, 'utf8'); } catch {}
+      // 完走したものだけ「閉じた」扱いにする。timeout / failure は purge に退避させると
+      // claude --resume で拾えなくなり、途中まで進んだ作業を追えなくなるため残す。
+      const closedRegistered = result.status === 'success'
+        ? appendClosedSession(path.join(claudeDir, 'closed-sessions.json'), sessionId)
+        : false;
+      const record = { todo, cwd: repoCwd, repoCwd, historyCwd, summaryFile, summary, sessionId, sessionIdSource, transcript, resumeCommand, closedRegistered, ...result };
       results.push(record);
-      const day = result.startedAt.slice(0, 10);
-      let n = 1;
-      while (fs.existsSync(path.join(autoDir, 'runs', `${day}-${n}.json`))) n += 1;
-      fs.writeFileSync(path.join(autoDir, 'runs', `${day}-${n}.json`), JSON.stringify(record, null, 2));
+      fs.writeFileSync(runFile, JSON.stringify(record, null, 2));
     }
   } finally { cleanup(); }
 
@@ -403,8 +463,10 @@ export async function main(argv = process.argv.slice(2)) {
   const lines = [`自動セッション ${day}`];
   for (const result of results) {
     const minutes = Math.max(0, Math.round((Date.parse(result.endedAt) - Date.parse(result.startedAt)) / 60_000));
-    const pr = prNumber(result.stdout);
-    lines.push(`- ${result.todo} | ${result.status}${pr ? ` | PR #${pr}` : ''} | ${minutes}分 | transcript: ${result.transcript || '(取得できず)'} | resume: ${result.resumeCommand || '(取得できず)'}`);
+    // timeout で kill されると stdout は丸ごと失われるので、生き残るサマリ側も併せて走査する。
+    const pr = prNumber(`${result.stdout}
+${result.summary ?? ''}`);
+    lines.push(`- ${result.todo} | ${result.status}${pr ? ` | PR #${pr}` : ''} | ${minutes}分 | transcript: ${result.transcript || '(取得できず)'} | resume: ${result.resumeCommand || '(取得できず)'}\n${result.summary ? `summary:\n${result.summary.slice(0, 700)}` : 'summary: (記録なし)'}`);
   }
   await notify(findWebhook(claudeDir), lines.join('\n'));
   return results.some((result) => result.status === 'failure') ? 1 : 0;

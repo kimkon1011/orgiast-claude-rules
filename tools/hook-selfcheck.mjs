@@ -10,6 +10,7 @@ import { deploySkills } from './onboarding-sync.mjs';
 
 export const REQUIRED_HOOKS = [
   ['PreToolUse', 'pretooluse-bash-delegation.mjs'],
+  ['PreToolUse', 'pretooluse-codex-invocation.mjs'],
   ['PreToolUse', 'model-agent-guard.mjs'],
   ['UserPromptSubmit', 'cost-routing-gate.mjs'],
   ['UserPromptSubmit', 'expensive-session-guard.mjs'],

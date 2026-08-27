@@ -70,7 +70,9 @@ export function classifyFleet({ discord, sheet, pcMap = {}, now = new Date(), er
   const mappedNames = new Map();
   for (const [discordLabel, mapped] of Object.entries(pcMap || {})) {
     if (discordLabel.startsWith('_') || !mapped || typeof mapped !== 'object') continue;
-    const names = [discordLabel, mapped.sheetName, mapped.hostname].filter(Boolean);
+    // aliases は「同じPCを指す別表記のシート行/ラベル」。実データでは1台が
+    // 手入力行と機械書き込み行に分かれて存在するため、1つの sheetName では足りない。
+    const names = [discordLabel, mapped.sheetName, mapped.hostname, ...(Array.isArray(mapped.aliases) ? mapped.aliases : [])].filter(Boolean);
     for (const name of names) mappedNames.set(key(name), names);
   }
   const obtain = (names) => {
@@ -95,7 +97,9 @@ export function classifyFleet({ discord, sheet, pcMap = {}, now = new Date(), er
     group.sheetName ||= clean(mapped.sheetName) || null;
     group.hostname ||= clean(mapped.hostname) || null;
     group.explicitlyMapped = true;
-    if (mapped.sheetName) mappedBySheet.set(key(mapped.sheetName), group);
+    for (const alias of [mapped.sheetName, ...(Array.isArray(mapped.aliases) ? mapped.aliases : [])].filter(Boolean)) {
+      mappedBySheet.set(key(alias), group);
+    }
   }
   for (const row of Array.isArray(sheet) ? sheet : []) {
     const sheetName = clean(row?.pcName || row?.label);

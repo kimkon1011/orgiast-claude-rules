@@ -41,7 +41,8 @@ description: セッションを綺麗に閉じて次に引き継ぐ。「終わ�
   - APIキーは初回に自動発行される（人間の作業はゼロ）。カテゴリ一覧は `makimono-search.mjs --categories`。
   - **exit 2 = 送信禁止スキャンに当たった**。一般化して書き直すか、汎用化できない内容なら出品を諦める。
     退避された下書きは `~/.claude/makimono-drafts/` にある。
-- 出品は必ず審査キュー(pending)に入る。即公開はされない。結果は1行で報告する（例: `マキモノ出品: <title> → pending (sub_xxx)`）。
+- 出品は必ず審査キュー(pending)に入る。**出品して pending と報告して終わることは禁止**。出品後は必ず `node <repo>/tools/makimono-publish.mjs --check --notify` を実行する。
+- 結果は `出品: <title> → pending (sub_xxx) / 未公開の滞留 M件` の形で滞留件数まで報告する。`--stale-days`（既定3日）超過があれば、その件数も kim への報告に1行入れる。
 - 出品しなかった場合は「出品対象なし」と1行書く（黙って飛ばさない）。
 
 ## 5. 残TODO を列挙

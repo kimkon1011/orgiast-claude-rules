@@ -13,6 +13,9 @@
 {"ruleId":"handoff-quality-only","label":"compliant","text":"対象ファイルだけを変更します。","note":"transcript 作業宣言"}
 {"ruleId":"handoff-quality-only","label":"compliant","text":"node --test tools/ を実行済みです。","note":"transcript 検証報告"}
 {"ruleId":"handoff-quality-only","label":"compliant","text":"結果を表にまとめます。","note":"transcript 通常進捗"}
+{"ruleId":"handoff-quality-only","label":"compliant","text":"gate の block理由は `[手渡し判定]` を書いてください。でした。","note":"実応答: gate理由文の引用報告"}
+{"ruleId":"handoff-quality-only","label":"compliant","text":"検出器の誤検知を確認しました。\n> 以下の手順を実行してください。","note":"実応答: 引用行を含む検出器報告"}
+{"ruleId":"handoff-quality-only","label":"compliant","text":"ルール説明です。\n```text\n以下をコピーして貼り付けてください。\n```","note":"実応答: コードブロック内の理由文"}
 {"ruleId":"id-with-name","label":"violation","text":"plannedRows: C0038","note":"transcript PJコード単独参照"}
 {"ruleId":"id-with-name","label":"violation","text":"caseId=C0001","note":"transcript ID単独参照"}
 {"ruleId":"id-with-name","label":"violation","text":"target: C0010","note":"transcript ID単独参照"}

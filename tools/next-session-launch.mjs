@@ -128,6 +128,16 @@ export function resolveMode(state, env = {}) {
   return raw === 'inline' ? 'inline' : 'window';
 }
 
+// 人に JSON を手編集させると enabled 等の既存キーを巻き添えで消す事故が起きる。
+// mode だけを差し替えた新しい状態を返す(不正な値は受け付けない)。
+// enabled は触らない。明示的に止めた設定を、モード変更のついでに勝手に復活させないため。
+export function withMode(state, mode) {
+  const wanted = String(mode || '').toLowerCase();
+  if (wanted !== 'window' && wanted !== 'inline') return null;
+  const base = state && typeof state === 'object' && !Array.isArray(state) ? state : {};
+  return { ...base, mode: wanted };
+}
+
 export function shouldLaunch({ state, now, env, force }) {
   if (state.enabled === false) {
     return { ok: false, reason: '設定で無効化されています (~/.claude/next-session-launch.json の enabled:false)' };
@@ -146,7 +156,7 @@ export function shouldLaunch({ state, now, env, force }) {
 }
 
 function parseArgs(argv) {
-  const result = { dryRun: false, prompt: '/session-start', cwd: '', force: false, wt: undefined, sessionId: '', mode: '' };
+  const result = { dryRun: false, prompt: '/session-start', cwd: '', force: false, wt: undefined, sessionId: '', mode: '', setMode: '', showMode: false, setEnabled: undefined };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--dry-run') result.dryRun = true;
@@ -156,6 +166,10 @@ function parseArgs(argv) {
     else if (arg === '--wt' && argv[index + 1] !== undefined) result.wt = argv[++index];
     else if (arg === '--session' && argv[index + 1] !== undefined) result.sessionId = argv[++index];
     else if (arg === '--mode' && argv[index + 1] !== undefined) result.mode = argv[++index];
+    else if (arg === '--set-mode' && argv[index + 1] !== undefined) result.setMode = argv[++index];
+    else if (arg === '--show-mode') result.showMode = true;
+    else if (arg === '--enable') result.setEnabled = true;
+    else if (arg === '--disable') result.setEnabled = false;
   }
   return result;
 }
@@ -186,6 +200,31 @@ export async function launchNextSession(argv = [], io = {}) {
     };
 
     const state = await readJson(statePath, { enabled: true });
+
+    if (flags.showMode) {
+      log(`mode=${resolveMode(state, env)} / enabled=${state?.enabled !== false}`);
+      return 0;
+    }
+    if (flags.setMode || flags.setEnabled !== undefined) {
+      let next = state && typeof state === 'object' && !Array.isArray(state) ? { ...state } : {};
+      if (flags.setMode) {
+        next = withMode(next, flags.setMode);
+        if (!next) {
+          log(`[next-session] mode は window か inline です (受け取った値: ${flags.setMode})`);
+          return 2;
+        }
+      }
+      if (flags.setEnabled !== undefined) next.enabled = flags.setEnabled;
+      const tmp = `${statePath}.tmp-${process.pid}`;
+      await writeFile(tmp, `${JSON.stringify(next, null, 2)}
+`, 'utf8');
+      await rename(tmp, statePath);
+      log(`[next-session] mode=${resolveMode(next, env)} / enabled=${next.enabled !== false} に設定しました (${statePath})`);
+      // モードだけ変えても enabled:false のままだと「設定したのに動かない」と誤診される。
+      if (next.enabled === false) log('[next-session] ただし enabled:false なので停止中です。動かすには --enable を実行してください。');
+      return 0;
+    }
+
     const decision = shouldLaunch({ state, now: Date.now(), env, force: flags.force });
     if (!decision.ok) {
       log(`[next-session] スキップ: ${decision.reason}`);

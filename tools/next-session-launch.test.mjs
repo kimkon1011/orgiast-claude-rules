@@ -6,6 +6,7 @@ import os from 'node:os';
 import {
   launchNextSession,
   resolveMode,
+  withMode,
   parseHandoffCwd,
   pickNewestExtensionBinary,
   pickNewestVersionDir,
@@ -202,4 +203,42 @@ test('inline モードはウィンドウを開かず予約だけ置く', async (
   assert.equal(armed.sessionId, 'closing-sid', '閉じた本人のIDを残さないと同じセッションへ注入し返す');
   assert.equal(armed.cwd, 'D:\work');
   assert.match(logs.join('\n'), /予約しました\(inline\)/);
+});
+
+test('withMode は既存キーを残し、不正な値を拒む', () => {
+  // enabled や lastLaunchAt を巻き添えで消さないこと。
+  const state = { enabled: false, lastLaunchAt: '2026-08-28T00:00:00.000Z', lastCwd: 'D:\a' };
+  const next = withMode(state, 'inline');
+  assert.equal(next.mode, 'inline');
+  assert.equal(next.lastLaunchAt, state.lastLaunchAt);
+  assert.equal(next.lastCwd, 'D:\a');
+  // 明示的に止めた設定を、モード変更のついでに勝手に復活させない。
+  assert.equal(next.enabled, false);
+  assert.equal(withMode({}, 'WINDOW').mode, 'window');
+  assert.equal(withMode({}, 'inlin'), null);
+  assert.equal(withMode({}, ''), null);
+  assert.equal(withMode(null, 'inline').mode, 'inline');
+});
+
+test('--set-mode は設定ファイルの mode だけを書き換え、--show-mode で読み出せる', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'nsl-setmode-'));
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  const file = path.join(home, '.claude', 'next-session-launch.json');
+  fs.writeFileSync(file, JSON.stringify({ enabled: true, lastCwd: 'D:\keep' }), 'utf8');
+
+  let spawned = 0;
+  const logs = [];
+  const io = { env: {}, homedir: () => home, spawn: () => { spawned += 1; return { once: () => {}, unref: () => {} }; }, log: (l) => logs.push(l) };
+
+  assert.equal(await launchNextSession(['--set-mode', 'inline'], io), 0);
+  assert.equal(spawned, 0, 'mode の設定でウィンドウを開かない');
+  const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(saved.mode, 'inline');
+  assert.equal(saved.lastCwd, 'D:\keep', '既存キーを消さない');
+
+  assert.equal(await launchNextSession(['--set-mode', 'まちがい'], io), 2, '不正な値は終了コード2で拒む');
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).mode, 'inline', '拒んだときは書き換えない');
+
+  await launchNextSession(['--show-mode'], io);
+  assert.match(logs.join('\n'), /mode=inline/);
 });

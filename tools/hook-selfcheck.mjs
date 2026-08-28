@@ -27,6 +27,7 @@ export const REQUIRED_HOOKS = [
   // .mjs へ移行させる(.ps1 は 'onboarding-sync.mjs' を含まないので includes 判定で欠落になる)。
   ['SessionStart', 'onboarding-sync.mjs'],
   ['Stop', 'doc-link-drive-guard.mjs'],
+  ['Stop', 'handoff-info-guard.mjs'],
 ];
 
 export const REQUIRED_TASKS = [

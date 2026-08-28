@@ -130,17 +130,24 @@ export async function runIntake({ args = [], home = process.env.ORGIAST_HOME || 
     let ledgerText = '';
     try { ledgerText = io.read(ledgerFile); } catch {}
     const ledger = readLedger(ledgerText);
-    const candidates = items.filter((item) => item?.key && !ledger.items[item.key]?.injectedAt);
     const nextFile = path.join(claudeDir, 'next-session.md');
     let before = '';
     try { before = io.read(nextFile); } catch {}
+    const validItems = items.filter((item) => item?.key);
+    const existingInText = validItems.filter((item) => before.includes(`[FB:${item.key}]`));
+    const missingFromText = validItems.filter((item) => !before.includes(`[FB:${item.key}]`));
+    const reinjectedItems = missingFromText.filter((item) => ledger.items[item.key]?.injectedAt);
+    const reinjectedKeys = new Set(reinjectedItems.map((item) => item.key));
+    const candidates = missingFromText;
     const result = injectFeedbackTodos(before, candidates, data.sheetUrl || '');
-    const already = items.length - candidates.length;
+    const reinjected = result.injected.filter((item) => reinjectedKeys.has(item.key)).length;
+    const newlyInjected = result.injected.length - reinjected;
+    const already = existingInText.length;
     const duplicateInText = candidates.length - result.injected.length;
     const dryRun = args.includes('--dry-run');
     if (dryRun) {
-      const output = { open: items.length, new: candidates.length, injected: result.injected.length, skippedAlreadyInjected: already, skippedExistingText: duplicateInText, preview: result.text === before ? '' : result.text };
-      io.stdout(json ? JSON.stringify(output) : `booth-feedback: open=${items.length} new=${candidates.length} would-inject=${result.injected.length}\n${output.preview}`);
+      const output = { open: items.length, new: newlyInjected, reinjected, injected: result.injected.length, skippedAlreadyInjected: already, skippedExistingText: duplicateInText, preview: result.text === before ? '' : result.text };
+      io.stdout(json ? JSON.stringify(output) : `booth-feedback: open=${items.length} new=${newlyInjected} reinjected=${reinjected} would-inject=${result.injected.length}\n${output.preview}`);
       return 0;
     }
     if (result.text !== before) io.write(nextFile, result.text);
@@ -149,10 +156,17 @@ export async function runIntake({ args = [], home = process.env.ORGIAST_HOME || 
       const previous = ledger.items[item.key] ?? {};
       ledger.items[item.key] = { ...previous, firstSeen: previous.firstSeen || now, title: item.title || previous.title || '', lastStatus: item.status || previous.lastStatus || '' };
     }
-    for (const item of candidates) ledger.items[item.key].injectedAt ||= now;
+    for (const item of result.injected) {
+      if (reinjectedKeys.has(item.key)) {
+        ledger.items[item.key].injectedAt = now;
+        ledger.items[item.key].reinjectedCount = (Number(ledger.items[item.key].reinjectedCount) || 0) + 1;
+      } else {
+        ledger.items[item.key].injectedAt ||= now;
+      }
+    }
     io.write(ledgerFile, `${JSON.stringify(ledger, null, 2)}\n`);
-    const summary = { open: items.length, new: candidates.length, injected: result.injected.length, skippedAlreadyInjected: already, skippedExistingText: duplicateInText };
-    io.stdout(json ? JSON.stringify(summary) : `booth-feedback: open=${items.length} new=${candidates.length} injected=${result.injected.length} (skipped: already-injected ${already + duplicateInText})`);
+    const summary = { open: items.length, new: newlyInjected, reinjected, injected: result.injected.length, skippedAlreadyInjected: already, skippedExistingText: duplicateInText };
+    io.stdout(json ? JSON.stringify(summary) : `booth-feedback: open=${items.length} new=${newlyInjected} reinjected=${reinjected} injected=${result.injected.length} (skipped: already-injected ${already + duplicateInText})`);
     return 0;
   } catch (error) {
     io.stderr(`booth-feedback: ${isResolve ? '更新' : '取得'}に失敗 (${oneLine(error?.message || error, 240)})`);

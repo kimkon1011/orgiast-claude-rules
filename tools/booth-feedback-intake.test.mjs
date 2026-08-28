@@ -76,6 +76,33 @@ test('台帳を消しても本文のキーで冪等になる', async () => {
   assert.equal((once.match(/\[FB:fb-123\]/g) || []).length, 1);
 });
 
+test('台帳に injectedAt があっても本文から消えた open 項目は再注入し、履歴を更新する', async () => {
+  const ledger = JSON.stringify({
+    version: 1,
+    items: { 'fb-123': { injectedAt: '2026-08-27T03:00:00.000Z' } },
+  });
+  const h = harness({ next: original, ledger });
+  assert.equal(await runIntake({ home: HOME, io: h.io, fetchImpl: h.fetchImpl }), 0);
+  assert.equal((h.files.get(HOME_FILE('next-session.md')).match(/\[FB:fb-123\]/g) || []).length, 1);
+  const saved = JSON.parse(h.files.get(HOME_FILE('booth-feedback-ledger.json')));
+  assert.equal(saved.items['fb-123'].injectedAt, '2026-08-28T03:00:00.000Z');
+  assert.equal(saved.items['fb-123'].reinjectedCount, 1);
+  assert.match(h.stdout[0], /new=0 reinjected=1 injected=1/);
+});
+
+test('本文にキーがあれば台帳の injectedAt の有無にかかわらず再注入数は増えない', async () => {
+  const once = injectFeedbackTodos(original, [item], api.sheetUrl).text;
+  for (const ledger of [undefined, JSON.stringify({ version: 1, items: { 'fb-123': { injectedAt: '2026-08-27T03:00:00.000Z', reinjectedCount: 2 } } })]) {
+    const h = harness({ next: once, ledger });
+    assert.equal(await runIntake({ args: ['--json'], home: HOME, io: h.io, fetchImpl: h.fetchImpl }), 0);
+    const summary = JSON.parse(h.stdout[0]);
+    assert.equal(summary.reinjected, 0);
+    assert.equal(h.files.get(HOME_FILE('next-session.md')), once);
+    const saved = JSON.parse(h.files.get(HOME_FILE('booth-feedback-ledger.json')));
+    assert.equal(saved.items['fb-123'].reinjectedCount ?? 0, ledger === undefined ? 0 : 2);
+  }
+});
+
 test('残TODOが無ければ先頭ブロック末尾にセクションを作る', () => {
   const md = `前\n<!-- NEXT-SESSION v1 -->\n## 対象\nrepo\n<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. 古い\n`;
   const result = injectFeedbackTodos(md, [item], api.sheetUrl).text;
@@ -107,6 +134,15 @@ test('--dry-run は next-session と台帳を更新しない', async () => {
   assert.equal(h.writes.length, 0);
   assert.match(h.stdout[0], /would-inject=1/);
   assert.match(h.stdout[0], /\[FB:fb-123\]/);
+});
+
+test('--dry-run でも本文から消えた項目を再注入対象として数える', async () => {
+  const ledger = JSON.stringify({ version: 1, items: { 'fb-123': { injectedAt: '2026-08-27T03:00:00.000Z' } } });
+  const h = harness({ next: original, ledger });
+  assert.equal(await runIntake({ args: ['--dry-run', '--json'], home: HOME, io: h.io, fetchImpl: h.fetchImpl }), 0);
+  assert.equal(h.writes.length, 0);
+  assert.equal(h.files.get(HOME_FILE('next-session.md')), original);
+  assert.equal(JSON.parse(h.stdout[0]).reinjected, 1);
 });
 
 test('--resolve 成功時だけ台帳に resolvedAt を記録する', async () => {

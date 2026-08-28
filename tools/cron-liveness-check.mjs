@@ -61,6 +61,11 @@ function main() {
   const results = evaluate(entries, lastSuccessByKey, nowMs);
   const home = process.env.ORGIAST_HOME || os.homedir();
   const outputDir = path.join(home, '.claude');
+  const complianceState = path.join(outputDir, 'rule-compliance-state.json');
+  let complianceLastRun = null;
+  try { complianceLastRun = JSON.parse(fs.readFileSync(complianceState, 'utf8')).lastRunAt || null; } catch { }
+  const complianceAge = complianceLastRun ? (nowMs - Date.parse(complianceLastRun)) / DAY_MS : Infinity;
+  results.push({ key: 'local#rule-compliance-loop', label: 'ルール遵守監査', lastSuccess: complianceLastRun, ageDays: complianceAge, status: complianceAge >= 2 ? (complianceLastRun ? 'stale' : 'never') : 'ok', line: complianceAge >= 2 ? `🚨 ルール遵守監査: ${complianceLastRun ? `最終実行 ${complianceLastRun.slice(0, 10)}` : '実行記録なし'}` : `✅ ルール遵守監査: 最終実行 ${complianceLastRun.slice(0, 10)}` });
   try {
     fs.mkdirSync(outputDir, { recursive: true });
     fs.writeFileSync(path.join(outputDir, 'cron-liveness.json'), JSON.stringify({ t: new Date(nowMs).toISOString(), results }, null, 2));

@@ -1,8 +1,8 @@
 {
-  "runId": "rules-resync-2026-08-28-specs",
+  "runId": "rules-resync-2026-08-28-nightly-cost-fix",
   "task": "rules-resync",
   "targets": "all",
-  "_why": "PR #90/#92 を全PCへ行き渡らせる。①fleet-poller が --specs を渡すようになった(付いていなかったので、どのPCもハードウェアスペックを一度も送っていなかった) ②スペック/開発プロジェクト/成果物の収集ツールが増えた。各PCは1回だけ onboarding-sync --force を実行して tools/ を更新する。破壊的操作なし。止めるときは task を \"\" に戻す。",
+  "_why": "PR #110 を全PCへ行き渡らせる。夜間のコスト削減が全PCで空振りしていた原因を配布元で直したもの。①hook 登録に -ExecutionPolicy Bypass が無く、実行ポリシー既定のPCでは PowerShell hook が毎セッション無音で死んでいた ②その修復役を起動する hook-selfcheck を登録するのが修復役自身という循環があり、壊れたPCは自力復旧できなかった(claude-cost-reporter.mjs を起点にして解消) ③nightly-batch.ps1 が全失敗パスで exit 0 を返しログも無く、空振りが「LastTaskResult 0 = 正常」に見えていた ④batch-enqueue を呼ぶ producer がコード上どこにも無くキューが構造的に常に空だった ⑤line-digest の空振りが ok と記録されていた。各PCは1回だけ onboarding-sync --force を実行して tools/ を更新し、次回セッション開始時に hook が自己修復される。破壊的操作なし。止めるときは task を \"\" に戻す。",
   "_note": "全PCへ承認済みタスクを配る中央キュー。kim/Claudeが task と runId(毎回ユニーク) を更新→各PCが夜間03:15の実行時に1回だけ処理しDiscordへ結果を返す。task を空にすると何もしない。",
   "_allowed_tasks": ["verify-setup", "rules-resync", "cost-report"],
   "_targets": "all=全PC / PC名の一部文字列=そのPCだけ"

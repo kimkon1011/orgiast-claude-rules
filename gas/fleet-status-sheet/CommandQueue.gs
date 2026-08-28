@@ -1,7 +1,28 @@
 const CMD_FOLDER_NAME_ = 'claude-fleet-status-cmds';
 
 function _COMMANDS_() {
-  return { upsertFleetStatus: upsertFleetStatus, clearFleetMachineColumns: clearFleetMachineColumns, setFleetToken: setFleetToken, describeFleetConfig: describeFleetConfig, describeExtensionAudit: describeExtensionAudit };
+  return { upsertFleetStatus: upsertFleetStatus, clearFleetMachineColumns: clearFleetMachineColumns, setFleetToken: setFleetToken, describeFleetConfig: describeFleetConfig, describeExtensionAudit: describeExtensionAudit, setPcInventorySheetId: setPcInventorySheetId, describePcInventoryHeaders: describePcInventoryHeaders };
+}
+
+// PC管理表の **1行目(見出し)だけ** を返す。本文(パスワード列を含む)は返さない。
+// 列名の実表記が分からないと書き込み先を解決できないが、本文を読むと秘匿値がログに載るため。
+function describePcInventoryHeaders() {
+  var sheet = _pcInventorySheet_();
+  var found = _pcFindHeaderRow_(sheet);
+  return { sheetName: sheet.getName(), headerRow: found.row, headers: found.headers };
+}
+
+// PC管理表(備品管理表関係データ保管用)の spreadsheet ID を設定する。
+// タブ名キャッシュは ID を変えたら無効になるので同時に消す。
+function setPcInventorySheetId(args) {
+  const id = args && typeof args.sheetId === 'string' ? args.sheetId.trim() : '';
+  if (!/^[A-Za-z0-9_-]{20,}$/.test(id)) throw new Error('sheetId looks invalid');
+  const props = PropertiesService.getScriptProperties();
+  props.setProperty('PC_INVENTORY_SHEET_ID', id);
+  props.deleteProperty('PC_INVENTORY_TAB_NAME');
+  const sheet = SpreadsheetApp.openById(id).getSheetByName('PC管理表');
+  if (!sheet) throw new Error('PC管理表 tab not found in the given spreadsheet');
+  return { ok: true, sheetName: sheet.getName(), headerCount: sheet.getLastColumn() };
 }
 
 // 共有シークレットは Claude 側で生成してここに流し込む。GAS から外へ出さない(戻り値もマスクする)。

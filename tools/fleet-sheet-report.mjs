@@ -8,6 +8,7 @@ import { scanBrowserExtensions } from './browser-extension-audit.mjs';
 import { machineIdentity } from './machine-identity.mjs';
 import { resolveReporterLabel } from './reporter-label.mjs';
 import { buildSpecPayload, collectHardwareSpec } from './hardware-spec.mjs';
+import { collectProjectInventory, formatArtifactsCell, formatLastCommitCell, formatProjectsCell } from './project-inventory.mjs';
 
 const dryRun = process.argv.includes('--dry-run');
 const includeSpecs = process.argv.includes('--specs');
@@ -71,6 +72,7 @@ async function main() {
   const mappedName = Object.prototype.hasOwnProperty.call(map, label) && typeof map[label] === 'string' ? map[label] : null;
   const topModel = Array.isArray(reporter.topModels) && reporter.topModels[0] ? reporter.topModels[0].model : '';
   const identity = machineIdentity();
+  const projects = collectProjectInventory({ projectsDir: path.join(claudeDir, 'projects') });
   // Fable5(§1.16 全用途禁止)は「データが無い」を「未検出」と断定しない。
   // 判定できないのに合格扱いにするのは「timeout を未導入と誤報告」と同じ誤り。
   const fableKnown = reporter.fable5Detected !== undefined || adoption.fable5OutTok !== undefined;
@@ -91,9 +93,16 @@ async function main() {
     codexLogin: adoption.codexAuthed === true ? '済' : adoption.codexAuthed === false ? '未' : '判定不能',
     fable5: fableDetected ? '検出' : fableKnown ? '未検出' : '判定不能',
     disciplineAlert: enforce.mode ? `${enforce.mode}${enforce.reason ? ': ' + enforce.reason : ''}` : '判定不能',
+    activeProjects: formatProjectsCell(projects),
+    artifacts: formatArtifactsCell(projects),
+    lastCommit: formatLastCommitCell(projects),
   };
-  if (includeSpecs) payload.spec = buildSpecPayload(collectHardwareSpec(), identity.hostname).spec;
-  if (includeSpecs) payload.kind = 'pc-spec';
+  // スペックは status とは**別シート**(PC管理表)への別リクエストにする。
+  // payload に kind:'pc-spec' を混ぜると GAS が status の upsert を行わなくなり、
+  // --specs を付けた瞬間にフリートシートの更新が黙って止まる。
+  const specPayload = includeSpecs
+    ? { token: fleetEnv.FLEET_SHEET_TOKEN, kind: 'pc-spec', hostname: identity.hostname, spec: buildSpecPayload(collectHardwareSpec(), identity.hostname).spec }
+    : null;
   const audit = scanBrowserExtensions();
   const extensionPayload = {
     token: fleetEnv.FLEET_SHEET_TOKEN, kind: 'extensions', label, hostname: os.hostname(), reportedAt: payload.reportedAt,
@@ -108,6 +117,7 @@ async function main() {
   // 2本は独立して送る。1本目が落ちたら2本目も送られない(かつ main の catch が
   // 握り潰す)と、拡張監査が「一度も届いていないのに誰も気付かない」状態になる。
   await post(fleetEnv.FLEET_SHEET_URL, 'status', payload);
+  if (specPayload) await post(fleetEnv.FLEET_SHEET_URL, 'pc-spec', specPayload);
   await post(fleetEnv.FLEET_SHEET_URL, 'extensions', extensionPayload);
 }
 

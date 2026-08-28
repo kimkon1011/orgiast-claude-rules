@@ -50,7 +50,9 @@ if ($dueDaily -and $repo) {
     $emoji = if ($ng -eq 0) { [char]0x2705 } else { [char]0x26A0 }
     $tail = ''; if ($ng -gt 0) { $tail = " … NG: $ngItems" }
     Post "$emoji **[$label]** 日次設定チェック: OK $ok / NG $ng$tail"
-    try { & node (Join-Path $repo 'tools\fleet-sheet-report.mjs') *> $null } catch {}
+    # --specs を必ず付ける。付けないとハードウェアスペックを一度も送らず、
+    # PC管理表 が「手で叩いた1台」だけの状態から永久に増えない(2026-08-28 実測)。
+    try { & node (Join-Path $repo 'tools\fleet-sheet-report.mjs') '--specs' *> $null } catch {}
   }
 }
 

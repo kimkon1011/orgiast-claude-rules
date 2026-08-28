@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
+import { armToFile } from './session-relaunch.mjs';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..');
 
@@ -119,6 +120,14 @@ export function planLaunch({ claudeBin, cwd, prompt, wt }) {
   };
 }
 
+// 窓を増やしたくない機体のための第二の届け方。VSCode 拡張は外部から新規会話を開けないので、
+// inline では窓を開かず「次に開いたセッションが自分から session-start を実行する」予約だけ置く。
+// user が押すのは /clear の1回だけになり、ウィンドウは増えない。
+export function resolveMode(state, env = {}) {
+  const raw = String(env.ORGIAST_NEXT_SESSION_MODE || state?.mode || 'window').toLowerCase();
+  return raw === 'inline' ? 'inline' : 'window';
+}
+
 export function shouldLaunch({ state, now, env, force }) {
   if (state.enabled === false) {
     return { ok: false, reason: '設定で無効化されています (~/.claude/next-session-launch.json の enabled:false)' };
@@ -137,7 +146,7 @@ export function shouldLaunch({ state, now, env, force }) {
 }
 
 function parseArgs(argv) {
-  const result = { dryRun: false, prompt: '/session-start', cwd: '', force: false, wt: undefined };
+  const result = { dryRun: false, prompt: '/session-start', cwd: '', force: false, wt: undefined, sessionId: '', mode: '' };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--dry-run') result.dryRun = true;
@@ -145,6 +154,8 @@ function parseArgs(argv) {
     else if (arg === '--prompt' && argv[index + 1] !== undefined) result.prompt = argv[++index];
     else if (arg === '--cwd' && argv[index + 1] !== undefined) result.cwd = argv[++index];
     else if (arg === '--wt' && argv[index + 1] !== undefined) result.wt = argv[++index];
+    else if (arg === '--session' && argv[index + 1] !== undefined) result.sessionId = argv[++index];
+    else if (arg === '--mode' && argv[index + 1] !== undefined) result.mode = argv[++index];
   }
   return result;
 }
@@ -184,6 +195,19 @@ export async function launchNextSession(argv = [], io = {}) {
     const handoffCwd = parseHandoffCwd(await readText(handoffPath));
     const current = await readJson(currentPath, {});
     const cwd = flags.cwd || handoffCwd || current.cwd || REPO_ROOT;
+    const mode = resolveMode({ ...state, mode: flags.mode || state?.mode }, env);
+    if (mode === 'inline') {
+      if (flags.dryRun) {
+        log(JSON.stringify({ mode, cwd, sessionId: flags.sessionId }));
+        return 0;
+      }
+      const armed = armToFile({ home, sessionId: flags.sessionId, cwd });
+      log(armed
+        ? `[next-session] 予約しました(inline): /clear すると新しいセッションが自分から ${flags.prompt} を実行します`
+        : '[next-session] スキップ: session-relaunch が無効です (--on で有効化)');
+      return 0;
+    }
+
     const claudeBin = resolveClaudeBinary({ env, exists, readdir, homedir: home });
     if (!claudeBin) {
       log('[next-session] スキップ: claude CLI が見つかりません (CLAUDE_CLI_PATH で明示できます)');

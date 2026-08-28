@@ -100,21 +100,43 @@ node "$HOME/orgiast-claude-rules/tools/close-session.mjs" --session <このセ�
 
 ## 8. 次のセッションは自動で立ち上がる（user に「新しいセッションを開いて」と言わない）
 
-- 手順7 の `close-session.mjs` が、退避したあとに `tools/next-session-launch.mjs` を呼び、
-  **新しい Windows Terminal ウィンドウで対話セッションを1つ起動し、初期プロンプトに `/session-start` を渡す**。
-  user がセッションを開く手作業はゼロ（VSCode 拡張のパネルは外部から新規会話を開けないため、別ウィンドウで起動する）。
+手順7 の `close-session.mjs` が、退避したあとに `tools/next-session-launch.mjs` を呼ぶ。
+**2つのモードがあり、機体ごとに `~/.claude/next-session-launch.json` の `mode` で選ぶ**（既定 `window`）。
+
+| mode | 何が起きるか | user の操作 | 向いている機体 |
+| --- | --- | --- | --- |
+| `window`（既定） | 新しい Windows Terminal ウィンドウで対話 CLI を起動し、初期プロンプトに `/session-start` を渡す | ゼロ（初回だけ trust ダイアログで Enter） | ウィンドウが増えてよい機体 |
+| `inline` | 窓を開かず予約だけ置く。**次に開いたセッションが自分から `session-start` を実行する** | `/clear` の1回だけ | 同じウィンドウで作業を続けたい機体 |
+
+- **VSCode 拡張のパネルは外部から新規会話を開けない**（拡張は uriHandler を持たず VSCode コマンドは外部起動不可）。
+  同様に **外部から `/clear` を発火させる公式手段もない**（`SessionEnd` フックは出力が無視される仕様）。
+  だから「同じウィンドウで完全に手を触れずに」は原理的に作れない。`inline` はその制約下の最小手数版で、残るのは `/clear` の1打鍵だけ。
+- 切り替え: `~/.claude/next-session-launch.json` に `{"mode": "inline"}` / その場限りなら `ORGIAST_NEXT_SESSION_MODE=inline`。
 - 起動先の作業ディレクトリは `~/.claude/next-session.md` の `cwd:` コメント →
   `~/.claude/current-session.json` の cwd → リポジトリルート の順で決まる。だから**手順6 を先に書くこと**。
-- 抑止したい時（無人実行・連続クローズ）:
-  - `node tools/close-session.mjs --session <id> --no-launch` … 起動しない
-  - `CLAUDE_HEADLESS` / `CI` が立っている環境では自動で起動しない（夜間 auto-session でウィンドウを開かない）
-  - 直近120秒に起動済みなら二重起動しない（`--force-launch` で無視できる）
-  - 恒久的に止めるなら `~/.claude/next-session-launch.json` に `{"enabled": false}`
+
+### window モードの注意
+
 - **新セッション側で「このフォルダを信頼しますか」が出ることがある**（CLI の trust ダイアログ。`~/.claude.json` の
   `hasTrustDialogAccepted` がそのフォルダで false のとき）。これはセキュリティの同意ゲートなので**Claude が代わりに押してはいけない**。
   user に Enter を1回押してもらう前提で案内する。
-- 起動結果は `[next-session] 新しいセッションを起動しました: <cwd>` / `[next-session] スキップ: <理由>` の1行で出る。
-  スキップされた時だけ「新しいセッションを手で開いてください」と伝える。
+
+### inline モードの注意
+
+- 予約は `~/.claude/session-relaunch.json` に置かれ、次セッションの SessionStart フック（`tools/session-relaunch.mjs --hook`）が**1回だけ**消費する。
+- 発火するのは `startup` / `clear` / `fork` の新しいセッションだけ。`--resume` で過去セッションを開き直した時や `compact` では発火しない（同じ作業の続きなので）。
+- **予約は「きちんと閉じた」証拠**。単に窓を閉じただけのセッションは自走しない。予約は7日で失効する。
+- 手で操作するとき: `--status`（状態）/ `--disarm`（今回の予約だけ取消）/ `--off`・`--on`（恒久的な停止と再開）。
+  例: `node ~/orgiast-claude-rules/tools/session-relaunch.mjs --status`
+
+### 共通の抑止
+
+- `node tools/close-session.mjs --session <id> --no-launch` … 起動も予約もしない
+- `CLAUDE_HEADLESS` / `CI` が立っている環境では自動で起動しない（夜間 auto-session でウィンドウを開かない）
+- 直近120秒に起動済みなら二重起動しない（`--force-launch` で無視できる）
+- 恒久的に止めるなら `~/.claude/next-session-launch.json` に `{"enabled": false}`
+- 結果は `[next-session] 新しいセッションを起動しました: <cwd>` / `[next-session] 予約しました(inline): …` /
+  `[next-session] スキップ: <理由>` の1行で出る。スキップされた時だけ「新しいセッションを手で開いてください」と伝える。
 
 ## 注意
 

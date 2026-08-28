@@ -68,7 +68,9 @@ console.log(`closed: ${sessionId} -> will disappear from the session list within
 
 if (!process.argv.includes("--no-launch")) {
   try {
-    await launchNextSession(process.argv.includes("--force-launch") ? ["--force"] : []);
+    const launchArgs = ["--session", sessionId];
+    if (process.argv.includes("--force-launch")) launchArgs.push("--force");
+    await launchNextSession(launchArgs);
   } catch {
     // 次セッションの起動失敗で、完了済みの close-session を失敗扱いにしない。
   }

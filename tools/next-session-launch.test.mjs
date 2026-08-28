@@ -1,8 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import fs from 'node:fs';
+import os from 'node:os';
 import {
   launchNextSession,
+  resolveMode,
   parseHandoffCwd,
   pickNewestExtensionBinary,
   pickNewestVersionDir,
@@ -12,6 +15,7 @@ import {
   sanitizeEnv,
   shouldLaunch,
 } from './next-session-launch.mjs';
+import { normalizeState } from './session-relaunch.mjs';
 
 test('引き継ぎコメントから Windows cwd を取り出す', () => {
   const text = '<!-- 前セッション: abc / 更新: 2026-08-28 / cwd: c:\\Users\\uers\\Downloads\\作業 -->\n本文';
@@ -163,4 +167,39 @@ test('親セッションの CLAUDE* 環境変数を新セッションへ渡さ�
     CLAUDE_CLI_PATH: '/keep/claude.exe',
     CLAUDE_CONFIG_DIR: '/keep/config',
   });
+});
+
+
+test('resolveMode は既定が window で、設定と環境変数で inline に切り替わる', () => {
+  assert.equal(resolveMode({}, {}), 'window');
+  assert.equal(resolveMode({ mode: 'inline' }, {}), 'inline');
+  assert.equal(resolveMode({ mode: 'INLINE' }, {}), 'inline');
+  // 環境変数は設定より強い(その場限りで切り替えたい時に使う)。
+  assert.equal(resolveMode({ mode: 'window' }, { ORGIAST_NEXT_SESSION_MODE: 'inline' }), 'inline');
+  assert.equal(resolveMode({ mode: 'inline' }, { ORGIAST_NEXT_SESSION_MODE: 'window' }), 'window');
+  assert.equal(resolveMode({ mode: 'なにか変な値' }, {}), 'window');
+});
+
+test('inline モードはウィンドウを開かず予約だけ置く', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'nsl-inline-'));
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', 'next-session-launch.json'), JSON.stringify({ enabled: true, mode: 'inline' }), 'utf8');
+  fs.writeFileSync(path.join(home, '.claude', 'next-session.md'), '<!-- 前セッション: x / cwd: D:\work -->\n', 'utf8');
+
+  let spawned = 0;
+  const logs = [];
+  const code = await launchNextSession(['--session', 'closing-sid'], {
+    env: {},
+    homedir: () => home,
+    spawn: () => { spawned += 1; return { once: () => {}, unref: () => {} }; },
+    log: (line) => logs.push(line),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(spawned, 0, 'inline では新しいウィンドウを開かない');
+  const state = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'session-relaunch.json'), 'utf8'));
+  const armed = normalizeState(state).armed;
+  assert.equal(armed.sessionId, 'closing-sid', '閉じた本人のIDを残さないと同じセッションへ注入し返す');
+  assert.equal(armed.cwd, 'D:\work');
+  assert.match(logs.join('\n'), /予約しました\(inline\)/);
 });

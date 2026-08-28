@@ -19,7 +19,8 @@ const hits = new Map<string, number[]>();
 
 function clientIp(request: NextRequest): string {
   const forwarded = request.headers.get("x-forwarded-for");
-  if (forwarded) return forwarded.split(",")[0].trim();
+  // noUncheckedIndexedAccess を有効にしたリポでも通るよう、添字アクセスは undefined を潰しておく。
+  if (forwarded) return (forwarded.split(",")[0] || "").trim();
   return request.headers.get("x-real-ip")?.trim() || "unknown";
 }
 
@@ -55,9 +56,10 @@ function accessToken(request: NextRequest): string | null {
     if (!cookie.name.startsWith("sb-") || !cookie.name.includes("-auth-token")) continue;
     const match = cookie.name.match(/^(.*-auth-token)\.(\d+)$/);
     if (!match) { values.push(cookie.value); continue; }
-    const group = chunks.get(match[1]) || [];
+    const name = match[1] as string;
+    const group = chunks.get(name) || [];
     group.push({ index: Number(match[2]), value: cookie.value });
-    chunks.set(match[1], group);
+    chunks.set(name, group);
   }
   for (const group of chunks.values()) {
     values.push(group.sort((a, b) => a.index - b.index).map((chunk) => chunk.value).join(""));
@@ -112,7 +114,8 @@ async function notifyDiscord(content: string, image: { name: string; type: strin
   const endpoint = token && channel ? `https://discord.com/api/v10/channels/${channel}/messages` : webhook || "";
   if (!endpoint) return false;
   const headers: Record<string, string> = token && channel ? { Authorization: `Bot ${token}` } : {};
-  const payload = { content, allowed_mentions: { parse: [] as string[] } };
+  // 提出元 URL のプレビューで通知チャンネルが流れないよう、埋め込み表示を抑止する。
+  const payload = { content, allowed_mentions: { parse: [] as string[] }, flags: 4 };
   try {
     // 画像は Discord へ直接添付する。DB を使わない構成でもスクショが失われないようにするため
     // (以前は Supabase 未設定時にフォームの添付が黙って捨てられていた)。

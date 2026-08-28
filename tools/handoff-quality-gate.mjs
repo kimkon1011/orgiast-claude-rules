@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const home = () => process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || os.homedir();
@@ -17,8 +18,25 @@ const handoffPatterns = [
 ];
 const numbered = /1\.\s*\S+[\s\S]*?\n[\s\S]*?2\.\s*\S+[\s\S]*?\n[\s\S]*?3\.\s*\S+/;
 const imperative = /(してください|お願いします|お願いいたします|お願い致します|クリックして|開いてください|入力してください|貼り付けてください|選択してください|コピーして|押してください|ログインしてください)/;
+const metaMention = /(gate|hook|検出器|正規表現|ルール|block理由|誤検知)/i;
 
-export function hasHandoff(text) { return handoffPatterns.some(r => r.test(text)) || (numbered.test(text) && imperative.test(text)); }
+export function handoffDetectionText(text) {
+  const lines = String(text).split(/\r?\n/);
+  const visible = [];
+  let inFence = false;
+  for (const line of lines) {
+    const startsInFence = inFence;
+    const fences = (line.match(/```/g) || []).length;
+    if (fences % 2) inFence = !inFence;
+    if (startsInFence || fences || /^\s*>/.test(line)) visible.push('');
+    else visible.push(line.replace(/`[^`]*`/g, ''));
+  }
+  return visible.map((line, index) => {
+    const nearby = visible.slice(Math.max(0, index - 1), index + 2).join('\n');
+    return metaMention.test(nearby) ? '' : line;
+  }).join('\n');
+}
+export function hasHandoff(text) { const detectionText = handoffDetectionText(text); return handoffPatterns.some(r => r.test(detectionText)) || (numbered.test(detectionText) && imperative.test(detectionText)); }
 export function allRoutes(catalog) { return [...new Set(Object.values(catalog).flat())]; }
 export function matchRoutes(text, catalog) {
   const lower = text.toLowerCase(); const occupied = []; const matched = [];
@@ -28,6 +46,7 @@ export function matchRoutes(text, catalog) {
   }
   return matched;
 }
+function listedRouteCount(text) { return text.split(/[,、;；]|\s+\/\s+/).map(x => x.trim()).filter(Boolean).length; }
 export function usesDeprecatedHandoffTag(text) {
   const lines = text.split(/\r?\n/);
   let inFence = false;
@@ -78,11 +97,15 @@ export function evaluateHandoff(text, { catalog, enforcement = {} } = {}) {
   const tried = block.match(/試した自動化経路:\s*([^\n]+)/)?.[1]?.trim() || '';
   const rejected = block.match(/未試行で却下した経路:\s*([^\n]+)/)?.[1]?.trim() || '';
   const routesMatched = matchRoutes(tried, catalog);
+  const enforced = enforcement['handoff-quality-only']?.mode === 'block';
+  const requiredRoutes = enforced ? 4 : 3;
+  const requiredRejected = enforced ? 2 : 1;
   if (!quality) return { decision: 'block', reason: '品質理由が空です。', quality, routesMatched };
   if (/(面倒|時間|トークン|手間を省|実装量|簡単に)/.test(quality)) return { decision: 'block', reason: '品質理由に効率語彙があります。', quality, routesMatched };
-  if (routesMatched.length < 3) return { decision: 'block', reason: `既知の自動化経路が${routesMatched.length}件です。3件以上必要です。`, quality, routesMatched };
+  if (routesMatched.length < requiredRoutes) return { decision: 'block', reason: `既知の自動化経路が${routesMatched.length}件です。${requiredRoutes}件以上必要です。`, quality, routesMatched };
   if (!rejected) return { decision: 'block', reason: '未試行で却下した経路がありません。', quality, routesMatched };
-  if (enforcement['handoff-quality-only']?.mode === 'block') return { decision: 'block', reason: enforcement['handoff-quality-only'].reason || 'handoff-quality-only は強制block中', quality, routesMatched };
+  const rejectedCount = listedRouteCount(rejected);
+  if (rejectedCount < requiredRejected) return { decision: 'block', reason: `未試行で却下した経路が${rejectedCount}件です。${requiredRejected}件以上必要です。`, quality, routesMatched };
   return { decision: 'pass', reason: '品質手渡し', quality, routesMatched };
 }
 export function latestAssistantText(transcript) {
@@ -97,14 +120,45 @@ export function runGate(input) {
   let enforcement = {}; try { enforcement = JSON.parse(fs.readFileSync(path.join(home(), '.claude', 'rule-enforcement.json'), 'utf8')); } catch {}
   return { ...evaluateHandoff(text, { catalog, enforcement }), text };
 }
+function recordSkip({ sessionId = '', reason, rawHead = '' }) {
+  const skips = path.join(home(), '.claude', 'handoff-gate-skips.jsonl');
+  const record = { ts: new Date().toISOString(), sessionId, reason, rawHead: String(rawHead).slice(0, 120) };
+  try {
+    fs.mkdirSync(path.dirname(skips), { recursive: true });
+    fs.appendFileSync(skips, JSON.stringify(record) + '\n');
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error(`[handoff-quality-gate] スキップ記録の書き込み失敗: ${detail} path=${skips}`);
+  }
+}
 async function main() {
   let raw = '';
   for await (const c of process.stdin) raw += c;
-  if (!raw.trim()) return;
+  if (!raw.trim()) {
+    console.error('[handoff-quality-gate] 入力が空のため判定をスキップしました');
+    return;
+  }
   let input;
-  try { input = JSON.parse(raw); } catch { return; }
+  try { input = JSON.parse(raw); } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    const reason = `入力をJSONとして解釈できず判定をスキップしました: ${detail}`;
+    console.error(`[handoff-quality-gate] ${reason} (先頭120字: ${raw.slice(0, 120)})`);
+    const sessionId = raw.match(/"session_id"\s*:\s*"([^"\\]{1,200})"/)?.[1] || '';
+    recordSkip({ sessionId, reason, rawHead: raw });
+    return;
+  }
+  const text = input?.assistant_text || latestAssistantText(input?.transcript_path);
+  if (!text && !input?.stop_hook_active) {
+    const reason = '判定対象の本文が取得できませんでした (assistant_text/transcript_path なし)';
+    console.error(`[handoff-quality-gate] ${reason}`);
+    recordSkip({ sessionId: input?.session_id || path.basename(input?.transcript_path || '', '.jsonl'), reason, rawHead: raw });
+    return;
+  }
   const result = runGate(input);
-  if (result.decision === 'pass' && result.reason === '手渡しなし') return;
+  if (result.decision === 'pass' && result.reason === '手渡しなし') {
+    console.error(`[handoff-quality-gate] 判定をスキップしました: ${result.reason}`);
+    return;
+  }
   const excerpt = (result.text || '').slice(0, 200);
   if (!excerpt) {
     console.error('[handoff-quality-gate] ledger書き込みを中止: excerpt が空です');
@@ -125,4 +179,4 @@ async function main() {
   }
   if (result.decision === 'block') console.log(JSON.stringify({ decision: 'block', reason: result.reason }));
 }
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();
+if (isEntry(import.meta.url)) await main();

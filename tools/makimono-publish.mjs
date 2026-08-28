@@ -10,10 +10,8 @@ import { isEntry } from './is-entry.mjs';
 import { readEnvValue } from './env-kv.mjs';
 
 const BASE = 'https://makimono-md.vercel.app';
-const home = process.env.ORGIAST_HOME || os.homedir();
-const envFile = path.join(home, '.claude', 'makimono.env');
-const logFile = path.join(home, '.claude', 'makimono-submissions.json');
-const costReporterEnvFile = path.join(home, '.claude', 'cost-reporter.env');
+const currentHome = () => process.env.ORGIAST_HOME || os.homedir();
+const homeFile = (name, home = currentHome()) => path.join(home, '.claude', name);
 const DAY_MS = 24 * 60 * 60 * 1000;
 export const INTERNAL_NAMES = ['オージャスト', 'Reブース', 'Re:ブース', 'NEXTForward', '東邦鋼業', 'ネクサス', 'アウジャスト'];
 const patterns = [
@@ -38,16 +36,31 @@ export function scanForbidden(text, allowed = []) {
   String(text).split(/\r?\n/).forEach((line, i) => { for (const [pattern, regex] of patterns) if (!allow.has(pattern) && regex.test(line) && (pattern !== 'メールアドレス' || hasNonPlaceholderEmail(line))) findings.push({ line: i + 1, pattern, sample: redactSecrets(line.trim()).slice(0, 240) }); });
   return findings;
 }
-function envValues() { const result = {}; try { for (const line of fs.readFileSync(envFile, 'utf8').split(/\r?\n/)) { const m = line.match(/^\s*(?:export\s+)?([A-Z_]+)=(.*)$/); if (m) result[m[1]] = m[2].trim().replace(/^(['"])(.*)\1$/, '$2'); } } catch {} return result; }
-function saveEnv(values) { let lines = []; try { lines = fs.readFileSync(envFile, 'utf8').split(/\r?\n/); } catch {} for (const [key, value] of Object.entries(values)) { const i = lines.findIndex((x) => x.startsWith(`${key}=`)); if (i >= 0) lines[i] = `${key}=${value}`; else lines.push(`${key}=${value}`); } fs.mkdirSync(path.dirname(envFile), { recursive: true }); fs.writeFileSync(envFile, `${lines.filter(Boolean).join('\n')}\n`, { mode: 0o600 }); fs.chmodSync(envFile, 0o600); }
-async function ensureKey() {
-  const env = envValues(); if (env.MAKIMONO_KEY) return { key: env.MAKIMONO_KEY, email: env.MAKIMONO_EMAIL || '' };
-  let email = process.env.MAKIMONO_EMAIL || env.MAKIMONO_EMAIL || '';
+function envValues(home = currentHome()) { const result = {}; try { for (const line of fs.readFileSync(homeFile('makimono.env', home), 'utf8').split(/\r?\n/)) { const m = line.match(/^\s*(?:export\s+)?([A-Z_]+)=(.*)$/); if (m) result[m[1]] = m[2].trim().replace(/^(['"])(.*)\1$/, '$2'); } } catch {} return result; }
+function saveEnv(values, home = currentHome()) { const envFile = homeFile('makimono.env', home); let lines = []; try { lines = fs.readFileSync(envFile, 'utf8').split(/\r?\n/); } catch {} for (const [key, value] of Object.entries(values)) { const i = lines.findIndex((x) => x.startsWith(`${key}=`)); if (i >= 0) lines[i] = `${key}=${value}`; else lines.push(`${key}=${value}`); } fs.mkdirSync(path.dirname(envFile), { recursive: true }); fs.writeFileSync(envFile, `${lines.filter(Boolean).join('\n')}\n`, { mode: 0o600 }); fs.chmodSync(envFile, 0o600); }
+export function pickTrustedKey({ home = currentHome(), email }) {
+  try {
+    const raw = readEnvValue(homeFile('makimono-trusted.env', home), 'MAKIMONO_TRUSTED_KEYS');
+    if (!raw) return undefined;
+    const wanted = String(email || '').trim().toLowerCase();
+    if (!wanted) return undefined;
+    const keys = JSON.parse(raw);
+    if (!keys || typeof keys !== 'object' || Array.isArray(keys)) return undefined;
+    const match = Object.entries(keys).find(([address, key]) => String(address).trim().toLowerCase() === wanted && typeof key === 'string' && key);
+    return match?.[1];
+  } catch { return undefined; }
+}
+export async function ensureKey({ home = currentHome(), logTrusted = false, fetchImpl = fetch } = {}) {
+  const env = envValues(home);
+  let email = env.MAKIMONO_EMAIL || process.env.MAKIMONO_EMAIL || '';
   if (!email) try { email = JSON.parse(fs.readFileSync(path.join(home, '.claude.json'), 'utf8'))?.oauthAccount?.emailAddress || ''; } catch {}
   if (!email) try { email = execFileSync('git', ['config', 'user.email'], { encoding: 'utf8' }).trim(); } catch {}
+  const trustedKey = pickTrustedKey({ home, email });
+  if (trustedKey) { if (logTrusted) console.log(`信頼済みキーで出品します（メール: ${email.trim()}）`); return { key: trustedKey, email }; }
+  if (env.MAKIMONO_KEY) return { key: env.MAKIMONO_KEY, email: env.MAKIMONO_EMAIL || email };
   if (!email) throw new Error('メールアドレスが特定できないため出品キーを発行できません');
-  const response = await fetch(`${BASE}/api/v1/keys`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email }), signal: AbortSignal.timeout(8000) });
-  if (!response.ok) throw new Error(`キー発行 HTTP ${response.status}`); const data = await response.json(); saveEnv({ MAKIMONO_KEY: data.apiKey, MAKIMONO_EMAIL: email }); return { key: data.apiKey, email };
+  const response = await fetchImpl(`${BASE}/api/v1/keys`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email }), signal: AbortSignal.timeout(8000) });
+  if (!response.ok) throw new Error(`キー発行 HTTP ${response.status}`); const data = await response.json(); saveEnv({ MAKIMONO_KEY: data.apiKey, MAKIMONO_EMAIL: email }, home); return { key: data.apiKey, email };
 }
 const val = (args, name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
 const allows = (args) => args.flatMap((x, i) => x === '--allow' ? [args[i + 1]] : []).filter(Boolean);
@@ -63,24 +76,25 @@ export function reconcileSubmissions(logs, listings, now, staleDays) {
     if (!listing) return entry;
     return { ...entry, status: 'published', slug: listing.slug, publishedSeenAt: new Date(nowMs).toISOString() };
   });
-  const pendingItems = nextLogs.filter((entry) => entry?.status !== 'published').map((entry) => {
+  const pendingItems = nextLogs.filter((entry) => entry?.status !== 'published' && entry?.status !== 'rejected').map((entry) => {
     const atMs = new Date(entry?.at).getTime();
     const ageMs = Number.isFinite(atMs) && Number.isFinite(nowMs) ? Math.max(0, nowMs - atMs) : 0;
     return { title: entry?.title || '(無題)', submissionId: entry?.submissionId || '', days: Math.floor(ageMs / DAY_MS), stale: ageMs > Number(staleDays) * DAY_MS };
   });
   return {
     logs: nextLogs,
-    published: nextLogs.length - pendingItems.length,
+    published: nextLogs.filter((entry) => entry?.status === 'published').length,
     pending: pendingItems.length,
+    rejected: nextLogs.filter((entry) => entry?.status === 'rejected').length,
     stale: pendingItems.filter((item) => item.stale).length,
     pendingItems,
   };
 }
-function readSubmissionLogs() {
-  try { const logs = JSON.parse(fs.readFileSync(logFile, 'utf8')); return Array.isArray(logs) ? logs : []; } catch { return []; }
+function readSubmissionLogs(home = currentHome()) {
+  try { const logs = JSON.parse(fs.readFileSync(homeFile('makimono-submissions.json', home), 'utf8')); return Array.isArray(logs) ? logs : []; } catch { return []; }
 }
 function listingsFromSearch(data) { return Array.isArray(data) ? data : data?.listings || data?.files || data?.results || []; }
-function formatCheckSummary(result) { return `公開済み ${result.published}件 / 審査待ち ${result.pending}件`; }
+function formatCheckSummary(result) { return `公開済み ${result.published}件 / 審査待ち ${result.pending}件 / 却下 ${result.rejected}件`; }
 export async function notifyStale(result, staleDays, { forceNotify = false, now = new Date(), fetchImpl = fetch, stateFile = path.join(process.env.ORGIAST_HOME || os.homedir(), '.claude', 'makimono-notify-state.json'), webhookUrl } = {}) {
   if (!result.stale) return;
   const staleIds = result.pendingItems.filter((item) => item.stale).map((item) => item.submissionId || '').sort();
@@ -94,7 +108,7 @@ export async function notifyStale(result, staleDays, { forceNotify = false, now 
     console.log(`前回と同内容のため通知しません（前回 ${previous.notifiedAt}）`);
     return false;
   }
-  const webhook = webhookUrl || readEnvValue(costReporterEnvFile, 'DISCORD_COST_WEBHOOK');
+  const webhook = webhookUrl || readEnvValue(homeFile('cost-reporter.env'), 'DISCORD_COST_WEBHOOK');
   if (!webhook) { console.error('DISCORD_COST_WEBHOOK が未設定のため通知しません'); return; }
   const titles = result.pendingItems.slice(0, 5).map((item) => `- ${item.title}`).join('\n');
   const content = `📜 マキモノ: 審査待ち ${result.pending}件(うち ${staleDays}日超 ${result.stale}件)${titles ? `\n${titles}` : ''}\n承認は本体リポ側で docs/makimono-auto-approve.md の実行が必要です。`.slice(0, 1900);
@@ -104,16 +118,42 @@ export async function notifyStale(result, staleDays, { forceNotify = false, now 
   fs.writeFileSync(stateFile, `${JSON.stringify({ notifiedAt: new Date(now).toISOString(), pending: result.pending, stale: result.stale, staleIds }, null, 2)}\n`);
   return true;
 }
-async function checkSubmissions(args, { compact = false } = {}) {
+async function mapLimited(items, limit, mapper) {
+  const results = new Array(items.length); let cursor = 0;
+  async function worker() { while (cursor < items.length) { const index = cursor++; results[index] = await mapper(items[index], index); } }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+export async function checkSubmissions(args, { compact = false, home = currentHome(), fetchImpl = fetch, now = new Date() } = {}) {
+  const logFile = homeFile('makimono-submissions.json', home);
   if (!fs.existsSync(logFile)) { console.log('出品ログなし'); return null; }
-  const logs = readSubmissionLogs();
+  const logs = readSubmissionLogs(home);
   const staleDays = Math.max(0, Number(val(args, '--stale-days') ?? 3) || 0);
-  const response = await fetch(`${BASE}/api/v1/search?limit=200`, { signal: AbortSignal.timeout(15_000) });
-  if (!response.ok) throw new Error(`公開済み一覧取得 HTTP ${response.status}`);
-  const result = reconcileSubmissions(logs, listingsFromSearch(await response.json()), new Date(), staleDays);
+  const unresolved = logs.map((entry, index) => ({ entry, index })).filter(({ entry }) => entry?.status !== 'published' && entry?.submissionId);
+  let auth;
+  try { auth = await ensureKey({ home, fetchImpl }); } catch {}
+  const statusResults = await mapLimited(unresolved, 4, async ({ entry, index }) => {
+    try {
+      if (!auth?.key) return { index, failed: true };
+      const response = await fetchImpl(`${BASE}/api/v1/listings/${encodeURIComponent(entry.submissionId)}`, { headers: { authorization: `Bearer ${auth.key}` }, signal: AbortSignal.timeout(8000) });
+      if (!response.ok) return { index, failed: true };
+      const data = await response.json();
+      if (!['pending', 'published', 'rejected'].includes(data?.status)) return { index, failed: true };
+      return { index, data };
+    } catch { return { index, failed: true }; }
+  });
+  const statusLogs = logs.map((entry) => entry);
+  const failedIndexes = new Set(logs.map((_, index) => index));
+  for (const item of statusResults) if (!item.failed) { statusLogs[item.index] = { ...statusLogs[item.index], status: item.data.status, ...(item.data.slug ? { slug: item.data.slug } : {}) }; failedIndexes.delete(item.index); }
+  let listings = [];
+  try { const response = await fetchImpl(`${BASE}/api/v1/search?limit=200`, { signal: AbortSignal.timeout(15_000) }); if (response.ok) listings = listingsFromSearch(await response.json()); } catch {}
+  const fallbackLogs = statusLogs.map((entry, index) => failedIndexes.has(index) ? entry : { ...entry, status: 'published' });
+  const fallback = reconcileSubmissions(fallbackLogs, listings, now, staleDays).logs;
+  const mergedLogs = fallback.map((entry, index) => failedIndexes.has(index) ? entry : statusLogs[index]);
+  const result = reconcileSubmissions(mergedLogs, [], now, staleDays);
   if (result.logs.some((entry, index) => entry !== logs[index])) fs.writeFileSync(logFile, `${JSON.stringify(result.logs, null, 2)}\n`);
   if (args.includes('--json')) {
-    console.log(JSON.stringify({ published: result.published, pending: result.pending, stale: result.stale, items: result.pendingItems }));
+    console.log(JSON.stringify({ published: result.published, pending: result.pending, rejected: result.rejected, stale: result.stale, items: result.pendingItems }));
   } else if (compact) {
     console.log(formatCheckSummary(result));
   } else {
@@ -131,21 +171,21 @@ async function main() {
   const args = process.argv.slice(2);
   if (args.includes('--check')) { await safeCheck(args); return; }
   if (args.includes('--ensure-key')) { console.log((await ensureKey()).key); return; }
-  if (args.includes('--list')) { let logs = []; try { logs = JSON.parse(fs.readFileSync(logFile, 'utf8')); } catch {} console.log(JSON.stringify(logs, null, 2)); return; }
+  if (args.includes('--list')) { let logs = []; try { logs = JSON.parse(fs.readFileSync(homeFile('makimono-submissions.json'), 'utf8')); } catch {} console.log(JSON.stringify(logs, null, 2)); return; }
   const inputFile = val(args, '--file'); if (!inputFile) throw new Error('--file が必要です'); const body = fs.readFileSync(inputFile, 'utf8'); const findings = scanForbidden(body, allows(args));
   if (args.includes('--scan')) { if (findings.length) { showFindings(findings); process.exitCode = 2; } else console.log('送信禁止パターン: 0件'); return; }
   if (!args.includes('--submit')) throw new Error('--submit、--scan、--ensure-key、--list のいずれかが必要です');
   const title = val(args, '--title') || '', summary = val(args, '--summary') || '', category = val(args, '--category') || '';
-  if (findings.length) { const draft = path.join(home, '.claude', 'makimono-drafts', `${new Date().toISOString().slice(0, 10)}-${slugify(title)}.md`); fs.mkdirSync(path.dirname(draft), { recursive: true }); fs.writeFileSync(draft, body); showFindings(findings); console.error(`送信せず下書きへ退避: ${draft}\n一般名に置換してから出品してください`); process.exitCode = 2; return; }
+  if (findings.length) { const draft = path.join(currentHome(), '.claude', 'makimono-drafts', `${new Date().toISOString().slice(0, 10)}-${slugify(title)}.md`); fs.mkdirSync(path.dirname(draft), { recursive: true }); fs.writeFileSync(draft, body); showFindings(findings); console.error(`送信せず下書きへ退避: ${draft}\n一般名に置換してから出品してください`); process.exitCode = 2; return; }
   const reasons = []; if (title.length < 5) reasons.push('title は5文字以上'); if (summary.length < 20) reasons.push('summary は20文字以上'); if (body.length < 200) reasons.push('body は200文字以上');
   const categoriesResponse = await fetch(`${BASE}/api/v1/categories`, { signal: AbortSignal.timeout(8000) }); if (!categoriesResponse.ok) throw new Error(`カテゴリ取得 HTTP ${categoriesResponse.status}`); const categories = (await categoriesResponse.json()).categories?.map((x) => x.name) || []; if (!categories.includes(category)) reasons.push(`category は既存カテゴリから選択: ${categories.join(' / ')}`);
   if (reasons.length) { reasons.forEach((x) => console.error(x)); process.exitCode = 2; return; }
   if (val(args, '--price') && Number(val(args, '--price')) !== 0) { console.error('price は常に 0（無料）です'); process.exitCode = 2; return; }
   const payload = { title, summary, category, body, scratchTokens: Number(val(args, '--scratch-tokens') || 0), withMdTokens: Number(val(args, '--with-md-tokens') || 0), price: 0 };
   if (args.includes('--dry')) { console.log(JSON.stringify({ ...payload, body: `${body.slice(0, 200)}… (${body.length}文字)` }, null, 2)); return; }
-  let logs = readSubmissionLogs();
+  let logs = readSubmissionLogs(); const logFile = homeFile('makimono-submissions.json');
   const hash = crypto.createHash('sha256').update(body).digest('hex').slice(0, 16); if (logs.some((x) => x.sha256 === hash)) { console.log('同一内容を出品済み'); return; }
-  const auth = await ensureKey(); const response = await fetch(`${BASE}/api/v1/listings`, { method: 'POST', headers: { authorization: `Bearer ${auth.key}`, 'content-type': 'application/json' }, body: JSON.stringify(payload), signal: AbortSignal.timeout(8000) }); const data = await response.json(); if (!response.ok) throw new Error(`出品 HTTP ${response.status}: ${data.error || '失敗'}`);
+  const auth = await ensureKey({ logTrusted: true }); const response = await fetch(`${BASE}/api/v1/listings`, { method: 'POST', headers: { authorization: `Bearer ${auth.key}`, 'content-type': 'application/json' }, body: JSON.stringify(payload), signal: AbortSignal.timeout(8000) }); const data = await response.json(); if (!response.ok) throw new Error(`出品 HTTP ${response.status}: ${data.error || '失敗'}`);
   logs.push({ at: new Date().toISOString(), title, category, submissionId: data.submissionId, status: data.status, email: auth.email, sha256: hash }); fs.mkdirSync(path.dirname(logFile), { recursive: true }); fs.writeFileSync(logFile, `${JSON.stringify(logs, null, 2)}\n`);
   console.log(JSON.stringify({ submissionId: data.submissionId, status: data.status })); console.log('確認: https://makimono-md.vercel.app/contribute');
   if (!args.includes('--no-check')) await safeCheck(args, { compact: true });

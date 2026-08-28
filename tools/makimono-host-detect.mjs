@@ -128,7 +128,9 @@ export function detectHostRepo({ roots, priorityRoots = [], previousState, budge
 export function formatDetectMessage(state, pendingCount) {
   if (state?.status !== 'found') return '';
   const instruction = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'docs', 'makimono-auto-approve.md');
-  const lines = [`[マキモノ] このPCに本体リポがあります: ${state.repoPath}`, `${instruction} を読んで、記載された審査待ち解消手順を実行してください。`];
+  // 自動承認そのものは 2026-08-28 に実装・本番反映済み。ここで「実行してください」と言うと
+  // 同じPCが毎セッション作り直しに走るので、残作業(§6)だけを指すこと。
+  const lines = [`[マキモノ] このPCに本体リポがあります: ${state.repoPath}`, `${instruction} の状態を確認し、未了の残作業(§6)だけ実行してください。§1〜§3 は実装済みなので作り直さないこと。`];
   if (Number.isInteger(pendingCount)) lines.push(`現在の審査待ち: ${pendingCount}件`);
   return lines.join('\n');
 }

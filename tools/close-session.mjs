@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolvePython } from "./session-list-tidy.mjs";
+import { launchNextSession } from "./next-session-launch.mjs";
 
 const claudeDir = join(homedir(), ".claude");
 const currentPath = join(claudeDir, "current-session.json");
@@ -64,3 +65,11 @@ const python = resolvePython();
 if (python) spawnSync(python, [purgePath], { stdio: "ignore", windowsHide: true });
 
 console.log(`closed: ${sessionId} -> will disappear from the session list within ~45s (no /clear needed)`);
+
+if (!process.argv.includes("--no-launch")) {
+  try {
+    await launchNextSession(process.argv.includes("--force-launch") ? ["--force"] : []);
+  } catch {
+    // 次セッションの起動失敗で、完了済みの close-session を失敗扱いにしない。
+  }
+}

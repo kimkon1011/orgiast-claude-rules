@@ -1,4 +1,4 @@
-# Claude 利用コスト監査 (純PowerShell / LLMトークン不使用)
+﻿# Claude 利用コスト監査 (純PowerShell / LLMトークン不使用)
 # ローカルの Claude Code 記録 (~/.claude/projects/**/*.jsonl) を解析し、
 # 「開発(cwd)別に どのモデルで 何トークン 推定いくら」+ 設定監査 を算出する。
 #

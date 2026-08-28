@@ -23,6 +23,16 @@ jobs:
       - name: selftest-guards (Windows)
         run: node tools/selftest-guards.mjs
 
+      # 配布する .ps1 の構文/文字コード検査。
+      # shell: powershell = Windows PowerShell 5.1 で走らせる(既定の pwsh=PS7 ではない)。
+      # PS7 は BOM なし UTF-8 を正しく読むため、日本語 .ps1 の BOM 欠落を検出できない。
+      # メンバーPCの既定は 5.1 なので、5.1 で検査しないと実機の事故をすり抜ける。
+      # if: !cancelled() = 前ステップが失敗しても必ず走らせる(silent skip 防止)。
+      - name: .ps1 構文/文字コード検査 (Windows PowerShell 5.1)
+        if: ${{ !cancelled() }}
+        shell: powershell
+        run: .\tools\pscheck.ps1
+
   test-posix:
     name: test-posix
     runs-on: ubuntu-latest

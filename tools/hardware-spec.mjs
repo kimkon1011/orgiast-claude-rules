@@ -44,6 +44,15 @@ export function classifyNetworkAdapters(adapters) {
 // WmiMonitorConnectionParams は「今つながっているモニタの接続方式」しか返さないので、
 // HDMI(5) が含まれれば端子ありと断定できるが、含まれないことは「端子が無い」証拠にならない
 // (実機で DisplayPort 接続のため HDMI 端子があるのに『なし』と出た)。断定できない側は判定不能にする。
+// Win32_ComputerSystem.PCSystemType: 1=Desktop / 2=Mobile(ノート) / 3=Workstation
+// 4=Enterprise Server / 5=SOHO Server / 6=Appliance PC / 7=Performance Server。
+// シートの列は「ﾉｰﾄor ﾃﾞｽｸﾄｯﾌﾟ」の2択なので、判別できない値は空にして人の記入を残す。
+export function classifyDeviceType(pcSystemType) {
+  const code = Number(pcSystemType);
+  if (code === 2) return 'ノート';
+  if (code === 1 || code === 3 || code === 7) return 'デスクトップ';
+  return '';
+}
 export function classifyVideoOutputs(codes) {
   const values = asArray(codes).map(Number).filter(Number.isFinite);
   if (!values.length) return '判定不能';
@@ -83,12 +92,13 @@ export function normalizeWindows(raw, hostname = '') {
     memorySlotsFree: arrays.length && memory.length ? Math.max(0, sum(arrays, a => Number(a.MemoryDevices)) - memory.length) : '', memoryMaxGb: maxKb === '' ? '' : toGb(maxKb * 1024),
     diskType: [...new Set(disks.map(classifyCimDisk).filter(Boolean))].join('/'), diskGb: (() => { const n = sum(disks, d => Number(d.Size ?? d.size)); return n === '' ? '' : toGb(n); })(),
     opticalDrive: raw.cdromKnown ? (asArray(raw.cdrom).length ? 'あり' : 'なし') : '判定不能',
-    lan: network.lan, wifi: network.wifi, hdmi: classifyVideoOutputs(raw.videoOutputs), deviceType: text(raw.deviceType)
+    lan: network.lan, wifi: network.wifi, hdmi: classifyVideoOutputs(raw.videoOutputs),
+    deviceType: text(raw.deviceType) || classifyDeviceType(raw.computer?.PCSystemType)
   };
 }
 
 const WINDOWS_SCRIPT = `[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; $OutputEncoding=[System.Text.Encoding]::UTF8; $ErrorActionPreference='SilentlyContinue'
-$cs=Get-CimInstance Win32_ComputerSystem|Select-Object -Property Manufacturer,Model
+$cs=Get-CimInstance Win32_ComputerSystem|Select-Object -Property Manufacturer,Model,PCSystemType
 $os=Get-CimInstance Win32_OperatingSystem|Select-Object -Property Caption,Version,OSArchitecture
 $mem=@(Get-CimInstance Win32_PhysicalMemory|Select-Object -Property Capacity,SMBIOSMemoryType,Speed)
 $ma=@(Get-CimInstance Win32_PhysicalMemoryArray|Select-Object -Property MemoryDevices,MaxCapacityEx)

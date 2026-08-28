@@ -27,10 +27,14 @@ function fleetPlanPcInventory(headers, rows, payload) {
     if (col >= 0 && pcNonEmpty(value)) values[col] = value;
   });
   var updatedCol = pcFindHeader(headers, '情報更新日'); if (updatedCol >= 0 && pcNonEmpty(payload.updatedAt)) values[updatedCol] = payload.updatedAt;
-  if (appended) {
-    var noCol = pcFindHeader(headers, 'PC No.');
-    if (noCol >= 0) { var max=0; rows.forEach(function(row){ var m=String(row[noCol]||'').match(/^P(\d+)$/i); if(m) max=Math.max(max,Number(m[1])); }); values[noCol]='P'+(max+1); }
-    var typeCol=pcFindHeader(headers,'ﾉｰﾄor ﾃﾞｽｸﾄｯﾌﾟ'); if(typeCol>=0 && pcNonEmpty(spec.deviceType)) values[typeCol]=spec.deviceType;
-  }
+  // No と 種別は「追加時」だけでなく「既存行が空欄のとき」も埋める。
+  // 追加専用にすると、先に別経路で作られた行が永久に空のまま残る(実際に39行目がそうなった)。
+  // 既に値がある行は人の記入なので絶対に上書きしない。
+  var existing = appended ? [] : (rows[rowIndex] || []);
+  var blank = function(col) { return col >= 0 && !pcNonEmpty(String(existing[col] == null ? '' : existing[col]).trim()); };
+  var noCol = pcFindHeader(headers, 'No');
+  if (blank(noCol)) { var max=0; rows.forEach(function(row){ var m=String(row[noCol]||'').match(/^P(\d+)$/i); if(m) max=Math.max(max,Number(m[1])); }); values[noCol]='P'+(max+1); }
+  var typeCol=pcFindHeader(headers,'ﾉｰﾄor ﾃﾞｽｸﾄｯﾌﾟ');
+  if (blank(typeCol) && pcNonEmpty(spec.deviceType)) values[typeCol]=spec.deviceType;
   return { action: appended ? 'appended' : 'updated', rowIndex: rowIndex, values: values };
 }

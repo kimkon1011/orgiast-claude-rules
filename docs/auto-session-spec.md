@@ -11,16 +11,25 @@ kim 決定 2026-08-26: 「/session-start を毎回打つのが手間。自動で
 
 ## 動作フロー
 
-1. `~/.claude/next-session.md` を読む（`ORGIAST_HOME` があればそちらの `.claude`）。
+1. `~/.claude/next-session.md` を読む（`ORGIAST_HOME` があればそちらの `.claude`）。これとは独立して、`tools/feedback-to-issues.mjs` と共有するリポジトリ表（定数 + `FEEDBACK_REPO_MAP`）から、`feedback` ラベル付きの open Issue も取得する。
 2. **先頭の引き継ぎブロックだけ**を対象にする。ファイルは歴代ブロックの追記で 159KB あり、`<!-- NEXT-SESSION v1 -->` で区切られている。2本目以降は無視する。
 3. 先頭ブロックから `## 残TODO` セクションの番号付き項目を抽出する。次は**除外**:
    - `~~` で囲まれた取り消し線（完了済み）
    - `要判断` / `判断待ち` / `未決` を含む行（kim の判断が要る）
    - `ブロック中` を含む行
-4. 残った先頭から `--count N`（既定 1）件を選ぶ。
+4. 残った先頭から `--count N`（既定 1）件を選ぶ。フォーム報告は `in-progress` ラベル付きを除外し、独立した `--feedback-count N`（既定 1、最大 3）で選ぶ。全体として両入力源を混ぜず、それぞれの上限を適用する。
 5. 各 TODO について子セッションを 1 つ起動する（下記「子セッションの起動」）。
 6. 実行結果を `~/.claude/auto-session/runs/<YYYY-MM-DD>-<n>.json` に保存する（`claude.exe --output-format json` の出力をそのまま + 選んだ TODO 文 + 開始終了時刻 + exitCode）。
 7. 全件終わったら Discord に 1 メッセージで要約を送る（下記「通知」）。
+
+### フォーム報告 Issue の扱い（2026-08-28 kim 決定）
+
+- 各対象リポジトリで `gh issue list --label feedback --state open` を使う。`gh` が無い環境ではフォーム入力だけを0件とし、`next-session.md` 経路はそのまま動かす。
+- 着手時に `in-progress` ラベルを作成・付与する。子セッションの起動自体に失敗した場合だけ外して再試行可能にする。
+- フォーム報告用には専用プロンプトを使う。Issue の番号・タイトル・本文・リポジトリを渡し、原因特定、修正、テスト・型チェック・ビルド、main からの新規ブランチ、`Closes #N` 付き PR 作成まで行う。
+- **フォーム報告由来は PR で止める。PR をマージしない、本番へデプロイしない、main へ直接 push しない。承認は kim が行う。** `next-session.md` 由来の main マージ・デプロイまでの自律範囲は変更しない。
+- 内容が曖昧なら推測で実装せず、不足情報を Issue にコメントして終了する。
+- 完了後は `FEEDBACK_RELAY_URL` の `/api/feedback-intake` を `/api/notify` に置換し、同じ `FEEDBACK_RELAY_SECRET` で PR URL・タイトル・CI結果を通知する。PR を作れない場合も試行数と失敗数を通知し、中継未設定はログを1行出してスキップする。
 
 ## 子セッションの起動
 
@@ -79,7 +88,7 @@ kim 決定 2026-08-26: 「/session-start を毎回打つのが手間。自動で
 - **キルスイッチ**: `~/.claude/auto-session/disabled` が存在したら何もせず終了（exit 0・理由を出力）。
 - **1回あたりの上限**: `--count` 既定 1、最大 3。夜間タスクも既定 1。
 - **--dry**: 選んだ TODO と生成したプロンプトを表示して終了。子セッションは起動しない。
-- **--list**: 抽出した TODO 一覧（採用/除外と理由）を表示して終了。
+- **--list**: 抽出した TODO とフォーム報告 Issue の一覧（`[next-session]` / `[feedback]`、採用/除外と理由）を表示して終了。
 
 ## 通知
 

@@ -6,7 +6,7 @@ import path from 'node:path';
 
 const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-session-test-'));
 process.env.ORGIAST_HOME = isolatedHome;
-const { DEFAULT_REPO, localDate, loadConfig, detectHistoryCwd, parseHandoff, todoExclusionReason, filterTodos, pickCwd, buildChildArgs, buildPrompt, resolveClaudeExe, decideRun, markTodoDone, extractSessionId, transcriptPath, recoverSessionId, appendClosedSession, formatResultLine } = await import('./auto-session.mjs');
+const { DEFAULT_REPO, localDate, loadConfig, detectHistoryCwd, parseHandoff, todoExclusionReason, filterTodos, pickCwd, buildChildArgs, buildPrompt, buildFeedbackPrompt, feedbackIssueExclusionReason, filterFeedbackIssues, feedbackNotifyUrl, normalizeGitHubRepo, feedbackRepoCwd, resolveClaudeExe, decideRun, markTodoDone, extractSessionId, transcriptPath, recoverSessionId, appendClosedSession, formatResultLine } = await import('./auto-session.mjs');
 const historyCwd = String.raw`c:\Users\example\Downloads\work`;
 test.after(() => fs.rmSync(isolatedHome, { recursive: true, force: true }));
 
@@ -23,6 +23,55 @@ test('parseHandoff は先頭ブロックだけから TODO と付帯セクショ�
 
 test('filterTodos は完了・判断待ち・未決・ブロック中を除外する', () => {
   assert.deepEqual(filterTodos(['実行', '~~完了~~', '要判断 X', '判断待ち X', '未決 X', 'ブロック中 X']), ['実行']);
+});
+
+test('フォーム報告用プロンプトは TODO 用と分離し、PR をマージしない制約を含む', () => {
+  const issue = { number: 42, title: '保存できない', url: 'https://github.com/acme/app/issues/42', body: '保存ボタンが反応しません' };
+  const prompt = buildFeedbackPrompt(issue, 'acme/app', '/repos/app', '/tmp/feedback.summary.md', 60);
+  assert.ok(prompt.includes('社員がアプリ内フォームから報告'));
+  assert.ok(prompt.includes('PR をマージしない'));
+  assert.ok(prompt.includes('本番へデプロイしない'));
+  assert.ok(prompt.includes('main へ直接 push しない'));
+  assert.ok(prompt.includes('Closes #42'));
+  assert.ok(prompt.includes('推測で実装しない'));
+  assert.ok(prompt.includes('PRタイトル: <タイトル>'));
+});
+
+test('in-progress ラベル付き Issue はフォーム報告の対象から除外する', () => {
+  const available = { number: 1, labels: [{ name: 'feedback' }] };
+  const active = { number: 2, labels: [{ name: 'feedback' }, { name: 'in-progress' }] };
+  assert.equal(feedbackIssueExclusionReason(active), 'in-progress（対応中）');
+  assert.deepEqual(filterFeedbackIssues([available, active]), [available]);
+});
+
+test('通知URLは feedback-intake を notify に置き換え、query を捨てる', () => {
+  assert.equal(feedbackNotifyUrl('https://relay.example/api/feedback-intake?pending=1'), 'https://relay.example/api/notify');
+  assert.equal(feedbackNotifyUrl('not a url'), '');
+});
+
+test('GitHub remote URL は形式・末尾・大文字小文字の差を owner/repo に正規化する', () => {
+  assert.equal(normalizeGitHubRepo('https://github.com/owner/repo.git'), 'owner/repo');
+  assert.equal(normalizeGitHubRepo('git@github.com:owner/repo'), 'owner/repo');
+  assert.equal(normalizeGitHubRepo('https://github.com/owner/repo/'), 'owner/repo');
+  assert.equal(normalizeGitHubRepo('HTTPS://GITHUB.COM/Owner/Repo.GIT/'), 'owner/repo');
+});
+
+test('feedbackRepoCwd は不一致 remote を飛ばして一致する既存作業ツリーを選ぶ', () => {
+  const root = '/repos';
+  const wrong = path.join(root, 'wrong-folder');
+  const matched = path.join(root, '日本語フォルダ');
+  const io = {
+    readdir: () => [
+      { name: 'wrong-folder', isDirectory: () => true },
+      { name: '日本語フォルダ', isDirectory: () => true },
+    ],
+    exists: (candidate) => candidate === path.join(wrong, '.git') || candidate === path.join(matched, '.git'),
+    remoteUrl: (candidate) => ({
+      status: 0,
+      stdout: candidate === wrong ? 'git@github.com:other/repo.git' : 'https://github.com/Owner/Repo.git',
+    }),
+  };
+  assert.equal(feedbackRepoCwd('owner/repo', { roots: [root], io }), matched);
 });
 
 test('todoExclusionReason は他セッションが着手中の項目を除外する', () => {
@@ -109,6 +158,15 @@ test('buildChildArgs は cwd が異なる場合だけ --add-dir を2つ渡す', 
   assert.deepEqual(same.slice(-2), ['--add-dir', repoCwd]);
   assert.equal(different.includes('--permission-mode'), false);
   assert.equal(same.includes('--permission-mode'), false);
+  assert.equal(different[different.indexOf('--model') + 1], 'sonnet');
+});
+
+test('buildChildArgs は環境変数で無人実行モデルを上書きできる', () => {
+  process.env.ORGIAST_AUTO_SESSION_MODEL = 'haiku';
+  try {
+    const args = buildChildArgs('C:\\repo', 'C:\\repo');
+    assert.equal(args[args.indexOf('--model') + 1], 'haiku');
+  } finally { delete process.env.ORGIAST_AUTO_SESSION_MODEL; }
 });
 
 test('resolveClaudeExe はバージョンを数値セグメントで比較する', () => {

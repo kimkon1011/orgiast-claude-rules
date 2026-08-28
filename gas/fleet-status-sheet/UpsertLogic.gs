@@ -3,10 +3,11 @@ const FLEET_HEADERS_ = {
   hostname: '【自動検知】PC名/ホスト名', reportedAt: '最終報告(JST)', claudeUsd: 'Claude概算$', mainModel: '主なモデル', delegRatio: '委譲率(安いAIへ)',
   cheapAiUse: '安いAI使用', codexLogin: 'Codexログイン', fable5: 'Fable5検出', disciplineAlert: '委譲規律アラート', consistency: '整合性(自己申告↔検知)',
   osUser: 'OSユーザー名', realHostname: '実ホスト名', gitEmail: 'Gitメール',
-  activeProjects: '開発プロジェクト(直近7日)', artifacts: '成果物(リポジトリ/ブランチ)', lastCommit: '直近コミット'
+  activeProjects: '開発プロジェクト(直近7日)', artifacts: '成果物(リポジトリ/ブランチ)', lastCommit: '直近コミット',
+  livenessState: '稼働状態', livenessReason: '状態の理由', livenessCheckedAt: '状態確認日(JST)'
 };
 
-const FLEET_OPTIONAL_HEADERS_ = ['osUser', 'realHostname', 'gitEmail', 'activeProjects', 'artifacts', 'lastCommit'];
+const FLEET_OPTIONAL_HEADERS_ = ['osUser', 'realHostname', 'gitEmail', 'activeProjects', 'artifacts', 'lastCommit', 'livenessState', 'livenessReason', 'livenessCheckedAt'];
 
 // ヘッダ照合は正規化してから行う。全角/半角の括弧・英数、前後の空白、改行の違いで
 // 「タブが見つからない」と誤判定するのを防ぐ(実セルの表記は目視できないため厳密一致に賭けない)。

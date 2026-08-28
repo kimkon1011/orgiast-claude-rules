@@ -1,11 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyFleet, formatLiveness, loadPcMap, TOOL_INTRODUCED } from './fleet-liveness.mjs';
+import { classifyFleet, formatLiveness, loadPcMap, TOOL_INTRODUCED, toSheetState } from './fleet-liveness.mjs';
 
 const now = new Date('2026-08-27T03:00:00.000Z');
 const message = (label, hostname, timestamp, email = 'person@example.com') => ({
   timestamp,
   content: `**💻 Claude Code ローカル利用トークン** — ${label}\n🖥 hostname=${hostname} / user=u / git=${email}`,
+});
+
+test('toSheetState は6状態をシート表記へ変換する', () => {
+  assert.deepEqual(Object.fromEntries(['alive', 'discord-mute', 'broken', 'never', 'legacy-manual', 'uncertain'].map((state) => [state, toSheetState(state)])), {
+    alive: '生存', 'discord-mute': 'Discord不通', broken: '停止', never: '報告実績なし', 'legacy-manual': '手入力のみ', uncertain: '要確認',
+  });
 });
 
 test('4状態を理由付きで分離し never を異常に数えない', () => {

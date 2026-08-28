@@ -11,6 +11,12 @@ const DAY_MS = 86_400_000;
 const DEFAULT_CHANNEL_ID = '1508437329247862794';
 export const TOOL_INTRODUCED = '2026-08-20';
 
+export function toSheetState(state) {
+  const states = { alive: '生存', 'discord-mute': 'Discord不通', broken: '停止', never: '報告実績なし', 'legacy-manual': '手入力のみ', uncertain: '要確認' };
+  if (!Object.hasOwn(states, state)) throw new TypeError(`unknown liveness state: ${state}`);
+  return states[state];
+}
+
 export async function loadPcMap(repoRoot, readFile = fs.promises.readFile) {
   try {
     const value = JSON.parse(await readFile(path.join(repoRoot, 'fleet-pc-map.json'), 'utf8'));
@@ -166,7 +172,7 @@ export function formatLiveness(result) {
 }
 
 export async function main(argv = process.argv.slice(2), now = new Date()) {
-  const allowed = new Set(['--json', '--post']);
+  const allowed = new Set(['--json', '--post', '--post-sheet']);
   const invalid = argv.find((arg) => !allowed.has(arg));
   if (invalid) { console.error(`不正な引数: ${invalid}`); return 2; }
   const home = os.homedir();
@@ -195,6 +201,23 @@ export async function main(argv = process.argv.slice(2), now = new Date()) {
     if (!webhook) { console.error('DISCORD_COST_WEBHOOK が未設定です'); return 1; }
     const response = await fetch(webhook, { method: 'POST', headers: { 'Content-Type': 'application/json', 'User-Agent': 'orgiast-fleet-liveness/1.0' }, body: JSON.stringify({ content: output }), signal: AbortSignal.timeout(20_000) });
     if (!response.ok) { console.error(`Discord送信が HTTP ${response.status}`); return 1; }
+  }
+  if (argv.includes('--post-sheet')) {
+    if (!fleetEnv.FLEET_SHEET_URL || !fleetEnv.FLEET_SHEET_TOKEN) { console.error('FLEET_SHEET_URL/TOKEN が未設定です'); return 1; }
+    const candidates = Object.entries(pcMap).map(([label, mapped]) => [label, mapped.sheetName, mapped.hostname, ...(Array.isArray(mapped.aliases) ? mapped.aliases : [])].filter(Boolean));
+    const items = result.items.map((item) => {
+      const mapped = candidates.find((names) => names.some((name) => item.name === name || item.name.includes(`（${name}）`)));
+      return { names: [...new Set(mapped || [item.name])], state: toSheetState(item.state), reason: item.reason };
+    });
+    const checkedAt = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Tokyo', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(now);
+    const response = await fetch(fleetEnv.FLEET_SHEET_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'User-Agent': 'orgiast-fleet-liveness/1.0' }, body: JSON.stringify({ token: fleetEnv.FLEET_SHEET_TOKEN, kind: 'liveness', checkedAt, items }), signal: AbortSignal.timeout(20_000) });
+    if (!response.ok) { console.error(`シート送信が HTTP ${response.status}`); return 1; }
+    const body = await response.json();
+    if (!body.ok) { console.error(`シート書き込み失敗: ${body.error || 'unknown'}`); return 1; }
+    // 成功時も必ず結果を出す。黙って成功すると「届いていない」ことに誰も気付けない。
+    // written は書き込んだ列見出し＝許可リストが守られたことをシートを読まずに検証できる。
+    console.log(`\nシート書き込み: ${body.updated ?? 0}行を更新 / 列: ${(body.written || []).join(', ') || '(なし)'}`);
+    if (body.unmatched?.length) console.log(`シート未突合(行は作っていません): ${body.unmatched.join(', ')}`);
   }
   return result.unavailable ? 1 : 0;
 }

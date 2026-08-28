@@ -6,12 +6,16 @@
 node -e "fetch('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/packages/feedback-widget/install.mjs?cb='+Date.now()).then(r=>r.text()).then(t=>{require('fs').writeFileSync('install-feedback.mjs',t);})" && node install-feedback.mjs --app-name "<アプリ名>"
 ```
 
-`--target <path> --discord-channel <id> --webhook <url> --no-admin-page --dry-run --force` を指定できます。Node.js 18 以降、Next.js App Router が対象です。テンプレートが手元に無い単体実行時も GitHub `main` から自動取得します。
+`--target <path> --relay <url> --relay-secret <secret> --discord-channel <id> --webhook <url> --no-admin-page --dry-run --force` を指定できます。Node.js 18 以降、Next.js App Router が対象です。テンプレートが手元に無い単体実行時も GitHub `main` から自動取得します。
+
+既定の通知先は中継エンドポイント経由の kim への個別 DM です。Bot と webhook によるチャンネル通知は、既存アプリのための後方互換経路です。
 
 ## 環境変数
 
 | 名前 | 用途 | 必須条件 |
 |---|---|---|
+| `FEEDBACK_RELAY_URL` | kim への個別 DM を行う中継エンドポイント | 標準の通知経路。secret と組で必須 |
+| `FEEDBACK_RELAY_SECRET` | 中継エンドポイントの Bearer 認証 | 標準の通知経路。URL と組で必須。クライアントへ公開禁止 |
 | `NEXT_PUBLIC_SUPABASE_URL` | REST/Auth/Storage URL | DB保存時 |
 | `SUPABASE_SERVICE_ROLE_KEY` | サーバー専用REST認証 | DB保存時。クライアントへ公開禁止 |
 | `DISCORD_BOT_TOKEN` | Bot REST API | Discord通知（優先） |
@@ -19,15 +23,21 @@ node -e "fetch('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rule
 | `FEEDBACK_DISCORD_WEBHOOK_URL` | BotがないGuild用 | Discord通知（代替） |
 | `NEXT_PUBLIC_APP_URL` | 通知内の管理画面URL | 任意 |
 
+通知経路の優先順位:
+
+1. `FEEDBACK_RELAY_URL` + `FEEDBACK_RELAY_SECRET`（kim への個別 DM）
+2. `DISCORD_BOT_TOKEN` + `DISCORD_FEEDBACK_CHANNEL_ID`（チャンネル通知・後方互換）
+3. `FEEDBACK_DISCORD_WEBHOOK_URL`（チャンネル通知・後方互換）
+
 ## データモデル
 
 `app_feedback` は UUID 主キー、`kind` (`bug/request`)、title、body、page_path、submitter、submitter_email、`status` (`new/triaged/in_progress/done/rejected`)、`priority` (`low/normal/high`)、admin_note、resolved_ref、screenshot_path、created_at、updated_at を持ちます。RLS を有効にし、アプリの読み書きは service role 経由に限定します。画像は private bucket `feedback-screenshots` に置き、authenticated 用 select/insert/update policy を作ります。正本は `templates/migration_app_feedback.sql` で、冪等に実行できます。
 
 ## API 仕様
 
-`POST /api/feedback` に `multipart/form-data` で `kind`, `title`, `body`, `page_path`, 任意の `submitter`, `screenshot` を送ります。title/body は必須、画像は `image/*`・8MB以下です。成功は `{ "ok": true, "id": "...", "sinks": { "db": true, "discord": true } }`、入力不備等は `{ "ok": false, "error": "..." }` と 4xx/5xx です。Supabase Cookie の access token からメールを best-effort で特定します。DB/画像/Discord の一部障害は利用可能な保存先が成功する限り投稿全体を維持します。
+`POST /api/feedback` に `multipart/form-data` で `kind`, `title`, `body`, `page_path`, 任意の `submitter`, `screenshot` を送ります。title/body は必須、画像は `image/*`・8MB以下です。成功は `{ "ok": true, "id": "...", "sinks": { "db": true, "discord": true, "via": "relay" } }`、入力不備等は `{ "ok": false, "error": "..." }` と 4xx/5xx です。`discord` はいずれかの通知経路で配信できたかを表し、`via` は `relay` / `bot` / `webhook` のどこを通ったかを表します。Supabase Cookie の access token からメールを best-effort で特定します。DB/画像/通知の一部障害は利用可能な保存先が成功する限り投稿全体を維持します。
 
-Discord 本文は `[アプリ名] 種別: タイトル`、本文先頭300字、提出者、画面、`/feedback`、7日署名スクショURLの順です。Bot token + channel を webhook より優先します。
+中継にはアプリ名、種別、タイトル、本文、画面、提出者、提出元URL、画像を multipart で渡します。中継が失敗した場合のみ Bot、webhook の順でフォールバックします。Discord 本文は `[アプリ名] 種別: タイトル`、本文先頭300字、提出者、画面、`/feedback`、7日署名スクショURLの順です。
 
 ## 公開サイト（ログイン不要のアプリ）へ設置する場合
 

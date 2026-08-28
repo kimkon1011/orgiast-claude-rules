@@ -6,12 +6,12 @@ import { fileURLToPath } from "node:url";
 
 const RAW = "https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/packages/feedback-widget/templates";
 const TEMPLATE_NAMES = ["api-route.ts", "FeedbackWidget.tsx", "FeedbackTriggerButton.tsx", "feedback-admin-page.tsx", "feedback-update-route.ts", "list-feedback.mjs", "migration_app_feedback.sql"];
-const args = process.argv.slice(2); const options = { target: process.cwd(), appName: "", channel: "", webhook: "", admin: true, dryRun: false, force: false };
+const args = process.argv.slice(2); const options = { target: process.cwd(), appName: "", channel: "", webhook: "", relay: "", relaySecret: "", admin: true, dryRun: false, force: false };
 function value(name) { const index = args.indexOf(name); if (index < 0 || !args[index + 1]) return ""; return args[index + 1]; }
-options.target = resolve(value("--target") || options.target); options.appName = value("--app-name"); options.channel = value("--discord-channel") || options.channel; options.webhook = value("--webhook");
+options.target = resolve(value("--target") || options.target); options.appName = value("--app-name"); options.channel = value("--discord-channel") || options.channel; options.webhook = value("--webhook"); options.relay = value("--relay"); options.relaySecret = value("--relay-secret");
 options.admin = !args.includes("--no-admin-page"); options.dryRun = args.includes("--dry-run"); options.force = args.includes("--force");
-const known = new Set(["--target", "--app-name", "--discord-channel", "--webhook", "--no-admin-page", "--dry-run", "--force"]);
-for (let i = 0; i < args.length; i++) { if (!known.has(args[i])) throw new Error(`不明なオプション: ${args[i]}`); if (["--target", "--app-name", "--discord-channel", "--webhook"].includes(args[i])) i++; }
+const known = new Set(["--target", "--app-name", "--discord-channel", "--webhook", "--relay", "--relay-secret", "--no-admin-page", "--dry-run", "--force"]);
+for (let i = 0; i < args.length; i++) { if (!known.has(args[i])) throw new Error(`不明なオプション: ${args[i]}`); if (["--target", "--app-name", "--discord-channel", "--webhook", "--relay", "--relay-secret"].includes(args[i])) i++; }
 
 const packageFile = join(options.target, "package.json");
 if (!existsSync(packageFile)) throw new Error(`package.json がありません: ${packageFile}`);
@@ -104,12 +104,19 @@ let migrationApplied = false;
 if (!options.dryRun && changed.includes(relative(options.target, migrationFile))) { try { if (commandExists("supabase") && existsSync(join(options.target, "supabase/config.toml"))) { execFileSync("supabase", ["db", "push"], { cwd: options.target, stdio: "inherit" }); migrationApplied = true; } else { const dbUrl = env.DATABASE_URL || env.POSTGRES_URL_NON_POOLING || env.POSTGRES_URL; if (dbUrl && commandExists("psql")) { execFileSync("psql", [dbUrl, "-f", migrationFile], { cwd: options.target, stdio: "inherit" }); migrationApplied = true; } } } catch (error) { pending.push(`マイグレーション自動適用失敗: ${error.message}`); } }
 if (!migrationApplied) { const match = String(env.NEXT_PUBLIC_SUPABASE_URL || "").match(/^https:\/\/([^.]+)\.supabase\.co/); const link = match ? `https://supabase.com/dashboard/project/${match[1]}/sql/new` : "Supabase Dashboard の SQL Editor"; pending.push(`マイグレーション: ${link} を開き ${migrationFile} の SQL 全文を貼って Run。完了判定 = Success. No rows returned\n\n${migrationSql}`); }
 if (options.webhook && !env.FEEDBACK_DISCORD_WEBHOOK_URL) pending.push(`FEEDBACK_DISCORD_WEBHOOK_URL=${options.webhook} を .env.local と本番環境へ設定`);
+// secret は生成ファイルへ埋め込まず、利用者が明示的にサーバー環境へ設定する残作業としてだけ案内する。
+if (options.relay && !env.FEEDBACK_RELAY_URL) pending.push(`FEEDBACK_RELAY_URL=${options.relay} を .env.local と本番環境へ設定`);
+if (options.relaySecret && !env.FEEDBACK_RELAY_SECRET) pending.push(`FEEDBACK_RELAY_SECRET=${options.relaySecret} を .env.local と本番環境へ設定`);
 
 log(`\n${options.dryRun ? "[dry-run] 予定内容" : "インストール結果"}`); log("変更ファイル:"); for (const file of changed) log(`- [x] ${file}`); if (!changed.length) log("- なし");
 if (skipped.length) { log("上書きせずスキップ:"); for (const file of skipped) log(`- ${file}（--force で上書き）`); }
 log("環境変数:");
 for (const name of ["NEXT_PUBLIC_SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "NEXT_PUBLIC_APP_URL"]) log(env[name] ? `- ✅ ${name}: OK` : `- ⚠️ ${name}: 未設定。Vercel: vercel env add ${name} production`);
-log(env.DISCORD_BOT_TOKEN || env.FEEDBACK_DISCORD_WEBHOOK_URL || options.webhook ? "- ✅ Discord 通知経路: OK" : "- ⚠️ Discord: DISCORD_BOT_TOKEN または FEEDBACK_DISCORD_WEBHOOK_URL を設定。Vercel: vercel env add DISCORD_BOT_TOKEN production");
+const hasRelay = Boolean((env.FEEDBACK_RELAY_URL || options.relay) && (env.FEEDBACK_RELAY_SECRET || options.relaySecret));
+const hasBot = Boolean(env.DISCORD_BOT_TOKEN && (env.DISCORD_FEEDBACK_CHANNEL_ID || options.channel));
+if (hasRelay) log("- ✅ 通知経路: OK（kim へ DM）");
+else if (hasBot || env.FEEDBACK_DISCORD_WEBHOOK_URL || options.webhook) log("- ✅ 通知経路: OK（Discord チャンネル・後方互換）");
+else log("- ⚠️ 通知経路: 中継 or Bot or webhook のいずれかを設定してください");
 log("残作業:"); if (pending.length) pending.forEach((item) => log(`- [ ] ${item}`)); else log("- [x] なし");
 const verifyFile = join(dirname(fileURLToPath(import.meta.url)), "verify.mjs");
 const verifyCommand = existsSync(verifyFile)

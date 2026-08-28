@@ -107,14 +107,48 @@ async function signedUrl(url: string, path: string, expiresIn: number): Promise<
   } catch { return null; }
 }
 
-async function notifyDiscord(content: string, image: { name: string; type: string; data: Buffer } | null): Promise<boolean> {
-  const token = process.env.DISCORD_BOT_TOKEN;
-  const channel = process.env.DISCORD_FEEDBACK_CHANNEL_ID || DEFAULT_CHANNEL_ID;
-  const webhook = process.env.FEEDBACK_DISCORD_WEBHOOK_URL;
-  const endpoint = token && channel ? `https://discord.com/api/v10/channels/${channel}/messages` : webhook || "";
-  if (!endpoint) return false;
-  const headers: Record<string, string> = token && channel ? { Authorization: `Bot ${token}` } : {};
-  // 提出元 URL のプレビューで通知チャンネルが流れないよう、埋め込み表示を抑止する。
+type NotificationVia = "relay" | "bot" | "webhook";
+type NotificationResult = { sent: boolean; via?: NotificationVia };
+type FeedbackNotification = {
+  kind: "bug" | "request";
+  title: string;
+  body: string;
+  pagePath: string | null;
+  submitter: string | null;
+  sourceUrl: string;
+};
+
+async function notifyRelay(feedback: FeedbackNotification, image: { name: string; type: string; data: Buffer } | null): Promise<boolean> {
+  const relayUrl = process.env.FEEDBACK_RELAY_URL;
+  const relaySecret = process.env.FEEDBACK_RELAY_SECRET;
+  if (!relayUrl || !relaySecret) return false;
+  try {
+    const form = new FormData();
+    form.set("app_name", APP_NAME);
+    form.set("kind", feedback.kind);
+    form.set("title", feedback.title);
+    form.set("body", feedback.body);
+    form.set("page_path", feedback.pagePath || "");
+    form.set("submitter", feedback.submitter || "");
+    form.set("source_url", feedback.sourceUrl);
+    // 中継側で kim の DM へ添付できるよう、受け取った画像を加工せず同じバイト列で渡す。
+    if (image) form.set("screenshot", new File([new Uint8Array(image.data)], image.name || "screenshot.png", { type: image.type || "image/png" }));
+    const response = await fetch(relayUrl, { method: "POST", headers: { Authorization: `Bearer ${relaySecret}` }, body: form });
+    // 失敗理由を console.warn に残せるよう、本文は一度だけ読み取ってから JSON として解釈する。
+    const responseBody = await responseText(response);
+    if (response.ok) {
+      let result: { ok?: boolean; delivered?: boolean } | null = null;
+      try { result = JSON.parse(responseBody); } catch { /* 契約外レスポンスは失敗としてフォールバックする */ }
+      if (result?.ok === true && result?.delivered === true) return true;
+    }
+    console.warn("feedback relay failed; falling back to Discord:", response.status, responseBody);
+  } catch (error) {
+    console.warn("feedback relay failed; falling back to Discord:", error);
+  }
+  return false;
+}
+
+async function sendDiscord(endpoint: string, headers: Record<string, string>, content: string, image: { name: string; type: string; data: Buffer } | null): Promise<boolean> {
   const payload = { content, allowed_mentions: { parse: [] as string[] }, flags: 4 };
   try {
     // 画像は Discord へ直接添付する。DB を使わない構成でもスクショが失われないようにするため
@@ -130,6 +164,16 @@ async function notifyDiscord(content: string, image: { name: string; type: strin
     const response = await fetch(endpoint, { method: "POST", headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     return response.ok;
   } catch { return false; }
+}
+
+async function notifyDiscord(content: string, image: { name: string; type: string; data: Buffer } | null): Promise<NotificationResult> {
+  const token = process.env.DISCORD_BOT_TOKEN;
+  const channel = process.env.DISCORD_FEEDBACK_CHANNEL_ID || DEFAULT_CHANNEL_ID;
+  const webhook = process.env.FEEDBACK_DISCORD_WEBHOOK_URL;
+  // Bot が失敗しても webhook まで試し、通知が完全に消える可能性を下げる。
+  if (token && channel && await sendDiscord(`https://discord.com/api/v10/channels/${channel}/messages`, { Authorization: `Bot ${token}` }, content, image)) return { sent: true, via: "bot" };
+  if (webhook && await sendDiscord(webhook, {}, content, image)) return { sent: true, via: "webhook" };
+  return { sent: false };
 }
 
 export async function POST(request: NextRequest) {
@@ -152,8 +196,8 @@ export async function POST(request: NextRequest) {
     const screenshot = form.get("screenshot");
     const upload = screenshot instanceof File && screenshot.size > 0 && screenshot.size <= MAX_IMAGE_BYTES && screenshot.type.startsWith("image/") ? screenshot : null;
     const screenshotPath = hasDb && upload ? await uploadImage(url, upload) : null;
-    // DB へ入れられない構成でも Discord に添付するため、バイト列を保持する。
-    const attachment = upload && !screenshotPath ? { name: upload.name, type: upload.type, data: Buffer.from(await upload.arrayBuffer()) } : null;
+    // DB 保存の成否にかかわらず、中継または Discord へ同じ画像を渡せるようバイト列を保持する。
+    const attachment = upload ? { name: upload.name, type: upload.type, data: Buffer.from(await upload.arrayBuffer()) } : null;
     let id: string | null = null;
     let db = false;
     if (hasDb) {
@@ -165,10 +209,14 @@ export async function POST(request: NextRequest) {
     }
     const screenshotLink = screenshotPath ? await signedUrl(url, screenshotPath, 60 * 60 * 24 * 7) : null;
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL || request.nextUrl.origin;
+    const sourceUrl = `${baseUrl}${pagePath || "/"}`;
     const content = [`🐛 **[${APP_NAME}] ${kind === "bug" ? "不具合" : "要望"}: ${title}**`, body.slice(0, 300), `提出者: ${submitter || "不明"}`, `画面: ${pagePath || "不明"}`, ADMIN_PAGE ? `管理画面: ${baseUrl}/feedback` : `提出元: ${baseUrl}${pagePath || "/"}`, screenshotLink ? `📎 スクショ: ${screenshotLink}` : null].filter(Boolean).join("\n");
-    const discord = await notifyDiscord(content, attachment);
-    if (!db && !discord) return NextResponse.json({ ok: false, error: hasDb ? "DB保存とDiscord通知の両方に失敗しました" : "保存先が未設定です。SupabaseまたはDiscordを設定してください" }, { status: 503 });
-    return NextResponse.json({ ok: true, id, sinks: { db, discord }, note: !db ? "記録は Discord のみ" : undefined });
+    let notification: NotificationResult = { sent: false };
+    if (await notifyRelay({ kind, title, body, pagePath, submitter, sourceUrl }, attachment)) notification = { sent: true, via: "relay" };
+    else notification = await notifyDiscord(content, attachment);
+    const discord = notification.sent;
+    if (!db && !discord) return NextResponse.json({ ok: false, error: hasDb ? "DB保存と通知の両方に失敗しました" : "保存先が未設定です。Supabaseまたは通知経路を設定してください" }, { status: 503 });
+    return NextResponse.json({ ok: true, id, sinks: { db, discord, via: notification.via }, note: !db ? "記録は通知のみ" : undefined });
   } catch (cause) {
     return NextResponse.json({ ok: false, error: cause instanceof Error ? cause.message : "投稿処理に失敗しました" }, { status: 500 });
   }

@@ -1,0 +1,9 @@
+{
+  "MCP": ["Drive MCP", "Sheets", "Gmail MCP", "Calendar MCP", "Discord MCP", "search_files", "read_file_content", "create_file", "share_file"],
+  "Google 認証": ["サービスアカウント", "DWD", "ドメイン全体の委任", "impersonate", "subject:", "JWT", "GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON", "gcloud auth", "ADC"],
+  "Google API": ["Sheets API", "Drive API", "spreadsheets.values", "batchUpdate", "batchClear", "Apps Script API"],
+  "GAS": ["clasp push", "clasp run-function", "clasp create-script", "コマンドキュー", "setupOnce"],
+  "CLI": ["vercel env", "gh secret", "gh api", "supabase db push", "psql", "npm i"],
+  "復元系": [".env.local", "transcript grep", "Grep tool", "production bundle", "keyserve"],
+  "委譲": ["codex-do.mjs", "llm-ask.mjs"]
+}

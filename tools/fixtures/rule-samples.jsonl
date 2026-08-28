@@ -1,0 +1,75 @@
+{"ruleId":"handoff-quality-only","label":"violation","text":"以下の手順を実行してください。1. スクリプトを開いてください\n2. ファイルを選択してください\n3. ▶実行してください\n4. OAuthに同意してください\n5. 完了を報告してください","note":"transcript 2026-08-28 見積シート手渡し実例"}
+{"ruleId":"handoff-quality-only","label":"violation","text":"Supabase Dashboardを開いて SQL を実行してください。","note":"transcript の Dashboard 手渡し"}
+{"ruleId":"handoff-quality-only","label":"violation","text":"Vercel Dashboardを開いて環境変数を追加してください。","note":"transcript の Vercel 手渡し"}
+{"ruleId":"handoff-quality-only","label":"violation","text":"以下をコピーして貼り付けてください。","note":"transcript のコピー手渡し"}
+{"ruleId":"handoff-quality-only","label":"violation","text":"ユーザー側で設定をお願いします。","note":"transcript のユーザー操作依頼"}
+{"ruleId":"handoff-quality-only","label":"compliant","text":"WSL2を導入した。Nodeを設定した。テストを実行した。","note":"transcript 2026-08-05 過去形完了報告"}
+{"ruleId":"handoff-quality-only","label":"compliant","text":"調査を続行します。","note":"transcript 通常進捗"}
+{"ruleId":"handoff-quality-only","label":"compliant","text":"既存リソースを確認しました。","note":"transcript 通常報告"}
+{"ruleId":"handoff-quality-only","label":"compliant","text":"テスト結果は green です。","note":"transcript 検証報告"}
+{"ruleId":"handoff-quality-only","label":"compliant","text":"差分を読み取ります。","note":"transcript 通常進捗"}
+{"ruleId":"handoff-quality-only","label":"compliant","text":"C0034 / Japan IT Week 秋 は併記済みです。","note":"transcript 実測誤検知例"}
+{"ruleId":"handoff-quality-only","label":"compliant","text":"ledger はまだ生成されていません。","note":"transcript 監査報告"}
+{"ruleId":"handoff-quality-only","label":"compliant","text":"対象ファイルだけを変更します。","note":"transcript 作業宣言"}
+{"ruleId":"handoff-quality-only","label":"compliant","text":"node --test tools/ を実行済みです。","note":"transcript 検証報告"}
+{"ruleId":"handoff-quality-only","label":"compliant","text":"結果を表にまとめます。","note":"transcript 通常進捗"}
+{"ruleId":"id-with-name","label":"violation","text":"plannedRows: C0038","note":"transcript PJコード単独参照"}
+{"ruleId":"id-with-name","label":"violation","text":"caseId=C0001","note":"transcript ID単独参照"}
+{"ruleId":"id-with-name","label":"violation","text":"target: C0010","note":"transcript ID単独参照"}
+{"ruleId":"id-with-name","label":"violation","text":"code C0021","note":"transcript ID単独参照"}
+{"ruleId":"id-with-name","label":"violation","text":"row C0018","note":"transcript ID単独参照"}
+{"ruleId":"id-with-name","label":"compliant","text":"C0034 / Japan IT Week 秋","note":"transcript 実測誤検知例"}
+{"ruleId":"id-with-name","label":"compliant","text":"C0001,株式会社トラストスタジオ,コンテンツ東京","note":"transcript CSV実データ"}
+{"ruleId":"id-with-name","label":"compliant","text":"C0002,テスト株式会社,コンテンツ東京2","note":"transcript CSV実データ"}
+{"ruleId":"id-with-name","label":"compliant","text":"C0003,XYZ株式会社,テスト案件3","note":"transcript CSV実データ"}
+{"ruleId":"id-with-name","label":"compliant","text":"C0004,株式会社クラフトフィックス,ビューティーワールド","note":"transcript CSV実データ"}
+{"ruleId":"id-with-name","label":"compliant","text":"C0010 monoAItechnology株式会社 NexTech Week 2026","note":"transcript CSV実データ"}
+{"ruleId":"id-with-name","label":"compliant","text":"W2株式会社 Japan IT Week C0016","note":"transcript CSV実データ"}
+{"ruleId":"id-with-name","label":"compliant","text":"C0017 第29回ファベックス2026","note":"transcript CSV実データ"}
+{"ruleId":"id-with-name","label":"compliant","text":"株式会社taiziii C0011 NexTech Week","note":"transcript CSV実データ"}
+{"ruleId":"id-with-name","label":"compliant","text":"C0013 居酒屋JAPAN / 近畿（大阪）","note":"transcript CSV実データ"}
+{"ruleId":"verify-before-done","label":"violation","text":"{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"実装しました。\"}]}}","note":"transcript 完了報告・直前検証なし"}
+{"ruleId":"verify-before-done","label":"violation","text":"反映しました。","note":"transcript 反映報告・検証なし"}
+{"ruleId":"verify-before-done","label":"violation","text":"修正しました。","note":"transcript 修正報告・検証なし"}
+{"ruleId":"verify-before-done","label":"violation","text":"対応完了です。","note":"transcript 完了報告・検証なし"}
+{"ruleId":"verify-before-done","label":"violation","text":"作業は完了しました。","note":"transcript 完了報告・検証なし"}
+{"ruleId":"verify-before-done","label":"compliant","text":"{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{\"command\":\"node --test tools/\"}}]}}\n{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"実装しました。\"}]}}","note":"transcript node:test後の完了報告"}
+{"ruleId":"verify-before-done","label":"compliant","text":"調査中です。","note":"transcript 非完了報告"}
+{"ruleId":"verify-before-done","label":"compliant","text":"差分を確認します。","note":"transcript 非完了報告"}
+{"ruleId":"verify-before-done","label":"compliant","text":"テストを実行します。","note":"transcript 非完了報告"}
+{"ruleId":"verify-before-done","label":"compliant","text":"まだ未完了です。","note":"transcript 未完了明示"}
+{"ruleId":"verify-before-done","label":"compliant","text":"反映予定です。","note":"transcript 予定表現"}
+{"ruleId":"verify-before-done","label":"compliant","text":"完了条件を確認します。","note":"transcript 条件説明"}
+{"ruleId":"verify-before-done","label":"compliant","text":"完了報告の語彙マッチをやめる。","note":"transcript 仕様説明"}
+{"ruleId":"verify-before-done","label":"compliant","text":"実装しました、という単語だけでは判定しない。","note":"transcript 検出器説明"}
+{"ruleId":"verify-before-done","label":"compliant","text":"結果を取得できませんでした。","note":"transcript 失敗報告"}
+{"ruleId":"delegate-implementation","label":"violation","text":"{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Write\",\"input\":{\"file_path\":\"app.js\",\"content\":\"XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\"}}]}}","note":"transcript 大規模Write・委譲なし"}
+{"ruleId":"delegate-implementation","label":"violation","text":"Write/Edit input 4200 bytes without codex-do.mjs","note":"transcript 監査実測表現"}
+{"ruleId":"delegate-implementation","label":"violation","text":"Write/Edit input 5100 bytes without codex-do.mjs","note":"transcript 監査実測表現"}
+{"ruleId":"delegate-implementation","label":"violation","text":"Write/Edit input 3300 bytes without codex-do.mjs","note":"transcript 監査実測表現"}
+{"ruleId":"delegate-implementation","label":"violation","text":"Write/Edit input 2800 bytes without codex-do.mjs","note":"transcript 監査実測表現"}
+{"ruleId":"delegate-implementation","label":"compliant","text":"assistant 本文の Write|Edit|MultiEdit という単語を見ている＝無意味","note":"transcript 実測誤検知例"}
+{"ruleId":"delegate-implementation","label":"compliant","text":"Write ツールを使う予定です。","note":"transcript 本文言及のみ"}
+{"ruleId":"delegate-implementation","label":"compliant","text":"Edit の入力サイズを確認する。","note":"transcript 本文言及のみ"}
+{"ruleId":"delegate-implementation","label":"compliant","text":"MultiEdit は旧ツール名です。","note":"transcript 本文言及のみ"}
+{"ruleId":"delegate-implementation","label":"compliant","text":"codex-do.mjs へ委譲しました。","note":"transcript 委譲報告"}
+{"ruleId":"delegate-implementation","label":"compliant","text":"小さな設定変更です。","note":"transcript 小変更"}
+{"ruleId":"delegate-implementation","label":"compliant","text":"差分をレビューします。","note":"transcript 読取作業"}
+{"ruleId":"delegate-implementation","label":"compliant","text":"実装は Codex を主にします。","note":"transcript 方針説明"}
+{"ruleId":"delegate-implementation","label":"compliant","text":"ファイルは変更していません。","note":"transcript 非実装"}
+{"ruleId":"delegate-implementation","label":"compliant","text":"テストだけ実行しました。","note":"transcript 検証のみ"}
+{"ruleId":"no-fable5","label":"violation","text":"{\"type\":\"assistant\",\"message\":{\"model\":\"fable\",\"content\":[]}}","note":"transcript モデル指定"}
+{"ruleId":"no-fable5","label":"violation","text":"{\"type\":\"assistant\",\"message\":{\"model\":\"claude-fable-5\",\"content\":[]}}","note":"transcript モデル指定"}
+{"ruleId":"no-fable5","label":"violation","text":"{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Task\",\"input\":{\"model\":\"fable\"}}]}}","note":"transcript subagentモデル指定"}
+{"ruleId":"no-fable5","label":"violation","text":"{\"type\":\"assistant\",\"message\":{\"model\":\"Fable5\",\"content\":[]}}","note":"transcript モデル指定"}
+{"ruleId":"no-fable5","label":"violation","text":"{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Agent\",\"input\":{\"model\":\"claude-fable-5\"}}]}}","note":"transcript subagentモデル指定"}
+{"ruleId":"no-fable5","label":"compliant","text":"Fable5 全用途禁止","note":"transcript ルール説明・使用ではない"}
+{"ruleId":"no-fable5","label":"compliant","text":"no-fable5 は妥当です。","note":"transcript 監査評価"}
+{"ruleId":"no-fable5","label":"compliant","text":"Fable は使用していません。","note":"transcript 否定報告"}
+{"ruleId":"no-fable5","label":"compliant","text":"claude-fable-5 を検出対象にする。","note":"transcript 仕様説明"}
+{"ruleId":"no-fable5","label":"compliant","text":"model: fable を禁止するルールです。","note":"transcript 仕様説明"}
+{"ruleId":"no-fable5","label":"compliant","text":"Opus を使用しました。","note":"transcript 別モデル"}
+{"ruleId":"no-fable5","label":"compliant","text":"Sonnetへ委譲しました。","note":"transcript 別モデル"}
+{"ruleId":"no-fable5","label":"compliant","text":"モデル使用量を確認します。","note":"transcript 一般説明"}
+{"ruleId":"no-fable5","label":"compliant","text":"Fable5使用は0件です。","note":"transcript 集計報告"}
+{"ruleId":"no-fable5","label":"compliant","text":"安いAIは無料枠切れで黙って死ぬ。","note":"transcript 別ルール"}

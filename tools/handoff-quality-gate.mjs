@@ -28,9 +28,49 @@ export function matchRoutes(text, catalog) {
   }
   return matched;
 }
+export function usesDeprecatedHandoffTag(text) {
+  const lines = text.split(/\r?\n/);
+  let inFence = false;
+  const mention = /(廃止|deprecated|禁止|使わない|置き換え)/i;
+
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    const line = lines[lineIndex];
+    const fenceMatches = [...line.matchAll(/```/g)];
+    let cursor = 0;
+    let fenced = inFence;
+    const fencedRanges = [];
+    for (const fence of fenceMatches) {
+      if (fenced) fencedRanges.push([cursor, fence.index + 3]);
+      cursor = fence.index + 3;
+      fenced = !fenced;
+    }
+    if (fenced) fencedRanges.push([cursor, line.length]);
+
+    for (const tag of line.matchAll(/\[HANDOFF-OK\]/g)) {
+      const column = tag.index;
+      const inCodeFence = fencedRanges.some(([start, end]) => column >= start && column < end);
+      const inlineRuns = [...line.matchAll(/`{1,2}/g)];
+      let inlineStart = null;
+      let inInlineCode = false;
+      for (const run of inlineRuns) {
+        if (!inlineStart) inlineStart = run;
+        else if (inlineStart[0].length === run[0].length) {
+          if (column >= inlineStart.index + inlineStart[0].length && column < run.index) inInlineCode = true;
+          inlineStart = null;
+        }
+      }
+      const quoted = /^\s*>/.test(line);
+      const nearby = lines.slice(Math.max(0, lineIndex - 1), lineIndex + 2).join('\n');
+      if (!inCodeFence && !inInlineCode && !quoted && !mention.test(nearby)) return true;
+    }
+
+    if (fenceMatches.length % 2 === 1) inFence = !inFence;
+  }
+  return false;
+}
 export function evaluateHandoff(text, { catalog, enforcement = {} } = {}) {
-  if (/\[HANDOFF-OK\]/.test(text)) return { decision: 'block', reason: 'このタグは廃止。`[手渡し判定]` を書いてください。', routesMatched: [] };
   if (!hasHandoff(text)) return { decision: 'pass', reason: '手渡しなし', routesMatched: [] };
+  if (usesDeprecatedHandoffTag(text)) return { decision: 'block', reason: 'このタグは廃止。`[手渡し判定]` を書いてください。', routesMatched: [] };
   const marker = text.search(/\[手渡し判定\]/);
   if (marker < 0) return { decision: 'block', reason: '`[手渡し判定]` ブロックがありません。', routesMatched: [] };
   const block = text.slice(marker);

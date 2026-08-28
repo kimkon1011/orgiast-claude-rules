@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { reconcileSubmissions } from './makimono-publish.mjs';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { notifyStale, reconcileSubmissions } from './makimono-publish.mjs';
 
 const NOW = new Date('2026-08-27T12:00:00.000Z');
 const pending = (overrides = {}) => ({ at: '2026-08-26T12:00:00.000Z', title: 'ＡＢＣ　手順', submissionId: 'sub_dummy', status: 'pending', ...overrides });
@@ -40,4 +43,44 @@ test('公開側一覧が空でも例外を投げない', () => {
   const result = reconcileSubmissions([pending()], [], NOW, 3);
   assert.equal(result.pending, 1);
   assert.equal(result.published, 0);
+});
+
+function notifyFixture(ids) {
+  return { pending: ids.length, stale: ids.length, pendingItems: ids.map((submissionId) => ({ submissionId, title: submissionId, stale: true })) };
+}
+function notifyHarness() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'makimono-notify-'));
+  const stateFile = path.join(root, '.claude', 'makimono-notify-state.json');
+  const calls = [];
+  process.env.ORGIAST_HOME = root;
+  return { root, stateFile, calls, webhookUrl: 'https://example.com/test-webhook', fetchImpl: async (...args) => { calls.push(args); return { ok: true, status: 204 }; } };
+}
+
+test('同じ stale 集合の2回目は通知しない', async () => {
+  const h = notifyHarness(); const options = { fetchImpl: h.fetchImpl, webhookUrl: h.webhookUrl, now: NOW };
+  await notifyStale(notifyFixture(['a']), 3, options);
+  await notifyStale(notifyFixture(['a']), 3, { ...options, now: new Date(NOW.getTime() + DAY) });
+  assert.equal(h.calls.length, 1);
+});
+
+const DAY = 24 * 60 * 60 * 1000;
+test('stale ID が増えたら通知する', async () => {
+  const h = notifyHarness();
+  await notifyStale(notifyFixture(['a']), 3, { fetchImpl: h.fetchImpl, webhookUrl: h.webhookUrl, now: NOW });
+  await notifyStale(notifyFixture(['a', 'b']), 3, { fetchImpl: h.fetchImpl, webhookUrl: h.webhookUrl, now: new Date(NOW.getTime() + DAY) });
+  assert.equal(h.calls.length, 2);
+});
+
+test('7日経過で再通知する', async () => {
+  const h = notifyHarness();
+  await notifyStale(notifyFixture(['a']), 3, { fetchImpl: h.fetchImpl, webhookUrl: h.webhookUrl, now: NOW });
+  await notifyStale(notifyFixture(['a']), 3, { fetchImpl: h.fetchImpl, webhookUrl: h.webhookUrl, now: new Date(NOW.getTime() + 7 * DAY) });
+  assert.equal(h.calls.length, 2);
+});
+
+test('forceNotify は同内容でも強制通知する', async () => {
+  const h = notifyHarness();
+  await notifyStale(notifyFixture(['a']), 3, { fetchImpl: h.fetchImpl, webhookUrl: h.webhookUrl, now: NOW });
+  await notifyStale(notifyFixture(['a']), 3, { fetchImpl: h.fetchImpl, webhookUrl: h.webhookUrl, now: NOW, forceNotify: true });
+  assert.equal(h.calls.length, 2);
 });

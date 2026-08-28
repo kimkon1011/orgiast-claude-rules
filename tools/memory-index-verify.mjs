@@ -4,9 +4,10 @@
 // ([[feedback-verify-must-measure-the-producers-model]])。ここは索引と本文を素で読み直して照合する。
 //
 // 使い方:
-//   node tools/memory-index-verify.mjs --before <MEMORY.md.bak-...> --after <MEMORY.md> [--body-backup <dir>]
+//   node tools/memory-index-verify.mjs --before <MEMORY.md.bak-...> --after <MEMORY.md> [--body-backup <dir>] [--strict-added]
 // 判定:
-//   1. エントリ(タイトル+リンク先)の集合が完全一致
+//   1. before のエントリ(タイトル+リンク先)が1つも消えていない
+//      (増えている分は before 取得後の追記とみなし注記どまり。--strict-added で失敗にする)
 //   2. before の hook 全文が、リンク先 .md の本文に存在する
 //   3. before の wikilink `[[slug]]` が、リンク先 .md の本文に存在する
 //   4. after の索引に hook / wikilink が1つも残っていない
@@ -45,7 +46,7 @@ export function parseIndex(text) {
   return entries;
 }
 
-export function verify({ before, after, directory, bodyBackupDir }) {
+export function verify({ before, after, directory, bodyBackupDir, strictAdded = false }) {
   const problems = [];
   const beforeEntries = parseIndex(before);
   const afterEntries = parseIndex(after);
@@ -53,8 +54,15 @@ export function verify({ before, after, directory, bodyBackupDir }) {
   const afterKeys = new Set(afterEntries.map(key));
   const beforeKeys = new Set(beforeEntries.map(key));
 
+  // 「消えた」は情報の喪失なので常に失敗。「増えた」は before を撮ってから別セッションが
+  // memory を追記しただけのことが多く、既定では警告に留める(常時赤の検査は読まれなくなる)。
+  // 変換の純粋性そのものを検査したいときだけ --strict-added で失敗にする。
+  const notes = [];
   for (const entry of beforeEntries) if (!afterKeys.has(key(entry))) problems.push(`エントリが消えた: ${key(entry)}`);
-  for (const entry of afterEntries) if (!beforeKeys.has(key(entry))) problems.push(`エントリが増えた: ${key(entry)}`);
+  for (const entry of afterEntries) {
+    if (beforeKeys.has(key(entry))) continue;
+    (strictAdded ? problems : notes).push(`エントリが増えた(before 取得後の追記と思われる): ${key(entry)}`);
+  }
 
   const bodies = new Map();
   const readBody = (file) => {
@@ -87,6 +95,7 @@ export function verify({ before, after, directory, bodyBackupDir }) {
 
   return {
     problems,
+    notes,
     stats: {
       entriesBefore: beforeEntries.length,
       entriesAfter: afterEntries.length,
@@ -118,12 +127,14 @@ export function run(argv = process.argv.slice(2)) {
     after: fs.readFileSync(afterFile, 'utf8'),
     directory: path.dirname(afterFile),
     bodyBackupDir: bodyBackup ? path.resolve(bodyBackup) : undefined,
+    strictAdded: argv.includes('--strict-added'),
   });
   const { stats } = result;
   console.log(`エントリ: ${stats.entriesBefore} -> ${stats.entriesAfter}`);
   console.log(`照合: hook ${stats.hooksChecked}件 / wikilink ${stats.wikilinksChecked}件 / 追記のみ検査 ${stats.appendOnlyChecked}ファイル`);
   console.log(`バイト: ${stats.bytesBefore} B -> ${stats.bytesAfter} B`);
   console.log(`24.4KB(24985B) 未満: ${stats.bytesAfter < 24985 ? 'OK' : 'NG'} / 17.1KB(17510B) 以下: ${stats.bytesAfter <= 17510 ? 'OK' : 'NG'}`);
+  for (const note of result.notes) console.log(`注記: ${note}`);
   if (result.problems.length) {
     console.error(`\n検証 NG (${result.problems.length}件):`);
     for (const problem of result.problems) console.error(`- ${problem}`);

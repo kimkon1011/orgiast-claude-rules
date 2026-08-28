@@ -1,8 +1,14 @@
-var CLOUD_TABS_ = {
-  'プロジェクト所在地図': CLOUD_PROJECT_HEADERS_,
-  'クラウド契約': CLOUD_CONTRACT_HEADERS_,
-  'PCログイン': CLOUD_LOGIN_HEADERS_
-};
+// GAS はファイルをアルファベット順に評価するので、CloudLedger.gs のトップレベルからは
+// CloudLedgerLogic.gs の定数がまだ undefined に見える。定数をそのまま束ねた var にすると
+// 「Cannot read properties of undefined (reading 'length')」で全機能が落ちる(実測)。
+// 呼ばれた時点で組み立てる関数にして、評価順に依存しないようにする。
+function _cloudTabs_() {
+  return {
+    'プロジェクト所在地図': CLOUD_PROJECT_HEADERS_,
+    'クラウド契約': CLOUD_CONTRACT_HEADERS_,
+    'PCログイン': CLOUD_LOGIN_HEADERS_
+  };
+}
 
 function _cloudSheet_(tabName) {
   var id = PropertiesService.getScriptProperties().getProperty('CLOUD_LEDGER_SHEET_ID');
@@ -11,7 +17,7 @@ function _cloudSheet_(tabName) {
   var sheet = book.getSheetByName(tabName);
   if (!sheet) {
     sheet = book.insertSheet(tabName);
-    sheet.getRange(1, 1, 1, CLOUD_TABS_[tabName].length).setValues([CLOUD_TABS_[tabName]]);
+    sheet.getRange(1, 1, 1, _cloudTabs_()[tabName].length).setValues([_cloudTabs_()[tabName]]);
   }
   return sheet;
 }
@@ -84,7 +90,7 @@ function upsertCloudContracts(payload) {
 function describeCloudLedger() {
   return _cloudWithLock_(function() {
     var result = { ok: true, tabs: {} };
-    Object.keys(CLOUD_TABS_).forEach(function(name) {
+    Object.keys(_cloudTabs_()).forEach(function(name) {
       var data = _cloudRead_(name);
       var keyNames;
       if (name === 'プロジェクト所在地図') {
@@ -131,9 +137,9 @@ function setupCloudLedger() {
   // 作成直後に ID を確定し、後続の共有・移動失敗で二重作成されないようにする。
   props.setProperty('CLOUD_LEDGER_SHEET_ID', id);
   var first = book.getSheets()[0];
-  Object.keys(CLOUD_TABS_).forEach(function(name) {
+  Object.keys(_cloudTabs_()).forEach(function(name) {
     var sheet = book.insertSheet(name);
-    sheet.getRange(1, 1, 1, CLOUD_TABS_[name].length).setValues([CLOUD_TABS_[name]]);
+    sheet.getRange(1, 1, 1, _cloudTabs_()[name].length).setValues([_cloudTabs_()[name]]);
   });
   book.deleteSheet(first);
 
@@ -159,7 +165,7 @@ function setupCloudLedger() {
     ok: true,
     sheetId: id,
     url: 'https://docs.google.com/a/orgiast.jp/spreadsheets/d/' + id + '/edit',
-    tabs: Object.keys(CLOUD_TABS_),
+    tabs: Object.keys(_cloudTabs_()),
     sharing: sharing,
     movedToFolder: movedToFolder
   };

@@ -11,49 +11,10 @@
 //
 // parentId 省略時はハブ直下 (claude-common-rules)
 
-import { createSign } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { driveApi as api, getDriveToken } from './lib/drive-auth.mjs';
 
 const HUB = '1RLYbK6CKyPWRJsG6LY0WB9OzlbFYSFvw'; // claude-common-rules
-const IMPERSONATE = 'kim@orgiast.jp';
-const KEY_PATH = process.env.GOOGLE_SA_KEY
-  ?? join(homedir(), 'Downloads', 'CLAUDE.md配布', 'aujust-sales-automation', '.gcp', 'sheets-sa.json');
-
-const b64url = (buf) => Buffer.from(buf).toString('base64url');
-
-async function getToken() {
-  const key = JSON.parse(readFileSync(KEY_PATH, 'utf8'));
-  const now = Math.floor(Date.now() / 1000);
-  const header = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
-  const claims = b64url(JSON.stringify({
-    iss: key.client_email,
-    sub: IMPERSONATE,
-    scope: 'https://www.googleapis.com/auth/drive',
-    aud: 'https://oauth2.googleapis.com/token',
-    iat: now,
-    exp: now + 3600,
-  }));
-  const signer = createSign('RSA-SHA256');
-  signer.update(`${header}.${claims}`);
-  const jwt = `${header}.${claims}.${signer.sign(key.private_key, 'base64url')}`;
-  const res = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: `grant_type=${encodeURIComponent('urn:ietf:params:oauth:grant-type:jwt-bearer')}&assertion=${jwt}`,
-  });
-  const j = await res.json();
-  if (!j.access_token) throw new Error(`token error: ${JSON.stringify(j)}`);
-  return j.access_token;
-}
-
-async function api(token, url, opts = {}) {
-  const res = await fetch(url, { ...opts, headers: { Authorization: `Bearer ${token}`, ...(opts.headers ?? {}) } });
-  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
-  return res;
-}
-
 async function findByTitle(token, title, parent) {
   const q = encodeURIComponent(`name='${title.replace(/'/g, "\\'")}' and '${parent}' in parents and trashed=false`);
   const res = await api(token, `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,modifiedTime)&orderBy=modifiedTime desc`);
@@ -62,7 +23,7 @@ async function findByTitle(token, title, parent) {
 
 const [cmd, a1, a2, a3] = process.argv.slice(2);
 const parent = a3 ?? (cmd === 'list' ? (a1 ?? HUB) : HUB);
-const token = await getToken();
+const token = await getDriveToken();
 
 if (cmd === 'list') {
   const q = encodeURIComponent(`'${parent}' in parents and trashed=false`);

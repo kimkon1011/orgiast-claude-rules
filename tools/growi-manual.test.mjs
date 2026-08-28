@@ -4,8 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-import { buildIndex, ingestFiles, parsePart } from './growi-manual.mjs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { buildIndex, ingestFiles, isMainModule, parsePart } from './growi-manual.mjs';
 
 const tool = fileURLToPath(new URL('./growi-manual.mjs', import.meta.url));
 const delimiter = '================================================== 次のページ ==================================================';
@@ -83,4 +83,27 @@ test('引数なしは usage を stderr に出して exit 2', (t) => {
   const result = run(temporaryCache(t), []);
   assert.equal(result.status, 2);
   assert.match(result.stderr, /usage:/);
+});
+
+test('シンボリックリンク経由で起動されても main が走る（無言 exit 0 の回帰）', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'growi-link-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const link = path.join(dir, 'growi-manual.mjs');
+  try {
+    fs.symlinkSync(tool, link, 'file');
+  } catch {
+    t.skip('この環境ではシンボリックリンクを作れない');
+    return;
+  }
+  // リンク側のパスを argv[1]、実体側を import.meta.url に見立てても main と判定されること
+  assert.equal(isMainModule(link, pathToFileURL(tool).href), true);
+  // 実際にリンク経由で起動しても usage が出る（無言 exit 0 にならない）
+  const result = spawnSync(process.execPath, [link], { encoding: 'utf8' });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /usage:/);
+});
+
+test('無関係なスクリプトを argv[1] に渡したら main と判定しない', () => {
+  assert.equal(isMainModule(path.join(os.tmpdir(), 'nope-not-here.mjs'), import.meta.url), false);
+  assert.equal(isMainModule(undefined, import.meta.url), false);
 });

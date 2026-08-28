@@ -14,9 +14,17 @@ if (-not (Test-Path $script)) { throw "script not found: $script" }
 $node = (Get-Command node -ErrorAction SilentlyContinue).Source
 if (-not $node) { throw 'node not found. Install Node.js first.' }
 
+# Console window taisaku: node wo chokusetsu jikkou suru to LogonType=Interactive no
+# task ga 1 jikan goto ni kuroi window wo hyouji suru. Principal wo S4U ni kaeru houhou wa
+# kanri sha kengen ga hitsuyou (Set-ScheduledTask ga Access Denied) datta node, console wo
+# motanai wscript.exe kara run-hidden.vbs keiyu de kidou suru. stdout/stderr wa
+# %USERPROFILE%\.claude\logs\plaud-to-tldv.log ni nokoru.
+$hiddenRunner = Join-Path $repo 'tools\run-hidden.vbs'
+if (-not (Test-Path $hiddenRunner)) { throw "hidden runner not found: $hiddenRunner" }
+
 # --limit 50: kako bun no toriKomi ga nokotte iru aida mo 1 kai de susumeru tame.
-$argument = '"{0}" --limit 50' -f $script
-$action = New-ScheduledTaskAction -Execute $node -Argument $argument -WorkingDirectory $repo
+$argument = '//nologo "{0}" "{1}" "{2}" --limit 50' -f $hiddenRunner, $node, $script
+$action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\wscript.exe" -Argument $argument -WorkingDirectory $repo
 $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).Date -RepetitionInterval (New-TimeSpan -Hours 1)
 # PC ga suimin/dengen off datta bawai wa tsugi ni okita toki ni oikake de jikkou suru.
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 30)

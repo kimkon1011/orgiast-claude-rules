@@ -129,14 +129,22 @@ async function main() {
   if (cloudPayload) await post(fleetEnv.FLEET_SHEET_URL, 'cloud-login', cloudPayload);
 }
 
+// GAS Web App はリダイレクト＋コールドスタートで数十秒かかることがある。
+// 20秒で切ると**サーバ側は書き込みに成功しているのにクライアントだけ「失敗」と出る**。
+// 実測: cloud-login が TimeoutError と出た直後にシートには7行入っていた。
+// 嘘の失敗ログは、本物の障害を調べるときに真っ先に人を迷わせるので余裕を持たせる。
+const POST_TIMEOUT_MS = 60_000;
+
 async function post(url, kind, body) {
   try {
     const response = await fetch(url, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(20_000), redirect: 'follow',
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(POST_TIMEOUT_MS), redirect: 'follow',
     });
     if (!response.ok) console.error(`fleet-sheet: ${kind} の送信が HTTP ${response.status}`);
   } catch (error) {
-    console.error(`fleet-sheet: ${kind} の送信に失敗 (${error?.name || 'error'})`);
+    // タイムアウトは「届かなかった」とは限らない(サーバ側は完了している場合がある)。
+    // ここで再送すると二重書き込みになりうるので、報告だけして再送はしない。
+    console.error(`fleet-sheet: ${kind} の送信に失敗 (${error?.name || 'error'})${error?.name === 'TimeoutError' ? ' ※サーバ側は完了している可能性がある' : ''}`);
   }
 }
 

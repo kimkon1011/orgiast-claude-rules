@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
+import { DEFAULT_REPO_MAP, parseRepoMap } from './feedback-to-issues.mjs';
 
 const MARKER = '<!-- NEXT-SESSION v1 -->';
 const SIX_HOURS = 6 * 60 * 60 * 1000;
@@ -16,14 +17,14 @@ export function localDate(date = new Date()) {
   return `${year}-${month}-${day}`;
 }
 
-function firstBlockBounds(md) {
+export function firstBlockBounds(md) {
   const first = md.indexOf(MARKER);
   if (first < 0) return { start: 0, end: md.length };
   const second = md.indexOf(MARKER, first + MARKER.length);
   return { start: first, end: second < 0 ? md.length : second };
 }
 
-function sectionFrom(block, heading) {
+export function sectionFrom(block, heading) {
   const escapedHeading = String(heading).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const re = new RegExp(`^##[ \\t]+${escapedHeading}(?=[ \\t（(]|$).*$`, 'm');
   const match = re.exec(block);
@@ -165,7 +166,9 @@ export function detectHistoryCwd({
 export function buildChildArgs(repoCwd, historyCwd) {
   // 2026-08-26 実測: acceptEdits はファイル編集だけを自動承認し、Bash は承認待ちで無人実行が最初のコマンドで止まる。
   // --permission-mode を渡さず ~/.claude/settings.json の既定 auto を継承すると、Bash（git -C ... rev-parse）も通る。
-  const args = ['-p', '', '--output-format', 'json', '--model', 'opus', '--add-dir', repoCwd];
+  // 無人の残TODO消化に Opus は過剰で、§1.18 の監督用途は最小限に留めるため既定は Sonnet。
+  const model = process.env.ORGIAST_AUTO_SESSION_MODEL || 'sonnet';
+  const args = ['-p', '', '--output-format', 'json', '--model', model, '--add-dir', repoCwd];
   if (historyCwd !== repoCwd) args.push('--add-dir', historyCwd);
   return args;
 }
@@ -236,6 +239,67 @@ export function buildPrompt(todo, sections, repoCwd, summaryFile, timeoutMin = 6
   ].filter(Boolean).join('\n\n');
 }
 
+export function feedbackIssueExclusionReason(issue) {
+  const labels = Array.isArray(issue?.labels) ? issue.labels : [];
+  return labels.some((label) => (typeof label === 'string' ? label : label?.name) === 'in-progress')
+    ? 'in-progress（対応中）'
+    : '';
+}
+
+export function filterFeedbackIssues(issues) {
+  return (Array.isArray(issues) ? issues : []).filter((issue) => !feedbackIssueExclusionReason(issue));
+}
+
+export function buildFeedbackPrompt(issue, repo, repoCwd, summaryFile, timeoutMin = 60) {
+  return `あなたは無人で起動された自動セッションです。人間は見ていません。質問せず、以下のフォーム報告を対応してください。
+
+## 入力
+これは社員がアプリ内フォームから報告した内容です。
+- リポジトリ: ${repo}
+- Issue: #${issue.number}
+- タイトル: ${issue.title}
+- URL: ${issue.url}
+
+### 本文
+${issue.body || '（本文なし）'}
+
+## 作業手順
+1. Issue とコードを確認して原因を特定する。
+2. 修正し、そのリポジトリのテスト・型チェック・ビルドをすべて通す。
+3. 必ず main の最新状態から新しいブランチを切る。main の作業ツリーを直接流用しない。
+4. PR を作り、本文に \`Closes #${issue.number}\` を入れる。CI の結果を確認する。
+
+## 禁止事項
+- PR をマージしない。
+- 本番へデプロイしない。
+- main へ直接 push しない。
+- 承認は kim が GitHub で行う。承認を代行しない。
+- 報告が曖昧で修正内容を特定できない場合、推測で実装しない。Issue に「何が分かれば直せるか」をコメントして終了する。
+- 他セッションと作業ツリーを共有しているため、git add -A / git commit -a / git stash / git checkout -- . を使わない。
+- 秘匿値をコード、PR、ログへ書かない。
+
+## 実行環境
+- 実リポジトリは ${repoCwd}。git は \`git -C ${repoCwd}\`、実装委譲は \`node tools/codex-do.mjs "<指示>" --cwd ${repoCwd}\` のように対象を明示する。
+- 作業経過を ${summaryFile} に逐次追記する。PR URL・PRタイトル・CI結果を必ず最後に記録する。
+- 5分を超える長時間ポーリングをしてはいけない。開始から ${Math.max(1, timeoutMin - 10)} 分でまとめに入る。
+
+## 完了報告
+最後に次の3行で出力してください（作れなければ値に「なし」と理由を書く）。
+PR URL: <URL>
+PRタイトル: <タイトル>
+CI結果: <結果と残ったこと>`;
+}
+
+export function feedbackNotifyUrl(base) {
+  try {
+    const url = new URL(String(base));
+    url.pathname = url.pathname.replace(/\/api\/feedback-intake\/?$/, '/api/notify');
+    url.search = '';
+    url.hash = '';
+    return url.href;
+  } catch { return ''; }
+}
+
 function homeDir() {
   return process.env.ORGIAST_HOME || os.homedir();
 }
@@ -293,11 +357,12 @@ export function appendClosedSession(file, sessionId, io = {}) {
 }
 
 function parseArgs(argv) {
-  const options = { count: 1, timeoutMin: 60, dry: false, list: false };
+  const options = { count: 1, feedbackCount: 1, timeoutMin: 60, dry: false, list: false };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === '--dry') options.dry = true;
     else if (argv[i] === '--list') options.list = true;
     else if (argv[i] === '--count') options.count = Math.min(3, Math.max(1, Number(argv[++i]) || 1));
+    else if (argv[i] === '--feedback-count') options.feedbackCount = Math.min(3, Math.max(1, Number(argv[++i]) || 1));
     else if (argv[i] === '--timeout-min') options.timeoutMin = Math.max(1, Number(argv[++i]) || 60);
     else throw new Error(`不明な引数: ${argv[i]}`);
   }
@@ -329,9 +394,10 @@ function runChild(executable, prompt, repoCwd, historyCwd, timeoutMs) {
     let stdout = '';
     let stderr = '';
     let timedOut = false;
+    let launchFailed = false;
     child.stdout.setEncoding('utf8').on('data', (chunk) => { stdout += chunk; });
     child.stderr.setEncoding('utf8').on('data', (chunk) => { stderr += chunk; });
-    child.on('error', (error) => { stderr += error.message; });
+    child.on('error', (error) => { launchFailed = true; stderr += error.message; });
     child.stdin.on('error', () => {});
     child.stdin.end(prompt, 'utf8');
     const timer = setTimeout(() => {
@@ -341,9 +407,151 @@ function runChild(executable, prompt, repoCwd, historyCwd, timeoutMs) {
     }, timeoutMs);
     child.on('close', (code) => {
       clearTimeout(timer);
-      resolve({ startedAt: startedAt.toISOString(), endedAt: new Date().toISOString(), exitCode: timedOut ? null : code, status: timedOut ? 'timeout' : code === 0 ? 'success' : 'failure', stdout, stderr });
+      resolve({ startedAt: startedAt.toISOString(), endedAt: new Date().toISOString(), exitCode: timedOut ? null : code, status: timedOut ? 'timeout' : code === 0 ? 'success' : 'failure', launchFailed, stdout, stderr });
     });
   });
+}
+
+function shellQuote(value) {
+  const text = String(value);
+  if (process.platform === 'win32') return `"${text.replace(/%/g, '%%').replace(/"/g, '""')}"`;
+  return `'${text.replace(/'/g, `'"'"'`)}'`;
+}
+
+function runGh(args) {
+  // gh.cmd も扱えるよう shell を使うため、外部入力を含む引数は必ず個別に quote する。
+  return spawnSync(['gh', ...args].map(shellQuote).join(' '), { shell: true, encoding: 'utf8', windowsHide: true });
+}
+
+function feedbackRepos(mapValue = process.env.FEEDBACK_REPO_MAP || '') {
+  return [...new Set(Object.values({ ...DEFAULT_REPO_MAP, ...parseRepoMap(mapValue) }))];
+}
+
+function listFeedbackIssues() {
+  const probe = runGh(['--version']);
+  if (probe.error || probe.status !== 0) return [];
+  const found = [];
+  for (const repo of feedbackRepos()) {
+    const result = runGh(['issue', 'list', '--repo', repo, '--label', 'feedback', '--state', 'open', '--json', 'number,title,url,body,labels']);
+    if (result.error || result.status !== 0) {
+      console.warn(`auto-session: フォーム報告の取得失敗 repo=${repo}`);
+      continue;
+    }
+    try { found.push(...JSON.parse(result.stdout).map((issue) => ({ ...issue, repo }))); }
+    catch { console.warn(`auto-session: フォーム報告のJSON解析失敗 repo=${repo}`); }
+  }
+  return found;
+}
+
+const feedbackRepoCwdCache = new Map();
+
+export function normalizeGitHubRepo(remoteUrl) {
+  const normalized = String(remoteUrl ?? '').trim().replace(/\\/g, '/');
+  const match = normalized.match(/^(?:(?:https?:\/\/github\.com\/|git@github\.com:))?([^/:]+)\/([^/]+?)(?:\.git)?\/*$/i);
+  return match ? `${match[1]}/${match[2]}`.toLowerCase() : '';
+}
+
+function feedbackSearchRoots(home = homeDir(), extra = process.env.AUTO_SESSION_REPO_DIRS || '') {
+  const downloads = path.join(home, 'Downloads');
+  return [...new Set([
+    downloads,
+    path.join(downloads, 'CLAUDE.md配布'),
+    ...String(extra).split(';').map((entry) => entry.trim()).filter(Boolean).map((entry) => path.resolve(entry)),
+  ])];
+}
+
+function repositoryCandidates(roots, io) {
+  const candidates = [];
+  for (const root of roots) {
+    // 深い再帰はバッチ全体を遅くするため、指定された探索先自身と直下だけを見る。
+    candidates.push(root);
+    try {
+      candidates.push(...io.readdir(root, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => path.join(root, entry.name)));
+    } catch {}
+  }
+  return [...new Set(candidates)];
+}
+
+export function feedbackRepoCwd(repo, options = {}) {
+  const target = normalizeGitHubRepo(repo);
+  const useCache = !options.roots && !options.io;
+  if (useCache && feedbackRepoCwdCache.has(target)) return feedbackRepoCwdCache.get(target);
+  const io = {
+    exists: options.io?.exists ?? fs.existsSync,
+    readdir: options.io?.readdir ?? fs.readdirSync,
+    remoteUrl: options.io?.remoteUrl ?? ((candidate) => spawnSync('git', ['-C', candidate, 'remote', 'get-url', 'origin'], { encoding: 'utf8', windowsHide: true })),
+  };
+  const roots = options.roots ?? feedbackSearchRoots();
+  let found = '';
+  for (const candidate of repositoryCandidates(roots, io)) {
+    if (!io.exists(path.join(candidate, '.git'))) continue;
+    const result = io.remoteUrl(candidate);
+    if (!result?.error && result?.status === 0 && normalizeGitHubRepo(result.stdout) === target) { found = candidate; break; }
+  }
+  const fallback = path.join(homeDir(), 'Downloads', String(repo).split('/').at(-1));
+  const resolved = found || fallback;
+  if (useCache) feedbackRepoCwdCache.set(target, resolved);
+  return resolved;
+}
+
+function ensureFeedbackRepo(repo) {
+  const repoCwd = feedbackRepoCwd(repo);
+  if (fs.existsSync(repoCwd)) return { repoCwd, ok: true, error: '' };
+  // 対象を標準リポジトリへ誤吸着させず、存在しない場合だけ正規の GitHub リポジトリを取得する。
+  console.warn(`auto-session: 既存の作業ツリーが見つからないため新規クローンします repo=${repo} cwd=${repoCwd}`);
+  const cloned = runGh(['repo', 'clone', repo, repoCwd]);
+  return { repoCwd, ok: !cloned.error && cloned.status === 0 && fs.existsSync(repoCwd), error: cloned.stderr || cloned.error?.message || '' };
+}
+
+function setInProgress(issue, add) {
+  if (add) runGh(['label', 'create', 'in-progress', '--repo', issue.repo, '--color', 'FBCA04', '--description', '自動セッションが対応中']);
+  return runGh(['issue', 'edit', String(issue.number), '--repo', issue.repo, add ? '--add-label' : '--remove-label', 'in-progress']);
+}
+
+function relayConfig(claudeDir) {
+  let url = process.env.FEEDBACK_RELAY_URL || '';
+  let secret = process.env.FEEDBACK_RELAY_SECRET || '';
+  try {
+    for (const name of fs.readdirSync(claudeDir).filter((entry) => entry.endsWith('.env')).sort()) {
+      if (!url) url = readEnvValue(path.join(claudeDir, name), ['FEEDBACK_RELAY_URL']);
+      if (!secret) secret = readEnvValue(path.join(claudeDir, name), ['FEEDBACK_RELAY_SECRET']);
+    }
+  } catch {}
+  return { url: feedbackNotifyUrl(url), secret };
+}
+
+async function notifyFeedback(config, payload) {
+  if (!config.url || !config.secret) { console.log('auto-session: フォーム報告の中継が未設定なので通知をスキップ'); return; }
+  try {
+    const response = await fetch(config.url, { method: 'POST', headers: { 'content-type': 'application/json', Authorization: `Bearer ${config.secret}` }, body: JSON.stringify(payload), signal: AbortSignal.timeout(20_000) });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  } catch (error) { console.warn(`auto-session: フォーム報告の通知失敗 (${error.message})`); }
+}
+
+function feedbackPrDetails(text) {
+  const source = String(text ?? '');
+  const url = source.match(/https:\/\/github\.com\/[^\s)]+\/pull\/\d+/)?.[0] ?? '';
+  const title = source.match(/(?:PRタイトル|PR title)\s*[:：]\s*(.+)/i)?.[1]?.trim() ?? '（PRタイトルを取得できず）';
+  const ci = source.match(/CI(?:結果)?\s*[:：]\s*(.+)/i)?.[1]?.trim() ?? '（CI結果を取得できず）';
+  return { url, title, ci };
+}
+
+function enrichFeedbackPrDetails(details) {
+  if (!details.url) return details;
+  const result = runGh(['pr', 'view', details.url, '--json', 'title,statusCheckRollup']);
+  if (result.error || result.status !== 0) return details;
+  try {
+    const parsed = JSON.parse(result.stdout);
+    const checks = Array.isArray(parsed.statusCheckRollup) ? parsed.statusCheckRollup : [];
+    const states = checks.map((check) => check.conclusion || check.state || check.status).filter(Boolean);
+    return {
+      ...details,
+      title: parsed.title || details.title,
+      ci: states.length ? states.join(', ') : details.ci,
+    };
+  } catch { return details; }
 }
 
 function readEnvValue(file, names) {
@@ -416,31 +624,43 @@ export async function main(argv = process.argv.slice(2)) {
   if (!decision.run) { console.log(`auto-session: 起動しません (${decision.reason})`); return 0; }
 
   const nextFile = path.join(claudeDir, 'next-session.md');
-  if (!fs.existsSync(nextFile)) { console.log('auto-session: next-session.md がありません'); return 0; }
-  const parsed = parseHandoff(fs.readFileSync(nextFile, 'utf8'));
+  // フォーム報告は next-session.md と独立した入力源なので、片方が無くてももう片方を止めない。
+  const parsed = fs.existsSync(nextFile) ? parseHandoff(fs.readFileSync(nextFile, 'utf8')) : { block: '', todos: [], sections: {} };
+  const feedbackIssues = listFeedbackIssues();
   const detectedHistoryCwd = config.historyCwd || detectHistoryCwd({ projectsDir: path.join(claudeDir, 'projects') });
   if (options.list) {
-    parsed.todos.forEach((todo, i) => console.log(`${i + 1}. ${todoExclusionReason(todo) ? `除外: ${todoExclusionReason(todo)}` : '採用'} | ${todo}`));
+    parsed.todos.forEach((todo, i) => console.log(`[next-session] ${i + 1}. ${todoExclusionReason(todo) ? `除外: ${todoExclusionReason(todo)}` : '採用'} | ${todo}`));
+    feedbackIssues.forEach((issue) => console.log(`[feedback] ${issue.repo}#${issue.number}. ${feedbackIssueExclusionReason(issue) ? `除外: ${feedbackIssueExclusionReason(issue)}` : '採用'} | ${issue.title}`));
+    if (!feedbackIssues.length) console.log('[feedback] 0件（対象リポジトリに未対応 Issue なし、または gh なし）');
     return 0;
   }
   const selected = filterTodos(parsed.todos).slice(0, options.count);
-  if (!selected.length) { console.log('auto-session: 実行可能な TODO はありません'); return 0; }
+  const selectedFeedback = filterFeedbackIssues(feedbackIssues).slice(0, options.feedbackCount);
+  if (!selected.length && !selectedFeedback.length) { console.log('auto-session: 実行可能な TODO とフォーム報告はありません'); return 0; }
   if (options.dry) {
     for (const [index, todo] of selected.entries()) {
       const repoCwd = pickCwd(todo, fs.existsSync, config.repoByKeyword);
       const historyCwd = fs.existsSync(detectedHistoryCwd) ? detectedHistoryCwd : repoCwd;
       const summaryFile = path.join(autoDir, 'runs', `dry-${index + 1}.summary.md`);
-      console.log(`TODO: ${todo}\nREPO CWD: ${repoCwd}\nHISTORY CWD: ${historyCwd}\n\n${buildPrompt(todo, parsed.sections, repoCwd, summaryFile, options.timeoutMin)}`);
+      console.log(`[next-session]\nTODO: ${todo}\nREPO CWD: ${repoCwd}\nHISTORY CWD: ${historyCwd}\n\n${buildPrompt(todo, parsed.sections, repoCwd, summaryFile, options.timeoutMin)}`);
     }
+    for (const [index, issue] of selectedFeedback.entries()) {
+      const repoCwd = feedbackRepoCwd(issue.repo);
+      const historyCwd = fs.existsSync(detectedHistoryCwd) ? detectedHistoryCwd : repoCwd;
+      const summaryFile = path.join(autoDir, 'runs', `dry-feedback-${index + 1}.summary.md`);
+      console.log(`[feedback]\nISSUE: ${issue.repo}#${issue.number} ${issue.title}\nREPO CWD: ${repoCwd}\nHISTORY CWD: ${historyCwd}\n\n${buildFeedbackPrompt(issue, issue.repo, repoCwd, summaryFile, options.timeoutMin)}`);
+    }
+    if (!selectedFeedback.length) console.log('[feedback]\nDRY対象: 0件');
     return 0;
   }
 
   fs.mkdirSync(path.join(autoDir, 'runs'), { recursive: true });
-  fs.writeFileSync(lockFile, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), todo: selected }, null, 2), { flag: 'w' });
+  fs.writeFileSync(lockFile, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), todo: selected, feedback: selectedFeedback.map(({ repo, number }) => `${repo}#${number}`) }, null, 2), { flag: 'w' });
   const cleanup = () => { try { fs.unlinkSync(lockFile); } catch {} };
   process.once('exit', cleanup);
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { cleanup(); process.exit(130); });
   const results = [];
+  const feedbackResults = [];
   try {
     const executable = resolveClaudeExe();
     for (const todo of selected) {
@@ -479,6 +699,32 @@ export async function main(argv = process.argv.slice(2)) {
       results.push(record);
       fs.writeFileSync(runFile, JSON.stringify(record, null, 2));
     }
+    for (const issue of selectedFeedback) {
+      const prepared = ensureFeedbackRepo(issue.repo);
+      if (!prepared.ok) {
+        feedbackResults.push({ issue, status: 'failure', launchFailed: true, stderr: prepared.error || '対象リポジトリを取得できませんでした' });
+        continue;
+      }
+      const marked = setInProgress(issue, true);
+      if (marked.error || marked.status !== 0) {
+        feedbackResults.push({ issue, status: 'failure', launchFailed: true, stderr: marked.stderr || 'in-progress ラベルを付けられませんでした' });
+        continue;
+      }
+      const repoCwd = prepared.repoCwd;
+      const historyCwd = fs.existsSync(detectedHistoryCwd) ? detectedHistoryCwd : repoCwd;
+      const stamp = `${localDate()}-feedback-${issue.repo.split('/').at(-1)}-${issue.number}`;
+      const runFile = path.join(autoDir, 'runs', `${stamp}.json`);
+      const summaryFile = path.join(autoDir, 'runs', `${stamp}.summary.md`);
+      fs.writeFileSync(summaryFile, '', { flag: 'a' });
+      const result = await runChild(executable, buildFeedbackPrompt(issue, issue.repo, repoCwd, summaryFile, options.timeoutMin), repoCwd, historyCwd, options.timeoutMin * 60_000);
+      let summary = '';
+      try { summary = fs.readFileSync(summaryFile, 'utf8'); } catch {}
+      const record = { source: 'feedback', issue, cwd: repoCwd, summaryFile, summary, ...result };
+      feedbackResults.push(record);
+      fs.writeFileSync(runFile, JSON.stringify(record, null, 2));
+      // 起動そのものに失敗した場合だけ、次回が再試行できるよう対応中ラベルを戻す。
+      if (result.launchFailed) setInProgress(issue, false);
+    }
   } finally { cleanup(); }
 
   const day = localDate();
@@ -491,7 +737,19 @@ ${result.summary ?? ''}`);
     lines.push(`${formatResultLine(result, minutes, pr)}\n${result.summary ? `summary:\n${result.summary.slice(0, 700)}` : 'summary: (記録なし)'}`);
   }
   await notify(findWebhook(claudeDir), lines.join('\n'));
-  return results.some((result) => result.status === 'failure') ? 1 : 0;
+  const relay = relayConfig(claudeDir);
+  let feedbackSucceeded = 0;
+  for (const result of feedbackResults) {
+    const details = enrichFeedbackPrDetails(feedbackPrDetails(`${result.stdout ?? ''}\n${result.summary ?? ''}`));
+    // 子の終了コードにかかわらず、PR が存在するなら kim に承認導線を必ず渡す。
+    if (details.url) {
+      feedbackSucceeded += 1;
+      await notifyFeedback(relay, { title: 'フォーム報告の修正PRができました', body: `#${result.issue.number} ${result.issue.title}\n${details.title}\nCI: ${details.ci}`, url: details.url });
+    }
+  }
+  const feedbackFailed = feedbackResults.length - feedbackSucceeded;
+  if (feedbackFailed > 0) await notifyFeedback(relay, { title: 'フォーム報告の自動対応結果', body: `${feedbackResults.length}件試行し、${feedbackFailed}件でPRを作成できませんでした`, url: '' });
+  return results.some((result) => result.status === 'failure') || feedbackFailed > 0 ? 1 : 0;
 }
 
 if (isEntry(import.meta.url)) {

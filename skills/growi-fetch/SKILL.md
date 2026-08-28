@@ -10,12 +10,12 @@ orgiast-manual.com は認証必須。Cookie/セッションを保持できない
 
 ## 一次ソース: Drive「社内マニュアル_NotebookLM連携」フォルダ
 - **Folder ID**: `1LMRI2jFpVG3WnDYlepgbOuyJ6ZBYzI8B`（所有: seisaku-team@orgiast.jp）
-- Growi 全マニュアルが **13 個の Google Docs**（`社内マニュアル_NotebookLM連携_Part01`〜`_Part13`、各 ~450KB）に分割され定期更新
+- Growi 全マニュアルが **14 個の Google Docs**（`社内マニュアル_NotebookLM連携_Part01`〜`_Part14`、各 ~450KB）に分割され定期更新（2026-08-28 実測。Part 数は増えるので必ず `search_files` で実数確認）
 - 運用 GAS:「社内マニュアル-NotebookLM連携」Script ID `1BVhALp3knyh4PaXGIre3v_ut6sOfWDMlAr_5S4yQM7-NGUzW-I5iLhIW`
 
 ## 手順
 1. **鮮度チェック（必須・最初に）**: Part 群の `modifiedTime`（Drive MCP `get_file_metadata`）と description 内「最終更新: YYYY/MM/DD」を確認。**3ヶ月以上古ければ user に報告**して stale で進めるか確認。
-2. **対象 Part の特定**: 13 Parts 全読みは高コスト。質問中の部署名/タイトル/URL を手がかりに該当 Part だけ `read_file_content`。不明なら Part01 で目次構造把握 → 推定 → 該当 Part。13 Parts 超に拡張されていたら `search_files parentId='1LMRI2jFpVG3WnDYlepgbOuyJ6ZBYzI8B'` で実数取得。
+2. **対象 Part の特定**: 全 Part 読みは高コスト。質問中の部署名/タイトル/URL を手がかりに該当 Part だけ `read_file_content`。不明なら Part01 で目次構造把握 → 推定 → 該当 Part。Part 数が増えている可能性があるので `search_files parentId='1LMRI2jFpVG3WnDYlepgbOuyJ6ZBYzI8B'` で実数取得。
 3. **一次で不足/古い時**: user に個別 Markdown エクスポートを依頼（配置先 `docs/_source/growi/`、ファイル名は元ページタイトルのまま）。案内文:
    > 社内マニュアル_NotebookLM連携 フォルダのデータでは不足／古いので、対象ページを Growi で個別 Markdown エクスポートして `docs/_source/growi/` に置いてください（ファイル名は元のページタイトルのまま）。
 4. **最終手段**: チャット貼り付け / PDF。

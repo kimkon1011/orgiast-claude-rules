@@ -73,16 +73,21 @@ function addImport(source, importLine) {
   return `${source.slice(0, preamble.length)}${importLine}\n${source.slice(preamble.length)}`;
 }
 const layouts = walkLayouts(appRoot).filter((path) => readFileSync(path, "utf8").includes("children"));
-const grouped = layouts.filter((path) => relative(appRoot, path).includes("(")); const layout = grouped.sort((a, b) => b.split(sep).length - a.split(sep).length)[0] || layouts.find((path) => dirname(path) === appRoot);
+// 全利用者が使えるようルートを優先し、存在しない場合だけ route group の深いレイアウトへフォールバックする。
+const rootLayout = layouts.find((path) => dirname(path) === appRoot);
+const grouped = layouts.filter((path) => relative(appRoot, path).includes("(")); const layout = rootLayout || grouped.sort((a, b) => b.split(sep).length - a.split(sep).length)[0];
 if (layout) {
   const source = readFileSync(layout, "utf8");
   if (!source.includes("<FeedbackWidget")) {
     const componentFile = join(componentRoot, ts ? "FeedbackWidget" : "FeedbackWidget"); let spec = "@/components/FeedbackWidget"; if (!alias) { spec = relative(dirname(layout), componentFile).split(sep).join("/"); if (!spec.startsWith(".")) spec = `./${spec}`; }
     const importLine = `import { FeedbackWidget } from "${spec}";`;
-    let next = addImport(source, importLine); const bodyAt = next.lastIndexOf("</body>");
-    if (bodyAt >= 0) next = `${next.slice(0, bodyAt)}  <FeedbackWidget />\n${next.slice(bodyAt)}`;
-    else { const returnClose = next.lastIndexOf(");"); if (returnClose >= 0) next = `${next.slice(0, returnClose)}  <FeedbackWidget />\n${next.slice(returnClose)}`; else next = ""; }
-    if (next) put(layout, next, true); else pending.push(`レイアウト注入: ${layout} の children と同じ領域に <FeedbackWidget /> を追加し、先頭に ${importLine} を追加`);
+    const bodyAt = source.lastIndexOf("</body>");
+    // </body> がない JSX の閉じ位置は推測せず、不正な兄弟要素を書き出さないためファイル全体を手作業に回す。
+    if (bodyAt >= 0) {
+      const withImport = addImport(source, importLine);
+      const withImportBodyAt = withImport.lastIndexOf("</body>");
+      put(layout, `${withImport.slice(0, withImportBodyAt)}  <FeedbackWidget />\n${withImport.slice(withImportBodyAt)}`, true);
+    } else pending.push(`レイアウト注入: ${layout} の children と同じ領域に <FeedbackWidget /> を追加し、先頭に ${importLine} を追加`);
   }
 } else pending.push(`レイアウト注入: ${appRoot} 配下の layout に <FeedbackWidget /> を追加してください`);
 

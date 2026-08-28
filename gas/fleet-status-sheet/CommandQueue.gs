@@ -1,7 +1,7 @@
 const CMD_FOLDER_NAME_ = 'claude-fleet-status-cmds';
 
 function _COMMANDS_() {
-  return { upsertFleetStatus: upsertFleetStatus, clearFleetMachineColumns: clearFleetMachineColumns, setFleetToken: setFleetToken, describeFleetConfig: describeFleetConfig, describeExtensionAudit: describeExtensionAudit, setPcInventorySheetId: setPcInventorySheetId, describePcInventoryHeaders: describePcInventoryHeaders };
+  return { upsertFleetStatus: upsertFleetStatus, clearFleetMachineColumns: clearFleetMachineColumns, setFleetToken: setFleetToken, describeFleetConfig: describeFleetConfig, describeExtensionAudit: describeExtensionAudit, setPcInventorySheetId: setPcInventorySheetId, describePcInventoryHeaders: describePcInventoryHeaders, describeFleetLiveness: describeFleetLiveness };
 }
 
 // PC管理表の **1行目(見出し)だけ** を返す。本文(パスワード列を含む)は返さない。

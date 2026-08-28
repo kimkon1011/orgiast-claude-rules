@@ -209,7 +209,7 @@ $setPath = Join-Path $HOMEDIR '.claude\settings.json'
 $shell = if (Have pwsh) { 'pwsh' } else { 'powershell' }
 $h = "$HOMEDIR"
 $wanted = @(
-  "$shell -NoProfile -NonInteractive -File `"$h\.claude\hooks\onboarding-sync.ps1`"",
+  "$shell -NoProfile -ExecutionPolicy Bypass -NonInteractive -File `"$h\.claude\hooks\onboarding-sync.ps1`"",
   "node `"$h\orgiast-claude-rules\tools\claude-cost-reporter.mjs`"",
   "node `"$h\orgiast-claude-rules\tools\tool-adoption-check.mjs`" --fix"
 )
@@ -240,7 +240,7 @@ if (Test-Path $dstW) {
   $already = $pre | ForEach-Object { $_.hooks } | ForEach-Object { $_.command } | Where-Object { $_ -match 'pretooluse-delegation-warn' }
   if ($already) { OK "委譲警告フック 登録済(スキップ)" }
   else {
-    $pre += [pscustomobject]@{ matcher='Write|Edit|MultiEdit'; hooks=@([pscustomobject]@{ type='command'; command="$shell -NoProfile -File `"$h\.claude\hooks\pretooluse-delegation-warn.ps1`"" }) }
+    $pre += [pscustomobject]@{ matcher='Write|Edit|MultiEdit'; hooks=@([pscustomobject]@{ type='command'; command="$shell -NoProfile -ExecutionPolicy Bypass -File `"$h\.claude\hooks\pretooluse-delegation-warn.ps1`"" }) }
     $json.hooks.PreToolUse = $pre
     OK "委譲警告フック PreToolUse 登録"
   }
@@ -252,7 +252,7 @@ if (Test-Path $dstG) {
   $gAlready = $ups | ForEach-Object { $_.hooks } | ForEach-Object { $_.command } | Where-Object { $_ -match 'delegation-gate' }
   if ($gAlready) { OK "委譲ゲートフック 登録済(スキップ)" }
   else {
-    $ups += [pscustomobject]@{ hooks=@([pscustomobject]@{ type='command'; command="$shell -NoProfile -NonInteractive -File `"$h\.claude\hooks\delegation-gate.ps1`"" }) }
+    $ups += [pscustomobject]@{ hooks=@([pscustomobject]@{ type='command'; command="$shell -NoProfile -ExecutionPolicy Bypass -NonInteractive -File `"$h\.claude\hooks\delegation-gate.ps1`"" }) }
     $json.hooks.UserPromptSubmit = $ups
     OK "委譲ゲートフック UserPromptSubmit 登録"
   }
@@ -264,7 +264,7 @@ if (Test-Path $dstV) {
   $sAlready = $stp | ForEach-Object { $_.hooks } | ForEach-Object { $_.command } | Where-Object { $_ -match 'verify-before-done' }
   if ($sAlready) { OK "テスト忘れ防止フック 登録済(スキップ)" }
   else {
-    $stp += [pscustomobject]@{ hooks=@([pscustomobject]@{ type='command'; command="$shell -NoProfile -File `"$h\.claude\hooks\verify-before-done-detector.ps1`"" }) }
+    $stp += [pscustomobject]@{ hooks=@([pscustomobject]@{ type='command'; command="$shell -NoProfile -ExecutionPolicy Bypass -File `"$h\.claude\hooks\verify-before-done-detector.ps1`"" }) }
     $json.hooks.Stop = $stp
     OK "テスト忘れ防止フック Stop 登録"
   }
@@ -275,7 +275,7 @@ if (Test-Path $dstC) {
   $cAlready = $ss2 | ForEach-Object { $_.hooks } | ForEach-Object { $_.command } | Where-Object { $_ -match 'cost-loop' }
   if ($cAlready) { OK "コスト×作業量ループ 登録済(スキップ)" }
   else {
-    $ss2 += [pscustomobject]@{ hooks = @([pscustomobject]@{ type='command'; command="$shell -NoProfile -NonInteractive -File `"$h\.claude\hooks\cost-loop.ps1`""; timeout=15 }) }
+    $ss2 += [pscustomobject]@{ hooks = @([pscustomobject]@{ type='command'; command="$shell -NoProfile -ExecutionPolicy Bypass -NonInteractive -File `"$h\.claude\hooks\cost-loop.ps1`""; timeout=15 }) }
     $json.hooks.SessionStart = $ss2
     OK "コスト×作業量ループ SessionStart 登録(毎回指示注入+日次計測)"
   }

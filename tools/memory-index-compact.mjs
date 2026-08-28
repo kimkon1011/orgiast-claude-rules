@@ -9,7 +9,8 @@ const MARKDOWN_LINK_RE = /\[([^\]]+)\]\(([^)]+\.md)\)/g;
 const HOOK_SEPARATOR = ' — ';
 const JOIN_SEPARATOR = ' ／ ';
 const MAX_LINE_LENGTH = 240;
-const MERGED_ENTRY_SEPARATOR_RE = / ／ (?=\[[^\]]+\]\([^)]+\.md\))/;
+export const MERGED_ENTRY_SEPARATOR_RE = / ／ (?=\[[^\]]+\]\([^)]+\.md\))/;
+const WIKILINK_RE = /\[\[([^\]]+)\]\]/g;
 
 function asSet(values) {
   return new Set(values);
@@ -21,6 +22,10 @@ function difference(left, right) {
 
 function sameSet(left, right) {
   return difference(left, right).length === 0 && difference(right, left).length === 0;
+}
+
+function byteLength(text) {
+  return Buffer.byteLength(text, 'utf8');
 }
 
 export function extractLinkSet(text) {
@@ -65,7 +70,7 @@ export function assertInvariants(before, after) {
   throw error;
 }
 
-function parseEntry(line) {
+export function parseEntry(line) {
   const match = line.match(ENTRY_RE);
   if (!match) return null;
   const separatorIndex = match[3].indexOf(HOOK_SEPARATOR);
@@ -73,6 +78,100 @@ function parseEntry(line) {
     content: line.replace(/^\s*-\s+/, ''),
     title: match[1],
     hook: separatorIndex < 0 ? '' : match[3].slice(separatorIndex + HOOK_SEPARATOR.length),
+  };
+}
+
+function parseMoveEntry(part) {
+  const match = part.match(/^\[([^\]]+)\]\(([^)]+\.md)\)(.*)$/);
+  if (!match) return null;
+  const tail = match[3];
+  const separatorIndex = tail.indexOf(HOOK_SEPARATOR);
+  const wikilinks = [...tail.matchAll(WIKILINK_RE)].map((item) => item[1]);
+  const rawHook = separatorIndex < 0 ? '' : tail.slice(separatorIndex + HOOK_SEPARATOR.length);
+  const hook = rawHook.replace(WIKILINK_RE, ' ').replace(/[\s\u3000]+/g, ' ').trim();
+  return { title: match[1], file: match[2], hook, wikilinks, original: part };
+}
+
+function normalizeForMatch(text) {
+  return text.replace(/[\s\u3000]+/g, ' ').trim();
+}
+
+function bodyContainsHook(body, hook) {
+  return !hook || normalizeForMatch(body).includes(normalizeForMatch(hook));
+}
+
+function bodyContainsWikilinks(body, wikilinks) {
+  const present = new Set([...body.matchAll(WIKILINK_RE)].map((match) => match[1]));
+  return wikilinks.every((slug) => present.has(slug));
+}
+
+function appendSummary(body, hook, wikilinks) {
+  const detail = [hook, ...wikilinks.map((slug) => `[[${slug}]]`)].filter(Boolean).join(' ');
+  let result = body;
+  if (!result.endsWith('\n')) result += '\n';
+  if (!/^## 索引の要約\s*$/m.test(result)) result += '\n## 索引の要約\n';
+  return `${result}- ${detail}\n`;
+}
+
+export function assertMoveInvariants(before, after, records, { readFile = (file) => fs.readFileSync(file, 'utf8') } = {}) {
+  const movedLinks = records.flatMap((record) => record.wikilinks).map((slug) => `[[${slug}]]`).join(' ');
+  const checks = [
+    ['リンク集合', extractLinkSet(before), extractLinkSet(`${after}\n${movedLinks}`)],
+    ['リンクテキスト(タイトル)集合', extractTitleSet(before), extractTitleSet(after)],
+  ];
+  const failures = checks.filter(([, left, right]) => !sameSet(left, right));
+  if (failures.length) {
+    const error = new Error(`不変条件が壊れました: ${failures.map(([label, left, right]) => describeSetChange(label, left, right)).join(' / ')}`);
+    error.code = 'INVARIANT_FAILED';
+    throw error;
+  }
+  for (const record of records) {
+    const body = readFile(record.path);
+    if (!bodyContainsHook(body, record.hook)) throw Object.assign(new Error(`転記後の hook が本文にありません: ${record.file} | ${record.hook}`), { code: 'INVARIANT_FAILED' });
+    if (!bodyContainsWikilinks(body, record.wikilinks)) throw Object.assign(new Error(`転記後の wikilink が本文にありません: ${record.file}`), { code: 'INVARIANT_FAILED' });
+  }
+}
+
+export function moveHooks(text, { directory, readFile = (file) => fs.readFileSync(file, 'utf8') } = {}) {
+  if (!directory) throw new Error('memory 本体の directory が必要です');
+  const hadFinalNewline = text.endsWith('\n');
+  const lines = text.split(/\r?\n/);
+  if (hadFinalNewline) lines.pop();
+  const bodies = new Map();
+  const records = [];
+  let entryCount = 0;
+
+  const output = lines.map((line) => {
+    if (!parseEntry(line)) return line;
+    const parts = line.replace(/^\s*-\s+/, '').split(MERGED_ENTRY_SEPARATOR_RE);
+    const transformed = parts.map((part) => {
+      const entry = parseMoveEntry(part);
+      if (!entry) return part;
+      entryCount += 1;
+      if (!entry.hook && !entry.wikilinks.length) return part;
+      const bodyPath = path.resolve(directory, entry.file);
+      if (path.dirname(bodyPath) !== path.resolve(directory)) throw new Error(`memory ディレクトリ外のリンクです: ${entry.title} (${entry.file})`);
+      let body;
+      try { body = bodies.has(bodyPath) ? bodies.get(bodyPath) : readFile(bodyPath); } catch (error) {
+        throw new Error(`リンク先ファイルが読めません: ${entry.title} (${entry.file}): ${error.message}`);
+      }
+      const transferred = bodyContainsHook(body, entry.hook) && bodyContainsWikilinks(body, entry.wikilinks);
+      if (!transferred) body = appendSummary(body, entry.hook, entry.wikilinks);
+      bodies.set(bodyPath, body);
+      records.push({ ...entry, path: bodyPath, transferred, preview: entry.hook.slice(0, 40) });
+      return `[${entry.title}](${entry.file})`;
+    });
+    return `- ${transformed.join(JOIN_SEPARATOR)}`;
+  });
+  const resultText = `${output.join('\n')}${hadFinalNewline ? '\n' : ''}`;
+  assertMoveInvariants(text, resultText, records, { readFile: (file) => bodies.get(file) ?? readFile(file) });
+  return {
+    text: resultText, bodies, records, entryCount,
+    hookCount: records.filter((record) => Boolean(record.hook)).length,
+    transferredCount: records.filter((record) => record.transferred).length,
+    appendCount: records.filter((record) => !record.transferred).length,
+    before: { bytes: byteLength(text), lines: lines.length },
+    after: { bytes: byteLength(resultText), lines: output.length },
   };
 }
 
@@ -173,10 +272,53 @@ export function run(argv = process.argv.slice(2)) {
   const apply = argv.includes('--apply');
   if (dryRun === apply) throw new Error('--dry-run または --apply のどちらか一方を指定してください');
   const file = path.resolve(optionValue(argv, '--file') || latestMemoryFile());
+  const moveHooksMode = argv.includes('--move-hooks');
   const targetText = optionValue(argv, '--target');
   const target = targetText === undefined ? 140 : Number(targetText);
   if (!Number.isInteger(target) || target < 1) throw new Error('--target は1以上の整数にしてください');
   const before = fs.readFileSync(file, 'utf8');
+  if (moveHooksMode) {
+    const result = moveHooks(before, { directory: path.dirname(file) });
+    for (const record of result.records) {
+      console.log(`${record.file} | ${record.transferred ? '転記済み' : '要追記'} | ${record.preview}`);
+    }
+    console.log(`集計: エントリ数 ${result.entryCount} / hook あり件数 ${result.hookCount} / 既に転記済み件数 ${result.transferredCount} / 追記する件数 ${result.appendCount}`);
+    const reduction = result.before.bytes ? ((result.before.bytes - result.after.bytes) / result.before.bytes) * 100 : 0;
+    console.log(`索引 ${result.before.bytes} B -> ${result.after.bytes} B (-${reduction.toFixed(1)}%)`);
+    console.log(`行数 ${result.before.lines} -> ${result.after.lines}`);
+    console.log(`24.4KB(24985B) 未満: ${result.after.bytes < 24985 ? 'OK' : 'NG'}`);
+    console.log(`17.1KB(17510B) 以下: ${result.after.bytes <= 17510 ? 'OK' : 'NG'}`);
+    if (!apply) return result;
+
+    const stamp = timestamp();
+    const indexBackup = `${file}.bak-${stamp}`;
+    const bodyBackupDir = path.join(path.dirname(file), `.memory-body-backup-${stamp}`);
+    const changedBodies = [...new Set(result.records.filter((record) => !record.transferred).map((record) => record.path))];
+    fs.copyFileSync(file, indexBackup, fs.constants.COPYFILE_EXCL);
+    fs.mkdirSync(bodyBackupDir, { recursive: false });
+    for (const bodyPath of changedBodies) fs.copyFileSync(bodyPath, path.join(bodyBackupDir, path.basename(bodyPath)), fs.constants.COPYFILE_EXCL);
+
+    const writeAtomic = (target, content) => {
+      const temporary = `${target}.tmp-${process.pid}`;
+      fs.writeFileSync(temporary, content, 'utf8');
+      try { fs.renameSync(temporary, target); } finally { fs.rmSync(temporary, { force: true }); }
+    };
+    try {
+      for (const bodyPath of changedBodies) writeAtomic(bodyPath, result.bodies.get(bodyPath));
+      writeAtomic(file, result.text);
+      const readBackIndex = fs.readFileSync(file, 'utf8');
+      assertMoveInvariants(before, readBackIndex, result.records);
+      if (readBackIndex !== result.text) throw Object.assign(new Error('索引の read-back が書き込み内容と一致しません'), { code: 'INVARIANT_FAILED' });
+    } catch (error) {
+      fs.copyFileSync(indexBackup, file);
+      for (const bodyPath of changedBodies) fs.copyFileSync(path.join(bodyBackupDir, path.basename(bodyPath)), bodyPath);
+      throw new Error(`適用後検証に失敗したためバックアップから復元しました: ${error.message}`);
+    }
+    console.log(`書き換え完了: ${file}`);
+    console.log(`索引バックアップ: ${indexBackup}`);
+    console.log(`本文バックアップ: ${bodyBackupDir}`);
+    return result;
+  }
   let result;
   try {
     result = compactMemory(before, { target });

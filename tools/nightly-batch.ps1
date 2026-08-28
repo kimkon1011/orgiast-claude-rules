@@ -43,6 +43,20 @@ try {
         }
     }
 
+    $lineReminder = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\line-export-reminder.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $lineReminder = $candidate; break }
+    }
+    if ($lineReminder) {
+        try {
+            & $node.Source $lineReminder
+            if ($LASTEXITCODE -ne 0) { Write-Warning ("nightly-batch: line-export-reminder exited " + $LASTEXITCODE) }
+        } catch {
+            Write-Warning ("nightly-batch: line-export-reminder: " + $_.Exception.Message)
+        }
+    }
+
     # LINEオープンチャットの取り込み分を選別・要約して作り置きを更新する。
     # batch-queue が空でも実行したいので、下の early exit より前に置くこと。
     $digest = $null

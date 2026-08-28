@@ -1,8 +1,8 @@
 {
-  "runId": "rules-resync-2026-08-26-auto-session",
+  "runId": "rules-resync-2026-08-28-specs",
   "task": "rules-resync",
   "targets": "all",
-  "_why": "auto-session(残TODOの無人消化・ONBOARDING §2.8.3)を全PCへ行き渡らせる。各PCは1回だけ onboarding-sync --force を実行して tools/ を更新し、次回セッション開始時に hook-selfcheck が OrgiastAutoSession(毎日03:20)を自己登録する。破壊的操作なし。止めるときは task を \"\" に戻す。個々のPCで止めるなら ~/.claude/auto-session/disabled を作る。",
+  "_why": "PR #90/#92 を全PCへ行き渡らせる。①fleet-poller が --specs を渡すようになった(付いていなかったので、どのPCもハードウェアスペックを一度も送っていなかった) ②スペック/開発プロジェクト/成果物の収集ツールが増えた。各PCは1回だけ onboarding-sync --force を実行して tools/ を更新する。破壊的操作なし。止めるときは task を \"\" に戻す。",
   "_note": "全PCへ承認済みタスクを配る中央キュー。kim/Claudeが task と runId(毎回ユニーク) を更新→各PCが夜間03:15の実行時に1回だけ処理しDiscordへ結果を返す。task を空にすると何もしない。",
   "_allowed_tasks": ["verify-setup", "rules-resync", "cost-report"],
   "_targets": "all=全PC / PC名の一部文字列=そのPCだけ"

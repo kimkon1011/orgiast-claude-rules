@@ -32,6 +32,20 @@ try {
         }
     }
 
+    $memoryIndexCompact = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\memory-index-compact.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $memoryIndexCompact = $candidate; break }
+    }
+    if ($memoryIndexCompact) {
+        try {
+            & $node.Source $memoryIndexCompact --move-hooks --apply --all-projects --min-bytes 20000
+            if ($LASTEXITCODE -ne 0) { Write-Warning ("nightly-batch: memory-index-compact exited " + $LASTEXITCODE) }
+        } catch {
+            Write-Warning ("nightly-batch: memory-index-compact: " + $_.Exception.Message)
+        }
+    }
+
     # LINEトーク履歴エクスポート(inbox の .txt)を先に取り込む。claude-mobile が無いPCでは静かにスキップする。
     $lineImport = Join-Path $HOME 'Downloads\claude-mobile\scripts\import-line-export.mjs'
     if (Test-Path -LiteralPath $lineImport -PathType Leaf) {

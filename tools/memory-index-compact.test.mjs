@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { assertInvariants, assertMoveInvariants, compactMemory, extractHookSet, extractLinkSet, extractTitleSet, moveHooks, run } from './memory-index-compact.mjs';
+import { fileURLToPath } from 'node:url';
+import { assertInvariants, assertMoveInvariants, cleanupOldBackups, compactMemory, extractHookSet, extractLinkSet, extractTitleSet, moveHooks, run } from './memory-index-compact.mjs';
 
 function fixture(index, bodies) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-index-'));
@@ -132,4 +133,79 @@ test('move-hooks: 転記後の本文を壊すと read-back verify が失敗す�
   const result = moveHooks(before, { directory: item.directory });
   fs.writeFileSync(path.join(item.directory, 'alpha.md'), '# broken\n');
   assert.throws(() => assertMoveInvariants(before, result.text, result.records), { code: 'INVARIANT_FAILED' });
+});
+
+test('move-hooks: 追記0件かつ索引不変なら --apply でもバックアップを作らない', () => {
+  const item = fixture('- [Project: Alpha](alpha.md)\n', { 'alpha.md': '# Alpha\n' });
+  const before = fs.readFileSync(item.file);
+  run(['--move-hooks', '--apply', '--file', item.file]);
+  assert.equal(Buffer.compare(before, fs.readFileSync(item.file)), 0);
+  assert.deepEqual(fs.readdirSync(item.directory).sort(), ['MEMORY.md', 'alpha.md']);
+});
+
+test('--min-bytes はしきい値以下のファイルを変更せずスキップする', () => {
+  const item = fixture('- [Project: Alpha](alpha.md) — hook\n', { 'alpha.md': '# Alpha\n' });
+  const indexBefore = fs.readFileSync(item.file);
+  const bodyBefore = fs.readFileSync(path.join(item.directory, 'alpha.md'));
+  run(['--move-hooks', '--apply', '--min-bytes', String(indexBefore.length), '--file', item.file]);
+  assert.equal(Buffer.compare(indexBefore, fs.readFileSync(item.file)), 0);
+  assert.equal(Buffer.compare(bodyBefore, fs.readFileSync(path.join(item.directory, 'alpha.md'))), 0);
+  assert.deepEqual(fs.readdirSync(item.directory).sort(), ['MEMORY.md', 'alpha.md']);
+});
+
+test('--all-projects は複数の MEMORY.md を処理する', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-home-'));
+  const projects = path.join(home, '.claude', 'projects');
+  for (const name of ['one', 'two']) {
+    const memory = path.join(projects, name, 'memory');
+    fs.mkdirSync(memory, { recursive: true });
+    fs.writeFileSync(path.join(memory, 'MEMORY.md'), `- [Project: ${name}](${name}.md) — hook ${name}\n`);
+    fs.writeFileSync(path.join(memory, `${name}.md`), `# ${name}\n`);
+  }
+  // os.homedir() は Windows では USERPROFILE を見るので、HOME だけ差し替えると
+  // 実ホームの MEMORY.md を --apply してしまう。両方を一時ホームへ向ける。
+  const child = spawnSync(process.execPath, [fileURLToPath(new URL('./memory-index-compact.mjs', import.meta.url)), '--move-hooks', '--apply', '--all-projects'], {
+    encoding: 'utf8', env: { ...process.env, HOME: home, USERPROFILE: home },
+  });
+  assert.equal(child.status, 0, child.stderr);
+  for (const name of ['one', 'two']) {
+    assert.equal(fs.readFileSync(path.join(projects, name, 'memory', 'MEMORY.md'), 'utf8'), `- [Project: ${name}](${name}.md)\n`);
+    assert.match(fs.readFileSync(path.join(projects, name, 'memory', `${name}.md`), 'utf8'), new RegExp(`hook ${name}`));
+  }
+});
+
+test('--file と --all-projects の同時指定を拒否する', () => {
+  const item = fixture('- [Project: Alpha](alpha.md)\n', { 'alpha.md': '# Alpha\n' });
+  assert.throws(() => run(['--move-hooks', '--apply', '--file', item.file, '--all-projects']), /同時に指定できません/);
+});
+
+test('14日より古いバックアップだけを削除する', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-cleanup-'));
+  const oldFile = path.join(directory, 'MEMORY.md.bak-old');
+  const newFile = path.join(directory, 'MEMORY.md.bak-new');
+  const oldDirectory = path.join(directory, '.memory-body-backup-old');
+  const newDirectory = path.join(directory, '.memory-body-backup-new');
+  fs.writeFileSync(oldFile, 'old');
+  fs.writeFileSync(newFile, 'new');
+  fs.mkdirSync(oldDirectory);
+  fs.mkdirSync(newDirectory);
+  const now = Date.now();
+  const old = new Date(now - 15 * 24 * 60 * 60 * 1000);
+  fs.utimesSync(oldFile, old, old);
+  fs.utimesSync(oldDirectory, old, old);
+  assert.equal(cleanupOldBackups(directory, { now }), 2);
+  assert.equal(fs.existsSync(oldFile), false);
+  assert.equal(fs.existsSync(oldDirectory), false);
+  assert.equal(fs.existsSync(newFile), true);
+  assert.equal(fs.existsSync(newDirectory), true);
+});
+
+test('--dry-run では古いバックアップを掃除しない', () => {
+  const item = fixture('- [Project: Alpha](alpha.md) — hook\n', { 'alpha.md': '# Alpha\n' });
+  const oldBackup = path.join(item.directory, 'MEMORY.md.bak-old');
+  fs.writeFileSync(oldBackup, 'old');
+  const old = new Date(Date.now() - 15 * 24 * 60 * 60 * 1000);
+  fs.utimesSync(oldBackup, old, old);
+  run(['--move-hooks', '--dry-run', '--file', item.file]);
+  assert.equal(fs.existsSync(oldBackup), true);
 });

@@ -243,7 +243,7 @@ export function formatDiff(before, after) {
   return output.join('\n');
 }
 
-function latestMemoryFile() {
+function allMemoryFiles() {
   const projectsDir = path.join(os.homedir(), '.claude', 'projects');
   const candidates = fs.readdirSync(projectsDir, { withFileTypes: true })
     .filter((item) => item.isDirectory())
@@ -252,7 +252,11 @@ function latestMemoryFile() {
     .map((file) => ({ file, mtime: fs.statSync(path.dirname(path.dirname(file))).mtimeMs }))
     .sort((a, b) => b.mtime - a.mtime);
   if (!candidates.length) throw new Error(`MEMORY.md が見つかりません: ${projectsDir}`);
-  return candidates[0].file;
+  return candidates.map((candidate) => candidate.file);
+}
+
+function latestMemoryFile() {
+  return allMemoryFiles()[0];
 }
 
 function optionValue(argv, name) {
@@ -267,18 +271,40 @@ function timestamp(date = new Date()) {
   return `${date.getFullYear()}${part(date.getMonth() + 1)}${part(date.getDate())}-${part(date.getHours())}${part(date.getMinutes())}`;
 }
 
-export function run(argv = process.argv.slice(2)) {
-  const dryRun = argv.includes('--dry-run');
-  const apply = argv.includes('--apply');
-  if (dryRun === apply) throw new Error('--dry-run または --apply のどちらか一方を指定してください');
-  const file = path.resolve(optionValue(argv, '--file') || latestMemoryFile());
-  const moveHooksMode = argv.includes('--move-hooks');
-  const targetText = optionValue(argv, '--target');
-  const target = targetText === undefined ? 140 : Number(targetText);
-  if (!Number.isInteger(target) || target < 1) throw new Error('--target は1以上の整数にしてください');
+const BACKUP_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+
+export function cleanupOldBackups(directory, { now = Date.now() } = {}) {
+  let deleted = 0;
+  for (const item of fs.readdirSync(directory, { withFileTypes: true })) {
+    const isIndexBackup = item.isFile() && /^MEMORY\.md\.bak-/.test(item.name);
+    const isBodyBackup = item.isDirectory() && /^\.memory-body-backup-/.test(item.name);
+    if (!isIndexBackup && !isBodyBackup) continue;
+    const target = path.join(directory, item.name);
+    if (fs.statSync(target).mtimeMs >= now - BACKUP_MAX_AGE_MS) continue;
+    fs.rmSync(target, { recursive: isBodyBackup, force: false });
+    deleted += 1;
+  }
+  return deleted;
+}
+
+function parseNonNegativeInteger(value, name) {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < 0) throw new Error(`${name} は0以上の整数にしてください`);
+  return number;
+}
+
+function processFile(file, { dryRun, apply, moveHooksMode, target, minBytes }) {
   const before = fs.readFileSync(file, 'utf8');
+  if (minBytes !== undefined && byteLength(before) <= minBytes) {
+    console.log(`しきい値未満のためスキップ: ${file}`);
+    return { file, skipped: true, reason: 'min-bytes' };
+  }
   if (moveHooksMode) {
     const result = moveHooks(before, { directory: path.dirname(file) });
+    if (result.appendCount === 0 && result.text === before) {
+      console.log(`変更なし: ${file}`);
+      return { ...result, file, skipped: true, reason: 'unchanged' };
+    }
     for (const record of result.records) {
       console.log(`${record.file} | ${record.transferred ? '転記済み' : '要追記'} | ${record.preview}`);
     }
@@ -291,12 +317,15 @@ export function run(argv = process.argv.slice(2)) {
     if (!apply) return result;
 
     const stamp = timestamp();
+    const indexChanged = result.text !== before;
     const indexBackup = `${file}.bak-${stamp}`;
     const bodyBackupDir = path.join(path.dirname(file), `.memory-body-backup-${stamp}`);
     const changedBodies = [...new Set(result.records.filter((record) => !record.transferred).map((record) => record.path))];
-    fs.copyFileSync(file, indexBackup, fs.constants.COPYFILE_EXCL);
-    fs.mkdirSync(bodyBackupDir, { recursive: false });
-    for (const bodyPath of changedBodies) fs.copyFileSync(bodyPath, path.join(bodyBackupDir, path.basename(bodyPath)), fs.constants.COPYFILE_EXCL);
+    if (indexChanged) fs.copyFileSync(file, indexBackup, fs.constants.COPYFILE_EXCL);
+    if (changedBodies.length) {
+      fs.mkdirSync(bodyBackupDir, { recursive: false });
+      for (const bodyPath of changedBodies) fs.copyFileSync(bodyPath, path.join(bodyBackupDir, path.basename(bodyPath)), fs.constants.COPYFILE_EXCL);
+    }
 
     const writeAtomic = (target, content) => {
       const temporary = `${target}.tmp-${process.pid}`;
@@ -305,18 +334,20 @@ export function run(argv = process.argv.slice(2)) {
     };
     try {
       for (const bodyPath of changedBodies) writeAtomic(bodyPath, result.bodies.get(bodyPath));
-      writeAtomic(file, result.text);
+      if (indexChanged) writeAtomic(file, result.text);
       const readBackIndex = fs.readFileSync(file, 'utf8');
       assertMoveInvariants(before, readBackIndex, result.records);
       if (readBackIndex !== result.text) throw Object.assign(new Error('索引の read-back が書き込み内容と一致しません'), { code: 'INVARIANT_FAILED' });
     } catch (error) {
-      fs.copyFileSync(indexBackup, file);
+      if (indexChanged) fs.copyFileSync(indexBackup, file);
       for (const bodyPath of changedBodies) fs.copyFileSync(path.join(bodyBackupDir, path.basename(bodyPath)), bodyPath);
       throw new Error(`適用後検証に失敗したためバックアップから復元しました: ${error.message}`);
     }
     console.log(`書き換え完了: ${file}`);
-    console.log(`索引バックアップ: ${indexBackup}`);
-    console.log(`本文バックアップ: ${bodyBackupDir}`);
+    if (indexChanged) console.log(`索引バックアップ: ${indexBackup}`);
+    if (changedBodies.length) console.log(`本文バックアップ: ${bodyBackupDir}`);
+    const deleted = cleanupOldBackups(path.dirname(file));
+    if (deleted) console.log(`古いバックアップを削除: ${deleted}件`);
     return result;
   }
   let result;
@@ -337,16 +368,42 @@ export function run(argv = process.argv.slice(2)) {
     fs.copyFileSync(file, backup, fs.constants.COPYFILE_EXCL);
     const temporary = `${file}.tmp-${process.pid}`;
     fs.writeFileSync(temporary, result.text, 'utf8');
-    try {
-      fs.copyFileSync(temporary, file);
-    } finally {
-      fs.rmSync(temporary, { force: true });
-    }
+    try { fs.copyFileSync(temporary, file); } finally { fs.rmSync(temporary, { force: true }); }
     console.log(`書き換え完了: ${file}`);
     console.log(`バックアップ: ${backup}`);
+    const deleted = cleanupOldBackups(path.dirname(file));
+    if (deleted) console.log(`古いバックアップを削除: ${deleted}件`);
   }
   if (!result.targetReached) console.log(`目標 ${target} 行に未達です。これ以上は機械的に畳めない。`);
   return result;
+}
+
+export function run(argv = process.argv.slice(2)) {
+  const dryRun = argv.includes('--dry-run');
+  const apply = argv.includes('--apply');
+  if (dryRun === apply) throw new Error('--dry-run または --apply のどちらか一方を指定してください');
+  const fileOption = optionValue(argv, '--file');
+  const allProjects = argv.includes('--all-projects');
+  if (fileOption && allProjects) throw new Error('--file と --all-projects は同時に指定できません');
+  const moveHooksMode = argv.includes('--move-hooks');
+  const targetText = optionValue(argv, '--target');
+  const target = targetText === undefined ? 140 : Number(targetText);
+  if (!Number.isInteger(target) || target < 1) throw new Error('--target は1以上の整数にしてください');
+  const minBytesText = optionValue(argv, '--min-bytes');
+  const minBytes = minBytesText === undefined ? undefined : parseNonNegativeInteger(minBytesText, '--min-bytes');
+  const files = fileOption ? [path.resolve(fileOption)] : allProjects ? allMemoryFiles() : [latestMemoryFile()];
+  if (!allProjects) return processFile(files[0], { dryRun, apply, moveHooksMode, target, minBytes });
+  const results = [];
+  const failures = [];
+  for (const file of files) {
+    try { results.push(processFile(file, { dryRun, apply, moveHooksMode, target, minBytes })); }
+    catch (error) {
+      failures.push({ file, error });
+      console.error(`処理失敗: ${file}: ${error.message}`);
+    }
+  }
+  if (failures.length) throw new Error(`全プロジェクト処理: ${failures.length}件失敗`);
+  return results;
 }
 
 if (isEntry(import.meta.url)) {

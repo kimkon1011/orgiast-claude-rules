@@ -18,13 +18,13 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
 
       # 理由付きの生存判定。シートと Discord の2経路を突き合わせ、
       # 「生存 / Discordにだけ届かない / 壊れて停止 / 報告実績なし(未導入・電源off)」を分けて出す。
       # 1経路だけの digest は「壊れて停止」と「未導入」を混ぜるため、何を直せばよいか分からなくなる。
       - name: Post fleet liveness digest
-        run: node tools/fleet-liveness.mjs --post
+        run: node tools/fleet-liveness.mjs --post --post-sheet
         env:
           FLEET_SHEET_URL: ${{ secrets.FLEET_SHEET_URL }}
           FLEET_SHEET_TOKEN: ${{ secrets.FLEET_SHEET_TOKEN }}

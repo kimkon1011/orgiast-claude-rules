@@ -9,9 +9,11 @@ import { machineIdentity } from './machine-identity.mjs';
 import { resolveReporterLabel } from './reporter-label.mjs';
 import { buildSpecPayload, collectHardwareSpec } from './hardware-spec.mjs';
 import { collectProjectInventory, formatArtifactsCell, formatLastCommitCell, formatProjectsCell } from './project-inventory.mjs';
+import { buildCloudLoginPayload, collectCloudInventory } from './cloud-inventory.mjs';
 
 const dryRun = process.argv.includes('--dry-run');
 const includeSpecs = process.argv.includes('--specs');
+const includeCloud = process.argv.includes('--cloud');
 const home = process.env.ORGIAST_HOME || os.homedir();
 const repo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -103,6 +105,11 @@ async function main() {
   const specPayload = includeSpecs
     ? { token: fleetEnv.FLEET_SHEET_TOKEN, kind: 'pc-spec', hostname: identity.hostname, spec: buildSpecPayload(collectHardwareSpec(), identity.hostname).spec }
     : null;
+  // クラウドのログイン状態も**別タブ**(PCログイン)への別リクエストにする。
+  // spec と同じ理由: payload に kind を混ぜると status の upsert が黙って止まる。
+  const cloudPayload = includeCloud
+    ? { token: fleetEnv.FLEET_SHEET_TOKEN, ...buildCloudLoginPayload(await collectCloudInventory(), { label, hostname: identity.hostname, username: identity.username, reportedAt: payload.reportedAt }) }
+    : null;
   const audit = scanBrowserExtensions();
   const extensionPayload = {
     token: fleetEnv.FLEET_SHEET_TOKEN, kind: 'extensions', label, hostname: os.hostname(), reportedAt: payload.reportedAt,
@@ -111,7 +118,7 @@ async function main() {
   if (dryRun) {
     // 秘匿値は出さない(状態だけ見せる)。ログ・CI・端末履歴に残るため。
     const shown = payload.token ? "<設定あり:" + payload.token.length + "文字>" : "<未設定>";
-    console.log(JSON.stringify({ ...payload, token: shown, extensionAudit: { ...extensionPayload, token: shown } }, null, 2));
+    console.log(JSON.stringify({ ...payload, token: shown, extensionAudit: { ...extensionPayload, token: shown }, cloudLogin: cloudPayload ? { ...cloudPayload, token: shown } : null }, null, 2));
     return;
   }
   // 2本は独立して送る。1本目が落ちたら2本目も送られない(かつ main の catch が
@@ -119,6 +126,7 @@ async function main() {
   await post(fleetEnv.FLEET_SHEET_URL, 'status', payload);
   if (specPayload) await post(fleetEnv.FLEET_SHEET_URL, 'pc-spec', specPayload);
   await post(fleetEnv.FLEET_SHEET_URL, 'extensions', extensionPayload);
+  if (cloudPayload) await post(fleetEnv.FLEET_SHEET_URL, 'cloud-login', cloudPayload);
 }
 
 async function post(url, kind, body) {

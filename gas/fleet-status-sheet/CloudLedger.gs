@@ -10,15 +10,21 @@ function _cloudTabs_() {
   };
 }
 
+// ヘッダ行が無いタブは列数0になり、以降の読み取りが
+// 「範囲の列数には 1 以上を指定してください」で落ちる。空のときだけ補う。
+function _cloudEnsureHeaders_(sheet, headers) {
+  if (sheet.getLastRow() !== 0 && sheet.getLastColumn() !== 0) return false;
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  return true;
+}
+
 function _cloudSheet_(tabName) {
   var id = PropertiesService.getScriptProperties().getProperty('CLOUD_LEDGER_SHEET_ID');
   if (!id) throw new Error('CLOUD_LEDGER_SHEET_ID is not configured');
   var book = SpreadsheetApp.openById(id);
   var sheet = book.getSheetByName(tabName);
-  if (!sheet) {
-    sheet = book.insertSheet(tabName);
-    sheet.getRange(1, 1, 1, _cloudTabs_()[tabName].length).setValues([_cloudTabs_()[tabName]]);
-  }
+  if (!sheet) sheet = book.insertSheet(tabName);
+  _cloudEnsureHeaders_(sheet, _cloudTabs_()[tabName]);
   return sheet;
 }
 
@@ -123,11 +129,18 @@ function _cloudFailure_(error) {
 function _cloudEnsureTabs_(book) {
   var definitions = _cloudTabs_();
   var created = [];
+  var repaired = [];
   Object.keys(definitions).forEach(function(name) {
-    if (book.getSheetByName(name)) return;
-    var sheet = book.insertSheet(name);
-    sheet.getRange(1, 1, 1, definitions[name].length).setValues([definitions[name]]);
-    created.push(name);
+    var sheet = book.getSheetByName(name);
+    if (!sheet) {
+      sheet = book.insertSheet(name);
+      _cloudEnsureHeaders_(sheet, definitions[name]);
+      created.push(name);
+      return;
+    }
+    // タブだけ作られてヘッダを書く前に落ちた台帳が実在した(2026-08-28 実測)。
+    // 1行でも入っているタブには触らない。
+    if (_cloudEnsureHeaders_(sheet, definitions[name])) repaired.push(name);
   });
   // 既定シートは中身が空のときだけ消す。人が使い始めていたら残す。
   ['シート1', 'Sheet1'].forEach(function(name) {
@@ -136,7 +149,7 @@ function _cloudEnsureTabs_(book) {
       book.deleteSheet(sheet);
     }
   });
-  return created;
+  return { created: created, repaired: repaired };
 }
 
 function setupCloudLedger() {
@@ -155,7 +168,7 @@ function setupCloudLedger() {
     props.setProperty('CLOUD_LEDGER_SHEET_ID', id);
     createdNow = true;
   }
-  var createdTabs = _cloudEnsureTabs_(book);
+  var tabPlan = _cloudEnsureTabs_(book);
 
   var file = DriveApp.getFileById(id);
   var sharing = 'DOMAIN';
@@ -181,7 +194,8 @@ function setupCloudLedger() {
     url: 'https://docs.google.com/a/orgiast.jp/spreadsheets/d/' + id + '/edit',
     tabs: book.getSheets().map(function(sheet) { return sheet.getName(); }),
     createdSpreadsheet: createdNow,
-    createdTabs: createdTabs,
+    createdTabs: tabPlan.created,
+    repairedTabs: tabPlan.repaired,
     sharing: sharing,
     movedToFolder: movedToFolder
   };

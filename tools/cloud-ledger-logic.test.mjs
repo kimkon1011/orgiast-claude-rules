@@ -442,3 +442,34 @@ test("中身のある既定シートは消さない", () => {
   setupContext.setupCloudLedger();
   assert.deepEqual(book.deleted, []);
 });
+
+// 回帰テスト: タブは作られたがヘッダを書く前に落ちた台帳が実在した。
+// 列数0のまま読むと GAS が「範囲の列数には 1 以上を指定してください」で落ち、
+// **タブが揃って見えるのに全ての読み書きが失敗する**という分かりにくい壊れ方になる。
+test("ヘッダの無い既存タブにヘッダを補う", () => {
+  const properties = new Map([["CLOUD_LEDGER_SHEET_ID", "sheet-id-1234567890"]]);
+  const book = makeBookStub(["プロジェクト所在地図"], { empty: ["プロジェクト所在地図"] });
+  const setupContext = {
+    CLOUD_PROJECT_HEADERS_: project,
+    CLOUD_CONTRACT_HEADERS_: contracts,
+    CLOUD_LOGIN_HEADERS_: logins,
+    PropertiesService: {
+      getScriptProperties: () => ({
+        getProperty: (key) => properties.get(key) || "",
+        setProperty: (key, value) => properties.set(key, value),
+      }),
+    },
+    SpreadsheetApp: { openById: () => book, create: () => book },
+    DriveApp: {
+      Access: { DOMAIN: "DOMAIN" },
+      Permission: { EDIT: "EDIT" },
+      getFileById: () => ({ setSharing() {}, moveTo() {} }),
+      getFolderById: () => ({}),
+    },
+  };
+  vm.createContext(setupContext);
+  vm.runInContext(io, setupContext);
+  const result = setupContext.setupCloudLedger();
+  assert.deepEqual([...result.repairedTabs], ["プロジェクト所在地図"]);
+  assert.deepEqual([...result.createdTabs], ["クラウド契約", "PCログイン"]);
+});

@@ -15,7 +15,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { recommendations } from './eval-harness.mjs';
 import { readEnvValue } from './env-kv.mjs';
 import { isEntry } from './is-entry.mjs';
-import { calculateDelegation, calculateLinesDelegation, collectBashProfile, collectClaudeStats, collectCodexUsage, collectGitActivity, estimateSpecAuthoringTokens, formatBlockSource } from './usage-stats.mjs';
+import { calculateDelegation, calculateLinesDelegation, collectBashProfile, collectClaudeActivityDays, collectClaudeCostStats, collectClaudeStats, collectCodexUsage, collectGitActivity, estimateSpecAuthoringTokens, formatBlockSource } from './usage-stats.mjs';
 export { codexSessionDirs, collectCodexUsage } from './usage-stats.mjs';
 const nativeHome = os.homedir();
 function defaultHome() { return process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || nativeHome; }
@@ -57,27 +57,9 @@ const isMain = isEntry(import.meta.url);
 if (isMain) {
 let claudeOut = 0, claudeUSD = 0, claudeByModel = {}, cacheBase = 0, cacheRead = 0, cacheWrite = 0, topFableSource = null;
 {
-  const files = []; walk(path.join(HOME, '.claude', 'projects'), files);
-  for (const f of files) {
-    let st; try { st = fs.statSync(f); } catch { continue; } if (st.mtimeMs < since) continue;
-    let lines = []; try { lines = fs.readFileSync(f, 'utf-8').split('\n'); } catch { continue; }
-    let fileFableOut = 0, fileFableLatest = 0;
-    for (const ln of lines) {
-      if (!ln.includes('"usage"')) continue;
-      let j; try { j = JSON.parse(ln); } catch { continue; }
-      // 行ごとのtimestampで期間を絞る(ファイルmtimeだと長寿命セッションの全履歴を誤集計する)
-      const ts = j?.timestamp ? new Date(j.timestamp).getTime() : 0; if (ts && ts < since) continue;
-      const u = j?.message?.usage; const model = j?.message?.model; if (!u) continue;
-      // 正しいキャッシュ単価: 通常入力=1x / キャッシュ書込=1.25x / キャッシュ読取=0.1x / 出力=出力単価
-      const baseIn = u.input_tokens || 0, cr = u.cache_read_input_tokens || 0, cc = u.cache_creation_input_tokens || 0;
-      cacheBase += baseIn; cacheRead += cr; cacheWrite += cc;
-      const outT = u.output_tokens || 0; const t = tier(model);
-      const [pi, po] = PRICE[t] || PRICE.default; claudeUSD += (baseIn * pi + cc * pi * 1.25 + cr * pi * 0.1 + outT * po) / 1e6; claudeOut += outT;
-      claudeByModel[t] = (claudeByModel[t] || 0) + outT;
-      if (t === 'fable') { fileFableOut += outT; fileFableLatest = Math.max(fileFableLatest, ts || st.mtimeMs); }
-    }
-    if (fileFableOut > (topFableSource?.outputTokens || 0)) topFableSource = { sessionId: path.basename(f, '.jsonl'), outputTokens: fileFableOut, latest: fileFableLatest };
-  }
+  const cost = collectClaudeCostStats({ home: HOME, days: DAYS });
+  claudeOut = cost.outputTokens; claudeByModel = cost.byModel; cacheBase = cost.cacheBase; cacheRead = cost.cacheRead; cacheWrite = cost.cacheWrite; topFableSource = cost.topFableSource;
+  for (const [model, usage] of Object.entries(cost.usageByModel)) { const [pi, po] = PRICE[model] || PRICE.default; claudeUSD += (usage.input * pi + usage.cacheWrite * pi * 1.25 + usage.cacheRead * pi * 0.1 + usage.output * po) / 1e6; }
 }
 // ---- 2) Codex(定額枠) ----
 const codexUsage = collectCodexUsage({ home: HOME, days: DAYS, includePatchLines: true });
@@ -101,7 +83,7 @@ let execOut = 0, execUSD = 0, execByProv = {};
 // ---- 4) 作業量プロキシ(gitコミット) ----
 let work = 0, workKind = 'commits';
 work = gitActivity.commits;
-if (work === 0) { workKind = 'sessions(代替)'; try { const files = []; walk(path.join(HOME, '.claude', 'projects'), files); const days = new Set(); for (const f of files) { const st = fs.statSync(f); if (st.mtimeMs >= since) days.add(new Date(st.mtimeMs).toDateString()); } work = days.size; } catch { } }
+if (work === 0) { workKind = 'sessions(代替)'; try { work = collectClaudeActivityDays({ home: HOME, days: DAYS }); } catch { } }
 
 // ---- 判定 ----
 const totalUSD = claudeUSD + execUSD;

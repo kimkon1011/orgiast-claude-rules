@@ -3,10 +3,26 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { calculateDelegation, calculateLinesDelegation, classifyBashCommand, collectBashProfile, collectClaudeLines, collectClaudeStats, collectCodexOutput, collectLandedLines, collectLedger, countPatchLines, estimateSpecAuthoringTokens, extractInlineProgram, formatBashProfile } from './usage-stats.mjs';
+import { calculateDelegation, calculateLinesDelegation, classifyBashCommand, collectBashProfile, collectClaudeLines, collectClaudeStats, collectCodexOutput, collectLandedLines, collectLedger, countPatchLines, estimateSpecAuthoringTokens, extractInlineProgram, formatBashProfile, parseCacheStats, resetParseCacheForTests } from './usage-stats.mjs';
 
 function fixture() { const home = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-stats-')), dir = path.join(home, '.claude', 'projects', 'p'); fs.mkdirSync(dir, { recursive: true }); return { home, file: path.join(dir, 'session.jsonl') }; }
 test('sessions uses row timestamps and splits main/sub/model', () => { const { home, file } = fixture(), now = Date.parse('2026-08-23T00:00:00Z'); const row = (timestamp, output_tokens, model, isSidechain = false) => JSON.stringify({ timestamp, isSidechain, message: { model, usage: { output_tokens }, content: [{ type: 'text', text: 'abc' }] } }); fs.writeFileSync(file, [row('2026-08-22T00:00:00Z', 100, 'claude-opus'), row('2026-08-21T00:00:00Z', 40, 'claude-sonnet', true), row('2026-07-01T00:00:00Z', 9999, 'claude-opus')].join('\n')); fs.utimesSync(file, new Date(now), new Date(now)); const x = collectClaudeStats({ home, days: 7, now }); assert.deepEqual(x.totals, { outputTokens: 140, main: 100, sub: 40 }); assert.deepEqual(x.byModel, { opus: 100, sonnet: 40 }); });
+test('parse cache hits unchanged files and reparses size/mtime changes', () => {
+  const { home, file } = fixture(), now = Date.parse('2026-08-23T00:00:00Z');
+  const row = (n) => JSON.stringify({ timestamp: new Date(now).toISOString(), message: { model: 'opus', usage: { output_tokens: n }, content: [] } });
+  fs.writeFileSync(file, row(3)); fs.utimesSync(file, new Date(now), new Date(now)); resetParseCacheForTests();
+  assert.equal(collectClaudeStats({ home, now }).totals.outputTokens, 3);
+  resetParseCacheForTests(); assert.equal(collectClaudeStats({ home, now }).totals.outputTokens, 3); assert.deepEqual(parseCacheStats(home), { hits: 1, misses: 0 });
+  fs.writeFileSync(file, `${row(3)}\n${row(5)}`); fs.utimesSync(file, new Date(now + 1000), new Date(now + 1000));
+  resetParseCacheForTests();
+  assert.equal(collectClaudeStats({ home, now }).totals.outputTokens, 8); assert.equal(parseCacheStats(home).misses, 1);
+});
+test('corrupt parse cache is ignored and rebuilt', () => {
+  const { home, file } = fixture(), now = Date.now(), cache = path.join(home, '.claude', 'cost-loop-parse-cache.json');
+  fs.writeFileSync(file, JSON.stringify({ timestamp: new Date(now).toISOString(), message: { model: 'opus', usage: { output_tokens: 7 }, content: [] } }));
+  fs.writeFileSync(cache, '{broken'); resetParseCacheForTests();
+  assert.equal(collectClaudeStats({ home, now }).totals.outputTokens, 7); assert.doesNotThrow(() => JSON.parse(fs.readFileSync(cache, 'utf8')));
+});
 test('blocks apportions output by prose and JSON token density', () => { const { home, file } = fixture(), now = Date.now(); fs.writeFileSync(file, JSON.stringify({ timestamp: new Date(now).toISOString(), message: { model: 'opus', usage: { output_tokens: 100 }, content: [{ type: 'text', text: '12345' }, { type: 'tool_use', name: 'Bash', input: '12345' }] } })); const b = collectClaudeStats({ home, now }).blocks, textEstimate = 5 / 1.8, toolEstimate = JSON.stringify('12345').length / 3.4, expectedText = 100 * textEstimate / (textEstimate + toolEstimate); assert.ok(Math.abs(b.text - expectedText) < 1e-9); assert.ok(Math.abs(b.tool_use - (100 - expectedText)) < 1e-9); assert.equal(b.tools.Bash, b.tool_use); });
 test('blocks assigns empty thinking-only output to thinking', () => { const { home, file } = fixture(), now = Date.now(); fs.writeFileSync(file, JSON.stringify({ timestamp: new Date(now).toISOString(), message: { model: 'opus', usage: { output_tokens: 100 }, content: [{ type: 'thinking', signature: 'sig' }] } })); const b = collectClaudeStats({ home, now }).blocks; assert.equal(b.thinking, 100); assert.equal(b.text, 0); assert.equal(b.unattributed, 0); });
 test('blocks assigns output with empty content to unattributed', () => { const { home, file } = fixture(), now = Date.now(); fs.writeFileSync(file, JSON.stringify({ timestamp: new Date(now).toISOString(), message: { model: 'opus', usage: { output_tokens: 100 }, content: [] } })); const b = collectClaudeStats({ home, now }).blocks; assert.equal(b.unattributed, 100); assert.equal(b.text, 0); assert.equal(b.thinking, 0); });

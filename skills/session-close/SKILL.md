@@ -83,7 +83,7 @@ description: セッションを綺麗に閉じて次に引き継ぐ。「終わ�
 - …
 ```
 
-- 書いたら「次は新しいセッションで `/session-start` と打つだけです」と1行で伝える。
+- 書いたら「次のセッションは自動で立ち上がって `/session-start` から始まります」と1行で伝える（手順8 が自動でやる）。
 
 ## 7. セッションを一覧から自動で消す（`/clear` は不要）
 
@@ -97,6 +97,24 @@ node "$HOME/orgiast-claude-rules/tools/close-session.mjs" --session <このセ�
 - 45秒ほどで `_deleted-backup/_closed/` へ退避されて一覧から消える。`/clear` は不要。
 - 実体は削除せず move するため復元できる。
 - 積み残しは `/session-triage` で後から拾える。
+
+## 8. 次のセッションは自動で立ち上がる（user に「新しいセッションを開いて」と言わない）
+
+- 手順7 の `close-session.mjs` が、退避したあとに `tools/next-session-launch.mjs` を呼び、
+  **新しい Windows Terminal ウィンドウで対話セッションを1つ起動し、初期プロンプトに `/session-start` を渡す**。
+  user がセッションを開く手作業はゼロ（VSCode 拡張のパネルは外部から新規会話を開けないため、別ウィンドウで起動する）。
+- 起動先の作業ディレクトリは `~/.claude/next-session.md` の `cwd:` コメント →
+  `~/.claude/current-session.json` の cwd → リポジトリルート の順で決まる。だから**手順6 を先に書くこと**。
+- 抑止したい時（無人実行・連続クローズ）:
+  - `node tools/close-session.mjs --session <id> --no-launch` … 起動しない
+  - `CLAUDE_HEADLESS` / `CI` が立っている環境では自動で起動しない（夜間 auto-session でウィンドウを開かない）
+  - 直近120秒に起動済みなら二重起動しない（`--force-launch` で無視できる）
+  - 恒久的に止めるなら `~/.claude/next-session-launch.json` に `{"enabled": false}`
+- **新セッション側で「このフォルダを信頼しますか」が出ることがある**（CLI の trust ダイアログ。`~/.claude.json` の
+  `hasTrustDialogAccepted` がそのフォルダで false のとき）。これはセキュリティの同意ゲートなので**Claude が代わりに押してはいけない**。
+  user に Enter を1回押してもらう前提で案内する。
+- 起動結果は `[next-session] 新しいセッションを起動しました: <cwd>` / `[next-session] スキップ: <理由>` の1行で出る。
+  スキップされた時だけ「新しいセッションを手で開いてください」と伝える。
 
 ## 注意
 

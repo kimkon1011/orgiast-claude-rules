@@ -26,6 +26,7 @@ export const REQUIRED_HOOKS = [
   // keyserve の鍵配布(provisionKeys)も走らない。ここで「欠落」と判定させて register-hooks に
   // .mjs へ移行させる(.ps1 は 'onboarding-sync.mjs' を含まないので includes 判定で欠落になる)。
   ['SessionStart', 'onboarding-sync.mjs'],
+  ['Stop', 'doc-link-drive-guard.mjs'],
 ];
 
 export const REQUIRED_TASKS = [

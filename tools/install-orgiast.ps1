@@ -299,13 +299,13 @@ if (Test-Path $envLocalPath) {
   $content = Get-Content $envLocalPath -Raw
   $lines = @($content -split "`n" | Where-Object { $_.Trim() -and -not $_.Trim().StartsWith('#') })
   foreach ($line in $lines) {
-    if ($line -match "^export\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*['\"]?([^'`"`r`n]+?)['`"]?$") {
+    if ($line -match '^export\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*[''"]?([^''"\r\n]+?)[''"]?$') {
       $varName = $matches[1]
       $varValue = $matches[2]
       Set-Item "env:$varName" $varValue
       OK "環境変数復元: $varName"
     }
-    elseif ($line -match "^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*['\"]?([^'`"`r`n]+?)['`"]?$") {
+    elseif ($line -match '^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*[''"]?([^''"\r\n]+?)[''"]?$') {
       $varName = $matches[1]
       $varValue = $matches[2]
       Set-Item "env:$varName" $varValue

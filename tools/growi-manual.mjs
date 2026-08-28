@@ -251,6 +251,15 @@ export async function main(args = process.argv.slice(2)) {
   usage(); return 2;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// シンボリックリンク経由で起動されると argv[1] はリンクのパス、import.meta.url は実体のパスに
+// なる。素の比較だと一致せず main が呼ばれないまま exit 0 で無言終了する（~/orgiast-claude-rules
+// が Downloads/orgiast-claude-rules へのリンクになっている環境で実際に踏んだ / 2026-08-28）。
+export function isMainModule(argv1, metaUrl) {
+  if (!argv1) return false;
+  const real = (p) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
+  return real(argv1) === real(fileURLToPath(metaUrl));
+}
+
+if (isMainModule(process.argv[1], import.meta.url)) {
   try { process.exitCode = await main(); } catch (error) { console.error(error.message); process.exitCode = 1; }
 }

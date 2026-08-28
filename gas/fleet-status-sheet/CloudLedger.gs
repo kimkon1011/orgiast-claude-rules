@@ -117,31 +117,45 @@ function _cloudFailure_(error) {
   return '失敗(' + (error && error.message ? error.message : String(error)) + ')';
 }
 
+// 不足しているタブだけをヘッダ付きで補い、Google が勝手に作る空の既定シートを片付ける。
+// 既存タブの中身には触らない。作成の途中で失敗した台帳(タブが1枚だけ等)を
+// 再実行だけで正しい形へ寄せるための修復処理でもある。
+function _cloudEnsureTabs_(book) {
+  var definitions = _cloudTabs_();
+  var created = [];
+  Object.keys(definitions).forEach(function(name) {
+    if (book.getSheetByName(name)) return;
+    var sheet = book.insertSheet(name);
+    sheet.getRange(1, 1, 1, definitions[name].length).setValues([definitions[name]]);
+    created.push(name);
+  });
+  // 既定シートは中身が空のときだけ消す。人が使い始めていたら残す。
+  ['シート1', 'Sheet1'].forEach(function(name) {
+    var sheet = book.getSheetByName(name);
+    if (sheet && book.getSheets().length > 1 && sheet.getLastRow() === 0 && sheet.getLastColumn() === 0) {
+      book.deleteSheet(sheet);
+    }
+  });
+  return created;
+}
+
 function setupCloudLedger() {
   var props = PropertiesService.getScriptProperties();
   var existing = props.getProperty('CLOUD_LEDGER_SHEET_ID');
+  var book;
+  var id;
+  var createdNow = false;
   if (existing) {
-    var current = SpreadsheetApp.openById(existing);
-    return {
-      ok: true,
-      sheetId: existing,
-      url: 'https://docs.google.com/a/orgiast.jp/spreadsheets/d/' + existing + '/edit',
-      tabs: current.getSheets().map(function(sheet) { return sheet.getName(); }),
-      sharing: 'DOMAIN',
-      movedToFolder: false
-    };
+    book = SpreadsheetApp.openById(existing);
+    id = existing;
+  } else {
+    book = SpreadsheetApp.create('オージャスト クラウド契約・プロジェクト台帳');
+    id = book.getId();
+    // 作成直後に ID を確定し、後続の失敗で二重作成されないようにする。
+    props.setProperty('CLOUD_LEDGER_SHEET_ID', id);
+    createdNow = true;
   }
-
-  var book = SpreadsheetApp.create('オージャスト クラウド契約・プロジェクト台帳');
-  var id = book.getId();
-  // 作成直後に ID を確定し、後続の共有・移動失敗で二重作成されないようにする。
-  props.setProperty('CLOUD_LEDGER_SHEET_ID', id);
-  var first = book.getSheets()[0];
-  Object.keys(_cloudTabs_()).forEach(function(name) {
-    var sheet = book.insertSheet(name);
-    sheet.getRange(1, 1, 1, _cloudTabs_()[name].length).setValues([_cloudTabs_()[name]]);
-  });
-  book.deleteSheet(first);
+  var createdTabs = _cloudEnsureTabs_(book);
 
   var file = DriveApp.getFileById(id);
   var sharing = 'DOMAIN';
@@ -165,7 +179,9 @@ function setupCloudLedger() {
     ok: true,
     sheetId: id,
     url: 'https://docs.google.com/a/orgiast.jp/spreadsheets/d/' + id + '/edit',
-    tabs: Object.keys(_cloudTabs_()),
+    tabs: book.getSheets().map(function(sheet) { return sheet.getName(); }),
+    createdSpreadsheet: createdNow,
+    createdTabs: createdTabs,
     sharing: sharing,
     movedToFolder: movedToFolder
   };

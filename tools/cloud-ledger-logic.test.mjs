@@ -250,15 +250,11 @@ test("setup persists sheet ID before sharing and reports sharing and move failur
       }),
     },
     SpreadsheetApp: {
-      create: () => ({
-        getId: () => "sheet-id-1234567890",
-        getSheets: () => [{ getName: () => "シート1" }],
-        insertSheet: (name) => {
-          createdSheets.push(name);
-          return { getRange: () => ({ setValues() {} }) };
-        },
-        deleteSheet() {},
-      }),
+      create: () => {
+        const book = makeBookStub(["シート1"], { empty: ["シート1"] });
+        book.created = createdSheets;
+        return book;
+      },
     },
     DriveApp: {
       Access: { DOMAIN: "DOMAIN" },
@@ -322,13 +318,7 @@ test("distributed cloud CLIs use the symlink-safe entry helper", () => {
 // テスト側で Logic を先に読み込んでいたので、この壊れ方が緑のまま素通りしていた。
 // **本番と同じ順序**で評価して固定する。
 test("GAS のファイル評価順(CloudLedger.gs が先)でもタブ定義が解決できる", () => {
-  const created = { sheets: [], name: "" };
-  const sheetStub = () => ({
-    getRange: () => ({ setValues() {}, getDisplayValues: () => [[]] }),
-    getName: () => "tab",
-    getLastColumn: () => 0,
-    getLastRow: () => 1,
-  });
+  const book = makeBookStub(["シート1"], { empty: ["シート1"] });
   const properties = {};
   const gas = {
     PropertiesService: {
@@ -339,20 +329,7 @@ test("GAS のファイル評価順(CloudLedger.gs が先)でもタブ定義が�
         },
       }),
     },
-    SpreadsheetApp: {
-      create: (name) => {
-        created.name = name;
-        return {
-          getId: () => "NEWID1234567890",
-          getSheets: () => [sheetStub()],
-          insertSheet: (tab) => {
-            created.sheets.push(tab);
-            return sheetStub();
-          },
-          deleteSheet() {},
-        };
-      },
-    },
+    SpreadsheetApp: { create: () => book, openById: () => book },
     DriveApp: {
       Access: { DOMAIN: "DOMAIN" },
       Permission: { EDIT: "EDIT" },
@@ -366,6 +343,102 @@ test("GAS のファイル評価順(CloudLedger.gs が先)でもタブ定義が�
   vm.runInContext(`${io}\n${logic}`, gas);
   const result = gas.setupCloudLedger();
   assert.equal(result.ok, true);
-  assert.deepEqual(created.sheets, ["プロジェクト所在地図", "クラウド契約", "PCログイン"]);
-  assert.equal(properties.CLOUD_LEDGER_SHEET_ID, "NEWID1234567890");
+  assert.deepEqual(book.created, ["プロジェクト所在地図", "クラウド契約", "PCログイン"]);
+  assert.equal(properties.CLOUD_LEDGER_SHEET_ID, "sheet-id-1234567890");
+});
+
+// 実物に近いブックのスタブ。getSheetByName を持たない簡易スタブだと
+// 「不足タブを補う」修復処理をテストできない(そこが実機で壊れた箇所)。
+// 関数宣言なので巻き上げられ、上のテストからも参照できる。
+function makeBookStub(initialTabs = [], { empty = [] } = {}) {
+  const tabs = initialTabs.map((name) => ({ name, rows: empty.includes(name) ? 0 : 1 }));
+  const wrap = (tab) => ({
+    getName: () => tab.name,
+    getLastRow: () => tab.rows,
+    getLastColumn: () => (tab.rows ? 1 : 0),
+    getRange: () => ({ setValues() {} }),
+  });
+  return {
+    created: [],
+    deleted: [],
+    getId: () => "sheet-id-1234567890",
+    getSheets: () => tabs.map(wrap),
+    getSheetByName(name) {
+      const tab = tabs.find((item) => item.name === name);
+      return tab ? wrap(tab) : null;
+    },
+    insertSheet(name) {
+      tabs.push({ name, rows: 1 });
+      this.created.push(name);
+      return wrap(tabs[tabs.length - 1]);
+    },
+    deleteSheet(sheet) {
+      const name = sheet.getName();
+      const index = tabs.findIndex((item) => item.name === name);
+      if (index >= 0) tabs.splice(index, 1);
+      this.deleted.push(name);
+    },
+  };
+}
+
+// 回帰テスト: 最初の setupCloudLedger が途中で落ち、タブ1枚＋既定「シート1」だけの
+// 半端な台帳が残った(2026-08-28 実測)。既に ID がある場合に何もせず返す実装だったため、
+// 再実行しても直らなかった。**再実行だけで正しい形へ寄る**ことを固定する。
+test("既存の作りかけ台帳を再実行だけで修復する", () => {
+  const properties = new Map([["CLOUD_LEDGER_SHEET_ID", "sheet-id-1234567890"]]);
+  const book = makeBookStub(["シート1", "プロジェクト所在地図"], { empty: ["シート1"] });
+  const setupContext = {
+    CLOUD_PROJECT_HEADERS_: project,
+    CLOUD_CONTRACT_HEADERS_: contracts,
+    CLOUD_LOGIN_HEADERS_: logins,
+    PropertiesService: {
+      getScriptProperties: () => ({
+        getProperty: (key) => properties.get(key) || "",
+        setProperty: (key, value) => properties.set(key, value),
+      }),
+    },
+    SpreadsheetApp: { openById: () => book, create: () => book },
+    DriveApp: {
+      Access: { DOMAIN: "DOMAIN" },
+      Permission: { EDIT: "EDIT" },
+      getFileById: () => ({ setSharing() {}, moveTo() {} }),
+      getFolderById: () => ({}),
+    },
+  };
+  vm.createContext(setupContext);
+  vm.runInContext(io, setupContext);
+  const result = setupContext.setupCloudLedger();
+  assert.equal(result.createdSpreadsheet, false, "既存があるのに作り直してはいけない");
+  // vm 内で作られた配列は realm が違うので、host 側の配列に写してから比較する。
+  assert.deepEqual([...result.createdTabs], ["クラウド契約", "PCログイン"]);
+  assert.deepEqual([...result.tabs], ["プロジェクト所在地図", "クラウド契約", "PCログイン"]);
+  assert.deepEqual(book.deleted, ["シート1"]);
+});
+
+// 空でない既定シートは人が使い始めている可能性があるので消さない。
+test("中身のある既定シートは消さない", () => {
+  const properties = new Map([["CLOUD_LEDGER_SHEET_ID", "sheet-id-1234567890"]]);
+  const book = makeBookStub(["シート1", "プロジェクト所在地図", "クラウド契約", "PCログイン"]);
+  const setupContext = {
+    CLOUD_PROJECT_HEADERS_: project,
+    CLOUD_CONTRACT_HEADERS_: contracts,
+    CLOUD_LOGIN_HEADERS_: logins,
+    PropertiesService: {
+      getScriptProperties: () => ({
+        getProperty: (key) => properties.get(key) || "",
+        setProperty: (key, value) => properties.set(key, value),
+      }),
+    },
+    SpreadsheetApp: { openById: () => book, create: () => book },
+    DriveApp: {
+      Access: { DOMAIN: "DOMAIN" },
+      Permission: { EDIT: "EDIT" },
+      getFileById: () => ({ setSharing() {}, moveTo() {} }),
+      getFolderById: () => ({}),
+    },
+  };
+  vm.createContext(setupContext);
+  vm.runInContext(io, setupContext);
+  setupContext.setupCloudLedger();
+  assert.deepEqual(book.deleted, []);
 });

@@ -229,13 +229,7 @@ test("describe response contains keys but never payment values", () => {
     },
   };
   vm.createContext(fake);
-  vm.runInContext(
-    io.replace(
-      /\bvar CLOUD_TABS_[^;]+;/,
-      'var CLOUD_TABS_ = {"プロジェクト所在地図":CLOUD_PROJECT_HEADERS_,"クラウド契約":CLOUD_CONTRACT_HEADERS_,"PCログイン":CLOUD_LOGIN_HEADERS_};',
-    ),
-    fake,
-  );
+  vm.runInContext(io, fake);
   const serialized = JSON.stringify(fake.describeCloudLedger());
   assert.match(serialized, /kim\/app/);
   assert(!serialized.includes("9876"));
@@ -319,4 +313,59 @@ test("distributed cloud CLIs use the symlink-safe entry helper", () => {
       ),
     );
   }
+});
+
+// 回帰テスト: GAS はファイルを**アルファベット順**に評価するので、CloudLedger.gs は
+// CloudLedgerLogic.gs より先に走る。ヘッダ定数をトップレベルの var で束ねていたため
+// undefined になり、setupCloudLedger が
+// 「Cannot read properties of undefined (reading 'length')」で落ちた(2026-08-28 実測)。
+// テスト側で Logic を先に読み込んでいたので、この壊れ方が緑のまま素通りしていた。
+// **本番と同じ順序**で評価して固定する。
+test("GAS のファイル評価順(CloudLedger.gs が先)でもタブ定義が解決できる", () => {
+  const created = { sheets: [], name: "" };
+  const sheetStub = () => ({
+    getRange: () => ({ setValues() {}, getDisplayValues: () => [[]] }),
+    getName: () => "tab",
+    getLastColumn: () => 0,
+    getLastRow: () => 1,
+  });
+  const properties = {};
+  const gas = {
+    PropertiesService: {
+      getScriptProperties: () => ({
+        getProperty: (key) => properties[key] ?? null,
+        setProperty: (key, value) => {
+          properties[key] = value;
+        },
+      }),
+    },
+    SpreadsheetApp: {
+      create: (name) => {
+        created.name = name;
+        return {
+          getId: () => "NEWID1234567890",
+          getSheets: () => [sheetStub()],
+          insertSheet: (tab) => {
+            created.sheets.push(tab);
+            return sheetStub();
+          },
+          deleteSheet() {},
+        };
+      },
+    },
+    DriveApp: {
+      Access: { DOMAIN: "DOMAIN" },
+      Permission: { EDIT: "EDIT" },
+      getFileById: () => ({ setSharing() {}, moveTo() {} }),
+      getFolderById: () => ({}),
+    },
+    LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock() {} }) },
+  };
+  vm.createContext(gas);
+  // 本番と同じ順: CloudLedger.gs → CloudLedgerLogic.gs
+  vm.runInContext(`${io}\n${logic}`, gas);
+  const result = gas.setupCloudLedger();
+  assert.equal(result.ok, true);
+  assert.deepEqual(created.sheets, ["プロジェクト所在地図", "クラウド契約", "PCログイン"]);
+  assert.equal(properties.CLOUD_LEDGER_SHEET_ID, "NEWID1234567890");
 });

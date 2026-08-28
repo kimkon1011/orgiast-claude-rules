@@ -108,6 +108,8 @@ try {
   if (add(settings.hooks.Stop, 'verify-before-done-detector.mjs', { hooks: [{ type: 'command', command: command('verify-before-done-detector.mjs') }] })) added += 1;
   // kim が読む文書をローカルパスのリンクで渡す違反を止める(モバイルで1クリックで開けない・2026-08-07 kim確定ルール)
   if (add(settings.hooks.Stop, 'doc-link-drive-guard.mjs', { hooks: [{ type: 'command', command: command('doc-link-drive-guard.mjs'), timeout: 10 }] })) added += 1;
+  // 作業依頼だけを残して必要なURL・コマンドを省くと、kimが過去ログを探すため同期Stopで差し戻す。
+  if (add(settings.hooks.Stop, 'handoff-info-guard.mjs', { hooks: [{ type: 'command', command: command('handoff-info-guard.mjs'), timeout: 10 }] })) added += 1;
   // 差分が無い時は書かない(日次実行で .bak が積み上がるのを防ぐ)
   if (added || settingsHadBom) { backup(settingsFile); write(settingsFile, settings); }
   if (settingsHadBom) console.log('[register-hooks] settings.json の BOM を除去しました');

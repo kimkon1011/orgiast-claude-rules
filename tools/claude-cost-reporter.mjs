@@ -36,7 +36,8 @@ export function bootstrapRequiredHooks({
   repo = path.dirname(path.dirname(fileURLToPath(import.meta.url))),
   now = Date.now(),
   spawn = spawnSync,
-  log = console.log,
+  // stdout は呼び出し側が解釈する経路なので汚さない。観測点は stderr に統一する(selftest-guards)。
+  log = console.error,
 } = {}) {
   const stampFile = path.join(home, '.claude', '.hook-bootstrap-stamp');
   try {

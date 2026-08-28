@@ -172,7 +172,7 @@ export function formatLiveness(result) {
 }
 
 export async function main(argv = process.argv.slice(2), now = new Date()) {
-  const allowed = new Set(['--json', '--post', '--post-sheet']);
+  const allowed = new Set(['--json', '--post', '--post-sheet', '--append-unmatched']);
   const invalid = argv.find((arg) => !allowed.has(arg));
   if (invalid) { console.error(`不正な引数: ${invalid}`); return 2; }
   const home = os.homedir();
@@ -210,13 +210,16 @@ export async function main(argv = process.argv.slice(2), now = new Date()) {
       return { names: [...new Set(mapped || [item.name])], state: toSheetState(item.state), reason: item.reason };
     });
     const checkedAt = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Tokyo', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(now);
-    const response = await fetch(fleetEnv.FLEET_SHEET_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'User-Agent': 'orgiast-fleet-liveness/1.0' }, body: JSON.stringify({ token: fleetEnv.FLEET_SHEET_TOKEN, kind: 'liveness', checkedAt, items }), signal: AbortSignal.timeout(20_000) });
+    const payload = { token: fleetEnv.FLEET_SHEET_TOKEN, kind: 'liveness', checkedAt, items };
+    if (argv.includes('--append-unmatched')) payload.appendUnmatched = true;
+    const response = await fetch(fleetEnv.FLEET_SHEET_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'User-Agent': 'orgiast-fleet-liveness/1.0' }, body: JSON.stringify(payload), signal: AbortSignal.timeout(20_000) });
     if (!response.ok) { console.error(`シート送信が HTTP ${response.status}`); return 1; }
     const body = await response.json();
     if (!body.ok) { console.error(`シート書き込み失敗: ${body.error || 'unknown'}`); return 1; }
     // 成功時も必ず結果を出す。黙って成功すると「届いていない」ことに誰も気付けない。
     // written は書き込んだ列見出し＝許可リストが守られたことをシートを読まずに検証できる。
     console.log(`\nシート書き込み: ${body.updated ?? 0}行を更新 / 列: ${(body.written || []).join(', ') || '(なし)'}`);
+    if (body.appended?.length) console.log(`追記した行: ${body.appended.map((entry) => `${entry.rowIndex}: ${entry.label}`).join(', ')}`);
     if (body.unmatched?.length) console.log(`シート未突合(行は作っていません): ${body.unmatched.join(', ')}`);
   }
   return result.unavailable ? 1 : 0;

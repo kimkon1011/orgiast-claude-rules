@@ -1,4 +1,4 @@
-// 生存判定は許可された3列だけを計画する。行追加や人間の記入列の更新は行わない。
+// 生存判定は既存行では許可された3列だけ、明示された行追加では F列と3列だけを計画する。
 function fleetPlanLiveness(headers, rows, payload) {
   var columns = fleetResolveColumns(headers);
   var allowed = [columns.livenessState, columns.livenessReason, columns.livenessCheckedAt];
@@ -7,27 +7,37 @@ function fleetPlanLiveness(headers, rows, payload) {
   var checkedAt = String(payload && payload.checkedAt || '');
   var updates = [];
   var unmatched = [];
-  var used = {};
+  var appended = [];
   items.forEach(function(item) {
     try {
       var names = item && Array.isArray(item.names) ? item.names.map(function(name) { return String(name == null ? '' : name).trim(); }).filter(Boolean) : [];
-      var index = -1;
-      for (var i = 0; i < names.length && index < 0; i += 1) {
-        index = rows.findIndex(function(row, rowIndex) { return !used[rowIndex] && row[columns.hostname] === names[i]; });
+      var indexes = [];
+      rows.forEach(function(row, rowIndex) {
+        var hostnameMatch = names.some(function(name) { return row[columns.hostname] === name; });
+        var selfPcMatch = !row[columns.hostname] && names.some(function(name) { return row[columns.selfPc] === name; });
+        if (hostnameMatch || selfPcMatch) indexes.push(rowIndex);
+      });
+      if (!indexes.length) {
+        var label = names[0] || '(名称未設定)';
+        if (!payload.appendUnmatched) { unmatched.push(label); return; }
+        var appendedValues = {};
+        appendedValues[columns.hostname] = names[0] || '';
+        appendedValues[columns.livenessState] = item.state == null ? '' : item.state;
+        appendedValues[columns.livenessReason] = item.reason == null ? '' : item.reason;
+        appendedValues[columns.livenessCheckedAt] = checkedAt;
+        appended.push({ rowIndex: rows.length + appended.length, label: names[0] || '', values: appendedValues });
+        return;
       }
-      for (var j = 0; j < names.length && index < 0; j += 1) {
-        index = rows.findIndex(function(row, rowIndex) { return !used[rowIndex] && row[columns.selfPc] === names[j] && !row[columns.hostname]; });
-      }
-      if (index < 0) { unmatched.push(names[0] || '(名称未設定)'); return; }
-      used[index] = true;
-      var values = {};
-      values[columns.livenessState] = item.state == null ? '' : item.state;
-      values[columns.livenessReason] = item.reason == null ? '' : item.reason;
-      values[columns.livenessCheckedAt] = checkedAt;
-      updates.push({ rowIndex: index, values: values });
+      indexes.forEach(function(index) {
+        var values = {};
+        values[columns.livenessState] = item.state == null ? '' : item.state;
+        values[columns.livenessReason] = item.reason == null ? '' : item.reason;
+        values[columns.livenessCheckedAt] = checkedAt;
+        updates.push({ rowIndex: index, values: values });
+      });
     } catch (error) {
       unmatched.push(item && item.names && item.names[0] ? String(item.names[0]) : '(名称未設定)');
     }
   });
-  return { updates: updates, unmatched: unmatched };
+  return { updates: updates, unmatched: unmatched, appended: appended };
 }

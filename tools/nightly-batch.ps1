@@ -57,6 +57,22 @@ try {
         }
     }
 
+    # アプリ内フォームの報告(kim の DM に届いたもの)を GitHub Issue 化する。
+    # 失敗しても既存の夜間処理を止めない。未 ack のものは次回そのまま再試行される。
+    $feedbackToIssues = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\feedback-to-issues.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $feedbackToIssues = $candidate; break }
+    }
+    if ($feedbackToIssues) {
+        try {
+            & $node.Source $feedbackToIssues
+            if ($LASTEXITCODE -ne 0) { Write-Warning ("nightly-batch: feedback-to-issues exited " + $LASTEXITCODE) }
+        } catch {
+            Write-Warning ("nightly-batch: feedback-to-issues: " + $_.Exception.Message)
+        }
+    }
+
     # LINEオープンチャットの取り込み分を選別・要約して作り置きを更新する。
     # batch-queue が空でも実行したいので、下の early exit より前に置くこと。
     $digest = $null

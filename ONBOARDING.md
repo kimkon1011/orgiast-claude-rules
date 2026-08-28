@@ -345,6 +345,18 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
 
 **APIキーは自動発行**: `~/.claude/makimono.env` に保存されるメールアドレス紐づきの決定的キーで、人間の作業はゼロ。サイト/API: [マキモノ](https://makimono-md.vercel.app) / [llms.txt](https://makimono-md.vercel.app/llms.txt) / [API docs](https://makimono-md.vercel.app/docs/api)
 
+### 1.19 「ChatGPTでデザインして」と言われたら Claude が上書きしない
+
+見た目のデザインを「ChatGPTで作って」と依頼されたら、**実際にOpenAIの画像生成に作らせ、その見た目に忠実に実装する**。Claude Codeが自分のCSSの好みで再解釈・簡略化するのは禁止（配色・レイアウト・アイコン・画像は生成結果に追従し、Claudeはテキスト・構成・データ配線に徹する）。
+
+- **Codex CLIで代用しない**。ChatGPTアカウントでログインしていてもCodexは**コード専用で画像を作れない**。画像は `gpt-image-1`（`/v1/images/generations`、または `/v1/responses` の `image_generation` tool）を直接叩く。chatgpt.comと同じ「スクショを見せて反復修正」は `/v1/responses` + `previous_response_id` で再現する
+- **複数枚が要る時は1枚のコンタクトシートを生成して切り出す**。1枚ずつ個別生成すると照明・色味がバラバラになり「同じブランドの写真」に見えない。「3列×2行、全パネル同一トンマナ」で1枚生成→`sharp`でcrop/composite
+- **生成画像は表示枠のアスペクト比に合わせる**。`object-cover`ははみ出しを問答無用で切るため、比がズレると主要被写体が枠外に消える。枠の実寸比を先に計算し、`gpt-image-1`のsize（1:1 / 1.5:1 / 0.67:1）から近いものを選び枠側も合わせる。検証は「画像が読めたか」では不十分で、**枠の実寸比と`naturalWidth/Height`を比較しcrop率を数値でassert**する
+- モックアップ内の数値（導入社数・満足度%・料金）は**AIの創作**なので実装時は必ず正直な表現に置換する（§2.1）。ただしレイアウトやトーンは変えない
+- **Codexに投げる時**: ブリーフはファイルに書いてファイル名だけ渡す（`codex exec "$(cat brief.md)"` はbashがバッククォートを食いコードブロックが空になる）。「コマンド実行禁止」と書くと`cat`すら拒否されるので、禁止対象は`npm`/`node`/ビルドだけと明記する（/mnt/c上でLinux側からnodeを走らせるとWindowsネイティブバイナリが壊れるのが理由。生成スクリプトは書かせるだけにして実行はWindows側から）
+
+**Why:** 2026-08-05〜06、あるLP制作で「ChatGPTで作ったものと違う／デザインレベルが落ちた」と4回連続で指摘された。原因は毎回Claude自身が最終的な見た目の決定権を握っていたこと（Codexでrewrite→抽象アートのみ生成→生成物を見て独自Tailwindに再構成→個別生成でトンマナ崩壊→アスペクト比不一致で主要被写体が42%切れる）。
+
 ---
 
 ## 2. 重要な運用ルール

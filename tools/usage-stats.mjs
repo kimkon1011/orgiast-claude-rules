@@ -27,53 +27,119 @@ export function walkJsonl(dir, out = []) {
   for (const e of entries) { const p = path.join(dir, e.name); if (e.isDirectory()) walkJsonl(p, out); else if (e.name.endsWith('.jsonl')) out.push(p); }
   return out;
 }
-function recentRows(file, cutoff) {
-  let raw = ''; try { raw = fs.readFileSync(file, 'utf8'); } catch { return []; }
-  const rows = [];
-  for (const line of raw.split(/\r?\n/)) { if (!line.trim()) continue; let row; try { row = JSON.parse(line); } catch { continue; } const ts = Date.parse(row.timestamp || ''); if (!Number.isFinite(ts) || ts < cutoff) continue; rows.push(row); }
-  return rows;
+const CACHE_VERSION = 1;
+const cacheStates = new Map();
+function cachePath(home) { return path.join(home, '.claude', 'cost-loop-parse-cache.json'); }
+function cacheState(home) {
+  const file = cachePath(home);
+  if (cacheStates.has(file)) return cacheStates.get(file);
+  let files = {}, dirs = {};
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (parsed?.version === CACHE_VERSION && parsed.files && !Array.isArray(parsed.files) && typeof parsed.files === 'object') { files = parsed.files; if (parsed.dirs && !Array.isArray(parsed.dirs) && typeof parsed.dirs === 'object') dirs = parsed.dirs; }
+  } catch {}
+  const state = { file, files, dirs, walks: new Map(), claudeScan: null, hits: 0, misses: 0, dirty: false };
+  cacheStates.set(file, state);
+  return state;
+}
+function cachedFile(home, file, kind, st, parse) {
+  const state = cacheState(home), old = state.files[file];
+  if (old?.size === st.size && old?.mtimeMs === st.mtimeMs && old?.kind === kind && old.result && typeof old.result === 'object') { state.hits++; return old.result; }
+  const result = parse();
+  if (result === null) return null;
+  state.files[file] = { size: st.size, mtimeMs: st.mtimeMs, kind, result };
+  state.misses++; state.dirty = true;
+  return result;
+}
+function saveCache(home) {
+  const state = cacheState(home); if (!state.dirty) return;
+  const retentionCutoff = Date.now() - 30 * DAY;
+  for (const file of Object.keys(state.files)) { try { if (state.files[file]?.mtimeMs < retentionCutoff || !fs.existsSync(file)) delete state.files[file]; } catch { delete state.files[file]; } }
+  try { fs.mkdirSync(path.dirname(state.file), { recursive: true }); fs.writeFileSync(state.file, JSON.stringify({ version: CACHE_VERSION, files: state.files, dirs: state.dirs })); state.dirty = false; } catch {}
+}
+export function parseCacheStats(home = process.env.ORGIAST_HOME || os.homedir()) { const s = cacheState(home); return { hits: s.hits, misses: s.misses }; }
+export function resetParseCacheForTests() { cacheStates.clear(); }
+function cachedWalk(home, root) {
+  const state = cacheState(home), out = [];
+  if (state.walks.has(root)) return state.walks.get(root);
+  const visit = (dir) => {
+    let st; try { st = fs.statSync(dir); } catch { return; }
+    let entry = state.dirs[dir];
+    if (!entry || entry.mtimeMs !== st.mtimeMs || !Array.isArray(entry.children)) {
+      let children; try { children = fs.readdirSync(dir, { withFileTypes: true }).map((item) => ({ name: item.name, dir: item.isDirectory() })); } catch { return; }
+      entry = state.dirs[dir] = { mtimeMs: st.mtimeMs, children }; state.dirty = true;
+    }
+    for (const child of entry.children) { const target = path.join(dir, child.name); if (child.dir) visit(target); else if (child.name.endsWith('.jsonl')) out.push(target); }
+  };
+  visit(root); state.walks.set(root, out); return out;
+}
+function bulkStat(files) {
+  if (files.length < 64) return files.map((file) => { try { const st = fs.statSync(file); return { size: st.size, mtimeMs: st.mtimeMs }; } catch { return null; } });
+  const program = "import fs from 'node:fs/promises';let s='';for await(const c of process.stdin)s+=c;const f=JSON.parse(s);const r=await Promise.all(f.map(async p=>{try{const x=await fs.stat(p);return [x.size,x.mtimeMs]}catch{return null}}));process.stdout.write(JSON.stringify(r));";
+  try {
+    const run = spawnSync(process.execPath, ['--input-type=module', '-e', program], { input: JSON.stringify(files), encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
+    if (run.status === 0) return JSON.parse(run.stdout).map((x) => x && ({ size: x[0], mtimeMs: x[1] }));
+  } catch {}
+  return files.map((file) => { try { const st = fs.statSync(file); return { size: st.size, mtimeMs: st.mtimeMs }; } catch { return null; } });
+}
+function parseClaudeFile(file) {
+  let raw = ''; try { raw = fs.readFileSync(file, 'utf8'); } catch { return null; }
+  const records = [], commands = [];
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line.trim()) continue; let row; try { row = JSON.parse(line); } catch { continue; }
+    const parsedTs = Date.parse(row.timestamp || ''), ts = Number.isFinite(parsedTs) ? parsedTs : 0;
+    const content = Array.isArray(row?.message?.content) ? row.message.content : [];
+    const assistant = (!row?.type || row.type === 'assistant') && (!row?.message?.role || row.message.role === 'assistant');
+    let authoredLines = 0;
+    if (assistant) for (const block of content) {
+      authoredLines += authoredLinesFromToolUse(block);
+      if (block?.type === 'tool_use' && ['Bash', 'PowerShell'].includes(block?.name)) {
+        const command = typeof block?.input?.command === 'string' ? block.input.command : '';
+        commands.push({ ts, chars: command.length, category: classifyBashCommand(command), preview: command.replace(/\s*\r?\n\s*/g, ' ').slice(0, 160) });
+      }
+    }
+    const usage = row?.message?.usage;
+    if (!usage) { if (authoredLines) records.push({ ts, authoredLines }); continue; }
+    const out = Number(usage.output_tokens) || 0, model = String(row?.message?.model || ''), tier = modelTier(model);
+    const blockTotals = { thinking: 0, text: 0, tool_use: 0, unattributed: 0, tools: {} };
+    const weighted = content.map((b) => { const type = b?.type === 'tool_use' ? 'tool_use' : b?.type === 'thinking' ? 'thinking' : 'text'; const chars = type === 'tool_use' ? JSON.stringify(b?.input ?? '').length : String(b?.text ?? b?.thinking ?? (typeof b === 'string' ? b : '')).length; return { b, type, n: chars / (type === 'tool_use' ? JSON_CHARS_PER_TOKEN : PROSE_CHARS_PER_TOKEN) }; });
+    const totalEstimate = weighted.reduce((s, x) => s + x.n, 0);
+    if (!totalEstimate) { if (content.some((b) => b?.type === 'thinking')) blockTotals.thinking += out; else blockTotals.unattributed += out; }
+    else for (const { b, type, n } of weighted) { const amount = out * n / totalEstimate; blockTotals[type] += amount; if (type === 'tool_use') { const name = String(b?.name || 'unknown'); blockTotals.tools[name] = (blockTotals.tools[name] || 0) + amount; } }
+    records.push({ ts, authoredLines, out, tier, side: Boolean(row.isSidechain), blocks: blockTotals,
+      input: Number(usage.input_tokens) || 0, cacheRead: Number(usage.cache_read_input_tokens) || 0, cacheWrite: Number(usage.cache_creation_input_tokens) || 0 });
+  }
+  return { records, commands };
+}
+function claudeFiles(home, cutoff = 0) {
+  const state = cacheState(home); if (state.claudeScan) return state.claudeScan;
+  const result = [], files = cachedWalk(home, path.join(home, '.claude', 'projects')), stats = bulkStat(files);
+  for (let i = 0; i < files.length; i++) { const file = files[i], st = stats[i]; if (!st || st.mtimeMs < cutoff) continue; const parsed = cachedFile(home, file, 'claude', st, () => parseClaudeFile(file)); if (parsed) result.push({ file, st, parsed }); }
+  state.claudeScan = result; return result;
+}
+export function collectClaudeActivityDays({ home = process.env.ORGIAST_HOME || os.homedir(), days = 7, now = Date.now() } = {}) {
+  const cutoff = now - days * DAY, active = new Set();
+  for (const { st } of claudeFiles(home, cutoff)) if (st.mtimeMs >= cutoff) active.add(new Date(st.mtimeMs).toDateString());
+  saveCache(home); return active.size;
 }
 export function collectClaudeStats({ home = process.env.ORGIAST_HOME || os.homedir(), days = 7, now = Date.now() } = {}) {
   const cutoff = now - days * DAY, sessions = [], byModel = {}, blocks = { thinking: 0, text: 0, tool_use: 0, unattributed: 0, tools: {} }; let authoredLines = 0;
-  for (const file of walkJsonl(path.join(home, '.claude', 'projects'))) {
-    let st; try { st = fs.statSync(file); } catch { continue; }
+  for (const { file, st, parsed } of claudeFiles(home, cutoff)) {
     if (st.mtimeMs < cutoff) continue;
     let outputTokens = 0, sideOutput = 0, mainOutput = 0;
-    for (const row of recentRows(file, cutoff)) {
-      const rowContent = Array.isArray(row?.message?.content) ? row.message.content : [];
-      if ((!row?.type || row.type === 'assistant') && (!row?.message?.role || row.message.role === 'assistant')) {
-        for (const block of rowContent) authoredLines += authoredLinesFromToolUse(block);
-      }
-      const usage = row?.message?.usage; if (!usage) continue;
-      const out = Number(usage.output_tokens) || 0, tier = modelTier(row?.message?.model);
-      outputTokens += out; byModel[tier] = (byModel[tier] || 0) + out;
-      if (row.isSidechain) sideOutput += out; else mainOutput += out;
-      const content = rowContent;
-      const weighted = content.map((b) => {
-        const type = b?.type === 'tool_use' ? 'tool_use' : b?.type === 'thinking' ? 'thinking' : 'text';
-        const chars = type === 'tool_use' ? JSON.stringify(b?.input ?? '').length : String(b?.text ?? b?.thinking ?? (typeof b === 'string' ? b : '')).length;
-        return { b, type, n: chars / (type === 'tool_use' ? JSON_CHARS_PER_TOKEN : PROSE_CHARS_PER_TOKEN) };
-      });
-      const totalEstimate = weighted.reduce((s, x) => s + x.n, 0);
-      if (!totalEstimate) {
-        if (content.some((b) => b?.type === 'thinking')) blocks.thinking += out;
-        else blocks.unattributed += out;
-        continue;
-      }
-      // Empty thinking bodies (only signatures are persisted) have no usable
-      // weight in mixed-content records, so thinking remains underestimated;
-      // do not invent an allocation without transcript evidence.
-      for (const { b, type, n } of weighted) {
-        const amount = out * n / totalEstimate;
-        blocks[type] += amount;
-        if (type === 'tool_use') { const name = String(b?.name || 'unknown'); blocks.tools[name] = (blocks.tools[name] || 0) + amount; }
-      }
+    for (const row of parsed.records) {
+      if (row.ts < cutoff) continue; authoredLines += row.authoredLines || 0;
+      const out = row.out || 0; if (!out) continue;
+      outputTokens += out; byModel[row.tier] = (byModel[row.tier] || 0) + out;
+      if (row.side) sideOutput += out; else mainOutput += out;
+      for (const name of ['thinking', 'text', 'tool_use', 'unattributed']) blocks[name] += row.blocks?.[name] || 0;
+      for (const [name, amount] of Object.entries(row.blocks?.tools || {})) blocks.tools[name] = (blocks.tools[name] || 0) + amount;
     }
     if (outputTokens) sessions.push({ session: path.basename(file, '.jsonl'), file, outputTokens, mainOutput, subOutput: sideOutput });
   }
   sessions.sort((a, b) => b.outputTokens - a.outputTokens);
   const total = sessions.reduce((s, x) => s + x.outputTokens, 0), main = sessions.reduce((s, x) => s + x.mainOutput, 0), sub = sessions.reduce((s, x) => s + x.subOutput, 0);
-  return { sessions, totals: { outputTokens: total, main, sub }, byModel, blocks, authoredLines };
+  saveCache(home); return { sessions, totals: { outputTokens: total, main, sub }, byModel, blocks, authoredLines };
 }
 export function classifyBashCommand(command) {
   command = String(command || '');
@@ -90,25 +156,33 @@ export function collectBashProfile({ home = process.env.ORGIAST_HOME || os.homed
   const categoryNames = ['inline-program', 'spec-authoring', 'delegated', 'git', 'read-only', 'other'];
   const byCategory = Object.fromEntries(categoryNames.map((category) => [category, { calls: 0, chars: 0, pct: 0 }]));
   const commands = [];
-  for (const file of walkJsonl(path.join(home, '.claude', 'projects'))) {
-    for (const row of recentRows(file, cutoff)) {
-      if (row?.type && row.type !== 'assistant') continue;
-      if (row?.message?.role && row.message.role !== 'assistant') continue;
-      const content = Array.isArray(row?.message?.content) ? row.message.content : [];
-      for (const block of content) {
-        if (block?.type !== 'tool_use' || !['Bash', 'PowerShell'].includes(block?.name)) continue;
-        const command = typeof block?.input?.command === 'string' ? block.input.command : '';
-        const chars = command.length, category = classifyBashCommand(command);
-        byCategory[category].calls++;
-        byCategory[category].chars += chars;
-        commands.push({ chars, category, preview: command.replace(/\s*\r?\n\s*/g, ' ').slice(0, 160) });
-      }
+  for (const { parsed } of claudeFiles(home, cutoff)) {
+    for (const command of parsed.commands) {
+      if (command.ts < cutoff) continue;
+      byCategory[command.category].calls++; byCategory[command.category].chars += command.chars; commands.push({ chars: command.chars, category: command.category, preview: command.preview });
     }
   }
   const totalCalls = commands.length, totalChars = commands.reduce((sum, command) => sum + command.chars, 0);
   for (const stats of Object.values(byCategory)) stats.pct = totalChars ? stats.chars / totalChars * 100 : 0;
   commands.sort((a, b) => b.chars - a.chars);
-  return { days, totalCalls, totalChars, byCategory, top: commands.slice(0, 15) };
+  saveCache(home); return { days, totalCalls, totalChars, byCategory, top: commands.slice(0, 15) };
+}
+export function collectClaudeCostStats({ home = process.env.ORGIAST_HOME || os.homedir(), days = 7, now = Date.now() } = {}) {
+  const cutoff = now - days * DAY, byModel = {}, usageByModel = {}; let outputTokens = 0, cacheBase = 0, cacheRead = 0, cacheWrite = 0, topFableSource = null;
+  for (const { file, st, parsed } of claudeFiles(home, cutoff)) {
+    if (st.mtimeMs < cutoff) continue;
+    let fileFableOut = 0, fileFableLatest = 0;
+    for (const row of parsed.records) {
+      if ((row.ts && row.ts < cutoff) || row.out === undefined) continue;
+      cacheBase += row.input || 0; cacheRead += row.cacheRead || 0; cacheWrite += row.cacheWrite || 0; outputTokens += row.out || 0;
+      byModel[row.tier] = (byModel[row.tier] || 0) + (row.out || 0);
+      const usage = usageByModel[row.tier] ||= { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
+      usage.input += row.input || 0; usage.cacheRead += row.cacheRead || 0; usage.cacheWrite += row.cacheWrite || 0; usage.output += row.out || 0;
+      if (row.tier === 'fable') { fileFableOut += row.out || 0; fileFableLatest = Math.max(fileFableLatest, row.ts || st.mtimeMs); }
+    }
+    if (fileFableOut > (topFableSource?.outputTokens || 0)) topFableSource = { sessionId: path.basename(file, '.jsonl'), outputTokens: fileFableOut, latest: fileFableLatest };
+  }
+  saveCache(home); return { outputTokens, byModel, usageByModel, cacheBase, cacheRead, cacheWrite, topFableSource };
 }
 export function collectLedger({ home = process.env.ORGIAST_HOME || os.homedir(), days = 7, now = Date.now() } = {}) {
   const cutoff = now - days * DAY, providers = {}; let outputTokens = 0, success = 0, failure = 0;
@@ -135,16 +209,17 @@ export function codexSessionDirs(home = process.env.ORGIAST_HOME || os.homedir()
 export function collectCodexUsage({ home = process.env.ORGIAST_HOME || os.homedir(), days = 7, now = Date.now(), includePatchLines = false } = {}) {
   const cutoff = now - days * DAY; let outputTokens = 0, sessions = 0, added = 0, deleted = 0, patchFiles = 0;
   const files = [];
-  for (const dir of codexSessionDirs(home)) walkJsonl(dir, files);
-  for (const file of new Set(files)) {
-    let st; try { st = fs.statSync(file); } catch { continue; } if (st.mtimeMs < cutoff) continue;
-    let raw = ''; try { raw = fs.readFileSync(file, 'utf8'); } catch { continue; }
-    if (includePatchLines) { const lines = countPatchLines(raw); added += lines.added; deleted += lines.deleted; patchFiles++; }
-    const re = /"total_token_usage"\s*:\s*\{[^{}]*?"output_tokens"\s*:\s*(\d+)/g; let match, last = null;
-    while ((match = re.exec(raw)) !== null) last = Number(match[1]);
+  for (const dir of codexSessionDirs(home)) files.push(...cachedWalk(home, dir));
+  const uniqueFiles = [...new Set(files)], stats = bulkStat(uniqueFiles);
+  for (let i = 0; i < uniqueFiles.length; i++) {
+    const file = uniqueFiles[i], st = stats[i]; if (!st || st.mtimeMs < cutoff) continue;
+    const parsed = cachedFile(home, file, 'codex', st, () => { let raw = ''; try { raw = fs.readFileSync(file, 'utf8'); } catch { return null; } const lines = countPatchLines(raw); const re = /"total_token_usage"\s*:\s*\{[^{}]*?"output_tokens"\s*:\s*(\d+)/g; let match, last = null; while ((match = re.exec(raw)) !== null) last = Number(match[1]); return { last, added: lines.added, deleted: lines.deleted }; });
+    if (!parsed) continue;
+    if (includePatchLines) { added += parsed.added; deleted += parsed.deleted; patchFiles++; }
+    const last = parsed.last;
     if (last !== null) { outputTokens += last; sessions++; }
   }
-  return includePatchLines ? { outputTokens, sessions, added, deleted, patchFiles } : { outputTokens, sessions };
+  saveCache(home); return includePatchLines ? { outputTokens, sessions, added, deleted, patchFiles } : { outputTokens, sessions };
 }
 export const collectCodexOutput = collectCodexUsage;
 export function countPatchLines(text) {

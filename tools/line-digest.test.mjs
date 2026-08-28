@@ -40,6 +40,41 @@ test('pendingの同一titleは追記しない', () => {
   assert.equal(result.added.length, 0);
 });
 
+test('入力ディレクトリが無い場合は対象外としてskipする', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'line-digest-no-input-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const logs = [];
+  const result = await runDigest({ home, args: [], log: (line) => logs.push(line) });
+  assert.equal(result.status, 'skip:入力ディレクトリなし');
+  assert.equal(logs.at(-1), result.status);
+});
+
+test('入力はあるが未処理メッセージが無い場合はskipする', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'line-digest-no-new-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(home, '.claude', 'line-openchat'), { recursive: true });
+  const logs = [];
+  const result = await runDigest({ home, args: [], log: (line) => logs.push(line) });
+  assert.equal(result.status, 'skip:新規メッセージなし');
+  assert.equal(logs.at(-1), result.status);
+});
+
+test('実処理時は処理件数をstatusに含める', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'line-digest-status-ok-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const dir = path.join(home, '.claude', 'line-openchat'); fs.mkdirSync(dir, { recursive: true });
+  const messages = [1, 2].map((i) => ({ id: `status-${i}`, text: `生成AIの新モデルと料金に関する十分な長さのニュースその${i}です。`, ts: Date.now() + i }));
+  fs.writeFileSync(path.join(dir, '2026-08.jsonl'), messages.map(JSON.stringify).join('\n') + '\n');
+  const llm = async ({ messages: prompts }) => ({ text: prompts[0].content.includes('scoreは')
+    ? '{"items":[{"i":0,"category":"cost","score":2},{"i":1,"category":"cost","score":2}]}'
+    : '{"digest":["料金情報が更新された（要検証）","新モデル情報を確認中","公式情報の確認が必要"],"proposals":[]}' });
+  const logs = [];
+  const result = await runDigest({ home, llm, args: [], log: (line) => logs.push(line) });
+  assert.equal(result.processed, 2);
+  assert.equal(result.status, `ok:${result.processed}件処理`);
+  assert.equal(logs.at(-1), result.status);
+});
+
 test('stateにより2回目は同じメッセージを処理しない', async (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'line-digest-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));

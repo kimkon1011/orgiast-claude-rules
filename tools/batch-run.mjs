@@ -58,7 +58,7 @@ function usageRecord(provider, model, usage = {}, extra = {}) {
 }
 function saveResult(job, text, usage, mode = 'standard', executedBy) {
   const date = new Date().toISOString().slice(0, 10);
-  const rec = { id: job.id, provider: executedBy?.provider || job.provider, model: executedBy?.model || job.model, text, usage, mode, completedAt: new Date().toISOString() };
+  const rec = { id: job.id, provider: executedBy?.provider || job.provider, model: executedBy?.model || job.model, text, usage, mode, completedAt: new Date().toISOString(), ...(job.jobType && { jobType: job.jobType }), ...(job.batchDate && { batchDate: job.batchDate }) };
   fs.appendFileSync(path.join(dir, `results-${date}.jsonl`), JSON.stringify(rec) + '\n');
 }
 async function runStandard(job) {

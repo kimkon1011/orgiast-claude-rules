@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
+import { detectCodex, detectProviders, chooseExecutors, buildDelegationBlock } from './executor-probe.mjs';
 import { DEFAULT_REPO_MAP, parseRepoMap } from './feedback-to-issues.mjs';
 
 const MARKER = '<!-- NEXT-SESSION v1 -->';
@@ -214,16 +215,19 @@ export function markTodoDone(md, todoText, note) {
   return source.slice(0, start) + changed + source.slice(end);
 }
 
-export function buildPrompt(todo, sections, repoCwd, summaryFile, timeoutMin = 60, date = new Date()) {
+export function buildPrompt(todo, sections, repoCwd, summaryFile, timeoutMin = 60, date = new Date(), delegationBlock = '') {
   const attached = ['対象', '完了条件', '触る前に読む memory'].map((name) => sections[name]).filter(Boolean).join('\n\n');
   const day = localDate(date).replaceAll('-', '');
   return [
     'あなたは無人で起動された自動セッションです。人間は見ていません。質問せず、完了まで自分で進めてください。',
     `## 目的\n${todo}`,
     attached,
+    delegationBlock,
     `## 固定の作業規約
-- セッションの作業ディレクトリは履歴を揃えるためのフォルダであり、実際の作業対象リポジトリは ${repoCwd} である。git は必ず \`git -C ${repoCwd}\` の形で実行し、codex-do.mjs は \`--cwd ${repoCwd}\` を付ける。裸の \`git status\` / \`git checkout\` は使わない。
-- 実装本体は \`node tools/codex-do.mjs "<指示>" --cwd ${repoCwd}\` で Codex に委譲する（§1.18）。監督は設計・レビュー・検証だけ。
+- セッションの作業ディレクトリは履歴を揃えるためのフォルダであり、実際の作業対象リポジトリは ${repoCwd} である。git は必ず \`git -C ${repoCwd}\` の形で実行し、委譲コマンドには必ず \`--cwd ${repoCwd}\` 相当で対象を明示する。裸の \`git status\` / \`git checkout\` は使わない。
+- 実装本体は上の「委譲ルート」のコマンドで委譲する（§1.18）。監督は設計・指示文の作成・レビュー・検証だけを行う。
+- 生成物を自分で打ち直さない。必ず \`--out <ファイル>\` で成果物をディスクへ直接着地させる（監督が全文を書くと委譲した意味が無くなり費用が同じになる）。
+- 委譲を1回実行するたびに \`委譲: <provider> <成功/失敗> <対象ファイル>\` の1行を ${summaryFile} に残す。
 - 他セッションと作業ツリーを共有している。\`git add -A\` / \`git commit -a\` / \`git stash\` / \`git checkout -- .\` は禁止。自分が作成・変更したファイルだけをパス指定で \`git add\` する。着手前とコミット直前に \`git status --porcelain\` を撮り、差分が自分の変更だけであることを確認する。
 - ブランチは必ず main から切る。ブランチ名は \`auto/${day}-<短いスラグ>\`。
 - \`node --test tools/*.test.mjs\` が緑になるまで直す。
@@ -250,7 +254,7 @@ export function filterFeedbackIssues(issues) {
   return (Array.isArray(issues) ? issues : []).filter((issue) => !feedbackIssueExclusionReason(issue));
 }
 
-export function buildFeedbackPrompt(issue, repo, repoCwd, summaryFile, timeoutMin = 60) {
+export function buildFeedbackPrompt(issue, repo, repoCwd, summaryFile, timeoutMin = 60, delegationBlock = '') {
   return `あなたは無人で起動された自動セッションです。人間は見ていません。質問せず、以下のフォーム報告を対応してください。
 
 ## 入力
@@ -279,7 +283,10 @@ ${issue.body || '（本文なし）'}
 - 秘匿値をコード、PR、ログへ書かない。
 
 ## 実行環境
-- 実リポジトリは ${repoCwd}。git は \`git -C ${repoCwd}\`、実装委譲は \`node tools/codex-do.mjs "<指示>" --cwd ${repoCwd}\` のように対象を明示する。
+- 実リポジトリは ${repoCwd}。git は \`git -C ${repoCwd}\`、実装は下の「委譲ルート」のコマンドで委譲し、対象を明示する。
+${delegationBlock ? `
+${delegationBlock}
+` : ''}
 - 作業経過を ${summaryFile} に逐次追記する。PR URL・PRタイトル・CI結果を必ず最後に記録する。
 - 5分を超える長時間ポーリングをしてはいけない。開始から ${Math.max(1, timeoutMin - 10)} 分でまとめに入る。
 
@@ -298,6 +305,39 @@ export function feedbackNotifyUrl(base) {
     url.hash = '';
     return url.href;
   } catch { return ''; }
+}
+
+// 起動時にこのマシンで実際に使える委譲先を測る。プロンプトに「Codex に委譲しろ」とだけ書いても、
+// WSL の無い Windows では codex が 0 出力・0.05 秒で失敗するだけで、子は黙って自分で実装してしまう。
+export function probeExecutorPlan({ runSync = defaultRunSync, home = homeDir(), exists = fs.existsSync, readFile = fs.readFileSync } = {}) {
+  const codex = detectCodex({ runSync });
+  const providers = detectProviders({ homeDir: home, exists, readFile });
+  return chooseExecutors(codex, providers);
+}
+
+function defaultRunSync(command, commandArgs) {
+  try {
+    const result = spawnSync(command, commandArgs, { encoding: 'utf8', timeout: 15_000, windowsHide: true });
+    return { status: result.status, stdout: String(result.stdout ?? '') };
+  } catch { return { status: null, stdout: '' }; }
+}
+
+export function readLedgerLines(file, read = fs.readFileSync) {
+  try { return String(read(file, 'utf8')).split(/\r?\n/).filter(Boolean); } catch { return []; }
+}
+
+// 子が本当に委譲したかは台帳の増分でしか分からない。プロンプトの文言や自己申告では測れない。
+export function ledgerDelta(before, after) {
+  const added = after.slice(before.length);
+  const byProvider = {};
+  for (const line of added) {
+    let provider = '';
+    try { provider = JSON.parse(line)?.provider ?? ''; } catch {}
+    if (!provider) continue;
+    byProvider[provider] = (byProvider[provider] ?? 0) + 1;
+  }
+  const total = Object.values(byProvider).reduce((sum, count) => sum + count, 0);
+  return { total, byProvider };
 }
 
 function homeDir() {
@@ -606,7 +646,10 @@ function failureReason(result) {
 }
 
 export function formatResultLine(result, minutes, pr = '') {
-  return `- ${result.todo} | ${result.status}${pr ? ` | PR #${pr}` : ''} | ${minutes}分 | transcript: ${result.transcript || '(取得できず)'} | resume: ${result.resumeCommand || '(取得できず)'}${failureReason(result)}`;
+  const delegated = result.delegations
+    ? ` | 委譲 ${result.delegations.total}件${Object.keys(result.delegations.byProvider ?? {}).length ? `(${Object.entries(result.delegations.byProvider).map(([name, count]) => `${name}:${count}`).join(' ')})` : ''}`
+    : '';
+  return `- ${result.todo} | ${result.status}${pr ? ` | PR #${pr}` : ''}${delegated} | ${minutes}分 | transcript: ${result.transcript || '(取得できず)'} | resume: ${result.resumeCommand || '(取得できず)'}${failureReason(result)}`;
 }
 
 export async function main(argv = process.argv.slice(2)) {
@@ -628,6 +671,9 @@ export async function main(argv = process.argv.slice(2)) {
   const parsed = fs.existsSync(nextFile) ? parseHandoff(fs.readFileSync(nextFile, 'utf8')) : { block: '', todos: [], sections: {} };
   const feedbackIssues = listFeedbackIssues();
   const detectedHistoryCwd = config.historyCwd || detectHistoryCwd({ projectsDir: path.join(claudeDir, 'projects') });
+  const executorPlan = probeExecutorPlan({ home });
+  const delegationBlock = buildDelegationBlock(executorPlan);
+  const ledgerFile = path.join(claudeDir, 'executor-usage.jsonl');
   if (options.list) {
     parsed.todos.forEach((todo, i) => console.log(`[next-session] ${i + 1}. ${todoExclusionReason(todo) ? `除外: ${todoExclusionReason(todo)}` : '採用'} | ${todo}`));
     feedbackIssues.forEach((issue) => console.log(`[feedback] ${issue.repo}#${issue.number}. ${feedbackIssueExclusionReason(issue) ? `除外: ${feedbackIssueExclusionReason(issue)}` : '採用'} | ${issue.title}`));
@@ -642,13 +688,13 @@ export async function main(argv = process.argv.slice(2)) {
       const repoCwd = pickCwd(todo, fs.existsSync, config.repoByKeyword);
       const historyCwd = fs.existsSync(detectedHistoryCwd) ? detectedHistoryCwd : repoCwd;
       const summaryFile = path.join(autoDir, 'runs', `dry-${index + 1}.summary.md`);
-      console.log(`[next-session]\nTODO: ${todo}\nREPO CWD: ${repoCwd}\nHISTORY CWD: ${historyCwd}\n\n${buildPrompt(todo, parsed.sections, repoCwd, summaryFile, options.timeoutMin)}`);
+      console.log(`[next-session]\nTODO: ${todo}\nREPO CWD: ${repoCwd}\nHISTORY CWD: ${historyCwd}\n\n${buildPrompt(todo, parsed.sections, repoCwd, summaryFile, options.timeoutMin, new Date(), delegationBlock)}`);
     }
     for (const [index, issue] of selectedFeedback.entries()) {
       const repoCwd = feedbackRepoCwd(issue.repo);
       const historyCwd = fs.existsSync(detectedHistoryCwd) ? detectedHistoryCwd : repoCwd;
       const summaryFile = path.join(autoDir, 'runs', `dry-feedback-${index + 1}.summary.md`);
-      console.log(`[feedback]\nISSUE: ${issue.repo}#${issue.number} ${issue.title}\nREPO CWD: ${repoCwd}\nHISTORY CWD: ${historyCwd}\n\n${buildFeedbackPrompt(issue, issue.repo, repoCwd, summaryFile, options.timeoutMin)}`);
+      console.log(`[feedback]\nISSUE: ${issue.repo}#${issue.number} ${issue.title}\nREPO CWD: ${repoCwd}\nHISTORY CWD: ${historyCwd}\n\n${buildFeedbackPrompt(issue, issue.repo, repoCwd, summaryFile, options.timeoutMin, delegationBlock)}`);
     }
     if (!selectedFeedback.length) console.log('[feedback]\nDRY対象: 0件');
     return 0;
@@ -680,7 +726,9 @@ export async function main(argv = process.argv.slice(2)) {
           n += 1;
         }
       }
-      const result = await runChild(executable, buildPrompt(todo, parsed.sections, repoCwd, summaryFile, options.timeoutMin), repoCwd, historyCwd, options.timeoutMin * 60_000);
+      const ledgerBefore = readLedgerLines(ledgerFile);
+      const result = await runChild(executable, buildPrompt(todo, parsed.sections, repoCwd, summaryFile, options.timeoutMin, new Date(), delegationBlock), repoCwd, historyCwd, options.timeoutMin * 60_000);
+      const delegations = ledgerDelta(ledgerBefore, readLedgerLines(ledgerFile));
       const stdoutSessionId = extractSessionId(result.stdout);
       const transcriptDir = path.dirname(transcriptPath(historyCwd, '00000000-0000-0000-0000-000000000000'));
       const recoveredSessionId = stdoutSessionId ? '' : recoverSessionId({ dir: transcriptDir, startedAt: result.startedAt, endedAt: result.endedAt });
@@ -695,7 +743,7 @@ export async function main(argv = process.argv.slice(2)) {
       const closedRegistered = result.status === 'success'
         ? appendClosedSession(path.join(claudeDir, 'closed-sessions.json'), sessionId)
         : false;
-      const record = { todo, cwd: repoCwd, repoCwd, historyCwd, summaryFile, summary, sessionId, sessionIdSource, transcript, resumeCommand, closedRegistered, ...result };
+      const record = { todo, cwd: repoCwd, repoCwd, historyCwd, summaryFile, summary, executorPlan, delegations, sessionId, sessionIdSource, transcript, resumeCommand, closedRegistered, ...result };
       results.push(record);
       fs.writeFileSync(runFile, JSON.stringify(record, null, 2));
     }
@@ -716,7 +764,7 @@ export async function main(argv = process.argv.slice(2)) {
       const runFile = path.join(autoDir, 'runs', `${stamp}.json`);
       const summaryFile = path.join(autoDir, 'runs', `${stamp}.summary.md`);
       fs.writeFileSync(summaryFile, '', { flag: 'a' });
-      const result = await runChild(executable, buildFeedbackPrompt(issue, issue.repo, repoCwd, summaryFile, options.timeoutMin), repoCwd, historyCwd, options.timeoutMin * 60_000);
+      const result = await runChild(executable, buildFeedbackPrompt(issue, issue.repo, repoCwd, summaryFile, options.timeoutMin, delegationBlock), repoCwd, historyCwd, options.timeoutMin * 60_000);
       let summary = '';
       try { summary = fs.readFileSync(summaryFile, 'utf8'); } catch {}
       const record = { source: 'feedback', issue, cwd: repoCwd, summaryFile, summary, ...result };

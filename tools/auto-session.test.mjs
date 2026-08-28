@@ -6,7 +6,7 @@ import path from 'node:path';
 
 const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-session-test-'));
 process.env.ORGIAST_HOME = isolatedHome;
-const { DEFAULT_REPO, localDate, loadConfig, detectHistoryCwd, parseHandoff, todoExclusionReason, filterTodos, pickCwd, buildChildArgs, buildPrompt, buildFeedbackPrompt, feedbackIssueExclusionReason, filterFeedbackIssues, feedbackNotifyUrl, normalizeGitHubRepo, feedbackRepoCwd, resolveClaudeExe, decideRun, markTodoDone, extractSessionId, transcriptPath, recoverSessionId, appendClosedSession, formatResultLine } = await import('./auto-session.mjs');
+const { DEFAULT_REPO, localDate, loadConfig, detectHistoryCwd, parseHandoff, todoExclusionReason, filterTodos, pickCwd, buildChildArgs, buildPrompt, buildFeedbackPrompt, feedbackIssueExclusionReason, filterFeedbackIssues, feedbackNotifyUrl, normalizeGitHubRepo, feedbackRepoCwd, resolveClaudeExe, decideRun, markTodoDone, extractSessionId, transcriptPath, recoverSessionId, appendClosedSession, formatResultLine, probeExecutorPlan, readLedgerLines, ledgerDelta } = await import('./auto-session.mjs');
 const historyCwd = String.raw`c:\Users\example\Downloads\work`;
 test.after(() => fs.rmSync(isolatedHome, { recursive: true, force: true }));
 
@@ -343,4 +343,134 @@ test('markTodoDone は複数行 TODO の先頭行だけを完了表示にする'
   const changed = markTodoDone(realShape, todo, '2026-08-26 完了（PR #42）');
   assert.ok(changed.includes('1. ~~**複数行の実装を完了する**~~ → ✅ 2026-08-26 完了（PR #42）\n   - 既存の挙動を維持する'));
   assert.ok(changed.includes('   - Windows 実機でもテストする'));
+});
+
+// --- 委譲型 auto-session（2026-08-29 追加）---
+test('buildPrompt: delegationBlock を渡すとプロンプトに含まれ、目的より後・固定の作業規約より前に出る', () => {
+  const todo = 'テストTODO';
+  const sections = { project: 'プロジェクト概要' };
+  const repoCwd = '/test';
+  const summaryFile = 'summary.md';
+  const timeoutMin = 30;
+  const date = new Date('2023-01-01');
+  const delegationBlock = 'DELEGATION_BLOCK_TEST';
+
+  const prompt = buildPrompt(todo, sections, repoCwd, summaryFile, timeoutMin, date, delegationBlock);
+
+  const purposeIndex = prompt.indexOf('## 目的');
+  const fixedRulesIndex = prompt.indexOf('## 固定の作業規約');
+  const delegationIndex = prompt.indexOf(delegationBlock);
+
+  assert.ok(purposeIndex !== -1, '目的セクションが存在する');
+  assert.ok(fixedRulesIndex !== -1, '固定の作業規約セクションが存在する');
+  assert.ok(delegationIndex !== -1, '委譲ブロックが存在する');
+  assert.ok(purposeIndex < delegationIndex, '委譲ブロックは目的より後');
+  assert.ok(delegationIndex < fixedRulesIndex, '委譲ブロックは固定の作業規約より前');
+});
+
+test('buildPrompt: delegationBlock未指定でも例外にならず、旧codex-doコマンドが含まれない', () => {
+  const prompt = buildPrompt('TODO', { project: '概要' }, '/repo', 'sum.md', 10, new Date());
+
+  assert.doesNotThrow(() => buildPrompt('TODO', { project: '概要' }, '/repo', 'sum.md', 10, new Date()));
+  assert.ok(!prompt.includes('codex-do.mjs'), '旧codex-doコマンドが含まれない');
+});
+
+test('buildPrompt: 固定の作業規約に3つの規定文言が含まれる', () => {
+  const prompt = buildPrompt('TODO', { project: '概要' }, '/repo', 'sum.md', 10, new Date());
+
+  assert.ok(prompt.includes('実装本体は上の「委譲ルート」のコマンドで委譲する'));
+  assert.ok(prompt.includes('--out <ファイル>'));
+  assert.ok(prompt.includes('委譲: <provider> <成功/失敗> <対象ファイル>'));
+});
+
+test('readLedgerLines: 空行を除いて分割、read例外時は空配列', () => {
+  const fakeRead = (file, encoding) => {
+    if (file === 'valid') return 'line1\n\nline2\nline3\n';
+    throw new Error('File not found');
+  };
+
+  const lines = readLedgerLines('valid', fakeRead);
+  assert.deepEqual(lines, ['line1', 'line2', 'line3']);
+
+  const emptyLines = readLedgerLines('invalid', fakeRead);
+  assert.deepEqual(emptyLines, []);
+});
+
+test('ledgerDelta: 増分だけを数える', () => {
+  const before = ['{"provider":"a"}', '{"provider":"b"}'];
+  const after = ['{"provider":"a"}', '{"provider":"b"}', '{"provider":"c"}', '{"provider":"d"}', '{"provider":"e"}'];
+
+  const delta = ledgerDelta(before, after);
+  assert.equal(delta.total, 3);
+  assert.equal(delta.byProvider.c, 1);
+  assert.equal(delta.byProvider.d, 1);
+  assert.equal(delta.byProvider.e, 1);
+});
+
+test('ledgerDelta: 壊れたJSONとproviderなし行を無視', () => {
+  const before = ['{"provider":"a"}'];
+  const after = [
+    '{"provider":"a"}',
+    'invalid json',
+    '{"no_provider":true}',
+    '{"provider":"b"}',
+    '{"provider":"b"}'
+  ];
+
+  const delta = ledgerDelta(before, after);
+  assert.equal(delta.total, 2);
+  assert.equal(delta.byProvider.b, 2);
+});
+
+test('formatResultLine: delegationsなし時は委譲を含まない', () => {
+  const result = {
+    todo: 'TODO',
+    status: 'done',
+    transcript: 'transcript',
+    resumeCommand: 'resume'
+  };
+
+  const line = formatResultLine(result, 5, 'PR123');
+  assert.ok(!line.includes('委譲'), '委譲を含まない');
+});
+
+test('formatResultLine: delegationsあり時は件数と内訳を含む', () => {
+  const result = {
+    todo: 'TODO',
+    status: 'done',
+    transcript: 'transcript',
+    resumeCommand: 'resume',
+    delegations: { total: 3, byProvider: { openrouter: 2, groq: 1 } }
+  };
+
+  const line = formatResultLine(result, 5, 'PR123');
+  assert.ok(line.includes('委譲 3件'));
+  assert.ok(line.includes('openrouter:2'));
+  assert.ok(line.includes('groq:1'));
+});
+
+test('probeExecutorPlan: WSL無し+openrouter鍵ありで実装ロールがopenrouter', () => {
+  const fakeRunSync = (cmd, args) => {
+    if (cmd === 'wsl' && args[0] === '-l' && args[1] === '-q') {
+      return { status: 1, stdout: '' };
+    }
+    return { status: 0, stdout: '' };
+  };
+
+  // path.join は Windows で区切りが変わるので、期待パスも path.join で組む。
+  const fakeHome = path.join(os.tmpdir(), 'probe-home');
+  const openrouterEnv = path.join(fakeHome, '.claude', 'openrouter.env');
+  const fakeExists = (file) => file === openrouterEnv;
+  const fakeReadFile = () => 'OPENROUTER_API_KEY=xxx';
+
+  const plan = probeExecutorPlan({
+    runSync: fakeRunSync,
+    home: fakeHome,
+    exists: fakeExists,
+    readFile: fakeReadFile
+  });
+
+  const implStep = plan.find(p => p.role === '実装');
+  assert.ok(implStep, '実装ロールが存在する');
+  assert.equal(implStep.provider, 'openrouter');
 });

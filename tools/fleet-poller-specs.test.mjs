@@ -8,16 +8,34 @@ import path from 'node:path';
 // (2026-08-28 実測)。引数が落ちても誰も気付けないのでテストで固定する。
 const dir = path.resolve(import.meta.dirname);
 
-test('fleet-poller.mjs は fleet-sheet-report に --specs を渡す', () => {
+const callInMjs = () => {
   const source = fs.readFileSync(path.join(dir, 'fleet-poller.mjs'), 'utf8');
   const call = source.match(/fleet-sheet-report\.mjs'[^\n]*/);
   assert.ok(call, 'fleet-sheet-report.mjs の呼び出しが見つからない');
-  assert.match(call[0], /--specs/);
-});
+  return call[0];
+};
 
-test('fleet-poller.ps1 は fleet-sheet-report に --specs を渡す', () => {
+const callInPs1 = () => {
   const source = fs.readFileSync(path.join(dir, 'fleet-poller.ps1'), 'utf8');
   const call = source.split(/\r?\n/).find((line) => line.includes('fleet-sheet-report.mjs') && !line.trim().startsWith('#'));
   assert.ok(call, 'fleet-sheet-report.mjs の呼び出しが見つからない');
-  assert.match(call, /--specs/);
+  return call;
+};
+
+test('fleet-poller.mjs は fleet-sheet-report に --specs を渡す', () => {
+  assert.match(callInMjs(), /--specs/);
+});
+
+test('fleet-poller.ps1 は fleet-sheet-report に --specs を渡す', () => {
+  assert.match(callInPs1(), /--specs/);
+});
+
+// --cloud も同じ理由で固定する。落ちるとクラウド台帳の「PCログイン」タブが
+// 永久に空のままになり、しかも誰も気付かない(送信側は未設定時に exit 0 で黙る)。
+test('fleet-poller.mjs は fleet-sheet-report に --cloud を渡す', () => {
+  assert.match(callInMjs(), /--cloud/);
+});
+
+test('fleet-poller.ps1 は fleet-sheet-report に --cloud を渡す', () => {
+  assert.match(callInPs1(), /--cloud/);
 });

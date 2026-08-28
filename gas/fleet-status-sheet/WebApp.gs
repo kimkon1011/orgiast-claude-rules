@@ -51,13 +51,35 @@ function _fleetSheet_() {
 
 function doPost(e) {
   let payload;
-  try { payload = JSON.parse((e && e.postData && e.postData.contents) || '{}'); }
-  catch (error) { return _fleetJson_({ ok: false, status: 400, error: 'invalid_json' }); }
+  try {
+    payload = JSON.parse((e && e.postData && e.postData.contents) || '{}');
+  } catch (error) {
+    return _fleetJson_({ ok: false, status: 400, error: 'invalid_json' });
+  }
   const expected = PropertiesService.getScriptProperties().getProperty('FLEET_TOKEN');
   if (!expected || payload.token !== expected) return _fleetJson_({ ok: false, status: 401, error: 'unauthorized' });
-  if (payload.kind === 'extensions' && (typeof payload.label !== 'string' || payload.label.trim() === '')) return _fleetJson_({ ok: false, status: 400, error: 'label_required' });
-  try { return _fleetJson_(payload.kind === 'pc-spec' ? upsertPcInventory(payload) : payload.kind === 'extensions-describe' ? describeExtensionAudit() : payload.kind === 'extensions' ? replaceExtensionAudit(payload) : payload.kind === 'liveness' ? upsertFleetLiveness(payload) : upsertFleetStatus(payload)); }
-  catch (error) { return _fleetJson_({ ok: false, status: 500, error: error.message }); }
+  const labelRequiredKinds = { extensions: true, 'cloud-login': true };
+  if (labelRequiredKinds[payload.kind] && (typeof payload.label !== 'string' || payload.label.trim() === '')) {
+    return _fleetJson_({ ok: false, status: 400, error: 'label_required' });
+  }
+
+  // 未知 kind は従来どおり通常点検として扱い、既存クライアントの挙動を変えない。
+  const handlers = {
+    'pc-spec': upsertPcInventory,
+    'extensions-describe': describeExtensionAudit,
+    extensions: replaceExtensionAudit,
+    liveness: upsertFleetLiveness,
+    'cloud-login': replaceCloudLogins,
+    'cloud-project': upsertCloudProjects,
+    'cloud-contract': upsertCloudContracts,
+    'cloud-describe': describeCloudLedger
+  };
+  try {
+    const handler = handlers[payload.kind] || upsertFleetStatus;
+    return _fleetJson_(handler(payload));
+  } catch (error) {
+    return _fleetJson_({ ok: false, status: 500, error: error.message });
+  }
 }
 
 function doGet(e) {

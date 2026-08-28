@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { detectSessions, fixtureSession } from './rule-detectors.mjs';
+import { isEntry } from './is-entry.mjs';
 const here=path.dirname(fileURLToPath(import.meta.url));
 const fixtureFile=path.join(here,'fixtures','rule-samples.jsonl');
 const registryFile=path.join(here,'rules-registry.json');
@@ -25,4 +26,4 @@ export function measure(){
   fs.writeFileSync(registryFile,JSON.stringify(registry,null,2)+'\n'); return metrics;
 }
 export function format(metrics){const lines=['| ルール | fixture | precision | recall | 誤検知 |','|---|---:|---:|---:|---:|'];for(const [id,m] of Object.entries(metrics))lines.push(m.delegatedTo?`| ${id} | 担当: ${m.delegatedTo} | — | — | — |`:`| ${id} | ${m.fixtureCount} | ${m.precision===null?'—':(m.precision*100).toFixed(1)+'%'} | ${m.recall===null?'—':(m.recall*100).toFixed(1)+'%'} | ${m.falsePositives.length} |`);for(const [id,m] of Object.entries(metrics))for(const x of m.falsePositives||[])lines.push(`- ${id}: ${x.text.slice(0,160).replace(/\s+/g,' ')} (${x.note})`);return lines.join('\n')+'\n';}
-if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url))process.stdout.write(format(measure()));
+if(isEntry(import.meta.url))process.stdout.write(format(measure()));

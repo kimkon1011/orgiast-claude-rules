@@ -16,7 +16,7 @@
         "daysObserved": 3
       },
       "validation": {
-        "fixtureCount": 15,
+        "fixtureCount": 18,
         "precision": 1,
         "minPrecision": 0.9,
         "status": "validated"

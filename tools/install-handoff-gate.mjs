@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 
 const scriptFile=fileURLToPath(import.meta.url),repo=path.dirname(path.dirname(scriptFile));
 const stamp=()=>new Date().toISOString().replace(/[-:]/g,'').replace('T','-').slice(0,15);
@@ -28,4 +29,4 @@ export function install({home=os.homedir(),apply=false,failReadBack=false,log=co
   log('適用とread-back検査が完了しました');return{changed:true,backup};
 }
 function option(name){const i=process.argv.indexOf(name);return i>=0?process.argv[i+1]:undefined;}
-if(process.argv[1]&&path.resolve(process.argv[1])===scriptFile){try{install({home:option('--home')||process.env.ORGIAST_HOME||os.homedir(),apply:process.argv.includes('--apply')});}catch(e){console.error(e.message);process.exitCode=1;}}
+if(isEntry(import.meta.url)){try{install({home:option('--home')||process.env.ORGIAST_HOME||os.homedir(),apply:process.argv.includes('--apply')});}catch(e){console.error(e.message);process.exitCode=1;}}

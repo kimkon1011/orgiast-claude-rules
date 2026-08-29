@@ -32,6 +32,7 @@ export const REQUIRED_HOOKS = [
 ];
 
 export const REQUIRED_TASKS = [
+  // 存在だけを検査するため、引数・時刻の変更は既存タスクを削除して再登録しないと反映されない。
   ['OrgiastAutoSession', 'tools/register-auto-session.ps1'],
 ];
 

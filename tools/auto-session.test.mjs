@@ -6,7 +6,7 @@ import path from 'node:path';
 
 const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-session-test-'));
 process.env.ORGIAST_HOME = isolatedHome;
-const { DEFAULT_REPO, localDate, loadConfig, detectHistoryCwd, parseHandoff, todoExclusionReason, filterTodos, pickCwd, buildChildArgs, buildPrompt, buildFeedbackPrompt, feedbackIssueExclusionReason, filterFeedbackIssues, feedbackNotifyUrl, normalizeGitHubRepo, feedbackRepoCwd, resolveClaudeExe, decideRun, markTodoDone, extractSessionId, transcriptPath, recoverSessionId, appendClosedSession, formatResultLine } = await import('./auto-session.mjs');
+const { DEFAULT_REPO, localDate, loadConfig, detectHistoryCwd, parseHandoff, todoExclusionReason, todoExclusionReasons, dedupeKey, dedupeTodos, filterTodos, pickCwd, buildChildArgs, buildPrompt, buildFeedbackPrompt, feedbackIssueExclusionReason, filterFeedbackIssues, feedbackNotifyUrl, normalizeGitHubRepo, feedbackRepoCwd, resolveClaudeExe, decideRun, markTodoDone, extractSessionId, transcriptPath, recoverSessionId, appendClosedSession, formatResultLine, parseArgs, deadlineDecision } = await import('./auto-session.mjs');
 const historyCwd = String.raw`c:\Users\example\Downloads\work`;
 test.after(() => fs.rmSync(isolatedHome, { recursive: true, force: true }));
 
@@ -23,6 +23,41 @@ test('parseHandoff は先頭ブロックだけから TODO と付帯セクショ�
 
 test('filterTodos は完了・判断待ち・未決・ブロック中を除外する', () => {
   assert.deepEqual(filterTodos(['実行', '~~完了~~', '要判断 X', '判断待ち X', '未決 X', 'ブロック中 X']), ['実行']);
+});
+
+test('--count all は3件を超えるフィルタ後の全TODOを選択する', () => {
+  const todos = ['実行1', '~~完了~~', '実行2', '実行3', '実行4'];
+  const options = parseArgs(['--count', 'all']);
+  assert.equal(options.count, Infinity);
+  assert.deepEqual(filterTodos(todos).slice(0, options.count), ['実行1', '実行2', '実行3', '実行4']);
+});
+
+test('数値 count と feedback-count は12件を上限にする', () => {
+  const options = parseArgs(['--count', '99', '--feedback-count', '99']);
+  assert.equal(options.count, 12);
+  assert.equal(options.feedbackCount, 12);
+  assert.equal(parseArgs(['--feedback-count', 'all']).feedbackCount, Infinity);
+});
+
+test('deadline まで5分なら起動せず、25分なら timeout を25分に縮める', () => {
+  const start = new Date(2026, 7, 30, 7, 0, 0);
+  assert.deepEqual(deadlineDecision('07:30', 40, new Date(2026, 7, 30, 7, 25, 0), start), {
+    run: false, timeoutMin: 0, reason: 'deadline', remainingMin: 5,
+  });
+  assert.deepEqual(deadlineDecision('07:30', 40, new Date(2026, 7, 30, 7, 5, 0), start), {
+    run: true, timeoutMin: 25, reason: '', remainingMin: 25,
+  });
+  // 起動時刻が締切を過ぎていたら翌朝の同時刻として扱う（夕方の手動起動が静かな no-op にならないように）。
+  const evening = new Date(2026, 7, 30, 20, 0, 0);
+  assert.deepEqual(deadlineDecision('07:30', 40, evening, evening), { run: true, timeoutMin: 40, reason: '', remainingMin: 690 });
+  // 子が締切を跨いで走り切った場合だけ already passed になる。
+  assert.equal(deadlineDecision('07:30', 40, new Date(2026, 7, 30, 8, 0, 0), start).reason, 'deadline already passed');
+});
+
+test('このPCでは実行不可と明記された実物由来TODOを除外する', () => {
+  const todo = '**マキモノ §6-1（信頼済み mkt_ キー発行 → keyserve ORGIAST_KEYS_JSON 投入）はこのPCでは実行不可**';
+  assert.equal(todoExclusionReason(todo), 'このPCでは実行不可');
+  assert.deepEqual(filterTodos([todo, '実行可能']), ['実行可能']);
 });
 
 test('フォーム報告用プロンプトは TODO 用と分離し、PR をマージしない制約を含む', () => {
@@ -76,10 +111,32 @@ test('feedbackRepoCwd は不一致 remote を飛ばして一致する既存作�
 
 test('todoExclusionReason は他セッションが着手中の項目を除外する', () => {
   assert.equal(todoExclusionReason('別セッションですでに着手した項目'), '他セッションが着手中');
-  assert.equal(todoExclusionReason('この対応は着手中'), '他セッションが着手中');
-  assert.equal(todoExclusionReason('担当者が作業中'), '他セッションが着手中');
+  assert.equal(todoExclusionReason('この対応は着手中'), '');
+  assert.equal(todoExclusionReason('担当者が作業中'), '');
   assert.equal(todoExclusionReason('別セッションで確認する'), '');
   assert.equal(todoExclusionReason('次回着手する'), '');
+});
+
+test('実物の gemini-cli TODO は先頭だけを採用し、後続を重複として表示できる', () => {
+  const todos = [
+    '**MCP `gemini-cli` の復旧**（上記「次の1目的」）',
+    '**MCP `gemini-cli` の復旧**（2026-08-28 発見・未着手）。セッション開始時に …',
+  ];
+  assert.equal(dedupeKey(todos[0]), 'MCPgemini-cliの復旧（上記「次の1目的」）');
+  assert.deepEqual(dedupeTodos(todos), [todos[0]]);
+  assert.deepEqual(filterTodos(todos), [todos[0]]);
+  assert.deepEqual(todoExclusionReasons(todos), ['', '重複（先の項目と同一）']);
+});
+
+test('他セッションの進行中差分は除外し、発見・積み残しだけは採用する', () => {
+  const active = '**ブース制作アプリのローカル未コミット差分は別セッションの進行中作業**（今回は触っていない）: … **他セッションの作業なので勝手に commit しない**';
+  const leftover = '**別セッション 739b053e の積み残し・日付ゲート付き**（2026-08-28 以降に実行）';
+  const discovered = '**別セッション 26624db2 で発見**: 復旧する';
+  const today = new Date(2026, 7, 30);
+  assert.equal(todoExclusionReason(active, today), '他セッションが着手中');
+  assert.equal(todoExclusionReason(leftover, today), '');
+  assert.equal(todoExclusionReason(discovered, today), '');
+  assert.deepEqual(filterTodos([active, leftover, discovered], today), [leftover, discovered]);
 });
 
 test('未来日の以降ゲートだけを固定日付基準で除外する', () => {

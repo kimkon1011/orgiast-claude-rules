@@ -76,7 +76,8 @@ export function todoExclusionReason(todo, today = new Date()) {
   if (/~~[^~]*~~/.test(text)) return '取り消し線（完了済み）';
   if (/(要判断|判断待ち|未決)/.test(text)) return '判断待ち';
   if (/ブロック中/.test(text)) return 'ブロック中';
-  if ((text.includes('別セッション') && text.includes('着手')) || /(着手中|作業中)/.test(text)) return '他セッションが着手中';
+  if (/(別|他)セッション/.test(text) && /(着手|進行中|作業中|未コミット差分)/.test(text)) return '他セッションが着手中';
+  if (/このPC(では実行不可|の残TODOではない|で再試行させない)/.test(text)) return 'このPCでは実行不可';
   const todayNumber = today.getFullYear() * 10000 + (today.getMonth() + 1) * 100 + today.getDate();
   for (const match of text.matchAll(/(\d{4})-(\d{2})-(\d{2})\s*以降/g)) {
     const date = `${match[1]}-${match[2]}-${match[3]}`;
@@ -86,8 +87,41 @@ export function todoExclusionReason(todo, today = new Date()) {
   return '';
 }
 
+export function dedupeKey(todo) {
+  return String(todo)
+    .replace(/^\s*\d+[a-z]?[.)、]\s*/i, '')
+    .replace(/[\*~`]/g, '')
+    .replace(/[\s　]+/g, '')
+    .slice(0, 40);
+}
+
+function emphasizedTitleKey(todo) {
+  const text = String(todo).replace(/^\s*\d+[a-z]?[.)、]\s*/i, '');
+  const match = text.match(/^\*\*(.+?)\*\*/s);
+  return match ? dedupeKey(match[1]) : '';
+}
+
+export function todoExclusionReasons(todos, today = new Date()) {
+  const seenKeys = new Set();
+  const seenTitles = new Set();
+  return todos.map((todo) => {
+    const key = dedupeKey(todo);
+    const titleKey = emphasizedTitleKey(todo);
+    const duplicate = (key && seenKeys.has(key)) || (titleKey && seenTitles.has(titleKey));
+    if (key) seenKeys.add(key);
+    if (titleKey) seenTitles.add(titleKey);
+    return duplicate ? '重複（先の項目と同一）' : todoExclusionReason(todo, today);
+  });
+}
+
+export function dedupeTodos(todos) {
+  const reasons = todoExclusionReasons(todos);
+  return todos.filter((_, index) => reasons[index] !== '重複（先の項目と同一）');
+}
+
 export function filterTodos(todos, today = new Date()) {
-  return todos.filter((todo) => !todoExclusionReason(todo, today));
+  const reasons = todoExclusionReasons(todos, today);
+  return todos.filter((_, index) => !reasons[index]);
 }
 
 function existingOrDefault(candidate, exists) {
@@ -356,17 +390,38 @@ export function appendClosedSession(file, sessionId, io = {}) {
   }
 }
 
-function parseArgs(argv) {
-  const options = { count: 1, feedbackCount: 1, timeoutMin: 60, dry: false, list: false };
+function boundedCount(value) {
+  return value === 'all' ? Infinity : Math.min(12, Math.max(1, Number(value) || 1));
+}
+
+export function parseArgs(argv) {
+  const options = { count: 1, feedbackCount: 1, timeoutMin: 60, deadline: '', dry: false, list: false };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === '--dry') options.dry = true;
     else if (argv[i] === '--list') options.list = true;
-    else if (argv[i] === '--count') options.count = Math.min(3, Math.max(1, Number(argv[++i]) || 1));
-    else if (argv[i] === '--feedback-count') options.feedbackCount = Math.min(3, Math.max(1, Number(argv[++i]) || 1));
+    else if (argv[i] === '--count') options.count = boundedCount(argv[++i]);
+    else if (argv[i] === '--feedback-count') options.feedbackCount = boundedCount(argv[++i]);
     else if (argv[i] === '--timeout-min') options.timeoutMin = Math.max(1, Number(argv[++i]) || 60);
+    else if (argv[i] === '--deadline') {
+      options.deadline = argv[++i] ?? '';
+      if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(options.deadline)) throw new Error('--deadline は HH:MM（24時間表記）で指定してください');
+    }
     else throw new Error(`不明な引数: ${argv[i]}`);
   }
   return options;
+}
+
+export function deadlineDecision(deadline, timeoutMin, now = new Date(), startedAt = now) {
+  if (!deadline) return { run: true, timeoutMin, reason: '', remainingMin: Infinity };
+  const [hours, minutes] = deadline.split(':').map(Number);
+  const cutoff = new Date(startedAt);
+  cutoff.setHours(hours, minutes, 0, 0);
+  // 「起動時刻より後の直近の HH:MM」と読む。夕方に手で起動したとき同日の 07:30 を過ぎていて
+  // 1件も起動しない静かな no-op になるのを防ぐ（翌朝の締切として扱う）。
+  if (cutoff.getTime() <= startedAt.getTime()) cutoff.setDate(cutoff.getDate() + 1);
+  const remainingMin = Math.floor((cutoff.getTime() - now.getTime()) / 60_000);
+  if (remainingMin < 10) return { run: false, timeoutMin: 0, reason: remainingMin < 0 ? 'deadline already passed' : 'deadline', remainingMin };
+  return { run: true, timeoutMin: Math.min(timeoutMin, remainingMin), reason: '', remainingMin };
 }
 
 function pidIsAlive(pid) {
@@ -611,6 +666,7 @@ export function formatResultLine(result, minutes, pr = '') {
 
 export async function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
+  const batchStartedAt = new Date();
   const home = homeDir();
   const claudeDir = path.join(home, '.claude');
   const config = loadConfig(home);
@@ -629,7 +685,8 @@ export async function main(argv = process.argv.slice(2)) {
   const feedbackIssues = listFeedbackIssues();
   const detectedHistoryCwd = config.historyCwd || detectHistoryCwd({ projectsDir: path.join(claudeDir, 'projects') });
   if (options.list) {
-    parsed.todos.forEach((todo, i) => console.log(`[next-session] ${i + 1}. ${todoExclusionReason(todo) ? `除外: ${todoExclusionReason(todo)}` : '採用'} | ${todo}`));
+    const reasons = todoExclusionReasons(parsed.todos);
+    parsed.todos.forEach((todo, i) => console.log(`[next-session] ${i + 1}. ${reasons[i] ? `除外: ${reasons[i]}` : '採用'} | ${todo}`));
     feedbackIssues.forEach((issue) => console.log(`[feedback] ${issue.repo}#${issue.number}. ${feedbackIssueExclusionReason(issue) ? `除外: ${feedbackIssueExclusionReason(issue)}` : '採用'} | ${issue.title}`));
     if (!feedbackIssues.length) console.log('[feedback] 0件（対象リポジトリに未対応 Issue なし、または gh なし）');
     return 0;
@@ -661,9 +718,23 @@ export async function main(argv = process.argv.slice(2)) {
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { cleanup(); process.exit(130); });
   const results = [];
   const feedbackResults = [];
+  let deadlineNote = '';
+  let deadlineReason = '';
+  let completedChildren = 0;
+  const totalChildren = selected.length + selectedFeedback.length;
+  const beforeChild = () => {
+    const decision = deadlineDecision(options.deadline, options.timeoutMin, new Date(), batchStartedAt);
+    if (!decision.run) {
+      deadlineReason = decision.reason;
+      deadlineNote = `未消化 ${totalChildren - completedChildren}件（deadline ${options.deadline} 到達）`;
+    }
+    return decision;
+  };
   try {
     const executable = resolveClaudeExe();
     for (const todo of selected) {
+      const timing = beforeChild();
+      if (!timing.run) break;
       const repoCwd = pickCwd(todo, fs.existsSync, config.repoByKeyword);
       const historyCwd = fs.existsSync(detectedHistoryCwd) ? detectedHistoryCwd : repoCwd;
       const day = localDate();
@@ -680,7 +751,7 @@ export async function main(argv = process.argv.slice(2)) {
           n += 1;
         }
       }
-      const result = await runChild(executable, buildPrompt(todo, parsed.sections, repoCwd, summaryFile, options.timeoutMin), repoCwd, historyCwd, options.timeoutMin * 60_000);
+      const result = await runChild(executable, buildPrompt(todo, parsed.sections, repoCwd, summaryFile, timing.timeoutMin), repoCwd, historyCwd, timing.timeoutMin * 60_000);
       const stdoutSessionId = extractSessionId(result.stdout);
       const transcriptDir = path.dirname(transcriptPath(historyCwd, '00000000-0000-0000-0000-000000000000'));
       const recoveredSessionId = stdoutSessionId ? '' : recoverSessionId({ dir: transcriptDir, startedAt: result.startedAt, endedAt: result.endedAt });
@@ -697,9 +768,13 @@ export async function main(argv = process.argv.slice(2)) {
         : false;
       const record = { todo, cwd: repoCwd, repoCwd, historyCwd, summaryFile, summary, sessionId, sessionIdSource, transcript, resumeCommand, closedRegistered, ...result };
       results.push(record);
+      completedChildren += 1;
       fs.writeFileSync(runFile, JSON.stringify(record, null, 2));
     }
     for (const issue of selectedFeedback) {
+      if (deadlineNote) break;
+      const timing = beforeChild();
+      if (!timing.run) break;
       const prepared = ensureFeedbackRepo(issue.repo);
       if (!prepared.ok) {
         feedbackResults.push({ issue, status: 'failure', launchFailed: true, stderr: prepared.error || '対象リポジトリを取得できませんでした' });
@@ -716,19 +791,29 @@ export async function main(argv = process.argv.slice(2)) {
       const runFile = path.join(autoDir, 'runs', `${stamp}.json`);
       const summaryFile = path.join(autoDir, 'runs', `${stamp}.summary.md`);
       fs.writeFileSync(summaryFile, '', { flag: 'a' });
-      const result = await runChild(executable, buildFeedbackPrompt(issue, issue.repo, repoCwd, summaryFile, options.timeoutMin), repoCwd, historyCwd, options.timeoutMin * 60_000);
+      const result = await runChild(executable, buildFeedbackPrompt(issue, issue.repo, repoCwd, summaryFile, timing.timeoutMin), repoCwd, historyCwd, timing.timeoutMin * 60_000);
       let summary = '';
       try { summary = fs.readFileSync(summaryFile, 'utf8'); } catch {}
+      completedChildren += 1;
       const record = { source: 'feedback', issue, cwd: repoCwd, summaryFile, summary, ...result };
       feedbackResults.push(record);
       fs.writeFileSync(runFile, JSON.stringify(record, null, 2));
       // 起動そのものに失敗した場合だけ、次回が再試行できるよう対応中ラベルを戻す。
       if (result.launchFailed) setInProgress(issue, false);
     }
+    if (deadlineNote) {
+      const stamp = `${localDate()}-deadline-${Date.now()}`;
+      const summaryFile = path.join(autoDir, 'runs', `${stamp}.summary.md`);
+      const runFile = path.join(autoDir, 'runs', `${stamp}.json`);
+      const summary = `${deadlineNote}\nreason: ${deadlineReason}\n`;
+      fs.writeFileSync(summaryFile, summary);
+      fs.writeFileSync(runFile, JSON.stringify({ status: 'deadline', reason: deadlineReason, deadline: options.deadline, unconsumed: totalChildren - completedChildren, summaryFile, summary }, null, 2));
+    }
   } finally { cleanup(); }
 
   const day = localDate();
   const lines = [`自動セッション ${day}`];
+  if (deadlineNote) lines.push(deadlineNote);
   for (const result of results) {
     const minutes = Math.max(0, Math.round((Date.parse(result.endedAt) - Date.parse(result.startedAt)) / 60_000));
     // timeout で kill されると stdout は丸ごと失われるので、生き残るサマリ側も併せて走査する。

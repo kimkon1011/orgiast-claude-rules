@@ -17,5 +17,10 @@
     "sheetName": "東邦2階HP",
     "person": "木下真弓",
     "_evidence": "ラベル名がシートD列『東邦2階HP』と一致。8/17申告と同日にラベル初登場。2026-08-18 を最後に停止（webhook削除と同時期）"
+  },
+  "nishi-PC": {
+    "hostname": "DESKTOP-04U31RG",
+    "aliases": ["DESKTOP-04U31RG"],
+    "_evidence": "2026-08-28/29 に Discord へ hostname=DESKTOP-04U31RG / user=user / git=seisaku-team@orgiast.jp を含む報告を送信（rules-resync runId=rules-resync-2026-08-28-nightly-cost-fix 実行報告 および 日次トークン報告、いずれも実測）"
   }
 }

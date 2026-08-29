@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 export const PROVIDERS = {
   deepseek: { model: 'deepseek-chat' }, gemini: { model: 'gemini-3.7-flash' },
-  openrouter: { model: 'meta-llama/llama-3.3-70b-instruct' }, groq: { model: 'llama-3.3-70b-versatile' },
+  openrouter: { model: 'meta-llama/llama-3.3-70b-instruct' }, groq: { model: 'openai/gpt-oss-120b' },
   kimi: { model: 'kimi-k3' }, anthropic: { model: 'claude-haiku-4-5-20251001' },
 };
 

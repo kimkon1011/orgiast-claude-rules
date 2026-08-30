@@ -2,7 +2,6 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { defaultDriveKeyPath, driveApi, getDriveToken } from '../scripts/lib/drive-auth.mjs';
 import { isEntry } from './is-entry.mjs';
 
 const FOLDER_ID = '1LMRI2jFpVG3WnDYlepgbOuyJ6ZBYzI8B';
@@ -98,7 +97,7 @@ export function buildIndex(cacheDir = CACHE_DIR, metadata = new Map()) {
 
 function printSummary(result) { console.log(`Parts: ${result.parts} / Pages: ${result.pages}`); }
 
-async function listManualDocs(token) {
+async function listManualDocs(token, driveApi) {
   const found = [];
   let pageToken = '';
   do {
@@ -115,13 +114,21 @@ async function listManualDocs(token) {
 }
 
 async function sync() {
+  let auth;
+  try {
+    auth = await import('./lib/drive-auth.mjs');
+  } catch {
+    console.error('sync/publish-index は認証モジュール(tools/lib/drive-auth.mjs)が必要です。他アカウントは install-index を使ってください。');
+    return 2;
+  }
+  const { defaultDriveKeyPath, driveApi, getDriveToken } = auth;
   const keyPath = process.env.GOOGLE_SA_KEY ?? defaultDriveKeyPath();
   if (!fs.existsSync(keyPath)) {
     console.error('sync は kim 環境専用です。サービスアカウント鍵がない他の環境では ingest を使ってください。');
     return 2;
   }
   const token = await getDriveToken({ keyPath });
-  const docs = await listManualDocs(token);
+  const docs = await listManualDocs(token, driveApi);
   if (docs.length === 0) throw new Error('対象の Part が見つかりません');
   fs.mkdirSync(CACHE_DIR, { recursive: true });
   const metadata = new Map();
@@ -141,16 +148,16 @@ async function sync() {
   return 0;
 }
 
-async function findHubFile(token, title) {
+async function findHubFile(token, title, driveApi) {
   const escaped = title.replaceAll("'", "\\'");
   const q = encodeURIComponent(`name='${escaped}' and '${HUB_FOLDER_ID}' in parents and trashed=false`);
   const response = await driveApi(token, `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,modifiedTime)&orderBy=modifiedTime desc`);
   return (await response.json()).files ?? [];
 }
 
-async function uploadHubFile(token, localFile, title, mimeType) {
+async function uploadHubFile(token, localFile, title, mimeType, driveApi) {
   const content = fs.readFileSync(localFile);
-  const existing = await findHubFile(token, title);
+  const existing = await findHubFile(token, title, driveApi);
   if (existing.length) {
     await driveApi(token, `https://www.googleapis.com/upload/drive/v3/files/${existing[0].id}?uploadType=media`, {
       method: 'PATCH', headers: { 'Content-Type': `${mimeType}; charset=utf-8` }, body: content,
@@ -177,14 +184,22 @@ async function publishIndex() {
     console.error('キャッシュがありません。先に sync を実行してください。');
     return 1;
   }
+  let auth;
+  try {
+    auth = await import('./lib/drive-auth.mjs');
+  } catch {
+    console.error('sync/publish-index は認証モジュール(tools/lib/drive-auth.mjs)が必要です。他アカウントは install-index を使ってください。');
+    return 2;
+  }
+  const { defaultDriveKeyPath, driveApi, getDriveToken } = auth;
   const keyPath = process.env.GOOGLE_SA_KEY ?? defaultDriveKeyPath();
   if (!fs.existsSync(keyPath)) {
     console.error('サービスアカウント鍵がありません。鍵のある環境で実行してください。');
     return 2;
   }
   const token = await getDriveToken({ keyPath });
-  const index = await uploadHubFile(token, indexFile, 'growi-manual-index.tsv', 'text/tab-separated-values');
-  const meta = await uploadHubFile(token, metaFile, 'growi-manual-meta.json', 'application/json');
+  const index = await uploadHubFile(token, indexFile, 'growi-manual-index.tsv', 'text/tab-separated-values', driveApi);
+  const meta = await uploadHubFile(token, metaFile, 'growi-manual-meta.json', 'application/json', driveApi);
   console.log(`published: growi-manual-index.tsv ${index.id} (${index.bytes} bytes) / growi-manual-meta.json ${meta.id}`);
   return 0;
 }

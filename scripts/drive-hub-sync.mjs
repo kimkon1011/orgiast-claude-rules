@@ -12,7 +12,7 @@
 // parentId 省略時はハブ直下 (claude-common-rules)
 
 import { readFileSync, writeFileSync } from 'node:fs';
-import { driveApi as api, getDriveToken } from './lib/drive-auth.mjs';
+import { driveApi as api, getDriveToken } from '../tools/lib/drive-auth.mjs';
 
 const HUB = '1RLYbK6CKyPWRJsG6LY0WB9OzlbFYSFvw'; // claude-common-rules
 async function findByTitle(token, title, parent) {

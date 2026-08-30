@@ -14,7 +14,7 @@ if (-not $node) { throw 'node not found. Install Node.js first.' }
 $argument = '"{0}" --count all --timeout-min 35 --deadline 07:30' -f $script
 $action = New-ScheduledTaskAction -Execute $node -Argument $argument -WorkingDirectory $repo
 $trigger = New-ScheduledTaskTrigger -Daily -At '00:30'
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 6)
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -WakeToRun -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 6)
 
 Register-ScheduledTask -TaskName 'OrgiastAutoSession' -Action $action -Trigger $trigger -Settings $settings -Description '残TODOを全件実行（00:30開始・07:30締切・1件35分）' -Force | Out-Null
 

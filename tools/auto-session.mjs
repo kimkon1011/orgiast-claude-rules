@@ -620,7 +620,7 @@ function readEnvValue(file, names) {
   return '';
 }
 
-function findWebhook(claudeDir) {
+export function findWebhook(claudeDir) {
   for (const name of ['cost-reporter.env', 'cost-monitor.env']) {
     const value = readEnvValue(path.join(claudeDir, name), ['DISCORD_COST_WEBHOOK', 'COST_WEBHOOK']);
     if (value) return value;
@@ -634,7 +634,7 @@ function findWebhook(claudeDir) {
   return process.env.DISCORD_COST_WEBHOOK || process.env.COST_WEBHOOK || '';
 }
 
-async function notify(webhook, content) {
+export async function notify(webhook, content) {
   console.log(content);
   if (!webhook) return;
   try {
@@ -649,7 +649,7 @@ function prNumber(output) {
   return last?.match(/\d+/)?.[0] ?? '';
 }
 
-function failureReason(result) {
+export function failureReason(result) {
   if (!['timeout', 'failure'].includes(result.status) || !String(result.stderr ?? '').trim()) return '';
   const sanitized = String(result.stderr)
     .replace(/\r?\n/g, ' ')
@@ -711,7 +711,35 @@ export async function main(argv = process.argv.slice(2)) {
     return 0;
   }
 
-  fs.mkdirSync(path.join(autoDir, 'runs'), { recursive: true });
+  const runsDir = path.join(autoDir, 'runs');
+  fs.mkdirSync(runsDir, { recursive: true });
+  // 子が1件も起動できなくても、朝の検証が予定件数を復元できるよう先に残す。
+  try {
+    const day = localDate();
+    let suffix = '';
+    let manifestFile;
+    for (let n = 1; ; n += 1) {
+      suffix = n === 1 ? '' : `-${n}`;
+      manifestFile = path.join(runsDir, `${day}-manifest${suffix}.json`);
+      try {
+        fs.writeFileSync(manifestFile, JSON.stringify({
+          startedAt: batchStartedAt.toISOString(),
+          options: { count: options.count === Infinity ? 'all' : options.count, timeoutMin: options.timeoutMin, deadline: options.deadline },
+          selectedTodos: selected.map((todo) => String(todo).slice(0, 80)),
+          selectedCount: selected.length,
+          selectedFeedback: selectedFeedback.map(({ repo, number, title }) => ({ repo, number, title })),
+          feedbackCount: selectedFeedback.length,
+          pid: process.pid,
+          runner: 'auto-session.mjs',
+        }, null, 2), { flag: 'wx' });
+        break;
+      } catch (error) {
+        if (error?.code !== 'EEXIST') throw error;
+      }
+    }
+  } catch (error) {
+    console.warn(`auto-session: マニフェストを書き込めませんでした（実行は継続します）: ${error?.message ?? error}`);
+  }
   fs.writeFileSync(lockFile, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), todo: selected, feedback: selectedFeedback.map(({ repo, number }) => `${repo}#${number}`) }, null, 2), { flag: 'w' });
   const cleanup = () => { try { fs.unlinkSync(lockFile); } catch {} };
   process.once('exit', cleanup);

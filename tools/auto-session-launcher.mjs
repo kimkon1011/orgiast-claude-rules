@@ -52,6 +52,27 @@ function exitCode(result) {
   return 0;
 }
 
+function localIso(date = new Date()) {
+  const offset = -date.getTimezoneOffset();
+  const sign = offset >= 0 ? '+' : '-';
+  const hh = String(Math.floor(Math.abs(offset) / 60)).padStart(2, '0');
+  const mm = String(Math.abs(offset) % 60).padStart(2, '0');
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}T${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}${sign}${hh}:${mm}`;
+}
+
+export function appendLauncherLog(file, message, io = {}) {
+  const read = io.readFile ?? fs.readFileSync;
+  const write = io.writeFile ?? fs.writeFileSync;
+  const mkdir = io.mkdir ?? fs.mkdirSync;
+  try {
+    mkdir(path.dirname(file), { recursive: true });
+    let lines = [];
+    try { lines = String(read(file, 'utf8')).split(/\r?\n/).filter(Boolean).slice(-500); } catch {}
+    lines.push(message);
+    write(file, `${lines.slice(-500).join('\n')}\n`);
+  } catch {}
+}
+
 export async function main(argv, io = {}) {
   const sharedRepo = process.env.ORGIAST_REPO || DEFAULT_SHARED_REPO;
   const pinnedTree = process.env.ORGIAST_AUTO_SESSION_TREE
@@ -61,6 +82,11 @@ export async function main(argv, io = {}) {
   const run = io.run ?? defaultRun;
   const exists = io.exists ?? fs.existsSync;
   const log = io.log ?? ((message) => console.error(message));
+  const now = io.now ?? (() => new Date());
+  const bootLog = io.bootLog ?? ((message) => appendLauncherLog(path.join(os.homedir(), '.claude', 'auto-session', 'launcher.log'), message));
+  const started = now();
+  const stamp = () => `[${localIso(now())}]`;
+  bootLog(`${stamp()} start argv=${JSON.stringify(argv)} pinnedTree=${pinnedTree}`);
   // ディレクトリだけ残った壊れた worktree を「用意できている」と誤判定しないよう、
   // 実際に起動する対象ファイルの有無で判定する。
   const entryPoint = launchArgs(pinnedTree, [])[0];
@@ -74,7 +100,9 @@ export async function main(argv, io = {}) {
       if (exitCode(result) !== 0) throw new Error(`終了コード ${exitCode(result)}`);
     } catch (error) {
       preparationFailed = true;
-      log(`[auto-session-launcher] 警告: ${command.label} に失敗しました: ${error?.message ?? error}`);
+      const warning = `[auto-session-launcher] 警告: ${command.label} に失敗しました: ${error?.message ?? error}`;
+      log(warning);
+      bootLog(`${stamp()} ${warning}`);
       break;
     }
   }
@@ -82,6 +110,7 @@ export async function main(argv, io = {}) {
   // ネットワーク断や更新失敗で夜間実行を消さないため、既存 tree があれば古い状態でも起動する。
   if (!exists(entryPoint)) {
     log('[auto-session-launcher] エラー: 専用 worktree を用意できないため実行できません。');
+    bootLog(`${stamp()} abort 専用 worktree を用意できません`);
     return 1;
   }
   if (preparationFailed) {
@@ -89,9 +118,13 @@ export async function main(argv, io = {}) {
   }
 
   try {
-    return exitCode(await run(process.execPath, launchArgs(pinnedTree, argv), { stdio: 'inherit' }));
+    // タスクスケジューラ経由では inherit した子の stderr が保存されないため、終了状態は boot log に残す。
+    const code = exitCode(await run(process.execPath, launchArgs(pinnedTree, argv), { stdio: 'inherit' }));
+    bootLog(`${stamp()} exit ${code} elapsed=${Math.max(0, Math.round((now() - started) / 1000))}s`);
+    return code;
   } catch (error) {
     log(`[auto-session-launcher] エラー: auto-session を起動できませんでした: ${error?.message ?? error}`);
+    bootLog(`${stamp()} abort auto-session を起動できませんでした: ${error?.message ?? error}`);
     return 1;
   }
 }

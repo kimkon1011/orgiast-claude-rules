@@ -472,13 +472,15 @@ node -e "fetch('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rule
 
 新規メンバーは**貼り付けプロンプト1本**で取り込み完結。手動運用が必要な場合のみA/B/Cを使う。
 
-### 3.0 自動取り込み / 3.0.1 完全自動巡回 / 3.0.2 日次コスト自己申告
+### 3.0 自動取り込み / 3.0.1 完全自動巡回 / 3.0.2 日次コスト自己申告 / 3.0.3 対話ループ
 
 3.0: WebFetchでGitHub raw URLから`ONBOARDING.md`を取得→取り込み先自動判定→バックアップ→BEGIN/ENDマーカーでマージ→完了報告、という貼り付けプロンプトで完結（gh CLI/Drive MCP/コネクタ不要）。
 3.0.1: SessionStart hookを1回登録すれば、以後はセッションを開くだけで自動的に最新版をチェック・反映（1日1回、差分がある時だけ静かに更新）。**貼り付けは通常(非auto)モードで**（auto だと settings.json 登録が承認プロンプトすら出ずブロックされる。プロンプトが冒頭で解除を案内する）。
 3.0.2: 各PCが当月Claude Code概算コスト（PC名・$合計・モデル別内訳のみ、**会話内容は送らない**）をDiscordに日次自己申告。当月$150超⚠️/$300超🚨・Fable5検出🚨のアラート付き。中央のAPI課金監視(GH Actions日次)と合わせて「組織合計＋per-PC」の二層監査になる。
 日次点検は各PCの配布物（`tools/` 等）の blob SHA を origin/main と突き合わせ、一致しないファイルがあれば 🚨 を出す。
 復旧は `node ~/orgiast-claude-rules/tools/onboarding-sync.mjs --force`。それでも直らない場合は共有作業ツリーの汚れ/divergeを解消する。
+3.0.3: **対話ループ**（userの手入力を減らす計測。2026-08-30 導入）。各PCが夜間バッチで `interaction-loop.mjs --digest` を回し、**そのPCのtranscriptから「何回・なぜ手入力させられたか」を測って `~/.claude/interaction-directive.md` に日次ダイジェストを書く**。結果は**ローカルに置くだけで外部送信しない**。5指標が前回比±5%以内なら書き換えずスキップ（毎晩同じ通知を出さないため）。フリートシートへ送るのは**版・自己テスト結果・最終実行時刻の3つだけ**で、**発話内容も集計値も送らない**（`interaction-adoption.mjs`／シートの `対話ループ適用` `対話ループ自己テスト` 列）。展開状況は `node ~/orgiast-claude-rules/tools/interaction-rollout.mjs` で 適用済/未適用・旧版/未報告 を一覧できる。**未報告には未導入・電源offが混ざるので異常として数えない**。
+同梱の `stop-gate.mjs` は「残TODOがあるのに完了報告で止まったらblockして続行させる」Stop hookだが、**既定オフ・`settings.json`未登録**で、`~/.claude/stop-gate-enabled` を置くか `ORGIAST_STOP_GATE=1` にするまで一切動かない。有効化しても①同一セッションで3回連続blockしたら降参して通す ②userへの質問で終わる応答は対象外 ③想定外の例外はfail-open、の3つのガードが入る。**他人のPCで勝手に有効化しない**（§1.1の🛑上限）。
 
 ### 3.0.5 ツール自己更新ブートストラップ（セッション開始時に1回だけ）
 

@@ -50,7 +50,9 @@ test('既定は VSCode 経路で、ターミナルは明示したときだけ選
   // ターミナル経路は別ウィンドウの CLI セッションになり VSCode 側の作業とぶつかる(2026-08-30 kim 指示)。
   // VSCode CLI が無い機体だけターミナルへフォールバックする。
   assert.equal(pickRoute({ codeCli: 'code.cmd', flagTarget: undefined, env: {} }), 'vscode');
-  assert.equal(pickRoute({ codeCli: '', flagTarget: undefined, env: {} }), 'terminal');
+  // CLI が見つからなくてもターミナルへは落とさない(何も起動せずスキップする)
+  assert.equal(pickRoute({ codeCli: '', flagTarget: undefined, env: {} }), 'vscode');
+  assert.equal(pickRoute({ codeCli: '', flagTarget: 'terminal', env: {} }), 'terminal');
   assert.equal(pickRoute({ codeCli: 'code.cmd', flagTarget: undefined, env: { ORGIAST_NEXT_SESSION_TARGET: 'terminal' } }), 'terminal');
   assert.equal(pickRoute({ codeCli: 'code.cmd', flagTarget: 'terminal', env: {} }), 'terminal');
   assert.equal(pickRoute({ codeCli: 'code.cmd', flagTarget: 'vscode', env: {} }), 'vscode');
@@ -146,7 +148,7 @@ function fakeIo(overrides = {}) {
 
 test('起動成功時に detached spawn し state を tmp から原子的に更新する', async () => {
   const { io, calls } = fakeIo();
-  assert.equal(await launchNextSession([], io), 0);
+  assert.equal(await launchNextSession(['--target', 'terminal'], io), 0);
   assert.equal(calls.spawn.length, 1);
   const options = calls.spawn[0][2];
   assert.equal(options.cwd, 'C:\\work');
@@ -165,7 +167,7 @@ test('起動成功時に detached spawn し state を tmp から原子的に更�
 
 test('dry-run は plan だけを出して spawn しない', async () => {
   const { io, calls } = fakeIo();
-  assert.equal(await launchNextSession(['--dry-run'], io), 0);
+  assert.equal(await launchNextSession(['--target', 'terminal', '--dry-run'], io), 0);
   assert.equal(calls.spawn.length, 0);
   assert.equal(calls.writes.length, 0);
   assert.equal(JSON.parse(calls.logs[0]).cwd, 'C:\\work');
@@ -297,7 +299,7 @@ test('applyTrust は元設定を破壊せず、既存フィールドを保って
 
 test('ターミナル経路はフォルダ信頼を tmp から原子的に登録してから起動する', async () => {
   const { io, calls } = fakeIo();
-  assert.equal(await launchNextSession([], io), 0);
+  assert.equal(await launchNextSession(['--target', 'terminal'], io), 0);
 
   const trustWriteIndex = calls.writes.findIndex(([file]) => file.includes('.claude.json.tmp-'));
   const trustRenameIndex = calls.renames.findIndex(([, file]) => file.endsWith('.claude.json'));
@@ -323,7 +325,7 @@ test('フォルダ信頼が両表記で登録済みなら .claude.json を書き
       throw new Error('ENOENT');
     },
   });
-  assert.equal(await launchNextSession([], io), 0);
+  assert.equal(await launchNextSession(['--target', 'terminal'], io), 0);
   assert.equal(calls.writes.some(([file]) => file.includes('.claude.json')), false);
   assert.equal(calls.spawn.length, 1);
 });
@@ -332,7 +334,7 @@ test('ORGIAST_NO_AUTO_TRUST=1 は信頼設定だけを飛ばして起動する',
   const { io, calls } = fakeIo({
     env: { CLAUDE_CLI_PATH: '/fake/claude.exe', ORGIAST_NO_AUTO_TRUST: '1' },
   });
-  assert.equal(await launchNextSession([], io), 0);
+  assert.equal(await launchNextSession(['--target', 'terminal'], io), 0);
   assert.equal(calls.writes.some(([file]) => file.includes('.claude.json')), false);
   assert.equal(calls.spawn.length, 1);
 });
@@ -347,7 +349,7 @@ test('~/.claude.json が読めない/壊れている時は絶対に書き戻さ�
         throw new Error('ENOENT');
       },
     });
-    assert.equal(await launchNextSession([], io), 0);
+    assert.equal(await launchNextSession(['--target', 'terminal'], io), 0);
     assert.equal(calls.writes.some(([file]) => file.includes('.claude.json')), false);
     // 信頼登録に失敗しても起動そのものは止めない。
     assert.equal(calls.spawn.length, 1);
@@ -369,4 +371,14 @@ test('VSCode 経路は .claude.json を読み書きしない', async () => {
   assert.equal(await launchNextSession(['--target', 'vscode'], base.io), 0);
   assert.equal(reads.some((file) => file.endsWith('.claude.json')), false);
   assert.equal(base.calls.writes.some(([file]) => file.includes('.claude.json')), false);
+});
+
+test('VSCode CLI が見つからない時はターミナルへ落とさず何も起動しない', async () => {
+  // 既定でターミナルへフォールバックしていた頃は「コードは VSCode 既定なのにターミナルが開く」が
+  // 再発し、原因が codeCli 解決の失敗だと気付けなかった(2026-08-30)。落とさずスキップする。
+  const { io, calls } = fakeIo();
+  io.exists = () => false;
+  io.env = {};
+  assert.equal(await launchNextSession([], io), 0);
+  assert.equal(calls.spawn.length, 0);
 });

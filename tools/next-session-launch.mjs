@@ -130,12 +130,15 @@ export function planVscodeLaunch({ codeCli, cwd, prompt, openFolder = false }) {
 // VSCode 経路は URI で新しいタブを開き `/session-start` を入力欄に**置くだけ**で送信はしない
 // (拡張 2.1.251 実測: webview は setInputText するのみ)。start は Enter 1 回だけ user が押す。
 // ターミナルで開きたい時だけ --target terminal / ORGIAST_NEXT_SESSION_TARGET=terminal。
-// VSCode CLI が無い機体(サーバ等)では従来どおりターミナルへフォールバックする。
+// **VSCode CLI が見つからない機体でもターミナルへは落とさない**(2026-08-30)。落とすと
+// 「コードは VSCode 既定なのにターミナルが開く」が再発し、原因が env でも古いコピーでもなく
+// codeCli 解決の失敗だった場合に気付けない。CLI が無い時は route=vscode のままスキップして
+// 何も起動しない(呼び出し側でログを出す)。ターミナルは明示指定した時だけ。
 export function pickRoute({ codeCli, flagTarget, env }) {
   const target = flagTarget ?? env.ORGIAST_NEXT_SESSION_TARGET;
   if (target === 'terminal') return 'terminal';
   if (target === 'vscode') return 'vscode';
-  return codeCli ? 'vscode' : 'terminal';
+  return 'vscode';
 }
 
 

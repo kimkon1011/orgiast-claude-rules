@@ -271,17 +271,29 @@ function checkCodex() {
 }
 
 // ---- Gemini ----
+function geminiApiKey() {
+  const envKey = loadEnv(path.join(HOME, '.gemini', '.env')).GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+  if (envKey) return envKey;
+  try {
+    const d = JSON.parse(fs.readFileSync(path.join(HOME, '.claude.json'), 'utf8'));
+    return d.mcpServers?.['gemini-cli']?.env?.GEMINI_API_KEY || '';
+  } catch { return ''; }
+}
+function addGeminiKeyHumanTask() {
+  const task = 'Gemini APIキー未設定→https://aistudio.google.com/apikey で発行し ~/.gemini/.env に GEMINI_API_KEY= 保存';
+  if (!human.includes(task)) human.push(task);
+}
 function ensureGeminiMcp() {
   // ~/.claude.json の mcpServers.gemini-cli を保証(無ければ追加)。env で GEMINI_API_KEY を渡す。
   const p = path.join(HOME, '.claude.json');
   let d; try { d = JSON.parse(fs.readFileSync(p, 'utf-8')); } catch { return false; }
-  const key = loadEnv(path.join(HOME, '.gemini', '.env')).GEMINI_API_KEY || process.env.GEMINI_API_KEY || '';
+  const key = geminiApiKey();
   const mcp = d.mcpServers = d.mcpServers || {};
   const want = { type: 'stdio', command: 'npx', args: ['-y', 'gemini-mcp-tool'], env: { GEMINI_API_KEY: key, GEMINI_CLI_TRUST_WORKSPACE: 'true', GEMINI_MCP_BACKEND: 'gemini' } };
   const cur = mcp['gemini-cli'];
   const ok = isCompatibleGeminiMcp(cur);
   if (ok) return false;
-  if (!key) { human.push('Gemini APIキー未設定→https://aistudio.google.com/apikey で発行し ~/.gemini/.env に GEMINI_API_KEY= 保存'); return false; }
+  if (!key) { addGeminiKeyHumanTask(); return false; }
   if (DO_FIX) {
     try { fs.copyFileSync(p, p + '.bak.adoption-' + new Date(now).toISOString().slice(0,10)); } catch {}
     mcp['gemini-cli'] = want;
@@ -290,6 +302,35 @@ function ensureGeminiMcp() {
     return true;
   }
   return false;
+}
+function ensureGeminiAuthSettings() {
+  const p = path.join(HOME, '.gemini', 'settings.json');
+  let settings = {};
+  try {
+    if (fs.existsSync(p)) settings = JSON.parse(fs.readFileSync(p, 'utf8'));
+  } catch {
+    // 壊れたJSONを推測で上書きすると既存設定を失うため、自動修復しない。
+    return false;
+  }
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return false;
+  const selectedType = settings.security?.auth?.selectedType;
+  // 旧トップレベルキーは0.55では読まれず、oauth-personalの無料枠も廃止済みで必ず失敗する。
+  const needsRepair = !selectedType || selectedType === 'oauth-personal'
+    || Object.prototype.hasOwnProperty.call(settings, 'selectedAuthType');
+  if (!needsRepair || !DO_FIX) return false;
+  if (!geminiApiKey()) {
+    addGeminiKeyHumanTask();
+    return false;
+  }
+  settings.security = settings.security && typeof settings.security === 'object' ? settings.security : {};
+  settings.security.auth = settings.security.auth && typeof settings.security.auth === 'object' ? settings.security.auth : {};
+  settings.security.auth.selectedType = 'gemini-api-key';
+  delete settings.selectedAuthType;
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  try { fs.copyFileSync(p, p + '.bak.adoption-' + new Date(now).toISOString().slice(0,10)); } catch {}
+  fs.writeFileSync(p, JSON.stringify(settings, null, 2));
+  fixes.push('gemini の認証方式を新スキーマ(security.auth.selectedType=gemini-api-key)へ修復');
+  return true;
 }
 function isCompatibleGeminiMcp(cur) {
   return !!(cur && cur.env && cur.env.GEMINI_API_KEY
@@ -305,7 +346,7 @@ function checkGemini() {
   const installed = probe.ok || present;
   const indeterminate = !installed && probe.reason !== 'notfound';
   const version = probe.stdout || (installed && probe.reason === 'timeout' ? '(バージョン取得はタイムアウト)' : '');
-  const key = loadEnv(path.join(HOME, '.gemini', '.env')).GEMINI_API_KEY || process.env.GEMINI_API_KEY || '';
+  const key = geminiApiKey();
   const keyed = !!key;
   let mcpReg = false;
   try { const d = JSON.parse(fs.readFileSync(path.join(HOME, '.claude.json'), 'utf-8')); mcpReg = isCompatibleGeminiMcp(d.mcpServers && d.mcpServers['gemini-cli']); } catch {}
@@ -315,6 +356,7 @@ function checkGemini() {
   }
   if (keyed && !mcpReg) ensureGeminiMcp();
   else if (!keyed) ensureGeminiMcp(); // human タスク追加のため
+  ensureGeminiAuthSettings();
   // 使用痕跡: gemini tmp のmtime or transcript の MCP呼び出し
   const tmpUsed = newestMtime(path.join(HOME, '.gemini', 'tmp'));
   const trUsed = transcriptHits(/gemini-cli|geminiChat|googleSearch|ask-gemini|gemini-mcp-tool|"gemini"\s*-p|gemini\s+-p/, USAGE_WINDOW_DAYS);

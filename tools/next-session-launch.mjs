@@ -92,6 +92,45 @@ export function resolveWt(io) {
   }
 }
 
+export function resolveVscodeCli(io) {
+  const { env, exists } = io;
+  const homedir = typeof io.homedir === 'function' ? io.homedir() : io.homedir;
+  const candidates = [
+    env.VSCODE_CLI_PATH,
+    path.join(homedir, 'AppData', 'Local', 'Programs', 'Microsoft VS Code', 'bin', 'code.cmd'),
+    'C:\\Program Files\\Microsoft VS Code\\bin\\code.cmd',
+    'C:\\Program Files (x86)\\Microsoft VS Code\\bin\\code.cmd',
+  ];
+  return candidates.find((candidate) => candidate && exists(candidate)) ?? '';
+}
+
+export function buildVscodeUri(prompt) {
+  const base = 'vscode://Anthropic.claude-code/open';
+  return prompt ? `${base}?prompt=${encodeURIComponent(prompt)}` : base;
+}
+
+// 既定では URI を撃つだけにする。`code.cmd <cwd>` を先に走らせると、そのフォルダを開いている
+// **既存ウィンドウが再読み込みされ拡張ホストが再起動する**（2026-08-30 実測。走っていたセッションが
+// state_sync からやり直しになり、直後に撃った URI も落ちた）。新タブは「いま開いているウィンドウの
+// ワークスペース」で開くので、通常はそれが正しい cwd になる。別フォルダを開きたい時だけ --open-folder。
+// その場合も `-n`(新規ウィンドウ)にして既存ウィンドウを触らない。
+export function planVscodeLaunch({ codeCli, cwd, prompt, openFolder = false }) {
+  if (!codeCli) return null;
+  const steps = [];
+  if (openFolder) {
+    if (!cwd) return null;
+    steps.push({ label: 'open-folder', command: 'cmd.exe', args: ['/c', codeCli, '-n', cwd] });
+  }
+  steps.push({ label: 'open-session', command: 'cmd.exe', args: ['/c', codeCli, '--open-url', buildVscodeUri(prompt)] });
+  return steps;
+}
+
+export function pickRoute({ codeCli, flagTarget, env }) {
+  if (flagTarget === 'terminal' || env.ORGIAST_NEXT_SESSION_TARGET === 'terminal') return 'terminal';
+  if (flagTarget === 'vscode') return 'vscode';
+  return codeCli ? 'vscode' : 'terminal';
+}
+
 // 親セッションの環境変数をそのまま渡すと、新しいセッションが「今のセッションの子」として
 // 起動してしまう(CLAUDE_CODE_SESSION_ID / CLAUDECODE / CLAUDE_CODE_MESSAGING_SOCKET を継承し、
 // VSCode 拡張の IPC に相乗りする)。CLAUDE* は原則すべて落とし、必要なものだけ残す。
@@ -137,14 +176,16 @@ export function shouldLaunch({ state, now, env, force }) {
 }
 
 function parseArgs(argv) {
-  const result = { dryRun: false, prompt: '/session-start', cwd: '', force: false, wt: undefined };
+  const result = { dryRun: false, prompt: '/session-start', cwd: '', force: false, wt: undefined, target: undefined, openFolder: false };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--dry-run') result.dryRun = true;
+    else if (arg === '--open-folder') result.openFolder = true;
     else if (arg === '--force') result.force = true;
     else if (arg === '--prompt' && argv[index + 1] !== undefined) result.prompt = argv[++index];
     else if (arg === '--cwd' && argv[index + 1] !== undefined) result.cwd = argv[++index];
     else if (arg === '--wt' && argv[index + 1] !== undefined) result.wt = argv[++index];
+    else if (arg === '--target' && argv[index + 1] !== undefined) result.target = argv[++index];
   }
   return result;
 }
@@ -159,6 +200,7 @@ export async function launchNextSession(argv = [], io = {}) {
   const writeFile = io.writeFile ?? fs.promises.writeFile;
   const rename = io.rename ?? fs.promises.rename;
   const spawnProcess = io.spawn ?? spawn;
+  const wait = io.wait ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   const log = io.log ?? console.log;
 
   try {
@@ -184,6 +226,49 @@ export async function launchNextSession(argv = [], io = {}) {
     const handoffCwd = parseHandoffCwd(await readText(handoffPath));
     const current = await readJson(currentPath, {});
     const cwd = flags.cwd || handoffCwd || current.cwd || REPO_ROOT;
+    const codeCli = resolveVscodeCli({ env, exists, homedir: home });
+    const route = pickRoute({ codeCli, flagTarget: flags.target, env });
+
+    if (route === 'vscode') {
+      if (!codeCli) {
+        log('[next-session] スキップ: VSCode CLI (code.cmd) が見つかりません (VSCODE_CLI_PATH で明示できます)');
+        return 0;
+      }
+      const steps = planVscodeLaunch({ codeCli, cwd, prompt: flags.prompt, openFolder: flags.openFolder });
+      if (flags.dryRun) {
+        log(JSON.stringify({ route: 'vscode', steps }));
+        return 0;
+      }
+
+      for (let index = 0; index < steps.length; index += 1) {
+        const step = steps[index];
+        const child = spawnProcess(step.command, step.args, {
+          cwd,
+          detached: false,
+          stdio: 'ignore',
+          windowsHide: true,
+          env: sanitizeEnv(env),
+        });
+        const isLast = index === steps.length - 1;
+        if (typeof child.once === 'function') {
+          // 先行手順は終了まで待つ。最後の1手は起動を確認したら待たない(code.cmd の終了を待つ必要はない)。
+          await new Promise((resolve, reject) => {
+            child.once(isLast ? 'spawn' : 'exit', resolve);
+            child.once('error', reject);
+          });
+        }
+        if (isLast && typeof child.unref === 'function') child.unref();
+        if (!isLast) await wait(2500);
+      }
+
+      const nextState = { ...state, enabled: state.enabled !== false, lastLaunchAt: new Date().toISOString(), lastCwd: cwd, lastRoute: route };
+      const tmpPath = `${statePath}.tmp-${process.pid}`;
+      await writeFile(tmpPath, `${JSON.stringify(nextState, null, 2)}\n`, 'utf8');
+      await rename(tmpPath, statePath);
+      log(`[next-session] VSCode に新しいセッションを開きました: ${cwd} / prompt=${flags.prompt}`);
+      return 0;
+    }
+
     const claudeBin = resolveClaudeBinary({ env, exists, readdir, homedir: home });
     if (!claudeBin) {
       log('[next-session] スキップ: claude CLI が見つかりません (CLAUDE_CLI_PATH で明示できます)');
@@ -212,7 +297,7 @@ export async function launchNextSession(argv = [], io = {}) {
     }
     child.unref();
 
-    const nextState = { ...state, enabled: state.enabled !== false, lastLaunchAt: new Date().toISOString(), lastCwd: cwd };
+    const nextState = { ...state, enabled: state.enabled !== false, lastLaunchAt: new Date().toISOString(), lastCwd: cwd, lastRoute: route };
     const tmpPath = `${statePath}.tmp-${process.pid}`;
     await writeFile(tmpPath, `${JSON.stringify(nextState, null, 2)}\n`, 'utf8');
     await rename(tmpPath, statePath);

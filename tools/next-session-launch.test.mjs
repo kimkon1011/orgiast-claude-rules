@@ -2,16 +2,54 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import {
+  buildVscodeUri,
   launchNextSession,
   parseHandoffCwd,
   pickNewestExtensionBinary,
   pickNewestVersionDir,
   planLaunch,
+  planVscodeLaunch,
+  pickRoute,
   resolveClaudeBinary,
+  resolveVscodeCli,
   resolveWt,
   sanitizeEnv,
   shouldLaunch,
 } from './next-session-launch.mjs';
+
+test('VSCode CLI は明示パス、ユーザーインストール、未検出の順で解決する', () => {
+  const home = 'C:\\Users\\test';
+  const explicit = 'D:\\VSCode\\bin\\code.cmd';
+  assert.equal(resolveVscodeCli({ env: { VSCODE_CLI_PATH: explicit }, exists: (file) => file === explicit, homedir: home }), explicit);
+  const local = path.join(home, 'AppData', 'Local', 'Programs', 'Microsoft VS Code', 'bin', 'code.cmd');
+  assert.equal(resolveVscodeCli({ env: {}, exists: (file) => file === local, homedir: () => home }), local);
+  assert.equal(resolveVscodeCli({ env: {}, exists: () => false, homedir: home }), '');
+});
+
+test('Claude Code の open URI にプロンプトを URL エンコードする', () => {
+  assert.equal(buildVscodeUri('/session-start'), 'vscode://Anthropic.claude-code/open?prompt=%2Fsession-start');
+  assert.equal(buildVscodeUri('日本語 開始'), `vscode://Anthropic.claude-code/open?prompt=${encodeURIComponent('日本語 開始')}`);
+  assert.equal(buildVscodeUri(''), 'vscode://Anthropic.claude-code/open');
+});
+
+test('VSCode 起動は code.cmd を cmd.exe /c 経由で実行する', () => {
+  // .cmd は Windows の node から execFile できないので必ず cmd.exe /c を挟む。
+  assert.deepEqual(planVscodeLaunch({ codeCli: 'C:\\Code\\bin\\code.cmd', cwd: 'C:\\work', prompt: '/session-start' }), [
+    { label: 'open-session', command: 'cmd.exe', args: ['/c', 'C:\\Code\\bin\\code.cmd', '--open-url', 'vscode://Anthropic.claude-code/open?prompt=%2Fsession-start'] },
+  ]);
+  assert.deepEqual(planVscodeLaunch({ codeCli: 'C:\\Code\\bin\\code.cmd', cwd: 'C:\\work', prompt: '/session-start', openFolder: true })[0], {
+    label: 'open-folder', command: 'cmd.exe', args: ['/c', 'C:\\Code\\bin\\code.cmd', '-n', 'C:\\work'],
+  });
+  assert.equal(planVscodeLaunch({ codeCli: '', cwd: 'C:\\work', prompt: '' }), null);
+  assert.equal(planVscodeLaunch({ codeCli: 'C:\\Code\\bin\\code.cmd', cwd: '', prompt: '', openFolder: true }), null);
+});
+
+test('指定と VSCode CLI の有無から起動経路を選ぶ', () => {
+  assert.equal(pickRoute({ codeCli: 'code.cmd', flagTarget: undefined, env: {} }), 'vscode');
+  assert.equal(pickRoute({ codeCli: '', flagTarget: undefined, env: {} }), 'terminal');
+  assert.equal(pickRoute({ codeCli: 'code.cmd', flagTarget: 'terminal', env: {} }), 'terminal');
+  assert.equal(pickRoute({ codeCli: 'code.cmd', flagTarget: undefined, env: { ORGIAST_NEXT_SESSION_TARGET: 'terminal' } }), 'terminal');
+});
 
 test('引き継ぎコメントから Windows cwd を取り出す', () => {
   const text = '<!-- 前セッション: abc / 更新: 2026-08-28 / cwd: c:\\Users\\uers\\Downloads\\作業 -->\n本文';
@@ -123,6 +161,60 @@ test('dry-run は plan だけを出して spawn しない', async () => {
   assert.equal(calls.spawn.length, 0);
   assert.equal(calls.writes.length, 0);
   assert.equal(JSON.parse(calls.logs[0]).cwd, 'C:\\work');
+});
+
+test('VSCode 経路は既定で URI だけを撃ち、既存ウィンドウを再読み込みしない', async () => {
+  const codeCli = 'C:\\Code\\bin\\code.cmd';
+  const waited = [];
+  const { io, calls } = fakeIo({
+    env: { VSCODE_CLI_PATH: codeCli },
+    exists: (file) => file === codeCli,
+    wait: async (ms) => waited.push(ms),
+  });
+  assert.equal(await launchNextSession(['--target', 'vscode'], io), 0);
+  // `code.cmd <cwd>` を先に走らせると既存ウィンドウの拡張ホストが再起動し、URI ごと落ちる(2026-08-30 実測)。
+  assert.equal(calls.spawn.length, 1);
+  assert.equal(calls.spawn[0][1][2], '--open-url');
+  assert.match(calls.spawn[0][1][3], /prompt=%2Fsession-start$/);
+  assert.equal(calls.spawn[0][2].detached, false);
+  assert.equal(calls.spawn[0][2].windowsHide, true);
+  assert.deepEqual(waited, []);
+  assert.match(calls.writes[0][1], /"lastRoute": "vscode"/);
+});
+
+test('--open-folder のときだけ新規ウィンドウ(-n)を先に開く', async () => {
+  const codeCli = 'C:\\Code\\bin\\code.cmd';
+  const waited = [];
+  const { io, calls } = fakeIo({
+    env: { VSCODE_CLI_PATH: codeCli },
+    exists: (file) => file === codeCli,
+    wait: async (ms) => waited.push(ms),
+  });
+  assert.equal(await launchNextSession(['--target', 'vscode', '--open-folder'], io), 0);
+  assert.equal(calls.spawn.length, 2);
+  // -n が無いと既存ウィンドウを再読み込みしてしまう。
+  assert.deepEqual(calls.spawn[0][1], ['/c', codeCli, '-n', 'C:\\work']);
+  assert.equal(calls.spawn[1][1][2], '--open-url');
+  assert.deepEqual(waited, [2500]);
+});
+
+test('VSCode dry-run は route と手順だけを出して spawn しない', async () => {
+  const codeCli = 'C:\\Code\\bin\\code.cmd';
+  const { io, calls } = fakeIo({ env: { VSCODE_CLI_PATH: codeCli }, exists: (file) => file === codeCli });
+  assert.equal(await launchNextSession(['--target', 'vscode', '--dry-run'], io), 0);
+  assert.equal(calls.spawn.length, 0);
+  const output = JSON.parse(calls.logs[0]);
+  assert.equal(output.route, 'vscode');
+  assert.equal(output.steps.length, 1);
+  assert.equal(output.steps[0].label, 'open-session');
+});
+
+test('CLAUDE_HEADLESS は VSCode 経路も抑止する', async () => {
+  const codeCli = 'C:\\Code\\bin\\code.cmd';
+  const { io, calls } = fakeIo({ env: { VSCODE_CLI_PATH: codeCli, CLAUDE_HEADLESS: '1' }, exists: (file) => file === codeCli });
+  assert.equal(await launchNextSession(['--target', 'vscode'], io), 0);
+  assert.equal(calls.spawn.length, 0);
+  assert.match(calls.logs[0], /スキップ/);
 });
 
 test('抑止時は spawn せず常に exit 0', async () => {

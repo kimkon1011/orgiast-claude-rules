@@ -482,6 +482,7 @@ test('外部送受信ツール: 設定不足をstderr 1行以上で観測可能�
   // 本番側を黙らせる誤修正を誘発する(実際に一度そうなった)。観測点は stderr に統一する。
   const targets = [
     ['fleet-sheet-report.mjs', ['--dry-run'], true],
+    ['interaction-rollout.mjs', [], true],
     ['fleet-triage-report.mjs', [], true],
     ['claude-cost-reporter.mjs', ['--force'], true],
     ['cost-work-loop.mjs', ['--post', '--days', '1'], false],

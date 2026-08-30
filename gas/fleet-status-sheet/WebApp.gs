@@ -98,7 +98,9 @@ function doGet(e) {
         pcName: row[columns.selfPc] || '',
         label: row[columns.hostname] || '',
         reportedAt: row[columns.reportedAt] || '',
-        note: row[columns.consistency] || ''
+        note: row[columns.consistency] || '',
+        interactionLoop: columns.interactionLoop >= 0 ? (row[columns.interactionLoop] || '') : '',
+        interactionSelftest: columns.interactionSelftest >= 0 ? (row[columns.interactionSelftest] || '') : ''
       };
     });
     return _fleetJson_({ ok: true, rows: rows, count: rows.length });

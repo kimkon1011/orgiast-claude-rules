@@ -101,23 +101,24 @@ node "$HOME/orgiast-claude-rules/tools/close-session.mjs" --session <このセ�
 ## 8. 次のセッションは自動で立ち上がる（user に「新しいセッションを開いて」と言わない）
 
 - 手順7 の `close-session.mjs` が、退避したあとに `tools/next-session-launch.mjs` を呼び、
-  **VSCode の中に新しい Claude Code タブを開いて、初期プロンプト `/session-start` を自動送信する**。
-  user がセッションを開く手作業はゼロ。別ウィンドウ（ターミナル）には出さない（kim の要望・2026-08-30）。
-- 仕組み: 拡張が登録している URI ハンドラを叩く。
-  `code.cmd --open-url "vscode://Anthropic.claude-code/open?prompt=<encodeURIComponent>"`（`session` を省くと新規会話）。
-  その前に `code.cmd "<cwd>"` で対象フォルダのウィンドウを開く／前面化する（新タブの作業ディレクトリは**そのウィンドウのワークスペース**になるため）。
-  **`Code.exe --open-url` を直接叩くと `bad option` で落ちる。必ず `bin/code.cmd` を使う**（Windows では node から `.cmd` を execFile できないので `cmd.exe /c` 経由）。
+  **新しいターミナルウィンドウで `claude "/session-start"` を argv 起動する**。プロンプトは argv なので
+  そのまま送信され、user がセッションを開く手作業はゼロ（2026-08-30 に end-to-end 検証済み）。
+- **VSCode の中に開く経路は使わない**（既定は `terminal`）。拡張の URI
+  `vscode://Anthropic.claude-code/open?prompt=...` は**新しいタブを開くだけでプロンプトを送信しない**
+  （拡張 2.1.251 の実体は `setInputText` のみ／実測では入力欄にも入らない）。VSCode CLI に `--command` も無く、
+  Enter を代打ちする手も成立しない（入力欄が未フォーカス・Ctrl+Esc はスタートメニューと衝突・前面が別アプリだと
+  他PCのリモート画面に Enter が入る）。VSCode 内にタブだけ開きたい時は `--target vscode`
+  / `ORGIAST_NEXT_SESSION_TARGET=vscode`（その場合 user が入力欄で送信する1手が必ず残る）。
 - 起動先の作業ディレクトリは `~/.claude/next-session.md` の `cwd:` コメント →
   `~/.claude/current-session.json` の cwd → リポジトリルート の順で決まる。だから**手順6 を先に書くこと**。
-- VSCode が無い機体では自動で**ターミナル経路**（Windows Terminal + `claude.exe`）に落ちる。明示するなら `--target terminal`
-  / `ORGIAST_NEXT_SESSION_TARGET=terminal`。ターミナル経路のときだけ CLI の trust ダイアログ（「このフォルダを信頼しますか」）が出る。
+- ターミナル経路では CLI の trust ダイアログ（「このフォルダを信頼しますか」）が出ることがある。
   これは**セキュリティの同意ゲートなので Claude が代わりに押してはいけない**。user に Enter を1回押してもらう前提で案内する。
 - 抑止したい時（無人実行・連続クローズ）:
   - `node tools/close-session.mjs --session <id> --no-launch` … 起動しない
   - `CLAUDE_HEADLESS` / `CI` が立っている環境では自動で起動しない（夜間 auto-session でウィンドウを開かない）
   - 直近120秒に起動済みなら二重起動しない（`--force-launch` で無視できる）
   - 恒久的に止めるなら `~/.claude/next-session-launch.json` に `{"enabled": false}`
-- 起動結果は `[next-session] VSCode に新しいセッションを開きました: <cwd>` / `[next-session] スキップ: <理由>` の1行で出る。
+- 起動結果は `[next-session] 新しいセッションを起動しました: <cwd>` / `[next-session] スキップ: <理由>` の1行で出る。
   スキップされた時だけ「新しいセッションを手で開いてください」と伝える。
 
 ## 注意

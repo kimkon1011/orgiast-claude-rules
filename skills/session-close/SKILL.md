@@ -101,19 +101,23 @@ node "$HOME/orgiast-claude-rules/tools/close-session.mjs" --session <このセ�
 ## 8. 次のセッションは自動で立ち上がる（user に「新しいセッションを開いて」と言わない）
 
 - 手順7 の `close-session.mjs` が、退避したあとに `tools/next-session-launch.mjs` を呼び、
-  **新しい Windows Terminal ウィンドウで対話セッションを1つ起動し、初期プロンプトに `/session-start` を渡す**。
-  user がセッションを開く手作業はゼロ（VSCode 拡張のパネルは外部から新規会話を開けないため、別ウィンドウで起動する）。
+  **VSCode の中に新しい Claude Code タブを開いて、初期プロンプト `/session-start` を自動送信する**。
+  user がセッションを開く手作業はゼロ。別ウィンドウ（ターミナル）には出さない（kim の要望・2026-08-30）。
+- 仕組み: 拡張が登録している URI ハンドラを叩く。
+  `code.cmd --open-url "vscode://Anthropic.claude-code/open?prompt=<encodeURIComponent>"`（`session` を省くと新規会話）。
+  その前に `code.cmd "<cwd>"` で対象フォルダのウィンドウを開く／前面化する（新タブの作業ディレクトリは**そのウィンドウのワークスペース**になるため）。
+  **`Code.exe --open-url` を直接叩くと `bad option` で落ちる。必ず `bin/code.cmd` を使う**（Windows では node から `.cmd` を execFile できないので `cmd.exe /c` 経由）。
 - 起動先の作業ディレクトリは `~/.claude/next-session.md` の `cwd:` コメント →
   `~/.claude/current-session.json` の cwd → リポジトリルート の順で決まる。だから**手順6 を先に書くこと**。
+- VSCode が無い機体では自動で**ターミナル経路**（Windows Terminal + `claude.exe`）に落ちる。明示するなら `--target terminal`
+  / `ORGIAST_NEXT_SESSION_TARGET=terminal`。ターミナル経路のときだけ CLI の trust ダイアログ（「このフォルダを信頼しますか」）が出る。
+  これは**セキュリティの同意ゲートなので Claude が代わりに押してはいけない**。user に Enter を1回押してもらう前提で案内する。
 - 抑止したい時（無人実行・連続クローズ）:
   - `node tools/close-session.mjs --session <id> --no-launch` … 起動しない
   - `CLAUDE_HEADLESS` / `CI` が立っている環境では自動で起動しない（夜間 auto-session でウィンドウを開かない）
   - 直近120秒に起動済みなら二重起動しない（`--force-launch` で無視できる）
   - 恒久的に止めるなら `~/.claude/next-session-launch.json` に `{"enabled": false}`
-- **新セッション側で「このフォルダを信頼しますか」が出ることがある**（CLI の trust ダイアログ。`~/.claude.json` の
-  `hasTrustDialogAccepted` がそのフォルダで false のとき）。これはセキュリティの同意ゲートなので**Claude が代わりに押してはいけない**。
-  user に Enter を1回押してもらう前提で案内する。
-- 起動結果は `[next-session] 新しいセッションを起動しました: <cwd>` / `[next-session] スキップ: <理由>` の1行で出る。
+- 起動結果は `[next-session] VSCode に新しいセッションを開きました: <cwd>` / `[next-session] スキップ: <理由>` の1行で出る。
   スキップされた時だけ「新しいセッションを手で開いてください」と伝える。
 
 ## 注意

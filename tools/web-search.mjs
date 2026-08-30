@@ -12,6 +12,12 @@ const DEFAULT_MODELS = { gemini: 'gemini-3.6-flash', groq: 'groq/compound-mini' 
 const DEFAULT_TIMEOUT_SECONDS = 120;
 const USAGE = '使い方: node tools/web-search.mjs "<調べたいこと>" [--provider auto|gemini|groq] [--model <id>] [--json] [--timeout <秒>] [--raw]';
 
+export function appendExecutorUsage(row, { homeDir = process.env.ORGIAST_HOME || os.homedir(), usageFile } = {}) {
+  const file = usageFile || path.join(homeDir, '.claude', 'executor-usage.jsonl');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.appendFileSync(file, `${JSON.stringify(row)}\n`);
+}
+
 export function loadGeminiApiKey({ env = process.env, homeDir = os.homedir() } = {}) {
   if (env.GEMINI_API_KEY) return env.GEMINI_API_KEY;
   const envKey = readEnvValue(path.join(homeDir, '.gemini', '.env'), 'GEMINI_API_KEY');
@@ -166,6 +172,15 @@ export async function runCli(argv, dependencies = {}) {
     try {
       const request = provider === 'gemini' ? requestGeminiSearch : requestGroqSearch;
       const result = await request({ ...options, model, apiKey: keys[provider], fetchImpl: dependencies.fetchImpl ?? globalThis.fetch });
+      const usage = result.raw?.usageMetadata || result.raw?.usage || {};
+      const row = provider === 'gemini'
+        ? { t: new Date().toISOString(), provider, model, in: usage.promptTokenCount || 0, out: usage.candidatesTokenCount || 0, secs: result.elapsedMs / 1000, grounded: result.raw?.candidates?.[0]?.groundingMetadata != null }
+        : { t: new Date().toISOString(), provider, model, in: usage.prompt_tokens || 0, out: usage.completion_tokens || 0, secs: result.elapsedMs / 1000 };
+      try {
+        (dependencies.appendUsage || appendExecutorUsage)(row, { homeDir: dependencies.homeDir, usageFile: dependencies.usageFile });
+      } catch (error) {
+        stderr.write(`使用量台帳への追記失敗: ${error.message}\n`);
+      }
       printResult(stdout, options, { ...result, provider, model });
       return 0;
     } catch (error) {

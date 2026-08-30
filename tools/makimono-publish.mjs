@@ -206,10 +206,7 @@ async function main() {
   const categoriesResponse = await fetch(`${BASE}/api/v1/categories`, { signal: AbortSignal.timeout(8000) }); if (!categoriesResponse.ok) throw new Error(`カテゴリ取得 HTTP ${categoriesResponse.status}`); const categories = (await categoriesResponse.json()).categories?.map((x) => x.name) || []; if (!categories.includes(category)) reasons.push(`category は既存カテゴリから選択: ${categories.join(' / ')}`);
   if (reasons.length) { reasons.forEach((x) => console.error(x)); process.exitCode = 2; return; }
   if (val(args, '--price') && Number(val(args, '--price')) !== 0) { console.error('price は常に 0（無料）です'); process.exitCode = 2; return; }
-  const payload = { title, summary, category, body, scratchTokens: Number(val(args, '--scratch-tokens') || 0), withMdTokens: Number(val(args, '--with-md-tokens') || 0), price: 0 };
-  if (args.includes('--dry')) { console.log(JSON.stringify({ ...payload, body: `${body.slice(0, 200)}… (${body.length}文字)` }, null, 2)); return; }
   let logs = readSubmissionLogs(); const logFile = homeFile('makimono-submissions.json');
-  const hash = crypto.createHash('sha256').update(body).digest('hex').slice(0, 16); if (logs.some((x) => x.sha256 === hash)) { console.log('同一内容を出品済み'); return; }
   const similarPending = findSimilarPending(logs, { title, summary });
   if (similarPending.length) {
     console.error('審査待ちに近い題名があります（取り下げ経路は無いので出す前に確認してください）');
@@ -217,6 +214,9 @@ async function main() {
     if (!args.includes('--force')) { console.error('同主題なら出品せず既存に寄せる。別主題だと確認できたら `--force` を付けて再実行してください'); process.exitCode = 2; return; }
     console.error('`--force` が指定されたため出品を続行します');
   }
+  const payload = { title, summary, category, body, scratchTokens: Number(val(args, '--scratch-tokens') || 0), withMdTokens: Number(val(args, '--with-md-tokens') || 0), price: 0 };
+  if (args.includes('--dry')) { console.log(JSON.stringify({ ...payload, body: `${body.slice(0, 200)}… (${body.length}文字)` }, null, 2)); return; }
+  const hash = crypto.createHash('sha256').update(body).digest('hex').slice(0, 16); if (logs.some((x) => x.sha256 === hash)) { console.log('同一内容を出品済み'); return; }
   const auth = await ensureKey({ logTrusted: true }); const response = await fetch(`${BASE}/api/v1/listings`, { method: 'POST', headers: { authorization: `Bearer ${auth.key}`, 'content-type': 'application/json' }, body: JSON.stringify(payload), signal: AbortSignal.timeout(8000) }); const data = await response.json(); if (!response.ok) throw new Error(`出品 HTTP ${response.status}: ${data.error || '失敗'}`);
   logs.push({ at: new Date().toISOString(), title, summary, category, submissionId: data.submissionId, status: data.status, email: auth.email, sha256: hash }); fs.mkdirSync(path.dirname(logFile), { recursive: true }); fs.writeFileSync(logFile, `${JSON.stringify(logs, null, 2)}\n`);
   console.log(JSON.stringify({ submissionId: data.submissionId, status: data.status })); console.log('確認: https://makimono-md.vercel.app/contribute');

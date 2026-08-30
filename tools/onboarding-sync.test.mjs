@@ -115,10 +115,27 @@ function fallbackOptions(f, git, emit = (line) => f.output.push(line)) {
   return { git, getZipRoot: f.getZipRoot, emit, fallbackStatePath: f.fallbackStatePath };
 }
 
-test('successful pull does not call zip fallback', async () => {
+test('successful pull at main does not call zip fallback', async () => {
   const f = repositoryFixture();
-  const result = await updateRepositoryFiles(f.repo, { git: () => '', getZipRoot: f.getZipRoot, emit: (line) => f.output.push(line) });
-  assert.equal(result.method, 'pull'); assert.equal(f.zipCalls(), 0);
+  const git = (args) => args.includes('rev-list') ? '0\n' : '';
+  const result = await updateRepositoryFiles(f.repo, { git, getZipRoot: f.getZipRoot, emit: (line) => f.output.push(line) });
+  assert.equal(result.method, 'pull'); assert.equal(result.behind, 0); assert.equal(f.zipCalls(), 0);
+});
+
+test('successful pull 78 commits behind main falls back to zip', async () => {
+  const f = repositoryFixture();
+  const git = (args) => args.includes('rev-list') ? '78\n' : '';
+  const result = await updateRepositoryFiles(f.repo, fallbackOptions(f, git));
+  assert.equal(result.method, 'zip'); assert.equal(result.behind, 78); assert.equal(f.zipCalls(), 1);
+  assert.match(f.output.join('\n'), /main へ未到達\(78コミット遅れ\)。zip で更新します/);
+});
+
+test('fetch failure after successful pull falls back to zip', async () => {
+  const f = repositoryFixture();
+  const git = (args) => { if (args.includes('fetch')) throw new Error('offline'); return ''; };
+  const result = await updateRepositoryFiles(f.repo, fallbackOptions(f, git));
+  assert.equal(result.method, 'zip'); assert.equal(result.behind, null); assert.equal(f.zipCalls(), 1);
+  assert.match(f.output.join('\n'), /main 到達確認に失敗: offline/);
 });
 
 test('failed pull falls back to zip and updates tools', async () => {
@@ -142,6 +159,8 @@ test('zip fallback preserves modified and untracked files and reports their name
   assert.equal(fs.readFileSync(path.join(f.repo, 'tools', 'changed.mjs'), 'utf8'), 'local work');
   assert.equal(fs.readFileSync(path.join(f.repo, 'tools', 'added.mjs'), 'utf8'), 'local untracked');
   assert.match(f.output.join('\n'), /人の変更を保護: 2件/);
+  assert.match(f.output.join('\n'), /保護のため未更新 2件（tools\/added\.mjs \/ tools\/changed\.mjs）/);
+  assert.match(f.output.join('\n'), /commit するまでこの PC には配布が届きません/);
 });
 
 test('status failure writes no files', async () => {

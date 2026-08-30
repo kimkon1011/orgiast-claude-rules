@@ -175,11 +175,26 @@ export async function updateRepositoryFiles(targetRepo, options = {}) {
   const stateFile = options.fallbackStatePath || fallbackStatePath;
   const hasGit = fs.existsSync(path.join(targetRepo, '.git'));
   let pullReason = '';
+  let behind = null;
   if (hasGit) {
     try {
       git(['-C', targetRepo, 'pull', '--ff-only'], { stdio: 'pipe', timeout: 60000 });
-      emit('[onboarding-sync] tools を更新しました (git pull)');
-      return { ok: true, method: 'pull', excluded: [] };
+      try {
+        // pull は現在ブランチの upstream を進めるだけなので、配布正本 origin/main との差を直接検証する。
+        git(['-C', targetRepo, 'fetch', 'origin', 'main'], { stdio: 'pipe', timeout: 60000 });
+        const count = git(['-C', targetRepo, 'rev-list', '--count', 'HEAD..origin/main'], { encoding: 'utf8', timeout: 60000 });
+        behind = Number.parseInt(String(count).trim(), 10);
+        if (!Number.isFinite(behind)) throw new Error(`behind 件数が不正です: ${String(count).trim()}`);
+        if (behind === 0) {
+          emit('[onboarding-sync] tools を更新しました (git pull / main 到達確認済み)');
+          return { ok: true, method: 'pull', behind, excluded: [] };
+        }
+        pullReason = `git pull は通ったが main へ未到達(${behind}コミット遅れ)`;
+        emit(`[onboarding-sync] ${pullReason}。zip で更新します`);
+      } catch (error) {
+        pullReason = `git pull 後の main 到達確認に失敗: ${oneLine(error)}`;
+        emit(`[onboarding-sync] ${pullReason}。zip で更新します`);
+      }
     } catch (error) { pullReason = oneLine(error); }
   }
 
@@ -201,7 +216,7 @@ export async function updateRepositoryFiles(targetRepo, options = {}) {
     } catch (error) {
       const reason = `git status を取得できません: ${oneLine(error)}`;
       emit(`[onboarding-sync] ⚠ tools を更新できませんでした (理由: ${reason})。このPCは配布が届いていません`);
-      return { ok: false, method: 'none', reason, excluded: [] };
+      return { ok: false, method: 'none', reason, behind, excluded: [] };
     }
   }
 
@@ -217,12 +232,18 @@ export async function updateRepositoryFiles(targetRepo, options = {}) {
     saveFallbackState(stateFile, hashes, options.now || new Date());
     const names = [...excluded].sort();
     const reason = pullReason || '.git がありません';
-    emit(`[onboarding-sync] git pull できないため zip で更新しました (理由: ${reason}) / 人の変更を保護: ${names.length}件 / 前回の自分の出力なので更新: ${selfOutput.size}件`);
-    return { ok: true, method: 'zip', reason, excluded: names, changed };
+    emit(`[onboarding-sync] zip で更新しました (理由: ${reason}) / 人の変更を保護: ${names.length}件 / 前回の自分の出力なので更新: ${selfOutput.size}件`);
+    if (names.length) {
+      const representatives = names.slice(0, 2);
+      const remaining = names.length - representatives.length;
+      const summary = [...representatives, ...(remaining ? [`他${remaining}件`] : [])].join(' / ');
+      emit(`[onboarding-sync] 保護のため未更新 ${names.length}件（${summary}）\n → 該当セッションが commit するまでこの PC には配布が届きません`);
+    }
+    return { ok: true, method: 'zip', reason, behind, excluded: names, changed };
   } catch (error) {
     const reason = oneLine(error);
     emit(`[onboarding-sync] ⚠ tools を更新できませんでした (理由: ${reason})。このPCは配布が届いていません`);
-    return { ok: false, method: 'none', reason, excluded: [...excluded] };
+    return { ok: false, method: 'none', reason, behind, excluded: [...excluded] };
   } finally { archive?.cleanup?.(); }
 }
 export function deploySkills(sourceRepo, targetHome, options = {}) {

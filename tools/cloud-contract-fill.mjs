@@ -65,14 +65,66 @@ function hasValue(value) {
   return value !== undefined && value !== null && value !== '';
 }
 
+function median(values) {
+  const sorted = values.slice().sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+function monthKey(date) {
+  const value = typeof date === 'string' ? date : date?.toISOString?.();
+  const match = String(value ?? '').match(/^(\d{4})-(\d{2})/);
+  if (!match) throw new Error(`today は日付形式で指定してください: ${date}`);
+  return `${match[1]}-${match[2]}`;
+}
+
+function shiftMonth(key, offset) {
+  const [year, month] = key.split('-').map(Number);
+  const shifted = new Date(Date.UTC(year, month - 1 + offset, 1));
+  return `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+function chargedEntries(monthly) {
+  return Object.entries(monthly && typeof monthly === 'object' ? monthly : {})
+    .filter(([key, amount]) => /^\d{4}-(0[1-9]|1[0-2])$/.test(key) && Number(amount) > 0)
+    .map(([key, amount]) => [key, Number(amount)]);
+}
+
+export function classifyBilling(monthly, today) {
+  const charged = chargedEntries(monthly);
+  if (charged.length === 0) {
+    return { status: 'none', monthlyJpy: null, billingCycle: '', lastChargedMonth: null, activeMonths: 0 };
+  }
+
+  const currentMonth = monthKey(today);
+  const recent3 = new Set(Array.from({ length: 3 }, (_, index) => shiftMonth(currentMonth, -index)));
+  const recent6 = new Set(Array.from({ length: 6 }, (_, index) => shiftMonth(currentMonth, -index)));
+  const recentAmounts = charged.filter(([key]) => recent3.has(key)).map(([, amount]) => amount);
+  const lastChargedMonth = charged.map(([key]) => key).sort().at(-1);
+  if (recentAmounts.length >= 2) {
+    const activeInSixMonths = charged.filter(([key]) => recent6.has(key)).length;
+    return {
+      status: 'active',
+      monthlyJpy: median(recentAmounts),
+      billingCycle: activeInSixMonths >= 5 ? '月次' : '',
+      lastChargedMonth,
+      activeMonths: charged.length,
+    };
+  }
+  return { status: 'stale', monthlyJpy: null, billingCycle: '', lastChargedMonth, activeMonths: charged.length };
+}
+
 export function buildContractPayload(vendorSummary, today) {
+  const classification = classifyBilling(vendorSummary?.monthly, today);
   const payload = {};
-  if (hasValue(vendorSummary?.medianMonthlyJpy)) payload.monthlyAmount = vendorSummary.medianMonthlyJpy;
-  payload.currency = 'JPY';
+  if (classification.status === 'active') {
+    payload.monthlyAmount = classification.monthlyJpy;
+    payload.currency = 'JPY';
+  }
   if (Array.isArray(vendorSummary?.payers) && vendorSummary.payers.length === 1 && hasValue(vendorSummary.payers[0]?.name)) {
     payload.payerName = vendorSummary.payers[0].name;
   }
-  if (hasValue(vendorSummary?.billingCycle)) payload.billingCycle = vendorSummary.billingCycle;
+  if (classification.billingCycle) payload.billingCycle = classification.billingCycle;
   payload.checkedAt = today;
   payload.detected = '検出済み';
   return payload;
@@ -131,19 +183,35 @@ export async function run(args = process.argv.slice(2), dependencies = {}) {
   try { aggregate = JSON.parse(readInput(options.input, dependencies.stdin)); }
   catch (error) { io.error(`cloud-contract-fill: 入力JSONを読めません: ${error.message}`); return 1; }
 
+  // 台帳の実キーは dry-run でも取りに行く。cloud-describe は読み取りだけで台帳を変えない。
+  // 内蔵辞書で代用すると「実在しない行に書き込む予定」と表示され、dry-run が予行演習にならない。
   let existingKeys = KNOWN_LEDGER_KEYS;
-  if (!options.dryRun) {
+  try {
     const description = await postJson(env.FLEET_SHEET_URL, {
       token: env.FLEET_SHEET_TOKEN, kind: 'cloud-describe',
     }, fetchImpl);
     existingKeys = description?.tabs?.['クラウド契約']?.keys ?? [];
+  } catch (error) {
+    // 本番書き込みは実キーが無いと他行を壊しうるので中止する。dry-run は内蔵辞書で続行し、その旨を明示する。
+    if (!options.dryRun) { io.error(`cloud-contract-fill: 台帳を読めませんでした: ${error.message}`); return 1; }
+    io.log(`[dry-run] 台帳を読めなかったため内蔵辞書で代用します（実際の行とは異なる可能性）: ${error.message}`);
   }
 
   const written = [];
   const ambiguous = [];
   const missing = [];
+  const stale = [];
   const today = dependencies.today ?? jstDate();
   for (const summary of Array.isArray(aggregate.vendors) ? aggregate.vendors : []) {
+    const classification = classifyBilling(summary.monthly, today);
+    if (classification.status === 'stale') {
+      const historicalAmounts = chargedEntries(summary.monthly).map(([, amount]) => amount);
+      stale.push({
+        vendor: summary.vendor,
+        lastChargedMonth: classification.lastChargedMonth,
+        previousMonthlyJpy: median(historicalAmounts),
+      });
+    }
     const resolution = resolveVendorTargets(summary.vendor, existingKeys);
     if (resolution.status === 'ambiguous') { ambiguous.push({ vendor: summary.vendor, targets: resolution.targets }); continue; }
     if (resolution.status === 'missing') { missing.push(summary.vendor); continue; }
@@ -158,6 +226,10 @@ export async function run(args = process.argv.slice(2), dependencies = {}) {
   for (const item of written) io.log(`  ${item.vendor} -> ${item.target.service} / ${item.target.account || '(空アカウント)'} ${JSON.stringify(item.contract)}`);
   io.log(`ambiguous: ${ambiguous.length}件`);
   for (const item of ambiguous) io.log(`  ${item.vendor} -> ${item.targets.map((target) => `${target.service} / ${target.account || '(空アカウント)'}`).join(', ')}`);
+  if (stale.length === 0) io.log('⚠️ 直近3か月に課金なし（解約 / カード変更 / 年払いの可能性）: 0件');
+  for (const item of stale) {
+    io.log(`⚠️ 直近3か月に課金なし（解約 / カード変更 / 年払いの可能性）: ${item.vendor} (最終課金 ${item.lastChargedMonth}, 月額だった額 ¥${item.previousMonthlyJpy.toLocaleString('ja-JP')})`);
+  }
   io.log(`台帳に行が無いベンダー: ${missing.length}件`);
   for (const vendor of missing) io.log(`  ${vendor}`);
   const unmatched = (Array.isArray(aggregate.unmatched) ? aggregate.unmatched : [])

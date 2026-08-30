@@ -7,17 +7,24 @@ import { isEntry } from './is-entry.mjs';
 
 const GET_TIMEOUT_MS = 30_000;
 const POST_TIMEOUT_MS = 20_000;
+// 夜間チェックは1日1回のため、24時間以上だと配布翌朝には未達となり、検知が丸1日遅れる。
+export const STALL_AFTER_MS = 12 * 60 * 60 * 1000;
+export const STALL_REPEAT_MS = 24 * 60 * 60 * 1000;
+export const LIVE_WITHIN_MS = 3 * 24 * 60 * 60 * 1000;
 
 function readEnv(file) {
   try { return parseEnvText(fs.readFileSync(file, 'utf8')); } catch { return {}; }
 }
 
-function categoryOf(row) {
+function categoryOf(row, now, liveWithinMs = LIVE_WITHIN_MS) {
   const reportedAt = String(row?.reportedAt ?? '').trim();
   const interactionLoop = String(row?.interactionLoop ?? '').trim();
-  if (!reportedAt || !interactionLoop) return 'unreported';
   if (interactionLoop.startsWith('適用済')) return 'applied';
   if (interactionLoop.startsWith('未適用') || interactionLoop.startsWith('旧版')) return 'outdated';
+  const nowMs = now instanceof Date ? now.getTime() : new Date(now).getTime();
+  const reportedAtMs = reportedTime(reportedAt);
+  if (!interactionLoop && Number.isFinite(nowMs)
+    && nowMs - reportedAtMs >= 0 && nowMs - reportedAtMs <= liveWithinMs) return 'liveNotApplied';
   return 'unreported';
 }
 
@@ -32,21 +39,21 @@ function reportedTime(value) {
   return Number.isNaN(parsed) ? -Infinity : parsed;
 }
 
-export function buildRollout(rows) {
+export function buildRollout(rows, now = new Date(), { liveWithinMs = LIVE_WITHIN_MS } = {}) {
   const normalized = (Array.isArray(rows) ? rows : []).map((row, index) => ({
     ...row,
-    category: categoryOf(row),
+    category: categoryOf(row, now, liveWithinMs),
     _index: index,
   })).sort((a, b) => reportedTime(b.reportedAt) - reportedTime(a.reportedAt) || a._index - b._index)
     .map(({ _index, ...row }) => row);
-  const summary = { applied: 0, outdated: 0, unreported: 0 };
+  const summary = { applied: 0, outdated: 0, liveNotApplied: 0, unreported: 0 };
   for (const row of normalized) summary[row.category] += 1;
   return { summary, rows: normalized };
 }
 
 export function formatRollout(result) {
   const { summary, rows } = result;
-  const lines = [`対話ループ展開: 適用済 ${summary.applied}台 / 未適用・旧版 ${summary.outdated}台 / 未報告 ${summary.unreported}台`];
+  const lines = [`対話ループ展開: 適用済 ${summary.applied}台 / 未適用・旧版 ${summary.outdated}台 / 稼働中だが未取込 ${summary.liveNotApplied}台 / 未導入・電源off ${summary.unreported}台`];
   for (const row of rows) {
     const name = String(row.label ?? '').trim() || String(row.pcName ?? '').trim() || '(名称未設定)';
     lines.push(`${name} | ${String(row.interactionLoop ?? '').trim() || '未報告'} | ${String(row.interactionSelftest ?? '').trim() || '未報告'} | ${String(row.reportedAt ?? '').trim() || '未報告'}`);
@@ -61,14 +68,53 @@ export function shouldRunWatch(markerExists) {
 export function shouldNotify(prev, curr) {
   if (prev?.done === true) return false;
   if (!prev) return true;
-  return ['applied', 'stale', 'unreported'].some((key) => Number(prev[key]) !== Number(curr[key]));
+  if (curr?.done === true && prev?.done !== true) return true;
+  return ['applied', 'stale', 'liveNotApplied']
+    .some((key) => (Number(prev[key]) || 0) !== (Number(curr[key]) || 0));
 }
 
-export function buildWatchMessage(curr, staleNames = []) {
-  if (curr.stale === 0 && curr.unreported === 0) return `✅ 対話ループ: 全${curr.applied}台が適用済`;
-  const lines = [`対話ループ展開: 適用済 ${curr.applied}台 / 未適用・旧版 ${curr.stale}台 / 未報告 ${curr.unreported}台`];
+export function shouldNotifyStall(prev, curr, now, {
+  stallAfterMs = STALL_AFTER_MS,
+  stallRepeatMs = STALL_REPEAT_MS,
+} = {}) {
+  if (prev?.done === true || curr?.done === true) return false;
+  if (shouldNotify(prev, curr)) return false;
+  if (!(Number(curr?.stale) > 0 || Number(curr?.liveNotApplied) > 0)) return false;
+  const nowMs = now instanceof Date ? now.getTime() : new Date(now).getTime();
+  const firstSeenMs = Date.parse(prev?.firstSeenAt ?? '');
+  if (!Number.isFinite(nowMs) || !Number.isFinite(firstSeenMs) || nowMs - firstSeenMs < stallAfterMs) return false;
+  const lastStallMs = Date.parse(prev?.lastStallNotifiedAt ?? '');
+  return !Number.isFinite(lastStallMs) || nowMs - lastStallMs >= stallRepeatMs;
+}
+
+export function buildWatchMessage(curr, staleNames = [], liveNotAppliedNames = []) {
+  if (curr.stale === 0 && curr.liveNotApplied === 0) return `✅ 対話ループ: 全${curr.applied}台が適用済`;
+  const lines = [`対話ループ展開: 適用済 ${curr.applied}台 / 未適用・旧版 ${curr.stale}台 / 稼働中だが未取込 ${curr.liveNotApplied}台 / 未導入・電源off ${curr.unreported}台`];
   const names = staleNames.slice(0, 10);
   if (names.length) lines.push(`未適用・旧版: ${names.join(' / ')}`);
+  const liveNames = liveNotAppliedNames.slice(0, 10);
+  if (liveNames.length) lines.push(`稼働中だが未取込: ${liveNames.join(' / ')}`);
+  return lines.join('\n');
+}
+
+export function buildStallMessage(curr, staleNames = [], liveNotAppliedNames = []) {
+  const stallHours = STALL_AFTER_MS / (60 * 60 * 1000);
+  const lines = [
+    `⚠ 対話ループの展開が${stallHours}時間進んでいません`,
+    `適用済 ${curr.applied}台 / 未適用・旧版 ${curr.stale}台 / 稼働中だが未取込 ${curr.liveNotApplied}台`,
+  ];
+  const names = staleNames.slice(0, 10);
+  if (names.length) lines.push(`未適用・旧版: ${names.join(' / ')}`);
+  const liveNames = liveNotAppliedNames.slice(0, 10);
+  if (liveNames.length) lines.push(`稼働中だが未取込: ${liveNames.join(' / ')}`);
+  lines.push(
+    '',
+    'そのPCの Claude Code に貼るだけで直ります:',
+    'オージャストのツール配布が届いていないので直して。~/orgiast-claude-rules/tools/onboarding-sync.mjs を',
+    'https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/tools/onboarding-sync.mjs',
+    'の内容で上書きしてから、node ~/orgiast-claude-rules/tools/onboarding-sync.mjs --force を実行して。',
+    '未コミットの作業は消さないこと。',
+  );
   return lines.join('\n');
 }
 
@@ -96,28 +142,54 @@ async function runWatch({ home, fleetEnv, fetchImpl, stdout, stderr, now }) {
   }
 
   const rows = await fetchRolloutRows({ sheetUrl: fleetEnv.FLEET_SHEET_URL, token: fleetEnv.FLEET_SHEET_TOKEN, fetchImpl });
-  const result = buildRollout(rows);
+  const observedAt = now();
+  const result = buildRollout(rows, observedAt);
   const curr = {
     applied: result.summary.applied,
     stale: result.summary.outdated,
+    liveNotApplied: result.summary.liveNotApplied,
     unreported: result.summary.unreported,
-    done: result.summary.outdated === 0 && result.summary.unreported === 0,
+    done: result.summary.outdated === 0 && result.summary.liveNotApplied === 0,
   };
-  if (!shouldNotify(prev, curr)) {
+  // 既存の状態ファイルには firstSeenAt が無い。ここで「今」を入れると、既に何日も前から
+  // 展開が始まっているのに計測が今日からになり、停滞の検出が丸1日遅れる。
+  // 前回通知した時刻(= その展開を観測していた証拠)があればそれを起点にする。
+  const firstSeenAt = prev?.firstSeenAt || prev?.notifiedAt || observedAt.toISOString();
+  const state = { ...curr, firstSeenAt };
+  const notifyChange = shouldNotify(prev, curr);
+  // 成功時だけ通知し、失敗して展開が止まった時に沈黙すると、user に思い出す仕事を押し付ける。
+  // 変化がなくても一定時間ごとに停滞を知らせ、確認作業を自動側に残す。
+  const notifyStall = !notifyChange && shouldNotifyStall(prev, curr, observedAt);
+  if (!notifyChange && !notifyStall) {
+    if (!prev?.firstSeenAt) {
+      fs.mkdirSync(claudeDir, { recursive: true });
+      fs.writeFileSync(stateFile, `${JSON.stringify({ ...prev, ...state }, null, 2)}\n`);
+    }
     stdout('skip:前回と差分なし');
     return;
   }
   const staleNames = result.rows.filter((row) => row.category === 'outdated')
     .map((row) => String(row.label ?? '').trim() || String(row.pcName ?? '').trim() || '(名称未設定)');
+  const liveNotAppliedNames = result.rows.filter((row) => row.category === 'liveNotApplied')
+    .map((row) => String(row.label ?? '').trim() || String(row.pcName ?? '').trim() || '(名称未設定)');
   const response = await fetchImpl(webhook, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ content: buildWatchMessage(curr, staleNames) }),
+    body: JSON.stringify({
+      content: notifyStall
+        ? buildStallMessage(curr, staleNames, liveNotAppliedNames)
+        : buildWatchMessage(curr, staleNames, liveNotAppliedNames),
+    }),
     signal: AbortSignal.timeout(POST_TIMEOUT_MS),
   });
   if (!response.ok) throw new Error(`Discord POST HTTP ${response.status}`);
   fs.mkdirSync(claudeDir, { recursive: true });
-  fs.writeFileSync(stateFile, `${JSON.stringify({ ...curr, notifiedAt: now().toISOString() }, null, 2)}\n`);
+  fs.writeFileSync(stateFile, `${JSON.stringify({
+    ...prev,
+    ...state,
+    notifiedAt: observedAt.toISOString(),
+    ...(notifyStall ? { lastStallNotifiedAt: observedAt.toISOString() } : {}),
+  }, null, 2)}\n`);
 }
 
 export async function fetchRolloutRows({ sheetUrl, token, fetchImpl = globalThis.fetch }) {
@@ -155,7 +227,7 @@ export async function runInteractionRollout({
   }
   try {
     const rows = await fetchRolloutRows({ sheetUrl: fleetEnv.FLEET_SHEET_URL, token: fleetEnv.FLEET_SHEET_TOKEN, fetchImpl });
-    const result = buildRollout(rows);
+    const result = buildRollout(rows, now());
     stdout(argv.includes('--json') ? JSON.stringify(result, null, 2) : formatRollout(result));
   } catch (error) {
     stderr(`interaction-rollout: 取得できませんでした (${error?.message || error?.name || 'error'})`);

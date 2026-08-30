@@ -219,3 +219,86 @@ test('forceNotify は同内容でも強制通知する', async () => {
   await notifyStale(notifyFixture(['a']), 3, { fetchImpl: h.fetchImpl, webhookUrl: h.webhookUrl, now: NOW, forceNotify: true });
   assert.equal(h.calls.length, 2);
 });
+
+const pendingCorpusTitles = [
+  ['sub_b9755c5d', '配布する PowerShell インストーラを CI で検査する（PS5.1・BOM の罠）'],
+  ['sub_58a6f22d', '規約PDFを根拠に「それ違反ですか？」に答える相談AIの作り方'],
+  ['sub_84528b53', 'Windowsの定期タスクから黒いコマンドウィンドウを消す'],
+  ['sub_66340283', '社内フィードバックを毎日AIの作業キューへ自動取り込みする（安全ゲート付き）'],
+  ['sub_188983bd', 'アプリ内フィードバック→責任者DM→Issue→自動修正PR→1タップ承認'],
+  ['sub_f8442836', 'AIの永続メモリ索引が読み込み上限で黙って切り捨てられる問題を直す'],
+  ['sub_45af39d0', '機密列を含む共有スプレッドシートにAIを安全に書き込ませる型'],
+  ['sub_643134d8', 'AEO/GEO 施策の型 — AI検索で自社を推薦・引用されやすくする'],
+  ['sub_4c9b1843', 'ChatGPTに本当にLPデザインを作らせて、コードへ忠実に落とす指示書'],
+  ['sub_57317153', '既存スプレッドシートを正本にした業務アプリの列マッピングを壊れない設計にする'],
+  ['sub_0275cb99', 'クラウド契約とプロジェクト所在を1枚のスプレッドシート台帳に自動集約する'],
+  ['sub_d1b55b48', 'ずっと skipped だった CI ジョブを掘り起こして緑にする'],
+  ['sub_26cab938', '別シートの列番号が腐って別レコードの値を返す事故の直し方（名前照合＋日付タイブレーク）'],
+  ['sub_f0f27191', '「そのPCにしか直せない障害」をAIに自分で気付かせて着手させる'],
+  ['sub_582c34db', 'ゲートを作った後の話 — すり抜けを監査して自己改善させるループ'],
+  ['sub_d34d68e7', '全世界公開になっていた共有ドライブ資料を、業務を止めずに締める'],
+  ['sub_b7a5ab7c', 'MCP stdio サーバが Windows で「接続済み」のまま死んでいるのを見抜く'],
+  ['sub_7997b4a1', 'ログインできないGitHubアカウントに縛られた開発を、止めずに前へ進める'],
+  ['sub_bcaffee4', '夜間の無人AIエージェントバッチが「静かに全滅」するのを止める（観測タスクの立て方）'],
+  ['sub_734c6cfb', 'MCPサーバの「Connected」は疎通の証拠にならない — 外部CLIを包むMCPを3段で検証する'],
+  ['sub_49503237', '毎晩「消化している」つもりのバッチが同じ先頭N件をやり直しているのを見抜いて直す'],
+  ['sub_913295b0', 'CLIをラップしたMCPサーバが上流の無料枠終了で死んだらREST直叩きへ寄せる'],
+  ['sub_2f8b6ed8', '毎晩「消化している」つもりのバッチが同じ先頭N件をやり直しているのを見抜く'],
+  ['sub_f8a1fc83', '「名前でフォルダを探して無ければ作る」処理が自分の重複を掴み続ける問題を潰す'],
+  ['sub_296a52ef', 'AIの記憶インデックスが読み込み上限で黙って切られる問題の検出と恒久対策'],
+  ['sub_0492e723', 'MCPサーバが「接続済み」なのにツールが動かない時の切り分け'],
+  ['sub_53a4205f', 'MCPサーバが「接続済み」なのに動かない — 4層の故障を切り分ける'],
+  ['sub_c6a8fad1', 'ログオンしただけでIDEが開きAIエージェントが走り出す状態を作る（Windows/VS Code）'],
+  ['sub_941ef071', 'MCPサーバが「接続済み」でもツールは死んでいる — Windowsの.cmd起動問題を見抜いて直す'],
+  ['sub_429591c3', '「接続済み」は疎通の証拠にならない — 外部連携を起動層・認証層・枠層で切り分ける'],
+  ['sub_e500f466', '定期実行が「手動なら動く」まま何週間も止まっているのを見抜いて直す'],
+];
+const pendingCorpus = pendingCorpusTitles.map(([submissionId, title], index) => ({
+  submissionId,
+  title,
+  status: 'pending',
+  at: new Date(Date.UTC(2026, 7, 30) - index * DAY).toISOString(),
+}));
+const pendingCorpusById = new Map(pendingCorpus.map((item) => [item.submissionId, item]));
+
+// 実測で確認した重複8組を両方向で固定し、言い換え側だけを取り逃がす非対称な劣化も防ぐ。
+// 0.32 の境界例を含むため、しきい値変更で既知重複の感度が落ちれば失敗する。
+test('審査待ちコーパスの既知の重複を全部止める', () => {
+  const duplicatePairs = [
+    ['sub_49503237', 'sub_2f8b6ed8'],
+    ['sub_f8442836', 'sub_296a52ef'],
+    ['sub_0492e723', 'sub_53a4205f'],
+    ['sub_0492e723', 'sub_941ef071'],
+    ['sub_b7a5ab7c', 'sub_941ef071'],
+    ['sub_b7a5ab7c', 'sub_53a4205f'],
+    ['sub_53a4205f', 'sub_941ef071'],
+    ['sub_734c6cfb', 'sub_429591c3'],
+  ];
+  for (const [leftId, rightId] of duplicatePairs) {
+    const left = pendingCorpusById.get(leftId); const right = pendingCorpusById.get(rightId);
+    assert.equal(findSimilarPending([right], { title: left.title }).length, 1, `${leftId} -> ${rightId}`);
+    assert.equal(findSimilarPending([left], { title: right.title }).length, 1, `${rightId} -> ${leftId}`);
+  }
+});
+
+// 2026-08-30 の31件・465ペアで実測19件。22以下に固定し、警告が乱発して
+// --force の常用を招く方向のしきい値劣化を検出する。
+test('審査待ちコーパスで警告が形骸化していない', () => {
+  let detectedPairs = 0;
+  for (let left = 0; left < pendingCorpus.length; left++) {
+    for (let right = left + 1; right < pendingCorpus.length; right++) {
+      if (findSimilarPending([pendingCorpus[right]], { title: pendingCorpus[left].title }).length === 1) detectedPairs++;
+    }
+  }
+  assert.ok(detectedPairs <= 22, `検出ペア数 ${detectedPairs} が上限22を超えた`);
+});
+
+// 実測で全30件に非類似だった両端の題名を固定し、一般語の一致だけで止める
+// 誤検知が入り込んだ場合に検出する。
+test('審査待ちコーパスの無関係な題名は素通しする', () => {
+  for (const id of ['sub_58a6f22d', 'sub_c6a8fad1']) {
+    const subject = pendingCorpusById.get(id);
+    const others = pendingCorpus.filter((item) => item.submissionId !== id);
+    assert.deepEqual(findSimilarPending(others, { title: subject.title }), [], id);
+  }
+});

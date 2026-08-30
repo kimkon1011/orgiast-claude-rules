@@ -67,6 +67,29 @@ const allows = (args) => args.flatMap((x, i) => x === '--allow' ? [args[i + 1]] 
 function showFindings(findings) { findings.forEach((x) => console.error(`${x.line}行目 [${x.pattern}] ${x.sample}`)); }
 function slugify(s) { return String(s).normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '').slice(0, 60) || 'draft'; }
 function normalizedTitle(title) { return String(title ?? '').normalize('NFKC').replace(/\s/gu, '').toLowerCase(); }
+function diceMultiset(a, b) { if (!a.length || !b.length) return undefined; const counts = new Map(); for (const item of a) counts.set(item, (counts.get(item) || 0) + 1); let overlap = 0; for (const item of b) { const count = counts.get(item) || 0; if (count) { overlap++; counts.set(item, count - 1); } } return 2 * overlap / (a.length + b.length); }
+function titleParts(title) {
+  const original = String(title ?? '').toLowerCase(); const compact = original.normalize('NFKC').replace(/[^\p{L}\p{N}]+/gu, '');
+  const grams = compact.length < 2 ? [...compact] : Array.from({ length: compact.length - 1 }, (_, i) => compact.slice(i, i + 2));
+  const tokens = original.match(/[\p{Script=Han}]{2,}|[\p{Script=Katakana}]{2,}|[a-z0-9]{2,}/gu) || [];
+  return { compact, grams, tokens };
+}
+export function titleSimilarity(a, b) {
+  const left = titleParts(a), right = titleParts(b); const scores = [diceMultiset(left.grams, right.grams), diceMultiset(left.tokens, right.tokens)].filter(Number.isFinite);
+  let score = scores.length ? Math.max(...scores) : 0; const shorter = left.compact.length <= right.compact.length ? left.compact : right.compact; const longer = left.compact.length <= right.compact.length ? right.compact : left.compact;
+  if (shorter.length >= 8 && longer.includes(shorter)) score = Math.max(score, 0.9);
+  return score;
+}
+export function titleOverlapRatio(a, b) {
+  const left = [...titleParts(a).compact], right = [...titleParts(b).compact]; if (!left.length || !right.length) return 0;
+  let previous = new Array(right.length + 1).fill(0), current = new Array(right.length + 1).fill(0), longest = 0;
+  for (const leftChar of left) { for (let j = 1; j <= right.length; j++) { current[j] = leftChar === right[j - 1] ? previous[j - 1] + 1 : 0; longest = Math.max(longest, current[j]); } [previous, current] = [current, previous]; current.fill(0); }
+  return 2 * longest / (left.length + right.length);
+}
+export function findSimilarSubmissions(logs, title, { threshold = 0.4, overlapThreshold = 0.325, limit = 5, includePublished = true } = {}) {
+  const now = Date.now();
+  return (Array.isArray(logs) ? logs : []).filter((entry) => includePublished || entry?.status !== 'published').map((entry) => { const atMs = new Date(entry?.at).getTime(); return { entry, score: titleSimilarity(entry?.title, title), overlap: titleOverlapRatio(entry?.title, title), days: Number.isFinite(atMs) ? Math.max(0, Math.floor((now - atMs) / DAY_MS)) : 0, atMs }; }).filter((item) => item.score >= threshold || item.overlap >= overlapThreshold).sort((a, b) => Math.max(b.score, b.overlap) - Math.max(a.score, a.overlap) || Number(b.entry?.status === 'pending') - Number(a.entry?.status === 'pending') || (Number.isFinite(b.atMs) ? b.atMs : 0) - (Number.isFinite(a.atMs) ? a.atMs : 0)).slice(0, Math.max(0, limit)).map(({ entry, score, overlap, days }) => ({ title: entry?.title, submissionId: entry?.submissionId, status: entry?.status, score, overlap, days }));
+}
 export function reconcileSubmissions(logs, listings, now, staleDays) {
   const nowMs = new Date(now).getTime();
   const publishedByTitle = new Map((Array.isArray(listings) ? listings : []).map((listing) => [normalizedTitle(listing?.title), listing]));
@@ -181,9 +204,16 @@ async function main() {
   const categoriesResponse = await fetch(`${BASE}/api/v1/categories`, { signal: AbortSignal.timeout(8000) }); if (!categoriesResponse.ok) throw new Error(`カテゴリ取得 HTTP ${categoriesResponse.status}`); const categories = (await categoriesResponse.json()).categories?.map((x) => x.name) || []; if (!categories.includes(category)) reasons.push(`category は既存カテゴリから選択: ${categories.join(' / ')}`);
   if (reasons.length) { reasons.forEach((x) => console.error(x)); process.exitCode = 2; return; }
   if (val(args, '--price') && Number(val(args, '--price')) !== 0) { console.error('price は常に 0（無料）です'); process.exitCode = 2; return; }
+  let logs = readSubmissionLogs(); const similar = findSimilarSubmissions(logs, title);
+  if (similar.length) {
+    console.error('⚠️ 近い題名の出品が既にあります（審査待ちは makimono-search では見えません）');
+    similar.forEach((item) => console.error(`- [${item.status === 'published' ? '公開済み' : '審査待ち'}] ${item.title}（${item.submissionId || 'ID不明'} / 出品から ${item.days}日 / 類似度 ${item.score.toFixed(2)} / 共通部分 ${item.overlap.toFixed(2)}）`));
+    if (!args.includes('--force')) { console.error('同主題なら出品しないでください。別主題だと確認できたら --force を付けて再実行してください。'); process.exitCode = 2; return; }
+    console.error('--force 指定のため続行します');
+  }
   const payload = { title, summary, category, body, scratchTokens: Number(val(args, '--scratch-tokens') || 0), withMdTokens: Number(val(args, '--with-md-tokens') || 0), price: 0 };
   if (args.includes('--dry')) { console.log(JSON.stringify({ ...payload, body: `${body.slice(0, 200)}… (${body.length}文字)` }, null, 2)); return; }
-  let logs = readSubmissionLogs(); const logFile = homeFile('makimono-submissions.json');
+  const logFile = homeFile('makimono-submissions.json');
   const hash = crypto.createHash('sha256').update(body).digest('hex').slice(0, 16); if (logs.some((x) => x.sha256 === hash)) { console.log('同一内容を出品済み'); return; }
   const auth = await ensureKey({ logTrusted: true }); const response = await fetch(`${BASE}/api/v1/listings`, { method: 'POST', headers: { authorization: `Bearer ${auth.key}`, 'content-type': 'application/json' }, body: JSON.stringify(payload), signal: AbortSignal.timeout(8000) }); const data = await response.json(); if (!response.ok) throw new Error(`出品 HTTP ${response.status}: ${data.error || '失敗'}`);
   logs.push({ at: new Date().toISOString(), title, category, submissionId: data.submissionId, status: data.status, email: auth.email, sha256: hash }); fs.mkdirSync(path.dirname(logFile), { recursive: true }); fs.writeFileSync(logFile, `${JSON.stringify(logs, null, 2)}\n`);

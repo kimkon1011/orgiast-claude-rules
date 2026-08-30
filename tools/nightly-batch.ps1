@@ -4,6 +4,7 @@ $logFile = Join-Path $logDir ("nightly-batch-" + (Get-Date -Format 'yyyy-MM-dd')
 New-Item -ItemType Directory -Path $logDir -Force | Out-Null
 $summary = [ordered]@{}
 function Write-NightlyLog([string]$Step, [string]$Result) {
+    if ($Step -ne 'サマリ') { $summary[$Step] = $Result }
     $line = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + " / " + $Step + " / " + $Result
     Add-Content -LiteralPath $logFile -Value $line -Encoding UTF8
 }
@@ -53,19 +54,62 @@ try {
             Write-NightlyLog 'session-auto-close' ("error:" + $_.Exception.Message)
             Write-Warning ("nightly-batch: session-auto-close: " + $_.Exception.Message)
         }
+    } else { Write-NightlyLog 'session-auto-close' 'skip:ファイルなし' }
+
+    $memoryIndexCompact = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\memory-index-compact.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $memoryIndexCompact = $candidate; break }
     }
+    if ($memoryIndexCompact) {
+        try {
+            & $node.Source $memoryIndexCompact --move-hooks --apply --all-projects --min-bytes 20000
+            if ($LASTEXITCODE -ne 0) { Write-Warning ("nightly-batch: memory-index-compact exited " + $LASTEXITCODE) }
+        } catch {
+            Write-Warning ("nightly-batch: memory-index-compact: " + $_.Exception.Message)
+        }
+    }
+
+    $memoryIndexGraph = $null
+    $memoryIndexVerify = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\memory-index-graph.mjs'
+        if (-not $memoryIndexGraph -and (Test-Path -LiteralPath $candidate -PathType Leaf)) { $memoryIndexGraph = $candidate }
+        $candidate = Join-Path $repo 'tools\memory-index-verify.mjs'
+        if (-not $memoryIndexVerify -and (Test-Path -LiteralPath $candidate -PathType Leaf)) { $memoryIndexVerify = $candidate }
+        if ($memoryIndexGraph -and $memoryIndexVerify) { break }
+    }
+    if ($memoryIndexGraph) {
+        try {
+            & $node.Source $memoryIndexGraph --all-projects --apply --budget 15000 --min-bytes 16000
+            if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'memory-index-graph' ("error:終了コード" + $LASTEXITCODE); Write-Warning ("nightly-batch: memory-index-graph exited " + $LASTEXITCODE) } else { Write-NightlyLog 'memory-index-graph' 'ok' }
+        } catch {
+            Write-NightlyLog 'memory-index-graph' ("error:" + $_.Exception.Message)
+            Write-Warning ("nightly-batch: memory-index-graph: " + $_.Exception.Message)
+        }
+    } else { Write-NightlyLog 'memory-index-graph' 'skip:ファイルなし' }
+
+    if ($memoryIndexVerify) {
+        try {
+            & $node.Source $memoryIndexVerify --reachability --all-projects
+            if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'memory-index-reachability' ("error:終了コード" + $LASTEXITCODE); Write-Warning ("nightly-batch: memory-index-reachability exited " + $LASTEXITCODE) } else { Write-NightlyLog 'memory-index-reachability' 'ok' }
+        } catch {
+            Write-NightlyLog 'memory-index-reachability' ("error:" + $_.Exception.Message)
+            Write-Warning ("nightly-batch: memory-index-reachability: " + $_.Exception.Message)
+        }
+    } else { Write-NightlyLog 'memory-index-reachability' 'skip:ファイルなし' }
 
     # LINEトーク履歴エクスポート(inbox の .txt)を先に取り込む。claude-mobile が無いPCでは静かにスキップする。
     $lineImport = Join-Path $HOME 'Downloads\claude-mobile\scripts\import-line-export.mjs'
     if (Test-Path -LiteralPath $lineImport -PathType Leaf) {
         try {
             & $node.Source $lineImport
-            if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'import-line-export' ("error:終了コード" + $LASTEXITCODE) } else { Write-NightlyLog 'import-line-export' 'ok' }
+            if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'import-line-export' ("error:終了コード" + $LASTEXITCODE); Write-Warning ("nightly-batch: import-line-export exited " + $LASTEXITCODE) } else { Write-NightlyLog 'import-line-export' 'ok' }
         } catch {
             Write-NightlyLog 'import-line-export' ("error:" + $_.Exception.Message)
             Write-Warning ("nightly-batch: import-line-export: " + $_.Exception.Message)
         }
-    }
+    } else { Write-NightlyLog 'import-line-export' 'skip:ファイルなし' }
 
     $lineReminder = $null
     foreach ($repo in $repos) {
@@ -75,12 +119,12 @@ try {
     if ($lineReminder) {
         try {
             & $node.Source $lineReminder
-            if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'line-export-reminder' ("error:終了コード" + $LASTEXITCODE) } else { Write-NightlyLog 'line-export-reminder' 'ok' }
+            if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'line-export-reminder' ("error:終了コード" + $LASTEXITCODE); Write-Warning ("nightly-batch: line-export-reminder exited " + $LASTEXITCODE) } else { Write-NightlyLog 'line-export-reminder' 'ok' }
         } catch {
             Write-NightlyLog 'line-export-reminder' ("error:" + $_.Exception.Message)
             Write-Warning ("nightly-batch: line-export-reminder: " + $_.Exception.Message)
         }
-    }
+    } else { Write-NightlyLog 'line-export-reminder' 'skip:ファイルなし' }
 
     if ($interactionLoop) {
         try {
@@ -102,6 +146,31 @@ try {
         Write-NightlyLog 'interaction-loop' $summary['interaction-loop']
     }
 
+    $interactionRollout = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\interaction-rollout.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $interactionRollout = $candidate; break }
+    }
+    if ($interactionRollout) {
+        try {
+            $interactionRolloutOutput = @(& $node.Source $interactionRollout --watch)
+            if ($LASTEXITCODE -ne 0) {
+                $summary['interaction-rollout'] = ("error:終了コード" + $LASTEXITCODE)
+            } else {
+                $interactionRolloutState = @($interactionRolloutOutput | Where-Object { $_ -eq 'skip:前回と差分なし' } | Select-Object -Last 1)
+                $summary['interaction-rollout'] = if ($interactionRolloutState.Count -gt 0) { [string]$interactionRolloutState[0] } else { 'ok' }
+            }
+            Write-NightlyLog 'interaction-rollout' $summary['interaction-rollout']
+        } catch {
+            $summary['interaction-rollout'] = ("error:" + $_.Exception.Message)
+            Write-NightlyLog 'interaction-rollout' $summary['interaction-rollout']
+            Write-Warning ("nightly-batch: interaction-rollout: " + $_.Exception.Message)
+        }
+    } else {
+        $summary['interaction-rollout'] = 'skip:ファイルなし'
+        Write-NightlyLog 'interaction-rollout' $summary['interaction-rollout']
+    }
+
     # ルール遵守監査。失敗しても後続処理は必ず続ける。
     $ruleCompliance = $null
     foreach ($repo in $repos) {
@@ -115,7 +184,8 @@ try {
         } catch { Write-NightlyLog 'rule-compliance-loop' ("error:" + $_.Exception.Message + ' (警告・後続処理続行)') }
     } else { Write-NightlyLog 'rule-compliance-loop' 'skip:ファイルなし' }
 
-    # フォーム報告を Issue 化する。失敗しても既存の夜間処理を止めず、次回に再試行できるよう独立させる。
+    # アプリ内フォームの報告(kim の DM に届いたもの)を GitHub Issue 化する。
+    # 失敗しても既存の夜間処理を止めない。未 ack のものは次回そのまま再試行される。
     $feedbackToIssues = $null
     foreach ($repo in $repos) {
         $candidate = Join-Path $repo 'tools\feedback-to-issues.mjs'
@@ -124,12 +194,26 @@ try {
     if ($feedbackToIssues) {
         try {
             & $node.Source $feedbackToIssues
-            if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'feedback-to-issues' ("error:終了コード" + $LASTEXITCODE + ' (警告・後続処理続行)') } else { Write-NightlyLog 'feedback-to-issues' 'ok' }
+            if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'feedback-to-issues' ("error:終了コード" + $LASTEXITCODE + ' (警告・後続処理続行)'); Write-Warning ("nightly-batch: feedback-to-issues exited " + $LASTEXITCODE) } else { Write-NightlyLog 'feedback-to-issues' 'ok' }
         } catch {
             Write-NightlyLog 'feedback-to-issues' ("error:" + $_.Exception.Message + ' (警告・後続処理続行)')
             Write-Warning ("nightly-batch: feedback-to-issues: " + $_.Exception.Message)
         }
     } else { Write-NightlyLog 'feedback-to-issues' 'skip:ファイルなし' }
+
+    $growiManual = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\growi-manual.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $growiManual = $candidate; break }
+    }
+    if ($growiManual) {
+        try {
+            & $node.Source $growiManual sync
+            if ($LASTEXITCODE -eq 2) { Write-NightlyLog 'growi-manual' 'skip:鍵なし' } elseif ($LASTEXITCODE -ne 0) { Write-NightlyLog 'growi-manual' ("error:終了コード" + $LASTEXITCODE) } else { Write-NightlyLog 'growi-manual' 'ok' }
+        } catch {
+            Write-NightlyLog 'growi-manual' ("error:" + $_.Exception.Message)
+        }
+    } else { Write-NightlyLog 'growi-manual' 'skip:ファイルなし' }
 
     # LINEオープンチャットの取り込み分を選別・要約して作り置きを更新する。
     # batch-queue が空でも実行したいので、下の early exit より前に置くこと。
@@ -154,7 +238,7 @@ try {
             $summary['line-digest'] = ("error:" + $_.Exception.Message); Write-NightlyLog 'line-digest' $summary['line-digest']
             Write-Warning ("nightly-batch: line-digest: " + $_.Exception.Message)
         }
-    }
+    } else { Write-NightlyLog 'line-digest' 'skip:ファイルなし' }
 
     $producer = $null
     foreach ($repo in $repos) {

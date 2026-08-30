@@ -172,6 +172,20 @@ try {
         }
     } else { Write-NightlyLog 'feedback-to-issues' 'skip:ファイルなし' }
 
+    $growiManual = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\growi-manual.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $growiManual = $candidate; break }
+    }
+    if ($growiManual) {
+        try {
+            & $node.Source $growiManual sync
+            if ($LASTEXITCODE -eq 2) { Write-NightlyLog 'growi-manual' 'skip:鍵なし' } elseif ($LASTEXITCODE -ne 0) { Write-NightlyLog 'growi-manual' ("error:終了コード" + $LASTEXITCODE) } else { Write-NightlyLog 'growi-manual' 'ok' }
+        } catch {
+            Write-NightlyLog 'growi-manual' ("error:" + $_.Exception.Message)
+        }
+    } else { Write-NightlyLog 'growi-manual' 'skip:ファイルなし' }
+
     # LINEオープンチャットの取り込み分を選別・要約して作り置きを更新する。
     # batch-queue が空でも実行したいので、下の early exit より前に置くこと。
     $digest = $null

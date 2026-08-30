@@ -9,52 +9,63 @@ description: オージャストの Growi 社内マニュアル（orgiast-manual.
 orgiast-manual.com は認証必須。Cookie/セッションを保持できない WebFetch は確実に失敗する。試行禁止。
 
 ## 厳守 2: Drive の Part を丸ごと読もうとしない
-全文は Drive に **Part01〜Part14**（2026-08-28 時点。今後増える）の Google Docs として置かれているが、
-**1 Part = 約 90 万文字 / 1.7MB** あり、Drive MCP `download_file_content` はトークン上限を超えて失敗する。
-Part を直接読むのではなく、下記 CLI で**ページ単位**に引くこと（全 6,867 ページ / 1ページ平均 4KB）。
+全文は Drive に **Part01〜Part14**（2026-08-30 時点。今後増える）の Google Docs として置かれているが、
+**1 Part = 約 90 万文字 / 1.7MB** あり、`download_file_content` はトークン上限を超える。
+下の CLI で**ページ単位**に引くこと（全 6,867 ページ / 1ページ平均 4KB）。
 
-## 手順: `tools/growi-manual.mjs` で search → get
+## 日常の使い方: status → search → get
 
 ```bash
-node ~/orgiast-claude-rules/tools/growi-manual.mjs status              # 鮮度とキャッシュ有無を確認（最初に必ず）
+node ~/orgiast-claude-rules/tools/growi-manual.mjs status              # 最初に必ず。鮮度と取得状況
 node ~/orgiast-claude-rules/tools/growi-manual.mjs search 応募対応      # 該当ページ一覧（本文は出ない）
-node ~/orgiast-claude-rules/tools/growi-manual.mjs get p0001           # そのページの本文だけ取得
+node ~/orgiast-claude-rules/tools/growi-manual.mjs get p0001           # そのページの本文だけ
 ```
 
-1. **`status`（必須・最初に）** — Parts 数・総ページ数・各 Part の更新日時・`syncedAt` が出る。
-   - キャッシュが無い（exit 1）→ 下の「初回セットアップ」へ
-   - `STALE` 警告（最新 Part が 90 日以上前）→ user に報告してから進める
-2. **`search <キーワード>`** — タイトルと内部パスを部分一致検索し、`id / part / タイトル / 内部パス` の TSV を返す。
-   **本文は絶対に返さない**ので何度打っても安全。
-   - `--path /13:人事部` で部署配下に絞る
-   - `--body` で本文も検索対象にする（遅い。タイトルで当たらない時だけ）
-   - `--limit N`（既定 20）
-3. **`get <id|内部パス|タイトル>`** — 1 ページの本文だけを出力する。複数該当時は候補を出して exit 1（勝手に選ばない）。
-4. 部署名や用語が分からず search が空振りする時は、`--body` か、内部パスの階層（`/12:営業部` `/13:人事部`
-   `/33:クライアント情報` など）を `--path` で当てて探索する。
+- **`search`** はタイトルと内部パスを部分一致検索し `id / part / タイトル / 内部パス` の TSV を返す。
+  **本文は絶対に返さない**ので何度打っても安全。`--path /13:人事部` で階層を絞る、
+  `--body` で本文も検索（遅い・未取得 Part は対象外になり stderr に注意が出る）、`--limit N`（既定 20）。
+- **`get`** は 1 ページの本文だけを出す。複数該当時は候補を出して exit 1（勝手に選ばない）。
+- **`get` が exit 3 で止まったら**、そのページの Part の本文がまだ手元に無い。
+  出力に **fileId と次にやる 2 手**が書いてあるので、そのとおりに実行する（下の「本文の取り寄せ」と同じ）。
+- **`status` が exit 1**（キャッシュ無し）→ 下の「初回セットアップ」へ。`STALE` 警告が出たら user に報告してから進める。
 
-## 初回セットアップ（キャッシュが無いとき）
+## 初回セットアップ
 
-**kim 環境（SA 鍵あり）** — 1 コマンドで完結。約 80 秒。
+### kim 環境（サービスアカウント鍵あり）
 ```bash
 node ~/orgiast-claude-rules/tools/growi-manual.mjs sync
 ```
+全 Part を取得して索引を作り、**続けて索引を Drive ハブへ発行する**（他アカウント向け）。約 80 秒。
+夜間バッチにも配線済みなので、放っておいても索引は新しくなる。
 
-**他アカウント（SA 鍵なし）** — Drive MCP で Part を落として `ingest` する。
-1. `search_files parentId='1LMRI2jFpVG3WnDYlepgbOuyJ6ZBYzI8B'` で Part の fileId を全部取る
-2. 各 Part を `download_file_content`（`exportMimeType: text/plain`）で呼ぶ。
-   サイズ超過で「ローカルに保存した」と言われるので、**その保存パスを控える**（これが正常な動作）
-3. 保存パスをまとめて渡す:
-   ```bash
-   node ~/orgiast-claude-rules/tools/growi-manual.mjs ingest <保存パス1> <保存パス2> ...
+### 他アカウント（鍵なし）— 索引を 2 ファイル取るだけ
+**14 本すべてを落とす必要はない。** 索引だけ入れれば全 6,867 ページの検索がすぐ効く。
+
+1. Drive MCP `search_files` で `parentId='1RLYbK6CKyPWRJsG6LY0WB9OzlbFYSFvw'`（共通ハブ）を検索し、
+   **`growi-manual-index.tsv`** と **`growi-manual-meta.json`** の fileId を取る（**fileId はハードコードしない**）
+2. それぞれ `download_file_content` を呼ぶ。索引は 1.5MB あるので
+   「大きいのでローカルに保存した」と言われる — **それが正常**。保存パスを控える
+3. ```bash
+   node ~/orgiast-claude-rules/tools/growi-manual.mjs install-index <索引の保存パス> <metaの保存パス>
    ```
-   MCP 保存 JSON（base64）と生 txt の両方を受け付ける。取り込み後は自動で索引を作り直す。
+   引数の順序はどちらでもよい。`索引を取り込みました: Parts 14 / Pages 6867（本文は未取得）` と出れば完了。
+   この時点で **`search` が全ページに効く**。
+
+### 本文の取り寄せ（必要になった Part だけ）
+`get` が exit 3 で止まったら、その案内どおりに:
+1. 表示された fileId を `download_file_content`（`exportMimeType: text/plain`）で呼ぶ → 保存パスを控える
+2. `node ~/orgiast-claude-rules/tools/growi-manual.mjs ingest <保存パス>`
+
+これでその Part の全ページが `get` できるようになる。たいてい 1〜2 Part で足りるので、
+14 本落とす必要は無い。`ingest` は 1 本も取り込めなければ exit 1 で失敗する。
 
 ## 一次ソース（Drive）
 
-- **Folder ID**: `1LMRI2jFpVG3WnDYlepgbOuyJ6ZBYzI8B`（所有: seisaku-team@orgiast.jp、orgiast.jp ドメインに reader 共有済み）
+- マニュアル本体フォルダ: `1LMRI2jFpVG3WnDYlepgbOuyJ6ZBYzI8B`
+  （所有 seisaku-team@orgiast.jp / orgiast.jp ドメインに reader 共有。**一般公開ではない**）
+- 索引の置き場: 共通ハブ `1RLYbK6CKyPWRJsG6LY0WB9OzlbFYSFvw`（`growi-manual-index.tsv` / `growi-manual-meta.json`）
 - 運用 GAS:「社内マニュアル-NotebookLM連携」Script ID `1BVhALp3knyh4PaXGIre3v_ut6sOfWDMlAr_5S4yQM7-NGUzW-I5iLhIW`
-- 元々は NotebookLM に読ませる目的で作られたもの。Part 数は増えるので**ハードコードせず** `search_files` で実数を取る
+- 元々は NotebookLM 用。Part 数は増えるので**決め打ちせず** `search_files` で実数を取る
 
 ## それでも足りないとき
 

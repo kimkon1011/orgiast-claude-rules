@@ -35,6 +35,11 @@ try {
         $candidate = Join-Path $repo 'tools\session-auto-close.mjs'
         if (Test-Path -LiteralPath $candidate -PathType Leaf) { $autoClose = $candidate; break }
     }
+    $interactionLoop = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\interaction-loop.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $interactionLoop = $candidate; break }
+    }
 
     $node = Get-Command node -ErrorAction SilentlyContinue
     if (-not $node) { $summary['node'] = 'error:nodeが見つからない'; Write-NightlyLog 'node確認' 'error:nodeが見つからない'; Finish-Nightly 1 }
@@ -75,6 +80,26 @@ try {
             Write-NightlyLog 'line-export-reminder' ("error:" + $_.Exception.Message)
             Write-Warning ("nightly-batch: line-export-reminder: " + $_.Exception.Message)
         }
+    }
+
+    if ($interactionLoop) {
+        try {
+            $interactionOutput = @(& $node.Source $interactionLoop --digest)
+            if ($LASTEXITCODE -ne 0) {
+                $summary['interaction-loop'] = ("error:終了コード" + $LASTEXITCODE)
+            } else {
+                $interactionState = @($interactionOutput | Where-Object { $_ -eq 'skip:前回と差分なし' } | Select-Object -Last 1)
+                $summary['interaction-loop'] = if ($interactionState.Count -gt 0) { [string]$interactionState[0] } else { 'ok' }
+            }
+            Write-NightlyLog 'interaction-loop' $summary['interaction-loop']
+        } catch {
+            $summary['interaction-loop'] = ("error:" + $_.Exception.Message)
+            Write-NightlyLog 'interaction-loop' $summary['interaction-loop']
+            Write-Warning ("nightly-batch: interaction-loop: " + $_.Exception.Message)
+        }
+    } else {
+        $summary['interaction-loop'] = 'skip:ファイルなし'
+        Write-NightlyLog 'interaction-loop' $summary['interaction-loop']
     }
 
     # ルール遵守監査。失敗しても後続処理は必ず続ける。

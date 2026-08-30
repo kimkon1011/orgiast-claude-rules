@@ -63,8 +63,10 @@ function percentile(sorted, fraction) {
 export function calculateWaitStats(seconds) {
   const valid = seconds.filter(Number.isFinite).filter(value => value >= 0).sort((a, b) => a - b);
   const attended = valid.filter(value => value < 300);
+  const middle = Math.floor(valid.length / 2);
+  const median = valid.length === 0 ? 0 : valid.length % 2 ? valid[middle] : (valid[middle - 1] + valid[middle]) / 2;
   return {
-    medianSec: percentile(valid, 0.5),
+    medianSec: median,
     p75Sec: percentile(valid, 0.75),
     attendedCount: attended.length,
     attendedMinutes: Number((attended.reduce((sum, value) => sum + value, 0) / 60).toFixed(1)),
@@ -73,6 +75,42 @@ export function calculateWaitStats(seconds) {
 
 function defaultHome() {
   return process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || os.homedir();
+}
+
+const DIGEST_METRICS = [
+  ['turnsPerDay'],
+  ['stops', 'total'],
+  ['stops', 'avoidable'],
+  ['nudgeCount'],
+  ['wait', 'attendedMinutes'],
+];
+
+function metricValue(metrics, keyPath) {
+  const value = keyPath.reduce((current, key) => current?.[key], metrics);
+  return Number.isFinite(value) ? value : 0;
+}
+
+export function diffMetrics(previous, current) {
+  const result = {};
+  for (const keyPath of DIGEST_METRICS) {
+    const key = keyPath.join('.');
+    const before = previous ? metricValue(previous, keyPath) : null;
+    const now = metricValue(current, keyPath);
+    result[key] = { previous: before, current: now, change: before === null ? null : now - before };
+  }
+  return result;
+}
+
+export function shouldPublish(diff) {
+  return Object.values(diff).some(({ previous, current }) => {
+    if (previous === null) return true;
+    if (previous === 0) return current !== 0;
+    return Math.abs(current - previous) / Math.abs(previous) > 0.05;
+  });
+}
+
+export function retainMetricHistory(history, current, limit = 30) {
+  return [...(Array.isArray(history) ? history : []), current].slice(-limit);
 }
 
 function walk(dir, out) {
@@ -155,15 +193,73 @@ export async function collectInteractionStats({ home = defaultHome(), days = 14,
 }
 
 function parseArgs(argv) {
-  let days = 14, out = '', json = false;
+  let days = 14, out = '', json = false, digest = false;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--json') json = true;
+    else if (argv[i] === '--digest') digest = true;
     else if (argv[i] === '--days') days = Number.parseInt(argv[++i], 10);
     else if (argv[i].startsWith('--days=')) days = Number.parseInt(argv[i].slice(7), 10);
     else if (argv[i] === '--out') out = argv[++i] || '';
     else if (argv[i].startsWith('--out=')) out = argv[i].slice(6);
   }
-  return { days: Number.isFinite(days) && days > 0 ? days : 14, out, json };
+  return { days: Number.isFinite(days) && days > 0 ? days : 14, out, json, digest };
+}
+
+const ACTION_BY_REASON = {
+  REPORT_DONE: '止まるな hook(Done Digest)',
+  ASK_PERMISSION: '判断キュー', ASK_CHOICE: '判断キュー',
+  LIMIT_ERROR: '自動再開', EMPTY_NOTICE: '自動再開',
+  ASK_INFO: '情報の先回り取得(Prefetch)', HANDOFF: '手渡しの品質理由の再確認', OTHER: 'OTHER の再分類',
+};
+
+function formatDelta(item) {
+  if (item.previous === null) return '初回計測';
+  const arrow = item.change > 0 ? '↑' : item.change < 0 ? '↓' : '→';
+  return `${item.previous} → ${item.current} (${arrow}${Math.abs(item.change)})`;
+}
+
+export function formatDigest(result, diff) {
+  const labels = {
+    turnsPerDay: '対話回数/日', 'stops.total': '停止回数', 'stops.avoidable': '削減可能な停止',
+    nudgeCount: '「進めて」系', 'wait.attendedMinutes': '張り付き待機時間(分)',
+  };
+  const topReasons = Object.entries(result.stops.byReason).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 3);
+  const avoidable = new Set(['LIMIT_ERROR', 'EMPTY_NOTICE', 'ASK_PERMISSION', 'ASK_CHOICE', 'REPORT_DONE']);
+  const topAvoidable = Object.entries(result.stops.byReason).filter(([reason]) => avoidable.has(reason)).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0];
+  const stopRate = Number((result.stops.total / Math.max(result.days, 1)).toFixed(1));
+  return `<!-- INTERACTION-DIGEST-START -->\n` +
+    `## 🕐 対話ループ ${result.turnsPerDay}回/日 (停止 ${stopRate}回/日)\n` +
+    `${Object.entries(diff).map(([key, item]) => `- ${labels[key]}: ${formatDelta(item)}`).join('\n')}\n` +
+    `### 停止理由 上位3件\n${topReasons.length ? topReasons.map(([reason, count]) => `- ${reason}: ${count}回`).join('\n') : '- なし'}\n` +
+    `### 最優先施策\n${topAvoidable ? `- ${topAvoidable[0]} (${topAvoidable[1]}回) → ${ACTION_BY_REASON[topAvoidable[0]]}` : '- 削減可能な停止なし'}\n` +
+    `<!-- INTERACTION-DIGEST-END -->\n`;
+}
+
+function digestSnapshot(result) {
+  return {
+    generatedAt: result.generatedAt, turnsPerDay: result.turnsPerDay,
+    stops: result.stops, nudgeCount: result.nudgeCount, wait: result.wait,
+  };
+}
+
+function writeDigest(result, home) {
+  const claudeDir = path.join(home, '.claude');
+  const metricsFile = path.join(claudeDir, 'interaction-metrics.json');
+  const directiveFile = path.join(claudeDir, 'interaction-directive.md');
+  let state = { history: [] };
+  try { state = JSON.parse(fs.readFileSync(metricsFile, 'utf8')); } catch { /* first measurement */ }
+  const history = Array.isArray(state.history) ? state.history : [];
+  const previous = history.at(-1) || null;
+  const current = digestSnapshot(result);
+  const diff = diffMetrics(previous, current);
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(metricsFile, JSON.stringify({ history: retainMetricHistory(history, current) }, null, 2) + '\n');
+  if (!shouldPublish(diff)) {
+    console.log('skip:前回と差分なし');
+    return;
+  }
+  fs.writeFileSync(directiveFile, formatDigest(result, diff));
+  console.log(formatDigest(result, diff));
 }
 
 export function formatReport(result) {
@@ -181,10 +277,16 @@ export function formatReport(result) {
 if (isEntry(import.meta.url)) {
   const args = parseArgs(process.argv.slice(2));
   const result = await collectInteractionStats({ days: args.days });
+  if (args.digest) {
+    try { writeDigest(result, defaultHome()); }
+    catch (error) { console.error(`ダイジェスト保存失敗: ${error.message}`); process.exitCode = 1; }
+    process.exitCode ||= 0;
+  } else {
   const serialized = JSON.stringify(result, null, 2);
   if (args.out) {
     try { fs.mkdirSync(path.dirname(path.resolve(args.out)), { recursive: true }); fs.writeFileSync(args.out, serialized + '\n'); }
     catch (error) { console.error(`JSON保存失敗: ${error.message}`); process.exitCode = 1; }
   }
   console.log(args.json ? serialized : formatReport(result));
+  }
 }

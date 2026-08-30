@@ -107,8 +107,9 @@ test('残TODOが無ければ先頭ブロック末尾にセクションを作る'
   const md = `前\n<!-- NEXT-SESSION v1 -->\n## 対象\nrepo\n<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. 古い\n`;
   const result = injectFeedbackTodos(md, [item], api.sheetUrl).text;
   const parsed = parseHandoff(result);
-  assert.equal(parsed.todos.length, 1);
+  assert.deepEqual(parsed.todoBlocks, [1, 2]);
   assert.match(parsed.todos[0], /\[FB:fb-123\]/);
+  assert.equal(parsed.todos[1], '古い');
   assert.match(parsed.block, /## 残TODO（自動取込）/);
 });
 

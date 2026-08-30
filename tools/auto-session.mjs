@@ -40,39 +40,55 @@ export function parseHandoff(md) {
   const source = String(md ?? '');
   const { start, end } = firstBlockBounds(source);
   const block = source.slice(start, end);
-  const todoSection = sectionFrom(block, '残TODO');
   const todos = [];
-  const lines = todoSection.split(/\r?\n/).slice(1);
-  for (let index = 0; index < lines.length;) {
-    const match = lines[index].match(/^\s*\d+[.)、]\s+(.+?)\s*$/);
-    if (!match) { index += 1; continue; }
-    const todoLines = [match[1]];
-    index += 1;
-    let blankCount = 0;
-    while (index < lines.length) {
-      const line = lines[index];
-      if (/^\s*\d+[.)、]\s+/.test(line) || /^##[ \t]+/.test(line)) break;
-      if (!line.trim()) {
-        blankCount += 1;
-        if (blankCount >= 2) break;
-      } else {
-        while (blankCount > 0) { todoLines.push(''); blankCount -= 1; }
-        todoLines.push(line);
-      }
+  const todoBlocks = [];
+  const markerStarts = [...source.matchAll(/<!-- NEXT-SESSION v1 -->/g)].map((match) => match.index);
+  const blocks = markerStarts.length
+    ? markerStarts.map((blockStart, index) => source.slice(blockStart, markerStarts[index + 1] ?? source.length))
+    : [source];
+  for (const [blockIndex, currentBlock] of blocks.entries()) {
+    const todoSection = sectionFrom(currentBlock, '残TODO');
+    const lines = todoSection.split(/\r?\n/).slice(1);
+    for (let index = 0; index < lines.length;) {
+      const match = lines[index].match(/^\s*\d+[.)、]\s+(.+?)\s*$/);
+      if (!match) { index += 1; continue; }
+      const todoLines = [match[1]];
       index += 1;
+      let blankCount = 0;
+      while (index < lines.length) {
+        const line = lines[index];
+        if (/^\s*\d+[.)、]\s+/.test(line) || /^##[ \t]+/.test(line) || /^\s*---\s*$/.test(line)) break;
+        if (!line.trim()) {
+          blankCount += 1;
+          if (blankCount >= 2) break;
+        } else {
+          while (blankCount > 0) { todoLines.push(''); blankCount -= 1; }
+          todoLines.push(line);
+        }
+        index += 1;
+      }
+      todos.push(todoLines.join('\n'));
+      todoBlocks.push(blockIndex + 1);
     }
-    todos.push(todoLines.join('\n'));
   }
   const sections = {};
   for (const name of ['対象', '完了条件', '触る前に読む memory']) {
     const value = sectionFrom(block, name);
     if (value) sections[name] = value;
   }
-  return { block, todos, sections };
+  return { block, todos, todoBlocks, sections };
 }
 
 export function todoExclusionReason(todo, today = new Date()) {
   const text = String(todo);
+  const body = text.replace(/^\s*\d+[a-z]?[.)、]\s*/i, '').trim();
+  const parenthesized = (body.startsWith('（') && body.endsWith('）')) || (body.startsWith('(') && body.endsWith(')'));
+  const referenceOnly = (!/\*\*.+?\*\*/s.test(body)
+    && /(下に|上記|前ブロック|旧引き継ぎ).{0,20}(残して|そのまま|参照|有効)/s.test(body))
+    // 「以下は下の別ブロックの残TODO（1〜14）…」型の案内文は太字を含むので上の条件では拾えない。
+    // 実物でこれが採用され、子セッションに案内文だけを渡すところだった。
+    || /^以下は.{0,40}ブロックの残TODO/s.test(body);
+  if (parenthesized || referenceOnly) return '参照のみ（作業内容が無い）';
   if (/~~[^~]*~~/.test(text)) return '取り消し線（完了済み）';
   if (/(要判断|判断待ち|未決)/.test(text)) return '判断待ち';
   if (/ブロック中/.test(text)) return 'ブロック中';
@@ -689,12 +705,12 @@ export async function main(argv = process.argv.slice(2)) {
 
   const nextFile = path.join(claudeDir, 'next-session.md');
   // フォーム報告は next-session.md と独立した入力源なので、片方が無くてももう片方を止めない。
-  const parsed = fs.existsSync(nextFile) ? parseHandoff(fs.readFileSync(nextFile, 'utf8')) : { block: '', todos: [], sections: {} };
+  const parsed = fs.existsSync(nextFile) ? parseHandoff(fs.readFileSync(nextFile, 'utf8')) : { block: '', todos: [], todoBlocks: [], sections: {} };
   const feedbackIssues = listFeedbackIssues();
   const detectedHistoryCwd = config.historyCwd || detectHistoryCwd({ projectsDir: path.join(claudeDir, 'projects') });
   if (options.list) {
     const reasons = todoExclusionReasons(parsed.todos);
-    parsed.todos.forEach((todo, i) => console.log(`[next-session] ${i + 1}. ${reasons[i] ? `除外: ${reasons[i]}` : '採用'} | ${todo}`));
+    parsed.todos.forEach((todo, i) => console.log(`[next-session] ${i + 1}. [block ${parsed.todoBlocks[i]}] ${reasons[i] ? `除外: ${reasons[i]}` : '採用'} | ${todo}`));
     feedbackIssues.forEach((issue) => console.log(`[feedback] ${issue.repo}#${issue.number}. ${feedbackIssueExclusionReason(issue) ? `除外: ${feedbackIssueExclusionReason(issue)}` : '採用'} | ${issue.title}`));
     if (!feedbackIssues.length) console.log('[feedback] 0件（対象リポジトリに未対応 Issue なし、または gh なし）');
     return 0;

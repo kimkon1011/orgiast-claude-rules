@@ -119,6 +119,31 @@ function describeCloudLedger() {
   });
 }
 
+// 契約タブの中身を検証するための診断。返す列は許可リストで固定し、
+// 支払い元カード(下4桁) と 支払い元(名義) は列名ごと応答に載せない。
+// 台帳を丸ごと読むと巨大タブと機密列まで持ち出すので、必要な列だけ返す経路を用意する。
+var CLOUD_CONTRACT_SAFE_COLUMNS_ = [
+  'サービス', 'アカウント(ログインID)', 'プラン', '月額(税込)', '通貨',
+  '請求サイクル', '最終確認日', '自動検出'
+];
+
+function describeCloudContracts() {
+  return _cloudWithLock_(function() {
+    var data = _cloudRead_('クラウド契約');
+    var columns = CLOUD_CONTRACT_SAFE_COLUMNS_.map(function(name) {
+      return { name: name, index: cloudColumn(data.headers, name, true) };
+    }).filter(function(column) { return column.index >= 0; });
+    return {
+      ok: true,
+      columns: columns.map(function(column) { return column.name; }),
+      rowCount: data.rows.length,
+      rows: data.rows.map(function(row) {
+        return columns.map(function(column) { return row[column.index]; });
+      })
+    };
+  });
+}
+
 function _cloudFailure_(error) {
   return '失敗(' + (error && error.message ? error.message : String(error)) + ')';
 }

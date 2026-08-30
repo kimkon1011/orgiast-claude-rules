@@ -13,6 +13,7 @@ function _COMMANDS_() {
     setupCloudLedger: setupCloudLedger,
     unifyIntoCloudLedger: unifyIntoCloudLedger,
     describeCloudLedger: describeCloudLedger,
+    describeCloudContracts: describeCloudContracts,
     setCloudLedgerFolder: setCloudLedgerFolder
   };
 }

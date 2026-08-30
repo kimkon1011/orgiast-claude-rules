@@ -255,13 +255,28 @@ export function decideRun({ lockExists, lockPid, lockAgeMs, pidAlive, disabled }
 
 export function markTodoDone(md, todoText, note) {
   const source = String(md);
-  const { start, end } = firstBlockBounds(source);
-  const block = source.slice(start, end);
   const firstLine = String(todoText).split(/\r?\n/, 1)[0];
   const escaped = firstLine.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const lineRe = new RegExp(`^(\\s*\\d+[.)、]\\s+)${escaped}(\\s*)$`, 'm');
-  const changed = block.replace(lineRe, (_whole, prefix, suffix) => `${prefix}~~${firstLine}~~ → ✅ ${note}${suffix}`);
-  return source.slice(0, start) + changed + source.slice(end);
+  // 同じ TODO が複数ブロックに重複して残っている（実測で10件）。先頭1件だけ消すと
+  // 双子が翌晩また採用され、同じ作業を永久に繰り返す。一致する行はすべて印を付ける。
+  const lineRe = new RegExp(`^(\\s*\\d+[.)、]\\s+)(?!~~)${escaped}(\\s*)$`, 'gm');
+  return source.replace(lineRe, (_whole, prefix, suffix) => `${prefix}~~${firstLine}~~ → ✅ ${note}${suffix}`);
+}
+
+export function writeTodoDone(nextFile, todoText, note, io = {}) {
+  const read = io.read ?? fs.readFileSync;
+  const write = io.write ?? fs.writeFileSync;
+  try {
+    // 他セッションの並行更新を古いバッチ開始時スナップショットで消さないよう、書く直前に再読込する。
+    const current = read(nextFile, 'utf8');
+    const changed = markTodoDone(current, todoText, note);
+    if (changed === current) return false;
+    write(nextFile, changed, 'utf8');
+    return true;
+  } catch (error) {
+    console.warn(`auto-session: 完了 TODO を書き戻せませんでした（実行は継続します）: ${error?.message ?? error}`);
+    return false;
+  }
 }
 
 export function buildPrompt(todo, sections, repoCwd, summaryFile, timeoutMin = 60, date = new Date()) {
@@ -282,7 +297,7 @@ export function buildPrompt(todo, sections, repoCwd, summaryFile, timeoutMin = 6
 - 進捗は節目ごと（ブランチ作成 / PR 作成 / CI green / マージ / 検証結果 / 残ったこと）に ${summaryFile} へ追記する。このファイルだけは強制終了されても残るので、「やったことは必ずここに書く」。追記は \`>>\` 相当とし、全文を上書きしない。
 - 外部の定期実行（GitHub Actions の schedule など）の結果を待つ場合、5分を超えるポーリングをしてはいけない。待ちが必要なら ${summaryFile} に「検証は次回の自動セッションで行う」と追記し、~/.claude/next-session.md の残TODO先頭に検証だけの1行を追加して終了する。
 - 開始から ${Math.max(0, timeoutMin - 10)} 分でまとめに入り、サマリ追記と残TODO更新を先に済ませる。
-- 終了時は ~/.claude/next-session.md の先頭ブロックの該当 TODO 行だけを \`~~…~~ → ✅ <日付> 完了（PR #N）\` に行単位で置換し、ファイル全体を上書きしない。
+- 終了時は ~/.claude/next-session.md の該当 TODO 行だけを \`~~…~~ → ✅ <日付> 完了（PR #N）\` に行単位で置換し、ファイル全体を上書きしない。該当 TODO 行はどのブロックにあってもよく、成功時は runner 側でも印を付けるので、取り消し線が既に付いていたら何もしなくてよい。
 - 秘匿値を出力しない。
 - 外部への送信（メール、社外向け Discord、SNS、顧客連絡）は行わない。`,
     '## 完了報告\n最後に3行以内で「やったこと / 検証したこと / 残ったこと」を出力する。',
@@ -819,6 +834,7 @@ export async function main(argv = process.argv.slice(2)) {
       const closedRegistered = result.status === 'success'
         ? appendClosedSession(path.join(claudeDir, 'closed-sessions.json'), sessionId)
         : false;
+      if (result.status === 'success') writeTodoDone(nextFile, todo, `${localDate()} 完了（auto-session）`);
       const record = { todo, cwd: repoCwd, repoCwd, historyCwd, summaryFile, summary, sessionId, sessionIdSource, transcript, resumeCommand, closedRegistered, ...result };
       results.push(record);
       completedChildren += 1;

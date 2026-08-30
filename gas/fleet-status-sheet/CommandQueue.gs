@@ -11,6 +11,7 @@ function _COMMANDS_() {
     describePcInventoryHeaders: describePcInventoryHeaders,
     describeFleetLiveness: describeFleetLiveness,
     setupCloudLedger: setupCloudLedger,
+    unifyIntoCloudLedger: unifyIntoCloudLedger,
     describeCloudLedger: describeCloudLedger,
     setCloudLedgerFolder: setCloudLedgerFolder
   };

@@ -237,3 +237,9 @@ GitHub / Vercel の API からプロジェクト所在地図を作る。
 
 関連: [[project_fleet_status_sheet_sync]] [[project_pc_inventory_sheet]]
 [[feedback_delegation_paths_fail_silently]] [[feedback_never_emit_credentials_from_memory]]
+
+## E. 統合（2026-08-30）
+
+フリート稼働状況タブと拡張機能監査タブを「オージャスト クラウド契約・プロジェクト台帳」へ移し、Script Property `SHEET_ID` を台帳 ID に切り替える。以後 `_fleetSheet_()` 経由の書き込みはすべて台帳に入り、旧「オージャストAI設定 実施状況＆整合性チェック」は参照用として残す。
+
+§A の大前提1「既存のフリートシートに相乗りしない」は、フリート側へ台帳を足すのではなく、フリートから DOMAIN 共有の台帳へ吸収する今回の方向でも有効なままである。台帳側への集約により共有範囲も DOMAIN に保たれ、機密面はむしろ強くなる。

@@ -148,6 +148,37 @@ export function sanitizeEnv(env) {
   return clean;
 }
 
+export function trustKeyVariants(cwd) {
+  const original = String(cwd ?? '');
+  if (!original) return [];
+  return [...new Set([
+    original,
+    original.replaceAll('/', '\\'),
+    original.replaceAll('\\', '/'),
+  ])];
+}
+
+export function applyTrust(config, cwd) {
+  const source = config && typeof config === 'object' && !Array.isArray(config) ? config : {};
+  const sourceProjects = source.projects && typeof source.projects === 'object' && !Array.isArray(source.projects)
+    ? source.projects
+    : {};
+  const projects = { ...sourceProjects };
+  let changed = source.projects !== sourceProjects;
+
+  for (const key of trustKeyVariants(cwd)) {
+    const entry = sourceProjects[key];
+    if (entry?.hasTrustDialogAccepted === true) continue;
+    projects[key] = {
+      ...(entry && typeof entry === 'object' && !Array.isArray(entry) ? entry : {}),
+      hasTrustDialogAccepted: true,
+    };
+    changed = true;
+  }
+
+  return { config: changed ? { ...source, projects } : source, changed };
+}
+
 export function planLaunch({ claudeBin, cwd, prompt, wt }) {
   if (!claudeBin || !cwd) return null;
   if (wt) {
@@ -210,6 +241,7 @@ export async function launchNextSession(argv = [], io = {}) {
     const flags = parseArgs(argv);
     const claudeDir = path.join(home, '.claude');
     const statePath = path.join(claudeDir, 'next-session-launch.json');
+    const claudeConfigPath = path.join(home, '.claude.json');
     const handoffPath = path.join(claudeDir, 'next-session.md');
     const currentPath = path.join(claudeDir, 'current-session.json');
     const readText = async (file) => {
@@ -286,6 +318,23 @@ export async function launchNextSession(argv = [], io = {}) {
       return 0;
     }
 
+    let trustRegistered = false;
+    if (env.ORGIAST_NO_AUTO_TRUST !== '1') {
+      try {
+        // 読めなかった時に {} を土台にして書き戻すと、~/.claude.json ごと(oauthAccount や
+        // 他プロジェクトの設定まで)消える。**読めた時だけ**触る。
+        const config = await readJson(claudeConfigPath, null);
+        const usable = config && typeof config === 'object' && !Array.isArray(config);
+        const trusted = usable ? applyTrust(config, cwd) : { changed: false };
+        if (trusted.changed) {
+          const trustTmpPath = `${claudeConfigPath}.tmp-${process.pid}`;
+          await writeFile(trustTmpPath, `${JSON.stringify(trusted.config, null, 2)}\n`, 'utf8');
+          await rename(trustTmpPath, claudeConfigPath);
+          trustRegistered = true;
+        }
+      } catch { /* 信頼設定に失敗しても、次セッションの起動は止めない */ }
+    }
+
     const child = spawnProcess(plan.command, plan.args, {
       cwd: plan.cwd,
       detached: true,
@@ -305,6 +354,7 @@ export async function launchNextSession(argv = [], io = {}) {
     const tmpPath = `${statePath}.tmp-${process.pid}`;
     await writeFile(tmpPath, `${JSON.stringify(nextState, null, 2)}\n`, 'utf8');
     await rename(tmpPath, statePath);
+    if (trustRegistered) log(`[next-session] フォルダ信頼を事前登録しました: ${cwd}`);
     log(`[next-session] 新しいセッションを起動しました: ${cwd} / prompt=${flags.prompt}`);
     return 0;
   } catch (error) {

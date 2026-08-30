@@ -125,14 +125,19 @@ export function planVscodeLaunch({ codeCli, cwd, prompt, openFolder = false }) {
   return steps;
 }
 
-// 既定はターミナル。VSCode 経路(URI)は**新しいタブを開くだけでプロンプトを送信しない**ので、
-// 自動で /session-start まで到達できない(拡張 2.1.251 実測 / 2026-08-30)。argv で
-// `claude "/session-start"` を起動するターミナル経路だけが手数ゼロで成立する。
-// VSCode の中に開きたい時だけ --target vscode / ORGIAST_NEXT_SESSION_TARGET=vscode。
+// 既定は VSCode(Claude Code のタブ)。ターミナル経路は wt.exe で**別ウィンドウの CLI セッション**を
+// 立ち上げるため、VSCode 側で作業中のセッションと並走してぶつかる(2026-08-30 kim 指示で既定を反転)。
+// VSCode 経路は URI で新しいタブを開き `/session-start` を入力欄に**置くだけ**で送信はしない
+// (拡張 2.1.251 実測: webview は setInputText するのみ)。start は Enter 1 回だけ user が押す。
+// ターミナルで開きたい時だけ --target terminal / ORGIAST_NEXT_SESSION_TARGET=terminal。
+// VSCode CLI が無い機体(サーバ等)では従来どおりターミナルへフォールバックする。
 export function pickRoute({ codeCli, flagTarget, env }) {
-  if (flagTarget === 'vscode' || env.ORGIAST_NEXT_SESSION_TARGET === 'vscode') return 'vscode';
-  return 'terminal';
+  const target = flagTarget ?? env.ORGIAST_NEXT_SESSION_TARGET;
+  if (target === 'terminal') return 'terminal';
+  if (target === 'vscode') return 'vscode';
+  return codeCli ? 'vscode' : 'terminal';
 }
+
 
 // 親セッションの環境変数をそのまま渡すと、新しいセッションが「今のセッションの子」として
 // 起動してしまう(CLAUDE_CODE_SESSION_ID / CLAUDECODE / CLAUDE_CODE_MESSAGING_SOCKET を継承し、

@@ -277,9 +277,9 @@ function ensureGeminiMcp() {
   let d; try { d = JSON.parse(fs.readFileSync(p, 'utf-8')); } catch { return false; }
   const key = loadEnv(path.join(HOME, '.gemini', '.env')).GEMINI_API_KEY || process.env.GEMINI_API_KEY || '';
   const mcp = d.mcpServers = d.mcpServers || {};
-  const want = { type: 'stdio', command: 'npx', args: ['-y', '@choplin/mcp-gemini-cli', '--allow-npx'], env: { GEMINI_API_KEY: key, GEMINI_CLI_TRUST_WORKSPACE: 'true' } };
+  const want = { type: 'stdio', command: 'npx', args: ['-y', 'gemini-mcp-tool'], env: { GEMINI_API_KEY: key, GEMINI_CLI_TRUST_WORKSPACE: 'true', GEMINI_MCP_BACKEND: 'gemini' } };
   const cur = mcp['gemini-cli'];
-  const ok = cur && cur.command === 'npx' && cur.env && cur.env.GEMINI_API_KEY;
+  const ok = isCompatibleGeminiMcp(cur);
   if (ok) return false;
   if (!key) { human.push('Gemini APIキー未設定→https://aistudio.google.com/apikey で発行し ~/.gemini/.env に GEMINI_API_KEY= 保存'); return false; }
   if (DO_FIX) {
@@ -290,6 +290,11 @@ function ensureGeminiMcp() {
     return true;
   }
   return false;
+}
+function isCompatibleGeminiMcp(cur) {
+  return !!(cur && cur.env && cur.env.GEMINI_API_KEY
+    && JSON.stringify(cur.args || []).includes('gemini-mcp-tool')
+    && cur.env.GEMINI_MCP_BACKEND === 'gemini');
 }
 function checkGemini() {
   const forceMissing = FORCE_MISSING.has('gemini');
@@ -303,7 +308,7 @@ function checkGemini() {
   const key = loadEnv(path.join(HOME, '.gemini', '.env')).GEMINI_API_KEY || process.env.GEMINI_API_KEY || '';
   const keyed = !!key;
   let mcpReg = false;
-  try { const d = JSON.parse(fs.readFileSync(path.join(HOME, '.claude.json'), 'utf-8')); mcpReg = !!(d.mcpServers && d.mcpServers['gemini-cli'] && d.mcpServers['gemini-cli'].env && d.mcpServers['gemini-cli'].env.GEMINI_API_KEY); } catch {}
+  try { const d = JSON.parse(fs.readFileSync(path.join(HOME, '.claude.json'), 'utf-8')); mcpReg = isCompatibleGeminiMcp(d.mcpServers && d.mcpServers['gemini-cli']); } catch {}
   if (!installed && !indeterminate && DO_FIX) {
     if (startGeminiInstall()) installStarts.push('🔧 native環境への Gemini CLI 導入をバックグラウンドで開始しました（数分後・次回セッションで有効。ログ: ~/.claude/tool-adoption-install.log）');
     else if (!installRecentlyStarted('gemini-native')) human.push('Gemini CLI のバックグラウンド導入を開始できませんでした→手動 `npm i -g @google/gemini-cli`');
@@ -312,7 +317,7 @@ function checkGemini() {
   else if (!keyed) ensureGeminiMcp(); // human タスク追加のため
   // 使用痕跡: gemini tmp のmtime or transcript の MCP呼び出し
   const tmpUsed = newestMtime(path.join(HOME, '.gemini', 'tmp'));
-  const trUsed = transcriptHits(/gemini-cli|geminiChat|googleSearch|"gemini"\s*-p|gemini\s+-p/, USAGE_WINDOW_DAYS);
+  const trUsed = transcriptHits(/gemini-cli|geminiChat|googleSearch|ask-gemini|gemini-mcp-tool|"gemini"\s*-p|gemini\s+-p/, USAGE_WINDOW_DAYS);
   const lastUsed = tmpUsed;
   const usedDays = lastUsed ? daysAgo(lastUsed) : Infinity;
   const used = trUsed || usedDays <= USAGE_WINDOW_DAYS;

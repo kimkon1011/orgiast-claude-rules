@@ -145,7 +145,7 @@ ONBOARDING.compressed.md §3.0 / §3.0.1 の詳細（貼り付けプロンプト
 
 ## 3.0.3 Gemini CLI 連携（超大規模文脈分析・Google検索を Gemini に委譲）
 
-Claude Code から MCP 経由で Gemini CLI を呼び、**コードベース全体の読み込み・長大ログ/PDF/動画の分析・Google検索**など「Claude単体だとトークンを大量に食う処理」を Gemini(1M文脈)に逃がす。実行者ルーティング(§1.13)の一員。ツール: `googleSearch`（Gemini経由Google検索）/ `geminiChat`（大規模文脈Q&A）。
+Claude Code から MCP 経由で Gemini CLI を呼び、**コードベース全体の読み込み・長大ログ/PDF/動画の分析・Google検索**など「Claude単体だとトークンを大量に食う処理」を Gemini(1M文脈)に逃がす。実行者ルーティング(§1.13)の一員。ツール: `ask-gemini`（検索・大規模文脈Q&A）。
 
 **⚠️ 認証は GEMINI_API_KEY（Google AI Studio 無料枠）を使う。** 「gemini でログイン(Login with Google / Code Assist 無料枠)」は **2026-07 に Google が個人無料枠を廃止**し `IneligibleTierError: UNSUPPORTED_CLIENT` で弾かれる（実測確認済。OAuth自体は通るが API 呼出が不可）。→ AI Studio の API キーを使う。**各PCが自分の orgiast.jp アカウントで発行**（seisaku-team 運用PCは seisaku-team@orgiast.jp で、他も運用者自身のアカウント。共有しない）。AI Studio 無料枠は追加課金なし（レート/日次上限あり）。
 
@@ -161,8 +161,8 @@ Gemini CLI 連携をセットアップして。Claude側で完結させ、質問
    - 受領したキーは即 ~/.gemini/.env に `GEMINI_API_KEY=<値>` として保存し永続化（以降は二度と聞かない。[[credentials-never-reask]]）。既存の環境変数 GEMINI_API_KEY があればそれを使い発行不要。
 
 3. MCP 登録: ~/.claude.json の トップレベル `mcpServers` に以下を追記（既存 mcpServers は消さず追記、事前に ~/.claude.json.bak.<日付> をバックアップ）。**env で GEMINI_API_KEY を渡す**ので MCP 経由の gemini もキーで動く:
-   "gemini-cli": { "type": "stdio", "command": "npx", "args": ["-y", "@choplin/mcp-gemini-cli", "--allow-npx"], "env": { "GEMINI_API_KEY": "<手順2のキー>" } }
-   （`claude` バイナリがPATHにあれば `claude mcp add -s user gemini-cli -e GEMINI_API_KEY=<キー> -- npx -y @choplin/mcp-gemini-cli --allow-npx` でも同等）
+   "gemini-cli": { "type": "stdio", "command": "npx", "args": ["-y", "gemini-mcp-tool"], "env": { "GEMINI_API_KEY": "<手順2のキー>", "GEMINI_CLI_TRUST_WORKSPACE": "true", "GEMINI_MCP_BACKEND": "gemini" } }
+   （`claude` バイナリがPATHにあれば `claude mcp add -s user gemini-cli -e GEMINI_API_KEY=<キー> -e GEMINI_CLI_TRUST_WORKSPACE=true -e GEMINI_MCP_BACKEND=gemini -- npx -y gemini-mcp-tool` でも同等）
 
 4. 疎通確認: `GEMINI_API_KEY=<キー> gemini -p "reply PONG"` を1回叩き応答が返ることを確認（IneligibleTierError が出るならそれは無料OAuth経路。APIキーが正しく渡っているか再確認）。MCPサーバはセッション開始時ロードのため、登録後は **Claude Code の再起動が必要**。
 

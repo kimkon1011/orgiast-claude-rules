@@ -53,7 +53,7 @@ try {
     parts.push(`[生成ルーティング] 中量級の生成・推論・下書きは \`${ask} --provider kimi "指示"\` (Kimi K3・別課金プール、reasoning_effort=noneで2〜3秒)。長文脈の要約/整形は \`--provider gemini\`。Claude(監督)が自分で書くのは最後の手段。`);
   }
   if (/全体を読|コードベース全部|横断で調べ|ログ全部|PDF|検索して|調べて/.test(prompt)) {
-    parts.push('[長文脈ルーティング] MCP `gemini-cli` の `googleSearch`/`geminiChat`(無料枠1M)へ委譲。探索は Agent(Explore)に「結果200字・コード本体なし」で。');
+    parts.push('[長文脈ルーティング] MCP `gemini-cli` の `ask-gemini`(検索・長文脈Q&A)(無料枠1M)へ委譲。探索は Agent(Explore)に「結果200字・コード本体なし」で。');
   }
   const countMatch = prompt.match(/(\d{2,})\s*(件|社|行|本|通|人|個|ファイル)/);
   if (!prompt.includes('[夜間判定]') && ((countMatch && Number(countMatch[1]) >= 20) || /一括生成|全件|バックフィル|エンリッチ|洗い出して全部|棚卸し|全部に対して|再生成/.test(prompt))) {

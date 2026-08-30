@@ -259,7 +259,7 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
   - **コード実装 → Codex**（ChatGPT定額枠、§1.17。従量トークンを使わない主経路）
   - **外部事実のWeb調査・属性エンリッチ（多段・根拠URL要。例: 企業の上場/設立日/出展歴）→ Manus**（`src/lib/manus.ts` パターン。専用エージェント枠で、Claudeのweb_searchループにトークンを燃やすより適・精度も高い。sources必ず保持）
   - **定型・確定処理（集計・整形・置換・スクレイプ）→ ローカルスクリプト**（Python/Node、トークン消費ゼロ）
-  - **超大規模コンテキスト分析（コードベース全体・長大ログ/PDF/動画）／Google検索 → Gemini CLI（MCP `gemini-cli` 経由）**（**GEMINI_API_KEY**＝Google AI Studio無料枠・1M文脈。※「gemini でGoogleログイン(Code Assist個人無料枠)」は2026-07にGoogle廃止＝IneligibleTierErrorで不可、APIキーを使う。Claudeのトークンを大量に食う「全体読み込み」やWeb検索を委譲しcontextを節約。ツール: `googleSearch`/`geminiChat`。**各PCは自分のorgiast.jpアカウントでキー発行**、共有しない。§3.0.3セットアップ）
+  - **超大規模コンテキスト分析（コードベース全体・長大ログ/PDF/動画）／Google検索 → Gemini CLI（MCP `gemini-cli` 経由）**（**GEMINI_API_KEY**＝Google AI Studio無料枠・1M文脈。※「gemini でGoogleログイン(Code Assist個人無料枠)」は2026-07にGoogle廃止＝IneligibleTierErrorで不可、APIキーを使う。Claudeのトークンを大量に食う「全体読み込み」やWeb検索を委譲しcontextを節約。ツール: `ask-gemini`(検索・長文脈Q&A)。MCPサーバ実体は `gemini-mcp-tool`(env `GEMINI_MCP_BACKEND=gemini` 必須)。`@choplin/mcp-gemini-cli` は Windows で `spawn gemini ENOENT` になり使用不可（2026-08-30 実測）。**各PCは自分のorgiast.jpアカウントでキー発行**、共有しない。§3.0.3セットアップ）
   - **安い推論・分類・抽出・下書き（品質は中でよくコストを抑えたい）→ DeepSeek**（`orgiast-claude-rules/tools/deepseek-ask.mjs "指示"`・Claude従量の約1/15。難しい推論は `--reasoner`。要 ~/.claude/deepseek.env の DEEPSEEK_API_KEY）
   - **大量の軽作業（分類・整形・簡単生成）をオフライン無料で → Ollama**（`tools/ollama-ask.mjs "指示"`・ローカル実行でAPI課金ゼロ・CPU固定。品質はSonnet未満なので"軽作業限定"、難しい判断には使わない）
   - **フォールバックの受け皿 → Grok**（`--provider grok` / 単体は `tools/grok-ask.mjs`。xAI・`grok-3`。難タスク実測で 91.7%・$0.001289/task・到達性36/36 と Kimi K3 を品質/価格の両方で上回ったため、`llm-fallback.mjs` の連鎖 `groq→openrouter→gemini→deepseek→grok→kimi` の **Kimi の前**に入れてある。対話・X最新情報にも使える）

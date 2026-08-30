@@ -3,10 +3,54 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { checkSubmissions, ensureKey, notifyStale, pickTrustedKey, reconcileSubmissions } from './makimono-publish.mjs';
+import { checkSubmissions, ensureKey, findSimilarPending, notifyStale, pickTrustedKey, reconcileSubmissions } from './makimono-publish.mjs';
 
 const NOW = new Date('2026-08-27T12:00:00.000Z');
 const pending = (overrides = {}) => ({ at: '2026-08-26T12:00:00.000Z', title: 'ＡＢＣ　手順', submissionId: 'sub_dummy', status: 'pending', ...overrides });
+
+test('審査待ちの実例に近い題名を検出する', () => {
+  const logs = [{ title: 'MCPサーバが「接続済み」なのにツールが動かない時の切り分け', status: 'pending', submissionId: 'sub_0492e723', at: '2026-08-30T09:59:00.000Z' }];
+  const result = findSimilarPending(logs, { title: 'MCPサーバが「接続済み」なのに動かない — 4層の故障を切り分ける' });
+  assert.equal(result.length, 1);
+  assert.equal(result[0].submissionId, 'sub_0492e723');
+});
+
+// しきい値 0.3 の境界。実データで誤検知だった組み合わせ(類似度 0.25)は止めない。
+// 止めすぎると毎回 --force を打つことになり、警告そのものが読まれなくなる。
+test('主題が違えば語がいくつか重なっても止めない', () => {
+  const logs = [{ title: 'Windowsの定期タスクから黒いコマンドウィンドウを消す', status: 'pending', submissionId: 'sub_84528b53', at: '2026-08-28T09:27:00.000Z' }];
+  assert.deepEqual(findSimilarPending(logs, { title: 'ログオンしただけでIDEが開きAIエージェントが走り出す状態を作る（Windows/VS Code）' }), []);
+});
+
+// 言い換えが大きい実例(sub_734c6cfb → sub_913295b0)。ここを取り逃がすと同じ主題が並ぶ。
+test('言い換えが大きくても同主題の審査待ちは検出する', () => {
+  const logs = [{ title: 'MCPサーバの「Connected」は疎通の証拠にならない — 外部CLIを包むMCPを3段で検証する', status: 'pending', submissionId: 'sub_734c6cfb', at: '2026-08-30T07:16:00.000Z' }];
+  const result = findSimilarPending(logs, { title: 'CLIをラップしたMCPサーバが上流の無料枠終了で死んだらREST直叩きへ寄せる' });
+  assert.equal(result.length, 1);
+  assert.equal(result[0].submissionId, 'sub_734c6cfb');
+});
+
+test('無関係な題名は類似と判定しない', () => {
+  const logs = [{ title: 'MCPサーバが「接続済み」なのにツールが動かない時の切り分け', status: 'pending' }];
+  assert.deepEqual(findSimilarPending(logs, { title: '会食候補を地図リンク付きで3件出す秘書スキル' }), []);
+});
+
+test('published と rejected は類似判定の対象外', () => {
+  const title = 'MCPサーバが接続済みなのに動かない';
+  const logs = [{ title, status: 'published' }, { title, status: 'rejected' }];
+  assert.deepEqual(findSimilarPending(logs, { title }), []);
+});
+
+test('類似判定は入力ログを破壊しない', () => {
+  const logs = [pending({ summary: '補足情報' })]; const snapshot = structuredClone(logs);
+  findSimilarPending(logs, { title: 'ABC手順', summary: '候補の補足' });
+  assert.deepEqual(logs, snapshot);
+});
+
+test('類似判定は非配列を空配列として扱う', () => {
+  assert.deepEqual(findSimilarPending(null, { title: '題名' }), []);
+  assert.deepEqual(findSimilarPending({}, { title: '題名' }), []);
+});
 
 test('タイトルの全角半角と空白差を正規化して published に更新する', () => {
   const result = reconcileSubmissions([pending()], [{ title: 'abc手順', slug: 'abc-guide' }], NOW, 3);

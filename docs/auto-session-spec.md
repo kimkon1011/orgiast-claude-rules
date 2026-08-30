@@ -104,7 +104,7 @@ kim 決定 2026-08-26: 「/session-start を毎回打つのが手間。自動で
 - `pickCwd(todoText)` → 判定表どおりに返すこと。実在しないパスのフォールバックもテストする。
 - `resolveClaudeExe(entries)` → バージョン比較が数値セグメント比較であること（`2.1.9` より `2.1.245` が新しいと判定されること）をテストする。
 - `decideRun({ lockExists, lockPid, lockAgeMs, pidAlive, disabled })` → 起動可否の判定。stale lock 奪取・生きたロックで中止・killswitch をテストする。
-- `markTodoDone(md, todoText, note)` → **先頭ブロックの該当行だけ**が書き換わり、他ブロック・他行が 1 バイトも変わらないことをテストする。
+- `markTodoDone(md, todoText, note)` → 全ブロックを対象に、最初に一致した該当行だけが書き換わり、他ブロック・他行が 1 バイトも変わらないことをテストする。成功した子セッションの終了後、runner が書く直前にファイルを再読込して完了印を書き戻す。
 
 テストは `ORGIAST_HOME` をテンポラリに向けて実機の `~/.claude` を汚さないこと。
 

@@ -6,7 +6,7 @@ import path from 'node:path';
 
 const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-session-test-'));
 process.env.ORGIAST_HOME = isolatedHome;
-const { DEFAULT_REPO, localDate, loadConfig, detectHistoryCwd, parseHandoff, todoExclusionReason, todoExclusionReasons, dedupeKey, dedupeTodos, filterTodos, pickCwd, buildChildArgs, buildPrompt, buildFeedbackPrompt, feedbackIssueExclusionReason, filterFeedbackIssues, feedbackNotifyUrl, normalizeGitHubRepo, feedbackRepoCwd, resolveClaudeExe, decideRun, markTodoDone, extractSessionId, transcriptPath, recoverSessionId, appendClosedSession, formatResultLine, parseArgs, deadlineDecision, runChild } = await import('./auto-session.mjs');
+const { DEFAULT_REPO, localDate, loadConfig, detectHistoryCwd, parseHandoff, todoExclusionReason, todoExclusionReasons, dedupeKey, dedupeTodos, filterTodos, pickCwd, buildChildArgs, buildPrompt, buildFeedbackPrompt, feedbackIssueExclusionReason, filterFeedbackIssues, feedbackNotifyUrl, normalizeGitHubRepo, feedbackRepoCwd, resolveClaudeExe, decideRun, markTodoDone, writeTodoDone, extractSessionId, transcriptPath, recoverSessionId, appendClosedSession, formatResultLine, parseArgs, deadlineDecision, runChild } = await import('./auto-session.mjs');
 const historyCwd = String.raw`c:\Users\example\Downloads\work`;
 test.after(() => fs.rmSync(isolatedHome, { recursive: true, force: true }));
 
@@ -395,11 +395,51 @@ test('decideRun は kill switch・有効ロック・stale lock を判定する',
   assert.equal(decideRun({ disabled: false, lockExists: true, lockPid: 12, lockAgeMs: 1000, pidAlive: false }).run, true);
 });
 
-test('markTodoDone は先頭ブロックの該当行だけを変更する', () => {
+test('markTodoDone は該当行だけを変更し、他行は変えない', () => {
   const changed = markTodoDone(sample, '実装する', '2026-08-26 完了（PR #42）');
   const expected = sample.replace('1. 実装する\n', '1. ~~実装する~~ → ✅ 2026-08-26 完了（PR #42）\n');
   assert.equal(changed, expected);
   assert.ok(changed.endsWith('1. 歴史上のTODO\n'));
+});
+
+test('markTodoDone は先頭でないブロックの TODO をマークし、他の全バイトを維持する', () => {
+  const changed = markTodoDone(sample, '歴史上のTODO', '2026-08-30 完了（auto-session）');
+  const expected = sample.replace('1. 歴史上のTODO\n', '1. ~~歴史上のTODO~~ → ✅ 2026-08-30 完了（auto-session）\n');
+  assert.equal(changed, expected);
+});
+
+test('markTodoDone は複数ブロックに重複した同一 TODO をすべてマークする', () => {
+  const duplicated = `<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. 重複するTODO\n2. 別のTODO\n<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. 重複するTODO\n`;
+  const changed = markTodoDone(duplicated, '重複するTODO', '2026-08-30 完了（auto-session）');
+  assert.equal(changed.match(/~~重複するTODO~~/g)?.length, 2);
+  assert.ok(changed.includes('2. 別のTODO\n'));
+});
+
+test('markTodoDone は取り消し線付きまたは該当行なしなら入力を完全一致で返す', () => {
+  assert.equal(markTodoDone(sample, '~~完了済み~~', '2026-08-30 完了（auto-session）'), sample);
+  assert.equal(markTodoDone(sample, '存在しないTODO', '2026-08-30 完了（auto-session）'), sample);
+});
+
+test('writeTodoDone は書く直前の再読込内容へ完了印を付け、並行追加行を維持する', () => {
+  const batchSnapshot = sample;
+  const latest = batchSnapshot.replace('1. 歴史上のTODO\n', '1. 歴史上のTODO\n2) 他セッションが追加\r\n');
+  let written = '';
+  const changed = writeTodoDone('/next-session.md', '歴史上のTODO', '2026-08-30 完了（auto-session）', {
+    read: () => latest,
+    write: (_file, content) => { written = content; },
+  });
+  assert.equal(changed, true);
+  assert.equal(written, latest.replace('1. 歴史上のTODO\n', '1. ~~歴史上のTODO~~ → ✅ 2026-08-30 完了（auto-session）\n'));
+  assert.ok(written.includes('2) 他セッションが追加\r\n'));
+});
+
+test('writeTodoDone は該当行が無ければ throw せず書き込まない', () => {
+  let writes = 0;
+  assert.doesNotThrow(() => assert.equal(writeTodoDone('/next-session.md', '存在しないTODO', 'note', {
+    read: () => sample,
+    write: () => { writes += 1; },
+  }), false));
+  assert.equal(writes, 0);
 });
 
 const realShape = `<!-- NEXT-SESSION v1 -->

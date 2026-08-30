@@ -10,6 +10,7 @@ import { resolveReporterLabel } from './reporter-label.mjs';
 import { buildSpecPayload, collectHardwareSpec } from './hardware-spec.mjs';
 import { collectProjectInventory, formatArtifactsCell, formatLastCommitCell, formatProjectsCell } from './project-inventory.mjs';
 import { buildCloudLoginPayload, collectCloudInventory } from './cloud-inventory.mjs';
+import { collectInteractionAdoption } from './interaction-adoption.mjs';
 
 const dryRun = process.argv.includes('--dry-run');
 const includeSpecs = process.argv.includes('--specs');
@@ -50,6 +51,8 @@ function toJst(value) {
 async function main() {
   const claudeDir = path.join(home, '.claude');
   const fleetEnv = readEnv(path.join(claudeDir, 'fleet-sheet.env'));
+  // dry-run でも設定不足を許すと収集処理まで進み、payload が stdout に漏れる。
+  // 送信先のない PC では収集テストも不要なため、必ずここで終了する。
   if (!fleetEnv.FLEET_SHEET_URL || !fleetEnv.FLEET_SHEET_TOKEN) {
     console.error('fleet-sheet: FLEET_SHEET_URL/TOKEN 未設定のため送信しません(~/.claude/fleet-sheet.env)');
     return;
@@ -75,6 +78,8 @@ async function main() {
   const topModel = Array.isArray(reporter.topModels) && reporter.topModels[0] ? reporter.topModels[0].model : '';
   const identity = machineIdentity();
   const projects = collectProjectInventory({ projectsDir: path.join(claudeDir, 'projects') });
+  let interaction = { version: '判定不能', selftest: '判定不能', lastRun: '判定不能' };
+  try { interaction = await collectInteractionAdoption({ repo, home }); } catch { /* status報告は止めない */ }
   // Fable5(§1.16 全用途禁止)は「データが無い」を「未検出」と断定しない。
   // 判定できないのに合格扱いにするのは「timeout を未導入と誤報告」と同じ誤り。
   const fableKnown = reporter.fable5Detected !== undefined || adoption.fable5OutTok !== undefined;
@@ -98,6 +103,10 @@ async function main() {
     activeProjects: formatProjectsCell(projects),
     artifacts: formatArtifactsCell(projects),
     lastCommit: formatLastCommitCell(projects),
+    interactionLoop: interaction.version === '判定不能' && interaction.lastRun === '判定不能'
+      ? '判定不能'
+      : `${interaction.version} / 最終実行 ${interaction.lastRun}`,
+    interactionSelftest: interaction.selftest,
   };
   // スペックは status とは**別シート**(PC管理表)への別リクエストにする。
   // payload に kind:'pc-spec' を混ぜると GAS が status の upsert を行わなくなり、

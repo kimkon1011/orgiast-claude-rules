@@ -66,11 +66,11 @@ test('登録済みタスクから欠落している必須タスクだけを返�
 });
 
 test('必須タスクがすべて登録済みなら空配列を返す', () => {
-  assert.deepEqual(missingScheduledTasks(['OrgiastAutoSession']), []);
+  assert.deepEqual(missingScheduledTasks(['OrgiastAutoSession', 'OrgiastAutoSessionVerify']), []);
 });
 
 test('タスク名は大文字小文字と schtasks の先頭バックスラッシュを区別しない', () => {
-  assert.deepEqual(missingScheduledTasks(['\\ORGIASTAUTOSESSION']), []);
+  assert.deepEqual(missingScheduledTasks(['\\ORGIASTAUTOSESSION', '\\ORGIASTAUTOSESSIONVERIFY']), []);
 });
 
 test('タスク自己チェックは最終実行から20時間以内ならスキップする', () => {

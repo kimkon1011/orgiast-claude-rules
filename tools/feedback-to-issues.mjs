@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 
 export const DEFAULT_REPO_MAP = {
   '購買部管理アプリ': 'kimkon1011/purchasing-management-app',
@@ -220,4 +220,4 @@ export async function main(args = process.argv.slice(2)) {
   return 0;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) process.exitCode = await main();
+if (isEntry(import.meta.url)) process.exitCode = await main();

@@ -5,9 +5,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { enqueueJob } from './batch-enqueue.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
+import { isEntry } from './is-entry.mjs';
 
 function readJson(file, fallback) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; } }
 function jsonl(file) { try { return fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean).flatMap((line) => { try { return [JSON.parse(line)]; } catch { return []; } }); } catch { return []; } }
@@ -98,7 +98,7 @@ export function produce({ home = os.homedir(), now = new Date(), enqueue = enque
   return made;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isEntry(import.meta.url)) {
   const made = produce();
   const types = made.map((job) => job.jobType).filter(Boolean);
   console.log(`batch-producer: ${made.length}件投入${types.length ? ` [${types.join(', ')}]` : ''}${made.skipped?.length ? ` / skipped: ${made.skipped.join(', ')}` : ''}`);

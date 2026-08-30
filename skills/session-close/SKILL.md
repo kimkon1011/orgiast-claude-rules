@@ -111,8 +111,13 @@ node "$HOME/orgiast-claude-rules/tools/close-session.mjs" --session <このセ�
   / `ORGIAST_NEXT_SESSION_TARGET=vscode`（その場合 user が入力欄で送信する1手が必ず残る）。
 - 起動先の作業ディレクトリは `~/.claude/next-session.md` の `cwd:` コメント →
   `~/.claude/current-session.json` の cwd → リポジトリルート の順で決まる。だから**手順6 を先に書くこと**。
-- ターミナル経路では CLI の trust ダイアログ（「このフォルダを信頼しますか」）が出ることがある。
-  これは**セキュリティの同意ゲートなので Claude が代わりに押してはいけない**。user に Enter を1回押してもらう前提で案内する。
+- CLI の trust ダイアログ（「このフォルダを信頼しますか」）は**起動前に自動で事前登録する**ので出ない
+  （`~/.claude.json` の `projects[<cwd>].hasTrustDialogAccepted` を両表記で立てる。2026-08-30 に kim が
+  「この件は今後自動で押してほしい」と明示の恒久承認を出した → [[feedback_auto_accept_local_consent_dialogs]]）。
+  対象は**起動する cwd だけ**。止めたい時は `ORGIAST_NO_AUTO_TRUST=1`。
+  なお `~/.claude.json` が読めなかった時は**触らない**（`{}` を土台に書き戻すと設定ごと消えるため）。
+  この緩和は kim 自身のPCのローカル同意に限る。外部サービスの OAuth・支払い・共有範囲変更・他アカウントの
+  安全機構解除は**引き続き人が判断する**。
 - 抑止したい時（無人実行・連続クローズ）:
   - `node tools/close-session.mjs --session <id> --no-launch` … 起動しない
   - `CLAUDE_HEADLESS` / `CI` が立っている環境では自動で起動しない（夜間 auto-session でウィンドウを開かない）

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import {
+  applyTrust,
   buildVscodeUri,
   launchNextSession,
   parseHandoffCwd,
@@ -15,6 +16,7 @@ import {
   resolveWt,
   sanitizeEnv,
   shouldLaunch,
+  trustKeyVariants,
 } from './next-session-launch.mjs';
 
 test('VSCode CLI は明示パス、ユーザーインストール、未検出の順で解決する', () => {
@@ -125,6 +127,7 @@ function fakeIo(overrides = {}) {
       readdir: () => [],
       readFile: async (file) => {
         if (file.endsWith('next-session.md')) return '<!-- 前セッション: abc / 更新: 2026-08-28 / cwd: C:\\work -->';
+        if (file.endsWith('.claude.json')) return '{}';
         throw new Error('ENOENT');
       },
       writeFile: async (...args) => calls.writes.push(args),
@@ -151,10 +154,11 @@ test('起動成功時に detached spawn し state を tmp から原子的に更�
   // 親セッションの CLAUDE* を継承させない(継承すると新セッションが今のセッションの子になる)。
   assert.deepEqual(options.env, { CLAUDE_CLI_PATH: '/fake/claude.exe' });
   assert.equal(calls.unref, 1);
-  assert.match(calls.writes[0][0], /next-session-launch\.json\.tmp-/);
-  assert.match(calls.writes[0][1], /"lastLaunchAt"/);
-  assert.match(calls.writes[0][1], /"lastCwd": "C:\\\\work"/);
-  assert.match(calls.renames[0][1], /next-session-launch\.json$/);
+  const stateWrite = calls.writes.find(([file]) => file.includes('next-session-launch.json.tmp-'));
+  const stateRename = calls.renames.find(([, file]) => file.endsWith('next-session-launch.json'));
+  assert.match(stateWrite[1], /"lastLaunchAt"/);
+  assert.match(stateWrite[1], /"lastCwd": "C:\\\\work"/);
+  assert.ok(stateRename);
 });
 
 test('dry-run は plan だけを出して spawn しない', async () => {
@@ -257,4 +261,110 @@ test('親セッションの CLAUDE* 環境変数を新セッションへ渡さ�
     CLAUDE_CLI_PATH: '/keep/claude.exe',
     CLAUDE_CONFIG_DIR: '/keep/config',
   });
+});
+
+test('trustKeyVariants はスラッシュ両表記を重複なく返す', () => {
+  assert.deepEqual(trustKeyVariants('c:/a/b'), ['c:/a/b', 'c:\\a\\b']);
+  assert.deepEqual(trustKeyVariants('c:\\a\\b'), ['c:\\a\\b', 'c:/a/b']);
+  assert.deepEqual(trustKeyVariants(''), []);
+});
+
+test('applyTrust は元設定を破壊せず、既存フィールドを保って両表記を登録する', () => {
+  const original = {
+    theme: 'dark',
+    projects: {
+      'c:/a/b': { allowedTools: ['Read'], hasTrustDialogAccepted: false },
+    },
+  };
+  const before = structuredClone(original);
+  const result = applyTrust(original, 'c:/a/b');
+
+  assert.equal(result.changed, true);
+  assert.deepEqual(original, before);
+  assert.deepEqual(result.config.projects['c:/a/b'], {
+    allowedTools: ['Read'],
+    hasTrustDialogAccepted: true,
+  });
+  assert.deepEqual(result.config.projects['c:\\a\\b'], { hasTrustDialogAccepted: true });
+  assert.equal(result.config.theme, 'dark');
+
+  const alreadyTrusted = applyTrust(result.config, 'c:/a/b');
+  assert.equal(alreadyTrusted.changed, false);
+  assert.equal(alreadyTrusted.config, result.config);
+});
+
+test('ターミナル経路はフォルダ信頼を tmp から原子的に登録してから起動する', async () => {
+  const { io, calls } = fakeIo();
+  assert.equal(await launchNextSession([], io), 0);
+
+  const trustWriteIndex = calls.writes.findIndex(([file]) => file.includes('.claude.json.tmp-'));
+  const trustRenameIndex = calls.renames.findIndex(([, file]) => file.endsWith('.claude.json'));
+  assert.notEqual(trustWriteIndex, -1);
+  assert.notEqual(trustRenameIndex, -1);
+  const trustConfig = JSON.parse(calls.writes[trustWriteIndex][1]);
+  assert.equal(trustConfig.projects['C:\\work'].hasTrustDialogAccepted, true);
+  assert.equal(trustConfig.projects['C:/work'].hasTrustDialogAccepted, true);
+  assert.match(calls.logs.join('\n'), /フォルダ信頼を事前登録しました: C:\\work/);
+  assert.equal(calls.spawn.length, 1);
+});
+
+test('フォルダ信頼が両表記で登録済みなら .claude.json を書き込まない', async () => {
+  const { io, calls } = fakeIo({
+    readFile: async (file) => {
+      if (file.endsWith('next-session.md')) return '<!-- cwd: C:\\work -->';
+      if (file.endsWith('.claude.json')) return JSON.stringify({
+        projects: {
+          'C:\\work': { hasTrustDialogAccepted: true },
+          'C:/work': { hasTrustDialogAccepted: true },
+        },
+      });
+      throw new Error('ENOENT');
+    },
+  });
+  assert.equal(await launchNextSession([], io), 0);
+  assert.equal(calls.writes.some(([file]) => file.includes('.claude.json')), false);
+  assert.equal(calls.spawn.length, 1);
+});
+
+test('ORGIAST_NO_AUTO_TRUST=1 は信頼設定だけを飛ばして起動する', async () => {
+  const { io, calls } = fakeIo({
+    env: { CLAUDE_CLI_PATH: '/fake/claude.exe', ORGIAST_NO_AUTO_TRUST: '1' },
+  });
+  assert.equal(await launchNextSession([], io), 0);
+  assert.equal(calls.writes.some(([file]) => file.includes('.claude.json')), false);
+  assert.equal(calls.spawn.length, 1);
+});
+
+test('~/.claude.json が読めない/壊れている時は絶対に書き戻さない', async () => {
+  // {} を土台に書き戻すと oauthAccount や他プロジェクトの設定ごと消える。
+  for (const broken of ['{ こわれている', '']) {
+    const { io, calls } = fakeIo({
+      readFile: async (file) => {
+        if (file.endsWith('next-session.md')) return '<!-- 前セッション: abc / 更新: 2026-08-28 / cwd: C:\\work -->';
+        if (file.endsWith('.claude.json')) return broken;
+        throw new Error('ENOENT');
+      },
+    });
+    assert.equal(await launchNextSession([], io), 0);
+    assert.equal(calls.writes.some(([file]) => file.includes('.claude.json')), false);
+    // 信頼登録に失敗しても起動そのものは止めない。
+    assert.equal(calls.spawn.length, 1);
+  }
+});
+
+test('VSCode 経路は .claude.json を読み書きしない', async () => {
+  const codeCli = 'C:\\Code\\bin\\code.cmd';
+  const reads = [];
+  const base = fakeIo();
+  const originalReadFile = base.io.readFile;
+  base.io.env = { VSCODE_CLI_PATH: codeCli };
+  base.io.exists = (file) => file === codeCli;
+  base.io.readFile = async (file, ...args) => {
+    reads.push(file);
+    return originalReadFile(file, ...args);
+  };
+
+  assert.equal(await launchNextSession(['--target', 'vscode'], base.io), 0);
+  assert.equal(reads.some((file) => file.endsWith('.claude.json')), false);
+  assert.equal(base.calls.writes.some(([file]) => file.includes('.claude.json')), false);
 });

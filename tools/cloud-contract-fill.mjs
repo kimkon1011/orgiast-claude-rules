@@ -226,16 +226,17 @@ export async function run(args = process.argv.slice(2), dependencies = {}) {
   for (const item of written) io.log(`  ${item.vendor} -> ${item.target.service} / ${item.target.account || '(空アカウント)'} ${JSON.stringify(item.contract)}`);
   io.log(`ambiguous: ${ambiguous.length}件`);
   for (const item of ambiguous) io.log(`  ${item.vendor} -> ${item.targets.map((target) => `${target.service} / ${target.account || '(空アカウント)'}`).join(', ')}`);
-  if (stale.length === 0) io.log('⚠️ 直近3か月に課金なし（解約 / カード変更 / 年払いの可能性）: 0件');
+  if (stale.length === 0) io.log('⚠️ 直近3か月の課金が1回以下＝月額を書かない（年払い / 単発 / 解約 / freee未同期のカード の可能性）: 0件');
   for (const item of stale) {
-    io.log(`⚠️ 直近3か月に課金なし（解約 / カード変更 / 年払いの可能性）: ${item.vendor} (最終課金 ${item.lastChargedMonth}, 月額だった額 ¥${item.previousMonthlyJpy.toLocaleString('ja-JP')})`);
+    io.log(`⚠️ 直近3か月の課金が1回以下＝月額を書かない（年払い / 単発 / 解約 / freee未同期のカード の可能性）: ${item.vendor} (最終課金 ${item.lastChargedMonth}, 月額だった額 ¥${item.previousMonthlyJpy.toLocaleString('ja-JP')})`);
   }
   io.log(`台帳に行が無いベンダー: ${missing.length}件`);
   for (const vendor of missing) io.log(`  ${vendor}`);
   const unmatched = (Array.isArray(aggregate.unmatched) ? aggregate.unmatched : [])
-    .slice().sort((a, b) => Number(b?.count ?? 0) - Number(a?.count ?? 0)).slice(0, 10);
-  io.log(`unmatched 上位10件: ${unmatched.length}件`);
-  for (const item of unmatched) io.log(`  ${unmatchedLabel(item)} (${Number(item?.count ?? 0)}件)`);
+    .slice().sort((a, b) => Number(b?.amount ?? 0) - Number(a?.amount ?? 0)).slice(0, 10);
+  // 辞書を育てるための材料。金額の大きい順に出す(件数はこの配列に無いので出さない)。
+  io.log(`辞書に無かった明細 上位10件(金額順・全${Number(aggregate.unmatchedTotalCount ?? unmatched.length)}件):`);
+  for (const item of unmatched) io.log(`  ¥${Number(item?.amount ?? 0).toLocaleString('ja-JP')} ${unmatchedLabel(item)}`);
   return 0;
 }
 

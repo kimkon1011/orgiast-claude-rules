@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 
 export function pickActiveBuckets(entries, now, days) {
   const nowMs = new Date(now).getTime();
@@ -108,5 +108,5 @@ export function collectProjectInventory(options = {}) {
   return summarizeProjects(items, limit);
 }
 
-const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+const isMain = isEntry(import.meta.url);
 if (isMain) console.log(JSON.stringify(collectProjectInventory(), null, 2));

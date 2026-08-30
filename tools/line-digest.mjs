@@ -2,8 +2,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { pathToFileURL } from 'node:url';
 import { callWithFallback, FALLBACK_CHAIN } from './llm-fallback.mjs';
+import { isEntry } from './is-entry.mjs';
 
 const CATEGORIES = new Set(['cost', 'quality', 'model-release', 'tool', 'prompt-technique', 'other']);
 const PROVIDERS = {
@@ -279,5 +279,5 @@ export async function runDigest(options = {}) {
   return { processed: successfullyClassified.size, held: held.length, proposals: appended.added.length, status };
 }
 
-const isMain = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+const isMain = isEntry(import.meta.url);
 if (isMain) runDigest({ args: process.argv.slice(2) }).catch((error) => { console.error(error.message); process.exitCode = 1; });

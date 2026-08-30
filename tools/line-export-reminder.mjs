@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 
 const DAY_MS = 86_400_000;
 const COOLDOWN_MS = 3 * DAY_MS;
@@ -122,5 +122,4 @@ export async function main(argv = process.argv.slice(2), options = {}) {
   return 0;
 }
 
-const isEntry = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
-if (isEntry) process.exitCode = await main();
+if (isEntry(import.meta.url)) process.exitCode = await main();

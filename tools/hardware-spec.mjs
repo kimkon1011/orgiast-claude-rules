@@ -2,7 +2,7 @@
 import osModule from 'node:os';
 import fsModule from 'node:fs';
 import { execFileSync as nodeExecFileSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 
 const PRESENCE = new Set(['あり', 'なし', '判定不能']);
 const FIELDS = ['maker','computerName','model','cpu','gpu','os','bits','memoryType','memoryGb','memorySlotsFree','memoryMaxGb','diskType','diskGb','opticalDrive','lan','wifi','hdmi'];
@@ -147,7 +147,7 @@ export function buildSpecPayload(spec, hostname = spec?.computerName || '') {
   return { kind: 'pc-spec', hostname: text(hostname), spec: clean };
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isEntry(import.meta.url)) {
   const spec = collectHardwareSpec();
   console.log(process.argv.includes('--json') ? JSON.stringify(spec, null, 2) : formatSpecTable(spec));
   const hardwareFields = FIELDS.filter(key => key !== 'computerName');

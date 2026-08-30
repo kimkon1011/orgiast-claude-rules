@@ -2,9 +2,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 import crypto from 'node:crypto';
 import { readEnvValue } from './env-kv.mjs';
+import { isEntry } from './is-entry.mjs';
 
 export const REGION_BASES = Object.freeze({
   'aws:us-west-2': 'https://api.plaud.ai',
@@ -632,6 +632,6 @@ export async function run(argv = process.argv.slice(2), dependencies = {}) {
   } finally { releaseLock(lockPath, lockFd); }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isEntry(import.meta.url)) {
   process.exitCode = await run();
 }

@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 
 export const PROVIDERS = {
   deepseek: { model: 'deepseek-chat' }, gemini: { model: 'gemini-3.7-flash' },
@@ -62,4 +62,4 @@ export function runCli(args = process.argv.slice(2)) {
   return 0;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) process.exitCode = runCli();
+if (isEntry(import.meta.url)) process.exitCode = runCli();

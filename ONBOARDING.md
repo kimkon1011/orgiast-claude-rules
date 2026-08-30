@@ -290,6 +290,36 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
 
 「すすめて」と打たせない。完了報告の後は自動で次のTODO（git commit/vercel prod deploy/Layer2 e2e/memory反映等）に着手する。設計判断・破壊的操作・未承認prod送信・大型リファクタのみAskUserQuestionで待つ。報告末尾に「残TODO」セクションを付ける。詳細・自動着手チェックリスト: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/autonomy-and-reporting.md`
 
+### 1.15.1 セッションを閉じたら次のセッションを自動で立ち上げる（全アカウント・全PC共通 / 2026-08-30 kim 指示）
+
+**user に「新しいセッションを開いて `/session-start` と打って」と言わない。** `/session-close` の最後に走る
+`tools/close-session.mjs` が、セッションを退避したあと `tools/next-session-launch.mjs` を呼び、**次のセッションを自分で立ち上げる**。
+
+- **立ち上げ先は Claude Code（VSCode のタブ）。ターミナルの別ウィンドウでは開かない**（kim 指示）。
+  拡張の URI ハンドラ `code.cmd --open-url "vscode://Anthropic.claude-code/open?prompt=<encodeURIComponent>"` を使う。
+  `session` を付けなければ新規会話になる。**`Code.exe --open-url` を直に叩くと `bad option` で落ちる**ので必ず `bin/code.cmd`
+  （Windows の node は `.cmd` を execFile できないため `cmd.exe /c` を挟む）。
+  **`code.cmd <cwd>` を先に走らせてはいけない**——そのフォルダを開いている既存ウィンドウが再読み込みされ、拡張ホストが再起動して
+  作業中のセッションが巻き添えになる（実測）。
+- **user の操作は Enter 1回だけ**。拡張の webview は初期プロンプトを `setInputText` するだけで送信しない（2.1.251 実体）。
+  `code` CLI に `--command` は無く、SendKeys の代打ちは前面が別アプリだと誤爆するので採らない。
+- VSCode CLI が無い機体（サーバ等）だけ**ターミナル経路へ自動フォールバック**（`wt.exe` + `claude.exe`、argv 起動なので送信まで自動）。
+  明示切替は `--target vscode|terminal` / `ORGIAST_NEXT_SESSION_TARGET`。
+- 起動先の作業ディレクトリは `~/.claude/next-session.md` の `cwd:` コメント → `current-session.json` → リポジトリルート の順。
+  **だから `/session-close` は引き継ぎファイルを書いてから** close-session を呼ぶ。
+- **フォルダ信頼の確認は起動前に自動登録して出さない**（`~/.claude.json` の `projects[<cwd>].hasTrustDialogAccepted` を
+  バックスラッシュ／スラッシュ**両表記**で立てる。対象は起動する cwd だけ）。`~/.claude.json` が読めない時は**触らない**
+  （`{}` を土台に書き戻すと `oauthAccount` ごと消える）。止めるなら `ORGIAST_NO_AUTO_TRUST=1`。
+  **この自動承認は自分のPCのローカル確認に限る**。外部サービスの OAuth・支払い・共有範囲変更・他アカウントの安全機構解除は今も人が判断する。
+- **どのアカウントで開くか**: Claude Code のログインは **config dir 単位**（`~/.claude/.credentials.json`）で、CLI に `--account` は無い。
+  ランチャーは `CLAUDE_CONFIG_DIR` だけ落とさず引き継ぐので、**閉じたセッションと同じアカウント**で開く。
+  アカウントを分ける機体では config dir を分けて `CLAUDE_CONFIG_DIR` を指定する。
+- 無人実行では立ち上げない（`CLAUDE_HEADLESS` / `CI`）。120秒デバウンス・`--no-launch`・
+  `~/.claude/next-session-launch.json` の `{"enabled": false}` で抑止できる。
+- **他PCへの反映条件**: この機能は `orgiast-claude-rules` の `tools/` と `skills/session-close/` に入っている。
+  各PCが **リポジトリを main へ更新**し、`skills/` を `~/.claude/skills/` へ配れば有効になる（`/rules-sync`）。
+  リポが古いPCでは動かないので、動いていない時はまず `git log origin/main..HEAD` と `git status` を見る。
+
 ### 1.16 Fable5 の使用は中止
 
 `claude-fable-5` / `model:"fable"` は**すべての用途で禁止**（別課金枠、追加コスト）。サブエージェント・直接呼び出し・SDK経由すべて対象。生成品質はOpus、速度・単純タスクはSonnet/Haiku、コーディングはCodex（§1.17）で代替。ユーザーが明示的に「Fable5で」と言った時のみ例外。

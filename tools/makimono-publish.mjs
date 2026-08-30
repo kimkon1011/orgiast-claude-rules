@@ -67,6 +67,16 @@ const allows = (args) => args.flatMap((x, i) => x === '--allow' ? [args[i + 1]] 
 function showFindings(findings) { findings.forEach((x) => console.error(`${x.line}行目 [${x.pattern}] ${x.sample}`)); }
 function slugify(s) { return String(s).normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '').slice(0, 60) || 'draft'; }
 function normalizedTitle(title) { return String(title ?? '').normalize('NFKC').replace(/\s/gu, '').toLowerCase(); }
+export function titleSimilarity(a, b) {
+  const left = normalizedTitle(a), right = normalizedTitle(b); if (!left || !right) return 0; if (left === right) return 1; if (left.length < 2 || right.length < 2) return 0;
+  const counts = new Map(); for (let i = 0; i < left.length - 1; i++) { const bigram = left.slice(i, i + 2); counts.set(bigram, (counts.get(bigram) || 0) + 1); }
+  let matches = 0; for (let i = 0; i < right.length - 1; i++) { const bigram = right.slice(i, i + 2), count = counts.get(bigram) || 0; if (count) { matches++; counts.set(bigram, count - 1); } }
+  return 2 * matches / (left.length + right.length - 2);
+}
+export function findSimilarSubmissions(title, logs, { threshold = 0.5 } = {}) {
+  if (!Array.isArray(logs) || !logs.length) return [];
+  return logs.filter((entry) => entry?.status !== 'rejected').map((entry) => ({ title: entry?.title, submissionId: entry?.submissionId, status: entry?.status, score: titleSimilarity(title, entry?.title) })).filter((entry) => entry.score >= threshold).sort((a, b) => b.score - a.score);
+}
 export function reconcileSubmissions(logs, listings, now, staleDays) {
   const nowMs = new Date(now).getTime();
   const publishedByTitle = new Map((Array.isArray(listings) ? listings : []).map((listing) => [normalizedTitle(listing?.title), listing]));
@@ -185,6 +195,7 @@ async function main() {
   if (args.includes('--dry')) { console.log(JSON.stringify({ ...payload, body: `${body.slice(0, 200)}… (${body.length}文字)` }, null, 2)); return; }
   let logs = readSubmissionLogs(); const logFile = homeFile('makimono-submissions.json');
   const hash = crypto.createHash('sha256').update(body).digest('hex').slice(0, 16); if (logs.some((x) => x.sha256 === hash)) { console.log('同一内容を出品済み'); return; }
+  const similar = findSimilarSubmissions(title, logs); if (similar.length && !args.includes('--force')) { console.error(`近い題名の出品が既にあります（${similar.length}件）。重複の可能性:`); similar.forEach((entry) => console.error(`- ${entry.title} (${entry.status} / ${entry.submissionId || 'ID不明'} / 類似度 ${entry.score.toFixed(2)})`)); console.error('本当に別物なら --force を付けて再実行してください。'); process.exitCode = 2; return; }
   const auth = await ensureKey({ logTrusted: true }); const response = await fetch(`${BASE}/api/v1/listings`, { method: 'POST', headers: { authorization: `Bearer ${auth.key}`, 'content-type': 'application/json' }, body: JSON.stringify(payload), signal: AbortSignal.timeout(8000) }); const data = await response.json(); if (!response.ok) throw new Error(`出品 HTTP ${response.status}: ${data.error || '失敗'}`);
   logs.push({ at: new Date().toISOString(), title, category, submissionId: data.submissionId, status: data.status, email: auth.email, sha256: hash }); fs.mkdirSync(path.dirname(logFile), { recursive: true }); fs.writeFileSync(logFile, `${JSON.stringify(logs, null, 2)}\n`);
   console.log(JSON.stringify({ submissionId: data.submissionId, status: data.status })); console.log('確認: https://makimono-md.vercel.app/contribute');

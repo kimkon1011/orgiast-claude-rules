@@ -3,10 +3,40 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { checkSubmissions, ensureKey, notifyStale, pickTrustedKey, reconcileSubmissions } from './makimono-publish.mjs';
+import { checkSubmissions, ensureKey, findSimilarSubmissions, notifyStale, pickTrustedKey, reconcileSubmissions, titleSimilarity } from './makimono-publish.mjs';
 
 const NOW = new Date('2026-08-27T12:00:00.000Z');
 const pending = (overrides = {}) => ({ at: '2026-08-26T12:00:00.000Z', title: 'ＡＢＣ　手順', submissionId: 'sub_dummy', status: 'pending', ...overrides });
+
+test('pending の近似題名を検出する', () => {
+  const logs = [pending({ title: 'MCPが接続済みなのにツールが死んでいる時の対処' })];
+  const result = findSimilarSubmissions('MCPが接続済みなのにツールが死んでいる時の直し方', logs);
+  assert.equal(result.length, 1); assert.ok(result[0].score >= 0.6);
+});
+
+test('言い換えの重複（実測 0.51 相当）も検出する', () => {
+  const logs = [pending({ title: 'AIの永続メモリ索引が読み込み上限で黙って切り捨てられる問題を直す' })];
+  const result = findSimilarSubmissions('AIの記憶インデックスが読み込み上限で黙って切られる問題の検出と恒久対策', logs);
+  assert.equal(result.length, 1);
+});
+
+test('無関係な題名は近似題名として検出しない', () => {
+  const logs = [pending({ title: 'MCPが接続済みなのにツールが死んでいる時の対処' })];
+  assert.deepEqual(findSimilarSubmissions('freee CSV を Sheets へ取り込む手順', logs), []);
+});
+
+test('rejected の近似題名は無視する', () => {
+  const logs = [pending({ title: 'MCPが接続済みなのにツールが死んでいる時の対処', status: 'rejected' })];
+  assert.deepEqual(findSimilarSubmissions('MCPが接続済みなのにツールが死んでいる時の直し方', logs), []);
+});
+
+test('題名の全角半角・空白・大文字小文字を吸収する', () => {
+  assert.equal(titleSimilarity('ＭＣＰ 接続', 'mcp接続'), 1);
+});
+
+test('logs が空配列または undefined でも空配列を返す', () => {
+  assert.deepEqual(findSimilarSubmissions('題名', []), []); assert.deepEqual(findSimilarSubmissions('題名', undefined), []);
+});
 
 test('タイトルの全角半角と空白差を正規化して published に更新する', () => {
   const result = reconcileSubmissions([pending()], [{ title: 'abc手順', slug: 'abc-guide' }], NOW, 3);

@@ -15,6 +15,7 @@
 // 1つでも破れたら exit 1。
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 
@@ -141,23 +142,47 @@ function optionValue(argv, name, required = true) {
   return argv[index + 1];
 }
 
+function allMemoryDirectories() {
+  const projectsDir = path.join(os.homedir(), '.claude', 'projects');
+  if (!fs.existsSync(projectsDir)) return [];
+  return fs.readdirSync(projectsDir, { withFileTypes: true })
+    .filter((item) => item.isDirectory())
+    .map((item) => path.join(projectsDir, item.name, 'memory'))
+    .filter((directory) => fs.existsSync(path.join(directory, 'MEMORY.md')))
+    .map((directory) => ({ directory, mtime: fs.statSync(path.dirname(directory)).mtimeMs }))
+    .sort((a, b) => b.mtime - a.mtime)
+    .map((candidate) => candidate.directory);
+}
+
+function reportReachability(directory) {
+  const result = verifyReachability(directory);
+  console.log(`到達可能性: ${result.totalFiles - result.unreachable.length}/${result.totalFiles}件（索引ルート ${result.rootEntries}件）: ${directory}`);
+  if (result.unreachable.length) {
+    console.error(`到達不能 (${result.unreachable.length}件):`);
+    for (const name of result.unreachable) console.error(`- ${name}`);
+    throw new Error('到達可能性検証に失敗しました');
+  }
+  console.log('到達可能性 OK: 全 memory に到達可能');
+  return result;
+}
+
 export function run(argv = process.argv.slice(2)) {
   if (argv.includes('--reachability')) {
-    const allowed = new Set(['--reachability', '--dir']);
+    const allowed = new Set(['--reachability', '--dir', '--all-projects']);
     for (let index = 0; index < argv.length; index += 1) {
       if (!allowed.has(argv[index])) throw new Error(`不明なオプションです: ${argv[index]}`);
       if (argv[index] === '--dir') index += 1;
     }
-    const directory = path.resolve(optionValue(argv, '--dir', false) ?? path.dirname(path.resolve(optionValue(argv, '--after', false) ?? 'MEMORY.md')));
-    const result = verifyReachability(directory);
-    console.log(`到達可能性: ${result.totalFiles - result.unreachable.length}/${result.totalFiles}件（索引ルート ${result.rootEntries}件）`);
-    if (result.unreachable.length) {
-      console.error(`到達不能 (${result.unreachable.length}件):`);
-      for (const name of result.unreachable) console.error(`- ${name}`);
-      throw new Error('到達可能性検証に失敗しました');
+    const directoryOption = optionValue(argv, '--dir', false);
+    const allProjects = argv.includes('--all-projects');
+    if (directoryOption && allProjects) throw new Error('--dir と --all-projects は同時に指定できません');
+    const directories = allProjects ? allMemoryDirectories() : [path.resolve(directoryOption ?? path.dirname(path.resolve(optionValue(argv, '--after', false) ?? 'MEMORY.md')))];
+    if (!directories.length) {
+      console.log('対象の MEMORY.md はありません');
+      return [];
     }
-    console.log('到達可能性 OK: 全 memory に到達可能');
-    return result;
+    const results = directories.map(reportReachability);
+    return allProjects ? results : results[0];
   }
   const beforeFile = path.resolve(optionValue(argv, '--before'));
   const afterFile = path.resolve(optionValue(argv, '--after'));

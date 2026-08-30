@@ -26,8 +26,46 @@ export function parseRepoMap(value = '') {
   return result;
 }
 
+export function parseHostMap(value = '') {
+  const result = {};
+  for (const entry of String(value).split(',')) {
+    const separator = entry.indexOf('=');
+    if (separator < 1) continue;
+    const host = entry.slice(0, separator).trim();
+    const repo = entry.slice(separator + 1).trim();
+    // gh に渡す値と URL の照合キーを設定から安全に限定し、意図しないコマンド解釈を防ぐ。
+    if (/^[A-Za-z0-9.-]+$/.test(host) && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) {
+      result[host.toLowerCase()] = repo;
+    }
+  }
+  return result;
+}
+
 export function resolveRepo(appName, mapValue = '') {
   return { ...DEFAULT_REPO_MAP, ...parseRepoMap(mapValue) }[clean(appName)] || null;
+}
+
+export function resolveRepoFromUrl(sourceUrl, repoMapValue = '', hostMapValue = '') {
+  let hostname;
+  try {
+    hostname = new URL(clean(sourceUrl)).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+  if (!hostname) return null;
+
+  const explicitRepo = parseHostMap(hostMapValue)[hostname];
+  if (explicitRepo) return explicitRepo;
+
+  const firstLabel = hostname.split('.')[0];
+  const repoMap = { ...DEFAULT_REPO_MAP, ...parseRepoMap(repoMapValue) };
+  // URL から未知のリポジトリを推測せず、既に許可された表の値だけを候補にする。
+  return Object.values(repoMap).find((repo) => repo.split('/')[1]?.toLowerCase() === firstLabel) || null;
+}
+
+export function resolveRepoForItem(item, repoMapValue = '', hostMapValue = '') {
+  return resolveRepo(item?.app_name, repoMapValue)
+    || resolveRepoFromUrl(item?.source_url, repoMapValue, hostMapValue);
 }
 
 export function buildIssueTitle(item) {
@@ -48,12 +86,12 @@ export function buildIssueBody(item) {
   return lines.join('\n');
 }
 
-export function isIssueCandidate(item, mapValue = '') {
-  return item?.parse_ok === true && Boolean(resolveRepo(item?.app_name, mapValue)) && Boolean(buildIssueTitle(item));
+export function isIssueCandidate(item, mapValue = '', hostMapValue = '') {
+  return item?.parse_ok === true && Boolean(resolveRepoForItem(item, mapValue, hostMapValue)) && Boolean(buildIssueTitle(item));
 }
 
-export function selectCandidates(items, limit, mapValue = '') {
-  const candidates = items.filter((item) => isIssueCandidate(item, mapValue));
+export function selectCandidates(items, limit, mapValue = '', hostMapValue = '') {
+  const candidates = items.filter((item) => isIssueCandidate(item, mapValue, hostMapValue));
   return { selected: candidates.slice(0, limit), remaining: Math.max(0, candidates.length - limit) };
 }
 
@@ -136,6 +174,7 @@ export async function main(args = process.argv.slice(2)) {
   }
 
   const repoMapValue = process.env.FEEDBACK_REPO_MAP || '';
+  const hostMapValue = process.env.FEEDBACK_HOST_MAP || '';
   const reasons = {};
   let items;
   const urls = relayUrls(config.url);
@@ -148,7 +187,7 @@ export async function main(args = process.argv.slice(2)) {
     return 1;
   }
 
-  const { selected, remaining: overLimit } = selectCandidates(items, limit, repoMapValue);
+  const { selected, remaining: overLimit } = selectCandidates(items, limit, repoMapValue, hostMapValue);
   const selectedIds = new Set(selected.map((item) => String(item.message_id)));
   let created = 0;
   let acked = 0;
@@ -160,11 +199,17 @@ export async function main(args = process.argv.slice(2)) {
       increment(reasons, '解析失敗');
       continue;
     }
-    const repo = resolveRepo(item?.app_name, repoMapValue);
+    const appRepo = resolveRepo(item?.app_name, repoMapValue);
+    const repo = resolveRepoForItem(item, repoMapValue, hostMapValue);
     if (!repo) {
       console.log(`feedback-to-issues: 未マッピングなのでスキップ app=${clean(item?.app_name)} message_id=${messageId}`);
       increment(reasons, '未マッピング');
       continue;
+    }
+    if (!appRepo) {
+      let hostname = '';
+      try { hostname = new URL(clean(item?.source_url)).hostname; } catch {}
+      console.log(`feedback-to-issues: アプリ名が解決できないため提出元URLのホストで解決 host=${hostname} repo=${repo}`);
     }
     const title = buildIssueTitle(item);
     if (!title) {

@@ -440,12 +440,20 @@ function extensionExecutables() {
   } catch { return []; }
 }
 
-function runChild(executable, prompt, repoCwd, historyCwd, timeoutMs) {
+export function runChild(executable, prompt, repoCwd, historyCwd, timeoutMs) {
   return new Promise((resolve) => {
     const startedAt = new Date();
-    const child = spawn(executable, buildChildArgs(repoCwd, historyCwd), {
-      cwd: historyCwd, env: { ...process.env, CLAUDE_HEADLESS: '1' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
-    });
+    let child;
+    try {
+      child = spawn(executable, buildChildArgs(repoCwd, historyCwd), {
+        cwd: historyCwd, env: { ...process.env, CLAUDE_HEADLESS: '1' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
+      });
+    } catch (error) {
+      // spawn は Windows で EFTYPE/ENOENT を同期 throw する。child.on('error') では拾えず、
+      // Promise executor の外へ抜けて main ごと落ち、残りのTODOも通知も丸ごと消える（実測）。
+      resolve({ startedAt: startedAt.toISOString(), endedAt: new Date().toISOString(), exitCode: null, status: 'failure', launchFailed: true, stdout: '', stderr: String(error?.message ?? error) });
+      return;
+    }
     let stdout = '';
     let stderr = '';
     let timedOut = false;
@@ -763,6 +771,7 @@ export async function main(argv = process.argv.slice(2)) {
     for (const todo of selected) {
       const timing = beforeChild();
       if (!timing.run) break;
+      try {
       const repoCwd = pickCwd(todo, fs.existsSync, config.repoByKeyword);
       const historyCwd = fs.existsSync(detectedHistoryCwd) ? detectedHistoryCwd : repoCwd;
       const day = localDate();
@@ -798,6 +807,12 @@ export async function main(argv = process.argv.slice(2)) {
       results.push(record);
       completedChildren += 1;
       fs.writeFileSync(runFile, JSON.stringify(record, null, 2));
+      } catch (error) {
+        // 1件の想定外の失敗で残りのTODOと最後の通知まで消さない。
+        completedChildren += 1;
+        results.push({ todo, status: 'failure', launchFailed: true, stderr: String(error?.message ?? error), startedAt: new Date().toISOString(), endedAt: new Date().toISOString() });
+        console.warn(`auto-session: TODO の処理に失敗しました（次へ進みます）: ${error?.message ?? error}`);
+      }
     }
     for (const issue of selectedFeedback) {
       if (deadlineNote) break;

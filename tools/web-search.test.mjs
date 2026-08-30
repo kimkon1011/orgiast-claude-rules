@@ -1,6 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { runCli } from './web-search.mjs';
+
+const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'web-search-test-'));
+process.env.ORGIAST_HOME = isolatedHome;
+test.after(() => fs.rmSync(isolatedHome, { recursive: true, force: true }));
 
 function outputSink() {
   let value = '';
@@ -163,4 +170,58 @@ test('Gemini parts の text を持たない要素を無視して本文を連結�
   });
   assert.equal(code, 0);
   assert.equal(JSON.parse(out.read()).answer, '前半後半');
+});
+
+test('Gemini 成功時に token と grounded を台帳へ追記する', async () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'web-search-ledger-'));
+  try {
+    const usageFile = path.join(temp, 'executor-usage.jsonl');
+    const fetchImpl = async () => response({
+      usageMetadata: { promptTokenCount: 12, candidatesTokenCount: 34 },
+      candidates: [{ content: { parts: [{ text: '回答' }] }, groundingMetadata: { groundingChunks: [] } }],
+    });
+    const code = await runCli(['質問', '--provider', 'gemini'], {
+      geminiApiKey: 'test', fetchImpl, usageFile,
+      stdout: outputSink().stream, stderr: outputSink().stream,
+    });
+    assert.equal(code, 0);
+    const rows = fs.readFileSync(usageFile, 'utf8').trim().split('\n').map(JSON.parse);
+    assert.equal(rows.length, 1);
+    assert.deepEqual({ provider: rows[0].provider, in: rows[0].in, out: rows[0].out, grounded: rows[0].grounded }, { provider: 'gemini', in: 12, out: 34, grounded: true });
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('Groq 成功時に usage を台帳へ追記する', async () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'web-search-groq-ledger-'));
+  try {
+    const usageFile = path.join(temp, 'executor-usage.jsonl');
+    const code = await runCli(['質問', '--provider', 'groq'], {
+      groqApiKey: 'test', usageFile,
+      fetchImpl: async () => response({ choices: [{ message: { content: '回答' } }], usage: { prompt_tokens: 21, completion_tokens: 43 } }),
+      stdout: outputSink().stream, stderr: outputSink().stream,
+    });
+    assert.equal(code, 0);
+    const row = JSON.parse(fs.readFileSync(usageFile, 'utf8'));
+    assert.deepEqual({ provider: row.provider, in: row.in, out: row.out }, { provider: 'groq', in: 21, out: 43 });
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('台帳追記が失敗しても検索結果を返す', async () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'web-search-ledger-error-'));
+  try {
+    const err = outputSink();
+    const code = await runCli(['質問', '--provider', 'gemini'], {
+      geminiApiKey: 'test', usageFile: temp,
+      fetchImpl: async () => response({ candidates: [{ content: { parts: [{ text: '検索結果' }] } }] }),
+      stdout: outputSink().stream, stderr: err.stream,
+    });
+    assert.equal(code, 0);
+    assert.match(err.read(), /^使用量台帳への追記失敗: .+\n$/);
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
 });

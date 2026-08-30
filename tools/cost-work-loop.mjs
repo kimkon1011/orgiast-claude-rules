@@ -17,6 +17,36 @@ import { readEnvValue } from './env-kv.mjs';
 import { isEntry } from './is-entry.mjs';
 import { calculateDelegation, calculateLinesDelegation, collectBashProfile, collectClaudeActivityDays, collectClaudeCostStats, collectClaudeStats, collectCodexUsage, collectGitActivity, estimateSpecAuthoringTokens, formatBlockSource } from './usage-stats.mjs';
 export { codexSessionDirs, collectCodexUsage } from './usage-stats.mjs';
+// 公式 pricing 2026-08-30。Gemini token は 2026-12-31 までのプロモ価格（以降は倍）。
+export const EXECUTOR_PRICING = {
+  groq: [0.6, 0.8], openrouter: [0.3, 0.6], gemini: [0.75, 3.75], kimi: [3, 15],
+  mistral: [2, 6], deepseek: [0.27, 1.1], grok: [3, 15], ollama: [0, 0], codex: [0, 0],
+};
+export const GEMINI_PRICING = { freeGroundedSearches: 5000, searchUsdPer1000: 14, monthlyLimitJpy: 20000 };
+
+export function summarizeGeminiMonth(rows, { now = new Date(), usdJpy = 150 } = {}) {
+  const current = now instanceof Date ? now : new Date(now);
+  const monthStart = new Date(current.getFullYear(), current.getMonth(), 1).getTime();
+  const throughNow = current.getTime();
+  let searches = 0, inputTokens = 0, outputTokens = 0;
+  for (const row of rows) {
+    if (row?.provider !== 'gemini') continue;
+    const timestamp = new Date(row.t).getTime();
+    if (!Number.isFinite(timestamp) || timestamp < monthStart || timestamp > throughNow) continue;
+    if (row.grounded === true) searches += 1;
+    inputTokens += Number(row.in) || 0;
+    outputTokens += Number(row.out) || 0;
+  }
+  const [inputPrice, outputPrice] = EXECUTOR_PRICING.gemini;
+  const tokenUsd = (inputTokens * inputPrice + outputTokens * outputPrice) / 1e6;
+  const billableSearches = Math.max(0, searches - GEMINI_PRICING.freeGroundedSearches);
+  const searchUsd = billableSearches * GEMINI_PRICING.searchUsdPer1000 / 1000;
+  const totalJpy = (tokenUsd + searchUsd) * usdJpy;
+  const flags = [];
+  if (searches > GEMINI_PRICING.freeGroundedSearches * 0.8) flags.push(`⚠️ Gemini検索が無料枠の80%超（${searches}/5000）。超過分は $14/1000req`);
+  if (totalJpy > GEMINI_PRICING.monthlyLimitJpy * 0.5) flags.push('🚨 Gemini従量が月上限¥20,000の50%超');
+  return { searches, remainingFree: Math.max(0, GEMINI_PRICING.freeGroundedSearches - searches), billableSearches, tokenUsd, searchUsd, totalJpy, limitPercent: totalJpy / GEMINI_PRICING.monthlyLimitJpy * 100, usdJpy, flags };
+}
 const nativeHome = os.homedir();
 function defaultHome() { return process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || nativeHome; }
 export function decideEnforcement({ delegRatioWithPrep, delegRatio, daysObserved, claudeOut, history, target, pilot, previousMode }) {
@@ -73,12 +103,11 @@ const claudeStats = collectClaudeStats({ home: HOME, days: DAYS });
 const claudeLines = claudeStats.authoredLines;
 const linesRatio = calculateLinesDelegation({ codexLines, claudeLines });
 // ---- 3) 安いAI実行者 台帳 ----
-let execOut = 0, execUSD = 0, execByProv = {};
+let execOut = 0, execUSD = 0, execByProv = {}, ledgerRows = [];
 {
   const led = path.join(HOME, '.claude', 'executor-usage.jsonl');
   let lines = []; try { lines = fs.readFileSync(led, 'utf-8').split('\n'); } catch { }
-  const EP = { groq: [0.6, 0.8], openrouter: [0.3, 0.6], gemini: [0.1, 0.4], kimi: [3, 15], mistral: [2, 6], deepseek: [0.27, 1.1], grok: [3, 15], ollama: [0, 0], codex: [0, 0] };
-  for (const ln of lines) { if (!ln.trim()) continue; let r; try { r = JSON.parse(ln); } catch { continue; } if (new Date(r.t).getTime() < since) continue; const [pi, po] = EP[r.provider] || [1, 3]; execUSD += ((r.in || 0) * pi + (r.out || 0) * po) / 1e6; execOut += (r.out || 0); execByProv[r.provider] = (execByProv[r.provider] || 0) + 1; }
+  for (const ln of lines) { if (!ln.trim()) continue; let r; try { r = JSON.parse(ln); } catch { continue; } ledgerRows.push(r); if (new Date(r.t).getTime() < since) continue; const [pi, po] = EXECUTOR_PRICING[r.provider] || [1, 3]; execUSD += ((r.in || 0) * pi + (r.out || 0) * po) / 1e6; execOut += (r.out || 0); execByProv[r.provider] = (execByProv[r.provider] || 0) + 1; }
 }
 // ---- 4) 作業量プロキシ(gitコミット) ----
 let work = 0, workKind = 'commits';
@@ -96,6 +125,9 @@ const outPerWork = claudeOut / Math.max(work, 1);
 const stateF = path.join(HOME, '.claude', 'cost-loop-state.json');
 let prev = null; try { prev = JSON.parse(fs.readFileSync(stateF, 'utf-8')); } catch { }
 const flags = [];
+const parsedUsdJpy = Number(process.env.ORGIAST_USDJPY);
+const geminiMonth = summarizeGeminiMonth(ledgerRows, { usdJpy: Number.isFinite(parsedUsdJpy) && parsedUsdJpy > 0 ? parsedUsdJpy : 150 });
+flags.push(...geminiMonth.flags);
 // 日次ループのたびにschedule実績を更新する。gh未導入・認証失敗・cron停止でも本体は継続する。
 spawnSync(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta.url)), 'cron-liveness-check.mjs')], {
   env: { ...process.env, ORGIAST_HOME: HOME }, stdio: 'ignore',
@@ -155,6 +187,8 @@ const md = `<!-- COST-DIRECTIVE-START -->
 - Claude Code利用: **out ${(claudeOut / 1000).toFixed(0)}k tok** ${arrow} (${claudeModelLine}) ※定額シート課金＝請求$は発生しない
 - (参考: list価格換算 $${claudeUSD.toFixed(1)} — 実請求ではない)
 - 安いAI実行者: **実額 $${execUSD.toFixed(2)}**（従量課金）— ${execLine}
+- Gemini 従量: 検索 ${geminiMonth.searches.toLocaleString('ja-JP')}回 / 無料枠5,000（残り ${geminiMonth.remainingFree.toLocaleString('ja-JP')}回） / トークン実費 $${geminiMonth.tokenUsd.toFixed(2)}（≒¥${Math.round(geminiMonth.tokenUsd * geminiMonth.usdJpy).toLocaleString('ja-JP')}） / 検索超過 $${geminiMonth.searchUsd.toFixed(2)} / 月上限¥20,000 に対し ${geminiMonth.limitPercent.toFixed(1)}%（$1=¥${geminiMonth.usdJpy}）
+- Gemini MCP 経由分は未計測（gemini-mcp-tool の ask-gemini は台帳対象外のため、この金額は過小評価）
 - Codex(定額枠・実装の主経路): **out ${codexOut.toLocaleString('ja-JP')} tok** / ${codexSessions}セッション ※従量課金なし
 - 作業量(${workKind}): ${work} / **作業あたり 出力 ${(outPerWork / 1000).toFixed(0)}k tok**
 - 委譲率(Codex/Sonnet/Haiku/安いAIへ逃がせた割合): **${(delegRatio * 100).toFixed(1)}%**

@@ -70,32 +70,35 @@ try {
         }
     }
 
-    $memoryIndexGraph = $null
+    $memoryIndexSplit = $null
     $memoryIndexVerify = $null
     foreach ($repo in $repos) {
-        $candidate = Join-Path $repo 'tools\memory-index-graph.mjs'
-        if (-not $memoryIndexGraph -and (Test-Path -LiteralPath $candidate -PathType Leaf)) { $memoryIndexGraph = $candidate }
+        $candidate = Join-Path $repo 'tools\memory-index-split.mjs'
+        if (-not $memoryIndexSplit -and (Test-Path -LiteralPath $candidate -PathType Leaf)) { $memoryIndexSplit = $candidate }
         $candidate = Join-Path $repo 'tools\memory-index-verify.mjs'
         if (-not $memoryIndexVerify -and (Test-Path -LiteralPath $candidate -PathType Leaf)) { $memoryIndexVerify = $candidate }
-        if ($memoryIndexGraph -and $memoryIndexVerify) { break }
+        if ($memoryIndexSplit -and $memoryIndexVerify) { break }
     }
-    if ($memoryIndexGraph) {
+    $memoryDirectory = Join-Path $HOME '.claude\projects\c--Users-uers-Downloads-CLAUDE-md--\memory'
+    $memoryDomains = Join-Path $memoryDirectory 'memory-index-domains.json'
+    $memoryPins = Join-Path $memoryDirectory 'memory-index-pins.txt'
+    if ($memoryIndexSplit -and (Test-Path -LiteralPath $memoryDirectory -PathType Container) -and (Test-Path -LiteralPath $memoryDomains -PathType Leaf)) {
         try {
-            & $node.Source $memoryIndexGraph --all-projects --apply --budget 15000 --min-bytes 16000
-            if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'memory-index-graph' ("error:終了コード" + $LASTEXITCODE); Write-Warning ("nightly-batch: memory-index-graph exited " + $LASTEXITCODE) } else { Write-NightlyLog 'memory-index-graph' 'ok' }
+            $splitArguments = @('--dir', $memoryDirectory, '--domains', $memoryDomains, '--apply')
+            if (Test-Path -LiteralPath $memoryPins -PathType Leaf) { $splitArguments += @('--pins', $memoryPins) }
+            & $node.Source $memoryIndexSplit @splitArguments
+            if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'memory-index-split' ("error:終了コード" + $LASTEXITCODE) } else { Write-NightlyLog 'memory-index-split' 'ok' }
         } catch {
-            Write-NightlyLog 'memory-index-graph' ("error:" + $_.Exception.Message)
-            Write-Warning ("nightly-batch: memory-index-graph: " + $_.Exception.Message)
+            Write-NightlyLog 'memory-index-split' ("error:" + $_.Exception.Message)
         }
-    } else { Write-NightlyLog 'memory-index-graph' 'skip:ファイルなし' }
+    } else { Write-NightlyLog 'memory-index-split' 'skip:ファイルなし' }
 
     if ($memoryIndexVerify) {
         try {
             & $node.Source $memoryIndexVerify --reachability --all-projects
-            if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'memory-index-reachability' ("error:終了コード" + $LASTEXITCODE); Write-Warning ("nightly-batch: memory-index-reachability exited " + $LASTEXITCODE) } else { Write-NightlyLog 'memory-index-reachability' 'ok' }
+            if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'memory-index-reachability' ("error:終了コード" + $LASTEXITCODE) } else { Write-NightlyLog 'memory-index-reachability' 'ok' }
         } catch {
             Write-NightlyLog 'memory-index-reachability' ("error:" + $_.Exception.Message)
-            Write-Warning ("nightly-batch: memory-index-reachability: " + $_.Exception.Message)
         }
     } else { Write-NightlyLog 'memory-index-reachability' 'skip:ファイルなし' }
 

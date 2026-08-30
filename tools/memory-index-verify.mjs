@@ -115,7 +115,18 @@ export function verifyReachability(directory) {
   const names = fs.readdirSync(directory).filter((name) => name.endsWith('.md') && name !== 'MEMORY.md').sort();
   const files = new Map(names.map((name) => [normalizeSlug(name), name]));
   if (files.size !== names.length) throw new Error('正規化後のファイル名が重複しています');
-  const roots = parseIndex(fs.readFileSync(indexFile, 'utf8')).map((entry) => normalizeSlug(entry.file)).filter((slug) => files.has(slug));
+  const indexText = fs.readFileSync(indexFile, 'utf8');
+  const rootFiles = [indexText];
+  // v2(2階層)索引では実エントリはサブ索引側にあるので、そこもルートとして数える。
+  if (indexText.includes('<!-- MEMORY-INDEX v2 split -->')) {
+    const subDirectory = path.join(directory, 'index');
+    if (fs.existsSync(subDirectory)) {
+      for (const name of fs.readdirSync(subDirectory).filter((name) => name.endsWith('.md'))) {
+        rootFiles.push(fs.readFileSync(path.join(subDirectory, name), 'utf8'));
+      }
+    }
+  }
+  const roots = rootFiles.flatMap((text) => parseIndex(text).map((entry) => normalizeSlug(entry.file))).filter((slug) => files.has(slug));
   const edges = new Map();
   for (const [slug, name] of files) {
     const body = fs.readFileSync(path.join(directory, name), 'utf8');

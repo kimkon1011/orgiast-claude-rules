@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+// 索引の正本は v2(split)。この予算方式は2026-08-30のA/B実測で採用されなかった。
+// 想起率は同率で、サブ索引は読まれず、索引一覧は想起の経路ではないと判明したため。
+// 本ツールは `--report` の解析用途で残している。
+// `--apply` は v2 索引を検出するとスキップする。
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -229,6 +233,10 @@ function allMemoryDirectories() {
 
 function processDirectory(directory, { apply, dryRun, budget, minBytes, keepFile }) {
   const indexPath = path.join(directory, 'MEMORY.md');
+  if (fs.readFileSync(indexPath, 'utf8').includes('<!-- MEMORY-INDEX v2 split -->')) {
+    console.log(`skip: v2索引のため対象外: ${indexPath}`);
+    return { directory, skipped: true, reason: 'v2-index' };
+  }
   const beforeBytes = fs.statSync(indexPath).size;
   if (beforeBytes <= minBytes) {
     console.log(`しきい値未満のためスキップ: ${indexPath}`);

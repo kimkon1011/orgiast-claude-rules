@@ -146,7 +146,13 @@ try {
   backup(claudeFile);
   const claude = load(claudeFile);
   if (!claude.mcpServers || typeof claude.mcpServers !== 'object' || Array.isArray(claude.mcpServers)) claude.mcpServers = {};
-  claude.mcpServers['gemini-cli'] = { type: 'stdio', command: 'npx', args: ['-y', '@choplin/mcp-gemini-cli', '--allow-npx'], env: { GEMINI_API_KEY: geminiKey, GEMINI_CLI_TRUST_WORKSPACE: 'true' } };
+  // @choplin/mcp-gemini-cli は内部で spawn('gemini') する。Windows の実体は gemini.cmd で
+  // CreateProcess が .cmd を起動できず、接続はできるのに呼ぶと必ず ENOENT になる(2026-08-30 実測)。
+  // 代わりにリポ同梱の gemini-mcp.mjs(cmd.exe 経由で起動する)を使う。
+  const prevGemini = claude.mcpServers['gemini-cli'];
+  // 鍵が取れなかった時に既存の有効な鍵を空で上書きしない。
+  const geminiKeyToUse = geminiKey || prevGemini?.env?.GEMINI_API_KEY || '';
+  claude.mcpServers['gemini-cli'] = { type: 'stdio', command: 'node', args: [path.join(repo, 'tools', 'gemini-mcp.mjs')], env: { GEMINI_API_KEY: geminiKeyToUse, GEMINI_CLI_TRUST_WORKSPACE: 'true' } };
   write(claudeFile, claude);
   console.log(`  [OK] settings.json${added ? '(hook ' + added + '件追加)' : '(変更なし)'} / .claude.json 更新`);
 } catch (e) {

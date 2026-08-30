@@ -277,11 +277,16 @@ function ensureGeminiMcp() {
   let d; try { d = JSON.parse(fs.readFileSync(p, 'utf-8')); } catch { return false; }
   const key = loadEnv(path.join(HOME, '.gemini', '.env')).GEMINI_API_KEY || process.env.GEMINI_API_KEY || '';
   const mcp = d.mcpServers = d.mcpServers || {};
-  const want = { type: 'stdio', command: 'npx', args: ['-y', '@choplin/mcp-gemini-cli', '--allow-npx'], env: { GEMINI_API_KEY: key, GEMINI_CLI_TRUST_WORKSPACE: 'true' } };
+  // npx 版は Windows で gemini.cmd を shell なしで起動するため spawn gemini ENOENT になる。
+  // cmd.exe 経由に対応した同梱 MCP サーバを node で直接起動する。
+  const server = path.join(process.env.ORGIAST_REPO || path.join(HOME, 'orgiast-claude-rules'), 'tools', 'gemini-mcp.mjs');
   const cur = mcp['gemini-cli'];
-  const ok = cur && cur.command === 'npx' && cur.env && cur.env.GEMINI_API_KEY;
+  // 鍵が読めなかった時に既存の有効な鍵を空で潰さない。
+  const keyToUse = key || cur?.env?.GEMINI_API_KEY || '';
+  const want = { type: 'stdio', command: 'node', args: [server], env: { GEMINI_API_KEY: keyToUse, GEMINI_CLI_TRUST_WORKSPACE: 'true' } };
+  const ok = cur && cur.command === 'node' && Array.isArray(cur.args) && cur.args[0] === server && cur.env && cur.env.GEMINI_API_KEY;
   if (ok) return false;
-  if (!key) { human.push('Gemini APIキー未設定→https://aistudio.google.com/apikey で発行し ~/.gemini/.env に GEMINI_API_KEY= 保存'); return false; }
+  if (!keyToUse) { human.push('Gemini APIキー未設定→https://aistudio.google.com/apikey で発行し ~/.gemini/.env に GEMINI_API_KEY= 保存'); return false; }
   if (DO_FIX) {
     try { fs.copyFileSync(p, p + '.bak.adoption-' + new Date(now).toISOString().slice(0,10)); } catch {}
     mcp['gemini-cli'] = want;

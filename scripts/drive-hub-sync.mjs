@@ -11,49 +11,10 @@
 //
 // parentId 省略時はハブ直下 (claude-common-rules)
 
-import { createSign } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { driveApi as api, getDriveToken } from './lib/drive-auth.mjs';
 
 const HUB = '1RLYbK6CKyPWRJsG6LY0WB9OzlbFYSFvw'; // claude-common-rules
-const IMPERSONATE = 'kim@orgiast.jp';
-const KEY_PATH = process.env.GOOGLE_SA_KEY
-  ?? join(homedir(), 'Downloads', 'CLAUDE.md配布', 'aujust-sales-automation', '.gcp', 'sheets-sa.json');
-
-const b64url = (buf) => Buffer.from(buf).toString('base64url');
-
-async function getToken() {
-  const key = JSON.parse(readFileSync(KEY_PATH, 'utf8'));
-  const now = Math.floor(Date.now() / 1000);
-  const header = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
-  const claims = b64url(JSON.stringify({
-    iss: key.client_email,
-    sub: IMPERSONATE,
-    scope: 'https://www.googleapis.com/auth/drive',
-    aud: 'https://oauth2.googleapis.com/token',
-    iat: now,
-    exp: now + 3600,
-  }));
-  const signer = createSign('RSA-SHA256');
-  signer.update(`${header}.${claims}`);
-  const jwt = `${header}.${claims}.${signer.sign(key.private_key, 'base64url')}`;
-  const res = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: `grant_type=${encodeURIComponent('urn:ietf:params:oauth:grant-type:jwt-bearer')}&assertion=${jwt}`,
-  });
-  const j = await res.json();
-  if (!j.access_token) throw new Error(`token error: ${JSON.stringify(j)}`);
-  return j.access_token;
-}
-
-async function api(token, url, opts = {}) {
-  const res = await fetch(url, { ...opts, headers: { Authorization: `Bearer ${token}`, ...(opts.headers ?? {}) } });
-  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
-  return res;
-}
-
 async function findByTitle(token, title, parent) {
   const q = encodeURIComponent(`name='${title.replace(/'/g, "\\'")}' and '${parent}' in parents and trashed=false`);
   const res = await api(token, `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,modifiedTime)&orderBy=modifiedTime desc`);
@@ -62,7 +23,12 @@ async function findByTitle(token, title, parent) {
 
 const [cmd, a1, a2, a3] = process.argv.slice(2);
 const parent = a3 ?? (cmd === 'list' ? (a1 ?? HUB) : HUB);
-const token = await getToken();
+const usage = 'usage: drive-hub-sync.mjs list [parentId] | push <local> <title> [parentId] | pull <title> <local> [parentId] | share-domain <id> <reader|writer> | perms <id> | unshare-anyone <id> [--apply]';
+if (!cmd) {
+  console.error(usage);
+  process.exit(1);
+}
+const token = await getDriveToken();
 
 if (cmd === 'list') {
   const q = encodeURIComponent(`'${parent}' in parents and trashed=false`);
@@ -98,7 +64,29 @@ if (cmd === 'list') {
     body: JSON.stringify({ type: 'domain', domain: 'orgiast.jp', role: a2 ?? 'reader', allowFileDiscovery: true }),
   });
   console.log(`shared: ${JSON.stringify(await res.json())}`);
+} else if (cmd === 'perms') {
+  const res = await api(token, `https://www.googleapis.com/drive/v3/files/${a1}/permissions?fields=permissions(id,type,role,domain,emailAddress,allowFileDiscovery,permissionDetails)&supportsAllDrives=true`);
+  for (const p of (await res.json()).permissions ?? []) console.log(JSON.stringify(p));
+} else if (cmd === 'unshare-anyone') {
+  const permissionsUrl = `https://www.googleapis.com/drive/v3/files/${a1}/permissions?fields=permissions(id,type,role,domain,emailAddress)&supportsAllDrives=true`;
+  const res = await api(token, permissionsUrl);
+  const targets = ((await res.json()).permissions ?? []).filter((p) => p.type === 'anyone');
+  const apply = process.argv.includes('--apply');
+
+  if (targets.length === 0) console.log(`anyone 公開なし: ${a1}`);
+  for (const p of targets) {
+    if (apply) {
+      await api(token, `https://www.googleapis.com/drive/v3/files/${a1}/permissions/${p.id}?supportsAllDrives=true`, { method: 'DELETE' });
+      console.log(`deleted: ${JSON.stringify(p)}`);
+    } else {
+      console.log(`[dry-run] would delete: ${JSON.stringify(p)}`);
+    }
+  }
+
+  // 削除後の権限を再取得し、実際に残った権限を確認する
+  const afterRes = await api(token, permissionsUrl);
+  console.log(`after: ${JSON.stringify((await afterRes.json()).permissions ?? [])}`);
 } else {
-  console.error('usage: drive-hub-sync.mjs list [parentId] | push <local> <title> [parentId] | pull <title> <local> [parentId] | share-domain <id> <reader|writer>');
+  console.error(usage);
   process.exit(1);
 }

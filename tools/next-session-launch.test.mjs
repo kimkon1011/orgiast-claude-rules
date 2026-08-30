@@ -48,8 +48,9 @@ test('VSCode 起動は code.cmd を cmd.exe /c 経由で実行する', () => {
 
 test('既定はターミナル経路で、VSCode は明示したときだけ選ぶ', () => {
   // VSCode の URI は新タブを開くだけでプロンプトを送信しないので、既定にすると手数ゼロにならない。
-  assert.equal(pickRoute({ codeCli: 'code.cmd', flagTarget: undefined, env: {} }), 'terminal');
+  assert.equal(pickRoute({ codeCli: 'code.cmd', flagTarget: undefined, env: {} }), 'vscode');
   assert.equal(pickRoute({ codeCli: '', flagTarget: undefined, env: {} }), 'terminal');
+  assert.equal(pickRoute({ codeCli: 'code.cmd', flagTarget: undefined, env: { ORGIAST_NEXT_SESSION_TARGET: 'terminal' } }), 'terminal');
   assert.equal(pickRoute({ codeCli: 'code.cmd', flagTarget: 'terminal', env: {} }), 'terminal');
   assert.equal(pickRoute({ codeCli: 'code.cmd', flagTarget: 'vscode', env: {} }), 'vscode');
   assert.equal(pickRoute({ codeCli: 'code.cmd', flagTarget: undefined, env: { ORGIAST_NEXT_SESSION_TARGET: 'vscode' } }), 'vscode');

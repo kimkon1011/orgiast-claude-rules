@@ -8,9 +8,12 @@ import { scanBrowserExtensions } from './browser-extension-audit.mjs';
 import { machineIdentity } from './machine-identity.mjs';
 import { resolveReporterLabel } from './reporter-label.mjs';
 import { buildSpecPayload, collectHardwareSpec } from './hardware-spec.mjs';
+import { collectProjectInventory, formatArtifactsCell, formatLastCommitCell, formatProjectsCell } from './project-inventory.mjs';
+import { buildCloudLoginPayload, collectCloudInventory } from './cloud-inventory.mjs';
 
 const dryRun = process.argv.includes('--dry-run');
 const includeSpecs = process.argv.includes('--specs');
+const includeCloud = process.argv.includes('--cloud');
 const home = process.env.ORGIAST_HOME || os.homedir();
 const repo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -71,6 +74,7 @@ async function main() {
   const mappedName = Object.prototype.hasOwnProperty.call(map, label) && typeof map[label] === 'string' ? map[label] : null;
   const topModel = Array.isArray(reporter.topModels) && reporter.topModels[0] ? reporter.topModels[0].model : '';
   const identity = machineIdentity();
+  const projects = collectProjectInventory({ projectsDir: path.join(claudeDir, 'projects') });
   // Fable5(§1.16 全用途禁止)は「データが無い」を「未検出」と断定しない。
   // 判定できないのに合格扱いにするのは「timeout を未導入と誤報告」と同じ誤り。
   const fableKnown = reporter.fable5Detected !== undefined || adoption.fable5OutTok !== undefined;
@@ -91,6 +95,9 @@ async function main() {
     codexLogin: adoption.codexAuthed === true ? '済' : adoption.codexAuthed === false ? '未' : '判定不能',
     fable5: fableDetected ? '検出' : fableKnown ? '未検出' : '判定不能',
     disciplineAlert: enforce.mode ? `${enforce.mode}${enforce.reason ? ': ' + enforce.reason : ''}` : '判定不能',
+    activeProjects: formatProjectsCell(projects),
+    artifacts: formatArtifactsCell(projects),
+    lastCommit: formatLastCommitCell(projects),
   };
   if (includeSpecs) payload.spec = buildSpecPayload(collectHardwareSpec(), identity.hostname).spec;
   if (includeSpecs) payload.kind = 'pc-spec';
@@ -99,16 +106,18 @@ async function main() {
     token: fleetEnv.FLEET_SHEET_TOKEN, kind: 'extensions', label, hostname: os.hostname(), reportedAt: payload.reportedAt,
     rows: audit.rows.filter((row) => !(row.risk === 'low' && row.builtin)).map(({ browser, profile, account, name, id, version, enabled, risk, builtin, broadHost, keyPerms }) => ({ browser, profile, account, name, id, version, enabled, risk, builtin, broadHost, keyPerms })),
   };
+  const cloudPayload = includeCloud ? { token: fleetEnv.FLEET_SHEET_TOKEN, ...buildCloudLoginPayload(await collectCloudInventory(), { label, hostname: os.hostname(), username: identity.username, reportedAt: payload.reportedAt }) } : null;
   if (dryRun) {
     // 秘匿値は出さない(状態だけ見せる)。ログ・CI・端末履歴に残るため。
     const shown = payload.token ? "<設定あり:" + payload.token.length + "文字>" : "<未設定>";
-    console.log(JSON.stringify({ ...payload, token: shown, extensionAudit: { ...extensionPayload, token: shown } }, null, 2));
+    console.log(JSON.stringify({ ...payload, token: shown, extensionAudit: { ...extensionPayload, token: shown }, cloud: cloudPayload ? { ...cloudPayload, token: shown } : undefined }, null, 2));
     return;
   }
   // 2本は独立して送る。1本目が落ちたら2本目も送られない(かつ main の catch が
   // 握り潰す)と、拡張監査が「一度も届いていないのに誰も気付かない」状態になる。
   await post(fleetEnv.FLEET_SHEET_URL, 'status', payload);
   await post(fleetEnv.FLEET_SHEET_URL, 'extensions', extensionPayload);
+  if (cloudPayload) await post(fleetEnv.FLEET_SHEET_URL, 'cloud-login', cloudPayload);
 }
 
 async function post(url, kind, body) {

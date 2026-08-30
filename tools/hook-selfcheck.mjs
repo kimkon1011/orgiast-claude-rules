@@ -21,15 +21,22 @@ export const REQUIRED_HOOKS = [
   ['SessionStart', 'fable-session-guard.mjs'],
   ['SessionStart', 'session-list-tidy.mjs'],
   ['SessionStart', 'hook-selfcheck.mjs'],
+  ['SessionStart', 'makimono-host-detect.mjs'],
   // 旧Windows機は SessionStart に凍結コピーの onboarding-sync.ps1 が居座り、リポ自己更新も
   // keyserve の鍵配布(provisionKeys)も走らない。ここで「欠落」と判定させて register-hooks に
   // .mjs へ移行させる(.ps1 は 'onboarding-sync.mjs' を含まないので includes 判定で欠落になる)。
   ['SessionStart', 'onboarding-sync.mjs'],
+  ['Stop', 'doc-link-drive-guard.mjs'],
 ];
 
 export const REQUIRED_TASKS = [
   ['OrgiastAutoSession', 'tools/register-auto-session.ps1'],
 ];
+
+export function missingRequiredHooks(settings, required = REQUIRED_HOOKS) {
+  return required.filter(([event, script]) => !(settings?.hooks?.[event] || []).some((group) =>
+    (group.hooks || []).some((hook) => String(hook.command || '').includes(script))));
+}
 
 const TASK_SELFCHECK_INTERVAL_MS = 20 * 60 * 60 * 1000;
 
@@ -108,7 +115,7 @@ if (isMain) try {
   const settingsFile = path.join(home, '.claude', 'settings.json');
   let settings = {};
   try { settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8').replace(/^\uFEFF/, '')); } catch {}
-  const missing = REQUIRED_HOOKS.filter(([event, script]) => !(settings.hooks?.[event] || []).some((group) => (group.hooks || []).some((hook) => String(hook.command || '').includes(script))));
+  const missing = missingRequiredHooks(settings);
   if (missing.length) {
     spawnSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo } });
     console.log(`🚨 コスト規律hookが ${missing.length} 本欠落していたため自動登録しました: ${missing.map(([event, script]) => `${event}/${script}`).join(', ')}（次回セッションから有効）`);

@@ -545,14 +545,22 @@ test('fleet upsert純関数: 自己申告3列を書き、A〜E列とO列を保�
   assert(plan.values[c.osUser] === 'os-user' && plan.values[c.realHostname] === 'real-host' && plan.values[c.gitEmail] === '未設定', JSON.stringify(plan));
   for (const key of ['staff', 'done', 'executed', 'selfPc', 'memo', 'consistency']) assert(!Object.hasOwn(plan.values, String(c[key])), `${key}列を上書き`);
 });
-test('fleet WebApp: 不足する自己申告ヘッダだけを右端に冪等追加', () => {
+test('fleet WebApp: 不足するオプショナルヘッダだけを右端に冪等追加', () => {
   const logic = fs.readFileSync(path.join(repo, 'gas', 'fleet-status-sheet', 'UpsertLogic.gs'), 'utf8');
   const webapp = fs.readFileSync(path.join(repo, 'gas', 'fleet-status-sheet', 'WebApp.gs'), 'utf8');
   const context = {}; vm.createContext(context); vm.runInContext((logic + '\n' + webapp).replace(/\bconst\s+/g, 'var '), context);
-  const original = Object.values(context.FLEET_HEADERS_).filter((header) => !['OSユーザー名', '実ホスト名', 'Gitメール'].includes(header));
+  const optional = ['OSユーザー名', '実ホスト名', 'Gitメール', '開発プロジェクト(直近7日)', '成果物(リポジトリ/ブランチ)', '直近コミット'];
+  const original = Object.values(context.FLEET_HEADERS_).filter((header) => !optional.includes(header));
   const once = context.fleetPlanHeaders(original); const twice = context.fleetPlanHeaders(once);
   assert(JSON.stringify(once) === JSON.stringify(twice), JSON.stringify({ once, twice }));
-  assert(JSON.stringify(once.slice(0, original.length)) === JSON.stringify(original) && once.slice(-3).join('|') === 'OSユーザー名|実ホスト名|Gitメール', JSON.stringify(once));
+  assert(JSON.stringify(once.slice(0, original.length)) === JSON.stringify(original) && JSON.stringify(once.slice(-6)) === JSON.stringify(optional), JSON.stringify(once));
+});
+test('fleet upsert純関数: 開発プロジェクト3列だけを対応payloadから書く', () => {
+  const source = fs.readFileSync(path.join(repo, 'gas', 'fleet-status-sheet', 'UpsertLogic.gs'), 'utf8');
+  const context = {}; vm.createContext(context); vm.runInContext(source.replace(/\bconst\s+/g, 'var '), context);
+  const headers = Object.values(context.FLEET_HEADERS_); const c = context.fleetResolveColumns(headers);
+  const plan = context.fleetPlanUpsert(headers, [], { label: 'host', activeProjects: 'proj(2)', artifacts: 'repo@main', lastCommit: '2026-08-28 subject' });
+  assert(plan.values[c.activeProjects] === 'proj(2)' && plan.values[c.artifacts] === 'repo@main' && plan.values[c.lastCommit] === '2026-08-28 subject', JSON.stringify(plan));
 });
 test('fleet upsert純関数: 紐付いた既存行のO列(kim手書き)は map 未登録でも保持し、空labelで行を奪わない', () => {
   const source = fs.readFileSync(path.join(repo, 'gas', 'fleet-status-sheet', 'UpsertLogic.gs'), 'utf8');

@@ -3,7 +3,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 
 export const WEBHOOK_RE = /https:\/\/discord\.com\/api\/webhooks\/(\d{15,})\/([A-Za-z0-9_-]{40,})/g;
 const USER_AGENT = 'DiscordBot (https://orgiast.jp, 1.0) orgiast-webhook-health';
@@ -220,8 +220,7 @@ export async function run(argv = process.argv.slice(2), { fetchImpl = fetch } = 
   return { result, exitCode: dead.some((item) => !item.fixed) ? 1 : 0 };
 }
 
-const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
-if (isMain) {
+if (isEntry(import.meta.url)) {
   run().then(({ exitCode }) => { process.exitCode = exitCode; }).catch((error) => {
     console.error(redactSecrets(error?.stack ?? error));
     process.exitCode = 1;

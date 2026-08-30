@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 
 export const SENSITIVE_APIS = new Set(['cookies', 'userScripts', 'debugger', 'desktopCapture', 'tabCapture', 'nativeMessaging', 'proxy', 'webRequest', 'webRequestBlocking', 'history', 'management', 'privacy', 'clipboardRead']);
 const BROAD_HOSTS = new Set(['<all_urls>', '*://*/*', 'http://*/*', 'https://*/*']);
@@ -131,4 +131,4 @@ async function main() {
   else console.log(text);
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main().catch((error) => { console.error(error.message); process.exitCode = 1; });
+if (isEntry(import.meta.url)) main().catch((error) => { console.error(error.message); process.exitCode = 1; });

@@ -2,8 +2,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { pathToFileURL } from 'node:url';
 import { callWithFallback, FALLBACK_CHAIN } from './llm-fallback.mjs';
+import { isEntry } from './is-entry.mjs';
 
 const CATEGORIES = new Set(['cost', 'quality', 'model-release', 'tool', 'prompt-technique', 'other']);
 const PROVIDERS = {
@@ -214,10 +214,20 @@ export async function runDigest(options = {}) {
     const seed = { id: `seed-${Date.now()}`, chat: '生成AI', sender: 'サンプル参加者', text: 'Claudeの新モデルが公開されたという情報です。料金と性能は公式情報で要検証です。', ts: Date.now(), receivedAt: new Date().toISOString() };
     if (cli.dryRun) log(`[dry-run] サンプルを ${inputDir} に投入`); else { fs.mkdirSync(inputDir, { recursive: true }); const month = new Date().toISOString().slice(0, 7); fs.appendFileSync(path.join(inputDir, `${month}.jsonl`), `${JSON.stringify(seed)}\n`); }
   }
+  if (!fs.existsSync(inputDir)) {
+    const status = 'skip:入力ディレクトリなし';
+    log(status);
+    return { processed: 0, status };
+  }
   const state = readJson(stateFile, { lastTs: 0, lastId: '', processedIds: [] });
   const candidates = selectUnprocessed(readMessages(inputDir), state, cli.since).slice(0, cli.limit);
   const messages = preprocessMessages(candidates);
-  if (!candidates.length) { log('未処理メッセージはありません。'); return { processed: 0 }; }
+  if (!candidates.length) {
+    const status = 'skip:新規メッセージなし';
+    log('未処理メッセージはありません。');
+    log(status);
+    return { processed: 0, status };
+  }
   const llm = options.llm || createLlmClient({ home, usageFile: path.join(base, 'executor-usage.jsonl') });
   const kept = [], successfullyClassified = new Set(), held = [];
   const classificationSystem = '生成AI・LLMのコスト、品質、新モデル、ツール、プロンプト技法について各入力を分類する。JSONオブジェクトのみを返し、前置き・説明・コードフェンスは禁止。形式は {"items":[{"i":<入力と同じ番号>,"category":"cost|quality|model-release|tool|prompt-technique|other","score":<0-3>}]}。入力の全要素に対して必ず1件ずつ同じiで返す。scoreは0=無関係、1=雑談程度、2=有用、3=自社の設定変更を検討すべき。';
@@ -264,8 +274,9 @@ export async function runDigest(options = {}) {
     fs.writeFileSync(digestFile, newDigest); fs.writeFileSync(proposalFile, appended.text); fs.writeFileSync(topicsFile, topics.text); fs.writeFileSync(stateFile, JSON.stringify(nextState, null, 2) + '\n');
     log(`line-digest: ${successfullyClassified.size}件処理 / ${held.length}件保留 / トピック${digestLines.length}件 / 新規提案${appended.added.length}件`);
   }
-  return { processed: successfullyClassified.size, held: held.length, proposals: appended.added.length };
+  const status = `ok:${successfullyClassified.size}件処理`;
+  log(status);
+  return { processed: successfullyClassified.size, held: held.length, proposals: appended.added.length, status };
 }
 
-const isMain = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
-if (isMain) runDigest({ args: process.argv.slice(2) }).catch((error) => { console.error(error.message); process.exitCode = 1; });
+if (isEntry(import.meta.url)) runDigest({ args: process.argv.slice(2) }).catch((error) => { console.error(error.message); process.exitCode = 1; });

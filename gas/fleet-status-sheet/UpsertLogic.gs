@@ -2,10 +2,11 @@ const FLEET_HEADERS_ = {
   staff: 'スタッフ名(記入)', done: '実行済み(記入:済/未)', executed: '実行日(記入)', selfPc: '自己申告PC名(記入)', memo: 'メモ(記入)',
   hostname: '【自動検知】PC名/ホスト名', reportedAt: '最終報告(JST)', claudeUsd: 'Claude概算$', mainModel: '主なモデル', delegRatio: '委譲率(安いAIへ)',
   cheapAiUse: '安いAI使用', codexLogin: 'Codexログイン', fable5: 'Fable5検出', disciplineAlert: '委譲規律アラート', consistency: '整合性(自己申告↔検知)',
-  osUser: 'OSユーザー名', realHostname: '実ホスト名', gitEmail: 'Gitメール'
+  osUser: 'OSユーザー名', realHostname: '実ホスト名', gitEmail: 'Gitメール',
+  activeProjects: '開発プロジェクト(直近7日)', artifacts: '成果物(リポジトリ/ブランチ)', lastCommit: '直近コミット'
 };
 
-const FLEET_OPTIONAL_HEADERS_ = ['osUser', 'realHostname', 'gitEmail'];
+const FLEET_OPTIONAL_HEADERS_ = ['osUser', 'realHostname', 'gitEmail', 'activeProjects', 'artifacts', 'lastCommit'];
 
 // ヘッダ照合は正規化してから行う。全角/半角の括弧・英数、前後の空白、改行の違いで
 // 「タブが見つからない」と誤判定するのを防ぐ(実セルの表記は目視できないため厳密一致に賭けない)。
@@ -59,6 +60,9 @@ function fleetPlanUpsert(headers, rows, payload) {
   if (columns.osUser >= 0) values[columns.osUser] = payload.username || '';
   if (columns.realHostname >= 0) values[columns.realHostname] = payload.hostname || '';
   if (columns.gitEmail >= 0) values[columns.gitEmail] = payload.gitEmail == null ? '' : payload.gitEmail;
+  if (columns.activeProjects >= 0) values[columns.activeProjects] = payload.activeProjects || '';
+  if (columns.artifacts >= 0) values[columns.artifacts] = payload.artifacts || '';
+  if (columns.lastCommit >= 0) values[columns.lastCommit] = payload.lastCommit || '';
   if (appended) values[columns.consistency] = '未マッピング(要 fleet-pc-map.json 追記)';
   return { action: index >= 0 ? 'updated' : 'appended', rowIndex: index >= 0 ? index : rows.length, columns: columns, values: values };
 }

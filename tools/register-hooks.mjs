@@ -53,12 +53,29 @@ function setTimeoutFor(groups, scriptName, timeout) {
   }
   return changed;
 }
+export function repairPowerShellExecutionPolicy(hooks) {
+  let changed = 0;
+  for (const groups of Object.values(hooks || {})) {
+    if (!Array.isArray(groups)) continue;
+    for (const group of groups) for (const hook of (Array.isArray(group?.hooks) ? group.hooks : [])) {
+      const current = String(hook?.command || '');
+      if (!/^\s*(?:pwsh|powershell)(?:\.exe)?\b/i.test(current) || !/-File\b[^\r\n]*\.ps1(?:["']|\s|$)/i.test(current) || /-ExecutionPolicy\s+Bypass\b/i.test(current)) continue;
+      const repaired = /-NoProfile\b/i.test(current)
+        ? current.replace(/-NoProfile\b/i, '$& -ExecutionPolicy Bypass')
+        : current.replace(/^(\s*(?:pwsh|powershell)(?:\.exe)?\b)/i, '$1 -ExecutionPolicy Bypass');
+      if (repaired !== current) { hook.command = repaired; changed += 1; }
+    }
+  }
+  return changed;
+}
 
 try {
   const settingsFile = path.join(home, '.claude', 'settings.json');
   const settingsHadBom = fs.existsSync(settingsFile) && fs.readFileSync(settingsFile, 'utf8').startsWith('\uFEFF');
   const settings = load(settingsFile);
   let added = 0;
+  let policyRepaired = 0;
+  let costLoopMigrated = 0;
   if (!settings.hooks || typeof settings.hooks !== 'object' || Array.isArray(settings.hooks)) settings.hooks = {};
   for (const event of ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'Stop']) if (!Array.isArray(settings.hooks[event])) settings.hooks[event] = [];
   const command = (name, extra = '') => `node "${path.join(repo, 'tools', name)}"${extra}`;
@@ -75,6 +92,10 @@ try {
       if (String(hook.command || '').includes('onboarding-sync.mjs')) { hook.timeout = 20; hook.async = true; }
     }
   }
+  if (fs.existsSync(path.join(repo, 'tools', 'cost-loop.mjs'))) {
+    costLoopMigrated = migrate(settings.hooks.SessionStart, 'cost-loop.ps1', 'cost-loop.mjs', command('cost-loop.mjs'));
+    added += costLoopMigrated;
+  }
   for (const [name, timeout, async, extra] of session) {
     const hook = { type: 'command', command: command(name, extra), timeout };
     if (async) hook.async = true;
@@ -82,6 +103,7 @@ try {
   }
   added += setTimeoutFor(settings.hooks.SessionStart, 'tool-adoption-check', 60);
   if (add(settings.hooks.SessionStart, 'hook-selfcheck.mjs', { hooks: [{ type: 'command', command: command('hook-selfcheck.mjs'), timeout: 10 }] })) added += 1;
+  if (add(settings.hooks.SessionStart, 'makimono-host-detect.mjs', { hooks: [{ type: 'command', command: command('makimono-host-detect.mjs'), timeout: 10 }] })) added += 1;
   // 1セッション=1目的ゲート: SessionStart で目的宣言を要求し、UserPromptSubmit で目的ドリフト/肥大をナッジする(context注入のため async 禁止)
   if (add(settings.hooks.SessionStart, 'session-purpose-gate.mjs', { hooks: [{ type: 'command', command: command('session-purpose-gate.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.UserPromptSubmit, 'session-purpose-gate.mjs', { hooks: [{ type: 'command', command: command('session-purpose-gate.mjs'), timeout: 5 }] })) added += 1;
@@ -105,9 +127,13 @@ try {
   if (add(settings.hooks.PreToolUse, 'pretooluse-codex-invocation.mjs', { matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command: command('pretooluse-codex-invocation.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.PreToolUse, 'model-agent-guard.mjs', { matcher: 'Agent|Task', hooks: [{ type: 'command', command: command('model-agent-guard.mjs') }] })) added += 1;
   if (add(settings.hooks.Stop, 'verify-before-done-detector.mjs', { hooks: [{ type: 'command', command: command('verify-before-done-detector.mjs') }] })) added += 1;
+  if (add(settings.hooks.Stop, 'doc-link-drive-guard.mjs', { hooks: [{ type: 'command', command: command('doc-link-drive-guard.mjs'), timeout: 10 }] })) added += 1;
+  policyRepaired = repairPowerShellExecutionPolicy(settings.hooks);
+  added += policyRepaired;
   // 差分が無い時は書かない(日次実行で .bak が積み上がるのを防ぐ)
   if (added || settingsHadBom) { backup(settingsFile); write(settingsFile, settings); }
   if (settingsHadBom) console.log('[register-hooks] settings.json の BOM を除去しました');
+  if (policyRepaired || costLoopMigrated) console.log(`hook修復: 実行ポリシー${policyRepaired}件 / cost-loop移行${costLoopMigrated}件`);
   if (hooksOnly) { console.log(added ? `  [OK] settings.json に hook を ${added} 件追加(バックアップ済)` : '  [OK] hook は既に登録済み(変更なし)'); process.exit(0); }
 
   const claudeFile = path.join(home, '.claude.json');

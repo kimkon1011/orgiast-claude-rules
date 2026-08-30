@@ -81,14 +81,28 @@ function readSubmissionLogs() {
 }
 function listingsFromSearch(data) { return Array.isArray(data) ? data : data?.listings || data?.files || data?.results || []; }
 function formatCheckSummary(result) { return `公開済み ${result.published}件 / 審査待ち ${result.pending}件`; }
-async function notifyStale(result, staleDays) {
+export async function notifyStale(result, staleDays, { forceNotify = false, now = new Date(), fetchImpl = fetch, stateFile = path.join(process.env.ORGIAST_HOME || os.homedir(), '.claude', 'makimono-notify-state.json'), webhookUrl } = {}) {
   if (!result.stale) return;
-  const webhook = readEnvValue(costReporterEnvFile, 'DISCORD_COST_WEBHOOK');
+  const staleIds = result.pendingItems.filter((item) => item.stale).map((item) => item.submissionId || '').sort();
+  let previous;
+  try { previous = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch {}
+  const previousIds = Array.isArray(previous?.staleIds) ? [...previous.staleIds].sort() : [];
+  const sameIds = staleIds.length === previousIds.length && staleIds.every((id, index) => id === previousIds[index]);
+  const lastMs = new Date(previous?.notifiedAt).getTime();
+  const reminderDue = !Number.isFinite(lastMs) || new Date(now).getTime() - lastMs >= 7 * DAY_MS;
+  if (!forceNotify && previous && previous.stale === result.stale && sameIds && !reminderDue) {
+    console.log(`前回と同内容のため通知しません（前回 ${previous.notifiedAt}）`);
+    return false;
+  }
+  const webhook = webhookUrl || readEnvValue(costReporterEnvFile, 'DISCORD_COST_WEBHOOK');
   if (!webhook) { console.error('DISCORD_COST_WEBHOOK が未設定のため通知しません'); return; }
   const titles = result.pendingItems.slice(0, 5).map((item) => `- ${item.title}`).join('\n');
-  const content = `📜 マキモノ: 審査待ち ${result.pending}件(うち ${staleDays}日超 ${result.stale}件)${titles ? `\n${titles}` : ''}`.slice(0, 1900);
-  const response = await fetch(webhook, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ content }), signal: AbortSignal.timeout(15_000) });
+  const content = `📜 マキモノ: 審査待ち ${result.pending}件(うち ${staleDays}日超 ${result.stale}件)${titles ? `\n${titles}` : ''}\n承認は本体リポ側で docs/makimono-auto-approve.md の実行が必要です。`.slice(0, 1900);
+  const response = await fetchImpl(webhook, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ content }), signal: AbortSignal.timeout(15_000) });
   if (!response.ok) throw new Error(`Discord通知 HTTP ${response.status}`);
+  fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+  fs.writeFileSync(stateFile, `${JSON.stringify({ notifiedAt: new Date(now).toISOString(), pending: result.pending, stale: result.stale, staleIds }, null, 2)}\n`);
+  return true;
 }
 async function checkSubmissions(args, { compact = false } = {}) {
   if (!fs.existsSync(logFile)) { console.log('出品ログなし'); return null; }
@@ -107,7 +121,7 @@ async function checkSubmissions(args, { compact = false } = {}) {
     result.pendingItems.forEach((item) => console.log(`- ${item.title} (${item.submissionId || 'ID不明'} / 出品から ${item.days}日)`));
     if (result.stale) console.log(`⚠️ ${result.stale}件が既定日数を超えて審査待ちです`);
   }
-  if (args.includes('--notify')) await notifyStale(result, staleDays);
+  if (args.includes('--notify')) await notifyStale(result, staleDays, { forceNotify: args.includes('--force-notify') });
   return result;
 }
 async function safeCheck(args, options) {

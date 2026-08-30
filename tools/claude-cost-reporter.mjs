@@ -18,13 +18,57 @@ import fs from 'node:fs';
 import { parseEnvText } from './env-kv.mjs';
 import path from 'node:path';
 import os from 'node:os';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { machineIdentity } from './machine-identity.mjs';
 import { resolveReporterLabel } from './reporter-label.mjs';
+import { missingRequiredHooks } from './hook-selfcheck.mjs';
+import { isEntry } from './is-entry.mjs';
 
 const DRY_RUN = process.argv.includes('--dry-run');
 // 6時間ガードを明示的に飛ばす(検証・手動実行用)。tool-adoption-check.mjs と同じ挙動。
 const FORCE = process.argv.includes('--force');
 const nativeHome = os.homedir(); const HOME = process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || nativeHome;
+
+const BOOTSTRAP_INTERVAL_MS = 24 * 60 * 60 * 1000;
+export function bootstrapRequiredHooks({
+  home = os.homedir(),
+  repo = path.dirname(path.dirname(fileURLToPath(import.meta.url))),
+  now = Date.now(),
+  spawn = spawnSync,
+  log = console.log,
+} = {}) {
+  const stampFile = path.join(home, '.claude', '.hook-bootstrap-stamp');
+  try {
+    const lastRun = Number(fs.readFileSync(stampFile, 'utf8').trim());
+    if (Number.isFinite(lastRun) && lastRun <= now && now - lastRun < BOOTSTRAP_INTERVAL_MS) return { repaired: false, skipped: 'daily-guard' };
+  } catch {}
+
+  let settings = {};
+  try { settings = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8').replace(/^\uFEFF/, '')); } catch {}
+  const missing = missingRequiredHooks(settings);
+  try {
+    fs.mkdirSync(path.dirname(stampFile), { recursive: true });
+    fs.writeFileSync(stampFile, String(now));
+  } catch {}
+  if (!missing.length) return { repaired: false, missing };
+
+  const result = spawn(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], {
+    encoding: 'utf8',
+    timeout: 30_000,
+    windowsHide: true,
+    env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo },
+  });
+  if (result?.error) throw result.error;
+  if (typeof result?.status === 'number' && result.status !== 0) throw new Error(`register-hooks exited ${result.status}`);
+  log('🔧 必須hookが未登録だったため自動登録しました（次回セッションから有効）');
+  return { repaired: true, missing };
+}
+
+export function runAfterBootstrap({ bootstrap, collect }) {
+  try { bootstrap(); } catch {}
+  return collect();
+}
 
 // --- 設定読み込み (~/.claude/cost-reporter.env) ---
 function loadEnv() {
@@ -116,7 +160,7 @@ function saveGuardState(fields = {}) {
   try { fs.writeFileSync(statePath(), JSON.stringify({ ...current, lastRun: new Date().toISOString(), ...fields })); } catch { /* ignore */ }
 }
 
-function main() {
+function runCostReporter() {
   const envPath = path.join(HOME, '.claude', 'cost-reporter.env');
   const envText = loadEnv();
   const env = parseEnvText(envText);
@@ -207,6 +251,14 @@ function main() {
     .then((r) => console.log(r.ok ? 'posted to Discord' : `Discord POST failed ${r.status}`))
     .catch((e) => console.error('Discord POST error:', e.message))
     .finally(() => saveGuardState(reportState));
+  return reportState;
 }
 
-main();
+function main() {
+  return runAfterBootstrap({
+    bootstrap: () => bootstrapRequiredHooks({ home: HOME, repo: process.env.ORGIAST_REPO || path.dirname(path.dirname(fileURLToPath(import.meta.url))) }),
+    collect: runCostReporter,
+  });
+}
+
+if (isEntry(import.meta.url)) main();

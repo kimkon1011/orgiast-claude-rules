@@ -229,6 +229,10 @@ function allMemoryDirectories() {
 
 function processDirectory(directory, { apply, dryRun, budget, minBytes, keepFile }) {
   const indexPath = path.join(directory, 'MEMORY.md');
+  if (fs.readFileSync(indexPath, 'utf8').includes('<!-- MEMORY-INDEX v2 split -->')) {
+    console.log(`skip: v2索引のため対象外: ${indexPath}`);
+    return { directory, skipped: true, reason: 'v2-index' };
+  }
   const beforeBytes = fs.statSync(indexPath).size;
   if (beforeBytes <= minBytes) {
     console.log(`しきい値未満のためスキップ: ${indexPath}`);

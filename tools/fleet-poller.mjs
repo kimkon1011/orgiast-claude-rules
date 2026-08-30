@@ -84,7 +84,7 @@ if (dueDaily && repo) {
     const ngItems = ngLines.map(line => line.replace(/^.*\[NG\s*\]\s*/, '').trim()).filter(Boolean).join(' / ');
     const tail = ngLines.length ? ` … NG: ${ngItems}` : '';
     await post(`${ngLines.length ? '⚠' : '✅'} **[${label}]** 日次設定チェック: OK ${ok} / NG ${ngLines.length}${tail}`);
-    run('node', [path.join(repo, 'tools', 'fleet-sheet-report.mjs')]);
+    run('node', [path.join(repo, 'tools', 'fleet-sheet-report.mjs'), '--specs', '--cloud']);
   }
 }
 

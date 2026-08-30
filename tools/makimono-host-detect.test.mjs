@@ -1,11 +1,16 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { detectHostRepo, formatDetectMessage, knownProjectRoots } from './makimono-host-detect.mjs';
 
-function temp() { return fs.mkdtempSync(path.join(os.tmpdir(), 'makimono-host-')); }
+// 作った一時リポは必ず消す。api/v1/listings を持つディレクトリが残ると、
+// docs/makimono-auto-approve.md §0 の「本体リポを持つPCか」判定 grep が偽陽性を出し、
+// 本体リポの無いPCを当事者だと誤認させる(実測で298個溜まっていた)。
+const temps = [];
+function temp() { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'makimono-host-')); temps.push(dir); return dir; }
+after(() => { for (const dir of temps) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} } });
 function makeRepo(root, prefix = 'repo') {
   const repo = path.join(root, prefix);
   fs.mkdirSync(path.join(repo, 'app', 'api', 'v1', 'listings'), { recursive: true });

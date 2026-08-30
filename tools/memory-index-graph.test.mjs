@@ -109,7 +109,7 @@ test('--apply 前に索引が変化したら書かずに失敗する', async () 
   const f = fixture();
   try {
     const original = fs.readFileSync(path.join(f.directory, 'MEMORY.md'), 'utf8');
-    const pending = runCli(['--apply', '--dir', f.directory, '--budget', '1', '--keep-file', f.keepFile], { MEMORY_INDEX_TEST_PREWRITE_DELAY_MS: '500' });
+    const pending = runCli(['--apply', '--dir', f.directory, '--budget', '1', '--min-bytes', '0', '--keep-file', f.keepFile], { MEMORY_INDEX_TEST_PREWRITE_DELAY_MS: '500' });
     for (let attempt = 0; attempt < 100; attempt += 1) {
       if (fs.readdirSync(f.directory).some((name) => name.startsWith('MEMORY.md.bak-'))) break;
       await new Promise((resolve) => setTimeout(resolve, 10));
@@ -127,9 +127,55 @@ test('適用後検証失敗時はバックアップから復元する', async ()
   const f = fixture();
   try {
     const original = fs.readFileSync(path.join(f.directory, 'MEMORY.md'));
-    const result = await runCli(['--apply', '--dir', f.directory, '--budget', '1', '--keep-file', f.keepFile], { MEMORY_INDEX_TEST_CORRUPT_AFTER_WRITE: '1' });
+    const result = await runCli(['--apply', '--dir', f.directory, '--budget', '1', '--min-bytes', '0', '--keep-file', f.keepFile], { MEMORY_INDEX_TEST_CORRUPT_AFTER_WRITE: '1' });
     assert.equal(result.code, 1);
     assert.match(result.stderr, /バックアップから復元/);
     assert.deepEqual(fs.readFileSync(path.join(f.directory, 'MEMORY.md')), original);
   } finally { cleanup(f.directory); }
+});
+
+test('--min-bytes 以下の索引は書き換えられない', async () => {
+  const f = fixture();
+  try {
+    const indexPath = path.join(f.directory, 'MEMORY.md');
+    const before = fs.readFileSync(indexPath);
+    const beforeStat = fs.statSync(indexPath);
+    const result = await runCli(['--apply', '--dir', f.directory, '--budget', '1', '--min-bytes', String(before.length), '--keep-file', f.keepFile]);
+    assert.equal(result.code, 0);
+    assert.match(result.stdout, /しきい値未満のためスキップ/);
+    assert.deepEqual(fs.readFileSync(indexPath), before);
+    assert.equal(fs.statSync(indexPath).mtimeMs, beforeStat.mtimeMs);
+    assert.equal(fs.readdirSync(f.directory).some((name) => name.startsWith('MEMORY.md.bak-')), false);
+  } finally { cleanup(f.directory); }
+});
+
+test('--all-projects が複数のプロジェクトを処理する', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-index-home-'));
+  try {
+    const projects = path.join(home, '.claude', 'projects');
+    const first = fixture();
+    const second = fixture();
+    fs.mkdirSync(projects, { recursive: true });
+    fs.renameSync(first.directory, path.join(projects, 'project-one'));
+    fs.renameSync(second.directory, path.join(projects, 'project-two'));
+    for (const project of ['project-one', 'project-two']) {
+      fs.renameSync(path.join(projects, project), path.join(projects, `${project}-tmp`));
+      fs.mkdirSync(path.join(projects, project), { recursive: true });
+      fs.renameSync(path.join(projects, `${project}-tmp`), path.join(projects, project, 'memory'));
+    }
+    const result = await runCli(['--all-projects', '--dry-run', '--budget', '1', '--min-bytes', '0'], { HOME: home, USERPROFILE: home });
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /project-one/);
+    assert.match(result.stdout, /project-two/);
+    assert.equal((result.stdout.match(/ドライラン:/g) ?? []).length, 2);
+  } finally { cleanup(home); }
+});
+
+test('--all-projects は対象0件でも exit 0', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-index-empty-home-'));
+  try {
+    const result = await runCli(['--all-projects', '--dry-run'], { HOME: home, USERPROFILE: home });
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /対象の MEMORY\.md はありません/);
+  } finally { cleanup(home); }
 });

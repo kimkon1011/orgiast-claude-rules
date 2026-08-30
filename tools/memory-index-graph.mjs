@@ -1,12 +1,10 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 
-const DEFAULT_DIR = process.platform === 'win32'
-  ? String.raw`C:\Users\uers\.claude\projects\c--Users-uers-Downloads-CLAUDE-md--\memory`
-  : '/mnt/c/Users/uers/.claude/projects/c--Users-uers-Downloads-CLAUDE-md--/memory';
 export const DEFAULT_KEEP = path.join(path.dirname(fileURLToPath(import.meta.url)), 'memory-index-keep.txt');
 const ENTRY_LINE_RE = /^\s*-\s+\[/;
 const ENTRY_SEPARATOR = ' ／ ';
@@ -167,6 +165,7 @@ export function applyPlan(directory, options = {}) {
   const firstStat = fs.statSync(indexPath);
   const plan = planApply(directory, options);
   if (!firstBuffer.equals(Buffer.from(plan.beforeText, 'utf8'))) throw new Error('計画中に MEMORY.md が変更されたため中止しました');
+  if (plan.removed.size === 0) return { ...plan, backupPath: undefined };
   const backupPath = `${indexPath}.bak-${stamp()}`;
   fs.copyFileSync(indexPath, backupPath, fs.constants.COPYFILE_EXCL);
   sleepForTest();
@@ -210,24 +209,75 @@ function optionValue(argv, name) {
   return argv[index + 1];
 }
 
-export function run(argv = process.argv.slice(2)) {
-  const valued = new Set(['--dir', '--budget', '--keep-file']);
-  const known = new Set(['--report', '--json', '--apply', '--dry-run', ...valued]);
-  for (let i = 0; i < argv.length; i += 1) { if (!known.has(argv[i])) throw new Error(`不明なオプションです: ${argv[i]}`); if (valued.has(argv[i])) i += 1; }
-  if (argv.includes('--apply') && argv.includes('--dry-run')) throw new Error('--apply と --dry-run は同時に指定できません');
-  if (argv.includes('--report') && argv.includes('--json')) throw new Error('--report と --json は同時に指定できません');
-  const directory = path.resolve(optionValue(argv, '--dir') ?? DEFAULT_DIR);
-  if (argv.includes('--apply') || argv.includes('--dry-run')) {
-    const budget = Number(optionValue(argv, '--budget') ?? 15000);
-    if (!Number.isSafeInteger(budget) || budget < 0) throw new Error('--budget は0以上の整数にしてください');
-    const options = { budget, keepFile: path.resolve(optionValue(argv, '--keep-file') ?? DEFAULT_KEEP) };
-    const result = argv.includes('--apply') ? applyPlan(directory, options) : planApply(directory, options);
-    console.log(`${argv.includes('--apply') ? '適用完了' : 'ドライラン'}: 削除 ${result.removed.size}件 / ${result.beforeBytes} B -> ${result.afterBytes} B / 残エントリ ${result.remainingEntries}件`);
+function parseNonNegativeInteger(value, name) {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < 0) throw new Error(`${name} は0以上の整数にしてください`);
+  return number;
+}
+
+function allMemoryDirectories() {
+  const projectsDir = path.join(os.homedir(), '.claude', 'projects');
+  if (!fs.existsSync(projectsDir)) return [];
+  return fs.readdirSync(projectsDir, { withFileTypes: true })
+    .filter((item) => item.isDirectory())
+    .map((item) => path.join(projectsDir, item.name, 'memory'))
+    .filter((directory) => fs.existsSync(path.join(directory, 'MEMORY.md')))
+    .map((directory) => ({ directory, mtime: fs.statSync(path.dirname(directory)).mtimeMs }))
+    .sort((a, b) => b.mtime - a.mtime)
+    .map((candidate) => candidate.directory);
+}
+
+function processDirectory(directory, { apply, dryRun, budget, minBytes, keepFile }) {
+  const indexPath = path.join(directory, 'MEMORY.md');
+  const beforeBytes = fs.statSync(indexPath).size;
+  if (beforeBytes <= minBytes) {
+    console.log(`しきい値未満のためスキップ: ${indexPath}`);
+    return { directory, skipped: true, reason: 'min-bytes', beforeBytes };
+  }
+  if (apply || dryRun) {
+    const result = apply ? applyPlan(directory, { budget, keepFile }) : planApply(directory, { budget, keepFile });
+    console.log(`${apply ? '適用完了' : 'ドライラン'}: ${indexPath}: 削除 ${result.removed.size}件 / ${result.beforeBytes} B -> ${result.afterBytes} B / 残エントリ ${result.remainingEntries}件`);
     return result;
   }
   const result = analyze(directory);
-  if (argv.includes('--json')) console.log(JSON.stringify(result, null, 2)); else console.log(formatReport(result));
   return result;
+}
+
+export function run(argv = process.argv.slice(2)) {
+  const valued = new Set(['--dir', '--budget', '--keep-file', '--min-bytes']);
+  const known = new Set(['--report', '--json', '--apply', '--dry-run', '--all-projects', ...valued]);
+  for (let i = 0; i < argv.length; i += 1) { if (!known.has(argv[i])) throw new Error(`不明なオプションです: ${argv[i]}`); if (valued.has(argv[i])) i += 1; }
+  if (argv.includes('--apply') && argv.includes('--dry-run')) throw new Error('--apply と --dry-run は同時に指定できません');
+  if (argv.includes('--report') && argv.includes('--json')) throw new Error('--report と --json は同時に指定できません');
+  const directoryOption = optionValue(argv, '--dir');
+  const allProjects = argv.includes('--all-projects');
+  if (directoryOption && allProjects) throw new Error('--dir と --all-projects は同時に指定できません');
+  const directories = directoryOption ? [path.resolve(directoryOption)] : allMemoryDirectories();
+  if (!directories.length) {
+    console.log('対象の MEMORY.md はありません');
+    return [];
+  }
+  const targets = allProjects ? directories : [directories[0]];
+  const budget = parseNonNegativeInteger(optionValue(argv, '--budget') ?? '15000', '--budget');
+  const minBytes = parseNonNegativeInteger(optionValue(argv, '--min-bytes') ?? '16000', '--min-bytes');
+  const options = { apply: argv.includes('--apply'), dryRun: argv.includes('--dry-run'), budget, minBytes, keepFile: path.resolve(optionValue(argv, '--keep-file') ?? DEFAULT_KEEP) };
+  const results = [];
+  const failures = [];
+  for (const directory of targets) {
+    try { results.push(processDirectory(directory, options)); }
+    catch (error) {
+      if (!allProjects) throw error;
+      failures.push({ directory, error });
+      console.error(`処理失敗: ${directory}: ${error.message}`);
+    }
+  }
+  if (failures.length) throw new Error(`全プロジェクト処理: ${failures.length}件失敗`);
+  if (!options.apply && !options.dryRun) {
+    if (argv.includes('--json')) console.log(JSON.stringify(allProjects ? results : results[0], null, 2));
+    else for (const result of results) if (!result.skipped) console.log(formatReport(result));
+  }
+  if (results.every((result) => result.skipped)) console.log('処理対象なし');
+  return allProjects ? results : results[0];
 }
 
 if (isEntry(import.meta.url)) {

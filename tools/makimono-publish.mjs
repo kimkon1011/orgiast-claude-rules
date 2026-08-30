@@ -67,6 +67,31 @@ const allows = (args) => args.flatMap((x, i) => x === '--allow' ? [args[i + 1]] 
 function showFindings(findings) { findings.forEach((x) => console.error(`${x.line}行目 [${x.pattern}] ${x.sample}`)); }
 function slugify(s) { return String(s).normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '').slice(0, 60) || 'draft'; }
 function normalizedTitle(title) { return String(title ?? '').normalize('NFKC').replace(/\s/gu, '').toLowerCase(); }
+function similarityText(value) { return String(value ?? '').normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]/gu, ''); }
+function bigrams(value) {
+  const normalized = similarityText(value); const result = new Set();
+  for (let i = 0; i < normalized.length - 1; i++) result.add(normalized.slice(i, i + 2));
+  return result;
+}
+const SIMILARITY_STOP_WORDS = new Set(['する', 'こと', 'ため', '方法', '手順', '対策', '問題', '自動', '設定', '確認', '作る', '直す', '止める', '使う', '実装', '運用', '場合', '内容', '状態', '必要', '処理', '仕組み', '全部', '毎回']);
+function terms(title, summary) {
+  const matches = `${String(title ?? '')} ${String(summary ?? '')}`.normalize('NFKC').match(/[ァ-ヶー]{2,}|[A-Za-z][A-Za-z0-9.+#-]{1,}|[一-龠々]{2,}/gu) || [];
+  return new Set(matches.map((term) => term.toLowerCase()).filter((term) => !SIMILARITY_STOP_WORDS.has(term)));
+}
+function overlapSize(left, right) { let count = 0; for (const value of left) if (right.has(value)) count++; return count; }
+// 出品後は取り下げられないため、文字面か特徴語の片方が近ければ警告して取りこぼしを避ける。
+// threshold 0.3 は実データで決めた値。審査待ち31件を投稿順に再生すると、
+// 既知の重複8件(MCP「接続済み」6件 / 記憶索引 / 夜間バッチ)を全部止めつつ誤検知は3件で済む。
+// 0.35 まで上げると言い換えの大きい2件を取り逃がし、0.25 まで下げると16件が止まり警告が形骸化する。
+export function findSimilarPending(logs, candidate, { threshold = 0.3, limit = 5 } = {}) {
+  const candidateBigrams = bigrams(candidate?.title); const candidateTerms = terms(candidate?.title, candidate?.summary);
+  return (Array.isArray(logs) ? logs : []).filter((entry) => entry?.status !== 'published' && entry?.status !== 'rejected').map((entry) => {
+    const entryBigrams = bigrams(entry?.title); const entryTerms = terms(entry?.title, entry?.summary);
+    const diceBigram = candidateBigrams.size && entryBigrams.size ? (2 * overlapSize(candidateBigrams, entryBigrams)) / (candidateBigrams.size + entryBigrams.size) : 0;
+    const termOverlap = candidateTerms.size && entryTerms.size ? overlapSize(candidateTerms, entryTerms) / Math.min(candidateTerms.size, entryTerms.size) : 0;
+    return { title: entry?.title, submissionId: entry?.submissionId, at: entry?.at, rawScore: Math.max(diceBigram, termOverlap) };
+  }).filter((entry) => entry.rawScore >= threshold).sort((a, b) => b.rawScore - a.rawScore || (new Date(b.at).getTime() || 0) - (new Date(a.at).getTime() || 0)).slice(0, Math.max(0, limit)).map(({ rawScore, ...entry }) => ({ ...entry, score: Math.round(rawScore * 100) / 100 }));
+}
 export function reconcileSubmissions(logs, listings, now, staleDays) {
   const nowMs = new Date(now).getTime();
   const publishedByTitle = new Map((Array.isArray(listings) ? listings : []).map((listing) => [normalizedTitle(listing?.title), listing]));
@@ -185,8 +210,15 @@ async function main() {
   if (args.includes('--dry')) { console.log(JSON.stringify({ ...payload, body: `${body.slice(0, 200)}… (${body.length}文字)` }, null, 2)); return; }
   let logs = readSubmissionLogs(); const logFile = homeFile('makimono-submissions.json');
   const hash = crypto.createHash('sha256').update(body).digest('hex').slice(0, 16); if (logs.some((x) => x.sha256 === hash)) { console.log('同一内容を出品済み'); return; }
+  const similarPending = findSimilarPending(logs, { title, summary });
+  if (similarPending.length) {
+    console.error('審査待ちに近い題名があります（取り下げ経路は無いので出す前に確認してください）');
+    similarPending.forEach((entry) => console.error(`- ${entry.title} (${entry.submissionId} / 出品 ${String(entry.at ?? '').slice(0, 10)} / 類似度 ${entry.score})`));
+    if (!args.includes('--force')) { console.error('同主題なら出品せず既存に寄せる。別主題だと確認できたら `--force` を付けて再実行してください'); process.exitCode = 2; return; }
+    console.error('`--force` が指定されたため出品を続行します');
+  }
   const auth = await ensureKey({ logTrusted: true }); const response = await fetch(`${BASE}/api/v1/listings`, { method: 'POST', headers: { authorization: `Bearer ${auth.key}`, 'content-type': 'application/json' }, body: JSON.stringify(payload), signal: AbortSignal.timeout(8000) }); const data = await response.json(); if (!response.ok) throw new Error(`出品 HTTP ${response.status}: ${data.error || '失敗'}`);
-  logs.push({ at: new Date().toISOString(), title, category, submissionId: data.submissionId, status: data.status, email: auth.email, sha256: hash }); fs.mkdirSync(path.dirname(logFile), { recursive: true }); fs.writeFileSync(logFile, `${JSON.stringify(logs, null, 2)}\n`);
+  logs.push({ at: new Date().toISOString(), title, summary, category, submissionId: data.submissionId, status: data.status, email: auth.email, sha256: hash }); fs.mkdirSync(path.dirname(logFile), { recursive: true }); fs.writeFileSync(logFile, `${JSON.stringify(logs, null, 2)}\n`);
   console.log(JSON.stringify({ submissionId: data.submissionId, status: data.status })); console.log('確認: https://makimono-md.vercel.app/contribute');
   if (!args.includes('--no-check')) await safeCheck(args, { compact: true });
 }

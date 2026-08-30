@@ -127,7 +127,7 @@ test("project empty or unavailable values never clear cells and labels merge", (
   assert.equal(context.cloudMergeLabels("PC-A, PC-B", "PC-A"), "PC-A, PC-B");
 });
 
-test("contract never writes payment columns and force controls nonempty overwrite", () => {
+test("contract force controls nonempty overwrite and never writes the card column", () => {
   const existing = row(contracts, {
     サービス: "Vercel",
     "アカウント(ログインID)": "kim",
@@ -150,10 +150,65 @@ test("contract never writes payment columns and force controls nonempty overwrit
   });
   assert.equal(forced.updates.length, 1);
   assert.equal(contracts[forced.updates[0].columnIndex - 1], "プラン");
-  for (const forbidden of ["支払い元カード(下4桁)", "支払い元(名義)"]) {
+  assert(
+    !forced.updates.some(
+      (update) => contracts[update.columnIndex - 1] === "支払い元カード(下4桁)",
+    ),
+  );
+});
+
+test("contract writes the four freee columns but never the card column across 200 column orders", () => {
+  const expected = ["月額(税込)", "通貨", "支払い元(名義)", "請求サイクル"];
+  for (let iteration = 0; iteration < 200; iteration += 1) {
+    const headers = shuffle(contracts);
+    const existing = row(headers, {
+      サービス: "Groq",
+      "アカウント(ログインID)": "",
+      "支払い元カード(下4桁)": "1234",
+    });
+    const plan = context.cloudPlanContractUpsert(headers, [existing], {
+      service: "Groq",
+      account: "",
+      monthlyAmount: 9800,
+      currency: "JPY",
+      payerName: "金立替／アメリカン・エキスプレス",
+      billingCycle: "月次",
+      card: "9999",
+    });
+    const written = plan.updates.map((update) => headers[update.columnIndex - 1]);
+    assert.deepEqual([...written].sort(), [...expected].sort());
+    assert(!written.includes("支払い元カード(下4桁)"));
+  }
+});
+
+test("contract protects nonempty freee cells without force", () => {
+  const existing = row(contracts, {
+    サービス: "Groq",
+    "月額(税込)": 100,
+    通貨: "USD",
+    "支払い元(名義)": "人の値",
+    請求サイクル: "年次",
+  });
+  const plan = context.cloudPlanContractUpsert(contracts, [existing], {
+    service: "Groq",
+    monthlyAmount: 200,
+    currency: "JPY",
+    payerName: "機械の値",
+    billingCycle: "月次",
+  });
+  assert.equal(plan.updates.length, 0);
+});
+
+test("contract does not touch monthly amount for unavailable values", () => {
+  for (const monthlyAmount of [undefined, null, ""]) {
+    const existing = row(contracts, { サービス: "Groq" });
+    const plan = context.cloudPlanContractUpsert(contracts, [existing], {
+      service: "Groq",
+      monthlyAmount,
+    });
     assert(
-      !forced.updates.some(
-        (update) => contracts[update.columnIndex - 1] === forbidden,
+      !plan.updates.some(
+        (update) => contracts[update.columnIndex - 1] === "月額(税込)",
       ),
     );
   }

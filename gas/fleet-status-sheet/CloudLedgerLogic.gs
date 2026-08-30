@@ -89,7 +89,7 @@ function cloudPlanProjectUpsert(headers, rows, payload) {
 
 function cloudPlanContractUpsert(headers, rows, payload) {
   // カード等の人の列は許可リストに含めず、機械からは書けない構造にする。
-  var allowed = {'サービス':'service','アカウント(ログインID)':'account','プラン':'plan','月額(税込)':'monthlyAmount','通貨':'currency','契約者・管理者':'administrator','用途':'purpose','関連プロジェクト':'projects','管理画面URL':'adminUrl','請求サイクル':'billingCycle','次回更新日':'renewalDate','解約可否メモ':'cancelMemo','最終確認日':'checkedAt','自動検出':'detected'};
+  var allowed = {'サービス':'service','アカウント(ログインID)':'account','プラン':'plan','月額(税込)':'monthlyAmount','通貨':'currency','支払い元(名義)':'payerName','契約者・管理者':'administrator','用途':'purpose','関連プロジェクト':'projects','管理画面URL':'adminUrl','請求サイクル':'billingCycle','次回更新日':'renewalDate','解約可否メモ':'cancelMemo','最終確認日':'checkedAt','自動検出':'detected'};
   var serviceCol = cloudColumn(headers, 'サービス', true);
   var accountCol = cloudColumn(headers, 'アカウント(ログインID)', true);
   var updates = [];

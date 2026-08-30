@@ -5,7 +5,7 @@ kim 指示 2026-08-28「残り4台は 2026-08-19 の webhook 削除で止まっ�
 現状 `tools/fleet-liveness.mjs` の判定（生存 / Discordにだけ届かない / 壊れて停止 / 報告実績なし / 手入力のみ / 未確定）は
 **Discord にしか出ていない**。シートを見ても「なぜ空欄なのか」が分からない。シート側に状態を持たせる。
 
-対象シート: 「オージャストAI設定 実施状況＆整合性チェック」（`FLEET_SHEET_URL` の既存 Web App）。
+対象シート: 「オージャスト クラウド契約・プロジェクト台帳」（`https://docs.google.com/a/orgiast.jp/spreadsheets/d/1soai_gMbH0C-67J8680Y26Y7KJWkV87sFZxCgDQ2BbI/edit`、`FLEET_SHEET_URL` の既存 Web App）。
 **PC管理表（備品管理表）ではない。**
 
 ## 追加する列（既存のオプショナル列の仕組みに乗る）

@@ -51,7 +51,9 @@ function toJst(value) {
 async function main() {
   const claudeDir = path.join(home, '.claude');
   const fleetEnv = readEnv(path.join(claudeDir, 'fleet-sheet.env'));
-  if (!dryRun && (!fleetEnv.FLEET_SHEET_URL || !fleetEnv.FLEET_SHEET_TOKEN)) {
+  // dry-run でも設定不足を許すと収集処理まで進み、payload が stdout に漏れる。
+  // 送信先のない PC では収集テストも不要なため、必ずここで終了する。
+  if (!fleetEnv.FLEET_SHEET_URL || !fleetEnv.FLEET_SHEET_TOKEN) {
     console.error('fleet-sheet: FLEET_SHEET_URL/TOKEN 未設定のため送信しません(~/.claude/fleet-sheet.env)');
     return;
   }

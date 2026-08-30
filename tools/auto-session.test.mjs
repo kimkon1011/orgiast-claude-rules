@@ -6,7 +6,7 @@ import path from 'node:path';
 
 const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-session-test-'));
 process.env.ORGIAST_HOME = isolatedHome;
-const { DEFAULT_REPO, localDate, loadConfig, detectHistoryCwd, parseHandoff, todoExclusionReason, todoExclusionReasons, dedupeKey, dedupeTodos, filterTodos, pickCwd, buildChildArgs, buildPrompt, buildFeedbackPrompt, feedbackIssueExclusionReason, filterFeedbackIssues, feedbackNotifyUrl, normalizeGitHubRepo, feedbackRepoCwd, resolveClaudeExe, decideRun, markTodoDone, extractSessionId, transcriptPath, recoverSessionId, appendClosedSession, formatResultLine, parseArgs, deadlineDecision } = await import('./auto-session.mjs');
+const { DEFAULT_REPO, localDate, loadConfig, detectHistoryCwd, parseHandoff, todoExclusionReason, todoExclusionReasons, dedupeKey, dedupeTodos, filterTodos, pickCwd, buildChildArgs, buildPrompt, buildFeedbackPrompt, feedbackIssueExclusionReason, filterFeedbackIssues, feedbackNotifyUrl, normalizeGitHubRepo, feedbackRepoCwd, resolveClaudeExe, decideRun, markTodoDone, extractSessionId, transcriptPath, recoverSessionId, appendClosedSession, formatResultLine, parseArgs, deadlineDecision, runChild } = await import('./auto-session.mjs');
 const historyCwd = String.raw`c:\Users\example\Downloads\work`;
 test.after(() => fs.rmSync(isolatedHome, { recursive: true, force: true }));
 
@@ -400,4 +400,14 @@ test('markTodoDone は複数行 TODO の先頭行だけを完了表示にする'
   const changed = markTodoDone(realShape, todo, '2026-08-26 完了（PR #42）');
   assert.ok(changed.includes('1. ~~**複数行の実装を完了する**~~ → ✅ 2026-08-26 完了（PR #42）\n   - 既存の挙動を維持する'));
   assert.ok(changed.includes('   - Windows 実機でもテストする'));
+});
+
+test('spawn が同期 throw しても reject せず failure として resolve する', async () => {
+  // Windows の spawn は EFTYPE/ENOENT を同期 throw する。child.on('error') では拾えないため、
+  // 以前は Promise executor の外へ抜けて main が exit 1 で死に、残りのTODOも最終通知も消えていた。
+  // NUL を含むパスはどのプラットフォームでも spawn が同期 throw するので、その経路を移植性高く踏める。
+  const result = await runChild(`bogus${String.fromCharCode(0)}path`, 'prompt', process.cwd(), process.cwd(), 1000);
+  assert.equal(result.status, 'failure');
+  assert.equal(result.launchFailed, true);
+  assert.ok(result.stderr.length > 0);
 });

@@ -4,8 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import { buildIndex, ingestFiles, isMainModule, parsePart } from './growi-manual.mjs';
+import { fileURLToPath } from 'node:url';
+import { buildIndex, ingestFiles, installIndexFiles, parsePart } from './growi-manual.mjs';
 
 const tool = fileURLToPath(new URL('./growi-manual.mjs', import.meta.url));
 const delimiter = '================================================== 次のページ ==================================================';
@@ -79,6 +79,78 @@ test('ingest はMCP保存JSON(base64)と生txtの両方を取り込む', (t) => 
   assert.ok(fs.existsSync(path.join(cache, 'part02.txt')));
 });
 
+function indexFixtures(dir) {
+  fs.writeFileSync(path.join(dir, 'part01.txt'), sample(1, 2));
+  fs.writeFileSync(path.join(dir, 'part02.txt'), sample(2, 2));
+  buildIndex(dir, new Map([[1, { fileId: 'drive-part-1' }], [2, { fileId: 'drive-part-2' }]]));
+  return {
+    index: fs.readFileSync(path.join(dir, 'index.tsv'), 'utf8'),
+    meta: fs.readFileSync(path.join(dir, 'meta.json'), 'utf8'),
+  };
+}
+
+test('install-index はMCP保存JSONと生ファイルを順序に関係なく振り分ける', (t) => {
+  const source = temporaryCache(t);
+  const fixture = indexFixtures(source);
+  for (const reverse of [false, true]) {
+    const cache = temporaryCache(t);
+    const input = temporaryCache(t);
+    const index = path.join(input, 'unknown-a.json');
+    const meta = path.join(input, 'unknown-b.json');
+    fs.writeFileSync(index, JSON.stringify({ content: Buffer.from(fixture.index).toString('base64'), title: 'download' }));
+    fs.writeFileSync(meta, fixture.meta);
+    const files = reverse ? [meta, index] : [index, meta];
+    assert.deepEqual(installIndexFiles(files, cache), { parts: 2, pages: 6 });
+    assert.match(fs.readFileSync(path.join(cache, 'index.tsv'), 'utf8'), /^p0001\t1\t/);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(cache, 'meta.json'), 'utf8')).parts.length, 2);
+  }
+});
+
+test('本文が1つもなくても search が結果を返す', (t) => {
+  const source = temporaryCache(t);
+  const fixture = indexFixtures(source);
+  const cache = temporaryCache(t);
+  const index = path.join(cache, 'source.tsv');
+  const meta = path.join(cache, 'source.json');
+  fs.writeFileSync(index, fixture.index); fs.writeFileSync(meta, fixture.meta);
+  installIndexFiles([meta, index], cache);
+  const result = run(cache, ['search', '経理処理']);
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /p0003\t1\t経理処理/);
+});
+
+test('未取得 Part の get は exit 3 で fileId と ingest 手順を案内する', (t) => {
+  const source = temporaryCache(t); const fixture = indexFixtures(source); const cache = temporaryCache(t);
+  const index = path.join(cache, 'source.tsv'); const meta = path.join(cache, 'source.json');
+  fs.writeFileSync(index, fixture.index); fs.writeFileSync(meta, fixture.meta); installIndexFiles([index, meta], cache);
+  const result = run(cache, ['get', 'p0001']);
+  assert.equal(result.status, 3);
+  assert.match(result.stderr, /fileId: drive-part-1/);
+  assert.match(result.stderr, /ingest <保存パス>/);
+});
+
+test('--body は未取得 Part を除外して注意を出すが exit 0', (t) => {
+  const source = temporaryCache(t); const fixture = indexFixtures(source); const cache = temporaryCache(t);
+  const index = path.join(cache, 'source.tsv'); const meta = path.join(cache, 'source.json');
+  fs.writeFileSync(index, fixture.index); fs.writeFileSync(meta, fixture.meta); installIndexFiles([index, meta], cache);
+  fs.writeFileSync(path.join(cache, 'part01.txt'), sample(1, 2));
+  const result = run(cache, ['search', '日本語の本文A', '--body']);
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /p0001/);
+  assert.match(result.stderr, /注意: 未取得の Part 2 は本文検索の対象外です/);
+});
+
+test('status は本文ありと索引のみを出し分ける', (t) => {
+  const source = temporaryCache(t); const fixture = indexFixtures(source); const cache = temporaryCache(t);
+  const index = path.join(cache, 'source.tsv'); const meta = path.join(cache, 'source.json');
+  fs.writeFileSync(index, fixture.index); fs.writeFileSync(meta, fixture.meta); installIndexFiles([index, meta], cache);
+  fs.writeFileSync(path.join(cache, 'part01.txt'), sample(1, 2));
+  const result = run(cache, ['status']);
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /Part 1:.*\[本文あり\]/);
+  assert.match(result.stdout, /Part 2:.*\[索引のみ\]/);
+});
+
 test('引数なしは usage を stderr に出して exit 2', (t) => {
   const result = run(temporaryCache(t), []);
   assert.equal(result.status, 2);
@@ -95,15 +167,8 @@ test('シンボリックリンク経由で起動されても main が走る（�
     t.skip('この環境ではシンボリックリンクを作れない');
     return;
   }
-  // リンク側のパスを argv[1]、実体側を import.meta.url に見立てても main と判定されること
-  assert.equal(isMainModule(link, pathToFileURL(tool).href), true);
   // 実際にリンク経由で起動しても usage が出る（無言 exit 0 にならない）
   const result = spawnSync(process.execPath, [link], { encoding: 'utf8' });
   assert.equal(result.status, 2);
   assert.match(result.stderr, /usage:/);
-});
-
-test('無関係なスクリプトを argv[1] に渡したら main と判定しない', () => {
-  assert.equal(isMainModule(path.join(os.tmpdir(), 'nope-not-here.mjs'), import.meta.url), false);
-  assert.equal(isMainModule(undefined, import.meta.url), false);
 });

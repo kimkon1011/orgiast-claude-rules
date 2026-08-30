@@ -2,10 +2,11 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { defaultDriveKeyPath, driveApi, getDriveToken } from '../scripts/lib/drive-auth.mjs';
+import { isEntry } from './is-entry.mjs';
 
 const FOLDER_ID = '1LMRI2jFpVG3WnDYlepgbOuyJ6ZBYzI8B';
+const HUB_FOLDER_ID = '1RLYbK6CKyPWRJsG6LY0WB9OzlbFYSFvw';
 const DOC_MIME = 'application/vnd.google-apps.document';
 const BODY_MARKER = '---------- マニュアル本文 ----------';
 const CACHE_DIR = process.env.GROWI_MANUAL_CACHE_DIR ?? path.join(os.homedir(), '.claude', 'cache', 'growi-manual');
@@ -62,6 +63,15 @@ function readIndex(cacheDir = CACHE_DIR) {
 
 function loadPreviousMeta(cacheDir) {
   try { return JSON.parse(fs.readFileSync(path.join(cacheDir, 'meta.json'), 'utf8')); } catch { return { parts: [] }; }
+}
+
+function decodeInput(file) {
+  const raw = fs.readFileSync(file);
+  try {
+    const json = JSON.parse(raw.toString('utf8'));
+    if (typeof json.content === 'string') return Buffer.from(json.content, 'base64').toString('utf8');
+  } catch { /* 生ファイルとして扱う */ }
+  return raw.toString('utf8');
 }
 
 export function buildIndex(cacheDir = CACHE_DIR, metadata = new Map()) {
@@ -127,6 +137,55 @@ async function sync() {
     if (match && !currentParts.has(Number(match[1]))) fs.rmSync(path.join(CACHE_DIR, name));
   }
   printSummary(buildIndex(CACHE_DIR, metadata));
+  try { await publishIndex(); } catch (error) { console.error(`警告: 索引の発行に失敗しました: ${error.message}`); }
+  return 0;
+}
+
+async function findHubFile(token, title) {
+  const escaped = title.replaceAll("'", "\\'");
+  const q = encodeURIComponent(`name='${escaped}' and '${HUB_FOLDER_ID}' in parents and trashed=false`);
+  const response = await driveApi(token, `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,modifiedTime)&orderBy=modifiedTime desc`);
+  return (await response.json()).files ?? [];
+}
+
+async function uploadHubFile(token, localFile, title, mimeType) {
+  const content = fs.readFileSync(localFile);
+  const existing = await findHubFile(token, title);
+  if (existing.length) {
+    await driveApi(token, `https://www.googleapis.com/upload/drive/v3/files/${existing[0].id}?uploadType=media`, {
+      method: 'PATCH', headers: { 'Content-Type': `${mimeType}; charset=utf-8` }, body: content,
+    });
+    return { id: existing[0].id, bytes: content.length };
+  }
+  const boundary = `growi-index-${Date.now()}`;
+  const metadata = JSON.stringify({ name: title, parents: [HUB_FOLDER_ID], mimeType });
+  const body = Buffer.concat([
+    Buffer.from(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadata}\r\n--${boundary}\r\nContent-Type: ${mimeType}; charset=utf-8\r\n\r\n`),
+    content,
+    Buffer.from(`\r\n--${boundary}--`),
+  ]);
+  const response = await driveApi(token, 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', {
+    method: 'POST', headers: { 'Content-Type': `multipart/related; boundary=${boundary}` }, body,
+  });
+  return { id: (await response.json()).id, bytes: content.length };
+}
+
+async function publishIndex() {
+  const indexFile = path.join(CACHE_DIR, 'index.tsv');
+  const metaFile = path.join(CACHE_DIR, 'meta.json');
+  if (!fs.existsSync(indexFile) || !fs.existsSync(metaFile)) {
+    console.error('キャッシュがありません。先に sync を実行してください。');
+    return 1;
+  }
+  const keyPath = process.env.GOOGLE_SA_KEY ?? defaultDriveKeyPath();
+  if (!fs.existsSync(keyPath)) {
+    console.error('サービスアカウント鍵がありません。鍵のある環境で実行してください。');
+    return 2;
+  }
+  const token = await getDriveToken({ keyPath });
+  const index = await uploadHubFile(token, indexFile, 'growi-manual-index.tsv', 'text/tab-separated-values');
+  const meta = await uploadHubFile(token, metaFile, 'growi-manual-meta.json', 'application/json');
+  console.log(`published: growi-manual-index.tsv ${index.id} (${index.bytes} bytes) / growi-manual-meta.json ${meta.id}`);
   return 0;
 }
 
@@ -135,20 +194,42 @@ export function ingestFiles(files, cacheDir = CACHE_DIR) {
   let ingested = 0;
   for (const file of files) {
     try {
-      const raw = fs.readFileSync(file);
-      let text;
-      try {
-        const json = JSON.parse(raw.toString('utf8'));
-        text = typeof json.content === 'string' ? Buffer.from(json.content, 'base64').toString('utf8') : raw.toString('utf8');
-      } catch { text = raw.toString('utf8'); }
-      text = normalizeText(text);
+      const text = normalizeText(decodeInput(file));
       const part = Number(text.slice(0, 300).match(/【社内マニュアル - Part (\d+)\/\d+】/)?.[1]);
       if (!Number.isInteger(part) || part < 1) { console.error(`Part 番号を判定できないため skip: ${file}`); continue; }
       fs.writeFileSync(path.join(cacheDir, partName(part)), text);
       ingested++;
     } catch (error) { console.error(`読み込み失敗のため skip: ${file}: ${error.message}`); }
   }
+  if (fs.existsSync(path.join(cacheDir, 'index.tsv')) && fs.existsSync(path.join(cacheDir, 'meta.json'))) {
+    const meta = loadPreviousMeta(cacheDir);
+    return { ingested, parts: meta.parts.length, pages: readIndex(cacheDir).length };
+  }
   return { ingested, ...buildIndex(cacheDir) };
+}
+
+export function installIndexFiles(files, cacheDir = CACHE_DIR) {
+  fs.mkdirSync(cacheDir, { recursive: true });
+  let indexText;
+  let meta;
+  for (const file of files) {
+    const text = normalizeText(decodeInput(file));
+    const first = text.split('\n', 1)[0];
+    if (/^p[^\t]*\t[^\t]+\t[^\t]+\t[^\t]+\t[^\t]*\t[^\t]*$/.test(first)) {
+      indexText = text;
+      continue;
+    }
+    try {
+      const candidate = JSON.parse(text);
+      if (Array.isArray(candidate.parts)) { meta = candidate; continue; }
+    } catch { /* 下のエラーにまとめる */ }
+    throw new Error(`索引ファイルとして判定できません: ${file}`);
+  }
+  if (!indexText || !meta) throw new Error('index.tsv と meta.json の両方を指定してください');
+  meta.installedAt = new Date().toISOString();
+  fs.writeFileSync(path.join(cacheDir, 'index.tsv'), indexText.endsWith('\n') ? indexText : `${indexText}\n`);
+  fs.writeFileSync(path.join(cacheDir, 'meta.json'), `${JSON.stringify(meta, null, 2)}\n`);
+  return { parts: meta.parts.length, pages: indexText.split('\n').filter(Boolean).length };
 }
 
 export function searchEntries(query, options = {}, cacheDir = CACHE_DIR) {
@@ -160,6 +241,7 @@ export function searchEntries(query, options = {}, cacheDir = CACHE_DIR) {
       if (options.path && !entry.path.startsWith(options.path)) return false;
       let match = entry.title.includes(query) || entry.path.includes(query);
       if (!match && options.body) {
+        if (!fs.existsSync(path.join(cacheDir, partName(entry.part)))) return false;
         let fd = handles.get(entry.part);
         if (fd === undefined) { fd = fs.openSync(path.join(cacheDir, partName(entry.part)), 'r'); handles.set(entry.part, fd); }
         match = readBody(fd, entry).toString('utf8').includes(query);
@@ -197,13 +279,20 @@ export function resolveGet(value, cacheDir = CACHE_DIR) {
 }
 
 function usage() {
-  console.error('usage: growi-manual.mjs sync | ingest <file>... | index | search <query> [--limit N] [--path <prefix>] [--body] | get <id|title|path> | status');
+  console.error('usage: growi-manual.mjs sync | publish-index | install-index <file>... | ingest <file>... | index | search <query> [--limit N] [--path <prefix>] [--body] | get <id|title|path> | status');
 }
 
 export async function main(args = process.argv.slice(2)) {
   const [command, ...rest] = args;
   if (!command) { usage(); return 2; }
   if (command === 'sync') return sync();
+  if (command === 'publish-index') return publishIndex();
+  if (command === 'install-index') {
+    if (!rest.length) { usage(); return 2; }
+    const result = installIndexFiles(rest);
+    console.log(`索引を取り込みました: Parts ${result.parts} / Pages ${result.pages}（本文は未取得）`);
+    return 0;
+  }
   if (command === 'ingest') {
     if (!rest.length) { usage(); return 2; }
     const result = ingestFiles(rest); printSummary(result); return result.ingested ? 0 : 1;
@@ -221,6 +310,11 @@ export async function main(args = process.argv.slice(2)) {
       else throw new Error(`不明なオプション: ${option}`);
     }
     const matches = searchEntries(query, options);
+    if (options.body) {
+      const missing = [...new Set(readIndex(CACHE_DIR).map((entry) => entry.part))]
+        .filter((part) => !fs.existsSync(path.join(CACHE_DIR, partName(part))));
+      if (missing.length) console.error(`注意: 未取得の Part ${missing.join(',')} は本文検索の対象外です`);
+    }
     console.log(matches.length ? matches.map(formatEntry).join('\n') : 'no match');
     return 0;
   }
@@ -230,7 +324,14 @@ export async function main(args = process.argv.slice(2)) {
     if (matches.length === 0) { console.error(`not found: ${rest[0]}`); return 1; }
     if (matches.length > 1) { console.log(matches.map(formatEntry).join('\n')); return 1; }
     const entry = matches[0];
-    const fd = fs.openSync(path.join(CACHE_DIR, partName(entry.part)), 'r');
+    const bodyFile = path.join(CACHE_DIR, partName(entry.part));
+    if (!fs.existsSync(bodyFile)) {
+      const meta = loadPreviousMeta(CACHE_DIR);
+      const item = (meta.parts ?? []).find((part) => part.part === entry.part) ?? {};
+      console.error(`このページは Part ${entry.part} にありますが、本文がまだ取得されていません。\n\n  1) Drive MCP で download_file_content を呼ぶ\n     fileId: ${item.fileId ?? 'meta.json に fileId がありません'}\n     exportMimeType: text/plain\n     （サイズが大きいためローカルに保存されます。その保存パスを控える）\n  2) node ${process.argv[1]} ingest <保存パス>\n\n取り込むと Part ${entry.part} の ${item.pages ?? '不明な'} ページすべてが get できるようになります。`);
+      return 3;
+    }
+    const fd = fs.openSync(bodyFile, 'r');
     try {
       process.stdout.write(`### ページタイトル: ${entry.title}\n--- 内部パス: ${entry.path} ---\n\n`);
       process.stdout.write(readBody(fd, entry));
@@ -241,9 +342,10 @@ export async function main(args = process.argv.slice(2)) {
     const metaFile = path.join(CACHE_DIR, 'meta.json');
     if (!fs.existsSync(metaFile)) { console.error('キャッシュがありません'); return 1; }
     const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
-    console.log(`Parts: ${meta.parts.length} / Pages: ${meta.parts.reduce((sum, item) => sum + item.pages, 0)}`);
-    console.log(`syncedAt: ${meta.syncedAt}`);
-    for (const item of meta.parts) console.log(`Part ${item.part}: ${item.更新日時} (${item.pages} pages)`);
+    const cached = meta.parts.filter((item) => fs.existsSync(path.join(CACHE_DIR, partName(item.part)))).length;
+    console.log(`Parts: ${meta.parts.length} / Pages: ${meta.parts.reduce((sum, item) => sum + item.pages, 0)}  (本文取得済み ${cached}/${meta.parts.length})`);
+    console.log(`索引: ${meta.installedAt ? `installed ${meta.installedAt}` : `synced ${meta.syncedAt}`}`);
+    for (const item of meta.parts) console.log(`Part ${item.part}: ${item.更新日時} (${item.pages} pages) ${fs.existsSync(path.join(CACHE_DIR, partName(item.part))) ? '[本文あり]' : '[索引のみ]'}`);
     const dates = meta.parts.map((item) => Date.parse(String(item.更新日時).replaceAll('/', '-').replace(' ', 'T'))).filter(Number.isFinite);
     if (dates.length && Date.now() - Math.max(...dates) >= 90 * 86400000) console.log('STALE: 最新 Part の更新日時が 90 日以上前です');
     return 0;
@@ -251,15 +353,6 @@ export async function main(args = process.argv.slice(2)) {
   usage(); return 2;
 }
 
-// シンボリックリンク経由で起動されると argv[1] はリンクのパス、import.meta.url は実体のパスに
-// なる。素の比較だと一致せず main が呼ばれないまま exit 0 で無言終了する（~/orgiast-claude-rules
-// が Downloads/orgiast-claude-rules へのリンクになっている環境で実際に踏んだ / 2026-08-28）。
-export function isMainModule(argv1, metaUrl) {
-  if (!argv1) return false;
-  const real = (p) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
-  return real(argv1) === real(fileURLToPath(metaUrl));
-}
-
-if (isMainModule(process.argv[1], import.meta.url)) {
+if (isEntry(import.meta.url)) {
   try { process.exitCode = await main(); } catch (error) { console.error(error.message); process.exitCode = 1; }
 }

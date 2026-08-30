@@ -1,0 +1,129 @@
+import test, { before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+
+const script = resolve('tools/nightly-bootstrap.ps1');
+const powershell = process.platform === 'win32'
+  ? 'powershell.exe'
+  : '/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe';
+let root;
+
+function toWindowsPath(path) {
+  if (process.platform === 'win32') return path;
+  return execFileSync('wslpath', ['-w', path], { encoding: 'utf8' }).trim();
+}
+
+function fixture(name) {
+  const dir = join(root, name);
+  const home = join(dir, 'home');
+  const repo = join(dir, 'repo');
+  mkdirSync(home, { recursive: true });
+  mkdirSync(repo, { recursive: true });
+  return { dir, home, repo };
+}
+
+function runBootstrap(fix, target, args = [], extraEnv = {}) {
+  const windowsPowerShellDir = String.raw`C:\Windows\System32\WindowsPowerShell\v1.0`;
+  const launcher = join(fix.dir, 'invoke-bootstrap.ps1');
+  const psQuote = (value) => `'${String(value).replaceAll("'", "''")}'`;
+  const bootstrapPath = toWindowsPath(script);
+  const targetPath = toWindowsPath(target);
+  const extraEnvLines = Object.entries(extraEnv).map(([name, value]) =>
+    `$env:${name} = ${psQuote(value)}`);
+  writeFileSync(launcher, [
+    `Set-Variable -Name HOME -Value ${psQuote(toWindowsPath(fix.home))} -Force`,
+    `$env:ORGIAST_NIGHTLY_REPO = ${psQuote(toWindowsPath(fix.repo))}`,
+    `$env:PATH = ${psQuote(windowsPowerShellDir)}`,
+    ...extraEnvLines,
+    `& ${psQuote(bootstrapPath)} -Target ${psQuote(targetPath)} -TargetArguments $args`,
+    'exit $LASTEXITCODE',
+    '',
+  ].join('\r\n'), 'utf8');
+  return spawnSync(powershell, [
+    '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+    '-File', toWindowsPath(launcher), '--', ...args,
+  ], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      HOME: toWindowsPath(fix.home),
+      USERPROFILE: toWindowsPath(fix.home),
+      PATH: windowsPowerShellDir,
+      ...extraEnv,
+    },
+  });
+}
+
+function logText(fix) {
+  const logDir = join(fix.home, '.claude', 'logs');
+  const logName = readdirSync(logDir).find((name) => /^nightly-bootstrap-\d{4}-\d{2}-\d{2}\.log$/.test(name));
+  assert.ok(logName, 'nightly bootstrap log was not created');
+  return readFileSync(join(logDir, logName), 'utf8');
+}
+
+const hasPowerShell = (() => {
+  const probe = spawnSync(powershell, ['-NoProfile', '-Command', 'exit 0']);
+  return !probe.error && probe.status === 0;
+})();
+
+before(() => {
+  root = mkdtempSync(join(dirname(script), '.nightly-bootstrap-test-'));
+});
+
+after(() => {
+  if (root) rmSync(root, { recursive: true, force: true });
+});
+
+test('script is UTF-8 with BOM', () => {
+  assert.deepEqual([...readFileSync(script).subarray(0, 3)], [0xef, 0xbb, 0xbf]);
+});
+
+test('missing target exits 1 and writes readable Japanese log', { skip: !hasPowerShell }, () => {
+  const fix = fixture('missing');
+  const result = runBootstrap(fix, join(fix.dir, 'missing.ps1'));
+  assert.equal(result.status, 1, result.stderr);
+  const log = logText(fix);
+  assert.match(log, /対象が見つからない/);
+  assert.match(log, /gitが見つからない/);
+  assert.doesNotMatch(log, /�/);
+});
+
+test('does not delete a non-repository directory with contents', { skip: !hasPowerShell }, () => {
+  const fix = fixture('non-repository');
+  const sentinel = join(fix.repo, 'keep.txt');
+  writeFileSync(sentinel, 'keep', 'utf8');
+  const result = runBootstrap(fix, join(fix.dir, 'missing.ps1'), [], {
+    PATH: String.raw`C:\Program Files\Git\cmd;C:\Windows\System32\WindowsPowerShell\v1.0`,
+  });
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(existsSync(sentinel), true, 'existing directory contents were deleted');
+  assert.match(logText(fix), /リポではないディレクトリが既にある/);
+});
+
+test('propagates PowerShell target exit code 7', { skip: !hasPowerShell }, () => {
+  const fix = fixture('exit-code');
+  const target = join(fix.dir, 'exit-seven.ps1');
+  writeFileSync(target, 'exit 7\r\n', 'utf8');
+  const result = runBootstrap(fix, target);
+  assert.equal(result.status, 7, result.stderr);
+  assert.match(logText(fix), /ok:exit-seven\.ps1 終了コード=7/);
+});
+
+test('forwards all target arguments and discards leading separator', { skip: !hasPowerShell }, () => {
+  const fix = fixture('arguments');
+  const target = join(fix.dir, 'capture.ps1');
+  const output = join(fix.dir, 'arguments.txt');
+  writeFileSync(target, [
+    'param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Values)',
+    '[IO.File]::WriteAllLines($env:CAPTURE_PATH, $Values, (New-Object Text.UTF8Encoding($false)))',
+    'exit 0',
+    '',
+  ].join('\r\n'), 'utf8');
+  const result = runBootstrap(fix, target, ['alpha', '日本語', '--flag'], {
+    CAPTURE_PATH: toWindowsPath(output),
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(readFileSync(output, 'utf8').trim().split(/\r?\n/), ['alpha', '日本語', '--flag']);
+});

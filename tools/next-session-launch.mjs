@@ -125,10 +125,13 @@ export function planVscodeLaunch({ codeCli, cwd, prompt, openFolder = false }) {
   return steps;
 }
 
+// 既定はターミナル。VSCode 経路(URI)は**新しいタブを開くだけでプロンプトを送信しない**ので、
+// 自動で /session-start まで到達できない(拡張 2.1.251 実測 / 2026-08-30)。argv で
+// `claude "/session-start"` を起動するターミナル経路だけが手数ゼロで成立する。
+// VSCode の中に開きたい時だけ --target vscode / ORGIAST_NEXT_SESSION_TARGET=vscode。
 export function pickRoute({ codeCli, flagTarget, env }) {
-  if (flagTarget === 'terminal' || env.ORGIAST_NEXT_SESSION_TARGET === 'terminal') return 'terminal';
-  if (flagTarget === 'vscode') return 'vscode';
-  return codeCli ? 'vscode' : 'terminal';
+  if (flagTarget === 'vscode' || env.ORGIAST_NEXT_SESSION_TARGET === 'vscode') return 'vscode';
+  return 'terminal';
 }
 
 // 親セッションの環境変数をそのまま渡すと、新しいセッションが「今のセッションの子」として
@@ -265,7 +268,8 @@ export async function launchNextSession(argv = [], io = {}) {
       const tmpPath = `${statePath}.tmp-${process.pid}`;
       await writeFile(tmpPath, `${JSON.stringify(nextState, null, 2)}\n`, 'utf8');
       await rename(tmpPath, statePath);
-      log(`[next-session] VSCode に新しいセッションを開きました: ${cwd} / prompt=${flags.prompt}`);
+      // 拡張の URI は prompt を送信しない(入力欄に置くだけ)。「開いた=始まった」と書くと嘘の成功報告になる。
+      log(`[next-session] VSCode に新しいタブを開きました(prompt は送信されません。セッションは入力欄で送信すると始まります): ${cwd} / prompt=${flags.prompt}`);
       return 0;
     }
 

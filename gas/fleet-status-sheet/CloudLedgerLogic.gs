@@ -1,6 +1,8 @@
 var CLOUD_PROJECT_HEADERS_ = ['プロジェクト名','用途・説明','GitHubリポジトリ','GitHubアカウント','可視性','本番URL','Vercelプロジェクト','Vercelアカウント/チーム','Supabaseプロジェクト','GASスクリプトID','関連スプレッドシート','開発PC','ローカルパス(basename)','最終コミット','状態','備考','更新日時(JST)'];
 var CLOUD_CONTRACT_HEADERS_ = ['サービス','アカウント(ログインID)','プラン','月額(税込)','通貨','支払い元カード(下4桁)','支払い元(名義)','契約者・管理者','用途','関連プロジェクト','管理画面URL','請求サイクル','次回更新日','解約可否メモ','最終確認日','自動検出'];
 var CLOUD_LOGIN_HEADERS_ = ['PC名/ホスト名','実ホスト名','OSユーザー名','サービス','ログインアカウント','スコープ/組織','検出元','状態','CLIバージョン','最終報告(JST)'];
+// 機械が意味を持たせている列。人の入力を保護する対象ではないので、送られたら常に更新する。
+var MACHINE_OWNED_CONTRACT_COLUMNS_ = { '最終確認日': true, '自動検出': true };
 
 function cloudNonEmpty(value) {
   return value !== '' && value !== null && value !== undefined;
@@ -112,7 +114,7 @@ function cloudPlanContractUpsert(headers, rows, payload) {
       if (header === 'サービス' || header === 'アカウント(ログインID)') return;
       var value = item[allowed[header]];
       var col = cloudColumn(headers, header, true);
-      if (cloudNonEmpty(value) && (payload.force === true || !cloudNonEmpty(rows[index][col]))) {
+      if (cloudNonEmpty(value) && (MACHINE_OWNED_CONTRACT_COLUMNS_[header] || payload.force === true || !cloudNonEmpty(rows[index][col]))) {
         updates.push({ rowNumber: index + 2, columnIndex: col + 1, value: value });
       }
     });

@@ -127,7 +127,7 @@ test("project empty or unavailable values never clear cells and labels merge", (
   assert.equal(context.cloudMergeLabels("PC-A, PC-B", "PC-A"), "PC-A, PC-B");
 });
 
-test("contract never writes payment columns and force controls nonempty overwrite", () => {
+test("contract force controls nonempty overwrite and never writes the card column", () => {
   const existing = row(contracts, {
     サービス: "Vercel",
     "アカウント(ログインID)": "kim",
@@ -150,10 +150,119 @@ test("contract never writes payment columns and force controls nonempty overwrit
   });
   assert.equal(forced.updates.length, 1);
   assert.equal(contracts[forced.updates[0].columnIndex - 1], "プラン");
-  for (const forbidden of ["支払い元カード(下4桁)", "支払い元(名義)"]) {
+  assert(
+    !forced.updates.some(
+      (update) => contracts[update.columnIndex - 1] === "支払い元カード(下4桁)",
+    ),
+  );
+});
+
+test("contract writes the four freee columns but never the card column across 200 column orders", () => {
+  const expected = ["月額(税込)", "通貨", "支払い元(名義)", "請求サイクル"];
+  for (let iteration = 0; iteration < 200; iteration += 1) {
+    const headers = shuffle(contracts);
+    const existing = row(headers, {
+      サービス: "Groq",
+      "アカウント(ログインID)": "",
+      "支払い元カード(下4桁)": "1234",
+    });
+    const plan = context.cloudPlanContractUpsert(headers, [existing], {
+      service: "Groq",
+      account: "",
+      monthlyAmount: 9800,
+      currency: "JPY",
+      payerName: "金立替／アメリカン・エキスプレス",
+      billingCycle: "月次",
+      card: "9999",
+    });
+    const written = plan.updates.map((update) => headers[update.columnIndex - 1]);
+    assert.deepEqual([...written].sort(), [...expected].sort());
+    assert(!written.includes("支払い元カード(下4桁)"));
+  }
+});
+
+test("contract protects nonempty freee cells without force", () => {
+  const existing = row(contracts, {
+    サービス: "Groq",
+    "月額(税込)": 100,
+    通貨: "USD",
+    "支払い元(名義)": "人の値",
+    請求サイクル: "年次",
+  });
+  const plan = context.cloudPlanContractUpsert(contracts, [existing], {
+    service: "Groq",
+    monthlyAmount: 200,
+    currency: "JPY",
+    payerName: "機械の値",
+    billingCycle: "月次",
+  });
+  assert.equal(plan.updates.length, 0);
+});
+
+test("contract machine-owned columns refresh without force while human columns remain protected", () => {
+  const existing = row(contracts, {
+    サービス: "Groq",
+    "アカウント(ログインID)": "dev@example.jp",
+    "月額(税込)": 100,
+    "支払い元(名義)": "人の値",
+    最終確認日: "2026-08-28",
+    自動検出: "旧状態",
+    通貨: "KEEP",
+  });
+  const payload = {
+    service: "Groq",
+    account: "dev@example.jp",
+    monthlyAmount: 200,
+    payerName: "機械の値",
+    checkedAt: "2026-08-30",
+    detected: "検出済み",
+  };
+  const normal = context.cloudPlanContractUpsert(contracts, [existing], payload);
+  assert.deepEqual(
+    Object.fromEntries(normal.updates.map((update) => [contracts[update.columnIndex - 1], update.value])),
+    { 最終確認日: "2026-08-30", 自動検出: "検出済み" },
+  );
+  assert(!normal.updates.some((update) => contracts[update.columnIndex - 1] === "通貨"));
+
+  const forced = context.cloudPlanContractUpsert(contracts, [existing], { ...payload, force: true });
+  const forcedValues = Object.fromEntries(
+    forced.updates.map((update) => [contracts[update.columnIndex - 1], update.value]),
+  );
+  assert.equal(forcedValues["月額(税込)"], 200);
+  assert.equal(forcedValues["支払い元(名義)"], "機械の値");
+  assert.equal(forcedValues["最終確認日"], "2026-08-30");
+  assert.equal(forcedValues["自動検出"], "検出済み");
+  assert(!Object.hasOwn(forcedValues, "通貨"));
+});
+
+test("contract never writes the card column across 200 shuffled column orders", () => {
+  for (let iteration = 0; iteration < 200; iteration += 1) {
+    const headers = shuffle(contracts);
+    const existing = row(headers, { サービス: "Groq", "アカウント(ログインID)": "dev@example.jp" });
+    const plan = context.cloudPlanContractUpsert(headers, [existing], {
+      force: true,
+      service: "Groq",
+      account: "dev@example.jp",
+      card: "9999",
+      monthlyAmount: 200,
+      payerName: "機械の値",
+      checkedAt: "2026-08-30",
+      detected: "検出済み",
+    });
+    assert(!plan.updates.some((update) => headers[update.columnIndex - 1] === "支払い元カード(下4桁)"));
+  }
+});
+
+test("contract does not touch monthly amount for unavailable values", () => {
+  for (const monthlyAmount of [undefined, null, ""]) {
+    const existing = row(contracts, { サービス: "Groq" });
+    const plan = context.cloudPlanContractUpsert(contracts, [existing], {
+      service: "Groq",
+      monthlyAmount,
+    });
     assert(
-      !forced.updates.some(
-        (update) => contracts[update.columnIndex - 1] === forbidden,
+      !plan.updates.some(
+        (update) => contracts[update.columnIndex - 1] === "月額(税込)",
       ),
     );
   }
@@ -174,7 +283,7 @@ test("login replacement deletes only own label rows", () => {
   assert.equal(plan.appendRows[0][logins.indexOf("状態")], "ログイン済み");
 });
 
-test("describe response contains keys but never payment values", () => {
+test("describe responses expose keys and safe payer names but never card values", () => {
   const datasets = {
     プロジェクト所在地図: {
       headers: project,
@@ -230,10 +339,17 @@ test("describe response contains keys but never payment values", () => {
   };
   vm.createContext(fake);
   vm.runInContext(io, fake);
-  const serialized = JSON.stringify(fake.describeCloudLedger());
-  assert.match(serialized, /kim\/app/);
-  assert(!serialized.includes("9876"));
-  assert(!serialized.includes("SECRET NAME"));
+  const ledgerSerialized = JSON.stringify(fake.describeCloudLedger());
+  assert.match(ledgerSerialized, /kim\/app/);
+  assert(!ledgerSerialized.includes("9876"));
+  assert(!ledgerSerialized.includes("SECRET NAME"));
+
+  const contractsResult = fake.describeCloudContracts();
+  assert(contractsResult.columns.includes("支払い元(名義)"));
+  const contractSerialized = JSON.stringify(contractsResult);
+  assert(contractSerialized.includes("SECRET NAME"));
+  assert(!contractSerialized.includes("9876"));
+  assert(!contractsResult.columns.includes("支払い元カード(下4桁)"));
 });
 
 test("setup persists sheet ID before sharing and reports sharing and move failures", () => {

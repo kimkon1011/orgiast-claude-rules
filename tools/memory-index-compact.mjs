@@ -295,6 +295,10 @@ function parseNonNegativeInteger(value, name) {
 
 function processFile(file, { dryRun, apply, moveHooksMode, target, minBytes }) {
   const before = fs.readFileSync(file, 'utf8');
+  if (before.includes('<!-- MEMORY-INDEX v2 split -->')) {
+    console.log('skip: v2索引のため対象外');
+    return { file, skipped: true, reason: 'v2-index' };
+  }
   if (minBytes !== undefined && byteLength(before) <= minBytes) {
     console.log(`しきい値未満のためスキップ: ${file}`);
     return { file, skipped: true, reason: 'min-bytes' };

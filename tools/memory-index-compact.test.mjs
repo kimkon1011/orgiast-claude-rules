@@ -153,6 +153,15 @@ test('--min-bytes はしきい値以下のファイルを変更せずスキッ�
   assert.deepEqual(fs.readdirSync(item.directory).sort(), ['MEMORY.md', 'alpha.md']);
 });
 
+test('v2 索引は変更せず正常にスキップする', () => {
+  const input = '<!-- MEMORY-INDEX v2 split -->\n- [Pin](alpha.md)\n';
+  const item = fixture(input, { 'alpha.md': '# Alpha\n' });
+  const result = run(['--apply', '--file', item.file]);
+  assert.equal(result.reason, 'v2-index');
+  assert.equal(fs.readFileSync(item.file, 'utf8'), input);
+  assert.deepEqual(fs.readdirSync(item.directory).sort(), ['MEMORY.md', 'alpha.md']);
+});
+
 test('--all-projects は複数の MEMORY.md を処理する', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-home-'));
   const projects = path.join(home, '.claude', 'projects');

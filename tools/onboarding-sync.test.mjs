@@ -6,6 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { makeIndex, mergeEnvFile, PRESERVE_LOCAL_KEYS, updateRepositoryFiles } from './onboarding-sync.mjs';
+import { gitBlobSha } from './version-drift.mjs';
 
 const script = path.join(path.dirname(fileURLToPath(import.meta.url)), 'onboarding-sync.mjs');
 const source = Buffer.from('# 見出し\r\n最初の文。二番目。\r\n本文\r\n🔴 絶対ルール全文\r\n## 次\r\n説明だけ\r\n🛑 上限規定', 'utf8');
@@ -158,9 +159,72 @@ test('zip fallback preserves modified and untracked files and reports their name
   await updateRepositoryFiles(f.repo, fallbackOptions(f, git));
   assert.equal(fs.readFileSync(path.join(f.repo, 'tools', 'changed.mjs'), 'utf8'), 'local work');
   assert.equal(fs.readFileSync(path.join(f.repo, 'tools', 'added.mjs'), 'utf8'), 'local untracked');
-  assert.match(f.output.join('\n'), /人の変更を保護: 2件/);
-  assert.match(f.output.join('\n'), /保護のため未更新 2件（tools\/added\.mjs \/ tools\/changed\.mjs）/);
-  assert.match(f.output.join('\n'), /commit するまでこの PC には配布が届きません/);
+  assert.match(f.output.join('\n'), /人の変更を保護: 1件/);
+  assert.match(f.output.join('\n'), /保護のため未更新 1件（tools\/changed\.mjs）/);
+  assert.doesNotMatch(f.output.join('\n'), /保護のため未更新[^\n]*tools\/added\.mjs/);
+  assert.match(f.output.join('\n'), /commit するまで配布が届きません/);
+});
+
+function historyGit(status, versions = {}, options = {}) {
+  return (args) => {
+    if (args.includes('pull')) throw new Error('dirty tree');
+    if (args.includes('status')) return status;
+    if (args.includes('rev-list')) {
+      if (options.revListFails) throw new Error('origin/main unavailable');
+      const rel = args.at(-1);
+      return Object.hasOwn(versions, rel) ? 'commit-a\n' : '';
+    }
+    if (args.includes('rev-parse')) {
+      const rel = args.at(-1).slice('commit-a:'.length);
+      return `${gitBlobSha(Buffer.from(versions[rel]))}\n`;
+    }
+    return '';
+  };
+}
+
+test('modified file matching a main history version is updated', async () => {
+  const f = repositoryFixture();
+  const result = await updateRepositoryFiles(f.repo, fallbackOptions(f, historyGit(' M tools/changed.mjs\0', { 'tools/changed.mjs': 'old' })));
+  assert.deepEqual(result.excluded, []);
+  assert.equal(fs.readFileSync(path.join(f.repo, 'tools', 'changed.mjs'), 'utf8'), 'new');
+  assert.match(f.output.join('\n'), /旧配布版と一致したため更新 1件/);
+});
+
+test('modified file absent from main history stays protected and is named', async () => {
+  const f = repositoryFixture();
+  fs.writeFileSync(path.join(f.repo, 'tools', 'changed.mjs'), 'human work');
+  const result = await updateRepositoryFiles(f.repo, fallbackOptions(f, historyGit(' M tools/changed.mjs\0')));
+  assert.deepEqual(result.excluded, ['tools/changed.mjs']);
+  assert.equal(fs.readFileSync(path.join(f.repo, 'tools', 'changed.mjs'), 'utf8'), 'human work');
+  assert.match(f.output.join('\n'), /保護のため未更新 1件（tools\/changed\.mjs）/);
+});
+
+test('untracked file skips history lookup and is always protected', async () => {
+  const f = repositoryFixture();
+  fs.writeFileSync(path.join(f.repo, 'tools', 'added.mjs'), 'old untracked');
+  let historyCalls = 0;
+  const base = historyGit('?? tools/added.mjs\0', { 'tools/added.mjs': 'old untracked' });
+  const git = (args) => { if (args.includes('rev-list') || args.includes('rev-parse')) historyCalls++; return base(args); };
+  const result = await updateRepositoryFiles(f.repo, fallbackOptions(f, git));
+  assert.deepEqual(result.excluded, ['tools/added.mjs']);
+  assert.equal(historyCalls, 0);
+});
+
+test('rev-list failure protects modified files without throwing', async () => {
+  const f = repositoryFixture();
+  const result = await updateRepositoryFiles(f.repo, fallbackOptions(f, historyGit(' M tools/changed.mjs\0', {}, { revListFails: true })));
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.excluded, ['tools/changed.mjs']);
+  assert.equal(fs.readFileSync(path.join(f.repo, 'tools', 'changed.mjs'), 'utf8'), 'old');
+});
+
+test('CRLF-only difference from a main history version is treated as old distribution', async () => {
+  const f = repositoryFixture();
+  fs.writeFileSync(path.join(f.repo, 'tools', 'changed.mjs'), 'line 1\r\nline 2\r\n');
+  const git = historyGit(' M tools/changed.mjs\0', { 'tools/changed.mjs': 'line 1\nline 2\n' });
+  const result = await updateRepositoryFiles(f.repo, fallbackOptions(f, git));
+  assert.deepEqual(result.excluded, []);
+  assert.equal(fs.readFileSync(path.join(f.repo, 'tools', 'changed.mjs'), 'utf8'), 'new');
 });
 
 test('status failure writes no files', async () => {
@@ -206,8 +270,8 @@ test('two fallback runs do not mistake previous zip output for human changes', a
   const second = await updateRepositoryFiles(f.repo, fallbackOptions(f, git));
   assert.equal(first.excluded.length, 0); assert.equal(second.excluded.length, 0);
   assert.equal(fs.readFileSync(path.join(f.repo, 'tools', 'changed.mjs'), 'utf8'), 'newer');
-  assert.match(f.output.at(-1), /人の変更を保護: 0件/);
-  assert.match(f.output.at(-1), /前回の自分の出力なので更新: 2件/);
+  assert.match(f.output.at(-2), /人の変更を保護: 0件/);
+  assert.match(f.output.at(-2), /前回の自分の出力なので更新: 2件/);
 });
 
 test('human edit after fallback remains protected on the next run', async () => {

@@ -101,14 +101,15 @@ node "$HOME/orgiast-claude-rules/tools/close-session.mjs" --session <このセ�
 ## 8. 次のセッションは自動で立ち上がる（user に「新しいセッションを開いて」と言わない）
 
 - 手順7 の `close-session.mjs` が、退避したあとに `tools/next-session-launch.mjs` を呼び、
-  **新しいターミナルウィンドウで `claude "/session-start"` を argv 起動する**。プロンプトは argv なので
-  そのまま送信され、user がセッションを開く手作業はゼロ（2026-08-30 に end-to-end 検証済み）。
-- **VSCode の中に開く経路は使わない**（既定は `terminal`）。拡張の URI
-  `vscode://Anthropic.claude-code/open?prompt=...` は**新しいタブを開くだけでプロンプトを送信しない**
-  （拡張 2.1.251 の実体は `setInputText` のみ／実測では入力欄にも入らない）。VSCode CLI に `--command` も無く、
-  Enter を代打ちする手も成立しない（入力欄が未フォーカス・Ctrl+Esc はスタートメニューと衝突・前面が別アプリだと
-  他PCのリモート画面に Enter が入る）。VSCode 内にタブだけ開きたい時は `--target vscode`
-  / `ORGIAST_NEXT_SESSION_TARGET=vscode`（その場合 user が入力欄で送信する1手が必ず残る）。
+  **いま使っている VSCode の中に Claude Code の新しいタブを開き、入力欄に `/session-start` を入れる**
+  （既定は `vscode`。2026-08-30 に kim 指示で反転）。user の手作業は **Enter 1回だけ**。
+- **ターミナル経路（wt.exe で別ウィンドウの CLI セッション）は既定で使わない**。argv 起動なので
+  プロンプトまで自動送信できる利点はあるが、**VSCode 側で作業中のセッションと並走してぶつかる**
+  （kim 実害・2026-08-30「session-start がターミナルのセッションと並行でぶつかってばかり」）。
+  ターミナルで開きたい時だけ `--target terminal` / `ORGIAST_NEXT_SESSION_TARGET=terminal`。
+  VSCode CLI (`code.cmd`) が無い機体では自動でターミナルへフォールバックする。
+- VSCode 経路が Enter 1回を残すのは拡張側の仕様（2.1.251 実体は `setInputText` のみで送信しない）。
+  `code` CLI に `--command` は無く、Enter の代打ち（SendKeys）は前面が別アプリだと誤爆するので採らない。
 - 起動先の作業ディレクトリは `~/.claude/next-session.md` の `cwd:` コメント →
   `~/.claude/current-session.json` の cwd → リポジトリルート の順で決まる。だから**手順6 を先に書くこと**。
 - CLI の trust ダイアログ（「このフォルダを信頼しますか」）は**起動前に自動で事前登録する**ので出ない
@@ -123,7 +124,7 @@ node "$HOME/orgiast-claude-rules/tools/close-session.mjs" --session <このセ�
   - `CLAUDE_HEADLESS` / `CI` が立っている環境では自動で起動しない（夜間 auto-session でウィンドウを開かない）
   - 直近120秒に起動済みなら二重起動しない（`--force-launch` で無視できる）
   - 恒久的に止めるなら `~/.claude/next-session-launch.json` に `{"enabled": false}`
-- 起動結果は `[next-session] 新しいセッションを起動しました: <cwd>` / `[next-session] スキップ: <理由>` の1行で出る。
+- 起動結果は `[next-session] VSCode に新しいタブを開きました…`（ターミナル経路なら `新しいセッションを起動しました: <cwd>`） / `[next-session] スキップ: <理由>` の1行で出る。
   スキップされた時だけ「新しいセッションを手で開いてください」と伝える。
 
 ## 注意

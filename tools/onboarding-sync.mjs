@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { inflateRawSync } from 'node:zlib';
 import { parseEnvText, readEnvValue } from './env-kv.mjs';
 import { repairEnvBom } from './env-repair.mjs';
 import { isEntry } from './is-entry.mjs';
@@ -19,6 +20,7 @@ const home = process.env.ORGIAST_HOME || os.homedir();
 const target = targetArg ? targetArg.slice(9) : path.join(home, '.claude', 'CLAUDE.md');
 const statePath = path.join(home, '.claude', '.onboarding-sync-state.json');
 const repoStatePath = path.join(home, '.claude', '.repo-sync-state.json');
+const fallbackStatePath = path.join(home, '.claude', 'onboarding-sync-fallback.json');
 const keysStatePath = path.join(home, '.claude', '.keys-sync-state.json');
 const repoPath = path.join(home, 'orgiast-claude-rules');
 const logPath = path.join(home, '.claude', 'hooks', 'onboarding-sync.log');
@@ -82,6 +84,147 @@ function copyTree(source, destination) {
     if (entry.isDirectory()) copyTree(from, to); else if (entry.isFile()) fs.copyFileSync(from, to);
   }
 }
+function oneLine(error) {
+  return String(error?.message || error || '不明').split(/\r?\n/)[0];
+}
+function parsePorcelainZ(output) {
+  const entries = String(output).split('\0');
+  const changed = new Set();
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    if (!entry) continue;
+    const status = entry.slice(0, 2);
+    changed.add(entry.slice(3).replaceAll('\\', '/'));
+    // rename/copy の次の NUL 要素は旧パス。新旧どちらも上書き対象から外す。
+    if (/[RC]/.test(status) && entries[i + 1]) changed.add(entries[++i].replaceAll('\\', '/'));
+  }
+  return changed;
+}
+function sha256File(file) {
+  return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+}
+function readFallbackState(file) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return parsed && parsed.files && typeof parsed.files === 'object' && !Array.isArray(parsed.files) ? parsed : null;
+  } catch { return null; }
+}
+function saveFallbackState(file, files, now = new Date()) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${JSON.stringify({ files, updatedAt: now.toISOString() }, null, 2)}\n`, 'utf8');
+}
+function copyTreeExcluding(source, destination, excluded, hashes, relative = '') {
+  let copied = false;
+  fs.mkdirSync(destination, { recursive: true });
+  for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
+    const rel = path.posix.join(relative, entry.name);
+    const from = path.join(source, entry.name); const to = path.join(destination, entry.name);
+    if (entry.isDirectory()) copied = copyTreeExcluding(from, to, excluded, hashes, rel) || copied;
+    else if (entry.isFile() && !excluded.has(rel)) {
+      const same = fs.existsSync(to) && fs.readFileSync(from).equals(fs.readFileSync(to));
+      if (!same) { fs.copyFileSync(from, to); copied = true; }
+      hashes[rel] = sha256File(to);
+    }
+  }
+  return copied;
+}
+function extractZip(buffer, destination) {
+  const eocd = buffer.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+  if (eocd < 0) throw new Error('zip central directory がありません');
+  const entries = buffer.readUInt16LE(eocd + 10);
+  let cursor = buffer.readUInt32LE(eocd + 16);
+  for (let i = 0; i < entries; i++) {
+    if (buffer.readUInt32LE(cursor) !== 0x02014b50) throw new Error('zip entry が不正です');
+    const method = buffer.readUInt16LE(cursor + 10);
+    const compressedSize = buffer.readUInt32LE(cursor + 20);
+    const nameLength = buffer.readUInt16LE(cursor + 28);
+    const extraLength = buffer.readUInt16LE(cursor + 30);
+    const commentLength = buffer.readUInt16LE(cursor + 32);
+    const localOffset = buffer.readUInt32LE(cursor + 42);
+    const name = buffer.subarray(cursor + 46, cursor + 46 + nameLength).toString('utf8').replaceAll('\\', '/');
+    cursor += 46 + nameLength + extraLength + commentLength;
+    // GitHub zip 内でも traversal を拒否し、展開先の外へ絶対に書かない。
+    if (name.startsWith('/') || name.split('/').includes('..')) throw new Error(`危険な zip path: ${name}`);
+    const output = path.join(destination, ...name.split('/'));
+    if (name.endsWith('/')) { fs.mkdirSync(output, { recursive: true }); continue; }
+    if (buffer.readUInt32LE(localOffset) !== 0x04034b50) throw new Error('zip local entry が不正です');
+    const localNameLength = buffer.readUInt16LE(localOffset + 26);
+    const localExtraLength = buffer.readUInt16LE(localOffset + 28);
+    const dataStart = localOffset + 30 + localNameLength + localExtraLength;
+    const compressed = buffer.subarray(dataStart, dataStart + compressedSize);
+    const contents = method === 0 ? compressed : method === 8 ? inflateRawSync(compressed) : null;
+    if (!contents) throw new Error(`未対応の zip compression method: ${method}`);
+    fs.mkdirSync(path.dirname(output), { recursive: true }); fs.writeFileSync(output, contents);
+  }
+}
+async function downloadZipRoot() {
+  const response = await fetch('https://github.com/kimkon1011/orgiast-claude-rules/archive/refs/heads/main.zip', { signal: AbortSignal.timeout(60000) });
+  if (!response.ok) throw new Error(`repo zip HTTP ${response.status}`);
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'orgiast-repo-sync-'));
+  try {
+    const zipBytes = Buffer.from(await response.arrayBuffer());
+    const expanded = path.join(temp, 'expanded'); fs.mkdirSync(expanded);
+    extractZip(zipBytes, expanded);
+    return { root: path.join(expanded, 'orgiast-claude-rules-main'), cleanup: () => fs.rmSync(temp, { recursive: true, force: true }) };
+  } catch (error) { fs.rmSync(temp, { recursive: true, force: true }); throw error; }
+}
+export async function updateRepositoryFiles(targetRepo, options = {}) {
+  const git = options.git || ((gitArgs, execOptions = {}) => execFileSync('git', gitArgs, execOptions));
+  const getZipRoot = options.getZipRoot || downloadZipRoot;
+  const emit = options.emit || console.log;
+  const stateFile = options.fallbackStatePath || fallbackStatePath;
+  const hasGit = fs.existsSync(path.join(targetRepo, '.git'));
+  let pullReason = '';
+  if (hasGit) {
+    try {
+      git(['-C', targetRepo, 'pull', '--ff-only'], { stdio: 'pipe', timeout: 60000 });
+      emit('[onboarding-sync] tools を更新しました (git pull)');
+      return { ok: true, method: 'pull', excluded: [] };
+    } catch (error) { pullReason = oneLine(error); }
+  }
+
+  let excluded = new Set();
+  let selfOutput = new Set();
+  if (hasGit) {
+    try {
+      // pull 失敗時だけ作業中ファイルを列挙し、zip がローカル作業を消さないよう個別に除外する。
+      const status = git(['-C', targetRepo, 'status', '--porcelain=v1', '-z', '--untracked-files=all'], { encoding: 'utf8', timeout: 60000 });
+      const changed = parsePorcelainZ(status);
+      const previous = readFallbackState(stateFile);
+      // zip が前回書いたファイルまで人の編集と誤認すると、2回目以降の同期がその版で凍結する。
+      // 現在値が記録ハッシュと一致するものだけ自己出力として更新し、それ以外は人の作業として保護する。
+      for (const rel of changed) {
+        const current = path.join(targetRepo, ...rel.split('/'));
+        if (previous?.files?.[rel] && fs.existsSync(current) && sha256File(current) === previous.files[rel]) selfOutput.add(rel);
+        else excluded.add(rel);
+      }
+    } catch (error) {
+      const reason = `git status を取得できません: ${oneLine(error)}`;
+      emit(`[onboarding-sync] ⚠ tools を更新できませんでした (理由: ${reason})。このPCは配布が届いていません`);
+      return { ok: false, method: 'none', reason, excluded: [] };
+    }
+  }
+
+  let archive;
+  try {
+    archive = await getZipRoot();
+    let changed = false;
+    const hashes = {};
+    for (const name of ['tools', 'rules-extracted', 'skills']) {
+      const source = path.join(archive.root, name);
+      if (fs.existsSync(source)) changed = copyTreeExcluding(source, path.join(targetRepo, name), excluded, hashes, name) || changed;
+    }
+    saveFallbackState(stateFile, hashes, options.now || new Date());
+    const names = [...excluded].sort();
+    const reason = pullReason || '.git がありません';
+    emit(`[onboarding-sync] git pull できないため zip で更新しました (理由: ${reason}) / 人の変更を保護: ${names.length}件 / 前回の自分の出力なので更新: ${selfOutput.size}件`);
+    return { ok: true, method: 'zip', reason, excluded: names, changed };
+  } catch (error) {
+    const reason = oneLine(error);
+    emit(`[onboarding-sync] ⚠ tools を更新できませんでした (理由: ${reason})。このPCは配布が届いていません`);
+    return { ok: false, method: 'none', reason, excluded: [...excluded] };
+  } finally { archive?.cleanup?.(); }
+}
 export function deploySkills(sourceRepo, targetHome, options = {}) {
   const updated = new Set();
   try {
@@ -129,20 +272,12 @@ async function syncRepository(now) {
     try {
     if (fs.existsSync(path.join(repoPath, '.git'))) {
       const before = execFileSync('git', ['-C', repoPath, 'rev-parse', 'HEAD'], { encoding: 'utf8', timeout: 60000 }).trim();
-      execFileSync('git', ['-C', repoPath, 'pull', '--ff-only'], { stdio: 'pipe', timeout: 60000 });
+      const result = await updateRepositoryFiles(repoPath);
       const after = execFileSync('git', ['-C', repoPath, 'rev-parse', 'HEAD'], { encoding: 'utf8', timeout: 60000 }).trim();
-      changed = before !== after;
+      changed = result.ok && (result.method === 'zip' ? result.changed : before !== after);
     } else {
-      const response = await fetch('https://github.com/kimkon1011/orgiast-claude-rules/archive/refs/heads/main.zip', { signal: AbortSignal.timeout(60000) });
-      if (!response.ok) throw new Error(`repo zip HTTP ${response.status}`);
-      const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'orgiast-repo-sync-'));
-      const zip = path.join(temp, 'main.zip'); fs.writeFileSync(zip, Buffer.from(await response.arrayBuffer()));
-      const expanded = path.join(temp, 'expanded'); fs.mkdirSync(expanded);
-      if (process.platform === 'win32') execFileSync('powershell.exe', ['-NoProfile', '-Command', 'Expand-Archive', '-LiteralPath', zip, '-DestinationPath', expanded, '-Force'], { timeout: 60000 });
-      else execFileSync('unzip', ['-q', zip, '-d', expanded], { timeout: 60000 });
-      const root = path.join(expanded, 'orgiast-claude-rules-main');
-      for (const name of ['tools', 'rules-extracted', 'skills']) if (fs.existsSync(path.join(root, name))) copyTree(path.join(root, name), path.join(repoPath, name));
-      changed = true;
+      const result = await updateRepositoryFiles(repoPath);
+      changed = result.ok && result.changed;
     }
     } catch (e) { console.log(`[onboarding-sync] リポ取得に失敗（skill配布とhook登録は続行）: ${e.message.split('\n')[0]}`); log(`repo fetch failed(continue): ${e.message}`); }
     if (changed) { console.log('[onboarding-sync] updated repository tools/rules/skills'); log('updated repository tools/rules/skills'); }

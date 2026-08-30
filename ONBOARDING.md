@@ -257,6 +257,7 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
 - CLAUDE.mdには恒久ルールだけ書く（進行中タスク・今日の数字は書かない、キャッシュ5分TTLを壊すため）。上部ほど静的に
 - **実行者ルーティング（まず「LLMに直接やらせる」以外の適材を選ぶ、費用対効果ファースト）**:
   - **コード実装 → Codex**（ChatGPT定額枠、§1.17。従量トークンを使わない主経路）
+  - **Web検索 → `node ~/orgiast-claude-rules/tools/web-search.mjs "<質問>"` を第一経路にする**（Gemini検索。オートチャージ有効で枠切れしない・出典URL付き）。Geminiが失敗した場合は自動でGroqへフォールバックする。多段の深掘り調査と根拠URLの束が必要なときだけ `manus-research.mjs`（専用枠）へ上げる
   - **外部事実のWeb調査・属性エンリッチ（多段・根拠URL要。例: 企業の上場/設立日/出展歴）→ Manus**（`src/lib/manus.ts` パターン。専用エージェント枠で、Claudeのweb_searchループにトークンを燃やすより適・精度も高い。sources必ず保持）
   - **定型・確定処理（集計・整形・置換・スクレイプ）→ ローカルスクリプト**（Python/Node、トークン消費ゼロ）
   - **超大規模コンテキスト分析（コードベース全体・長大ログ/PDF/動画）／Google検索 → Gemini CLI（MCP `gemini-cli` 経由）**（**GEMINI_API_KEY**＝Google AI Studio無料枠・1M文脈。※「gemini でGoogleログイン(Code Assist個人無料枠)」は2026-07にGoogle廃止＝IneligibleTierErrorで不可、APIキーを使う。Claudeのトークンを大量に食う「全体読み込み」やWeb検索を委譲しcontextを節約。ツール: `ask-gemini`(検索・長文脈Q&A)。MCPサーバ実体は `gemini-mcp-tool`(env `GEMINI_MCP_BACKEND=gemini` 必須)。`@choplin/mcp-gemini-cli` は Windows で `spawn gemini ENOENT` になり使用不可（2026-08-30 実測）。**各PCは自分のorgiast.jpアカウントでキー発行**、共有しない。§3.0.3セットアップ）

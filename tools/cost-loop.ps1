@@ -6,14 +6,21 @@ $ErrorActionPreference = 'SilentlyContinue'
 $H = $env:USERPROFILE
 # リポの場所はPCで異なる(配布先=~/orgiast-claude-rules / kim開発機=~/Downloads/orgiast-claude-rules)。候補を探索。
 $loop = $null
-foreach ($c in @((Join-Path $H 'orgiast-claude-rules\tools\cost-work-loop.mjs'), (Join-Path $H 'Downloads\orgiast-claude-rules\tools\cost-work-loop.mjs'))) { if (Test-Path $c) { $loop = $c; break } }
+$loopCandidates = @()
+if ($PSScriptRoot) { $loopCandidates += (Join-Path (Split-Path -Parent $PSScriptRoot) 'tools\cost-work-loop.mjs') }
+$loopCandidates += @((Join-Path $H 'orgiast-claude-rules\tools\cost-work-loop.mjs'), (Join-Path $H 'Downloads\orgiast-claude-rules\tools\cost-work-loop.mjs'))
+foreach ($c in @($loopCandidates | Select-Object -Unique)) { if (Test-Path $c) { $loop = $c; break } }
 $guard = Join-Path $H '.claude\.cost-loop-guard'
 # 夜間バッチ: いま off-peak(UTC16:30-00:30) かつ pendingキューが有れば裏で消化(スケジューラ不要の best-effort ・50%off帯)
 try {
   $u = (Get-Date).ToUniversalTime(); $mins = $u.Hour * 60 + $u.Minute
   $offpeak = ($mins -ge 990 -or $mins -lt 30)
   $pend = Join-Path $H '.claude\batch-queue\pending.jsonl'
-  $nb = $null; foreach ($c in @((Join-Path $H 'orgiast-claude-rules\tools\batch-run.mjs'), (Join-Path $H 'Downloads\orgiast-claude-rules\tools\batch-run.mjs'))) { if (Test-Path $c) { $nb = $c; break } }
+  $nb = $null
+  $batchCandidates = @()
+  if ($PSScriptRoot) { $batchCandidates += (Join-Path (Split-Path -Parent $PSScriptRoot) 'tools\batch-run.mjs') }
+  $batchCandidates += @((Join-Path $H 'orgiast-claude-rules\tools\batch-run.mjs'), (Join-Path $H 'Downloads\orgiast-claude-rules\tools\batch-run.mjs'))
+  foreach ($c in @($batchCandidates | Select-Object -Unique)) { if (Test-Path $c) { $nb = $c; break } }
   if ($offpeak -and $nb -and (Test-Path $pend) -and ((Get-Item $pend).Length -gt 0)) { Start-Process -FilePath 'node' -ArgumentList @($nb) -WindowStyle Hidden | Out-Null }
 } catch {}
 # 1日1回だけ計測。ガードは実行前に先に書く(並行SessionStartの二重起動防止)。

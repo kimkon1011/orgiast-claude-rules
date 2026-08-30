@@ -22,10 +22,13 @@ try {
     if (-not $offPeak) { $summary['batch'] = 'skip:off-peak帯外'; Write-NightlyLog '時間帯判定' 'skip:off-peak帯外'; Finish-Nightly 0 }
     Write-NightlyLog '時間帯判定' 'ok:off-peak帯'
 
-    $repos = @(
+    $repos = @()
+    if ($PSScriptRoot) { $repos += (Split-Path -Parent $PSScriptRoot) }
+    $repos += @(
         (Join-Path $HOME 'orgiast-claude-rules'),
         (Join-Path $HOME 'Downloads\orgiast-claude-rules')
     )
+    $repos = @($repos | Select-Object -Unique)
     $runner = $null
     $autoClose = $null
     foreach ($repo in $repos) {

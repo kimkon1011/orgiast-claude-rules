@@ -12,13 +12,50 @@ test.after(() => fs.rmSync(isolatedHome, { recursive: true, force: true }));
 
 const sample = `前書き\n<!-- NEXT-SESSION v1 -->\n## 対象\nrepo A\n## 残TODO\n1. 実装する\n2. ~~完了済み~~\n3. 要判断: 色\n4. ブロック中: API\n## 完了条件\nテスト green\n<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. 歴史上のTODO\n`;
 
-test('parseHandoff は先頭ブロックだけから TODO と付帯セクションを抽出する', () => {
+test('parseHandoff は全ブロックから TODO を抽出し、付帯セクションは先頭だけから抽出する', () => {
   const parsed = parseHandoff(sample);
-  assert.deepEqual(parsed.todos, ['実装する', '~~完了済み~~', '要判断: 色', 'ブロック中: API']);
+  assert.deepEqual(parsed.todos, ['実装する', '~~完了済み~~', '要判断: 色', 'ブロック中: API', '歴史上のTODO']);
+  assert.deepEqual(parsed.todoBlocks, [1, 1, 1, 1, 2]);
   assert.ok(parsed.block.includes('実装する'));
   assert.ok(!parsed.block.includes('歴史上のTODO'));
   assert.equal(parsed.sections['対象'], '## 対象\nrepo A');
   assert.equal(parsed.sections['完了条件'], '## 完了条件\nテスト green');
+});
+
+test('3ブロックの残TODOを新しいブロックから順に連結する', () => {
+  const md = `<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. 最新A\n2. 最新B\n---\n<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. 2番目\n---\n<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. 3番目\n`;
+  const parsed = parseHandoff(md);
+  assert.deepEqual(parsed.todos, ['最新A', '最新B', '2番目', '3番目']);
+  assert.deepEqual(parsed.todoBlocks, [1, 1, 2, 3]);
+  assert.equal(parsed.todoBlocks.length, parsed.todos.length);
+});
+
+test('単一ブロックは従来と同じ件数・順序で解析する', () => {
+  const md = `<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. 最初\n2. 次\n`;
+  const parsed = parseHandoff(md);
+  assert.deepEqual(parsed.todos, ['最初', '次']);
+  assert.deepEqual(parsed.todoBlocks, [1, 1]);
+});
+
+test('sections は2番目以降の対象を混ぜない', () => {
+  const md = `<!-- NEXT-SESSION v1 -->\n## 対象\n最新のrepo\n## 残TODO\n1. A\n---\n<!-- NEXT-SESSION v1 -->\n## 対象\n古いrepo\n## 残TODO\n1. B\n`;
+  const parsed = parseHandoff(md);
+  assert.equal(parsed.sections['対象'], '## 対象\n最新のrepo');
+  assert.ok(!parsed.sections['対象'].includes('古いrepo'));
+});
+
+test('参照だけの実文言 TODO を除外し、末尾に括弧がある通常 TODO は除外しない', () => {
+  const note = '（旧引き継ぎの残TODO 3〜15 はすべて有効。下にそのまま残してある）';
+  const task = '**MCP gemini-cli の復旧**（2026-08-28 発見・未着手）。セッション開始時に CONNECT_TIMEOUT で落ちており、…';
+  assert.equal(todoExclusionReason(`4. ${note}`), '参照のみ（作業内容が無い）');
+  assert.equal(todoExclusionReason(task), '');
+});
+
+test('新旧ブロックの同一 TODO は先頭の1件だけを採用する', () => {
+  const md = `<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. **同じ作業**（最新）\n---\n<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. **同じ作業**（古い）\n`;
+  const parsed = parseHandoff(md);
+  assert.equal(filterTodos(parsed.todos).length, 1);
+  assert.deepEqual(todoExclusionReasons(parsed.todos), ['', '重複（先の項目と同一）']);
 });
 
 test('filterTodos は完了・判断待ち・未決・ブロック中を除外する', () => {
@@ -410,4 +447,13 @@ test('spawn が同期 throw しても reject せず failure として resolve �
   assert.equal(result.status, 'failure');
   assert.equal(result.launchFailed, true);
   assert.ok(result.stderr.length > 0);
+});
+
+test('「以下は下の別ブロックの残TODO…」型の案内文は参照のみとして除外する', () => {
+  // 実物にあった文言。太字を含むため「太字が無い」条件では拾えず、子セッションに案内文だけが渡っていた。
+  const guide = '36. 以下は**下の別ブロックの残TODO（1〜14）**をそのまま引き継いだもの。内容は下を見ること';
+  assert.equal(todoExclusionReason(guide, new Date(2026, 7, 30)), '参照のみ（作業内容が無い）');
+  // 通常のTODOは巻き込まない
+  const normal = '10. **`is-entry.mjs` 未統一の掃除**（`line-digest.mjs` は素の比較のまま）。以下の手順で直す';
+  assert.equal(todoExclusionReason(normal, new Date(2026, 7, 30)), '');
 });

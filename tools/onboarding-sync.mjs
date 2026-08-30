@@ -11,6 +11,7 @@ import { parseEnvText, readEnvValue } from './env-kv.mjs';
 import { repairEnvBom } from './env-repair.mjs';
 import { isEntry } from './is-entry.mjs';
 import { buildKeyserveAlert, shouldAlert } from './keyserve-alert.mjs';
+import { gitBlobSha } from './version-drift.mjs';
 
 const args = process.argv.slice(2);
 const force = args.includes('--force');
@@ -90,15 +91,18 @@ function oneLine(error) {
 function parsePorcelainZ(output) {
   const entries = String(output).split('\0');
   const changed = new Set();
+  const untracked = new Set();
   for (let i = 0; i < entries.length; i++) {
     const entry = entries[i];
     if (!entry) continue;
     const status = entry.slice(0, 2);
-    changed.add(entry.slice(3).replaceAll('\\', '/'));
+    const rel = entry.slice(3).replaceAll('\\', '/');
+    changed.add(rel);
+    if (status === '??') untracked.add(rel);
     // rename/copy の次の NUL 要素は旧パス。新旧どちらも上書き対象から外す。
     if (/[RC]/.test(status) && entries[i + 1]) changed.add(entries[++i].replaceAll('\\', '/'));
   }
-  return changed;
+  return { changed, untracked };
 }
 function sha256File(file) {
   return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
@@ -200,18 +204,47 @@ export async function updateRepositoryFiles(targetRepo, options = {}) {
 
   let excluded = new Set();
   let selfOutput = new Set();
+  let oldDistribution = new Set();
+  let untrackedOutput = new Set();
+  const historyBlobCache = new Map();
   if (hasGit) {
     try {
       // pull 失敗時だけ作業中ファイルを列挙し、zip がローカル作業を消さないよう個別に除外する。
       const status = git(['-C', targetRepo, 'status', '--porcelain=v1', '-z', '--untracked-files=all'], { encoding: 'utf8', timeout: 60000 });
-      const changed = parsePorcelainZ(status);
+      const { changed, untracked } = parsePorcelainZ(status);
+      untrackedOutput = untracked;
       const previous = readFallbackState(stateFile);
       // zip が前回書いたファイルまで人の編集と誤認すると、2回目以降の同期がその版で凍結する。
       // 現在値が記録ハッシュと一致するものだけ自己出力として更新し、それ以外は人の作業として保護する。
       for (const rel of changed) {
         const current = path.join(targetRepo, ...rel.split('/'));
         if (previous?.files?.[rel] && fs.existsSync(current) && sha256File(current) === previous.files[rel]) selfOutput.add(rel);
-        else excluded.add(rel);
+        else if (untracked.has(rel) || !fs.existsSync(current)) excluded.add(rel);
+        else {
+          // HEAD との差ではなく main の過去版との一致で、zip が以前書いた配布物かを判定する。
+          // git の失敗や浅い履歴では一致扱いにせず、安全側で人の作業として保護する。
+          let matchesHistory = false;
+          try {
+            const commits = String(git(
+              ['-C', targetRepo, 'rev-list', '-n', '50', 'origin/main', '--', rel],
+              { encoding: 'utf8', timeout: 60000 },
+            )).trim().split(/\s+/).filter(Boolean);
+            const content = fs.readFileSync(current);
+            const localShas = new Set([gitBlobSha(content)]);
+            if (!content.includes(0)) localShas.add(gitBlobSha(Buffer.from(content.toString('binary').replaceAll('\r\n', '\n'), 'binary')));
+            for (const commit of commits) {
+              const key = `${commit}\0${rel}`;
+              let blob = historyBlobCache.get(key);
+              if (blob === undefined) {
+                blob = String(git(['-C', targetRepo, 'rev-parse', `${commit}:${rel}`], { encoding: 'utf8', timeout: 60000 })).trim();
+                historyBlobCache.set(key, blob);
+              }
+              if (localShas.has(blob)) { matchesHistory = true; break; }
+            }
+          } catch {}
+          if (matchesHistory) oldDistribution.add(rel);
+          else excluded.add(rel);
+        }
       }
     } catch (error) {
       const reason = `git status を取得できません: ${oneLine(error)}`;
@@ -230,16 +263,17 @@ export async function updateRepositoryFiles(targetRepo, options = {}) {
       if (fs.existsSync(source)) changed = copyTreeExcluding(source, path.join(targetRepo, name), excluded, hashes, name) || changed;
     }
     saveFallbackState(stateFile, hashes, options.now || new Date());
-    const names = [...excluded].sort();
+    const names = [...excluded].filter((rel) => !untrackedOutput.has(rel)).sort();
     const reason = pullReason || '.git がありません';
     emit(`[onboarding-sync] zip で更新しました (理由: ${reason}) / 人の変更を保護: ${names.length}件 / 前回の自分の出力なので更新: ${selfOutput.size}件`);
+    emit(`[onboarding-sync] 旧配布版と一致したため更新 ${oldDistribution.size}件`);
     if (names.length) {
-      const representatives = names.slice(0, 2);
+      const representatives = names.slice(0, 3);
       const remaining = names.length - representatives.length;
       const summary = [...representatives, ...(remaining ? [`他${remaining}件`] : [])].join(' / ');
-      emit(`[onboarding-sync] 保護のため未更新 ${names.length}件（${summary}）\n → 該当セッションが commit するまでこの PC には配布が届きません`);
+      emit(`[onboarding-sync] 保護のため未更新 ${names.length}件（${summary}）→ 該当セッションが commit するまで配布が届きません`);
     }
-    return { ok: true, method: 'zip', reason, behind, excluded: names, changed };
+    return { ok: true, method: 'zip', reason, behind, excluded: [...excluded].sort(), changed };
   } catch (error) {
     const reason = oneLine(error);
     emit(`[onboarding-sync] ⚠ tools を更新できませんでした (理由: ${reason})。このPCは配布が届いていません`);

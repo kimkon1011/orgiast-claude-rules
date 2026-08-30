@@ -117,6 +117,31 @@ try {
         Write-NightlyLog 'interaction-loop' $summary['interaction-loop']
     }
 
+    $interactionRollout = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\interaction-rollout.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $interactionRollout = $candidate; break }
+    }
+    if ($interactionRollout) {
+        try {
+            $interactionRolloutOutput = @(& $node.Source $interactionRollout --watch)
+            if ($LASTEXITCODE -ne 0) {
+                $summary['interaction-rollout'] = ("error:終了コード" + $LASTEXITCODE)
+            } else {
+                $interactionRolloutState = @($interactionRolloutOutput | Where-Object { $_ -eq 'skip:前回と差分なし' } | Select-Object -Last 1)
+                $summary['interaction-rollout'] = if ($interactionRolloutState.Count -gt 0) { [string]$interactionRolloutState[0] } else { 'ok' }
+            }
+            Write-NightlyLog 'interaction-rollout' $summary['interaction-rollout']
+        } catch {
+            $summary['interaction-rollout'] = ("error:" + $_.Exception.Message)
+            Write-NightlyLog 'interaction-rollout' $summary['interaction-rollout']
+            Write-Warning ("nightly-batch: interaction-rollout: " + $_.Exception.Message)
+        }
+    } else {
+        $summary['interaction-rollout'] = 'skip:ファイルなし'
+        Write-NightlyLog 'interaction-rollout' $summary['interaction-rollout']
+    }
+
     # ルール遵守監査。失敗しても後続処理は必ず続ける。
     $ruleCompliance = $null
     foreach ($repo in $repos) {

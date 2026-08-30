@@ -6,6 +6,7 @@ import { parseEnvText } from './env-kv.mjs';
 import { isEntry } from './is-entry.mjs';
 
 const GET_TIMEOUT_MS = 30_000;
+const POST_TIMEOUT_MS = 20_000;
 
 function readEnv(file) {
   try { return parseEnvText(fs.readFileSync(file, 'utf8')); } catch { return {}; }
@@ -53,6 +54,72 @@ export function formatRollout(result) {
   return lines.join('\n');
 }
 
+export function shouldRunWatch(markerExists) {
+  return markerExists === true;
+}
+
+export function shouldNotify(prev, curr) {
+  if (prev?.done === true) return false;
+  if (!prev) return true;
+  return ['applied', 'stale', 'unreported'].some((key) => Number(prev[key]) !== Number(curr[key]));
+}
+
+export function buildWatchMessage(curr, staleNames = []) {
+  if (curr.stale === 0 && curr.unreported === 0) return `✅ 対話ループ: 全${curr.applied}台が適用済`;
+  const lines = [`対話ループ展開: 適用済 ${curr.applied}台 / 未適用・旧版 ${curr.stale}台 / 未報告 ${curr.unreported}台`];
+  const names = staleNames.slice(0, 10);
+  if (names.length) lines.push(`未適用・旧版: ${names.join(' / ')}`);
+  return lines.join('\n');
+}
+
+function readJson(file) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
+}
+
+async function runWatch({ home, fleetEnv, fetchImpl, stdout, stderr, now }) {
+  const claudeDir = path.join(home, '.claude');
+  if (!shouldRunWatch(fs.existsSync(path.join(claudeDir, 'interaction-rollout-watch')))) return;
+
+  const stateFile = path.join(claudeDir, 'interaction-rollout-state.json');
+  const prev = readJson(stateFile);
+  if (prev?.done === true) return;
+
+  const costEnv = readEnv(path.join(claudeDir, 'cost-reporter.env'));
+  const webhook = costEnv.DISCORD_COST_WEBHOOK || costEnv.COST_WEBHOOK || '';
+  if (!webhook) {
+    stderr('interaction-rollout: DISCORD_COST_WEBHOOK/COST_WEBHOOK 未設定のため投稿しません(~/.claude/cost-reporter.env)');
+    return;
+  }
+  if (!fleetEnv.FLEET_SHEET_URL || !fleetEnv.FLEET_SHEET_TOKEN) {
+    stderr('interaction-rollout: FLEET_SHEET_URL/TOKEN 未設定のため実行しません(~/.claude/fleet-sheet.env)');
+    return;
+  }
+
+  const rows = await fetchRolloutRows({ sheetUrl: fleetEnv.FLEET_SHEET_URL, token: fleetEnv.FLEET_SHEET_TOKEN, fetchImpl });
+  const result = buildRollout(rows);
+  const curr = {
+    applied: result.summary.applied,
+    stale: result.summary.outdated,
+    unreported: result.summary.unreported,
+    done: result.summary.outdated === 0 && result.summary.unreported === 0,
+  };
+  if (!shouldNotify(prev, curr)) {
+    stdout('skip:前回と差分なし');
+    return;
+  }
+  const staleNames = result.rows.filter((row) => row.category === 'outdated')
+    .map((row) => String(row.label ?? '').trim() || String(row.pcName ?? '').trim() || '(名称未設定)');
+  const response = await fetchImpl(webhook, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ content: buildWatchMessage(curr, staleNames) }),
+    signal: AbortSignal.timeout(POST_TIMEOUT_MS),
+  });
+  if (!response.ok) throw new Error(`Discord POST HTTP ${response.status}`);
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(stateFile, `${JSON.stringify({ ...curr, notifiedAt: now().toISOString() }, null, 2)}\n`);
+}
+
 export async function fetchRolloutRows({ sheetUrl, token, fetchImpl = globalThis.fetch }) {
   const url = new URL(sheetUrl);
   url.searchParams.set('token', token);
@@ -70,9 +137,18 @@ export async function runInteractionRollout({
   fetchImpl = globalThis.fetch,
   stdout = console.log,
   stderr = console.error,
+  now = () => new Date(),
 } = {}) {
   const home = env.ORGIAST_HOME || os.homedir();
   const fleetEnv = readEnv(path.join(home, '.claude', 'fleet-sheet.env'));
+  if (argv.includes('--watch')) {
+    try {
+      await runWatch({ home, fleetEnv, fetchImpl, stdout, stderr, now });
+    } catch (error) {
+      stderr(`interaction-rollout: 取得・投稿できませんでした (${error?.message || error?.name || 'error'})`);
+    }
+    return;
+  }
   if (!fleetEnv.FLEET_SHEET_URL || !fleetEnv.FLEET_SHEET_TOKEN) {
     stderr('interaction-rollout: FLEET_SHEET_URL/TOKEN 未設定のため実行しません(~/.claude/fleet-sheet.env)');
     return;

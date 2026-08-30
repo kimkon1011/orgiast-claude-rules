@@ -78,17 +78,72 @@ if (Have node) { OK ("Node.js あり (" + (node -v) + ")") } else { Warn "Node.j
 # --- リポ取得(ZIP優先: git の pack ロック/Defender 干渉を回避) ---
 Step "共通ルール一式のダウンロード"
 $gotRepo = $false
+$preserveRepo = $false
+function Update-DirtyRepoFromZip($repo) {
+  $zip = Join-Path $env:TEMP ('orgiast-rules-' + [guid]::NewGuid().ToString('N') + '.zip')
+  $ext = Join-Path $env:TEMP ('orgiast-rules-ext-' + [guid]::NewGuid().ToString('N'))
+  try {
+    $currentStatus = @(git -c core.quotepath=false -C $repo status --porcelain --untracked-files=all 2>$null)
+    if ($LASTEXITCODE -ne 0) {
+      Warn "リポジトリの状態を確認できないため更新を見送りました。会社担当に連絡してください"
+      return $false
+    }
+
+    $protected = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($line in $currentStatus) {
+      if ($line.Length -lt 4) { continue }
+      $path = $line.Substring(3).Replace('\', '/')
+      foreach ($changedPath in @($path -split ' -> ')) { [void]$protected.Add($changedPath.Trim('"')) }
+    }
+
+    Invoke-WebRequest -UseBasicParsing 'https://github.com/kimkon1011/orgiast-claude-rules/archive/refs/heads/main.zip' -OutFile $zip
+    Expand-Archive -Path $zip -DestinationPath $ext -Force
+    $src = Join-Path $ext 'orgiast-claude-rules-main'
+    if (-not (Test-Path $src)) { throw "zip内のリポジトリが見つかりません" }
+
+    # 汚れたPCを救える唯一の配布経路なので、repo自体は決して削除しない。
+    # 未コミット作業を守りつつ、配布対象のうち変更されていないファイルだけを更新する。
+    foreach ($dir in @('tools', 'rules-extracted', 'skills')) {
+      $sourceDir = Join-Path $src $dir
+      if (-not (Test-Path $sourceDir)) { continue }
+      foreach ($sourceFile in @(Get-ChildItem $sourceDir -File -Recurse)) {
+        $relative = $sourceFile.FullName.Substring($src.Length).TrimStart('\', '/').Replace('\', '/')
+        if ($protected.Contains($relative)) { continue }
+        $destination = Join-Path $repo $relative
+        $destinationDir = Split-Path $destination -Parent
+        if (-not (Test-Path $destinationDir)) { New-Item -ItemType Directory -Force -Path $destinationDir | Out-Null }
+        Copy-Item $sourceFile.FullName $destination -Force
+      }
+    }
+    Warn ("pull できないため zip で tools を更新しました(ローカル変更 " + $currentStatus.Count + " 件は保護)")
+    return $true
+  } catch {
+    Warn ("zipによる安全な更新に失敗しました: " + $_.Exception.Message)
+    return $false
+  } finally {
+    Remove-Item $zip -Force -ErrorAction SilentlyContinue
+    Remove-Item $ext -Recurse -Force -ErrorAction SilentlyContinue
+  }
+}
 if ((Have git) -and (Test-Path (Join-Path $REPO '.git'))) {
   try {
     $repoStatus = @(git -C $REPO status --porcelain 2>$null)
     if ($LASTEXITCODE -eq 0 -and $repoStatus.Count -gt 0) {
-      try { git -C $REPO pull --ff-only | Out-Null } catch {}
-      $gotRepo = $true
-      Warn "未コミットの変更があるため既存リポジトリを保持しました(削除せず pull のみ)"
+      $preserveRepo = $true
+      git -C $REPO pull --ff-only | Out-Null
+      if ($LASTEXITCODE -eq 0) {
+        $gotRepo = $true
+        Warn "未コミットの変更があるため既存リポジトリを保持しました(pull 済み)"
+      } else {
+        $gotRepo = Update-DirtyRepoFromZip $REPO
+      }
+    } elseif ($LASTEXITCODE -ne 0) {
+      $preserveRepo = $true
+      Warn "リポジトリの状態を確認できないため更新を見送りました。会社担当に連絡してください"
     }
   } catch {}
 }
-if (-not $gotRepo) { try {
+if (-not $gotRepo -and -not $preserveRepo) { try {
   $zip = Join-Path $env:TEMP 'orgiast-rules.zip'
   $ext = Join-Path $env:TEMP ('orgiast-rules-ext-' + [guid]::NewGuid().ToString('N'))
   Invoke-WebRequest -UseBasicParsing 'https://github.com/kimkon1011/orgiast-claude-rules/archive/refs/heads/main.zip' -OutFile $zip
@@ -102,10 +157,10 @@ if (-not $gotRepo) { try {
   Remove-Item $zip -Force -ErrorAction SilentlyContinue
   Remove-Item $ext -Recurse -Force -ErrorAction SilentlyContinue
 } catch { Warn "zip取得に失敗、gitで再試行します" } }
-if (-not $gotRepo -and (Test-Path (Join-Path $REPO '.git'))) {
+if (-not $gotRepo -and -not $preserveRepo -and (Test-Path (Join-Path $REPO '.git'))) {
   try { git -C $REPO pull --quiet; if (Test-Path (Join-Path $REPO 'tools')) { $gotRepo = $true; OK "最新に更新" } } catch { if (Test-Path (Join-Path $REPO 'tools')) { $gotRepo = $true; Warn "更新失敗(既存を使用)" } }
 }
-if (-not $gotRepo) {
+if (-not $gotRepo -and -not $preserveRepo) {
   if (Test-Path $REPO) { Remove-Item $REPO -Recurse -Force -ErrorAction SilentlyContinue }
   for ($i = 1; $i -le 3 -and -not $gotRepo; $i++) {
     try { git clone --depth 1 --quiet https://github.com/kimkon1011/orgiast-claude-rules.git $REPO; if (Test-Path (Join-Path $REPO 'tools')) { $gotRepo = $true; OK "ダウンロード完了(git)" } }

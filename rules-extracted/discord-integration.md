@@ -79,6 +79,9 @@ kim 指示:「**ほかのアカウントのパソコンもすべて、今後は�
 （`Discordチャンネル` タブ。`用途・何のチャンネルか【手入力】` 等の【手入力】列は人が自由に書ける欄で、機械は上書きしない）
 ## 2.6.2 Discord の webhook URL を user にコピーさせない（絶対ルール / 2026-08-31 kim 指示）
 
+サーバ全体の webhook 棚卸しは `node tools/discord-webhook-inventory.mjs`（kim 機の夜間バッチが毎晩実行）。
+台帳の `Webhook` タブを見れば、どのチャンネルに誰が作った webhook が何本あるか分かる。URL は載せない。
+
 kim 指示:「ウェブフックもクラウド台帳に入れられるかな。いちいちコピーしろって手間がかかるから」。
 
 1. URL が要るときは `node ~/orgiast-claude-rules/tools/discord-webhook.mjs "<webhook名 or チャンネル名>"`

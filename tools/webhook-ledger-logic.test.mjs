@@ -29,3 +29,16 @@ test("partial:true の報告は、報告に含まれない既存行の状態を�
   });
   assert.deepEqual([...full.missing], ["1"]);
 });
+
+test('creator と channelName の空文字は既存値を消さない', () => {
+  const payload = { label: 'PC1', checkedAt: 'd', webhooks: [{ ...item, creator: 'alice' }] };
+  const row = context.webhookPlanUpsert(H, [], payload).appendRows[0];
+  const plan = context.webhookPlanUpsert(H, [row], {
+    label: 'PC1', checkedAt: 'd', webhooks: [{ ...item, creator: '', channelName: '' }],
+  });
+  const changedColumns = plan.updates.map((update) => H[update.columnIndex - 1]);
+  assert(!changedColumns.includes('作成者'));
+  assert(!changedColumns.includes('対象チャンネル名'));
+  assert.equal(row[H.indexOf('作成者')], 'alice');
+  assert.equal(row[H.indexOf('対象チャンネル名')], '一般');
+});

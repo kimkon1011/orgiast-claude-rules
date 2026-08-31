@@ -214,6 +214,21 @@ try {
         }
     } else { Write-NightlyLog 'line-digest' 'skip:ファイルなし' }
 
+    $makimonoDrain = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\makimono-publish.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $makimonoDrain = $candidate; break }
+    }
+    if ($makimonoDrain) {
+        try {
+            & $node.Source $makimonoDrain --drain-queue --notify
+            if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'makimono-drain' ("error:終了コード" + $LASTEXITCODE) } else { Write-NightlyLog 'makimono-drain' 'ok' }
+        } catch {
+            Write-NightlyLog 'makimono-drain' ("error:" + $_.Exception.Message)
+            Write-Warning ("nightly-batch: makimono-drain: " + $_.Exception.Message)
+        }
+    } else { Write-NightlyLog 'makimono-drain' 'error:ファイルなし' }
+
     $producer = $null
     foreach ($repo in $repos) {
         $candidate = Join-Path $repo 'tools\batch-producer.mjs'

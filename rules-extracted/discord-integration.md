@@ -63,3 +63,17 @@ claude mcp list
 - Q: Bot 経由のメッセージ送信は誰の発言として記録される？ A: `clawd-connector` Bot として残ります（orgiast guild の audit log）。誰が呼んだかは Discord 側からは見えないので、業務上重要な投稿は本人アカウントで二次共有してください。
 - Q: 自分の個人 DM を読み取れる？ A: 現状は NO（user token 未設定のため）。要件があれば kim に相談 → ToS リスクを承知の上で個別追加。
 - Q: 新しい tool が欲しい A: kim に相談、または `c:\Users\uers\Downloads\CLAUDE.md配布\discord-mcp-connector\lib\tools\` 配下に追加して PR / push。
+
+## 2.6.1 Discord のチャンネルIDは user に聞かない（絶対ルール / 2026-08-31 kim 指示）
+
+kim 指示:「**ほかのアカウントのパソコンもすべて、今後はこの Discord からチャンネルIDをひっぱってきて、ユーザーに取得させないようにして**」。
+
+チャンネルID が必要になったら、**user に「開発者モードでIDをコピーして貼って」と依頼してはならない**。次の順で自動取得する:
+
+1. `node ~/orgiast-claude-rules/tools/discord-channel-id.mjs "<チャンネル名の一部>"`
+   （クラウド台帳の `Discordチャンネル` タブを引く。全PCで動く＝Bot トークン不要）
+2. 候補が複数出たら **user には「どれ？」とだけ聞く**（IDを調べさせるのではなく、名前で選ばせる）
+3. 台帳に無い新設チャンネルは kim 機の夜間バッチが翌朝までに載せる。急ぐなら `--refresh`（Bot トークンを持つPCのみ有効）
+
+台帳: https://docs.google.com/a/orgiast.jp/spreadsheets/d/1soai_gMbH0C-67J8680Y26Y7KJWkV87sFZxCgDQ2BbI/edit
+（`Discordチャンネル` タブ。`用途・何のチャンネルか【手入力】` 等の【手入力】列は人が自由に書ける欄で、機械は上書きしない）

@@ -189,6 +189,23 @@ try {
         }
     } else { Write-NightlyLog 'growi-manual' 'skip:ファイルなし' }
 
+    $discordChannels = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\discord-channel-ledger.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $discordChannels = $candidate; break }
+    }
+    $discordBotToken = Join-Path ([Environment]::GetFolderPath('UserProfile')) '.claude\orgiast-discord-bot-token.txt'
+    if (-not (Test-Path -LiteralPath $discordBotToken -PathType Leaf)) {
+        Write-NightlyLog 'discord-channels' 'skip:トークンなし'
+    } elseif ($discordChannels) {
+        try {
+            & $node.Source $discordChannels
+            if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'discord-channels' ("error:終了コード" + $LASTEXITCODE) } else { Write-NightlyLog 'discord-channels' 'ok' }
+        } catch {
+            Write-NightlyLog 'discord-channels' ("error:" + $_.Exception.Message)
+        }
+    } else { Write-NightlyLog 'discord-channels' 'skip:ファイルなし' }
+
     # LINEオープンチャットの取り込み分を選別・要約して作り置きを更新する。
     # batch-queue が空でも実行したいので、下の early exit より前に置くこと。
     $digest = $null

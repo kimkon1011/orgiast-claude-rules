@@ -14,7 +14,11 @@ function _COMMANDS_() {
     unifyIntoCloudLedger: unifyIntoCloudLedger,
     describeCloudLedger: describeCloudLedger,
     describeCloudContracts: describeCloudContracts,
-    setCloudLedgerFolder: setCloudLedgerFolder
+    setCloudLedgerFolder: setCloudLedgerFolder,
+    upsertDiscordChannels: upsertDiscordChannels,
+    describeDiscordChannels: describeDiscordChannels,
+    lookupDiscordChannels: lookupDiscordChannels,
+    ensureManualColumns: ensureManualColumns
   };
 }
 

@@ -7,7 +7,7 @@ function _ledgerWriteIndex_(book, fleetTabName, props, ledgerId) {
   );
   sheet.getRange(1, 1, rows.length, rows[0].length).setValues(rows);
   sheet.getRange('A1').setFontWeight('bold').setFontSize(14);
-  [4, 13].forEach(function(row) {
+  [4, 16].forEach(function(row) {
     sheet.getRange(row, 1, 1, row === 4 ? 5 : 3).setFontWeight('bold').setBackground('#d9eaf7');
   });
   sheet.autoResizeColumns(1, 5);

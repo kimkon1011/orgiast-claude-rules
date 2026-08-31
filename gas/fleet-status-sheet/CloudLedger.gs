@@ -71,7 +71,7 @@ function replaceCloudLogins(payload) {
     var reportedDate = payload.reportedAt ? String(payload.reportedAt).slice(0, 10) : '';
     var seed = cloudPlanContractSeed(contracts.headers, contracts.rows, payload.rows, reportedDate);
     _cloudApply_(contracts.sheet, seed);
-    return { ok: true, deleted: plan.deleteRowNumbers.length, appended: plan.appendRows.length, seeded: seed.appendRows.length };
+    return { ok: true, deleted: plan.deleteRowNumbers.length, appended: plan.appendRows.length, seeded: seed.appendRows.length, droppedManual: plan.droppedManual };
   });
 }
 

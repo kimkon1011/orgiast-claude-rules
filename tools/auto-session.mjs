@@ -289,6 +289,8 @@ export function buildPrompt(todo, sections, repoCwd, summaryFile, timeoutMin = 6
     `## 固定の作業規約
 - セッションの作業ディレクトリは履歴を揃えるためのフォルダであり、実際の作業対象リポジトリは ${repoCwd} である。git は必ず \`git -C ${repoCwd}\` の形で実行し、codex-do.mjs は \`--cwd ${repoCwd}\` を付ける。裸の \`git status\` / \`git checkout\` は使わない。
 - 実装本体は \`node tools/codex-do.mjs "<指示>" --cwd ${repoCwd}\` で Codex に委譲する（§1.18）。監督は設計・レビュー・検証だけ。
+- このセッションは \`claude -p\` の1回きりのヘッドレス実行である。ターンを終えた瞬間にプロセスごと終了し、起動中の子プロセスはすべて kill される。\`run_in_background: true\` と \`ScheduleWakeup\` は使用禁止で、フックでも deny される。「バックグラウンドで走らせて完了を待つ」と書いてターンを終えてはいけない。
+- \`codex-do.mjs\` は必ず前景で実行し、\`--timeout <秒>\` にセッションの残り時間より短い秒数を渡す。時間内に終わらない見込みなら待たず、そこまでの状態を ${summaryFile} に書き、作りかけのブランチを push して draft PR にするか、次回へ引き継いで終了する。
 - 他セッションと作業ツリーを共有している。\`git add -A\` / \`git commit -a\` / \`git stash\` / \`git checkout -- .\` は禁止。自分が作成・変更したファイルだけをパス指定で \`git add\` する。着手前とコミット直前に \`git status --porcelain\` を撮り、差分が自分の変更だけであることを確認する。
 - ブランチは必ず main から切る。ブランチ名は \`auto/${day}-<短いスラグ>\`。
 - \`node --test tools/*.test.mjs\` が緑になるまで直す。
@@ -345,6 +347,8 @@ ${issue.body || '（本文なし）'}
 
 ## 実行環境
 - 実リポジトリは ${repoCwd}。git は \`git -C ${repoCwd}\`、実装委譲は \`node tools/codex-do.mjs "<指示>" --cwd ${repoCwd}\` のように対象を明示する。
+- このセッションは \`claude -p\` の1回きりのヘッドレス実行である。ターンを終えた瞬間にプロセスごと終了し、起動中の子プロセスはすべて kill される。\`run_in_background: true\` と \`ScheduleWakeup\` は使用禁止で、フックでも deny される。「バックグラウンドで走らせて完了を待つ」と書いてターンを終えてはいけない。
+- \`codex-do.mjs\` は必ず前景で実行し、\`--timeout <秒>\` にセッションの残り時間より短い秒数を渡す。時間内に終わらない見込みなら待たず、そこまでの状態を ${summaryFile} に書き、作りかけのブランチを push して draft PR にするか、次回へ引き継いで終了する。
 - 作業経過を ${summaryFile} に逐次追記する。PR URL・PRタイトル・CI結果を必ず最後に記録する。
 - 5分を超える長時間ポーリングをしてはいけない。開始から ${Math.max(1, timeoutMin - 10)} 分でまとめに入る。
 
@@ -632,6 +636,12 @@ function feedbackPrDetails(text) {
   return { url, title, ci };
 }
 
+export function feedbackIssuesToUnmark(feedbackResults) {
+  return (Array.isArray(feedbackResults) ? feedbackResults : [])
+    .filter((result) => !feedbackPrDetails(`${result.stdout ?? ''}\n${result.summary ?? ''}`).url)
+    .map((result) => result.issue);
+}
+
 function enrichFeedbackPrDetails(details) {
   if (!details.url) return details;
   const result = runGh(['pr', 'view', details.url, '--json', 'title,statusCheckRollup']);
@@ -646,6 +656,31 @@ function enrichFeedbackPrDetails(details) {
       ci: states.length ? states.join(', ') : details.ci,
     };
   } catch { return details; }
+}
+
+export function feedbackFailureBody(results) {
+  return results.map((result) => {
+    const issue = result.issue ?? {};
+    const status = result.launchFailed ? '起動失敗 (launchFailed)'
+      : result.status === 'timeout' ? 'タイムアウト (timeout)'
+        : result.status === 'failure' ? '失敗 (failure)' : String(result.status ?? '不明');
+    const lines = [
+      `${issue.repo ?? 'リポジトリ不明'}#${issue.number ?? '?'} ${issue.title ?? '（タイトルなし）'}`,
+      `Issue: ${issue.url ?? '（URLなし）'}`,
+      `子の結果: ${status}, exitCode=${result.exitCode ?? 'null'}`,
+      `summary: ${result.summaryFile ?? '（未作成）'}`,
+    ];
+    const sessionId = result.sessionId || extractSessionId(result.stdout);
+    if (sessionId) lines.push(`再開: claude --resume ${sessionId}`);
+    const stderr = String(result.stderr ?? '')
+      .replace(/\r?\n/g, ' ')
+      .replace(/(authorization\s*:\s*bearer\s+)\S+/gi, '$1[REDACTED]')
+      .replace(/((?:token|secret|password|api[_-]?key)\s*[=:]\s*)\S+/gi, '$1[REDACTED]')
+      .replace(/https:\/\/discord(?:app)?\.com\/api\/webhooks\/\S+/gi, '[REDACTED_WEBHOOK]')
+      .trim();
+    if (stderr) lines.push(`stderr: ${stderr.slice(0, 200)}`);
+    return lines.join('\n');
+  }).join('\n\n');
 }
 
 function readEnvValue(file, names) {
@@ -870,7 +905,8 @@ export async function main(argv = process.argv.slice(2)) {
       let summary = '';
       try { summary = fs.readFileSync(summaryFile, 'utf8'); } catch {}
       completedChildren += 1;
-      const record = { source: 'feedback', issue, cwd: repoCwd, summaryFile, summary, ...result };
+      const sessionId = extractSessionId(result.stdout);
+      const record = { source: 'feedback', issue, cwd: repoCwd, summaryFile, summary, sessionId, ...result };
       feedbackResults.push(record);
       fs.writeFileSync(runFile, JSON.stringify(record, null, 2));
       // 起動そのものに失敗した場合だけ、次回が再試行できるよう対応中ラベルを戻す。
@@ -908,7 +944,19 @@ ${result.summary ?? ''}`);
     }
   }
   const feedbackFailed = feedbackResults.length - feedbackSucceeded;
-  if (feedbackFailed > 0) await notifyFeedback(relay, { title: 'フォーム報告の自動対応結果', body: `${feedbackResults.length}件試行し、${feedbackFailed}件でPRを作成できませんでした`, url: '' });
+  if (feedbackFailed > 0) {
+    const failed = feedbackResults.filter((result) => !feedbackPrDetails(`${result.stdout ?? ''}\n${result.summary ?? ''}`).url);
+    // PR が無いまま in-progress を残すと次回以降 feedbackIssueExclusionReason に弾かれて永久に再試行されないため。
+    for (const issue of feedbackIssuesToUnmark(feedbackResults)) {
+      try {
+        const unmarked = setInProgress(issue, false);
+        if (unmarked.error || unmarked.status !== 0) console.warn(`auto-session: in-progress ラベル解除失敗 (${issue.repo}#${issue.number})`);
+      } catch {
+        console.warn(`auto-session: in-progress ラベル解除失敗 (${issue.repo}#${issue.number})`);
+      }
+    }
+    await notifyFeedback(relay, { title: 'フォーム報告の自動対応結果', body: `${feedbackResults.length}件試行し、${feedbackFailed}件でPRを作成できませんでした\n\n${feedbackFailureBody(failed)}`, url: '' });
+  }
   return results.some((result) => result.status === 'failure') || feedbackFailed > 0 ? 1 : 0;
 }
 

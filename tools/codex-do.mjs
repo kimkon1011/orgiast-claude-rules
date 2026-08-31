@@ -3,6 +3,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
+import { isEntry } from './is-entry.mjs';
+
+export function needsWorktreeRepair(gitFileContent) {
+  return /^gitdir:\s*[A-Za-z]:/i.test(String(gitFileContent ?? '').trim());
+}
+
+if (isEntry(import.meta.url)) {
 
 const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
@@ -123,7 +130,19 @@ if (process.platform === 'win32' && !forceNative) {
       usable = spawnSync('wsl', ['-d', distro, '--', 'codex', '--version'], { stdio: 'ignore', timeout: 15000 }).status === 0;
     }
   }
-  if (usable) result = await execute('wsl', ['-d', distro, '--cd', cwd, '--', 'codex', 'exec', '-s', 'workspace-write', '-']);
+  if (usable) {
+    const gitFile = path.join(cwd, '.git');
+    try {
+      if (fs.statSync(gitFile).isFile() && needsWorktreeRepair(fs.readFileSync(gitFile, 'utf8'))) {
+        const repaired = spawnSync('git', ['-C', cwd, '-c', 'worktree.useRelativePaths=true', 'worktree', 'repair'], { encoding: 'utf8' });
+        if (repaired.status === 0) console.error('⚠️ Windows 絶対パスの gitdir は WSL 側 codex が解決できないため相対パスへ直しました');
+        else console.error(`⚠️ Windows 絶対パスの gitdir を相対パスへ修復できませんでした（処理は続行します）: ${(repaired.stderr || repaired.error?.message || `exit ${repaired.status}`).trim()}`);
+      }
+    } catch (error) {
+      if (error?.code !== 'ENOENT') console.error(`⚠️ worktree の gitdir 確認に失敗しました（処理は続行します）: ${error?.message ?? error}`);
+    }
+    result = await execute('wsl', ['-d', distro, '--cd', cwd, '--', 'codex', 'exec', '-s', 'workspace-write', '-']);
+  }
   else {
     console.error('⚠️ WSL 経路が使えないためネイティブ Windows codex で実行します。\nWindows 版は read-only サンドボックス固定でファイルを書けない既知の不具合(openai/codex#35428)があり、編集が保存されない可能性が高い。WSL の導入を推奨');
     result = await execute('codex', ['exec', '-s', 'workspace-write', '-'], { cwd });
@@ -148,3 +167,4 @@ try {
   fs.appendFileSync(ledger, `${JSON.stringify(usage)}\n`, 'utf8');
 } catch {}
 process.exit(result?.status ?? 1);
+}

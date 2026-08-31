@@ -420,6 +420,9 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
 
 `discord-mcp-connector`（Vercelデプロイ、kim管理、16 tools）を必ず使う。自前Bot・`discord.py`ローカル実行は禁止。URL・承認password・セットアップ手順・FAQ: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/discord-integration.md`
 
+### 2.6.1 Discord のチャンネルIDは user に聞かない（絶対）
+`node ~/orgiast-claude-rules/tools/discord-channel-id.mjs "<チャンネル名の一部>"` で全PC共通の台帳から自動取得する。複数候補時は名前だけ選んでもらい、ID取得作業は依頼しない。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/discord-integration.md`
+
 **ただし「まとめ読み」は `list_messages` を使わず `tools/discord-digest.mjs` を使う（2026-08-27 実測に基づく）**。
 直近30日の transcript を実測したところ、**context へ一括データを貼っている最大の発生源が `list_messages`** だった
 （8回で生 56,667 tok、**以降の全リクエストで再送される分を含めた増幅後 13,123,596 tok = 一括貼り全体の29%**）。

@@ -9,3 +9,9 @@ Discord Bot がギルドの全チャンネルを取得し、GAS Web App の `dis
 - PCログインと拡張機能監査の夜間置換では、複合キーが一致する手入力値を新しい行へ引き継ぐ。引継先のない値は `droppedManual` で報告する。
 
 Nodeツールは `~/.claude/orgiast-discord-bot-token.txt` と `~/.claude/fleet-sheet.env` を使用する。`--dry-run` はGASへPOSTせず、トークンを含まない収集結果だけを表示する。
+
+## 全PCからの検索
+
+`discord-lookup` はチャンネル名の部分一致・完全一致または19桁IDで台帳を検索する。既定では「削除/非表示」を除外し、最大50件（指定上限200件）を返す。
+
+`node ~/orgiast-claude-rules/tools/discord-channel-id.mjs "<チャンネル名の一部>"` は全PCにある `~/.claude/fleet-sheet.env` を使って台帳を引く。1件ならIDだけを標準出力へ出し、複数件は候補を標準エラーへ出して終了コード1にする。台帳が0件でBotトークンがあるPCだけDiscord APIへフォールバックする。`--refresh` はBotトークンがあるPCでは同期後に検索し、ないPCでは台帳値の検索を継続する。

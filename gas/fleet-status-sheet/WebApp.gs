@@ -75,6 +75,7 @@ function doPost(e) {
     'cloud-describe': describeCloudLedger,
     'discord-channels': upsertDiscordChannels,
     'discord-describe': describeDiscordChannels,
+    'discord-lookup': lookupDiscordChannels,
     'manual-columns': ensureManualColumns,
     'ledger-unify': unifyIntoCloudLedger
   };

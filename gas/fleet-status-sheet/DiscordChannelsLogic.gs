@@ -53,3 +53,36 @@ function discordPlanChannels(headers, rows, payload) {
   });
   return { updates: updates, appendRows: appendRows, missing: missing };
 }
+
+function discordMatchRows(headers, rows, options) {
+  options = options || {};
+  var columnNames = {
+    id: 'チャンネルID', name: 'チャンネル名', category: 'カテゴリ', type: '種別',
+    url: 'チャンネルURL', purpose: '用途・何のチャンネルか【手入力】',
+    owner: '担当【手入力】', note: '備考【手入力】', state: '状態', checkedAt: '最終確認日(JST)'
+  };
+  var columns = {};
+  Object.keys(columnNames).forEach(function(key) { columns[key] = cloudColumn(headers, columnNames[key], true); });
+  var normalize = function(value) { return String(value == null ? '' : value).toLowerCase().replace(/[ \u3000]/g, ''); };
+  var query = normalize(options.query);
+  var idQuery = /^\d{19}$/.test(String(options.query == null ? '' : options.query).trim());
+  var requestedLimit = Number(options.limit);
+  var limit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.min(200, Math.floor(requestedLimit)) : 50;
+  var matches = rows.filter(function(row) {
+    var state = String(row[columns.state] == null ? '' : row[columns.state]);
+    if (!options.includeMissing && state === '削除/非表示') return false;
+    if (!query) return true;
+    if (idQuery) return String(row[columns.id] == null ? '' : row[columns.id]).trim() === String(options.query).trim();
+    var name = normalize(row[columns.name]);
+    return options.exact ? name === query : name.indexOf(query) >= 0;
+  });
+  return {
+    count: Math.min(matches.length, limit),
+    truncated: matches.length > limit,
+    rows: matches.slice(0, limit).map(function(row) {
+      var result = {};
+      Object.keys(columns).forEach(function(key) { result[key] = String(row[columns[key]] == null ? '' : row[columns[key]]); });
+      return result;
+    })
+  };
+}

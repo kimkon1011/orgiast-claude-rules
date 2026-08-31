@@ -52,3 +52,16 @@ function describeDiscordChannels() {
   var values = count ? sheet.getRange(2, 1, Math.min(5, count), lastColumn).getDisplayValues() : [];
   return { ok: true, tab: DISCORD_TAB_NAME_, exists: true, headers: headers, rowCount: count, rows: values.map(function(row) { return { id: row[idColumn], name: row[nameColumn] }; }) };
 }
+
+function lookupDiscordChannels(payload) {
+  var id = PropertiesService.getScriptProperties().getProperty('CLOUD_LEDGER_SHEET_ID');
+  if (!id) throw new Error('CLOUD_LEDGER_SHEET_ID is not configured');
+  var sheet = SpreadsheetApp.openById(id).getSheetByName(DISCORD_TAB_NAME_);
+  if (!sheet) return { ok: true, count: 0, truncated: false, rows: [], exists: false };
+  var lastColumn = sheet.getLastColumn();
+  var lastRow = sheet.getLastRow();
+  var headers = lastColumn ? sheet.getRange(1, 1, 1, lastColumn).getDisplayValues()[0] : [];
+  var rows = lastRow > 1 && lastColumn ? sheet.getRange(2, 1, lastRow - 1, lastColumn).getDisplayValues() : [];
+  var result = discordMatchRows(headers, rows, payload || {});
+  return { ok: true, count: result.count, truncated: result.truncated, rows: result.rows };
+}

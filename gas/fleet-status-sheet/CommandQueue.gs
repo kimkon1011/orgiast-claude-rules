@@ -17,6 +17,7 @@ function _COMMANDS_() {
     setCloudLedgerFolder: setCloudLedgerFolder,
     upsertDiscordChannels: upsertDiscordChannels,
     describeDiscordChannels: describeDiscordChannels,
+    lookupDiscordChannels: lookupDiscordChannels,
     ensureManualColumns: ensureManualColumns
   };
 }

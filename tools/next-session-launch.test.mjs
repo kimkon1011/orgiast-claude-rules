@@ -283,6 +283,33 @@ test('transcript の先頭読み取り失敗時は fail-open で起動する', a
   assert.equal(calls.spawn.length, 1);
 });
 
+// bucket が無い(=その cwd で一度もセッションが始まっていない)のは「未送信」の積極的な証拠。
+// ここを fail-open にすると、新しい cwd に開いたタブでは抑止が永久に効かない(2026-08-31 実測)。
+test('transcript bucket が無い(ENOENT)ときは未送信として抑止する', async () => {
+  const { io, calls } = pendingTabIo('');
+  io.readdir = (dir) => {
+    if (!dir.includes('projects')) return [];
+    const error = new Error('ENOENT: no such file or directory');
+    error.code = 'ENOENT';
+    throw error;
+  };
+  assert.equal(await launchNextSession(['--target', 'vscode'], io), 0);
+  assert.equal(calls.spawn.length, 0);
+  assert.match(calls.logs[0], /未送信/);
+});
+
+test('ENOENT 以外の readdir 失敗は fail-open で起動する', async () => {
+  const { io, calls } = pendingTabIo('');
+  io.readdir = (dir) => {
+    if (!dir.includes('projects')) return [];
+    const error = new Error('EACCES: permission denied');
+    error.code = 'EACCES';
+    throw error;
+  };
+  assert.equal(await launchNextSession(['--target', 'vscode'], io), 0);
+  assert.equal(calls.spawn.length, 1);
+});
+
 test('dry-run は plan だけを出して spawn しない', async () => {
   const { io, calls } = fakeIo();
   assert.equal(await launchNextSession(['--target', 'terminal', '--dry-run'], io), 0);

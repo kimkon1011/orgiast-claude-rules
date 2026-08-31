@@ -13,6 +13,11 @@ function clean(value) {
   return String(value ?? '').trim();
 }
 
+export function parseDismissId(args) {
+  const dismissIndex = args.indexOf('--dismiss');
+  return dismissIndex >= 0 ? clean(args[dismissIndex + 1]) : null;
+}
+
 export function parseRepoMap(value = '') {
   const result = {};
   for (const entry of String(value).split(',')) {
@@ -159,12 +164,37 @@ function increment(reasons, reason) {
 
 export async function main(args = process.argv.slice(2)) {
   const dry = args.includes('--dry');
+  const dismissId = parseDismissId(args);
   const limitIndex = args.indexOf('--limit');
   const requestedLimit = limitIndex >= 0 ? Number.parseInt(args[limitIndex + 1], 10) : 5;
   const limit = Number.isInteger(requestedLimit) && requestedLimit > 0 ? requestedLimit : 5;
   const config = loadRelayConfig();
   if (!config.url || !config.secret) {
     console.log('feedback-to-issues: 中継が未設定なのでスキップ');
+    return 0;
+  }
+  if (dismissId !== null) {
+    if (!dismissId) {
+      console.error('feedback-to-issues: --dismiss には message_id を指定する');
+      return 1;
+    }
+    if (dry) {
+      console.log(`feedback-to-issues: 対象外予定（--dry） message_id=${dismissId}`);
+      return 0;
+    }
+    const urls = relayUrls(config.url);
+    try {
+      const ack = await relayRequest(urls.ack, config.secret, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message_id: dismissId }),
+      });
+      if (ack.acked !== true) throw new Error('acked=true ではない応答');
+    } catch (error) {
+      console.error(`feedback-to-issues: 対象外化に失敗 message_id=${dismissId} (${error.message})`);
+      return 1;
+    }
+    console.log(`feedback-to-issues: 対象外にしました message_id=${dismissId}`);
     return 0;
   }
   const probe = runGh(['--version']);

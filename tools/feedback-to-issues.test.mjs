@@ -4,6 +4,7 @@ import {
   buildIssueBody,
   buildIssueTitle,
   isIssueCandidate,
+  parseDismissId,
   parseHostMap,
   parseRepoMap,
   resolveRepo,
@@ -11,6 +12,18 @@ import {
   resolveRepoFromUrl,
   selectCandidates,
 } from './feedback-to-issues.mjs';
+
+test('--dismiss の message_id を解析する', () => {
+  assert.equal(parseDismissId(['--dismiss', 'abc123']), 'abc123');
+});
+
+test('--dismiss が無ければ null を返す', () => {
+  assert.equal(parseDismissId(['--dry']), null);
+});
+
+test('--dismiss に値が無ければ空文字を返す', () => {
+  assert.equal(parseDismissId(['--dismiss']), '');
+});
 
 test('FEEDBACK_REPO_MAP を解析し、空要素と不正値を無視する', () => {
   assert.deepEqual(parseRepoMap('A=o/r,B=o/r2'), { A: 'o/r', B: 'o/r2' });

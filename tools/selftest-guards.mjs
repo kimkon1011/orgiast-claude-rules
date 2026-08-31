@@ -343,12 +343,16 @@ test('tool-adoption-check: 新しい同一target stateなら導入をスキッ�
 });
 test('tool-adoption-check: detached導入は同期的にブロックしない', () => {
   const { home, env } = makeToolAdoptionTestEnv('orgiast-adoption-detached-test-');
-  const adoptionEnv = { ...env, TOOL_ADOPTION_FORCE_MISSING: 'codex', TOOL_ADOPTION_FAKE_DISTRO: 'Ubuntu', TOOL_ADOPTION_INSTALL_CMD: '/bin/sleep 5' };
+  // install コマンドは十分長く(20s)取り、判定閾値(10s)との間に
+  // 遅いマシンのプロセス起動オーバーヘッド(実測3.3〜5s)を吸収する余裕を持たせる。
+  // 閾値だけを詰めると「detachせず同期ブロックした」実バグと「マシンが遅いだけ」を区別できず、
+  // 遅いPCで誤FAILする(2026-09-01 実測 elapsed=3326ms で閾値3000msに引っかかった)。
+  const adoptionEnv = { ...env, TOOL_ADOPTION_FORCE_MISSING: 'codex', TOOL_ADOPTION_FAKE_DISTRO: 'Ubuntu', TOOL_ADOPTION_INSTALL_CMD: '/bin/sleep 20' };
   const started = Date.now();
   const r = run('tool-adoption-check.mjs', undefined, ['--fix', '--dry-run'], adoptionEnv);
   const elapsed = Date.now() - started;
   assert(r.status === 0 && r.stdout.includes('バックグラウンドで開始しました'), r.stdout || r.stderr);
-  assert(elapsed < 3000, `detached起動が ${elapsed}ms ブロックした`);
+  assert(elapsed < 10000, `detached起動が ${elapsed}ms ブロックした`);
   const state = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'tool-adoption-install.state'), 'utf8'));
   assert(state.target === 'wsl' || state.target === 'native', JSON.stringify(state));
   const second = run('tool-adoption-check.mjs', undefined, ['--fix', '--dry-run'], adoptionEnv);

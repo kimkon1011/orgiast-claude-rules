@@ -73,6 +73,97 @@ try {
         }
     }
 
+    $memoryIndexDomains = $null
+    $memoryIndexSplit = $null
+    $memoryIndexSplitVerify = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\memory-index-domains.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $memoryIndexDomains = $candidate; break }
+    }
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\memory-index-split.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $memoryIndexSplit = $candidate; break }
+    }
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\memory-index-split-verify.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $memoryIndexSplitVerify = $candidate; break }
+    }
+    $v2MemoryDirs = @()
+    $projectsDir = Join-Path $HOME '.claude\projects'
+    if (Test-Path -LiteralPath $projectsDir -PathType Container) {
+        $v2MemoryDirs = @(Get-ChildItem -LiteralPath $projectsDir -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+            $memoryDir = Join-Path $_.FullName 'memory'
+            $memoryFile = Join-Path $memoryDir 'MEMORY.md'
+            if (Test-Path -LiteralPath $memoryFile -PathType Leaf) {
+                $firstLine = Get-Content -LiteralPath $memoryFile -TotalCount 1 -Encoding UTF8
+                if ($firstLine -eq '<!-- MEMORY-INDEX v2 split -->') { $memoryDir }
+            }
+        })
+    }
+
+    if (-not $memoryIndexDomains -or -not $memoryIndexSplit) {
+        Write-NightlyLog 'memory-index-split' 'skip:ファイルなし'
+    } elseif ($v2MemoryDirs.Count -eq 0) {
+        Write-NightlyLog 'memory-index-split' 'skip:v2索引なし'
+    } else {
+        $applied = 0
+        $needsAttention = @()
+        foreach ($memoryDir in $v2MemoryDirs) {
+            $projectName = Split-Path -Leaf (Split-Path -Parent $memoryDir)
+            $domainsTmp = [System.IO.Path]::GetTempFileName()
+            $pinsTmp = [System.IO.Path]::GetTempFileName()
+            try {
+                $deriveOutput = @(& $node.Source $memoryIndexDomains --dir $memoryDir --out-domains $domainsTmp --out-pins $pinsTmp 2>&1)
+                $deriveExit = $LASTEXITCODE
+                if ($deriveExit -eq 0) {
+                    $splitOutput = @(& $node.Source $memoryIndexSplit --dir $memoryDir --domains $domainsTmp --pins $pinsTmp --apply 2>&1)
+                    if ($LASTEXITCODE -eq 0) { $applied++ } else {
+                        $needsAttention += ($projectName + ':適用失敗')
+                        Write-Warning ("nightly-batch: memory-index-split " + $projectName + ': ' + ($splitOutput -join ' / '))
+                    }
+                } elseif ($deriveExit -eq 1) {
+                    $unclassified = @($deriveOutput | Where-Object { [string]$_ -match '^- ' }).Count
+                    $needsAttention += ($projectName + ':' + $unclassified + '件未分類')
+                    Write-Warning ("nightly-batch: memory-index-domains " + $projectName + ': ' + ($deriveOutput -join ' / '))
+                } else {
+                    $needsAttention += ($projectName + ':導出失敗')
+                    Write-Warning ("nightly-batch: memory-index-domains " + $projectName + ': ' + ($deriveOutput -join ' / '))
+                }
+            } catch {
+                $needsAttention += ($projectName + ':例外')
+                Write-Warning ("nightly-batch: memory-index-split " + $projectName + ': ' + $_.Exception.Message)
+            } finally {
+                Remove-Item -LiteralPath $domainsTmp, $pinsTmp -Force -ErrorAction SilentlyContinue
+            }
+        }
+        $splitResult = 'ok:' + $applied + '件適用'
+        if ($needsAttention.Count -gt 0) { $splitResult += '/' + $needsAttention.Count + '件要手当(' + ($needsAttention -join ',') + ')' }
+        Write-NightlyLog 'memory-index-split' $splitResult
+    }
+
+    if (-not $memoryIndexSplitVerify) {
+        Write-NightlyLog 'memory-index-split-verify' 'skip:ファイルなし'
+    } elseif ($v2MemoryDirs.Count -eq 0) {
+        Write-NightlyLog 'memory-index-split-verify' 'skip:v2索引なし'
+    } else {
+        $verifyNg = @()
+        foreach ($memoryDir in $v2MemoryDirs) {
+            $projectName = Split-Path -Leaf (Split-Path -Parent $memoryDir)
+            try {
+                $verifyOutput = @(& $node.Source $memoryIndexSplitVerify --dir $memoryDir 2>&1)
+                if ($LASTEXITCODE -ne 0) {
+                    $verifyNg += $projectName
+                    Write-Warning ("nightly-batch: memory-index-split-verify " + $projectName + ': ' + ($verifyOutput -join ' / '))
+                }
+            } catch {
+                $verifyNg += $projectName
+                Write-Warning ("nightly-batch: memory-index-split-verify " + $projectName + ': ' + $_.Exception.Message)
+            }
+        }
+        if ($verifyNg.Count -gt 0) { Write-NightlyLog 'memory-index-split-verify' ('NG:' + ($verifyNg -join ',')) }
+        else { Write-NightlyLog 'memory-index-split-verify' ('ok:' + $v2MemoryDirs.Count + '件') }
+    }
+
     # LINEトーク履歴エクスポート(inbox の .txt)を先に取り込む。claude-mobile が無いPCでは静かにスキップする。
     $lineImport = Join-Path $HOME 'Downloads\claude-mobile\scripts\import-line-export.mjs'
     if (Test-Path -LiteralPath $lineImport -PathType Leaf) {

@@ -49,29 +49,34 @@ export function summarizeGeminiMonth(rows, { now = new Date(), usdJpy = 150 } = 
 }
 const nativeHome = os.homedir();
 function defaultHome() { return process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || nativeHome; }
-export function decideEnforcement({ delegRatioWithPrep, delegRatio, daysObserved, claudeOut, history, target, pilot, previousMode }) {
-  const enforcementRatio = delegRatioWithPrep ?? delegRatio ?? 0;
+export function decideEnforcement({ delegRatioWithPrep, delegRatio, linesRatio, daysObserved, claudeOut, history, target, targetLines = 0.50, pilot, previousMode }) {
+  const useLinesRatio = typeof linesRatio === 'number' && Number.isFinite(linesRatio);
+  const enforcementRatio = useLinesRatio ? linesRatio : (delegRatioWithPrep ?? delegRatio ?? 0);
+  const enforcementTarget = useLinesRatio ? targetLines : target;
+  const decidedBy = useLinesRatio ? 'linesRatio' : 'delegRatioWithPrep';
+  const metric = useLinesRatio ? '行ベース委譲率' : '委譲率';
+  const fallback = useLinesRatio ? '' : '(行ベース算出不能のためフォールバック)';
   if (!pilot) {
     const demotion = previousMode === 'block' ? '既存blockをwarnへ降格。' : '';
-    return { mode: 'warn', reason: `${demotion}block昇格はパイロット機のみ有効(~/.claude/cost-enforce-pilot が無い)。目標50%の指示書と可視化は有効` };
+    return { mode: 'warn', reason: `${demotion}block昇格はパイロット機のみ有効(~/.claude/cost-enforce-pilot が無い)。目標50%の指示書と可視化は有効${fallback}`, decidedBy };
   }
 
   let mode = 'warn', reason = '観察中';
-  if (enforcementRatio < target / 3 && daysObserved >= 2 && claudeOut >= 1e6) {
-    mode = 'block'; reason = `委譲率${(enforcementRatio * 100).toFixed(1)}%=目標の1/3未満。2日で昇格`;
-  } else if (daysObserved >= 3 && claudeOut >= 1e6 && enforcementRatio < target / 2) {
-    mode = 'block'; reason = `委譲率${(enforcementRatio * 100).toFixed(1)}%=目標の半分未満。3日でトレンドに関わらず昇格`;
-  } else if (daysObserved >= 7 && claudeOut >= 1e6 && enforcementRatio < target) {
-    const avg = a => a.length ? a.reduce((s, x) => s + (x.delegRatioWithPrep ?? x.delegRatio ?? 0), 0) / a.length : 0;
+  if (enforcementRatio < enforcementTarget / 3 && daysObserved >= 2 && claudeOut >= 1e6) {
+    mode = 'block'; reason = `${metric}${(enforcementRatio * 100).toFixed(1)}%=目標の1/3未満。2日で昇格${fallback}`;
+  } else if (daysObserved >= 3 && claudeOut >= 1e6 && enforcementRatio < enforcementTarget / 2) {
+    mode = 'block'; reason = `${metric}${(enforcementRatio * 100).toFixed(1)}%=目標の半分未満。3日でトレンドに関わらず昇格${fallback}`;
+  } else if (daysObserved >= 7 && claudeOut >= 1e6 && enforcementRatio < enforcementTarget) {
+    const avg = a => { const values = useLinesRatio ? a.map(x => x.linesRatio).filter(x => typeof x === 'number' && Number.isFinite(x)) : a.map(x => x.delegRatioWithPrep ?? x.delegRatio ?? 0); return values.length ? values.reduce((s, x) => s + x, 0) / values.length : 0; };
     const early = history.slice(0, Math.max(1, Math.floor(history.length / 2)));
     const recent = history.slice(-3);
     if (avg(recent) <= avg(early) + 0.05) {
-      mode = 'block'; reason = `${daysObserved}日観察して委譲率が改善せず(${(avg(early) * 100).toFixed(0)}%→${(avg(recent) * 100).toFixed(0)}%)。ハードブロック昇格`;
+      mode = 'block'; reason = `${daysObserved}日観察して${metric}が改善せず(${(avg(early) * 100).toFixed(0)}%→${(avg(recent) * 100).toFixed(0)}%)。ハードブロック昇格${fallback}`;
     } else {
-      reason = `改善傾向あり(${(avg(early) * 100).toFixed(0)}%→${(avg(recent) * 100).toFixed(0)}%)=警告継続`;
+      reason = `${metric}に改善傾向あり(${(avg(early) * 100).toFixed(0)}%→${(avg(recent) * 100).toFixed(0)}%)=警告継続${fallback}`;
     }
   }
-  return { mode, reason };
+  return { mode, reason, decidedBy };
 }
 const HOME = defaultHome();
 const DAYS = parseInt((process.argv.find(a => a.startsWith('--days=')) || '').split('=')[1] || '7', 10) || 7;
@@ -145,12 +150,15 @@ if (!Number.isFinite(cronCheckedAt) || Date.now() - cronCheckedAt >= 2 * 864e5) 
   }
 }
 const TARGET_DELEG = 0.50;
+const TARGET_LINES = 0.50;
 if (claudeByModel.fable > 0) {
   const latest = new Date(topFableSource?.latest || Date.now()); const pad = (n) => String(n).padStart(2, '0');
   const latestText = `${latest.getFullYear()}-${pad(latest.getMonth() + 1)}-${pad(latest.getDate())} ${pad(latest.getHours())}:${pad(latest.getMinutes())}`;
   flags.push(`🚨 Fable5使用を検出(out ${(claudeByModel.fable / 1000).toFixed(0)}k tok)=§1.16 全用途禁止(別課金枠)。発生元: ${topFableSource?.sessionId || '特定不能'}（最終 ${latestText}）— そのセッションで /model opus か /session-close。user明示指定が無ければ即停止`);
 }
-if (claudeOut >= 1e6 && delegRatio < TARGET_DELEG) flags.push(`🚨 委譲不足: Claude出力${(claudeOut / 1000).toFixed(0)}k tokなのに委譲率${(delegRatio * 100).toFixed(0)}%(目標${TARGET_DELEG * 100}%↑、Codex分は計上済み)。実装→Codex/量産→Groq/汎用安→OpenRouter/中量級の生成・推論→Kimi K3(別課金プール) へ回す`);
+if (claudeOut >= 1e6 && typeof linesRatio === 'number' && Number.isFinite(linesRatio) && linesRatio < TARGET_LINES) flags.push(`🚨 実装の委譲不足: 行ベース委譲率${(linesRatio * 100).toFixed(0)}%(目標${TARGET_LINES * 100}%↑)。実装→Codex/量産→Groq/汎用安→OpenRouter/中量級→Kimi K3 へ回す`);
+else if (claudeOut >= 1e6 && typeof linesRatio === 'number' && Number.isFinite(linesRatio) && linesRatio >= TARGET_LINES && delegRatio < TARGET_DELEG) flags.push(`ℹ️ 実装は委譲できている(行ベース${(linesRatio * 100).toFixed(0)}%)が、監督の出力量自体が大きい(トークン委譲率${(delegRatio * 100).toFixed(0)}% / 監督out ${(claudeOut / 1000).toFixed(0)}k tok)。thinking と報告文が主因で、これは品質を削らない限り下がらない — 判定には使わない`);
+else if (claudeOut >= 1e6 && delegRatio < TARGET_DELEG) flags.push(`🚨 委譲不足: Claude出力${(claudeOut / 1000).toFixed(0)}k tokなのに委譲率${(delegRatio * 100).toFixed(0)}%(目標${TARGET_DELEG * 100}%↑、Codex分は計上済み。行ベース算出不能のためフォールバック)。実装→Codex/量産→Groq/汎用安→OpenRouter/中量級の生成・推論→Kimi K3(別課金プール) へ回す`);
 if (codexSessions === 0) flags.push('⚠️ Codex未使用=実装を監督が抱えている疑い。実装はCodexへ委譲する');
 if (prev && typeof prev.claudeOut === 'number' && claudeOut > prev.claudeOut * 1.15 && work <= prev.work) flags.push(`🚨 利用効率悪化: Claude出力 ${(prev.claudeOut / 1000).toFixed(0)}k→${(claudeOut / 1000).toFixed(0)}k tok 増だが作業量(${workKind}) ${prev.work}→${work} 増えず。誤ルーティング/やり直し/呼びすぎを点検`);
 if (claudeByModel.opus && claudeOut && (claudeByModel.opus / claudeOut) > 0.5) flags.push(`⚠️ Opus比率高(${((claudeByModel.opus / claudeOut) * 100).toFixed(0)}%)。監督は最小限に、実装/生成は委譲(§1.18)`);
@@ -192,9 +200,9 @@ const md = `<!-- COST-DIRECTIVE-START -->
 - Codex(定額枠・実装の主経路): **out ${codexOut.toLocaleString('ja-JP')} tok** / ${codexSessions}セッション ※従量課金なし
 - 作業量(${workKind}): ${work} / **作業あたり 出力 ${(outPerWork / 1000).toFixed(0)}k tok**
 - 委譲率(Codex/Sonnet/Haiku/安いAIへ逃がせた割合): **${(delegRatio * 100).toFixed(1)}%**
-- 委譲率(委譲の準備込み・強制判定に使う値): **${(delegRatioWithPrep * 100).toFixed(1)}%**
+- 委譲率(委譲の準備込み・参考): **${(delegRatioWithPrep * 100).toFixed(1)}%**
 - うち委譲の準備(仕様書執筆): **${specAuthoringOut.toLocaleString('ja-JP', { maximumFractionDigits: 0 })} tok**
-- 委譲率(行ベース・実装の実体): ${linesDelegationLine} ※参考値・判定にはまだ使わない
+- 委譲率(行ベース・**強制判定に使う値**): ${linesDelegationLine}
 - 内訳 codex ${(codexOut / 1000).toFixed(0)}k / sonnet+haiku ${(delegation.sonnetHaikuOut / 1000).toFixed(0)}k / 安いAI ${(execOut / 1000).toFixed(0)}k / 監督(opus+fable+default) ${(delegation.supervisorOut / 1000).toFixed(0)}k
 - 🔍 監督の出力の出どころ: ${blockSourceLine}
 - ${cacheLine}
@@ -219,12 +227,11 @@ const daysObserved = Math.round((Date.now() - new Date(obsStart + 'T00:00:00Z').
 const enforceFile = path.join(HOME, '.claude', 'cost-enforce.json');
 let previousMode = 'warn';
 try { previousMode = String(JSON.parse(fs.readFileSync(enforceFile, 'utf8')).mode || 'warn'); } catch { }
-const { mode: enforce, reason: ereason } = decideEnforcement({
-  delegRatioWithPrep, daysObserved, claudeOut, history: hist, target: TARGET_DELEG,
+const { mode: enforce, reason: ereason, decidedBy } = decideEnforcement({
+  delegRatioWithPrep, linesRatio, daysObserved, claudeOut, history: hist, target: TARGET_DELEG, targetLines: TARGET_LINES,
   pilot: fs.existsSync(path.join(HOME, '.claude', 'cost-enforce-pilot')), previousMode,
 });
-// 判定に使ったのは調整後(委譲の準備込み)の値。名前を delegRatio にすると将来の診断で生の値と取り違えるので両方を明示して書く。
-try { fs.writeFileSync(enforceFile, JSON.stringify({ mode: enforce, reason: ereason, since: obsStart, daysObserved, delegRatio, delegRatioWithPrep, decidedBy: 'delegRatioWithPrep', target: TARGET_DELEG }, null, 2)); } catch { }
+try { fs.writeFileSync(enforceFile, JSON.stringify({ mode: enforce, reason: ereason, since: obsStart, daysObserved, delegRatio, delegRatioWithPrep, linesRatio, codexLines, claudeLines, decidedBy, target: TARGET_DELEG, targetLines: TARGET_LINES }, null, 2)); } catch { }
 try { fs.writeFileSync(stateF, JSON.stringify({ t: new Date().toISOString(), totalUSD, claudeUSD, claudeOut, codexOut, codexSessions, execUSD, work, delegRatio, delegRatioWithPrep, linesRatio, codexLines, claudeLines, landedLines, obsStart, history: hist })); } catch { }
 if (enforce === 'block') console.log(`\n🔒 ハードブロック昇格: ${ereason}（アプリ実装コードの直接編集をpretooluseフックが拒否します）`);
 console.log(md);

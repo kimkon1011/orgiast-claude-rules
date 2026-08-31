@@ -342,6 +342,12 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
 - **どのアカウントで開くか**: Claude Code のログインは **config dir 単位**（`~/.claude/.credentials.json`）で、CLI に `--account` は無い。
   ランチャーは `CLAUDE_CONFIG_DIR` だけ落とさず引き継ぐので、**閉じたセッションと同じアカウント**で開く。
   アカウントを分ける機体では config dir を分けて `CLAUDE_CONFIG_DIR` を指定する。
+  **起動ログは必ずアカウントを出す**（terminal 経路は末尾に `/ account=<email>`、VSCode 経路は案内の最終行 `account: <email>`。既定なら `~/.claude.json`、`CLAUDE_CONFIG_DIR=X` なら `X/.claude.json` の
+  `oauthAccount.emailAddress`。読めない時は `account=不明(<パス>)` とし、**起動は止めない**）。機体ごとに固定するなら
+  `~/.claude/next-session-launch.json` に `{"configDir": "D:/team-config"}`（`~` 展開可）。
+  ⚠️ **`configDir` は terminal 経路でしか効かない**。VSCode 拡張はアカウントを拡張自身のログイン(secure storage)で決め外部から選べないので、
+  拡張経路のログは `account=<email>(参考: 実際は VSCode ウィンドウのログイン)` と参考値であることを明示し、`configDir` 指定時は
+  「効きません／`--target terminal` を使え」と警告する（効かない指定を黙って無視すると**固定したつもり**の事故になる）。
 - 無人実行では立ち上げない（`CLAUDE_HEADLESS` / `CI`）。120秒デバウンス・`--no-launch`・
   `~/.claude/next-session-launch.json` の `{"enabled": false}` で抑止できる。
 - **他PCへの反映条件**: この機能は `orgiast-claude-rules` の `tools/` と `skills/session-close/` に入っている。

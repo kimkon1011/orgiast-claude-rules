@@ -20,8 +20,16 @@ $pwsh = (Get-Command pwsh.exe -ErrorAction SilentlyContinue).Source
 if (-not $pwsh) { $pwsh = (Get-Command pwsh -ErrorAction SilentlyContinue).Source }
 if (-not $pwsh) { throw 'pwsh not found. PowerShell 7 をインストールしてください。' }
 
-. (Join-Path $PSScriptRoot 'ensure-run-hidden.ps1')
-$action = New-HiddenScheduledTaskAction -Execute $pwsh -ChildArgument @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $script) -WorkingDirectory $PSScriptRoot
+# hidden runner は別 PR で配布されるため、未導入の PC でもタスク登録自体は成功させる。
+$hiddenActionHelper = Join-Path $PSScriptRoot 'ensure-run-hidden.ps1'
+if (Test-Path -LiteralPath $hiddenActionHelper) {
+  . $hiddenActionHelper
+  $action = New-HiddenScheduledTaskAction -Execute $pwsh -ChildArgument @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $script) -WorkingDirectory $PSScriptRoot
+} else {
+  $argument = '-NoProfile -ExecutionPolicy Bypass -File "{0}"' -f $script
+  $action = New-ScheduledTaskAction -Execute $pwsh -Argument $argument -WorkingDirectory $PSScriptRoot
+  Write-Host 'NOTE: ensure-run-hidden.ps1 が無いため通常起動で登録しました（実行時にコンソール窓が出ます）'
+}
 $trigger = New-ScheduledTaskTrigger -Daily -At '03:40'
 # 夜間にスリープしていても次回起動時に回収し、バッテリー移行でも途中停止させない。
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 2)

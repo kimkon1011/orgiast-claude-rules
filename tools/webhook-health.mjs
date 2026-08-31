@@ -4,6 +4,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
+import { parseEnvText } from './env-kv.mjs';
+import { resolveReporterLabel } from './reporter-label.mjs';
 
 export const WEBHOOK_RE = /https:\/\/discord\.com\/api\/webhooks\/(\d{15,})\/([A-Za-z0-9_-]{40,})/g;
 const USER_AGENT = 'DiscordBot (https://orgiast.jp, 1.0) orgiast-webhook-health';
@@ -24,8 +26,12 @@ export function mergeLedger(ledger, alive, seenFiles, now = new Date().toISOStri
   for (const item of alive) {
     const previous = next[item.webhookId] ?? {};
     next[item.webhookId] = {
+      ...previous,
+      name: item.name ?? previous.name ?? null,
       channelId: item.channelId,
-      channelName: item.channelName ?? previous.channelName ?? null,
+      // 旧版は body.name(=webhook名)を channelName として保存していた。
+      // 引き継ぐと台帳の「対象チャンネル名」に webhook 名が入るので、分からない時は null に倒す。
+      channelName: item.channelName ?? null,
       files: [...new Set([...(previous.files ?? []), ...(seenFiles[item.webhookId] ?? [])])].sort(),
       lastSeenAliveAt: now,
     };
@@ -88,7 +94,7 @@ async function expandPattern(pattern) {
   return files.filter((file) => matcher.test(path.resolve(file).replaceAll('\\', '/')));
 }
 
-async function scanFiles(patterns) {
+export async function scanFiles(patterns = []) {
   const home = os.homedir();
   const defaults = (await fs.readdir(path.join(home, '.claude'), { withFileTypes: true }).catch(() => []))
     .filter((entry) => entry.isFile() && /\.(?:env|txt)$/.test(entry.name))
@@ -102,7 +108,7 @@ async function checkWebhook(item, fetchImpl) {
     const response = await fetchImpl(item.url, { headers: { 'User-Agent': USER_AGENT } });
     if (response.status === 200) {
       const body = await response.json();
-      return { ...item, status: 'alive', channelId: String(body.channel_id), channelName: body.name ?? null };
+      return { ...item, status: 'alive', channelId: String(body.channel_id), name: body.name ?? null };
     }
     return { ...item, status: response.status === 404 ? 'dead' : 'error', code: response.status };
   } catch (error) {
@@ -125,15 +131,40 @@ async function replaceInFiles(dead, replacement, dryRun) {
 }
 
 function parseArgs(argv) {
-  const options = { dryRun: false, fix: false, json: false, scans: [] };
+  const options = { dryRun: false, fix: false, json: false, postSheet: false, scans: [] };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === '--dry-run') options.dryRun = true;
     else if (argv[i] === '--fix') options.fix = true;
     else if (argv[i] === '--json') options.json = true;
+    else if (argv[i] === '--post-sheet') options.postSheet = true;
     else if (argv[i] === '--scan' && argv[i + 1]) options.scans.push(argv[++i]);
     else throw new Error(`Unknown or incomplete argument: ${argv[i]}`);
   }
   return options;
+}
+
+function basenameAny(file) { return String(file || '').replaceAll('\\', '/').split('/').pop(); }
+export function buildWebhookSheetPayload(result, { label, checkedAt }) {
+  const rows = [...(result?.alive ?? []), ...(result?.dead ?? []), ...(result?.errors ?? [])];
+  return { label, checkedAt, webhooks: rows.map((item) => ({
+    webhookId: item.webhookId, name: item.name ?? '', channelId: item.channelId ?? '',
+    channelName: item.channelName ?? '', state: item.status,
+    files: [...new Set((item.files ?? []).map(basenameAny).filter(Boolean))],
+  })) };
+}
+
+async function postSheet(result, checkedAt, fetchImpl) {
+  const envFile = path.join(os.homedir(), '.claude', 'fleet-sheet.env');
+  let envText = ''; try { envText = await fs.readFile(envFile, 'utf8'); } catch {}
+  const env = parseEnvText(envText);
+  if (!env.FLEET_SHEET_URL || !env.FLEET_SHEET_TOKEN) return { skipped: true, reason: '設定なし' };
+  const resolved = resolveReporterLabel({ envText, hostname: os.hostname() });
+  if (resolved.nextEnvText !== envText) await fs.writeFile(envFile, resolved.nextEnvText, 'utf8');
+  const payload = buildWebhookSheetPayload(result, { label: resolved.label, checkedAt: checkedAt.slice(0, 10) });
+  const response = await fetchImpl(env.FLEET_SHEET_URL, { method:'POST', redirect:'follow', headers:{'content-type':'application/json'}, body:JSON.stringify({ token:env.FLEET_SHEET_TOKEN, kind:'webhooks', ...payload }) });
+  const text = await response.text(); if (!response.ok) throw new Error(`fleet sheet HTTP ${response.status}`);
+  let body; try { body=JSON.parse(text); } catch { throw new Error('fleet sheet returned invalid JSON'); }
+  if (!body.ok) throw new Error(`fleet sheet rejected request: ${body.error || 'unknown error'}`); return body;
 }
 
 async function notify(target, deadResults, fetchImpl) {
@@ -183,6 +214,11 @@ export async function run(argv = process.argv.slice(2), { fetchImpl = fetch } = 
   for (const item of checks) seenFiles[item.webhookId] = [...new Set([...(seenFiles[item.webhookId] ?? []), ...item.files])];
   const checkedAt = new Date().toISOString();
   ledger = mergeLedger(ledger, alive, seenFiles, checkedAt);
+  for (const item of checks) {
+    item.name = item.name ?? ledger[item.webhookId]?.name ?? null;
+    item.channelId = item.channelId ?? ledger[item.webhookId]?.channelId ?? null;
+    item.channelName = ledger[item.webhookId]?.channelName ?? null;
+  }
   if (!options.dryRun) {
     await fs.mkdir(path.dirname(ledgerFile), { recursive: true });
     await fs.writeFile(ledgerFile, `${JSON.stringify(ledger, null, 2)}\n`, 'utf8');
@@ -208,10 +244,14 @@ export async function run(argv = process.argv.slice(2), { fetchImpl = fetch } = 
   }
   const publicItem = (item) => ({
     webhookId: item.webhookId, status: item.status, code: item.code,
-    channelId: item.channelId, channelName: item.channelName, files: item.files,
+    name: item.name, channelId: item.channelId, channelName: item.channelName, files: item.files,
     fixed: item.fixed, replacementWebhookId: item.replacementWebhookId,
   });
   const result = { checkedAt, filesScanned: files.length, alive: alive.map(publicItem), dead: dead.map(publicItem), errors: checks.filter((item) => item.status === 'error').map(publicItem), notification };
+  if (options.postSheet) {
+    const posted = await postSheet(result, checkedAt, fetchImpl);
+    if (posted.skipped) console.error(`Webhook台帳送信 skip:${posted.reason}`);
+  }
   if (options.json) console.log(JSON.stringify(result));
   else {
     console.log(`Discord webhook health: alive=${alive.length} dead=${dead.length} error=${result.errors.length}`);

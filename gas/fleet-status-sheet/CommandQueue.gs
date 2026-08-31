@@ -18,6 +18,9 @@ function _COMMANDS_() {
     upsertDiscordChannels: upsertDiscordChannels,
     describeDiscordChannels: describeDiscordChannels,
     lookupDiscordChannels: lookupDiscordChannels,
+    upsertWebhookLedger: upsertWebhookLedger,
+    lookupWebhooks: lookupWebhooks,
+    describeWebhookLedger: describeWebhookLedger,
     ensureManualColumns: ensureManualColumns
   };
 }

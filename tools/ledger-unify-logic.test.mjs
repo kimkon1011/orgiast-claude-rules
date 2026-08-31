@@ -70,6 +70,7 @@ test("the index names the renamed fleet tab", () => {
 test("the index includes real manual tabs and the manual-column note", () => {
   const rows = context.buildIndexRows(["PC稼働状況"], "ledger-id", "inventory-id", "legacy-id");
   assert(rows.some((row) => row[0] === "Discordチャンネル"));
+  assert(rows.some((row) => row[0] === "Webhook"));
   assert(rows.some((row) => row[0] === "APIクライアント(DWD)"));
   const noteIndex = rows.findIndex((row) => row[0].includes("【手入力】"));
   const blankIndex = rows.findIndex((row, index) => index > noteIndex && row.every((cell) => cell === ""));

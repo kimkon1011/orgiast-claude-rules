@@ -2,23 +2,65 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import {
+  accountConfigPath,
+  accountLabel,
   applyTrust,
   buildVscodeUri,
   hasUnsentVscodeTab,
+  childEnv,
+  KEPT_CLAUDE_ENV,
   launchNextSession,
   parseHandoffCwd,
+  pickAccountEmail,
   pickNewestExtensionBinary,
   pickNewestVersionDir,
   planLaunch,
   planVscodeLaunch,
   pickRoute,
   resolveClaudeBinary,
+  resolveConfigDir,
   resolveVscodeCli,
   resolveWt,
   sanitizeEnv,
   shouldLaunch,
   trustKeyVariants,
 } from './next-session-launch.mjs';
+
+test('config dir は state、env、既定の順で解決し state の ~ を展開する', () => {
+  const home = 'C:\\Users\\test';
+  assert.deepEqual(resolveConfigDir({ state: { configDir: '~/claude-work' }, env: { CLAUDE_CONFIG_DIR: 'D:\\env' }, home }), {
+    configDir: path.join(home, 'claude-work'), source: 'state',
+  });
+  assert.deepEqual(resolveConfigDir({ state: { configDir: '~\\claude-work' }, env: {}, home }), {
+    configDir: path.join(home, 'claude-work'), source: 'state',
+  });
+  assert.deepEqual(resolveConfigDir({ state: { configDir: '~' }, env: {}, home }), { configDir: home, source: 'state' });
+  assert.deepEqual(resolveConfigDir({ state: {}, env: { CLAUDE_CONFIG_DIR: 'D:\\env' }, home }), { configDir: 'D:\\env', source: 'env' });
+  assert.deepEqual(resolveConfigDir({ state: {}, env: {}, home }), { configDir: path.join(home, '.claude'), source: 'default' });
+});
+
+test('アカウント設定パスは既定 config dir だけ home 直下になる', () => {
+  const home = path.resolve('/fake/Home');
+  assert.equal(accountConfigPath(path.join(home, '.claude'), home), path.join(home, '.claude.json'));
+  assert.equal(accountConfigPath(path.join(home, 'work-config'), home), path.join(home, 'work-config', '.claude.json'));
+  const variant = path.join(home.toUpperCase(), '.CLAUDE').replaceAll(path.sep, path.sep === '/' ? '\\' : '/');
+  if (process.platform === 'win32') assert.equal(accountConfigPath(variant, home), path.join(home, '.claude.json'));
+});
+
+test('アカウントメールは有効な非空文字列だけを採用する', () => {
+  assert.equal(pickAccountEmail({ oauthAccount: { emailAddress: ' kim@orgiast.jp ' } }), 'kim@orgiast.jp');
+  for (const config of [{}, null, [], { oauthAccount: null }, { oauthAccount: { emailAddress: '' } }]) {
+    assert.equal(pickAccountEmail(config), '');
+  }
+});
+
+test('child env は state の config dir だけ上書きし、他の CLAUDE 変数を落とす', () => {
+  const env = { PATH: '/bin', CLAUDE_CONFIG_DIR: '/env', CLAUDE_CODE_SESSION_ID: 'secret' };
+  assert.deepEqual(childEnv({ env, configDir: '/state', source: 'state' }), { PATH: '/bin', CLAUDE_CONFIG_DIR: '/state' });
+  assert.deepEqual(childEnv({ env, configDir: '/env', source: 'env' }), { PATH: '/bin', CLAUDE_CONFIG_DIR: '/env' });
+  assert.deepEqual(childEnv({ env: { PATH: '/bin', CLAUDE_CODE_SESSION_ID: 'secret' }, configDir: '/default', source: 'default' }), { PATH: '/bin' });
+  assert.equal(KEPT_CLAUDE_ENV.has('CLAUDE_CONFIG_DIR'), true);
+});
 
 test('VSCode CLI は明示パス、ユーザーインストール、未検出の順で解決する', () => {
   const home = 'C:\\Users\\test';
@@ -246,7 +288,11 @@ test('dry-run は plan だけを出して spawn しない', async () => {
   assert.equal(await launchNextSession(['--target', 'terminal', '--dry-run'], io), 0);
   assert.equal(calls.spawn.length, 0);
   assert.equal(calls.writes.length, 0);
-  assert.equal(JSON.parse(calls.logs[0]).cwd, 'C:\\work');
+  const output = JSON.parse(calls.logs[0]);
+  assert.equal(output.cwd, 'C:\\work');
+  assert.equal(output.account, '');
+  assert.equal(output.configDir, path.join('/fake/home', '.claude'));
+  assert.equal(output.configDirSource, 'default');
 });
 
 test('VSCode 経路は既定で URI だけを撃ち、既存ウィンドウを再読み込みしない', async () => {
@@ -295,6 +341,9 @@ test('VSCode dry-run は route と手順だけを出して spawn しない', asy
   assert.equal(calls.spawn.length, 0);
   const output = JSON.parse(calls.logs[0]);
   assert.equal(output.route, 'vscode');
+  assert.equal(output.account, '');
+  assert.equal(output.configDir, path.join('/fake/home', '.claude'));
+  assert.equal(output.configDirSource, 'default');
   assert.equal(output.steps.length, 1);
   assert.equal(output.steps[0].label, 'open-session');
 });
@@ -436,7 +485,7 @@ test('~/.claude.json が読めない/壊れている時は絶対に書き戻さ�
   }
 });
 
-test('VSCode 経路は .claude.json を読み書きしない', async () => {
+test('VSCode 経路はアカウント確認で .claude.json を読むが書き込まない', async () => {
   const codeCli = 'C:\\Code\\bin\\code.cmd';
   const reads = [];
   const base = fakeIo();
@@ -449,7 +498,7 @@ test('VSCode 経路は .claude.json を読み書きしない', async () => {
   };
 
   assert.equal(await launchNextSession(['--target', 'vscode'], base.io), 0);
-  assert.equal(reads.some((file) => file.endsWith('.claude.json')), false);
+  assert.equal(reads.some((file) => file.endsWith('.claude.json')), true);
   assert.equal(base.calls.writes.some(([file]) => file.includes('.claude.json')), false);
 });
 
@@ -461,4 +510,71 @@ test('VSCode CLI が見つからない時はターミナルへ落とさず何も
   io.env = {};
   assert.equal(await launchNextSession([], io), 0);
   assert.equal(calls.spawn.length, 0);
+});
+
+test('取得したアカウントを成功ログと state に記録する', async () => {
+  const { io, calls } = fakeIo({
+    readFile: async (file) => {
+      if (file.endsWith('next-session.md')) return '<!-- cwd: C:\\work -->';
+      if (file.endsWith('.claude.json')) return JSON.stringify({ oauthAccount: { emailAddress: 'kim@orgiast.jp' } });
+      throw new Error('ENOENT');
+    },
+  });
+  assert.equal(await launchNextSession(['--target', 'terminal'], io), 0);
+  assert.match(calls.logs.at(-1), /\/ account=kim@orgiast\.jp$/);
+  const stateWrite = calls.writes.find(([file]) => file.includes('next-session-launch.json.tmp-'));
+  assert.equal(JSON.parse(stateWrite[1]).lastAccount, 'kim@orgiast.jp');
+  assert.equal(JSON.parse(stateWrite[1]).lastConfigDir, path.join('/fake/home', '.claude'));
+});
+
+test('アカウント不明でも起動を止めず候補パスをログに出す', async () => {
+  const { io, calls } = fakeIo();
+  assert.equal(await launchNextSession(['--target', 'terminal'], io), 0);
+  assert.equal(calls.spawn.length, 1);
+  assert.match(calls.logs.at(-1), /account=不明\(.+\.claude\.json\)$/);
+});
+
+test('state.configDir は子プロセスの CLAUDE_CONFIG_DIR を上書きする', async () => {
+  const configDir = '/fake/account-config';
+  const { io, calls } = fakeIo({
+    readFile: async (file) => {
+      if (file.endsWith('next-session-launch.json')) return JSON.stringify({ configDir });
+      if (file.endsWith('next-session.md')) return '<!-- cwd: C:\\work -->';
+      if (file.endsWith('.claude.json')) return '{}';
+      throw new Error('ENOENT');
+    },
+  });
+  assert.equal(await launchNextSession(['--target', 'terminal'], io), 0);
+  assert.equal(calls.spawn[0][2].env.CLAUDE_CONFIG_DIR, configDir);
+});
+
+
+test('vscode 経路のアカウントは断定せず参考値として出す', () => {
+  // 拡張のログインは外から選べないので、config dir から読んだ値を確定として書くと嘘になる。
+  const accountPath = '/fake/home/.claude.json';
+  assert.equal(accountLabel({ account: 'kim@orgiast.jp', route: 'terminal', accountPath }), 'kim@orgiast.jp');
+  assert.equal(
+    accountLabel({ account: 'kim@orgiast.jp', route: 'vscode', accountPath }),
+    'kim@orgiast.jp(参考: 実際は VSCode ウィンドウのログイン)',
+  );
+  assert.equal(accountLabel({ account: '', route: 'terminal', accountPath }), `不明(${accountPath})`);
+});
+
+test('vscode 経路で state.configDir が指定されていたら効かないことを警告する', async () => {
+  const codeCli = 'C:/Code/bin/code.cmd';
+  const base = fakeIo();
+  const io = {
+    ...base.io,
+    env: { VSCODE_CLI_PATH: codeCli },
+    exists: (file) => file === codeCli,
+    readFile: async (file) => {
+      if (file.endsWith('next-session-launch.json')) return JSON.stringify({ enabled: true, configDir: 'D:/team-config' });
+      if (file.endsWith('next-session.md')) return '<!-- cwd: C:/work -->';
+      if (file.endsWith('.claude.json')) return JSON.stringify({ oauthAccount: { emailAddress: 'kim@orgiast.jp' } });
+      throw new Error('ENOENT');
+    },
+  };
+  assert.equal(await launchNextSession(['--target', 'vscode'], io), 0);
+  assert.ok(base.calls.logs.some((line) => line.includes('VSCode 拡張経路では効きません')));
+  assert.ok(base.calls.logs.at(-1).endsWith('account: kim@orgiast.jp(参考: 実際は VSCode ウィンドウのログイン)'));
 });

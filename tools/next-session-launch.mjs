@@ -156,6 +156,46 @@ export function sanitizeEnv(env) {
   return clean;
 }
 
+export function resolveConfigDir({ state, env, home }) {
+  const stateConfigDir = typeof state?.configDir === 'string' ? state.configDir.trim() : '';
+  if (stateConfigDir) {
+    const configDir = /^~(?:[\\/]|$)/.test(stateConfigDir)
+      ? path.join(home, stateConfigDir.replace(/^~[\\/]?/, ''))
+      : stateConfigDir;
+    return { configDir, source: 'state' };
+  }
+
+  const envConfigDir = typeof env?.CLAUDE_CONFIG_DIR === 'string' ? env.CLAUDE_CONFIG_DIR.trim() : '';
+  if (envConfigDir) return { configDir: envConfigDir, source: 'env' };
+  return { configDir: path.join(home, '.claude'), source: 'default' };
+}
+
+export function accountConfigPath(configDir, home) {
+  const normalize = (value) => path.resolve(value).replaceAll('\\', '/').toLowerCase();
+  return normalize(configDir) === normalize(path.join(home, '.claude'))
+    ? path.join(home, '.claude.json')
+    : path.join(configDir, '.claude.json');
+}
+
+export function pickAccountEmail(config) {
+  if (!config || typeof config !== 'object' || Array.isArray(config)) return '';
+  const email = config.oauthAccount?.emailAddress;
+  return typeof email === 'string' && email.trim() ? email.trim() : '';
+}
+
+export function childEnv({ env, configDir, source }) {
+  const clean = sanitizeEnv(env);
+  if (source === 'state') clean.CLAUDE_CONFIG_DIR = configDir;
+  return clean;
+}
+
+// VSCode 拡張のアカウントは拡張自身のログイン(secure storage)で決まり、CLAUDE_CONFIG_DIR では動かない。
+// config dir から読んだメールを vscode 経路で断定すると、当たっている保証のない値を成功ログに書くことになる。
+export function accountLabel({ account, route, accountPath }) {
+  if (!account) return `不明(${accountPath})`;
+  return route === 'vscode' ? `${account}(参考: 実際は VSCode ウィンドウのログイン)` : account;
+}
+
 export function trustKeyVariants(cwd) {
   const original = String(cwd ?? '');
   if (!original) return [];
@@ -312,6 +352,18 @@ export async function launchNextSession(argv = [], io = {}) {
         promptConsumed = null;
       }
     }
+    const { configDir, source: configDirSource } = resolveConfigDir({ state, env, home });
+    const firstAccountConfigPath = accountConfigPath(configDir, home);
+    const nestedAccountConfigPath = path.join(configDir, '.claude.json');
+    const homeAccountConfigPath = path.join(home, '.claude.json');
+    const fallbackAccountConfigPath = firstAccountConfigPath === homeAccountConfigPath
+      ? nestedAccountConfigPath
+      : homeAccountConfigPath;
+    let account = pickAccountEmail(await readJson(firstAccountConfigPath, null));
+    if (!account && fallbackAccountConfigPath !== firstAccountConfigPath) {
+      account = pickAccountEmail(await readJson(fallbackAccountConfigPath, null));
+    }
+    const launchEnv = childEnv({ env, configDir, source: configDirSource });
     const pendingTab = hasUnsentVscodeTab({ state, now, promptConsumed });
     const decision = shouldLaunch({ state, now, env, force: flags.force, pendingTab });
     if (!decision.ok) {
@@ -324,6 +376,11 @@ export async function launchNextSession(argv = [], io = {}) {
     const cwd = flags.cwd || handoffCwd || current.cwd || REPO_ROOT;
     const codeCli = resolveVscodeCli({ env, exists, homedir: home });
     const route = pickRoute({ codeCli, flagTarget: flags.target, env });
+    const accountLog = accountLabel({ account, route, accountPath: firstAccountConfigPath });
+    if (configDirSource === 'state' && route === 'vscode') {
+      // 効かない指定を黙って無視すると「固定したつもり」の事故になる。terminal 経路なら env で効く。
+      log(`[next-session] 注意: configDir(${configDir}) は VSCode 拡張経路では効きません。アカウントを固定するなら --target terminal を使ってください`);
+    }
 
     if (route === 'vscode') {
       if (!codeCli) {
@@ -332,7 +389,7 @@ export async function launchNextSession(argv = [], io = {}) {
       }
       const steps = planVscodeLaunch({ codeCli, cwd, prompt: flags.prompt, openFolder: flags.openFolder });
       if (flags.dryRun) {
-        log(JSON.stringify({ route: 'vscode', steps }));
+        log(JSON.stringify({ route: 'vscode', steps, account, configDir, configDirSource }));
         return 0;
       }
 
@@ -343,7 +400,7 @@ export async function launchNextSession(argv = [], io = {}) {
           detached: false,
           stdio: 'ignore',
           windowsHide: true,
-          env: sanitizeEnv(env),
+          env: launchEnv,
         });
         const isLast = index === steps.length - 1;
         if (typeof child.once === 'function') {
@@ -357,12 +414,13 @@ export async function launchNextSession(argv = [], io = {}) {
         if (!isLast) await wait(2500);
       }
 
-      const nextState = { ...state, enabled: state.enabled !== false, lastLaunchAt: new Date().toISOString(), lastCwd: cwd, lastRoute: route, lastPrompt: flags.prompt };
+      const nextState = { ...state, enabled: state.enabled !== false, lastLaunchAt: new Date().toISOString(), lastCwd: cwd, lastRoute: route, lastPrompt: flags.prompt, lastAccount: account, lastConfigDir: configDir };
       const tmpPath = `${statePath}.tmp-${process.pid}`;
       await writeFile(tmpPath, `${JSON.stringify(nextState, null, 2)}\n`, 'utf8');
       await rename(tmpPath, statePath);
       // 拡張の URI は prompt を送信しない(入力欄に置くだけ)。「開いた=始まった」と書くと嘘の成功報告になる。
-      log(`[next-session] VSCode に新しいタブを1枚開きました\n  場所  : タブバーの一番右端\n  タブ名: Claude Code（送信するまでこの名前のままです）\n  入力欄: ${flags.prompt} が入っています → Enter 1回で開始\n  cwd   : ${cwd}`);
+      log(`[next-session] VSCode に新しいタブを1枚開きました\n  場所  : タブバーの一番右端\n  タブ名: Claude Code（送信するまでこの名前のままです）\n  入力欄: ${flags.prompt} が入っています → Enter 1回で開始\n  cwd   : ${cwd}
+  account: ${accountLog}`);
       return 0;
     }
 
@@ -375,7 +433,7 @@ export async function launchNextSession(argv = [], io = {}) {
     const wt = resolveWt({ env, readdir, homedir: home, flagWt: flags.wt });
     const plan = planLaunch({ claudeBin, cwd, prompt: flags.prompt, wt });
     if (flags.dryRun) {
-      log(JSON.stringify(plan));
+      log(JSON.stringify({ ...plan, account, configDir, configDirSource }));
       return 0;
     }
 
@@ -401,7 +459,7 @@ export async function launchNextSession(argv = [], io = {}) {
       detached: true,
       stdio: 'ignore',
       windowsHide: false,
-      env: sanitizeEnv(env),
+      env: launchEnv,
     });
     if (typeof child.once === 'function') {
       await new Promise((resolve, reject) => {
@@ -411,12 +469,12 @@ export async function launchNextSession(argv = [], io = {}) {
     }
     child.unref();
 
-    const nextState = { ...state, enabled: state.enabled !== false, lastLaunchAt: new Date().toISOString(), lastCwd: cwd, lastRoute: route, lastPrompt: flags.prompt };
+    const nextState = { ...state, enabled: state.enabled !== false, lastLaunchAt: new Date().toISOString(), lastCwd: cwd, lastRoute: route, lastPrompt: flags.prompt, lastAccount: account, lastConfigDir: configDir };
     const tmpPath = `${statePath}.tmp-${process.pid}`;
     await writeFile(tmpPath, `${JSON.stringify(nextState, null, 2)}\n`, 'utf8');
     await rename(tmpPath, statePath);
     if (trustRegistered) log(`[next-session] フォルダ信頼を事前登録しました: ${cwd}`);
-    log(`[next-session] 新しいセッションを起動しました: ${cwd} / prompt=${flags.prompt}`);
+    log(`[next-session] 新しいセッションを起動しました: ${cwd} / prompt=${flags.prompt} / account=${accountLog}`);
     return 0;
   } catch (error) {
     log(`[next-session] スキップ: 起動に失敗しました (${error?.message ?? error})`);

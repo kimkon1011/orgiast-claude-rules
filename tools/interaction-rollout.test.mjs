@@ -188,6 +188,21 @@ test('watch は未導入・電源off が24台あっても done: true を保存�
   assert.equal(state.done, true);
 });
 
+test('watch は webhook 未設定でも kim DM が届けば完了状態を保存する', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'interaction-rollout-dm-'));
+  const claudeDir = path.join(home, '.claude'); fs.mkdirSync(claudeDir);
+  fs.writeFileSync(path.join(claudeDir, 'interaction-rollout-watch'), '');
+  fs.writeFileSync(path.join(claudeDir, 'fleet-sheet.env'), 'FLEET_SHEET_URL=https://example.invalid/fleet\nFLEET_SHEET_TOKEN=test\n');
+  let notification = '';
+  await runInteractionRollout({
+    argv: ['--watch'], env: { ORGIAST_HOME: home }, now: () => NOW, stdout: assert.fail, stderr: assert.fail,
+    notifyKimImpl: async (message) => { notification = message; return { delivered: 'dm' }; },
+    fetchImpl: async () => ({ ok: true, json: async () => ({ ok: true, rows: [{ pcName: 'ready', reportedAt: '2026-08-30', interactionLoop: '適用済(x)' }] }) }),
+  });
+  assert.match(notification, /^✅ 対話ループ/);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(claudeDir, 'interaction-rollout-state.json'), 'utf8')).done, true);
+});
+
 test('稼働中だが未取込が1台なら12時間後に停滞通知する', () => {
   const curr = { applied: 3, stale: 0, liveNotApplied: 1, unreported: 24, done: false };
   const prev = { ...curr, firstSeenAt: '2026-08-30T00:00:00.000Z' };

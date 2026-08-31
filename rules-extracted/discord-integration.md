@@ -77,3 +77,14 @@ kim 指示:「**ほかのアカウントのパソコンもすべて、今後は�
 
 台帳: https://docs.google.com/a/orgiast.jp/spreadsheets/d/1soai_gMbH0C-67J8680Y26Y7KJWkV87sFZxCgDQ2BbI/edit
 （`Discordチャンネル` タブ。`用途・何のチャンネルか【手入力】` 等の【手入力】列は人が自由に書ける欄で、機械は上書きしない）
+## 2.6.2 Discord の webhook URL を user にコピーさせない（絶対ルール / 2026-08-31 kim 指示）
+
+kim 指示:「ウェブフックもクラウド台帳に入れられるかな。いちいちコピーしろって手間がかかるから」。
+
+1. URL が要るときは `node ~/orgiast-claude-rules/tools/discord-webhook.mjs "<webhook名 or チャンネル名>"`
+   （そのPCのローカルから解決。**user に貼らせない**）
+2. ローカルに無ければ台帳の `Webhook` タブが「どのPCのどのファイルにあるか」を教える
+3. 新規作成は `--create <チャンネルID>`（Bot に「ウェブフックの管理」権限がある場合）
+
+**台帳に webhook URL 本体を書いてはならない。** 台帳は orgiast.jp ドメイン全員が編集可で、
+URL は持っているだけで任意投稿できる鍵だから。台帳に載せるのは 名前 / チャンネル / 状態 / 用途 / 保管場所 だけ。

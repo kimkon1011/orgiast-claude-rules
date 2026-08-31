@@ -1,0 +1,6 @@
+import test from 'node:test'; import assert from 'node:assert/strict';
+import { buildWebhookSheetPayload } from './webhook-health.mjs'; import { formatWebhookCandidates,pickWebhookResult } from './discord-webhook.mjs';
+const secret=`https://discord.com/api/webhooks/123456789012345/${'x'.repeat(40)}`;
+test('sheet payloadにURLがなくfilesはbasenameだけ',()=>{const p=buildWebhookSheetPayload({alive:[{webhookId:'1',name:'n',channelId:'2',channelName:'c',status:'alive',files:['C:\\Users\\x\\a.env'],url:secret}],dead:[],errors:[]},{label:'PC',checkedAt:'2026-08-31'});assert(!JSON.stringify(p).includes('discord.com/api/webhooks/'));assert.deepEqual(p.webhooks[0].files,['a.env']);});
+test('候補整形とJSONはURLを含めない',()=>{const rows=[{webhookId:'1',name:'n',channelName:'c',files:['a.env'],url:secret},{webhookId:'2',name:'m',channelName:'d',url:secret}];assert(!formatWebhookCandidates(rows).includes(secret));assert(!pickWebhookResult(rows,{json:true}).stdout.includes(secret));});
+test('0件1件複数件を安全に判定',()=>{assert.equal(pickWebhookResult([]).exitCode,1);assert.equal(pickWebhookResult([{url:secret}]).stdout,`${secret}\n`);assert.equal(pickWebhookResult([{url:secret},{url:secret}]).exitCode,1);assert(!pickWebhookResult([{url:secret},{url:secret}]).stderr.includes(secret));});

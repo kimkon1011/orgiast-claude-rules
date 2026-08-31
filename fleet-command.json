@@ -1,8 +1,8 @@
 {
-  "runId": "discord-channel-id-rollout-2026-08-31",
+  "runId": "webhook-ledger-rollout-2026-08-31",
   "task": "rules-resync",
   "targets": "all",
-  "_why": "Discord のチャンネルIDを user に取得させないためのルールとツールを全PCへ配る。配るもの: tools/discord-channel-id.mjs(クラウド台帳の Discordチャンネル タブを引いてIDを返す。Botトークン不要・全PCで動く) / ONBOARDING §2.6.1 と rules-extracted/discord-integration.md の「チャンネルIDを user に聞かない」ルール / nightly-batch の台帳更新ブロック(Botトークンが無いPCは skip)。各PCは onboarding-sync --force を1回だけ実行する。破壊的操作なし。止めるときは task を \"\" に戻す。",
+  "_why": "webhook URL を人にコピーさせないためのツールとルールを全PCへ配る。配るもの: tools/discord-webhook.mjs(ローカルの ~/.claude から webhook URL を自動解決。台帳にはURLを置かない) / webhook-health.mjs --post-sheet(生存確認の結果だけを台帳の Webhook タブへ。URLは送らない) / nightly-batch の該当ブロック / ONBOARDING §2.6.2 と rules-extracted の「webhook URL を user にコピーさせない」ルール。各PCは onboarding-sync --force を1回だけ実行する。破壊的操作なし。止めるときは task を \"\" に戻す。",
   "_note": "全PCへ承認済みタスクを配る中央キュー。kim/Claudeが task と runId(毎回ユニーク) を更新→各PCが夜間03:15の実行時に1回だけ処理しDiscordへ結果を返す。task を空にすると何もしない。",
   "_allowed_tasks": [
     "verify-setup",

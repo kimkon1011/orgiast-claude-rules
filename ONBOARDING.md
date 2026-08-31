@@ -83,6 +83,8 @@ API/CLI/MCP/GitHub Actions で実行可能な操作は、手順案内せず Clau
 
 **Critical event（新規signup/問合せ/障害アラート）のDiscord通知は単一webhook依存禁止**。kim確実視認チャンネル＋担当者チャンネルの2系統以上に並列送信＋日次pending件数の二重チェック層。詳細・実装コード: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/critical-event-notify.md`
 
+**Discord webhook URL は user にコピーさせない。** `tools/discord-webhook.mjs` でローカル解決し、台帳にはURLでなく保管PC・ファイルだけを載せる。詳細: `rules-extracted/discord-integration.md` §2.6.2。
+
 **認証情報・接続情報・あらゆる秘匿値は「再聞き」絶対禁止**（Supabase接続だけでなくWebhook URL/API key/OAuth token/Channel ID等すべて）。復元優先順位: ①.env系をGlob ②過去transcriptをGrep toolで検索（bash grepがclassifierに止められたら諦めずGrep toolに切替） ③production公開リソースから抽出 ④それでも無ければuserに理由付きで依頼 ⑤受領後は即.env.localに永続化。詳細・Supabase接続の組み立て: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/credentials-handling.md`
 
 <!-- BEGIN: 手渡し品質ルール (2026-08-28) -->

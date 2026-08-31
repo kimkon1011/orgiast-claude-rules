@@ -206,6 +206,21 @@ try {
         }
     } else { Write-NightlyLog 'discord-channels' 'skip:ファイルなし' }
 
+    $webhookHealth = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\webhook-health.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $webhookHealth = $candidate; break }
+    }
+    $fleetSheetEnv = Join-Path ([Environment]::GetFolderPath('UserProfile')) '.claude\fleet-sheet.env'
+    if (-not (Test-Path -LiteralPath $fleetSheetEnv -PathType Leaf)) {
+        Write-NightlyLog 'webhook-health' 'skip:設定なし'
+    } elseif ($webhookHealth) {
+        try {
+            & $node.Source $webhookHealth --post-sheet
+            if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'webhook-health' ("error:終了コード" + $LASTEXITCODE) } else { Write-NightlyLog 'webhook-health' 'ok' }
+        } catch { Write-NightlyLog 'webhook-health' ("error:" + $_.Exception.Message) }
+    } else { Write-NightlyLog 'webhook-health' 'skip:ファイルなし' }
+
     # LINEオープンチャットの取り込み分を選別・要約して作り置きを更新する。
     # batch-queue が空でも実行したいので、下の early exit より前に置くこと。
     $digest = $null

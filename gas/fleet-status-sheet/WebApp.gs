@@ -76,6 +76,9 @@ function doPost(e) {
     'discord-channels': upsertDiscordChannels,
     'discord-describe': describeDiscordChannels,
     'discord-lookup': lookupDiscordChannels,
+    'webhooks': upsertWebhookLedger,
+    'webhook-lookup': lookupWebhooks,
+    'webhook-describe': describeWebhookLedger,
     'manual-columns': ensureManualColumns,
     'ledger-unify': unifyIntoCloudLedger
   };

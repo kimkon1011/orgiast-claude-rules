@@ -27,7 +27,7 @@ export function walkJsonl(dir, out = []) {
   for (const e of entries) { const p = path.join(dir, e.name); if (e.isDirectory()) walkJsonl(p, out); else if (e.name.endsWith('.jsonl')) out.push(p); }
   return out;
 }
-const CACHE_VERSION = 1;
+const CACHE_VERSION = 3;
 const cacheStates = new Map();
 function cachePath(home) { return path.join(home, '.claude', 'cost-loop-parse-cache.json'); }
 function cacheState(home) {
@@ -98,15 +98,13 @@ function parseClaudeFile(file) {
         commands.push({ ts, chars: command.length, category: classifyBashCommand(command), preview: command.replace(/\s*\r?\n\s*/g, ' ').slice(0, 160) });
       }
     }
+    const msgId = row?.message?.id ?? row?.requestId ?? row?.uuid ?? `${ts}:${records.length}`;
     const usage = row?.message?.usage;
-    if (!usage) { if (authoredLines) records.push({ ts, authoredLines }); continue; }
+    if (!usage) { const toolUses = content.filter((b) => b?.type === 'tool_use').map((b) => ({ name: String(b?.name || 'unknown'), input: b?.input || {} })); if (authoredLines || toolUses.length) records.push({ ts, authoredLines, toolUses, tier: modelTier(row?.message?.model), msgId }); continue; }
     const out = Number(usage.output_tokens) || 0, model = String(row?.message?.model || ''), tier = modelTier(model);
-    const blockTotals = { thinking: 0, text: 0, tool_use: 0, unattributed: 0, tools: {} };
-    const weighted = content.map((b) => { const type = b?.type === 'tool_use' ? 'tool_use' : b?.type === 'thinking' ? 'thinking' : 'text'; const chars = type === 'tool_use' ? JSON.stringify(b?.input ?? '').length : String(b?.text ?? b?.thinking ?? (typeof b === 'string' ? b : '')).length; return { b, type, n: chars / (type === 'tool_use' ? JSON_CHARS_PER_TOKEN : PROSE_CHARS_PER_TOKEN) }; });
-    const totalEstimate = weighted.reduce((s, x) => s + x.n, 0);
-    if (!totalEstimate) { if (content.some((b) => b?.type === 'thinking')) blockTotals.thinking += out; else blockTotals.unattributed += out; }
-    else for (const { b, type, n } of weighted) { const amount = out * n / totalEstimate; blockTotals[type] += amount; if (type === 'tool_use') { const name = String(b?.name || 'unknown'); blockTotals.tools[name] = (blockTotals.tools[name] || 0) + amount; } }
-    records.push({ ts, authoredLines, out, tier, side: Boolean(row.isSidechain), blocks: blockTotals,
+    const blockTotals = { thinking: 0, text: 0, tool_use: 0, unattributed: 0, tools: {} }, toolUses = [];
+    for (const b of content) { const type = b?.type === 'tool_use' ? 'tool_use' : b?.type === 'thinking' ? 'thinking' : 'text'; const amount = type === 'thinking' ? 0 : type === 'tool_use' ? JSON.stringify(b?.input ?? '').length / JSON_CHARS_PER_TOKEN : String(b?.text ?? (typeof b === 'string' ? b : '')).length / PROSE_CHARS_PER_TOKEN; blockTotals[type] += amount; if (type === 'tool_use') { const name = String(b?.name || 'unknown'); blockTotals.tools[name] = (blockTotals.tools[name] || 0) + amount; toolUses.push({ name, input: b?.input || {} }); } }
+    records.push({ ts, authoredLines, out, tier, side: Boolean(row.isSidechain), blocks: blockTotals, toolUses, msgId,
       input: Number(usage.input_tokens) || 0, cacheRead: Number(usage.cache_read_input_tokens) || 0, cacheWrite: Number(usage.cache_creation_input_tokens) || 0 });
   }
   return { records, commands };
@@ -126,14 +124,22 @@ export function collectClaudeStats({ home = process.env.ORGIAST_HOME || os.homed
   const cutoff = now - days * DAY, sessions = [], byModel = {}, blocks = { thinking: 0, text: 0, tool_use: 0, unattributed: 0, tools: {} }; let authoredLines = 0;
   for (const { file, st, parsed } of claudeFiles(home, cutoff)) {
     if (st.mtimeMs < cutoff) continue;
-    let outputTokens = 0, sideOutput = 0, mainOutput = 0;
+    let outputTokens = 0, sideOutput = 0, mainOutput = 0; const messages = new Map();
     for (const row of parsed.records) {
       if (row.ts < cutoff) continue; authoredLines += row.authoredLines || 0;
-      const out = row.out || 0; if (!out) continue;
-      outputTokens += out; byModel[row.tier] = (byModel[row.tier] || 0) + out;
-      if (row.side) sideOutput += out; else mainOutput += out;
-      for (const name of ['thinking', 'text', 'tool_use', 'unattributed']) blocks[name] += row.blocks?.[name] || 0;
-      for (const [name, amount] of Object.entries(row.blocks?.tools || {})) blocks.tools[name] = (blocks.tools[name] || 0) + amount;
+      if (row.out === undefined) continue;
+      const message = messages.get(row.msgId) || { out: 0, tier: row.tier, side: row.side, text: 0, tool_use: 0, tools: {} };
+      if ((row.out || 0) >= message.out) { message.out = row.out || 0; message.tier = row.tier; message.side = row.side; }
+      message.text += row.blocks?.text || 0; message.tool_use += row.blocks?.tool_use || 0;
+      for (const [name, amount] of Object.entries(row.blocks?.tools || {})) message.tools[name] = (message.tools[name] || 0) + amount;
+      messages.set(row.msgId, message);
+    }
+    for (const message of messages.values()) {
+      const out = message.out; if (!out) continue; const visibleEst = message.text + message.tool_use, scale = visibleEst > out ? out / visibleEst : 1;
+      outputTokens += out; byModel[message.tier] = (byModel[message.tier] || 0) + out;
+      if (message.side) sideOutput += out; else mainOutput += out;
+      blocks.thinking += Math.max(0, out - visibleEst); blocks.text += message.text * scale; blocks.tool_use += message.tool_use * scale;
+      for (const [name, amount] of Object.entries(message.tools)) blocks.tools[name] = (blocks.tools[name] || 0) + amount * scale;
     }
     if (outputTokens) sessions.push({ session: path.basename(file, '.jsonl'), file, outputTokens, mainOutput, subOutput: sideOutput });
   }
@@ -150,6 +156,34 @@ export function classifyBashCommand(command) {
   if (/^\s*git(?:\s|$)/i.test(command)) return 'git';
   if (/^\s*(?:cat|head|tail|sed\s+-n|grep|ls|wc|find)(?:\s|$)/i.test(command) && !/(?:^|[^<])>{1,2}/.test(command)) return 'read-only';
   return 'other';
+}
+export function isReadOnlyToolUse(name, input = {}) {
+  if (['Read', 'Grep', 'Glob'].includes(name)) return true;
+  if (!['Bash', 'PowerShell'].includes(name)) return false;
+  const command = String(input?.command || '');
+  if (/(?:^|[^<])>{1,2}|\brm\s|\bmv\s|\bcp\s|\bmkdir\s|\binstall\b|\bpush\b|\bdeploy\b|\bcodex\b|\bnpm\s|\bgit\s+commit\b|\bgit\s+push\b|\bclasp\b/i.test(command)) return false;
+  const allowed = /^(?:cat|head|tail|sed|grep|rg|ls|find|wc|stat|jq|awk|cut|sort|uniq|echo|which|type)(?:\s|$)|^node\s+--test(?:\s|$)|^git\s+(?:status|log|diff|show|rev-parse|branch)(?:\s|$)/i;
+  const segments = command.split(/&&|\|\||;|\|(?!\|)/).map((x) => x.trim()).filter(Boolean);
+  let checked = 0;
+  for (let segment of segments) { segment = segment.replace(/^cd(?:\s+(?:"[^"]*"|'[^']*'|[^\s]+))?\s*/, '').trim(); if (!segment) continue; checked++; if (!allowed.test(segment)) return false; }
+  return checked > 0;
+}
+export function collectTurnStats({ home = process.env.ORGIAST_HOME || os.homedir(), days = 7, now = Date.now() } = {}) {
+  const cutoff = now - days * DAY, byToolCount = {}, investigationStreaks = []; let responses = 0, batchedResponses = 0, readOnlyResponses = 0;
+  for (const { st, parsed } of claudeFiles(home, cutoff)) {
+    if (st.mtimeMs < cutoff) continue;
+    const messages = new Map();
+    for (const row of parsed.records) { if (row.ts < cutoff) continue; const message = messages.get(row.msgId) || { ts: row.ts, tiers: new Set(), tools: [] }; message.ts = Math.min(message.ts || row.ts, row.ts); message.tiers.add(row.tier); message.tools.push(...(row.toolUses || [])); messages.set(row.msgId, message); }
+    let streak = 0;
+    for (const message of [...messages.values()].filter((x) => x.tiers.has('opus')).sort((a, b) => a.ts - b.ts)) {
+      const count = message.tools.length, readOnly = count > 0 && message.tools.every((tool) => isReadOnlyToolUse(tool.name, tool.input)); responses++; byToolCount[count] = (byToolCount[count] || 0) + 1;
+      if (count >= 2) batchedResponses++;
+      if (readOnly) { readOnlyResponses++; streak++; } else { if (streak >= 2) investigationStreaks.push(streak); streak = 0; }
+    }
+    if (streak >= 2) investigationStreaks.push(streak);
+  }
+  investigationStreaks.sort((a, b) => a - b); const middle = Math.floor(investigationStreaks.length / 2), medianStreak = investigationStreaks.length ? investigationStreaks.length % 2 ? investigationStreaks[middle] : (investigationStreaks[middle - 1] + investigationStreaks[middle]) / 2 : 0;
+  saveCache(home); return { responses, byToolCount, batchedResponses, batchRate: responses ? batchedResponses / responses : 0, readOnlyResponses, investigationStreaks, longestStreak: investigationStreaks.at(-1) || 0, medianStreak };
 }
 export function collectBashProfile({ home = process.env.ORGIAST_HOME || os.homedir(), days = 7, now = Date.now() } = {}) {
   const cutoff = now - days * DAY;
@@ -171,14 +205,18 @@ export function collectClaudeCostStats({ home = process.env.ORGIAST_HOME || os.h
   const cutoff = now - days * DAY, byModel = {}, usageByModel = {}; let outputTokens = 0, cacheBase = 0, cacheRead = 0, cacheWrite = 0, topFableSource = null;
   for (const { file, st, parsed } of claudeFiles(home, cutoff)) {
     if (st.mtimeMs < cutoff) continue;
-    let fileFableOut = 0, fileFableLatest = 0;
+    let fileFableOut = 0, fileFableLatest = 0; const messages = new Map();
     for (const row of parsed.records) {
       if ((row.ts && row.ts < cutoff) || row.out === undefined) continue;
-      cacheBase += row.input || 0; cacheRead += row.cacheRead || 0; cacheWrite += row.cacheWrite || 0; outputTokens += row.out || 0;
-      byModel[row.tier] = (byModel[row.tier] || 0) + (row.out || 0);
-      const usage = usageByModel[row.tier] ||= { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
-      usage.input += row.input || 0; usage.cacheRead += row.cacheRead || 0; usage.cacheWrite += row.cacheWrite || 0; usage.output += row.out || 0;
-      if (row.tier === 'fable') { fileFableOut += row.out || 0; fileFableLatest = Math.max(fileFableLatest, row.ts || st.mtimeMs); }
+      const message = messages.get(row.msgId) || { tier: row.tier, input: 0, cacheRead: 0, cacheWrite: 0, out: 0, latest: 0 };
+      message.input = Math.max(message.input, row.input || 0); message.cacheRead = Math.max(message.cacheRead, row.cacheRead || 0); message.cacheWrite = Math.max(message.cacheWrite, row.cacheWrite || 0); message.out = Math.max(message.out, row.out || 0); message.latest = Math.max(message.latest, row.ts || st.mtimeMs); messages.set(row.msgId, message);
+    }
+    for (const message of messages.values()) {
+      cacheBase += message.input; cacheRead += message.cacheRead; cacheWrite += message.cacheWrite; outputTokens += message.out;
+      byModel[message.tier] = (byModel[message.tier] || 0) + message.out;
+      const usage = usageByModel[message.tier] ||= { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
+      usage.input += message.input; usage.cacheRead += message.cacheRead; usage.cacheWrite += message.cacheWrite; usage.output += message.out;
+      if (message.tier === 'fable') { fileFableOut += message.out; fileFableLatest = Math.max(fileFableLatest, message.latest); }
     }
     if (fileFableOut > (topFableSource?.outputTokens || 0)) topFableSource = { sessionId: path.basename(file, '.jsonl'), outputTokens: fileFableOut, latest: fileFableLatest };
   }
@@ -357,12 +395,14 @@ export function formatBashProfile(profile) {
 if (isEntry(import.meta.url)) {
   const args = process.argv.slice(2), sub = args.find((x) => !x.startsWith('--')) || 'sessions', daysArg = args.find((x) => x.startsWith('--days='));
   const daysIndex = args.indexOf('--days'), days = Number(daysArg?.split('=')[1] || (daysIndex >= 0 ? args[daysIndex + 1] : 7)) || 7, json = args.includes('--json');
-  const home = process.env.ORGIAST_HOME || os.homedir(), claude = collectClaudeStats({ home, days }); let result;
+  const home = process.env.ORGIAST_HOME || os.homedir(); let result, claude;
+  if (sub !== 'turns') claude = collectClaudeStats({ home, days });
   if (sub === 'sessions') result = { sessions: claude.sessions, totals: claude.totals, byModel: claude.byModel };
   else if (sub === 'blocks') result = claude.blocks;
   else if (sub === 'bash') result = collectBashProfile({ home, days });
   else if (sub === 'ledger') result = collectLedger({ home, days });
   else if (sub === 'deleg') { const ledger = collectLedger({ home, days }), codex = collectCodexUsage({ home, days }); result = calculateDelegation({ codexOut: codex.outputTokens, execOut: ledger.totals.outputTokens, byModel: claude.byModel }); }
-  else { console.error('usage: node tools/usage-stats.mjs <sessions|blocks|bash|ledger|deleg> [--days 7] [--json]'); process.exitCode = 2; }
+  else if (sub === 'turns') result = collectTurnStats({ home, days });
+  else { console.error('usage: node tools/usage-stats.mjs <sessions|blocks|bash|ledger|deleg|turns> [--days 7] [--json]'); process.exitCode = 2; }
   if (result) console.log(json ? JSON.stringify(result, null, 2) : sub === 'blocks' ? formatBlockSource(result) : sub === 'bash' ? formatBashProfile(result) : JSON.stringify(result, null, 2));
 }

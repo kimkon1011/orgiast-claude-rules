@@ -45,6 +45,30 @@ test('enforcement trend supports adjusted and legacy history entries', () => {
   assert.equal(result.mode, 'warn');
 });
 
+test('lines delegation above target stays warn despite low token delegation', () => {
+  const result = decideEnforcement({ ...base, linesRatio: 0.635, delegRatio: 0.19, delegRatioWithPrep: 0.22, daysObserved: 10, pilot: true });
+  assert.equal(result.mode, 'warn');
+  assert.equal(result.decidedBy, 'linesRatio');
+});
+
+test('lines delegation blocks below half target after 3 days', () => {
+  const result = decideEnforcement({ ...base, linesRatio: 0.10, daysObserved: 3, pilot: true });
+  assert.equal(result.mode, 'block');
+});
+
+test('invalid lines delegation falls back to token delegation', () => {
+  const result = decideEnforcement({ ...base, linesRatio: null, delegRatioWithPrep: 0.1, daysObserved: 3, pilot: true });
+  assert.equal(result.mode, 'block');
+  assert.equal(result.decidedBy, 'delegRatioWithPrep');
+});
+
+test('7-day enforcement trend reads lines delegation history', () => {
+  const flat = decideEnforcement({ ...base, linesRatio: 0.3, history: [{ linesRatio: 0.28 }, { linesRatio: 0.29 }], daysObserved: 7, pilot: true });
+  const improving = decideEnforcement({ ...base, linesRatio: 0.3, history: [{ linesRatio: 0.10 }, { linesRatio: 0.29 }], daysObserved: 7, pilot: true });
+  assert.equal(flat.mode, 'block');
+  assert.equal(improving.mode, 'warn');
+});
+
 function geminiRows(count, overrides = {}) {
   return Array.from({ length: count }, () => ({ t: '2026-08-15T00:00:00Z', provider: 'gemini', grounded: true, in: 0, out: 0, ...overrides }));
 }

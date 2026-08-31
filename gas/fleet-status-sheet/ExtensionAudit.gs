@@ -14,7 +14,16 @@ function extPlanReplace(headers, rows, payload) {
   });
   const labelColumn = columns.label;
   const deleteRowNumbers = [];
-  rows.forEach(function(row, index) { if (String(row[labelColumn]) === label) deleteRowNumbers.push(index + 2); });
+  const manualColumns = headers.map(function(name, index) { return String(name).indexOf('【手入力】') >= 0 ? { name: name, index: index } : null; }).filter(Boolean);
+  const preserved = {};
+  rows.forEach(function(row, index) {
+    if (String(row[labelColumn]) !== label) return;
+    deleteRowNumbers.push(index + 2);
+    const key = String(row[columns.browser] || '') + '\u0000' + String(row[columns.profile] || '') + '\u0000' + String(row[columns.id] || '');
+    if (!preserved[key]) preserved[key] = {};
+    manualColumns.forEach(function(column) { if (row[column.index] !== '' && row[column.index] != null) preserved[key][column.name] = row[column.index]; });
+  });
+  const restored = {};
   const appendRows = (Array.isArray(payload.rows) ? payload.rows : []).map(function(row) {
     const values = {
       label: label, browser: row.browser || '', profile: row.profile || '', account: row.account || '', name: row.name || '', id: row.id || '', version: row.version || '',
@@ -22,9 +31,19 @@ function extPlanReplace(headers, rows, payload) {
     };
     const output = headers.map(function() { return ''; });
     Object.keys(columns).forEach(function(key) { output[columns[key]] = values[key]; });
+    const key = String(row.browser || '') + '\u0000' + String(row.profile || '') + '\u0000' + String(row.id || '');
+    if (preserved[key]) {
+      restored[key] = true;
+      manualColumns.forEach(function(column) { if (preserved[key][column.name] !== undefined) output[column.index] = preserved[key][column.name]; });
+    }
     return output;
   });
-  return { deleteRowNumbers: deleteRowNumbers, appendRows: appendRows };
+  const droppedManual = [];
+  Object.keys(preserved).forEach(function(key) {
+    if (restored[key]) return;
+    Object.keys(preserved[key]).forEach(function(header) { droppedManual.push({ key: key, header: header, value: preserved[key][header] }); });
+  });
+  return { deleteRowNumbers: deleteRowNumbers, appendRows: appendRows, droppedManual: droppedManual };
 }
 
 function extSummarize(headers, rows) {
@@ -79,6 +98,6 @@ function replaceExtensionAudit(payload) {
     const plan = extPlanReplace(headers, rows, payload);
     plan.deleteRowNumbers.slice().sort(function(a, b) { return b - a; }).forEach(function(rowNumber) { sheet.deleteRow(rowNumber); });
     if (plan.appendRows.length) sheet.getRange(sheet.getLastRow() + 1, 1, plan.appendRows.length, headers.length).setValues(plan.appendRows);
-    return { ok: true, deleted: plan.deleteRowNumbers.length, appended: plan.appendRows.length };
+    return { ok: true, deleted: plan.deleteRowNumbers.length, appended: plan.appendRows.length, droppedManual: plan.droppedManual };
   } finally { lock.releaseLock(); }
 }

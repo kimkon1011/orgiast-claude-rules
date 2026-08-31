@@ -29,11 +29,19 @@ function cloudPlanLoginReplace(headers, rows, payload) {
     columns[name] = cloudColumn(headers, name, true);
   });
   var deleteRowNumbers = [];
+  var manualColumns = headers.map(function(name, index) { return String(name).indexOf('【手入力】') >= 0 ? { name: name, index: index } : null; }).filter(Boolean);
+  var preserved = {};
   rows.forEach(function(row, index) {
     if (String(row[columns['PC名/ホスト名']] || '').trim() === label) {
       deleteRowNumbers.push(index + 2);
+      var key = String(row[columns['サービス']] || '') + '\u0000' + String(row[columns['ログインアカウント']] || '');
+      if (!preserved[key]) preserved[key] = {};
+      manualColumns.forEach(function(column) {
+        if (cloudNonEmpty(row[column.index])) preserved[key][column.name] = row[column.index];
+      });
     }
   });
+  var restored = {};
   var appendRows = (Array.isArray(payload.rows) ? payload.rows : []).map(function(item) {
     var output = headers.map(function() { return ''; });
     var values = {
@@ -45,9 +53,21 @@ function cloudPlanLoginReplace(headers, rows, payload) {
     Object.keys(values).forEach(function(name) {
       if (cloudNonEmpty(values[name])) output[columns[name]] = values[name];
     });
+    var key = String(item.service || '') + '\u0000' + String(item.account || '');
+    if (preserved[key]) {
+      restored[key] = true;
+      manualColumns.forEach(function(column) {
+        if (cloudNonEmpty(preserved[key][column.name])) output[column.index] = preserved[key][column.name];
+      });
+    }
     return output;
   });
-  return { deleteRowNumbers: deleteRowNumbers, appendRows: appendRows };
+  var droppedManual = [];
+  Object.keys(preserved).forEach(function(key) {
+    if (restored[key]) return;
+    Object.keys(preserved[key]).forEach(function(header) { droppedManual.push({ key: key, header: header, value: preserved[key][header] }); });
+  });
+  return { deleteRowNumbers: deleteRowNumbers, appendRows: appendRows, droppedManual: droppedManual };
 }
 
 function cloudPlanProjectUpsert(headers, rows, payload) {

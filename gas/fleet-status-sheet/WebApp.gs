@@ -72,7 +72,11 @@ function doPost(e) {
     'cloud-login': replaceCloudLogins,
     'cloud-project': upsertCloudProjects,
     'cloud-contract': upsertCloudContracts,
-    'cloud-describe': describeCloudLedger
+    'cloud-describe': describeCloudLedger,
+    'discord-channels': upsertDiscordChannels,
+    'discord-describe': describeDiscordChannels,
+    'manual-columns': ensureManualColumns,
+    'ledger-unify': unifyIntoCloudLedger
   };
   try {
     const handler = handlers[payload.kind] || upsertFleetStatus;

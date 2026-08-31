@@ -1,0 +1,45 @@
+# User-global preferences (kim@orgiast.jp)
+
+ユーザーグローバルの恒久ルール集。全プロジェクトでロード。手続き系の詳細は rules/ と skills/ に分離済み（2026-07-03 再編、旧版: backups/CLAUDE.md.bak-20260703）。
+
+---
+
+## Google Workspace URL は `/a/orgiast.jp/` を必ず挟む
+
+Workspace のリンク提示時は必ず `/a/orgiast.jp/` パスを入れる。素の URL 禁止（Chrome デフォルトが個人 Gmail のメンバーが多く、「アクセス権が必要です」→毎回アカウント切替になるため。ドメインベースなので他の orgiast.jp メンバーにもそのまま渡せる）。
+
+| サービス | 形式 |
+|---|---|
+| Apps Script エディタ | `script.google.com/a/orgiast.jp/d/{ID}/edit` |
+| Apps Script マクロ実行 | `script.google.com/a/macros/orgiast.jp/d/{ID}/...` |
+| Sheets / Docs / Slides / Forms | `docs.google.com/a/orgiast.jp/{spreadsheets|document|presentation|forms}/d/{ID}/edit` |
+| Drive **file** (view) | `drive.google.com/a/orgiast.jp/file/d/{ID}/view` |
+| Drive **folder** | `drive.google.com/drive/folders/{ID}`（**素URL。`/a/orgiast.jp/` を付けると404**） |
+
+- **Drive folder だけは `/a/orgiast.jp/` 非対応**: `drive.google.com/a/orgiast.jp/drive/folders/{ID}` は Google が **404** を返す（`/a/{domain}/` 形式が生きているのは docs.google.com / script.google.com のエディタ系ホストと drive.google.com の `/file/d/` のみ。`/drive/folders/` パスには存在しない）。folder は素URLで渡し、フォルダを orgiast.jp ドメイン共有にした上で、個人Gmailデフォルトの相手には「右上アバターで orgiast.jp に切替」を併記。2026-06-12 / 2026-07-06 に404実測。
+- `?authuser=kim@orgiast.jp` は付けない（他メンバーが踏めなくなる）
+- 例外: `script.google.com/home/usersettings` 等の `/home/...` 系は素URL + 「右上アバターで kim@orgiast.jp に切替」を併記
+
+---
+
+## GAS 開発
+
+- `.gs` / `appsscript.json` を触ると **rules/gas.md** が自動適用される（clasp 統一・コマンドキュー絶対ルール・read-back verify）
+- 新規 GAS 立ち上げは **/gas-project-setup** skill（kim の手作業 = setupOnce 1クリックのみ）
+
+## Growi 社内マニュアル取り込み
+
+**/growi-fetch** skill を使う（一次ソース = Drive `社内マニュアル_NotebookLM連携` 13分割 Docs、WebFetch 禁止、鮮度チェック必須）。
+
+## 変更後の検証
+
+デプロイ・UI・cron 等の変更は **/deploy-verify** skill の2段検証（Layer1 ロジック再現 + Layer2 Playwright 実描画）を通してから完了報告。
+
+---
+
+## トークン効率
+
+- **出力は Caveman**: 前置きなし、完了報告 1〜3 行（output-styles/caveman.md）
+- **キャッシュ保護**: CLAUDE.md には恒久ルールだけ。実行中タスク・今日の数字・進行中障害は書かない（毎回キャッシュを壊す）。上部ほど静的に。セッション中のモデル切替を乱発しない
+- **モデルルーティング**: 単純編集/grep/確認系 → Sonnet/Haiku、設計/横断調査/複数仮説 → Opus/Fable。迷ったら Auto
+- **重い探索はサブエージェント委譲**: 「配下を全部読んで○○」型は Explore/general-purpose に投げ、「結果を200字以内・コード本体は含めない」と指定して親コンテキストを守る

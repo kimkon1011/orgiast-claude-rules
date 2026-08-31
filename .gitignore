@@ -1,0 +1,3 @@
+
+# Codex CLI が作業ごとに置く一時ファイル(コミット対象外)
+.codex-task.md

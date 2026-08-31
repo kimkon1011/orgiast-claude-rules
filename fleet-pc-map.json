@@ -1,0 +1,21 @@
+{
+  "_note": "Discordラベル → シートD列表記 / hostname / 担当者 の対応表。fleet-liveness.mjs が同一PCの二重計上を防ぐために使う。証拠のあるものだけを書く（推測でマージすると他PCのシート行を奪う）。証拠 = ①報告本文の `🖥 hostname=…` ②ラベル名がシートD列と一致 ③申告日と同日のラベル初登場 ④kim の明示回答。aliases は同じPCを指す別表記（1台が手入力行と機械書き込み行に分かれているため）。",
+  "kim-PC": {
+    "hostname": "DESKTOP-2D0R4LI",
+    "person": "金功勇",
+    "aliases": ["DESKTOP-2D0R4LI", "kim-PC(開発機/kim)"],
+    "_evidence": "報告本文の 🖥 hostname=DESKTOP-2D0R4LI / user=uers / git=kim@orgiast.jp（2026-08-27 実測）。kim 明示回答『18行目(kim-PC)と22行目(DESKTOP-2D0R4LI)は同じパソコン』（2026-08-27）。kim が DESKTOP-2D0R4LI を『作業用004民泊用』行から独立行へ移動済み＝作業用004民泊用 は開発機ではないことが確定"
+  },
+  "kimko-PC": {
+    "sheetName": "作業用011",
+    "hostname": "DESKTOP-PPD5V8I",
+    "person": "金功勇",
+    "aliases": ["作業用011(=DESKTOP-PPD5V8I)"],
+    "_evidence": "2026-08-27 20:0x に Discord へ初報告し 🖥 hostname=DESKTOP-PPD5V8I を送ってきた（webhook 復旧の実証）。シート行『作業用011(=DESKTOP-PPD5V8I)』と hostname 一致"
+  },
+  "HP": {
+    "sheetName": "東邦2階HP",
+    "person": "木下真弓",
+    "_evidence": "ラベル名がシートD列『東邦2階HP』と一致。8/17申告と同日にラベル初登場。2026-08-18 を最後に停止（webhook削除と同時期）"
+  }
+}

@@ -1,0 +1,45 @@
+# 配布ツールの回帰テスト。
+# なぜ windows-latest を必須ジョブにするか: メンバーPCはほぼ Windows で、
+# 実際に落ちたバグ(2026-08-19)は Windows 固有だった(テストが実機の %APPDATA%\npm を拾う / PATH 差し替えで wsl.exe が解決できない)。
+# Linux だけで回すと同じ見逃しが再発する。
+# ジョブ id は `test` 固定。main のブランチ保護が必須コンテキスト `test` を要求しているため、
+# 名前を変えると保護が永久に満たされなくなる(matrix にすると `test (windows-latest)` になり不一致)。
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    name: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: selftest-guards (Windows)
+        run: node tools/selftest-guards.mjs
+
+      # 配布する .ps1 の構文/文字コード検査。
+      # shell: powershell = Windows PowerShell 5.1 で走らせる(既定の pwsh=PS7 ではない)。
+      # PS7 は BOM なし UTF-8 を正しく読むため、日本語 .ps1 の BOM 欠落を検出できない。
+      # メンバーPCの既定は 5.1 なので、5.1 で検査しないと実機の事故をすり抜ける。
+      # if: !cancelled() = 前ステップが失敗しても必ず走らせる(silent skip 防止)。
+      - name: .ps1 構文/文字コード検査 (Windows PowerShell 5.1)
+        if: ${{ !cancelled() }}
+        shell: powershell
+        run: .\tools\pscheck.ps1
+
+  test-posix:
+    name: test-posix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: selftest-guards (Linux/macOS 相当)
+        run: node tools/selftest-guards.mjs

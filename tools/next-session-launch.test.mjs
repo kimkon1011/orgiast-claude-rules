@@ -4,6 +4,7 @@ import path from 'node:path';
 import {
   applyTrust,
   buildVscodeUri,
+  hasUnsentVscodeTab,
   launchNextSession,
   parseHandoffCwd,
   pickNewestExtensionBinary,
@@ -118,6 +119,25 @@ test('起動抑止と force の安全境界を判定する', () => {
   assert.equal(shouldLaunch({ state: {}, now, env: { CI: '1' }, force: true }).ok, false);
 });
 
+test('未送信の VSCode タブを transcript の開始時刻から判定する', () => {
+  const now = Date.parse('2026-08-31T12:00:00.000Z');
+  const recentLaunch = '2026-08-31T10:00:00.000Z';
+  const lastLaunch = Date.parse(recentLaunch);
+  assert.equal(hasUnsentVscodeTab({ state: { lastRoute: 'terminal', lastLaunchAt: recentLaunch }, now, latestTranscriptMs: lastLaunch }), false);
+  assert.equal(hasUnsentVscodeTab({ state: { lastRoute: 'vscode', lastLaunchAt: '2026-08-31T05:59:59.999Z' }, now, latestTranscriptMs: lastLaunch }), false);
+  assert.equal(hasUnsentVscodeTab({ state: { lastRoute: 'vscode', lastLaunchAt: recentLaunch }, now, latestTranscriptMs: lastLaunch }), true);
+  assert.equal(hasUnsentVscodeTab({ state: { lastRoute: 'vscode', lastLaunchAt: recentLaunch }, now, latestTranscriptMs: lastLaunch + 1 }), false);
+  assert.equal(hasUnsentVscodeTab({ state: { lastRoute: 'vscode', lastLaunchAt: recentLaunch }, now, latestTranscriptMs: null }), false);
+});
+
+test('未送信タブは通常起動を抑止し、force なら起動する', () => {
+  const args = { state: {}, now: 0, env: {}, pendingTab: true };
+  const blocked = shouldLaunch({ ...args, force: false });
+  assert.equal(blocked.ok, false);
+  assert.match(blocked.reason, /未送信/);
+  assert.deepEqual(shouldLaunch({ ...args, force: true }), { ok: true });
+});
+
 function fakeIo(overrides = {}) {
   const home = '/fake/home';
   const claude = '/fake/claude.exe';
@@ -190,6 +210,10 @@ test('VSCode 経路は既定で URI だけを撃ち、既存ウィンドウを�
   assert.equal(calls.spawn[0][2].windowsHide, true);
   assert.deepEqual(waited, []);
   assert.match(calls.writes[0][1], /"lastRoute": "vscode"/);
+  const successLog = calls.logs.join('\n');
+  assert.match(successLog, /タブバーの一番右端/);
+  assert.match(successLog, /Enter 1回で開始/);
+  assert.match(successLog, /cwd   : C:\\work/);
 });
 
 test('--open-folder のときだけ新規ウィンドウ(-n)を先に開く', async () => {

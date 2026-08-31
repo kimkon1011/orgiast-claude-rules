@@ -4,6 +4,9 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Target,
 
+    [Parameter()]
+    [string]$Shell = 'powershell',
+
     [Parameter(ValueFromRemainingArguments = $true)]
     [object[]]$TargetArguments
 )
@@ -81,11 +84,19 @@ try {
             $repoRoot = [IO.Path]::GetFullPath($repo).TrimEnd('\', '/')
             $selfInRepo = $selfPath.StartsWith($repoRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)
             if (-not $selfInRepo) {
-                $repoHash = (Get-FileHash -LiteralPath $repoBootstrap -Algorithm SHA256).Hash
-                $selfHash = (Get-FileHash -LiteralPath $selfPath -Algorithm SHA256).Hash
-                if ($repoHash -ne $selfHash) {
-                    Copy-Item -LiteralPath $repoBootstrap -Destination $selfPath -Force
-                    Write-NightlyLog '自己更新' 'ok:自己更新(次回から新版)'
+                $installedPath = [IO.Path]::GetFullPath((Join-Path $HOME '.claude\tools\nightly-bootstrap.ps1'))
+                $isInstalledPath = $selfPath.Equals($installedPath, [StringComparison]::OrdinalIgnoreCase)
+                if ($isInstalledPath -and $env:ORGIAST_NIGHTLY_NO_SELF_UPDATE -ne '1') {
+                    $repoHash = (Get-FileHash -LiteralPath $repoBootstrap -Algorithm SHA256).Hash
+                    $selfHash = (Get-FileHash -LiteralPath $selfPath -Algorithm SHA256).Hash
+                    if ($repoHash -ne $selfHash) {
+                        Copy-Item -LiteralPath $repoBootstrap -Destination $selfPath -Force
+                        Write-NightlyLog '自己更新' 'ok:自己更新(次回から新版)'
+                    }
+                } elseif ($isInstalledPath) {
+                    Write-NightlyLog '自己更新' 'skip:自己更新(ORGIAST_NIGHTLY_NO_SELF_UPDATE=1のため)'
+                } else {
+                    Write-NightlyLog '自己更新' 'skip:自己更新(運用の設置先でないため)'
                 }
             }
         }
@@ -106,7 +117,21 @@ try {
 
     $extension = [IO.Path]::GetExtension($targetPath).ToLowerInvariant()
     if ($extension -eq '.ps1') {
-        & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $targetPath @forwardArgs
+        $shellCommand = $null
+        if ([string]::IsNullOrEmpty($Shell) -or $Shell.Equals('powershell', [StringComparison]::OrdinalIgnoreCase)) {
+            $shellCommand = 'powershell.exe'
+        } elseif ($Shell.Equals('pwsh', [StringComparison]::OrdinalIgnoreCase)) {
+            $pwsh = Get-Command pwsh -ErrorAction SilentlyContinue
+            if ($pwsh) {
+                $shellCommand = $pwsh.Source
+            } else {
+                Write-NightlyLog 'シェル確認' 'warn:pwshが見つからないためpowershellで実行'
+                $shellCommand = 'powershell.exe'
+            }
+        } else {
+            Stop-Nightly 'シェル確認' ("error:未知の-Shell " + $Shell) 1
+        }
+        & $shellCommand -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $targetPath @forwardArgs
         $targetExitCode = $LASTEXITCODE
     } elseif ($extension -eq '.mjs' -or $extension -eq '.js') {
         $node = Get-Command node -ErrorAction SilentlyContinue

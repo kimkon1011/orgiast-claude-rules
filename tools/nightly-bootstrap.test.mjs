@@ -24,20 +24,22 @@ function fixture(name) {
   return { dir, home, repo };
 }
 
-function runBootstrap(fix, target, args = [], extraEnv = {}) {
+function runBootstrap(fix, target, args = [], extraEnv = {}, shell, bootstrap = script) {
   const windowsPowerShellDir = String.raw`C:\Windows\System32\WindowsPowerShell\v1.0`;
   const launcher = join(fix.dir, 'invoke-bootstrap.ps1');
   const psQuote = (value) => `'${String(value).replaceAll("'", "''")}'`;
-  const bootstrapPath = toWindowsPath(script);
+  const bootstrapPath = toWindowsPath(bootstrap);
   const targetPath = toWindowsPath(target);
   const extraEnvLines = Object.entries(extraEnv).map(([name, value]) =>
     `$env:${name} = ${psQuote(value)}`);
+  const shellArgument = shell === undefined ? '' : ` -Shell ${psQuote(shell)}`;
   writeFileSync(launcher, [
     `Set-Variable -Name HOME -Value ${psQuote(toWindowsPath(fix.home))} -Force`,
     `$env:ORGIAST_NIGHTLY_REPO = ${psQuote(toWindowsPath(fix.repo))}`,
     `$env:PATH = ${psQuote(windowsPowerShellDir)}`,
+    "$env:ORGIAST_NIGHTLY_NO_SELF_UPDATE = '1'",
     ...extraEnvLines,
-    `& ${psQuote(bootstrapPath)} -Target ${psQuote(targetPath)} -TargetArguments $args`,
+    `& ${psQuote(bootstrapPath)} -Target ${psQuote(targetPath)}${shellArgument} -TargetArguments $args`,
     'exit $LASTEXITCODE',
     '',
   ].join('\r\n'), 'utf8');
@@ -68,8 +70,37 @@ const hasPowerShell = (() => {
   return !probe.error && probe.status === 0;
 })();
 
+const windowsPwshDir = String.raw`C:\Program Files\PowerShell\7`;
+const hasPwsh = hasPowerShell && (() => {
+  const probe = spawnSync(powershell, [
+    '-NoProfile', '-Command',
+    `if (Test-Path -LiteralPath '${windowsPwshDir}\\pwsh.exe') { exit 0 } else { exit 1 }`,
+  ]);
+  return !probe.error && probe.status === 0;
+})();
+
 before(() => {
   root = mkdtempSync(join(dirname(script), '.nightly-bootstrap-test-'));
+});
+
+test('does not self-update a copy outside the operational install path', { skip: !hasPowerShell }, () => {
+  const fix = fixture('self-update-guard');
+  const copy = join(fix.dir, 'arbitrary', 'nightly-bootstrap.ps1');
+  const repoBootstrap = join(fix.repo, 'tools', 'nightly-bootstrap.ps1');
+  const target = join(fix.dir, 'target.ps1');
+  mkdirSync(dirname(copy), { recursive: true });
+  mkdirSync(dirname(repoBootstrap), { recursive: true });
+  writeFileSync(copy, readFileSync(script));
+  writeFileSync(repoBootstrap, 'different repository version\r\n', 'utf8');
+  writeFileSync(target, 'exit 0\r\n', 'utf8');
+  const beforeBytes = readFileSync(copy);
+
+  const result = runBootstrap(fix, target, [], {
+    ORGIAST_NIGHTLY_NO_SELF_UPDATE: '0',
+  }, undefined, copy);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(readFileSync(copy), beforeBytes, 'non-operational copy was modified');
+  assert.match(logText(fix), /skip:自己更新\(運用の設置先でないため\)/);
 });
 
 after(() => {
@@ -126,4 +157,53 @@ test('forwards all target arguments and discards leading separator', { skip: !ha
   });
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(readFileSync(output, 'utf8').trim().split(/\r?\n/), ['alpha', '日本語', '--flag']);
+});
+
+test('-Shell pwsh runs a PowerShell target in Core', { skip: !hasPwsh }, () => {
+  const fix = fixture('shell-pwsh');
+  const target = join(fix.dir, 'edition.ps1');
+  const output = join(fix.dir, 'edition.txt');
+  writeFileSync(target, '[IO.File]::WriteAllText($env:CAPTURE_PATH, $PSVersionTable.PSEdition)\r\n', 'utf8');
+  const result = runBootstrap(fix, target, [], {
+    CAPTURE_PATH: toWindowsPath(output),
+    PATH: `${windowsPwshDir};C:\\Windows\\System32\\WindowsPowerShell\\v1.0`,
+  }, 'pwsh');
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(readFileSync(output, 'utf8'), 'Core');
+});
+
+test('omitting -Shell runs a PowerShell target in Desktop', { skip: !hasPowerShell }, () => {
+  const fix = fixture('shell-default');
+  const target = join(fix.dir, 'edition.ps1');
+  const output = join(fix.dir, 'edition.txt');
+  writeFileSync(target, '[IO.File]::WriteAllText($env:CAPTURE_PATH, $PSVersionTable.PSEdition)\r\n', 'utf8');
+  const result = runBootstrap(fix, target, [], { CAPTURE_PATH: toWindowsPath(output) });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(readFileSync(output, 'utf8'), 'Desktop');
+});
+
+test('-Shell bogus exits 1 and logs the unknown value', { skip: !hasPowerShell }, () => {
+  const fix = fixture('shell-bogus');
+  const target = join(fix.dir, 'target.ps1');
+  writeFileSync(target, 'exit 0\r\n', 'utf8');
+  const result = runBootstrap(fix, target, [], {}, 'bogus');
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(logText(fix), /未知の-Shell bogus/);
+});
+
+test('-Shell is not forwarded to the PowerShell target', { skip: !hasPwsh }, () => {
+  const fix = fixture('shell-not-forwarded');
+  const target = join(fix.dir, 'capture.ps1');
+  const output = join(fix.dir, 'arguments.txt');
+  writeFileSync(target, [
+    'param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Values)',
+    '[IO.File]::WriteAllLines($env:CAPTURE_PATH, $Values, (New-Object Text.UTF8Encoding($false)))',
+    '',
+  ].join('\r\n'), 'utf8');
+  const result = runBootstrap(fix, target, ['alpha'], {
+    CAPTURE_PATH: toWindowsPath(output),
+    PATH: `${windowsPwshDir};C:\\Windows\\System32\\WindowsPowerShell\\v1.0`,
+  }, 'pwsh');
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(readFileSync(output, 'utf8').trim().split(/\r?\n/), ['alpha']);
 });

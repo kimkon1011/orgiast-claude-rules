@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 
 const QUESTIONS = [
   { group: 'A', q: 'ESM のツールで自ファイルの場所を基準に相対パスを組むとき、Windows で踏む罠は何？', kw: ['fileURLToPath', 'C:\\C:', 'pathname'] },
@@ -261,6 +261,6 @@ export async function main(argv = process.argv.slice(2)) {
   }
 }
 
-if (path.resolve(process.argv[1] || '') === fileURLToPath(import.meta.url)) {
+if (isEntry(import.meta.url)) {
   try { await main(); } catch (error) { console.error(error.message); process.exitCode = 1; }
 }

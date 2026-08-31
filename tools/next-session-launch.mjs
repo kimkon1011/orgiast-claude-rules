@@ -200,7 +200,16 @@ export function planLaunch({ claudeBin, cwd, prompt, wt }) {
   };
 }
 
-export function shouldLaunch({ state, now, env, force }) {
+export function hasUnsentVscodeTab({ state, now, latestTranscriptMs, windowMs = 6 * 60 * 60 * 1000 }) {
+  if (state.lastRoute !== 'vscode') return false;
+  const lastLaunch = Date.parse(state.lastLaunchAt);
+  if (Number.isNaN(lastLaunch)) return false;
+  if (now - lastLaunch >= windowMs) return false;
+  if (typeof latestTranscriptMs !== 'number' || Number.isNaN(latestTranscriptMs)) return false;
+  return latestTranscriptMs <= lastLaunch;
+}
+
+export function shouldLaunch({ state, now, env, force, pendingTab }) {
   if (state.enabled === false) {
     return { ok: false, reason: '設定で無効化されています (~/.claude/next-session-launch.json の enabled:false)' };
   }
@@ -213,6 +222,9 @@ export function shouldLaunch({ state, now, env, force }) {
   const lastLaunch = Date.parse(state.lastLaunchAt);
   if (!force && !Number.isNaN(lastLaunch) && now - lastLaunch < 120_000) {
     return { ok: false, reason: '120秒以内に起動済みなので二重起動を防ぎます' };
+  }
+  if (!force && pendingTab === true) {
+    return { ok: false, reason: '前回開いた VSCode タブがまだ未送信です。タブバー右端のタブ（タブ名 Claude Code）で Enter を押すと始まります。新しく開き直すには --force-launch' };
   }
   return { ok: true };
 }
@@ -238,6 +250,7 @@ export async function launchNextSession(argv = [], io = {}) {
   const home = typeof getHomedir === 'function' ? getHomedir() : getHomedir;
   const exists = io.exists ?? fs.existsSync;
   const readdir = io.readdir ?? fs.readdirSync;
+  const stat = io.stat ?? fs.statSync;
   const readFile = io.readFile ?? fs.promises.readFile;
   const writeFile = io.writeFile ?? fs.promises.writeFile;
   const rename = io.rename ?? fs.promises.rename;
@@ -260,7 +273,22 @@ export async function launchNextSession(argv = [], io = {}) {
     };
 
     const state = await readJson(statePath, { enabled: true });
-    const decision = shouldLaunch({ state, now: Date.now(), env, force: flags.force });
+    const now = typeof io.now === 'function' ? io.now() : (io.now ?? Date.now());
+    let latestTranscriptMs = null;
+    if (state.lastCwd) {
+      try {
+        // auto-session.mjs の cwdSlug と同じ規則。前回開いた cwd の transcript bucket を見る。
+        const slug = String(state.lastCwd ?? '').replace(/[^A-Za-z0-9]/g, '-');
+        const transcriptDir = path.join(claudeDir, 'projects', slug);
+        const birthtimes = readdir(transcriptDir)
+          .filter((name) => String(name).endsWith('.jsonl'))
+          .map((name) => stat(path.join(transcriptDir, name)).birthtimeMs)
+          .filter((value) => typeof value === 'number' && Number.isFinite(value));
+        if (birthtimes.length > 0) latestTranscriptMs = Math.max(...birthtimes);
+      } catch { /* transcript を判定できない時は fail-open で起動する */ }
+    }
+    const pendingTab = hasUnsentVscodeTab({ state, now, latestTranscriptMs });
+    const decision = shouldLaunch({ state, now, env, force: flags.force, pendingTab });
     if (!decision.ok) {
       log(`[next-session] スキップ: ${decision.reason}`);
       return 0;
@@ -309,7 +337,7 @@ export async function launchNextSession(argv = [], io = {}) {
       await writeFile(tmpPath, `${JSON.stringify(nextState, null, 2)}\n`, 'utf8');
       await rename(tmpPath, statePath);
       // 拡張の URI は prompt を送信しない(入力欄に置くだけ)。「開いた=始まった」と書くと嘘の成功報告になる。
-      log(`[next-session] VSCode に新しいタブを開きました(prompt は送信されません。セッションは入力欄で送信すると始まります): ${cwd} / prompt=${flags.prompt}`);
+      log(`[next-session] VSCode に新しいタブを1枚開きました\n  場所  : タブバーの一番右端\n  タブ名: Claude Code（送信するまでこの名前のままです）\n  入力欄: ${flags.prompt} が入っています → Enter 1回で開始\n  cwd   : ${cwd}`);
       return 0;
     }
 

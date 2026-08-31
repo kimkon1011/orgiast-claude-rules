@@ -6,6 +6,7 @@ import { clipMessageBody, PER_MESSAGE_CHARS } from './discord-digest.mjs';
 import { intake } from './discord-inbox-intake.mjs';
 import { isEntry } from './is-entry.mjs';
 import { listDecisions, markDecisions } from './pending-decisions.mjs';
+import { notifyKim } from './notify-kim.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 
 const USER_AGENT = 'DiscordBot (https://orgiast.jp, 1.0) orgiast-morning-batch';
@@ -19,7 +20,15 @@ function datePart(value) {
   return `${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
 }
 export function formatMorning(decisions) {
-  return [`☀️ 朝バッチ: 夜間〜昨日中に ${decisions.length} 件たまっています`, ...decisions.map((item, index) => `${index + 1}. [${datePart(item.capturedAt)}] ${item.author || '不明'}: ${clipMessageBody(item.text, PER_MESSAGE_CHARS)}`), '→ 個別に返信不要。着手してほしいものだけ後でまとめて指示してください。'].join('\n');
+  const lines = decisions.flatMap((item, index) => {
+    const attachments = Array.isArray(item.attachments) ? item.attachments : [];
+    const suffix = attachments.length ? ` 📎${attachments.length}` : '';
+    const detail = attachments.map((attachment) => attachment.path
+      ? `   📎 ${attachment.path}`
+      : `   📎 (取得失敗: ${attachment.filename || 'file'})`);
+    return [`${index + 1}. [${datePart(item.capturedAt)}] ${item.author || '不明'}: ${clipMessageBody(item.text, PER_MESSAGE_CHARS)}${suffix}`, ...detail];
+  });
+  return [`☀️ 朝バッチ: 夜間〜昨日中に ${decisions.length} 件たまっています`, ...lines, '→ 個別に返信不要。着手してほしいものだけ後でまとめて指示してください。'].join('\n');
 }
 export async function postWebhook(url, content, { fetchImpl = fetch, sleepImpl = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), username = 'orgiast inbox' } = {}) {
   const request = () => fetchImpl(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'User-Agent': USER_AGENT }, body: JSON.stringify({ username, content }) });
@@ -50,10 +59,10 @@ function appendNextSession(home, decisions, date) {
   fs.renameSync(tmp, file);
 }
 
-export async function runMorning({ home = userHome(), now = new Date(), dryRun = false, intakeImpl = intake, fetchMessagesImpl, fetchImpl = fetch, sleepImpl, channelId, token, webhookUrl } = {}) {
+export async function runMorning({ home = userHome(), now = new Date(), dryRun = false, intakeImpl = intake, fetchMessagesImpl, fetchImpl = fetch, sleepImpl, channelId, token, webhookUrl, notifyKimImpl = notifyKim } = {}) {
   const resolvedToken = token || process.env.DISCORD_BOT_TOKEN?.trim() || readTrimmed(path.join(home, '.claude', 'orgiast-discord-bot-token.txt'));
   if (!resolvedToken && intakeImpl === intake) throw new Error('Discord Bot トークンが見つかりません');
-  const intakeResult = await intakeImpl({ home, now, dryRun, fetchMessagesImpl, channelId, token: resolvedToken });
+  const intakeResult = await intakeImpl({ home, now, dryRun, fetchMessagesImpl, fetchImpl, channelId, token: resolvedToken });
   const pending = dryRun ? [...listDecisions({ home, status: 'pending' }), ...(intakeResult.decisions || [])] : listDecisions({ home, status: 'pending' });
   if (!pending.length) return { message: '朝バッチ: 取り込み対象なし', count: 0, sent: false };
   const message = formatMorning(pending);
@@ -61,8 +70,11 @@ export async function runMorning({ home = userHome(), now = new Date(), dryRun =
   let warning = null;
   const resolvedWebhook = webhookUrl || process.env.ORGIAST_INBOX_WEBHOOK?.trim() || readTrimmed(path.join(home, '.claude', 'orgiast-discord-webhook.txt'));
   try {
-    if (!resolvedWebhook) throw new Error('Discord Webhook URLが見つかりません');
-    await postWebhook(resolvedWebhook, message, { fetchImpl, sleepImpl });
+    const delivery = await notifyKimImpl(message, { home, token: resolvedToken, fetchImpl });
+    if (delivery?.delivered === 'none') {
+      if (!resolvedWebhook) throw new Error('Discord Webhook URLが見つかりません');
+      await postWebhook(resolvedWebhook, message, { fetchImpl, sleepImpl });
+    }
   } catch (error) { warning = redactSecrets(error?.message ?? error); }
   const date = localDate(now);
   appendNextSession(home, pending, date);

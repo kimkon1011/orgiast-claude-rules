@@ -3,10 +3,71 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { checkSubmissions, ensureKey, findSimilarPending, notifyStale, pickTrustedKey, reconcileSubmissions } from './makimono-publish.mjs';
+import { checkSubmissions, drainQueue, ensureKey, findSimilarPending, notifyStale, pickTrustedKey, queueSubmission, reconcileSubmissions } from './makimono-publish.mjs';
 
 const NOW = new Date('2026-08-27T12:00:00.000Z');
 const pending = (overrides = {}) => ({ at: '2026-08-26T12:00:00.000Z', title: 'ＡＢＣ　手順', submissionId: 'sub_dummy', status: 'pending', ...overrides });
+const validBody = '外部公開できる一般的な手順です。'.repeat(20);
+const validQueue = { title: '安全な夜間処理の手順', summary: '安全な夜間処理を構成して確実に運用するための一般的な説明です。', category: '開発', body: validBody };
+function queueHome(logs = []) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'makimono-queue-'));
+  fs.mkdirSync(path.join(root, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.claude', 'makimono.env'), 'MAKIMONO_EMAIL=test@example.com\nMAKIMONO_KEY=mk_test_key_123456789\n');
+  fs.writeFileSync(path.join(root, '.claude', 'makimono-submissions.json'), `${JSON.stringify(logs)}\n`);
+  return root;
+}
+const categoryFetch = async () => response(200, { categories: [{ name: '開発' }] });
+
+test('queue はJSONとMDを作りPOSTしない', async () => {
+  const home = queueHome(); let posts = 0;
+  const result = await queueSubmission({ home, ...validQueue, fetchImpl: async (url, options = {}) => { if (options.method === 'POST') posts++; return categoryFetch(); } });
+  const files = fs.readdirSync(path.join(home, '.claude', 'makimono-queue'));
+  assert.equal(result.ok, true); assert.equal(posts, 0); assert.equal(files.filter((x) => x.endsWith('.json')).length, 1); assert.equal(files.filter((x) => x.endsWith('.md')).length, 1);
+});
+
+test('queue は禁止本文を下書きへ退避して投入しない', async () => {
+  const home = queueHome(); const result = await queueSubmission({ home, ...validQueue, body: `${validBody}\nkim@orgiast.jp`, fetchImpl: categoryFetch });
+  assert.equal(result.ok, false); assert.equal(result.reason, 'forbidden'); assert.equal(fs.existsSync(path.join(home, '.claude', 'makimono-queue')), false); assert.equal(fs.readdirSync(path.join(home, '.claude', 'makimono-drafts')).length, 1);
+});
+
+test('queue の近似は未確認なら止まり force ならIDを記録する', async () => {
+  const log = pending({ title: validQueue.title, summary: validQueue.summary, submissionId: 'sub_similar' });
+  const stoppedHome = queueHome([log]); const stopped = await queueSubmission({ home: stoppedHome, ...validQueue, fetchImpl: categoryFetch });
+  assert.equal(stopped.reason, 'similar'); assert.equal(fs.existsSync(path.join(stoppedHome, '.claude', 'makimono-queue')), false);
+  const home = queueHome([log]); const queued = await queueSubmission({ home, ...validQueue, force: true, fetchImpl: categoryFetch });
+  assert.deepEqual(queued.acknowledgedSimilar, ['sub_similar']);
+  const metadata = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'makimono-queue', queued.queued), 'utf8'));
+  assert.deepEqual(metadata.acknowledgedSimilar, ['sub_similar']);
+});
+
+test('queue は同一sha256を二重投入しない', async () => {
+  const home = queueHome(); await queueSubmission({ home, ...validQueue, fetchImpl: categoryFetch });
+  const again = await queueSubmission({ home, ...validQueue, fetchImpl: categoryFetch });
+  assert.equal(again.duplicate, 'queued'); assert.equal(fs.readdirSync(path.join(home, '.claude', 'makimono-queue')).filter((x) => x.endsWith('.json')).length, 1);
+});
+
+test('drain はPOST・ログ追記・キュー削除を行う', async () => {
+  const home = queueHome(); await queueSubmission({ home, ...validQueue, fetchImpl: categoryFetch }); let posts = 0;
+  const result = await drainQueue({ home, check: false, fetchImpl: async (url, options = {}) => { if (url.endsWith('/listings') && options.method === 'POST') { posts++; return response(200, { submissionId: 'sub_sent', status: 'pending' }); } throw new Error(`unexpected ${url}`); } });
+  assert.deepEqual(result, { sent: 1, held: 0, remaining: 0 }); assert.equal(posts, 1); assert.equal(JSON.parse(fs.readFileSync(path.join(home, '.claude', 'makimono-submissions.json')))[0].submissionId, 'sub_sent'); assert.deepEqual(fs.readdirSync(path.join(home, '.claude', 'makimono-queue')), []);
+});
+
+test('drain は投入後の未確認近似を保留する', async () => {
+  const home = queueHome(); const queued = await queueSubmission({ home, ...validQueue, fetchImpl: categoryFetch });
+  fs.writeFileSync(path.join(home, '.claude', 'makimono-submissions.json'), JSON.stringify([pending({ title: validQueue.title, summary: validQueue.summary, submissionId: 'sub_new' })])); let posts = 0;
+  const result = await drainQueue({ home, check: false, fetchImpl: async () => { posts++; return response(200, {}); } });
+  assert.deepEqual(result, { sent: 0, held: 1, remaining: 1 }); assert.equal(posts, 0); assert.equal(fs.existsSync(path.join(home, '.claude', 'makimono-queue', queued.queued)), true);
+});
+
+test('drain はPOST失敗を残して再試行可能にする', async () => {
+  const home = queueHome(); await queueSubmission({ home, ...validQueue, fetchImpl: categoryFetch });
+  const result = await drainQueue({ home, check: false, fetchImpl: async () => response(500, { error: 'temporary' }) });
+  assert.deepEqual(result, { sent: 0, held: 1, remaining: 1 });
+});
+
+test('drain は空キューを正常終了する', async () => {
+  assert.deepEqual(await drainQueue({ home: queueHome(), check: false, fetchImpl: async () => { throw new Error('network must not be called'); } }), { sent: 0, held: 0, remaining: 0 });
+});
 
 test('審査待ちの実例に近い題名を検出する', () => {
   const logs = [{ title: 'MCPサーバが「接続済み」なのにツールが動かない時の切り分け', status: 'pending', submissionId: 'sub_0492e723', at: '2026-08-30T09:59:00.000Z' }];

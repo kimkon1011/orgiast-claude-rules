@@ -118,6 +118,90 @@ export function reconcileSubmissions(logs, listings, now, staleDays) {
 function readSubmissionLogs(home = currentHome()) {
   try { const logs = JSON.parse(fs.readFileSync(homeFile('makimono-submissions.json', home), 'utf8')); return Array.isArray(logs) ? logs : []; } catch { return []; }
 }
+function bodyHash(body) { return crypto.createHash('sha256').update(body).digest('hex').slice(0, 16); }
+function queueDir(home = currentHome()) { return homeFile('makimono-queue', home); }
+function saveForbiddenDraft({ home, title, body, findings, now = new Date() }) {
+  const draft = path.join(home, '.claude', 'makimono-drafts', `${new Date(now).toISOString().slice(0, 10)}-${slugify(title)}.md`);
+  fs.mkdirSync(path.dirname(draft), { recursive: true }); fs.writeFileSync(draft, body);
+  showFindings(findings); console.error(`送信せず下書きへ退避: ${draft}\n一般名に置換してから出品してください`);
+  return draft;
+}
+function showSimilar(similarPending) {
+  console.error('審査待ちに近い題名があります（取り下げ経路は無いので出す前に確認してください）');
+  similarPending.forEach((entry) => console.error(`- ${entry.title} (${entry.submissionId} / 出品 ${String(entry.at ?? '').slice(0, 10)} / 類似度 ${entry.score})`));
+}
+function queuedMetadata(home) {
+  const dir = queueDir(home); if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir).filter((name) => name.endsWith('.json')).flatMap((name) => {
+    try { return [{ name, data: JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')) }]; } catch { return []; }
+  });
+}
+export async function queueSubmission({ home = currentHome(), fetchImpl = fetch, body, inputFile, title = '', summary = '', category = '', scratchTokens = 0, withMdTokens = 0, price = 0, allowed = [], force = false, dry = false, now = new Date() } = {}) {
+  body = body ?? fs.readFileSync(inputFile, 'utf8');
+  const findings = scanForbidden(body, allowed);
+  if (findings.length) { saveForbiddenDraft({ home, title, body, findings, now }); return { ok: false, reason: 'forbidden', findings }; }
+  const reasons = []; if (title.length < 5) reasons.push('title は5文字以上'); if (summary.length < 20) reasons.push('summary は20文字以上'); if (body.length < 200) reasons.push('body は200文字以上');
+  const categoriesResponse = await fetchImpl(`${BASE}/api/v1/categories`, { signal: AbortSignal.timeout(8000) });
+  if (!categoriesResponse.ok) throw new Error(`カテゴリ取得 HTTP ${categoriesResponse.status}`);
+  const categories = (await categoriesResponse.json()).categories?.map((x) => x.name) || [];
+  if (!categories.includes(category)) reasons.push(`category は既存カテゴリから選択: ${categories.join(' / ')}`);
+  if (reasons.length) { reasons.forEach((x) => console.error(x)); return { ok: false, reason: 'validation', reasons }; }
+  if (Number(price) !== 0) { console.error('price は常に 0（無料）です'); return { ok: false, reason: 'price' }; }
+  const logs = readSubmissionLogs(home); const sha256 = bodyHash(body);
+  const similarPending = findSimilarPending(logs, { title, summary });
+  if (similarPending.length) {
+    showSimilar(similarPending);
+    if (!force) { console.error('同主題なら出品せず既存に寄せる。別主題だと確認できたら `--force` を付けて再実行してください'); return { ok: false, reason: 'similar', similarPending }; }
+  }
+  const acknowledgedSimilar = similarPending.map((entry) => entry.submissionId).filter(Boolean);
+  const at = new Date(now).toISOString();
+  const metadata = { at, title, summary, category, scratchTokens: Number(scratchTokens || 0), withMdTokens: Number(withMdTokens || 0), price: 0, sha256, bodyFile: '', acknowledgedSimilar };
+  const basename = `${at.replace(/[:.]/g, '-')}-${slugify(title)}`; metadata.bodyFile = `${basename}.md`;
+  if (dry) { console.log(JSON.stringify({ ...metadata, body: `${body.slice(0, 200)}… (${body.length}文字)` }, null, 2)); return { ok: true, dry: true, metadata }; }
+  if (logs.some((x) => x.sha256 === sha256)) { console.log('同一内容を出品済み'); return { ok: true, duplicate: 'submitted' }; }
+  if (queuedMetadata(home).some(({ data }) => data.sha256 === sha256)) { console.log('同一内容がキュー済み'); return { ok: true, duplicate: 'queued' }; }
+  const dir = queueDir(home); fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, metadata.bodyFile), body);
+  const jsonName = `${basename}.json`; fs.writeFileSync(path.join(dir, jsonName), `${JSON.stringify(metadata, null, 2)}\n`);
+  const result = { queued: jsonName, acknowledgedSimilar }; console.log(JSON.stringify(result)); return { ok: true, ...result };
+}
+async function notifyHeld(held, { home, fetchImpl, webhookUrl }) {
+  if (!held.length) return;
+  const webhook = webhookUrl || readEnvValue(homeFile('cost-reporter.env', home), 'DISCORD_COST_WEBHOOK');
+  if (!webhook) { console.error('DISCORD_COST_WEBHOOK が未設定のため通知しません'); return; }
+  const content = `📜 マキモノ: キュー保留 ${held.length}件\n${held.map((item) => `- ${item.title || '(無題)'} / ${item.reason} / ${item.file}`).join('\n')}`.slice(0, 1900);
+  const response = await fetchImpl(webhook, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ content }), signal: AbortSignal.timeout(15_000) });
+  if (!response.ok) throw new Error(`Discord通知 HTTP ${response.status}`);
+}
+export async function drainQueue({ home = currentHome(), fetchImpl = fetch, notify = false, webhookUrl, check = true } = {}) {
+  const dir = queueDir(home); const held = []; let sent = 0;
+  const entries = queuedMetadata(home).sort((a, b) => String(a.data?.at || '').localeCompare(String(b.data?.at || '')));
+  if (fs.existsSync(dir)) for (const name of fs.readdirSync(dir).filter((item) => item.endsWith('.json'))) if (!entries.some((entry) => entry.name === name)) console.error(`warn: 壊れたキューJSONを飛ばします: ${name}`);
+  for (const { name, data } of entries) {
+    const bodyPath = path.join(dir, path.basename(String(data.bodyFile || ''))); let body;
+    try { body = fs.readFileSync(bodyPath, 'utf8'); } catch { console.error(`warn: 本文を読めません: ${name}`); held.push({ title: data.title, reason: '本文を読めない', file: name }); continue; }
+    const findings = scanForbidden(body);
+    if (findings.length) { console.error(`warn: 送信禁止パターンを検出: ${name}`); held.push({ title: data.title, reason: '送信禁止パターン', file: name }); continue; }
+    let logs = readSubmissionLogs(home); const sha256 = bodyHash(body);
+    if (logs.some((entry) => entry.sha256 === sha256)) { fs.unlinkSync(path.join(dir, name)); fs.unlinkSync(bodyPath); continue; }
+    const acknowledged = new Set(Array.isArray(data.acknowledgedSimilar) ? data.acknowledgedSimilar : []);
+    const unseen = findSimilarPending(logs, data).filter((entry) => !acknowledged.has(entry.submissionId));
+    if (unseen.length) { held.push({ title: data.title, reason: `未確認の近似 ${unseen.map((x) => x.submissionId).join(',')}`, file: name }); continue; }
+    try {
+      const auth = await ensureKey({ home, fetchImpl });
+      const payload = { title: data.title, summary: data.summary, category: data.category, body, scratchTokens: Number(data.scratchTokens || 0), withMdTokens: Number(data.withMdTokens || 0), price: 0 };
+      const response = await fetchImpl(`${BASE}/api/v1/listings`, { method: 'POST', headers: { authorization: `Bearer ${auth.key}`, 'content-type': 'application/json' }, body: JSON.stringify(payload), signal: AbortSignal.timeout(8000) });
+      const result = await response.json(); if (!response.ok) throw new Error(`出品 HTTP ${response.status}: ${result.error || '失敗'}`);
+      logs.push({ at: new Date().toISOString(), title: data.title, summary: data.summary, category: data.category, submissionId: result.submissionId, status: result.status, email: auth.email, sha256 });
+      const logFile = homeFile('makimono-submissions.json', home); fs.mkdirSync(path.dirname(logFile), { recursive: true }); fs.writeFileSync(logFile, `${JSON.stringify(logs, null, 2)}\n`);
+      fs.unlinkSync(path.join(dir, name)); fs.unlinkSync(bodyPath); sent++;
+    } catch (error) { const reason = String(error?.message || error).split(/\r?\n/, 1)[0]; console.error(`warn: ${name}: ${reason}`); held.push({ title: data.title, reason, file: name }); }
+  }
+  if (sent && check) await safeCheck([], { compact: true, home, fetchImpl });
+  if (notify && held.length) try { await notifyHeld(held, { home, fetchImpl, webhookUrl }); } catch (error) { console.error(`warn: 保留通知失敗: ${error.message}`); }
+  const remaining = fs.existsSync(dir) ? fs.readdirSync(dir).filter((name) => name.endsWith('.json')).length : 0;
+  const summary = { sent, held: held.length, remaining }; console.log(JSON.stringify(summary)); return summary;
+}
 function listingsFromSearch(data) { return Array.isArray(data) ? data : data?.listings || data?.files || data?.results || []; }
 function formatCheckSummary(result) { return `公開済み ${result.published}件 / 審査待ち ${result.pending}件 / 却下 ${result.rejected}件`; }
 export async function notifyStale(result, staleDays, { forceNotify = false, now = new Date(), fetchImpl = fetch, stateFile = path.join(process.env.ORGIAST_HOME || os.homedir(), '.claude', 'makimono-notify-state.json'), webhookUrl } = {}) {
@@ -194,12 +278,17 @@ async function safeCheck(args, options) {
 }
 async function main() {
   const args = process.argv.slice(2);
+  if (args.includes('--drain-queue')) { await drainQueue({ notify: args.includes('--notify') }); return; }
   if (args.includes('--check')) { await safeCheck(args); return; }
   if (args.includes('--ensure-key')) { console.log((await ensureKey()).key); return; }
   if (args.includes('--list')) { let logs = []; try { logs = JSON.parse(fs.readFileSync(homeFile('makimono-submissions.json'), 'utf8')); } catch {} console.log(JSON.stringify(logs, null, 2)); return; }
   const inputFile = val(args, '--file'); if (!inputFile) throw new Error('--file が必要です'); const body = fs.readFileSync(inputFile, 'utf8'); const findings = scanForbidden(body, allows(args));
   if (args.includes('--scan')) { if (findings.length) { showFindings(findings); process.exitCode = 2; } else console.log('送信禁止パターン: 0件'); return; }
-  if (!args.includes('--submit')) throw new Error('--submit、--scan、--ensure-key、--list のいずれかが必要です');
+  if (args.includes('--queue')) {
+    const result = await queueSubmission({ body, title: val(args, '--title') || '', summary: val(args, '--summary') || '', category: val(args, '--category') || '', scratchTokens: val(args, '--scratch-tokens'), withMdTokens: val(args, '--with-md-tokens'), price: val(args, '--price') ?? 0, allowed: allows(args), force: args.includes('--force'), dry: args.includes('--dry') });
+    if (!result.ok) process.exitCode = 2; return;
+  }
+  if (!args.includes('--submit')) throw new Error('--submit、--queue、--drain-queue、--scan、--ensure-key、--list のいずれかが必要です');
   const title = val(args, '--title') || '', summary = val(args, '--summary') || '', category = val(args, '--category') || '';
   if (findings.length) { const draft = path.join(currentHome(), '.claude', 'makimono-drafts', `${new Date().toISOString().slice(0, 10)}-${slugify(title)}.md`); fs.mkdirSync(path.dirname(draft), { recursive: true }); fs.writeFileSync(draft, body); showFindings(findings); console.error(`送信せず下書きへ退避: ${draft}\n一般名に置換してから出品してください`); process.exitCode = 2; return; }
   const reasons = []; if (title.length < 5) reasons.push('title は5文字以上'); if (summary.length < 20) reasons.push('summary は20文字以上'); if (body.length < 200) reasons.push('body は200文字以上');

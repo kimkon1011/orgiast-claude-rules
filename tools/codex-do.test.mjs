@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
+const { needsWorktreeRepair } = await import('./codex-do.mjs');
 
 function run(args, options = {}) {
   return spawnSync(process.execPath, [tool, ...args], {
@@ -69,4 +70,9 @@ test('指示が空なら使い方を出して終了する', () => {
   const result = run(['--dry-run']);
   assert.equal(result.status, 2);
   assert.match(result.stderr, /使い方/);
+});
+
+test('Windows 絶対パスの gitdir だけ worktree repair 対象にする', () => {
+  assert.equal(needsWorktreeRepair('gitdir: C:/Users/example/repo/.git/worktrees/linked\n'), true);
+  assert.equal(needsWorktreeRepair('gitdir: ../../../.git/worktrees/linked\n'), false);
 });

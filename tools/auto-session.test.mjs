@@ -6,7 +6,7 @@ import path from 'node:path';
 
 const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-session-test-'));
 process.env.ORGIAST_HOME = isolatedHome;
-const { DEFAULT_REPO, localDate, loadConfig, detectHistoryCwd, parseHandoff, todoExclusionReason, todoExclusionReasons, dedupeKey, dedupeTodos, filterTodos, pickCwd, buildChildArgs, buildPrompt, buildFeedbackPrompt, feedbackIssueExclusionReason, filterFeedbackIssues, feedbackNotifyUrl, normalizeGitHubRepo, feedbackRepoCwd, resolveClaudeExe, decideRun, markTodoDone, writeTodoDone, extractSessionId, transcriptPath, recoverSessionId, appendClosedSession, formatResultLine, parseArgs, deadlineDecision, runChild } = await import('./auto-session.mjs');
+const { DEFAULT_REPO, localDate, loadConfig, detectHistoryCwd, parseHandoff, todoExclusionReason, todoExclusionReasons, dedupeKey, dedupeTodos, filterTodos, pickCwd, buildChildArgs, buildPrompt, buildFeedbackPrompt, feedbackFailureBody, feedbackIssueExclusionReason, feedbackIssuesToUnmark, filterFeedbackIssues, feedbackNotifyUrl, normalizeGitHubRepo, feedbackRepoCwd, resolveClaudeExe, decideRun, markTodoDone, writeTodoDone, extractSessionId, transcriptPath, recoverSessionId, appendClosedSession, formatResultLine, parseArgs, deadlineDecision, runChild } = await import('./auto-session.mjs');
 const historyCwd = String.raw`c:\Users\example\Downloads\work`;
 test.after(() => fs.rmSync(isolatedHome, { recursive: true, force: true }));
 
@@ -107,6 +107,18 @@ test('フォーム報告用プロンプトは TODO 用と分離し、PR をマ�
   assert.ok(prompt.includes('Closes #42'));
   assert.ok(prompt.includes('推測で実装しない'));
   assert.ok(prompt.includes('PRタイトル: <タイトル>'));
+  assert.ok(prompt.includes('run_in_background'));
+  assert.ok(prompt.includes('ScheduleWakeup'));
+});
+
+test('失敗通知本文は Issue・結果・summary・再開手段を含む', () => {
+  const sessionId = '123e4567-e89b-42d3-a456-426614174000';
+  const body = feedbackFailureBody([{ issue: { repo: 'acme/app', number: 42, title: '保存できない', url: 'https://github.com/acme/app/issues/42' }, status: 'timeout', exitCode: null, summaryFile: '/tmp/42.summary.md', stdout: JSON.stringify({ session_id: sessionId }), stderr: '時間切れ' }]);
+  assert.match(body, /acme\/app#42 保存できない/);
+  assert.match(body, /https:\/\/github\.com\/acme\/app\/issues\/42/);
+  assert.match(body, /タイムアウト \(timeout\)/);
+  assert.match(body, /\/tmp\/42\.summary\.md/);
+  assert.match(body, new RegExp(`claude --resume ${sessionId}`));
 });
 
 test('in-progress ラベル付き Issue はフォーム報告の対象から除外する', () => {
@@ -114,6 +126,14 @@ test('in-progress ラベル付き Issue はフォーム報告の対象から除�
   const active = { number: 2, labels: [{ name: 'feedback' }, { name: 'in-progress' }] };
   assert.equal(feedbackIssueExclusionReason(active), 'in-progress（対応中）');
   assert.deepEqual(filterFeedbackIssues([available, active]), [available]);
+});
+
+test('PR URL が無いフォーム報告だけ in-progress ラベル解除対象にする', () => {
+  const stdoutPr = { issue: { number: 1 }, stdout: 'https://github.com/acme/app/pull/10', summary: '' };
+  const summaryPr = { issue: { number: 2 }, stdout: '', summary: 'PR: https://github.com/acme/app/pull/11' };
+  const noPr = { issue: { number: 3 }, stdout: '完了', summary: 'PR は作成できませんでした' };
+  assert.deepEqual(feedbackIssuesToUnmark([stdoutPr, summaryPr, noPr]), [noPr.issue]);
+  assert.deepEqual(feedbackIssuesToUnmark([]), []);
 });
 
 test('通知URLは feedback-intake を notify に置き換え、query を捨てる', () => {
@@ -337,6 +357,8 @@ test('buildPrompt は逐次サマリと長時間ポーリング禁止を指示�
   assert.ok(prompt.includes(summaryFile));
   assert.ok(prompt.includes('5分を超えるポーリングをしてはいけない'));
   assert.ok(prompt.includes('開始から 50 分でまとめに入'));
+  assert.ok(prompt.includes('run_in_background'));
+  assert.ok(prompt.includes('ScheduleWakeup'));
 });
 
 test('recoverSessionId は実行時間窓の外に作られた jsonl を選ばない', () => {

@@ -1,10 +1,10 @@
 var WEBHOOK_TAB_NAME_ = 'Webhook';
 var WEBHOOK_HEADERS_ = [
   'Webhook名','対象チャンネル名','チャンネルID','Webhook ID','状態',
-  '保管しているPC','保管場所(ファイル名)',
+  '保管しているPC','保管場所(ファイル名)','作成者',
   '用途【手入力】','担当【手入力】','備考【手入力】','最終確認日(JST)'
 ];
-var WEBHOOK_MACHINE_COLUMNS_ = ['Webhook名','対象チャンネル名','チャンネルID','Webhook ID','状態','保管しているPC','保管場所(ファイル名)','最終確認日(JST)'];
+var WEBHOOK_MACHINE_COLUMNS_ = ['Webhook名','対象チャンネル名','チャンネルID','Webhook ID','状態','保管しているPC','保管場所(ファイル名)','作成者','最終確認日(JST)'];
 
 function webhookPlanUpsert(headers, rows, payload) {
   var label = String(payload && payload.label || '').trim();
@@ -25,7 +25,7 @@ function webhookPlanUpsert(headers, rows, payload) {
       'Webhook名': item.name || '', '対象チャンネル名': item.channelName || '',
       'チャンネルID': item.channelId || '', 'Webhook ID': id,
       '状態': states[item.state] || '未確認', '保管しているPC': label,
-      '保管場所(ファイル名)': files, '最終確認日(JST)': payload.checkedAt || ''
+      '保管場所(ファイル名)': files, '作成者': item.creator || '', '最終確認日(JST)': payload.checkedAt || ''
     };
     if (index < 0) {
       var output = headers.map(function() { return ''; });
@@ -37,6 +37,8 @@ function webhookPlanUpsert(headers, rows, payload) {
     files.split(',').map(function(value) { return value.trim(); }).filter(Boolean).forEach(function(file) {
       values['保管場所(ファイル名)'] = cloudMergeLabels(values['保管場所(ファイル名)'], file);
     });
+    if (!String(item.channelName || '').trim()) values['対象チャンネル名'] = String(rows[index][columns['対象チャンネル名']] || '');
+    if (!String(item.creator || '').trim()) values['作成者'] = String(rows[index][columns['作成者']] || '');
     WEBHOOK_MACHINE_COLUMNS_.forEach(function(name) {
       if (String(rows[index][columns[name]] == null ? '' : rows[index][columns[name]]) !== String(values[name]))
         updates.push({ rowNumber: index + 2, columnIndex: columns[name] + 1, value: values[name] });
@@ -57,7 +59,7 @@ function webhookPlanUpsert(headers, rows, payload) {
 
 function webhookMatchRows(headers, rows, options) {
   options = options || {};
-  var names = { name:'Webhook名', channelName:'対象チャンネル名', channelId:'チャンネルID', webhookId:'Webhook ID', state:'状態', pcs:'保管しているPC', files:'保管場所(ファイル名)', purpose:'用途【手入力】', owner:'担当【手入力】', note:'備考【手入力】', checkedAt:'最終確認日(JST)' };
+  var names = { name:'Webhook名', channelName:'対象チャンネル名', channelId:'チャンネルID', webhookId:'Webhook ID', state:'状態', pcs:'保管しているPC', files:'保管場所(ファイル名)', creator:'作成者', purpose:'用途【手入力】', owner:'担当【手入力】', note:'備考【手入力】', checkedAt:'最終確認日(JST)' };
   var columns = {}; Object.keys(names).forEach(function(key) { columns[key] = cloudColumn(headers, names[key], true); });
   var normalize = function(value) { return String(value == null ? '' : value).toLowerCase().replace(/[ \u3000]/g, ''); };
   var query = normalize(options.query), requested = Number(options.limit);

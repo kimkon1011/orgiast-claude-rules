@@ -221,6 +221,20 @@ try {
         } catch { Write-NightlyLog 'webhook-health' ("error:" + $_.Exception.Message) }
     } else { Write-NightlyLog 'webhook-health' 'skip:ファイルなし' }
 
+    $webhookInventory = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\discord-webhook-inventory.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $webhookInventory = $candidate; break }
+    }
+    if (-not (Test-Path -LiteralPath $discordBotToken -PathType Leaf)) {
+        Write-NightlyLog 'webhook-inventory' 'skip:トークンなし'
+    } elseif ($webhookInventory) {
+        try {
+            & $node.Source $webhookInventory
+            if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'webhook-inventory' ("error:終了コード" + $LASTEXITCODE) } else { Write-NightlyLog 'webhook-inventory' 'ok' }
+        } catch { Write-NightlyLog 'webhook-inventory' ("error:" + $_.Exception.Message) }
+    } else { Write-NightlyLog 'webhook-inventory' 'skip:ファイルなし' }
+
     # LINEオープンチャットの取り込み分を選別・要約して作り置きを更新する。
     # batch-queue が空でも実行したいので、下の early exit より前に置くこと。
     $digest = $null

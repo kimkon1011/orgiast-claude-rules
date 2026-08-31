@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { parseEnvText } from './env-kv.mjs';
 import { isEntry } from './is-entry.mjs';
+import { notifyKim } from './notify-kim.mjs';
 
 const GET_TIMEOUT_MS = 30_000;
 const POST_TIMEOUT_MS = 20_000;
@@ -122,7 +123,7 @@ function readJson(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
 }
 
-async function runWatch({ home, fleetEnv, fetchImpl, stdout, stderr, now }) {
+async function runWatch({ home, fleetEnv, fetchImpl, stdout, stderr, now, notifyKimImpl }) {
   const claudeDir = path.join(home, '.claude');
   if (!shouldRunWatch(fs.existsSync(path.join(claudeDir, 'interaction-rollout-watch')))) return;
 
@@ -132,10 +133,6 @@ async function runWatch({ home, fleetEnv, fetchImpl, stdout, stderr, now }) {
 
   const costEnv = readEnv(path.join(claudeDir, 'cost-reporter.env'));
   const webhook = costEnv.DISCORD_COST_WEBHOOK || costEnv.COST_WEBHOOK || '';
-  if (!webhook) {
-    stderr('interaction-rollout: DISCORD_COST_WEBHOOK/COST_WEBHOOK 未設定のため投稿しません(~/.claude/cost-reporter.env)');
-    return;
-  }
   if (!fleetEnv.FLEET_SHEET_URL || !fleetEnv.FLEET_SHEET_TOKEN) {
     stderr('interaction-rollout: FLEET_SHEET_URL/TOKEN 未設定のため実行しません(~/.claude/fleet-sheet.env)');
     return;
@@ -172,17 +169,17 @@ async function runWatch({ home, fleetEnv, fetchImpl, stdout, stderr, now }) {
     .map((row) => String(row.label ?? '').trim() || String(row.pcName ?? '').trim() || '(名称未設定)');
   const liveNotAppliedNames = result.rows.filter((row) => row.category === 'liveNotApplied')
     .map((row) => String(row.label ?? '').trim() || String(row.pcName ?? '').trim() || '(名称未設定)');
-  const response = await fetchImpl(webhook, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      content: notifyStall
-        ? buildStallMessage(curr, staleNames, liveNotAppliedNames)
-        : buildWatchMessage(curr, staleNames, liveNotAppliedNames),
-    }),
-    signal: AbortSignal.timeout(POST_TIMEOUT_MS),
-  });
-  if (!response.ok) throw new Error(`Discord POST HTTP ${response.status}`);
+  const content = notifyStall
+    ? buildStallMessage(curr, staleNames, liveNotAppliedNames)
+    : buildWatchMessage(curr, staleNames, liveNotAppliedNames);
+  const delivery = await notifyKimImpl(content, { home, fetchImpl });
+  if (delivery?.delivered === 'none') {
+    if (!webhook) throw new Error('DISCORD_COST_WEBHOOK/COST_WEBHOOK 未設定(~/.claude/cost-reporter.env)');
+    const response = await fetchImpl(webhook, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ content }), signal: AbortSignal.timeout(POST_TIMEOUT_MS),
+    });
+    if (!response.ok) throw new Error(`Discord POST HTTP ${response.status}`);
+  }
   fs.mkdirSync(claudeDir, { recursive: true });
   fs.writeFileSync(stateFile, `${JSON.stringify({
     ...prev,
@@ -210,12 +207,13 @@ export async function runInteractionRollout({
   stdout = console.log,
   stderr = console.error,
   now = () => new Date(),
+  notifyKimImpl = notifyKim,
 } = {}) {
   const home = env.ORGIAST_HOME || os.homedir();
   const fleetEnv = readEnv(path.join(home, '.claude', 'fleet-sheet.env'));
   if (argv.includes('--watch')) {
     try {
-      await runWatch({ home, fleetEnv, fetchImpl, stdout, stderr, now });
+      await runWatch({ home, fleetEnv, fetchImpl, stdout, stderr, now, notifyKimImpl });
     } catch (error) {
       stderr(`interaction-rollout: 取得・投稿できませんでした (${error?.message || error?.name || 'error'})`);
     }

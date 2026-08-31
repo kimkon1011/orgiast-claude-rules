@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { addDecision, listDecisions } from './pending-decisions.mjs';
-import { runMorning } from './morning-batch.mjs';
+import { formatMorning, runMorning } from './morning-batch.mjs';
 
 function home() { return fs.mkdtempSync(path.join(os.tmpdir(), 'morning-batch-')); }
 const emptyIntake = async () => ({ decisions: [], count: 0, channelId: '123' });
@@ -42,4 +42,21 @@ test('adds TODOs inside an existing same-day section', async () => {
   const text = fs.readFileSync(file, 'utf8');
   assert.ok(text.indexOf('追加分') < text.indexOf('## 後続'));
   assert.equal(text.match(/## 朝バッチ取り込み/g).length, 1);
+});
+test('formats saved attachments as a count and readable path', () => {
+  const message = formatMorning([{ capturedAt: '2026-08-31T18:59:00', author: '金功勇', text: 'これ', attachments: [{ filename: 'image.png', path: 'C:\\Users\\kim\\.claude\\inbox-attachments\\id\\0-image.png' }] }]);
+  assert.match(message, /これ 📎1/);
+  assert.match(message, /   📎 C:\\Users\\kim\\\.claude\\inbox-attachments\\id\\0-image\.png/);
+});
+test('shows failed attachment acquisition and leaves attachment-free rows unchanged', () => {
+  const failed = formatMorning([{ capturedAt: '2026-08-31T18:59:00', author: 'kim', text: '失敗', attachments: [{ filename: 'bad.png', skipped: 'download-failed' }] }]);
+  assert.match(failed, /失敗 📎1/); assert.match(failed, /📎 \(取得失敗: bad\.png\)/);
+  const plain = formatMorning([{ capturedAt: '2026-08-31T18:59:00', author: 'kim', text: '通常' }]);
+  assert.doesNotMatch(plain, /📎/);
+});
+test('通知本文を kim DM ヘルパに渡す', async () => {
+  const dir = home(); addDecision({ source: 'discord-inbox', text: 'DM確認', author: 'kim' }, { home: dir });
+  let sent = '';
+  const result = await runMorning({ home: dir, intakeImpl: emptyIntake, notifyKimImpl: async (message) => { sent = message; return { delivered: 'dm' }; } });
+  assert.match(sent, /DM確認/); assert.equal(result.sent, true);
 });

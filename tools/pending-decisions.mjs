@@ -19,7 +19,7 @@ function readRecords(home) {
   }
 }
 
-export function addDecision({ source, text, author, capturedAt, batchDate }, { home = userHome(), now = new Date() } = {}) {
+export function addDecision({ source, text, author, capturedAt, batchDate, attachments }, { home = userHome(), now = new Date() } = {}) {
   const normalized = String(text ?? '').trim();
   if (!normalized) throw new Error('判断テキストがありません');
   const file = queuePath({ home });
@@ -35,7 +35,21 @@ export function addDecision({ source, text, author, capturedAt, batchDate }, { h
     source: String(source || ''), author: author || null, text: normalized,
     capturedAt: capturedAt || now.toISOString(), status: 'pending', batchDate: batchDate || null,
   };
+  if (Array.isArray(attachments) && attachments.length) record.attachments = attachments;
   fs.appendFileSync(file, `${JSON.stringify(record)}\n`);
+  return record;
+}
+
+export function setDecisionAttachments(id, attachments, { home = userHome() } = {}) {
+  if (!Array.isArray(attachments) || !attachments.length) return null;
+  const file = queuePath({ home });
+  const records = readRecords(home);
+  const record = records.find((item) => item.id === id);
+  if (!record) return null;
+  record.attachments = attachments;
+  const tmp = path.join(path.dirname(file), `pending-decisions-${process.pid}-${Date.now()}.tmp`);
+  fs.writeFileSync(tmp, records.map((item) => JSON.stringify(item)).join('\n') + '\n');
+  fs.renameSync(tmp, file);
   return record;
 }
 

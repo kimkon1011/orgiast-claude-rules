@@ -481,6 +481,7 @@ test('外部送受信ツール: 設定不足をstderr 1行以上で観測可能�
   // cost-work-loop は指示書本文を stdout に出すのが正常動作なので、そこを空だと要求すると
   // 本番側を黙らせる誤修正を誘発する(実際に一度そうなった)。観測点は stderr に統一する。
   const targets = [
+    ['notify-kim.mjs', [], true],
     ['fleet-sheet-report.mjs', ['--dry-run'], true],
     ['interaction-rollout.mjs', [], true],
     ['fleet-triage-report.mjs', [], true],

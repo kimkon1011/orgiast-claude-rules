@@ -2,8 +2,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { parseEnvText } from './env-kv.mjs';
+import { isEntry } from './is-entry.mjs';
 
 const TYPE_NAMES = { 0: 'テキスト', 2: 'ボイス', 4: 'カテゴリ', 5: 'アナウンス', 13: 'ステージ', 15: 'フォーラム', 16: 'メディア' };
 
@@ -87,6 +87,6 @@ async function main() {
   console.log(JSON.stringify({ ok: true, updated: result.updated, appended: result.appended, missing: result.missing || [] }));
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isEntry(import.meta.url)) {
   main().catch((error) => { console.error(error.message); process.exitCode = 1; });
 }

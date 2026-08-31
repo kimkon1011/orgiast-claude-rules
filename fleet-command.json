@@ -1,9 +1,13 @@
 {
-  "runId": "interaction-loop-rollout-2026-08-30b",
+  "runId": "discord-channel-id-rollout-2026-08-31",
   "task": "rules-resync",
   "targets": "all",
-  "_why": "対話ループの計測ツールを全PCへ配る(2回目)。1回目(interaction-loop-rollout-2026-08-30)で、作業ツリーが汚れている/ブランチが diverged しているPCでは onboarding-sync の `git pull --ff-only` が失敗し、例外が握り潰されて tools/ が更新されないまま『成功』に見えることが実測で判明した(skills配布・hook登録・CLAUDE.md更新だけ成功と表示される)。zip フォールバックが `.git` の無いPCにしか効かなかったのが原因。取得に失敗したら zip へフォールバックし、ローカルで変更中のファイルだけは上書きせず除外し、結果を必ず1行で明示するよう直したので、その修正版を行き渡らせる。配るもの: interaction-loop.mjs(そのPCのtranscriptから対話回数を測り日次ダイジェストをローカルに書く・外部送信なし) / stop-gate.mjs(既定オフ・settings.json未登録) / interaction-adoption.mjs(版・自己テスト結果・最終実行時刻の3つだけをフリートシートへ報告)。各PCは onboarding-sync --force を1回だけ実行する。破壊的操作なし。止めるときは task を \"\" に戻す。",
+  "_why": "Discord のチャンネルIDを user に取得させないためのルールとツールを全PCへ配る。配るもの: tools/discord-channel-id.mjs(クラウド台帳の Discordチャンネル タブを引いてIDを返す。Botトークン不要・全PCで動く) / ONBOARDING §2.6.1 と rules-extracted/discord-integration.md の「チャンネルIDを user に聞かない」ルール / nightly-batch の台帳更新ブロック(Botトークンが無いPCは skip)。各PCは onboarding-sync --force を1回だけ実行する。破壊的操作なし。止めるときは task を \"\" に戻す。",
   "_note": "全PCへ承認済みタスクを配る中央キュー。kim/Claudeが task と runId(毎回ユニーク) を更新→各PCが夜間03:15の実行時に1回だけ処理しDiscordへ結果を返す。task を空にすると何もしない。",
-  "_allowed_tasks": ["verify-setup", "rules-resync", "cost-report"],
+  "_allowed_tasks": [
+    "verify-setup",
+    "rules-resync",
+    "cost-report"
+  ],
   "_targets": "all=全PC / PC名の一部文字列=そのPCだけ"
 }

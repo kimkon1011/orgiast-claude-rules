@@ -200,13 +200,12 @@ export function planLaunch({ claudeBin, cwd, prompt, wt }) {
   };
 }
 
-export function hasUnsentVscodeTab({ state, now, latestTranscriptMs, windowMs = 6 * 60 * 60 * 1000 }) {
+export function hasUnsentVscodeTab({ state, now, promptConsumed, windowMs = 6 * 60 * 60 * 1000 }) {
   if (state.lastRoute !== 'vscode') return false;
   const lastLaunch = Date.parse(state.lastLaunchAt);
   if (Number.isNaN(lastLaunch)) return false;
   if (now - lastLaunch >= windowMs) return false;
-  if (typeof latestTranscriptMs !== 'number' || Number.isNaN(latestTranscriptMs)) return false;
-  return latestTranscriptMs <= lastLaunch;
+  return promptConsumed === false;
 }
 
 export function shouldLaunch({ state, now, env, force, pendingTab }) {
@@ -251,6 +250,16 @@ export async function launchNextSession(argv = [], io = {}) {
   const exists = io.exists ?? fs.existsSync;
   const readdir = io.readdir ?? fs.readdirSync;
   const stat = io.stat ?? fs.statSync;
+  const readHead = io.readHead ?? ((file, maxBytes = 65536) => {
+    const fd = fs.openSync(file, 'r');
+    try {
+      const buffer = Buffer.alloc(maxBytes);
+      const bytesRead = fs.readSync(fd, buffer, 0, maxBytes, 0);
+      return buffer.toString('utf8', 0, bytesRead);
+    } finally {
+      fs.closeSync(fd);
+    }
+  });
   const readFile = io.readFile ?? fs.promises.readFile;
   const writeFile = io.writeFile ?? fs.promises.writeFile;
   const rename = io.rename ?? fs.promises.rename;
@@ -274,20 +283,36 @@ export async function launchNextSession(argv = [], io = {}) {
 
     const state = await readJson(statePath, { enabled: true });
     const now = typeof io.now === 'function' ? io.now() : (io.now ?? Date.now());
-    let latestTranscriptMs = null;
-    if (state.lastCwd) {
+    let promptConsumed = null;
+    const lastLaunch = Date.parse(state.lastLaunchAt);
+    if (state.lastCwd && !Number.isNaN(lastLaunch)) {
       try {
         // auto-session.mjs の cwdSlug と同じ規則。前回開いた cwd の transcript bucket を見る。
         const slug = String(state.lastCwd ?? '').replace(/[^A-Za-z0-9]/g, '-');
         const transcriptDir = path.join(claudeDir, 'projects', slug);
-        const birthtimes = readdir(transcriptDir)
+        const candidates = readdir(transcriptDir)
           .filter((name) => String(name).endsWith('.jsonl'))
-          .map((name) => stat(path.join(transcriptDir, name)).birthtimeMs)
-          .filter((value) => typeof value === 'number' && Number.isFinite(value));
-        if (birthtimes.length > 0) latestTranscriptMs = Math.max(...birthtimes);
-      } catch { /* transcript を判定できない時は fail-open で起動する */ }
+          .map((name) => ({ file: path.join(transcriptDir, name), birthtimeMs: stat(path.join(transcriptDir, name)).birthtimeMs }))
+          .filter(({ birthtimeMs }) => typeof birthtimeMs === 'number' && Number.isFinite(birthtimeMs) && birthtimeMs > lastLaunch)
+          .sort((a, b) => b.birthtimeMs - a.birthtimeMs)
+          .slice(0, 10);
+        const prompt = state.lastPrompt || flags.prompt;
+        promptConsumed = false;
+        for (const candidate of candidates) {
+          const head = String(await readHead(candidate.file, 65536));
+          // hook の添付レコードが "type":"user" で先に来ても掴まないよう "role":"user" まで見る
+          // (実測: 直近 transcript 25件すべてで最初の "type":"user" 行は "role":"user" を持つ)
+          const firstUserLine = head.split(/\r?\n/).find((line) => line.includes('"type":"user"') && line.includes('"role":"user"'));
+          if (firstUserLine?.includes(prompt)) {
+            promptConsumed = true;
+            break;
+          }
+        }
+      } catch {
+        promptConsumed = null;
+      }
     }
-    const pendingTab = hasUnsentVscodeTab({ state, now, latestTranscriptMs });
+    const pendingTab = hasUnsentVscodeTab({ state, now, promptConsumed });
     const decision = shouldLaunch({ state, now, env, force: flags.force, pendingTab });
     if (!decision.ok) {
       log(`[next-session] スキップ: ${decision.reason}`);
@@ -332,7 +357,7 @@ export async function launchNextSession(argv = [], io = {}) {
         if (!isLast) await wait(2500);
       }
 
-      const nextState = { ...state, enabled: state.enabled !== false, lastLaunchAt: new Date().toISOString(), lastCwd: cwd, lastRoute: route };
+      const nextState = { ...state, enabled: state.enabled !== false, lastLaunchAt: new Date().toISOString(), lastCwd: cwd, lastRoute: route, lastPrompt: flags.prompt };
       const tmpPath = `${statePath}.tmp-${process.pid}`;
       await writeFile(tmpPath, `${JSON.stringify(nextState, null, 2)}\n`, 'utf8');
       await rename(tmpPath, statePath);
@@ -386,7 +411,7 @@ export async function launchNextSession(argv = [], io = {}) {
     }
     child.unref();
 
-    const nextState = { ...state, enabled: state.enabled !== false, lastLaunchAt: new Date().toISOString(), lastCwd: cwd, lastRoute: route };
+    const nextState = { ...state, enabled: state.enabled !== false, lastLaunchAt: new Date().toISOString(), lastCwd: cwd, lastRoute: route, lastPrompt: flags.prompt };
     const tmpPath = `${statePath}.tmp-${process.pid}`;
     await writeFile(tmpPath, `${JSON.stringify(nextState, null, 2)}\n`, 'utf8');
     await rename(tmpPath, statePath);

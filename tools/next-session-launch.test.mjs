@@ -119,15 +119,14 @@ test('起動抑止と force の安全境界を判定する', () => {
   assert.equal(shouldLaunch({ state: {}, now, env: { CI: '1' }, force: true }).ok, false);
 });
 
-test('未送信の VSCode タブを transcript の開始時刻から判定する', () => {
+test('未送信の VSCode タブを注入した prompt の送信有無から判定する', () => {
   const now = Date.parse('2026-08-31T12:00:00.000Z');
   const recentLaunch = '2026-08-31T10:00:00.000Z';
-  const lastLaunch = Date.parse(recentLaunch);
-  assert.equal(hasUnsentVscodeTab({ state: { lastRoute: 'terminal', lastLaunchAt: recentLaunch }, now, latestTranscriptMs: lastLaunch }), false);
-  assert.equal(hasUnsentVscodeTab({ state: { lastRoute: 'vscode', lastLaunchAt: '2026-08-31T05:59:59.999Z' }, now, latestTranscriptMs: lastLaunch }), false);
-  assert.equal(hasUnsentVscodeTab({ state: { lastRoute: 'vscode', lastLaunchAt: recentLaunch }, now, latestTranscriptMs: lastLaunch }), true);
-  assert.equal(hasUnsentVscodeTab({ state: { lastRoute: 'vscode', lastLaunchAt: recentLaunch }, now, latestTranscriptMs: lastLaunch + 1 }), false);
-  assert.equal(hasUnsentVscodeTab({ state: { lastRoute: 'vscode', lastLaunchAt: recentLaunch }, now, latestTranscriptMs: null }), false);
+  assert.equal(hasUnsentVscodeTab({ state: { lastRoute: 'terminal', lastLaunchAt: recentLaunch }, now, promptConsumed: false }), false);
+  assert.equal(hasUnsentVscodeTab({ state: { lastRoute: 'vscode', lastLaunchAt: '2026-08-31T05:59:59.999Z' }, now, promptConsumed: false }), false);
+  assert.equal(hasUnsentVscodeTab({ state: { lastRoute: 'vscode', lastLaunchAt: recentLaunch }, now, promptConsumed: false }), true);
+  assert.equal(hasUnsentVscodeTab({ state: { lastRoute: 'vscode', lastLaunchAt: recentLaunch }, now, promptConsumed: true }), false);
+  assert.equal(hasUnsentVscodeTab({ state: { lastRoute: 'vscode', lastLaunchAt: recentLaunch }, now, promptConsumed: null }), false);
 });
 
 test('未送信タブは通常起動を抑止し、force なら起動する', () => {
@@ -182,7 +181,64 @@ test('起動成功時に detached spawn し state を tmp から原子的に更�
   const stateRename = calls.renames.find(([, file]) => file.endsWith('next-session-launch.json'));
   assert.match(stateWrite[1], /"lastLaunchAt"/);
   assert.match(stateWrite[1], /"lastCwd": "C:\\\\work"/);
+  assert.equal(JSON.parse(stateWrite[1]).lastPrompt, '/session-start');
   assert.ok(stateRename);
+});
+
+function pendingTabIo(firstUserLine, readHeadOverride) {
+  const codeCli = 'C:\\Code\\bin\\code.cmd';
+  const lastLaunchAt = '2026-08-31T10:00:00.000Z';
+  const lastLaunch = Date.parse(lastLaunchAt);
+  return fakeIo({
+    env: { VSCODE_CLI_PATH: codeCli },
+    exists: (file) => file === codeCli,
+    now: Date.parse('2026-08-31T10:03:00.000Z'),
+    readdir: (dir) => (dir.includes('projects') ? ['candidate.jsonl'] : []),
+    stat: () => ({ birthtimeMs: lastLaunch + 1 }),
+    readHead: readHeadOverride ?? (() => `${firstUserLine}\n{"type":"assistant"}`),
+    readFile: async (file) => {
+      if (file.endsWith('next-session-launch.json')) return JSON.stringify({
+        enabled: true,
+        lastRoute: 'vscode',
+        lastLaunchAt,
+        lastCwd: 'C:\\work',
+        lastPrompt: '/session-start',
+      });
+      if (file.endsWith('next-session.md')) return '<!-- cwd: C:\\work -->';
+      if (file.endsWith('.claude.json')) return '{}';
+      throw new Error('ENOENT');
+    },
+  });
+}
+
+test('他人の新しい transcript では未送信タブの抑止を解除しない', async () => {
+  const { io, calls } = pendingTabIo('{"type":"user","message":{"role":"user","content":"別の依頼"}}');
+  assert.equal(await launchNextSession(['--target', 'vscode'], io), 0);
+  assert.equal(calls.spawn.length, 0);
+  assert.match(calls.logs[0], /未送信/);
+});
+
+test('最初の user メッセージに注入 prompt があれば起動する', async () => {
+  const { io, calls } = pendingTabIo('{"type":"user","message":{"role":"user","content":"<command-message>session-start</command-message>\\n<command-name>/session-start</command-name>"}}');
+  assert.equal(await launchNextSession(['--target', 'vscode'], io), 0);
+  assert.equal(calls.spawn.length, 1);
+});
+
+// hook の添付レコードが "type":"user" で先に並ぶ transcript でも、本物の user 入力を掴めること。
+// role まで見ないとここで取り違えて「未送信」と誤判定し、開くべきタブを永久に開かなくなる。
+test('hook の添付レコードが先にあっても本物の user 入力を見る', async () => {
+  const { io, calls } = pendingTabIo('', () => [
+    '{"parentUuid":null,"attachment":{"type":"hook_success"},"type":"user"}',
+    '{"type":"user","message":{"role":"user","content":"<command-name>/session-start</command-name>"}}',
+  ].join('\n'));
+  assert.equal(await launchNextSession(['--target', 'vscode'], io), 0);
+  assert.equal(calls.spawn.length, 1);
+});
+
+test('transcript の先頭読み取り失敗時は fail-open で起動する', async () => {
+  const { io, calls } = pendingTabIo('', () => { throw new Error('EACCES'); });
+  assert.equal(await launchNextSession(['--target', 'vscode'], io), 0);
+  assert.equal(calls.spawn.length, 1);
 });
 
 test('dry-run は plan だけを出して spawn しない', async () => {

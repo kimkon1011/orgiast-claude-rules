@@ -10,3 +10,22 @@ test('同値は冪等',()=>{const payload={label:'PC1',checkedAt:'d',webhooks:[i
 test('label必須',()=>assert.throws(()=>context.webhookPlanUpsert(H,[],{}),/label_required/));
 test('未報告かつ同じPC保管は未確認',()=>{const row=context.webhookPlanUpsert(H,[],{label:'PC1',webhooks:[item]}).appendRows[0],p=context.webhookPlanUpsert(H,[row],{label:'PC1',webhooks:[]});assert.deepEqual([...p.missing],['123']);assert.equal(p.updates[0].value,'未確認');});
 test('検索は名前・ID・空白と大小文字を正規化しlimitする',()=>{const a=context.webhookPlanUpsert(H,[],{label:'P',webhooks:[item]}).appendRows[0],b=[...a];b[H.indexOf('Webhook ID')]='999';b[H.indexOf('Webhook名')]='A Test';assert.equal(context.webhookMatchRows(H,[a,b],{query:'a　test'}).count,1);assert.equal(context.webhookMatchRows(H,[a,b],{query:'99'}).count,1);const limited=context.webhookMatchRows(H,[a,b],{limit:1});assert.equal(limited.count,1);assert.equal(limited.truncated,true);});
+
+test("partial:true の報告は、報告に含まれない既存行の状態を落とさない", () => {
+  const headers = [...context.WEBHOOK_HEADERS_];
+  const existing = headers.map((header) =>
+    ({ "Webhook ID": "1", 状態: "生存", "保管しているPC": "PC-A" }[header] ?? ""));
+  const partial = context.webhookPlanUpsert(headers, [existing], {
+    label: "PC-A", checkedAt: "2026-08-31", partial: true,
+    webhooks: [{ webhookId: "2", name: "new", channelId: "9", state: "alive", files: ["x.env"] }],
+  });
+  assert.equal(partial.updates.length, 0);
+  assert.equal(partial.appendRows.length, 1);
+  assert.deepEqual([...partial.missing], []);
+
+  const full = context.webhookPlanUpsert(headers, [existing], {
+    label: "PC-A", checkedAt: "2026-08-31",
+    webhooks: [{ webhookId: "2", name: "new", channelId: "9", state: "alive", files: ["x.env"] }],
+  });
+  assert.deepEqual([...full.missing], ["1"]);
+});

@@ -97,7 +97,9 @@ async function expandPattern(pattern) {
 export async function scanFiles(patterns = []) {
   const home = os.homedir();
   const defaults = (await fs.readdir(path.join(home, '.claude'), { withFileTypes: true }).catch(() => []))
-    .filter((entry) => entry.isFile() && /\.(?:env|txt)$/.test(entry.name))
+    // discord-webhooks.json も対象にする。--create で作った webhook の URL はここにしか無く、
+    // 除くと作った直後に「未確認」へ落ちる(実測 2026-08-31)。
+    .filter((entry) => entry.isFile() && (/\.(?:env|txt)$/.test(entry.name) || entry.name === 'discord-webhooks.json'))
     .map((entry) => path.join(home, '.claude', entry.name));
   const additions = (await Promise.all(patterns.map(expandPattern))).flat();
   return [...new Set([...defaults, ...additions].map((file) => path.resolve(file)))].sort();

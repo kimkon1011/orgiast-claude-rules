@@ -42,6 +42,9 @@ function webhookPlanUpsert(headers, rows, payload) {
         updates.push({ rowNumber: index + 2, columnIndex: columns[name] + 1, value: values[name] });
     });
   });
+  // 部分報告(1件だけ登録する --create 等)で、報告に含まれない既存行を
+  // 「未確認」に落とさない。全件走査した報告(webhook-health)だけが状態を下げてよい。
+  if (payload && payload.partial === true) return { updates: updates, appendRows: appendRows, missing: missing };
   rows.forEach(function(row, index) {
     var id = String(row[columns['Webhook ID']] || '').trim();
     var labels = String(row[columns['保管しているPC']] || '').split(',').map(function(v) { return v.trim(); });

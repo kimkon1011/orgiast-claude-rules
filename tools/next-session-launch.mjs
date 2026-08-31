@@ -330,7 +330,18 @@ export async function launchNextSession(argv = [], io = {}) {
         // auto-session.mjs の cwdSlug と同じ規則。前回開いた cwd の transcript bucket を見る。
         const slug = String(state.lastCwd ?? '').replace(/[^A-Za-z0-9]/g, '-');
         const transcriptDir = path.join(claudeDir, 'projects', slug);
-        const candidates = readdir(transcriptDir)
+        // bucket が無い = その cwd でセッションが1度も始まっていない = 注入した prompt は未消化。
+        // ENOENT は「判定できない」ではなく「未送信」の積極的な証拠なので fail-open にしない。
+        // 新しい cwd では必ずここを通るので、fail-open にすると抑止すべき場面でこそ効かなくなる
+        // (2026-08-31 実測: lastCwd=...\aujust-sales-automation の bucket が存在せず抑止が空振りした)。
+        let names;
+        try {
+          names = readdir(transcriptDir);
+        } catch (error) {
+          if (error?.code !== 'ENOENT') throw error;
+          names = [];
+        }
+        const candidates = names
           .filter((name) => String(name).endsWith('.jsonl'))
           .map((name) => ({ file: path.join(transcriptDir, name), birthtimeMs: stat(path.join(transcriptDir, name)).birthtimeMs }))
           .filter(({ birthtimeMs }) => typeof birthtimeMs === 'number' && Number.isFinite(birthtimeMs) && birthtimeMs > lastLaunch)

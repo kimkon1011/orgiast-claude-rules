@@ -25,6 +25,16 @@ function Stop-Nightly([string]$Step, [string]$Result, [int]$Code) {
     exit $Code
 }
 
+function Get-NightlyFileSha256([string]$Path) {
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [System.IO.File]::ReadAllBytes($Path)
+        return [System.BitConverter]::ToString($sha256.ComputeHash($bytes)).Replace('-', '')
+    } finally {
+        $sha256.Dispose()
+    }
+}
+
 try {
     Write-NightlyLog 'nightly-bootstrap' 'ok:開始'
 
@@ -87,8 +97,8 @@ try {
                 $installedPath = [IO.Path]::GetFullPath((Join-Path $HOME '.claude\tools\nightly-bootstrap.ps1'))
                 $isInstalledPath = $selfPath.Equals($installedPath, [StringComparison]::OrdinalIgnoreCase)
                 if ($isInstalledPath -and $env:ORGIAST_NIGHTLY_NO_SELF_UPDATE -ne '1') {
-                    $repoHash = (Get-FileHash -LiteralPath $repoBootstrap -Algorithm SHA256).Hash
-                    $selfHash = (Get-FileHash -LiteralPath $selfPath -Algorithm SHA256).Hash
+                    $repoHash = Get-NightlyFileSha256 $repoBootstrap
+                    $selfHash = Get-NightlyFileSha256 $selfPath
                     if ($repoHash -ne $selfHash) {
                         Copy-Item -LiteralPath $repoBootstrap -Destination $selfPath -Force
                         Write-NightlyLog '自己更新' 'ok:自己更新(次回から新版)'

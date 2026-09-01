@@ -103,6 +103,30 @@ test('does not self-update a copy outside the operational install path', { skip:
   assert.match(logText(fix), /skip:自己更新\(運用の設置先でないため\)/);
 });
 
+test('self-updates the operational copy when PSModulePath is empty', { skip: !hasPowerShell }, () => {
+  const fix = fixture('self-update-without-module-autoload');
+  const installed = join(fix.home, '.claude', 'tools', 'nightly-bootstrap.ps1');
+  const repoBootstrap = join(fix.repo, 'tools', 'nightly-bootstrap.ps1');
+  const target = join(fix.dir, 'target.ps1');
+  const installedBytes = readFileSync(script);
+  const repoBytes = Buffer.concat([installedBytes, Buffer.from('\r\n# repository version\r\n', 'utf8')]);
+  mkdirSync(dirname(installed), { recursive: true });
+  mkdirSync(dirname(repoBootstrap), { recursive: true });
+  writeFileSync(installed, installedBytes);
+  writeFileSync(repoBootstrap, repoBytes);
+  writeFileSync(target, 'exit 0\r\n', 'utf8');
+
+  const result = runBootstrap(fix, target, [], {
+    ORGIAST_NIGHTLY_NO_SELF_UPDATE: '0',
+    PSModulePath: '',
+  }, undefined, installed);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(readFileSync(installed), repoBytes, 'operational copy was not updated');
+  const log = logText(fix);
+  assert.match(log, /ok:自己更新\(次回から新版\)/);
+  assert.doesNotMatch(log, /warn:.*Get-FileHash/);
+});
+
 after(() => {
   if (root) rmSync(root, { recursive: true, force: true });
 });

@@ -128,9 +128,29 @@ function Get-Temperature {
     return $null
 }
 
+function Get-PowerCapPct {
+    # powercfg の「最大のプロセッサの状態」(PROCTHROTTLEMAX)。
+    # power-save.mjs で上限を絞ると CurrentClockSpeed の天井が下がるため、
+    # クロック比の基準を MaxClockSpeed ではなくこの上限にしないと誤検知し続ける。
+    try {
+        $out = & powercfg /query SCHEME_CURRENT SUB_PROCESSOR PROCTHROTTLEMAX
+        $text = ($out | Out-String)
+        foreach ($line in ($text -split "`r?`n")) {
+            if ($line -match 'AC' -and $line -match '0x([0-9a-fA-F]+)') {
+                $v = [Convert]::ToInt32($Matches[1], 16)
+                if ($v -ge 1 -and $v -le 100) { return $v }
+            }
+        }
+    } catch {
+        # 取得できなければ 100 とみなす（絞られていない前提＝従来動作）
+    }
+    return 100
+}
+
 function Get-CpuMetrics {
     $clockPct = $null
     $loadPct = 0
+    $cap = Get-PowerCapPct
     try {
         $procs = Get-CimInstance -ClassName Win32_Processor
         $clockValues = @()
@@ -138,8 +158,15 @@ function Get-CpuMetrics {
         foreach ($proc in $procs) {
             $current = $proc.CurrentClockSpeed
             $max = $proc.MaxClockSpeed
+            $ceiling = $max * $cap / 100
             if ($current -gt 0 -and $max -gt 0) {
-                $clockValues += [math]::Round(($current / $max) * 100, 1)
+                if ($ceiling -gt 0) {
+                    $v = [math]::Round(($current / $ceiling) * 100, 1)
+                    if ($v -gt 100) { $v = 100 }
+                    $clockValues += $v
+                } else {
+                    $clockValues += $null
+                }
             }
             if ($null -ne $proc.LoadPercentage) {
                 $loadValues += $proc.LoadPercentage
@@ -154,7 +181,7 @@ function Get-CpuMetrics {
     } catch {
         # 取得失敗時は null/0 のまま
     }
-    return @{ ClockPct = $clockPct; LoadPct = $loadPct }
+    return @{ ClockPct = $clockPct; LoadPct = $loadPct; CapPct = $cap }
 }
 
 function Get-UptimeHours {
@@ -185,12 +212,12 @@ function Add-Sample {
             New-Item -Path $DataDir -ItemType Directory -Force | Out-Null
         }
         $exists = Test-Path $SamplesCsv
-        $line = "{0},{1},{2},{3},{4},{5},{6},{7}" -f `
+        $line = "{0},{1},{2},{3},{4},{5},{6},{7},{8}" -f `
             $Record.timestamp, $Record.label, $Record.hostname, `
             $Record.clockPct, $Record.loadPct, $Record.tempC, `
-            $Record.uptimeHours, $Record.kernelPower41
+            $Record.uptimeHours, $Record.kernelPower41, $Record.capPct
         if (-not $exists) {
-            "timestamp,label,hostname,clockPct,loadPct,tempC,uptimeHours,kernelPower41_24h" | Out-File -FilePath $SamplesCsv -Encoding utf8 -Append
+            "timestamp,label,hostname,clockPct,loadPct,tempC,uptimeHours,kernelPower41_24h,capPct" | Out-File -FilePath $SamplesCsv -Encoding utf8 -Append
         }
         $line | Out-File -FilePath $SamplesCsv -Encoding utf8 -Append
     } catch {
@@ -338,27 +365,36 @@ if ($args -contains '-Uninstall') { $Mode = 'uninstall' }
 
 switch ($Mode) {
     "install" {
-        # schtasks は例外を投げないので $LASTEXITCODE で判定する。
-        # Invoke-Expression は /TR の入れ子引用符を壊すため使わず、引数配列で直接呼ぶ。
+        # 登録は ScheduledTasks モジュールで行う。schtasks /TR は引用符を落とすため、
+        # ユーザー名に空白があるPC(C:\Users\Taro Yamada\...)で -File のパスが分断されて壊れる
+        # (2026-09-01 実測: 登録後の XML から パスを囲む引用符が消えていた)。
+        # 管理者権限は不要 = 現在のユーザーのタスクとして登録される。
         $taskName = "OrgiastThermalGuard"
         $scriptPath = $PSCommandPath
-        $action = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $scriptPath + '"'
-        $out = & schtasks /Create /TN $taskName /SC MINUTE /MO 5 /TR $action /F
-        if ($LASTEXITCODE -eq 0) {
+        try {
+            $arg = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $scriptPath + '"'
+            $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arg
+            # -Once + -RepetitionInterval で「5分ごとに無期限」。PS5.1 では期間を明示しないと
+            # 1回で終わることがあるため、十分長い期間を渡す。
+            $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650)
+            # StartWhenAvailable: PCがスリープ等で実行を逃した場合に復帰後すぐ拾う。
+            # IgnoreNew: 前回が長引いていても多重起動しない。
+            $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
+            Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null
             Write-Host "タスク $taskName を登録しました (5分ごとに実行)"
-        } else {
-            Write-Host "タスク登録に失敗しました (exit=$LASTEXITCODE)"
-            Write-Host ($out | Out-String)
+        } catch {
+            Write-Host ("タスク登録に失敗しました: " + $_.Exception.Message)
         }
         exit 0
     }
     "uninstall" {
         $taskName = "OrgiastThermalGuard"
-        $out = & schtasks /Delete /TN $taskName /F
-        if ($LASTEXITCODE -eq 0) {
+        try {
+            Get-ScheduledTask -TaskName $taskName -ErrorAction Stop | Out-Null
+            Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
             Write-Host "タスク $taskName を削除しました"
-        } else {
-            Write-Host "タスク $taskName は登録されていません (exit=$LASTEXITCODE)"
+        } catch {
+            Write-Host "タスク $taskName は登録されていません"
         }
         exit 0
     }
@@ -380,6 +416,7 @@ $sampleRecord = @{
     tempC = $temp
     uptimeHours = $uptime
     kernelPower41 = $kp41
+    capPct = $metrics.CapPct
 }
 
 Add-Sample $sampleRecord
@@ -425,8 +462,10 @@ if ($Mode -eq "report") {
             $tempMax = ($temps | Measure-Object -Property tempC -Maximum).Maximum
             $tempReadable = "$($tempMax)°C"
         }
+        $capInfo = ""
+        if ($metrics.CapPct -lt 100) { $capInfo = " 電力上限 $($metrics.CapPct)% 基準" }
         $msg = "📊 熱レポート [$($config.Label)] 直近24h`n" +
-               "サンプル数: $($entries.Count) / クロック比 最小 $clockMin%・平均 $clockAvg% / " +
+               "サンプル数: $($entries.Count) / クロック比 最小 $clockMin%・平均 $clockAvg%$capInfo / " +
                "負荷 最大 $loadMax%・平均 $loadAvg% / スロットリング疑い時間 ${throttleMinutes}分 / " +
                "異常停止(Kernel-Power41): $($kp41)件 / 温度: $tempReadable`n" +
                (Format-HostLine)
@@ -450,10 +489,12 @@ $needsPost = Should-Post $state $level
 if ($needsPost -or $Dry) {
     $tempStr = "取得不可(管理者権限が必要なため未計測。クロック比で代替監視中)"
     if ($null -ne $temp) { $tempStr = "${temp}°C" }
+    $clockBasis = ""
+    if ($metrics.CapPct -lt 100) { $clockBasis = " (電力上限$($metrics.CapPct)%基準)" }
     
     if ($level -eq "WARN") {
         $msg = "⚠️ 熱警告 [$($config.Label)] WARN`n" +
-               "クロック $($metrics.ClockPct)% / 負荷 $($metrics.LoadPct)% / 温度 $tempStr`n" +
+               "クロック $($metrics.ClockPct)%$clockBasis / 負荷 $($metrics.LoadPct)% / 温度 $tempStr`n" +
                "15分以上クロックが落ちています。室温を確認してください。`n" +
                (Format-HostLine)
     } elseif ($level -eq "CRITICAL") {
@@ -466,12 +507,12 @@ if ($needsPost -or $Dry) {
             $desc = "深刻: 15分以上クロックが大幅に落ちています。室温を下げてください。"
         }
         $msg = "🔥 熱警報 [$($config.Label)] CRITICAL`n" +
-               "クロック $($metrics.ClockPct)% / 負荷 $($metrics.LoadPct)% / 温度 $tempStr`n" +
+               "クロック $($metrics.ClockPct)%$clockBasis / 負荷 $($metrics.LoadPct)% / 温度 $tempStr`n" +
                "$desc`n" +
                (Format-HostLine)
     } elseif ($state.level -ne "OK" -and $level -eq "OK") {
         $msg = "✅ 熱復旧 [$($config.Label)] OK`n" +
-               "クロック $($metrics.ClockPct)% / 負荷 $($metrics.LoadPct)% / 温度 $tempStr`n" +
+               "クロック $($metrics.ClockPct)%$clockBasis / 負荷 $($metrics.LoadPct)% / 温度 $tempStr`n" +
                (Format-HostLine)
     } else {
         $msg = $null

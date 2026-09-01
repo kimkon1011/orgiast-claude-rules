@@ -23,6 +23,10 @@ const DIRECT_REQUEST = /(?:ここ|次|以下|リンク|ボタン|URL|コマン�
 const STATEMENT_REQUEST = /(?:えば|れば|たら|だけで|してもらえれば)[^。.!！?？\n]{0,30}(?:通りま|入りま|直りま|完了|OK|終わりま|反映|済みま|できま|使えま)/i;
 const COMPLETED = /しておきました|実行しました|設定しました|入力しました|共有しました|送信しました|アップロードしました|ダウンロードしました|インストールしました|有効にしました|オンにしました|選択しました|確認しました|設定済み|実行済み|完了(?:しました|です)/;
 const SELF_ACTION = /(?:私|こちら|当方|Claude|AI)(?:が|で)[^。.!！?？\n]{0,50}(?:実行|設定|入力|共有|送信|アップロード|ダウンロード|インストール|確認)/i;
+// 2026-09-01 誤爆回避: このチャットへ返すだけの依頼(スクショを貼る・数字を教える等)。
+// 動詞は「て形」まで書き下す。`(?:貼|送)ください` と書くと `貼ってください` に当たらない。
+const CHAT_REPLY_ONLY = /(?:スクショ|スクリーンショット|画面写真|画像)[^。.!！?？\n]{0,30}(?:貼(?:って|り付けて)|送って|共有して|見せて)(?:ください|下さい|もらえますか|いただけますか)|教えて(?:ください|下さい|もらえますか|いただけますか|ほしい)|知らせて(?:ください|下さい|もらえますか|いただけますか|ほしい)|返信(?:してください|下さい|もらえますか|いただけますか|ほしい)|返事(?:してください|下さい|もらえますか|いただけますか|ほしい)|一言(?:ください|下さい|もらえますか|いただけますか|ほしい)|報告して(?:ください|下さい|もらえますか|いただけますか|ほしい)|このチャットに(?:貼|送)ってください|ここに(?:貼|送)ってください/i;
+const NEEDS_INFO_ACTION = /実行|走らせ|開いて|開けば|開いたら|ログイン|サインイン|インストール|クリック|押して|押せば|アップロード|ダウンロード|有効にして|オンにして|設定して|設定を|設定すれば|入力して|入力を|入力すれば/i;
 
 function hasRequiredInfo(text) {
   return /https:\/\/\S+/i.test(text)
@@ -55,10 +59,24 @@ export function splitBlocks(text) {
   return blocks;
 }
 
+// 2026-09-01: 引用・インラインコードの中身を依頼判定から除去する（中身自体は残す）
+export function stripQuoted(s) {
+  // ダブルクォート（直線・曲線）
+  s = s.replace(/“[^”]*”/g, '“”').replace(/"[^"]*"/g, '""');
+  // 鉤括弧
+  s = s.replace(/「[^」]*」/g, '「」').replace(/『[^』]*』/g, '『』');
+  // インラインコード（バッククォート1個で囲まれた範囲）
+  s = s.replace(/`[^`]*`/g, '``');
+  return s;
+}
+
+// 渡す文は stripQuoted 済みである前提(findHandoffWithoutInfo がブロック単位で剥がす)。
 function isHandoffSentence(part) {
   if (!HANDOFF_ACTION.test(part)) return false;
   // 完了報告や Claude 自身の作業記述を依頼と数えると、正常な最終報告を毎回止めてしまう。
   if (COMPLETED.test(part) || SELF_ACTION.test(part)) return false;
+  // 2026-09-01: このチャットへ返すだけの依頼は情報を要求しない
+  if (CHAT_REPLY_ONLY.test(part) && !NEEDS_INFO_ACTION.test(part)) return false;
   return REQUEST_ENDING.test(part) || DIRECT_REQUEST.test(part) || STATEMENT_REQUEST.test(part);
 }
 
@@ -67,20 +85,27 @@ export function findHandoffWithoutInfo(text) {
   if (!body || body.includes('[HANDOFF-INFO-OK]')) return null;
 
   const offending = [];
+  const sentences = [];
   for (const block of splitBlocks(body)) {
-    const sentences = block.split(/(?<=[。.!！?？])|\r?\n/).map((s) => s.trim()).filter(Boolean);
-    if (!sentences.some(isHandoffSentence)) continue;
+    // 引用の中身は「依頼の引用」であって依頼ではないので、文に切る**前**にブロック単位で空にする。
+    // 文に切ってからでは、引用の中の「。」で断片化して閉じ括弧を失い、剥がせなくなる(2026-09-01 の誤爆)。
+    const scannable = stripQuoted(block);
+    const blockSentences = scannable.split(/(?<=[。.!！?？])|\r?\n/).map((s) => s.trim()).filter(Boolean);
+    const handoffSentences = blockSentences.filter(isHandoffSentence);
+    if (handoffSentences.length === 0) continue;
     // 依頼が入っているブロック自身に実行可能な情報があるかを見る。
     // 本文の別の場所にあるリンクは、この依頼を実行可能にしないので数えない。
     if (hasRequiredInfo(block)) continue;
     offending.push(block);
+    // 2026-09-01: 引っかかった文の最初の1つを保存
+    sentences.push(handoffSentences[0]);
   }
   if (offending.length === 0) return null;
 
   if (PAST_REFERENCE.test(body)) {
-    return { tier: 'A', reasons: ['「前回と同じ」等で過去を参照させている'], blocks: offending };
+    return { tier: 'A', reasons: ['「前回と同じ」等で過去を参照させている'], blocks: offending, sentences };
   }
-  return { tier: 'B', reasons: ['user に作業を頼んでいるが、その場で実行できる情報が本文に無い'], blocks: offending };
+  return { tier: 'B', reasons: ['user に作業を頼んでいるが、その場で実行できる情報が本文に無い'], blocks: offending, sentences };
 }
 
 export function formatViolationMessage(result) {
@@ -88,9 +113,13 @@ export function formatViolationMessage(result) {
   const past = result.tier === 'A'
     ? '\n特に「前回と同じ」「さっきの」等で過去を参照させています。user に過去ログを掘らせないでください。'
     : '';
-  const sample = Array.isArray(result.blocks) && result.blocks.length
-    ? `\n\n該当箇所:\n  ${result.blocks[0].split(/\r?\n/)[0].slice(0, 80)}`
-    : '';
+  // 2026-09-01: 引っかかった文があればそれを使う、なければブロック1行目
+  let sample = '';
+  if (Array.isArray(result.sentences) && result.sentences.length > 0) {
+    sample = `\n\n該当箇所:\n  ${result.sentences[0].slice(0, 80)}`;
+  } else if (Array.isArray(result.blocks) && result.blocks.length) {
+    sample = `\n\n該当箇所:\n  ${result.blocks[0].split(/\r?\n/)[0].slice(0, 80)}`;
+  }
   return `[HANDOFF-INFO-GUARD] user に作業を頼んでいますが、その場で実行できる情報が同じ場所にありません。${past}${sample}\n\n依頼と同じブロックに次を書いてください(ONBOARDING §1.5.3):\n  - URL(開く先・対象の Doc/PR/画面)\n  - 実際に貼るコマンドの全文(「同じコマンド」で参照しない)\n  - 対象ファイルのパスと人が読める名前\nGoogle Workspace の URL は /a/orgiast.jp/ を挟み、Drive の file/folder は ?authuser=kim@orgiast.jp を付けてください。\n\n例外的に追加情報が不要な依頼なら、本文に [HANDOFF-INFO-OK] を入れてください。`;
 }
 

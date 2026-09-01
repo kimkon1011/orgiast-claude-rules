@@ -1,4 +1,7 @@
 ﻿# nightly-batch.ps1 — DeepSeek off-peak時間帯にpendingジョブがあればバッチ実行する (Windows PowerShell 5.1)。
+# wscript経由のhidden起動はコンソール無しでOEMコードページ(932)にフォールバックし、
+# 子プロセスのUTF-8出力を文字化けさせる(実測: line-digest の日本語ステータス regex が常に不一致)。
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $logDir = Join-Path $HOME '.claude\logs'
 $logFile = Join-Path $logDir ("nightly-batch-" + (Get-Date -Format 'yyyy-MM-dd') + ".log")
 New-Item -ItemType Directory -Path $logDir -Force | Out-Null

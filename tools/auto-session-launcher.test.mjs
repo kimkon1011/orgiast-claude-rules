@@ -50,11 +50,13 @@ test('fetch 失敗でも既存の専用 tree があれば子を起動する', as
   process.env.ORGIAST_AUTO_SESSION_TREE = pinnedTree;
   const calls = [];
   const logs = [];
+  const bootLogs = [];
   try {
     const code = await main(['--dry-run'], {
       // 用意できているかは worktree ディレクトリではなく起動対象ファイルで判定される。
       exists: (candidate) => candidate === launchArgs(pinnedTree, [])[0],
       log: (message) => logs.push(message),
+      bootLog: (message) => bootLogs.push(message),
       run: async (command, args, options) => {
         calls.push({ command, args, options });
         return command === 'git' ? 1 : 23;
@@ -65,6 +67,7 @@ test('fetch 失敗でも既存の専用 tree があれば子を起動する', as
     assert.equal(calls[1].command, process.execPath);
     assert.deepEqual(calls[1].args, launchArgs(pinnedTree, ['--dry-run']));
     assert.ok(logs.some((message) => message.includes('警告')));
+    assert.ok(bootLogs.some((message) => message.includes('警告は非致命')));
   } finally {
     if (previousRepo === undefined) delete process.env.ORGIAST_REPO; else process.env.ORGIAST_REPO = previousRepo;
     if (previousTree === undefined) delete process.env.ORGIAST_AUTO_SESSION_TREE; else process.env.ORGIAST_AUTO_SESSION_TREE = previousTree;

@@ -115,6 +115,7 @@ export async function main(argv, io = {}) {
   }
   if (preparationFailed) {
     log('[auto-session-launcher] 既存の専用 worktree を使って夜間実行を継続します。');
+    bootLog(`${stamp()} 警告は非致命: 既存の専用 worktree を使って継続します`);
   }
 
   try {

@@ -74,6 +74,47 @@ test('fetch 失敗でも既存の専用 tree があれば子を起動する', as
   }
 });
 
+test('準備コマンド失敗時は stderr の末尾を警告に残す', async () => {
+  const previousTree = process.env.ORGIAST_AUTO_SESSION_TREE;
+  process.env.ORGIAST_AUTO_SESSION_TREE = pinnedTree;
+  const logs = [];
+  const bootLogs = [];
+  try {
+    await main([], {
+      exists: (candidate) => candidate === launchArgs(pinnedTree, [])[0],
+      log: (message) => logs.push(message),
+      bootLog: (message) => bootLogs.push(message),
+      run: async (command) => command === 'git'
+        ? { code: 1, stderrTail: '致命的なエラーの本文' }
+        : 0,
+    });
+    assert.ok(logs.some((message) => message.includes('stderr: 致命的なエラーの本文')));
+    assert.ok(bootLogs.some((message) => message.includes('stderr: 致命的なエラーの本文')));
+  } finally {
+    if (previousTree === undefined) delete process.env.ORGIAST_AUTO_SESSION_TREE; else process.env.ORGIAST_AUTO_SESSION_TREE = previousTree;
+  }
+});
+
+test('最終起動失敗時は stderr の末尾を boot log に残す', async () => {
+  const previousTree = process.env.ORGIAST_AUTO_SESSION_TREE;
+  process.env.ORGIAST_AUTO_SESSION_TREE = pinnedTree;
+  const bootLogs = [];
+  try {
+    const code = await main([], {
+      exists: (candidate) => candidate === launchArgs(pinnedTree, [])[0],
+      log: () => {},
+      bootLog: (message) => bootLogs.push(message),
+      run: async (command) => command === 'git'
+        ? 0
+        : { code: 1, stderrTail: '本体の致命的なエラー' },
+    });
+    assert.equal(code, 1);
+    assert.ok(bootLogs.some((message) => message.includes('stderr: 本体の致命的なエラー')));
+  } finally {
+    if (previousTree === undefined) delete process.env.ORGIAST_AUTO_SESSION_TREE; else process.env.ORGIAST_AUTO_SESSION_TREE = previousTree;
+  }
+});
+
 test('専用 tree を用意できない場合だけ 1 を返して子を起動しない', async () => {
   const previousTree = process.env.ORGIAST_AUTO_SESSION_TREE;
   process.env.ORGIAST_AUTO_SESSION_TREE = pinnedTree;

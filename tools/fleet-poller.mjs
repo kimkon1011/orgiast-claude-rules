@@ -65,6 +65,15 @@ function taskOutput(task) {
     return '';
   }
   if (task === 'cost-report') return run('node', [path.join(repo, 'tools', 'claude-cost-reporter.mjs')]);
+  // 熱監視の常駐登録(5分ごと)。管理者権限は不要＝現在ユーザーのタスクとして作る。
+  // CPU温度は多くの機体で取得できないため、クロック比の低下と異常停止イベントで代替監視する。
+  if (task === 'thermal-guard') {
+    if (process.platform !== 'win32') return '';
+    return run('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(repo, 'tools', 'thermal-guard.ps1'), '-Install']);
+  }
+  // CPU電力上限を絞って発熱と電気代を同時に下げる。
+  // 画面OFF(VIDEOIDLE)には触らない: 物理画面をキャプチャするリモート操作ソフトが黒画面になる事故を避けるため。
+  if (task === 'power-save') return run('node', [path.join(repo, 'tools', 'power-save.mjs'), '--apply', '--post']);
   return '';
 }
 
@@ -86,6 +95,11 @@ if (dueDaily && repo) {
     await post(`${ngLines.length ? '⚠' : '✅'} **[${label}]** 日次設定チェック: OK ${ok} / NG ${ngLines.length}${tail}`);
     run('node', [path.join(repo, 'tools', 'fleet-sheet-report.mjs'), '--specs', '--cloud']);
   }
+  // 熱の日次サマリ。thermal-guard が未導入(=サンプルが無い)なら何も送らないので、
+  // 導入済みのPCだけが1日1回 直近24hの要約を返す。
+  if (process.platform === 'win32') {
+    run('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(repo, 'tools', 'thermal-guard.ps1'), '-Report']);
+  }
 }
 
 // B) 中央キュー。runId は実行前に記録し、ホワイトリスト以外は決して実行しない。
@@ -103,7 +117,7 @@ try {
     const matches = targets === 'all' || targets === '' || label.includes(targets);
     if (!done.includes(runId) && matches) {
       fs.appendFileSync(processedFile, `${runId}\n`);
-      const allowed = new Set(['verify-setup', 'rules-resync', 'cost-report']);
+      const allowed = new Set(['verify-setup', 'rules-resync', 'cost-report', 'thermal-guard', 'power-save']);
       if (allowed.has(task)) {
         const result = taskOutput(task);
         const summary = result.split(/\r?\n/).filter(line => /結果:|OK |NG |完了|エラー|error/i.test(line)).slice(-3).join(' / ');

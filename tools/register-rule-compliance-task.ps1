@@ -34,7 +34,7 @@ if (Test-Path -LiteralPath $hiddenActionHelper) {
 # ローカルの ~/.claude/projects/*.jsonl だけを読む純ローカル処理なので、対話ログオン不要で回せる。
 $trigger = New-ScheduledTaskTrigger -Daily -At '03:50'
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
-$principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType S4U -RunLevel Limited
+$principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
 
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'ルール遵守監査ループを毎日実行し rule-compliance.md / rule-compliance-state.json を更新' -Force | Out-Null
 Write-Host "OK: task $taskName registered (daily 03:50, limit 30 min)"

@@ -367,7 +367,17 @@ try {
             Write-NightlyLog 'makimono-drain' ("error:" + $_.Exception.Message)
             Write-Warning ("nightly-batch: makimono-drain: " + $_.Exception.Message)
         }
-    } else { Write-NightlyLog 'makimono-drain' 'error:ファイルなし' }
+        try {
+            & $node.Source $makimonoDrain --check --notify
+            if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'makimono-check' ("error:終了コード" + $LASTEXITCODE) } else { Write-NightlyLog 'makimono-check' 'ok' }
+        } catch {
+            Write-NightlyLog 'makimono-check' ("error:" + $_.Exception.Message)
+            Write-Warning ("nightly-batch: makimono-check: " + $_.Exception.Message)
+        }
+    } else {
+        Write-NightlyLog 'makimono-drain' 'error:ファイルなし'
+        Write-NightlyLog 'makimono-check' 'error:ファイルなし'
+    }
 
     $producer = $null
     foreach ($repo in $repos) {

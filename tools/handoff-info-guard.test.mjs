@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { findHandoffWithoutInfo, formatViolationMessage, splitBlocks } from './handoff-info-guard.mjs';
+
+const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'handoff-info-guard');
+const readFixture = (name) => fs.readFileSync(path.join(FIXTURES, name), 'utf8');
 
 test('過去参照だけでコマンドを再実行させる回帰ケースは tier A', () => {
   const result = findHandoffWithoutInfo('AI設定の配布に不具合がありました。お手数ですが、前回と同じコマンドをもう一度 PowerShell に貼って Enter してください');
@@ -111,4 +117,38 @@ test('箇条書き手順に URL とコマンドを添えた依頼は違反にし
 test('フェンス付きコードブロックは直前の依頼ブロックに属する', () => {
   const blocks = splitBlocks('下を貼ってください。\n```\nnode x.mjs\n```');
   assert.equal(blocks.length, 1);
+});
+
+// --- 2026-09-01 誤爆の回帰。実際にブロックされた応答の全文を fixture で固定する ---
+// 合成した短文だけだと再現しない。表は空行が無いので1ブロックになり、
+// セルの中の1文が表全体を違反にしていた。逐語で置くこと。
+
+test('誤爆回帰: 逃げ道の表にある「スクショを貼ってください」は違反にしない', () => {
+  const text = readFixture('false-positive-fallback-table.md');
+  assert.equal(findHandoffWithoutInfo(text), null);
+});
+
+test('誤爆回帰: 引用した依頼文（検証結果の表）は違反にしない', () => {
+  const text = readFixture('false-positive-quoted-example.md');
+  assert.equal(findHandoffWithoutInfo(text), null);
+});
+
+test('スクショを貼るだけの依頼は情報を要求しない', () => {
+  assert.equal(findHandoffWithoutInfo('その画面のスクショを貼ってください'), null);
+});
+
+test('画面を開いてスクショを貼る依頼は URL が要るので違反のまま', () => {
+  const result = findHandoffWithoutInfo('ホスト画面を開いてスクショを貼ってください');
+  assert.equal(result?.tier, 'B');
+});
+
+test('鉤括弧はラベルとしても使うので、外に動詞が残る依頼は検出し続ける', () => {
+  const result = findHandoffWithoutInfo('「割引」の画面を開いてください');
+  assert.equal(result?.tier, 'B');
+});
+
+test('違反メッセージは表のヘッダではなく引っかかった文を出す', () => {
+  const result = findHandoffWithoutInfo('リモートPCでもう一度実行してください');
+  const message = formatViolationMessage(result);
+  assert.match(message, /実行してください/);
 });

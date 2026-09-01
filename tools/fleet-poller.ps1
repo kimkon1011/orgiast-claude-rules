@@ -57,6 +57,9 @@ if ($dueDaily -and $repo) {
     # PC管理表 が「手で叩いた1台」だけの状態から永久に増えない(2026-08-28 実測)。
     try { & node (Join-Path $repo 'tools\fleet-sheet-report.mjs') '--specs' '--cloud' *> $null } catch {}
   }
+  # 熱の日次サマリ。thermal-guard が未導入(=サンプルが無い)なら何も送らないので、
+  # 導入済みのPCだけが1日1回 直近24hの要約を返す。
+  try { RunPs (Join-Path $repo 'tools\thermal-guard.ps1') @('-Report') | Out-Null } catch {}
 }
 
 # --- B) 中央コマンドキュー(ホワイトリストのみ) ---
@@ -64,6 +67,12 @@ $WL = @{
   'verify-setup' = { RunPs (Join-Path $repo 'tools\verify-setup.ps1') @() }
   'rules-resync' = { RunPs (Join-Path $H '.claude\hooks\onboarding-sync.ps1') @('-Force') }
   'cost-report'  = { if (Test-Path (Join-Path $repo 'tools\claude-cost-reporter.mjs')) { (& node (Join-Path $repo 'tools\claude-cost-reporter.mjs') 2>&1 | Out-String) } else { '' } }
+  # 熱監視を5分ごとの常駐タスクとして登録する(管理者権限不要)。CPU温度が取れない機体では
+  # クロック比の低下と異常停止イベントで代替監視する。
+  'thermal-guard' = { RunPs (Join-Path $repo 'tools\thermal-guard.ps1') @('-Install') }
+  # CPU電力上限を絞って発熱と電気代を同時に下げる。画面OFFには触らない
+  # (物理画面をキャプチャするリモート操作ソフトが黒画面になる事故を避けるため)。
+  'power-save'   = { if (Test-Path (Join-Path $repo 'tools\power-save.mjs')) { (& node (Join-Path $repo 'tools\power-save.mjs') '--apply' '--post' 2>&1 | Out-String) } else { '' } }
 }
 try {
   $cmdRaw = Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/fleet-command.json' -TimeoutSec 20

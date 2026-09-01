@@ -102,6 +102,16 @@ test('既定は VSCode 経路で、ターミナルは明示したときだけ選
   assert.equal(pickRoute({ codeCli: 'code.cmd', flagTarget: undefined, env: { ORGIAST_NEXT_SESSION_TARGET: 'vscode' } }), 'vscode');
 });
 
+test('inline は target と旧 mode の各経路で選べ、明示 target の優先順位が最も高い', () => {
+  assert.equal(pickRoute({ codeCli: '', flagTarget: 'inline', env: {}, state: {} }), 'inline');
+  assert.equal(pickRoute({ codeCli: '', env: { ORGIAST_NEXT_SESSION_TARGET: 'inline' }, state: {} }), 'inline');
+  assert.equal(pickRoute({ codeCli: '', env: { ORGIAST_NEXT_SESSION_MODE: 'inline' }, state: {} }), 'inline');
+  assert.equal(pickRoute({ codeCli: '', env: {}, state: { mode: 'inline' } }), 'inline');
+  assert.equal(pickRoute({ codeCli: '', env: {}, state: { target: 'inline' } }), 'inline');
+  assert.equal(pickRoute({ codeCli: '', flagTarget: 'vscode', env: { ORGIAST_NEXT_SESSION_TARGET: 'inline' }, state: { target: 'inline' } }), 'vscode');
+  assert.equal(pickRoute({ codeCli: '', env: {}, state: {} }), 'vscode');
+});
+
 test('引き継ぎコメントから Windows cwd を取り出す', () => {
   const text = '<!-- 前セッション: abc / 更新: 2026-08-28 / cwd: c:\\Users\\uers\\Downloads\\作業 -->\n本文';
   assert.equal(parseHandoffCwd(text), 'c:\\Users\\uers\\Downloads\\作業');
@@ -206,6 +216,57 @@ function fakeIo(overrides = {}) {
     },
   };
 }
+
+test('--set-target は他の state を保持し、不正値では何も書かない', async () => {
+  const initial = { enabled: false, lastLaunchAt: '2026-08-28T00:00:00.000Z', lastCwd: 'D:\\keep' };
+  const configured = fakeIo({
+    readFile: async (file) => {
+      if (file.endsWith('next-session-launch.json')) return JSON.stringify(initial);
+      throw new Error('ENOENT');
+    },
+  });
+  assert.equal(await launchNextSession(['--set-target', 'inline'], configured.io), 0);
+  assert.equal(configured.calls.spawn.length, 0);
+  const saved = JSON.parse(configured.calls.writes[0][1]);
+  assert.deepEqual(saved, { ...initial, target: 'inline' });
+  assert.match(configured.calls.logs.join('\n'), /停止中です。--enable が必要/);
+
+  const invalid = fakeIo();
+  assert.equal(await launchNextSession(['--set-target', 'invalid'], invalid.io), 2);
+  assert.equal(invalid.calls.writes.length, 0);
+  assert.equal(invalid.calls.renames.length, 0);
+});
+
+test('inline は spawn せず予約し、lastRoute を inline で保存する', async () => {
+  const armed = [];
+  const { io, calls } = fakeIo({ armToFile: (value) => { armed.push(value); return true; } });
+  assert.equal(await launchNextSession(['--target', 'inline', '--session', 'closing-sid'], io), 0);
+  assert.equal(calls.spawn.length, 0);
+  assert.deepEqual(armed, [{ home: '/fake/home', sessionId: 'closing-sid', cwd: 'C:\\work' }]);
+  const saved = JSON.parse(calls.writes.find(([file]) => file.includes('next-session-launch.json.tmp-'))[1]);
+  assert.equal(saved.lastRoute, 'inline');
+  assert.match(calls.logs.join('\n'), /予約しました\(inline\)/);
+});
+
+test('inline は前回 VSCode タブが未送信でも予約できる', async () => {
+  let armed = 0;
+  const base = pendingTabIo('{"type":"user","message":{"role":"user","content":"別の依頼"}}');
+  base.io.armToFile = () => { armed += 1; return true; };
+  assert.equal(await launchNextSession(['--target', 'inline', '--session', 'closing-sid'], base.io), 0);
+  assert.equal(armed, 1);
+  assert.equal(base.calls.spawn.length, 0);
+  assert.equal(JSON.parse(base.calls.writes.find(([file]) => file.includes('next-session-launch.json.tmp-'))[1]).lastRoute, 'inline');
+});
+
+test('inline dry-run は spawn も予約も state 更新もしない', async () => {
+  let armed = 0;
+  const { io, calls } = fakeIo({ armToFile: () => { armed += 1; return true; } });
+  assert.equal(await launchNextSession(['--target', 'inline', '--dry-run', '--session', 'probe'], io), 0);
+  assert.equal(calls.spawn.length, 0);
+  assert.equal(calls.writes.length, 0);
+  assert.equal(armed, 0);
+  assert.deepEqual(JSON.parse(calls.logs[0]), { route: 'inline', cwd: 'C:\\work', sessionId: 'probe' });
+});
 
 test('起動成功時に detached spawn し state を tmp から原子的に更新する', async () => {
   const { io, calls } = fakeIo();

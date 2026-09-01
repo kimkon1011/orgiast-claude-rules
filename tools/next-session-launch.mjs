@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
+import { armToFile } from './session-relaunch.mjs';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..');
 
@@ -134,11 +135,28 @@ export function planVscodeLaunch({ codeCli, cwd, prompt, openFolder = false }) {
 // 「コードは VSCode 既定なのにターミナルが開く」が再発し、原因が env でも古いコピーでもなく
 // codeCli 解決の失敗だった場合に気付けない。CLI が無い時は route=vscode のままスキップして
 // 何も起動しない(呼び出し側でログを出す)。ターミナルは明示指定した時だけ。
-export function pickRoute({ codeCli, flagTarget, env }) {
-  const target = flagTarget ?? env.ORGIAST_NEXT_SESSION_TARGET;
+// inline は「窓もタブも開かず、次に開いたセッションが自分から session-start を実行する」第三の経路。
+// 起動先の軸は target 一本にする(mode という第二の軸を作ると target=vscode かつ mode=window のような
+// 意味の無い組み合わせが生まれる)。旧 mode 表記は他機体に残っている可能性があるので読むだけ受ける。
+// 旧 `window`(= wt.exe で別ウィンドウ)は vscode へ寄せる。既定を VSCode タブへ反転した 2026-08-30 の
+// kim 指示より前の表記であり、いま terminal として復活させると「並走してぶつかる」実害へ戻る。
+export function pickRoute({ codeCli, flagTarget, env, state = {} }) {
+  const raw = flagTarget
+    ?? env.ORGIAST_NEXT_SESSION_TARGET
+    ?? env.ORGIAST_NEXT_SESSION_MODE
+    ?? state.target
+    ?? state.mode;
+  const target = String(raw ?? '').trim().toLowerCase();
+  if (target === 'inline') return 'inline';
   if (target === 'terminal') return 'terminal';
-  if (target === 'vscode') return 'vscode';
   return 'vscode';
+}
+
+export function withTarget(state, value) {
+  const normalized = String(value ?? '').toLowerCase();
+  const target = normalized === 'window' ? 'vscode' : normalized;
+  if (!['vscode', 'terminal', 'inline'].includes(target)) return null;
+  return { ...(state && typeof state === 'object' && !Array.isArray(state) ? state : {}), target };
 }
 
 
@@ -269,7 +287,7 @@ export function shouldLaunch({ state, now, env, force, pendingTab }) {
 }
 
 function parseArgs(argv) {
-  const result = { dryRun: false, prompt: '/session-start', cwd: '', force: false, wt: undefined, target: undefined, openFolder: false };
+  const result = { dryRun: false, prompt: '/session-start', cwd: '', force: false, wt: undefined, target: undefined, openFolder: false, sessionId: '', action: '', actionValue: '' };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--dry-run') result.dryRun = true;
@@ -277,8 +295,13 @@ function parseArgs(argv) {
     else if (arg === '--force') result.force = true;
     else if (arg === '--prompt' && argv[index + 1] !== undefined) result.prompt = argv[++index];
     else if (arg === '--cwd' && argv[index + 1] !== undefined) result.cwd = argv[++index];
+    else if (arg === '--session' && argv[index + 1] !== undefined) result.sessionId = argv[++index];
     else if (arg === '--wt' && argv[index + 1] !== undefined) result.wt = argv[++index];
     else if (arg === '--target' && argv[index + 1] !== undefined) result.target = argv[++index];
+    else if ((arg === '--set-target' || arg === '--set-mode') && argv[index + 1] !== undefined) { result.action = 'set-target'; result.actionValue = argv[++index]; }
+    else if (arg === '--show-target' || arg === '--show-mode') result.action = 'show-target';
+    else if (arg === '--enable') result.action = 'enable';
+    else if (arg === '--disable') result.action = 'disable';
   }
   return result;
 }
@@ -306,6 +329,7 @@ export async function launchNextSession(argv = [], io = {}) {
   const spawnProcess = io.spawn ?? spawn;
   const wait = io.wait ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   const log = io.log ?? console.log;
+  const arm = io.armToFile ?? armToFile;
 
   try {
     const flags = parseArgs(argv);
@@ -322,6 +346,36 @@ export async function launchNextSession(argv = [], io = {}) {
     };
 
     const state = await readJson(statePath, { enabled: true });
+    const codeCli = resolveVscodeCli({ env, exists, homedir: home });
+    const route = pickRoute({ codeCli, flagTarget: flags.target, env, state });
+
+    if (flags.action) {
+      if (flags.action === 'show-target') {
+        log(`target=${route} / enabled=${state.enabled !== false}`);
+        return 0;
+      }
+      let nextState;
+      if (flags.action === 'set-target') {
+        nextState = withTarget(state, flags.actionValue);
+        if (!nextState) {
+          log(`[next-session] エラー: target は vscode / terminal / inline のいずれかを指定してください`);
+          return 2;
+        }
+      } else {
+        nextState = { ...state, enabled: flags.action === 'enable' };
+      }
+      const tmpPath = `${statePath}.tmp-${process.pid}`;
+      await writeFile(tmpPath, `${JSON.stringify(nextState, null, 2)}\n`, 'utf8');
+      await rename(tmpPath, statePath);
+      if (flags.action === 'set-target') {
+        log(`[next-session] target=${nextState.target} に設定しました`);
+        if (nextState.enabled === false) log('[next-session] 停止中です。--enable が必要です');
+      } else {
+        log(`[next-session] enabled=${nextState.enabled}`);
+      }
+      return 0;
+    }
+
     const now = typeof io.now === 'function' ? io.now() : (io.now ?? Date.now());
     let promptConsumed = null;
     const lastLaunch = Date.parse(state.lastLaunchAt);
@@ -376,7 +430,7 @@ export async function launchNextSession(argv = [], io = {}) {
     }
     const launchEnv = childEnv({ env, configDir, source: configDirSource });
     const pendingTab = hasUnsentVscodeTab({ state, now, promptConsumed });
-    const decision = shouldLaunch({ state, now, env, force: flags.force, pendingTab });
+    const decision = shouldLaunch({ state, now, env, force: flags.force, pendingTab: route === 'inline' ? false : pendingTab });
     if (!decision.ok) {
       log(`[next-session] スキップ: ${decision.reason}`);
       return 0;
@@ -385,12 +439,28 @@ export async function launchNextSession(argv = [], io = {}) {
     const handoffCwd = parseHandoffCwd(await readText(handoffPath));
     const current = await readJson(currentPath, {});
     const cwd = flags.cwd || handoffCwd || current.cwd || REPO_ROOT;
-    const codeCli = resolveVscodeCli({ env, exists, homedir: home });
-    const route = pickRoute({ codeCli, flagTarget: flags.target, env });
     const accountLog = accountLabel({ account, route, accountPath: firstAccountConfigPath });
     if (configDirSource === 'state' && route === 'vscode') {
       // 効かない指定を黙って無視すると「固定したつもり」の事故になる。terminal 経路なら env で効く。
       log(`[next-session] 注意: configDir(${configDir}) は VSCode 拡張経路では効きません。アカウントを固定するなら --target terminal を使ってください`);
+    }
+
+    if (route === 'inline') {
+      if (flags.dryRun) {
+        log(JSON.stringify({ route: 'inline', cwd, sessionId: flags.sessionId }));
+        return 0;
+      }
+      const armed = arm({ home, sessionId: flags.sessionId, cwd });
+      if (!armed) {
+        log('[next-session] スキップ: session-relaunch が無効です (--on で有効化)');
+        return 0;
+      }
+      const nextState = { ...state, enabled: state.enabled !== false, lastLaunchAt: new Date().toISOString(), lastCwd: cwd, lastRoute: 'inline', lastPrompt: flags.prompt, lastAccount: account, lastConfigDir: configDir };
+      const tmpPath = `${statePath}.tmp-${process.pid}`;
+      await writeFile(tmpPath, `${JSON.stringify(nextState, null, 2)}\n`, 'utf8');
+      await rename(tmpPath, statePath);
+      log(`[next-session] 予約しました(inline): /clear すると新しいセッションが自分から ${flags.prompt} を実行します`);
+      return 0;
     }
 
     if (route === 'vscode') {

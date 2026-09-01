@@ -25,3 +25,21 @@ test('既存PowerShell hookへExecutionPolicy Bypassを補いcost-loopをmjsへ�
   assert.match(stdout, /hook修復: 実行ポリシー1件 \/ cost-loop移行1件/);
   fs.rmSync(home, { recursive: true, force: true });
 });
+
+test('session-relaunch hook は同期で1本だけ登録され、再実行で重複しない', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-relaunch-'));
+  const repo = path.resolve('.');
+  const settingsFile = path.join(home, '.claude', 'settings.json');
+  const env = { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo };
+  execFileSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { encoding: 'utf8', env });
+  const second = execFileSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { encoding: 'utf8', env });
+  const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  const hooks = settings.hooks.SessionStart.flatMap((group) => group.hooks || [])
+    .filter((hook) => String(hook.command).includes('session-relaunch'));
+  assert.equal(hooks.length, 1);
+  assert.match(hooks[0].command, /session-relaunch\.mjs" --hook$/);
+  assert.equal(hooks[0].timeout, 10);
+  assert.equal('async' in hooks[0], false);
+  assert.match(second, /hook は既に登録済み\(変更なし\)/);
+  fs.rmSync(home, { recursive: true, force: true });
+});

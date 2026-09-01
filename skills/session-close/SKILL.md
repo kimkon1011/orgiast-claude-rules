@@ -107,11 +107,16 @@ node "$HOME/orgiast-claude-rules/tools/close-session.mjs" --session <このセ�
 - 手順7 の `close-session.mjs` が、退避したあとに `tools/next-session-launch.mjs` を呼び、
   **いま使っている VSCode の中に Claude Code の新しいタブを開き、入力欄に `/session-start` を入れる**
   （既定は `vscode`。2026-08-30 に kim 指示で反転）。user の手作業は **Enter 1回だけ**。
+- 起動先 `target` は3種類: `vscode`（既定）/ `terminal` / `inline`。`inline` は窓もタブも開かず、
+  次のセッション用の予約だけを置く。user が現在の画面で `/clear` を1回実行すると、同期 SessionStart hook が
+  引き継ぎ context を注入し、新しいセッションが自分から `/session-start` を実行する。
+- `inline` でも `/clear` の1打鍵は残る。外部から `/clear` を発火させる公式手段はなく、SessionEnd hook の
+  出力も新規会話の開始には使えないため、この操作を「完全自動」と偽って報告しない。
 - **ターミナル経路（wt.exe で別ウィンドウの CLI セッション）は既定で使わない**。argv 起動なので
   プロンプトまで自動送信できる利点はあるが、**VSCode 側で作業中のセッションと並走してぶつかる**
   （kim 実害・2026-08-30「session-start がターミナルのセッションと並行でぶつかってばかり」）。
   ターミナルで開きたい時だけ `--target terminal` / `ORGIAST_NEXT_SESSION_TARGET=terminal`。
-  VSCode CLI (`code.cmd`) が無い機体では自動でターミナルへフォールバックする。
+  VSCode CLI (`code.cmd`) が無い機体でもターミナルへは自動フォールバックせず、安全にスキップする。
 - VSCode 経路が Enter 1回を残すのは拡張側の仕様（2.1.251 実体は `setInputText` のみで送信しない）。
   `code` CLI に `--command` は無く、Enter の代打ち（SendKeys）は前面が別アプリだと誤爆するので採らない。
 - 起動先の作業ディレクトリは `~/.claude/next-session.md` の `cwd:` コメント →
@@ -128,6 +133,8 @@ node "$HOME/orgiast-claude-rules/tools/close-session.mjs" --session <このセ�
   - `CLAUDE_HEADLESS` / `CI` が立っている環境では自動で起動しない（夜間 auto-session でウィンドウを開かない）
   - 直近120秒に起動済みなら二重起動しない（`--force-launch` で無視できる）
   - 恒久的に止めるなら `~/.claude/next-session-launch.json` に `{"enabled": false}`
+- target の変更・確認は `next-session-launch.mjs --set-target <vscode|terminal|inline>` / `--show-target`。
+  旧手順との互換用に `--set-mode` / `--show-mode` も受けるが、新しい文書では使わない。
 - 起動結果は `[next-session] VSCode に新しいタブを開きました…`（ターミナル経路なら `新しいセッションを起動しました: <cwd>`） / `[next-session] スキップ: <理由>` の1行で出る。
   スキップされた時だけ「新しいセッションを手で開いてください」と伝える。
 

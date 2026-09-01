@@ -78,10 +78,12 @@ test('専用 tree を用意できない場合だけ 1 を返して子を起動�
   const previousTree = process.env.ORGIAST_AUTO_SESSION_TREE;
   process.env.ORGIAST_AUTO_SESSION_TREE = pinnedTree;
   const calls = [];
+  const bootLogs = [];
   try {
     const code = await main([], {
       exists: () => false,
       log: () => {},
+      bootLog: (message) => bootLogs.push(message),
       run: async (command, args) => {
         calls.push({ command, args });
         return args[0] === 'fetch' ? 0 : 1;
@@ -89,6 +91,7 @@ test('専用 tree を用意できない場合だけ 1 を返して子を起動�
     });
     assert.equal(code, 1);
     assert.equal(calls.every(({ command }) => command === 'git'), true);
+    assert.ok(bootLogs.some((message) => message.includes('abort')));
   } finally {
     if (previousTree === undefined) delete process.env.ORGIAST_AUTO_SESSION_TREE; else process.env.ORGIAST_AUTO_SESSION_TREE = previousTree;
   }

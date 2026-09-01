@@ -65,7 +65,17 @@ if ($dueDaily -and $repo) {
 # --- B) 中央コマンドキュー(ホワイトリストのみ) ---
 $WL = @{
   'verify-setup' = { RunPs (Join-Path $repo 'tools\verify-setup.ps1') @() }
-  'rules-resync' = { RunPs (Join-Path $H '.claude\hooks\onboarding-sync.ps1') @('-Force') }
+  # リポの .mjs を最優先。凍結コピー(~/.claude/hooks/onboarding-sync.ps1)は install 時に
+  # コピーされて以後一度も更新されず、その中身は ONBOARDING.md の raw URL を1本取るだけで
+  # tools/ を一切運ばない(2026-09-01 実測: 08-15 版の外部取得は ONBOARDING.md のみ)。
+  # つまり中央キューから rules-resync を配っても新しいツールが永久に届かない。
+  # fleet-poller.mjs 側には 2026-08-25 に同じ修正が入っているが、
+  # スケジュールタスクが実際に実行するのはこの .ps1 なので取り残されていた。
+  'rules-resync' = {
+    $mjs = Join-Path $repo 'tools\onboarding-sync.mjs'
+    if (Test-Path $mjs) { (& node $mjs '--force' 2>&1 | Out-String) }
+    else { RunPs (Join-Path $H '.claude\hooks\onboarding-sync.ps1') @('-Force') }
+  }
   'cost-report'  = { if (Test-Path (Join-Path $repo 'tools\claude-cost-reporter.mjs')) { (& node (Join-Path $repo 'tools\claude-cost-reporter.mjs') 2>&1 | Out-String) } else { '' } }
   # 熱監視を5分ごとの常駐タスクとして登録する(管理者権限不要)。CPU温度が取れない機体では
   # クロック比の低下と異常停止イベントで代替監視する。

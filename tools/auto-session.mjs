@@ -738,7 +738,14 @@ export function formatResultLine(result, minutes, pr = '') {
   return `- ${result.todo} | ${result.status}${pr ? ` | PR #${pr}` : ''} | ${minutes}分 | transcript: ${result.transcript || '(取得できず)'} | resume: ${result.resumeCommand || '(取得できず)'}${failureReason(result)}`;
 }
 
-export async function main(argv = process.argv.slice(2)) {
+export async function main(argv = process.argv.slice(2), io = {}) {
+  const listIssues = io.listFeedbackIssues ?? listFeedbackIssues;
+  const resolveExecutable = io.resolveClaudeExe ?? resolveClaudeExe;
+  const runSession = io.runChild ?? runChild;
+  const prepareFeedbackRepo = io.ensureFeedbackRepo ?? ensureFeedbackRepo;
+  const markInProgress = io.setInProgress ?? setInProgress;
+  const sendNotification = io.notify ?? notify;
+  const sendFeedbackNotification = io.notifyFeedback ?? notifyFeedback;
   const options = parseArgs(argv);
   const batchStartedAt = new Date();
   const home = homeDir();
@@ -756,7 +763,7 @@ export async function main(argv = process.argv.slice(2)) {
   const nextFile = path.join(claudeDir, 'next-session.md');
   // フォーム報告は next-session.md と独立した入力源なので、片方が無くてももう片方を止めない。
   const parsed = fs.existsSync(nextFile) ? parseHandoff(fs.readFileSync(nextFile, 'utf8')) : { block: '', todos: [], todoBlocks: [], sections: {} };
-  const feedbackIssues = listFeedbackIssues();
+  const feedbackIssues = listIssues();
   const detectedHistoryCwd = config.historyCwd || detectHistoryCwd({ projectsDir: path.join(claudeDir, 'projects') });
   if (options.list) {
     const reasons = todoExclusionReasons(parsed.todos);
@@ -833,7 +840,7 @@ export async function main(argv = process.argv.slice(2)) {
     return decision;
   };
   try {
-    const executable = resolveClaudeExe();
+    const executable = resolveExecutable();
     for (const todo of selected) {
       const timing = beforeChild();
       if (!timing.run) break;
@@ -854,7 +861,7 @@ export async function main(argv = process.argv.slice(2)) {
           n += 1;
         }
       }
-      const result = await runChild(executable, buildPrompt(todo, parsed.sections, repoCwd, summaryFile, timing.timeoutMin), repoCwd, historyCwd, timing.timeoutMin * 60_000);
+      const result = await runSession(executable, buildPrompt(todo, parsed.sections, repoCwd, summaryFile, timing.timeoutMin), repoCwd, historyCwd, timing.timeoutMin * 60_000);
       const stdoutSessionId = extractSessionId(result.stdout);
       const transcriptDir = path.dirname(transcriptPath(historyCwd, '00000000-0000-0000-0000-000000000000'));
       const recoveredSessionId = stdoutSessionId ? '' : recoverSessionId({ dir: transcriptDir, startedAt: result.startedAt, endedAt: result.endedAt });
@@ -885,12 +892,12 @@ export async function main(argv = process.argv.slice(2)) {
       if (deadlineNote) break;
       const timing = beforeChild();
       if (!timing.run) break;
-      const prepared = ensureFeedbackRepo(issue.repo);
+      const prepared = prepareFeedbackRepo(issue.repo);
       if (!prepared.ok) {
         feedbackResults.push({ issue, status: 'failure', launchFailed: true, stderr: prepared.error || '対象リポジトリを取得できませんでした' });
         continue;
       }
-      const marked = setInProgress(issue, true);
+      const marked = markInProgress(issue, true);
       if (marked.error || marked.status !== 0) {
         feedbackResults.push({ issue, status: 'failure', launchFailed: true, stderr: marked.stderr || 'in-progress ラベルを付けられませんでした' });
         continue;
@@ -901,7 +908,7 @@ export async function main(argv = process.argv.slice(2)) {
       const runFile = path.join(autoDir, 'runs', `${stamp}.json`);
       const summaryFile = path.join(autoDir, 'runs', `${stamp}.summary.md`);
       fs.writeFileSync(summaryFile, '', { flag: 'a' });
-      const result = await runChild(executable, buildFeedbackPrompt(issue, issue.repo, repoCwd, summaryFile, timing.timeoutMin), repoCwd, historyCwd, timing.timeoutMin * 60_000);
+      const result = await runSession(executable, buildFeedbackPrompt(issue, issue.repo, repoCwd, summaryFile, timing.timeoutMin), repoCwd, historyCwd, timing.timeoutMin * 60_000);
       let summary = '';
       try { summary = fs.readFileSync(summaryFile, 'utf8'); } catch {}
       completedChildren += 1;
@@ -910,7 +917,7 @@ export async function main(argv = process.argv.slice(2)) {
       feedbackResults.push(record);
       fs.writeFileSync(runFile, JSON.stringify(record, null, 2));
       // 起動そのものに失敗した場合だけ、次回が再試行できるよう対応中ラベルを戻す。
-      if (result.launchFailed) setInProgress(issue, false);
+      if (result.launchFailed) markInProgress(issue, false);
     }
     if (deadlineNote) {
       const stamp = `${localDate()}-deadline-${Date.now()}`;
@@ -932,7 +939,7 @@ export async function main(argv = process.argv.slice(2)) {
 ${result.summary ?? ''}`);
     lines.push(`${formatResultLine(result, minutes, pr)}\n${result.summary ? `summary:\n${result.summary.slice(0, 700)}` : 'summary: (記録なし)'}`);
   }
-  await notify(findWebhook(claudeDir), lines.join('\n'));
+  await sendNotification(findWebhook(claudeDir), lines.join('\n'));
   const relay = relayConfig(claudeDir);
   let feedbackSucceeded = 0;
   for (const result of feedbackResults) {
@@ -940,7 +947,7 @@ ${result.summary ?? ''}`);
     // 子の終了コードにかかわらず、PR が存在するなら kim に承認導線を必ず渡す。
     if (details.url) {
       feedbackSucceeded += 1;
-      await notifyFeedback(relay, { title: 'フォーム報告の修正PRができました', body: `#${result.issue.number} ${result.issue.title}\n${details.title}\nCI: ${details.ci}`, url: details.url });
+      await sendFeedbackNotification(relay, { title: 'フォーム報告の修正PRができました', body: `#${result.issue.number} ${result.issue.title}\n${details.title}\nCI: ${details.ci}`, url: details.url });
     }
   }
   const feedbackFailed = feedbackResults.length - feedbackSucceeded;
@@ -949,15 +956,17 @@ ${result.summary ?? ''}`);
     // PR が無いまま in-progress を残すと次回以降 feedbackIssueExclusionReason に弾かれて永久に再試行されないため。
     for (const issue of feedbackIssuesToUnmark(feedbackResults)) {
       try {
-        const unmarked = setInProgress(issue, false);
+        const unmarked = markInProgress(issue, false);
         if (unmarked.error || unmarked.status !== 0) console.warn(`auto-session: in-progress ラベル解除失敗 (${issue.repo}#${issue.number})`);
       } catch {
         console.warn(`auto-session: in-progress ラベル解除失敗 (${issue.repo}#${issue.number})`);
       }
     }
-    await notifyFeedback(relay, { title: 'フォーム報告の自動対応結果', body: `${feedbackResults.length}件試行し、${feedbackFailed}件でPRを作成できませんでした\n\n${feedbackFailureBody(failed)}`, url: '' });
+    await sendFeedbackNotification(relay, { title: 'フォーム報告の自動対応結果', body: `${feedbackResults.length}件試行し、${feedbackFailed}件でPRを作成できませんでした\n\n${feedbackFailureBody(failed)}`, url: '' });
   }
-  return results.some((result) => result.status === 'failure') || feedbackFailed > 0 ? 1 : 0;
+  const anyFailedOrTimedOut = [...results, ...feedbackResults]
+    .some((result) => result.status === 'failure' || result.status === 'timeout');
+  return anyFailedOrTimedOut ? 1 : 0;
 }
 
 if (isEntry(import.meta.url)) {

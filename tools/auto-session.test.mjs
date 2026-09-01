@@ -6,7 +6,7 @@ import path from 'node:path';
 
 const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-session-test-'));
 process.env.ORGIAST_HOME = isolatedHome;
-const { DEFAULT_REPO, localDate, loadConfig, detectHistoryCwd, parseHandoff, todoExclusionReason, todoExclusionReasons, dedupeKey, dedupeTodos, filterTodos, pickCwd, buildChildArgs, buildPrompt, buildFeedbackPrompt, feedbackFailureBody, feedbackIssueExclusionReason, feedbackIssuesToUnmark, filterFeedbackIssues, feedbackNotifyUrl, normalizeGitHubRepo, feedbackRepoCwd, resolveClaudeExe, decideRun, markTodoDone, writeTodoDone, extractSessionId, transcriptPath, recoverSessionId, appendClosedSession, formatResultLine, parseArgs, deadlineDecision, runChild } = await import('./auto-session.mjs');
+const { DEFAULT_REPO, localDate, loadConfig, detectHistoryCwd, parseHandoff, todoExclusionReason, todoExclusionReasons, dedupeKey, dedupeTodos, filterTodos, pickCwd, buildChildArgs, buildPrompt, buildFeedbackPrompt, feedbackFailureBody, feedbackIssueExclusionReason, feedbackIssuesToUnmark, filterFeedbackIssues, feedbackNotifyUrl, normalizeGitHubRepo, feedbackRepoCwd, resolveClaudeExe, decideRun, markTodoDone, writeTodoDone, extractSessionId, transcriptPath, recoverSessionId, appendClosedSession, formatResultLine, parseArgs, deadlineDecision, runChild, main } = await import('./auto-session.mjs');
 const historyCwd = String.raw`c:\Users\example\Downloads\work`;
 test.after(() => fs.rmSync(isolatedHome, { recursive: true, force: true }));
 
@@ -134,6 +134,27 @@ test('PR URL が無いフォーム報告だけ in-progress ラベル解除対象
   const noPr = { issue: { number: 3 }, stdout: '完了', summary: 'PR は作成できませんでした' };
   assert.deepEqual(feedbackIssuesToUnmark([stdoutPr, summaryPr, noPr]), [noPr.issue]);
   assert.deepEqual(feedbackIssuesToUnmark([]), []);
+});
+
+function mainIoWithFeedback(status) {
+  return {
+    listFeedbackIssues: () => [{ repo: 'acme/app', number: 8, title: '修正して', labels: [{ name: 'feedback' }] }],
+    resolveClaudeExe: () => '/fake/claude',
+    ensureFeedbackRepo: () => ({ ok: true, repoCwd: isolatedHome }),
+    setInProgress: () => ({ status: 0, stdout: '', stderr: '' }),
+    runChild: async () => ({ status, exitCode: status === 'success' ? 0 : 1, stdout: '完了待ちでスケジュールしました', stderr: '', startedAt: new Date().toISOString(), endedAt: new Date().toISOString() }),
+    notify: async () => {},
+    notifyFeedback: async () => {},
+  };
+}
+
+test('全記録が success なら feedback に PR URL が無くても main は 0 を返す', async () => {
+  assert.equal(await main(['--count', '0', '--feedback-count', '1'], mainIoWithFeedback('success')), 0);
+});
+
+test('todo または feedback が failure/timeout なら main は 1 を返す', async () => {
+  assert.equal(await main(['--count', '0', '--feedback-count', '1'], mainIoWithFeedback('failure')), 1);
+  assert.equal(await main(['--count', '0', '--feedback-count', '1'], mainIoWithFeedback('timeout')), 1);
 });
 
 test('通知URLは feedback-intake を notify に置き換え、query を捨てる', () => {

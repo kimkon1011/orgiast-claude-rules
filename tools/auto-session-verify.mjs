@@ -145,7 +145,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
         let launcher = '';
         try { launcher = read(path.join(autoDir, 'launcher.log'), 'utf8'); } catch {}
         const dayLines = String(launcher).split(/\r?\n/).filter((line) => line.includes(day));
-        const failed = dayLines.filter((line) => /\babort\b|\bexit\s+(?!0\b)\d+/.test(line));
+        const failed = dayLines.filter((line) => /\babort\b|に失敗しました|\bexit\s+(?!0\b)\d+/.test(line));
         if (failed.length) { cause = 'launcher-failed'; evidence.push(...failed.slice(-5)); }
         else { cause = 'unknown'; evidence.push(...String(launcher).split(/\r?\n/).filter(Boolean).slice(-20)); }
       }

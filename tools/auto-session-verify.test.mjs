@@ -62,6 +62,29 @@ test('LastRunTime が00:30より前なら未発火で登録しない', async () 
   assert.match(result.notice, /LastRunTime=.*LastTaskResult=267011/);
 });
 
+test('当日の前準備コマンド失敗を launcher-failed に分類する', async () => {
+  const launcherLog = path.join(HOME, '.claude', 'auto-session', 'launcher.log');
+  const h = harness({
+    files: {
+      [launcherLog]: '[2026-08-30T03:20:00+09:00] [auto-session-launcher] 警告: detach pinned worktree に失敗しました: 終了コード 1\n',
+    },
+  });
+  const result = await main([], h.io);
+  assert.equal(result.cause, 'launcher-failed');
+  assert.match(result.notice, /detach pinned worktree に失敗しました/);
+});
+
+test('非致命の継続メッセージだけなら launcher-failed に誤分類しない', async () => {
+  const launcherLog = path.join(HOME, '.claude', 'auto-session', 'launcher.log');
+  const h = harness({
+    files: {
+      [launcherLog]: '[2026-08-30T03:20:01+09:00] [auto-session-launcher] 警告は非致命: 既存の専用 worktree を使って継続します\n',
+    },
+  });
+  const result = await main([], h.io);
+  assert.equal(result.cause, 'unknown');
+});
+
 function batchFiles({ expected = 12, records = 7, status = 'success', deadline = true } = {}) {
   const files = { [path.join(runs, '2026-08-30-manifest.json')]: JSON.stringify({ selectedCount: expected - 1, feedbackCount: 1, options: { deadline: '07:30' } }) };
   for (let n = 1; n <= records; n += 1) files[path.join(runs, `2026-08-30-${n}.json`)] = JSON.stringify({ todo: `TODO ${n}`, status });

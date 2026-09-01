@@ -939,7 +939,11 @@ export async function main(argv = process.argv.slice(2), io = {}) {
 ${result.summary ?? ''}`);
     lines.push(`${formatResultLine(result, minutes, pr)}\n${result.summary ? `summary:\n${result.summary.slice(0, 700)}` : 'summary: (記録なし)'}`);
   }
-  await sendNotification(findWebhook(claudeDir), lines.join('\n'));
+  try {
+    await sendNotification(findWebhook(claudeDir), lines.join('\n'));
+  } catch (error) {
+    console.warn(`auto-session: 完走通知の送信に失敗しました（本体の成否には影響させません）: ${error?.message ?? error}`);
+  }
   const relay = relayConfig(claudeDir);
   let feedbackSucceeded = 0;
   for (const result of feedbackResults) {
@@ -947,7 +951,11 @@ ${result.summary ?? ''}`);
     // 子の終了コードにかかわらず、PR が存在するなら kim に承認導線を必ず渡す。
     if (details.url) {
       feedbackSucceeded += 1;
-      await sendFeedbackNotification(relay, { title: 'フォーム報告の修正PRができました', body: `#${result.issue.number} ${result.issue.title}\n${details.title}\nCI: ${details.ci}`, url: details.url });
+      try {
+        await sendFeedbackNotification(relay, { title: 'フォーム報告の修正PRができました', body: `#${result.issue.number} ${result.issue.title}\n${details.title}\nCI: ${details.ci}`, url: details.url });
+      } catch (error) {
+        console.warn(`auto-session: フォーム報告のPR通知送信に失敗しました（本体の成否には影響させません） (${result.issue.repo}#${result.issue.number}): ${error?.message ?? error}`);
+      }
     }
   }
   const feedbackFailed = feedbackResults.length - feedbackSucceeded;
@@ -962,7 +970,11 @@ ${result.summary ?? ''}`);
         console.warn(`auto-session: in-progress ラベル解除失敗 (${issue.repo}#${issue.number})`);
       }
     }
-    await sendFeedbackNotification(relay, { title: 'フォーム報告の自動対応結果', body: `${feedbackResults.length}件試行し、${feedbackFailed}件でPRを作成できませんでした\n\n${feedbackFailureBody(failed)}`, url: '' });
+    try {
+      await sendFeedbackNotification(relay, { title: 'フォーム報告の自動対応結果', body: `${feedbackResults.length}件試行し、${feedbackFailed}件でPRを作成できませんでした\n\n${feedbackFailureBody(failed)}`, url: '' });
+    } catch (error) {
+      console.warn(`auto-session: フォーム報告の結果通知送信に失敗しました（本体の成否には影響させません）: ${error?.message ?? error}`);
+    }
   }
   const anyFailedOrTimedOut = [...results, ...feedbackResults]
     .some((result) => result.status === 'failure' || result.status === 'timeout');

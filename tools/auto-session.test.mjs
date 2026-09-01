@@ -152,6 +152,27 @@ test('全記録が success なら feedback に PR URL が無くても main は 0
   assert.equal(await main(['--count', '0', '--feedback-count', '1'], mainIoWithFeedback('success')), 0);
 });
 
+test('TODO が全て成功していれば完走通知が例外でも main は 0 を返して警告を残す', async () => {
+  const claudeDir = path.join(isolatedHome, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(path.join(claudeDir, 'next-session.md'), '<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. 通知失敗の回帰テスト\n');
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (message) => warnings.push(String(message));
+  try {
+    const code = await main(['--count', '1', '--feedback-count', '0'], {
+      listFeedbackIssues: () => [],
+      resolveClaudeExe: () => '/fake/claude',
+      runChild: async () => ({ status: 'success', exitCode: 0, stdout: '完了', stderr: '', startedAt: new Date().toISOString(), endedAt: new Date().toISOString() }),
+      notify: async () => { throw new Error('webhook unavailable'); },
+    });
+    assert.equal(code, 0);
+    assert.ok(warnings.some((warning) => warning.includes('完走通知の送信に失敗しました') && warning.includes('webhook unavailable')));
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
 test('todo または feedback が failure/timeout なら main は 1 を返す', async () => {
   assert.equal(await main(['--count', '0', '--feedback-count', '1'], mainIoWithFeedback('failure')), 1);
   assert.equal(await main(['--count', '0', '--feedback-count', '1'], mainIoWithFeedback('timeout')), 1);

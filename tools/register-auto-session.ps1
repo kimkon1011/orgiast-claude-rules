@@ -1,6 +1,7 @@
 ﻿# Orgiast auto-session runner を毎日 00:30 に起動する。
 # Windows PowerShell 5.1 で日本語を安全に扱うため UTF-8 BOM で保存する。
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'ensure-run-hidden.ps1')
 
 $repo = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $fixedLauncher = Join-Path $env:USERPROFILE '.claude\auto-session-repo\tools\auto-session-launcher.mjs'
@@ -11,8 +12,7 @@ if (-not (Test-Path $script)) { throw "script not found: $script" }
 $node = (Get-Command node -ErrorAction SilentlyContinue).Source
 if (-not $node) { throw 'node not found. Install Node.js first.' }
 
-$argument = '"{0}" --count all --timeout-min 35 --deadline 07:30' -f $script
-$action = New-ScheduledTaskAction -Execute $node -Argument $argument -WorkingDirectory $repo
+$action = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($script, '--count', 'all', '--timeout-min', '35', '--deadline', '07:30') -WorkingDirectory $repo
 $trigger = New-ScheduledTaskTrigger -Daily -At '00:30'
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -WakeToRun -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 6)
 

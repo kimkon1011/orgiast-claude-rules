@@ -21,6 +21,7 @@ param(
   [switch]$Yes                                # 確認を省略(配布ランチャーから)
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'ensure-run-hidden.ps1')
 $OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
 function Say($m,$c='White'){ Write-Host $m -ForegroundColor $c }
 function OK($m){ Say "  [OK] $m" 'Green' }
@@ -385,7 +386,7 @@ Step "夜間バッチの定時起動を登録 (毎日03:00)"
 try {
   $nb = Join-Path $REPO 'tools\nightly-batch.ps1'
   if (Test-Path $nb) {
-    $act = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $nb + '"')
+    $act = New-HiddenScheduledTaskAction -Execute 'powershell.exe' -ChildArgument @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $nb)
     $trg = New-ScheduledTaskTrigger -Daily -At 3:00am
     $set = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
     Register-ScheduledTask -TaskName 'OrgiastNightlyBatch' -Action $act -Trigger $trg -Settings $set -Force -ErrorAction Stop | Out-Null
@@ -398,7 +399,7 @@ Step "フリート自己点検の定時起動を登録 (毎日03:15)"
 try {
   $fp = Join-Path $REPO 'tools\fleet-poller.ps1'
   if (Test-Path $fp) {
-    $fact = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $fp + '"')
+    $fact = New-HiddenScheduledTaskAction -Execute 'powershell.exe' -ChildArgument @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $fp)
     $ftrg = New-ScheduledTaskTrigger -Daily -At 3:15am
     $fset = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
     Register-ScheduledTask -TaskName 'OrgiastFleetPoller' -Action $fact -Trigger $ftrg -Settings $fset -Force -ErrorAction Stop | Out-Null

@@ -7,6 +7,7 @@
 # Shift-JIS to gokai shite parse error ni naru tame).
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'ensure-run-hidden.ps1')
 
 $repo = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $script = Join-Path $repo 'tools\booth-feedback-intake.mjs'
@@ -18,11 +19,7 @@ if (-not $node) { throw 'node not found. Install Node.js first.' }
 # Console window taisaku: node wo chokusetsu jikkou suru to kuroi window ga deru node,
 # console wo motanai wscript.exe kara run-hidden.vbs keiyu de kidou suru.
 # stdout/stderr wa %USERPROFILE%\.claude\logs\booth-feedback-intake.log ni nokoru.
-$hiddenRunner = Join-Path $repo 'tools\run-hidden.vbs'
-if (-not (Test-Path $hiddenRunner)) { throw "hidden runner not found: $hiddenRunner" }
-
-$argument = '//nologo "{0}" "{1}" "{2}"' -f $hiddenRunner, $node, $script
-$action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\wscript.exe" -Argument $argument -WorkingDirectory $repo
+$action = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($script) -WorkingDirectory $repo
 
 # 03:00 = yakan no OrgiastAutoSession (03:20) yori mae ni suru. Sono ban no muzin
 # session ga sono hi no youbou wo hiroeru you ni suru tame.

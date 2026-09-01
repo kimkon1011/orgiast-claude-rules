@@ -54,8 +54,13 @@ try {
 
     if ($autoClose) {
         try {
-            & $node.Source $autoClose --days 7 --max 40
-            if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'session-auto-close' ("error:終了コード" + $LASTEXITCODE) } else { Write-NightlyLog 'session-auto-close' 'ok' }
+            $autoCloseOutput = @(& $node.Source $autoClose --days 7 --max 40 2>&1)
+            $autoCloseExit = $LASTEXITCODE
+            if ($autoCloseExit -ne 0) {
+                $autoCloseReason = "error:終了コード" + $autoCloseExit + ': ' + (@($autoCloseOutput | Select-Object -Last 3) -join ' / ')
+                Write-NightlyLog 'session-auto-close' $autoCloseReason
+                Write-Warning ("nightly-batch: session-auto-close: " + $autoCloseReason)
+            } else { Write-NightlyLog 'session-auto-close' 'ok' }
         } catch {
             Write-NightlyLog 'session-auto-close' ("error:" + $_.Exception.Message)
             Write-Warning ("nightly-batch: session-auto-close: " + $_.Exception.Message)

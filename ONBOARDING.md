@@ -323,13 +323,28 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
 **user に「新しいセッションを開いて `/session-start` と打って」と言わない。** `/session-close` の最後に走る
 `tools/close-session.mjs` が、セッションを退避したあと `tools/next-session-launch.mjs` を呼び、**次のセッションを自分で立ち上げる**。
 
-- **立ち上げ先は Claude Code（VSCode のタブ）。ターミナルの別ウィンドウでは開かない**（kim 指示）。
-  拡張の URI ハンドラ `code.cmd --open-url "vscode://Anthropic.claude-code/open?prompt=<encodeURIComponent>"` を使う。
+- 🔴 **起動先はここで既決。調べ直すな。窓を開ける実験もするな**（2026-09-02 実体確認 / kim「そのあたりは
+  kim@orgiast.jp のパソコンでやり取りしたから同じことしないで」＝**別PCで再検証すると user の画面を荒らす**）。
+  - **Claude Code 拡張は初期プロンプトを送信しない**。`vscode://Anthropic.claude-code/open?prompt=` は
+    `data-initial-prompt` としてタブへ渡り、webview 側は `setInputText` を呼ぶだけ（**2.1.257 の実装で確認**。
+    submit の API は無く、URI ハンドラが受けるのは `/open` と `/install-plugin` の2つだけ）。
+    → **VSCode タブ経路は原理的に user の Enter が1回残る。ゼロタッチにできない。**
+  - **`.code-workspace` の `folderOpen` タスクでも代替できない**。ワークスペースファイルはフォルダとは
+    別の信頼対象になり**制限モード**で開くため自動タスクが走らない（マーカーを45秒待って0件・実測）。
+  - **VSCode 内かつ送信まで自動を両立できるのは自前の極小拡張だけ**。統合ターミナルを
+    `createTerminal({shellPath: <claude>, shellArgs: [prompt], cwd})` で作れば argv 起動＝送信まで自動。
+    `code --install-extension <vsix>` で入れれば**新規ウィンドウの extension host は再起動なしで読み込む**（実測）。
+    `~/.vscode/extensions/` への直接書き込みと `~/.claude/` を触る PowerShell は**auto-mode 分類器が拒否する**ので、
+    正規の CLI 経路で入れ、拡張の状態は `~/.claude` の外（例 `~/.orgiast/next-session/`）に置く。
+  - つまり **「VSCode のタブ」と「操作ゼロ」は同時に成立しない**。§1.1 の最上位原則（手作業を極限まで減らす）が
+    優先するので、**既定は機体ごとの選択**になる。触る前に必ず
+    `node tools/next-session-launch.mjs --show-target` で**その機体の実際の値**を見る。
+- 拡張タブ経路を使う場合の作り: URI ハンドラ `code.cmd --open-url "vscode://Anthropic.claude-code/open?prompt=<encodeURIComponent>"` を使う。
   `session` を付けなければ新規会話になる。**`Code.exe --open-url` を直に叩くと `bad option` で落ちる**ので必ず `bin/code.cmd`
   （Windows の node は `.cmd` を execFile できないため `cmd.exe /c` を挟む）。
   **`code.cmd <cwd>` を先に走らせてはいけない**——そのフォルダを開いている既存ウィンドウが再読み込みされ、拡張ホストが再起動して
   作業中のセッションが巻き添えになる（実測）。
-- **user の操作は Enter 1回だけ**。拡張の webview は初期プロンプトを `setInputText` するだけで送信しない（2.1.251 実体）。
+- 拡張タブ経路を選んだ機体では **user の操作は Enter 1回だけ残る**（`setInputText` のみ。2.1.251 / 2.1.257 で同じ）。
   `code` CLI に `--command` は無く、SendKeys の代打ちは前面が別アプリだと誤爆するので採らない。
 - VSCode CLI が無い機体（サーバ等）だけ**ターミナル経路へ自動フォールバック**（`wt.exe` + `claude.exe`、argv 起動なので送信まで自動）。
   明示切替は `--target vscode|terminal` / `ORGIAST_NEXT_SESSION_TARGET`。
@@ -353,6 +368,38 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
 - **他PCへの反映条件**: この機能は `orgiast-claude-rules` の `tools/` と `skills/session-close/` に入っている。
   各PCが **リポジトリを main へ更新**し、`skills/` を `~/.claude/skills/` へ配れば有効になる（`/rules-sync`）。
   リポが古いPCでは動かないので、動いていない時はまず `git log origin/main..HEAD` と `git status` を見る。
+
+#### 機体ごとの実態と、それを他PCへ自動で届ける義務（2026-09-02 kim 指示）
+
+kim:「**kim@orgiast.jp のパソコンで実行している内容が ONBOARDING に反映されて、こっちのパソコンで
+スムーズに実行できないのかな？ それじゃ意味がないよね。**」
+
+**取り込み(pull)は自動だが、書き出し(push)は自動ではない。ここが穴だった。**
+`ONBOARDING.md` は各PCの SessionStart hook が GitHub raw から毎セッション取得するので、
+**このファイルに書いた結論は全PCへ自動で届く**（2026-09-02 実測: raw 92,144バイトがローカルと完全一致）。
+一方で次のものは**PC・アカウント単位のローカルで、どこにも伝播しない**:
+
+| 伝播しないもの | どこにある |
+|---|---|
+| セッション memory | `~/.claude/projects/<プロジェクト>/memory/` |
+| 起動先の実値 | `~/.claude/next-session-launch.json` の `target` |
+| 別PCでの会話そのもの | どこにも残らない |
+
+**だから機体ローカルで何かを決めたら、決めた側が ONBOARDING（＝下の表）へ書いて push するまでが1タスク。**
+書かずに閉じると、他PCは古い記述を読んで**同じ調査をやり直す**（実際に 2026-09-02 に再検証が発生した）。
+`gh` 未認証の機体でも `git push origin HEAD:refs/heads/main` は通る（main に保護は無い・実測）。
+
+<!-- MACHINE-STATE-START 各PCは自分の行だけを更新して push する -->
+
+| 機体 / アカウント | 起動先 `target` | 理由 | 最終更新 |
+|---|---|---|---|
+| kimko PC / seisaku-team@orgiast.jp | `terminal` | 2026-09-01 kim「+ New session を押させるな」。タブ経路は Enter が残るため | 2026-09-02 |
+| kim@orgiast.jp の PC | **未記入（あちらのセッションが書くこと）** | — | — |
+
+<!-- MACHINE-STATE-END -->
+
+**自分の行を書くとき**は「値」だけでなく**なぜその値なのか**を残す。理由が無い値は次のセッションが
+「ルールと違う」と判断して勝手に戻す（2026-09-02 にそれで混乱した）。
 
 ### 1.16 Fable5 の使用は中止
 

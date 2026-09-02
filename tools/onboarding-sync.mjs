@@ -11,6 +11,7 @@ import { parseEnvText, readEnvValue } from './env-kv.mjs';
 import { repairEnvBom } from './env-repair.mjs';
 import { isEntry } from './is-entry.mjs';
 import { buildKeyserveAlert, shouldAlert } from './keyserve-alert.mjs';
+import { installSharedMemories } from './memory-share.mjs';
 import { gitBlobSha } from './version-drift.mjs';
 
 const args = process.argv.slice(2);
@@ -338,6 +339,10 @@ async function syncRepository(now) {
     if (changed) { console.log('[onboarding-sync] updated repository tools/rules/skills'); log('updated repository tools/rules/skills'); }
     const skills = deploySkills(repoPath, home, { now, onError: (e) => log(`skill deployment failed: ${e.message}`) });
     if (skills.length) log(`skills updated: ${skills.join(', ')}`);
+    try {
+      const memory = await installSharedMemories({ home, emit: (line) => log(line) });
+      log(`memory-share install: installed=${memory.installed} skipped=${memory.skipped} unchanged=${memory.unchanged} indexed=${memory.indexed}`);
+    } catch (e) { log(`memory-share install failed(continue): ${e.message}`); }
     // 新しく配布された hook を全PCへ自動登録する(add-only・差分が無ければ何も書かない)。
     try {
       const registrar = path.join(repoPath, 'tools', 'register-hooks.mjs');

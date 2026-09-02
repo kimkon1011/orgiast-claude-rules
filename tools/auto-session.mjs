@@ -104,7 +104,12 @@ export function todoExclusionReason(todo, today = new Date()) {
 }
 
 export function dedupeKey(todo) {
-  return String(todo)
+  const text = String(todo);
+  // 受付ID付きの行は ID そのものを鍵にする。同じ報告が別ブロックへ別表記でコピーされると
+  // 先頭40文字が食い違って別項目に見え、1晩に2回実行されうる(2026-09-02 実データで two-copy 状態を確認)。
+  const receipt = text.match(/\[FB:([^\]\s]+)\]/);
+  if (receipt) return `FB:${receipt[1]}`;
+  return text
     .replace(/^\s*\d+[a-z]?[.)、]\s*/i, '')
     .replace(/[\*~`]/g, '')
     .replace(/[\s　]+/g, '')
@@ -124,9 +129,16 @@ export function todoExclusionReasons(todos, today = new Date()) {
     const key = dedupeKey(todo);
     const titleKey = emphasizedTitleKey(todo);
     const duplicate = (key && seenKeys.has(key)) || (titleKey && seenTitles.has(titleKey));
-    if (key) seenKeys.add(key);
-    if (titleKey) seenTitles.add(titleKey);
-    return duplicate ? '重複（先の項目と同一）' : todoExclusionReason(todo, today);
+    if (duplicate) return '重複（先の項目と同一）';
+    const reason = todoExclusionReason(todo, today);
+    // 除外される項目に鍵を主張させない。除外済みのコピーが先に並んでいるだけで
+    // 実行可能なコピーが「重複」に落ち、結果として1件も実行されなくなる
+    // (2026-09-02: 保留語を含む旧コピーが先頭ブロックにあり、この順序で潰れる寸前だった)。
+    if (!reason) {
+      if (key) seenKeys.add(key);
+      if (titleKey) seenTitles.add(titleKey);
+    }
+    return reason;
   });
 }
 
@@ -138,6 +150,30 @@ export function dedupeTodos(todos) {
 export function filterTodos(todos, today = new Date()) {
   const reasons = todoExclusionReasons(todos, today);
   return todos.filter((_, index) => !reasons[index]);
+}
+
+// SLA レーンの中では「即実行(不具合)」が「当日夜(要望)」より必ず先。
+// 注入順(API の行順)のままだと、要望が先に並んでいるだけで不具合が繰り越しに落ち、
+// 最も急ぐものが翌夜まで待たされる(2026-09-02 実データで発生)。
+function slaPriority(todo) {
+  return String(todo).includes('【即実行') ? 0 : 1;
+}
+
+export function selectTodoLanes(todos, { count = 1, slaCount = 4 } = {}) {
+  const runnable = filterTodos(todos);
+  const allSla = runnable
+    .filter((todo) => String(todo).includes('[FB:'))
+    // 同順位は注入順を保つため安定ソートに任せる(Array#sort は ES2019 以降 stable)。
+    .sort((a, b) => slaPriority(a) - slaPriority(b));
+  const sla = allSla.slice(0, slaCount);
+  const slaSet = new Set(allSla);
+  const normal = runnable.filter((todo) => !slaSet.has(todo)).slice(0, count);
+  return { sla, normal, selected: [...sla, ...normal], slaTotal: allSla.length, slaOverflow: Math.max(0, allSla.length - sla.length) };
+}
+
+export function logSlaOverflow(lanes, log = console.log) {
+  if (!lanes.slaOverflow) return;
+  log(`auto-session: SLA対象 ${lanes.slaTotal}件のうち ${lanes.sla.length}件を今夜実行、${lanes.slaOverflow}件は翌夜に繰り越し（--sla-count で調整可）`);
 }
 
 function existingOrDefault(candidate, exists) {
@@ -430,11 +466,12 @@ function boundedCount(value) {
 }
 
 export function parseArgs(argv) {
-  const options = { count: 1, feedbackCount: 1, timeoutMin: 60, deadline: '', dry: false, list: false };
+  const options = { count: 1, slaCount: 4, feedbackCount: 1, timeoutMin: 60, deadline: '', dry: false, list: false };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === '--dry') options.dry = true;
     else if (argv[i] === '--list') options.list = true;
     else if (argv[i] === '--count') options.count = boundedCount(argv[++i]);
+    else if (argv[i] === '--sla-count') options.slaCount = boundedCount(argv[++i]);
     else if (argv[i] === '--feedback-count') options.feedbackCount = boundedCount(argv[++i]);
     else if (argv[i] === '--timeout-min') options.timeoutMin = Math.max(1, Number(argv[++i]) || 60);
     else if (argv[i] === '--deadline') {
@@ -767,12 +804,19 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   const detectedHistoryCwd = config.historyCwd || detectHistoryCwd({ projectsDir: path.join(claudeDir, 'projects') });
   if (options.list) {
     const reasons = todoExclusionReasons(parsed.todos);
-    parsed.todos.forEach((todo, i) => console.log(`[next-session] ${i + 1}. [block ${parsed.todoBlocks[i]}] ${reasons[i] ? `除外: ${reasons[i]}` : '採用'} | ${todo}`));
+    const lanes = selectTodoLanes(parsed.todos, options);
+    const slaSet = new Set(lanes.sla);
+    const normalSet = new Set(lanes.normal);
+    parsed.todos.forEach((todo, i) => console.log(`[next-session] ${i + 1}. [block ${parsed.todoBlocks[i]}] ${reasons[i] ? `除外: ${reasons[i]}` : slaSet.has(todo) ? '[SLA] 採用' : normalSet.has(todo) ? '[通常] 採用' : '実行可能（今回の上限外）'} | ${todo}`));
+    logSlaOverflow(lanes);
     feedbackIssues.forEach((issue) => console.log(`[feedback] ${issue.repo}#${issue.number}. ${feedbackIssueExclusionReason(issue) ? `除外: ${feedbackIssueExclusionReason(issue)}` : '採用'} | ${issue.title}`));
     if (!feedbackIssues.length) console.log('[feedback] 0件（対象リポジトリに未対応 Issue なし、または gh なし）');
     return 0;
   }
-  const selected = filterTodos(parsed.todos).slice(0, options.count);
+  const todoLanes = selectTodoLanes(parsed.todos, options);
+  const selected = todoLanes.selected;
+  const laneOf = (todo) => todoLanes.sla.includes(todo) ? 'SLA' : '通常';
+  logSlaOverflow(todoLanes);
   const selectedFeedback = filterFeedbackIssues(feedbackIssues).slice(0, options.feedbackCount);
   if (!selected.length && !selectedFeedback.length) { console.log('auto-session: 実行可能な TODO とフォーム報告はありません'); return 0; }
   if (options.dry) {
@@ -780,7 +824,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
       const repoCwd = pickCwd(todo, fs.existsSync, config.repoByKeyword);
       const historyCwd = fs.existsSync(detectedHistoryCwd) ? detectedHistoryCwd : repoCwd;
       const summaryFile = path.join(autoDir, 'runs', `dry-${index + 1}.summary.md`);
-      console.log(`[next-session]\nTODO: ${todo}\nREPO CWD: ${repoCwd}\nHISTORY CWD: ${historyCwd}\n\n${buildPrompt(todo, parsed.sections, repoCwd, summaryFile, options.timeoutMin)}`);
+      console.log(`[next-session] [${laneOf(todo)}]\nTODO: ${todo}\nREPO CWD: ${repoCwd}\nHISTORY CWD: ${historyCwd}\n\n${buildPrompt(todo, parsed.sections, repoCwd, summaryFile, options.timeoutMin)}`);
     }
     for (const [index, issue] of selectedFeedback.entries()) {
       const repoCwd = feedbackRepoCwd(issue.repo);
@@ -805,8 +849,8 @@ export async function main(argv = process.argv.slice(2), io = {}) {
       try {
         fs.writeFileSync(manifestFile, JSON.stringify({
           startedAt: batchStartedAt.toISOString(),
-          options: { count: options.count === Infinity ? 'all' : options.count, timeoutMin: options.timeoutMin, deadline: options.deadline },
-          selectedTodos: selected.map((todo) => String(todo).slice(0, 80)),
+          options: { count: options.count === Infinity ? 'all' : options.count, slaCount: options.slaCount === Infinity ? 'all' : options.slaCount, timeoutMin: options.timeoutMin, deadline: options.deadline },
+          selectedTodos: selected.map((todo) => ({ lane: laneOf(todo), todo: String(todo).slice(0, 80) })),
           selectedCount: selected.length,
           selectedFeedback: selectedFeedback.map(({ repo, number, title }) => ({ repo, number, title })),
           feedbackCount: selectedFeedback.length,
@@ -877,14 +921,14 @@ export async function main(argv = process.argv.slice(2), io = {}) {
         ? appendClosedSession(path.join(claudeDir, 'closed-sessions.json'), sessionId)
         : false;
       if (result.status === 'success') writeTodoDone(nextFile, todo, `${localDate()} 完了（auto-session）`);
-      const record = { todo, cwd: repoCwd, repoCwd, historyCwd, summaryFile, summary, sessionId, sessionIdSource, transcript, resumeCommand, closedRegistered, ...result };
+      const record = { todo, lane: laneOf(todo), cwd: repoCwd, repoCwd, historyCwd, summaryFile, summary, sessionId, sessionIdSource, transcript, resumeCommand, closedRegistered, ...result };
       results.push(record);
       completedChildren += 1;
       fs.writeFileSync(runFile, JSON.stringify(record, null, 2));
       } catch (error) {
         // 1件の想定外の失敗で残りのTODOと最後の通知まで消さない。
         completedChildren += 1;
-        results.push({ todo, status: 'failure', launchFailed: true, stderr: String(error?.message ?? error), startedAt: new Date().toISOString(), endedAt: new Date().toISOString() });
+        results.push({ todo, lane: laneOf(todo), status: 'failure', launchFailed: true, stderr: String(error?.message ?? error), startedAt: new Date().toISOString(), endedAt: new Date().toISOString() });
         console.warn(`auto-session: TODO の処理に失敗しました（次へ進みます）: ${error?.message ?? error}`);
       }
     }
@@ -939,7 +983,11 @@ export async function main(argv = process.argv.slice(2), io = {}) {
 ${result.summary ?? ''}`);
     lines.push(`${formatResultLine(result, minutes, pr)}\n${result.summary ? `summary:\n${result.summary.slice(0, 700)}` : 'summary: (記録なし)'}`);
   }
-  await sendNotification(findWebhook(claudeDir), lines.join('\n'));
+  try {
+    await sendNotification(findWebhook(claudeDir), lines.join('\n'));
+  } catch (error) {
+    console.warn(`auto-session: 完走通知の送信に失敗しました（本体の成否には影響させません）: ${error?.message ?? error}`);
+  }
   const relay = relayConfig(claudeDir);
   let feedbackSucceeded = 0;
   for (const result of feedbackResults) {
@@ -947,7 +995,11 @@ ${result.summary ?? ''}`);
     // 子の終了コードにかかわらず、PR が存在するなら kim に承認導線を必ず渡す。
     if (details.url) {
       feedbackSucceeded += 1;
-      await sendFeedbackNotification(relay, { title: 'フォーム報告の修正PRができました', body: `#${result.issue.number} ${result.issue.title}\n${details.title}\nCI: ${details.ci}`, url: details.url });
+      try {
+        await sendFeedbackNotification(relay, { title: 'フォーム報告の修正PRができました', body: `#${result.issue.number} ${result.issue.title}\n${details.title}\nCI: ${details.ci}`, url: details.url });
+      } catch (error) {
+        console.warn(`auto-session: フォーム報告のPR通知送信に失敗しました（本体の成否には影響させません） (${result.issue.repo}#${result.issue.number}): ${error?.message ?? error}`);
+      }
     }
   }
   const feedbackFailed = feedbackResults.length - feedbackSucceeded;
@@ -962,7 +1014,11 @@ ${result.summary ?? ''}`);
         console.warn(`auto-session: in-progress ラベル解除失敗 (${issue.repo}#${issue.number})`);
       }
     }
-    await sendFeedbackNotification(relay, { title: 'フォーム報告の自動対応結果', body: `${feedbackResults.length}件試行し、${feedbackFailed}件でPRを作成できませんでした\n\n${feedbackFailureBody(failed)}`, url: '' });
+    try {
+      await sendFeedbackNotification(relay, { title: 'フォーム報告の自動対応結果', body: `${feedbackResults.length}件試行し、${feedbackFailed}件でPRを作成できませんでした\n\n${feedbackFailureBody(failed)}`, url: '' });
+    } catch (error) {
+      console.warn(`auto-session: フォーム報告の結果通知送信に失敗しました（本体の成否には影響させません）: ${error?.message ?? error}`);
+    }
   }
   const anyFailedOrTimedOut = [...results, ...feedbackResults]
     .some((result) => result.status === 'failure' || result.status === 'timeout');

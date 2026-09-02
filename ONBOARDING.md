@@ -323,13 +323,59 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
 **user に「新しいセッションを開いて `/session-start` と打って」と言わない。** `/session-close` の最後に走る
 `tools/close-session.mjs` が、セッションを退避したあと `tools/next-session-launch.mjs` を呼び、**次のセッションを自分で立ち上げる**。
 
-- **立ち上げ先は Claude Code（VSCode のタブ）。ターミナルの別ウィンドウでは開かない**（kim 指示）。
-  拡張の URI ハンドラ `code.cmd --open-url "vscode://Anthropic.claude-code/open?prompt=<encodeURIComponent>"` を使う。
+- 🔴 **起動先はここで既決。調べ直すな。窓を開ける実験もするな**（2026-09-02 実体確認 / kim「そのあたりは
+  kim@orgiast.jp のパソコンでやり取りしたから同じことしないで」＝**別PCで再検証すると user の画面を荒らす**）。
+  - **Claude Code 拡張は初期プロンプトを送信しない**。`vscode://Anthropic.claude-code/open?prompt=` は
+    `data-initial-prompt` としてタブへ渡り、webview 側は `setInputText` を呼ぶだけ。
+    → **VSCode タブ経路は原理的に user の Enter が1回残る。ゼロタッチにできない。**
+    **2.1.257 で確認し、2.1.258 でも一次ソースで再確認済み（2026-09-02）。以下が証拠の全連鎖なので、
+    次に疑ったらこの6点を grep するだけで足りる。拡張を読み直す作業を最初からやるな**:
+
+    | # | ファイル | 実体 |
+    |---|---|---|
+    | 1 | `extension.js` | `registerUriHandler` は**1個だけ**。`switch(M.path)` の case は `"/install-plugin"` と `"/open"` の**2つのみ** |
+    | 2 | `extension.js` | `/open` は `prompt` を読み `executeCommand("claude-vscode.primaryEditor.open", session, prompt)` を呼ぶだけ |
+    | 3 | `extension.js` | HTML 生成側は `<div id="root" data-initial-prompt="...">` として webview へ渡すだけ |
+    | 4 | `webview/index.js` | `F={initialPrompt:W.dataset.initialPrompt,…}` → `session.initialPrompt.value = F.initialPrompt` |
+    | 5 | `webview/index.js` | 消費は `if(d5) q.current?.setInputText(d5), $.initialPrompt.value=void 0` — **送信呼び出しが無い** |
+    | 6 | `webview/index.js` | `setInputText` の実装は `(D1)=>{ _1.current.textContent = D1 }` — **contenteditable への代入のみ** |
+
+    🔴 **`setInputText` は `extension.js` には無く `webview/index.js` にある**。`extension.js` だけを grep して
+    0ヒットだったのを「新しい版で消えた＝送信できるようになった」と誤読しないこと（2026-09-02 に一度誤読した）。
+    🔴 **`autoSubmit` という語が `extension.js` に1件あるが、これは voice 設定**（"Submit the prompt when
+    hold-to-talk is released"）で、URI・初期プロンプトとは**無関係**。手がかりに見えるが違う。
+    🔴 **npm / PyPI / GitHub のパッケージ検索でこの件は裏付けられない**（`setInputText` は公開パッケージ名ではなく
+    バンドル内部の関数名。実測: npm=無関係ヒットのみ / `@setInputText/cli`=404 / PyPI=Not Found / gh search=0件）。
+    一次ソースは**そのPCに入っている拡張の実体ファイル**であり、確認先は
+    `~/.vscode/extensions/anthropic.claude-code-<版>-win32-x64/{extension.js,webview/index.js}`。
+  - **`.code-workspace` の `folderOpen` タスクでも代替できない**。ワークスペースファイルはフォルダとは
+    別の信頼対象になり**制限モード**で開くため自動タスクが走らない（マーカーを45秒待って0件・実測）。
+  - **VSCode 内かつ送信まで自動を両立できるのは自前の極小拡張だけ**。統合ターミナルを
+    `createTerminal({shellPath: <claude>, shellArgs: [prompt], cwd})` で作れば argv 起動＝送信まで自動。
+    `code --install-extension <vsix>` で入れれば**新規ウィンドウの extension host は再起動なしで読み込む**（実測）。
+    `~/.vscode/extensions/` への直接書き込みと `~/.claude/` を触る PowerShell は**auto-mode 分類器が拒否する**ので、
+    正規の CLI 経路で入れ、拡張の状態は `~/.claude` の外（例 `~/.orgiast/next-session/`）に置く。
+  - つまり **公式拡張では「VSCode のタブ」と「操作ゼロ」は同時に成立しない**。§1.1 の最上位原則（手作業を極限まで減らす）が
+    優先するので、**既定は機体ごとの選択**になる。触る前に必ず
+    `node tools/next-session-launch.mjs --show-target` で**その機体の実際の値**を見る。
+  - **自前拡張は実装済み**（2026-09-02）: `packages/vscode-next-session/`（`orgiast.next-session`）＋
+    ランチャーの4つ目の target **`vscode-ext`**。統合ターミナルを argv 起動するので**送信まで自動**になる。
+    既定は変えていない（切り替えは `--set-target vscode-ext`）。`claude` パラメータは
+    **絶対パス＋basename が `claude`/`claude.exe`＋実在**の3条件を検証し、外れたら PATH の `claude` へ
+    警告付きでフォールバックする（URI はローカルの別プロセスからも撃てるため、任意 exe を起動できる口を作らない）。
+  - 🔴 **`vscode-ext` は「拡張をインストールした後に起動した VSCode ウィンドウ」でしか効かない**（2026-09-02 実測）。
+    既存ウィンドウの extension host は後から入れた拡張の `onUri` ハンドラを持たないため、
+    URI を撃っても**何も起きず、エラーも出ない**。実測方法: `claude.exe` のプロセス数が
+    URI 発射の前後で変わらない（トークンを使わずに測るなら `?prompt=--version` を使う。
+    `?probe=1` は `cmd /c echo` が数十msで終わるので**プロセス表では捕捉できない**＝この方法で「動かない」と判断するな）。
+    → **導入したPCは、次に VSCode を起動し直したときから有効**。切り替え直後に検証しようとして
+    「壊れている」と誤診しないこと。
+- 拡張タブ経路を使う場合の作り: URI ハンドラ `code.cmd --open-url "vscode://Anthropic.claude-code/open?prompt=<encodeURIComponent>"` を使う。
   `session` を付けなければ新規会話になる。**`Code.exe --open-url` を直に叩くと `bad option` で落ちる**ので必ず `bin/code.cmd`
   （Windows の node は `.cmd` を execFile できないため `cmd.exe /c` を挟む）。
   **`code.cmd <cwd>` を先に走らせてはいけない**——そのフォルダを開いている既存ウィンドウが再読み込みされ、拡張ホストが再起動して
   作業中のセッションが巻き添えになる（実測）。
-- **user の操作は Enter 1回だけ**。拡張の webview は初期プロンプトを `setInputText` するだけで送信しない（2.1.251 実体）。
+- 拡張タブ経路を選んだ機体では **user の操作は Enter 1回だけ残る**（`setInputText` のみ。2.1.251 / 2.1.257 で同じ）。
   `code` CLI に `--command` は無く、SendKeys の代打ちは前面が別アプリだと誤爆するので採らない。
 - VSCode CLI が無い機体（サーバ等）だけ**ターミナル経路へ自動フォールバック**（`wt.exe` + `claude.exe`、argv 起動なので送信まで自動）。
   明示切替は `--target vscode|terminal` / `ORGIAST_NEXT_SESSION_TARGET`。
@@ -353,6 +399,122 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
 - **他PCへの反映条件**: この機能は `orgiast-claude-rules` の `tools/` と `skills/session-close/` に入っている。
   各PCが **リポジトリを main へ更新**し、`skills/` を `~/.claude/skills/` へ配れば有効になる（`/rules-sync`）。
   リポが古いPCでは動かないので、動いていない時はまず `git log origin/main..HEAD` と `git status` を見る。
+
+#### 機体ごとの実態と、それを他PCへ自動で届ける義務（2026-09-02 kim 指示）
+
+kim:「**kim@orgiast.jp のパソコンで実行している内容が ONBOARDING に反映されて、こっちのパソコンで
+スムーズに実行できないのかな？ それじゃ意味がないよね。**」
+
+**取り込み(pull)は自動だが、書き出し(push)は自動ではない。ここが穴だった。**
+`ONBOARDING.md` は各PCの SessionStart hook が GitHub raw から毎セッション取得するので、
+**このファイルに書いた結論は全PCへ自動で届く**（2026-09-02 実測: raw 92,144バイトがローカルと完全一致）。
+一方で次のものは**PC・アカウント単位のローカルで、どこにも伝播しない**:
+
+| 伝播しないもの | どこにある |
+|---|---|
+| セッション memory | `~/.claude/projects/<プロジェクト>/memory/` |
+| 起動先の実値 | `~/.claude/next-session-launch.json` の `target` |
+| 別PCでの会話そのもの | どこにも残らない |
+
+**だから機体ローカルで何かを決めたら、決めた側が ONBOARDING（＝下の表）へ書いて push するまでが1タスク。**
+書かずに閉じると、他PCは古い記述を読んで**同じ調査をやり直す**（実際に 2026-09-02 に再検証が発生した）。
+`gh` 未認証の機体でも `git push origin HEAD:refs/heads/main` は通る（main に保護は無い・実測）。
+
+<!-- MACHINE-STATE-START 各PCは自分の行だけを更新して push する -->
+
+| 機体 / アカウント | 起動先 `target` | 理由 | 最終更新 |
+|---|---|---|---|
+| kimko PC / seisaku-team@orgiast.jp | `terminal` | 2026-09-01 kim「+ New session を押させるな」。タブ経路は Enter が残るため | 2026-09-02 |
+| kim-PC (DESKTOP-2D0R4LI) / kim@orgiast.jp | `vscode` → **`vscode-ext` へ移行中** | kim「ターミナルじゃなくて VSCode でやる」（2026-09-02 再指示）。公式タブ経路のまま `terminal` へ落とすと kim の指示に反するので、**自前拡張 `orgiast.next-session`（統合ターミナルを argv 起動）で「VSCode のタブ」と「操作ゼロ」を両立させる**方針を選んだ。`vscode-ext` は既定にせず、実機で URI 発射を確認したPCだけが `--set-target vscode-ext` で切り替える | 2026-09-02 |
+
+<!-- MACHINE-STATE-END -->
+
+**自分の行を書くとき**は「値」だけでなく**なぜその値なのか**を残す。理由が無い値は次のセッションが
+「ルールと違う」と判断して勝手に戻す（2026-09-02 にそれで混乱した）。
+
+#### 1.15.2 別アカウント・別PCの Claude Code を横断管理する（管制面）
+
+kim「**ほかのアカウントでまた同じ試行錯誤が発生している。このパソコンでの試行錯誤がちゃんと
+別アカウントのパソコンにつながって最後までスムーズに実行されるように管理してほしい。
+他のアカウントのパソコンの Claude Code を動かしたり通信して状況を把握して指示を出したりできないのかな**」
+（2026-09-02）。答えと、そのために置いた仕組みを以下に固定する。
+
+##### 🔴 Claude Code の組み込み機能では別アカウントのPCは操作できない（調べ直すな）
+
+実測（2026-09-02 / kim-PC）: `ListAgents` に出るのは**同一アカウント・同一マシンのセッションだけ**
+（このPCでは9本。cross-machine の行は0）。`SendMessage` の宛先も同じ範囲で、Remote Control も
+対象は「**自分のアカウントの**別セッション」。**別アカウント（seisaku-team@orgiast.jp 等）は仕様上アドレスできない。**
+→ 横断管理は**自前の管制面**でやる。以下がその実体。
+
+##### 中央キューは2本立て（どちらもリポ直下の JSON を各PCが raw から取得する）
+
+| ファイル | 拾う側 | 周期 | できること |
+|---|---|---|---|
+| `fleet-command.json` | `tools/fleet-poller.mjs` | 1日1回 03:15 | 許可済み5タスク（`verify-setup` / `rules-resync` / `cost-report` / `thermal-guard` / `power-save`）。**自由文は流せない** |
+| `fleet-directives.json` | `tools/fleet-agent.mjs` | **15分ごと**（`OrgiastFleetAgent`） | `status`（状況照会）/ `prompt`（**自由文の指示**）/ `enable-auto-session`（そのPCに夜間無人セッションを登録） |
+
+- 送るのは `node tools/fleet-directive-send.mjs --kind <k> --targets <all|PC名の一部> --why "<理由>" --body-file <file>`。
+  **`--why` 必須**（理由の無い遠隔指示を作らせない）。**`--body-file` が既定**＝argv でシェルを1層通すと
+  バッククォートがコマンド置換として実行され、指示の一部が消えたまま全PCへ配られる（実害あり）。
+- 結果は各PCの Discord webhook へ返り、`~/.claude/fleet-agent-results/<id>.json` にも残る。
+- **止めるときは `directives` を空配列に戻す。**
+
+##### 🛑 `prompt` と `enable-auto-session` は「そのPCの人の1回の承諾」が必須（§1.1 の上限）
+
+他人のPCで勝手にAIが走る状態を作ってはいけない。実装は次のようになっている。**緩めるな。**
+
+- 実行の条件は `~/.claude/fleet-agent-optin.json` に該当 kind があること。無ければ**実行せず**、
+  Discord へ「どんな指示が来ているか・送信者・理由・承諾用の1コマンド」を**その指示IDにつき1回だけ**出す。
+  ＝ブロックを迂回するのではなく、透明化して人に委ねる。
+- **指示本文はシェルに渡らない**。`spawn(claudeExe, ['-p', body], { shell: false })` の argv 1要素として渡す。
+- **実行ファイルは指示側から選べない**（`CLAUDE_CLI_PATH || 'claude'` で解決）。
+  中央キューに任意のコマンドを流せる口は**存在しない**。これがこの機能の生命線。
+- `status` だけはオプトイン不要（読み取り専用の自己申告。既に fleet-poller が毎日 verify-setup の結果を
+  投げているのと同じ扱い）。ただし本文は `redactSecrets` を通し、**webhook URL やキーは絶対に載せない**。
+
+##### memory（試行錯誤の実測）は自動で配られる — ただし全部ではない
+
+**これが「同じ試行錯誤が別アカウントで再発する」真因だった。**
+`tools/onboarding-sync.mjs` が配っていたのは `tools/` `rules-extracted/` `skills/` **だけ**で、
+`~/.claude/projects/<proj>/memory/` は1件も配っていなかった（2026-09-02 に grep で確認）。
+
+- `tools/memory-share.mjs --export` が **`metadata.type: feedback` の memory だけ**を `memory-shared/` へ出す。
+  `project_*`（案件固有）と `reference_*` は配らない。
+- 各PCは `onboarding-sync` の中で `--install` 相当が走り、`<memoryDir>/shared/` と `index/shared.md` に入る。
+  **`MEMORY.md` には1行だけ足す**（このファイルは約 24,985 バイトで切り捨てられるため）。
+- 発信元PC（同名の memory をローカル直下に持っているPC）ではスキップされ、二重に持たない。
+- 🔴 **配布先リポ `orgiast-claude-rules` は PUBLIC**（実測: `gh repo view` が `"visibility":"PUBLIC"`）。
+  そのため export には2種類の除外門がある。**外すな**:
+  1. **資格情報**（webhook URL / `sk-` `gsk_` `ghp_` `AIza` / 秘密鍵 / 長い hex）
+  2. **顧客情報**（法人名 `株式会社|有限会社|合同会社` / 案件ID `C0\d{3,}`）
+     — 2026-09-02 実測で 254 件中 **12 件**が該当した（例: `C0038（株式会社◯◯ / ◯◯EXPO）` を
+     そのまま引用している feedback）。社員名・Docs ID・keyserve の秘密名は0件だった。
+  除外は**理由つきで1行出す**（黙って落とすと「なぜ件数が減ったのか」が誰にも分からなくなる）。
+  除外された分の**ファイル名と一般化した理由だけ**が `memory-shared/EXCLUDED.md` に残る。
+- **公開できない13件（および全257件）を他PCへ届ける経路は private keyserve で作る**（kim 判断・2026-09-02）。
+  クライアント側（`memory-share.mjs --install` が HMAC で `/api/memory` から取る形）は実装済み。
+  **ただし配信口のデプロイは下の理由で止めてある。**
+
+##### 🔴 keyserve に手を入れる前に必ず読む: git は本番より古い（2026-09-02 実測）
+
+| 観測 | 値 |
+|---|---|
+| `orgiast-keyserve` の git コミット数 | **1本**（`ebbb543` のみ） |
+| GitHub の deployments / check-runs | **0 / 0** ＝ **Vercel の git 連携が無い** |
+| Vercel の本番デプロイ | **8日間で7回以上、すべて CLI から `kimkon1011`** |
+| クローンの `api/keys.js` | `ORGIAST_SHARED_SECRET` **1本しか検証しない** |
+| 本番の疎通 | HMAC で 200・配布12ファイル（生きている） |
+
+記録上 2026-08-20 に入ったはずの「複数秘密(LEGACY 複数 + ENROLL)を受け付ける」実装が
+**git 履歴に無い**。本番は「コミットされていない、CLI で直接上げたコード」で動いている。
+
+→ **クローンから `vercel --prod` すると本番の認証を古い版へ巻き戻す。** LEGACY 経由で認証している
+PCがあればその瞬間に 401 で締め出され、鍵配布が全滅する（2026-08-21 / 08-25 に実際に起きた事故と同じ形）。
+`git push` は連携が無いので何も起きないが、**将来 git 連携を有効にした瞬間に同じ巻き戻しが走る**。
+
+**直す順序**: ①**先に本番の実体を git へ復元**（デプロイ済みソースを取り出して1コミットにする）
+②その後に `/api/memory` を足してデプロイ。復元せずに機能を足すと、足した瞬間に既存機能が消える。
+本番を触る前に「旧秘密で401か / 新秘密で200か」を**実際にHTTPで叩いて**確認する（表示や記録を完了判定にしない）。
 
 ### 1.16 Fable5 の使用は中止
 

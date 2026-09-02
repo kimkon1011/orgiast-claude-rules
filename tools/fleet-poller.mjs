@@ -71,6 +71,10 @@ function taskOutput(task) {
     if (process.platform !== 'win32') return '';
     return run('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(repo, 'tools', 'thermal-guard.ps1'), '-Install']);
   }
+  if (task === 'register-fleet-agent') {
+    if (process.platform !== 'win32') return '';
+    return run('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(repo, 'tools', 'register-fleet-agent.ps1')]);
+  }
   // CPU電力上限を絞って発熱と電気代を同時に下げる。
   // 画面OFF(VIDEOIDLE)には触らない: 物理画面をキャプチャするリモート操作ソフトが黒画面になる事故を避けるため。
   if (task === 'power-save') return run('node', [path.join(repo, 'tools', 'power-save.mjs'), '--apply', '--post']);
@@ -117,7 +121,7 @@ try {
     const matches = targets === 'all' || targets === '' || label.includes(targets);
     if (!done.includes(runId) && matches) {
       fs.appendFileSync(processedFile, `${runId}\n`);
-      const allowed = new Set(['verify-setup', 'rules-resync', 'cost-report', 'thermal-guard', 'power-save']);
+      const allowed = new Set(['verify-setup', 'rules-resync', 'cost-report', 'thermal-guard', 'power-save', 'register-fleet-agent']);
       if (allowed.has(task)) {
         const result = taskOutput(task);
         const summary = result.split(/\r?\n/).filter(line => /結果:|OK |NG |完了|エラー|error/i.test(line)).slice(-3).join(' / ');

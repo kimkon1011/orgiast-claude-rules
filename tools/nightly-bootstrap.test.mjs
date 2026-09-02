@@ -1,6 +1,6 @@
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 
@@ -9,6 +9,7 @@ const powershell = process.platform === 'win32'
   ? 'powershell.exe'
   : '/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe';
 let root;
+let launcherSequence = 0;
 
 function toWindowsPath(path) {
   if (process.platform === 'win32') return path;
@@ -26,7 +27,7 @@ function fixture(name) {
 
 function runBootstrap(fix, target, args = [], extraEnv = {}, shell, bootstrap = script) {
   const windowsPowerShellDir = String.raw`C:\Windows\System32\WindowsPowerShell\v1.0`;
-  const launcher = join(fix.dir, 'invoke-bootstrap.ps1');
+  const launcher = join(fix.dir, `invoke-bootstrap-${++launcherSequence}.ps1`);
   const psQuote = (value) => `'${String(value).replaceAll("'", "''")}'`;
   const bootstrapPath = toWindowsPath(bootstrap);
   const targetPath = toWindowsPath(target);
@@ -58,11 +59,57 @@ function runBootstrap(fix, target, args = [], extraEnv = {}, shell, bootstrap = 
   });
 }
 
+function runBootstrapAsync(fix, target, args = [], extraEnv = {}) {
+  const windowsPowerShellDir = String.raw`C:\Windows\System32\WindowsPowerShell\v1.0`;
+  const launcher = join(fix.dir, `invoke-bootstrap-${++launcherSequence}.ps1`);
+  const psQuote = (value) => `'${String(value).replaceAll("'", "''")}'`;
+  const extraEnvLines = Object.entries(extraEnv).map(([name, value]) =>
+    `$env:${name} = ${psQuote(value)}`);
+  writeFileSync(launcher, [
+    `Set-Variable -Name HOME -Value ${psQuote(toWindowsPath(fix.home))} -Force`,
+    `$env:ORGIAST_NIGHTLY_REPO = ${psQuote(toWindowsPath(fix.repo))}`,
+    `$env:PATH = ${psQuote(windowsPowerShellDir)}`,
+    "$env:ORGIAST_NIGHTLY_NO_SELF_UPDATE = '1'",
+    ...extraEnvLines,
+    `& ${psQuote(toWindowsPath(script))} -Target ${psQuote(target)} -TargetArguments $args`,
+    'exit $LASTEXITCODE',
+    '',
+  ].join('\r\n'), 'utf8');
+
+  return new Promise((resolveResult) => {
+    const child = spawn(powershell, [
+      '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+      '-File', toWindowsPath(launcher), '--', ...args,
+    ], {
+      env: {
+        ...process.env,
+        HOME: toWindowsPath(fix.home),
+        USERPROFILE: toWindowsPath(fix.home),
+        PATH: windowsPowerShellDir,
+        ...extraEnv,
+      },
+    });
+    let stderr = '';
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.on('error', (error) => resolveResult({ status: null, stderr: String(error) }));
+    child.on('close', (status) => resolveResult({ status, stderr }));
+  });
+}
+
 function logText(fix) {
   const logDir = join(fix.home, '.claude', 'logs');
   const logName = readdirSync(logDir).find((name) => /^nightly-bootstrap-\d{4}-\d{2}-\d{2}\.log$/.test(name));
   assert.ok(logName, 'nightly bootstrap log was not created');
   return readFileSync(join(logDir, logName), 'utf8');
+}
+
+function allLogText(fix) {
+  const logDir = join(fix.home, '.claude', 'logs');
+  return readdirSync(logDir)
+    .filter((name) => /^nightly-bootstrap-\d{4}-\d{2}-\d{2}(?:\.\d+)?\.log$/.test(name))
+    .map((name) => readFileSync(join(logDir, name), 'utf8'))
+    .join('\n');
 }
 
 const hasPowerShell = (() => {
@@ -230,4 +277,38 @@ test('-Shell is not forwarded to the PowerShell target', { skip: !hasPwsh }, () 
   }, 'pwsh');
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(readFileSync(output, 'utf8').trim().split(/\r?\n/), ['alpha']);
+});
+
+test('six concurrent runs retain every start and target-execution log line', { skip: !hasPowerShell }, async () => {
+  const fix = fixture('concurrent-logging');
+  const target = join(fix.repo, 'tools', 'target.ps1');
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, 'Start-Sleep -Milliseconds 100\r\nexit 0\r\n', 'utf8');
+
+  const results = await Promise.all(Array.from({ length: 6 }, () =>
+    runBootstrapAsync(fix, String.raw`tools\target.ps1`)));
+  for (const result of results) assert.equal(result.status, 0, result.stderr);
+
+  const log = allLogText(fix);
+  assert.equal((log.match(/nightly-bootstrap \/ ok:開始/g) || []).length, 6, log);
+  assert.equal((log.match(/対象実行 \/ ok:target\.ps1 終了コード=0/g) || []).length, 6, log);
+  assert.doesNotMatch(log, /対象が見つからない/);
+});
+
+test('mutex timeout logs a warning and continues with the existing target', { skip: !hasPowerShell }, async () => {
+  const fix = fixture('mutex-timeout');
+  const target = join(fix.repo, 'tools', 'target.ps1');
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, 'exit 0\r\n', 'utf8');
+
+  const holder = runBootstrapAsync(fix, String.raw`tools\target.ps1`, [], {
+    ORGIAST_NIGHTLY_MUTEX_HOLD_MS: '2000',
+  });
+  await new Promise((resolveWait) => setTimeout(resolveWait, 500));
+  const contender = await runBootstrapAsync(fix, String.raw`tools\target.ps1`, [], {
+    ORGIAST_NIGHTLY_MUTEX_TIMEOUT_MS: '50',
+  });
+  assert.equal(contender.status, 0, contender.stderr);
+  await holder;
+  assert.match(allLogText(fix), /warn:他のタスクが同期中のためタイムアウト。既存版で続行/);
 });

@@ -8,6 +8,24 @@ import { isEntry } from './is-entry.mjs';
 
 const DAY_MS = 864e5;
 
+// 日次TOP3 は「GitHub workflow が成功したか」では測らない。
+// 配達先(この PC の Funnel)が引けない日は job が赤くなるが、その run の artifact には
+// 完全な生成物が残っており tools/top3-catchup.mjs が後から回収して届ける。
+// 逆に workflow が緑でも届いていない、という状態は POST 失敗が job 失敗になるので起きない。
+// つまり真実は「ローカルキャッシュの asOf がいつのものか」だけなので、そちらを見る。
+export function evaluateTop3Delivery(asOf, nowMs) {
+  const key = 'local#top3-delivery';
+  const label = '日次TOP3(配達)';
+  if (!asOf) return { key, label, lastSuccess: null, ageDays: null, status: 'never', line: `🚨 ${label}: 一度も届いていません` };
+  const asOfMs = Date.parse(`${asOf}T00:00:00+09:00`);
+  if (!Number.isFinite(asOfMs)) return { key, label, lastSuccess: asOf, ageDays: null, status: 'unknown', line: `⚠️ ${label}: asOf を日付として読めません (${asOf})` };
+  const ageDays = (nowMs - asOfMs) / DAY_MS;
+  // 当日ぶんが届いていれば 0〜1 日、前日ぶんで止まっていれば 1〜2 日。2 日以上で鳴らす。
+  const status = ageDays >= 2 ? 'stale' : 'ok';
+  const line = status === 'stale' ? `🚨 ${label}: 最終着地 ${asOf} (${Math.floor(ageDays)}日前)` : `✅ ${label}: 最終着地 ${asOf}`;
+  return { key, label, lastSuccess: asOf, ageDays, status, line };
+}
+
 export function evaluate(entries, lastSuccessByKey, nowMs) {
   return entries.map((entry) => {
     const key = `${entry.repo}#${entry.workflow}`;
@@ -75,6 +93,9 @@ function main() {
   try { complianceLastRun = JSON.parse(fs.readFileSync(complianceState, 'utf8')).lastRunAt || null; } catch { }
   const complianceAge = complianceLastRun ? (nowMs - Date.parse(complianceLastRun)) / DAY_MS : Infinity;
   results.push({ key: 'local#rule-compliance-loop', label: 'ルール遵守監査', lastSuccess: complianceLastRun, ageDays: complianceAge, status: complianceAge >= 2 ? (complianceLastRun ? 'stale' : 'never') : 'ok', line: complianceAge >= 2 ? `🚨 ルール遵守監査: ${complianceLastRun ? `最終実行 ${complianceLastRun.slice(0, 10)}` : '実行記録なし'}` : `✅ ルール遵守監査: 最終実行 ${complianceLastRun.slice(0, 10)}` });
+  let top3AsOf = null;
+  try { top3AsOf = JSON.parse(fs.readFileSync(path.join(outputDir, 'secretary-state', 'top3.json'), 'utf8')).asOf || null; } catch { }
+  results.push(evaluateTop3Delivery(top3AsOf, nowMs));
   let skipRecords = [];
   try { skipRecords = fs.readFileSync(path.join(outputDir, 'handoff-gate-skips.jsonl'), 'utf8').split(/\r?\n/).filter(Boolean).map(JSON.parse); } catch { }
   const skipAlert = evaluateGateSkips(skipRecords, nowMs);

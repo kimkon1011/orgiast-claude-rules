@@ -41,8 +41,12 @@ export function launchArgs(pinnedTree, argv) {
 function defaultRun(command, args, options = {}) {
   return new Promise((resolve) => {
     const child = spawn(command, args, options);
-    child.once('error', () => resolve(1));
-    child.once('exit', (code) => resolve(Number.isInteger(code) ? code : 1));
+    let stderrTail = '';
+    child.stderr?.on('data', (chunk) => {
+      stderrTail = `${stderrTail}${chunk}`.slice(-2000);
+    });
+    child.once('error', () => resolve({ code: 1, stderrTail }));
+    child.once('close', (code) => resolve({ code: Number.isInteger(code) ? code : 1, stderrTail }));
   });
 }
 
@@ -96,13 +100,21 @@ export async function main(argv, io = {}) {
   let preparationFailed = false;
   for (const command of commands) {
     try {
-      const result = await run('git', command.args, { cwd: command.cwd, stdio: 'inherit' });
-      if (exitCode(result) !== 0) throw new Error(`終了コード ${exitCode(result)}`);
+      const result = await run('git', command.args, {
+        cwd: command.cwd,
+        stdio: ['inherit', 'inherit', 'pipe'],
+      });
+      if (exitCode(result) !== 0) {
+        const error = new Error(`終了コード ${exitCode(result)}`);
+        error.stderrTail = result?.stderrTail;
+        throw error;
+      }
     } catch (error) {
       preparationFailed = true;
       const warning = `[auto-session-launcher] 警告: ${command.label} に失敗しました: ${error?.message ?? error}`;
-      log(warning);
-      bootLog(`${stamp()} ${warning}`);
+      const warningWithStderr = error?.stderrTail ? `${warning}\nstderr: ${error.stderrTail}` : warning;
+      log(warningWithStderr);
+      bootLog(`${stamp()} ${warningWithStderr}`);
       break;
     }
   }
@@ -120,8 +132,12 @@ export async function main(argv, io = {}) {
 
   try {
     // タスクスケジューラ経由では inherit した子の stderr が保存されないため、終了状態は boot log に残す。
-    const code = exitCode(await run(process.execPath, launchArgs(pinnedTree, argv), { stdio: 'inherit' }));
+    const result = await run(process.execPath, launchArgs(pinnedTree, argv), {
+      stdio: ['inherit', 'inherit', 'pipe'],
+    });
+    const code = exitCode(result);
     bootLog(`${stamp()} exit ${code} elapsed=${Math.max(0, Math.round((now() - started) / 1000))}s`);
+    if (code !== 0 && result?.stderrTail) bootLog(`${stamp()} stderr: ${result.stderrTail}`);
     return code;
   } catch (error) {
     log(`[auto-session-launcher] エラー: auto-session を起動できませんでした: ${error?.message ?? error}`);

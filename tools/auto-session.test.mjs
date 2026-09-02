@@ -6,7 +6,7 @@ import path from 'node:path';
 
 const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-session-test-'));
 process.env.ORGIAST_HOME = isolatedHome;
-const { DEFAULT_REPO, localDate, loadConfig, detectHistoryCwd, parseHandoff, todoExclusionReason, todoExclusionReasons, dedupeKey, dedupeTodos, filterTodos, pickCwd, buildChildArgs, buildPrompt, buildFeedbackPrompt, feedbackFailureBody, feedbackIssueExclusionReason, feedbackIssuesToUnmark, filterFeedbackIssues, feedbackNotifyUrl, normalizeGitHubRepo, feedbackRepoCwd, resolveClaudeExe, decideRun, markTodoDone, writeTodoDone, extractSessionId, transcriptPath, recoverSessionId, appendClosedSession, formatResultLine, parseArgs, deadlineDecision, runChild, main } = await import('./auto-session.mjs');
+const { DEFAULT_REPO, localDate, loadConfig, detectHistoryCwd, parseHandoff, todoExclusionReason, todoExclusionReasons, dedupeKey, dedupeTodos, filterTodos, selectTodoLanes, logSlaOverflow, pickCwd, buildChildArgs, buildPrompt, buildFeedbackPrompt, feedbackFailureBody, feedbackIssueExclusionReason, feedbackIssuesToUnmark, filterFeedbackIssues, feedbackNotifyUrl, normalizeGitHubRepo, feedbackRepoCwd, resolveClaudeExe, decideRun, markTodoDone, writeTodoDone, extractSessionId, transcriptPath, recoverSessionId, appendClosedSession, formatResultLine, parseArgs, deadlineDecision, runChild, main } = await import('./auto-session.mjs');
 const historyCwd = String.raw`c:\Users\example\Downloads\work`;
 test.after(() => fs.rmSync(isolatedHome, { recursive: true, force: true }));
 
@@ -69,10 +69,78 @@ test('--count all は3件を超えるフィルタ後の全TODOを選択する', 
   assert.deepEqual(filterTodos(todos).slice(0, options.count), ['実行1', '実行2', '実行3', '実行4']);
 });
 
-test('数値 count と feedback-count は12件を上限にする', () => {
-  const options = parseArgs(['--count', '99', '--feedback-count', '99']);
+test('SLAレーンは14件中の先頭FB 4件を通常1件より先に選ぶ', () => {
+  const todos = Array.from({ length: 14 }, (_, index) => [2, 4, 6, 8, 10].includes(index)
+    ? `作業${index + 1} [FB:fb-${index + 1}]`
+    : `通常${index + 1}`);
+  const lanes = selectTodoLanes(todos, { count: 1, slaCount: 4 });
+  assert.deepEqual(lanes.sla, [todos[2], todos[4], todos[6], todos[8]]);
+  assert.deepEqual(lanes.normal, [todos[0]]);
+  assert.deepEqual(lanes.selected, [...lanes.sla, ...lanes.normal]);
+});
+
+test('受付IDが同じ行は表記が違っても1件に畳む', () => {
+  // 別セッションが同じ報告をレーン表記なしでコピーすると先頭40文字が食い違い、
+  // 鍵が別物になって1晩に2回実行されうる。受付IDを鍵にして防ぐ。
+  const a = '1. **[FB:fb-1] 原価を集めるタスク**（取込 / パネル）— 本文。';
+  const b = '5. **[FB:fb-1] 【当日夜に実行・要望】 原価を集めるタスク**（取込 / パネル）— 本文。';
+  const reasons = todoExclusionReasons([a, b]);
+  assert.equal(reasons[0], '');
+  assert.equal(reasons[1], '重複（先の項目と同一）');
+});
+
+test('除外される項目は鍵を主張しない（実行可能なコピーを潰さない）', () => {
+  // 2026-09-02 実データ: 保留語を含む旧コピーが先頭ブロックにあり、
+  // 素朴に鍵を主張させると実行可能なコピーが「重複」に落ち、SLA対象が1件も実行されなくなる。
+  const held = '3. **[FB:fb-9] E16セルの不具合**（取込）— 着手可否は kim 判断待ち。';
+  const runnable = '9. **[FB:fb-9] 【即実行・不具合】 E16セルの不具合**（取込）— 本文。';
+  const reasons = todoExclusionReasons([held, runnable]);
+  assert.equal(reasons[0], '判断待ち');
+  assert.equal(reasons[1], '', '実行可能なコピーが残ること');
+  assert.deepEqual(filterTodos([held, runnable]), [runnable]);
+});
+
+test('SLAレーンでは即実行(不具合)が当日夜(要望)より先に来る', () => {
+  // 注入順は要望が先。並び順のままだと不具合が繰り越しに落ちる(2026-09-02 実データで発生)。
+  const todos = [
+    '1. [FB:w1] 【当日夜に実行・要望】 要望1',
+    '2. [FB:w2] 【当日夜に実行・要望】 要望2',
+    '3. [FB:b1] 【即実行・不具合】 不具合1',
+    '4. [FB:w3] 【当日夜に実行・要望】 要望3',
+  ];
+  const lanes = selectTodoLanes(todos, { count: 0, slaCount: 2 });
+  assert.deepEqual(lanes.sla, [todos[2], todos[0]]);
+  assert.equal(lanes.slaOverflow, 2);
+});
+
+test('同じレーン内では注入順を保つ(安定ソート)', () => {
+  const todos = [
+    '1. [FB:w1] 【当日夜に実行・要望】 要望1',
+    '2. [FB:w2] 【当日夜に実行・要望】 要望2',
+    '3. [FB:w3] 【当日夜に実行・要望】 要望3',
+  ];
+  assert.deepEqual(selectTodoLanes(todos, { count: 0, slaCount: 3 }).sla, todos);
+});
+
+test('判断待ちのFBはSLAレーンに入らない', () => {
+  const lanes = selectTodoLanes(['[FB:hold] 判断待ち', '[FB:run] 実行可', '通常'], { count: 1, slaCount: 4 });
+  assert.deepEqual(lanes.sla, ['[FB:run] 実行可']);
+  assert.deepEqual(lanes.normal, ['通常']);
+});
+
+test('SLA上限超過は今夜実行数と翌夜繰越数をログに出す', () => {
+  const lanes = selectTodoLanes(Array.from({ length: 6 }, (_, index) => `[FB:${index}] 要望${index}`), { slaCount: 4 });
+  const logs = [];
+  logSlaOverflow(lanes, (line) => logs.push(line));
+  assert.deepEqual(logs, ['auto-session: SLA対象 6件のうち 4件を今夜実行、2件は翌夜に繰り越し（--sla-count で調整可）']);
+});
+
+test('数値 count と sla-count と feedback-count は12件を上限にする', () => {
+  const options = parseArgs(['--count', '99', '--sla-count', '99', '--feedback-count', '99']);
   assert.equal(options.count, 12);
+  assert.equal(options.slaCount, 12);
   assert.equal(options.feedbackCount, 12);
+  assert.equal(parseArgs(['--sla-count', 'all']).slaCount, Infinity);
   assert.equal(parseArgs(['--feedback-count', 'all']).feedbackCount, Infinity);
 });
 
@@ -150,6 +218,27 @@ function mainIoWithFeedback(status) {
 
 test('全記録が success なら feedback に PR URL が無くても main は 0 を返す', async () => {
   assert.equal(await main(['--count', '0', '--feedback-count', '1'], mainIoWithFeedback('success')), 0);
+});
+
+test('TODO が全て成功していれば完走通知が例外でも main は 0 を返して警告を残す', async () => {
+  const claudeDir = path.join(isolatedHome, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(path.join(claudeDir, 'next-session.md'), '<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. 通知失敗の回帰テスト\n');
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (message) => warnings.push(String(message));
+  try {
+    const code = await main(['--count', '1', '--feedback-count', '0'], {
+      listFeedbackIssues: () => [],
+      resolveClaudeExe: () => '/fake/claude',
+      runChild: async () => ({ status: 'success', exitCode: 0, stdout: '完了', stderr: '', startedAt: new Date().toISOString(), endedAt: new Date().toISOString() }),
+      notify: async () => { throw new Error('webhook unavailable'); },
+    });
+    assert.equal(code, 0);
+    assert.ok(warnings.some((warning) => warning.includes('完走通知の送信に失敗しました') && warning.includes('webhook unavailable')));
+  } finally {
+    console.warn = originalWarn;
+  }
 });
 
 test('todo または feedback が failure/timeout なら main は 1 を返す', async () => {

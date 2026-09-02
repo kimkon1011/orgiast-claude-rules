@@ -7,6 +7,8 @@ import path from 'node:path';
 // 一度も送らない。実際に PC管理表 が「手で叩いた1台」だけの状態で止まっていた
 // (2026-08-28 実測)。引数が落ちても誰も気付けないのでテストで固定する。
 const dir = path.resolve(import.meta.dirname);
+const pollerSource = fs.readFileSync(path.join(dir, 'fleet-poller.mjs'), 'utf8');
+const installerSource = fs.readFileSync(path.join(dir, 'install-orgiast.ps1'), 'utf8');
 
 const callInMjs = () => {
   const source = fs.readFileSync(path.join(dir, 'fleet-poller.mjs'), 'utf8');
@@ -38,4 +40,29 @@ test('fleet-poller.mjs は fleet-sheet-report に --cloud を渡す', () => {
 
 test('fleet-poller.ps1 は fleet-sheet-report に --cloud を渡す', () => {
   assert.match(callInPs1(), /--cloud/);
+});
+
+test('fleet-poller.mjs は register-fleet-agent を許可する', () => {
+  const allowed = pollerSource.match(/const allowed = new Set\(\[([^\]]+)\]\)/);
+  assert.ok(allowed, '許可タスク一覧が見つからない');
+  assert.match(allowed[1], /['"]register-fleet-agent['"]/);
+});
+
+test('fleet-poller.mjs は register-fleet-agent.ps1 を実行する', () => {
+  const branch = pollerSource.match(/if \(task === 'register-fleet-agent'\)[\s\S]*?\n  }/);
+  assert.ok(branch, 'register-fleet-agent の分岐が見つからない');
+  assert.match(branch[0], /register-fleet-agent\.ps1/);
+});
+
+test('fleet-poller.mjs の既存5タスクが許可リストに残っている', () => {
+  const allowed = pollerSource.match(/const allowed = new Set\(\[([^\]]+)\]\)/);
+  assert.ok(allowed, '許可タスク一覧が見つからない');
+  for (const task of ['verify-setup', 'rules-resync', 'cost-report', 'thermal-guard', 'power-save']) {
+    assert.match(allowed[1], new RegExp(`['"]${task}['"]`), `${task} が許可リストにない`);
+  }
+});
+
+test('install-orgiast.ps1 は register-fleet-agent.ps1 を呼ぶ', () => {
+  assert.match(installerSource, /& powershell\.exe[^\r\n]*-File \$fa/);
+  assert.match(installerSource, /register-fleet-agent\.ps1/);
 });

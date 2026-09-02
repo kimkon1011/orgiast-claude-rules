@@ -17,7 +17,23 @@ New-Item -ItemType Directory -Path $logDir -Force | Out-Null
 
 function Write-NightlyLog([string]$Step, [string]$Result) {
     $line = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + ' / ' + $Step + ' / ' + $Result
-    Add-Content -LiteralPath $logFile -Value $line -Encoding UTF8
+    for ($attempt = 0; $attempt -lt 10; $attempt++) {
+        try {
+            Add-Content -LiteralPath $logFile -Value $line -Encoding UTF8 -ErrorAction Stop
+            return
+        } catch {
+            if ($attempt -lt 9) {
+                Start-Sleep -Milliseconds (50 + ($PID % 37) + ($attempt * 25))
+            }
+        }
+    }
+
+    try {
+        $fallbackFile = Join-Path $logDir ("nightly-bootstrap-" + (Get-Date -Format 'yyyy-MM-dd') + '.' + $PID + '.log')
+        Add-Content -LiteralPath $fallbackFile -Value $line -Encoding UTF8 -ErrorAction Stop
+    } catch {
+        try { [Console]::Error.WriteLine($line) } catch { }
+    }
 }
 
 function Stop-Nightly([string]$Step, [string]$Result, [int]$Code) {
@@ -45,11 +61,40 @@ try {
     }
     $repoUrl = 'https://github.com/kimkon1011/orgiast-claude-rules.git'
     $git = Get-Command git -ErrorAction SilentlyContinue
+    $mutex = $null
+    $mutexAcquired = $false
+    $targetPath = $null
 
-    if (-not $git) {
-        Write-NightlyLog 'git確認' 'error:gitが見つからない'
-    } else {
+    try {
+        $repoFullPath = [IO.Path]::GetFullPath($repo).ToUpperInvariant()
+        $repoPathBytes = [Text.Encoding]::UTF8.GetBytes($repoFullPath)
+        $repoPathSha = [BitConverter]::ToString(([Security.Cryptography.SHA256]::Create()).ComputeHash($repoPathBytes)).Replace('-', '')
+        $mutexName = 'Global\OrgiastNightlyBootstrap-' + $repoPathSha.Substring(0, 24)
+        $mutex = New-Object Threading.Mutex($false, $mutexName)
+        $mutexTimeoutMs = 180000
+        if ($env:ORGIAST_NIGHTLY_MUTEX_TIMEOUT_MS) {
+            $parsedTimeout = 0
+            if ([int]::TryParse($env:ORGIAST_NIGHTLY_MUTEX_TIMEOUT_MS, [ref]$parsedTimeout) -and $parsedTimeout -ge 0) {
+                $mutexTimeoutMs = $parsedTimeout
+            }
+        }
         try {
+            $mutexAcquired = $mutex.WaitOne($mutexTimeoutMs)
+        } catch [Threading.AbandonedMutexException] {
+            $mutexAcquired = $true
+            Write-NightlyLog '排他制御' 'warn:放棄されたミューテックスを取得。続行'
+        }
+
+        if (-not $mutexAcquired) {
+            Write-NightlyLog '排他制御' 'warn:他のタスクが同期中のためタイムアウト。既存版で続行'
+        } elseif ($env:ORGIAST_NIGHTLY_MUTEX_HOLD_MS -and [int]$env:ORGIAST_NIGHTLY_MUTEX_HOLD_MS -gt 0) {
+            Start-Sleep -Milliseconds ([int]$env:ORGIAST_NIGHTLY_MUTEX_HOLD_MS)
+        }
+
+        if ($mutexAcquired -and -not $git) {
+            Write-NightlyLog 'git確認' 'error:gitが見つからない'
+        } elseif ($mutexAcquired) {
+          try {
             $gitDir = Join-Path $repo '.git'
             $repoSynced = $true
             if (-not (Test-Path -LiteralPath $gitDir -PathType Container)) {
@@ -84,12 +129,13 @@ try {
             }
         } catch {
             Write-NightlyLog 'リポ同期' ("warn:" + $_.Exception.Message + ' 既存版で続行')
+          }
         }
-    }
 
-    try {
-        $repoBootstrap = Join-Path $repo 'tools\nightly-bootstrap.ps1'
-        if ((Test-Path -LiteralPath $repoBootstrap -PathType Leaf) -and $PSCommandPath) {
+        if ($mutexAcquired) {
+          try {
+            $repoBootstrap = Join-Path $repo 'tools\nightly-bootstrap.ps1'
+            if ((Test-Path -LiteralPath $repoBootstrap -PathType Leaf) -and $PSCommandPath) {
             $selfPath = [IO.Path]::GetFullPath($PSCommandPath)
             $repoRoot = [IO.Path]::GetFullPath($repo).TrimEnd('\', '/')
             $selfInRepo = $selfPath.StartsWith($repoRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)
@@ -109,16 +155,26 @@ try {
                     Write-NightlyLog '自己更新' 'skip:自己更新(運用の設置先でないため)'
                 }
             }
+            }
+          } catch {
+            Write-NightlyLog '自己更新' ("warn:" + $_.Exception.Message)
+          }
         }
-    } catch {
-        Write-NightlyLog '自己更新' ("warn:" + $_.Exception.Message)
-    }
 
-    $targetPath = if ([IO.Path]::IsPathRooted($Target)) { $Target } else { Join-Path $repo $Target }
-    if (-not (Test-Path -LiteralPath $targetPath -PathType Leaf)) {
-        Stop-Nightly '対象確認' ("error:対象が見つからない " + $targetPath) 1
+        $targetCandidate = if ([IO.Path]::IsPathRooted($Target)) { $Target } else { Join-Path $repo $Target }
+        if (-not (Test-Path -LiteralPath $targetCandidate -PathType Leaf)) {
+            Start-Sleep -Seconds 1
+        }
+        if (-not (Test-Path -LiteralPath $targetCandidate -PathType Leaf)) {
+            Stop-Nightly '対象確認' ("error:対象が見つからない " + $targetCandidate) 1
+        }
+        $targetPath = (Resolve-Path -LiteralPath $targetCandidate).Path
+    } finally {
+        if ($mutexAcquired -and $mutex) {
+            try { $mutex.ReleaseMutex() } catch { }
+        }
+        if ($mutex) { $mutex.Dispose() }
     }
-    $targetPath = (Resolve-Path -LiteralPath $targetPath).Path
 
     $forwardArgs = @($TargetArguments)
     if ($forwardArgs.Count -gt 0 -and [string]$forwardArgs[0] -eq '--') {

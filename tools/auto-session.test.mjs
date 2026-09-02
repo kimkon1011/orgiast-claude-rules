@@ -79,6 +79,27 @@ test('SLAレーンは14件中の先頭FB 4件を通常1件より先に選ぶ', (
   assert.deepEqual(lanes.selected, [...lanes.sla, ...lanes.normal]);
 });
 
+test('受付IDが同じ行は表記が違っても1件に畳む', () => {
+  // 別セッションが同じ報告をレーン表記なしでコピーすると先頭40文字が食い違い、
+  // 鍵が別物になって1晩に2回実行されうる。受付IDを鍵にして防ぐ。
+  const a = '1. **[FB:fb-1] 原価を集めるタスク**（取込 / パネル）— 本文。';
+  const b = '5. **[FB:fb-1] 【当日夜に実行・要望】 原価を集めるタスク**（取込 / パネル）— 本文。';
+  const reasons = todoExclusionReasons([a, b]);
+  assert.equal(reasons[0], '');
+  assert.equal(reasons[1], '重複（先の項目と同一）');
+});
+
+test('除外される項目は鍵を主張しない（実行可能なコピーを潰さない）', () => {
+  // 2026-09-02 実データ: 保留語を含む旧コピーが先頭ブロックにあり、
+  // 素朴に鍵を主張させると実行可能なコピーが「重複」に落ち、SLA対象が1件も実行されなくなる。
+  const held = '3. **[FB:fb-9] E16セルの不具合**（取込）— 着手可否は kim 判断待ち。';
+  const runnable = '9. **[FB:fb-9] 【即実行・不具合】 E16セルの不具合**（取込）— 本文。';
+  const reasons = todoExclusionReasons([held, runnable]);
+  assert.equal(reasons[0], '判断待ち');
+  assert.equal(reasons[1], '', '実行可能なコピーが残ること');
+  assert.deepEqual(filterTodos([held, runnable]), [runnable]);
+});
+
 test('SLAレーンでは即実行(不具合)が当日夜(要望)より先に来る', () => {
   // 注入順は要望が先。並び順のままだと不具合が繰り越しに落ちる(2026-09-02 実データで発生)。
   const todos = [

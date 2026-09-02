@@ -7,6 +7,8 @@ import {
   queryPullRequests, similarity, todoTokens,
 } from './nightly-kpi.mjs';
 
+process.env.TZ = 'Asia/Tokyo';
+
 const date = '2026-09-02';
 const baseBatch = parseBatchLog('2026-09-02 03:00:00 / nightly-batch / ok:開始\n2026-09-02 03:10:00 / サマリ / nightly-batch 完了: ok');
 

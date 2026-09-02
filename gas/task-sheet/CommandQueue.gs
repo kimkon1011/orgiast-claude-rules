@@ -6,6 +6,8 @@ function _COMMANDS_() {
     listTasks: listTasks,
     claimTask: claimTask,
     doneTask: doneTask,
+    jobWatchRun: jobWatchRun,
+    installJobWatchTrigger: installJobWatchTrigger,
     setTaskSheetToken: setTaskSheetToken,
     describeTaskSheetConfig: describeTaskSheetConfig
   };

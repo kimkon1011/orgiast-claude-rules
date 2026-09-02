@@ -340,7 +340,7 @@ async function syncRepository(now) {
     const skills = deploySkills(repoPath, home, { now, onError: (e) => log(`skill deployment failed: ${e.message}`) });
     if (skills.length) log(`skills updated: ${skills.join(', ')}`);
     try {
-      const memory = installSharedMemories({ home, repoRoot: repoPath, emit: () => {} });
+      const memory = await installSharedMemories({ home, emit: (line) => log(line) });
       log(`memory-share install: installed=${memory.installed} skipped=${memory.skipped} unchanged=${memory.unchanged} indexed=${memory.indexed}`);
     } catch (e) { log(`memory-share install failed(continue): ${e.message}`); }
     // 新しく配布された hook を全PCへ自動登録する(add-only・差分が無ければ何も書かない)。

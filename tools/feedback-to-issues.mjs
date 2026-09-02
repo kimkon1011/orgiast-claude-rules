@@ -295,4 +295,28 @@ export async function main(args = process.argv.slice(2)) {
   return 0;
 }
 
-if (isEntry(import.meta.url)) process.exitCode = await main();
+// ブース制作アプリの不具合要望も 10 分毎に拾う必要がある(不具合=即実行/要望=当日夜が要件)。
+// 専用タスクを別に登録するのが本筋だが、Task Scheduler への登録は環境によって
+// 実行できないことがある(2026-09-02: 登録が権限で通らず、タスクが存在しない時間帯が生まれた)。
+// このタスク(OrgiastFeedbackIntakeFast)は既に 10 分毎に回っているので、ここから相乗りさせて
+// 「専用タスクが無くても拾える」状態を作る。専用タスクがある場合は二重に走るが、
+// intake は [FB:<key>] と台帳で冪等なので重複注入は起きない。
+export async function chainBoothFeedbackIntake({ argv = process.argv.slice(2), spawnImpl } = {}) {
+  if (argv.includes('--dry-run') || argv.includes('--no-chain')) return 'skipped';
+  try {
+    const { spawn } = spawnImpl ? { spawn: spawnImpl } : await import('node:child_process');
+    const target = path.join(import.meta.dirname, 'booth-feedback-intake.mjs');
+    const child = spawn(process.execPath, [target], { detached: true, stdio: 'ignore', windowsHide: true });
+    child.unref?.();
+    return 'spawned';
+  } catch (error) {
+    // 相乗りの失敗でこのタスクの exit code を汚さない。
+    console.warn(`feedback-to-issues: booth-feedback-intake の相乗り起動に失敗 (${error?.message || error})`);
+    return 'failed';
+  }
+}
+
+if (isEntry(import.meta.url)) {
+  process.exitCode = await main();
+  await chainBoothFeedbackIntake();
+}

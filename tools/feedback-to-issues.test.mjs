@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildIssueBody,
+  chainBoothFeedbackIntake,
   buildIssueTitle,
   isIssueCandidate,
   parseDismissId,
@@ -125,4 +126,26 @@ test('正常なアプリ名の従来解決を保ち、ホスト表よりアプ�
     resolveRepoForItem(item, '', 'purchasing-management-app.vercel.app=other/repo'),
     'kimkon1011/purchasing-management-app',
   );
+});
+
+test('booth-feedback-intake を 10分タスクから相乗り起動する', async () => {
+  const calls = [];
+  const fakeSpawn = (...args) => { calls.push(args); return { unref() {} }; };
+  assert.equal(await chainBoothFeedbackIntake({ argv: [], spawnImpl: fakeSpawn }), 'spawned');
+  assert.equal(calls.length, 1);
+  assert.match(calls[0][1][0], /booth-feedback-intake\.mjs$/);
+  assert.equal(calls[0][2].detached, true);
+});
+
+test('--dry-run と --no-chain では相乗り起動しない', async () => {
+  const calls = [];
+  const fakeSpawn = (...args) => { calls.push(args); return { unref() {} }; };
+  assert.equal(await chainBoothFeedbackIntake({ argv: ['--dry-run'], spawnImpl: fakeSpawn }), 'skipped');
+  assert.equal(await chainBoothFeedbackIntake({ argv: ['--no-chain'], spawnImpl: fakeSpawn }), 'skipped');
+  assert.equal(calls.length, 0);
+});
+
+test('相乗り起動の失敗はこのタスクを落とさない', async () => {
+  const boom = () => { throw new Error('spawn boom'); };
+  assert.equal(await chainBoothFeedbackIntake({ argv: [], spawnImpl: boom }), 'failed');
 });

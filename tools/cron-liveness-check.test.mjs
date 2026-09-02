@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluate, evaluateGateSkips } from './cron-liveness-check.mjs';
+import { evaluate, evaluateGateSkips, evaluateTop3Delivery } from './cron-liveness-check.mjs';
 
 const now = Date.parse('2026-08-21T00:00:00.000Z');
 const entry = { label: '日次', repo: 'owner/repo', workflow: 'daily.yml', everyDays: 1 };
@@ -42,4 +42,34 @@ test('境界値はok、境界を超えるとstale', () => {
 test('直近7日のgateスキップ3件で警報', () => {
   const records = [1, 2, 3].map((days) => ({ ts: new Date(now - days * 864e5).toISOString() }));
   assert.match(evaluateGateSkips(records, now).line, /🚨 gate判定スキップ 3件/);
+});
+
+// 日次TOP3 は workflow の成否ではなくローカル着地(asOf)で測る。
+// 取りこぼしは top3-catchup が artifact から回収するため、run が赤くても届いていることがある。
+const top3Now = Date.parse('2026-09-02T07:00:00.000Z'); // = 2026-09-02 16:00 JST
+
+test('日次TOP3: 当日ぶんが届いていればok', () => {
+  const actual = evaluateTop3Delivery('2026-09-02', top3Now);
+  assert.equal(actual.status, 'ok');
+  assert.match(actual.line, /^✅/);
+});
+
+test('日次TOP3: 前日ぶんで止まっていてもまだok（当日の生成前に鳴らさない）', () => {
+  assert.equal(evaluateTop3Delivery('2026-09-01', top3Now).status, 'ok');
+});
+
+test('日次TOP3: 2日以上遅れたらstale', () => {
+  const actual = evaluateTop3Delivery('2026-08-31', top3Now);
+  assert.equal(actual.status, 'stale');
+  assert.match(actual.line, /^🚨/);
+});
+
+test('日次TOP3: 一度も届いていなければnever', () => {
+  assert.equal(evaluateTop3Delivery(null, top3Now).status, 'never');
+});
+
+test('日次TOP3: asOfが日付として読めなければunknown', () => {
+  const actual = evaluateTop3Delivery('not-a-date', top3Now);
+  assert.equal(actual.status, 'unknown');
+  assert.match(actual.line, /^⚠️/);
 });

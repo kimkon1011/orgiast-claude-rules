@@ -1,5 +1,4 @@
 [
   {"label":"週次経営指示(weekly.yml)","repo":"kimkon1011/orgiast-weekly-bot","workflow":"weekly.yml","everyDays":7},
-  {"label":"日次TOP3(daily-top3.yml)","repo":"kimkon1011/orgiast-weekly-bot","workflow":"daily-top3.yml","everyDays":1},
   {"label":"コスト監視(cost-monitor.yml)","repo":"kimkon1011/orgiast-claude-rules","workflow":"cost-monitor.yml","everyDays":1}
 ]

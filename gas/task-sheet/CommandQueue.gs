@@ -4,6 +4,8 @@ function _COMMANDS_() {
   return {
     upsertTask: upsertTask,
     listTasks: listTasks,
+    claimTask: claimTask,
+    doneTask: doneTask,
     setTaskSheetToken: setTaskSheetToken,
     describeTaskSheetConfig: describeTaskSheetConfig
   };

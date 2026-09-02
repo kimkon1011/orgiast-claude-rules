@@ -44,6 +44,35 @@ test('トップレベル type: feedback にも対応する', () => {
   assert.equal(exportMemories({ home: f.home, repoRoot: f.repoRoot, emit: () => {} }).exported, 1);
 });
 
+test('ドットで始まるfeedbackバックアップはexportせず対象外ファイルとしてログに出す', () => {
+  const f = fixture(); const output = [];
+  fs.writeFileSync(path.join(f.memoryDir, '.memory-bak-20260101-x.md'), memory('古い複製'));
+  const result = exportMemories({ home: f.home, repoRoot: f.repoRoot, emit: (line) => output.push(line) });
+  assert.equal(result.exported, 0);
+  assert.match(output.join('\n'), /除外\(対象外ファイル\): \.memory-bak-20260101-x\.md — バックアップ\/隠しファイル/);
+  assert.doesNotMatch(output.join('\n'), /除外\((?:資格情報|顧客情報)\): \.memory-bak/);
+  assert.doesNotMatch(fs.readFileSync(path.join(f.repoRoot, 'memory-shared', 'EXCLUDED.md'), 'utf8'), /\.memory-bak-20260101-x\.md/);
+});
+
+test('チルダで終わるfeedbackバックアップはexportせず対象外ファイルとしてログに出す', () => {
+  const f = fixture(); const output = [];
+  fs.writeFileSync(path.join(f.memoryDir, 'feedback_x.md~'), memory('エディタの複製'));
+  const result = exportMemories({ home: f.home, repoRoot: f.repoRoot, emit: (line) => output.push(line) });
+  assert.equal(result.exported, 0);
+  assert.match(output.join('\n'), /除外\(対象外ファイル\): feedback_x\.md~ — バックアップ\/隠しファイル/);
+  assert.doesNotMatch(fs.readFileSync(path.join(f.repoRoot, 'memory-shared', 'EXCLUDED.md'), 'utf8'), /feedback_x\.md~/);
+});
+
+test('対象外ファイルと同居しても正常なfeedbackは引き続きexportする', () => {
+  const f = fixture();
+  fs.writeFileSync(path.join(f.memoryDir, 'feedback_ok.md'), memory('共有対象'));
+  fs.writeFileSync(path.join(f.memoryDir, 'feedback_copy.bak.md'), memory('バックアップ'));
+  const result = exportMemories({ home: f.home, repoRoot: f.repoRoot, emit: () => {} });
+  assert.equal(result.exported, 1);
+  assert.equal(fs.existsSync(path.join(f.repoRoot, 'memory-shared', 'feedback_ok.md')), true);
+  assert.equal(fs.existsSync(path.join(f.repoRoot, 'memory-shared', 'feedback_copy.bak.md')), false);
+});
+
 test('Discord webhook URL はexportせず理由を1行出す', () => {
   const f = fixture(); const output = [];
   fs.writeFileSync(path.join(f.memoryDir, 'feedback_webhook.md'), memory('危険', 'feedback', 'https://discord.com/api/webhooks/123/token-value'));

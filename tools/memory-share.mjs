@@ -27,6 +27,10 @@ const CUSTOMER_PATTERNS = [
 ];
 const EXCLUDED_FILE = 'EXCLUDED.md';
 
+function isNonMemoryFile(name) {
+  return name.startsWith('.') || name.includes('-bak-') || name.includes('.bak') || name.endsWith('~');
+}
+
 function excludedIndex(items) {
   const lines = [
     '# Export exclusions',
@@ -71,6 +75,10 @@ function memoryFiles(home, emit) {
       const memory = path.join(root, project.name, 'memory');
       try {
         for (const entry of fs.readdirSync(memory, { withFileTypes: true })) {
+          if (entry.isFile() && isNonMemoryFile(entry.name)) {
+            emit(`除外(対象外ファイル): ${entry.name} — バックアップ/隠しファイル`);
+            continue;
+          }
           if (entry.isFile() && entry.name.endsWith('.md') && entry.name !== 'MEMORY.md') files.push(path.join(memory, entry.name));
         }
       } catch (error) { if (error?.code !== 'ENOENT') emit(`失敗: ${memory} — ${oneLine(error)}`); }

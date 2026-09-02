@@ -181,6 +181,14 @@ try {
         if ($forwardArgs.Count -eq 1) { $forwardArgs = @() } else { $forwardArgs = @($forwardArgs[1..($forwardArgs.Count - 1)]) }
     }
 
+    try {
+        $heartbeatScript = Join-Path $repo 'tools\lib\heartbeat.mjs'
+        if (-not (Test-Path -LiteralPath $heartbeatScript -PathType Leaf)) { $heartbeatScript = Join-Path $HOME '.claude\tools\lib\heartbeat.mjs' }
+        if (Test-Path -LiteralPath $heartbeatScript -PathType Leaf) {
+            & node $heartbeatScript --job nightly-bootstrap --startedAt (Get-Date -Format 'o') 2>$null | Out-Null
+        }
+    } catch { }
+
     $extension = [IO.Path]::GetExtension($targetPath).ToLowerInvariant()
     if ($extension -eq '.ps1') {
         $shellCommand = $null

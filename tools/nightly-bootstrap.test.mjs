@@ -182,6 +182,14 @@ test('script is UTF-8 with BOM', () => {
   assert.deepEqual([...readFileSync(script).subarray(0, 3)], [0xef, 0xbb, 0xbf]);
 });
 
+test('heartbeat is fail-open and runs before target extension dispatch', () => {
+  const source = readFileSync(script, 'utf8');
+  const heartbeat = source.indexOf("--job nightly-bootstrap --startedAt");
+  const dispatch = source.indexOf("$extension = [IO.Path]::GetExtension($targetPath)");
+  assert.ok(heartbeat > 0 && heartbeat < dispatch);
+  assert.match(source.slice(source.lastIndexOf('try {', heartbeat), dispatch), /catch \{ \}/);
+});
+
 test('missing target exits 1 and writes readable Japanese log', { skip: !hasPowerShell }, () => {
   const fix = fixture('missing');
   const result = runBootstrap(fix, join(fix.dir, 'missing.ps1'));

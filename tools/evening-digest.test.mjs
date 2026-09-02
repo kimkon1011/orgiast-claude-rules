@@ -51,3 +51,32 @@ test('今日の bot 投稿の 🚨 だけ数え、先頭3件の1行目を載せ�
   assert.match(sent, /backup failed/); assert.match(sent, /fleet stopped/); assert.match(sent, /webhook dead/);
   assert.doesNotMatch(sent, /fourth alert|human|normal bot|old alert|detail/);
 });
+
+test('送信成功後に heartbeat を記録する', async () => {
+  const dir = home(); const calls = [];
+  const result = await runEvening({
+    home: dir, now: new Date('2026-08-31T18:00:00Z'),
+    notifyKimImpl: async () => ({ delivered: 'dm' }),
+    reportHeartbeatImpl: async (...args) => calls.push(args),
+  });
+  assert.equal(result.sent, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0].job, 'evening-digest');
+  assert.equal(calls[0][0].ok, true);
+  assert.equal(calls[0][1].homeDir, dir);
+});
+
+test('heartbeat 失敗でも送信結果と state を維持する', async () => {
+  const dir = home(); const warnings = []; const originalWarn = console.warn;
+  console.warn = (message) => warnings.push(String(message));
+  try {
+    const result = await runEvening({
+      home: dir, now: new Date('2026-08-31T18:00:00'),
+      notifyKimImpl: async () => ({ delivered: 'dm' }),
+      reportHeartbeatImpl: async () => { throw new Error('heartbeat unavailable'); },
+    });
+    assert.equal(result.sent, true);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(dir, '.claude', 'evening-digest-state.json'))).lastSentDate, '2026-08-31');
+    assert.ok(warnings.some((line) => /heartbeat送信失敗.*heartbeat unavailable/.test(line)));
+  } finally { console.warn = originalWarn; }
+});

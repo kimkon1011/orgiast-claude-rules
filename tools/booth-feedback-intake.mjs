@@ -62,10 +62,12 @@ export function injectFeedbackTodos(md, items, sheetUrl) {
   const block = source.slice(bounds.start, bounds.end);
   const range = todoSectionRange(block);
   if (range) {
-    const numbers = [...range.section.matchAll(/^\s*(\d+)[.)、]\s+/gm)].map((match) => Number(match[1]));
-    const firstNumber = numbers.length ? Math.max(...numbers) + 1 : 1;
-    const lines = fresh.map((item, index) => formatTodo(item, sheetUrl, firstNumber + index)).join(newline);
-    const changedSection = `${range.section}${newline}${lines}`;
+    const sectionLines = range.section.split(/\r?\n/);
+    const heading = sectionLines.shift();
+    const lines = fresh.map((item, index) => formatTodo(item, sheetUrl, index + 1)).join(newline);
+    let existingNumber = fresh.length;
+    const existing = sectionLines.map((line) => line.replace(/^(\s*)\d+([.)、]\s+)/, (_, indent, suffix) => `${indent}${++existingNumber}${suffix}`)).join(newline);
+    const changedSection = `${heading}${newline}${lines}${existing ? `${newline}${existing}` : ''}`;
     const changedBlock = block.slice(0, range.start) + changedSection + block.slice(range.end);
     return { text: source.slice(0, bounds.start) + changedBlock + source.slice(bounds.end), injected: fresh };
   }

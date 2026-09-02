@@ -9,6 +9,7 @@ import { postWebhook } from './morning-batch.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { listDecisions } from './pending-decisions.mjs';
 import { redactSecrets } from './webhook-health.mjs';
+import { reportHeartbeat } from './lib/heartbeat.mjs';
 
 const TYPES = new Set(['results-daily-digest', 'auto-session-digest', 'executor-usage-digest', 'next-session-todo-triage']);
 const TITLES = { 'results-daily-digest': '今日の結果', 'auto-session-digest': '今日の自動セッション', 'executor-usage-digest': '今日の委譲実績', 'next-session-todo-triage': '次回TODO整理' };
@@ -45,7 +46,7 @@ async function readTodayAlerts({ home, now, token, channelId, fetchMessagesImpl 
   });
   return { count: alerts.length, summaries: alerts.slice(0, 3).map((message) => String(message.content).split(/\r?\n/, 1)[0]) };
 }
-export async function runEvening({ home = userHome(), now = new Date(), force = false, dryRun = false, fetchImpl = fetch, fetchMessagesImpl = fetchMessages, sleepImpl, webhookUrl, channelId, token, notifyKimImpl = notifyKim } = {}) {
+export async function runEvening({ home = userHome(), now = new Date(), force = false, dryRun = false, fetchImpl = fetch, fetchMessagesImpl = fetchMessages, sleepImpl, webhookUrl, channelId, token, notifyKimImpl = notifyKim, reportHeartbeatImpl = reportHeartbeat } = {}) {
   const date = localDate(now);
   const stateFile = path.join(home, '.claude', 'evening-digest-state.json');
   let state = {};
@@ -68,6 +69,11 @@ export async function runEvening({ home = userHome(), now = new Date(), force = 
   const tmp = `${stateFile}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, `${JSON.stringify({ lastSentDate: date })}\n`);
   fs.renameSync(tmp, stateFile);
+  try {
+    await reportHeartbeatImpl({ job: 'evening-digest', startedAt: now.toISOString(), finishedAt: new Date().toISOString(), ok: true, summary: message.slice(0, 200) }, { homeDir: home });
+  } catch (error) {
+    console.warn(`evening-digest: heartbeat送信失敗（本体には影響しません）: ${error?.message ?? error}`);
+  }
   return { skipped: false, sent: true, message };
 }
 export async function main(args = process.argv.slice(2)) {

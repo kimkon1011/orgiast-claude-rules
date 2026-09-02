@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process';
 import { parseEnvText } from './env-kv.mjs';
 import { isEntry } from './is-entry.mjs';
 import { decideRun, firstBlockBounds, sectionFrom } from './auto-session.mjs';
+import { runTaskLedger } from './task-ledger.mjs';
 
 const MARKER = '<!-- NEXT-SESSION v1 -->';
 
@@ -144,7 +145,7 @@ function runningReason(claudeDir, io, now) {
   return '';
 }
 
-export async function runIntake({ args = [], home = process.env.ORGIAST_HOME || os.homedir(), io = defaultIo(), fetchImpl = fetch } = {}) {
+export async function runIntake({ args = [], home = process.env.ORGIAST_HOME || os.homedir(), io = defaultIo(), fetchImpl = fetch, taskLedger = runTaskLedger } = {}) {
   const claudeDir = path.join(home, '.claude');
   let env = {};
   try { env = parseEnvText(io.read(path.join(claudeDir, 'booth-feedback.env'))); } catch {}
@@ -213,6 +214,16 @@ export async function runIntake({ args = [], home = process.env.ORGIAST_HOME || 
       return 0;
     }
     if (result.text !== before) io.write(nextFile, result.text);
+    for (const item of result.injected) {
+      try {
+        await taskLedger({
+          command: 'upsert', taskId: `FB-${item.key}`, 起票元: 'booth-feedback', 件名: item.title || '無題',
+          依頼元: item.source || '不明', 状態: '未着手', 次アクション: item.kind === '不具合' ? '即実行' : '当日夜に実行', 期限: '',
+        }, { homeDir: home });
+      } catch (error) {
+        io.stderr(`booth-feedback: task-ledger upsert 失敗 (key=${oneLine(item.key)}): ${oneLine(error?.message || error, 160)}`);
+      }
+    }
     const now = io.now().toISOString();
     for (const item of items) {
       const previous = ledger.items[item.key] ?? {};

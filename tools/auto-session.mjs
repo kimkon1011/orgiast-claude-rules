@@ -5,6 +5,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
 import { DEFAULT_REPO_MAP, parseRepoMap } from './feedback-to-issues.mjs';
+import { runTaskLedger } from './task-ledger.mjs';
 
 const MARKER = '<!-- NEXT-SESSION v1 -->';
 const SIX_HOURS = 6 * 60 * 60 * 1000;
@@ -786,6 +787,11 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   const options = parseArgs(argv);
   const batchStartedAt = new Date();
   const home = homeDir();
+  const listTaskLedgerItems = io.listTaskLedgerItems ?? (async (filters) => {
+    const response = await runTaskLedger({ command: 'list', ...filters }, { homeDir: home });
+    return Array.isArray(response) ? response : response?.items ?? response?.tasks ?? [];
+  });
+  const updateTaskLedger = io.runTaskLedger ?? ((args) => runTaskLedger(args, { homeDir: home }));
   const claudeDir = path.join(home, '.claude');
   const config = loadConfig(home);
   const autoDir = path.join(claudeDir, 'auto-session');
@@ -800,7 +806,14 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   const nextFile = path.join(claudeDir, 'next-session.md');
   // フォーム報告は next-session.md と独立した入力源なので、片方が無くてももう片方を止めない。
   const parsed = fs.existsSync(nextFile) ? parseHandoff(fs.readFileSync(nextFile, 'utf8')) : { block: '', todos: [], todoBlocks: [], sections: {} };
-  const feedbackIssues = listIssues();
+  const feedbackIssues = await listIssues();
+  let taskLedgerItems = [];
+  try {
+    const listed = await listTaskLedgerItems({ 状態: '未着手' });
+    taskLedgerItems = Array.isArray(listed) ? listed.filter((item) => item?.taskId) : [];
+  } catch (error) {
+    console.warn(`auto-session: task-ledger の取得に失敗しました（既存処理は継続します）: ${error?.message ?? error}`);
+  }
   const detectedHistoryCwd = config.historyCwd || detectHistoryCwd({ projectsDir: path.join(claudeDir, 'projects') });
   if (options.list) {
     const reasons = todoExclusionReasons(parsed.todos);
@@ -811,6 +824,8 @@ export async function main(argv = process.argv.slice(2), io = {}) {
     logSlaOverflow(lanes);
     feedbackIssues.forEach((issue) => console.log(`[feedback] ${issue.repo}#${issue.number}. ${feedbackIssueExclusionReason(issue) ? `除外: ${feedbackIssueExclusionReason(issue)}` : '採用'} | ${issue.title}`));
     if (!feedbackIssues.length) console.log('[feedback] 0件（対象リポジトリに未対応 Issue なし、または gh なし）');
+    taskLedgerItems.forEach((item, index) => console.log(`[task-ledger] ${index + 1}. 採用 | ${item.taskId} ${item.件名 || '無題'}`));
+    if (!taskLedgerItems.length) console.log('[task-ledger] 0件（未着手タスクなし、または取得失敗）');
     return 0;
   }
   const todoLanes = selectTodoLanes(parsed.todos, options);
@@ -818,7 +833,8 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   const laneOf = (todo) => todoLanes.sla.includes(todo) ? 'SLA' : '通常';
   logSlaOverflow(todoLanes);
   const selectedFeedback = filterFeedbackIssues(feedbackIssues).slice(0, options.feedbackCount);
-  if (!selected.length && !selectedFeedback.length) { console.log('auto-session: 実行可能な TODO とフォーム報告はありません'); return 0; }
+  const selectedTaskLedger = taskLedgerItems.slice(0, options.count);
+  if (!selected.length && !selectedFeedback.length && !selectedTaskLedger.length) { console.log('auto-session: 実行可能な TODO、フォーム報告、task-ledger タスクはありません'); return 0; }
   if (options.dry) {
     for (const [index, todo] of selected.entries()) {
       const repoCwd = pickCwd(todo, fs.existsSync, config.repoByKeyword);
@@ -833,6 +849,14 @@ export async function main(argv = process.argv.slice(2), io = {}) {
       console.log(`[feedback]\nISSUE: ${issue.repo}#${issue.number} ${issue.title}\nREPO CWD: ${repoCwd}\nHISTORY CWD: ${historyCwd}\n\n${buildFeedbackPrompt(issue, issue.repo, repoCwd, summaryFile, options.timeoutMin)}`);
     }
     if (!selectedFeedback.length) console.log('[feedback]\nDRY対象: 0件');
+    for (const [index, item] of selectedTaskLedger.entries()) {
+      const todo = `[${item.taskId}] ${item.件名 || '無題'}${item.次アクション ? ` — ${item.次アクション}` : ''}`;
+      const repoCwd = pickCwd(todo, fs.existsSync, config.repoByKeyword);
+      const historyCwd = fs.existsSync(detectedHistoryCwd) ? detectedHistoryCwd : repoCwd;
+      const summaryFile = path.join(autoDir, 'runs', `dry-task-ledger-${index + 1}.summary.md`);
+      console.log(`[task-ledger]\nTASK: ${todo}\nREPO CWD: ${repoCwd}\nHISTORY CWD: ${historyCwd}\n\n${buildPrompt(todo, {}, repoCwd, summaryFile, options.timeoutMin)}`);
+    }
+    if (!selectedTaskLedger.length) console.log('[task-ledger]\nDRY対象: 0件');
     return 0;
   }
 
@@ -854,6 +878,8 @@ export async function main(argv = process.argv.slice(2), io = {}) {
           selectedCount: selected.length,
           selectedFeedback: selectedFeedback.map(({ repo, number, title }) => ({ repo, number, title })),
           feedbackCount: selectedFeedback.length,
+          selectedTaskLedger: selectedTaskLedger.map(({ taskId, 件名 }) => ({ taskId, 件名 })),
+          taskLedgerCount: selectedTaskLedger.length,
           pid: process.pid,
           runner: 'auto-session.mjs',
         }, null, 2), { flag: 'wx' });
@@ -865,16 +891,17 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   } catch (error) {
     console.warn(`auto-session: マニフェストを書き込めませんでした（実行は継続します）: ${error?.message ?? error}`);
   }
-  fs.writeFileSync(lockFile, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), todo: selected, feedback: selectedFeedback.map(({ repo, number }) => `${repo}#${number}`) }, null, 2), { flag: 'w' });
+  fs.writeFileSync(lockFile, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), todo: selected, feedback: selectedFeedback.map(({ repo, number }) => `${repo}#${number}`), taskLedger: selectedTaskLedger.map(({ taskId }) => taskId) }, null, 2), { flag: 'w' });
   const cleanup = () => { try { fs.unlinkSync(lockFile); } catch {} };
   process.once('exit', cleanup);
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { cleanup(); process.exit(130); });
   const results = [];
   const feedbackResults = [];
+  const taskLedgerResults = [];
   let deadlineNote = '';
   let deadlineReason = '';
   let completedChildren = 0;
-  const totalChildren = selected.length + selectedFeedback.length;
+  const totalChildren = selected.length + selectedFeedback.length + selectedTaskLedger.length;
   const beforeChild = () => {
     const decision = deadlineDecision(options.deadline, options.timeoutMin, new Date(), batchStartedAt);
     if (!decision.run) {
@@ -963,6 +990,39 @@ export async function main(argv = process.argv.slice(2), io = {}) {
       // 起動そのものに失敗した場合だけ、次回が再試行できるよう対応中ラベルを戻す。
       if (result.launchFailed) markInProgress(issue, false);
     }
+    for (const item of selectedTaskLedger) {
+      if (deadlineNote) break;
+      const timing = beforeChild();
+      if (!timing.run) break;
+      const taskId = item.taskId;
+      const todo = `[${taskId}] ${item.件名 || '無題'}${item.次アクション ? ` — ${item.次アクション}` : ''}`;
+      try {
+        try { await updateTaskLedger({ command: 'claim', taskId, 状態: '作業中' }); }
+        catch (error) { console.warn(`auto-session: task-ledger claim 失敗 (${taskId}、実行は継続します): ${error?.message ?? error}`); }
+        const repoCwd = pickCwd(todo, fs.existsSync, config.repoByKeyword);
+        const historyCwd = fs.existsSync(detectedHistoryCwd) ? detectedHistoryCwd : repoCwd;
+        const stamp = `${localDate()}-task-${String(taskId).replace(/[^A-Za-z0-9._-]/g, '_')}`;
+        const runFile = path.join(autoDir, 'runs', `${stamp}.json`);
+        const summaryFile = path.join(autoDir, 'runs', `${stamp}.summary.md`);
+        fs.writeFileSync(summaryFile, '', { flag: 'a' });
+        const result = await runSession(executable, buildPrompt(todo, {}, repoCwd, summaryFile, timing.timeoutMin), repoCwd, historyCwd, timing.timeoutMin * 60_000);
+        let summary = '';
+        try { summary = fs.readFileSync(summaryFile, 'utf8'); } catch {}
+        completedChildren += 1;
+        const record = { source: 'task-ledger', taskId, todo, cwd: repoCwd, summaryFile, summary, sessionId: extractSessionId(result.stdout), ...result };
+        taskLedgerResults.push(record);
+        fs.writeFileSync(runFile, JSON.stringify(record, null, 2));
+        if (result.status === 'success') {
+          const prUrl = `${result.stdout ?? ''}\n${summary}`.match(/https:\/\/github\.com\/[^\s)]+\/pull\/\d+/)?.[0];
+          try { await updateTaskLedger({ command: 'done', taskId, 成果物リンク: prUrl || summaryFile, 備考: summary.slice(0, 500) || 'auto-session 完了' }); }
+          catch (error) { console.warn(`auto-session: task-ledger done 失敗 (${taskId}、本体には影響しません): ${error?.message ?? error}`); }
+        }
+      } catch (error) {
+        completedChildren += 1;
+        taskLedgerResults.push({ source: 'task-ledger', taskId, todo, status: 'failure', launchFailed: true, stderr: String(error?.message ?? error), startedAt: new Date().toISOString(), endedAt: new Date().toISOString() });
+        console.warn(`auto-session: task-ledger タスクの処理に失敗しました（次へ進みます）: ${error?.message ?? error}`);
+      }
+    }
     if (deadlineNote) {
       const stamp = `${localDate()}-deadline-${Date.now()}`;
       const summaryFile = path.join(autoDir, 'runs', `${stamp}.summary.md`);
@@ -1020,7 +1080,7 @@ ${result.summary ?? ''}`);
       console.warn(`auto-session: フォーム報告の結果通知送信に失敗しました（本体の成否には影響させません）: ${error?.message ?? error}`);
     }
   }
-  const anyFailedOrTimedOut = [...results, ...feedbackResults]
+  const anyFailedOrTimedOut = [...results, ...feedbackResults, ...taskLedgerResults]
     .some((result) => result.status === 'failure' || result.status === 'timeout');
   return anyFailedOrTimedOut ? 1 : 0;
 }

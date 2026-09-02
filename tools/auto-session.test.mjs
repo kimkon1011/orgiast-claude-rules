@@ -246,6 +246,43 @@ test('todo または feedback が failure/timeout なら main は 1 を返す', 
   assert.equal(await main(['--count', '0', '--feedback-count', '1'], mainIoWithFeedback('timeout')), 1);
 });
 
+test('task-ledger タスクを第3取得元として実行し claim と done を記録する', async () => {
+  const claudeDir = path.join(isolatedHome, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(path.join(claudeDir, 'next-session.md'), '<!-- NEXT-SESSION v1 -->\n## 残TODO\n');
+  const ledgerCalls = [];
+  const code = await main(['--count', '1', '--feedback-count', '0'], {
+    listFeedbackIssues: () => [],
+    listTaskLedgerItems: async (filters) => { assert.deepEqual(filters, { 状態: '未着手' }); return [{ taskId: 'TASK-42', 件名: '台帳タスク' }]; },
+    runTaskLedger: async (args) => ledgerCalls.push(args),
+    resolveClaudeExe: () => '/fake/claude',
+    runChild: async () => ({ status: 'success', exitCode: 0, stdout: '完了', stderr: '', startedAt: new Date().toISOString(), endedAt: new Date().toISOString() }),
+    notify: async () => {},
+  });
+  assert.equal(code, 0);
+  assert.deepEqual(ledgerCalls.map(({ command, taskId }) => ({ command, taskId })), [{ command: 'claim', taskId: 'TASK-42' }, { command: 'done', taskId: 'TASK-42' }]);
+  const recordName = fs.readdirSync(path.join(claudeDir, 'auto-session', 'runs')).find((name) => name.endsWith('-task-TASK-42.json'));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(claudeDir, 'auto-session', 'runs', recordName))).taskId, 'TASK-42');
+});
+
+test('task-ledger 取得失敗でも next-session TODO を実行する', async () => {
+  const claudeDir = path.join(isolatedHome, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(path.join(claudeDir, 'next-session.md'), '<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. 既存TODOを続行\n');
+  let ran = 0; const warnings = []; const originalWarn = console.warn;
+  console.warn = (message) => warnings.push(String(message));
+  try {
+    const code = await main(['--count', '1', '--feedback-count', '0'], {
+      listFeedbackIssues: () => [], listTaskLedgerItems: async () => { throw new Error('ledger down'); },
+      resolveClaudeExe: () => '/fake/claude',
+      runChild: async () => { ran++; return { status: 'success', exitCode: 0, stdout: '完了', stderr: '', startedAt: new Date().toISOString(), endedAt: new Date().toISOString() }; },
+      notify: async () => {},
+    });
+    assert.equal(code, 0); assert.equal(ran, 1);
+    assert.ok(warnings.some((line) => /task-ledger の取得に失敗.*ledger down/.test(line)));
+  } finally { console.warn = originalWarn; }
+});
+
 test('通知URLは feedback-intake を notify に置き換え、query を捨てる', () => {
   assert.equal(feedbackNotifyUrl('https://relay.example/api/feedback-intake?pending=1'), 'https://relay.example/api/notify');
   assert.equal(feedbackNotifyUrl('not a url'), '');

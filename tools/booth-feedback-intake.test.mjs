@@ -175,10 +175,27 @@ for (const [name, fetchImpl] of [
 
 test('--dry-run は next-session と台帳を更新しない', async () => {
   const h = harness({ next: original });
-  assert.equal(await runIntake({ args: ['--dry-run'], home: HOME, io: h.io, fetchImpl: h.fetchImpl }), 0);
+  let taskLedgerCalls = 0;
+  assert.equal(await runIntake({ args: ['--dry-run'], home: HOME, io: h.io, fetchImpl: h.fetchImpl, taskLedger: async () => { taskLedgerCalls++; } }), 0);
   assert.equal(h.writes.length, 0);
+  assert.equal(taskLedgerCalls, 0);
   assert.match(h.stdout[0], /would-inject=1/);
   assert.match(h.stdout[0], /\[FB:fb-123\]/);
+});
+
+test('新規注入を task-ledger に upsert する', async () => {
+  const h = harness({ next: original });
+  const calls = [];
+  assert.equal(await runIntake({ home: HOME, io: h.io, fetchImpl: h.fetchImpl, taskLedger: async (args) => calls.push(args) }), 0);
+  assert.deepEqual(calls, [{ command: 'upsert', taskId: 'FB-fb-123', 起票元: 'booth-feedback', 件名: item.title, 依頼元: item.source, 状態: '未着手', 次アクション: '当日夜に実行', 期限: '' }]);
+});
+
+test('task-ledger upsert 失敗でも next-session とローカル台帳を更新する', async () => {
+  const h = harness({ next: original });
+  assert.equal(await runIntake({ home: HOME, io: h.io, fetchImpl: h.fetchImpl, taskLedger: async () => { throw new Error('ledger unavailable'); } }), 0);
+  assert.match(h.files.get(HOME_FILE('next-session.md')), /\[FB:fb-123\]/);
+  assert.ok(h.files.has(HOME_FILE('booth-feedback-ledger.json')));
+  assert.ok(h.stderr.some((line) => /task-ledger upsert 失敗.*ledger unavailable/.test(line)));
 });
 
 test('--dry-run の不具合は spawn しない', async () => {

@@ -6,7 +6,7 @@ import path from 'node:path';
 
 const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-session-test-'));
 process.env.ORGIAST_HOME = isolatedHome;
-const { DEFAULT_REPO, localDate, loadConfig, detectHistoryCwd, parseHandoff, todoExclusionReason, todoExclusionReasons, dedupeKey, dedupeTodos, filterTodos, pickCwd, buildChildArgs, buildPrompt, buildFeedbackPrompt, feedbackFailureBody, feedbackIssueExclusionReason, feedbackIssuesToUnmark, filterFeedbackIssues, feedbackNotifyUrl, normalizeGitHubRepo, feedbackRepoCwd, resolveClaudeExe, decideRun, markTodoDone, writeTodoDone, extractSessionId, transcriptPath, recoverSessionId, appendClosedSession, formatResultLine, parseArgs, deadlineDecision, runChild, main } = await import('./auto-session.mjs');
+const { DEFAULT_REPO, localDate, loadConfig, detectHistoryCwd, parseHandoff, todoExclusionReason, todoExclusionReasons, dedupeKey, dedupeTodos, filterTodos, selectTodoLanes, logSlaOverflow, pickCwd, buildChildArgs, buildPrompt, buildFeedbackPrompt, feedbackFailureBody, feedbackIssueExclusionReason, feedbackIssuesToUnmark, filterFeedbackIssues, feedbackNotifyUrl, normalizeGitHubRepo, feedbackRepoCwd, resolveClaudeExe, decideRun, markTodoDone, writeTodoDone, extractSessionId, transcriptPath, recoverSessionId, appendClosedSession, formatResultLine, parseArgs, deadlineDecision, runChild, main } = await import('./auto-session.mjs');
 const historyCwd = String.raw`c:\Users\example\Downloads\work`;
 test.after(() => fs.rmSync(isolatedHome, { recursive: true, force: true }));
 
@@ -69,10 +69,57 @@ test('--count all は3件を超えるフィルタ後の全TODOを選択する', 
   assert.deepEqual(filterTodos(todos).slice(0, options.count), ['実行1', '実行2', '実行3', '実行4']);
 });
 
-test('数値 count と feedback-count は12件を上限にする', () => {
-  const options = parseArgs(['--count', '99', '--feedback-count', '99']);
+test('SLAレーンは14件中の先頭FB 4件を通常1件より先に選ぶ', () => {
+  const todos = Array.from({ length: 14 }, (_, index) => [2, 4, 6, 8, 10].includes(index)
+    ? `作業${index + 1} [FB:fb-${index + 1}]`
+    : `通常${index + 1}`);
+  const lanes = selectTodoLanes(todos, { count: 1, slaCount: 4 });
+  assert.deepEqual(lanes.sla, [todos[2], todos[4], todos[6], todos[8]]);
+  assert.deepEqual(lanes.normal, [todos[0]]);
+  assert.deepEqual(lanes.selected, [...lanes.sla, ...lanes.normal]);
+});
+
+test('SLAレーンでは即実行(不具合)が当日夜(要望)より先に来る', () => {
+  // 注入順は要望が先。並び順のままだと不具合が繰り越しに落ちる(2026-09-02 実データで発生)。
+  const todos = [
+    '1. [FB:w1] 【当日夜に実行・要望】 要望1',
+    '2. [FB:w2] 【当日夜に実行・要望】 要望2',
+    '3. [FB:b1] 【即実行・不具合】 不具合1',
+    '4. [FB:w3] 【当日夜に実行・要望】 要望3',
+  ];
+  const lanes = selectTodoLanes(todos, { count: 0, slaCount: 2 });
+  assert.deepEqual(lanes.sla, [todos[2], todos[0]]);
+  assert.equal(lanes.slaOverflow, 2);
+});
+
+test('同じレーン内では注入順を保つ(安定ソート)', () => {
+  const todos = [
+    '1. [FB:w1] 【当日夜に実行・要望】 要望1',
+    '2. [FB:w2] 【当日夜に実行・要望】 要望2',
+    '3. [FB:w3] 【当日夜に実行・要望】 要望3',
+  ];
+  assert.deepEqual(selectTodoLanes(todos, { count: 0, slaCount: 3 }).sla, todos);
+});
+
+test('判断待ちのFBはSLAレーンに入らない', () => {
+  const lanes = selectTodoLanes(['[FB:hold] 判断待ち', '[FB:run] 実行可', '通常'], { count: 1, slaCount: 4 });
+  assert.deepEqual(lanes.sla, ['[FB:run] 実行可']);
+  assert.deepEqual(lanes.normal, ['通常']);
+});
+
+test('SLA上限超過は今夜実行数と翌夜繰越数をログに出す', () => {
+  const lanes = selectTodoLanes(Array.from({ length: 6 }, (_, index) => `[FB:${index}] 要望${index}`), { slaCount: 4 });
+  const logs = [];
+  logSlaOverflow(lanes, (line) => logs.push(line));
+  assert.deepEqual(logs, ['auto-session: SLA対象 6件のうち 4件を今夜実行、2件は翌夜に繰り越し（--sla-count で調整可）']);
+});
+
+test('数値 count と sla-count と feedback-count は12件を上限にする', () => {
+  const options = parseArgs(['--count', '99', '--sla-count', '99', '--feedback-count', '99']);
   assert.equal(options.count, 12);
+  assert.equal(options.slaCount, 12);
   assert.equal(options.feedbackCount, 12);
+  assert.equal(parseArgs(['--sla-count', 'all']).slaCount, Infinity);
   assert.equal(parseArgs(['--feedback-count', 'all']).feedbackCount, Infinity);
 });
 

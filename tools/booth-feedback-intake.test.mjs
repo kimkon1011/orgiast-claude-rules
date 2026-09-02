@@ -44,7 +44,7 @@ function harness({ next = '', ledger, fetchImpl = async () => response(api), spa
 
 const original = `前書き\r\n<!-- NEXT-SESSION v1 -->\r\n## 次の1目的\r\n目的A\r\n## 残TODO（次の1件を先頭に）\r\n1. 既存A\r\n3. 既存C\r\n## 完了条件\r\ngreen\r\n<!-- NEXT-SESSION v1 -->\r\n## 残TODO\r\n1. 履歴\r\n`;
 
-test('種別ごとのマーカーと実行可否を固定する', () => {
+test('新規注入は残TODOセクション先頭に入り、種別ごとの実行可否を保つ', () => {
   for (const [kind, marker, excluded] of [
     ['不具合', '【即実行・不具合】', ''],
     ['要望', '【当日夜に実行・要望】', ''],
@@ -52,7 +52,9 @@ test('種別ごとのマーカーと実行可否を固定する', () => {
   ]) {
     const result = injectFeedbackTodos(original, [{ ...item, kind }], api.sheetUrl);
     assert.equal(result.injected.length, 1);
-    assert.match(result.text, /^4\. \*\*\[FB:fb-123\]/m);
+    assert.match(result.text, /## 残TODO（次の1件を先頭に）\r\n1\. \*\*\[FB:fb-123\]/);
+    assert.match(result.text, /\r\n2\. 既存A\r\n3\. 既存C\r\n/);
+    assert.ok(result.text.indexOf('[FB:fb-123]') < result.text.indexOf('既存A'));
     assert.match(result.text, new RegExp(marker));
     const todo = parseHandoff(result.text).todos.find((value) => value.includes('[FB:fb-123]'));
     assert.equal(todoExclusionReason(todo), excluded);

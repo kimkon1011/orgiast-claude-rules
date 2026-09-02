@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  NO_OP_PATTERNS, appendImprovementTodos, calculateKpi, isInNightlyWindow,
-  normalizeTodo, parseBatchLog, parseRun, parseTodos,
+  NO_OP_PATTERNS, TODO_SIMILARITY_THRESHOLD, TOPIC_SIMILARITY_THRESHOLD,
+  appendImprovementTodos, calculateKpi, clusterBySimilarity, isInNightlyWindow,
+  normalizeTodo, parseBatchLog, parseRun, parseTodos, similarity, todoTokens,
 } from './nightly-kpi.mjs';
 
 const date = '2026-09-02';
@@ -92,4 +93,39 @@ test('同内容の未消化TODOがあれば再起票せず、新規だけ先頭�
 
 test('normalizeTodo は番号・装飾・完了注記を除去する', () => {
   assert.equal(normalizeTodo('2. ~~**A  B**~~ → ✅ 2026-09-02 完了'), 'A B');
+});
+
+test('similarity は同一文字列で1、無関係な文字列で0に近い', () => {
+  const tokens = todoTokens('auto-session の exit 1 誤報を直す');
+  assert.equal(similarity(tokens, tokens), 1);
+  assert.ok(similarity(tokens, todoTokens('Growi マニュアルを取り込む')) < 0.1);
+});
+
+test('補足だけが違う同一テーマは topic/TODO 両閾値で同じクラスタになる', () => {
+  const items = [
+    'auto-session の exit 1 誤報を直す （上記「次の1目的」）',
+    'auto-session の exit 1 誤報を直す （上記「次の1目的」／下の a55cee2f ブロックに詳細）',
+  ];
+  for (const threshold of [TOPIC_SIMILARITY_THRESHOLD, TODO_SIMILARITY_THRESHOLD]) {
+    assert.equal(clusterBySimilarity(items, { threshold, keyOf: (item) => item }).length, 1);
+  }
+});
+
+test('明らかに別テーマの項目は topic 閾値でも別クラスタになる', () => {
+  const items = ['auto-session の exit 1 誤報を直す', 'Growi マニュアルを取り込む'];
+  assert.equal(clusterBySimilarity(items, { threshold: TOPIC_SIMILARITY_THRESHOLD, keyOf: (item) => item }).length, 2);
+});
+
+test('近似重複TODOのどれかに✅があればクラスタ全体を完了扱いする', () => {
+  const parsed = parseTodos('## 残TODO\n1. auto-session の exit 1 誤報を直す （次の目的）\n## 履歴\n## 残TODO\n2. auto-session の exit 1 誤報を直す （詳細） → ✅ 2026-09-02 完了');
+  assert.equal(parsed.todos.length, 1);
+  assert.equal(parsed.todos[0].completed, true);
+  assert.equal(parsed.todos[0].completedDate, '2026-09-02');
+  assert.equal(parsed.duplicateTodoLines, 1);
+});
+
+test('clusterBySimilarity は同じ入力に対して決定的である', () => {
+  const items = ['alpha beta', 'alpha beta gamma', '別の仕事'];
+  const cluster = () => clusterBySimilarity(items, { threshold: 0.5, keyOf: (item) => item });
+  assert.deepEqual(cluster(), cluster());
 });

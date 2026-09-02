@@ -19,6 +19,9 @@ export const NO_OP_PATTERNS = [
   /no\s+(?:new\s+)?code/i,
 ];
 
+export const TOPIC_SIMILARITY_THRESHOLD = 0.5;
+export const TODO_SIMILARITY_THRESHOLD = 0.7;
+
 const DAY_MS = 86_400_000;
 const round = (value, digits = 6) => Number.isFinite(value) ? Number(value.toFixed(digits)) : value;
 const normalizeSpace = (text) => String(text ?? '').replace(/\s+/g, ' ').trim();
@@ -28,6 +31,43 @@ export function normalizeTodo(text) {
     .replace(/^\s*\d+\.\s*/, '')
     .replace(/→\s*✅[\s\S]*$/, '')
     .replace(/~~|\*\*/g, ''));
+}
+
+export function todoTokens(text) {
+  const normalized = normalizeTodo(text)
+    .toLowerCase()
+    // 括弧内は参照先や進捗などの補足であることが多く、テーマ本体の比較から外す。
+    .replace(/[（(][^）)]*[）)]/g, ' ');
+  const tokens = new Set(normalized.match(/[a-z0-9]+/g) ?? []);
+  const japanese = normalized
+    .replace(/[a-z0-9]+/g, ' ')
+    .split(/[\s\p{P}\p{S}]+/u)
+    .filter(Boolean);
+  for (const word of japanese) {
+    for (let index = 0; index < word.length - 1; index += 1) tokens.add(word.slice(index, index + 2));
+  }
+  for (const token of tokens) if ([...token].length <= 1) tokens.delete(token);
+  return tokens;
+}
+
+export function similarity(a, b) {
+  const union = new Set([...a, ...b]);
+  // 1文字だけの項目はトークンを持たない。完全一致は前段で処理済みなので近似一致させない。
+  if (!union.size) return 0;
+  let intersection = 0;
+  for (const token of a) if (b.has(token)) intersection += 1;
+  return intersection / union.size;
+}
+
+export function clusterBySimilarity(items, { threshold = 0.5, keyOf }) {
+  const clusters = [];
+  for (const item of items) {
+    const tokens = todoTokens(keyOf(item));
+    const cluster = clusters.find(({ representativeTokens }) => similarity(tokens, representativeTokens) >= threshold);
+    if (cluster) cluster.items.push(item);
+    else clusters.push({ representativeTokens: tokens, items: [item] });
+  }
+  return clusters.map(({ items: members }) => members);
 }
 
 export function parseTodos(markdown) {
@@ -54,7 +94,13 @@ export function parseTodos(markdown) {
     if (!existing) byKey.set(key, { key, text: normalizeSpace(raw.replace(/^\s*\d+\.\s*/, '')), completed, completedDate, dateUnknown: completed && !completedDate });
     else if (completed && !existing.completed) Object.assign(existing, { completed, completedDate, dateUnknown: !completedDate, text: normalizeSpace(raw.replace(/^\s*\d+\.\s*/, '')) });
   }
-  return { todos: [...byKey.values()], duplicateTodoLines: rawTodos.length - byKey.size };
+  const exactTodos = [...byKey.values()];
+  const clusters = clusterBySimilarity(exactTodos, { threshold: TODO_SIMILARITY_THRESHOLD, keyOf: (todo) => todo.key });
+  const todos = clusters.map((members) => {
+    const completed = members.find((todo) => todo.completed);
+    return completed ? { ...members[0], ...completed, key: members[0].key } : members[0];
+  });
+  return { todos, duplicateTodoLines: rawTodos.length - todos.length };
 }
 
 export function nightlyWindow(date) {
@@ -138,8 +184,7 @@ export function calculateKpi({ date, todoParse, runs, batch, taskInfo = null }) 
   const timedOut = selected.filter((run) => run.status === 'timeout').length;
   const failed = selected.filter((run) => run.launchFailed || !['success', 'timeout'].includes(run.status)).length;
   const noOps = selected.filter((run) => run.noOp);
-  const topics = new Map();
-  for (const run of selected) { const key = normalizeTodo(run.todo).slice(0, 120); topics.set(key, (topics.get(key) ?? 0) + 1); }
+  const topicClusters = clusterBySimilarity(selected, { threshold: TOPIC_SIMILARITY_THRESHOLD, keyOf: (run) => run.todo });
   const nightCosts = selected.filter((run) => run.costKnown).map((run) => run.nightCostUsd);
   const nightCostUsd = nightCosts.length ? nightCosts.reduce((a, b) => a + b, 0) : null;
   let supervisorEquivalentUsd = 0;
@@ -163,7 +208,7 @@ export function calculateKpi({ date, todoParse, runs, batch, taskInfo = null }) 
     dateUnknown: completed.filter((todo) => todo.dateUnknown).length,
     duplicateTodoLines: todoParse.duplicateTodoLines,
     sessions, succeeded, failed, timedOut, noOpSessions: noOps.length,
-    topicConcentration: sessions ? Math.max(0, ...topics.values()) / sessions : null,
+    topicConcentration: sessions ? Math.max(0, ...topicClusters.map((cluster) => cluster.length)) / sessions : null,
     ...batch,
     scheduledTask: taskInfo,
     nightCostUsd: round(nightCostUsd),

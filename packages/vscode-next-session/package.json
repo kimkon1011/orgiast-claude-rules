@@ -1,0 +1,28 @@
+{
+  "name": "next-session",
+  "displayName": "Orgiast Next Session",
+  "description": "Starts the next Claude session in a VS Code integrated terminal from a URI.",
+  "version": "0.1.1",
+  "publisher": "orgiast",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kimkon1011/orgiast-claude-rules.git"
+  },
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onUri"
+  ],
+  "main": "./extension.js",
+  "files": [
+    "extension.js",
+    "shell-path.js",
+    "README.md",
+    "LICENSE"
+  ]
+}

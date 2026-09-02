@@ -110,6 +110,31 @@ export function buildVscodeUri(prompt) {
   return prompt ? `${base}?prompt=${encodeURIComponent(prompt)}` : base;
 }
 
+export function buildVscodeExtUri({ prompt, cwd, claude, probe = false }) {
+  const params = [
+    `prompt=${encodeURIComponent(prompt)}`,
+    `cwd=${encodeURIComponent(cwd)}`,
+  ];
+  if (claude) params.push(`claude=${encodeURIComponent(claude)}`);
+  if (probe) params.push('probe=1');
+  return `vscode://orgiast.next-session/start?${params.join('&')}`;
+}
+
+export function planVscodeExtLaunch({ codeCli, prompt, cwd, claude }) {
+  if (!codeCli || !cwd) return null;
+  return {
+    label: 'open-session',
+    command: 'cmd.exe',
+    args: ['/c', codeCli, '--open-url', buildVscodeExtUri({ prompt, cwd, claude })],
+  };
+}
+
+export function pickBundledVsix(names) {
+  return names
+    .filter((name) => /^orgiast-next-session-[0-9]+(?:\.[0-9]+){2}\.vsix$/.test(String(name)))
+    .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))[0] ?? '';
+}
+
 // 既定では URI を撃つだけにする。`code.cmd <cwd>` を先に走らせると、そのフォルダを開いている
 // **既存ウィンドウが再読み込みされ拡張ホストが再起動する**（2026-08-30 実測。走っていたセッションが
 // state_sync からやり直しになり、直後に撃った URI も落ちた）。新タブは「いま開いているウィンドウの
@@ -149,13 +174,14 @@ export function pickRoute({ codeCli, flagTarget, env, state = {} }) {
   const target = String(raw ?? '').trim().toLowerCase();
   if (target === 'inline') return 'inline';
   if (target === 'terminal') return 'terminal';
+  if (target === 'vscode-ext') return 'vscode-ext';
   return 'vscode';
 }
 
 export function withTarget(state, value) {
   const normalized = String(value ?? '').toLowerCase();
   const target = normalized === 'window' ? 'vscode' : normalized;
-  if (!['vscode', 'terminal', 'inline'].includes(target)) return null;
+  if (!['vscode', 'vscode-ext', 'terminal', 'inline'].includes(target)) return null;
   return { ...(state && typeof state === 'object' && !Array.isArray(state) ? state : {}), target };
 }
 
@@ -211,7 +237,7 @@ export function childEnv({ env, configDir, source }) {
 // config dir から読んだメールを vscode 経路で断定すると、当たっている保証のない値を成功ログに書くことになる。
 export function accountLabel({ account, route, accountPath }) {
   if (!account) return `不明(${accountPath})`;
-  return route === 'vscode' ? `${account}(参考: 実際は VSCode ウィンドウのログイン)` : account;
+  return route === 'vscode' || route === 'vscode-ext' ? `${account}(参考: 実際は VSCode ウィンドウのログイン)` : account;
 }
 
 export function trustKeyVariants(cwd) {
@@ -347,7 +373,7 @@ export async function launchNextSession(argv = [], io = {}) {
 
     const state = await readJson(statePath, { enabled: true });
     const codeCli = resolveVscodeCli({ env, exists, homedir: home });
-    const route = pickRoute({ codeCli, flagTarget: flags.target, env, state });
+    let route = pickRoute({ codeCli, flagTarget: flags.target, env, state });
 
     if (flags.action) {
       if (flags.action === 'show-target') {
@@ -358,7 +384,7 @@ export async function launchNextSession(argv = [], io = {}) {
       if (flags.action === 'set-target') {
         nextState = withTarget(state, flags.actionValue);
         if (!nextState) {
-          log(`[next-session] エラー: target は vscode / terminal / inline のいずれかを指定してください`);
+          log(`[next-session] エラー: target は vscode / vscode-ext / terminal / inline のいずれかを指定してください`);
           return 2;
         }
       } else {
@@ -440,7 +466,7 @@ export async function launchNextSession(argv = [], io = {}) {
     const current = await readJson(currentPath, {});
     const cwd = flags.cwd || handoffCwd || current.cwd || REPO_ROOT;
     const accountLog = accountLabel({ account, route, accountPath: firstAccountConfigPath });
-    if (configDirSource === 'state' && route === 'vscode') {
+    if (configDirSource === 'state' && (route === 'vscode' || route === 'vscode-ext')) {
       // 効かない指定を黙って無視すると「固定したつもり」の事故になる。terminal 経路なら env で効く。
       log(`[next-session] 注意: configDir(${configDir}) は VSCode 拡張経路では効きません。アカウントを固定するなら --target terminal を使ってください`);
     }
@@ -461,6 +487,72 @@ export async function launchNextSession(argv = [], io = {}) {
       await rename(tmpPath, statePath);
       log(`[next-session] 予約しました(inline): /clear すると新しいセッションが自分から ${flags.prompt} を実行します`);
       return 0;
+    }
+
+    if (route === 'vscode-ext') {
+      const claudeBin = resolveClaudeBinary({ env, exists, readdir, homedir: home });
+      const step = planVscodeExtLaunch({ codeCli, cwd, prompt: flags.prompt, claude: claudeBin });
+      if (flags.dryRun) {
+        log(JSON.stringify({ route: 'vscode-ext', step, extensionId: 'orgiast.next-session', account, configDir, configDirSource }));
+        return 0;
+      }
+
+      try {
+        if (!codeCli) throw new Error('VSCode CLI (code.cmd) が見つかりません');
+        const runCodeCli = io.runCodeCli ?? (async (args) => {
+          const child = spawnProcess('cmd.exe', ['/c', codeCli, ...args], {
+            cwd,
+            detached: false,
+            stdio: ['ignore', 'pipe', 'pipe'],
+            windowsHide: true,
+            env: launchEnv,
+          });
+          let stdout = '';
+          let stderr = '';
+          child.stdout?.on('data', (chunk) => { stdout += chunk; });
+          child.stderr?.on('data', (chunk) => { stderr += chunk; });
+          const code = await new Promise((resolve, reject) => {
+            child.once('exit', resolve);
+            child.once('error', reject);
+          });
+          return { code, stdout, stderr };
+        });
+        const listed = await runCodeCli(['--list-extensions']);
+        if (listed.code !== 0) throw new Error(`拡張一覧の取得に失敗しました: ${listed.stderr || `exit ${listed.code}`}`);
+        const installed = String(listed.stdout).split(/\r?\n/).some((line) => line.trim().toLowerCase() === 'orgiast.next-session');
+        if (!installed) {
+          const packageDir = path.join(REPO_ROOT, 'packages', 'vscode-next-session');
+          const vsixName = pickBundledVsix(readdir(packageDir));
+          if (!vsixName) throw new Error(`同梱 VSIX が見つかりません: ${packageDir}`);
+          const installedResult = await runCodeCli(['--install-extension', path.join(packageDir, vsixName), '--force']);
+          if (installedResult.code !== 0) throw new Error(`拡張のインストールに失敗しました: ${installedResult.stderr || `exit ${installedResult.code}`}`);
+        }
+
+        const child = spawnProcess(step.command, step.args, {
+          cwd,
+          detached: false,
+          stdio: 'ignore',
+          windowsHide: true,
+          env: launchEnv,
+        });
+        if (typeof child.once === 'function') {
+          await new Promise((resolve, reject) => {
+            child.once('spawn', resolve);
+            child.once('error', reject);
+          });
+        }
+        if (typeof child.unref === 'function') child.unref();
+
+        const nextState = { ...state, enabled: state.enabled !== false, lastLaunchAt: new Date().toISOString(), lastCwd: cwd, lastRoute: 'vscode-ext', lastPrompt: flags.prompt, lastAccount: account, lastConfigDir: configDir };
+        const tmpPath = `${statePath}.tmp-${process.pid}`;
+        await writeFile(tmpPath, `${JSON.stringify(nextState, null, 2)}\n`, 'utf8');
+        await rename(tmpPath, statePath);
+        log(`[next-session] VSCode の統合ターミナルで次セッションを起動しました: ${cwd} / prompt=${flags.prompt} / account=${accountLog}`);
+        return 0;
+      } catch (error) {
+        log(`[next-session] vscode-ext を使えないため vscode 経路へフォールバックします: ${error?.message ?? error}`);
+        route = 'vscode';
+      }
     }
 
     if (route === 'vscode') {

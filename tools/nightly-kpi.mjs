@@ -19,7 +19,6 @@ export const NO_OP_PATTERNS = [
   /no\s+(?:new\s+)?code/i,
 ];
 
-export const TOPIC_SIMILARITY_THRESHOLD = 0.5;
 export const TODO_SIMILARITY_THRESHOLD = 0.7;
 
 const DAY_MS = 86_400_000;
@@ -116,6 +115,36 @@ export function isInNightlyWindow(timestamp, date) {
   return Number.isFinite(time) && time >= start.getTime() && time <= end.getTime();
 }
 
+export function defaultRunGh(args) {
+  return spawnSync('gh', args, { encoding: 'utf8', timeout: 30_000, windowsHide: true });
+}
+
+export function githubRepo(origin) {
+  const value = String(origin ?? '').trim().replace(/\.git$/i, '');
+  return value.match(/^https?:\/\/github\.com\/([^/]+\/[^/]+)$/i)?.[1]
+    ?? value.match(/^git@github\.com:([^/]+\/[^/]+)$/i)?.[1]
+    ?? value.match(/^ssh:\/\/git@github\.com\/([^/]+\/[^/]+)$/i)?.[1]
+    ?? value;
+}
+
+export function queryPullRequests(date, origin, { runGh = defaultRunGh } = {}) {
+  try {
+    if (!origin) return { prsCreated: null, prNumbers: [] };
+    const result = runGh(['pr', 'list', '--repo', githubRepo(origin), '--state', 'all', '--json', 'number,title,createdAt,url', '--limit', '100']);
+    if (result?.error || result?.status !== 0) return { prsCreated: null, prNumbers: [] };
+    const pullRequests = JSON.parse(String(result.stdout ?? ''));
+    if (!Array.isArray(pullRequests)) return { prsCreated: null, prNumbers: [] };
+    const prNumbers = pullRequests
+      .filter((pullRequest) => isInNightlyWindow(pullRequest.createdAt, date))
+      .map((pullRequest) => pullRequest.number)
+      .filter(Number.isInteger)
+      .sort((a, b) => a - b);
+    return { prsCreated: prNumbers.length, prNumbers };
+  } catch {
+    return { prsCreated: null, prNumbers: [] };
+  }
+}
+
 export function parseRun(run) {
   let event = null;
   let costKnown = false;
@@ -173,7 +202,7 @@ export function parseBatchLog(content) {
   };
 }
 
-export function calculateKpi({ date, todoParse, runs, batch, taskInfo = null }) {
+export function calculateKpi({ date, todoParse, runs, batch, taskInfo = null, pullRequests = { prsCreated: null, prNumbers: [] } }) {
   const previousDate = localDate(new Date(nightlyWindow(date).start.getTime()));
   const completed = todoParse.todos.filter((todo) => todo.completed);
   const closedOvernight = completed.filter((todo) => todo.completedDate === date || todo.completedDate === previousDate).length;
@@ -184,7 +213,6 @@ export function calculateKpi({ date, todoParse, runs, batch, taskInfo = null }) 
   const timedOut = selected.filter((run) => run.status === 'timeout').length;
   const failed = selected.filter((run) => run.launchFailed || !['success', 'timeout'].includes(run.status)).length;
   const noOps = selected.filter((run) => run.noOp);
-  const topicClusters = clusterBySimilarity(selected, { threshold: TOPIC_SIMILARITY_THRESHOLD, keyOf: (run) => run.todo });
   const nightCosts = selected.filter((run) => run.costKnown).map((run) => run.nightCostUsd);
   const nightCostUsd = nightCosts.length ? nightCosts.reduce((a, b) => a + b, 0) : null;
   let supervisorEquivalentUsd = 0;
@@ -208,7 +236,9 @@ export function calculateKpi({ date, todoParse, runs, batch, taskInfo = null }) 
     dateUnknown: completed.filter((todo) => todo.dateUnknown).length,
     duplicateTodoLines: todoParse.duplicateTodoLines,
     sessions, succeeded, failed, timedOut, noOpSessions: noOps.length,
-    topicConcentration: sessions ? Math.max(0, ...topicClusters.map((cluster) => cluster.length)) / sessions : null,
+    prsCreated: pullRequests.prsCreated,
+    prNumbers: pullRequests.prNumbers,
+    prYieldRate: pullRequests.prsCreated === null || !sessions ? null : pullRequests.prsCreated / sessions,
     ...batch,
     scheduledTask: taskInfo,
     nightCostUsd: round(nightCostUsd),
@@ -233,7 +263,7 @@ export function improvementTodos(kpi, previous = null) {
   else if (!kpi.batchCompleted) todos.push(`P0: 夜間バッチが途中で停止（サマリ行なし）。最終ステップ = ${kpi.lastStep ?? '不明'}`);
   if (kpi.failedSteps.length) todos.push(`P1: 夜間バッチのステップ失敗: ${kpi.failedSteps.join('、')}`);
   if (kpi.noOpRate !== null && kpi.noOpRate > 0.3) todos.push(`P1: 空回り率 ${pct(kpi.noOpRate)}。完了済みTODOが引き継ぎ票に残り再配布されている。next-session.md の ✅ 済みブロックを刈る`);
-  if (kpi.topicConcentration !== null && kpi.topicConcentration > 0.5) todos.push(`P1: セッションの ${pct(kpi.topicConcentration)} が同一テーマに集中。TODO の配り方を見直す`);
+  if (kpi.prYieldRate !== null && kpi.prYieldRate < 0.3 && kpi.sessions >= 5) todos.push(`P1: 夜間 ${kpi.sessions} セッションに対し PR は ${kpi.prsCreated} 本（成果率 ${pct(kpi.prYieldRate)}）。TODO の粒度と配り方を見直す`);
   if (kpi.closeRate !== null && previous?.closeRate !== null && previous?.closeRate !== undefined && kpi.closeRate < previous.closeRate && kpi.closeRate < 0.2) todos.push(`P1: 消化率が ${pct(kpi.closeRate)} に低下`);
   return todos;
 }
@@ -274,7 +304,7 @@ export function formatText(kpi, previous = null, added = []) {
     `夜間KPI ${kpi.date}`,
     `主KPI: 消化率 ${pct(kpi.closeRate)}${delta('closeRate', (v) => `${v >= 0 ? '+' : ''}${(v * 100).toFixed(1)}pt`)} / 空回り率 ${pct(kpi.noOpRate)}${delta('noOpRate', (v) => `${v >= 0 ? '+' : ''}${(v * 100).toFixed(1)}pt`)} / 純削減 ${usd(kpi.netSavingUsd)}${delta('netSavingUsd', (v) => `${v >= 0 ? '+' : ''}$${v.toFixed(2)}`)}`,
     `消化: ${kpi.closedOvernight}/${kpi.backlogAtStart}件 / 残 ${kpi.backlogAtEnd}件 / 純減 ${kpi.netBurnDown}件 / 日付不明完了 ${kpi.dateUnknown}件`,
-    `セッション: ${kpi.sessions}件（成功 ${kpi.succeeded} / 失敗 ${kpi.failed} / timeout ${kpi.timedOut} / 空回り ${kpi.noOpSessions}）/ テーマ集中 ${pct(kpi.topicConcentration)}`,
+    `セッション: ${kpi.sessions}件（成功 ${kpi.succeeded} / 失敗 ${kpi.failed} / timeout ${kpi.timedOut} / 空回り ${kpi.noOpSessions}）/ 成果 ${kpi.prsCreated === null ? '不明' : `${kpi.prsCreated}PR/${kpi.sessions}セッション = ${pct(kpi.prYieldRate)}`}`,
     `夜間バッチ: ran=${kpi.batchRan} / completed=${kpi.batchCompleted} / ok=${kpi.batchStepsOk}/${kpi.batchStepsTotal}${kpi.failedSteps.length ? ` / 失敗=${kpi.failedSteps.join('、')}` : ''}`,
     `コスト: 夜間 ${usd(kpi.nightCostUsd)} / 監督相当 ${usd(kpi.supervisorEquivalentUsd)} / モデル削減 ${usd(kpi.modelSavingUsd)} / 空回り ${usd(kpi.wastedUsd)} / 完了1件あたり ${usd(kpi.savingPerClosedTodo)}`,
     `参考: 無人消化実時間の中央値 ${kpi.medianSessionMinutes === null ? '不明' : `${kpi.medianSessionMinutes.toFixed(1)}分`} × 完了件数 = ${kpi.humanMinutesSaved === null ? '不明' : `${kpi.humanMinutesSaved.toFixed(1)}分`}`,
@@ -327,7 +357,13 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   const previousDate = localDate(new Date(nightlyWindow(date).start.getTime() - DAY_MS));
   let previous = null;
   try { previous = JSON.parse(fs.readFileSync(path.join(outputDir, `${previousDate}.json`), 'utf8')); } catch {}
-  const kpi = calculateKpi({ date, todoParse: parseTodos(handoff), runs, batch: parseBatchLog(batchContent), taskInfo: queryScheduledTaskInfo(io.spawn) });
+  let origin = null;
+  try {
+    const result = (io.spawn ?? spawnSync)('git', ['config', '--get', 'remote.origin.url'], { cwd: process.cwd(), encoding: 'utf8', timeout: 15_000, windowsHide: true });
+    if (!result.error && result.status === 0) origin = String(result.stdout).trim();
+  } catch {}
+  const pullRequests = queryPullRequests(date, origin, { runGh: io.runGh ?? defaultRunGh });
+  const kpi = calculateKpi({ date, todoParse: parseTodos(handoff), runs, batch: parseBatchLog(batchContent), taskInfo: queryScheduledTaskInfo(io.spawn), pullRequests });
   const candidates = improvementTodos(kpi, previous);
   const appended = appendImprovementTodos(handoff, candidates);
   if (!dryRun && appended.added.length) atomicWrite(handoffFile, appended.markdown);

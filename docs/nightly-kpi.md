@@ -10,7 +10,9 @@
 
 分母が0なら率は `null`（不明）とする。消化量 `closedOvernight` は完了日が対象日または前日のTODO数。完了時刻は引き継ぎ票に無いため、前日付は夜間開始後に完了したものとして扱う。`backlogAtEnd` は重複除去後の未完了数、`backlogAtStart = backlogAtEnd + closedOvernight`、`netBurnDown = backlogAtStart - backlogAtEnd` である。日付なしの✅は `dateUnknown` に分離する。
 
-品質指標はセッションの成功・失敗・timeout、要約と最終応答から判定する空回り、近似一致クラスタによるテーマ集中率を含む。比較時は、参照先や進捗などの補足になりやすい括弧内を除き、英数字の連続を1語、日本語を文字bi-gramとしてJaccard係数を計算する。テーマは同じ仕事の言い換えを拾うため `TOPIC_SIMILARITY_THRESHOLD = 0.5`、TODO重複は似た別件の誤統合を避けるため厳しく `TODO_SIMILARITY_THRESHOLD = 0.7` とする。TODOは完全一致で畳んだ後に近似一致でも畳み、クラスタ内に✅が1つでもあれば完了扱いにする。`duplicateTodoLines` は両段階で除去された行数である。
+品質指標はセッションの成功・失敗・timeout、要約と最終応答から判定する空回り、夜間窓に新規作成されたPR数と `prYieldRate = prsCreated / sessions`（成果率）を含む。PR一覧を取得できない場合は、PRゼロと区別するため `prsCreated` と `prYieldRate` を `null` にする。TODO重複除去では、参照先や進捗などの補足になりやすい括弧内を除き、英数字の連続を1語、日本語を文字bi-gramとしてJaccard係数を計算し、`TODO_SIMILARITY_THRESHOLD = 0.7` で近似一致を畳む。クラスタ内に✅が1つでもあれば完了扱いにし、`duplicateTodoLines` は完全一致と近似一致の両段階で除去された行数である。
+
+テーマ集中率は掲載しない。長文Jaccardは和集合が支配的になり、人手判定約74%（29/39）に対して、todoのみは閾値0.3/0.4/0.5で7.7%/5.1%/5.1%、summary全文は7.7%/5.1%/5.1%、目的節は5.1%/2.6%/2.6%、todo+目的節は2.6%/2.6%/2.6%にしかならなかった。また「着手時点で✅済みTODOを配られた率」も1/39で、✅はその夜のセッション自身が事後付与するため配布時点の重複を検知できない。精確に測れない数字を再導入しないため、この失敗結果を記録する。
 
 夜間バッチはログ不在を `batchRan: false`、サマリ行不在を `batchCompleted: false` とし、不明を正常に丸めない。Windowsのスケジュールタスク情報は取得できない環境では `null` になる。
 

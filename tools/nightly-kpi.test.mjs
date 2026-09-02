@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  NO_OP_PATTERNS, TODO_SIMILARITY_THRESHOLD, TOPIC_SIMILARITY_THRESHOLD,
+  NO_OP_PATTERNS, TODO_SIMILARITY_THRESHOLD,
   appendImprovementTodos, calculateKpi, clusterBySimilarity, isInNightlyWindow,
-  normalizeTodo, parseBatchLog, parseRun, parseTodos, similarity, todoTokens,
+  formatText, githubRepo, improvementTodos, normalizeTodo, parseBatchLog, parseRun, parseTodos,
+  queryPullRequests, similarity, todoTokens,
 } from './nightly-kpi.mjs';
 
 const date = '2026-09-02';
@@ -101,19 +102,12 @@ test('similarity は同一文字列で1、無関係な文字列で0に近い', (
   assert.ok(similarity(tokens, todoTokens('Growi マニュアルを取り込む')) < 0.1);
 });
 
-test('補足だけが違う同一テーマは topic/TODO 両閾値で同じクラスタになる', () => {
+test('補足だけが違う近似TODOは同じクラスタになる', () => {
   const items = [
     'auto-session の exit 1 誤報を直す （上記「次の1目的」）',
     'auto-session の exit 1 誤報を直す （上記「次の1目的」／下の a55cee2f ブロックに詳細）',
   ];
-  for (const threshold of [TOPIC_SIMILARITY_THRESHOLD, TODO_SIMILARITY_THRESHOLD]) {
-    assert.equal(clusterBySimilarity(items, { threshold, keyOf: (item) => item }).length, 1);
-  }
-});
-
-test('明らかに別テーマの項目は topic 閾値でも別クラスタになる', () => {
-  const items = ['auto-session の exit 1 誤報を直す', 'Growi マニュアルを取り込む'];
-  assert.equal(clusterBySimilarity(items, { threshold: TOPIC_SIMILARITY_THRESHOLD, keyOf: (item) => item }).length, 2);
+  assert.equal(clusterBySimilarity(items, { threshold: TODO_SIMILARITY_THRESHOLD, keyOf: (item) => item }).length, 1);
 });
 
 test('近似重複TODOのどれかに✅があればクラスタ全体を完了扱いする', () => {
@@ -128,4 +122,44 @@ test('clusterBySimilarity は同じ入力に対して決定的である', () => 
   const items = ['alpha beta', 'alpha beta gamma', '別の仕事'];
   const cluster = () => clusterBySimilarity(items, { threshold: 0.5, keyOf: (item) => item });
   assert.deepEqual(cluster(), cluster());
+});
+
+test('gh 失敗時は prYieldRate を null のまま保持し、0に丸めない', () => {
+  const pullRequests = queryPullRequests(date, 'owner/repo', { runGh: () => ({ status: 1, stderr: 'offline' }) });
+  const kpi = calculateKpi({ date, todoParse: parseTodos(''), runs: [run()], batch: baseBatch, pullRequests });
+  assert.equal(kpi.prsCreated, null);
+  assert.deepEqual(kpi.prNumbers, []);
+  assert.equal(kpi.prYieldRate, null);
+});
+
+test('夜間窓外に作成されたPRを除外し、境界上は含める', () => {
+  const prs = [
+    { number: 1, createdAt: '2026-09-01T17:59:59+09:00' },
+    { number: 2, createdAt: '2026-09-01T18:00:00+09:00' },
+    { number: 3, createdAt: '2026-09-02T09:00:00+09:00' },
+    { number: 4, createdAt: '2026-09-02T09:01:00+09:00' },
+  ];
+  const result = queryPullRequests(date, 'owner/repo', { runGh: () => ({ status: 0, stdout: JSON.stringify(prs) }) });
+  assert.deepEqual(result, { prsCreated: 2, prNumbers: [2, 3] });
+});
+
+test('GitHub remote URLをghのowner/repo形式に正規化する', () => {
+  assert.equal(githubRepo('https://github.com/owner/repo.git'), 'owner/repo');
+  assert.equal(githubRepo('git@github.com:owner/repo.git'), 'owner/repo');
+});
+
+test('成果率30%未満かつ5セッション以上だけ改善TODOを起票する', () => {
+  const base = { date, batchRan: true, batchCompleted: true, failedSteps: [], noOpRate: 0, closeRate: null };
+  assert.match(improvementTodos({ ...base, sessions: 5, prsCreated: 1, prYieldRate: 0.2 })[0], /夜間 5 セッションに対し PR は 1 本（成果率 20\.0%）/);
+  assert.deepEqual(improvementTodos({ ...base, sessions: 4, prsCreated: 0, prYieldRate: 0 }), []);
+  assert.deepEqual(improvementTodos({ ...base, sessions: 5, prsCreated: 2, prYieldRate: 0.4 }), []);
+  assert.deepEqual(improvementTodos({ ...base, sessions: 5, prsCreated: null, prYieldRate: null }), []);
+});
+
+test('topicConcentration はJSONにもtextにも現れない', () => {
+  const kpi = calculateKpi({ date, todoParse: parseTodos(''), runs: [run()], batch: baseBatch, pullRequests: { prsCreated: 1, prNumbers: [204] } });
+  assert.equal('topicConcentration' in kpi, false);
+  assert.doesNotMatch(JSON.stringify(kpi), /topicConcentration|テーマ集中/);
+  assert.doesNotMatch(formatText(kpi), /topicConcentration|テーマ集中/);
+  assert.match(formatText(kpi), /成果 1PR\/1セッション = 100\.0%/);
 });

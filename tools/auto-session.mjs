@@ -104,7 +104,12 @@ export function todoExclusionReason(todo, today = new Date()) {
 }
 
 export function dedupeKey(todo) {
-  return String(todo)
+  const text = String(todo);
+  // 受付ID付きの行は ID そのものを鍵にする。同じ報告が別ブロックへ別表記でコピーされると
+  // 先頭40文字が食い違って別項目に見え、1晩に2回実行されうる(2026-09-02 実データで two-copy 状態を確認)。
+  const receipt = text.match(/\[FB:([^\]\s]+)\]/);
+  if (receipt) return `FB:${receipt[1]}`;
+  return text
     .replace(/^\s*\d+[a-z]?[.)、]\s*/i, '')
     .replace(/[\*~`]/g, '')
     .replace(/[\s　]+/g, '')
@@ -124,9 +129,16 @@ export function todoExclusionReasons(todos, today = new Date()) {
     const key = dedupeKey(todo);
     const titleKey = emphasizedTitleKey(todo);
     const duplicate = (key && seenKeys.has(key)) || (titleKey && seenTitles.has(titleKey));
-    if (key) seenKeys.add(key);
-    if (titleKey) seenTitles.add(titleKey);
-    return duplicate ? '重複（先の項目と同一）' : todoExclusionReason(todo, today);
+    if (duplicate) return '重複（先の項目と同一）';
+    const reason = todoExclusionReason(todo, today);
+    // 除外される項目に鍵を主張させない。除外済みのコピーが先に並んでいるだけで
+    // 実行可能なコピーが「重複」に落ち、結果として1件も実行されなくなる
+    // (2026-09-02: 保留語を含む旧コピーが先頭ブロックにあり、この順序で潰れる寸前だった)。
+    if (!reason) {
+      if (key) seenKeys.add(key);
+      if (titleKey) seenTitles.add(titleKey);
+    }
+    return reason;
   });
 }
 

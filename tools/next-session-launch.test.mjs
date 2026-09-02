@@ -5,6 +5,7 @@ import {
   accountConfigPath,
   accountLabel,
   applyTrust,
+  buildVscodeExtUri,
   buildVscodeUri,
   hasUnsentVscodeTab,
   childEnv,
@@ -14,7 +15,9 @@ import {
   pickAccountEmail,
   pickNewestExtensionBinary,
   pickNewestVersionDir,
+  pickBundledVsix,
   planLaunch,
+  planVscodeExtLaunch,
   planVscodeLaunch,
   pickRoute,
   resolveClaudeBinary,
@@ -77,6 +80,22 @@ test('Claude Code の open URI にプロンプトを URL エンコードする',
   assert.equal(buildVscodeUri(''), 'vscode://Anthropic.claude-code/open');
 });
 
+test('自前拡張 URI は prompt/cwd/claude を個別に URL エンコードする', () => {
+  const values = { prompt: '/session-start 日本語', cwd: 'C:\\作業 folder', claude: 'C:\\Program Files\\Claude\\claude.exe' };
+  const uri = buildVscodeExtUri(values);
+  assert.equal(uri, `vscode://orgiast.next-session/start?prompt=${encodeURIComponent(values.prompt)}&cwd=${encodeURIComponent(values.cwd)}&claude=${encodeURIComponent(values.claude)}`);
+  assert.deepEqual(planVscodeExtLaunch({ codeCli: 'C:\\Code\\bin\\code.cmd', ...values }), {
+    label: 'open-session',
+    command: 'cmd.exe',
+    args: ['/c', 'C:\\Code\\bin\\code.cmd', '--open-url', uri],
+  });
+});
+
+test('同梱 VSIX は数値バージョンが最新のものを選ぶ', () => {
+  assert.equal(pickBundledVsix(['x.vsix', 'orgiast-next-session-0.2.9.vsix', 'orgiast-next-session-0.10.0.vsix']), 'orgiast-next-session-0.10.0.vsix');
+  assert.equal(pickBundledVsix([]), '');
+});
+
 test('VSCode 起動は code.cmd を cmd.exe /c 経由で実行する', () => {
   // .cmd は Windows の node から execFile できないので必ず cmd.exe /c を挟む。
   assert.deepEqual(planVscodeLaunch({ codeCli: 'C:\\Code\\bin\\code.cmd', cwd: 'C:\\work', prompt: '/session-start' }), [
@@ -99,6 +118,7 @@ test('既定は VSCode 経路で、ターミナルは明示したときだけ選
   assert.equal(pickRoute({ codeCli: 'code.cmd', flagTarget: undefined, env: { ORGIAST_NEXT_SESSION_TARGET: 'terminal' } }), 'terminal');
   assert.equal(pickRoute({ codeCli: 'code.cmd', flagTarget: 'terminal', env: {} }), 'terminal');
   assert.equal(pickRoute({ codeCli: 'code.cmd', flagTarget: 'vscode', env: {} }), 'vscode');
+  assert.equal(pickRoute({ codeCli: 'code.cmd', flagTarget: 'vscode-ext', env: {} }), 'vscode-ext');
   assert.equal(pickRoute({ codeCli: 'code.cmd', flagTarget: undefined, env: { ORGIAST_NEXT_SESSION_TARGET: 'vscode' } }), 'vscode');
 });
 
@@ -235,6 +255,24 @@ test('--set-target は他の state を保持し、不正値では何も書かな
   assert.equal(await launchNextSession(['--set-target', 'invalid'], invalid.io), 2);
   assert.equal(invalid.calls.writes.length, 0);
   assert.equal(invalid.calls.renames.length, 0);
+});
+
+test('--set-target vscode-ext の保存値を --show-target が返す', async () => {
+  let state = { enabled: true };
+  let pending = '';
+  const base = fakeIo({
+    readFile: async (file) => {
+      if (file.endsWith('next-session-launch.json')) return JSON.stringify(state);
+      throw new Error('ENOENT');
+    },
+    writeFile: async (_file, content) => { pending = content; },
+    rename: async () => { state = JSON.parse(pending); },
+  });
+  assert.equal(await launchNextSession(['--set-target', 'vscode-ext'], base.io), 0);
+  assert.equal(state.target, 'vscode-ext');
+  base.calls.logs.length = 0;
+  assert.equal(await launchNextSession(['--show-target'], base.io), 0);
+  assert.equal(base.calls.logs[0], 'target=vscode-ext / enabled=true');
 });
 
 test('inline は spawn せず予約し、lastRoute を inline で保存する', async () => {
@@ -434,6 +472,59 @@ test('VSCode dry-run は route と手順だけを出して spawn しない', asy
   assert.equal(output.configDirSource, 'default');
   assert.equal(output.steps.length, 1);
   assert.equal(output.steps[0].label, 'open-session');
+});
+
+function vscodeExtIo({ installed = false, codeCli = 'C:\\Code\\bin\\code.cmd' } = {}) {
+  const commands = [];
+  const base = fakeIo({
+    env: { VSCODE_CLI_PATH: codeCli, CLAUDE_CLI_PATH: 'C:\\Claude CLI\\claude.exe' },
+    exists: (file) => file === codeCli || file === 'C:\\Claude CLI\\claude.exe',
+    readdir: (dir) => dir.endsWith('vscode-next-session') ? ['orgiast-next-session-0.1.0.vsix'] : [],
+    runCodeCli: async (args) => {
+      commands.push(args);
+      return args[0] === '--list-extensions'
+        ? { code: 0, stdout: installed ? 'orgiast.next-session\r\n' : 'other.extension\r\n', stderr: '' }
+        : { code: 0, stdout: 'ok', stderr: '' };
+    },
+  });
+  return { ...base, commands };
+}
+
+test('vscode-ext は未導入時だけ VSIX を先に入れ、正しい URI を開く', async () => {
+  const { io, calls, commands } = vscodeExtIo();
+  assert.equal(await launchNextSession(['--target', 'vscode-ext', '--prompt', '/session-start 日本語'], io), 0);
+  assert.equal(commands[0][0], '--list-extensions');
+  assert.equal(commands[1][0], '--install-extension');
+  assert.match(commands[1][1], /orgiast-next-session-0\.1\.0\.vsix$/);
+  assert.equal(commands[1][2], '--force');
+  assert.equal(calls.spawn.length, 1);
+  const args = calls.spawn[0][1];
+  assert.deepEqual(args.slice(0, 3), ['/c', 'C:\\Code\\bin\\code.cmd', '--open-url']);
+  const opened = new URL(args[3]);
+  assert.equal(opened.protocol, 'vscode:');
+  assert.equal(opened.hostname, 'orgiast.next-session');
+  assert.equal(opened.pathname, '/start');
+  assert.equal(opened.searchParams.get('prompt'), '/session-start 日本語');
+  assert.equal(opened.searchParams.get('cwd'), 'C:\\work');
+  assert.equal(opened.searchParams.get('claude'), 'C:\\Claude CLI\\claude.exe');
+  assert.equal(JSON.parse(calls.writes.find(([file]) => file.includes('next-session-launch.json.tmp-'))[1]).lastRoute, 'vscode-ext');
+  // code.cmd <cwd> は既存ウィンドウの extension host を再起動するため、どの呼び出しにも裸の cwd を渡さない。
+  assert.equal(calls.spawn.some(([, commandArgs]) => commandArgs.includes('C:\\work') && !commandArgs.includes('--open-url')), false);
+});
+
+test('vscode-ext は導入済みなら再インストールしない', async () => {
+  const { io, calls, commands } = vscodeExtIo({ installed: true });
+  assert.equal(await launchNextSession(['--target', 'vscode-ext'], io), 0);
+  assert.deepEqual(commands, [['--list-extensions']]);
+  assert.equal(calls.spawn.length, 1);
+});
+
+test('vscode-ext で code CLI が無い時は理由を出して既存 vscode 経路へフォールバックする', async () => {
+  const base = fakeIo({ env: {}, exists: () => false });
+  assert.equal(await launchNextSession(['--target', 'vscode-ext'], base.io), 0);
+  assert.equal(base.calls.spawn.length, 0);
+  assert.match(base.calls.logs[0], /vscode-ext を使えないため vscode 経路へフォールバック/);
+  assert.match(base.calls.logs[1], /VSCode CLI \(code\.cmd\) が見つかりません/);
 });
 
 test('CLAUDE_HEADLESS は VSCode 経路も抑止する', async () => {

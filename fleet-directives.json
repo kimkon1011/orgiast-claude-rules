@@ -1,0 +1,5 @@
+{
+  "version": 1,
+  "_note": "kim/監督Claude が指示を1件書き、各PCの fleet-agent が15分以内に拾って結果を Discord へ返す。kind は status / prompt / enable-auto-session の3つだけ。prompt と enable-auto-session はそのPCの人がオプトイン済みの場合のみ実行される。空配列にすると全PCで何も起きない。",
+  "directives": []
+}

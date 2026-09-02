@@ -326,9 +326,28 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
 - 🔴 **起動先はここで既決。調べ直すな。窓を開ける実験もするな**（2026-09-02 実体確認 / kim「そのあたりは
   kim@orgiast.jp のパソコンでやり取りしたから同じことしないで」＝**別PCで再検証すると user の画面を荒らす**）。
   - **Claude Code 拡張は初期プロンプトを送信しない**。`vscode://Anthropic.claude-code/open?prompt=` は
-    `data-initial-prompt` としてタブへ渡り、webview 側は `setInputText` を呼ぶだけ（**2.1.257 の実装で確認**。
-    submit の API は無く、URI ハンドラが受けるのは `/open` と `/install-plugin` の2つだけ）。
+    `data-initial-prompt` としてタブへ渡り、webview 側は `setInputText` を呼ぶだけ。
     → **VSCode タブ経路は原理的に user の Enter が1回残る。ゼロタッチにできない。**
+    **2.1.257 で確認し、2.1.258 でも一次ソースで再確認済み（2026-09-02）。以下が証拠の全連鎖なので、
+    次に疑ったらこの6点を grep するだけで足りる。拡張を読み直す作業を最初からやるな**:
+
+    | # | ファイル | 実体 |
+    |---|---|---|
+    | 1 | `extension.js` | `registerUriHandler` は**1個だけ**。`switch(M.path)` の case は `"/install-plugin"` と `"/open"` の**2つのみ** |
+    | 2 | `extension.js` | `/open` は `prompt` を読み `executeCommand("claude-vscode.primaryEditor.open", session, prompt)` を呼ぶだけ |
+    | 3 | `extension.js` | HTML 生成側は `<div id="root" data-initial-prompt="...">` として webview へ渡すだけ |
+    | 4 | `webview/index.js` | `F={initialPrompt:W.dataset.initialPrompt,…}` → `session.initialPrompt.value = F.initialPrompt` |
+    | 5 | `webview/index.js` | 消費は `if(d5) q.current?.setInputText(d5), $.initialPrompt.value=void 0` — **送信呼び出しが無い** |
+    | 6 | `webview/index.js` | `setInputText` の実装は `(D1)=>{ _1.current.textContent = D1 }` — **contenteditable への代入のみ** |
+
+    🔴 **`setInputText` は `extension.js` には無く `webview/index.js` にある**。`extension.js` だけを grep して
+    0ヒットだったのを「新しい版で消えた＝送信できるようになった」と誤読しないこと（2026-09-02 に一度誤読した）。
+    🔴 **`autoSubmit` という語が `extension.js` に1件あるが、これは voice 設定**（"Submit the prompt when
+    hold-to-talk is released"）で、URI・初期プロンプトとは**無関係**。手がかりに見えるが違う。
+    🔴 **npm / PyPI / GitHub のパッケージ検索でこの件は裏付けられない**（`setInputText` は公開パッケージ名ではなく
+    バンドル内部の関数名。実測: npm=無関係ヒットのみ / `@setInputText/cli`=404 / PyPI=Not Found / gh search=0件）。
+    一次ソースは**そのPCに入っている拡張の実体ファイル**であり、確認先は
+    `~/.vscode/extensions/anthropic.claude-code-<版>-win32-x64/{extension.js,webview/index.js}`。
   - **`.code-workspace` の `folderOpen` タスクでも代替できない**。ワークスペースファイルはフォルダとは
     別の信頼対象になり**制限モード**で開くため自動タスクが走らない（マーカーを45秒待って0件・実測）。
   - **VSCode 内かつ送信まで自動を両立できるのは自前の極小拡張だけ**。統合ターミナルを
@@ -394,12 +413,75 @@ kim:「**kim@orgiast.jp のパソコンで実行している内容が ONBOARDING
 | 機体 / アカウント | 起動先 `target` | 理由 | 最終更新 |
 |---|---|---|---|
 | kimko PC / seisaku-team@orgiast.jp | `terminal` | 2026-09-01 kim「+ New session を押させるな」。タブ経路は Enter が残るため | 2026-09-02 |
-| kim@orgiast.jp の PC | **未記入（あちらのセッションが書くこと）** | — | — |
+| kim-PC (DESKTOP-2D0R4LI) / kim@orgiast.jp | `vscode` → **`vscode-ext` へ移行中** | kim「ターミナルじゃなくて VSCode でやる」（2026-09-02 再指示）。公式タブ経路のまま `terminal` へ落とすと kim の指示に反するので、**自前拡張 `orgiast.next-session`（統合ターミナルを argv 起動）で「VSCode のタブ」と「操作ゼロ」を両立させる**方針を選んだ。`vscode-ext` は既定にせず、実機で URI 発射を確認したPCだけが `--set-target vscode-ext` で切り替える | 2026-09-02 |
 
 <!-- MACHINE-STATE-END -->
 
 **自分の行を書くとき**は「値」だけでなく**なぜその値なのか**を残す。理由が無い値は次のセッションが
 「ルールと違う」と判断して勝手に戻す（2026-09-02 にそれで混乱した）。
+
+#### 1.15.2 別アカウント・別PCの Claude Code を横断管理する（管制面）
+
+kim「**ほかのアカウントでまた同じ試行錯誤が発生している。このパソコンでの試行錯誤がちゃんと
+別アカウントのパソコンにつながって最後までスムーズに実行されるように管理してほしい。
+他のアカウントのパソコンの Claude Code を動かしたり通信して状況を把握して指示を出したりできないのかな**」
+（2026-09-02）。答えと、そのために置いた仕組みを以下に固定する。
+
+##### 🔴 Claude Code の組み込み機能では別アカウントのPCは操作できない（調べ直すな）
+
+実測（2026-09-02 / kim-PC）: `ListAgents` に出るのは**同一アカウント・同一マシンのセッションだけ**
+（このPCでは9本。cross-machine の行は0）。`SendMessage` の宛先も同じ範囲で、Remote Control も
+対象は「**自分のアカウントの**別セッション」。**別アカウント（seisaku-team@orgiast.jp 等）は仕様上アドレスできない。**
+→ 横断管理は**自前の管制面**でやる。以下がその実体。
+
+##### 中央キューは2本立て（どちらもリポ直下の JSON を各PCが raw から取得する）
+
+| ファイル | 拾う側 | 周期 | できること |
+|---|---|---|---|
+| `fleet-command.json` | `tools/fleet-poller.mjs` | 1日1回 03:15 | 許可済み5タスク（`verify-setup` / `rules-resync` / `cost-report` / `thermal-guard` / `power-save`）。**自由文は流せない** |
+| `fleet-directives.json` | `tools/fleet-agent.mjs` | **15分ごと**（`OrgiastFleetAgent`） | `status`（状況照会）/ `prompt`（**自由文の指示**）/ `enable-auto-session`（そのPCに夜間無人セッションを登録） |
+
+- 送るのは `node tools/fleet-directive-send.mjs --kind <k> --targets <all|PC名の一部> --why "<理由>" --body-file <file>`。
+  **`--why` 必須**（理由の無い遠隔指示を作らせない）。**`--body-file` が既定**＝argv でシェルを1層通すと
+  バッククォートがコマンド置換として実行され、指示の一部が消えたまま全PCへ配られる（実害あり）。
+- 結果は各PCの Discord webhook へ返り、`~/.claude/fleet-agent-results/<id>.json` にも残る。
+- **止めるときは `directives` を空配列に戻す。**
+
+##### 🛑 `prompt` と `enable-auto-session` は「そのPCの人の1回の承諾」が必須（§1.1 の上限）
+
+他人のPCで勝手にAIが走る状態を作ってはいけない。実装は次のようになっている。**緩めるな。**
+
+- 実行の条件は `~/.claude/fleet-agent-optin.json` に該当 kind があること。無ければ**実行せず**、
+  Discord へ「どんな指示が来ているか・送信者・理由・承諾用の1コマンド」を**その指示IDにつき1回だけ**出す。
+  ＝ブロックを迂回するのではなく、透明化して人に委ねる。
+- **指示本文はシェルに渡らない**。`spawn(claudeExe, ['-p', body], { shell: false })` の argv 1要素として渡す。
+- **実行ファイルは指示側から選べない**（`CLAUDE_CLI_PATH || 'claude'` で解決）。
+  中央キューに任意のコマンドを流せる口は**存在しない**。これがこの機能の生命線。
+- `status` だけはオプトイン不要（読み取り専用の自己申告。既に fleet-poller が毎日 verify-setup の結果を
+  投げているのと同じ扱い）。ただし本文は `redactSecrets` を通し、**webhook URL やキーは絶対に載せない**。
+
+##### memory（試行錯誤の実測）は自動で配られる — ただし全部ではない
+
+**これが「同じ試行錯誤が別アカウントで再発する」真因だった。**
+`tools/onboarding-sync.mjs` が配っていたのは `tools/` `rules-extracted/` `skills/` **だけ**で、
+`~/.claude/projects/<proj>/memory/` は1件も配っていなかった（2026-09-02 に grep で確認）。
+
+- `tools/memory-share.mjs --export` が **`metadata.type: feedback` の memory だけ**を `memory-shared/` へ出す。
+  `project_*`（案件固有）と `reference_*` は配らない。
+- 各PCは `onboarding-sync` の中で `--install` 相当が走り、`<memoryDir>/shared/` と `index/shared.md` に入る。
+  **`MEMORY.md` には1行だけ足す**（このファイルは約 24,985 バイトで切り捨てられるため）。
+- 発信元PC（同名の memory をローカル直下に持っているPC）ではスキップされ、二重に持たない。
+- 🔴 **配布先リポ `orgiast-claude-rules` は PUBLIC**（実測: `gh repo view` が `"visibility":"PUBLIC"`）。
+  そのため export には2種類の除外門がある。**外すな**:
+  1. **資格情報**（webhook URL / `sk-` `gsk_` `ghp_` `AIza` / 秘密鍵 / 長い hex）
+  2. **顧客情報**（法人名 `株式会社|有限会社|合同会社` / 案件ID `C0\d{3,}`）
+     — 2026-09-02 実測で 254 件中 **12 件**が該当した（例: `C0038（株式会社◯◯ / ◯◯EXPO）` を
+     そのまま引用している feedback）。社員名・Docs ID・keyserve の秘密名は0件だった。
+  除外は**理由つきで1行出す**（黙って落とすと「なぜ件数が減ったのか」が誰にも分からなくなる）。
+  除外された分の**ファイル名と一般化した理由だけ**が `memory-shared/EXCLUDED.md` に残る。
+- **公開できない12件を他PCへ届ける経路はまだ無い。** 必要になったら private な keyserve
+  （`orgiast-keyserve` は private・HMAC 認証済み・全PCが既にクライアントを持つ）に
+  エンドポイントを足すのが筋。public リポへ置いて解決してはいけない。
 
 ### 1.16 Fable5 の使用は中止
 

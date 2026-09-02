@@ -407,6 +407,17 @@ try {
   } else { Warn "fleet-poller.ps1 未取得=スキップ(他機能は動作)" }
 } catch { Warn ("フリート点検の登録に失敗(他機能は動作): " + $_.Exception.Message) }
 
+# --- フリート管制エージェントの定時起動(15分ごと) ---
+Step "フリート管制エージェントを登録 (15分ごと)"
+try {
+  $fa = Join-Path $REPO 'tools\register-fleet-agent.ps1'
+  if (Test-Path $fa) {
+    & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $fa
+    if ($LASTEXITCODE -ne 0) { throw "register-fleet-agent.ps1 exit $LASTEXITCODE" }
+    OK "フリート管制エージェント 登録完了(15分ごと OrgiastFleetAgent・中央指示を確認)"
+  } else { Warn "register-fleet-agent.ps1 未取得=スキップ(他機能は動作)" }
+} catch { Warn ("フリート管制エージェントの登録に失敗(他機能は動作): " + $_.Exception.Message) }
+
 # --- 残TODOの無人消化(毎日03:20・各PCのnext-session.mdから1件) ---
 Step "残TODOの無人消化を登録 (毎日03:20)"
 try {

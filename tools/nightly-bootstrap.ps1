@@ -146,8 +146,15 @@ try {
                     $repoHash = Get-NightlyFileSha256 $repoBootstrap
                     $selfHash = Get-NightlyFileSha256 $selfPath
                     if ($repoHash -ne $selfHash) {
-                        Copy-Item -LiteralPath $repoBootstrap -Destination $selfPath -Force
-                        Write-NightlyLog '自己更新' 'ok:自己更新(次回から新版)'
+                        $selfUpdateTemp = $selfPath + '.new-' + $PID
+                        try {
+                            Copy-Item -LiteralPath $repoBootstrap -Destination $selfUpdateTemp -Force
+                            Move-Item -LiteralPath $selfUpdateTemp -Destination $selfPath -Force
+                            Write-NightlyLog '自己更新' 'ok:自己更新(次回から新版)'
+                        } catch {
+                            Remove-Item -LiteralPath $selfUpdateTemp -Force -ErrorAction SilentlyContinue
+                            throw
+                        }
                     }
                 } elseif ($isInstalledPath) {
                     Write-NightlyLog '自己更新' 'skip:自己更新(ORGIAST_NIGHTLY_NO_SELF_UPDATE=1のため)'

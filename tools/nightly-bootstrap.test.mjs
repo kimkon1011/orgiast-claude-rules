@@ -5,6 +5,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, 
 import { dirname, join, resolve } from 'node:path';
 
 const script = resolve('tools/nightly-bootstrap.ps1');
+const hiddenRunner = resolve('tools/run-hidden.vbs');
 const powershell = process.platform === 'win32'
   ? 'powershell.exe'
   : '/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe';
@@ -169,9 +170,39 @@ test('self-updates the operational copy when PSModulePath is empty', { skip: !ha
   }, undefined, installed);
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(readFileSync(installed), repoBytes, 'operational copy was not updated');
+  assert.equal(
+    readdirSync(dirname(installed)).some((name) => name.startsWith('nightly-bootstrap.ps1.new-')),
+    false,
+    'self-update temporary file was left behind',
+  );
   const log = logText(fix);
   assert.match(log, /ok:自己更新\(次回から新版\)/);
   assert.doesNotMatch(log, /warn:.*Get-FileHash/);
+});
+
+test('self-update replaces the installed script through a same-directory temporary file', () => {
+  const source = readFileSync(script, 'utf8');
+  const updateStart = source.indexOf("if ($repoHash -ne $selfHash)");
+  const updateEnd = source.indexOf("} elseif ($isInstalledPath)", updateStart);
+  assert.ok(updateStart > 0 && updateEnd > updateStart, 'self-update block was not found');
+  const update = source.slice(updateStart, updateEnd);
+  assert.match(update, /\$selfUpdateTemp = \$selfPath \+ '\.new-' \+ \$PID/);
+  assert.match(update, /Copy-Item[^\r\n]+-Destination \$selfUpdateTemp/);
+  assert.match(update, /Move-Item -LiteralPath \$selfUpdateTemp -Destination \$selfPath -Force/);
+  assert.match(update, /catch \{[\s\S]*Remove-Item -LiteralPath \$selfUpdateTemp -Force -ErrorAction SilentlyContinue[\s\S]*throw/);
+  assert.doesNotMatch(update, /Copy-Item[^\r\n]+-Destination \$selfPath/);
+});
+
+test('hidden runner derives its log name from the target script, not the bootstrap wrapper', () => {
+  const source = readFileSync(hiddenRunner, 'utf8');
+  assert.match(source, /For i = 1 To args\.Count - 1/);
+  assert.match(source, /GetExtensionName\(args\(i\)\).*"ps1"/);
+  assert.match(source, /GetExtensionName\(args\(i\)\).*"mjs"/);
+  assert.match(source, /GetExtensionName\(args\(i\)\).*"js"/);
+  assert.match(source, /GetFileName\(args\(i\)\)\) <> "nightly-bootstrap\.ps1"/);
+  assert.match(source, /baseName = fso\.GetBaseName\(args\(i\)\)/);
+  assert.match(source, /baseName = fso\.GetBaseName\(exePath\)/);
+  assert.doesNotMatch(source, /baseName = fso\.GetBaseName\(args\(1\)\)/);
 });
 
 after(() => {

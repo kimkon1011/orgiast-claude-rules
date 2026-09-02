@@ -10,7 +10,7 @@
 '   Arguments : //nologo "<...>\tools\run-hidden.vbs" "<exe>" "<arg1>" "<arg2>" ...
 '
 ' The child's stdout/stderr are appended to
-'   %USERPROFILE%\.claude\logs\<exe-basename>.log
+'   %USERPROFILE%\.claude\logs\<target-script-basename>.log
 ' (rotated at ~1 MB) so the output is still inspectable after the window is gone.
 ' The child's exit code is returned, so LastTaskResult stays meaningful.
 '
@@ -31,10 +31,18 @@ Set shell = CreateObject("WScript.Shell")
 
 exePath = args(0)
 baseName = fso.GetBaseName(exePath)
-If args.Count >= 2 Then
-  ' Prefer the script name over the interpreter name for the log file.
-  baseName = fso.GetBaseName(args(1))
-End If
+
+' Prefer the target script name over the interpreter or bootstrap wrapper.
+For i = 1 To args.Count - 1
+  If LCase(fso.GetExtensionName(args(i))) = "ps1" Or _
+      LCase(fso.GetExtensionName(args(i))) = "mjs" Or _
+      LCase(fso.GetExtensionName(args(i))) = "js" Then
+    If LCase(fso.GetFileName(args(i))) <> "nightly-bootstrap.ps1" Then
+      baseName = fso.GetBaseName(args(i))
+      Exit For
+    End If
+  End If
+Next
 
 logDir = shell.ExpandEnvironmentStrings("%USERPROFILE%") & "\.claude\logs"
 If Not fso.FolderExists(logDir) Then

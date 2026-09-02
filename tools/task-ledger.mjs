@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 import { machineIdentity } from './machine-identity.mjs';
 
 const TASK_FIELDS = ['taskId', '起票元', '件名', '依頼元', '担当PC', '状態', '次アクション', '成果物リンク', '期限', '備考'];
@@ -100,7 +100,7 @@ export async function taskLedgerCli(argv = process.argv.slice(2)) {
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isEntry(import.meta.url)) {
   taskLedgerCli().catch((error) => {
     process.stderr.write(`warning: ${error.message}\n`);
     process.exitCode = 1;

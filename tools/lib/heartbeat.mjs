@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { isEntry } from '../is-entry.mjs';
 
 function parseEnv(text) {
   const env = {};
@@ -84,7 +84,7 @@ export async function heartbeatCli(argv = process.argv.slice(2)) {
   process.stdout.write(`${JSON.stringify(await reportHeartbeat(record))}\n`);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isEntry(import.meta.url)) {
   heartbeatCli().catch((error) => {
     process.stderr.write(`${error.message}\n`);
     process.exitCode = 1;

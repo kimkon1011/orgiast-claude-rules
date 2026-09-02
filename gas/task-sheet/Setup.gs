@@ -5,6 +5,7 @@ const TASK_SHEET_HEADERS_ = ['taskId', '起票元', '件名', '依頼元', '担�
 function setupOnce() {
   const sheet = _taskSheetEnsureTab_();
   installCommandQueue();
+  installJobWatchTrigger();
   console.log('task sheet read-back OK; tab=' + sheet.getName() + '; command queue installed');
   return { ok: true, tabName: sheet.getName(), headerCount: sheet.getLastColumn() };
 }
@@ -36,10 +37,15 @@ function _taskSheetEnsureTab_() {
   const ss = _taskSheetSpreadsheet_();
   let sheet = ss.getSheetByName(TASK_SHEET_TAB_NAME_);
   if (!sheet) sheet = ss.insertSheet(TASK_SHEET_TAB_NAME_);
-  const lastColumn = sheet.getLastColumn();
-  const headers = lastColumn > 0 ? sheet.getRange(1, 1, 1, lastColumn).getDisplayValues()[0] : [];
+  let lastColumn = sheet.getLastColumn();
+  let headers = lastColumn > 0 ? sheet.getRange(2, 1, 1, lastColumn).getDisplayValues()[0] : [];
+  const oldHeaders = lastColumn > 0 ? sheet.getRange(1, 1, 1, lastColumn).getDisplayValues()[0] : [];
+  if (oldHeaders.join('\u0001') === TASK_SHEET_HEADERS_.join('\u0001')) {
+    sheet.insertRowBefore(1);
+    headers = oldHeaders;
+  }
   if (headers.join('') !== TASK_SHEET_HEADERS_.join('')) {
-    sheet.getRange(1, 1, 1, TASK_SHEET_HEADERS_.length).setValues([TASK_SHEET_HEADERS_]);
+    sheet.getRange(2, 1, 1, TASK_SHEET_HEADERS_.length).setValues([TASK_SHEET_HEADERS_]);
   }
   return sheet;
 }

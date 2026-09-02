@@ -16,6 +16,7 @@ function doPost(e) {
     if (payload.kind === 'upsertTask' || !payload.kind) return _taskJson_(upsertTask(payload));
     if (payload.kind === 'claimTask') return _taskJson_(claimTask(payload));
     if (payload.kind === 'doneTask') return _taskJson_(doneTask(payload));
+    if (payload.kind === 'upsertJob') return _taskJson_(upsertJob(payload));
     return _taskJson_({ ok: false, status: 400, error: 'unknown_kind' });
   } catch (error) {
     return _taskJson_({ ok: false, status: 500, error: error.message });

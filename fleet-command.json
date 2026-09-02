@@ -1,13 +1,14 @@
 {
-  "runId": "webhook-ledger-rollout-2026-08-31",
-  "task": "rules-resync",
+  "runId": "register-fleet-agent-2026-09-02",
+  "task": "register-fleet-agent",
   "targets": "all",
-  "_why": "webhook URL を人にコピーさせないためのツールとルールを全PCへ配る。配るもの: tools/discord-webhook.mjs(ローカルの ~/.claude から webhook URL を自動解決。台帳にはURLを置かない) / webhook-health.mjs --post-sheet(生存確認の結果だけを台帳の Webhook タブへ。URLは送らない) / nightly-batch の該当ブロック / ONBOARDING §2.6.2 と rules-extracted の「webhook URL を user にコピーさせない」ルール。各PCは onboarding-sync --force を1回だけ実行する。破壊的操作なし。止めるときは task を \"\" に戻す。",
+  "_why": "別アカウント・別PCの状況把握と指示を通す管制面(fleet-agent)を全PCで起動する。各PCは register-fleet-agent.ps1 を1回だけ実行して OrgiastFleetAgent(15分ごと)を登録する。エージェント自体は中央キュー fleet-directives.json が空なら何もしない。status は読み取り専用の自己申告で、自由文の指示(prompt)と夜間無人セッション(enable-auto-session)は ~/.claude/fleet-agent-optin.json でそのPCの人が1回承諾するまで実行されない(未承諾なら内容と承諾コマンドをDiscordへ1回出すだけ)。破壊的操作なし。止めるときは task を \"\" に戻す。",
   "_note": "全PCへ承認済みタスクを配る中央キュー。kim/Claudeが task と runId(毎回ユニーク) を更新→各PCが夜間03:15の実行時に1回だけ処理しDiscordへ結果を返す。task を空にすると何もしない。",
   "_allowed_tasks": [
     "verify-setup",
     "rules-resync",
-    "cost-report"
+    "cost-report",
+    "register-fleet-agent"
   ],
   "_targets": "all=全PC / PC名の一部文字列=そのPCだけ"
 }

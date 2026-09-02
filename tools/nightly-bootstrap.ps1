@@ -13,11 +13,25 @@ param(
 
 $logDir = Join-Path $HOME '.claude\logs'
 $logFile = Join-Path $logDir ("nightly-bootstrap-" + (Get-Date -Format 'yyyy-MM-dd') + '.log')
-New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+try {
+    New-Item -ItemType Directory -Path $logDir -Force -ErrorAction Stop | Out-Null
+} catch {
+    [Console]::Error.WriteLine("nightly-bootstrap: ログディレクトリを作成できません: " + $_.Exception.Message)
+}
 
 function Write-NightlyLog([string]$Step, [string]$Result) {
     $line = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + ' / ' + $Step + ' / ' + $Result
-    Add-Content -LiteralPath $logFile -Value $line -Encoding UTF8
+    $lastError = $null
+    for ($attempt = 1; $attempt -le 10; $attempt++) {
+        try {
+            Add-Content -LiteralPath $logFile -Value $line -Encoding UTF8 -ErrorAction Stop
+            return
+        } catch {
+            $lastError = $_.Exception.Message
+            if ($attempt -lt 10) { Start-Sleep -Milliseconds 200 }
+        }
+    }
+    [Console]::Error.WriteLine("nightly-bootstrap: ログに書けませんでした (10回試行): " + $line + " / " + $lastError)
 }
 
 function Stop-Nightly([string]$Step, [string]$Result, [int]$Code) {
@@ -35,8 +49,23 @@ function Get-NightlyFileSha256([string]$Path) {
     }
 }
 
+$mutex = $null
+$mutexAcquired = $false
 try {
     Write-NightlyLog 'nightly-bootstrap' 'ok:開始'
+
+    $mutex = [System.Threading.Mutex]::new($false, 'OrgiastNightlyBootstrap')
+    try {
+        $mutexAcquired = $mutex.WaitOne([TimeSpan]::FromMinutes(10))
+    } catch [System.Threading.AbandonedMutexException] {
+        $mutexAcquired = $true
+        Write-NightlyLog 'ミューテックス' 'warn:前回の保持プロセスが異常終了したため処理を継続'
+    }
+    if (-not $mutexAcquired) {
+        Write-NightlyLog 'ミューテックス' 'error:ミューテックス取得タイムアウト'
+        exit 1
+    }
+    Write-NightlyLog 'ミューテックス' 'ok:取得'
 
     $repo = if ($env:ORGIAST_NIGHTLY_REPO) {
         $env:ORGIAST_NIGHTLY_REPO
@@ -155,6 +184,13 @@ try {
     Write-NightlyLog '対象実行' ("ok:" + [IO.Path]::GetFileName($targetPath) + " 終了コード=" + $targetExitCode)
     exit $targetExitCode
 } catch {
-    try { Write-NightlyLog 'nightly-bootstrap' ("error:" + $_.Exception.Message) } catch { }
+    Write-NightlyLog 'nightly-bootstrap' ("error:" + $_.Exception.Message)
     exit 1
+} finally {
+    if ($mutexAcquired -and $mutex) {
+        try { $mutex.ReleaseMutex() } catch {
+            [Console]::Error.WriteLine("nightly-bootstrap: ミューテックスを解放できません: " + $_.Exception.Message)
+        }
+    }
+    if ($mutex) { $mutex.Dispose() }
 }

@@ -1,4 +1,4 @@
-# Booth seisaku app no "fuguai/youbou" sheet wo mainichi 03:00 ni tori-komi,
+﻿# Booth seisaku app no "fuguai/youbou" sheet wo mainichi 03:06 ni tori-komi,
 # ~/.claude/next-session.md no zan-TODO ni tsumu task wo touroku suru.
 # Jikkou: powershell -ExecutionPolicy Bypass -File "<kono file>"
 # Nando jikkou shitemo onaji task wo uwagaki suru dake (-Force). Hoka no task ni wa furenai.
@@ -21,12 +21,12 @@ if (-not $node) { throw 'node not found. Install Node.js first.' }
 # stdout/stderr wa %USERPROFILE%\.claude\logs\booth-feedback-intake.log ni nokoru.
 $action = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($script) -WorkingDirectory $repo
 
-# 03:00 = yakan no OrgiastAutoSession (03:20) yori mae ni suru. Sono ban no muzin
+# 03:06 = yakan no OrgiastAutoSession (03:20) yori mae ni suru. Sono ban no muzin
 # session ga sono hi no youbou wo hiroeru you ni suru tame.
-$trigger = New-ScheduledTaskTrigger -Daily -At 3:00am
+$trigger = New-ScheduledTaskTrigger -Daily -At 3:06am -RandomDelay (New-TimeSpan -Minutes 2)
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
 
-Register-ScheduledTask -TaskName 'OrgiastBoothFeedbackIntake' -Action $action -Trigger $trigger -Settings $settings -Description 'Pull booth app feedback rows into next-session.md TODO (daily 03:00)' -Force | Out-Null
+Register-ScheduledTask -TaskName 'OrgiastBoothFeedbackIntake' -Action $action -Trigger $trigger -Settings $settings -Description 'Pull booth app feedback rows into next-session.md TODO (daily 03:06, random delay up to 2 minutes)' -Force | Out-Null
 
-Write-Host 'OK: task OrgiastBoothFeedbackIntake registered (daily 03:00)'
+Write-Host 'OK: task OrgiastBoothFeedbackIntake registered (daily 03:06, random delay up to 2 minutes)'
 Get-ScheduledTask -TaskName 'OrgiastBoothFeedbackIntake' | Select-Object TaskName, State

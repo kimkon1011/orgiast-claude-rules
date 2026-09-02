@@ -22,11 +22,11 @@ if (-not $node) { throw 'node not found. Install Node.js first.' }
 # %USERPROFILE%\.claude\logs\plaud-to-tldv.log ni nokoru.
 # --limit 50: kako bun no toriKomi ga nokotte iru aida mo 1 kai de susumeru tame.
 $action = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($script, '--limit', '50') -WorkingDirectory $repo
-$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).Date -RepetitionInterval (New-TimeSpan -Hours 1)
+$trigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).Date.AddMinutes(8)) -RepetitionInterval (New-TimeSpan -Hours 1) -RandomDelay (New-TimeSpan -Minutes 2)
 # PC ga suimin/dengen off datta bawai wa tsugi ni okita toki ni oikake de jikkou suru.
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
 
-Register-ScheduledTask -TaskName 'OrgiastPlaudToTldv' -Action $action -Trigger $trigger -Settings $settings -Description 'Import new Plaud recordings into tl;dv (hourly)' -Force | Out-Null
+Register-ScheduledTask -TaskName 'OrgiastPlaudToTldv' -Action $action -Trigger $trigger -Settings $settings -Description 'Import new Plaud recordings into tl;dv (hourly at :08, random delay up to 2 minutes)' -Force | Out-Null
 
-Write-Host 'OK: task OrgiastPlaudToTldv registered (every hour)'
+Write-Host 'OK: task OrgiastPlaudToTldv registered (hourly at :08, random delay up to 2 minutes)'
 Get-ScheduledTask -TaskName 'OrgiastPlaudToTldv' | Select-Object TaskName, State

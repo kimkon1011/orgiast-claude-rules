@@ -135,6 +135,22 @@ test('script is UTF-8 with BOM', () => {
   assert.deepEqual([...readFileSync(script).subarray(0, 3)], [0xef, 0xbb, 0xbf]);
 });
 
+test('protects the full run with a ten-minute named mutex and always releases it', () => {
+  const source = readFileSync(script, 'utf8');
+  assert.match(source, /Mutex\]::new\(\$false, 'OrgiastNightlyBootstrap'\)/);
+  assert.match(source, /WaitOne\(\[TimeSpan\]::FromMinutes\(10\)\)/);
+  assert.match(source, /catch \[System\.Threading\.AbandonedMutexException\]/);
+  assert.match(source, /error:ミューテックス取得タイムアウト/);
+  assert.match(source, /finally\s*\{[\s\S]*ReleaseMutex\(\)[\s\S]*Dispose\(\)/);
+});
+
+test('log writes retry ten times without throwing after exhaustion', () => {
+  const source = readFileSync(script, 'utf8');
+  assert.match(source, /for \(\$attempt = 1; \$attempt -le 10; \$attempt\+\+\)/);
+  assert.match(source, /Start-Sleep -Milliseconds 200/);
+  assert.match(source, /\[Console\]::Error\.WriteLine\("nightly-bootstrap: ログに書けませんでした/);
+});
+
 test('missing target exits 1 and writes readable Japanese log', { skip: !hasPowerShell }, () => {
   const fix = fixture('missing');
   const result = runBootstrap(fix, join(fix.dir, 'missing.ps1'));

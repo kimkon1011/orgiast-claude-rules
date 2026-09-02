@@ -355,9 +355,21 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
     `code --install-extension <vsix>` で入れれば**新規ウィンドウの extension host は再起動なしで読み込む**（実測）。
     `~/.vscode/extensions/` への直接書き込みと `~/.claude/` を触る PowerShell は**auto-mode 分類器が拒否する**ので、
     正規の CLI 経路で入れ、拡張の状態は `~/.claude` の外（例 `~/.orgiast/next-session/`）に置く。
-  - つまり **「VSCode のタブ」と「操作ゼロ」は同時に成立しない**。§1.1 の最上位原則（手作業を極限まで減らす）が
+  - つまり **公式拡張では「VSCode のタブ」と「操作ゼロ」は同時に成立しない**。§1.1 の最上位原則（手作業を極限まで減らす）が
     優先するので、**既定は機体ごとの選択**になる。触る前に必ず
     `node tools/next-session-launch.mjs --show-target` で**その機体の実際の値**を見る。
+  - **自前拡張は実装済み**（2026-09-02）: `packages/vscode-next-session/`（`orgiast.next-session`）＋
+    ランチャーの4つ目の target **`vscode-ext`**。統合ターミナルを argv 起動するので**送信まで自動**になる。
+    既定は変えていない（切り替えは `--set-target vscode-ext`）。`claude` パラメータは
+    **絶対パス＋basename が `claude`/`claude.exe`＋実在**の3条件を検証し、外れたら PATH の `claude` へ
+    警告付きでフォールバックする（URI はローカルの別プロセスからも撃てるため、任意 exe を起動できる口を作らない）。
+  - 🔴 **`vscode-ext` は「拡張をインストールした後に起動した VSCode ウィンドウ」でしか効かない**（2026-09-02 実測）。
+    既存ウィンドウの extension host は後から入れた拡張の `onUri` ハンドラを持たないため、
+    URI を撃っても**何も起きず、エラーも出ない**。実測方法: `claude.exe` のプロセス数が
+    URI 発射の前後で変わらない（トークンを使わずに測るなら `?prompt=--version` を使う。
+    `?probe=1` は `cmd /c echo` が数十msで終わるので**プロセス表では捕捉できない**＝この方法で「動かない」と判断するな）。
+    → **導入したPCは、次に VSCode を起動し直したときから有効**。切り替え直後に検証しようとして
+    「壊れている」と誤診しないこと。
 - 拡張タブ経路を使う場合の作り: URI ハンドラ `code.cmd --open-url "vscode://Anthropic.claude-code/open?prompt=<encodeURIComponent>"` を使う。
   `session` を付けなければ新規会話になる。**`Code.exe --open-url` を直に叩くと `bad option` で落ちる**ので必ず `bin/code.cmd`
   （Windows の node は `.cmd` を execFile できないため `cmd.exe /c` を挟む）。

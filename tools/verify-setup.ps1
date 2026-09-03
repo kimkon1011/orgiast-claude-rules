@@ -47,6 +47,7 @@ Chk 'Gemini MCP 登録(.claude.json)' ((Get-Content "$H\.claude.json" -Raw -Erro
 # 夜間バッチ定時タスク
 Chk '夜間バッチ 定時タスク(毎日03:00)' ([bool](Get-ScheduledTask -TaskName OrgiastNightlyBatch -ErrorAction SilentlyContinue))
 # 開発CLI
+Chk 'Claude Code 導入' (Have claude)
 Chk 'Codex CLI 導入' (Have codex)
 # Codexログイン(auth.jsonにトークン)
 $auth = "$H\.codex\auth.json"; $li = $false
@@ -54,5 +55,11 @@ if (Test-Path $auth) { try { $li = [bool](((Get-Content $auth -Raw) | ConvertFro
 Chk 'Codexログイン済(auth.jsonにトークン)' $li
 
 Write-Host ("`n===== 結果: OK {0} / NG {1} =====" -f $ok, $ng)
+if (-not (Have claude)) {
+  Write-Host "🚨 Claude Code 本体が入っていません。このPCでは Claude Code を使えません。" -ForegroundColor Red
+  Write-Host "   青いPowerShellで次を実行してください:" -ForegroundColor Yellow
+  Write-Host "   winget install Anthropic.ClaudeCode --accept-source-agreements --accept-package-agreements" -ForegroundColor Yellow
+  Write-Host "   実行後は PowerShell を閉じて開き直し、claude --version でバージョンが出れば成功です。" -ForegroundColor Yellow
+}
 if ($ng -gt 0) { Write-Host "NG項目は、青いPowerShellで配布コマンドを再実行すれば直ります(既存はスキップ=二重にならない)。Codexログインだけは codex login で。" }
 else { Write-Host "全項目OK。セットアップは完全に適用されています。" }

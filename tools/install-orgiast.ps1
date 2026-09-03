@@ -430,7 +430,67 @@ try {
 } catch { Warn ("残TODOの無人消化の登録に失敗(他機能は動作): " + $_.Exception.Message) }
 
 # --- 開発ツール導入 ---
-Step "開発ツール Codex / Gemini の導入 (コスト削減用)"
+Step "開発ツール Claude Code / Codex / Gemini の導入"
+$claudeCodeInstalledNow = $false
+if (Have claude) {
+  OK "Claude Code は導入済み(スキップ)"
+} else {
+  function Invoke-InstallerWithTimeout($filePath, $argumentList, $sec) {
+    try {
+      $process = Start-Process -FilePath $filePath -ArgumentList $argumentList -NoNewWindow -PassThru
+      if (-not $process.WaitForExit($sec * 1000)) {
+        try { $process.Kill() } catch {}
+        return $false
+      }
+      return ($process.ExitCode -eq 0)
+    } catch {
+      return $false
+    }
+  }
+  function Refresh-InstallerPath {
+    try {
+      $pathParts = @(
+        [Environment]::GetEnvironmentVariable('Path','Machine'),
+        [Environment]::GetEnvironmentVariable('Path','User'),
+        (Join-Path $env:USERPROFILE '.local\bin')
+      ) | Where-Object { $_ }
+      $env:Path = ($pathParts -join ';')
+    } catch {}
+  }
+
+  $claudeInstallSucceeded = $false
+  if (Have winget) {
+    Say "  Claude Code を winget で導入します(最大5分)..." 'Gray'
+    $claudeInstallSucceeded = Invoke-InstallerWithTimeout 'winget.exe' @('install', '--id', 'Anthropic.ClaudeCode', '-e', '--accept-source-agreements', '--accept-package-agreements') 300
+    Refresh-InstallerPath
+    if (Have claude) { $claudeInstallSucceeded = $true }
+  }
+
+  if (-not $claudeInstallSucceeded) {
+    Warn "winget で導入できなかったため、Claude公式インストーラで再試行します"
+    $claudeInstaller = Join-Path $env:TEMP ('claude-install-' + [guid]::NewGuid().ToString('N') + '.ps1')
+    try {
+      Invoke-WebRequest -UseBasicParsing 'https://claude.ai/install.ps1' -OutFile $claudeInstaller
+      if (-not (Test-Path $claudeInstaller) -or (Get-Item $claudeInstaller).Length -le 0) {
+        throw 'ダウンロードしたインストーラが空です'
+      }
+      $claudeInstallSucceeded = Invoke-InstallerWithTimeout 'powershell.exe' @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $claudeInstaller) 300
+    } catch {
+      $claudeInstallSucceeded = $false
+      Warn ("Claude公式インストーラの実行に失敗しました: " + $_.Exception.Message)
+    } finally {
+      Remove-Item $claudeInstaller -Force -ErrorAction SilentlyContinue
+    }
+    Refresh-InstallerPath
+  }
+
+  if ($claudeInstallSucceeded -or (Have claude)) {
+    $claudeCodeInstalledNow = $true
+    OK "Claude Code 導入完了"
+  } else {
+    Warn "Claude Code が時間内に入りませんでした。最後の総合チェックに対処方法を表示します"
+  }
+}
 # 直前にwingetで入れたNodeを"同一セッション"で使えるよう、PATHをレジストリから再読込(未反映だとnpm/codexが見つからず失敗する)
 try {
   $npmBin = Join-Path $env:APPDATA 'npm'
@@ -575,5 +635,8 @@ Codex(コードを速く安く作るツール・定額枠)を使うにはログ�
     else { Say "`nセットアップ完了。30秒後に再起動します(中止: 青い画面に『shutdown /a』)。" 'Green'; try { shutdown /r /t 30 /c "オージャストAI設定の反映のため再起動します(中止: shutdown /a)" | Out-Null } catch {} }
   }
   else { Warn "10分待ちましたがCodexログインが未完了。自動再起動はしません。ログイン完了後に手動でPC再起動を。" }
+}
+if ($claudeCodeInstalledNow) {
+  Say "Claude Code を導入しました。PowerShell を一度閉じて開き直してから claude --version で確認してください。" 'Yellow'
 }
 Say "`n分からないことがあれば、この画面の内容をそのまま kim に送ってください。" 'Green'

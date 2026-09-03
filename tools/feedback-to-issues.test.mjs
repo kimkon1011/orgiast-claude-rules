@@ -53,6 +53,11 @@ test('Issue 本文は提出元なしと添付ありを明示する', () => {
   assert.match(body, /スクショは Discord の元メッセージを参照/);
 });
 
+test('Issue 本文の末尾に feedback-dm マーカーが入る(feedback-replies.mjs のマーカー検索用)', () => {
+  const body = buildIssueBody({ body: '報告本文', message_id: 'abc123' });
+  assert.equal(body.trimEnd().split('\n').at(-1), '<!-- feedback-dm:abc123 -->');
+});
+
 test('parse_ok false は Issue 対象外になる', () => {
   assert.equal(isIssueCandidate({ parse_ok: false, app_name: '購買部管理アプリ', kind: 'bug', title: '障害' }), false);
 });

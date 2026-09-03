@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { launchArgs, main, planCommands } from './auto-session-launcher.mjs';
+import { fallbackTreePath, launchArgs, main, planCommands } from './auto-session-launcher.mjs';
 
 const sharedRepo = '/shared/repo';
 const pinnedTree = '/private/auto-session/repo';
@@ -133,6 +133,161 @@ test('専用 tree を用意できない場合だけ 1 を返して子を起動�
     assert.equal(code, 1);
     assert.equal(calls.every(({ command }) => command === 'git'), true);
     assert.ok(bootLogs.some((message) => message.includes('abort')));
+  } finally {
+    if (previousTree === undefined) delete process.env.ORGIAST_AUTO_SESSION_TREE; else process.env.ORGIAST_AUTO_SESSION_TREE = previousTree;
+  }
+});
+
+test('detach 失敗時は pinnedTree に破壊的コマンドを一切発行しない', async () => {
+  const previousTree = process.env.ORGIAST_AUTO_SESSION_TREE;
+  process.env.ORGIAST_AUTO_SESSION_TREE = pinnedTree;
+  const calls = [];
+  try {
+    await main([], {
+      exists: (candidate) => candidate === launchArgs(pinnedTree, [])[0],
+      log: () => {},
+      bootLog: () => {},
+      readdir: () => { throw new Error('no such directory'); },
+      run: async (command, args, options) => {
+        calls.push({ command, args, cwd: options?.cwd });
+        if (command === 'git' && args[0] === 'fetch') return 0;
+        if (command === 'git' && args.join(' ') === 'checkout --detach origin/main --quiet') return 1;
+        if (command === 'git' && args[0] === 'worktree' && args[1] === 'add') return 1;
+        return 0;
+      },
+    });
+  } finally {
+    if (previousTree === undefined) delete process.env.ORGIAST_AUTO_SESSION_TREE; else process.env.ORGIAST_AUTO_SESSION_TREE = previousTree;
+  }
+  const pinnedTreeCalls = calls.filter((call) => call.cwd === pinnedTree);
+  // detach（失敗した checkout --detach 自体）だけが試行され、reset/clean/stash は一切発行されない。
+  assert.deepEqual(pinnedTreeCalls.map((call) => call.args[0]), ['checkout']);
+  assert.equal(
+    calls.some((call) => call.cwd === pinnedTree && ['reset', 'clean', 'stash'].includes(call.args[0])),
+    false,
+  );
+});
+
+test('detach 失敗時は使い捨て fallback tree を作ってそこから起動する', async () => {
+  const previousTree = process.env.ORGIAST_AUTO_SESSION_TREE;
+  process.env.ORGIAST_AUTO_SESSION_TREE = pinnedTree;
+  const fixedNow = new Date(2026, 8, 3, 0, 30, 1);
+  const fallbackTree = fallbackTreePath(pinnedTree, fixedNow);
+  const calls = [];
+  const bootLogs = [];
+  try {
+    const code = await main(['--count', 'all'], {
+      now: () => fixedNow,
+      exists: (candidate) => candidate === launchArgs(pinnedTree, [])[0] || candidate === launchArgs(fallbackTree, [])[0],
+      log: () => {},
+      bootLog: (message) => bootLogs.push(message),
+      readdir: () => { throw new Error('no such directory'); },
+      run: async (command, args) => {
+        calls.push({ command, args });
+        if (command === 'git' && args[0] === 'fetch') return 0;
+        if (command === 'git' && args.join(' ') === 'checkout --detach origin/main --quiet') return 1;
+        if (command === 'git' && args.join(' ') === `worktree add --detach ${fallbackTree} origin/main`) return 0;
+        return 0;
+      },
+    });
+    assert.equal(code, 0);
+    assert.ok(calls.some((call) => call.command === 'git'
+      && call.args.join(' ') === `worktree add --detach ${fallbackTree} origin/main`));
+    const launchCall = calls.find((call) => call.command === process.execPath);
+    assert.deepEqual(launchCall.args, launchArgs(fallbackTree, ['--count', 'all']));
+    assert.ok(bootLogs.some((message) => message.includes(`launched from ${fallbackTree}`)));
+  } finally {
+    if (previousTree === undefined) delete process.env.ORGIAST_AUTO_SESSION_TREE; else process.env.ORGIAST_AUTO_SESSION_TREE = previousTree;
+  }
+});
+
+test('fetch のみ失敗した場合は fallback tree を作らず既存 tree からそのまま起動する', async () => {
+  const previousTree = process.env.ORGIAST_AUTO_SESSION_TREE;
+  process.env.ORGIAST_AUTO_SESSION_TREE = pinnedTree;
+  const calls = [];
+  const bootLogs = [];
+  try {
+    const code = await main([], {
+      exists: (candidate) => candidate === launchArgs(pinnedTree, [])[0],
+      log: () => {},
+      bootLog: (message) => bootLogs.push(message),
+      readdir: () => { throw new Error('no such directory'); },
+      run: async (command, args) => {
+        calls.push({ command, args });
+        if (command === 'git' && args[0] === 'fetch') return 1;
+        return 0;
+      },
+    });
+    assert.equal(code, 0);
+    assert.equal(calls.some((call) => call.command === 'git' && call.args[0] === 'worktree'), false);
+    const launchCall = calls.find((call) => call.command === process.execPath);
+    assert.deepEqual(launchCall.args, launchArgs(pinnedTree, []));
+    assert.ok(bootLogs.some((message) => message.includes('警告は非致命')));
+    assert.ok(bootLogs.some((message) => message.includes(`launched from ${pinnedTree}`)));
+  } finally {
+    if (previousTree === undefined) delete process.env.ORGIAST_AUTO_SESSION_TREE; else process.env.ORGIAST_AUTO_SESSION_TREE = previousTree;
+  }
+});
+
+test('fallback tree の作成にも失敗したら stale マーカーを残して既存 tree から起動する', async () => {
+  const previousTree = process.env.ORGIAST_AUTO_SESSION_TREE;
+  process.env.ORGIAST_AUTO_SESSION_TREE = pinnedTree;
+  const bootLogs = [];
+  try {
+    const code = await main([], {
+      exists: (candidate) => candidate === launchArgs(pinnedTree, [])[0],
+      log: () => {},
+      bootLog: (message) => bootLogs.push(message),
+      readdir: () => { throw new Error('no such directory'); },
+      run: async (command, args) => {
+        if (command === 'git' && args[0] === 'fetch') return 0;
+        if (command === 'git' && args.join(' ') === 'checkout --detach origin/main --quiet') return 1;
+        if (command === 'git' && args[0] === 'worktree' && args[1] === 'add') return 1;
+        return 0;
+      },
+    });
+    assert.equal(code, 0);
+    assert.ok(bootLogs.some((message) => message.includes('stale')));
+    assert.ok(bootLogs.some((message) => message.includes(`launched from ${pinnedTree}`)));
+  } finally {
+    if (previousTree === undefined) delete process.env.ORGIAST_AUTO_SESSION_TREE; else process.env.ORGIAST_AUTO_SESSION_TREE = previousTree;
+  }
+});
+
+test('3日より古い fallback tree だけ削除し、掃除が失敗しても起動まで到達する', async () => {
+  const previousTree = process.env.ORGIAST_AUTO_SESSION_TREE;
+  process.env.ORGIAST_AUTO_SESSION_TREE = pinnedTree;
+  const fixedNow = new Date(2026, 8, 3, 0, 30, 1);
+  const oldFallback = fallbackTreePath(pinnedTree, new Date(2026, 7, 25, 0, 0, 0));
+  const recentFallback = fallbackTreePath(pinnedTree, new Date(2026, 8, 2, 12, 0, 0));
+  const dir = path.dirname(pinnedTree);
+  const calls = [];
+  try {
+    const code = await main([], {
+      now: () => fixedNow,
+      exists: (candidate) => candidate === launchArgs(pinnedTree, [])[0],
+      log: () => {},
+      bootLog: () => {},
+      readdir: (target) => (target === dir
+        ? [path.basename(oldFallback), path.basename(recentFallback), 'unrelated-dir']
+        : []),
+      run: async (command, args) => {
+        calls.push({ command, args });
+        if (command === 'git' && args[0] === 'fetch') return 0;
+        if (command === 'git' && args[0] === 'worktree' && args[1] === 'remove') return 1;
+        return 0;
+      },
+    });
+    assert.equal(code, 0);
+    // 実装は path.join(dir, entry) でパスを組み立てる（OS のセパレータに正規化される）ため、
+    // 期待値も同じ組み立て方で比較する。
+    const expectedRemovedPath = path.join(dir, path.basename(oldFallback));
+    assert.ok(calls.some((call) => call.command === 'git'
+      && call.args.join(' ') === `worktree remove --force ${expectedRemovedPath}`));
+    assert.equal(
+      calls.some((call) => call.command === 'git' && call.args.some((arg) => arg.includes(path.basename(recentFallback)))),
+      false,
+    );
   } finally {
     if (previousTree === undefined) delete process.env.ORGIAST_AUTO_SESSION_TREE; else process.env.ORGIAST_AUTO_SESSION_TREE = previousTree;
   }

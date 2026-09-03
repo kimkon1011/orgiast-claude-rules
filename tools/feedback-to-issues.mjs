@@ -9,7 +9,7 @@ export const DEFAULT_REPO_MAP = {
   '購買部管理アプリ': 'kimkon1011/purchasing-management-app',
 };
 
-function clean(value) {
+export function clean(value) {
   return String(value ?? '').trim();
 }
 
@@ -88,6 +88,8 @@ export function buildIssueBody(item) {
     `Discord: ${clean(item?.discord_url) || '（記載なし）'}`,
   ];
   if (item?.has_attachment === true) lines.push('', 'スクショは Discord の元メッセージを参照');
+  // どの DM から生まれた Issue かを後から機械的に検索できるようにする(feedback-replies.mjs が使う)。
+  lines.push('', `<!-- feedback-dm:${clean(item?.message_id)} -->`);
   return lines.join('\n');
 }
 
@@ -100,7 +102,7 @@ export function selectCandidates(items, limit, mapValue = '', hostMapValue = '')
   return { selected: candidates.slice(0, limit), remaining: Math.max(0, candidates.length - limit) };
 }
 
-function parseEnvText(text) {
+export function parseEnvText(text) {
   const values = {};
   for (const line of String(text).split(/\r?\n/)) {
     const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
@@ -110,7 +112,7 @@ function parseEnvText(text) {
   return values;
 }
 
-function loadRelayConfig(home = os.homedir()) {
+export function loadRelayConfig(home = os.homedir()) {
   const fromFiles = {};
   const envDir = path.join(home, '.claude');
   let names = [];
@@ -125,13 +127,13 @@ function loadRelayConfig(home = os.homedir()) {
   };
 }
 
-function shellQuote(value) {
+export function shellQuote(value) {
   const text = String(value);
   if (process.platform === 'win32') return `"${text.replace(/%/g, '%%').replace(/"/g, '""')}"`;
   return `'${text.replace(/'/g, `'"'"'`)}'`;
 }
 
-function runGh(args, options = {}) {
+export function runGh(args, options = {}) {
   // Windows の gh.cmd は直接 spawn できないため shell を使い、値はすべて個別に quote する。
   const command = ['gh', ...args].map(shellQuote).join(' ');
   return spawnSync(command, { shell: true, encoding: 'utf8', ...options });
@@ -147,7 +149,7 @@ function relayUrls(base) {
   return { pending, ack };
 }
 
-async function relayRequest(url, secret, options = {}) {
+export async function relayRequest(url, secret, options = {}) {
   const response = await fetch(url, {
     ...options,
     headers: { Authorization: `Bearer ${secret}`, ...(options.headers || {}) },

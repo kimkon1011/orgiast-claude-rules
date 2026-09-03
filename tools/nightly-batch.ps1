@@ -274,6 +274,23 @@ try {
         }
     } else { Write-NightlyLog 'feedback-to-issues' 'skip:ファイルなし' }
 
+    # kim が Discord DM に返信した実行指示を、対応する Issue/PR にコメントとして落とす。
+    # feedback-to-issues の直後に置く(Issue が作られた後でないと返信の貼り先が無い)。
+    $feedbackReplies = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\feedback-replies.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $feedbackReplies = $candidate; break }
+    }
+    if ($feedbackReplies) {
+        try {
+            & $node.Source $feedbackReplies
+            if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'feedback-replies' ("error:終了コード" + $LASTEXITCODE + ' (警告・後続処理続行)'); Write-Warning ("nightly-batch: feedback-replies exited " + $LASTEXITCODE) } else { Write-NightlyLog 'feedback-replies' 'ok' }
+        } catch {
+            Write-NightlyLog 'feedback-replies' ("error:" + $_.Exception.Message + ' (警告・後続処理続行)')
+            Write-Warning ("nightly-batch: feedback-replies: " + $_.Exception.Message)
+        }
+    } else { Write-NightlyLog 'feedback-replies' 'skip:ファイルなし' }
+
     $growiManual = $null
     foreach ($repo in $repos) {
         $candidate = Join-Path $repo 'tools\growi-manual.mjs'

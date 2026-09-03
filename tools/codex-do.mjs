@@ -233,13 +233,13 @@ if (quotaCheck.matched) {
       '--skip-trust'
     ];
 
-    const geminiOptions = {
-      cwd,
-      env: geminiEnv,
-      shell: process.platform === 'win32'
-    };
+    // shell: true で spawn すると Windows では引数がクォートされずに連結され、
+    // `-p` の値が空白で割れて Gemini が使い方（ヘルプ）を出して exit 0 で終わる
+    // = 1行も書かずに「成功」して見える（2026-09-03 実測）。npm shim を直接指名して
+    // シェルを1層も通さないこと。
+    const geminiOptions = { cwd, env: geminiEnv };
 
-    result = await execute('gemini', geminiArgs, geminiOptions);
+    result = await execute(process.platform === 'win32' ? 'gemini.cmd' : 'gemini', geminiArgs, geminiOptions);
     if (result.status === null) {
       console.error(`[codex-do] Failed to spawn Gemini CLI fallback:`, result.error);
       result.status = 1;
@@ -251,12 +251,21 @@ const secs = (Date.now() - started) / 1000;
 const diff = spawnSync('git', ['-C', cwd, 'diff', '--stat'], { encoding: 'utf8' });
 if (diff.stdout) process.stdout.write(diff.stdout);
 // 読み取り専用の質問(説明して/調べて)では空diffが正常なので、指示自体が実装系のときだけ判定する。
+const wantedEdit = /実装|作って|修正|直して|追加して|リファクタ|refactor|fix|implement/i.test(instruction);
 if (executorName === 'codex') {
-  const wantedEdit = /実装|作って|修正|直して|追加して|リファクタ|refactor|fix|implement/i.test(instruction);
   if (wantedEdit && !result.timedOut && !diff.stdout.trim() && /実装|変更|修正|implemented|updated|modified/i.test(result.output || '')) {
     console.error('🚨 Codex は変更を書き込めていません（read-only サンドボックスの疑い）。WSL 経路で再実行してください');
     result.status = 1;
   }
+}
+// Gemini は引数を1つ取り違えるだけで使い方(ヘルプ)を出して exit 0 で終わる。
+// 出力の中身を見ないと「1行も書かずに成功」を見逃す（2026-09-03 実測）。
+if (executorName === 'gemini-cli' && wantedEdit && !result.timedOut && !diff.stdout.trim()) {
+  const printedUsage = /^\s*(Usage|使い方)[:：]|--approval-mode\s+Set the approval mode/m.test(result.output || result.stderr || '');
+  console.error(printedUsage
+    ? '🚨 Gemini が使い方(ヘルプ)を表示して終了しました＝指示が届いていません。引数の渡し方を確認してください'
+    : '🚨 Gemini は作業ツリーを1行も変更していません。指示が届いたか確認してください');
+  result.status = 1;
 }
 try {
   const ledger = path.join(home, '.claude', 'executor-usage.jsonl');

@@ -5,11 +5,23 @@ import { lastAssistantText, readStdin } from './transcript-tail.mjs';
 
 const DOC_EXTENSIONS = new Set(['.md', '.pdf', '.docx', '.xlsx', '.pptx', '.csv', '.txt']);
 const CODE_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.mjs', '.cjs', '.ps1', '.py', '.gs', '.json', '.yml', '.yaml', '.sql', '.sh', '.cmd']);
+const INTERNAL_DIRECTORY_SEGMENTS = new Set(['memory', 'projects', 'shell-snapshots', 'todos', 'skills', 'agents', 'commands', 'plugins']);
+const INTERNAL_FILENAMES = new Set(['claude.md', 'next-session.md']);
+
+function destinationPath(destination) {
+  return destination.split(/[?#]/, 1)[0].replaceAll('\\', '/');
+}
 
 function destinationExtension(destination) {
-  const withoutFragmentOrQuery = destination.split(/[?#]/, 1)[0];
-  const match = withoutFragmentOrQuery.match(/(\.[a-z0-9]+)$/i);
+  const match = destinationPath(destination).match(/(\.[a-z0-9]+)$/i);
   return match ? match[1].toLowerCase() : '';
+}
+
+function isInternalClaudePath(destination) {
+  const segments = destinationPath(destination).toLowerCase().split('/');
+  const filename = segments.at(-1);
+  return segments.slice(0, -1).some((segment) => INTERNAL_DIRECTORY_SEGMENTS.has(segment))
+    || INTERNAL_FILENAMES.has(filename);
 }
 
 export function findLocalDocLinks(text) {
@@ -21,10 +33,9 @@ export function findLocalDocLinks(text) {
   for (const match of body.matchAll(markdownLink)) {
     const label = match[1];
     const destination = match[2].replace(/^<|>$/g, '');
-    const normalized = destination.replaceAll('\\', '/').toLowerCase();
     const extension = destinationExtension(destination);
     if (/^(?:https?:\/\/|mailto:)/i.test(destination)) continue;
-    if (normalized.includes('/memory/') || normalized.includes('.claude')) continue;
+    if (isInternalClaudePath(destination)) continue;
     if (/#L\d+/i.test(destination)) continue;
     if (CODE_EXTENSIONS.has(extension)) continue;
     if (!DOC_EXTENSIONS.has(extension)) continue;

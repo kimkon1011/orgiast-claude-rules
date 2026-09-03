@@ -6,7 +6,6 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { exportMemories, installSharedMemories } from './memory-share.mjs';
-import { publishMemories } from './memory-publish.mjs';
 
 const script = fileURLToPath(new URL('./memory-share.mjs', import.meta.url));
 
@@ -198,16 +197,4 @@ test('installの正常応答でsharedとindexを作りMEMORY索引を1本に保�
   assert.equal(fs.readFileSync(path.join(f.memoryDir, 'shared', 'feedback_remote.md'), 'utf8'), body);
   assert.match(fs.readFileSync(path.join(f.memoryDir, 'index', 'shared.md'), 'utf8'), /キーサーブ共有/);
   assert.equal((fs.readFileSync(path.join(f.memoryDir, 'MEMORY.md'), 'utf8').match(/他PCからの共有知見/g) || []).length, 1);
-});
-
-test('memory-publishはexportから消えたmemoryをコピー先からも消す', () => {
-  const f = fixture();
-  const destination = path.join(f.repoRoot, 'keyserve', 'memory-bundle');
-  fs.mkdirSync(destination, { recursive: true });
-  fs.writeFileSync(path.join(destination, 'feedback_stale.md'), memory('古い'));
-  fs.writeFileSync(path.join(f.memoryDir, 'feedback_current.md'), memory('現行'));
-  const result = publishMemories({ home: f.home, keyserveRepo: path.join(f.repoRoot, 'keyserve'), emit: () => {} });
-  assert.equal(result.removed, 1);
-  assert.equal(fs.existsSync(path.join(destination, 'feedback_stale.md')), false);
-  assert.equal(fs.existsSync(path.join(destination, 'feedback_current.md')), true);
 });

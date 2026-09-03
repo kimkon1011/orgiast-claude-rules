@@ -188,6 +188,81 @@ test('installの壊れたJSONは1行ログで例外にしない', async () => {
   assert.equal(output.length, 1);
 });
 
+test('アンカーが無いMEMORY.mdでも末尾に索引行が追記される', async () => {
+  const f = fixture();
+  fs.writeFileSync(path.join(f.memoryDir, 'MEMORY.md'), '# MEMORY\n\n見出しなしの本文だけ\n');
+  fs.mkdirSync(path.join(f.repoRoot, 'memory-shared'));
+  fs.writeFileSync(path.join(f.repoRoot, 'memory-shared', 'feedback_remote.md'), memory('遠隔の知見'));
+
+  const result = await installSharedMemories(installOptions(f));
+  const contents = fs.readFileSync(path.join(f.memoryDir, 'MEMORY.md'), 'utf8');
+
+  assert.equal(result.indexed, 1);
+  assert.match(contents, /見出しなしの本文だけ/);
+  assert.match(contents, /## ドメイン索引\n- \*\*他PCからの共有知見\*\*.*\(1件\)\n$/);
+});
+
+test('既存の他PCからの共有知見行だけがある場合は重複せず置換される', async () => {
+  const f = fixture();
+  fs.writeFileSync(path.join(f.memoryDir, 'MEMORY.md'), '# MEMORY\n\n- **他PCからの共有知見** 別アカウントPCで確立した実測ノウハウ → [index/shared.md](index/shared.md) (9件)\n');
+  fs.mkdirSync(path.join(f.repoRoot, 'memory-shared'));
+  fs.writeFileSync(path.join(f.repoRoot, 'memory-shared', 'feedback_remote.md'), memory('遠隔の知見'));
+
+  const result = await installSharedMemories(installOptions(f));
+  const contents = fs.readFileSync(path.join(f.memoryDir, 'MEMORY.md'), 'utf8');
+
+  assert.equal(result.indexed, 1);
+  assert.equal((contents.match(/他PCからの共有知見/g) || []).length, 1);
+  assert.match(contents, /\(1件\)/);
+  assert.doesNotMatch(contents, /\(9件\)/);
+});
+
+test('## ドメイン索引 がある場合はその直後に挿入される(既存挙動の保護)', async () => {
+  const f = fixture();
+  fs.mkdirSync(path.join(f.repoRoot, 'memory-shared'));
+  fs.writeFileSync(path.join(f.repoRoot, 'memory-shared', 'feedback_remote.md'), memory('遠隔の知見'));
+
+  await installSharedMemories(installOptions(f));
+  const lines = fs.readFileSync(path.join(f.memoryDir, 'MEMORY.md'), 'utf8').split(/\r?\n/);
+  const headingIndex = lines.findIndex((line) => line === '## ドメイン索引');
+
+  assert.notEqual(headingIndex, -1);
+  assert.match(lines[headingIndex + 1], /他PCからの共有知見/);
+});
+
+test('MEMORY.mdが無いHOMEでもinstallSharedMemoriesが新規作成しindexedを返す', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-share-'));
+  const home = path.join(root, 'home');
+  const repoRoot = path.join(root, 'repo');
+  const memoryDir = path.join(home, '.claude', 'projects', 'project-a', 'memory');
+  fs.mkdirSync(memoryDir, { recursive: true });
+  fs.mkdirSync(path.join(repoRoot, 'memory-shared'), { recursive: true });
+  fs.writeFileSync(path.join(repoRoot, 'memory-shared', 'feedback_remote.md'), memory('遠隔の知見'));
+
+  const result = await installSharedMemories({
+    home, fromDir: path.join(repoRoot, 'memory-shared'),
+    fetchImpl: async () => { throw new Error('offline fixture'); }, emit: () => {},
+  });
+  const contents = fs.readFileSync(path.join(memoryDir, 'MEMORY.md'), 'utf8');
+
+  assert.ok(result.indexed > 0);
+  assert.match(contents, /## ドメイン索引/);
+  assert.match(contents, /他PCからの共有知見/);
+});
+
+test('CRLFのMEMORY.mdでも改行コードがCRLFのまま保たれる', async () => {
+  const f = fixture();
+  fs.writeFileSync(path.join(f.memoryDir, 'MEMORY.md'), '# MEMORY\r\n\r\n見出しなし\r\n');
+  fs.mkdirSync(path.join(f.repoRoot, 'memory-shared'));
+  fs.writeFileSync(path.join(f.repoRoot, 'memory-shared', 'feedback_remote.md'), memory('遠隔の知見'));
+
+  await installSharedMemories(installOptions(f));
+  const contents = fs.readFileSync(path.join(f.memoryDir, 'MEMORY.md'), 'utf8');
+
+  assert.equal(/[^\r]\n/.test(contents), false, 'すべての改行がCRLFであるべき');
+  assert.match(contents, /## ドメイン索引\r\n- \*\*他PCからの共有知見\*\*/);
+});
+
 test('installの正常応答でsharedとindexを作りMEMORY索引を1本に保つ', async () => {
   const f = fixture();
   const body = memory('キーサーブ共有');

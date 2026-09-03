@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { machineIdentity } from './machine-identity.mjs';
 import { parseHandoff } from './auto-session.mjs';
 import { isEntry } from './is-entry.mjs';
+import { findLatestMemoryDir } from './memory-share.mjs';
 
 const ALLOWED_KINDS = new Set(['status', 'prompt', 'enable-auto-session']);
 const DEFAULT_URL = 'https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/fleet-directives.json';
@@ -84,8 +85,30 @@ function scheduledTaskStatus(run = runSync) {
   }
 }
 
-function fitStatusLines({ header, hostLine, repoLine, jobStatus, syncLine, todoLine }) {
-  const fixedLines = [header, hostLine, repoLine, syncLine, todoLine];
+function sharedMemoryStatus(home) {
+  try {
+    const memoryDir = findLatestMemoryDir(home, () => {});
+    if (!memoryDir) return { found: false, count: 0, indexed: false };
+    let count = 0;
+    try {
+      count = fs.readdirSync(path.join(memoryDir, 'shared'), { withFileTypes: true })
+        .filter((entry) => entry.isFile() && entry.name.endsWith('.md')).length;
+    } catch {}
+    let indexed = false;
+    try { indexed = /index\/shared\.md/.test(fs.readFileSync(path.join(memoryDir, 'MEMORY.md'), 'utf8')); } catch {}
+    return { found: true, count, indexed };
+  } catch {
+    return { found: false, count: 0, indexed: false };
+  }
+}
+
+function formatMemoryLine(sharedMemory) {
+  if (!sharedMemory.found) return 'memory=なし';
+  return `memory=共有${sharedMemory.count}件 / MEMORY.md参照=${sharedMemory.indexed ? 'yes' : 'no'}`;
+}
+
+function fitStatusLines({ header, hostLine, repoLine, memoryLine, jobStatus, syncLine, todoLine }) {
+  const fixedLines = [header, hostLine, repoLine, memoryLine, syncLine, todoLine];
   const fixedLength = fixedLines.join('\n').length + 1;
   const jobBudget = Math.max(0, STATUS_TEXT_LIMIT - fixedLength);
   let jobLine;
@@ -107,7 +130,7 @@ function fitStatusLines({ header, hostLine, repoLine, jobStatus, syncLine, todoL
     jobLine = `${prefix}${included.join(' / ')}${omitted > 0 ? `${included.length ? ' / ' : ''}…(他${omitted}件を省略)` : ''}`;
   }
   if (jobLine.length > jobBudget) jobLine = jobLine.slice(0, jobBudget);
-  return [header, hostLine, repoLine, jobLine, syncLine, todoLine];
+  return [header, hostLine, repoLine, memoryLine, jobLine, syncLine, todoLine];
 }
 
 export function collectStatus({ home, repo, label, hostname, run = runSync, platform = process.platform }) {
@@ -123,16 +146,18 @@ export function collectStatus({ home, repo, label, hostname, run = runSync, plat
   const accepts = loadOptin(path.join(home, '.claude', 'fleet-agent-optin.json'));
   const jobStatus = platform === 'win32' ? scheduledTaskStatus(run) : { tasks: [], failures: [] };
   const failures = jobStatus.failures ?? [];
+  const sharedMemory = sharedMemoryStatus(home);
   const lines = fitStatusLines({
     header: `📡 **[${label}]** status`,
     hostLine: `hostname=${hostname} / OS=${platform} ${os.release()} / account=${account}`,
     repoLine: `repo=${git.branch}, origin/mainより${git.behind}コミット遅れ`,
+    memoryLine: formatMemoryLine(sharedMemory),
     jobStatus,
     syncLine: `onboarding-sync=${syncLast}`,
     todoLine: `残TODO=${todoCount} / prompt opt-in=${accepts.includes('prompt') ? 'yes' : 'no'}`,
   });
   const text = lines.join('\n');
-  return { text: redactSecrets(text), data: { label, hostname, platform, account, git, syncLast, failures, todoCount, promptOptin: accepts.includes('prompt'), checkedAt: new Date().toISOString() } };
+  return { text: redactSecrets(text), data: { label, hostname, platform, account, git, syncLast, failures, todoCount, promptOptin: accepts.includes('prompt'), sharedMemory, checkedAt: new Date().toISOString() } };
 }
 
 export function runPrompt({ claudeExe, body, cwd, timeoutSeconds = 1800, spawnImpl = spawn }) {

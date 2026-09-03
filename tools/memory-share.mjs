@@ -179,15 +179,21 @@ export function exportMemories(options = {}) {
 export function findLatestMemoryDir(home, emit = console.log) {
   const projects = path.join(home, '.claude', 'projects');
   const candidates = [];
+  const directories = [];
   try {
     for (const project of fs.readdirSync(projects, { withFileTypes: true })) {
       if (!project.isDirectory()) continue;
-      const file = path.join(projects, project.name, 'memory', 'MEMORY.md');
+      const dir = path.join(projects, project.name, 'memory');
+      const file = path.join(dir, 'MEMORY.md');
       try { candidates.push({ file, mtime: fs.statSync(file).mtimeMs }); } catch {}
+      try { directories.push({ dir, mtime: fs.statSync(dir).mtimeMs }); } catch {}
     }
   } catch (error) { if (error?.code !== 'ENOENT') emit(`失敗: ${projects} — ${oneLine(error)}`); }
   candidates.sort((a, b) => b.mtime - a.mtime);
-  return candidates[0] ? path.dirname(candidates[0].file) : '';
+  if (candidates[0]) return path.dirname(candidates[0].file);
+  // MEMORY.md がまだ無い新規PCでも memory ディレクトリ自体があれば install 先として使う
+  directories.sort((a, b) => b.mtime - a.mtime);
+  return directories[0] ? directories[0].dir : '';
 }
 
 function updateMemoryIndex(text, count) {
@@ -197,7 +203,10 @@ function updateMemoryIndex(text, count) {
   if (pattern.test(text)) return text.replace(pattern, line);
   const heading = /^## ドメイン索引\s*$/m;
   if (heading.test(text)) return text.replace(heading, (value) => `${value}${newline}${line}`);
-  return text;
+  // どちらのアンカーも無い場合: 既存本文を保持したまま末尾に見出しと索引行を追記する
+  const trimmed = text.replace(/\s+$/, '');
+  const prefix = trimmed.length > 0 ? `${trimmed}${newline}${newline}` : '';
+  return `${prefix}## ドメイン索引${newline}${line}${newline}`;
 }
 
 function bundleFiles(payload) {
@@ -278,7 +287,8 @@ export async function installSharedMemories(options = {}) {
       emit(`${dryRun ? '生成予定' : '生成'}: index/shared.md`);
       if (!dryRun) { fs.mkdirSync(path.dirname(indexPath), { recursive: true }); fs.writeFileSync(indexPath, indexBytes); }
     }
-    const current = fs.readFileSync(memoryPath, 'utf8');
+    let current;
+    try { current = fs.readFileSync(memoryPath, 'utf8'); } catch (error) { if (error?.code !== 'ENOENT') throw error; current = ''; }
     const updated = updateMemoryIndex(current, entries.length);
     if (updated !== current) {
       emit(`${dryRun ? '更新予定' : '更新'}: MEMORY.md 共有索引 (${entries.length}件)`);

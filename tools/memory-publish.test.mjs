@@ -24,7 +24,7 @@ function feedback(body) {
 }
 
 function loadGenerated(keyserveRepo) {
-  const generated = path.join(keyserveRepo, 'memory-bundle.generated.js');
+  const generated = path.join(keyserveRepo, 'api', '_memory-bundle.generated.js');
   delete require.cache[require.resolve(generated)];
   return { generated, bundle: require(generated) };
 }
@@ -73,9 +73,25 @@ test('dry-runは件数とバイト数だけ報告し何も書かない', () => {
   const result = publishMemories({ home: f.home, keyserveRepo: f.keyserveRepo, dryRun: true, emit: (line) => output.push(line) });
 
   assert.equal(result.files, 1);
+  assert.equal(fs.existsSync(path.join(f.keyserveRepo, 'api', '_memory-bundle.generated.js')), false);
   assert.equal(fs.existsSync(path.join(f.keyserveRepo, 'memory-bundle.generated.js')), false);
   assert.equal(fs.existsSync(path.join(legacy, 'keep.md')), true);
   assert.deepEqual(output, [`dry-run: memory bundle: files=1 bytes=${result.bytes}`]);
+});
+
+test('出力先が api/_memory-bundle.generated.js になり旧パスの直下ファイルは削除される', () => {
+  const f = fixture();
+  fs.writeFileSync(path.join(f.memoryDir, 'feedback_current.md'), feedback('本文'));
+  const legacyFile = path.join(f.keyserveRepo, 'memory-bundle.generated.js');
+  fs.writeFileSync(legacyFile, '// 旧・直下配信で漏洩していたファイル');
+
+  const result = publishMemories({ home: f.home, keyserveRepo: f.keyserveRepo, emit: () => {} });
+  const { generated, bundle } = loadGenerated(f.keyserveRepo);
+
+  assert.equal(generated, path.join(f.keyserveRepo, 'api', '_memory-bundle.generated.js'));
+  assert.equal(bundle.files['feedback_current.md'], feedback('本文'));
+  assert.equal(result.removedLegacyPath, true);
+  assert.equal(fs.existsSync(legacyFile), false);
 });
 
 test('memoryが0件でもfilesが空のモジュールを生成する', () => {

@@ -180,6 +180,117 @@ test('self-updates the operational copy when PSModulePath is empty', { skip: !ha
   assert.doesNotMatch(log, /warn:.*Get-FileHash/);
 });
 
+test('self-updates run-hidden.vbs when installed content differs', { skip: !hasPowerShell }, () => {
+  const fix = fixture('self-update-run-hidden-differs');
+  const installedBootstrap = join(fix.home, '.claude', 'tools', 'nightly-bootstrap.ps1');
+  const repoBootstrap = join(fix.repo, 'tools', 'nightly-bootstrap.ps1');
+  const installedVbs = join(fix.home, '.claude', 'tools', 'run-hidden.vbs');
+  const repoVbs = join(fix.repo, 'tools', 'run-hidden.vbs');
+  const target = join(fix.dir, 'target.ps1');
+
+  const bootstrapBytes = readFileSync(script);
+  mkdirSync(dirname(installedBootstrap), { recursive: true });
+  mkdirSync(dirname(repoBootstrap), { recursive: true });
+  writeFileSync(installedBootstrap, bootstrapBytes);
+  writeFileSync(repoBootstrap, bootstrapBytes);
+
+  const installedVbsBytes = Buffer.from('old vbs content\r\n', 'utf8');
+  const repoVbsBytes = Buffer.from('new vbs content\r\n', 'utf8');
+  writeFileSync(installedVbs, installedVbsBytes);
+  writeFileSync(repoVbs, repoVbsBytes);
+  writeFileSync(target, 'exit 0\r\n', 'utf8');
+
+  const result = runBootstrap(fix, target, [], {
+    ORGIAST_NIGHTLY_NO_SELF_UPDATE: '0',
+    PSModulePath: '',
+  }, undefined, installedBootstrap);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(readFileSync(installedVbs), repoVbsBytes, 'installed run-hidden.vbs was not updated');
+  assert.equal(
+    readdirSync(dirname(installedVbs)).some((name) => name.startsWith('run-hidden.vbs.new-')),
+    false,
+    'run-hidden.vbs temporary file was left behind',
+  );
+  const log = logText(fix);
+  assert.match(log, /ok:run-hidden\.vbs更新\(次回起動から新版\)/);
+});
+
+test('does not create installed run-hidden.vbs if it does not exist', { skip: !hasPowerShell }, () => {
+  const fix = fixture('self-update-run-hidden-missing');
+  const installedBootstrap = join(fix.home, '.claude', 'tools', 'nightly-bootstrap.ps1');
+  const repoBootstrap = join(fix.repo, 'tools', 'nightly-bootstrap.ps1');
+  const repoVbs = join(fix.repo, 'tools', 'run-hidden.vbs');
+  const target = join(fix.dir, 'target.ps1');
+
+  const bootstrapBytes = readFileSync(script);
+  mkdirSync(dirname(installedBootstrap), { recursive: true });
+  mkdirSync(dirname(repoBootstrap), { recursive: true });
+  writeFileSync(installedBootstrap, bootstrapBytes);
+  writeFileSync(repoBootstrap, bootstrapBytes);
+
+  const repoVbsBytes = Buffer.from('new vbs content\r\n', 'utf8');
+  writeFileSync(repoVbs, repoVbsBytes);
+  writeFileSync(target, 'exit 0\r\n', 'utf8');
+
+  const result = runBootstrap(fix, target, [], {
+    ORGIAST_NIGHTLY_NO_SELF_UPDATE: '0',
+    PSModulePath: '',
+  }, undefined, installedBootstrap);
+
+  assert.equal(result.status, 0, result.stderr);
+  const installedVbs = join(fix.home, '.claude', 'tools', 'run-hidden.vbs');
+  assert.equal(existsSync(installedVbs), false, 'run-hidden.vbs was created even though it did not exist');
+  const log = logText(fix);
+  assert.doesNotMatch(log, /run-hidden\.vbs更新/);
+});
+
+test('skips run-hidden.vbs self-update when ORGIAST_NIGHTLY_NO_SELF_UPDATE=1', { skip: !hasPowerShell }, () => {
+  const fix = fixture('self-update-run-hidden-disabled');
+  const installedBootstrap = join(fix.home, '.claude', 'tools', 'nightly-bootstrap.ps1');
+  const repoBootstrap = join(fix.repo, 'tools', 'nightly-bootstrap.ps1');
+  const installedVbs = join(fix.home, '.claude', 'tools', 'run-hidden.vbs');
+  const repoVbs = join(fix.repo, 'tools', 'run-hidden.vbs');
+  const target = join(fix.dir, 'target.ps1');
+
+  const bootstrapBytes = readFileSync(script);
+  mkdirSync(dirname(installedBootstrap), { recursive: true });
+  mkdirSync(dirname(repoBootstrap), { recursive: true });
+  writeFileSync(installedBootstrap, bootstrapBytes);
+  writeFileSync(repoBootstrap, bootstrapBytes);
+
+  const installedVbsBytes = Buffer.from('old vbs content\r\n', 'utf8');
+  const repoVbsBytes = Buffer.from('new vbs content\r\n', 'utf8');
+  writeFileSync(installedVbs, installedVbsBytes);
+  writeFileSync(repoVbs, repoVbsBytes);
+  writeFileSync(target, 'exit 0\r\n', 'utf8');
+
+  const result = runBootstrap(fix, target, [], {
+    ORGIAST_NIGHTLY_NO_SELF_UPDATE: '1',
+    PSModulePath: '',
+  }, undefined, installedBootstrap);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(readFileSync(installedVbs), installedVbsBytes, 'installed run-hidden.vbs was modified even though self-update is disabled');
+  const log = logText(fix);
+  assert.match(log, /skip:run-hidden\.vbs更新\(ORGIAST_NIGHTLY_NO_SELF_UPDATE=1のため\)/);
+});
+
+test('run-hidden.vbs self-update replaces the installed runner through a same-directory temporary file', () => {
+  const source = readFileSync(script, 'utf8');
+  const updateStart = source.indexOf("$repoRunHidden = Join-Path $repo 'tools\\run-hidden.vbs'");
+  assert.ok(updateStart > 0, 'run-hidden.vbs update block start was not found');
+  // 内側 try の "} catch {" ではなく、外側 catch の warn ログを終端にする（内側 catch の Remove-Item/throw を含めるため）
+  const updateEnd = source.indexOf("Write-NightlyLog '自己更新' (\"warn:run-hidden.vbs更新 \"", updateStart);
+  assert.ok(updateEnd > updateStart, 'run-hidden.vbs update block end was not found');
+  const update = source.slice(updateStart, updateEnd);
+  assert.match(update, /\$runHiddenTemp = \$installedRunHidden \+ '\.new-' \+ \$PID/);
+  assert.match(update, /Copy-Item[^\r\n]+-Destination \$runHiddenTemp/);
+  assert.match(update, /Move-Item -LiteralPath \$runHiddenTemp -Destination \$installedRunHidden -Force/);
+  assert.match(update, /catch \{[\s\S]*Remove-Item -LiteralPath \$runHiddenTemp -Force -ErrorAction SilentlyContinue[\s\S]*throw/);
+  assert.doesNotMatch(update, /Copy-Item[^\r\n]+-Destination \$installedRunHidden/);
+});
+
 test('self-update replaces the installed script through a same-directory temporary file', () => {
   const source = readFileSync(script, 'utf8');
   const updateStart = source.indexOf("if ($repoHash -ne $selfHash)");

@@ -1,4 +1,5 @@
 ﻿# nightly-bootstrap.ps1 — nightly 専用リポを同期して対象を実行する (Windows PowerShell 5.1)
+# 運用の設置版 (~/.claude/tools/nightly-bootstrap.ps1, run-hidden.vbs) を自己更新する。
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
@@ -165,6 +166,32 @@ try {
             }
           } catch {
             Write-NightlyLog '自己更新' ("warn:" + $_.Exception.Message)
+          }
+
+          try {
+            $repoRunHidden = Join-Path $repo 'tools\run-hidden.vbs'
+            $installedRunHidden = Join-Path $HOME '.claude\tools\run-hidden.vbs'
+            if ((Test-Path -LiteralPath $repoRunHidden -PathType Leaf) -and (Test-Path -LiteralPath $installedRunHidden -PathType Leaf)) {
+                if ($env:ORGIAST_NIGHTLY_NO_SELF_UPDATE -eq '1') {
+                    Write-NightlyLog '自己更新' 'skip:run-hidden.vbs更新(ORGIAST_NIGHTLY_NO_SELF_UPDATE=1のため)'
+                } else {
+                    $repoRunHiddenHash = Get-NightlyFileSha256 $repoRunHidden
+                    $installedRunHiddenHash = Get-NightlyFileSha256 $installedRunHidden
+                    if ($repoRunHiddenHash -ne $installedRunHiddenHash) {
+                        $runHiddenTemp = $installedRunHidden + '.new-' + $PID
+                        try {
+                            Copy-Item -LiteralPath $repoRunHidden -Destination $runHiddenTemp -Force
+                            Move-Item -LiteralPath $runHiddenTemp -Destination $installedRunHidden -Force
+                            Write-NightlyLog '自己更新' 'ok:run-hidden.vbs更新(次回起動から新版)'
+                        } catch {
+                            Remove-Item -LiteralPath $runHiddenTemp -Force -ErrorAction SilentlyContinue
+                            throw
+                        }
+                    }
+                }
+            }
+          } catch {
+            Write-NightlyLog '自己更新' ("warn:run-hidden.vbs更新 " + $_.Exception.Message)
           }
         }
 

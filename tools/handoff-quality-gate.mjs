@@ -3,6 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
+import { latestAssistantText as readLatestAssistantText, readAssistantText } from './lib/assistant-text.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const home = () => process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || os.homedir();
@@ -109,9 +110,7 @@ export function evaluateHandoff(text, { catalog, enforcement = {} } = {}) {
   return { decision: 'pass', reason: '品質手渡し', quality, routesMatched };
 }
 export function latestAssistantText(transcript) {
-  let lines = []; try { lines = fs.readFileSync(transcript, 'utf8').trimEnd().split(/\r?\n/).slice(-50); } catch { return ''; }
-  for (let i = lines.length - 1; i >= 0; i--) { try { const e = JSON.parse(lines[i]); if (e.type !== 'assistant') continue; const c = e.message?.content; return Array.isArray(c) ? c.filter(x => x.type === 'text').map(x => x.text).join('\n') : typeof c === 'string' ? c : ''; } catch {} }
-  return '';
+  return readLatestAssistantText(transcript);
 }
 export function runGate(input) {
   const text = input?.assistant_text || latestAssistantText(input?.transcript_path);
@@ -131,9 +130,9 @@ export function runGate(input) {
   }
   return { ...evaluateHandoff(text, { catalog, enforcement }), text };
 }
-function recordSkip({ sessionId = '', reason, rawHead = '' }) {
+function recordSkip({ sessionId = '', reason, reasonCode = '', rawHead = '' }) {
   const skips = path.join(home(), '.claude', 'handoff-gate-skips.jsonl');
-  const record = { ts: new Date().toISOString(), sessionId, reason, rawHead: String(rawHead).slice(0, 120) };
+  const record = { ts: new Date().toISOString(), sessionId, reason, reasonCode, rawHead: String(rawHead).slice(0, 120) };
   try {
     fs.mkdirSync(path.dirname(skips), { recursive: true });
     fs.appendFileSync(skips, JSON.stringify(record) + '\n');
@@ -158,11 +157,18 @@ async function main() {
     recordSkip({ sessionId, reason, rawHead: raw });
     return;
   }
-  const text = input?.assistant_text || latestAssistantText(input?.transcript_path);
+  const extraction = input?.assistant_text
+    ? { text: input.assistant_text, reason: 'ok', scannedLines: 0 }
+    : readAssistantText(input?.transcript_path);
+  const text = extraction.text;
   if (!text && !input?.stop_hook_active) {
-    const reason = '判定対象の本文が取得できませんでした (assistant_text/transcript_path なし)';
+    const reason = extraction.reason === 'no-path'
+      ? '判定対象の本文が取得できませんでした (transcript_path も assistant_text も渡されませんでした)'
+      : extraction.reason === 'unreadable'
+        ? `判定対象の本文が取得できませんでした (transcript_path のファイルを読めません: ${input?.transcript_path})`
+        : `判定対象の本文が取得できませんでした (transcript を遡ったが text を持つ assistant 応答がありません; ${extraction.scannedLines}行走査)`;
     console.error(`[handoff-quality-gate] ${reason}`);
-    recordSkip({ sessionId: input?.session_id || path.basename(input?.transcript_path || '', '.jsonl'), reason, rawHead: raw });
+    recordSkip({ sessionId: input?.session_id || path.basename(input?.transcript_path || '', '.jsonl'), reason, reasonCode: extraction.reason, rawHead: raw });
     return;
   }
   const result = runGate(input);

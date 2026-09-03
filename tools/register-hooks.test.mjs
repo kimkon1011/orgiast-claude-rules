@@ -43,3 +43,20 @@ test('session-relaunch hook は同期で1本だけ登録され、再実行で重
   assert.match(second, /hook は既に登録済み\(変更なし\)/);
   fs.rmSync(home, { recursive: true, force: true });
 });
+
+test('report-length-gate hook は timeout 10 で Stop に登録される', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-report-length-'));
+  const repo = path.resolve('.');
+  const settingsFile = path.join(home, '.claude', 'settings.json');
+  execFileSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], {
+    encoding: 'utf8',
+    env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo },
+  });
+  const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  const hooks = settings.hooks.Stop.flatMap((group) => group.hooks || [])
+    .filter((hook) => String(hook.command).includes('report-length-gate.mjs'));
+  assert.equal(hooks.length, 1);
+  assert.equal(hooks[0].timeout, 10);
+  assert.equal('async' in hooks[0], false);
+  fs.rmSync(home, { recursive: true, force: true });
+});

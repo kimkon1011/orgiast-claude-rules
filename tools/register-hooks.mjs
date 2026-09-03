@@ -130,6 +130,7 @@ try {
   if (add(settings.hooks.PreToolUse, 'model-agent-guard.mjs', { matcher: 'Agent|Task', hooks: [{ type: 'command', command: command('model-agent-guard.mjs') }] })) added += 1;
   // 人に手作業を頼むとき、初見の人でも実行できる手順になっているかを検査する(§1.5.1)。
   if (add(settings.hooks.Stop, 'manual-request-fullsteps-gate.mjs', { hooks: [{ type: 'command', command: command('manual-request-fullsteps-gate.mjs'), timeout: 8 }] })) added += 1;
+  if (add(settings.hooks.Stop, 'report-length-gate.mjs', { hooks: [{ type: 'command', command: command('report-length-gate.mjs'), timeout: 10 }] })) added += 1;
   if (add(settings.hooks.Stop, 'verify-before-done-detector.mjs', { hooks: [{ type: 'command', command: command('verify-before-done-detector.mjs') }] })) added += 1;
   // kim が読む文書をローカルパスのリンクで渡す違反を止める(モバイルで1クリックで開けない・2026-08-07 kim確定ルール)
   if (add(settings.hooks.Stop, 'doc-link-drive-guard.mjs', { hooks: [{ type: 'command', command: command('doc-link-drive-guard.mjs'), timeout: 10 }] })) added += 1;

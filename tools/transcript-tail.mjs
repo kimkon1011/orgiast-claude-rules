@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { latestAssistantText } from './lib/assistant-text.mjs';
 
 export function readLastLines(file, count = 50, maxBytes = 256 * 1024) {
   const stat = fs.statSync(file);
@@ -12,15 +13,7 @@ export function readLastLines(file, count = 50, maxBytes = 256 * 1024) {
 }
 
 export function lastAssistantText(transcriptPath) {
-  let latest = '';
-  for (const line of readLastLines(transcriptPath)) {
-    let event;
-    try { event = JSON.parse(line); } catch { continue; }
-    const message = event?.message;
-    if (!message || (event.type !== 'assistant' && message.role !== 'assistant') || !Array.isArray(message.content)) continue;
-    latest = message.content.filter((block) => block?.type === 'text' && typeof block.text === 'string').map((block) => block.text).join('\n');
-  }
-  return latest;
+  return latestAssistantText(transcriptPath);
 }
 
 export async function readStdin() {

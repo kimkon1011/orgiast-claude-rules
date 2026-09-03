@@ -418,13 +418,19 @@ kim:「**kim@orgiast.jp のパソコンで実行している内容が ONBOARDING
 
 **だから機体ローカルで何かを決めたら、決めた側が ONBOARDING（＝下の表）へ書いて push するまでが1タスク。**
 書かずに閉じると、他PCは古い記述を読んで**同じ調査をやり直す**（実際に 2026-09-02 に再検証が発生した）。
-`gh` 未認証の機体でも `git push origin HEAD:refs/heads/main` は通る（main に保護は無い・実測）。
+⚠️ **main は保護ブランチで直 push は `protected branch hook declined` になる**（2026-09-02 実測。
+`git push --dry-run` は保護フックを通らず「通る」ように見えるので、**dry-run を根拠にするな**）。
+`gh` 未認証の機体でも、**ブランチを push → credential helper のトークンで API から PR を作る**までは
+Claude 側で完結できる（`git credential fill` の password が PAT）。**マージだけは人が押す**——共有 repo の
+main へのマージは auto-mode 分類器が拒否する。これは正しい関門なので迂回しない。
+必須チェック `test` / `test-posix` が終わるまで `mergeable_state=blocked` なので、
+**green を API で確認してから**手順を出す（灰色のボタンを押させない）。
 
 <!-- MACHINE-STATE-START 各PCは自分の行だけを更新して push する -->
 
 | 機体 / アカウント | 起動先 `target` | 理由 | 最終更新 |
 |---|---|---|---|
-| kimko PC / seisaku-team@orgiast.jp | `terminal` | 2026-09-01 kim「+ New session を押させるな」。タブ経路は Enter が残るため | 2026-09-02 |
+| kimko PC / seisaku-team@orgiast.jp | **`inline`** | 2026-09-02 kim「なぜターミナルの Claude Code が立ち上がるの？」→「**VSCode 内で開く／同一窓に切り替え**」。`terminal`（別ウィンドウが飛び出して作業窓と並走）は撤回。`inline` は**窓もタブも増やさない**代わりに、同じ窓での **`/clear` 1打鍵が残る**（外部から `/clear` を発火させる公式手段は無いので「完全自動」と報告しない）。無人で自走させたい時だけ一時的に `--set-target terminal` | 2026-09-03 |
 | kim-PC (DESKTOP-2D0R4LI) / kim@orgiast.jp | `vscode` → **`vscode-ext` へ移行中** | kim「ターミナルじゃなくて VSCode でやる」（2026-09-02 再指示）。公式タブ経路のまま `terminal` へ落とすと kim の指示に反するので、**自前拡張 `orgiast.next-session`（統合ターミナルを argv 起動）で「VSCode のタブ」と「操作ゼロ」を両立させる**方針を選んだ。`vscode-ext` は既定にせず、実機で URI 発射を確認したPCだけが `--set-target vscode-ext` で切り替える | 2026-09-02 |
 
 <!-- MACHINE-STATE-END -->

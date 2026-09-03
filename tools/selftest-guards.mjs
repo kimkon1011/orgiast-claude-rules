@@ -156,11 +156,24 @@ function writeFableTranscript(home, name, rows) {
 function assistantRow(model, outputTokens = 100, timestamp = '2026-08-18T02:06:00.000Z') {
   return { type: 'assistant', timestamp, message: { model, usage: { output_tokens: outputTokens } } };
 }
-test('fable-session-guard: 最新応答がFable5なら切替警告を注入', () => {
+// §1.16(2026-09-03改定)以降、警告は「Fable が定額内と未確認のアカウント」でだけ出る。
+// 警告を期待するテストは planIncluded:false を明示して固定する（配布される実ファイルは true）。
+function policyDirWith(planIncluded) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orgiast-fable-policy-'));
+  fs.writeFileSync(path.join(dir, 'fable-policy.json'), JSON.stringify({ planIncluded, scope: 'supervisor-only' }));
+  return dir;
+}
+test('fable-session-guard: 定額内と未確認なら最新応答がFable5で切替警告を注入', () => {
   const home = makeTempHome('orgiast-fable-session-warn-');
   const transcript = writeFableTranscript(home, 'warn', [assistantRow('claude-opus-5'), assistantRow('claude-fable-5', 1200)]);
-  const r = run('fable-session-guard.mjs', { transcript_path: transcript, session_id: 'warn', hook_event_name: 'UserPromptSubmit' }, [], { ORGIAST_HOME: home });
+  const r = run('fable-session-guard.mjs', { transcript_path: transcript, session_id: 'warn', hook_event_name: 'UserPromptSubmit' }, [], { ORGIAST_HOME: home, ORGIAST_FABLE_POLICY_DIR: policyDirWith(false) });
   assert(r.status === 0 && r.stdout.includes('🚨') && r.stdout.includes('/model opus'), r.stdout || r.stderr);
+});
+test('fable-session-guard: 定額内(planIncluded)なら最新応答がFable5でも無出力', () => {
+  const home = makeTempHome('orgiast-fable-session-included-');
+  const transcript = writeFableTranscript(home, 'included', [assistantRow('claude-fable-5-1', 1200)]);
+  const r = run('fable-session-guard.mjs', { transcript_path: transcript, session_id: 'included', hook_event_name: 'UserPromptSubmit' }, [], { ORGIAST_HOME: home, ORGIAST_FABLE_POLICY_DIR: policyDirWith(true) });
+  assert(r.status === 0 && r.stdout === '', r.stdout || r.stderr);
 });
 test('fable-session-guard: 最新応答がOpusなら無出力', () => {
   const home = makeTempHome('orgiast-fable-session-opus-');
@@ -179,9 +192,10 @@ test('fable-session-guard: 別sessionまたは失効allowでは警告', () => {
   const home = makeTempHome('orgiast-fable-session-invalid-allow-'); const claude = path.join(home, '.claude'); fs.mkdirSync(claude, { recursive: true });
   const transcript = writeFableTranscript(home, 'target', [assistantRow('claude-fable-5')]);
   fs.writeFileSync(path.join(claude, 'fable-allow.json'), JSON.stringify({ sessionId: 'other', until: new Date(Date.now() + 60_000).toISOString() }));
-  const other = run('fable-session-guard.mjs', { transcript_path: transcript, session_id: 'target' }, [], { ORGIAST_HOME: home });
+  const policyDir = policyDirWith(false);
+  const other = run('fable-session-guard.mjs', { transcript_path: transcript, session_id: 'target' }, [], { ORGIAST_HOME: home, ORGIAST_FABLE_POLICY_DIR: policyDir });
   fs.writeFileSync(path.join(claude, 'fable-allow.json'), JSON.stringify({ sessionId: 'target', until: new Date(Date.now() - 1000).toISOString() }));
-  const expired = run('fable-session-guard.mjs', { transcript_path: transcript, session_id: 'target' }, [], { ORGIAST_HOME: home });
+  const expired = run('fable-session-guard.mjs', { transcript_path: transcript, session_id: 'target' }, [], { ORGIAST_HOME: home, ORGIAST_FABLE_POLICY_DIR: policyDir });
   assert(other.stdout.includes('🚨') && expired.stdout.includes('🚨'), `${other.stdout}\n${expired.stdout}`);
 });
 test('fable-session-guard: transcript欠損と壊れたstdinは無言exit 0', () => {
@@ -195,11 +209,12 @@ test('fable-session-guard: 巨大transcriptも末尾の最新モデルだけで�
   const fableLine = JSON.stringify(assistantRow('claude-fable-5'));
   const opusLine = JSON.stringify(assistantRow('claude-opus-5'));
   const prefix = `${fableLine}\n`.repeat(Math.ceil(1_100_000 / (fableLine.length + 1)));
+  const policyDir = policyDirWith(false);
   const latestOpus = path.join(home, 'latest-opus.jsonl'); fs.writeFileSync(latestOpus, prefix + opusLine + '\n');
-  const quiet = run('fable-session-guard.mjs', { transcript_path: latestOpus, session_id: 'latest-opus' }, [], { ORGIAST_HOME: home });
+  const quiet = run('fable-session-guard.mjs', { transcript_path: latestOpus, session_id: 'latest-opus' }, [], { ORGIAST_HOME: home, ORGIAST_FABLE_POLICY_DIR: policyDir });
   const opusPrefix = `${opusLine}\n`.repeat(Math.ceil(1_100_000 / (opusLine.length + 1)));
   const latestFable = path.join(home, 'latest-fable.jsonl'); fs.writeFileSync(latestFable, opusPrefix + fableLine + '\n');
-  const warned = run('fable-session-guard.mjs', { transcript_path: latestFable, session_id: 'latest-fable' }, [], { ORGIAST_HOME: home });
+  const warned = run('fable-session-guard.mjs', { transcript_path: latestFable, session_id: 'latest-fable' }, [], { ORGIAST_HOME: home, ORGIAST_FABLE_POLICY_DIR: policyDir });
   assert(quiet.status === 0 && quiet.stdout === '' && warned.stdout.includes('🚨'), `${quiet.stdout}\n${warned.stdout}\n${quiet.stderr}${warned.stderr}`);
 });
 test('fable-session-guard: process.exitを使わずisEntryで起動', () => {

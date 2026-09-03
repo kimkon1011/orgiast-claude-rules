@@ -1,0 +1,8 @@
+{
+  "planIncluded": true,
+  "scope": "supervisor-only",
+  "verifiedOn": "2026-09-03",
+  "evidence": "オージャスト Team プランの spend report (2026-09-01..09-02): kim@orgiast.jp / Claude Code / claude-fable-5-1 = 13 req, 51,036 out tok, total_net_spend_usd 0.00。seisaku-team@orgiast.jp / Chat / claude-fable-5 = 2 req, 0.00。usage credits 課金の機能は上限に関係なく課金されるため、$0.00 は定額内を意味する。",
+  "recheck": "claude.ai/analytics の Export spend report を出し、model が fable の行の total_net_spend_usd が 0 でなくなったら planIncluded を false に戻す。プラン変更・seat tier 変更時も再確認する。",
+  "note": "planIncluded が false のアカウントでは Fable は全用途禁止（従量課金が発生する）。scope が supervisor-only の間、サブエージェントへの Fable 指定は planIncluded に関係なく禁止。"
+}

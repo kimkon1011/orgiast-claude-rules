@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
+import { loadFablePolicy, fableAllowedForSupervisor } from './fable-policy.mjs';
 
 const TAIL_BYTES = 256 * 1024;
 
@@ -53,6 +54,8 @@ export async function main() {
   if (!raw) return;
   let input;
   try { input = JSON.parse(raw.replace(/^﻿/, '')); } catch { return; }
+  const policy = loadFablePolicy({ dir: process.env.ORGIAST_FABLE_POLICY_DIR || undefined });
+  if (fableAllowedForSupervisor(policy)) return;
   const home = process.env.ORGIAST_HOME || os.homedir();
   if (allowed(home, input.session_id)) return;
   let detected;

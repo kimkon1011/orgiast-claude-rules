@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
+import { parseCodexResetUntil, writeCodexCooldown } from './codex-cooldown.mjs';
 
 // Windows の shell 経由起動では引数がクォートされないため、この値に空白を入れると
 // -p の値が割れて Gemini が使い方(ヘルプ)を出して終わる。空白を入れないこと。
@@ -207,7 +208,12 @@ if (process.platform === 'win32' && !forceNative) {
 }
 
 const quotaCheck = detectQuotaLimit(result?.output, result?.stderr);
+let quotaResetUntil = 0;
 if (quotaCheck.matched) {
+  quotaResetUntil = parseCodexResetUntil(`${result?.output || ''}\n${result?.stderr || ''}`);
+  try {
+    writeCodexCooldown(quotaResetUntil);
+  } catch {}
   if (noFallback) {
     console.error(`[codex-do] Codex usage limit detected: ${quotaCheck.pattern} at index ${quotaCheck.index}. Context: "${quotaCheck.snippet}"`);
     console.error(`[codex-do] --no-fallback is specified. Fallback skipped.`);
@@ -272,6 +278,9 @@ if (executorName === 'gemini-cli' && wantedEdit && !result.timedOut && !diff.std
     ? '🚨 Gemini が使い方(ヘルプ)を表示して終了しました＝指示が届いていません。引数の渡し方を確認してください'
     : '🚨 Gemini は作業ツリーを1行も変更していません。指示が届いたか確認してください');
   result.status = 1;
+}
+if (executorName === 'gemini-cli' && result?.status !== 0) {
+  try { writeCodexCooldown(quotaResetUntil, undefined, 'usage_limit_no_fallback'); } catch {}
 }
 try {
   const ledger = path.join(home, '.claude', 'executor-usage.jsonl');

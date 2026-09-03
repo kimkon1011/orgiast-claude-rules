@@ -140,6 +140,22 @@ test('枠切れ発生時に --no-fallback を指定した場合はフォール�
   assert.match(result.stdout, /executor=codex/);
 });
 
+test('枠切れ検出時に provider-cooldown.json へ codex を記録する', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-cooldown-home-'));
+  const before = Date.now();
+  const mockResults = [
+    { status: 0, output: "You've hit your usage limit. Please try again in 35 minutes.", stderr: '' }
+  ];
+  const result = run(['--no-fallback', '指示内容'], {
+    home, env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults) }
+  });
+  assert.notEqual(result.status, 0);
+  const state = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'provider-cooldown.json'), 'utf8'));
+  assert.equal(state.codex.reason, 'usage_limit');
+  assert.ok(state.codex.until >= before + 35 * 60_000);
+  assert.ok(state.codex.until <= Date.now() + 35 * 60_000);
+});
+
 test('枠切れ発生時にフォールバックし、Gemini が成功した場合は 0 で終了しヘッダ・フッタを出力する', () => {
   const mockResults = [
     { status: 0, output: "You've hit your usage limit. Please try again later.", stderr: "" },
@@ -186,14 +202,17 @@ test('Gemini が何も変更せず終わったら失敗として扱う', () => {
 });
 
 test('Codex もフォールバック(Gemini) も失敗した場合は非ゼロで終了する', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-no-fallback-home-'));
   const mockResults = [
     { status: 0, output: "You've hit your usage limit. Please try again later.", stderr: "" },
     { status: 12, output: "", stderr: "Gemini execution error" }
   ];
   const result = run(['指示内容'], {
+    home,
     env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults) }
   });
   assert.equal(result.status, 12);
   assert.match(result.stdout, /executor=gemini-cli/);
+  const state = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'provider-cooldown.json'), 'utf8'));
+  assert.equal(state.codex.reason, 'usage_limit_no_fallback');
 });
-

@@ -122,6 +122,10 @@ if (mainMemory || related.length || claudeMd) {
 const prompt = `${context.join('\n')}\n\n## 実装指示\n${instruction}`.trim();
 if (dryRun) { console.log(prompt); process.exit(0); }
 
+// 実行前の作業ツリーを控える。未コミット差分が常時あるリポでは diff が空にならず、
+// 下の「空diffなら書き込めていない」判定が一度も発火しないため（2026-09-03 実害）。
+const treeSnapshot = () => `${spawnSync('git', ['-C', cwd, 'diff', '--stat'], { encoding: 'utf8' }).stdout || ''}\n${spawnSync('git', ['-C', cwd, 'status', '--porcelain'], { encoding: 'utf8' }).stdout || ''}`;
+const treeBefore = treeSnapshot();
 const started = Date.now();
 let mockIndex = 0;
 function execute(command, commandArgs, options = {}) {
@@ -258,8 +262,10 @@ const diff = spawnSync('git', ['-C', cwd, 'diff', '--stat'], { encoding: 'utf8' 
 if (diff.stdout) process.stdout.write(diff.stdout);
 // 読み取り専用の質問(説明して/調べて)では空diffが正常なので、指示自体が実装系のときだけ判定する。
 const wantedEdit = /実装|作って|修正|直して|追加して|リファクタ|refactor|fix|implement/i.test(instruction);
+// 「空か」ではなく「この実行で変わったか」を見る。
+const treeUnchanged = treeBefore.trim() === treeSnapshot().trim();
 if (executorName === 'codex') {
-  if (wantedEdit && !result.timedOut && !diff.stdout.trim() && /実装|変更|修正|implemented|updated|modified/i.test(result.output || '')) {
+  if (wantedEdit && !result.timedOut && treeUnchanged && /実装|変更|修正|implemented|updated|modified/i.test(result.output || '')) {
     console.error('🚨 Codex は変更を書き込めていません（read-only サンドボックスの疑い）。WSL 経路で再実行してください');
     result.status = 1;
   }

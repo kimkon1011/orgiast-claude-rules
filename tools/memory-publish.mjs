@@ -13,22 +13,41 @@ export function publishMemories(options = {}) {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-bundle-'));
   try {
     const exported = exportMemories({ home: options.home, outDir: temporary, channel: 'private', emit: () => {} });
-    const destination = path.join(options.keyserveRepo, 'memory-bundle');
-    const sourceNames = new Set(fs.readdirSync(temporary));
-    let copied = 0, removed = 0;
-    for (const name of sourceNames) {
-      const source = path.join(temporary, name);
-      if (!fs.statSync(source).isFile()) continue;
-      copied++;
-      if (!dryRun) { fs.mkdirSync(destination, { recursive: true }); fs.copyFileSync(source, path.join(destination, name)); }
-    }
-    if (fs.existsSync(destination)) {
-      for (const entry of fs.readdirSync(destination, { withFileTypes: true })) {
-        if (entry.isFile() && !sourceNames.has(entry.name)) { removed++; if (!dryRun) fs.rmSync(path.join(destination, entry.name)); }
+    const names = fs.readdirSync(temporary, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.md') && entry.name !== 'EXCLUDED.md')
+      .map((entry) => entry.name)
+      .sort((a, b) => a.localeCompare(b));
+    const generatedAt = (options.now || new Date()).toISOString();
+    const fileLines = names.map((name) =>
+      `    ${JSON.stringify(name)}: ${JSON.stringify(fs.readFileSync(path.join(temporary, name), 'utf8'))},`);
+    const source = [
+      '// 自動生成。編集しない。コミットしない。orgiast-claude-rules の tools/memory-publish.mjs が作る。',
+      'module.exports = {',
+      '  version: 1,',
+      '  channel: "private",',
+      `  generatedAt: ${JSON.stringify(generatedAt)},`,
+      '  files: {',
+      ...fileLines,
+      '  }',
+      '};',
+      '',
+    ].join('\n');
+    const bytes = Buffer.byteLength(source, 'utf8');
+    const destination = path.join(options.keyserveRepo, 'memory-bundle.generated.js');
+    const legacyDirectory = path.join(options.keyserveRepo, 'memory-bundle');
+    const emit = options.emit || console.log;
+    let removedLegacyDirectory = false;
+    if (!dryRun) {
+      if (fs.existsSync(legacyDirectory)) {
+        fs.rmSync(legacyDirectory, { recursive: true });
+        removedLegacyDirectory = true;
+        emit(`旧 memory-bundle/ ディレクトリを削除: ${legacyDirectory}`);
       }
+      fs.mkdirSync(options.keyserveRepo, { recursive: true });
+      fs.writeFileSync(destination, source, 'utf8');
     }
-    const result = { exported: exported.exported, copied, removed };
-    (options.emit || console.log)(`${dryRun ? 'dry-run: ' : ''}memory bundle: exported=${result.exported} copied=${copied} removed=${removed}`);
+    const result = { exported: exported.exported, files: names.length, bytes, removedLegacyDirectory };
+    emit(`${dryRun ? 'dry-run: ' : ''}memory bundle: files=${names.length} bytes=${bytes}`);
     return result;
   } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
 }

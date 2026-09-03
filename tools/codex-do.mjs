@@ -36,12 +36,15 @@ export function detectQuotaLimit(stdout, stderr) {
   return { matched: false };
 }
 
+<<<<<<< HEAD
 export function shouldFlagEmptyFallbackDiff({ executorName, wantedEdit, timedOut, diffText }) {
   // diffText は spawnSync の stdout。spawn に失敗すると null が来るので String() で畳む
   // (ここで例外を投げると「無音の故障」を検知する側が落ちて本末転倒になる)
   return executorName === 'fallback' && wantedEdit && !timedOut && !String(diffText || '').trim();
 }
 
+=======
+>>>>>>> 8398c6f (fix(codex-do): 死んでいた Gemini 無料枠フォールバックを Qwen Code + DeepSeek に置き換える)
 // 指示本文は execute() が stdin へ流す。argv には短いマーカーだけ渡す（長文を argv に載せると
 // Windows の shell:true で壊れる。§1.17）
 // shell:true の Windows では引数がエスケープされず連結されるので、
@@ -58,6 +61,7 @@ export function buildQwenArgs({ model = 'deepseek-chat', timeoutSecs = 1800, max
   ];
 }
 
+<<<<<<< HEAD
 export function buildGeminiArgs({ model = 'gemini-3.7-flash', marker = 'Follow-the-instructions-provided-on-stdin.' } = {}) {
   return ['-m', model, '--approval-mode', 'auto_edit', '--skip-trust', '-p', marker];
 }
@@ -70,6 +74,8 @@ export function buildGeminiEnv(baseEnv, apiKey) {
   };
 }
 
+=======
+>>>>>>> 8398c6f (fix(codex-do): 死んでいた Gemini 無料枠フォールバックを Qwen Code + DeepSeek に置き換える)
 export function buildQwenEnv(baseEnv, apiKey, { model = 'deepseek-chat', baseUrl = 'https://api.deepseek.com/v1' } = {}) {
   const env = { ...baseEnv };
   env.OPENAI_API_KEY = apiKey;
@@ -81,9 +87,15 @@ export function buildQwenEnv(baseEnv, apiKey, { model = 'deepseek-chat', baseUrl
   return env;
 }
 
+<<<<<<< HEAD
 export function loadEnvKey(homeDir, fileName, varName) {
   if (process.env[varName]) return process.env[varName];
   const envFile = path.join(homeDir, '.claude', fileName);
+=======
+export function loadDeepseekKey(homeDir) {
+  if (process.env.DEEPSEEK_API_KEY) return process.env.DEEPSEEK_API_KEY;
+  const envFile = path.join(homeDir, '.claude', 'deepseek.env');
+>>>>>>> 8398c6f (fix(codex-do): 死んでいた Gemini 無料枠フォールバックを Qwen Code + DeepSeek に置き換える)
   let content;
   try {
     content = fs.readFileSync(envFile, 'utf8');
@@ -93,7 +105,11 @@ export function loadEnvKey(homeDir, fileName, varName) {
   for (const rawLine of content.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line || line.startsWith('#')) continue;
+<<<<<<< HEAD
     const match = line.match(new RegExp(`^(?:export\\s+)?${varName}\\s*=\\s*(.*)$`));
+=======
+    const match = line.match(/^(?:export\s+)?DEEPSEEK_API_KEY\s*=\s*(.*)$/);
+>>>>>>> 8398c6f (fix(codex-do): 死んでいた Gemini 無料枠フォールバックを Qwen Code + DeepSeek に置き換える)
     if (!match) continue;
     let value = match[1].trim();
     if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
@@ -104,6 +120,7 @@ export function loadEnvKey(homeDir, fileName, varName) {
   return null;
 }
 
+<<<<<<< HEAD
 export function loadDeepseekKey(homeDir) {
   return loadEnvKey(homeDir, 'deepseek.env', 'DEEPSEEK_API_KEY');
 }
@@ -159,6 +176,8 @@ export function isBackendExhausted(output, stderr) {
   return patterns.some((p) => merged.includes(p));
 }
 
+=======
+>>>>>>> 8398c6f (fix(codex-do): 死んでいた Gemini 無料枠フォールバックを Qwen Code + DeepSeek に置き換える)
 if (isEntry(import.meta.url)) {
 
 const args = process.argv.slice(2);
@@ -350,6 +369,7 @@ if (quotaCheck.matched) {
       result.status = 1;
     }
   } else {
+<<<<<<< HEAD
     executorName = 'fallback';
     console.log(`[codex-do] executor=fallback (理由: Codex usage limit を検出)`);
     console.error(`[codex-do] Codex usage limit detected: ${quotaCheck.pattern} at index ${quotaCheck.index}. Context: "${quotaCheck.snippet}"`);
@@ -388,6 +408,37 @@ if (quotaCheck.matched) {
         }
         // 上限/エラー以外の失敗(実装エラー等)は次のバックエンドへ落とさず、この結果で止める。
         break;
+=======
+    executorName = 'qwen-code';
+    console.log(`[codex-do] executor=qwen-code (理由: Codex usage limit を検出)`);
+    console.error(`[codex-do] Codex usage limit detected: ${quotaCheck.pattern} at index ${quotaCheck.index}. Context: "${quotaCheck.snippet}"`);
+    console.error(`[codex-do] Falling back to Qwen Code CLI (DeepSeek backend)...`);
+
+    // フォールバック先は Qwen Code CLI + DeepSeek API。
+    // 2026-09-03 実測: Gemini CLI の OAuth 無料枠は終了しており
+    // (IneligibleTierError: This client is no longer supported for Gemini Code Assist for individuals)、
+    // 現在の gemini フォールバックは 100% 失敗する。代わりに qwen + DeepSeek が動く。
+    // qwen には gemini の auto_edit に相当する「編集だけ自動承認」モードが無く、-y なしだと
+    // 非対話モードで write_file が必ず拒否される。ただし -y 単独はシェル実行まで自動承認になるので、
+    // 必ず --exclude-tools run_shell_command と併用して「編集はできるがシェルは実行できない」=
+    // 従来の auto_edit 相当に落とすこと。この2つは常にセットで渡す。
+    // テスト実行・git 操作はできないのは仕様として受け入れる。codex-do の呼び出し側
+    // （auto-session の子セッション等）が「実装を委譲 → 自分でテストして commit/PR」という
+    // 分担で動いているため、テストと git は呼び出し側の責任。承認モードを緩めて解決してはいけない。
+    const key = loadDeepseekKey(home);
+    if (!key) {
+      console.error('DEEPSEEK_API_KEY が無いため qwen-code フォールバックを実行できません。~/.claude/deepseek.env を配置してください');
+      result.status = 1;
+    } else {
+      result = await execute('qwen', buildQwenArgs({ timeoutSecs: timeoutSeconds }), {
+        cwd,
+        env: buildQwenEnv(process.env, key),
+        shell: process.platform === 'win32'
+      });
+      if (result.status === null) {
+        console.error(`[codex-do] Failed to spawn Qwen Code CLI fallback:`, result.error);
+        result.status = 1;
+>>>>>>> 8398c6f (fix(codex-do): 死んでいた Gemini 無料枠フォールバックを Qwen Code + DeepSeek に置き換える)
       }
     }
   }
@@ -426,7 +477,11 @@ try {
   const usage = {
     t: new Date().toISOString(),
     provider: executorName,
+<<<<<<< HEAD
     model: executorName === 'fallback' ? `${reportedFallbackBackend?.name ?? 'unknown'}/${reportedFallbackBackend?.model ?? 'unknown'}` : 'codex-cli',
+=======
+    model: executorName === 'qwen-code' ? 'qwen-code/deepseek-chat' : 'codex-cli',
+>>>>>>> 8398c6f (fix(codex-do): 死んでいた Gemini 無料枠フォールバックを Qwen Code + DeepSeek に置き換える)
     in: Math.ceil(prompt.length / 4),
     out: Math.ceil((result.outputChars || 0) / 4),
     secs: Number(secs.toFixed(3))
@@ -434,6 +489,10 @@ try {
   fs.appendFileSync(ledger, `${JSON.stringify(usage)}\n`, 'utf8');
 } catch {}
 
+<<<<<<< HEAD
 console.log(`[codex-do] executor=${executorName}${executorName === 'fallback' ? `:${reportedFallbackBackend?.name ?? 'unknown'} (理由: Codex usage limit を検出)` : ''}`);
+=======
+console.log(`[codex-do] executor=${executorName}${executorName === 'qwen-code' ? ' (理由: Codex usage limit を検出)' : ''}`);
+>>>>>>> 8398c6f (fix(codex-do): 死んでいた Gemini 無料枠フォールバックを Qwen Code + DeepSeek に置き換える)
 process.exit(result?.status ?? 1);
 }

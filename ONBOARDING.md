@@ -305,7 +305,7 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
   - **軽処理（分類・抽出・OCR）→ Haiku**
   - **コード実装 → Codex**（定額枠、§1.17）
   - **社内推論（議事録採点・出展予測など出力が構造化JSON）→ 原則 Sonnet**（最高価値判断のみOpus5）。中量級の生成・推論・量産は Kimi K3（`reasoning_effort=none`）も標準経路として常用してよい。
-  - **Fable5は全用途禁止**（§1.16、別課金）
+  - **Fable は「定額内なら監督用のみ」可**（§1.16、サブエージェントは引き続き禁止）
 - 重い探索はAgentツール(Explore/general-purpose)に委譲し「結果を200字以内・コード本体は含めない」と指定
 
 詳細・Why: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/token-model-cost-routing.md`
@@ -522,13 +522,27 @@ PCがあればその瞬間に 401 で締め出され、鍵配布が全滅する�
 ②その後に `/api/memory` を足してデプロイ。復元せずに機能を足すと、足した瞬間に既存機能が消える。
 本番を触る前に「旧秘密で401か / 新秘密で200か」を**実際にHTTPで叩いて**確認する（表示や記録を完了判定にしない）。
 
-### 1.16 Fable5 の使用は中止
+### 1.16 Fable は「定額内なら監督用のみ」可（2026-09-03 改定・旧: 全用途禁止）
 
-`claude-fable-5` / `model:"fable"` は**すべての用途で禁止**（別課金枠、追加コスト）。サブエージェント・直接呼び出し・SDK経由すべて対象。生成品質はOpus、速度・単純タスクはSonnet/Haiku、コーディングはCodex（§1.17）で代替。ユーザーが明示的に「Fable5で」と言った時のみ例外。
+**監督（設計・タスク分解・指示・レビュー・検証＝メインループ）に限り Fable を使ってよい。ただし自分のアカウントで定額内と確認できている場合だけ**（判定は `tools/fable-policy.json` の `planIncluded`）。
 
-この規律は hook で機械的に強制され、Agent/Task の Fable5 指定は PreToolUse が deny する。**例外もhookが自動で扱う**: user が「Fable5で〜」と明示指定したプロンプトを UserPromptSubmit が検知して 60分・同一セッション限りの許可トークン(`~/.claude/fable-allow.json`)を発行し、その間だけ deny を通す（時間経過とセッション変更で自動失効。「Fable5は使うな」等の否定文脈では発行しない）。user 側の手作業・設定変更は不要。必須hookの欠落は SessionStart の `hook-selfcheck` が自動修復する。
+**サブエージェント / 実装 / 量産 / 分類への Fable 指定は引き続き禁止**。単価が Opus の2倍（$10/$50 vs $5/$25 per MTok）で、専用の週間上限を別に持つため、大量に挽く用途に向かない。実装は Codex（§1.17）、量産は Sonnet、分類は Haiku、長文脈は Gemini（§1.18 の委譲原則は不変）。
 
-セッション固定モデル（`/model` で fable を選んだまま）は PreToolUse では止められないため、`fable-session-guard.mjs` が UserPromptSubmit / SessionStart で自分の transcript を読み、検知して警告する。
+**なぜ変えたか（2026-09-03 実測）**: 旧ルールは「別課金枠だから全用途禁止」だったが、**前提が誤りだった**。支出レポート（claude.ai/analytics → Export spend report、期間 2026-09-01..09-02）で `claude-fable-5-1` は 13 リクエスト・出力 51,036 tok で **net $0.00 / gross $0.00**。同期間に実際に課金されていたのは `claude-sonnet-5` $8.64 と `claude-opus-5` $2.77 だけで、管理画面の「当月累計支出 $11.40」の正体は**この2つの上限超過分**（「使用クレジットをオン」により従量継続していた）であり、Fable とは無関係だった。公式ドキュメントに「usage credits 課金の機能はプランに残枠があっても credits から引かれる」とある通り、**支出が $0.00 なら定額内**。個人の使用量画面でも Fable のバーは「週間制限」の枠内に「すべてのモデル」と並び、使用に応じて増える。
+
+**罠: 専用のレート制限バーがあることは「定額内」の証明にならない**。fast mode も credits 課金なのに専用のレート制限プールを持つ。**証拠は支出レポートの金額だけ**を見ること。
+
+**再確認の手順**（プラン変更・seat tier 変更時、および疑いが出たら）: claude.ai/analytics の「How much is Claude costing?」→ Export spend report（MTD）を出し、`model` が fable の行の `total_net_spend_usd` を見る。0 でなければ `tools/fable-policy.json` の `planIncluded` を **false** に戻す。データは**1日遅れ**なので当日分は翌日にしか出ない。
+
+**機械側の強制**: `tools/fable-policy.json` が単一の設定源で、次の3つが同じファイルを読む。**`planIncluded: false` のアカウントでは従来どおり全用途禁止として振る舞う**（読めない・壊れている場合も false 扱い＝安全側）。
+
+- `fable-session-guard.mjs`（UserPromptSubmit / SessionStart）… セッション固定モデル（`/model` で fable を選んだまま）は PreToolUse では止められないため、自分の transcript の末尾 256KB だけを読んで検知する。`planIncluded` なら警告しない
+- `model-agent-guard.mjs`（PreToolUse / Agent・Task）… サブエージェントの Fable 指定を deny する（改定後も deny のまま）
+- `cost-work-loop.mjs`（日次レポート）… `planIncluded` なら 🚨 ではなく ℹ️ で報告する
+
+**例外は hook が自動で扱う**: user が「Fable5で〜」と明示指定したプロンプトを UserPromptSubmit が検知して 60分・同一セッション限りの許可トークン（`~/.claude/fable-allow.json`）を発行し、その間だけ deny を通す（時間経過とセッション変更で自動失効。「Fable5は使うな」等の否定文脈では発行しない）。user 側の手作業・設定変更は不要。必須 hook の欠落は SessionStart の `hook-selfcheck` が自動修復する。
+
+**経緯**: 2026-07-13 kim 指示「Fable5 はもう使わないように。別料金がかかるので」→ 2026-08-06 スコープを全用途へ拡大 → 2026-09-03 kim の問い「定額制の中に入っていないってことかな」を受けて実測し、前提が誤りと判明して現行ルールへ改定。
 
 ### 1.17 コーディングは Codex を主に使う（Claude Code は指揮官）
 

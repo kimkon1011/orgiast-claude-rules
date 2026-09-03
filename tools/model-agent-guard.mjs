@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadFablePolicy, fableAllowedForSubagent } from './fable-policy.mjs';
 
 let raw = '';
 process.stdin.setEncoding('utf8');
@@ -13,6 +14,12 @@ try {
   if (!/^(Agent|Task)$/.test(String(input.tool_name || ''))) process.exit(0);
   const toolInput = input.tool_input || {};
   if (/fable/i.test(`${toolInput.model || ''} ${toolInput.subagent_type || ''}`)) {
+    const policy = loadFablePolicy({ dir: process.env.ORGIAST_FABLE_POLICY_DIR || undefined });
+    if (fableAllowedForSubagent(policy)) {
+      const context = `Fable5を許可: policyによりサブエージェントでの使用が許可されています`;
+      console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: context } }));
+      process.exit(0);
+    }
     const home = process.env.ORGIAST_HOME || os.homedir();
     try {
       const allow = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'fable-allow.json'), 'utf8'));
@@ -24,7 +31,12 @@ try {
         process.exit(0);
       }
     } catch {}
-    const reason = '組織ポリシー §1.16 で Fable5(claude-fable-5)は全用途禁止(別課金枠)。model を省略(監督継承)か "sonnet"(生成/量産)/"haiku"(分類)に変えて再実行。実装なら Codex(`node tools/codex-do.mjs`)へ。';
+    let reason;
+    if (policy.planIncluded === true) {
+      reason = '§1.16(2026-09-03改定): Fable は定額内だが監督(メインループ)専用。サブエージェント=実装/量産なので単価2倍の Fable は使わない。model を省略(監督継承)か "sonnet"/"haiku" にするか、実装なら Codex(node tools/codex-do.mjs)へ委譲して再実行。';
+    } else {
+      reason = 'このアカウントでは Fable が定額内と未確認(tools/fable-policy.json)。組織ポリシー §1.16 で Fable5(claude-fable-5)は全用途禁止(別課金枠)。model を省略(監督継承)か "sonnet"(生成/量産)/"haiku"(分類)に変えて再実行。実装なら Codex(`node tools/codex-do.mjs`)へ。';
+    }
     console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason } }));
     process.exit(0);
   }

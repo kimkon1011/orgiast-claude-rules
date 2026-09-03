@@ -78,9 +78,9 @@
     {
       "id": "no-fable5",
       "source": "ONBOARDING §1.16",
-      "summary": "Fable5を使用しない",
+      "summary": "Fable をサブエージェント(実装/量産)に使わない",
       "detect": {
-        "scope": "all",
+        "scope": "session_tool_history",
         "violation": [
           "model\\s*[:=]\\s*[\"']?fable|claude-fable-5"
         ],
@@ -97,7 +97,8 @@
         "precision": 1,
         "minPrecision": 0.9,
         "status": "validated"
-      }
+      },
+      "note": "2026-09-03改定: 監督(メインループ)用のFable使用は定額内なら許可。サブエージェント(実装/量産)への指定は単価2倍のため引き続き禁止。"
     }
   ]
 }

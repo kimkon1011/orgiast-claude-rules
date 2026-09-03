@@ -15,6 +15,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { recommendations } from './eval-harness.mjs';
 import { readEnvValue } from './env-kv.mjs';
 import { isEntry } from './is-entry.mjs';
+import { loadFablePolicy } from './fable-policy.mjs';
 import { calculateDelegation, calculateLinesDelegation, collectBashProfile, collectClaudeActivityDays, collectClaudeCostStats, collectClaudeStats, collectCodexUsage, collectGitActivity, estimateSpecAuthoringTokens, formatBlockSource } from './usage-stats.mjs';
 export { codexSessionDirs, collectCodexUsage } from './usage-stats.mjs';
 // 公式 pricing 2026-08-30。Gemini token は 2026-12-31 までのプロモ価格（以降は倍）。
@@ -154,7 +155,12 @@ const TARGET_LINES = 0.50;
 if (claudeByModel.fable > 0) {
   const latest = new Date(topFableSource?.latest || Date.now()); const pad = (n) => String(n).padStart(2, '0');
   const latestText = `${latest.getFullYear()}-${pad(latest.getMonth() + 1)}-${pad(latest.getDate())} ${pad(latest.getHours())}:${pad(latest.getMinutes())}`;
-  flags.push(`🚨 Fable5使用を検出(out ${(claudeByModel.fable / 1000).toFixed(0)}k tok)=§1.16 全用途禁止(別課金枠)。発生元: ${topFableSource?.sessionId || '特定不能'}（最終 ${latestText}）— そのセッションで /model opus か /session-close。user明示指定が無ければ即停止`);
+  const policy = loadFablePolicy({ dir: process.env.ORGIAST_FABLE_POLICY_DIR || undefined });
+  if (policy.planIncluded === true) {
+    flags.push(`ℹ️ Fable 使用 out ${(claudeByModel.fable / 1000).toFixed(0)}k tok — 定額内(§1.16 改定済み・監督用途は許可)。従量課金は発生していない。単価は Opus の2倍なので実装/量産には使わない（発生元: ${topFableSource?.sessionId || '特定不能'} / 最終 ${latestText}）`);
+  } else {
+    flags.push(`🚨 Fable5使用を検出(out ${(claudeByModel.fable / 1000).toFixed(0)}k tok)=§1.16 全用途禁止(別課金枠)。発生元: ${topFableSource?.sessionId || '特定不能'}（最終 ${latestText}）— そのセッションで /model opus か /session-close。user明示指定が無ければ即停止`);
+  }
 }
 if (claudeOut >= 1e6 && typeof linesRatio === 'number' && Number.isFinite(linesRatio) && linesRatio < TARGET_LINES) flags.push(`🚨 実装の委譲不足: 行ベース委譲率${(linesRatio * 100).toFixed(0)}%(目標${TARGET_LINES * 100}%↑)。実装→Codex/量産→Groq/汎用安→OpenRouter/中量級→Kimi K3 へ回す`);
 else if (claudeOut >= 1e6 && typeof linesRatio === 'number' && Number.isFinite(linesRatio) && linesRatio >= TARGET_LINES && delegRatio < TARGET_DELEG) flags.push(`ℹ️ 実装は委譲できている(行ベース${(linesRatio * 100).toFixed(0)}%)が、監督の出力量自体が大きい(トークン委譲率${(delegRatio * 100).toFixed(0)}% / 監督out ${(claudeOut / 1000).toFixed(0)}k tok)。thinking と報告文が主因で、これは品質を削らない限り下がらない — 判定には使わない`);

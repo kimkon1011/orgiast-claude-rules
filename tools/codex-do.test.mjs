@@ -7,7 +7,14 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { needsWorktreeRepair, detectQuotaLimit } = await import('./codex-do.mjs');
+const { needsWorktreeRepair, detectQuotaLimit, GEMINI_PROMPT_FLAG } = await import('./codex-do.mjs');
+
+test('Gemini に渡す -p の値には空白を含めない', () => {
+  // Windows の shell 経由起動では引数がクォートされず、空白があると値が割れて
+  // Gemini が使い方(ヘルプ)を出して exit 0 で終わる（2026-09-03 実測）。
+  assert.ok(GEMINI_PROMPT_FLAG.length > 0);
+  assert.doesNotMatch(GEMINI_PROMPT_FLAG, /\s/);
+});
 
 function run(args, options = {}) {
   return spawnSync(process.execPath, [tool, ...args], {
@@ -144,6 +151,38 @@ test('枠切れ発生時にフォールバックし、Gemini が成功した場�
   assert.equal(result.status, 0);
   assert.match(result.stdout, /executor=gemini-cli/);
   assert.match(result.stderr, /Falling back to Gemini CLI/);
+});
+
+function emptyRepo() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-repo-'));
+  spawnSync('git', ['-C', dir, 'init', '-q'], { encoding: 'utf8' });
+  return dir;
+}
+
+test('Gemini が使い方(ヘルプ)を出して exit 0 で終わったら失敗として扱う', () => {
+  // 引数を1つ取り違えるだけでヘルプが出て exit 0 になり、1行も書いていないのに
+  // 成功に見える(2026-09-03 実測: shell:true で -p の値が空白で割れていた)。
+  const mockResults = [
+    { status: 0, output: "You've hit your usage limit. Please try again later.", stderr: '' },
+    { status: 0, output: 'Usage: gemini [options]\n      --approval-mode             Set the approval mode: default\n', stderr: '' }
+  ];
+  const result = run(['実装して', '--cwd', emptyRepo()], {
+    env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults) }
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /使い方\(ヘルプ\)を表示して終了/);
+});
+
+test('Gemini が何も変更せず終わったら失敗として扱う', () => {
+  const mockResults = [
+    { status: 0, output: "You've hit your usage limit. Please try again later.", stderr: '' },
+    { status: 0, output: '対応しました。', stderr: '' }
+  ];
+  const result = run(['実装して', '--cwd', emptyRepo()], {
+    env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults) }
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /1行も変更していません/);
 });
 
 test('Codex もフォールバック(Gemini) も失敗した場合は非ゼロで終了する', () => {

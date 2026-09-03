@@ -497,7 +497,7 @@ export function build(current, body, label) {
 async function main() { try {
   const now = new Date();
   // rules/ 配下は paths: が無いと全リクエストで自動ロードされる(実測 23,288 tok/req)。
-  // 日次ガードより前に自己修復する。削除ではなく移動にするのは、次の同期まで最大20時間
+  // 日次ガードより前に自己修復する。削除ではなく移動にするのは、次の同期までの間
   // 全文がローカルから消える窓を作らないため。
   const oldRulesPath = path.join(home, '.claude', 'rules', 'orgiast-onboarding.md');
   const rulesPath = path.join(home, '.claude', 'orgiast-onboarding.md');
@@ -510,10 +510,20 @@ async function main() { try {
   await syncRepository(now);
   await provisionKeys(now);
   const oldState = state();
-  if (!force && !dryRun && oldState?.lastCheck && now - new Date(oldState.lastCheck) < 20 * 60 * 60 * 1000) return;
+  // 間引きは「分」で持つ。20時間だと、片方のPCがルールへ書いた結論がもう片方へ最大20時間届かず、
+  // その間 repo 側(tools/rules/skills)の更新ログだけ出るので**同期は成功したように見える**
+  // (2026-09-02 実害: 直したはずの ONBOARDING が別PCで古いまま読まれ、同じ調査をやり直した)。
+  // 全文は 90KB 程度なので、セッション開始ごとに取り直しても実質コストは無い。
+  const minIntervalMin = Number(process.env.ORGIAST_ONBOARDING_MIN_INTERVAL_MIN ?? 15);
+  const sinceMs = oldState?.lastCheck ? now - new Date(oldState.lastCheck) : Infinity;
+  if (!force && !dryRun && Number.isFinite(minIntervalMin) && minIntervalMin > 0 && sinceMs < minIntervalMin * 60 * 1000) {
+    // 黙って return しない。スキップしたことを必ず残す（残さないと「古い版のまま」が見えない）。
+    console.log(`[onboarding-sync] ONBOARDING の取得をスキップ (前回 ${Math.round(sinceMs / 60000)} 分前 / 間引き ${minIntervalMin} 分 / 強制するなら --force)`);
+    return;
+  }
   let bodyBytes;
   try {
-    const response = await fetch(rawUrl, { signal: AbortSignal.timeout(15000) });
+    const response = await fetch(rawUrl, { cache: 'no-store', headers: { 'Cache-Control': 'no-cache' }, signal: AbortSignal.timeout(15000) });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     bodyBytes = Buffer.from(await response.arrayBuffer());
   } catch (e) { log(`fetch failed: ${e.message}`); return; }

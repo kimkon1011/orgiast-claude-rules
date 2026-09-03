@@ -5,6 +5,10 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
 
+// Windows の shell 経由起動では引数がクォートされないため、この値に空白を入れると
+// -p の値が割れて Gemini が使い方(ヘルプ)を出して終わる。空白を入れないこと。
+export const GEMINI_PROMPT_FLAG = 'Execute_the_implementation_instructions_provided_on_stdin.';
+
 export function needsWorktreeRepair(gitFileContent) {
   return /^gitdir:\s*[A-Za-z]:/i.test(String(gitFileContent ?? '').trim());
 }
@@ -227,19 +231,21 @@ if (quotaCheck.matched) {
     // これは仕様として受け入れる。codex-do の呼び出し側（auto-session の子セッション等）が
     // 「実装を委譲 → 自分でテストして commit/PR」という分担で動いているため、
     // テストと git は呼び出し側の責任。承認モードを緩めて解決してはいけない。
+    // Windows では gemini は .cmd(npm shim) なので shell 経由でしか起動できない
+    // （shell:false は Node 24 で spawn EINVAL）。その shell が引数をクォートせず
+    // 連結するため、`-p` の値に空白があると割れて Gemini が使い方(ヘルプ)を出して
+    // exit 0 で終わる = 1行も書かずに「成功」して見える（2026-09-03 実測）。
+    // 指示本体は stdin から渡っており（--prompt は stdin の入力に追記される）
+    // `-p` の値は実質使われないので、空白を含めないことで両方を回避する。
     const geminiArgs = [
-      '-p', 'Please execute implementation instructions:',
+      '-p', GEMINI_PROMPT_FLAG,
       '--approval-mode', 'auto_edit',
       '--skip-trust'
     ];
 
-    // shell: true で spawn すると Windows では引数がクォートされずに連結され、
-    // `-p` の値が空白で割れて Gemini が使い方（ヘルプ）を出して exit 0 で終わる
-    // = 1行も書かずに「成功」して見える（2026-09-03 実測）。npm shim を直接指名して
-    // シェルを1層も通さないこと。
-    const geminiOptions = { cwd, env: geminiEnv };
+    const geminiOptions = { cwd, env: geminiEnv, shell: process.platform === 'win32' };
 
-    result = await execute(process.platform === 'win32' ? 'gemini.cmd' : 'gemini', geminiArgs, geminiOptions);
+    result = await execute('gemini', geminiArgs, geminiOptions);
     if (result.status === null) {
       console.error(`[codex-do] Failed to spawn Gemini CLI fallback:`, result.error);
       result.status = 1;

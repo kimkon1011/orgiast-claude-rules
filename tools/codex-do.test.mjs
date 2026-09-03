@@ -7,7 +7,14 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { needsWorktreeRepair, detectQuotaLimit } = await import('./codex-do.mjs');
+const { needsWorktreeRepair, detectQuotaLimit, GEMINI_PROMPT_FLAG } = await import('./codex-do.mjs');
+
+test('Gemini に渡す -p の値には空白を含めない', () => {
+  // Windows の shell 経由起動では引数がクォートされず、空白があると値が割れて
+  // Gemini が使い方(ヘルプ)を出して exit 0 で終わる（2026-09-03 実測）。
+  assert.ok(GEMINI_PROMPT_FLAG.length > 0);
+  assert.doesNotMatch(GEMINI_PROMPT_FLAG, /\s/);
+});
 
 function run(args, options = {}) {
   return spawnSync(process.execPath, [tool, ...args], {

@@ -9,11 +9,34 @@ export function needsWorktreeRepair(gitFileContent) {
   return /^gitdir:\s*[A-Za-z]:/i.test(String(gitFileContent ?? '').trim());
 }
 
+export function detectQuotaLimit(stdout, stderr) {
+  const merged = `${stdout || ''}\n${stderr || ''}`;
+  const patterns = [
+    { name: "You've hit your usage limit", regex: /You've hit your usage limit/i },
+    { name: "usage limit", regex: /usage limit/i },
+    { name: "rate limit", regex: /rate limit/i },
+    { name: "429", regex: /429/i },
+    { name: "Upgrade to Pro", regex: /Upgrade to Pro/i }
+  ];
+  for (const { name, regex } of patterns) {
+    const match = merged.match(regex);
+    if (match) {
+      const index = match.index;
+      const start = Math.max(0, index - 40);
+      const end = Math.min(merged.length, index + match[0].length + 40);
+      const snippet = merged.slice(start, end).replace(/\r?\n/g, ' ');
+      return { matched: true, pattern: name, index, snippet };
+    }
+  }
+  return { matched: false };
+}
+
 if (isEntry(import.meta.url)) {
 
 const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
 const forceNative = args.includes('--force-native');
+const noFallback = args.includes('--no-fallback');
 const cwdIndex = args.indexOf('--cwd');
 const promptFileIndex = args.indexOf('--prompt-file');
 const timeoutIndex = args.indexOf('--timeout');
@@ -22,10 +45,11 @@ const cwd = path.resolve(cwdIndex >= 0 && args[cwdIndex + 1] ? args[cwdIndex + 1
 const omitted = new Set();
 if (dryRun) omitted.add(args.indexOf('--dry-run'));
 if (forceNative) omitted.add(args.indexOf('--force-native'));
+if (noFallback) omitted.add(args.indexOf('--no-fallback'));
 if (cwdIndex >= 0) { omitted.add(cwdIndex); omitted.add(cwdIndex + 1); }
 if (promptFileIndex >= 0) { omitted.add(promptFileIndex); omitted.add(promptFileIndex + 1); }
 if (timeoutIndex >= 0) { omitted.add(timeoutIndex); omitted.add(timeoutIndex + 1); }
-const usage = '使い方: node tools/codex-do.mjs "<指示>" [--cwd <path>] [--prompt-file <file>] [--timeout <秒>] [--dry-run]';
+const usage = '使い方: node tools/codex-do.mjs "<指示>" [--cwd <path>] [--prompt-file <file>] [--timeout <秒>] [--dry-run] [--no-fallback]';
 
 // タイムアウト既定30分。無限に待って気付かないより、切って原因を見に行くほうが安い。
 const timeoutSeconds = timeoutIndex >= 0 ? Number(args[timeoutIndex + 1]) : 1800;
@@ -95,28 +119,54 @@ const prompt = `${context.join('\n')}\n\n## 実装指示\n${instruction}`.trim()
 if (dryRun) { console.log(prompt); process.exit(0); }
 
 const started = Date.now();
+let mockIndex = 0;
 function execute(command, commandArgs, options = {}) {
+  if (process.env.CODEX_DO_MOCK_RESULTS) {
+    try {
+      const mocks = JSON.parse(process.env.CODEX_DO_MOCK_RESULTS);
+      const mock = mocks[mockIndex++];
+      if (mock) {
+        if (mock.output) process.stdout.write(mock.output);
+        if (mock.stderr) process.stderr.write(mock.stderr);
+        return Promise.resolve({
+          status: mock.status !== undefined ? mock.status : 0,
+          output: mock.output || '',
+          stderr: mock.stderr || '',
+          outputChars: (mock.output || '').length,
+          timedOut: mock.timedOut || false,
+          error: mock.error || null
+        });
+      }
+    } catch (e) {
+      console.error('[MOCK ERROR]', e);
+    }
+  }
   return new Promise((resolve) => {
-    let outputChars = 0, output = '', timedOut = false;
+    let outputChars = 0, output = '', stderr = '', timedOut = false;
     // stdio を全て pipe にして TTY を渡さない。TTY 付きで起動すると codex が端末入力を
     // 待ったまま眠り続ける(2026-08-26 に 1日00:57 hang した実害)。
     const child = spawn(command, commandArgs, { ...options, stdio: ['pipe', 'pipe', 'pipe'] });
     const timer = setTimeout(() => {
       timedOut = true;
-      console.error(`\n⏱ Codex が ${timeoutSeconds} 秒で応答を終えなかったので停止しました。--timeout で延長できます`);
+      console.error(`\n⏱ ${command} が ${timeoutSeconds} 秒で応答を終えなかったので停止しました。--timeout で延長できます`);
       child.kill('SIGKILL');
     }, timeoutSeconds * 1000);
     timer.unref?.();
     child.stdout.on('data', (chunk) => { outputChars += chunk.length; output += chunk.toString(); process.stdout.write(chunk); });
-    child.stderr.on('data', (chunk) => { process.stderr.write(chunk); });
-    child.on('error', (error) => { clearTimeout(timer); resolve({ status: null, error, outputChars, output }); });
-    child.on('close', (status) => { clearTimeout(timer); resolve({ status: timedOut ? 124 : status, outputChars, output, timedOut }); });
+    child.stderr.on('data', (chunk) => { stderr += chunk.toString(); process.stderr.write(chunk); });
+    child.on('error', (error) => { clearTimeout(timer); resolve({ status: null, error, outputChars, output, stderr }); });
+    child.on('close', (status) => { clearTimeout(timer); resolve({ status: timedOut ? 124 : status, outputChars, output, stderr, timedOut }); });
     // 指示は stdin で渡し、必ず閉じる。閉じないと codex が
     // "Reading additional input from stdin..." のまま永久に待つ。
     child.stdin.end(prompt);
   });
 }
 let result;
+let executorName = 'codex';
+
+// 先頭に1行で出力する
+console.log('[codex-do] executor=codex');
+
 if (process.platform === 'win32' && !forceNative) {
   const listed = spawnSync('wsl', ['-l', '-q'], { encoding: 'utf16le', timeout: 15000 });
   const distros = listed.status === 0 ? listed.stdout.split(/\r?\n/).map((x) => x.replace(/\0/g, '').trim()).filter(Boolean) : [];
@@ -151,20 +201,77 @@ if (process.platform === 'win32' && !forceNative) {
   if (process.platform === 'win32') console.error('⚠️ --force-native によりネイティブ Windows codex で実行します。編集が保存されない可能性があります');
   result = await execute('codex', ['exec', '-s', 'workspace-write', '-'], { cwd });
 }
+
+const quotaCheck = detectQuotaLimit(result?.output, result?.stderr);
+if (quotaCheck.matched) {
+  if (noFallback) {
+    console.error(`[codex-do] Codex usage limit detected: ${quotaCheck.pattern} at index ${quotaCheck.index}. Context: "${quotaCheck.snippet}"`);
+    console.error(`[codex-do] --no-fallback is specified. Fallback skipped.`);
+    if (result.status === 0 || result.status === null) {
+      result.status = 1;
+    }
+  } else {
+    executorName = 'gemini-cli';
+    console.log(`[codex-do] executor=gemini-cli (理由: Codex usage limit を検出)`);
+    console.error(`[codex-do] Codex usage limit detected: ${quotaCheck.pattern} at index ${quotaCheck.index}. Context: "${quotaCheck.snippet}"`);
+    console.error(`[codex-do] Falling back to Gemini CLI (free OAuth tier)...`);
+
+    const geminiEnv = { ...process.env };
+    delete geminiEnv.GEMINI_API_KEY;
+    delete geminiEnv.GOOGLE_API_KEY;
+
+    // approval-mode は auto_edit（編集ツールのみ自動承認）に留める。yolo にはしない。
+    // 2026-09-03 実測: auto_edit の Gemini は run_shell_command が
+    // "Unauthorized tool call" で弾かれるため、コードは書けるが
+    // テスト実行・git 操作はできない（195行書けてテスト0件・コミット0件だった）。
+    // これは仕様として受け入れる。codex-do の呼び出し側（auto-session の子セッション等）が
+    // 「実装を委譲 → 自分でテストして commit/PR」という分担で動いているため、
+    // テストと git は呼び出し側の責任。承認モードを緩めて解決してはいけない。
+    const geminiArgs = [
+      '-p', 'Please execute implementation instructions:',
+      '--approval-mode', 'auto_edit',
+      '--skip-trust'
+    ];
+
+    const geminiOptions = {
+      cwd,
+      env: geminiEnv,
+      shell: process.platform === 'win32'
+    };
+
+    result = await execute('gemini', geminiArgs, geminiOptions);
+    if (result.status === null) {
+      console.error(`[codex-do] Failed to spawn Gemini CLI fallback:`, result.error);
+      result.status = 1;
+    }
+  }
+}
+
 const secs = (Date.now() - started) / 1000;
 const diff = spawnSync('git', ['-C', cwd, 'diff', '--stat'], { encoding: 'utf8' });
 if (diff.stdout) process.stdout.write(diff.stdout);
 // 読み取り専用の質問(説明して/調べて)では空diffが正常なので、指示自体が実装系のときだけ判定する。
-const wantedEdit = /実装|作って|修正|直して|追加して|リファクタ|refactor|fix|implement/i.test(instruction);
-if (wantedEdit && !result.timedOut && !diff.stdout.trim() && /実装|変更|修正|implemented|updated|modified/i.test(result.output || '')) {
-  console.error('🚨 Codex は変更を書き込めていません（read-only サンドボックスの疑い）。WSL 経路で再実行してください');
-  result.status = 1;
+if (executorName === 'codex') {
+  const wantedEdit = /実装|作って|修正|直して|追加して|リファクタ|refactor|fix|implement/i.test(instruction);
+  if (wantedEdit && !result.timedOut && !diff.stdout.trim() && /実装|変更|修正|implemented|updated|modified/i.test(result.output || '')) {
+    console.error('🚨 Codex は変更を書き込めていません（read-only サンドボックスの疑い）。WSL 経路で再実行してください');
+    result.status = 1;
+  }
 }
 try {
   const ledger = path.join(home, '.claude', 'executor-usage.jsonl');
   fs.mkdirSync(path.dirname(ledger), { recursive: true });
-  const usage = { t: new Date().toISOString(), provider: 'codex', model: 'codex-cli', in: Math.ceil(prompt.length / 4), out: Math.ceil((result.outputChars || 0) / 4), secs: Number(secs.toFixed(3)) };
+  const usage = {
+    t: new Date().toISOString(),
+    provider: executorName,
+    model: executorName === 'gemini-cli' ? 'gemini-cli-oauth' : 'codex-cli',
+    in: Math.ceil(prompt.length / 4),
+    out: Math.ceil((result.outputChars || 0) / 4),
+    secs: Number(secs.toFixed(3))
+  };
   fs.appendFileSync(ledger, `${JSON.stringify(usage)}\n`, 'utf8');
 } catch {}
+
+console.log(`[codex-do] executor=${executorName}${executorName === 'gemini-cli' ? ' (理由: Codex usage limit を検出)' : ''}`);
 process.exit(result?.status ?? 1);
 }

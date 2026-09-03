@@ -7,13 +7,17 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { needsWorktreeRepair } = await import('./codex-do.mjs');
+const { needsWorktreeRepair, detectQuotaLimit } = await import('./codex-do.mjs');
 
 function run(args, options = {}) {
   return spawnSync(process.execPath, [tool, ...args], {
     encoding: 'utf8',
     timeout: 30000,
-    env: { ...process.env, ORGIAST_HOME: options.home ?? fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-home-')) },
+    env: {
+      ...process.env,
+      ORGIAST_HOME: options.home ?? fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-home-')),
+      ...options.env
+    },
   });
 }
 
@@ -76,3 +80,81 @@ test('Windows 絶対パスの gitdir だけ worktree repair 対象にする', ()
   assert.equal(needsWorktreeRepair('gitdir: C:/Users/example/repo/.git/worktrees/linked\n'), true);
   assert.equal(needsWorktreeRepair('gitdir: ../../../.git/worktrees/linked\n'), false);
 });
+
+test('detectQuotaLimit: 枠切れメッセージ (You\'ve hit your usage limit) を検出する', () => {
+  const stdout = 'ERROR: You\'ve hit your usage limit. Upgrade to Pro...';
+  const check = detectQuotaLimit(stdout, '');
+  assert.equal(check.matched, true);
+  assert.equal(check.pattern, "You've hit your usage limit");
+  assert.match(check.snippet, /You've hit your usage limit/);
+});
+
+test('detectQuotaLimit: 枠切れメッセージ (Upgrade to Pro) を検出する', () => {
+  const stderr = 'Please visit chatgpt.com/explore/pro to Upgrade to Pro';
+  const check = detectQuotaLimit('', stderr);
+  assert.equal(check.matched, true);
+  assert.equal(check.pattern, "Upgrade to Pro");
+});
+
+test('detectQuotaLimit: 枠切れメッセージ (rate limit / 429) を検出する', () => {
+  const checkStderr = detectQuotaLimit('', 'Error: rate limit exceeded (429)');
+  assert.equal(checkStderr.matched, true);
+  assert.equal(checkStderr.pattern, "rate limit");
+
+  const check429 = detectQuotaLimit('', 'HTTP 429 Too Many Requests');
+  assert.equal(check429.matched, true);
+  assert.equal(check429.pattern, "429");
+});
+
+test('detectQuotaLimit: 通常のエラー出力やテスト失敗では検出しない', () => {
+  const stderr = 'Error: AssertionError [ERR_ASSERTION]: Expected true but got false\nReferenceError: x is not defined';
+  const check = detectQuotaLimit('', stderr);
+  assert.equal(check.matched, false);
+});
+
+test('--no-fallback が指定されても指示文が引数として食われず、正しく除外される', () => {
+  const result = run(['--dry-run', '--no-fallback', 'これは指示文です']);
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /これは指示文です/);
+  assert.doesNotMatch(result.stdout, /--no-fallback/);
+});
+
+test('枠切れ発生時に --no-fallback を指定した場合はフォールバックせず非ゼロ終了する', () => {
+  const mockResults = [
+    { status: 0, output: "You've hit your usage limit. Please try again later.", stderr: "" }
+  ];
+  const result = run(['--no-fallback', '指示内容'], {
+    env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults) }
+  });
+  // フォールバックしないため非ゼロ終了
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Codex usage limit detected/);
+  assert.match(result.stderr, /--no-fallback is specified/);
+  assert.match(result.stdout, /executor=codex/);
+});
+
+test('枠切れ発生時にフォールバックし、Gemini が成功した場合は 0 で終了しヘッダ・フッタを出力する', () => {
+  const mockResults = [
+    { status: 0, output: "You've hit your usage limit. Please try again later.", stderr: "" },
+    { status: 0, output: "Gemini CLI has successfully edited files.", stderr: "" }
+  ];
+  const result = run(['指示内容'], {
+    env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults) }
+  });
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /executor=gemini-cli/);
+  assert.match(result.stderr, /Falling back to Gemini CLI/);
+});
+
+test('Codex もフォールバック(Gemini) も失敗した場合は非ゼロで終了する', () => {
+  const mockResults = [
+    { status: 0, output: "You've hit your usage limit. Please try again later.", stderr: "" },
+    { status: 12, output: "", stderr: "Gemini execution error" }
+  ];
+  const result = run(['指示内容'], {
+    env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults) }
+  });
+  assert.equal(result.status, 12);
+  assert.match(result.stdout, /executor=gemini-cli/);
+});
+

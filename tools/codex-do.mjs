@@ -58,9 +58,9 @@ export function buildQwenEnv(baseEnv, apiKey, { model = 'deepseek-chat', baseUrl
   return env;
 }
 
-export function loadDeepseekKey(homeDir) {
-  if (process.env.DEEPSEEK_API_KEY) return process.env.DEEPSEEK_API_KEY;
-  const envFile = path.join(homeDir, '.claude', 'deepseek.env');
+export function loadEnvKey(homeDir, fileName, varName) {
+  if (process.env[varName]) return process.env[varName];
+  const envFile = path.join(homeDir, '.claude', fileName);
   let content;
   try {
     content = fs.readFileSync(envFile, 'utf8');
@@ -70,7 +70,7 @@ export function loadDeepseekKey(homeDir) {
   for (const rawLine of content.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line || line.startsWith('#')) continue;
-    const match = line.match(/^(?:export\s+)?DEEPSEEK_API_KEY\s*=\s*(.*)$/);
+    const match = line.match(new RegExp(`^(?:export\\s+)?${varName}\\s*=\\s*(.*)$`));
     if (!match) continue;
     let value = match[1].trim();
     if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
@@ -79,6 +79,56 @@ export function loadDeepseekKey(homeDir) {
     return value;
   }
   return null;
+}
+
+export function loadDeepseekKey(homeDir) {
+  return loadEnvKey(homeDir, 'deepseek.env', 'DEEPSEEK_API_KEY');
+}
+
+// 2026-09-03 実測: deepseek 5/5 / north-mini-code:free 1/5 / glm-5.2:free は 368 秒で打ち切り。
+// 無料モデルは rc=0 のまま誤った実装を書くため既定にしない。
+// 費用ゼロを優先したいときだけ CODEX_DO_PREFER_FREE=1 を立てる。
+export function resolveQwenBackends(homeDir) {
+  const backends = [];
+  const openrouterKey = loadEnvKey(homeDir, 'openrouter.env', 'OPENROUTER_API_KEY');
+  const deepseekKey = loadDeepseekKey(homeDir);
+  const preferFree = process.env.CODEX_DO_PREFER_FREE === '1';
+  const pushOpenrouter = () => {
+    if (openrouterKey) {
+      backends.push({
+        name: 'openrouter-free',
+        model: process.env.CODEX_DO_FREE_MODEL || 'cohere/north-mini-code:free',
+        baseUrl: 'https://openrouter.ai/api/v1',
+        apiKey: openrouterKey
+      });
+    }
+  };
+  const pushDeepseek = () => {
+    if (deepseekKey) {
+      backends.push({
+        name: 'deepseek',
+        model: 'deepseek-chat',
+        baseUrl: 'https://api.deepseek.com/v1',
+        apiKey: deepseekKey
+      });
+    }
+  };
+  if (preferFree) {
+    pushOpenrouter();
+    pushDeepseek();
+  } else {
+    pushDeepseek();
+    pushOpenrouter();
+  }
+  return backends;
+}
+
+// 無料枠の上限(429 / rate limit / quota / insufficient / Request too large / 413)に
+// 当たった時に次のバックエンドへ落とすための判定。
+export function isBackendExhausted(output, stderr) {
+  const merged = `${output || ''}\n${stderr || ''}`.toLowerCase();
+  const patterns = ['429', 'rate limit', 'rate-limited', 'quota', 'insufficient', 'request too large', '413'];
+  return patterns.some((p) => merged.includes(p));
 }
 
 if (isEntry(import.meta.url)) {
@@ -213,6 +263,7 @@ function execute(command, commandArgs, options = {}) {
 }
 let result;
 let executorName = 'codex';
+let fallbackBackend = null;
 
 // 先頭に1行で出力する
 console.log('[codex-do] executor=codex');
@@ -264,12 +315,13 @@ if (quotaCheck.matched) {
     executorName = 'qwen-code';
     console.log(`[codex-do] executor=qwen-code (理由: Codex usage limit を検出)`);
     console.error(`[codex-do] Codex usage limit detected: ${quotaCheck.pattern} at index ${quotaCheck.index}. Context: "${quotaCheck.snippet}"`);
-    console.error(`[codex-do] Falling back to Qwen Code CLI (DeepSeek backend)...`);
+    console.error(`[codex-do] Falling back to Qwen Code CLI...`);
 
-    // フォールバック先は Qwen Code CLI + DeepSeek API。
+    // フォールバック先は Qwen Code CLI。2段構成で、追加費用ゼロの OpenRouter `:free` を先に試し、
+    // 上限(20rpm/1000rpd)に当たったら従量の DeepSeek に落ちる(§1.17.1 費用対効果ファースト)。
     // 2026-09-03 実測: Gemini CLI の OAuth 無料枠は終了しており
     // (IneligibleTierError: This client is no longer supported for Gemini Code Assist for individuals)、
-    // 現在の gemini フォールバックは 100% 失敗する。代わりに qwen + DeepSeek が動く。
+    // 現在の gemini フォールバックは 100% 失敗する。代わりに qwen + OpenRouter `:free` / DeepSeek が動く。
     // qwen には gemini の auto_edit に相当する「編集だけ自動承認」モードが無く、-y なしだと
     // 非対話モードで write_file が必ず拒否される。ただし -y 単独はシェル実行まで自動承認になるので、
     // 必ず --exclude-tools run_shell_command と併用して「編集はできるがシェルは実行できない」=
@@ -277,19 +329,32 @@ if (quotaCheck.matched) {
     // テスト実行・git 操作はできないのは仕様として受け入れる。codex-do の呼び出し側
     // （auto-session の子セッション等）が「実装を委譲 → 自分でテストして commit/PR」という
     // 分担で動いているため、テストと git は呼び出し側の責任。承認モードを緩めて解決してはいけない。
-    const key = loadDeepseekKey(home);
-    if (!key) {
-      console.error('DEEPSEEK_API_KEY が無いため qwen-code フォールバックを実行できません。~/.claude/deepseek.env を配置してください');
+    const backends = resolveQwenBackends(home);
+    if (backends.length === 0) {
+      console.error('OPENROUTER_API_KEY も DEEPSEEK_API_KEY も無いため qwen-code フォールバックを実行できません。~/.claude/openrouter.env か ~/.claude/deepseek.env を配置してください');
       result.status = 1;
     } else {
-      result = await execute('qwen', buildQwenArgs({ timeoutSecs: timeoutSeconds }), {
-        cwd,
-        env: buildQwenEnv(process.env, key),
-        shell: process.platform === 'win32'
-      });
-      if (result.status === null) {
-        console.error(`[codex-do] Failed to spawn Qwen Code CLI fallback:`, result.error);
-        result.status = 1;
+      for (const backend of backends) {
+        console.log(`[codex-do] fallback backend=${backend.name} model=${backend.model}`);
+        result = await execute('qwen', buildQwenArgs({ timeoutSecs: timeoutSeconds, model: backend.model }), {
+          cwd,
+          env: buildQwenEnv(process.env, backend.apiKey, { model: backend.model, baseUrl: backend.baseUrl }),
+          shell: process.platform === 'win32'
+        });
+        if (result.status === null) {
+          console.error(`[codex-do] Failed to spawn Qwen Code CLI fallback:`, result.error);
+          result.status = 1;
+        }
+        if (result.status === 0) {
+          fallbackBackend = backend;
+          break;
+        }
+        if (isBackendExhausted(result.output, result.stderr)) {
+          console.error(`[codex-do] backend=${backend.name} が上限/エラーで使えないため次へ`);
+          continue;
+        }
+        // 上限/エラー以外の失敗(実装エラー等)は次のバックエンドへ落とさず、この結果で止める。
+        break;
       }
     }
   }
@@ -312,7 +377,7 @@ try {
   const usage = {
     t: new Date().toISOString(),
     provider: executorName,
-    model: executorName === 'qwen-code' ? 'qwen-code/deepseek-chat' : 'codex-cli',
+    model: executorName === 'qwen-code' ? `qwen-code/${fallbackBackend?.model ?? 'unknown'}` : 'codex-cli',
     in: Math.ceil(prompt.length / 4),
     out: Math.ceil((result.outputChars || 0) / 4),
     secs: Number(secs.toFixed(3))

@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { needsWorktreeRepair, detectQuotaLimit, buildQwenArgs, buildQwenEnv, loadDeepseekKey } = await import('./codex-do.mjs');
+const { needsWorktreeRepair, detectQuotaLimit, buildQwenArgs, buildQwenEnv, loadDeepseekKey, loadEnvKey, resolveQwenBackends, isBackendExhausted } = await import('./codex-do.mjs');
 
 function run(args, options = {}) {
   return spawnSync(process.execPath, [tool, ...args], {
@@ -170,7 +170,7 @@ test('枠切れ発生時に DEEPSEEK_API_KEY が無ければフォールバッ�
     });
     assert.equal(result.status, 1);
     assert.match(result.stdout, /executor=qwen-code/);
-    assert.match(result.stderr, /DEEPSEEK_API_KEY が無いため qwen-code フォールバックを実行できません/);
+    assert.match(result.stderr, /OPENROUTER_API_KEY も DEEPSEEK_API_KEY も無いため qwen-code フォールバックを実行できません/);
   } finally {
     if (prev !== undefined) process.env.DEEPSEEK_API_KEY = prev;
   }
@@ -295,4 +295,172 @@ test('loadDeepseekKey はキーが無ければ null を返す', () => {
     if (prev !== undefined) process.env.DEEPSEEK_API_KEY = prev;
   }
 });
+
+// ---- resolveQwenBackends / loadEnvKey / isBackendExhausted ----
+
+function makeHomeWithEnv(files) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-home-'));
+  fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
+  for (const [name, body] of Object.entries(files)) {
+    fs.writeFileSync(path.join(dir, '.claude', name), body, 'utf8');
+  }
+  return dir;
+}
+
+// process.env の影響を受けないよう、テスト中は両キーを退避・削除・復元する。
+function withEnvKeysCleared(fn) {
+  const prevOR = process.env.OPENROUTER_API_KEY;
+  const prevDS = process.env.DEEPSEEK_API_KEY;
+  const prevModel = process.env.CODEX_DO_FREE_MODEL;
+  const prevPreferFree = process.env.CODEX_DO_PREFER_FREE;
+  delete process.env.OPENROUTER_API_KEY;
+  delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.CODEX_DO_FREE_MODEL;
+  delete process.env.CODEX_DO_PREFER_FREE;
+  try {
+    return fn();
+  } finally {
+    if (prevOR === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = prevOR;
+    if (prevDS === undefined) delete process.env.DEEPSEEK_API_KEY;
+    else process.env.DEEPSEEK_API_KEY = prevDS;
+    if (prevModel === undefined) delete process.env.CODEX_DO_FREE_MODEL;
+    else process.env.CODEX_DO_FREE_MODEL = prevModel;
+    if (prevPreferFree === undefined) delete process.env.CODEX_DO_PREFER_FREE;
+    else process.env.CODEX_DO_PREFER_FREE = prevPreferFree;
+  }
+}
+
+test('resolveQwenBackends は既定では deepseek を openrouter-free より先に置く', () => {
+  withEnvKeysCleared(() => {
+    const dir = makeHomeWithEnv({
+      'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n',
+      'deepseek.env': 'DEEPSEEK_API_KEY=sk-ds-1\n'
+    });
+    const backends = resolveQwenBackends(dir);
+    assert.equal(backends.length, 2);
+    assert.equal(backends[0].name, 'deepseek');
+    assert.equal(backends[0].model, 'deepseek-chat');
+    assert.equal(backends[0].baseUrl, 'https://api.deepseek.com/v1');
+    assert.equal(backends[0].apiKey, 'sk-ds-1');
+    assert.equal(backends[1].name, 'openrouter-free');
+    assert.equal(backends[1].model, 'cohere/north-mini-code:free');
+    assert.equal(backends[1].baseUrl, 'https://openrouter.ai/api/v1');
+    assert.equal(backends[1].apiKey, 'sk-or-1');
+  });
+});
+
+test('resolveQwenBackends は CODEX_DO_PREFER_FREE=1 のとき openrouter-free を先頭に置く', () => {
+  withEnvKeysCleared(() => {
+    const prev = process.env.CODEX_DO_PREFER_FREE;
+    process.env.CODEX_DO_PREFER_FREE = '1';
+    try {
+      const dir = makeHomeWithEnv({
+        'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n',
+        'deepseek.env': 'DEEPSEEK_API_KEY=sk-ds-1\n'
+      });
+      const backends = resolveQwenBackends(dir);
+      assert.equal(backends.length, 2);
+      assert.equal(backends[0].name, 'openrouter-free');
+      assert.equal(backends[0].model, 'cohere/north-mini-code:free');
+      assert.equal(backends[0].baseUrl, 'https://openrouter.ai/api/v1');
+      assert.equal(backends[0].apiKey, 'sk-or-1');
+      assert.equal(backends[1].name, 'deepseek');
+      assert.equal(backends[1].model, 'deepseek-chat');
+      assert.equal(backends[1].baseUrl, 'https://api.deepseek.com/v1');
+      assert.equal(backends[1].apiKey, 'sk-ds-1');
+    } finally {
+      if (prev === undefined) delete process.env.CODEX_DO_PREFER_FREE;
+      else process.env.CODEX_DO_PREFER_FREE = prev;
+    }
+  });
+});
+
+test('resolveQwenBackends は片方のキーしか無いときその1本だけを返す', () => {
+  withEnvKeysCleared(() => {
+    const onlyOR = resolveQwenBackends(makeHomeWithEnv({ 'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n' }));
+    assert.equal(onlyOR.length, 1);
+    assert.equal(onlyOR[0].name, 'openrouter-free');
+
+    const onlyDS = resolveQwenBackends(makeHomeWithEnv({ 'deepseek.env': 'DEEPSEEK_API_KEY=sk-ds-1\n' }));
+    assert.equal(onlyDS.length, 1);
+    assert.equal(onlyDS[0].name, 'deepseek');
+  });
+});
+
+test('resolveQwenBackends はどちらも無ければ空配列を返す', () => {
+  withEnvKeysCleared(() => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-home-'));
+    assert.deepEqual(resolveQwenBackends(dir), []);
+  });
+});
+
+test('resolveQwenBackends は CODEX_DO_FREE_MODEL で openrouter-free の model を上書きできる', () => {
+  withEnvKeysCleared(() => {
+    process.env.CODEX_DO_FREE_MODEL = 'z-ai/glm-5.2:free';
+    const dir = makeHomeWithEnv({ 'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n' });
+    const backends = resolveQwenBackends(dir);
+    assert.equal(backends[0].name, 'openrouter-free');
+    assert.equal(backends[0].model, 'z-ai/glm-5.2:free');
+  });
+});
+
+test('isBackendExhausted は上限系メッセージで true を返す', () => {
+  assert.equal(isBackendExhausted('HTTP 429 Too Many Requests', ''), true);
+  assert.equal(isBackendExhausted('', 'Error: rate limit exceeded'), true);
+  assert.equal(isBackendExhausted('', 'rate-limited'), true);
+  assert.equal(isBackendExhausted('Request too large for model', ''), true);
+  assert.equal(isBackendExhausted('', 'HTTP 413 Payload Too Large'), true);
+  assert.equal(isBackendExhausted('quota exceeded', ''), true);
+  assert.equal(isBackendExhausted('', 'insufficient_quota'), true);
+});
+
+test('isBackendExhausted は通常の成功出力で false を返す', () => {
+  assert.equal(isBackendExhausted('Qwen Code CLI has successfully edited files.', ''), false);
+  assert.equal(isBackendExhausted('', 'All tests passed'), false);
+});
+
+test('loadEnvKey は process.env を最優先し、ファイルの export VAR="..." 形式も読める', () => {
+  const dir = makeHomeWithEnv({ 'openrouter.env': 'export OPENROUTER_API_KEY="sk-or-file"\n' });
+  const prev = process.env.OPENROUTER_API_KEY;
+  process.env.OPENROUTER_API_KEY = 'sk-or-env';
+  try {
+    assert.equal(loadEnvKey(dir, 'openrouter.env', 'OPENROUTER_API_KEY'), 'sk-or-env');
+  } finally {
+    if (prev === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = prev;
+  }
+
+  delete process.env.OPENROUTER_API_KEY;
+  try {
+    assert.equal(loadEnvKey(dir, 'openrouter.env', 'OPENROUTER_API_KEY'), 'sk-or-file');
+  } finally {
+    if (prev === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = prev;
+  }
+});
+
+test('loadEnvKey はキーが無ければ null を返す', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-home-'));
+  const prev = process.env.OPENROUTER_API_KEY;
+  delete process.env.OPENROUTER_API_KEY;
+  try {
+    assert.equal(loadEnvKey(dir, 'openrouter.env', 'OPENROUTER_API_KEY'), null);
+  } finally {
+    if (prev !== undefined) process.env.OPENROUTER_API_KEY = prev;
+  }
+});
+
+test('loadDeepseekKey は loadEnvKey の薄いラッパとして振る舞いが変わらない', () => {
+  const dir = makeHomeWithEnv({ 'deepseek.env': 'export DEEPSEEK_API_KEY="sk-ds-1"\n' });
+  const prev = process.env.DEEPSEEK_API_KEY;
+  delete process.env.DEEPSEEK_API_KEY;
+  try {
+    assert.equal(loadDeepseekKey(dir), 'sk-ds-1');
+    assert.equal(loadEnvKey(dir, 'deepseek.env', 'DEEPSEEK_API_KEY'), 'sk-ds-1');
+  } finally {
+    if (prev !== undefined) process.env.DEEPSEEK_API_KEY = prev;
+  }
+});
+
 

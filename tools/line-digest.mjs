@@ -6,7 +6,7 @@ import { callWithFallback, FALLBACK_CHAIN } from './llm-fallback.mjs';
 import { isEntry } from './is-entry.mjs';
 
 const CATEGORIES = new Set(['cost', 'quality', 'model-release', 'tool', 'prompt-technique', 'other']);
-const PROVIDERS = {
+export const PROVIDERS = {
   groq: { url: 'https://api.groq.com/openai/v1/chat/completions', env: 'GROQ_API_KEY', file: 'groq.env', model: 'openai/gpt-oss-120b' },
   cerebras: { url: 'https://api.cerebras.ai/v1/chat/completions', env: 'CEREBRAS_API_KEY', file: 'cerebras.env', model: 'zai-glm-4.7' },
   deepseek: { url: 'https://api.deepseek.com/chat/completions', env: 'DEEPSEEK_API_KEY', file: 'deepseek.env', model: 'deepseek-chat' },

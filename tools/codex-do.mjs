@@ -4,9 +4,23 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
+import { recordCodexUsageLimit } from './codex-cooldown.mjs';
 
 export function needsWorktreeRepair(gitFileContent) {
   return /^gitdir:\s*[A-Za-z]:/i.test(String(gitFileContent ?? '').trim());
+}
+
+export function detectQuotaLimit(stdout, stderr) {
+  const text = `${String(stdout ?? '')}\n${String(stderr ?? '')}`;
+  const patterns = ["You've hit your usage limit", 'Upgrade to Pro', 'rate limit', '429'];
+  for (const pattern of patterns) {
+    const index = text.toLowerCase().indexOf(pattern.toLowerCase());
+    if (index < 0) continue;
+    const start = Math.max(0, index - 120);
+    const end = Math.min(text.length, index + pattern.length + 120);
+    return { matched: true, pattern, snippet: text.slice(start, end).trim() };
+  }
+  return { matched: false, pattern: '', snippet: '' };
 }
 
 if (isEntry(import.meta.url)) {
@@ -14,6 +28,7 @@ if (isEntry(import.meta.url)) {
 const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
 const forceNative = args.includes('--force-native');
+const noFallback = args.includes('--no-fallback');
 const cwdIndex = args.indexOf('--cwd');
 const promptFileIndex = args.indexOf('--prompt-file');
 const timeoutIndex = args.indexOf('--timeout');
@@ -22,10 +37,11 @@ const cwd = path.resolve(cwdIndex >= 0 && args[cwdIndex + 1] ? args[cwdIndex + 1
 const omitted = new Set();
 if (dryRun) omitted.add(args.indexOf('--dry-run'));
 if (forceNative) omitted.add(args.indexOf('--force-native'));
+if (noFallback) omitted.add(args.indexOf('--no-fallback'));
 if (cwdIndex >= 0) { omitted.add(cwdIndex); omitted.add(cwdIndex + 1); }
 if (promptFileIndex >= 0) { omitted.add(promptFileIndex); omitted.add(promptFileIndex + 1); }
 if (timeoutIndex >= 0) { omitted.add(timeoutIndex); omitted.add(timeoutIndex + 1); }
-const usage = '使い方: node tools/codex-do.mjs "<指示>" [--cwd <path>] [--prompt-file <file>] [--timeout <秒>] [--dry-run]';
+const usage = '使い方: node tools/codex-do.mjs "<指示>" [--cwd <path>] [--prompt-file <file>] [--timeout <秒>] [--no-fallback] [--dry-run]';
 
 // タイムアウト既定30分。無限に待って気付かないより、切って原因を見に行くほうが安い。
 const timeoutSeconds = timeoutIndex >= 0 ? Number(args[timeoutIndex + 1]) : 1800;
@@ -94,13 +110,38 @@ if (mainMemory || related.length || claudeMd) {
 const prompt = `${context.join('\n')}\n\n## 実装指示\n${instruction}`.trim();
 if (dryRun) { console.log(prompt); process.exit(0); }
 
+let mockResults = null;
+if (process.env.CODEX_DO_MOCK_RESULTS) {
+  try {
+    const parsed = JSON.parse(process.env.CODEX_DO_MOCK_RESULTS);
+    if (!Array.isArray(parsed)) throw new Error('JSON 配列ではありません');
+    mockResults = [...parsed];
+  } catch (error) {
+    console.error(`CODEX_DO_MOCK_RESULTS を読めません: ${error.message}`);
+    process.exit(2);
+  }
+}
+
+// 実行前の作業ツリーを控えておく。既存の未コミット差分があるリポでも
+// 「この実行で変わったか」を判定できるようにするため。
+const treeBefore = mockResults ? '' : `${spawnSync('git', ['-C', cwd, 'diff', '--stat'], { encoding: 'utf8' }).stdout || ''}\n${spawnSync('git', ['-C', cwd, 'status', '--porcelain'], { encoding: 'utf8' }).stdout || ''}`;
 const started = Date.now();
 function execute(command, commandArgs, options = {}) {
+  if (mockResults) {
+    const mocked = mockResults.shift();
+    if (!mocked) return Promise.resolve({ status: 1, outputChars: 0, output: '', stderr: 'モック実行結果が不足しています' });
+    const output = String(mocked.output ?? '');
+    const stderr = String(mocked.stderr ?? '');
+    if (output) process.stdout.write(output);
+    if (stderr) process.stderr.write(stderr);
+    return Promise.resolve({ status: mocked.status ?? 0, outputChars: output.length, output, stderr });
+  }
   return new Promise((resolve) => {
-    let outputChars = 0, output = '', timedOut = false;
+    const { input = prompt, ...spawnOptions } = options;
+    let outputChars = 0, output = '', stderr = '', timedOut = false;
     // stdio を全て pipe にして TTY を渡さない。TTY 付きで起動すると codex が端末入力を
     // 待ったまま眠り続ける(2026-08-26 に 1日00:57 hang した実害)。
-    const child = spawn(command, commandArgs, { ...options, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(command, commandArgs, { ...spawnOptions, stdio: ['pipe', 'pipe', 'pipe'] });
     const timer = setTimeout(() => {
       timedOut = true;
       console.error(`\n⏱ Codex が ${timeoutSeconds} 秒で応答を終えなかったので停止しました。--timeout で延長できます`);
@@ -108,15 +149,16 @@ function execute(command, commandArgs, options = {}) {
     }, timeoutSeconds * 1000);
     timer.unref?.();
     child.stdout.on('data', (chunk) => { outputChars += chunk.length; output += chunk.toString(); process.stdout.write(chunk); });
-    child.stderr.on('data', (chunk) => { process.stderr.write(chunk); });
-    child.on('error', (error) => { clearTimeout(timer); resolve({ status: null, error, outputChars, output }); });
-    child.on('close', (status) => { clearTimeout(timer); resolve({ status: timedOut ? 124 : status, outputChars, output, timedOut }); });
+    child.stderr.on('data', (chunk) => { stderr += chunk.toString(); process.stderr.write(chunk); });
+    child.on('error', (error) => { clearTimeout(timer); resolve({ status: null, error, outputChars, output, stderr }); });
+    child.on('close', (status) => { clearTimeout(timer); resolve({ status: timedOut ? 124 : status, outputChars, output, stderr, timedOut }); });
     // 指示は stdin で渡し、必ず閉じる。閉じないと codex が
     // "Reading additional input from stdin..." のまま永久に待つ。
-    child.stdin.end(prompt);
+    child.stdin.end(input);
   });
 }
 let result;
+console.log('--- executor=codex start ---');
 if (process.platform === 'win32' && !forceNative) {
   const listed = spawnSync('wsl', ['-l', '-q'], { encoding: 'utf16le', timeout: 15000 });
   const distros = listed.status === 0 ? listed.stdout.split(/\r?\n/).map((x) => x.replace(/\0/g, '').trim()).filter(Boolean) : [];
@@ -151,12 +193,42 @@ if (process.platform === 'win32' && !forceNative) {
   if (process.platform === 'win32') console.error('⚠️ --force-native によりネイティブ Windows codex で実行します。編集が保存されない可能性があります');
   result = await execute('codex', ['exec', '-s', 'workspace-write', '-'], { cwd });
 }
+console.log('\n--- executor=codex end ---');
+
+const quota = detectQuotaLimit(result?.output, result?.stderr);
+if (quota.matched) {
+  const quotaOutput = `${result?.output || ''}\n${result?.stderr || ''}`;
+  if (/you(?:'|’)ve hit your usage limit|quota exceeded|rate limit exceeded|\b429\b/i.test(quotaOutput)) {
+    recordCodexUsageLimit(quotaOutput, path.join(home, '.claude', 'provider-cooldown.json'));
+  }
+  console.error(`🚨 Codex usage limit detected (${quota.pattern})。Codex の定額枠が利用できません`);
+  if (noFallback) {
+    console.error('--no-fallback is specified。指定されているため Gemini CLI へフォールバックしません');
+    result.status = result.status || 1;
+  } else if (!mockResults && !spawnSync(process.platform === 'win32' ? 'where' : 'which', ['gemini'], { encoding: 'utf8' }).stdout?.trim()) {
+    // 実体が無いまま spawn すると ENOENT の生エラーだけが出て原因が分からない。
+    console.error('Gemini CLI が見つからないためフォールバックできません（npm i -g @google/gemini-cli）。枠の復帰時刻は上の出力を確認してください');
+    result.status = result.status || 1;
+  } else {
+    // --yolo は Gemini CLI のツール実行を全自動承認する。ファイルを書けないと
+    // 「やった」と言うだけで何も変わらない静かな失敗になるため付けているが、
+    // 無人で承認を飛ばしていることはログに必ず残す（下の treeUnchanged 判定が保険）。
+    console.error('⚠️ Falling back to Gemini CLI。--yolo で起動するため、Gemini は確認を求めずに対象ディレクトリのファイルを編集します');
+    console.log('--- executor=gemini-cli start ---');
+    result = await execute('gemini', ['--yolo', '-p', ''], { cwd });
+    console.log('\n--- executor=gemini-cli end ---');
+  }
+}
 const secs = (Date.now() - started) / 1000;
-const diff = spawnSync('git', ['-C', cwd, 'diff', '--stat'], { encoding: 'utf8' });
+const diff = mockResults ? { stdout: '' } : spawnSync('git', ['-C', cwd, 'diff', '--stat'], { encoding: 'utf8' });
 if (diff.stdout) process.stdout.write(diff.stdout);
 // 読み取り専用の質問(説明して/調べて)では空diffが正常なので、指示自体が実装系のときだけ判定する。
 const wantedEdit = /実装|作って|修正|直して|追加して|リファクタ|refactor|fix|implement/i.test(instruction);
-if (wantedEdit && !result.timedOut && !diff.stdout.trim() && /実装|変更|修正|implemented|updated|modified/i.test(result.output || '')) {
+// 作業ツリーに元から差分があるリポでは diff が常に非空になり、旧来の「空diffなら失敗」判定が
+// 一度も発火しない。実行前後のスナップショットを比べて「この実行で何も変わらなかった」を見る。
+const treeAfter = mockResults ? '' : `${diff.stdout || ''}\n${spawnSync('git', ['-C', cwd, 'status', '--porcelain'], { encoding: 'utf8' }).stdout || ''}`;
+const treeUnchanged = treeBefore.trim() === treeAfter.trim();
+if (wantedEdit && !result.timedOut && treeUnchanged && /実装|変更|修正|implemented|updated|modified/i.test(result.output || '')) {
   console.error('🚨 Codex は変更を書き込めていません（read-only サンドボックスの疑い）。WSL 経路で再実行してください');
   result.status = 1;
 }

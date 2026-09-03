@@ -1,4 +1,7 @@
 ﻿# nightly-batch.ps1 — DeepSeek off-peak時間帯にpendingジョブがあればバッチ実行する (Windows PowerShell 5.1)。
+# wscript経由のhidden起動はコンソール無しでOEMコードページ(932)にフォールバックし、
+# 子プロセスのUTF-8出力を文字化けさせる(実測: line-digest の日本語ステータス regex が常に不一致)。
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $logDir = Join-Path $HOME '.claude\logs'
 $logFile = Join-Path $logDir ("nightly-batch-" + (Get-Date -Format 'yyyy-MM-dd') + ".log")
 New-Item -ItemType Directory -Path $logDir -Force | Out-Null
@@ -51,8 +54,13 @@ try {
 
     if ($autoClose) {
         try {
-            & $node.Source $autoClose --days 7 --max 40
-            if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'session-auto-close' ("error:終了コード" + $LASTEXITCODE) } else { Write-NightlyLog 'session-auto-close' 'ok' }
+            $autoCloseOutput = @(& $node.Source $autoClose --days 7 --max 40 2>&1)
+            $autoCloseExit = $LASTEXITCODE
+            if ($autoCloseExit -ne 0) {
+                $autoCloseReason = "error:終了コード" + $autoCloseExit + ': ' + (@($autoCloseOutput | Select-Object -Last 3) -join ' / ')
+                Write-NightlyLog 'session-auto-close' $autoCloseReason
+                Write-Warning ("nightly-batch: session-auto-close: " + $autoCloseReason)
+            } else { Write-NightlyLog 'session-auto-close' 'ok' }
         } catch {
             Write-NightlyLog 'session-auto-close' ("error:" + $_.Exception.Message)
             Write-Warning ("nightly-batch: session-auto-close: " + $_.Exception.Message)
@@ -266,6 +274,23 @@ try {
         }
     } else { Write-NightlyLog 'feedback-to-issues' 'skip:ファイルなし' }
 
+    # kim が Discord DM に返信した実行指示を、対応する Issue/PR にコメントとして落とす。
+    # feedback-to-issues の直後に置く(Issue が作られた後でないと返信の貼り先が無い)。
+    $feedbackReplies = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\feedback-replies.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $feedbackReplies = $candidate; break }
+    }
+    if ($feedbackReplies) {
+        try {
+            & $node.Source $feedbackReplies
+            if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'feedback-replies' ("error:終了コード" + $LASTEXITCODE + ' (警告・後続処理続行)'); Write-Warning ("nightly-batch: feedback-replies exited " + $LASTEXITCODE) } else { Write-NightlyLog 'feedback-replies' 'ok' }
+        } catch {
+            Write-NightlyLog 'feedback-replies' ("error:" + $_.Exception.Message + ' (警告・後続処理続行)')
+            Write-Warning ("nightly-batch: feedback-replies: " + $_.Exception.Message)
+        }
+    } else { Write-NightlyLog 'feedback-replies' 'skip:ファイルなし' }
+
     $growiManual = $null
     foreach ($repo in $repos) {
         $candidate = Join-Path $repo 'tools\growi-manual.mjs'
@@ -364,7 +389,17 @@ try {
             Write-NightlyLog 'makimono-drain' ("error:" + $_.Exception.Message)
             Write-Warning ("nightly-batch: makimono-drain: " + $_.Exception.Message)
         }
-    } else { Write-NightlyLog 'makimono-drain' 'error:ファイルなし' }
+        try {
+            & $node.Source $makimonoDrain --check --notify
+            if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'makimono-check' ("error:終了コード" + $LASTEXITCODE) } else { Write-NightlyLog 'makimono-check' 'ok' }
+        } catch {
+            Write-NightlyLog 'makimono-check' ("error:" + $_.Exception.Message)
+            Write-Warning ("nightly-batch: makimono-check: " + $_.Exception.Message)
+        }
+    } else {
+        Write-NightlyLog 'makimono-drain' 'error:ファイルなし'
+        Write-NightlyLog 'makimono-check' 'error:ファイルなし'
+    }
 
     $producer = $null
     foreach ($repo in $repos) {

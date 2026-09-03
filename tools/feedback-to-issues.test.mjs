@@ -2,8 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildIssueBody,
+  chainBoothFeedbackIntake,
   buildIssueTitle,
   isIssueCandidate,
+  parseDismissId,
   parseHostMap,
   parseRepoMap,
   resolveRepo,
@@ -11,6 +13,18 @@ import {
   resolveRepoFromUrl,
   selectCandidates,
 } from './feedback-to-issues.mjs';
+
+test('--dismiss の message_id を解析する', () => {
+  assert.equal(parseDismissId(['--dismiss', 'abc123']), 'abc123');
+});
+
+test('--dismiss が無ければ null を返す', () => {
+  assert.equal(parseDismissId(['--dry']), null);
+});
+
+test('--dismiss に値が無ければ空文字を返す', () => {
+  assert.equal(parseDismissId(['--dismiss']), '');
+});
 
 test('FEEDBACK_REPO_MAP を解析し、空要素と不正値を無視する', () => {
   assert.deepEqual(parseRepoMap('A=o/r,B=o/r2'), { A: 'o/r', B: 'o/r2' });
@@ -37,6 +51,11 @@ test('Issue 本文は提出元なしと添付ありを明示する', () => {
   assert.match(body, /報告本文/);
   assert.match(body, /提出元URL: （記載なし）/);
   assert.match(body, /スクショは Discord の元メッセージを参照/);
+});
+
+test('Issue 本文の末尾に feedback-dm マーカーが入る(feedback-replies.mjs のマーカー検索用)', () => {
+  const body = buildIssueBody({ body: '報告本文', message_id: 'abc123' });
+  assert.equal(body.trimEnd().split('\n').at(-1), '<!-- feedback-dm:abc123 -->');
 });
 
 test('parse_ok false は Issue 対象外になる', () => {
@@ -112,4 +131,26 @@ test('正常なアプリ名の従来解決を保ち、ホスト表よりアプ�
     resolveRepoForItem(item, '', 'purchasing-management-app.vercel.app=other/repo'),
     'kimkon1011/purchasing-management-app',
   );
+});
+
+test('booth-feedback-intake を 10分タスクから相乗り起動する', async () => {
+  const calls = [];
+  const fakeSpawn = (...args) => { calls.push(args); return { unref() {} }; };
+  assert.equal(await chainBoothFeedbackIntake({ argv: [], spawnImpl: fakeSpawn }), 'spawned');
+  assert.equal(calls.length, 1);
+  assert.match(calls[0][1][0], /booth-feedback-intake\.mjs$/);
+  assert.equal(calls[0][2].detached, true);
+});
+
+test('--dry-run と --no-chain では相乗り起動しない', async () => {
+  const calls = [];
+  const fakeSpawn = (...args) => { calls.push(args); return { unref() {} }; };
+  assert.equal(await chainBoothFeedbackIntake({ argv: ['--dry-run'], spawnImpl: fakeSpawn }), 'skipped');
+  assert.equal(await chainBoothFeedbackIntake({ argv: ['--no-chain'], spawnImpl: fakeSpawn }), 'skipped');
+  assert.equal(calls.length, 0);
+});
+
+test('相乗り起動の失敗はこのタスクを落とさない', async () => {
+  const boom = () => { throw new Error('spawn boom'); };
+  assert.equal(await chainBoothFeedbackIntake({ argv: [], spawnImpl: boom }), 'failed');
 });

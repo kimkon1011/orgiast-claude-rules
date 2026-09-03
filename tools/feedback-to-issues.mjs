@@ -9,8 +9,13 @@ export const DEFAULT_REPO_MAP = {
   '購買部管理アプリ': 'kimkon1011/purchasing-management-app',
 };
 
-function clean(value) {
+export function clean(value) {
   return String(value ?? '').trim();
+}
+
+export function parseDismissId(args) {
+  const dismissIndex = args.indexOf('--dismiss');
+  return dismissIndex >= 0 ? clean(args[dismissIndex + 1]) : null;
 }
 
 export function parseRepoMap(value = '') {
@@ -83,6 +88,8 @@ export function buildIssueBody(item) {
     `Discord: ${clean(item?.discord_url) || '（記載なし）'}`,
   ];
   if (item?.has_attachment === true) lines.push('', 'スクショは Discord の元メッセージを参照');
+  // どの DM から生まれた Issue かを後から機械的に検索できるようにする(feedback-replies.mjs が使う)。
+  lines.push('', `<!-- feedback-dm:${clean(item?.message_id)} -->`);
   return lines.join('\n');
 }
 
@@ -95,7 +102,7 @@ export function selectCandidates(items, limit, mapValue = '', hostMapValue = '')
   return { selected: candidates.slice(0, limit), remaining: Math.max(0, candidates.length - limit) };
 }
 
-function parseEnvText(text) {
+export function parseEnvText(text) {
   const values = {};
   for (const line of String(text).split(/\r?\n/)) {
     const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
@@ -105,7 +112,7 @@ function parseEnvText(text) {
   return values;
 }
 
-function loadRelayConfig(home = os.homedir()) {
+export function loadRelayConfig(home = os.homedir()) {
   const fromFiles = {};
   const envDir = path.join(home, '.claude');
   let names = [];
@@ -120,13 +127,13 @@ function loadRelayConfig(home = os.homedir()) {
   };
 }
 
-function shellQuote(value) {
+export function shellQuote(value) {
   const text = String(value);
   if (process.platform === 'win32') return `"${text.replace(/%/g, '%%').replace(/"/g, '""')}"`;
   return `'${text.replace(/'/g, `'"'"'`)}'`;
 }
 
-function runGh(args, options = {}) {
+export function runGh(args, options = {}) {
   // Windows の gh.cmd は直接 spawn できないため shell を使い、値はすべて個別に quote する。
   const command = ['gh', ...args].map(shellQuote).join(' ');
   return spawnSync(command, { shell: true, encoding: 'utf8', ...options });
@@ -142,7 +149,7 @@ function relayUrls(base) {
   return { pending, ack };
 }
 
-async function relayRequest(url, secret, options = {}) {
+export async function relayRequest(url, secret, options = {}) {
   const response = await fetch(url, {
     ...options,
     headers: { Authorization: `Bearer ${secret}`, ...(options.headers || {}) },
@@ -159,12 +166,37 @@ function increment(reasons, reason) {
 
 export async function main(args = process.argv.slice(2)) {
   const dry = args.includes('--dry');
+  const dismissId = parseDismissId(args);
   const limitIndex = args.indexOf('--limit');
   const requestedLimit = limitIndex >= 0 ? Number.parseInt(args[limitIndex + 1], 10) : 5;
   const limit = Number.isInteger(requestedLimit) && requestedLimit > 0 ? requestedLimit : 5;
   const config = loadRelayConfig();
   if (!config.url || !config.secret) {
     console.log('feedback-to-issues: 中継が未設定なのでスキップ');
+    return 0;
+  }
+  if (dismissId !== null) {
+    if (!dismissId) {
+      console.error('feedback-to-issues: --dismiss には message_id を指定する');
+      return 1;
+    }
+    if (dry) {
+      console.log(`feedback-to-issues: 対象外予定（--dry） message_id=${dismissId}`);
+      return 0;
+    }
+    const urls = relayUrls(config.url);
+    try {
+      const ack = await relayRequest(urls.ack, config.secret, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message_id: dismissId }),
+      });
+      if (ack.acked !== true) throw new Error('acked=true ではない応答');
+    } catch (error) {
+      console.error(`feedback-to-issues: 対象外化に失敗 message_id=${dismissId} (${error.message})`);
+      return 1;
+    }
+    console.log(`feedback-to-issues: 対象外にしました message_id=${dismissId}`);
     return 0;
   }
   const probe = runGh(['--version']);
@@ -265,4 +297,28 @@ export async function main(args = process.argv.slice(2)) {
   return 0;
 }
 
-if (isEntry(import.meta.url)) process.exitCode = await main();
+// ブース制作アプリの不具合要望も 10 分毎に拾う必要がある(不具合=即実行/要望=当日夜が要件)。
+// 専用タスクを別に登録するのが本筋だが、Task Scheduler への登録は環境によって
+// 実行できないことがある(2026-09-02: 登録が権限で通らず、タスクが存在しない時間帯が生まれた)。
+// このタスク(OrgiastFeedbackIntakeFast)は既に 10 分毎に回っているので、ここから相乗りさせて
+// 「専用タスクが無くても拾える」状態を作る。専用タスクがある場合は二重に走るが、
+// intake は [FB:<key>] と台帳で冪等なので重複注入は起きない。
+export async function chainBoothFeedbackIntake({ argv = process.argv.slice(2), spawnImpl } = {}) {
+  if (argv.includes('--dry-run') || argv.includes('--no-chain')) return 'skipped';
+  try {
+    const { spawn } = spawnImpl ? { spawn: spawnImpl } : await import('node:child_process');
+    const target = path.join(import.meta.dirname, 'booth-feedback-intake.mjs');
+    const child = spawn(process.execPath, [target], { detached: true, stdio: 'ignore', windowsHide: true });
+    child.unref?.();
+    return 'spawned';
+  } catch (error) {
+    // 相乗りの失敗でこのタスクの exit code を汚さない。
+    console.warn(`feedback-to-issues: booth-feedback-intake の相乗り起動に失敗 (${error?.message || error})`);
+    return 'failed';
+  }
+}
+
+if (isEntry(import.meta.url)) {
+  process.exitCode = await main();
+  await chainBoothFeedbackIntake();
+}

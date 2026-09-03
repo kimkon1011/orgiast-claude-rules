@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: #f2f3f5; }
+    body {
+      font-family: -apple-system, "Segoe UI", "Noto Sans JP", sans-serif;
+      font-size: 15px; color: #202124;
+      padding: 16px; max-width: 480px; margin: 0 auto;
+    }
+    h2 { font-size: 17px; margin: 4px 0 4px; }
+    p.sub { font-size: 12px; color: #5f6368; margin: 0 0 18px; word-break: break-all; }
+    fieldset { border: none; padding: 0; margin: 0 0 16px; }
+    legend { font-size: 13px; color: #5f6368; margin-bottom: 6px; padding: 0; }
+    .kindRow { display: flex; gap: 10px; }
+    .kindRow label {
+      flex: 1; display: flex; align-items: center; gap: 6px;
+      border: 1px solid #dadce0; border-radius: 8px; padding: 10px 12px;
+      background: #fff; font-size: 14px;
+    }
+    label.field { display: block; font-size: 13px; color: #5f6368; margin: 0 0 16px; }
+    label.field span.req { color: #c5221f; }
+    input[type=text], textarea {
+      width: 100%; padding: 10px; margin-top: 6px; border: 1px solid #ccc; border-radius: 8px;
+      font-size: 15px; font-family: inherit; background: #fff;
+    }
+    textarea { min-height: 110px; resize: vertical; }
+    .dropzone {
+      margin-top: 6px; border: 2px dashed #c8ccd0; border-radius: 8px; padding: 16px;
+      text-align: center; color: #5f6368; font-size: 13px; background: #fff;
+    }
+    .dropzone.drag { border-color: #1a73e8; background: #e8f0fe; }
+    .thumbs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    .thumbs img { width: 64px; height: 64px; object-fit: cover; border-radius: 6px; border: 1px solid #dadce0; }
+    .honeypot { position: absolute; left: -9999px; top: -9999px; width: 1px; height: 1px; overflow: hidden; }
+    button#submitBtn {
+      width: 100%; padding: 14px; border: none; border-radius: 8px;
+      background: #1a73e8; color: #fff; font-size: 16px; font-weight: 600; margin-top: 8px;
+    }
+    button#submitBtn:disabled { background: #9aa0a6; }
+    .status { margin-top: 12px; padding: 10px; border-radius: 8px; font-size: 13px; white-space: pre-wrap; }
+    .status.ok { background: #e6f4ea; color: #1e8e3e; }
+    .status.err { background: #fce8e6; color: #c5221f; }
+    .fileBtn { display: inline-block; margin-top: 8px; font-size: 13px; color: #1a73e8; text-decoration: underline; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <h2>🐛 不具合・要望の報告</h2>
+  <p class="sub" id="introText"></p>
+
+  <input type="hidden" id="appNameValue" value="<?= appName ?>">
+  <input type="hidden" id="sourceUrlValue" value="<?= sourceUrl ?>">
+
+  <form id="fbForm">
+    <!-- honeypot: 人間には見えない欄。埋まっていたら bot として成功を装って破棄する -->
+    <input type="text" name="company" class="honeypot" tabindex="-1" autocomplete="off">
+
+    <fieldset>
+      <legend>種別</legend>
+      <div class="kindRow">
+        <label><input type="radio" name="kind" value="不具合" checked> 🐛 不具合</label>
+        <label><input type="radio" name="kind" value="要望"> 💡 要望</label>
+      </div>
+    </fieldset>
+
+    <label class="field">タイトル <span class="req">*</span>
+      <input type="text" id="title" maxlength="200" placeholder="例: ○○ボタンを押すとエラーになる">
+    </label>
+
+    <label class="field">内容
+      <textarea id="body" maxlength="4000" placeholder="状況・再現手順・要望の詳細など"></textarea>
+    </label>
+
+    <label class="field">お名前（任意）
+      <input type="text" id="submitter" placeholder="例: 山田">
+    </label>
+
+    <label class="field">画像（任意）
+      <div class="dropzone" id="dropzone">
+        Ctrl+V で貼り付け / ドラッグ&ドロップ、または
+        <span class="fileBtn" id="fileBtn">ファイルを選択</span>
+        <input type="file" id="fileInput" accept="image/*" multiple style="display:none">
+      </div>
+      <div class="thumbs" id="thumbs"></div>
+    </label>
+
+    <button type="button" id="submitBtn">送信</button>
+    <div id="status"></div>
+  </form>
+
+  <script>
+    (function () {
+      var appName = document.getElementById('appNameValue').value;
+      var sourceUrl = document.getElementById('sourceUrlValue').value;
+      document.getElementById('introText').textContent =
+        (appName || 'アプリ') + ' についての不具合・要望を報告します。送信先は開発担当に直接届きます。';
+
+      var thumbsEl = document.getElementById('thumbs');
+      var statusEl = document.getElementById('status');
+      var dropzone = document.getElementById('dropzone');
+      var fileInput = document.getElementById('fileInput');
+      var fileBtn = document.getElementById('fileBtn');
+      var submitBtn = document.getElementById('submitBtn');
+      var images = []; // { name, mimeType, base64 }
+
+      function addImageFile(file) {
+        if (!file || String(file.type || '').indexOf('image/') !== 0) return;
+        var reader = new FileReader();
+        reader.onload = function () {
+          var dataUrl = String(reader.result || '');
+          var m = /^data:([^;]+);base64,(.*)$/.exec(dataUrl);
+          if (!m) return;
+          images.push({ name: file.name || 'screenshot.png', mimeType: m[1], base64: m[2] });
+          var img = document.createElement('img');
+          img.src = dataUrl;
+          thumbsEl.appendChild(img);
+        };
+        reader.readAsDataURL(file);
+      }
+
+      document.addEventListener('paste', function (e) {
+        var items = (e.clipboardData && e.clipboardData.items) || [];
+        for (var i = 0; i < items.length; i++) {
+          if (items[i].kind === 'file' && String(items[i].type || '').indexOf('image/') === 0) {
+            addImageFile(items[i].getAsFile());
+          }
+        }
+      });
+
+      dropzone.addEventListener('dragover', function (e) {
+        e.preventDefault();
+        dropzone.classList.add('drag');
+      });
+      dropzone.addEventListener('dragleave', function () {
+        dropzone.classList.remove('drag');
+      });
+      dropzone.addEventListener('drop', function (e) {
+        e.preventDefault();
+        dropzone.classList.remove('drag');
+        var files = (e.dataTransfer && e.dataTransfer.files) || [];
+        for (var i = 0; i < files.length; i++) addImageFile(files[i]);
+      });
+
+      fileBtn.addEventListener('click', function () { fileInput.click(); });
+      fileInput.addEventListener('change', function () {
+        for (var i = 0; i < fileInput.files.length; i++) addImageFile(fileInput.files[i]);
+        fileInput.value = '';
+      });
+
+      function setStatus(text, kind) {
+        statusEl.textContent = text;
+        statusEl.className = 'status ' + (kind || '');
+      }
+
+      function clearForm() {
+        document.getElementById('title').value = '';
+        document.getElementById('body').value = '';
+        document.getElementById('submitter').value = '';
+        document.querySelector('input[name=company]').value = '';
+        images = [];
+        thumbsEl.innerHTML = '';
+      }
+
+      submitBtn.addEventListener('click', function () {
+        // 送信ハンドラの冒頭でフォーム要素と入力値をローカル変数に確保する
+        // (非同期コールバック内で辿ると null になり得るため)。
+        var btn = submitBtn;
+        var kindEl = document.querySelector('input[name=kind]:checked');
+        var payload = {
+          company: document.querySelector('input[name=company]').value,
+          kind: kindEl ? kindEl.value : '不具合',
+          title: document.getElementById('title').value.trim(),
+          body: document.getElementById('body').value.trim(),
+          submitter: document.getElementById('submitter').value.trim(),
+          appName: appName,
+          sourceUrl: sourceUrl,
+          pagePath: '',
+          images: images.slice()
+        };
+
+        if (!payload.title && !payload.body) {
+          setStatus('タイトルか内容を入力してください', 'err');
+          return;
+        }
+
+        btn.disabled = true;
+        setStatus('送信中…', 'ok');
+
+        google.script.run
+          .withSuccessHandler(function (res) {
+            btn.disabled = false;
+            if (res && res.ok) {
+              setStatus('送信しました。ご協力ありがとうございます。', 'ok');
+              clearForm();
+            } else {
+              setStatus('エラー: ' + (res && res.error ? res.error : '送信に失敗しました'), 'err');
+            }
+          })
+          .withFailureHandler(function (err) {
+            btn.disabled = false;
+            setStatus('エラー: ' + (err && err.message ? err.message : err), 'err');
+          })
+          .FeedbackRelay_submitFromForm(payload);
+      });
+    })();
+  </script>
+</body>
+</html>

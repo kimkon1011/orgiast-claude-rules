@@ -535,6 +535,10 @@ node -e "fetch('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rule
 
 導入後は `node verify.mjs --url <本番URL>` で実投稿+read-back検証まで通してから完了とする（§1.4）。開発側の対応キューは `node scripts/list-feedback.mjs`。**任意staffの自由記述が本番コードを無人で駆動しない**（実装はkimトリガ or レビューゲート付き）。仕様・手移植手順（Pages Router/Remix等）: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/packages/feedback-widget/INSTALL.md`
 
+**GAS（Apps Script / スプレッドシート業務アプリ）は `packages/feedback-gas/` を使う**（2026-09-03 追加）。Next.js 用の feedback-widget は使えないため別パッケージ。`templates/` の2ファイル（`FeedbackRelay.js` / `FeedbackForm.html`）を対象プロジェクトの `src/` にコピーし、`doGet` の**token検証より前**に1行足して Web アプリをデプロイするだけ。フォームは未認証で開けるので、シートの閲覧者や社外の取引先にも URL を渡せる（honeypot + 10分5件のレート制限を常時有効で内蔵）。手順: `packages/feedback-gas/INSTALL.md`
+
+**通知先はチャンネルではなく kim の個別 DM（中継 `/api/feedback-intake` 経由）**。webhook 直叩きは中継が落ちた時のフォールバックとしてのみ残す。**kim が DM に返信すると、その内容が夜間 `tools/feedback-replies.mjs` で Issue/PR のコメント（＝実行指示）として貼られる**（2026-09-03 本番検証済み）。貼り先が特定できない返信は推測で書き込まずスキップする。
+
 ---
 
 

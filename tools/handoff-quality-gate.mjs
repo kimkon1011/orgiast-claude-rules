@@ -115,9 +115,20 @@ export function latestAssistantText(transcript) {
 }
 export function runGate(input) {
   const text = input?.assistant_text || latestAssistantText(input?.transcript_path);
-  if (input?.stop_hook_active) return { decision: 'pass', reason: 'stop_hook_active', routesMatched: [], text };
-  const catalog = JSON.parse(fs.readFileSync(path.join(here, 'automation-routes.json'), 'utf8'));
+  // stop_hook_active はブロック後の再実行なので、ここで例外を投げると応答を出せなくなる。
+  // カタログが読めない配布不備でも、判定を諦めて通す側に倒す。
+  let catalog = null;
+  try { catalog = JSON.parse(fs.readFileSync(path.join(here, 'automation-routes.json'), 'utf8')); } catch (error) {
+    if (input?.stop_hook_active) return { decision: 'pass', reason: 'stop_hook_active', routesMatched: [], text };
+    throw error;
+  }
   let enforcement = {}; try { enforcement = JSON.parse(fs.readFileSync(path.join(home(), '.claude', 'rule-enforcement.json'), 'utf8')); } catch {}
+  if (input?.stop_hook_active) {
+    if (!text) return { decision: 'pass', reason: 'stop_hook_active', routesMatched: [], text };
+    const evaluated = evaluateHandoff(text, { catalog, enforcement });
+    // 無限ループを防ぐため decision は pass に固定する。判定結果は recheck に残して可視化する。
+    return { ...evaluated, decision: 'pass', reason: 'stop_hook_active', recheck: evaluated.decision, text };
+  }
   return { ...evaluateHandoff(text, { catalog, enforcement }), text };
 }
 function recordSkip({ sessionId = '', reason, rawHead = '' }) {
@@ -166,7 +177,7 @@ async function main() {
     return;
   }
   const ledger = path.join(home(), '.claude', 'handoff-ledger.jsonl');
-  const record = { ts: new Date().toISOString(), sessionId: input.session_id || path.basename(input.transcript_path || '', '.jsonl'), verdict: result.decision === 'pass' ? 'passed' : 'blocked', reason: result.reason, quality: result.quality || '', routesMatched: result.routesMatched, excerpt };
+  const record = { ts: new Date().toISOString(), sessionId: input.session_id || path.basename(input.transcript_path || '', '.jsonl'), verdict: result.recheck === 'block' ? 'bypassed' : result.decision === 'pass' ? 'passed' : 'blocked', reason: result.reason, quality: result.quality || '', routesMatched: result.routesMatched, excerpt };
   try {
     fs.mkdirSync(path.dirname(ledger), { recursive: true });
     fs.appendFileSync(ledger, JSON.stringify(record) + '\n');

@@ -133,6 +133,67 @@ test('status は ConvertTo-Json の単一オブジェクトも扱う', () => {
   assert.match(result.text, /ClaudeOnlyFailure\(result=1\)/);
 });
 
+function memoryHome({ shared, indexed } = {}) {
+  const home = tempHome();
+  const memoryDir = path.join(home, '.claude', 'projects', 'proj1', 'memory');
+  fs.mkdirSync(memoryDir, { recursive: true });
+  fs.writeFileSync(path.join(memoryDir, 'MEMORY.md'), indexed
+    ? '# MEMORY\n\n## ドメイン索引\n- [他PCからの共有知見](index/shared.md)\n'
+    : '# MEMORY\n\n## ドメイン索引\n- [別の索引](index/other.md)\n');
+  if (shared && shared.length) {
+    const sharedDir = path.join(memoryDir, 'shared');
+    fs.mkdirSync(sharedDir, { recursive: true });
+    for (const name of shared) fs.writeFileSync(path.join(sharedDir, name), `# ${name}\n`);
+  }
+  return home;
+}
+
+function statusForHome(home) {
+  const run = (_program, args) => {
+    if (args.includes('--abbrev-ref')) return { status: 0, stdout: 'main\n', stderr: '' };
+    if (args.includes('--count')) return { status: 0, stdout: '0\n', stderr: '' };
+    return { status: 0, stdout: '[]', stderr: '' };
+  };
+  return collectStatus({ home, repo: process.cwd(), label: 'PC', hostname: 'host', run, platform: 'linux' });
+}
+
+test('status は共有memoryの件数とMEMORY.md参照有無を表示する(届いている)', () => {
+  const home = memoryHome({ shared: ['a.md', 'b.md', 'c.md'], indexed: true });
+  const result = statusForHome(home);
+  assert.match(result.text, /memory=共有3件 \/ MEMORY\.md参照=yes/);
+  assert.deepEqual(result.data.sharedMemory, { found: true, count: 3, indexed: true });
+});
+
+test('status は共有memoryが未着地・未参照だと0件/noを表示する(届いていない)', () => {
+  const home = memoryHome({ indexed: false });
+  const result = statusForHome(home);
+  assert.match(result.text, /memory=共有0件 \/ MEMORY\.md参照=no/);
+  assert.deepEqual(result.data.sharedMemory, { found: true, count: 0, indexed: false });
+});
+
+test('status はmemoryディレクトリ自体が無いと memory=なし を表示する', () => {
+  const home = tempHome();
+  const result = statusForHome(home);
+  assert.match(result.text, /memory=なし/);
+  assert.deepEqual(result.data.sharedMemory, { found: false, count: 0, indexed: false });
+});
+
+test('status はmemory行を追加しても大量の夜間ジョブ失敗込みで1800字以内に収まる(予算回帰)', () => {
+  const home = memoryHome({ shared: Array.from({ length: 250 }, (_, index) => `shared-${index}.md`), indexed: true });
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'kim@orgiast.jp' } }));
+  const tasks = Array.from({ length: 200 }, (_, index) => ({ name: `ClaudeFailure${String(index).padStart(3, '0')}`, result: 1 }));
+  const run = (program, args) => {
+    if (program === 'powershell') return { status: 0, stdout: JSON.stringify(tasks), stderr: '' };
+    if (args.includes('--abbrev-ref')) return { status: 0, stdout: 'main\n', stderr: '' };
+    if (args.includes('--count')) return { status: 0, stdout: '1\n', stderr: '' };
+    return { status: 0, stdout: '', stderr: '' };
+  };
+  const result = collectStatus({ home, repo: process.cwd(), label: 'kim-PC', hostname: 'DESKTOP-2D0R4LI', run, platform: 'win32' });
+  assert.ok(result.text.length <= 1800, `length=${result.text.length}`);
+  assert.match(result.text, /memory=共有250件 \/ MEMORY\.md参照=yes/);
+  assert.match(result.text, /…\(他\d+件を省略\)/);
+});
+
 test('ネットワーク不通は例外にせず空結果で終了する', async () => {
   const oldHome = process.env.ORGIAST_HOME;
   process.env.ORGIAST_HOME = tempHome();

@@ -162,6 +162,37 @@ function extractZip(buffer, destination) {
     fs.mkdirSync(path.dirname(output), { recursive: true }); fs.writeFileSync(output, contents);
   }
 }
+// ONBOARDING の本文を取ってくる。**raw.githubusercontent は当てにならない**:
+// マージ直後、node(undici) からは `x-cache: HIT` で古い版が返り、`Cache-Control: no-cache` も
+// クエリでのキャッシュ回避も効かなかった（2026-09-03 実測: raw 107,857バイト / 実際は 108,989バイト。
+// curl は別エッジに当たって新しい版を取れたので「curl で確認したから配布できている」も成り立たない）。
+// Contents API は同時刻に新しい版を返した。未認証でも 60req/h/IP あり、15分間引きなら1台4回/hで収まる。
+// レート制限や障害では raw へ落とす（古い版でも「取れない」より良い。取得元はログに出す）。
+async function fetchOnboarding() {
+  const attempts = [];
+  if (!process.env.ORGIAST_ONBOARDING_URL) {
+    attempts.push({
+      label: 'api',
+      url: `https://api.github.com/repos/kimkon1011/orgiast-claude-rules/contents/ONBOARDING.md?ref=main`,
+      headers: { Accept: 'application/vnd.github.raw', 'User-Agent': 'orgiast-onboarding-sync' },
+    });
+  }
+  attempts.push({ label: 'raw', url: rawUrl, headers: { 'Cache-Control': 'no-cache' } });
+  const errors = [];
+  for (const attempt of attempts) {
+    try {
+      const response = await fetch(attempt.url, { cache: 'no-store', headers: attempt.headers, signal: AbortSignal.timeout(15000) });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const bytes = Buffer.from(await response.arrayBuffer());
+      if (!bytes.length) throw new Error('empty body');
+      return { bytes, source: attempt.label };
+    } catch (error) {
+      errors.push(`${attempt.label}: ${oneLine(error)}`);
+    }
+  }
+  log(`fetch failed (${errors.join(' / ')})`);
+  return null;
+}
 async function downloadZipRoot() {
   const response = await fetch('https://github.com/kimkon1011/orgiast-claude-rules/archive/refs/heads/main.zip', { signal: AbortSignal.timeout(60000) });
   if (!response.ok) throw new Error(`repo zip HTTP ${response.status}`);
@@ -521,12 +552,9 @@ async function main() { try {
     console.log(`[onboarding-sync] ONBOARDING の取得をスキップ (前回 ${Math.round(sinceMs / 60000)} 分前 / 間引き ${minIntervalMin} 分 / 強制するなら --force)`);
     return;
   }
-  let bodyBytes;
-  try {
-    const response = await fetch(rawUrl, { cache: 'no-store', headers: { 'Cache-Control': 'no-cache' }, signal: AbortSignal.timeout(15000) });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    bodyBytes = Buffer.from(await response.arrayBuffer());
-  } catch (e) { log(`fetch failed: ${e.message}`); return; }
+  const fetched = await fetchOnboarding();
+  if (!fetched) return;
+  const { bytes: bodyBytes, source } = fetched;
   if (!bodyBytes?.length) { log('fetch returned empty body, skip'); return; }
   const hash = crypto.createHash('sha256').update(bodyBytes).digest('hex');
   const body = bodyBytes.toString('utf8');
@@ -545,8 +573,8 @@ async function main() { try {
     if (current !== null) fs.copyFileSync(target, `${target}.bak.${now.toISOString().slice(0, 10)}-onboarding-index`);
     fs.writeFileSync(target, result.updated, 'utf8');
     save(hash, now);
-    console.log(`[onboarding-sync] updated CLAUDE.md (hash ${hash.slice(0, 8)})`);
-    log(`updated (hash ${hash.slice(0, 8)})`);
+    console.log(`[onboarding-sync] updated CLAUDE.md (hash ${hash.slice(0, 8)} / from ${source})`);
+    log(`updated (hash ${hash.slice(0, 8)} / from ${source})`);
   }
 } catch (e) { log(`unexpected error: ${e.message}`); } }
 

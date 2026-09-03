@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { needsWorktreeRepair, detectQuotaLimit } = await import('./codex-do.mjs');
+const { needsWorktreeRepair, detectQuotaLimit, buildQwenArgs, buildQwenEnv, loadDeepseekKey } = await import('./codex-do.mjs');
 
 function run(args, options = {}) {
   return spawnSync(process.execPath, [tool, ...args], {
@@ -133,28 +133,166 @@ test('枠切れ発生時に --no-fallback を指定した場合はフォール�
   assert.match(result.stdout, /executor=codex/);
 });
 
-test('枠切れ発生時にフォールバックし、Gemini が成功した場合は 0 で終了しヘッダ・フッタを出力する', () => {
+test('枠切れ発生時にフォールバックし、Qwen Code が成功した場合は 0 で終了しヘッダ・フッタを出力する', () => {
   const mockResults = [
     { status: 0, output: "You've hit your usage limit. Please try again later.", stderr: "" },
-    { status: 0, output: "Gemini CLI has successfully edited files.", stderr: "" }
+    { status: 0, output: "Qwen Code CLI has successfully edited files.", stderr: "" }
   ];
   const result = run(['指示内容'], {
-    env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults) }
+    env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults), DEEPSEEK_API_KEY: 'sk-test' }
   });
   assert.equal(result.status, 0);
-  assert.match(result.stdout, /executor=gemini-cli/);
-  assert.match(result.stderr, /Falling back to Gemini CLI/);
+  assert.match(result.stdout, /executor=qwen-code/);
+  assert.match(result.stderr, /Falling back to Qwen Code CLI/);
 });
 
-test('Codex もフォールバック(Gemini) も失敗した場合は非ゼロで終了する', () => {
+test('Codex もフォールバック(Qwen Code) も失敗した場合は非ゼロで終了する', () => {
   const mockResults = [
     { status: 0, output: "You've hit your usage limit. Please try again later.", stderr: "" },
-    { status: 12, output: "", stderr: "Gemini execution error" }
+    { status: 12, output: "", stderr: "Qwen Code execution error" }
   ];
   const result = run(['指示内容'], {
-    env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults) }
+    env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults), DEEPSEEK_API_KEY: 'sk-test' }
   });
   assert.equal(result.status, 12);
-  assert.match(result.stdout, /executor=gemini-cli/);
+  assert.match(result.stdout, /executor=qwen-code/);
+});
+
+test('枠切れ発生時に DEEPSEEK_API_KEY が無ければフォールバックせず非ゼロで終了する', () => {
+  const mockResults = [
+    { status: 0, output: "You've hit your usage limit. Please try again later.", stderr: "" }
+  ];
+  const prev = process.env.DEEPSEEK_API_KEY;
+  delete process.env.DEEPSEEK_API_KEY;
+  try {
+    const result = run(['指示内容'], {
+      env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults) }
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /executor=qwen-code/);
+    assert.match(result.stderr, /DEEPSEEK_API_KEY が無いため qwen-code フォールバックを実行できません/);
+  } finally {
+    if (prev !== undefined) process.env.DEEPSEEK_API_KEY = prev;
+  }
+});
+
+test('buildQwenArgs は -y と --exclude-tools run_shell_command を必ず両方含む', () => {
+  const args = buildQwenArgs();
+  assert.ok(args.includes('-y'));
+  const excludeIndex = args.indexOf('--exclude-tools');
+  assert.ok(excludeIndex >= 0);
+  assert.equal(args[excludeIndex + 1], 'run_shell_command');
+});
+
+test('buildQwenArgs は --approval-mode を含まない', () => {
+  const args = buildQwenArgs();
+  assert.ok(!args.includes('--approval-mode'));
+});
+
+test('buildQwenArgs の最後は [-p, marker] で終わる', () => {
+  const args = buildQwenArgs();
+  assert.deepEqual(args.slice(-2), ['-p', 'Follow-the-instructions-provided-on-stdin.']);
+});
+
+test('buildQwenArgs の戻り値のどの要素にも空白文字(半角スペース・タブ・改行)が含まれない', () => {
+  // shell:true の Windows では引数がエスケープされず連結されるため、空白を含む引数は
+  // qwen が位置引数と誤認して即死する(2026-09-03 実測)。既定値とカスタム marker の両方で検証する。
+  const cases = [buildQwenArgs(), buildQwenArgs({ marker: 'Custom-marker-without-spaces.' })];
+  for (const args of cases) {
+    for (const arg of args) {
+      assert.ok(!/[\s]/.test(arg), `argv 要素に空白が含まれる: ${JSON.stringify(arg)}`);
+    }
+  }
+});
+
+test('buildQwenArgs は timeoutSecs を --max-wall-time の次に置く', () => {
+  const args = buildQwenArgs({ timeoutSecs: 42 });
+  const wallIndex = args.indexOf('--max-wall-time');
+  assert.ok(wallIndex >= 0);
+  assert.equal(args[wallIndex + 1], '42');
+});
+
+test('buildQwenArgs は既定値と上書き値の両方で正しい引数を返す', () => {
+  const defaults = buildQwenArgs();
+  assert.deepEqual(defaults, [
+    '--auth-type', 'openai',
+    '-m', 'deepseek-chat',
+    '-y',
+    '--exclude-tools', 'run_shell_command',
+    '--max-wall-time', '1800',
+    '--max-tool-calls', '80',
+    '-p', 'Follow-the-instructions-provided-on-stdin.'
+  ]);
+  const custom = buildQwenArgs({ model: 'deepseek-reasoner', timeoutSecs: 300, maxToolCalls: 40 });
+  assert.deepEqual(custom, [
+    '--auth-type', 'openai',
+    '-m', 'deepseek-reasoner',
+    '-y',
+    '--exclude-tools', 'run_shell_command',
+    '--max-wall-time', '300',
+    '--max-tool-calls', '40',
+    '-p', 'Follow-the-instructions-provided-on-stdin.'
+  ]);
+});
+
+test('buildQwenEnv は OPENAI_* を設定し GEMINI/GOOGLE キーを削除し baseEnv を変えない', () => {
+  const base = { PATH: '/usr/bin', GEMINI_API_KEY: 'g', GOOGLE_API_KEY: 'gg', OPENAI_API_KEY: 'old' };
+  const snapshot = { ...base };
+  const env = buildQwenEnv(base, 'deepseek-key');
+  assert.equal(env.OPENAI_API_KEY, 'deepseek-key');
+  assert.equal(env.OPENAI_BASE_URL, 'https://api.deepseek.com/v1');
+  assert.equal(env.OPENAI_MODEL, 'deepseek-chat');
+  assert.equal(env.QWEN_CODE_SUPPRESS_YOLO_WARNING, '1');
+  assert.ok(!('GEMINI_API_KEY' in env));
+  assert.ok(!('GOOGLE_API_KEY' in env));
+  assert.deepEqual(base, snapshot);
+});
+
+test('buildQwenEnv は model と baseUrl を上書きできる', () => {
+  const env = buildQwenEnv({}, 'key', { model: 'deepseek-reasoner', baseUrl: 'https://example.com/v1' });
+  assert.equal(env.OPENAI_MODEL, 'deepseek-reasoner');
+  assert.equal(env.OPENAI_BASE_URL, 'https://example.com/v1');
+});
+
+test('loadDeepseekKey は process.env を最優先する', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-ds-'));
+  fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.claude', 'deepseek.env'), 'DEEPSEEK_API_KEY=from-file\n', 'utf8');
+  const prev = process.env.DEEPSEEK_API_KEY;
+  process.env.DEEPSEEK_API_KEY = 'from-env';
+  try {
+    assert.equal(loadDeepseekKey(dir), 'from-env');
+  } finally {
+    if (prev === undefined) delete process.env.DEEPSEEK_API_KEY;
+    else process.env.DEEPSEEK_API_KEY = prev;
+  }
+});
+
+test('loadDeepseekKey はファイルから export DEEPSEEK_API_KEY="..." 形式を読める', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-ds-'));
+  fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.claude', 'deepseek.env'), [
+    '# コメント行は無視',
+    'export DEEPSEEK_API_KEY="sk-abc-123"',
+    'OTHER=ignored'
+  ].join('\n'), 'utf8');
+  const prev = process.env.DEEPSEEK_API_KEY;
+  delete process.env.DEEPSEEK_API_KEY;
+  try {
+    assert.equal(loadDeepseekKey(dir), 'sk-abc-123');
+  } finally {
+    if (prev !== undefined) process.env.DEEPSEEK_API_KEY = prev;
+  }
+});
+
+test('loadDeepseekKey はキーが無ければ null を返す', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-ds-'));
+  const prev = process.env.DEEPSEEK_API_KEY;
+  delete process.env.DEEPSEEK_API_KEY;
+  try {
+    assert.equal(loadDeepseekKey(dir), null);
+  } finally {
+    if (prev !== undefined) process.env.DEEPSEEK_API_KEY = prev;
+  }
 });
 

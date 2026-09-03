@@ -31,6 +31,56 @@ export function detectQuotaLimit(stdout, stderr) {
   return { matched: false };
 }
 
+// 指示本文は execute() が stdin へ流す。argv には短いマーカーだけ渡す（長文を argv に載せると
+// Windows の shell:true で壊れる。§1.17）
+// shell:true の Windows では引数がエスケープされず連結されるので、
+// どの引数にも空白を含めない（含めると qwen が位置引数と誤認して即死する。2026-09-03 実測）
+export function buildQwenArgs({ model = 'deepseek-chat', timeoutSecs = 1800, maxToolCalls = 80, marker = 'Follow-the-instructions-provided-on-stdin.' } = {}) {
+  return [
+    '--auth-type', 'openai',
+    '-m', model,
+    '-y',
+    '--exclude-tools', 'run_shell_command',
+    '--max-wall-time', String(timeoutSecs),
+    '--max-tool-calls', String(maxToolCalls),
+    '-p', marker
+  ];
+}
+
+export function buildQwenEnv(baseEnv, apiKey, { model = 'deepseek-chat', baseUrl = 'https://api.deepseek.com/v1' } = {}) {
+  const env = { ...baseEnv };
+  env.OPENAI_API_KEY = apiKey;
+  env.OPENAI_BASE_URL = baseUrl;
+  env.OPENAI_MODEL = model;
+  env.QWEN_CODE_SUPPRESS_YOLO_WARNING = '1';
+  delete env.GEMINI_API_KEY;
+  delete env.GOOGLE_API_KEY;
+  return env;
+}
+
+export function loadDeepseekKey(homeDir) {
+  if (process.env.DEEPSEEK_API_KEY) return process.env.DEEPSEEK_API_KEY;
+  const envFile = path.join(homeDir, '.claude', 'deepseek.env');
+  let content;
+  try {
+    content = fs.readFileSync(envFile, 'utf8');
+  } catch {
+    return null;
+  }
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    const match = line.match(/^(?:export\s+)?DEEPSEEK_API_KEY\s*=\s*(.*)$/);
+    if (!match) continue;
+    let value = match[1].trim();
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    return value;
+  }
+  return null;
+}
+
 if (isEntry(import.meta.url)) {
 
 const args = process.argv.slice(2);
@@ -211,38 +261,36 @@ if (quotaCheck.matched) {
       result.status = 1;
     }
   } else {
-    executorName = 'gemini-cli';
-    console.log(`[codex-do] executor=gemini-cli (理由: Codex usage limit を検出)`);
+    executorName = 'qwen-code';
+    console.log(`[codex-do] executor=qwen-code (理由: Codex usage limit を検出)`);
     console.error(`[codex-do] Codex usage limit detected: ${quotaCheck.pattern} at index ${quotaCheck.index}. Context: "${quotaCheck.snippet}"`);
-    console.error(`[codex-do] Falling back to Gemini CLI (free OAuth tier)...`);
+    console.error(`[codex-do] Falling back to Qwen Code CLI (DeepSeek backend)...`);
 
-    const geminiEnv = { ...process.env };
-    delete geminiEnv.GEMINI_API_KEY;
-    delete geminiEnv.GOOGLE_API_KEY;
-
-    // approval-mode は auto_edit（編集ツールのみ自動承認）に留める。yolo にはしない。
-    // 2026-09-03 実測: auto_edit の Gemini は run_shell_command が
-    // "Unauthorized tool call" で弾かれるため、コードは書けるが
-    // テスト実行・git 操作はできない（195行書けてテスト0件・コミット0件だった）。
-    // これは仕様として受け入れる。codex-do の呼び出し側（auto-session の子セッション等）が
-    // 「実装を委譲 → 自分でテストして commit/PR」という分担で動いているため、
-    // テストと git は呼び出し側の責任。承認モードを緩めて解決してはいけない。
-    const geminiArgs = [
-      '-p', 'Please execute implementation instructions:',
-      '--approval-mode', 'auto_edit',
-      '--skip-trust'
-    ];
-
-    const geminiOptions = {
-      cwd,
-      env: geminiEnv,
-      shell: process.platform === 'win32'
-    };
-
-    result = await execute('gemini', geminiArgs, geminiOptions);
-    if (result.status === null) {
-      console.error(`[codex-do] Failed to spawn Gemini CLI fallback:`, result.error);
+    // フォールバック先は Qwen Code CLI + DeepSeek API。
+    // 2026-09-03 実測: Gemini CLI の OAuth 無料枠は終了しており
+    // (IneligibleTierError: This client is no longer supported for Gemini Code Assist for individuals)、
+    // 現在の gemini フォールバックは 100% 失敗する。代わりに qwen + DeepSeek が動く。
+    // qwen には gemini の auto_edit に相当する「編集だけ自動承認」モードが無く、-y なしだと
+    // 非対話モードで write_file が必ず拒否される。ただし -y 単独はシェル実行まで自動承認になるので、
+    // 必ず --exclude-tools run_shell_command と併用して「編集はできるがシェルは実行できない」=
+    // 従来の auto_edit 相当に落とすこと。この2つは常にセットで渡す。
+    // テスト実行・git 操作はできないのは仕様として受け入れる。codex-do の呼び出し側
+    // （auto-session の子セッション等）が「実装を委譲 → 自分でテストして commit/PR」という
+    // 分担で動いているため、テストと git は呼び出し側の責任。承認モードを緩めて解決してはいけない。
+    const key = loadDeepseekKey(home);
+    if (!key) {
+      console.error('DEEPSEEK_API_KEY が無いため qwen-code フォールバックを実行できません。~/.claude/deepseek.env を配置してください');
       result.status = 1;
+    } else {
+      result = await execute('qwen', buildQwenArgs({ timeoutSecs: timeoutSeconds }), {
+        cwd,
+        env: buildQwenEnv(process.env, key),
+        shell: process.platform === 'win32'
+      });
+      if (result.status === null) {
+        console.error(`[codex-do] Failed to spawn Qwen Code CLI fallback:`, result.error);
+        result.status = 1;
+      }
     }
   }
 }
@@ -264,7 +312,7 @@ try {
   const usage = {
     t: new Date().toISOString(),
     provider: executorName,
-    model: executorName === 'gemini-cli' ? 'gemini-cli-oauth' : 'codex-cli',
+    model: executorName === 'qwen-code' ? 'qwen-code/deepseek-chat' : 'codex-cli',
     in: Math.ceil(prompt.length / 4),
     out: Math.ceil((result.outputChars || 0) / 4),
     secs: Number(secs.toFixed(3))
@@ -272,6 +320,6 @@ try {
   fs.appendFileSync(ledger, `${JSON.stringify(usage)}\n`, 'utf8');
 } catch {}
 
-console.log(`[codex-do] executor=${executorName}${executorName === 'gemini-cli' ? ' (理由: Codex usage limit を検出)' : ''}`);
+console.log(`[codex-do] executor=${executorName}${executorName === 'qwen-code' ? ' (理由: Codex usage limit を検出)' : ''}`);
 process.exit(result?.status ?? 1);
 }

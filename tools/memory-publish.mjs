@@ -33,20 +33,27 @@ export function publishMemories(options = {}) {
       '',
     ].join('\n');
     const bytes = Buffer.byteLength(source, 'utf8');
-    const destination = path.join(options.keyserveRepo, 'memory-bundle.generated.js');
+    const destination = path.join(options.keyserveRepo, 'api', '_memory-bundle.generated.js');
     const legacyDirectory = path.join(options.keyserveRepo, 'memory-bundle');
+    const legacyPath = path.join(options.keyserveRepo, 'memory-bundle.generated.js');
     const emit = options.emit || console.log;
     let removedLegacyDirectory = false;
+    let removedLegacyPath = false;
     if (!dryRun) {
       if (fs.existsSync(legacyDirectory)) {
         fs.rmSync(legacyDirectory, { recursive: true });
         removedLegacyDirectory = true;
         emit(`旧 memory-bundle/ ディレクトリを削除: ${legacyDirectory}`);
       }
-      fs.mkdirSync(options.keyserveRepo, { recursive: true });
+      if (fs.existsSync(legacyPath)) {
+        fs.rmSync(legacyPath);
+        removedLegacyPath = true;
+        emit(`旧 memory-bundle.generated.js を削除（直下配信の再漏洩防止）: ${legacyPath}`);
+      }
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
       fs.writeFileSync(destination, source, 'utf8');
     }
-    const result = { exported: exported.exported, files: names.length, bytes, removedLegacyDirectory };
+    const result = { exported: exported.exported, files: names.length, bytes, removedLegacyDirectory, removedLegacyPath };
     emit(`${dryRun ? 'dry-run: ' : ''}memory bundle: files=${names.length} bytes=${bytes}`);
     return result;
   } finally { fs.rmSync(temporary, { recursive: true, force: true }); }

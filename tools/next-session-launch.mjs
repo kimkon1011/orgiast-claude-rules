@@ -122,10 +122,16 @@ export function buildVscodeExtUri({ prompt, cwd, claude, probe = false }) {
 
 export function planVscodeExtLaunch({ codeCli, prompt, cwd, claude }) {
   if (!codeCli || !cwd) return null;
+  const uri = buildVscodeExtUri({ prompt, cwd, claude });
+  // URI は `&` 区切りの複数パラメータを持つ。cmd.exe は引用されていない `&` を
+  // コマンド区切りとして解釈し、cwd/claude が別コマンド扱いで落ちる（2026-09-04 実測:
+  // `'cwd' is not recognized as an internal or external command`）。cmd /c "..." の
+  // 一枚文字列にして URI を引用符で囲み、windowsVerbatimArguments で node の再クォートを止める。
   return {
     label: 'open-session',
     command: 'cmd.exe',
-    args: ['/c', codeCli, '--open-url', buildVscodeExtUri({ prompt, cwd, claude })],
+    args: ['/c', `""${codeCli}" --open-url "${uri}""`],
+    windowsVerbatimArguments: true,
   };
 }
 
@@ -534,11 +540,20 @@ export async function launchNextSession(argv = [], io = {}) {
           stdio: 'ignore',
           windowsHide: true,
           env: launchEnv,
+          windowsVerbatimArguments: step.windowsVerbatimArguments === true,
         });
         if (typeof child.once === 'function') {
+          // `spawn` は「プロセスを作った」だけで、code.cmd → Code.exe が起動中の VSCode へ URL を
+          // IPC で渡し終える前に親が抜けると URI が届かない（2026-09-04 実測: ランチャー経由だと
+          // ptyhost.log に端末起動が一切残らないが、exit を待つと即座に残る）。exit まで待つ。
+          // ただし code.cmd が固まっても止まらないよう上限を設ける。
           await new Promise((resolve, reject) => {
-            child.once('spawn', resolve);
-            child.once('error', reject);
+            let settled = false;
+            const finish = (fn, value) => { if (!settled) { settled = true; clearTimeout(timer); fn(value); } };
+            const timer = setTimeout(() => finish(resolve), 30000);
+            if (typeof timer.unref === 'function') timer.unref();
+            child.once('exit', () => finish(resolve));
+            child.once('error', (error) => finish(reject, error));
           });
         }
         if (typeof child.unref === 'function') child.unref();

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import { EventEmitter } from 'node:events';
 import {
   accountConfigPath,
   accountLabel,
@@ -87,8 +88,25 @@ test('自前拡張 URI は prompt/cwd/claude を個別に URL エンコードす
   assert.deepEqual(planVscodeExtLaunch({ codeCli: 'C:\\Code\\bin\\code.cmd', ...values }), {
     label: 'open-session',
     command: 'cmd.exe',
-    args: ['/c', 'C:\\Code\\bin\\code.cmd', '--open-url', uri],
+    args: ['/c', `""C:\\Code\\bin\\code.cmd" --open-url "${uri}""`],
+    windowsVerbatimArguments: true,
   });
+});
+
+test('vscode-ext の URI は cmd.exe で & が切れないよう引用される', () => {
+  // buildVscodeExtUri は `&` 区切りの複数パラメータを持つ URI を返す。cmd.exe は引用のない `&` を
+  // コマンド区切りとして解釈するため、cmd /c の一枚文字列に URI 全体を引用符で包んで渡し、
+  // windowsVerbatimArguments で node 側の再クォートを止める必要がある（2026-09-04 実測で再現・確定）。
+  const values = { prompt: '/session-start', cwd: 'C:\\tmp\\wt', claude: 'C:\\claude.exe' };
+  const uri = buildVscodeExtUri(values);
+  const result = planVscodeExtLaunch({ codeCli: 'C:\\Code\\bin\\code.cmd', ...values });
+  assert.equal(result.windowsVerbatimArguments, true);
+  assert.match(result.args[1], /&cwd=/);
+  assert.match(result.args[1], /&claude=/);
+  assert.equal(result.args[1].startsWith('""C:\\Code\\bin\\code.cmd" --open-url "'), true);
+  assert.equal(result.args[1].endsWith('""'), true);
+  const inner = result.args[1].slice('""C:\\Code\\bin\\code.cmd" --open-url "'.length, -'""'.length);
+  assert.equal(inner, uri);
 });
 
 test('同梱 VSIX は数値バージョンが最新のものを選ぶ', () => {
@@ -476,6 +494,8 @@ test('VSCode dry-run は route と手順だけを出して spawn しない', asy
 
 function vscodeExtIo({ installed = false, codeCli = 'C:\\Code\\bin\\code.cmd' } = {}) {
   const commands = [];
+  const spawnCalls = [];
+  let exitListenerAttached = false;
   const base = fakeIo({
     env: { VSCODE_CLI_PATH: codeCli, CLAUDE_CLI_PATH: 'C:\\Claude CLI\\claude.exe' },
     exists: (file) => file === codeCli || file === 'C:\\Claude CLI\\claude.exe',
@@ -486,8 +506,24 @@ function vscodeExtIo({ installed = false, codeCli = 'C:\\Code\\bin\\code.cmd' } 
         ? { code: 0, stdout: installed ? 'orgiast.next-session\r\n' : 'other.extension\r\n', stderr: '' }
         : { code: 0, stdout: 'ok', stderr: '' };
     },
+    // open-session の spawn は本物の子プロセスと同じく EventEmitter を返し、`exit` を出す。
+    // ランチャーが `spawn` イベントだけを見て早期に抜けていないかをここで実地検証する
+    // (2026-09-04 実測: code.cmd → Code.exe の IPC 完了前に親が抜けると URI が届かない)。
+    spawn: (...args) => {
+      spawnCalls.push(args);
+      const child = new EventEmitter();
+      const attachOnce = child.once.bind(child);
+      child.once = (event, listener) => {
+        if (event === 'exit') exitListenerAttached = true;
+        return attachOnce(event, listener);
+      };
+      child.unref = () => {};
+      queueMicrotask(() => child.emit('exit', 0));
+      return child;
+    },
   });
-  return { ...base, commands };
+  base.calls.spawn = spawnCalls;
+  return { ...base, commands, exitListenerAttached: () => exitListenerAttached };
 }
 
 test('vscode-ext は未導入時だけ VSIX を先に入れ、正しい URI を開く', async () => {
@@ -499,8 +535,12 @@ test('vscode-ext は未導入時だけ VSIX を先に入れ、正しい URI を�
   assert.equal(commands[1][2], '--force');
   assert.equal(calls.spawn.length, 1);
   const args = calls.spawn[0][1];
-  assert.deepEqual(args.slice(0, 3), ['/c', 'C:\\Code\\bin\\code.cmd', '--open-url']);
-  const opened = new URL(args[3]);
+  assert.equal(args[0], '/c');
+  assert.equal(args[1].startsWith('""C:\\Code\\bin\\code.cmd" --open-url "'), true);
+  assert.equal(args[1].endsWith('""'), true);
+  const uriText = args[1].slice('""C:\\Code\\bin\\code.cmd" --open-url "'.length, -'""'.length);
+  assert.equal(calls.spawn[0][2].windowsVerbatimArguments, true);
+  const opened = new URL(uriText);
   assert.equal(opened.protocol, 'vscode:');
   assert.equal(opened.hostname, 'orgiast.next-session');
   assert.equal(opened.pathname, '/start');
@@ -517,6 +557,52 @@ test('vscode-ext は導入済みなら再インストールしない', async () 
   assert.equal(await launchNextSession(['--target', 'vscode-ext'], io), 0);
   assert.deepEqual(commands, [['--list-extensions']]);
   assert.equal(calls.spawn.length, 1);
+});
+
+test('vscode-ext は URI を撃った子プロセスの exit を待ってから終わる', async () => {
+  // `spawn` イベントだけを見て抜けると、code.cmd → Code.exe の IPC 完了前にランチャーが
+  // 終了し URI が届かない（2026-09-04 実測）。ここでは exit を出すまでランチャーの
+  // Promise が解決しないこと、かつ exit リスナーが実際に登録されたことを観測して確認する。
+  const codeCli = 'C:\\Code\\bin\\code.cmd';
+  const commands = [];
+  let releaseExit;
+  const exitGate = new Promise((resolve) => { releaseExit = resolve; });
+  let spawnedChild = null;
+  const { io } = fakeIo({
+    env: { VSCODE_CLI_PATH: codeCli, CLAUDE_CLI_PATH: 'C:\\Claude CLI\\claude.exe' },
+    exists: (file) => file === codeCli || file === 'C:\\Claude CLI\\claude.exe',
+    readdir: (dir) => dir.endsWith('vscode-next-session') ? ['orgiast-next-session-0.1.0.vsix'] : [],
+    runCodeCli: async (args) => {
+      commands.push(args);
+      return args[0] === '--list-extensions'
+        ? { code: 0, stdout: 'other.extension\r\n', stderr: '' }
+        : { code: 0, stdout: 'ok', stderr: '' };
+    },
+    spawn: (...args) => {
+      const child = new EventEmitter();
+      child.unref = () => {};
+      spawnedChild = child;
+      exitGate.then(() => child.emit('exit', 0));
+      return child;
+    },
+  });
+
+  let settled = false;
+  const runPromise = launchNextSession(['--target', 'vscode-ext'], io).then((code) => { settled = true; return code; });
+
+  // list-extensions / install-extension の非同期呼び出し分だけ tick を空けてから
+  // open-session の spawn 呼び出しが来るのを待つ(それでもまだ exit 待ちで settle しない)。
+  for (let i = 0; i < 20 && !spawnedChild; i += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.notEqual(spawnedChild, null);
+  assert.equal(settled, false);
+  assert.equal(spawnedChild.listenerCount('exit') > 0, true);
+
+  releaseExit();
+  const code = await runPromise;
+  assert.equal(code, 0);
+  assert.equal(settled, true);
 });
 
 test('vscode-ext で code CLI が無い時は理由を出して既存 vscode 経路へフォールバックする', async () => {

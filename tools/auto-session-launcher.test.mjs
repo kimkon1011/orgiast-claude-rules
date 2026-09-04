@@ -1,10 +1,84 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { fallbackTreePath, launchArgs, main, planCommands } from './auto-session-launcher.mjs';
+import {
+  fallbackTreePath,
+  launchArgs,
+  main,
+  planCommands,
+  planSharedRepoSyncCommands,
+} from './auto-session-launcher.mjs';
 
 const sharedRepo = '/shared/repo';
 const pinnedTree = '/private/auto-session/repo';
+
+test('共有リポジトリ自身を origin/main へ同期する4コマンドを計画する', () => {
+  assert.deepEqual(planSharedRepoSyncCommands({ sharedRepo }), [
+    { label: 'fetch shared repo', cwd: sharedRepo, args: ['fetch', 'origin', 'main', '--quiet'] },
+    { label: 'detach shared repo', cwd: sharedRepo, args: ['checkout', '--detach', 'origin/main', '--quiet'] },
+    { label: 'reset shared repo', cwd: sharedRepo, args: ['reset', '--hard', 'origin/main', '--quiet'] },
+    { label: 'clean shared repo', cwd: sharedRepo, args: ['clean', '-fd', '--quiet'] },
+  ]);
+});
+
+test('main は pinnedTree の準備前に共有リポジトリ同期コマンドを run へ渡す', async () => {
+  const previousRepo = process.env.ORGIAST_REPO;
+  const previousTree = process.env.ORGIAST_AUTO_SESSION_TREE;
+  process.env.ORGIAST_REPO = sharedRepo;
+  process.env.ORGIAST_AUTO_SESSION_TREE = pinnedTree;
+  const calls = [];
+  try {
+    const code = await main([], {
+      exists: (candidate) => candidate === launchArgs(pinnedTree, [])[0],
+      log: () => {},
+      bootLog: () => {},
+      readdir: () => [],
+      run: async (command, args, options) => {
+        calls.push({ command, args, cwd: options?.cwd });
+        return 0;
+      },
+    });
+    assert.equal(code, 0);
+    assert.deepEqual(calls.slice(0, 4), planSharedRepoSyncCommands({ sharedRepo }).map(({ args, cwd }) => ({
+      command: 'git', args, cwd,
+    })));
+    assert.equal(calls[4].args[0], 'fetch');
+  } finally {
+    if (previousRepo === undefined) delete process.env.ORGIAST_REPO; else process.env.ORGIAST_REPO = previousRepo;
+    if (previousTree === undefined) delete process.env.ORGIAST_AUTO_SESSION_TREE; else process.env.ORGIAST_AUTO_SESSION_TREE = previousTree;
+  }
+});
+
+test('共有リポジトリ同期失敗は pinnedTree の localStateFailure と fallback に影響しない', async () => {
+  const previousRepo = process.env.ORGIAST_REPO;
+  const previousTree = process.env.ORGIAST_AUTO_SESSION_TREE;
+  process.env.ORGIAST_REPO = sharedRepo;
+  process.env.ORGIAST_AUTO_SESSION_TREE = pinnedTree;
+  const calls = [];
+  const bootLogs = [];
+  try {
+    const code = await main([], {
+      exists: (candidate) => candidate === launchArgs(pinnedTree, [])[0],
+      log: () => {},
+      bootLog: (message) => bootLogs.push(message),
+      readdir: () => [],
+      run: async (command, args, options) => {
+        calls.push({ command, args, cwd: options?.cwd });
+        if (command === 'git' && options?.cwd === sharedRepo && args[0] === 'checkout') return 1;
+        return 0;
+      },
+    });
+    assert.equal(code, 0);
+    assert.equal(calls.some(({ args }) => args[0] === 'worktree' && args[1] === 'add'), false);
+    assert.ok(calls.some(({ cwd, args }) => cwd === pinnedTree && args[0] === 'clean'));
+    assert.ok(calls.some(({ command }) => command === process.execPath));
+    assert.ok(bootLogs.some((message) => message.includes('detach shared repo')));
+    assert.equal(bootLogs.some((message) => message.includes('stale')), false);
+  } finally {
+    if (previousRepo === undefined) delete process.env.ORGIAST_REPO; else process.env.ORGIAST_REPO = previousRepo;
+    if (previousTree === undefined) delete process.env.ORGIAST_AUTO_SESSION_TREE; else process.env.ORGIAST_AUTO_SESSION_TREE = previousTree;
+  }
+});
 
 test('共有リポジトリに対して fetch 以外の更新操作を計画しない', () => {
   const commands = planCommands({ sharedRepo, pinnedTree, treeExists: true });
@@ -63,9 +137,9 @@ test('fetch 失敗でも既存の専用 tree があれば子を起動する', as
       },
     });
     assert.equal(code, 23);
-    assert.equal(calls.length, 2);
-    assert.equal(calls[1].command, process.execPath);
-    assert.deepEqual(calls[1].args, launchArgs(pinnedTree, ['--dry-run']));
+    assert.equal(calls.length, 3);
+    assert.equal(calls[2].command, process.execPath);
+    assert.deepEqual(calls[2].args, launchArgs(pinnedTree, ['--dry-run']));
     assert.ok(logs.some((message) => message.includes('警告')));
     assert.ok(bootLogs.some((message) => message.includes('警告は非致命')));
   } finally {

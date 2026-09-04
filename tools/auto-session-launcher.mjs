@@ -19,6 +19,15 @@ const LOCAL_STATE_LABELS = new Set([
 
 const FALLBACK_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000;
 
+export function planSharedRepoSyncCommands({ sharedRepo }) {
+  return [
+    { label: 'fetch shared repo', cwd: sharedRepo, args: ['fetch', 'origin', 'main', '--quiet'] },
+    { label: 'detach shared repo', cwd: sharedRepo, args: ['checkout', '--detach', 'origin/main', '--quiet'] },
+    { label: 'reset shared repo', cwd: sharedRepo, args: ['reset', '--hard', 'origin/main', '--quiet'] },
+    { label: 'clean shared repo', cwd: sharedRepo, args: ['clean', '-fd', '--quiet'] },
+  ];
+}
+
 export function planCommands({ sharedRepo, pinnedTree, treeExists }) {
   const commands = [
     { label: 'fetch origin/main', cwd: sharedRepo, args: ['fetch', 'origin', 'main', '--quiet'] },
@@ -114,6 +123,30 @@ function exitCode(result) {
   return 0;
 }
 
+// タスクスケジューラが直接読む共有クローンも次回起動に向けて更新する。
+// 今回の pinnedTree 準備とは独立したベストエフォート処理なので、失敗は警告だけに留める。
+async function syncSharedRepo({ sharedRepo, run, log, bootLog, stamp }) {
+  for (const command of planSharedRepoSyncCommands({ sharedRepo })) {
+    try {
+      const result = await run('git', command.args, {
+        cwd: command.cwd,
+        stdio: ['inherit', 'inherit', 'pipe'],
+      });
+      if (exitCode(result) !== 0) {
+        const error = new Error(`終了コード ${exitCode(result)}`);
+        error.stderrTail = result?.stderrTail;
+        throw error;
+      }
+    } catch (error) {
+      const warning = `[auto-session-launcher] 警告: ${command.label} に失敗しました: ${error?.message ?? error}`;
+      const warningWithStderr = error?.stderrTail ? `${warning}\nstderr: ${error.stderrTail}` : warning;
+      log(warningWithStderr);
+      bootLog(`${stamp()} ${warningWithStderr}`);
+      return;
+    }
+  }
+}
+
 function localIso(date = new Date()) {
   const offset = -date.getTimezoneOffset();
   const sign = offset >= 0 ? '+' : '-';
@@ -150,6 +183,7 @@ export async function main(argv, io = {}) {
   const started = now();
   const stamp = () => `[${localIso(now())}]`;
   bootLog(`${stamp()} start argv=${JSON.stringify(argv)} pinnedTree=${pinnedTree}`);
+  await syncSharedRepo({ sharedRepo, run, log, bootLog, stamp });
   // ディレクトリだけ残った壊れた worktree を「用意できている」と誤判定しないよう、
   // 実際に起動する対象ファイルの有無で判定する。
   const initialEntryPoint = launchArgs(pinnedTree, [])[0];

@@ -77,7 +77,7 @@ function loadEnv() {
 }
 
 // --- 料金表 (USD / 1M tokens)。2026-07時点の公開価格。新モデルが出たら追記する ---
-const PRICING = {
+export const PRICING = {
   'claude-haiku-4-5': { in: 1, out: 5, cacheWrite: 1.25, cacheRead: 0.1 },
   'claude-sonnet-4-6': { in: 3, out: 15, cacheWrite: 3.75, cacheRead: 0.3 },
   'claude-sonnet-5': { in: 3, out: 15, cacheWrite: 3.75, cacheRead: 0.3 },

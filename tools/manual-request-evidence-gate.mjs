@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { latestAssistantText } from './lib/assistant-text.mjs';
 
 export function judge(text) {
     // コードフェンスを除去
@@ -128,41 +128,7 @@ function main() {
                     process.exit(0);
                 }
                 
-                // トランスクリプトパスのチェック
-                if (!data.transcript_path) {
-                    process.exit(0);
-                }
-                
-                // トランスクリプト読み込み
-                let transcriptLines;
-                try {
-                    const content = readFileSync(data.transcript_path, 'utf8');
-                    transcriptLines = content.split('\n').slice(-80);
-                } catch {
-                    process.exit(0);
-                }
-                
-                // アシスタントテキストの抽出
-                const NL = String.fromCharCode(10);   // ヒアドキュメント越しの改行エスケープ事故を避けるため定数にする
-                const entries = [];
-                for (const raw of transcriptLines) {
-                    try { entries.push(JSON.parse(raw)); } catch { /* パース失敗行は無視 */ }
-                }
-                // 「最後の user 発言より後ろ」が今回のターン。末尾から遡って集めると
-                // 1つ前のターンの発言を読んでしまう（委譲コードの実際の不具合）。
-                let lastUser = -1;
-                for (let i = entries.length - 1; i >= 0; i--) {
-                    if (entries[i] && entries[i].type === 'user') { lastUser = i; break; }
-                }
-                let assistantText = '';
-                for (let i = lastUser + 1; i < entries.length; i++) {
-                    const e = entries[i];
-                    if (!e || e.type !== 'assistant' || !e.message) continue;
-                    const content = e.message.content;
-                    if (typeof content === 'string') { assistantText += content + NL; continue; }
-                    if (!Array.isArray(content)) continue;
-                    for (const b of content) if (b && b.type === 'text' && b.text) assistantText += b.text + NL;
-                }
+                const assistantText = latestAssistantText(data.transcript_path);
 
                 // 空チェック
                 if (!assistantText) {

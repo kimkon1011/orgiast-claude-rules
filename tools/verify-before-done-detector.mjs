@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
+import { latestAssistantText } from './lib/assistant-text.mjs';
+import { readLastLines } from './transcript-tail.mjs';
 
 let stdin = '';
 process.stdin.setEncoding('utf8');
@@ -9,15 +11,15 @@ try {
   if (!stdin.trim()) process.exit(0);
   const data = JSON.parse(stdin);
   if (data.stop_hook_active || !data.transcript_path || !fs.existsSync(data.transcript_path)) process.exit(0);
-  const lines = fs.readFileSync(data.transcript_path, 'utf8').split(/\r?\n/).slice(-60);
-  let assistantText = '', codeEdited = false, editedName = '', testRun = false;
+  const lines = readLastLines(data.transcript_path, 4000, 8 * 1024 * 1024);
+  const assistantText = latestAssistantText(data.transcript_path);
+  let codeEdited = false, editedName = '', testRun = false;
   const exts = ['.ts','.tsx','.js','.jsx','.mjs','.cjs','.py','.go','.rs','.java','.gs','.vue','.svelte','.php','.rb','.cs'];
   const excl = ['\\memory\\','\\.claude\\','rules-extracted','onboarding-compress','\\docs\\','node_modules','\\tools\\','\\.git\\','scratchpad','.test.','.spec.','\\test\\','\\tests\\'];
   for (const line of lines) {
     let e; try { e = JSON.parse(line); } catch { continue; }
     if (!Array.isArray(e.message?.content)) continue;
     for (const b of e.message.content) {
-      if (b.type === 'text' && b.text) assistantText += `\n${b.text}`;
       if (b.type !== 'tool_use') continue;
       const name = String(b.name || '');
       if (/^(Edit|Write|MultiEdit)$/.test(name)) {

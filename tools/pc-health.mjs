@@ -148,7 +148,7 @@ function collectBatch() {
   return { exists: names.length > 0, pending, lastResult: result ? new Date(result.ms).toISOString() : null, resultAgeDays: ageDays(result?.ms || 0) };
 }
 function collectHooks() {
-  const expected = ['onboarding-sync', 'cost-loop', 'delegation-gate', 'claude-cost-reporter', 'tool-adoption-check'];
+  const expected = ['onboarding-sync', 'cost-loop', 'cost-routing-gate', 'claude-cost-reporter', 'tool-adoption-check'];
   let raw = ''; try { raw = fs.readFileSync(path.join(CLAUDE, 'settings.json'), 'utf8'); } catch {}
   const missing = expected.filter((name) => !raw.includes(name));
   return { expected, missing };

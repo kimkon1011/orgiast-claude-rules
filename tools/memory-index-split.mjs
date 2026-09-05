@@ -6,6 +6,7 @@ import { isEntry } from './is-entry.mjs';
 export const V2_MARKER = '<!-- MEMORY-INDEX v2 split -->';
 export const MAX_MEMORY_BYTES = 5120;
 export const DOMAINS = Object.freeze({
+  shared: ['他PCからの共有知見', '別アカウントPCで確立した実測ノウハウ'],
   session: ['セッション運用', '引き継ぎ/並行セッション/1目的/監査/記憶索引'],
   cost: ['AIコストと委譲', 'モデルルーティング/Codex/安いAI/課金枠'],
   workstyle: ['userへの接し方', '手作業ゼロ/依頼の書き方/通知/クレデンシャル'],
@@ -54,6 +55,27 @@ function titlesFrom(text, baseDirectory, wantedDirectory) {
   for (const match of text.matchAll(LINK_RE)) {
     const resolved = path.resolve(baseDirectory, match[2]);
     if (path.dirname(resolved) === path.resolve(wantedDirectory)) result.set(path.basename(resolved), match[1]);
+  }
+  return result;
+}
+
+function externallyManagedIndexes(directory) {
+  const result = new Map();
+  const indexDirectory = path.join(directory, 'index');
+  if (!fs.existsSync(indexDirectory)) return result;
+  for (const item of fs.readdirSync(indexDirectory, { withFileTypes: true })) {
+    if (!item.isFile() || !item.name.endsWith('.md')) continue;
+    const key = item.name.slice(0, -3);
+    const filename = path.join(indexDirectory, item.name);
+    const content = fs.readFileSync(filename);
+    const text = content.toString('utf8');
+    const targets = [...text.matchAll(LINK_RE)]
+      .map((match) => path.resolve(indexDirectory, match[2]));
+    const externalTargets = targets.filter((target) => path.dirname(target) !== path.resolve(directory));
+    const hasLocalTargets = targets.some((target) => path.dirname(target) === path.resolve(directory));
+    if (externalTargets.length > 0 && !hasLocalTargets) {
+      result.set(key, { content, count: externalTargets.length });
+    }
   }
   return result;
 }
@@ -137,6 +159,7 @@ export function build({ directory, domainsFile, pinsFile, backupsDirectory }) {
   if (invalidPins.length) throw new Error(`pin のファイルが存在しません:\n${invalidPins.map((file) => `- ${file}`).join('\n')}`);
   if (new Set(pins).size !== pins.length) throw new Error('--pins に重複があります');
   const titles = chooseTitles({ directory, oldMemory: format.text, assignments, backupsDirectory });
+  const externalIndexes = externallyManagedIndexes(directory);
   const grouped = new Map();
   for (const key of Object.keys(DOMAINS)) grouped.set(key, []);
   for (const file of files) grouped.get(assignments[file]).push(file);
@@ -150,11 +173,30 @@ export function build({ directory, domainsFile, pinsFile, backupsDirectory }) {
   ];
   const indexes = new Map();
   for (const [key, [display, keywords]] of Object.entries(DOMAINS)) {
+    const external = externalIndexes.get(key);
+    if (external) {
+      memoryLines.push(`- **${display}** ${keywords} → [index/${key}.md](index/${key}.md) (${external.count}件)`);
+      indexes.set(`${key}.md`, external.content);
+      continue;
+    }
     const domainFiles = grouped.get(key);
     if (!domainFiles.length) continue;
     memoryLines.push(`- **${display}** ${keywords} → [index/${key}.md](index/${key}.md) (${domainFiles.length}件)`);
     const text = [`# ${display}`, '', '（MEMORY.md から辿られるサブ索引。新規はここへ1行足す）', '', ...domainFiles.map((file) => `- [${titles.get(file)}](../${file})`), ''].join('\n');
     indexes.set(`${key}.md`, encode(text, format));
+  }
+  for (const [key, external] of externalIndexes.entries()) {
+    if (Object.hasOwn(DOMAINS, key)) continue;
+    const lines = format.text.split(/\r?\n/);
+    const targetRef = `[index/${key}.md](index/${key}.md)`;
+    let matchingLine = lines.find((line) => line.includes(targetRef));
+    if (matchingLine) {
+      matchingLine = matchingLine.replace(/\(\d+件\)/, `(${external.count}件)`);
+      memoryLines.push(matchingLine);
+    } else {
+      memoryLines.push(`- **${key}** → [index/${key}.md](index/${key}.md) (${external.count}件)`);
+    }
+    indexes.set(`${key}.md`, external.content);
   }
   memoryLines.push('');
   const memory = encode(memoryLines.join('\n'), format);

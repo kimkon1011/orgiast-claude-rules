@@ -376,6 +376,32 @@ try {
         }
     } else { Write-NightlyLog 'line-digest' 'skip:ファイルなし' }
 
+    $triage = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\ai-news-triage.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $triage = $candidate; break }
+    }
+    if ($triage) {
+        try {
+            $triageOutput = @(& $node.Source $triage)
+            $triageExitCode = $LASTEXITCODE
+            if ($triageExitCode -ne 0) {
+                $triageResult = "error:終了コード$triageExitCode"
+            } else {
+                $triageResult = @($triageOutput | Where-Object { $_ -match '^(ok:検証\d+件 done\d+ rejected\d+ pending\d+|skip:対象なし|error:.+)$' } | Select-Object -Last 1)
+                if ($triageResult.Count -eq 0) { $triageResult = 'error:状態不明' } else { $triageResult = [string]$triageResult[0] }
+            }
+            $summary['ai-news-triage'] = $triageResult
+            Write-NightlyLog 'ai-news-triage' $triageResult
+        } catch {
+            $summary['ai-news-triage'] = ("error:" + $_.Exception.Message); Write-NightlyLog 'ai-news-triage' $summary['ai-news-triage']
+            Write-Warning ("nightly-batch: ai-news-triage: " + $_.Exception.Message)
+        }
+    } else {
+        $summary['ai-news-triage'] = 'skip:ファイルなし'
+        Write-NightlyLog 'ai-news-triage' 'skip:ファイルなし'
+    }
+
     $makimonoDrain = $null
     foreach ($repo in $repos) {
         $candidate = Join-Path $repo 'tools\makimono-publish.mjs'

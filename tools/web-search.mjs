@@ -154,15 +154,29 @@ export async function runCli(argv, dependencies = {}) {
   try { options = parseArgs(argv); } catch (error) { stderr.write(`${error.message}\n${USAGE}\n`); return 2; }
   if (!options.query) { stderr.write(`調べたいことを指定してください。\n${USAGE}\n`); return 2; }
 
-  const keyOptions = { env: dependencies.env, homeDir: dependencies.homeDir };
+  try {
+    const result = await search(options.query, { ...options, ...dependencies });
+    printResult(stdout, options, result);
+    return 0;
+  } catch (error) {
+    stderr.write(`${error.message}\n`);
+    if (error.failures?.some((reason) => reason.includes('HTTP 429'))) stderr.write('429 はリトライしていません。時間をおいて再実行してください。\n');
+    return error.code || 1;
+  }
+}
+
+export async function search(query, options = {}) {
+  const providerOption = options.provider || 'auto';
+  const keyOptions = { env: options.env, homeDir: options.homeDir };
   const keys = {
-    gemini: dependencies.geminiApiKey ?? loadGeminiApiKey(keyOptions),
-    groq: dependencies.groqApiKey ?? dependencies.apiKey ?? loadGroqApiKey(keyOptions),
+    gemini: options.geminiApiKey ?? loadGeminiApiKey(keyOptions),
+    groq: options.groqApiKey ?? options.apiKey ?? loadGroqApiKey(keyOptions),
   };
-  const providers = options.provider === 'auto' ? ['gemini', 'groq'] : [options.provider];
+  const providers = providerOption === 'auto' ? ['gemini', 'groq'] : [providerOption];
   if (providers.every((provider) => !keys[provider])) {
-    stderr.write(`${providers.map((provider) => `${provider === 'gemini' ? 'GEMINI' : 'GROQ'}_API_KEY がありません`).join('。')}。環境変数、~/.gemini/.env、~/.claude.json または ~/.claude/groq.env を確認してください。\n`);
-    return 2;
+    const error = new Error(`${providers.map((provider) => `${provider === 'gemini' ? 'GEMINI' : 'GROQ'}_API_KEY がありません`).join('。')}。環境変数、~/.gemini/.env、~/.claude.json または ~/.claude/groq.env を確認してください。`);
+    error.code = 2;
+    throw error;
   }
 
   const failures = [];
@@ -171,26 +185,25 @@ export async function runCli(argv, dependencies = {}) {
     const model = options.model || DEFAULT_MODELS[provider];
     try {
       const request = provider === 'gemini' ? requestGeminiSearch : requestGroqSearch;
-      const result = await request({ ...options, model, apiKey: keys[provider], fetchImpl: dependencies.fetchImpl ?? globalThis.fetch });
+      const result = await request({ query, ...options, model, apiKey: keys[provider], fetchImpl: options.fetchImpl ?? globalThis.fetch });
       const usage = result.raw?.usageMetadata || result.raw?.usage || {};
       const row = provider === 'gemini'
         ? { t: new Date().toISOString(), provider, model, in: usage.promptTokenCount || 0, out: usage.candidatesTokenCount || 0, secs: result.elapsedMs / 1000, grounded: result.raw?.candidates?.[0]?.groundingMetadata != null }
         : { t: new Date().toISOString(), provider, model, in: usage.prompt_tokens || 0, out: usage.completion_tokens || 0, secs: result.elapsedMs / 1000 };
       try {
-        (dependencies.appendUsage || appendExecutorUsage)(row, { homeDir: dependencies.homeDir, usageFile: dependencies.usageFile });
+        (options.appendUsage || appendExecutorUsage)(row, { homeDir: options.homeDir, usageFile: options.usageFile });
       } catch (error) {
-        stderr.write(`使用量台帳への追記失敗: ${error.message}\n`);
+        options.stderr?.write(`使用量台帳への追記失敗: ${error.message}\n`);
       }
-      printResult(stdout, options, { ...result, provider, model });
-      return 0;
+      return { ...result, provider, model };
     } catch (error) {
-      failures.push(failureReason(provider, error, options.timeoutSeconds));
+      failures.push(failureReason(provider, error, options.timeoutSeconds || DEFAULT_TIMEOUT_SECONDS));
       // 429 も再試行せず、auto の場合だけ次のプロバイダへ進む。
     }
   }
-  stderr.write(`${failures.join('\n')}\n`);
-  if (failures.some((reason) => reason.includes('HTTP 429'))) stderr.write('429 はリトライしていません。時間をおいて再実行してください。\n');
-  return 1;
+  const error = new Error(failures.join('\n'));
+  error.failures = failures;
+  throw error;
 }
 
 if (isEntry(import.meta.url)) process.exitCode = await runCli(process.argv.slice(2));

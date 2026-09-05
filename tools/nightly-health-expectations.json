@@ -1,0 +1,13 @@
+[
+  { "log": "nightly-batch.log", "maxAgeHours": 26, "label": "夜間バッチ", "scan": "keywords" },
+  { "pattern": "^nightly-batch-\\d{4}-\\d{2}-\\d{2}\\.log$", "maxAgeHours": 26, "label": "夜間バッチ(日次)", "scan": "keywords" },
+  { "log": "auto-session-launcher.log", "maxAgeHours": 26, "label": "オートセッションランチャー", "scan": "stale-only" },
+  { "log": "backup-to-drive.log", "maxAgeHours": 26, "label": "ドライブバックアップ", "scan": "keywords" },
+  { "log": "discord-task-digest.log", "maxAgeHours": 26, "label": "Discordタスクダイジェスト", "scan": "keywords" },
+  { "log": "mail-task-digest.log", "maxAgeHours": 26, "label": "メールタスクダイジェスト", "scan": "keywords" },
+  { "log": "morning-batch.log", "maxAgeHours": 26, "label": "朝バッチ", "scan": "keywords" },
+  { "log": "fleet-poller.log", "maxAgeHours": 26, "label": "フリートポーラー", "scan": "keywords" },
+  { "log": "booth-feedback-intake.log", "maxAgeHours": 2, "label": "ブースフィードバック取り込み", "scan": "keywords" },
+  { "log": "funnel-probe.log", "maxAgeHours": 3, "label": "ファンネルプローブ", "scan": "keywords" },
+  { "log": "plaud-to-tldv.log", "maxAgeHours": 3, "label": "Plaudからtl;dv転送", "scan": "stale-only" }
+]

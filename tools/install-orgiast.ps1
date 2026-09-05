@@ -21,7 +21,12 @@ param(
   [switch]$Yes                                # 確認を省略(配布ランチャーから)
 )
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot 'ensure-run-hidden.ps1')
+$runHiddenLoaded = $false
+$runHiddenLocal = Join-Path $PSScriptRoot 'ensure-run-hidden.ps1'
+if (Test-Path -LiteralPath $runHiddenLocal) {
+  . $runHiddenLocal
+  $runHiddenLoaded = $true
+}
 $OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
 function Say($m,$c='White'){ Write-Host $m -ForegroundColor $c }
 function OK($m){ Say "  [OK] $m" 'Green' }
@@ -169,6 +174,20 @@ if (-not $gotRepo -and -not $preserveRepo) {
   }
 }
 if (-not $gotRepo) { Warn "共通ルールの取得に失敗。ネット接続を確認して、青い画面を閉じてもう一度コマンドを貼り付けてください(それでも駄目なら kim に連絡)" }
+
+# 単体配布では補助スクリプトが隣に無いため、リポジトリ取得後にもう一度解決する。
+if (-not $runHiddenLoaded) {
+  $runHiddenRepo = Join-Path $REPO 'tools\ensure-run-hidden.ps1'
+  if (Test-Path -LiteralPath $runHiddenLocal) {
+    . $runHiddenLocal
+    $runHiddenLoaded = $true
+  } elseif (Test-Path -LiteralPath $runHiddenRepo) {
+    . $runHiddenRepo
+    $runHiddenLoaded = $true
+  } else {
+    Warn "ensure-run-hidden.ps1 が見つからないため、黒いコンソールを隠す定期タスクの登録をスキップします(他機能は動作)"
+  }
+}
 
 # --- onboarding-sync.ps1 を hooks へ配置(BOM付き) ---
 Step "ルール自動追従スクリプトの配置"
@@ -383,7 +402,7 @@ if (Test-ApiKeyConfigured 'MANUS_API_KEY') { OK "Manus API key configured — Re
 
 # --- 夜間バッチの定時起動(毎日03:00・off-peak帯にキュー消化=50%off) ---
 Step "夜間バッチの定時起動を登録 (毎日03:00)"
-try {
+if ($runHiddenLoaded) { try {
   $nb = Join-Path $REPO 'tools\nightly-batch.ps1'
   if (Test-Path $nb) {
     $act = New-HiddenScheduledTaskAction -Execute 'powershell.exe' -ChildArgument @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $nb)
@@ -392,11 +411,11 @@ try {
     Register-ScheduledTask -TaskName 'OrgiastNightlyBatch' -Action $act -Trigger $trg -Settings $set -Force -ErrorAction Stop | Out-Null
     OK "定時起動 登録完了(毎日03:00 OrgiastNightlyBatch・夜間バッチ半額実行)"
   } else { Warn "nightly-batch.ps1 未取得=定時起動スキップ(他機能は動作)" }
-} catch { Warn ("定時起動の登録に失敗(他機能は動作。後で会社担当に相談): " + $_.Exception.Message) }
+} catch { Warn ("定時起動の登録に失敗(他機能は動作。後で会社担当に相談): " + $_.Exception.Message) } }
 
 # --- フリートポーラーの定時起動(毎日03:15・夜間1回=コスト最小/LLM呼び出しゼロ) ---
 Step "フリート自己点検の定時起動を登録 (毎日03:15)"
-try {
+if ($runHiddenLoaded) { try {
   $fp = Join-Path $REPO 'tools\fleet-poller.ps1'
   if (Test-Path $fp) {
     $fact = New-HiddenScheduledTaskAction -Execute 'powershell.exe' -ChildArgument @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $fp)
@@ -405,7 +424,7 @@ try {
     Register-ScheduledTask -TaskName 'OrgiastFleetPoller' -Action $fact -Trigger $ftrg -Settings $fset -Force -ErrorAction Stop | Out-Null
     OK "フリート自己点検 登録完了(毎日03:15・設定チェック結果をDiscordへ自己報告+承認済みタスク処理)"
   } else { Warn "fleet-poller.ps1 未取得=スキップ(他機能は動作)" }
-} catch { Warn ("フリート点検の登録に失敗(他機能は動作): " + $_.Exception.Message) }
+} catch { Warn ("フリート点検の登録に失敗(他機能は動作): " + $_.Exception.Message) } }
 
 # --- フリート管制エージェントの定時起動(15分ごと) ---
 Step "フリート管制エージェントを登録 (15分ごと)"

@@ -7,14 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { needsWorktreeRepair, detectQuotaLimit, GEMINI_PROMPT_FLAG } = await import('./codex-do.mjs');
-
-test('Gemini に渡す -p の値には空白を含めない', () => {
-  // Windows の shell 経由起動では引数がクォートされず、空白があると値が割れて
-  // Gemini が使い方(ヘルプ)を出して exit 0 で終わる（2026-09-03 実測）。
-  assert.ok(GEMINI_PROMPT_FLAG.length > 0);
-  assert.doesNotMatch(GEMINI_PROMPT_FLAG, /\s/);
-});
+const { needsWorktreeRepair, detectQuotaLimit, shouldFlagEmptyFallbackDiff, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, isBackendExhausted } = await import('./codex-do.mjs');
 
 function run(args, options = {}) {
   return spawnSync(process.execPath, [tool, ...args], {
@@ -119,6 +112,24 @@ test('detectQuotaLimit: 通常のエラー出力やテスト失敗では検出�
   assert.equal(check.matched, false);
 });
 
+test('fallback の実装系指示で空 diff なら失敗扱いにする', () => {
+  assert.equal(shouldFlagEmptyFallbackDiff({
+    executorName: 'fallback',
+    wantedEdit: true,
+    timedOut: false,
+    diffText: '  \n',
+  }), true);
+});
+
+test('fallback の読み取り専用指示なら空 diff でも失敗扱いにしない', () => {
+  assert.equal(shouldFlagEmptyFallbackDiff({
+    executorName: 'fallback',
+    wantedEdit: false,
+    timedOut: false,
+    diffText: '',
+  }), false);
+});
+
 test('--no-fallback が指定されても指示文が引数として食われず、正しく除外される', () => {
   const result = run(['--dry-run', '--no-fallback', 'これは指示文です']);
   assert.equal(result.status, 0);
@@ -140,79 +151,387 @@ test('枠切れ発生時に --no-fallback を指定した場合はフォール�
   assert.match(result.stdout, /executor=codex/);
 });
 
-test('枠切れ検出時に provider-cooldown.json へ codex を記録する', () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-cooldown-home-'));
-  const before = Date.now();
-  const mockResults = [
-    { status: 0, output: "You've hit your usage limit. Please try again in 35 minutes.", stderr: '' }
-  ];
-  const result = run(['--no-fallback', '指示内容'], {
-    home, env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults) }
-  });
-  assert.notEqual(result.status, 0);
-  const state = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'provider-cooldown.json'), 'utf8'));
-  assert.equal(state.codex.reason, 'usage_limit');
-  assert.ok(state.codex.until >= before + 35 * 60_000);
-  assert.ok(state.codex.until <= Date.now() + 35 * 60_000);
-});
-
-test('枠切れ発生時にフォールバックし、Gemini が成功した場合は 0 で終了しヘッダ・フッタを出力する', () => {
+test('枠切れ発生時にフォールバックが成功した場合は 0 で終了しヘッダ・フッタを出力する', () => {
   const mockResults = [
     { status: 0, output: "You've hit your usage limit. Please try again later.", stderr: "" },
-    { status: 0, output: "Gemini CLI has successfully edited files.", stderr: "" }
+    { status: 0, output: "Qwen Code CLI has successfully edited files.", stderr: "" }
   ];
   const result = run(['指示内容'], {
-    env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults) }
+    env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults), GEMINI_API_KEY: '', DEEPSEEK_API_KEY: 'sk-test' }
   });
   assert.equal(result.status, 0);
-  assert.match(result.stdout, /executor=gemini-cli/);
-  assert.match(result.stderr, /Falling back to Gemini CLI/);
+  assert.match(result.stdout, /executor=fallback:deepseek/);
+  assert.match(result.stderr, /Falling back to an agentic CLI/);
 });
 
-function emptyRepo() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-repo-'));
-  spawnSync('git', ['-C', dir, 'init', '-q'], { encoding: 'utf8' });
+test('Codex もフォールバック(Qwen Code) も失敗した場合は非ゼロで終了する', () => {
+  const mockResults = [
+    { status: 0, output: "You've hit your usage limit. Please try again later.", stderr: "" },
+    { status: 12, output: "", stderr: "Qwen Code execution error" }
+  ];
+  const result = run(['指示内容'], {
+    env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults), GEMINI_API_KEY: '', DEEPSEEK_API_KEY: 'sk-test' }
+  });
+  assert.equal(result.status, 12);
+  assert.match(result.stdout, /executor=fallback:deepseek/);
+});
+
+test('枠切れ発生時に DEEPSEEK_API_KEY が無ければフォールバックせず非ゼロで終了する', () => {
+  const mockResults = [
+    { status: 0, output: "You've hit your usage limit. Please try again later.", stderr: "" }
+  ];
+  const prev = process.env.DEEPSEEK_API_KEY;
+  delete process.env.DEEPSEEK_API_KEY;
+  try {
+    const result = run(['指示内容'], {
+      env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults), GEMINI_API_KEY: '', OPENROUTER_API_KEY: '' }
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /executor=fallback:unknown/);
+    assert.match(result.stderr, /GEMINI_API_KEY、DEEPSEEK_API_KEY、OPENROUTER_API_KEY が無いため/);
+  } finally {
+    if (prev !== undefined) process.env.DEEPSEEK_API_KEY = prev;
+  }
+});
+
+test('buildQwenArgs は -y と --exclude-tools run_shell_command を必ず両方含む', () => {
+  const args = buildQwenArgs();
+  assert.ok(args.includes('-y'));
+  const excludeIndex = args.indexOf('--exclude-tools');
+  assert.ok(excludeIndex >= 0);
+  assert.equal(args[excludeIndex + 1], 'run_shell_command');
+});
+
+test('buildQwenArgs は --approval-mode を含まない', () => {
+  const args = buildQwenArgs();
+  assert.ok(!args.includes('--approval-mode'));
+});
+
+test('buildQwenArgs の最後は [-p, marker] で終わる', () => {
+  const args = buildQwenArgs();
+  assert.deepEqual(args.slice(-2), ['-p', 'Follow-the-instructions-provided-on-stdin.']);
+});
+
+test('buildQwenArgs の戻り値のどの要素にも空白文字(半角スペース・タブ・改行)が含まれない', () => {
+  // shell:true の Windows では引数がエスケープされず連結されるため、空白を含む引数は
+  // qwen が位置引数と誤認して即死する(2026-09-03 実測)。既定値とカスタム marker の両方で検証する。
+  const cases = [buildQwenArgs(), buildQwenArgs({ marker: 'Custom-marker-without-spaces.' })];
+  for (const args of cases) {
+    for (const arg of args) {
+      assert.ok(!/[\s]/.test(arg), `argv 要素に空白が含まれる: ${JSON.stringify(arg)}`);
+    }
+  }
+});
+
+test('buildQwenArgs は timeoutSecs を --max-wall-time の次に置く', () => {
+  const args = buildQwenArgs({ timeoutSecs: 42 });
+  const wallIndex = args.indexOf('--max-wall-time');
+  assert.ok(wallIndex >= 0);
+  assert.equal(args[wallIndex + 1], '42');
+});
+
+test('buildQwenArgs は既定値と上書き値の両方で正しい引数を返す', () => {
+  const defaults = buildQwenArgs();
+  assert.deepEqual(defaults, [
+    '--auth-type', 'openai',
+    '-m', 'deepseek-chat',
+    '-y',
+    '--exclude-tools', 'run_shell_command',
+    '--max-wall-time', '1800',
+    '--max-tool-calls', '80',
+    '-p', 'Follow-the-instructions-provided-on-stdin.'
+  ]);
+  const custom = buildQwenArgs({ model: 'deepseek-reasoner', timeoutSecs: 300, maxToolCalls: 40 });
+  assert.deepEqual(custom, [
+    '--auth-type', 'openai',
+    '-m', 'deepseek-reasoner',
+    '-y',
+    '--exclude-tools', 'run_shell_command',
+    '--max-wall-time', '300',
+    '--max-tool-calls', '40',
+    '-p', 'Follow-the-instructions-provided-on-stdin.'
+  ]);
+});
+
+test('buildQwenEnv は OPENAI_* を設定し GEMINI/GOOGLE キーを削除し baseEnv を変えない', () => {
+  const base = { PATH: '/usr/bin', GEMINI_API_KEY: 'g', GOOGLE_API_KEY: 'gg', OPENAI_API_KEY: 'old' };
+  const snapshot = { ...base };
+  const env = buildQwenEnv(base, 'deepseek-key');
+  assert.equal(env.OPENAI_API_KEY, 'deepseek-key');
+  assert.equal(env.OPENAI_BASE_URL, 'https://api.deepseek.com/v1');
+  assert.equal(env.OPENAI_MODEL, 'deepseek-chat');
+  assert.equal(env.QWEN_CODE_SUPPRESS_YOLO_WARNING, '1');
+  assert.ok(!('GEMINI_API_KEY' in env));
+  assert.ok(!('GOOGLE_API_KEY' in env));
+  assert.deepEqual(base, snapshot);
+});
+
+test('buildQwenEnv は model と baseUrl を上書きできる', () => {
+  const env = buildQwenEnv({}, 'key', { model: 'deepseek-reasoner', baseUrl: 'https://example.com/v1' });
+  assert.equal(env.OPENAI_MODEL, 'deepseek-reasoner');
+  assert.equal(env.OPENAI_BASE_URL, 'https://example.com/v1');
+});
+
+test('buildGeminiArgs は auto_edit を使い -y を含めず、末尾に空白なし marker を置く', () => {
+  const marker = 'Custom-marker-without-spaces.';
+  const args = buildGeminiArgs({ marker });
+  const approvalIndex = args.indexOf('--approval-mode');
+  assert.ok(approvalIndex >= 0);
+  assert.equal(args[approvalIndex + 1], 'auto_edit');
+  assert.ok(!args.includes('-y'));
+  assert.deepEqual(args.slice(-2), ['-p', marker]);
+  for (const arg of args) assert.ok(!/\s/.test(arg), `argv 要素に空白が含まれる: ${JSON.stringify(arg)}`);
+});
+
+test('buildGeminiEnv は Gemini キーと trust を設定し、OPENAI_* と baseEnv を変えない', () => {
+  const base = { PATH: '/usr/bin', GEMINI_API_KEY: 'old', OPENAI_API_KEY: 'openai-key', OPENAI_BASE_URL: 'https://example.test' };
+  const snapshot = { ...base };
+  const env = buildGeminiEnv(base, 'gemini-key');
+  assert.equal(env.GEMINI_API_KEY, 'gemini-key');
+  assert.equal(env.GEMINI_CLI_TRUST_WORKSPACE, 'true');
+  assert.equal(env.OPENAI_API_KEY, 'openai-key');
+  assert.equal(env.OPENAI_BASE_URL, 'https://example.test');
+  assert.deepEqual(base, snapshot);
+});
+
+test('loadDeepseekKey は process.env を最優先する', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-ds-'));
+  fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.claude', 'deepseek.env'), 'DEEPSEEK_API_KEY=from-file\n', 'utf8');
+  const prev = process.env.DEEPSEEK_API_KEY;
+  process.env.DEEPSEEK_API_KEY = 'from-env';
+  try {
+    assert.equal(loadDeepseekKey(dir), 'from-env');
+  } finally {
+    if (prev === undefined) delete process.env.DEEPSEEK_API_KEY;
+    else process.env.DEEPSEEK_API_KEY = prev;
+  }
+});
+
+test('loadDeepseekKey はファイルから export DEEPSEEK_API_KEY="..." 形式を読める', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-ds-'));
+  fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.claude', 'deepseek.env'), [
+    '# コメント行は無視',
+    'export DEEPSEEK_API_KEY="sk-abc-123"',
+    'OTHER=ignored'
+  ].join('\n'), 'utf8');
+  const prev = process.env.DEEPSEEK_API_KEY;
+  delete process.env.DEEPSEEK_API_KEY;
+  try {
+    assert.equal(loadDeepseekKey(dir), 'sk-abc-123');
+  } finally {
+    if (prev !== undefined) process.env.DEEPSEEK_API_KEY = prev;
+  }
+});
+
+test('loadDeepseekKey はキーが無ければ null を返す', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-ds-'));
+  const prev = process.env.DEEPSEEK_API_KEY;
+  delete process.env.DEEPSEEK_API_KEY;
+  try {
+    assert.equal(loadDeepseekKey(dir), null);
+  } finally {
+    if (prev !== undefined) process.env.DEEPSEEK_API_KEY = prev;
+  }
+});
+
+// ---- fallback backend resolution / key loading / exhaustion detection ----
+
+function makeHomeWithEnv(files) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-home-'));
+  fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
+  for (const [name, body] of Object.entries(files)) {
+    const file = name === '.gemini/.env' ? path.join(dir, name) : path.join(dir, '.claude', name);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, body, 'utf8');
+  }
   return dir;
 }
 
-test('Gemini が使い方(ヘルプ)を出して exit 0 で終わったら失敗として扱う', () => {
-  // 引数を1つ取り違えるだけでヘルプが出て exit 0 になり、1行も書いていないのに
-  // 成功に見える(2026-09-03 実測: shell:true で -p の値が空白で割れていた)。
-  const mockResults = [
-    { status: 0, output: "You've hit your usage limit. Please try again later.", stderr: '' },
-    { status: 0, output: 'Usage: gemini [options]\n      --approval-mode             Set the approval mode: default\n', stderr: '' }
-  ];
-  const result = run(['実装して', '--cwd', emptyRepo()], {
-    env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults) }
+// process.env の影響を受けないよう、テスト中は両キーを退避・削除・復元する。
+function withEnvKeysCleared(fn) {
+  const prevOR = process.env.OPENROUTER_API_KEY;
+  const prevDS = process.env.DEEPSEEK_API_KEY;
+  const prevGemini = process.env.GEMINI_API_KEY;
+  const prevModel = process.env.CODEX_DO_FREE_MODEL;
+  const prevGeminiModel = process.env.CODEX_DO_GEMINI_MODEL;
+  const prevPreferFree = process.env.CODEX_DO_PREFER_FREE;
+  delete process.env.OPENROUTER_API_KEY;
+  delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.GEMINI_API_KEY;
+  delete process.env.CODEX_DO_FREE_MODEL;
+  delete process.env.CODEX_DO_GEMINI_MODEL;
+  delete process.env.CODEX_DO_PREFER_FREE;
+  try {
+    return fn();
+  } finally {
+    if (prevOR === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = prevOR;
+    if (prevDS === undefined) delete process.env.DEEPSEEK_API_KEY;
+    else process.env.DEEPSEEK_API_KEY = prevDS;
+    if (prevGemini === undefined) delete process.env.GEMINI_API_KEY;
+    else process.env.GEMINI_API_KEY = prevGemini;
+    if (prevModel === undefined) delete process.env.CODEX_DO_FREE_MODEL;
+    else process.env.CODEX_DO_FREE_MODEL = prevModel;
+    if (prevGeminiModel === undefined) delete process.env.CODEX_DO_GEMINI_MODEL;
+    else process.env.CODEX_DO_GEMINI_MODEL = prevGeminiModel;
+    if (prevPreferFree === undefined) delete process.env.CODEX_DO_PREFER_FREE;
+    else process.env.CODEX_DO_PREFER_FREE = prevPreferFree;
+  }
+}
+
+test('resolveFallbackBackends は既定で gemini-cli → deepseek → openrouter-free の順に置く', () => {
+  withEnvKeysCleared(() => {
+    const dir = makeHomeWithEnv({
+      'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n',
+      'deepseek.env': 'DEEPSEEK_API_KEY=sk-ds-1\n',
+      'gemini.env': 'GEMINI_API_KEY=sk-gemini-1\n'
+    });
+    const backends = resolveFallbackBackends(dir);
+    assert.deepEqual(backends.map(({ name }) => name), ['gemini-cli', 'deepseek', 'openrouter-free']);
+    assert.deepEqual(backends.map(({ kind }) => kind), ['gemini', 'qwen', 'qwen']);
+    assert.equal(backends[0].model, 'gemini-3.7-flash');
+    assert.equal(backends[0].apiKey, 'sk-gemini-1');
+    assert.equal(backends[1].baseUrl, 'https://api.deepseek.com/v1');
+    assert.equal(backends[2].baseUrl, 'https://openrouter.ai/api/v1');
   });
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /使い方\(ヘルプ\)を表示して終了/);
 });
 
-test('Gemini が何も変更せず終わったら失敗として扱う', () => {
-  const mockResults = [
-    { status: 0, output: "You've hit your usage limit. Please try again later.", stderr: '' },
-    { status: 0, output: '対応しました。', stderr: '' }
-  ];
-  const result = run(['実装して', '--cwd', emptyRepo()], {
-    env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults) }
+test('resolveFallbackBackends は prefer-free でも残りを gemini-cli → deepseek の順に保つ', () => {
+  withEnvKeysCleared(() => {
+    const prev = process.env.CODEX_DO_PREFER_FREE;
+    process.env.CODEX_DO_PREFER_FREE = '1';
+    try {
+      const dir = makeHomeWithEnv({
+        'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n',
+        'deepseek.env': 'DEEPSEEK_API_KEY=sk-ds-1\n',
+        'gemini.env': 'GEMINI_API_KEY=sk-gemini-1\n'
+      });
+      const backends = resolveFallbackBackends(dir);
+      assert.deepEqual(backends.map(({ name }) => name), ['openrouter-free', 'gemini-cli', 'deepseek']);
+    } finally {
+      if (prev === undefined) delete process.env.CODEX_DO_PREFER_FREE;
+      else process.env.CODEX_DO_PREFER_FREE = prev;
+    }
   });
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /1行も変更していません/);
 });
 
-test('Codex もフォールバック(Gemini) も失敗した場合は非ゼロで終了する', () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-no-fallback-home-'));
-  const mockResults = [
-    { status: 0, output: "You've hit your usage limit. Please try again later.", stderr: "" },
-    { status: 12, output: "", stderr: "Gemini execution error" }
-  ];
-  const result = run(['指示内容'], {
-    home,
-    env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults) }
+test('resolveFallbackBackends はキーが一部だけなら存在する分だけを順序どおり返す', () => {
+  withEnvKeysCleared(() => {
+    const onlyOR = resolveFallbackBackends(makeHomeWithEnv({ 'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n' }));
+    assert.equal(onlyOR.length, 1);
+    assert.equal(onlyOR[0].name, 'openrouter-free');
+
+    const onlyDS = resolveFallbackBackends(makeHomeWithEnv({ 'deepseek.env': 'DEEPSEEK_API_KEY=sk-ds-1\n' }));
+    assert.equal(onlyDS.length, 1);
+    assert.equal(onlyDS[0].name, 'deepseek');
+
+    const geminiAndOR = resolveFallbackBackends(makeHomeWithEnv({
+      'gemini.env': 'GEMINI_API_KEY=sk-gemini-1\n',
+      'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n'
+    }));
+    assert.deepEqual(geminiAndOR.map(({ name }) => name), ['gemini-cli', 'openrouter-free']);
   });
-  assert.equal(result.status, 12);
-  assert.match(result.stdout, /executor=gemini-cli/);
-  const state = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'provider-cooldown.json'), 'utf8'));
-  assert.equal(state.codex.reason, 'usage_limit_no_fallback');
+});
+
+test('resolveFallbackBackends はどのキーも無ければ空配列を返す', () => {
+  withEnvKeysCleared(() => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-home-'));
+    assert.deepEqual(resolveFallbackBackends(dir), []);
+  });
+});
+
+test('resolveQwenBackends は CODEX_DO_FREE_MODEL で openrouter-free の model を上書きできる', () => {
+  withEnvKeysCleared(() => {
+    process.env.CODEX_DO_FREE_MODEL = 'z-ai/glm-5.2:free';
+    const dir = makeHomeWithEnv({ 'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n' });
+    const backends = resolveQwenBackends(dir);
+    assert.equal(backends[0].name, 'openrouter-free');
+    assert.equal(backends[0].model, 'z-ai/glm-5.2:free');
+  });
+});
+
+test('resolveQwenBackends は resolveFallbackBackends の後方互換別名である', () => {
+  withEnvKeysCleared(() => {
+    const dir = makeHomeWithEnv({
+      'gemini.env': 'GEMINI_API_KEY=sk-gemini-1\n',
+      'deepseek.env': 'DEEPSEEK_API_KEY=sk-ds-1\n'
+    });
+    assert.deepEqual(resolveQwenBackends(dir), resolveFallbackBackends(dir));
+  });
+});
+
+test('loadGeminiKey は process.env、.claude/gemini.env、~/.gemini/.env の順で読む', () => {
+  withEnvKeysCleared(() => {
+    const dir = makeHomeWithEnv({
+      'gemini.env': 'GEMINI_API_KEY=from-claude\n',
+      '.gemini/.env': 'GEMINI_API_KEY=from-gemini-home\n'
+    });
+    assert.equal(loadGeminiKey(dir), 'from-claude');
+    process.env.GEMINI_API_KEY = 'from-process';
+    assert.equal(loadGeminiKey(dir), 'from-process');
+
+    delete process.env.GEMINI_API_KEY;
+    const fallbackDir = makeHomeWithEnv({ '.gemini/.env': 'export GEMINI_API_KEY="from-gemini-home"\n' });
+    assert.equal(loadGeminiKey(fallbackDir), 'from-gemini-home');
+  });
+});
+
+test('isBackendExhausted は上限系メッセージで true を返す', () => {
+  assert.equal(isBackendExhausted('HTTP 429 Too Many Requests', ''), true);
+  assert.equal(isBackendExhausted('', 'Error: rate limit exceeded'), true);
+  assert.equal(isBackendExhausted('', 'rate-limited'), true);
+  assert.equal(isBackendExhausted('Request too large for model', ''), true);
+  assert.equal(isBackendExhausted('', 'HTTP 413 Payload Too Large'), true);
+  assert.equal(isBackendExhausted('quota exceeded', ''), true);
+  assert.equal(isBackendExhausted('', 'insufficient_quota'), true);
+});
+
+test('isBackendExhausted は通常の成功出力で false を返す', () => {
+  assert.equal(isBackendExhausted('Qwen Code CLI has successfully edited files.', ''), false);
+  assert.equal(isBackendExhausted('', 'All tests passed'), false);
+});
+
+test('loadEnvKey は process.env を最優先し、ファイルの export VAR="..." 形式も読める', () => {
+  const dir = makeHomeWithEnv({ 'openrouter.env': 'export OPENROUTER_API_KEY="sk-or-file"\n' });
+  const prev = process.env.OPENROUTER_API_KEY;
+  process.env.OPENROUTER_API_KEY = 'sk-or-env';
+  try {
+    assert.equal(loadEnvKey(dir, 'openrouter.env', 'OPENROUTER_API_KEY'), 'sk-or-env');
+  } finally {
+    if (prev === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = prev;
+  }
+
+  delete process.env.OPENROUTER_API_KEY;
+  try {
+    assert.equal(loadEnvKey(dir, 'openrouter.env', 'OPENROUTER_API_KEY'), 'sk-or-file');
+  } finally {
+    if (prev === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = prev;
+  }
+});
+
+test('loadEnvKey はキーが無ければ null を返す', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-home-'));
+  const prev = process.env.OPENROUTER_API_KEY;
+  delete process.env.OPENROUTER_API_KEY;
+  try {
+    assert.equal(loadEnvKey(dir, 'openrouter.env', 'OPENROUTER_API_KEY'), null);
+  } finally {
+    if (prev !== undefined) process.env.OPENROUTER_API_KEY = prev;
+  }
+});
+
+test('loadDeepseekKey は loadEnvKey の薄いラッパとして振る舞いが変わらない', () => {
+  const dir = makeHomeWithEnv({ 'deepseek.env': 'export DEEPSEEK_API_KEY="sk-ds-1"\n' });
+  const prev = process.env.DEEPSEEK_API_KEY;
+  delete process.env.DEEPSEEK_API_KEY;
+  try {
+    assert.equal(loadDeepseekKey(dir), 'sk-ds-1');
+    assert.equal(loadEnvKey(dir, 'deepseek.env', 'DEEPSEEK_API_KEY'), 'sk-ds-1');
+  } finally {
+    if (prev !== undefined) process.env.DEEPSEEK_API_KEY = prev;
+  }
 });

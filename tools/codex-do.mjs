@@ -36,6 +36,129 @@ export function detectQuotaLimit(stdout, stderr) {
   return { matched: false };
 }
 
+export function shouldFlagEmptyFallbackDiff({ executorName, wantedEdit, timedOut, diffText }) {
+  // diffText は spawnSync の stdout。spawn に失敗すると null が来るので String() で畳む
+  // (ここで例外を投げると「無音の故障」を検知する側が落ちて本末転倒になる)
+  return executorName === 'fallback' && wantedEdit && !timedOut && !String(diffText || '').trim();
+}
+
+// 指示本文は execute() が stdin へ流す。argv には短いマーカーだけ渡す（長文を argv に載せると
+// Windows の shell:true で壊れる。§1.17）
+// shell:true の Windows では引数がエスケープされず連結されるので、
+// どの引数にも空白を含めない（含めると qwen が位置引数と誤認して即死する。2026-09-03 実測）
+export function buildQwenArgs({ model = 'deepseek-chat', timeoutSecs = 1800, maxToolCalls = 80, marker = 'Follow-the-instructions-provided-on-stdin.' } = {}) {
+  return [
+    '--auth-type', 'openai',
+    '-m', model,
+    '-y',
+    '--exclude-tools', 'run_shell_command',
+    '--max-wall-time', String(timeoutSecs),
+    '--max-tool-calls', String(maxToolCalls),
+    '-p', marker
+  ];
+}
+
+export function buildGeminiArgs({ model = 'gemini-3.7-flash', marker = 'Follow-the-instructions-provided-on-stdin.' } = {}) {
+  return ['-m', model, '--approval-mode', 'auto_edit', '--skip-trust', '-p', marker];
+}
+
+export function buildGeminiEnv(baseEnv, apiKey) {
+  return {
+    ...baseEnv,
+    GEMINI_API_KEY: apiKey,
+    GEMINI_CLI_TRUST_WORKSPACE: 'true'
+  };
+}
+
+export function buildQwenEnv(baseEnv, apiKey, { model = 'deepseek-chat', baseUrl = 'https://api.deepseek.com/v1' } = {}) {
+  const env = { ...baseEnv };
+  env.OPENAI_API_KEY = apiKey;
+  env.OPENAI_BASE_URL = baseUrl;
+  env.OPENAI_MODEL = model;
+  env.QWEN_CODE_SUPPRESS_YOLO_WARNING = '1';
+  delete env.GEMINI_API_KEY;
+  delete env.GOOGLE_API_KEY;
+  return env;
+}
+
+export function loadEnvKey(homeDir, fileName, varName) {
+  if (process.env[varName]) return process.env[varName];
+  const envFile = path.join(homeDir, '.claude', fileName);
+  let content;
+  try {
+    content = fs.readFileSync(envFile, 'utf8');
+  } catch {
+    return null;
+  }
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    const match = line.match(new RegExp(`^(?:export\\s+)?${varName}\\s*=\\s*(.*)$`));
+    if (!match) continue;
+    let value = match[1].trim();
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    return value;
+  }
+  return null;
+}
+
+export function loadDeepseekKey(homeDir) {
+  return loadEnvKey(homeDir, 'deepseek.env', 'DEEPSEEK_API_KEY');
+}
+
+export function loadGeminiKey(homeDir) {
+  const key = loadEnvKey(homeDir, 'gemini.env', 'GEMINI_API_KEY');
+  if (key) return key;
+  const envFile = path.join(homeDir, '.gemini', '.env');
+  let content;
+  try {
+    content = fs.readFileSync(envFile, 'utf8');
+  } catch {
+    return null;
+  }
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    const match = line.match(/^(?:export\s+)?GEMINI_API_KEY\s*=\s*(.*)$/);
+    if (!match) continue;
+    let value = match[1].trim();
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1);
+    return value;
+  }
+  return null;
+}
+
+// 2026-09-03 実測: Gemini Flash 5/5、DeepSeek 5/5、OpenRouter free 1/5。
+// 同品質なら正規の auto_edit を持つ Gemini を安全性から第1候補にする。
+// 費用ゼロを優先するときだけ CODEX_DO_PREFER_FREE=1 で free を先頭へ移す。
+export function resolveFallbackBackends(homeDir) {
+  const backends = [];
+  const geminiKey = loadGeminiKey(homeDir);
+  const openrouterKey = loadEnvKey(homeDir, 'openrouter.env', 'OPENROUTER_API_KEY');
+  const deepseekKey = loadDeepseekKey(homeDir);
+  const preferFree = process.env.CODEX_DO_PREFER_FREE === '1';
+  const gemini = geminiKey && { kind: 'gemini', name: 'gemini-cli', model: process.env.CODEX_DO_GEMINI_MODEL || 'gemini-3.7-flash', apiKey: geminiKey };
+  const deepseek = deepseekKey && { kind: 'qwen', name: 'deepseek', model: 'deepseek-chat', baseUrl: 'https://api.deepseek.com/v1', apiKey: deepseekKey };
+  const openrouter = openrouterKey && { kind: 'qwen', name: 'openrouter-free', model: process.env.CODEX_DO_FREE_MODEL || 'cohere/north-mini-code:free', baseUrl: 'https://openrouter.ai/api/v1', apiKey: openrouterKey };
+  const ordered = preferFree ? [openrouter, gemini, deepseek] : [gemini, deepseek, openrouter];
+  backends.push(...ordered.filter(Boolean));
+  return backends;
+}
+
+export function resolveQwenBackends(homeDir) {
+  return resolveFallbackBackends(homeDir);
+}
+
+// 無料枠の上限(429 / rate limit / quota / insufficient / Request too large / 413)に
+// 当たった時に次のバックエンドへ落とすための判定。
+export function isBackendExhausted(output, stderr) {
+  const merged = `${output || ''}\n${stderr || ''}`.toLowerCase();
+  const patterns = ['429', 'rate limit', 'rate-limited', 'quota', 'insufficient', 'request too large', '413'];
+  return patterns.some((p) => merged.includes(p));
+}
+
 if (isEntry(import.meta.url)) {
 
 const args = process.argv.slice(2);
@@ -172,6 +295,8 @@ function execute(command, commandArgs, options = {}) {
 }
 let result;
 let executorName = 'codex';
+let fallbackBackend = null;
+let lastBackend = null;
 
 // 先頭に1行で出力する
 console.log('[codex-do] executor=codex');
@@ -225,45 +350,51 @@ if (quotaCheck.matched) {
       result.status = 1;
     }
   } else {
-    executorName = 'gemini-cli';
-    console.log(`[codex-do] executor=gemini-cli (理由: Codex usage limit を検出)`);
+    executorName = 'fallback';
+    console.log(`[codex-do] executor=fallback (理由: Codex usage limit を検出)`);
     console.error(`[codex-do] Codex usage limit detected: ${quotaCheck.pattern} at index ${quotaCheck.index}. Context: "${quotaCheck.snippet}"`);
-    console.error(`[codex-do] Falling back to Gemini CLI (free OAuth tier)...`);
+    console.error(`[codex-do] Falling back to an agentic CLI...`);
 
-    const geminiEnv = { ...process.env };
-    delete geminiEnv.GEMINI_API_KEY;
-    delete geminiEnv.GOOGLE_API_KEY;
-
-    // approval-mode は auto_edit（編集ツールのみ自動承認）に留める。yolo にはしない。
-    // 2026-09-03 実測: auto_edit の Gemini は run_shell_command が
-    // "Unauthorized tool call" で弾かれるため、コードは書けるが
-    // テスト実行・git 操作はできない（195行書けてテスト0件・コミット0件だった）。
-    // これは仕様として受け入れる。codex-do の呼び出し側（auto-session の子セッション等）が
-    // 「実装を委譲 → 自分でテストして commit/PR」という分担で動いているため、
-    // テストと git は呼び出し側の責任。承認モードを緩めて解決してはいけない。
-    // Windows では gemini は .cmd(npm shim) なので shell 経由でしか起動できない
-    // （shell:false は Node 24 で spawn EINVAL）。その shell が引数をクォートせず
-    // 連結するため、`-p` の値に空白があると割れて Gemini が使い方(ヘルプ)を出して
-    // exit 0 で終わる = 1行も書かずに「成功」して見える（2026-09-03 実測）。
-    // 指示本体は stdin から渡っており（--prompt は stdin の入力に追記される）
-    // `-p` の値は実質使われないので、空白を含めないことで両方を回避する。
-    const geminiArgs = [
-      '-p', GEMINI_PROMPT_FLAG,
-      '--approval-mode', 'auto_edit',
-      '--skip-trust'
-    ];
-
-    const geminiOptions = { cwd, env: geminiEnv, shell: process.platform === 'win32' };
-
-    result = await execute('gemini', geminiArgs, geminiOptions);
-    if (result.status === null) {
-      console.error(`[codex-do] Failed to spawn Gemini CLI fallback:`, result.error);
+    const backends = resolveFallbackBackends(home);
+    if (backends.length === 0) {
+      console.error('GEMINI_API_KEY、DEEPSEEK_API_KEY、OPENROUTER_API_KEY が無いためフォールバックを実行できません');
       result.status = 1;
+    } else {
+      for (const backend of backends) {
+        lastBackend = backend;
+        console.log(`[codex-do] fallback backend=${backend.name} model=${backend.model}`);
+        result = backend.kind === 'gemini'
+          ? await execute('gemini', buildGeminiArgs({ model: backend.model }), {
+              cwd,
+              env: buildGeminiEnv(process.env, backend.apiKey),
+              shell: process.platform === 'win32'
+            })
+          : await execute('qwen', buildQwenArgs({ timeoutSecs: timeoutSeconds, model: backend.model }), {
+              cwd,
+              env: buildQwenEnv(process.env, backend.apiKey, { model: backend.model, baseUrl: backend.baseUrl }),
+              shell: process.platform === 'win32'
+            });
+        if (result.status === null) {
+          console.error(`[codex-do] Failed to spawn ${backend.name} fallback:`, result.error);
+          result.status = 1;
+        }
+        if (result.status === 0) {
+          fallbackBackend = backend;
+          break;
+        }
+        if (isBackendExhausted(result.output, result.stderr)) {
+          console.error(`[codex-do] backend=${backend.name} が上限/エラーで使えないため次へ`);
+          continue;
+        }
+        // 上限/エラー以外の失敗(実装エラー等)は次のバックエンドへ落とさず、この結果で止める。
+        break;
+      }
     }
   }
 }
 
 const secs = (Date.now() - started) / 1000;
+const reportedFallbackBackend = fallbackBackend ?? lastBackend;
 const diff = spawnSync('git', ['-C', cwd, 'diff', '--stat'], { encoding: 'utf8' });
 if (diff.stdout) process.stdout.write(diff.stdout);
 // 読み取り専用の質問(説明して/調べて)では空diffが正常なので、指示自体が実装系のときだけ判定する。
@@ -277,15 +408,16 @@ if (executorName === 'codex') {
   }
 }
 // Gemini は引数を1つ取り違えるだけで使い方(ヘルプ)を出して exit 0 で終わる。
-// 出力の中身を見ないと「1行も書かずに成功」を見逃す（2026-09-03 実測）。
-if (executorName === 'gemini-cli' && wantedEdit && !result.timedOut && !diff.stdout.trim()) {
+// DeepSeek / OpenRouter も含め、出力の中身を見ないと「1行も書かずに成功」を見逃す（2026-09-03 実測）。
+if (shouldFlagEmptyFallbackDiff({ executorName, wantedEdit, timedOut: result.timedOut, diffText: diff.stdout })) {
   const printedUsage = /^\s*(Usage|使い方)[:：]|--approval-mode\s+Set the approval mode/m.test(result.output || result.stderr || '');
-  console.error(printedUsage
+  const fallbackName = reportedFallbackBackend?.name ?? 'unknown';
+  console.error(reportedFallbackBackend?.kind === 'gemini' && printedUsage
     ? '🚨 Gemini が使い方(ヘルプ)を表示して終了しました＝指示が届いていません。引数の渡し方を確認してください'
-    : '🚨 Gemini は作業ツリーを1行も変更していません。指示が届いたか確認してください');
+    : `🚨 フォールバック(${fallbackName})は作業ツリーを1行も変更していません。指示が届いたか確認してください`);
   result.status = 1;
 }
-if (executorName === 'gemini-cli' && result?.status !== 0) {
+if (executorName === 'fallback' && result?.status !== 0) {
   try { writeCodexCooldown(quotaResetUntil, undefined, 'usage_limit_no_fallback'); } catch {}
 }
 try {
@@ -294,7 +426,7 @@ try {
   const usage = {
     t: new Date().toISOString(),
     provider: executorName,
-    model: executorName === 'gemini-cli' ? 'gemini-cli-oauth' : 'codex-cli',
+    model: executorName === 'fallback' ? `${reportedFallbackBackend?.name ?? 'unknown'}/${reportedFallbackBackend?.model ?? 'unknown'}` : 'codex-cli',
     in: Math.ceil(prompt.length / 4),
     out: Math.ceil((result.outputChars || 0) / 4),
     secs: Number(secs.toFixed(3))
@@ -302,6 +434,6 @@ try {
   fs.appendFileSync(ledger, `${JSON.stringify(usage)}\n`, 'utf8');
 } catch {}
 
-console.log(`[codex-do] executor=${executorName}${executorName === 'gemini-cli' ? ' (理由: Codex usage limit を検出)' : ''}`);
+console.log(`[codex-do] executor=${executorName}${executorName === 'fallback' ? `:${reportedFallbackBackend?.name ?? 'unknown'} (理由: Codex usage limit を検出)` : ''}`);
 process.exit(result?.status ?? 1);
 }

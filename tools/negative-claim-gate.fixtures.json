@@ -1,0 +1,26 @@
+[
+  {
+    "text": "「Genspark に API は無い＝自動経路に組み込めない」と答えたが、**誤り**。",
+    "shouldDetect": false
+  },
+  {
+    "text": "1. 応答テキストから否定存在断定を検出（「API/CLI/SDK/MCP…」×「無い/存在しない/対応していない/組み込めない…」）。",
+    "shouldDetect": false
+  },
+  {
+    "text": "`terminal` は **VSCode CLI が無い機体だけ** `",
+    "shouldDetect": false
+  },
+  {
+    "text": "Genspark は公開 API / OpenAI 互換エンドポイントが無い（2026-09 時点。…",
+    "shouldDetect": true
+  },
+  {
+    "text": "| 1 | 「Genspark は公開 API…が無い」 | ✅ 真陽性（狙いどおり） |",
+    "shouldDetect": false
+  },
+  {
+    "text": "- ❌「VSCode CLI が無い**機体**だけ」＝製品の不在ではない",
+    "shouldDetect": false
+  }
+]

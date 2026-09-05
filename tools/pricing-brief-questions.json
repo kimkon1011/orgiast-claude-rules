@@ -1,0 +1,42 @@
+[
+  {
+    "id": "claude-code-plan",
+    "label": "Claude Code の Max/Team プランの上限",
+    "query": "Claude Code tool Max Team plan limits pricing 2026"
+  },
+  {
+    "id": "codex-limit",
+    "label": "Codex CLI の利用上限",
+    "query": "OpenAI Codex CLI usage limits Plus Pro 2026"
+  },
+  {
+    "id": "gemini-free-tier",
+    "label": "Gemini API の無料枠と検索無料枠",
+    "query": "Gemini API free tier limits Google AI Studio grounding search 2026"
+  },
+  {
+    "id": "groq-pricing",
+    "label": "Groq の従量単価",
+    "query": "Groq API pricing token cost per million tokens 2026"
+  },
+  {
+    "id": "deepseek-pricing",
+    "label": "DeepSeek の従量単価とオフピーク割引",
+    "query": "DeepSeek API pricing deepseek-chat deepseek-coder off-peak discount"
+  },
+  {
+    "id": "openrouter-pricing",
+    "label": "OpenRouter の課金方式",
+    "query": "OpenRouter pricing credit billing and free models"
+  },
+  {
+    "id": "copilot-plan",
+    "label": "GitHub Copilot のプランと上限",
+    "query": "GitHub Copilot pricing individual business enterprise plan limits"
+  },
+  {
+    "id": "zai-glm-pricing",
+    "label": "Z.ai / GLM のプランと上限",
+    "query": "Z.ai GLM pricing plans usage limits 2026"
+  }
+]

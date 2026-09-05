@@ -135,6 +135,11 @@ try {
   // kim が読む文書をローカルパスのリンクで渡す違反を止める(モバイルで1クリックで開けない・2026-08-07 kim確定ルール)
   if (add(settings.hooks.Stop, 'doc-link-drive-guard.mjs', { hooks: [{ type: 'command', command: command('doc-link-drive-guard.mjs'), timeout: 10 }] })) added += 1;
   // 作業依頼だけを残して必要なURL・コマンドを省くと、kimが過去ログを探すため同期Stopで差し戻す。
+  // 自分で調べられることを user に「確認して教えてください」と外注する応答を止める(§1.1/§1.2)。
+  if (add(settings.hooks.Stop, 'self-check-before-asking-guard.mjs', { hooks: [{ type: 'command', command: command('self-check-before-asking-guard.mjs'), timeout: 10 }] })) added += 1;
+  // 同じ判定を AskUserQuestion では *事前* に効かせる。Stop は応答を出したあとなので、
+  // user の目に触れる前に止められるのはここだけ(2026-09-01 user 厳命への対応)。
+  if (add(settings.hooks.PreToolUse, 'askuser-selfcheck-gate.mjs', { matcher: 'AskUserQuestion', hooks: [{ type: 'command', command: command('askuser-selfcheck-gate.mjs'), timeout: 10 }] })) added += 1;
   if (add(settings.hooks.Stop, 'handoff-info-guard.mjs', { hooks: [{ type: 'command', command: command('handoff-info-guard.mjs'), timeout: 10 }] })) added += 1;
   // 旧PCは hook が `powershell -NoProfile -File ...ps1` で登録され、実行ポリシーで無音死している。
   policyRepaired = repairPowerShellExecutionPolicy(settings.hooks);

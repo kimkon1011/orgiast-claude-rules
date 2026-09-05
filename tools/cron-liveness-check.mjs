@@ -59,10 +59,10 @@ export function evaluate(entries, lastSuccessByKey, nowMs) {
 export function evaluateGateSkips(records, nowMs) {
   const recent = records.filter((record) => {
     const timestamp = Date.parse(record?.ts || '');
-    return Number.isFinite(timestamp) && timestamp >= nowMs - 7 * DAY_MS && timestamp <= nowMs;
+    return Boolean(record?.reasonCode) && record.reasonCode !== 'unreadable' && Number.isFinite(timestamp) && timestamp >= nowMs - 7 * DAY_MS && timestamp <= nowMs;
   });
   if (recent.length < 3) return null;
-  return { key: 'local#handoff-gate-skips', label: 'gate判定スキップ', lastSuccess: null, ageDays: null, status: 'alert', line: `🚨 gate判定スキップ ${recent.length}件（強制が効いていない可能性）` };
+  return { key: 'local#handoff-gate-skips', label: 'gate判定スキップ', lastSuccess: null, ageDays: null, status: 'alert', line: `🚨 gate判定スキップ（要調査）${recent.length}件` };
 }
 
 function fetchLastSuccess(entry) {

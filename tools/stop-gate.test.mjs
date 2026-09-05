@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { bumpState, pruneState, shouldBlock, shouldBlockProgressQuestion } from './stop-gate.mjs';
+import { bumpState, endsWithQuestion, normalizeForQuestionCheck, pruneState, shouldBlock, shouldBlockProgressQuestion } from './stop-gate.mjs';
 
 test('1 完了報告と箇条書きの残TODOをblock', () => assert.equal(shouldBlock('完了しました。\n残TODO:\n- A を直す\n- B を消す'), true));
 test('2 残TODOなしはpass', () => assert.equal(shouldBlock('完了しました。残TODO: なし'), false));
@@ -51,6 +51,7 @@ test('10 末尾がtool_useだけでも手前の本文で判定する', () => {
   assert.equal(JSON.parse(result.stdout).decision, 'block');
   const ledger = fs.readFileSync(path.join(home, '.claude', 'stop-gate-ledger.jsonl'), 'utf8');
   assert.equal(JSON.parse(ledger).kind, 'remaining-todo');
+  assert.equal(JSON.parse(ledger).verdict, 'blocked');
 });
 
 test('11 承認不要の実装質問をblock', () => assert.equal(shouldBlockProgressQuestion('完了しました。実装しますか。'), true));
@@ -95,3 +96,29 @@ test('23 CLIは本番デプロイの承認質問をpass', () => {
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout, '');
 });
+
+test('24 URLのクエリ文字列はpass', () => assert.equal(shouldBlockProgressQuestion('詳細は [駐車場](https://www.park-direct.jp/area/chiba/chibashi?accommodation_size_6=6) を参照。'), false));
+test('25 疑問文でない「どちらも」はpass', () => assert.equal(shouldBlockProgressQuestion('残りは最終調整と冒頭フック — どちらも Codex で実装中。'), false));
+test('26 手順表で引用された質問文はpass', () => assert.equal(shouldBlockProgressQuestion('| 「Claude Code: session-start を実行しますか」と聞かれる | **Never（実行しない）** を選ぶ |'), false));
+test('27 壊れた入力への依頼募集はpass', () => assert.equal(shouldBlockProgressQuestion('入力が壊れています。何をしますか？ご依頼を書いてください。'), false));
+test('28 commitの可否はpass', () => assert.equal(shouldBlockProgressQuestion('他セッションの変更も同居しているため commit は保留しています。commit しますか？'), false));
+test('29 インラインコード内の疑問符はpass', () => assert.equal(shouldBlockProgressQuestion('設定は `--force?` で確認できます。'), false));
+test('30 STOP-OKを含む実例はpass', () => assert.equal(shouldBlockProgressQuestion('対応しました。次は API を実装しますか？ [STOP-OK]'), false));
+test('31 承認不要のAPI実装質問はblock', () => assert.equal(shouldBlockProgressQuestion('対応しました。次は API を実装しますか？'), true));
+test('32 後ろに平叙文が1文続く質問もblock', () => assert.equal(shouldBlockProgressQuestion('A と B のどちらで進めますか。この棚卸しはここで区切って /session-close、実装は新セッションが筋です。'), true));
+test('33 複数不具合を直す質問はblock', () => assert.equal(shouldBlockProgressQuestion('1. API 404  2. verify NG  どちらも直しますか？'), true));
+test('34 記憶への記録質問の実例はblock', () => assert.equal(shouldBlockProgressQuestion('この判断根拠を記憶に残しておきますか。'), true));
+
+test('35 正規化でURL・インラインコード・テーブル行・鉤括弧引用を落とす', () => {
+  const normalized = normalizeForQuestionCheck('残す [駐車場](https://example.com/?q=1) `--force?`\n| 表の質問ですか |\n「実行しますか」 終了。');
+  assert.match(normalized, /残す/);
+  assert.doesNotMatch(normalized, /https|force|表の質問|実行しますか/);
+});
+test('36 正規化でフェンスドコードとダブルクォート引用を落とす', () => {
+  const normalized = normalizeForQuestionCheck('前```js\n実装しますか？\n```後 "進めますか" 終了。');
+  assert.equal(normalized.includes('実装しますか'), false);
+  assert.equal(normalized.includes('進めますか'), false);
+});
+test('37 endsWithQuestionは平叙文の「どちらも」をfalseにする', () => assert.equal(endsWithQuestion('どちらも実装中。'), false));
+test('38 endsWithQuestionは「どちらで進めますか。」をtrueにする', () => assert.equal(endsWithQuestion('どちらで進めますか。'), true));
+test('39 endsWithQuestionは最後から2文目も判定する', () => assert.equal(endsWithQuestion('どちらで進めますか。この案が最善です。'), true));

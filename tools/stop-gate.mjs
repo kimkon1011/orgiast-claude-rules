@@ -10,8 +10,9 @@ const completionPattern = /(完了|反映済|push\s*済|deploy\s*完了|PASS|✅
 const todoHeadingPattern = /(残TODO|残タスク|次タスク|次の一手|残り|未着手|TODO:)/i;
 const questionPattern = /(\?|？|どちら|いいですか|しますか|進めて良い|よろしい)/;
 const escapePattern = /(\[TODO-NONE\]|\[STOP-OK\]|残TODO\s*:?\s*なし|残タスク\s*:?\s*なし)/i;
-export const consentExemptPattern = /(送信|送る|公開|投稿|課金|支払|請求|決済|削除|消す|本番|デプロイ|deploy|マージ|merge|push|共有|招待|解約|退会|発注|契約|外部|先方|お客様|クライアント|取引先|承認|許可|権限|認証|パスワード|クレデンシャル|APIキー|アカウント作成|OAuth|予算|価格|見積|宛先|誰に|いつまで|締切|好み|ご希望|意向)/;
+export const consentExemptPattern = /(送信|送る|公開|投稿|課金|支払|請求|決済|削除|消す|本番|デプロイ|deploy|マージ|merge|push|commit|コミット|共有|招待|解約|退会|発注|契約|外部|先方|お客様|クライアント|取引先|承認|許可|権限|認証|パスワード|クレデンシャル|APIキー|アカウント作成|OAuth|予算|価格|見積|宛先|誰に|いつまで|締切|好み|ご希望|意向)/i;
 export const progressQuestionPattern = /(ますか|ましょうか|でしょうか|でいい(です)?か|よろしい|どちら|どれ(を|が)|進めて|着手して|やりますか|作りますか|実装しますか|続けますか|\?|？)/;
+export const requestSolicitationPattern = /(ご依頼|依頼を(書いて|ください|ど[うぞ])|何をしますか|何をしましょう|ご要望|お手伝いできること|目的を(宣言|教えて)|貼り付けミス|入力が壊れて)/;
 export const QUESTION_TAIL_CHARS = 200;
 const bulletPattern = /^\s*(?:[-*]|\d+\.)\s+\S/;
 const home = () => process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || os.homedir();
@@ -31,11 +32,35 @@ export function shouldBlock(text) {
   return remainingItems(source).length > 0;
 }
 
+export function normalizeForQuestionCheck(text) {
+  return String(text || '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/^\s*\|.*$/gm, ' ')
+    .replace(/https?:\/\/\S+/gi, ' ')
+    .replace(/`[^`]*`/g, ' ')
+    .replace(/「[^」]*」/g, ' ')
+    .replace(/"[^"\r\n]*"/g, ' ');
+}
+
+export function endsWithQuestion(normalizedText) {
+  const sentences = String(normalizedText || '')
+    .match(/[^。！？?!\r\n]+(?:[。！？?!]+|(?=\r?$))/gm)
+    ?.map(sentence => sentence.trim())
+    .filter(Boolean) || [];
+  return sentences.slice(-2).some(sentence => {
+    if (/[?？]\s*$/.test(sentence)) return true;
+    const withoutFullStop = sentence.replace(/[。、]\s*$/, '').trim();
+    return /(?:ますか|ましょうか|でしょうか|ませんか|でいいか|でいいですか|よろしいか|よろしいですか|か)$/.test(withoutFullStop);
+  });
+}
+
 export function shouldBlockProgressQuestion(text) {
   const source = String(text || '');
   if (!source.trim() || escapePattern.test(source)) return false;
-  const tail = source.slice(-QUESTION_TAIL_CHARS);
-  if (!progressQuestionPattern.test(tail)) return false;
+  const normalized = normalizeForQuestionCheck(source);
+  const tail = normalized.slice(-QUESTION_TAIL_CHARS);
+  if (!endsWithQuestion(tail)) return false;
+  if (requestSolicitationPattern.test(tail)) return false;
   if (consentExemptPattern.test(tail)) return false;
   return true;
 }
@@ -89,6 +114,7 @@ function appendLedger(input, kind, text) {
     ts: new Date().toISOString(),
     sessionId: input?.session_id || input?.sessionId || input?.transcript_path || '',
     kind,
+    verdict: 'blocked',
     excerpt: String(text || '').slice(-QUESTION_TAIL_CHARS),
   };
   fs.mkdirSync(path.dirname(ledgerPath), { recursive: true });

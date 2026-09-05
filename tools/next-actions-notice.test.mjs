@@ -92,3 +92,31 @@ test('--jsonはfreshとactionsを返す', () => {
   assert.equal(value.actions.length, 3);
   assert.deepEqual(value.actions[0], { title: '一件目', source: 'PR#1', first_step: '最初の操作1' });
 });
+
+test('新しいopen-work.mdがあれば在庫1行を足し9行以内にする', () => {
+  const ctx = setup(fixture('2026/9/5 16:50:48', threeActions()));
+  const file = path.join(ctx.home, '.claude', 'open-work.md');
+  fs.writeFileSync(file, 'ok:PR2 ブランチ4 タスク9(P1 3) TODO1 夜間異常0\n');
+  fs.utimesSync(file, NOW, NOW);
+  runNextActionsNotice(ctx.options);
+  const lines = ctx.stdout[0].split('\n');
+  assert.ok(lines.length <= 9);
+  assert.equal(lines.filter((line) => line.startsWith('未処理の在庫:')).length, 1);
+  assert.equal(lines.at(-1), '未処理の在庫: PR2件 / 取り残しブランチ4件 / P1タスク3件 → ~/.claude/open-work.md');
+});
+
+test('open-work.mdが古い・無い・サマリ不正なら在庫行を足さない', () => {
+  const absent = setup(fixture('2026/9/5 16:50:48', threeActions()));
+  runNextActionsNotice(absent.options);
+  assert.doesNotMatch(absent.stdout[0], /未処理の在庫:/);
+
+  for (const [name, content, ageHours] of [['stale', 'ok:PR1 ブランチ1 タスク1(P1 1) TODO1 夜間異常1', 31], ['broken', 'サマリなし', 0]]) {
+    const ctx = setup(fixture('2026/9/5 16:50:48', threeActions()));
+    const file = path.join(ctx.home, '.claude', 'open-work.md');
+    fs.writeFileSync(file, content);
+    const time = new Date(NOW.getTime() - ageHours * 60 * 60 * 1000);
+    fs.utimesSync(file, time, time);
+    runNextActionsNotice(ctx.options);
+    assert.doesNotMatch(ctx.stdout[0], /未処理の在庫:/, name);
+  }
+});

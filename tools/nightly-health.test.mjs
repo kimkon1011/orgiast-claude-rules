@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { runNightlyHealth, formatDate, extractFailCount, isFailureLine } from './nightly-health.mjs';
+import { runNightlyHealth, formatDate, extractFailCount, isFailureLine, extractHookToolPaths, nativePath, getPlatform } from './nightly-health.mjs';
 
 function createTempHome() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'nightly-health-test-'));
@@ -18,6 +18,21 @@ function removeDir(dir) {
     // Ignore cleanup error
   }
 }
+
+function createHookFixture() {
+  const home = createTempHome();
+  const roots = [path.join(home, 'checkout-a'), path.join(home, 'checkout-b')];
+  for (const root of roots) fs.mkdirSync(path.join(root, '.git'), { recursive: true });
+  return { home, roots };
+}
+
+function writeSettings(home, commands) {
+  const settingsPath = path.join(home, '.claude', 'settings.json');
+  fs.writeFileSync(settingsPath, JSON.stringify({ hooks: { SessionStart: commands.map((command) => ({ hooks: [{ command }] })) } }));
+  return settingsPath;
+}
+
+function healthyTests() { return { status: 0, stdout: 'ok', stderr: '' }; }
 
 test('異常ゼロなら notify が1度も呼ばれず ok:異常なし になる', async () => {
   const home = createTempHome();
@@ -209,6 +224,32 @@ test('実ログのゼロ件カウンタと error=- は失敗扱いしない', ()
     'checks: fail=0 NG: 0'
   ];
   for (const line of successfulLines) assert.equal(isFailureLine(line), false, line);
+});
+
+test('git の同期出力は失敗扱いせず、通常の error 行は検知する', () => {
+  const syncLines = [
+    'HEAD is now at 975b87d feat(nightly): 夜間ジョブの失敗検知と朝の推奨アクション作り置きを追加 (#261)',
+    'From https://github.com/kimkon1011/orgiast-claude-rules',
+    '  From git@github.com:kimkon1011/orgiast-claude-rules',
+    ' * branch            main       -> FETCH_HEAD',
+    'Already up to date.',
+    'Updating 1234567..89abcde',
+    'Fast-forward',
+    '[2026-09-05 12:00:00] HEAD is now at 975b87d feat(nightly): 夜間ジョブの失敗検知と朝の推奨アクション作り置きを追加 (#261)',
+    '[2026-09-05 12:00:00] [booth-feedback-intake] HEAD is now at 975b87d feat(nightly): 夜間ジョブの失敗検知と…',
+    '2026-09-05 12:00:00 From https://github.com/kimkon1011/orgiast-claude-rules'
+  ];
+  for (const line of syncLines) assert.equal(isFailureLine(line), false, line);
+  assert.equal(isFailureLine('通常ログ error: 接続に失敗しました'), true);
+  assert.equal(isFailureLine('[2026-09-05 12:00:00] 通常ログ error: 接続に失敗しました'), true);
+});
+
+test('Windows 形式パスは win32 では維持し linux で WSL パスへ変換する', () => {
+  const windowsPath = 'C:\\Users\\uers\\repo\\tools\\hook.mjs';
+  assert.equal(nativePath(windowsPath, 'win32'), windowsPath);
+  assert.equal(nativePath(windowsPath, 'linux'), '/mnt/c/Users/uers/repo/tools/hook.mjs');
+  // デフォルトのプラットフォーム (getPlatform()) を使った検証を追加
+  assert.equal(nativePath(windowsPath), nativePath(windowsPath, getPlatform()));
 });
 
 test('/ サマリ / 行は失敗を含んでも除外する', () => {
@@ -474,5 +515,102 @@ test('未登録ログや baseline 抑制だけでは通知しない（平穏な�
     assert.equal(result.anomalies.length, 0);
     assert.equal(notified, 0, '未登録ログがあっても異常ゼロなら通知しない');
     assert.match(result.message, /ok:異常なし/);
+  } finally { removeDir(home); }
+});
+
+test('全フックから node の mjs と PowerShell -File の ps1 絶対パスを抽出する', () => {
+  const settings = { hooks: {
+    SessionStart: [{ hooks: [{ command: 'node "/work/a.mjs" --fix' }] }],
+    PreToolUse: [{ hooks: [{ command: 'powershell.exe -File "C:\\work\\b.ps1" -Quiet' }] }],
+    Stop: [{ hooks: [{ command: 'node "/work/ignored.js"' }] }]
+  } };
+  assert.deepEqual(extractHookToolPaths(settings), ['/work/a.mjs', 'C:\\work\\b.ps1']);
+});
+
+test('複数チェックアウトのフックをルートごとにまとめて判定する', async () => {
+  const { home, roots } = createHookFixture();
+  try {
+    const files = roots.map((root, index) => path.join(root, 'tools', `hook-${index}.mjs`));
+    files.forEach((file) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, 'local'); });
+    const settingsPath = writeSettings(home, files.map((file) => `node "${file}"`));
+    const fetchCwds = [];
+    const result = await runNightlyHealth({ home, settingsPath, expectations: [], dryRun: true, runTests: async () => healthyTests(),
+      gitImpl: async (args, options) => {
+        if (args[0] === 'fetch') { fetchCwds.push(options.cwd); return { status: 0 }; }
+        if (args[0] === 'rev-list') return { status: 0, stdout: '3\n' };
+        return { status: 0, stdout: 'main' };
+      }
+    });
+    assert.deepEqual(fetchCwds.sort(), [...roots].sort());
+    assert.equal(result.anomalies.filter((item) => item.label === 'フック版ずれ').length, 2);
+  } finally { removeDir(home); }
+});
+
+test('不一致ファイルをチェックアウトごとに1 anomalyへまとめ名前は最大5件にする', async () => {
+  const { home, roots: [root] } = createHookFixture();
+  try {
+    const files = Array.from({ length: 7 }, (_, index) => path.join(root, 'tools', `hook-${index}.mjs`));
+    files.forEach((file) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, 'local'); });
+    const settingsPath = writeSettings(home, files.map((file) => `node "${file}"`));
+    const result = await runNightlyHealth({ home, settingsPath, expectations: [], dryRun: true, runTests: async () => healthyTests(),
+      gitImpl: async (args) => args[0] === 'rev-list' ? { status: 0, stdout: '68' } : args[0] === 'show' ? { status: 0, stdout: 'main' } : { status: 0 }
+    });
+    const drift = result.anomalies.filter((item) => item.label === 'フック版ずれ');
+    assert.equal(drift.length, 1);
+    assert.match(drift[0].message, /68 コミット遅れ \/ フック実行ファイル 7件/);
+    assert.equal((drift[0].message.match(/hook-\d\.mjs/g) || []).length, 5);
+  } finally { removeDir(home); }
+});
+
+test('内容が一致すれば100コミット遅れでも報告しない', async () => {
+  const { home, roots: [root] } = createHookFixture();
+  try {
+    const file = path.join(root, 'hook.mjs'); fs.writeFileSync(file, 'same');
+    const settingsPath = writeSettings(home, [`node "${file}"`]);
+    const result = await runNightlyHealth({ home, settingsPath, expectations: [], dryRun: true, runTests: async () => healthyTests(),
+      gitImpl: async (args) => args[0] === 'rev-list' ? { status: 0, stdout: '100' } : args[0] === 'show' ? { status: 0, stdout: 'same' } : { status: 0 }
+    });
+    assert.equal(result.anomalies.length, 0);
+  } finally { removeDir(home); }
+});
+
+test('origin/main に存在しないフックファイルは不一致に数えない', async () => {
+  const { home, roots: [root] } = createHookFixture();
+  try {
+    const file = path.join(root, 'new-hook.mjs'); fs.writeFileSync(file, 'new');
+    const settingsPath = writeSettings(home, [`node "${file}"`]);
+    const result = await runNightlyHealth({ home, settingsPath, expectations: [], dryRun: true, runTests: async () => healthyTests(),
+      gitImpl: async (args) => args[0] === 'rev-list' ? { status: 0, stdout: '5' } : args[0] === 'show' ? { status: 128, stderr: 'not in main' } : { status: 0 }
+    });
+    assert.equal(result.anomalies.length, 0);
+  } finally { removeDir(home); }
+});
+
+test('git fetch 失敗は理由を1行出してチェックアウト判定を異常なしでスキップする', async () => {
+  const { home, roots: [root] } = createHookFixture();
+  const originalLog = console.log;
+  const lines = [];
+  try {
+    const file = path.join(root, 'hook.mjs'); fs.writeFileSync(file, 'local');
+    const settingsPath = writeSettings(home, [`node "${file}"`]);
+    console.log = (value) => { lines.push(String(value)); };
+    const result = await runNightlyHealth({ home, settingsPath, expectations: [], dryRun: true, runTests: async () => healthyTests(),
+      gitImpl: async () => ({ status: 1, stderr: 'offline now' })
+    });
+    assert.equal(result.anomalies.length, 0);
+    assert.equal(lines.filter((line) => /フック版ずれ判定をスキップ.*offline now/.test(line)).length, 1);
+  } finally { console.log = originalLog; removeDir(home); }
+});
+
+test('settings.json が読めないかフックが無ければ git を呼ばず何も報告しない', async () => {
+  const home = createTempHome();
+  try {
+    let gitCalls = 0;
+    const common = { home, expectations: [], dryRun: true, runTests: async () => healthyTests(), gitImpl: async () => { gitCalls++; return { status: 0 }; } };
+    const missing = await runNightlyHealth({ ...common, settingsPath: path.join(home, 'missing.json') });
+    const noHooksPath = path.join(home, 'settings.json'); fs.writeFileSync(noHooksPath, '{}');
+    const noHooks = await runNightlyHealth({ ...common, settingsPath: noHooksPath });
+    assert.equal(missing.anomalies.length + noHooks.anomalies.length, 0);
+    assert.equal(gitCalls, 0);
   } finally { removeDir(home); }
 });

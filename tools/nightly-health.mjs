@@ -29,6 +29,107 @@ export async function defaultRunTests() {
   };
 }
 
+export async function defaultGitImpl(args, { cwd, timeout = 20_000 } = {}) {
+  const { spawnSync } = await import('node:child_process');
+  const result = spawnSync('git', args, { cwd, timeout, encoding: 'utf8', shell: false });
+  return { status: result.status, stdout: result.stdout || '', stderr: result.stderr || '', error: result.error };
+}
+
+export function extractHookToolPaths(settings) {
+  const found = new Set();
+  const visit = (value) => {
+    if (Array.isArray(value)) return value.forEach(visit);
+    if (!value || typeof value !== 'object') return;
+    if (typeof value.command === 'string') {
+      const regex = /(?:^|\s)(?:node\s+|-File\s+)(?:"([^"]+\.(?:mjs|ps1))"|'([^']+\.(?:mjs|ps1))'|([^\s"']+\.(?:mjs|ps1)))(?=\s|$)/gi;
+      for (const match of value.command.matchAll(regex)) found.add(match[1] || match[2] || match[3]);
+    }
+    Object.values(value).forEach(visit);
+  };
+  visit(settings?.hooks);
+  return [...found];
+}
+
+let currentPlatform = process.platform;
+export function getPlatform() {
+  return currentPlatform;
+}
+export function setPlatform(platform) {
+  currentPlatform = platform;
+}
+
+export function nativePath(filePath, platform = getPlatform()) {
+  if (platform === 'win32') return filePath;
+  const match = filePath.match(/^([A-Za-z]):[\\/](.*)$/);
+  return match ? `/mnt/${match[1].toLowerCase()}/${match[2].replaceAll('\\', '/')}` : filePath;
+}
+
+function findCheckoutRoot(filePath, platform = getPlatform()) {
+  let current = path.dirname(path.resolve(nativePath(filePath, platform)));
+  while (true) {
+    if (fs.existsSync(path.join(current, '.git'))) {
+      try { return fs.realpathSync(current); } catch { return current; }
+    }
+    const parent = path.dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+
+async function detectHookVersionDrift({ settingsPath, gitImpl, platform = getPlatform() }) {
+  const settings = readJson(settingsPath, null);
+  if (!settings) return { anomalies: [], notes: [] };
+  const groups = new Map();
+  for (const configuredPath of extractHookToolPaths(settings)) {
+    const convertedPath = nativePath(configuredPath, platform);
+    let filePath;
+    try { filePath = fs.realpathSync(convertedPath); } catch { filePath = convertedPath; }
+    const root = findCheckoutRoot(filePath, platform);
+    if (!root) continue;
+    const groupKey = platform === 'win32' ? root.toLowerCase() : root;
+    if (!groups.has(groupKey)) groups.set(groupKey, { root, files: [] });
+    const group = groups.get(groupKey);
+    const hasFile = group.files.some((existing) => platform === 'win32'
+      ? existing.toLowerCase() === filePath.toLowerCase()
+      : existing === filePath);
+    if (!hasFile) group.files.push(filePath);
+  }
+
+  const anomalies = [];
+  const notes = [];
+  for (const { root, files } of groups.values()) {
+    // 同じリポを2箇所にチェックアウトしている場合 basename だけでは区別できない
+    // （実測: ~/orgiast-claude-rules と ~/Downloads/orgiast-claude-rules の両方を hook が使っていた）。
+    // 親ディレクトリ名を添えて、どちらを直すべきか分かるようにする。
+    const checkout = `${path.basename(path.dirname(root))}/${path.basename(root)}`;
+    const fetched = await gitImpl(['fetch', 'origin', 'main'], { cwd: root, timeout: 20_000 });
+    if (fetched?.error || fetched?.status !== 0) {
+      const reason = fetched?.error?.message || fetched?.stderr?.trim() || `終了コード ${fetched?.status ?? '不明'}`;
+      notes.push(`フック版ずれ判定をスキップ: ${checkout}: ${reason.replace(/\r?\n/g, ' ').slice(0, 200)}`);
+      continue;
+    }
+    const behindResult = await gitImpl(['rev-list', '--count', 'HEAD..origin/main'], { cwd: root, timeout: 20_000 });
+    const behind = behindResult?.status === 0 ? Number.parseInt(behindResult.stdout.trim(), 10) || 0 : 0;
+    const mismatched = [];
+    for (const filePath of files) {
+      const relative = path.relative(root, filePath).replaceAll('\\', '/');
+      const mainFile = await gitImpl(['show', `origin/main:${relative}`], { cwd: root, timeout: 20_000 });
+      if (mainFile?.status !== 0 || mainFile?.error) continue; // main に無い新規ツール
+      let local;
+      try { local = fs.readFileSync(filePath, 'utf8'); } catch { continue; }
+      if (local !== mainFile.stdout) mismatched.push(path.basename(filePath));
+    }
+    if (mismatched.length) {
+      anomalies.push({
+        type: 'hook_version_drift',
+        label: 'フック版ずれ',
+        message: `${checkout} が origin/main より ${behind} コミット遅れ / フック実行ファイル ${mismatched.length}件が main と不一致: ${mismatched.slice(0, 5).join(', ')}`
+      });
+    }
+  }
+  return { anomalies, notes };
+}
+
 async function defaultNotify(text, { home }) {
   const { notifyKim } = await import('./notify-kim.mjs');
   const result = await notifyKim(text, { home });
@@ -65,7 +166,17 @@ function linesSinceOffset(logPath, previousSize) {
 }
 
 export function isFailureLine(line) {
-  if (!line.trim() || line.includes('/ サマリ /')) return false;
+  const trimmed = line.trimStart();
+  if (!trimmed.trim() || line.includes('/ サマリ /')) return false;
+
+  // Strip optional leading timestamps (e.g. "[2026-09-05 12:00:00]") and optional bracket prefixes (e.g. "[booth-feedback-intake]")
+  const cleanLine = trimmed
+    .replace(/^(?:\[?\d{4}[-/]\d{2}[-/]\d{2}[ T]\d{2}:\d{2}:\d{2}\]?\s*[:\-]?\s*)/, '')
+    .replace(/^\[[^\]]+\]\s*/, '')
+    .trimStart();
+
+  if (/^(?:HEAD is now at|From https:\/\/|From git@|\*\s+branch\b|Already up to date\b|Updating\s|Fast-forward\b)/i.test(cleanLine)) return false;
+
   let remainder = line
     .replace(/\berror\s*[:= ]*\s*(?:[0-9]*[0]|-(?!\w))/gi, '')
     .replace(/失敗\s*[:：= ]*\s*0(?!\w)/g, '')
@@ -136,6 +247,9 @@ export async function runNightlyHealth({
   prime = false,
   json = false,
   updateBaseline = false,
+  gitImpl = defaultGitImpl,
+  platform = getPlatform(),
+  settingsPath = path.join(home, '.claude', 'settings.json'),
   baselinePath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'nightly-health-baseline.json')
 } = {}) {
   const dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -193,6 +307,10 @@ export async function runNightlyHealth({
       }
   }
   const unregisteredLogs = logFiles.filter((file) => !registeredLogs.has(file));
+
+  const hookDrift = await detectHookVersionDrift({ settingsPath, gitImpl, platform });
+  anomalies.push(...hookDrift.anomalies);
+  for (const note of hookDrift.notes) console.log(note);
 
   let suppressedCount = 0;
   try {

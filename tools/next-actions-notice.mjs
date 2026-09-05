@@ -51,6 +51,15 @@ function emptyResult(generatedAt = null) {
   return { fresh: false, generatedAt, actions: [] };
 }
 
+function openWorkNotice(home, now) {
+  const file = path.join(home, '.claude', 'open-work.md');
+  try {
+    if (now.getTime() - fs.statSync(file).mtimeMs > MAX_AGE_MS || now.getTime() < fs.statSync(file).mtimeMs) return '';
+    const match = fs.readFileSync(file, 'utf8').match(/^ok:PR(\d+) ブランチ(\d+) タスク\d+\(P1 (\d+)\) TODO\d+ 夜間異常\d+(?:\s*\/.*)?$/m);
+    return match ? `未処理の在庫: PR${match[1]}件 / 取り残しブランチ${match[2]}件 / P1タスク${match[3]}件 → ~/.claude/open-work.md` : '';
+  } catch { return ''; }
+}
+
 export function runNextActionsNotice(options = {}) {
   const home = options.home || os.homedir();
   const now = options.now instanceof Date ? options.now :
@@ -98,10 +107,12 @@ export function runNextActionsNotice(options = {}) {
       return result;
     }
 
+    const inventory = openWorkNotice(home, now);
     log([
       `## 明日の推奨アクション（${generated.text}・夜間の作り置き）`,
       ...actions.map((action, index) => `${index + 1}. ${action.title} [${action.source}] — ${action.first_step}`),
-      '詳細: ~/.claude/next-actions.md'
+      '詳細: ~/.claude/next-actions.md',
+      ...(inventory ? [inventory] : [])
     ].join('\n'));
     return result;
   } catch (unexpected) {

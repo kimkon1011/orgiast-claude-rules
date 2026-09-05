@@ -6,10 +6,15 @@ $logDir = Join-Path $HOME '.claude\logs'
 $logFile = Join-Path $logDir ("nightly-batch-" + (Get-Date -Format 'yyyy-MM-dd') + ".log")
 New-Item -ItemType Directory -Path $logDir -Force | Out-Null
 $summary = [ordered]@{}
-function Write-NightlyLog([string]$Step, [string]$Result) {
-    if ($Step -ne 'サマリ') { $summary[$Step] = $Result }
+function Write-NightlyLog([string]$Step, [string]$Result, [bool]$IncludeInSummary = $true) {
+    if ($IncludeInSummary -and $Step -ne 'サマリ') { $summary[$Step] = $Result }
     $line = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + " / " + $Step + " / " + $Result
     Add-Content -LiteralPath $logFile -Value $line -Encoding UTF8
+}
+function Format-NightlyDetail($Output) {
+    $lines = @($Output | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ } | Select-Object -First 8)
+    if ($lines.Count -eq 0) { return '(出力なし)' }
+    return ($lines -join ' / ')
 }
 function Finish-Nightly([int]$Code) {
     $parts = @($summary.Keys | ForEach-Object { $_ + '=' + $summary[$_] })
@@ -127,18 +132,22 @@ try {
                     $splitOutput = @(& $node.Source $memoryIndexSplit --dir $memoryDir --domains $domainsTmp --pins $pinsTmp --apply 2>&1)
                     if ($LASTEXITCODE -eq 0) { $applied++ } else {
                         $needsAttention += ($projectName + ':適用失敗')
+                        Write-NightlyLog 'memory-index-split' ('detail:' + $projectName + ':適用失敗: ' + (Format-NightlyDetail $splitOutput)) $false
                         Write-Warning ("nightly-batch: memory-index-split " + $projectName + ': ' + ($splitOutput -join ' / '))
                     }
                 } elseif ($deriveExit -eq 1) {
                     $unclassified = @($deriveOutput | Where-Object { [string]$_ -match '^- ' }).Count
                     $needsAttention += ($projectName + ':' + $unclassified + '件未分類')
+                    Write-NightlyLog 'memory-index-domains' ('detail:' + $projectName + ':' + $unclassified + '件未分類: ' + (Format-NightlyDetail $deriveOutput)) $false
                     Write-Warning ("nightly-batch: memory-index-domains " + $projectName + ': ' + ($deriveOutput -join ' / '))
                 } else {
                     $needsAttention += ($projectName + ':導出失敗')
+                    Write-NightlyLog 'memory-index-domains' ('detail:' + $projectName + ':導出失敗: ' + (Format-NightlyDetail $deriveOutput)) $false
                     Write-Warning ("nightly-batch: memory-index-domains " + $projectName + ': ' + ($deriveOutput -join ' / '))
                 }
             } catch {
                 $needsAttention += ($projectName + ':例外')
+                Write-NightlyLog 'memory-index-split' ('detail:' + $projectName + ':例外: ' + $_.Exception.Message) $false
                 Write-Warning ("nightly-batch: memory-index-split " + $projectName + ': ' + $_.Exception.Message)
             } finally {
                 Remove-Item -LiteralPath $domainsTmp, $pinsTmp -Force -ErrorAction SilentlyContinue
@@ -161,10 +170,12 @@ try {
                 $verifyOutput = @(& $node.Source $memoryIndexSplitVerify --dir $memoryDir 2>&1)
                 if ($LASTEXITCODE -ne 0) {
                     $verifyNg += $projectName
+                    Write-NightlyLog 'memory-index-split-verify' ('detail:' + $projectName + ': ' + (Format-NightlyDetail $verifyOutput)) $false
                     Write-Warning ("nightly-batch: memory-index-split-verify " + $projectName + ': ' + ($verifyOutput -join ' / '))
                 }
             } catch {
                 $verifyNg += $projectName
+                Write-NightlyLog 'memory-index-split-verify' ('detail:' + $projectName + ':例外: ' + $_.Exception.Message) $false
                 Write-Warning ("nightly-batch: memory-index-split-verify " + $projectName + ': ' + $_.Exception.Message)
             }
         }

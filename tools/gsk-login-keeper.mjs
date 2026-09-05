@@ -6,6 +6,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { upsertEnvValue } from './env-kv.mjs';
+import { isEntry } from './is-entry.mjs';
 
 const HOST = '127.0.0.1';
 const DEFAULT_PORT = 8787;
@@ -199,8 +200,7 @@ export async function startKeeper({ args = process.argv.slice(2), env = process.
   return { server, state, close, configFile, envFile };
 }
 
-const isEntry = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
-if (isEntry) {
+if (isEntry(import.meta.url)) {
   startKeeper().catch((error) => {
     console.error(`[ERROR] ${messageOf(error)}`);
     process.exitCode = 1;

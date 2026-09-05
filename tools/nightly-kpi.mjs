@@ -21,6 +21,12 @@ export const NO_OP_PATTERNS = [
 
 export const TODO_SIMILARITY_THRESHOLD = 0.7;
 
+export const BATCH_RESULT_PATTERNS = {
+  success: /^ok(?::|$)/i,
+  failure: /^(?:error:|ng(?::|$))/i,
+  warning: /^warn:/i,
+};
+
 const DAY_MS = 86_400_000;
 const round = (value, digits = 6) => Number.isFinite(value) ? Number(value.toFixed(digits)) : value;
 const normalizeSpace = (text) => String(text ?? '').replace(/\s+/g, ' ').trim();
@@ -183,7 +189,7 @@ export function tokenCost(usage, price) {
 }
 
 export function parseBatchLog(content) {
-  if (content === null || content === undefined) return { batchRan: false, batchCompleted: false, batchStepsOk: 0, batchStepsTotal: 0, failedSteps: [], lastStep: null };
+  if (content === null || content === undefined) return { batchRan: false, batchCompleted: false, batchStepsOk: 0, batchStepsTotal: 0, failedSteps: [], warnSteps: [], lastStep: null };
   const steps = [];
   for (const line of String(content).split(/\r?\n/).filter(Boolean)) {
     const parts = line.split(' / ');
@@ -192,12 +198,14 @@ export function parseBatchLog(content) {
     const detail = parts.slice(2).join(' / ').trim();
     steps.push({ step, detail });
   }
+  const batchSteps = steps.filter(({ step }) => step !== 'サマリ');
   return {
     batchRan: true,
     batchCompleted: steps.some(({ step, detail }) => step === 'サマリ' || /nightly-batch\s+完了/.test(detail)),
-    batchStepsOk: steps.filter(({ detail }) => detail.startsWith('ok:')).length,
-    batchStepsTotal: steps.length,
-    failedSteps: [...new Set(steps.filter(({ detail }) => detail.startsWith('error:')).map(({ step }) => step))],
+    batchStepsOk: batchSteps.filter(({ detail }) => BATCH_RESULT_PATTERNS.success.test(detail)).length,
+    batchStepsTotal: batchSteps.length,
+    failedSteps: [...new Set(batchSteps.filter(({ detail }) => BATCH_RESULT_PATTERNS.failure.test(detail)).map(({ step }) => step))],
+    warnSteps: [...new Set(batchSteps.filter(({ detail }) => BATCH_RESULT_PATTERNS.warning.test(detail)).map(({ step }) => step))],
     lastStep: steps.at(-1)?.step ?? null,
   };
 }
@@ -305,7 +313,7 @@ export function formatText(kpi, previous = null, added = []) {
     `主KPI: 消化率 ${pct(kpi.closeRate)}${delta('closeRate', (v) => `${v >= 0 ? '+' : ''}${(v * 100).toFixed(1)}pt`)} / 空回り率 ${pct(kpi.noOpRate)}${delta('noOpRate', (v) => `${v >= 0 ? '+' : ''}${(v * 100).toFixed(1)}pt`)} / 純削減 ${usd(kpi.netSavingUsd)}${delta('netSavingUsd', (v) => `${v >= 0 ? '+' : ''}$${v.toFixed(2)}`)}`,
     `消化: ${kpi.closedOvernight}/${kpi.backlogAtStart}件 / 残 ${kpi.backlogAtEnd}件 / 純減 ${kpi.netBurnDown}件 / 日付不明完了 ${kpi.dateUnknown}件`,
     `セッション: ${kpi.sessions}件（成功 ${kpi.succeeded} / 失敗 ${kpi.failed} / timeout ${kpi.timedOut} / 空回り ${kpi.noOpSessions}）/ 成果 ${kpi.prsCreated === null ? '不明' : `${kpi.prsCreated}PR/${kpi.sessions}セッション = ${pct(kpi.prYieldRate)}`}`,
-    `夜間バッチ: ran=${kpi.batchRan} / completed=${kpi.batchCompleted} / ok=${kpi.batchStepsOk}/${kpi.batchStepsTotal}${kpi.failedSteps.length ? ` / 失敗=${kpi.failedSteps.join('、')}` : ''}`,
+    `夜間バッチ: ran=${kpi.batchRan} / completed=${kpi.batchCompleted} / ok=${kpi.batchStepsOk}/${kpi.batchStepsTotal}${kpi.failedSteps.length ? ` / 失敗=${kpi.failedSteps.join('、')}` : ''}${kpi.warnSteps?.length ? ` / 警告=${kpi.warnSteps.join('、')}` : ''}`,
     `コスト: 夜間 ${usd(kpi.nightCostUsd)} / 監督相当 ${usd(kpi.supervisorEquivalentUsd)} / モデル削減 ${usd(kpi.modelSavingUsd)} / 空回り ${usd(kpi.wastedUsd)} / 完了1件あたり ${usd(kpi.savingPerClosedTodo)}`,
     `参考: 無人消化実時間の中央値 ${kpi.medianSessionMinutes === null ? '不明' : `${kpi.medianSessionMinutes.toFixed(1)}分`} × 完了件数 = ${kpi.humanMinutesSaved === null ? '不明' : `${kpi.humanMinutesSaved.toFixed(1)}分`}`,
     `注記: ${kpi.costNote}`,

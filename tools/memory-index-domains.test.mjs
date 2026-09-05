@@ -82,3 +82,15 @@ test('shared サブ索引を未知扱いせず、配下の memory は分類対�
   assert.equal(child.status, 0, child.stderr);
   assert.doesNotMatch(child.stderr, /未知のドメイン/);
 });
+
+test('DOMAINSにない外部サブ索引（リンク先が実在するが直下ではない）を未知扱いせず無視する', () => {
+  const directory = fixture();
+  fs.mkdirSync(path.join(directory, 'another_shared'));
+  fs.writeFileSync(path.join(directory, 'another_shared', 'foo.md'), 'external memory\n');
+  fs.writeFileSync(path.join(directory, 'index', 'another_shared.md'), '- [foo](../another_shared/foo.md)\n');
+
+  const child = invoke(directory);
+
+  assert.equal(child.status, 0, child.stderr);
+  assert.doesNotMatch(child.stderr, /未知のドメイン/);
+});

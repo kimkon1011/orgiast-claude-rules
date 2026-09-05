@@ -12,7 +12,8 @@ function Write-NightlyLog([string]$Step, [string]$Result, [bool]$IncludeInSummar
     Add-Content -LiteralPath $logFile -Value $line -Encoding UTF8
 }
 function Format-NightlyDetail($Output) {
-    $lines = @($Output | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ } | Select-Object -First 8)
+    if (-not $Output) { return '(出力なし)' }
+    $lines = @($Output | ForEach-Object { "$_" } | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -First 8)
     if ($lines.Count -eq 0) { return '(出力なし)' }
     return ($lines -join ' / ')
 }
@@ -119,6 +120,9 @@ try {
     } elseif ($v2MemoryDirs.Count -eq 0) {
         Write-NightlyLog 'memory-index-split' 'skip:v2索引なし'
     } else {
+        $oldPreference = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
         $applied = 0
         $needsAttention = @()
         foreach ($memoryDir in $v2MemoryDirs) {
@@ -156,6 +160,7 @@ try {
         $splitResult = 'ok:' + $applied + '件適用'
         if ($needsAttention.Count -gt 0) { $splitResult += '/' + $needsAttention.Count + '件要手当(' + ($needsAttention -join ',') + ')' }
         Write-NightlyLog 'memory-index-split' $splitResult
+        } finally { $ErrorActionPreference = $oldPreference }
     }
 
     if (-not $memoryIndexSplitVerify) {
@@ -163,6 +168,9 @@ try {
     } elseif ($v2MemoryDirs.Count -eq 0) {
         Write-NightlyLog 'memory-index-split-verify' 'skip:v2索引なし'
     } else {
+        $oldPreference = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
         $verifyNg = @()
         foreach ($memoryDir in $v2MemoryDirs) {
             $projectName = Split-Path -Leaf (Split-Path -Parent $memoryDir)
@@ -181,6 +189,7 @@ try {
         }
         if ($verifyNg.Count -gt 0) { Write-NightlyLog 'memory-index-split-verify' ('NG:' + ($verifyNg -join ',')) }
         else { Write-NightlyLog 'memory-index-split-verify' ('ok:' + $v2MemoryDirs.Count + '件') }
+        } finally { $ErrorActionPreference = $oldPreference }
     }
 
     # LINEトーク履歴エクスポート(inbox の .txt)を先に取り込む。claude-mobile が無いPCでは静かにスキップする。

@@ -64,12 +64,28 @@ export function run(argv = process.argv.slice(2)) {
   for (const item of fs.readdirSync(indexDirectory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
     if (!item.isFile() || !item.name.endsWith('.md')) continue;
     const key = item.name.slice(0, -3);
+    const text = fs.readFileSync(path.join(indexDirectory, item.name), 'utf8');
+    const allTargets = targets(text);
+    const externalTargets = allTargets.filter((target) => {
+      if (!target.startsWith('../')) return false;
+      const resolved = path.resolve(indexDirectory, target);
+      return path.dirname(resolved) !== directory;
+    });
+    const hasLocalTargets = allTargets.some((target) => {
+      if (!target.startsWith('../')) return false;
+      const resolved = path.resolve(indexDirectory, target);
+      return path.dirname(resolved) === directory;
+    });
+    const isExternal = externalTargets.length > 0 && !hasLocalTargets;
+
     if (!Object.hasOwn(DOMAINS, key)) {
+      if (isExternal) {
+        continue;
+      }
       console.error(`警告: 未知のドメイン索引を無視します: index/${item.name}`);
       continue;
     }
-    const text = fs.readFileSync(path.join(indexDirectory, item.name), 'utf8');
-    for (const target of targets(text)) {
+    for (const target of allTargets) {
       if (!target.startsWith('../')) continue;
       const resolved = path.resolve(indexDirectory, target);
       if (path.dirname(resolved) !== directory) continue;

@@ -149,3 +149,19 @@ test('直下以外の実在 memory を指すサブ索引をそのまま保存す
   assert.equal(fs.readFileSync(path.join(item.directory, 'index', 'shared.md'), 'utf8'), sharedIndex);
   assert.match(fs.readFileSync(path.join(item.directory, 'MEMORY.md'), 'utf8'), /\[index\/shared\.md\]\(index\/shared\.md\) \(1件\)/);
 });
+
+test('DOMAINSにない外部サブ索引（リンク先が実在するが直下ではない）を split が削除せずそのまま保存し、MEMORY.mdにも残す', () => {
+  const item = fixture({
+    memory: '<!-- MEMORY-INDEX v2 split -->\n## 常に効くルール\n\n## ドメイン索引\n- **他PCからの別共有知見** → [index/another_shared.md](index/another_shared.md) (1件)\n',
+  });
+  fs.mkdirSync(path.join(item.directory, 'index'));
+  fs.mkdirSync(path.join(item.directory, 'another_shared'));
+  fs.writeFileSync(path.join(item.directory, 'another_shared', 'foo.md'), 'external memory\n');
+  const anotherIndex = '# 他PCからの別共有知見\n\n- [foo](../another_shared/foo.md)\n';
+  fs.writeFileSync(path.join(item.directory, 'index', 'another_shared.md'), anotherIndex);
+
+  run(args(item));
+
+  assert.equal(fs.readFileSync(path.join(item.directory, 'index', 'another_shared.md'), 'utf8'), anotherIndex);
+  assert.match(fs.readFileSync(path.join(item.directory, 'MEMORY.md'), 'utf8'), /\[index\/another_shared\.md\]\(index\/another_shared\.md\) \(1件\)/);
+});

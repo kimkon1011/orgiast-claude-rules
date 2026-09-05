@@ -11,7 +11,7 @@ const dryRun = args.includes('--dry-run');
 const cwdIndex = args.indexOf('--cwd');
 const modelIndex = args.indexOf('--model');
 const cwd = path.resolve(cwdIndex >= 0 && args[cwdIndex + 1] ? args[cwdIndex + 1] : process.cwd());
-const model = modelIndex >= 0 && args[modelIndex + 1] ? args[modelIndex + 1] : 'glm-5.2';
+const model = modelIndex >= 0 && args[modelIndex + 1] ? args[modelIndex + 1] : 'glm-5.3';
 const omitted = new Set();
 if (dryRun) omitted.add(args.indexOf('--dry-run'));
 for (const index of [cwdIndex, modelIndex]) if (index >= 0) { omitted.add(index); omitted.add(index + 1); }

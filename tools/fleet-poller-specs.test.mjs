@@ -8,6 +8,7 @@ import path from 'node:path';
 // (2026-08-28 実測)。引数が落ちても誰も気付けないのでテストで固定する。
 const dir = path.resolve(import.meta.dirname);
 const pollerSource = fs.readFileSync(path.join(dir, 'fleet-poller.mjs'), 'utf8');
+const pollerPs1Source = fs.readFileSync(path.join(dir, 'fleet-poller.ps1'), 'utf8');
 const installerSource = fs.readFileSync(path.join(dir, 'install-orgiast.ps1'), 'utf8');
 
 const callInMjs = () => {
@@ -40,6 +41,11 @@ test('fleet-poller.mjs は fleet-sheet-report に --cloud を渡す', () => {
 
 test('fleet-poller.ps1 は fleet-sheet-report に --cloud を渡す', () => {
   assert.match(callInPs1(), /--cloud/);
+});
+
+test('fleet-poller.ps1 は fleet-agent のScheduledTaskを自己登録する', () => {
+  assert.match(pollerPs1Source, /OrgiastFleetAgent/);
+  assert.match(pollerPs1Source, /register-fleet-agent\.ps1/);
 });
 
 test('fleet-poller.mjs は register-fleet-agent を許可する', () => {

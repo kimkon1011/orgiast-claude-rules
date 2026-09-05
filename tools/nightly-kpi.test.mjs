@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  NO_OP_PATTERNS, TODO_SIMILARITY_THRESHOLD,
+  BATCH_RESULT_PATTERNS, NO_OP_PATTERNS, TODO_SIMILARITY_THRESHOLD,
   appendImprovementTodos, calculateKpi, clusterBySimilarity, isInNightlyWindow,
   formatText, githubRepo, improvementTodos, normalizeTodo, parseBatchLog, parseRun, parseTodos,
   queryPullRequests, similarity, todoTokens,
@@ -22,7 +22,7 @@ function run(overrides = {}) {
 }
 
 test('ログファイル不在は batchRan=false で、0/0を正常扱いしない', () => {
-  assert.deepEqual(parseBatchLog(null), { batchRan: false, batchCompleted: false, batchStepsOk: 0, batchStepsTotal: 0, failedSteps: [], lastStep: null });
+  assert.deepEqual(parseBatchLog(null), { batchRan: false, batchCompleted: false, batchStepsOk: 0, batchStepsTotal: 0, failedSteps: [], warnSteps: [], lastStep: null });
 });
 
 test('ログがあってもサマリ行がなければ未完了、errorステップを列挙する', () => {
@@ -31,6 +31,53 @@ test('ログがあってもサマリ行がなければ未完了、errorステッ
   assert.equal(result.batchCompleted, false);
   assert.deepEqual(result.failedSteps, ['digest']);
   assert.equal(result.lastStep, 'digest');
+});
+
+test('夜間バッチの成功語彙は ok 単独と ok:detail を数え、okay は数えない', () => {
+  const result = parseBatchLog([
+    '2026-09-05 03:00:00 / plain / ok',
+    '2026-09-05 03:01:00 / detailed / ok:200件処理',
+    '2026-09-05 03:02:00 / other / okay',
+  ].join('\n'));
+  assert.equal(result.batchStepsOk, 2);
+  assert.equal(BATCH_RESULT_PATTERNS.success.test('okay'), false);
+});
+
+test('NG/NG: は大文字小文字を問わず、error: とともに失敗に数える', () => {
+  const result = parseBatchLog([
+    '2026-09-05 03:00:00 / ng-plain / ng',
+    '2026-09-05 03:01:00 / ng-detail / Ng:不整合',
+    '2026-09-05 03:02:00 / error-detail / error:終了コード1',
+  ].join('\n'));
+  assert.deepEqual(result.failedSteps, ['ng-plain', 'ng-detail', 'error-detail']);
+});
+
+test('warn: は warnSteps に入り failedSteps には入らず、text に警告があるときだけ出る', () => {
+  const warned = parseBatchLog('2026-09-05 03:00:00 / cache / WARN:遅延');
+  assert.deepEqual(warned.warnSteps, ['cache']);
+  assert.deepEqual(warned.failedSteps, []);
+  assert.match(formatText(calculateKpi({ date, todoParse: parseTodos(''), runs: [], batch: warned })), /\s\/ 警告=cache/);
+  assert.doesNotMatch(formatText(calculateKpi({ date, todoParse: parseTodos(''), runs: [], batch: baseBatch })), /警告=/);
+});
+
+test('サマリ行はステップ数から除くが batchCompleted の根拠にする', () => {
+  const result = parseBatchLog('2026-09-05 03:00:00 / worker / ok\n2026-09-05 03:01:00 / サマリ / nightly-batch 完了: ok');
+  assert.equal(result.batchStepsTotal, 1);
+  assert.equal(result.batchCompleted, true);
+});
+
+test('2026-09-05 実ログ相当の23行は実ステップ22件中 ok=21件、失敗ステップ1件になる', () => {
+  const successfulSteps = Array.from({ length: 22 }, (_, index) => {
+    const detail = index < 5 ? `ok:${index}件処理` : 'ok';
+    return `2026-09-05 03:${String(index).padStart(2, '0')}:00 / step-${index + 1} / ${detail}`;
+  });
+  successfulSteps[21] = '2026-09-05 03:21:00 / memory-index-split-verify / NG:c--Users-uers-Downloads-CLAUDE-md--';
+  const fixture = [...successfulSteps, '2026-09-05 03:22:00 / サマリ / nightly-batch 完了: ok'].join('\n');
+  const result = parseBatchLog(fixture);
+  assert.equal(fixture.split('\n').length, 23);
+  assert.equal(result.batchStepsOk, 21);
+  assert.equal(result.batchStepsTotal, 22);
+  assert.deepEqual(result.failedSteps, ['memory-index-split-verify']);
 });
 
 test('全残TODOブロックを読み、装飾違いの重複を1件に畳む', () => {

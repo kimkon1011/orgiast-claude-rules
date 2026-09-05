@@ -561,7 +561,7 @@ PCがあればその瞬間に 401 で締め出され、鍵配布が全滅する�
 
 ### 1.17.1 費用対効果ファースト — 追加費用ゼロの経路を先に必ず検討する（絶対ルール）
 
-従量課金トークンを使う前に必ず: ①定額枠内・トークン消費ゼロの代替があるか（ローカルスクリプト/既存自動化/Codex/Manus） ②「ツール未導入だから従量経路で」は理由にならない（自分でinstall） ③従量課金しか無ければモデル最小化（分類=Haiku、量産=Sonnet、Opusは品質差実測時のみ） ④大量トークン消費が見込まれる判断は着手前に費用見込みを1行提示。優先順位: 既存自動化・ローカルスクリプト（消費ゼロ）→Codex（コード・定額）／Manus（Web調査・エンリッチ・専用枠）→Haiku→Sonnet→Opus5（要正当化）→Fable5（禁止）。詳細・過去事例: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/token-model-cost-routing.md`
+従量課金トークンを使う前に必ず: ①定額枠内・トークン消費ゼロの代替があるか（ローカルスクリプト/既存自動化/Codex/Manus） ②「ツール未導入だから従量経路で」は理由にならない（自分でinstall） ③従量課金しか無ければモデル最小化（分類=Haiku、量産=Sonnet、Opusは品質差実測時のみ） ④大量トークン消費が見込まれる判断は着手前に費用見込みを1行提示。優先順位: 既存自動化・ローカルスクリプト（消費ゼロ）→Codex（コード・定額）／Manus（Web調査・エンリッチ・専用枠）→Haiku→Sonnet→Opus5（要正当化）。Fable は監督用のみ（§1.16）で、実装・量産・分類には使わない。詳細・過去事例: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/token-model-cost-routing.md`
 
 ### 1.18 監督(Opus)は最小限だけ動き、実働はCodex/Sonnet/Geminiに委譲する
 

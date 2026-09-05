@@ -13,6 +13,14 @@ if ($PSScriptRoot) { $repoCandidates += (Split-Path -Parent $PSScriptRoot) }
 $repoCandidates += @("$H\orgiast-claude-rules", "$H\Downloads\orgiast-claude-rules")
 $repo = @($repoCandidates | Select-Object -Unique) | Where-Object { Test-Path $_ } | Select-Object -First 1
 
+# 自己修復: 既存PCにも fleet-agent の15分タスクを登録し、中央ディレクティブへ応答できるようにする
+try {
+  if ($repo -and -not (Get-ScheduledTask -TaskName 'OrgiastFleetAgent' -ErrorAction SilentlyContinue)) {
+    $fleetAgentInstaller = Join-Path $repo 'tools\register-fleet-agent.ps1'
+    if (Test-Path $fleetAgentInstaller) { & powershell -NoProfile -ExecutionPolicy Bypass -File $fleetAgentInstaller *> $null }
+  }
+} catch {}
+
 # 自己修復: 設定ファイルの先頭BOMを除去(BOM付きだとClaude Code/nodeがJSON.parse・env読取に失敗して起動不能になるため。schtask実行なのでClaude Codeが壊れていても直せる)
 foreach ($bf in @("$H\.claude\settings.json", "$H\.claude.json", "$H\.gemini\.env", "$H\.claude\cost-reporter.env", "$H\.claude\manus.env", "$H\.claude\deepseek.env", "$H\.claude\xai.env", "$H\.claude\openrouter.env", "$H\.claude\groq.env", "$H\.claude\mistral.env", "$H\.claude\ollama.env")) {
   try { if (Test-Path $bf) { $bc = [System.IO.File]::ReadAllText($bf); if ($bc.Length -gt 0 -and $bc[0] -eq [char]0xFEFF) { [System.IO.File]::WriteAllText($bf, $bc.TrimStart([char]0xFEFF), (New-Object System.Text.UTF8Encoding($false))) } } } catch {}

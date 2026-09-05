@@ -17,9 +17,14 @@ function Quote-TaskArgument([string]$Value) {
 $repo = Split-Path -Parent $PSScriptRoot
 $runHidden = Join-Path ([Environment]::GetFolderPath('UserProfile')) '.claude\tools\run-hidden.vbs'
 $wscript = Join-Path $env:WINDIR 'System32\wscript.exe'
+# Keep this file ASCII-only: it has no UTF-8 BOM, so PowerShell 5.1 would decode raw
+# Japanese as Shift-JIS and break parsing. Japanese output goes through J '\uXXXX'.
+# open-work runs before next-actions so the inventory exists when priorities are picked.
 $specs = @(
+  [pscustomobject]@{ TaskName = 'OrgiastMorningBatch'; ScriptName = 'open-work.mjs'; ScriptArgs = @() },
   [pscustomobject]@{ TaskName = 'OrgiastMorningBatch'; ScriptName = 'next-actions.mjs'; ScriptArgs = @() },
   [pscustomobject]@{ TaskName = 'OrgiastMorningBatch'; ScriptName = 'nightly-health.mjs'; ScriptArgs = @() },
+  [pscustomobject]@{ TaskName = 'OrgiastNightlyBatch'; ScriptName = 'ai-news-triage.mjs'; ScriptArgs = @('--confidence', 'high,medium', '--limit', '8') },
   [pscustomobject]@{ TaskName = 'OrgiastNightlyBatch'; ScriptName = 'pricing-brief.mjs'; ScriptArgs = @('--limit', '8') }
 )
 

@@ -324,6 +324,10 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
 
 「すすめて」と打たせない。完了報告の後は自動で次のTODO（git commit/vercel prod deploy/Layer2 e2e/memory反映等）に着手する。設計判断・破壊的操作・未承認prod送信・大型リファクタのみAskUserQuestionで待つ。報告末尾に「残TODO」セクションを付ける。詳細・自動着手チェックリスト: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/autonomy-and-reporting.md`
 
+PR は原則 `gh pr create ... --label automerge` で作り、CI が赤なら Claude が直す。「マージしてください」と user に頼まない。
+workflow・keyserve・secrets・env・fleet 指令ファイルに触る時だけ label を付けず、PR 冒頭に kim の手動マージが必要な理由を書く。
+完了結論は 3 行以内、詳細はファイルへのリンク 1 本とし、応答末尾を必ず `**次に kim がすること: なし**` または 1 件だけの行動で終える。
+
 ### 1.15.1 セッションを閉じたら次のセッションを自動で立ち上げる（全アカウント・全PC共通 / 2026-08-30 kim 指示）
 
 **user に「新しいセッションを開いて `/session-start` と打って」と言わない。** `/session-close` の最後に走る

@@ -281,6 +281,57 @@ function _FeedbackRelay_loadFormTemplate() {
     + (lastError ? ' 詳細: ' + lastError.message : ''));
 }
 
+/** Collect every unfinished feedback row, including rows with a response note. */
+function FeedbackRelay_nagPending(opts) {
+  opts = opts || {};
+  try {
+    var config = _FeedbackRelay_config();
+    var ss = config.logSsId ? SpreadsheetApp.openById(config.logSsId) : SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName(config.logSheetName || _FEEDBACK_RELAY_DEFAULT_LOG_SHEET_NAME);
+    if (!sheet) return { ok: true, count: 0, sent: false, via: 'none', reason: '記録シートなし' };
+    var values = sheet.getDataRange().getValues();
+    if (!values.length) return { ok: true, count: 0, sent: false, via: 'none', reason: '記録なし' };
+    var headers = values[0].map(function (v) { return String(v || '').trim(); });
+    var required = ['日時', '種別', 'タイトル', '状態', '対応メモ', '送信元'];
+    var col = {};
+    for (var h = 0; h < required.length; h++) {
+      col[required[h]] = headers.indexOf(required[h]);
+      if (col[required[h]] < 0) return { ok: false, count: 0, sent: false, via: 'none', reason: '必須列がありません: ' + required[h] };
+    }
+    var doneStates = { done: true, '完了': true, '対応済': true, '却下': true };
+    var now = new Date();
+    var items = [];
+    for (var r = 1; r < values.length; r++) {
+      var row = values[r];
+      var state = String(row[col['状態']] || '').trim().toLowerCase();
+      if (doneStates[state]) continue;
+      var rawDate = row[col['日時']];
+      var days = rawDate instanceof Date && !isNaN(rawDate.getTime())
+        ? Math.max(0, Math.floor((now.getTime() - rawDate.getTime()) / 86400000)) : null;
+      items.push({
+        kind: String(row[col['種別']] || '不具合'), title: String(row[col['タイトル']] || '(無題)'),
+        days: days, source: String(row[col['送信元']] || '不明'),
+        replyState: String(row[col['対応メモ']] || '').trim() ? '返答済・未完了' : '未返答'
+      });
+    }
+    if (!items.length) return { ok: true, count: 0, sent: false, via: 'none', reason: '未対応なし' };
+    var lines = ['🐛 未対応の不具合・要望 ' + items.length + ' 件'];
+    items.slice(0, 15).forEach(function (item) {
+      lines.push('・[' + item.kind.slice(0, 20) + '/' + item.replyState + '] ' + item.title.slice(0, 70) + ' … ' +
+        (item.days === null ? '経過不明' : '経過 ' + item.days + ' 日') + ' / 送信元: ' + item.source.slice(0, 50));
+    });
+    if (items.length > 15) lines.push('ほか ' + (items.length - 15) + ' 件');
+    lines.push('https://docs.google.com/a/orgiast.jp/spreadsheets/d/' + ss.getId() + '/edit#gid=' + sheet.getSheetId());
+    var content = lines.join('\n');
+    if (opts.dryRun === true) return { ok: true, count: items.length, items: items, content: content };
+    if (config.webhook && _FeedbackRelay_postWebhook(config.webhook, content, [])) return { ok: true, count: items.length, sent: true, via: 'webhook' };
+    var configured = Boolean(config.webhook);
+    return { ok: true, count: items.length, sent: false, via: 'none', reason: configured ? '通知送信失敗' : '通知先未設定' };
+  } catch (e) {
+    return { ok: false, count: 0, sent: false, via: 'none', reason: String(e && e.message ? e.message : e) };
+  }
+}
+
 function FeedbackRelay_serveForm(params) {
   var opts = params || {};
   // HTML のファイル名はプロジェクト構成で変わる(src/ui/ 配下 or 平置き)。

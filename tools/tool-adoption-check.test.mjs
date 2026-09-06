@@ -54,6 +54,29 @@ function runAuthFix({ settingsText, withKey = true }) {
   }
 }
 
+function runLedger({ rows, deadline = '5000', countReads = false }) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tool-adoption-ledger-'));
+  try {
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), rows.map((row) => JSON.stringify(row)).join('\n'));
+    const countFile = path.join(home, 'ledger-read-count.txt');
+    const stdout = execFileSync(process.execPath, [script, '--dry-run'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        ORGIAST_HOME: home,
+        TOOL_ADOPTION_FORCE_TIMEOUT: 'codex,gemini',
+        TOOL_ADOPTION_FORCE_PRESENT: 'codex,gemini',
+        TOOL_ADOPTION_DEADLINE_MS: deadline,
+        ...(countReads ? { TOOL_ADOPTION_LEDGER_READ_COUNT_FILE: countFile } : {}),
+      },
+    });
+    return { stdout, readCount: fs.existsSync(countFile) ? Number(fs.readFileSync(countFile, 'utf8')) : 0 };
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+}
+
 test('@choplin の旧Gemini MCP設定を gemini-mcp-tool へ修復する', () => {
   const result = runFix({ type: 'stdio', command: 'npx', args: ['-y', '@choplin/mcp-gemini-cli', '--allow-npx'], env: { GEMINI_API_KEY: 'test-key' } });
   assert.deepEqual(result, { type: 'stdio', command: 'npx', args: ['-y', 'gemini-mcp-tool'], env: { GEMINI_API_KEY: 'test-key', GEMINI_CLI_TRUST_WORKSPACE: 'true', GEMINI_MCP_BACKEND: 'gemini' } });
@@ -98,4 +121,30 @@ test('壊れたGemini settings JSONは例外を投げず書き換えない', () 
   assert.equal(result.text, original);
   assert.equal(result.backupExists, false);
   assert.doesNotMatch(result.stdout, /gemini の認証方式を新スキーマ/);
+});
+
+test('十分な予算では直近7日のprovider別件数を正しく集計する', () => {
+  const recent = new Date().toISOString();
+  const old = '2020-01-01T00:00:00.000Z';
+  const { stdout } = runLedger({ rows: [
+    { t: recent, provider: 'groq' },
+    { t: recent, provider: 'groq' },
+    { t: recent, provider: 'kimi' },
+    { t: old, provider: 'groq' },
+  ] });
+  assert.match(stdout, /groq 2 \/ kimi 1/);
+  assert.match(stdout, /\| groq \| 2 \| ✅ \|/);
+  assert.match(stdout, /\| kimi \| 1 \| ✅ \|/);
+});
+
+test('台帳読み取りが時間切れなら使用0とせず計測不能にする', () => {
+  const { stdout } = runLedger({ rows: [{ t: new Date().toISOString(), provider: 'groq' }], deadline: '0' });
+  assert.match(stdout, /計測不能\(台帳の読み取りが時間切れ・次回再判定\)/);
+  assert.match(stdout, /\| groq \| — \| ❓ 計測不能\(次回再判定\) \|/);
+  assert.doesNotMatch(stdout, /\| (?:kimi|groq|openrouter|gemini|deepseek) \| [^\n]*使用0/);
+});
+
+test('同一プロセスの複数集計でも台帳ファイルは1回だけ読む', () => {
+  const { readCount } = runLedger({ rows: [{ t: new Date().toISOString(), provider: 'kimi' }], countReads: true });
+  assert.equal(readCount, 1);
 });

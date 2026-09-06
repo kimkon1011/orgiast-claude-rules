@@ -70,3 +70,27 @@ test('導出結果は split build の全網羅検証を通る', () => {
   derive(['--dir', directory, '--out-domains', domainsFile, '--out-pins', pinsFile]);
   assert.doesNotThrow(() => build({ directory, domainsFile, pinsFile }));
 });
+
+test('shared サブ索引を未知扱いせず、配下の memory は分類対象にしない', () => {
+  const directory = fixture();
+  fs.mkdirSync(path.join(directory, 'shared'));
+  fs.writeFileSync(path.join(directory, 'shared', 'foo.md'), 'shared memory\n');
+  fs.writeFileSync(path.join(directory, 'index', 'shared.md'), '- [foo](../shared/foo.md)\n');
+
+  const child = invoke(directory);
+
+  assert.equal(child.status, 0, child.stderr);
+  assert.doesNotMatch(child.stderr, /未知のドメイン/);
+});
+
+test('DOMAINSにない外部サブ索引（リンク先が実在するが直下ではない）を未知扱いせず無視する', () => {
+  const directory = fixture();
+  fs.mkdirSync(path.join(directory, 'another_shared'));
+  fs.writeFileSync(path.join(directory, 'another_shared', 'foo.md'), 'external memory\n');
+  fs.writeFileSync(path.join(directory, 'index', 'another_shared.md'), '- [foo](../another_shared/foo.md)\n');
+
+  const child = invoke(directory);
+
+  assert.equal(child.status, 0, child.stderr);
+  assert.doesNotMatch(child.stderr, /未知のドメイン/);
+});

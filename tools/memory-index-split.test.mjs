@@ -133,3 +133,35 @@ test('CLI は --dry-run を既定としファイルを書き換えない', () =>
   assert.ok(fs.readFileSync(path.join(item.directory, 'MEMORY.md')).equals(before));
   assert.equal(fs.existsSync(path.join(item.directory, 'index')), false);
 });
+
+test('直下以外の実在 memory を指すサブ索引をそのまま保存する', () => {
+  const item = fixture({
+    memory: '<!-- MEMORY-INDEX v2 split -->\n## 常に効くルール\n\n## ドメイン索引\n- **他PCからの共有知見** 別アカウントPCで確立した実測ノウハウ → [index/shared.md](index/shared.md) (1件)\n',
+  });
+  fs.mkdirSync(path.join(item.directory, 'index'));
+  fs.mkdirSync(path.join(item.directory, 'shared'));
+  fs.writeFileSync(path.join(item.directory, 'shared', 'foo.md'), 'shared memory\n');
+  const sharedIndex = '# 他PCからの共有知見\n\n（共有元PCで管理）\n\n- [foo](../shared/foo.md)\n';
+  fs.writeFileSync(path.join(item.directory, 'index', 'shared.md'), sharedIndex);
+
+  run(args(item));
+
+  assert.equal(fs.readFileSync(path.join(item.directory, 'index', 'shared.md'), 'utf8'), sharedIndex);
+  assert.match(fs.readFileSync(path.join(item.directory, 'MEMORY.md'), 'utf8'), /\[index\/shared\.md\]\(index\/shared\.md\) \(1件\)/);
+});
+
+test('DOMAINSにない外部サブ索引（リンク先が実在するが直下ではない）を split が削除せずそのまま保存し、MEMORY.mdにも残す', () => {
+  const item = fixture({
+    memory: '<!-- MEMORY-INDEX v2 split -->\n## 常に効くルール\n\n## ドメイン索引\n- **他PCからの別共有知見** → [index/another_shared.md](index/another_shared.md) (1件)\n',
+  });
+  fs.mkdirSync(path.join(item.directory, 'index'));
+  fs.mkdirSync(path.join(item.directory, 'another_shared'));
+  fs.writeFileSync(path.join(item.directory, 'another_shared', 'foo.md'), 'external memory\n');
+  const anotherIndex = '# 他PCからの別共有知見\n\n- [foo](../another_shared/foo.md)\n';
+  fs.writeFileSync(path.join(item.directory, 'index', 'another_shared.md'), anotherIndex);
+
+  run(args(item));
+
+  assert.equal(fs.readFileSync(path.join(item.directory, 'index', 'another_shared.md'), 'utf8'), anotherIndex);
+  assert.match(fs.readFileSync(path.join(item.directory, 'MEMORY.md'), 'utf8'), /\[index\/another_shared\.md\]\(index\/another_shared\.md\) \(1件\)/);
+});

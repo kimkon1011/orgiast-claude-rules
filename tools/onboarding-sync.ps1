@@ -291,6 +291,15 @@ try {
     }
 } catch { Write-SyncLog "repo sync failed: $($_.Exception.Message)" }
 
+# 鍵配布はルール同期とは別の20時間ガードを onboarding-sync.mjs 側で持つ。
+# node・配布スクリプト・keyserve のいずれが使えなくても SessionStart は静かに続行する。
+try {
+    $keysSync = Join-Path $repoRoot 'tools\onboarding-sync.mjs'
+    if ((Get-Command node -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath $keysSync)) {
+        & node $keysSync --keys-only | Out-Null
+    }
+} catch {}
+
 # 日次同期の成否・差分有無にかかわらず、後から追加された必須hookを自己修復する。
 try {
     $homeRoot = if ($env:ORGIAST_HOME) { $env:ORGIAST_HOME } elseif ($env:USERPROFILE) { $env:USERPROFILE } else { [Environment]::GetFolderPath('UserProfile') }

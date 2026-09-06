@@ -302,6 +302,18 @@ export function sortViolationsBySeverity(violations) {
   });
 }
 
+const COMBINED_CODEX_INSTRUCTION = '以下は独立したN件の修正タスクです。それぞれ独立に原因調査・修正し、他のタスクの変更ファイルに触れないこと。1件でも原因を特定できなければ、そのタスクだけ見送り、残りは実施すること。';
+
+export function buildCombinedCodexSpec(actions) {
+  if (!Array.isArray(actions) || actions.length === 0) return '';
+  const total = actions.length;
+  const instruction = COMBINED_CODEX_INSTRUCTION.replace('N件', `${total}件`);
+  const tasks = actions.map((action, index) =>
+    `## タスク ${index + 1}/${total}: ${action.kind} (${action.pc})\n\n${action.specContent ?? ''}`
+  );
+  return `${instruction}\n\n${tasks.join('\n\n')}\n`;
+}
+
 function humanTodoMessage(violation, now) {
   const pc = violation.pc;
   if (violation.kind === 'stale_report') {
@@ -754,6 +766,8 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   // Execute actions
   const executedActions = [];
   const runSpawnSync = io.spawnSync || defaultSpawnSync;
+  const batchCodexActions = decision.actions.filter(act => act.mode === 'auto-codex' && act.result === 'pending');
+  let batchCodexHandled = false;
 
   for (const act of decision.actions) {
     if (act.result !== 'pending' && act.mode !== 'auto-codex' && act.mode !== 'auto-local') {
@@ -785,6 +799,74 @@ export async function main(argv = process.argv.slice(2), io = {}) {
         console.error(`Local command not allowed: ${act.command}`);
         act.result = 'failed';
         act.note = 'Command not in whitelist';
+      }
+    } else if (act.mode === 'auto-codex' && batchCodexActions.length > 1) {
+      if (!batchCodexHandled) {
+        batchCodexHandled = true;
+        const combinedSpec = buildCombinedCodexSpec(batchCodexActions);
+        const timestamp = now.toISOString().replace(/[:.]/g, '-');
+        const combinedSpecPath = `cost-improve/specs/combined-${timestamp}.md`;
+        const combinedSpecFile = path.join(claudeDir, combinedSpecPath);
+        console.log(`Writing combined spec file: ${combinedSpecFile}`);
+        if (!dryRun) {
+          fs.mkdirSync(path.dirname(combinedSpecFile), { recursive: true });
+          fs.writeFileSync(combinedSpecFile, combinedSpec, 'utf8');
+        }
+
+        const repoPath = path.resolve(import.meta.dirname, '..');
+        const codexCmd = `node tools/codex-do.mjs --prompt-file ${combinedSpecPath} --cwd ${repoPath} --timeout 1800`;
+        console.log(`Running batched auto-codex command: ${codexCmd}`);
+
+        if (dryRun) {
+          console.log(`[dry-run] Would execute: ${codexCmd}`);
+        } else {
+          const res = runSpawnSync('node', ['tools/codex-do.mjs', '--prompt-file', combinedSpecFile, '--cwd', repoPath, '--timeout', '1800'], { encoding: 'utf8' });
+          let testsGreen = false;
+          if (res.status === 0) {
+            console.log('Running project tests to validate batched codex fixes...');
+            testsGreen = true;
+            try {
+              const testFiles = fs.readdirSync(path.join(repoPath, 'tools'))
+                .filter(f => f.endsWith('.test.mjs'))
+                .map(f => path.join('tools', f));
+              for (const testFile of testFiles) {
+                console.log(`Running test: ${testFile}`);
+                const testRes = runSpawnSync('node', ['--test', testFile], { encoding: 'utf8' });
+                if (testRes.status !== 0) {
+                  console.error(`Test failed: ${testFile}\n${testRes.stderr}`);
+                  testsGreen = false;
+                  break;
+                }
+              }
+            } catch (err) {
+              console.error(`Error during test collection: ${err.message}`);
+              testsGreen = false;
+            }
+          } else {
+            console.error(`Codex command failed: ${res.stderr || res.error?.message}`);
+          }
+
+          if (res.status === 0 && testsGreen) {
+            const dateStr = now.toISOString().slice(0, 10);
+            const branchName = `auto/cost-improve-${dateStr}-batch`;
+            runSpawnSync('git', ['checkout', '-b', branchName], { encoding: 'utf8' });
+            for (const batchAct of batchCodexActions) {
+              batchAct.pr = `Mock PR created on branch ${branchName}`;
+              batchAct.note = `Successfully fixed via Codex batch. Created branch ${branchName}`;
+              batchAct.result = 'pending';
+            }
+          } else {
+            console.error('Batched Codex execution or tests failed! Discarding working tree changes...');
+            runSpawnSync('git', ['reset', '--hard', 'HEAD'], { encoding: 'utf8' });
+            runSpawnSync('git', ['clean', '-fd'], { encoding: 'utf8' });
+            for (const batchAct of batchCodexActions) {
+              batchAct.result = 'failed';
+              batchAct.note = res.status === 0
+                ? 'Codex changes failed verification tests'
+                : `Codex execution failed: ${res.stderr || res.error?.message}`;
+            }
+          }
+        }
       }
     } else if (act.mode === 'auto-codex') {
       const specFile = path.join(claudeDir, act.specPath);

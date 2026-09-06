@@ -557,15 +557,70 @@ export function verifyPreviousActions({ state, rows, localState, now, horizonDay
   return { ...state, actions: nextActionsState };
 }
 
-function atomicWrite(file, content) {
+function defaultSleepSync(milliseconds) {
+  const buffer = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(buffer, 0, 0, milliseconds);
+}
+
+export function atomicWrite(file, content, options = {}) {
+  const renameSync = options.renameSync || fs.renameSync;
+  const sleepSync = options.sleepSync || defaultSleepSync;
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
   try {
     fs.writeFileSync(tmp, content, 'utf8');
-    fs.renameSync(tmp, file);
+    let lastError;
+    for (let attempt = 0; attempt < 10; attempt++) {
+      try {
+        renameSync(tmp, file);
+        return;
+      } catch (error) {
+        lastError = error;
+        if (attempt < 9) sleepSync(50 + attempt * 25);
+      }
+    }
+    throw lastError;
   } finally {
     try { fs.rmSync(tmp, { force: true }); } catch {}
   }
+}
+
+function formatJst(date) {
+  const jst = new Date(date.getTime() + 9 * 60 * 60 * 1000);
+  const two = (value) => String(value).padStart(2, '0');
+  return `${jst.getUTCFullYear()}-${two(jst.getUTCMonth() + 1)}-${two(jst.getUTCDate())} ${two(jst.getUTCHours())}:${two(jst.getUTCMinutes())}:${two(jst.getUTCSeconds())}`;
+}
+
+function parseEnvFile(file) {
+  try {
+    return Object.fromEntries(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '').split(/\r?\n/).map((line) => {
+      const match = /^\s*(?:export\s+)?([A-Za-z_][\w]*)\s*=\s*(.*?)\s*$/.exec(line);
+      return match ? [match[1], match[2].replace(/^(['"])(.*)\1$/, '$2')] : null;
+    }).filter(Boolean));
+  } catch { return {}; }
+}
+
+export function analyzeEffectiveness(actions, limit = 10) {
+  const verified = (Array.isArray(actions) ? actions : [])
+    .filter((action) => ['worked', 'no_effect', 'worse'].includes(action.result))
+    .sort((a, b) => Date.parse(b.verifiedAt || b.dispatchedAt || 0) - Date.parse(a.verifiedAt || a.dispatchedAt || 0))
+    .slice(0, limit);
+  const ineffective = verified.filter((action) => ['no_effect', 'worse'].includes(action.result)).length;
+  return { total: verified.length, ineffective, warning: verified.length > 0 && ineffective / verified.length >= 0.7 };
+}
+
+export async function sendCostImproveHeartbeat({ claudeDir, label, ranAt, status, summary, fetchImpl = globalThis.fetch }) {
+  const env = { ...parseEnvFile(path.join(claudeDir, 'fleet-sheet.env')), ...process.env };
+  if (!env.FLEET_SHEET_URL || !env.FLEET_SHEET_TOKEN) throw new Error('FLEET_SHEET_URL/TOKEN 未設定');
+  const response = await fetchImpl(env.FLEET_SHEET_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token: env.FLEET_SHEET_TOKEN, kind: 'cost-improve-heartbeat', label, ranAt, status, summary }),
+    signal: AbortSignal.timeout(20_000)
+  });
+  if (!response.ok) throw new Error(`heartbeat HTTP ${response.status}`);
+  const payload = await response.json();
+  if (!payload?.ok) throw new Error(`heartbeat rejected: ${payload?.error || 'unknown'}`);
 }
 
 export function readLedgerCounts(filePath, now) {
@@ -646,16 +701,20 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   const claudeDir = getClaudeDir(argv);
   const home = path.dirname(claudeDir);
   const now = io.now || new Date();
+  const writeAtomic = io.atomicWrite || atomicWrite;
+  let stateWriteFailed = false;
 
   // 1. Collect
   let rows = null;
+  let fleetFetchReason = '';
   if (io.fetchFleetSheetRows) {
-    rows = await io.fetchFleetSheetRows();
+    try { rows = await io.fetchFleetSheetRows(); }
+    catch (error) { fleetFetchReason = String(error?.message ?? error); }
   } else {
     const result = await mainFetch(argv);
     if (result.ok) {
       rows = result.rows;
-    }
+    } else fleetFetchReason = result.reason || 'フリート取得失敗';
   }
 
   const ledgerCounts = (io.readLedger ?? readLedgerCounts)(path.join(claudeDir, 'executor-usage.jsonl'), now);
@@ -684,6 +743,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
 
   // 2. Verify previous actions (completed actions state update)
   const verifiedState = verifyPreviousActions({ state, rows, localState, now });
+  const effectiveness = analyzeEffectiveness(verifiedState.actions);
 
   // 3. Evaluate violations
   const evaluation = evaluateFleet({ rows, ledgerCounts, localState, now, lastKpis: verifiedState.lastKpis });
@@ -798,8 +858,12 @@ export async function main(argv = process.argv.slice(2), io = {}) {
         }
         const res = appendImprovementTodos(content, [act.todoMessage]);
         if (res.added.length > 0) {
-          atomicWrite(nextSessionFile, res.markdown);
-          console.log(`Added todo to next-session.md: ${act.todoMessage}`);
+          try {
+            writeAtomic(nextSessionFile, res.markdown);
+            console.log(`Added todo to next-session.md: ${act.todoMessage}`);
+          } catch (error) {
+            console.error(`next-session.md 書き込み失敗: ${String(error?.message ?? error)}`);
+          }
         }
       }
     }
@@ -838,13 +902,28 @@ export async function main(argv = process.argv.slice(2), io = {}) {
     lastKpis: updatedLastKpis
   };
 
+  const ineffectiveWarning = effectiveness.warning
+    ? `⚠️ このループは効いていません(直近${effectiveness.total}件中${effectiveness.ineffective}件が効果なし)。playbook の見直しが要ります`
+    : '';
+  if (ineffectiveWarning && !dryRun) {
+    const nextSessionFile = path.join(claudeDir, 'next-session.md');
+    const content = fs.existsSync(nextSessionFile) ? fs.readFileSync(nextSessionFile, 'utf8') : '## 対象\n\n## 残TODO\n';
+    const todo = appendImprovementTodos(content, [ineffectiveWarning]);
+    if (todo.added.length) atomicWrite(nextSessionFile, todo.markdown);
+  }
+
   if (!dryRun) {
-    atomicWrite(stateFile, JSON.stringify(finalState, null, 2));
+    try { writeAtomic(stateFile, JSON.stringify(finalState, null, 2)); }
+    catch (error) {
+      stateWriteFailed = true;
+      console.error(`cost-improve 状態書き込み失敗: ${String(error?.message ?? error)}`);
+    }
   }
 
   // 5. Discord Notification
   const stalePcs = new Set(evaluation.violations.filter(v => v.kind === 'stale_report').map(v => v.pc));
-  let reportText = state.lastNotifyError ? `※ 前回の通知は送信に失敗しています(${state.lastNotifyError})\n\n` : '';
+  let reportText = ineffectiveWarning ? `${ineffectiveWarning}\n\n` : '';
+  reportText += state.lastNotifyError ? `※ 前回の通知は送信に失敗しています(${state.lastNotifyError})\n\n` : '';
   reportText += `**📊 AIコスト自動改善ループ報告 (${now.toISOString().slice(0, 10)})**\n\n`;
   
   reportText += `### ① フリートKPI状況\n`;
@@ -922,25 +1001,39 @@ export async function main(argv = process.argv.slice(2), io = {}) {
       finalState.lastNotifyError = String(error?.message ?? error);
       console.error(`AIコスト自動改善ループ通知失敗: ${finalState.lastNotifyError}`);
     }
-    atomicWrite(stateFile, JSON.stringify(finalState, null, 2));
+    try { writeAtomic(stateFile, JSON.stringify(finalState, null, 2)); }
+    catch (error) {
+      stateWriteFailed = true;
+      console.error(`cost-improve 状態書き込み失敗: ${String(error?.message ?? error)}`);
+    }
   }
 
-  return { ok: true, evaluation, decision, finalState, reportText };
+  if (!dryRun) {
+    const status = rows === null || evaluation.pcs.length === 0 ? 'NG' : 'OK';
+    const reason = rows === null ? (fleetFetchReason || 'フリート取得失敗') : evaluation.pcs.length === 0 ? '集計対象PCが0台' : '';
+    const metrics = `pcs=${evaluation.pcs.length} violations=${evaluation.violations.length} actions=${executedActions.length} escalated=${executedActions.filter(a => a.mode === 'human').length}`;
+    let heartbeat = 'ok';
+    const provisional = `${formatJst(now)} / ${status} / ${metrics} notify=ok${reason ? ` reason=${reason}` : ''}`;
+    try {
+      await (io.sendHeartbeat ?? sendCostImproveHeartbeat)({ claudeDir, label: io.hostname || os.hostname(), ranAt: now.toISOString(), status, summary: provisional, fetchImpl: io.fetchImpl });
+    } catch (error) {
+      heartbeat = 'failed';
+      console.error(`cost-improve heartbeat 送信失敗: ${String(error?.message ?? error)}`);
+    }
+    const logLine = `${formatJst(now)} / ${status} / ${metrics} notify=${heartbeat} state=${stateWriteFailed ? 'failed' : 'ok'}${reason ? ` reason=${reason}` : ''}`;
+    try {
+      fs.mkdirSync(path.join(claudeDir, 'logs'), { recursive: true });
+      fs.appendFileSync(path.join(claudeDir, 'logs', 'cost-improve-loop.log'), `${logLine}\n`, 'utf8');
+    } catch (error) { console.error(`cost-improve-loop ログ書き込み失敗: ${String(error?.message ?? error)}`); }
+  }
+
+  return { ok: true, evaluation, decision, finalState, reportText, effectiveness };
 }
 
 async function mainFetch(argv) {
   const claudeDir = getClaudeDir(argv);
-  const parseEnv = (file) => {
-    try {
-      return Object.fromEntries(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '').split(/\r?\n/).map((line) => {
-        const match = /^\s*(?:export\s+)?([A-Za-z_][\w]*)\s*=\s*(.*?)\s*$/.exec(line);
-        if (!match) return null;
-        return [match[1], match[2].replace(/^(['"])(.*)\1$/, '$2')];
-      }).filter(Boolean));
-    } catch { return {}; }
-  };
   const fleetEnv = {
-    ...parseEnv(path.join(claudeDir, 'fleet-sheet.env')),
+    ...parseEnvFile(path.join(claudeDir, 'fleet-sheet.env')),
     ...process.env
   };
   return await fetchFleetKPIs({ sheetUrl: fleetEnv.FLEET_SHEET_URL, token: fleetEnv.FLEET_SHEET_TOKEN });

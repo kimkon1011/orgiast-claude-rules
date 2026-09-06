@@ -1,0 +1,25 @@
+name: Cost improve loop watchdog
+
+on:
+  schedule:
+    - cron: '10 2 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Check cost improve loop heartbeat
+        run: node tools/cost-improve-watchdog.mjs
+        env:
+          FLEET_SHEET_URL: ${{ secrets.FLEET_SHEET_URL }}
+          FLEET_SHEET_TOKEN: ${{ secrets.FLEET_SHEET_TOKEN }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_COST_WEBHOOK: ${{ secrets.DISCORD_COST_WEBHOOK }}

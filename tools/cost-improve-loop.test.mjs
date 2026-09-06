@@ -9,6 +9,7 @@ import {
   sortViolationsBySeverity,
   verifyPreviousActions,
   readLedgerCounts,
+  atomicWrite,
   main,
   ALLOWED_LOCAL_COMMANDS
 } from './cost-improve-loop.mjs';
@@ -353,5 +354,70 @@ test('16. failed DM notification is saved and prepended to the next report', asy
 
     const second = await main(['--dry-run', '--no-notify'], { ...inputs, noNotify: true });
     assert.ok(second.reportText.startsWith('※ 前回の通知は送信に失敗しています(DM API timeout)'));
+  } finally { delete process.env.ORGIAST_HOME; cleanTempDir(tempDir); }
+});
+
+test('17. 実行ログを1行追記し、フリート取得失敗は NG と理由を残す', async () => {
+  const tempDir = createTempDir(); process.env.ORGIAST_HOME = tempDir;
+  try {
+    await main(['--no-notify'], {
+      fetchFleetSheetRows: async () => { throw new Error('sheet timeout'); }, readLedger: () => ({ codex: 1 }), localState: {}, noNotify: true,
+      sendHeartbeat: async () => {}
+    });
+    const lines = fs.readFileSync(path.join(tempDir, '.claude', 'logs', 'cost-improve-loop.log'), 'utf8').trim().split(/\r?\n/);
+    assert.equal(lines.length, 1); assert.match(lines[0], /\/ NG \/ pcs=0/); assert.match(lines[0], /reason=sheet timeout/);
+  } finally { delete process.env.ORGIAST_HOME; cleanTempDir(tempDir); }
+});
+
+test('18. --dry-run では実行ログを書かない', async () => {
+  const tempDir = createTempDir(); process.env.ORGIAST_HOME = tempDir;
+  try {
+    await main(['--dry-run', '--no-notify'], { fetchFleetSheetRows: async () => [], readLedger: () => ({ codex: 1 }), localState: {}, noNotify: true });
+    assert.equal(fs.existsSync(path.join(tempDir, '.claude', 'logs', 'cost-improve-loop.log')), false);
+  } finally { delete process.env.ORGIAST_HOME; cleanTempDir(tempDir); }
+});
+
+test('19. 直近10件の7割以上が no_effect/worse なら報告先頭に警告する', async () => {
+  const tempDir = createTempDir(); process.env.ORGIAST_HOME = tempDir;
+  const actions = Array.from({ length: 10 }, (_, i) => ({ id: `old-${i}`, kind: 'low_delegation', pc: `PC-${i}`, mode: 'auto-codex', dispatchedAt: new Date(NOW.getTime() - (i + 4) * 86400000).toISOString(), verifiedAt: new Date(NOW.getTime() - i * 1000).toISOString(), baseline: { metric: 'delegRatio', value: .4 }, result: i < 7 ? 'no_effect' : 'worked' }));
+  fs.writeFileSync(path.join(tempDir, '.claude', 'cost-improve-state.json'), JSON.stringify({ version: 1, actions, lastKpis: {} }));
+  try {
+    const result = await main(['--dry-run', '--no-notify'], { fetchFleetSheetRows: async () => [{ pcName: 'PC-ok', reportedAt: '2026-09-06 11:00:00', delegRatio: '60%', claudeUsd: '1' }], readLedger: () => ({ codex: 1 }), localState: {}, noNotify: true });
+    assert.match(result.reportText, /^⚠️ このループは効いていません\(直近10件中7件が効果なし\)/);
+  } finally { delete process.env.ORGIAST_HOME; cleanTempDir(tempDir); }
+});
+
+test('20. heartbeat 失敗でも main は例外を投げずログに notify=failed を残す', async () => {
+  const tempDir = createTempDir(); process.env.ORGIAST_HOME = tempDir;
+  try {
+    const result = await main(['--no-notify'], { fetchFleetSheetRows: async () => [{ pcName: 'PC-ok', reportedAt: '2026-09-06 11:00:00', delegRatio: '60%', claudeUsd: '1' }], readLedger: () => ({ codex: 1 }), localState: {}, noNotify: true, sendHeartbeat: async () => { throw new Error('heartbeat down'); } });
+    assert.equal(result.ok, true);
+    assert.match(fs.readFileSync(path.join(tempDir, '.claude', 'logs', 'cost-improve-loop.log'), 'utf8'), /notify=failed/);
+  } finally { delete process.env.ORGIAST_HOME; cleanTempDir(tempDir); }
+});
+
+test('21. atomicWrite は rename の一時失敗を再試行して保存する', () => {
+  const tempDir = createTempDir();
+  const file = path.join(tempDir, '.claude', 'retry-state.json');
+  let attempts = 0;
+  try {
+    atomicWrite(file, '{"ok":true}', {
+      renameSync: (from, to) => { if (++attempts < 4) throw Object.assign(new Error('busy'), { code: 'EPERM' }); fs.renameSync(from, to); },
+      sleepSync: () => {}
+    });
+    assert.equal(attempts, 4); assert.equal(fs.readFileSync(file, 'utf8'), '{"ok":true}');
+  } finally { cleanTempDir(tempDir); }
+});
+
+test('22. 状態保存が最後まで失敗しても main は成功しログに state=failed を残す', async () => {
+  const tempDir = createTempDir(); process.env.ORGIAST_HOME = tempDir;
+  try {
+    const result = await main(['--no-notify'], {
+      fetchFleetSheetRows: async () => [{ pcName: 'PC-ok', reportedAt: '2026-09-06 11:00:00', delegRatio: '60%', claudeUsd: '1' }],
+      readLedger: () => ({ codex: 1 }), localState: {}, noNotify: true, sendHeartbeat: async () => {},
+      atomicWrite: () => { throw Object.assign(new Error('rename busy'), { code: 'EPERM' }); }
+    });
+    assert.equal(result.ok, true);
+    assert.match(fs.readFileSync(path.join(tempDir, '.claude', 'logs', 'cost-improve-loop.log'), 'utf8'), /state=failed/);
   } finally { delete process.env.ORGIAST_HOME; cleanTempDir(tempDir); }
 });

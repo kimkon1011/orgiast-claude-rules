@@ -1,0 +1,102 @@
+name: Clean Windows install
+
+on:
+  pull_request:
+    paths:
+      - 'tools/install-orgiast.ps1'
+      - 'tools/verify-setup.ps1'
+      - 'tools/onboarding-sync.*'
+      - 'tools/ensure-run-hidden.ps1'
+      - 'tools/register-hooks.mjs'
+      - '.github/workflows/clean-install.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  clean-install:
+    name: clean-install
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # 配布 URL と同じく installer 1ファイルだけが手元にある状態を作る。
+      # checkout 内で直接実行すると、兄弟ファイルへの誤依存を見逃す。
+      - name: Run standalone installer with Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $logDir = Join-Path $env:RUNNER_TEMP 'clean-install-logs'
+          New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+          $installer = 'C:\Users\Public\install-orgiast.ps1'
+          Copy-Item -LiteralPath '.\tools\install-orgiast.ps1' -Destination $installer -Force
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer -NoOllama -NoReboot -NonInteractive *>&1 |
+            Tee-Object -FilePath (Join-Path $logDir 'install-orgiast.log')
+          if ($LASTEXITCODE -ne 0) { throw "install-orgiast.ps1 failed with exit code $LASTEXITCODE" }
+          $installLog = Get-Content -LiteralPath (Join-Path $logDir 'install-orgiast.log') -Raw
+          if ($installLog -notmatch 'セットアップ処理完了 \(非対話モード\)') {
+            throw 'install-orgiast.ps1 exited before its completion marker'
+          }
+
+      - name: Verify installed behavior with Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pathParts = @(
+            [Environment]::GetEnvironmentVariable('Path', 'Machine'),
+            [Environment]::GetEnvironmentVariable('Path', 'User'),
+            (Join-Path $env:USERPROFILE '.local\bin'),
+            (Join-Path $env:APPDATA 'npm')
+          ) | Where-Object { $_ }
+          $env:Path = $pathParts -join ';'
+
+          $claudeVersion = (& claude --version 2>&1 | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or $claudeVersion -notmatch '\d+\.\d+\.\d+') {
+            throw "claude --version did not return a semantic version: $claudeVersion"
+          }
+          $codexVersion = (& codex --version 2>&1 | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or -not $codexVersion) { throw 'codex --version failed' }
+          $nodeVersion = (& node --version 2>&1 | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or -not $nodeVersion) { throw 'node --version failed' }
+
+          $settingsPath = Join-Path $env:USERPROFILE '.claude\settings.json'
+          if (-not (Test-Path -LiteralPath $settingsPath)) { throw "settings.json is missing: $settingsPath" }
+          $settings = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json
+          $sessionCommands = @($settings.hooks.SessionStart) |
+            ForEach-Object { @($_.hooks) } |
+            ForEach-Object { $_.command }
+          if (-not ($sessionCommands -match 'onboarding-sync')) {
+            throw 'hooks.SessionStart does not contain onboarding-sync'
+          }
+
+          $onboarding = Join-Path $env:USERPROFILE 'orgiast-claude-rules\tools\onboarding-sync.mjs'
+          if (-not (Test-Path -LiteralPath $onboarding)) { throw "onboarding-sync.mjs is missing: $onboarding" }
+
+      - name: Run setup verifier with Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pathParts = @(
+            [Environment]::GetEnvironmentVariable('Path', 'Machine'),
+            [Environment]::GetEnvironmentVariable('Path', 'User'),
+            (Join-Path $env:USERPROFILE '.local\bin'),
+            (Join-Path $env:APPDATA 'npm')
+          ) | Where-Object { $_ }
+          $env:Path = $pathParts -join ';'
+          $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\tools\verify-setup.ps1' 2>&1
+          $output | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'clean-install-logs\verify-setup.log')
+          if ($LASTEXITCODE -ne 0) { throw "verify-setup.ps1 failed with exit code $LASTEXITCODE" }
+          if ($output | Select-String -SimpleMatch '[NG ] Claude Code 導入') {
+            throw 'verify-setup.ps1 reports that Claude Code is not installed'
+          }
+
+      - name: Upload installer logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: clean-install-logs
+          path: ${{ runner.temp }}\clean-install-logs
+          if-no-files-found: warn

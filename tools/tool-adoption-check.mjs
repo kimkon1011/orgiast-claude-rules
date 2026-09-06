@@ -184,44 +184,56 @@ function transcriptHits(regex, windowDays) {
 }
 
 const ledgerPath = path.join(HOME, '.claude', 'executor-usage.jsonl');
+const ledgerCache = new Map();
 function readLedger(windowDays) {
+  if (ledgerCache.has(windowDays)) return ledgerCache.get(windowDays);
   if (!fs.existsSync(ledgerPath)) return null;
   const cutoff = now - windowDays * 86400000;
   let fallbackTime = 0;
   try { fallbackTime = fs.statSync(ledgerPath).mtimeMs; } catch {}
-  const rows = [];
-  let raw; try { raw = fs.readFileSync(ledgerPath, 'utf-8'); } catch { return []; }
+  const result = { rows: [], truncated: false };
+  let raw; try { raw = fs.readFileSync(ledgerPath, 'utf-8'); } catch { ledgerCache.set(windowDays, result); return result; }
+  // テスト用観測点。指定された場合だけ、実ファイル読み取り回数を別ファイルへ記録する。
+  if (process.env.TOOL_ADOPTION_LEDGER_READ_COUNT_FILE) {
+    let count = 0;
+    try { count = Number(fs.readFileSync(process.env.TOOL_ADOPTION_LEDGER_READ_COUNT_FILE, 'utf8')) || 0; } catch {}
+    try { fs.writeFileSync(process.env.TOOL_ADOPTION_LEDGER_READ_COUNT_FILE, String(count + 1)); } catch {}
+  }
   for (const line of raw.split(/\r?\n/)) {
-    if (deadlineExceeded()) break;
+    if (deadlineExceeded()) { result.truncated = true; break; }
     if (!line.trim()) continue;
     let row; try { row = JSON.parse(line); } catch { continue; }
     const value = row.t ?? row.ts ?? row.time ?? row.timestamp;
     const parsed = typeof value === 'number' ? (value < 1e12 ? value * 1000 : value) : Date.parse(value);
     const time = Number.isFinite(parsed) ? parsed : fallbackTime;
-    if (time >= cutoff) rows.push(row);
+    if (time >= cutoff) result.rows.push(row);
   }
-  return rows;
+  ledgerCache.set(windowDays, result);
+  return result;
 }
 function ledgerUsed(providerRegex, windowDays) {
-  const rows = readLedger(windowDays);
-  if (rows === null) return null;
-  return rows.some((row) => providerRegex.test(String(row.provider ?? row.tool ?? '')));
+  const ledger = readLedger(windowDays);
+  if (ledger === null || ledger.truncated) return null;
+  return ledger.rows.some((row) => providerRegex.test(String(row.provider ?? row.tool ?? '')));
 }
 function ledgerCount(providerRegex, windowDays) {
-  const rows = readLedger(windowDays);
-  if (rows === null) return null;
-  return rows.filter((row) => providerRegex.test(String(row.provider ?? row.tool ?? ''))).length;
+  const ledger = readLedger(windowDays);
+  if (ledger === null || ledger.truncated) return null;
+  return ledger.rows.filter((row) => providerRegex.test(String(row.provider ?? row.tool ?? ''))).length;
 }
 function ledgerCounts(windowDays) {
-  const rows = readLedger(windowDays);
-  if (rows === null) return null;
+  const ledger = readLedger(windowDays);
+  if (ledger === null || ledger.truncated) return null;
   const counts = {};
-  for (const row of rows) {
+  for (const row of ledger.rows) {
     const provider = String(row.provider ?? row.tool ?? '').trim().toLowerCase();
     if (provider) counts[provider] = (counts[provider] || 0) + 1;
   }
   return counts;
 }
+
+// ローカル台帳は最も安価で価値の高い計測なので、外部プローブより先に1回だけ読む。
+const warmedLedger = readLedger(USAGE_WINDOW_DAYS);
 
 const fixes = [];   // 自動適用した修復
 const installStarts = []; // 完了待ちせずバックグラウンドで開始した導入
@@ -373,7 +385,7 @@ function checkKimi() {
   const count = ledgerCount(/kimi|moonshot/i, USAGE_WINDOW_DAYS);
   const traceUsed = count === null && transcriptHits(/moonshot|kimi-k[23]|MOONSHOT_API_KEY/, USAGE_WINDOW_DAYS);
   const used = count === null ? traceUsed : count > 0;
-  return { name: 'Kimi', installed: keyed, version: keyed ? 'key有' : '', keyed, used, count, traceOnly: traceUsed, usedDays: used ? 0 : Infinity, role: '中量級の生成・推論の逃がし先(別課金プール・K3/reasoning_effort=none)' };
+  return { name: 'Kimi', installed: keyed, version: keyed ? 'key有' : '', keyed, used, count, measurementIndeterminate: Boolean(warmedLedger?.truncated) && !traceUsed, traceOnly: traceUsed, usedDays: used ? 0 : Infinity, role: '中量級の生成・推論の逃がし先(別課金プール・K3/reasoning_effort=none)' };
 }
 
 // ---- Manus (アプリ埋め込み型: aujust の src/lib/manus.ts 経由。CLI/セッションdirは無い) ----
@@ -475,6 +487,7 @@ for (const c of checks) {
   let icon, note;
   if (c.name === 'Kimi' && !c.keyed) { icon = '🚨'; note = 'APIキー未設定→~/.claude/kimi-api.env に MOONSHOT_API_KEY= を設定'; }
   else if (c.name === 'Kimi' && c.used) { icon = '✅'; note = c.count === null ? '使用あり(痕跡のみ)' : `使用あり(${c.count}回)`; }
+  else if (c.name === 'Kimi' && c.measurementIndeterminate) { icon = '❓'; note = '計測不能(次回再判定)'; }
   else if (c.name === 'Kimi') { icon = '⚠️'; note = '未使用=Claude従量を別課金プールへ逃がせていない(§1.13)。量産・分類・中量級生成は `node tools/llm-ask.mjs --provider kimi "…"` へ'; }
   else if (c.appEmbedded) { icon = c.used ? '✅' : '☑️'; note = c.used ? `使用あり(直近)${c.traceOnly ? '(痕跡のみ)' : ''}` : '未使用(aujust未実行なら想定内)'; }
   else if (c.indeterminate) { icon = '⚠️'; note = '判定不能(プローブがタイムアウト・次回再判定)'; }
@@ -493,12 +506,15 @@ const disc = supervisorDiscipline(codexUsed);
 msg += `${disc.icon} **監督委譲規律(§1.18)** — ${disc.note}\n`;
 msg += `※料金の正本は同時投稿の「Claude Code ローカル利用トークン」(list価格換算)を参照\n`;
 const providerCounts = ledgerCounts(USAGE_WINDOW_DAYS);
-const ledgerSummary = providerCounts === null ? '台帳なし' : (Object.entries(providerCounts).sort((a, b) => b[1] - a[1]).map(([p, n]) => `${p} ${n}`).join(' / ') || '呼び出しなし');
+const ledgerSummary = warmedLedger?.truncated
+  ? '計測不能(台帳の読み取りが時間切れ・次回再判定)'
+  : providerCounts === null ? '台帳なし' : (Object.entries(providerCounts).sort((a, b) => b[1] - a[1]).map(([p, n]) => `${p} ${n}`).join(' / ') || '呼び出しなし');
 msg += `📒 安いAI実行者(直近${USAGE_WINDOW_DAYS}日・実呼び出し): ${ledgerSummary}\n`;
 
 // ---- 決めた施策が実際に使われたか ----
 const wantedProviders = ['kimi', 'groq', 'openrouter', 'gemini', 'deepseek'];
-const adoptionCounts = Object.fromEntries(wantedProviders.map((provider) => [provider, providerCounts?.[provider] || 0]));
+const ledgerTruncated = Boolean(warmedLedger?.truncated);
+const adoptionCounts = ledgerTruncated ? null : Object.fromEntries(wantedProviders.map((provider) => [provider, providerCounts?.[provider] || 0]));
 let batchCount = 0;
 try {
   const queueDir = path.join(HOME, '.claude', 'batch-queue');
@@ -512,7 +528,12 @@ try {
 const fableCount = recentFableOutput(USAGE_WINDOW_DAYS);
 msg += `\n**決めた施策が実際に使われたか（直近${USAGE_WINDOW_DAYS}日）**\n`;
 msg += `| 実行者/施策 | 使用回数 | 判定 |\n|---|---:|---|\n`;
-for (const provider of wantedProviders) msg += `| ${provider} | ${adoptionCounts[provider]} | ${adoptionCounts[provider] ? '✅' : '⚠️ 使用0'} |\n`;
+for (const provider of wantedProviders) {
+  const count = adoptionCounts?.[provider];
+  msg += ledgerTruncated
+    ? `| ${provider} | — | ❓ 計測不能(次回再判定) |\n`
+    : `| ${provider} | ${count} | ${count ? '✅' : '⚠️ 使用0'} |\n`;
+}
 msg += `| 夜間バッチ投入/結果 | ${batchCount} | ${batchCount ? '✅' : '⚠️ 使用0'} |\n`;
 msg += `| Fable5 (§1.16) | ${fableCount ? formatTokens(fableCount) : '0'} | ${fableCount ? '🚨 検出' : '✅ 未検出'} |\n`;
 if (deadlineSkipped) msg += `※一部の判定はデッドライン超過でスキップしました(次回再判定)\n`;

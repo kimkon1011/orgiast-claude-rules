@@ -59,8 +59,8 @@ export function appendTodoBlock(original, rows) {
 export const HOWTO = [
   '- **Googleタスク消化の手順**（下の「Googleタスク消化:」行に共通）: (1) タイトルの作業を実際にやる（調査ならWeb検索して結論まで、実装なら `node tools/codex-do.mjs --prompt-file <仕様>` でCodexに委譲してテストまで緑にする）。',
   '  (2) 結果・結論・根拠URLを1ファイルに書き、`node tools/gtasks.mjs note <listId> <taskId> --text-file <その file>` でタスクのメモに残す（kim はスマホのGoogleタスクでこれを読む）。',
-  '  (3) Claude だけで完遂したものは `node tools/gtasks.mjs done <listId> <taskId>` で完了にする。kim の物理操作（購入・電話・来店・署名・支払い）が必ず残るものは done にせず、メモの最後に「■ kimの残り1操作: …」を1行で書いて終わる。',
-  '  (4) 情報が足りず着手できないものは done にせず、メモに「■ 要確認: <聞きたいこと>」を書き、`~/.claude/next-session.md` の申し送りにも1行残す。',
+  '  (3) **禁止: Discord DM・メール・チャットワーク等で外部へ送信しないこと。無人セッションが kim や取引先へ勝手に送るのは禁止。** 連絡が必要なら宛先・件名・本文を含む下書きだけを `~/.claude/gtasks-drafts/<taskId>.md` に保存し、メモに「■ 下書き作成済み（未送信）: <1行要約> / 下書き: ~/.claude/gtasks-drafts/<taskId>.md」と書く。送信は kim が明示的に指示したときだけ行う。',
+  '  (4) Claude だけで完遂したものは `node tools/gtasks.mjs done <listId> <taskId>` で完了にする。情報が足りないものはメモに「■ 要確認: <聞きたいこと>」を書いて done にしない。kim の物理操作が残るものはメモに「■ kimの残り1操作: <やること>」を書いて done にしない。',
 ].join('\n');
 
 export function todoLines(rows, newline = '\n') {

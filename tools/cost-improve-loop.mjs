@@ -11,7 +11,6 @@ import { appendImprovementTodos } from './nightly-kpi.mjs';
 
 export const ALLOWED_LOCAL_COMMANDS = [
   'node tools/tool-adoption-check.mjs --force',
-  'node tools/onboarding-sync.mjs --force',
   'node tools/register-hooks.mjs --hooks-only'
 ];
 
@@ -352,8 +351,7 @@ export function decideActions({ violations, state, now, limits = { maxCodex: 2 }
       command: 'node tools/tool-adoption-check.mjs --force'
     },
     unused_provider: {
-      mode: 'auto-local',
-      command: 'node tools/onboarding-sync.mjs --force'
+      mode: 'human'
     },
     low_delegation: {
       mode: 'auto-codex',

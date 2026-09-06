@@ -32,7 +32,9 @@ export function decideTreeAction({ dirty, detached, headSha, mainSha }) {
 }
 
 function git(repo, args, options = {}) {
+  // 親は detached（コンソール無し）で起動されるため、windowsHide が無いと git ごとにターミナル窓が開く
   return execFileSync('git', ['-C', repo, ...args], {
+    windowsHide: true,
     encoding: options.encoding ?? 'utf8',
     stdio: options.stdio ?? ['ignore', 'pipe', 'pipe'],
     ...(Object.hasOwn(options, 'input') ? { input: options.input } : {}),
@@ -135,7 +137,7 @@ function appendLedger(file, record) {
 }
 
 function syntaxCheck(repo, file) {
-  const check = spawnSync(process.execPath, ['--check', path.join(repo, file)], { encoding: 'utf8' });
+  const check = spawnSync(process.execPath, ['--check', path.join(repo, file)], { encoding: 'utf8', windowsHide: true });
   return check.status === 0 ? { ok: true, reason: '構文チェック成功' } : { ok: false, reason: `構文チェック失敗: ${(check.stderr || check.stdout || '').trim()}` };
 }
 
@@ -144,7 +146,7 @@ function healthCheck(repo, file) {
   if (!syntax.ok) return syntax;
   const testFile = file.replace(/\.mjs$/i, '.test.mjs');
   if (testFile !== file && fs.existsSync(path.join(repo, testFile))) {
-    const test = spawnSync(process.execPath, ['--test', path.join(repo, testFile)], { cwd: repo, encoding: 'utf8' });
+    const test = spawnSync(process.execPath, ['--test', path.join(repo, testFile)], { cwd: repo, encoding: 'utf8', windowsHide: true });
     if (test.status !== 0) return { ok: false, reason: `同名テスト失敗: ${testFile}` };
   }
   return { ok: true, reason: '構文・同名テスト成功' };
@@ -243,4 +245,26 @@ export function runSelfheal({ repo, home, dryRun = false, list = false, fetch = 
   return allResults;
 }
 
-if (isEntry(import.meta.url)) runSelfheal({ dryRun: process.argv.includes('--dry-run'), list: process.argv.includes('--list') });
+export function acquireLock(home = process.env.ORGIAST_HOME || os.homedir()) {
+  const lockFile = process.env.ORGIAST_SELFHEAL_LOCK || path.join(home, '.claude', 'hook-selfheal.lock');
+  try {
+    const pid = Number(fs.readFileSync(lockFile, 'utf8').trim());
+    if (pid && pid !== process.pid) {
+      try { process.kill(pid, 0); return null; } catch {} // 生きていれば多重起動 → スキップ。死んでいれば stale lock として上書き
+    }
+  } catch {}
+  try {
+    fs.mkdirSync(path.dirname(lockFile), { recursive: true });
+    fs.writeFileSync(lockFile, String(process.pid));
+  } catch { return null; }
+  return () => { try { fs.rmSync(lockFile, { force: true }); } catch {} };
+}
+
+if (isEntry(import.meta.url)) {
+  const release = acquireLock();
+  if (!release) console.error('[hook-tree-selfheal] 別インスタンスが実行中のためスキップ');
+  else {
+    try { runSelfheal({ dryRun: process.argv.includes('--dry-run'), list: process.argv.includes('--list') }); }
+    finally { release(); }
+  }
+}

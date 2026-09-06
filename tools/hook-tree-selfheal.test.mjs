@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { decideAction, decideTreeAction, extractHookTreeRoots, runSelfheal, sha256 } from './hook-tree-selfheal.mjs';
+import { acquireLock, decideAction, decideTreeAction, extractHookTreeRoots, runSelfheal, sha256 } from './hook-tree-selfheal.mjs';
 
 test('working === main は uptodate', () => {
   assert.equal(decideAction({ working: 'same', head: 'old', main: 'same', lastWrittenSha: null }).action, 'uptodate');
@@ -139,4 +139,31 @@ test('統合: dirty な作業ファイルを変えず skipped を記録する', 
     assert.equal(fs.readFileSync(path.join(f.repo, 'tools', 'other.mjs'), 'utf8'), 'export const other = "new";\n');
     assert.equal(git(f.repo, ['rev-parse', 'HEAD']).trim(), git(f.repo, ['rev-parse', 'HEAD~0']).trim());
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test('子プロセス起動は全て windowsHide: true（detached 親から起動されるとターミナル窓が開くため）', () => {
+  const source = fs.readFileSync(new URL('./hook-tree-selfheal.mjs', import.meta.url), 'utf8');
+  const calls = (source.match(/\b(?:execFileSync|spawnSync|execSync|spawn|exec)\(/g) || []).length;
+  const hidden = (source.match(/windowsHide: true/g) || []).length;
+  assert.ok(calls > 0);
+  assert.equal(hidden, calls, `child_process 呼び出し ${calls} 件に対し windowsHide が ${hidden} 件`);
+});
+
+test('acquireLock は生存中の別 pid があればスキップし、stale lock は上書きする', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'selfheal-lock-'));
+  const lockFile = path.join(dir, 'lock');
+  process.env.ORGIAST_SELFHEAL_LOCK = lockFile;
+  try {
+    fs.writeFileSync(lockFile, String(process.ppid)); // 生存中の別プロセス（親）
+    assert.equal(acquireLock(dir), null, '生存中の別 pid が持つ lock は取得できない');
+    fs.writeFileSync(lockFile, '999999'); // 死んだ pid
+    const release = acquireLock(dir);
+    assert.ok(typeof release === 'function', 'stale lock は上書きされる');
+    assert.equal(fs.readFileSync(lockFile, 'utf8'), String(process.pid));
+    release();
+    assert.equal(fs.existsSync(lockFile), false);
+  } finally {
+    delete process.env.ORGIAST_SELFHEAL_LOCK;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -37,7 +37,9 @@ jobs:
             Tee-Object -FilePath (Join-Path $logDir 'install-orgiast.log')
           if ($LASTEXITCODE -ne 0) { throw "install-orgiast.ps1 failed with exit code $LASTEXITCODE" }
           $installLog = Get-Content -LiteralPath (Join-Path $logDir 'install-orgiast.log') -Raw
-          if ($installLog -notmatch 'セットアップ処理完了 \(非対話モード\)') {
+          # ASCII marker only: GitHub Actions writes this block to a temp .ps1 WITHOUT a BOM,
+          # so Windows PowerShell 5.1 reads any Japanese literal as CP932 and fails to parse.
+          if ($installLog -notmatch '\[ORGIAST-INSTALL-COMPLETE mode=noninteractive\]') {
             throw 'install-orgiast.ps1 exited before its completion marker'
           }
 
@@ -89,7 +91,8 @@ jobs:
           $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\tools\verify-setup.ps1' 2>&1
           $output | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'clean-install-logs\verify-setup.log')
           if ($LASTEXITCODE -ne 0) { throw "verify-setup.ps1 failed with exit code $LASTEXITCODE" }
-          if ($output | Select-String -SimpleMatch '[NG ] Claude Code 導入') {
+          # ASCII only (see the note in the install step): match "[NG ] Claude Code" and drop the Japanese suffix.
+          if ($output | Select-String -SimpleMatch '[NG ] Claude Code') {
             throw 'verify-setup.ps1 reports that Claude Code is not installed'
           }
 

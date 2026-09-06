@@ -629,6 +629,8 @@ Say "`n============================================================" 'Green'
 $codexCmd = (Get-Command codex -ErrorAction SilentlyContinue)
 if ($NonInteractive) {
   Say " セットアップ処理完了 (非対話モード)" 'Green'
+  # ASCII のみの完了マーカー。CI は BOM 無しの一時 .ps1 で判定するため、日本語で照合すると PS5.1 が CP932 と誤読して壊れる。
+  Say "[ORGIAST-INSTALL-COMPLETE mode=noninteractive]" 'Green'
   Say "============================================================" 'Green'
   Warn "Codexログインと再起動は CI のためスキップ"
   Say "`n--- 適用状況の総合チェック ---" 'Cyan'

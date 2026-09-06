@@ -5,21 +5,30 @@ import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { latestAssistantText as readLatestAssistantText, readAssistantText } from './lib/assistant-text.mjs';
 
+// 2026-09-06: 78 block 中71件は、実際には user への依頼がない完了報告だった。
+// 「user の操作は0回」のような否定文を手渡し扱いしないため、依頼は文単位で判定する。
+
 const here = path.dirname(fileURLToPath(import.meta.url));
 const home = () => process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || os.homedir();
 const handoffPatterns = [
-  /環境変数.*(設定|追加|登録).*(してください|お願い)/s,
-  /Vercel.*(Dashboard|設定|環境変数).*(開いて|クリック|追加|設定|登録)/s,
-  /Supabase Dashboard.*(SQL|Connect|実行|開いて)/s,
-  /(Settings|Console|Dashboard).*(クリック|タブ|開いて)/s,
-  /(コピー|貼り付け|paste).*(ください|お願い)/s,
-  /(以下の手順|次の手順|手順は|手順を).*(実行|お試し|お願い|してください)/s,
-  /user.*(操作|側で|に依頼)/is, /あなた(の方|側|が).*(設定|実行|操作|登録|追加)/s,
-  /こちらの操作が必要|ユーザー側の操作/s,
+  /環境変数.*(?:設定|追加|登録).*(?:してください|お願い)/,
+  /Vercel.*(?:Dashboard|設定|環境変数).*(?:開いて|クリック|追加|設定|登録)/,
+  /Supabase Dashboard.*(?:SQL|Connect|実行|開いて)/,
+  /(?:Settings|Console|Dashboard).*(?:クリック|タブ|開いて)/,
+  /(?:コピー|貼り付け|paste).*(?:ください|お願い)/,
+  /(?:以下の手順|次の手順|手順は|手順を).*(?:実行|お試し|お願い|してください)/,
+  /あなた(?:の方|側|が).*(?:設定|実行|操作|登録|追加)/,
+  /こちらの操作が必要|ユーザー側の操作/,
 ];
 const numbered = /1\.\s*\S+[\s\S]*?\n[\s\S]*?2\.\s*\S+[\s\S]*?\n[\s\S]*?3\.\s*\S+/;
 const imperative = /(してください|お願いします|お願いいたします|お願い致します|クリックして|開いてください|入力してください|貼り付けてください|選択してください|コピーして|押してください|ログインしてください)/;
 const metaMention = /(gate|hook|検出器|正規表現|ルール|block理由|誤検知)/i;
+const negatedHandoff = /(?:手作業(?:は|が)?\s*(?:ゼロ|0\s*回|無し|なし|ありません|不要)|手渡し(?:は)?\s*(?:なし|無し|ありません|発生しません)|user\s*の操作(?:は)?\s*(?:0|ゼロ|なし)|kim\s*の操作\s*[:：]\s*なし)/gi;
+const broadUserHandoff = /user[^。.!！?？\n]*(?:操作|側で|に依頼)/i;
+
+function sentences(text) {
+  return String(text).split(/(?<=[。.!！?？])|\r?\n/).map((part) => part.trim()).filter(Boolean);
+}
 
 export function handoffDetectionText(text) {
   const lines = String(text).split(/\r?\n/);
@@ -34,10 +43,18 @@ export function handoffDetectionText(text) {
   }
   return visible.map((line, index) => {
     const nearby = visible.slice(Math.max(0, index - 1), index + 2).join('\n');
-    return metaMention.test(nearby) ? '' : line;
+    return metaMention.test(nearby) ? '' : line.replace(negatedHandoff, '');
   }).join('\n');
 }
-export function hasHandoff(text) { const detectionText = handoffDetectionText(text); return handoffPatterns.some(r => r.test(detectionText)) || (numbered.test(detectionText) && imperative.test(detectionText)); }
+export function hasHandoff(text) {
+  const detectionText = handoffDetectionText(text);
+  const parts = sentences(detectionText);
+  // 応答全体をまたぐ `.*` は完了報告中の別々の語を誤結合する。広い user 表現も
+  // 同じ文に命令形がある場合だけ依頼とみなす。
+  if (parts.some((part) => imperative.test(part) && handoffPatterns.some((pattern) => pattern.test(part)))) return true;
+  if (parts.some((part) => broadUserHandoff.test(part) && imperative.test(part))) return true;
+  return numbered.test(detectionText) && imperative.test(detectionText);
+}
 export function allRoutes(catalog) { return [...new Set(Object.values(catalog).flat())]; }
 export function matchRoutes(text, catalog) {
   const lower = text.toLowerCase(); const occupied = []; const matched = [];

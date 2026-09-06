@@ -32,10 +32,19 @@ export function parseJstOrIsoDate(text) {
     const year = +jst[1];
     const month = +jst[2] - 1;
     const day = +jst[3];
-    const hour = +(jst[4] || 0) - 9;
+    const localHour = +(jst[4] || 0);
     const min = +(jst[5] || 0);
     const sec = +(jst[6] || 0);
-    return Date.UTC(year, month, day, hour, min, sec);
+    if (month < 0 || month > 11 || day < 1 || localHour > 23 || min > 59 || sec > 59) return null;
+    const check = new Date(Date.UTC(year, month, day));
+    if (check.getUTCFullYear() !== year || check.getUTCMonth() !== month || check.getUTCDate() !== day) return null;
+    return Date.UTC(year, month, day, localHour - 9, min, sec);
+  }
+  const isoDay = /^(\d{4})-(\d{2})-(\d{2})T/.exec(cleanText);
+  if (isoDay) {
+    const check = new Date(Date.UTC(+isoDay[1], +isoDay[2] - 1, +isoDay[3]));
+    if (check.getUTCFullYear() !== +isoDay[1] || check.getUTCMonth() !== +isoDay[2] - 1 || check.getUTCDate() !== +isoDay[3]) return null;
+    if (/T24:|T\d{2}:6\d|T\d{2}:\d{2}:6\d/.test(cleanText)) return null;
   }
   const parsed = Date.parse(cleanText);
   return Number.isFinite(parsed) ? parsed : null;
@@ -46,10 +55,12 @@ export function parsePercent(text) {
   if (!cleanText) return null;
   const match = /^(\d+(?:\.\d+)?)\s*%$/.exec(cleanText);
   if (match) {
-    return parseFloat(match[1]) / 100;
+    const percent = Number(match[1]);
+    return percent >= 0 && percent <= 100 ? percent / 100 : null;
   }
-  const floatVal = parseFloat(cleanText);
-  return Number.isFinite(floatVal) ? floatVal : null;
+  if (!/^(?:0(?:\.\d+)?|1(?:\.0+)?)$/.test(cleanText)) return null;
+  const floatVal = Number(cleanText);
+  return floatVal >= 0 && floatVal <= 1 ? floatVal : null;
 }
 
 export function isOpusHeavy(row, localState) {
@@ -91,12 +102,12 @@ export function evaluateFleet({ rows, ledgerCounts, localState, now, lastKpis = 
   let selfLedgerTrusted = true;
   let selfStateTrusted = true;
 
-  if (rows === null) {
+  if (!Array.isArray(rows) || rows.length === 0) {
     violations.push({
       kind: 'measurement_untrusted',
       pc: 'fleet',
       severity: 'error',
-      evidence: 'Failed to fetch fleet rows',
+      evidence: Array.isArray(rows) ? 'fleet_empty: fleet returned no rows' : 'Failed to fetch fleet rows',
       measuredAt,
       trusted: false
     });
@@ -379,8 +390,6 @@ export function decideActions({ violations, state, now, limits = { maxCodex: 2 }
   // 委譲率や Opus 比は「安いAIが何回呼ばれたか」の上に立つ数字なので、台帳が読めなかった回に
   // それを根拠として直しにいくと、存在しない問題を直すことになる(2026-09-06 の「使用0」誤報がまさにこれ)。
   // この回の仕事は、まず計測そのものを直すことに絞る。
-  const measurementUntrusted = violations.some((violation) => violation.kind === 'measurement_untrusted');
-
   for (const violation of sortViolationsBySeverity(violations)) {
     const { kind, pc, evidence } = violation;
     const playbook = PLAYBOOK[kind];
@@ -410,11 +419,19 @@ export function decideActions({ violations, state, now, limits = { maxCodex: 2 }
 
     let mode = playbook.mode;
     let note = '';
+    const selfLike = (value) => /^(?:self|local)(?:-|$)/i.test(String(value));
+    const measurementUntrusted = violations.some((item) => item.kind === 'measurement_untrusted'
+      && (item.pc === pc || item.pc === 'fleet' || (selfLike(item.pc) && selfLike(pc))));
     if (measurementUntrusted && mode === 'auto-codex') {
       skipped.push({ kind, pc, reason: 'measurement_untrusted', note: '計測不能のため自動委譲を見送り(次回再判定)' });
       continue;
     }
-    if (hasThreeConsecutiveFailures && (mode === 'auto-local' || mode === 'auto-codex')) {
+    const latestHuman = sameCompletedActs.find((item) => item.humanSince || item.mode === 'human');
+    const humanSince = Date.parse(latestHuman?.humanSince || latestHuman?.dispatchedAt || '');
+    const recovered = Number.isFinite(violation.actualValue) && Number.isFinite(violation.targetValue)
+      && (kind === 'opus_heavy' ? violation.actualValue <= violation.targetValue : violation.actualValue >= violation.targetValue);
+    const humanExpired = Number.isFinite(humanSince) && nowMs - humanSince >= 14 * 86400000;
+    if (hasThreeConsecutiveFailures && !humanExpired && !recovered && (mode === 'auto-local' || mode === 'auto-codex')) {
       mode = 'human';
       note = 'Downgraded to human due to 3 consecutive failures';
     }
@@ -447,6 +464,7 @@ export function decideActions({ violations, state, now, limits = { maxCodex: 2 }
       note: note || `Dispatched via ${mode}`,
       pr: null
     };
+    if (mode === 'human' && hasThreeConsecutiveFailures) action.humanSince = now.toISOString();
 
     if (mode === 'auto-local') {
       action.command = playbook.command;
@@ -883,48 +901,35 @@ export async function main(argv = process.argv.slice(2), io = {}) {
         console.log(`[dry-run] Would execute: ${codexCmd}`);
         act.result = 'pending';
       } else {
-        const res = runSpawnSync('node', ['tools/codex-do.mjs', '--prompt-file', specFile, '--cwd', repoPath, '--timeout', '1800'], { encoding: 'utf8' });
-        if (res.status === 0) {
-          console.log(`Running project tests to validate codex fix...`);
-          let testsGreen = true;
-          try {
-            const testFiles = fs.readdirSync(path.join(repoPath, 'tools'))
-              .filter(f => f.endsWith('.test.mjs'))
-              .map(f => path.join('tools', f));
-
-            for (const testFile of testFiles) {
-              console.log(`Running test: ${testFile}`);
-              const testRes = runSpawnSync('node', ['--test', testFile], { encoding: 'utf8' });
-              if (testRes.status !== 0) {
-                console.error(`Test failed: ${testFile}\n${testRes.stderr}`);
-                testsGreen = false;
-                break;
-              }
-            }
-          } catch (err) {
-            console.error(`Error during test collection: ${err.message}`);
-            testsGreen = false;
-          }
-
-          if (testsGreen) {
-            console.log(`All tests are GREEN! Creating git branch...`);
-            const dateStr = now.toISOString().slice(0, 10);
-            const branchName = `auto/cost-improve-${dateStr}-${act.kind}`;
-            runSpawnSync('git', ['checkout', '-b', branchName], { encoding: 'utf8' });
-            act.pr = `Mock PR created on branch ${branchName}`;
-            act.note = `Successfully fixed via Codex. Created branch ${branchName}`;
-            act.result = 'pending';
-          } else {
-            console.error(`Tests failed! Discarding working tree changes...`);
-            runSpawnSync('git', ['reset', '--hard', 'HEAD'], { encoding: 'utf8' });
-            runSpawnSync('git', ['clean', '-fd'], { encoding: 'utf8' });
-            act.result = 'failed';
-            act.note = 'Codex changes failed verification tests';
-          }
-        } else {
-          console.error(`Codex command failed: ${res.stderr || res.error?.message}`);
-          act.result = 'failed';
-          act.note = `Codex execution failed: ${res.stderr || res.error?.message}`;
+        const tempTree = path.join(os.tmpdir(), `orgiast-cost-improve-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+        const fail = (stage, res) => { act.result = 'failed'; act.note = `${stage}: ${String(res?.stderr || res?.stdout || res?.error?.message || `exit ${res?.status}`).trim()}`; };
+        try {
+          let res = runSpawnSync('git', ['-C', repoPath, 'worktree', 'add', '--detach', tempTree, 'origin/main'], { encoding: 'utf8' });
+          if (res.status !== 0) { fail('worktree add failed', res); continue; }
+          res = runSpawnSync('node', [path.join(tempTree, 'tools/codex-do.mjs'), '--prompt-file', specFile, '--cwd', tempTree, '--timeout', '1800'], { cwd: tempTree, encoding: 'utf8' });
+          if (res.status !== 0) { fail('Codex execution failed', res); continue; }
+          const diff = runSpawnSync('git', ['-C', tempTree, 'diff', '--stat'], { encoding: 'utf8' });
+          if (diff.status !== 0 || !String(diff.stdout || '').trim()) { fail('変更なし', diff); continue; }
+          const tests = runSpawnSync('node', ['--test', 'tools/*.test.mjs'], { cwd: tempTree, shell: true, encoding: 'utf8' });
+          if (tests.status !== 0) { fail('verification tests failed', tests); continue; }
+          const dateStr = now.toISOString().slice(0, 10).replaceAll('-', '');
+          const branchName = `auto/cost-improve-${dateStr}-${act.kind}`;
+          for (const [program, args, stage] of [
+            ['git', ['-C', tempTree, 'checkout', '-b', branchName], 'branch creation failed'],
+            ['git', ['-C', tempTree, 'add', '-A'], 'git add failed'],
+            ['git', ['-C', tempTree, 'commit', '-m', `fix(cost): auto improve ${act.kind}`], 'commit failed'],
+            ['git', ['-C', tempTree, 'push', '-u', 'origin', branchName], 'push failed']
+          ]) { res = runSpawnSync(program, args, { encoding: 'utf8' }); if (res.status !== 0) { fail(stage, res); break; } }
+          if (act.result === 'failed') continue;
+          const body = `Evidence: ${act.specContent.match(/- 根拠: (.*)/)?.[1] || act.kind}\n\nSpec summary: ${act.kind} on ${act.pc}; verify with node --test tools/*.test.mjs.`;
+          res = runSpawnSync('gh', ['pr', 'create', '--title', `fix(cost): auto improve ${act.kind}`, '--body', body, '--head', branchName], { cwd: tempTree, encoding: 'utf8' });
+          const url = `${res.stdout || ''}\n${res.stderr || ''}`.match(/https:\/\/github\.com\/[^\s]+\/pull\/\d+/)?.[0];
+          if (res.status !== 0 || !url) { fail('PR creation failed', res); continue; }
+          act.pr = url;
+          act.note = `Successfully fixed via Codex: ${url}`;
+          act.result = 'pending';
+        } finally {
+          runSpawnSync('git', ['-C', repoPath, 'worktree', 'remove', '--force', tempTree], { encoding: 'utf8' });
         }
       }
     } else if (act.mode === 'human') {
@@ -1092,7 +1097,10 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   if (!dryRun) {
     const status = rows === null || evaluation.pcs.length === 0 ? 'NG' : 'OK';
     const reason = rows === null ? (fleetFetchReason || 'フリート取得失敗') : evaluation.pcs.length === 0 ? '集計対象PCが0台' : '';
-    const metrics = `pcs=${evaluation.pcs.length} violations=${evaluation.violations.length} actions=${executedActions.length} escalated=${executedActions.filter(a => a.mode === 'human').length}`;
+    const nonClaudeDeleg = Number(localState?.nonClaudeDelegRatio ?? evaluation.fleet.avgDelegRatio ?? 0);
+    const headlessOut = Number(localState?.headlessClaudeOut ?? 0);
+    const budgetPace = Number(localState?.budgetPacePct ?? 0);
+    const metrics = `pcs=${evaluation.pcs.length} violations=${evaluation.violations.length} actions=${executedActions.length} escalated=${executedActions.filter(a => a.mode === 'human').length} nonClaudeDeleg=${nonClaudeDeleg.toFixed(3)} headlessOut=${headlessOut}tok budgetPace=${budgetPace.toFixed(1)}%`;
     let heartbeat = 'ok';
     const provisional = `${formatJst(now)} / ${status} / ${metrics} notify=ok${reason ? ` reason=${reason}` : ''}`;
     try {

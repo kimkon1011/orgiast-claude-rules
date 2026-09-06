@@ -260,6 +260,13 @@ export function buildChildArgs(repoCwd, historyCwd) {
   return args;
 }
 
+export function autoSessionExecutor(env = process.env, hostname = os.hostname(), home = env.ORGIAST_HOME || os.homedir()) {
+  let fileEnv = {};
+  try { fileEnv = Object.fromEntries(fs.readFileSync(path.join(home, '.claude', 'auto-session.env'), 'utf8').split(/\r?\n/).map((line) => /^([A-Z_]+)=(.*)$/.exec(line.trim())).filter(Boolean).map((m) => [m[1], m[2].replace(/^['"]|['"]$/g, '')])); } catch {}
+  const merged = { ...env, ...fileEnv };
+  return { executor: merged.ORGIAST_AUTO_SESSION_EXECUTOR || 'cheap-code', provider: merged.ORGIAST_AUTO_SESSION_PROVIDER || (/kim/i.test(hostname) ? 'glm' : 'deepseek') };
+}
+
 function numericVersion(entry) {
   const normalized = String(entry).replace(/\\/g, '/');
   const match = normalized.match(/anthropic\.claude-code-([0-9]+(?:\.[0-9]+)*)(?:-[^/]+)?(?:\/|$)/i);
@@ -516,17 +523,16 @@ function extensionExecutables() {
 export function runChild(executable, prompt, repoCwd, historyCwd, timeoutMs) {
   return new Promise((resolve) => {
     const startedAt = new Date();
-    let child;
-    try {
-      child = spawn(executable, buildChildArgs(repoCwd, historyCwd), {
-        cwd: historyCwd, env: { ...process.env, CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: 'auto-session' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
-      });
-    } catch (error) {
-      // spawn は Windows で EFTYPE/ENOENT を同期 throw する。child.on('error') では拾えず、
-      // Promise executor の外へ抜けて main ごと落ち、残りのTODOも通知も丸ごと消える（実測）。
-      resolve({ startedAt: startedAt.toISOString(), endedAt: new Date().toISOString(), exitCode: null, status: 'failure', launchFailed: true, stdout: '', stderr: String(error?.message ?? error) });
-      return;
-    }
+    const choice = autoSessionExecutor();
+    const promptFile = path.join(os.tmpdir(), `orgiast-auto-session-${process.pid}-${Date.now()}.txt`);
+    if (choice.executor === 'cheap-code') fs.writeFileSync(promptFile, `[headless:auto-session]\n${prompt}`, 'utf8');
+    const launch = (fallback = false) => {
+      const cheap = choice.executor === 'cheap-code' && !fallback;
+      let child;
+      try { child = spawn(cheap ? process.execPath : executable, cheap
+        ? [path.join(repoCwd, 'tools', 'cheap-code.mjs'), '--provider', choice.provider, '--prompt-file', promptFile, '--cwd', historyCwd]
+        : buildChildArgs(repoCwd, historyCwd), { cwd: historyCwd, env: { ...process.env, CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: cheap ? `auto-session:cheap-code:${choice.provider}` : 'auto-session:fallback-claude' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }); }
+      catch (error) { finish(null, '', String(error?.message ?? error), true, fallback); return; }
     let stdout = '';
     let stderr = '';
     let timedOut = false;
@@ -535,7 +541,7 @@ export function runChild(executable, prompt, repoCwd, historyCwd, timeoutMs) {
     child.stderr.setEncoding('utf8').on('data', (chunk) => { stderr += chunk; });
     child.on('error', (error) => { launchFailed = true; stderr += error.message; });
     child.stdin.on('error', () => {});
-    child.stdin.end(`[headless:auto-session]\n${prompt}`, 'utf8');
+    if (cheap) child.stdin.end(); else child.stdin.end(`[headless:auto-session]\n${prompt}`, 'utf8');
     const timer = setTimeout(() => {
       timedOut = true;
       if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true });
@@ -543,8 +549,12 @@ export function runChild(executable, prompt, repoCwd, historyCwd, timeoutMs) {
     }, timeoutMs);
     child.on('close', (code) => {
       clearTimeout(timer);
-      resolve({ startedAt: startedAt.toISOString(), endedAt: new Date().toISOString(), exitCode: timedOut ? null : code, status: timedOut ? 'timeout' : code === 0 ? 'success' : 'failure', launchFailed, stdout, stderr });
+      if (cheap && !timedOut && code !== 0) { fs.appendFileSync(path.join(process.env.ORGIAST_HOME || os.homedir(), '.claude', 'executor-usage.jsonl'), `${JSON.stringify({ t: new Date().toISOString(), provider: 'claude-fallback', model: process.env.ORGIAST_AUTO_SESSION_MODEL || 'sonnet', status: 'fallback', reason: `cheap-code/${choice.provider} exit ${code}` })}\n`); launch(true); return; }
+      finish(timedOut ? null : code, stdout, stderr, launchFailed, fallback, timedOut);
     });
+    };
+    const finish = (code, stdout, stderr, launchFailed, fallback, timedOut = false) => { try { fs.rmSync(promptFile, { force: true }); } catch {} resolve({ startedAt: startedAt.toISOString(), endedAt: new Date().toISOString(), exitCode: code, status: timedOut ? 'timeout' : code === 0 ? 'success' : 'failure', launchFailed, fallbackToClaude: Boolean(fallback), stdout, stderr }); };
+    launch(false);
   });
 }
 

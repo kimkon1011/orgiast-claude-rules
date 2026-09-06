@@ -16,6 +16,7 @@ const PROSE_CHARS_PER_TOKEN = 1.8;
 const JSON_CHARS_PER_TOKEN = 3.4;
 export function modelTier(model) {
   const m = String(model || '').toLowerCase();
+  if (!m.includes('claude') && /(glm|deepseek|qwen|gemini|gpt|kimi|llama|mistral)/.test(m)) return 'nonclaude';
   if (m.includes('fable')) return 'fable';
   if (m.includes('opus')) return 'opus';
   if (m.includes('haiku')) return 'haiku';
@@ -365,6 +366,7 @@ export function calculateLinesDelegation({ codexLines = 0, claudeLines = 0 } = {
   return total > 0 ? codexLines / total : null;
 }
 export function calculateDelegation({ codexOut = 0, execOut = 0, byModel = {}, specAuthoringOut = 0 } = {}) {
+  execOut += byModel.nonclaude || 0;
   const sonnetHaikuOut = (byModel.sonnet || 0) + (byModel.haiku || 0), supervisorOut = (byModel.opus || 0) + (byModel.fable || 0) + (byModel.default || 0);
   const delegated = codexOut + execOut + sonnetHaikuOut, total = delegated + supervisorOut;
   const delegRatio = total ? delegated / total : 0;

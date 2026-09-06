@@ -175,6 +175,7 @@ if (!execByProv.kimi) unused.push('kimi(中量級生成)');
 if (!execByProv.groq) unused.push('groq(量産分類)');
 if (!execByProv.gemini) unused.push('gemini(長文脈)');
 let batchUsed = false;
+let criticalWriteFailed = false;
 try {
   const queueDir = path.join(HOME, '.claude', 'batch-queue');
   for (const name of fs.readdirSync(queueDir)) {
@@ -249,7 +250,7 @@ ${pricingBriefLine}
 try {
   fs.mkdirSync(path.join(HOME, '.claude'), { recursive: true });
   fs.writeFileSync(path.join(HOME, '.claude', 'cost-directive.md'), md);
-} catch { }
+} catch (error) { criticalWriteFailed = true; console.error(`cost-directive 書き込み失敗: ${error?.message ?? error}`); }
 
 // --- 1週間観察→改善しなければハードブロックへ昇格(kim 2026-08-16) ---
 const today = new Date().toISOString().slice(0, 10);
@@ -266,8 +267,9 @@ const { mode: enforce, reason: ereason, decidedBy } = decideEnforcement({
   pilot: fs.existsSync(path.join(HOME, '.claude', 'cost-enforce-pilot')),
   override: fs.existsSync(path.join(HOME, '.claude', 'cost-enforce-override')), previousMode,
 });
-try { fs.writeFileSync(enforceFile, JSON.stringify({ mode: enforce, reason: ereason, since: obsStart, daysObserved, delegRatio, nonClaudeDelegRatio, delegRatioWithPrep, linesRatio, codexLines, claudeLines, decidedBy, target: TARGET_DELEG, targetLines: TARGET_LINES }, null, 2)); } catch { }
-try { fs.writeFileSync(stateF, JSON.stringify({ t: new Date().toISOString(), totalUSD, claudeUSD, claudeOut, codexOut, codexSessions, execUSD, work, delegRatio, nonClaudeDelegRatio, delegRatioWithPrep, linesRatio, codexLines, claudeLines, landedLines, obsStart, history: hist })); } catch { }
+try { fs.writeFileSync(enforceFile, JSON.stringify({ mode: enforce, reason: ereason, since: obsStart, daysObserved, delegRatio, nonClaudeDelegRatio, delegRatioWithPrep, linesRatio, codexLines, claudeLines, decidedBy, target: TARGET_DELEG, targetLines: TARGET_LINES }, null, 2)); } catch (error) { criticalWriteFailed = true; console.error(`cost-enforce 書き込み失敗: ${error?.message ?? error}`); }
+try { fs.writeFileSync(stateF, JSON.stringify({ t: new Date().toISOString(), totalUSD, claudeUSD, claudeOut, codexOut, codexSessions, execUSD, work, delegRatio, nonClaudeDelegRatio, delegRatioWithPrep, linesRatio, codexLines, claudeLines, landedLines, obsStart, history: hist })); } catch (error) { criticalWriteFailed = true; console.error(`cost-loop-state 書き込み失敗: ${error?.message ?? error}`); }
+if (criticalWriteFailed) process.exitCode = 1;
 if (enforce === 'block') console.log(`\n🔒 ハードブロック昇格: ${ereason}（アプリ実装コードの直接編集をpretooluseフックが拒否します）`);
 console.log(md);
 

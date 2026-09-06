@@ -11,7 +11,9 @@ import {
   readLedgerCounts,
   atomicWrite,
   main,
-  ALLOWED_LOCAL_COMMANDS
+  ALLOWED_LOCAL_COMMANDS,
+  parsePercent,
+  parseJstOrIsoDate
 } from './cost-improve-loop.mjs';
 
 function createTempDir() {
@@ -27,6 +29,26 @@ function cleanTempDir(dir) {
 }
 
 const NOW = new Date('2026-09-06T12:00:00Z');
+
+test('strict percent and date parsing rejects ambiguous or impossible values', () => {
+  assert.equal(parsePercent('0'), 0); assert.equal(parsePercent('1'), 1); assert.equal(parsePercent('50%'), .5);
+  assert.equal(parsePercent('50'), null); assert.equal(parsePercent('12abc'), null);
+  assert.equal(parseJstOrIsoDate('2026-02-30 12:00:00'), null);
+  assert.equal(parseJstOrIsoDate('2026-01-01 24:00:00'), null);
+});
+
+test('one untrusted PC does not stop another PC auto action', () => {
+  const decision = decideActions({ violations: [
+    { kind: 'measurement_untrusted', pc: 'broken-PC', severity: 'error', evidence: 'missing' },
+    { kind: 'low_delegation', pc: 'healthy-PC', severity: 'error', evidence: '30%', actualValue: .3, targetValue: .5 }
+  ], state: { actions: [] }, now: NOW });
+  assert.equal(decision.actions.find((x) => x.pc === 'healthy-PC')?.mode, 'auto-codex');
+});
+
+test('empty fleet is measurement failure', () => {
+  const result = evaluateFleet({ rows: [], ledgerCounts: {}, localState: {}, now: NOW });
+  assert.match(result.violations.find((x) => x.pc === 'fleet').evidence, /fleet_empty/);
+});
 
 // 1. 台帳が計測不能(null)のとき no_cheap_ai は出ず measurement_untrusted が出て、codex 委譲が1件も発生しない
 test('1. When ledger is unreadable (null), measurement_untrusted is reported instead of no_cheap_ai, and no codex actions are decided', () => {

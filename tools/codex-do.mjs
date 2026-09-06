@@ -165,6 +165,7 @@ const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
 const forceNative = args.includes('--force-native');
 const noFallback = args.includes('--no-fallback');
+const review = args.includes('--review');
 const cwdIndex = args.indexOf('--cwd');
 const promptFileIndex = args.indexOf('--prompt-file');
 const timeoutIndex = args.indexOf('--timeout');
@@ -174,10 +175,11 @@ const omitted = new Set();
 if (dryRun) omitted.add(args.indexOf('--dry-run'));
 if (forceNative) omitted.add(args.indexOf('--force-native'));
 if (noFallback) omitted.add(args.indexOf('--no-fallback'));
+if (review) omitted.add(args.indexOf('--review'));
 if (cwdIndex >= 0) { omitted.add(cwdIndex); omitted.add(cwdIndex + 1); }
 if (promptFileIndex >= 0) { omitted.add(promptFileIndex); omitted.add(promptFileIndex + 1); }
 if (timeoutIndex >= 0) { omitted.add(timeoutIndex); omitted.add(timeoutIndex + 1); }
-const usage = '使い方: node tools/codex-do.mjs "<指示>" [--cwd <path>] [--prompt-file <file>] [--timeout <秒>] [--dry-run] [--no-fallback]';
+const usage = '使い方: node tools/codex-do.mjs "<指示>" [--cwd <path>] [--prompt-file <file>] [--review] [--timeout <秒>] [--dry-run] [--no-fallback]';
 
 // タイムアウト既定30分。無限に待って気付かないより、切って原因を見に行くほうが安い。
 const timeoutSeconds = timeoutIndex >= 0 ? Number(args[timeoutIndex + 1]) : 1800;
@@ -325,15 +327,15 @@ if (process.platform === 'win32' && !forceNative) {
     } catch (error) {
       if (error?.code !== 'ENOENT') console.error(`⚠️ worktree の gitdir 確認に失敗しました（処理は続行します）: ${error?.message ?? error}`);
     }
-    result = await execute('wsl', ['-d', distro, '--cd', cwd, '--', 'codex', 'exec', '-s', 'workspace-write', '-']);
+    result = await execute('wsl', ['-d', distro, '--cd', cwd, '--', 'codex', 'exec', '-s', review ? 'read-only' : 'workspace-write', '-']);
   }
   else {
     console.error('⚠️ WSL 経路が使えないためネイティブ Windows codex で実行します。\nWindows 版は read-only サンドボックス固定でファイルを書けない既知の不具合(openai/codex#35428)があり、編集が保存されない可能性が高い。WSL の導入を推奨');
-    result = await execute('codex', ['exec', '-s', 'workspace-write', '-'], { cwd });
+    result = await execute('codex', ['exec', '-s', review ? 'read-only' : 'workspace-write', '-'], { cwd });
   }
 } else {
   if (process.platform === 'win32') console.error('⚠️ --force-native によりネイティブ Windows codex で実行します。編集が保存されない可能性があります');
-  result = await execute('codex', ['exec', '-s', 'workspace-write', '-'], { cwd });
+  result = await execute('codex', ['exec', '-s', review ? 'read-only' : 'workspace-write', '-'], { cwd });
 }
 
 const quotaCheck = detectQuotaLimit(result?.output, result?.stderr);

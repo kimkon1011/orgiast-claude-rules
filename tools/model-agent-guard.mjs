@@ -13,6 +13,18 @@ try {
   const input = JSON.parse(raw);
   if (!/^(Agent|Task)$/.test(String(input.tool_name || ''))) process.exit(0);
   const toolInput = input.tool_input || {};
+  const subagentType = String(toolInput.subagent_type || '');
+  const exempt = /^(biz-reader|statusline-setup|claude-code-guide)$/i.test(subagentType);
+  const exploratory = /^(Explore|general-purpose|Plan)$/i.test(subagentType);
+  const expensiveOrImplicit = !toolInput.model || /(?:opus|fable)/i.test(String(toolInput.model));
+  if (!exempt && exploratory && expensiveOrImplicit) {
+    const home = process.env.ORGIAST_HOME || os.homedir();
+    let mode = 'warn';
+    try { mode = String(JSON.parse(fs.readFileSync(path.join(home, '.claude', 'cost-enforce.json'), 'utf8')).mode || 'warn'); } catch {}
+    const advice = '探索/調査は `gemini -p "<質問>" --include-directories <dir>`(OAuth無料枠) または `node tools/codex-do.mjs --review --prompt-file <file>`(定額)。Claudeサブエージェントは最後の手段。使うなら model:"haiku"。';
+    console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', ...(mode === 'block' ? { permissionDecision: 'deny', permissionDecisionReason: advice } : { additionalContext: advice }) } }));
+    process.exit(0);
+  }
   if (/fable/i.test(`${toolInput.model || ''} ${toolInput.subagent_type || ''}`)) {
     const policy = loadFablePolicy({ dir: process.env.ORGIAST_FABLE_POLICY_DIR || undefined });
     if (fableAllowedForSubagent(policy)) {

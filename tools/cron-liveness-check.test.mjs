@@ -40,8 +40,36 @@ test('境界値はok、境界を超えるとstale', () => {
 });
 
 test('直近7日のgateスキップ3件で警報', () => {
-  const records = [1, 2, 3].map((days) => ({ ts: new Date(now - days * 864e5).toISOString() }));
-  assert.match(evaluateGateSkips(records, now).line, /🚨 gate判定スキップ 3件/);
+  const records = [1, 2, 3].map((days) => ({ ts: new Date(now - days * 864e5).toISOString(), reasonCode: 'no-path' }));
+  assert.match(evaluateGateSkips(records, now).line, /🚨 gate判定スキップ（要調査）3件/);
+});
+
+test('unreadableだけなら10件でもgateスキップ警報を出さない', () => {
+  const records = Array.from({ length: 10 }, (_, index) => ({ ts: new Date(now - index * 36e5).toISOString(), reasonCode: 'unreadable' }));
+  assert.equal(evaluateGateSkips(records, now), null);
+});
+
+test('reasonCodeなしの旧記録はgateスキップ警報に数えない', () => {
+  const records = Array.from({ length: 10 }, (_, index) => ({ ts: new Date(now - index * 36e5).toISOString() }));
+  assert.equal(evaluateGateSkips(records, now), null);
+});
+
+test('unreadable 8件と要調査3件なら要調査分だけ警報に数える', () => {
+  const unreadable = Array.from({ length: 8 }, (_, index) => ({ ts: new Date(now - index * 36e5).toISOString(), reasonCode: 'unreadable' }));
+  const investigable = [1, 2, 3].map((days) => ({ ts: new Date(now - days * 864e5).toISOString(), reasonCode: 'no-path' }));
+  assert.match(evaluateGateSkips([...unreadable, ...investigable], now).line, /（要調査）3件/);
+});
+
+test('unreadable 8件と要調査2件ならgateスキップ警報を出さない', () => {
+  const unreadable = Array.from({ length: 8 }, (_, index) => ({ ts: new Date(now - index * 36e5).toISOString(), reasonCode: 'unreadable' }));
+  const investigable = [1, 2].map((days) => ({ ts: new Date(now - days * 864e5).toISOString(), reasonCode: 'no-path' }));
+  assert.equal(evaluateGateSkips([...unreadable, ...investigable], now), null);
+});
+
+test('7日より古いgateスキップは要調査件数に数えない', () => {
+  const records = [1, 2].map((days) => ({ ts: new Date(now - days * 864e5).toISOString(), reasonCode: 'no-path' }));
+  records.push({ ts: new Date(now - 8 * 864e5).toISOString(), reasonCode: 'no-path' });
+  assert.equal(evaluateGateSkips(records, now), null);
 });
 
 // 日次TOP3 は workflow の成否ではなくローカル着地(asOf)で測る。

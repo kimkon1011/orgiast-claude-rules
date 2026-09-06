@@ -2,3 +2,15 @@
 # Codex CLI が作業ごとに置く一時ファイル(コミット対象外)
 .codex-task.md
 memory-shared/
+
+# Codex 委譲時のラッパーが吐く実行ログ(内容は都度使い捨て)
+/codex-rule*.log
+
+# nightly-bootstrap のテストが作る一時ディレクトリ(後始末前に落ちると残る)
+tools/.nightly-bootstrap-test-*/
+
+# PowerShell を repo 直下で走らせたときの一時スクリプト
+tools/.ps.tmp.ps1
+
+# $env:LOCALAPPDATA が未設定のまま PowerShell を起動すると repo 直下に掘られるキャッシュ
+/Microsoft/

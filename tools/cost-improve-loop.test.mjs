@@ -10,6 +10,7 @@ import {
   verifyPreviousActions,
   readLedgerCounts,
   atomicWrite,
+  buildCombinedCodexSpec,
   main,
   ALLOWED_LOCAL_COMMANDS
 } from './cost-improve-loop.mjs';
@@ -420,4 +421,27 @@ test('22. 状態保存が最後まで失敗しても main は成功しログに 
     assert.equal(result.ok, true);
     assert.match(fs.readFileSync(path.join(tempDir, '.claude', 'logs', 'cost-improve-loop.log'), 'utf8'), /state=failed/);
   } finally { delete process.env.ORGIAST_HOME; cleanTempDir(tempDir); }
+});
+
+test('23. buildCombinedCodexSpec は2件の内容を番号付き見出しで区切る', () => {
+  const spec = buildCombinedCodexSpec([
+    { kind: 'low_delegation', pc: 'PC-A', specContent: 'Aの修正仕様' },
+    { kind: 'opus_heavy', pc: 'PC-B', specContent: 'Bの修正仕様' }
+  ]);
+  assert.match(spec, /## タスク 1\/2: low_delegation \(PC-A\)/);
+  assert.match(spec, /## タスク 2\/2: opus_heavy \(PC-B\)/);
+  assert.ok(spec.includes('Aの修正仕様'));
+  assert.ok(spec.includes('Bの修正仕様'));
+});
+
+test('24. buildCombinedCodexSpec は空配列と null に空文字列を返す', () => {
+  assert.strictEqual(buildCombinedCodexSpec([]), '');
+  assert.strictEqual(buildCombinedCodexSpec(null), '');
+});
+
+test('25. buildCombinedCodexSpec は1件でも仕様内容を欠落させない', () => {
+  const spec = buildCombinedCodexSpec([
+    { kind: 'low_delegation', pc: 'PC-only', specContent: '単独タスクの修正仕様' }
+  ]);
+  assert.ok(spec.includes('単独タスクの修正仕様'));
 });

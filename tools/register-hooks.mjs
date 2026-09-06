@@ -17,7 +17,13 @@ function load(file) {
   return raw.trim() ? JSON.parse(raw) : {};
 }
 function backup(file) { if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.bak.${stamp}-installer`); }
-function write(file, value) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, 'utf8'); }
+function write(file, value) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+  // 配布設定は書けたつもりで終えず、直後にJSONとして同値か読み戻す。
+  const written = load(file);
+  if (JSON.stringify(written) !== JSON.stringify(value)) throw new Error(`${file} のread-back検査に失敗`);
+}
 function commands(groups) { return groups.flatMap((g) => Array.isArray(g?.hooks) ? g.hooks : []).map((h) => String(h?.command || '')); }
 function add(groups, scriptName, group) {
   // リポの同期が遅れている環境で、存在しないスクリプトを登録して毎回 ENOENT を出すのを防ぐ。
@@ -79,6 +85,18 @@ try {
   if (!settings.hooks || typeof settings.hooks !== 'object' || Array.isArray(settings.hooks)) settings.hooks = {};
   for (const event of ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'Stop']) if (!Array.isArray(settings.hooks[event])) settings.hooks[event] = [];
   const command = (name, extra = '') => `node "${path.join(repo, 'tools', name)}"${extra}`;
+  // 2026-09-06: 9本を別プロセスで動かすと304 Stop中198回が再Stopになったため、
+  // ファイル名で旧登録を拾い、PCごとに異なるrepoパスのrunner 1本へ収束させる。
+  const oldStopGates = [
+    'handoff-quality-gate.mjs', 'stop-gate.mjs', 'manual-request-fullsteps-gate.mjs',
+    'handoff-investigation-gate.mjs', 'handoff-info-guard.mjs', 'negative-claim-gate.mjs',
+    'report-length-gate.mjs', 'self-check-before-asking-guard.mjs', 'doc-link-drive-guard.mjs',
+  ];
+  if (fs.existsSync(path.join(repo, 'tools', 'stop-gate-runner.mjs'))) {
+    for (const oldName of oldStopGates) added += migrate(settings.hooks.Stop, oldName, 'stop-gate-runner.mjs', command('stop-gate-runner.mjs'));
+    if (add(settings.hooks.Stop, 'stop-gate-runner.mjs', { hooks: [{ type: 'command', command: command('stop-gate-runner.mjs'), timeout: 10 }] })) added += 1;
+    added += setTimeoutFor(settings.hooks.Stop, 'stop-gate-runner.mjs', 10);
+  }
   const session = [
     ['onboarding-sync.mjs', 20, true, ''],
     ['claude-cost-reporter.mjs', 15, true, ''],
@@ -129,18 +147,13 @@ try {
   if (add(settings.hooks.PreToolUse, 'pretooluse-codex-invocation.mjs', { matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command: command('pretooluse-codex-invocation.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.PreToolUse, 'model-agent-guard.mjs', { matcher: 'Agent|Task', hooks: [{ type: 'command', command: command('model-agent-guard.mjs') }] })) added += 1;
   // 人に手作業を頼むとき、初見の人でも実行できる手順になっているかを検査する(§1.5.1)。
-  if (add(settings.hooks.Stop, 'manual-request-fullsteps-gate.mjs', { hooks: [{ type: 'command', command: command('manual-request-fullsteps-gate.mjs'), timeout: 8 }] })) added += 1;
-  if (add(settings.hooks.Stop, 'report-length-gate.mjs', { hooks: [{ type: 'command', command: command('report-length-gate.mjs'), timeout: 10 }] })) added += 1;
   if (add(settings.hooks.Stop, 'verify-before-done-detector.mjs', { hooks: [{ type: 'command', command: command('verify-before-done-detector.mjs') }] })) added += 1;
   // kim が読む文書をローカルパスのリンクで渡す違反を止める(モバイルで1クリックで開けない・2026-08-07 kim確定ルール)
-  if (add(settings.hooks.Stop, 'doc-link-drive-guard.mjs', { hooks: [{ type: 'command', command: command('doc-link-drive-guard.mjs'), timeout: 10 }] })) added += 1;
   // 作業依頼だけを残して必要なURL・コマンドを省くと、kimが過去ログを探すため同期Stopで差し戻す。
   // 自分で調べられることを user に「確認して教えてください」と外注する応答を止める(§1.1/§1.2)。
-  if (add(settings.hooks.Stop, 'self-check-before-asking-guard.mjs', { hooks: [{ type: 'command', command: command('self-check-before-asking-guard.mjs'), timeout: 10 }] })) added += 1;
   // 同じ判定を AskUserQuestion では *事前* に効かせる。Stop は応答を出したあとなので、
   // user の目に触れる前に止められるのはここだけ(2026-09-01 user 厳命への対応)。
   if (add(settings.hooks.PreToolUse, 'askuser-selfcheck-gate.mjs', { matcher: 'AskUserQuestion', hooks: [{ type: 'command', command: command('askuser-selfcheck-gate.mjs'), timeout: 10 }] })) added += 1;
-  if (add(settings.hooks.Stop, 'handoff-info-guard.mjs', { hooks: [{ type: 'command', command: command('handoff-info-guard.mjs'), timeout: 10 }] })) added += 1;
   // 旧PCは hook が `powershell -NoProfile -File ...ps1` で登録され、実行ポリシーで無音死している。
   policyRepaired = repairPowerShellExecutionPolicy(settings.hooks);
   added += policyRepaired;

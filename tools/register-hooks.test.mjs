@@ -44,7 +44,7 @@ test('session-relaunch hook は同期で1本だけ登録され、再実行で重
   fs.rmSync(home, { recursive: true, force: true });
 });
 
-test('report-length-gate hook は timeout 10 で Stop に登録される', () => {
+test('stop-gate-runner hook は timeout 10 で Stop に登録される', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-report-length-'));
   const repo = path.resolve('.');
   const settingsFile = path.join(home, '.claude', 'settings.json');
@@ -54,9 +54,28 @@ test('report-length-gate hook は timeout 10 で Stop に登録される', () =>
   });
   const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
   const hooks = settings.hooks.Stop.flatMap((group) => group.hooks || [])
-    .filter((hook) => String(hook.command).includes('report-length-gate.mjs'));
+    .filter((hook) => String(hook.command).includes('stop-gate-runner.mjs'));
   assert.equal(hooks.length, 1);
   assert.equal(hooks[0].timeout, 10);
   assert.equal('async' in hooks[0], false);
   fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('旧Stop gate 9本をrunner 1本へ移行し無関係なStop hookを残す', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-runner-'));
+  const repo = path.resolve('.');
+  const settingsFile = path.join(home, '.claude', 'settings.json');
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  const old = ['handoff-quality-gate.mjs','stop-gate.mjs','manual-request-fullsteps-gate.mjs','handoff-investigation-gate.mjs','handoff-info-guard.mjs','negative-claim-gate.mjs','report-length-gate.mjs','self-check-before-asking-guard.mjs','doc-link-drive-guard.mjs'];
+  const hooks = old.map((name) => ({ hooks: [{ type: 'command', command: `node "C:\\old\\tools\\${name}"` }] }));
+  hooks.push({ hooks: [{ type: 'command', command: 'powershell -NoProfile -File "C:\\keep.ps1"' }, { type: 'command', command: 'node "C:\\keep-tool.mjs"' }] });
+  fs.writeFileSync(settingsFile, JSON.stringify({ hooks: { Stop: hooks } }));
+  execFileSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo } });
+  const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  const commands = settings.hooks.Stop.flatMap((group) => group.hooks || []).map((hook) => hook.command);
+  assert.equal(commands.filter((value) => value.includes('stop-gate-runner.mjs')).length, 1);
+  assert.ok(old.every((name) => !commands.some((value) => value.includes(name))));
+  assert.ok(commands.some((value) => value.includes('keep.ps1')));
+  assert.ok(commands.some((value) => value.includes('keep-tool.mjs')));
+  assert.ok(fs.readdirSync(path.dirname(settingsFile)).some((name) => /^settings\.json\.bak\..+-installer$/.test(name)));
 });

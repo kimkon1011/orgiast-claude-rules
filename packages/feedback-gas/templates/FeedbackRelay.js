@@ -13,6 +13,9 @@
  *   FEEDBACK_RELAY_SECRET    共有シークレット
  *   FEEDBACK_APP_NAME        既定のアプリ名（呼び出し側が省略した場合に使う）
  *   FEEDBACK_FORM_URL        フォームの /exec URL（各画面にリンクを置く用途。無くても動く）
+ *   DISCORD_BOT_TOKEN        Discord Bot トークン（DM 送信用。webhook では DM できない）
+ *   DISCORD_DM_USER_ID       DM の送信先ユーザーID
+ *   FEEDBACK_WORKSPACE_DOMAIN シートURLに挟む Workspace ドメイン（未設定なら素URL）
  *   DISCORD_FEEDBACK_WEBHOOK 中継が失敗した場合のフォールバック先（無くても動く）
  *   FEEDBACK_LOG_SS_ID       記録先スプレッドシートID（未設定ならアクティブなスプレッドシート）
  *   FEEDBACK_LOG_SHEET_NAME  記録先シート名（未設定なら既定値 '不具合要望'）
@@ -46,7 +49,10 @@ function _FeedbackRelay_config() {
     appName: String(props.getProperty('FEEDBACK_APP_NAME') || ''),
     webhook: String(props.getProperty('DISCORD_FEEDBACK_WEBHOOK') || ''),
     logSsId: String(props.getProperty('FEEDBACK_LOG_SS_ID') || ''),
-    logSheetName: String(props.getProperty('FEEDBACK_LOG_SHEET_NAME') || '')
+    logSheetName: String(props.getProperty('FEEDBACK_LOG_SHEET_NAME') || ''),
+    botToken: String(props.getProperty('DISCORD_BOT_TOKEN') || ''),
+    dmUserId: String(props.getProperty('DISCORD_DM_USER_ID') || ''),
+    workspaceDomain: String(props.getProperty('FEEDBACK_WORKSPACE_DOMAIN') || '')
   };
 }
 
@@ -167,29 +173,111 @@ function _FeedbackRelay_postWebhook(hook, content, blobs) {
  * 従来どおり webhook へフォールバックする。設定が何も無ければ { ok:true, relayed:false, via:'none' }。
  * 呼び出し側は via で分岐する必要はない（記録が本体、通知は best-effort）。
  */
+/**
+ * Discord Bot で DM を送る。webhook はチャンネル投稿しかできず DM できないため Bot API を使う。
+ * 失敗は例外にせず false を返す（通知は best-effort、記録を止めない）。
+ */
+function _FeedbackRelay_postDm(token, userId, content, blobs) {
+  try {
+    var channelResponse = UrlFetchApp.fetch('https://discord.com/api/v10/users/@me/channels', {
+      method: 'post', headers: { Authorization: 'Bot ' + token }, contentType: 'application/json',
+      payload: JSON.stringify({ recipient_id: String(userId) }), muteHttpExceptions: true
+    });
+    var channelCode = channelResponse.getResponseCode();
+    if (channelCode < 200 || channelCode >= 300) return false;
+    var channel = JSON.parse(channelResponse.getContentText() || '{}');
+    if (!channel.id) return false;
+    var text = String(content || '').slice(0, 1900);
+    var list = Array.isArray(blobs) ? blobs : [];
+    var options;
+    if (list.length) {
+      var form = { payload_json: JSON.stringify({ content: text }) };
+      for (var i = 0; i < list.length; i++) form['files[' + i + ']'] = list[i];
+      options = { method: 'post', headers: { Authorization: 'Bot ' + token }, payload: form, muteHttpExceptions: true };
+    } else {
+      options = { method: 'post', headers: { Authorization: 'Bot ' + token }, contentType: 'application/json',
+        payload: JSON.stringify({ content: text }), muteHttpExceptions: true };
+    }
+    var messageResponse = UrlFetchApp.fetch(
+      'https://discord.com/api/v10/channels/' + encodeURIComponent(String(channel.id)) + '/messages', options);
+    var messageCode = messageResponse.getResponseCode();
+    return messageCode >= 200 && messageCode < 300;
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * 記録シートの URL。FEEDBACK_WORKSPACE_DOMAIN があれば /a/<domain>/ を挟む
+ * （素 URL はブラウザ既定の個人アカウントで開いて「アクセス権が必要です」になる）。
+ */
+function _FeedbackRelay_sheetUrl(config, ss, sheet) {
+  var base = config && config.workspaceDomain
+    ? 'https://docs.google.com/a/' + config.workspaceDomain + '/spreadsheets/d/' + ss.getId() + '/edit'
+    : ss.getUrl();
+  return base + '#gid=' + sheet.getSheetId();
+}
+
+/** Discord DM 設定を Script Properties に保存する。トークン値は返さない。 */
+function Admin_setFeedbackDiscord(botToken, dmUserId) {
+  var props = PropertiesService.getScriptProperties();
+  props.setProperty('DISCORD_BOT_TOKEN', String(botToken || ''));
+  props.setProperty('DISCORD_DM_USER_ID', String(dmUserId || ''));
+  return { ok: true, set: { botToken: Boolean(botToken), dmUserId: String(dmUserId || '') } };
+}
+
+/** 疎通確認: DM を1回実送信する。導入完了はこれで着信を見てから（設定だけで完了と呼ばない）。 */
+function FeedbackRelay_testDm() {
+  var config = _FeedbackRelay_config();
+  if (!(config.botToken && config.dmUserId)) return { ok: false, sent: false, via: 'none', error: 'DM: 未設定' };
+  var sent = _FeedbackRelay_postDm(config.botToken, config.dmUserId, '疎通テストです（無視してください）', []);
+  return { ok: sent, sent: sent, via: sent ? 'dm' : 'none', error: sent ? undefined : 'DM: 送信失敗' };
+}
+
+/** 未対応の毎日プッシュを重複なく1本だけ設置する（GAS のトリガー上限は 20 本）。 */
+function FeedbackRelay_installNagTrigger() {
+  var triggers = ScriptApp.getProjectTriggers();
+  var removed = 0;
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === 'FeedbackRelay_nagPending') {
+      ScriptApp.deleteTrigger(triggers[i]);
+      removed++;
+    }
+  }
+  ScriptApp.newTrigger('FeedbackRelay_nagPending').timeBased().atHour(9).everyDays(1).create();
+  return { ok: true, removed: removed, created: true };
+}
+
 function FeedbackRelay_submit(payload) {
   payload = payload || {};
   try {
     var config = _FeedbackRelay_config();
     var blobs = Array.isArray(payload.imageBlobs) ? payload.imageBlobs : [];
-    var hasRelay = Boolean(config.url && config.secret);
-
-    if (hasRelay) {
+    // (1)中継 -> (2)Bot DM -> (3)webhook。先に成功した1つで止める。
+    // 通知先ゼロだと「記録は残るが誰も気づかない」になるため、全滅時は理由を error に残す。
+    var errors = [];
+    if (config.url && config.secret) {
       var attempt = _FeedbackRelay_post(config, payload);
       if (attempt.ok) return { ok: true, relayed: true, via: 'relay' };
-      if (config.webhook) {
-        var sent = _FeedbackRelay_postWebhook(config.webhook, _FeedbackRelay_webhookContent(payload, config), blobs);
-        return { ok: true, relayed: false, via: sent ? 'webhook' : 'none', error: attempt.error };
+      errors.push('中継: ' + (attempt.error || '送信失敗'));
+    } else errors.push('中継: 未設定');
+
+    var content = _FeedbackRelay_webhookContent(payload, config);
+    if (config.botToken && config.dmUserId) {
+      if (_FeedbackRelay_postDm(config.botToken, config.dmUserId, content, blobs)) {
+        return { ok: true, relayed: false, via: 'dm' };
       }
-      return { ok: true, relayed: false, via: 'none', error: attempt.error };
-    }
+      errors.push('DM: 送信失敗');
+    } else errors.push('DM: 未設定');
 
     if (config.webhook) {
-      var sentOnly = _FeedbackRelay_postWebhook(config.webhook, _FeedbackRelay_webhookContent(payload, config), blobs);
-      return { ok: true, relayed: false, via: sentOnly ? 'webhook' : 'none' };
-    }
+      if (_FeedbackRelay_postWebhook(config.webhook, content, blobs)) {
+        return { ok: true, relayed: false, via: 'webhook' };
+      }
+      errors.push('webhook: 送信失敗');
+    } else errors.push('webhook: 未設定');
 
-    return { ok: true, relayed: false, via: 'none' };
+    return { ok: true, relayed: false, via: 'none', error: errors.join(' / ') };
   } catch (e) {
     return { ok: true, relayed: false, via: 'none', error: String(e && e.message ? e.message : e) };
   }
@@ -248,6 +336,7 @@ function FeedbackRelay_ping() {
     hasSecret: Boolean(config.secret),
     appName: config.appName,
     webhookFallback: Boolean(config.webhook),
+    dmConfigured: Boolean(config.botToken && config.dmUserId),
     logSpreadsheet: config.logSsId ? 'configured' : 'active-spreadsheet',
     logSheetName: config.logSheetName || _FEEDBACK_RELAY_DEFAULT_LOG_SHEET_NAME
   };
@@ -279,6 +368,60 @@ function _FeedbackRelay_loadFormTemplate() {
   throw new Error('FeedbackForm.html が見つかりません（試した名前: ' + candidates.join(', ') + '）'
     + ' Script Property FEEDBACK_FORM_TEMPLATE で明示してください。'
     + (lastError ? ' 詳細: ' + lastError.message : ''));
+}
+
+/** Collect every unfinished feedback row, including rows with a response note. */
+function FeedbackRelay_nagPending(opts) {
+  opts = opts || {};
+  try {
+    var config = _FeedbackRelay_config();
+    var ss = config.logSsId ? SpreadsheetApp.openById(config.logSsId) : SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName(config.logSheetName || _FEEDBACK_RELAY_DEFAULT_LOG_SHEET_NAME);
+    if (!sheet) return { ok: true, count: 0, sent: false, via: 'none', reason: '記録シートなし' };
+    var values = sheet.getDataRange().getValues();
+    if (!values.length) return { ok: true, count: 0, sent: false, via: 'none', reason: '記録なし' };
+    var headers = values[0].map(function (v) { return String(v || '').trim(); });
+    var required = ['日時', '種別', 'タイトル', '状態', '対応メモ', '送信元'];
+    var col = {};
+    for (var h = 0; h < required.length; h++) {
+      col[required[h]] = headers.indexOf(required[h]);
+      if (col[required[h]] < 0) return { ok: false, count: 0, sent: false, via: 'none', reason: '必須列がありません: ' + required[h] };
+    }
+    var doneStates = { done: true, '完了': true, '対応済': true, '却下': true };
+    var now = new Date();
+    var items = [];
+    for (var r = 1; r < values.length; r++) {
+      var row = values[r];
+      var state = String(row[col['状態']] || '').trim().toLowerCase();
+      if (doneStates[state]) continue;
+      var rawDate = row[col['日時']];
+      var days = rawDate instanceof Date && !isNaN(rawDate.getTime())
+        ? Math.max(0, Math.floor((now.getTime() - rawDate.getTime()) / 86400000)) : null;
+      items.push({
+        kind: String(row[col['種別']] || '不具合'), title: String(row[col['タイトル']] || '(無題)'),
+        days: days, source: String(row[col['送信元']] || '不明'),
+        replyState: String(row[col['対応メモ']] || '').trim() ? '返答済・未完了' : '未返答'
+      });
+    }
+    if (!items.length) return { ok: true, count: 0, sent: false, via: 'none', reason: '未対応なし' };
+    var lines = ['🐛 未対応の不具合・要望 ' + items.length + ' 件'];
+    items.slice(0, 15).forEach(function (item) {
+      lines.push('・[' + item.kind.slice(0, 20) + '/' + item.replyState + '] ' + item.title.slice(0, 70) + ' … ' +
+        (item.days === null ? '経過不明' : '経過 ' + item.days + ' 日') + ' / 送信元: ' + item.source.slice(0, 50));
+    });
+    if (items.length > 15) lines.push('ほか ' + (items.length - 15) + ' 件');
+    lines.push(_FeedbackRelay_sheetUrl(config, ss, sheet));
+    var content = lines.join('\n');
+    if (opts.dryRun === true) return { ok: true, count: items.length, items: items, content: content };
+    if (config.botToken && config.dmUserId && _FeedbackRelay_postDm(config.botToken, config.dmUserId, content, [])) {
+      return { ok: true, count: items.length, sent: true, via: 'dm' };
+    }
+    if (config.webhook && _FeedbackRelay_postWebhook(config.webhook, content, [])) return { ok: true, count: items.length, sent: true, via: 'webhook' };
+    var configured = Boolean((config.botToken && config.dmUserId) || config.webhook);
+    return { ok: true, count: items.length, sent: false, via: 'none', reason: configured ? '通知送信失敗' : '通知先未設定' };
+  } catch (e) {
+    return { ok: false, count: 0, sent: false, via: 'none', reason: String(e && e.message ? e.message : e) };
+  }
 }
 
 function FeedbackRelay_serveForm(params) {

@@ -7,6 +7,7 @@ create table if not exists public.app_feedback (
   page_path text,
   submitter text,
   submitter_email text,
+  submitter_discord_id text,
   status text not null default 'new' check (status in ('new','triaged','in_progress','done','rejected')),
   priority text not null default 'normal' check (priority in ('low','normal','high')),
   admin_note text,
@@ -16,6 +17,7 @@ create table if not exists public.app_feedback (
   updated_at timestamptz not null default now()
 );
 alter table public.app_feedback add column if not exists screenshot_path text;
+alter table public.app_feedback add column if not exists submitter_discord_id text;
 alter table public.app_feedback enable row level security;
 create index if not exists app_feedback_status_idx on public.app_feedback (status, created_at desc);
 

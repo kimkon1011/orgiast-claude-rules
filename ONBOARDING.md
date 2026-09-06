@@ -121,6 +121,12 @@ API/CLI/MCP/GitHub Actions で実行可能な操作は、手順案内せず Clau
 
 「ユーザー側の設定が怪しい」と感じた瞬間に依頼を出さない。エラーメッセージを表層で解釈しない、プログラム的に確認できる経路を全部試す、複数仮説があれば依頼不要な方から潰す、手作業が必要と判明したら根拠も併記する。「念のため確認して」型の予防的依頼も禁止。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/automation-first-checklist.md`
 
+#### 1.2.1 依頼の前に必要性と代替経路を調査し、証拠を依頼文に併記する（絶対ルール）
+
+user に何かを依頼する前に、実際の API 呼び出し・検索など異なる経路を2件以上試し、各結果を確認する。
+依頼文の `[手渡し判定]` に「試したこと」と結果（`→`）、および「user でないと無理な理由」を書く。
+受け取る情報や認証情報が現行経路で本当に機能することも先に確かめる。「たぶん必要」は調査に含めない。
+
 ### 1.3 GAS（Google Apps Script）は clasp + GitHub 統一
 
 Apps Script Web エディタに直接コードを書かない。ソースはGitHub管理、`.clasp.json`で`clasp push -f`反映。Web Appデプロイは既存 `deploymentId` を再利用（URL維持）。手作業コピペ・「エディタで保存→再デプロイしてください」案内は禁止。
@@ -724,6 +730,8 @@ node -e "fetch('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rule
 **通知は必須。「記録だけして誰も気づかない」を作らない（全アカウント絶対 / 2026-09-06 kim厳命）**。不具合シート／フォームを組み込むときは、**Discord 通知先を必ず1つ以上設定してから完了とする**。実測でブース制作アプリは中継だけが設定され `DISCORD_FEEDBACK_WEBHOOK` が空で、中継が落ちたら通知ゼロになる状態だった（シートには入るが誰も見ない＝報告が死ぬ）。**Discord の DM は webhook では送れず Bot トークンが要る**。Bot トークンを GAS の Script Properties に置くのは認証情報をクラウドへ複製することになるので、**本人PCで動く定期実行から DM する**のを既定とし、GAS 側は中継/webhook に留める（中継が落ちて即時通知が飛ばなくても、翌朝のプッシュがシートを読んで必ず拾う二段構え）。GAS から直接 DM したい場合だけ Script Properties に入れる。通知の多段フォールバックは「①中継 `FEEDBACK_RELAY_URL` → ②Bot DM（`DISCORD_BOT_TOKEN` + `DISCORD_DM_USER_ID`、`POST /users/@me/channels` → `POST /channels/{id}/messages`）→ ③`DISCORD_FEEDBACK_WEBHOOK`」の順で、先に成功した1つで止める。**kim の PC で動くものは kim 本人の DM 宛**（ユーザーID `715210673642012733` / `kimkon.`。`kimi_74244` は別人なので混同しない）。他メンバーの環境ではその人自身の DM 宛にする。
 
 **溜まった未対応は毎日プッシュする（同上）**。記録シートに入っただけで放置されるのを防ぐため、未対応の一覧を**日次1本**で本人の DM に送る（ローカル版は `tools/feedback-nag.mjs` + `tools/register-feedback-nag-task.ps1`、GAS 版は `FeedbackRelay_nagPending()` + `FeedbackRelay_installNagTrigger()`。同名ハンドラを全削除してから1本だけ作る＝重複防止。GAS のトリガー上限20本に注意）。**「未対応」＝ 状態が done/完了/対応済/却下 のいずれでもないもの全部**（対応メモが入っていても除外しない）。各行に `未返答` / `返答済・未完了` を出して区別する——実測でブース制作アプリの唯一の未完了1件が「メモ入りだが未完了」だったため、メモ空だけに絞ると取りこぼす。列は必ずヘッダー名で引く（`受付ID` 列が後から増えた実績があり列番号固定は壊れる）。**0件のときは送らない**（毎日の無意味通知を作らない）。導入完了の条件は「実際に着信を確認したこと」で、設定しただけを完了と呼ばない（§1.4）。
+
+**投稿時は「開発した人 + kim」の2名に DM する（全アカウント絶対 / 2026-09-06 kim厳命）**。開発者IDは `FEEDBACK_OWNER_DISCORD_ID`（Next.js は env、GAS は Script Property）で渡し、インストーラが `~/.claude/orgiast-discord-user-id.txt` から自動設定するので user には聞かない。**対応完了時は投稿者本人へ必ず DM で完了報告する**。経路は夜間バッチ登録済みの `tools/feedback-done-notify.mjs` → 中継 `POST /api/feedback-done`、完了判定はその投稿から作られた GitHub Issue が closed になったこと。Issue を経由せず直した場合は `node tools/feedback-done-notify.mjs --message-id <id> --summary "..."` を手動実行する。投稿者を一意に特定できない場合は推測で別人へ送らず、kim にまとめて届く「返せなかった件」を確認し、名簿（Discord の表示名）を直して再実行する。**今後作るアプリはこの2つなしで「完成」と呼ばない**。導入完了条件は、実際に開発者へ着信し、完了報告が投稿者へ着信したことを確認したこと（§1.4）。
 
 ---
 

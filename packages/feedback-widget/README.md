@@ -16,6 +16,10 @@ node -e "fetch('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rule
 
 ログイン不要の公開サイトにも設置できます（ハニーポット・IP レート制限・入力長上限が常時有効。詳細は [INSTALL.md](./INSTALL.md)）。
 
+| 環境変数 | 用途 | 必須条件 |
+|---|---|---|
+| `FEEDBACK_OWNER_DISCORD_ID` | kim と併せて投稿通知を送る開発者の Discord user ID | 標準通知を使う全アプリで必須（17〜20桁） |
+
 ## 導入状況
 
 | アプリ | 状況 |
@@ -26,4 +30,4 @@ node -e "fetch('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rule
 
 ## 運用
 
-社員がアプリ内から投稿 → Discord へ通知 → 開発側が `node scripts/list-feedback.mjs` で未対応キューを取得 → 実装 → `/feedback` で status を `done` に更新、という流れです。導入後は、パッケージ一式が手元にあれば `node packages/feedback-widget/verify.mjs --url https://<app>.vercel.app --target <repo>`、1行導入で `verify.mjs` が無ければインストーラーが表示するダウンロード + 実行コマンドで投稿と read-back を検証します。詳細は [INSTALL.md](./INSTALL.md) を参照してください。
+社員がアプリ内から投稿 → 中継が kim + 開発者へ DM → 実装 → Issue closed（または手動完了通知）→ 夜間ジョブが投稿者へ完了 DM、という流れです。開発者IDは `FEEDBACK_OWNER_DISCORD_ID`（17〜20桁）で、標準通知を使う全アプリで必須です。導入後は `verify.mjs` で投稿と read-back を検証します。詳細は [INSTALL.md](./INSTALL.md) を参照してください。

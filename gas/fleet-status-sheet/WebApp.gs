@@ -49,6 +49,26 @@ function _fleetSheet_() {
   throw new Error('fleet status tab not found');
 }
 
+function _fleetReadSheet_() {
+  const properties = PropertiesService.getScriptProperties();
+  const id = properties.getProperty('SHEET_ID');
+  if (!id) throw new Error('SHEET_ID is not configured');
+  const spreadsheet = SpreadsheetApp.openById(id);
+  const cachedName = properties.getProperty('SHEET_TAB_NAME');
+  const cached = cachedName ? spreadsheet.getSheetByName(cachedName) : null;
+  if (cached) return cached;
+  const minimum = [FLEET_HEADERS_.selfPc, FLEET_HEADERS_.hostname, FLEET_HEADERS_.reportedAt];
+  const sheets = spreadsheet.getSheets();
+  for (let i = 0; i < sheets.length; i += 1) {
+    const sheet = sheets[i];
+    const lastColumn = sheet.getLastColumn();
+    if (lastColumn < minimum.length) continue;
+    const headers = sheet.getRange(1, 1, 1, lastColumn).getDisplayValues()[0];
+    if (minimum.every(function(header) { return fleetFindHeaderIndex(headers, header) >= 0; })) return sheet;
+  }
+  throw new Error('fleet status tab not found');
+}
+
 function doPost(e) {
   let payload;
   try {
@@ -58,7 +78,7 @@ function doPost(e) {
   }
   const expected = PropertiesService.getScriptProperties().getProperty('FLEET_TOKEN');
   if (!expected || payload.token !== expected) return _fleetJson_({ ok: false, status: 401, error: 'unauthorized' });
-  const labelRequiredKinds = { extensions: true, 'cloud-login': true };
+  const labelRequiredKinds = { extensions: true, 'cloud-login': true, 'cost-improve-heartbeat': true };
   if (labelRequiredKinds[payload.kind] && (typeof payload.label !== 'string' || payload.label.trim() === '')) {
     return _fleetJson_({ ok: false, status: 400, error: 'label_required' });
   }
@@ -80,7 +100,8 @@ function doPost(e) {
     'webhook-lookup': lookupWebhooks,
     'webhook-describe': describeWebhookLedger,
     'manual-columns': ensureManualColumns,
-    'ledger-unify': unifyIntoCloudLedger
+    'ledger-unify': unifyIntoCloudLedger,
+    'cost-improve-heartbeat': upsertCostImproveHeartbeat
   };
   try {
     const handler = handlers[payload.kind] || upsertFleetStatus;
@@ -95,25 +116,46 @@ function doGet(e) {
   const token = e && e.parameter ? e.parameter.token : '';
   if (!expected || token !== expected) return _fleetJson_({ ok: false, status: 401, error: 'unauthorized' });
   try {
-    const sheet = _fleetSheet_();
+    const sheet = _fleetReadSheet_();
     const lastColumn = sheet.getLastColumn();
     const lastRow = sheet.getLastRow();
     const headers = sheet.getRange(1, 1, 1, lastColumn).getDisplayValues()[0];
-    const columns = fleetResolveColumns(headers);
+    const columns = {};
+    Object.keys(FLEET_HEADERS_).forEach(function(key) { columns[key] = fleetFindHeaderIndex(headers, FLEET_HEADERS_[key]); });
     const values = lastRow > 1 ? sheet.getRange(2, 1, lastRow - 1, lastColumn).getDisplayValues() : [];
     const rows = values.map(function(row) {
+      const value = function(key) { return columns[key] >= 0 ? (row[columns[key]] || '') : ''; };
       return {
-        pcName: row[columns.selfPc] || '',
-        label: row[columns.hostname] || '',
-        reportedAt: row[columns.reportedAt] || '',
-        note: row[columns.consistency] || '',
-        interactionLoop: columns.interactionLoop >= 0 ? (row[columns.interactionLoop] || '') : '',
-        interactionSelftest: columns.interactionSelftest >= 0 ? (row[columns.interactionSelftest] || '') : ''
+        pcName: value('selfPc'), label: value('hostname'), reportedAt: value('reportedAt'), note: value('consistency'),
+        interactionLoop: value('interactionLoop'), interactionSelftest: value('interactionSelftest'),
+        claudeUsd: value('claudeUsd'), mainModel: value('mainModel'), delegRatio: value('delegRatio'), cheapAiUse: value('cheapAiUse'),
+        codexLogin: value('codexLogin'), fable5: value('fable5'), disciplineAlert: value('disciplineAlert'), livenessState: value('livenessState'),
+        costLoopRanAt: value('costLoopRanAt'), costLoopStatus: value('costLoopStatus')
       };
     });
     return _fleetJson_({ ok: true, rows: rows, count: rows.length });
   } catch (error) {
     return _fleetJson_({ ok: false, status: 500, error: error.message });
+  }
+}
+
+function upsertCostImproveHeartbeat(payload) {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(20000)) return { ok: false, status: 503, error: 'busy' };
+  try {
+    const sheet = _fleetSheet_();
+    _fleetEnsureIdentityHeaders_(sheet);
+    const lastColumn = sheet.getLastColumn();
+    const lastRow = sheet.getLastRow();
+    const headers = sheet.getRange(1, 1, 1, lastColumn).getDisplayValues()[0];
+    const rows = lastRow > 1 ? sheet.getRange(2, 1, lastRow - 1, lastColumn).getValues() : [];
+    const plan = fleetPlanCostImproveHeartbeat(headers, rows, payload);
+    Object.keys(plan.values).forEach(function(columnIndex) {
+      sheet.getRange(plan.rowIndex + 2, Number(columnIndex) + 1).setValue(plan.values[columnIndex]);
+    });
+    return { ok: true, action: 'updated', row: plan.rowIndex + 2 };
+  } finally {
+    lock.releaseLock();
   }
 }
 

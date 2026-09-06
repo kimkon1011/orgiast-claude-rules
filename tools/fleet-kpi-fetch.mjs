@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { isEntry } from './is-entry.mjs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -85,7 +86,7 @@ export async function main(argv = process.argv.slice(2)) {
 }
 
 // Only run if called directly
-if (import.meta.url === `file://${process.argv[1]}` || (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')))) {
+if (isEntry(import.meta.url)) {
   main().catch((err) => {
     console.error(err);
     process.exitCode = 1;

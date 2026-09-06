@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { isEntry } from './is-entry.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync as defaultSpawnSync } from 'node:child_process';
@@ -945,7 +946,7 @@ async function mainFetch(argv) {
   return await fetchFleetKPIs({ sheetUrl: fleetEnv.FLEET_SHEET_URL, token: fleetEnv.FLEET_SHEET_TOKEN });
 }
 
-if (import.meta.url === `file://${process.argv[1]}` || (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')))) {
+if (isEntry(import.meta.url)) {
   main().catch((err) => {
     console.error(err);
     process.exitCode = 1;

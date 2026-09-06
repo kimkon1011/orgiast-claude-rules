@@ -266,6 +266,17 @@ test('9. human escalation is neither worked nor shown in the verification sectio
   } finally { delete process.env.ORGIAST_HOME; cleanTempDir(tempDir); }
 });
 
+test('unused_provider is escalated without running a command', () => {
+  const decision = decideActions({
+    violations: [{ kind: 'unused_provider', pc: 'self', evidence: "Provider 'kimi' is configured but has 0 calls in last 7 days" }],
+    state: { actions: [] },
+    now: NOW
+  });
+  assert.strictEqual(decision.actions[0].mode, 'human');
+  assert.strictEqual(decision.actions[0].result, 'escalated');
+  assert.strictEqual(decision.actions[0].command, undefined);
+});
+
 test('10. roster-only rows are excluded without violations and summarized', async () => {
   const rows = [{ pcName: '作業用018', label: '', hostname: '', reportedAt: '', delegRatio: '', claudeUsd: '' }];
   const evaluated = evaluateFleet({ rows, ledgerCounts: { codex: 1 }, localState: {}, now: NOW });

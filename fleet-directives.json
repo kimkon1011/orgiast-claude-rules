@@ -3,13 +3,13 @@
   "_note": "kim/監督Claude が指示を1件書き、各PCの fleet-agent が15分以内に拾って結果を Discord へ返す。kind は status / prompt / enable-auto-session の3つだけ。prompt と enable-auto-session はそのPCの人がオプトイン済みの場合のみ実行される。空配列にすると全PCで何も起きない。",
   "directives": [
     {
-      "id": "status-20260902-133730-8974",
+      "id": "status-20260906-171027-8784",
       "kind": "status",
       "targets": "all",
-      "why": "管制面の初回疎通確認。各PCの hostname/アカウント/リポの遅れ/夜間ジョブの失敗/残TODO/オプトイン状態を1回だけ返す。読み取り専用で実行系の処理は無い。",
-      "createdBy": "uers",
-      "createdAt": "2026-09-02T13:37:30.945Z",
-      "expiresAt": "2026-09-05T13:37:30.945Z"
+      "why": "seisaku-team を Pro化するか判断するため、kimko-PC(作業用011)/nishi-PC が Codex(codex-cli)をどのChatGPTアカウント(email)・どのプラン(free/plus/pro/prolite)で認証しているかを確認したい。~/.codex/auth.json や codex login 表示のアカウント名とプランを1回だけ返してほしい。実行系の処理なし・読み取り専用。",
+      "createdBy": "auto-session",
+      "createdAt": "2026-09-06T17:10:27.652Z",
+      "expiresAt": "2026-09-09T17:10:27.652Z"
     }
   ]
 }

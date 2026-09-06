@@ -32,11 +32,26 @@ export function decideTreeAction({ dirty, detached, headSha, mainSha }) {
 }
 
 function git(repo, args, options = {}) {
-  return execFileSync('git', ['-C', repo, ...args], { encoding: options.encoding ?? 'utf8', stdio: options.stdio ?? ['ignore', 'pipe', 'pipe'] });
+  return execFileSync('git', ['-C', repo, ...args], {
+    encoding: options.encoding ?? 'utf8',
+    stdio: options.stdio ?? ['ignore', 'pipe', 'pipe'],
+    ...(Object.hasOwn(options, 'input') ? { input: options.input } : {}),
+  });
 }
 
 function gitContent(repo, ref, file) {
   try { return git(repo, ['show', `${ref}:${file}`], { encoding: 'buffer' }); } catch { return null; }
+}
+
+function blobHashOfWorkingFile(repo, file, fullPath) {
+  try {
+    if (fs.existsSync(fullPath)) return git(repo, ['hash-object', fullPath]).trim();
+    return git(repo, ['hash-object', '--stdin', '--path', file], { input: '' }).trim();
+  } catch { return null; }
+}
+
+function refBlobHash(repo, ref, file) {
+  try { return git(repo, ['rev-parse', `${ref}:${file}`]).trim(); } catch { return null; }
 }
 
 function hookCommands(settings) {
@@ -139,9 +154,10 @@ function runPerFile({ tree, files, ledgerFile, lastWritten, dryRun, list }) {
   const results = [];
   for (const file of files) {
     const fullPath = path.join(tree, file);
-    let working;
-    try { working = fs.readFileSync(fullPath); } catch { working = Buffer.alloc(0); }
-    const decision = decideAction({ working, head: gitContent(tree, 'HEAD', file), main: gitContent(tree, 'origin/main', file), lastWrittenSha: lastWritten.get(`${tree}\0${file}`) || null });
+    let workingRaw;
+    try { workingRaw = fs.readFileSync(fullPath); } catch { workingRaw = Buffer.alloc(0); }
+    const working = blobHashOfWorkingFile(tree, file, fullPath);
+    const decision = decideAction({ working, head: refBlobHash(tree, 'HEAD', file), main: refBlobHash(tree, 'origin/main', file), lastWrittenSha: lastWritten.get(`${tree}\0${file}`) || null });
     const result = { tree, file, action: decision.action, reason: decision.reason, sha256: sha256(working) };
     results.push(result);
     if (dryRun || list) continue;
@@ -150,11 +166,11 @@ function runPerFile({ tree, files, ledgerFile, lastWritten, dryRun, list }) {
       git(tree, ['checkout', 'origin/main', '--', file]);
       const health = healthCheck(tree, file);
       if (!health.ok) {
-        if (gitContent(tree, 'HEAD', file) == null) fs.rmSync(fullPath, { force: true }); else fs.writeFileSync(fullPath, working);
+        if (gitContent(tree, 'HEAD', file) == null) fs.rmSync(fullPath, { force: true }); else fs.writeFileSync(fullPath, workingRaw);
         Object.assign(result, { action: 'reverted', reason: health.reason, sha256: sha256(working) });
-      } else Object.assign(result, { reason: `${decision.reason}; ${health.reason}`, sha256: sha256(fs.readFileSync(fullPath)) });
+      } else Object.assign(result, { reason: `${decision.reason}; ${health.reason}`, sha256: sha256(blobHashOfWorkingFile(tree, file, fullPath)) });
     } catch (error) {
-      try { fs.writeFileSync(fullPath, working); } catch {}
+      try { fs.writeFileSync(fullPath, workingRaw); } catch {}
       Object.assign(result, { action: 'reverted', reason: `更新処理失敗: ${error.message}`, sha256: sha256(working) });
     }
     appendLedger(ledgerFile, result);

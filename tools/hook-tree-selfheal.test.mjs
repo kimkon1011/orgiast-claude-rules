@@ -73,6 +73,7 @@ function fixture({ includeOther = false } = {}) {
   const home = path.join(root, 'home');
   git(root, ['init', '--bare', origin]);
   git(root, ['init', '-b', 'main', seed]);
+  git(seed, ['config', 'core.autocrlf', 'false']);
   git(seed, ['config', 'user.email', 'test@example.com']);
   git(seed, ['config', 'user.name', 'Test']);
   fs.mkdirSync(path.join(seed, 'tools'), { recursive: true });
@@ -82,7 +83,8 @@ function fixture({ includeOther = false } = {}) {
   git(seed, ['commit', '-m', 'old']);
   git(seed, ['remote', 'add', 'origin', origin]);
   git(seed, ['push', '-u', 'origin', 'main']);
-  git(root, ['clone', origin, repo]);
+  git(root, ['-c', 'core.autocrlf=false', 'clone', origin, repo]);
+  git(repo, ['config', 'core.autocrlf', 'false']);
   git(repo, ['checkout', 'main']);
   fs.writeFileSync(path.join(seed, 'tools', 'sample.mjs'), 'export const value = "new";\n');
   if (includeOther) fs.writeFileSync(path.join(seed, 'tools', 'other.mjs'), 'export const other = "new";\n');

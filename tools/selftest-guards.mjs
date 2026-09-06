@@ -235,10 +235,36 @@ test('model-agent-guard: block昇格時は実装委譲を deny', () => {
   const output = JSON.parse(r.stdout);
   assert(output.hookSpecificOutput.permissionDecision === 'deny', r.stdout || r.stderr);
 });
-test('model-agent-guard: Explore 調査は無出力', () => {
-  const temp = makeTempHome('orgiast-model-agent-explore-test-');
+test('model-agent-guard: Explore+model未指定は安経路への案内を warn で通す', () => {
+  const temp = makeTempHome('orgiast-model-agent-explore-warn-test-');
   const r = run('model-agent-guard.mjs', { tool_name: 'Agent', tool_input: { subagent_type: 'Explore', prompt: '設定を調査して' } }, [], { ORGIAST_HOME: temp });
-  assert(r.stdout === '', `stdout=${r.stdout}`);
+  const output = JSON.parse(r.stdout).hookSpecificOutput;
+  assert(output.additionalContext && output.additionalContext.includes('gemini -p') && output.additionalContext.includes('codex-do.mjs --review'), r.stdout || r.stderr);
+  assert(!output.permissionDecision, '探索の既定は warn で通す');
+});
+test('model-agent-guard: Explore+haiku と専門agent は無出力', () => {
+  const temp = makeTempHome('orgiast-model-agent-quiet-test-');
+  for (const tool_input of [
+    { subagent_type: 'Explore', model: 'haiku', prompt: '設定を調査して' },
+    { subagent_type: 'biz-reader', prompt: '売上を集計して' },
+    { subagent_type: 'statusline-setup', prompt: 'ステータスラインを実装して' },
+    { subagent_type: 'claude-code-guide', prompt: 'hook の書き方を実装して' },
+  ]) {
+    const r = run('model-agent-guard.mjs', { tool_name: 'Agent', tool_input }, [], { ORGIAST_HOME: temp });
+    assert(r.stdout === '', `${JSON.stringify(tool_input)} -> stdout=${r.stdout}`);
+  }
+});
+test('model-agent-guard: block モードでは探索の既定経路も deny', () => {
+  const temp = makeTempHome('orgiast-model-agent-block-explore-test-');
+  writeCostEnforce(temp, 'block');
+  const r = run('model-agent-guard.mjs', { tool_name: 'Agent', tool_input: { subagent_type: 'Explore', prompt: '設定を調査して' } }, [], { ORGIAST_HOME: temp });
+  assert(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision === 'deny', r.stdout || r.stderr);
+});
+test('model-agent-guard: Fable 指定は探索でも deny のまま', () => {
+  const temp = makeTempHome('orgiast-model-agent-fable-test-');
+  const r = run('model-agent-guard.mjs', { tool_name: 'Agent', tool_input: { subagent_type: 'Explore', model: 'claude-fable-5', prompt: '設定を調査して' } }, [], { ORGIAST_HOME: temp, ORGIAST_FABLE_POLICY_DIR: policyDirWith(false) });
+  const output = JSON.parse(r.stdout).hookSpecificOutput;
+  assert(output.permissionDecision === 'deny' && output.permissionDecisionReason.includes('§1.16'), r.stdout || r.stderr);
 });
 test('model-agent-guard: Write は無出力', () => {
   const temp = makeTempHome('orgiast-model-agent-write-test-');
@@ -274,6 +300,14 @@ test('cost-routing-gate: 小規模は夜間判定を注入しない', () => {
   const temp = makeTempHome('orgiast-routing-nightly-small-test-');
   const r = run('cost-routing-gate.mjs', { prompt: '1件だけ分類して' }, [], { ORGIAST_HOME: temp });
   assert(!r.stdout.includes('§2.8.1'), r.stdout || r.stderr);
+});
+test('cost-routing-gate: budgetPressure 中は20件超の夜間バッチ文言を強める', () => {
+  const temp = makeTempHome('orgiast-routing-pressure-test-');
+  const claude = path.join(temp, '.claude'); fs.mkdirSync(claude, { recursive: true });
+  fs.writeFileSync(path.join(claude, 'cost-enforce.json'), JSON.stringify({ mode: 'warn', budgetPressure: true }));
+  const r = run('cost-routing-gate.mjs', { prompt: '300件の会社を分類して' }, [], { ORGIAST_HOME: temp });
+  assert(r.stdout.includes('budgetPressure') && r.stdout.includes('ほぼ必須'), r.stdout || r.stderr);
+  assert(r.stdout.includes('[夜間判定]'), r.stdout || r.stderr);
 });
 test('cost-routing-gate: codex語で全体を無効化しない', () => {
   const temp = makeTempHome('orgiast-routing-codex-test-');

@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import fs from 'node:fs';
+import os from 'node:os';
 import { EventEmitter } from 'node:events';
 import {
   accountConfigPath,
@@ -25,6 +27,7 @@ import {
   resolveConfigDir,
   resolveVscodeCli,
   resolveWt,
+  runHeadlessNextSession,
   sanitizeEnv,
   shouldLaunch,
   trustKeyVariants,
@@ -147,6 +150,9 @@ test('inline は target と旧 mode の各経路で選べ、明示 target の優
   assert.equal(pickRoute({ codeCli: '', env: {}, state: { mode: 'inline' } }), 'inline');
   assert.equal(pickRoute({ codeCli: '', env: {}, state: { target: 'inline' } }), 'inline');
   assert.equal(pickRoute({ codeCli: '', flagTarget: 'vscode', env: { ORGIAST_NEXT_SESSION_TARGET: 'inline' }, state: { target: 'inline' } }), 'vscode');
+  assert.equal(pickRoute({ codeCli: '', flagTarget: 'headless', env: {}, state: {} }), 'headless');
+  assert.equal(pickRoute({ codeCli: 'code.cmd', flagTarget: 'headless', env: { ORGIAST_NEXT_SESSION_TARGET: 'terminal' }, state: {} }), 'headless');
+  assert.equal(pickRoute({ codeCli: '', env: { ORGIAST_NEXT_SESSION_TARGET: 'headless' }, state: {} }), 'headless');
   assert.equal(pickRoute({ codeCli: '', env: {}, state: {} }), 'vscode');
 });
 
@@ -842,4 +848,90 @@ test('vscode 経路で state.configDir が指定されていたら効かない�
   assert.equal(await launchNextSession(['--target', 'vscode'], io), 0);
   assert.ok(base.calls.logs.some((line) => line.includes('VSCode 拡張経路では効きません')));
   assert.ok(base.calls.logs.at(-1).endsWith('account: kim@orgiast.jp(参考: 実際は VSCode ウィンドウのログイン)'));
+});
+
+// ---- headless 経路(B5): cheap-code を先に試し、失敗時だけ claude へ落とす ----
+
+function fakeHeadlessChild() {
+  const child = new EventEmitter();
+  child.stdout = { setEncoding() { return this; }, on() { return this; } };
+  child.stderr = { setEncoding() { return this; }, on() { return this; } };
+  child.stdin = { on() {}, end() {} };
+  child.kill = () => {};
+  return child;
+}
+
+function headlessSpawnRecorder(exitCodes) {
+  const calls = [];
+  let index = 0;
+  const spawnImpl = (program, args, options) => {
+    calls.push({ program, args: args ? [...args] : [], options });
+    const child = fakeHeadlessChild();
+    const code = exitCodes[index++] ?? 0;
+    queueMicrotask(() => child.emit('close', code));
+    return child;
+  };
+  return { calls, spawnImpl };
+}
+
+test('headless は cheap-code を先に試し、成功なら1行ログを残して台帳には書かない', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orgiast-nsl-ok-'));
+  try {
+    const { calls, spawnImpl } = headlessSpawnRecorder([0]);
+    const logLines = [];
+    const result = await runHeadlessNextSession({
+      env: { ORGIAST_AUTO_SESSION_EXECUTOR: 'cheap-code', ORGIAST_AUTO_SESSION_PROVIDER: 'glm' },
+      hostname: 'TEST-PC', home: tempDir, cwd: tempDir, prompt: '次セッション開始処理を実行してください',
+      executable: 'claude-test', spawnImpl, appendLog: (line) => logLines.push(line),
+      now: () => new Date('2026-09-07T00:00:00Z'),
+    });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].program, process.execPath);
+    assert.ok(calls[0].args.join(' ').includes('cheap-code.mjs'));
+    assert.ok(calls[0].args.join(' ').includes('--provider glm'));
+    assert.equal(result.executor, 'cheap-code:glm');
+    assert.equal(result.status, 'success');
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.fallbackToClaude, false);
+    assert.equal(logLines.length, 1);
+    assert.match(logLines[0], /executor=cheap-code:glm exit=0 status=success fallback=false/);
+    assert.equal(fs.existsSync(path.join(tempDir, '.claude', 'executor-usage.jsonl')), false, '成功時は claude への落下を記録しない');
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('headless は cheap-code 失敗時に claude へ落とし、台帳とログの両方に記録する', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orgiast-nsl-fb-'));
+  const previousModel = process.env.ORGIAST_AUTO_SESSION_MODEL;
+  process.env.ORGIAST_AUTO_SESSION_MODEL = 'sonnet';
+  try {
+    const { calls, spawnImpl } = headlessSpawnRecorder([1, 0]);
+    const logLines = [];
+    const result = await runHeadlessNextSession({
+      env: { ORGIAST_AUTO_SESSION_EXECUTOR: 'cheap-code', ORGIAST_AUTO_SESSION_PROVIDER: 'glm' },
+      hostname: 'TEST-PC', home: tempDir, cwd: tempDir, prompt: '次セッション開始処理を実行してください',
+      executable: 'claude-test', spawnImpl, appendLog: (line) => logLines.push(line),
+      now: () => new Date('2026-09-07T00:00:00Z'),
+    });
+    assert.equal(calls.length, 2, 'cheap-code 失敗後に claude へ再試行する');
+    assert.equal(calls[0].program, process.execPath);
+    assert.equal(calls[1].program, 'claude-test');
+    const fallbackArgs = calls[1].args.join(' ');
+    assert.ok(fallbackArgs.includes('-p'));
+    assert.ok(fallbackArgs.includes('--model sonnet'));
+    assert.equal(result.executor, 'claude');
+    assert.equal(result.fallbackToClaude, true);
+    assert.equal(result.status, 'success');
+    assert.equal(result.exitCode, 0);
+    assert.equal(logLines.length, 1);
+    assert.match(logLines[0], /executor=claude exit=0 status=success fallback=true/);
+    const ledger = fs.readFileSync(path.join(tempDir, '.claude', 'executor-usage.jsonl'), 'utf8');
+    assert.match(ledger, /"provider":"claude-fallback"/);
+    assert.match(ledger, /cheap-code\/glm exit 1/);
+  } finally {
+    if (previousModel === undefined) delete process.env.ORGIAST_AUTO_SESSION_MODEL;
+    else process.env.ORGIAST_AUTO_SESSION_MODEL = previousModel;
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
 });

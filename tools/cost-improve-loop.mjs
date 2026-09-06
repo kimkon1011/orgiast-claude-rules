@@ -9,12 +9,35 @@ import { fetchFleetKPIs, getClaudeDir } from './fleet-kpi-fetch.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { appendImprovementTodos } from './nightly-kpi.mjs';
 import { KNOWN_CHEAP_PROVIDERS } from './llm-fallback.mjs';
+import { collectProviderHealth, collectClaudeStats } from './usage-stats.mjs';
+import { collectBudgetStatus } from './budget-status.mjs';
 
 export const ALLOWED_LOCAL_COMMANDS = [
   'node tools/tool-adoption-check.mjs --force',
   'node tools/onboarding-sync.mjs --force',
-  'node tools/register-hooks.mjs --hooks-only'
+  'node tools/register-hooks.mjs --hooks-only',
+  // eval_stale 対処: eval-harness の再実行を夜間バッチへ投入する固定コマンド。
+  // batch-run が kind=eval-harness をローカル実行(node tools/eval-harness.mjs --all)に変換する。
+  'node tools/batch-enqueue.mjs --provider groq --kind eval-harness "eval-harness --all"'
 ];
+
+// 許可リストの固定コマンド文字列を argv 配列へ割る(二重引用内は1要素。shell は通さない)。
+export function splitWhitelistedCommand(command) {
+  const parts = [];
+  const pattern = /"([^"]*)"|(\S+)/g;
+  let match;
+  while ((match = pattern.exec(String(command || '')))) parts.push(match[1] ?? match[2]);
+  return parts;
+}
+
+// B4 シグナル系 kind → 効果検証(verifyEffects)で追う metric。
+export const SIGNAL_METRICS = Object.freeze({
+  provider_unhealthy: 'failRate',
+  codex_saturated: 'codexLimit24h',
+  headless_claude: 'headlessClaudeOut',
+  budget_pace: 'pacePercent',
+  eval_stale: 'evalAgeDays'
+});
 
 // §1.18 の通常運用で利用を期待する主経路だけを監視し、障害時専用の fallback は除外する。
 export const PRIMARY_PROVIDERS = KNOWN_CHEAP_PROVIDERS;
@@ -95,7 +118,7 @@ export function parseCheapAiUseCount(text) {
   return total;
 }
 
-export function evaluateFleet({ rows, ledgerCounts, localState, now, lastKpis = {} }) {
+export function evaluateFleet({ rows, ledgerCounts, localState, now, lastKpis = {}, signals = null }) {
   const violations = [];
   const measuredAt = now.toISOString();
 
@@ -297,12 +320,72 @@ export function evaluateFleet({ rows, ledgerCounts, localState, now, lastKpis = 
     }
   }
 
+  if (signals) {
+    // provider_unhealthy: 直近7日で failRate>=0.2 か http429>=50 の provider(codex=定額なので除外)。
+    for (const [name, stats] of Object.entries(signals.providerHealth?.providers || {})) {
+      if (String(name).toLowerCase() === 'codex') continue;
+      const failRate = Number(stats?.failRate) || 0;
+      const http429 = Number(stats?.http429) || 0;
+      if (failRate >= 0.2 || http429 >= 50) {
+        violations.push({
+          kind: 'provider_unhealthy', pc: 'self', severity: 'warning',
+          evidence: `Provider '${name}' unhealthy: failRate ${failRate.toFixed(2)} (threshold 0.20), http429 ${http429} (threshold 50) in last 7 days`,
+          measuredAt, actualValue: failRate, targetValue: 0.2, provider: String(name).toLowerCase(), trusted: true
+        });
+      }
+    }
+    // codex_saturated: 直近24h の usage_limit 検出が2回以上。
+    const codexLimit24h = Number(signals.codexLimit24h) || 0;
+    if (codexLimit24h >= 2) {
+      violations.push({
+        kind: 'codex_saturated', pc: 'self', severity: 'warning',
+        evidence: `Codex usage_limit detected ${codexLimit24h} times in last 24h (threshold 2)`,
+        measuredAt, actualValue: codexLimit24h, targetValue: 1, trusted: true
+      });
+    }
+    // headless_claude: 無人ジョブが Claude 課金 tier を直接使っている出力 > 0 (cheap-code経由は除外)。
+    const headlessClaudeOut = Number(signals.headlessClaudeOut) || 0;
+    if (headlessClaudeOut > 0) {
+      violations.push({
+        kind: 'headless_claude', pc: 'self', severity: 'warning',
+        evidence: `Headless jobs used Claude-tier output ${headlessClaudeOut} tok in last 7 days (auto-session/next-session should run on cheap-code)`,
+        measuredAt, actualValue: headlessClaudeOut, targetValue: 0, trusted: true
+      });
+    }
+    // budget_pace: 月次予算の日割りペースが 100% 超(月末見込みで予算超え)。
+    const budgetPacePct = Number(signals.budgetPacePct);
+    if (Number.isFinite(budgetPacePct) && budgetPacePct > 100) {
+      violations.push({
+        kind: 'budget_pace', pc: 'self', severity: 'error',
+        evidence: `Monthly budget pace is ${budgetPacePct.toFixed(1)}% (> 100%)`,
+        measuredAt, actualValue: budgetPacePct, targetValue: 100, trusted: true
+      });
+    }
+    // eval_stale: eval結果が7日超、または一度も無い。
+    if (signals.evalAgeDays === null) {
+      violations.push({
+        kind: 'eval_stale', pc: 'self', severity: 'warning',
+        evidence: 'eval-results.jsonl has no results (never run)',
+        measuredAt, actualValue: null, targetValue: 7, trusted: true
+      });
+    } else {
+      const evalAgeDays = Number(signals.evalAgeDays);
+      if (Number.isFinite(evalAgeDays) && evalAgeDays > 7) {
+        violations.push({
+          kind: 'eval_stale', pc: 'self', severity: 'warning',
+          evidence: `eval-harness results are ${Math.floor(evalAgeDays)} days old (threshold 7)`,
+          measuredAt, actualValue: evalAgeDays, targetValue: 7, trusted: true
+        });
+      }
+    }
+  }
+
   return { pcs: nonStaleRows, fleet: fleetStats, violations };
 }
 
 export function sortViolationsBySeverity(violations) {
   const severityRank = { error: 2, warning: 1 };
-  const kindRank = { measurement_untrusted: 0, low_delegation: 1, cost_spike: 2, no_cheap_ai: 3, opus_heavy: 4, stale_report: 5, unused_provider: 6 };
+  const kindRank = { measurement_untrusted: 0, low_delegation: 1, cost_spike: 2, no_cheap_ai: 3, opus_heavy: 4, stale_report: 5, unused_provider: 6, provider_unhealthy: 7, codex_saturated: 8, headless_claude: 9, budget_pace: 10, eval_stale: 11 };
   return [...violations].sort((a, b) => {
     const rankDifference = (severityRank[b.severity] ?? 0) - (severityRank[a.severity] ?? 0);
     if (rankDifference !== 0) return rankDifference;
@@ -336,6 +419,10 @@ function humanTodoMessage(violation, now) {
         ? 'フリートの KPI を取得できていません'
         : 'このPCの計測ファイルまたは実行台帳を読み取れません';
     return `【${pc}】${situation}。計測できていないため、この値を根拠にした自動修正は見送りました。\`node tools/fleet-sheet-report.mjs\` を実行し、委譲率と Claude 概算が記録されるか確認してください。`;
+  }
+  if (violation.kind === 'budget_pace') {
+    const pace = Number.isFinite(Number(violation.actualValue)) ? Number(violation.actualValue).toFixed(1) : '不明';
+    return `【このPC】の月次AI予算ペースが ${pace}% に達しています（日割りで月末を見込むと予算超過。しきい値 100%）。cost-enforce.json に budgetPressure を立てて量産系ルーティングを夜間バッチへ寄せる自動対処は済ませました。急ぎでない分類・生成・一括処理は \`node tools/batch-enqueue.mjs --provider <groq|deepseek> "指示"\` で夜間(03:00・半額)へ回してください。`;
   }
   return `【${pc}】自動対処を完了できませんでした（実測: ${violation.evidence}）。状況を確認してください。`;
 }
@@ -371,6 +458,28 @@ export function decideActions({ violations, state, now, limits = { maxCodex: 2 }
     },
     measurement_untrusted: {
       mode: 'human'
+    },
+    // B4 (2026-09-07): ローカル信号由来の違反。auto-local は固定コマンド配列(shell無し)か
+    // effect 関数(シート由来文字列を実行しない)のどちらかでだけ対処する。
+    provider_unhealthy: {
+      mode: 'auto-local',
+      effect: 'writeRoutingOverride'
+    },
+    codex_saturated: {
+      mode: 'auto-local',
+      effect: 'writeCodexFallbackOrder'
+    },
+    headless_claude: {
+      mode: 'auto-local',
+      effect: 'writeAutoSessionExecutor'
+    },
+    budget_pace: {
+      mode: 'human',
+      localEffect: 'budgetPressure'
+    },
+    eval_stale: {
+      mode: 'auto-local',
+      command: 'node tools/batch-enqueue.mjs --provider groq --kind eval-harness "eval-harness --all"'
     }
   };
 
@@ -439,6 +548,9 @@ export function decideActions({ violations, state, now, limits = { maxCodex: 2 }
       metric = 'claudeUsd';
       const match = evidence.match(/\$(\d+(?:\.\d+)?)/);
       value = match ? parseFloat(match[1]) : 0;
+    } else if (SIGNAL_METRICS[kind]) {
+      metric = SIGNAL_METRICS[kind];
+      value = Number.isFinite(Number(violation.actualValue)) ? Number(violation.actualValue) : 0;
     }
 
     const actionId = `action-${nowMs}-${kind}-${pc}`;
@@ -454,10 +566,16 @@ export function decideActions({ violations, state, now, limits = { maxCodex: 2 }
       note: note || `Dispatched via ${mode}`,
       pr: null
     };
+    if (violation.provider) action.provider = violation.provider;
     if (mode === 'human' && hasThreeConsecutiveFailures) action.humanSince = now.toISOString();
+    if (kind === 'provider_unhealthy') {
+      // DM 本文の1行: 無料枠の上限が原因なら有料枠で即解消できることを示す。
+      action.reportNote = '有料枠で解消可(例: Groq Dev tier)';
+    }
 
     if (mode === 'auto-local') {
-      action.command = playbook.command;
+      if (playbook.command) action.command = playbook.command;
+      if (playbook.effect) action.effect = playbook.effect;
       actions.push(action);
       nextActionsState.push(action);
     } else if (mode === 'auto-codex') {
@@ -477,6 +595,7 @@ export function decideActions({ violations, state, now, limits = { maxCodex: 2 }
     } else if (mode === 'human') {
       action.result = 'escalated';
       action.todoMessage = humanTodoMessage(violation, now);
+      if (playbook.localEffect) action.localEffect = playbook.localEffect;
       actions.push(action);
       nextActionsState.push(action);
     }
@@ -485,7 +604,7 @@ export function decideActions({ violations, state, now, limits = { maxCodex: 2 }
   return { actions, skipped, nextActionsState };
 }
 
-export function verifyPreviousActions({ state, rows, localState, now, horizonDays = 3 }) {
+export function verifyPreviousActions({ state, rows, localState, now, horizonDays = 3, signals = null }) {
   const nextActionsState = [...(state.actions || [])];
   const nowMs = now instanceof Date ? now.getTime() : new Date(now).getTime();
 
@@ -513,6 +632,18 @@ export function verifyPreviousActions({ state, rows, localState, now, horizonDay
         currentVal = localState?.opusRatio ?? null;
       } else if (act.baseline.metric === 'claudeUsd') {
         currentVal = localState?.claudeUSD ?? null;
+      } else if (act.baseline.metric === 'failRate') {
+        const stats = signals?.providerHealth?.providers?.[act.provider];
+        currentVal = Number.isFinite(Number(stats?.failRate)) ? Number(stats.failRate) : null;
+      } else if (act.baseline.metric === 'codexLimit24h') {
+        currentVal = Number.isFinite(Number(signals?.codexLimit24h)) ? Number(signals.codexLimit24h) : null;
+      } else if (act.baseline.metric === 'headlessClaudeOut') {
+        currentVal = Number.isFinite(Number(signals?.headlessClaudeOut)) ? Number(signals.headlessClaudeOut) : null;
+      } else if (act.baseline.metric === 'pacePercent') {
+        currentVal = Number.isFinite(Number(signals?.budgetPacePct)) ? Number(signals.budgetPacePct) : null;
+      } else if (act.baseline.metric === 'evalAgeDays') {
+        // null(結果ファイルがまだ無い)は計測不能として pending 継続。
+        currentVal = Number.isFinite(Number(signals?.evalAgeDays)) ? Number(signals.evalAgeDays) : null;
       }
     } else {
       const row = rows?.find(r => r.pcName === act.pc || r.label === act.pc);
@@ -566,6 +697,23 @@ export function verifyPreviousActions({ state, rows, localState, now, horizonDay
       } else {
         result = 'no_effect';
       }
+    } else if (act.baseline.metric === 'failRate') {
+      if (currentVal <= 0.2 || currentVal < baselineVal - 0.05) result = 'worked';
+      else if (currentVal > baselineVal + 0.05) result = 'worse';
+      else result = 'no_effect';
+    } else if (act.baseline.metric === 'pacePercent') {
+      if (currentVal <= 100 || currentVal < baselineVal - 5) result = 'worked';
+      else if (currentVal > baselineVal + 5) result = 'worse';
+      else result = 'no_effect';
+    } else if (act.baseline.metric === 'evalAgeDays') {
+      if (currentVal <= 7 || currentVal < baselineVal - 1) result = 'worked';
+      else if (currentVal > baselineVal + 1) result = 'worse';
+      else result = 'no_effect';
+    } else if (act.baseline.metric === 'codexLimit24h' || act.baseline.metric === 'headlessClaudeOut') {
+      // カウント系: 1でも下がれば効いた、上がれば悪化。
+      if (currentVal <= (act.baseline.metric === 'codexLimit24h' ? 1 : 0) || currentVal < baselineVal) result = 'worked';
+      else if (currentVal > baselineVal) result = 'worse';
+      else result = 'no_effect';
     }
 
     act.result = result;
@@ -617,6 +765,53 @@ function parseEnvFile(file) {
       return match ? [match[1], match[2].replace(/^(['"])(.*)\1$/, '$2')] : null;
     }).filter(Boolean));
   } catch { return {}; }
+}
+
+// auto-local アクションの実行。コマンドは「許可リストの固定文字列→argv 配列」だけ(shell 無し)。
+// effect はシート由来文字列を実行しないローカルファイル書き込み(writeXxx 純関数)のみ。
+// 戻り値は act を差し替えた新しいオブジェクト(呼び出し側で Object.assign して使う)。
+export function executeLocalAction({ act, dryRun = false, claudeDir, home, now = new Date(), repoRoot = process.cwd(), spawnSync = defaultSpawnSync, writeImpl = null, hasZaiEnvImpl = null }) {
+  if (act.effect) {
+    if (dryRun) {
+      console.log(`[dry-run] Would apply effect: ${act.effect}`);
+      return { ...act, result: 'pending', note: `[dry-run] Would apply effect: ${act.effect}` };
+    }
+    const zaiCheck = hasZaiEnvImpl ?? hasZaiEnv;
+    try {
+      if (act.effect === 'writeRoutingOverride') {
+        const applied = writeRoutingOverride({ claudeDir, provider: act.provider, now, writeImpl });
+        return { ...act, result: 'pending', note: `routing-overrides.json に ${applied.provider} の demote(${applied.until}まで)を記録。llm-fallback が連鎖末尾へ回します。` };
+      }
+      if (act.effect === 'writeCodexFallbackOrder') {
+        const applied = writeCodexFallbackOrder({ claudeDir, zaiAvailable: zaiCheck(home), writeImpl });
+        return { ...act, result: 'pending', note: applied.changed ? `codex-fallback-order.json を ${applied.order.join(' → ')} に更新。` : `no_change (${applied.order.join(' → ')} が既に設定済み)` };
+      }
+      if (act.effect === 'writeAutoSessionExecutor') {
+        const provider = zaiCheck(home) ? 'glm' : 'deepseek';
+        const applied = writeAutoSessionExecutorEnv({ claudeDir, provider, writeImpl });
+        return { ...act, result: 'pending', note: applied.changed ? `auto-session.env に executor=cheap-code provider=${provider} を設定。` : applied.note };
+      }
+      console.error(`Unknown local effect: ${act.effect}`);
+      return { ...act, result: 'failed', note: `Unknown effect: ${act.effect}` };
+    } catch (error) {
+      return { ...act, result: 'failed', note: `Effect ${act.effect} failed: ${String(error?.message ?? error)}` };
+    }
+  }
+  if (!ALLOWED_LOCAL_COMMANDS.includes(act.command)) {
+    console.error(`Local command not allowed: ${act.command}`);
+    return { ...act, result: 'failed', note: 'Command not in whitelist' };
+  }
+  if (dryRun) {
+    console.log(`[dry-run] Would run: ${act.command}`);
+    return { ...act, result: 'pending', note: `[dry-run] Would run: ${act.command}` };
+  }
+  console.log(`Executing auto-local command: ${act.command}`);
+  const parts = splitWhitelistedCommand(act.command);
+  const res = spawnSync(parts[0], parts.slice(1), { shell: false, cwd: repoRoot, encoding: 'utf8' });
+  if (res.status === 0) {
+    return { ...act, result: 'pending', note: 'Command executed successfully. Awaiting verification.' };
+  }
+  return { ...act, result: 'failed', note: `Command failed with exit code ${res.status}: ${res.stderr || res.error?.message}` };
 }
 
 export function analyzeEffectiveness(actions, limit = 10) {
@@ -707,6 +902,118 @@ export function localProviderEnv(homeDir) {
   return { configured, envMap };
 }
 
+// ---- B4: ローカル信号の収集と対処(PLAYBOOK provider_unhealthy/codex_saturated/headless_claude/budget_pace/eval_stale) ----
+
+export function countCodexLimitDetections(claudeDir, now) {
+  let text = '';
+  try { text = fs.readFileSync(path.join(claudeDir, 'codex-limit-history.jsonl'), 'utf8'); } catch { return 0; }
+  const cutoff = now.getTime() - 24 * 3600 * 1000;
+  let count = 0;
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const row = JSON.parse(line);
+      const t = Date.parse(row.t || '');
+      if (Number.isFinite(t) && t >= cutoff && t <= now.getTime()) count++;
+    } catch {}
+  }
+  return count;
+}
+
+// eval-results.jsonl の最新 t の経過日数。ファイル/行が無い場合は null(=「無い」も発火対象)。
+export function evalLatestAgeDays(claudeDir, now) {
+  let text = '';
+  try { text = fs.readFileSync(path.join(claudeDir, 'eval-results.jsonl'), 'utf8'); } catch { return null; }
+  let latest = NaN;
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const t = Date.parse(JSON.parse(line).t || '');
+      if (Number.isFinite(t) && (Number.isNaN(latest) || t > latest)) latest = t;
+    } catch {}
+  }
+  if (Number.isNaN(latest)) return null;
+  return (now.getTime() - latest) / 86400000;
+}
+
+export function hasZaiEnv(home) {
+  if (process.env.ZAI_API_KEY) return true;
+  try {
+    return /^ZAI_API_KEY\s*=/m.test(fs.readFileSync(path.join(home, '.claude', 'zai.env'), 'utf8').replace(/^﻿/, ''));
+  } catch { return false; }
+}
+
+// provider_unhealthy 対処: demote 有効期限(+3日)を ~/.claude/routing-overrides.json に書く純関数。
+// 既存の他 provider/他キーは保持する。llm-fallback.mjs が demote 中の provider を連鎖末尾へ回す。
+export function writeRoutingOverride({ claudeDir, provider, now, writeImpl = null }) {
+  const file = path.join(claudeDir, 'routing-overrides.json');
+  const name = String(provider || '').trim().toLowerCase();
+  if (!/^[a-z0-9_-]+$/.test(name)) throw new Error(`不正なprovider名: ${provider}`);
+  const until = new Date(now.getTime() + 3 * 86400000).toISOString();
+  let state = {};
+  try { state = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
+  if (!state || typeof state !== 'object' || Array.isArray(state)) state = {};
+  if (!state.demote || typeof state.demote !== 'object' || Array.isArray(state.demote)) state.demote = {};
+  const changed = state.demote[name] !== until;
+  state.demote[name] = until;
+  const content = `${JSON.stringify(state, null, 2)}\n`;
+  if (writeImpl) writeImpl(file, content);
+  else atomicWrite(file, content);
+  return { file, provider: name, until, changed };
+}
+
+// codex_saturated 対処: ~/.claude/codex-fallback-order.json に fallback 順を書く。
+// zai.env(GLM定額)が無い機体は glm を諦めて deepseek 先頭にする(キーが無いものを先頭にすると即死する)。
+export function writeCodexFallbackOrder({ claudeDir, zaiAvailable, writeImpl = null }) {
+  const file = path.join(claudeDir, 'codex-fallback-order.json');
+  const order = zaiAvailable ? ['cheap-code:glm', 'qwen', 'gemini-cli'] : ['cheap-code:deepseek', 'qwen', 'gemini-cli'];
+  const content = `${JSON.stringify(order, null, 2)}\n`;
+  let previous = null;
+  try { previous = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
+  const changed = JSON.stringify(previous) !== JSON.stringify(order);
+  if (changed) {
+    if (writeImpl) writeImpl(file, content);
+    else atomicWrite(file, content);
+  }
+  return { file, order, changed };
+}
+
+// headless_claude 対処: ~/.claude/auto-session.env に executor=cheap-code を固定する。
+// 既に同値なら何も書かない(no_change)。他の行は保持する。
+export function writeAutoSessionExecutorEnv({ claudeDir, provider, writeImpl = null }) {
+  const file = path.join(claudeDir, 'auto-session.env');
+  const wanted = { ORGIAST_AUTO_SESSION_EXECUTOR: 'cheap-code', ORGIAST_AUTO_SESSION_PROVIDER: String(provider) };
+  let text = '';
+  try { text = fs.readFileSync(file, 'utf8').replace(/^﻿/, ''); } catch {}
+  const lines = text.split(/\r?\n/).filter((line) => line.trim() && !/^\s*#/.test(line));
+  const kept = new Map();
+  for (const line of lines) {
+    const match = /^\s*(?:export\s+)?([A-Za-z_][\w]*)\s*=\s*(.*?)\s*$/.exec(line);
+    if (match) kept.set(match[1], match[2].replace(/^(['"])(.*)\1$/, '$2'));
+  }
+  const noChange = Object.entries(wanted).every(([key, value]) => kept.get(key) === value);
+  if (noChange) return { file, ...wanted, changed: false, note: 'no_change (既に同値)' };
+  for (const [key, value] of Object.entries(wanted)) kept.set(key, value);
+  const content = [...kept.entries()].map(([key, value]) => `${key}=${value}`).join('\n') + '\n';
+  if (writeImpl) writeImpl(file, content);
+  else atomicWrite(file, content);
+  return { file, ...wanted, changed: true };
+}
+
+// budget_pace 対処: ~/.claude/cost-enforce.json に budgetPressure をマージする(mode等は保持)。
+export function writeBudgetPressure({ claudeDir, writeImpl = null }) {
+  const file = path.join(claudeDir, 'cost-enforce.json');
+  let state = {};
+  try { state = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
+  if (!state || typeof state !== 'object' || Array.isArray(state)) state = {};
+  if (state.budgetPressure === true) return { file, changed: false };
+  state.budgetPressure = true;
+  const content = `${JSON.stringify(state, null, 2)}\n`;
+  if (writeImpl) writeImpl(file, content);
+  else atomicWrite(file, content);
+  return { file, changed: true };
+}
+
 export async function main(argv = process.argv.slice(2), io = {}) {
   const dryRun = argv.includes('--dry-run');
   const jsonOutput = argv.includes('--json');
@@ -749,6 +1056,43 @@ export async function main(argv = process.argv.slice(2), io = {}) {
     localState.configuredProviders = provEnv.configured;
   }
 
+  // 1.5 ローカル信号(B4): provider健全性 / codex上限回数 / headless Claude出力 / 予算ペース / eval鮮度。
+  // 各収集器は io で差し替え可能(テスト・dry-run で実データに触れないように)。
+  const collectSignals = async () => {
+    if (io.signals !== undefined) return io.signals;
+    let budgetPacePct = null;
+    try {
+      const budget = await (io.collectBudgetStatus ?? collectBudgetStatus)({ home, now });
+      budgetPacePct = Number.isFinite(Number(budget?.budgetPacePct)) ? Number(budget.budgetPacePct) : null;
+    } catch (error) {
+      console.error(`予算ペース取得失敗(信号から除外): ${String(error?.message ?? error)}`);
+    }
+    let headlessClaudeOut = 0;
+    try {
+      headlessClaudeOut = Number((io.collectClaudeStats ?? collectClaudeStats)({ home, days: 7, now: now.getTime() }).headlessClaudeOut) || 0;
+    } catch (error) {
+      console.error(`headless出力計測失敗(信号から除外): ${String(error?.message ?? error)}`);
+    }
+    return {
+      providerHealth: (io.collectProviderHealth ?? collectProviderHealth)({ home, days: 7, now: now.getTime() }),
+      codexLimit24h: (io.countCodexLimitDetections ?? countCodexLimitDetections)(claudeDir, now),
+      headlessClaudeOut,
+      budgetPacePct,
+      evalAgeDays: (io.evalLatestAgeDays ?? evalLatestAgeDays)(claudeDir, now)
+    };
+  };
+  let signals = null;
+  try {
+    signals = await collectSignals();
+  } catch (error) {
+    console.error(`ローカル信号の収集に失敗(B4判定をスキップ): ${String(error?.message ?? error)}`);
+  }
+  // heartbeat metrics(headlessOut / budgetPace)は常に実測を載せる。
+  if (localState && typeof localState === 'object' && signals) {
+    if (Number.isFinite(Number(signals.headlessClaudeOut))) localState.headlessClaudeOut = Number(signals.headlessClaudeOut);
+    if (Number.isFinite(Number(signals.budgetPacePct))) localState.budgetPacePct = Number(signals.budgetPacePct);
+  }
+
   const stateFile = path.join(claudeDir, 'cost-improve-state.json');
   let state = { version: 1, lastRun: '', actions: [], lastKpis: {} };
   try {
@@ -761,11 +1105,11 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   if (!state.lastKpis) state.lastKpis = {};
 
   // 2. Verify previous actions (completed actions state update)
-  const verifiedState = verifyPreviousActions({ state, rows, localState, now });
+  const verifiedState = verifyPreviousActions({ state, rows, localState, now, signals });
   const effectiveness = analyzeEffectiveness(verifiedState.actions);
 
   // 3. Evaluate violations
-  const evaluation = evaluateFleet({ rows, ledgerCounts, localState, now, lastKpis: verifiedState.lastKpis });
+  const evaluation = evaluateFleet({ rows, ledgerCounts, localState, now, lastKpis: verifiedState.lastKpis, signals });
 
   // 4. Decide actions
   const decision = decideActions({ violations: evaluation.violations, state: verifiedState, now, limits: { maxCodex } });
@@ -782,29 +1126,8 @@ export async function main(argv = process.argv.slice(2), io = {}) {
     }
 
     if (act.mode === 'auto-local') {
-      if (ALLOWED_LOCAL_COMMANDS.includes(act.command)) {
-        console.log(`Executing auto-local command: ${act.command}`);
-        if (dryRun) {
-          console.log(`[dry-run] Would run: ${act.command}`);
-          act.result = 'pending';
-        } else {
-          const parts = act.command.split(' ');
-          const cmd = parts[0];
-          const args = parts.slice(1);
-          const res = runSpawnSync(cmd, args, { shell: true, encoding: 'utf8' });
-          if (res.status === 0) {
-            act.result = 'pending';
-            act.note = 'Command executed successfully. Awaiting verification.';
-          } else {
-            act.result = 'failed';
-            act.note = `Command failed with exit code ${res.status}: ${res.stderr || res.error?.message}`;
-          }
-        }
-      } else {
-        console.error(`Local command not allowed: ${act.command}`);
-        act.result = 'failed';
-        act.note = 'Command not in whitelist';
-      }
+      const repoRoot = path.resolve(import.meta.dirname, '..');
+      Object.assign(act, executeLocalAction({ act, dryRun, claudeDir, home, now, repoRoot, spawnSync: runSpawnSync }));
     } else if (act.mode === 'auto-codex') {
       const specFile = path.join(claudeDir, act.specPath);
       console.log(`Writing spec file: ${specFile}`);
@@ -869,6 +1192,15 @@ export async function main(argv = process.argv.slice(2), io = {}) {
             console.log(`Added todo to next-session.md: ${act.todoMessage}`);
           } catch (error) {
             console.error(`next-session.md 書き込み失敗: ${String(error?.message ?? error)}`);
+          }
+        }
+        // budget_pace の自動対処: cost-routing-gate が文言を強めるための budgetPressure フラグ。
+        if (act.localEffect === 'budgetPressure') {
+          try {
+            const applied = writeBudgetPressure({ claudeDir });
+            console.log(applied.changed ? 'cost-enforce.json に budgetPressure:true を設定しました' : 'cost-enforce.json の budgetPressure は既に true です');
+          } catch (error) {
+            console.error(`budgetPressure 書き込み失敗: ${String(error?.message ?? error)}`);
           }
         }
       }
@@ -958,7 +1290,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   const newlyDispatched = executedActions.filter(a => a.mode !== 'human');
   if (newlyDispatched.length > 0) {
     for (const act of newlyDispatched) {
-      reportText += `- [${act.mode}] **${act.pc}** の ${act.kind} (状態: ${act.result})${act.pr ? ` -> ${act.pr}` : ''}\n`;
+      reportText += `- [${act.mode}] **${act.pc}** の ${act.kind} (状態: ${act.result})${act.pr ? ` -> ${act.pr}` : ''}${act.provider ? ` [${act.provider}]` : ''}${act.reportNote ? ` — ${act.reportNote}` : ''}\n`;
     }
   } else {
     reportText += `- なし\n`;

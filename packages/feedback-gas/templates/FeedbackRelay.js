@@ -13,6 +13,7 @@
  *   FEEDBACK_RELAY_SECRET    共有シークレット
  *   FEEDBACK_APP_NAME        既定のアプリ名（呼び出し側が省略した場合に使う）
  *   FEEDBACK_FORM_URL        フォームの /exec URL（各画面にリンクを置く用途。無くても動く）
+ *   FEEDBACK_OWNER_DISCORD_ID このアプリを開発した人の Discord user ID
  *   DISCORD_BOT_TOKEN        Discord Bot トークン（DM 送信用。webhook では DM できない）
  *   DISCORD_DM_USER_ID       DM の送信先ユーザーID
  *   FEEDBACK_WORKSPACE_DOMAIN シートURLに挟む Workspace ドメイン（未設定なら素URL）
@@ -47,6 +48,7 @@ function _FeedbackRelay_config() {
     url: String(props.getProperty('FEEDBACK_RELAY_URL') || ''),
     secret: String(props.getProperty('FEEDBACK_RELAY_SECRET') || ''),
     appName: String(props.getProperty('FEEDBACK_APP_NAME') || ''),
+    ownerDiscordId: String(props.getProperty('FEEDBACK_OWNER_DISCORD_ID') || ''),
     webhook: String(props.getProperty('DISCORD_FEEDBACK_WEBHOOK') || ''),
     logSsId: String(props.getProperty('FEEDBACK_LOG_SS_ID') || ''),
     logSheetName: String(props.getProperty('FEEDBACK_LOG_SHEET_NAME') || ''),
@@ -104,6 +106,12 @@ function _FeedbackRelay_buildForm(config, payload) {
     page_path: String(payload.pagePath || ''),
     source_url: String(payload.sourceUrl || '')
   };
+  if (/^\d{17,20}$/.test(String(config.ownerDiscordId || ''))) {
+    form.owner_discord_id = String(config.ownerDiscordId);
+  }
+  if (/^\d{17,20}$/.test(String(payload.submitterDiscordId || ''))) {
+    form.submitter_discord_id = String(payload.submitterDiscordId);
+  }
   if (blobs.length) form.screenshot = blobs[0];
   return form;
 }
@@ -287,18 +295,20 @@ function FeedbackRelay_submit(payload) {
  * 管理コマンド: 中継の設定を Script Properties に保存する。
  * 戻り値にシークレットそのものは含めない。
  */
-function Admin_setFeedbackRelay(url, secret, appName, formUrl) {
+function Admin_setFeedbackRelay(url, secret, appName, formUrl, ownerDiscordId) {
   var props = PropertiesService.getScriptProperties();
   if (url !== undefined && url !== null) props.setProperty('FEEDBACK_RELAY_URL', String(url));
   if (secret !== undefined && secret !== null) props.setProperty('FEEDBACK_RELAY_SECRET', String(secret));
   if (appName !== undefined && appName !== null) props.setProperty('FEEDBACK_APP_NAME', String(appName));
   // 各画面に置く「🐛 不具合・要望」リンクの組み立て元。Web アプリの /exec URL をそのまま入れる。
   if (formUrl !== undefined && formUrl !== null) props.setProperty('FEEDBACK_FORM_URL', String(formUrl));
+  // 既存の4引数呼び出しでは、設定済みの開発者IDを変更しない。
+  if (ownerDiscordId !== undefined && ownerDiscordId !== null) props.setProperty('FEEDBACK_OWNER_DISCORD_ID', String(ownerDiscordId));
   return {
     ok: true,
     set: {
       url: Boolean(url), secret: Boolean(secret),
-      appName: String(appName || ''), formUrl: Boolean(formUrl)
+      appName: String(appName || ''), formUrl: Boolean(formUrl), ownerDiscordId: Boolean(ownerDiscordId)
     }
   };
 }
@@ -324,7 +334,7 @@ function Admin_setFeedbackRelayFromFile(fileId) {
   var cfg = null;
   try { cfg = JSON.parse(raw); } catch (e) { return { ok: false, error: '設定ファイルが JSON ではありません' }; }
   if (!cfg || typeof cfg !== 'object') return { ok: false, error: '設定ファイルの中身が不正' };
-  return Admin_setFeedbackRelay(cfg.url, cfg.secret, cfg.appName, cfg.formUrl);
+  return Admin_setFeedbackRelay(cfg.url, cfg.secret, cfg.appName, cfg.formUrl, cfg.ownerDiscordId);
 }
 
 /** 読み取り専用の疎通確認。値そのものは返さない。 */
@@ -334,6 +344,7 @@ function FeedbackRelay_ping() {
     ok: true,
     hasUrl: Boolean(config.url),
     hasSecret: Boolean(config.secret),
+    hasOwnerDiscordId: /^\d{17,20}$/.test(config.ownerDiscordId),
     appName: config.appName,
     webhookFallback: Boolean(config.webhook),
     dmConfigured: Boolean(config.botToken && config.dmUserId),
@@ -524,7 +535,7 @@ function _FeedbackRelay_ensureLogSheet(ss, sheetName) {
 
 /**
  * FeedbackRelay_submitFromForm(payload) — google.script.run から呼ばれる、未認証フォームの送信口。
- * payload = { company(honeypot), kind, title, body, submitter, appName, sourceUrl, pagePath,
+ * payload = { company(honeypot), kind, title, body, submitter, submitterDiscordId?, appName, sourceUrl, pagePath,
  *             images: [{name, mimeType, base64}], logSpreadsheetId?, logSheetName? }
  *
  * 濫用対策（常時有効）: honeypot / レート制限(10分5件) / 文字数切り詰め / 画像上限。
@@ -552,6 +563,8 @@ function FeedbackRelay_submitFromForm(payload) {
   var kindLabel = String(payload.kind || '') === '要望' ? '要望' : '不具合';
   var appName = String(payload.appName || '').trim();
   var submitter = String(payload.submitter || '').trim();
+  var submitterDiscordId = /^\d{17,20}$/.test(String(payload.submitterDiscordId || '').trim())
+    ? String(payload.submitterDiscordId).trim() : '';
   var sourceUrl = String(payload.sourceUrl || '').trim();
   var pagePath = String(payload.pagePath || '').trim();
 
@@ -583,10 +596,20 @@ function FeedbackRelay_submitFromForm(payload) {
     }
   }
   var source = (appName || 'アプリ') + ' / フォーム';
-  log.appendRow([now, kindLabel, title, body, 'new', '', imageUrls.join('\n'), source]);
+  var logHeaders = log.getRange(1, 1, 1, log.getLastColumn()).getValues()[0]
+    .map(function (value) { return String(value || '').trim(); });
+  var valuesByHeader = {
+    '日時': now, '種別': kindLabel, 'タイトル': title, '内容': body, '状態': 'new',
+    '対応メモ': '', '画像': imageUrls.join('\n'), '送信元': source, '提出者ID': submitterDiscordId
+  };
+  var logRow = logHeaders.map(function (header) {
+    return Object.prototype.hasOwnProperty.call(valuesByHeader, header) ? valuesByHeader[header] : '';
+  });
+  var lastRow = log.getLastRow() + 1;
+  log.getRange(lastRow, 1, 1, logRow.length).setValues([logRow]);
   SpreadsheetApp.flush();
-  var lastRow = log.getLastRow();
-  var readBack = String(log.getRange(lastRow, 3).getValue() || '');
+  var titleColumn = logHeaders.indexOf('タイトル');
+  var readBack = titleColumn >= 0 ? String(log.getRange(lastRow, titleColumn + 1).getValue() || '') : '';
   if (readBack !== title) {
     return { ok: false, error: '記録の読み戻しに失敗しました' };
   }
@@ -600,6 +623,7 @@ function FeedbackRelay_submitFromForm(payload) {
       title: title,
       body: body,
       submitter: submitter,
+      submitterDiscordId: submitterDiscordId,
       pagePath: pagePath,
       sourceUrl: sourceUrl,
       imageBlobs: selected.map(function (item) { return item.blob; })

@@ -62,12 +62,17 @@ Web アプリとして未デプロイの場合は、GAS エディタで「デプ
 
 **このリポジトリは public のため、URL・シークレットの値はどこにも書きません。** 値は GAS の Script Properties に保存し、そこからだけ読みます。
 
-`Admin_setFeedbackRelay(url, secret, appName, formUrl)` を1回だけ実行します。引数は以下の通りです。
+| Script Property | 用途 | 必須条件 |
+|---|---|---|
+| `FEEDBACK_OWNER_DISCORD_ID` | kim と併せて投稿通知を送る開発者の Discord user ID | 標準通知を使う全アプリで必須（17〜20桁） |
+
+`Admin_setFeedbackRelay(url, secret, appName, formUrl, ownerDiscordId)` を1回だけ実行します。引数は以下の通りです。
 
 - `url`: 全社共通の中継エンドポイント URL（既存の GAS アプリで動いている値を流用。分からなければ kim に確認）
 - `secret`: 中継の共有シークレット（同上）
 - `appName`: このアプリの表示名（例: `"予約管理アプリ"`）。通知やフォームの案内文に出ます
 - `formUrl`: 手順4で控えた `/exec` URL（各画面に「🐛 不具合・要望」リンクを置く場合に使う。省略可）
+- `ownerDiscordId`: このアプリを開発した人の Discord user ID（17〜20桁）。`FEEDBACK_OWNER_DISCORD_ID` として保存され、kim と開発者の両方へ DM するため必須
 
 **コマンドキューがあるアプリ**（実行パネル等から関数を呼べる仕組みがある場合）: 実行パネルから `Admin_setFeedbackRelay` を選び、上記の値を引数で渡して実行します。
 
@@ -79,7 +84,8 @@ function _tmp_setFeedbackRelay() {
     'https://中継のURL',
     '共有シークレット',
     'このアプリの表示名',
-    'https://script.google.com/.../exec'
+    'https://script.google.com/.../exec',
+    'あなたの17〜20桁のDiscordユーザーID'
   );
 }
 ```
@@ -93,8 +99,9 @@ GAS エディタ上部の関数選択で `_tmp_setFeedbackRelay` を選び「実
 1. ブラウザで `<手順4の/exec URL>?form=feedback` を開き、フォームが表示されることを確認する
 2. 適当なタイトルを入力して送信し、「送信しました。」と表示されることを確認する
 3. 記録先スプレッドシートに「不具合要望」シートが作られ、送信内容が1行追加されていることを確認する
-4. 開発担当の Discord に通知が届いていることを確認する
-5. 設定だけを確認したい場合は、実行パネルまたは GAS エディタから `FeedbackRelay_ping()` を実行する（`hasUrl` / `hasSecret` が `true` なら設定済み。値そのものは返ってこない）
+4. kim と開発担当の Discord の両方に通知が届いていることを確認する
+5. 設定だけを確認したい場合は、実行パネルまたは GAS エディタから `FeedbackRelay_ping()` を実行する（`hasUrl` / `hasSecret` / `hasOwnerDiscordId` が `true` なら設定済み。値そのものは返ってこない）
+6. 対応 Issue を closed にし、夜間ジョブから投稿者本人へ完了 DM が届くことを確認する
 
 ## 7. うまくいかない時の対応表
 
@@ -154,8 +161,8 @@ Web アプリとして公開する設定と、中継へ通信するスコープ�
 
 | 呼び出し方 | 例 | 登録の書き方 |
 |---|---|---|
-| `commands[fn].apply(null, args)`（配列を展開） | ブース制作アプリ | `function (url, secret, appName, formUrl) { return Admin_setFeedbackRelay(url, secret, appName, formUrl); }` |
-| `COMMANDS[fn](args)`（配列をそのまま第1引数へ） | CO2算出ツール | `(a) => { var o = Array.isArray(a) ? (a[0] \|\| {}) : (a \|\| {}); return Admin_setFeedbackRelay(o.url, o.secret, o.appName, o.formUrl); }` |
+| `commands[fn].apply(null, args)`（配列を展開） | ブース制作アプリ | `function (url, secret, appName, formUrl, ownerDiscordId) { return Admin_setFeedbackRelay(url, secret, appName, formUrl, ownerDiscordId); }` |
+| `COMMANDS[fn](args)`（配列をそのまま第1引数へ） | CO2算出ツール | `(a) => { var o = Array.isArray(a) ? (a[0] \|\| {}) : (a \|\| {}); return Admin_setFeedbackRelay(o.url, o.secret, o.appName, o.formUrl, o.ownerDiscordId); }` |
 
 確認せずにコピペすると `fileId は必須` のような「引数が届かない」エラーになります。
 

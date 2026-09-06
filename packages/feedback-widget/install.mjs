@@ -3,15 +3,26 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { homedir } from "node:os";
+
+const DISCORD_ID_PATTERN = /^\d{17,20}$/;
+export function readOwnerDiscordId(file = join(homedir(), ".claude", "orgiast-discord-user-id.txt")) {
+  try {
+    const value = readFileSync(file, "utf8").trim();
+    return DISCORD_ID_PATTERN.test(value) ? value : "";
+  } catch { return ""; }
+}
+
+export async function main() {
 
 const RAW = "https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/packages/feedback-widget/templates";
 const TEMPLATE_NAMES = ["api-route.ts", "FeedbackWidget.tsx", "FeedbackTriggerButton.tsx", "feedback-admin-page.tsx", "feedback-update-route.ts", "list-feedback.mjs", "migration_app_feedback.sql"];
-const args = process.argv.slice(2); const options = { target: process.cwd(), appName: "", channel: "", webhook: "", relay: "", relaySecret: "", admin: true, dryRun: false, force: false };
+const args = process.argv.slice(2); const options = { target: process.cwd(), appName: "", channel: "", webhook: "", relay: "", relaySecret: "", ownerDiscordId: "", admin: true, dryRun: false, force: false };
 function value(name) { const index = args.indexOf(name); if (index < 0 || !args[index + 1]) return ""; return args[index + 1]; }
-options.target = resolve(value("--target") || options.target); options.appName = value("--app-name"); options.channel = value("--discord-channel") || options.channel; options.webhook = value("--webhook"); options.relay = value("--relay"); options.relaySecret = value("--relay-secret");
+options.target = resolve(value("--target") || options.target); options.appName = value("--app-name"); options.channel = value("--discord-channel") || options.channel; options.webhook = value("--webhook"); options.relay = value("--relay"); options.relaySecret = value("--relay-secret"); options.ownerDiscordId = value("--owner-discord-id");
 options.admin = !args.includes("--no-admin-page"); options.dryRun = args.includes("--dry-run"); options.force = args.includes("--force");
-const known = new Set(["--target", "--app-name", "--discord-channel", "--webhook", "--relay", "--relay-secret", "--no-admin-page", "--dry-run", "--force"]);
-for (let i = 0; i < args.length; i++) { if (!known.has(args[i])) throw new Error(`不明なオプション: ${args[i]}`); if (["--target", "--app-name", "--discord-channel", "--webhook", "--relay", "--relay-secret"].includes(args[i])) i++; }
+const known = new Set(["--target", "--app-name", "--discord-channel", "--webhook", "--relay", "--relay-secret", "--owner-discord-id", "--no-admin-page", "--dry-run", "--force"]);
+for (let i = 0; i < args.length; i++) { if (!known.has(args[i])) throw new Error(`不明なオプション: ${args[i]}`); if (["--target", "--app-name", "--discord-channel", "--webhook", "--relay", "--relay-secret", "--owner-discord-id"].includes(args[i])) i++; }
 
 const packageFile = join(options.target, "package.json");
 if (!existsSync(packageFile)) throw new Error(`package.json がありません: ${packageFile}`);
@@ -33,6 +44,18 @@ options.channel ||= String(env.DISCORD_FEEDBACK_CHANNEL_ID || "");
 const changed = []; const skipped = []; const pending = [];
 function log(line = "") { console.log(line); }
 function put(path, content, updateExisting = false) { const rel = relative(options.target, path); const normalized = content.replace(/\r\n/g, "\n"); if (existsSync(path) && readFileSync(path, "utf8").replace(/\r\n/g, "\n") === normalized) return; if (existsSync(path) && !options.force && !updateExisting) { skipped.push(rel); return; } changed.push(rel); if (!options.dryRun) { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, normalized, "utf8"); } }
+const discoveredOwnerDiscordId = options.ownerDiscordId || readOwnerDiscordId();
+const ownerDiscordId = DISCORD_ID_PATTERN.test(discoveredOwnerDiscordId) ? discoveredOwnerDiscordId : "";
+if (!env.FEEDBACK_OWNER_DISCORD_ID && ownerDiscordId) {
+  const envLocal = join(options.target, ".env.local");
+  const before = existsSync(envLocal) ? readFileSync(envLocal, "utf8") : "";
+  const separator = before && !before.endsWith("\n") ? "\n" : "";
+  put(envLocal, `${before}${separator}FEEDBACK_OWNER_DISCORD_ID=${ownerDiscordId}\n`, true);
+  env.FEEDBACK_OWNER_DISCORD_ID = ownerDiscordId;
+}
+const hasOwnerDiscordId = DISCORD_ID_PATTERN.test(String(env.FEEDBACK_OWNER_DISCORD_ID || "").trim());
+if (hasOwnerDiscordId) pending.push("vercel env add FEEDBACK_OWNER_DISCORD_ID production");
+else pending.push("FEEDBACK_OWNER_DISCORD_ID=<あなたのDiscordユーザーID> を .env.local と本番環境へ設定（投稿時にあなたへも DM が届く）");
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 // raw.githubusercontent.com は一時的に 429/5xx を返すことがある。配布側で吸収する(部分適用を作らないため取得は先に全件行う)。
 async function template(name) {
@@ -114,7 +137,8 @@ log("環境変数:");
 for (const name of ["NEXT_PUBLIC_SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "NEXT_PUBLIC_APP_URL"]) log(env[name] ? `- ✅ ${name}: OK` : `- ⚠️ ${name}: 未設定。Vercel: vercel env add ${name} production`);
 const hasRelay = Boolean((env.FEEDBACK_RELAY_URL || options.relay) && (env.FEEDBACK_RELAY_SECRET || options.relaySecret));
 const hasBot = Boolean(env.DISCORD_BOT_TOKEN && (env.DISCORD_FEEDBACK_CHANNEL_ID || options.channel));
-if (hasRelay) log("- ✅ 通知経路: OK（kim へ DM）");
+if (hasRelay && hasOwnerDiscordId) log("- ✅ 通知経路: OK（kim + 開発者へ DM）");
+else if (hasRelay) log("- ✅ 通知経路: OK（kim へ DM。開発者ID未設定）");
 else if (hasBot || env.FEEDBACK_DISCORD_WEBHOOK_URL || options.webhook) log("- ✅ 通知経路: OK（Discord チャンネル・後方互換）");
 else log("- ⚠️ 通知経路: 中継 or Bot or webhook のいずれかを設定してください");
 log("残作業:"); if (pending.length) pending.forEach((item) => log(`- [ ] ${item}`)); else log("- [x] なし");
@@ -123,3 +147,7 @@ const verifyCommand = existsSync(verifyFile)
   ? `node ${verifyFile} --url <本番URL> --target ${options.target}`
   : `node -e "fetch('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/packages/feedback-widget/verify.mjs?cb='+Date.now()).then(r=>r.text()).then(t=>require('fs').writeFileSync('verify-feedback.mjs',t))" && node verify-feedback.mjs --url <本番URL>`;
 log(`検証: ${verifyCommand}`);
+}
+
+const entry = process.argv[1] ? resolve(process.argv[1]) : "";
+if (entry && resolve(fileURLToPath(import.meta.url)) === entry) await main();

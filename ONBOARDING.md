@@ -731,6 +731,8 @@ node -e "fetch('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rule
 
 **溜まった未対応は毎日プッシュする（同上）**。記録シートに入っただけで放置されるのを防ぐため、未対応の一覧を**日次1本**で本人の DM に送る（ローカル版は `tools/feedback-nag.mjs` + `tools/register-feedback-nag-task.ps1`、GAS 版は `FeedbackRelay_nagPending()` + `FeedbackRelay_installNagTrigger()`。同名ハンドラを全削除してから1本だけ作る＝重複防止。GAS のトリガー上限20本に注意）。**「未対応」＝ 状態が done/完了/対応済/却下 のいずれでもないもの全部**（対応メモが入っていても除外しない）。各行に `未返答` / `返答済・未完了` を出して区別する——実測でブース制作アプリの唯一の未完了1件が「メモ入りだが未完了」だったため、メモ空だけに絞ると取りこぼす。列は必ずヘッダー名で引く（`受付ID` 列が後から増えた実績があり列番号固定は壊れる）。**0件のときは送らない**（毎日の無意味通知を作らない）。導入完了の条件は「実際に着信を確認したこと」で、設定しただけを完了と呼ばない（§1.4）。
 
+**投稿時は「開発した人 + kim」の2名に DM する（全アカウント絶対 / 2026-09-06 kim厳命）**。開発者IDは `FEEDBACK_OWNER_DISCORD_ID`（Next.js は env、GAS は Script Property）で渡し、インストーラが `~/.claude/orgiast-discord-user-id.txt` から自動設定するので user には聞かない。**対応完了時は投稿者本人へ必ず DM で完了報告する**。経路は夜間バッチ登録済みの `tools/feedback-done-notify.mjs` → 中継 `POST /api/feedback-done`、完了判定はその投稿から作られた GitHub Issue が closed になったこと。Issue を経由せず直した場合は `node tools/feedback-done-notify.mjs --message-id <id> --summary "..."` を手動実行する。投稿者を一意に特定できない場合は推測で別人へ送らず、kim にまとめて届く「返せなかった件」を確認し、名簿（Discord の表示名）を直して再実行する。**今後作るアプリはこの2つなしで「完成」と呼ばない**。導入完了条件は、実際に開発者へ着信し、完了報告が投稿者へ着信したことを確認したこと（§1.4）。
+
 ---
 
 

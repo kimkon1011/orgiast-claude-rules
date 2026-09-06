@@ -298,8 +298,8 @@ try {
     }
     if ($growiManual) {
         try {
-            & $node.Source $growiManual sync
-            if ($LASTEXITCODE -eq 2) { Write-NightlyLog 'growi-manual' 'skip:鍵なし' } elseif ($LASTEXITCODE -ne 0) { Write-NightlyLog 'growi-manual' ("error:終了コード" + $LASTEXITCODE) } else { Write-NightlyLog 'growi-manual' 'ok' }
+            & $node.Source $growiManual sync-growi
+            if ($LASTEXITCODE -eq 2) { Write-NightlyLog 'growi-manual' 'skip:認証情報なし' } elseif ($LASTEXITCODE -ne 0) { Write-NightlyLog 'growi-manual' ("error:終了コード" + $LASTEXITCODE) } else { Write-NightlyLog 'growi-manual' 'ok' }
         } catch {
             Write-NightlyLog 'growi-manual' ("error:" + $_.Exception.Message)
         }

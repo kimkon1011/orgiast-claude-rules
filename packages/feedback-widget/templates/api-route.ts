@@ -115,6 +115,7 @@ type FeedbackNotification = {
   body: string;
   pagePath: string | null;
   submitter: string | null;
+  submitterDiscordId: string | null;
   sourceUrl: string;
 };
 
@@ -130,6 +131,9 @@ async function notifyRelay(feedback: FeedbackNotification, image: { name: string
     form.set("body", feedback.body);
     form.set("page_path", feedback.pagePath || "");
     form.set("submitter", feedback.submitter || "");
+    const ownerDiscordId = String(process.env.FEEDBACK_OWNER_DISCORD_ID || "").trim();
+    if (/^\d{17,20}$/.test(ownerDiscordId)) form.set("owner_discord_id", ownerDiscordId);
+    if (feedback.submitterDiscordId) form.set("submitter_discord_id", feedback.submitterDiscordId);
     form.set("source_url", feedback.sourceUrl);
     // 中継側で kim の DM へ添付できるよう、受け取った画像を加工せず同じバイト列で渡す。
     if (image) form.set("screenshot", new File([new Uint8Array(image.data)], image.name || "screenshot.png", { type: image.type || "image/png" }));
@@ -191,6 +195,8 @@ export async function POST(request: NextRequest) {
     const url = (process.env.NEXT_PUBLIC_SUPABASE_URL || "").replace(/\/$/, "");
     const hasDb = Boolean(url && process.env.SUPABASE_SERVICE_ROLE_KEY);
     const clientSubmitter = String(form.get("submitter") || "").trim() || null;
+    const rawSubmitterDiscordId = String(form.get("submitter_discord_id") || "").trim();
+    const submitterDiscordId = /^\d{17,20}$/.test(rawSubmitterDiscordId) ? rawSubmitterDiscordId : null;
     const email = hasDb ? await authEmail(request, url) : null;
     const submitter = email || clientSubmitter;
     const screenshot = form.get("screenshot");
@@ -202,7 +208,7 @@ export async function POST(request: NextRequest) {
     let db = false;
     if (hasDb) {
       try {
-        const response = await fetch(`${url}/rest/v1/app_feedback`, { method: "POST", headers: supabaseHeaders({ "Content-Type": "application/json", Prefer: "return=representation" }), body: JSON.stringify({ kind, title, body, page_path: pagePath, submitter, submitter_email: email, screenshot_path: screenshotPath }) });
+        const response = await fetch(`${url}/rest/v1/app_feedback`, { method: "POST", headers: supabaseHeaders({ "Content-Type": "application/json", Prefer: "return=representation" }), body: JSON.stringify({ kind, title, body, page_path: pagePath, submitter, submitter_email: email, submitter_discord_id: submitterDiscordId, screenshot_path: screenshotPath }) });
         if (response.ok) { const rows = await response.json(); id = rows?.[0]?.id || null; db = true; }
         else console.error("feedback DB insert failed:", await responseText(response));
       } catch (error) { console.error("feedback DB insert failed:", error); }
@@ -212,7 +218,7 @@ export async function POST(request: NextRequest) {
     const sourceUrl = `${baseUrl}${pagePath || "/"}`;
     const content = [`🐛 **[${APP_NAME}] ${kind === "bug" ? "不具合" : "要望"}: ${title}**`, body.slice(0, 300), `提出者: ${submitter || "不明"}`, `画面: ${pagePath || "不明"}`, ADMIN_PAGE ? `管理画面: ${baseUrl}/feedback` : `提出元: ${baseUrl}${pagePath || "/"}`, screenshotLink ? `📎 スクショ: ${screenshotLink}` : null].filter(Boolean).join("\n");
     let notification: NotificationResult = { sent: false };
-    if (await notifyRelay({ kind, title, body, pagePath, submitter, sourceUrl }, attachment)) notification = { sent: true, via: "relay" };
+    if (await notifyRelay({ kind, title, body, pagePath, submitter, submitterDiscordId, sourceUrl }, attachment)) notification = { sent: true, via: "relay" };
     else notification = await notifyDiscord(content, attachment);
     const discord = notification.sent;
     if (!db && !discord) return NextResponse.json({ ok: false, error: hasDb ? "DB保存と通知の両方に失敗しました" : "保存先が未設定です。Supabaseまたは通知経路を設定してください" }, { status: 503 });

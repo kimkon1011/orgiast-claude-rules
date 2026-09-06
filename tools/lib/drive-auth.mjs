@@ -15,6 +15,7 @@ export async function getDriveToken({
   keyPath = process.env.GOOGLE_SA_KEY ?? defaultDriveKeyPath(),
   impersonate = process.env.GOOGLE_IMPERSONATE ?? 'kim@orgiast.jp',
   scope = DRIVE_SCOPE,
+  signal,
 } = {}) {
   const key = JSON.parse(readFileSync(keyPath, 'utf8'));
   const now = Math.floor(Date.now() / 1000);
@@ -32,6 +33,7 @@ export async function getDriveToken({
   const jwt = `${header}.${claims}.${signer.sign(key.private_key, 'base64url')}`;
   const res = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
+    signal,
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: `grant_type=${encodeURIComponent('urn:ietf:params:oauth:grant-type:jwt-bearer')}&assertion=${jwt}`,
   });

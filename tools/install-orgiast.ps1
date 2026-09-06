@@ -18,6 +18,7 @@ param(
   [string]$GeminiKey = $env:ORGIAST_GEMINI_KEY, # Gemini APIキー(配布者が埋め込み→鍵作成画面を省略・任意)
   [switch]$NoOllama,                           # Ollama(無料ローカル)導入をスキップ
   [switch]$NoReboot,                           # 最後の自動再起動をスキップ
+  [switch]$NonInteractive,                     # CI等: ブラウザ/入力/ログイン待ち/再起動だけを省略
   [switch]$Yes                                # 確認を省略(配布ランチャーから)
 )
 $ErrorActionPreference = 'Stop'
@@ -288,6 +289,7 @@ $wanted = @(
   "node `"$h\orgiast-claude-rules\tools\claude-cost-reporter.mjs`"",
   "node `"$h\orgiast-claude-rules\tools\tool-adoption-check.mjs`" --fix"
 )
+try {
 if (-not (Test-Path $setPath)) { '{}' | Set-Content $setPath -Encoding UTF8 }
 Copy-Item $setPath ($setPath + '.bak.' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-installer') -Force
 $json = Get-Content $setPath -Raw | ConvertFrom-Json
@@ -357,6 +359,11 @@ if (Test-Path $dstC) {
 }
 ($json | ConvertTo-Json -Depth 20) | Set-Content $setPath -Encoding UTF8
 OK "settings.json 更新(バックアップ済)"
+} catch {
+  # PS5.1 は大きい/キーの大小が衝突する settings.json を ConvertFrom-Json で読めないことがある。
+  # 直後の Node 製 register-hooks.mjs が同じ必須 hook を安全に登録するため、全体は止めない。
+  Warn ("従来hookの登録をスキップし、Node互換処理へ切り替えます: " + $_.Exception.Message)
+}
 
 # .mjs を正として必須hookを一括登録。旧個別hookと共存しても register-hooks 側で重複を防ぎ、
 # delegation-gate は cost-routing-gate へ移行する。
@@ -564,6 +571,9 @@ if (-not $geminiKey -and $embedKey) {
   OK "Gemini APIキー(会社共有)を設定しました(鍵作成の操作は不要)"
 }
 if ($geminiKey) { OK "Gemini APIキーは設定済み(スキップ)" }
+elseif ($NonInteractive) {
+  Warn "Gemini APIキー入力は CI のためスキップ"
+}
 else {
   Say "  これから APIキー作成ページをブラウザで開きます。会社のGoogle(orgiast.jp)でログインしてください。" 'Gray'
   Say "  ページで『APIキーを作成 / Create API key』を押し、出てきた文字(AIza... か AQ...)をコピー。" 'Gray'
@@ -617,7 +627,16 @@ foreach ($bf in $bomFix) { try { if ($bf -and (Test-Path $bf)) { $bc = [System.I
 # --- Codex ログイン(Codex導入済みの時だけ・未導入なら待たずにスキップ) ---
 Say "`n============================================================" 'Green'
 $codexCmd = (Get-Command codex -ErrorAction SilentlyContinue)
-if (-not $codexCmd) {
+if ($NonInteractive) {
+  Say " セットアップ処理完了 (非対話モード)" 'Green'
+  # ASCII のみの完了マーカー。CI は BOM 無しの一時 .ps1 で判定するため、日本語で照合すると PS5.1 が CP932 と誤読して壊れる。
+  Say "[ORGIAST-INSTALL-COMPLETE mode=noninteractive]" 'Green'
+  Say "============================================================" 'Green'
+  Warn "Codexログインと再起動は CI のためスキップ"
+  Say "`n--- 適用状況の総合チェック ---" 'Cyan'
+  try { $vs = Join-Path $REPO 'tools\verify-setup.ps1'; if (Test-Path $vs) { & $vs } } catch {}
+}
+elseif (-not $codexCmd) {
   Say " ほぼ完了！ (ただし Codex CLI が未導入)" 'Yellow'
   Say "============================================================" 'Green'
   Warn "Codex未導入のためログインはスキップ(待ちません)。ネット改善後に青い画面で『npm i -g @openai/codex』→『codex login』(seisaku-team@orgiast.jp)を。"

@@ -11,8 +11,9 @@ Google Apps Script（GAS）で作った社内アプリへ、不具合・要望�
 
 1. 対象アプリの Web アプリ URL に `?form=feedback` を付けて開く（ログイン・token 不要）
 2. フォーム送信 → 記録先スプレッドシートの「不具合要望」シートに append → 読み戻して照合
-3. 記録成功後、全社共通の中継 (`FEEDBACK_RELAY_URL`) へ通知 → 中継失敗時のみ `DISCORD_FEEDBACK_WEBHOOK` にフォールバック
+3. 記録成功後、中継が kim + 開発者へ DM → 中継失敗時のみ Bot DM、webhook の順でフォールバック
 4. 通知が失敗しても記録（②）は成功として扱う（通知は best-effort）
+5. Issue closed 後、夜間ジョブが投稿者へ完了 DM
 
 ## 記録先の決め方
 
@@ -31,7 +32,11 @@ Google Apps Script（GAS）で作った社内アプリへ、不具合・要望�
 
 ## 設定はすべて Script Properties
 
-このリポジトリは public のため、URL・シークレット・Webhook 等の値はコード中に一切書きません。`Admin_setFeedbackRelay(url, secret, appName, formUrl)` を GAS エディタか clasp 経由で1回実行して Script Properties に保存します。詳細は [INSTALL.md](./INSTALL.md) の手順5。
+| Script Property | 用途 | 必須条件 |
+|---|---|---|
+| `FEEDBACK_OWNER_DISCORD_ID` | kim と併せて投稿通知を送る開発者の Discord user ID | 標準通知を使う全アプリで必須（17〜20桁） |
+
+このリポジトリは public のため、URL・シークレット・Webhook 等の値はコード中に一切書きません。`Admin_setFeedbackRelay(url, secret, appName, formUrl, ownerDiscordId)` を GAS エディタか clasp 経由で1回実行して Script Properties に保存します。`FEEDBACK_OWNER_DISCORD_ID` は投稿時に kim と併せて DM する開発者ID（17〜20桁）で、標準通知を使う全アプリで必須です。詳細は [INSTALL.md](./INSTALL.md) の手順5。
 
 ## 関連パッケージ
 

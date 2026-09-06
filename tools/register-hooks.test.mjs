@@ -79,3 +79,20 @@ test('旧Stop gate 9本をrunner 1本へ移行し無関係なStop hookを残す'
   assert.ok(commands.some((value) => value.includes('keep-tool.mjs')));
   assert.ok(fs.readdirSync(path.dirname(settingsFile)).some((name) => /^settings\.json\.bak\..+-installer$/.test(name)));
 });
+
+test('gtasks-pending-notice hook は同期かつtimeout 15で1本だけ登録される', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-gtasks-'));
+  const repo = path.resolve('.');
+  const settingsFile = path.join(home, '.claude', 'settings.json');
+  const env = { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo };
+  execFileSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { encoding: 'utf8', env });
+  const second = execFileSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { encoding: 'utf8', env });
+  const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  const hooks = settings.hooks.SessionStart.flatMap((group) => group.hooks || [])
+    .filter((hook) => String(hook.command).includes('gtasks-pending-notice.mjs'));
+  assert.equal(hooks.length, 1);
+  assert.equal(hooks[0].timeout, 15);
+  assert.equal('async' in hooks[0], false);
+  assert.match(second, /hook は既に登録済み\(変更なし\)/);
+  fs.rmSync(home, { recursive: true, force: true });
+});

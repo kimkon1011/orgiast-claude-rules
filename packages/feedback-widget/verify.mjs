@@ -7,6 +7,9 @@ const base = (at("--url") || "").replace(/\/$/, ""); const target = resolve(at("
 if (!base) { console.error("❌ --url https://<app>.vercel.app を指定してください"); process.exit(1); }
 const env = { ...process.env };
 for (const name of [".env", ".env.local"]) { const file = join(target, name); if (!existsSync(file)) continue; for (const line of readFileSync(file, "utf8").split(/\r?\n/)) { const match = line.match(/^\s*([A-Za-z_][\w]*)\s*=\s*(.*)\s*$/); if (match) env[match[1]] = match[2].replace(/^(['"])(.*)\1$/, "$2"); } }
+const envLocalFile = join(target, ".env.local");
+const envLocalHasOwner = existsSync(envLocalFile) && /^\s*FEEDBACK_OWNER_DISCORD_ID\s*=/m.test(readFileSync(envLocalFile, "utf8"));
+if (!envLocalHasOwner) console.warn("⚠️ .env.local に FEEDBACK_OWNER_DISCORD_ID がありません（開発者への DM は送られません）");
 const stamp = new Date().toISOString(); const form = new FormData(); form.set("kind", "request"); form.set("title", "[install-verify] 動作確認"); form.set("body", `自動インストール検証 ${stamp}`); form.set("page_path", "/install-verify");
 let data; try { const response = await fetch(`${base}/api/feedback`, { method: "POST", body: form }); data = await response.json().catch(() => ({})); if (!response.ok || !data.ok) throw new Error(`${response.status}: ${data.error || "応答が不正です"}`); console.log("✅ API 投稿成功"); console.log(`   sinks: DB=${Boolean(data.sinks?.db)} Discord=${Boolean(data.sinks?.discord)} id=${data.id || "なし"}`); } catch (error) { console.error(`❌ API 投稿失敗: ${error.message}`); console.error("   原因候補: route 未デプロイ / 環境変数未設定 / app_feedback テーブル未作成 / 認証エラー(401)"); process.exit(1); }
 const url = (env.NEXT_PUBLIC_SUPABASE_URL || "").replace(/\/$/, ""); const key = env.SUPABASE_SERVICE_ROLE_KEY;

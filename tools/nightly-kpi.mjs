@@ -20,6 +20,8 @@ export const NO_OP_PATTERNS = [
 ];
 
 export const TODO_SIMILARITY_THRESHOLD = 0.7;
+export const PR_YIELD_RATE_THRESHOLD = 0.2;
+export const PR_YIELD_LOW_STREAK_DAYS = 2;
 
 export const BATCH_RESULT_PATTERNS = {
   success: /^ok(?::|$)/i,
@@ -271,7 +273,13 @@ export function improvementTodos(kpi, previous = null) {
   else if (!kpi.batchCompleted) todos.push(`P0: 夜間バッチが途中で停止（サマリ行なし）。最終ステップ = ${kpi.lastStep ?? '不明'}`);
   if (kpi.failedSteps.length) todos.push(`P1: 夜間バッチのステップ失敗: ${kpi.failedSteps.join('、')}`);
   if (kpi.noOpRate !== null && kpi.noOpRate > 0.3) todos.push(`P1: 空回り率 ${pct(kpi.noOpRate)}。完了済みTODOが引き継ぎ票に残り再配布されている。next-session.md の ✅ 済みブロックを刈る`);
-  if (kpi.prYieldRate !== null && kpi.prYieldRate < 0.3 && kpi.sessions >= 5) todos.push(`P1: 夜間 ${kpi.sessions} セッションに対し PR は ${kpi.prsCreated} 本（成果率 ${pct(kpi.prYieldRate)}）。TODO の粒度と配り方を見直す`);
+  const lowPrYieldStreak = [kpi, previous].slice(0, PR_YIELD_LOW_STREAK_DAYS).every((day) => (
+    day?.prYieldRate !== null
+    && day?.prYieldRate !== undefined
+    && day.prYieldRate < PR_YIELD_RATE_THRESHOLD
+    && day.sessions >= 5
+  ));
+  if (lowPrYieldStreak) todos.push(`P1: 夜間 ${kpi.sessions} セッションに対し PR は ${kpi.prsCreated} 本（成果率 ${pct(kpi.prYieldRate)}）。TODO の粒度と配り方を見直す`);
   if (kpi.closeRate !== null && previous?.closeRate !== null && previous?.closeRate !== undefined && kpi.closeRate < previous.closeRate && kpi.closeRate < 0.2) todos.push(`P1: 消化率が ${pct(kpi.closeRate)} に低下`);
   return todos;
 }

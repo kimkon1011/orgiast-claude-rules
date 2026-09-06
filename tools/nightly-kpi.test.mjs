@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  BATCH_RESULT_PATTERNS, NO_OP_PATTERNS, TODO_SIMILARITY_THRESHOLD,
+  BATCH_RESULT_PATTERNS, NO_OP_PATTERNS, PR_YIELD_LOW_STREAK_DAYS,
+  PR_YIELD_RATE_THRESHOLD, TODO_SIMILARITY_THRESHOLD,
   appendImprovementTodos, calculateKpi, clusterBySimilarity, isInNightlyWindow,
   formatText, githubRepo, improvementTodos, normalizeTodo, parseBatchLog, parseRun, parseTodos,
   queryPullRequests, similarity, todoTokens,
@@ -197,12 +198,50 @@ test('GitHub remote URLをghのowner/repo形式に正規化する', () => {
   assert.equal(githubRepo('git@github.com:owner/repo.git'), 'owner/repo');
 });
 
-test('成果率30%未満かつ5セッション以上だけ改善TODOを起票する', () => {
+test('成果率20%未満が2日連続かつ両日5セッション以上なら改善TODOを起票する', () => {
   const base = { date, batchRan: true, batchCompleted: true, failedSteps: [], noOpRate: 0, closeRate: null };
-  assert.match(improvementTodos({ ...base, sessions: 5, prsCreated: 1, prYieldRate: 0.2 })[0], /夜間 5 セッションに対し PR は 1 本（成果率 20\.0%）/);
-  assert.deepEqual(improvementTodos({ ...base, sessions: 4, prsCreated: 0, prYieldRate: 0 }), []);
-  assert.deepEqual(improvementTodos({ ...base, sessions: 5, prsCreated: 2, prYieldRate: 0.4 }), []);
-  assert.deepEqual(improvementTodos({ ...base, sessions: 5, prsCreated: null, prYieldRate: null }), []);
+  const current = { ...base, sessions: 6, prsCreated: 1, prYieldRate: 1 / 6 };
+  const previous = { ...base, sessions: 5, prsCreated: 0, prYieldRate: 0 };
+  assert.equal(PR_YIELD_RATE_THRESHOLD, 0.2);
+  assert.equal(PR_YIELD_LOW_STREAK_DAYS, 2);
+  assert.match(improvementTodos(current, previous)[0], /夜間 6 セッションに対し PR は 1 本（成果率 16\.7%）/);
+});
+
+test('当日のみ成果率20%未満なら改善TODOを起票しない', () => {
+  const base = { date, batchRan: true, batchCompleted: true, failedSteps: [], noOpRate: 0, closeRate: null };
+  assert.deepEqual(improvementTodos(
+    { ...base, sessions: 5, prsCreated: 0, prYieldRate: 0 },
+    { ...base, sessions: 5, prsCreated: 1, prYieldRate: 0.2 },
+  ), []);
+});
+
+test('前日KPIファイルが無い場合は成果率の改善TODOを起票しない', () => {
+  const current = { date, batchRan: true, batchCompleted: true, failedSteps: [], noOpRate: 0, closeRate: null, sessions: 5, prsCreated: 0, prYieldRate: 0 };
+  assert.deepEqual(improvementTodos(current, null), []);
+});
+
+test('前日の成果率がnullなら改善TODOを起票しない', () => {
+  const base = { date, batchRan: true, batchCompleted: true, failedSteps: [], noOpRate: 0, closeRate: null };
+  assert.deepEqual(improvementTodos(
+    { ...base, sessions: 5, prsCreated: 0, prYieldRate: 0 },
+    { ...base, sessions: 5, prsCreated: null, prYieldRate: null },
+  ), []);
+});
+
+test('当日の成果率がnullなら改善TODOを起票しない', () => {
+  const base = { date, batchRan: true, batchCompleted: true, failedSteps: [], noOpRate: 0, closeRate: null };
+  assert.deepEqual(improvementTodos(
+    { ...base, sessions: 5, prsCreated: null, prYieldRate: null },
+    { ...base, sessions: 5, prsCreated: 0, prYieldRate: 0 },
+  ), []);
+});
+
+test('当日の成果率が20%未満でも5セッション未満なら改善TODOを起票しない', () => {
+  const base = { date, batchRan: true, batchCompleted: true, failedSteps: [], noOpRate: 0, closeRate: null };
+  assert.deepEqual(improvementTodos(
+    { ...base, sessions: 4, prsCreated: 0, prYieldRate: 0 },
+    { ...base, sessions: 5, prsCreated: 0, prYieldRate: 0 },
+  ), []);
 });
 
 test('topicConcentration はJSONにもtextにも現れない', () => {

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { MARKER, appendTodoBlock, insertTodosAtTop, isSkipped, plan, readSkip, readState, selectTasks } from './gtasks-loop.mjs';
+import { HOWTO, MARKER, appendTodoBlock, insertTodosAtTop, isSkipped, plan, readSkip, readState, selectTasks } from './gtasks-loop.mjs';
 import { parseHandoff } from './auto-session.mjs';
 
 test('状態ファイルにある処理済み・保留タスクを除外して上から選ぶ', () => {
@@ -77,4 +77,12 @@ test('先頭ブロックの残TODO直後に差し込み、既存TODOを壊さな
 test('マーカーが無いファイルは従来どおり末尾に追記する', () => {
   const out = insertTodosAtTop('# メモだけ\n', [{ listId: 'l1', taskId: 't1', title: 'あれ' }]);
   assert.ok(out.includes(MARKER) && out.includes('Googleタスク消化: あれ（l1/t1）'));
+});
+
+test('HOWTOは夜間の外部送信を禁止し下書き保存を指示する', () => {
+  assert.match(HOWTO, /禁止.*Discord DM・メール・チャットワーク.*外部へ送信しない/);
+  assert.match(HOWTO, /gtasks-drafts\/<taskId>\.md/);
+  assert.match(HOWTO, /送信は kim が明示的に指示したときだけ/);
+  assert.match(HOWTO, /■ 要確認:/);
+  assert.match(HOWTO, /■ kimの残り1操作:/);
 });

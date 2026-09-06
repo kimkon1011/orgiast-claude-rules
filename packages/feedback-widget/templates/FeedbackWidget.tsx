@@ -3,12 +3,12 @@
 import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { usePathname } from "next/navigation";
 
-type Props = { appName?: string; hideFloatingButton?: boolean; endpoint?: string };
+type Props = { appName?: string; hideFloatingButton?: boolean; endpoint?: string; submitter?: string };
 const z = 2147483000;
 const field: CSSProperties = { boxSizing: "border-box", width: "100%", marginTop: 5, border: "1px solid #d1d5db", borderRadius: 7, padding: "9px 10px", background: "#fff", color: "#111827", font: "inherit" };
 const label: CSSProperties = { display: "block", marginTop: 12, color: "#374151", fontSize: 13, fontWeight: 600 };
 
-export function FeedbackWidget({ appName = "{{APP_NAME}}", hideFloatingButton = false, endpoint = "/api/feedback" }: Props) {
+export function FeedbackWidget({ appName = "{{APP_NAME}}", hideFloatingButton = false, endpoint = "/api/feedback", submitter = "" }: Props) {
   const routePath = usePathname();
   const [open, setOpen] = useState(false);
   const [sending, setSending] = useState(false);
@@ -59,6 +59,8 @@ export function FeedbackWidget({ appName = "{{APP_NAME}}", hideFloatingButton = 
           <label style={label}>種別<select name="kind" style={field}><option value="bug">不具合</option><option value="request">要望</option></select></label>
           <label style={label}>タイトル<input name="title" required style={field} /></label>
           <label style={label}>内容<textarea name="body" required rows={5} style={{ ...field, resize: "vertical" }} /></label>
+          <label style={label}>お名前（Discord の表示名）<input name="submitter" defaultValue={submitter} autoComplete="name" style={field} /></label>
+          <p style={{ margin: "5px 0", color: "#6b7280", fontSize: 12 }}>対応が終わったら Discord の DM で完了をお知らせします</p>
           <p style={{ margin: "5px 0", color: "#6b7280", fontSize: 12 }}>Ctrl+V で画像を貼り付けることもできます。</p>
           <label style={label}>スクリーンショット（任意）<input ref={fileRef} type="file" name="screenshot" accept="image/*" onChange={(e) => setFileName(e.target.files?.[0]?.name || "")} style={{ ...field, padding: 7 }} /></label>
           {fileName && <p style={{ color: "#6b7280", fontSize: 12 }}>選択中: {fileName}</p>}

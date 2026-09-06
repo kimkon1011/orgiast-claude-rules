@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import {
+  appendFeedbackIssueLedger,
   buildIssueBody,
   chainBoothFeedbackIntake,
   buildIssueTitle,
@@ -13,6 +17,16 @@ import {
   resolveRepoFromUrl,
   selectCandidates,
 } from './feedback-to-issues.mjs';
+
+test('Issue 台帳は同じ message_id を重複追記しない', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'feedback-ledger-test-'));
+  const file = path.join(dir, 'ledger.json');
+  try {
+    assert.equal(appendFeedbackIssueLedger(file, { message_id: 'm1', number: 1 }), true);
+    assert.equal(appendFeedbackIssueLedger(file, { message_id: 'm1', number: 2 }), false);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).items, [{ message_id: 'm1', number: 1 }]);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
 
 test('--dismiss の message_id を解析する', () => {
   assert.equal(parseDismissId(['--dismiss', 'abc123']), 'abc123');

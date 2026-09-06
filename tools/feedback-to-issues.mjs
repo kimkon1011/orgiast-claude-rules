@@ -127,6 +127,27 @@ export function loadRelayConfig(home = os.homedir()) {
   };
 }
 
+export function appendFeedbackIssueLedger(file, item) {
+  let ledger = { items: [] };
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (Array.isArray(parsed?.items)) ledger = { ...parsed, items: parsed.items };
+  } catch {}
+  if (ledger.items.some((entry) => String(entry?.message_id) === String(item?.message_id))) return false;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const next = { ...ledger, items: [...ledger.items, item] };
+  const temp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(temp, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
+  fs.renameSync(temp, file);
+  return true;
+}
+
+export function issueIdentity(output) {
+  const url = clean(output).split(/\s+/).find((value) => /^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+\/?$/.test(value)) || '';
+  const match = url.match(/\/issues\/(\d+)\/?$/);
+  return match ? { number: Number(match[1]), url } : null;
+}
+
 export function shellQuote(value) {
   const text = String(value);
   if (process.platform === 'win32') return `"${text.replace(/%/g, '%%').replace(/"/g, '""')}"`;
@@ -267,6 +288,23 @@ export async function main(args = process.argv.slice(2)) {
       const result = runGh(['issue', 'create', '--repo', repo, '--title', title, '--label', 'feedback', '--body-file', bodyFile]);
       if (result.error || result.status !== 0) throw new Error(clean(result.stderr) || result.error?.message || `gh exit ${result.status}`);
       created += 1;
+      try {
+        const issue = issueIdentity(result.stdout);
+        if (!issue) throw new Error('Issue URL を取得できない');
+        appendFeedbackIssueLedger(path.join(os.homedir(), '.claude', 'feedback-issue-ledger.json'), {
+          message_id: item.message_id,
+          repo,
+          number: issue.number,
+          url: issue.url,
+          app_name: clean(item?.app_name),
+          title: clean(item?.title),
+          submitter: clean(item?.submitter),
+          submitter_discord_id: clean(item?.submitter_discord_id) || null,
+          created_at: new Date().toISOString(),
+        });
+      } catch (error) {
+        console.warn(`feedback-to-issues: Issue 台帳への記録に失敗 message_id=${messageId} (${error.message})`);
+      }
       console.log(`feedback-to-issues: 作成済み repo=${repo} title=${title} message_id=${messageId}`);
       try {
         const ack = await relayRequest(urls.ack, config.secret, {

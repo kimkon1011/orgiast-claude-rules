@@ -75,7 +75,7 @@ jobs:
             message="🔒 kim の手動マージが必要(理由: $unsafe_path)"
             # 再評価イベントが多いため、同じ安全弁コメントは一度だけ残す。
             if ! gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$number/comments?per_page=100" --jq '.[].body' | grep -Fqx "$message"; then
-              gh pr comment "$number" --body "$message"
+              gh pr comment "$number" --repo "$GITHUB_REPOSITORY" --body "$message"
             fi
             echo "eligible=false" >> "$GITHUB_OUTPUT"
             exit 0
@@ -87,4 +87,4 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
-        run: gh pr merge --auto --squash --delete-branch "$PR_NUMBER"
+        run: gh pr merge --auto --squash --delete-branch --repo "$GITHUB_REPOSITORY" "$PR_NUMBER"

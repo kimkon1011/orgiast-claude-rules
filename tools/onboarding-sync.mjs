@@ -17,13 +17,14 @@ import { gitBlobSha } from './version-drift.mjs';
 const args = process.argv.slice(2);
 const force = args.includes('--force');
 const dryRun = args.includes('--dry-run');
+const keysOnly = args.includes('--keys-only');
 const targetArg = args.find((x) => x.startsWith('--target='));
 const home = process.env.ORGIAST_HOME || os.homedir();
 const target = targetArg ? targetArg.slice(9) : path.join(home, '.claude', 'CLAUDE.md');
 const statePath = path.join(home, '.claude', '.onboarding-sync-state.json');
 const repoStatePath = path.join(home, '.claude', '.repo-sync-state.json');
 const fallbackStatePath = path.join(home, '.claude', 'onboarding-sync-fallback.json');
-const keysStatePath = path.join(home, '.claude', '.keys-sync-state.json');
+const keysStatePath = path.join(home, '.claude', 'onboarding-sync-keys.json');
 const repoPath = path.join(home, 'orgiast-claude-rules');
 const logPath = path.join(home, '.claude', 'hooks', 'onboarding-sync.log');
 const rawUrl = process.env.ORGIAST_ONBOARDING_URL || 'https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/ONBOARDING.md';
@@ -32,6 +33,26 @@ const beginPrefix = '<!-- BEGIN: オージャスト共通ルール';
 const endMarker = '<!-- END: オージャスト共通ルール -->';
 const indexLead = '全文は ~/.claude/orgiast-onboarding.md（および https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/ONBOARDING.md ）。このファイルは自動ロードされない。判断に迷ったら Read ツールで該当節を読むこと';
 export const PRESERVE_LOCAL_KEYS = new Set(['REPORTER_LABEL', 'REPORTER_HOST']);
+export const KEYS_GUARD_MS = 20 * 60 * 60 * 1000;
+
+export function executionPlan(argv = []) {
+  const onlyKeys = argv.includes('--keys-only');
+  return { syncRepository: !onlyKeys, provisionKeys: true, syncRules: !onlyKeys };
+}
+
+export function shouldRunKeys(previous, now = new Date(), forced = false) {
+  if (forced) return true;
+  if (!previous?.lastRunAt) return true;
+  const elapsed = now - new Date(previous.lastRunAt);
+  return !Number.isFinite(elapsed) || elapsed >= KEYS_GUARD_MS;
+}
+
+export function missingDeclaredKeys(files, exists) {
+  if (!files || typeof files !== 'object' || Array.isArray(files)) return [];
+  return Object.keys(files)
+    .filter((name) => /^[A-Za-z0-9._-]+$/.test(name) && !name.includes('..') && !exists(name))
+    .sort();
+}
 
 export function mergeEnvFile(existingText, incomingText, preserveKeys = PRESERVE_LOCAL_KEYS) {
   const existing = String(existingText ?? '');
@@ -387,7 +408,7 @@ async function syncRepository(now) {
 function saveKeysState(now) {
   try {
     fs.mkdirSync(path.dirname(keysStatePath), { recursive: true });
-    fs.writeFileSync(keysStatePath, `${JSON.stringify({ last: now.toISOString() }, null, 2)}\n`, 'utf8');
+    fs.writeFileSync(keysStatePath, `${JSON.stringify({ lastRunAt: now.toISOString() }, null, 2)}\n`, 'utf8');
   } catch {}
 }
 function saveKeysAlertState(previous, now) {
@@ -424,10 +445,10 @@ async function alertKeyserveFailure(previous, now, status) {
     saveKeysAlertState(previous, now);
   } catch {}
 }
-async function provisionKeys(now) {
+async function provisionKeys(now, options = {}) {
   if (dryRun) return;
   const previous = keysState();
-  if (!force && previous?.last && now - new Date(previous.last) < 24 * 60 * 60 * 1000) return;
+  if (!shouldRunKeys(previous, now, force)) return;
   let secret = process.env.ORGIAST_KEYSERVE_SECRET || '';
   if (!secret) secret = readEnvValue(path.join(home, '.claude', 'keyserve.env'), 'ORGIAST_KEYSERVE_SECRET');
   if (!secret) {
@@ -454,30 +475,34 @@ async function provisionKeys(now) {
     const refreshed = [];
     for (const [name, contents] of Object.entries(payload.files)) {
       if (!/^[A-Za-z0-9._-]+$/.test(name) || name.includes('..') || typeof contents !== 'string') continue;
-      const destination = path.join(home, '.claude', name);
-      const cleanedContents = contents.replace(/^\uFEFF/, '');
-      if (fs.existsSync(destination)) {
-        const existing = fs.readFileSync(destination, 'utf8');
-        const updated = mergeEnvFile(existing, cleanedContents);
-        if (updated === existing) continue;
-        fs.writeFileSync(destination, updated, { encoding: 'utf8', mode: 0o600 });
-        fs.chmodSync(destination, 0o600);
-        refreshed.push(name);
-        log(`refreshed: ${name}`);
-        continue;
-      }
-      fs.mkdirSync(path.dirname(destination), { recursive: true });
-      fs.writeFileSync(destination, cleanedContents, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
-      provisioned.push(name);
-      log(`provisioned: ${name}`);
+      try {
+        const destination = path.join(home, '.claude', name);
+        const cleanedContents = contents.replace(/^\uFEFF/, '');
+        if (fs.existsSync(destination)) {
+          const existing = fs.readFileSync(destination, 'utf8');
+          const updated = mergeEnvFile(existing, cleanedContents);
+          if (updated === existing) continue;
+          fs.writeFileSync(destination, updated, { encoding: 'utf8', mode: 0o600 });
+          fs.chmodSync(destination, 0o600);
+          refreshed.push(name);
+          log(`refreshed: ${name}`);
+          continue;
+        }
+        fs.mkdirSync(path.dirname(destination), { recursive: true });
+        fs.writeFileSync(destination, cleanedContents, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+        provisioned.push(name);
+        log(`provisioned: ${name}`);
+      } catch (e) { log(`key write failed (${name}): ${e.message}`); }
     }
+    const missing = missingDeclaredKeys(payload.files, (name) => fs.existsSync(path.join(home, '.claude', name)));
+    if (missing.length) console.error(`[onboarding-sync] 未取得の鍵: ${missing.join(', ')}`);
+    else saveKeysState(now);
     repairEnvBom({ home });
-    saveKeysState(now);
-    if (provisioned.length) console.log(`[onboarding-sync] provisioned: ${provisioned.join(', ')}`);
-    if (refreshed.length) console.log(`[onboarding-sync] refreshed: ${refreshed.join(', ')}`);
+    if (!options.quiet && provisioned.length) console.log(`[onboarding-sync] provisioned: ${provisioned.join(', ')}`);
+    if (!options.quiet && refreshed.length) console.log(`[onboarding-sync] refreshed: ${refreshed.join(', ')}`);
   } catch (e) {
     log(`key provisioning failed: ${e.message}`);
-    await alertKeyserveFailure(previous, now, e.status);
+    if (!options.quiet) await alertKeyserveFailure(previous, now, e.status);
   }
 }
 function save(hash, now) {
@@ -527,6 +552,11 @@ export function build(current, body, label) {
 
 async function main() { try {
   const now = new Date();
+  const plan = executionPlan(args);
+  if (keysOnly) {
+    await provisionKeys(now, { quiet: true });
+    return;
+  }
   // rules/ 配下は paths: が無いと全リクエストで自動ロードされる(実測 23,288 tok/req)。
   // 日次ガードより前に自己修復する。削除ではなく移動にするのは、次の同期までの間
   // 全文がローカルから消える窓を作らないため。
@@ -538,8 +568,8 @@ async function main() { try {
       else { fs.mkdirSync(path.dirname(rulesPath), { recursive: true }); fs.renameSync(oldRulesPath, rulesPath); }
     } catch {}
   }
-  await syncRepository(now);
-  await provisionKeys(now);
+  if (plan.syncRepository) await syncRepository(now);
+  if (plan.provisionKeys) await provisionKeys(now);
   const oldState = state();
   // 間引きは「分」で持つ。20時間だと、片方のPCがルールへ書いた結論がもう片方へ最大20時間届かず、
   // その間 repo 側(tools/rules/skills)の更新ログだけ出るので**同期は成功したように見える**

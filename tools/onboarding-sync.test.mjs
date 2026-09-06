@@ -5,7 +5,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { makeIndex, mergeEnvFile, PRESERVE_LOCAL_KEYS, updateRepositoryFiles } from './onboarding-sync.mjs';
+import {
+  executionPlan, makeIndex, mergeEnvFile, missingDeclaredKeys, PRESERVE_LOCAL_KEYS,
+  shouldRunKeys, updateRepositoryFiles,
+} from './onboarding-sync.mjs';
 import { gitBlobSha } from './version-drift.mjs';
 
 const script = path.join(path.dirname(fileURLToPath(import.meta.url)), 'onboarding-sync.mjs');
@@ -21,6 +24,62 @@ function run(f, extraArgs = [], envOverrides = {}) {
   const url = `data:text/markdown;base64,${source.toString('base64')}`;
   return spawnSync(process.execPath, [script, '--force', ...extraArgs, `--target=${f.target}`], { encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: f.home, ORGIAST_ONBOARDING_URL: url, ORGIAST_KEYSERVE_SECRET: '', ORGIAST_REPO: path.join(f.home, 'absent'), ...envOverrides } });
 }
+
+test('--keys-only runs only key provisioning', () => {
+  assert.deepEqual(executionPlan(['--keys-only']), { syncRepository: false, provisionKeys: true, syncRules: false });
+});
+
+test('default execution plan retains repository, keys, and rules sync', () => {
+  assert.deepEqual(executionPlan([]), { syncRepository: true, provisionKeys: true, syncRules: true });
+});
+
+test('key guard skips at 19 hours and runs at 21 hours', () => {
+  const now = new Date('2026-09-06T12:00:00.000Z');
+  assert.equal(shouldRunKeys({ lastRunAt: '2026-09-05T17:00:00.000Z' }, now), false);
+  assert.equal(shouldRunKeys({ lastRunAt: '2026-09-05T15:00:00.000Z' }, now), true);
+});
+
+test('key guard runs when state file has no prior success', () => {
+  assert.equal(shouldRunKeys(null, new Date('2026-09-06T12:00:00.000Z')), true);
+});
+
+test('missingDeclaredKeys lists declared files absent locally', () => {
+  const present = new Set(['cost-reporter.env']);
+  assert.deepEqual(
+    missingDeclaredKeys({ 'fleet-sheet.env': 'x', 'cost-reporter.env': 'y' }, (name) => present.has(name)),
+    ['fleet-sheet.env'],
+  );
+});
+
+test('missingDeclaredKeys is empty when every declared file exists', () => {
+  assert.deepEqual(missingDeclaredKeys({ 'fleet-sheet.env': 'x' }, () => true), []);
+});
+
+test('--keys-only keyserve failure is silent and never stops the session', () => {
+  const f = setup(null);
+  const result = spawnSync(process.execPath, [script, '--keys-only', '--force'], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      ORGIAST_HOME: f.home,
+      ORGIAST_KEYSERVE_SECRET: 'test-only-secret',
+      ORGIAST_KEYSERVE_URL: 'http://127.0.0.1:9/unreachable',
+      ORGIAST_REPO: path.join(f.home, 'absent'),
+    },
+  });
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, '');
+  assert.equal(result.stderr, '');
+});
+
+test('PowerShell hook retains self-update and invokes keys-only sync', () => {
+  const ps1 = fs.readFileSync(path.join(path.dirname(script), 'onboarding-sync.ps1'));
+  assert.deepEqual([...ps1.subarray(0, 3)], [239, 187, 191]);
+  const text = ps1.toString('utf8');
+  assert.match(text, /Get-FileHash -LiteralPath \$selfUpdateSource -Algorithm SHA256/);
+  assert.match(text, /Copy-Item -LiteralPath \$selfUpdateSource -Destination \$selfUpdateTarget -Force/);
+  assert.match(text, /& node \$keysSync --keys-only/);
+});
 
 test('preserves bytes outside existing markers', () => {
   const before = Buffer.from('個人\r\n<!-- BEGIN: オージャスト共通ルール (自動同期 2026-01-01) -->\r\n旧本文\r\n<!-- END: オージャスト共通ルール -->\r\n末尾\r\n');

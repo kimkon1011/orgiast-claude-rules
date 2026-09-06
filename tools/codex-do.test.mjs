@@ -442,6 +442,23 @@ test('resolveFallbackBackends はどのキーも無ければ空配列を返す',
   });
 });
 
+test('resolveFallbackBackends は codex-fallback-order.json があればその順を尊重する', () => {
+  withEnvKeysCleared(() => {
+    const dir = makeHomeWithEnv({
+      'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n',
+      'deepseek.env': 'DEEPSEEK_API_KEY=sk-ds-1\n',
+      'gemini.env': 'GEMINI_API_KEY=sk-gemini-1\n'
+    });
+    fs.writeFileSync(path.join(dir, '.claude', 'codex-fallback-order.json'), JSON.stringify(['qwen', 'openrouter-free', 'gemini-cli']));
+    const backends = resolveFallbackBackends(dir);
+    assert.deepEqual(backends.map(({ name }) => name), ['deepseek', 'openrouter-free', 'gemini-cli']);
+    // cheap-code:glm は ZAI キーが無いとスキップされ、残りだけが返る
+    fs.writeFileSync(path.join(dir, '.claude', 'codex-fallback-order.json'), JSON.stringify(['gemini-cli', 'cheap-code:glm']));
+    const withCheap = resolveFallbackBackends(dir);
+    assert.deepEqual(withCheap.map(({ name }) => name), ['gemini-cli']);
+  });
+});
+
 test('resolveQwenBackends は CODEX_DO_FREE_MODEL で openrouter-free の model を上書きできる', () => {
   withEnvKeysCleared(() => {
     process.env.CODEX_DO_FREE_MODEL = 'z-ai/glm-5.2:free';

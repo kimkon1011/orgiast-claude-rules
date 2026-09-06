@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // batch-enqueue.mjs — 夜間バッチ用ジョブを ~/.claude/batch-queue/pending.jsonl へ追加する。
-// 使い方: node batch-enqueue.mjs --provider <provider> "指示" [--model X] [--system S] [--max N]
+// 使い方: node batch-enqueue.mjs --provider <provider> "指示" [--model X] [--system S] [--max N] [--kind <種別>]
+// kind は batch-run.mjs 側の実行方式指定。kind=eval-harness のジョブは LLM 呼び出しではなく
+// 「node tools/eval-harness.mjs --all」のローカル実行に変換される(コスト改善ループの eval_stale 対処)。
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -17,11 +19,12 @@ export function userHome() {
   return process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || nativeHome;
 }
 
-export function enqueueJob({ provider, prompt, model, system = '', max = 4000, jobType, batchDate }, { home = userHome(), now = new Date() } = {}) {
+export function enqueueJob({ provider, prompt, model, system = '', max = 4000, jobType, batchDate, kind }, { home = userHome(), now = new Date() } = {}) {
   const normalizedProvider = String(provider || '').toLowerCase();
   const config = PROVIDERS[normalizedProvider];
   if (!config) throw new Error(`未対応provider: ${provider}`);
   if (!String(prompt || '').trim()) throw new Error('指示テキストがありません');
+  if (kind && !/^[a-z0-9][a-z0-9-]{0,63}$/.test(String(kind))) throw new Error(`不正なkindです: ${kind}`);
   const dir = path.join(home, '.claude', 'batch-queue');
   const pending = path.join(dir, 'pending.jsonl');
   fs.mkdirSync(dir, { recursive: true });
@@ -35,7 +38,7 @@ export function enqueueJob({ provider, prompt, model, system = '', max = 4000, j
   const job = {
     id: `${stamp}-${String(seq).padStart(3, '0')}`, provider: normalizedProvider, model: model || config.model,
     system, prompt: String(prompt).trim(), max: Number(max) || 4000, enqueuedAt: now.toISOString(),
-    ...(jobType && { jobType }), ...(batchDate && { batchDate }),
+    ...(jobType && { jobType }), ...(batchDate && { batchDate }), ...(kind && { kind }),
   };
   fs.appendFileSync(pending, `${JSON.stringify(job)}\n`);
   return job;
@@ -45,9 +48,9 @@ function option(args, name, fallback) { const i = args.indexOf(name); return i >
 
 export function runCli(args = process.argv.slice(2)) {
   const provider = String(option(args, '--provider', '')).toLowerCase();
-  if (!PROVIDERS[provider]) { console.error('使い方: node batch-enqueue.mjs --provider <deepseek|gemini|openrouter|groq|kimi|anthropic> "指示"|--prompt-file <path> [--model X] [--system S] [--max N]'); return 2; }
+  if (!PROVIDERS[provider]) { console.error('使い方: node batch-enqueue.mjs --provider <deepseek|gemini|openrouter|groq|kimi|anthropic> "指示"|--prompt-file <path> [--model X] [--system S] [--max N] [--kind <種別>]'); return 2; }
   const skip = new Set();
-  for (const flag of ['--provider', '--model', '--system', '--max', '--prompt-file']) { const i = args.indexOf(flag); if (i >= 0) { skip.add(i); skip.add(i + 1); } }
+  for (const flag of ['--provider', '--model', '--system', '--max', '--prompt-file', '--kind']) { const i = args.indexOf(flag); if (i >= 0) { skip.add(i); skip.add(i + 1); } }
   const promptFile = option(args, '--prompt-file', '');
   let prompt = args.filter((value, index) => !value.startsWith('--') && !skip.has(index)).join(' ').trim();
   if (promptFile) {
@@ -55,8 +58,10 @@ export function runCli(args = process.argv.slice(2)) {
     catch (error) { console.error(`--prompt-file を読めません: ${promptFile} (${error.code || error.message})`); return 2; }
   }
   if (!prompt) { console.error('指示テキストがありません'); return 2; }
-  const job = enqueueJob({ provider, prompt, model: option(args, '--model'), system: option(args, '--system', ''), max: parseInt(option(args, '--max', '4000'), 10) });
-  console.log(`${job.id} を夜間バッチに追加 (${job.provider}:${job.model})`);
+  const kind = String(option(args, '--kind', '')).toLowerCase();
+  if (kind && !/^[a-z0-9][a-z0-9-]{0,63}$/.test(kind)) { console.error(`不正なkindです: ${kind}`); return 2; }
+  const job = enqueueJob({ provider, prompt, model: option(args, '--model'), system: option(args, '--system', ''), max: parseInt(option(args, '--max', '4000'), 10), ...(kind && { kind }) });
+  console.log(`${job.id} を夜間バッチに追加 (${job.provider}:${job.model}${kind ? ` kind=${kind}` : ''})`);
   console.log(job.provider === 'kimi' ? '→ Kimiは割引待ちせず次回実行時に処理されます。結果は ~/.claude/batch-queue/results-<日付>.jsonl。' : job.provider === 'anthropic' ? '→ Anthropic Message Batchesで常時50%off処理されます。結果は ~/.claude/batch-queue/results-<日付>.jsonl。' : '→ 毎日03:00のoff-peak帯に半額(約50%off)で実行されます。結果は ~/.claude/batch-queue/results-<日付>.jsonl。');
   console.log('→ 今すぐ実行したい場合: node batch-run.mjs --force');
   return 0;

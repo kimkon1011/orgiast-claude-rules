@@ -134,7 +134,7 @@ node "$HOME/orgiast-claude-rules/tools/close-session.mjs" --session <このセ�
   - `CLAUDE_HEADLESS` / `CI` が立っている環境では自動で起動しない（夜間 auto-session でウィンドウを開かない）
   - 直近120秒に起動済みなら二重起動しない（`--force-launch` で無視できる）
   - 恒久的に止めるなら `~/.claude/next-session-launch.json` に `{"enabled": false}`
-- target の変更・確認は `next-session-launch.mjs --set-target <vscode|terminal|inline>` / `--show-target`。
+- target の変更・確認は `next-session-launch.mjs --set-target <vscode|vscode-ext|terminal|inline|headless>` / `--show-target`。
   旧手順との互換用に `--set-mode` / `--show-mode` も受けるが、新しい文書では使わない。
 - 起動結果は `[next-session] VSCode に新しいタブを開きました…`（ターミナル経路なら `新しいセッションを起動しました: <cwd>`） / `[next-session] スキップ: <理由>` の1行で出る。
   スキップされた時だけ「新しいセッションを手で開いてください」と伝える。

@@ -95,6 +95,30 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, payloadF
     candidates.push(candidate);
   }
 
+  // routing-overrides.json の demote 有効期限が切れるまで、該当 provider を連鎖の末尾へ回す
+  // (cost-improve-loop が provider_unhealthy を検出した時に書く。B4 2026-09-07)。
+  // start として明示された provider は呼び出し元の意思なので先頭のまま。
+  // cooldown と同じく node --test 配下では実環境のファイルを読まない。
+  let demotedProviders = [];
+  if (cooldownFile != null || !process.env.NODE_TEST_CONTEXT) {
+    const overridesPath = cooldownFile
+      ? path.join(path.dirname(cooldownFile), 'routing-overrides.json')
+      : path.join(home, '.claude', 'routing-overrides.json');
+    try {
+      const overrides = JSON.parse(fs.readFileSync(overridesPath, 'utf8'));
+      demotedProviders = Object.entries(overrides?.demote || {})
+        .filter(([, until]) => Number(Date.parse(until)) > timestamp)
+        .map(([provider]) => String(provider).toLowerCase());
+    } catch {}
+  }
+  if (demotedProviders.length) {
+    const rank = (candidate) => (demotedProviders.includes(candidate.provider) && candidate.provider !== start.provider ? 1 : 0);
+    candidates.sort((a, b) => rank(a) - rank(b)); // Array#sort は安定なので同 rank 内の元順を保つ
+    for (const provider of demotedProviders) {
+      if (provider !== start.provider) console.error(`[routing] ${provider} はdemote中のため連鎖の末尾へ回します`);
+    }
+  }
+
   // node --test 配下では、呼び出し側が隔離先を明示した場合だけ永続化する。
   // 将来テストが cooldownFile を渡し忘れても実環境の受け皿を止めないための多重防御。
   const useCooldown = chain.length > 0 && (cooldownFile != null || !process.env.NODE_TEST_CONTEXT);

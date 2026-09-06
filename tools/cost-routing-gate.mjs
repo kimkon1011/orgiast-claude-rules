@@ -57,10 +57,18 @@ try {
   }
   const countMatch = prompt.match(/(\d{2,})\s*(件|社|行|本|通|人|個|ファイル)/);
   if (!prompt.includes('[夜間判定]') && ((countMatch && Number(countMatch[1]) >= 20) || /一括生成|全件|バックフィル|エンリッチ|洗い出して全部|棚卸し|全部に対して|再生成/.test(prompt))) {
+    // budgetPressure(cost-improve-loop が予算ペース超過で立てる)が true の間は文言を強める。
+    let budgetPressure = false;
+    try {
+      const pressureHome = process.env.ORGIAST_HOME || os.homedir();
+      budgetPressure = JSON.parse(fs.readFileSync(path.join(pressureHome, '.claude', 'cost-enforce.json'), 'utf8')).budgetPressure === true;
+    } catch {}
     if (/今すぐ|すぐに|至急|急ぎ|今日中|即時|リアルタイム|いま必要|今必要/.test(prompt)) {
-      parts.push(`[夜間バッチ §2.8.1] 応答冒頭に必ず1行で \`**[夜間判定]** 即時実行（理由: user が急ぎと明示）\` と宣言し、同期実行(\`${ask}\`)へ回す。`);
+      parts.push(`[夜間バッチ §2.8.1] 応答冒頭に必ず1行で \`**[夜間判定]** 即時実行（理由: user が急ぎと明示）\` と宣言し、同期実行(\`${ask}\`)へ回す。${budgetPressure ? '⚠️ 現在月次予算ペース超過中(budgetPressure)。即時実行は最小件数に抑え、残りは必ず夜間バッチへ分割すること。' : ''}`);
     } else {
-      parts.push(`[夜間バッチ §2.8.1] 応答冒頭に必ず1行で \`**[夜間判定]** 夜間バッチ(半額・翌朝03:00) — 投入: ${enqueue} --provider <deepseek|gemini|openrouter|groq> "指示"\` または \`**[夜間判定]** 即時実行（理由: user が待っている / ブロッキング / 20件未満相当）\` と宣言。宣言せずに着手するのは §2.8.1 違反。夜間に落とすなら黙って遅延させず、user に「夜間(半額・翌朝結果)でよいか、今すぐ必要か」を伝え、今すぐと言われたら同期実行(\`${ask}\`)に切替える。`);
+      parts.push(budgetPressure
+        ? `[夜間バッチ §2.8.1] ⚠️ 月次予算ペース超過中(budgetPressure)。20件超の量産は夜間バッチが「既定」ではなくほぼ必須。応答冒頭に必ず1行で \`**[夜間判定]** 夜間バッチ(半額・翌朝03:00) — 投入: ${enqueue} --provider <deepseek|gemini|openrouter|groq> "指示"\` と宣言。日中の従量実行は user が「今すぐ」と言った場合だけに絞る。`
+        : `[夜間バッチ §2.8.1] 応答冒頭に必ず1行で \`**[夜間判定]** 夜間バッチ(半額・翌朝03:00) — 投入: ${enqueue} --provider <deepseek|gemini|openrouter|groq> "指示"\` または \`**[夜間判定]** 即時実行（理由: user が待っている / ブロッキング / 20件未満相当）\` と宣言。宣言せずに着手するのは §2.8.1 違反。夜間に落とすなら黙って遅延させず、user に「夜間(半額・翌朝結果)でよいか、今すぐ必要か」を伝え、今すぐと言われたら同期実行(\`${ask}\`)に切替える。`);
     }
   }
   // "codex" という語だけでは処理全体をバイパスしない。分類なしの場合も監督責務を注入する。

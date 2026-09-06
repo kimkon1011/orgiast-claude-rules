@@ -6,6 +6,9 @@ import { spawn, spawnSync } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
 import { DEFAULT_REPO_MAP, parseRepoMap } from './feedback-to-issues.mjs';
 import { runTaskLedger } from './task-ledger.mjs';
+import { autoSessionExecutor, buildClaudeHeadlessArgs, buildCheapCodeArgs, recordFallbackToClaude } from './auto-session-executor.mjs';
+
+export { autoSessionExecutor } from './auto-session-executor.mjs';
 
 const MARKER = '<!-- NEXT-SESSION v1 -->';
 const SIX_HOURS = 6 * 60 * 60 * 1000;
@@ -251,20 +254,8 @@ export function detectHistoryCwd({
 }
 
 export function buildChildArgs(repoCwd, historyCwd) {
-  // 2026-08-26 実測: acceptEdits はファイル編集だけを自動承認し、Bash は承認待ちで無人実行が最初のコマンドで止まる。
-  // --permission-mode を渡さず ~/.claude/settings.json の既定 auto を継承すると、Bash（git -C ... rev-parse）も通る。
-  // 無人の残TODO消化に Opus は過剰で、§1.18 の監督用途は最小限に留めるため既定は Sonnet。
-  const model = process.env.ORGIAST_AUTO_SESSION_MODEL || 'sonnet';
-  const args = ['-p', '', '--output-format', 'json', '--model', model, '--add-dir', repoCwd];
-  if (historyCwd !== repoCwd) args.push('--add-dir', historyCwd);
-  return args;
-}
-
-export function autoSessionExecutor(env = process.env, hostname = os.hostname(), home = env.ORGIAST_HOME || os.homedir()) {
-  let fileEnv = {};
-  try { fileEnv = Object.fromEntries(fs.readFileSync(path.join(home, '.claude', 'auto-session.env'), 'utf8').split(/\r?\n/).map((line) => /^([A-Z_]+)=(.*)$/.exec(line.trim())).filter(Boolean).map((m) => [m[1], m[2].replace(/^['"]|['"]$/g, '')])); } catch {}
-  const merged = { ...env, ...fileEnv };
-  return { executor: merged.ORGIAST_AUTO_SESSION_EXECUTOR || 'cheap-code', provider: merged.ORGIAST_AUTO_SESSION_PROVIDER || (/kim/i.test(hostname) ? 'glm' : 'deepseek') };
+  // 実体は auto-session-executor.mjs(共有部品)。next-session-launch と同じ組立を使う。
+  return buildClaudeHeadlessArgs({ repoCwd, historyCwd });
 }
 
 function numericVersion(entry) {
@@ -530,8 +521,8 @@ export function runChild(executable, prompt, repoCwd, historyCwd, timeoutMs) {
       const cheap = choice.executor === 'cheap-code' && !fallback;
       let child;
       try { child = spawn(cheap ? process.execPath : executable, cheap
-        ? [path.join(repoCwd, 'tools', 'cheap-code.mjs'), '--provider', choice.provider, '--prompt-file', promptFile, '--cwd', historyCwd]
-        : buildChildArgs(repoCwd, historyCwd), { cwd: historyCwd, env: { ...process.env, CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: cheap ? `auto-session:cheap-code:${choice.provider}` : 'auto-session:fallback-claude' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }); }
+        ? buildCheapCodeArgs({ repoRoot: repoCwd, provider: choice.provider, promptFile, cwd: historyCwd })
+        : buildClaudeHeadlessArgs({ repoCwd, historyCwd }), { cwd: historyCwd, env: { ...process.env, CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: cheap ? `auto-session:cheap-code:${choice.provider}` : 'auto-session:fallback-claude' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }); }
       catch (error) { finish(null, '', String(error?.message ?? error), true, fallback); return; }
     let stdout = '';
     let stderr = '';
@@ -549,7 +540,7 @@ export function runChild(executable, prompt, repoCwd, historyCwd, timeoutMs) {
     }, timeoutMs);
     child.on('close', (code) => {
       clearTimeout(timer);
-      if (cheap && !timedOut && code !== 0) { fs.appendFileSync(path.join(process.env.ORGIAST_HOME || os.homedir(), '.claude', 'executor-usage.jsonl'), `${JSON.stringify({ t: new Date().toISOString(), provider: 'claude-fallback', model: process.env.ORGIAST_AUTO_SESSION_MODEL || 'sonnet', status: 'fallback', reason: `cheap-code/${choice.provider} exit ${code}` })}\n`); launch(true); return; }
+      if (cheap && !timedOut && code !== 0) { recordFallbackToClaude({ reason: `cheap-code/${choice.provider} exit ${code}` }); launch(true); return; }
       finish(timedOut ? null : code, stdout, stderr, launchFailed, fallback, timedOut);
     });
     };

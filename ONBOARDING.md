@@ -121,6 +121,12 @@ API/CLI/MCP/GitHub Actions で実行可能な操作は、手順案内せず Clau
 
 「ユーザー側の設定が怪しい」と感じた瞬間に依頼を出さない。エラーメッセージを表層で解釈しない、プログラム的に確認できる経路を全部試す、複数仮説があれば依頼不要な方から潰す、手作業が必要と判明したら根拠も併記する。「念のため確認して」型の予防的依頼も禁止。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/automation-first-checklist.md`
 
+#### 1.2.1 依頼の前に必要性と代替経路を調査し、証拠を依頼文に併記する（絶対ルール）
+
+user に何かを依頼する前に、実際の API 呼び出し・検索など異なる経路を2件以上試し、各結果を確認する。
+依頼文の `[手渡し判定]` に「試したこと」と結果（`→`）、および「user でないと無理な理由」を書く。
+受け取る情報や認証情報が現行経路で本当に機能することも先に確かめる。「たぶん必要」は調査に含めない。
+
 ### 1.3 GAS（Google Apps Script）は clasp + GitHub 統一
 
 Apps Script Web エディタに直接コードを書かない。ソースはGitHub管理、`.clasp.json`で`clasp push -f`反映。Web Appデプロイは既存 `deploymentId` を再利用（URL維持）。手作業コピペ・「エディタで保存→再デプロイしてください」案内は禁止。

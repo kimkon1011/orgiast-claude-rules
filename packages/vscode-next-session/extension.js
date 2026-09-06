@@ -1,7 +1,17 @@
 const vscode = require('vscode');
 const { resolveClaudeShellPath } = require('./shell-path');
+const { decideAction } = require('./route');
 
 const PROBE_TEXT = 'ORGIAST_NEXT_SESSION_PROBE_OK';
+
+// 遅延生成する出力チャンネル（dry run の記録用）。
+let outputChannel;
+function getOutputChannel() {
+  if (!outputChannel) {
+    outputChannel = vscode.window.createOutputChannel('Orgiast Next Session');
+  }
+  return outputChannel;
+}
 
 function probeTerminalOptions(cwd) {
   if (process.platform === 'win32') {
@@ -25,6 +35,17 @@ function activate(context) {
     async handleUri(uri) {
       try {
         const params = new URLSearchParams(uri.query);
+        const action = decideAction({ path: uri.path, query: params });
+        if (action.kind === 'reload') {
+          if (action.dry) {
+            const channel = getOutputChannel();
+            channel.appendLine(`${new Date().toISOString()} dry reload requested (再読み込みは実行しません)`);
+            await vscode.window.showInformationMessage('Dry reload: 記録のみ（再読み込みはしません）');
+            return;
+          }
+          await vscode.commands.executeCommand('workbench.action.reloadWindow');
+          return;
+        }
         const cwd = params.get('cwd') || undefined;
         const probe = params.get('probe') === '1';
         const resolved = probe ? null : resolveClaudeShellPath(params.get('claude'));

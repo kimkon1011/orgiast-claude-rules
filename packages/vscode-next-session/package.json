@@ -2,7 +2,7 @@
   "name": "next-session",
   "displayName": "Orgiast Next Session",
   "description": "Starts the next Claude session in a VS Code integrated terminal from a URI.",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "publisher": "orgiast",
   "license": "MIT",
   "repository": {
@@ -21,6 +21,7 @@
   "main": "./extension.js",
   "files": [
     "extension.js",
+    "route.js",
     "shell-path.js",
     "README.md",
     "LICENSE"

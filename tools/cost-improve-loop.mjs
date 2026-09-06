@@ -11,6 +11,7 @@ import { appendImprovementTodos } from './nightly-kpi.mjs';
 import { KNOWN_CHEAP_PROVIDERS } from './llm-fallback.mjs';
 import { collectProviderHealth, collectClaudeStats } from './usage-stats.mjs';
 import { collectBudgetStatus } from './budget-status.mjs';
+import { shouldSendMonthlyReport, buildMonthlyReport, markMonthlyReportSent } from './cost-monthly-report.mjs';
 
 export const ALLOWED_LOCAL_COMMANDS = [
   'node tools/tool-adoption-check.mjs --force',
@@ -46,6 +47,60 @@ function isRosterOnlyRow(row) {
   return !String(row?.reportedAt ?? '').trim()
     && !String(row?.label ?? '').trim()
     && !String(row?.hostname ?? '').trim();
+}
+
+// ---- 仕様C5: フリート名簿の同一機体エイリアスを stale 扱いしない ----
+// fleet-pc-map.json(ラベル→hostname/aliases)から「同じ物理機を指す別表記」の索引を作る。
+export function buildAliasIndex(map) {
+  const index = new Map();
+  if (!map || typeof map !== 'object' || Array.isArray(map)) return index;
+  for (const [key, entry] of Object.entries(map)) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    const host = String(entry.hostname || entry.sheetName || '').trim() || String(key);
+    index.set(String(key).trim().toLowerCase(), host);
+    if (Array.isArray(entry.aliases)) {
+      for (const alias of entry.aliases) index.set(String(alias).trim().toLowerCase(), host);
+    }
+  }
+  return index;
+}
+
+// 同じホスト名(または alias 解決で同一物理機)を持つ行は「最新の報告がある1行」だけを採用し、
+// 他は alias_of として集計・違反対象から外す。ホストが特定できない行はそのまま残す。
+export function dedupeAliasRows(rows, aliasIndex, now = new Date()) {
+  const chosen = [];
+  const excluded = [];
+  if (!Array.isArray(rows)) return { rows: chosen, excluded };
+  const hostOf = (row) => {
+    const hostname = String(row?.hostname ?? '').trim();
+    if (hostname) return hostname.toLowerCase();
+    for (const key of [row?.label, row?.pcName]) {
+      const host = aliasIndex?.get(String(key || '').trim().toLowerCase());
+      if (host) return String(host).toLowerCase();
+    }
+    return null;
+  };
+  const tsOf = (row) => {
+    const t = Date.parse(String(row?.reportedAt || row?.t || ''));
+    return Number.isFinite(t) ? t : 0;
+  };
+  const groups = new Map();
+  for (const row of rows) {
+    const host = hostOf(row);
+    if (!host) { chosen.push(row); continue; }
+    if (!groups.has(host)) groups.set(host, []);
+    groups.get(host).push(row);
+  }
+  for (const [host, list] of groups) {
+    if (list.length === 1) { chosen.push(list[0]); continue; }
+    const sorted = [...list].sort((a, b) => tsOf(b) - tsOf(a));
+    const primary = sorted[0];
+    chosen.push(primary);
+    for (const row of sorted.slice(1)) {
+      excluded.push({ pc: row?.pcName || row?.label || '(名称未設定)', aliasOf: primary?.pcName || primary?.label || host, host, reportedAt: row?.reportedAt || '' });
+    }
+  }
+  return { rows: chosen, excluded };
 }
 
 export function parseJstOrIsoDate(text) {
@@ -118,9 +173,14 @@ export function parseCheapAiUseCount(text) {
   return total;
 }
 
-export function evaluateFleet({ rows, ledgerCounts, localState, now, lastKpis = {}, signals = null }) {
+export function evaluateFleet({ rows, ledgerCounts, localState, now, lastKpis = {}, signals = null, aliasIndex = null }) {
   const violations = [];
   const measuredAt = now.toISOString();
+  // 同一機体の別表記行は最新報告の1行だけを採用し、古い別表記行を stale 誤検知しない(仕様C5)。
+  // hostname 列が同じ行は index が無くてもまとめる。fleet-pc-map.json の aliases は index で補う。
+  if (Array.isArray(rows)) {
+    rows = dedupeAliasRows(rows, aliasIndex, now).rows;
+  }
 
   let fleetTrusted = true;
   let selfLedgerTrusted = true;
@@ -1056,6 +1116,17 @@ export async function main(argv = process.argv.slice(2), io = {}) {
     localState.configuredProviders = provEnv.configured;
   }
 
+  // 仕様C5: 同一機体の別表記行(alias)は最新報告の1行だけを採用。古い別表記行を stale 誤検知しない。
+  let excludedAliasRows = [];
+  if (rows) {
+    try {
+      const aliasIndex = buildAliasIndex(JSON.parse(fs.readFileSync(path.join(path.resolve(import.meta.dirname, '..'), 'fleet-pc-map.json'), 'utf8')));
+      const dedup = dedupeAliasRows(rows, aliasIndex, now);
+      rows = dedup.rows;
+      excludedAliasRows = dedup.excluded;
+    } catch { /* fleet-pc-map.json が読めない機体は従来どおり全行を対象にする */ }
+  }
+
   // 1.5 ローカル信号(B4): provider健全性 / codex上限回数 / headless Claude出力 / 予算ペース / eval鮮度。
   // 各収集器は io で差し替え可能(テスト・dry-run で実データに触れないように)。
   const collectSignals = async () => {
@@ -1282,6 +1353,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
       }
     }
     if (unreportedCount > 0) reportText += `※ 未報告のPC ${unreportedCount}台は表から除外\n`;
+    if (excludedAliasRows.length > 0) reportText += `※ 同一機体の旧行 ${excludedAliasRows.length}行を除外 (${excludedAliasRows.map((x) => `${x.pc}→${x.aliasOf}`).join(', ')})\n`;
   } else {
     reportText += `- フリートKPI取得失敗\n`;
   }
@@ -1343,6 +1415,20 @@ export async function main(argv = process.argv.slice(2), io = {}) {
     catch (error) {
       stateWriteFailed = true;
       console.error(`cost-improve 状態書き込み失敗: ${String(error?.message ?? error)}`);
+    }
+  }
+
+  // 5.5 毎月1日だけ前月の月次レポートを1通 DM する(仕様C4)。失敗しても日次ループは続行。
+  if (!dryRun && !noNotify && !io.noNotify) {
+    try {
+      if (await (io.shouldSendMonthlyReport || shouldSendMonthlyReport)({ home, now, claudeDir })) {
+        const reportText = buildMonthlyReport({ home, now });
+        const monthlyResult = await (io.notifyKim ?? notifyKim)(reportText, { home, webhookFallback: false });
+        if (monthlyResult?.delivered === 'dm') await (io.markMonthlyReportSent || markMonthlyReportSent)({ home, now, claudeDir });
+        console.log('月次レポートを kim へ DM 送信しました');
+      }
+    } catch (error) {
+      console.error(`月次レポートDM送信失敗: ${String(error?.message ?? error)}`);
     }
   }
 

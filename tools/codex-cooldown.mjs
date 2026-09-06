@@ -86,6 +86,33 @@ export function codexCooldownRemaining(now = Date.now(), cooldownFile) {
   }
 }
 
+// provider-cooldown.json は codex 以外の定額レーン(glm 等)も同じ構造で持つ。
+// 指定 provider の残りクールダウンmsを返す。無ければ0。
+export function providerCooldownMs(provider, now = Date.now(), cooldownFile) {
+  const name = String(provider || '').trim().toLowerCase();
+  if (!name) return 0;
+  try {
+    const state = JSON.parse(fs.readFileSync(cooldownFile || defaultCooldownFile(), 'utf8'));
+    const until = Number(state?.[name]?.until);
+    return Number.isFinite(until) && until > now ? until - now : 0;
+  } catch {
+    return 0;
+  }
+}
+
+// usage_limit 系の本文から provider の再開時刻を返す(parseCodexResetUntil を再利用)。
+// 「reset at 日時」等の構造化された表記を解釈できた時だけその時刻を使い、取れなければ fallbackMs(既定5h)にする。
+export function providerResetUntil(text, now = Date.now(), fallbackMs = 5 * 60 * 60 * 1000) {
+  const body = String(text ?? '');
+  const hasStructuredReset = /(?:reset\w*|retry\s+again)\s+(?:at\s+)?(?:\d{4}-\d{2}-\d{2}[ T])?\d{1,2}:\d{2}|try\s+again\s+in\s+\d+|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4}|in\s+\d+\s*(?:hours?|h|minutes?|m)\b/i.test(body);
+  const timestamp = parseCodexResetUntil(body, now);
+  return hasStructuredReset ? timestamp : now + fallbackMs;
+}
+
+export function providerInCooldown(provider, now = Date.now(), cooldownFile) {
+  return providerCooldownMs(provider, now, cooldownFile) > 0;
+}
+
 export function codexHardBlockBypass(now = Date.now(), cooldownFile, opts = {}) {
   let codex = {};
   try {

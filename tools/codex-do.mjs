@@ -5,7 +5,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
-import { parseCodexResetUntil, writeCodexCooldown } from './codex-cooldown.mjs';
+import { parseCodexResetUntil, providerCooldownMs, writeCodexCooldown } from './codex-cooldown.mjs';
 
 // Windows の shell 経由起動では引数がクォートされないため、この値に空白を入れると
 // -p の値が割れて Gemini が使い方(ヘルプ)を出して終わる。空白を入れないこと。
@@ -156,6 +156,13 @@ function cheapCodeBackend(name, homeDir) {
   const provider = name.split(':')[1] || '';
   if (!['glm', 'deepseek'].includes(provider)) return null;
   // キーが無い機体で cheap-code を先頭にすると毎回即死するので、キーがある時だけ候補に入れる。
+  const cooldownFile = path.join(homeDir, '.claude', 'provider-cooldown.json');
+  // 仕様C2b: 定額レーン glm が usage_limit でクールダウン中のときは、同じ位置を deepseek へ自動差し替えする。
+  if (provider === 'glm' && providerCooldownMs('glm', Date.now(), cooldownFile) > 0) {
+    if (!loadEnvKey(homeDir, 'deepseek.env', 'DEEPSEEK_API_KEY')) return null;
+    console.error('[codex-do] cheap-code:glm は usage_limit クールダウン中のため cheap-code:deepseek へフォールバックします');
+    return { kind: 'cheap-code', name: 'cheap-code:deepseek', provider: 'deepseek', model: 'deepseek-v4-flash' };
+  }
   const keyFile = provider === 'glm' ? 'zai.env' : 'deepseek.env';
   const keyEnv = provider === 'glm' ? 'ZAI_API_KEY' : 'DEEPSEEK_API_KEY';
   if (!loadEnvKey(homeDir, keyFile, keyEnv)) return null;

@@ -552,3 +552,27 @@ test('loadDeepseekKey は loadEnvKey の薄いラッパとして振る舞いが�
     if (prev !== undefined) process.env.DEEPSEEK_API_KEY = prev;
   }
 });
+
+test('codex-fallback: cheap-code:glm が usage_limit クールダウン中なら deepseek へ差し替える', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-cooldown-'));
+  const claude = path.join(home, '.claude'); fs.mkdirSync(claude, { recursive: true });
+  fs.writeFileSync(path.join(claude, 'zai.env'), 'ZAI_API_KEY=zai-test\n', 'utf8');
+  fs.writeFileSync(path.join(claude, 'deepseek.env'), 'DEEPSEEK_API_KEY=ds-test\n', 'utf8');
+  fs.writeFileSync(path.join(claude, 'provider-cooldown.json'), JSON.stringify({ glm: { until: Date.now() + 5 * 60 * 60 * 1000, reason: 'usage_limit', at: new Date().toISOString() } }));
+  fs.writeFileSync(path.join(claude, 'codex-fallback-order.json'), JSON.stringify(['cheap-code:glm', 'gemini-cli']));
+  const backends = resolveFallbackBackends(home);
+  assert.ok(backends.length >= 1);
+  assert.equal(backends[0].provider, 'deepseek');
+  assert.equal(backends[0].name, 'cheap-code:deepseek');
+});
+
+test('codex-fallback: クールダウン無しなら glm を維持する', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-normal-'));
+  const claude = path.join(home, '.claude'); fs.mkdirSync(claude, { recursive: true });
+  fs.writeFileSync(path.join(claude, 'zai.env'), 'ZAI_API_KEY=zai-test\n', 'utf8');
+  fs.writeFileSync(path.join(claude, 'deepseek.env'), 'DEEPSEEK_API_KEY=ds-test\n', 'utf8');
+  fs.writeFileSync(path.join(claude, 'codex-fallback-order.json'), JSON.stringify(['cheap-code:glm']));
+  const backends = resolveFallbackBackends(home);
+  assert.equal(backends[0].provider, 'glm');
+  assert.equal(backends[0].name, 'cheap-code:glm');
+});

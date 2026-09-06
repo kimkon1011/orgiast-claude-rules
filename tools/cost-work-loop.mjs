@@ -198,6 +198,27 @@ const blockSourceLine = formatBlockSource(claudeStats.blocks);
 const headlessJobsLine = Object.entries(claudeStats.headlessJobs || {}).sort((a, b) => b[1] - a[1]).map(([name, out]) => `${name} ${(out / 1000).toFixed(0)}k`).join(' / ') || '内訳なし';
 const health = collectProviderHealth({ home: HOME, days: DAYS });
 const healthLines = Object.entries(health.providers).sort((a, b) => b[1].calls - a[1].calls).map(([name, value]) => `- ${value.cooldown ? '🔒' : value.failRate >= 0.2 ? '⚠️' : '✅'} ${name}: ${value.calls} calls / fail ${value.fail} (${(value.failRate * 100).toFixed(1)}%) / 429 ${value.http429} / 413 ${value.http413} / 平均 ${value.averageSeconds.toFixed(1)}秒 / failover救済 ${value.rescuedByFailover}${value.cooldown ? ` / cooldown ${value.cooldown.reason}` : ''}`);
+// 定額レーン(codex / glm)の cooldown と 24h の usage-limit 到達回数(仕様C2b)。
+const laneHealthLines = (() => {
+  const claudeDir = path.join(HOME, '.claude');
+  const nowMs = Date.now();
+  const readCooldown = () => { try { return JSON.parse(fs.readFileSync(path.join(claudeDir, 'provider-cooldown.json'), 'utf8')); } catch { return {}; } };
+  const cooldowns = readCooldown();
+  const laneLines = [];
+  for (const lane of ['codex', 'glm']) {
+    const state = cooldowns?.[lane];
+    const until = Number(state?.until);
+    laneLines.push(state && Number.isFinite(until) && until > nowMs
+      ? `- 🔒 ${lane}: usage_limit cooldown 残り${Math.max(1, Math.ceil((until - nowMs) / 3600000))}h${state.reason ? ` (${state.reason})` : ''}`
+      : `- ✅ ${lane}: cooldown なし`);
+  }
+  const countHits = (file, providerFilter) => { try { let n = 0; const cutoff = nowMs - 86400000; for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) { if (!line.trim()) continue; try { const r = JSON.parse(line); if (providerFilter && String(r.provider || '').toLowerCase() !== providerFilter) continue; const t = Date.parse(r.t || ''); if (Number.isFinite(t) && t >= cutoff && t <= nowMs) n++; } catch {} } return n; } catch { return 0; } };
+  const codex24h = countHits(path.join(claudeDir, 'codex-limit-history.jsonl'), null);
+  const glm24h = countHits(path.join(claudeDir, 'provider-limit-history.jsonl'), 'glm');
+  laneLines.push(`- codex: 24h usage-limit 到達 ${codex24h}回`);
+  laneLines.push(`- glm: 24h usage-limit 到達 ${glm24h}回`);
+  return laneLines;
+})();
 function runJsonTool(name) { try { const result = spawnSync(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta.url)), name), '--json'], { env: { ...process.env, ORGIAST_HOME: HOME }, encoding: 'utf8', timeout: 30000 }); return result.status === 0 ? JSON.parse(result.stdout) : null; } catch { return null; } }
 const planUsage = runJsonTool('claude-plan-usage.mjs');
 const budgetStatus = runJsonTool('budget-status.mjs');
@@ -242,6 +263,7 @@ ${budgetLines.map((line) => `- ${line}`).join('\n')}
 ${flags.map(f => '- ' + f).join('\n')}
 ### プロバイダ健全性
 ${healthLines.length ? healthLines.join('\n') : '- 計測データなし'}
+${laneHealthLines.join('\n')}
 ### 品質ゲート
 ${qualityLines.map((x) => '- ' + x).join('\n')}
 ${pricingBriefLine}

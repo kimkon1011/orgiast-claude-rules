@@ -721,6 +721,10 @@ node -e "fetch('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rule
 
 **通知先はチャンネルではなく kim の個別 DM（中継 `/api/feedback-intake` 経由）**。webhook 直叩きは中継が落ちた時のフォールバックとしてのみ残す。**kim が DM に返信すると、その内容が夜間 `tools/feedback-replies.mjs` で Issue/PR のコメント（＝実行指示）として貼られる**（2026-09-03 本番検証済み）。貼り先が特定できない返信は推測で書き込まずスキップする。
 
+**通知は必須。「記録だけして誰も気づかない」を作らない（全アカウント絶対 / 2026-09-06 kim厳命）**。不具合シート／フォームを組み込むときは、**Discord 通知先を必ず1つ以上設定してから完了とする**。実測でブース制作アプリは中継だけが設定され `DISCORD_FEEDBACK_WEBHOOK` が空で、中継が落ちたら通知ゼロになる状態だった（シートには入るが誰も見ない＝報告が死ぬ）。**Discord の DM は webhook では送れず Bot トークンが要る**。Bot トークンを GAS の Script Properties に置くのは認証情報をクラウドへ複製することになるので、**本人PCで動く定期実行から DM する**のを既定とし、GAS 側は中継/webhook に留める（中継が落ちて即時通知が飛ばなくても、翌朝のプッシュがシートを読んで必ず拾う二段構え）。GAS から直接 DM したい場合だけ Script Properties に入れる。通知の多段フォールバックは「①中継 `FEEDBACK_RELAY_URL` → ②Bot DM（`DISCORD_BOT_TOKEN` + `DISCORD_DM_USER_ID`、`POST /users/@me/channels` → `POST /channels/{id}/messages`）→ ③`DISCORD_FEEDBACK_WEBHOOK`」の順で、先に成功した1つで止める。**kim の PC で動くものは kim 本人の DM 宛**（ユーザーID `715210673642012733` / `kimkon.`。`kimi_74244` は別人なので混同しない）。他メンバーの環境ではその人自身の DM 宛にする。
+
+**溜まった未対応は毎日プッシュする（同上）**。記録シートに入っただけで放置されるのを防ぐため、未対応の一覧を**日次1本**で本人の DM に送る（ローカル版は `tools/feedback-nag.mjs` + `tools/register-feedback-nag-task.ps1`、GAS 版は `FeedbackRelay_nagPending()` + `FeedbackRelay_installNagTrigger()`。同名ハンドラを全削除してから1本だけ作る＝重複防止。GAS のトリガー上限20本に注意）。**「未対応」＝ 状態が done/完了/対応済/却下 のいずれでもないもの全部**（対応メモが入っていても除外しない）。各行に `未返答` / `返答済・未完了` を出して区別する——実測でブース制作アプリの唯一の未完了1件が「メモ入りだが未完了」だったため、メモ空だけに絞ると取りこぼす。列は必ずヘッダー名で引く（`受付ID` 列が後から増えた実績があり列番号固定は壊れる）。**0件のときは送らない**（毎日の無意味通知を作らない）。導入完了の条件は「実際に着信を確認したこと」で、設定しただけを完了と呼ばない（§1.4）。
+
 ---
 
 

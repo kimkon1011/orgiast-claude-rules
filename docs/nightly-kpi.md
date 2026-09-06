@@ -24,4 +24,17 @@
 
 判定は行頭の結果語として行い、`okay` のような別語は成功に数えない。Windowsのスケジュールタスク情報は取得できない環境では `null` になる。
 
+改善TODOの起票ルールは次のとおり。
+
+| 対象 | 起票条件 |
+|---|---|
+| 夜間バッチ未起動 | ログが存在しない（`batchRan = false`） |
+| 夜間バッチ途中停止 | サマリ行がない（`batchCompleted = false`） |
+| 夜間バッチのステップ失敗 | `failedSteps` が1件以上 |
+| 空回り率 | `noOpRate > 0.3` |
+| 成果率 | 当日と前日の2日連続で `prYieldRate < PR_YIELD_RATE_THRESHOLD`（0.20）、かつ両日とも `sessions >= 5`。連続日数は `PR_YIELD_LOW_STREAK_DAYS`（2） |
+| 消化率低下 | 前日より低下し、かつ当日 `closeRate < 0.2` |
+
+成果率は、2026-09-02が28.9%、09-05が11.8%、09-06が75.0%と、実測3日だけでも11.8%〜75.0%（6倍以上）に振れた。PRを作らない調査中心の夜や他PCが作業した静かな夜も普通にあり、単日判定ではそれだけで誤検知して通知ノイズになるため、閾値を20%に下げたうえで2日連続の低下を条件とする。前日ファイルがない場合や、GitHub取得失敗で当日または前日の `prYieldRate` が `null` の場合は、「不明」を「低い」と解釈せず起票しない。
+
 コスト値はすべてlist価格換算であり、実請求額ではない。`nightCostUsd` は実行結果の総コスト（欠落時はモデル別トークンから算出）、`supervisorEquivalentUsd` は同じトークン量をOpus 5で処理した反実仮想、`modelSavingUsd` は両者の差、`wastedUsd` は空回り分、`savingPerClosedTodo = netSavingUsd / closedOvernight` である。`humanMinutesSaved = closedOvernight × セッション所要時間中央値` は「人間の作業時間」ではなく、無人で消化した実時間の中央値を使う参考値である。

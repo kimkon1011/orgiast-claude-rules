@@ -5,6 +5,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { isEntry } from './is-entry.mjs';
+
+function claudeDirFor(home) { return path.join(home, '.claude'); }
 
 export function parseAutoSessionEnvText(text) {
   const parsed = {};
@@ -38,6 +41,25 @@ export function buildClaudeHeadlessArgs({ repoCwd, historyCwd, model = process.e
   return args;
 }
 
+// ~/.claude/auto-session.env へ executor/provider を固定する(cost-improve-loop の writeAutoSessionExecutorEnv と同値の書き方)。
+export function writeAutoSessionEnv({ home = process.env.ORGIAST_HOME || os.homedir(), executor = 'cheap-code', provider, writeImpl = null } = {}) {
+  if (!['cheap-code', 'claude', 'codex'].includes(String(executor))) throw new Error(`不正な executor です: ${executor}`);
+  if (!/^[a-z0-9_-]+$/.test(String(provider || ''))) throw new Error(`不正な provider です: ${provider}`);
+  const file = path.join(claudeDirFor(home), 'auto-session.env');
+  let text = '';
+  try { text = fs.readFileSync(file, 'utf8').replace(/^﻿/, ''); } catch {}
+  const parsed = parseAutoSessionEnvText(text);
+  const wanted = { ORGIAST_AUTO_SESSION_EXECUTOR: String(executor), ORGIAST_AUTO_SESSION_PROVIDER: String(provider) };
+  const changed = Object.entries(wanted).some(([key, value]) => parsed[key] !== value);
+  if (changed) {
+    const merged = { ...parsed, ...wanted };
+    const content = `${Object.entries(merged).map(([key, value]) => `${key}=${value}`).join('\n')}\n`;
+    if (writeImpl) writeImpl(file, content);
+    else { fs.mkdirSync(claudeDirFor(home), { recursive: true }); fs.writeFileSync(file, content, 'utf8'); }
+  }
+  return { file, ...wanted, changed };
+}
+
 // cheap-code → claude への落下を台帳(executor-usage.jsonl)に残す。失敗しても例外を投げない。
 export function recordFallbackToClaude({ home = process.env.ORGIAST_HOME || os.homedir(), reason, model = process.env.ORGIAST_AUTO_SESSION_MODEL || 'sonnet', appendImpl = null, now = new Date() } = {}) {
   try {
@@ -49,3 +71,25 @@ export function recordFallbackToClaude({ home = process.env.ORGIAST_HOME || os.h
     }
   } catch {}
 }
+
+function main(argv) {
+  const setIndex = argv.indexOf('--set');
+  if (setIndex < 0) {
+    console.error('使い方: node tools/auto-session-executor.mjs --set cheap-code --provider glm|deepseek  (~/.claude/auto-session.env を更新)');
+    return 2;
+  }
+  const executor = argv[setIndex + 1];
+  const providerIndex = argv.indexOf('--provider');
+  const provider = providerIndex >= 0 ? argv[providerIndex + 1] : '';
+  if (!executor || !provider) { console.error('--set と --provider が必要です'); return 2; }
+  try {
+    const result = writeAutoSessionEnv({ executor, provider });
+    console.log(JSON.stringify(result, null, 2));
+    return 0;
+  } catch (error) {
+    console.error(error.message);
+    return 2;
+  }
+}
+
+if (isEntry(import.meta.url)) process.exitCode = main(process.argv.slice(2));

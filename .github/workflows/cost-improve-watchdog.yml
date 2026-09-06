@@ -16,7 +16,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: Check cost improve loop heartbeat
+      - name: Check cost improve loop heartbeat (daily 36h / weekly 8d+2h)
+        # 日次(36h)に加えて週次コスト改善ループ(OrgiastCostWeeklyImprove)の heartbeat も
+        # inspectWeeklyHeartbeats が 8日+2h 以内の OK 有無で監視する(仕様C3)。
         run: node tools/cost-improve-watchdog.mjs
         env:
           FLEET_SHEET_URL: ${{ secrets.FLEET_SHEET_URL }}

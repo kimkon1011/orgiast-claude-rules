@@ -2,6 +2,7 @@
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'; import { isDeepStrictEqual } from 'node:util'; import { fileURLToPath, pathToFileURL } from 'node:url';
 import { runCheck } from './eval-exec-checks.mjs';
 import { isEntry } from './is-entry.mjs';
+import { rebuildRoutingTable } from './routing-table.mjs';
 const HERE = path.dirname(fileURLToPath(import.meta.url)); function userHome() { const h = os.homedir(), m = process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i); return process.env.USERPROFILE || m?.[1] || h; } const HOME = userHome(); const EVAL_DIR = path.join(HOME, '.claude', 'eval'); const TASKS = path.join(EVAL_DIR, 'tasks.jsonl'); const SEED = path.join(HERE, 'eval-tasks.seed.jsonl'); const SEED_SYNCED = path.join(EVAL_DIR, '.seed-synced.jsonl'); const RESULTS = path.join(HOME, '.claude', 'eval-results.jsonl');
 import { COST_PER_MILLION } from './llm-fallback.mjs';
 const PRICE = { ...COST_PER_MILLION, anthropic: [1, 5] };
@@ -121,5 +122,10 @@ async function runOne(name, model, cfg = {}) { let tasks = readJsonl(TASKS); con
   await Promise.all(Array.from({ length: Math.min(concurrency, tasks.length) }, worker)); const rec = resultRecord(name, model, rows); fs.appendFileSync(RESULTS, JSON.stringify(rec) + '\n'); const stamp = rec.t.replace(/[:.]/g, '-'); fs.writeFileSync(path.join(EVAL_DIR, 'runs', `${stamp}-${name}.jsonl`), rows.map(JSON.stringify).join('\n') + '\n'); const rate = rec.rate === null ? '計測不能' : `${(rec.rate * 100).toFixed(1)}%`; console.log(`結果 ${name}/${model}: ${rec.pass}/${rec.graded} graded (${rate}) / ${rec.pass}/${rec.n} attempted (${(rec.attemptedRate * 100).toFixed(1)}%) エラー${rec.errors}件 切断${rec.truncated}件 $${rec.costUsd.toFixed(6)} 平均${Math.round(rec.msAvg)}ms`); }
 const requested = (opt('--provider', '') || '').toLowerCase(); let targets; if (has('--all')) targets = readConfig(); else { if (!PROVIDERS[requested]) { console.error('使い方: node tools/eval-harness.mjs --provider <groq|openrouter|gemini|deepseek|kimi|mistral|ollama|anthropic> [--model X] [--limit N] [--category X] [--concurrency N] [--refresh-tasks|--no-sync] / --all / --pareto'); process.exit(2); } targets = [{ ...providerConfig(requested), provider: requested, model: opt('--model', providerConfig(requested).model || PROVIDERS[requested].model) }]; }
 for (const x of targets) { if (!PROVIDERS[x.provider]) { console.log(`SKIP ${x.provider}: 未対応provider`); continue; } if (x.skip) { console.log(`SKIP ${x.provider}: モデル未導入のためスキップ`); continue; } if (!loadKey(x.provider)) { const P = PROVIDERS[x.provider]; console.log(`SKIP ${x.provider}: ${P.keyEnv} 未設定（env または ~/.claude/${P.keyFile}）`); continue; } const model = x.model || PROVIDERS[x.provider].model; if (x.provider === 'ollama' && (!model || !(await ollamaHasModel(model)))) { console.log('SKIP ollama: モデル未導入のためスキップ'); continue; } try { await runOne(x.provider, model, x); } catch (e) { console.error(`${x.provider} 実行失敗: ${e.message}`); if (!has('--all')) process.exitCode = 1; } }
+if (has('--all')) {
+  // 全provider計測の完了で routing-table.json を再生成する(仕様C: eval 結果に連動するルーティング表)。
+  try { rebuildRoutingTable({ resultsFile: RESULTS }); }
+  catch (error) { console.error(`routing-table 再生成失敗: ${String(error?.message ?? error)}`); }
+}
 }
 if (isEntry(import.meta.url)) await main();

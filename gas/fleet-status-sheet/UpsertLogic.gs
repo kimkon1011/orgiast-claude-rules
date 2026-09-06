@@ -7,10 +7,11 @@ const FLEET_HEADERS_ = {
   activeProjects: '開発プロジェクト(直近7日)', artifacts: '成果物(リポジトリ/ブランチ)', lastCommit: '直近コミット',
   livenessState: '稼働状態', livenessReason: '状態の理由', livenessCheckedAt: '状態確認日(JST)',
   interactionLoop: '対話ループ適用', interactionSelftest: '対話ループ自己テスト',
-  costLoopRanAt: 'コスト改善ループ最終実行', costLoopStatus: 'コスト改善ループ結果'
+  costLoopRanAt: 'コスト改善ループ最終実行', costLoopStatus: 'コスト改善ループ結果',
+  costWeeklyRanAt: 'コスト週次改善ループ最終実行', costWeeklyStatus: 'コスト週次改善ループ結果'
 };
 
-const FLEET_OPTIONAL_HEADERS_ = ['delegRatioLegacy', 'planSevenDayPct', 'planFiveHourPct', 'budgetPacePct', 'settingsModel', 'osUser', 'realHostname', 'gitEmail', 'activeProjects', 'artifacts', 'lastCommit', 'livenessState', 'livenessReason', 'livenessCheckedAt', 'interactionLoop', 'interactionSelftest', 'costLoopRanAt', 'costLoopStatus'];
+const FLEET_OPTIONAL_HEADERS_ = ['delegRatioLegacy', 'planSevenDayPct', 'planFiveHourPct', 'budgetPacePct', 'settingsModel', 'osUser', 'realHostname', 'gitEmail', 'activeProjects', 'artifacts', 'lastCommit', 'livenessState', 'livenessReason', 'livenessCheckedAt', 'interactionLoop', 'interactionSelftest', 'costLoopRanAt', 'costLoopStatus', 'costWeeklyRanAt', 'costWeeklyStatus'];
 
 // ヘッダ照合は正規化してから行う。全角/半角の括弧・英数、前後の空白、改行の違いで
 // 「タブが見つからない」と誤判定するのを防ぐ(実セルの表記は目視できないため厳密一致に賭けない)。

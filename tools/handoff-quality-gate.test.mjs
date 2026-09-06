@@ -48,8 +48,10 @@ test('30 広い user 表現は同じ文に命令形がある場合だけ検出',
   assert.equal(hasHandoff('user 側で操作する必要はありません。設定は完了しました。'),false);
   assert.equal(hasHandoff('user 側で操作してください。'),true);
 });
-test('31 7日fixtureの命令形なし応答はすべて手渡しなし',()=>{
-  const fixture=JSON.parse(fs.readFileSync(new URL('../../handoff-blocked-7d.json',import.meta.url),'utf8'));
+// 実会話の抜粋(業務情報を含む)はリポに入れない。ローカルに台帳由来の fixture がある時だけ回帰確認する。
+const fixturePath=process.env.HANDOFF_BLOCKED_FIXTURE||'';
+test('31 7日fixtureの命令形なし応答はすべて手渡しなし',{skip:!fixturePath||!fs.existsSync(fixturePath)?'HANDOFF_BLOCKED_FIXTURE 未設定':false},()=>{
+  const fixture=JSON.parse(fs.readFileSync(fixturePath,'utf8'));
   const command=/(してください|クリック|貼り付け|押して|開いて|ダブルクリック|ログインして)/;
   const withoutCommand=fixture.filter(({excerpt})=>!command.test(excerpt));
   assert.ok(withoutCommand.length>=71,`fixtureの命令形なし件数=${withoutCommand.length}`);

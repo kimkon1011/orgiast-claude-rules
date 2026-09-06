@@ -49,6 +49,27 @@ function _fleetSheet_() {
   throw new Error('fleet status tab not found');
 }
 
+// GET は移行途中のシートも読める必要がある。書き込み用の全必須列を要求しない。
+function _fleetReadSheet_() {
+  const properties = PropertiesService.getScriptProperties();
+  const id = properties.getProperty('SHEET_ID');
+  if (!id) throw new Error('SHEET_ID is not configured');
+  const spreadsheet = SpreadsheetApp.openById(id);
+  const cachedName = properties.getProperty('SHEET_TAB_NAME');
+  const cached = cachedName ? spreadsheet.getSheetByName(cachedName) : null;
+  if (cached) return cached;
+  const minimum = [FLEET_HEADERS_.selfPc, FLEET_HEADERS_.hostname, FLEET_HEADERS_.reportedAt];
+  const sheets = spreadsheet.getSheets();
+  for (let i = 0; i < sheets.length; i += 1) {
+    const sheet = sheets[i];
+    const lastColumn = sheet.getLastColumn();
+    if (lastColumn < minimum.length) continue;
+    const headers = sheet.getRange(1, 1, 1, lastColumn).getDisplayValues()[0];
+    if (minimum.every(function(header) { return fleetFindHeaderIndex(headers, header) >= 0; })) return sheet;
+  }
+  throw new Error('fleet status tab not found');
+}
+
 function doPost(e) {
   let payload;
   try {
@@ -95,20 +116,36 @@ function doGet(e) {
   const token = e && e.parameter ? e.parameter.token : '';
   if (!expected || token !== expected) return _fleetJson_({ ok: false, status: 401, error: 'unauthorized' });
   try {
-    const sheet = _fleetSheet_();
+    const sheet = _fleetReadSheet_();
     const lastColumn = sheet.getLastColumn();
     const lastRow = sheet.getLastRow();
     const headers = sheet.getRange(1, 1, 1, lastColumn).getDisplayValues()[0];
-    const columns = fleetResolveColumns(headers);
+    // 読み取りAPIは古いシートにも対応する。upsert用の必須列検証はここでは使わない。
+    const columns = {};
+    Object.keys(FLEET_HEADERS_).forEach(function(key) {
+      columns[key] = fleetFindHeaderIndex(headers, FLEET_HEADERS_[key]);
+    });
     const values = lastRow > 1 ? sheet.getRange(2, 1, lastRow - 1, lastColumn).getDisplayValues() : [];
     const rows = values.map(function(row) {
+      const value = function(key) {
+        const index = columns[key];
+        return index >= 0 ? (row[index] || '') : '';
+      };
       return {
-        pcName: row[columns.selfPc] || '',
-        label: row[columns.hostname] || '',
-        reportedAt: row[columns.reportedAt] || '',
-        note: row[columns.consistency] || '',
-        interactionLoop: columns.interactionLoop >= 0 ? (row[columns.interactionLoop] || '') : '',
-        interactionSelftest: columns.interactionSelftest >= 0 ? (row[columns.interactionSelftest] || '') : ''
+        pcName: value('selfPc'),
+        label: value('hostname'),
+        reportedAt: value('reportedAt'),
+        note: value('consistency'),
+        interactionLoop: value('interactionLoop'),
+        interactionSelftest: value('interactionSelftest'),
+        claudeUsd: value('claudeUsd'),
+        mainModel: value('mainModel'),
+        delegRatio: value('delegRatio'),
+        cheapAiUse: value('cheapAiUse'),
+        codexLogin: value('codexLogin'),
+        fable5: value('fable5'),
+        disciplineAlert: value('disciplineAlert'),
+        livenessState: value('livenessState')
       };
     });
     return _fleetJson_({ ok: true, rows: rows, count: rows.length });

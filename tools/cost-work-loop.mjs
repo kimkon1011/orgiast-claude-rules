@@ -196,6 +196,16 @@ const linesDelegationLine = linesRatio === null
   ? '計測不能(Codex/Claudeともに実装行なし)'
   : `**${(linesRatio * 100).toFixed(1)}%** (Codex ±${codexLines.toLocaleString('ja-JP')}行 / Claude手打ち ±${claudeLines.toLocaleString('ja-JP')}行)`;
 if (!qualityLines.length) qualityLines.push(fs.existsSync(path.join(HOME, '.claude', 'eval-results.jsonl')) ? '有効な計測なし（再計測が必要）' : 'eval 未実行 (node tools/eval-harness.mjs --all で計測)');
+// 料金・利用上限は pricing-brief.mjs が夜間に作り置きする。ここでは「どこにあるか」を1行だけ出す。
+// 表を丸ごと注入すると毎セッション数百トークンを食うので、必要になった時に読ませる。
+const pricingBriefLine = (() => {
+  const file = path.join(HOME, '.claude', 'pricing-brief.md');
+  try {
+    const ageHours = (Date.now() - fs.statSync(file).mtimeMs) / 3_600_000;
+    if (ageHours > 72) return `### 料金・上限の一次情報\n- ⚠️ ~/.claude/pricing-brief.md が${Math.floor(ageHours / 24)}日前で古い。判断前に出典URLを開くか \`node tools/pricing-brief.mjs\` で更新すること`;
+    return '### 料金・上限の一次情報\n- 各AIのプラン料金・利用上限は **~/.claude/pricing-brief.md**（夜間に自動収集・出典URL付き）を読む。毎回Web検索し直さない';
+  } catch { return ''; }
+})();
 const md = `<!-- COST-DIRECTIVE-START -->
 ## 📊 Claude Code out ${(claudeOut / 1000).toFixed(0)}k tok / 委譲率 ${(delegRatio * 100).toFixed(1)}% (直近${DAYS}日 / このPC)
 - Claude Code利用: **out ${(claudeOut / 1000).toFixed(0)}k tok** ${arrow} (${claudeModelLine}) ※定額シート課金＝請求$は発生しない
@@ -216,6 +226,7 @@ const md = `<!-- COST-DIRECTIVE-START -->
 ${flags.map(f => '- ' + f).join('\n')}
 ### 品質ゲート
 ${qualityLines.map((x) => '- ' + x).join('\n')}
+${pricingBriefLine}
 <!-- COST-DIRECTIVE-END -->
 `;
 try {

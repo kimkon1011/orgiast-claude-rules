@@ -48,25 +48,38 @@ export function extractBody(payload, limit = 4000) {
   return text.replace(/&nbsp;/g, ' ').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim().slice(0, limit);
 }
 
-async function gmail(token, path) {
-  const response = await fetch(`${API}${path}`, { headers: { Authorization: `Bearer ${token}` } });
-  if (!response.ok) throw new Error(`Gmail API ${response.status}: ${(await response.text()).slice(0, 200)}`);
+async function gmail(token, path, fetchImpl) {
+  const response = await fetchImpl(`${API}${path}`, { headers: { Authorization: `Bearer ${token}` } });
+  if (!response.ok) {
+    const error = new Error(`Gmail API ${response.status}: ${(await response.text()).slice(0, 200)}`);
+    error.status = response.status;
+    throw error;
+  }
   return response.json();
 }
 
-export async function searchGmail({ user, query, max = 10, withBody = false, bodyLimit = 4000 }) {
-  const token = await getDriveToken({ scope: SCOPE, impersonate: user });
-  const list = await gmail(token, `/messages?q=${encodeURIComponent(query)}&maxResults=${Math.min(100, max)}`);
+export async function searchGmail({ user, query, max = 10, withBody = false, bodyLimit = 4000, fetchImpl = globalThis.fetch, getToken = getDriveToken }) {
+  const token = await getToken({ scope: SCOPE, impersonate: user });
+  const list = await gmail(token, `/messages?q=${encodeURIComponent(query)}&maxResults=${Math.min(100, max)}`, fetchImpl);
   const results = [];
+  let skipped = 0;
   for (const stub of (list.messages || []).slice(0, max)) {
     const format = withBody ? 'full' : 'metadata';
     const suffix = withBody ? '' : '&metadataHeaders=Date&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject';
-    const message = await gmail(token, `/messages/${stub.id}?format=${format}${suffix}`);
+    let message;
+    try {
+      message = await gmail(token, `/messages/${stub.id}?format=${format}${suffix}`, fetchImpl);
+    } catch (error) {
+      if (error?.status !== 404 && error?.status !== 410) throw error;
+      skipped++;
+      continue;
+    }
     const compact = compactMessage(message);
     if (withBody) compact.body = extractBody(message.payload, bodyLimit);
     results.push(compact);
   }
-  return { estimate: Number(list.resultSizeEstimate) || results.length, messages: results };
+  if (skipped > 0) console.error(`gmail-search: ${skipped}件のメッセージが取得前に削除または移動されたためスキップしました`);
+  return { estimate: Number(list.resultSizeEstimate) || results.length, messages: results, skipped };
 }
 
 async function main() {

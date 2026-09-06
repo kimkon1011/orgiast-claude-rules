@@ -50,16 +50,20 @@ export function summarizeGeminiMonth(rows, { now = new Date(), usdJpy = 150 } = 
 }
 const nativeHome = os.homedir();
 function defaultHome() { return process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || nativeHome; }
-export function decideEnforcement({ delegRatioWithPrep, delegRatio, linesRatio, daysObserved, claudeOut, history, target, targetLines = 0.50, pilot, previousMode }) {
+export function decideEnforcement({ delegRatioWithPrep, delegRatio, linesRatio, daysObserved, claudeOut, history, target, targetLines = 0.50, pilot, previousMode, override = false }) {
   const useLinesRatio = typeof linesRatio === 'number' && Number.isFinite(linesRatio);
   const enforcementRatio = useLinesRatio ? linesRatio : (delegRatioWithPrep ?? delegRatio ?? 0);
   const enforcementTarget = useLinesRatio ? targetLines : target;
   const decidedBy = useLinesRatio ? 'linesRatio' : 'delegRatioWithPrep';
   const metric = useLinesRatio ? '行ベース委譲率' : '委譲率';
   const fallback = useLinesRatio ? '' : '(行ベース算出不能のためフォールバック)';
-  if (!pilot) {
+  // 2026-09-06 kim 承認: パイロット機限定を解除し、全PCで block 昇格を有効にする。
+  // nishi-PC 15.9% / kimko-PC 13% が長期間 warn のまま改善しなかったため。
+  // 逃げ道は override ファイルのみ(pilot は互換のため受け取るが判定には使わない)。
+  const overrideGuidance = '強制を止めるには ~/.claude/cost-enforce-override を作成してください';
+  if (override) {
     const demotion = previousMode === 'block' ? '既存blockをwarnへ降格。' : '';
-    return { mode: 'warn', reason: `${demotion}block昇格はパイロット機のみ有効(~/.claude/cost-enforce-pilot が無い)。目標50%の指示書と可視化は有効${fallback}`, decidedBy };
+    return { mode: 'warn', reason: `${demotion}~/.claude/cost-enforce-override があるため強制を停止。override ファイルを削除すれば自動判定を再開します${fallback}`, decidedBy };
   }
 
   let mode = 'warn', reason = '観察中';
@@ -77,7 +81,7 @@ export function decideEnforcement({ delegRatioWithPrep, delegRatio, linesRatio, 
       reason = `${metric}に改善傾向あり(${(avg(early) * 100).toFixed(0)}%→${(avg(recent) * 100).toFixed(0)}%)=警告継続${fallback}`;
     }
   }
-  return { mode, reason, decidedBy };
+  return { mode, reason: `${reason}。${overrideGuidance}`, decidedBy };
 }
 const HOME = defaultHome();
 const DAYS = parseInt((process.argv.find(a => a.startsWith('--days=')) || '').split('=')[1] || '7', 10) || 7;
@@ -246,7 +250,8 @@ let previousMode = 'warn';
 try { previousMode = String(JSON.parse(fs.readFileSync(enforceFile, 'utf8')).mode || 'warn'); } catch { }
 const { mode: enforce, reason: ereason, decidedBy } = decideEnforcement({
   delegRatioWithPrep, linesRatio, daysObserved, claudeOut, history: hist, target: TARGET_DELEG, targetLines: TARGET_LINES,
-  pilot: fs.existsSync(path.join(HOME, '.claude', 'cost-enforce-pilot')), previousMode,
+  pilot: fs.existsSync(path.join(HOME, '.claude', 'cost-enforce-pilot')),
+  override: fs.existsSync(path.join(HOME, '.claude', 'cost-enforce-override')), previousMode,
 });
 try { fs.writeFileSync(enforceFile, JSON.stringify({ mode: enforce, reason: ereason, since: obsStart, daysObserved, delegRatio, delegRatioWithPrep, linesRatio, codexLines, claudeLines, decidedBy, target: TARGET_DELEG, targetLines: TARGET_LINES }, null, 2)); } catch { }
 try { fs.writeFileSync(stateF, JSON.stringify({ t: new Date().toISOString(), totalUSD, claudeUSD, claudeOut, codexOut, codexSessions, execUSD, work, delegRatio, delegRatioWithPrep, linesRatio, codexLines, claudeLines, landedLines, obsStart, history: hist })); } catch { }

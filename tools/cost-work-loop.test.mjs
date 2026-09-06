@@ -12,16 +12,18 @@ const base = { claudeOut: 1_000_000, history: [], target: 0.5, previousMode: 'wa
 
 test.after(() => fs.rmSync(isolatedHome, { recursive: true, force: true }));
 
-test('non-pilot remains warn after 10 days at 0% delegation', () => {
+test('non-pilot blocks when enforcement conditions are met', () => {
   const result = decideEnforcement({ ...base, delegRatio: 0, daysObserved: 10, pilot: false });
-  assert.equal(result.mode, 'warn');
-  assert.match(result.reason, /cost-enforce-pilot が無い/);
+  assert.equal(result.mode, 'block');
+  assert.match(result.reason, /cost-enforce-override を作成/);
 });
 
-test('non-pilot demotes a previous block to warn', () => {
-  const result = decideEnforcement({ ...base, delegRatio: 0, daysObserved: 10, pilot: false, previousMode: 'block' });
+test('override keeps enforcement at warn and explains how to resume it', () => {
+  const result = decideEnforcement({ ...base, delegRatio: 0, daysObserved: 10, pilot: false, previousMode: 'block', override: true });
   assert.equal(result.mode, 'warn');
   assert.match(result.reason, /降格/);
+  assert.match(result.reason, /cost-enforce-override/);
+  assert.match(result.reason, /削除すれば自動判定を再開/);
 });
 
 test('pilot blocks at 15% delegation after 3 days', () => {

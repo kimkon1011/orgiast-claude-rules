@@ -296,9 +296,9 @@ test('11. reported rows with missing metrics are untrusted and never displayed a
   } finally { delete process.env.ORGIAST_HOME; cleanTempDir(tempDir); }
 });
 
-test('12. fallback-only providers do not raise unused_provider', () => {
+test('12. all known cheap providers participate in unused-provider health checks', () => {
   const result = evaluateFleet({ rows: [], ledgerCounts: { codex: 1 }, localState: { configuredProviders: ['grok', 'openrouter'] }, now: NOW });
-  assert.ok(!result.violations.some(v => v.kind === 'unused_provider'));
+  assert.equal(result.violations.filter(v => v.kind === 'unused_provider').length, 2);
 });
 
 test('13. auto-codex spec contains measured facts and diagnostic guardrails', () => {

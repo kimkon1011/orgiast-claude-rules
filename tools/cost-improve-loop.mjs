@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { fetchFleetKPIs, getClaudeDir } from './fleet-kpi-fetch.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { appendImprovementTodos } from './nightly-kpi.mjs';
+import { KNOWN_CHEAP_PROVIDERS } from './llm-fallback.mjs';
 
 export const ALLOWED_LOCAL_COMMANDS = [
   'node tools/tool-adoption-check.mjs --force',
@@ -16,7 +17,7 @@ export const ALLOWED_LOCAL_COMMANDS = [
 ];
 
 // §1.18 の通常運用で利用を期待する主経路だけを監視し、障害時専用の fallback は除外する。
-export const PRIMARY_PROVIDERS = ['codex', 'groq', 'gemini', 'deepseek', 'kimi'];
+export const PRIMARY_PROVIDERS = KNOWN_CHEAP_PROVIDERS;
 
 function isRosterOnlyRow(row) {
   return !String(row?.reportedAt ?? '').trim()
@@ -252,7 +253,7 @@ export function evaluateFleet({ rows, ledgerCounts, localState, now, lastKpis = 
   }
 
   if (selfLedgerTrusted) {
-    const cheapProviders = ['groq', 'deepseek', 'gemini', 'codex', 'grok', 'ollama', 'openrouter', 'kimi', 'moonshot'];
+    const cheapProviders = KNOWN_CHEAP_PROVIDERS;
     let cheapCount = 0;
     for (const [provider, count] of Object.entries(ledgerCounts)) {
       if (cheapProviders.includes(provider)) {

@@ -14,6 +14,8 @@ function fleetPlanHeaders(headers) {
 function _fleetEnsureIdentityHeaders_(sheet) {
   const lastColumn = sheet.getLastColumn();
   const headers = lastColumn > 0 ? sheet.getRange(1, 1, 1, lastColumn).getDisplayValues()[0] : [];
+  const oldDelegation = fleetFindHeaderIndex(headers, '委譲率(安いAIへ)');
+  if (oldDelegation >= 0) { sheet.getRange(1, oldDelegation + 1).setValue(FLEET_HEADERS_.delegRatio); headers[oldDelegation] = FLEET_HEADERS_.delegRatio; }
   const planned = fleetPlanHeaders(headers);
   if (planned.length > headers.length) {
     sheet.getRange(1, lastColumn + 1, 1, planned.length - headers.length).setValues([planned.slice(headers.length)]);
@@ -41,7 +43,7 @@ function _fleetSheet_() {
     const lastColumn = sheet.getLastColumn();
     if (lastColumn < requiredHeaders.length) continue;
     const headers = sheet.getRange(1, 1, 1, lastColumn).getDisplayValues()[0];
-    if (requiredHeaders.every(function(header) { return headers.indexOf(header) >= 0; })) {
+    if (requiredHeaders.every(function(header) { return fleetFindHeaderIndex(headers, header) >= 0; })) {
       properties.setProperty('SHEET_TAB_NAME', sheet.getName());
       return sheet;
     }
@@ -128,7 +130,8 @@ function doGet(e) {
       return {
         pcName: value('selfPc'), label: value('hostname'), reportedAt: value('reportedAt'), note: value('consistency'),
         interactionLoop: value('interactionLoop'), interactionSelftest: value('interactionSelftest'),
-        claudeUsd: value('claudeUsd'), mainModel: value('mainModel'), delegRatio: value('delegRatio'), cheapAiUse: value('cheapAiUse'),
+        claudeUsd: value('claudeUsd'), mainModel: value('mainModel'), delegRatio: value('delegRatio'), delegRatioLegacy: value('delegRatioLegacy'), cheapAiUse: value('cheapAiUse'),
+        planSevenDayPct: value('planSevenDayPct'), planFiveHourPct: value('planFiveHourPct'), budgetPacePct: value('budgetPacePct'), settingsModel: value('settingsModel'),
         codexLogin: value('codexLogin'), fable5: value('fable5'), disciplineAlert: value('disciplineAlert'), livenessState: value('livenessState'),
         costLoopRanAt: value('costLoopRanAt'), costLoopStatus: value('costLoopStatus')
       };

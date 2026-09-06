@@ -16,13 +16,11 @@ import { recommendations } from './eval-harness.mjs';
 import { readEnvValue } from './env-kv.mjs';
 import { isEntry } from './is-entry.mjs';
 import { loadFablePolicy } from './fable-policy.mjs';
-import { calculateDelegation, calculateLinesDelegation, collectBashProfile, collectClaudeActivityDays, collectClaudeCostStats, collectClaudeStats, collectCodexUsage, collectGitActivity, estimateSpecAuthoringTokens, formatBlockSource } from './usage-stats.mjs';
+import { COST_PER_MILLION } from './llm-fallback.mjs';
+import { calculateDelegation, calculateLinesDelegation, collectBashProfile, collectClaudeActivityDays, collectClaudeCostStats, collectClaudeStats, collectCodexUsage, collectGitActivity, collectProviderHealth, estimateSpecAuthoringTokens, formatBlockSource } from './usage-stats.mjs';
 export { codexSessionDirs, collectCodexUsage } from './usage-stats.mjs';
 // 公式 pricing 2026-08-30。Gemini token は 2026-12-31 までのプロモ価格（以降は倍）。
-export const EXECUTOR_PRICING = {
-  groq: [0.6, 0.8], openrouter: [0.3, 0.6], gemini: [0.75, 3.75], kimi: [3, 15],
-  mistral: [2, 6], deepseek: [0.27, 1.1], grok: [3, 15], ollama: [0, 0], codex: [0, 0],
-};
+export const EXECUTOR_PRICING = COST_PER_MILLION;
 export const GEMINI_PRICING = { freeGroundedSearches: 5000, searchUsdPer1000: 14, monthlyLimitJpy: 20000 };
 
 export function summarizeGeminiMonth(rows, { now = new Date(), usdJpy = 150 } = {}) {
@@ -129,7 +127,7 @@ const totalUSD = claudeUSD + execUSD;
 const bashProfile = collectBashProfile({ home: HOME, days: DAYS });
 const specAuthoringOut = estimateSpecAuthoringTokens({ blocks: claudeStats.blocks, profile: bashProfile });
 const delegation = calculateDelegation({ execOut, codexOut, byModel: claudeByModel, specAuthoringOut });
-const { delegRatio, delegRatioWithPrep } = delegation;
+const { delegRatio, delegRatioWithPrep, nonClaudeDelegRatio } = delegation;
 const outPerWork = claudeOut / Math.max(work, 1);
 // 前回スナップショットで傾向
 const stateF = path.join(HOME, '.claude', 'cost-loop-state.json');
@@ -196,6 +194,14 @@ const cacheTarget = cacheRead + cacheWrite + cacheBase, cacheRate = cacheTarget 
 const cacheLine = `${cacheTarget > 1_000_000 ? (cacheRate < 0.2 ? '🚨 ' : cacheRate < 0.5 ? '⚠️ ' : '✅ ') : ''}プロンプトキャッシュヒット率 ${(cacheRate * 100).toFixed(1)}% (対象 ${(cacheTarget / 1e6).toFixed(1)}M${cacheTarget <= 1_000_000 ? '・判定対象外' : ''})${cacheTarget > 1_000_000 && cacheRate < 0.2 ? ' — system 内に日時/ID などの動的値が入っている・JSON が非ソート・tools 定義が毎回変わる、を疑う' : ''}`;
 const qualityLines = recommendations();
 const blockSourceLine = formatBlockSource(claudeStats.blocks);
+const headlessJobsLine = Object.entries(claudeStats.headlessJobs || {}).sort((a, b) => b[1] - a[1]).map(([name, out]) => `${name} ${(out / 1000).toFixed(0)}k`).join(' / ') || '内訳なし';
+const health = collectProviderHealth({ home: HOME, days: DAYS });
+const healthLines = Object.entries(health.providers).sort((a, b) => b[1].calls - a[1].calls).map(([name, value]) => `- ${value.cooldown ? '🔒' : value.failRate >= 0.2 ? '⚠️' : '✅'} ${name}: ${value.calls} calls / fail ${value.fail} (${(value.failRate * 100).toFixed(1)}%) / 429 ${value.http429} / 413 ${value.http413} / 平均 ${value.averageSeconds.toFixed(1)}秒 / failover救済 ${value.rescuedByFailover}${value.cooldown ? ` / cooldown ${value.cooldown.reason}` : ''}`);
+function runJsonTool(name) { try { const result = spawnSync(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta.url)), name), '--json'], { env: { ...process.env, ORGIAST_HOME: HOME }, encoding: 'utf8', timeout: 30000 }); return result.status === 0 ? JSON.parse(result.stdout) : null; } catch { return null; } }
+const planUsage = runJsonTool('claude-plan-usage.mjs');
+const budgetStatus = runJsonTool('budget-status.mjs');
+const planLine = planUsage?.available ? `Claudeプラン上限: 5h ${planUsage.fiveHour.utilization.toFixed(1)}% / 7日 ${planUsage.sevenDay.utilization.toFixed(1)}%${planUsage.sevenDay.utilization >= 80 ? ' ⚠️ 上限超過→従量課金の手前。監督の応答回数を減らし、実装/調査を Codex・Gemini へ' : ''}` : `Claudeプラン上限: 計測不能(${planUsage?.reason || '実行失敗'})`;
+const budgetLines = budgetStatus ? [`月次予算: 固定 ¥${Math.round(budgetStatus.fixedJpy).toLocaleString('ja-JP')} / 変動MTD ¥${Math.round(budgetStatus.variableKnownJpy).toLocaleString('ja-JP')} / 合計 ¥${Math.round(budgetStatus.totalKnownJpy).toLocaleString('ja-JP')} / ¥${budgetStatus.monthlyBudgetJpy.toLocaleString('ja-JP')} の ${budgetStatus.budgetUsedPct.toFixed(1)}%`, `日割りペース: 月末 ¥${Math.round(budgetStatus.projectedJpy).toLocaleString('ja-JP')} (${budgetStatus.budgetPacePct.toFixed(1)}%)${budgetStatus.unfilled.length ? ` / 未記入: ${budgetStatus.unfilled.join(', ')}` : ''}`] : ['月次予算: 計測不能(budget-status 実行失敗)'];
 const linesDelegationLine = linesRatio === null
   ? '計測不能(Codex/Claudeともに実装行なし)'
   : `**${(linesRatio * 100).toFixed(1)}%** (Codex ±${codexLines.toLocaleString('ja-JP')}行 / Claude手打ち ±${claudeLines.toLocaleString('ja-JP')}行)`;
@@ -211,7 +217,7 @@ const pricingBriefLine = (() => {
   } catch { return ''; }
 })();
 const md = `<!-- COST-DIRECTIVE-START -->
-## 📊 Claude Code out ${(claudeOut / 1000).toFixed(0)}k tok / 委譲率 ${(delegRatio * 100).toFixed(1)}% (直近${DAYS}日 / このPC)
+## 📊 Claude Code out ${(claudeOut / 1000).toFixed(0)}k tok / 委譲率(Claude以外へ) ${(nonClaudeDelegRatio * 100).toFixed(1)}% (直近${DAYS}日 / このPC)
 - Claude Code利用: **out ${(claudeOut / 1000).toFixed(0)}k tok** ${arrow} (${claudeModelLine}) ※定額シート課金＝請求$は発生しない
 - (参考: list価格換算 $${claudeUSD.toFixed(1)} — 実請求ではない)
 - 安いAI実行者: **実額 $${execUSD.toFixed(2)}**（従量課金）— ${execLine}
@@ -219,15 +225,22 @@ const md = `<!-- COST-DIRECTIVE-START -->
 - Gemini MCP 経由分は未計測（gemini-mcp-tool の ask-gemini は台帳対象外のため、この金額は過小評価）
 - Codex(定額枠・実装の主経路): **out ${codexOut.toLocaleString('ja-JP')} tok** / ${codexSessions}セッション ※従量課金なし
 - 作業量(${workKind}): ${work} / **作業あたり 出力 ${(outPerWork / 1000).toFixed(0)}k tok**
-- 委譲率(Codex/Sonnet/Haiku/安いAIへ逃がせた割合): **${(delegRatio * 100).toFixed(1)}%**
+- 委譲率(Claude以外へ): **${(nonClaudeDelegRatio * 100).toFixed(1)}%**
+- Claude内の格下げ(節約): **${(delegation.claudeDowngradeRatio * 100).toFixed(1)}%** (Sonnet/Haiku)
+- 旧委譲率(互換値): ${(delegRatio * 100).toFixed(1)}%
 - 委譲率(委譲の準備込み・参考): **${(delegRatioWithPrep * 100).toFixed(1)}%**
 - うち委譲の準備(仕様書執筆): **${specAuthoringOut.toLocaleString('ja-JP', { maximumFractionDigits: 0 })} tok**
 - 委譲率(行ベース・**強制判定に使う値**): ${linesDelegationLine}
 - 内訳 codex ${(codexOut / 1000).toFixed(0)}k / sonnet+haiku ${(delegation.sonnetHaikuOut / 1000).toFixed(0)}k / 安いAI ${(execOut / 1000).toFixed(0)}k / 監督(opus+fable+default) ${(delegation.supervisorOut / 1000).toFixed(0)}k
+- 無人ジョブの Claude 使用: ${(claudeStats.headlessClaudeOut / 1000).toFixed(0)}k tok (${headlessJobsLine}) — 人が待たない処理は cheap-code(GLM/DeepSeek) へ
+- ${planLine}
+${budgetLines.map((line) => `- ${line}`).join('\n')}
 - 🔍 監督の出力の出どころ: ${blockSourceLine}
 - ${cacheLine}
 ### 指示
 ${flags.map(f => '- ' + f).join('\n')}
+### プロバイダ健全性
+${healthLines.length ? healthLines.join('\n') : '- 計測データなし'}
 ### 品質ゲート
 ${qualityLines.map((x) => '- ' + x).join('\n')}
 ${pricingBriefLine}
@@ -241,7 +254,7 @@ try {
 // --- 1週間観察→改善しなければハードブロックへ昇格(kim 2026-08-16) ---
 const today = new Date().toISOString().slice(0, 10);
 let hist = (prev && Array.isArray(prev.history)) ? prev.history : [];
-if (!hist.length || hist[hist.length - 1].date !== today) hist.push({ date: today, delegRatio, delegRatioWithPrep, linesRatio, codexLines, claudeLines, claudeOut }); else hist[hist.length - 1] = { date: today, delegRatio, delegRatioWithPrep, linesRatio, codexLines, claudeLines, claudeOut };
+if (!hist.length || hist[hist.length - 1].date !== today) hist.push({ date: today, delegRatio, nonClaudeDelegRatio, delegRatioWithPrep, linesRatio, codexLines, claudeLines, claudeOut }); else hist[hist.length - 1] = { date: today, delegRatio, nonClaudeDelegRatio, delegRatioWithPrep, linesRatio, codexLines, claudeLines, claudeOut };
 while (hist.length > 14) hist.shift();
 const obsStart = (prev && prev.obsStart) ? prev.obsStart : today;
 const daysObserved = Math.round((Date.now() - new Date(obsStart + 'T00:00:00Z').getTime()) / 864e5);
@@ -253,8 +266,8 @@ const { mode: enforce, reason: ereason, decidedBy } = decideEnforcement({
   pilot: fs.existsSync(path.join(HOME, '.claude', 'cost-enforce-pilot')),
   override: fs.existsSync(path.join(HOME, '.claude', 'cost-enforce-override')), previousMode,
 });
-try { fs.writeFileSync(enforceFile, JSON.stringify({ mode: enforce, reason: ereason, since: obsStart, daysObserved, delegRatio, delegRatioWithPrep, linesRatio, codexLines, claudeLines, decidedBy, target: TARGET_DELEG, targetLines: TARGET_LINES }, null, 2)); } catch { }
-try { fs.writeFileSync(stateF, JSON.stringify({ t: new Date().toISOString(), totalUSD, claudeUSD, claudeOut, codexOut, codexSessions, execUSD, work, delegRatio, delegRatioWithPrep, linesRatio, codexLines, claudeLines, landedLines, obsStart, history: hist })); } catch { }
+try { fs.writeFileSync(enforceFile, JSON.stringify({ mode: enforce, reason: ereason, since: obsStart, daysObserved, delegRatio, nonClaudeDelegRatio, delegRatioWithPrep, linesRatio, codexLines, claudeLines, decidedBy, target: TARGET_DELEG, targetLines: TARGET_LINES }, null, 2)); } catch { }
+try { fs.writeFileSync(stateF, JSON.stringify({ t: new Date().toISOString(), totalUSD, claudeUSD, claudeOut, codexOut, codexSessions, execUSD, work, delegRatio, nonClaudeDelegRatio, delegRatioWithPrep, linesRatio, codexLines, claudeLines, landedLines, obsStart, history: hist })); } catch { }
 if (enforce === 'block') console.log(`\n🔒 ハードブロック昇格: ${ereason}（アプリ実装コードの直接編集をpretooluseフックが拒否します）`);
 console.log(md);
 

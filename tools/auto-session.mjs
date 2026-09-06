@@ -519,7 +519,7 @@ export function runChild(executable, prompt, repoCwd, historyCwd, timeoutMs) {
     let child;
     try {
       child = spawn(executable, buildChildArgs(repoCwd, historyCwd), {
-        cwd: historyCwd, env: { ...process.env, CLAUDE_HEADLESS: '1' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
+        cwd: historyCwd, env: { ...process.env, CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: 'auto-session' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
       });
     } catch (error) {
       // spawn は Windows で EFTYPE/ENOENT を同期 throw する。child.on('error') では拾えず、
@@ -535,7 +535,7 @@ export function runChild(executable, prompt, repoCwd, historyCwd, timeoutMs) {
     child.stderr.setEncoding('utf8').on('data', (chunk) => { stderr += chunk; });
     child.on('error', (error) => { launchFailed = true; stderr += error.message; });
     child.stdin.on('error', () => {});
-    child.stdin.end(prompt, 'utf8');
+    child.stdin.end(`[headless:auto-session]\n${prompt}`, 'utf8');
     const timer = setTimeout(() => {
       timedOut = true;
       if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true });

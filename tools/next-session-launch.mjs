@@ -460,7 +460,7 @@ export async function launchNextSession(argv = [], io = {}) {
     if (!account && fallbackAccountConfigPath !== firstAccountConfigPath) {
       account = pickAccountEmail(await readJson(fallbackAccountConfigPath, null));
     }
-    const launchEnv = childEnv({ env, configDir, source: configDirSource });
+    const launchEnv = { ...childEnv({ env, configDir, source: configDirSource }), ORGIAST_HEADLESS_JOB: 'next-session-launch' };
     const pendingTab = hasUnsentVscodeTab({ state, now, promptConsumed });
     const decision = shouldLaunch({ state, now, env, force: flags.force, pendingTab: route === 'inline' ? false : pendingTab });
     if (!decision.ok) {
@@ -619,7 +619,7 @@ export async function launchNextSession(argv = [], io = {}) {
     }
 
     const wt = resolveWt({ env, readdir, homedir: home, flagWt: flags.wt });
-    const plan = planLaunch({ claudeBin, cwd, prompt: flags.prompt, wt });
+    const plan = planLaunch({ claudeBin, cwd, prompt: `[headless:next-session-launch] ${flags.prompt}`, wt });
     if (flags.dryRun) {
       log(JSON.stringify({ ...plan, account, configDir, configDirSource }));
       return 0;

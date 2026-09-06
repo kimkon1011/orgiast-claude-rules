@@ -1,0 +1,4 @@
+import test from 'node:test'; import assert from 'node:assert/strict'; import { calculateBudgetStatus, formatBudgetStatus } from './budget-status.mjs';
+const base = { monthlyBudgetJpy: 150000, usdJpy: 150, fixed: [{ name: 'unknown', jpy: null }, { name: 'usd', usd: 10 }, { name: 'cap', jpy: 20000, kind: 'cap' }] };
+test('null fixed cost is omitted and reported unfilled', () => { const s = calculateBudgetStatus({ config: base, now: new Date('2026-09-06T00:00:00') }); assert.equal(s.fixedJpy, 1500); assert.deepEqual(s.unfilled, ['unknown']); assert.match(formatBudgetStatus(s), /未記入: unknown/); });
+test('usdJpy changes converted fixed cost', () => { const a = calculateBudgetStatus({ config: base, now: new Date('2026-09-06') }), b = calculateBudgetStatus({ config: { ...base, usdJpy: 200 }, now: new Date('2026-09-06') }); assert.equal(a.fixedJpy, 1500); assert.equal(b.fixedJpy, 2000); });

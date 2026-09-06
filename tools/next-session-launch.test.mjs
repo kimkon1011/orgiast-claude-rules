@@ -334,7 +334,7 @@ test('起動成功時に detached spawn し state を tmp から原子的に更�
   assert.equal(options.stdio, 'ignore');
   assert.equal(options.windowsHide, false);
   // 親セッションの CLAUDE* を継承させない(継承すると新セッションが今のセッションの子になる)。
-  assert.deepEqual(options.env, { CLAUDE_CLI_PATH: '/fake/claude.exe' });
+  assert.deepEqual(options.env, { CLAUDE_CLI_PATH: '/fake/claude.exe', ORGIAST_HEADLESS_JOB: 'next-session-launch' });
   assert.equal(calls.unref, 1);
   const stateWrite = calls.writes.find(([file]) => file.includes('next-session-launch.json.tmp-'));
   const stateRename = calls.renames.find(([, file]) => file.endsWith('next-session-launch.json'));

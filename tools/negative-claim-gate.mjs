@@ -72,6 +72,10 @@ function productPattern(product) {
 
 export function hasPrimarySourceEvidence(transcript, product) {
   const raw = tailText(transcript);
+  return hasPrimarySourceEvidenceFromRaw(raw, product);
+}
+
+export function hasPrimarySourceEvidenceFromRaw(raw, product) {
   const needle = productPattern(product);
   // tool_use の command / url だけを対象にし、検索結果や assistant 本文の記述は証拠にしない。
   for (const line of raw.split(/\r?\n/)) {
@@ -111,7 +115,14 @@ export function evaluateNegativeClaim({ text, transcriptPath }) {
   return { decision: 'block', reason: `「${claim}」は一次ソース未照会の否定断定です。次を実行して確認してください:\n${commands(product).join('\n')}`, claim, product };
 }
 
-function configuredMode() {
+export function evaluateNegativeClaimFromRaw({ text, transcriptRaw }) {
+  const claim = findNegativeClaim(text); if (!claim) return { decision: 'pass', reason: '否定存在断定なし' };
+  const product = inferProduct(claim);
+  if (hasPrimarySourceEvidenceFromRaw(transcriptRaw, product)) return { decision: 'pass', reason: '一次ソース照会済み', claim, product };
+  return { decision: 'block', reason: `「${claim}」は一次ソース未照会の否定断定です。次を実行して確認してください:\n${commands(product).join('\n')}`, claim, product };
+}
+
+export function configuredMode() {
   let registryMode = 'warn';
   try {
     const registry = JSON.parse(fs.readFileSync(path.join(here, 'rules-registry.json'), 'utf8'));

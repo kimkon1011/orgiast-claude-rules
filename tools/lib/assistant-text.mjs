@@ -21,6 +21,29 @@ function tailLines(file, maxLines, maxBytes) {
   return raw.split(/\r?\n/).slice(-maxLines);
 }
 
+export function readTranscriptContext(transcriptPath, options = {}) {
+  if (!transcriptPath) return { assistantText: '', humanText: '', raw: '', reason: 'no-path', scannedLines: 0 };
+  let lines;
+  try { lines = tailLines(transcriptPath, options.maxLines ?? DEFAULT_MAX_LINES, options.maxBytes ?? DEFAULT_MAX_BYTES); }
+  catch { return { assistantText: '', humanText: '', raw: '', reason: 'unreadable', scannedLines: 0 }; }
+  let assistantText = '';
+  let humanText = '';
+  for (let index = lines.length - 1; index >= 0 && (!assistantText || !humanText); index--) {
+    let entry; try { entry = JSON.parse(lines[index]); } catch { continue; }
+    if (entry?.isSidechain === true) continue;
+    const content = entry?.message?.content;
+    const text = Array.isArray(content)
+      ? content.filter((block) => block?.type === 'text' && typeof block.text === 'string').map((block) => block.text).join('\n')
+      : typeof content === 'string' ? content : '';
+    if (!assistantText && (entry?.type === 'assistant' || entry?.message?.role === 'assistant') && text.trim()) assistantText = text;
+    if (!humanText && entry?.type === 'user' && !(Array.isArray(content) && content.some((block) => block?.type === 'tool_result'))) {
+      const trimmed = text.trimStart();
+      if (trimmed && !MACHINE_USER_PREFIXES.some((prefix) => trimmed.startsWith(prefix))) humanText = text;
+    }
+  }
+  return { assistantText, humanText, raw: lines.join('\n'), reason: assistantText ? 'ok' : 'no-assistant-text', scannedLines: lines.length };
+}
+
 export function readAssistantText(transcriptPath, options = {}) {
   if (!transcriptPath) return { text: '', reason: 'no-path', scannedLines: 0 };
   const maxLines = options.maxLines ?? DEFAULT_MAX_LINES;

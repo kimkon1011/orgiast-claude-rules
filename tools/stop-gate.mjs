@@ -89,16 +89,16 @@ export function latestAssistantText(transcript, options) {
   return readLatestAssistantText(transcript, options);
 }
 
-function enabled() {
+export function enabled() {
   if (process.env.ORGIAST_STOP_GATE === '1') return true;
   try { return fs.existsSync(path.join(home(), '.claude', 'stop-gate-enabled')); } catch { return false; }
 }
 
-function reasonFor(items) {
+export function reasonFor(items) {
   return `[STOP-GATE] 完了報告と同時に、次の残作業が宣言されています:\n${items.join('\n')}\n\n止まらず次の項目に着手せよ。全部終わったら止まってよい。\n本当に残っていないなら応答に \`[TODO-NONE]\` を、意図して止まるなら理由付きで \`[STOP-OK]\` を含めれば通る。\n完了報告での停止は実測で最多(14日で573回)。§1.15の自律進行を機械で強制している`;
 }
 
-function progressQuestionReason() {
+export function progressQuestionReason() {
   return `[STOP-GATE] 承認が要らない質問で止まっている。末尾が「〜しますか/進めますか」で終わっている。
 
 次の一手が明らかなら聞かずに実行せよ。実行してから結果を1〜3行で報告する。選択肢が複数あるなら、最も妥当な案を自分で選んで実行し、選んだ理由と他案を1行で併記せよ（情報を伏せるのではなく、決めてから見せる）。

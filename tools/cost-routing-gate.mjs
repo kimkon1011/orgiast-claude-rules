@@ -7,6 +7,31 @@ import { fileURLToPath } from 'node:url';
 let raw = '';
 process.stdin.setEncoding('utf8');
 for await (const chunk of process.stdin) raw += chunk;
+
+// ---- 仕様C: eval 実測のルーティング表(routing-table.json)を読み、分類・抽出・要約・返信の各タスクに
+// 「実測で最安の安いAI」を1行出す。計測が無い・provisional でも表があれば参照し、なければ黙る。 ----
+function measuredRoutingLines(prompt) {
+  const repo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+  let table = null;
+  try { table = JSON.parse(fs.readFileSync(path.join(repo, 'tools', 'routing-table.json'), 'utf8')); } catch {}
+  if (!table?.categories) return [];
+  const cats = [];
+  if (/分類|仕分け|タグ付け|ラベル|どちら|カテゴリ|種別|振り分け|判定/.test(prompt)) cats.push('classification');
+  if (/抽出|抜き出し|JSON|構造化|取り出し/.test(prompt)) cats.push('extraction');
+  if (/要約|サマリ|要点|簡潔にまとめ/.test(prompt)) cats.push('summarize');
+  if (/返信|返事|メール.*(作成|案)|下書き/.test(prompt)) cats.push('jp_reply');
+  const lines = [];
+  for (const cat of cats) {
+    const e = table.categories[cat];
+    if (!e?.provider) continue;
+    const rate = e.rate == null ? '成功率不明' : `成功率${Math.round(e.rate * 100)}%`;
+    const usd = e.usdPerTask == null ? '単価不明' : `$${Number(e.usdPerTask).toPrecision(2).replace(/0+$/, '').replace(/\.$/, '')}/task`;
+    const ms = e.msAvg ? `平均${Math.round(e.msAvg)}ms` : '';
+    const suffix = [rate, usd, ms, `n=${e.samples ?? '?'}回`].filter(Boolean).join('・');
+    lines.push(`[品質ゲート実測] ${cat === 'jp_reply' ? '返信' : cat}→${e.provider}/${e.model}（${suffix}）${e.provisional ? '※暫定' : ''}`);
+  }
+  return lines;
+}
 try {
   if (!raw) process.exit(0);
   const input = JSON.parse(raw);
@@ -73,6 +98,7 @@ try {
   }
   // "codex" という語だけでは処理全体をバイパスしない。分類なしの場合も監督責務を注入する。
   parts.push('[監督の担当] 設計・分解・指示・verify。実装・レビュー・テスト作成・調査レポートは Codex または用途別の安い経路へ流す(§1.18)。');
+  for (const line of measuredRoutingLines(prompt)) parts.push(line);
   const output = { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: parts.join('\n') } };
   if (suggestCodexDelegation) {
     output.hookSpecificOutput.suggestCodexDelegation = suggestCodexDelegation;

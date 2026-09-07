@@ -1,7 +1,7 @@
 // 複数プロバイダのLLMを1本で叩く統合CLIヘルパー。
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
 import { readEnvValue } from './env-kv.mjs';
-import { callWithFallback, FALLBACK_CHAIN } from './llm-fallback.mjs';
+import { callWithFallback, FALLBACK_CHAIN, preferredForCategory } from './llm-fallback.mjs';
 
 const PROVIDERS = {
   // 実測で精度が高く、llama-3.3-70b より安価な共通既定モデル。
@@ -22,14 +22,27 @@ const args = process.argv.slice(2);
 function opt(name, def) { const i = args.indexOf(name); return (i >= 0 && args[i + 1]) ? args[i + 1] : def; }
 const provider = (opt('--provider', '') || '').toLowerCase();
 const selected = PROVIDERS[provider];
-if (!selected) { console.error('使い方: node llm-ask.mjs --provider <openrouter|groq|glm|cerebras|gemini|deepseek|grok|kimi|mistral> "指示" [--model X] [--system S] [--max N] [--no-fallback]'); process.exit(2); }
+if (!selected) { console.error('使い方: node llm-ask.mjs --provider <openrouter|groq|glm|cerebras|gemini|deepseek|grok|kimi|mistral> "指示" [--model X] [--system S] [--max N] [--category <classification|extraction|summarize|jp_reply|code>] [--no-fallback]'); process.exit(2); }
 const model = opt('--model', selected.model);
+const category = (opt('--category', '') || '').toLowerCase();
 const system = opt('--system', '');
 const maxTok = parseInt(opt('--max', '4000'), 10) || 4000;
 const skip = new Set();
-['--provider', '--model', '--system', '--max'].forEach((flag) => { const i = args.indexOf(flag); if (i >= 0) { skip.add(i); skip.add(i + 1); } });
+['--provider', '--model', '--system', '--max', '--category'].forEach((flag) => { const i = args.indexOf(flag); if (i >= 0) { skip.add(i); skip.add(i + 1); } });
 const prompt = args.filter((arg, i) => !arg.startsWith('--') && !skip.has(i)).join(' ').trim();
 const home = process.env.ORGIAST_HOME || os.homedir();
+
+// --category 指定時は eval 実測のルーティング表(routing-table.json)の最安候補を先頭にする。
+// 表に無い・暫定の場合は指定された provider をそのまま使い、フォールバック連鎖は維持する。
+const routedStart = category ? preferredForCategory(category) : null;
+const start = routedStart && PROVIDERS[routedStart.provider]
+  ? { provider: routedStart.provider, model: routedStart.model || selected.model }
+  : { provider, model };
+if (category && routedStart) {
+  console.error(`[routing] カテゴリ ${category} は実測表から ${routedStart.provider}/${routedStart.model} を先頭にします${routedStart.provisional ? ' (暫定)' : ''}`);
+} else if (category) {
+  console.error(`[routing] カテゴリ ${category} の実測候補が無いため --provider ${provider} を使います`);
+}
 
 function loadKey(name) {
   const P = PROVIDERS[name];
@@ -55,7 +68,7 @@ function appendAttempt(info, usage = {}) {
 
 try {
   const result = await callWithFallback({
-    start: { provider, model },
+    start,
     chain: args.includes('--no-fallback') ? [] : FALLBACK_CHAIN,
     payloadFor(candidate) {
       const P = PROVIDERS[candidate.provider]; const key = loadKey(candidate.provider);

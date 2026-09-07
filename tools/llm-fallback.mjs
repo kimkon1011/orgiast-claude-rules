@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export const FALLBACK_CHAIN = Object.freeze([
   { provider: 'groq', model: 'openai/gpt-oss-120b' },
@@ -23,6 +24,23 @@ export const KNOWN_CHEAP_PROVIDERS = Object.freeze([
   'groq', 'glm', 'cerebras', 'deepseek', 'openrouter', 'gemini', 'gemini-cli',
   'grok', 'kimi', 'mistral', 'ollama', 'codex', 'qwen-code', 'genspark',
 ]);
+
+const ROUTING_TABLE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'routing-table.json');
+
+// eval 実測のルーティング表(tools/routing-table.json)から、指定カテゴリで最安の候補を返す。
+// 表が無い・カテゴリが無い・暫定計測(provisional)のどれでも null を返し、既定の連鎖を使わせる。
+export function preferredForCategory(category) {
+  const name = String(category || '').trim().toLowerCase();
+  if (!name) return null;
+  try {
+    const table = JSON.parse(fs.readFileSync(ROUTING_TABLE, 'utf8'));
+    const entry = table?.categories?.[name];
+    if (!entry || !entry.provider) return null;
+    return { provider: entry.provider, model: entry.model, ...(entry.provisional ? { provisional: true } : {}) };
+  } catch {
+    return null;
+  }
+}
 
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }

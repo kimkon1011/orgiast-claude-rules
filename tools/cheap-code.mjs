@@ -6,6 +6,10 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { readEnvValue } from './env-kv.mjs';
 import { isEntry } from './is-entry.mjs';
+import { providerResetUntil, providerInCooldown } from './codex-cooldown.mjs';
+
+const FIVE_HOURS = 5 * 60 * 60 * 1000;
+const COOLDOWN_FILE = () => path.join(process.env.ORGIAST_HOME || os.homedir(), '.claude', 'provider-cooldown.json');
 
 const PROVIDERS = Object.freeze({
   deepseek: Object.freeze({
@@ -47,6 +51,53 @@ export function buildChildEnv(config, key, parentEnv = process.env) {
 export function readInstruction(promptFile, positional) {
   if (!promptFile) return positional.join(' ').trim();
   return fs.readFileSync(promptFile, 'utf8').trim();
+}
+
+// ---- 仕様C2b: 定額レーン飽和(usage limit)の検知と cooldown ----
+
+// 子プロセスの出力に「契約枠を使い切った」系の文言が含まれるかを判定する。
+export function detectUsageLimitText(text) {
+  return /usage\s+limit\s+reached|429|\[1308\]/i.test(String(text || ''));
+}
+
+// usage-limit 本文から provider の再開時刻を返す。取れなければ +5h。
+export function cooldownUntilFromText(text, now = Date.now()) {
+  return providerResetUntil(text, now, FIVE_HOURS);
+}
+
+export function readProviderCooldown(claudeDir) {
+  try { return JSON.parse(fs.readFileSync(path.join(claudeDir, 'provider-cooldown.json'), 'utf8')); } catch { return {}; }
+}
+
+// provider-cooldown.json に usage_limit を記録する(codex と並ぶ構造。理由・記録時刻付き)。
+// 24h の到達回数を後から数えられるよう、provider-limit-history.jsonl にも1行残す。
+export function writeProviderCooldown({ claudeDir, provider, until, reason = 'usage_limit', now = Date.now() }) {
+  const name = String(provider || '').trim().toLowerCase();
+  if (!/^[a-z0-9_-]+$/.test(name)) return { file: null, provider: name, changed: false };
+  const state = readProviderCooldown(claudeDir);
+  const changed = Number(state?.[name]?.until) !== Number(until);
+  state[name] = { until: Number(until), reason: String(reason), at: new Date(now).toISOString() };
+  const file = path.join(claudeDir, 'provider-cooldown.json');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(file, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+  if (/^usage_limit/.test(String(reason))) {
+    try {
+      fs.appendFileSync(path.join(claudeDir, 'provider-limit-history.jsonl'), `${JSON.stringify({ t: new Date(now).toISOString(), provider: name, until: Number(until), reason: String(reason) })}\n`, 'utf8');
+    } catch {}
+  }
+  return { file, provider: name, changed };
+}
+
+function hasZaiKey(home) {
+  if (process.env.ZAI_API_KEY) return true;
+  return Boolean(readEnvValue(path.join(home, '.claude', 'zai.env'), 'ZAI_API_KEY'));
+}
+
+// --provider auto: クールダウン中でない glm → deepseek。zai キーが無い機体は deepseek のみ。
+export function autoProvider({ home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now() } = {}) {
+  const claudeDir = path.join(home, '.claude');
+  if (hasZaiKey(home) && !providerInCooldown('glm', now, path.join(claudeDir, 'provider-cooldown.json'))) return 'glm';
+  return 'deepseek';
 }
 
 function parseArgs(args) {
@@ -115,13 +166,12 @@ function buildPrompt(instruction, cwd, home) {
 }
 
 async function main(args) {
-  const usage = '使い方: node tools/cheap-code.mjs [--provider deepseek|glm] [--model <名前>] [--prompt-file <path>] [--cwd <path>] [--dry-run] "<指示>"';
+  const usage = '使い方: node tools/cheap-code.mjs [--provider deepseek|glm|auto] [--model <名前>] [--prompt-file <path>] [--cwd <path>] [--dry-run] "<指示>"';
   let parsed;
   let config;
   let instruction;
   try {
     parsed = parseArgs(args);
-    config = resolveProvider(parsed.provider);
     instruction = readInstruction(parsed.promptFile, parsed.positional);
   } catch (error) {
     console.error(`${error.message}\n${usage}`);
@@ -131,6 +181,17 @@ async function main(args) {
 
   const cwd = path.resolve(parsed.cwd);
   const home = process.env.ORGIAST_HOME || os.homedir();
+  let providerName = parsed.provider;
+  if (providerName === 'auto') {
+    providerName = autoProvider({ home });
+    console.error(`[cheap-code] provider=auto → ${providerName}`);
+  }
+  try {
+    config = resolveProvider(providerName);
+  } catch (error) {
+    console.error(`${error.message}\n${usage}`);
+    return 2;
+  }
   const model = parsed.model || config.defaultModel;
   const key = readEnvValue(path.join(home, '.claude', config.envFile), config.keyName);
   const prompt = `[headless:cheap-code]\n${buildPrompt(instruction, cwd, home)}`;
@@ -146,18 +207,33 @@ async function main(args) {
 
   const started = Date.now();
   let outputChars = 0;
+  let stdoutText = '';
+  let stderrText = '';
   const status = await new Promise((resolve) => {
     const child = spawn('claude', childArgs, {
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...buildChildEnv(config, key), ORGIAST_HEADLESS_JOB: `cheap-code:${config.provider}` },
     });
-    child.stdout.on('data', (chunk) => { outputChars += chunk.length; process.stdout.write(chunk); });
-    child.stderr.on('data', (chunk) => process.stderr.write(chunk));
+    child.stdout.on('data', (chunk) => { outputChars += chunk.length; stdoutText += String(chunk); process.stdout.write(chunk); });
+    child.stderr.on('data', (chunk) => { stderrText += String(chunk); process.stderr.write(chunk); });
     child.on('error', (error) => { console.error(`claude CLI を起動できません: ${error.message}`); resolve(1); });
     child.on('close', (code) => resolve(code ?? 1));
   });
   const secs = (Date.now() - started) / 1000;
+
+  // 定額レーン飽和(codex/glm の usage limit)は「契約枠なし」として cooldown を書き exit 3 で返す。
+  // 成功(exit 0)のまま 429 文言が混ざることはないので、失敗時にだけ検査する。
+  if (status !== 0 && detectUsageLimitText(`${stdoutText}\n${stderrText}`)) {
+    const until = cooldownUntilFromText(`${stdoutText}\n${stderrText}`, Date.now());
+    try {
+      writeProviderCooldown({ claudeDir: path.join(home, '.claude'), provider: config.provider, until });
+      console.error(`[cheap-code] ${config.provider} は契約枠を使い切りました(usage_limit)。provider-cooldown.json に ${new Date(until).toISOString()} まで記録しました。`);
+    } catch (error) {
+      console.error(`[cheap-code] cooldown 記録に失敗: ${String(error?.message ?? error)}`);
+    }
+    return 3;
+  }
   try {
     const ledger = path.join(home, '.claude', 'executor-usage.jsonl');
     fs.mkdirSync(path.dirname(ledger), { recursive: true });

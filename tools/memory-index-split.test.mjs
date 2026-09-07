@@ -6,7 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { run } from './memory-index-split.mjs';
-import { verify } from './memory-index-split-verify.mjs';
+import { fix, verify } from './memory-index-split-verify.mjs';
 
 const splitScript = fileURLToPath(new URL('./memory-index-split.mjs', import.meta.url));
 const verifyScript = fileURLToPath(new URL('./memory-index-split-verify.mjs', import.meta.url));
@@ -123,6 +123,59 @@ test('独立 verify CLI が取りこぼし、重複、壊れリンクを個別�
     assert.notEqual(child.status, 0, label);
     assert.match(`${child.stdout}\n${child.stderr}`, expected, label);
   }
+});
+
+test('verify が ../ 抜けを検出し fix が実在する memory へのリンクだけを修復する', () => {
+  const item = fixture({
+    memory: '<!-- MEMORY-INDEX v2 split -->\n- [infra](index/infra.md)\n',
+    files: { 'feedback_x.md': 'memory\n' },
+  });
+  fs.mkdirSync(path.join(item.directory, 'index'));
+  const indexPath = path.join(item.directory, 'index', 'infra.md');
+  fs.writeFileSync(indexPath, '- [title](feedback_x.md)\n');
+
+  const before = verify(item.directory);
+  assert.ok(before.problems.includes('壊れリンク: index/infra.md -> feedback_x.md'));
+  assert.ok(before.problems.includes('取りこぼし: feedback_x.md'));
+
+  const result = fix(item.directory);
+  assert.equal(result.fixedCount, 1);
+  assert.deepEqual(result.fixes, [{ file: 'index/infra.md', count: 1 }]);
+  assert.equal(fs.readFileSync(indexPath, 'utf8'), '- [title](../feedback_x.md)\n');
+  assert.deepEqual(result.problems, []);
+  assert.deepEqual(verify(item.directory).problems, []);
+});
+
+test('fix は ../ を補完してもリンク先が存在しない場合は書き換えない', () => {
+  const item = fixture({
+    memory: '<!-- MEMORY-INDEX v2 split -->\n- [infra](index/infra.md)\n',
+  });
+  fs.mkdirSync(path.join(item.directory, 'index'));
+  const indexPath = path.join(item.directory, 'index', 'infra.md');
+  const original = '- [missing](missing.md)\n';
+  fs.writeFileSync(indexPath, original);
+
+  const result = fix(item.directory);
+  assert.equal(result.fixedCount, 0);
+  assert.deepEqual(result.fixes, []);
+  assert.equal(fs.readFileSync(indexPath, 'utf8'), original);
+  assert.ok(result.problems.includes('壊れリンク: index/infra.md -> missing.md'));
+});
+
+test('独立 verify CLI の --fix は修復内容を出力して修復後の結果で成功する', () => {
+  const item = fixture({
+    memory: '<!-- MEMORY-INDEX v2 split -->\n- [infra](index/infra.md)\n',
+    files: { 'feedback_x.md': 'memory\n' },
+  });
+  fs.mkdirSync(path.join(item.directory, 'index'));
+  const indexPath = path.join(item.directory, 'index', 'infra.md');
+  fs.writeFileSync(indexPath, '- [title](feedback_x.md)\n');
+
+  const child = spawnSync(process.execPath, [verifyScript, '--dir', item.directory, '--fix'], { encoding: 'utf8' });
+  assert.equal(child.status, 0, child.stderr);
+  assert.match(child.stdout, /修復: index\/infra\.md の 1 件のリンクに \.\.\/ を補完しました/);
+  assert.match(child.stdout, /検証 OK/);
+  assert.equal(fs.readFileSync(indexPath, 'utf8'), '- [title](../feedback_x.md)\n');
 });
 
 test('CLI は --dry-run を既定としファイルを書き換えない', () => {

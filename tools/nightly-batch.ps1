@@ -175,7 +175,7 @@ try {
         foreach ($memoryDir in $v2MemoryDirs) {
             $projectName = Split-Path -Leaf (Split-Path -Parent $memoryDir)
             try {
-                $verifyOutput = @(& $node.Source $memoryIndexSplitVerify --dir $memoryDir 2>&1)
+                $verifyOutput = @(& $node.Source $memoryIndexSplitVerify --dir $memoryDir --fix 2>&1)
                 if ($LASTEXITCODE -ne 0) {
                     $verifyNg += $projectName
                     Write-NightlyLog 'memory-index-split-verify' ('detail:' + $projectName + ': ' + (Format-NightlyDetail $verifyOutput)) $false

@@ -3,7 +3,8 @@ import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'
 import { runCheck } from './eval-exec-checks.mjs';
 import { isEntry } from './is-entry.mjs';
 const HERE = path.dirname(fileURLToPath(import.meta.url)); function userHome() { const h = os.homedir(), m = process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i); return process.env.USERPROFILE || m?.[1] || h; } const HOME = userHome(); const EVAL_DIR = path.join(HOME, '.claude', 'eval'); const TASKS = path.join(EVAL_DIR, 'tasks.jsonl'); const SEED = path.join(HERE, 'eval-tasks.seed.jsonl'); const SEED_SYNCED = path.join(EVAL_DIR, '.seed-synced.jsonl'); const RESULTS = path.join(HOME, '.claude', 'eval-results.jsonl');
-const PRICE = { groq: [0.15, 0.60], openrouter: [0.59, 0.79], gemini: [0.10, 0.40], deepseek: [0.27, 1.10], kimi: [3, 15], mistral: [2, 6], ollama: [0, 0], anthropic: [1, 5] };
+import { COST_PER_MILLION } from './llm-fallback.mjs';
+const PRICE = { ...COST_PER_MILLION, anthropic: [1, 5] };
 const PROVIDERS = {
   groq: { base: 'https://api.groq.com/openai/v1/chat/completions', keyEnv: 'GROQ_API_KEY', keyFile: 'groq.env', model: 'openai/gpt-oss-120b' },
   openrouter: { base: 'https://openrouter.ai/api/v1/chat/completions', keyEnv: 'OPENROUTER_API_KEY', keyFile: 'openrouter.env', model: 'meta-llama/llama-3.3-70b-instruct', headers: { 'HTTP-Referer': 'https://orgiast.jp', 'X-Title': 'orgiast-eval' } },

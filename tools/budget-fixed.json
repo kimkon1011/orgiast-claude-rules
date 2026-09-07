@@ -1,0 +1,10 @@
+{
+  "monthlyBudgetJpy": 150000,
+  "usdJpy": 150,
+  "fixed": [
+    { "name": "Claude Team seats", "jpy": null, "note": "kim 記入" },
+    { "name": "ChatGPT (Codex) subscriptions", "jpy": null },
+    { "name": "Z.ai GLM Coding Plan (kim)", "usd": 12.6 },
+    { "name": "Gemini autopay 上限", "jpy": 20000, "kind": "cap" }
+  ]
+}

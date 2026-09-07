@@ -14,10 +14,15 @@ export const FALLBACK_CHAIN = Object.freeze([
   { provider: 'kimi', model: 'kimi-k3' },
 ]);
 
-const COST_PER_MILLION = Object.freeze({
-  groq: [0.15, 0.60], openrouter: [0.59, 0.79], gemini: [0.10, 0.40], deepseek: [0.27, 1.10],
+export const COST_PER_MILLION = Object.freeze({
+  groq: [0.15, 0.60], openrouter: [0.59, 0.79], gemini: [0.75, 3.75], deepseek: [0.27, 1.10],
   grok: [3, 15], kimi: [3, 15], mistral: [2, 6], cerebras: [0, 0], codex: [0, 0],
 });
+
+export const KNOWN_CHEAP_PROVIDERS = Object.freeze([
+  'groq', 'glm', 'cerebras', 'deepseek', 'openrouter', 'gemini', 'gemini-cli',
+  'grok', 'kimi', 'mistral', 'ollama', 'codex', 'qwen-code', 'genspark',
+]);
 
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }

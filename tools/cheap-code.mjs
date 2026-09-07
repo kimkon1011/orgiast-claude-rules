@@ -133,7 +133,7 @@ async function main(args) {
   const home = process.env.ORGIAST_HOME || os.homedir();
   const model = parsed.model || config.defaultModel;
   const key = readEnvValue(path.join(home, '.claude', config.envFile), config.keyName);
-  const prompt = buildPrompt(instruction, cwd, home);
+  const prompt = `[headless:cheap-code]\n${buildPrompt(instruction, cwd, home)}`;
   const childArgs = ['-p', prompt, '--model', model];
   if (parsed.dryRun) {
     console.log(JSON.stringify({ provider: config.provider, base: config.base, model, keyPresent: Boolean(key), argv: ['claude', ...childArgs] }, null, 2));
@@ -150,7 +150,7 @@ async function main(args) {
     const child = spawn('claude', childArgs, {
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: buildChildEnv(config, key),
+      env: { ...buildChildEnv(config, key), ORGIAST_HEADLESS_JOB: 'cheap-code' },
     });
     child.stdout.on('data', (chunk) => { outputChars += chunk.length; process.stdout.write(chunk); });
     child.stderr.on('data', (chunk) => process.stderr.write(chunk));

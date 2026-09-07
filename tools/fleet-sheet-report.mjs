@@ -11,6 +11,8 @@ import { buildSpecPayload, collectHardwareSpec } from './hardware-spec.mjs';
 import { collectProjectInventory, formatArtifactsCell, formatLastCommitCell, formatProjectsCell } from './project-inventory.mjs';
 import { buildCloudLoginPayload, collectCloudInventory } from './cloud-inventory.mjs';
 import { collectInteractionAdoption } from './interaction-adoption.mjs';
+import { fetchClaudePlanUsage } from './claude-plan-usage.mjs';
+import { collectBudgetStatus } from './budget-status.mjs';
 
 const dryRun = process.argv.includes('--dry-run');
 const includeSpecs = process.argv.includes('--specs');
@@ -84,6 +86,11 @@ async function main() {
   // 判定できないのに合格扱いにするのは「timeout を未導入と誤報告」と同じ誤り。
   const fableKnown = reporter.fable5Detected !== undefined || adoption.fable5OutTok !== undefined;
   const fableDetected = Boolean(reporter.fable5Detected || Number(adoption.fable5OutTok || 0) > 0);
+  const planUsage = await fetchClaudePlanUsage({ home });
+  const budget = await collectBudgetStatus({ home });
+  const settings = readJson(path.join(claudeDir, 'settings.json'));
+  const nonClaudeRatio = Number.isFinite(Number(cost.nonClaudeDelegRatio)) ? Number(cost.nonClaudeDelegRatio) : Number(enforce.nonClaudeDelegRatio || 0);
+  const legacyRatio = Number.isFinite(Number(cost.delegRatio)) ? Number(cost.delegRatio) : Number(enforce.delegRatio || 0);
   const payload = {
     token: fleetEnv.FLEET_SHEET_TOKEN,
     label,
@@ -95,7 +102,12 @@ async function main() {
     claudeUsd: Math.round((Number.isFinite(Number(cost.claudeUSD)) ? Number(cost.claudeUSD) : Number(reporter.mtdUsd || 0)) * 100) / 100,
     mainModel: topModel,
     // 既存行が "0%" 表記なので、人が読む列で表記が混ざらないようパーセント文字列にする。
-    delegRatio: `${(Math.round((Number.isFinite(Number(cost.delegRatio)) ? Number(cost.delegRatio) : Number(enforce.delegRatio || 0)) * 1000) / 10).toFixed(1)}%`,
+    delegRatio: `${(Math.round(nonClaudeRatio * 1000) / 10).toFixed(1)}%`,
+    delegRatioLegacy: `${(Math.round(legacyRatio * 1000) / 10).toFixed(1)}%`,
+    planFiveHourPct: planUsage.available ? planUsage.fiveHour.utilization : null,
+    planSevenDayPct: planUsage.available ? planUsage.sevenDay.utilization : null,
+    budgetPacePct: budget.budgetPacePct,
+    settingsModel: typeof settings.model === 'string' && settings.model.trim() ? settings.model.trim() : '未設定(=Opus)',
     cheapAiUse: Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([provider, count]) => `${provider}:${count}`).join(', ') || 'なし',
     codexLogin: adoption.codexAuthed === true ? '済' : adoption.codexAuthed === false ? '未' : '判定不能',
     fable5: fableDetected ? '検出' : fableKnown ? '未検出' : '判定不能',

@@ -60,10 +60,11 @@ function fleetPlanUpsert(headers, rows, payload) {
   const values = {};
   values[columns.hostname] = label;
   values[columns.reportedAt] = payload.reportedAt || '';
-  values[columns.claudeUsd] = payload.claudeUsd == null ? '' : payload.claudeUsd;
+  // 計測不能の空文字は既存の実測値を消さない。0 / "0.0%" は実測値なので更新する。
+  if (payload.claudeUsd !== '') values[columns.claudeUsd] = payload.claudeUsd == null ? '' : payload.claudeUsd;
   values[columns.mainModel] = payload.mainModel || '';
-  values[columns.delegRatio] = payload.delegRatio == null ? '' : payload.delegRatio;
-  if (columns.delegRatioLegacy >= 0) values[columns.delegRatioLegacy] = payload.delegRatioLegacy == null ? '' : payload.delegRatioLegacy;
+  if (payload.delegRatio !== '') values[columns.delegRatio] = payload.delegRatio == null ? '' : payload.delegRatio;
+  if (columns.delegRatioLegacy >= 0 && payload.delegRatioLegacy !== '') values[columns.delegRatioLegacy] = payload.delegRatioLegacy == null ? '' : payload.delegRatioLegacy;
   if (columns.planSevenDayPct >= 0) values[columns.planSevenDayPct] = payload.planSevenDayPct == null ? '計測不能' : payload.planSevenDayPct;
   if (columns.planFiveHourPct >= 0) values[columns.planFiveHourPct] = payload.planFiveHourPct == null ? '計測不能' : payload.planFiveHourPct;
   if (columns.budgetPacePct >= 0) values[columns.budgetPacePct] = payload.budgetPacePct == null ? '計測不能' : payload.budgetPacePct;

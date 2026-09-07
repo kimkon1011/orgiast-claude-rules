@@ -41,6 +41,24 @@ function cheapAiCounts(file) {
   return counts;
 }
 
+function finiteNumber(value) {
+  if (value === null || value === undefined || (typeof value === 'string' && value.trim() === '')) return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function firstFiniteNumber(...values) {
+  for (const value of values) {
+    const number = finiteNumber(value);
+    if (number !== null) return number;
+  }
+  return null;
+}
+
+function formatRatio(value) {
+  return value === null ? '' : `${(Math.round(value * 1000) / 10).toFixed(1)}%`;
+}
+
 // G列は「最終報告(JST)」。UTC の ISO 文字列をそのまま入れると列の意味と食い違うため JST に整形する。
 function toJst(value) {
   const d = value ? new Date(value) : new Date();
@@ -89,8 +107,9 @@ async function main() {
   const planUsage = await fetchClaudePlanUsage({ home });
   const budget = await collectBudgetStatus({ home });
   const settings = readJson(path.join(claudeDir, 'settings.json'));
-  const nonClaudeRatio = Number.isFinite(Number(cost.nonClaudeDelegRatio)) ? Number(cost.nonClaudeDelegRatio) : Number(enforce.nonClaudeDelegRatio || 0);
-  const legacyRatio = Number.isFinite(Number(cost.delegRatio)) ? Number(cost.delegRatio) : Number(enforce.delegRatio || 0);
+  const nonClaudeRatio = firstFiniteNumber(cost.nonClaudeDelegRatio, enforce.nonClaudeDelegRatio);
+  const legacyRatio = firstFiniteNumber(cost.delegRatio, enforce.delegRatio);
+  const claudeUsd = firstFiniteNumber(cost.claudeUSD, reporter.mtdUsd);
   const payload = {
     token: fleetEnv.FLEET_SHEET_TOKEN,
     label,
@@ -99,11 +118,11 @@ async function main() {
     username: identity.username,
     gitEmail: identity.gitEmail,
     reportedAt: toJst(cost.t || adoption.last || reporter.lastRun),
-    claudeUsd: Math.round((Number.isFinite(Number(cost.claudeUSD)) ? Number(cost.claudeUSD) : Number(reporter.mtdUsd || 0)) * 100) / 100,
+    claudeUsd: claudeUsd === null ? '' : Math.round(claudeUsd * 100) / 100,
     mainModel: topModel,
     // 既存行が "0%" 表記なので、人が読む列で表記が混ざらないようパーセント文字列にする。
-    delegRatio: `${(Math.round(nonClaudeRatio * 1000) / 10).toFixed(1)}%`,
-    delegRatioLegacy: `${(Math.round(legacyRatio * 1000) / 10).toFixed(1)}%`,
+    delegRatio: formatRatio(nonClaudeRatio),
+    delegRatioLegacy: formatRatio(legacyRatio),
     planFiveHourPct: planUsage.available ? planUsage.fiveHour.utilization : null,
     planSevenDayPct: planUsage.available ? planUsage.sevenDay.utilization : null,
     budgetPacePct: budget.budgetPacePct,

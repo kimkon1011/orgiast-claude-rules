@@ -5,6 +5,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
 import { armToFile } from './session-relaunch.mjs';
+import { autoSessionExecutor, buildCheapCodeArgs, buildClaudeHeadlessArgs, recordFallbackToClaude } from './auto-session-executor.mjs';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..');
 
@@ -181,14 +182,84 @@ export function pickRoute({ codeCli, flagTarget, env, state = {} }) {
   if (target === 'inline') return 'inline';
   if (target === 'terminal') return 'terminal';
   if (target === 'vscode-ext') return 'vscode-ext';
+  if (target === 'headless') return 'headless';
   return 'vscode';
 }
 
 export function withTarget(state, value) {
   const normalized = String(value ?? '').toLowerCase();
   const target = normalized === 'window' ? 'vscode' : normalized;
-  if (!['vscode', 'vscode-ext', 'terminal', 'inline'].includes(target)) return null;
+  if (!['vscode', 'vscode-ext', 'terminal', 'inline', 'headless'].includes(target)) return null;
   return { ...(state && typeof state === 'object' && !Array.isArray(state) ? state : {}), target };
+}
+
+// headless 実行: /session-start 相当の開始処理を cheap-code(定額/従量安)で走らせ、
+// 失敗した時だけ claude -p --model sonnet へ落とす(auto-session.mjs と同じ方式・B5)。
+// 落下は executor-usage.jsonl に記録し、実行結果は logs/next-session-launch.log に1行残す。
+export const HEADLESS_TIMEOUT_MS = 30 * 60 * 1000;
+
+export function buildHeadlessPrompt(prompt) {
+  return `[headless:next-session-launch] ${prompt}`;
+}
+
+export async function runHeadlessNextSession({ env, hostname, home, cwd, prompt, executable, spawnImpl = spawn, timeoutMs = HEADLESS_TIMEOUT_MS, appendLog = null, now = () => new Date() }) {
+  const choice = autoSessionExecutor(env, hostname, home);
+  const fullPrompt = buildHeadlessPrompt(prompt);
+  const promptFile = path.join(os.tmpdir(), `orgiast-next-session-${process.pid}-${Date.now()}.txt`);
+  const launch = (fallback = false) => new Promise((resolve) => {
+    const cheap = choice.executor === 'cheap-code' && !fallback;
+    if (cheap) {
+      try { fs.writeFileSync(promptFile, fullPrompt, 'utf8'); } catch {}
+    }
+    let child;
+    try {
+      child = spawnImpl(cheap ? process.execPath : executable, cheap
+        ? buildCheapCodeArgs({ repoRoot: REPO_ROOT, provider: choice.provider, promptFile, cwd })
+        : buildClaudeHeadlessArgs({ repoCwd: cwd, historyCwd: cwd }), {
+        cwd,
+        env: { ...env, CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: cheap ? `next-session-launch:cheap-code:${choice.provider}` : 'next-session-launch:fallback-claude' },
+        stdio: ['pipe', 'pipe', 'pipe'],
+        windowsHide: true,
+      });
+    } catch (error) {
+      resolve({ executor: cheap ? `cheap-code:${choice.provider}` : 'claude', exitCode: null, status: 'failure', error: String(error?.message ?? error), fallbackToClaude: false });
+      return;
+    }
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    child.stdout?.setEncoding?.('utf8').on('data', (chunk) => { stdout += chunk; });
+    child.stderr?.setEncoding?.('utf8').on('data', (chunk) => { stderr += chunk; });
+    child.stdin?.on?.('error', () => {});
+    if (cheap) child.stdin?.end?.(); else child.stdin?.end?.(fullPrompt, 'utf8');
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill?.('SIGKILL');
+    }, timeoutMs);
+    if (typeof timer.unref === 'function') timer.unref();
+    child.on('close', async (code) => {
+      clearTimeout(timer);
+      if (cheap && !timedOut && code !== 0) {
+        recordFallbackToClaude({ home, reason: `cheap-code/${choice.provider} exit ${code}` });
+        const retried = await launch(true);
+        resolve({ ...retried, firstExecutor: `cheap-code:${choice.provider}`, fallbackToClaude: true });
+        return;
+      }
+      resolve({ executor: cheap ? `cheap-code:${choice.provider}` : 'claude', exitCode: timedOut ? null : code, status: timedOut ? 'timeout' : code === 0 ? 'success' : 'failure', stdout, stderr, fallbackToClaude: false });
+    });
+    child.on('error', (error) => { stderr += error.message; });
+  });
+  const result = await launch(false);
+  try { fs.rmSync(promptFile, { force: true }); } catch {}
+  const line = `${now().toISOString()} executor=${result.executor} exit=${result.exitCode} status=${result.status} fallback=${result.fallbackToClaude} cwd=${cwd}`;
+  if (appendLog) appendLog(line);
+  else {
+    try {
+      fs.mkdirSync(path.join(home, '.claude', 'logs'), { recursive: true });
+      fs.appendFileSync(path.join(home, '.claude', 'logs', 'next-session-launch.log'), `${line}\n`, 'utf8');
+    } catch {}
+  }
+  return result;
 }
 
 
@@ -462,7 +533,7 @@ export async function launchNextSession(argv = [], io = {}) {
     }
     const launchEnv = { ...childEnv({ env, configDir, source: configDirSource }), ORGIAST_HEADLESS_JOB: 'next-session-launch' };
     const pendingTab = hasUnsentVscodeTab({ state, now, promptConsumed });
-    const decision = shouldLaunch({ state, now, env, force: flags.force, pendingTab: route === 'inline' ? false : pendingTab });
+    const decision = shouldLaunch({ state, now, env, force: flags.force, pendingTab: route === 'inline' || route === 'headless' ? false : pendingTab });
     if (!decision.ok) {
       log(`[next-session] スキップ: ${decision.reason}`);
       return 0;
@@ -492,6 +563,34 @@ export async function launchNextSession(argv = [], io = {}) {
       await writeFile(tmpPath, `${JSON.stringify(nextState, null, 2)}\n`, 'utf8');
       await rename(tmpPath, statePath);
       log(`[next-session] 予約しました(inline): /clear すると新しいセッションが自分から ${flags.prompt} を実行します`);
+      return 0;
+    }
+
+    if (route === 'headless') {
+      // 対話窓を開かず、次セッションの開始処理を無人実行する経路(B5)。shouldLaunch が
+      // CLAUDE_HEADLESS/CI を弾くので、headless 実行からさらに headless を連鎖させない。
+      const hostname = typeof io.hostname === 'function' ? io.hostname() : io.hostname;
+      const choice = autoSessionExecutor(env, hostname ?? os.hostname(), home);
+      if (flags.dryRun) {
+        log(JSON.stringify({ route: 'headless', cwd, executor: choice.executor, provider: choice.provider, prompt: flags.prompt }));
+        return 0;
+      }
+      const claudeBin = resolveClaudeBinary({ env, exists, readdir, homedir: home });
+      const result = await runHeadlessNextSession({
+        env: launchEnv,
+        hostname: hostname ?? os.hostname(),
+        home,
+        cwd,
+        prompt: flags.prompt,
+        executable: claudeBin || 'claude',
+        spawnImpl: spawnProcess,
+        appendLog: io.appendHeadlessLog ?? null,
+      });
+      const nextState = { ...state, enabled: state.enabled !== false, lastLaunchAt: new Date().toISOString(), lastCwd: cwd, lastRoute: 'headless', lastPrompt: flags.prompt, lastAccount: account, lastConfigDir: configDir, lastHeadless: { executor: result.executor, status: result.status, fallbackToClaude: result.fallbackToClaude, endedAt: new Date().toISOString() } };
+      const tmpPath = `${statePath}.tmp-${process.pid}`;
+      await writeFile(tmpPath, `${JSON.stringify(nextState, null, 2)}\n`, 'utf8');
+      await rename(tmpPath, statePath);
+      log(`[next-session] headless で次セッションの開始処理を実行しました: executor=${result.executor} status=${result.status}${result.fallbackToClaude ? ' (cheap-code失敗のためclaudeへ落下・台帳記録済み)' : ''}`);
       return 0;
     }
 

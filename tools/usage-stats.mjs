@@ -16,6 +16,7 @@ const PROSE_CHARS_PER_TOKEN = 1.8;
 const JSON_CHARS_PER_TOKEN = 3.4;
 export function modelTier(model) {
   const m = String(model || '').toLowerCase();
+  if (!m.includes('claude') && /(glm|deepseek|qwen|gemini|gpt|kimi|llama|mistral)/.test(m)) return 'nonclaude';
   if (m.includes('fable')) return 'fable';
   if (m.includes('opus')) return 'opus';
   if (m.includes('haiku')) return 'haiku';
@@ -139,7 +140,7 @@ export function collectClaudeStats({ home = process.env.ORGIAST_HOME || os.homed
   const cutoff = now - days * DAY, sessions = [], byModel = {}, blocks = { thinking: 0, text: 0, tool_use: 0, unattributed: 0, tools: {} }; let authoredLines = 0;
   for (const { file, st, parsed } of claudeFiles(home, cutoff)) {
     if (st.mtimeMs < cutoff) continue;
-    let outputTokens = 0, sideOutput = 0, mainOutput = 0; const messages = new Map();
+    let outputTokens = 0, sideOutput = 0, mainOutput = 0, claudeOutput = 0; const messages = new Map();
     for (const row of parsed.records) {
       if (row.ts < cutoff) continue; authoredLines += row.authoredLines || 0;
       if (row.out === undefined) continue;
@@ -153,14 +154,18 @@ export function collectClaudeStats({ home = process.env.ORGIAST_HOME || os.homed
       const out = message.out; if (!out) continue; const visibleEst = message.text + message.tool_use, scale = visibleEst > out ? out / visibleEst : 1;
       outputTokens += out; byModel[message.tier] = (byModel[message.tier] || 0) + out;
       if (message.side) sideOutput += out; else mainOutput += out;
+      // headless ジョブの内訳用: Claude 課金 tier(opus/sonnet/haiku/default)の出力だけを分離する。
+      // cheap-code 経由(zai/deepseek)の無人ジョブも同じ projects に transcript を残すため、
+      // tier 無視で足すと「全部 cheap-code に寄せた健全状態」まで headlessClaudeOut>0 になり誤報になる。
+      if (message.tier !== 'nonclaude') claudeOutput += out;
       blocks.thinking += Math.max(0, out - visibleEst); blocks.text += message.text * scale; blocks.tool_use += message.tool_use * scale;
       for (const [name, amount] of Object.entries(message.tools)) blocks.tools[name] = (blocks.tools[name] || 0) + amount * scale;
     }
-    if (outputTokens) sessions.push({ session: path.basename(file, '.jsonl'), file, outputTokens, mainOutput, subOutput: sideOutput, ...classifyHeadlessSession({ firstUser: parsed.firstUser, cwd: parsed.firstCwd }) });
+    if (outputTokens) sessions.push({ session: path.basename(file, '.jsonl'), file, outputTokens, mainOutput, subOutput: sideOutput, claudeOutput, ...classifyHeadlessSession({ firstUser: parsed.firstUser, cwd: parsed.firstCwd }) });
   }
   sessions.sort((a, b) => b.outputTokens - a.outputTokens);
   const total = sessions.reduce((s, x) => s + x.outputTokens, 0), main = sessions.reduce((s, x) => s + x.mainOutput, 0), sub = sessions.reduce((s, x) => s + x.subOutput, 0);
-  const headless = sessions.filter((x) => x.headless), headlessClaudeOut = headless.reduce((s, x) => s + x.outputTokens, 0), headlessJobs = {};
+  const headless = sessions.filter((x) => x.headless), headlessClaudeOut = headless.reduce((s, x) => s + x.claudeOutput, 0), headlessJobs = {};
   for (const session of headless) headlessJobs[session.job] = (headlessJobs[session.job] || 0) + session.outputTokens;
   saveCache(home); return { sessions, totals: { outputTokens: total, main, sub }, byModel, blocks, authoredLines, headlessClaudeOut, headlessJobs };
 }
@@ -365,6 +370,7 @@ export function calculateLinesDelegation({ codexLines = 0, claudeLines = 0 } = {
   return total > 0 ? codexLines / total : null;
 }
 export function calculateDelegation({ codexOut = 0, execOut = 0, byModel = {}, specAuthoringOut = 0 } = {}) {
+  execOut += byModel.nonclaude || 0;
   const sonnetHaikuOut = (byModel.sonnet || 0) + (byModel.haiku || 0), supervisorOut = (byModel.opus || 0) + (byModel.fable || 0) + (byModel.default || 0);
   const delegated = codexOut + execOut + sonnetHaikuOut, total = delegated + supervisorOut;
   const delegRatio = total ? delegated / total : 0;

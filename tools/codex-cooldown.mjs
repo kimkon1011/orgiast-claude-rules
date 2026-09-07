@@ -116,4 +116,12 @@ export function writeCodexCooldown(until, cooldownFile, reason = 'usage_limit') 
   state.codex = { until: Number(until), reason, at };
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+  // usage_limit の検出履歴を1行ずつ残す。provider-cooldown.json は上書きされるので
+  // 「直近24hで何回上限に当たったか」が後から数えられず、コスト改善ループの
+  // codex_saturated 判定(≥2回)ができなかったため(2026-09-07 B4)。
+  if (/^usage_limit/.test(String(reason))) {
+    try {
+      fs.appendFileSync(path.join(path.dirname(file), 'codex-limit-history.jsonl'), `${JSON.stringify({ t: new Date(at).toISOString(), until: Number(until), reason })}\n`, 'utf8');
+    } catch {}
+  }
 }

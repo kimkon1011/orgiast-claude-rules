@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { parseCodexResetUntil, writeCodexCooldown } from './codex-cooldown.mjs';
 
@@ -133,8 +134,35 @@ export function loadGeminiKey(homeDir) {
 // 2026-09-03 実測: Gemini Flash 5/5、DeepSeek 5/5、OpenRouter free 1/5。
 // 同品質なら正規の auto_edit を持つ Gemini を安全性から第1候補にする。
 // 費用ゼロを優先するときだけ CODEX_DO_PREFER_FREE=1 で free を先頭へ移す。
+export function codexFallbackOrderFile(homeDir) {
+  return path.join(homeDir, '.claude', 'codex-fallback-order.json');
+}
+
+// ~/.claude/codex-fallback-order.json で fallback 順を上書きできる
+// (cost-improve-loop の codex_saturated 対処が書く。無ければ従来順)。
+// 使える名前: "cheap-code:glm" / "cheap-code:deepseek" / "qwen" / "gemini-cli" / "openrouter-free"。
+export function readCodexFallbackOrder(homeDir) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(codexFallbackOrderFile(homeDir), 'utf8'));
+    if (!Array.isArray(parsed)) return null;
+    const entries = parsed.map((x) => String(x).trim()).filter(Boolean);
+    return entries.length ? entries : null;
+  } catch {
+    return null;
+  }
+}
+
+function cheapCodeBackend(name, homeDir) {
+  const provider = name.split(':')[1] || '';
+  if (!['glm', 'deepseek'].includes(provider)) return null;
+  // キーが無い機体で cheap-code を先頭にすると毎回即死するので、キーがある時だけ候補に入れる。
+  const keyFile = provider === 'glm' ? 'zai.env' : 'deepseek.env';
+  const keyEnv = provider === 'glm' ? 'ZAI_API_KEY' : 'DEEPSEEK_API_KEY';
+  if (!loadEnvKey(homeDir, keyFile, keyEnv)) return null;
+  return { kind: 'cheap-code', name, provider, model: provider === 'glm' ? 'glm-5.3' : 'deepseek-v4-flash' };
+}
+
 export function resolveFallbackBackends(homeDir) {
-  const backends = [];
   const geminiKey = loadGeminiKey(homeDir);
   const openrouterKey = loadEnvKey(homeDir, 'openrouter.env', 'OPENROUTER_API_KEY');
   const deepseekKey = loadDeepseekKey(homeDir);
@@ -142,9 +170,24 @@ export function resolveFallbackBackends(homeDir) {
   const gemini = geminiKey && { kind: 'gemini', name: 'gemini-cli', model: process.env.CODEX_DO_GEMINI_MODEL || 'gemini-3.7-flash', apiKey: geminiKey };
   const deepseek = deepseekKey && { kind: 'qwen', name: 'deepseek', model: 'deepseek-chat', baseUrl: 'https://api.deepseek.com/v1', apiKey: deepseekKey };
   const openrouter = openrouterKey && { kind: 'qwen', name: 'openrouter-free', model: process.env.CODEX_DO_FREE_MODEL || 'cohere/north-mini-code:free', baseUrl: 'https://openrouter.ai/api/v1', apiKey: openrouterKey };
+  const byName = {
+    'gemini-cli': () => gemini,
+    'qwen': () => deepseek,
+    'openrouter-free': () => openrouter,
+  };
+  const order = readCodexFallbackOrder(homeDir);
+  if (order) {
+    const backends = [];
+    for (const name of order) {
+      const backend = name.startsWith('cheap-code:') ? cheapCodeBackend(name, homeDir) : byName[name]?.();
+      if (backend) backends.push(backend);
+      else console.error(`[codex-do] codex-fallback-order.json の ${name} はキー未設定か未知の名前のためスキップ`);
+    }
+    if (backends.length) return backends;
+    console.error('[codex-do] codex-fallback-order.json に使えるバックエンドが無いため従来順へ戻します');
+  }
   const ordered = preferFree ? [openrouter, gemini, deepseek] : [gemini, deepseek, openrouter];
-  backends.push(...ordered.filter(Boolean));
-  return backends;
+  return ordered.filter(Boolean);
 }
 
 export function resolveQwenBackends(homeDir) {
@@ -165,6 +208,7 @@ const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
 const forceNative = args.includes('--force-native');
 const noFallback = args.includes('--no-fallback');
+const review = args.includes('--review');
 const cwdIndex = args.indexOf('--cwd');
 const promptFileIndex = args.indexOf('--prompt-file');
 const timeoutIndex = args.indexOf('--timeout');
@@ -174,10 +218,11 @@ const omitted = new Set();
 if (dryRun) omitted.add(args.indexOf('--dry-run'));
 if (forceNative) omitted.add(args.indexOf('--force-native'));
 if (noFallback) omitted.add(args.indexOf('--no-fallback'));
+if (review) omitted.add(args.indexOf('--review'));
 if (cwdIndex >= 0) { omitted.add(cwdIndex); omitted.add(cwdIndex + 1); }
 if (promptFileIndex >= 0) { omitted.add(promptFileIndex); omitted.add(promptFileIndex + 1); }
 if (timeoutIndex >= 0) { omitted.add(timeoutIndex); omitted.add(timeoutIndex + 1); }
-const usage = '使い方: node tools/codex-do.mjs "<指示>" [--cwd <path>] [--prompt-file <file>] [--timeout <秒>] [--dry-run] [--no-fallback]';
+const usage = '使い方: node tools/codex-do.mjs "<指示>" [--cwd <path>] [--prompt-file <file>] [--review] [--timeout <秒>] [--dry-run] [--no-fallback]';
 
 // タイムアウト既定30分。無限に待って気付かないより、切って原因を見に行くほうが安い。
 const timeoutSeconds = timeoutIndex >= 0 ? Number(args[timeoutIndex + 1]) : 1800;
@@ -293,6 +338,19 @@ function execute(command, commandArgs, options = {}) {
     child.stdin.end(prompt);
   });
 }
+// cheap-code バックエンド: 指示は argv で渡さず一時ファイル経由(§1.17 argv経由の指示破壊防止)。
+// shell も通さない(node の引数配列をそのまま渡す)。
+async function executeCheapCode(backend) {
+  const promptFile = path.join(os.tmpdir(), `orgiast-codex-fallback-${process.pid}-${Date.now()}.md`);
+  fs.writeFileSync(promptFile, prompt, 'utf8');
+  try {
+    const cheapCode = path.join(path.dirname(fileURLToPath(import.meta.url)), 'cheap-code.mjs');
+    return await execute(process.execPath, [cheapCode, '--provider', backend.provider, '--prompt-file', promptFile, '--cwd', cwd], { cwd });
+  } finally {
+    try { fs.rmSync(promptFile, { force: true }); } catch {}
+  }
+}
+
 let result;
 let executorName = 'codex';
 let fallbackBackend = null;
@@ -325,15 +383,15 @@ if (process.platform === 'win32' && !forceNative) {
     } catch (error) {
       if (error?.code !== 'ENOENT') console.error(`⚠️ worktree の gitdir 確認に失敗しました（処理は続行します）: ${error?.message ?? error}`);
     }
-    result = await execute('wsl', ['-d', distro, '--cd', cwd, '--', 'codex', 'exec', '-s', 'workspace-write', '-']);
+    result = await execute('wsl', ['-d', distro, '--cd', cwd, '--', 'codex', 'exec', '-s', review ? 'read-only' : 'workspace-write', '-']);
   }
   else {
     console.error('⚠️ WSL 経路が使えないためネイティブ Windows codex で実行します。\nWindows 版は read-only サンドボックス固定でファイルを書けない既知の不具合(openai/codex#35428)があり、編集が保存されない可能性が高い。WSL の導入を推奨');
-    result = await execute('codex', ['exec', '-s', 'workspace-write', '-'], { cwd });
+    result = await execute('codex', ['exec', '-s', review ? 'read-only' : 'workspace-write', '-'], { cwd });
   }
 } else {
   if (process.platform === 'win32') console.error('⚠️ --force-native によりネイティブ Windows codex で実行します。編集が保存されない可能性があります');
-  result = await execute('codex', ['exec', '-s', 'workspace-write', '-'], { cwd });
+  result = await execute('codex', ['exec', '-s', review ? 'read-only' : 'workspace-write', '-'], { cwd });
 }
 
 const quotaCheck = detectQuotaLimit(result?.output, result?.stderr);
@@ -369,11 +427,13 @@ if (quotaCheck.matched) {
               env: buildGeminiEnv(process.env, backend.apiKey),
               shell: process.platform === 'win32'
             })
-          : await execute('qwen', buildQwenArgs({ timeoutSecs: timeoutSeconds, model: backend.model }), {
-              cwd,
-              env: buildQwenEnv(process.env, backend.apiKey, { model: backend.model, baseUrl: backend.baseUrl }),
-              shell: process.platform === 'win32'
-            });
+          : backend.kind === 'cheap-code'
+            ? await executeCheapCode(backend)
+            : await execute('qwen', buildQwenArgs({ timeoutSecs: timeoutSeconds, model: backend.model }), {
+                cwd,
+                env: buildQwenEnv(process.env, backend.apiKey, { model: backend.model, baseUrl: backend.baseUrl }),
+                shell: process.platform === 'win32'
+              });
         if (result.status === null) {
           console.error(`[codex-do] Failed to spawn ${backend.name} fallback:`, result.error);
           result.status = 1;

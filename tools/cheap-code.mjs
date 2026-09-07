@@ -150,7 +150,7 @@ async function main(args) {
     const child = spawn('claude', childArgs, {
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...buildChildEnv(config, key), ORGIAST_HEADLESS_JOB: 'cheap-code' },
+      env: { ...buildChildEnv(config, key), ORGIAST_HEADLESS_JOB: `cheap-code:${config.provider}` },
     });
     child.stdout.on('data', (chunk) => { outputChars += chunk.length; process.stdout.write(chunk); });
     child.stderr.on('data', (chunk) => process.stderr.write(chunk));

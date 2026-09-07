@@ -125,11 +125,19 @@ try {
   if (add(settings.hooks.UserPromptSubmit, 'expensive-session-guard.mjs', { hooks: [{ type: 'command', command: command('expensive-session-guard.mjs'), timeout: 5 }] })) added += 1;
   // 完成済み指示書の候補を同期注入するため async は付けない。
   if (add(settings.hooks.UserPromptSubmit, 'makimono-gate.mjs', { hooks: [{ type: 'command', command: command('makimono-gate.mjs'), timeout: 6 }] })) added += 1;
+  // userへ頼む前に自動取得・復元・自動設定を毎プロンプトで先に検討させる。
+  if (add(settings.hooks.UserPromptSubmit, 'automation-first-reminder.mjs', { hooks: [{ type: 'command', command: command('automation-first-reminder.mjs'), timeout: 5 }] })) added += 1;
+  // 過去に受領済みのクレデンシャルをuserへ再質問する前に復元経路を注入する。
+  if (add(settings.hooks.UserPromptSubmit, 'credentials-reminder.mjs', { hooks: [{ type: 'command', command: command('credentials-reminder.mjs'), timeout: 5 }] })) added += 1;
   added += migrate(settings.hooks.PreToolUse, 'pretooluse-delegation-warn.ps1', 'pretooluse-delegation-warn.mjs', command('pretooluse-delegation-warn.mjs'));
   if (add(settings.hooks.PreToolUse, 'pretooluse-delegation-warn.mjs', { matcher: 'Write|Edit|MultiEdit', hooks: [{ type: 'command', command: command('pretooluse-delegation-warn.mjs') }] })) added += 1;
   if (add(settings.hooks.PreToolUse, 'pretooluse-bash-delegation.mjs', { matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command: command('pretooluse-bash-delegation.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.PreToolUse, 'pretooluse-codex-invocation.mjs', { matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command: command('pretooluse-codex-invocation.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.PreToolUse, 'model-agent-guard.mjs', { matcher: 'Agent|Task', hooks: [{ type: 'command', command: command('model-agent-guard.mjs') }] })) added += 1;
+  // ヘッドレス実行で消失するバックグラウンド処理を実行前に拒否する。
+  if (add(settings.hooks.PreToolUse, 'pretooluse-headless-background.mjs', { matcher: 'Bash|PowerShell|ScheduleWakeup', hooks: [{ type: 'command', command: command('pretooluse-headless-background.mjs'), timeout: 5 }] })) added += 1;
+  // read-only調査の逐次実行を検知し、まとめて調査するよう同期注入する。
+  if (add(settings.hooks.PreToolUse, 'pretooluse-serial-investigation.mjs', { hooks: [{ type: 'command', command: command('pretooluse-serial-investigation.mjs'), timeout: 5 }] })) added += 1;
   // 人に手作業を頼むとき、初見の人でも実行できる手順になっているかを検査する(§1.5.1)。
   if (add(settings.hooks.Stop, 'manual-request-fullsteps-gate.mjs', { hooks: [{ type: 'command', command: command('manual-request-fullsteps-gate.mjs'), timeout: 8 }] })) added += 1;
   if (add(settings.hooks.Stop, 'report-length-gate.mjs', { hooks: [{ type: 'command', command: command('report-length-gate.mjs'), timeout: 10 }] })) added += 1;
@@ -143,6 +151,14 @@ try {
   // user の目に触れる前に止められるのはここだけ(2026-09-01 user 厳命への対応)。
   if (add(settings.hooks.PreToolUse, 'askuser-selfcheck-gate.mjs', { matcher: 'AskUserQuestion', hooks: [{ type: 'command', command: command('askuser-selfcheck-gate.mjs'), timeout: 10 }] })) added += 1;
   if (add(settings.hooks.Stop, 'handoff-info-guard.mjs', { hooks: [{ type: 'command', command: command('handoff-info-guard.mjs'), timeout: 10 }] })) added += 1;
+  // 手渡し時に品質理由・十分な自動化試行・却下経路を必須化する最重要ゲート。
+  if (add(settings.hooks.Stop, 'handoff-quality-gate.mjs', { hooks: [{ type: 'command', command: command('handoff-quality-gate.mjs'), timeout: 10 }] })) added += 1;
+  // user依頼の前に実測した調査内容と本人しかできない理由を要求する。
+  if (add(settings.hooks.Stop, 'handoff-investigation-gate.mjs', { hooks: [{ type: 'command', command: command('handoff-investigation-gate.mjs'), timeout: 10 }] })) added += 1;
+  // 「無い・できない」という断定を一次情報なしで返すのを防ぐ。
+  if (add(settings.hooks.Stop, 'negative-claim-gate.mjs', { hooks: [{ type: 'command', command: command('negative-claim-gate.mjs'), timeout: 10 }] })) added += 1;
+  // コマンドの手渡しに非エンジニア向けの開き方・入力場所・完了確認を必須化する。
+  if (add(settings.hooks.Stop, 'handoff-detail-guard.mjs', { hooks: [{ type: 'command', command: command('handoff-detail-guard.mjs'), timeout: 10 }] })) added += 1;
   // 旧PCは hook が `powershell -NoProfile -File ...ps1` で登録され、実行ポリシーで無音死している。
   policyRepaired = repairPowerShellExecutionPolicy(settings.hooks);
   added += policyRepaired;

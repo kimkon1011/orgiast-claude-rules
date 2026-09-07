@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseProposalsText, isAllowedWeeklyProvider, classifyWeeklyCommand, proposalMetric, proposalSignature, suppressNoEffectProposals, runWeekly } from './cost-weekly-improve.mjs';
+import { parseProposalsText, isAllowedWeeklyProvider, classifyWeeklyCommand, proposalMetric, proposalSignature, suppressNoEffectProposals, runWeekly, main } from './cost-weekly-improve.mjs';
 
 function makeHome(prefix) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -133,4 +133,64 @@ test('提案 metric delegRatio の baseline は委譲率の現在値を使う', 
   });
   // dry-run なので state は書かれない。outcome だけ確認。
   assert.equal(result.ok, true);
+});
+
+test('--json は全提案と applied/human を出し、dry-run 監査ファイルだけを保存する', async () => {
+  const { home, claude } = makeHome('orgiast-weekly-json-');
+  const previousHome = process.env.ORGIAST_HOME;
+  const stdout = [];
+  const originalLog = console.log;
+  process.env.ORGIAST_HOME = home;
+  console.log = (...args) => stdout.push(args.join(' '));
+  try {
+    const exitCode = await main(['--dry-run', '--provider', 'gemini', '--json'], {
+      now: new Date('2026-09-07T01:23:45.000Z'),
+      budget: null,
+      askImpl: async () => JSON_ONLY([
+        { id: 'auto1', title: 'ルーティング再生成', rationale: '計測値を更新', expectedSavingJpyPerMonth: 700, confidence: 'high', action: { type: 'command', command: ['node', 'tools/routing-table.mjs', '--rebuild'], note: '' }, risk: '低' },
+        { id: 'human1', title: '契約見直し', rationale: '固定費を削減', expectedSavingJpyPerMonth: 3000, confidence: 'medium', action: { type: 'human', note: '契約確認が必要' }, risk: '中' },
+      ]),
+    });
+    assert.equal(exitCode, 0);
+  } finally {
+    console.log = originalLog;
+    if (previousHome === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previousHome;
+  }
+
+  assert.equal(stdout.length, 1, 'JSON 以外が stdout に混ざっている');
+  const payload = JSON.parse(stdout[0]);
+  assert.equal(payload.proposals.length, 2);
+  assert.equal(payload.proposals[0].decision, 'dry-run-would-apply');
+  assert.deepEqual(payload.applied[0].command, ['node', 'tools/routing-table.mjs', '--rebuild']);
+  assert.equal(payload.human[0].id, 'human1');
+  assert.equal(fs.existsSync(path.join(claude, 'cost-improve-state.json')), false, 'dry-run が設定 state を書き換えた');
+
+  const auditFile = path.join(claude, 'cost-improve', 'weekly', '2026-09-07.json');
+  assert.equal(fs.existsSync(auditFile), true);
+  const audit = JSON.parse(fs.readFileSync(auditFile, 'utf8'));
+  assert.equal(audit.proposals.length, 2);
+  assert.equal(audit.applied[0].id, 'auto1');
+  assert.equal(audit.human[0].id, 'human1');
+  assert.ok(audit.rawResponse.length > 0 && audit.rawResponse.length <= 4000);
+});
+
+test('通常実行の DM に自動適用 title・削減額・command と human 提案を含める', async () => {
+  const { home } = makeHome('orgiast-weekly-dm-');
+  let dm = '';
+  await runWeekly({
+    home, provider: 'gemini',
+    io: {
+      budget: null,
+      sendHeartbeat: async () => {},
+      spawnImpl: () => ({ status: 0, stdout: 'ok' }),
+      notifyKim: async (text) => { dm = text; return { delivered: 'dm' }; },
+      askImpl: async () => JSON_ONLY([
+        { id: 'auto1', title: 'ルーティング再生成', rationale: '更新', expectedSavingJpyPerMonth: 700, confidence: 'high', action: { type: 'command', command: ['node', 'tools/routing-table.mjs', '--rebuild'] }, risk: '低' },
+        { id: 'human1', title: '契約見直し', rationale: '固定費', expectedSavingJpyPerMonth: 3000, confidence: 'medium', action: { type: 'human', note: '確認' }, risk: '中' },
+      ]),
+    },
+  });
+  assert.match(dm, /ルーティング再生成 — 期待削減 ¥700\/月 — 実行 node tools\/routing-table\.mjs --rebuild/);
+  assert.match(dm, /契約見直し/);
 });

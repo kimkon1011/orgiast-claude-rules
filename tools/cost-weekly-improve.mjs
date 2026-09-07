@@ -135,10 +135,12 @@ export function suppressNoEffectProposals(proposals, actions, now) {
 }
 
 // ---- LLM(安いAI)で提案生成 ----
-export async function askForProposals({ provider, context, claudeDir, askImpl = null, now = new Date() }) {
+export async function askForProposals({ provider, context, claudeDir, askImpl = null, now = new Date(), includeRaw = false }) {
   if (askImpl) {
     const result = await askImpl({ provider, context, claudeDir, now });
-    return typeof result === 'string' ? parseProposalsText(result) : parseProposalsText(result?.text);
+    const rawResponse = typeof result === 'string' ? result : String(result?.text || '');
+    const proposals = parseProposalsText(rawResponse);
+    return includeRaw ? { proposals, rawResponse: rawResponse.slice(0, 4000) } : proposals;
   }
   const system = 'あなたはコスト改善コンサルタントです。与えられたデータだけを根拠に、安全で実行可能な改善提案を最大5件、次のJSONだけで返してください。Markdownや前後の文章は付けないでください。' + JSON.stringify({
     proposals: [
@@ -152,7 +154,9 @@ export async function askForProposals({ provider, context, claudeDir, askImpl = 
     env: { ...process.env, ORGIAST_HOME: claudeDir ? path.dirname(claudeDir) : process.env.ORGIAST_HOME },
   });
   if (result.status !== 0) throw new Error(`提案生成の LLM 呼び出しが失敗しました(exit ${result.status}): ${String(result.stderr || '').slice(0, 300)}`);
-  return parseProposalsText(result.stdout);
+  const rawResponse = String(result.stdout || '');
+  const proposals = parseProposalsText(rawResponse);
+  return includeRaw ? { proposals, rawResponse: rawResponse.slice(0, 4000) } : proposals;
 }
 
 // ---- 許可済み command の実行(shell なし) ----
@@ -238,12 +242,30 @@ async function appendActionsAndSave({ claudeDir, improveState, newActions, dryRu
   return nextState;
 }
 
-export async function runWeekly({ home, provider = 'deepseek', dryRun = false, noNotify = false, approveId = '', now = new Date(), io = {} } = {}) {
+function auditFilePath(claudeDir, now) {
+  const date = formatJst(now).slice(0, 10);
+  return path.join(claudeDir, 'cost-improve', 'weekly', `${date}.json`);
+}
+
+function saveWeeklyAudit({ claudeDir, now, audit }) {
+  const file = auditFilePath(claudeDir, now);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  atomicWrite(file, `${JSON.stringify(audit, null, 2)}\n`);
+  return file;
+}
+
+function formatListLine(kind, proposal) {
+  const saving = Math.round(proposal.expectedSavingJpyPerMonth).toLocaleString('ja-JP');
+  return `- [${kind}] ${proposal.title} (¥${saving}/月, ${proposal.confidence})`;
+}
+
+export async function runWeekly({ home, provider = 'deepseek', dryRun = false, noNotify = false, approveId = '', now = new Date(), quiet = false, io = {} } = {}) {
   if (!isAllowedWeeklyProvider(provider)) throw new Error(`提案生成に ${provider} は使えません(deepseek/gemini 等の安いAIのみ。anthropic/claude は禁止)`);
   const claudeDir = path.join(home, '.claude');
   const startedJst = formatJst(now);
   let status = 'OK';
   let outcome = { proposals: 0, applied: 0, human: 0, rejected: 0, provider, approveId: approveId || undefined };
+  const log = (...args) => { if (!quiet) console.log(...args); };
 
   if (approveId) {
     // kim 明示承認: state に保存された human 提案の command を実行する(許可リスト外でも人の意思なので実行)。
@@ -256,7 +278,7 @@ export async function runWeekly({ home, provider = 'deepseek', dryRun = false, n
       const idx = improveState.actions.findIndex((a) => a.id === approveId);
       improveState.actions[idx] = { ...act, result: res.ok ? 'pending' : 'failed', approvedAt: now.toISOString(), note: res.ok ? `kim承認により実行済み: ${res.output}` : `kim承認実行に失敗: ${res.output}` };
       atomicWrite(path.join(claudeDir, 'cost-improve-state.json'), `${JSON.stringify(improveState, null, 2)}\n`);
-      console.log(res.ok ? `OK approve ${approveId}` : `NG approve ${approveId}: ${res.output}`);
+      log(res.ok ? `OK approve ${approveId}` : `NG approve ${approveId}: ${res.output}`);
     }
     return { ok: true, outcome };
   }
@@ -265,8 +287,11 @@ export async function runWeekly({ home, provider = 'deepseek', dryRun = false, n
   const { localState, improveState, providerHealth, claudeStats, budget, routingTable, pricingBrief, cooldowns } = inputs;
   const context = buildContext({ claudeDir, now, localState, improveState, providerHealth, budget, routingTable, pricingBrief, cooldowns, headlessJobs: claudeStats.headlessJobs, headlessClaudeOut: claudeStats.headlessClaudeOut });
   let proposals;
+  let rawResponse = '';
   try {
-    proposals = await askForProposals({ provider, context, claudeDir, askImpl: io.askImpl, now });
+    const generated = await askForProposals({ provider, context, claudeDir, askImpl: io.askImpl, now, includeRaw: true });
+    proposals = generated.proposals;
+    rawResponse = generated.rawResponse;
   } catch (error) {
     status = 'NG';
     console.error(`提案生成に失敗: ${String(error?.message ?? error)}`);
@@ -278,6 +303,14 @@ export async function runWeekly({ home, provider = 'deepseek', dryRun = false, n
 
   const newActions = [];
   const humanLines = [];
+  const autoLines = [];
+  const proposalAudits = [];
+  const applied = [];
+  const human = [];
+  const rejected = [];
+  const suppressedSignatures = new Set(
+    proposals.filter((proposal) => !filtered.includes(proposal)).map((proposal) => proposalSignature(proposal, proposalMetric(proposal))),
+  );
   for (const proposal of filtered) {
     const metric = proposalMetric(proposal);
     const baseline = { metric, value: metricCurrentValue(metric, { localState, budget, signals: { headlessClaudeOut: claudeStats.headlessClaudeOut } }) };
@@ -300,6 +333,9 @@ export async function runWeekly({ home, provider = 'deepseek', dryRun = false, n
       if (classified.reject) {
         // 形が不正(配列でない等)の提案は実行せず記録もしない。
         outcome.rejected++;
+        const reason = classified.reason;
+        proposalAudits.push({ ...proposal, decision: `rejected(${reason})` });
+        rejected.push({ id: proposal.id, reason, command: Array.isArray(proposal.action.command) ? proposal.action.command : [] });
         console.error(`rejected proposal ${proposal.id}: ${classified.reason}`);
         continue;
       }
@@ -308,6 +344,8 @@ export async function runWeekly({ home, provider = 'deepseek', dryRun = false, n
         const act = { ...common, mode: 'human', result: 'escalated', note: `許可リスト外のため自動実行せず kim 承認待ち: ${classified.reason}`, command: proposal.action.command };
         newActions.push(act);
         humanLines.push(formatProposalLine({ ...proposal, action: { ...proposal.action } }, act.id));
+        proposalAudits.push({ ...proposal, decision: 'human' });
+        human.push({ id: proposal.id, reason: classified.reason, command: Array.isArray(proposal.action.command) ? proposal.action.command : [] });
         outcome.human++;
         continue;
       }
@@ -316,6 +354,9 @@ export async function runWeekly({ home, provider = 'deepseek', dryRun = false, n
       if (dryRun) {
         const act = { ...common, note: `[dry-run] 適用は見送り: ${parts.join(' ')}`, command: parts };
         newActions.push(act);
+        const reason = 'dry-run のため未実行';
+        proposalAudits.push({ ...proposal, action: { ...proposal.action, command: parts }, decision: 'dry-run-would-apply' });
+        applied.push({ id: proposal.id, reason, command: parts });
         outcome.applied++;
         continue;
       }
@@ -323,23 +364,42 @@ export async function runWeekly({ home, provider = 'deepseek', dryRun = false, n
       const act = { ...common, command: parts, note: res.ok ? `適用済み: ${parts.join(' ')}` : `適用に失敗: ${res.output}` };
       if (!res.ok) act.result = 'failed';
       newActions.push(act);
+      const reason = res.ok ? '自動適用済み' : `自動適用に失敗: ${res.output}`;
+      proposalAudits.push({ ...proposal, action: { ...proposal.action, command: parts }, decision: 'auto-applied' });
+      applied.push({ id: proposal.id, reason, command: parts });
+      autoLines.push(`${proposal.title} — 期待削減 ¥${Math.round(proposal.expectedSavingJpyPerMonth).toLocaleString('ja-JP')}/月 — 実行 ${parts.join(' ')}`);
       outcome.applied++;
     } else {
       // human 提案: 自動実行しない。kim が --approve するか手動で実施する。
       const act = { ...common, mode: 'human', result: 'escalated', note: proposal.action.note || '人間の判断が必要です', command: proposal.action.command && Array.isArray(proposal.action.command) ? proposal.action.command : undefined };
       newActions.push(act);
       humanLines.push(formatProposalLine(proposal, act.id));
+      proposalAudits.push({ ...proposal, decision: 'human' });
+      human.push({ id: proposal.id, reason: proposal.action.note || '人間の判断が必要', command: Array.isArray(proposal.action.command) ? proposal.action.command : [] });
       outcome.human++;
     }
   }
+  for (const proposal of proposals) {
+    const signature = proposalSignature(proposal, proposalMetric(proposal));
+    if (!suppressedSignatures.has(signature)) continue;
+    const reason = '過去4週間以内に同種提案が no_effect と判定済み';
+    proposalAudits.push({ ...proposal, decision: `rejected(${reason})` });
+    rejected.push({ id: proposal.id, reason, command: Array.isArray(proposal.action?.command) ? proposal.action.command : [] });
+  }
   outcome.proposals = filtered.length;
-  if (suppressedCount) console.log(`4週間抑止で ${suppressedCount}件の同種提案を除外`);
+  outcome.rejected += suppressedCount;
+  if (suppressedCount) log(`4週間抑止で ${suppressedCount}件の同種提案を除外`);
 
   await appendActionsAndSave({ claudeDir, improveState, newActions, dryRun });
   const summary = `proposals=${outcome.proposals} applied=${outcome.applied} human=${outcome.human} rejected=${outcome.rejected} suppressed=${suppressedCount} provider=${provider}`;
+  const audit = { ok: status === 'OK', ranAt: now.toISOString(), provider, dryRun, outcome, proposals: proposalAudits, applied, human, rejected, rawResponse };
+  const auditFile = saveWeeklyAudit({ claudeDir, now, audit });
 
-  if (humanLines.length && !dryRun && !noNotify) {
-    const dmText = `**📈 週次コスト改善: kim の判断待ち提案(${humanLines.length}件)**\n\n${humanLines.join('\n\n')}`;
+  if ((autoLines.length || humanLines.length) && !dryRun && !noNotify) {
+    const sections = [];
+    if (autoLines.length) sections.push(`**自動適用(${autoLines.length}件)**\n${autoLines.join('\n')}`);
+    if (humanLines.length) sections.push(`**kim の判断待ち提案(${humanLines.length}件)**\n\n${humanLines.join('\n\n')}`);
+    const dmText = `**📈 週次コスト改善**\n\n${sections.join('\n\n')}`;
     try {
       const notifyResult = await (io.notifyKim || notifyKim)(dmText, { home, webhookFallback: false });
       if (!notifyResult || notifyResult.delivered !== 'dm') throw new Error(notifyResult?.reason || 'kim の DM に配信されませんでした');
@@ -363,8 +423,12 @@ export async function runWeekly({ home, provider = 'deepseek', dryRun = false, n
       console.error(`cost-weekly heartbeat 送信失敗: ${String(error?.message ?? error)}`);
     }
   }
-  console.log(`OK / ${summary}`);
-  return { ok: status === 'OK', outcome, humanLines };
+  for (const proposal of proposalAudits) {
+    const kind = proposal.decision.startsWith('auto-') || proposal.decision === 'dry-run-would-apply' ? 'auto' : proposal.decision === 'human' ? 'human' : 'reject';
+    log(formatListLine(kind, proposal));
+  }
+  log(`OK / ${summary}`);
+  return { ok: status === 'OK', outcome, proposals: proposalAudits, applied, human, rejected, rawResponse, auditFile, humanLines };
 }
 
 export async function sendCostWeeklyHeartbeat({ claudeDir, label, ranAt, status, summary, fetchImpl = globalThis.fetch }) {
@@ -397,9 +461,10 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   const provider = providerIndex >= 0 ? String(argv[providerIndex + 1] || '') : 'deepseek';
   const approveIndex = argv.indexOf('--approve');
   const approveId = approveIndex >= 0 ? String(argv[approveIndex + 1] || '') : '';
+  const json = argv.includes('--json');
   try {
-    const result = await runWeekly({ home, provider, dryRun, noNotify, approveId, now: io.now || new Date(), io });
-    if (argv.includes('--json')) console.log(JSON.stringify(result, null, 2));
+    const result = await runWeekly({ home, provider, dryRun, noNotify, approveId, now: io.now || new Date(), quiet: json, io });
+    if (json) console.log(JSON.stringify(result, null, 2));
     if (result.ok === false && result.reason) { console.error(result.reason); return 1; }
     return 0;
   } catch (error) {

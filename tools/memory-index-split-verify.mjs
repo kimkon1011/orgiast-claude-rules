@@ -76,9 +76,40 @@ export function verify(directory) {
   };
 }
 
+export function fix(directory) {
+  const indexDirectory = path.join(directory, 'index');
+  const fixes = [];
+  if (fs.existsSync(indexDirectory)) {
+    const indexNames = fs.readdirSync(indexDirectory, { withFileTypes: true })
+      .filter((item) => item.isFile() && item.name.endsWith('.md'))
+      .map((item) => item.name).sort();
+    for (const name of indexNames) {
+      const indexPath = path.join(indexDirectory, name);
+      const original = fs.readFileSync(indexPath, 'utf8');
+      let fixedCount = 0;
+      const updated = original.replace(LINK_RE, (match, title, target) => {
+        if (target.startsWith('../')) return match;
+        const rootTarget = path.resolve(directory, target);
+        if (!fs.existsSync(rootTarget) || !fs.statSync(rootTarget).isFile()) return match;
+        fixedCount += 1;
+        return `[${title}](../${target})`;
+      });
+      if (fixedCount > 0) {
+        fs.writeFileSync(indexPath, updated);
+        fixes.push({ file: `index/${name}`, count: fixedCount });
+      }
+    }
+  }
+  const result = verify(directory);
+  return { ...result, fixedCount: fixes.reduce((sum, item) => sum + item.count, 0), fixes };
+}
+
 export function run(argv = process.argv.slice(2)) {
   const directory = path.resolve(optionValue(argv, '--dir'));
-  const result = verify(directory);
+  const result = argv.includes('--fix') ? fix(directory) : verify(directory);
+  for (const item of result.fixes || []) {
+    console.log(`修復: ${item.file} の ${item.count} 件のリンクに ../ を補完しました`);
+  }
   if (result.problems.length) {
     console.error(`検証 NG (${result.problems.length}件):`);
     for (const problem of result.problems) console.error(`- ${problem}`);

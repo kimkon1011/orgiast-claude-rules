@@ -337,6 +337,17 @@ test('11. reported rows with missing metrics are untrusted and never displayed a
   } finally { delete process.env.ORGIAST_HOME; cleanTempDir(tempDir); }
 });
 
+test('11b. empty delegation is untrusted while measured 0.0% is low delegation', () => {
+  const base = { pcName: 'PC-ratio', reportedAt: '2026-09-06 11:00:00', claudeUsd: '1' };
+  const missing = evaluateFleet({ rows: [{ ...base, delegRatio: '' }], ledgerCounts: { codex: 1 }, localState: {}, now: NOW });
+  assert.ok(missing.violations.some(v => v.kind === 'measurement_untrusted' && v.pc === 'PC-ratio'));
+  assert.ok(!missing.violations.some(v => v.kind === 'low_delegation' && v.pc === 'PC-ratio'));
+
+  const measuredZero = evaluateFleet({ rows: [{ ...base, delegRatio: '0.0%' }], ledgerCounts: { codex: 1 }, localState: {}, now: NOW });
+  assert.ok(measuredZero.violations.some(v => v.kind === 'low_delegation' && v.pc === 'PC-ratio'));
+  assert.ok(!measuredZero.violations.some(v => v.kind === 'measurement_untrusted' && v.pc === 'PC-ratio'));
+});
+
 test('12. all known cheap providers participate in unused-provider health checks', () => {
   const result = evaluateFleet({ rows: [], ledgerCounts: { codex: 1 }, localState: { configuredProviders: ['grok', 'openrouter'] }, now: NOW });
   assert.equal(result.violations.filter(v => v.kind === 'unused_provider').length, 2);

@@ -574,7 +574,7 @@ test('fleet-sheet-report: state欠損・破損でも既定値で継続', () => {
   fs.writeFileSync(path.join(claude, 'cost-loop-state.json'), '{broken');
   fs.writeFileSync(path.join(claude, 'executor-usage.jsonl'), 'broken\n');
   const r = run('fleet-sheet-report.mjs', undefined, ['--dry-run'], { ORGIAST_HOME: home }); const payload = JSON.parse(r.stdout);
-  assert(r.status === 0 && payload.claudeUsd === 0 && payload.codexLogin === '判定不能', r.stdout || r.stderr);
+  assert(r.status === 0 && payload.claudeUsd === '' && payload.delegRatio === '' && payload.delegRatioLegacy === '' && payload.codexLogin === '判定不能', r.stdout || r.stderr);
 });
 test('fleet upsert純関数: 保護列・連投・未マッピング・ヘッダ並替え', () => {
   const source = fs.readFileSync(path.join(repo, 'gas', 'fleet-status-sheet', 'UpsertLogic.gs'), 'utf8');

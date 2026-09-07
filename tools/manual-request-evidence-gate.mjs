@@ -1,4 +1,5 @@
 import { latestAssistantText } from './lib/assistant-text.mjs';
+import { isEntry } from './is-entry.mjs';
 
 export function judge(text) {
     // コードフェンスを除去
@@ -161,6 +162,6 @@ function main() {
     }
 }
 
-if (process.argv[1] && process.argv[1].endsWith('manual-request-evidence-gate.mjs')) {
+if (isEntry(import.meta.url)) {
     main();
 }

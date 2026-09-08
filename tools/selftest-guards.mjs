@@ -524,7 +524,7 @@ test('install/verify: 配布する ~/.claude/*.env を両方の総合チェッ�
   assert(distributed.size > 0, 'installer から ~/.claude/*.env を1件も抽出できなかった');
   const missing = [];
   for (const [checker, source] of [
-    ['verify-setup.ps1', fs.readFileSync(path.join(toolsDir, 'verify-setup.ps1'), 'utf8')],
+    ['setup-manifest.json', fs.readFileSync(path.join(toolsDir, 'setup-manifest.json'), 'utf8')],
     ['selftest-install.sh', fs.readFileSync(path.join(toolsDir, 'selftest-install.sh'), 'utf8')],
   ]) for (const name of [...distributed].sort()) if (!source.includes(name)) missing.push(`${name} -> ${checker}`);
   assert(missing.length === 0, `総合チェックに未掲載: ${missing.join(', ')}`);

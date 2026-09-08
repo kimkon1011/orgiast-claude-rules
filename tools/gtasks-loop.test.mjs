@@ -86,3 +86,9 @@ test('HOWTOは夜間の外部送信を禁止し下書き保存を指示する', 
   assert.match(HOWTO, /■ 要確認:/);
   assert.match(HOWTO, /■ kimの残り1操作:/);
 });
+
+test('HOWTOは回答待ちタスクへの同一質問の再追記を禁止する', () => {
+  assert.match(HOWTO, /get <listId> <taskId>` で既存メモ/);
+  assert.match(HOWTO, /同じ趣旨の質問が既にあれば二度と追記しない/);
+  assert.match(HOWTO, /新しく聞くことが無い限り note せず/);
+});

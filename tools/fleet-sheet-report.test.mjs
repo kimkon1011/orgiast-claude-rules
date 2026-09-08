@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 
 const script = new URL('./fleet-sheet-report.mjs', import.meta.url);
@@ -16,7 +17,7 @@ function reportPayload(files = {}) {
   fs.writeFileSync(path.join(claude, 'cost-reporter.env'), 'REPORTER_LABEL=fleet-sheet-test\n');
   for (const [name, value] of Object.entries(files)) fs.writeFileSync(path.join(claude, name), JSON.stringify(value));
   try {
-    const result = spawnSync(process.execPath, [script.pathname, '--dry-run'], {
+    const result = spawnSync(process.execPath, [fileURLToPath(script), '--dry-run'], {
       encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, VERSION_DRIFT_SKIP: '1' },
     });
     assert.equal(result.status, 0, result.stderr);

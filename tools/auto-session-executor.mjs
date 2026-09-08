@@ -27,6 +27,28 @@ export function autoSessionExecutor(env = process.env, hostname = os.hostname(),
   return { executor: merged.ORGIAST_AUTO_SESSION_EXECUTOR || 'cheap-code', provider: merged.ORGIAST_AUTO_SESSION_PROVIDER || (/kim/i.test(hostname) ? 'glm' : 'deepseek') };
 }
 
+export function claudeFallbackEnabled(env = process.env, home = env.ORGIAST_HOME || os.homedir()) {
+  let fileEnv = {};
+  try { fileEnv = parseAutoSessionEnvText(fs.readFileSync(path.join(home, '.claude', 'auto-session.env'), 'utf8')); } catch {}
+  return /^(?:1|true|on)$/i.test(String({ ...env, ...fileEnv }.ORGIAST_AUTO_SESSION_CLAUDE_FALLBACK || '').trim());
+}
+
+export function alternateCheapProvider(provider, home = process.env.ORGIAST_HOME || os.homedir()) {
+  const alternate = provider === 'glm' ? 'deepseek' : provider === 'deepseek' ? 'glm' : null;
+  if (!alternate) return null;
+  const keyFile = path.join(home, '.claude', alternate === 'glm' ? 'zai.env' : 'deepseek.env');
+  const keyName = alternate === 'glm' ? 'ZAI_API_KEY' : 'DEEPSEEK_API_KEY';
+  try {
+    if (!parseAutoSessionEnvText(fs.readFileSync(keyFile, 'utf8'))[keyName]) return null;
+    const state = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'provider-cooldown.json'), 'utf8'));
+    if (Number(state?.[alternate]?.until) > Date.now()) return null;
+  } catch (error) {
+    if (error?.code !== 'ENOENT' && error instanceof SyntaxError) return null;
+    try { if (!parseAutoSessionEnvText(fs.readFileSync(keyFile, 'utf8'))[keyName]) return null; } catch { return null; }
+  }
+  return alternate;
+}
+
 // cheap-code 子プロセスの引数。指示は argv でなく prompt-file 経由(§1.17 argv経由の指示破壊防止)。
 export function buildCheapCodeArgs({ repoRoot, provider, promptFile, cwd }) {
   return [path.join(repoRoot, 'tools', 'cheap-code.mjs'), '--provider', provider, '--prompt-file', promptFile, '--cwd', cwd];
@@ -69,6 +91,15 @@ export function recordFallbackToClaude({ home = process.env.ORGIAST_HOME || os.h
       fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
       fs.appendFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), row, 'utf8');
     }
+  } catch {}
+}
+
+export function recordSkippedNoExecutor({ home = process.env.ORGIAST_HOME || os.homedir(), reason, provider, appendImpl = null, now = new Date() } = {}) {
+  try {
+    const row = `${JSON.stringify({ t: now.toISOString(), provider: 'skipped', model: 'none', status: 'no-cheap-executor', reason: String(reason || provider || 'unknown') })}\n`;
+    const file = path.join(home, '.claude', 'executor-usage.jsonl');
+    if (appendImpl) appendImpl(file, row, 'utf8');
+    else { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.appendFileSync(file, row, 'utf8'); }
   } catch {}
 }
 

@@ -6,7 +6,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
 import { DEFAULT_REPO_MAP, parseRepoMap } from './feedback-to-issues.mjs';
 import { runTaskLedger } from './task-ledger.mjs';
-import { autoSessionExecutor, buildClaudeHeadlessArgs, buildCheapCodeArgs, recordFallbackToClaude } from './auto-session-executor.mjs';
+import { alternateCheapProvider, autoSessionExecutor, buildClaudeHeadlessArgs, buildCheapCodeArgs, claudeFallbackEnabled, recordFallbackToClaude, recordSkippedNoExecutor } from './auto-session-executor.mjs';
 
 export { autoSessionExecutor } from './auto-session-executor.mjs';
 
@@ -515,14 +515,16 @@ export function runChild(executable, prompt, repoCwd, historyCwd, timeoutMs) {
   return new Promise((resolve) => {
     const startedAt = new Date();
     const choice = autoSessionExecutor();
+    let cheapProvider = choice.provider;
+    let alternateTried = false;
     const promptFile = path.join(os.tmpdir(), `orgiast-auto-session-${process.pid}-${Date.now()}.txt`);
     if (choice.executor === 'cheap-code') fs.writeFileSync(promptFile, `[headless:auto-session]\n${prompt}`, 'utf8');
     const launch = (fallback = false) => {
       const cheap = choice.executor === 'cheap-code' && !fallback;
       let child;
       try { child = spawn(cheap ? process.execPath : executable, cheap
-        ? buildCheapCodeArgs({ repoRoot: repoCwd, provider: choice.provider, promptFile, cwd: historyCwd })
-        : buildClaudeHeadlessArgs({ repoCwd, historyCwd }), { cwd: historyCwd, env: { ...process.env, CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: cheap ? `auto-session:cheap-code:${choice.provider}` : 'auto-session:fallback-claude' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }); }
+        ? buildCheapCodeArgs({ repoRoot: repoCwd, provider: cheapProvider, promptFile, cwd: historyCwd })
+        : buildClaudeHeadlessArgs({ repoCwd, historyCwd }), { cwd: historyCwd, env: { ...process.env, CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: cheap ? `auto-session:cheap-code:${cheapProvider}` : 'auto-session:fallback-claude' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }); }
       catch (error) { finish(null, '', String(error?.message ?? error), true, fallback); return; }
     let stdout = '';
     let stderr = '';
@@ -540,11 +542,21 @@ export function runChild(executable, prompt, repoCwd, historyCwd, timeoutMs) {
     }, timeoutMs);
     child.on('close', (code) => {
       clearTimeout(timer);
-      if (cheap && !timedOut && code !== 0) { recordFallbackToClaude({ reason: `cheap-code/${choice.provider} exit ${code}` }); launch(true); return; }
+      if (cheap && !timedOut && code !== 0) {
+        const reason = `cheap-code/${cheapProvider} exit ${code}`;
+        const alternate = alternateTried ? null : alternateCheapProvider(cheapProvider);
+        if (alternate) { alternateTried = true; cheapProvider = alternate; launch(false); return; }
+        if (claudeFallbackEnabled()) { recordFallbackToClaude({ reason }); launch(true); return; }
+        recordSkippedNoExecutor({ reason, provider: cheapProvider });
+        finish(code, stdout, stderr, launchFailed, false, false, true);
+        return;
+      }
       finish(timedOut ? null : code, stdout, stderr, launchFailed, fallback, timedOut);
     });
     };
-    const finish = (code, stdout, stderr, launchFailed, fallback, timedOut = false) => { try { fs.rmSync(promptFile, { force: true }); } catch {} resolve({ startedAt: startedAt.toISOString(), endedAt: new Date().toISOString(), exitCode: code, status: timedOut ? 'timeout' : code === 0 ? 'success' : 'failure', launchFailed, fallbackToClaude: Boolean(fallback), stdout, stderr }); };
+    const finish = (code, stdout, stderr, launchFailed, fallback, timedOut = false, skippedNoExecutor = false) => { try { fs.rmSync(promptFile, { force: true }); } catch {} resolve({ startedAt: startedAt.toISOString(), endedAt: new Date().toISOString(), exitCode: code, status: timedOut ? 'timeout' : code === 0 ? 'success' : 'failure', launchFailed, fallbackToClaude: Boolean(fallback), skippedNoExecutor, executorUsed: fallback || choice.executor !== 'cheap-code' ? 'claude' : `cheap-code:${cheapProvider}`, stdout, stderr }); };
+    // 既存の呼び出し契約: executable 自体が不正なら cheap-code の選択状態にかかわらず起動失敗として返す。
+    if (String(executable).includes('\0')) { finish(null, '', 'The argument contains null bytes', true, false); return; }
     launch(false);
   });
 }
@@ -774,7 +786,7 @@ export function failureReason(result) {
 }
 
 export function formatResultLine(result, minutes, pr = '') {
-  return `- ${result.todo} | ${result.status}${pr ? ` | PR #${pr}` : ''} | ${minutes}分 | transcript: ${result.transcript || '(取得できず)'} | resume: ${result.resumeCommand || '(取得できず)'}${failureReason(result)}`;
+  return `- ${result.todo} | ${result.status}${result.skippedNoExecutor ? '（安い実行者なし・Claude非使用）' : ''}${pr ? ` | PR #${pr}` : ''} | ${minutes}分 | transcript: ${result.transcript || '(取得できず)'} | resume: ${result.resumeCommand || '(取得できず)'}${failureReason(result)}`;
 }
 
 export async function main(argv = process.argv.slice(2), io = {}) {

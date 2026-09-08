@@ -90,14 +90,14 @@ test('detectQuotaLimit: 枠切れメッセージ (You\'ve hit your usage limit) 
 });
 
 test('detectQuotaLimit: 枠切れメッセージ (Upgrade to Pro) を検出する', () => {
-  const stderr = 'Please visit chatgpt.com/explore/pro to Upgrade to Pro';
+  const stderr = 'WARN: Upgrade to Pro to continue';
   const check = detectQuotaLimit('', stderr);
   assert.equal(check.matched, true);
   assert.equal(check.pattern, "Upgrade to Pro");
 });
 
 test('detectQuotaLimit: 枠切れメッセージ (rate limit / 429) を検出する', () => {
-  const checkStderr = detectQuotaLimit('', 'Error: rate limit exceeded (429)');
+  const checkStderr = detectQuotaLimit('', 'Error: Rate limit exceeded (429)');
   assert.equal(checkStderr.matched, true);
   assert.equal(checkStderr.pattern, "rate limit");
 
@@ -110,6 +110,29 @@ test('detectQuotaLimit: 通常のエラー出力やテスト失敗では検出�
   const stderr = 'Error: AssertionError [ERR_ASSERTION]: Expected true but got false\nReferenceError: x is not defined';
   const check = detectQuotaLimit('', stderr);
   assert.equal(check.matched, false);
+});
+
+test('detectQuotaLimit: exit 0 の stdout でも Codex の上限エラー行を検出する', () => {
+  const stdout = "work completed\nERROR: You've hit your usage limit. Try again at Sep 9th 10:08 AM";
+  assert.equal(detectQuotaLimit(stdout, '', 0).matched, true);
+});
+
+test('detectQuotaLimit: テストランナー、コード、行番号の疑似一致を除外する', () => {
+  assert.equal(detectQuotaLimit("✔ detectQuotaLimit: 枠切れメッセージ (You've hit your usage limit) を検出する (1.2ms)", '', 0).matched, false);
+  assert.equal(detectQuotaLimit('return json({ ok:false, error:"rate limit exceeded" }, 429)', '', 0).matched, false);
+  assert.equal(detectQuotaLimit('src/CaseList.js:429:function foo()', '', 0).matched, false);
+});
+
+test('detectQuotaLimit: promptText に含まれる指示文エコーを除外する', () => {
+  const echoed = '「Usage limit」を検知したら…';
+  assert.equal(detectQuotaLimit(echoed, '', 1, echoed).matched, false);
+});
+
+test('detectQuotaLimit: stderr の上限行は終了コードに関係なく検出する', () => {
+  for (const status of [0, 1, null]) {
+    assert.equal(detectQuotaLimit('', "ERROR: You've hit your usage limit.", status).matched, true);
+  }
+  assert.equal(detectQuotaLimit('', '[2026-09-09T00:00:00] error: Rate limit reached for requests', 0).matched, true);
 });
 
 test('fallback の実装系指示で空 diff なら失敗扱いにする', () => {
@@ -139,7 +162,7 @@ test('--no-fallback が指定されても指示文が引数として食われず
 
 test('枠切れ発生時に --no-fallback を指定した場合はフォールバックせず非ゼロ終了する', () => {
   const mockResults = [
-    { status: 0, output: "You've hit your usage limit. Please try again later.", stderr: "" }
+    { status: 1, output: "You've hit your usage limit. Please try again later.", stderr: "" }
   ];
   const result = run(['--no-fallback', '指示内容'], {
     env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults) }
@@ -153,7 +176,7 @@ test('枠切れ発生時に --no-fallback を指定した場合はフォール�
 
 test('枠切れ発生時にフォールバックが成功した場合は 0 で終了しヘッダ・フッタを出力する', () => {
   const mockResults = [
-    { status: 0, output: "You've hit your usage limit. Please try again later.", stderr: "" },
+    { status: 1, output: "You've hit your usage limit. Please try again later.", stderr: "" },
     { status: 0, output: "Qwen Code CLI has successfully edited files.", stderr: "" }
   ];
   const result = run(['指示内容'], {
@@ -166,7 +189,7 @@ test('枠切れ発生時にフォールバックが成功した場合は 0 で�
 
 test('Codex もフォールバック(Qwen Code) も失敗した場合は非ゼロで終了する', () => {
   const mockResults = [
-    { status: 0, output: "You've hit your usage limit. Please try again later.", stderr: "" },
+    { status: 1, output: "You've hit your usage limit. Please try again later.", stderr: "" },
     { status: 12, output: "", stderr: "Qwen Code execution error" }
   ];
   const result = run(['指示内容'], {
@@ -178,7 +201,7 @@ test('Codex もフォールバック(Qwen Code) も失敗した場合は非ゼ�
 
 test('枠切れ発生時に DEEPSEEK_API_KEY が無ければフォールバックせず非ゼロで終了する', () => {
   const mockResults = [
-    { status: 0, output: "You've hit your usage limit. Please try again later.", stderr: "" }
+    { status: 1, output: "You've hit your usage limit. Please try again later.", stderr: "" }
   ];
   const prev = process.env.DEEPSEEK_API_KEY;
   delete process.env.DEEPSEEK_API_KEY;

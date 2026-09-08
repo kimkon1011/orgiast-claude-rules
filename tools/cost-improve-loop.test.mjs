@@ -17,12 +17,33 @@ import {
   parsePercent,
   parseJstOrIsoDate,
   executeLocalAction,
+  evaluateBalanceSignals,
   writeRoutingOverride,
+  writeGatewayOverride,
   writeCodexFallbackOrder,
   writeAutoSessionExecutorEnv,
   writeBudgetPressure,
   splitWhitelistedCommand
 } from './cost-improve-loop.mjs';
+
+test('残高シグナル3種の境界とauto-local効果は固定許可リストだけ', () => {
+  const rows = [
+    { provider: 'deepseek', balanceUsd: 2.99, autoTopUp: false, todaySpendUsd: 1.01, avg7dSpendUsd: 0.5, status: 'anomaly' },
+    { provider: 'kimi', balanceUsd: 2.99, autoTopUp: false, todaySpendUsd: 0, avg7dSpendUsd: 0, status: 'low' },
+  ];
+  const kinds = evaluateBalanceSignals(rows).map((x) => x.kind);
+  assert.deepEqual(kinds, ['spend_anomaly', 'autotopup_missing', 'balance_low', 'autotopup_missing']);
+  const decision = decideActions({ violations: evaluateBalanceSignals(rows), state: { actions: [] }, now: new Date('2026-09-09T00:00:00Z'), limits: { maxCodex: 0 } });
+  assert.deepEqual(new Set(decision.actions.filter((x) => x.mode === 'auto-local').map((x) => x.effect)), new Set(['writeRoutingOverride', 'writeGatewayOverride']));
+});
+
+test('spend_anomalyは24h降格、gateway overrideは実在確認済みモデルを書く', () => {
+  const home = createTempDir(); const claudeDir = path.join(home, '.claude'); const now = new Date('2026-09-09T00:00:00Z');
+  const demote = writeRoutingOverride({ claudeDir, provider: 'deepseek', now, durationHours: 24 });
+  assert.equal(Date.parse(demote.until) - now.getTime(), 86400000);
+  assert.equal(writeGatewayOverride({ claudeDir, provider: 'kimi' }).model, 'moonshotai/kimi-k3');
+  cleanTempDir(home);
+});
 
 function createTempDir() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orgiast-cost-test-'));

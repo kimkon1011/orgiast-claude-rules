@@ -8,8 +8,8 @@ export const FALLBACK_CHAIN = Object.freeze([
   // 無料の Groq、定額の GLM、以降の従量プロバイダの順で費用を抑える。
   { provider: 'glm', model: 'glm-5.3' },
   { provider: 'cerebras', model: 'zai-glm-4.7' },
-  { provider: 'deepseek', model: 'deepseek-chat' },
   { provider: 'openrouter', model: 'openai/gpt-oss-120b' },
+  { provider: 'deepseek', model: 'deepseek-chat' },
   { provider: 'gemini', model: 'gemini-3.7-flash' },
   { provider: 'grok', model: 'grok-3' },
   { provider: 'kimi', model: 'kimi-k3' },
@@ -107,7 +107,9 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, payloadF
 
   const candidates = [];
   const seen = new Set();
-  for (const candidate of [start, ...chain].filter(Boolean)) {
+  const deepseekGateway = { provider: 'openrouter', model: 'deepseek/deepseek-v4-flash' };
+  const expanded = start?.provider === 'deepseek' ? [start, deepseekGateway, ...chain] : [start, ...chain];
+  for (const candidate of expanded.filter(Boolean)) {
     if (seen.has(candidate.provider)) continue;
     seen.add(candidate.provider);
     candidates.push(candidate);
@@ -157,7 +159,8 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, payloadF
   function setCooldown(provider, status, response) {
     if (!useCooldown) return;
     let duration = 0;
-    if ([401, 402, 403].includes(status)) duration = 6 * 60 * 60 * 1000;
+    if (status === 402) duration = 24 * 60 * 60 * 1000;
+    else if ([401, 403].includes(status)) duration = 6 * 60 * 60 * 1000;
     else if (status === 429) duration = retryAfterMs(response, timestamp) ?? 30 * 60 * 1000;
     if (!duration) return;
     cooldowns[provider] = { until: timestamp + duration, reason: `http_${status}`, at: timestamp };

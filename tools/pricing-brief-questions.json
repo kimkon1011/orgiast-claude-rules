@@ -38,5 +38,10 @@
     "id": "zai-glm-pricing",
     "label": "Z.ai / GLM のプランと上限",
     "query": "Z.ai GLM pricing plans usage limits 2026"
+  },
+  {
+    "id": "provider-autotopup",
+    "label": "各プロバイダの自動チャージと月上限（出典URL必須）",
+    "query": "各AI APIプロバイダの自動チャージ機能の有無と月上限設定の可否 official source URL"
   }
 ]

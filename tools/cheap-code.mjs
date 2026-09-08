@@ -60,6 +60,22 @@ export function detectUsageLimitText(text) {
   return /usage\s+limit\s+reached|429|\[1308\]/i.test(String(text || ''));
 }
 
+export function detectBillingFailure(text) {
+  const value = String(text || '');
+  if (/402|insufficient\s+balance/i.test(value)) return 402;
+  if (/429|usage\s+limit/i.test(value)) return 429;
+  return null;
+}
+
+export function appendUsageLedger({ home, provider, model, promptChars, outputChars, secs, ok, status = null, now = new Date() }) {
+  const file = path.join(home, '.claude', 'executor-usage.jsonl');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const row = { t: now.toISOString(), provider, model, in: Math.ceil(promptChars / 4), out: Math.ceil(outputChars / 4), secs: Number(secs.toFixed(3)), ok };
+  if (status !== null) row.status = status;
+  fs.appendFileSync(file, `${JSON.stringify(row)}\n`, 'utf8');
+  return row;
+}
+
 // usage-limit 本文から provider の再開時刻を返す。取れなければ +5h。
 export function cooldownUntilFromText(text, now = Date.now()) {
   return providerResetUntil(text, now, FIVE_HOURS);
@@ -97,6 +113,7 @@ function hasZaiKey(home) {
 export function autoProvider({ home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now() } = {}) {
   const claudeDir = path.join(home, '.claude');
   if (hasZaiKey(home) && !providerInCooldown('glm', now, path.join(claudeDir, 'provider-cooldown.json'))) return 'glm';
+  if (providerInCooldown('deepseek', now, path.join(claudeDir, 'provider-cooldown.json')) && hasZaiKey(home)) return 'glm';
   return 'deepseek';
 }
 
@@ -224,21 +241,20 @@ async function main(args) {
 
   // 定額レーン飽和(codex/glm の usage limit)は「契約枠なし」として cooldown を書き exit 3 で返す。
   // 成功(exit 0)のまま 429 文言が混ざることはないので、失敗時にだけ検査する。
-  if (status !== 0 && detectUsageLimitText(`${stdoutText}\n${stderrText}`)) {
-    const until = cooldownUntilFromText(`${stdoutText}\n${stderrText}`, Date.now());
+  const failureCode = status !== 0 ? detectBillingFailure(`${stdoutText}\n${stderrText}`) : null;
+  if (failureCode) {
+    const until = failureCode === 402 ? Date.now() + 24 * 60 * 60 * 1000 : cooldownUntilFromText(`${stdoutText}\n${stderrText}`, Date.now());
     try {
-      writeProviderCooldown({ claudeDir: path.join(home, '.claude'), provider: config.provider, until });
-      console.error(`[cheap-code] ${config.provider} は契約枠を使い切りました(usage_limit)。provider-cooldown.json に ${new Date(until).toISOString()} まで記録しました。`);
+      appendUsageLedger({ home, provider: config.provider, model, promptChars: prompt.length, outputChars, secs, ok: false, status: failureCode });
+      writeProviderCooldown({ claudeDir: path.join(home, '.claude'), provider: config.provider, until, reason: failureCode === 402 ? 'http_402' : 'usage_limit' });
+      console.error(`[cheap-code] ${config.provider} は利用不可(${failureCode})。provider-cooldown.json に ${new Date(until).toISOString()} まで記録しました。`);
     } catch (error) {
       console.error(`[cheap-code] cooldown 記録に失敗: ${String(error?.message ?? error)}`);
     }
     return 3;
   }
   try {
-    const ledger = path.join(home, '.claude', 'executor-usage.jsonl');
-    fs.mkdirSync(path.dirname(ledger), { recursive: true });
-    const usageEntry = { t: new Date().toISOString(), provider: config.provider, model, in: Math.ceil(prompt.length / 4), out: Math.ceil(outputChars / 4), secs: Number(secs.toFixed(3)) };
-    fs.appendFileSync(ledger, `${JSON.stringify(usageEntry)}\n`, 'utf8');
+    appendUsageLedger({ home, provider: config.provider, model, promptChars: prompt.length, outputChars, secs, ok: status === 0, status: status === 0 ? null : status });
   } catch {}
   return status;
 }

@@ -16,6 +16,9 @@ const hooks = [
   'automation-first-reminder.mjs',
   'credentials-reminder.mjs',
   'handoff-detail-guard.mjs',
+  'url-format-guard.mjs',
+  'check-e2e-before-stop.mjs',
+  'pipe-stage-permissions.mjs',
 ];
 
 function run(name, input, home) {

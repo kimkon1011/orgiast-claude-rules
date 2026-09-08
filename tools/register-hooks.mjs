@@ -138,6 +138,8 @@ try {
   if (add(settings.hooks.PreToolUse, 'pretooluse-headless-background.mjs', { matcher: 'Bash|PowerShell|ScheduleWakeup', hooks: [{ type: 'command', command: command('pretooluse-headless-background.mjs'), timeout: 5 }] })) added += 1;
   // read-only調査の逐次実行を検知し、まとめて調査するよう同期注入する。
   if (add(settings.hooks.PreToolUse, 'pretooluse-serial-investigation.mjs', { hooks: [{ type: 'command', command: command('pretooluse-serial-investigation.mjs'), timeout: 5 }] })) added += 1;
+  // パイプ等で連結された全ステージが許可済みBashプレフィックスなら自動承認する。
+  if (add(settings.hooks.PreToolUse, 'pipe-stage-permissions.mjs', { matcher: 'Bash', hooks: [{ type: 'command', command: command('pipe-stage-permissions.mjs'), timeout: 5 }] })) added += 1;
   // 人に手作業を頼むとき、初見の人でも実行できる手順になっているかを検査する(§1.5.1)。
   if (add(settings.hooks.Stop, 'manual-request-fullsteps-gate.mjs', { hooks: [{ type: 'command', command: command('manual-request-fullsteps-gate.mjs'), timeout: 8 }] })) added += 1;
   if (add(settings.hooks.Stop, 'report-length-gate.mjs', { hooks: [{ type: 'command', command: command('report-length-gate.mjs'), timeout: 10 }] })) added += 1;
@@ -159,6 +161,10 @@ try {
   if (add(settings.hooks.Stop, 'negative-claim-gate.mjs', { hooks: [{ type: 'command', command: command('negative-claim-gate.mjs'), timeout: 10 }] })) added += 1;
   // コマンドの手渡しに非エンジニア向けの開き方・入力場所・完了確認を必須化する。
   if (add(settings.hooks.Stop, 'handoff-detail-guard.mjs', { hooks: [{ type: 'command', command: command('handoff-detail-guard.mjs'), timeout: 10 }] })) added += 1;
+  // 生URLと日本語・全角文字の直接隣接によるリンク破損を差し戻す。
+  if (add(settings.hooks.Stop, 'url-format-guard.mjs', { hooks: [{ type: 'command', command: command('url-format-guard.mjs'), timeout: 8 }] })) added += 1;
+  // 完了報告にLayer 1/2・e2e等の検証記載がなければ同期警告する。
+  if (add(settings.hooks.Stop, 'check-e2e-before-stop.mjs', { hooks: [{ type: 'command', command: command('check-e2e-before-stop.mjs'), timeout: 8 }] })) added += 1;
   // 旧PCは hook が `powershell -NoProfile -File ...ps1` で登録され、実行ポリシーで無音死している。
   policyRepaired = repairPowerShellExecutionPolicy(settings.hooks);
   added += policyRepaired;

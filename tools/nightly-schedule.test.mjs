@@ -24,6 +24,15 @@ test('registration triggers are dispersed and use two-minute random delay', () =
   assert.match(installer, /-Daily -At 3:00am -RandomDelay \(New-TimeSpan -Minutes 2\)/);
 });
 
+test('nightly batch task runs through nightly-bootstrap from the self-syncing checkout', () => {
+  const installer = readFileSync(files.installer, 'utf8');
+  const block = installer.match(/Step "夜間バッチの定時起動を登録[\s\S]*?(?=# --- フリートポーラー)/)?.[0];
+  assert.ok(block, 'OrgiastNightlyBatch registration block');
+  assert.match(block, /\$nb = Join-Path \$REPO 'tools\\nightly-bootstrap\.ps1'/);
+  assert.match(block, /'-Target', 'tools\\nightly-batch\.ps1'/);
+  assert.doesNotMatch(block, /\$nb = Join-Path \$REPO 'tools\\nightly-batch\.ps1'[\s\S]*?'-File', \$nb/);
+});
+
 test('apply script retains actions, supports DryRun, skips missing tasks, and reads back updates', () => {
   const source = readFileSync(files.apply, 'utf8');
   for (const [name, time] of [

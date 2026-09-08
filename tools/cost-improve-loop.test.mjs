@@ -330,7 +330,7 @@ test('11. reported rows with missing metrics are untrusted and never displayed a
   process.env.ORGIAST_HOME = tempDir;
   try {
     const result = await main(['--dry-run', '--no-notify'], {
-      fetchFleetSheetRows: async () => rows, readLedger: () => ({ codex: 1 }), localState: {}, noNotify: true
+      fetchFleetSheetRows: async () => rows, readLedger: () => ({ codex: 1 }), localState: {}, now: NOW, noNotify: true
     });
     assert.ok(result.reportText.includes('**PC-broken**: 計測不能'));
     assert.ok(!result.reportText.includes('$0.00'));
@@ -685,6 +685,7 @@ test('32. auto-codex 実行は共有ツリーへ reset/clean/checkout -b を投�
       readLedger: () => ({ deepseek: 1 }),
       localState: {},
       signals: {},
+      now: NOW,
       spawnSync: autoCodexSpawnMocks(calls),
       noNotify: true,
       sendHeartbeat: async () => {}
@@ -727,7 +728,7 @@ test('33. auto-codex は空 diff を failed とし PR 作成まで進めない',
     const result = await main([], {
       fetchFleetSheetRows: async () => rows,
       readLedger: () => ({ deepseek: 1 }),
-      localState: {}, signals: {}, spawnSync: spawn, noNotify: true, sendHeartbeat: async () => {}
+      localState: {}, signals: {}, now: NOW, spawnSync: spawn, noNotify: true, sendHeartbeat: async () => {}
     });
     const codexAct = result.finalState.actions.find((a) => a.mode === 'auto-codex');
     assert.equal(codexAct.result, 'failed');

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fetchMessages } from './discord-digest.mjs';
 import { auditFleet, extractIdentity, maskEmailAddress } from './fleet-discord-audit.mjs';
 import { fetchFleetSheetRows } from './fleet-triage-report.mjs';
-import { buildPcIdentityIndex, pcMapEntries, pcMapNames, reconcileFleetRows } from './fleet-pc-identity.mjs';
+import { buildPcIdentityIndex, emptyFleetStateCounts, fleetRowState, pcMapEntries, pcMapNames, reconcileFleetRows } from './fleet-pc-identity.mjs';
 import { isEntry } from './is-entry.mjs';
 
 const DAY_MS = 86_400_000;
@@ -145,14 +145,13 @@ export function classifyFleet({ discord, sheet, pcMap = {}, now = new Date(), er
   const counts = { ...emptyCounts };
   for (const item of items) counts[item.state]++;
   const reconciliation = reconcileFleetRows(sheet, pcMap);
-  const rolloutCounts = { reporting: 0, 'installed-pending': 0, 'never-reported': 0, 'machine-only': 0, stale: 0 };
+  // state 判定は fleet-pc-identity.mjs に1本化(interaction-rollout と共有)。ここに複製すると
+  // 優先順位がズレて「手書き行なし」が reporting を隠す実害が出た(2026-09-08)。
+  const rolloutCounts = emptyFleetStateCounts();
   for (const row of reconciliation.rows) {
-    const at = timeOf(row.reportedAt);
-    const state = !row._hasManual && row._hasMachine ? 'machine-only'
-      : row.installedAt && !row._hasMachine ? 'installed-pending'
-        : row._hasMachine && at != null && nowMs - at >= 0 && nowMs - at <= 3 * DAY_MS ? 'reporting'
-          : row._hasMachine && at != null ? 'stale' : 'never-reported';
+    const { state, manualRowMissing } = fleetRowState(row, nowMs, { liveWithinMs: 3 * DAY_MS, parseTime: timeOf });
     rolloutCounts[state]++;
+    if (manualRowMissing) rolloutCounts.manualRowMissing++;
   }
   return { items, counts, warnings, unavailable: false, rolloutCounts, candidates: reconciliation.candidates, duplicateManualRows: reconciliation.duplicateManualRows };
 }
@@ -169,7 +168,7 @@ export function formatLiveness(result) {
   if (result.counts['discord-mute'] || result.counts.broken) lines.push('壊れて停止 / Discord不通: 該当PCで Claude Code を開けば keyserve が新しい webhook を配る（.ps1 のままのPCは2セッション必要）');
   if (result.rolloutCounts?.['installed-pending']) lines.push('installed-pending: 次回 03:15 の定期実行で自己修復する見込み。翌日も未報告なら keyserve 認証を疑う');
   if (result.rolloutCounts?.['never-reported'] || result.counts.never) lines.push('never-reported: そのPCで配布コマンドを1回実行するまで機械回収は不可能（未導入か電源off）');
-  if (result.rolloutCounts?.['machine-only']) lines.push('machine-only: 手書き一覧に行が無い。台帳へ1行追加が必要');
+  if (result.rolloutCounts?.manualRowMissing) lines.push(`手書き行なし ${result.rolloutCounts.manualRowMissing}台: 機械報告はあるが手書き一覧に行が無い。台帳へ1行追加が必要（稼働状態とは別軸）`);
   if (result.counts['legacy-manual']) lines.push('手入力データのみ: 対処不要');
   if (result.counts.uncertain) lines.push('ラベル対応未確定: kim の判断待ち');
   for (const candidate of result.candidates || []) lines.push(`${candidate.manual}↔${candidate.machine} の同一判定は kim の回答が必要（根拠: ${candidate.reason}）`);

@@ -117,6 +117,7 @@ test('名字/person一致は未確定候補として出し、state別の次ア�
   assert.ok(result.candidates.some((candidate) => candidate.manual === '金功勇PC'));
   const text = formatLiveness(result);
   assert.match(text, /installed-pending: 次回 03:15/);
-  assert.match(text, /machine-only: 手書き一覧に行が無い/);
+  // 「手書き行なし」は稼働状態と別軸で数える(machine-only という state は廃止)
+  assert.match(text, /手書き行なし \d+台: 機械報告はあるが手書き一覧に行が無い/);
   assert.match(text, /古川PC↔古川龍慶のノートブックコンピュータ の同一判定は kim の回答が必要/);
 });

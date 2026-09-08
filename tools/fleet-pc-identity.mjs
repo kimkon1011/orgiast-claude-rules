@@ -32,6 +32,27 @@ function latestRow(rows) {
   return [...rows].sort((a, b) => (Date.parse(b.reportedAt || '') || 0) - (Date.parse(a.reportedAt || '') || 0))[0] || {};
 }
 
+// 稼働状態(state)と「手書き行が無い」(manualRowMissing)は別軸。ここに1本化し、
+// interaction-rollout と fleet-liveness の両方から使う(二重実装を作らない)。
+// 以前は machine-only を state の最優先にしていたため、実際に報告中の PC が reporting に数えられず
+// 本番台帳で「PC 20: reporting 1」と実態(4台稼働)を隠した(2026-09-08 実測)。
+// parseTime は呼び手の時刻解釈をそのまま使う(rollout は JST 表記を UTC へ、liveness は timeOf)。
+// ここで独自に解釈すると 3 日境界の判定が呼び手と食い違う。
+export function fleetRowState(row, nowMs, { liveWithinMs = 3 * 24 * 60 * 60 * 1000, parseTime } = {}) {
+  const raw = String(row?.reportedAt ?? '').trim();
+  const at = typeof parseTime === 'function' ? parseTime(raw) : Date.parse(raw.replace(' ', 'T'));
+  const hasAt = raw !== '' && at != null && Number.isFinite(at);
+  const state = row?.installedAt && !row?._hasMachine ? 'installed-pending'
+    : row?._hasMachine && hasAt && nowMs - at >= 0 && nowMs - at <= liveWithinMs ? 'reporting'
+      : row?._hasMachine && hasAt ? 'stale'
+        : 'never-reported';
+  return { state, manualRowMissing: Boolean(row?._hasMachine && !row?._hasManual) };
+}
+
+export function emptyFleetStateCounts() {
+  return { reporting: 0, 'installed-pending': 0, 'never-reported': 0, stale: 0, manualRowMissing: 0 };
+}
+
 export function reconcileFleetRows(rows, pcMap = {}) {
   const source = Array.isArray(rows) ? rows : [];
   const identityIndex = buildPcIdentityIndex(pcMap);

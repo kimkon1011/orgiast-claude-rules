@@ -69,8 +69,14 @@ test('対応表で手書き行と機械行を1PC=1行に統合して5状態を�
   const result = buildRollout(rows, NOW, { pcMap });
   assert.equal(result.rows.length, 5);
   assert.equal(result.rows.find((row) => row.label === 'kimko-PC').state, 'reporting');
-  assert.deepEqual(result.fleetSummary, { reporting: 1, 'installed-pending': 1, 'never-reported': 1, 'machine-only': 1, stale: 1 });
-  assert.match(formatRollout(result), /^PC 台数 5: reporting 1 \/ installed-pending 1 \/ never-reported 1 \/ machine-only 1 \/ stale 1/);
+  // 「手書き行なし」は稼働状態と別軸。以前は machine-only が reporting を隠し、本番で稼働4台が
+  // 「reporting 1」と出た(2026-09-08 実測)。nishi-PC は reporting かつ manualRowMissing で数える。
+  const nishi = result.rows.find((row) => row.label === 'nishi-PC');
+  assert.equal(nishi.state, 'reporting');
+  assert.equal(nishi.manualRowMissing, true);
+  assert.equal(result.rows.find((row) => row.label === 'kimko-PC').manualRowMissing, false);
+  assert.deepEqual(result.fleetSummary, { reporting: 2, 'installed-pending': 1, 'never-reported': 1, stale: 1, manualRowMissing: 1 });
+  assert.match(formatRollout(result), /^PC 台数 5: reporting 2 \/ installed-pending 1 \/ never-reported 1 \/ stale 1（うち手書き行なし 1）/);
 });
 
 test('重複手書き行は別枠に残し、名字とperson一致は候補だけにする', () => {

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { parseEnvText } from './env-kv.mjs';
-import { reconcileFleetRows } from './fleet-pc-identity.mjs';
+import { emptyFleetStateCounts, fleetRowState, reconcileFleetRows } from './fleet-pc-identity.mjs';
 import { isEntry } from './is-entry.mjs';
 import { notifyKim } from './notify-kim.mjs';
 
@@ -47,24 +47,22 @@ export function buildRollout(rows, now = new Date(), { liveWithinMs = LIVE_WITHI
   const normalized = reconciled.rows.map((row, index) => ({
     ...row,
     category: categoryOf(row, now, liveWithinMs),
-    state: !row._hasManual && row._hasMachine ? 'machine-only'
-      : row.installedAt && !row._hasMachine ? 'installed-pending'
-        : row._hasMachine && nowMs - reportedTime(row.reportedAt) >= 0 && nowMs - reportedTime(row.reportedAt) <= liveWithinMs ? 'reporting'
-          : row._hasMachine && Number.isFinite(reportedTime(row.reportedAt)) ? 'stale'
-            : 'never-reported',
+    // state(稼働状態)と manualRowMissing(手書き行なし)は別軸。判定は fleet-pc-identity.mjs に1本化
+    // (fleet-liveness と共有。二重実装で優先順位がズレた実害あり・2026-09-08)。
+    ...fleetRowState(row, nowMs, { liveWithinMs, parseTime: reportedTime }),
     _index: index,
   })).sort((a, b) => reportedTime(b.reportedAt) - reportedTime(a.reportedAt) || a._index - b._index)
     .map(({ _index, ...row }) => row);
   const summary = { applied: 0, outdated: 0, liveNotApplied: 0, unreported: 0 };
   for (const row of normalized) summary[row.category] += 1;
-  const fleetSummary = { reporting: 0, 'installed-pending': 0, 'never-reported': 0, 'machine-only': 0, stale: 0 };
-  for (const row of normalized) fleetSummary[row.state] += 1;
+  const fleetSummary = emptyFleetStateCounts();
+  for (const row of normalized) { fleetSummary[row.state] += 1; if (row.manualRowMissing) fleetSummary.manualRowMissing += 1; }
   return { summary, fleetSummary, rows: normalized, duplicateManualRows: reconciled.duplicateManualRows, candidates: reconciled.candidates };
 }
 
 export function formatRollout(result) {
   const { summary, fleetSummary, rows } = result;
-  const lines = [`PC 台数 ${rows.length}: reporting ${fleetSummary.reporting} / installed-pending ${fleetSummary['installed-pending']} / never-reported ${fleetSummary['never-reported']} / machine-only ${fleetSummary['machine-only']} / stale ${fleetSummary.stale}`,
+  const lines = [`PC 台数 ${rows.length}: reporting ${fleetSummary.reporting} / installed-pending ${fleetSummary['installed-pending']} / never-reported ${fleetSummary['never-reported']} / stale ${fleetSummary.stale}（うち手書き行なし ${fleetSummary.manualRowMissing}）`,
     `対話ループ展開: 適用済 ${summary.applied}台 / 未適用・旧版 ${summary.outdated}台 / 稼働中だが未取込 ${summary.liveNotApplied}台 / 未導入・電源off ${summary.unreported}台`];
   for (const row of rows) {
     const name = String(row.label ?? '').trim() || String(row.pcName ?? '').trim() || '(名称未設定)';

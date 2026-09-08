@@ -403,7 +403,7 @@ try {
     }
     if ($triage) {
         try {
-            $triageOutput = @(& $node.Source $triage)
+            $triageOutput = @(& $node.Source $triage '--limit' '60' '--confidence' 'high,medium,low')
             $triageExitCode = $LASTEXITCODE
             if ($triageExitCode -ne 0) {
                 $triageResult = "error:終了コード$triageExitCode"

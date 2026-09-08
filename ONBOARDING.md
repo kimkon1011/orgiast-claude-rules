@@ -316,6 +316,10 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
 
 詳細・Why: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/token-model-cost-routing.md`
 
+### 1.13.1 性能を下げる節約は禁止（kim 2026-09-09 厳命・§1.13 より上位）
+
+effortLevel（high 未満）・thinking 予算・監督モデル（Opus/Fable）・実装先（Codex）を節約目的で下げない。節約は委譲・レスポンス数削減・無人ジョブの非Claude化・キャッシュ維持で行う。`tools/settings-quality-guard.mjs` が PreToolUse で block／SessionStart で自動復元する。
+
 ### 1.14 Claude Code は Auto Mode を default にする
 
 `~/.claude/settings.json` の `permissions.defaultMode: "auto"` で恒久化済み（user settingsのみ有効、プロジェクト設定では無視される）。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/autonomy-and-reporting.md`
@@ -705,6 +709,8 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
 - 手動実行: `tools\auto-session.cmd` をダブルクリックする（`--list` で採用/除外だけ確認できる）。
 - 履歴は VSCode の `/resume` に出る。ログは `~/.claude/auto-session/runs/` に保存し、Discord通知には transcript パスと `claude --resume <ID>` が入る。
 - `--permission-mode` は**渡さない**（`acceptEdits` は Bash を承認待ちで止めるため、既定の `auto` を継承する）。
+
+**委譲ヘルスの自動ループ（2026-09-09）**: 夜間に `tools/delegation-health-check.mjs` が委譲の台帳（codex 上限記録・cooldown・executor-usage）を実測と照合し、偽の cooldown は即時解除、根本原因は `~/.claude/next-session.md` の残TODO先頭へ起票して翌夜の auto-session(Codex) が修正する。朝の COST-DIRECTIVE に結果が出る。人が症状を指摘するのを待たない。
 
 ### 2.9 Google Drive 運用ルール
 

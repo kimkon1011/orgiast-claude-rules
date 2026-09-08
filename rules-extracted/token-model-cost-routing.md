@@ -17,6 +17,8 @@ ONBOARDING.compressed.md §1.13 / §1.16 / §1.17 / §1.17.1 / §1.18 の詳細�
 
 Manus適用外（Claude/Codexで足りる）: 単発の軽い事実確認、根拠URL不要な要約、社内データだけで完結する処理。Manusは「外部Webを多段でたどって構造化データを作る」用途に絞る。
 
+**性能を下げる節約は禁止（kim 2026-09-09 厳命・§1.13 より上位）**: effortLevel（high 未満）・thinking 予算・監督モデル（Opus/Fable）・実装先（Codex）を節約目的で下げない。節約は委譲・レスポンス数削減・無人ジョブの非Claude化・キャッシュ維持で行う。`tools/settings-quality-guard.mjs` が PreToolUse で block／SessionStart で自動復元する。
+
 ### モデル（認知）ルーティング
 
 | タスク種別 | 使うモデル | 単価/1M(in/out) | 根拠 |

@@ -7,9 +7,45 @@ import {
   autoSessionExecutor,
   buildCheapCodeArgs,
   buildClaudeHeadlessArgs,
+  claudeFallbackEnabled,
+  alternateCheapProvider,
   parseAutoSessionEnvText,
   recordFallbackToClaude,
+  recordSkippedNoExecutor,
 } from './auto-session-executor.mjs';
+
+test('claudeFallbackEnabled は既定無効で env またはファイルから明示的に有効化する', () => {
+  const home = makeHome();
+  try {
+    assert.equal(claudeFallbackEnabled({}, home), false);
+    assert.equal(claudeFallbackEnabled({ ORGIAST_AUTO_SESSION_CLAUDE_FALLBACK: '1' }, home), true);
+    writeAutoSessionEnv(home, 'ORGIAST_AUTO_SESSION_CLAUDE_FALLBACK=On\n');
+    assert.equal(claudeFallbackEnabled({}, home), true);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test('alternateCheapProvider はキーと cooldown を確認して反対側だけを返す', () => {
+  const home = makeHome();
+  try {
+    assert.equal(alternateCheapProvider('glm', home), null);
+    fs.writeFileSync(path.join(home, '.claude', 'deepseek.env'), 'DEEPSEEK_API_KEY=ds\n');
+    fs.writeFileSync(path.join(home, '.claude', 'zai.env'), 'ZAI_API_KEY=zai\n');
+    assert.equal(alternateCheapProvider('glm', home), 'deepseek');
+    assert.equal(alternateCheapProvider('deepseek', home), 'glm');
+    fs.writeFileSync(path.join(home, '.claude', 'provider-cooldown.json'), JSON.stringify({ deepseek: { until: Date.now() + 60000 } }));
+    assert.equal(alternateCheapProvider('glm', home), null);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test('recordSkippedNoExecutor は no-cheap-executor の行を追記する', () => {
+  const home = makeHome();
+  try {
+    recordSkippedNoExecutor({ home, provider: 'glm', reason: 'cheap-code/glm exit 1', now: new Date('2026-09-07T00:00:00Z') });
+    const row = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), 'utf8').trim());
+    assert.deepEqual({ provider: row.provider, model: row.model, status: row.status }, { provider: 'skipped', model: 'none', status: 'no-cheap-executor' });
+    assert.equal(row.reason, 'cheap-code/glm exit 1');
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
 
 function makeHome() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orgiast-ase-test-'));

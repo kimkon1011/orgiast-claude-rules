@@ -15,23 +15,48 @@ export function needsWorktreeRepair(gitFileContent) {
   return /^gitdir:\s*[A-Za-z]:/i.test(String(gitFileContent ?? '').trim());
 }
 
-export function detectQuotaLimit(stdout, stderr) {
-  const merged = `${stdout || ''}\n${stderr || ''}`;
-  const patterns = [
-    { name: "You've hit your usage limit", regex: /You've hit your usage limit/i },
-    { name: "usage limit", regex: /usage limit/i },
-    { name: "rate limit", regex: /rate limit/i },
-    { name: "429", regex: /429/i },
-    { name: "Upgrade to Pro", regex: /Upgrade to Pro/i }
+export function detectQuotaLimit(stdout, stderr, exitStatus = null, promptText = '') {
+  void exitStatus;
+  const stdoutText = String(stdout || '');
+  const prompt = String(promptText || '');
+  const sources = [
+    { text: stdoutText, offset: 0 },
+    { text: String(stderr || ''), offset: stdoutText.length + 1 },
   ];
-  for (const { name, regex } of patterns) {
-    const match = merged.match(regex);
-    if (match) {
-      const index = match.index;
-      const start = Math.max(0, index - 40);
-      const end = Math.min(merged.length, index + match[0].length + 40);
-      const snippet = merged.slice(start, end).replace(/\r?\n/g, ' ');
-      return { matched: true, pattern: name, index, snippet };
+  const prefixed = /^\s*(?:\[[^\]]*\]\s*)?(?:ERROR|Error|error|WARN(?:ING)?)\s*[:\-]?\s*(You(?:'ve| have) hit your usage limit|Usage limit (?:reached|exceeded)|Rate limit (?:reached|exceeded)|Too many requests|Upgrade to Pro)/;
+  const raw = /^(You've hit your usage limit|Too many requests)/i;
+  const status429 = /^\s*(?:\[[^\]]*\]\s*)?(?:ERROR|Error|error|WARN(?:ING)?)?\s*[:\-]?\s*(?:HTTP\s*)?429\b/i;
+  const ignoredPrefix = /^(?:✔|✓|✖|×|ok\s|not ok\s|#)/i;
+  const codeLike = /(?:;|\{|\}|=>|\breturn\s|assert|regex|\/i)/i;
+
+  for (const source of sources) {
+    let position = 0;
+    for (const line of source.text.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      let match = line.match(prefixed);
+      let pattern;
+      if (match) {
+        const message = match[1];
+        pattern = /you/i.test(message) ? "You've hit your usage limit"
+          : /usage/i.test(message) ? 'usage limit'
+          : /rate/i.test(message) ? 'rate limit'
+          : /too many/i.test(message) ? 'too many requests'
+          : 'Upgrade to Pro';
+      } else if ((match = trimmed.match(raw))) {
+        pattern = /usage/i.test(match[1]) ? "You've hit your usage limit" : 'too many requests';
+      } else if (status429.test(line) && /(?:too many requests|rate|limit|quota)/i.test(line)) {
+        match = line.match(/(?:HTTP\s*)?429\b/i);
+        pattern = '429';
+      }
+      if (match && !prompt.includes(trimmed) && !ignoredPrefix.test(trimmed) && !codeLike.test(trimmed)) {
+        return {
+          matched: true,
+          pattern,
+          index: source.offset + position + Math.max(0, line.indexOf(match[0])),
+          snippet: trimmed,
+        };
+      }
+      position += line.length + 1;
     }
   }
   return { matched: false };
@@ -401,7 +426,7 @@ if (process.platform === 'win32' && !forceNative) {
   result = await execute('codex', ['exec', '-s', review ? 'read-only' : 'workspace-write', '-'], { cwd });
 }
 
-const quotaCheck = detectQuotaLimit(result?.output, result?.stderr);
+const quotaCheck = detectQuotaLimit(result?.output, result?.stderr, result?.status, prompt);
 let quotaResetUntil = 0;
 if (quotaCheck.matched) {
   quotaResetUntil = parseCodexResetUntil(`${result?.output || ''}\n${result?.stderr || ''}`);

@@ -277,6 +277,20 @@ try {
         } catch { Write-NightlyLog 'rule-compliance-loop' ("error:" + $_.Exception.Message + ' (警告・後続処理続行)') }
     } else { Write-NightlyLog 'rule-compliance-loop' 'skip:ファイルなし' }
 
+    # 委譲台帳を実測と照合し、偽 cooldown を修復して根本修正を auto-session へ起票する。
+    # high が見つかっても、このブロック自身の失敗時も後続処理は必ず続ける。
+    $delegationHealth = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\delegation-health-check.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $delegationHealth = $candidate; break }
+    }
+    if ($delegationHealth) {
+        try {
+            & $node.Source $delegationHealth
+            if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'delegation-health-check' ("error:終了コード" + $LASTEXITCODE + ' (警告・後続処理続行)') } else { Write-NightlyLog 'delegation-health-check' 'ok' }
+        } catch { Write-NightlyLog 'delegation-health-check' ("error:" + $_.Exception.Message + ' (警告・後続処理続行)') }
+    } else { Write-NightlyLog 'delegation-health-check' 'skip:ファイルなし' }
+
     # アプリ内フォームの報告(kim の DM に届いたもの)を GitHub Issue 化する。
     # 失敗しても既存の夜間処理を止めない。未 ack のものは次回そのまま再試行される。
     $feedbackToIssues = $null

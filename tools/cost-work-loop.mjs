@@ -238,6 +238,9 @@ const pricingBriefLine = (() => {
     return '### 料金・上限の一次情報\n- 各AIのプラン料金・利用上限は **~/.claude/pricing-brief.md**（夜間に自動収集・出典URL付き）を読む。毎回Web検索し直さない';
   } catch { return ''; }
 })();
+const delegationHealthSummary = (() => {
+  try { return fs.readFileSync(path.join(HOME, '.claude', 'delegation-health.md'), 'utf8').trim(); } catch { return ''; }
+})();
 const md = `<!-- COST-DIRECTIVE-START -->
 ## 📊 Claude Code out ${(claudeOut / 1000).toFixed(0)}k tok / 委譲率(Claude以外へ) ${(nonClaudeDelegRatio * 100).toFixed(1)}% (直近${DAYS}日 / このPC)
 - Claude Code利用: **out ${(claudeOut / 1000).toFixed(0)}k tok** ${arrow} (${claudeModelLine}) ※定額シート課金＝請求$は発生しない
@@ -261,7 +264,7 @@ ${budgetLines.map((line) => `- ${line}`).join('\n')}
 - ${cacheLine}
 ### 指示
 ${flags.map(f => '- ' + f).join('\n')}
-### プロバイダ健全性
+${delegationHealthSummary ? `${delegationHealthSummary}\n` : ''}### プロバイダ健全性
 ${healthLines.length ? healthLines.join('\n') : '- 計測データなし'}
 ${laneHealthLines.join('\n')}
 ### 品質ゲート

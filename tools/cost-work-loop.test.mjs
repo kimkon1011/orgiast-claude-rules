@@ -3,14 +3,24 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'cost-work-loop-'));
 process.env.ORGIAST_HOME = isolatedHome;
+fs.mkdirSync(path.join(isolatedHome, '.claude'), { recursive: true });
+fs.writeFileSync(path.join(isolatedHome, '.claude', 'delegation-health.md'), '## 🩺 委譲ヘルス（直近24h）\n- high / テスト所見\n');
 const { decideEnforcement, summarizeGeminiMonth } = await import('./cost-work-loop.mjs');
 
 const base = { claudeOut: 1_000_000, history: [], target: 0.5, previousMode: 'warn' };
 
 test.after(() => fs.rmSync(isolatedHome, { recursive: true, force: true }));
+
+test('委譲ヘルスをプロバイダ健全性の直前へ挿入する', () => {
+  const run = spawnSync(process.execPath, [path.join(import.meta.dirname, 'cost-work-loop.mjs')], { env: { ...process.env, ORGIAST_HOME: isolatedHome }, encoding: 'utf8', timeout: 120_000 });
+  assert.equal(run.status, 0, run.stderr);
+  const directive = fs.readFileSync(path.join(isolatedHome, '.claude', 'cost-directive.md'), 'utf8');
+  assert.ok(directive.indexOf('## 🩺 委譲ヘルス') < directive.indexOf('### プロバイダ健全性'));
+});
 
 test('non-pilot blocks when enforcement conditions are met', () => {
   const result = decideEnforcement({ ...base, delegRatio: 0, daysObserved: 10, pilot: false });

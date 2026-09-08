@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { parseEnvText } from './env-kv.mjs';
+import { reconcileFleetRows } from './fleet-pc-identity.mjs';
 import { isEntry } from './is-entry.mjs';
 import { notifyKim } from './notify-kim.mjs';
 
@@ -40,24 +41,42 @@ function reportedTime(value) {
   return Number.isNaN(parsed) ? -Infinity : parsed;
 }
 
-export function buildRollout(rows, now = new Date(), { liveWithinMs = LIVE_WITHIN_MS } = {}) {
-  const normalized = (Array.isArray(rows) ? rows : []).map((row, index) => ({
+export function buildRollout(rows, now = new Date(), { liveWithinMs = LIVE_WITHIN_MS, pcMap = {} } = {}) {
+  const reconciled = reconcileFleetRows(rows, pcMap);
+  const nowMs = now instanceof Date ? now.getTime() : new Date(now).getTime();
+  const normalized = reconciled.rows.map((row, index) => ({
     ...row,
     category: categoryOf(row, now, liveWithinMs),
+    state: !row._hasManual && row._hasMachine ? 'machine-only'
+      : row.installedAt && !row._hasMachine ? 'installed-pending'
+        : row._hasMachine && nowMs - reportedTime(row.reportedAt) >= 0 && nowMs - reportedTime(row.reportedAt) <= liveWithinMs ? 'reporting'
+          : row._hasMachine && Number.isFinite(reportedTime(row.reportedAt)) ? 'stale'
+            : 'never-reported',
     _index: index,
   })).sort((a, b) => reportedTime(b.reportedAt) - reportedTime(a.reportedAt) || a._index - b._index)
     .map(({ _index, ...row }) => row);
   const summary = { applied: 0, outdated: 0, liveNotApplied: 0, unreported: 0 };
   for (const row of normalized) summary[row.category] += 1;
-  return { summary, rows: normalized };
+  const fleetSummary = { reporting: 0, 'installed-pending': 0, 'never-reported': 0, 'machine-only': 0, stale: 0 };
+  for (const row of normalized) fleetSummary[row.state] += 1;
+  return { summary, fleetSummary, rows: normalized, duplicateManualRows: reconciled.duplicateManualRows, candidates: reconciled.candidates };
 }
 
 export function formatRollout(result) {
-  const { summary, rows } = result;
-  const lines = [`対話ループ展開: 適用済 ${summary.applied}台 / 未適用・旧版 ${summary.outdated}台 / 稼働中だが未取込 ${summary.liveNotApplied}台 / 未導入・電源off ${summary.unreported}台`];
+  const { summary, fleetSummary, rows } = result;
+  const lines = [`PC 台数 ${rows.length}: reporting ${fleetSummary.reporting} / installed-pending ${fleetSummary['installed-pending']} / never-reported ${fleetSummary['never-reported']} / machine-only ${fleetSummary['machine-only']} / stale ${fleetSummary.stale}`,
+    `対話ループ展開: 適用済 ${summary.applied}台 / 未適用・旧版 ${summary.outdated}台 / 稼働中だが未取込 ${summary.liveNotApplied}台 / 未導入・電源off ${summary.unreported}台`];
   for (const row of rows) {
     const name = String(row.label ?? '').trim() || String(row.pcName ?? '').trim() || '(名称未設定)';
     lines.push(`${name} | ${String(row.interactionLoop ?? '').trim() || '未報告'} | ${String(row.interactionSelftest ?? '').trim() || '未報告'} | ${String(row.reportedAt ?? '').trim() || '未報告'}`);
+  }
+  if (result.duplicateManualRows.length) {
+    lines.push('duplicate-manual-rows:');
+    for (const row of result.duplicateManualRows) lines.push(`- ${String(row.pcName ?? '').trim()}`);
+  }
+  if (result.candidates.length) {
+    lines.push('対応候補（自動結合しません）:');
+    for (const candidate of result.candidates) lines.push(`- ${candidate.manual} ↔ ${candidate.machine}（根拠: ${candidate.reason} / 確度: ${candidate.confidence}）`);
   }
   return lines.join('\n');
 }
@@ -123,7 +142,7 @@ function readJson(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
 }
 
-async function runWatch({ home, fleetEnv, fetchImpl, stdout, stderr, now, notifyKimImpl }) {
+async function runWatch({ home, fleetEnv, fetchImpl, stdout, stderr, now, notifyKimImpl, pcMap }) {
   const claudeDir = path.join(home, '.claude');
   if (!shouldRunWatch(fs.existsSync(path.join(claudeDir, 'interaction-rollout-watch')))) return;
 
@@ -140,7 +159,7 @@ async function runWatch({ home, fleetEnv, fetchImpl, stdout, stderr, now, notify
 
   const rows = await fetchRolloutRows({ sheetUrl: fleetEnv.FLEET_SHEET_URL, token: fleetEnv.FLEET_SHEET_TOKEN, fetchImpl });
   const observedAt = now();
-  const result = buildRollout(rows, observedAt);
+  const result = buildRollout(rows, observedAt, { pcMap });
   const curr = {
     applied: result.summary.applied,
     stale: result.summary.outdated,
@@ -210,10 +229,12 @@ export async function runInteractionRollout({
   notifyKimImpl = notifyKim,
 } = {}) {
   const home = env.ORGIAST_HOME || os.homedir();
+  const repoRoot = path.resolve(import.meta.dirname, '..');
+  const pcMap = readJson(path.join(repoRoot, 'fleet-pc-map.json')) || {};
   const fleetEnv = readEnv(path.join(home, '.claude', 'fleet-sheet.env'));
   if (argv.includes('--watch')) {
     try {
-      await runWatch({ home, fleetEnv, fetchImpl, stdout, stderr, now, notifyKimImpl });
+      await runWatch({ home, fleetEnv, fetchImpl, stdout, stderr, now, notifyKimImpl, pcMap });
     } catch (error) {
       stderr(`interaction-rollout: 取得・投稿できませんでした (${error?.message || error?.name || 'error'})`);
     }
@@ -225,7 +246,7 @@ export async function runInteractionRollout({
   }
   try {
     const rows = await fetchRolloutRows({ sheetUrl: fleetEnv.FLEET_SHEET_URL, token: fleetEnv.FLEET_SHEET_TOKEN, fetchImpl });
-    const result = buildRollout(rows, now());
+    const result = buildRollout(rows, now(), { pcMap });
     stdout(argv.includes('--json') ? JSON.stringify(result, null, 2) : formatRollout(result));
   } catch (error) {
     stderr(`interaction-rollout: 取得できませんでした (${error?.message || error?.name || 'error'})`);

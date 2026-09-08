@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  buildRollout, buildStallMessage, buildWatchMessage, runInteractionRollout,
+  buildRollout, buildStallMessage, buildWatchMessage, formatRollout, runInteractionRollout,
   shouldNotify, shouldNotifyStall, shouldRunWatch, STALL_AFTER_MS,
 } from './interaction-rollout.mjs';
 
@@ -49,6 +49,42 @@ test('最終報告の新しい順に並べる', () => {
     { pcName: 'empty', reportedAt: '', interactionLoop: '' },
   ], NOW);
   assert.deepEqual(result.rows.map((row) => row.pcName), ['new', 'old', 'empty']);
+});
+
+test('対応表で手書き行と機械行を1PC=1行に統合して5状態を集計する', () => {
+  const rows = [
+    { pcName: '作業用011', label: '', hostname: '', reportedAt: '' },
+    { pcName: '', label: 'kimko-PC', hostname: 'DESKTOP-PPD5V8I', reportedAt: '2026-08-30 10:00' },
+    { pcName: '手書きのみ', label: '', hostname: '', reportedAt: '' },
+    { pcName: '', label: 'nishi-PC', hostname: 'NISHI', reportedAt: '2026-08-30 10:00' },
+    { pcName: '停止PC', label: '', hostname: '', reportedAt: '' },
+    { pcName: '', label: 'stale-label', hostname: 'STALE', reportedAt: '2026-08-20 10:00' },
+    { pcName: '作業用999', label: '', hostname: '', reportedAt: '' },
+  ];
+  const pcMap = {
+    'kimko-PC': { sheetName: '作業用011', hostname: 'DESKTOP-PPD5V8I' },
+    '作業用999': { sheetName: '作業用999', installedAt: '2026-09-03' },
+    'stale-label': { sheetName: '停止PC', hostname: 'STALE' },
+  };
+  const result = buildRollout(rows, NOW, { pcMap });
+  assert.equal(result.rows.length, 5);
+  assert.equal(result.rows.find((row) => row.label === 'kimko-PC').state, 'reporting');
+  assert.deepEqual(result.fleetSummary, { reporting: 1, 'installed-pending': 1, 'never-reported': 1, 'machine-only': 1, stale: 1 });
+  assert.match(formatRollout(result), /^PC 台数 5: reporting 1 \/ installed-pending 1 \/ never-reported 1 \/ machine-only 1 \/ stale 1/);
+});
+
+test('重複手書き行は別枠に残し、名字とperson一致は候補だけにする', () => {
+  const rows = [
+    { pcName: '金功勇PC' }, { pcName: '金功勇PC' },
+    { pcName: '古川PC', staff: '古川未歩' },
+    { label: 'kim-PC', hostname: 'KIM', reportedAt: '2026-08-30' },
+    { label: '古川龍慶のノートブックコンピュータ', hostname: 'FURU', reportedAt: '2026-08-30' },
+  ];
+  const result = buildRollout(rows, NOW, { pcMap: { 'kim-PC': { person: '金功勇', hostname: 'KIM' } } });
+  assert.equal(result.duplicateManualRows.length, 2);
+  assert.equal(result.rows.some((row) => row.pcName === '金功勇PC'), false);
+  assert.ok(result.candidates.some((candidate) => candidate.manual === '古川PC' && candidate.machine.startsWith('古川龍慶') && candidate.confidence === 'low'));
+  assert.ok(result.candidates.some((candidate) => candidate.manual === '金功勇PC' && candidate.machine === 'kim-PC' && candidate.confidence === 'medium'));
 });
 
 test('doGet が ok:false でも例外終了せず stderr に出して exit 0 相当', async () => {

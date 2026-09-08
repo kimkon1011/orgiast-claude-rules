@@ -21,6 +21,12 @@
   "nishi-PC": {
     "hostname": "DESKTOP-04U31RG",
     "aliases": ["DESKTOP-04U31RG"],
+    "_gap": "手書き行が無い(PC稼働状況シートに追加が必要)",
     "_evidence": "2026-08-28/29 に Discord へ hostname=DESKTOP-04U31RG / user=user / git=seisaku-team@orgiast.jp を含む報告を送信（rules-resync runId=rules-resync-2026-08-28-nightly-cost-fix 実行報告 および 日次トークン報告、いずれも実測）"
+  },
+  "作業用999": {
+    "sheetName": "作業用999",
+    "installedAt": "2026-09-03",
+    "_evidence": "配布インストーラ完走(結果 OK 29 / NG 3)と claude --version 2.1.258 を kim のスクリーンショットで実機確認(2026-09-03)。hostname は未報告のため未記入。fleet-sheet.env 未取得で未報告 → PR #285 の自己修復待ち"
   }
 }

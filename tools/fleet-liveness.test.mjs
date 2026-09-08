@@ -100,3 +100,23 @@ test('未対応の hostname 衝突は勝手に統合しない', () => {
   assert.equal(result.items.find((x) => x.state === 'alive').name, 'kim開発機');
   assert.match(formatLiveness(result), /kim の判断待ち/);
 });
+
+test('名字/person一致は未確定候補として出し、state別の次アクションを示す', () => {
+  const sheet = [
+    { pcName: '金功勇PC' },
+    { pcName: '古川PC' },
+    { label: 'kim-PC', hostname: 'KIM', reportedAt: '2026-08-27 11:00' },
+    { label: '古川龍慶のノートブックコンピュータ', hostname: 'FURU', reportedAt: '2026-08-27 11:00' },
+    { pcName: '作業用999' },
+  ];
+  const result = classifyFleet({ discord: [], sheet, pcMap: {
+    'kim-PC': { hostname: 'KIM', person: '金功勇' },
+    '作業用999': { sheetName: '作業用999', installedAt: '2026-09-03' },
+  }, now });
+  assert.ok(result.candidates.some((candidate) => candidate.manual === '古川PC'));
+  assert.ok(result.candidates.some((candidate) => candidate.manual === '金功勇PC'));
+  const text = formatLiveness(result);
+  assert.match(text, /installed-pending: 次回 03:15/);
+  assert.match(text, /machine-only: 手書き一覧に行が無い/);
+  assert.match(text, /古川PC↔古川龍慶のノートブックコンピュータ の同一判定は kim の回答が必要/);
+});

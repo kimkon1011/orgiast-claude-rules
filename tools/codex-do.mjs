@@ -226,12 +226,24 @@ export function resolveQwenBackends(homeDir) {
   return resolveFallbackBackends(homeDir);
 }
 
+// 429/413 はコード上の行番号(例: "foo.ts:429:12")と衝突するため、コロンで数字に
+// 隣接していない・かつ同じ行に HTTP/quota 文脈語があるときだけ一致とみなす。
+function isHttpStatusCodeLine(line, code) {
+  const index = line.search(new RegExp(`\\b${code}\\b`));
+  if (index === -1) return false;
+  if (/:\s*$/.test(line.slice(0, index))) return false;
+  if (/^\s*:/.test(line.slice(index + code.length))) return false;
+  return /too many requests|rate|limit|quota|payload|http|status|error/i.test(line);
+}
+
 // 無料枠の上限(429 / rate limit / quota / insufficient / Request too large / 413)に
 // 当たった時に次のバックエンドへ落とすための判定。
 export function isBackendExhausted(output, stderr) {
-  const merged = `${output || ''}\n${stderr || ''}`.toLowerCase();
-  const patterns = ['429', 'rate limit', 'rate-limited', 'quota', 'insufficient', 'request too large', '413'];
-  return patterns.some((p) => merged.includes(p));
+  const merged = `${output || ''}\n${stderr || ''}`;
+  const lower = merged.toLowerCase();
+  const patterns = ['rate limit', 'rate-limited', 'quota', 'insufficient', 'request too large'];
+  if (patterns.some((p) => lower.includes(p))) return true;
+  return merged.split(/\r?\n/).some((line) => isHttpStatusCodeLine(line, '429') || isHttpStatusCodeLine(line, '413'));
 }
 
 if (isEntry(import.meta.url)) {

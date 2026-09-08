@@ -533,6 +533,12 @@ test('isBackendExhausted は通常の成功出力で false を返す', () => {
   assert.equal(isBackendExhausted('', 'All tests passed'), false);
 });
 
+test('isBackendExhausted は 429/413 がファイル行番号(コロン隣接)なら誤検出しない', () => {
+  assert.equal(isBackendExhausted('tools/codex-do.mjs:429:12', ''), false);
+  assert.equal(isBackendExhausted('', 'Applied edit in tools/codex-do.mjs:429: added helper function'), false);
+  assert.equal(isBackendExhausted('src/CaseList.js:413:function foo()', ''), false);
+});
+
 test('loadEnvKey は process.env を最優先し、ファイルの export VAR="..." 形式も読める', () => {
   const dir = makeHomeWithEnv({ 'openrouter.env': 'export OPENROUTER_API_KEY="sk-or-file"\n' });
   const prev = process.env.OPENROUTER_API_KEY;

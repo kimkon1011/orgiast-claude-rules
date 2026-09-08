@@ -410,9 +410,10 @@ if (Test-ApiKeyConfigured 'MANUS_API_KEY') { OK "Manus API key configured — Re
 # --- 夜間バッチの定時起動(毎日03:00・off-peak帯にキュー消化=50%off) ---
 Step "夜間バッチの定時起動を登録 (毎日03:00)"
 if ($runHiddenLoaded) { try {
-  $nb = Join-Path $REPO 'tools\nightly-batch.ps1'
-  if (Test-Path $nb) {
-    $act = New-HiddenScheduledTaskAction -Execute 'powershell.exe' -ChildArgument @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $nb)
+  $nb = Join-Path $REPO 'tools\nightly-bootstrap.ps1'
+  $nightlyBatch = Join-Path $REPO 'tools\nightly-batch.ps1'
+  if ((Test-Path $nb) -and (Test-Path $nightlyBatch)) {
+    $act = New-HiddenScheduledTaskAction -Execute 'powershell.exe' -ChildArgument @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $nb, '-Target', 'tools\nightly-batch.ps1')
     $trg = New-ScheduledTaskTrigger -Daily -At 3:00am -RandomDelay (New-TimeSpan -Minutes 2)
     $set = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
     Register-ScheduledTask -TaskName 'OrgiastNightlyBatch' -Action $act -Trigger $trg -Settings $set -Force -ErrorAction Stop | Out-Null

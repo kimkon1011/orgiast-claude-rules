@@ -240,3 +240,7 @@ How to apply:
 - `/model sonnet` で明示指定、または Auto 使用時も監視して Opus に自動昇格したら「本当に必要か？」を自問する
 - subagent 呼び出しでも `model:"sonnet"` を明示（未指定だと親モデル継承）
 - 疑わしいときは Sonnet を先、Opus は「品質不足を確認してから」の 2 段階運用
+
+## 従量課金AIの残高とオートチャージ（2026-09-09）
+
+前払い型プロバイダはオートチャージを ON（月上限があれば必須）にし、手動チャージを定常運用にしない。自動チャージがない DeepSeek/Kimi は OpenRouter 経由を既定、直叩きをフォールバックとする。`tools/provider-balance.mjs` と日次 `cost-improve-loop` が残高・台帳消費を監視し、7日平均の2倍超かつ日額$1以上は24時間自動降格＋`spend_anomaly` DM、残高$3未満かつ自動チャージなしは`balance_low` DMとする。残高APIがないプロバイダは0扱いせず「監視不能（台帳推定）」と明示する。

@@ -11,13 +11,11 @@ const requestFor = () => ({ url: 'https://example.invalid', init: {} });
 
 test('フォールバック候補は指定された順序である', () => {
   const providers = FALLBACK_CHAIN.map(({ provider }) => provider);
-  assert.deepEqual(providers, ['groq', 'glm', 'cerebras', 'deepseek', 'openrouter', 'gemini', 'grok', 'kimi']);
+  assert.deepEqual(providers, ['groq', 'glm', 'cerebras', 'openrouter', 'deepseek', 'gemini', 'grok', 'kimi']);
   assert.equal(providers[1], 'glm', '無料のGroqの次に定額のGLMを試す');
   assert.equal(providers[2], 'cerebras', '定額のCerebrasは従量プロバイダより先に試す');
   assert.ok(providers.indexOf('grok') < providers.indexOf('kimi'));
-  // 実測(2026-08-20)で openrouter 402・gemini 429 が常態化していたため、
-  // 実際に生きている最安の前払い(deepseek)を死んでいる無料枠より前に出す。
-  assert.ok(providers.indexOf('deepseek') < providers.indexOf('openrouter'));
+  assert.ok(providers.indexOf('openrouter') < providers.indexOf('deepseek'), '自動チャージ可能なgatewayを直叩きより先にする');
   assert.ok(providers.indexOf('deepseek') < providers.indexOf('gemini'));
 });
 
@@ -124,12 +122,21 @@ function temporaryFiles(t) {
   return { cooldownFile: path.join(dir, 'cooldown.json'), ledgerFile: path.join(dir, 'ledger.jsonl') };
 }
 
-test('402 はプロバイダを6時間クールダウンに記録する', async (t) => {
+test('402 はプロバイダを24時間クールダウンに記録する', async (t) => {
   const files = temporaryFiles(t), timestamp = 1_700_000_000_000; let calls = 0;
   await callWithFallback({ start, chain: [second], payloadFor: requestFor, ...files, now: () => timestamp,
     fetchImpl: async () => ++calls === 1 ? new Response('payment', { status: 402 }) : new Response('{}', { status: 200 }) });
   const state = JSON.parse(fs.readFileSync(files.cooldownFile, 'utf8'));
-  assert.deepEqual(state.groq, { until: timestamp + 6 * 60 * 60 * 1000, reason: 'http_402', at: timestamp });
+  assert.deepEqual(state.groq, { until: timestamp + 24 * 60 * 60 * 1000, reason: 'http_402', at: timestamp });
+});
+
+test('DeepSeek直叩き402はOpenRouterの同モデルへ直ちに回す', async (t) => {
+  const files = temporaryFiles(t), attempted = []; let calls = 0;
+  const result = await callWithFallback({ start: { provider: 'deepseek', model: 'deepseek-chat' }, chain: [], ...files,
+    payloadFor(candidate) { attempted.push(candidate); return requestFor(); },
+    fetchImpl: async () => ++calls === 1 ? new Response('Insufficient Balance', { status: 402 }) : new Response('{}') });
+  assert.deepEqual(attempted.map((x) => `${x.provider}:${x.model}`), ['deepseek:deepseek-chat', 'openrouter:deepseek/deepseek-v4-flash']);
+  assert.equal(result.candidate.provider, 'openrouter');
 });
 
 test('クールダウン中のプロバイダは payloadFor を呼ばずにスキップする', async (t) => {

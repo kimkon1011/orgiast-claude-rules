@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { autoProvider, buildChildEnv, cooldownUntilFromText, detectUsageLimitText, readInstruction, resolveProvider, writeProviderCooldown } from './cheap-code.mjs';
+import { appendUsageLedger, autoProvider, buildChildEnv, cooldownUntilFromText, detectBillingFailure, detectUsageLimitText, readInstruction, resolveProvider, writeProviderCooldown } from './cheap-code.mjs';
 
 const tool = fileURLToPath(new URL('./cheap-code.mjs', import.meta.url));
 
@@ -86,6 +86,18 @@ test('detectUsageLimitText は Usage limit reached / 429 / [1308] を検知す�
   assert.equal(detectUsageLimitText('429 [1308] Usage limit reached for 5 hour'), true);
   assert.equal(detectUsageLimitText('HTTP 429 too many requests'), true);
   assert.equal(detectUsageLimitText('all good'), false);
+});
+
+test('402/Insufficient Balance と 429/Usage limit を分類し失敗台帳とcooldownへ残せる', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cheap-code-402-'));
+  const claude = path.join(home, '.claude'); const now = Date.now();
+  assert.equal(detectBillingFailure('HTTP 402 Insufficient Balance'), 402);
+  assert.equal(detectBillingFailure('429 Usage limit reached'), 429);
+  appendUsageLedger({ home, provider: 'deepseek', model: 'x', promptChars: 4, outputChars: 0, secs: 1, ok: false, status: 402, now: new Date(now) });
+  writeProviderCooldown({ claudeDir: claude, provider: 'deepseek', until: now + 86400000, reason: 'http_402', now });
+  const row = JSON.parse(fs.readFileSync(path.join(claude, 'executor-usage.jsonl'), 'utf8'));
+  assert.equal(row.ok, false); assert.equal(row.status, 402);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(claude, 'provider-cooldown.json'))).deepseek.until, now + 86400000);
 });
 
 test('writeProviderCooldown は usage_limit 履歴も残す', () => {

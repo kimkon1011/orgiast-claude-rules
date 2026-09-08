@@ -12,6 +12,7 @@ import { KNOWN_CHEAP_PROVIDERS } from './llm-fallback.mjs';
 import { collectProviderHealth, collectClaudeStats } from './usage-stats.mjs';
 import { collectBudgetStatus } from './budget-status.mjs';
 import { shouldSendMonthlyReport, buildMonthlyReport, markMonthlyReportSent } from './cost-monthly-report.mjs';
+import { collectProviderBalances, formatBalanceLine } from './provider-balance.mjs';
 
 export const ALLOWED_LOCAL_COMMANDS = [
   'node tools/tool-adoption-check.mjs --force',
@@ -37,8 +38,19 @@ export const SIGNAL_METRICS = Object.freeze({
   codex_saturated: 'codexLimit24h',
   headless_claude: 'headlessClaudeOut',
   budget_pace: 'pacePercent',
-  eval_stale: 'evalAgeDays'
+  eval_stale: 'evalAgeDays',
+  spend_anomaly: 'todaySpendUsd'
 });
+
+export function evaluateBalanceSignals(rows, { directProviders = ['deepseek', 'kimi'] } = {}) {
+  const violations = [];
+  for (const row of rows || []) {
+    if (row.status === 'anomaly') violations.push({ kind: 'spend_anomaly', pc: 'self', severity: 'error', provider: row.provider, evidence: `${row.provider} today $${row.todaySpendUsd.toFixed(4)} > 2x 7d avg $${row.avg7dSpendUsd.toFixed(4)}`, actualValue: row.todaySpendUsd, targetValue: row.avg7dSpendUsd * 2, trusted: true });
+    if (row.status === 'low' && row.autoTopUp !== true) violations.push({ kind: 'balance_low', pc: 'self', severity: 'warning', provider: row.provider, evidence: `${row.provider} balance $${row.balanceUsd.toFixed(2)} (< $3), auto top-up unavailable`, actualValue: row.balanceUsd, targetValue: 3, trusted: true });
+    if (row.autoTopUp === false && directProviders.includes(row.provider)) violations.push({ kind: 'autotopup_missing', pc: 'self', severity: 'warning', provider: row.provider, evidence: `${row.provider} has no auto top-up and remains a direct lane`, trusted: true });
+  }
+  return violations;
+}
 
 // §1.18 の通常運用で利用を期待する主経路だけを監視し、障害時専用の fallback は除外する。
 export const PRIMARY_PROVIDERS = KNOWN_CHEAP_PROVIDERS;
@@ -381,6 +393,7 @@ export function evaluateFleet({ rows, ledgerCounts, localState, now, lastKpis = 
   }
 
   if (signals) {
+    violations.push(...evaluateBalanceSignals(signals.providerBalances));
     // provider_unhealthy: 直近7日で failRate>=0.2 か http429>=50 の provider(codex=定額なので除外)。
     for (const [name, stats] of Object.entries(signals.providerHealth?.providers || {})) {
       if (String(name).toLowerCase() === 'codex') continue;
@@ -445,7 +458,7 @@ export function evaluateFleet({ rows, ledgerCounts, localState, now, lastKpis = 
 
 export function sortViolationsBySeverity(violations) {
   const severityRank = { error: 2, warning: 1 };
-  const kindRank = { measurement_untrusted: 0, low_delegation: 1, cost_spike: 2, no_cheap_ai: 3, opus_heavy: 4, stale_report: 5, unused_provider: 6, provider_unhealthy: 7, codex_saturated: 8, headless_claude: 9, budget_pace: 10, eval_stale: 11 };
+  const kindRank = { measurement_untrusted: 0, low_delegation: 1, cost_spike: 2, no_cheap_ai: 3, opus_heavy: 4, stale_report: 5, unused_provider: 6, spend_anomaly: 7, balance_low: 8, autotopup_missing: 9, provider_unhealthy: 10, codex_saturated: 11, headless_claude: 12, budget_pace: 13, eval_stale: 14 };
   return [...violations].sort((a, b) => {
     const rankDifference = (severityRank[b.severity] ?? 0) - (severityRank[a.severity] ?? 0);
     if (rankDifference !== 0) return rankDifference;
@@ -471,6 +484,10 @@ export function buildCombinedCodexSpec(actions) {
 
 function humanTodoMessage(violation, now) {
   const pc = violation.pc;
+  if (violation.kind === 'balance_low') {
+    const switched = ['deepseek', 'kimi'].includes(violation.provider) ? '切替済み' : '未切替';
+    return `【このPC】${violation.provider} の残高が $${Number(violation.actualValue).toFixed(2)} です。自動チャージが無いプロバイダです。OpenRouter 経由へ${switched}。`;
+  }
   if (violation.kind === 'stale_report') {
     const reportedAt = /last reported:\s*([^)]*)/.exec(violation.evidence)?.[1] || '日時不明';
     const reportedMs = parseJstOrIsoDate(reportedAt);
@@ -536,6 +553,9 @@ export function decideActions({ violations, state, now, limits = { maxCodex: 2 }
       mode: 'auto-local',
       effect: 'writeRoutingOverride'
     },
+    spend_anomaly: { mode: 'auto-local', effect: 'writeRoutingOverride' },
+    balance_low: { mode: 'human' },
+    autotopup_missing: { mode: 'auto-local', effect: 'writeGatewayOverride' },
     codex_saturated: {
       mode: 'auto-local',
       effect: 'writeCodexFallbackOrder'
@@ -643,6 +663,8 @@ export function decideActions({ violations, state, now, limits = { maxCodex: 2 }
       // DM 本文の1行: 無料枠の上限が原因なら有料枠で即解消できることを示す。
       action.reportNote = '有料枠で解消可(例: Groq Dev tier)';
     }
+    if (kind === 'spend_anomaly') action.durationHours = 24;
+    if (kind === 'balance_low') action.reportNote = `自動チャージが無いプロバイダです。OpenRouter 経由へ切替${['deepseek', 'kimi'].includes(action.provider) ? '済み' : '未'}`;
 
     if (mode === 'auto-local') {
       if (playbook.command) action.command = playbook.command;
@@ -850,8 +872,12 @@ export function executeLocalAction({ act, dryRun = false, claudeDir, home, now =
     const zaiCheck = hasZaiEnvImpl ?? hasZaiEnv;
     try {
       if (act.effect === 'writeRoutingOverride') {
-        const applied = writeRoutingOverride({ claudeDir, provider: act.provider, now, writeImpl });
+        const applied = writeRoutingOverride({ claudeDir, provider: act.provider, now, writeImpl, durationHours: act.durationHours });
         return { ...act, result: 'pending', note: `routing-overrides.json に ${applied.provider} の demote(${applied.until}まで)を記録。llm-fallback が連鎖末尾へ回します。` };
+      }
+      if (act.effect === 'writeGatewayOverride') {
+        const applied = writeGatewayOverride({ claudeDir, provider: act.provider, writeImpl });
+        return { ...act, result: 'pending', note: `routing-overrides.json: ${applied.provider} は OpenRouter ${applied.model} の後ろへ移動。` };
       }
       if (act.effect === 'writeCodexFallbackOrder') {
         const applied = writeCodexFallbackOrder({ claudeDir, zaiAvailable: zaiCheck(home), writeImpl });
@@ -1071,11 +1097,11 @@ export function hasZaiEnv(home) {
 
 // provider_unhealthy 対処: demote 有効期限(+3日)を ~/.claude/routing-overrides.json に書く純関数。
 // 既存の他 provider/他キーは保持する。llm-fallback.mjs が demote 中の provider を連鎖末尾へ回す。
-export function writeRoutingOverride({ claudeDir, provider, now, writeImpl = null }) {
+export function writeRoutingOverride({ claudeDir, provider, now, writeImpl = null, durationHours = 72 }) {
   const file = path.join(claudeDir, 'routing-overrides.json');
   const name = String(provider || '').trim().toLowerCase();
   if (!/^[a-z0-9_-]+$/.test(name)) throw new Error(`不正なprovider名: ${provider}`);
-  const until = new Date(now.getTime() + 3 * 86400000).toISOString();
+  const until = new Date(now.getTime() + durationHours * 3600000).toISOString();
   let state = {};
   try { state = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
   if (!state || typeof state !== 'object' || Array.isArray(state)) state = {};
@@ -1086,6 +1112,21 @@ export function writeRoutingOverride({ claudeDir, provider, now, writeImpl = nul
   if (writeImpl) writeImpl(file, content);
   else atomicWrite(file, content);
   return { file, provider: name, until, changed };
+}
+
+export function writeGatewayOverride({ claudeDir, provider, writeImpl = null }) {
+  const models = { deepseek: 'deepseek/deepseek-v4-flash', kimi: 'moonshotai/kimi-k3' };
+  const name = String(provider || '').trim().toLowerCase();
+  const model = models[name];
+  if (!model) throw new Error(`gateway mapping unavailable: ${provider}`);
+  const file = path.join(claudeDir, 'routing-overrides.json');
+  let state = {};
+  try { state = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
+  if (!state || typeof state !== 'object' || Array.isArray(state)) state = {};
+  state.gatewayBeforeDirect = { ...(state.gatewayBeforeDirect || {}), [name]: model };
+  const content = `${JSON.stringify(state, null, 2)}\n`;
+  if (writeImpl) writeImpl(file, content); else atomicWrite(file, content);
+  return { file, provider: name, model };
 }
 
 // codex_saturated 対処: ~/.claude/codex-fallback-order.json に fallback 順を書く。
@@ -1215,7 +1256,8 @@ export async function main(argv = process.argv.slice(2), io = {}) {
       codexLimit24h: (io.countCodexLimitDetections ?? countCodexLimitDetections)(claudeDir, now),
       headlessClaudeOut,
       budgetPacePct,
-      evalAgeDays: (io.evalLatestAgeDays ?? evalLatestAgeDays)(claudeDir, now)
+      evalAgeDays: (io.evalLatestAgeDays ?? evalLatestAgeDays)(claudeDir, now),
+      providerBalances: await (io.collectProviderBalances ?? collectProviderBalances)({ home, now, appendHistory: !dryRun })
     };
   };
   let signals = null;
@@ -1396,6 +1438,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   const stalePcs = new Set(evaluation.violations.filter(v => v.kind === 'stale_report').map(v => v.pc));
   let reportText = ineffectiveWarning ? `${ineffectiveWarning}\n\n` : '';
   reportText += state.lastNotifyError ? `※ 前回の通知は送信に失敗しています(${state.lastNotifyError})\n\n` : '';
+  reportText += `${formatBalanceLine(signals?.providerBalances || [])}\n`;
   reportText += `**📊 AIコスト自動改善ループ報告 (${now.toISOString().slice(0, 10)})**\n\n`;
   
   reportText += `### ① フリートKPI状況\n`;

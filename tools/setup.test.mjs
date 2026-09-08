@@ -82,6 +82,21 @@ test('manifest schema rejects duplicate ids and unknown enums', () => {
   }
 });
 
+test('win32: command type resolves .cmd shims (npm-installed CLIs like codex)', { skip: process.platform !== 'win32' }, () => {
+  const home = temp('setup-cmdshim-');
+  const name = `orgiast-shim-${process.pid}`;
+  const dir = path.join(home, 'bin');
+  write(path.join(dir, `${name}.cmd`), '@echo 1.2.3\r\n');
+  const mf = path.join(home, 'manifest.json');
+  write(mf, JSON.stringify(manifest([item(`cmd:${name}`, 'command', { command: name, versionRegex: '\\d+\\.\\d+\\.\\d+' })])));
+  const result = spawnSync(process.execPath, [setup, '--json', '--home', home, '--manifest', mf], {
+    encoding: 'utf8',
+    env: { ...process.env, PATH: `${dir};${process.env.PATH}` },
+  });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(JSON.parse(result.stdout).items[0].status, 'OK');
+});
+
 test('project manifest has unique known item types and severities', () => {
   const parsed = JSON.parse(fs.readFileSync(path.join(toolsDir, 'setup-manifest.json'), 'utf8'));
   const ids = parsed.items.map((entry) => entry.id);

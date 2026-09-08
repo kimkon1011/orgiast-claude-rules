@@ -46,7 +46,12 @@ function check(item) {
   try {
     const spec = item.spec;
     if (item.type === 'command') {
-      const output = execFileSync(spec.command, ['--version'], { encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+      // npm製CLIはWindowsでは .cmd シム(codex 等)で、execFileSync の直接指定では解決できない
+      // (Node 18.20+ は shell 無しの .cmd/.bat 実行を拒否)。cmd.exe 経由で PATHEXT 解決させる。
+      const raw = process.platform === 'win32'
+        ? execFileSync('cmd.exe', ['/d', '/s', '/c', `${spec.command} --version`], { encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] })
+        : execFileSync(spec.command, ['--version'], { encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] });
+      const output = String(raw).trim();
       return output.length > 0 && new RegExp(spec.versionRegex || '.+').test(output);
     }
     if (item.type === 'file-nonempty') {

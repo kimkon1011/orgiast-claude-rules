@@ -81,6 +81,9 @@ try {
   const command = (name, extra = '') => `node "${path.join(repo, 'tools', name)}"${extra}`;
   const session = [
     ['onboarding-sync.mjs', 20, true, ''],
+    // あるべき状態への収束(検査→修復→再検査)。onboarding-sync が repo を新しくした後に走る。
+    // リポジトリ直接参照・コピー配布なし = main を変えれば全PC追従(配り直し不要)。
+    ['setup.mjs', 60, true, ' --converge'],
     ['claude-cost-reporter.mjs', 15, true, ''],
     ['tool-adoption-check.mjs', 60, true, ' --fix'],
     ['cost-loop.mjs', 15, false, ''],

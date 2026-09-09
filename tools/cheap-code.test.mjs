@@ -144,3 +144,24 @@ test('--provider auto は cooldown 中に deepseek を選んで dry-run に出�
   assert.equal(result.status, 0);
   assert.equal(JSON.parse(result.stdout).provider, 'deepseek');
 });
+
+test('明示 provider が cooldown 中なら claude を起動せず exit 3 で返す', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cheap-code-explicit-cooldown-'));
+  const claude = path.join(home, '.claude');
+  try {
+    fs.mkdirSync(claude, { recursive: true });
+    fs.writeFileSync(path.join(claude, 'zai.env'), 'ZAI_API_KEY=test-key\n', 'utf8');
+    fs.writeFileSync(path.join(claude, 'provider-cooldown.json'), JSON.stringify({ glm: { until: Date.now() + 3600000, reason: 'usage_limit' } }), 'utf8');
+    const result = spawnSync(process.execPath, [tool, '--provider', 'glm', '--cwd', home, '確認する'], {
+      encoding: 'utf8',
+      env: { ...process.env, ORGIAST_HOME: home },
+    });
+    assert.equal(result.status, 3);
+    assert.match(result.stderr, /クールダウン/);
+    const ledger = fs.readFileSync(path.join(claude, 'executor-usage.jsonl'), 'utf8');
+    assert.match(ledger, /"provider":"glm"/);
+    assert.match(ledger, /"status":"cooldown"/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});

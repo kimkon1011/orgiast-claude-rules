@@ -221,6 +221,14 @@ async function main(args) {
     console.error(`${config.provider} のキーが未設定です: ~/.claude/${config.envFile} に ${config.keyName} がありません。自動購入・課金は行いません。`);
     return 3;
   }
+  const cooldownFile = path.join(home, '.claude', 'provider-cooldown.json');
+  if (providerInCooldown(config.provider, Date.now(), cooldownFile)) {
+    try { appendUsageLedger({ home, provider: config.provider, model, promptChars: prompt.length, outputChars: 0, secs: 0, ok: false, status: 'cooldown' }); } catch {}
+    const until = readProviderCooldown(path.join(home, '.claude'))[config.provider]?.until;
+    const untilText = Number.isFinite(Number(until)) ? `(${new Date(Number(until)).toISOString()}まで)` : '';
+    console.error(`[cheap-code] ${config.provider} はクールダウン中です${untilText}。起動を省略しました。`);
+    return 3;
+  }
 
   const started = Date.now();
   let outputChars = 0;

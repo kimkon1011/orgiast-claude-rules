@@ -5,7 +5,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
 import { armToFile } from './session-relaunch.mjs';
-import { autoSessionExecutor, buildCheapCodeArgs, buildClaudeHeadlessArgs, recordFallbackToClaude } from './auto-session-executor.mjs';
+import { alternateCheapProvider, autoSessionExecutor, buildCheapCodeArgs, buildClaudeHeadlessArgs, claudeFallbackEnabled, recordFallbackToClaude, recordSkippedNoExecutor } from './auto-session-executor.mjs';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..');
 
@@ -206,6 +206,8 @@ export async function runHeadlessNextSession({ env, hostname, home, cwd, prompt,
   const choice = autoSessionExecutor(env, hostname, home);
   const fullPrompt = buildHeadlessPrompt(prompt);
   const promptFile = path.join(os.tmpdir(), `orgiast-next-session-${process.pid}-${Date.now()}.txt`);
+  let cheapProvider = choice.provider;
+  let alternateTried = false;
   const launch = (fallback = false) => new Promise((resolve) => {
     const cheap = choice.executor === 'cheap-code' && !fallback;
     if (cheap) {
@@ -214,15 +216,15 @@ export async function runHeadlessNextSession({ env, hostname, home, cwd, prompt,
     let child;
     try {
       child = spawnImpl(cheap ? process.execPath : executable, cheap
-        ? buildCheapCodeArgs({ repoRoot: REPO_ROOT, provider: choice.provider, promptFile, cwd })
+        ? buildCheapCodeArgs({ repoRoot: REPO_ROOT, provider: cheapProvider, promptFile, cwd })
         : buildClaudeHeadlessArgs({ repoCwd: cwd, historyCwd: cwd }), {
         cwd,
-        env: { ...env, CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: cheap ? `next-session-launch:cheap-code:${choice.provider}` : 'next-session-launch:fallback-claude' },
+        env: { ...env, CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: cheap ? `next-session-launch:cheap-code:${cheapProvider}` : 'next-session-launch:fallback-claude' },
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true,
       });
     } catch (error) {
-      resolve({ executor: cheap ? `cheap-code:${choice.provider}` : 'claude', exitCode: null, status: 'failure', error: String(error?.message ?? error), fallbackToClaude: false });
+      resolve({ executor: cheap ? `cheap-code:${cheapProvider}` : 'claude', exitCode: null, status: 'failure', error: String(error?.message ?? error), fallbackToClaude: false });
       return;
     }
     let stdout = '';
@@ -240,12 +242,20 @@ export async function runHeadlessNextSession({ env, hostname, home, cwd, prompt,
     child.on('close', async (code) => {
       clearTimeout(timer);
       if (cheap && !timedOut && code !== 0) {
-        recordFallbackToClaude({ home, reason: `cheap-code/${choice.provider} exit ${code}` });
-        const retried = await launch(true);
-        resolve({ ...retried, firstExecutor: `cheap-code:${choice.provider}`, fallbackToClaude: true });
+        const reason = `cheap-code/${cheapProvider} exit ${code}`;
+        const alternate = alternateTried ? null : alternateCheapProvider(cheapProvider, home);
+        if (alternate) { alternateTried = true; cheapProvider = alternate; launch(false).then(resolve); return; }
+        if (claudeFallbackEnabled(env, home)) {
+          recordFallbackToClaude({ home, reason });
+          const retried = await launch(true);
+          resolve({ ...retried, firstExecutor: `cheap-code:${choice.provider}`, fallbackToClaude: true });
+          return;
+        }
+        recordSkippedNoExecutor({ home, reason, provider: cheapProvider });
+        resolve({ executor: `cheap-code:${cheapProvider}`, exitCode: code, status: 'failure', stdout, stderr, fallbackToClaude: false, skippedNoExecutor: true });
         return;
       }
-      resolve({ executor: cheap ? `cheap-code:${choice.provider}` : 'claude', exitCode: timedOut ? null : code, status: timedOut ? 'timeout' : code === 0 ? 'success' : 'failure', stdout, stderr, fallbackToClaude: false });
+      resolve({ executor: cheap ? `cheap-code:${cheapProvider}` : 'claude', exitCode: timedOut ? null : code, status: timedOut ? 'timeout' : code === 0 ? 'success' : 'failure', stdout, stderr, fallbackToClaude: false });
     });
     child.on('error', (error) => { stderr += error.message; });
   });

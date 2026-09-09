@@ -901,12 +901,10 @@ test('headless は cheap-code を先に試し、成功なら1行ログを残し�
   }
 });
 
-test('headless は cheap-code 失敗時に claude へ落とし、台帳とログの両方に記録する', async () => {
+test('headless は cheap-code 失敗時に既定で claude へ落とさず skipped を記録する', async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orgiast-nsl-fb-'));
-  const previousModel = process.env.ORGIAST_AUTO_SESSION_MODEL;
-  process.env.ORGIAST_AUTO_SESSION_MODEL = 'sonnet';
   try {
-    const { calls, spawnImpl } = headlessSpawnRecorder([1, 0]);
+    const { calls, spawnImpl } = headlessSpawnRecorder([1]);
     const logLines = [];
     const result = await runHeadlessNextSession({
       env: { ORGIAST_AUTO_SESSION_EXECUTOR: 'cheap-code', ORGIAST_AUTO_SESSION_PROVIDER: 'glm' },
@@ -914,24 +912,67 @@ test('headless は cheap-code 失敗時に claude へ落とし、台帳とログ
       executable: 'claude-test', spawnImpl, appendLog: (line) => logLines.push(line),
       now: () => new Date('2026-09-07T00:00:00Z'),
     });
-    assert.equal(calls.length, 2, 'cheap-code 失敗後に claude へ再試行する');
+    assert.equal(calls.length, 1, 'cheap-code 失敗後に claude を起動しない');
     assert.equal(calls[0].program, process.execPath);
-    assert.equal(calls[1].program, 'claude-test');
-    const fallbackArgs = calls[1].args.join(' ');
-    assert.ok(fallbackArgs.includes('-p'));
-    assert.ok(fallbackArgs.includes('--model sonnet'));
-    assert.equal(result.executor, 'claude');
-    assert.equal(result.fallbackToClaude, true);
-    assert.equal(result.status, 'success');
-    assert.equal(result.exitCode, 0);
+    assert.equal(result.executor, 'cheap-code:glm');
+    assert.equal(result.fallbackToClaude, false);
+    assert.equal(result.status, 'failure');
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.skippedNoExecutor, true);
     assert.equal(logLines.length, 1);
-    assert.match(logLines[0], /executor=claude exit=0 status=success fallback=true/);
+    const ledger = fs.readFileSync(path.join(tempDir, '.claude', 'executor-usage.jsonl'), 'utf8');
+    assert.match(ledger, /"provider":"skipped"/);
+    assert.match(ledger, /cheap-code\/glm exit 1/);
+    assert.doesNotMatch(ledger, /"provider":"claude-fallback"/);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('headless は opt-in 時だけ cheap-code 失敗後に claude へ落とす', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orgiast-nsl-optin-'));
+  try {
+    const { calls, spawnImpl } = headlessSpawnRecorder([1, 0]);
+    const result = await runHeadlessNextSession({
+      env: { ORGIAST_AUTO_SESSION_EXECUTOR: 'cheap-code', ORGIAST_AUTO_SESSION_PROVIDER: 'glm', ORGIAST_AUTO_SESSION_CLAUDE_FALLBACK: '1' },
+      hostname: 'TEST-PC', home: tempDir, cwd: tempDir, prompt: '次セッション開始処理を実行してください',
+      executable: 'claude-test', spawnImpl, appendLog: () => {},
+    });
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1].program, 'claude-test');
+    assert.equal(result.fallbackToClaude, true);
+    assert.equal(result.executor, 'claude');
     const ledger = fs.readFileSync(path.join(tempDir, '.claude', 'executor-usage.jsonl'), 'utf8');
     assert.match(ledger, /"provider":"claude-fallback"/);
     assert.match(ledger, /cheap-code\/glm exit 1/);
   } finally {
-    if (previousModel === undefined) delete process.env.ORGIAST_AUTO_SESSION_MODEL;
-    else process.env.ORGIAST_AUTO_SESSION_MODEL = previousModel;
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('headless は glm 失敗後に deepseek の代替レーンで成功する', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orgiast-nsl-alternate-'));
+  try {
+    fs.mkdirSync(path.join(tempDir, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(tempDir, '.claude', 'deepseek.env'), 'DEEPSEEK_API_KEY=test-key\n', 'utf8');
+    const { calls, spawnImpl } = headlessSpawnRecorder([3, 0]);
+    const result = await runHeadlessNextSession({
+      env: { ORGIAST_AUTO_SESSION_EXECUTOR: 'cheap-code', ORGIAST_AUTO_SESSION_PROVIDER: 'glm' },
+      hostname: 'TEST-PC', home: tempDir, cwd: tempDir, prompt: '次セッション開始処理を実行してください',
+      executable: 'claude-test', spawnImpl, appendLog: () => {},
+    });
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].program, process.execPath);
+    assert.equal(calls[1].program, process.execPath);
+    assert.match(calls[0].args.join(' '), /--provider glm/);
+    assert.match(calls[1].args.join(' '), /--provider deepseek/);
+    assert.equal(result.executor, 'cheap-code:deepseek');
+    assert.equal(result.fallbackToClaude, false);
+    assert.equal(result.status, 'success');
+    const ledgerFile = path.join(tempDir, '.claude', 'executor-usage.jsonl');
+    const ledger = fs.existsSync(ledgerFile) ? fs.readFileSync(ledgerFile, 'utf8') : '';
+    assert.doesNotMatch(ledger, /claude-fallback|"provider":"skipped"/);
+  } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });

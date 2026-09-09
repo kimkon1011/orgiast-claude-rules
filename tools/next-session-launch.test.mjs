@@ -10,6 +10,7 @@ import {
   applyTrust,
   buildVscodeExtUri,
   buildVscodeUri,
+  hasVscodeAppDarwin,
   hasUnsentVscodeTab,
   childEnv,
   KEPT_CLAUDE_ENV,
@@ -78,6 +79,20 @@ test('VSCode CLI は明示パス、ユーザーインストール、未検出の
   assert.equal(resolveVscodeCli({ env: {}, exists: () => false, homedir: home }), '');
 });
 
+test('macOS の VSCode CLI は候補の優先順で解決し、未検出なら空文字列を返す', () => {
+  const home = '/Users/test';
+  const userCli = path.join(home, 'bin', 'code');
+  const bundledCli = '/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code';
+  assert.equal(resolveVscodeCli({ env: {}, exists: (file) => file === userCli, homedir: home }, 'darwin'), userCli);
+  assert.equal(resolveVscodeCli({ env: {}, exists: (file) => file === bundledCli, homedir: home }, 'darwin'), bundledCli);
+  assert.equal(resolveVscodeCli({ env: {}, exists: () => false, homedir: home }, 'darwin'), '');
+});
+
+test('macOS の Visual Studio Code.app の存在を判定する', () => {
+  assert.equal(hasVscodeAppDarwin((file) => file === '/Applications/Visual Studio Code.app'), true);
+  assert.equal(hasVscodeAppDarwin(() => false), false);
+});
+
 test('Claude Code の open URI にプロンプトを URL エンコードする', () => {
   assert.equal(buildVscodeUri('/session-start'), 'vscode://Anthropic.claude-code/open?prompt=%2Fsession-start');
   assert.equal(buildVscodeUri('日本語 開始'), `vscode://Anthropic.claude-code/open?prompt=${encodeURIComponent('日本語 開始')}`);
@@ -127,6 +142,17 @@ test('VSCode 起動は code.cmd を cmd.exe /c 経由で実行する', () => {
   });
   assert.equal(planVscodeLaunch({ codeCli: '', cwd: 'C:\\work', prompt: '' }), null);
   assert.equal(planVscodeLaunch({ codeCli: 'C:\\Code\\bin\\code.cmd', cwd: '', prompt: '', openFolder: true }), null);
+});
+
+test('macOS の VSCode 起動は code CLI 無しでも open で URI を開く', () => {
+  const uri = buildVscodeUri('/session-start');
+  assert.deepEqual(planVscodeLaunch({ codeCli: '', cwd: '/tmp/x', prompt: '/session-start', platform: 'darwin' }), [
+    { label: 'open-session', command: '/usr/bin/open', args: [uri] },
+  ]);
+  assert.deepEqual(planVscodeLaunch({ codeCli: '', cwd: '/tmp/x', prompt: '/session-start', openFolder: true, platform: 'darwin' }), [
+    { label: 'open-folder', command: '/usr/bin/open', args: ['-n', '-a', 'Visual Studio Code', '/tmp/x'] },
+    { label: 'open-session', command: '/usr/bin/open', args: [uri] },
+  ]);
 });
 
 test('既定は VSCode 経路で、ターミナルは明示したときだけ選ぶ', () => {
@@ -456,8 +482,13 @@ test('VSCode 経路は既定で URI だけを撃ち、既存ウィンドウを�
   assert.equal(await launchNextSession(['--target', 'vscode'], io), 0);
   // `code.cmd <cwd>` を先に走らせると既存ウィンドウの拡張ホストが再起動し、URI ごと落ちる(2026-08-30 実測)。
   assert.equal(calls.spawn.length, 1);
-  assert.equal(calls.spawn[0][1][2], '--open-url');
-  assert.match(calls.spawn[0][1][3], /prompt=%2Fsession-start$/);
+  if (process.platform === 'darwin') {
+    assert.equal(calls.spawn[0][0], '/usr/bin/open');
+    assert.match(calls.spawn[0][1][0], /prompt=%2Fsession-start$/);
+  } else {
+    assert.equal(calls.spawn[0][1][2], '--open-url');
+    assert.match(calls.spawn[0][1][3], /prompt=%2Fsession-start$/);
+  }
   assert.equal(calls.spawn[0][2].detached, false);
   assert.equal(calls.spawn[0][2].windowsHide, true);
   assert.deepEqual(waited, []);
@@ -479,8 +510,13 @@ test('--open-folder のときだけ新規ウィンドウ(-n)を先に開く', as
   assert.equal(await launchNextSession(['--target', 'vscode', '--open-folder'], io), 0);
   assert.equal(calls.spawn.length, 2);
   // -n が無いと既存ウィンドウを再読み込みしてしまう。
-  assert.deepEqual(calls.spawn[0][1], ['/c', codeCli, '-n', 'C:\\work']);
-  assert.equal(calls.spawn[1][1][2], '--open-url');
+  if (process.platform === 'darwin') {
+    assert.deepEqual(calls.spawn[0][1], ['-n', '-a', 'Visual Studio Code', 'C:\\work']);
+    assert.match(calls.spawn[1][1][0], /prompt=%2Fsession-start$/);
+  } else {
+    assert.deepEqual(calls.spawn[0][1], ['/c', codeCli, '-n', 'C:\\work']);
+    assert.equal(calls.spawn[1][1][2], '--open-url');
+  }
   assert.deepEqual(waited, [2500]);
 });
 

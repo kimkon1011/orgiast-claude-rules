@@ -47,6 +47,23 @@ jobs:
             throw 'bootstrap.ps1 exited before its completion marker'
           }
 
+      # bootstrap が配布正本(main)を clone するため、PR 未マージの manifest/register-hooks
+      # (setup.mjs --converge SessionStart 追加)はこの checkout(PR 版)から収束させて検証する。
+      - name: Converge from this PR repo against the clean profile
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pathParts = @(
+            [Environment]::GetEnvironmentVariable('Path', 'Machine'),
+            [Environment]::GetEnvironmentVariable('Path', 'User'),
+            (Join-Path $env:USERPROFILE '.local\bin'),
+            (Join-Path $env:APPDATA 'npm')
+          ) | Where-Object { $_ }
+          $env:Path = $pathParts -join ';'
+          node '.\tools\setup.mjs' --converge --home $env:USERPROFILE 2>&1 |
+            Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'clean-install-logs\converge-pr.log')
+          if ($LASTEXITCODE -ne 0) { throw "setup.mjs --converge failed with exit code $LASTEXITCODE" }
+
       - name: Verify installed behavior with Windows PowerShell 5.1
         shell: powershell
         run: |

@@ -14,6 +14,13 @@ test('/start は start を返す（既存動作）', () => {
   assert.deepEqual(decideAction({ path: '/start', query: 'prompt=/session-start' }), { kind: 'start' });
 });
 
+test('/mobile は count と name を返し、count を 1..10 に収める', () => {
+  assert.deepEqual(decideAction({ path: '/mobile', query: 'count=4&name=%E6%90%BA%E5%B8%AF%E7%94%A8' }), { kind: 'mobile', count: 4, name: '携帯用' });
+  assert.deepEqual(decideAction({ path: '/mobile', query: 'count=99' }), { kind: 'mobile', count: 10, name: 'スマホ用セッション' });
+  assert.deepEqual(decideAction({ path: '/mobile', query: 'count=0&name=' }), { kind: 'mobile', count: 1, name: 'スマホ用セッション' });
+  assert.deepEqual(decideAction({ path: '/mobile', query: 'count=invalid' }), { kind: 'mobile', count: 3, name: 'スマホ用セッション' });
+});
+
 test('未知のパスは start を返す（後方互換）', () => {
   assert.deepEqual(decideAction({ path: '/foo', query: '' }), { kind: 'start' });
 });

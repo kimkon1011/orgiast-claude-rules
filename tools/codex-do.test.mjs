@@ -123,6 +123,45 @@ test('detectQuotaLimit: テストランナー、コード、行番号の疑似�
   assert.equal(detectQuotaLimit('src/CaseList.js:429:function foo()', '', 0).matched, false);
 });
 
+test('detectQuotaLimit: 2026-09-08 に実発生した偽陽性ラインを弾く（回帰）', () => {
+  const lines = [
+    'if (m) { src/BulkImportFromTaskMgmt.js:429: trailing whitespace. +    const y = m[',
+    'src/CaseList.js:429:function CaseList_touchUpdatedAt(caseId',
+    'rovider_unhealthy は failRate 0.20 / http429 50 の境界で発火し codex は除外される (0.6032ms) ✔ 27',
+    '登録 seed だけを返し、title の前後空白と全角空白を同一視する (0.4297ms) ✔ 役割を固定優先順にし、それ以外は出現順を保つ (0.3027ms)',
+    '  80 63 319.4251888363211 100 56 333.4470429659536 120 48 347.85853020441544 150 42 ',
+    'ookへPOSTするときUser-Agentを明示しないとCloudflareが429/error code 1015で弾く。送信結果は必ずレスポンスコードで検証する',
+    'ides の modifiedTime に更新 - *   - partial（429 残あり）→ 時刻更新せず、次回 trigger で同じ判定が走り resume',
+  ];
+  for (const line of lines) {
+    assert.equal(detectQuotaLimit(line, '', 0, '').matched, false, `偽陽性ライン: ${line}`);
+  }
+});
+
+test('detectQuotaLimit: 行頭429の直後にコロン（grep -h 行番号）は弾く', () => {
+  for (const line of [
+    '429:rate limit 対策のメモ',
+    '429:## Rate Limit の扱い',
+    '429:quota exceeded と書かれたドキュメント行',
+  ]) {
+    assert.equal(detectQuotaLimit(line, '', 0, '').matched, false, `行番号形式: ${line}`);
+  }
+
+  for (const line of [
+    '429 Too Many Requests',
+    'HTTP 429 Too Many Requests',
+    'ERROR: 429 too many requests, retry later',
+  ]) {
+    const check = detectQuotaLimit(line, '', 0, '');
+    assert.equal(check.matched, true, `真陽性: ${line}`);
+    assert.equal(check.pattern, '429', `検出パターン: ${line}`);
+  }
+
+  const rateLimit = detectQuotaLimit('Error: Rate limit exceeded (429)', '', 0, '');
+  assert.equal(rateLimit.matched, true);
+  assert.equal(rateLimit.pattern, 'rate limit');
+});
+
 test('detectQuotaLimit: promptText に含まれる指示文エコーを除外する', () => {
   const echoed = '「Usage limit」を検知したら…';
   assert.equal(detectQuotaLimit(echoed, '', 1, echoed).matched, false);

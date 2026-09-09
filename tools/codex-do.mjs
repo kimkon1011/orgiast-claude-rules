@@ -25,7 +25,8 @@ export function detectQuotaLimit(stdout, stderr, exitStatus = null, promptText =
   ];
   const prefixed = /^\s*(?:\[[^\]]*\]\s*)?(?:ERROR|Error|error|WARN(?:ING)?)\s*[:\-]?\s*(You(?:'ve| have) hit your usage limit|Usage limit (?:reached|exceeded)|Rate limit (?:reached|exceeded)|Too many requests|Upgrade to Pro)/;
   const raw = /^(You've hit your usage limit|Too many requests)/i;
-  const status429 = /^\s*(?:\[[^\]]*\]\s*)?(?:ERROR|Error|error|WARN(?:ING)?)?\s*[:\-]?\s*(?:HTTP\s*)?429\b/i;
+  // コロン隣接の 429 は grep -h / sed などが出力した行番号とみなす。
+  const status429 = /^\s*(?:\[[^\]]*\]\s*)?(?:ERROR|Error|error|WARN(?:ING)?)?\s*[:\-]?\s*(?:HTTP\s*)?429(?!:)\b/i;
   const ignoredPrefix = /^(?:✔|✓|✖|×|ok\s|not ok\s|#)/i;
   const codeLike = /(?:;|\{|\}|=>|\breturn\s|assert|regex|\/i)/i;
 

@@ -97,6 +97,14 @@ export function buildGeminiEnv(baseEnv, apiKey) {
   };
 }
 
+// フォールバックの1バックエンドに掛けていい上限秒数。
+// 全体 --timeout より長くはできない。既定600秒、環境変数で上書き可。
+export function fallbackBackendTimeoutSecs(timeoutSeconds, env = process.env) {
+  const raw = Number(env.CODEX_DO_FALLBACK_BACKEND_TIMEOUT_SECS);
+  const wanted = Number.isFinite(raw) && raw > 0 ? raw : 600;
+  return Math.max(60, Math.min(timeoutSeconds, wanted));
+}
+
 export function buildQwenEnv(baseEnv, apiKey, { model = 'deepseek-chat', baseUrl = 'https://api.deepseek.com/v1' } = {}) {
   const env = { ...baseEnv };
   env.OPENAI_API_KEY = apiKey;
@@ -365,14 +373,19 @@ function execute(command, commandArgs, options = {}) {
   }
   return new Promise((resolve) => {
     let outputChars = 0, output = '', stderr = '', timedOut = false;
+    const callTimeoutSeconds = Number.isFinite(options.timeoutSecs) && options.timeoutSecs > 0
+      ? options.timeoutSecs
+      : timeoutSeconds;
+    const spawnOptions = { ...options };
+    delete spawnOptions.timeoutSecs;
     // stdio を全て pipe にして TTY を渡さない。TTY 付きで起動すると codex が端末入力を
     // 待ったまま眠り続ける(2026-08-26 に 1日00:57 hang した実害)。
-    const child = spawn(command, commandArgs, { ...options, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(command, commandArgs, { ...spawnOptions, stdio: ['pipe', 'pipe', 'pipe'] });
     const timer = setTimeout(() => {
       timedOut = true;
-      console.error(`\n⏱ ${command} が ${timeoutSeconds} 秒で応答を終えなかったので停止しました。--timeout で延長できます`);
+      console.error(`\n⏱ ${command} が ${callTimeoutSeconds} 秒で応答を終えなかったので停止しました。--timeout で延長できます`);
       child.kill('SIGKILL');
-    }, timeoutSeconds * 1000);
+    }, callTimeoutSeconds * 1000);
     timer.unref?.();
     child.stdout.on('data', (chunk) => { outputChars += chunk.length; output += chunk.toString(); process.stdout.write(chunk); });
     child.stderr.on('data', (chunk) => { stderr += chunk.toString(); process.stderr.write(chunk); });
@@ -385,12 +398,12 @@ function execute(command, commandArgs, options = {}) {
 }
 // cheap-code バックエンド: 指示は argv で渡さず一時ファイル経由(§1.17 argv経由の指示破壊防止)。
 // shell も通さない(node の引数配列をそのまま渡す)。
-async function executeCheapCode(backend) {
+async function executeCheapCode(backend, backendTimeout) {
   const promptFile = path.join(os.tmpdir(), `orgiast-codex-fallback-${process.pid}-${Date.now()}.md`);
   fs.writeFileSync(promptFile, prompt, 'utf8');
   try {
     const cheapCode = path.join(path.dirname(fileURLToPath(import.meta.url)), 'cheap-code.mjs');
-    return await execute(process.execPath, [cheapCode, '--provider', backend.provider, '--prompt-file', promptFile, '--cwd', cwd], { cwd });
+    return await execute(process.execPath, [cheapCode, '--provider', backend.provider, '--prompt-file', promptFile, '--cwd', cwd], { cwd, timeoutSecs: backendTimeout });
   } finally {
     try { fs.rmSync(promptFile, { force: true }); } catch {}
   }
@@ -463,6 +476,7 @@ if (quotaCheck.matched) {
       console.error('GEMINI_API_KEY、DEEPSEEK_API_KEY、OPENROUTER_API_KEY が無いためフォールバックを実行できません');
       result.status = 1;
     } else {
+      const backendTimeout = fallbackBackendTimeoutSecs(timeoutSeconds);
       for (const backend of backends) {
         lastBackend = backend;
         console.log(`[codex-do] fallback backend=${backend.name} model=${backend.model}`);
@@ -470,18 +484,24 @@ if (quotaCheck.matched) {
           ? await execute('gemini', buildGeminiArgs({ model: backend.model }), {
               cwd,
               env: buildGeminiEnv(process.env, backend.apiKey),
-              shell: process.platform === 'win32'
+              shell: process.platform === 'win32',
+              timeoutSecs: backendTimeout
             })
           : backend.kind === 'cheap-code'
-            ? await executeCheapCode(backend)
-            : await execute('qwen', buildQwenArgs({ timeoutSecs: timeoutSeconds, model: backend.model }), {
+            ? await executeCheapCode(backend, backendTimeout)
+            : await execute('qwen', buildQwenArgs({ timeoutSecs: backendTimeout, model: backend.model }), {
                 cwd,
                 env: buildQwenEnv(process.env, backend.apiKey, { model: backend.model, baseUrl: backend.baseUrl }),
-                shell: process.platform === 'win32'
+                shell: process.platform === 'win32',
+                timeoutSecs: backendTimeout
               });
         if (result.status === null) {
           console.error(`[codex-do] Failed to spawn ${backend.name} fallback:`, result.error);
           result.status = 1;
+        }
+        if (result.timedOut) {
+          console.error(`[codex-do] backend=${backend.name} が ${backendTimeout} 秒でタイムアウトしたため次のバックエンドへ移ります`);
+          continue;
         }
         if (result.status === 0) {
           fallbackBackend = backend;

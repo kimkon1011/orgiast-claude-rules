@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { needsWorktreeRepair, detectQuotaLimit, shouldFlagEmptyFallbackDiff, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, isBackendExhausted } = await import('./codex-do.mjs');
+const { needsWorktreeRepair, detectQuotaLimit, shouldFlagEmptyFallbackDiff, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, isBackendExhausted } = await import('./codex-do.mjs');
 
 function run(args, options = {}) {
   return spawnSync(process.execPath, [tool, ...args], {
@@ -68,6 +68,14 @@ test('--timeout と --cwd を付けても指示文が引数として食われな
   assert.equal(result.status, 0);
   assert.match(result.stdout, /これは指示文です/);
   assert.doesNotMatch(result.stdout, /--timeout|--cwd|60/);
+});
+
+test('fallbackBackendTimeoutSecs は全体枠・既定値・環境変数・下限を反映する', () => {
+  assert.equal(fallbackBackendTimeoutSecs(1800, {}), 600);
+  assert.equal(fallbackBackendTimeoutSecs(300, {}), 300);
+  assert.equal(fallbackBackendTimeoutSecs(1800, { CODEX_DO_FALLBACK_BACKEND_TIMEOUT_SECS: '900' }), 900);
+  assert.equal(fallbackBackendTimeoutSecs(1800, { CODEX_DO_FALLBACK_BACKEND_TIMEOUT_SECS: 'garbage' }), 600);
+  assert.equal(fallbackBackendTimeoutSecs(10, {}), 60);
 });
 
 test('指示が空なら使い方を出して終了する', () => {
@@ -224,6 +232,24 @@ test('枠切れ発生時にフォールバックが成功した場合は 0 で�
   assert.equal(result.status, 0);
   assert.match(result.stdout, /executor=fallback:deepseek/);
   assert.match(result.stderr, /Falling back to an agentic CLI/);
+});
+
+test('第1フォールバックがタイムアウトしたら第2バックエンドへ進み成功する', () => {
+  const mockResults = [
+    { status: 1, output: "You've hit your usage limit. Please try again later.", stderr: '' },
+    { status: 124, output: '', stderr: '', timedOut: true },
+    { status: 0, output: 'Qwen Code CLI has successfully completed.', stderr: '' }
+  ];
+  const result = run(['指示内容'], {
+    env: {
+      CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults),
+      GEMINI_API_KEY: 'gemini-test',
+      DEEPSEEK_API_KEY: 'deepseek-test'
+    }
+  });
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /executor=fallback:deepseek/);
+  assert.match(result.stderr, /タイムアウトしたため次のバックエンドへ/);
 });
 
 test('Codex もフォールバック(Qwen Code) も失敗した場合は非ゼロで終了する', () => {

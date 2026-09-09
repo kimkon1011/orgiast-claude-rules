@@ -1,4 +1,6 @@
 ﻿# Orgiast fleet agent を15分ごとに起動する。Windows PowerShell 5.1向けUTF-8 BOM。
+# 実行対象(fleet-agent.mjs)は作業ツリーではなく nightly-bootstrap が origin/main へ同期した
+# チェックアウト(~/.claude/nightly-repo)から実行する(2026-09-10・nightly-batch と同様の分離)。
 param([switch]$Unregister)
 $ErrorActionPreference = 'Stop'
 $taskName = 'OrgiastFleetAgent'
@@ -11,12 +13,18 @@ if ($Unregister) {
 }
 
 $repo = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
-$script = Join-Path $repo 'tools\fleet-agent.mjs'
+$target = 'tools\fleet-agent.mjs'
+$script = Join-Path $repo $target
 if (-not (Test-Path -LiteralPath $script -PathType Leaf)) { throw "fleet-agent.mjs not found: $script" }
-$node = (Get-Command node -ErrorAction SilentlyContinue).Source
-if (-not $node) { throw 'node not found. Install Node.js first.' }
+$bootstrapSource = Join-Path $repo 'tools\nightly-bootstrap.ps1'
+if (-not (Test-Path -LiteralPath $bootstrapSource -PathType Leaf)) { throw "nightly-bootstrap.ps1 not found: $bootstrapSource" }
+$bootstrapDir = Join-Path $env:USERPROFILE '.claude\tools'
+$bootstrap = Join-Path $bootstrapDir 'nightly-bootstrap.ps1'
+New-Item -ItemType Directory -Force -Path $bootstrapDir | Out-Null
+Copy-Item -LiteralPath $bootstrapSource -Destination $bootstrap -Force
+
 . (Join-Path $PSScriptRoot 'ensure-run-hidden.ps1')
-$action = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($script, '--once') -WorkingDirectory $repo
+$action = New-HiddenScheduledTaskAction -Execute 'powershell.exe' -ChildArgument @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $bootstrap, '-Target', $target, '--once') -WorkingDirectory $repo
 $trigger = New-ScheduledTaskTrigger -Daily -At '00:00'
 $repetition = New-ScheduledTaskTrigger -Once -At '00:00' -RepetitionInterval (New-TimeSpan -Minutes 15) -RepetitionDuration (New-TimeSpan -Hours 24)
 $trigger.Repetition = $repetition.Repetition

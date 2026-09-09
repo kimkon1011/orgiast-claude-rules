@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { providerCooldownEnabled, readProviderCooldowns, writeProviderCooldowns } from './provider-cooldown.mjs';
 
 export const FALLBACK_CHAIN = Object.freeze([
   { provider: 'groq', model: 'openai/gpt-oss-120b' },
@@ -141,9 +142,8 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, payloadF
 
   // node --test 配下では、呼び出し側が隔離先を明示した場合だけ永続化する。
   // 将来テストが cooldownFile を渡し忘れても実環境の受け皿を止めないための多重防御。
-  const useCooldown = chain.length > 0 && (cooldownFile != null || !process.env.NODE_TEST_CONTEXT);
-  const cooldownPath = cooldownFile || path.join(home, '.claude', 'provider-cooldown.json');
-  const cooldowns = useCooldown ? readJson(cooldownPath, {}) : {};
+  const useCooldown = chain.length > 0 && providerCooldownEnabled(cooldownFile);
+  const cooldowns = useCooldown ? readProviderCooldowns(cooldownFile) : {};
   const available = useCooldown ? candidates.filter(({ provider }) => !(Number(cooldowns?.[provider]?.until) > timestamp)) : candidates;
   const selectedCandidates = available.length ? available : candidates;
   if (useCooldown && available.length) {
@@ -171,7 +171,7 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, payloadF
   }
   function saveCooldowns() {
     if (!cooldownDirty) return;
-    try { fs.mkdirSync(path.dirname(cooldownPath), { recursive: true }); fs.writeFileSync(cooldownPath, `${JSON.stringify(cooldowns, null, 2)}\n`); } catch {}
+    try { writeProviderCooldowns(cooldowns, cooldownFile); } catch {}
   }
 
   const failures = [];

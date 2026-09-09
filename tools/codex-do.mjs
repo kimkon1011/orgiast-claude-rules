@@ -255,6 +255,20 @@ export function isBackendExhausted(output, stderr) {
   return merged.split(/\r?\n/).some((line) => isHttpStatusCodeLine(line, '429') || isHttpStatusCodeLine(line, '413'));
 }
 
+// WSL codex の起動確認は「codex が無い」と「一過性で起動できない」を分けて扱う。
+// codex --version の失敗だけで「無い」と断定して npm i -g を走らせると、非root の
+// WSL では EACCES で必ず失敗し、時間を消費した末にネイティブ(信頼できないディレクトリ
+// では空出力で即終了)へ落ちる。codex-do の out=0 空出力行の根本原因(2026-09-08 実測)。
+// 戻り値: 'wsl'=そのまま WSL codex で実行 / 'retry'=在るのに起動確認失敗→再試行(再インストールしない)
+//         'install'=本当に無いときだけ1回インストール / 'native'=ネイティブへ(警告付き・trust チェック回避)。
+export function wslCodexLaunchPlan({ distroFound, codexPresent, versionOk, installAttempted, retried }) {
+  if (!distroFound) return 'native';
+  if (versionOk) return 'wsl';
+  if (codexPresent && !retried) return 'retry';
+  if (!codexPresent && !installAttempted) return 'install';
+  return 'native';
+}
+
 if (isEntry(import.meta.url)) {
 
 const args = process.argv.slice(2);
@@ -423,13 +437,31 @@ if (process.platform === 'win32' && !forceNative) {
   const distro = distros.find((x) => x.toLowerCase() === 'ubuntu') || distros[0];
   let usable = false;
   if (distro) {
-    usable = spawnSync('wsl', ['-d', distro, '--', 'codex', '--version'], { stdio: 'ignore', timeout: 15000 }).status === 0;
-    if (!usable) {
-      console.error(`WSL ${distro} に Codex がないため自動インストールを試します`);
-      spawnSync('wsl', ['-d', distro, '--', 'npm', 'i', '-g', '@openai/codex'], { stdio: 'inherit', timeout: 120000 });
-      usable = spawnSync('wsl', ['-d', distro, '--', 'codex', '--version'], { stdio: 'ignore', timeout: 15000 }).status === 0;
+    // 起動確認の失敗は stderr ごと拾い、「codex が無い」と「一過性で失敗」を区別する。
+    const versionProbe = () => {
+      const probe = spawnSync('wsl', ['-d', distro, '--', 'codex', '--version'], { encoding: 'utf8', timeout: 15000 });
+      return { ok: probe.status === 0, stderr: (probe.stderr || '').toString().trim().slice(0, 300) };
+    };
+    const present = spawnSync('wsl', ['-d', distro, '--', 'sh', '-lc', 'command -v codex >/dev/null 2>&1'], { timeout: 15000 }).status === 0;
+    const first = versionProbe();
+    usable = first.ok;
+    const step = wslCodexLaunchPlan({ distroFound: true, codexPresent: present, versionOk: first.ok, installAttempted: false, retried: false });
+    if (step === 'retry') {
+      console.error(`WSL ${distro} には codex が在りますが起動確認が失敗しました。一過性の可能性があるため再試行します${first.stderr ? ` (${first.stderr})` : ''}`);
+      usable = versionProbe().ok;
+      if (!usable) console.error(`WSL ${distro} の codex は再試行でも起動確認できませんでした。在るのに失敗しているため npm 再インストールはしません`);
+    } else if (step === 'install') {
+      console.error(`WSL ${distro} に codex が見つからないため自動インストールを試します`);
+      const installed = spawnSync('wsl', ['-d', distro, '--', 'npm', 'i', '-g', '@openai/codex'], { stdio: 'inherit', timeout: 120000 });
+      if (installed.status === 0) usable = versionProbe().ok;
+      else console.error(`WSL ${distro} への codex 自動インストールが失敗しました(exit ${installed.status})。WSL 内に手動で導入してください`);
     }
   }
+  // 非git ディレクトリ(scratchpad 等)では trust チェックに失敗して空出力・即終了するため
+  // 回避する(2026-09-08 実測: "Not inside a trusted directory and --skip-git-repo-check was not specified")。
+  const nativeArgs = ['exec', '-s', review ? 'read-only' : 'workspace-write'];
+  if (!fs.existsSync(path.join(cwd, '.git'))) nativeArgs.push('--skip-git-repo-check');
+  nativeArgs.push('-');
   if (usable) {
     const gitFile = path.join(cwd, '.git');
     try {
@@ -445,11 +477,14 @@ if (process.platform === 'win32' && !forceNative) {
   }
   else {
     console.error('⚠️ WSL 経路が使えないためネイティブ Windows codex で実行します。\nWindows 版は read-only サンドボックス固定でファイルを書けない既知の不具合(openai/codex#35428)があり、編集が保存されない可能性が高い。WSL の導入を推奨');
-    result = await execute('codex', ['exec', '-s', review ? 'read-only' : 'workspace-write', '-'], { cwd });
+    result = await execute('codex', nativeArgs, { cwd });
   }
 } else {
   if (process.platform === 'win32') console.error('⚠️ --force-native によりネイティブ Windows codex で実行します。編集が保存されない可能性があります');
-  result = await execute('codex', ['exec', '-s', review ? 'read-only' : 'workspace-write', '-'], { cwd });
+  const nativeArgs = ['exec', '-s', review ? 'read-only' : 'workspace-write'];
+  if (!fs.existsSync(path.join(cwd, '.git'))) nativeArgs.push('--skip-git-repo-check');
+  nativeArgs.push('-');
+  result = await execute('codex', nativeArgs, { cwd });
 }
 
 const quotaCheck = detectQuotaLimit(result?.output, result?.stderr, result?.status, prompt);

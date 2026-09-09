@@ -2,12 +2,17 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
 import { execute as executeGtasks, flattenCache } from './gtasks.mjs';
 
 export const MARKER = '<!-- NEXT-SESSION v1 -->';
 export const defaultStateFile = () => path.join(os.homedir(), '.claude', 'gtasks-state.json');
 export const defaultNextSessionFile = () => path.join(os.homedir(), '.claude', 'next-session.md');
+export const defaultClassifyCacheFile = () => path.join(os.homedir(), '.claude', 'gtasks-classify-cache.json');
+export const TITLE_KEY_LENGTH = 24;
+export const CLASSIFY_LIMIT = 12;
+export const CLASSIFY_SYSTEM = '各行が「実行可能なタスク」か「心構え・格言・引用・内省メモ（実行対象が無い文章）」かを判定し、{"n":<番号>,"c":"task"|"memo"} のJSONL 1行で出力する';
 
 export function readState(text) {
   try { const value = JSON.parse(text); return value?.picked && typeof value.picked === 'object' ? value : { picked: {} }; } catch { return { picked: {} }; }
@@ -43,6 +48,36 @@ export function isSkipped(row, skip = BUILTIN_SKIP) {
 
 export function selectTasks(rows, state, count = 3, skip = BUILTIN_SKIP) {
   return rows.filter((row) => !state.picked[row.taskId] && !isSkipped(row, skip)).slice(0, count);
+}
+
+export function titleKey(title) { return String(title ?? '').slice(0, TITLE_KEY_LENGTH); }
+
+export function parseClassifications(text, size) {
+  const result = new Map();
+  for (const line of String(text ?? '').split(/\r?\n/)) {
+    try {
+      const value = JSON.parse(line);
+      if (Number.isInteger(value?.n) && value.n >= 1 && value.n <= size && (value.c === 'task' || value.c === 'memo')) result.set(value.n, value.c);
+    } catch {}
+  }
+  return result;
+}
+
+export function askClassifier(rows) {
+  const prompt = rows.map((row, index) => `${index + 1}. ${String(row.title ?? '').replace(/[\r\n]+/g, ' ')}`).join('\n');
+  return new Promise((resolve, reject) => {
+    execFile(process.execPath, [path.join(import.meta.dirname, 'llm-ask.mjs'), '--provider', 'groq', '--system', CLASSIFY_SYSTEM, '--max', '1000', prompt],
+      { timeout: 20_000, maxBuffer: 1024 * 1024 }, (error, stdout) => error ? reject(error) : resolve(stdout));
+  });
+}
+
+function readObject(text) {
+  try { const value = JSON.parse(text); return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; } catch { return {}; }
+}
+
+function writeJson(file, value) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
 }
 
 export function appendTodoBlock(original, rows) {
@@ -86,24 +121,51 @@ export function insertTodosAtTop(original, rows) {
 
 function readOptional(file) { try { return fs.readFileSync(file, 'utf8'); } catch (error) { if (error.code === 'ENOENT') return ''; throw error; } }
 
-export async function plan({ count = 3, dryRun = false, stateFile = defaultStateFile(), nextFile = defaultNextSessionFile(), skipFile = defaultSkipFile(), fetchCache, now = () => new Date() } = {}) {
+export async function plan({ count = 3, dryRun = false, classify = true, stateFile = defaultStateFile(), nextFile = defaultNextSessionFile(), skipFile = defaultSkipFile(), classifyCacheFile = defaultClassifyCacheFile(), fetchCache, classifyRows = askClassifier, now = () => new Date() } = {}) {
   let cache;
   if (fetchCache) cache = await fetchCache();
   else { const result = await executeGtasks(['list', '--refresh', '--json'], { stdout: () => {} }); cache = result.cache; }
   const rows = flattenCache(cache).rows;
   const state = readState(readOptional(stateFile));
-  const picked = selectTasks(rows, state, count, readSkip(readOptional(skipFile)));
+  const skipText = readOptional(skipFile);
+  const eligible = selectTasks(rows, state, CLASSIFY_LIMIT, readSkip(skipText));
+  const classifyCache = readObject(readOptional(classifyCacheFile));
+  let classifications = new Map();
+  let classificationSucceeded = false;
+  if (classify && eligible.length) {
+    const uncached = eligible.filter((row) => !['task', 'memo'].includes(classifyCache[titleKey(row.title)]));
+    try {
+      const parsed = uncached.length ? parseClassifications(await classifyRows(uncached), uncached.length) : new Map();
+      classifications = new Map(eligible.map((row) => [row.taskId, classifyCache[titleKey(row.title)] ?? 'task']));
+      uncached.forEach((row, index) => classifications.set(row.taskId, parsed.get(index + 1) === 'memo' ? 'memo' : 'task'));
+      classificationSucceeded = true;
+    } catch {}
+  }
+  const memos = classificationSucceeded ? eligible.filter((row) => classifications.get(row.taskId) === 'memo') : [];
+  const picked = eligible.filter((row) => !memos.includes(row)).slice(0, count);
   const originalNext = readOptional(nextFile);
   const nextText = insertTodosAtTop(originalNext, picked);
-  if (!dryRun && picked.length) {
+  if (!dryRun && (picked.length || memos.length || classificationSucceeded)) {
     const stamp = now().toISOString();
     for (const row of picked) state.picked[row.taskId] = { title: row.title, pickedAt: stamp, status: 'picked' };
-    fs.mkdirSync(path.dirname(stateFile), { recursive: true });
-    fs.writeFileSync(stateFile, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
-    fs.mkdirSync(path.dirname(nextFile), { recursive: true });
-    fs.writeFileSync(nextFile, nextText, 'utf8');
+    for (const row of memos) state.picked[row.taskId] = { title: row.title, pickedAt: stamp, status: 'skipped-memo' };
+    writeJson(stateFile, state);
+    if (classificationSucceeded) {
+      for (const row of eligible) classifyCache[titleKey(row.title)] = classifications.get(row.taskId) ?? 'task';
+      writeJson(classifyCacheFile, classifyCache);
+    }
+    if (memos.length) {
+      const skipConfig = readObject(skipText);
+      if (!Array.isArray(skipConfig.titles)) skipConfig.titles = [];
+      for (const row of memos) if (!skipConfig.titles.includes(titleKey(row.title))) skipConfig.titles.push(titleKey(row.title));
+      writeJson(skipFile, skipConfig);
+    }
+    if (picked.length) {
+      fs.mkdirSync(path.dirname(nextFile), { recursive: true });
+      fs.writeFileSync(nextFile, nextText, 'utf8');
+    }
   }
-  return { picked, text: nextText };
+  return { picked, memos, text: nextText };
 }
 
 export async function execute(argv, io = {}) {
@@ -118,12 +180,16 @@ export async function execute(argv, io = {}) {
     console.log(`reset: ${taskId}`);
     return;
   }
-  if (!argv.includes('--plan')) throw new Error('使い方: gtasks-loop.mjs --plan [--count 3] [--dry-run] | --reset <taskId>');
+  if (!argv.includes('--plan')) throw new Error('使い方: gtasks-loop.mjs --plan [--count 3] [--dry-run] [--no-classify] | --reset <taskId>');
   const countIndex = argv.indexOf('--count');
   const count = countIndex < 0 ? 3 : Number(argv[countIndex + 1]);
   if (!Number.isInteger(count) || count < 1) throw new Error('--count は正の整数で指定してください');
-  const result = await plan({ count, dryRun: argv.includes('--dry-run'), ...io });
-  console.log(result.picked.length ? result.picked.map((row, index) => `${index + 1}. Googleタスク消化: ${row.title}（${row.listId}/${row.taskId}）`).join('\n') : '対象タスクはありません');
+  const result = await plan({ count, dryRun: argv.includes('--dry-run'), classify: !argv.includes('--no-classify'), ...io });
+  const output = [
+    ...result.memos.map((row) => `[memo] ${row.title}（${row.listId}/${row.taskId}）`),
+    ...result.picked.map((row, index) => `${index + 1}. Googleタスク消化: ${row.title}（${row.listId}/${row.taskId}）`),
+  ];
+  console.log(output.length ? output.join('\n') : '対象タスクはありません');
 }
 
 if (isEntry(import.meta.url)) {

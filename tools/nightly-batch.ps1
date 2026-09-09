@@ -422,7 +422,7 @@ try {
             if ($triageExitCode -ne 0) {
                 $triageResult = "error:終了コード$triageExitCode"
             } else {
-                $triageResult = @($triageOutput | Where-Object { $_ -match '^(ok:検証\d+件 done\d+ rejected\d+ pending\d+|skip:対象なし|error:.+)$' } | Select-Object -Last 1)
+                $triageResult = @($triageOutput | Where-Object { $_ -match '^(ok:検証\d+件 done\d+ rejected\d+ pending\d+(?: 判定失敗\d+件)?|skip:対象なし|error:.+)$' } | Select-Object -Last 1)
                 if ($triageResult.Count -eq 0) { $triageResult = 'error:状態不明' } else { $triageResult = [string]$triageResult[0] }
             }
             $summary['ai-news-triage'] = $triageResult

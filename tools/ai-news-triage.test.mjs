@@ -29,6 +29,17 @@ test('判定JSONを復旧し文字数を制限する', () => {
   assert.equal(result.verdict, 'confirmed'); assert.equal(result.finding.length, 120); assert.equal(result.reason.length, 80);
 });
 
+test('判定の表記ゆれと文字列adoptを正規化する', () => {
+  assert.deepEqual(parseVerdict('{"verdict":" Confirmed ","adopt":"true"}'), { verdict: 'confirmed', finding: '', adopt: true, reason: '' });
+  assert.equal(parseVerdict('{"verdict":"yes","adopt":"1"}').verdict, 'confirmed');
+  assert.deepEqual(parseVerdict('{"verdict":"不明","adopt":"no"}'), { verdict: 'unclear', finding: '', adopt: false, reason: '' });
+  assert.equal(parseVerdict('{"verdict":"反証","adopt":"false"}').verdict, 'refuted');
+});
+
+test('未知のverdictは拒否する', () => {
+  assert.throws(() => parseVerdict('{"verdict":"maybe","adopt":true}'), /verdict が不正です/);
+});
+
 test('status規則とunclear 3回上限を適用する', () => {
   assert.equal(applyTriageResult(proposal, { verdict: 'confirmed', finding: '', adopt: true }, { now: new Date(0), provider: 'groq' }).status, 'done');
   assert.equal(applyTriageResult(proposal, { verdict: 'confirmed', finding: '', adopt: false }, { now: new Date(0), provider: 'groq' }).status, 'rejected');
@@ -80,3 +91,39 @@ test('--idはconfidenceを無視して1件だけ検証する', async (t) => {
   const result = await runTriage({ home, args: ['--id', 'P-0001', '--dry-run'], search: async () => { searches += 1; return { answer: 'なし', urls: [] }; }, llm: async () => ({ text: '{"verdict":"refuted","finding":"否定","adopt":false,"reason":"根拠なし"}', provider: 'groq' }), log() {} });
   assert.equal(searches, 1); assert.equal(result.processed, 1);
 });
+
+test('1件の判定失敗を分離し、成功した1件だけ永続化する', async (t) => {
+  const second = { ...proposal, id: 'P-0002', title: '正常な提案' };
+  const { home, base } = fixture(t, [proposal, second]);
+  const logs = [];
+  let calls = 0;
+  const result = await runTriage({
+    home,
+    args: ['--limit', '2'],
+    search: async () => ({ answer: '結果', urls: [] }),
+    llm: async () => ({ text: ++calls === 1 ? '不正JSON' : '{"verdict":"confirmed","finding":"確認済み","adopt":true,"reason":"有用"}', provider: 'groq' }),
+    now: () => new Date('2026-09-10T00:00:00.000Z'),
+    log: (line) => logs.push(line),
+  });
+  assert.equal(result.status, 'ok:検証1件 done1 rejected0 pending0 判定失敗1件');
+  assert.match(logs[0], /^warn:P-0001 判定失敗:/);
+  const saved = readSaved(base);
+  assert.equal(saved[0].status, 'pending'); assert.equal(saved[0].triagedAt, undefined); assert.equal(saved[0].triageAttempts, undefined);
+  assert.equal(saved[1].status, 'done'); assert.equal(saved[1].triagedAt, '2026-09-10T00:00:00.000Z');
+});
+
+test('全件の判定失敗時はerrorを返し、レコードを変更しない', async (t) => {
+  const second = { ...proposal, id: 'P-0002' };
+  const { home, base } = fixture(t, [proposal, second]);
+  const before = fs.readFileSync(path.join(base, 'ai-news-proposals.jsonl'));
+  const result = await runTriage({ home, args: ['--limit', '2'], search: async () => ({ answer: '', urls: [] }), llm: async () => ({ text: '不正応答' }), log() {} });
+  assert.match(result.status, /^error:判定失敗 2件/);
+  assert.deepEqual(fs.readFileSync(path.join(base, 'ai-news-proposals.jsonl')), before);
+  for (const record of readSaved(base)) {
+    assert.equal(record.status, 'pending'); assert.equal(record.triagedAt, undefined); assert.equal(record.triageAttempts, undefined);
+  }
+});
+
+function readSaved(base) {
+  return fs.readFileSync(path.join(base, 'ai-news-proposals.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+}

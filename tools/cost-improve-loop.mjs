@@ -1130,10 +1130,13 @@ export function writeGatewayOverride({ claudeDir, provider, writeImpl = null }) 
 }
 
 // codex_saturated 対処: ~/.claude/codex-fallback-order.json に fallback 順を書く。
-// zai.env(GLM定額)が無い機体は glm を諦めて deepseek 先頭にする(キーが無いものを先頭にすると即死する)。
+// 2026-09-08 実測で cheap-code:glm 1544s/277tok・gemini-cli 2234s/0tok と低成果
+// (delegation-health fallback_low_yield)。救済レーンは速度と成功率を最優先し、
+// fail 4.2% / 平均36秒と最良の qwen(deepseek-chat) を先頭、glm(定額)を2番目、
+// 平均509秒かつハング実績のある gemini-cli を最後にする。
 export function writeCodexFallbackOrder({ claudeDir, zaiAvailable, writeImpl = null }) {
   const file = path.join(claudeDir, 'codex-fallback-order.json');
-  const order = zaiAvailable ? ['cheap-code:glm', 'qwen', 'gemini-cli'] : ['cheap-code:deepseek', 'qwen', 'gemini-cli'];
+  const order = zaiAvailable ? ['qwen', 'cheap-code:glm', 'gemini-cli'] : ['qwen', 'cheap-code:deepseek', 'gemini-cli'];
   const content = `${JSON.stringify(order, null, 2)}\n`;
   let previous = null;
   try { previous = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}

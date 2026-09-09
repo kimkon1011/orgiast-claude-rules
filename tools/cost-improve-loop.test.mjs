@@ -648,11 +648,11 @@ test('31. B4 effect は既存ファイル内容を保持して書き込む', () 
     assert.deepEqual(Object.keys(overrides.demote).sort(), ['gemini', 'groq']);
     assert.equal(writeRoutingOverride({ claudeDir, provider: 'groq', now: NOW }).changed, false, '同値なら no_change');
 
-    // codex-fallback-order: zai 有無で先頭が glm / deepseek に変わる
+    // codex-fallback-order: qwen が先頭で、zai 有無により第2候補が glm / deepseek に変わる
     assert.equal(writeCodexFallbackOrder({ claudeDir, zaiAvailable: true }).changed, true);
-    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(claudeDir, 'codex-fallback-order.json'), 'utf8')), ['cheap-code:glm', 'qwen', 'gemini-cli']);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(claudeDir, 'codex-fallback-order.json'), 'utf8')), ['qwen', 'cheap-code:glm', 'gemini-cli']);
     assert.equal(writeCodexFallbackOrder({ claudeDir, zaiAvailable: false }).changed, true);
-    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(claudeDir, 'codex-fallback-order.json'), 'utf8')), ['cheap-code:deepseek', 'qwen', 'gemini-cli']);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(claudeDir, 'codex-fallback-order.json'), 'utf8')), ['qwen', 'cheap-code:deepseek', 'gemini-cli']);
 
     // auto-session.env: 既存行を保持して executor を上書きし、同値は no_change
     fs.writeFileSync(path.join(claudeDir, 'auto-session.env'), 'KEEP=1\nORGIAST_AUTO_SESSION_EXECUTOR=claude\n', 'utf8');

@@ -2,7 +2,7 @@
   "name": "next-session",
   "displayName": "Orgiast Next Session",
   "description": "Starts the next Claude session and prepares mobile Remote Control tabs from a URI.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "publisher": "orgiast",
   "license": "MIT",
   "repository": {

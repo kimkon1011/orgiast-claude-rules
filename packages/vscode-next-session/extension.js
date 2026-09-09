@@ -1,6 +1,6 @@
 const vscode = require('vscode');
 const { resolveClaudeShellPath } = require('./shell-path');
-const { decideAction } = require('./route');
+const { decideAction, shouldRetryMobileTab } = require('./route');
 
 const PROBE_TEXT = 'ORGIAST_NEXT_SESSION_PROBE_OK';
 
@@ -52,7 +52,20 @@ function waitForNewClaudeTab(previousCount, timeoutMs = 5000) {
   });
 }
 
-async function ensureMobileTabs({ count, name }) {
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForCommand(command, timeoutMs = 60000, intervalMs = 1000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() <= deadline) {
+    if ((await vscode.commands.getCommands(true)).includes(command)) return true;
+    await delay(intervalMs);
+  }
+  return false;
+}
+
+async function ensureMobileTabs({ count, name, attempts = 1, retryDelayMs = 5000 }) {
   const channel = getOutputChannel();
   const targetCount = Math.min(10, Math.max(1, Number.parseInt(count, 10) || 3));
   const prefix = String(name || 'スマホ用セッション');
@@ -64,9 +77,20 @@ async function ensureMobileTabs({ count, name }) {
   while (missing > 0) {
     let index = 1;
     while (usedLabels.has(`${prefix}${index}`)) index += 1;
-    const before = claudeTabs().length;
-    await vscode.commands.executeCommand('claude-vscode.newConversation');
-    if (!await waitForNewClaudeTab(before)) {
+    let created = false;
+    let failedAttempts = 0;
+    while (!created && shouldRetryMobileTab(failedAttempts, attempts)) {
+      const before = claudeTabs().length;
+      await vscode.commands.executeCommand('claude-vscode.newConversation');
+      created = await waitForNewClaudeTab(before);
+      if (created) break;
+      failedAttempts += 1;
+      if (shouldRetryMobileTab(failedAttempts, attempts)) {
+        channel.appendLine(`${new Date().toISOString()} mobile tabs: newConversation を再試行します (${failedAttempts + 1}/${attempts})`);
+        await delay(retryDelayMs);
+      }
+    }
+    if (!created) {
       channel.appendLine(`${new Date().toISOString()} mobile tabs: newConversation 後 5 秒以内にタブが増えなかったため、残り ${missing} 件を打ち切りました`);
       return;
     }
@@ -130,7 +154,13 @@ function activate(context) {
       getOutputChannel().appendLine(`${new Date().toISOString()} mobile tabs: Anthropic.claude-code が未導入のため補充しません`);
     } else {
       claudeExtension.activate()
-        .then(() => ensureMobileTabs({ count: mobileTabs, name }))
+        .then(async () => {
+          if (!await waitForCommand('claude-vscode.newConversation')) {
+            getOutputChannel().appendLine(`${new Date().toISOString()} mobile tabs: claude-vscode.newConversation が 60 秒以内に登録されなかったため補充しません`);
+            return;
+          }
+          await ensureMobileTabs({ count: mobileTabs, name, attempts: 12 });
+        })
         .catch((error) => getOutputChannel().appendLine(`${new Date().toISOString()} mobile tabs activation failed: ${error instanceof Error ? error.message : String(error)}`));
     }
   }

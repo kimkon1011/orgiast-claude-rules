@@ -119,10 +119,10 @@ test('同梱 VSIX は数値バージョンが最新のものを選ぶ', () => {
 });
 
 test('同梱 VSIX は未導入または旧版のときだけインストールする', () => {
-  const vsixName = 'orgiast-next-session-0.3.0.vsix';
+  const vsixName = 'orgiast-next-session-0.3.1.vsix';
   assert.equal(shouldInstallBundledVsix({ listedExtensions: 'other.extension@1.0.0', vsixName }), true);
   assert.equal(shouldInstallBundledVsix({ listedExtensions: 'orgiast.next-session@0.2.0', vsixName }), true);
-  assert.equal(shouldInstallBundledVsix({ listedExtensions: 'orgiast.next-session@0.3.0', vsixName }), false);
+  assert.equal(shouldInstallBundledVsix({ listedExtensions: 'orgiast.next-session@0.3.1', vsixName }), false);
   assert.equal(shouldInstallBundledVsix({ listedExtensions: 'orgiast.next-session@0.4.0', vsixName }), false);
 });
 
@@ -507,7 +507,7 @@ test('VSCode dry-run は route と手順だけを出して spawn しない', asy
   assert.equal(output.steps[0].label, 'open-session');
 });
 
-function vscodeExtIo({ installedVersion = '', bundledVersion = '0.3.0', codeCli = 'C:\\Code\\bin\\code.cmd' } = {}) {
+function vscodeExtIo({ installedVersion = '', bundledVersion = '0.3.1', codeCli = 'C:\\Code\\bin\\code.cmd' } = {}) {
   const commands = [];
   const spawnCalls = [];
   let exitListenerAttached = false;
@@ -546,7 +546,7 @@ test('vscode-ext は未導入時だけ VSIX を先に入れ、正しい URI を�
   assert.equal(await launchNextSession(['--target', 'vscode-ext', '--prompt', '/session-start 日本語'], io), 0);
   assert.equal(commands[0][0], '--list-extensions');
   assert.equal(commands[1][0], '--install-extension');
-  assert.match(commands[1][1], /orgiast-next-session-0\.3\.0\.vsix$/);
+  assert.match(commands[1][1], /orgiast-next-session-0\.3\.1\.vsix$/);
   assert.equal(commands[1][2], '--force');
   assert.equal(calls.spawn.length, 1);
   const args = calls.spawn[0][1];
@@ -568,7 +568,7 @@ test('vscode-ext は未導入時だけ VSIX を先に入れ、正しい URI を�
 });
 
 test('vscode-ext は同版が導入済みなら再インストールしない', async () => {
-  const { io, calls, commands } = vscodeExtIo({ installedVersion: '0.3.0' });
+  const { io, calls, commands } = vscodeExtIo({ installedVersion: '0.3.1' });
   assert.equal(await launchNextSession(['--target', 'vscode-ext'], io), 0);
   assert.deepEqual(commands, [['--list-extensions', '--show-versions']]);
   assert.equal(calls.spawn.length, 1);

@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { decideAction } = require('./route');
+const { decideAction, shouldRetryMobileTab } = require('./route');
 
 test('/reload はリロードを実行する（dry指定なし）', () => {
   assert.deepEqual(decideAction({ path: '/reload', query: '' }), { kind: 'reload', dry: false });
@@ -27,4 +27,9 @@ test('未知のパスは start を返す（後方互換）', () => {
 
 test('空のパスは start を返す', () => {
   assert.deepEqual(decideAction({ path: '', query: '' }), { kind: 'start' });
+});
+
+test('スマホ用タブは失敗回数が上限未満の間だけ再試行する', () => {
+  assert.equal(shouldRetryMobileTab(1, 12), true);
+  assert.equal(shouldRetryMobileTab(12, 12), false);
 });

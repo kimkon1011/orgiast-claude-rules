@@ -19,4 +19,8 @@ function decideAction({ path, query }) {
   return { kind: 'start' };
 }
 
-module.exports = { decideAction };
+function shouldRetryMobileTab(failedAttempts, attempts) {
+  return failedAttempts < attempts;
+}
+
+module.exports = { decideAction, shouldRetryMobileTab };

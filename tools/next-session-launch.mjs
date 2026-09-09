@@ -94,16 +94,30 @@ export function resolveWt(io) {
   }
 }
 
-export function resolveVscodeCli(io) {
+export function resolveVscodeCli(io, platform = 'win32') {
   const { env, exists } = io;
   const homedir = typeof io.homedir === 'function' ? io.homedir() : io.homedir;
-  const candidates = [
-    env.VSCODE_CLI_PATH,
-    path.join(homedir, 'AppData', 'Local', 'Programs', 'Microsoft VS Code', 'bin', 'code.cmd'),
-    'C:\\Program Files\\Microsoft VS Code\\bin\\code.cmd',
-    'C:\\Program Files (x86)\\Microsoft VS Code\\bin\\code.cmd',
-  ];
+  const candidates = platform === 'win32'
+    ? [
+      env.VSCODE_CLI_PATH,
+      path.join(homedir, 'AppData', 'Local', 'Programs', 'Microsoft VS Code', 'bin', 'code.cmd'),
+      'C:\\Program Files\\Microsoft VS Code\\bin\\code.cmd',
+      'C:\\Program Files (x86)\\Microsoft VS Code\\bin\\code.cmd',
+    ]
+    : platform === 'darwin'
+      ? [
+        env.VSCODE_CLI_PATH,
+        path.join(homedir, 'bin', 'code'),
+        '/usr/local/bin/code',
+        '/opt/homebrew/bin/code',
+        '/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code',
+      ]
+      : [];
   return candidates.find((candidate) => candidate && exists(candidate)) ?? '';
+}
+
+export function hasVscodeAppDarwin(exists) {
+  return exists('/Applications/Visual Studio Code.app');
 }
 
 export function buildVscodeUri(prompt) {
@@ -147,7 +161,16 @@ export function pickBundledVsix(names) {
 // state_sync からやり直しになり、直後に撃った URI も落ちた）。新タブは「いま開いているウィンドウの
 // ワークスペース」で開くので、通常はそれが正しい cwd になる。別フォルダを開きたい時だけ --open-folder。
 // その場合も `-n`(新規ウィンドウ)にして既存ウィンドウを触らない。
-export function planVscodeLaunch({ codeCli, cwd, prompt, openFolder = false }) {
+export function planVscodeLaunch({ codeCli, cwd, prompt, openFolder = false, platform = 'win32' }) {
+  if (platform === 'darwin') {
+    const steps = [];
+    if (openFolder) {
+      if (!cwd) return null;
+      steps.push({ label: 'open-folder', command: '/usr/bin/open', args: ['-n', '-a', 'Visual Studio Code', cwd] });
+    }
+    steps.push({ label: 'open-session', command: '/usr/bin/open', args: [buildVscodeUri(prompt)] });
+    return steps;
+  }
   if (!codeCli) return null;
   const steps = [];
   if (openFolder) {
@@ -449,7 +472,8 @@ export async function launchNextSession(argv = [], io = {}) {
     };
 
     const state = await readJson(statePath, { enabled: true });
-    const codeCli = resolveVscodeCli({ env, exists, homedir: home });
+    const platform = process.platform;
+    const codeCli = resolveVscodeCli({ env, exists, homedir: home }, platform);
     let route = pickRoute({ codeCli, flagTarget: flags.target, env, state });
 
     if (flags.action) {
@@ -670,11 +694,12 @@ export async function launchNextSession(argv = [], io = {}) {
     }
 
     if (route === 'vscode') {
-      if (!codeCli) {
+      const canLaunch = platform === 'darwin' ? Boolean(codeCli || hasVscodeAppDarwin(exists)) : Boolean(codeCli);
+      if (!canLaunch) {
         log('[next-session] スキップ: VSCode CLI (code.cmd) が見つかりません (VSCODE_CLI_PATH で明示できます)');
         return 0;
       }
-      const steps = planVscodeLaunch({ codeCli, cwd, prompt: flags.prompt, openFolder: flags.openFolder });
+      const steps = planVscodeLaunch({ codeCli, cwd, prompt: flags.prompt, openFolder: flags.openFolder, platform });
       if (flags.dryRun) {
         log(JSON.stringify({ route: 'vscode', steps, account, configDir, configDirSource }));
         return 0;

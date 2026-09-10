@@ -11,6 +11,8 @@ import { buildSpecPayload, collectHardwareSpec } from './hardware-spec.mjs';
 import { collectProjectInventory, formatArtifactsCell, formatLastCommitCell, formatProjectsCell } from './project-inventory.mjs';
 import { buildCloudLoginPayload, collectCloudInventory } from './cloud-inventory.mjs';
 import { collectInteractionAdoption } from './interaction-adoption.mjs';
+import { fetchClaudePlanUsage } from './claude-plan-usage.mjs';
+import { collectBudgetStatus } from './budget-status.mjs';
 
 const dryRun = process.argv.includes('--dry-run');
 const includeSpecs = process.argv.includes('--specs');
@@ -37,6 +39,24 @@ function cheapAiCounts(file) {
     if (provider) counts[provider] = (counts[provider] || 0) + 1;
   }
   return counts;
+}
+
+function finiteNumber(value) {
+  if (value === null || value === undefined || (typeof value === 'string' && value.trim() === '')) return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function firstFiniteNumber(...values) {
+  for (const value of values) {
+    const number = finiteNumber(value);
+    if (number !== null) return number;
+  }
+  return null;
+}
+
+function formatRatio(value) {
+  return value === null ? '' : `${(Math.round(value * 1000) / 10).toFixed(1)}%`;
 }
 
 // G列は「最終報告(JST)」。UTC の ISO 文字列をそのまま入れると列の意味と食い違うため JST に整形する。
@@ -84,6 +104,12 @@ async function main() {
   // 判定できないのに合格扱いにするのは「timeout を未導入と誤報告」と同じ誤り。
   const fableKnown = reporter.fable5Detected !== undefined || adoption.fable5OutTok !== undefined;
   const fableDetected = Boolean(reporter.fable5Detected || Number(adoption.fable5OutTok || 0) > 0);
+  const planUsage = await fetchClaudePlanUsage({ home });
+  const budget = await collectBudgetStatus({ home });
+  const settings = readJson(path.join(claudeDir, 'settings.json'));
+  const nonClaudeRatio = firstFiniteNumber(cost.nonClaudeDelegRatio, enforce.nonClaudeDelegRatio);
+  const legacyRatio = firstFiniteNumber(cost.delegRatio, enforce.delegRatio);
+  const claudeUsd = firstFiniteNumber(cost.claudeUSD, reporter.mtdUsd);
   const payload = {
     token: fleetEnv.FLEET_SHEET_TOKEN,
     label,
@@ -92,10 +118,15 @@ async function main() {
     username: identity.username,
     gitEmail: identity.gitEmail,
     reportedAt: toJst(cost.t || adoption.last || reporter.lastRun),
-    claudeUsd: Math.round((Number.isFinite(Number(cost.claudeUSD)) ? Number(cost.claudeUSD) : Number(reporter.mtdUsd || 0)) * 100) / 100,
+    claudeUsd: claudeUsd === null ? '' : Math.round(claudeUsd * 100) / 100,
     mainModel: topModel,
     // 既存行が "0%" 表記なので、人が読む列で表記が混ざらないようパーセント文字列にする。
-    delegRatio: `${(Math.round((Number.isFinite(Number(cost.delegRatio)) ? Number(cost.delegRatio) : Number(enforce.delegRatio || 0)) * 1000) / 10).toFixed(1)}%`,
+    delegRatio: formatRatio(nonClaudeRatio),
+    delegRatioLegacy: formatRatio(legacyRatio),
+    planFiveHourPct: planUsage.available ? planUsage.fiveHour.utilization : null,
+    planSevenDayPct: planUsage.available ? planUsage.sevenDay.utilization : null,
+    budgetPacePct: budget.budgetPacePct,
+    settingsModel: typeof settings.model === 'string' && settings.model.trim() ? settings.model.trim() : '未設定(=Opus)',
     cheapAiUse: Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([provider, count]) => `${provider}:${count}`).join(', ') || 'なし',
     codexLogin: adoption.codexAuthed === true ? '済' : adoption.codexAuthed === false ? '未' : '判定不能',
     fable5: fableDetected ? '検出' : fableKnown ? '未検出' : '判定不能',

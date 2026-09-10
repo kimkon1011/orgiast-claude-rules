@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 
 const HOUR_MS = 60 * 60 * 1000;
 const MINUTE_MS = 60 * 1000;
+const MAX_RESET_MS = 7 * 24 * HOUR_MS;
 const MONTHS = new Map([
   ['jan', 0], ['january', 0], ['feb', 1], ['february', 1],
   ['mar', 2], ['march', 2], ['apr', 3], ['april', 3],
@@ -21,13 +22,16 @@ function defaultCooldownFile() {
 
 export function parseCodexResetUntil(output, now = Date.now()) {
   const text = String(output || '');
-  const relative = text.match(/(?:try\s+again\s+)?(?:in\s+)?(?:(\d+)\s*(?:h|hours?))?\s*(?:(\d+)\s*(?:m|minutes?))(?=\b|\d|$)/i)
-    || text.match(/(?:try\s+again\s+)?in\s+(\d+)\s*(hours?)(?=\b)/i);
+  const fallback = () => now + HOUR_MS;
+  const valid = (timestamp) => Number.isFinite(timestamp) && timestamp - now <= MAX_RESET_MS;
+  const relative = text.match(/(?:try\s+again|retry|resets?|available|wait)\s+(?:in|after)\s+(?:(\d+)\s*(?:h|hours?))?\s*(?:(\d+)\s*(?:m|minutes?))?(?=\b|$)/i)
+    || text.match(/(?:(\d+)\s*h\s*(\d+)\s*m|(\d+)\s*(hours?|minutes?))\s+(?:remaining|left)\b/i);
   if (relative) {
-    const hours = relative[2]?.toLowerCase().startsWith('hour') ? Number(relative[1]) : Number(relative[1] || 0);
-    const minutes = relative[2]?.toLowerCase().startsWith('hour') ? 0 : Number(relative[2] || 0);
+    const unit = relative[4]?.toLowerCase();
+    const hours = unit?.startsWith('hour') ? Number(relative[3]) : Number(relative[1] || 0);
+    const minutes = unit?.startsWith('minute') ? Number(relative[3]) : Number(relative[2] || 0);
     const duration = hours * HOUR_MS + minutes * MINUTE_MS;
-    if (duration > 0) return now + duration;
+    if (duration > 0) return valid(now + duration) ? now + duration : fallback();
   }
 
   const monthDateTime = text.match(/\b(?:try\s+again\s+at|resets?(?:\s+at)?)\s+(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(\d{4}))?\s+(\d{1,2}):(\d{2})(?:\s*(AM|PM))?(?:\s*\((UTC|GMT)\)|\s+(Z|[+-]\d{2}:?\d{2}))?/i);
@@ -52,7 +56,10 @@ export function parseCodexResetUntil(output, now = Date.now()) {
     };
     let parsed = makeTimestamp(year);
     if (!explicitYear && parsed <= now) parsed = makeTimestamp(++year);
-    if (Number.isFinite(parsed)) return explicitYear && parsed <= now ? now : parsed;
+    if (Number.isFinite(parsed)) {
+      parsed = explicitYear && parsed <= now ? now : parsed;
+      return valid(parsed) ? parsed : fallback();
+    }
   }
 
   const resetDateTime = text.match(/\bresets?(?:\s+at)?\s+(\d{4}-\d{2}-\d{2})[ T](\d{1,2}:\d{2}(?::\d{2})?)(?:\s*(Z|[+-]\d{2}:?\d{2}))?/i);
@@ -71,9 +78,9 @@ export function parseCodexResetUntil(output, now = Date.now()) {
   }
   if (Number.isFinite(parsed)) {
     while (parsed <= now) parsed += 24 * HOUR_MS;
-    return parsed;
+    return valid(parsed) ? parsed : fallback();
   }
-  return now + HOUR_MS;
+  return fallback();
 }
 
 export function codexCooldownRemaining(now = Date.now(), cooldownFile) {
@@ -84,6 +91,38 @@ export function codexCooldownRemaining(now = Date.now(), cooldownFile) {
   } catch {
     return 0;
   }
+}
+
+// provider-cooldown.json は codex 以外の定額レーン(glm 等)も同じ構造で持つ。
+// 指定 provider の残りクールダウンmsを返す。無ければ0。
+export function providerCooldownMs(provider, now = Date.now(), cooldownFile) {
+  const name = String(provider || '').trim().toLowerCase();
+  if (!name) return 0;
+  try {
+    const state = JSON.parse(fs.readFileSync(cooldownFile || defaultCooldownFile(), 'utf8'));
+    const until = Number(state?.[name]?.until);
+    return Number.isFinite(until) && until > now ? until - now : 0;
+  } catch {
+    return 0;
+  }
+}
+
+// usage_limit 系の本文から provider の再開時刻を返す(parseCodexResetUntil を再利用)。
+// 「reset at 日時」等の構造化された表記を解釈できた時だけその時刻を使い、取れなければ fallbackMs(既定5h)にする。
+export function providerResetUntil(text, now = Date.now(), fallbackMs = 5 * 60 * 60 * 1000) {
+  const body = String(text ?? '');
+  const hasStructuredReset = /(?:reset\w*|retry|try\s+again|available|wait)\s+(?:(?:at\s+)?(?:\d{4}-\d{2}-\d{2}[ T])?\d{1,2}:\d{2}|(?:in|after)\s+\d+)|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4}|(?:\d+h\s*\d+m|\d+\s*(?:hours?|minutes?))\s+(?:remaining|left)/i.test(body);
+  const numericDate = body.match(/\b\d{4}-\d{2}-\d{2}[ T]\d{1,2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?/i);
+  if (numericDate) {
+    const rawTimestamp = Date.parse(numericDate[0].replace(' ', 'T'));
+    if (Number.isFinite(rawTimestamp) && rawTimestamp - now > MAX_RESET_MS) return now + fallbackMs;
+  }
+  const timestamp = parseCodexResetUntil(body, now);
+  return hasStructuredReset && timestamp - now <= MAX_RESET_MS ? timestamp : now + fallbackMs;
+}
+
+export function providerInCooldown(provider, now = Date.now(), cooldownFile) {
+  return providerCooldownMs(provider, now, cooldownFile) > 0;
 }
 
 export function codexHardBlockBypass(now = Date.now(), cooldownFile, opts = {}) {
@@ -113,7 +152,21 @@ export function writeCodexCooldown(until, cooldownFile, reason = 'usage_limit') 
   try { state = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
   if (!state || typeof state !== 'object' || Array.isArray(state)) state = {};
   const at = Date.now();
-  state.codex = { until: Number(until), reason, at };
+  let savedUntil = Number(until);
+  let savedReason = reason;
+  if (savedUntil - at > MAX_RESET_MS + HOUR_MS) {
+    savedUntil = at + 5 * HOUR_MS;
+    savedReason = `${reason}:clamped`;
+  }
+  state.codex = { until: savedUntil, reason: savedReason, at };
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+  // usage_limit の検出履歴を1行ずつ残す。provider-cooldown.json は上書きされるので
+  // 「直近24hで何回上限に当たったか」が後から数えられず、コスト改善ループの
+  // codex_saturated 判定(≥2回)ができなかったため(2026-09-07 B4)。
+  if (/^usage_limit/.test(String(savedReason))) {
+    try {
+      fs.appendFileSync(path.join(path.dirname(file), 'codex-limit-history.jsonl'), `${JSON.stringify({ t: new Date(at).toISOString(), until: savedUntil, reason: savedReason })}\n`, 'utf8');
+    } catch {}
+  }
 }

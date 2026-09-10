@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { HOWTO, MARKER, appendTodoBlock, insertTodosAtTop, isSkipped, plan, readSkip, readState, selectTasks } from './gtasks-loop.mjs';
+import { HOWTO, MARKER, appendTodoBlock, insertTodosAtTop, isSkipped, parseClassifications, plan, readSkip, readState, selectTasks, titleKey } from './gtasks-loop.mjs';
 import { parseHandoff } from './auto-session.mjs';
 
 test('状態ファイルにある処理済み・保留タスクを除外して上から選ぶ', () => {
@@ -29,10 +29,10 @@ test('planはdry-runではファイルを書かず、通常時は追記と状態
   fs.writeFileSync(nextFile, '<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. 元\n');
   const cache = { lists: [{ id: 'L', title: '仕事', tasks: [{ id: 'T', title: '日本語タスク' }] }] };
   const before = fs.readFileSync(nextFile, 'utf8');
-  await plan({ dryRun: true, stateFile, nextFile, fetchCache: async () => cache });
+  await plan({ dryRun: true, classify: false, stateFile, nextFile, fetchCache: async () => cache });
   assert.equal(fs.readFileSync(nextFile, 'utf8'), before);
   assert.equal(fs.existsSync(stateFile), false);
-  await plan({ stateFile, nextFile, fetchCache: async () => cache, now: () => new Date('2026-09-03T00:00:00Z') });
+  await plan({ classify: false, stateFile, nextFile, fetchCache: async () => cache, now: () => new Date('2026-09-03T00:00:00Z') });
   const after = fs.readFileSync(nextFile, 'utf8');
   // 末尾ではなく先頭ブロックの残TODO直後に入る（既存の「1. 元」は残る）
   assert.ok(after.includes('1. Googleタスク消化: 日本語タスク（L/T）\n1. 元\n'), after);
@@ -85,4 +85,72 @@ test('HOWTOは夜間の外部送信を禁止し下書き保存を指示する', 
   assert.match(HOWTO, /送信は kim が明示的に指示したときだけ/);
   assert.match(HOWTO, /■ 要確認:/);
   assert.match(HOWTO, /■ kimの残り1操作:/);
+});
+
+test('HOWTOは回答待ちタスクへの同一質問の再追記を禁止する', () => {
+  assert.match(HOWTO, /get <listId> <taskId>` で既存メモ/);
+  assert.match(HOWTO, /同じ趣旨の質問が既にあれば二度と追記しない/);
+  assert.match(HOWTO, /新しく聞くことが無い限り note せず/);
+});
+
+function planFixture(t, titles, extra = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gtasks-classify-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  return {
+    stateFile: path.join(dir, 'state.json'),
+    nextFile: path.join(dir, 'next.md'),
+    skipFile: path.join(dir, 'skip.json'),
+    classifyCacheFile: path.join(dir, 'classify-cache.json'),
+    fetchCache: async () => ({ lists: [{ id: 'L', title: '仕事', tasks: titles.map((title, index) => ({ id: `T${index + 1}`, title })) }] }),
+    ...extra,
+  };
+}
+
+test('memo判定を外して後続のtaskを3件に繰り上げる', async (t) => {
+  const fixture = planFixture(t, ['格言です', '作業A', '作業B', '作業C']);
+  const result = await plan({ ...fixture, classifyRows: async () => '{"n":1,"c":"memo"}\n{"n":2,"c":"task"}\n{"n":3,"c":"task"}\n{"n":4,"c":"task"}' });
+  assert.deepEqual(result.memos.map((row) => row.taskId), ['T1']);
+  assert.deepEqual(result.picked.map((row) => row.taskId), ['T2', 'T3', 'T4']);
+  assert.equal(JSON.parse(fs.readFileSync(fixture.stateFile)).picked.T1.status, 'skipped-memo');
+});
+
+test('分類の例外・タイムアウトはfail-openで従来どおり上から3件を選ぶ', async (t) => {
+  for (const message of ['network failure', 'timed out']) {
+    const fixture = planFixture(t, [`${message}-1`, `${message}-2`, `${message}-3`, `${message}-4`]);
+    const result = await plan({ ...fixture, dryRun: true, classifyRows: async () => { throw new Error(message); } });
+    assert.deepEqual(result.picked.map((row) => row.taskId), ['T1', 'T2', 'T3']);
+    assert.deepEqual(result.memos, []);
+  }
+});
+
+test('空・壊れたJSONなど判定不能な出力はtask扱い', () => {
+  assert.deepEqual([...parseClassifications('', 2)], []);
+  assert.deepEqual([...parseClassifications('broken\n{"n":9,"c":"memo"}\n{"n":1,"c":"unknown"}', 2)], []);
+});
+
+test('memoのタイトル先頭24字をskipへ重複なしで追記し既存キーを保つ', async (t) => {
+  const longTitle = 'これは二十四文字より長い内省メモなので先頭だけ保存される文章';
+  const fixture = planFixture(t, [longTitle]);
+  fs.writeFileSync(fixture.skipFile, JSON.stringify({ _comment: 'keep', listIds: ['existing'], titles: [] }));
+  await plan({ ...fixture, classifyRows: async () => '{"n":1,"c":"memo"}' });
+  fixture.fetchCache = async () => ({ lists: [{ id: 'L', tasks: [{ id: 'T2', title: longTitle }] }] });
+  await plan({ ...fixture, classifyRows: async () => { throw new Error('skip should avoid this'); } });
+  const saved = JSON.parse(fs.readFileSync(fixture.skipFile));
+  assert.deepEqual(saved, { _comment: 'keep', listIds: ['existing'], titles: [titleKey(longTitle)] });
+});
+
+test('キャッシュ済み文言では分類関数を呼ばない', async (t) => {
+  const fixture = planFixture(t, ['既知の実作業']);
+  fs.writeFileSync(fixture.classifyCacheFile, JSON.stringify({ [titleKey('既知の実作業')]: 'task' }));
+  let calls = 0;
+  const result = await plan({ ...fixture, dryRun: true, classifyRows: async () => { calls++; return ''; } });
+  assert.equal(calls, 0);
+  assert.deepEqual(result.picked.map((row) => row.taskId), ['T1']);
+});
+
+test('dry-runは分類結果を返すがstate・skip・cache・nextを書かない', async (t) => {
+  const fixture = planFixture(t, ['内省メモ', '実作業']);
+  const result = await plan({ ...fixture, dryRun: true, classifyRows: async () => '{"n":1,"c":"memo"}\n{"n":2,"c":"task"}' });
+  assert.deepEqual(result.memos.map((row) => row.taskId), ['T1']);
+  for (const file of [fixture.stateFile, fixture.skipFile, fixture.classifyCacheFile, fixture.nextFile]) assert.equal(fs.existsSync(file), false, file);
 });

@@ -9,7 +9,11 @@ import { parseHandoff } from './auto-session.mjs';
 import { isEntry } from './is-entry.mjs';
 import { findLatestMemoryDir } from './memory-share.mjs';
 
-const ALLOWED_KINDS = new Set(['status', 'prompt', 'enable-auto-session']);
+const ALLOWED_KINDS = new Set(['status', 'prompt', 'enable-auto-session', 'run']);
+const RUN_TASKS = Object.freeze({
+  'fleet-sheet-report': [['node', ['tools/fleet-sheet-report.mjs']]],
+  'cost-self-heal': [['node', ['tools/tool-adoption-check.mjs', '--fix']], ['node', ['tools/hook-selfcheck.mjs']], ['node', ['tools/onboarding-sync.mjs']]]
+});
 const DEFAULT_URL = 'https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/fleet-directives.json';
 const SECRET_PATTERN = /(https?:\/\/[^\s]*?(?:webhook|token|key)[^\s]*|(?:api[_-]?key|token|secret|webhook)[\s=:]+[^\s]+)/gi;
 const STATUS_TEXT_LIMIT = 1800;
@@ -206,6 +210,16 @@ export async function processDirective(directive, context) {
       await post(status.text);
     }
     return { action: 'status', message: status.text };
+  }
+  if (kind === 'run') {
+    const commands = RUN_TASKS[String(directive.task || '')];
+    if (!commands) return { action: 'rejected', message: `許可されていない run task: ${directive.task || '(なし)'}` };
+    if (dryRun) return { action: 'dry-run', task: directive.task };
+    const runs = commands.map(([program, args]) => run(program, args, { cwd: repo, timeout: 300_000 }));
+    const ok = runs.every((result) => result.status === 0);
+    const message = `${ok ? '✅' : '⚠'} **[${label}]** run ${directive.task} ${ok ? '完了' : '失敗'} (id=${id})`;
+    await post(message);
+    return { action: 'run', task: directive.task, runs, message };
   }
   const optinKind = kind === 'prompt' ? 'prompt' : 'auto-session';
   if (!loadOptin(path.join(home, '.claude', 'fleet-agent-optin.json')).includes(optinKind)) {

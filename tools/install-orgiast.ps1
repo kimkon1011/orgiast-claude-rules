@@ -410,9 +410,10 @@ if (Test-ApiKeyConfigured 'MANUS_API_KEY') { OK "Manus API key configured — Re
 # --- 夜間バッチの定時起動(毎日03:00・off-peak帯にキュー消化=50%off) ---
 Step "夜間バッチの定時起動を登録 (毎日03:00)"
 if ($runHiddenLoaded) { try {
-  $nb = Join-Path $REPO 'tools\nightly-batch.ps1'
-  if (Test-Path $nb) {
-    $act = New-HiddenScheduledTaskAction -Execute 'powershell.exe' -ChildArgument @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $nb)
+  $nb = Join-Path $REPO 'tools\nightly-bootstrap.ps1'
+  $nightlyBatch = Join-Path $REPO 'tools\nightly-batch.ps1'
+  if ((Test-Path $nb) -and (Test-Path $nightlyBatch)) {
+    $act = New-HiddenScheduledTaskAction -Execute 'powershell.exe' -ChildArgument @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $nb, '-Target', 'tools\nightly-batch.ps1')
     $trg = New-ScheduledTaskTrigger -Daily -At 3:00am -RandomDelay (New-TimeSpan -Minutes 2)
     $set = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
     Register-ScheduledTask -TaskName 'OrgiastNightlyBatch' -Action $act -Trigger $trg -Settings $set -Force -ErrorAction Stop | Out-Null
@@ -422,16 +423,14 @@ if ($runHiddenLoaded) { try {
 
 # --- フリートポーラーの定時起動(毎日03:15・夜間1回=コスト最小/LLM呼び出しゼロ) ---
 Step "フリート自己点検の定時起動を登録 (毎日03:15)"
-if ($runHiddenLoaded) { try {
-  $fp = Join-Path $REPO 'tools\fleet-poller.ps1'
-  if (Test-Path $fp) {
-    $fact = New-HiddenScheduledTaskAction -Execute 'powershell.exe' -ChildArgument @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $fp)
-    $ftrg = New-ScheduledTaskTrigger -Daily -At 3:15am
-    $fset = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-    Register-ScheduledTask -TaskName 'OrgiastFleetPoller' -Action $fact -Trigger $ftrg -Settings $fset -Force -ErrorAction Stop | Out-Null
-    OK "フリート自己点検 登録完了(毎日03:15・設定チェック結果をDiscordへ自己報告+承認済みタスク処理)"
-  } else { Warn "fleet-poller.ps1 未取得=スキップ(他機能は動作)" }
-} catch { Warn ("フリート点検の登録に失敗(他機能は動作): " + $_.Exception.Message) } }
+try {
+  $fpr = Join-Path $REPO 'tools\register-fleet-poller.ps1'
+  if (Test-Path $fpr) {
+    & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $fpr
+    if ($LASTEXITCODE -ne 0) { throw "register-fleet-poller.ps1 exit $LASTEXITCODE" }
+    OK "フリート自己点検 登録完了(毎日03:15 OrgiastFleetPoller・設定チェック結果をDiscordへ自己報告+承認済みタスク処理)"
+  } else { Warn "register-fleet-poller.ps1 未取得=スキップ(他機能は動作)" }
+} catch { Warn ("フリート点検の登録に失敗(他機能は動作): " + $_.Exception.Message) }
 
 # --- フリート管制エージェントの定時起動(15分ごと) ---
 Step "フリート管制エージェントを登録 (15分ごと)"

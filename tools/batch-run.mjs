@@ -1,7 +1,11 @@
 // batch-run.mjs — pending.jsonl を実行し、成功結果と使用量を記録する夜間バッチ実行器。
 // DeepSeekはUTC 16:30〜00:30だけ実行。--force で時間帯を無視、--dry で対象表示のみ。
 // --fallback-standard 指定時だけ、Anthropic Batch失敗後に通常APIで再実行する。
+// kind=eval-harness のジョブは LLM に渡さず「node tools/eval-harness.mjs --all」へ変換する
+// (eval自体が複数providerを叩くローカル計測なので、ここでLLM呼び出しすると二重課金になる)。
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import { readEnvValue } from './env-kv.mjs';
 import { callWithFallback, classifyFailure, FALLBACK_CHAIN } from './llm-fallback.mjs';
 
@@ -136,17 +140,34 @@ if (!jobs.length) { console.log('pendingジョブはありません'); process.e
 const runnable = jobs.filter((job) => job.provider !== 'deepseek' || force || offPeak());
 const skipped = jobs.filter((job) => !runnable.includes(job));
 for (const job of skipped) console.log(`SKIP ${job.id} deepseek off-peak時間外`);
-if (dry) { for (const job of runnable) console.log(`DRY ${job.id} ${job.provider}:${job.model}`); process.exit(0); }
+if (dry) {
+  for (const job of runnable) console.log(job.kind === 'eval-harness' ? `DRY ${job.id} ${job.provider}:${job.model} kind=eval-harness → node tools/eval-harness.mjs --all` : `DRY ${job.id} ${job.provider}:${job.model}`);
+  process.exit(0);
+}
 
 const completed = new Set();
+// kind=eval-harness: 指示文をLLMに解釈させず、固定のローカルコマンドへ置き換える。
+// ジョブの provider/prompt は実行に使わない(固定コマンドのみ。シート由来文字列の実行を避ける)。
+async function runEvalHarnessJob(job) {
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const result = spawnSync(process.execPath, [path.join(repoRoot, 'tools', 'eval-harness.mjs'), '--all'], {
+    cwd: repoRoot, encoding: 'utf8', timeout: 30 * 60 * 1000, windowsHide: true,
+    env: { ...process.env, ORGIAST_HOME: process.env.ORGIAST_HOME || home },
+  });
+  const summary = String(result.stdout || '').split(/\r?\n/).slice(-3).join(' / ').slice(0, 500);
+  if (result.status !== 0) throw new Error(`eval-harness exit ${result.status}: ${String(result.stderr || summary).slice(0, 300)}`);
+  saveResult(job, summary, {}, 'eval-harness');
+  completed.add(job.id);
+  console.log(`OK ${job.id} eval-harness`);
+}
 const geminiGroups = new Map();
-for (const job of runnable.filter((j) => j.provider === 'gemini')) {
+for (const job of runnable.filter((j) => j.provider === 'gemini' && j.kind !== 'eval-harness')) {
   const key = job.model || PROVIDERS.gemini.model;
   if (!geminiGroups.has(key)) geminiGroups.set(key, []);
   geminiGroups.get(key).push(job);
 }
 const anthropicGroups = new Map();
-for (const job of runnable.filter((j) => j.provider === 'anthropic')) { const key = job.model || PROVIDERS.anthropic.model; if (!anthropicGroups.has(key)) anthropicGroups.set(key, []); anthropicGroups.get(key).push(job); }
+for (const job of runnable.filter((j) => j.provider === 'anthropic' && j.kind !== 'eval-harness')) { const key = job.model || PROVIDERS.anthropic.model; if (!anthropicGroups.has(key)) anthropicGroups.set(key, []); anthropicGroups.get(key).push(job); }
 for (const jobsOfModel of anthropicGroups.values()) for (let start = 0; start < jobsOfModel.length; start += 100) { const group = jobsOfModel.slice(start, start + 100); try { const outputs = await runAnthropicBatch(group); for (let i = 0; i < group.length; i++) { const job = group[i], out = outputs[i]; if (out.error) { console.error(`FAIL ${job.id}: ${out.error}`); continue; } const usage = usageRecord(job.provider, job.model, out.usage); saveResult(job, out.text, usage, 'batch'); completed.add(job.id); console.log(`OK ${job.id} batch`); } } catch (e) { console.error(`Anthropic Batch失敗: ${e.message}`); if (fallbackStandard) { console.error('Anthropic通常APIへ切替'); for (const job of group) { try { const out = await runAnthropicStandard(job); const usage = usageRecord(job.provider, job.model, out.usage); saveResult(job, out.text, usage, out.mode); completed.add(job.id); console.log(`OK ${job.id} standard`); } catch (err) { console.error(`FAIL ${job.id}: ${err.message}`); } } } } }
 for (const group of geminiGroups.values()) {
   try {
@@ -168,7 +189,11 @@ for (const group of geminiGroups.values()) {
     }
   }
 }
-for (const job of runnable.filter((j) => j.provider !== 'gemini' && j.provider !== 'anthropic')) {
+for (const job of runnable.filter((j) => j.kind === 'eval-harness')) {
+  try { await runEvalHarnessJob(job); }
+  catch (e) { console.error(`FAIL ${job.id}: ${e.message}`); }
+}
+for (const job of runnable.filter((j) => j.provider !== 'gemini' && j.provider !== 'anthropic' && j.kind !== 'eval-harness')) {
   try { const out = await runStandard(job); const usage = usageRecord(job.provider, job.model, out.usage); saveResult(job, out.text, usage, out.mode, out); completed.add(job.id); console.log(`OK ${job.id} standard`); }
   catch (e) { console.error(`FAIL ${job.id}: ${e.message}`); }
 }

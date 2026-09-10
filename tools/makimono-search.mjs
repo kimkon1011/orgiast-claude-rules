@@ -8,6 +8,7 @@ import { isEntry } from './is-entry.mjs';
 const BASE = 'https://makimono-md.vercel.app';
 const STOPWORDS = new Set(['ください', 'お願い', 'して', 'したい', '作って', '作成', 'よろしく', 'ほしい', '欲しい']);
 const cacheFile = () => path.join(process.env.ORGIAST_HOME || os.homedir(), '.claude', '.makimono-cache.json');
+export const usageLedgerFile = () => path.join(process.env.ORGIAST_HOME || os.homedir(), '.claude', 'makimono-usage-ledger.jsonl');
 const normalize = (q) => String(q).toLowerCase().replace(/　/g, ' ').replace(/\s+/g, ' ').trim();
 async function request(url, options = {}) {
   const response = await fetch(url, { ...options, signal: options.signal || AbortSignal.timeout(options.timeout || 8000) });
@@ -15,6 +16,7 @@ async function request(url, options = {}) {
 }
 function readCache() { try { const j = JSON.parse(fs.readFileSync(cacheFile(), 'utf8')); return j && typeof j === 'object' ? j : {}; } catch { return {}; } }
 function writeCache(cache) { try { fs.mkdirSync(path.dirname(cacheFile()), { recursive: true }); fs.writeFileSync(cacheFile(), `${JSON.stringify(cache, null, 2)}\n`); } catch {} }
+export function appendUsage(entry) { try { const record = entry.at ? entry : { ...entry, at: new Date().toISOString() }; fs.mkdirSync(path.dirname(usageLedgerFile()), { recursive: true }); fs.appendFileSync(usageLedgerFile(), `${JSON.stringify(record)}\n`); } catch {} }
 
 export async function search(query, options = {}) {
   const key = normalize(query);
@@ -103,7 +105,7 @@ async function cli() {
     const slug = value(args, '--raw'); const result = await fetchRaw(slug);
     if (result.status === 402) { let human = `${BASE}/files/${slug}`; try { const meta = await request(`${BASE}/api/v1/files/${encodeURIComponent(slug)}`); if (meta.ok) { const link = (await meta.json())?.file?.links?.human; if (link) human = new URL(link, BASE); } } catch {} console.error(`有料出品です。購入ページ: ${human}`); process.exitCode = 3; return; }
     if (!result.response.ok) throw new Error(`HTTP ${result.status}`);
-    process.stdout.write(result.text); return;
+    process.stdout.write(result.text); appendUsage({ t: 'read', slug, chars: result.text.length }); return;
   }
   if (args.includes('--categories')) {
     const response = await request(`${BASE}/api/v1/categories`); if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -113,7 +115,7 @@ async function cli() {
     const slug = value(args, '--report'); const saved = Number(value(args, '--saved'));
     if (!slug || !Number.isFinite(saved)) throw new Error('--report と --saved が必要です');
     const response = await request(`${BASE}/api/v1/report`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ slug, savedTokens: saved, ...(value(args, '--model') ? { model: value(args, '--model') } : {}) }) });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`); console.log(JSON.stringify(await response.json())); return;
+    if (!response.ok) throw new Error(`HTTP ${response.status}`); console.log(JSON.stringify(await response.json())); appendUsage({ t: 'report', slug, saved }); return;
   }
   const query = args.find((x) => !x.startsWith('--') && !/^\d+$/.test(x));
   const options = { limit: Number(value(args, '--limit') || 5), freeOnly: args.includes('--free-only'), maxTokens: Number(value(args, '--max-tokens')) || undefined, noCache: args.includes('--no-cache') };

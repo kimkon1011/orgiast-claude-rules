@@ -1,0 +1,8 @@
+{
+  "deepseek": { "autoTopUp": false, "monthlyLimit": false, "verified": false },
+  "openrouter": { "autoTopUp": true, "monthlyLimit": false, "verified": false },
+  "kimi": { "autoTopUp": false, "monthlyLimit": false, "verified": false },
+  "xai": { "autoTopUp": true, "monthlyLimit": true, "verified": false },
+  "groq": { "autoTopUp": null, "monthlyLimit": null, "billing": "postpaid", "verified": false },
+  "gemini": { "autoTopUp": true, "monthlyLimit": true, "verified": false }
+}

@@ -99,6 +99,9 @@ try {
   }
   const session = [
     ['onboarding-sync.mjs', 20, true, ''],
+    // あるべき状態への収束(検査→修復→再検査)。onboarding-sync が repo を新しくした後に走る。
+    // リポジトリ直接参照・コピー配布なし = main を変えれば全PC追従(配り直し不要)。
+    ['setup.mjs', 60, true, ' --converge'],
     ['claude-cost-reporter.mjs', 15, true, ''],
     ['tool-adoption-check.mjs', 60, true, ' --fix'],
     ['cost-loop.mjs', 15, false, ''],
@@ -143,11 +146,21 @@ try {
   if (add(settings.hooks.UserPromptSubmit, 'expensive-session-guard.mjs', { hooks: [{ type: 'command', command: command('expensive-session-guard.mjs'), timeout: 5 }] })) added += 1;
   // 完成済み指示書の候補を同期注入するため async は付けない。
   if (add(settings.hooks.UserPromptSubmit, 'makimono-gate.mjs', { hooks: [{ type: 'command', command: command('makimono-gate.mjs'), timeout: 6 }] })) added += 1;
+  // userへ頼む前に自動取得・復元・自動設定を毎プロンプトで先に検討させる。
+  if (add(settings.hooks.UserPromptSubmit, 'automation-first-reminder.mjs', { hooks: [{ type: 'command', command: command('automation-first-reminder.mjs'), timeout: 5 }] })) added += 1;
+  // 過去に受領済みのクレデンシャルをuserへ再質問する前に復元経路を注入する。
+  if (add(settings.hooks.UserPromptSubmit, 'credentials-reminder.mjs', { hooks: [{ type: 'command', command: command('credentials-reminder.mjs'), timeout: 5 }] })) added += 1;
   added += migrate(settings.hooks.PreToolUse, 'pretooluse-delegation-warn.ps1', 'pretooluse-delegation-warn.mjs', command('pretooluse-delegation-warn.mjs'));
   if (add(settings.hooks.PreToolUse, 'pretooluse-delegation-warn.mjs', { matcher: 'Write|Edit|MultiEdit', hooks: [{ type: 'command', command: command('pretooluse-delegation-warn.mjs') }] })) added += 1;
   if (add(settings.hooks.PreToolUse, 'pretooluse-bash-delegation.mjs', { matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command: command('pretooluse-bash-delegation.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.PreToolUse, 'pretooluse-codex-invocation.mjs', { matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command: command('pretooluse-codex-invocation.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.PreToolUse, 'model-agent-guard.mjs', { matcher: 'Agent|Task', hooks: [{ type: 'command', command: command('model-agent-guard.mjs') }] })) added += 1;
+  // ヘッドレス実行で消失するバックグラウンド処理を実行前に拒否する。
+  if (add(settings.hooks.PreToolUse, 'pretooluse-headless-background.mjs', { matcher: 'Bash|PowerShell|ScheduleWakeup', hooks: [{ type: 'command', command: command('pretooluse-headless-background.mjs'), timeout: 5 }] })) added += 1;
+  // read-only調査の逐次実行を検知し、まとめて調査するよう同期注入する。
+  if (add(settings.hooks.PreToolUse, 'pretooluse-serial-investigation.mjs', { hooks: [{ type: 'command', command: command('pretooluse-serial-investigation.mjs'), timeout: 5 }] })) added += 1;
+  // パイプ等で連結された全ステージが許可済みBashプレフィックスなら自動承認する。
+  if (add(settings.hooks.PreToolUse, 'pipe-stage-permissions.mjs', { matcher: 'Bash', hooks: [{ type: 'command', command: command('pipe-stage-permissions.mjs'), timeout: 5 }] })) added += 1;
   // 人に手作業を頼むとき、初見の人でも実行できる手順になっているかを検査する(§1.5.1)。
   if (add(settings.hooks.Stop, 'verify-before-done-detector.mjs', { hooks: [{ type: 'command', command: command('verify-before-done-detector.mjs') }] })) added += 1;
   // kim が読む文書をローカルパスのリンクで渡す違反を止める(モバイルで1クリックで開けない・2026-08-07 kim確定ルール)
@@ -156,6 +169,13 @@ try {
   // 同じ判定を AskUserQuestion では *事前* に効かせる。Stop は応答を出したあとなので、
   // user の目に触れる前に止められるのはここだけ(2026-09-01 user 厳命への対応)。
   if (add(settings.hooks.PreToolUse, 'askuser-selfcheck-gate.mjs', { matcher: 'AskUserQuestion', hooks: [{ type: 'command', command: command('askuser-selfcheck-gate.mjs'), timeout: 10 }] })) added += 1;
+  // 上記4本(handoff-info/quality/investigation/negative-claim)は stop-gate-runner に合流済みなので個別登録しない。
+  // コマンドの手渡しに非エンジニア向けの開き方・入力場所・完了確認を必須化する。
+  if (add(settings.hooks.Stop, 'handoff-detail-guard.mjs', { hooks: [{ type: 'command', command: command('handoff-detail-guard.mjs'), timeout: 10 }] })) added += 1;
+  // 生URLと日本語・全角文字の直接隣接によるリンク破損を差し戻す。
+  if (add(settings.hooks.Stop, 'url-format-guard.mjs', { hooks: [{ type: 'command', command: command('url-format-guard.mjs'), timeout: 8 }] })) added += 1;
+  // 完了報告にLayer 1/2・e2e等の検証記載がなければ同期警告する。
+  if (add(settings.hooks.Stop, 'check-e2e-before-stop.mjs', { hooks: [{ type: 'command', command: command('check-e2e-before-stop.mjs'), timeout: 8 }] })) added += 1;
   // 旧PCは hook が `powershell -NoProfile -File ...ps1` で登録され、実行ポリシーで無音死している。
   policyRepaired = repairPowerShellExecutionPolicy(settings.hooks);
   added += policyRepaired;

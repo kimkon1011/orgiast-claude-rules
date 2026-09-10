@@ -1,23 +1,46 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export const FALLBACK_CHAIN = Object.freeze([
   { provider: 'groq', model: 'openai/gpt-oss-120b' },
   // 無料の Groq、定額の GLM、以降の従量プロバイダの順で費用を抑える。
   { provider: 'glm', model: 'glm-5.3' },
   { provider: 'cerebras', model: 'zai-glm-4.7' },
-  { provider: 'deepseek', model: 'deepseek-chat' },
   { provider: 'openrouter', model: 'openai/gpt-oss-120b' },
+  { provider: 'deepseek', model: 'deepseek-chat' },
   { provider: 'gemini', model: 'gemini-3.7-flash' },
   { provider: 'grok', model: 'grok-3' },
   { provider: 'kimi', model: 'kimi-k3' },
 ]);
 
-const COST_PER_MILLION = Object.freeze({
-  groq: [0.15, 0.60], openrouter: [0.59, 0.79], gemini: [0.10, 0.40], deepseek: [0.27, 1.10],
+export const COST_PER_MILLION = Object.freeze({
+  groq: [0.15, 0.60], openrouter: [0.59, 0.79], gemini: [0.75, 3.75], deepseek: [0.27, 1.10],
   grok: [3, 15], kimi: [3, 15], mistral: [2, 6], cerebras: [0, 0], codex: [0, 0],
 });
+
+export const KNOWN_CHEAP_PROVIDERS = Object.freeze([
+  'groq', 'glm', 'cerebras', 'deepseek', 'openrouter', 'gemini', 'gemini-cli',
+  'grok', 'kimi', 'mistral', 'ollama', 'codex', 'qwen-code', 'genspark',
+]);
+
+const ROUTING_TABLE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'routing-table.json');
+
+// eval 実測のルーティング表(tools/routing-table.json)から、指定カテゴリで最安の候補を返す。
+// 表が無い・カテゴリが無い・暫定計測(provisional)のどれでも null を返し、既定の連鎖を使わせる。
+export function preferredForCategory(category) {
+  const name = String(category || '').trim().toLowerCase();
+  if (!name) return null;
+  try {
+    const table = JSON.parse(fs.readFileSync(ROUTING_TABLE, 'utf8'));
+    const entry = table?.categories?.[name];
+    if (!entry || !entry.provider) return null;
+    return { provider: entry.provider, model: entry.model, ...(entry.provisional ? { provisional: true } : {}) };
+  } catch {
+    return null;
+  }
+}
 
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
@@ -84,10 +107,36 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, payloadF
 
   const candidates = [];
   const seen = new Set();
-  for (const candidate of [start, ...chain].filter(Boolean)) {
+  const deepseekGateway = { provider: 'openrouter', model: 'deepseek/deepseek-v4-flash' };
+  const expanded = start?.provider === 'deepseek' ? [start, deepseekGateway, ...chain] : [start, ...chain];
+  for (const candidate of expanded.filter(Boolean)) {
     if (seen.has(candidate.provider)) continue;
     seen.add(candidate.provider);
     candidates.push(candidate);
+  }
+
+  // routing-overrides.json の demote 有効期限が切れるまで、該当 provider を連鎖の末尾へ回す
+  // (cost-improve-loop が provider_unhealthy を検出した時に書く。B4 2026-09-07)。
+  // start として明示された provider は呼び出し元の意思なので先頭のまま。
+  // cooldown と同じく node --test 配下では実環境のファイルを読まない。
+  let demotedProviders = [];
+  if (cooldownFile != null || !process.env.NODE_TEST_CONTEXT) {
+    const overridesPath = cooldownFile
+      ? path.join(path.dirname(cooldownFile), 'routing-overrides.json')
+      : path.join(home, '.claude', 'routing-overrides.json');
+    try {
+      const overrides = JSON.parse(fs.readFileSync(overridesPath, 'utf8'));
+      demotedProviders = Object.entries(overrides?.demote || {})
+        .filter(([, until]) => Number(Date.parse(until)) > timestamp)
+        .map(([provider]) => String(provider).toLowerCase());
+    } catch {}
+  }
+  if (demotedProviders.length) {
+    const rank = (candidate) => (demotedProviders.includes(candidate.provider) && candidate.provider !== start.provider ? 1 : 0);
+    candidates.sort((a, b) => rank(a) - rank(b)); // Array#sort は安定なので同 rank 内の元順を保つ
+    for (const provider of demotedProviders) {
+      if (provider !== start.provider) console.error(`[routing] ${provider} はdemote中のため連鎖の末尾へ回します`);
+    }
   }
 
   // node --test 配下では、呼び出し側が隔離先を明示した場合だけ永続化する。
@@ -110,7 +159,8 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, payloadF
   function setCooldown(provider, status, response) {
     if (!useCooldown) return;
     let duration = 0;
-    if ([401, 402, 403].includes(status)) duration = 6 * 60 * 60 * 1000;
+    if (status === 402) duration = 24 * 60 * 60 * 1000;
+    else if ([401, 403].includes(status)) duration = 6 * 60 * 60 * 1000;
     else if (status === 429) duration = retryAfterMs(response, timestamp) ?? 30 * 60 * 1000;
     if (!duration) return;
     cooldowns[provider] = { until: timestamp + duration, reason: `http_${status}`, at: timestamp };

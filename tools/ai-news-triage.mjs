@@ -40,9 +40,23 @@ function extractJson(text) {
 
 export function parseVerdict(text) {
   const value = extractJson(text);
-  if (!['confirmed', 'refuted', 'unclear'].includes(value.verdict)) throw new Error('verdict が不正です');
-  if (typeof value.adopt !== 'boolean') throw new Error('adopt が真偽値ではありません');
-  return { verdict: value.verdict, finding: String(value.finding || '').slice(0, 120), adopt: value.adopt, reason: String(value.reason || '').slice(0, 80) };
+  return { verdict: normalizeVerdict(value.verdict), finding: String(value.finding || '').slice(0, 120), adopt: coerceBoolean(value.adopt), reason: String(value.reason || '').slice(0, 80) };
+}
+
+export function normalizeVerdict(value) {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (['confirmed', 'true', 'yes', 'verified', 'supported', '支持'].includes(normalized)) return 'confirmed';
+  if (['refuted', 'false', 'no', 'unsupported', '否定', '反証'].includes(normalized)) return 'refuted';
+  if (['unclear', 'unknown', 'unverifiable', '不明'].includes(normalized)) return 'unclear';
+  throw new Error('verdict が不正です');
+}
+
+export function coerceBoolean(value) {
+  if (typeof value === 'boolean') return value;
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (['true', 'yes', '1'].includes(normalized)) return true;
+  if (['false', 'no', '0'].includes(normalized)) return false;
+  throw new Error('adopt が真偽値ではありません');
 }
 
 export function applyTriageResult(record, result, { now = new Date(), provider } = {}) {
@@ -120,21 +134,29 @@ export async function runTriage(options = {}) {
   const now = options.now || (() => new Date());
   const updates = new Map();
   const adopted = [];
+  const failures = [];
   const system = 'LINE投稿由来の提案を検索結果だけから検証する。検索結果に無いことを書かない。不明なら必ず unclear と書く。verdictは投稿内容が裏取りできたか、adoptはオージャストのコスト削減または品質向上に直結し実際に手を打つ価値があるかで決める。JSONのみを返す。形式: {"verdict":"confirmed|refuted|unclear","finding":"120字以内の日本語","adopt":true|false,"reason":"80字以内"}';
   for (const record of targets) {
-    const found = await search(`${record.title}\n${record.action}`);
-    const response = await llm({ provider: cli.provider, messages: [{ role: 'system', content: system }, { role: 'user', content: `提案: ${JSON.stringify({ title: record.title, action: record.action, evidence: record.evidence })}\n検索結果: ${formatSearch(found)}` }], maxTokens: 500, responseFormat: { type: 'json_object' } });
-    const result = parseVerdict(response.text);
-    const updated = applyTriageResult(record, result, { now: now(), provider: response.provider || cli.provider });
-    updates.set(record.id, updated);
-    if (updated.status === 'done' && updated.adopt === true) adopted.push(updated);
-    log(`${cli.dryRun ? '[dry-run] ' : ''}${record.id} ${updated.verdict} adopt=${updated.adopt} → ${updated.status}: ${updated.finding}`);
+    try {
+      const found = await search(`${record.title}\n${record.action}`);
+      const response = await llm({ provider: cli.provider, messages: [{ role: 'system', content: system }, { role: 'user', content: `提案: ${JSON.stringify({ title: record.title, action: record.action, evidence: record.evidence })}\n検索結果: ${formatSearch(found)}` }], maxTokens: 500, responseFormat: { type: 'json_object' } });
+      const result = parseVerdict(response.text);
+      const updated = applyTriageResult(record, result, { now: now(), provider: response.provider || cli.provider });
+      updates.set(record.id, updated);
+      if (updated.status === 'done' && updated.adopt === true) adopted.push(updated);
+      log(`${cli.dryRun ? '[dry-run] ' : ''}${record.id} ${updated.verdict} adopt=${updated.adopt} → ${updated.status}: ${updated.finding}`);
+    } catch (error) {
+      failures.push({ id: record.id, error });
+      log(`warn:${record.id} 判定失敗: ${error.message}`);
+    }
   }
 
   const nextRecords = records.map((item) => updates.get(item.id) || item);
   const counts = { done: 0, rejected: 0, pending: 0 };
   for (const item of updates.values()) counts[item.status] += 1;
-  const status = `ok:検証${updates.size}件 done${counts.done} rejected${counts.rejected} pending${counts.pending}`;
+  const status = failures.length && updates.size === 0
+    ? `error:判定失敗 ${failures.length}件`
+    : `ok:検証${updates.size}件 done${counts.done} rejected${counts.rejected} pending${counts.pending}${failures.length ? ` 判定失敗${failures.length}件` : ''}`;
   const warnings = [];
   let nextSessionText = fs.existsSync(nextSessionFile) ? fs.readFileSync(nextSessionFile, 'utf8') : '';
   for (const item of adopted) {
@@ -145,7 +167,7 @@ export async function runTriage(options = {}) {
   const digestText = fs.existsSync(digestFile) ? fs.readFileSync(digestFile, 'utf8') : '';
   const digestResult = rewritePendingSection(digestText, nextRecords.filter((item) => item.status === 'pending'));
 
-  if (!cli.dryRun) {
+  if (!cli.dryRun && updates.size > 0) {
     fs.writeFileSync(proposalFile, nextRecords.map(JSON.stringify).join('\n') + (nextRecords.length ? '\n' : ''), 'utf8');
     if (adopted.length && nextSessionText && !warnings.length) fs.writeFileSync(nextSessionFile, nextSessionText, 'utf8');
     if (digestResult.changed) fs.writeFileSync(digestFile, digestResult.text, 'utf8');

@@ -1,61 +1,36 @@
-// Claude API課金 日次監視 — Anthropic Admin cost_report → Discord #claude-code
-// GitHub Actions で日次実行。秘匿値は env(GH Secrets)から。会話本文・トランスクリプトは一切触らない。
-//   ANTHROPIC_ADMIN_KEY  : sk-ant-admin01-... (read-only 集計に使用)
-//   DISCORD_COST_WEBHOOK : #claude-code webhook
-const KEY = process.env.ANTHROPIC_ADMIN_KEY;
-const HOOK = process.env.DISCORD_COST_WEBHOOK;
-if (!KEY || !HOOK) { console.error('missing ANTHROPIC_ADMIN_KEY / DISCORD_COST_WEBHOOK'); process.exit(1); }
+#!/usr/bin/env node
+import { isEntry } from './is-entry.mjs';
 
-const H = { 'x-api-key': KEY, 'anthropic-version': '2023-06-01' };
-const now = new Date();
-const monthStart = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-01`;
-const yst = new Date(now.getTime() - 86400000).toISOString().slice(0, 10);
-
-async function costReport(startingAt) {
-  const buckets = [];
-  let page = null;
-  for (let p = 0; p < 40; p++) {
-    let uri = `https://api.anthropic.com/v1/organizations/cost_report?starting_at=${startingAt}&group_by[]=description`;
-    if (page) uri += `&page=${encodeURIComponent(page)}`;
-    const r = await fetch(uri, { headers: H });
-    if (!r.ok) throw new Error(`cost_report ${r.status}: ${await r.text()}`);
-    const j = await r.json();
-    buckets.push(...(j.data || []));
-    if (j.has_more && j.next_page) page = j.next_page; else break;
-  }
-  return buckets;
+export async function fetchAdminCostReport({ startingAt, adminKey, fetchImpl = fetch } = {}) {
+  if (!adminKey) return { available: false, reason: 'Admin key 未設定' };
+  const buckets = []; let page = null;
+  try {
+    for (let p = 0; p < 40; p++) {
+      let uri = `https://api.anthropic.com/v1/organizations/cost_report?starting_at=${startingAt}&group_by[]=description`;
+      if (page) uri += `&page=${encodeURIComponent(page)}`;
+      const response = await fetchImpl(uri, { headers: { 'x-api-key': adminKey, 'anthropic-version': '2023-06-01' } });
+      if (!response.ok) return { available: false, reason: `cost_report HTTP ${response.status}` };
+      const json = await response.json(); buckets.push(...(json.data || []));
+      if (json.has_more && json.next_page) page = json.next_page; else break;
+    }
+    let totalUsd = 0; const byModel = {}, byDay = {};
+    for (const bucket of buckets) { const day = String(typeof bucket.starting_at === 'string' ? bucket.starting_at : new Date(bucket.starting_at).toISOString()).slice(0, 10); for (const result of bucket.results || []) { const usd = (parseFloat(result.amount) || 0) / 100; totalUsd += usd; const match = /^(Claude .+?) Usage/.exec(result.description || ''), model = match ? match[1] : (result.description || 'other'); byModel[model] = (byModel[model] || 0) + usd; byDay[day] = (byDay[day] || 0) + usd; } }
+    return { available: true, totalUsd, byModel, byDay };
+  } catch (error) { return { available: false, reason: `network: ${error.name || 'error'}` }; }
 }
 
-const modelOf = (d) => { const m = /^(Claude .+?) Usage/.exec(d || ''); return m ? m[1] : (d || 'other'); };
-
-const buckets = await costReport(monthStart);
-let total = 0; const byModel = {}, byDay = {};
-for (const b of buckets) {
-  const day = String(typeof b.starting_at === 'string' ? b.starting_at : new Date(b.starting_at).toISOString()).slice(0, 10);
-  for (const res of (b.results || [])) {
-    // 公式仕様: "Cost amount in lowest currency units (e.g. cents) as a decimal string."
-    const amt = (parseFloat(res.amount) || 0) / 100;
-    total += amt;
-    const mdl = modelOf(res.description);
-    byModel[mdl] = (byModel[mdl] || 0) + amt;
-    byDay[day] = (byDay[day] || 0) + amt;
-  }
+async function main() {
+  const key = process.env.ANTHROPIC_ADMIN_KEY, hook = process.env.DISCORD_COST_WEBHOOK;
+  if (!key || !hook) { console.error('missing ANTHROPIC_ADMIN_KEY / DISCORD_COST_WEBHOOK'); process.exitCode = 1; return; }
+  const now = new Date(), monthStart = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-01`, yesterday = new Date(now - 864e5).toISOString().slice(0, 10);
+  const report = await fetchAdminCostReport({ startingAt: monthStart, adminKey: key });
+  if (!report.available) throw new Error(report.reason);
+  const fable = Object.entries(report.byModel).filter(([name]) => /Fable|Mythos/i.test(name)).reduce((sum, [, usd]) => sum + usd, 0);
+  let message = `**💰 Claude API課金 日次監視** (Developer Platform / MTD ${monthStart}〜)\nMTD合計: **$${report.totalUsd.toFixed(2)}** ／ 前日 ${yesterday}: **$${(report.byDay[yesterday] || 0).toFixed(2)}**\n`;
+  if (fable) message += `🚨 **Fable5 MTD $${fable.toFixed(2)}**\n`;
+  message += Object.entries(report.byModel).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([name, usd]) => `- ${name}: $${usd.toFixed(2)}`).join('\n');
+  message += '\n※Admin cost_report。Claude Team 定額利用は含まれません。';
+  const posted = await fetch(hook, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: message.slice(0, 1950) }) });
+  console.log(message); console.log(posted.ok ? 'posted to #claude-code' : `discord POST failed ${posted.status}`);
 }
-const ystCost = byDay[yst] || 0;
-const fable = Object.entries(byModel).filter(([k]) => /Fable|Mythos/i.test(k)).reduce((a, [, v]) => a + v, 0);
-const top = Object.entries(byModel).sort((a, b) => b[1] - a[1]).slice(0, 6);
-
-let msg = `**💰 Claude API課金 日次監視** (Developer Platform / MTD ${monthStart}〜)\n`;
-msg += `MTD合計: **$${total.toFixed(2)}** ／ 前日 ${yst}: **$${ystCost.toFixed(2)}**\n`;
-if (fable > 0) msg += `🚨 **Fable5(§1.16 禁止) MTD $${fable.toFixed(2)} = ${total ? (fable / total * 100).toFixed(0) : 0}%** → アプリのFable5全廃deployで消える\n`;
-if (ystCost > 50) msg += `🚨 前日 $${ystCost.toFixed(2)} が危険水準（>$50）\n`;
-else if (ystCost > 20) msg += `⚠️ 前日 $${ystCost.toFixed(2)} が高水準（>$20）\n`;
-if (total > 500) msg += `🚨 MTD $${total.toFixed(2)} が危険水準（>$500）\n`;
-else if (total > 200) msg += `⚠️ MTD $${total.toFixed(2)} が高水準（>$200）\n`;
-msg += `__モデル別 MTD TOP__\n`;
-for (const [k, v] of top) msg += `- ${k}: $${v.toFixed(2)}\n`;
-msg += `※この額は Admin cost_report(セント建てをUSD換算)。正本は console.anthropic.com の請求ページ。Claude Code のシート利用は含まれない（定額）。`;
-
-const post = await fetch(HOOK, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: msg.slice(0, 1950) }) });
-console.log(msg);
-console.log(post.ok ? 'posted to #claude-code' : `discord POST failed ${post.status}`);
+if (isEntry(import.meta.url)) await main();

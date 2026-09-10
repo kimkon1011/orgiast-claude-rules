@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { codexCooldownRemaining, codexHardBlockBypass, parseCodexResetUntil, writeCodexCooldown } from './codex-cooldown.mjs';
+import { codexCooldownRemaining, codexHardBlockBypass, parseCodexResetUntil, providerResetUntil, writeCodexCooldown } from './codex-cooldown.mjs';
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -41,7 +41,18 @@ test('parseCodexResetUntil は12 AM/PMと年省略時の直近の未来を解釈
   const now = new Date(2026, 8, 8, 20, 0).getTime();
   assert.equal(parseCodexResetUntil('try again at Sep 9th 12:05 AM', now), new Date(2026, 8, 9, 0, 5).getTime());
   assert.equal(parseCodexResetUntil('try again at Sep 9th 12:05 PM', now), new Date(2026, 8, 9, 12, 5).getTime());
-  assert.equal(parseCodexResetUntil('try again at Sep 7th 11:27 AM', now), new Date(2027, 8, 7, 11, 27).getTime());
+  assert.equal(parseCodexResetUntil('try again at Sep 7th 11:27 AM', now), now + HOUR);
+});
+
+test('parseCodexResetUntil は裸の相対時間と7日超を既定1時間へ戻す', () => {
+  const now = new Date(2026, 8, 8, 20, 0).getTime();
+  assert.equal(parseCodexResetUntil('details: 3365h 15m observed', now), now + HOUR);
+  assert.equal(parseCodexResetUntil('try again in 3365h 15m', now), now + HOUR);
+});
+
+test('providerResetUntil は7日超の絶対日時を fallbackMs へ戻す', () => {
+  const now = new Date(2026, 8, 8, 20, 0).getTime();
+  assert.equal(providerResetUntil('resets at 2027-01-26 18:44', now), now + 5 * HOUR);
 });
 
 test('parseCodexResetUntil は年明示の過去日時なら now を返す', () => {
@@ -94,6 +105,20 @@ test('writeCodexCooldown の reason は省略時に後方互換で、明示時�
   assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).codex.reason, 'usage_limit');
   writeCodexCooldown(Date.now() + HOUR, file, 'usage_limit_no_fallback');
   assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).codex.reason, 'usage_limit_no_fallback');
+});
+
+test('writeCodexCooldown は140日後を5時間へ丸め reason と history に残す', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-cooldown-clamp-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'provider-cooldown.json');
+  const before = Date.now();
+  writeCodexCooldown(before + 140 * 24 * HOUR, file, 'usage_limit');
+  const saved = JSON.parse(fs.readFileSync(file, 'utf8')).codex;
+  assert.ok(Math.abs(saved.until - (before + 5 * HOUR)) < 2000);
+  assert.equal(saved.reason, 'usage_limit:clamped');
+  const history = JSON.parse(fs.readFileSync(path.join(dir, 'codex-limit-history.jsonl'), 'utf8').trim());
+  assert.equal(history.until, saved.until);
+  assert.equal(history.reason, saved.reason);
 });
 
 test('codexHardBlockBypass は有効なクールダウンとフォールバック不能が揃った時だけ解除する', (t) => {

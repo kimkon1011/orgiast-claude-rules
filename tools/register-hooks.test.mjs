@@ -96,3 +96,32 @@ test('gtasks-pending-notice hook は同期かつtimeout 15で1本だけ登録さ
   assert.match(second, /hook は既に登録済み\(変更なし\)/);
   fs.rmSync(home, { recursive: true, force: true });
 });
+
+test('手間削減hook 8本を正しいイベントへ登録しstop-gateは登録しない', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-parity-'));
+  const repo = path.resolve('.');
+  const settingsFile = path.join(home, '.claude', 'settings.json');
+  const env = { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo };
+  execFileSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { encoding: 'utf8', env });
+  const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  const names = (event) => settings.hooks[event].flatMap((group) => group.hooks || []).map((hook) => path.basename(String(hook.command).match(/"([^"]+\.mjs)"/)?.[1] || ''));
+  assert.deepEqual(['automation-first-reminder.mjs', 'credentials-reminder.mjs'].every((name) => names('UserPromptSubmit').includes(name)), true);
+  assert.deepEqual(['pretooluse-headless-background.mjs', 'pretooluse-serial-investigation.mjs', 'pipe-stage-permissions.mjs'].every((name) => names('PreToolUse').includes(name)), true);
+  assert.deepEqual(['stop-gate-runner.mjs', 'handoff-detail-guard.mjs', 'url-format-guard.mjs', 'check-e2e-before-stop.mjs'].every((name) => names('Stop').includes(name)), true);
+  assert.equal(Object.values(settings.hooks).flatMap((groups) => groups).flatMap((group) => group.hooks || []).some((hook) => /(?:^|[\\/])stop-gate\.mjs/.test(String(hook.command))), false);
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('手間削減hook 8本は2回実行しても各1本のまま', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-parity-idempotent-'));
+  const repo = path.resolve('.');
+  const settingsFile = path.join(home, '.claude', 'settings.json');
+  const env = { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo };
+  execFileSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { encoding: 'utf8', env });
+  execFileSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { encoding: 'utf8', env });
+  const commands = Object.values(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).hooks).flatMap((groups) => groups).flatMap((group) => group.hooks || []).map((hook) => String(hook.command));
+  for (const name of ['automation-first-reminder', 'credentials-reminder', 'pretooluse-headless-background', 'pretooluse-serial-investigation', 'stop-gate-runner', 'handoff-detail-guard', 'pipe-stage-permissions', 'url-format-guard', 'check-e2e-before-stop']) {
+    assert.equal(commands.filter((command) => command.includes(name)).length, 1, `${name} must be unique`);
+  }
+  fs.rmSync(home, { recursive: true, force: true });
+});

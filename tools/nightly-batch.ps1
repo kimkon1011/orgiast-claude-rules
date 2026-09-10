@@ -175,7 +175,7 @@ try {
         foreach ($memoryDir in $v2MemoryDirs) {
             $projectName = Split-Path -Leaf (Split-Path -Parent $memoryDir)
             try {
-                $verifyOutput = @(& $node.Source $memoryIndexSplitVerify --dir $memoryDir 2>&1)
+                $verifyOutput = @(& $node.Source $memoryIndexSplitVerify --dir $memoryDir --fix 2>&1)
                 if ($LASTEXITCODE -ne 0) {
                     $verifyNg += $projectName
                     Write-NightlyLog 'memory-index-split-verify' ('detail:' + $projectName + ': ' + (Format-NightlyDetail $verifyOutput)) $false
@@ -276,6 +276,20 @@ try {
             if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'rule-compliance-loop' ("error:終了コード" + $LASTEXITCODE + ' (警告・後続処理続行)') } else { Write-NightlyLog 'rule-compliance-loop' 'ok' }
         } catch { Write-NightlyLog 'rule-compliance-loop' ("error:" + $_.Exception.Message + ' (警告・後続処理続行)') }
     } else { Write-NightlyLog 'rule-compliance-loop' 'skip:ファイルなし' }
+
+    # 委譲台帳を実測と照合し、偽 cooldown を修復して根本修正を auto-session へ起票する。
+    # high が見つかっても、このブロック自身の失敗時も後続処理は必ず続ける。
+    $delegationHealth = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\delegation-health-check.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $delegationHealth = $candidate; break }
+    }
+    if ($delegationHealth) {
+        try {
+            & $node.Source $delegationHealth
+            if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'delegation-health-check' ("error:終了コード" + $LASTEXITCODE + ' (警告・後続処理続行)') } else { Write-NightlyLog 'delegation-health-check' 'ok' }
+        } catch { Write-NightlyLog 'delegation-health-check' ("error:" + $_.Exception.Message + ' (警告・後続処理続行)') }
+    } else { Write-NightlyLog 'delegation-health-check' 'skip:ファイルなし' }
 
     # アプリ内フォームの報告(kim の DM に届いたもの)を GitHub Issue 化する。
     # 失敗しても既存の夜間処理を止めない。未 ack のものは次回そのまま再試行される。
@@ -403,12 +417,12 @@ try {
     }
     if ($triage) {
         try {
-            $triageOutput = @(& $node.Source $triage)
+            $triageOutput = @(& $node.Source $triage '--limit' '60' '--confidence' 'high,medium,low')
             $triageExitCode = $LASTEXITCODE
             if ($triageExitCode -ne 0) {
                 $triageResult = "error:終了コード$triageExitCode"
             } else {
-                $triageResult = @($triageOutput | Where-Object { $_ -match '^(ok:検証\d+件 done\d+ rejected\d+ pending\d+|skip:対象なし|error:.+)$' } | Select-Object -Last 1)
+                $triageResult = @($triageOutput | Where-Object { $_ -match '^(ok:検証\d+件 done\d+ rejected\d+ pending\d+(?: 判定失敗\d+件)?|skip:対象なし|error:.+)$' } | Select-Object -Last 1)
                 if ($triageResult.Count -eq 0) { $triageResult = 'error:状態不明' } else { $triageResult = [string]$triageResult[0] }
             }
             $summary['ai-news-triage'] = $triageResult

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fetchMessages } from './discord-digest.mjs';
 import { auditFleet, extractIdentity, maskEmailAddress } from './fleet-discord-audit.mjs';
 import { fetchFleetSheetRows } from './fleet-triage-report.mjs';
+import { buildPcIdentityIndex, emptyFleetStateCounts, fleetRowState, pcMapEntries, pcMapNames, reconcileFleetRows } from './fleet-pc-identity.mjs';
 import { isEntry } from './is-entry.mjs';
 
 const DAY_MS = 86_400_000;
@@ -73,16 +74,9 @@ export function classifyFleet({ discord, sheet, pcMap = {}, now = new Date(), er
 
   const groups = [];
   const byName = new Map();
-  const mappedNames = new Map();
-  for (const [discordLabel, mapped] of Object.entries(pcMap || {})) {
-    if (discordLabel.startsWith('_') || !mapped || typeof mapped !== 'object') continue;
-    // aliases は「同じPCを指す別表記のシート行/ラベル」。実データでは1台が
-    // 手入力行と機械書き込み行に分かれて存在するため、1つの sheetName では足りない。
-    const names = [discordLabel, mapped.sheetName, mapped.hostname, ...(Array.isArray(mapped.aliases) ? mapped.aliases : [])].filter(Boolean);
-    for (const name of names) mappedNames.set(key(name), names);
-  }
+  const identityIndex = buildPcIdentityIndex(pcMap);
   const obtain = (names) => {
-    const expandedNames = [...new Set(names.flatMap((name) => mappedNames.get(key(name)) || [name]))];
+    const expandedNames = [...new Set(names.flatMap((name) => identityIndex.find(name)?.names || [name]))];
     const found = expandedNames.map((name) => byName.get(key(name))).find(Boolean);
     const group = found || { names: new Set(), discordAt: null, sheetAt: null, sheetDate: null, discordLabel: null, sheetName: null, hostname: null, uncertainReason: null, explicitlyMapped: false };
     for (const name of expandedNames.filter(Boolean)) { group.names.add(clean(name)); byName.set(key(name), group); }
@@ -96,8 +90,7 @@ export function classifyFleet({ discord, sheet, pcMap = {}, now = new Date(), er
     if (observation.at != null && (group.discordAt == null || observation.at > group.discordAt)) group.discordAt = observation.at;
   }
   const mappedBySheet = new Map();
-  for (const [discordLabel, mapped] of Object.entries(pcMap || {})) {
-    if (!mapped || typeof mapped !== 'object') continue;
+  for (const [discordLabel, mapped] of pcMapEntries(pcMap)) {
     const group = byName.get(key(discordLabel)) || obtain([discordLabel, mapped.hostname]);
     group.discordLabel ||= clean(discordLabel);
     group.sheetName ||= clean(mapped.sheetName) || null;
@@ -151,7 +144,16 @@ export function classifyFleet({ discord, sheet, pcMap = {}, now = new Date(), er
   });
   const counts = { ...emptyCounts };
   for (const item of items) counts[item.state]++;
-  return { items, counts, warnings, unavailable: false };
+  const reconciliation = reconcileFleetRows(sheet, pcMap);
+  // state 判定は fleet-pc-identity.mjs に1本化(interaction-rollout と共有)。ここに複製すると
+  // 優先順位がズレて「手書き行なし」が reporting を隠す実害が出た(2026-09-08)。
+  const rolloutCounts = emptyFleetStateCounts();
+  for (const row of reconciliation.rows) {
+    const { state, manualRowMissing } = fleetRowState(row, nowMs, { liveWithinMs: 3 * DAY_MS, parseTime: timeOf });
+    rolloutCounts[state]++;
+    if (manualRowMissing) rolloutCounts.manualRowMissing++;
+  }
+  return { items, counts, warnings, unavailable: false, rolloutCounts, candidates: reconciliation.candidates, duplicateManualRows: reconciliation.duplicateManualRows };
 }
 
 export function formatLiveness(result) {
@@ -164,9 +166,12 @@ export function formatLiveness(result) {
   }
   lines.push('', '## 次にやること');
   if (result.counts['discord-mute'] || result.counts.broken) lines.push('壊れて停止 / Discord不通: 該当PCで Claude Code を開けば keyserve が新しい webhook を配る（.ps1 のままのPCは2セッション必要）');
-  if (result.counts.never) lines.push('報告実績なし: 対処不要。導入状況は人が確認する');
+  if (result.rolloutCounts?.['installed-pending']) lines.push('installed-pending: 次回 03:15 の定期実行で自己修復する見込み。翌日も未報告なら keyserve 認証を疑う');
+  if (result.rolloutCounts?.['never-reported'] || result.counts.never) lines.push('never-reported: そのPCで配布コマンドを1回実行するまで機械回収は不可能（未導入か電源off）');
+  if (result.rolloutCounts?.manualRowMissing) lines.push(`手書き行なし ${result.rolloutCounts.manualRowMissing}台: 機械報告はあるが手書き一覧に行が無い。台帳へ1行追加が必要（稼働状態とは別軸）`);
   if (result.counts['legacy-manual']) lines.push('手入力データのみ: 対処不要');
   if (result.counts.uncertain) lines.push('ラベル対応未確定: kim の判断待ち');
+  for (const candidate of result.candidates || []) lines.push(`${candidate.manual}↔${candidate.machine} の同一判定は kim の回答が必要（根拠: ${candidate.reason}）`);
   if (!result.counts['discord-mute'] && !result.counts.broken && !result.counts.never && !result.counts['legacy-manual'] && !result.counts.uncertain) lines.push('対処不要');
   return lines.join('\n');
 }
@@ -204,7 +209,7 @@ export async function main(argv = process.argv.slice(2), now = new Date()) {
   }
   if (argv.includes('--post-sheet')) {
     if (!fleetEnv.FLEET_SHEET_URL || !fleetEnv.FLEET_SHEET_TOKEN) { console.error('FLEET_SHEET_URL/TOKEN が未設定です'); return 1; }
-    const candidates = Object.entries(pcMap).map(([label, mapped]) => [label, mapped.sheetName, mapped.hostname, ...(Array.isArray(mapped.aliases) ? mapped.aliases : [])].filter(Boolean));
+    const candidates = pcMapEntries(pcMap).map(([label, mapped]) => pcMapNames(label, mapped));
     const items = result.items.map((item) => {
       const mapped = candidates.find((names) => names.some((name) => item.name === name || item.name.includes(`（${name}）`)));
       return { names: [...new Set(mapped || [item.name])], state: toSheetState(item.state), reason: item.reason };

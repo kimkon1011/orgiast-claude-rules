@@ -52,7 +52,7 @@ try {
   const directive = path.join(home, '.claude', 'cost-directive.md');
   if (fs.existsSync(directive)) {
     const txt = fs.readFileSync(directive, 'utf8');
-    const ctx = `【コスト×作業量ループ｜監督への自己指示】前回計測の結果は下記。委譲率が低い/コスト効率が悪化している時は、作業前に必ず: 実装→Codex(定額) / 量産・分類→Groq / 汎用の安い推論→OpenRouter / 長文脈→Gemini / 別課金へ逃がす→Kimi、へ回す。監督(Opus)は最小限にとどめ大きな実装を抱えない(§1.18)。\n\n${txt}`;
+    const ctx = `【コスト×作業量ループ｜監督への自己指示】前回計測の結果は下記。Claude以外への委譲率が低い/コスト効率が悪化している時は、作業前に必ず: 実装→Codex(定額) / 量産・分類→Groq / 汎用の安い推論→OpenRouter / 長文脈→Gemini / 別課金へ逃がす→Kimi、へ回す。監督(Opus)は最小限にとどめ大きな実装を抱えない(§1.18)。\n\n${txt}`;
     process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: ctx } })}\n`);
   }
 } catch {}

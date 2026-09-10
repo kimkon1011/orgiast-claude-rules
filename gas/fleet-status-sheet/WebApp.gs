@@ -14,6 +14,8 @@ function fleetPlanHeaders(headers) {
 function _fleetEnsureIdentityHeaders_(sheet) {
   const lastColumn = sheet.getLastColumn();
   const headers = lastColumn > 0 ? sheet.getRange(1, 1, 1, lastColumn).getDisplayValues()[0] : [];
+  const oldDelegation = fleetFindHeaderIndex(headers, '委譲率(安いAIへ)');
+  if (oldDelegation >= 0) { sheet.getRange(1, oldDelegation + 1).setValue(FLEET_HEADERS_.delegRatio); headers[oldDelegation] = FLEET_HEADERS_.delegRatio; }
   const planned = fleetPlanHeaders(headers);
   if (planned.length > headers.length) {
     sheet.getRange(1, lastColumn + 1, 1, planned.length - headers.length).setValues([planned.slice(headers.length)]);
@@ -41,7 +43,7 @@ function _fleetSheet_() {
     const lastColumn = sheet.getLastColumn();
     if (lastColumn < requiredHeaders.length) continue;
     const headers = sheet.getRange(1, 1, 1, lastColumn).getDisplayValues()[0];
-    if (requiredHeaders.every(function(header) { return headers.indexOf(header) >= 0; })) {
+    if (requiredHeaders.every(function(header) { return fleetFindHeaderIndex(headers, header) >= 0; })) {
       properties.setProperty('SHEET_TAB_NAME', sheet.getName());
       return sheet;
     }
@@ -101,7 +103,8 @@ function doPost(e) {
     'webhook-describe': describeWebhookLedger,
     'manual-columns': ensureManualColumns,
     'ledger-unify': unifyIntoCloudLedger,
-    'cost-improve-heartbeat': upsertCostImproveHeartbeat
+    'cost-improve-heartbeat': upsertCostImproveHeartbeat,
+    'cost-weekly-heartbeat': upsertCostWeeklyHeartbeat
   };
   try {
     const handler = handlers[payload.kind] || upsertFleetStatus;
@@ -126,11 +129,13 @@ function doGet(e) {
     const rows = values.map(function(row) {
       const value = function(key) { return columns[key] >= 0 ? (row[columns[key]] || '') : ''; };
       return {
-        pcName: value('selfPc'), label: value('hostname'), reportedAt: value('reportedAt'), note: value('consistency'),
+        pcName: value('selfPc'), label: value('hostname'), hostname: value('realHostname'), reportedAt: value('reportedAt'), note: value('consistency'),
         interactionLoop: value('interactionLoop'), interactionSelftest: value('interactionSelftest'),
-        claudeUsd: value('claudeUsd'), mainModel: value('mainModel'), delegRatio: value('delegRatio'), cheapAiUse: value('cheapAiUse'),
+        claudeUsd: value('claudeUsd'), mainModel: value('mainModel'), delegRatio: value('delegRatio'), delegRatioLegacy: value('delegRatioLegacy'), cheapAiUse: value('cheapAiUse'),
+        planSevenDayPct: value('planSevenDayPct'), planFiveHourPct: value('planFiveHourPct'), budgetPacePct: value('budgetPacePct'), settingsModel: value('settingsModel'),
         codexLogin: value('codexLogin'), fable5: value('fable5'), disciplineAlert: value('disciplineAlert'), livenessState: value('livenessState'),
-        costLoopRanAt: value('costLoopRanAt'), costLoopStatus: value('costLoopStatus')
+        costLoopRanAt: value('costLoopRanAt'), costLoopStatus: value('costLoopStatus'),
+        costWeeklyRanAt: value('costWeeklyRanAt'), costWeeklyStatus: value('costWeeklyStatus')
       };
     });
     return _fleetJson_({ ok: true, rows: rows, count: rows.length });
@@ -150,6 +155,26 @@ function upsertCostImproveHeartbeat(payload) {
     const headers = sheet.getRange(1, 1, 1, lastColumn).getDisplayValues()[0];
     const rows = lastRow > 1 ? sheet.getRange(2, 1, lastRow - 1, lastColumn).getValues() : [];
     const plan = fleetPlanCostImproveHeartbeat(headers, rows, payload);
+    Object.keys(plan.values).forEach(function(columnIndex) {
+      sheet.getRange(plan.rowIndex + 2, Number(columnIndex) + 1).setValue(plan.values[columnIndex]);
+    });
+    return { ok: true, action: 'updated', row: plan.rowIndex + 2 };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function upsertCostWeeklyHeartbeat(payload) {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(20000)) return { ok: false, status: 503, error: 'busy' };
+  try {
+    const sheet = _fleetSheet_();
+    _fleetEnsureIdentityHeaders_(sheet);
+    const lastColumn = sheet.getLastColumn();
+    const lastRow = sheet.getLastRow();
+    const headers = sheet.getRange(1, 1, 1, lastColumn).getDisplayValues()[0];
+    const rows = lastRow > 1 ? sheet.getRange(2, 1, lastRow - 1, lastColumn).getValues() : [];
+    const plan = fleetPlanCostWeeklyHeartbeat(headers, rows, payload);
     Object.keys(plan.values).forEach(function(columnIndex) {
       sheet.getRange(plan.rowIndex + 2, Number(columnIndex) + 1).setValue(plan.values[columnIndex]);
     });

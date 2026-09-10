@@ -1,4 +1,5 @@
 import { latestAssistantText } from './lib/assistant-text.mjs';
+import { isEntry } from './is-entry.mjs';
 
 export function hasManualRequest(text) {
     // コードフェンスを除去
@@ -156,6 +157,6 @@ function main() {
     }
 }
 
-if (process.argv[1] && process.argv[1].endsWith('manual-request-fullsteps-gate.mjs')) {
+if (isEntry(import.meta.url)) {
     main();
 }

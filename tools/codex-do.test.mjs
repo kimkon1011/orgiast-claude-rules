@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { needsWorktreeRepair, detectQuotaLimit, shouldFlagEmptyFallbackDiff, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, isBackendExhausted } = await import('./codex-do.mjs');
+const { needsWorktreeRepair, detectQuotaLimit, shouldFlagEmptyFallbackDiff, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, isBackendExhausted, wslCodexLaunchPlan } = await import('./codex-do.mjs');
 
 function run(args, options = {}) {
   return spawnSync(process.execPath, [tool, ...args], {
@@ -70,6 +70,14 @@ test('--timeout と --cwd を付けても指示文が引数として食われな
   assert.doesNotMatch(result.stdout, /--timeout|--cwd|60/);
 });
 
+test('fallbackBackendTimeoutSecs は全体枠・既定値・環境変数・下限を反映する', () => {
+  assert.equal(fallbackBackendTimeoutSecs(1800, {}), 600);
+  assert.equal(fallbackBackendTimeoutSecs(300, {}), 300);
+  assert.equal(fallbackBackendTimeoutSecs(1800, { CODEX_DO_FALLBACK_BACKEND_TIMEOUT_SECS: '900' }), 900);
+  assert.equal(fallbackBackendTimeoutSecs(1800, { CODEX_DO_FALLBACK_BACKEND_TIMEOUT_SECS: 'garbage' }), 600);
+  assert.equal(fallbackBackendTimeoutSecs(10, {}), 60);
+});
+
 test('指示が空なら使い方を出して終了する', () => {
   const result = run(['--dry-run']);
   assert.equal(result.status, 2);
@@ -90,14 +98,14 @@ test('detectQuotaLimit: 枠切れメッセージ (You\'ve hit your usage limit) 
 });
 
 test('detectQuotaLimit: 枠切れメッセージ (Upgrade to Pro) を検出する', () => {
-  const stderr = 'Please visit chatgpt.com/explore/pro to Upgrade to Pro';
+  const stderr = 'WARN: Upgrade to Pro to continue';
   const check = detectQuotaLimit('', stderr);
   assert.equal(check.matched, true);
   assert.equal(check.pattern, "Upgrade to Pro");
 });
 
 test('detectQuotaLimit: 枠切れメッセージ (rate limit / 429) を検出する', () => {
-  const checkStderr = detectQuotaLimit('', 'Error: rate limit exceeded (429)');
+  const checkStderr = detectQuotaLimit('', 'Error: Rate limit exceeded (429)');
   assert.equal(checkStderr.matched, true);
   assert.equal(checkStderr.pattern, "rate limit");
 
@@ -110,6 +118,68 @@ test('detectQuotaLimit: 通常のエラー出力やテスト失敗では検出�
   const stderr = 'Error: AssertionError [ERR_ASSERTION]: Expected true but got false\nReferenceError: x is not defined';
   const check = detectQuotaLimit('', stderr);
   assert.equal(check.matched, false);
+});
+
+test('detectQuotaLimit: exit 0 の stdout でも Codex の上限エラー行を検出する', () => {
+  const stdout = "work completed\nERROR: You've hit your usage limit. Try again at Sep 9th 10:08 AM";
+  assert.equal(detectQuotaLimit(stdout, '', 0).matched, true);
+});
+
+test('detectQuotaLimit: テストランナー、コード、行番号の疑似一致を除外する', () => {
+  assert.equal(detectQuotaLimit("✔ detectQuotaLimit: 枠切れメッセージ (You've hit your usage limit) を検出する (1.2ms)", '', 0).matched, false);
+  assert.equal(detectQuotaLimit('return json({ ok:false, error:"rate limit exceeded" }, 429)', '', 0).matched, false);
+  assert.equal(detectQuotaLimit('src/CaseList.js:429:function foo()', '', 0).matched, false);
+});
+
+test('detectQuotaLimit: 2026-09-08 に実発生した偽陽性ラインを弾く（回帰）', () => {
+  const lines = [
+    'if (m) { src/BulkImportFromTaskMgmt.js:429: trailing whitespace. +    const y = m[',
+    'src/CaseList.js:429:function CaseList_touchUpdatedAt(caseId',
+    'rovider_unhealthy は failRate 0.20 / http429 50 の境界で発火し codex は除外される (0.6032ms) ✔ 27',
+    '登録 seed だけを返し、title の前後空白と全角空白を同一視する (0.4297ms) ✔ 役割を固定優先順にし、それ以外は出現順を保つ (0.3027ms)',
+    '  80 63 319.4251888363211 100 56 333.4470429659536 120 48 347.85853020441544 150 42 ',
+    'ookへPOSTするときUser-Agentを明示しないとCloudflareが429/error code 1015で弾く。送信結果は必ずレスポンスコードで検証する',
+    'ides の modifiedTime に更新 - *   - partial（429 残あり）→ 時刻更新せず、次回 trigger で同じ判定が走り resume',
+  ];
+  for (const line of lines) {
+    assert.equal(detectQuotaLimit(line, '', 0, '').matched, false, `偽陽性ライン: ${line}`);
+  }
+});
+
+test('detectQuotaLimit: 行頭429の直後にコロン（grep -h 行番号）は弾く', () => {
+  for (const line of [
+    '429:rate limit 対策のメモ',
+    '429:## Rate Limit の扱い',
+    '429:quota exceeded と書かれたドキュメント行',
+  ]) {
+    assert.equal(detectQuotaLimit(line, '', 0, '').matched, false, `行番号形式: ${line}`);
+  }
+
+  for (const line of [
+    '429 Too Many Requests',
+    'HTTP 429 Too Many Requests',
+    'ERROR: 429 too many requests, retry later',
+  ]) {
+    const check = detectQuotaLimit(line, '', 0, '');
+    assert.equal(check.matched, true, `真陽性: ${line}`);
+    assert.equal(check.pattern, '429', `検出パターン: ${line}`);
+  }
+
+  const rateLimit = detectQuotaLimit('Error: Rate limit exceeded (429)', '', 0, '');
+  assert.equal(rateLimit.matched, true);
+  assert.equal(rateLimit.pattern, 'rate limit');
+});
+
+test('detectQuotaLimit: promptText に含まれる指示文エコーを除外する', () => {
+  const echoed = '「Usage limit」を検知したら…';
+  assert.equal(detectQuotaLimit(echoed, '', 1, echoed).matched, false);
+});
+
+test('detectQuotaLimit: stderr の上限行は終了コードに関係なく検出する', () => {
+  for (const status of [0, 1, null]) {
+    assert.equal(detectQuotaLimit('', "ERROR: You've hit your usage limit.", status).matched, true);
+  }
+  assert.equal(detectQuotaLimit('', '[2026-09-09T00:00:00] error: Rate limit reached for requests', 0).matched, true);
 });
 
 test('fallback の実装系指示で空 diff なら失敗扱いにする', () => {
@@ -139,7 +209,7 @@ test('--no-fallback が指定されても指示文が引数として食われず
 
 test('枠切れ発生時に --no-fallback を指定した場合はフォールバックせず非ゼロ終了する', () => {
   const mockResults = [
-    { status: 0, output: "You've hit your usage limit. Please try again later.", stderr: "" }
+    { status: 1, output: "You've hit your usage limit. Please try again later.", stderr: "" }
   ];
   const result = run(['--no-fallback', '指示内容'], {
     env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults) }
@@ -153,7 +223,7 @@ test('枠切れ発生時に --no-fallback を指定した場合はフォール�
 
 test('枠切れ発生時にフォールバックが成功した場合は 0 で終了しヘッダ・フッタを出力する', () => {
   const mockResults = [
-    { status: 0, output: "You've hit your usage limit. Please try again later.", stderr: "" },
+    { status: 1, output: "You've hit your usage limit. Please try again later.", stderr: "" },
     { status: 0, output: "Qwen Code CLI has successfully edited files.", stderr: "" }
   ];
   const result = run(['指示内容'], {
@@ -164,9 +234,27 @@ test('枠切れ発生時にフォールバックが成功した場合は 0 で�
   assert.match(result.stderr, /Falling back to an agentic CLI/);
 });
 
+test('第1フォールバックがタイムアウトしたら第2バックエンドへ進み成功する', () => {
+  const mockResults = [
+    { status: 1, output: "You've hit your usage limit. Please try again later.", stderr: '' },
+    { status: 124, output: '', stderr: '', timedOut: true },
+    { status: 0, output: 'Qwen Code CLI has successfully completed.', stderr: '' }
+  ];
+  const result = run(['指示内容'], {
+    env: {
+      CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults),
+      GEMINI_API_KEY: 'gemini-test',
+      DEEPSEEK_API_KEY: 'deepseek-test'
+    }
+  });
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /executor=fallback:deepseek/);
+  assert.match(result.stderr, /タイムアウトしたため次のバックエンドへ/);
+});
+
 test('Codex もフォールバック(Qwen Code) も失敗した場合は非ゼロで終了する', () => {
   const mockResults = [
-    { status: 0, output: "You've hit your usage limit. Please try again later.", stderr: "" },
+    { status: 1, output: "You've hit your usage limit. Please try again later.", stderr: "" },
     { status: 12, output: "", stderr: "Qwen Code execution error" }
   ];
   const result = run(['指示内容'], {
@@ -178,7 +266,7 @@ test('Codex もフォールバック(Qwen Code) も失敗した場合は非ゼ�
 
 test('枠切れ発生時に DEEPSEEK_API_KEY が無ければフォールバックせず非ゼロで終了する', () => {
   const mockResults = [
-    { status: 0, output: "You've hit your usage limit. Please try again later.", stderr: "" }
+    { status: 1, output: "You've hit your usage limit. Please try again later.", stderr: "" }
   ];
   const prev = process.env.DEEPSEEK_API_KEY;
   delete process.env.DEEPSEEK_API_KEY;
@@ -442,6 +530,23 @@ test('resolveFallbackBackends はどのキーも無ければ空配列を返す',
   });
 });
 
+test('resolveFallbackBackends は codex-fallback-order.json があればその順を尊重する', () => {
+  withEnvKeysCleared(() => {
+    const dir = makeHomeWithEnv({
+      'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n',
+      'deepseek.env': 'DEEPSEEK_API_KEY=sk-ds-1\n',
+      'gemini.env': 'GEMINI_API_KEY=sk-gemini-1\n'
+    });
+    fs.writeFileSync(path.join(dir, '.claude', 'codex-fallback-order.json'), JSON.stringify(['qwen', 'openrouter-free', 'gemini-cli']));
+    const backends = resolveFallbackBackends(dir);
+    assert.deepEqual(backends.map(({ name }) => name), ['deepseek', 'openrouter-free', 'gemini-cli']);
+    // cheap-code:glm は ZAI キーが無いとスキップされ、残りだけが返る
+    fs.writeFileSync(path.join(dir, '.claude', 'codex-fallback-order.json'), JSON.stringify(['gemini-cli', 'cheap-code:glm']));
+    const withCheap = resolveFallbackBackends(dir);
+    assert.deepEqual(withCheap.map(({ name }) => name), ['gemini-cli']);
+  });
+});
+
 test('resolveQwenBackends は CODEX_DO_FREE_MODEL で openrouter-free の model を上書きできる', () => {
   withEnvKeysCleared(() => {
     process.env.CODEX_DO_FREE_MODEL = 'z-ai/glm-5.2:free';
@@ -493,6 +598,12 @@ test('isBackendExhausted は通常の成功出力で false を返す', () => {
   assert.equal(isBackendExhausted('', 'All tests passed'), false);
 });
 
+test('isBackendExhausted は 429/413 がファイル行番号(コロン隣接)なら誤検出しない', () => {
+  assert.equal(isBackendExhausted('tools/codex-do.mjs:429:12', ''), false);
+  assert.equal(isBackendExhausted('', 'Applied edit in tools/codex-do.mjs:429: added helper function'), false);
+  assert.equal(isBackendExhausted('src/CaseList.js:413:function foo()', ''), false);
+});
+
 test('loadEnvKey は process.env を最優先し、ファイルの export VAR="..." 形式も読める', () => {
   const dir = makeHomeWithEnv({ 'openrouter.env': 'export OPENROUTER_API_KEY="sk-or-file"\n' });
   const prev = process.env.OPENROUTER_API_KEY;
@@ -534,4 +645,49 @@ test('loadDeepseekKey は loadEnvKey の薄いラッパとして振る舞いが�
   } finally {
     if (prev !== undefined) process.env.DEEPSEEK_API_KEY = prev;
   }
+});
+
+test('codex-fallback: cheap-code:glm が usage_limit クールダウン中なら deepseek へ差し替える', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-cooldown-'));
+  const claude = path.join(home, '.claude'); fs.mkdirSync(claude, { recursive: true });
+  fs.writeFileSync(path.join(claude, 'zai.env'), 'ZAI_API_KEY=zai-test\n', 'utf8');
+  fs.writeFileSync(path.join(claude, 'deepseek.env'), 'DEEPSEEK_API_KEY=ds-test\n', 'utf8');
+  fs.writeFileSync(path.join(claude, 'provider-cooldown.json'), JSON.stringify({ glm: { until: Date.now() + 5 * 60 * 60 * 1000, reason: 'usage_limit', at: new Date().toISOString() } }));
+  fs.writeFileSync(path.join(claude, 'codex-fallback-order.json'), JSON.stringify(['cheap-code:glm', 'gemini-cli']));
+  const backends = resolveFallbackBackends(home);
+  assert.ok(backends.length >= 1);
+  assert.equal(backends[0].provider, 'deepseek');
+  assert.equal(backends[0].name, 'cheap-code:deepseek');
+});
+
+test('codex-fallback: クールダウン無しなら glm を維持する', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-normal-'));
+  const claude = path.join(home, '.claude'); fs.mkdirSync(claude, { recursive: true });
+  fs.writeFileSync(path.join(claude, 'zai.env'), 'ZAI_API_KEY=zai-test\n', 'utf8');
+  fs.writeFileSync(path.join(claude, 'deepseek.env'), 'DEEPSEEK_API_KEY=ds-test\n', 'utf8');
+  fs.writeFileSync(path.join(claude, 'codex-fallback-order.json'), JSON.stringify(['cheap-code:glm']));
+  const backends = resolveFallbackBackends(home);
+  assert.equal(backends[0].provider, 'glm');
+  assert.equal(backends[0].name, 'cheap-code:glm');
+});
+
+test('wslCodexLaunchPlan: 起動確認成功ならそのまま WSL codex を使う', () => {
+  assert.equal(wslCodexLaunchPlan({ distroFound: true, codexPresent: true, versionOk: true, installAttempted: false, retried: false }), 'wsl');
+});
+
+test('wslCodexLaunchPlan: codex が在るのに --version だけ失敗したら再インストールでなく再試行する(2026-09-08 out=0 空出力の根本原因)', () => {
+  // 旧実装は --version 失敗を「codex が無い」と誤認し npm i -g(非root の WSL では EACCES で必ず失敗)へ
+  // 進み、22秒を消費した末にネイティブ(非git では trust エラーで空出力・即終了)へ落ちて out=0 行を残した。
+  assert.equal(wslCodexLaunchPlan({ distroFound: true, codexPresent: true, versionOk: false, installAttempted: false, retried: false }), 'retry');
+  // 再試行も失敗したら、再インストールではなくネイティブ(警告付き・--skip-git-repo-check)へ。
+  assert.equal(wslCodexLaunchPlan({ distroFound: true, codexPresent: true, versionOk: false, installAttempted: false, retried: true }), 'native');
+});
+
+test('wslCodexLaunchPlan: 本当に codex が無いときだけ1回インストールし、それも失敗ならネイティブへ', () => {
+  assert.equal(wslCodexLaunchPlan({ distroFound: true, codexPresent: false, versionOk: false, installAttempted: false, retried: false }), 'install');
+  assert.equal(wslCodexLaunchPlan({ distroFound: true, codexPresent: false, versionOk: false, installAttempted: true, retried: false }), 'native');
+});
+
+test('wslCodexLaunchPlan: ディストリが見つからなければ最初からネイティブへ', () => {
+  assert.equal(wslCodexLaunchPlan({ distroFound: false, codexPresent: false, versionOk: false, installAttempted: false, retried: false }), 'native');
 });

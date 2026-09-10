@@ -142,6 +142,30 @@ export function pickBundledVsix(names) {
     .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))[0] ?? '';
 }
 
+export function vsixVersion(name) {
+  const match = String(name).match(/^orgiast-next-session-([0-9]+(?:\.[0-9]+){2})\.vsix$/);
+  return match?.[1] ?? '';
+}
+
+export function compareVersions(left, right) {
+  const a = String(left).split('.').map(Number);
+  const b = String(right).split('.').map(Number);
+  for (let index = 0; index < 3; index += 1) {
+    const difference = (a[index] || 0) - (b[index] || 0);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
+
+export function shouldInstallBundledVsix({ listedExtensions, vsixName }) {
+  const bundledVersion = vsixVersion(vsixName);
+  const line = String(listedExtensions).split(/\r?\n/)
+    .find((entry) => /^orgiast\.next-session(?:@|$)/i.test(entry.trim()));
+  if (!line) return true;
+  const installedVersion = line.trim().match(/^orgiast\.next-session@(.+)$/i)?.[1] ?? '';
+  return !installedVersion || !bundledVersion || compareVersions(installedVersion, bundledVersion) < 0;
+}
+
 // 既定では URI を撃つだけにする。`code.cmd <cwd>` を先に走らせると、そのフォルダを開いている
 // **既存ウィンドウが再読み込みされ拡張ホストが再起動する**（2026-08-30 実測。走っていたセッションが
 // state_sync からやり直しになり、直後に撃った URI も落ちた）。新タブは「いま開いているウィンドウの
@@ -632,13 +656,12 @@ export async function launchNextSession(argv = [], io = {}) {
           });
           return { code, stdout, stderr };
         });
-        const listed = await runCodeCli(['--list-extensions']);
+        const listed = await runCodeCli(['--list-extensions', '--show-versions']);
         if (listed.code !== 0) throw new Error(`拡張一覧の取得に失敗しました: ${listed.stderr || `exit ${listed.code}`}`);
-        const installed = String(listed.stdout).split(/\r?\n/).some((line) => line.trim().toLowerCase() === 'orgiast.next-session');
-        if (!installed) {
-          const packageDir = path.join(REPO_ROOT, 'packages', 'vscode-next-session');
-          const vsixName = pickBundledVsix(readdir(packageDir));
-          if (!vsixName) throw new Error(`同梱 VSIX が見つかりません: ${packageDir}`);
+        const packageDir = path.join(REPO_ROOT, 'packages', 'vscode-next-session');
+        const vsixName = pickBundledVsix(readdir(packageDir));
+        if (!vsixName) throw new Error(`同梱 VSIX が見つかりません: ${packageDir}`);
+        if (shouldInstallBundledVsix({ listedExtensions: listed.stdout, vsixName })) {
           const installedResult = await runCodeCli(['--install-extension', path.join(packageDir, vsixName), '--force']);
           if (installedResult.code !== 0) throw new Error(`拡張のインストールに失敗しました: ${installedResult.stderr || `exit ${installedResult.code}`}`);
         }

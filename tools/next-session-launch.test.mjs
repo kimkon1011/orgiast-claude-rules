@@ -30,6 +30,7 @@ import {
   runHeadlessNextSession,
   sanitizeEnv,
   shouldLaunch,
+  shouldInstallBundledVsix,
   trustKeyVariants,
 } from './next-session-launch.mjs';
 
@@ -115,6 +116,14 @@ test('vscode-ext の URI は cmd.exe で & が切れないよう引用される'
 test('同梱 VSIX は数値バージョンが最新のものを選ぶ', () => {
   assert.equal(pickBundledVsix(['x.vsix', 'orgiast-next-session-0.2.9.vsix', 'orgiast-next-session-0.10.0.vsix']), 'orgiast-next-session-0.10.0.vsix');
   assert.equal(pickBundledVsix([]), '');
+});
+
+test('同梱 VSIX は未導入または旧版のときだけインストールする', () => {
+  const vsixName = 'orgiast-next-session-0.3.2.vsix';
+  assert.equal(shouldInstallBundledVsix({ listedExtensions: 'other.extension@1.0.0', vsixName }), true);
+  assert.equal(shouldInstallBundledVsix({ listedExtensions: 'orgiast.next-session@0.2.0', vsixName }), true);
+  assert.equal(shouldInstallBundledVsix({ listedExtensions: 'orgiast.next-session@0.3.2', vsixName }), false);
+  assert.equal(shouldInstallBundledVsix({ listedExtensions: 'orgiast.next-session@0.4.0', vsixName }), false);
 });
 
 test('VSCode 起動は code.cmd を cmd.exe /c 経由で実行する', () => {
@@ -498,18 +507,18 @@ test('VSCode dry-run は route と手順だけを出して spawn しない', asy
   assert.equal(output.steps[0].label, 'open-session');
 });
 
-function vscodeExtIo({ installed = false, codeCli = 'C:\\Code\\bin\\code.cmd' } = {}) {
+function vscodeExtIo({ installedVersion = '', bundledVersion = '0.3.2', codeCli = 'C:\\Code\\bin\\code.cmd' } = {}) {
   const commands = [];
   const spawnCalls = [];
   let exitListenerAttached = false;
   const base = fakeIo({
     env: { VSCODE_CLI_PATH: codeCli, CLAUDE_CLI_PATH: 'C:\\Claude CLI\\claude.exe' },
     exists: (file) => file === codeCli || file === 'C:\\Claude CLI\\claude.exe',
-    readdir: (dir) => dir.endsWith('vscode-next-session') ? ['orgiast-next-session-0.1.0.vsix'] : [],
+    readdir: (dir) => dir.endsWith('vscode-next-session') ? [`orgiast-next-session-${bundledVersion}.vsix`] : [],
     runCodeCli: async (args) => {
       commands.push(args);
       return args[0] === '--list-extensions'
-        ? { code: 0, stdout: installed ? 'orgiast.next-session\r\n' : 'other.extension\r\n', stderr: '' }
+        ? { code: 0, stdout: installedVersion ? `orgiast.next-session@${installedVersion}\r\n` : 'other.extension@1.0.0\r\n', stderr: '' }
         : { code: 0, stdout: 'ok', stderr: '' };
     },
     // open-session の spawn は本物の子プロセスと同じく EventEmitter を返し、`exit` を出す。
@@ -537,7 +546,7 @@ test('vscode-ext は未導入時だけ VSIX を先に入れ、正しい URI を�
   assert.equal(await launchNextSession(['--target', 'vscode-ext', '--prompt', '/session-start 日本語'], io), 0);
   assert.equal(commands[0][0], '--list-extensions');
   assert.equal(commands[1][0], '--install-extension');
-  assert.match(commands[1][1], /orgiast-next-session-0\.1\.0\.vsix$/);
+  assert.match(commands[1][1], /orgiast-next-session-0\.3\.2\.vsix$/);
   assert.equal(commands[1][2], '--force');
   assert.equal(calls.spawn.length, 1);
   const args = calls.spawn[0][1];
@@ -558,11 +567,18 @@ test('vscode-ext は未導入時だけ VSIX を先に入れ、正しい URI を�
   assert.equal(calls.spawn.some(([, commandArgs]) => commandArgs.includes('C:\\work') && !commandArgs.includes('--open-url')), false);
 });
 
-test('vscode-ext は導入済みなら再インストールしない', async () => {
-  const { io, calls, commands } = vscodeExtIo({ installed: true });
+test('vscode-ext は同版が導入済みなら再インストールしない', async () => {
+  const { io, calls, commands } = vscodeExtIo({ installedVersion: '0.3.2' });
   assert.equal(await launchNextSession(['--target', 'vscode-ext'], io), 0);
-  assert.deepEqual(commands, [['--list-extensions']]);
+  assert.deepEqual(commands, [['--list-extensions', '--show-versions']]);
   assert.equal(calls.spawn.length, 1);
+});
+
+test('vscode-ext は導入済みでも旧版なら強制更新する', async () => {
+  const { io, commands } = vscodeExtIo({ installedVersion: '0.2.0' });
+  assert.equal(await launchNextSession(['--target', 'vscode-ext'], io), 0);
+  assert.equal(commands[1][0], '--install-extension');
+  assert.equal(commands[1][2], '--force');
 });
 
 test('vscode-ext は URI を撃った子プロセスの exit を待ってから終わる', async () => {

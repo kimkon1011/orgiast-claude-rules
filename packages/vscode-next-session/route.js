@@ -23,4 +23,10 @@ function shouldRetryMobileTab(failedAttempts, attempts) {
   return failedAttempts < attempts;
 }
 
-module.exports = { decideAction, shouldRetryMobileTab };
+function mobileTabOpenCommand(claudeTabCount) {
+  return claudeTabCount === 0
+    ? 'claude-vscode.editor.openLast'
+    : 'claude-vscode.newConversation';
+}
+
+module.exports = { decideAction, shouldRetryMobileTab, mobileTabOpenCommand };

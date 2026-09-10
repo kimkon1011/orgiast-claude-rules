@@ -1,6 +1,6 @@
 const vscode = require('vscode');
 const { resolveClaudeShellPath } = require('./shell-path');
-const { decideAction, shouldRetryMobileTab } = require('./route');
+const { decideAction, shouldRetryMobileTab, mobileTabOpenCommand } = require('./route');
 
 const PROBE_TEXT = 'ORGIAST_NEXT_SESSION_PROBE_OK';
 
@@ -34,7 +34,7 @@ function claudeTabs() {
   return vscode.window.tabGroups.all
     .flatMap((group) => group.tabs)
     .filter((tab) => tab.input instanceof vscode.TabInputWebview
-      && String(tab.input.viewType).includes('claudeVSCodePanel'));
+      && String(tab.input.viewType).includes('claudeVSCode'));
 }
 
 function waitForNewClaudeTab(previousCount, timeoutMs = 5000) {
@@ -81,17 +81,29 @@ async function ensureMobileTabs({ count, name, attempts = 1, retryDelayMs = 5000
     let failedAttempts = 0;
     while (!created && shouldRetryMobileTab(failedAttempts, attempts)) {
       const before = claudeTabs().length;
-      await vscode.commands.executeCommand('claude-vscode.newConversation');
+      let openCommand = mobileTabOpenCommand(before);
+      try {
+        await vscode.commands.executeCommand(openCommand);
+      } catch (error) {
+        if (openCommand !== 'claude-vscode.editor.openLast') throw error;
+        openCommand = 'claude-vscode.editor.open';
+        await vscode.commands.executeCommand(openCommand);
+      }
       created = await waitForNewClaudeTab(before);
-      if (created) break;
+      if (created) {
+        if (before === 0) {
+          channel.appendLine(`${new Date().toISOString()} mobile tabs: 最初のタブを ${openCommand} で開きました`);
+        }
+        break;
+      }
       failedAttempts += 1;
       if (shouldRetryMobileTab(failedAttempts, attempts)) {
-        channel.appendLine(`${new Date().toISOString()} mobile tabs: newConversation を再試行します (${failedAttempts + 1}/${attempts})`);
+        channel.appendLine(`${new Date().toISOString()} mobile tabs: ${openCommand} を再試行します (${failedAttempts + 1}/${attempts})`);
         await delay(retryDelayMs);
       }
     }
     if (!created) {
-      channel.appendLine(`${new Date().toISOString()} mobile tabs: newConversation 後 5 秒以内にタブが増えなかったため、残り ${missing} 件を打ち切りました`);
+      channel.appendLine(`${new Date().toISOString()} mobile tabs: コマンド実行後 5 秒以内にタブが増えなかったため、残り ${missing} 件を打ち切りました`);
       return;
     }
     // v2.1.263 のハンドラは第1引数を renameActiveSessionTab へそのまま渡す。

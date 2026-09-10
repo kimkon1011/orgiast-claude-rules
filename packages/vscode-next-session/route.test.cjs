@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { decideAction, shouldRetryMobileTab } = require('./route');
+const { decideAction, shouldRetryMobileTab, mobileTabOpenCommand } = require('./route');
 
 test('/reload はリロードを実行する（dry指定なし）', () => {
   assert.deepEqual(decideAction({ path: '/reload', query: '' }), { kind: 'reload', dry: false });
@@ -32,4 +32,9 @@ test('空のパスは start を返す', () => {
 test('スマホ用タブは失敗回数が上限未満の間だけ再試行する', () => {
   assert.equal(shouldRetryMobileTab(1, 12), true);
   assert.equal(shouldRetryMobileTab(12, 12), false);
+});
+
+test('Claude Code タブが無いときは Open、既にあれば New Conversation を使う', () => {
+  assert.equal(mobileTabOpenCommand(0), 'claude-vscode.editor.openLast');
+  assert.equal(mobileTabOpenCommand(1), 'claude-vscode.newConversation');
 });

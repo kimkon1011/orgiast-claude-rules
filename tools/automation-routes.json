@@ -5,5 +5,6 @@
   "GAS": ["clasp push", "clasp run-function", "clasp create-script", "コマンドキュー", "setupOnce"],
   "CLI": ["vercel env", "gh secret", "gh api", "supabase db push", "psql", "npm i"],
   "復元系": [".env.local", "transcript grep", "Grep tool", "production bundle", "keyserve"],
-  "委譲": ["codex-do.mjs", "llm-ask.mjs"]
+  "委譲": ["codex-do.mjs", "llm-ask.mjs"],
+  "内部連絡": ["チャット表示", "チャットに本文", "Discord MCP", "Discord 送信", "リモートデスクトップ", "LINE", "internal-recipients.json"]
 }

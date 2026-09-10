@@ -156,6 +156,7 @@ try {
   if (add(settings.hooks.PreToolUse, 'pretooluse-lane-guard.mjs', { matcher: 'Bash|PowerShell|Edit|Write|MultiEdit', hooks: [{ type: 'command', command: command('pretooluse-lane-guard.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.PreToolUse, 'pretooluse-codex-invocation.mjs', { matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command: command('pretooluse-codex-invocation.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.PreToolUse, 'model-agent-guard.mjs', { matcher: 'Agent|Task', hooks: [{ type: 'command', command: command('model-agent-guard.mjs') }] })) added += 1;
+  if (add(settings.hooks.PreToolUse, 'internal-recipient-gmail-guard.mjs', { matcher: 'mcp__claude_ai_Gmail__create_draft|mcp__claude_ai_Gmail__send_message|mcp__claude_ai_Gmail__update_draft|mcp__claude_ai_Gmail__reply|mcp__claude_ai_Gmail__forward|mcp__claude_ai_Gmail_2__create_draft|mcp__claude_ai_Gmail_2__send_message', hooks: [{ type: 'command', command: command('internal-recipient-gmail-guard.mjs'), timeout: 5 }] })) added += 1;
   // ヘッドレス実行で消失するバックグラウンド処理を実行前に拒否する。
   if (add(settings.hooks.PreToolUse, 'pretooluse-headless-background.mjs', { matcher: 'Bash|PowerShell|ScheduleWakeup', hooks: [{ type: 'command', command: command('pretooluse-headless-background.mjs'), timeout: 5 }] })) added += 1;
   // read-only調査の逐次実行を検知し、まとめて調査するよう同期注入する。

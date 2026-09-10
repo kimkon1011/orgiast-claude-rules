@@ -22,6 +22,28 @@ test('parseHandoff は全ブロックから TODO を抽出し、付帯セクシ�
   assert.equal(parsed.sections['完了条件'], '## 完了条件\nテスト green');
 });
 
+const closedPurposeSample = `<!-- NEXT-SESSION v1 -->\n## 次の1目的\n~~**Growi 直取り同期を Drive へ本番反映する**~~ → ✅ 2026-09-11 完了（夜間バッチ）\n\n## 対象\n- tools/growi-manual.mjs\n\n## 完了条件\n- Part が 14 → 15 本\n\n## 触る前に読む memory\n- [[feedback-x]]\n\n## 残TODO\n1. 別件のバグ修正をする\n`;
+
+test('parseHandoff はクローズ済み目的の対象・完了条件を除外し、memory と残TODOを維持する', () => {
+  const parsed = parseHandoff(closedPurposeSample);
+  assert.ok(!('対象' in parsed.sections));
+  assert.ok(!('完了条件' in parsed.sections));
+  assert.equal(parsed.sections['触る前に読む memory'], '## 触る前に読む memory\n- [[feedback-x]]');
+  assert.deepEqual(parsed.todos, ['別件のバグ修正をする']);
+});
+
+test('parseHandoff はオープンな目的の対象・完了条件・memory を維持する', () => {
+  const md = closedPurposeSample.replace(
+    '~~**Growi 直取り同期を Drive へ本番反映する**~~ → ✅ 2026-09-11 完了（夜間バッチ）',
+    '**Growi 同期をする**',
+  );
+  const parsed = parseHandoff(md);
+  assert.equal(parsed.sections['対象'], '## 対象\n- tools/growi-manual.mjs');
+  assert.equal(parsed.sections['完了条件'], '## 完了条件\n- Part が 14 → 15 本');
+  assert.equal(parsed.sections['触る前に読む memory'], '## 触る前に読む memory\n- [[feedback-x]]');
+  assert.deepEqual(parsed.todos, ['別件のバグ修正をする']);
+});
+
 test('3ブロックの残TODOを新しいブロックから順に連結する', () => {
   const md = `<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. 最新A\n2. 最新B\n---\n<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. 2番目\n---\n<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. 3番目\n`;
   const parsed = parseHandoff(md);

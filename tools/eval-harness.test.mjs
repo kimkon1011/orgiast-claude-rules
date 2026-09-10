@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isUnmeasurable, paretoClassification, recommendations, resultRecord, suspiciousTasks } from './eval-harness.mjs';
+import { isDailyLimit, isUnmeasurable, JUDGE_CHAIN, paretoClassification, recommendations, resolveJudgeChain, resultRecord, retryDelay, suspiciousTasks } from './eval-harness.mjs';
 
 function task(id, category, status, extra = {}) {
   return { id, category, status, pass: status === 'pass', costUsd: 0.001, ms: 10, ...extra };
@@ -37,4 +37,33 @@ test('半数以上が fail/error のタスクは警告され推薦根拠から�
   const output = recommendations(rows).join('\n');
   assert.match(output, /タスク rep-03: 3プロバイダ中2で失敗/);
   assert.match(output, /成功率 100%/);
+});
+
+const fakeResponse = (retryAfter) => ({ headers: { get: (n) => (n === 'retry-after' ? retryAfter : null) } });
+
+test('isDailyLimit は本文の RPD 文字列で日次上限を判定する', () => {
+  assert.equal(isDailyLimit(429, 'Rate limit reached ... on requests per day (RPD): Limit 1000, Used 1000'), true);
+  assert.equal(isDailyLimit(429, 'Rate limit reached ... on tokens per minute (TPM): Limit 6000'), false);
+  assert.equal(isDailyLimit(500, 'requests per day (RPD)'), false);
+  assert.equal(isDailyLimit(429, ''), false);
+});
+
+test('retryDelay は retry-after を30秒にクランプする', () => {
+  assert.equal(retryDelay(fakeResponse('87'), 0), 30000);
+  assert.equal(retryDelay(fakeResponse('5'), 0), 5000);
+  assert.equal(retryDelay(fakeResponse(null), 2), 4000);
+});
+
+test('resultRecord は空配列でも例外を投げず n:0 rate:null を返す（中断時の部分結果パス）', () => {
+  const r = resultRecord('groq', 'm', [], '2026-09-10T00:00:00Z');
+  assert.equal(r.n, 0);
+  assert.equal(r.rate, null);
+  assert.equal(r.attemptedRate, null);
+  assert.deepEqual(r.tasks, []);
+});
+
+test('resolveJudgeChain は --judge-provider を先頭に置き重複除去する', () => {
+  assert.deepEqual(resolveJudgeChain('deepseek'), ['deepseek', 'groq', 'openrouter', 'gemini', 'anthropic']);
+  assert.deepEqual(resolveJudgeChain(''), JUDGE_CHAIN);
+  assert.equal(new Set(resolveJudgeChain('gemini')).size, JUDGE_CHAIN.length);
 });

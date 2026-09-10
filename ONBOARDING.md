@@ -131,6 +131,8 @@ API/CLI/MCP/GitHub Actions で実行可能な操作は、手順案内せず Clau
 
 **🔴 Claude 側ログの不在は、外部システムの不在の証拠ではない（kim 2026-09-10 厳命・絶対）**: 外部システム（Google / Vercel / GitHub 等のアカウント内のプロパティ・権限・設定・レコード）の有無を答えるときの証拠は、**そのシステムを直接照会した tool 結果だけ**（vendor MCP / DWD SA での API / 公式 CLI）。過去 transcript や memory の Grep は「Claude が行った操作」しか含まず、人が Web UI で作ったものは一切残らないので証拠にならない。直接照会できていないなら「存在しない可能性が高い」「痕跡がない」等の確率表現を一切使わず **「未確認」** と書き、「画面を開いて有るか無いか教えて」と user に検証を投げない（user の作業なしで進められる代替案を先に出す）。実害: TETSUKO の Search Console を「存在しない可能性が高い」と暫定回答し、kim がスクショで反証（2026-09-10）。Stop hook `external-state-claim-gate` がヘッジ付きの否定断定と検証の外注を block する。
 
+**🔴 内部宛メッセージはチャットに表示、Gmail 下書きは外部宛だけ（kim 2026-09-11 厳命・絶対）**: 社内・グループ会社（東邦鋼業 genbateam.toho@gmail.com、Reブース、NEXTForward）・スタッフ宛の連絡文は **Gmail の下書きも送信も作らない**。kim の内部連絡はリモートデスクトップ／LINE／Discord で、Gmail を見に行かせるのは余計な1操作になる。チャット本文に「宛先／用件／本文」をそのままコピペできる完成形で表示する。**Gmail 下書きは顧客・取引先・外部の人宛だけ有効**（その場合もチャットに本文を併記し、下書きの件名を1行で示す）。内部宛の判定は orgiast.jp / toho-kogyo.com ドメインとスタッフ個人 Gmail の台帳 `~/.claude/internal-recipients.json`。PreToolUse hook `internal-recipient-gmail-guard` が Gmail create_draft / send_message の宛先を照合して block する。
+
 #### 1.2.1 依頼の前に必要性と代替経路を調査し、証拠を依頼文に併記する（絶対ルール）
 
 user に何かを依頼する前に、実際の API 呼び出し・検索など異なる経路を2件以上試し、各結果を確認する。

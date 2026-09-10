@@ -241,6 +241,16 @@ How to apply:
 - subagent 呼び出しでも `model:"sonnet"` を明示（未指定だと親モデル継承）
 - 疑わしいときは Sonnet を先、Opus は「品質不足を確認してから」の 2 段階運用
 
+### 実行レーン制（2026-09-10 kim承認）
+| lane | 主経路 | 失敗時 |
+|---|---|---|
+| consult / design | Fable相談・判断（Opusは設計判断のみ） | Sonnetで材料整理 |
+| implement / edit-small | Codex（軽微ならGemini可） | 内蔵fallback→Sonnet |
+| verify | Codex review / Gemini | Sonnet |
+| bulk | llm-ask（20件以上・全件は夜間batch） | Sonnet |
+| mcp | Sonnetサブエージェント | Fable/Opusは結果確認のみ |
+Fable/Opus本体は直接ツール4回で警告・8回で停止。`[LANE-OK]` のみ例外。
+
 ## 従量課金AIの残高とオートチャージ（2026-09-09）
 
 前払い型プロバイダはオートチャージを ON（月上限があれば必須）にし、手動チャージを定常運用にしない。自動チャージがない DeepSeek/Kimi は OpenRouter 経由を既定、直叩きをフォールバックとする。`tools/provider-balance.mjs` と日次 `cost-improve-loop` が残高・台帳消費を監視し、7日平均の2倍超かつ日額$1以上は24時間自動降格＋`spend_anomaly` DM、残高$3未満かつ自動チャージなしは`balance_low` DMとする。残高APIがないプロバイダは0扱いせず「監視不能（台帳推定）」と明示する。

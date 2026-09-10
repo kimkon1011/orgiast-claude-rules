@@ -3,8 +3,69 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isEntry } from './is-entry.mjs';
+
+const LANE_NAMES = new Set(['consult', 'implement', 'edit-small', 'verify', 'bulk', 'mcp', 'design']);
+const IMPLEMENT = /作って|実装|修正|直して|追加して|書いて|リファクタ|バグ|\bfix\b|\bimplement\b|hook作|ツール作|スクリプト/i;
+const SMALL = /1行|一行|typo|誤字|名前を変えて|値を変えて|設定を変えて/i;
+const VERIFY = /テストして|確認して|動作確認|レビュー|チェック|検証|通るか見て/i;
+const BULK = /分類|抽出|要約|返信文|一括|全件|各社|各件|消費者向け.{0,8}(?:文章|文面)|\d+\s*(?:件|社|行|本|通|人|個|ファイル)/i;
+const MCP = /Drive|Gmail|Discord|Calendar|Google\s*Drive|Google\s*Calendar|スプレッドシート|ドキュメント|メール送信|\bDM\b/i;
+// MCP 語(Discord/Drive 等)があっても「作る」依頼なら実装レーン。Sonnet サブエージェントに bot 開発を渡さないため。
+const BUILD = /実装|作って|hook作|ツール作|スクリプト|bot|ボット|コード|リファクタ|バグ|fix|implement/i;
+const DESIGN = /設計|アーキテクチャ|方針|複数案|トレードオフ|横断調査|仮説/i;
+const CONSULT = /質問|相談|判断|比較|どう思う|教えて|決めれないかな|なぜ|かな[？?]?|[？?]/i;
+
+function repoRoot() { return path.dirname(path.dirname(fileURLToPath(import.meta.url))); }
+function bulkCategory(prompt) {
+  if (/分類|仕分け|タグ|ラベル/.test(prompt)) return 'classification';
+  if (/抽出|抜き出|構造化/.test(prompt)) return 'extraction';
+  if (/返信|返事|メール|消費者向け/.test(prompt)) return 'jp_reply';
+  if (/コード/.test(prompt)) return 'code';
+  return 'summarize';
+}
+function routedBulkProvider(category, home = process.env.ORGIAST_HOME || os.homedir()) {
+  let provider = '';
+  try { provider = JSON.parse(fs.readFileSync(path.join(repoRoot(), 'tools', 'routing-table.json'), 'utf8').replace(/^\uFEFF/, '')).categories?.[category]?.provider || ''; } catch {}
+  let cooldown = {};
+  try { cooldown = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'provider-cooldown.json'), 'utf8').replace(/^\uFEFF/, '')); } catch {}
+  const active = (name) => Number(cooldown?.[name]?.until) > Date.now();
+  if (provider && !active(provider)) return provider;
+  for (const candidate of ['gemini', 'deepseek', 'groq', 'openrouter']) if (candidate !== provider && !active(candidate)) return candidate;
+  return 'openrouter';
+}
+export function laneAdvice(lane, repoDir = repoRoot(), options = {}) {
+  const codex = `node "${path.join(repoDir, 'tools', 'codex-do.mjs')}"`;
+  if (lane === 'implement') return { primary: `${codex} --prompt-file <指示> --cwd <対象> --timeout 1800`, fallback: 'codex-do 内蔵 Gemini/DeepSeek → Agent(model:"sonnet")' };
+  if (lane === 'edit-small') return { primary: `${codex} --prompt-file <指示> --cwd <対象> --timeout 600（または gemini -p）`, fallback: 'Agent(model:"sonnet")' };
+  if (lane === 'verify') return { primary: `${codex} --review --prompt-file <file>（または gemini -p --include-directories <dir>）`, fallback: 'Agent(model:"sonnet")' };
+  if (lane === 'bulk') { const cat = options.category || 'summarize', provider = options.provider || routedBulkProvider(cat, options.home); return { primary: `node "${path.join(repoDir, 'tools', 'llm-ask.mjs')}" --category ${cat} --provider ${provider} "指示"`, fallback: 'Agent(model:"sonnet")' }; }
+  if (lane === 'mcp') return { primary: 'Agent(model:"sonnet") で MCP コネクタ操作', fallback: 'Fable/Opus 本体が結果確認' };
+  if (lane === 'design') return { primary: 'Fable 本体で判断（複数仮説の検証時だけ Agent(model:"opus")）', fallback: 'Sonnet で材料整理' };
+  return { primary: 'Fable 本体（ツールなし、または Read/Grep 数回）', fallback: '実装・調査に踏み込むなら該当レーンへ委譲' };
+}
+export function classifyRequest(prompt, options = {}) {
+  const text = String(prompt || '').replace(/^\uFEFF/, '');
+  const fixed = text.match(/\[レーン固定:\s*(consult|implement|edit-small|verify|bulk|mcp|design)\s*\]/i)?.[1]?.toLowerCase();
+  let lane, reason;
+  if (fixed && LANE_NAMES.has(fixed)) { lane = fixed; reason = '明示的なレーン固定'; }
+  else if (MCP.test(text) && !BUILD.test(text)) { lane = 'mcp'; reason = 'MCP コネクタ操作'; }
+  else if (BULK.test(text) && !SMALL.test(text)) { lane = 'bulk'; reason = '量産・分類・抽出・生成'; }
+  else if (/設計してから/.test(text)) { lane = 'design'; reason = '実装前の設計判断'; }
+  else if (IMPLEMENT.test(text)) { lane = 'implement'; reason = '実装語を検出'; }
+  else if (SMALL.test(text)) { lane = 'edit-small'; reason = '軽微編集'; }
+  else if (VERIFY.test(text)) { lane = 'verify'; reason = '検証・レビュー'; }
+  else if (DESIGN.test(text)) { lane = 'design'; reason = '設計判断'; }
+  else { lane = 'consult'; reason = CONSULT.test(text) ? '質問・相談' : '実行指示なし'; }
+  const category = lane === 'bulk' ? bulkCategory(text) : lane;
+  const advice = laneAdvice(lane, options.repoDir || repoRoot(), { ...options, category });
+  const large = lane === 'bulk' && (/全件|一括生成|バックフィル/.test(text) || Number(text.match(/(\d+)\s*(?:件|社|行|本|通|人|個|ファイル)/)?.[1]) >= 20);
+  if (large) advice.primary = `node "${path.join(options.repoDir || repoRoot(), 'tools', 'batch-enqueue.mjs')}" --category ${category} "指示"`;
+  return { lane, category, reason, ...advice };
+}
 
 let raw = '';
+if (isEntry(import.meta.url)) {
 process.stdin.setEncoding('utf8');
 for await (const chunk of process.stdin) raw += chunk;
 
@@ -38,10 +99,16 @@ try {
   const prompt = String(input.prompt || '');
   if (prompt.length < 2) process.exit(0);
   const repo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+  const route = classifyRequest(prompt, { repoDir: repo });
+  if (input.session_id) try {
+    const home = process.env.ORGIAST_HOME || os.homedir(), dir = path.join(home, '.claude', 'session-lane');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `${input.session_id}.json`), `${JSON.stringify({ lane: route.lane, category: route.category, at: new Date().toISOString(), prompt: prompt.slice(0, 120), toolCalls: 0, laneOk: prompt.includes('[LANE-OK]'), primary: route.primary }, null, 2)}\n`);
+  } catch {}
   const codex = `node "${path.join(repo, 'tools', 'codex-do.mjs')}" "指示"`;
   const ask = `node "${path.join(repo, 'tools', 'llm-ask.mjs')}"`;
   const enqueue = `node "${path.join(repo, 'tools', 'batch-enqueue.mjs')}"`;
-  const parts = [];
+  const parts = [`[実行レーン] ${route.lane}（理由: ${route.reason}）→ 主: ${route.primary} ／ 失敗時: ${route.fallback} ／ Fable/Opus 本体は「判定・委譲・結果確認」の 3 ターン以内。Sonnet は非Claude が全部落ちた時だけ、Opus は設計判断だけ。${route.lane === 'consult' ? ' ツールを使わず、または Read/Grep 数回で答える。実装・調査に踏み込むなら委譲。' : ''}`];
   const fableExplicit = /fable\s*-?\s*5|fable5|claude-fable-5|fable\s*(?:で|を使)/i;
   const fableNegative = /(?:fable\s*-?\s*5|fable5|claude-fable-5|fable)\s*(?:は|を)?\s*(?:使うな|使わない|使わず|使わなく|使わん|使用しない|利用しない|禁止|使用中止|不可)/i;
   if (fableExplicit.test(prompt) && !fableNegative.test(prompt)) {
@@ -106,3 +173,4 @@ try {
   console.log(JSON.stringify(output));
 } catch {}
 process.exit(0);
+}

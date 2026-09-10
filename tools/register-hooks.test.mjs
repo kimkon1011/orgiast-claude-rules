@@ -125,3 +125,10 @@ test('手間削減hook 8本は2回実行しても各1本のまま', () => {
   }
   fs.rmSync(home, { recursive: true, force: true });
 });
+
+test('lane guard は指定matcher・timeoutで登録される', () => {
+  const home=fs.mkdtempSync(path.join(os.tmpdir(),'register-lane-')), repo=path.resolve('.');
+  execFileSync(process.execPath,[path.join(repo,'tools','register-hooks.mjs'),'--hooks-only'],{env:{...process.env,ORGIAST_HOME:home,ORGIAST_REPO:repo}});
+  const group=JSON.parse(fs.readFileSync(path.join(home,'.claude','settings.json'),'utf8')).hooks.PreToolUse.find((x)=>x.hooks?.some((h)=>h.command.includes('pretooluse-lane-guard')));
+  assert.equal(group.matcher,'Bash|PowerShell|Edit|Write|MultiEdit'); assert.equal(group.hooks[0].timeout,5);
+});

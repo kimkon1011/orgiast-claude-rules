@@ -8,7 +8,9 @@
     "verify-setup",
     "rules-resync",
     "cost-report",
-    "register-fleet-agent"
+    "register-fleet-agent",
+    "thermal-guard",
+    "power-save"
   ],
   "_targets": "all=全PC / PC名の一部文字列=そのPCだけ"
 }

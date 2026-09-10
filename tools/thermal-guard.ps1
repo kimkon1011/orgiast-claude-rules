@@ -419,8 +419,13 @@ $sampleRecord = @{
     capPct = $metrics.CapPct
 }
 
-Add-Sample $sampleRecord
-Clean-OldSamples
+# -Report は読み取り専用にする。ここでサンプルを足すと、thermal-guard を未導入のPCでも
+# 集計対象が必ず1件になり、fleet-poller の日次ブロック(全Windows PCで無条件に走る)から
+# 毎日1通の無意味なレポートが飛ぶ (2026-09-01 実測: サンプル数1の24h集計が送信された)。
+if ($Mode -ne "report") {
+    Add-Sample $sampleRecord
+    Clean-OldSamples
+}
 
 if ($Mode -eq "report") {
     # レポート生成

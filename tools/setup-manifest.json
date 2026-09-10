@@ -34,6 +34,7 @@
     { "id": "env:ollama", "type": "file-nonempty", "severity": "optional", "spec": { "path": ".claude/ollama.env" }, "description": "キー: ollama.env", "repair": ["onboarding-sync.mjs", "--keys-only", "--force"] },
     { "id": "env:gemini", "type": "file-contains", "severity": "optional", "spec": { "path": ".gemini/.env", "regex": "GEMINI_API_KEY=." }, "description": "Geminiキー(~/.gemini/.env)", "repair": ["onboarding-sync.mjs", "--keys-only", "--force"] },
     { "id": "task:nightly", "type": "scheduled-task", "severity": "optional", "spec": { "name": "OrgiastNightlyBatch" }, "description": "夜間バッチ 定時タスク(毎日03:00)", "repairHint": "配布インストーラを再実行" },
+    { "id": "task:thermal-guard", "type": "scheduled-task", "severity": "optional", "spec": { "name": "OrgiastThermalGuard" }, "description": "熱監視 常駐タスク(5分ごと)", "repairHint": "fleet-command.json の task を thermal-guard にして配る" },
     { "id": "auth:codex", "type": "json-valid", "severity": "manual", "spec": { "path": ".codex/auth.json", "requiredPath": "tokens.id_token", "bom": false }, "description": "Codexログイン済(auth.jsonにトークン)", "repairHint": "codex login" }
   ]
 }

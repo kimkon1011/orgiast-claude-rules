@@ -6,8 +6,83 @@ import path from 'node:path';
 
 const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-session-test-'));
 process.env.ORGIAST_HOME = isolatedHome;
-const { DEFAULT_REPO, localDate, loadConfig, detectHistoryCwd, parseHandoff, sectionsForTodo, todoExclusionReason, todoExclusionReasons, dedupeKey, dedupeTodos, filterTodos, selectTodoLanes, logSlaOverflow, pickCwd, buildChildArgs, buildPrompt, buildFeedbackPrompt, feedbackFailureBody, feedbackIssueExclusionReason, feedbackIssuesToUnmark, filterFeedbackIssues, feedbackNotifyUrl, normalizeGitHubRepo, feedbackRepoCwd, resolveClaudeExe, decideRun, markTodoDone, isTodoAlreadyDone, writeTodoDone, extractSessionId, transcriptPath, recoverSessionId, appendClosedSession, formatResultLine, parseArgs, deadlineDecision, runChild, main } = await import('./auto-session.mjs');
+const { BUILTIN_REPO_BY_KEYWORD, boundedCount, todoDoneDecision, DEFAULT_REPO, localDate, loadConfig, detectHistoryCwd, parseHandoff, sectionsForTodo, todoExclusionReason, todoExclusionReasons, dedupeKey, dedupeTodos, filterTodos, selectTodoLanes, logSlaOverflow, pickCwd, buildChildArgs, buildPrompt, buildFeedbackPrompt, feedbackFailureBody, feedbackIssueExclusionReason, feedbackIssuesToUnmark, filterFeedbackIssues, feedbackNotifyUrl, normalizeGitHubRepo, feedbackRepoCwd, resolveClaudeExe, decideRun, markTodoDone, isTodoAlreadyDone, writeTodoDone, extractSessionId, transcriptPath, recoverSessionId, appendClosedSession, formatResultLine, parseArgs, deadlineDecision, runChild, main } = await import('./auto-session.mjs');
 const historyCwd = String.raw`c:\Users\example\Downloads\work`;
+const completedSummary = 'やったこと: 対象のコードを修正してコミットした。検証したこと: 回帰テストを実行し全件成功を確認した。残ったこと: なし';
+
+test('todoDoneDecision は成功でも空サマリを拒否する', () => {
+  assert.deepEqual(todoDoneDecision({ status: 'success', summary: ' \n ' }), { done: false, reason: 'サマリが空（作業の痕跡が無い）' });
+});
+
+test('todoDoneDecision は実装試行せず打ち切り・到達不能の実データ相当を拒否する', () => {
+  const summary = 'Read/Glob が許可されていないため対象リポジトリに到達不能。実装試行せず打ち切りとなり、コードの変更も検証も実行していない。';
+  const decision = todoDoneDecision({ status: 'success', summary });
+  assert.equal(decision.done, false);
+  assert.match(decision.reason, /^未完の申告あり: /);
+});
+
+test('todoDoneDecision は残ったこと: なしを含む正常完了を許可する', () => {
+  assert.deepEqual(todoDoneDecision({ status: 'success', summary: completedSummary }), { done: true, reason: '' });
+});
+
+test('todoDoneDecision は終了コード失敗を最優先で拒否する', () => {
+  for (const summary of ['', completedSummary]) {
+    assert.deepEqual(todoDoneDecision({ status: 'failure', summary }), { done: false, reason: '終了コードが成功でない' });
+  }
+});
+
+test('todoDoneDecision は trim 後39文字を拒否し40文字を許可する', () => {
+  assert.deepEqual(todoDoneDecision({ status: 'success', summary: ` ${'あ'.repeat(39)} ` }), { done: false, reason: 'サマリが短すぎる' });
+  assert.equal(todoDoneDecision({ status: 'success', summary: 'あ'.repeat(40) }).done, true);
+});
+
+test('todoDoneDecision は指定された未完語すべてを理由に残す', () => {
+  for (const word of ['打ち切', '中断', '未完', '着手できな', '到達できな', '到達不能', '実装せず', '実装ゼロ', '許可されていない', "haven't granted", 'ブロックされ', '人間介入', '人間の判断', '判断を仰ぐ', '次のセッション', '失敗しました']) {
+    assert.deepEqual(todoDoneDecision({ status: 'success', summary: `${word}。${'補足'.repeat(25)}` }), { done: false, reason: `未完の申告あり: ${word}` });
+  }
+});
+
+test('boundedCount は all と数値を12件以内に制限する', () => {
+  assert.equal(boundedCount('all'), 12);
+  assert.equal(boundedCount(13), 12);
+  assert.equal(boundedCount(0), 1);
+});
+
+test('todoExclusionReason は契約と個別写真を除外し通常TODOを許可する', () => {
+  assert.equal(todoExclusionReason('7. カート・決済（決済プロバイダ契約が必要）'), '人間の作業が前提');
+  assert.equal(todoExclusionReason('9. SKU個別写真'), '人間の作業が前提');
+  assert.equal(todoExclusionReason('8. SKUの表示バグを修正する'), '');
+  assert.equal(todoExclusionReason('~~SKU個別写真~~'), '取り消し線（完了済み）');
+});
+
+test('todoExclusionReason は kim待ちの判断を除外する', () => {
+  assert.equal(todoExclusionReason('3. **settings.json に defaultMode を入れるかの判断（kim待ち）**'), '人間の作業が前提');
+});
+
+test('todoExclusionReason は kim の同意が必要なWSL導入を除外する', () => {
+  assert.equal(todoExclusionReason('WSL導入。対話セッションで kim の同意を得てから行う'), '人間の作業が前提');
+});
+
+test('todoExclusionReason は同意画面のコピー修正を除外しない', () => {
+  assert.equal(todoExclusionReason('4. 同意画面のコピーを直す'), '');
+});
+
+test('parseHandoff はリスト後の見出し段落と取り消し線をTODOに含めない', () => {
+  for (const separator of ['', '\n']) {
+    const parsed = parseHandoff(`## 残TODO\n1. 実装する\n13. kim相談\n   継続本文\n${separator}**見出し**\n~~別の完了済み作業~~\n   散文の補足\n`);
+    assert.deepEqual(parsed.todos, ['実装する', 'kim相談\n   継続本文']);
+    assert.equal(todoExclusionReason(parsed.todos[1]), '人間の作業が前提');
+  }
+});
+
+test('loadConfig は組み込みマッピングをファイル側で上書きし欠落時も補完する', () => {
+  const config = loadConfig('/home/x', () => JSON.stringify({ repoByKeyword: { SKU: '/custom' } }));
+  assert.equal(config.repoByKeyword.SKU, '/custom');
+  assert.equal(config.repoByKeyword.TETSUKO, BUILTIN_REPO_BY_KEYWORD.TETSUKO);
+  assert.deepEqual(loadConfig('/home/x', () => '{}').repoByKeyword, BUILTIN_REPO_BY_KEYWORD);
+  assert.equal(pickCwd('TETSUKO修正', () => true, config.repoByKeyword), BUILTIN_REPO_BY_KEYWORD.TETSUKO);
+  assert.equal(pickCwd('SKU修正', () => false, config.repoByKeyword), DEFAULT_REPO);
+});
 test.after(() => fs.rmSync(isolatedHome, { recursive: true, force: true }));
 
 const sample = `前書き\n<!-- NEXT-SESSION v1 -->\n## 対象\nrepo A\n## 残TODO\n1. 実装する\n2. ~~完了済み~~\n3. 要判断: 色\n4. ブロック中: API\n## 完了条件\nテスト green\n<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. 歴史上のTODO\n`;
@@ -178,7 +253,7 @@ test('filterTodos は完了・判断待ち・未決・ブロック中を除外�
 test('--count all は3件を超えるフィルタ後の全TODOを選択する', () => {
   const todos = ['実行1', '~~完了~~', '実行2', '実行3', '実行4'];
   const options = parseArgs(['--count', 'all']);
-  assert.equal(options.count, Infinity);
+  assert.equal(options.count, 12);
   assert.deepEqual(filterTodos(todos).slice(0, options.count), ['実行1', '実行2', '実行3', '実行4']);
 });
 
@@ -253,8 +328,8 @@ test('数値 count と sla-count と feedback-count は12件を上限にする',
   assert.equal(options.count, 12);
   assert.equal(options.slaCount, 12);
   assert.equal(options.feedbackCount, 12);
-  assert.equal(parseArgs(['--sla-count', 'all']).slaCount, Infinity);
-  assert.equal(parseArgs(['--feedback-count', 'all']).feedbackCount, Infinity);
+  assert.equal(parseArgs(['--sla-count', 'all']).slaCount, 12);
+  assert.equal(parseArgs(['--feedback-count', 'all']).feedbackCount, 12);
 });
 
 test('deadline まで5分なら起動せず、25分なら timeout を25分に縮める', () => {
@@ -352,6 +427,28 @@ test('TODO が全て成功していれば完走通知が例外でも main は 0 
   } finally {
     console.warn = originalWarn;
   }
+});
+
+test('main は空サマリの成功でTODOを変更せずrun JSONに見送り理由を保存する', async () => {
+  const claudeDir = path.join(isolatedHome, '.claude');
+  const nextFile = path.join(claudeDir, 'next-session.md');
+  const source = '<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. 空サマリの誤完了を防ぐ\n';
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(nextFile, source);
+  const code = await main(['--count', '1', '--feedback-count', '0'], {
+    listFeedbackIssues: () => [],
+    listTaskLedgerItems: async () => [],
+    resolveClaudeExe: () => '/fake/claude',
+    runChild: async () => ({ status: 'success', exitCode: 0, stdout: '', stderr: '', startedAt: new Date().toISOString(), endedAt: new Date().toISOString() }),
+    notify: async () => {},
+  });
+  assert.equal(code, 0);
+  assert.equal(fs.readFileSync(nextFile, 'utf8'), source);
+  const runs = path.join(claudeDir, 'auto-session', 'runs');
+  const record = fs.readdirSync(runs).filter((name) => name.endsWith('.json'))
+    .map((name) => JSON.parse(fs.readFileSync(path.join(runs, name), 'utf8')))
+    .find((item) => item.todo === '空サマリの誤完了を防ぐ');
+  assert.equal(record.doneSkippedReason, 'サマリが空（作業の痕跡が無い）');
 });
 
 test('todo または feedback が failure/timeout なら main は 1 を返す', async () => {
@@ -479,14 +576,14 @@ test('pickCwd は注入された存在判定で候補と標準リポジトリを
   assert.equal(pickCwd('その他', () => true, {}), DEFAULT_REPO);
 });
 
-test('loadConfig は設定なし・破損時に空設定を返す', () => {
-  assert.deepEqual(loadConfig('/home/x', () => { throw new Error('ENOENT'); }), { historyCwd: '', repoByKeyword: {} });
-  assert.deepEqual(loadConfig('/home/x', () => '{broken'), { historyCwd: '', repoByKeyword: {} });
+test('loadConfig は設定なし・破損時に組み込み設定を返す', () => {
+  assert.deepEqual(loadConfig('/home/x', () => { throw new Error('ENOENT'); }), { historyCwd: '', repoByKeyword: BUILTIN_REPO_BY_KEYWORD });
+  assert.deepEqual(loadConfig('/home/x', () => '{broken'), { historyCwd: '', repoByKeyword: BUILTIN_REPO_BY_KEYWORD });
 });
 
 test('loadConfig は正常な設定を読む', () => {
   const config = loadConfig('/home/x', () => JSON.stringify({ historyCwd: '/history', repoByKeyword: { 案件A: '/repo-a' } }));
-  assert.deepEqual(config, { historyCwd: '/history', repoByKeyword: { 案件A: '/repo-a' } });
+  assert.deepEqual(config, { historyCwd: '/history', repoByKeyword: { ...BUILTIN_REPO_BY_KEYWORD, 案件A: '/repo-a' } });
 });
 
 function historyDeps(items, existing = new Set(items.map((item) => item.cwd))) {

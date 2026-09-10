@@ -13,6 +13,14 @@ export { autoSessionExecutor } from './auto-session-executor.mjs';
 const MARKER = '<!-- NEXT-SESSION v1 -->';
 const SIX_HOURS = 6 * 60 * 60 * 1000;
 export const DEFAULT_REPO = path.resolve(import.meta.dirname, '..');
+export const BUILTIN_REPO_BY_KEYWORD = {
+  TETSUKO: 'C:\\Users\\user\\Documents\\tetsuko-unified',
+  tetsuko: 'C:\\Users\\user\\Documents\\tetsuko-unified',
+  SKU: 'C:\\Users\\user\\Documents\\tetsuko-unified',
+  '/spec': 'C:\\Users\\user\\Documents\\tetsuko-unified',
+  formatDim: 'C:\\Users\\user\\Documents\\tetsuko-unified',
+  プライバシーポリシー: 'C:\\Users\\user\\Documents\\tetsuko-unified',
+};
 
 export function localDate(date = new Date()) {
   const year = date.getFullYear();
@@ -63,6 +71,8 @@ export function parseHandoff(md) {
       let blankCount = 0;
       while (index < lines.length) {
         const line = lines[index];
+        // インデントのない散文や、空行後の独立したリストは TODO の外側。
+        if (/^\S/.test(line) && (blankCount > 0 || !/^[-*]\s+/.test(line))) break;
         if (/^\s*\d+[.)、]\s+/.test(line) || /^##[ \t]+/.test(line) || /^\s*---\s*$/.test(line)) break;
         if (!line.trim()) {
           blankCount += 1;
@@ -123,6 +133,7 @@ export function todoExclusionReason(todo, today = new Date()) {
     const dateNumber = Number(`${match[1]}${match[2]}${match[3]}`);
     if (dateNumber > todayNumber) return `${date}以降`;
   }
+  if (/(契約が必要|契約待ち|原価待ち|入金|支払|kim相談|kim に相談|kim と話す|人間の作業|人間しか|人間専用|human-only|要東邦鋼業側で確認|個別写真|撮影|電話|郵送|捺印|OAuth初回同意|アカウント作成|kim待ち|kim の判断|kimの判断|kim の同意|kimの同意|判断を仰|同意を得てから|同意が必要|OS管理操作|管理者権限が必要)/.test(text)) return '人間の作業が前提';
   return '';
 }
 
@@ -208,9 +219,9 @@ export function loadConfig(homeDir, readFile = fs.readFileSync) {
   try {
     const parsed = JSON.parse(readFile(path.join(homeDir, '.claude', 'auto-session.json'), 'utf8'));
     const repoByKeyword = Object.fromEntries(Object.entries(parsed?.repoByKeyword ?? {}).filter(([key, value]) => key && typeof value === 'string'));
-    return { historyCwd: typeof parsed?.historyCwd === 'string' ? parsed.historyCwd : '', repoByKeyword };
+    return { historyCwd: typeof parsed?.historyCwd === 'string' ? parsed.historyCwd : '', repoByKeyword: { ...BUILTIN_REPO_BY_KEYWORD, ...repoByKeyword } };
   } catch {
-    return { historyCwd: '', repoByKeyword: {} };
+    return { historyCwd: '', repoByKeyword: { ...BUILTIN_REPO_BY_KEYWORD } };
   }
 }
 
@@ -305,6 +316,16 @@ export function decideRun({ lockExists, lockPid, lockAgeMs, pidAlive, disabled }
   if (!lockExists) return { run: true, reason: 'no-lock' };
   if (pidAlive && Number(lockAgeMs) < SIX_HOURS) return { run: false, reason: `active-lock:${lockPid}` };
   return { run: true, reason: 'stale-lock' };
+}
+
+export function todoDoneDecision({ status, summary }) {
+  if (status !== 'success') return { done: false, reason: '終了コードが成功でない' };
+  const text = String(summary ?? '').trim();
+  if (!text) return { done: false, reason: 'サマリが空（作業の痕跡が無い）' };
+  if (text.length < 40) return { done: false, reason: 'サマリが短すぎる' };
+  const incomplete = text.match(/打ち切|中断|未完|着手できな|到達できな|到達不能|実装せず|実装ゼロ|許可されていない|haven't granted|ブロックされ|人間介入|人間の判断|判断を仰ぐ|次のセッション|失敗しました/);
+  if (incomplete) return { done: false, reason: `未完の申告あり: ${incomplete[0]}` };
+  return { done: true, reason: '' };
 }
 
 export function markTodoDone(md, todoText, note) {
@@ -490,8 +511,8 @@ export function appendClosedSession(file, sessionId, io = {}) {
   }
 }
 
-function boundedCount(value) {
-  return value === 'all' ? Infinity : Math.min(12, Math.max(1, Number(value) || 1));
+export function boundedCount(value) {
+  return value === 'all' ? 12 : Math.min(12, Math.max(1, Number(value) || 1));
 }
 
 export function parseArgs(argv) {
@@ -1000,8 +1021,10 @@ export async function main(argv = process.argv.slice(2), io = {}) {
       const closedRegistered = result.status === 'success'
         ? appendClosedSession(path.join(claudeDir, 'closed-sessions.json'), sessionId)
         : false;
-      if (result.status === 'success') writeTodoDone(nextFile, todo, `${localDate()} 完了（auto-session）`);
+      const doneDecision = todoDoneDecision({ status: result.status, summary });
+      if (doneDecision.done) writeTodoDone(nextFile, todo, `${localDate()} 完了（auto-session）`);
       const record = { todo, lane: laneOf(todo), cwd: repoCwd, repoCwd, historyCwd, summaryFile, summary, sessionId, sessionIdSource, transcript, resumeCommand, closedRegistered, ...result };
+      if (!doneDecision.done) record.doneSkippedReason = doneDecision.reason;
       results.push(record);
       completedChildren += 1;
       fs.writeFileSync(runFile, JSON.stringify(record, null, 2));

@@ -118,19 +118,23 @@ export async function listGrowiPages(baseUrl, http, limit = 500, maxPasses = 5) 
   let nextProgress = 100;
   let passes = 0;
   let executedPasses = 0;
+  let rows;
+  let duplicateRows;
+  let complete = false;
   for (; passes < maxPasses; passes++) {
     executedPasses++;
     const countBeforePass = pages.length;
     const batchesSeen = new Set();
     let offset = 0;
+    let interrupted = false;
     while (offset < totalCount) {
       const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
       const json = await growiJson(http, `${baseUrl.replace(/\/$/, '')}/_api/v3/pages/recent?${params}`);
       const batch = json.data?.pages ?? [];
       totalCount = Number(json.data?.totalCount ?? batch.length);
-      if (batch.length === 0) break;
+      if (batch.length === 0) { interrupted = true; break; }
       const signature = batch.map((page) => page._id).join('\0');
-      if (batchesSeen.has(signature)) break;
+      if (batchesSeen.has(signature)) { interrupted = true; break; }
       batchesSeen.add(signature);
       for (const page of batch) {
         if (seen.has(page._id)) continue;
@@ -143,15 +147,22 @@ export async function listGrowiPages(baseUrl, http, limit = 500, maxPasses = 5) 
         nextProgress = Math.floor(pages.length / 100 + 1) * 100;
       }
     }
+    if (!interrupted && offset >= totalCount) {
+      complete = true;
+      rows = offset;
+      duplicateRows = rows - pages.length;
+      break;
+    }
     if (pages.length >= totalCount || pages.length === countBeforePass) break;
   }
   const additionalPasses = Math.max(0, executedPasses - 1);
-  if (pages.length < totalCount) {
+  if (!complete && pages.length < totalCount) {
     const reason = passes >= maxPasses ? `${maxPasses}パスの上限に達した` : '追加パスでも新規ページが増えなかった';
     console.error(`警告: Growi ページ列挙を打ち切ります（${reason}、収集 ${pages.length}/${totalCount}）`);
   }
-  console.error(`Growi ページ列挙完了: 収集 ${pages.length} / totalCount ${totalCount}（追加パス ${additionalPasses} 回）`);
-  return { pages, totalCount };
+  if (complete && duplicateRows > 0) console.error(`Growi ページ列挙完了: 固有 ${pages.length} / totalCount ${totalCount}（重複行 ${duplicateRows}・全行走査済み）`);
+  else console.error(`Growi ページ列挙完了: 収集 ${pages.length} / totalCount ${totalCount}（追加パス ${additionalPasses} 回）`);
+  return { pages, totalCount, rows, duplicateRows, complete };
 }
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -400,8 +411,8 @@ export async function syncGrowi(options = {}) {
   fs.writeFileSync(metaFile, `${JSON.stringify(meta, null, 2)}\n`);
   let reparsed = 0;
   for (let index = 0; index < parts.length; index++) reparsed += parsePart(parts[index], index + 1).pages.length;
-  if (reparsed !== listed.totalCount) console.warn(`警告: Part のページ数 (${reparsed}) が Growi totalCount (${listed.totalCount}) と一致しません`);
-  else console.log(`検証OK: ${reparsed}ページ`);
+  if (reparsed !== listed.pages.length) console.warn(`警告: Part のページ数 (${reparsed}) が列挙固有ページ数 (${listed.pages.length}) と一致しません`);
+  else console.log(`検証OK: ${reparsed}ページ${listed.complete && listed.duplicateRows > 0 ? `（totalCount ${listed.totalCount} のうち重複行 ${listed.duplicateRows} を除く）` : ''}`);
   const shouldPublish = options.publish ?? !options.writeParts;
   if (shouldPublish) {
     const code = options.publishIndex ? await options.publishIndex(cacheDir) : await publishIndex(cacheDir);

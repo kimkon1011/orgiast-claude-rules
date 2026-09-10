@@ -3,13 +3,22 @@
   "_note": "kim/監督Claude が指示を1件書き、各PCの fleet-agent が15分以内に拾って結果を Discord へ返す。kind は status / prompt / enable-auto-session の3つだけ。prompt と enable-auto-session はそのPCの人がオプトイン済みの場合のみ実行される。空配列にすると全PCで何も起きない。",
   "directives": [
     {
-      "id": "status-20260906-171027-8784",
+      "id": "status-20260910-080152-4779",
       "kind": "status",
-      "targets": "all",
-      "why": "seisaku-team を Pro化するか判断するため、kimko-PC(作業用011)/nishi-PC が Codex(codex-cli)をどのChatGPTアカウント(email)・どのプラン(free/plus/pro/prolite)で認証しているかを確認したい。~/.codex/auth.json や codex login 表示のアカウント名とプランを1回だけ返してほしい。実行系の処理なし・読み取り専用。",
-      "createdBy": "auto-session",
-      "createdAt": "2026-09-06T17:10:27.652Z",
-      "expiresAt": "2026-09-09T17:10:27.652Z"
+      "targets": "kimko-PC",
+      "why": "Stop hook runner(PR#292/#343) の他PC反映確認のため、repo遅れとonboarding-sync最終ログのstatus報告を取得する(09-12効果実測の完了条件)",
+      "createdBy": "auto-session-20260910-19",
+      "createdAt": "2026-09-10T08:01:52.277Z",
+      "expiresAt": "2026-09-13T08:01:52.277Z"
+    },
+    {
+      "id": "status-20260910-080223-0871",
+      "kind": "status",
+      "targets": "nishi-PC",
+      "why": "Stop hook runner(PR#292/#343) の他PC反映確認のため、repo遅れとonboarding-sync最終ログのstatus報告を取得する(09-12効果実測の完了条件)",
+      "createdBy": "auto-session-20260910-19",
+      "createdAt": "2026-09-10T08:02:23.365Z",
+      "expiresAt": "2026-09-13T08:02:23.365Z"
     }
   ]
 }

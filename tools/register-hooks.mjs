@@ -153,6 +153,7 @@ try {
   added += migrate(settings.hooks.PreToolUse, 'pretooluse-delegation-warn.ps1', 'pretooluse-delegation-warn.mjs', command('pretooluse-delegation-warn.mjs'));
   if (add(settings.hooks.PreToolUse, 'pretooluse-delegation-warn.mjs', { matcher: 'Write|Edit|MultiEdit', hooks: [{ type: 'command', command: command('pretooluse-delegation-warn.mjs') }] })) added += 1;
   if (add(settings.hooks.PreToolUse, 'pretooluse-bash-delegation.mjs', { matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command: command('pretooluse-bash-delegation.mjs'), timeout: 5 }] })) added += 1;
+  if (add(settings.hooks.PreToolUse, 'pretooluse-lane-guard.mjs', { matcher: 'Bash|PowerShell|Edit|Write|MultiEdit', hooks: [{ type: 'command', command: command('pretooluse-lane-guard.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.PreToolUse, 'pretooluse-codex-invocation.mjs', { matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command: command('pretooluse-codex-invocation.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.PreToolUse, 'model-agent-guard.mjs', { matcher: 'Agent|Task', hooks: [{ type: 'command', command: command('model-agent-guard.mjs') }] })) added += 1;
   // ヘッドレス実行で消失するバックグラウンド処理を実行前に拒否する。

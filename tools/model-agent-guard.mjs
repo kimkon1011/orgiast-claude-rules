@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadFablePolicy, fableAllowedForSubagent } from './fable-policy.mjs';
+import { inspectTranscript } from './fable-session-guard.mjs';
 
 let raw = '';
 process.stdin.setEncoding('utf8');
@@ -13,6 +14,16 @@ try {
   const input = JSON.parse(raw);
   if (!/^(Agent|Task)$/.test(String(input.tool_name || ''))) process.exit(0);
   const toolInput = input.tool_input || {};
+  // model 省略は親を継承するため、Fable メインでは意図せず単価2倍の実働になる。
+  if (!toolInput.model) {
+    let currentModel = '';
+    try { currentModel = inspectTranscript(input.transcript_path).currentModel; } catch {}
+    if (/fable/i.test(currentModel)) {
+      const reason = '省略すると Fable(単価2倍)を継承する。model を明示: 量産/編集/確認は "sonnet"、分類は "haiku"、設計判断のみ "opus"。実装は Codex へ';
+      console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason } }));
+      process.exit(0);
+    }
+  }
   const subagentType = String(toolInput.subagent_type || '');
   const exploratory = /^(Explore|general-purpose|Plan)$/i.test(subagentType);
   const expensiveOrImplicit = !toolInput.model || /(?:opus|fable)/i.test(String(toolInput.model));

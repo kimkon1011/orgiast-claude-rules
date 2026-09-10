@@ -602,6 +602,19 @@ PCがあればその瞬間に 401 で締め出され、鍵配布が全滅する�
 
 詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/token-model-cost-routing.md`
 
+### 1.18.1 実行レーン制（Fable は相談と判定、実行は非Claude → Sonnet → Opus(設計のみ)）
+
+| lane | 主経路 | 失敗時 |
+|---|---|---|
+| consult | Fable本体（ツールなし、Read/Grep数回まで） | 実行へ進むなら該当レーンへ委譲 |
+| implement / edit-small | Codex（軽微編集はGemini可） | Codex内蔵fallback → Sonnet |
+| verify | Codex review または Gemini | Sonnet |
+| bulk | `llm-ask`（20件以上・全件は夜間`batch-enqueue`） | Sonnet |
+| mcp | Sonnetサブエージェント | Fable/Opusは結果確認のみ |
+| design | Fable本体、複数仮説の設計判断だけOpus | Sonnetで材料整理 |
+
+Fable/Opus本体の直接ツール実行は1ターン4回で警告、8回で停止（lane-guard）。例外はuser指示の `[LANE-OK]`。Sonnetは非Claudeが全部落ちた時の最後の手だが、MCPコネクタ操作だけは最初からSonnetサブエージェントへ渡す。2026-09-10 kim承認。
+
 ### 1.19 マキモノ（AI指示書マーケット）を必ず経由する
 
 **参照（コスト削減の主経路）**: 開発依頼を受けたらゼロから設計する前に `node ~/orgiast-claude-rules/tools/makimono-search.mjs "<キーワード>"` で完成済み指示書を探し、`--raw <slug>` で読んでから着手する（平均85%トークン削減）。UserPromptSubmit の `makimono-gate` hook が候補を自動注入するので、多くの場合は候補を読むだけでよい。使用後は `--report` で実績報告。有料（HTTP 402）は勝手に買わず購入ページを Markdown リンクで提示して判断を仰ぐ。

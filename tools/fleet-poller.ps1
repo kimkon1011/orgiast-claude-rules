@@ -21,6 +21,25 @@ try {
   }
 } catch {}
 
+# 自己修復: 全PCで Claude 環境の Google Drive 日次バックアップを登録する
+try {
+  if ($repo -and -not (Get-ScheduledTask -TaskName 'ClaudeDailyDriveBackup' -ErrorAction SilentlyContinue)) {
+    $backupTaskInstaller = Join-Path $repo 'tools\register-claude-backup-task.ps1'
+    if (Test-Path $backupTaskInstaller) {
+      & powershell -NoProfile -ExecutionPolicy Bypass -File $backupTaskInstaller *> $null
+      if ($LASTEXITCODE -ne 0) { throw "register-claude-backup-task.ps1 exit $LASTEXITCODE" }
+    }
+  }
+} catch {
+  try {
+    $fleetLogDir = Join-Path $H '.claude\logs'
+    if (-not (Test-Path -LiteralPath $fleetLogDir)) { New-Item -ItemType Directory -Path $fleetLogDir -Force | Out-Null }
+    $fleetLog = Join-Path $fleetLogDir 'fleet-poller.log'
+    $line = '{0} WARN backup-task-self-repair-failed reason={1}' -f (Get-Date).ToString('yyyy-MM-ddTHH:mm:ssK'), ($_.Exception.Message -replace "[\r\n]+", ' ')
+    [IO.File]::AppendAllText($fleetLog, $line + [Environment]::NewLine, (New-Object Text.UTF8Encoding($false)))
+  } catch {}
+}
+
 # 自己修復: 設定ファイルの先頭BOMを除去(BOM付きだとClaude Code/nodeがJSON.parse・env読取に失敗して起動不能になるため。schtask実行なのでClaude Codeが壊れていても直せる)
 foreach ($bf in @("$H\.claude\settings.json", "$H\.claude.json", "$H\.gemini\.env", "$H\.claude\cost-reporter.env", "$H\.claude\manus.env", "$H\.claude\deepseek.env", "$H\.claude\xai.env", "$H\.claude\openrouter.env", "$H\.claude\groq.env", "$H\.claude\mistral.env", "$H\.claude\ollama.env")) {
   try { if (Test-Path $bf) { $bc = [System.IO.File]::ReadAllText($bf); if ($bc.Length -gt 0 -and $bc[0] -eq [char]0xFEFF) { [System.IO.File]::WriteAllText($bf, $bc.TrimStart([char]0xFEFF), (New-Object System.Text.UTF8Encoding($false))) } } } catch {}

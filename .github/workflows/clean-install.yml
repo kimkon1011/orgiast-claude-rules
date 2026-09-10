@@ -10,6 +10,7 @@ on:
       - 'tools/setup.mjs'
       - 'tools/setup-manifest.json'
       - 'tools/onboarding-sync.*'
+      - 'tools/keyserve-secret.mjs'
       - 'tools/ensure-run-hidden.ps1'
       - 'tools/register-hooks.mjs'
       - '.github/workflows/clean-install.yml'
@@ -113,7 +114,8 @@ jobs:
             (Join-Path $env:APPDATA 'npm')
           ) | Where-Object { $_ }
           $env:Path = $pathParts -join ';'
-          $output = & node '.\tools\setup.mjs' --verify 2>&1
+          # This clean VM receives no enrollment credential; keep all other required checks.
+          $output = & node '.\tools\setup.mjs' --verify --allow-missing keyserve 2>&1
           $output | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'clean-install-logs\verify-setup.log')
           if ($LASTEXITCODE -ne 0) { throw "setup.mjs failed with exit code $LASTEXITCODE" }
 

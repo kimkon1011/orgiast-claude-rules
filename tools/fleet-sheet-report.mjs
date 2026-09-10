@@ -80,7 +80,7 @@ async function main() {
   const reporterEnvPath = path.join(claudeDir, 'cost-reporter.env');
   const reporterEnvText = readText(reporterEnvPath);
   const labelResolution = resolveReporterLabel({ envText: reporterEnvText, hostname: os.hostname() });
-  if (labelResolution.nextEnvText !== reporterEnvText) {
+  if (fs.existsSync(reporterEnvPath) && labelResolution.nextEnvText !== reporterEnvText) {
     try {
       fs.writeFileSync(reporterEnvPath, labelResolution.nextEnvText, { encoding: 'utf8', mode: 0o600 });
       fs.chmodSync(reporterEnvPath, 0o600);

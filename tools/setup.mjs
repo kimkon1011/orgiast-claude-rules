@@ -10,6 +10,7 @@ const SEVERITIES = new Set(['required', 'optional', 'manual']);
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
 const valueAfter = (flag) => { const i = argv.indexOf(flag); return i >= 0 ? argv[i + 1] : undefined; };
+const allowMissing = valueAfter('--allow-missing');
 const converge = argv.includes('--converge');
 const strict = argv.includes('--strict');
 const jsonOutput = argv.includes('--json');
@@ -86,7 +87,14 @@ function repair(item) {
     return true;
   } catch { return true; }
 }
-function inspect(items) { return items.map((item) => { const outcome = check(item); return { item, status: outcome === true ? 'OK' : outcome === null ? 'NOTICE' : 'NG', checked: true, repaired: false }; }); }
+function inspect(items) {
+  return items.map((item) => {
+    const outcome = check(item);
+    const exempt = item.id === 'env:keyserve' && allowMissing === 'keyserve';
+    const status = outcome === true ? 'OK' : outcome === null || exempt ? 'NOTICE' : 'NG';
+    return { item, status, checked: true, repaired: false };
+  });
+}
 function emit(results) {
   if (jsonOutput) {
     console.log(JSON.stringify({ items: results.map(({ item, status, checked, repaired }) => ({ id: item.id, severity: item.severity, status, checked, repaired })) }));
@@ -94,13 +102,17 @@ function emit(results) {
   }
   for (const result of results) {
     const marker = result.status === 'OK' ? '[OK ]' : result.status === 'NOTICE' ? '[注意]' : '[NG ]';
+    const exemption = result.item.id === 'env:keyserve' && allowMissing === 'keyserve' && result.status === 'NOTICE' ? ' (--allow-missing keyserve)' : '';
     const hint = result.status === 'NG' && result.item.repairHint ? ` (修復: ${result.item.repairHint})` : '';
-    console.log(`${marker} ${result.item.id} - ${result.item.description}${hint}`);
+    console.log(`${marker} ${result.item.id} - ${result.item.description}${hint}${exemption}`);
   }
 }
 
 let manifest;
-try { manifest = loadManifest(); } catch (error) { invalid(String(error?.message || error).split(/\r?\n/)[0]); }
+try {
+  if (argv.includes('--allow-missing') && (allowMissing !== 'keyserve' || converge)) throw new Error('--allow-missing keyserve is supported only for verification');
+  manifest = loadManifest();
+} catch (error) { invalid(String(error?.message || error).split(/\r?\n/)[0]); }
 if (manifest) {
   let results = inspect(manifest.items);
   if (converge) {

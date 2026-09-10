@@ -1,10 +1,10 @@
 # bootstrap.ps1 - Orgiast rule & tool setup (converging installer, ASCII only).
-# Replaces install-orgiast.ps1 as the one-time entry. Idempotent: repairs to a
-# converged state via tools/setup.mjs --converge. Run with Windows PowerShell 5.1:
-#   powershell -NoProfile -ExecutionPolicy Bypass -File bootstrap.ps1
+param([string]$EnrollToken = $env:ORGIAST_ENROLL_TOKEN)
 $ErrorActionPreference = 'Stop'
 function Have($Name) { return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue) }
-$Repo = Join-Path $HOME 'orgiast-claude-rules'
+$EnrollHome = if ($env:ORGIAST_HOME) { $env:ORGIAST_HOME } else { $HOME }
+if ($EnrollToken) { $EnrollDir = Join-Path $EnrollHome '.claude'; New-Item -ItemType Directory -Force -Path $EnrollDir | Out-Null; [IO.File]::WriteAllText((Join-Path $EnrollDir 'enroll.env'), "ORGIAST_ENROLL_TOKEN=$EnrollToken`r`n", [Text.UTF8Encoding]::new($true)) }
+$Repo = Join-Path $EnrollHome 'orgiast-claude-rules'
 $Base = 'https://github.com/kimkon1011/orgiast-claude-rules'
 if (-not (Have git)) { winget install --id Git.Git -e --source winget --accept-package-agreements --accept-source-agreements | Out-Null }
 if (-not (Have node)) { winget install --id OpenJS.NodeJS.LTS -e --source winget --accept-package-agreements --accept-source-agreements | Out-Null; $env:Path += ';' + (Join-Path $env:ProgramFiles 'nodejs') }

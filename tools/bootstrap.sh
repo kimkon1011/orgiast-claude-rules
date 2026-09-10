@@ -4,6 +4,9 @@
 set -eu
 have() { command -v "$1" >/dev/null 2>&1; }
 H="${ORGIAST_HOME:-$HOME}"
+ENROLL_TOKEN="${ORGIAST_ENROLL_TOKEN:-}"
+while [ "$#" -gt 0 ]; do case "$1" in --enroll-token) [ "$#" -ge 2 ] || { echo "--enroll-token requires a value" >&2; exit 1; }; ENROLL_TOKEN="$2"; shift 2 ;; *) echo "unsupported argument" >&2; exit 1 ;; esac; done
+if [ -n "$ENROLL_TOKEN" ]; then (umask 077; mkdir -p "$H/.claude"; printf 'ORGIAST_ENROLL_TOKEN=%s\n' "$ENROLL_TOKEN" > "$H/.claude/enroll.env"; chmod 600 "$H/.claude/enroll.env"); fi
 REPO="$H/orgiast-claude-rules"
 NODE_BIN="$H/.orgiast/node/bin"
 [ -d "$NODE_BIN" ] && export PATH="$NODE_BIN:$PATH"

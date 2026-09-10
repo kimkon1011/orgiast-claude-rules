@@ -104,3 +104,50 @@ test('project manifest has unique known item types and severities', () => {
   assert(parsed.items.every((entry) => ['command', 'file-contains', 'file-nonempty', 'json-valid', 'scheduled-task'].includes(entry.type)));
   assert(parsed.items.every((entry) => ['required', 'optional', 'manual'].includes(entry.severity)));
 });
+
+test('real cost-reporter manifest rejects label-only files and accepts HTTPS webhook', (t) => {
+  const home = temp('setup-cost-enroll-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const entry = JSON.parse(fs.readFileSync(path.join(toolsDir, 'setup-manifest.json'), 'utf8')).items.find((i) => i.id === 'env:cost-reporter');
+  assert.equal(entry.severity, 'optional');
+  const mf = path.join(home, 'manifest.json');
+  write(mf, JSON.stringify(manifest([entry])));
+  const inspect = () => JSON.parse(run(['--verify', '--json', '--home', home, '--manifest', mf]).stdout).items[0].status;
+  assert.equal(inspect(), 'NG');
+  write(path.join(home, '.claude/cost-reporter.env'), 'REPORTER_LABEL=existing-pc\n');
+  assert.equal(inspect(), 'NG');
+  write(path.join(home, '.claude/cost-reporter.env'), 'DISCORD_COST_WEBHOOK=https://x\n');
+  assert.equal(inspect(), 'OK');
+});
+
+test('real keyserve manifest is required: missing primary exits 1 and explains -EnrollToken; CI exemption stays visible', (t) => {
+  const home = temp('setup-keyserve-required-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const parsed = JSON.parse(fs.readFileSync(path.join(toolsDir, 'setup-manifest.json'), 'utf8'));
+  const entry = parsed.items.find((i) => i.id === 'env:keyserve');
+  assert.equal(entry.severity, 'required');
+  assert.equal(parsed.items.find((i) => i.id === 'env:fleet-sheet').spec.ifPresent, true);
+  assert.deepEqual(entry.repair, ['onboarding-sync.mjs', '--keys-only', '--force']);
+  const mf = path.join(home, 'manifest.json');
+  write(mf, JSON.stringify(manifest([entry])));
+  const args = ['--verify', '--home', home, '--manifest', mf];
+  const missing = run(args);
+  assert.equal(missing.status, 1);
+  assert.match(missing.stdout, /\[NG \] env:keyserve.*-EnrollToken/);
+  const exempt = run([...args, '--allow-missing', 'keyserve']);
+  assert.equal(exempt.status, 0);
+  assert.match(exempt.stdout, /\[注意\] env:keyserve.*--allow-missing keyserve/);
+  const json = run([...args, '--allow-missing', 'keyserve', '--json']);
+  assert.equal(JSON.parse(json.stdout).items[0].status, 'NOTICE');
+  assert.equal(run(args).status, 1, 'exemption is not persisted');
+  // Runtime-generated value: no credential in the checked-in fixture or test output.
+  write(path.join(home, '.claude/keyserve.env'), `ORGIAST_KEYSERVE_SECRET=${Date.now()}\n`);
+  assert.equal(run(args).status, 0);
+  fs.unlinkSync(path.join(home, '.claude/keyserve.env'));
+  assert.equal(run(args).status, 1, 'fault injection: removing the actual required file fails verification');
+  write(mf, JSON.stringify(manifest([entry, item('other-required', 'file-nonempty', { path: 'absent' })])));
+  assert.equal(run([...args, '--allow-missing', 'keyserve']).status, 1, 'other required checks stay enforced');
+  assert.equal(run([...args, '--allow-missing', 'other-required']).status, 1, 'unknown exemption is rejected');
+  assert.equal(run([...args, '--allow-missing']).status, 1, 'missing argument is rejected');
+  assert.equal(run([...args, '--converge', '--allow-missing', 'keyserve']).status, 1, 'cannot disable repair');
+});

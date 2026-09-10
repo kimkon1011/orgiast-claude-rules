@@ -8,6 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { inflateRawSync } from 'node:zlib';
 import { parseEnvText, readEnvValue } from './env-kv.mjs';
+import { resolveKeyserveSecret, reportKeyserveSource } from './keyserve-secret.mjs';
 import { repairEnvBom } from './env-repair.mjs';
 import { isEntry } from './is-entry.mjs';
 import { buildKeyserveAlert, shouldAlert } from './keyserve-alert.mjs';
@@ -445,16 +446,19 @@ async function alertKeyserveFailure(previous, now, status) {
     saveKeysAlertState(previous, now);
   } catch {}
 }
+function removeEnrollToken(name, contents) {
+  if (name !== 'keyserve.env' || !parseEnvText(contents).ORGIAST_KEYSERVE_SECRET) return;
+  try { fs.rmSync(path.join(home, '.claude', 'enroll.env'), { force: true }); }
+  catch { console.error('[onboarding-sync] enroll.env の削除に失敗しました'); }
+}
+
 async function provisionKeys(now, options = {}) {
   if (dryRun) return;
   const previous = keysState();
   if (!shouldRunKeys(previous, now, force)) return;
-  let secret = process.env.ORGIAST_KEYSERVE_SECRET || '';
-  if (!secret) secret = readEnvValue(path.join(home, '.claude', 'keyserve.env'), 'ORGIAST_KEYSERVE_SECRET');
-  if (!secret) {
-    secret = readEnvValue(path.join(home, '.claude', 'cost-reporter.env'), 'DISCORD_COST_WEBHOOK');
-    if (secret) log('legacy secret を使用中（keyserve.env 未受領）');
-  }
+  const { source, secret } = resolveKeyserveSecret({ home, env: process.env });
+  reportKeyserveSource(source);
+  if (source === 'legacy') log('legacy secret を使用中（keyserve.env 未受領）');
   if (!secret) return;
   try {
     const ts = Math.floor(Date.now() / 1000).toString();
@@ -481,8 +485,9 @@ async function provisionKeys(now, options = {}) {
         if (fs.existsSync(destination)) {
           const existing = fs.readFileSync(destination, 'utf8');
           const updated = mergeEnvFile(existing, cleanedContents);
-          if (updated === existing) continue;
+          if (updated === existing) { removeEnrollToken(name, updated); continue; }
           fs.writeFileSync(destination, updated, { encoding: 'utf8', mode: 0o600 });
+          removeEnrollToken(name, updated);
           fs.chmodSync(destination, 0o600);
           refreshed.push(name);
           log(`refreshed: ${name}`);
@@ -490,6 +495,7 @@ async function provisionKeys(now, options = {}) {
         }
         fs.mkdirSync(path.dirname(destination), { recursive: true });
         fs.writeFileSync(destination, cleanedContents, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+        removeEnrollToken(name, cleanedContents);
         provisioned.push(name);
         log(`provisioned: ${name}`);
       } catch (e) { log(`key write failed (${name}): ${e.message}`); }
@@ -501,7 +507,7 @@ async function provisionKeys(now, options = {}) {
     if (!options.quiet && provisioned.length) console.log(`[onboarding-sync] provisioned: ${provisioned.join(', ')}`);
     if (!options.quiet && refreshed.length) console.log(`[onboarding-sync] refreshed: ${refreshed.join(', ')}`);
   } catch (e) {
-    log(`key provisioning failed: ${e.message}`);
+    log(`key provisioning failed: ${e.status ? `HTTP ${e.status}` : 'request or response failed'}`);
     if (!options.quiet) await alertKeyserveFailure(previous, now, e.status);
   }
 }

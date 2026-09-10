@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import vm from 'node:vm';
 
 const script = new URL('./fleet-sheet-report.mjs', import.meta.url);
@@ -69,4 +69,27 @@ test('GAS upsertは空の計測値で既存セルを上書きせず、実測0は
   assert.equal(zero.values[columns.claudeUsd], 0);
   assert.equal(zero.values[columns.delegRatio], '0.0%');
   assert.equal(zero.values[columns.delegRatioLegacy], '0.0%');
+});
+
+test('fleet report never creates missing cost-reporter.env and still updates existing labels', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-no-reporter-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const dir = path.join(home, '.claude');
+  fs.mkdirSync(dir);
+  fs.writeFileSync(path.join(dir, 'fleet-sheet.env'), `FLEET_SHEET_URL=https://example.invalid/report\nFLEET_SHEET_TOKEN=${Date.now()}\n`);
+  const noNetwork = path.join(home, 'offline.mjs');
+  fs.writeFileSync(noNetwork, "globalThis.fetch = async () => { throw new Error('network disabled in test'); };\n");
+  const reporterPath = path.join(dir, 'cost-reporter.env');
+  const run = () => spawnSync(process.execPath, ['--import', pathToFileURL(noNetwork).href, fileURLToPath(script), '--dry-run'], {
+    encoding: 'utf8', timeout: 30000, env: { ...process.env, ORGIAST_HOME: home, VERSION_DRIFT_SKIP: '1' },
+  });
+  const fresh = run();
+  assert.equal(fresh.status, 0, fresh.stderr);
+  assert.ok(JSON.parse(fresh.stdout).label, 'collection reached label resolution');
+  assert.equal(fs.existsSync(reporterPath), false);
+  fs.writeFileSync(reporterPath, 'REPORTER_LABEL=old-pc\nREPORTER_HOST=other-host\n');
+  const upgrade = run();
+  assert.equal(upgrade.status, 0, upgrade.stderr);
+  assert.equal(JSON.parse(upgrade.stdout).label, os.hostname());
+  assert.ok(fs.readFileSync(reporterPath, 'utf8').includes(`REPORTER_LABEL=${os.hostname()}`));
 });

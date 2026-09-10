@@ -4,6 +4,7 @@
 # 実行するのは"あなた(このPCの持ち主)"。途中で「続けますか?」を1回だけ聞きます。中身に納得してから y を押してください。
 # 冪等(何度実行してもOK)。settings.json は毎回バックアップ。
 param(
+  [string]$EnrollToken = $env:ORGIAST_ENROLL_TOKEN,
   [string]$Webhook  = $env:ORGIAST_WEBHOOK,    # #claude-code webhook (配布者が埋め込み)
   [string]$Label    = $env:ORGIAST_LABEL,      # このPCの表示名(空ならPC名)
   [string]$ManusKey = $env:ORGIAST_MANUS_KEY,  # Manus APIキー(Web調査委譲用・配布者が埋め込み・任意)
@@ -209,12 +210,18 @@ $srcC = Join-Path $REPO 'tools\cost-loop.ps1'
 $dstC = Join-Path $HOOKS 'cost-loop.ps1'
 if (Test-Path $srcC) { Copy-Item $srcC $dstC -Force; OK "配置: コスト×作業量ループフック" }
 
+# --- enroll.env ---
+if ($EnrollToken) {
+  $enrollPath = Join-Path $HOMEDIR '.claude\enroll.env'
+  [IO.File]::WriteAllText($enrollPath, "ORGIAST_ENROLL_TOKEN=$EnrollToken`r`n", [Text.UTF8Encoding]::new($true))
+}
+
 # --- cost-reporter.env ---
 Step "コスト報告の設定"
 $envPath = Join-Path $HOMEDIR '.claude\cost-reporter.env'
 if (Test-Path $envPath) { OK "既存の設定を使用(上書きしません)" }
 elseif ($Webhook) { "DISCORD_COST_WEBHOOK=$Webhook`r`nREPORTER_LABEL=$Label" | Set-Content -Path $envPath -Encoding UTF8; OK "作成: $envPath" }
-else { Warn "Discord webhook 未指定。コスト報告は送信されません(配布者にwebhook入りランチャーをもらってください)" }
+elseif (-not $EnrollToken) { Warn "keyserve 登録トークン未指定。配布コマンドに -EnrollToken が付いているか kim に確認" }
 
 # --- Manus(Web調査委譲)キー ---
 Step "Manus(Web調査委譲)の設定"

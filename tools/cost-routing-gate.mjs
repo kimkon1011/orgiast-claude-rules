@@ -59,7 +59,9 @@ export function classifyRequest(prompt, options = {}) {
   else { lane = 'consult'; reason = CONSULT.test(text) ? '質問・相談' : '実行指示なし'; }
   const category = lane === 'bulk' ? bulkCategory(text) : lane;
   const advice = laneAdvice(lane, options.repoDir || repoRoot(), { ...options, category });
-  const large = lane === 'bulk' && (/全件|一括生成|バックフィル/.test(text) || Number(text.match(/(\d+)\s*(?:件|社|行|本|通|人|個|ファイル)/)?.[1]) >= 20);
+  // 急ぎ明示(今すぐ/至急 等)は §2.8.1 の即時実行判定と揃え、夜間 batch-enqueue を主経路にしない。
+  const urgent = /今すぐ|すぐに|至急|急ぎ|今日中|即時|リアルタイム|いま必要|今必要/.test(text);
+  const large = lane === 'bulk' && !urgent && (/全件|一括生成|バックフィル/.test(text) || Number(text.match(/(\d+)\s*(?:件|社|行|本|通|人|個|ファイル)/)?.[1]) >= 20);
   if (large) advice.primary = `node "${path.join(options.repoDir || repoRoot(), 'tools', 'batch-enqueue.mjs')}" --category ${category} "指示"`;
   return { lane, category, reason, ...advice };
 }

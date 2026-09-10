@@ -5,7 +5,7 @@ const cases = [
  ['1行だけ変えて','edit-small'],['typo','edit-small'],['名前を変えて','edit-small'],
  ['テストして','verify'],['レビューして','verify'],['通るか見て','verify'],
  ['10件分類','bulk'],['全件要約','bulk'],['消費者向け文章を作成','bulk'],
- ['Driveを確認','mcp'],['Discord bot を実装して','implement'],['Drive連携のhook作って','implement'],['DiscordへDM','mcp'],['メール送信','mcp'],
+ ['Driveを確認','mcp'],['500件を今すぐ分類して','bulk'],['Discord bot を実装して','implement'],['Drive連携のhook作って','implement'],['DiscordへDM','mcp'],['メール送信','mcp'],
  ['アーキテクチャの方針','design'],['複数案のトレードオフ','design'],['設計してから実装して','design'],
  ['Driveの20件を修正','mcp'],['全件を実装','bulk'],['[レーン固定: verify] 実装して','verify'],
 ];

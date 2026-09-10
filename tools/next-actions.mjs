@@ -123,6 +123,34 @@ function fallbackActions({ p1, errors, prs, todo }) {
   return choices.slice(0, 3);
 }
 
+async function filterStalePrActions(actions, prs, execImpl, log) {
+  const openSet = new Set(prs.map((pr) => pr.number));
+  const states = new Map(), filtered = [];
+  for (const action of actions) {
+    let stale = false;
+    const numbers = new Set([...`${action.title} ${action.source}`.matchAll(/PR\s*#?(\d{1,6})/g)].map((match) => Number(match[1])));
+    for (const number of numbers) {
+      if (openSet.has(number)) continue;
+      if (!states.has(number)) {
+        let state;
+        try {
+          const raw = await runExec(execImpl, 'gh', ['pr', 'view', String(number), '--repo', 'kimkon1011/orgiast-claude-rules', '--json', 'number,state']);
+          state = JSON.parse(raw)?.state;
+        } catch {}
+        states.set(number, state);
+      }
+      const state = states.get(number);
+      if (state === 'MERGED' || state === 'CLOSED') {
+        log(`next-actions: PR#${number} は${state}のため除外`);
+        stale = true;
+        break;
+      }
+    }
+    if (!stale) filtered.push(action);
+  }
+  return filtered;
+}
+
 function isNightlyError(line) {
   if (line.includes('/ サマリ /') || !/(?:NG|error|失敗|fail|dead)/i.test(line)) return false;
   const withoutZeroes = line
@@ -179,9 +207,18 @@ export async function runNextActions(options = {}) {
     actions = fallbackActions(inputs);
     (options.error || console.error)(`next-actions: LLM応答をJSONとして解釈できずフォールバック: ${lastError?.message || lastError || '不明なエラー'}`);
   }
+  const log = options.log || console.log;
+  actions = await filterStalePrActions(actions, prs, execImpl, log);
+  if (!actions.length) {
+    actions = [{
+      title: '新しい依頼と未処理事項を確認',
+      why: '候補が処理済みだったため（LLM未使用・機械選択）',
+      first_step: 'PR一覧と next-session.md を確認する',
+      source: 'TODO'
+    }];
+  }
   const body = render(actions, now), outputFile = path.join(base, 'next-actions.md');
   if (!cli.dryRun) { fs.mkdirSync(base, { recursive: true }); fs.writeFileSync(outputFile, replaceNextActionsSection(readFile(outputFile), body), 'utf8'); }
-  const log = options.log || console.log;
   if (cli.json) log(JSON.stringify({ actions }, null, 2));
   else if (cli.dryRun) log(body);
   log(`ok:アクション${actions.length}件 provider=${usedProvider}`);

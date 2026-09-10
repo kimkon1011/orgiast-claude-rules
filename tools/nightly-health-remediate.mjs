@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
-import { redactSecrets } from './webhook-health.mjs';
+import { redactAll } from './lib/redact.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { addDecision } from './pending-decisions.mjs';
 import { appendLineWithRetry } from './lib/append-line.mjs';
@@ -19,6 +19,12 @@ export function slugify(value) { return String(value).normalize('NFKD').replace(
 
 function readJson(file, fallback) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; } }
 function readLedger(file) { try { return fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean).map(JSON.parse); } catch { return []; } }
+function redactValue(value) {
+  if (typeof value === 'string') return redactAll(value);
+  if (Array.isArray(value)) return value.map(redactValue);
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactValue(item)]));
+  return value;
+}
 function command(exe, args, options = {}) { const result = spawnSync(exe, args, { encoding: 'utf8', windowsHide: true, ...options }); return { status: result.status, stdout: result.stdout || '', stderr: result.stderr || '', error: result.error }; }
 function ymd(now) { return now.toISOString().slice(0, 10).replaceAll('-', ''); }
 
@@ -43,7 +49,7 @@ export async function runRemediation({
   const result = { exitCode: 0, fixed: [], prs: [], escalated: [], deferred: [], suppressed: [], skipped: [], plan: [] };
   const tasks = { get: (name) => taskApi.get(name), start: (name) => taskApi.start(name), stop: (name) => taskApi.stop(name) };
   const record = async (anomaly, outcome, extra = {}) => {
-    const row = { fingerprint: anomalyFingerprint(anomaly), label: anomaly.label, outcome, ...extra, ranAt: now.toISOString() };
+    const row = redactValue({ fingerprint: anomalyFingerprint(anomaly), label: anomaly.label, outcome, ...extra, ranAt: now.toISOString() });
     if (!dryRun) { await appendLineWithRetry(ledgerFile, JSON.stringify(row)); await appendLineWithRetry(logFile, `${row.ranAt} ${outcome} ${anomaly.label}${extra.playbook ? ` (${extra.playbook})` : ''}${extra.prUrl ? ` ${extra.prUrl}` : ''}`); }
     return row;
   };
@@ -65,20 +71,26 @@ export async function runRemediation({
   const defer = async (anomaly, reason) => result.deferred.push(await record(anomaly, dryRun ? 'deferred' : 'deferred', { reason }));
   const seenThisRun = new Set();
   for (const raw of anomalies) {
-    const anomaly = { ...raw, logTail: redactSecrets(raw.logTail || ''), message: redactSecrets(raw.message || '') };
+    const anomaly = { ...raw, logTail: redactAll(raw.logTail || ''), message: redactAll(raw.message || ''), laneReason: redactAll(raw.laneReason || '') };
     const fingerprint = anomalyFingerprint(anomaly);
     if (seenThisRun.has(fingerprint)) { result.skipped.push(await record(anomaly, 'skipped', { reason: '同一実行内で処理済み' })); continue; }
     seenThisRun.add(fingerprint);
     if (prior.some((row) => row.fingerprint === fingerprint && now - new Date(row.ranAt) < DAY)) { result.skipped.push(await record(anomaly, 'skipped', { reason: '同日処理済み' })); continue; }
     let handled = false;
     for (const playbook of playbooks) {
-      if (!await playbook.match(anomaly, context)) continue;
-      if (dryRun) { plan(anomaly, `playbook=${playbook.name}`); handled = true; break; }
-      const applied = await playbook.apply(anomaly, context);
-      const verified = applied.outcome !== 'unhandled' && await playbook.verify(anomaly, context, applied);
-      if (!verified) continue;
-      const bucket = applied.outcome === 'suppressed' ? result.suppressed : result.fixed;
-      bucket.push(await record(anomaly, applied.outcome, { playbook: playbook.name, note: applied.note })); handled = true; break;
+      try {
+        if (!await playbook.match(anomaly, context)) continue;
+        if (dryRun) { plan(anomaly, `playbook=${playbook.name}`); handled = true; break; }
+        const applied = await playbook.apply(anomaly, context);
+        const verified = applied.outcome !== 'unhandled' && await playbook.verify(anomaly, context, applied);
+        if (!verified) continue;
+        const bucket = applied.outcome === 'suppressed' ? result.suppressed : result.fixed;
+        bucket.push(await record(anomaly, applied.outcome, { playbook: playbook.name, note: applied.note })); handled = true; break;
+      } catch (error) {
+        result.playbookErrors ??= [];
+        result.playbookErrors.push(await record(anomaly, 'playbook-error', { playbook: playbook.name, reason: redactAll(error?.message ?? error) }));
+        handled = true; break;
+      }
     }
     if (handled) continue;
     const history = prior.filter((row) => row.fingerprint === fingerprint);
@@ -133,24 +145,25 @@ export async function runRemediation({
       const branch = `autofix/${ymd(now)}-${slug}`;
       const worktree = path.join(home, '.claude', 'remediate-worktrees', `${slug}-${ymd(now)}`);
       const promptFile = path.join(os.tmpdir(), `nightly-remediate-${process.pid}-${fingerprint}.txt`);
-      const prompt = `夜間ジョブ異常を修復してください。\nlabel: ${anomaly.label}\nmessage: ${anomaly.message}\ntool: ${anomaly.expectation?.tool || '要調査'}\nredacted log tail:\n${anomaly.logTail}\n\n真因を特定し最小差分で直す。回帰テストを tools/*.test.mjs に追加。node --test tools/*.test.mjs tools/lib/*.test.mjs が全緑になること。コミットメッセージは fix(${slug}): … 。push はしない。`;
+      const prompt = redactAll(`夜間ジョブ異常を修復してください。\nlabel: ${anomaly.label}\nmessage: ${anomaly.message}\ntool: ${anomaly.expectation?.tool || '要調査'}\nredacted log tail:\n${anomaly.logTail}\n\n真因を特定し最小差分で直す。回帰テストを tools/*.test.mjs に追加。node --test tools/*.test.mjs tools/lib/*.test.mjs が全緑になること。コミットメッセージは fix(${slug}): … 。push はしない。`);
       fs.mkdirSync(path.dirname(worktree), { recursive: true }); fs.writeFileSync(promptFile, prompt, 'utf8');
       let laneReason = '';
       try {
         const added = run('git', ['worktree', 'add', worktree, '-b', branch, 'origin/main'], { cwd: repo });
         if (added.status !== 0) throw new Error(added.stderr || 'worktree add failed');
-        let coded = run(process.execPath, [path.join(repo, 'tools', 'codex-do.mjs'), '--prompt-file', promptFile, '--cwd', worktree, '--timeout', '1800'], { cwd: repo, timeout: 31 * 60000 });
-        if (coded.status !== 0) coded = run(process.execPath, [path.join(repo, 'tools', 'cheap-code.mjs'), '--provider', 'auto', '--prompt-file', promptFile, '--cwd', worktree], { cwd: repo, timeout: 31 * 60000 });
-        if (coded.status !== 0) throw new Error(`修理レーン失敗 exit ${coded.status}: ${redactSecrets(coded.stderr).slice(0, 300)}`);
+        const codex = run(process.execPath, [path.join(repo, 'tools', 'codex-do.mjs'), '--prompt-file', promptFile, '--cwd', worktree, '--timeout', '1800'], { cwd: repo, timeout: 31 * 60000 });
+        let coded = codex;
+        if (codex.status !== 0) coded = run(process.execPath, [path.join(repo, 'tools', 'cheap-code.mjs'), '--provider', 'auto', '--prompt-file', promptFile, '--cwd', worktree], { cwd: repo, timeout: 31 * 60000 });
+        if (coded.status !== 0) throw new Error(`修理レーン失敗 codex exit ${codex.status}: ${redactAll(codex.stderr).slice(-200)} / cheap-code exit ${coded.status}: ${redactAll(coded.stderr).slice(-200)}`);
         const tested = run(process.execPath, ['--test', 'tools/*.test.mjs', 'tools/lib/*.test.mjs'], { cwd: worktree, timeout: 20 * 60000 });
         if (tested.status !== 0) throw new Error(`回帰テスト失敗: ${tested.stderr.slice(0, 300)}`);
         const pushed = run('git', ['push', '-u', 'origin', branch], { cwd: worktree, timeout: 120000 }); if (pushed.status !== 0) throw new Error(pushed.stderr);
         const bodyFile = path.join(os.tmpdir(), `nightly-remediate-pr-${process.pid}.txt`);
-        fs.writeFileSync(bodyFile, `fingerprint: ${fingerprint}\n\n異常: ${anomaly.label}: ${anomaly.message}\n\n変更点: Codexによる最小修復\n検証: 全テスト成功\n`, 'utf8');
+        fs.writeFileSync(bodyFile, redactAll(`fingerprint: ${fingerprint}\n\n異常: ${anomaly.label}: ${anomaly.message}\n\n変更点: Codexによる最小修復\n検証: 全テスト成功\n`), 'utf8');
         const pr = run('gh', ['pr', 'create', '--label', 'automerge', '--title', `fix(${slug}): ${anomaly.label} を自動修復`, '--body-file', bodyFile], { cwd: worktree });
         if (pr.status !== 0) throw new Error(pr.stderr); const prUrl = pr.stdout.trim();
         result.prs.push(await record(anomaly, 'pr', { prUrl })); handled = true;
-      } catch (error) { laneReason = redactSecrets(error.message || error); }
+      } catch (error) { laneReason = redactAll(error.message || error); }
       finally { run('git', ['worktree', 'remove', '--force', worktree], { cwd: repo }); try { fs.unlinkSync(promptFile); } catch {} }
       if (handled) continue;
       anomaly.laneReason = laneReason;
@@ -169,4 +182,4 @@ export async function runRemediation({
   return result;
 }
 
-if (isEntry(import.meta.url)) runRemediation({ dryRun: process.argv.includes('--dry-run'), json: process.argv.includes('--json') }).then((r) => { process.exitCode = r.exitCode; }).catch((e) => { console.error(redactSecrets(e.stack || e)); process.exitCode = 1; });
+if (isEntry(import.meta.url)) runRemediation({ dryRun: process.argv.includes('--dry-run'), json: process.argv.includes('--json') }).then((r) => { process.exitCode = r.exitCode; }).catch((e) => { console.error(redactAll(e.stack || e)); process.exitCode = 1; });

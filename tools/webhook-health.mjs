@@ -6,6 +6,7 @@ import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 import { parseEnvText } from './env-kv.mjs';
 import { resolveReporterLabel } from './reporter-label.mjs';
+import { redactAll } from './lib/redact.mjs';
 
 export const WEBHOOK_RE = /https:\/\/discord\.com\/api\/webhooks\/(\d{15,})\/([A-Za-z0-9_-]{40,})/g;
 const USER_AGENT = 'DiscordBot (https://orgiast.jp, 1.0) orgiast-webhook-health';
@@ -18,7 +19,7 @@ export function extractWebhooks(text) {
 }
 
 export function redactSecrets(value) {
-  return String(value).replace(new RegExp(WEBHOOK_RE.source, 'g'), 'https://discord.com/api/webhooks/$1/[REDACTED]');
+  return redactAll(value);
 }
 
 export function mergeLedger(ledger, alive, seenFiles, now = new Date().toISOString()) {

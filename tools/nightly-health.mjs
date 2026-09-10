@@ -16,11 +16,13 @@ export function formatDate(date) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
-export async function defaultRunTests() {
-  const { spawnSync } = await import('node:child_process');
-  const result = spawnSync(process.execPath, ['--test', '--test-reporter=tap', 'tools/*.test.mjs', 'tools/lib/*.test.mjs'], {
+export async function defaultRunTests(spawnImpl) {
+  if (!spawnImpl) ({ spawnSync: spawnImpl } = await import('node:child_process'));
+  const result = spawnImpl(process.execPath, ['--test', '--test-reporter=tap', 'tools/*.test.mjs', 'tools/lib/*.test.mjs'], {
     encoding: 'utf8',
-    shell: false
+    shell: false,
+    timeout: 15 * 60 * 1000,
+    killSignal: 'SIGKILL'
   });
   return {
     status: result.status,
@@ -324,10 +326,12 @@ export async function runNightlyHealth({
   let suppressedCount = 0;
   try {
     const testResult = await runTests();
-    if (testResult.error) throw testResult.error;
+    if (testResult.error?.code === 'ETIMEDOUT') {
+      anomalies.push({ type: 'test_failure', label: 'ローカルテスト', message: 'テスト実行が15分でタイムアウト' });
+    } else if (testResult.error) throw testResult.error;
     const output = `${testResult.stdout || ''}\n${testResult.stderr || ''}`;
     const failCount = extractFailCount(output);
-    const isRed = testResult.status !== 0 || (failCount !== null && failCount > 0);
+    const isRed = !testResult.error && (testResult.status !== 0 || (failCount !== null && failCount > 0));
     const failing = isRed ? extractFailingTests(output) : [];
     if (updateBaseline) writeJson(baselinePath, { failing, recordedAt: now.toISOString() });
     const baseline = updateBaseline ? failing : readJson(baselinePath, { failing: [] }).failing || [];

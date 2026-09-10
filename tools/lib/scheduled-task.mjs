@@ -9,7 +9,7 @@ function run(command, spawnImpl = spawnSync) {
 
 export function getScheduledTaskInfo(taskName, { spawnImpl = spawnSync } = {}) {
   const name = String(taskName).replaceAll("'", "''");
-  const command = `$t=Get-ScheduledTask -TaskName '${name}' -ErrorAction Stop;$i=Get-ScheduledTaskInfo -TaskName '${name}' -ErrorAction Stop;[pscustomobject]@{taskName=$t.TaskName;state=[string]$t.State;lastRunTime=$i.LastRunTime.ToString('o');nextRunTime=$i.NextRunTime.ToString('o');lastTaskResult=$i.LastTaskResult;neverRun=($i.LastRunTime.Year -le 1999)}|ConvertTo-Json -Compress`;
+  const command = `try{$t=Get-ScheduledTask -TaskName '${name}' -ErrorAction Stop;$i=Get-ScheduledTaskInfo -TaskName '${name}' -ErrorAction Stop;[pscustomobject]@{taskName=$t.TaskName;state=[string]$t.State;lastRunTime=$i.LastRunTime.ToString('o');nextRunTime=$i.NextRunTime.ToString('o');lastTaskResult=$i.LastTaskResult;neverRun=($i.LastRunTime.Year -le 1999)}|ConvertTo-Json -Compress}catch{if($_.FullyQualifiedErrorId -match 'NoMatchingMSFT_ScheduledTaskFound'){Write-Output 'null'}else{throw}}`;
   return Promise.resolve(run(command, spawnImpl));
 }
 

@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { runNightlyHealth, formatDate, extractFailCount, isFailureLine, extractHookToolPaths, nativePath, getPlatform } from './nightly-health.mjs';
+import { runNightlyHealth, defaultRunTests, formatDate, extractFailCount, isFailureLine, extractHookToolPaths, nativePath, getPlatform } from './nightly-health.mjs';
 
 function createTempHome() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'nightly-health-test-'));
@@ -18,6 +18,25 @@ function removeDir(dir) {
     // Ignore cleanup error
   }
 }
+
+test('defaultRunTests enforces the 15 minute hard timeout', async () => {
+  let options;
+  const result = await defaultRunTests((_exe, _args, received) => { options = received; return { status: null, error: Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }) }; });
+  assert.equal(options.timeout, 15 * 60 * 1000);
+  assert.equal(options.killSignal, 'SIGKILL');
+  assert.equal(result.error.code, 'ETIMEDOUT');
+});
+
+test('test timeout becomes one anomaly and still writes the nightly cache', async () => {
+  const home = createTempHome();
+  try {
+    const timeout = Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' });
+    const result = await runNightlyHealth({ home, expectations: [], dryRun: true, runTests: async () => ({ status: null, stdout: '', stderr: '', error: timeout }) });
+    assert.equal(result.anomalies.filter((item) => item.message === 'テスト実行が15分でタイムアウト').length, 1);
+    const cache = JSON.parse(fs.readFileSync(path.join(home, '.claude', '.nightly-health-last.json'), 'utf8'));
+    assert.equal(cache.anomalies.filter((item) => item.message === 'テスト実行が15分でタイムアウト').length, 1);
+  } finally { removeDir(home); }
+});
 
 function createHookFixture() {
   const home = createTempHome();

@@ -87,3 +87,31 @@ test('missing and empty anomaly caches print an explicit ok line', async (t) => 
   const emptyOutput = await captureConsole(() => runRemediation({ home: empty }));
   assert.deepEqual(emptyOutput.lines, ['ok:異常なし（2026-09-10T06:30:00Z）']);
 });
+
+test('playbook exception is recorded and the next anomaly is still processed', async (t) => {
+  const home = makeHome(t, { anomalies: [{ label: 'one', message: 'bad one' }, { label: 'two', message: 'bad two' }] });
+  const pb = { name: 'broken', match: async () => { throw new Error(`token=${'s'.repeat(30)}`); } };
+  const result = await runRemediation({ home, playbooks: [pb], notify: async () => {} });
+  assert.equal(result.playbookErrors.length, 2);
+  assert.equal(result.playbookErrors.every((row) => row.outcome === 'playbook-error'), true);
+  assert.equal(JSON.stringify(result).includes('s'.repeat(30)), false);
+  const ledger = fs.readFileSync(path.join(home, '.claude', 'nightly-health-remediate-ledger.jsonl'), 'utf8');
+  assert.equal((ledger.match(/playbook-error/g) || []).length, 2);
+});
+
+test('any nonzero codex exit tries cheap-code once and reports both redacted failures', async (t) => {
+  const home = makeHome(t, { anomalies: [{ label: 'repair', message: 'bad' }] });
+  const calls = [];
+  const run = (_exe, args) => {
+    calls.push(args);
+    if (args.some((arg) => String(arg).endsWith('codex-do.mjs'))) return { status: 124, stdout: '', stderr: `codex token=${'a'.repeat(30)}` };
+    if (args.some((arg) => String(arg).endsWith('cheap-code.mjs'))) return { status: 7, stdout: '', stderr: `cheap sk-${'b'.repeat(20)}` };
+    return { status: 0, stdout: '', stderr: '' };
+  };
+  const result = await runRemediation({ home, playbooks: [], run, decision: () => {}, notify: async () => {} });
+  assert.equal(calls.filter((args) => args.some((arg) => String(arg).endsWith('cheap-code.mjs'))).length, 1);
+  assert.match(result.escalated[0].reason, /codex exit 124/);
+  assert.match(result.escalated[0].reason, /cheap-code exit 7/);
+  assert.equal(result.escalated[0].reason.includes('a'.repeat(30)), false);
+  assert.equal(result.escalated[0].reason.includes('b'.repeat(20)), false);
+});

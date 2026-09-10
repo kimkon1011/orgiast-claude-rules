@@ -5,4 +5,4 @@ export async function match(anomaly, context) {
   return info?.state === 'Running' && context.now - new Date(info.lastRunTime) > exp.maxRunHours * 3600000;
 }
 export async function apply(anomaly, context) { await context.tasks.stop(anomaly.expectation.task); return { outcome: 'fixed', note: '長時間実行タスクを停止' }; }
-export async function verify(anomaly, context) { return (await context.tasks.get(anomaly.expectation.task)).state !== 'Running'; }
+export async function verify(anomaly, context) { const info = await context.tasks.get(anomaly.expectation.task); return Boolean(info && info.state !== 'Running'); }

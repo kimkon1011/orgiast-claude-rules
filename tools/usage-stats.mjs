@@ -28,7 +28,7 @@ export function walkJsonl(dir, out = []) {
   for (const e of entries) { const p = path.join(dir, e.name); if (e.isDirectory()) walkJsonl(p, out); else if (e.name.endsWith('.jsonl')) out.push(p); }
   return out;
 }
-const CACHE_VERSION = 4;
+const CACHE_VERSION = 5;
 const cacheStates = new Map();
 function cachePath(home) { return path.join(home, '.claude', 'cost-loop-parse-cache.json'); }
 function cacheState(home) {
@@ -266,20 +266,42 @@ export function codexSessionDirs(home = process.env.ORGIAST_HOME || os.homedir()
   if (process.platform === 'linux') addUsers('/home');
   return [...new Set(dirs)];
 }
+function parseCodexUsage(raw) {
+  const patches = countPatchLines(raw), byModel = {};
+  let model = 'unknown', last = null;
+  for (const line of raw.split(/\r?\n/)) {
+    let row; try { row = JSON.parse(line); } catch { continue; }
+    const slug = row?.model || row?.payload?.model || row?.message?.model;
+    if (typeof slug === 'string' && slug) model = slug;
+    const match = line.match(/"total_token_usage"\s*:\s*\{[^{}]*?"output_tokens"\s*:\s*(\d+)/);
+    if (!match) continue;
+    const total = Number(match[1]);
+    const usage = byModel[model] ||= { sessions: 1, outputTokens: 0 };
+    // token_count はセッション累積値。重複イベントを加算せず、モデル切替時も増分だけ割り当てる。
+    usage.outputTokens += Math.max(0, total - (last ?? 0));
+    last = total;
+  }
+  return { last, byModel, added: patches.added, deleted: patches.deleted };
+}
 export function collectCodexUsage({ home = process.env.ORGIAST_HOME || os.homedir(), days = 7, now = Date.now(), includePatchLines = false } = {}) {
   const cutoff = now - days * DAY; let outputTokens = 0, sessions = 0, added = 0, deleted = 0, patchFiles = 0;
-  const files = [];
+  const files = [], byModel = {};
   for (const dir of codexSessionDirs(home)) files.push(...cachedWalk(home, dir));
   const uniqueFiles = [...new Set(files)], stats = bulkStat(uniqueFiles);
   for (let i = 0; i < uniqueFiles.length; i++) {
     const file = uniqueFiles[i], st = stats[i]; if (!st || st.mtimeMs < cutoff) continue;
-    const parsed = cachedFile(home, file, 'codex', st, () => { let raw = ''; try { raw = fs.readFileSync(file, 'utf8'); } catch { return null; } const lines = countPatchLines(raw); const re = /"total_token_usage"\s*:\s*\{[^{}]*?"output_tokens"\s*:\s*(\d+)/g; let match, last = null; while ((match = re.exec(raw)) !== null) last = Number(match[1]); return { last, added: lines.added, deleted: lines.deleted }; });
+    const parsed = cachedFile(home, file, 'codex', st, () => {
+      try { return parseCodexUsage(fs.readFileSync(file, 'utf8')); } catch { return null; }
+    });
     if (!parsed) continue;
     if (includePatchLines) { added += parsed.added; deleted += parsed.deleted; patchFiles++; }
-    const last = parsed.last;
-    if (last !== null) { outputTokens += last; sessions++; }
+    if (parsed.last !== null) { outputTokens += parsed.last; sessions++; }
+    for (const [slug, usage] of Object.entries(parsed.byModel)) {
+      const total = byModel[slug] ||= { sessions: 0, outputTokens: 0 };
+      total.sessions += usage.sessions; total.outputTokens += usage.outputTokens;
+    }
   }
-  saveCache(home); return includePatchLines ? { outputTokens, sessions, added, deleted, patchFiles } : { outputTokens, sessions };
+  saveCache(home); return includePatchLines ? { outputTokens, sessions, byModel, added, deleted, patchFiles } : { outputTokens, sessions, byModel };
 }
 export const collectCodexOutput = collectCodexUsage;
 export function countPatchLines(text) {

@@ -134,3 +134,18 @@ test('codexHardBlockBypass は有効なクールダウンとフォールバッ�
   fs.writeFileSync(file, JSON.stringify({ codex: { until: now + HOUR, reason: 'usage_limit' } }));
   assert.equal(codexHardBlockBypass(now, file, { hasGemini: false }).bypass, true);
 });
+
+test('codex-astra cooldown is independent and legacy path calls still work', async (t) => {
+  const { providerCooldownMs } = await import('./codex-cooldown.mjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'astra-cooldown-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'provider-cooldown.json'), now = Date.now();
+  writeCodexCooldown(now + HOUR, file);
+  writeCodexCooldown(now + 2 * HOUR, 'codex-astra', 'usage_limit', file);
+  assert.equal(providerCooldownMs('codex', now, file), HOUR);
+  assert.equal(providerCooldownMs('codex-astra', now, file), 2 * HOUR);
+  assert.equal(providerCooldownMs('codex-astra', now + 3 * HOUR, file), 0);
+  assert.equal(codexCooldownRemaining(now, file), HOUR);
+  assert.equal(JSON.parse(fs.readFileSync(file)).codex.reason, 'usage_limit');
+  assert.equal(JSON.parse(fs.readFileSync(file))['codex-astra'].reason, 'usage_limit');
+});

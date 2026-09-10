@@ -691,3 +691,192 @@ test('wslCodexLaunchPlan: 本当に codex が無いときだけ1回インスト�
 test('wslCodexLaunchPlan: ディストリが見つからなければ最初からネイティブへ', () => {
   assert.equal(wslCodexLaunchPlan({ distroFound: false, codexPresent: false, versionOk: false, installAttempted: false, retried: false }), 'native');
 });
+
+const { decideCodexLane, buildCodexExecArgs, normalizeCodexModel } = await import('./codex-do.mjs');
+const ASTRA = 'gpt-6-astra', SOL = 'gpt-5.6-sol';
+for (const [name, input, slug, reason] of [
+  ['explicit model wins', { model: 'sol', lane: 'astra' }, SOL, 'explicit_model'],
+  ['explicit Astra ignores cooldown', { model: ASTRA, astraCooldownMs: 1 }, ASTRA, 'explicit_model'],
+  ['alias ignores cooldown', { model: 'astra', astraCooldownMs: 1 }, ASTRA, 'explicit_model'],
+  ['unknown model passes through', { model: 'custom-model' }, 'custom-model', 'explicit_model'],
+  ['astra lane', { lane: 'astra' }, ASTRA, 'lane_astra'],
+  ['sol lane wins over header', { lane: 'sol', promptText: '<!-- lane: astra -->' }, SOL, 'lane_sol'],
+  ['HTML Astra header wins over review', { promptText: '<!-- lane: astra -->', review: true }, ASTRA, 'header_astra'],
+  ['text Astra header', { promptText: '# Task\nLane: astra' }, ASTRA, 'header_astra'],
+  ['Sol header wins over timeout', { promptText: '<!-- lane: sol -->', timeoutSecs: 3000 }, SOL, 'header_sol'],
+  ['line 40 included', { promptText: '\n'.repeat(39) + '<!-- lane: astra -->' }, ASTRA, 'header_astra'],
+  ['line 41 excluded', { promptText: '\n'.repeat(40) + '<!-- lane: astra -->' }, SOL, 'default_sol'],
+  ['inline Lane text excluded', { promptText: 'Example Lane: astra' }, SOL, 'default_sol'],
+  ['review conserves quota', { review: true, timeoutSecs: 3000, promptText: 'E2E Playwright' }, SOL, 'review_sol'],
+  ['long timeout boundary', { timeoutSecs: 2700 }, ASTRA, 'long_timeout'],
+  ['short timeout boundary', { timeoutSecs: 2699 }, SOL, 'default_sol'],
+  ['two keywords', { promptText: 'migration と根本原因' }, ASTRA, 'complex_task'],
+  ['case insensitive keywords', { promptText: 'e2e PLAYWRIGHT' }, ASTRA, 'complex_task'],
+  ['duplicate keyword counts once', { promptText: 'E2E e2e E2E' }, SOL, 'default_sol'],
+  ['default Sol', {}, SOL, 'default_sol'],
+  ['auto cooldown', { timeoutSecs: 2700, astraCooldownMs: 1 }, SOL, 'astra_cooldown:long_timeout'],
+  ['astra lane cooldown', { lane: 'astra', astraCooldownMs: 1 }, SOL, 'astra_cooldown:lane_astra'],
+]) {
+  test(`decideCodexLane: ${name}`, () => {
+    assert.deepEqual(decideCodexLane(input), { slug, effort: slug === ASTRA ? 'high' : undefined, reason });
+  });
+}
+
+test('normalizeCodexModel: aliases and unknown slugs', () => {
+  assert.equal(normalizeCodexModel('astra'), ASTRA);
+  assert.equal(normalizeCodexModel('sol'), SOL);
+  assert.equal(normalizeCodexModel('future-slug'), 'future-slug');
+});
+
+test('buildCodexExecArgs: model, effort, sandbox and stdin without spaces', () => {
+  const args = buildCodexExecArgs({ slug: ASTRA, effort: 'high' });
+  assert.deepEqual(args, ['exec', '-m', ASTRA, '-c', 'model_reasoning_effort="high"', '-s', 'workspace-write', '-']);
+  assert.ok(args.every((arg) => !/\s/.test(arg)));
+  assert.deepEqual(buildCodexExecArgs({ slug: SOL, review: true }), ['exec', '-m', SOL, '-s', 'read-only', '-']);
+});
+
+test('CLI validates routing options and dry-run reports model/effort', () => {
+  for (const args of [['--effort', 'ultra'], ['--lane', 'invalid'], ['--model'], ['--effort'], ['--lane']]) {
+    assert.equal(run(['--dry-run', '指示', ...args]).status, 2);
+  }
+  const result = run(['--dry-run', '--lane', 'astra', '--effort', 'max', '--no-escalate', '指示']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /executor=codex model=gpt-6-astra effort=max lane=lane_astra/);
+  assert.doesNotMatch(result.stdout, /--lane|--effort|--no-escalate/);
+});
+
+function runRouting(t, args, mocks, cooldown = null) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-routing-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const claude = path.join(home, '.claude');
+  fs.mkdirSync(claude);
+  if (cooldown) fs.writeFileSync(path.join(claude, 'provider-cooldown.json'), JSON.stringify(cooldown));
+  fs.writeFileSync(path.join(claude, 'codex-fallback-order.json'), JSON.stringify(['cheap-code:deepseek']));
+  const result = run(['--force-native', '--cwd', home, ...args], {
+    home, env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mocks), DEEPSEEK_API_KEY: 'test-key' },
+  });
+  const read = (name) => {
+    try { return fs.readFileSync(path.join(claude, name), 'utf8'); } catch { return ''; }
+  };
+  return { ...result, ledger: read('executor-usage.jsonl').trim().split('\n').filter(Boolean).map(JSON.parse),
+    cooldown: JSON.parse(read('provider-cooldown.json') || '{}'),
+    history: read('codex-limit-history.jsonl').trim().split('\n').filter(Boolean).map(JSON.parse) };
+}
+const quotaResult = { status: 1, stderr: "ERROR: You've hit your usage limit. Try again in 2 hours" };
+
+test('Astra quota retreats to Sol, writes isolated cooldown/history and both ledger rows', (t) => {
+  const result = runRouting(t, ['--model', 'astra', '--no-fallback', '説明して'], [quotaResult, { output: 'done' }]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /astra usage limit → sol へ退避/);
+  assert.deepEqual(result.ledger.map((r) => r.model), [`codex-cli/${ASTRA}`, `codex-cli/${SOL}`]);
+  assert.ok(result.ledger.every((r) => r.escalated === false && r.lane));
+  assert.ok(result.cooldown['codex-astra'].until > Date.now());
+  assert.equal(result.cooldown.codex, undefined);
+  assert.equal(result.history.length, 1);
+  assert.equal(result.history[0].model, ASTRA);
+  assert.equal(result.history[0].pattern, "You've hit your usage limit");
+});
+
+test('Astra and Sol quota proceed to cheap-code once', (t) => {
+  const result = runRouting(t, ['--lane', 'astra', '説明して'], [quotaResult, quotaResult, { output: 'done' }]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /executor=fallback:cheap-code:deepseek/);
+  assert.ok(result.cooldown.codex.until > Date.now());
+  assert.equal(result.ledger.length, 3);
+});
+
+for (const [name, first, prompt] of [
+  ['nonzero', { status: 9 }, '説明して'],
+  ['timeout', { status: 124, timedOut: true }, '説明して'],
+  ['empty diff', { output: 'done' }, '実装して'],
+]) {
+  test(`auto Sol escalates once on ${name}`, (t) => {
+    const result = runRouting(t, ['--no-fallback', prompt], [first, { output: 'done' }]);
+    assert.equal(result.status, name === 'empty diff' ? 1 : 0, result.stderr);
+    assert.match(result.stdout, /sol 失敗 → astra へ昇格/);
+    assert.deepEqual(result.ledger.map((r) => [r.model, r.escalated]), [[`codex-cli/${SOL}`, false], [`codex-cli/${ASTRA}`, true]]);
+  });
+}
+
+test('failed escalation goes to existing fallback without quota cooldown', (t) => {
+  const result = runRouting(t, ['説明して'], [{ status: 9 }, { status: 9 }, { output: 'done' }]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /executor=fallback:cheap-code:deepseek/);
+  assert.deepEqual(result.cooldown, {});
+});
+
+test('quota after escalation retreats without escalating again', (t) => {
+  const result = runRouting(t, ['説明して'], [{ status: 9 }, quotaResult, { output: 'done' }]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.ledger.map((r) => r.model), [`codex-cli/${SOL}`, `codex-cli/${ASTRA}`, `codex-cli/${SOL}`]);
+});
+
+for (const flags of [['--no-escalate'], ['--model', 'sol'], ['--lane', 'sol']]) {
+  test(`escalation disabled by ${flags.join(' ')}`, (t) => {
+    const result = runRouting(t, [...flags, '説明して'], [{ status: 9 }]);
+    assert.equal(result.status, 9, result.stderr);
+    assert.equal(result.ledger.length, 1);
+  });
+}
+
+test('Astra cooldown downgrades and suppresses escalation but explicit model bypasses it', (t) => {
+  const cooldown = { 'codex-astra': { until: Date.now() + 3600000 } };
+  const result = runRouting(t, ['--lane', 'astra', '説明して'], [{ status: 9 }], cooldown);
+  assert.equal(result.status, 9, result.stderr);
+  assert.match(result.stderr, /astra_cooldown/);
+  assert.equal(result.ledger[0].model, `codex-cli/${SOL}`);
+  const automatic = runRouting(t, ['説明して'], [{ status: 9 }], cooldown);
+  assert.equal(automatic.ledger.length, 1);
+  const explicit = runRouting(t, ['--model', 'astra', '説明して'], [{ output: 'done' }], cooldown);
+  assert.equal(explicit.ledger[0].model, `codex-cli/${ASTRA}`);
+});
+
+test('successful auto Sol does not escalate', (t) => {
+  const result = runRouting(t, ['説明して'], [{ output: 'done' }]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.ledger.length, 1);
+  assert.equal(result.ledger[0].model, `codex-cli/${SOL}`);
+});
+
+test('review is read-only even when an edit keyword occurs in the prompt', (t) => {
+  const result = runRouting(t, ['--review', '実装をレビューして'], [{ output: 'implemented code reviewed' }]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.ledger.length, 1);
+});
+
+test('CLI header boundary counts leading blank lines', () => {
+  const result = run(['--dry-run', '--prompt-file', writePrompt('\n'.repeat(40) + '<!-- lane: astra -->\n説明して')]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /model=gpt-5\.6-sol/);
+});
+
+test('native retry preserves stdin and passes model/effort as separate argv', { skip: process.platform === 'win32' }, (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-native-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const capture = path.join(home, 'capture.jsonl');
+  const executable = path.join(home, 'codex');
+  fs.writeFileSync(executable, `#!/usr/bin/env node
+const fs = require('node:fs');
+const input = fs.readFileSync(0, 'utf8');
+fs.appendFileSync(process.env.CAPTURE, JSON.stringify({ args: process.argv.slice(2), input }) + '\\n');
+if (process.argv.includes('gpt-6-astra')) { console.error("ERROR: You've hit your usage limit. Try again in 1 hour"); process.exit(1); }
+console.log('done');
+`, { mode: 0o755 });
+  const instruction = '説明して: `literal` $(literal)\n次の行';
+  const result = run(['--cwd', home, '--force-native', '--model', 'astra', '--prompt-file', writePrompt(instruction)], {
+    home, env: { PATH: `${home}${path.delimiter}${process.env.PATH}`, CAPTURE: capture, CODEX_DO_MOCK_RESULTS: '' },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const calls = fs.readFileSync(capture, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(calls.length, 2);
+  const expectedArgs = (options) => {
+    const args = buildCodexExecArgs(options);
+    args.splice(-1, 0, '--skip-git-repo-check');
+    return args;
+  };
+  assert.deepEqual(calls[0].args, expectedArgs({ slug: ASTRA, effort: 'high' }));
+  assert.deepEqual(calls[1].args, expectedArgs({ slug: SOL }));
+  assert.equal(calls[0].input, calls[1].input);
+  assert.ok(calls[0].input.endsWith(instruction));
+  assert.ok(calls.every((call) => !call.args.some((arg) => arg.includes('literal'))));
+});

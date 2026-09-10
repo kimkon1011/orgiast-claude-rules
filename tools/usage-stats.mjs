@@ -16,6 +16,7 @@ const PROSE_CHARS_PER_TOKEN = 1.8;
 const JSON_CHARS_PER_TOKEN = 3.4;
 export function modelTier(model) {
   const m = String(model || '').toLowerCase();
+  if (!m.includes('claude') && /(glm|deepseek|qwen|gemini|gpt|kimi|llama|mistral)/.test(m)) return 'nonclaude';
   if (m.includes('fable')) return 'fable';
   if (m.includes('opus')) return 'opus';
   if (m.includes('haiku')) return 'haiku';
@@ -27,7 +28,7 @@ export function walkJsonl(dir, out = []) {
   for (const e of entries) { const p = path.join(dir, e.name); if (e.isDirectory()) walkJsonl(p, out); else if (e.name.endsWith('.jsonl')) out.push(p); }
   return out;
 }
-const CACHE_VERSION = 3;
+const CACHE_VERSION = 4;
 const cacheStates = new Map();
 function cachePath(home) { return path.join(home, '.claude', 'cost-loop-parse-cache.json'); }
 function cacheState(home) {
@@ -84,11 +85,16 @@ function bulkStat(files) {
 }
 function parseClaudeFile(file) {
   let raw = ''; try { raw = fs.readFileSync(file, 'utf8'); } catch { return null; }
-  const records = [], commands = [];
+  const records = [], commands = []; let firstUser = '', firstCwd = '';
   for (const line of raw.split(/\r?\n/)) {
     if (!line.trim()) continue; let row; try { row = JSON.parse(line); } catch { continue; }
     const parsedTs = Date.parse(row.timestamp || ''), ts = Number.isFinite(parsedTs) ? parsedTs : 0;
     const content = Array.isArray(row?.message?.content) ? row.message.content : [];
+    if (!firstCwd && typeof row.cwd === 'string') firstCwd = row.cwd;
+    if (!firstUser && (row?.type === 'user' || row?.message?.role === 'user')) {
+      const value = row?.message?.content ?? row?.content;
+      firstUser = typeof value === 'string' ? value : Array.isArray(value) ? value.map((b) => b?.text || '').join('\n') : '';
+    }
     const assistant = (!row?.type || row.type === 'assistant') && (!row?.message?.role || row.message.role === 'assistant');
     let authoredLines = 0;
     if (assistant) for (const block of content) {
@@ -107,7 +113,17 @@ function parseClaudeFile(file) {
     records.push({ ts, authoredLines, out, tier, side: Boolean(row.isSidechain), blocks: blockTotals, toolUses, msgId,
       input: Number(usage.input_tokens) || 0, cacheRead: Number(usage.cache_read_input_tokens) || 0, cacheWrite: Number(usage.cache_creation_input_tokens) || 0 });
   }
-  return { records, commands };
+  return { records, commands, firstUser, firstCwd };
+}
+
+export function classifyHeadlessSession({ firstUser = '', cwd = '' } = {}) {
+  const text = `${firstUser}\n${cwd}`;
+  const marker = /^\s*\[headless:([^\]\r\n]+)\]/i.exec(firstUser);
+  if (marker) return { headless: true, job: marker[1].trim() || 'unknown' };
+  if (/auto-session/i.test(text) || /あなたは無人で起動された自動セッション/.test(text)) return { headless: true, job: 'auto-session' };
+  if (/next-session-launch/i.test(text)) return { headless: true, job: 'next-session-launch' };
+  if (/cheap-code/i.test(text) || /--output-format\s+json/i.test(text)) return { headless: true, job: 'cheap-code' };
+  return { headless: false, job: null };
 }
 function claudeFiles(home, cutoff = 0) {
   const state = cacheState(home); if (state.claudeScan) return state.claudeScan;
@@ -124,7 +140,7 @@ export function collectClaudeStats({ home = process.env.ORGIAST_HOME || os.homed
   const cutoff = now - days * DAY, sessions = [], byModel = {}, blocks = { thinking: 0, text: 0, tool_use: 0, unattributed: 0, tools: {} }; let authoredLines = 0;
   for (const { file, st, parsed } of claudeFiles(home, cutoff)) {
     if (st.mtimeMs < cutoff) continue;
-    let outputTokens = 0, sideOutput = 0, mainOutput = 0; const messages = new Map();
+    let outputTokens = 0, sideOutput = 0, mainOutput = 0, claudeOutput = 0; const messages = new Map();
     for (const row of parsed.records) {
       if (row.ts < cutoff) continue; authoredLines += row.authoredLines || 0;
       if (row.out === undefined) continue;
@@ -138,14 +154,20 @@ export function collectClaudeStats({ home = process.env.ORGIAST_HOME || os.homed
       const out = message.out; if (!out) continue; const visibleEst = message.text + message.tool_use, scale = visibleEst > out ? out / visibleEst : 1;
       outputTokens += out; byModel[message.tier] = (byModel[message.tier] || 0) + out;
       if (message.side) sideOutput += out; else mainOutput += out;
+      // headless ジョブの内訳用: Claude 課金 tier(opus/sonnet/haiku/default)の出力だけを分離する。
+      // cheap-code 経由(zai/deepseek)の無人ジョブも同じ projects に transcript を残すため、
+      // tier 無視で足すと「全部 cheap-code に寄せた健全状態」まで headlessClaudeOut>0 になり誤報になる。
+      if (message.tier !== 'nonclaude') claudeOutput += out;
       blocks.thinking += Math.max(0, out - visibleEst); blocks.text += message.text * scale; blocks.tool_use += message.tool_use * scale;
       for (const [name, amount] of Object.entries(message.tools)) blocks.tools[name] = (blocks.tools[name] || 0) + amount * scale;
     }
-    if (outputTokens) sessions.push({ session: path.basename(file, '.jsonl'), file, outputTokens, mainOutput, subOutput: sideOutput });
+    if (outputTokens) sessions.push({ session: path.basename(file, '.jsonl'), file, outputTokens, mainOutput, subOutput: sideOutput, claudeOutput, ...classifyHeadlessSession({ firstUser: parsed.firstUser, cwd: parsed.firstCwd }) });
   }
   sessions.sort((a, b) => b.outputTokens - a.outputTokens);
   const total = sessions.reduce((s, x) => s + x.outputTokens, 0), main = sessions.reduce((s, x) => s + x.mainOutput, 0), sub = sessions.reduce((s, x) => s + x.subOutput, 0);
-  saveCache(home); return { sessions, totals: { outputTokens: total, main, sub }, byModel, blocks, authoredLines };
+  const headless = sessions.filter((x) => x.headless), headlessClaudeOut = headless.reduce((s, x) => s + x.claudeOutput, 0), headlessJobs = {};
+  for (const session of headless) headlessJobs[session.job] = (headlessJobs[session.job] || 0) + session.outputTokens;
+  saveCache(home); return { sessions, totals: { outputTokens: total, main, sub }, byModel, blocks, authoredLines, headlessClaudeOut, headlessJobs };
 }
 export function classifyBashCommand(command) {
   command = String(command || '');
@@ -348,10 +370,30 @@ export function calculateLinesDelegation({ codexLines = 0, claudeLines = 0 } = {
   return total > 0 ? codexLines / total : null;
 }
 export function calculateDelegation({ codexOut = 0, execOut = 0, byModel = {}, specAuthoringOut = 0 } = {}) {
+  execOut += byModel.nonclaude || 0;
   const sonnetHaikuOut = (byModel.sonnet || 0) + (byModel.haiku || 0), supervisorOut = (byModel.opus || 0) + (byModel.fable || 0) + (byModel.default || 0);
   const delegated = codexOut + execOut + sonnetHaikuOut, total = delegated + supervisorOut;
   const delegRatio = total ? delegated / total : 0;
-  return { codexOut, execOut, sonnetHaikuOut, supervisorOut, delegated, total, delegRatio, delegRatioWithPrep: total ? (delegated + specAuthoringOut) / total : 0, specAuthoringOut };
+  const claudeOutAll = sonnetHaikuOut + supervisorOut, nonClaudeOut = codexOut + execOut, nonClaudeTotal = nonClaudeOut + claudeOutAll;
+  return { codexOut, execOut, sonnetHaikuOut, supervisorOut, claudeOutAll, nonClaudeOut, delegated, total, delegRatio, nonClaudeDelegRatio: nonClaudeTotal ? nonClaudeOut / nonClaudeTotal : 0, claudeDowngradeRatio: claudeOutAll ? sonnetHaikuOut / claudeOutAll : 0, delegRatioWithPrep: total ? (delegated + specAuthoringOut) / total : 0, specAuthoringOut };
+}
+
+export function collectProviderHealth({ home = process.env.ORGIAST_HOME || os.homedir(), days = 7, now = Date.now() } = {}) {
+  const cutoff = now - days * DAY, providers = {}; let raw = '';
+  try { raw = fs.readFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), 'utf8'); } catch {}
+  for (const line of raw.split(/\r?\n/)) {
+    let row; try { row = JSON.parse(line); } catch { continue; }
+    if (Date.parse(row.t || '') < cutoff) continue;
+    const name = String(row.provider || 'unknown'), p = providers[name] ||= { calls: 0, fail: 0, failRate: 0, http429: 0, http413: 0, averageSeconds: 0, rescuedByFailover: 0, _seconds: 0 };
+    p.calls++; const ok = row.ok !== false && (row.status == null || row.status === 'ok'); if (!ok) p.fail++;
+    const status = String(row.status ?? ''); if (status === '429' || /(?:http[_ ]?|HTTP)429/i.test(status)) p.http429++; if (status === '413' || /(?:http[_ ]?|HTTP)413/i.test(status)) p.http413++;
+    p._seconds += Number(row.secs ?? row.seconds ?? (Number(row.ms) / 1000)) || 0;
+    if (ok && row.failover === true) p.rescuedByFailover++;
+  }
+  let cooldowns = {}; try { cooldowns = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'provider-cooldown.json'), 'utf8')); } catch {}
+  for (const [name, p] of Object.entries(providers)) { p.failRate = p.calls ? p.fail / p.calls : 0; p.averageSeconds = p.calls ? p._seconds / p.calls : 0; delete p._seconds; const state = cooldowns?.[name]; p.cooldown = Number(state?.until) > now ? { until: state.until, reason: state.reason || '' } : null; }
+  for (const [name, state] of Object.entries(cooldowns || {})) if (Number(state?.until) > now && !providers[name]) providers[name] = { calls: 0, fail: 0, failRate: 0, http429: 0, http413: 0, averageSeconds: 0, rescuedByFailover: 0, cooldown: { until: state.until, reason: state.reason || '' } };
+  return { days, providers };
 }
 /**
  * Estimate spec-authoring output tokens by apportioning Bash/PowerShell tool-use
@@ -401,8 +443,9 @@ if (isEntry(import.meta.url)) {
   else if (sub === 'blocks') result = claude.blocks;
   else if (sub === 'bash') result = collectBashProfile({ home, days });
   else if (sub === 'ledger') result = collectLedger({ home, days });
-  else if (sub === 'deleg') { const ledger = collectLedger({ home, days }), codex = collectCodexUsage({ home, days }); result = calculateDelegation({ codexOut: codex.outputTokens, execOut: ledger.totals.outputTokens, byModel: claude.byModel }); }
+  else if (sub === 'deleg') { const ledger = collectLedger({ home, days }), codex = collectCodexUsage({ home, days }); result = { ...calculateDelegation({ codexOut: codex.outputTokens, execOut: ledger.totals.outputTokens, byModel: claude.byModel }), headlessClaudeOut: claude.headlessClaudeOut, headlessJobs: claude.headlessJobs }; }
+  else if (sub === 'health') result = collectProviderHealth({ home, days });
   else if (sub === 'turns') result = collectTurnStats({ home, days });
-  else { console.error('usage: node tools/usage-stats.mjs <sessions|blocks|bash|ledger|deleg|turns> [--days 7] [--json]'); process.exitCode = 2; }
+  else { console.error('usage: node tools/usage-stats.mjs <sessions|blocks|bash|ledger|deleg|health|turns> [--days 7] [--json]'); process.exitCode = 2; }
   if (result) console.log(json ? JSON.stringify(result, null, 2) : sub === 'blocks' ? formatBlockSource(result) : sub === 'bash' ? formatBashProfile(result) : JSON.stringify(result, null, 2));
 }

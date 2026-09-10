@@ -87,6 +87,14 @@ API/CLI/MCP/GitHub Actions で実行可能な操作は、手順案内せず Clau
 
 **認証情報・接続情報・あらゆる秘匿値は「再聞き」絶対禁止**（Supabase接続だけでなくWebhook URL/API key/OAuth token/Channel ID等すべて）。復元優先順位: ①.env系をGlob ②過去transcriptをGrep toolで検索（bash grepがclassifierに止められたら諦めずGrep toolに切替） ③production公開リソースから抽出 ④それでも無ければuserに理由付きで依頼 ⑤受領後は即.env.localに永続化。詳細・Supabase接続の組み立て: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/credentials-handling.md`
 
+### 1.1.0 ユーザーの手間は最上位のコスト — あらゆる判断のトレードオフに適用（kim 2026-09-09 厳命）
+
+提案・設計・トレードオフ判断のすべてで、**ユーザーの手作業1回を最も高いコスト**として扱います。「たった1クリックだけ」「年数回の手動作業だけ」と甘く見ないこと（アカウント数 × プロバイダ数 × 各PCの台数分で積み上がり、実質的に重大な滞留と手戻りを生みます）。
+
+* **リスク（課金暴走・誤設定・データ消失）はユーザーの手作業で止めるのではなく、Claude 側の監視・自動停止・DM通知で吸収する設計**にします。手動操作を関門に据えるのは設計怠慢です。
+* 手作業を伴う提案をする場合は、必ず「全体で年に何回発生するか」をカウントして明示し、事前に Claude 側で自動解決または吸収できないかを検討して記述しなければなりません。数値で数えずに「1クリックで済むから」と言い訳するのは禁止です。
+* **🛑 上限の優先：** ただし、既存の「🛑 上限（人間の理解・同意・他AIの安全判断は減らさない）」は引き続き最優先されます。ゼロ手間を達成するために、ユーザーの正規の承諾や、他AIによる安全判断そのものを剥奪・迂回してはなりません。
+
 <!-- BEGIN: 手渡し品質ルール (2026-08-28) -->
 ### 1.1.1 手渡しの唯一の正当化理由は「品質」（絶対ルール / 2026-08-28 kim厳命）
 
@@ -120,6 +128,8 @@ API/CLI/MCP/GitHub Actions で実行可能な操作は、手順案内せず Clau
 ### 1.2 user に手作業を頼む前に必ず根本診断する
 
 「ユーザー側の設定が怪しい」と感じた瞬間に依頼を出さない。エラーメッセージを表層で解釈しない、プログラム的に確認できる経路を全部試す、複数仮説があれば依頼不要な方から潰す、手作業が必要と判明したら根拠も併記する。「念のため確認して」型の予防的依頼も禁止。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/automation-first-checklist.md`
+
+**🔴 Claude 側ログの不在は、外部システムの不在の証拠ではない（kim 2026-09-10 厳命・絶対）**: 外部システム（Google / Vercel / GitHub 等のアカウント内のプロパティ・権限・設定・レコード）の有無を答えるときの証拠は、**そのシステムを直接照会した tool 結果だけ**（vendor MCP / DWD SA での API / 公式 CLI）。過去 transcript や memory の Grep は「Claude が行った操作」しか含まず、人が Web UI で作ったものは一切残らないので証拠にならない。直接照会できていないなら「存在しない可能性が高い」「痕跡がない」等の確率表現を一切使わず **「未確認」** と書き、「画面を開いて有るか無いか教えて」と user に検証を投げない（user の作業なしで進められる代替案を先に出す）。実害: TETSUKO の Search Console を「存在しない可能性が高い」と暫定回答し、kim がスクショで反証（2026-09-10）。Stop hook `external-state-claim-gate` がヘッジ付きの否定断定と検証の外注を block する。
 
 #### 1.2.1 依頼の前に必要性と代替経路を調査し、証拠を依頼文に併記する（絶対ルール）
 
@@ -569,6 +579,17 @@ PCがあればその瞬間に 401 で締め出され、鍵配布が全滅する�
 
 従量課金トークンを使う前に必ず: ①定額枠内・トークン消費ゼロの代替があるか（ローカルスクリプト/既存自動化/Codex/Manus） ②「ツール未導入だから従量経路で」は理由にならない（自分でinstall） ③従量課金しか無ければモデル最小化（分類=Haiku、量産=Sonnet、Opusは品質差実測時のみ） ④大量トークン消費が見込まれる判断は着手前に費用見込みを1行提示。優先順位: 既存自動化・ローカルスクリプト（消費ゼロ）→Codex（コード・定額）／Manus（Web調査・エンリッチ・専用枠）→Haiku→Sonnet→Opus5（要正当化）。Fable は監督用のみ（§1.16）で、実装・量産・分類には使わない。詳細・過去事例: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/token-model-cost-routing.md`
 
+### 1.17.2 GPT-6 Astra レーン
+
+通常実装は Sol (`gpt-5.6-sol`) が既定。長時間・高難度・Sol 失敗時の昇格には Astra (`gpt-6-astra`) を使う。
+Astra の上限到達時は同じ指示を Sol で1回再実行し、Sol も上限なら従来の cheap-code 等へフォールバックする。
+`node tools/codex-do.mjs --prompt-file task.md --lane auto`（既定）。`--lane sol` / `--lane astra` で固定できる。
+`--model astra` / `--model sol` / `--model <slug>` はレーン指定より優先する。
+`--effort low|medium|high|xhigh|max` で推論量を指定（Astra は既定 high、Sol は Codex 既定）。
+指示ファイルの先頭40行に `<!-- lane: astra -->` を書いても Astra 指定になる（Sol は `<!-- lane: sol -->`）。
+auto はレビューを Sol に、2700秒以上または長時間性キーワード2種以上を Astra に振り分ける。失敗時の昇格は `--no-escalate` で停止。
+Astra クールダウン中は Sol を使う。明示の `--model astra`（または完全 slug）だけは再試行できる。
+
 ### 1.18 監督(Opus)は最小限だけ動き、実働はCodex/Sonnet/Geminiに委譲する
 
 実装サブエージェントへの委譲は PreToolUse で warn し、観測条件を満たすと block へ昇格する。必須hookの欠落は SessionStart の `hook-selfcheck` が自動修復する。
@@ -701,6 +722,17 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
 - 手動実行: `tools\auto-session.cmd` をダブルクリックする（`--list` で採用/除外だけ確認できる）。
 - 履歴は VSCode の `/resume` に出る。ログは `~/.claude/auto-session/runs/` に保存し、Discord通知には transcript パスと `claude --resume <ID>` が入る。
 - `--permission-mode` は**渡さない**（`acceptEdits` は Bash を承認待ちで止めるため、既定の `auto` を継承する）。
+
+### 2.8.4 従量課金AIはオートチャージ ON、暴走対策は Claude の監視
+
+* **オートチャージの全機登録：** 前払いクレジット型の AI/API はすべてオートチャージ ON で運用します（月上限を設定できるプロバイダは必ず設定）。手動での追加チャージを推奨したり、人の手作業を当てにしたりしてはいけません（旧「Kimi はオートチャージ OFF」は撤回します）。
+* **自動ゲートウェイ経由の優先：** 自動チャージ機能が無いプロバイダ（DeepSeek・Kimiなど）は、**自動チャージを内蔵した集約ゲートウェイ（OpenRouter）経由での呼び出し**を既定経路にし、直叩きは予備のフォールバックに格下げします。
+* **Claude 側での日次多層監視（cost-improve-loop）：**
+  1. **残高情報収集：** 各プロバイダの残高/クレジット/当月消費を API 経由で直接取得します（`tools/provider-balance.mjs`）。
+  2. **暴走検知（`spend_anomaly`）：** 1日あたりの消費額が直近7日平均の2倍を超えた場合（かつ今日だけで $1 以上の消費がある場合）、当該プロバイダレーンを24時間自動で格下げし、kimへDM通知します。
+  3. **残高低下アラート（`balance_low`）：** 残高が $3 未満かつ自動チャージ非対応 of プロバイダがある場合、DMでアラート通知します。本文に「自動チャージが無いプロバイダです。OpenRouter 経由へ切替済み/未」を明記します。
+  4. **未測定の明示：** 残高取得 API を持たないプロバイダは、台帳ベースでの推定消費額を算出して「監視不能（台帳推定）」と明確にログに残します。
+  5. **予算合算：** 取得した残高・消費額は、月次予算メーター（`budget-status`）に合算して監視します。
 
 ### 2.9 Google Drive 運用ルール
 

@@ -57,7 +57,7 @@ export function bumpState(state, sessionId, requestedBlock, now = new Date()) {
   return { state: next, blocked };
 }
 
-function enabled() {
+export function enabled() {
   if (process.env.ORGIAST_REPORT_LEN_GATE === '1') return true;
   try { return fs.existsSync(path.join(home(), '.claude', 'report-length-gate-enabled')); } catch { return false; }
 }

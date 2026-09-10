@@ -103,7 +103,13 @@ export function scanToolUses(transcriptPath, maxBytes = 4 * 1024 * 1024) {
     raw = buffer.toString('utf8');
   } catch { return { names, inputs: '' }; }
 
-  for (const line of raw.split('\n')) {
+  return scanToolUsesFromRaw(raw);
+}
+
+export function scanToolUsesFromRaw(raw) {
+  const names = new Set();
+  const inputs = [];
+  for (const line of String(raw || '').split('\n')) {
     if (!line.includes('"tool_use"')) continue;
     let parsed;
     try { parsed = JSON.parse(line); } catch { continue; }

@@ -7,7 +7,7 @@ import path from 'node:path';
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hook-selfcheck-'));
 const originalHome = process.env.ORGIAST_HOME;
 process.env.ORGIAST_HOME = path.join(root, 'home');
-const { missingScheduledTasks, missingSkills, shouldRunTaskSelfcheck } = await import('./hook-selfcheck.mjs');
+const { missingRequiredHooks, missingScheduledTasks, missingSkills, shouldRunTaskSelfcheck } = await import('./hook-selfcheck.mjs');
 
 after(() => {
   if (originalHome === undefined) delete process.env.ORGIAST_HOME;
@@ -78,4 +78,11 @@ test('タスク自己チェックは最終実行から20時間以内ならスキ
   assert.equal(shouldRunTaskSelfcheck(now - (20 * 60 * 60 * 1000) + 1, now), false);
   assert.equal(shouldRunTaskSelfcheck(now - (20 * 60 * 60 * 1000), now), true);
   assert.equal(shouldRunTaskSelfcheck(undefined, now), true);
+});
+
+test('Stopはrunner 1本だけを必須とし旧9本を要求しない', () => {
+  const settings = { hooks: { Stop: [{ hooks: [{ command: 'node "C:\\repo\\tools\\stop-gate-runner.mjs"' }] }] } };
+  const required = [['Stop', 'stop-gate-runner.mjs']];
+  assert.deepEqual(missingRequiredHooks(settings, required), []);
+  assert.equal(missingRequiredHooks({ hooks: { Stop: [] } }, required).length, 1);
 });

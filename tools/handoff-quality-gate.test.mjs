@@ -1,5 +1,5 @@
 import test from 'node:test'; import assert from 'node:assert/strict'; import fs from 'node:fs'; import path from 'node:path'; import os from 'node:os'; import { fileURLToPath } from 'node:url';
-import { evaluateHandoff, runGate } from './handoff-quality-gate.mjs';
+import { evaluateHandoff, hasHandoff, runGate } from './handoff-quality-gate.mjs';
 import { spawnSync } from 'node:child_process';
 const catalog = JSON.parse(fs.readFileSync(new URL('./automation-routes.json', import.meta.url), 'utf8'));
 const gatePath = fileURLToPath(new URL('./handoff-quality-gate.mjs', import.meta.url));
@@ -41,3 +41,19 @@ test('25 stop_hook_active の品質合格はledgerへpassedを記録',()=>{const
 test('26 本文もpathもなしは reasonCode 付きで記録する',()=>{const h=fs.mkdtempSync(path.join(os.tmpdir(),'hqg-no-path-'));spawnSync(process.execPath,[gatePath],{input:JSON.stringify({session_id:'no-path'}),encoding:'utf8',env:{...process.env,ORGIAST_HOME:h}});const record=JSON.parse(fs.readFileSync(path.join(h,'.claude','handoff-gate-skips.jsonl'),'utf8'));assert.equal(record.reasonCode,'no-path');});
 test('27 末尾がtool_useだけでも手前の本文で判定する',()=>{const h=fs.mkdtempSync(path.join(os.tmpdir(),'hqg-tool-tail-'));const tp=path.join(h,'transcript.jsonl');fs.writeFileSync(tp,[JSON.stringify({type:'assistant',message:{content:[{type:'text',text:handoff}]}}),JSON.stringify({type:'assistant',message:{content:[{type:'tool_use',name:'Bash',input:{command:'true'}}]}})].join('\n'));const p=spawnSync(process.execPath,[gatePath],{input:JSON.stringify({session_id:'tool-tail',transcript_path:tp}),encoding:'utf8',env:{...process.env,ORGIAST_HOME:h}});assert.equal(p.status,0,p.stderr);assert.equal(JSON.parse(p.stdout).decision,'block');});
 test('28 読めないpathは unreadable コード付きで記録する',()=>{const h=fs.mkdtempSync(path.join(os.tmpdir(),'hqg-unreadable-'));const missing=path.join(h,'missing.jsonl');spawnSync(process.execPath,[gatePath],{input:JSON.stringify({session_id:'unreadable',transcript_path:missing}),encoding:'utf8',env:{...process.env,ORGIAST_HOME:h}});const record=JSON.parse(fs.readFileSync(path.join(h,'.claude','handoff-gate-skips.jsonl'),'utf8'));assert.equal(record.reasonCode,'unreadable');});
+test('29 否定された手渡し表現は依頼にしない',()=>{
+  for (const text of ['kim の手作業はゼロです','手作業が0回です','手渡しはありません','手渡しは発生しません','user の操作はなし','kim の操作: なし']) assert.equal(hasHandoff(text),false,text);
+});
+test('30 広い user 表現は同じ文に命令形がある場合だけ検出',()=>{
+  assert.equal(hasHandoff('user 側で操作する必要はありません。設定は完了しました。'),false);
+  assert.equal(hasHandoff('user 側で操作してください。'),true);
+});
+// 実会話の抜粋(業務情報を含む)はリポに入れない。ローカルに台帳由来の fixture がある時だけ回帰確認する。
+const fixturePath=process.env.HANDOFF_BLOCKED_FIXTURE||'';
+test('31 7日fixtureの命令形なし応答はすべて手渡しなし',{skip:!fixturePath||!fs.existsSync(fixturePath)?'HANDOFF_BLOCKED_FIXTURE 未設定':false},()=>{
+  const fixture=JSON.parse(fs.readFileSync(fixturePath,'utf8'));
+  const command=/(してください|クリック|貼り付け|押して|開いて|ダブルクリック|ログインして)/;
+  const withoutCommand=fixture.filter(({excerpt})=>!command.test(excerpt));
+  assert.ok(withoutCommand.length>=71,`fixtureの命令形なし件数=${withoutCommand.length}`);
+  for(const {excerpt} of withoutCommand) assert.equal(hasHandoff(excerpt),false,excerpt);
+});

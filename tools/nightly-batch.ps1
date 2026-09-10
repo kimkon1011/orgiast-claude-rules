@@ -20,10 +20,23 @@ function Format-NightlyDetail($Output) {
 function Finish-Nightly([int]$Code) {
     $parts = @($summary.Keys | ForEach-Object { $_ + '=' + $summary[$_] })
     Write-NightlyLog 'サマリ' ("nightly-batch 完了: " + ($parts -join ', '))
+    if ($script:pidFile -and (Test-Path -LiteralPath $script:pidFile)) { Remove-Item -LiteralPath $script:pidFile -Force -ErrorAction SilentlyContinue }
     exit $Code
 }
 
 try {
+    $script:pidFile = Join-Path $HOME '.claude\.nightly-batch.pid'
+    if (Test-Path -LiteralPath $script:pidFile) {
+        try {
+            $prior = Get-Content -LiteralPath $script:pidFile -Raw -Encoding UTF8 | ConvertFrom-Json
+            $priorProcess = Get-Process -Id ([int]$prior.pid) -ErrorAction SilentlyContinue
+            if ($priorProcess) {
+                Write-NightlyLog 'nightly-batch' ("skip:prior instance (started " + $prior.startedAt + ") is still running")
+                exit 0
+            }
+        } catch { }
+    }
+    @{ pid = $PID; startedAt = (Get-Date -Format 'HH:mm') } | ConvertTo-Json -Compress | Set-Content -LiteralPath $script:pidFile -Encoding UTF8
     Write-NightlyLog 'nightly-batch' 'ok:開始'
     $utc = [DateTime]::UtcNow
     $minutes = $utc.Hour * 60 + $utc.Minute

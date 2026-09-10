@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { readEnvValue } from './env-kv.mjs';
 import { callWithFallback, classifyFailure, FALLBACK_CHAIN } from './llm-fallback.mjs';
+import { batchDeadline } from './lib/batch-deadline.mjs';
 
 const PROVIDERS = {
   deepseek: { base: 'https://api.deepseek.com/chat/completions', keyEnv: 'DEEPSEEK_API_KEY', keyFile: 'deepseek.env', model: 'deepseek-chat' },
@@ -22,6 +23,8 @@ const args = process.argv.slice(2);
 const force = args.includes('--force');
 const dry = args.includes('--dry');
 const fallbackStandard = args.includes('--fallback-standard');
+const wallDeadline = batchDeadline();
+const deadlineReached = () => Date.now() >= wallDeadline.getTime();
 if (args.includes('--help')) {
   console.log('使い方: node tools/batch-run.mjs [--dry] [--force] [--fallback-standard]');
   console.log('  --fallback-standard  Anthropic Batch失敗時のみ、通常APIで単発再実行する');
@@ -66,6 +69,7 @@ function saveResult(job, text, usage, mode = 'standard', executedBy) {
   fs.appendFileSync(path.join(dir, `results-${date}.jsonl`), JSON.stringify(rec) + '\n');
 }
 async function runStandard(job) {
+  if (deadlineReached()) throw new Error('batch wall-clock deadline reached');
   const start = { provider: job.provider, model: job.model || PROVIDERS[job.provider].model };
   const result = await callWithFallback({
     start, chain: FALLBACK_CHAIN,
@@ -99,6 +103,7 @@ function geminiRequest(job) {
 }
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function runGeminiBatch(jobs) {
+  if (deadlineReached()) throw new Error('batch wall-clock deadline reached');
   const key = loadKey('gemini');
   if (!key) throw new Error('GEMINI_API_KEY 未設定');
   const model = jobs[0].model || PROVIDERS.gemini.model;
@@ -127,7 +132,7 @@ async function runGeminiBatch(jobs) {
     return { text, usage: response.usageMetadata || {}, mode: 'gemini-batch' };
   });
 }
-async function runAnthropicBatch(jobs) { const P = PROVIDERS.anthropic, key = loadKey('anthropic'); if (!key) throw new Error(`${P.keyEnv} 未設定。環境変数または ~/.claude/${P.keyFile} に ${P.keyEnv}=値 を置いてください`); const base = 'https://api.anthropic.com/v1/messages/batches'; const made = await retryFetch(base, { method: 'POST', headers: anthropicHeaders(key), body: JSON.stringify({ requests: jobs.map((j) => ({ custom_id: j.id, params: anthropicParams(j) })) }) }, 'Anthropic Batch作成'); if (!made.ok) throw new Error(`Batch作成 ${made.status}: ${(await made.text().catch(() => '')).slice(0, 400)}`); let batch = await made.json(), wait = 5000; if (!batch.id) throw new Error('Batch IDが応答にありません'); while (batch.processing_status !== 'ended') { await delay(wait); wait = Math.min(wait * 2, 60000); const p = await retryFetch(`${base}/${encodeURIComponent(batch.id)}`, { headers: anthropicHeaders(key) }, 'Anthropic Batch確認'); if (!p.ok) throw new Error(`Batch確認 ${p.status}: ${(await p.text().catch(() => '')).slice(0, 400)}`); batch = await p.json(); } const resultUrl = batch.results_url || `${base}/${encodeURIComponent(batch.id)}/results`; const got = await retryFetch(resultUrl, { headers: anthropicHeaders(key) }, 'Anthropic Batch結果'); if (!got.ok) throw new Error(`Batch結果 ${got.status}: ${(await got.text().catch(() => '')).slice(0, 400)}`); const map = new Map(); for (const line of (await got.text()).split(/\r?\n/).filter(Boolean)) { let row; try { row = JSON.parse(line); } catch { continue; } const type = row.result?.type; if (type !== 'succeeded') { map.set(row.custom_id, { error: row.result?.error?.message || `Anthropic Batch内エラー (${type || 'unknown'})` }); continue; } const msg = row.result.message || {}; map.set(row.custom_id, { text: (msg.content || []).map((x) => x.text || '').join(''), usage: msg.usage || {}, mode: 'batch' }); } return jobs.map((j) => map.get(j.id) || { error: 'Anthropic Batch結果がありません' }); }
+async function runAnthropicBatch(jobs) { if (deadlineReached()) throw new Error('batch wall-clock deadline reached'); const P = PROVIDERS.anthropic, key = loadKey('anthropic'); if (!key) throw new Error(`${P.keyEnv} 未設定。環境変数または ~/.claude/${P.keyFile} に ${P.keyEnv}=値 を置いてください`); const base = 'https://api.anthropic.com/v1/messages/batches'; const made = await retryFetch(base, { method: 'POST', headers: anthropicHeaders(key), body: JSON.stringify({ requests: jobs.map((j) => ({ custom_id: j.id, params: anthropicParams(j) })) }) }, 'Anthropic Batch作成'); if (!made.ok) throw new Error(`Batch作成 ${made.status}: ${(await made.text().catch(() => '')).slice(0, 400)}`); let batch = await made.json(), wait = 5000; if (!batch.id) throw new Error('Batch IDが応答にありません'); while (batch.processing_status !== 'ended') { await delay(wait); wait = Math.min(wait * 2, 60000); const p = await retryFetch(`${base}/${encodeURIComponent(batch.id)}`, { headers: anthropicHeaders(key) }, 'Anthropic Batch確認'); if (!p.ok) throw new Error(`Batch確認 ${p.status}: ${(await p.text().catch(() => '')).slice(0, 400)}`); batch = await p.json(); } const resultUrl = batch.results_url || `${base}/${encodeURIComponent(batch.id)}/results`; const got = await retryFetch(resultUrl, { headers: anthropicHeaders(key) }, 'Anthropic Batch結果'); if (!got.ok) throw new Error(`Batch結果 ${got.status}: ${(await got.text().catch(() => '')).slice(0, 400)}`); const map = new Map(); for (const line of (await got.text()).split(/\r?\n/).filter(Boolean)) { let row; try { row = JSON.parse(line); } catch { continue; } const type = row.result?.type; if (type !== 'succeeded') { map.set(row.custom_id, { error: row.result?.error?.message || `Anthropic Batch内エラー (${type || 'unknown'})` }); continue; } const msg = row.result.message || {}; map.set(row.custom_id, { text: (msg.content || []).map((x) => x.text || '').join(''), usage: msg.usage || {}, mode: 'batch' }); } return jobs.map((j) => map.get(j.id) || { error: 'Anthropic Batch結果がありません' }); }
 
 let raw = '';
 try { raw = fs.readFileSync(pending, 'utf-8'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
@@ -149,6 +154,7 @@ const completed = new Set();
 // kind=eval-harness: 指示文をLLMに解釈させず、固定のローカルコマンドへ置き換える。
 // ジョブの provider/prompt は実行に使わない(固定コマンドのみ。シート由来文字列の実行を避ける)。
 async function runEvalHarnessJob(job) {
+  if (deadlineReached()) throw new Error('batch wall-clock deadline reached');
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const result = spawnSync(process.execPath, [path.join(repoRoot, 'tools', 'eval-harness.mjs'), '--all'], {
     cwd: repoRoot, encoding: 'utf8', timeout: 30 * 60 * 1000, windowsHide: true,
@@ -202,6 +208,7 @@ for (const job of runnable.filter((j) => j.provider !== 'gemini' && j.provider !
 let latest = '';
 try { latest = fs.readFileSync(pending, 'utf-8'); } catch {}
 const kept = latest.split(/\r?\n/).filter(Boolean).filter((line) => { try { return !completed.has(JSON.parse(line).id); } catch { return true; } });
+if (deadlineReached() && kept.length) console.log(`deadline:残り ${kept.length}件は翌晩へ`);
 const tmp = path.join(dir, `pending-${process.pid}.tmp`);
 fs.writeFileSync(tmp, kept.length ? kept.join('\n') + '\n' : '');
 fs.renameSync(tmp, pending);

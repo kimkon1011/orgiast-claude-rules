@@ -79,17 +79,26 @@ export function injectFeedbackTodos(md, items, sheetUrl) {
   return { text: source.slice(0, bounds.start) + changedBlock + source.slice(bounds.end), injected: fresh };
 }
 
-export async function fetchJson(url, options = {}, fetchImpl = fetch) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 20_000);
-  try {
-    const response = await fetchImpl(url, { ...options, redirect: 'follow', signal: controller.signal });
-    const text = await response.text();
-    let data;
-    try { data = JSON.parse(text); } catch { throw new Error(`JSONでない応答: ${oneLine(text, 200)}`); }
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return data;
-  } finally { clearTimeout(timer); }
+export async function fetchJson(url, options = {}, fetchImpl = fetch, { sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
+  let last;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20_000);
+    try {
+      const response = await fetchImpl(url, { ...options, redirect: 'follow', signal: controller.signal });
+      const text = await response.text();
+      let data;
+      try { data = JSON.parse(text); } catch { throw new Error(`JSONでない応答: ${oneLine(text, 200)}`); }
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return data;
+    } catch (error) {
+      last = error;
+      const transient = error?.name === 'AbortError' || /abort|timeout/i.test(error?.message || '');
+      if (!transient || attempt === 1) throw Object.assign(error, { transient });
+      await sleep(5000);
+    } finally { clearTimeout(timer); }
+  }
+  throw last;
 }
 
 function defaultIo() {
@@ -286,7 +295,7 @@ export async function runIntake({ args = [], home = process.env.ORGIAST_HOME || 
     io.stdout(json ? JSON.stringify(summary) : line.slice(now.length + 1));
     return 0;
   } catch (error) {
-    io.stderr(`booth-feedback: ${isResolve ? '更新' : '取得'}に失敗 (${oneLine(error?.message || error, 240)})`);
+    io.stderr(`booth-feedback: ${error?.transient ? 'WARN transient:' : 'ERROR'} ${isResolve ? '更新' : '取得'}に失敗 (${oneLine(error?.message || error, 240)})`);
     return isResolve ? 1 : 0;
   }
 }

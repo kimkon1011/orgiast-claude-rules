@@ -415,7 +415,7 @@ if ($runHiddenLoaded) { try {
   if ((Test-Path $nb) -and (Test-Path $nightlyBatch)) {
     $act = New-HiddenScheduledTaskAction -Execute 'powershell.exe' -ChildArgument @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $nb, '-Target', 'tools\nightly-batch.ps1')
     $trg = New-ScheduledTaskTrigger -Daily -At 3:00am -RandomDelay (New-TimeSpan -Minutes 2)
-    $set = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+    $set = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 5)
     Register-ScheduledTask -TaskName 'OrgiastNightlyBatch' -Action $act -Trigger $trg -Settings $set -Force -ErrorAction Stop | Out-Null
     OK "定時起動 登録完了(毎日03:00 OrgiastNightlyBatch・夜間バッチ半額実行)"
   } else { Warn "nightly-batch.ps1 未取得=定時起動スキップ(他機能は動作)" }

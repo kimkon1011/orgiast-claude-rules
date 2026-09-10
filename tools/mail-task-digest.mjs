@@ -138,10 +138,17 @@ function parseArgs(argv) {
   return opts;
 }
 
-async function sheetsRequest(fetchImpl, token, url, init = {}) {
-  const response = await fetchImpl(url, { ...init, headers: { Authorization: `Bearer ${token}`, ...(init.headers || {}) } });
-  if (!response.ok) throw new Error(`Sheets API エラー: HTTP ${response.status} ${await response.text()}`);
-  return response.json();
+export async function sheetsRequest(fetchImpl, token, url, init = {}, { sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
+  const waits = [2000, 8000, 30000];
+  for (let attempt = 0; ; attempt += 1) {
+    const response = await fetchImpl(url, { ...init, headers: { Authorization: `Bearer ${token}`, ...(init.headers || {}) } });
+    if (response.ok) return response.json();
+    const detail = await response.text();
+    if (![429, 500, 502, 503, 504].includes(response.status) || attempt >= waits.length) {
+      throw new Error(`Sheets API エラー: HTTP ${response.status} ${detail}`);
+    }
+    await sleep(waits[attempt]);
+  }
 }
 
 function valuesUrl(sheetId, range) {
@@ -199,7 +206,13 @@ export async function runMailTaskDigest(options = {}) {
 
 export async function main(argv = process.argv.slice(2)) {
   try { await runMailTaskDigest({ args: argv }); return 0; }
-  catch (error) { console.error(`mail-task-digest: ${error.message}`); return 1; }
+  catch (error) {
+    if (/Sheets API.+HTTP (?:429|5\d\d)/i.test(error.message)) {
+      console.error(`mail-task-digest: WARN sheets-unavailable ${error.message}`);
+      return 0;
+    }
+    console.error(`mail-task-digest: ${error.message}`); return 1;
+  }
 }
 
 if (isEntry(import.meta.url)) process.exitCode = await main();

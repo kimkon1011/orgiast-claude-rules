@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { isUnmeasurable, paretoClassification, recommendations, resultRecord, suspiciousTasks } from './eval-harness.mjs';
+import { isDailyLimit, isUnmeasurable, JUDGE_CHAIN, paretoClassification, recommendations, resolveJudgeChain, resultRecord, retryDelay, suspiciousTasks } from './eval-harness.mjs';
 
 // Run the real CLI with isolated home/config/results and a fetch stub; --all also
 // writes a routing table, so copy its modules rather than touching the checkout.
@@ -52,15 +52,18 @@ function runHarness(t, { cooldown = {}, tasks, responses = [], args = ['--provid
 const activeCooldown = () => ({ until: Date.now() + 3600000, reason: 'daily_limit' });
 const success = { body: JSON.stringify({ choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }] }) };
 
-test('call skips a cooled-down judge without fetching', (t) => {
+test('judge はクールダウン中の候補をスキップし次の候補へ自動切替する（日次上限でevalが全滅しない）', (t) => {
+  const passVerdict = { body: JSON.stringify({ choices: [{ message: { content: 'PASS' }, finish_reason: 'stop' }] }) };
   const result = runHarness(t, {
-    cooldown: { groq: activeCooldown() }, responses: [success],
+    cooldown: { groq: activeCooldown() }, responses: [success, passVerdict],
     tasks: [{ id: 'judge', category: 'classification', prompt: 'test', expect: { type: 'judge' } }],
   });
-  assert.equal(result.calls.length, 1);
-  assert.match(result.calls[0], /openrouter/);
-  assert.match(result.stderr, /ERROR judge: SKIP groq: cooldown中 \(daily_limit, 残り\d+分\)/);
-  assert.equal(result.results[0].errors, 1);
+  assert.equal(result.calls.length, 2);
+  assert.ok(result.calls.every((url) => /openrouter/.test(url)));
+  assert.match(result.stderr, /JUDGE切替 groq → openrouter \(日次上限\)/);
+  assert.equal(result.results[0].pass, 1);
+  assert.equal(result.results[0].errors, 0);
+  assert.doesNotMatch(result.stderr, /ERROR judge/);
 });
 
 test('--all skips all tasks for a cooled-down provider and runs the next provider', (t) => {
@@ -155,4 +158,33 @@ test('半数以上が fail/error のタスクは警告され推薦根拠から�
   const output = recommendations(rows).join('\n');
   assert.match(output, /タスク rep-03: 3プロバイダ中2で失敗/);
   assert.match(output, /成功率 100%/);
+});
+
+const fakeResponse = (retryAfter) => ({ headers: { get: (n) => (n === 'retry-after' ? retryAfter : null) } });
+
+test('isDailyLimit は本文の RPD 文字列で日次上限を判定する', () => {
+  assert.equal(isDailyLimit(429, 'Rate limit reached ... on requests per day (RPD): Limit 1000, Used 1000'), true);
+  assert.equal(isDailyLimit(429, 'Rate limit reached ... on tokens per minute (TPM): Limit 6000'), false);
+  assert.equal(isDailyLimit(500, 'requests per day (RPD)'), false);
+  assert.equal(isDailyLimit(429, ''), false);
+});
+
+test('retryDelay は retry-after を30秒にクランプする', () => {
+  assert.equal(retryDelay(fakeResponse('87'), 0), 30000);
+  assert.equal(retryDelay(fakeResponse('5'), 0), 5000);
+  assert.equal(retryDelay(fakeResponse(null), 2), 4000);
+});
+
+test('resultRecord は空配列でも例外を投げず n:0 rate:null を返す（中断時の部分結果パス）', () => {
+  const r = resultRecord('groq', 'm', [], '2026-09-10T00:00:00Z');
+  assert.equal(r.n, 0);
+  assert.equal(r.rate, null);
+  assert.equal(r.attemptedRate, null);
+  assert.deepEqual(r.tasks, []);
+});
+
+test('resolveJudgeChain は --judge-provider を先頭に置き重複除去する', () => {
+  assert.deepEqual(resolveJudgeChain('deepseek'), ['deepseek', 'groq', 'openrouter', 'gemini', 'anthropic']);
+  assert.deepEqual(resolveJudgeChain(''), JUDGE_CHAIN);
+  assert.equal(new Set(resolveJudgeChain('gemini')).size, JUDGE_CHAIN.length);
 });

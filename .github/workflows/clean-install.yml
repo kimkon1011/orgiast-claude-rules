@@ -28,6 +28,12 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Test enrollment paths offline (including Windows PowerShell 5.1)
+        shell: powershell
+        run: |
+          node --test tools/bootstrap-enroll.test.mjs tools/keyserve-secret.test.mjs tools/keyserve-enroll.test.mjs tools/setup.test.mjs tools/fleet-sheet-report.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Enrollment regression tests failed' }
+
       # 配布 URL と同じく bootstrap 1ファイルだけが手元にある状態を作る。
       # checkout 内で直接実行すると、兄弟ファイルへの誤依存を見逃す。
       - name: Run standalone bootstrap (converging setup) with Windows PowerShell 5.1

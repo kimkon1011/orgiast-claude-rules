@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { appendUsageLedger, autoProvider, buildChildEnv, cooldownUntilFromText, detectBillingFailure, detectUsageLimitText, readInstruction, resolveProvider, writeProviderCooldown } from './cheap-code.mjs';
+import { appendUsageLedger, autoProvider, buildChildEnv, cooldownUntilFromText, detectBillingFailure, detectUsageLimitText, readInstruction, resolveClaudeBin, resolveProvider, writeProviderCooldown } from './cheap-code.mjs';
 
 const tool = fileURLToPath(new URL('./cheap-code.mjs', import.meta.url));
 
@@ -164,4 +164,57 @@ test('明示 provider が cooldown 中なら claude を起動せず exit 3 で�
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
+});
+
+// --- resolveClaudeBin: Windows の npm グローバルは claude.cmd しか置かず spawn が ENOENT になるため、
+// --- 実体の claude.exe を明示解決する。exists を注入してファイルシステム非依存で検証する。
+function fakeExists(paths) {
+  const set = new Set(paths);
+  return (target) => set.has(target);
+}
+
+const npmClaudeExe = (...segments) => path.join(...segments, 'npm', 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe');
+const localClaudeExe = (...segments) => path.join(...segments, 'Programs', 'claude', 'claude.exe');
+
+test('CLAUDE_BIN が設定されていて存在する場合はそれを返す', () => {
+  const bin = path.join('C:', 'tools', 'claude.exe');
+  assert.equal(resolveClaudeBin({ CLAUDE_BIN: bin }, fakeExists([bin])), bin);
+});
+
+test('CLAUDE_BIN が設定されていても存在しない場合は候補探索へフォールバックする', () => {
+  const appData = path.join('C:', 'Users', 'user', 'AppData', 'Roaming');
+  const expected = npmClaudeExe(appData);
+  const env = { CLAUDE_BIN: path.join('C:', 'missing', 'claude.exe'), APPDATA: appData };
+  assert.equal(resolveClaudeBin(env, fakeExists([expected])), expected);
+});
+
+test('APPDATA 配下の npm グローバル claude.exe を返す', () => {
+  const appData = path.join('C:', 'Users', 'user', 'AppData', 'Roaming');
+  const expected = npmClaudeExe(appData);
+  assert.equal(resolveClaudeBin({ APPDATA: appData }, fakeExists([expected])), expected);
+});
+
+test('APPDATA が無くても USERPROFILE から AppData/Roaming を組み立てて同じ候補を探す', () => {
+  const userProfile = path.join('C:', 'Users', 'user');
+  const expected = npmClaudeExe(userProfile, 'AppData', 'Roaming');
+  assert.equal(resolveClaudeBin({ USERPROFILE: userProfile }, fakeExists([expected])), expected);
+});
+
+test('APPDATA 側が無いときは LOCALAPPDATA 配下の claude.exe へフォールバックする', () => {
+  const localAppData = path.join('C:', 'Users', 'user', 'AppData', 'Local');
+  const expected = localClaudeExe(localAppData);
+  const env = { APPDATA: path.join('C:', 'Users', 'user', 'AppData', 'Roaming'), LOCALAPPDATA: localAppData };
+  assert.equal(resolveClaudeBin(env, fakeExists([expected])), expected);
+});
+
+test('どの候補も存在しなければ PATH 依存の最終手段 claude を返す', () => {
+  const env = {
+    APPDATA: path.join('C:', 'Users', 'user', 'AppData', 'Roaming'),
+    LOCALAPPDATA: path.join('C:', 'Users', 'user', 'AppData', 'Local'),
+  };
+  assert.equal(resolveClaudeBin(env, fakeExists([])), 'claude');
+});
+
+test('APPDATA も USERPROFILE も無い環境でも例外を投げず claude を返す', () => {
+  assert.equal(resolveClaudeBin({}, fakeExists([])), 'claude');
 });

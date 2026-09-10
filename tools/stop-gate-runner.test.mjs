@@ -52,3 +52,26 @@ test('次の行があればピギーバック・ヒントを重ねない', () =>
   const output = JSON.parse(invoke(home, 'hint', `${request}\n次に kim がすること: Merge をクリック`).stdout);
   assert.doesNotMatch(output.reason, /ピギーバック・ヒント/);
 });
+
+test('外部状態の否定断定を EXTERNAL-STATE で block する', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-external-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const output = invoke(home, 'external', 'GA4 は存在しない可能性が高い');
+  assert.equal(output.status, 0, output.stderr);
+  const verdict = JSON.parse(output.stdout);
+  assert.equal(verdict.decision, 'block');
+  assert.match(verdict.reason, /\[EXTERNAL-STATE\]/);
+});
+
+test('assistant_text と transcript_path の併用でも直接照会証拠を読む', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-evidence-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const transcript = path.join(home, 'transcript.jsonl');
+  fs.writeFileSync(transcript, [
+    { type: 'user', message: { role: 'user', content: 'GA4 を確認して' } },
+    { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'gcloud projects list' } }] } },
+  ].map(entry => JSON.stringify(entry)).join('\n'));
+  const output = invoke(home, 'evidence', 'GA4 は存在しない', { transcript_path: transcript });
+  assert.equal(output.status, 0, output.stderr);
+  assert.equal(output.stdout, '');
+});

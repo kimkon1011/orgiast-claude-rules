@@ -82,7 +82,13 @@ if ($dueDaily -and $repo) {
     Post "$emoji **[$label]** 日次設定チェック: OK $ok / NG $ng$tail"
     # --specs を必ず付ける。付けないとハードウェアスペックを一度も送らず、
     # PC管理表 が「手で叩いた1台」だけの状態から永久に増えない(2026-08-28 実測)。
-    try { & node (Join-Path $repo 'tools\fleet-sheet-report.mjs') '--specs' '--cloud' *> $null } catch {}
+    try {
+      $fleetLogDir = Join-Path $H '.claude\logs'; New-Item -ItemType Directory -Path $fleetLogDir -Force | Out-Null
+      $fleetLog = Join-Path $fleetLogDir 'fleet-poller.log'
+      $stamp = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ssK')
+      & node (Join-Path $repo 'tools\fleet-sheet-report.mjs') '--specs' '--cloud' 2>&1 | ForEach-Object { Add-Content -LiteralPath $fleetLog -Value "$stamp $_" -Encoding UTF8 }
+      if ($LASTEXITCODE -ne 0) { Add-Content -LiteralPath $fleetLog -Value "$stamp WARN fleet-sheet-report exit=$LASTEXITCODE" -Encoding UTF8 }
+    } catch {}
   }
   # 熱の日次サマリ。thermal-guard が未導入(=サンプルが無い)なら何も送らないので、
   # 導入済みのPCだけが1日1回 直近24hの要約を返す。

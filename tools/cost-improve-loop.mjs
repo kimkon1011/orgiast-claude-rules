@@ -14,6 +14,8 @@ import { collectProviderHealth, collectClaudeStats } from './usage-stats.mjs';
 import { collectBudgetStatus } from './budget-status.mjs';
 import { shouldSendMonthlyReport, buildMonthlyReport, markMonthlyReportSent } from './cost-monthly-report.mjs';
 import { collectProviderBalances, formatBalanceLine } from './provider-balance.mjs';
+import { resolveReporterLabel } from './reporter-label.mjs';
+import { main as sendFleetDirective } from './fleet-directive-send.mjs';
 
 export const ALLOWED_LOCAL_COMMANDS = [
   'node tools/tool-adoption-check.mjs --force',
@@ -254,6 +256,7 @@ export function evaluateFleet({ rows, ledgerCounts, localState, now, lastKpis = 
           violations.push({
             kind: 'stale_report',
             pc: pcName,
+            label: row.label,
             severity: 'warning',
             evidence: `Report is stale (last reported: ${row.reportedAt})`,
             measuredAt,
@@ -483,7 +486,7 @@ export function buildCombinedCodexSpec(actions) {
   return `${instruction}\n\n${tasks.join('\n\n')}\n`;
 }
 
-function humanTodoMessage(violation, now) {
+function humanTodoMessage(violation, now, retryCount = 0, retryMode = 'directive') {
   const pc = violation.pc;
   if (violation.kind === 'balance_low') {
     const switched = ['deepseek', 'kimi'].includes(violation.provider) ? '切替済み' : '未切替';
@@ -493,7 +496,8 @@ function humanTodoMessage(violation, now) {
     const reportedAt = /last reported:\s*([^)]*)/.exec(violation.evidence)?.[1] || '日時不明';
     const reportedMs = parseJstOrIsoDate(reportedAt);
     const days = reportedMs === null ? '不明' : Math.max(0, Math.floor((now.getTime() - reportedMs) / 86400000));
-    return `【${pc}】から${reportedAt}以降 KPI の自己申告が届いていません（${days}日間）。そのPCで Claude Code を起動できているか確認し、起動していれば \`node tools/fleet-sheet-report.mjs\` が夜間に走っているかを見てください。`;
+    if (!retryCount) return `【${pc}】から${reportedAt}以降 KPI の自己申告が届いていません（${days}日間）。そのPCで Claude Code を起動できているか確認し、起動していれば ` + '`node tools/fleet-sheet-report.mjs`' + ' が夜間に走っているかを見てください。';
+    return `【${pc}】から${reportedAt}以降 KPI の自己申告が届いていません（${days}日間）。自動再送（${retryMode}）を ${retryCount} 回試みたが復帰しないため、そのPCで Claude Code を1回起動してください。`;
   }
   if (violation.kind === 'cost_spike') {
     const previous = violation.previousValue ?? /from \$(\d+(?:\.\d+)?)/.exec(violation.evidence)?.[1] ?? '不明';
@@ -517,10 +521,11 @@ function humanTodoMessage(violation, now) {
   return `【${pc}】自動対処を完了できませんでした（実測: ${violation.evidence}）。状況を確認してください。`;
 }
 
-export function decideActions({ violations, state, now, limits = { maxCodex: 2 } }) {
+export function decideActions({ violations, state, now, limits = { maxCodex: 2 }, directiveSend = null, spawnSync = defaultSpawnSync, ownLabel = '', dryRun = false, repo = path.resolve(import.meta.dirname, '..') }) {
   const actions = [];
   const skipped = [];
   const nextActionsState = [...(state.actions || [])];
+  const nextStaleRetry = { ...(state.staleRetry || {}) };
   let codexCount = 0;
 
   const PLAYBOOK = {
@@ -585,6 +590,33 @@ export function decideActions({ violations, state, now, limits = { maxCodex: 2 }
     const { kind, pc, evidence } = violation;
     const playbook = PLAYBOOK[kind];
     if (!playbook) continue;
+    let retryFailed = false;
+    if (kind === 'stale_report' && !nextStaleRetry[pc]) {
+      const mode = (violation.label || pc) === ownLabel ? 'local' : 'directive';
+      if (dryRun) {
+        skipped.push({ kind, pc, reason: 'dry_run', note: `fleet-sheet-report 再送予定 (${mode})` });
+        continue;
+      }
+      try {
+        if (mode === 'local') {
+          const result = spawnSync(process.execPath, ['tools/fleet-sheet-report.mjs', '--specs', '--cloud', '--no-jitter'], {
+            cwd: repo, timeout: 300_000, windowsHide: true, shell: false, encoding: 'utf8'
+          });
+          if (result.error || result.status !== 0) throw new Error('local report failed');
+        } else {
+          if (typeof directiveSend !== 'function') throw new Error('fleet directive unavailable');
+          directiveSend(['--kind', 'run', '--task', 'fleet-sheet-report', '--targets', violation.label || pc, '--why', 'stale_report 自動復旧', '--push', '--expires-hours', '48'], { repo });
+        }
+        nextStaleRetry[pc] = { sentAt: now.toISOString(), count: 1, mode };
+        actions.push({ id: `action-${nowMs}-stale_report-${pc}`, kind, pc, mode, dispatchedAt: now.toISOString(), baseline: { metric: 'reportAge', value: 0 }, result: 'sent', verifiedAt: null, note: `fleet-sheet-report 再送 (${mode})` });
+        continue;
+      } catch {
+        // 外部例外には認証情報を含む git 出力があり得るので、固定の理由だけを記録する。
+        console.error(`stale_report: ${mode === 'local' ? 'ローカル再送に失敗（終了異常またはタイムアウト）' : '再送指令の送信に失敗（利用不可または push 失敗）'}。人へエスカレーションします。`);
+        retryFailed = true;
+      }
+    }
+    if (kind === 'stale_report' && nextStaleRetry[pc] && nowMs - Date.parse(nextStaleRetry[pc].sentAt) < 86400000) continue;
 
     const isCooldown = nextActionsState.some(act => {
       if (act.kind === kind && act.pc === pc) {
@@ -593,7 +625,7 @@ export function decideActions({ violations, state, now, limits = { maxCodex: 2 }
       }
       return false;
     });
-    if (isCooldown) continue;
+    if (isCooldown && !retryFailed) continue;
 
     const sameCompletedActs = nextActionsState
       .filter(act => act.kind === kind && act.pc === pc && act.result !== 'pending')
@@ -688,14 +720,16 @@ export function decideActions({ violations, state, now, limits = { maxCodex: 2 }
       }
     } else if (mode === 'human') {
       action.result = 'escalated';
-      action.todoMessage = humanTodoMessage(violation, now);
+      action.todoMessage = humanTodoMessage(violation, now, nextStaleRetry[pc]?.count || 0, nextStaleRetry[pc]?.mode || 'directive');
       if (playbook.localEffect) action.localEffect = playbook.localEffect;
       actions.push(action);
       nextActionsState.push(action);
     }
   }
 
-  return { actions, skipped, nextActionsState };
+  const stalePcs = new Set(violations.filter(v => v.kind === 'stale_report').map(v => v.pc));
+  for (const pc of Object.keys(nextStaleRetry)) if (!stalePcs.has(pc)) delete nextStaleRetry[pc];
+  return { actions, skipped, nextActionsState, nextStaleRetry };
 }
 
 export function verifyPreviousActions({ state, rows, localState, now, horizonDays = 3, signals = null }) {
@@ -1295,7 +1329,12 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   const evaluation = evaluateFleet({ rows, ledgerCounts, localState, now, lastKpis: verifiedState.lastKpis, signals });
 
   // 4. Decide actions
-  const decision = decideActions({ violations: evaluation.violations, state: verifiedState, now, limits: { maxCodex } });
+  let envText = '';
+  try { envText = fs.readFileSync(path.join(claudeDir, 'cost-reporter.env'), 'utf8'); } catch {}
+  const ownLabel = io.ownLabel ?? resolveReporterLabel({ envText, hostname: os.hostname() }).label;
+  const decision = decideActions({ violations: evaluation.violations, state: verifiedState, now, limits: { maxCodex },
+    ownLabel, spawnSync: io.spawnSync || defaultSpawnSync, dryRun,
+    directiveSend: io.directiveSend || (io.fetchFleetSheetRows ? null : sendFleetDirective) });
 
   // Execute actions
   const executedActions = [];
@@ -1417,7 +1456,8 @@ export async function main(argv = process.argv.slice(2), io = {}) {
     version: 1,
     lastRun: now.toISOString(),
     actions: finalActions,
-    lastKpis: updatedLastKpis
+    lastKpis: updatedLastKpis,
+    staleRetry: decision.nextStaleRetry
   };
 
   const ineffectiveWarning = effectiveness.warning
@@ -1445,6 +1485,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   reportText += `${formatBalanceLine(signals?.providerBalances || [])}\n`;
   reportText += `**📊 AIコスト自動改善ループ報告 (${now.toISOString().slice(0, 10)})**\n\n`;
   
+  const unmeasurableRows = [];
   reportText += `### ① フリートKPI状況\n`;
   if (rows) {
     let unreportedCount = 0;
@@ -1457,7 +1498,8 @@ export async function main(argv = process.argv.slice(2), io = {}) {
       if (stalePcs.has(pcName)) {
         reportText += `- **${pcName}**: 最終報告が古い (${row.reportedAt}) - 集計除外\n`;
       } else if (parsePercent(row.delegRatio) === null || String(row.claudeUsd ?? '').trim() === '' || !Number.isFinite(Number(row.claudeUsd))) {
-        reportText += `- **${pcName}**: 計測不能\n`;
+        unmeasurableRows.push(row);
+        reportText += `- **${pcName}**: 報告実績なし（最終報告 ${row.reportedAt || '不明'}）— そのPCで Claude Code を1回起動すれば復帰\n`;
       } else {
         reportText += `- **${pcName}**: 委譲率 ${row.delegRatio || '不明'} / Claude $${row.claudeUsd || '0.00'} / 鮮度: ${row.reportedAt || 'なし'}\n`;
       }
@@ -1489,14 +1531,16 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   }
 
   reportText += `\n### ④ 自動で直せず人に上げた項目\n`;
-  const newlyHuman = executedActions.filter(a => a.mode === 'human');
-  if (newlyHuman.length > 0) {
+  const unmeasurablePcs = new Set(unmeasurableRows.map(row => row.pcName || row.label || 'unknown'));
+  const newlyHuman = executedActions.filter(a => a.mode === 'human' && !(a.kind === 'measurement_untrusted' && unmeasurablePcs.has(a.pc)));
+  if (newlyHuman.length > 0 || unmeasurableRows.length > 0) {
     for (const act of newlyHuman) {
       reportText += `- **${act.pc}**: ${act.todoMessage}\n`;
     }
   } else {
     reportText += `- なし\n`;
   }
+  for (const row of unmeasurableRows) reportText += `- **${row.pcName || row.label || 'unknown'}**: 自動では復旧不可 — そのPCで Claude Code を1回起動してください\n`;
 
   if (jsonOutput) {
     process.stdout.write(JSON.stringify({

@@ -11,7 +11,7 @@ import { findLatestMemoryDir } from './memory-share.mjs';
 
 const ALLOWED_KINDS = new Set(['status', 'prompt', 'enable-auto-session', 'run']);
 const RUN_TASKS = Object.freeze({
-  'fleet-sheet-report': [['node', ['tools/fleet-sheet-report.mjs']]],
+  'fleet-sheet-report': [['node', ['tools/fleet-sheet-report.mjs', '--no-jitter']]],
   'cost-self-heal': [['node', ['tools/tool-adoption-check.mjs', '--fix']], ['node', ['tools/hook-selfcheck.mjs']], ['node', ['tools/onboarding-sync.mjs']]]
 });
 const DEFAULT_URL = 'https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/fleet-directives.json';

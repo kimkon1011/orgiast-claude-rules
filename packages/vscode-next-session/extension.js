@@ -1,11 +1,16 @@
 const vscode = require('vscode');
+const { execFile } = require('node:child_process');
 const { resolveClaudeShellPath } = require('./shell-path');
-const { decideAction, shouldRetryMobileTab, mobileTabOpenCommand } = require('./route');
+const { decideAction, shouldRetryMobileTab, mobileTabOpenCommand, deadMobileTabCount } = require('./route');
 
 const PROBE_TEXT = 'ORGIAST_NEXT_SESSION_PROBE_OK';
 
 // 遅延生成する出力チャンネル（dry run の記録用）。
 let outputChannel;
+let healthCheckPromise;
+let lastHealthCheckAt = 0;
+let focusDebounceTimer;
+const HEALTH_CHECK_INTERVAL_MS = 10 * 60 * 1000;
 function getOutputChannel() {
   if (!outputChannel) {
     outputChannel = vscode.window.createOutputChannel('Orgiast Next Session');
@@ -54,6 +59,68 @@ function waitForNewClaudeTab(previousCount, timeoutMs = 5000) {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function interactiveSessionCount() {
+  return new Promise((resolve, reject) => {
+    execFile('claude', ['agents', '--json'], { windowsHide: true, timeout: 30000, shell: process.platform === 'win32' }, (error, stdout) => {
+      if (error) return reject(error);
+      try {
+        const agents = JSON.parse(stdout || '[]');
+        resolve(Array.isArray(agents) ? agents.filter((agent) => agent?.kind === 'interactive').length : 0);
+      } catch (parseError) { reject(parseError); }
+    });
+  });
+}
+
+async function closeMobileTab(tab) {
+  try {
+    if (await vscode.window.tabGroups.close(tab)) return true;
+  } catch {}
+
+  const groups = vscode.window.tabGroups.all;
+  const groupIndex = groups.findIndex((group) => group.tabs.includes(tab));
+  const tabIndex = groupIndex >= 0 ? groups[groupIndex].tabs.indexOf(tab) : -1;
+  try {
+    const groupNames = ['First', 'Second', 'Third', 'Fourth', 'Fifth', 'Sixth', 'Seventh', 'Eighth'];
+    if (groupNames[groupIndex]) await vscode.commands.executeCommand(`workbench.action.focus${groupNames[groupIndex]}Group`);
+    if (tabIndex >= 0 && tabIndex < 9) await vscode.commands.executeCommand(`workbench.action.openEditorAtIndex${tabIndex + 1}`);
+    await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+    return true;
+  } catch { return false; }
+}
+
+async function recreateDeadMobileTabs({ count, name }) {
+  const prefix = String(name || 'スマホ用セッション');
+  const labelled = claudeTabs().filter((tab) => String(tab.label).startsWith(prefix));
+  let liveCount;
+  try { liveCount = await interactiveSessionCount(); } catch (error) {
+    getOutputChannel().appendLine(`${new Date().toISOString()} mobile health: claude agents failed: ${error instanceof Error ? error.message : String(error)}`);
+    return false;
+  }
+  const deadCount = deadMobileTabCount(labelled.length, liveCount);
+  getOutputChannel().appendLine(`${new Date().toISOString()} mobile health: labelled=${labelled.length} interactive=${liveCount} dead=${deadCount}`);
+  if (deadCount === 0) return true;
+  let closed = 0;
+  for (const tab of labelled.slice(-deadCount)) {
+    if (await closeMobileTab(tab)) closed += 1;
+  }
+  getOutputChannel().appendLine(`${new Date().toISOString()} mobile health: closed=${closed}/${deadCount}`);
+  await ensureMobileTabs({ count, name, attempts: 12 });
+  return true;
+}
+
+function scheduleHealthCheck({ count, name, force = false, debounceMs = 0 }) {
+  if (focusDebounceTimer) clearTimeout(focusDebounceTimer);
+  focusDebounceTimer = setTimeout(() => {
+    focusDebounceTimer = undefined;
+    if (!force && Date.now() - lastHealthCheckAt < HEALTH_CHECK_INTERVAL_MS) return;
+    if (healthCheckPromise) return;
+    lastHealthCheckAt = Date.now();
+    healthCheckPromise = recreateDeadMobileTabs({ count, name })
+      .catch((error) => getOutputChannel().appendLine(`${new Date().toISOString()} mobile health failed: ${error instanceof Error ? error.message : String(error)}`))
+      .finally(() => { healthCheckPromise = undefined; });
+  }, debounceMs);
 }
 
 async function waitForCommand(command, timeoutMs = 60000, intervalMs = 1000) {
@@ -131,6 +198,7 @@ function activate(context) {
           return;
         }
         if (action.kind === 'mobile') {
+          if (action.recreate) await recreateDeadMobileTabs(action);
           await ensureMobileTabs(action);
           return;
         }
@@ -172,12 +240,16 @@ function activate(context) {
             return;
           }
           await ensureMobileTabs({ count: mobileTabs, name, attempts: 12 });
+          scheduleHealthCheck({ count: mobileTabs, name, force: true });
         })
         .catch((error) => getOutputChannel().appendLine(`${new Date().toISOString()} mobile tabs activation failed: ${error instanceof Error ? error.message : String(error)}`));
     }
+    context.subscriptions.push(vscode.window.onDidChangeWindowState((state) => {
+      if (state.focused) scheduleHealthCheck({ count: mobileTabs, name, debounceMs: 2000 });
+    }));
   }
 }
 
 function deactivate() {}
 
-module.exports = { activate, deactivate, ensureMobileTabs };
+module.exports = { activate, deactivate, ensureMobileTabs, recreateDeadMobileTabs };

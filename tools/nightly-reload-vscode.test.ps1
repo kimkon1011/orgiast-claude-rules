@@ -32,7 +32,18 @@ try {
     $targets = @(Get-VSCodeRestoreTargets $storage)
     Assert ($targets.Count -eq 2) 'storage.json から重複なしで folder/workspace を抽出する'
 
-    Write-Output 'PASS: nightly-reload-vscode tests (4 groups)'
+    $settings = Join-Path $root 'settings.json'
+    '{"orgiast.nextSession.mobileTabs":4}' | Set-Content -LiteralPath $settings -Encoding utf8
+    Assert ((Get-MobileTabsTarget $settings) -eq 4) 'settings.json の mobileTabs を目標値にする'
+    Assert ((Get-MobileTabsTarget (Join-Path $root 'missing.json')) -eq 3) '設定が無ければ目標値は3'
+
+    $script:mockCounts = [System.Collections.Generic.Queue[int]]::new()
+    $script:mockCounts.Enqueue(1); $script:mockCounts.Enqueue(3)
+    $script:logPath = Join-Path $root 'resume.log'
+    $resume = Wait-InteractiveResume 3 40 20 { $script:mockCounts.Dequeue() } { param($seconds) }
+    Assert ($resume.Resumed -and $resume.Count -eq 3) 'interactive 数が目標に達すると復帰待機を終える'
+
+    Write-Output 'PASS: nightly-reload-vscode tests (6 groups)'
 } finally {
     Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
 }

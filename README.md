@@ -37,3 +37,7 @@ GitHub にログイン済みの Claude Code で:
 
 - Google Workspace URL は `/a/orgiast.jp/` を必ず挟む（ONBOARDING 参照）
 - プロジェクト CLAUDE.md 冒頭に ONBOARDING.md への参照を1行入れる
+
+# Remote Control wake recovery
+
+自動復帰タスクの登録・更新: `pwsh -NoProfile -File tools/register-rc-resume-task.ps1`

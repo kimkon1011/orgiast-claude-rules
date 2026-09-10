@@ -2,7 +2,7 @@
   "name": "next-session",
   "displayName": "Orgiast Next Session",
   "description": "Starts the next Claude session and prepares mobile Remote Control tabs from a URI.",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "publisher": "orgiast",
   "license": "MIT",
   "repository": {
@@ -19,6 +19,10 @@
     "onUri",
     "onStartupFinished"
   ],
+  "scripts": {
+    "test": "node --test route.test.cjs shell-path.test.cjs",
+    "package": "npx --yes @vscode/vsce package --out orgiast-next-session-0.3.3.vsix"
+  },
   "contributes": {
     "configuration": {
       "title": "Orgiast Next Session",
@@ -44,6 +48,7 @@
     "route.js",
     "shell-path.js",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ]
 }

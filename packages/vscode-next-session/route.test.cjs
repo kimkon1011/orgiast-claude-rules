@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { decideAction, shouldRetryMobileTab, mobileTabOpenCommand } = require('./route');
+const { decideAction, shouldRetryMobileTab, mobileTabOpenCommand, deadMobileTabCount } = require('./route');
 
 test('/reload はリロードを実行する（dry指定なし）', () => {
   assert.deepEqual(decideAction({ path: '/reload', query: '' }), { kind: 'reload', dry: false });
@@ -15,10 +15,15 @@ test('/start は start を返す（既存動作）', () => {
 });
 
 test('/mobile は count と name を返し、count を 1..10 に収める', () => {
-  assert.deepEqual(decideAction({ path: '/mobile', query: 'count=4&name=%E6%90%BA%E5%B8%AF%E7%94%A8' }), { kind: 'mobile', count: 4, name: '携帯用' });
-  assert.deepEqual(decideAction({ path: '/mobile', query: 'count=99' }), { kind: 'mobile', count: 10, name: 'スマホ用セッション' });
-  assert.deepEqual(decideAction({ path: '/mobile', query: 'count=0&name=' }), { kind: 'mobile', count: 1, name: 'スマホ用セッション' });
-  assert.deepEqual(decideAction({ path: '/mobile', query: 'count=invalid' }), { kind: 'mobile', count: 3, name: 'スマホ用セッション' });
+  assert.deepEqual(decideAction({ path: '/mobile', query: 'count=4&name=%E6%90%BA%E5%B8%AF%E7%94%A8&recreate=1' }), { kind: 'mobile', count: 4, name: '携帯用', recreate: true });
+  assert.deepEqual(decideAction({ path: '/mobile', query: 'count=99' }), { kind: 'mobile', count: 10, name: 'スマホ用セッション', recreate: false });
+  assert.deepEqual(decideAction({ path: '/mobile', query: 'count=0&name=' }), { kind: 'mobile', count: 1, name: 'スマホ用セッション', recreate: false });
+  assert.deepEqual(decideAction({ path: '/mobile', query: 'count=invalid' }), { kind: 'mobile', count: 3, name: 'スマホ用セッション', recreate: false });
+});
+
+test('ラベル付きタブが interactive セッションより多い差分を死活不明タブとする', () => {
+  assert.equal(deadMobileTabCount(3, 1), 2);
+  assert.equal(deadMobileTabCount(3, 5), 0);
 });
 
 test('未知のパスは start を返す（後方互換）', () => {

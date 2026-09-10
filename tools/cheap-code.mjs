@@ -9,6 +9,23 @@ import { isEntry } from './is-entry.mjs';
 import { providerResetUntil, providerInCooldown } from './codex-cooldown.mjs';
 
 const FIVE_HOURS = 5 * 60 * 60 * 1000;
+
+// Windows の npm グローバルは claude.cmd / claude.ps1 しか置かず、Node の spawn は
+// shell 無しで .cmd を実行できない(CVE-2024-27980 以降)。結果 ENOENT で「claude CLI を
+// 起動できません」になり、cheap-code が全く動かない(実測 2026-09-10)。
+// PATH 依存をやめ、実体の claude.exe を明示的に解決する。
+export function resolveClaudeBin(env = process.env, exists = fs.existsSync) {
+  if (env.CLAUDE_BIN && exists(env.CLAUDE_BIN)) return env.CLAUDE_BIN;
+  const appData = env.APPDATA || (env.USERPROFILE ? path.join(env.USERPROFILE, 'AppData', 'Roaming') : '');
+  const candidates = [
+    appData && path.join(appData, 'npm', 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe'),
+    env.LOCALAPPDATA && path.join(env.LOCALAPPDATA, 'Programs', 'claude', 'claude.exe')
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    if (exists(candidate)) return candidate;
+  }
+  return 'claude';
+}
 const COOLDOWN_FILE = () => path.join(process.env.ORGIAST_HOME || os.homedir(), '.claude', 'provider-cooldown.json');
 
 const PROVIDERS = Object.freeze({
@@ -235,7 +252,7 @@ async function main(args) {
   let stdoutText = '';
   let stderrText = '';
   const status = await new Promise((resolve) => {
-    const child = spawn('claude', childArgs, {
+    const child = spawn(resolveClaudeBin(), childArgs, {
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...buildChildEnv(config, key), ORGIAST_HEADLESS_JOB: `cheap-code:${config.provider}` },

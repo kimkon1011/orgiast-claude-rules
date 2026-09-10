@@ -1,5 +1,6 @@
 ﻿param(
-  [switch]$Unregister
+  [switch]$Unregister,
+  [switch]$DryRun
 )
 
 # 既存の register-*.ps1 と同じく、何度実行しても最新定義に置き換わる設計にする。
@@ -18,7 +19,34 @@ if (-not (Test-Path -LiteralPath $script)) { throw "script not found: $script" }
 $script = (Resolve-Path -LiteralPath $script).Path
 $pwsh = (Get-Command pwsh.exe -ErrorAction SilentlyContinue).Source
 if (-not $pwsh) { $pwsh = (Get-Command pwsh -ErrorAction SilentlyContinue).Source }
-if (-not $pwsh) { throw 'pwsh not found. PowerShell 7 をインストールしてください。' }
+if (-not $pwsh) {
+  if ($DryRun) {
+    Write-Host 'NOTE: pwsh が無いため、通常実行では winget による Microsoft.PowerShell の導入を試みる予定です（DryRun ではスキップ）'
+  } else {
+    $winget = Get-Command winget.exe -ErrorAction SilentlyContinue
+    if (-not $winget) { $winget = Get-Command winget -ErrorAction SilentlyContinue }
+    if ($winget) {
+      Write-Host 'NOTE: pwsh が無いため winget で Microsoft.PowerShell の導入を試みます（最大300秒）'
+      try {
+        $installProcess = Start-Process -FilePath $winget.Source -ArgumentList @('install', '--id', 'Microsoft.PowerShell', '-e', '--accept-package-agreements', '--accept-source-agreements') -PassThru -NoNewWindow
+        if (-not $installProcess.WaitForExit(300000)) {
+          try { $installProcess.Kill() } catch {}
+          Write-Warning 'pwsh の winget 導入が300秒でタイムアウトしました'
+        } elseif ($installProcess.ExitCode -ne 0) {
+          Write-Warning ('pwsh の winget 導入に失敗しました (exit={0})' -f $installProcess.ExitCode)
+        }
+      } catch { Write-Warning ('pwsh の winget 導入に失敗しました: {0}' -f $_.Exception.Message) }
+      $installedPwsh = Join-Path $env:ProgramFiles 'PowerShell\7\pwsh.exe'
+      if (Test-Path -LiteralPath $installedPwsh) { $pwsh = $installedPwsh }
+    } else { Write-Warning 'pwsh を導入できません: winget が見つかりません' }
+  }
+}
+if (-not $pwsh) {
+  $windowsPowerShell = Join-Path $PSHOME 'powershell.exe'
+  if (-not (Test-Path -LiteralPath $windowsPowerShell)) { $windowsPowerShell = (Get-Command powershell.exe -ErrorAction Stop).Source }
+  $pwsh = $windowsPowerShell
+  Write-Host 'NOTE: pwsh が無いため Windows PowerShell 5.1 でタスクを登録します'
+}
 
 # hidden runner は別 PR で配布されるため、未導入の PC でもタスク登録自体は成功させる。
 $hiddenActionHelper = Join-Path $PSScriptRoot 'ensure-run-hidden.ps1'
@@ -30,6 +58,9 @@ if (Test-Path -LiteralPath $hiddenActionHelper) {
   $action = New-ScheduledTaskAction -Execute $pwsh -Argument $argument -WorkingDirectory $PSScriptRoot
   Write-Host 'NOTE: ensure-run-hidden.ps1 が無いため通常起動で登録しました（実行時にコンソール窓が出ます）'
 }
+Write-Host ('Execute: {0}' -f $pwsh)
+Write-Host ('Arguments: -NoProfile -ExecutionPolicy Bypass -File "{0}"' -f $script)
+if ($DryRun) { Write-Host 'OK: DryRun のためタスク登録をスキップしました'; exit 0 }
 $trigger = New-ScheduledTaskTrigger -Daily -At '03:40'
 # 夜間にスリープしていても次回起動時に回収し、バッテリー移行でも途中停止させない。
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 2)

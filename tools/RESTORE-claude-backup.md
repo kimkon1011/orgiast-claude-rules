@@ -2,13 +2,20 @@
 
 > ⚠️ このバックアップには API キー、認証情報、会話履歴が入っています。フォルダや zip を絶対に他人と共有しないでください。
 
+## ダブルクリック 1 回で復元する
+
+1. 新しいパソコンに Google Drive デスクトップを入れ、`kim@orgiast.jp` でログインします。
+2. 「マイドライブ」→「Claude-Backups」→元のパソコン名のフォルダを開きます。
+3. `復元する.bat` をダブルクリックし、表示された復元内容を読んで `y` を入力します。必要なツールの導入、最新バックアップの展開、設定・認証・作業ツリー・定期タスクの復元まで自動で行います。
+4. 終了したら Claude Code を起動し、ログイン画面が出た場合だけログインします。
+
 ## バックアップがある場所
 
 Google Drive デスクトップを開き、「マイドライブ」→「Claude-Backups」→元のパソコン名のフォルダへ進みます。`claude-パソコン名-YYYY-MM-DD.zip` がバックアップです。通常は日付が最も新しい zip を使います。
 
 zip の中には `.claude` と `home` の2つのフォルダがあります。`.claude` には Claude Code の設定、hooks、skills、memory、会話 transcript などが入り、`home` にはホーム直下の `.claude.json`、`.claude.json.backup`、`.codex` が入っています。
 
-## 新しいパソコンへ戻す手順
+## 手動で戻す場合（予備）
 
 1. 最初に Claude Code 本体を入れます。Windows の「スタート」を押して `PowerShell` と入力し、「Windows PowerShell」を開きます。`npm install -g @anthropic-ai/claude-code` と入力して Enter キーを押し、処理が終わるまで待ちます。Visual Studio Code を使う場合は、左側の「拡張機能」を開いて `Claude Code` を検索し、Anthropic の拡張機能を「インストール」する方法でも構いません。
 2. バックアップ内の `.codex` も戻す場合は、同じ PowerShell で `npm install -g @openai/codex` を実行し、Codex CLI を先に入れます。

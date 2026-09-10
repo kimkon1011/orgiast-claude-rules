@@ -90,6 +90,7 @@ if ($dueDaily -and $repo) {
 }
 
 # --- B) 中央コマンドキュー(ホワイトリストのみ) ---
+$processedCount = 0
 $WL = @{
   'verify-setup' = { RunPs (Join-Path $repo 'tools\verify-setup.ps1') @() }
   # リポの .mjs を最優先。凍結コピー(~/.claude/hooks/onboarding-sync.ps1)は install 時に
@@ -120,6 +121,7 @@ try {
     $done = @(); if (Test-Path $procF) { $done = Get-Content $procF }
     $match = ($targets -eq 'all' -or [string]::IsNullOrEmpty($targets) -or $label -like "*$targets*")
     if (($done -notcontains $runId) -and $match) {
+      $processedCount++
       Add-Content -Path $procF -Value $runId   # 先に処理済み記録(二重実行防止)
       if ($WL.ContainsKey($task)) {
         $res = & $WL[$task]
@@ -131,3 +133,6 @@ try {
     }
   }
 } catch {}
+$fleetLogDir = Join-Path $H '.claude\logs'
+New-Item -ItemType Directory -Path $fleetLogDir -Force | Out-Null
+Add-Content -LiteralPath (Join-Path $fleetLogDir 'fleet-poller.log') -Value ((Get-Date -Format 'yyyy-MM-ddTHH:mm:ssK') + " OK poll done processed=$processedCount") -Encoding UTF8

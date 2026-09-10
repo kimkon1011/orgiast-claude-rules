@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { dedupeKey, isNearDuplicate, mergeTasks } from './discord-task-digest.mjs';
-import { MAIL_NOISE_PATTERNS, gmailThreadLink, preprocessMails, runMailTaskDigest, validateExtractedItem, validatedDeadline } from './mail-task-digest.mjs';
+import { MAIL_NOISE_PATTERNS, gmailThreadLink, preprocessMails, runMailTaskDigest, sheetsRequest, validateExtractedItem, validatedDeadline } from './mail-task-digest.mjs';
 
 const NOW = new Date('2026-09-03T03:00:00.000Z');
 const base = { id: 'm1', threadId: 'th1', date: 'Thu, 03 Sep 2026 10:00:00 +0900', from: '担当者 <staff@example.jp>', subject: '確認依頼', body: '申請内容を確認してください。' };
@@ -22,6 +22,13 @@ test('MAIL_NOISE_PATTERNS は各ノイズ条件だけに一致する', () => {
     assert.equal(pattern.test(samples[i]), true);
     assert.equal(pattern.test('from:staff@example.jp\nsubject:請求書の確認\nbody:明日までに返信してください'), false);
   });
+});
+
+test('Sheets 503 is retried with 2s, 8s, 30s backoff', async () => {
+  let calls = 0; const waits = [];
+  const fetchImpl = async () => ++calls < 4 ? new Response('busy', { status: 503 }) : new Response('{"values":[]}');
+  const result = await sheetsRequest(fetchImpl, 'token', 'https://example.test', {}, { sleep: async (ms) => waits.push(ms) });
+  assert.deepEqual(result, { values: [] }); assert.deepEqual(waits, [2000, 8000, 30000]);
 });
 
 test('preprocessMails は空本文とノイズを落とし同一threadIdの最新1通を残す', () => {

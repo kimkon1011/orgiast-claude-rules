@@ -4,6 +4,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
+import { redactSecrets } from './webhook-health.mjs';
+import { getScheduledTaskInfo } from './lib/scheduled-task.mjs';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_NOTIFICATION_ITEMS = 12;
@@ -250,7 +252,8 @@ export async function runNightlyHealth({
   gitImpl = defaultGitImpl,
   platform = getPlatform(),
   settingsPath = path.join(home, '.claude', 'settings.json'),
-  baselinePath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'nightly-health-baseline.json')
+  baselinePath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'nightly-health-baseline.json'),
+  scheduledTaskInfo = getScheduledTaskInfo
 } = {}) {
   const dirname = path.dirname(fileURLToPath(import.meta.url));
   expectations ??= readJson(path.join(dirname, 'nightly-health-expectations.json'), []);
@@ -279,13 +282,18 @@ export async function runNightlyHealth({
     const logFile = matches[0];
     if (!logFile) {
       const log = exp.log || exp.pattern;
-      anomalies.push({ type: 'missing', label: exp.label, log, message: 'ログファイルが存在しません' });
+      if (exp.ignore) continue;
+      if (exp.task) {
+        const info = await scheduledTaskInfo(exp.task).catch(() => null);
+        if (info?.neverRun && info?.nextRunTime && new Date(info.nextRunTime) > now) continue;
+      }
+      anomalies.push({ type: 'missing', label: exp.label, log, message: 'ログファイルが存在しません', expectation: exp });
       continue;
     }
     const logPath = path.join(logsDir, logFile);
     const stat = fs.statSync(logPath);
     if ((now - stat.mtime) / 3_600_000 > exp.maxAgeHours) {
-      anomalies.push({ type: 'stale', label: exp.label, log: logFile, message: `ログ更新が滞っています（最終更新: ${formatDate(stat.mtime)}、期待: ${exp.maxAgeHours}時間以内）` });
+      anomalies.push({ type: 'stale', label: exp.label, log: logFile, message: `ログ更新が滞っています（最終更新: ${formatDate(stat.mtime)}、期待: ${exp.maxAgeHours}時間以内）`, expectation: exp });
     }
     if (exp.scan === 'keywords') scanTargets.push({ logFile, label: exp.label });
   }
@@ -300,13 +308,14 @@ export async function runNightlyHealth({
         const lines = recentLines(latestLines, now, !selection.incremental);
         const matched = lines.filter(isFailureLine).map((line) => line.trim().slice(0, 200)).slice(0, 3);
         if (matched.length) {
-          anomalies.push({ type: 'failure_traces', label, log: logFile, message: `ログに失敗を検知: ${matched.join(' / ')}` });
+          const expectation = expectations.find((item) => item.label === label);
+          anomalies.push({ type: 'failure_traces', label, log: logFile, message: `ログに失敗を検知: ${matched.join(' / ')}`, expectation });
         }
       } catch (error) {
         anomalies.push({ type: 'log_scan_error', label: logFile, log: logFile, message: `ログ走査に失敗: ${error.message}` });
       }
   }
-  const unregisteredLogs = logFiles.filter((file) => !registeredLogs.has(file));
+  const unregisteredLogs = logFiles.filter((file) => !registeredLogs.has(file) && now - fs.statSync(path.join(logsDir, file)).mtime <= 7 * DAY_MS);
 
   const hookDrift = await detectHookVersionDrift({ settingsPath, gitImpl, platform });
   anomalies.push(...hookDrift.anomalies);
@@ -338,6 +347,16 @@ export async function runNightlyHealth({
   if (!dryRun) {
     try { writeJson(offsetsPath, newOffsets); } catch (error) { console.error('オフセットの書き込みに失敗しました:', error); }
   }
+
+  for (const anomaly of anomalies) {
+    if (!anomaly.expectation) anomaly.expectation = expectations.find((item) => item.label === anomaly.label) || null;
+    if (anomaly.log && !anomaly.logTail) {
+      try { anomaly.logTail = redactSecrets(tailLines(fs.readFileSync(path.join(logsDir, anomaly.log)), 80).join('\n')); } catch { anomaly.logTail = ''; }
+    }
+  }
+  writeJson(path.join(home, '.claude', '.nightly-health-last.json'), {
+    ranAt: now.toISOString(), anomalies, unregisteredLogs, suppressedCount
+  });
 
   // 未登録ログ・baseline抑制は「異常」ではなく注記なので、それ単独では通知しない。
   // これらで通知が飛ぶと、平穏な夜も毎日DMが来て通知そのものが読まれなくなる。

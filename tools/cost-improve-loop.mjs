@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { appendLineWithRetry } from './lib/append-line.mjs';
 import { isEntry } from './is-entry.mjs';
 import os from 'node:os';
 import path from 'node:path';
@@ -1559,7 +1560,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
     const logLine = `${formatJst(now)} / ${status} / ${metrics} notify=${heartbeat} state=${stateWriteFailed ? 'failed' : 'ok'}${reason ? ` reason=${reason}` : ''}`;
     try {
       fs.mkdirSync(path.join(claudeDir, 'logs'), { recursive: true });
-      fs.appendFileSync(path.join(claudeDir, 'logs', 'cost-improve-loop.log'), `${logLine}\n`, 'utf8');
+      await appendLineWithRetry(path.join(claudeDir, 'logs', 'cost-improve-loop.log'), logLine);
     } catch (error) { console.error(`cost-improve-loop ログ書き込み失敗: ${String(error?.message ?? error)}`); }
   }
 

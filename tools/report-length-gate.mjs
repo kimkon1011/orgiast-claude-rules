@@ -7,7 +7,8 @@ import { readAssistantText, readLastHumanText } from './lib/assistant-text.mjs';
 
 export const REPORT_LINE_LIMIT = 12;
 export const COMPLETION_REPORT_PATTERN = /(完了|反映済|反映しました|push\s*済|deploy\s*完了|✅|できました|直しました|修正しました|実装しました)/;
-export const EXPLANATION_REQUEST_PATTERN = /(調べ|教えて|まとめて|検証して|なぜ|どう|説明|比較|どれ|どちら|分析|レビュー|確認して|\?|？)/;
+/** 実測で疑問文末を見逃した3件（うち1件は誤爆確定）を説明要求として扱う。 */
+export const EXPLANATION_REQUEST_PATTERN = /(調べ|教えて|まとめて|検証して|なぜ|どう|説明|比較|どれ|どちら|分析|レビュー|確認して|\?|？|(?:かな|かしら|でしょうか|だろうか|ですか|ますか)(?=[。．.!！\r\n]|\s*$))/;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const home = () => process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || os.homedir();
 

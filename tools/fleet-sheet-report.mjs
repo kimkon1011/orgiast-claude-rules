@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { isEntry } from './is-entry.mjs';
 import fs from 'node:fs';
+import { codexAuthStatus, formatCodexLogin } from './codex-auth-status.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -131,7 +132,7 @@ async function main() {
     budgetPacePct: budget.budgetPacePct,
     settingsModel: typeof settings.model === 'string' && settings.model.trim() ? settings.model.trim() : '未設定(=Opus)',
     cheapAiUse: Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([provider, count]) => `${provider}:${count}`).join(', ') || 'なし',
-    codexLogin: adoption.codexAuthed === true ? '済' : adoption.codexAuthed === false ? '未' : '判定不能',
+    codexLogin: formatCodexLogin(codexAuthStatus(home), adoption.codexAuthed),
     fable5: fableDetected ? '検出' : fableKnown ? '未検出' : '判定不能',
     disciplineAlert: enforce.mode ? `${enforce.mode}${enforce.reason ? ': ' + enforce.reason : ''}` : '判定不能',
     activeProjects: formatProjectsCell(projects),

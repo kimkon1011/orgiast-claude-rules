@@ -51,6 +51,19 @@ function Get-InteractiveSessionIdsFromJson($Json) {
     return @($ids | Select-Object -Unique)
 }
 
+function Get-InteractiveSessionCount {
+    try {
+        $claudeCli = (Get-Command claude -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+        if (-not $claudeCli) {
+            $candidate = Join-Path $env:USERPROFILE '.local\bin\claude.exe'
+            if (Test-Path -LiteralPath $candidate) { $claudeCli = $candidate }
+        }
+        if (-not $claudeCli) { return 0 }
+        $json = (& $claudeCli agents --json 2>$null) -join "`n"
+        return @(Get-InteractiveSessionIdsFromJson $json).Count
+    } catch { return 0 }
+}
+
 function Get-BusySessionFiles($ProjectsPath, [datetime]$Cutoff, [string[]]$InteractiveSessionIds, [bool]$AgentsUsable) {
     $recent = @(Get-ChildItem -Path $ProjectsPath -Filter *.jsonl -Recurse -File -ErrorAction SilentlyContinue |
         Where-Object { $_.LastWriteTime -gt $Cutoff })
@@ -89,8 +102,18 @@ public static class NightlyReloadWin32 {
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int max);
     [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+    [DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint flags);
 }
 '@
+}
+
+function Enable-SleepInhibition {
+    Initialize-WindowApi
+    [void][NightlyReloadWin32]::SetThreadExecutionState(0x80000041)
+}
+
+function Disable-SleepInhibition {
+    [void][NightlyReloadWin32]::SetThreadExecutionState(0x80000000)
 }
 
 function Get-VSCodeWindowHandles {
@@ -136,6 +159,48 @@ function Wait-Until($Condition, [int]$TimeoutSeconds) {
         Start-Sleep -Seconds 1
     } while ((Get-Date) -lt $deadline)
     return $false
+}
+
+function Invoke-VSCodeRestart($CodeCli, [string[]]$RestoreTargets) {
+    $handles = @(Get-VSCodeWindowHandles)
+    foreach ($handle in $handles) { [void][NightlyReloadWin32]::PostMessage($handle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) }
+    if (-not (Wait-Until { @(Get-Process Code -ErrorAction SilentlyContinue).Count -eq 0 } 60)) {
+        Write-Log 'SKIP: VSCode が終了しなかった'
+        return $false
+    }
+    Start-CodeCli $CodeCli
+    if (-not (Wait-Until { @(Get-VSCodeWindowHandles).Count -gt 0 } 60)) {
+        foreach ($target in $RestoreTargets) { Start-CodeCli $CodeCli @($target) }
+        if (-not (Wait-Until { @(Get-VSCodeWindowHandles).Count -gt 0 } 60)) {
+            Write-Log 'SKIP: VSCode の再起動後に可視ウィンドウを確認できなかった'
+            return $false
+        }
+    }
+    return $true
+}
+
+function Wait-InteractiveSessions([int]$Target, [int]$TimeoutSeconds, [int]$IntervalSeconds = 20) {
+    for ($elapsed = 0; $elapsed -le $TimeoutSeconds; $elapsed += $IntervalSeconds) {
+        $count = Get-InteractiveSessionCount
+        if ($count -ge $Target -and $count -ge 1) {
+            Write-Log ("RESUMED: interactive {0} 件 / 目標 {1} 件 / {2} 秒" -f $count, $Target, $elapsed)
+            return $count
+        }
+        if ($elapsed + $IntervalSeconds -le $TimeoutSeconds) { Start-Sleep -Seconds $IntervalSeconds }
+    }
+    return $count
+}
+
+function Confirm-VSCodeResume([int]$Target, $CodeCli, [string[]]$RestoreTargets) {
+    $count = Wait-InteractiveSessions $Target 360 20
+    if ($count -eq 0) {
+        Write-Log 'RESUME-RETRY: 起動失敗を検知、再起動を 1 回やり直す'
+        if (Invoke-VSCodeRestart $CodeCli $RestoreTargets) {
+            $count = Wait-InteractiveSessions $Target 240 20
+        }
+        if ($count -eq 0) { Write-Log 'RESUME-FAIL: interactive 0 件' }
+    }
+    return $count
 }
 
 if ($FunctionsOnly) { return }
@@ -204,7 +269,11 @@ try {
     $requiredVersion = [version]'0.2.0'
     $uriEligible = $diskVersion -and $diskVersion -ge $requiredVersion -and $activatedVersion -and $activatedVersion -ge $requiredVersion
     $pathLabel = if ($uriEligible) { 'URI（未確認時はRestart）' } else { 'Restart' }
-    if ($DryRun) { Write-Log ("DRYRUN: ここで再起動する（{0} / {1} / 対象窓 {2}）" -f $pathLabel, $reason, $windowHandles.Count); exit 0 }
+    if ($DryRun) {
+        Write-Log ("DRYRUN: ここで再起動する（{0} / {1} / 対象窓 {2}）" -f $pathLabel, $reason, $windowHandles.Count)
+        Write-Log 'DRYRUN: 復帰確認をスキップ'
+        exit 0
+    }
 
     $useRestart = -not $uriEligible
     if ($uriEligible) {
@@ -221,25 +290,22 @@ try {
     }
 
     if ($useRestart) {
-        $storage = Join-Path $env:APPDATA 'Code\User\globalStorage\storage.json'
-        $restoreTargets = @(Get-VSCodeRestoreTargets $storage)
-        foreach ($handle in $windowHandles) { [void][NightlyReloadWin32]::PostMessage($handle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) }
-        if (-not (Wait-Until { @(Get-Process Code -ErrorAction SilentlyContinue).Count -eq 0 } 60)) {
-            Write-Log 'SKIP: VSCode が終了しなかった'
-            exit 0
+        Enable-SleepInhibition
+        try {
+            $storage = Join-Path $env:APPDATA 'Code\User\globalStorage\storage.json'
+            $restoreTargets = @(Get-VSCodeRestoreTargets $storage)
+            $resumeTarget = [Math]::Min($interactiveIds.Count, 3)
+            if ($resumeTarget -lt 1) { $resumeTarget = [Math]::Min((Get-InteractiveSessionCount), 3) }
+            if ($resumeTarget -lt 1) { $resumeTarget = 1 }
+            if (-not (Invoke-VSCodeRestart $codeCli $restoreTargets)) { exit 0 }
+            Set-Content -Path $marker -Value (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') -Encoding utf8
+            if ($diskVersion) { Set-Content -Path $activatedMarker -Value $diskVersion.ToString() -Encoding utf8 }
+            $updateLabel = if ($updatePending) { $diskVersion.ToString() } else { 'なし' }
+            Write-Log ("RELOADED: 再起動を実行（Restart / 退避 {0} 件 / 更新待ち {1}）" -f $moved, $updateLabel)
+            [void](Confirm-VSCodeResume $resumeTarget $codeCli $restoreTargets)
+        } finally {
+            Disable-SleepInhibition
         }
-        Start-CodeCli $codeCli
-        if (-not (Wait-Until { @(Get-VSCodeWindowHandles).Count -gt 0 } 60)) {
-            foreach ($target in $restoreTargets) { Start-CodeCli $codeCli @($target) }
-            if (-not (Wait-Until { @(Get-VSCodeWindowHandles).Count -gt 0 } 60)) {
-                Write-Log 'SKIP: VSCode の再起動後に可視ウィンドウを確認できなかった'
-                exit 0
-            }
-        }
-        Set-Content -Path $marker -Value (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') -Encoding utf8
-        if ($diskVersion) { Set-Content -Path $activatedMarker -Value $diskVersion.ToString() -Encoding utf8 }
-        $updateLabel = if ($updatePending) { $diskVersion.ToString() } else { 'なし' }
-        Write-Log ("RELOADED: 再起動を実行（Restart / 退避 {0} 件 / 更新待ち {1}）" -f $moved, $updateLabel)
     }
 } catch {
     Write-Log ("ERROR: 再読み込み処理で例外（{0}）" -f $_.Exception.Message)

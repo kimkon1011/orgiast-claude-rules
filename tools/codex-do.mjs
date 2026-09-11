@@ -589,6 +589,8 @@ try {
     model: executorName === 'fallback' ? `${reportedFallbackBackend?.name ?? 'unknown'}/${reportedFallbackBackend?.model ?? 'unknown'}` : 'codex-cli',
     in: Math.ceil(prompt.length / 4),
     out: Math.ceil((result.outputChars || 0) / 4),
+    timedOut: result?.timedOut === true,
+    status: result?.status ?? null,
     secs: Number(secs.toFixed(3))
   };
   fs.appendFileSync(ledger, `${JSON.stringify(usage)}\n`, 'utf8');

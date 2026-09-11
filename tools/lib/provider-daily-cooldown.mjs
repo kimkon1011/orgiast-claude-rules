@@ -7,6 +7,13 @@ export function isDailyQuotaResponse(status, detail, retryAfterMs = 0) {
 
 export function nextUtcMidnight(now = new Date()) { return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1); }
 
+export function activeDailyCooldown(provider, { home, now = new Date(), fsImpl = fs } = {}) {
+  const file = path.join(home, '.claude', 'provider-cooldown.json');
+  let state; try { state = JSON.parse(fsImpl.readFileSync(file, 'utf8')); } catch { return null; }
+  const cooldown = state?.[provider];
+  return Number(cooldown?.until) > now.getTime() ? cooldown : null;
+}
+
 export function markDailyProviderCooldown(provider, { home, now = new Date(), fsImpl = fs } = {}) {
   const file = path.join(home, '.claude', 'provider-cooldown.json');
   let state = {}; try { state = JSON.parse(fsImpl.readFileSync(file, 'utf8')); } catch {}

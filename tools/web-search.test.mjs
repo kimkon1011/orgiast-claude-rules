@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runCli } from './web-search.mjs';
+import { loadOpenRouterApiKey, parseArgs, runCli, search } from './web-search.mjs';
 
 const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'web-search-test-'));
 process.env.ORGIAST_HOME = isolatedHome;
@@ -221,6 +221,72 @@ test('台帳追記が失敗しても検索結果を返す', async () => {
     });
     assert.equal(code, 0);
     assert.match(err.read(), /^使用量台帳への追記失敗: .+\n$/);
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('--provider openrouter で本文と annotations の URL を JSON で返す', async () => {
+  const out = outputSink();
+  let request;
+  const code = await runCli(['質問', '--provider', 'openrouter', '--json'], {
+    openrouterApiKey: 'test',
+    fetchImpl: async (url, init) => {
+      request = { url, init };
+      return response({ choices: [{ message: { content: ' OpenRouter回答 ', annotations: [{ url_citation: { url: 'https://example.com/source' } }] } }] });
+    },
+    stdout: out.stream, stderr: outputSink().stream,
+  });
+  assert.equal(code, 0);
+  assert.match(request.url, /openrouter\.ai/);
+  assert.equal(request.init.headers['HTTP-Referer'], 'https://orgiast.jp');
+  assert.deepEqual(JSON.parse(out.read()), {
+    query: '質問', provider: 'openrouter', model: 'openai/gpt-oss-120b:online', answer: 'OpenRouter回答',
+    urls: ['https://example.com/source'], elapsedMs: JSON.parse(out.read()).elapsedMs,
+  });
+});
+
+test('auto は Gemini と Groq の 429 後に OpenRouter へフォールバックする', async () => {
+  const calls = [];
+  const result = await search('質問', {
+    geminiApiKey: 'gemini-test', groqApiKey: 'groq-test', openrouterApiKey: 'openrouter-test',
+    fetchImpl: async (url) => {
+      calls.push(url);
+      if (!url.includes('openrouter.ai')) return response({ error: 'rate limit' }, 429);
+      return response({ choices: [{ message: { content: '回答' } }] });
+    },
+    appendUsage() {},
+  });
+  assert.equal(calls.length, 3);
+  assert.equal(result.provider, 'openrouter');
+  assert.equal(result.failures.length, 2);
+  assert.match(result.failures[0], /gemini: Gemini API HTTP 429/);
+  assert.match(result.failures[1], /groq: Groq API HTTP 429/);
+});
+
+test('OpenRouter キーが無い auto は APIキーなしとしてスキップしクラッシュしない', async () => {
+  await assert.rejects(search('質問', {
+    env: {}, homeDir: '/存在しないテスト用パス', geminiApiKey: 'gemini-test', groqApiKey: 'groq-test',
+    fetchImpl: async () => response({ error: 'down' }, 500), appendUsage() {},
+  }), (error) => {
+    assert.equal(error.failures.length, 3);
+    assert.equal(error.failures[2], 'openrouter: APIキーなし');
+    return true;
+  });
+});
+
+test('parseArgs は openrouter を受け付け未知の provider を拒否する', () => {
+  assert.equal(parseArgs(['質問', '--provider', 'openrouter']).provider, 'openrouter');
+  assert.throws(() => parseArgs(['質問', '--provider', 'unknown']), /auto\|gemini\|groq\|openrouter/);
+});
+
+test('loadOpenRouterApiKey は env を優先し openrouter.env へフォールバックする', () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'web-search-openrouter-key-'));
+  try {
+    fs.mkdirSync(path.join(temp, '.claude'));
+    fs.writeFileSync(path.join(temp, '.claude', 'openrouter.env'), 'OPENROUTER_API_KEY=file-key\n');
+    assert.equal(loadOpenRouterApiKey({ env: { OPENROUTER_API_KEY: 'env-key' }, homeDir: temp }), 'env-key');
+    assert.equal(loadOpenRouterApiKey({ env: {}, homeDir: temp }), 'file-key');
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }

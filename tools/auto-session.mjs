@@ -46,11 +46,13 @@ export function parseHandoff(md) {
   const block = source.slice(start, end);
   const todos = [];
   const todoBlocks = [];
+  const sectionsByBlock = {};
   const markerStarts = [...source.matchAll(/<!-- NEXT-SESSION v1 -->/g)].map((match) => match.index);
   const blocks = markerStarts.length
     ? markerStarts.map((blockStart, index) => source.slice(blockStart, markerStarts[index + 1] ?? source.length))
     : [source];
   for (const [blockIndex, currentBlock] of blocks.entries()) {
+    sectionsByBlock[blockIndex + 1] = handoffSections(currentBlock);
     const todoSection = sectionFrom(currentBlock, '残TODO');
     const lines = todoSection.split(/\r?\n/).slice(1);
     for (let index = 0; index < lines.length;) {
@@ -75,6 +77,10 @@ export function parseHandoff(md) {
       todoBlocks.push(blockIndex + 1);
     }
   }
+  return { block, todos, todoBlocks, sections: sectionsByBlock[1], sectionsByBlock };
+}
+
+function handoffSections(block) {
   const sections = {};
   const purpose = sectionFrom(block, '次の1目的');
   // 2026-09-08 / 2026-09-11: クローズ済み目的の対象・完了条件が別件TODOへ混入した。
@@ -85,7 +91,15 @@ export function parseHandoff(md) {
     const value = sectionFrom(block, name);
     if (value) sections[name] = value;
   }
-  return { block, todos, todoBlocks, sections };
+  return sections;
+}
+
+export function sectionsForTodo(parsed, todo) {
+  if (parsed.sectionsByBlock == null) return parsed.sections ?? {};
+  const index = parsed.todos.indexOf(todo);
+  if (index < 0) return {};
+  const blockIndex = parsed.todoBlocks[index];
+  return parsed.sectionsByBlock[blockIndex] ?? {};
 }
 
 export function todoExclusionReason(todo, today = new Date()) {
@@ -858,7 +872,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
       const repoCwd = pickCwd(todo, fs.existsSync, config.repoByKeyword);
       const historyCwd = fs.existsSync(detectedHistoryCwd) ? detectedHistoryCwd : repoCwd;
       const summaryFile = path.join(autoDir, 'runs', `dry-${index + 1}.summary.md`);
-      console.log(`[next-session] [${laneOf(todo)}]\nTODO: ${todo}\nREPO CWD: ${repoCwd}\nHISTORY CWD: ${historyCwd}\n\n${buildPrompt(todo, parsed.sections, repoCwd, summaryFile, options.timeoutMin)}`);
+      console.log(`[next-session] [${laneOf(todo)}]\nTODO: ${todo}\nREPO CWD: ${repoCwd}\nHISTORY CWD: ${historyCwd}\n\n${buildPrompt(todo, sectionsForTodo(parsed, todo), repoCwd, summaryFile, options.timeoutMin)}`);
     }
     for (const [index, issue] of selectedFeedback.entries()) {
       const repoCwd = feedbackRepoCwd(issue.repo);
@@ -950,7 +964,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
           n += 1;
         }
       }
-      const result = await runSession(executable, buildPrompt(todo, parsed.sections, repoCwd, summaryFile, timing.timeoutMin), repoCwd, historyCwd, timing.timeoutMin * 60_000);
+      const result = await runSession(executable, buildPrompt(todo, sectionsForTodo(parsed, todo), repoCwd, summaryFile, timing.timeoutMin), repoCwd, historyCwd, timing.timeoutMin * 60_000);
       const stdoutSessionId = extractSessionId(result.stdout);
       const transcriptDir = path.dirname(transcriptPath(historyCwd, '00000000-0000-0000-0000-000000000000'));
       const recoveredSessionId = stdoutSessionId ? '' : recoverSessionId({ dir: transcriptDir, startedAt: result.startedAt, endedAt: result.endedAt });

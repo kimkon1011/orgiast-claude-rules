@@ -6,13 +6,13 @@ import path from 'node:path';
 
 const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-session-test-'));
 process.env.ORGIAST_HOME = isolatedHome;
-const { DEFAULT_REPO, localDate, loadConfig, detectHistoryCwd, parseHandoff, todoExclusionReason, todoExclusionReasons, dedupeKey, dedupeTodos, filterTodos, selectTodoLanes, logSlaOverflow, pickCwd, buildChildArgs, buildPrompt, buildFeedbackPrompt, feedbackFailureBody, feedbackIssueExclusionReason, feedbackIssuesToUnmark, filterFeedbackIssues, feedbackNotifyUrl, normalizeGitHubRepo, feedbackRepoCwd, resolveClaudeExe, decideRun, markTodoDone, writeTodoDone, extractSessionId, transcriptPath, recoverSessionId, appendClosedSession, formatResultLine, parseArgs, deadlineDecision, runChild, main } = await import('./auto-session.mjs');
+const { DEFAULT_REPO, localDate, loadConfig, detectHistoryCwd, parseHandoff, sectionsForTodo, todoExclusionReason, todoExclusionReasons, dedupeKey, dedupeTodos, filterTodos, selectTodoLanes, logSlaOverflow, pickCwd, buildChildArgs, buildPrompt, buildFeedbackPrompt, feedbackFailureBody, feedbackIssueExclusionReason, feedbackIssuesToUnmark, filterFeedbackIssues, feedbackNotifyUrl, normalizeGitHubRepo, feedbackRepoCwd, resolveClaudeExe, decideRun, markTodoDone, writeTodoDone, extractSessionId, transcriptPath, recoverSessionId, appendClosedSession, formatResultLine, parseArgs, deadlineDecision, runChild, main } = await import('./auto-session.mjs');
 const historyCwd = String.raw`c:\Users\example\Downloads\work`;
 test.after(() => fs.rmSync(isolatedHome, { recursive: true, force: true }));
 
 const sample = `前書き\n<!-- NEXT-SESSION v1 -->\n## 対象\nrepo A\n## 残TODO\n1. 実装する\n2. ~~完了済み~~\n3. 要判断: 色\n4. ブロック中: API\n## 完了条件\nテスト green\n<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. 歴史上のTODO\n`;
 
-test('parseHandoff は全ブロックから TODO を抽出し、付帯セクションは先頭だけから抽出する', () => {
+test('parseHandoff は全ブロックから TODO を抽出し、互換用 sections は先頭だけから抽出する', () => {
   const parsed = parseHandoff(sample);
   assert.deepEqual(parsed.todos, ['実装する', '~~完了済み~~', '要判断: 色', 'ブロック中: API', '歴史上のTODO']);
   assert.deepEqual(parsed.todoBlocks, [1, 1, 1, 1, 2]);
@@ -20,6 +20,97 @@ test('parseHandoff は全ブロックから TODO を抽出し、付帯セクシ�
   assert.ok(!parsed.block.includes('歴史上のTODO'));
   assert.equal(parsed.sections['対象'], '## 対象\nrepo A');
   assert.equal(parsed.sections['完了条件'], '## 完了条件\nテスト green');
+});
+
+const blockSectionsSample = `<!-- NEXT-SESSION v1 -->
+## 次の1目的
+**Codex 認証を整理する**
+
+## 対象
+- Codex 認証
+
+## 完了条件
+- seisaku-team の Pro 利用方針を確定する
+
+## 触る前に読む memory
+- [[codex-auth]]
+
+## 残TODO（次の1件を先頭に）
+1. Codex 認証の利用方針を確認する
+
+<!-- NEXT-SESSION v1 -->
+## 次の1目的
+**マスター保守の Phase 4 を実装する**
+
+## 対象
+- scripts/master-maintenance.ts
+
+## 完了条件
+- Phase 4 のマスター保守テストが通る
+
+## 触る前に読む memory
+- [[master-maintenance]]
+
+## 残TODO（次の1件を先頭に）
+1. Phase 4: scripts/master-maintenance.ts を実装する
+   マスター保守の検証も実施する。
+`;
+
+test('sectionsForTodo: 第2ブロックの完了条件だけを返す', () => {
+  const parsed = parseHandoff(blockSectionsSample);
+  const sections = sectionsForTodo(parsed, parsed.todos[1]);
+  assert.equal(sections['完了条件'], '## 完了条件\n- Phase 4 のマスター保守テストが通る');
+  assert.equal(sections['対象'], '## 対象\n- scripts/master-maintenance.ts');
+  assert.equal(sections['触る前に読む memory'], '## 触る前に読む memory\n- [[master-maintenance]]');
+  assert.equal(sections, parsed.sectionsByBlock[2]);
+  assert.ok(!JSON.stringify(sections).includes('seisaku-team'));
+  const prompt = buildPrompt(parsed.todos[1], sections, '/repo', '/summary');
+  assert.ok(prompt.includes('Phase 4 のマスター保守テストが通る'));
+  assert.ok(!prompt.includes('seisaku-team'));
+});
+
+test('sectionsForTodo: 第1ブロックは従来の sections を返す', () => {
+  const parsed = parseHandoff(blockSectionsSample);
+  assert.equal(sectionsForTodo(parsed, parsed.todos[0]), parsed.sections);
+  assert.equal(parsed.sections, parsed.sectionsByBlock[1]);
+  assert.equal(parsed.sections['完了条件'], '## 完了条件\n- seisaku-team の Pro 利用方針を確定する');
+});
+
+test('sectionsForTodo: 完了条件がないブロックへ先頭の条件を混ぜない', () => {
+  const parsed = parseHandoff(blockSectionsSample.replace('## 完了条件\n- Phase 4 のマスター保守テストが通る\n\n', ''));
+  const sections = sectionsForTodo(parsed, parsed.todos[1]);
+  assert.ok(!('完了条件' in sections));
+  assert.ok(!JSON.stringify(sections).includes('seisaku-team'));
+  assert.equal(sections['対象'], '## 対象\n- scripts/master-maintenance.ts');
+});
+
+test('sectionsForTodo: 第2ブロックのクローズ済み目的は memory だけを残す', () => {
+  const parsed = parseHandoff(blockSectionsSample.replace('**マスター保守の Phase 4 を実装する**', '~~**マスター保守の Phase 4 を実装する**~~ → ✅ 完了'));
+  assert.deepEqual(sectionsForTodo(parsed, parsed.todos[1]), {
+    '触る前に読む memory': '## 触る前に読む memory\n- [[master-maintenance]]',
+  });
+  assert.ok('完了条件' in sectionsForTodo(parsed, parsed.todos[0]));
+});
+
+test('sectionsForTodo: 先頭がクローズ済みでも第2ブロックの条件は維持する', () => {
+  const parsed = parseHandoff(blockSectionsSample.replace('**Codex 認証を整理する**', '~~**Codex 認証を整理する**~~ → ✅ 完了'));
+  assert.ok(!('完了条件' in parsed.sections));
+  assert.equal(sectionsForTodo(parsed, parsed.todos[1])['完了条件'], '## 完了条件\n- Phase 4 のマスター保守テストが通る');
+});
+
+test('sectionsForTodo: 旧形式だけ sections にフォールバックする', () => {
+  const sections = { '完了条件': '## 完了条件\n- 旧形式の条件' };
+  const legacy = { todos: ['旧TODO'], todoBlocks: [1], sections };
+  assert.equal(sectionsForTodo(legacy, '旧TODO'), sections);
+  assert.equal(sectionsForTodo(legacy, '未知TODO'), sections);
+  assert.deepEqual(sectionsForTodo({ todos: [] }, '未知TODO'), {});
+});
+
+test('sectionsForTodo: 未知TODO・未登録ブロックは空を返す', () => {
+  const parsed = parseHandoff(blockSectionsSample);
+  assert.deepEqual(sectionsForTodo(parsed, '未知TODO'), {});
+  delete parsed.sectionsByBlock[2];
+  assert.deepEqual(sectionsForTodo(parsed, parsed.todos[1]), {});
 });
 
 const closedPurposeSample = `<!-- NEXT-SESSION v1 -->\n## 次の1目的\n~~**Growi 直取り同期を Drive へ本番反映する**~~ → ✅ 2026-09-11 完了（夜間バッチ）\n\n## 対象\n- tools/growi-manual.mjs\n\n## 完了条件\n- Part が 14 → 15 本\n\n## 触る前に読む memory\n- [[feedback-x]]\n\n## 残TODO\n1. 別件のバグ修正をする\n`;

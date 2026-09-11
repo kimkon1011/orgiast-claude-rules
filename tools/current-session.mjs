@@ -8,16 +8,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 
-const __hookGuard = setTimeout(() => process.exit(0), 4000); __hookGuard.unref();
 
 async function main() {
 try {
-  let raw = "";
-  try {
-    process.stdin.setEncoding("utf8");
-    for await (const chunk of process.stdin) raw += chunk;
-  } catch { /* stdin 無しでも動く */ }
+  const raw = await readStdinWithTimeout();
   const o = JSON.parse(raw || "{}");
   const sessionId = o.session_id || "";
   if (sessionId) {

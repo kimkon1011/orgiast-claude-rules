@@ -3,11 +3,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { isReadOnlyToolUse } from './usage-stats.mjs';
-
-const __hookGuard = setTimeout(() => process.exit(0), 4000); __hookGuard.unref();
+import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 
 try {
-  let raw = ''; process.stdin.setEncoding('utf8'); for await (const chunk of process.stdin) raw += chunk;
+  const raw = await readStdinWithTimeout();
   const input = JSON.parse(raw), name = String(input.tool_name || ''), sessionId = String(input.session_id || 'default');
   const home = process.env.ORGIAST_HOME || os.homedir(), file = path.join(home, '.claude', '.serial-investigation.json'), now = Date.now(); let state = {};
   try { state = JSON.parse(fs.readFileSync(file, 'utf8')); if (!state || Array.isArray(state) || typeof state !== 'object') state = {}; } catch {}

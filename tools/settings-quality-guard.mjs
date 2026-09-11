@@ -3,8 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
+import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 
-const __hookGuard = setTimeout(() => process.exit(0), 4000); __hookGuard.unref();
 
 const ALLOWED_EFFORT_LEVELS = new Set(['high', 'xhigh', 'max']);
 const REASON = 'kim 2026-09-09 厳命: 節約のために effortLevel/thinking/監督モデルを下げない。節約は委譲・レスポンス数削減で行う。意図的に変える場合は ORGIAST_ALLOW_EFFORT_DOWNGRADE=1 を付けて再実行';
@@ -62,12 +62,6 @@ export function restoreEffortLevel(settingsPath, { now = Date.now(), backupDir }
   return { changed: true, from };
 }
 
-async function readStdin() {
-  const chunks = [];
-  for await (const chunk of process.stdin) chunks.push(chunk);
-  return Buffer.concat(chunks).toString('utf8');
-}
-
 if (isEntry(import.meta.url)) {
   const homeDir = process.env.ORGIAST_HOME || os.homedir();
   const settingsPath = path.join(homeDir, '.claude', 'settings.json');
@@ -78,7 +72,7 @@ if (isEntry(import.meta.url)) {
     if (result.changed) console.log(`⚠️ effortLevel が ${result.from} だったため high へ自動復元しました（性能を下げる節約は禁止）`);
   } else if (process.env.ORGIAST_ALLOW_EFFORT_DOWNGRADE !== '1') {
     try {
-      const input = JSON.parse(await readStdin());
+      const input = JSON.parse(await readStdinWithTimeout());
       const result = detectEffortDowngrade(input.tool_name, input.tool_input, settingsPath);
       if (result.blocked) {
         console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: result.reason } }));

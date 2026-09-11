@@ -10,7 +10,7 @@
 // ので通す。判定ロジックは Stop hook と同じモジュールを共有する(二重メンテを避ける)。
 import fs from 'node:fs';
 import { isEntry } from './is-entry.mjs';
-import { readStdin } from './transcript-tail.mjs';
+import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { findOutsourcedInvestigation, formatViolationMessage, scanToolUses } from './self-check-before-asking-guard.mjs';
 
 // 質問文と選択肢を1本のテキストに畳む。段落判定に載せるため空行で区切る。
@@ -34,9 +34,8 @@ export function judge(toolInput, evidence) {
 }
 
 async function main() {
-  const __hookGuard = setTimeout(() => process.exit(0), 4000); __hookGuard.unref();
   try {
-    const raw = await readStdin();
+    const raw = await readStdinWithTimeout();
     if (!raw.trim()) return;
     const input = JSON.parse(raw);
     if (input.tool_name !== 'AskUserQuestion') return;

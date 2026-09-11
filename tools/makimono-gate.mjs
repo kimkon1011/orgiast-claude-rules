@@ -4,12 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { findRelevant } from './makimono-search.mjs';
+import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 
-const __hookGuard = setTimeout(() => process.exit(0), 4000); __hookGuard.unref();
-
-// 通常経路は早期リターンで自然終了する。stdin が閉じない異常時だけ上の fail-open guard が終了させる。
 async function main() {
-let raw = ''; process.stdin.setEncoding('utf8'); for await (const chunk of process.stdin) raw += chunk;
+const raw = await readStdinWithTimeout();
 const trigger = /作って|作成して|実装|構築|セットアップ|立ち上げ|自動化|自動投稿|連携|スクレイピング|bot|スクリプト|アプリ|ツールを|cron|デプロイ|パイプライン|ジェネレータ|build|implement|create a|set up|scaffold|automate/i;
 try {
   if (!raw) return; const input = JSON.parse(raw); const prompt = String(input.prompt || '').trim();

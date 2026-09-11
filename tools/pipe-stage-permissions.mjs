@@ -3,8 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
+import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 
-const __hookGuard = setTimeout(() => process.exit(0), 4000); __hookGuard.unref();
 
 const SENSITIVE_VAR_PREFIXES = [
   'PATH=', 'LD_', 'DYLD_', 'PYTHONPATH=', 'PYTHONHOME=',
@@ -57,7 +57,7 @@ export function matchesAllowed(command, allowedPrefixes) {
 
 async function main() {
   try {
-    let raw = ''; process.stdin.setEncoding('utf8'); for await (const chunk of process.stdin) raw += chunk;
+    const raw = await readStdinWithTimeout();
     if (!raw.trim()) return;
     const input = JSON.parse(raw);
     if (!input?.tool_input?.command) return;

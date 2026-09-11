@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 import { readTranscriptContext } from './lib/assistant-text.mjs';
+import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { runGate as evaluateQuality } from './handoff-quality-gate.mjs';
 import { judge as judgeFullSteps } from './manual-request-fullsteps-gate.mjs';
 import { evaluateInvestigation, failureReason } from './handoff-investigation-gate.mjs';
@@ -16,7 +17,6 @@ import { findOutsourcedInvestigation, formatViolationMessage as formatSelfCheck,
 import { findLocalDocLinks, formatViolationMessage as formatDocLink } from './doc-link-drive-guard.mjs';
 import { enabled as stopGateEnabled, progressQuestionReason, reasonFor, remainingItems, shouldBlock, shouldBlockProgressQuestion } from './stop-gate.mjs';
 
-const __hookGuard = setTimeout(() => process.exit(0), 4000); __hookGuard.unref();
 
 const home = () => process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || os.homedir();
 const HANDOFF_HINT = "末尾に『次に kim がすること: なし / <1件>』を1行入れること(user が『この先はどうしたらいいの？』と聞き返した回数: 7日で9回)";
@@ -86,7 +86,7 @@ export function run(input, context) {
 
 async function main() {
   try {
-    let raw = ''; for await (const chunk of process.stdin) raw += chunk;
+    const raw = await readStdinWithTimeout();
     if (!raw.trim()) return;
     let input; try { input = JSON.parse(raw); } catch { ledger({ sessionId: '', verdict: 'skipped', blockedBy: [], reasonCodes: ['invalid-json'], excerpt: raw.slice(0, 200) }); return; }
     const context = input?.assistant_text

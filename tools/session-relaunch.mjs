@@ -5,8 +5,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
+import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 
-const __hookGuard = setTimeout(() => process.exit(0), 4000); __hookGuard.unref();
 
 export const ARM_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 // compact / resume は「同じ作業の続き」なので除外する。ここに入れると、
@@ -81,21 +81,6 @@ function writeState(file, state) {
   fs.renameSync(tmp, file);
 }
 
-// フックが本体をブロックしないよう、stdin が閉じない環境でも必ず有限時間で抜ける。
-function readStdin(timeoutMs = 2000) {
-  return new Promise((resolve) => {
-    let raw = '';
-    let done = false;
-    const finish = () => { if (!done) { done = true; resolve(raw); } };
-    const timer = setTimeout(finish, timeoutMs);
-    timer.unref?.();
-    process.stdin.setEncoding('utf8');
-    process.stdin.on('data', (chunk) => { raw += chunk; });
-    process.stdin.on('end', () => { clearTimeout(timer); finish(); });
-    process.stdin.on('error', () => { clearTimeout(timer); finish(); });
-  });
-}
-
 function flagValue(args, name, fallback) {
   const i = args.indexOf(name);
   const value = i >= 0 ? args[i + 1] : undefined;
@@ -149,7 +134,7 @@ async function main(argv) {
     return;
   }
 
-  const raw = (await readStdin()).trim();
+  const raw = (await readStdinWithTimeout()).trim();
   if (!raw) return;
   let input;
   try {

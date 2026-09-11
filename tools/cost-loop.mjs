@@ -5,8 +5,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 
-const g = setTimeout(() => process.exit(0), 3000); g.unref();
-
 const home = process.env.ORGIAST_HOME || os.homedir();
 const candidates = (name) => [
   path.join(home, 'orgiast-claude-rules', 'tools', name),

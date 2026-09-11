@@ -15,6 +15,36 @@ test('12行ちょうどの完了報告は pass', () => assert.equal(judgeReportL
 test('13行の完了報告は block', () => assert.equal(judgeReportLength(report(13), 'デプロイして').decision, 'block'));
 test('30行でも完了報告の語が無ければ pass', () => assert.equal(judgeReportLength(Array(30).fill('詳細').join('\n'), 'デプロイして').decision, 'pass'));
 test('説明を求めた発言には長い完了報告でも pass', () => assert.equal(judgeReportLength(report(30), 'なぜ失敗したか調べて').decision, 'pass'));
+for (const human of [
+  'れはSonnetでやるとか、Opusでやると決めれないかな。',
+  'この計測不能などの問題は解決しようとしてるのかな。',
+  'こういう問題がきたので、対策をとってもらえるかな。',
+]) {
+  test(`実測の疑問文末を説明要求として pass: ${human}`, () => {
+    const result = judgeReportLength(report(13), human);
+    assert.equal(result.decision, 'pass');
+    assert.equal(result.reason, 'explanation-requested');
+  });
+}
+for (const ending of ['かな', 'かしら', 'でしょうか', 'だろうか', 'ですか', 'ますか']) {
+  for (const punctuation of ['', '。', '．', '.', '！', '!', '\n', '  ']) {
+    test(`疑問文末「${ending}」と末尾 ${JSON.stringify(punctuation)} は説明要求`, () => {
+      const result = judgeReportLength(report(13), `対応可能${ending}${punctuation}`);
+      assert.equal(result.decision, 'pass');
+      assert.equal(result.reason, 'explanation-requested');
+    });
+  }
+}
+for (const human of ['src を直して。', '静かな環境にして。', 'かしら文字を揃えて。', 'src を動かすまで進めて。']) {
+  test(`疑問文末のない依頼は block のまま: ${human}`, () => {
+    assert.equal(judgeReportLength(report(13), human).decision, 'block');
+  });
+}
+test('既存の全角疑問符も説明要求として pass', () => {
+  const result = judgeReportLength(report(13), '対応できる？');
+  assert.equal(result.decision, 'pass');
+  assert.equal(result.reason, 'explanation-requested');
+});
 test('[REPORT-OK] があれば pass', () => assert.equal(judgeReportLength(`${report(30)}\n[REPORT-OK] 詳細が必要`, 'デプロイして').decision, 'pass'));
 test('lastHumanText が空なら fail-open', () => assert.equal(judgeReportLength(report(30), '').decision, 'pass'));
 test('assistantText が空なら fail-open', () => assert.equal(judgeReportLength('', 'デプロイして').decision, 'pass'));

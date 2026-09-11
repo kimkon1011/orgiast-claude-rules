@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { classify, parseOptions } from './process-hygiene.mjs';
+import { classify, parseOptions, parseProcessLines } from './process-hygiene.mjs';
 
 const now = Date.parse('2026-09-11T06:00:00Z');
 const processInfo = (name, commandLine, ageMin, mb = 100) => ({ Name: name, ProcessId: ageMin, CommandLine: commandLine, CreationDate: new Date(now - ageMin * 60_000).toISOString(), WorkingSetSize: mb * 1024 * 1024 });
@@ -34,4 +34,26 @@ test('閾値は超えた時だけ対象になり上書きできる', () => {
   assert.equal(classify(rows, now, { maxAgeMin: 10, maxBatchAgeMin: 20 }).length, 0);
   assert.equal(classify(rows, now + 1, { maxAgeMin: 10, maxBatchAgeMin: 20 }).length, 2);
   assert.deepEqual(parseOptions(['--kill', '--max-age-min', '3', '--max-batch-age-min', '4', '--alert-threshold', '5']), { kill: true, maxAgeMin: 3, maxBatchAgeMin: 4, alertThreshold: 5 });
+});
+
+test('US区切りを行単位でパースし壊れた行だけを捨てる', () => {
+  const us = '\x1f';
+  const fixture = [
+    ['123', '10', '2026-09-11T05:00:00.0000000Z', '1048576', 'node.exe', 'node C:\\Users\\kim\\orgiast-main\\tools\\x.mjs'].join(us),
+    '区切りのない壊れた行',
+    ['456', '10', '2026-09-11T05:30:00.0000000Z', '2048', 'pwsh.exe', `pwsh command${us}with-us`].join(us),
+  ].join('\r\n');
+  const result = parseProcessLines(`\uFEFF${fixture}\r\n`);
+  assert.equal(result.totalLines, 3);
+  assert.equal(result.failedLines, 1);
+  assert.equal(result.processes.length, 2);
+  assert.deepEqual(result.processes[0], {
+    ProcessId: 123,
+    ParentProcessId: 10,
+    CreationDate: '2026-09-11T05:00:00.0000000Z',
+    WorkingSetSize: 1048576,
+    Name: 'node.exe',
+    CommandLine: 'node C:\\Users\\kim\\orgiast-main\\tools\\x.mjs',
+  });
+  assert.equal(result.processes[1].CommandLine, `pwsh command${us}with-us`);
 });

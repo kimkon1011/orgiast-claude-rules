@@ -10,6 +10,7 @@ import { notifyKim } from './notify-kim.mjs';
 const MINUTE = 60_000;
 const ALERT_COOLDOWN_MS = 6 * 60 * MINUTE;
 const PROCESS_NAMES = new Set(['node.exe', 'pwsh.exe', 'powershell.exe']);
+const FIELD_SEPARATOR = '\x1f';
 
 function numberAfter(argv, flag, fallback) {
   const index = argv.indexOf(flag);
@@ -64,12 +65,49 @@ export function classify(processes, now = Date.now(), opts = {}) {
   });
 }
 
+export function parseProcessLines(text) {
+  const processes = [];
+  let totalLines = 0;
+  let failedLines = 0;
+  for (const rawLine of String(text ?? '').replace(/^\uFEFF/, '').split(/\r?\n/)) {
+    if (!rawLine) continue;
+    totalLines += 1;
+    const fields = rawLine.split(FIELD_SEPARATOR);
+    if (fields.length < 6) { failedLines += 1; continue; }
+    const [pidText, parentPidText, creationDate, workingSetText, name, ...commandParts] = fields;
+    const ProcessId = Number(pidText);
+    const ParentProcessId = Number(parentPidText);
+    const WorkingSetSize = Number(workingSetText);
+    if (!Number.isInteger(ProcessId) || ProcessId < 0
+      || !Number.isInteger(ParentProcessId) || ParentProcessId < 0
+      || !Number.isFinite(WorkingSetSize) || WorkingSetSize < 0
+      || !name || !Number.isFinite(Date.parse(creationDate))) {
+      failedLines += 1;
+      continue;
+    }
+    processes.push({ ProcessId, ParentProcessId, CreationDate: creationDate, WorkingSetSize, Name: name, CommandLine: commandParts.join(FIELD_SEPARATOR) });
+  }
+  return { processes, totalLines, failedLines };
+}
+
 function powershellProcesses(spawnImpl = spawnSync) {
-  const command = "Get-CimInstance Win32_Process | Select-Object Name,ProcessId,CommandLine,CreationDate,WorkingSetSize | ConvertTo-Json -Compress";
+  const command = `[Console]::OutputEncoding=[Text.Encoding]::UTF8
+$separator=[char]31
+Get-CimInstance Win32_Process | ForEach-Object {
+  $commandLine=[string]$_.CommandLine
+  $commandLine=$commandLine.Replace([char]13,' ').Replace([char]10,' ')
+  $fields=@([string]$_.ProcessId,[string]$_.ParentProcessId,$_.CreationDate.ToUniversalTime().ToString('o'),[string]$_.WorkingSetSize,[string]$_.Name,$commandLine)
+  [Console]::Out.WriteLine(($fields -join $separator))
+}`;
   const result = spawnImpl('powershell', ['-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8', windowsHide: true, timeout: 20_000 });
   if (result.error || result.status !== 0) throw result.error || new Error(String(result.stderr || `PowerShell exit ${result.status}`).trim());
-  const output = String(result.stdout ?? '').trim();
-  return output ? JSON.parse(output.replace(/^\uFEFF/, '')) : [];
+  return parseProcessLines(result.stdout);
+}
+
+function isTarget(processInfo) {
+  const name = String(processInfo.Name ?? processInfo.name ?? '').toLowerCase();
+  const commandLine = String(processInfo.CommandLine ?? processInfo.commandLine ?? '');
+  return PROCESS_NAMES.has(name) && targetKind(commandLine) !== null;
 }
 
 function totalMb(items) { return items.reduce((sum, item) => sum + item.mb, 0); }
@@ -113,8 +151,12 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   if (!lock.acquired) { console.log(`process-hygiene: already running${lock.ownerPid ? ` (pid=${lock.ownerPid})` : ''}`); return 0; }
   try {
     const home = deps.home ?? process.env.ORGIAST_HOME ?? os.homedir();
-    const processes = (deps.listProcesses ?? (() => powershellProcesses(deps.spawnImpl)))();
+    const query = (deps.listProcesses ?? (() => powershellProcesses(deps.spawnImpl)))();
+    const parsed = Array.isArray(query) ? { processes: query, totalLines: query.length, failedLines: 0 } : query;
+    const processes = parsed.processes ?? [];
     const stale = classify(processes, deps.now ?? Date.now(), opts);
+    const candidates = processes.filter(isTarget).length;
+    console.log(`process-hygiene: 照会=${parsed.totalLines ?? processes.length} パース失敗=${parsed.failedLines ?? 0} 対象候補=${candidates} 残留判定=${stale.length}`);
     console.log(`process-hygiene: ${opts.kill ? 'kill' : 'dry-run'} ${summary(stale)}`);
     for (const item of stale) console.log(`pid=${item.pid} age=${item.ageMin.toFixed(0)}min mb=${item.mb.toFixed(1)} ${item.commandLine}`);
     if (opts.kill) {

@@ -43,3 +43,9 @@ test('--prune は期限切れと処理済みだけを除く', () => {
   ], Date.parse('2026-09-02T00:00:00Z'));
   assert.deepEqual(remaining.map((item) => item.id), ['active']);
 });
+
+test('process-hygiene run 指示を作れる', () => {
+  const repo = tempRepo();
+  const directive = main(['--kind', 'run', '--task', 'process-hygiene', '--why', '残留掃除'], { repo, randomInt: () => 8 });
+  assert.equal(directive.task, 'process-hygiene');
+});

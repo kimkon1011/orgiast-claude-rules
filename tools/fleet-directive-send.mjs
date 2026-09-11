@@ -34,7 +34,7 @@ export function main(argv = process.argv.slice(2), options = {}) {
   if (!why) throw new Error('--why は必須です（遠隔指示の理由を指定してください）');
   if (!['status', 'prompt', 'enable-auto-session', 'run'].includes(kind)) throw new Error('--kind は status / prompt / enable-auto-session / run のいずれかです');
   const task = valueAfter(argv, '--task');
-  if (kind === 'run' && !['fleet-sheet-report', 'cost-self-heal'].includes(task)) throw new Error('run の --task は fleet-sheet-report / cost-self-heal のいずれかです');
+  if (kind === 'run' && !['fleet-sheet-report', 'cost-self-heal', 'process-hygiene'].includes(task)) throw new Error('run の --task は fleet-sheet-report / cost-self-heal / process-hygiene のいずれかです');
   const bodyFile = valueAfter(argv, '--body-file');
   if (kind === 'prompt' && !bodyFile) throw new Error('prompt は --body-file で本文ファイルを指定してください');
   const createdAt = new Date();

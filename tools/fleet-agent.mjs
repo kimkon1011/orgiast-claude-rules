@@ -12,7 +12,8 @@ import { findLatestMemoryDir } from './memory-share.mjs';
 const ALLOWED_KINDS = new Set(['status', 'prompt', 'enable-auto-session', 'run']);
 const RUN_TASKS = Object.freeze({
   'fleet-sheet-report': [['node', ['tools/fleet-sheet-report.mjs']]],
-  'cost-self-heal': [['node', ['tools/tool-adoption-check.mjs', '--fix']], ['node', ['tools/hook-selfcheck.mjs']], ['node', ['tools/onboarding-sync.mjs']]]
+  'cost-self-heal': [['node', ['tools/tool-adoption-check.mjs', '--fix']], ['node', ['tools/hook-selfcheck.mjs']], ['node', ['tools/onboarding-sync.mjs']]],
+  'process-hygiene': [['node', ['tools/process-hygiene.mjs', '--kill']]],
 });
 const DEFAULT_URL = 'https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/fleet-directives.json';
 const SECRET_PATTERN = /(https?:\/\/[^\s]*?(?:webhook|token|key)[^\s]*|(?:api[_-]?key|token|secret|webhook)[\s=:]+[^\s]+)/gi;

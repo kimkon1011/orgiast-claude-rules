@@ -58,6 +58,16 @@ test('expiresAt 超過は実行しない', async () => {
   assert.equal(posted, false);
 });
 
+test('run process-hygiene は固定argvだけを実行する', async () => {
+  const calls = [];
+  const result = await processDirective({ id: 'hygiene-1', kind: 'run', task: 'process-hygiene', targets: 'all' }, {
+    home: tempHome(), repo: process.cwd(), label: 'PC', hostname: 'host', dryRun: false,
+    post: async () => {}, run: (program, args, options) => { calls.push({ program, args, options }); return { status: 0, stdout: '', stderr: '' }; },
+  });
+  assert.equal(result.action, 'run');
+  assert.deepEqual(calls.map(({ program, args }) => [program, args]), [['node', ['tools/process-hygiene.mjs', '--kill']]]);
+});
+
 test('status は webhook URL と API key を伏せる', () => {
   const home = tempHome();
   fs.mkdirSync(path.join(home, '.claude', 'hooks'), { recursive: true });

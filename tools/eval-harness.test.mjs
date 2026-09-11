@@ -1,10 +1,47 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isUnmeasurable, paretoClassification, recommendations, resultRecord, suspiciousTasks } from './eval-harness.mjs';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { activeDailyCooldown, markDailyProviderCooldown } from './lib/provider-daily-cooldown.mjs';
+import { call, isUnmeasurable, paretoClassification, recommendations, resultRecord, suspiciousTasks } from './eval-harness.mjs';
 
 function task(id, category, status, extra = {}) {
   return { id, category, status, pass: status === 'pass', costUsd: 0.001, ms: 10, ...extra };
 }
+
+test('cooldown中は call が fetch を呼ばずSKIPする', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'eval-cooldown-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const now = new Date('2026-09-10T12:00:00Z');
+  markDailyProviderCooldown('openrouter', { home, now });
+  let fetchCalls = 0;
+  await assert.rejects(call('openrouter', 'model', 'prompt', '', 10, {}, { home, now, fetchImpl: async () => { fetchCalls++; } }), /SKIP openrouter: cooldown中 \(daily_limit, 残り720分\)/);
+  assert.equal(fetchCalls, 0);
+});
+
+test('groq以外の日次上限も該当provider名でcooldownを記録する', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'eval-cooldown-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  t.after(() => { delete process.env.OPENROUTER_API_KEY; });
+  const now = new Date('2026-09-10T12:00:00Z');
+  process.env.OPENROUTER_API_KEY = 'test-key';
+  const response = { ok: false, status: 429, headers: new Headers(), text: async () => 'requests per day exceeded' };
+  await assert.rejects(call('openrouter', 'model', 'prompt', '', 10, {}, { home, now, fetchImpl: async () => response }), /429/);
+  assert.equal(activeDailyCooldown('openrouter', { home, now })?.reason, 'daily_limit');
+  assert.equal(activeDailyCooldown('groq', { home, now }), null);
+});
+
+test('通常の429は従来通り3回リトライして計4回試行する', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'eval-cooldown-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  t.after(() => { delete process.env.OPENROUTER_API_KEY; });
+  process.env.OPENROUTER_API_KEY = 'test-key';
+  let fetchCalls = 0;
+  const response = { ok: false, status: 429, headers: new Headers({ 'retry-after': '0' }), text: async () => 'short rate limit' };
+  await assert.rejects(call('openrouter', 'model', 'prompt', '', 10, {}, { home, fetchImpl: async () => { fetchCalls++; return response; } }), /429/);
+  assert.equal(fetchCalls, 4);
+});
 
 test('attemptedRate は pass/n、既存 rate は pass/graded のまま', () => {
   const r = resultRecord('p', 'm', [task('a', 'cat', 'pass'), task('b', 'cat', 'fail'), task('c', 'cat', 'error')], '2026-08-26T00:00:00Z');

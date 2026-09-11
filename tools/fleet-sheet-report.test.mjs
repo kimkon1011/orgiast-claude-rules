@@ -10,7 +10,7 @@ import { post } from './fleet-sheet-report.mjs';
 
 const script = new URL('./fleet-sheet-report.mjs', import.meta.url);
 
-function reportPayload(files = {}) {
+function reportPayload(files = {}, codexAuth) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-sheet-report-'));
   const claude = path.join(home, '.claude');
   fs.mkdirSync(claude, { recursive: true });
@@ -18,6 +18,10 @@ function reportPayload(files = {}) {
   fs.writeFileSync(path.join(claude, 'cost-reporter.env'), 'REPORTER_LABEL=fleet-sheet-test\n');
   for (const [name, value] of Object.entries(files)) fs.writeFileSync(path.join(claude, name), JSON.stringify(value));
   try {
+    if (codexAuth) {
+      fs.mkdirSync(path.join(home, '.codex'), { recursive: true });
+      fs.writeFileSync(path.join(home, '.codex', 'auth.json'), JSON.stringify(codexAuth));
+    }
     const result = spawnSync(process.execPath, [fileURLToPath(script), '--dry-run'], {
       encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, VERSION_DRIFT_SKIP: '1' },
     });
@@ -27,6 +31,12 @@ function reportPayload(files = {}) {
     fs.rmSync(home, { recursive: true, force: true });
   }
 }
+
+test('adoption state が無くても認証ファイルの Codex アカウントとプランを報告する', () => {
+  const payload = { email: 'codex@example.com', 'https://api.openai.com/auth': { chatgpt_plan_type: 'prolite' } };
+  const token = `${Buffer.from('{"alg":"none"}').toString('base64url')}.${Buffer.from(JSON.stringify(payload)).toString('base64url')}.dummy-signature`;
+  assert.equal(reportPayload({}, { tokens: { id_token: token } }).codexLogin, '済(codex@example.com/prolite)');
+});
 
 test('stateに計測値が無ければ数値0へ変換しない', () => {
   const payload = reportPayload();

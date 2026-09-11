@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { loadOpenRouterApiKey, parseArgs, runCli, search } from './web-search.mjs';
+import { extractExecutedToolUrls, loadOpenRouterApiKey, parseArgs, runCli, search } from './web-search.mjs';
 
 const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'web-search-test-'));
 process.env.ORGIAST_HOME = isolatedHome;
@@ -17,6 +17,30 @@ function outputSink() {
 function response(body, status = 200) {
   return { ok: status >= 200 && status < 300, status, json: async () => body, text: async () => JSON.stringify(body) };
 }
+
+test('extractExecutedToolUrls は末尾の全角 。 を除去して重複を消す', () => {
+  const urls = extractExecutedToolUrls([
+    { snippet: '【orgiast.jp】(https://www.orgiast.jp/company)。' },
+    { url: 'https://www.orgiast.jp/company' },
+  ]).map(({ url }) => url);
+  assert.deepEqual(urls, ['https://www.orgiast.jp/company']);
+});
+
+for (const punctuation of ['）', '、', '，']) {
+  test(`extractExecutedToolUrls は末尾の全角 ${punctuation} を除去する`, () => {
+    const urls = extractExecutedToolUrls([
+      { snippet: `出典 https://www.orgiast.jp/company${punctuation}` },
+    ]).map(({ url }) => url);
+    assert.deepEqual(urls, ['https://www.orgiast.jp/company']);
+  });
+}
+
+test('extractExecutedToolUrls は末尾の半角約物を従来どおり除去する', () => {
+  const urls = extractExecutedToolUrls([
+    { snippet: 'see https://example.com/a).' },
+  ]).map(({ url }) => url);
+  assert.deepEqual(urls, ['https://example.com/a']);
+});
 
 test('executed_tools の URL を重複なく既定出力へ列挙する', async () => {
   const out = outputSink();

@@ -43,7 +43,8 @@ function collectUrls(value, found) {
   if (typeof value === 'string') {
     try { collectUrls(JSON.parse(value), found); } catch {}
     for (const match of value.matchAll(/https?:\/\/[^\s"'<>]+/g)) {
-      const url = match[0].replace(/[),.;:\]}]+$/g, '');
+      // run33 実測: 回答本文の「【orgiast.jp】(https://www.orgiast.jp/company)。」で全角約物が URL に混入する。
+      const url = match[0].replace(/[),.;:\]}）。、，]+$/g, '');
       if (url) found.add(url);
     }
   } else if (Array.isArray(value)) {

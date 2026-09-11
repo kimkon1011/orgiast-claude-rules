@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { classify, parseOptions, parseProcessLines } from './process-hygiene.mjs';
+import { classify, classifyDetailed, parseOptions, parseProcessLines } from './process-hygiene.mjs';
 
 const now = Date.parse('2026-09-11T06:00:00Z');
-const processInfo = (name, commandLine, ageMin, mb = 100) => ({ Name: name, ProcessId: ageMin, CommandLine: commandLine, CreationDate: new Date(now - ageMin * 60_000).toISOString(), WorkingSetSize: mb * 1024 * 1024 });
+const processInfo = (name, commandLine, ageMin, mb = 100, parentPid = 999_999) => ({ Name: name, ProcessId: ageMin, ParentProcessId: parentPid, CommandLine: commandLine, CreationDate: new Date(now - ageMin * 60_000).toISOString(), WorkingSetSize: mb * 1024 * 1024 });
 
 test('repo tools と hooks の期限超過だけを対象にする', () => {
   const result = classify([
@@ -27,6 +27,38 @@ test('batch/eval は4時間まで許容し場所に依存しない', () => {
 test('next/MCP/claude/codex-do と tools 外は対象外', () => {
   const commands = ['next start', 'node mcp-server.mjs', 'claude', 'node codex-do.mjs', 'node C:\\tmp\\random.mjs'];
   assert.equal(classify(commands.map((command) => processInfo('node.exe', command, 999)), now, {}).length, 0);
+});
+
+test('親プロセスが一覧に存在する期限超過プロセスは除外する', () => {
+  const child = processInfo('node.exe', 'node C:\\Users\\kim\\orgiast-main\\tools\\hook-selfcheck.mjs', 121, 100, 42);
+  const parent = { ...processInfo('node.exe', 'claude', 300), ProcessId: 42 };
+  const result = classifyDetailed([child, parent], now);
+  assert.equal(result.stale.length, 0);
+  assert.equal(result.parentAliveExcluded, 1);
+});
+
+test('長時間ジョブは12時間以内なら除外し12時間超なら候補へ戻す', () => {
+  const result = classifyDetailed([
+    processInfo('node.exe', 'node C:\\Users\\kim\\orgiast-main\\tools\\auto-session-launcher.mjs', 719),
+    processInfo('pwsh.exe', 'pwsh -File C:\\Users\\kim\\orgiast-main\\tools\\fleet-poller.ps1', 719),
+    processInfo('node.exe', 'node C:\\Users\\kim\\orgiast-main\\tools\\fleet-agent.mjs --config config.mjs', 721),
+  ], now);
+  assert.equal(result.longRunningExcluded, 2);
+  assert.deepEqual(result.stale.map((item) => item.ageMin), [721]);
+});
+
+test('batch-run は8時間以内の一致するロックを保持中なら除外する', () => {
+  const batch = { ...processInfo('node.exe', 'node D:\\tmp\\batch-run.mjs', 300), ProcessId: 4321 };
+  const result = classifyDetailed([batch], now, { batchLock: { pid: 4321, startedAt: new Date(now - 7 * 60 * 60_000).toISOString() } });
+  assert.equal(result.lockHeldExcluded, 1);
+  assert.equal(result.stale.length, 0);
+  assert.equal(classify([batch], now, { batchLock: { pid: 9999, startedAt: new Date(now).toISOString() } }).length, 1);
+});
+
+test('孤児 hook は120分を超えると残留判定する', () => {
+  const result = classify([processInfo('node.exe', 'node C:\\Users\\kim\\.claude\\hooks\\orphan.mjs', 121)], now);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].kind, 'hook');
 });
 
 test('閾値は超えた時だけ対象になり上書きできる', () => {

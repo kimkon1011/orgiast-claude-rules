@@ -11,6 +11,22 @@ const MINUTE = 60_000;
 const ALERT_COOLDOWN_MS = 6 * 60 * MINUTE;
 const PROCESS_NAMES = new Set(['node.exe', 'pwsh.exe', 'powershell.exe']);
 const FIELD_SEPARATOR = '\x1f';
+const LONG_RUNNING_JOB_MAX_AGE_MIN = 12 * 60;
+const BATCH_LOCK_MAX_AGE_MS = 8 * 60 * MINUTE;
+const LONG_RUNNING_JOBS = new Set([
+  'auto-session-launcher.mjs',
+  'auto-session.mjs',
+  'auto-session-executor.mjs',
+  'gsk-login-keeper.mjs',
+  'fleet-poller.ps1',
+  'fleet-agent.mjs',
+  'nightly-batch.ps1',
+  'cost-improve-loop.mjs',
+  'cost-work-loop.mjs',
+  'codex-do.mjs',
+  'cheap-code.mjs',
+  'process-hygiene.mjs',
+]);
 
 function numberAfter(argv, flag, fallback) {
   const index = argv.indexOf(flag);
@@ -34,7 +50,7 @@ function targetKind(commandLine) {
   if (/\b(?:batch-run|eval-harness)\.mjs\b/i.test(command)) return 'batch';
   if (/\bhook-tree-selfheal\.mjs\b/i.test(command)) return 'tool';
   if (/\\\.claude\\hooks\\[^"']+\.(?:mjs|ps1)(?:["'\s]|$)/i.test(command)) return 'hook';
-  if (/\\(?:orgiast-main|orgiast-claude-rules|\.claude\\auto-session-repo)\\tools\\[^"']+\.mjs(?:["'\s]|$)/i.test(command)) return 'tool';
+  if (/\\(?:orgiast-main|orgiast-claude-rules|\.claude\\auto-session-repo)\\tools\\[^"']+\.(?:mjs|ps1)(?:["'\s]|$)/i.test(command)) return 'tool';
   return null;
 }
 
@@ -47,10 +63,24 @@ function creationTime(value) {
   return Number.NaN;
 }
 
-export function classify(processes, now = Date.now(), opts = {}) {
+function commandBasename(commandLine) {
+  const matches = String(commandLine ?? '').match(/[A-Za-z0-9._-]+\.(?:mjs|ps1)/gi);
+  return matches?.[0]?.toLowerCase() ?? '';
+}
+
+function lockProtectsBatch(processInfo, lock, now) {
+  const lockAge = now - Date.parse(lock?.startedAt);
+  return Number(lock?.pid) === Number(processInfo.ProcessId ?? processInfo.pid)
+    && Number.isFinite(lockAge) && lockAge >= 0 && lockAge <= BATCH_LOCK_MAX_AGE_MS;
+}
+
+export function classifyDetailed(processes, now = Date.now(), opts = {}) {
   const maxAgeMin = opts.maxAgeMin ?? 120;
   const maxBatchAgeMin = opts.maxBatchAgeMin ?? 240;
-  return (Array.isArray(processes) ? processes : processes ? [processes] : []).flatMap((processInfo) => {
+  const rows = Array.isArray(processes) ? processes : processes ? [processes] : [];
+  const livePids = new Set(rows.map((processInfo) => Number(processInfo.ProcessId ?? processInfo.pid)).filter(Number.isInteger));
+  const stats = { parentAliveExcluded: 0, longRunningExcluded: 0, lockHeldExcluded: 0 };
+  const stale = rows.flatMap((processInfo) => {
     const name = String(processInfo.Name ?? processInfo.name ?? '').toLowerCase();
     if (!PROCESS_NAMES.has(name)) return [];
     const commandLine = String(processInfo.CommandLine ?? processInfo.commandLine ?? '');
@@ -60,9 +90,25 @@ export function classify(processes, now = Date.now(), opts = {}) {
     const ageMin = (now - createdAt) / MINUTE;
     const thresholdMin = kind === 'batch' ? maxBatchAgeMin : maxAgeMin;
     if (!Number.isFinite(ageMin) || ageMin <= thresholdMin) return [];
+    const parentPid = Number(processInfo.ParentProcessId ?? processInfo.parentPid);
+    if (livePids.has(parentPid)) { stats.parentAliveExcluded += 1; return []; }
+    const basename = commandBasename(commandLine);
+    if (LONG_RUNNING_JOBS.has(basename) && ageMin <= LONG_RUNNING_JOB_MAX_AGE_MIN) {
+      stats.longRunningExcluded += 1;
+      return [];
+    }
+    if (basename === 'batch-run.mjs' && lockProtectsBatch(processInfo, opts.batchLock, now)) {
+      stats.lockHeldExcluded += 1;
+      return [];
+    }
     const bytes = Number(processInfo.WorkingSetSize ?? processInfo.workingSetSize ?? 0);
     return [{ pid: Number(processInfo.ProcessId ?? processInfo.pid), name, commandLine, kind, ageMin, mb: Number.isFinite(bytes) ? bytes / 1024 / 1024 : 0 }];
   });
+  return { stale, ...stats };
+}
+
+export function classify(processes, now = Date.now(), opts = {}) {
+  return classifyDetailed(processes, now, opts).stale;
 }
 
 export function parseProcessLines(text) {
@@ -110,6 +156,11 @@ function isTarget(processInfo) {
   return PROCESS_NAMES.has(name) && targetKind(commandLine) !== null;
 }
 
+function readBatchLock(home) {
+  try { return JSON.parse(fs.readFileSync(path.join(home, '.claude', 'locks', 'batch-run.lock'), 'utf8')); }
+  catch { return null; }
+}
+
 function totalMb(items) { return items.reduce((sum, item) => sum + item.mb, 0); }
 function summary(items) { return `${items.length}本 / ${totalMb(items).toFixed(1)} MB`; }
 
@@ -154,13 +205,15 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     const query = (deps.listProcesses ?? (() => powershellProcesses(deps.spawnImpl)))();
     const parsed = Array.isArray(query) ? { processes: query, totalLines: query.length, failedLines: 0 } : query;
     const processes = parsed.processes ?? [];
-    const stale = classify(processes, deps.now ?? Date.now(), opts);
+    const now = deps.now ?? Date.now();
+    const classified = classifyDetailed(processes, now, { ...opts, batchLock: deps.batchLock ?? readBatchLock(home) });
+    const stale = classified.stale;
     const candidates = processes.filter(isTarget).length;
-    console.log(`process-hygiene: 照会=${parsed.totalLines ?? processes.length} パース失敗=${parsed.failedLines ?? 0} 対象候補=${candidates} 残留判定=${stale.length}`);
+    console.log(`process-hygiene: 照会=${parsed.totalLines ?? processes.length} パース失敗=${parsed.failedLines ?? 0} 対象候補=${candidates} 親生存除外=${classified.parentAliveExcluded} 長時間ジョブ除外=${classified.longRunningExcluded} ロック保持除外=${classified.lockHeldExcluded} 残留判定=${stale.length}`);
     console.log(`process-hygiene: ${opts.kill ? 'kill' : 'dry-run'} ${summary(stale)}`);
     for (const item of stale) console.log(`pid=${item.pid} age=${item.ageMin.toFixed(0)}min mb=${item.mb.toFixed(1)} ${item.commandLine}`);
     if (opts.kill) {
-      await maybeAlert(stale, opts.alertThreshold, home, deps.now ?? Date.now(), deps.notify ?? notifyKim);
+      await maybeAlert(stale, opts.alertThreshold, home, now, deps.notify ?? notifyKim);
       const failed = (deps.stopProcesses ?? ((items) => stopProcesses(items, deps.spawnImpl)))(stale);
       const after = stale.filter((item) => failed.includes(item.pid));
       appendLog(home, stale, after);

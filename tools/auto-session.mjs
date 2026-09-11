@@ -76,7 +76,12 @@ export function parseHandoff(md) {
     }
   }
   const sections = {};
+  const purpose = sectionFrom(block, '次の1目的');
+  // 2026-09-08 / 2026-09-11: クローズ済み目的の対象・完了条件が別件TODOへ混入した。
+  // 打消し線のある目的の残骸は除外し、汎用の読み物案内は維持する。
+  const closedPurpose = /~~[^~]*~~/.test(purpose);
   for (const name of ['対象', '完了条件', '触る前に読む memory']) {
+    if (closedPurpose && name !== '触る前に読む memory') continue;
     const value = sectionFrom(block, name);
     if (value) sections[name] = value;
   }

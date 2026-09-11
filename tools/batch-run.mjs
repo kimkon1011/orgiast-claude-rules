@@ -9,6 +9,13 @@ import { spawnSync } from 'node:child_process';
 import { readEnvValue } from './env-kv.mjs';
 import { callWithFallback, classifyFailure, FALLBACK_CHAIN } from './llm-fallback.mjs';
 import { batchDeadline } from './lib/batch-deadline.mjs';
+import { acquireLock } from './lib/single-instance.mjs';
+
+const batchLock = acquireLock('batch-run');
+if (!batchLock.acquired) {
+  console.error(`[batch-run] already running pid=${batchLock.ownerPid ?? 'unknown'}`);
+  process.exit(0);
+}
 
 const PROVIDERS = {
   deepseek: { base: 'https://api.deepseek.com/chat/completions', keyEnv: 'DEEPSEEK_API_KEY', keyFile: 'deepseek.env', model: 'deepseek-chat' },
@@ -32,6 +39,10 @@ if (args.includes('--help')) {
 }
 function userHome() { const h = os.homedir(), m = process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i); return process.env.USERPROFILE || m?.[1] || h; }
 const home = userHome();
+const lastFile = path.join(home, '.claude', 'state', 'batch-run.last');
+process.once('exit', () => {
+  try { fs.mkdirSync(path.dirname(lastFile), { recursive: true }); fs.writeFileSync(lastFile, `${new Date().toISOString()}\n`); } catch {}
+});
 const dir = path.join(home, '.claude', 'batch-queue');
 const pending = path.join(dir, 'pending.jsonl');
 const ledger = path.join(home, '.claude', 'executor-usage.jsonl');

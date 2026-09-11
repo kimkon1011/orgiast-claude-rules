@@ -51,6 +51,103 @@ function Get-InteractiveSessionIdsFromJson($Json) {
     return @($ids | Select-Object -Unique)
 }
 
+function Resolve-ClaudeCli {
+    $command = (Get-Command claude -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+    if ($command) { return $command }
+    $candidate = Join-Path $env:USERPROFILE '.local\bin\claude.exe'
+    if (Test-Path -LiteralPath $candidate) { return $candidate }
+    return $null
+}
+
+function Invoke-ClaudeAgentsJson($ClaudeCli, [int]$TimeoutSeconds = 10) {
+    if (-not $ClaudeCli) { throw 'claude CLI not found' }
+    $info = [Diagnostics.ProcessStartInfo]::new()
+    $info.FileName = $ClaudeCli
+    $info.Arguments = 'agents --json'
+    if ($ClaudeCli -match '\.(cmd|bat)$') {
+        $info.FileName = $env:ComSpec
+        $info.Arguments = '/d /s /c ""' + $ClaudeCli + '" agents --json"'
+    }
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo = $info
+    try {
+        [void]$process.Start()
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            $process.Kill($true)
+            throw 'claude agents timed out'
+        }
+        if ($process.ExitCode -ne 0) { throw "claude agents exited $($process.ExitCode)" }
+        return $stdout.GetAwaiter().GetResult()
+    } finally { $process.Dispose() }
+}
+
+function Get-InteractiveSessionCount($ClaudeCli) {
+    try {
+        $json = Invoke-ClaudeAgentsJson $ClaudeCli
+        if ([string]::IsNullOrWhiteSpace($json) -or -not $json.TrimStart().StartsWith('[')) { return -1 }
+        $agents = $json | ConvertFrom-Json -ErrorAction Stop
+        return @($agents | Where-Object { $_.kind -eq 'interactive' }).Count
+    } catch { return -1 }
+}
+
+function Get-MobileTabsTarget($SettingsPath) {
+    if (-not (Test-Path -LiteralPath $SettingsPath)) { return 3 }
+    try {
+        $settings = Get-Content -LiteralPath $SettingsPath -Raw -Encoding utf8 | ConvertFrom-Json -ErrorAction Stop
+        $value = $settings.'orgiast.nextSession.mobileTabs'
+        if ($null -ne $value -and [int]$value -ge 0 -and [int]$value -le 10) { return [int]$value }
+    } catch {}
+    return 3
+}
+
+function Wait-InteractiveResume([int]$TargetCount, [int]$TimeoutSeconds, [int]$IntervalSeconds,
+    [scriptblock]$GetCount, [scriptblock]$SleepAction = { param($seconds) Start-Sleep -Seconds $seconds },
+    [scriptblock]$Now = { [datetime]::UtcNow }) {
+    $started = & $Now
+    do {
+        $queryStarted = & $Now
+        $count = [int](& $GetCount)
+        $elapsed = [Math]::Max(0, ((& $Now) - $started).TotalSeconds)
+        Write-Log ("RESUME-WAIT: interactive {0}/{1} 件（{2:F0} 秒、-1 は照会失敗）" -f $count, $TargetCount, $elapsed) | Out-Host
+        if ($count -ge $TargetCount) { return [pscustomobject]@{ Resumed = $true; Count = $count; Elapsed = $elapsed } }
+        if ($elapsed -ge $TimeoutSeconds) { break }
+        $querySeconds = ((& $Now) - $queryStarted).TotalSeconds
+        & $SleepAction ([Math]::Min([Math]::Max(0, $IntervalSeconds - $querySeconds), $TimeoutSeconds - $elapsed))
+    } while ($true)
+    return [pscustomobject]@{ Resumed = $false; Count = $count; Elapsed = $elapsed }
+}
+
+function Invoke-MobileRecreate([int]$TargetCount) {
+    & node (Join-Path $PSScriptRoot 'mobile-sessions.mjs') --count $TargetCount --recreate 2>&1 |
+        ForEach-Object { Write-Log ("RESUME-RECREATE: {0}" -f $_) | Out-Host }
+    if ($LASTEXITCODE -ne 0) { throw "mobile-sessions exited $LASTEXITCODE" }
+}
+
+function Confirm-InteractiveResume([int]$TargetCount, $ClaudeCli) {
+    if ($TargetCount -eq 0) {
+        Write-Log 'RESUMED: interactive 0 件（0 秒、mobileTabs=0）' | Out-Host
+        return
+    }
+    $started = [datetime]::UtcNow
+    $resume = Wait-InteractiveResume $TargetCount 360 20 { Get-InteractiveSessionCount $ClaudeCli }
+    if (-not $resume.Resumed) {
+        Write-Log ("RESUME-RECREATE: interactive {0}/{1} 件のため待機タブを再作成" -f $resume.Count, $TargetCount) | Out-Host
+        try { Invoke-MobileRecreate $TargetCount } catch {
+            Write-Log ("RESUME-RECREATE: 起動失敗（{0}）" -f $_.Exception.Message) | Out-Host
+        }
+        $resume = Wait-InteractiveResume $TargetCount 120 20 { Get-InteractiveSessionCount $ClaudeCli }
+    }
+    $elapsed = [int]([datetime]::UtcNow - $started).TotalSeconds
+    if ($resume.Resumed) { Write-Log ("RESUMED: interactive {0} 件（{1} 秒）" -f $resume.Count, $elapsed) | Out-Host }
+    else { Write-Log ("RESUME-FAIL: interactive {0}/{1} 件（{2} 秒）" -f $resume.Count, $TargetCount, $elapsed) | Out-Host }
+}
+
 function Get-BusySessionFiles($ProjectsPath, [datetime]$Cutoff, [string[]]$InteractiveSessionIds, [bool]$AgentsUsable) {
     $recent = @(Get-ChildItem -Path $ProjectsPath -Filter *.jsonl -Recurse -File -ErrorAction SilentlyContinue |
         Where-Object { $_.LastWriteTime -gt $Cutoff })
@@ -91,6 +188,24 @@ public static class NightlyReloadWin32 {
     [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 }
 '@
+}
+
+function Initialize-ExecutionStateApi {
+    if ('NightlyReloadPower' -as [type]) { return }
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class NightlyReloadPower {
+    [DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint flags);
+}
+'@
+}
+
+function Set-SleepSuppression([bool]$Enabled) {
+    Initialize-ExecutionStateApi
+    $ES_CONTINUOUS = [uint32]2147483648
+    $flags = if ($Enabled) { $ES_CONTINUOUS -bor [uint32]0x00000001 -bor [uint32]0x00000040 } else { $ES_CONTINUOUS }
+    if ([NightlyReloadPower]::SetThreadExecutionState($flags) -eq 0) { throw 'SetThreadExecutionState failed' }
 }
 
 function Get-VSCodeWindowHandles {
@@ -146,6 +261,7 @@ $marker = Join-Path $claude 'nightly-reload-vscode.last'
 $activatedMarker = Join-Path $claude 'nightly-reload-vscode.ext-activated'
 
 try {
+    Set-SleepSuppression $true
     $windowHandles = @(Get-VSCodeWindowHandles)
     if ($windowHandles.Count -eq 0) { Write-Log 'SKIP: VSCode の表示中ウィンドウが無い'; exit 0 }
 
@@ -153,11 +269,7 @@ try {
     $interactiveIds = @()
     try {
         # タスクスケジューラの非対話環境では PATH に claude が無いことがある。無ければ既定の導入先を直接使う。
-        $claudeCli = (Get-Command claude -ErrorAction SilentlyContinue | Select-Object -First 1).Source
-        if (-not $claudeCli) {
-            $candidate = Join-Path $env:USERPROFILE '.local\bin\claude.exe'
-            if (Test-Path -LiteralPath $candidate) { $claudeCli = $candidate }
-        }
+        $claudeCli = Resolve-ClaudeCli
         if (-not $claudeCli) { Write-Log 'WARN: claude CLI が見つからないため busy 判定を全 jsonl に戻す'; throw 'claude CLI not found' }
         $agentsOutput = (& $claudeCli agents --json 2>$null) -join "`n"
         if (-not [string]::IsNullOrWhiteSpace($agentsOutput)) {
@@ -241,7 +353,12 @@ try {
         $updateLabel = if ($updatePending) { $diskVersion.ToString() } else { 'なし' }
         Write-Log ("RELOADED: 再起動を実行（Restart / 退避 {0} 件 / 更新待ち {1}）" -f $moved, $updateLabel)
     }
+    # URI reloads need the same recovery window as full restarts.
+    $target = Get-MobileTabsTarget (Join-Path $env:APPDATA 'Code\User\settings.json')
+    Confirm-InteractiveResume $target $claudeCli
 } catch {
     Write-Log ("ERROR: 再読み込み処理で例外（{0}）" -f $_.Exception.Message)
+} finally {
+    try { Set-SleepSuppression $false } catch { Write-Log ("ERROR: スリープ抑止解除失敗（{0}）" -f $_.Exception.Message) }
 }
 exit 0

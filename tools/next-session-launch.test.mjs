@@ -992,3 +992,15 @@ test('headless は glm 失敗後に deepseek の代替レーンで成功する',
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
+
+
+test('実際の同梱 0.3.3 VSIX を選択し既存 0.3.2 から自動更新する', async () => {
+  const { io, commands } = vscodeExtIo({ installedVersion: '0.3.2' });
+  const bundled = fs.readdirSync(new URL('../packages/vscode-next-session/', import.meta.url));
+  assert.equal(pickBundledVsix(bundled), 'orgiast-next-session-0.3.3.vsix');
+  io.readdir = (dir) => dir.endsWith('vscode-next-session') ? bundled : [];
+  assert.equal(await launchNextSession(['--target', 'vscode-ext'], io), 0);
+  assert.equal(commands[1][0], '--install-extension');
+  assert.match(commands[1][1], /orgiast-next-session-0\.3\.3\.vsix$/);
+  assert.equal(commands[1][2], '--force');
+});

@@ -38,6 +38,8 @@ GitHub にログイン済みの Claude Code で:
 - Google Workspace URL は `/a/orgiast.jp/` を必ず挟む（ONBOARDING 参照）
 - プロジェクト CLAUDE.md 冒頭に ONBOARDING.md への参照を1行入れる
 
-# Remote Control wake recovery
+## Remote Control の自動復帰
+
+夜間リロードはスリープを抑止して復帰を確認し、拡張 0.3.3 は起動・フォーカス復帰時に待機タブを自己修復します。追加の `OrgiastRcResumeOnWake` はスリープ復帰とロック解除の90秒後に復帰を要求し、結果を `~/.claude/rc-resume-on-wake.log` に追記します。
 
 自動復帰タスクの登録・更新: `pwsh -NoProfile -File tools/register-rc-resume-task.ps1`

@@ -20,8 +20,10 @@
     "onStartupFinished"
   ],
   "scripts": {
-    "test": "node --test route.test.cjs shell-path.test.cjs",
-    "package": "npx --yes @vscode/vsce package --out orgiast-next-session-0.3.3.vsix"
+    "test": "node --test *.test.cjs",
+    "build": "node --check extension.js && node --check route.js && node --check shell-path.js",
+    "vscode:prepublish": "npm run build",
+    "package": "node package.cjs"
   },
   "contributes": {
     "configuration": {

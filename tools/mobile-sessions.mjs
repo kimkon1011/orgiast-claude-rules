@@ -26,9 +26,9 @@ export function buildMobileSessionsUri({ count, name, recreate = false }) {
   return `vscode://orgiast.next-session/mobile?count=${count}&name=${encodeURIComponent(name)}${suffix}`;
 }
 
-export function planMobileSessionsLaunch({ codeCli, count, name }) {
+export function planMobileSessionsLaunch({ codeCli, count, name, recreate = false }) {
   if (!codeCli) return null;
-  const uri = buildMobileSessionsUri({ count, name });
+  const uri = buildMobileSessionsUri({ count, name, recreate });
   return {
     command: 'cmd.exe',
     args: ['/c', `""${codeCli}" --open-url "${uri}""`],
@@ -60,11 +60,12 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   const child = spawnProcess(plan.command, plan.args, {
     stdio: 'ignore', windowsHide: true, windowsVerbatimArguments: true,
   });
-  await new Promise((resolve, reject) => {
+  const exitCode = await new Promise((resolve, reject) => {
     child.once('exit', resolve);
     child.once('error', reject);
   });
-  return 0;
+  log(`[mobile-sessions] URI dispatch exit=${exitCode ?? 'signal'} count=${options.count} recreate=${options.recreate}`);
+  return exitCode ?? 1;
 }
 
 if (isEntry(import.meta.url)) process.exitCode = await main();

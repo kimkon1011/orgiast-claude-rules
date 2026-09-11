@@ -81,7 +81,12 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
   if (claudeFallback.length) { const top = reasonTop(claudeFallback); findings.push({ id: 'unattended_claude_fallback', severity: 'high', title: '無人ジョブが Claude へフォールバック', evidence: [`${claudeFallback.length}件`, ...top], fixTask: `無人ジョブが Claude に落ちた理由(${top.join(', ')})を潰す。cheap-code 側の失敗原因を修正し、Claude フォールバックが opt-in のままであることを確認` }); }
   const lowYield = usageRows.filter((row) => row.provider === 'fallback' && Number(row.secs) > 900 && Number(row.out) < 300);
   if (lowYield.length >= 2) { const models = [...new Set(lowYield.map((row) => row.model || '不明'))].join(', '); findings.push({ id: 'fallback_low_yield', severity: 'medium', title: 'フォールバックの低成果', evidence: [`${lowYield.length}件`, `model ${models}`], fixTask: `フォールバック先(${models})が長時間走って成果が無い。codex-fallback-order.json の順序と各バックエンドの実効性を見直す` }); }
-  const empty = usageRows.filter((row) => row.provider === 'codex' && Number(row.out) === 0);
+  // 「起動できない機体」と「起動したのに空」を分ける。前者は直せる不具合ではないので
+  // fixTask を持たせない(持たせると毎日 next-session.md に同じ宿題が再起票される。2026-09-10 実測)。
+  const codexRows = usageRows.filter((row) => row.provider === 'codex' && Number(row.out) === 0);
+  const unusable = codexRows.filter((row) => row.status === 'native-windows-unusable');
+  const empty = codexRows.filter((row) => row.status !== 'native-windows-unusable');
+  if (unusable.length) findings.push({ id: 'codex_unavailable_on_host', severity: 'low', title: 'Codex はこの機体で起動できない（既知・cheap-code へ回す）', evidence: [`${unusable.length}件`, 'WSL 無し＋ネイティブ版は read-only 固定'] });
   if (empty.length) findings.push({ id: 'codex_empty_output', severity: 'medium', title: 'Codex の出力ゼロ', evidence: [`${empty.length}件`], fixTask: 'codex が出力ゼロで終了した原因（認証切れ/上限/起動失敗）を codex-do のログから特定' });
   for (const [provider, state] of Object.entries(cooldown)) if (state?.reason === 'http_402' && Number(state.until) > nowMs) findings.push({ id: 'provider_balance_exhausted', severity: 'low', title: `${provider} の残高切れ`, evidence: [`provider ${provider}`, CLAUDE_FALLBACK_RULE] });
   return findings.length ? findings : [{ id: 'healthy', severity: 'low', title: '委譲経路は正常', evidence: [] }];

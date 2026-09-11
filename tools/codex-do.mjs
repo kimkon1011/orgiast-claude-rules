@@ -425,6 +425,9 @@ async function executeCheapCode(backend, backendTimeout) {
 
 let result;
 let executorName = 'codex';
+// WSL が無くネイティブ Windows codex に落ちた回は「起動できたが空」ではなく「起動できない」。
+// 台帳で区別しないと delegation-health が毎日「原因を特定せよ」を再起票し続ける(2026-09-10)。
+let nativeWindowsUnusable = false;
 let fallbackBackend = null;
 let lastBackend = null;
 
@@ -476,6 +479,7 @@ if (process.platform === 'win32' && !forceNative) {
     result = await execute('wsl', ['-d', distro, '--cd', cwd, '--', 'codex', 'exec', '-s', review ? 'read-only' : 'workspace-write', '-']);
   }
   else {
+    nativeWindowsUnusable = true;
     console.error('⚠️ WSL 経路が使えないためネイティブ Windows codex で実行します。\nWindows 版は read-only サンドボックス固定でファイルを書けない既知の不具合(openai/codex#35428)があり、編集が保存されない可能性が高い。WSL の導入を推奨');
     result = await execute('codex', nativeArgs, { cwd });
   }
@@ -591,9 +595,17 @@ try {
     out: Math.ceil((result.outputChars || 0) / 4),
     secs: Number(secs.toFixed(3))
   };
+  // 出力ゼロは「なぜゼロか」を残す。native-windows-unusable は機体の既知の制約
+  // (read-only サンドボックス固定 openai/codex#35428)で、直せる不具合ではない。
+  if (executorName === 'codex' && !usage.out) usage.status = nativeWindowsUnusable ? 'native-windows-unusable' : 'empty-output';
   fs.appendFileSync(ledger, `${JSON.stringify(usage)}\n`, 'utf8');
 } catch {}
 
+if (executorName === 'codex' && !(result.outputChars > 0)) {
+  console.error(nativeWindowsUnusable
+    ? '[codex-do] この機体では codex が起動できません(WSL 無し＋ネイティブ版は read-only 固定)。実装の委譲は node tools/cheap-code.mjs --provider deepseek --prompt-file <指示> を使ってください。'
+    : '[codex-do] codex が出力ゼロで終了しました。認証切れ・上限・起動失敗のいずれかです。');
+}
 console.log(`[codex-do] executor=${executorName}${executorName === 'fallback' ? `:${reportedFallbackBackend?.name ?? 'unknown'} (理由: Codex usage limit を検出)` : ''}`);
 process.exit(result?.status ?? 1);
 }

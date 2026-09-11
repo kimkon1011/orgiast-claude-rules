@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { readEnvValue } from './env-kv.mjs';
+import { resolveClaudeExecutableFromDisk } from './claude-exe.mjs';
 
 const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
@@ -70,7 +71,9 @@ if (instruction) {
     } else {
       const started = Date.now();
       let outputChars = 0;
-      const child = spawn('claude', ['-p', prompt, '--model', model], {
+      // Windows の claude.bat は shell 無しで起動できない(cheap-code と同じ実測)。
+      const { executable } = await resolveClaudeExecutableFromDisk(process);
+      const child = spawn(executable, ['-p', prompt, '--model', model], {
         cwd,
         stdio: ['ignore', 'pipe', 'pipe'],
         env: { ...process.env, ANTHROPIC_BASE_URL: 'https://api.z.ai/api/anthropic', ANTHROPIC_AUTH_TOKEN: key },

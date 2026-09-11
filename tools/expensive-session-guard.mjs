@@ -2,14 +2,14 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
+
 
 const MODEL_LIMIT = new Set(['claude-opus-4-7', 'claude-fable-5']);
 const COOLDOWN_MS = 30 * 60 * 1000;
 
 async function main() {
-  let raw = '';
-  process.stdin.setEncoding('utf8');
-  for await (const chunk of process.stdin) raw += chunk;
+  const raw = await readStdinWithTimeout();
   if (!raw) return;
 
   let input;

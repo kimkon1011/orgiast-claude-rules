@@ -3,10 +3,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { latestAssistantText } from './lib/assistant-text.mjs';
 import { readLastLines } from './transcript-tail.mjs';
+import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 
-let stdin = '';
-process.stdin.setEncoding('utf8');
-for await (const chunk of process.stdin) stdin += chunk;
+const stdin = await readStdinWithTimeout();
 try {
   if (!stdin.trim()) process.exit(0);
   const data = JSON.parse(stdin);

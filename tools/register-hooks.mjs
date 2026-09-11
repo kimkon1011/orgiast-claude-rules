@@ -178,6 +178,17 @@ try {
   if (add(settings.hooks.Stop, 'url-format-guard.mjs', { hooks: [{ type: 'command', command: command('url-format-guard.mjs'), timeout: 8 }] })) added += 1;
   // 完了報告にLayer 1/2・e2e等の検証記載がなければ同期警告する。
   if (add(settings.hooks.Stop, 'check-e2e-before-stop.mjs', { hooks: [{ type: 'command', command: command('check-e2e-before-stop.mjs'), timeout: 8 }] })) added += 1;
+  const permanentTimeouts = [
+    ['pretooluse-delegation-warn.mjs', 5], ['model-agent-guard.mjs', 5],
+    ['pretooluse-serial-investigation.mjs', 5], ['current-session.mjs', 5],
+    ['cost-loop.mjs', 5], ['rule-compliance-report.mjs', 10],
+    ['next-actions-notice.mjs', 10], ['plaud-renewal-notice.mjs', 5],
+    ['clear-ack.mjs', 5], ['verify-before-done-detector.ps1', 10],
+  ];
+  for (const groups of Object.values(settings.hooks)) {
+    if (!Array.isArray(groups)) continue;
+    for (const [name, timeout] of permanentTimeouts) added += setTimeoutFor(groups, name, timeout);
+  }
   // 旧PCは hook が `powershell -NoProfile -File ...ps1` で登録され、実行ポリシーで無音死している。
   policyRepaired = repairPowerShellExecutionPolicy(settings.hooks);
   added += policyRepaired;

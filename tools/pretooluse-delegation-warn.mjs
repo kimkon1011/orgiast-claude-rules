@@ -3,10 +3,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { codexHardBlockBypass } from './codex-cooldown.mjs';
+import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 
-let raw = '';
-process.stdin.setEncoding('utf8');
-for await (const chunk of process.stdin) raw += chunk;
+const raw = await readStdinWithTimeout();
 try {
   if (!raw) process.exit(0);
   const j = JSON.parse(raw);

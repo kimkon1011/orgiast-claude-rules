@@ -5,6 +5,7 @@ import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 import { appendLedger } from './dead-fallback-invariant.mjs';
 import { checkSubmissions } from './makimono-publish.mjs';
+import { acquireLock } from './lib/single-instance.mjs';
 
 /**
  * Periodically checks for makimono submissions that are pending review
@@ -72,7 +73,9 @@ export async function runCheck({
 }
 
 if (isEntry(import.meta.url)) {
-  runCheck().catch((error) => {
-    console.error(`[makimono-stale-reminder] Execution failed: ${error.message}`);
-  });
+  const lock = acquireLock('makimono-stale-reminder');
+  if (!lock.acquired) console.error(`[makimono-stale-reminder] already running pid=${lock.ownerPid ?? 'unknown'}`);
+  else runCheck().catch((error) => {
+      console.error(`[makimono-stale-reminder] Execution failed: ${error.message}`);
+    });
 }

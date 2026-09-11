@@ -111,8 +111,25 @@ function formatMemoryLine(sharedMemory) {
   return `memory=共有${sharedMemory.count}件 / MEMORY.md参照=${sharedMemory.indexed ? 'yes' : 'no'}`;
 }
 
-function fitStatusLines({ header, hostLine, repoLine, memoryLine, jobStatus, syncLine, todoLine }) {
-  const fixedLines = [header, hostLine, repoLine, memoryLine, syncLine, todoLine];
+function codexAuthStatus(home) {
+  const tokens = readJson(path.join(home, '.codex', 'auth.json'))?.tokens;
+  const token = tokens && typeof tokens === 'object' && !Array.isArray(tokens)
+    ? tokens.id_token || tokens.access_token : null;
+  if (!token) return { login: false, email: null, plan: null };
+  let email = null;
+  let plan = null;
+  try {
+    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));
+    const payloadEmail = payload?.email || payload?.['https://api.openai.com/profile']?.email;
+    const payloadPlan = payload?.['https://api.openai.com/auth']?.chatgpt_plan_type;
+    email = typeof payloadEmail === 'string' && payloadEmail ? payloadEmail : null;
+    plan = typeof payloadPlan === 'string' && payloadPlan ? payloadPlan : null;
+  } catch {}
+  return { login: true, email, plan };
+}
+
+function fitStatusLines({ header, hostLine, codexLine, repoLine, memoryLine, jobStatus, syncLine, todoLine }) {
+  const fixedLines = [header, hostLine, codexLine, repoLine, memoryLine, syncLine, todoLine];
   const fixedLength = fixedLines.join('\n').length + 1;
   const jobBudget = Math.max(0, STATUS_TEXT_LIMIT - fixedLength);
   let jobLine;
@@ -134,11 +151,12 @@ function fitStatusLines({ header, hostLine, repoLine, memoryLine, jobStatus, syn
     jobLine = `${prefix}${included.join(' / ')}${omitted > 0 ? `${included.length ? ' / ' : ''}…(他${omitted}件を省略)` : ''}`;
   }
   if (jobLine.length > jobBudget) jobLine = jobLine.slice(0, jobBudget);
-  return [header, hostLine, repoLine, memoryLine, jobLine, syncLine, todoLine];
+  return [header, hostLine, codexLine, repoLine, memoryLine, jobLine, syncLine, todoLine];
 }
 
 export function collectStatus({ home, repo, label, hostname, run = runSync, platform = process.platform }) {
   const account = readJson(path.join(home, '.claude.json'))?.oauthAccount?.emailAddress || '未設定';
+  const codex = codexAuthStatus(home);
   const git = repoInfo(repo, run);
   let syncLast = 'なし';
   try {
@@ -154,6 +172,8 @@ export function collectStatus({ home, repo, label, hostname, run = runSync, plat
   const lines = fitStatusLines({
     header: `📡 **[${label}]** status`,
     hostLine: `hostname=${hostname} / OS=${platform} ${os.release()} / account=${account}`,
+    codexLine: !codex.login ? 'codex=未ログイン' : codex.email
+      ? `codex=${codex.email} / plan=${codex.plan ?? '不明'}` : 'codex=ログイン済(詳細不明)',
     repoLine: `repo=${git.branch}, origin/mainより${git.behind}コミット遅れ`,
     memoryLine: formatMemoryLine(sharedMemory),
     jobStatus,
@@ -161,7 +181,7 @@ export function collectStatus({ home, repo, label, hostname, run = runSync, plat
     todoLine: `残TODO=${todoCount} / prompt opt-in=${accepts.includes('prompt') ? 'yes' : 'no'}`,
   });
   const text = lines.join('\n');
-  return { text: redactSecrets(text), data: { label, hostname, platform, account, git, syncLast, failures, todoCount, promptOptin: accepts.includes('prompt'), sharedMemory, checkedAt: new Date().toISOString() } };
+  return { text: redactSecrets(text), data: { label, hostname, platform, account, codex, git, syncLast, failures, todoCount, promptOptin: accepts.includes('prompt'), sharedMemory, checkedAt: new Date().toISOString() } };
 }
 
 export function runPrompt({ claudeExe, body, cwd, timeoutSeconds = 1800, spawnImpl = spawn }) {

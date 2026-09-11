@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { parseHandoff } from './auto-session.mjs';
-import { applyAutoHeal, collectFindings, parseRateLimitsFromText, readCodexUsedPercent, upsertFixTasks } from './delegation-health-check.mjs';
+import { applyAutoHeal, collectFindings, emptyOutputReason, parseRateLimitsFromText, readCodexUsedPercent, upsertFixTasks } from './delegation-health-check.mjs';
 
 const NOW = new Date('2026-09-09T12:00:00.000Z');
 const homes = [];
@@ -58,6 +58,32 @@ test('claude-fallback の件数と reason 上位を evidence に含める', () =
   const finding = collectFindings({ home: dir, now: NOW, codexUsedPercent: null })[0];
   assert.equal(finding.id, 'unattended_claude_fallback');
   assert.deepEqual(finding.evidence, ['3件', 'timeout(2件)', 'auth(1件)']);
+});
+
+test('timeout で打ち切られた出力ゼロは codex_empty_output に数えない', () => {
+  const dir = home();
+  for (const details of [{ secs: 404.8, timedOut: true }, { secs: 600 }]) {
+    write(dir, 'executor-usage.jsonl', row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, ...details }));
+    assert.equal(collectFindings({ home: dir, now: NOW, codexUsedPercent: null })[0].id, 'healthy');
+  }
+});
+
+test('打ち切りでない出力ゼロは原因付きで起票する', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, secs: 5, timedOut: false, status: 1 }));
+  const finding = collectFindings({ home: dir, now: NOW, codexUsedPercent: null })[0];
+  assert.equal(finding.id, 'codex_empty_output');
+  assert.deepEqual(finding.evidence, ['1件', 'exit_1(1件)']);
+});
+
+test('emptyOutputReason は timeout・終了コード・原因不明を分類する', () => {
+  assert.equal(emptyOutputReason({ timedOut: true }), 'timeout');
+  assert.equal(emptyOutputReason({ secs: 600 }), 'timeout');
+  assert.equal(emptyOutputReason({ status: 1 }), 'exit_1');
+  assert.equal(emptyOutputReason({ secs: 0 }), 'no_output');
+  assert.equal(emptyOutputReason({ secs: 299 }), 'no_output');
+  assert.equal(emptyOutputReason({ secs: 300 }), 'timeout');
+  assert.equal(emptyOutputReason({ secs: 600, timedOut: false, status: 1 }), 'exit_1');
 });
 
 test('正常時は healthy のみで next-session を変更しない', () => {

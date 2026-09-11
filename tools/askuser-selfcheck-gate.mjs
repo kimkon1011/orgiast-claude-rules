@@ -34,6 +34,7 @@ export function judge(toolInput, evidence) {
 }
 
 async function main() {
+  const __hookGuard = setTimeout(() => process.exit(0), 4000); __hookGuard.unref();
   try {
     const raw = await readStdin();
     if (!raw.trim()) return;

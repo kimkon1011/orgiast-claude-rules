@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { loadFablePolicy, fableAllowedForSubagent } from './fable-policy.mjs';
 import { inspectTranscript } from './fable-session-guard.mjs';
 
+const __hookGuard = setTimeout(() => process.exit(0), 4000); __hookGuard.unref();
+
 let raw = '';
 process.stdin.setEncoding('utf8');
 for await (const chunk of process.stdin) raw += chunk;

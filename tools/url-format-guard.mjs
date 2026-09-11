@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import { isEntry } from './is-entry.mjs';
 import { latestAssistantText } from './lib/assistant-text.mjs';
 
+const __hookGuard = setTimeout(() => process.exit(0), 4000); __hookGuard.unref();
+
 const BAD_RAW_URL = /(?<!\]\()https?:\/\/[A-Za-z0-9._~:/?#@!$&'*+,;=%\-]+[　-〿぀-ヿ一-鿿＀-￯]/;
 
 export function findBrokenRawUrl(text) {

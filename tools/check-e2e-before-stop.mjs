@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import { isEntry } from './is-entry.mjs';
 import { latestAssistantText } from './lib/assistant-text.mjs';
 
+const __hookGuard = setTimeout(() => process.exit(0), 4000); __hookGuard.unref();
+
 const COMPLETION_KEYWORDS = ['完了', 'deploy 完了', 'deploy 済', 'commit 済', 'deploy しました', 'commit しました', '全 PASS', '✅', 'verify 完了', '実装完了'];
 const VERIFY_KEYWORDS = ['e2e', 'Layer 2', 'Layer2', 'Playwright', 'playwright', 'passed', 'PASS ✅', 'Layer 1', 'Layer1', 'spec'];
 

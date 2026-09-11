@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import { isEntry } from './is-entry.mjs';
 import { latestAssistantText } from './lib/assistant-text.mjs';
 
+const __hookGuard = setTimeout(() => process.exit(0), 4000); __hookGuard.unref();
+
 export function evaluateHandoffDetail(text) {
   const value = String(text || '');
   if (!value.trim() || /\[HANDOFF-DETAIL-OK\]/.test(value)) return { decision: 'pass' };

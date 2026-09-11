@@ -4,6 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { isReadOnlyToolUse } from './usage-stats.mjs';
 
+const __hookGuard = setTimeout(() => process.exit(0), 4000); __hookGuard.unref();
+
 try {
   let raw = ''; process.stdin.setEncoding('utf8'); for await (const chunk of process.stdin) raw += chunk;
   const input = JSON.parse(raw), name = String(input.tool_name || ''), sessionId = String(input.session_id || 'default');

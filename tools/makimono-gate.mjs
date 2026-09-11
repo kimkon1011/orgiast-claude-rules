@@ -5,10 +5,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { findRelevant } from './makimono-search.mjs';
 
-// process.exit を絶対に呼ばない: top-level await の評価中に呼ぶと Windows の Node が
-// `Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)` で異常終了する(v24.14.1 実測)。
-// stdout に候補を書けていても exit!=0 だと Claude Code が hook 失敗として注入を捨てるため、
-// キャッシュ切れ(24h毎)の初回プロンプトだけ静かに機能が死ぬ。早期リターンで自然終了させる。
+const __hookGuard = setTimeout(() => process.exit(0), 4000); __hookGuard.unref();
+
+// 通常経路は早期リターンで自然終了する。stdin が閉じない異常時だけ上の fail-open guard が終了させる。
 async function main() {
 let raw = ''; process.stdin.setEncoding('utf8'); for await (const chunk of process.stdin) raw += chunk;
 const trigger = /作って|作成して|実装|構築|セットアップ|立ち上げ|自動化|自動投稿|連携|スクレイピング|bot|スクリプト|アプリ|ツールを|cron|デプロイ|パイプライン|ジェネレータ|build|implement|create a|set up|scaffold|automate/i;

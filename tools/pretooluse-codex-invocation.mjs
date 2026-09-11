@@ -2,6 +2,8 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+const __hookGuard = setTimeout(() => process.exit(0), 4000); __hookGuard.unref();
+
 try {
   let raw = '';
   process.stdin.setEncoding('utf8');

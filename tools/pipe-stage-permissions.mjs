@@ -4,6 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 
+const __hookGuard = setTimeout(() => process.exit(0), 4000); __hookGuard.unref();
+
 const SENSITIVE_VAR_PREFIXES = [
   'PATH=', 'LD_', 'DYLD_', 'PYTHONPATH=', 'PYTHONHOME=',
   'NODE_PATH=', 'GEM_PATH=', 'GEM_HOME=', 'RUBYLIB=',

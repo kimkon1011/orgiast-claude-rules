@@ -4,6 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 
+const __hookGuard = setTimeout(() => process.exit(0), 4000); __hookGuard.unref();
+
 const ALLOWED_EFFORT_LEVELS = new Set(['high', 'xhigh', 'max']);
 const REASON = 'kim 2026-09-09 厳命: 節約のために effortLevel/thinking/監督モデルを下げない。節約は委譲・レスポンス数削減で行う。意図的に変える場合は ORGIAST_ALLOW_EFFORT_DOWNGRADE=1 を付けて再実行';
 

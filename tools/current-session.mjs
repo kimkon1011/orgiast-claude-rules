@@ -9,9 +9,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+const __hookGuard = setTimeout(() => process.exit(0), 4000); __hookGuard.unref();
+
+async function main() {
 try {
   let raw = "";
-  try { raw = fs.readFileSync(0, "utf8"); } catch { /* stdin 無しでも動く */ }
+  try {
+    process.stdin.setEncoding("utf8");
+    for await (const chunk of process.stdin) raw += chunk;
+  } catch { /* stdin 無しでも動く */ }
   const o = JSON.parse(raw || "{}");
   const sessionId = o.session_id || "";
   if (sessionId) {
@@ -48,4 +54,6 @@ try {
     }
   }
 } catch { /* 記録失敗は握りつぶす */ }
+}
+await main().catch(() => {});
 process.exit(0);

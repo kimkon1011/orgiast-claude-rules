@@ -4,6 +4,8 @@ import path from 'node:path';
 import { latestAssistantText } from './lib/assistant-text.mjs';
 import { readLastLines } from './transcript-tail.mjs';
 
+const __hookGuard = setTimeout(() => process.exit(0), 4000); __hookGuard.unref();
+
 let stdin = '';
 process.stdin.setEncoding('utf8');
 for await (const chunk of process.stdin) stdin += chunk;

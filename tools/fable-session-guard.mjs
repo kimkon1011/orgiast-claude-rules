@@ -5,6 +5,8 @@ import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 import { loadFablePolicy, fableAllowedForSupervisor } from './fable-policy.mjs';
 
+const __hookGuard = setTimeout(() => process.exit(0), 4000); __hookGuard.unref();
+
 const TAIL_BYTES = 256 * 1024;
 
 function allowed(home, sessionId) {

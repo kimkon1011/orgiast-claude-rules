@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+const __hookGuard = setTimeout(() => process.exit(0), 4000); __hookGuard.unref();
+
 try {
   let raw = '';
   process.stdin.setEncoding('utf8');

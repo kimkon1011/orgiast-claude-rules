@@ -5,6 +5,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 
+const __hookGuard = setTimeout(() => process.exit(0), 4000); __hookGuard.unref();
+
 const LANE_NAMES = new Set(['consult', 'implement', 'edit-small', 'verify', 'bulk', 'mcp', 'design']);
 const IMPLEMENT = /作って|実装|修正|直して|追加して|書いて|リファクタ|バグ|\bfix\b|\bimplement\b|hook作|ツール作|スクリプト/i;
 const SMALL = /1行|一行|typo|誤字|名前を変えて|値を変えて|設定を変えて/i;

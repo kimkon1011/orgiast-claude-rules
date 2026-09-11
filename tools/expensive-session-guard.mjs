@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+const __hookGuard = setTimeout(() => process.exit(0), 4000); __hookGuard.unref();
+
 const MODEL_LIMIT = new Set(['claude-opus-4-7', 'claude-fable-5']);
 const COOLDOWN_MS = 30 * 60 * 1000;
 

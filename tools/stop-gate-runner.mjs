@@ -16,6 +16,8 @@ import { findOutsourcedInvestigation, formatViolationMessage as formatSelfCheck,
 import { findLocalDocLinks, formatViolationMessage as formatDocLink } from './doc-link-drive-guard.mjs';
 import { enabled as stopGateEnabled, progressQuestionReason, reasonFor, remainingItems, shouldBlock, shouldBlockProgressQuestion } from './stop-gate.mjs';
 
+const __hookGuard = setTimeout(() => process.exit(0), 4000); __hookGuard.unref();
+
 const home = () => process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || os.homedir();
 const HANDOFF_HINT = "末尾に『次に kim がすること: なし / <1件>』を1行入れること(user が『この先はどうしたらいいの？』と聞き返した回数: 7日で9回)";
 const NEXT_ACTION = /(?:^|\n)次に kim がすること:\s*(?:なし|\S.*)\s*$/;

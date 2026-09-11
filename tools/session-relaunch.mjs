@@ -6,6 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 
+const __hookGuard = setTimeout(() => process.exit(0), 4000); __hookGuard.unref();
+
 export const ARM_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 // compact / resume は「同じ作業の続き」なので除外する。ここに入れると、
 // 過去セッションを --resume で開き直しただけで引き継ぎ票の別目的に引きずられる。

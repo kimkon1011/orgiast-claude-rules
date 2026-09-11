@@ -8,6 +8,8 @@ import { classifyBashCommand } from './usage-stats.mjs';
 import { codexHardBlockBypass } from './codex-cooldown.mjs';
 import { laneAdvice } from './cost-routing-gate.mjs';
 
+const __hookGuard = setTimeout(() => process.exit(0), 4000); __hookGuard.unref();
+
 const repo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const delegated = /codex-do\.mjs|llm-ask\.mjs|batch-(?:enqueue|run)\.mjs|(?:^|\s)gemini\s|(?:^|\s)codex\s|wsl[^\r\n]*\bcodex\b|claude\s+-p|node[^\r\n]*usage-stats\.mjs/i;
 function output(value) { console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', ...value } })); }

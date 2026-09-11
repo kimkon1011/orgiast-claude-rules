@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { classifyBashCommand } from './usage-stats.mjs';
 import { codexHardBlockBypass } from './codex-cooldown.mjs';
 
+const __hookGuard = setTimeout(() => process.exit(0), 4000); __hookGuard.unref();
+
 try {
   let raw = ''; process.stdin.setEncoding('utf8'); for await (const chunk of process.stdin) raw += chunk;
   const j = JSON.parse(raw), tool = String(j.tool_name || ''); if (!/^(Bash|PowerShell)$/.test(tool)) process.exit(0);

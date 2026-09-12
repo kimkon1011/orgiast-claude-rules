@@ -317,6 +317,17 @@ export function markTodoDone(md, todoText, note) {
   return source.replace(lineRe, (_whole, prefix, suffix) => `${prefix}~~${firstLine}~~ → ✅ ${note}${suffix}`);
 }
 
+// バッチ開始時に固定した selected は、同じバッチの先行する子が next-session.md へ
+// ✅ を書き戻しても更新されない。起動直前に読み直さないと、完了済み TODO に
+// 子セッションを1本丸ごと消費する（2026-09-13 実測: PR #392 で解決済みの #35 を再実行）。
+export function isTodoAlreadyDone(md, todoText) {
+  const firstLine = String(todoText).split(/\r?\n/, 1)[0];
+  if (!firstLine.trim()) return false;
+  const escaped = firstLine.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const lineRe = new RegExp(`^\\s*\\d+[.)、]\\s+~~${escaped}~~`, 'm');
+  return lineRe.test(String(md));
+}
+
 export function writeTodoDone(nextFile, todoText, note, io = {}) {
   const read = io.read ?? fs.readFileSync;
   const write = io.write ?? fs.writeFileSync;
@@ -947,6 +958,16 @@ export async function main(argv = process.argv.slice(2), io = {}) {
     for (const todo of selected) {
       const timing = beforeChild();
       if (!timing.run) break;
+      // バッチ中に先行の子が完了させた TODO は起動しない（子セッション1本の無駄）。
+      let currentHandoff = '';
+      try { currentHandoff = fs.readFileSync(nextFile, 'utf8'); } catch {}
+      if (isTodoAlreadyDone(currentHandoff, todo)) {
+        completedChildren += 1;
+        const now = new Date().toISOString();
+        results.push({ todo, lane: laneOf(todo), status: 'skipped-already-done', startedAt: now, endedAt: now });
+        console.log(`auto-session: 完了済みのため起動しません（先行セッションが処理済み）: ${String(todo).slice(0, 80)}`);
+        continue;
+      }
       try {
       const repoCwd = pickCwd(todo, fs.existsSync, config.repoByKeyword);
       const historyCwd = fs.existsSync(detectedHistoryCwd) ? detectedHistoryCwd : repoCwd;

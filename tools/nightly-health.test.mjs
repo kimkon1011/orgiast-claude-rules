@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { runNightlyHealth, defaultRunTests, formatDate, extractFailCount, isFailureLine, extractHookToolPaths, nativePath, getPlatform } from './nightly-health.mjs';
+import { runNightlyHealth, defaultRunTests, formatDate, extractFailCount, isFailureLine, extractHookToolPaths, nativePath, getPlatform, evaluateScheduledTaskHealth } from './nightly-health.mjs';
 
 function createTempHome() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'nightly-health-test-'));
@@ -52,6 +52,34 @@ function writeSettings(home, commands) {
 }
 
 function healthyTests() { return { status: 0, stdout: 'ok', stderr: '' }; }
+
+test('scheduled task の起動拒否・時間超過・ログ未生成を判定する', () => {
+  const now = new Date('2026-09-10T12:00:00.000Z');
+  const expectation = { task: 'OrgiastNightlyBatch', maxRunHours: 5, label: '夜間バッチ' };
+  const info = (overrides = {}) => ({
+    taskName: expectation.task,
+    state: 'Ready',
+    lastRunTime: '2026-09-10T11:00:00.000Z',
+    nextRunTime: null,
+    lastTaskResult: 0,
+    neverRun: false,
+    ...overrides
+  });
+  const types = (taskInfo, options) => evaluateScheduledTaskHealth(expectation, taskInfo, { now, ...options }).map((item) => item.type);
+
+  assert.deepEqual(types(info({ lastTaskResult: 2147946720 })), ['task_start_refused']);
+  assert.deepEqual(types(info({ lastTaskResult: 2147946720, lastRunTime: '2026-09-08T23:00:00.000Z' }), { logMtimeMs: now.getTime() }), []);
+  assert.deepEqual(types(info({ state: 'Running', lastRunTime: '2026-09-10T06:00:00.000Z' }), { logMtimeMs: now.getTime() }), ['task_overrun']);
+  assert.deepEqual(types(info({ state: 'Running', lastRunTime: '2026-09-10T10:00:00.000Z' }), { logMtimeMs: now.getTime() }), []);
+  assert.deepEqual(types(info({ lastRunTime: '2026-09-10T09:00:00.000Z' }), { logMtimeMs: new Date('2026-09-10T08:00:00.000Z').getTime() }), ['task_started_no_log']);
+  assert.deepEqual(types(info({ lastRunTime: '2026-09-10T09:00:00.000Z' }), { logMtimeMs: new Date('2026-09-10T11:50:00.000Z').getTime() }), []);
+  assert.deepEqual(types(info({ lastRunTime: '2026-09-10T09:00:00.000Z' })), ['task_started_no_log']);
+  assert.deepEqual(types(info({ lastRunTime: '2026-09-10T11:30:00.000Z' })), []);
+  assert.deepEqual(evaluateScheduledTaskHealth({ task: expectation.task, label: expectation.label }, info(), { now }), []);
+  assert.deepEqual(evaluateScheduledTaskHealth(expectation, null, { now }), []);
+  assert.deepEqual(types(info({ lastRunTime: 'not-a-date' })), []);
+  assert.deepEqual(types(info({ neverRun: true, lastRunTime: '1999-11-30T00:00:00.000Z' })), []);
+});
 
 test('異常ゼロなら notify が1度も呼ばれず ok:異常なし になる', async () => {
   const home = createTempHome();

@@ -10,10 +10,40 @@ import { getScheduledTaskInfo } from './lib/scheduled-task.mjs';
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_NOTIFICATION_ITEMS = 12;
 const INITIAL_TAIL_LINES = 200;
+const TASK_START_REFUSED = 2147946720; // 0x800710E0
 
 export function formatDate(date) {
   const pad = (n) => String(n).padStart(2, '0');
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+export function evaluateScheduledTaskHealth(expectation, info, { now = new Date(), logMtimeMs = null } = {}) {
+  if (!Number.isFinite(expectation?.maxRunHours) || !info) return [];
+
+  const lastRunTime = info.lastRunTime;
+  // 一度も実行されていないタスクは lastRunTime が 1999 年になる。これを「起動したのにログが無い」
+  // と誤検知しないため、neverRun は無条件で除外する（新規PCの初回ヘルスで鳴らないように）。
+  if (info.neverRun) return [];
+  const lastRunMs = Date.parse(lastRunTime);
+  if (!Number.isFinite(lastRunMs)) return [];
+
+  const elapsedMs = now - lastRunMs;
+  const anomalies = [];
+  const anomaly = (type, message) => ({ type, label: expectation.label, message, expectation });
+
+  if (info.lastTaskResult === TASK_START_REFUSED && elapsedMs <= 36 * 3_600_000) {
+    anomalies.push(anomaly('task_start_refused', `タスクの起動が拒否されました（0x800710E0 / 既に実行中のインスタンスがあった）。この回は1ステップも実行されていません（最終起動: ${lastRunTime}）`));
+  }
+  if (info.state === 'Running' && elapsedMs / 3_600_000 > expectation.maxRunHours) {
+    anomalies.push(anomaly('task_overrun', `実行が上限 ${expectation.maxRunHours} 時間を超えて継続中（開始: ${lastRunTime}）。前回インスタンスの長期生存は次回起動の拒否（0x800710E0）につながります`));
+  }
+  if (elapsedMs > 3_600_000 && (logMtimeMs === null || logMtimeMs < lastRunMs)) {
+    const message = logMtimeMs === null
+      ? `タスクは ${lastRunTime} に起動しましたが、対応するログファイルが 1 つも作られていません（起動直後に死んだ可能性）`
+      : `タスクは ${lastRunTime} に起動しましたが、ログはそれより前（${new Date(logMtimeMs).toISOString()}）から 1 行も更新されていません（起動直後に死んだ可能性）`;
+    anomalies.push(anomaly('task_started_no_log', message));
+  }
+  return anomalies;
 }
 
 export async function defaultRunTests(spawnImpl) {
@@ -285,9 +315,11 @@ export async function runNightlyHealth({
     if (!logFile) {
       const log = exp.log || exp.pattern;
       if (exp.ignore) continue;
+      let taskInfo = null;
       if (exp.task) {
-        const info = await scheduledTaskInfo(exp.task).catch(() => null);
-        if (info?.neverRun && info?.nextRunTime && new Date(info.nextRunTime) > now) continue;
+        taskInfo = await scheduledTaskInfo(exp.task).catch(() => null);
+        anomalies.push(...evaluateScheduledTaskHealth(exp, taskInfo, { now, logMtimeMs: null }));
+        if (taskInfo?.neverRun && taskInfo?.nextRunTime && new Date(taskInfo.nextRunTime) > now) continue;
       }
       anomalies.push({ type: 'missing', label: exp.label, log, message: 'ログファイルが存在しません', expectation: exp });
       continue;
@@ -296,6 +328,10 @@ export async function runNightlyHealth({
     const stat = fs.statSync(logPath);
     if ((now - stat.mtime) / 3_600_000 > exp.maxAgeHours) {
       anomalies.push({ type: 'stale', label: exp.label, log: logFile, message: `ログ更新が滞っています（最終更新: ${formatDate(stat.mtime)}、期待: ${exp.maxAgeHours}時間以内）`, expectation: exp });
+    }
+    if (exp.task) {
+      const taskInfo = await scheduledTaskInfo(exp.task).catch(() => null);
+      anomalies.push(...evaluateScheduledTaskHealth(exp, taskInfo, { now, logMtimeMs: stat.mtimeMs }));
     }
     if (exp.scan === 'keywords') scanTargets.push({ logFile, label: exp.label });
   }

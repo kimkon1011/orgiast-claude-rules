@@ -59,7 +59,7 @@ test('scheduled task の起動拒否・時間超過・ログ未生成を判定�
   const info = (overrides = {}) => ({
     taskName: expectation.task,
     state: 'Ready',
-    lastRunTime: '2026-09-10T11:00:00.000Z',
+    lastRunTime: '2026-09-10T09:00:00.000Z',
     nextRunTime: null,
     lastTaskResult: 0,
     neverRun: false,
@@ -67,13 +67,17 @@ test('scheduled task の起動拒否・時間超過・ログ未生成を判定�
   });
   const types = (taskInfo, options) => evaluateScheduledTaskHealth(expectation, taskInfo, { now, ...options }).map((item) => item.type);
 
+  // 起動拒否 + ログが1行も動いていない（2026-09-10 の実状態）→ 原因付きで鳴る
   assert.deepEqual(types(info({ lastTaskResult: 2147946720 })), ['task_start_refused']);
-  assert.deepEqual(types(info({ lastTaskResult: 2147946720, lastRunTime: '2026-09-08T23:00:00.000Z' }), { logMtimeMs: now.getTime() }), []);
+  // 起動拒否の記録が残っていても、当日のログが動いていれば黙る（2026-09-13 の実状態＝誤検知させない）
+  assert.deepEqual(types(info({ lastTaskResult: 2147946720 }), { logMtimeMs: now.getTime() }), []);
+  // 拒否が36時間より前なら原因の断定はやめ、症状だけを報告する
+  assert.deepEqual(types(info({ lastTaskResult: 2147946720, lastRunTime: '2026-09-08T23:00:00.000Z' })), ['task_started_no_log']);
   assert.deepEqual(types(info({ state: 'Running', lastRunTime: '2026-09-10T06:00:00.000Z' }), { logMtimeMs: now.getTime() }), ['task_overrun']);
   assert.deepEqual(types(info({ state: 'Running', lastRunTime: '2026-09-10T10:00:00.000Z' }), { logMtimeMs: now.getTime() }), []);
-  assert.deepEqual(types(info({ lastRunTime: '2026-09-10T09:00:00.000Z' }), { logMtimeMs: new Date('2026-09-10T08:00:00.000Z').getTime() }), ['task_started_no_log']);
-  assert.deepEqual(types(info({ lastRunTime: '2026-09-10T09:00:00.000Z' }), { logMtimeMs: new Date('2026-09-10T11:50:00.000Z').getTime() }), []);
-  assert.deepEqual(types(info({ lastRunTime: '2026-09-10T09:00:00.000Z' })), ['task_started_no_log']);
+  assert.deepEqual(types(info(), { logMtimeMs: new Date('2026-09-10T08:00:00.000Z').getTime() }), ['task_started_no_log']);
+  assert.deepEqual(types(info(), { logMtimeMs: new Date('2026-09-10T11:50:00.000Z').getTime() }), []);
+  assert.deepEqual(types(info()), ['task_started_no_log']);
   assert.deepEqual(types(info({ lastRunTime: '2026-09-10T11:30:00.000Z' })), []);
   assert.deepEqual(evaluateScheduledTaskHealth({ task: expectation.task, label: expectation.label }, info(), { now }), []);
   assert.deepEqual(evaluateScheduledTaskHealth(expectation, null, { now }), []);

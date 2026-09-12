@@ -37,6 +37,15 @@ test('残高シグナル3種の境界とauto-local効果は固定許可リスト
   assert.deepEqual(new Set(decision.actions.filter((x) => x.mode === 'auto-local').map((x) => x.effect)), new Set(['writeRoutingOverride', 'writeGatewayOverride']));
 });
 
+test('Genspark前払いクレジットの残り少だけを残高違反にする', () => {
+  const low = evaluateBalanceSignals([{ provider: 'genspark', status: 'low', credits: 1200, balanceUsd: null, autoTopUp: 'unknown' }]);
+  assert.equal(low.length, 1);
+  assert.equal(low[0].kind, 'balance_low');
+  assert.equal(low[0].provider, 'genspark');
+  assert.equal(low[0].actualValue, 1200);
+  assert.deepEqual(evaluateBalanceSignals([{ provider: 'genspark', status: 'ok', credits: 5000, balanceUsd: null, autoTopUp: 'unknown' }]), []);
+});
+
 test('spend_anomalyは24h降格、gateway overrideは実在確認済みモデルを書く', () => {
   const home = createTempDir(); const claudeDir = path.join(home, '.claude'); const now = new Date('2026-09-09T00:00:00Z');
   const demote = writeRoutingOverride({ claudeDir, provider: 'deepseek', now, durationHours: 24 });

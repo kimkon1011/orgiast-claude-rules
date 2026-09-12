@@ -520,6 +520,11 @@ try {
     }
     $before = @((Get-Content -LiteralPath $pending -Encoding UTF8) | Where-Object { $_.Trim() }).Count
     & $node.Source $runner
+    if ($LASTEXITCODE -eq 3) {
+        $summary['batch'] = 'skip:既に実行中(ロック競合)'
+        Write-NightlyLog 'batch-run' 'skip:既に実行中(ロック競合)'
+        Finish-Nightly 0
+    }
     if ($LASTEXITCODE -ne 0) { $summary['batch'] = "error:終了コード$LASTEXITCODE"; Write-NightlyLog 'batch-run' ("error:終了コード" + $LASTEXITCODE); Finish-Nightly 1 }
     $after = if (Test-Path -LiteralPath $pending -PathType Leaf) { @((Get-Content -LiteralPath $pending -Encoding UTF8) | Where-Object { $_.Trim() }).Count } else { 0 }
     $processed = [Math]::Max(0, $before - $after)

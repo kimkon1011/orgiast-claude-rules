@@ -31,17 +31,22 @@ export function evaluateScheduledTaskHealth(expectation, info, { now = new Date(
   const anomalies = [];
   const anomaly = (type, message) => ({ type, label: expectation.label, message, expectation });
 
-  if (info.lastTaskResult === TASK_START_REFUSED && elapsedMs <= 36 * 3_600_000) {
-    anomalies.push(anomaly('task_start_refused', `タスクの起動が拒否されました（0x800710E0 / 既に実行中のインスタンスがあった）。この回は1ステップも実行されていません（最終起動: ${lastRunTime}）`));
-  }
   if (info.state === 'Running' && elapsedMs / 3_600_000 > expectation.maxRunHours) {
     anomalies.push(anomaly('task_overrun', `実行が上限 ${expectation.maxRunHours} 時間を超えて継続中（開始: ${lastRunTime}）。前回インスタンスの長期生存は次回起動の拒否（0x800710E0）につながります`));
   }
-  if (elapsedMs > 3_600_000 && (logMtimeMs === null || logMtimeMs < lastRunMs)) {
-    const message = logMtimeMs === null
-      ? `タスクは ${lastRunTime} に起動しましたが、対応するログファイルが 1 つも作られていません（起動直後に死んだ可能性）`
-      : `タスクは ${lastRunTime} に起動しましたが、ログはそれより前（${new Date(logMtimeMs).toISOString()}）から 1 行も更新されていません（起動直後に死んだ可能性）`;
-    anomalies.push(anomaly('task_started_no_log', message));
+  // 「起動したのにログが1行も動いていない」ときだけ鳴らす。0x800710E0 は
+  // 前回インスタンスが生存していた証拠なので原因として併記するが、**ログが動いている回は黙る**
+  // （実測 2026-09-13: 起動拒否の記録が残っていても当日のログは正常に伸びていた＝拒否だけでは異常と言えない）。
+  const lostRun = elapsedMs > 3_600_000 && (logMtimeMs === null || logMtimeMs < lastRunMs);
+  if (lostRun) {
+    const where = logMtimeMs === null
+      ? '対応するログファイルが 1 つも作られていません'
+      : `ログはそれより前（${new Date(logMtimeMs).toISOString()}）から 1 行も更新されていません`;
+    if (info.lastTaskResult === TASK_START_REFUSED && elapsedMs <= 36 * 3_600_000) {
+      anomalies.push(anomaly('task_start_refused', `タスクは ${lastRunTime} に起動を試みましたが拒否され（0x800710E0 / 既に実行中のインスタンスがあった）、${where}（起動直後に死んだ）`));
+    } else {
+      anomalies.push(anomaly('task_started_no_log', `タスクは ${lastRunTime} に起動しましたが、${where}（起動直後に死んだ可能性）`));
+    }
   }
   return anomalies;
 }

@@ -468,6 +468,14 @@ async function provisionKeys(now, options = {}) {
   }
   let secret = process.env.ORGIAST_KEYSERVE_SECRET || '';
   if (!secret) secret = readEnvValue(path.join(home, '.claude', 'keyserve.env'), 'ORGIAST_KEYSERVE_SECRET');
+  const enrollPath = path.join(home, '.claude', 'enroll.env');
+  const enrollToken = !secret ? readEnvValue(enrollPath, 'ORGIAST_ENROLL_TOKEN') : '';
+  if (enrollToken) secret = enrollToken;
+  let enrollHttpStatus = null;
+  const saveEnrollResult = (result) => {
+    if (!enrollToken) return;
+    try { fs.writeFileSync(path.join(home, '.claude', '.enroll-result.json'), JSON.stringify({ authVia: 'enroll', ...result }), { mode: 0o600 }); } catch {}
+  };
   if (!secret) {
     secret = readEnvValue(path.join(home, '.claude', 'cost-reporter.env'), 'DISCORD_COST_WEBHOOK');
     if (secret) log('legacy secret を使用中（keyserve.env 未受領）');
@@ -481,18 +489,26 @@ async function provisionKeys(now, options = {}) {
     const auth = crypto.createHmac('sha256', secret).update(ts).digest('hex');
     const response = await fetch(keyserveUrl, {
       method: 'POST',
-      headers: { 'x-orgiast-ts': ts, 'x-orgiast-auth': auth },
+      headers: { 'x-orgiast-ts': ts, 'x-orgiast-auth': auth, ...(enrollToken ? { 'x-orgiast-enroll': enrollToken } : {}) },
       signal: AbortSignal.timeout(15000),
     });
+    enrollHttpStatus = response.status;
     if (!response.ok) {
       const error = new Error(`HTTP ${response.status}`);
       error.status = response.status;
+      if (enrollToken) {
+        // The token is opaque. Only the server can diagnose expiry.
+        const detail = await response.json().catch(() => null);
+        const code = detail?.code ?? detail?.error?.code ?? detail?.error?.message ?? detail?.error ?? detail?.message ?? '';
+        error.enrollKind = /expired|expiry|期限切れ/i.test(String(code)) ? 'expired' : 'http';
+      }
       throw error;
     }
     const payload = await response.json();
     if (!payload || typeof payload.files !== 'object' || payload.files === null || Array.isArray(payload.files)) throw new Error('invalid response');
     const provisioned = [];
     const refreshed = [];
+    let enrollWriteFailed = false;
     for (const [name, contents] of Object.entries(payload.files)) {
       if (!/^[A-Za-z0-9._-]+$/.test(name) || name.includes('..') || typeof contents !== 'string') continue;
       try {
@@ -512,16 +528,23 @@ async function provisionKeys(now, options = {}) {
         fs.writeFileSync(destination, cleanedContents, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
         provisioned.push(name);
         log(`provisioned: ${name}`);
-      } catch (e) { log(`key write failed (${name}): ${e.message}`); }
+      } catch (e) { enrollWriteFailed = true; log(`key write failed (${name}): ${e.message}`); }
     }
     const missing = missingDeclaredKeys(payload.files, (name) => fs.existsSync(path.join(home, '.claude', name)));
     if (missing.length) console.error(`[onboarding-sync] 未取得の鍵: ${missing.join(', ')}`);
     else saveKeysState(now);
     repairEnvBom({ home });
+    const primaryWritten = [...provisioned, ...refreshed].includes('keyserve.env')
+      && Boolean(readEnvValue(path.join(home, '.claude', 'keyserve.env'), 'ORGIAST_KEYSERVE_SECRET'));
+    if (primaryWritten && !missing.length && !enrollWriteFailed) {
+      try { fs.unlinkSync(enrollPath); } catch {}
+    }
+    saveEnrollResult({ status: response.status, kind: primaryWritten && !missing.length && !enrollWriteFailed ? 'ok' : 'write' });
     if (!options.quiet && provisioned.length) console.log(`[onboarding-sync] provisioned: ${provisioned.join(', ')}`);
     if (!options.quiet && refreshed.length) console.log(`[onboarding-sync] refreshed: ${refreshed.join(', ')}`);
   } catch (e) {
-    log(`key provisioning failed: ${e.message}`);
+    saveEnrollResult({ status: e.status ?? enrollHttpStatus, kind: e.enrollKind ?? (e instanceof SyntaxError || e.message === 'invalid response' ? 'invalid-response' : 'network') });
+    log(`key provisioning failed: ${enrollToken ? 'enroll request failed (see .enroll-result.json)' : e.message}`);
     if (!options.quiet) await alertKeyserveFailure(previous, now, e.status);
   }
 }

@@ -70,6 +70,7 @@ try {
     $node = Get-Command node -ErrorAction SilentlyContinue
     if (-not $node) { $summary['node'] = 'error:nodeが見つからない'; Write-NightlyLog 'node確認' 'error:nodeが見つからない'; Finish-Nightly 1 }
     Write-NightlyLog 'node確認' 'ok'
+    try { & $node.Source (Join-Path $PSScriptRoot 'handoff-audit-nightly.mjs'); if ($LASTEXITCODE -ne 0) { throw 'handoff-audit-nightly failed' }; Write-NightlyLog 'handoff-audit-nightly' 'ok' } catch { Write-NightlyLog 'handoff-audit-nightly' ('error:' + $_.Exception.Message) }
 
     if ($autoClose) {
         try {

@@ -12,7 +12,7 @@ const request = 'GitHub の画面で Merge をクリックしてください。'
 function invoke(home, sessionId, text, extra = {}) {
   return spawnSync(process.execPath, [runner], {
     input: JSON.stringify({ session_id: sessionId, assistant_text: text, ...extra }),
-    encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home },
+    encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_HANDOFF_AUDIT: 'off' },
   });
 }
 

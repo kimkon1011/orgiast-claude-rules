@@ -6,7 +6,7 @@ import path from 'node:path';
 
 const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-session-test-'));
 process.env.ORGIAST_HOME = isolatedHome;
-const { DEFAULT_REPO, localDate, loadConfig, detectHistoryCwd, parseHandoff, sectionsForTodo, todoExclusionReason, todoExclusionReasons, dedupeKey, dedupeTodos, filterTodos, selectTodoLanes, logSlaOverflow, pickCwd, buildChildArgs, buildPrompt, buildFeedbackPrompt, feedbackFailureBody, feedbackIssueExclusionReason, feedbackIssuesToUnmark, filterFeedbackIssues, feedbackNotifyUrl, normalizeGitHubRepo, feedbackRepoCwd, resolveClaudeExe, decideRun, markTodoDone, writeTodoDone, extractSessionId, transcriptPath, recoverSessionId, appendClosedSession, formatResultLine, parseArgs, deadlineDecision, runChild, main } = await import('./auto-session.mjs');
+const { DEFAULT_REPO, localDate, loadConfig, detectHistoryCwd, parseHandoff, sectionsForTodo, todoExclusionReason, todoExclusionReasons, dedupeKey, dedupeTodos, filterTodos, selectTodoLanes, logSlaOverflow, pickCwd, buildChildArgs, buildPrompt, buildFeedbackPrompt, feedbackFailureBody, feedbackIssueExclusionReason, feedbackIssuesToUnmark, filterFeedbackIssues, feedbackNotifyUrl, normalizeGitHubRepo, feedbackRepoCwd, resolveClaudeExe, decideRun, markTodoDone, isTodoAlreadyDone, writeTodoDone, extractSessionId, transcriptPath, recoverSessionId, appendClosedSession, formatResultLine, parseArgs, deadlineDecision, runChild, main } = await import('./auto-session.mjs');
 const historyCwd = String.raw`c:\Users\example\Downloads\work`;
 test.after(() => fs.rmSync(isolatedHome, { recursive: true, force: true }));
 
@@ -700,6 +700,26 @@ test('markTodoDone は複数ブロックに重複した同一 TODO をすべて�
 test('markTodoDone は取り消し線付きまたは該当行なしなら入力を完全一致で返す', () => {
   assert.equal(markTodoDone(sample, '~~完了済み~~', '2026-08-30 完了（auto-session）'), sample);
   assert.equal(markTodoDone(sample, '存在しないTODO', '2026-08-30 完了（auto-session）'), sample);
+});
+
+test('isTodoAlreadyDone は完了印のある同一タイトルだけを検出する', () => {
+  const md = `## 残TODO\n35. ~~P1: 消化率が 14.3% に低下~~ → ✅ 2026-09-13 完了（PR #392）\n36. P1: 未完了\n37. ~~別のTODO~~ → ✅ 2026-09-13 完了\n`;
+  assert.equal(isTodoAlreadyDone(md, 'P1: 消化率が 14.3% に低下'), true);
+  assert.equal(isTodoAlreadyDone(md, 'P1: 未完了'), false);
+  assert.equal(isTodoAlreadyDone(md, 'P1: 消化率が 14.3% に低下した'), false);
+});
+
+test('isTodoAlreadyDone は複数行 TODO の1行目だけで判定し、空のタイトルを拒否する', () => {
+  const md = `35、 ~~P1: 消化率が 14.3% に低下~~ → ✅ 完了\n`;
+  assert.equal(isTodoAlreadyDone(md, 'P1: 消化率が 14.3% に低下\n   詳細な本文'), true);
+  assert.equal(isTodoAlreadyDone(md, ''), false);
+  assert.equal(isTodoAlreadyDone(md, ' \t '), false);
+});
+
+test('isTodoAlreadyDone は正規表現メタ文字をタイトルの文字として扱う', () => {
+  const md = `1. ~~P1: axb c d~~ → ✅ 完了\n2) ~~P1: a.b (c) [d]~~ → ✅ 完了\n`;
+  assert.equal(isTodoAlreadyDone(md, 'P1: a.b (c) [d]'), true);
+  assert.equal(isTodoAlreadyDone(md, 'P1: a.b (c) [x]'), false);
 });
 
 test('writeTodoDone は書く直前の再読込内容へ完了印を付け、並行追加行を維持する', () => {

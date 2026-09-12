@@ -9,6 +9,7 @@
 // 実行: node claude-cost-reporter.mjs           → 実際に Discord へ送信
 //       node claude-cost-reporter.mjs --dry-run  → 送信内容を表示するだけ(送信しない)
 //       node claude-cost-reporter.mjs --force    → 6時間ガードを無視して実行する(検証用)
+//       node claude-cost-reporter.mjs --cached   → 前回出力を即時表示し、裏でキャッシュ更新
 //
 // 設定: ~/.claude/cost-reporter.env に以下を書く(このファイルは配布物に含めない、各PC個別設定):
 //   DISCORD_COST_WEBHOOK=https://discord.com/api/webhooks/...
@@ -18,7 +19,7 @@ import fs from 'node:fs';
 import { parseEnvText } from './env-kv.mjs';
 import path from 'node:path';
 import os from 'node:os';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { machineIdentity } from './machine-identity.mjs';
 import { resolveReporterLabel } from './reporter-label.mjs';
@@ -26,9 +27,61 @@ import { missingRequiredHooks } from './hook-selfcheck.mjs';
 import { isEntry } from './is-entry.mjs';
 
 const DRY_RUN = process.argv.includes('--dry-run');
+const CACHED = process.argv.includes('--cached');
+const REFRESH_CACHE = process.argv.includes('--refresh-cache');
 // 6時間ガードを明示的に飛ばす(検証・手動実行用)。tool-adoption-check.mjs と同じ挙動。
 const FORCE = process.argv.includes('--force');
 const nativeHome = os.homedir(); const HOME = process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || nativeHome;
+const OUTPUT_CACHE_FILE = path.join(HOME, '.claude', '.cost-reporter-output-cache.txt');
+const REFRESH_LOCK_FILE = path.join(HOME, '.claude', '.cost-reporter-output-cache.lock');
+const REFRESH_LOCK_MAX_AGE_MS = 10 * 60 * 1000;
+
+function readOutputCache() {
+  try { return fs.readFileSync(OUTPUT_CACHE_FILE, 'utf8'); } catch { return null; }
+}
+
+function startCacheRefresh() {
+  try {
+    fs.mkdirSync(path.dirname(REFRESH_LOCK_FILE), { recursive: true });
+    try {
+      const age = Date.now() - fs.statSync(REFRESH_LOCK_FILE).mtimeMs;
+      if (age < REFRESH_LOCK_MAX_AGE_MS) return false;
+      fs.unlinkSync(REFRESH_LOCK_FILE);
+    } catch {}
+    const lockFd = fs.openSync(REFRESH_LOCK_FILE, 'wx');
+    fs.closeSync(lockFd);
+  } catch { return false; }
+
+  try {
+    const child = spawn(process.execPath, [fileURLToPath(import.meta.url), '--force', '--refresh-cache'], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+      env: process.env,
+    });
+    child.unref();
+    return true;
+  } catch {
+    try { fs.unlinkSync(REFRESH_LOCK_FILE); } catch {}
+    return false;
+  }
+}
+
+function captureStdoutToCache() {
+  let output = '';
+  const originalWrite = process.stdout.write.bind(process.stdout);
+  process.stdout.write = function cachedWrite(chunk, encoding, callback) {
+    output += Buffer.isBuffer(chunk) ? chunk.toString(typeof encoding === 'string' ? encoding : undefined) : String(chunk);
+    return originalWrite(chunk, encoding, callback);
+  };
+  process.once('beforeExit', () => {
+    try {
+      fs.mkdirSync(path.dirname(OUTPUT_CACHE_FILE), { recursive: true });
+      fs.writeFileSync(OUTPUT_CACHE_FILE, output, 'utf8');
+    } catch {}
+    if (REFRESH_CACHE) try { fs.unlinkSync(REFRESH_LOCK_FILE); } catch {}
+  });
+}
 
 const BOOTSTRAP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 export function bootstrapRequiredHooks({
@@ -256,6 +309,18 @@ function runCostReporter() {
 }
 
 function main() {
+  if (CACHED) {
+    const cached = readOutputCache();
+    if (cached !== null) {
+      process.stdout.write(cached);
+      startCacheRefresh();
+      return;
+    }
+    // 初回だけ従来処理を同期実行し、その stdout を次回用に保存する。
+    captureStdoutToCache();
+  } else if (REFRESH_CACHE) {
+    captureStdoutToCache();
+  }
   return runAfterBootstrap({
     bootstrap: () => bootstrapRequiredHooks({ home: HOME, repo: process.env.ORGIAST_REPO || path.dirname(path.dirname(fileURLToPath(import.meta.url))) }),
     collect: runCostReporter,

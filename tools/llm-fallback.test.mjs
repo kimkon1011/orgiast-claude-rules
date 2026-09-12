@@ -85,6 +85,27 @@ test('キー未設定相当の候補はエラーにせず飛ばす', async (t) =
   assert.equal(result.candidate.provider, 'openrouter');
 });
 
+test('payloadFor が null の候補は HTTP を叩かずスキップ理由に記録する', async (t) => {
+  const files = temporaryFiles(t); let calls = 0;
+  await assert.rejects(
+    callWithFallback({
+      start, chain: [second], ...files,
+      payloadFor: () => null,
+      fetchImpl: async () => { calls++; return new Response('{}', { status: 200 }); },
+    }),
+    (error) => {
+      assert.equal(calls, 0);
+      assert.deepEqual(error.failures, []);
+      assert.deepEqual(error.skipped, [
+        { provider: 'groq', model: 'model-a', reason: 'no-request' },
+        { provider: 'openrouter', model: 'model-b', reason: 'no-request' },
+      ]);
+      assert.match(error.message, /利用可能なキーを持つ候補がありません ; スキップ: groq\(no-request\), openrouter\(no-request\)$/);
+      return true;
+    },
+  );
+});
+
 test('3候補が連続失敗した場合は候補自身の理由で3ホップを記録する', async (t) => {
   const files = temporaryFiles(t);
   const candidates = [
@@ -123,6 +144,17 @@ function temporaryFiles(t) {
   return { cooldownFile: path.join(dir, 'cooldown.json'), ledgerFile: path.join(dir, 'ledger.jsonl') };
 }
 
+test('本文に billing を含むだけの通常429(groqのTPD)は24時間にしない', async (t) => {
+  const files = temporaryFiles(t), timestamp = 1_700_000_000_000; let calls = 0;
+  const body = 'Rate limit reached for model `openai/gpt-oss-120b` on tokens per day (TPD). Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing';
+  await callWithFallback({
+    start, chain: [second], payloadFor: requestFor, ...files, now: () => timestamp, sleepImpl: async () => {},
+    fetchImpl: async () => ++calls <= 3 ? new Response(body, { status: 429 }) : new Response('{}', { status: 200 }),
+  });
+  const state = JSON.parse(fs.readFileSync(files.cooldownFile, 'utf8'));
+  assert.equal(state.groq.until, timestamp + 30 * 60 * 1000, 'retry-after の無い通常の429は既定30分のまま');
+});
+
 test('402 はプロバイダを24時間クールダウンに記録する', async (t) => {
   const files = temporaryFiles(t), timestamp = 1_700_000_000_000; let calls = 0;
   await callWithFallback({ start, chain: [second], payloadFor: requestFor, ...files, now: () => timestamp,
@@ -149,6 +181,20 @@ test('クールダウン中のプロバイダは payloadFor を呼ばずにス�
   assert.equal(result.candidate.provider, 'openrouter');
 });
 
+test('クールダウン中の候補はスキップ理由と残り時間に記録する', async (t) => {
+  const files = temporaryFiles(t), timestamp = 1_700_000_000_000;
+  fs.writeFileSync(files.cooldownFile, JSON.stringify({ groq: { until: timestamp + 61_000, reason: 'http_429', at: timestamp } }));
+  await assert.rejects(
+    callWithFallback({ start, chain: [second], ...files, now: () => timestamp,
+      payloadFor: requestFor, fetchImpl: async () => new Response('denied', { status: 403 }) }),
+    (error) => {
+      assert.deepEqual(error.skipped, [{ provider: 'groq', model: 'model-a', reason: 'cooldown', minutesLeft: 2 }]);
+      assert.match(error.message, /スキップ: groq\(cooldown, 残り2分\)$/);
+      return true;
+    },
+  );
+});
+
 test('全候補がクールダウン中なら無視して全候補を試す', async (t) => {
   const files = temporaryFiles(t), timestamp = 1_700_000_000_000, payloads = []; let calls = 0;
   fs.writeFileSync(files.cooldownFile, JSON.stringify({ groq: { until: timestamp + 60_000 }, openrouter: { until: timestamp + 60_000 } }));
@@ -165,6 +211,28 @@ test('429 の Retry-After をクールダウン秒数に使う', async (t) => {
     fetchImpl: async () => ++calls === 1 ? new Response('quota', { status: 429, headers: { 'Retry-After': '120' } }) : new Response('{}', { status: 200 }) });
   const state = JSON.parse(fs.readFileSync(files.cooldownFile, 'utf8'));
   assert.equal(state.groq.until, timestamp + 120_000);
+});
+
+test('恒久的な課金切れの429はリトライせず次候補へ進む', async (t) => {
+  const files = temporaryFiles(t), timestamp = 1_700_000_000_000; let calls = 0; const waits = [];
+  const result = await callWithFallback({ start, chain: [second], payloadFor: requestFor, ...files, now: () => timestamp,
+    sleepImpl: async (ms) => waits.push(ms),
+    fetchImpl: async () => ++calls === 1
+      ? new Response('{"error":{"message":"Your prepayment credits are depleted."}}', { status: 429 })
+      : new Response('{}', { status: 200 }) });
+  assert.equal(calls, 2);
+  assert.deepEqual(waits, []);
+  assert.equal(result.candidate.provider, 'openrouter');
+});
+
+test('恒久的な課金切れの429は24時間クールダウンに記録する', async (t) => {
+  const files = temporaryFiles(t), timestamp = 1_700_000_000_000; let calls = 0;
+  await callWithFallback({ start, chain: [second], payloadFor: requestFor, ...files, now: () => timestamp,
+    fetchImpl: async () => ++calls === 1
+      ? new Response('{"error":{"message":"insufficient_quota"}}', { status: 429 })
+      : new Response('{}', { status: 200 }) });
+  const state = JSON.parse(fs.readFileSync(files.cooldownFile, 'utf8'));
+  assert.deepEqual(state.groq, { until: timestamp + 24 * 60 * 60 * 1000, reason: 'http_429', at: timestamp });
 });
 
 test('成功したプロバイダのクールダウンを削除する', async (t) => {

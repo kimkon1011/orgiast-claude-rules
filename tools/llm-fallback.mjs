@@ -148,20 +148,22 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, payloadF
   const cooldowns = useCooldown ? readJson(cooldownPath, {}) : {};
   const available = useCooldown ? candidates.filter(({ provider }) => !(Number(cooldowns?.[provider]?.until) > timestamp)) : candidates;
   const selectedCandidates = available.length ? available : candidates;
+  const skipped = [];
   if (useCooldown && available.length) {
     for (const candidate of candidates) {
       const state = cooldowns?.[candidate.provider];
       if (Number(state?.until) <= timestamp || !state) continue;
       const minutes = Math.max(1, Math.ceil((state.until - timestamp) / 60000));
+      skipped.push({ provider: candidate.provider, model: candidate.model, reason: 'cooldown', minutesLeft: minutes });
       console.error(`[cooldown] ${candidate.provider} はスキップ (${state.reason || 'unknown'}, 残り${minutes}分)`);
     }
   }
 
   let cooldownDirty = false;
-  function setCooldown(provider, status, response) {
+  function setCooldown(provider, status, response, permanentBilling = false) {
     if (!useCooldown) return;
     let duration = 0;
-    if (status === 402) duration = 24 * 60 * 60 * 1000;
+    if (status === 402 || permanentBilling) duration = 24 * 60 * 60 * 1000;
     else if ([401, 403].includes(status)) duration = 6 * 60 * 60 * 1000;
     else if (status === 429) duration = retryAfterMs(response, timestamp) ?? 30 * 60 * 1000;
     if (!duration) return;
@@ -179,7 +181,14 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, payloadF
   const failures = [];
   const requests = new Map();
   async function requestAt(index) {
-    if (!requests.has(index)) requests.set(index, await payloadFor(selectedCandidates[index]));
+    if (!requests.has(index)) {
+      const request = await payloadFor(selectedCandidates[index]);
+      requests.set(index, request);
+      if (!request) {
+        const candidate = selectedCandidates[index];
+        skipped.push({ provider: candidate.provider, model: candidate.model, reason: 'no-request' });
+      }
+    }
     return requests.get(index);
   }
 
@@ -210,10 +219,13 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, payloadF
       }
       attempted++;
       await onAttempt?.({ candidate, attempt, status: statusName(status), response, reason: lastReason, secs: (Date.now() - began) / 1000, failover: candidate.provider !== start.provider });
-      setCooldown(candidate.provider, status, response);
+      // groq の通常429の本文には `https://console.groq.com/settings/billing` が含まれるため、
+      // 素の `billing` で判定すると日次上限(TPD)を恒久障害と誤判定する。恒久障害の文面だけを拾う。
+      const permanentBilling = status === 429 && /prepayment credits are depleted|insufficient_quota|exceeded your current quota/i.test(detail);
+      setCooldown(candidate.provider, status, response, permanentBilling);
 
       const kind = classifyFailure(status);
-      if (kind !== 'retry' || attempt === 2) break;
+      if (permanentBilling || kind !== 'retry' || attempt === 2) break;
       const specified = retryAfterMs(response);
       if (specified != null && specified > 60000) break;
       await sleepImpl(specified ?? 1000 * 2 ** attempt);
@@ -230,8 +242,12 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, payloadF
   const summary = failures.length
     ? failures.map(({ candidate, reason }) => `${candidate.provider}:${candidate.model} ${reason}`).join('; ')
     : '利用可能なキーを持つ候補がありません';
-  const error = new Error(`全候補が失敗しました: ${summary}`);
+  const skippedSummary = skipped.length
+    ? ` ; スキップ: ${skipped.map(({ provider, reason, minutesLeft }) => `${provider}(${reason}${minutesLeft != null ? `, 残り${minutesLeft}分` : ''})`).join(', ')}`
+    : '';
+  const error = new Error(`全候補が失敗しました: ${summary}${skippedSummary}`);
   error.failures = failures;
+  error.skipped = skipped;
   saveCooldowns();
   throw error;
 }

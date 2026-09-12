@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { needsWorktreeRepair, detectQuotaLimit, shouldFlagEmptyFallbackDiff, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, isBackendExhausted, wslCodexLaunchPlan } = await import('./codex-do.mjs');
+const { needsWorktreeRepair, detectQuotaLimit, shouldFlagEmptyFallbackDiff, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, isBackendExhausted, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS } = await import('./codex-do.mjs');
 
 function run(args, options = {}) {
   return spawnSync(process.execPath, [tool, ...args], {
@@ -679,17 +679,29 @@ test('wslCodexLaunchPlan: codex が在るのに --version だけ失敗したら�
   // 旧実装は --version 失敗を「codex が無い」と誤認し npm i -g(非root の WSL では EACCES で必ず失敗)へ
   // 進み、22秒を消費した末にネイティブ(非git では trust エラーで空出力・即終了)へ落ちて out=0 行を残した。
   assert.equal(wslCodexLaunchPlan({ distroFound: true, codexPresent: true, versionOk: false, installAttempted: false, retried: false }), 'retry');
-  // 再試行も失敗したら、再インストールではなくネイティブ(警告付き・--skip-git-repo-check)へ。
-  assert.equal(wslCodexLaunchPlan({ distroFound: true, codexPresent: true, versionOk: false, installAttempted: false, retried: true }), 'native');
+  // 再試行も失敗したら、再インストールや暗黙のネイティブ移行はせず中断する。
+  assert.equal(wslCodexLaunchPlan({ distroFound: true, codexPresent: true, versionOk: false, installAttempted: false, retried: true }), 'abort');
 });
 
-test('wslCodexLaunchPlan: 本当に codex が無いときだけ1回インストールし、それも失敗ならネイティブへ', () => {
+test('wslCodexLaunchPlan: 本当に codex が無いときだけ1回インストールし、それも失敗なら中断する', () => {
   assert.equal(wslCodexLaunchPlan({ distroFound: true, codexPresent: false, versionOk: false, installAttempted: false, retried: false }), 'install');
-  assert.equal(wslCodexLaunchPlan({ distroFound: true, codexPresent: false, versionOk: false, installAttempted: true, retried: false }), 'native');
+  assert.equal(wslCodexLaunchPlan({ distroFound: true, codexPresent: false, versionOk: false, installAttempted: true, retried: false }), 'abort');
 });
 
-test('wslCodexLaunchPlan: ディストリが見つからなければ最初からネイティブへ', () => {
-  assert.equal(wslCodexLaunchPlan({ distroFound: false, codexPresent: false, versionOk: false, installAttempted: false, retried: false }), 'native');
+test('wslCodexLaunchPlan: ディストリが見つからなければ中断する', () => {
+  assert.equal(wslCodexLaunchPlan({ distroFound: false, codexPresent: false, versionOk: false, installAttempted: false, retried: false }), 'abort');
+  // distro が無いのに codex だけ在る、という矛盾した入力でも 'retry'(=再試行)へ進めない。
+  assert.equal(wslCodexLaunchPlan({ distroFound: false, codexPresent: true, versionOk: false, installAttempted: false, retried: false }), 'abort');
+});
+
+test('wslCodexLaunchPlan: allowNative を明示したときだけネイティブへ移行する', () => {
+  assert.equal(wslCodexLaunchPlan({ distroFound: false, codexPresent: false, versionOk: false, installAttempted: false, retried: false, allowNative: true }), 'native');
+  assert.equal(wslCodexLaunchPlan({ distroFound: true, codexPresent: true, versionOk: false, installAttempted: false, retried: true, allowNative: true }), 'native');
+  assert.equal(wslCodexLaunchPlan({ distroFound: true, codexPresent: false, versionOk: false, installAttempted: true, retried: false, allowNative: true }), 'native');
+});
+
+test('WSL codex のプローブはコールドスタートを待てる', () => {
+  assert.ok(WSL_PROBE_TIMEOUT_MS >= 60000);
 });
 
 const { decideCodexLane, buildCodexExecArgs, normalizeCodexModel } = await import('./codex-do.mjs');

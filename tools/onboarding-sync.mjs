@@ -432,7 +432,6 @@ function saveKeysAlertState(previous, now) {
   } catch {}
 }
 async function alertKeyserveFailure(previous, now, status) {
-  if (status !== 401 && !keySyncIsStale(previous, now)) return;
   const keyserveEnvExists = fs.existsSync(path.join(home, '.claude', 'keyserve.env'));
   const rotationHint = status === 401 && keyserveEnvExists
     ? ' (この PC は既存 keyserve.env の秘密で認証を試みています。サーバ側で秘密がローテーションされた可能性があります)'
@@ -463,14 +462,20 @@ async function alertKeyserveFailure(previous, now, status) {
 async function provisionKeys(now, options = {}) {
   if (dryRun) return;
   const previous = keysState();
-  if (!shouldRunKeys(previous, now, force)) return;
+  if (!shouldRunKeys(previous, now, force)) {
+    if (keySyncIsStale(previous, now)) await alertKeyserveFailure(previous, now);
+    return;
+  }
   let secret = process.env.ORGIAST_KEYSERVE_SECRET || '';
   if (!secret) secret = readEnvValue(path.join(home, '.claude', 'keyserve.env'), 'ORGIAST_KEYSERVE_SECRET');
   if (!secret) {
     secret = readEnvValue(path.join(home, '.claude', 'cost-reporter.env'), 'DISCORD_COST_WEBHOOK');
     if (secret) log('legacy secret を使用中（keyserve.env 未受領）');
   }
-  if (!secret) return;
+  if (!secret) {
+    await alertKeyserveFailure(previous, now);
+    return;
+  }
   try {
     const ts = Math.floor(Date.now() / 1000).toString();
     const auth = crypto.createHmac('sha256', secret).update(ts).digest('hex');

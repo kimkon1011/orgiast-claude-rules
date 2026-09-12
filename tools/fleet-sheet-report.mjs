@@ -32,6 +32,17 @@ function readEnv(file) {
 function readText(file) {
   try { return fs.readFileSync(file, 'utf8'); } catch { return ''; }
 }
+function readKeyserveStatus(text) {
+  try {
+    const value = JSON.parse(text || '{}');
+    const source = ['primary', 'legacy', 'enroll'].includes(value.auth) ? value.auth : 'unset';
+    return {
+      keyserveAuth: value.success ? source : source === 'unset' ? 'unset' : 'failed',
+      keyserveStatus: value.status ?? null,
+      keyserveCheckedAt: typeof value.checkedAt === 'string' ? value.checkedAt : '',
+    };
+  } catch { return {}; }
+}
 function cheapAiCounts(file) {
   const counts = {};
   let text = '';
@@ -142,6 +153,7 @@ async function main() {
       ? '判定不能'
       : `${interaction.version} / 最終実行 ${interaction.lastRun}`,
     interactionSelftest: interaction.selftest,
+    ...readKeyserveStatus(process.env.ORGIAST_KEYSERVE_STATUS_JSON),
   };
   // スペックは status とは**別シート**(PC管理表)への別リクエストにする。
   // payload に kind:'pc-spec' を混ぜると GAS が status の upsert を行わなくなり、

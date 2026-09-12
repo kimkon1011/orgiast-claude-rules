@@ -525,6 +525,8 @@ kim「**ほかのアカウントでまた同じ試行錯誤が発生している
 
 ##### 🔴 keyserve に手を入れる前に必ず読む: git は本番より古い（2026-09-02 実測）
 
+legacy 秘密を削除する前に、必ず `node tools/keyserve-rotation-gate.mjs` を通す。
+
 | 観測 | 値 |
 |---|---|
 | `orgiast-keyserve` の git コミット数 | **1本**（`ebbb543` のみ） |

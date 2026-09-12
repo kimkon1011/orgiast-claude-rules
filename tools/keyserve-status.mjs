@@ -20,7 +20,7 @@ function resolveSecret() {
 }
 
 const resolved = resolveSecret();
-const result = { auth: resolved.source, success: false, status: null, files: [] };
+const result = { auth: resolved.source, success: false, status: null, files: [], hostname: os.hostname(), checkedAt: new Date().toISOString() };
 
 if (resolved.secret) {
   try {

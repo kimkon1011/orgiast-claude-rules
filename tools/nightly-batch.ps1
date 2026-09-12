@@ -384,6 +384,33 @@ try {
         } catch { Write-NightlyLog 'webhook-health' ("error:" + $_.Exception.Message) }
     } else { Write-NightlyLog 'webhook-health' 'skip:ファイルなし' }
 
+    # keyserve の失敗は台帳に failed/unset として残すが、夜間バッチ本体は止めない。
+    $keyserveStatus = $null
+    $fleetSheetReport = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\keyserve-status.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $keyserveStatus = $candidate; break }
+    }
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\fleet-sheet-report.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $fleetSheetReport = $candidate; break }
+    }
+    if (-not (Test-Path -LiteralPath $fleetSheetEnv -PathType Leaf)) {
+        Write-NightlyLog 'keyserve-status' 'skip:設定なし'
+    } elseif ($keyserveStatus -and $fleetSheetReport) {
+        try {
+            $keyserveOutput = @(& $node.Source $keyserveStatus --json 2>$null | Select-Object -Last 1)
+            if ($keyserveOutput.Count -eq 0) { throw 'JSON出力なし' }
+            $env:ORGIAST_KEYSERVE_STATUS_JSON = [string]$keyserveOutput[0]
+            try { & $node.Source $fleetSheetReport --no-jitter *> $null } finally { Remove-Item Env:ORGIAST_KEYSERVE_STATUS_JSON -ErrorAction SilentlyContinue }
+            if ($LASTEXITCODE -ne 0) { throw ('fleet-sheet-report 終了コード' + $LASTEXITCODE) }
+            Write-NightlyLog 'keyserve-status' 'ok'
+        } catch {
+            Remove-Item Env:ORGIAST_KEYSERVE_STATUS_JSON -ErrorAction SilentlyContinue
+            Write-NightlyLog 'keyserve-status' ('error:' + $_.Exception.Message)
+        }
+    } else { Write-NightlyLog 'keyserve-status' 'skip:ファイルなし' }
+
     $webhookInventory = $null
     foreach ($repo in $repos) {
         $candidate = Join-Path $repo 'tools\discord-webhook-inventory.mjs'

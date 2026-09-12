@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
   executionPlan, makeIndex, mergeEnvFile, missingDeclaredKeys, PRESERVE_LOCAL_KEYS,
-  shouldRunKeys, updateRepositoryFiles,
+  shouldRunKeys, keySyncIsStale, updateRepositoryFiles,
 } from './onboarding-sync.mjs';
 import { gitBlobSha } from './version-drift.mjs';
 
@@ -41,6 +41,13 @@ test('key guard skips at 19 hours and runs at 21 hours', () => {
 
 test('key guard runs when state file has no prior success', () => {
   assert.equal(shouldRunKeys(null, new Date('2026-09-06T12:00:00.000Z')), true);
+});
+
+test('keyserve failure alert treats a success 48h ago or no success as stale', () => {
+  const now = new Date('2026-09-06T12:00:00.000Z');
+  assert.equal(keySyncIsStale({ last: '2026-09-04T12:00:01.000Z' }, now), false);
+  assert.equal(keySyncIsStale({ last: '2026-09-04T12:00:00.000Z' }, now), true);
+  assert.equal(keySyncIsStale(null, now), true);
 });
 
 test('missingDeclaredKeys lists declared files absent locally', () => {

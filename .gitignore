@@ -14,3 +14,6 @@ tools/.ps.tmp.ps1
 
 # $env:LOCALAPPDATA が未設定のまま PowerShell を起動すると repo 直下に掘られるキャッシュ
 /Microsoft/
+
+# Genspark Tool CLI の自動生成スキル (gsk init-skills)。ベンダー成果物なのでコミットしない
+.gsk/

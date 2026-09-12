@@ -16,10 +16,12 @@ export function parseArgs(args) {
   const limit = Number(value('--limit', 3));
   const confidence = String(value('--confidence', 'high')).split(',').filter(Boolean);
   const provider = value('--provider', 'groq');
+  const budgetSeconds = Number(value('--budget-seconds', 900));
   if (!Number.isInteger(limit) || limit < 1) throw new Error('--limit は1以上の整数で指定してください');
+  if (!Number.isInteger(budgetSeconds) || budgetSeconds < 0) throw new Error('--budget-seconds は1以上の整数で指定してください');
   if (!confidence.length || confidence.some((item) => !CONFIDENCES.has(item))) throw new Error('--confidence は low,medium,high の組み合わせで指定してください');
   if (!PROVIDERS.has(provider)) throw new Error('--provider は groq または deepseek を指定してください');
-  return { dryRun: args.includes('--dry-run'), list: args.includes('--list'), limit, confidence: new Set(confidence), provider, id: value('--id') };
+  return { dryRun: args.includes('--dry-run'), list: args.includes('--list'), limit, confidence: new Set(confidence), provider, budgetSeconds, id: value('--id') };
 }
 
 export function readProposalLines(text) {
@@ -135,10 +137,18 @@ export async function runTriage(options = {}) {
   const updates = new Map();
   const adopted = [];
   const failures = [];
+  let deferred = 0;
   const system = 'LINE投稿由来の提案を検索結果だけから検証する。検索結果に無いことを書かない。不明なら必ず unclear と書く。verdictは投稿内容が裏取りできたか、adoptはオージャストのコスト削減または品質向上に直結し実際に手を打つ価値があるかで決める。JSONのみを返す。形式: {"verdict":"confirmed|refuted|unclear","finding":"120字以内の日本語","adopt":true|false,"reason":"80字以内"}';
-  for (const record of targets) {
+  const startedAt = Date.now();
+  for (const [index, record] of targets.entries()) {
+    if (cli.budgetSeconds > 0 && Date.now() - startedAt >= cli.budgetSeconds * 1000) {
+      deferred = targets.length - index;
+      break;
+    }
+    let stage = 'search';
     try {
       const found = await search(`${record.title}\n${record.action}`);
+      stage = 'llm';
       const response = await llm({ provider: cli.provider, messages: [{ role: 'system', content: system }, { role: 'user', content: `提案: ${JSON.stringify({ title: record.title, action: record.action, evidence: record.evidence })}\n検索結果: ${formatSearch(found)}` }], maxTokens: 500, responseFormat: { type: 'json_object' } });
       const result = parseVerdict(response.text);
       const updated = applyTriageResult(record, result, { now: now(), provider: response.provider || cli.provider });
@@ -146,8 +156,16 @@ export async function runTriage(options = {}) {
       if (updated.status === 'done' && updated.adopt === true) adopted.push(updated);
       log(`${cli.dryRun ? '[dry-run] ' : ''}${record.id} ${updated.verdict} adopt=${updated.adopt} → ${updated.status}: ${updated.finding}`);
     } catch (error) {
-      failures.push({ id: record.id, error });
+      failures.push({ id: record.id, stage, error });
       log(`warn:${record.id} 判定失敗: ${error.message}`);
+      if (!cli.dryRun) {
+        try {
+          const file = path.join(base, 'ai-news-triage-failures.jsonl');
+          fs.mkdirSync(path.dirname(file), { recursive: true });
+          const message = String(error && error.message || error).slice(0, 300);
+          fs.appendFileSync(file, `${JSON.stringify({ t: new Date().toISOString(), id: record.id, stage, message })}\n`, 'utf8');
+        } catch {}
+      }
     }
   }
 
@@ -173,7 +191,12 @@ export async function runTriage(options = {}) {
     if (digestResult.changed) fs.writeFileSync(digestFile, digestResult.text, 'utf8');
   }
   [...new Set(warnings)].forEach(log);
-  return { status, processed: updates.size, records: nextRecords };
+  const searchFailures = failures.filter((item) => item.stage === 'search').length;
+  const llmFailures = failures.filter((item) => item.stage === 'llm').length;
+  const diagnostic = failures.length
+    ? `診断:検索失敗${searchFailures}件 / LLM失敗${llmFailures}件${deferred ? ` / 時間切れ残${deferred}件` : ''}`
+    : '';
+  return { status, processed: updates.size, records: nextRecords, deferred, diagnostic };
 }
 
 export async function runCli(args, options = {}) {
@@ -181,6 +204,7 @@ export async function runCli(args, options = {}) {
   try {
     const result = await runTriage({ ...options, args, log });
     log(result.status);
+    if (result.diagnostic) log(result.diagnostic);
   } catch (error) {
     log(`error:${error.message}`);
   }

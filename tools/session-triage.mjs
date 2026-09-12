@@ -354,8 +354,9 @@ async function addLlmJudgments(records) {
     for (const record of records) failRecord(record, 'tools/llm-ask.mjs が見つかりません');
     return llmStats;
   }
-  const selectedProvider = (provider || process.env.SESSION_TRIAGE_LLM_PROVIDERS || 'groq')
-    .split(',').map((value) => value.trim()).filter(Boolean)[0] || 'groq';
+  const providerChain = (provider || process.env.SESSION_TRIAGE_LLM_PROVIDERS || 'groq')
+    .split(',').map((value) => value.trim()).filter(Boolean);
+  if (!providerChain.length) providerChain.push('groq');
   const errorDetail = (error) => String(error?.stderr || error?.message || error).trim().split('\n').slice(-1)[0].slice(0, 200);
   let cursor = 0;
   async function worker() {
@@ -377,13 +378,19 @@ async function addLlmJudgments(records) {
       prompt = redactSecrets(prompt);
       let result;
       let failure = '';
-      try {
-        const { stdout } = await execFileAsync(process.execPath, [helper, '--provider', selectedProvider, '--max', '200', prompt], { timeout: 60_000, maxBuffer: 256 * 1024 });
-        result = parseLlmResult(stdout);
-        if (process.env.SESSION_TRIAGE_DEBUG) console.error(`DBG ${record.sessionId.slice(0, 8)} provider=${selectedProvider} promptLen=${prompt.length} raw=${JSON.stringify(String(stdout).slice(0, 300))}`);
-      } catch (error) {
-        failure = errorDetail(error);
-        if (failure && !llmStats.providerNotes.includes(failure)) llmStats.providerNotes.push(failure);
+      for (const selectedProvider of providerChain) {
+        try {
+          const { stdout } = await execFileAsync(process.execPath, [helper, '--provider', selectedProvider, '--max', '200', prompt], { timeout: 60_000, maxBuffer: 256 * 1024 });
+          result = parseLlmResult(stdout);
+          if (process.env.SESSION_TRIAGE_DEBUG) console.error(`DBG ${record.sessionId.slice(0, 8)} provider=${selectedProvider} promptLen=${prompt.length} raw=${JSON.stringify(String(stdout).slice(0, 300))}`);
+          if (result) break;
+          failure = `${selectedProvider}: LLM応答を解析できません`;
+          if (!llmStats.providerNotes.includes(failure)) llmStats.providerNotes.push(failure);
+        } catch (error) {
+          failure = errorDetail(error);
+          if (failure && !llmStats.providerNotes.includes(failure)) llmStats.providerNotes.push(failure);
+          if (process.env.SESSION_TRIAGE_DEBUG) console.error(`DBG ${record.sessionId.slice(0, 8)} provider=${selectedProvider} error=${JSON.stringify(failure)}`);
+        }
       }
       if (result) {
         applyLlmResult(record, result);

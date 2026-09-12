@@ -94,8 +94,8 @@ try {
   ];
   if (fs.existsSync(path.join(repo, 'tools', 'stop-gate-runner.mjs'))) {
     for (const oldName of oldStopGates) added += migrate(settings.hooks.Stop, oldName, 'stop-gate-runner.mjs', command('stop-gate-runner.mjs'));
-    if (add(settings.hooks.Stop, 'stop-gate-runner.mjs', { hooks: [{ type: 'command', command: command('stop-gate-runner.mjs'), timeout: 10 }] })) added += 1;
-    added += setTimeoutFor(settings.hooks.Stop, 'stop-gate-runner.mjs', 10);
+    if (add(settings.hooks.Stop, 'stop-gate-runner.mjs', { hooks: [{ type: 'command', command: command('stop-gate-runner.mjs'), timeout: 30 }] })) added += 1;
+    added += setTimeoutFor(settings.hooks.Stop, 'stop-gate-runner.mjs', 30);
   }
   const session = [
     ['onboarding-sync.mjs', 20, true, ''],

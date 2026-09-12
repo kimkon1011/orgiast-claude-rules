@@ -1,0 +1,10 @@
+[
+  { "pattern": "Google 系プロパティ(GA4/Search Console/GTM)の有無確認", "route": "DWD サービスアカウント(kim impersonate)で analyticsadmin/webmasters/tagmanager API を直接照会（tools/google-property-check.mjs）。Claude 履歴の Grep は証拠にならない。分類器で止まるなら『未確認』と書く", "confidence": "high", "source": "2026-09-10 TETSUKO Search Console 誤判定" },
+  { "pattern": "Search Console の所有者追加", "route": "API にユーザー追加は無い。相手がサイトを配信しているなら相手側の HTML ファイル/メタタグ検証で所有者になれる（kim 操作ゼロ、履歴データも同一プロパティで共有）", "confidence": "high", "source": "2026-09-10" },
+  { "pattern": "社内・グループ会社・スタッフ宛の連絡文", "route": "Gmail 下書きにしない。チャット本文に宛先/用件/本文を完成形で表示（kim はリモートデスクトップ/LINE/Discord で渡す）。Discord MCP が使えるなら Discord 送信可", "confidence": "high", "source": "2026-09-11 kim 厳命" },
+  { "pattern": "Drive にファイル/Sheet を作る", "route": "SA 直では quota 0 で失敗。DWD で kim を impersonate（subject）して作成", "confidence": "high", "source": "2026-06-29 feedback-sa-drive-dwd-pattern" },
+  { "pattern": "Discord チャンネル ID が要る", "route": "user に聞かず tools/discord-channel-id.mjs で台帳から取得", "confidence": "high", "source": "§2.6.1" },
+  { "pattern": "API キー/接続文字列/ID が要る", "route": "過去 transcript・.env.local・production bundle・keyserve から復元。user に再聞き禁止", "confidence": "high", "source": "feedback-credentials-never-reask-universal" },
+  { "pattern": "GAS の関数実行が要る", "route": "clasp run / コマンドキュー経由で Claude 側から実行。『▶実行してください』は違反", "confidence": "high", "source": "§1.4" },
+  { "pattern": "permission 分類器で自動経路が止まった", "route": "推測で結論を出さない。『未確認』＋user 作業なしの代替案を提示。恒久策は settings.json の許可ルール/DWD スコープ追加を kim に1回だけ提案", "confidence": "high", "source": "2026-09-10" }
+]

@@ -18,6 +18,16 @@ node tools/keyserve-enroll.mjs --pc "対象PC名" --ttl-hours 24 --dm
 
 ## 隔離ホームの実環境検証
 
+本物のサーバハンドラをローカルで直接使うE2Eは別リポに依存するためCIでは実行せず、Vercel本番にも通信しません。
+
+```powershell
+node tools/keyserve-enroll-e2e.mjs
+```
+
+このコマンドはテスト用のprimaryとダミー鍵だけを使い、一時的なローカルHTTPサーバと新PC相当の隔離ホームを作ります。enroll発行、鍵復帰、`enroll.env`削除、2回目のprimary認証、`keyserve-status`まで検証し、終了時に隔離ホームを削除します。サーバリポが既定位置にない場合だけ `ORGIAST_KEYSERVE_REPO` で指定できます。
+
+本番環境を使う従来のWindows検証は次のとおりです。
+
 Windows PowerShell 5.1で、実トークンを受け取ってから次の1行を実行します。
 
 ```powershell

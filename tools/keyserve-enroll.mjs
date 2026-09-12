@@ -7,7 +7,7 @@ import { keyserveAuthHeaders } from './keyserve-auth.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { isEntry } from './is-entry.mjs';
 
-const ENROLL_URL = 'https://orgiast-keyserve.vercel.app/api/enroll';
+const ENROLL_URL = process.env.ORGIAST_KEYSERVE_ENROLL_URL || 'https://orgiast-keyserve.vercel.app/api/enroll';
 const INSTALL_URL = 'https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/tools/install-orgiast.ps1';
 const DRY_TOKEN = 'DRY_RUN_TOKEN_NOT_VALID';
 

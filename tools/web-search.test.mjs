@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { extractExecutedToolUrls, loadOpenRouterApiKey, parseArgs, runCli, search } from './web-search.mjs';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
+import { extractExecutedToolUrls, loadOpenRouterApiKey, parseArgs, requestGskCrawl, requestGskSearch, runCli, search } from './web-search.mjs';
 
 const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'web-search-test-'));
 process.env.ORGIAST_HOME = isolatedHome;
@@ -17,6 +19,29 @@ function outputSink() {
 function response(body, status = 200) {
   return { ok: status >= 200 && status < 300, status, json: async () => body, text: async () => JSON.stringify(body) };
 }
+
+function fakeSpawnWith(body, code = 0, capture = () => {}) {
+  return (cmd, args, options) => {
+    capture(cmd, args, options);
+    const child = new EventEmitter();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = () => {};
+    queueMicrotask(() => {
+      if (body.stdout) child.stdout.write(body.stdout);
+      if (body.stderr) child.stderr.write(body.stderr);
+      child.stdout.end();
+      child.stderr.end();
+      child.emit('close', code);
+    });
+    return child;
+  };
+}
+
+const gskSuccess = JSON.stringify({
+  version: 1, status: 'ok', message: 'success',
+  data: { organic_results: [{ title: '結果', link: 'https://example.com/result', snippet: '説明' }] },
+});
 
 test('extractExecutedToolUrls は末尾の全角 。 を除去して重複を消す', () => {
   const urls = extractExecutedToolUrls([
@@ -183,8 +208,9 @@ test('Gemini と Groq の両方が失敗したら両理由を出して exit 1', 
   const fetchImpl = async (url) => url.includes('generativelanguage.googleapis.com')
     ? response({ error: 'gemini down' }, 500)
     : response({ error: 'groq too large' }, 413);
+  // gskApiKey を空にして auto 連鎖の受け皿(gsk)から実 CLI を叩かせない（有料レーンの実呼び出し防止）。
   const code = await runCli(['質問'], {
-    geminiApiKey: 'gemini-test', groqApiKey: 'groq-test', fetchImpl,
+    geminiApiKey: 'gemini-test', groqApiKey: 'groq-test', openrouterApiKey: '', gskApiKey: '', fetchImpl,
     stdout: outputSink().stream, stderr: err.stream,
   });
   assert.equal(code, 1);
@@ -301,8 +327,9 @@ test('OpenRouter キーが無い auto は APIキーなしとしてスキップ�
     env: {}, homeDir: '/存在しないテスト用パス', geminiApiKey: 'gemini-test', groqApiKey: 'groq-test',
     fetchImpl: async () => response({ error: 'down' }, 500), appendUsage() {},
   }), (error) => {
-    assert.equal(error.failures.length, 3);
+    assert.equal(error.failures.length, 4);
     assert.equal(error.failures[2], 'openrouter: APIキーなし');
+    assert.equal(error.failures[3], 'gsk: APIキーなし');
     return true;
   });
 });
@@ -310,6 +337,68 @@ test('OpenRouter キーが無い auto は APIキーなしとしてスキップ�
 test('parseArgs は openrouter を受け付け未知の provider を拒否する', () => {
   assert.equal(parseArgs(['質問', '--provider', 'openrouter']).provider, 'openrouter');
   assert.throws(() => parseArgs(['質問', '--provider', 'unknown']), /auto\|gemini\|groq\|openrouter/);
+});
+
+test('parseArgs は gsk を受け付け bogus provider を拒否する', () => {
+  assert.equal(parseArgs(['q', '--provider', 'gsk']).provider, 'gsk');
+  assert.throws(() => parseArgs(['q', '--provider', 'bogus']), /auto\|gemini\|groq\|openrouter\|gsk/);
+});
+
+test('search は fake spawn で gsk 検索結果を返す', async () => {
+  const result = await search('テスト', {
+    provider: 'gsk', gskApiKey: 'k', appendUsage() {},
+    spawnImpl: fakeSpawnWith({ stdout: gskSuccess }),
+  });
+  assert.equal(result.provider, 'gsk');
+  assert.equal(result.answer, '結果 — 説明');
+  assert.deepEqual(result.urls, [{ url: 'https://example.com/result', title: '結果' }]);
+});
+
+test('requestGskSearch はクエリを argv に載せず --args-file で渡す', async () => {
+  const query = 'シェルに出してはいけない; echo injected';
+  let invocation;
+  await requestGskSearch({
+    query, apiKey: 'k',
+    spawnImpl: fakeSpawnWith({ stdout: gskSuccess }, 0, (cmd, args, options) => {
+      invocation = { cmd, args, options, argsFile: JSON.parse(fs.readFileSync(args[2], 'utf8')) };
+    }),
+  });
+  assert.ok(!invocation.args.includes(query));
+  assert.deepEqual(invocation.args.slice(0, 2), ['search', '--args-file']);
+  assert.equal(invocation.argsFile.q, query);
+  assert.equal(invocation.options.windowsHide, true);
+});
+
+test('requestGskSearch は organic_results が空なら空の answer と urls を返す', async () => {
+  const result = await requestGskSearch({
+    query: 'q', apiKey: 'k',
+    spawnImpl: fakeSpawnWith({ stdout: JSON.stringify({ status: 'ok', data: { organic_results: [] } }) }),
+  });
+  assert.equal(result.answer, '');
+  assert.deepEqual(result.urls, []);
+});
+
+test('requestGskSearch は終了コード非 0 で reject する', async () => {
+  await assert.rejects(requestGskSearch({
+    query: 'q', apiKey: 'k', spawnImpl: fakeSpawnWith({ stderr: 'CLI failure detail' }, 7),
+  }), /exit 7: CLI failure detail/);
+});
+
+test('requestGskCrawl は http/https 以外の URL を拒否する', async () => {
+  await assert.rejects(requestGskCrawl({
+    url: 'file:///etc/passwd', apiKey: 'k', spawnImpl: fakeSpawnWith({ stdout: gskSuccess }),
+  }), /http\/https/);
+});
+
+test('requestGskCrawl は URL を正規化しシェル経由のときだけ引用する', async () => {
+  let invoked;
+  await requestGskCrawl({
+    url: 'https://example.com/a b?x=1&y=2', apiKey: 'k',
+    spawnImpl: fakeSpawnWith({ stdout: '{"status":"ok","data":{"content":"本文"}}' }, 0, (_cmd, args) => { invoked = args; }),
+  });
+  const normalized = 'https://example.com/a%20b?x=1&y=2';
+  assert.equal(invoked[0], 'crawl');
+  assert.equal(invoked[1], process.platform === 'win32' ? `"${normalized}"` : normalized);
 });
 
 test('loadOpenRouterApiKey は env を優先し openrouter.env へフォールバックする', () => {

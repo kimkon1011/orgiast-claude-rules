@@ -35,6 +35,14 @@ for (const punctuation of ['）', '、', '，']) {
   });
 }
 
+test('extractExecutedToolUrls は Markdown リンクから ](https://… を飲み込まない', () => {
+  const urls = extractExecutedToolUrls([
+    { snippet: '出典 [https://www.orgiast.jp/company](https://www.orgiast.jp/company) を参照' },
+    { url: 'https://www.orgiast.jp/company' },
+  ]).map(({ url }) => url);
+  assert.deepEqual(urls, ['https://www.orgiast.jp/company']);
+});
+
 test('extractExecutedToolUrls は末尾の半角約物を従来どおり除去する', () => {
   const urls = extractExecutedToolUrls([
     { snippet: 'see https://example.com/a).' },

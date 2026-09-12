@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+// 通常実装は Sol、長時間・高難度・auto の失敗時は Astra（既定 effort high）。
+// --lane sol|astra|auto / --model astra|sol|<slug> / --effort で指定する。
+// 先頭40行の <!-- lane: astra --> でも指定可。Astra 上限時は Sol へ退避する。
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -10,6 +13,38 @@ import { parseCodexResetUntil, providerCooldownMs, writeCodexCooldown } from './
 // Windows の shell 経由起動では引数がクォートされないため、この値に空白を入れると
 // -p の値が割れて Gemini が使い方(ヘルプ)を出して終わる。空白を入れないこと。
 export const GEMINI_PROMPT_FLAG = 'Execute_the_implementation_instructions_provided_on_stdin.';
+
+const ASTRA = 'gpt-6-astra';
+const SOL = 'gpt-5.6-sol';
+export function normalizeCodexModel(model) {
+  return model === 'astra' ? ASTRA : model === 'sol' ? SOL : model;
+}
+
+// I/O を持たない判定。クールダウン残時間は呼び出し側で読み取って注入する。
+export function decideCodexLane({ lane = 'auto', model, promptText = '', timeoutSecs = 1800, review = false, astraCooldownMs = 0 } = {}) {
+  let slug = SOL, reason = 'default_sol';
+  if (model) { slug = normalizeCodexModel(model); reason = 'explicit_model'; }
+  else if (lane !== 'auto') { slug = lane === 'astra' ? ASTRA : SOL; reason = `lane_${lane}`; }
+  else {
+    const header = String(promptText).split(/\r?\n/).slice(0, 40).join('\n');
+    const marker = header.match(/<!--\s*lane:\s*(astra|sol)\s*-->|^Lane:\s*(astra|sol)\s*$/im);
+    if (marker) { const selected = marker[1] || marker[2]; slug = selected.toLowerCase() === 'astra' ? ASTRA : SOL; reason = `header_${selected.toLowerCase()}`; }
+    else if (review) reason = 'review_sol';
+    else if (timeoutSecs >= 2700) { slug = ASTRA; reason = 'long_timeout'; }
+    else {
+      const keywords = /マイグレーション|migration|E2E|Playwright|リファクタ|refactor|横断|全ファイル|複数リポ|調査して実装|根本原因/gi;
+      if (new Set((String(promptText).match(keywords) || []).map((word) => word.toLowerCase())).size >= 2) {
+        slug = ASTRA; reason = 'complex_task';
+      }
+    }
+  }
+  if (slug === ASTRA && !model && astraCooldownMs > 0) { slug = SOL; reason = `astra_cooldown:${reason}`; }
+  return { slug, effort: slug === ASTRA ? 'high' : undefined, reason };
+}
+
+export function buildCodexExecArgs({ slug = SOL, effort, review = false } = {}) {
+  return ['exec', '-m', slug, ...(effort ? ['-c', `model_reasoning_effort="${effort}"`] : []), '-s', review ? 'read-only' : 'workspace-write', '-'];
+}
 
 export function needsWorktreeRepair(gitFileContent) {
   return /^gitdir:\s*[A-Za-z]:/i.test(String(gitFileContent ?? '').trim());
@@ -276,6 +311,13 @@ const dryRun = args.includes('--dry-run');
 const forceNative = args.includes('--force-native');
 const noFallback = args.includes('--no-fallback');
 const review = args.includes('--review');
+const noEscalate = args.includes('--no-escalate');
+const modelIndex = args.indexOf('--model');
+const effortIndex = args.indexOf('--effort');
+const laneIndex = args.indexOf('--lane');
+const model = modelIndex >= 0 ? args[modelIndex + 1] : undefined;
+const effort = effortIndex >= 0 ? args[effortIndex + 1] : undefined;
+const lane = laneIndex >= 0 ? args[laneIndex + 1] : 'auto';
 const cwdIndex = args.indexOf('--cwd');
 const promptFileIndex = args.indexOf('--prompt-file');
 const timeoutIndex = args.indexOf('--timeout');
@@ -286,10 +328,21 @@ if (dryRun) omitted.add(args.indexOf('--dry-run'));
 if (forceNative) omitted.add(args.indexOf('--force-native'));
 if (noFallback) omitted.add(args.indexOf('--no-fallback'));
 if (review) omitted.add(args.indexOf('--review'));
+if (noEscalate) omitted.add(args.indexOf('--no-escalate'));
+for (const index of [modelIndex, effortIndex, laneIndex]) {
+  if (index >= 0) { omitted.add(index); omitted.add(index + 1); }
+}
 if (cwdIndex >= 0) { omitted.add(cwdIndex); omitted.add(cwdIndex + 1); }
 if (promptFileIndex >= 0) { omitted.add(promptFileIndex); omitted.add(promptFileIndex + 1); }
 if (timeoutIndex >= 0) { omitted.add(timeoutIndex); omitted.add(timeoutIndex + 1); }
-const usage = '使い方: node tools/codex-do.mjs "<指示>" [--cwd <path>] [--prompt-file <file>] [--review] [--timeout <秒>] [--dry-run] [--no-fallback]';
+const usage = '使い方: node tools/codex-do.mjs "<指示>" [--cwd <path>] [--prompt-file <file>] [--review] [--timeout <秒>] [--model <slug|astra|sol>] [--effort <low|medium|high|xhigh|max>] [--lane <sol|astra|auto>] [--no-escalate] [--dry-run] [--no-fallback] [--force-native]';
+
+if ((modelIndex >= 0 && (!model || !/^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(model))) ||
+    (effortIndex >= 0 && !['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) ||
+    !['sol', 'astra', 'auto'].includes(lane)) {
+  console.error(`--model / --effort / --lane の指定が不正です\n${usage}`);
+  process.exit(2);
+}
 
 // タイムアウト既定30分。無限に待って気付かないより、切って原因を見に行くほうが安い。
 const timeoutSeconds = timeoutIndex >= 0 ? Number(args[timeoutIndex + 1]) : 1800;
@@ -305,13 +358,13 @@ if (promptFileIndex >= 0) {
   const promptFile = args[promptFileIndex + 1];
   if (!promptFile) { console.error(`--prompt-file にファイルパスが必要です\n${usage}`); process.exit(2); }
   try {
-    instruction = fs.readFileSync(promptFile, 'utf8').trim();
+    instruction = fs.readFileSync(promptFile, 'utf8');
   } catch (error) {
     console.error(`--prompt-file を読めません: ${promptFile} (${error.code || error.message})`);
     process.exit(2);
   }
 }
-if (!instruction) { console.error(usage); process.exit(2); }
+if (!instruction.trim()) { console.error(usage); process.exit(2); }
 
 const home = process.env.ORGIAST_HOME || os.homedir();
 const slug = cwd.replace(/[^a-z0-9]/gi, '-').toLowerCase();
@@ -356,12 +409,17 @@ if (mainMemory || related.length || claudeMd) {
   if (claudeMd) context.push(`\n## 対象プロジェクト CLAUDE.md\n${claudeMd}`);
 }
 const prompt = `${context.join('\n')}\n\n## 実装指示\n${instruction}`.trim();
-if (dryRun) { console.log(prompt); process.exit(0); }
+let selectedLane = decideCodexLane({ lane, model, promptText: instruction, timeoutSecs: timeoutSeconds, review, astraCooldownMs: providerCooldownMs('codex-astra') });
+if (effort) selectedLane.effort = effort;
+if (selectedLane.reason.includes('astra_cooldown')) console.error('[codex-do] astra_cooldown: Astra クールダウン中のため Sol へ退避');
+const logCodex = () => console.log(`[codex-do] executor=codex model=${selectedLane.slug} effort=${selectedLane.effort || 'default'} lane=${selectedLane.reason}`);
+if (dryRun) { logCodex(); console.log(prompt); process.exit(0); }
 
 // 実行前の作業ツリーを控える。未コミット差分が常時あるリポでは diff が空にならず、
 // 下の「空diffなら書き込めていない」判定が一度も発火しないため（2026-09-03 実害）。
 const treeSnapshot = () => `${spawnSync('git', ['-C', cwd, 'diff', '--stat'], { encoding: 'utf8' }).stdout || ''}\n${spawnSync('git', ['-C', cwd, 'status', '--porcelain'], { encoding: 'utf8' }).stdout || ''}`;
 const treeBefore = treeSnapshot();
+const wantedEdit = !review && /実装|作って|修正|直して|追加して|リファクタ|refactor|fix|implement/i.test(instruction);
 const started = Date.now();
 let mockIndex = 0;
 function execute(command, commandArgs, options = {}) {
@@ -369,6 +427,7 @@ function execute(command, commandArgs, options = {}) {
     try {
       const mocks = JSON.parse(process.env.CODEX_DO_MOCK_RESULTS);
       const mock = mocks[mockIndex++];
+      if (!mock) throw new Error('CODEX_DO_MOCK_RESULTS exhausted');
       if (mock) {
         if (mock.output) process.stdout.write(mock.output);
         if (mock.stderr) process.stderr.write(mock.stderr);
@@ -382,7 +441,7 @@ function execute(command, commandArgs, options = {}) {
         });
       }
     } catch (e) {
-      console.error('[MOCK ERROR]', e);
+      throw e;
     }
   }
   return new Promise((resolve) => {
@@ -428,82 +487,131 @@ let executorName = 'codex';
 let fallbackBackend = null;
 let lastBackend = null;
 
-// 先頭に1行で出力する
-console.log('[codex-do] executor=codex');
+let escalated = false;
+function recordUsage(result, modelName, seconds, provider = 'codex') {
+  try {
+    const ledger = path.join(home, '.claude', 'executor-usage.jsonl');
+    fs.mkdirSync(path.dirname(ledger), { recursive: true });
+    fs.appendFileSync(ledger, `${JSON.stringify({
+      t: new Date().toISOString(), provider, model: modelName,
+      lane: selectedLane.reason, escalated,
+      in: Math.ceil(prompt.length / 4), out: Math.ceil((result.outputChars || 0) / 4),
+      timedOut: result?.timedOut === true,
+      status: result?.status ?? null,
+      secs: Number(seconds.toFixed(3))
+    })}\n`, 'utf8');
+  } catch {}
+}
+async function executeCodex() {
+  const attemptStarted = Date.now();
+  logCodex();
+  const codexArgs = buildCodexExecArgs({ ...selectedLane, review });
+  let result;
 
-if (process.platform === 'win32' && !forceNative) {
-  const listed = spawnSync('wsl', ['-l', '-q'], { encoding: 'utf16le', timeout: 15000 });
-  const distros = listed.status === 0 ? listed.stdout.split(/\r?\n/).map((x) => x.replace(/\0/g, '').trim()).filter(Boolean) : [];
-  const distro = distros.find((x) => x.toLowerCase() === 'ubuntu') || distros[0];
-  let usable = false;
-  if (distro) {
-    // 起動確認の失敗は stderr ごと拾い、「codex が無い」と「一過性で失敗」を区別する。
-    const versionProbe = () => {
-      const probe = spawnSync('wsl', ['-d', distro, '--', 'codex', '--version'], { encoding: 'utf8', timeout: 15000 });
-      return { ok: probe.status === 0, stderr: (probe.stderr || '').toString().trim().slice(0, 300) };
-    };
-    const present = spawnSync('wsl', ['-d', distro, '--', 'sh', '-lc', 'command -v codex >/dev/null 2>&1'], { timeout: 15000 }).status === 0;
-    const first = versionProbe();
-    usable = first.ok;
-    const step = wslCodexLaunchPlan({ distroFound: true, codexPresent: present, versionOk: first.ok, installAttempted: false, retried: false });
-    if (step === 'retry') {
-      console.error(`WSL ${distro} には codex が在りますが起動確認が失敗しました。一過性の可能性があるため再試行します${first.stderr ? ` (${first.stderr})` : ''}`);
-      usable = versionProbe().ok;
-      if (!usable) console.error(`WSL ${distro} の codex は再試行でも起動確認できませんでした。在るのに失敗しているため npm 再インストールはしません`);
-    } else if (step === 'install') {
-      console.error(`WSL ${distro} に codex が見つからないため自動インストールを試します`);
-      const installed = spawnSync('wsl', ['-d', distro, '--', 'npm', 'i', '-g', '@openai/codex'], { stdio: 'inherit', timeout: 120000 });
-      if (installed.status === 0) usable = versionProbe().ok;
-      else console.error(`WSL ${distro} への codex 自動インストールが失敗しました(exit ${installed.status})。WSL 内に手動で導入してください`);
-    }
-  }
-  // 非git ディレクトリ(scratchpad 等)では trust チェックに失敗して空出力・即終了するため
-  // 回避する(2026-09-08 実測: "Not inside a trusted directory and --skip-git-repo-check was not specified")。
-  const nativeArgs = ['exec', '-s', review ? 'read-only' : 'workspace-write'];
-  if (!fs.existsSync(path.join(cwd, '.git'))) nativeArgs.push('--skip-git-repo-check');
-  nativeArgs.push('-');
-  if (usable) {
-    const gitFile = path.join(cwd, '.git');
-    try {
-      if (fs.statSync(gitFile).isFile() && needsWorktreeRepair(fs.readFileSync(gitFile, 'utf8'))) {
-        const repaired = spawnSync('git', ['-C', cwd, '-c', 'worktree.useRelativePaths=true', 'worktree', 'repair'], { encoding: 'utf8' });
-        if (repaired.status === 0) console.error('⚠️ Windows 絶対パスの gitdir は WSL 側 codex が解決できないため相対パスへ直しました');
-        else console.error(`⚠️ Windows 絶対パスの gitdir を相対パスへ修復できませんでした（処理は続行します）: ${(repaired.stderr || repaired.error?.message || `exit ${repaired.status}`).trim()}`);
+  if (process.platform === 'win32' && !forceNative) {
+    const listed = spawnSync('wsl', ['-l', '-q'], { encoding: 'utf16le', timeout: 15000 });
+    const distros = listed.status === 0 ? listed.stdout.split(/\r?\n/).map((x) => x.replace(/\0/g, '').trim()).filter(Boolean) : [];
+    const distro = distros.find((x) => x.toLowerCase() === 'ubuntu') || distros[0];
+    let usable = false;
+    if (distro) {
+      const versionProbe = () => {
+        const probe = spawnSync('wsl', ['-d', distro, '--', 'codex', '--version'], { encoding: 'utf8', timeout: 15000 });
+        return { ok: probe.status === 0, stderr: (probe.stderr || '').toString().trim().slice(0, 300) };
+      };
+      const present = spawnSync('wsl', ['-d', distro, '--', 'sh', '-lc', 'command -v codex >/dev/null 2>&1'], { timeout: 15000 }).status === 0;
+      const first = versionProbe();
+      usable = first.ok;
+      const step = wslCodexLaunchPlan({ distroFound: true, codexPresent: present, versionOk: first.ok, installAttempted: false, retried: false });
+      if (step === 'retry') {
+        console.error(`WSL ${distro} には codex が在りますが起動確認が失敗しました。一過性の可能性があるため再試行します${first.stderr ? ` (${first.stderr})` : ''}`);
+        usable = versionProbe().ok;
+        if (!usable) console.error(`WSL ${distro} の codex は再試行でも起動確認できませんでした。在るのに失敗しているため npm 再インストールはしません`);
+      } else if (step === 'install') {
+        console.error(`WSL ${distro} に codex が見つからないため自動インストールを試します`);
+        const installed = spawnSync('wsl', ['-d', distro, '--', 'npm', 'i', '-g', '@openai/codex'], { stdio: 'inherit', timeout: 120000 });
+        if (installed.status === 0) usable = versionProbe().ok;
+        else console.error(`WSL ${distro} への codex 自動インストールが失敗しました(exit ${installed.status})。WSL 内に手動で導入してください`);
       }
-    } catch (error) {
-      if (error?.code !== 'ENOENT') console.error(`⚠️ worktree の gitdir 確認に失敗しました（処理は続行します）: ${error?.message ?? error}`);
     }
-    result = await execute('wsl', ['-d', distro, '--cd', cwd, '--', 'codex', 'exec', '-s', review ? 'read-only' : 'workspace-write', '-']);
-  }
-  else {
-    console.error('⚠️ WSL 経路が使えないためネイティブ Windows codex で実行します。\nWindows 版は read-only サンドボックス固定でファイルを書けない既知の不具合(openai/codex#35428)があり、編集が保存されない可能性が高い。WSL の導入を推奨');
+    if (usable) {
+      const gitFile = path.join(cwd, '.git');
+      try {
+        if (fs.statSync(gitFile).isFile() && needsWorktreeRepair(fs.readFileSync(gitFile, 'utf8'))) {
+          const repaired = spawnSync('git', ['-C', cwd, '-c', 'worktree.useRelativePaths=true', 'worktree', 'repair'], { encoding: 'utf8' });
+          if (repaired.status === 0) console.error('⚠️ Windows 絶対パスの gitdir は WSL 側 codex が解決できないため相対パスへ直しました');
+          else console.error(`⚠️ Windows 絶対パスの gitdir を相対パスへ修復できませんでした（処理は続行します）: ${(repaired.stderr || repaired.error?.message || `exit ${repaired.status}`).trim()}`);
+        }
+      } catch (error) {
+        if (error?.code !== 'ENOENT') console.error(`⚠️ worktree の gitdir 確認に失敗しました（処理は続行します）: ${error?.message ?? error}`);
+      }
+      result = await execute('wsl', ['-d', distro, '--cd', cwd, '--', 'codex', ...codexArgs]);
+    }
+    else {
+      console.error('⚠️ WSL 経路が使えないためネイティブ Windows codex で実行します。\nWindows 版は read-only サンドボックス固定でファイルを書けない既知の不具合(openai/codex#35428)があり、編集が保存されない可能性が高い。WSL の導入を推奨');
+      const nativeArgs = [...codexArgs];
+      if (!fs.existsSync(path.join(cwd, '.git'))) nativeArgs.splice(-1, 0, '--skip-git-repo-check');
+      result = await execute('codex', nativeArgs, { cwd });
+    }
+  } else {
+    if (process.platform === 'win32') console.error('⚠️ --force-native によりネイティブ Windows codex で実行します。編集が保存されない可能性があります');
+    const nativeArgs = [...codexArgs];
+    if (!fs.existsSync(path.join(cwd, '.git'))) nativeArgs.splice(-1, 0, '--skip-git-repo-check');
     result = await execute('codex', nativeArgs, { cwd });
   }
-} else {
-  if (process.platform === 'win32') console.error('⚠️ --force-native によりネイティブ Windows codex で実行します。編集が保存されない可能性があります');
-  const nativeArgs = ['exec', '-s', review ? 'read-only' : 'workspace-write'];
-  if (!fs.existsSync(path.join(cwd, '.git'))) nativeArgs.push('--skip-git-repo-check');
-  nativeArgs.push('-');
-  result = await execute('codex', nativeArgs, { cwd });
+
+  recordUsage(result, `codex-cli/${selectedLane.slug}`, (Date.now() - attemptStarted) / 1000);
+  return result;
 }
 
-const quotaCheck = detectQuotaLimit(result?.output, result?.stderr, result?.status, prompt);
+const failureReason = (result) => result.timedOut ? 'timedOut'
+  : result.status !== 0 ? `exit_${result.status}`
+  : wantedEdit && treeBefore.trim() === treeSnapshot().trim() ? 'empty_diff' : '';
+let quotaCheck;
 let quotaResetUntil = 0;
-if (quotaCheck.matched) {
-  quotaResetUntil = parseCodexResetUntil(`${result?.output || ''}\n${result?.stderr || ''}`);
-  try {
-    writeCodexCooldown(quotaResetUntil);
-  } catch {}
+let escalationFailed = false;
+let astraRetreated = false;
+while (true) {
+  result = await executeCodex();
+  quotaCheck = detectQuotaLimit(result?.output, result?.stderr, result?.status, prompt);
+  if (quotaCheck.matched && selectedLane.slug === ASTRA && !astraRetreated) {
+    const resetUntil = parseCodexResetUntil(`${result.output || ''}\n${result.stderr || ''}`);
+    try { writeCodexCooldown(resetUntil, 'codex-astra', 'usage_limit'); } catch {}
+    try {
+      fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+      fs.appendFileSync(path.join(home, '.claude', 'codex-limit-history.jsonl'), `${JSON.stringify({ t: new Date().toISOString(), model: ASTRA, pattern: quotaCheck.pattern })}\n`, 'utf8');
+    } catch {}
+    console.log('[codex-do] astra usage limit → sol へ退避');
+    astraRetreated = true;
+    selectedLane = { slug: SOL, effort, reason: 'astra_usage_limit' };
+    continue;
+  }
+  const failure = failureReason(result);
+  if (!quotaCheck.matched && failure && selectedLane.slug === SOL && lane === 'auto' && !model && !noEscalate && !escalated && !astraRetreated && providerCooldownMs('codex-astra') === 0) {
+    console.log(`[codex-do] sol 失敗 → astra へ昇格 (理由: ${failure})`);
+    escalated = true;
+    selectedLane = { slug: ASTRA, effort: 'high', reason: `escalated:${failure}` };
+    continue;
+  }
+  escalationFailed = escalated && Boolean(failure);
+  if (escalationFailed && result.status === 0) result.status = 1;
+  break;
+}
+const fallbackReason = quotaCheck.matched ? 'Codex usage limit を検出' : 'Astra 昇格後も失敗';
+if (quotaCheck.matched || escalationFailed) {
+  if (quotaCheck.matched) {
+    quotaResetUntil = parseCodexResetUntil(`${result?.output || ''}\n${result?.stderr || ''}`);
+    try { writeCodexCooldown(quotaResetUntil); } catch {}
+  }
   if (noFallback) {
-    console.error(`[codex-do] Codex usage limit detected: ${quotaCheck.pattern} at index ${quotaCheck.index}. Context: "${quotaCheck.snippet}"`);
+    if (quotaCheck.matched) console.error(`[codex-do] Codex usage limit detected: ${quotaCheck.pattern} at index ${quotaCheck.index}. Context: "${quotaCheck.snippet}"`);
     console.error(`[codex-do] --no-fallback is specified. Fallback skipped.`);
     if (result.status === 0 || result.status === null) {
       result.status = 1;
     }
   } else {
     executorName = 'fallback';
-    console.log(`[codex-do] executor=fallback (理由: Codex usage limit を検出)`);
-    console.error(`[codex-do] Codex usage limit detected: ${quotaCheck.pattern} at index ${quotaCheck.index}. Context: "${quotaCheck.snippet}"`);
+    console.log(`[codex-do] executor=fallback (理由: ${fallbackReason})`);
+    if (quotaCheck.matched) console.error(`[codex-do] Codex usage limit detected: ${quotaCheck.pattern} at index ${quotaCheck.index}. Context: "${quotaCheck.snippet}"`);
     console.error(`[codex-do] Falling back to an agentic CLI...`);
 
     const backends = resolveFallbackBackends(home);
@@ -558,7 +666,6 @@ const reportedFallbackBackend = fallbackBackend ?? lastBackend;
 const diff = spawnSync('git', ['-C', cwd, 'diff', '--stat'], { encoding: 'utf8' });
 if (diff.stdout) process.stdout.write(diff.stdout);
 // 読み取り専用の質問(説明して/調べて)では空diffが正常なので、指示自体が実装系のときだけ判定する。
-const wantedEdit = /実装|作って|修正|直して|追加して|リファクタ|refactor|fix|implement/i.test(instruction);
 // 「空か」ではなく「この実行で変わったか」を見る。
 const treeUnchanged = treeBefore.trim() === treeSnapshot().trim();
 if (executorName === 'codex') {
@@ -577,25 +684,13 @@ if (shouldFlagEmptyFallbackDiff({ executorName, wantedEdit, timedOut: result.tim
     : `🚨 フォールバック(${fallbackName})は作業ツリーを1行も変更していません。指示が届いたか確認してください`);
   result.status = 1;
 }
-if (executorName === 'fallback' && result?.status !== 0) {
+if (quotaCheck.matched && executorName === 'fallback' && result?.status !== 0) {
   try { writeCodexCooldown(quotaResetUntil, undefined, 'usage_limit_no_fallback'); } catch {}
 }
-try {
-  const ledger = path.join(home, '.claude', 'executor-usage.jsonl');
-  fs.mkdirSync(path.dirname(ledger), { recursive: true });
-  const usage = {
-    t: new Date().toISOString(),
-    provider: executorName,
-    model: executorName === 'fallback' ? `${reportedFallbackBackend?.name ?? 'unknown'}/${reportedFallbackBackend?.model ?? 'unknown'}` : 'codex-cli',
-    in: Math.ceil(prompt.length / 4),
-    out: Math.ceil((result.outputChars || 0) / 4),
-    timedOut: result?.timedOut === true,
-    status: result?.status ?? null,
-    secs: Number(secs.toFixed(3))
-  };
-  fs.appendFileSync(ledger, `${JSON.stringify(usage)}\n`, 'utf8');
-} catch {}
+if (executorName === 'fallback') {
+  recordUsage(result, `${reportedFallbackBackend?.name ?? 'unknown'}/${reportedFallbackBackend?.model ?? 'unknown'}`, secs, 'fallback');
+}
 
-console.log(`[codex-do] executor=${executorName}${executorName === 'fallback' ? `:${reportedFallbackBackend?.name ?? 'unknown'} (理由: Codex usage limit を検出)` : ''}`);
+console.log(`[codex-do] executor=${executorName}${executorName === 'fallback' ? `:${reportedFallbackBackend?.name ?? 'unknown'} (理由: ${fallbackReason})` : ''}`);
 process.exit(result?.status ?? 1);
 }

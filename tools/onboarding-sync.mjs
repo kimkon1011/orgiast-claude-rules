@@ -24,7 +24,8 @@ const target = targetArg ? targetArg.slice(9) : path.join(home, '.claude', 'CLAU
 const statePath = path.join(home, '.claude', '.onboarding-sync-state.json');
 const repoStatePath = path.join(home, '.claude', '.repo-sync-state.json');
 const fallbackStatePath = path.join(home, '.claude', 'onboarding-sync-fallback.json');
-const keysStatePath = path.join(home, '.claude', 'onboarding-sync-keys.json');
+const keysStatePath = path.join(home, '.claude', '.keys-sync-state.json');
+const legacyKeysStatePath = path.join(home, '.claude', 'onboarding-sync-keys.json');
 const repoPath = path.join(home, 'orgiast-claude-rules');
 const logPath = path.join(home, '.claude', 'hooks', 'onboarding-sync.log');
 const rawUrl = process.env.ORGIAST_ONBOARDING_URL || 'https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/ONBOARDING.md';
@@ -34,6 +35,7 @@ const endMarker = '<!-- END: オージャスト共通ルール -->';
 const indexLead = '全文は ~/.claude/orgiast-onboarding.md（および https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/ONBOARDING.md ）。このファイルは自動ロードされない。判断に迷ったら Read ツールで該当節を読むこと';
 export const PRESERVE_LOCAL_KEYS = new Set(['REPORTER_LABEL', 'REPORTER_HOST']);
 export const KEYS_GUARD_MS = 20 * 60 * 60 * 1000;
+export const KEYS_ALERT_STALE_MS = 48 * 60 * 60 * 1000;
 
 export function executionPlan(argv = []) {
   const onlyKeys = argv.includes('--keys-only');
@@ -45,6 +47,13 @@ export function shouldRunKeys(previous, now = new Date(), forced = false) {
   if (!previous?.lastRunAt) return true;
   const elapsed = now - new Date(previous.lastRunAt);
   return !Number.isFinite(elapsed) || elapsed >= KEYS_GUARD_MS;
+}
+
+export function keySyncIsStale(previous, now = new Date(), staleMs = KEYS_ALERT_STALE_MS) {
+  const last = previous?.last ?? previous?.lastRunAt;
+  if (!last) return true;
+  const timestamp = new Date(last);
+  return !Number.isFinite(timestamp.getTime()) || now - timestamp >= staleMs;
 }
 
 export function missingDeclaredKeys(files, exists) {
@@ -95,7 +104,12 @@ function log(message) {
 }
 function state() { try { return JSON.parse(fs.readFileSync(statePath, 'utf8')); } catch { return null; } }
 function repoState() { try { return JSON.parse(fs.readFileSync(repoStatePath, 'utf8')); } catch { return null; } }
-function keysState() { try { return JSON.parse(fs.readFileSync(keysStatePath, 'utf8')); } catch { return null; } }
+function keysState() {
+  for (const file of [keysStatePath, legacyKeysStatePath]) {
+    try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
+  }
+  return null;
+}
 function saveRepoState(now) {
   if (dryRun) return;
   try { fs.mkdirSync(path.dirname(repoStatePath), { recursive: true }); fs.writeFileSync(repoStatePath, `${JSON.stringify({ last: now.toISOString() }, null, 2)}\n`, 'utf8'); } catch {}
@@ -408,7 +422,7 @@ async function syncRepository(now) {
 function saveKeysState(now) {
   try {
     fs.mkdirSync(path.dirname(keysStatePath), { recursive: true });
-    fs.writeFileSync(keysStatePath, `${JSON.stringify({ lastRunAt: now.toISOString() }, null, 2)}\n`, 'utf8');
+    fs.writeFileSync(keysStatePath, `${JSON.stringify({ last: now.toISOString(), lastRunAt: now.toISOString() }, null, 2)}\n`, 'utf8');
   } catch {}
 }
 function saveKeysAlertState(previous, now) {
@@ -448,14 +462,20 @@ async function alertKeyserveFailure(previous, now, status) {
 async function provisionKeys(now, options = {}) {
   if (dryRun) return;
   const previous = keysState();
-  if (!shouldRunKeys(previous, now, force)) return;
+  if (!shouldRunKeys(previous, now, force)) {
+    if (keySyncIsStale(previous, now)) await alertKeyserveFailure(previous, now);
+    return;
+  }
   let secret = process.env.ORGIAST_KEYSERVE_SECRET || '';
   if (!secret) secret = readEnvValue(path.join(home, '.claude', 'keyserve.env'), 'ORGIAST_KEYSERVE_SECRET');
   if (!secret) {
     secret = readEnvValue(path.join(home, '.claude', 'cost-reporter.env'), 'DISCORD_COST_WEBHOOK');
     if (secret) log('legacy secret を使用中（keyserve.env 未受領）');
   }
-  if (!secret) return;
+  if (!secret) {
+    await alertKeyserveFailure(previous, now);
+    return;
+  }
   try {
     const ts = Math.floor(Date.now() / 1000).toString();
     const auth = crypto.createHmac('sha256', secret).update(ts).digest('hex');

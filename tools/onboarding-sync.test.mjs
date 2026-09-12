@@ -3,11 +3,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import http from 'node:http';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
   executionPlan, makeIndex, mergeEnvFile, missingDeclaredKeys, PRESERVE_LOCAL_KEYS,
-  shouldRunKeys, updateRepositoryFiles,
+  shouldRunKeys, keySyncIsStale, updateRepositoryFiles,
 } from './onboarding-sync.mjs';
 import { gitBlobSha } from './version-drift.mjs';
 
@@ -23,6 +24,19 @@ function setup(initial) {
 function run(f, extraArgs = [], envOverrides = {}) {
   const url = `data:text/markdown;base64,${source.toString('base64')}`;
   return spawnSync(process.execPath, [script, '--force', ...extraArgs, `--target=${f.target}`], { encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: f.home, ORGIAST_ONBOARDING_URL: url, ORGIAST_KEYSERVE_SECRET: '', ORGIAST_REPO: path.join(f.home, 'absent'), ...envOverrides } });
+}
+function runAsync(f, extraArgs = [], envOverrides = {}, forced = true) {
+  const url = `data:text/markdown;base64,${source.toString('base64')}`;
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [script, ...(forced ? ['--force'] : []), ...extraArgs, `--target=${f.target}`], {
+      env: { ...process.env, ORGIAST_HOME: f.home, ORGIAST_ONBOARDING_URL: url, ORGIAST_KEYSERVE_SECRET: '', ORGIAST_REPO: path.join(f.home, 'absent'), ...envOverrides },
+    });
+    let stdout = '', stderr = '';
+    child.stdout.setEncoding('utf8').on('data', (chunk) => { stdout += chunk; });
+    child.stderr.setEncoding('utf8').on('data', (chunk) => { stderr += chunk; });
+    child.once('error', reject);
+    child.once('close', (status) => resolve({ status, stdout, stderr }));
+  });
 }
 
 test('--keys-only runs only key provisioning', () => {
@@ -41,6 +55,48 @@ test('key guard skips at 19 hours and runs at 21 hours', () => {
 
 test('key guard runs when state file has no prior success', () => {
   assert.equal(shouldRunKeys(null, new Date('2026-09-06T12:00:00.000Z')), true);
+});
+
+test('keyserve failure alert treats a success 48h ago or no success as stale', () => {
+  const now = new Date('2026-09-06T12:00:00.000Z');
+  assert.equal(keySyncIsStale({ last: '2026-09-04T12:00:01.000Z' }, now), false);
+  assert.equal(keySyncIsStale({ last: '2026-09-04T12:00:00.000Z' }, now), true);
+  assert.equal(keySyncIsStale(null, now), true);
+});
+
+test('HTTP 500 is alerted even after a recent successful key sync', async (t) => {
+  const f = setup(null);
+  fs.writeFileSync(path.join(f.home, '.claude', '.keys-sync-state.json'), `${JSON.stringify({ last: new Date().toISOString(), lastRunAt: new Date().toISOString() })}\n`);
+  const server = http.createServer((_request, response) => {
+    response.writeHead(500).end('failed');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => server.close());
+  const { port } = server.address();
+  const result = await runAsync(f, [], {
+    ORGIAST_KEYSERVE_SECRET: 'test-only-secret',
+    ORGIAST_KEYSERVE_URL: `http://127.0.0.1:${port}/keys`,
+  });
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /keyserve .*HTTP status: 500/);
+});
+
+test('missing every keyserve secret is alerted instead of returning silently', async () => {
+  const f = setup(null);
+  const result = await runAsync(f);
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /keyserve .*HTTP status: 不明/);
+});
+
+test('a throttled key sync is alerted when the last success is over 48h old', async () => {
+  const f = setup(null);
+  fs.writeFileSync(path.join(f.home, '.claude', '.keys-sync-state.json'), `${JSON.stringify({
+    last: new Date(Date.now() - 49 * 60 * 60 * 1000).toISOString(),
+    lastRunAt: new Date().toISOString(),
+  })}\n`);
+  const result = await runAsync(f, [], {}, false);
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /keyserve .*HTTP status: 不明/);
 });
 
 test('missingDeclaredKeys lists declared files absent locally', () => {

@@ -54,6 +54,20 @@ test('stateに計測値があればパーセント表記で送る', () => {
   assert.equal(payload.claudeUsd, 1.23);
 });
 
+test('keyserve status を既存 status payload に相乗りさせる', () => {
+  const checkedAt = '2026-09-12T00:00:00.000Z';
+  const old = process.env.ORGIAST_KEYSERVE_STATUS_JSON;
+  process.env.ORGIAST_KEYSERVE_STATUS_JSON = JSON.stringify({ auth: 'legacy', success: true, status: 200, checkedAt });
+  try {
+    const payload = reportPayload();
+    assert.equal(payload.keyserveAuth, 'legacy');
+    assert.equal(payload.keyserveStatus, 200);
+    assert.equal(payload.keyserveCheckedAt, checkedAt);
+  } finally {
+    if (old === undefined) delete process.env.ORGIAST_KEYSERVE_STATUS_JSON; else process.env.ORGIAST_KEYSERVE_STATUS_JSON = old;
+  }
+});
+
 test('GAS upsertは空の計測値で既存セルを上書きせず、実測0は更新する', () => {
   const source = fs.readFileSync(new URL('../gas/fleet-status-sheet/UpsertLogic.gs', import.meta.url), 'utf8');
   const context = {};

@@ -783,6 +783,7 @@ test('Astra and Sol quota proceed to cheap-code once', (t) => {
   assert.match(result.stdout, /executor=fallback:cheap-code:deepseek/);
   assert.ok(result.cooldown.codex.until > Date.now());
   assert.equal(result.ledger.length, 3);
+  assert.deepEqual(result.ledger.map((r) => [r.timedOut, r.status]), [[false, 1], [false, 1], [false, 0]]);
 });
 
 for (const [name, first, prompt] of [
@@ -795,6 +796,7 @@ for (const [name, first, prompt] of [
     assert.equal(result.status, name === 'empty diff' ? 1 : 0, result.stderr);
     assert.match(result.stdout, /sol 失敗 → astra へ昇格/);
     assert.deepEqual(result.ledger.map((r) => [r.model, r.escalated]), [[`codex-cli/${SOL}`, false], [`codex-cli/${ASTRA}`, true]]);
+    assert.deepEqual(result.ledger.map((r) => [r.timedOut, r.status]), [[first.timedOut === true, first.status ?? 0], [false, 0]]);
   });
 }
 

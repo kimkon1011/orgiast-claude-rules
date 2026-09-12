@@ -496,6 +496,8 @@ function recordUsage(result, modelName, seconds, provider = 'codex') {
       t: new Date().toISOString(), provider, model: modelName,
       lane: selectedLane.reason, escalated,
       in: Math.ceil(prompt.length / 4), out: Math.ceil((result.outputChars || 0) / 4),
+      timedOut: result?.timedOut === true,
+      status: result?.status ?? null,
       secs: Number(seconds.toFixed(3))
     })}\n`, 'utf8');
   } catch {}

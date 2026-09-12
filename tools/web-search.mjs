@@ -7,10 +7,11 @@ import { isEntry } from './is-entry.mjs';
 
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
-const DEFAULT_MODELS = { gemini: 'gemini-3.6-flash', groq: 'groq/compound-mini' };
+const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const DEFAULT_MODELS = { gemini: 'gemini-3.6-flash', groq: 'groq/compound-mini', openrouter: 'openai/gpt-oss-120b:online' };
 // グラウンディング検索は実測で 50 秒超えることがある(2026-08-30)。60 秒だと惜しいところで Groq へ落ちる。
 const DEFAULT_TIMEOUT_SECONDS = 120;
-const USAGE = '使い方: node tools/web-search.mjs "<調べたいこと>" [--provider auto|gemini|groq] [--model <id>] [--json] [--timeout <秒>] [--raw]';
+const USAGE = '使い方: node tools/web-search.mjs "<調べたいこと>" [--provider auto|gemini|groq|openrouter] [--model <id>] [--json] [--timeout <秒>] [--raw]';
 
 export function appendExecutorUsage(row, { homeDir = process.env.ORGIAST_HOME || os.homedir(), usageFile } = {}) {
   const file = usageFile || path.join(homeDir, '.claude', 'executor-usage.jsonl');
@@ -34,11 +35,16 @@ export function loadGroqApiKey({ env = process.env, homeDir = os.homedir() } = {
   return env.GROQ_API_KEY || readEnvValue(path.join(homeDir, '.claude', 'groq.env'), 'GROQ_API_KEY');
 }
 
+export function loadOpenRouterApiKey({ env = process.env, homeDir = os.homedir() } = {}) {
+  return env.OPENROUTER_API_KEY || readEnvValue(path.join(homeDir, '.claude', 'openrouter.env'), 'OPENROUTER_API_KEY');
+}
+
 function collectUrls(value, found) {
   if (typeof value === 'string') {
     try { collectUrls(JSON.parse(value), found); } catch {}
     for (const match of value.matchAll(/https?:\/\/[^\s"'<>]+/g)) {
-      const url = match[0].replace(/[),.;:\]}]+$/g, '');
+      // run33 実測: 回答本文の「【orgiast.jp】(https://www.orgiast.jp/company)。」で全角約物が URL に混入する。
+      const url = match[0].replace(/[),.;:\]}）。、，]+$/g, '');
       if (url) found.add(url);
     }
   } else if (Array.isArray(value)) {
@@ -75,7 +81,7 @@ export function parseArgs(argv) {
       if (!value) throw new Error(`${arg} の値がありません`);
       if (arg === '--model') options.model = value;
       else if (arg === '--provider') {
-        if (!['auto', 'gemini', 'groq'].includes(value)) throw new Error('--provider は auto|gemini|groq で指定してください');
+        if (!['auto', 'gemini', 'groq', 'openrouter'].includes(value)) throw new Error('--provider は auto|gemini|groq|openrouter で指定してください');
         options.provider = value;
       } else {
         options.timeoutSeconds = Number(value);
@@ -122,6 +128,19 @@ export async function requestGroqSearch({ query, model = DEFAULT_MODELS.groq, ti
   const raw = await response.json();
   const message = raw.choices?.[0]?.message ?? {};
   return { raw, answer: typeof message.content === 'string' ? message.content.trim() : '', urls: extractExecutedToolUrls(message.executed_tools), elapsedMs: Date.now() - started };
+}
+
+export async function requestOpenRouterSearch({ query, model = DEFAULT_MODELS.openrouter, timeoutSeconds = DEFAULT_TIMEOUT_SECONDS, apiKey, fetchImpl = globalThis.fetch }) {
+  const started = Date.now();
+  const response = await fetchWithTimeout(OPENROUTER_API_URL, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', 'HTTP-Referer': 'https://orgiast.jp', 'X-Title': 'orgiast' },
+    body: JSON.stringify({ model, messages: [{ role: 'user', content: `${query}\n\n回答には、根拠として参照した出典URLを必ず付けてください。` }] }),
+  }, timeoutSeconds, fetchImpl);
+  if (!response.ok) throw await httpError('OpenRouter', response);
+  const raw = await response.json();
+  const message = raw.choices?.[0]?.message ?? {};
+  return { raw, answer: typeof message.content === 'string' ? message.content.trim() : '', urls: extractExecutedToolUrls(message), elapsedMs: Date.now() - started };
 }
 
 async function httpError(provider, response) {
@@ -171,20 +190,23 @@ export async function search(query, options = {}) {
   const keys = {
     gemini: options.geminiApiKey ?? loadGeminiApiKey(keyOptions),
     groq: options.groqApiKey ?? options.apiKey ?? loadGroqApiKey(keyOptions),
+    openrouter: options.openrouterApiKey ?? loadOpenRouterApiKey(keyOptions),
   };
-  const providers = providerOption === 'auto' ? ['gemini', 'groq'] : [providerOption];
+  const providers = providerOption === 'auto' ? ['gemini', 'groq', 'openrouter'] : [providerOption];
+  const keyNames = { gemini: 'GEMINI_API_KEY', groq: 'GROQ_API_KEY', openrouter: 'OPENROUTER_API_KEY' };
   if (providers.every((provider) => !keys[provider])) {
-    const error = new Error(`${providers.map((provider) => `${provider === 'gemini' ? 'GEMINI' : 'GROQ'}_API_KEY がありません`).join('。')}。環境変数、~/.gemini/.env、~/.claude.json または ~/.claude/groq.env を確認してください。`);
+    const error = new Error(`${providers.map((provider) => `${keyNames[provider]} がありません`).join('。')}。環境変数、~/.gemini/.env、~/.claude.json、~/.claude/groq.env または ~/.claude/openrouter.env を確認してください。`);
     error.code = 2;
     throw error;
   }
 
   const failures = [];
+  const requests = { gemini: requestGeminiSearch, groq: requestGroqSearch, openrouter: requestOpenRouterSearch };
   for (const provider of providers) {
     if (!keys[provider]) { failures.push(`${provider}: APIキーなし`); continue; }
     const model = options.model || DEFAULT_MODELS[provider];
     try {
-      const request = provider === 'gemini' ? requestGeminiSearch : requestGroqSearch;
+      const request = requests[provider];
       const result = await request({ query, ...options, model, apiKey: keys[provider], fetchImpl: options.fetchImpl ?? globalThis.fetch });
       const usage = result.raw?.usageMetadata || result.raw?.usage || {};
       const row = provider === 'gemini'
@@ -195,7 +217,7 @@ export async function search(query, options = {}) {
       } catch (error) {
         options.stderr?.write(`使用量台帳への追記失敗: ${error.message}\n`);
       }
-      return { ...result, provider, model };
+      return { ...result, provider, model, failures };
     } catch (error) {
       failures.push(failureReason(provider, error, options.timeoutSeconds || DEFAULT_TIMEOUT_SECONDS));
       // 429 も再試行せず、auto の場合だけ次のプロバイダへ進む。

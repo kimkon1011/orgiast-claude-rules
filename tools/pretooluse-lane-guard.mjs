@@ -7,6 +7,8 @@ import { inspectTranscript } from './fable-session-guard.mjs';
 import { classifyBashCommand } from './usage-stats.mjs';
 import { codexHardBlockBypass } from './codex-cooldown.mjs';
 import { laneAdvice } from './cost-routing-gate.mjs';
+import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
+
 
 const repo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const delegated = /codex-do\.mjs|llm-ask\.mjs|batch-(?:enqueue|run)\.mjs|(?:^|\s)gemini\s|(?:^|\s)codex\s|wsl[^\r\n]*\bcodex\b|claude\s+-p|node[^\r\n]*usage-stats\.mjs/i;
@@ -18,7 +20,7 @@ function isDocEdit(name, input, home) {
   return target.startsWith(claude) || /(?:memory|scratchpad)/i.test(target) || /\.md$/i.test(target);
 }
 async function main() {
-  let raw = ''; process.stdin.setEncoding('utf8'); for await (const chunk of process.stdin) raw += chunk;
+  const raw = await readStdinWithTimeout();
   try {
     const input = JSON.parse(raw.replace(/^\uFEFF/, '')), home = process.env.ORGIAST_HOME || os.homedir();
     if (/subagents/i.test(String(input.transcript_path || '')) || fs.existsSync(path.join(home, '.claude', 'cost-enforce-override'))) return;

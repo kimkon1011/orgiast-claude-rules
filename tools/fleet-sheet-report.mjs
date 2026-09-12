@@ -1,5 +1,7 @@
 #!/usr/bin/env node
+import { isEntry } from './is-entry.mjs';
 import fs from 'node:fs';
+import { codexAuthStatus, formatCodexLogin } from './codex-auth-status.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,6 +17,7 @@ import { fetchClaudePlanUsage } from './claude-plan-usage.mjs';
 import { collectBudgetStatus } from './budget-status.mjs';
 
 const dryRun = process.argv.includes('--dry-run');
+const noJitter = process.argv.includes('--no-jitter');
 const includeSpecs = process.argv.includes('--specs');
 const includeCloud = process.argv.includes('--cloud');
 const home = process.env.ORGIAST_HOME || os.homedir();
@@ -93,6 +96,7 @@ async function main() {
   const reporter = readJson(path.join(claudeDir, '.cost-reporter-state.json'));
   const map = readJson(path.join(repo, 'fleet-pc-map.json'));
   const label = labelResolution.label || 'unknown';
+  if (!dryRun && !noJitter) await sleep(labelJitterMs(label));
   const counts = cheapAiCounts(path.join(claudeDir, 'executor-usage.jsonl'));
   const mappedName = Object.prototype.hasOwnProperty.call(map, label) && typeof map[label] === 'string' ? map[label] : null;
   const topModel = Array.isArray(reporter.topModels) && reporter.topModels[0] ? reporter.topModels[0].model : '';
@@ -128,7 +132,7 @@ async function main() {
     budgetPacePct: budget.budgetPacePct,
     settingsModel: typeof settings.model === 'string' && settings.model.trim() ? settings.model.trim() : '未設定(=Opus)',
     cheapAiUse: Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([provider, count]) => `${provider}:${count}`).join(', ') || 'なし',
-    codexLogin: adoption.codexAuthed === true ? '済' : adoption.codexAuthed === false ? '未' : '判定不能',
+    codexLogin: formatCodexLogin(codexAuthStatus(home), adoption.codexAuthed),
     fable5: fableDetected ? '検出' : fableKnown ? '未検出' : '判定不能',
     disciplineAlert: enforce.mode ? `${enforce.mode}${enforce.reason ? ': ' + enforce.reason : ''}` : '判定不能',
     activeProjects: formatProjectsCell(projects),
@@ -163,10 +167,11 @@ async function main() {
   }
   // 2本は独立して送る。1本目が落ちたら2本目も送られない(かつ main の catch が
   // 握り潰す)と、拡張監査が「一度も届いていないのに誰も気付かない」状態になる。
-  await post(fleetEnv.FLEET_SHEET_URL, 'status', payload);
+  const status = await post(fleetEnv.FLEET_SHEET_URL, 'status', payload);
   if (specPayload) await post(fleetEnv.FLEET_SHEET_URL, 'pc-spec', specPayload);
   await post(fleetEnv.FLEET_SHEET_URL, 'extensions', extensionPayload);
   if (cloudPayload) await post(fleetEnv.FLEET_SHEET_URL, 'cloud-login', cloudPayload);
+  if (!status.ok) process.exitCode = 1;
 }
 
 // GAS Web App はリダイレクト＋コールドスタートで数十秒かかることがある。
@@ -175,17 +180,37 @@ async function main() {
 // 嘘の失敗ログは、本物の障害を調べるときに真っ先に人を迷わせるので余裕を持たせる。
 const POST_TIMEOUT_MS = 60_000;
 
-async function post(url, kind, body) {
-  try {
-    const response = await fetch(url, {
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+export function labelJitterMs(label) {
+  let hash = 2166136261;
+  for (const char of String(label)) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
+  return (hash >>> 0) % 240001;
+}
+function safeError(error) {
+  return String(error?.message || error?.name || 'error').replace(/https?:\/\/\S+/gi, '<url>').replace(/[\r\n]+/g, ' ').slice(0, 160);
+}
+export async function post(url, kind, body, options = {}) {
+  const fetchFn = options.fetchFn || fetch, wait = options.sleepFn || sleep, random = options.random || Math.random;
+  const logFile = options.logFile || path.join(home, '.claude', 'logs', 'fleet-sheet-report.log');
+  let lastError = '';
+  for (let attempt = 1; attempt <= 3; attempt++) try {
+    const response = await fetchFn(url, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(POST_TIMEOUT_MS), redirect: 'follow',
     });
-    if (!response.ok) console.error(`fleet-sheet: ${kind} の送信が HTTP ${response.status}`);
+    const text = await response.text();
+    let parsed = null; try { parsed = text ? JSON.parse(text) : null; } catch {}
+    if (!response.ok || parsed?.ok === false) throw new Error(parsed?.error || `HTTP ${response.status}`);
+    fs.mkdirSync(path.dirname(logFile), { recursive: true });
+    fs.appendFileSync(logFile, `${new Date().toISOString()} kind=${kind} attempts=${attempt} result=ok error=-\n`);
+    return { ok: true, attempts: attempt };
   } catch (error) {
-    // タイムアウトは「届かなかった」とは限らない(サーバ側は完了している場合がある)。
-    // ここで再送すると二重書き込みになりうるので、報告だけして再送はしない。
-    console.error(`fleet-sheet: ${kind} の送信に失敗 (${error?.name || 'error'})${error?.name === 'TimeoutError' ? ' ※サーバ側は完了している可能性がある' : ''}`);
+    lastError = safeError(error);
+    if (attempt < 3) await wait(Math.round([5000, 15000][attempt - 1] * (0.8 + random() * 0.4)));
   }
+  fs.mkdirSync(path.dirname(logFile), { recursive: true });
+  fs.appendFileSync(logFile, `${new Date().toISOString()} kind=${kind} attempts=3 result=failed error=${lastError}\n`);
+  console.error(`fleet-sheet: ${kind} の送信に失敗 (${lastError})`);
+  return { ok: false, attempts: 3, error: lastError };
 }
 
-main().catch(() => {});
+if (isEntry(import.meta.url)) main().catch(error => { console.error(`fleet-sheet: fatal (${safeError(error)})`); process.exitCode = 1; });

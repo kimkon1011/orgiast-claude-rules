@@ -85,14 +85,18 @@ node ~/orgiast-claude-rules/tools/growi-manual.mjs sync
 2. `node ~/orgiast-claude-rules/tools/growi-manual.mjs ingest <保存パス>`
 
 これでその Part の全ページが `get` できるようになる。たいてい 1〜2 Part で足りるので、
-14 本落とす必要は無い。`ingest` は 1 本も取り込めなければ exit 1 で失敗する。
+全 Part（2026-09-12 実測で 15 本）を落とす必要は無い。`ingest` は 1 本も取り込めなければ exit 1 で失敗する。
 
 ## 一次ソース（Drive）
 
 - マニュアル本体フォルダ: `1LMRI2jFpVG3WnDYlepgbOuyJ6ZBYzI8B`
   （所有 seisaku-team@orgiast.jp / orgiast.jp ドメインに reader 共有。**一般公開ではない**）
 - 索引の置き場: 共通ハブ `1RLYbK6CKyPWRJsG6LY0WB9OzlbFYSFvw`（`growi-manual-index.tsv` / `growi-manual-meta.json`）
-- 運用 GAS:「社内マニュアル-NotebookLM連携」Script ID `1BVhALp3knyh4PaXGIre3v_ut6sOfWDMlAr_5S4yQM7-NGUzW-I5iLhIW`
+- ~~運用 GAS:「社内マニュアル-NotebookLM連携」Script ID `1BVhALp3knyh4PaXGIre3v_ut6sOfWDMlAr_5S4yQM7-NGUzW-I5iLhIW`~~
+  → **2026-09-12 に閉鎖（受信口としては廃止）**。Drive への書き込みは `sync-growi`（Growi 直取り・毎晩自動）へ移行済みで、この GAS はもう使わない。
+  live な deployment 5本はいずれも**要ログイン**で匿名 POST は通らないことを実測（`@HEAD`=GET 302→`accounts.google.com/ServiceLogin` / POST 401、他4本 403）。
+  manifest の `access` は `ANYONE_ANONYMOUS` → **`MYSELF`** に変更済み（新規 deploy で匿名全開 URL が生える潜在穴を塞いだ）。
+  **再デプロイしないこと。** 手動で同期し直したいときは `sync-growi` を使う
 - 元々は NotebookLM 用。Part 数は増えるので**決め打ちせず** `search_files` で実数を取る
 
 ## それでも足りないとき

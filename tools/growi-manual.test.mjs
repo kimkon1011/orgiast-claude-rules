@@ -221,9 +221,34 @@ test('Growi ページ列挙は limit=500 を無視する20件固定APIでも全�
   const result = await listGrowiPages('https://growi.example', http, 500);
   const ids = result.pages.map((page) => page._id);
   assert.equal(result.pages.length, expected.length);
+  assert.equal(result.complete, true);
+  assert.equal(result.rows, 130);
+  assert.equal(result.duplicateRows, 0);
   assert.equal(new Set(ids).size, ids.length);
   assert.deepEqual(new Set(ids), new Set(expected.map((page) => page._id)));
   assert.deepEqual(offsets, [0, 20, 40, 60, 80, 100, 120]);
+});
+
+test('Growi ページ列挙は44行中2行が重複しても全行走査の1パスだけで完了する', async (t) => {
+  const unique = Array.from({ length: 42 }, (_, index) => ({ _id: `page-${index}` }));
+  const stream = [...unique.slice(0, 20), ...unique.slice(18)];
+  const offsets = [];
+  const errors = [];
+  t.mock.method(console, 'error', (...args) => errors.push(args.join(' ')));
+  const result = await listGrowiPages('https://growi.example', async (url) => {
+    const offset = Number(new URL(url).searchParams.get('offset'));
+    offsets.push(offset);
+    return Response.json({ data: { pages: stream.slice(offset, offset + 20), totalCount: 44 } });
+  });
+  assert.equal(result.pages.length, 42);
+  assert.deepEqual(result.pages, unique);
+  assert.equal(result.totalCount, 44);
+  assert.equal(result.rows, 44);
+  assert.equal(result.complete, true);
+  assert.equal(result.duplicateRows, 2);
+  assert.deepEqual(offsets, [0, 20, 40]);
+  assert.ok(errors.every((line) => !line.includes('打ち切')));
+  assert.ok(errors.includes('Growi ページ列挙完了: 固有 42 / totalCount 44（重複行 2・全行走査済み）'));
 });
 
 test('Growi ページ列挙は同じ20件しか返らず進捗が止まると警告して中断する', async () => {
@@ -240,6 +265,7 @@ test('Growi ページ列挙は同じ20件しか返らず進捗が止まると警
       });
     }, 500);
     assert.equal(result.pages.length, 20);
+    assert.equal(result.complete, false);
   } finally {
     console.error = originalError;
   }
@@ -278,6 +304,7 @@ test('Growi ページ列挙は追加パスで増えなければ警告して収�
       return new Response(JSON.stringify({ data: { pages: visible.slice(offset, offset + 2), totalCount: 5 } }), { status: 200, headers: { 'content-type': 'application/json' } });
     }, 2);
     assert.equal(result.pages.length, 4);
+    assert.equal(result.complete, false);
   } finally {
     console.error = originalError;
   }
@@ -315,6 +342,30 @@ test('syncGrowi は writeParts 使用時に既定で発行せず、publish: true
   assert.equal(JSON.parse(fs.readFileSync(path.join(cache, 'meta.json'), 'utf8')).parts[0].fileId, 'mock-file');
   assert.equal(await syncGrowi({ ...common, publish: true }), 0);
   assert.equal(publishCalls, 1);
+});
+
+test('syncGrowi は重複行を除いた固有ページ数で Part を検証する', async (t) => {
+  const page = { _id: 'page-1', path: '/部署/ページ1', updatedAt: 'now' };
+  const logs = [];
+  const warnings = [];
+  t.mock.method(console, 'log', (...args) => logs.push(args.join(' ')));
+  t.mock.method(console, 'warn', (...args) => warnings.push(args.join(' ')));
+  const code = await syncGrowi({
+    cacheDir: temporaryCache(t),
+    env: { GROWI_BASE_URL: 'https://growi.example', GROWI_USER: 'user', GROWI_PASS: 'pass' },
+    http: async (url, options = {}) => {
+      const pathname = new URL(url).pathname;
+      if (pathname === '/login' && !options.method) return new Response('<main csrftoken="csrf"></main>');
+      if (pathname === '/login') return new Response(null, { status: 302 });
+      if (pathname.endsWith('/pages/recent')) return Response.json({ data: { pages: [page, page], totalCount: 2 } });
+      if (pathname.endsWith('/revisions/list')) return Response.json({ data: { docs: [{ body: '本文' }] } });
+      throw new Error(`想定外の HTTP 呼び出し: ${url}`);
+    },
+    writeParts: async () => new Map([[1, { fileId: 'mock-file', title: 'mock-title' }]]),
+  });
+  assert.equal(code, 0);
+  assert.deepEqual(warnings, []);
+  assert.ok(logs.includes('検証OK: 1ページ（totalCount 2 のうち重複行 1 を除く）'));
 });
 
 test('publishIndex は指定された cacheDir の索引を発行する', async (t) => {

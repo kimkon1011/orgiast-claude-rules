@@ -8,6 +8,8 @@ export const FALLBACK_CHAIN = Object.freeze([
   // 無料の Groq、定額の GLM、以降の従量プロバイダの順で費用を抑える。
   { provider: 'glm', model: 'glm-5.3' },
   { provider: 'cerebras', model: 'zai-glm-4.7' },
+  // Genspark Pro は前払いクレジットなので従量課金プロバイダより先に使う。
+  { provider: 'genspark', model: 'gpt-5.6-luna' },
   { provider: 'openrouter', model: 'openai/gpt-oss-120b' },
   { provider: 'deepseek', model: 'deepseek-chat' },
   { provider: 'gemini', model: 'gemini-3.7-flash' },

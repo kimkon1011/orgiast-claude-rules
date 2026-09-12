@@ -126,6 +126,9 @@ test('2. Stale reports (> 48h) raise stale_report and are excluded from fleet av
   assert.strictEqual(evalResult.fleet.totalClaudeUsd, 5.0);
 });
 
+test('stale_report 初回は再送指令を送り人へ上げない', () => { const calls = []; const r = decideActions({ violations: [{ kind: 'stale_report', pc: 'PC-A', evidence: 'stale' }], state: { actions: [] }, now: NOW, directiveSend: (...args) => calls.push(args) }); assert.equal(calls.length, 1); assert.equal(r.actions[0].mode, 'directive'); assert.equal(r.nextStaleRetry['PC-A'].count, 1); });
+test('stale_report 2日目は人へ上げる', () => { const r = decideActions({ violations: [{ kind: 'stale_report', pc: 'PC-A', evidence: 'stale' }], state: { actions: [], staleRetry: { 'PC-A': { sentAt: '2026-09-05T00:00:00Z', count: 1 } } }, now: NOW }); assert.equal(r.actions[0].mode, 'human'); assert.match(r.actions[0].todoMessage, /自動再送（directive）を 1 回/); });
+
 // 3. 同じ (kind, pc) はクールダウン中に再委譲されない
 test('3. Action is not dispatched if under cooldown (last action within 3 days)', () => {
   const violations = [
@@ -298,7 +301,7 @@ test('8. auto-local only runs commands that are present in the ALLOWED_LOCAL_COM
 });
 
 test('9. human escalation is neither worked nor shown in the verification section', async () => {
-  const decision = decideActions({ violations: [{ kind: 'stale_report', pc: 'PC-human', evidence: 'stale' }], state: { actions: [] }, now: NOW });
+  const decision = decideActions({ violations: [{ kind: 'stale_report', pc: 'PC-human', evidence: 'stale' }], state: { actions: [], staleRetry: { 'PC-human': { sentAt: '2026-09-01T00:00:00Z', count: 1 } } }, now: NOW });
   assert.strictEqual(decision.actions[0].result, 'escalated');
   assert.strictEqual(decision.actions[0].verifiedAt, null);
   const verified = verifyPreviousActions({ state: { actions: decision.actions }, rows: [], now: new Date(NOW.getTime() + 4 * 86400000) });
@@ -307,6 +310,7 @@ test('9. human escalation is neither worked nor shown in the verification sectio
   const tempDir = createTempDir();
   process.env.ORGIAST_HOME = tempDir;
   try {
+    fs.writeFileSync(path.join(tempDir, '.claude', 'cost-improve-state.json'), JSON.stringify({ version: 1, actions: [], lastKpis: {}, staleRetry: { 'PC-human': { sentAt: '2026-09-01T00:00:00Z', count: 1 } } }));
     const result = await main(['--dry-run', '--no-notify'], {
       fetchFleetSheetRows: async () => [{ pcName: 'PC-human', label: 'human', reportedAt: '2026-09-01 00:00:00', delegRatio: '60%', claudeUsd: '1' }],
       readLedger: () => ({ codex: 1 }), localState: {}, noNotify: true
@@ -353,7 +357,7 @@ test('11. reported rows with missing metrics are untrusted and never displayed a
     const result = await main(['--dry-run', '--no-notify'], {
       fetchFleetSheetRows: async () => rows, readLedger: () => ({ codex: 1 }), localState: {}, now: NOW, noNotify: true
     });
-    assert.ok(result.reportText.includes('**PC-broken**: 計測不能'));
+    assert.ok(result.reportText.includes('**PC-broken**: 報告実績なし'));
     assert.ok(!result.reportText.includes('$0.00'));
   } finally { delete process.env.ORGIAST_HOME; cleanTempDir(tempDir); }
 });
@@ -400,8 +404,8 @@ test('15. human todo messages are Japanese, self-contained, and contain PC name 
     { kind: 'cost_spike', pc: 'PC-cost', severity: 'error', evidence: 'Claude USD spiked by +30% (from $10 to $15) without work increase', previousValue: 10, actualValue: 15, increasePercent: 50 },
     { kind: 'measurement_untrusted', pc: 'PC-empty', severity: 'error', evidence: 'Reported at 2026-09-06 11:00:00, but delegation ratio or Claude USD is missing' }
   ];
-  const messages = decideActions({ violations, state: { actions: [] }, now: NOW }).actions.map(action => action.todoMessage);
-  assert.ok(messages.some(message => message.includes('PC-stale') && message.includes('2026-09-01 12:00:00') && message.includes('5日間') && message.includes('fleet-sheet-report.mjs')));
+  const messages = decideActions({ violations, state: { actions: [], staleRetry: { 'PC-stale': { sentAt: '2026-09-01T00:00:00Z', count: 1 } } }, now: NOW }).actions.map(action => action.todoMessage);
+  assert.ok(messages.filter(Boolean).some(message => message.includes('PC-stale') && message.includes('2026-09-01 12:00:00') && message.includes('5日間') && message.includes('自動再送（directive）を 1 回')));
   assert.ok(messages.some(message => message.includes('PC-cost') && message.includes('$10 → $15') && message.includes('+50.0%')));
   assert.ok(messages.some(message => message.includes('PC-empty') && message.includes('2026-09-06 11:00:00') && message.includes('値が空です') && message.includes('自動修正は見送りました')));
   assert.ok(messages.every(message => !/Liveness reporting|cost spiked|Measurement untrusted/.test(message)));
@@ -755,5 +759,97 @@ test('33. auto-codex は空 diff を failed とし PR 作成まで進めない',
     assert.equal(codexAct.result, 'failed');
     assert.match(codexAct.note, /変更なし/);
     assert.equal(calls.some((c) => c.program === 'gh' && c.args[0] === 'pr'), false, '空 diff では PR を作らない');
+  } finally { delete process.env.ORGIAST_HOME; cleanTempDir(tempDir); }
+});
+
+
+test('自機の stale_report は表示名とラベルが違ってもローカル再送する', () => {
+  const calls = [];
+  const result = decideActions({
+    violations: [{ kind: 'stale_report', pc: '自分のPC', label: 'own-label', evidence: 'stale' }],
+    state: { actions: [] }, now: NOW, ownLabel: 'own-label', repo: '/tmp/repo',
+    spawnSync: (...args) => { calls.push(args); return { status: 0 }; },
+    directiveSend: () => assert.fail('自機へ指令を送らない')
+  });
+  assert.deepEqual(calls, [[process.execPath, ['tools/fleet-sheet-report.mjs', '--specs', '--cloud', '--no-jitter'],
+    { cwd: '/tmp/repo', timeout: 300_000, windowsHide: true, shell: false, encoding: 'utf8' }]]);
+  assert.equal(result.actions[0].mode, 'local');
+  assert.deepEqual(result.nextStaleRetry['自分のPC'], { sentAt: NOW.toISOString(), count: 1, mode: 'local' });
+});
+
+test('他機への再送は --push と48時間の有効期限を付ける', () => {
+  const result = decideActions({
+    violations: [{ kind: 'stale_report', pc: '他のPC', label: 'remote-label', evidence: 'stale' }],
+    state: { actions: [] }, now: NOW, ownLabel: 'own-label', repo: '/tmp/repo',
+    spawnSync: () => assert.fail('他機をローカルで実行しない'),
+    directiveSend: (args, options) => {
+      assert.deepEqual(args, ['--kind', 'run', '--task', 'fleet-sheet-report', '--targets', 'remote-label', '--why', 'stale_report 自動復旧', '--push', '--expires-hours', '48']);
+      assert.deepEqual(options, { repo: '/tmp/repo' });
+    }
+  });
+  assert.equal(result.nextStaleRetry['他のPC'].mode, 'directive');
+});
+
+for (const mode of ['local', 'directive']) {
+  test(`${mode} 再送失敗は即人へ上げ、再送済みを記録せず秘匿値も出さない`, (t) => {
+    const errors = [];
+    t.mock.method(console, 'error', message => errors.push(message));
+    const result = decideActions({
+      violations: [{ kind: 'stale_report', pc: 'PC-A', evidence: 'stale' }],
+      state: { actions: [{ kind: 'stale_report', pc: 'PC-A', dispatchedAt: NOW.toISOString() }] }, now: NOW,
+      ownLabel: mode === 'local' ? 'PC-A' : 'other',
+      spawnSync: () => ({ status: null, error: new Error('secret-token') }),
+      directiveSend: () => { throw new Error('secret-token'); }
+    });
+    assert.equal(result.actions[0].mode, 'human');
+    assert.deepEqual(result.nextStaleRetry, {});
+    assert.match(result.actions[0].todoMessage, /Claude Code を起動できているか/);
+    assert.match(result.actions[0].todoMessage, /fleet-sheet-report.*夜間/);
+    assert.doesNotMatch(result.actions[0].todoMessage, /0 回/);
+    assert.equal(errors.length, 1);
+    assert.ok(!errors[0].includes('secret-token'));
+  });
+
+  test(`${mode} 再送から24時間未満は待ち、24時間後は試行回数付きで人へ上げる`, () => {
+    const state = { actions: [], staleRetry: { 'PC-A': { sentAt: NOW.toISOString(), count: 2, mode } } };
+    const violations = [{ kind: 'stale_report', pc: 'PC-A', evidence: 'stale' }];
+    assert.equal(decideActions({ violations, state, now: new Date(+NOW + 86400000 - 1) }).actions.length, 0);
+    const result = decideActions({ violations, state, now: new Date(+NOW + 86400000) });
+    assert.equal(result.actions[0].mode, 'human');
+    assert.ok(result.actions[0].todoMessage.includes(`自動再送（${mode}）を 2 回試みた`));
+  });
+}
+
+test('復帰したPCの再送記録だけを削除し元stateは変更しない', () => {
+  const retry = { sentAt: NOW.toISOString(), count: 1, mode: 'local' };
+  const state = { actions: [], staleRetry: { recovered: retry, stale: retry } };
+  const result = decideActions({ violations: [{ kind: 'stale_report', pc: 'stale', evidence: 'stale' }], state, now: NOW });
+  assert.deepEqual(result.nextStaleRetry, { stale: retry });
+  assert.ok(state.staleRetry.recovered);
+});
+
+test('dry-runでは再送を実行せず成功記録も作らない', () => {
+  const result = decideActions({ violations: [{ kind: 'stale_report', pc: 'PC-A', evidence: 'stale' }], state: { actions: [] }, now: NOW, dryRun: true,
+    directiveSend: () => assert.fail('dry-runでpushしない') });
+  assert.deepEqual(result.nextStaleRetry, {});
+  assert.equal(result.actions.length, 0);
+});
+
+test('名簿16行は除外し計測不能3行だけを①と④に表示する', async () => {
+  const roster = Array.from({ length: 16 }, (_, i) => ({ pcName: `名簿${i}`, label: '', reportedAt: '' }));
+  const missing = ['百瀬かなうのMacBook Air', 'owner-PC', 'macBook'].map((pcName, i) => ({ pcName, label: `label-${i}`, reportedAt: i ? '' : '2026-09-06 11:00:00', delegRatio: '', claudeUsd: '' }));
+  const tempDir = createTempDir();
+  process.env.ORGIAST_HOME = tempDir;
+  try {
+    const result = await main(['--dry-run', '--no-notify'], { fetchFleetSheetRows: async () => [...roster, ...missing], readLedger: () => ({ codex: 1 }), localState: {}, now: NOW, noNotify: true });
+    const section1 = result.reportText.split('### ①')[1].split('### ②')[0];
+    const section4 = result.reportText.split('### ④')[1];
+    for (const row of roster) assert.ok(!result.reportText.includes(`**${row.pcName}**`));
+    assert.match(section1, /※ 未報告のPC 16台は表から除外/);
+    for (const row of missing) {
+      assert.ok(section1.includes(`- **${row.pcName}**: 報告実績なし（最終報告 ${row.reportedAt || '不明'}）— そのPCで Claude Code を1回起動すれば復帰`));
+      assert.ok(section4.includes(`- **${row.pcName}**: 自動では復旧不可 — そのPCで Claude Code を1回起動してください`));
+    }
+    assert.equal((section4.match(/^- /gm) || []).length, 3);
   } finally { delete process.env.ORGIAST_HOME; cleanTempDir(tempDir); }
 });

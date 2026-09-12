@@ -6,10 +6,11 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
+import { post } from './fleet-sheet-report.mjs';
 
 const script = new URL('./fleet-sheet-report.mjs', import.meta.url);
 
-function reportPayload(files = {}) {
+function reportPayload(files = {}, codexAuth) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-sheet-report-'));
   const claude = path.join(home, '.claude');
   fs.mkdirSync(claude, { recursive: true });
@@ -17,6 +18,10 @@ function reportPayload(files = {}) {
   fs.writeFileSync(path.join(claude, 'cost-reporter.env'), 'REPORTER_LABEL=fleet-sheet-test\n');
   for (const [name, value] of Object.entries(files)) fs.writeFileSync(path.join(claude, name), JSON.stringify(value));
   try {
+    if (codexAuth) {
+      fs.mkdirSync(path.join(home, '.codex'), { recursive: true });
+      fs.writeFileSync(path.join(home, '.codex', 'auth.json'), JSON.stringify(codexAuth));
+    }
     const result = spawnSync(process.execPath, [fileURLToPath(script), '--dry-run'], {
       encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, VERSION_DRIFT_SKIP: '1' },
     });
@@ -26,6 +31,12 @@ function reportPayload(files = {}) {
     fs.rmSync(home, { recursive: true, force: true });
   }
 }
+
+test('adoption state が無くても認証ファイルの Codex アカウントとプランを報告する', () => {
+  const payload = { email: 'codex@example.com', 'https://api.openai.com/auth': { chatgpt_plan_type: 'prolite' } };
+  const token = `${Buffer.from('{"alg":"none"}').toString('base64url')}.${Buffer.from(JSON.stringify(payload)).toString('base64url')}.dummy-signature`;
+  assert.equal(reportPayload({}, { tokens: { id_token: token } }).codexLogin, '済(codex@example.com/prolite)');
+});
 
 test('stateに計測値が無ければ数値0へ変換しない', () => {
   const payload = reportPayload();
@@ -70,3 +81,12 @@ test('GAS upsertは空の計測値で既存セルを上書きせず、実測0は
   assert.equal(zero.values[columns.delegRatio], '0.0%');
   assert.equal(zero.values[columns.delegRatioLegacy], '0.0%');
 });
+
+const response = (body, status = 200) => ({ ok: status < 400, status, text: async () => JSON.stringify(body) });
+test('HTTP 200 + ok:false は3回再送して失敗ログを残す', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-post-')), logFile = path.join(dir, 'report.log'); let calls = 0;
+  const result = await post('secret-url', 'status', { token: 'secret' }, { fetchFn: async () => { calls++; return response({ ok: false, error: 'busy' }); }, sleepFn: async () => {}, random: () => 0, logFile });
+  assert.equal(result.ok, false); assert.equal(calls, 3); assert.match(fs.readFileSync(logFile, 'utf8'), /kind=status attempts=3 result=failed error=busy/);
+});
+test('busy 後の成功は2回目で完了する', async () => { let calls = 0; const result = await post('u', 'status', {}, { fetchFn: async () => response(++calls === 1 ? { ok: false, error: 'busy' } : { ok: true }), sleepFn: async () => {}, logFile: path.join(os.tmpdir(), `fleet-${Date.now()}.log`) }); assert.equal(result.ok, true); assert.equal(calls, 2); });
+test('timeout は再送する', async () => { let calls = 0; const result = await post('u', 'status', {}, { fetchFn: async () => { calls++; if (calls === 1) throw Object.assign(new Error('timeout'), { name: 'TimeoutError' }); return response({ ok: true }); }, sleepFn: async () => {}, logFile: path.join(os.tmpdir(), `fleet-${Date.now()}-t.log`) }); assert.equal(result.ok, true); assert.equal(calls, 2); });

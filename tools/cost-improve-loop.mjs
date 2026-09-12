@@ -13,7 +13,7 @@ import { KNOWN_CHEAP_PROVIDERS } from './llm-fallback.mjs';
 import { collectProviderHealth, collectClaudeStats } from './usage-stats.mjs';
 import { collectBudgetStatus } from './budget-status.mjs';
 import { shouldSendMonthlyReport, buildMonthlyReport, markMonthlyReportSent } from './cost-monthly-report.mjs';
-import { collectProviderBalances, formatBalanceLine } from './provider-balance.mjs';
+import { collectProviderBalances, formatBalanceLine, CREDIT_LOW_THRESHOLD } from './provider-balance.mjs';
 import { resolveReporterLabel } from './reporter-label.mjs';
 import { main as sendFleetDirective } from './fleet-directive-send.mjs';
 
@@ -49,7 +49,13 @@ export function evaluateBalanceSignals(rows, { directProviders = ['deepseek', 'k
   const violations = [];
   for (const row of rows || []) {
     if (row.status === 'anomaly') violations.push({ kind: 'spend_anomaly', pc: 'self', severity: 'error', provider: row.provider, evidence: `${row.provider} today $${row.todaySpendUsd.toFixed(4)} > 2x 7d avg $${row.avg7dSpendUsd.toFixed(4)}`, actualValue: row.todaySpendUsd, targetValue: row.avg7dSpendUsd * 2, trusted: true });
-    if (row.status === 'low' && row.autoTopUp !== true) violations.push({ kind: 'balance_low', pc: 'self', severity: 'warning', provider: row.provider, evidence: `${row.provider} balance $${row.balanceUsd.toFixed(2)} (< $3), auto top-up unavailable`, actualValue: row.balanceUsd, targetValue: 3, trusted: true });
+    if (row.status === 'low') {
+      if (Number.isFinite(row.credits)) {
+        violations.push({ kind: 'balance_low', pc: 'self', severity: 'warning', provider: row.provider, evidence: `${row.provider} の前払いクレジットが ${row.credits}（閾値 ${CREDIT_LOW_THRESHOLD}）`, actualValue: row.credits, targetValue: CREDIT_LOW_THRESHOLD, trusted: true });
+      } else if (row.autoTopUp !== true) {
+        violations.push({ kind: 'balance_low', pc: 'self', severity: 'warning', provider: row.provider, evidence: `${row.provider} balance $${row.balanceUsd.toFixed(2)} (< $3), auto top-up unavailable`, actualValue: row.balanceUsd, targetValue: 3, trusted: true });
+      }
+    }
     if (row.autoTopUp === false && directProviders.includes(row.provider)) violations.push({ kind: 'autotopup_missing', pc: 'self', severity: 'warning', provider: row.provider, evidence: `${row.provider} has no auto top-up and remains a direct lane`, trusted: true });
   }
   return violations;
@@ -489,6 +495,7 @@ export function buildCombinedCodexSpec(actions) {
 function humanTodoMessage(violation, now, retryCount = 0, retryMode = 'directive') {
   const pc = violation.pc;
   if (violation.kind === 'balance_low') {
+    if (violation.provider === 'genspark') return `【このPC】Genspark の前払いクレジットが ${Math.round(Number(violation.actualValue))} です（閾値 ${CREDIT_LOW_THRESHOLD}）。Genspark にチャージするか、画像生成を止めるかの判断が必要です。`;
     const switched = ['deepseek', 'kimi'].includes(violation.provider) ? '切替済み' : '未切替';
     return `【このPC】${violation.provider} の残高が $${Number(violation.actualValue).toFixed(2)} です。自動チャージが無いプロバイダです。OpenRouter 経由へ${switched}。`;
   }
@@ -697,7 +704,7 @@ export function decideActions({ violations, state, now, limits = { maxCodex: 2 }
       action.reportNote = '有料枠で解消可(例: Groq Dev tier)';
     }
     if (kind === 'spend_anomaly') action.durationHours = 24;
-    if (kind === 'balance_low') action.reportNote = `自動チャージが無いプロバイダです。OpenRouter 経由へ切替${['deepseek', 'kimi'].includes(action.provider) ? '済み' : '未'}`;
+    if (kind === 'balance_low') action.reportNote = action.provider === 'genspark' ? '前払い枠が残り少。チャージまたは画像生成レーンの停止を判断' : `自動チャージが無いプロバイダです。OpenRouter 経由へ切替${['deepseek', 'kimi'].includes(action.provider) ? '済み' : '未'}`;
 
     if (mode === 'auto-local') {
       if (playbook.command) action.command = playbook.command;

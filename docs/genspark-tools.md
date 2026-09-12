@@ -48,6 +48,25 @@ node tools/web-search.mjs --crawl https://example.com --json
 
 **実測（2026-09-13）**: `--provider gsk` で `provider: "gsk"` の結果が返ることを確認済み。
 
+## 前払い残高の日次監視
+
+`tools/provider-balance.mjs` の監視対象に `genspark` を追加済み（日次コストループが毎日この関数を呼ぶ）。
+残高は **REST で直接取る**（CLI 起動は不要）:
+
+```
+GET https://www.genspark.ai/api/tool_cli/me   Authorization: Bearer $GSK_API_KEY
+→ {"email":"...","plan":"pro","credit_balance":124812.7}   # credit_balance はトップレベル
+```
+
+- 残高は **クレジット**（USD ではない）なので `balanceUsd` は `null`、`credits` に数値が入る。
+- `CREDIT_LOW_THRESHOLD = 5000` を割ると `balance_low`（mode: human）として kim に DM が飛ぶ。
+- 日次スナップショットは `~/.claude/provider-balances.jsonl` に1日1行追記される＝日次差分が後から追える。
+- 実測（2026-09-13）: 1024×1024 の画像1枚 = **44 クレジット**（124,856.7 → 124,812.7）。`gsk search` 1回 = 1 クレジット。
+
+```bash
+node tools/provider-balance.mjs           # 💳 残高: … / genspark 124812.7cr(前払い) / …
+```
+
 ## Claude Code 用スキルの生成
 
 `gsk init-skills --agent claude` は GSK の 60 スキル（image-generation / aidrive / google-sheets 等）を

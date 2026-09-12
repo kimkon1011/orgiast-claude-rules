@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyBalance, fetchProviderBalance } from './provider-balance.mjs';
+import { classifyBalance, fetchProviderBalance, formatBalanceLine } from './provider-balance.mjs';
 
 test('confirmed provider response shapes are parsed', async () => {
   const cases = [
@@ -22,4 +22,23 @@ test('anomaly and low thresholds are strict at specified boundaries', () => {
   assert.equal(classifyBalance({ todaySpendUsd: 0.99, avg7dSpendUsd: 0, balanceUsd: 9, autoTopUp: false }), 'ok');
   assert.equal(classifyBalance({ todaySpendUsd: 0, avg7dSpendUsd: 0, balanceUsd: 2.99, autoTopUp: false }), 'low');
   assert.equal(classifyBalance({ todaySpendUsd: 0, avg7dSpendUsd: 0, balanceUsd: 2.99, autoTopUp: true }), 'ok');
+});
+
+test('genspark prepaid credits are parsed without a USD parse reason', async () => {
+  // REST(実測 2026-09-13)は素の `credit_balance` を返す。`gsk me` の CLI は同じ値を `data` で包む。
+  for (const body of [{ credit_balance: 124857.7 }, { status: 'ok', message: 'success', data: { credit_balance: 124857.7 } }]) {
+    const result = await fetchProviderBalance({ provider: 'genspark', key: 'secret', url: 'https://example.test', fetchImpl: async () => new Response(JSON.stringify(body)) });
+    assert.deepEqual(result, { balanceUsd: null, credits: 124857.7 });
+    assert.equal('reason' in result, false);
+  }
+
+  const missing = await fetchProviderBalance({ provider: 'genspark', key: 'secret', url: 'https://example.test', fetchImpl: async () => new Response(JSON.stringify({ data: {} })) });
+  assert.equal(missing.credits, null);
+  assert.ok(missing.reason);
+});
+
+test('genspark credit threshold and formatting are independent of USD balance', () => {
+  assert.equal(classifyBalance({ credits: 4999, balanceUsd: 100, autoTopUp: true }), 'low');
+  assert.equal(classifyBalance({ credits: 5000, balanceUsd: 0, autoTopUp: false }), 'ok');
+  assert.match(formatBalanceLine([{ provider: 'genspark', credits: 124857.7, autoTopUp: null }]), /genspark 124857\.7cr\(前払い\)/);
 });

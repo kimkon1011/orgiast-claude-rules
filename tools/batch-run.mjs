@@ -1,6 +1,7 @@
 // batch-run.mjs — pending.jsonl を実行し、成功結果と使用量を記録する夜間バッチ実行器。
 // DeepSeekはUTC 16:30〜00:30だけ実行。--force で時間帯を無視、--dry で対象表示のみ。
 // --fallback-standard 指定時だけ、Anthropic Batch失敗後に通常APIで再実行する。
+// 終了コード3 = 別インスタンス実行中のためスキップ。
 // kind=eval-harness のジョブは LLM に渡さず「node tools/eval-harness.mjs --all」へ変換する
 // (eval自体が複数providerを叩くローカル計測なので、ここでLLM呼び出しすると二重課金になる)。
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
@@ -11,10 +12,18 @@ import { callWithFallback, classifyFailure, FALLBACK_CHAIN } from './llm-fallbac
 import { batchDeadline } from './lib/batch-deadline.mjs';
 import { acquireLock } from './lib/single-instance.mjs';
 
+function userHome() { const h = os.homedir(), m = process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i); return process.env.USERPROFILE || m?.[1] || h; }
+const home = userHome();
 const batchLock = acquireLock('batch-run');
 if (!batchLock.acquired) {
-  console.error(`[batch-run] already running pid=${batchLock.ownerPid ?? 'unknown'}`);
-  process.exit(0);
+  let pendingSuffix = '';
+  try {
+    const pendingText = fs.readFileSync(path.join(home, '.claude', 'batch-queue', 'pending.jsonl'), 'utf8');
+    const pendingCount = pendingText.split(/\r?\n/).filter(line => line.trim()).length;
+    pendingSuffix = ` — 処理をスキップしました (pending ${pendingCount}件)`;
+  } catch {}
+  console.error(`[batch-run] already running pid=${batchLock.ownerPid ?? 'unknown'}${pendingSuffix}`);
+  process.exit(3);
 }
 
 const PROVIDERS = {
@@ -37,8 +46,6 @@ if (args.includes('--help')) {
   console.log('  --fallback-standard  Anthropic Batch失敗時のみ、通常APIで単発再実行する');
   process.exit(0);
 }
-function userHome() { const h = os.homedir(), m = process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i); return process.env.USERPROFILE || m?.[1] || h; }
-const home = userHome();
 const lastFile = path.join(home, '.claude', 'state', 'batch-run.last');
 process.once('exit', () => {
   try { fs.mkdirSync(path.dirname(lastFile), { recursive: true }); fs.writeFileSync(lastFile, `${new Date().toISOString()}\n`); } catch {}

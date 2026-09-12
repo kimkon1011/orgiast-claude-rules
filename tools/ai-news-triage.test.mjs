@@ -20,8 +20,11 @@ const proposal = { id: 'P-0001', createdAt: '2026-09-01T00:00:00.000Z', status: 
 
 test('CLI既定値とconfidence指定を解釈する', () => {
   const defaults = parseArgs([]);
-  assert.equal(defaults.limit, 3); assert.deepEqual([...defaults.confidence], ['high']); assert.equal(defaults.provider, 'groq');
+  assert.equal(defaults.limit, 3); assert.deepEqual([...defaults.confidence], ['high']); assert.equal(defaults.provider, 'groq'); assert.equal(defaults.budgetSeconds, 900);
   assert.deepEqual([...parseArgs(['--confidence', 'medium,high', '--limit', '2', '--provider', 'deepseek']).confidence], ['medium', 'high']);
+  assert.equal(parseArgs(['--budget-seconds', '0']).budgetSeconds, 0);
+  assert.throws(() => parseArgs(['--budget-seconds', '-1']), /--budget-seconds/);
+  assert.throws(() => parseArgs(['--budget-seconds', 'abc']), /--budget-seconds/);
 });
 
 test('判定JSONを復旧し文字数を制限する', () => {
@@ -122,6 +125,20 @@ test('全件の判定失敗時はerrorを返し、レコードを変更しない
   for (const record of readSaved(base)) {
     assert.equal(record.status, 'pending'); assert.equal(record.triagedAt, undefined); assert.equal(record.triageAttempts, undefined);
   }
+});
+
+test('LLM失敗をstage付きJSONLへ追記する', async (t) => {
+  const { home, base } = fixture(t, [proposal]);
+  await runTriage({ home, args: [], search: async () => ({ answer: '結果', urls: [] }), llm: async () => { throw new Error('LLM停止'); }, log() {} });
+  const failure = JSON.parse(fs.readFileSync(path.join(base, 'ai-news-triage-failures.jsonl'), 'utf8').trim());
+  assert.equal(failure.id, proposal.id); assert.equal(failure.stage, 'llm'); assert.equal(failure.message, 'LLM停止');
+});
+
+test('検索失敗をstage付きJSONLへ追記する', async (t) => {
+  const { home, base } = fixture(t, [proposal]);
+  await runTriage({ home, args: [], search: async () => { throw new Error('検索停止'); }, llm: async () => { throw new Error('呼ばれない'); }, log() {} });
+  const failure = JSON.parse(fs.readFileSync(path.join(base, 'ai-news-triage-failures.jsonl'), 'utf8').trim());
+  assert.equal(failure.id, proposal.id); assert.equal(failure.stage, 'search'); assert.equal(failure.message, '検索停止');
 });
 
 function readSaved(base) {

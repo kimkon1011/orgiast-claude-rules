@@ -58,18 +58,43 @@ function transcriptFiles(projectsDir, since, fsApi = fs) {
 }
 
 function rewriteStopCount(home, since) {
-  const candidates = [
-    ...readJsonl(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl')).filter((row) => row.stop_hook_active === true),
-    ...readJsonl(path.join(home, '.claude', 'handoff-ledger.jsonl')).filter((row) => row.reason === 'stop_hook_active'),
-  ].map((row) => eventTime(row)).filter((ts) => ts !== null && ts >= since).sort((a, b) => a - b);
-  let count = 0;
+  const legacyCandidates = readJsonl(path.join(home, '.claude', 'handoff-ledger.jsonl'))
+    .filter((row) => row.reason === 'stop_hook_active')
+    .map((row) => eventTime(row)).filter((ts) => ts !== null && ts >= since).sort((a, b) => a - b);
+  let legacyCount = 0;
   let clusterEnd = -Infinity;
-  for (const ts of candidates) {
-    // 同じ Stop hook が二つの台帳に残るため、2 秒以内の記録を一つに丸める。
-    if (ts - clusterEnd > 2_000) count += 1;
+  for (const ts of legacyCandidates) {
+    // 旧ゲートが同じ発火を複数行に残すため、legacy 台帳内の 2 秒以内の記録を一つに丸める。
+    if (ts - clusterEnd > 2_000) legacyCount += 1;
     clusterEnd = ts;
   }
-  return count;
+
+  const runnerBySession = new Map();
+  for (const row of readJsonl(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'))) {
+    const sessionId = typeof row.sessionId === 'string' ? row.sessionId : '';
+    const ts = eventTime(row);
+    if (!sessionId || sessionId.startsWith('e2e') || sessionId.startsWith('live') || ts === null) continue;
+    if (!runnerBySession.has(sessionId)) runnerBySession.set(sessionId, []);
+    runnerBySession.get(sessionId).push({ ...row, ts });
+  }
+
+  let runnerCount = 0;
+  for (const rows of runnerBySession.values()) {
+    rows.sort((a, b) => a.ts - b.ts);
+    let previousWasBlock = false;
+    for (const row of rows) {
+      // rewrite_stop は「同一ターンの連続 block の 2 件目以降」で固定する。
+      // KPI の時系列比較を壊さないため、skipped / retry-cap は連続を切らない。
+      if (row.verdict === 'block') {
+        if (previousWasBlock && row.ts >= since) runnerCount += 1;
+        previousWasBlock = true;
+      } else if (row.verdict === 'pass') {
+        previousWasBlock = false;
+      }
+    }
+  }
+
+  return legacyCount + runnerCount;
 }
 
 function defaultManualMerges({ since, cwd }) {

@@ -42,7 +42,8 @@ export function loadOpenRouterApiKey({ env = process.env, homeDir = os.homedir()
 function collectUrls(value, found) {
   if (typeof value === 'string') {
     try { collectUrls(JSON.parse(value), found); } catch {}
-    for (const match of value.matchAll(/https?:\/\/[^\s"'<>]+/g)) {
+    // run34 実測: Markdown リンク「[text](https://…)」から `](https://…` を飲み込むため [] も境界にする。
+    for (const match of value.matchAll(/https?:\/\/[^\s"'<>\[\]]+/g)) {
       // run33 実測: 回答本文の「【orgiast.jp】(https://www.orgiast.jp/company)。」で全角約物が URL に混入する。
       const url = match[0].replace(/[),.;:\]}）。、，]+$/g, '');
       if (url) found.add(url);

@@ -98,7 +98,7 @@ function reasonForLog(reason, maxLength = 140) {
   return singleLine.length <= maxLength ? singleLine : `${singleLine.slice(0, maxLength - 1)}…`;
 }
 
-export async function callWithFallback({ start, chain = FALLBACK_CHAIN, payloadFor, fetchImpl = fetch, onAttempt, onFailover, sleepImpl = defaultSleep, cooldownFile, ledgerFile, now = () => Date.now() }) {
+export async function callWithFallback({ start, chain = FALLBACK_CHAIN, payloadFor, fetchImpl = fetch, onAttempt, onFailover, validateResponse, sleepImpl = defaultSleep, cooldownFile, ledgerFile, now = () => Date.now() }) {
   const home = process.env.ORGIAST_HOME || os.homedir();
   const timestamp = now();
   const cost = dailyCost(ledgerFile || path.join(home, '.claude', 'executor-usage.jsonl'), timestamp);
@@ -207,6 +207,17 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, payloadF
         response = await fetchImpl(request.url, request.init);
         status = response.status;
         if (response.ok) {
+          if (validateResponse) {
+            const json = await response.clone().json().catch(() => null);
+            const validation = await validateResponse(json, candidate);
+            if (validation !== true) {
+              const validationReason = typeof validation === 'string' ? validation : 'unusable response';
+              lastReason = `unusable: ${validationReason}`;
+              attempted++;
+              await onAttempt?.({ candidate, attempt, status: 'unusable', response, reason: lastReason, secs: (Date.now() - began) / 1000, failover: candidate.provider !== start.provider });
+              break;
+            }
+          }
           await onAttempt?.({ candidate, attempt, status: 'ok', response, secs: (Date.now() - began) / 1000, failover: candidate.provider !== start.provider });
           clearCooldown(candidate.provider);
           saveCooldowns();

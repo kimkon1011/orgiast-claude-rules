@@ -156,6 +156,14 @@ export function createLlmClient({ home = os.homedir(), fetchImpl = fetch, sleep 
         if (p.special === 'kimi') Object.assign(body, { reasoning_effort: 'none', temperature: 0.6 });
         return { url: p.url, init: { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', ...(p.extraHeaders || {}) }, body: JSON.stringify(body) } };
       },
+      validateResponse(json) {
+        const choice = json?.choices?.[0];
+        if (!choice) return 'choices がありません';
+        if (choice.finish_reason === 'length') return `finish_reason=length (max_tokens=${maxTokens})`;
+        const content = choice.message?.content;
+        if (typeof content !== 'string' || !content.trim()) return 'content が空です';
+        return true;
+      },
       async onAttempt(info) {
         const usage = info.status === 'ok' ? (await info.response.clone().json().catch(() => ({}))).usage || {} : {};
         const rec = { t: new Date().toISOString(), tool: 'line-digest', provider: info.candidate.provider, model: info.candidate.model, in: usage.prompt_tokens || 0, out: usage.completion_tokens || 0, secs: Number(info.secs.toFixed(3)), status: info.status, attempt: info.attempt, failover: info.failover, ok: info.status === 'ok' };

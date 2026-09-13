@@ -141,6 +141,21 @@ test('検索失敗をstage付きJSONLへ追記する', async (t) => {
   assert.equal(failure.id, proposal.id); assert.equal(failure.stage, 'search'); assert.equal(failure.message, '検索停止');
 });
 
+test('runTriageはLLMへ十分なmaxTokensを渡す', async (t) => {
+  const { home } = fixture(t, [proposal]); let request;
+  await runTriage({ home, args: ['--dry-run'], search: async () => ({ answer: '結果', urls: [] }),
+    llm: async (value) => { request = value; return { text: '{"verdict":"unclear","adopt":false}', provider: 'groq' }; }, log() {} });
+  assert.ok(request.maxTokens >= 1000);
+});
+
+test('判定JSONの解析失敗ログに応答providerを残す', async (t) => {
+  const { home, base } = fixture(t, [proposal]);
+  await runTriage({ home, args: [], search: async () => ({ answer: '結果', urls: [] }),
+    llm: async () => ({ text: '壊れた', provider: 'openrouter' }), log() {} });
+  const failure = JSON.parse(fs.readFileSync(path.join(base, 'ai-news-triage-failures.jsonl'), 'utf8').trim());
+  assert.equal(failure.provider, 'openrouter');
+});
+
 function readSaved(base) {
   return fs.readFileSync(path.join(base, 'ai-news-proposals.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
 }

@@ -146,12 +146,14 @@ export async function runTriage(options = {}) {
       break;
     }
     let stage = 'search';
+    let provider = '';
     try {
       const found = await search(`${record.title}\n${record.action}`);
       stage = 'llm';
-      const response = await llm({ provider: cli.provider, messages: [{ role: 'system', content: system }, { role: 'user', content: `提案: ${JSON.stringify({ title: record.title, action: record.action, evidence: record.evidence })}\n検索結果: ${formatSearch(found)}` }], maxTokens: 500, responseFormat: { type: 'json_object' } });
+      const response = await llm({ provider: cli.provider, messages: [{ role: 'system', content: system }, { role: 'user', content: `提案: ${JSON.stringify({ title: record.title, action: record.action, evidence: record.evidence })}\n検索結果: ${formatSearch(found)}` }], maxTokens: 1600, responseFormat: { type: 'json_object' } });
+      provider = response.provider || cli.provider;
       const result = parseVerdict(response.text);
-      const updated = applyTriageResult(record, result, { now: now(), provider: response.provider || cli.provider });
+      const updated = applyTriageResult(record, result, { now: now(), provider });
       updates.set(record.id, updated);
       if (updated.status === 'done' && updated.adopt === true) adopted.push(updated);
       log(`${cli.dryRun ? '[dry-run] ' : ''}${record.id} ${updated.verdict} adopt=${updated.adopt} → ${updated.status}: ${updated.finding}`);
@@ -163,7 +165,7 @@ export async function runTriage(options = {}) {
           const file = path.join(base, 'ai-news-triage-failures.jsonl');
           fs.mkdirSync(path.dirname(file), { recursive: true });
           const message = String(error && error.message || error).slice(0, 300);
-          fs.appendFileSync(file, `${JSON.stringify({ t: new Date().toISOString(), id: record.id, stage, message })}\n`, 'utf8');
+          fs.appendFileSync(file, `${JSON.stringify({ t: new Date().toISOString(), id: record.id, stage, provider, message })}\n`, 'utf8');
         } catch {}
       }
     }

@@ -286,3 +286,59 @@ test('node --test では cooldownFile 未指定でも実ホームへ書き込ま
   assert.equal(result.candidate.provider, 'openrouter');
   assert.equal(fs.existsSync(cooldownPath), false);
 });
+
+test('200応答が無効なら次候補へfailoverする', async (t) => {
+  const files = temporaryFiles(t); let calls = 0; const attempts = [];
+  const result = await callWithFallback({
+    start, chain: [second], payloadFor: requestFor, ...files,
+    fetchImpl: async () => new Response(JSON.stringify({ usable: ++calls > 1 })),
+    validateResponse: (json) => json?.usable || '本文が不完全です',
+    onAttempt: (info) => attempts.push({ provider: info.candidate.provider, status: info.status, failover: info.failover }),
+  });
+  assert.equal(result.candidate.provider, 'openrouter');
+  assert.equal(result.failover, true);
+  assert.deepEqual(attempts, [
+    { provider: 'groq', status: 'unusable', failover: false },
+    { provider: 'openrouter', status: 'ok', failover: true },
+  ]);
+});
+
+test('全候補の200応答が無効ならunusable理由を集計する', async (t) => {
+  const files = temporaryFiles(t);
+  await assert.rejects(
+    callWithFallback({ start, chain: [second], payloadFor: requestFor, ...files,
+      fetchImpl: async () => new Response('{}'), validateResponse: () => false }),
+    (error) => {
+      assert.match(error.message, /^全候補が失敗しました:/);
+      assert.equal(error.failures.length, 2);
+      assert.ok(error.failures.every(({ reason }) => /^unusable:/.test(reason)));
+      return true;
+    },
+  );
+});
+
+test('無効な200応答ではプロバイダをcooldownに記録しない', async (t) => {
+  const files = temporaryFiles(t); let calls = 0;
+  await callWithFallback({ start, chain: [second], payloadFor: requestFor, ...files,
+    fetchImpl: async () => new Response(JSON.stringify({ usable: ++calls > 1 })), validateResponse: (json) => json.usable });
+  const cooldowns = fs.existsSync(files.cooldownFile) ? JSON.parse(fs.readFileSync(files.cooldownFile, 'utf8')) : {};
+  assert.equal(cooldowns.groq, undefined);
+});
+
+test('validateResponse未指定なら200応答を従来どおり即返す', async (t) => {
+  const files = temporaryFiles(t); let calls = 0;
+  const result = await callWithFallback({ start, chain: [second], payloadFor: requestFor, ...files,
+    fetchImpl: async () => { calls += 1; return new Response('JSONでない本文'); } });
+  assert.equal(calls, 1);
+  assert.equal(result.candidate.provider, 'groq');
+});
+
+test('HTTP 400応答ではvalidateResponseを呼ばない', async (t) => {
+  const files = temporaryFiles(t); let calls = 0; let validations = 0;
+  const result = await callWithFallback({ start, chain: [second], payloadFor: requestFor, ...files,
+    fetchImpl: async () => ++calls === 1 ? new Response('bad request', { status: 400 }) : new Response('{"usable":true}'),
+    validateResponse: () => { validations += 1; return true; },
+  });
+  assert.equal(result.candidate.provider, 'openrouter');
+  assert.equal(validations, 1);
+});

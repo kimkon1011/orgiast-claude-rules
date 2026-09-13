@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// ローカルにある別リポの本物の Vercel handler に依存するため、CI では実行しない手動 E2E。
+// ローカルの本物の Vercel handler / --prod の実トークンを使う手動 E2E。CI では実行しない。
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -9,6 +9,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 
 const require = createRequire(import.meta.url);
 const toolsDir = path.dirname(fileURLToPath(import.meta.url));
@@ -17,7 +18,32 @@ const defaultServerRepo = process.platform === 'win32'
   ? path.join(process.env.USERPROFILE || '', 'Downloads', 'orgiast-keyserve')
   : '/mnt/c/Users/uers/Downloads/orgiast-keyserve';
 
-async function runNode(script, args, env) {
+export function parseArgs(argv) {
+  let mode = 'local';
+  let pc = `AUTO-E2E-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}`;
+  let ttlHours = 2;
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--prod') mode = 'prod';
+    else if (arg === '--pc' || arg === '--ttl-hours') {
+      const value = argv[++i];
+      if (!value || value.startsWith('--')) throw new Error('--pc / --ttl-hours の値が必要です');
+      if (arg === '--pc') pc = value; else ttlHours = Number(value);
+    } else throw new Error('使い方: node tools/keyserve-enroll-e2e.mjs [--prod] [--pc "PC名"] [--ttl-hours 2]');
+  }
+  if (!pc.trim() || /[\r\n\0]/.test(pc)) throw new Error('--pc に対象PC名を指定してください');
+  if (!Number.isFinite(ttlHours) || ttlHours <= 0) throw new Error('--ttl-hours は正の時間数を指定してください');
+  return { mode, pc, ttlHours };
+}
+
+export function resolveEndpoints(env) {
+  return {
+    enrollUrl: env.ORGIAST_KEYSERVE_ENROLL_URL || 'https://orgiast-keyserve.vercel.app/api/enroll',
+    keysUrl: env.ORGIAST_KEYSERVE_URL || 'https://orgiast-keyserve.vercel.app/api/keys',
+  };
+}
+
+async function runNode(script, args, env, { includeOutput = true } = {}) {
   const child = spawn(process.execPath, [path.join(toolsDir, script), ...args], {
     cwd: repoRoot, env, stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -33,7 +59,7 @@ async function runNode(script, args, env) {
     child.once('close', (status, signal) => resolve({ status, signal, stdout, stderr }));
   }).finally(() => clearTimeout(timer));
   if (result.status !== 0) {
-    throw new Error(`${script} failed (${result.signal || `exit ${result.status}`})\n${result.stdout}${result.stderr}`);
+    throw new Error(`${script} failed (${result.signal || `exit ${result.status}`})${includeOutput ? `\n${result.stdout}${result.stderr}` : ''}`);
   }
   return result;
 }
@@ -60,7 +86,77 @@ function readAllFiles(root) {
   return contents;
 }
 
-async function main() {
+async function runProd({ pc, ttlHours }, { env = process.env, run = runNode, stdout = console.log } = {}) {
+  const { enrollUrl, keysUrl } = resolveEndpoints(env);
+  const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'keyserve-enroll-prod-e2e-'));
+  let stage = '隔離ホームの初期状態';
+  try {
+    const claudeDir = path.join(isolatedHome, '.claude');
+    fs.mkdirSync(claudeDir);
+    assert.deepEqual(fs.readdirSync(isolatedHome), ['.claude']);
+    assert.deepEqual(fs.readdirSync(claudeDir), []);
+
+    const baseEnv = { ...env, ORGIAST_KEYSERVE_ENROLL_URL: enrollUrl, ORGIAST_KEYSERVE_URL: keysUrl };
+    // 発行のみ呼び出し元の primary を使う。--dm は渡さない。
+    stage = 'enroll トークンの発行';
+    const issued = await run('keyserve-enroll.mjs', ['--pc', pc, '--ttl-hours', String(ttlHours), '--json'], baseEnv, { includeOutput: false });
+    assert.equal(issued.status, 0);
+    const token = JSON.parse(issued.stdout).token;
+    assert.ok(typeof token === 'string' && token.startsWith('ORG1.') && token.length > 5 && !/[\r\n\0]/.test(token));
+    fs.writeFileSync(path.join(claudeDir, 'enroll.env'), `ORGIAST_ENROLL_TOKEN=${token}\n`, { mode: 0o600 });
+
+    const isolatedEnv = { ...baseEnv, ORGIAST_HOME: isolatedHome };
+    delete isolatedEnv.ORGIAST_KEYSERVE_SECRET;
+    const visibleOutput = [];
+    // keyserve-enroll --json は仕様上 token を含むので漏洩判定から除外する。
+    const runIsolated = async (script, args) => {
+      const result = await run(script, args, isolatedEnv, { includeOutput: false });
+      visibleOutput.push(result.stdout, result.stderr);
+      assert.equal(result.status, 0);
+      assert.ok(!visibleOutput.join('\n').includes(token), '子プロセス出力に生トークンあり');
+      return result;
+    };
+    stage = '初回の鍵取得と primary への自己昇格';
+    await runIsolated('onboarding-sync.mjs', ['--keys-only', '--force']);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(claudeDir, '.enroll-result.json'), 'utf8')),
+      { authVia: 'enroll', status: 200, kind: 'ok' });
+    assert.ok(fs.readFileSync(path.join(claudeDir, 'keyserve.env'), 'utf8').trim().length > 0);
+    const otherKeys = fs.readdirSync(claudeDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && !entry.name.startsWith('.') && !['keyserve.env', 'enroll.env'].includes(entry.name));
+    assert.ok(otherKeys.some((entry) => fs.statSync(path.join(claudeDir, entry.name)).size > 0), '他の鍵ファイルが必要です');
+    assert.equal(fs.existsSync(path.join(claudeDir, 'enroll.env')), false);
+
+    stage = '2回目の鍵取得';
+    await runIsolated('onboarding-sync.mjs', ['--keys-only', '--force']);
+    stage = 'primary 認証の確認';
+    const statusRun = await runIsolated('keyserve-status.mjs', ['--json']);
+    const status = JSON.parse(statusRun.stdout);
+    assert.equal(status.auth, 'primary');
+    assert.equal(status.status, 200);
+
+    stage = '一時ホーム全体のトークン残留検査';
+    assert.ok(!Buffer.concat(readAllFiles(isolatedHome)).includes(Buffer.from(token)), '一時ホームに生トークンあり');
+    stdout([
+      'OK: 隔離ホームは空の鍵状態から開始',
+      `OK: 本物の /api/enroll が enroll トークンを発行 (接頭辞 ORG1. / 長さ ${token.length})`,
+      `OK: 鍵一式を取得 (keyserve.env + ${otherKeys.length} ファイル)`,
+      'OK: keyserve.env を保存',
+      'OK: enroll.env を削除',
+      'OK: 2回目の onboarding-sync は exit 0',
+      'OK: keyserve-status は auth=primary / status=200',
+      'OK: 標準出力・標準エラー・一時ホーム全ファイルに生トークンなし',
+      'OK: 認証経路: primary / HTTP 200',
+    ].join('\n'));
+  } catch {
+    // 子プロセス出力、JSON の解析エラー、assert の actual に秘密が含まれ得る。
+    // エラー本文を転記せず、失敗した固定の工程名だけ報告する。
+    throw new Error(`本番 E2E 失敗: ${stage}`);
+  } finally {
+    fs.rmSync(isolatedHome, { recursive: true, force: true });
+  }
+}
+
+async function runLocal() {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'keyserve-enroll-e2e-'));
   const primaryHome = path.join(tempRoot, 'primary-home');
   const isolatedHome = path.join(tempRoot, 'isolated-home');
@@ -199,7 +295,16 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(`FAIL: ${error.message}`);
-  process.exitCode = 1;
-});
+export async function main(argv = process.argv.slice(2), dependencies = {}) {
+  const options = parseArgs(argv);
+  if (options.mode === 'prod') return runProd(options, dependencies);
+  return runLocal();
+}
+
+// isEntry は fileURLToPath(import.meta.url) と argv[1] を実パスに正規化して比較する。
+if (isEntry(import.meta.url)) {
+  main().catch((error) => {
+    console.error(`FAIL: ${error.message}`);
+    process.exitCode = 1;
+  });
+}

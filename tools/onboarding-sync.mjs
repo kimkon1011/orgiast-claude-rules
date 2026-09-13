@@ -11,6 +11,7 @@ import { parseEnvText, readEnvValue } from './env-kv.mjs';
 import { repairEnvBom } from './env-repair.mjs';
 import { isEntry } from './is-entry.mjs';
 import { buildKeyserveAlert, shouldAlert } from './keyserve-alert.mjs';
+import { keyserveAuthHeaders, keyservePcId } from './keyserve-auth.mjs';
 import { installSharedMemories } from './memory-share.mjs';
 import { gitBlobSha } from './version-drift.mjs';
 
@@ -469,6 +470,8 @@ async function provisionKeys(now, options = {}) {
   let secret = process.env.ORGIAST_KEYSERVE_SECRET || '';
   if (!secret) secret = readEnvValue(path.join(home, '.claude', 'keyserve.env'), 'ORGIAST_KEYSERVE_SECRET');
   const enrollPath = path.join(home, '.claude', 'enroll.env');
+  const keyserveEnvPath = path.join(home, '.claude', 'keyserve.env');
+  const previousSecretPath = path.join(home, '.claude', 'keyserve-prev.env');
   const enrollToken = !secret ? readEnvValue(enrollPath, 'ORGIAST_ENROLL_TOKEN') : '';
   if (enrollToken) secret = enrollToken;
   let enrollHttpStatus = null;
@@ -485,14 +488,27 @@ async function provisionKeys(now, options = {}) {
     return;
   }
   try {
-    const ts = Math.floor(Date.now() / 1000).toString();
-    const auth = crypto.createHmac('sha256', secret).update(ts).digest('hex');
-    const response = await fetch(keyserveUrl, {
+    const pcId = keyservePcId(home);
+    const requestKeys = (requestSecret) => fetch(keyserveUrl, {
       method: 'POST',
-      headers: { 'x-orgiast-ts': ts, 'x-orgiast-auth': auth, ...(enrollToken ? { 'x-orgiast-enroll': enrollToken } : {}) },
+      headers: { ...keyserveAuthHeaders(requestSecret, Date.now(), pcId), ...(enrollToken ? { 'x-orgiast-enroll': enrollToken } : {}) },
       signal: AbortSignal.timeout(15000),
     });
+    let response = await requestKeys(secret);
     enrollHttpStatus = response.status;
+    if (response.status === 401 && fs.existsSync(previousSecretPath)) {
+      const previousSecret = readEnvValue(previousSecretPath, 'ORGIAST_KEYSERVE_SECRET');
+      if (previousSecret) {
+        response = await requestKeys(previousSecret);
+        if (response.ok) {
+          fs.writeFileSync(keyserveEnvPath, `ORGIAST_KEYSERVE_SECRET=${previousSecret}\n`, { encoding: 'utf8', mode: 0o600 });
+          fs.chmodSync(keyserveEnvPath, 0o600);
+          fs.unlinkSync(previousSecretPath);
+          saveKeysState(now);
+          return;
+        }
+      }
+    }
     if (!response.ok) {
       const error = new Error(`HTTP ${response.status}`);
       error.status = response.status;
@@ -503,6 +519,11 @@ async function provisionKeys(now, options = {}) {
         error.enrollKind = /expired|expiry|期限切れ/i.test(String(code)) ? 'expired' : 'http';
       }
       throw error;
+    }
+    // A successful request with the current PC identity proves the installed key works.
+    // Remove an older fallback before processing a possible newly rotated key below.
+    if (!enrollToken && pcId) {
+      try { fs.unlinkSync(previousSecretPath); } catch {}
     }
     const payload = await response.json();
     if (!payload || typeof payload.files !== 'object' || payload.files === null || Array.isArray(payload.files)) throw new Error('invalid response');
@@ -518,6 +539,14 @@ async function provisionKeys(now, options = {}) {
           const existing = fs.readFileSync(destination, 'utf8');
           const updated = mergeEnvFile(existing, cleanedContents);
           if (updated === existing) continue;
+          if (name === 'keyserve.env') {
+            const oldSecret = readEnvValue(destination, 'ORGIAST_KEYSERVE_SECRET');
+            const newSecret = parseEnvText(cleanedContents).ORGIAST_KEYSERVE_SECRET || '';
+            if (oldSecret && newSecret && oldSecret !== newSecret) {
+              fs.writeFileSync(previousSecretPath, `ORGIAST_KEYSERVE_SECRET=${oldSecret}\n`, { encoding: 'utf8', mode: 0o600 });
+              fs.chmodSync(previousSecretPath, 0o600);
+            }
+          }
           fs.writeFileSync(destination, updated, { encoding: 'utf8', mode: 0o600 });
           fs.chmodSync(destination, 0o600);
           refreshed.push(name);

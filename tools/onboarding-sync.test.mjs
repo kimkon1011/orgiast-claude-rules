@@ -437,47 +437,66 @@ test('fallback state is refreshed with hashes of copied files', async () => {
 
 // Child-process fetch stub: exercises the real CLI and filesystem without network access.
 function runEnrollFixture(t, { primary = '', enroll = 'opaque-enroll-token', legacy = 'legacy-test', status = 200,
-  files = { 'keyserve.env': 'ORGIAST_KEYSERVE_SECRET=new-primary\n' }, body, network = false, writeFailure = false, unlinkFailure = false } = {}) {
+  statuses, previous = '', files = { 'keyserve.env': 'ORGIAST_KEYSERVE_SECRET=new-primary\n' }, body, network = false, writeFailure = false, unlinkFailure = false } = {}) {
   const f = setup(null);
   t.after(() => fs.rmSync(f.home, { recursive: true, force: true }));
   const claude = path.join(f.home, '.claude');
   for (const [name, key, value] of [['keyserve.env', 'ORGIAST_KEYSERVE_SECRET', primary], ['enroll.env', 'ORGIAST_ENROLL_TOKEN', enroll], ['cost-reporter.env', 'DISCORD_COST_WEBHOOK', legacy]]) {
     if (value) fs.writeFileSync(path.join(claude, name), `${key}=${value}\n`);
   }
+  if (previous) fs.writeFileSync(path.join(claude, 'keyserve-prev.env'), `ORGIAST_KEYSERVE_SECRET=${previous}\n`, { mode: 0o600 });
   if (writeFailure) fs.mkdirSync(path.join(claude, 'keyserve.env'));
   const stub = path.join(f.home, 'mock.mjs');
   fs.writeFileSync(stub, `import fs from 'node:fs';
     const unlink = fs.unlinkSync;
     fs.unlinkSync = (p) => { if (${unlinkFailure} && String(p).endsWith('enroll.env')) throw new Error('denied'); return unlink(p); };
+    let calls = 0;
     globalThis.fetch = async (url, options) => {
       if (url !== 'https://keyserve.test/keys') throw new Error('unexpected network');
-      fs.writeFileSync(${JSON.stringify(path.join(f.home, 'request.json'))}, JSON.stringify(options.headers));
+      const requestPath = ${JSON.stringify(path.join(f.home, 'request.json'))};
+      const requests = fs.existsSync(requestPath) ? JSON.parse(fs.readFileSync(requestPath, 'utf8')) : [];
+      requests.push(options.headers); fs.writeFileSync(requestPath, JSON.stringify(requests));
       if (${network}) throw new Error('network failure: opaque-enroll-token');
-      return new Response(JSON.stringify(${JSON.stringify(body ?? { files })}), { status: ${status} });
+      const statuses = ${JSON.stringify(statuses || [status])};
+      return new Response(JSON.stringify(${JSON.stringify(body ?? { files })}), { status: statuses[calls++] ?? statuses.at(-1) });
     };`);
   const result = spawnSync(process.execPath, ['--import', pathToFileURL(stub).href, script, '--keys-only', '--force'], {
-    encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: f.home, ORGIAST_KEYSERVE_SECRET: '', ORGIAST_KEYSERVE_URL: 'https://keyserve.test/keys' },
+    encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: f.home, ORGIAST_KEYSERVE_SECRET: '', ORGIAST_KEYSERVE_PC: 'fixture-pc', ORGIAST_KEYSERVE_URL: 'https://keyserve.test/keys' },
   });
   assert.equal(result.status, 0, result.stderr);
-  const headers = JSON.parse(fs.readFileSync(path.join(f.home, 'request.json'), 'utf8'));
+  const requests = JSON.parse(fs.readFileSync(path.join(f.home, 'request.json'), 'utf8'));
+  const headers = requests.at(-1);
   const logs = fs.existsSync(path.join(claude, 'hooks', 'onboarding-sync.log')) ? fs.readFileSync(path.join(claude, 'hooks', 'onboarding-sync.log'), 'utf8') : '';
   assert.ok(!`${result.stdout}${result.stderr}${logs}`.includes('opaque-enroll-token'));
-  return { f, claude, headers };
+  return { f, claude, headers, requests };
 }
 
 test('primary takes precedence over enroll without an enroll header', async (t) => {
-  const { headers } = runEnrollFixture(t, { primary: 'primary-test' });
+  const { headers, claude } = runEnrollFixture(t, { primary: 'primary-test' });
   assert.equal(headers['x-orgiast-enroll'], undefined);
   const { createHmac } = await import('node:crypto');
   assert.equal(headers['x-orgiast-auth'], createHmac('sha256', 'primary-test').update(headers['x-orgiast-ts']).digest('hex'));
+  assert.equal(fs.readFileSync(path.join(claude, 'keyserve-prev.env'), 'utf8'), 'ORGIAST_KEYSERVE_SECRET=primary-test\n');
 });
 test('enroll takes precedence over legacy and signs the timestamp with the opaque token', async (t) => {
   const { headers, claude } = runEnrollFixture(t);
   assert.equal(headers['x-orgiast-enroll'], 'opaque-enroll-token');
+  assert.equal(headers['x-orgiast-pc'], 'fixture-pc');
   const { createHmac } = await import('node:crypto');
   assert.equal(headers['x-orgiast-auth'], createHmac('sha256', 'opaque-enroll-token').update(headers['x-orgiast-ts']).digest('hex'));
   assert.equal(fs.existsSync(path.join(claude, 'enroll.env')), false);
   assert.match(fs.readFileSync(path.join(claude, 'keyserve.env'), 'utf8'), /new-primary/);
+});
+test('a 401 retries once with the previous secret and restores the one-line file', (t) => {
+  const { claude, requests } = runEnrollFixture(t, { primary: 'derived-test', enroll: '', previous: 'old-test', statuses: [401, 200] });
+  assert.equal(requests.length, 2);
+  assert.equal(requests.every((headers) => headers['x-orgiast-pc'] === 'fixture-pc'), true);
+  assert.equal(fs.readFileSync(path.join(claude, 'keyserve.env'), 'utf8'), 'ORGIAST_KEYSERVE_SECRET=old-test\n');
+  assert.equal(fs.existsSync(path.join(claude, 'keyserve-prev.env')), false);
+});
+test('a successful current PC key removes a stale previous-secret fallback', (t) => {
+  const { claude } = runEnrollFixture(t, { primary: 'derived-test', enroll: '', previous: 'old-test', files: { 'kimi-api.env': 'KEY=test\n' } });
+  assert.equal(fs.existsSync(path.join(claude, 'keyserve-prev.env')), false);
 });
 for (const [label, options] of Object.entries({
   unauthorized: { status: 401 }, expired: { status: 401, body: { error: 'enroll_token_expired' } },
@@ -509,7 +528,7 @@ test('the next sync automatically uses the received primary without an enroll he
     encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: f.home, ORGIAST_KEYSERVE_SECRET: '', ORGIAST_KEYSERVE_URL: 'https://keyserve.test/keys' },
   });
   assert.equal(result.status, 0);
-  const headers = JSON.parse(fs.readFileSync(path.join(f.home, 'request.json'), 'utf8'));
+  const headers = JSON.parse(fs.readFileSync(path.join(f.home, 'request.json'), 'utf8')).at(-1);
   assert.equal(headers['x-orgiast-enroll'], undefined);
   const { createHmac } = await import('node:crypto');
   assert.equal(headers['x-orgiast-auth'], createHmac('sha256', 'new-primary').update(headers['x-orgiast-ts']).digest('hex'));

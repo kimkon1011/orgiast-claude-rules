@@ -105,7 +105,7 @@ async function runProd({ pc, ttlHours }, { env = process.env, run = runNode, std
     assert.ok(typeof token === 'string' && token.startsWith('ORG1.') && token.length > 5 && !/[\r\n\0]/.test(token));
     fs.writeFileSync(path.join(claudeDir, 'enroll.env'), `ORGIAST_ENROLL_TOKEN=${token}\n`, { mode: 0o600 });
 
-    const isolatedEnv = { ...baseEnv, ORGIAST_HOME: isolatedHome };
+    const isolatedEnv = { ...baseEnv, ORGIAST_HOME: isolatedHome, ORGIAST_KEYSERVE_PC: pc };
     delete isolatedEnv.ORGIAST_KEYSERVE_SECRET;
     const visibleOutput = [];
     // keyserve-enroll --json は仕様上 token を含むので漏洩判定から除外する。
@@ -239,16 +239,19 @@ async function runLocal() {
     assert.match(token, /^ORG1\./);
     fs.writeFileSync(path.join(isolatedHome, '.claude', 'enroll.env'), `ORGIAST_ENROLL_TOKEN=${token}\n`, { mode: 0o600 });
 
-    const isolatedEnv = { ...baseEnv, ORGIAST_HOME: isolatedHome };
+    const isolatedEnv = { ...baseEnv, ORGIAST_HOME: isolatedHome, ORGIAST_KEYSERVE_PC: 'e2e-new-pc' };
     const first = await runNode('onboarding-sync.mjs', ['--keys-only', '--force'], isolatedEnv);
     visibleOutput.push(first.stdout, first.stderr);
     const firstKeysRequest = requests.filter((request) => request.url === '/api/keys')[0];
     assert.equal(firstKeysRequest?.headers['x-orgiast-enroll'], token);
+    assert.equal(firstKeysRequest?.headers['x-orgiast-pc'], 'e2e-new-pc');
 
     for (const [name, contents] of Object.entries(dummyFiles)) {
+      if (name === 'keyserve.env') continue;
       assert.equal(fs.readFileSync(path.join(isolatedHome, '.claude', name), 'utf8'), contents);
     }
-    assert.equal(fs.readFileSync(path.join(isolatedHome, '.claude', 'keyserve.env'), 'utf8'), `ORGIAST_KEYSERVE_SECRET=${primarySecret}\n`);
+    const derivedSecret = crypto.createHmac('sha256', primarySecret).update('orgiast-pc-key-v1:e2e-new-pc').digest('hex');
+    assert.equal(fs.readFileSync(path.join(isolatedHome, '.claude', 'keyserve.env'), 'utf8'), `ORGIAST_KEYSERVE_SECRET=${derivedSecret}\nORGIAST_KEYSERVE_PC=e2e-new-pc\n`);
     assert.equal(fs.existsSync(path.join(isolatedHome, '.claude', 'enroll.env')), false);
 
     const second = await runNode('onboarding-sync.mjs', ['--keys-only', '--force'], isolatedEnv);
@@ -256,6 +259,7 @@ async function runLocal() {
     const keyRequests = requests.filter((request) => request.url === '/api/keys');
     assert.equal(keyRequests.length, 2);
     assert.equal(keyRequests[1].headers['x-orgiast-enroll'], undefined);
+    assert.equal(keyRequests[1].headers['x-orgiast-pc'], 'e2e-new-pc');
     assert.equal(keyRequests[1].status, 200);
 
     const statusRun = await runNode('keyserve-status.mjs', ['--json'], isolatedEnv);

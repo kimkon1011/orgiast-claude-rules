@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { readEnvValue } from './env-kv.mjs';
+import { keyserveAuthHeaders, keyservePcId } from './keyserve-auth.mjs';
 
 const jsonOutput = process.argv.slice(2).includes('--json');
 const home = process.env.ORGIAST_HOME || os.homedir();
@@ -24,11 +24,9 @@ const result = { auth: resolved.source, success: false, status: null, files: [],
 
 if (resolved.secret) {
   try {
-    const ts = Math.floor(Date.now() / 1000).toString();
-    const auth = crypto.createHmac('sha256', resolved.secret).update(ts).digest('hex');
     const response = await fetch(keyserveUrl, {
       method: 'POST',
-      headers: { 'x-orgiast-ts': ts, 'x-orgiast-auth': auth },
+      headers: keyserveAuthHeaders(resolved.secret, Date.now(), keyservePcId(home)),
       signal: AbortSignal.timeout(15000),
     });
     result.status = response.status;

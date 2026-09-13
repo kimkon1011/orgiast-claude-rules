@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { readEnvValue } from './env-kv.mjs';
-import { keyserveAuthHeaders } from './keyserve-auth.mjs';
+import { keyserveAuthHeaders, keyservePcId } from './keyserve-auth.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { isEntry } from './is-entry.mjs';
 
@@ -60,7 +60,7 @@ export async function main(argv = process.argv.slice(2), {
       let response;
       try {
         response = await fetchImpl(ENROLL_URL, {
-          method: 'POST', headers: { ...keyserveAuthHeaders(secret), 'Content-Type': 'application/json' },
+          method: 'POST', headers: { ...keyserveAuthHeaders(secret, Date.now(), keyservePcId(home)), 'Content-Type': 'application/json' },
           body: JSON.stringify({ pc, ttlHours }), signal: AbortSignal.timeout(15000),
         });
       } catch { throw new Error('発行APIへ接続できません。ネットワーク接続を確認してください。'); }

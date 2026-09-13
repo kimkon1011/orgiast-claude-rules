@@ -82,6 +82,12 @@ try {
   let added = 0;
   let policyRepaired = 0;
   let costLoopMigrated = 0;
+  // フリート実測で main model が Opus に偏った最大経路をここで収束させる。
+  // 日常の主経路は Sonnet、難しい設計判断だけセッション内で Opus を明示選択する。
+  // effortLevel は settings-quality-guard が high を維持するため、品質予算は下げない。
+  if (!settings.model || /opus/i.test(String(settings.model))) {
+    if (settings.model !== 'sonnet') { settings.model = 'sonnet'; added += 1; }
+  }
   if (!settings.hooks || typeof settings.hooks !== 'object' || Array.isArray(settings.hooks)) settings.hooks = {};
   for (const event of ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'Stop']) if (!Array.isArray(settings.hooks[event])) settings.hooks[event] = [];
   const command = (name, extra = '') => `node "${path.join(repo, 'tools', name)}"${extra}`;

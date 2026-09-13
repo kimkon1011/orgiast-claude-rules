@@ -10,6 +10,7 @@
 //       node claude-cost-reporter.mjs --dry-run  → 送信内容を表示するだけ(送信しない)
 //       node claude-cost-reporter.mjs --force    → 6時間ガードを無視して実行する(検証用)
 //       node claude-cost-reporter.mjs --cached   → 前回出力を即時表示し、裏でキャッシュ更新
+//       (キャッシュ更新は毎回・Discord への投稿は6時間ガード順守)
 //
 // 設定: ~/.claude/cost-reporter.env に以下を書く(このファイルは配布物に含めない、各PC個別設定):
 //   DISCORD_COST_WEBHOOK=https://discord.com/api/webhooks/...
@@ -40,6 +41,10 @@ function readOutputCache() {
   try { return fs.readFileSync(OUTPUT_CACHE_FILE, 'utf8'); } catch { return null; }
 }
 
+export function cacheRefreshArgs(file = fileURLToPath(import.meta.url)) {
+  return [file, '--refresh-cache']; // --force を付けてはいけない（付けると 6時間ガードが無効になる）
+}
+
 function startCacheRefresh() {
   try {
     fs.mkdirSync(path.dirname(REFRESH_LOCK_FILE), { recursive: true });
@@ -53,7 +58,7 @@ function startCacheRefresh() {
   } catch { return false; }
 
   try {
-    const child = spawn(process.execPath, [fileURLToPath(import.meta.url), '--force', '--refresh-cache'], {
+    const child = spawn(process.execPath, cacheRefreshArgs(), {
       detached: true,
       stdio: 'ignore',
       windowsHide: true,
@@ -214,6 +219,15 @@ function saveGuardState(fields = {}) {
   try { fs.writeFileSync(statePath(), JSON.stringify({ ...current, lastRun: new Date().toISOString(), ...fields })); } catch { /* ignore */ }
 }
 
+// 6時間ガード中の挙動を決める純関数。
+// 'post'       = 集計して Discord へ送る
+// 'cache-only' = 集計して表示キャッシュだけ更新する（Discord へは送らない）
+// 'skip'       = 何もせず「スキップ」だけ表示する（従来の素の実行）
+export function postDecision({ dryRun = false, force = false, refreshCache = false, withinGuard = false } = {}) {
+  if (dryRun || force || !withinGuard) return 'post';
+  return refreshCache ? 'cache-only' : 'skip';
+}
+
 function runCostReporter() {
   const envPath = path.join(HOME, '.claude', 'cost-reporter.env');
   const envText = loadEnv();
@@ -230,12 +244,14 @@ function runCostReporter() {
   }
   const identity = machineIdentity();
 
-  if (!DRY_RUN && !FORCE && shouldSkipByGuard()) {
+  const decision = postDecision({ dryRun: DRY_RUN, force: FORCE, refreshCache: REFRESH_CACHE, withinGuard: shouldSkipByGuard() });
+  if (decision === 'skip') {
     console.log(`前回実行から${GUARD_HOURS}時間未満のためスキップ`);
     return;
   }
-  // 競合防止: ガード通過直後に即座に状態を書く(近接して複数回発火しても2回目以降はスキップされ重複投稿しない)
-  if (!DRY_RUN) saveGuardState();
+  const willPost = decision === 'post';
+  // 競合防止: 実際に投稿するときだけ即座に状態を書く(近接して複数回発火しても2回目以降はスキップされ重複投稿しない)
+  if (!DRY_RUN && willPost) saveGuardState();
 
   if (!webhook && !DRY_RUN) {
     console.error('DISCORD_COST_WEBHOOK が未設定です。~/.claude/cost-reporter.env を作成してください。');
@@ -266,7 +282,7 @@ function runCostReporter() {
     fable5Detected: fableUsed,
     opusRatio,
   };
-  if (!DRY_RUN) saveGuardState(reportState);
+  if (!DRY_RUN && willPost) saveGuardState(reportState);
 
   let msg = `**💻 Claude Code ローカル利用トークン** — ${label}\n`;
   // 識別行はヘッダ直後に置く。本文は 1950 文字で切って送るため、末尾だとモデル一覧が長いPCで欠落する。
@@ -295,6 +311,11 @@ function runCostReporter() {
   if (DRY_RUN) {
     console.log('\n--dry-run のため Discord へは送信していません。');
     return;
+  }
+
+  if (!willPost) {
+    console.error('6時間ガード中: 表示キャッシュのみ更新し、Discordへは送信しません');
+    return reportState;
   }
 
   fetch(webhook, {

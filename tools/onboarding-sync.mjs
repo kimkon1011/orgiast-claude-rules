@@ -11,7 +11,7 @@ import { parseEnvText, readEnvValue } from './env-kv.mjs';
 import { repairEnvBom } from './env-repair.mjs';
 import { isEntry } from './is-entry.mjs';
 import { buildKeyserveAlert, shouldAlert } from './keyserve-alert.mjs';
-import { keyserveAuthHeaders, keyservePcId } from './keyserve-auth.mjs';
+import { keyserveAuthHeaders, keyserveEnrollPcId, keyservePcId } from './keyserve-auth.mjs';
 import { installSharedMemories } from './memory-share.mjs';
 import { gitBlobSha } from './version-drift.mjs';
 
@@ -488,7 +488,7 @@ async function provisionKeys(now, options = {}) {
     return;
   }
   try {
-    const pcId = keyservePcId(home);
+    const pcId = (enrollToken ? keyserveEnrollPcId(enrollToken) : '') || keyservePcId(home);
     const requestKeys = (requestSecret) => fetch(keyserveUrl, {
       method: 'POST',
       headers: { ...keyserveAuthHeaders(requestSecret, Date.now(), pcId), ...(enrollToken ? { 'x-orgiast-enroll': enrollToken } : {}) },

@@ -17,6 +17,14 @@ function Format-NightlyDetail($Output) {
     if ($lines.Count -eq 0) { return '(出力なし)' }
     return ($lines -join ' / ')
 }
+# ステップの出力を捕捉し、失敗時は理由を1行でログに残す。
+# $Output は呼び出し側が @(& ... 2>&1) で受け取った配列。
+function Write-NightlyStepResult([string]$Step, [int]$ExitCode, $Output, [string]$Note = '') {
+    if ($ExitCode -eq 0) { Write-NightlyLog $Step 'ok'; return }
+    $reason = Format-NightlyDetail $Output
+    Write-NightlyLog $Step ('error:終了コード' + $ExitCode + $Note + ': ' + $reason)
+    Write-Warning ("nightly-batch: " + $Step + " exited " + $ExitCode + ': ' + ($reason))
+}
 function Finish-Nightly([int]$Code) {
     $parts = @($summary.Keys | ForEach-Object { $_ + '=' + $summary[$_] })
     Write-NightlyLog 'サマリ' ("nightly-batch 完了: " + ($parts -join ', '))
@@ -209,11 +217,13 @@ try {
     # LINEトーク履歴エクスポート(inbox の .txt)を先に取り込む。claude-mobile が無いPCでは静かにスキップする。
     $lineImport = Join-Path $HOME 'Downloads\claude-mobile\scripts\import-line-export.mjs'
     if (Test-Path -LiteralPath $lineImport -PathType Leaf) {
+        $lineImportOutput = $null
         try {
-            & $node.Source $lineImport
-            if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'import-line-export' ("error:終了コード" + $LASTEXITCODE); Write-Warning ("nightly-batch: import-line-export exited " + $LASTEXITCODE) } else { Write-NightlyLog 'import-line-export' 'ok' }
+            $lineImportOutput = @(& $node.Source $lineImport 2>&1)
+            $lineImportExit = $LASTEXITCODE
+            Write-NightlyStepResult 'import-line-export' $lineImportExit $lineImportOutput
         } catch {
-            Write-NightlyLog 'import-line-export' ("error:" + $_.Exception.Message)
+            Write-NightlyLog 'import-line-export' ("error:" + $_.Exception.Message + ': ' + (Format-NightlyDetail $lineImportOutput))
             Write-Warning ("nightly-batch: import-line-export: " + $_.Exception.Message)
         }
     } else { Write-NightlyLog 'import-line-export' 'skip:ファイルなし' }
@@ -224,27 +234,32 @@ try {
         if (Test-Path -LiteralPath $candidate -PathType Leaf) { $lineReminder = $candidate; break }
     }
     if ($lineReminder) {
+        $lineReminderOutput = $null
         try {
-            & $node.Source $lineReminder
-            if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'line-export-reminder' ("error:終了コード" + $LASTEXITCODE); Write-Warning ("nightly-batch: line-export-reminder exited " + $LASTEXITCODE) } else { Write-NightlyLog 'line-export-reminder' 'ok' }
+            $lineReminderOutput = @(& $node.Source $lineReminder 2>&1)
+            $lineReminderExit = $LASTEXITCODE
+            Write-NightlyStepResult 'line-export-reminder' $lineReminderExit $lineReminderOutput
         } catch {
-            Write-NightlyLog 'line-export-reminder' ("error:" + $_.Exception.Message)
+            Write-NightlyLog 'line-export-reminder' ("error:" + $_.Exception.Message + ': ' + (Format-NightlyDetail $lineReminderOutput))
             Write-Warning ("nightly-batch: line-export-reminder: " + $_.Exception.Message)
         }
     } else { Write-NightlyLog 'line-export-reminder' 'skip:ファイルなし' }
 
     if ($interactionLoop) {
+        $interactionOutput = $null
         try {
-            $interactionOutput = @(& $node.Source $interactionLoop --digest)
-            if ($LASTEXITCODE -ne 0) {
-                $summary['interaction-loop'] = ("error:終了コード" + $LASTEXITCODE)
+            $interactionOutput = @(& $node.Source $interactionLoop --digest 2>&1)
+            $interactionExit = $LASTEXITCODE
+            if ($interactionExit -ne 0) {
+                $summary['interaction-loop'] = ('error:終了コード' + $interactionExit + ': ' + (Format-NightlyDetail $interactionOutput))
+                Write-NightlyStepResult 'interaction-loop' $interactionExit $interactionOutput
             } else {
                 $interactionState = @($interactionOutput | Where-Object { $_ -eq 'skip:前回と差分なし' } | Select-Object -Last 1)
                 $summary['interaction-loop'] = if ($interactionState.Count -gt 0) { [string]$interactionState[0] } else { 'ok' }
+                Write-NightlyLog 'interaction-loop' $summary['interaction-loop']
             }
-            Write-NightlyLog 'interaction-loop' $summary['interaction-loop']
         } catch {
-            $summary['interaction-loop'] = ("error:" + $_.Exception.Message)
+            $summary['interaction-loop'] = ("error:" + $_.Exception.Message + ': ' + (Format-NightlyDetail $interactionOutput))
             Write-NightlyLog 'interaction-loop' $summary['interaction-loop']
             Write-Warning ("nightly-batch: interaction-loop: " + $_.Exception.Message)
         }
@@ -259,17 +274,20 @@ try {
         if (Test-Path -LiteralPath $candidate -PathType Leaf) { $interactionRollout = $candidate; break }
     }
     if ($interactionRollout) {
+        $interactionRolloutOutput = $null
         try {
-            $interactionRolloutOutput = @(& $node.Source $interactionRollout --watch)
-            if ($LASTEXITCODE -ne 0) {
-                $summary['interaction-rollout'] = ("error:終了コード" + $LASTEXITCODE)
+            $interactionRolloutOutput = @(& $node.Source $interactionRollout --watch 2>&1)
+            $interactionRolloutExit = $LASTEXITCODE
+            if ($interactionRolloutExit -ne 0) {
+                $summary['interaction-rollout'] = ('error:終了コード' + $interactionRolloutExit + ': ' + (Format-NightlyDetail $interactionRolloutOutput))
+                Write-NightlyStepResult 'interaction-rollout' $interactionRolloutExit $interactionRolloutOutput
             } else {
                 $interactionRolloutState = @($interactionRolloutOutput | Where-Object { $_ -eq 'skip:前回と差分なし' } | Select-Object -Last 1)
                 $summary['interaction-rollout'] = if ($interactionRolloutState.Count -gt 0) { [string]$interactionRolloutState[0] } else { 'ok' }
+                Write-NightlyLog 'interaction-rollout' $summary['interaction-rollout']
             }
-            Write-NightlyLog 'interaction-rollout' $summary['interaction-rollout']
         } catch {
-            $summary['interaction-rollout'] = ("error:" + $_.Exception.Message)
+            $summary['interaction-rollout'] = ("error:" + $_.Exception.Message + ': ' + (Format-NightlyDetail $interactionRolloutOutput))
             Write-NightlyLog 'interaction-rollout' $summary['interaction-rollout']
             Write-Warning ("nightly-batch: interaction-rollout: " + $_.Exception.Message)
         }
@@ -285,10 +303,12 @@ try {
         if (Test-Path -LiteralPath $candidate -PathType Leaf) { $ruleCompliance = $candidate; break }
     }
     if ($ruleCompliance) {
+        $ruleComplianceOutput = $null
         try {
-            & $node.Source $ruleCompliance '--days' '7'
-            if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'rule-compliance-loop' ("error:終了コード" + $LASTEXITCODE + ' (警告・後続処理続行)') } else { Write-NightlyLog 'rule-compliance-loop' 'ok' }
-        } catch { Write-NightlyLog 'rule-compliance-loop' ("error:" + $_.Exception.Message + ' (警告・後続処理続行)') }
+            $ruleComplianceOutput = @(& $node.Source $ruleCompliance '--days' '7' 2>&1)
+            $ruleComplianceExit = $LASTEXITCODE
+            Write-NightlyStepResult 'rule-compliance-loop' $ruleComplianceExit $ruleComplianceOutput ' (警告・後続処理続行)'
+        } catch { Write-NightlyLog 'rule-compliance-loop' ("error:" + $_.Exception.Message + ' (警告・後続処理続行): ' + (Format-NightlyDetail $ruleComplianceOutput)) }
     } else { Write-NightlyLog 'rule-compliance-loop' 'skip:ファイルなし' }
 
     # 委譲台帳を実測と照合し、偽 cooldown を修復して根本修正を auto-session へ起票する。
@@ -299,10 +319,12 @@ try {
         if (Test-Path -LiteralPath $candidate -PathType Leaf) { $delegationHealth = $candidate; break }
     }
     if ($delegationHealth) {
+        $delegationHealthOutput = $null
         try {
-            & $node.Source $delegationHealth
-            if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'delegation-health-check' ("error:終了コード" + $LASTEXITCODE + ' (警告・後続処理続行)') } else { Write-NightlyLog 'delegation-health-check' 'ok' }
-        } catch { Write-NightlyLog 'delegation-health-check' ("error:" + $_.Exception.Message + ' (警告・後続処理続行)') }
+            $delegationHealthOutput = @(& $node.Source $delegationHealth 2>&1)
+            $delegationHealthExit = $LASTEXITCODE
+            Write-NightlyStepResult 'delegation-health-check' $delegationHealthExit $delegationHealthOutput ' (警告・後続処理続行)'
+        } catch { Write-NightlyLog 'delegation-health-check' ("error:" + $_.Exception.Message + ' (警告・後続処理続行): ' + (Format-NightlyDetail $delegationHealthOutput)) }
     } else { Write-NightlyLog 'delegation-health-check' 'skip:ファイルなし' }
 
     # アプリ内フォームの報告(kim の DM に届いたもの)を GitHub Issue 化する。
@@ -313,11 +335,13 @@ try {
         if (Test-Path -LiteralPath $candidate -PathType Leaf) { $feedbackToIssues = $candidate; break }
     }
     if ($feedbackToIssues) {
+        $feedbackToIssuesOutput = $null
         try {
-            & $node.Source $feedbackToIssues
-            if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'feedback-to-issues' ("error:終了コード" + $LASTEXITCODE + ' (警告・後続処理続行)'); Write-Warning ("nightly-batch: feedback-to-issues exited " + $LASTEXITCODE) } else { Write-NightlyLog 'feedback-to-issues' 'ok' }
+            $feedbackToIssuesOutput = @(& $node.Source $feedbackToIssues 2>&1)
+            $feedbackToIssuesExit = $LASTEXITCODE
+            Write-NightlyStepResult 'feedback-to-issues' $feedbackToIssuesExit $feedbackToIssuesOutput ' (警告・後続処理続行)'
         } catch {
-            Write-NightlyLog 'feedback-to-issues' ("error:" + $_.Exception.Message + ' (警告・後続処理続行)')
+            Write-NightlyLog 'feedback-to-issues' ("error:" + $_.Exception.Message + ' (警告・後続処理続行): ' + (Format-NightlyDetail $feedbackToIssuesOutput))
             Write-Warning ("nightly-batch: feedback-to-issues: " + $_.Exception.Message)
         }
     } else { Write-NightlyLog 'feedback-to-issues' 'skip:ファイルなし' }
@@ -330,11 +354,13 @@ try {
         if (Test-Path -LiteralPath $candidate -PathType Leaf) { $feedbackReplies = $candidate; break }
     }
     if ($feedbackReplies) {
+        $feedbackRepliesOutput = $null
         try {
-            & $node.Source $feedbackReplies
-            if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'feedback-replies' ("error:終了コード" + $LASTEXITCODE + ' (警告・後続処理続行)'); Write-Warning ("nightly-batch: feedback-replies exited " + $LASTEXITCODE) } else { Write-NightlyLog 'feedback-replies' 'ok' }
+            $feedbackRepliesOutput = @(& $node.Source $feedbackReplies 2>&1)
+            $feedbackRepliesExit = $LASTEXITCODE
+            Write-NightlyStepResult 'feedback-replies' $feedbackRepliesExit $feedbackRepliesOutput ' (警告・後続処理続行)'
         } catch {
-            Write-NightlyLog 'feedback-replies' ("error:" + $_.Exception.Message + ' (警告・後続処理続行)')
+            Write-NightlyLog 'feedback-replies' ("error:" + $_.Exception.Message + ' (警告・後続処理続行): ' + (Format-NightlyDetail $feedbackRepliesOutput))
             Write-Warning ("nightly-batch: feedback-replies: " + $_.Exception.Message)
         }
     } else { Write-NightlyLog 'feedback-replies' 'skip:ファイルなし' }
@@ -345,11 +371,13 @@ try {
         if (Test-Path -LiteralPath $candidate -PathType Leaf) { $growiManual = $candidate; break }
     }
     if ($growiManual) {
+        $growiManualOutput = $null
         try {
-            & $node.Source $growiManual sync-growi
-            if ($LASTEXITCODE -eq 2) { Write-NightlyLog 'growi-manual' 'skip:認証情報なし' } elseif ($LASTEXITCODE -ne 0) { Write-NightlyLog 'growi-manual' ("error:終了コード" + $LASTEXITCODE) } else { Write-NightlyLog 'growi-manual' 'ok' }
+            $growiManualOutput = @(& $node.Source $growiManual sync-growi 2>&1)
+            $growiManualExit = $LASTEXITCODE
+            if ($growiManualExit -eq 2) { Write-NightlyLog 'growi-manual' 'skip:認証情報なし' } else { Write-NightlyStepResult 'growi-manual' $growiManualExit $growiManualOutput }
         } catch {
-            Write-NightlyLog 'growi-manual' ("error:" + $_.Exception.Message)
+            Write-NightlyLog 'growi-manual' ("error:" + $_.Exception.Message + ': ' + (Format-NightlyDetail $growiManualOutput))
         }
     } else { Write-NightlyLog 'growi-manual' 'skip:ファイルなし' }
 
@@ -362,11 +390,13 @@ try {
     if (-not (Test-Path -LiteralPath $discordBotToken -PathType Leaf)) {
         Write-NightlyLog 'discord-channels' 'skip:トークンなし'
     } elseif ($discordChannels) {
+        $discordChannelsOutput = $null
         try {
-            & $node.Source $discordChannels
-            if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'discord-channels' ("error:終了コード" + $LASTEXITCODE) } else { Write-NightlyLog 'discord-channels' 'ok' }
+            $discordChannelsOutput = @(& $node.Source $discordChannels 2>&1)
+            $discordChannelsExit = $LASTEXITCODE
+            Write-NightlyStepResult 'discord-channels' $discordChannelsExit $discordChannelsOutput
         } catch {
-            Write-NightlyLog 'discord-channels' ("error:" + $_.Exception.Message)
+            Write-NightlyLog 'discord-channels' ("error:" + $_.Exception.Message + ': ' + (Format-NightlyDetail $discordChannelsOutput))
         }
     } else { Write-NightlyLog 'discord-channels' 'skip:ファイルなし' }
 
@@ -379,10 +409,12 @@ try {
     if (-not (Test-Path -LiteralPath $fleetSheetEnv -PathType Leaf)) {
         Write-NightlyLog 'webhook-health' 'skip:設定なし'
     } elseif ($webhookHealth) {
+        $webhookHealthOutput = $null
         try {
-            & $node.Source $webhookHealth --post-sheet
-            if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'webhook-health' ("error:終了コード" + $LASTEXITCODE) } else { Write-NightlyLog 'webhook-health' 'ok' }
-        } catch { Write-NightlyLog 'webhook-health' ("error:" + $_.Exception.Message) }
+            $webhookHealthOutput = @(& $node.Source $webhookHealth --post-sheet 2>&1)
+            $webhookHealthExit = $LASTEXITCODE
+            Write-NightlyStepResult 'webhook-health' $webhookHealthExit $webhookHealthOutput
+        } catch { Write-NightlyLog 'webhook-health' ("error:" + $_.Exception.Message + ': ' + (Format-NightlyDetail $webhookHealthOutput)) }
     } else { Write-NightlyLog 'webhook-health' 'skip:ファイルなし' }
 
     # keyserve の失敗は台帳に failed/unset として残すが、夜間バッチ本体は止めない。
@@ -420,10 +452,12 @@ try {
     if (-not (Test-Path -LiteralPath $discordBotToken -PathType Leaf)) {
         Write-NightlyLog 'webhook-inventory' 'skip:トークンなし'
     } elseif ($webhookInventory) {
+        $webhookInventoryOutput = $null
         try {
-            & $node.Source $webhookInventory
-            if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'webhook-inventory' ("error:終了コード" + $LASTEXITCODE) } else { Write-NightlyLog 'webhook-inventory' 'ok' }
-        } catch { Write-NightlyLog 'webhook-inventory' ("error:" + $_.Exception.Message) }
+            $webhookInventoryOutput = @(& $node.Source $webhookInventory 2>&1)
+            $webhookInventoryExit = $LASTEXITCODE
+            Write-NightlyStepResult 'webhook-inventory' $webhookInventoryExit $webhookInventoryOutput
+        } catch { Write-NightlyLog 'webhook-inventory' ("error:" + $_.Exception.Message + ': ' + (Format-NightlyDetail $webhookInventoryOutput)) }
     } else { Write-NightlyLog 'webhook-inventory' 'skip:ファイルなし' }
 
     # LINEオープンチャットの取り込み分を選別・要約して作り置きを更新する。
@@ -435,10 +469,10 @@ try {
     }
     if ($digest) {
         try {
-            $digestOutput = @(& $node.Source $digest)
+            $digestOutput = @(& $node.Source $digest 2>&1)
             $digestExitCode = $LASTEXITCODE
             if ($digestExitCode -ne 0) {
-                $digestResult = "error:終了コード$digestExitCode"
+                $digestResult = 'error:終了コード' + $digestExitCode + ': ' + (Format-NightlyDetail $digestOutput)
             } else {
                 $digestResult = @($digestOutput | Where-Object { $_ -match '^(skip:入力ディレクトリなし|skip:新規メッセージなし|ok:\d+件処理)$' } | Select-Object -Last 1)
                 if ($digestResult.Count -eq 0) { $digestResult = 'error:状態不明' } else { $digestResult = [string]$digestResult[0] }
@@ -458,10 +492,10 @@ try {
     }
     if ($triage) {
         try {
-            $triageOutput = @(& $node.Source $triage '--limit' '60' '--confidence' 'high,medium,low')
+            $triageOutput = @(& $node.Source $triage '--limit' '60' '--confidence' 'high,medium,low' 2>&1)
             $triageExitCode = $LASTEXITCODE
             if ($triageExitCode -ne 0) {
-                $triageResult = "error:終了コード$triageExitCode"
+                $triageResult = 'error:終了コード' + $triageExitCode + ': ' + (Format-NightlyDetail $triageOutput)
             } else {
                 $triageResult = @($triageOutput | Where-Object { $_ -match '^(ok:検証\d+件 done\d+ rejected\d+ pending\d+(?: 判定失敗\d+件)?|skip:対象なし|error:.+)$' } | Select-Object -Last 1)
                 if ($triageResult.Count -eq 0) { $triageResult = 'error:状態不明' } else { $triageResult = [string]$triageResult[0] }
@@ -483,18 +517,22 @@ try {
         if (Test-Path -LiteralPath $candidate -PathType Leaf) { $makimonoDrain = $candidate; break }
     }
     if ($makimonoDrain) {
+        $makimonoDrainOutput = $null
         try {
-            & $node.Source $makimonoDrain --drain-queue --notify
-            if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'makimono-drain' ("error:終了コード" + $LASTEXITCODE) } else { Write-NightlyLog 'makimono-drain' 'ok' }
+            $makimonoDrainOutput = @(& $node.Source $makimonoDrain --drain-queue --notify 2>&1)
+            $makimonoDrainExit = $LASTEXITCODE
+            Write-NightlyStepResult 'makimono-drain' $makimonoDrainExit $makimonoDrainOutput
         } catch {
-            Write-NightlyLog 'makimono-drain' ("error:" + $_.Exception.Message)
+            Write-NightlyLog 'makimono-drain' ("error:" + $_.Exception.Message + ': ' + (Format-NightlyDetail $makimonoDrainOutput))
             Write-Warning ("nightly-batch: makimono-drain: " + $_.Exception.Message)
         }
+        $makimonoCheckOutput = $null
         try {
-            & $node.Source $makimonoDrain --check --notify
-            if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'makimono-check' ("error:終了コード" + $LASTEXITCODE) } else { Write-NightlyLog 'makimono-check' 'ok' }
+            $makimonoCheckOutput = @(& $node.Source $makimonoDrain --check --notify 2>&1)
+            $makimonoCheckExit = $LASTEXITCODE
+            Write-NightlyStepResult 'makimono-check' $makimonoCheckExit $makimonoCheckOutput
         } catch {
-            Write-NightlyLog 'makimono-check' ("error:" + $_.Exception.Message)
+            Write-NightlyLog 'makimono-check' ("error:" + $_.Exception.Message + ': ' + (Format-NightlyDetail $makimonoCheckOutput))
             Write-Warning ("nightly-batch: makimono-check: " + $_.Exception.Message)
         }
     } else {
@@ -508,10 +546,12 @@ try {
         if (Test-Path -LiteralPath $candidate -PathType Leaf) { $producer = $candidate; break }
     }
     if ($producer) {
+        $producerOutput = $null
         try {
-            & $node.Source $producer
-            if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'batch-producer' ("error:終了コード" + $LASTEXITCODE + ' (警告・batch-run続行)') } else { Write-NightlyLog 'batch-producer' 'ok' }
-        } catch { Write-NightlyLog 'batch-producer' ("error:" + $_.Exception.Message + ' (警告・batch-run続行)') }
+            $producerOutput = @(& $node.Source $producer 2>&1)
+            $producerExit = $LASTEXITCODE
+            Write-NightlyStepResult 'batch-producer' $producerExit $producerOutput ' (警告・batch-run続行)'
+        } catch { Write-NightlyLog 'batch-producer' ("error:" + $_.Exception.Message + ' (警告・batch-run続行): ' + (Format-NightlyDetail $producerOutput)) }
     } else { Write-NightlyLog 'batch-producer' 'skip:ファイルなし' }
 
     if (-not $runner) { $summary['batch'] = 'error:batch-run.mjsが見つからない'; Write-NightlyLog 'batch-run確認' 'error:batch-run.mjsが見つからない'; Finish-Nightly 1 }
@@ -520,13 +560,14 @@ try {
         $summary['batch'] = '処理対象0件'; Write-NightlyLog 'batch-run' 'skip:処理対象0件'; Finish-Nightly 0
     }
     $before = @((Get-Content -LiteralPath $pending -Encoding UTF8) | Where-Object { $_.Trim() }).Count
-    & $node.Source $runner
-    if ($LASTEXITCODE -eq 3) {
+    $batchRunOutput = @(& $node.Source $runner 2>&1)
+    $batchRunExit = $LASTEXITCODE
+    if ($batchRunExit -eq 3) {
         $summary['batch'] = 'skip:既に実行中(ロック競合)'
         Write-NightlyLog 'batch-run' 'skip:既に実行中(ロック競合)'
         Finish-Nightly 0
     }
-    if ($LASTEXITCODE -ne 0) { $summary['batch'] = "error:終了コード$LASTEXITCODE"; Write-NightlyLog 'batch-run' ("error:終了コード" + $LASTEXITCODE); Finish-Nightly 1 }
+    if ($batchRunExit -ne 0) { $summary['batch'] = ('error:終了コード' + $batchRunExit + ': ' + (Format-NightlyDetail $batchRunOutput)); Write-NightlyStepResult 'batch-run' $batchRunExit $batchRunOutput; Finish-Nightly 1 }
     $after = if (Test-Path -LiteralPath $pending -PathType Leaf) { @((Get-Content -LiteralPath $pending -Encoding UTF8) | Where-Object { $_.Trim() }).Count } else { 0 }
     $processed = [Math]::Max(0, $before - $after)
     $summary['batch'] = ($processed.ToString() + '件処理')

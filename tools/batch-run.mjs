@@ -10,6 +10,7 @@ import { spawnSync } from 'node:child_process';
 import { readEnvValue } from './env-kv.mjs';
 import { callWithFallback, classifyFailure, FALLBACK_CHAIN } from './llm-fallback.mjs';
 import { batchDeadline } from './lib/batch-deadline.mjs';
+import { runEvalHarnessJobs } from './lib/eval-harness-coalesce.mjs';
 import { acquireLock } from './lib/single-instance.mjs';
 
 function userHome() { const h = os.homedir(), m = process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i); return process.env.USERPROFILE || m?.[1] || h; }
@@ -213,9 +214,12 @@ for (const group of geminiGroups.values()) {
     }
   }
 }
-for (const job of runnable.filter((j) => j.kind === 'eval-harness')) {
-  try { await runEvalHarnessJob(job); }
-  catch (e) { console.error(`FAIL ${job.id}: ${e.message}`); }
+const evalHarnessJobs = runnable.filter((j) => j.kind === 'eval-harness');
+if (evalHarnessJobs.length) {
+  try {
+    await runEvalHarnessJobs(evalHarnessJobs, runEvalHarnessJob, completed);
+    if (evalHarnessJobs.length > 1) console.log(`eval-harness を1回に集約: ${evalHarnessJobs.length}件を完了 (実行1回)`);
+  } catch (e) { console.error(`FAIL eval-harness (${evalHarnessJobs.length}件): ${e.message}`); }
 }
 for (const job of runnable.filter((j) => j.provider !== 'gemini' && j.provider !== 'anthropic' && j.kind !== 'eval-harness')) {
   try { const out = await runStandard(job); const usage = usageRecord(job.provider, job.model, out.usage); saveResult(job, out.text, usage, out.mode, out); completed.add(job.id); console.log(`OK ${job.id} standard`); }

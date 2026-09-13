@@ -946,7 +946,7 @@ export function executeLocalAction({ act, dryRun = false, claudeDir, home, now =
   }
   console.log(`Executing auto-local command: ${act.command}`);
   const parts = splitWhitelistedCommand(act.command);
-  const res = spawnSync(parts[0], parts.slice(1), { shell: false, cwd: repoRoot, encoding: 'utf8' });
+  const res = spawnSync(parts[0], parts.slice(1), { windowsHide: true, shell: false, cwd: repoRoot, encoding: 'utf8' });
   if (res.status === 0) {
     return { ...act, result: 'pending', note: 'Command executed successfully. Awaiting verification.' };
   }
@@ -974,13 +974,13 @@ export function runAutoCodexIsolated({ acts, specFile, dryRun = false, repoPath,
   }
   const tempTree = path.join(os.tmpdir(), `orgiast-cost-improve-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   try {
-    let res = spawnSync('git', ['-C', repoPath, 'worktree', 'add', '--detach', tempTree, 'origin/main'], { encoding: 'utf8' });
+    let res = spawnSync('git', ['-C', repoPath, 'worktree', 'add', '--detach', tempTree, 'origin/main'], { windowsHide: true, encoding: 'utf8' });
     if (res.status !== 0) { fail('worktree add failed', res); return; }
-    res = spawnSync('node', [path.join(tempTree, 'tools/codex-do.mjs'), '--prompt-file', specFile, '--cwd', tempTree, '--timeout', '1800'], { cwd: tempTree, encoding: 'utf8' });
+    res = spawnSync('node', [path.join(tempTree, 'tools/codex-do.mjs'), '--prompt-file', specFile, '--cwd', tempTree, '--timeout', '1800'], { windowsHide: true, cwd: tempTree, encoding: 'utf8' });
     if (res.status !== 0) { fail('Codex execution failed', res); return; }
-    const diff = spawnSync('git', ['-C', tempTree, 'diff', '--stat'], { encoding: 'utf8' });
+    const diff = spawnSync('git', ['-C', tempTree, 'diff', '--stat'], { windowsHide: true, encoding: 'utf8' });
     if (diff.status !== 0 || !String(diff.stdout || '').trim()) { fail('変更なし', diff); return; }
-    const tests = spawnSync('node', ['--test', 'tools/*.test.mjs'], { cwd: tempTree, shell: true, encoding: 'utf8' });
+    const tests = spawnSync('node', ['--test', 'tools/*.test.mjs'], { windowsHide: true, cwd: tempTree, shell: true, encoding: 'utf8' });
     if (tests.status !== 0) { fail('verification tests failed', tests); return; }
     const dateStr = now.toISOString().slice(0, 10).replaceAll('-', '');
     const branchName = `auto/cost-improve-${dateStr}-${label}`;
@@ -991,11 +991,11 @@ export function runAutoCodexIsolated({ acts, specFile, dryRun = false, repoPath,
       ['git', ['-C', tempTree, 'commit', '-m', commitMsg], 'commit failed'],
       ['git', ['-C', tempTree, 'push', '-u', 'origin', branchName], 'push failed']
     ]) {
-      res = spawnSync(program, args, { encoding: 'utf8' });
+      res = spawnSync(program, args, { windowsHide: true, encoding: 'utf8' });
       if (res.status !== 0) { fail(stage, res); return; }
     }
     const body = `Evidence: ${first.specContent?.match(/- 根拠: (.*)/)?.[1] || label}\n\nSpec summary: ${label} on ${first.pc}; verify with node --test tools/*.test.mjs.`;
-    res = spawnSync('gh', ['pr', 'create', '--title', commitMsg, '--body', body, '--head', branchName], { cwd: tempTree, encoding: 'utf8' });
+    res = spawnSync('gh', ['pr', 'create', '--title', commitMsg, '--body', body, '--head', branchName], { windowsHide: true, cwd: tempTree, encoding: 'utf8' });
     const url = `${res.stdout || ''}\n${res.stderr || ''}`.match(/https:\/\/github\.com\/[^\s]+\/pull\/\d+/)?.[0];
     if (res.status !== 0 || !url) { fail('PR creation failed', res); return; }
     for (const act of list) {
@@ -1004,7 +1004,7 @@ export function runAutoCodexIsolated({ acts, specFile, dryRun = false, repoPath,
       act.result = 'pending';
     }
   } finally {
-    spawnSync('git', ['-C', repoPath, 'worktree', 'remove', '--force', tempTree], { encoding: 'utf8' });
+    spawnSync('git', ['-C', repoPath, 'worktree', 'remove', '--force', tempTree], { windowsHide: true, encoding: 'utf8' });
   }
 }
 

@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
 
 const home = process.env.ORGIAST_HOME || os.homedir();
 const candidates = (name) => [
@@ -12,7 +13,7 @@ const candidates = (name) => [
 ];
 const firstFile = (name) => candidates(name).find((p) => fs.existsSync(p));
 const background = (script, args = []) => {
-  try { spawn(process.execPath, [script, ...args], { detached: true, stdio: 'ignore' }).unref(); } catch {}
+  try { spawn(process.execPath, [script, ...args], { ...backgroundSpawnOptions(), stdio: 'ignore' }).unref(); } catch {}
 };
 const batchRecentlyRan = () => {
   const lock = path.join(os.homedir(), '.claude', 'locks', 'batch-run.lock');

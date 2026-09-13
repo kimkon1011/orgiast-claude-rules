@@ -73,7 +73,7 @@ export function parseAudit(raw) {
 export function askCli({ provider, prompt, signal, home }) {
   return new Promise((resolve, reject) => {
     execFile(process.execPath, [fileURLToPath(new URL('./llm-ask.mjs', import.meta.url)), '--provider', provider, '--no-fallback', '--max', '4000', prompt],
-      { encoding: 'utf8', signal, maxBuffer: 1024 * 1024, env: { ...process.env, ORGIAST_HOME: home } },
+      { windowsHide: true, encoding: 'utf8', signal, maxBuffer: 1024 * 1024, env: { ...process.env, ORGIAST_HOME: home } },
       (error, stdout, stderr) => error ? reject(new Error(signal.aborted ? 'timeout' : `provider-unavailable:${provider}`)) : resolve({ text: stdout, usage: stderr.match(/in=(\d+)/)?.[1] }));
   });
 }

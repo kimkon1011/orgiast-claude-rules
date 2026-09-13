@@ -41,11 +41,11 @@ async function post(message) {
 }
 
 function run(program, args) {
-  const result = spawnSync(program, args, { encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home } });
+  const result = spawnSync(program, args, { windowsHide: true, encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home } });
   return `${result.stdout || ''}${result.stderr || ''}`;
 }
 function runFleetSheetReport() {
-  const result = spawnSync('node', [path.join(repo, 'tools', 'fleet-sheet-report.mjs'), '--specs', '--cloud'], { encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home } });
+  const result = spawnSync('node', [path.join(repo, 'tools', 'fleet-sheet-report.mjs'), '--specs', '--cloud'], { windowsHide: true, encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home } });
   const log = path.join(claudeDir, 'logs', 'fleet-poller.log'); fs.mkdirSync(path.dirname(log), { recursive: true });
   const stamp = new Date().toISOString();
   for (const line of `${result.stdout || ''}${result.stderr || ''}`.split(/\r?\n/).filter(Boolean)) fs.appendFileSync(log, `${stamp} ${line}\n`);

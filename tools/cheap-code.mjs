@@ -251,7 +251,7 @@ async function main(args) {
   let stdoutText = '';
   let stderrText = '';
   const status = await new Promise((resolve) => {
-    const child = spawn(executable, childArgs, {
+    const child = spawn(executable, childArgs, { windowsHide: true,
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...buildChildEnv(config, key), ORGIAST_HEADLESS_JOB: `cheap-code:${config.provider}` },

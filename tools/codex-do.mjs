@@ -420,7 +420,7 @@ if (dryRun) { logCodex(); console.log(prompt); process.exit(0); }
 
 // 実行前の作業ツリーを控える。未コミット差分が常時あるリポでは diff が空にならず、
 // 下の「空diffなら書き込めていない」判定が一度も発火しないため（2026-09-03 実害）。
-const treeSnapshot = () => `${spawnSync('git', ['-C', cwd, 'diff', '--stat'], { encoding: 'utf8' }).stdout || ''}\n${spawnSync('git', ['-C', cwd, 'status', '--porcelain'], { encoding: 'utf8' }).stdout || ''}`;
+const treeSnapshot = () => `${spawnSync('git', ['-C', cwd, 'diff', '--stat'], { windowsHide: true, encoding: 'utf8' }).stdout || ''}\n${spawnSync('git', ['-C', cwd, 'status', '--porcelain'], { windowsHide: true, encoding: 'utf8' }).stdout || ''}`;
 const treeBefore = treeSnapshot();
 const wantedEdit = !review && /実装|作って|修正|直して|追加して|リファクタ|refactor|fix|implement/i.test(instruction);
 const started = Date.now();
@@ -456,7 +456,7 @@ function execute(command, commandArgs, options = {}) {
     delete spawnOptions.timeoutSecs;
     // stdio を全て pipe にして TTY を渡さない。TTY 付きで起動すると codex が端末入力を
     // 待ったまま眠り続ける(2026-08-26 に 1日00:57 hang した実害)。
-    const child = spawn(command, commandArgs, { ...spawnOptions, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(command, commandArgs, { ...spawnOptions, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     const timer = setTimeout(() => {
       timedOut = true;
       console.error(`\n⏱ ${command} が ${callTimeoutSeconds} 秒で応答を終えなかったので停止しました。--timeout で延長できます`);
@@ -512,7 +512,7 @@ async function launchCodex(codexArgs) {
   let result;
 
   if (process.platform === 'win32' && !forceNative) {
-    const listed = spawnSync('wsl', ['-l', '-q'], { encoding: 'utf16le', timeout: WSL_PROBE_TIMEOUT_MS });
+    const listed = spawnSync('wsl', ['-l', '-q'], { windowsHide: true, encoding: 'utf16le', timeout: WSL_PROBE_TIMEOUT_MS });
     const distros = listed.status === 0 ? listed.stdout.split(/\r?\n/).map((x) => x.replace(/\0/g, '').trim()).filter(Boolean) : [];
     const distro = distros.find((x) => x.toLowerCase() === 'ubuntu') || distros[0];
     let usable = false;
@@ -520,10 +520,10 @@ async function launchCodex(codexArgs) {
     let finalStep = wslCodexLaunchPlan({ distroFound: Boolean(distro), codexPresent: false, versionOk: false, installAttempted: false, retried: false, allowNative });
     if (distro) {
       const versionProbe = () => {
-        const probe = spawnSync('wsl', ['-d', distro, '--', 'codex', '--version'], { encoding: 'utf8', timeout: WSL_PROBE_TIMEOUT_MS });
+        const probe = spawnSync('wsl', ['-d', distro, '--', 'codex', '--version'], { windowsHide: true, encoding: 'utf8', timeout: WSL_PROBE_TIMEOUT_MS });
         return { ok: probe.status === 0, stderr: (probe.stderr || '').toString().trim().slice(0, 300) };
       };
-      const present = spawnSync('wsl', ['-d', distro, '--', 'sh', '-lc', 'command -v codex >/dev/null 2>&1'], { timeout: WSL_PROBE_TIMEOUT_MS }).status === 0;
+      const present = spawnSync('wsl', ['-d', distro, '--', 'sh', '-lc', 'command -v codex >/dev/null 2>&1'], { windowsHide: true, timeout: WSL_PROBE_TIMEOUT_MS }).status === 0;
       const first = versionProbe();
       usable = first.ok;
       failureReason = present ? `WSL ${distro} の codex 起動確認に失敗しました` : `WSL ${distro} に codex が見つかりませんでした`;
@@ -536,7 +536,7 @@ async function launchCodex(codexArgs) {
         if (!usable) console.error(`WSL ${distro} の codex は再試行でも起動確認できませんでした。在るのに失敗しているため npm 再インストールはしません`);
       } else if (step === 'install') {
         console.error(`WSL ${distro} に codex が見つからないため自動インストールを試します`);
-        const installed = spawnSync('wsl', ['-d', distro, '--', 'npm', 'i', '-g', '@openai/codex'], { stdio: 'inherit', timeout: 120000 });
+        const installed = spawnSync('wsl', ['-d', distro, '--', 'npm', 'i', '-g', '@openai/codex'], { windowsHide: true, stdio: 'inherit', timeout: 120000 });
         if (installed.status === 0) usable = versionProbe().ok;
         else console.error(`WSL ${distro} への codex 自動インストールが失敗しました(exit ${installed.status})。WSL 内に手動で導入してください`);
         if (!usable) finalStep = wslCodexLaunchPlan({ distroFound: true, codexPresent: false, versionOk: false, installAttempted: true, retried: false, allowNative });
@@ -546,7 +546,7 @@ async function launchCodex(codexArgs) {
       const gitFile = path.join(cwd, '.git');
       try {
         if (fs.statSync(gitFile).isFile() && needsWorktreeRepair(fs.readFileSync(gitFile, 'utf8'))) {
-          const repaired = spawnSync('git', ['-C', cwd, '-c', 'worktree.useRelativePaths=true', 'worktree', 'repair'], { encoding: 'utf8' });
+          const repaired = spawnSync('git', ['-C', cwd, '-c', 'worktree.useRelativePaths=true', 'worktree', 'repair'], { windowsHide: true, encoding: 'utf8' });
           if (repaired.status === 0) console.error('⚠️ Windows 絶対パスの gitdir は WSL 側 codex が解決できないため相対パスへ直しました');
           else console.error(`⚠️ Windows 絶対パスの gitdir を相対パスへ修復できませんでした（処理は続行します）: ${(repaired.stderr || repaired.error?.message || `exit ${repaired.status}`).trim()}`);
         }
@@ -703,7 +703,7 @@ if (quotaCheck.matched || escalationFailed) {
 
 const secs = (Date.now() - started) / 1000;
 const reportedFallbackBackend = fallbackBackend ?? lastBackend;
-const diff = spawnSync('git', ['-C', cwd, 'diff', '--stat'], { encoding: 'utf8' });
+const diff = spawnSync('git', ['-C', cwd, 'diff', '--stat'], { windowsHide: true, encoding: 'utf8' });
 if (diff.stdout) process.stdout.write(diff.stdout);
 // 読み取り専用の質問(説明して/調べて)では空diffが正常なので、指示自体が実装系のときだけ判定する。
 // 「空か」ではなく「この実行で変わったか」を見る。

@@ -54,7 +54,7 @@ export async function ensureKey({ home = currentHome(), logTrusted = false, fetc
   const env = envValues(home);
   let email = env.MAKIMONO_EMAIL || process.env.MAKIMONO_EMAIL || '';
   if (!email) try { email = JSON.parse(fs.readFileSync(path.join(home, '.claude.json'), 'utf8'))?.oauthAccount?.emailAddress || ''; } catch {}
-  if (!email) try { email = execFileSync('git', ['config', 'user.email'], { encoding: 'utf8' }).trim(); } catch {}
+  if (!email) try { email = execFileSync('git', ['config', 'user.email'], { windowsHide: true, encoding: 'utf8' }).trim(); } catch {}
   const trustedKey = pickTrustedKey({ home, email });
   if (trustedKey) { if (logTrusted) console.log(`信頼済みキーで出品します（メール: ${email.trim()}）`); return { key: trustedKey, email }; }
   if (env.MAKIMONO_KEY) return { key: env.MAKIMONO_KEY, email: env.MAKIMONO_EMAIL || email };

@@ -98,7 +98,7 @@ function rewriteStopCount(home, since) {
 }
 
 function defaultManualMerges({ since, cwd }) {
-  const result = spawnSync('gh', ['pr', 'list', '--state', 'merged', '--limit', '50', '--json', 'mergedBy,mergedAt'], { cwd, encoding: 'utf8' });
+  const result = spawnSync('gh', ['pr', 'list', '--state', 'merged', '--limit', '50', '--json', 'mergedBy,mergedAt'], { windowsHide: true, cwd, encoding: 'utf8' });
   if (result.error || result.status !== 0) return null;
   try {
     return JSON.parse(result.stdout).filter((pr) => Date.parse(pr.mergedAt) >= since && pr.mergedBy?.login !== 'github-actions').length;

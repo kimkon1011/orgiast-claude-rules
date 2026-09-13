@@ -78,7 +78,7 @@ function bulkStat(files) {
   if (files.length < 64) return files.map((file) => { try { const st = fs.statSync(file); return { size: st.size, mtimeMs: st.mtimeMs }; } catch { return null; } });
   const program = "import fs from 'node:fs/promises';let s='';for await(const c of process.stdin)s+=c;const f=JSON.parse(s);const r=await Promise.all(f.map(async p=>{try{const x=await fs.stat(p);return [x.size,x.mtimeMs]}catch{return null}}));process.stdout.write(JSON.stringify(r));";
   try {
-    const run = spawnSync(process.execPath, ['--input-type=module', '-e', program], { input: JSON.stringify(files), encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
+    const run = spawnSync(process.execPath, ['--input-type=module', '-e', program], { windowsHide: true, input: JSON.stringify(files), encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
     if (run.status === 0) return JSON.parse(run.stdout).map((x) => x && ({ size: x[0], mtimeMs: x[1] }));
   } catch {}
   return files.map((file) => { try { const st = fs.statSync(file); return { size: st.size, mtimeMs: st.mtimeMs }; } catch { return null; } });
@@ -260,7 +260,7 @@ export function codexSessionDirs(home = process.env.ORGIAST_HOME || os.homedir()
   // `//wsl.localhost/` itself cannot be enumerated, so ask wsl.exe for distro names.
   if (process.platform === 'win32') {
     let distros = [];
-    try { distros = execSync('wsl.exe -l -q', { stdio: ['ignore', 'pipe', 'ignore'], timeout: 15000 }).toString('utf16le').split(/\r?\n/).map((s) => s.trim()).filter(Boolean); } catch {}
+    try { distros = execSync('wsl.exe -l -q', { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], timeout: 15000 }).toString('utf16le').split(/\r?\n/).map((s) => s.trim()).filter(Boolean); } catch {}
     for (const distro of distros) { addUsers(`//wsl.localhost/${distro}/home`); addUsers(`//wsl$/${distro}/home`); }
   }
   if (process.platform === 'linux') addUsers('/home');
@@ -353,7 +353,7 @@ export function collectCodexPatchLines({ dirs = codexSessionDirs(), since = 0 } 
 export function collectGitActivity({ repos = [process.cwd()], days = 7 } = {}) {
   const result = { added: 0, deleted: 0, repos: 0, commits: 0 };
   for (const repo of repos) {
-    const run = spawnSync('git', ['-C', repo, 'log', `--since=${days} days ago`, '--numstat', '--pretty=tformat:commit %H'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    const run = spawnSync('git', ['-C', repo, 'log', `--since=${days} days ago`, '--numstat', '--pretty=tformat:commit %H'], { windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
     if (run.error || run.status !== 0) continue;
     result.repos++;
     for (const line of run.stdout.split(/\r?\n/)) {

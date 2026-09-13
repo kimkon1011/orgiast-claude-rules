@@ -111,7 +111,7 @@ function collectWork(outputTokens) {
   const repos = (process.env.COST_WORK_REPOS || '').split(path.delimiter).filter(Boolean);
   for (const repo of repos.length ? repos : [process.cwd()]) {
     try {
-      const value = execFileSync('git', ['-C', repo, 'rev-list', '--count', '--since=7 days ago', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      const value = execFileSync('git', ['-C', repo, 'rev-list', '--count', '--since=7 days ago', 'HEAD'], { windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
       commits += Number.parseInt(value.trim(), 10) || 0;
     } catch {}
   }

@@ -73,7 +73,7 @@ if (instruction) {
       let outputChars = 0;
       // Windows の claude.bat は shell 無しで起動できない(cheap-code と同じ実測)。
       const { executable } = await resolveClaudeExecutableFromDisk(process);
-      const child = spawn(executable, ['-p', prompt, '--model', model], {
+      const child = spawn(executable, ['-p', prompt, '--model', model], { windowsHide: true,
         cwd,
         stdio: ['ignore', 'pipe', 'pipe'],
         env: { ...process.env, ANTHROPIC_BASE_URL: 'https://api.z.ai/api/anthropic', ANTHROPIC_AUTH_TOKEN: key },

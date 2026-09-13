@@ -14,7 +14,7 @@ function run(script, input, args = [], env = {}) {
   // 既定で版ドリフト照合を止める。テストごとに GitHub API を叩くと未認証の 60req/h に当たり、
   // 「照合できず」がレポートに混ざって無関係な assert を落とす。実 fetch を通したい
   // テストだけ VERSION_DRIFT_SKIP: '' を明示的に渡す。
-  const result = spawnSync(process.execPath, [path.join(toolsDir, script), ...args], {
+  const result = spawnSync(process.execPath, [path.join(toolsDir, script), ...args], { windowsHide: true,
     input: input === undefined ? undefined : JSON.stringify(input), encoding: 'utf8', env: { VERSION_DRIFT_SKIP: '1', ...process.env, ...env }, cwd: repo,
   });
   return { stdout: result.stdout || '', stderr: result.stderr || '', status: result.status };
@@ -201,7 +201,7 @@ test('fable-session-guard: 別sessionまたは失効allowでは警告', () => {
 test('fable-session-guard: transcript欠損と壊れたstdinは無言exit 0', () => {
   const home = makeTempHome('orgiast-fable-session-broken-');
   const missing = run('fable-session-guard.mjs', { transcript_path: path.join(home, 'missing.jsonl'), session_id: 'missing' }, [], { ORGIAST_HOME: home });
-  const broken = spawnSync(process.execPath, [path.join(toolsDir, 'fable-session-guard.mjs')], { input: '{broken', encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home }, cwd: repo });
+  const broken = spawnSync(process.execPath, [path.join(toolsDir, 'fable-session-guard.mjs')], { windowsHide: true, input: '{broken', encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home }, cwd: repo });
   assert(missing.status === 0 && missing.stdout === '' && broken.status === 0 && broken.stdout === '', JSON.stringify({ missing, broken: { status: broken.status, stdout: broken.stdout, stderr: broken.stderr } }));
 });
 test('fable-session-guard: 巨大transcriptも末尾の最新モデルだけで判定', () => {

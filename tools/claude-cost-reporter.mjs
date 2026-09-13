@@ -21,6 +21,7 @@ import { parseEnvText } from './env-kv.mjs';
 import path from 'node:path';
 import os from 'node:os';
 import { spawn, spawnSync } from 'node:child_process';
+import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
 import { fileURLToPath } from 'node:url';
 import { machineIdentity } from './machine-identity.mjs';
 import { resolveReporterLabel } from './reporter-label.mjs';
@@ -59,9 +60,8 @@ function startCacheRefresh() {
 
   try {
     const child = spawn(process.execPath, cacheRefreshArgs(), {
-      detached: true,
+      ...backgroundSpawnOptions(),
       stdio: 'ignore',
-      windowsHide: true,
       env: process.env,
     });
     child.unref();

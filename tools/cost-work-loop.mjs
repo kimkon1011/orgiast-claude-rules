@@ -137,7 +137,7 @@ const parsedUsdJpy = Number(process.env.ORGIAST_USDJPY);
 const geminiMonth = summarizeGeminiMonth(ledgerRows, { usdJpy: Number.isFinite(parsedUsdJpy) && parsedUsdJpy > 0 ? parsedUsdJpy : 150 });
 flags.push(...geminiMonth.flags);
 // 日次ループのたびにschedule実績を更新する。gh未導入・認証失敗・cron停止でも本体は継続する。
-spawnSync(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta.url)), 'cron-liveness-check.mjs')], {
+spawnSync(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta.url)), 'cron-liveness-check.mjs')], { windowsHide: true,
   env: { ...process.env, ORGIAST_HOME: HOME }, stdio: 'ignore',
 });
 const cronLivenessFile = path.join(HOME, '.claude', 'cron-liveness.json');
@@ -221,7 +221,7 @@ const laneHealthLines = (() => {
   laneLines.push(`- glm: 24h usage-limit 到達 ${glm24h}回`);
   return laneLines;
 })();
-function runJsonTool(name) { try { const result = spawnSync(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta.url)), name), '--json'], { env: { ...process.env, ORGIAST_HOME: HOME }, encoding: 'utf8', timeout: 30000 }); return result.status === 0 ? JSON.parse(result.stdout) : null; } catch { return null; } }
+function runJsonTool(name) { try { const result = spawnSync(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta.url)), name), '--json'], { windowsHide: true, env: { ...process.env, ORGIAST_HOME: HOME }, encoding: 'utf8', timeout: 30000 }); return result.status === 0 ? JSON.parse(result.stdout) : null; } catch { return null; } }
 const planUsage = runJsonTool('claude-plan-usage.mjs');
 const budgetStatus = runJsonTool('budget-status.mjs');
 const planLine = planUsage?.available ? `Claudeプラン上限: 5h ${planUsage.fiveHour.utilization.toFixed(1)}% / 7日 ${planUsage.sevenDay.utilization.toFixed(1)}%${planUsage.sevenDay.utilization >= 80 ? ' ⚠️ 上限超過→従量課金の手前。監督の応答回数を減らし、実装/調査を Codex・Gemini へ' : ''}` : `Claudeプラン上限: 計測不能(${planUsage?.reason || '実行失敗'})`;

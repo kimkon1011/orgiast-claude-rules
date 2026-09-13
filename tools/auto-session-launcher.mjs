@@ -107,7 +107,7 @@ async function cleanupStaleFallbackTrees({ sharedRepo, pinnedTree, now, run, rea
 
 function defaultRun(command, args, options = {}) {
   return new Promise((resolve) => {
-    const child = spawn(command, args, options);
+    const child = spawn(command, args, { ...options, windowsHide: true });
     let stderrTail = '';
     child.stderr?.on('data', (chunk) => {
       stderrTail = `${stderrTail}${chunk}`.slice(-2000);

@@ -119,7 +119,7 @@ if (isMain) try {
   try { settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8').replace(/^\uFEFF/, '')); } catch {}
   const missing = missingRequiredHooks(settings);
   if (missing.length) {
-    spawnSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo } });
+    spawnSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { windowsHide: true, encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo } });
     console.log(`🚨 コスト規律hookが ${missing.length} 本欠落していたため自動登録しました: ${missing.map(([event, script]) => `${event}/${script}`).join(', ')}（次回セッションから有効）`);
   }
   const skills = missingSkills({ home, repo });

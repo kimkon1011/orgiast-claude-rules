@@ -67,7 +67,7 @@ export function askClassifier(rows) {
   const prompt = rows.map((row, index) => `${index + 1}. ${String(row.title ?? '').replace(/[\r\n]+/g, ' ')}`).join('\n');
   return new Promise((resolve, reject) => {
     execFile(process.execPath, [path.join(import.meta.dirname, 'llm-ask.mjs'), '--provider', 'groq', '--system', CLASSIFY_SYSTEM, '--max', '1000', prompt],
-      { timeout: 20_000, maxBuffer: 1024 * 1024 }, (error, stdout) => error ? reject(error) : resolve(stdout));
+      { windowsHide: true, timeout: 20_000, maxBuffer: 1024 * 1024 }, (error, stdout) => error ? reject(error) : resolve(stdout));
   });
 }
 

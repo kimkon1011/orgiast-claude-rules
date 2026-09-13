@@ -241,7 +241,7 @@ async function downloadZipRoot() {
   } catch (error) { fs.rmSync(temp, { recursive: true, force: true }); throw error; }
 }
 export async function updateRepositoryFiles(targetRepo, options = {}) {
-  const git = options.git || ((gitArgs, execOptions = {}) => execFileSync('git', gitArgs, execOptions));
+  const git = options.git || ((gitArgs, execOptions = {}) => execFileSync('git', gitArgs, { ...execOptions, windowsHide: true }));
   const getZipRoot = options.getZipRoot || downloadZipRoot;
   const emit = options.emit || console.log;
   const stateFile = options.fallbackStatePath || fallbackStatePath;
@@ -394,9 +394,9 @@ async function syncRepository(now) {
     // ここを1つの try に入れていたため、pull が1回失敗した PC は配布が静かに止まっていた(実測 2026-08-19)。
     try {
     if (fs.existsSync(path.join(repoPath, '.git'))) {
-      const before = execFileSync('git', ['-C', repoPath, 'rev-parse', 'HEAD'], { encoding: 'utf8', timeout: 60000 }).trim();
+      const before = execFileSync('git', ['-C', repoPath, 'rev-parse', 'HEAD'], { windowsHide: true, encoding: 'utf8', timeout: 60000 }).trim();
       const result = await updateRepositoryFiles(repoPath);
-      const after = execFileSync('git', ['-C', repoPath, 'rev-parse', 'HEAD'], { encoding: 'utf8', timeout: 60000 }).trim();
+      const after = execFileSync('git', ['-C', repoPath, 'rev-parse', 'HEAD'], { windowsHide: true, encoding: 'utf8', timeout: 60000 }).trim();
       changed = result.ok && (result.method === 'zip' ? result.changed : before !== after);
     } else {
       const result = await updateRepositoryFiles(repoPath);
@@ -414,7 +414,7 @@ async function syncRepository(now) {
     try {
       const registrar = path.join(repoPath, 'tools', 'register-hooks.mjs');
       if (fs.existsSync(registrar)) {
-        const out = execFileSync(process.execPath, [registrar, '--hooks-only'], { encoding: 'utf8', timeout: 20000, env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repoPath } }).trim();
+        const out = execFileSync(process.execPath, [registrar, '--hooks-only'], { windowsHide: true, encoding: 'utf8', timeout: 20000, env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repoPath } }).trim();
         // skip がログに届かないと hook 未登録の無言 skip が復活するため、追加と同様に転送する。
         if (out.includes('追加') || out.includes('[skip]')) { console.log(`[onboarding-sync] ${out.trim()}`); log(out.replace(/\s+/g, ' ')); }
       }

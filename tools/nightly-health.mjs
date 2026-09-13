@@ -70,7 +70,7 @@ export async function defaultRunTests(spawnImpl) {
 
 export async function defaultGitImpl(args, { cwd, timeout = 20_000 } = {}) {
   const { spawnSync } = await import('node:child_process');
-  const result = spawnSync('git', args, { cwd, timeout, encoding: 'utf8', shell: false });
+  const result = spawnSync('git', args, { windowsHide: true, cwd, timeout, encoding: 'utf8', shell: false });
   return { status: result.status, stdout: result.stdout || '', stderr: result.stderr || '', error: result.error };
 }
 

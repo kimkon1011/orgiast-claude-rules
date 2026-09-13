@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
 import { parseEnvText } from './env-kv.mjs';
 import { isEntry } from './is-entry.mjs';
 import { decideRun, firstBlockBounds, sectionFrom } from './auto-session.mjs';
@@ -111,7 +112,7 @@ function defaultIo() {
     append: (file, text) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.appendFileSync(file, text, 'utf8'); },
     exists: (file) => fs.existsSync(file),
     pidAlive: (pid) => { try { process.kill(Number(pid), 0); return Number(pid) > 0; } catch { return false; } },
-    spawn: (...args) => spawn(...args),
+    spawn: (command, args, options = {}) => spawn(command, args, { ...options, windowsHide: true }),
     notify: async (url, content) => {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 5_000);
@@ -265,7 +266,7 @@ export async function runIntake({ args = [], home = process.env.ORGIAST_HOME || 
         io.write(lockFile, `${JSON.stringify({ pid: process.pid, startedAt: now, keys: newImmediate.map((item) => item.key) }, null, 2)}\n`);
         try {
           const launcher = path.join(import.meta.dirname, 'auto-session-launcher.mjs');
-          const child = io.spawn(process.execPath, [launcher], { detached: true, stdio: 'ignore', windowsHide: true });
+          const child = io.spawn(process.execPath, [launcher], { ...backgroundSpawnOptions(), stdio: 'ignore' });
           child.unref();
           for (const item of newImmediate) {
             ledger.items[item.key].immediateLaunchedAt = now;

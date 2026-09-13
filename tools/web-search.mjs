@@ -133,7 +133,7 @@ function requestGsk({ args, timeoutSeconds = DEFAULT_TIMEOUT_SECONDS, apiKey, sp
     let spawnArgs;
     try { spawnArgs = shell ? args.map(quoteForShell) : args; } catch (error) { cleanup?.(); reject(error); return; }
     // shell:true は Node が DEP0190 を出すが、引数は上の quoteForShell で自前に処理済み。
-    // 警告は spawn() の同期中にしか出ないので、その間だけ抑止して stderr を汚さない。
+    // 警告は子プロセス起動の同期中にしか出ないので、その間だけ抑止して stderr を汚さない。
     const previousNoDeprecation = process.noDeprecation;
     try {
       process.noDeprecation = true;

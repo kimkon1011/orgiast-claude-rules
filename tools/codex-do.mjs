@@ -491,7 +491,7 @@ let fallbackBackend = null;
 let lastBackend = null;
 
 let escalated = false;
-function recordUsage(result, modelName, seconds, provider = 'codex') {
+function recordUsage(result, modelName, seconds, provider = 'codex', attempts = 1) {
   try {
     const ledger = path.join(home, '.claude', 'executor-usage.jsonl');
     fs.mkdirSync(path.dirname(ledger), { recursive: true });
@@ -501,14 +501,14 @@ function recordUsage(result, modelName, seconds, provider = 'codex') {
       in: Math.ceil(prompt.length / 4), out: Math.ceil((result.outputChars || 0) / 4),
       timedOut: result?.timedOut === true,
       status: result?.status ?? null,
+      stderrTail: String(result?.stderr || '').replace(/\s+/g, ' ').trim().slice(-200),
+      fastFail: result?.timedOut !== true && Number(result?.status) !== 0 && (result?.outputChars || 0) === 0,
+      attempts,
       secs: Number(seconds.toFixed(3))
     })}\n`, 'utf8');
   } catch {}
 }
-async function executeCodex() {
-  const attemptStarted = Date.now();
-  logCodex();
-  const codexArgs = buildCodexExecArgs({ ...selectedLane, review });
+async function launchCodex(codexArgs) {
   let result;
 
   if (process.platform === 'win32' && !forceNative) {
@@ -573,7 +573,33 @@ async function executeCodex() {
     result = await execute('codex', nativeArgs, { cwd });
   }
 
-  recordUsage(result, `codex-cli/${selectedLane.slug}`, (Date.now() - attemptStarted) / 1000);
+  return result;
+}
+
+// codex は WSL の名前解決失敗などで、セッションを作る前に 1〜9 秒で exit 1 / 出力ゼロで死ぬことがある
+// (2026-09-14 実測・stderr に "failed to lookup address information")。同一プロンプトの再実行は
+// 2 分後に成功していた実例があるため、即時失敗に限って 1 回だけ再試行する。
+const FAST_FAIL_SECS = 60;
+function isFastFail(result, elapsedSecs) {
+  return result?.timedOut !== true && Number(result?.status) !== 0
+    && (result?.outputChars || 0) === 0 && elapsedSecs < FAST_FAIL_SECS;
+}
+
+async function executeCodex() {
+  const codexArgs = buildCodexExecArgs({ ...selectedLane, review });
+  let result = null, attempts = 0, seconds = 0;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const attemptStarted = Date.now();
+    logCodex();
+    result = await launchCodex(codexArgs);
+    const elapsed = (Date.now() - attemptStarted) / 1000;
+    seconds += elapsed;
+    attempts = attempt;
+    if (!isFastFail(result, elapsed)) break;
+    const tail = String(result?.stderr || '').replace(/\s+/g, ' ').trim().slice(-200);
+    if (attempt === 1) console.error(`[codex-do] codex が ${elapsed.toFixed(1)} 秒で出力ゼロ(exit ${result.status})のため 1 回だけ再試行します${tail ? `: ${tail}` : ''}`);
+  }
+  recordUsage(result, `codex-cli/${selectedLane.slug}`, seconds, 'codex', attempts);
   return result;
 }
 

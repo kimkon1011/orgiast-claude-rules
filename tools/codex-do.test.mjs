@@ -27,6 +27,24 @@ function writePrompt(body) {
   return file;
 }
 
+test('即時の出力ゼロ失敗を1回だけ再試行し、成功と試行回数を台帳に記録する', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-fastfail-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const result = run(['--force-native', '--cwd', home, '--model', 'sol', '説明して'], {
+    home,
+    env: { CODEX_DO_MOCK_RESULTS: JSON.stringify([
+      { status: 1, output: '', stderr: 'failed to lookup address information' },
+      { status: 0, output: 'done', stderr: '' },
+    ]) },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /1 回だけ再試行します/);
+  const rows = fs.readFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].attempts, 2);
+  assert.equal(rows[0].status, 0);
+});
+
 test('--prompt-file の中身をそのまま指示として使う', () => {
   const file = writePrompt('# 見出し\n新規ファイルを作る\n');
   const result = run(['--dry-run', '--prompt-file', file]);
@@ -777,7 +795,7 @@ function runRouting(t, args, mocks, cooldown = null) {
 const quotaResult = { status: 1, stderr: "ERROR: You've hit your usage limit. Try again in 2 hours" };
 
 test('Astra quota retreats to Sol, writes isolated cooldown/history and both ledger rows', (t) => {
-  const result = runRouting(t, ['--model', 'astra', '--no-fallback', '説明して'], [quotaResult, { output: 'done' }]);
+  const result = runRouting(t, ['--model', 'astra', '--no-fallback', '説明して'], [quotaResult, quotaResult, { output: 'done' }]);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /astra usage limit → sol へ退避/);
   assert.deepEqual(result.ledger.map((r) => r.model), [`codex-cli/${ASTRA}`, `codex-cli/${SOL}`]);
@@ -790,7 +808,7 @@ test('Astra quota retreats to Sol, writes isolated cooldown/history and both led
 });
 
 test('Astra and Sol quota proceed to cheap-code once', (t) => {
-  const result = runRouting(t, ['--lane', 'astra', '説明して'], [quotaResult, quotaResult, { output: 'done' }]);
+  const result = runRouting(t, ['--lane', 'astra', '説明して'], [quotaResult, quotaResult, quotaResult, quotaResult, { output: 'done' }]);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /executor=fallback:cheap-code:deepseek/);
   assert.ok(result.cooldown.codex.until > Date.now());
@@ -804,7 +822,8 @@ for (const [name, first, prompt] of [
   ['empty diff', { output: 'done' }, '実装して'],
 ]) {
   test(`auto Sol escalates once on ${name}`, (t) => {
-    const result = runRouting(t, ['--no-fallback', prompt], [first, { output: 'done' }]);
+    const attempts = name === 'nonzero' ? [first, first, { output: 'done' }] : [first, { output: 'done' }];
+    const result = runRouting(t, ['--no-fallback', prompt], attempts);
     assert.equal(result.status, name === 'empty diff' ? 1 : 0, result.stderr);
     assert.match(result.stdout, /sol 失敗 → astra へ昇格/);
     assert.deepEqual(result.ledger.map((r) => [r.model, r.escalated]), [[`codex-cli/${SOL}`, false], [`codex-cli/${ASTRA}`, true]]);
@@ -813,21 +832,21 @@ for (const [name, first, prompt] of [
 }
 
 test('failed escalation goes to existing fallback without quota cooldown', (t) => {
-  const result = runRouting(t, ['説明して'], [{ status: 9 }, { status: 9 }, { output: 'done' }]);
+  const result = runRouting(t, ['説明して'], [{ status: 9 }, { status: 9 }, { status: 9 }, { status: 9 }, { output: 'done' }]);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /executor=fallback:cheap-code:deepseek/);
   assert.deepEqual(result.cooldown, {});
 });
 
 test('quota after escalation retreats without escalating again', (t) => {
-  const result = runRouting(t, ['説明して'], [{ status: 9 }, quotaResult, { output: 'done' }]);
+  const result = runRouting(t, ['説明して'], [{ status: 9 }, { status: 9 }, quotaResult, quotaResult, { output: 'done' }]);
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(result.ledger.map((r) => r.model), [`codex-cli/${SOL}`, `codex-cli/${ASTRA}`, `codex-cli/${SOL}`]);
 });
 
 for (const flags of [['--no-escalate'], ['--model', 'sol'], ['--lane', 'sol']]) {
   test(`escalation disabled by ${flags.join(' ')}`, (t) => {
-    const result = runRouting(t, [...flags, '説明して'], [{ status: 9 }]);
+    const result = runRouting(t, [...flags, '説明して'], [{ status: 9 }, { status: 9 }]);
     assert.equal(result.status, 9, result.stderr);
     assert.equal(result.ledger.length, 1);
   });
@@ -835,11 +854,11 @@ for (const flags of [['--no-escalate'], ['--model', 'sol'], ['--lane', 'sol']]) 
 
 test('Astra cooldown downgrades and suppresses escalation but explicit model bypasses it', (t) => {
   const cooldown = { 'codex-astra': { until: Date.now() + 3600000 } };
-  const result = runRouting(t, ['--lane', 'astra', '説明して'], [{ status: 9 }], cooldown);
+  const result = runRouting(t, ['--lane', 'astra', '説明して'], [{ status: 9 }, { status: 9 }], cooldown);
   assert.equal(result.status, 9, result.stderr);
   assert.match(result.stderr, /astra_cooldown/);
   assert.equal(result.ledger[0].model, `codex-cli/${SOL}`);
-  const automatic = runRouting(t, ['説明して'], [{ status: 9 }], cooldown);
+  const automatic = runRouting(t, ['説明して'], [{ status: 9 }, { status: 9 }], cooldown);
   assert.equal(automatic.ledger.length, 1);
   const explicit = runRouting(t, ['--model', 'astra', '説明して'], [{ output: 'done' }], cooldown);
   assert.equal(explicit.ledger[0].model, `codex-cli/${ASTRA}`);
@@ -882,15 +901,17 @@ console.log('done');
   });
   assert.equal(result.status, 0, result.stderr);
   const calls = fs.readFileSync(capture, 'utf8').trim().split('\n').map(JSON.parse);
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 3);
   const expectedArgs = (options) => {
     const args = buildCodexExecArgs(options);
     args.splice(-1, 0, '--skip-git-repo-check');
     return args;
   };
   assert.deepEqual(calls[0].args, expectedArgs({ slug: ASTRA, effort: 'high' }));
-  assert.deepEqual(calls[1].args, expectedArgs({ slug: SOL }));
+  assert.deepEqual(calls[1].args, expectedArgs({ slug: ASTRA, effort: 'high' }));
+  assert.deepEqual(calls[2].args, expectedArgs({ slug: SOL }));
   assert.equal(calls[0].input, calls[1].input);
+  assert.equal(calls[1].input, calls[2].input);
   assert.ok(calls[0].input.endsWith(instruction));
   assert.ok(calls.every((call) => !call.args.some((arg) => arg.includes('literal'))));
 });

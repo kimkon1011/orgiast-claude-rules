@@ -60,11 +60,16 @@ function reasonTop(rows) {
 // 出力ゼロの原因を分類する。打ち切り(timeout)は「codex が使えない」証拠ではない ——
 // SIGKILL されると codex は最終メッセージを stdout に書く前に死ぬため out=0 になる。
 // 2026-09-11 実測: 404秒/487秒で打ち切られた実行は rollout ログ上は tsc 実行など実作業の途中だった。
+// codex は WSL の名前解決失敗などで、セッションを作る前に exit 1 / 出力ゼロで死ぬことがある。
+// これは codex 本体の故障ではなく一過性のインフラ障害で、codex-do 側の再試行で回復する。
+const INFRA_TRANSIENT = /failed to lookup address information|failed to connect to websocket|stream error|connection reset|i\/o timeout|dns/i;
+
 export function emptyOutputReason(row) {
   if (row?.timedOut === true) return 'timeout';
   // 旧行(timedOut 未記録)は経過秒数から推定する。codex の正常終了は実測で中央値~100秒、
   // 打ち切りは --timeout 到達時にのみ現れ、実測値は 300 秒以上だった。
   if (row?.timedOut == null && Number(row?.secs) >= 300) return 'timeout';
+  if (INFRA_TRANSIENT.test(String(row?.stderrTail || ''))) return 'infra_transient';
   const status = Number(row?.status);
   if (Number.isFinite(status) && status !== 0) return `exit_${status}`;
   return 'no_output';
@@ -98,7 +103,8 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
     .filter((row) => row.provider === 'codex' && Number(row.out) === 0)
     .map((source) => ({ reason: emptyOutputReason(source) }))
     .filter((item) => item.reason !== 'timeout');
-  if (empty.length) findings.push({ id: 'codex_empty_output', severity: 'medium', title: 'Codex の出力ゼロ', evidence: [`${empty.length}件`, ...reasonTop(empty)], fixTask: 'codex が出力ゼロで終了した原因（認証切れ/上限/起動失敗）を codex-do のログから特定' });
+  const realEmpty = empty.filter((item) => item.reason !== 'infra_transient');
+  if (realEmpty.length) findings.push({ id: 'codex_empty_output', severity: 'medium', title: 'Codex の出力ゼロ', evidence: [`${realEmpty.length}件`, ...reasonTop(realEmpty), ...(empty.length > realEmpty.length ? [`インフラ起因(名前解決/接続)で除外 ${empty.length - realEmpty.length}件`] : [])], fixTask: 'codex が出力ゼロで終了した原因（認証切れ/上限/起動失敗）を codex-do のログから特定' });
   for (const [provider, state] of Object.entries(cooldown)) if (state?.reason === 'http_402' && Number(state.until) > nowMs) findings.push({ id: 'provider_balance_exhausted', severity: 'low', title: `${provider} の残高切れ`, evidence: [`provider ${provider}`, CLAUDE_FALLBACK_RULE] });
   return findings.length ? findings : [{ id: 'healthy', severity: 'low', title: '委譲経路は正常', evidence: [] }];
 }

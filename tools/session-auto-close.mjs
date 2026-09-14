@@ -8,9 +8,11 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { redactSecrets } from './redact-secrets.mjs';
+import { isEntry } from './is-entry.mjs';
 
 const execFileAsync = promisify(execFile);
-const args = process.argv.slice(2);
+const isMain = isEntry(import.meta.url);
+const args = isMain ? process.argv.slice(2) : [];
 
 function usage(message) {
   if (message) console.error(`エラー: ${message}`);
@@ -59,6 +61,58 @@ function cleanOneLine(value, fallback) {
   return redactSecrets(String(value || fallback)).replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+// 優先順位と比較条件は従来の llmFailed と同じ。
+function llmFailureKind(record) {
+  if (!record.llm) return 'llmフィールド無し';
+  if (record.llm.verdict === '失敗') return '失敗';
+  if (record.llm.verdict === '不明') return '不明';
+  if (record.llm.confidence < 60) return 'confidence<60';
+  return '';
+}
+
+export function llmFailureReason(record) {
+  const kind = llmFailureKind(record);
+  if (!kind) return '';
+  let detail;
+  if (kind === 'llmフィールド無し') detail = kind;
+  else if (kind === 'confidence<60') detail = `confidence=${record.llm.confidence} <60`;
+  else detail = `verdict=${kind}`;
+  const error = record.llm?.error ? cleanOneLine(record.llm.error, '') : '';
+  return `(${detail})${error ? ` ${error}` : ''}`;
+}
+
+// I/O は呼び出し側で行う。失敗だけの回も、この台帳を保存する必要がある。
+export function closeRecord(record, ledger, { noLlm = false, closedAt = new Date().toISOString() } = {}) {
+  if (!ledger.llmFailureStreak || typeof ledger.llmFailureStreak !== 'object' || Array.isArray(ledger.llmFailureStreak)) {
+    ledger.llmFailureStreak = {};
+  }
+  const failureReason = noLlm ? '' : llmFailureReason(record);
+  const failureKind = noLlm ? '' : llmFailureKind(record);
+  let streak = 0;
+  let llmFallback = false;
+  if (failureReason) {
+    const previous = ledger.llmFailureStreak[record.sessionId];
+    streak = Math.min(3, (Number.isSafeInteger(previous) && previous >= 0 ? previous : 0) + 1);
+    ledger.llmFailureStreak[record.sessionId] = streak;
+    if (streak < 3) return { deferred: true, failureReason, failureKind, streak, llmFallback: false };
+    llmFallback = true;
+  } else {
+    delete ledger.llmFailureStreak[record.sessionId];
+  }
+
+  const reason = noLlm || llmFallback
+    ? record.status === '完了っぽい' && record.ageDays >= 30 ? 'completed' : 'handoff'
+    : record.llm.verdict === '完了' ? 'completed' : 'handoff';
+  const nextAction = reason === 'handoff' ? cleanOneLine(record.nextAction, 'セッションを再開して残作業を確認する') : '';
+  ledger.sessions[record.sessionId] = {
+    closedAt, reason, status: record.status, title: redactSecrets(record.displayTitle), cwd: redactSecrets(record.cwd),
+    file: redactSecrets(record.file), lastActivity: record.mtime, idleDays: record.ageDays,
+    ...(reason === 'handoff' && { nextAction }), resumeCommand: `claude --resume ${record.sessionId}`,
+    ...(llmFallback && { llmFallback: true }),
+  };
+  return { deferred: false, reason, nextAction, failureReason, failureKind, streak, llmFallback };
+}
+
 function markerFor(id) { return `<!-- SESSION:${id} -->`; }
 
 function handoffBlock(record, nextAction) {
@@ -99,74 +153,83 @@ async function redactExistingFiles() {
   console.log(`既存ファイルの秘匿値掃除: ${changed}件更新`);
 }
 
-try {
-  if (redactExisting) {
-    await redactExistingFiles();
-  } else {
-  const ledger = redactObject(await loadLedger());
-  const triageArgs = [triagePath, '--all', '--older-than', String(days), '--json', '--include-completed', '--top', String(max)];
-  if (force) triageArgs.push('--include-closed');
-  if (!noLlm) triageArgs.push('--llm');
-  if (provider) triageArgs.push('--provider', provider);
-  const { stdout, stderr } = await execFileAsync(process.execPath, triageArgs, { maxBuffer: 16 * 1024 * 1024, timeout: Math.max(30_000, max * 35_000) });
-  if (stderr.trim()) process.stderr.write(redactSecrets(stderr));
-  const result = redactObject(JSON.parse(redactSecrets(stdout)));
-  const totalEligible = Object.values(result.summary?.counts || {}).reduce((sum, count) => sum + Number(count || 0), 0);
-  const candidates = result.sessions.filter((record) => force || !ledger.sessions[record.sessionId]);
-  const alreadyClosedInBatch = result.sessions.length - candidates.length;
-  const deferred = Math.max(0, totalEligible - result.sessions.length);
-  const closedAt = new Date().toISOString();
-  const handoffIds = new Set();
-  let handoffs = '';
+if (isMain) {
   try {
-    handoffs = await fs.readFile(handoffsPath, 'utf8');
-    for (const line of handoffs.split(/\r?\n/)) {
-      const match = line.match(/^<!-- SESSION:([0-9a-f-]{36}) -->$/i);
-      if (match) handoffIds.add(match[1]);
-    }
-  } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    if (redactExisting) {
+      await redactExistingFiles();
+    } else {
+      const ledger = redactObject(await loadLedger());
+      const triageArgs = [triagePath, '--all', '--older-than', String(days), '--json', '--include-completed', '--top', String(max)];
+      if (force) triageArgs.push('--include-closed');
+      if (!noLlm) triageArgs.push('--llm');
+      if (provider) triageArgs.push('--provider', provider);
+      const { stdout, stderr } = await execFileAsync(process.execPath, triageArgs, { maxBuffer: 16 * 1024 * 1024, timeout: Math.max(30_000, max * 35_000) });
+      if (stderr.trim()) process.stderr.write(redactSecrets(stderr));
+      const result = redactObject(JSON.parse(redactSecrets(stdout)));
+      const totalEligible = Object.values(result.summary?.counts || {}).reduce((sum, count) => sum + Number(count || 0), 0);
+      const candidates = result.sessions.filter((record) => force || !ledger.sessions[record.sessionId]);
+      const alreadyClosedInBatch = result.sessions.length - candidates.length;
+      const deferred = Math.max(0, totalEligible - result.sessions.length);
+      const closedAt = new Date().toISOString();
+      const handoffIds = new Set();
+      let handoffs = '';
+      try {
+        handoffs = await fs.readFile(handoffsPath, 'utf8');
+        for (const line of handoffs.split(/\r?\n/)) {
+          const match = line.match(/^<!-- SESSION:([0-9a-f-]{36}) -->$/i);
+          if (match) handoffIds.add(match[1]);
+        }
+      } catch (error) { if (error.code !== 'ENOENT') throw error; }
 
-  let completed = 0;
-  let handedOff = 0;
-  let llmFailures = 0;
-  const additions = [];
-  for (const record of candidates) {
-    const llmFailed = !noLlm && (!record.llm || record.llm.verdict === '失敗' || record.llm.verdict === '不明' || record.llm.confidence < 60);
-    if (llmFailed) { llmFailures++; console.log(`⚠️ 未記帳 ${record.sessionId}: LLM判定失敗`); continue; }
-    let reason;
-    if (noLlm) reason = record.status === '完了っぽい' && record.ageDays >= 30 ? 'completed' : 'handoff';
-    else reason = record.llm.verdict === '完了' ? 'completed' : 'handoff';
-    const nextAction = reason === 'handoff' ? cleanOneLine(record.nextAction, 'セッションを再開して残作業を確認する') : '';
-    ledger.sessions[record.sessionId] = {
-      closedAt, reason, status: record.status, title: redactSecrets(record.displayTitle), cwd: redactSecrets(record.cwd),
-      file: redactSecrets(record.file), lastActivity: record.mtime, idleDays: record.ageDays,
-      ...(reason === 'handoff' && { nextAction }), resumeCommand: `claude --resume ${record.sessionId}`,
-    };
-    if (reason === 'handoff') {
-      handedOff++;
-      if (!handoffIds.has(record.sessionId)) additions.push(handoffBlock(record, nextAction));
-    } else completed++;
-    console.log(`${dry ? '[dry] ' : ''}${reason === 'completed' ? '完了' : '引き継ぎ'} ${record.sessionId} ${cleanOneLine(record.displayTitle, '(タイトルなし)')}`);
-  }
+      let completed = 0;
+      let handedOff = 0;
+      let llmFailures = 0;
+      let llmFallbacks = 0;
+      const failureCounts = new Map();
+      const additions = [];
+      for (const record of candidates) {
+        const outcome = closeRecord(record, ledger, { noLlm, closedAt });
+        if (outcome.deferred) {
+          llmFailures++;
+          failureCounts.set(outcome.failureKind, (failureCounts.get(outcome.failureKind) || 0) + 1);
+          console.log(`${dry ? '[dry] ' : ''}⚠️ 未記帳 ${record.sessionId}: LLM判定失敗 ${outcome.failureReason} / 連続${outcome.streak}回`);
+          continue;
+        }
+        const { reason, nextAction, llmFallback } = outcome;
+        if (llmFallback) {
+          llmFallbacks++;
+          console.log(`${dry ? '[dry] ' : ''}⚠️ ${record.sessionId}: LLM判定失敗 ${outcome.failureReason} / 連続${outcome.streak}回のため決定的規則で記帳 (llmFallback=true)`);
+        }
+        if (reason === 'handoff') {
+          handedOff++;
+          if (!handoffIds.has(record.sessionId)) additions.push(handoffBlock(record, nextAction));
+        } else completed++;
+        console.log(`${dry ? '[dry] ' : ''}${reason === 'completed' ? '完了' : '引き継ぎ'} ${record.sessionId} ${cleanOneLine(record.displayTitle, '(タイトルなし)')}${llmFallback ? ' (llmFallback=true)' : ''}`);
+      }
 
-  if (!dry && completed + handedOff > 0) {
-    await fs.mkdir(claudeDir, { recursive: true });
-    if (additions.length) {
-      const separator = handoffs && !handoffs.endsWith('\n') ? '\n\n' : handoffs ? '\n' : '';
-      await fs.appendFile(handoffsPath, redactSecrets(`${separator}${additions.join('\n')}`), 'utf8');
+      // 記帳ゼロでも連続失敗回数を永続化する。dry-run は台帳・引き継ぎとも書かない。
+      if (!dry && candidates.length > 0) {
+        await fs.mkdir(claudeDir, { recursive: true });
+        if (additions.length) {
+          const separator = handoffs && !handoffs.endsWith('\n') ? '\n\n' : handoffs ? '\n' : '';
+          await fs.appendFile(handoffsPath, redactSecrets(`${separator}${additions.join('\n')}`), 'utf8');
+        }
+        await atomicWrite(ledgerPath, redactSecrets(`${JSON.stringify(redactObject(ledger), null, 2)}\n`));
+      }
+      const failureBreakdown = llmFailures
+        ? ` (${[...failureCounts].map(([kind, count]) => `${kind} ${count}件`).join('、')})`
+        : '';
+      if (llmFailures) {
+        const warning = `⚠️ LLM判定失敗 ${llmFailures}件${failureBreakdown} — クローズせず次回に回した`;
+        console.error(warning);
+        console.log(warning);
+      }
+      if (deferred) console.log(`上限 --max ${max} に達したため、残り${deferred}件は次回`);
+      console.log(`${dry ? 'dry-run: ' : ''}完了 ${completed}件 / 引き継ぎ ${handedOff}件 / LLM判定失敗 ${llmFailures}件${failureBreakdown} / LLMフォールバック ${llmFallbacks}件 / 既クローズ ${alreadyClosedInBatch}件`);
+      if (!noLlm && candidates.length > 0 && llmFailures === candidates.length) process.exitCode = 1;
     }
-    await atomicWrite(ledgerPath, redactSecrets(`${JSON.stringify(redactObject(ledger), null, 2)}\n`));
+  } catch (error) {
+    console.error(redactSecrets(`session-auto-close: ${error.message}`));
+    process.exitCode = 1;
   }
-  if (llmFailures) {
-    const warning = `⚠️ LLM判定失敗 ${llmFailures}件 — クローズせず次回に回した`;
-    console.error(warning);
-    console.log(warning);
-  }
-  if (deferred) console.log(`上限 --max ${max} に達したため、残り${deferred}件は次回`);
-  console.log(`${dry ? 'dry-run: ' : ''}完了 ${completed}件 / 引き継ぎ ${handedOff}件 / LLM判定失敗 ${llmFailures}件 / 既クローズ ${alreadyClosedInBatch}件`);
-  if (!noLlm && candidates.length > 0 && llmFailures === candidates.length) process.exitCode = 1;
-  }
-} catch (error) {
-  console.error(redactSecrets(`session-auto-close: ${error.message}`));
-  process.exitCode = 1;
 }

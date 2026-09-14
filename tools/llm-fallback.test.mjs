@@ -317,6 +317,19 @@ test('全候補の200応答が無効ならunusable理由を集計する', async 
   );
 });
 
+test('全候補が失敗した場合のfailureにattemptを残す', async (t) => {
+  const files = temporaryFiles(t);
+  await assert.rejects(
+    callWithFallback({ start, chain: [], payloadFor: requestFor, ...files,
+      fetchImpl: async () => new Response('rate limited', { status: 429 }), sleepImpl: async () => {} }),
+    (error) => {
+      assert.equal(typeof error.failures[0].attempt, 'number');
+      assert.equal(error.failures[0].attempt, 2);
+      return true;
+    },
+  );
+});
+
 test('無効な200応答ではプロバイダをcooldownに記録しない', async (t) => {
   const files = temporaryFiles(t); let calls = 0;
   await callWithFallback({ start, chain: [second], payloadFor: requestFor, ...files,

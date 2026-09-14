@@ -195,10 +195,12 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, payloadF
   let attempted = 0;
   for (let candidateIndex = 0; candidateIndex < selectedCandidates.length; candidateIndex++) {
     const candidate = selectedCandidates[candidateIndex];
+    let lastAttempt = 0;
     const request = await requestAt(candidateIndex);
     if (!request) continue;
     let lastReason = '';
     for (let attempt = 0; attempt < 3; attempt++) {
+      lastAttempt = attempt;
       const began = Date.now();
       let response;
       let status;
@@ -221,7 +223,7 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, payloadF
           await onAttempt?.({ candidate, attempt, status: 'ok', response, secs: (Date.now() - began) / 1000, failover: candidate.provider !== start.provider });
           clearCooldown(candidate.provider);
           saveCooldowns();
-          return { response, candidate, failover: candidate.provider !== start.provider };
+          return { response, candidate, failover: candidate.provider !== start.provider, attempt };
         }
         detail = (await response.clone().text().catch(() => '')).slice(0, 400);
         lastReason = `HTTP${status}${detail ? `: ${detail}` : ''}`;
@@ -242,7 +244,7 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, payloadF
       await sleepImpl(specified ?? 1000 * 2 ** attempt);
     }
     const reason = lastReason || 'unknown failure';
-    failures.push({ candidate, reason });
+    failures.push({ candidate, reason, attempt: lastAttempt });
     for (let nextIndex = candidateIndex + 1; nextIndex < selectedCandidates.length; nextIndex++) {
       if (!await requestAt(nextIndex)) continue;
       await onFailover?.({ from: candidate, to: selectedCandidates[nextIndex], reason: reasonForLog(reason) });

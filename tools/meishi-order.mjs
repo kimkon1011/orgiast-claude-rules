@@ -1180,22 +1180,29 @@ async function cmdOrder(args, creds) {
   if (exitCode) process.exit(exitCode);
 }
 
+// 注文履歴のテーブルには氏名列が無い（注文日時/商品種別/注文番号/進捗/金額/荷物番号/出荷/発送/請求先のみ）。
+// 申請履歴と同じ名前フィルタを注文履歴にもかけると、実際は該当注文があっても
+// 一致するセルが無いため必ず「該当なし」になり、「まだ発注していない」と誤読させる
+// （2026-09-14 実際に発生: 注文番号1159869001が存在するのに history 澤山 が該当なしと表示）。
+// 申請履歴だけを名前で絞り込み、注文履歴は絞り込み対象外として全件返す。
+export function applyHistoryQuery(reqRows, ordRows, query) {
+  if (!query) return { reqRows, ordRows, ordUnfiltered: false };
+  const q = String(query).replace(/[\s　]/g, "");
+  const hit = (o) => o.cells.some((c) => c.replace(/[\s　]/g, "").includes(q));
+  return { reqRows: reqRows.filter(hit), ordRows, ordUnfiltered: true };
+}
+
 async function cmdHistory(args, creds) {
   const client = new Client(BASE_URL);
   await login(client, creds);
   const req = await client.request(`${BASE_URL}/businesscard/requesthistory`);
   const reqTable = parseTableRows(req.text);
-  let reqRows = rowsToObjects(reqTable);
+  const reqRowsAll = rowsToObjects(reqTable);
   const ord = await client.request(`${BASE_URL}/businesscard/orderhistory`);
   const ordTable = parseTableRows(ord.text);
-  let ordRows = rowsToObjects(ordTable);
+  const ordRowsAll = rowsToObjects(ordTable);
 
-  if (args.query) {
-    const q = String(args.query).replace(/[\s　]/g, "");
-    const hit = (o) => o.cells.some((c) => c.replace(/[\s　]/g, "").includes(q));
-    reqRows = reqRows.filter(hit);
-    ordRows = ordRows.filter(hit);
-  }
+  const { reqRows, ordRows, ordUnfiltered } = applyHistoryQuery(reqRowsAll, ordRowsAll, args.query);
 
   if (args.json) {
     console.log(
@@ -1217,7 +1224,8 @@ async function cmdHistory(args, creds) {
   if (!reqRows.length) console.log("  (該当なし)");
   for (const o of reqRows.slice(0, 30)) console.log("  " + o.cells.join(" | "));
 
-  console.log(`【注文履歴】${ordTable.headers.join(" | ")}`);
+  const ordLabel = ordUnfiltered ? "【注文履歴（氏名列が無いため絞り込み対象外・全件表示）】" : "【注文履歴】";
+  console.log(`${ordLabel}${ordTable.headers.join(" | ")}`);
   if (!ordRows.length) console.log("  (該当なし)");
   for (const o of ordRows.slice(0, 30)) console.log("  " + o.cells.join(" | "));
 }

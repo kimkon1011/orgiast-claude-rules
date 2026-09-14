@@ -27,6 +27,7 @@ import {
   findChromium,
   splitSetCookie,
   extractCsrfMeta,
+  applyHistoryQuery,
 } from "./meishi-order.mjs";
 
 // ---------------------------------------------------------------------------
@@ -456,4 +457,30 @@ test("parseArgs は --to new --new-addr を受ける", () => {
   const a = parseArgs(["order", "澤山", "--to", "new", "--new-addr", "A|B|560-0003|1||0612345678"]);
   assert.equal(a.to, "new");
   assert.equal(a.newAddr, "A|B|560-0003|1||0612345678");
+});
+
+test("applyHistoryQuery: 注文履歴に氏名列が無いため、氏名フィルタでも注文履歴は絞り込まず全件返す", () => {
+  // 注文履歴の列に氏名は含まれない（実サイトの列: 注文日時/商品種別/注文番号/進捗/金額/荷物番号/出荷/発送/請求先）
+  const reqRows = [
+    { cells: ["2026-09-10 21:10", "Sawayama.T", "澤山 貴俊", "289720", "100", "承認済", "", ""] },
+    { cells: ["2026-06-21 20:51", "kim", "金 功勇", "137587", "100", "承認済", "", ""] },
+  ];
+  const ordRows = [
+    { cells: ["2026/09/14 10:01", "名刺", "1159869001", "発送済", "1,529円", "469197500122", "0営業日", "2026/09/14", "オージャスト経理"] },
+  ];
+  const { reqRows: filteredReq, ordRows: filteredOrd, ordUnfiltered } = applyHistoryQuery(reqRows, ordRows, "澤山");
+  assert.equal(filteredReq.length, 1);
+  assert.equal(filteredReq[0].cells[2], "澤山 貴俊");
+  // 注文履歴は氏名で絞り込めないため、該当が無く見えても実際は存在する可能性がある → 絞り込まず全件を返す
+  assert.equal(filteredOrd.length, 1);
+  assert.equal(ordUnfiltered, true);
+});
+
+test("applyHistoryQuery: クエリなしなら両方そのまま返し ordUnfiltered は false", () => {
+  const reqRows = [{ cells: ["x"] }];
+  const ordRows = [{ cells: ["y"] }];
+  const r = applyHistoryQuery(reqRows, ordRows, "");
+  assert.deepEqual(r.reqRows, reqRows);
+  assert.deepEqual(r.ordRows, ordRows);
+  assert.equal(r.ordUnfiltered, false);
 });

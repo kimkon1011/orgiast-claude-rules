@@ -6,7 +6,7 @@ import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 import { machineIdentity } from './machine-identity.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
-import { keyserveAuthHeaders, keyserveSecret } from './keyserve-auth.mjs';
+import { keyserveAuthHeaders, keyservePcId, keyserveSecret } from './keyserve-auth.mjs';
 
 const DEFAULT_MEMORY_URL = 'https://orgiast-keyserve.vercel.app/api/memory';
 const SHARED_INDEX_LINE = '- **他PCからの共有知見** 別アカウントPCで確立した実測ノウハウ → [index/shared.md](index/shared.md)';
@@ -233,7 +233,7 @@ export async function installSharedMemories(options = {}) {
   try {
     const secret = keyserveSecret(home, options.env || process.env);
     const response = await (options.fetchImpl || fetch)(options.memoryUrl || process.env.ORGIAST_MEMORY_URL || DEFAULT_MEMORY_URL, {
-      headers: keyserveAuthHeaders(secret, options.nowMs || Date.now()), signal: AbortSignal.timeout(options.timeoutMs || 10000),
+      headers: keyserveAuthHeaders(secret, options.nowMs || Date.now(), keyservePcId(home, options.env || process.env)), signal: AbortSignal.timeout(options.timeoutMs || 10000),
     });
     if (!response.ok) throw Object.assign(new Error(`HTTP ${response.status}`), { status: response.status });
     incoming = bundleFiles(await response.json()).map(([name, value]) => [name, Buffer.from(String(value), 'utf8')]);

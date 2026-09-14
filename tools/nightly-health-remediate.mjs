@@ -50,9 +50,16 @@ export async function runRemediation({
   const tasks = { get: (name) => taskApi.get(name), start: (name) => taskApi.start(name), stop: (name) => taskApi.stop(name) };
   const record = async (anomaly, outcome, extra = {}) => {
     const row = redactValue({ fingerprint: anomalyFingerprint(anomaly), label: anomaly.label, outcome, ...extra, ranAt: now.toISOString() });
-    if (!dryRun) { await appendLineWithRetry(ledgerFile, JSON.stringify(row)); await appendLineWithRetry(logFile, `${row.ranAt} ${outcome} ${anomaly.label}${extra.playbook ? ` (${extra.playbook})` : ''}${extra.prUrl ? ` ${extra.prUrl}` : ''}`); }
+    if (!dryRun) {
+      const line = `${row.ranAt} ${outcome} ${anomaly.label}${extra.playbook ? ` (${extra.playbook})` : ''}${extra.prUrl ? ` ${extra.prUrl}` : ''}`;
+      try { await appendLineWithRetry(ledgerFile, JSON.stringify(row)); }
+      catch (error) { console.error(`WARN 台帳追記失敗: ${redactAll(error?.message ?? error)}`); }
+      try { await appendLineWithRetry(logFile, line); }
+      catch (error) { console.error(`WARN ログ追記失敗: ${redactAll(error?.message ?? error)}`); console.log(line); }
+    }
     return row;
   };
+  const fileDecision = (text) => { try { decision({ source: 'nightly-health-remediate', text }, { home, now }); } catch (error) { console.error(`WARN decision記録失敗: ${redactAll(error?.message ?? error)}`); } };
   const context = {
     now, tasks, reranToday: false,
     readRepoFile: (file) => fs.readFileSync(path.resolve(repo, file), 'utf8'),
@@ -102,7 +109,7 @@ export async function runRemediation({
       const reason = anomaly.laneReason;
       if (dryRun) plan(anomaly, 'escalate', reason);
       else {
-        decision({ source: 'nightly-health-remediate', text: `何が起きた: ${anomaly.label} — ${anomaly.message}\nPlaybook判定: ${reason}\n判断してほしい1点: 手動対応を優先するか。` }, { home, now });
+        fileDecision(`何が起きた: ${anomaly.label} — ${anomaly.message}\nPlaybook判定: ${reason}\n判断してほしい1点: 手動対応を優先するか。`);
         result.escalated.push(await record(anomaly, 'escalated', { reason }));
       }
       continue;
@@ -126,7 +133,7 @@ export async function runRemediation({
       const reason = '過去7日に2回以上deferred/prを経て再発';
       if (dryRun) plan(anomaly, 'escalate', reason);
       else {
-        decision({ source: 'nightly-health-remediate', text: `何が起きた: ${anomaly.label} — ${anomaly.message}\n何を試した: 過去7日に自動修理または持ち越しを2回以上実施\n判断してほしい1点: 手動対応を優先するか。` }, { home, now });
+        fileDecision(`何が起きた: ${anomaly.label} — ${anomaly.message}\n何を試した: 過去7日に自動修理または持ち越しを2回以上実施\n判断してほしい1点: 手動対応を優先するか。`);
         result.escalated.push(await record(anomaly, 'escalated', { reason }));
       }
       continue;
@@ -169,7 +176,7 @@ export async function runRemediation({
       anomaly.laneReason = laneReason;
     }
     const reason = anomaly.laneReason || 'Codexとcheap-codeの修理レーンが失敗';
-    decision({ source: 'nightly-health-remediate', text: `何が起きた: ${anomaly.label} — ${anomaly.message}\n何を試した: Playbookと自動修理レーン（${reason}）\n判断してほしい1点: 自動修理を待たず手動対応を優先するか。` }, { home, now });
+    fileDecision(`何が起きた: ${anomaly.label} — ${anomaly.message}\n何を試した: Playbookと自動修理レーン（${reason}）\n判断してほしい1点: 自動修理を待たず手動対応を優先するか。`);
     result.escalated.push(await record(anomaly, 'escalated', { reason }));
   }
   if (!dryRun && (result.fixed.length || result.prs.length || result.escalated.length || result.suppressed.length)) {

@@ -44,7 +44,7 @@ test('session-relaunch hook は同期で1本だけ登録され、再実行で重
   fs.rmSync(home, { recursive: true, force: true });
 });
 
-test('stop-gate-runner hook は timeout 10 で Stop に登録される', () => {
+test('stop-gate-runner hook は timeout 30 で Stop に登録される', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-report-length-'));
   const repo = path.resolve('.');
   const settingsFile = path.join(home, '.claude', 'settings.json');
@@ -56,7 +56,7 @@ test('stop-gate-runner hook は timeout 10 で Stop に登録される', () => {
   const hooks = settings.hooks.Stop.flatMap((group) => group.hooks || [])
     .filter((hook) => String(hook.command).includes('stop-gate-runner.mjs'));
   assert.equal(hooks.length, 1);
-  assert.equal(hooks[0].timeout, 10);
+  assert.equal(hooks[0].timeout, 30);
   assert.equal('async' in hooks[0], false);
   fs.rmSync(home, { recursive: true, force: true });
 });

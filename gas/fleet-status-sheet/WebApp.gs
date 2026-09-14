@@ -135,7 +135,8 @@ function doGet(e) {
         planSevenDayPct: value('planSevenDayPct'), planFiveHourPct: value('planFiveHourPct'), budgetPacePct: value('budgetPacePct'), settingsModel: value('settingsModel'),
         codexLogin: value('codexLogin'), fable5: value('fable5'), disciplineAlert: value('disciplineAlert'), livenessState: value('livenessState'),
         costLoopRanAt: value('costLoopRanAt'), costLoopStatus: value('costLoopStatus'),
-        costWeeklyRanAt: value('costWeeklyRanAt'), costWeeklyStatus: value('costWeeklyStatus')
+        costWeeklyRanAt: value('costWeeklyRanAt'), costWeeklyStatus: value('costWeeklyStatus'),
+        keyserveAuth: value('keyserveAuth'), keyserveStatus: value('keyserveStatus'), keyserveCheckedAt: value('keyserveCheckedAt')
       };
     });
     return _fleetJson_({ ok: true, rows: rows, count: rows.length });

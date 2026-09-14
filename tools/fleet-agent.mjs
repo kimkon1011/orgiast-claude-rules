@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { codexAuthStatus } from './codex-auth-status.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
@@ -109,23 +110,6 @@ function sharedMemoryStatus(home) {
 function formatMemoryLine(sharedMemory) {
   if (!sharedMemory.found) return 'memory=なし';
   return `memory=共有${sharedMemory.count}件 / MEMORY.md参照=${sharedMemory.indexed ? 'yes' : 'no'}`;
-}
-
-function codexAuthStatus(home) {
-  const tokens = readJson(path.join(home, '.codex', 'auth.json'))?.tokens;
-  const token = tokens && typeof tokens === 'object' && !Array.isArray(tokens)
-    ? tokens.id_token || tokens.access_token : null;
-  if (!token) return { login: false, email: null, plan: null };
-  let email = null;
-  let plan = null;
-  try {
-    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));
-    const payloadEmail = payload?.email || payload?.['https://api.openai.com/profile']?.email;
-    const payloadPlan = payload?.['https://api.openai.com/auth']?.chatgpt_plan_type;
-    email = typeof payloadEmail === 'string' && payloadEmail ? payloadEmail : null;
-    plan = typeof payloadPlan === 'string' && payloadPlan ? payloadPlan : null;
-  } catch {}
-  return { login: true, email, plan };
 }
 
 function fitStatusLines({ header, hostLine, codexLine, repoLine, memoryLine, jobStatus, syncLine, todoLine }) {

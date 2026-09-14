@@ -4,6 +4,8 @@
 # 実行するのは"あなた(このPCの持ち主)"。途中で「続けますか?」を1回だけ聞きます。中身に納得してから y を押してください。
 # 冪等(何度実行してもOK)。settings.json は毎回バックアップ。
 param(
+  [string]$Enroll,                            # 復帰用の不透明なトークン
+  [switch]$EnrollOnly,                        # 鍵の復帰だけを実行(隔離ホーム検証用)
   [string]$Webhook  = $env:ORGIAST_WEBHOOK,    # #claude-code webhook (配布者が埋め込み)
   [string]$Label    = $env:ORGIAST_LABEL,      # このPCの表示名(空ならPC名)
   [string]$ManusKey = $env:ORGIAST_MANUS_KEY,  # Manus APIキー(Web調査委譲用・配布者が埋め込み・任意)
@@ -55,9 +57,18 @@ function Test-ApiKeyConfigured($keyName) {
 }
 
 $HOMEDIR = $env:USERPROFILE
+if ($Enroll -and $env:ORGIAST_HOME) { $HOMEDIR = $env:ORGIAST_HOME }
 $REPO    = Join-Path $HOMEDIR 'orgiast-claude-rules'
 $HOOKS   = Join-Path $HOMEDIR '.claude\hooks'
 if (-not $Label) { $Label = $env:COMPUTERNAME }
+
+# 検証も実導入と同じ enroll 実装を通す。追加インストールや定期タスクは作らない。
+if ($EnrollOnly) {
+  if (-not $Enroll) { throw '-EnrollOnly には -Enroll が必要です。' }
+  $enrollRepo = Split-Path -Parent $PSScriptRoot
+  & (Join-Path $PSScriptRoot 'install-keyserve-enroll.ps1') -Enroll $Enroll -TargetHome $HOMEDIR -Repo $enrollRepo
+  exit $LASTEXITCODE
+}
 
 Say "============================================================" 'Cyan'
 Say " オージャスト Claude セットアップ (このPC: $Label)" 'Cyan'
@@ -175,6 +186,14 @@ if (-not $gotRepo -and -not $preserveRepo) {
   }
 }
 if (-not $gotRepo) { Warn "共通ルールの取得に失敗。ネット接続を確認して、青い画面を閉じてもう一度コマンドを貼り付けてください(それでも駄目なら kim に連絡)" }
+
+# 新PCと既存PCの復帰の両方で、鍵を先に取得してから従来の導入を続ける。
+if ($Enroll) {
+  $enrollHelper = Join-Path $REPO 'tools\install-keyserve-enroll.ps1'
+  if (-not (Test-Path -LiteralPath $enrollHelper)) { throw 'enroll 対応ツールを取得できません。ネット接続と配布版を確認してください。' }
+  & $enrollHelper -Enroll $Enroll -TargetHome $HOMEDIR -Repo $REPO
+  if ($LASTEXITCODE -ne 0) { exit 1 }
+}
 
 # 単体配布では補助スクリプトが隣に無いため、リポジトリ取得後にもう一度解決する。
 if (-not $runHiddenLoaded) {

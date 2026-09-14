@@ -99,6 +99,30 @@
         "status": "validated"
       },
       "note": "2026-09-03改定: 監督(メインループ)用のFable使用は定額内なら許可。サブエージェント(実装/量産)への指定は単価2倍のため引き続き禁止。"
+    },
+    {
+      "id": "negative-claim-primary-source",
+      "source": "memory feedback_never_assert_nonexistence_from_search (2026-09-01 実害)",
+      "summary": "「APIが無い/存在しない」の否定断定は一次ソース(npm/PyPI/GitHub)照会後のみ",
+      "detect": {
+        "scope": "shared:negative-claim-gate.findNegativeClaim"
+      },
+      "gate": "negative-claim-gate.mjs",
+      "ledger": "~/.claude/handoff-ledger.jsonl",
+      "enforcement": "block",
+      "thresholds": {
+        "violationsToBlock": 1,
+        "daysObserved": 0
+      },
+      "validation": {
+        "fixtureCount": 22,
+        "precision": 1,
+        "minPrecision": 0.9,
+        "status": "validated",
+        "measuredOn": "2026-09-01",
+        "sample": "実データ 12セッション / assistant応答288件 / 検出1件・真陽性1件・誤爆0件",
+        "note": "誤爆3型(訂正引用・仕様説明・環境に無い)と自己言及レポート文を除外済み。回帰は negative-claim-gate.fixtures.json"
+      }
     }
   ]
 }

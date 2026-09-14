@@ -37,6 +37,32 @@ async function captureConsole(fn) {
   try { return { value: await fn(), lines }; } finally { console.log = original; }
 }
 
+async function captureConsoleError(fn) {
+  const lines = [], original = console.error; console.error = (...args) => lines.push(args.join(' '));
+  try { return { value: await fn(), lines }; } finally { console.error = original; }
+}
+
+test('記録の失敗で全体を落とさない: ログ追記が失敗しても複数異常を最後まで処理し通知まで到達する', async (t) => {
+  const home = makeHome(t, { anomalies: [
+    { label: 'esc', message: 'x', laneReason: 'テスト' },
+    { label: 'd1', message: 'y' },
+    { label: 'd2', message: 'z' }
+  ] });
+  fs.writeFileSync(path.join(home, '.claude', 'logs'), '');
+  let notifications = 0;
+  const { value: { value: result, lines }, lines: warnings } = await captureConsoleError(() => captureConsole(() => runRemediation({
+    home, playbooks: [], maxCodex: 0, notify: async () => notifications++, decision: () => {}
+  })));
+  assert.equal(result.escalated.length, 1);
+  assert.equal(result.deferred.length, 2);
+  const ledger = fs.readFileSync(path.join(home, '.claude', 'nightly-health-remediate-ledger.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(ledger.length, 3);
+  assert.equal(notifications, 1);
+  assert.equal(fs.existsSync(path.join(home, '.claude', '.nightly-health-remediate-state.json')), true);
+  assert.equal(warnings.filter((line) => line.startsWith('WARN ログ追記失敗: ')).length, 3);
+  assert.deepEqual(lines.slice(0, 3), ledger.map((row) => `${row.ranAt} ${row.outcome} ${row.label}`));
+});
+
 test('dry-run reports PLAN for a matching playbook and never calls apply or notification', async (t) => {
   const home = makeHome(t, { anomalies: [{ label: 'x', message: 'bad' }] });
   let applied = 0, notified = 0;

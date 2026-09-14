@@ -8,10 +8,11 @@ const FLEET_HEADERS_ = {
   livenessState: '稼働状態', livenessReason: '状態の理由', livenessCheckedAt: '状態確認日(JST)',
   interactionLoop: '対話ループ適用', interactionSelftest: '対話ループ自己テスト',
   costLoopRanAt: 'コスト改善ループ最終実行', costLoopStatus: 'コスト改善ループ結果',
-  costWeeklyRanAt: 'コスト週次改善ループ最終実行', costWeeklyStatus: 'コスト週次改善ループ結果'
+  costWeeklyRanAt: 'コスト週次改善ループ最終実行', costWeeklyStatus: 'コスト週次改善ループ結果',
+  keyserveAuth: 'keyserve認証経路', keyserveStatus: 'keyserve HTTP', keyserveCheckedAt: 'keyserve確認時刻'
 };
 
-const FLEET_OPTIONAL_HEADERS_ = ['delegRatioLegacy', 'planSevenDayPct', 'planFiveHourPct', 'budgetPacePct', 'settingsModel', 'osUser', 'realHostname', 'gitEmail', 'activeProjects', 'artifacts', 'lastCommit', 'livenessState', 'livenessReason', 'livenessCheckedAt', 'interactionLoop', 'interactionSelftest', 'costLoopRanAt', 'costLoopStatus', 'costWeeklyRanAt', 'costWeeklyStatus'];
+const FLEET_OPTIONAL_HEADERS_ = ['delegRatioLegacy', 'planSevenDayPct', 'planFiveHourPct', 'budgetPacePct', 'settingsModel', 'osUser', 'realHostname', 'gitEmail', 'activeProjects', 'artifacts', 'lastCommit', 'livenessState', 'livenessReason', 'livenessCheckedAt', 'interactionLoop', 'interactionSelftest', 'costLoopRanAt', 'costLoopStatus', 'costWeeklyRanAt', 'costWeeklyStatus', 'keyserveAuth', 'keyserveStatus', 'keyserveCheckedAt'];
 
 // ヘッダ照合は正規化してから行う。全角/半角の括弧・英数、前後の空白、改行の違いで
 // 「タブが見つからない」と誤判定するのを防ぐ(実セルの表記は目視できないため厳密一致に賭けない)。
@@ -81,6 +82,9 @@ function fleetPlanUpsert(headers, rows, payload) {
   if (columns.lastCommit >= 0) values[columns.lastCommit] = payload.lastCommit || '';
   if (columns.interactionLoop >= 0) values[columns.interactionLoop] = payload.interactionLoop || '';
   if (columns.interactionSelftest >= 0) values[columns.interactionSelftest] = payload.interactionSelftest || '';
+  if (columns.keyserveAuth >= 0 && payload.keyserveAuth) values[columns.keyserveAuth] = payload.keyserveAuth;
+  if (columns.keyserveStatus >= 0 && payload.keyserveStatus !== undefined) values[columns.keyserveStatus] = payload.keyserveStatus == null ? '' : payload.keyserveStatus;
+  if (columns.keyserveCheckedAt >= 0 && payload.keyserveCheckedAt) values[columns.keyserveCheckedAt] = payload.keyserveCheckedAt;
   if (appended) values[columns.consistency] = '未マッピング(要 fleet-pc-map.json 追記)';
   return { action: index >= 0 ? 'updated' : 'appended', rowIndex: index >= 0 ? index : rows.length, columns: columns, values: values };
 }

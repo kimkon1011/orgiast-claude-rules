@@ -14,7 +14,10 @@ const PROVIDERS = [
   ['deepseek', 'deepseek.env', 'DEEPSEEK_API_KEY', 'https://api.deepseek.com/user/balance'],
   ['openrouter', 'openrouter.env', 'OPENROUTER_API_KEY', 'https://openrouter.ai/api/v1/credits'],
   ['kimi', 'kimi-api.env', 'MOONSHOT_API_KEY', 'https://api.moonshot.ai/v1/users/me/balance'],
+  ['genspark', 'genspark.env', 'GSK_API_KEY', 'https://www.genspark.ai/api/tool_cli/me'],
 ];
+
+export const CREDIT_LOW_THRESHOLD = 5000;
 
 function dayKey(value) { const date = new Date(value); return Number.isFinite(date.getTime()) ? date.toISOString().slice(0, 10) : ''; }
 function finite(value) { const n = Number(value); return Number.isFinite(n) ? n : null; }
@@ -28,14 +31,24 @@ function parseBalance(provider, json) {
   return null;
 }
 
+export function parseCredits(provider, json) {
+  // REST は素の `credit_balance` を返す。`gsk me` の CLI は同じ値を `data` で包むので両方受ける。
+  if (provider === 'genspark') return finite(json?.credit_balance ?? json?.data?.credit_balance);
+  return null;
+}
+
 export async function fetchProviderBalance({ provider, url, key, fetchImpl = fetch }) {
-  if (!key) return { balanceUsd: null, reason: 'API key unavailable' };
+  if (!key) return { balanceUsd: null, credits: null, reason: 'API key unavailable' };
   try {
     const response = await fetchImpl(url, { headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(15000) });
-    if (!response.ok) return { balanceUsd: null, reason: `HTTP ${response.status}` };
-    const balanceUsd = parseBalance(provider, await response.json());
-    return balanceUsd === null ? { balanceUsd: null, reason: 'confirmed response had no parseable USD balance' } : { balanceUsd };
-  } catch (error) { return { balanceUsd: null, reason: `network: ${error?.message || error}` }; }
+    if (!response.ok) return { balanceUsd: null, credits: null, reason: `HTTP ${response.status}` };
+    const json = await response.json();
+    const balanceUsd = parseBalance(provider, json);
+    const credits = parseCredits(provider, json);
+    return balanceUsd === null && credits === null
+      ? { balanceUsd: null, credits: null, reason: 'confirmed response had no parseable USD balance' }
+      : { balanceUsd, credits };
+  } catch (error) { return { balanceUsd: null, credits: null, reason: `network: ${error?.message || error}` }; }
 }
 
 export function summarizeLedger(rows, provider, now = new Date()) {
@@ -58,12 +71,15 @@ function readRows(file) {
 }
 export function classifyBalance(row) {
   if (row.todaySpendUsd >= 1 && row.todaySpendUsd > 2 * row.avg7dSpendUsd) return 'anomaly';
+  if (Number.isFinite(row.credits)) return row.credits < CREDIT_LOW_THRESHOLD ? 'low' : 'ok';
   if (row.balanceUsd !== null && row.balanceUsd < 3 && row.autoTopUp !== true) return 'low';
   if (row.balanceUsd === null) return 'unmeasurable';
   return 'ok';
 }
 export function formatBalanceLine(rows) {
-  const item = (r) => `${r.provider} ${r.balanceUsd === null ? '監視不能' : `$${r.balanceUsd.toFixed(2)}`}(${r.autoTopUp === true ? '自動あり' : r.autoTopUp === false ? '自動なし' : '自動不明'})`;
+  const item = (r) => Number.isFinite(r.credits)
+    ? `${r.provider} ${r.credits}cr(前払い)`
+    : `${r.provider} ${r.balanceUsd === null ? '監視不能' : `$${r.balanceUsd.toFixed(2)}`}(${r.autoTopUp === true ? '自動あり' : r.autoTopUp === false ? '自動なし' : '自動不明'})`;
   return `💳 残高: ${rows.map(item).join(' / ')}`;
 }
 
@@ -76,6 +92,7 @@ export async function collectProviderBalances({ home = process.env.ORGIAST_HOME 
     const key = process.env[keyName] || readEnvValue(path.join(claudeDir, envFile), keyName);
     const remote = await fetchProviderBalance({ provider, url, key, fetchImpl });
     const row = { provider, balanceUsd: remote.balanceUsd, autoTopUp: billing[provider]?.autoTopUp ?? 'unknown', ...summarizeLedger(ledger, provider, now) };
+    if (remote.credits !== null) row.credits = remote.credits;
     if (remote.reason) row.reason = remote.reason;
     row.status = classifyBalance(row); results.push(row);
   }
@@ -100,6 +117,6 @@ export async function collectProviderBalances({ home = process.env.ORGIAST_HOME 
 export async function main(argv = process.argv.slice(2)) {
   const rows = await collectProviderBalances();
   if (argv.includes('--json')) console.log(JSON.stringify(rows, null, 2));
-  else { console.log(formatBalanceLine(rows)); for (const r of rows) console.log(`${r.provider}\tbalance=${r.balanceUsd === null ? 'unmeasurable' : `$${r.balanceUsd.toFixed(2)}`}\ttoday=$${r.todaySpendUsd.toFixed(4)}\tavg7d=$${r.avg7dSpendUsd.toFixed(4)}\tstatus=${r.status}${r.reason ? `\treason=${r.reason}` : ''}`); }
+  else { console.log(formatBalanceLine(rows)); for (const r of rows) console.log(`${r.provider}\tbalance=${Number.isFinite(r.credits) ? `${r.credits}cr` : r.balanceUsd === null ? 'unmeasurable' : `$${r.balanceUsd.toFixed(2)}`}\ttoday=$${r.todaySpendUsd.toFixed(4)}\tavg7d=$${r.avg7dSpendUsd.toFixed(4)}\tstatus=${r.status}${r.reason ? `\treason=${r.reason}` : ''}`); }
 }
 if (isEntry(import.meta.url)) await main();

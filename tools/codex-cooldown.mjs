@@ -95,7 +95,7 @@ export function codexCooldownRemaining(now = Date.now(), cooldownFile) {
 
 // provider-cooldown.json は codex 以外の定額レーン(glm 等)も同じ構造で持つ。
 // 指定 provider の残りクールダウンmsを返す。無ければ0。
-export function providerCooldownMs(provider, now = Date.now(), cooldownFile) {
+export function providerCooldownMs(provider = 'codex', now = Date.now(), cooldownFile) {
   const name = String(provider || '').trim().toLowerCase();
   if (!name) return 0;
   try {
@@ -146,7 +146,13 @@ export function codexHardBlockBypass(now = Date.now(), cooldownFile, opts = {}) 
   };
 }
 
-export function writeCodexCooldown(until, cooldownFile, reason = 'usage_limit') {
+// 第2引数の旧ファイルパス指定も維持する。provider 指定時の保存先は第4引数。
+export function writeCodexCooldown(until, provider = 'codex', reason = 'usage_limit', cooldownFile) {
+  if (/[\\/]/.test(provider) || /\.json$/i.test(provider)) {
+    cooldownFile = provider;
+    provider = 'codex';
+  }
+  provider ||= 'codex';
   const file = cooldownFile || defaultCooldownFile();
   let state = {};
   try { state = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
@@ -158,13 +164,14 @@ export function writeCodexCooldown(until, cooldownFile, reason = 'usage_limit') 
     savedUntil = at + 5 * HOUR_MS;
     savedReason = `${reason}:clamped`;
   }
-  state.codex = { until: savedUntil, reason: savedReason, at };
+  state[provider] = { until: savedUntil, reason: savedReason, at };
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
   // usage_limit の検出履歴を1行ずつ残す。provider-cooldown.json は上書きされるので
   // 「直近24hで何回上限に当たったか」が後から数えられず、コスト改善ループの
   // codex_saturated 判定(≥2回)ができなかったため(2026-09-07 B4)。
-  if (/^usage_limit/.test(String(savedReason))) {
+  // Astra は呼び出し元で model/pattern 付きの検出履歴を1回だけ残す。
+  if (provider === 'codex' && /^usage_limit/.test(String(savedReason))) {
     try {
       fs.appendFileSync(path.join(path.dirname(file), 'codex-limit-history.jsonl'), `${JSON.stringify({ t: new Date(at).toISOString(), until: savedUntil, reason: savedReason })}\n`, 'utf8');
     } catch {}

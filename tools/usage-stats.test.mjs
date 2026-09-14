@@ -90,7 +90,7 @@ test('spec-authoring tokens use Bash and PowerShell character share and tolerate
   assert.equal(estimateSpecAuthoringTokens({ blocks: { tools: { Bash: 80, PowerShell: 20 } }, profile: { totalChars: 200, byCategory: { 'spec-authoring': { chars: 50 } } } }), 25);
   assert.equal(estimateSpecAuthoringTokens({ blocks: { tools: { Bash: 100 } }, profile: { totalChars: 0, byCategory: { 'spec-authoring': { chars: 1 } } } }), 0);
 });
-test('deleg command source counts latest cumulative Codex usage per session', () => { const { home } = fixture(), dir = path.join(home, '.codex', 'sessions'), previous = process.env.CODEX_SESSIONS_DIRS; fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, 'x.jsonl'), '{"total_token_usage":{"output_tokens":3}}\n{"total_token_usage":{"output_tokens":8}}'); process.env.CODEX_SESSIONS_DIRS = dir; try { assert.deepEqual(collectCodexOutput({ home }), { outputTokens: 8, sessions: 1 }); } finally { if (previous === undefined) delete process.env.CODEX_SESSIONS_DIRS; else process.env.CODEX_SESSIONS_DIRS = previous; } });
+test('deleg command source counts latest cumulative Codex usage per session', () => { const { home } = fixture(), dir = path.join(home, '.codex', 'sessions'), previous = process.env.CODEX_SESSIONS_DIRS; fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, 'x.jsonl'), '{"total_token_usage":{"output_tokens":3}}\n{"total_token_usage":{"output_tokens":8}}'); process.env.CODEX_SESSIONS_DIRS = dir; try { assert.deepEqual(collectCodexOutput({ home }), { outputTokens: 8, sessions: 1, byModel: { unknown: { sessions: 1, outputTokens: 8 } } }); } finally { if (previous === undefined) delete process.env.CODEX_SESSIONS_DIRS; else process.env.CODEX_SESSIONS_DIRS = previous; } });
 test('countPatchLines counts patch changes but not headers or non-apply_patch commands', () => {
   const patch = '*** Begin Patch\n--- old/file\n+++ new/file\n@@ -1 +1 @@\n-old\n+new\n+added\n*** End Patch';
   const text = [
@@ -127,4 +127,28 @@ test('collectLandedLines sums numstat from two commits', { skip: process.env.PAT
   }).then(() => git('commit', '-m', 'second')).then(() => {
     assert.deepEqual(collectLandedLines({ repos: [repo], days: 7 }), { added: 4, deleted: 1, repos: 1 });
   });
+});
+
+test('Codex byModel counts cumulative deltas, model switches, multiple sessions and cached reads', (t) => {
+  const { home } = fixture(), dir = path.join(home, '.codex', 'sessions');
+  fs.mkdirSync(dir, { recursive: true });
+  const previous = process.env.CODEX_SESSIONS_DIRS;
+  process.env.CODEX_SESSIONS_DIRS = dir;
+  t.after(() => { if (previous === undefined) delete process.env.CODEX_SESSIONS_DIRS; else process.env.CODEX_SESSIONS_DIRS = previous; });
+  const usage = (out) => ({ type: 'event_msg', payload: { info: { total_token_usage: { output_tokens: out } } } });
+  const model = (slug) => ({ type: 'turn_context', payload: { model: slug } });
+  const write = (name, rows) => fs.writeFileSync(path.join(dir, name + '.jsonl'), rows.map(JSON.stringify).join('\n') + '\ninvalid');
+  write('a', [model('gpt-6-astra'), usage(10), usage(30), usage(30), model('gpt-5.6-sol'), usage(50)]);
+  write('b', [{ model: 'gpt-6-astra' }, usage(5)]);
+  write('c', [model('gpt-5.6-sol'), usage(9)]);
+  write('old', [model('gpt-6-astra'), usage(999)]);
+  fs.utimesSync(path.join(dir, 'old.jsonl'), new Date('2020-01-01'), new Date('2020-01-01'));
+  const expected = { outputTokens: 64, sessions: 3, byModel: {
+    'gpt-6-astra': { sessions: 2, outputTokens: 35 },
+    'gpt-5.6-sol': { sessions: 2, outputTokens: 29 },
+  } };
+  assert.deepEqual(collectCodexOutput({ home }), expected);
+  resetParseCacheForTests();
+  assert.deepEqual(collectCodexOutput({ home }), expected);
+  assert.deepEqual(collectCodexOutput({ home, includePatchLines: true }), { ...expected, added: 0, deleted: 0, patchFiles: 3 });
 });

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { parseHandoff } from './auto-session.mjs';
-import { applyAutoHeal, collectFindings, emptyOutputReason, parseRateLimitsFromText, readCodexUsedPercent, upsertFixTasks } from './delegation-health-check.mjs';
+import { applyAutoHeal, collectFindings, emptyOutputReason, isCodexSpawnFailure, parseRateLimitsFromText, readCodexUsedPercent, upsertFixTasks } from './delegation-health-check.mjs';
 
 const NOW = new Date('2026-09-09T12:00:00.000Z');
 const homes = [];
@@ -128,4 +128,32 @@ test('dry-run 相当では cooldown ファイルを変更しない', () => {
   write(dir, 'provider-cooldown.json', original); write(dir, 'codex-limit-history.jsonl', row({ t: '2026-09-09T10:00:00Z', reason: 'usage_limit' }));
   collectFindings({ home: dir, now: NOW, codexUsedPercent: 1 });
   assert.deepEqual(readCooldown(dir), original);
+});
+
+test('emptyOutputReason は spawn 失敗を spawn_error として分類する', () => {
+  // 旧実装は status:null を「出力ゼロで終了(no_output)」と誤診し、原因が違うものを同じ finding に束ねていた。
+  assert.equal(emptyOutputReason({ status: null, timedOut: false, secs: 0.1, stderrTail: 'spawn codex ENOENT' }), 'spawn_error');
+  assert.equal(emptyOutputReason({ status: null, timedOut: false, secs: 0.1, spawnError: true, stderrTail: '' }), 'spawn_error');
+});
+
+test('spawn 失敗は codex_spawn_failed として起票し、codex_empty_output を出さない', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', row({ t: '2026-09-09T10:00:00Z', provider: 'codex', model: 'codex-cli/gpt-5.6-sol', out: 0, timedOut: false, status: null, spawnError: true, stderrTail: 'spawn codex ENOENT', secs: 0.1 }));
+  const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
+  assert.ok(findings.some((item) => item.id === 'codex_spawn_failed'), JSON.stringify(findings));
+  assert.ok(!findings.some((item) => item.id === 'codex_empty_output'), JSON.stringify(findings));
+});
+
+test('回帰: 起動できた上での出力ゼロは今までどおり codex_empty_output になる', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, status: 0, secs: 10, timedOut: false, stderrTail: '' }));
+  const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
+  assert.ok(findings.some((item) => item.id === 'codex_empty_output'), JSON.stringify(findings));
+  assert.ok(!findings.some((item) => item.id === 'codex_spawn_failed'), JSON.stringify(findings));
+});
+
+test('回帰: isCodexSpawnFailure は通常の stderr では false になる', () => {
+  assert.equal(isCodexSpawnFailure({ stderrTail: 'failed to lookup address information' }), false);
+  assert.equal(isCodexSpawnFailure({ stderrTail: '' }), false);
+  assert.equal(isCodexSpawnFailure({}), false);
 });

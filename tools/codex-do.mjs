@@ -305,6 +305,45 @@ export function wslCodexLaunchPlan({ distroFound, codexPresent, versionOk, insta
   return allowNative ? 'native' : 'abort';
 }
 
+// spawn 自体の失敗(ENOENT 等)は status:null + error で返る。status が数値でないことを
+// 「失敗ではない」と扱うと再試行も fastFail も効かず、台帳には out:0 だけが残って
+// delegation-health が「codex が出力ゼロで終了した(no_output)」と誤診する(2026-09-14 実害)。
+export function isSpawnFailure(result) {
+  return Boolean(result?.error);
+}
+
+// spawn 失敗・シグナル終了(status:null)・非ゼロ exit をまとめて「失敗」とする。
+// Number(null) === 0 に引っかからないよう status は数値のときだけ比較する。
+export function isFailedResult(result) {
+  if (result?.timedOut === true) return false;
+  if (isSpawnFailure(result)) return true;
+  if (result?.status == null) return true;
+  return Number(result.status) !== 0;
+}
+
+// Windows の npm グローバル shim は codex.cmd で、shell を通さない spawn では必ず ENOENT になる
+// (§1.17 で shell は禁止)。spawn 可能な実体を PATH から解決する。見つからなければ現状維持で
+// 'codex' をそのまま返す(＝従来どおり即失敗し、その事実は isSpawnFailure で可視化される)。
+export function resolveCodexSpawnTarget({ platform, pathEntries = [], exists, nodeExecPath }) {
+  if (platform !== 'win32') return { command: 'codex', argsPrefix: [] };
+  for (const entry of pathEntries) {
+    if (!entry) continue;
+    const exe = path.join(entry, 'codex.exe');
+    if (exists(exe)) return { command: exe, argsPrefix: [] };
+    const js = path.join(entry, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
+    if (exists(js)) return { command: nodeExecPath, argsPrefix: [js] };
+  }
+  return { command: 'codex', argsPrefix: [] };
+}
+
+// 実ディスクを引く既定の解決器。純関数側は fs を注入させ、ここだけが fs を使う。
+export function resolveCodexSpawnTargetFromDisk(platform = process.platform, env = process.env, nodeExecPath = process.execPath) {
+  if (platform !== 'win32') return { command: 'codex', argsPrefix: [] };
+  const pathEntries = (env.PATH || env.Path || '').split(';').filter(Boolean);
+  const exists = (file) => { try { return fs.statSync(file).isFile(); } catch { return false; } };
+  return resolveCodexSpawnTarget({ platform, pathEntries, exists, nodeExecPath });
+}
+
 if (isEntry(import.meta.url)) {
 
 const args = process.argv.slice(2);
@@ -501,8 +540,10 @@ function recordUsage(result, modelName, seconds, provider = 'codex', attempts = 
       in: Math.ceil(prompt.length / 4), out: Math.ceil((result.outputChars || 0) / 4),
       timedOut: result?.timedOut === true,
       status: result?.status ?? null,
-      stderrTail: String(result?.stderr || '').replace(/\s+/g, ' ').trim().slice(-200),
-      fastFail: result?.timedOut !== true && Number(result?.status) !== 0 && (result?.outputChars || 0) === 0,
+      stderrTail: String(result?.stderr || result?.error?.message || '').replace(/\s+/g, ' ').trim().slice(-200),
+      fastFail: isFailedResult(result) && (result?.outputChars || 0) === 0,
+      spawnError: isSpawnFailure(result),
+      errorCode: result?.error?.code ?? null,
       attempts,
       secs: Number(seconds.toFixed(3))
     })}\n`, 'utf8');
@@ -510,6 +551,7 @@ function recordUsage(result, modelName, seconds, provider = 'codex', attempts = 
 }
 async function launchCodex(codexArgs) {
   let result;
+  const nativeTarget = resolveCodexSpawnTargetFromDisk();
 
   if (process.platform === 'win32' && !forceNative) {
     const listed = spawnSync('wsl', ['-l', '-q'], { encoding: 'utf16le', timeout: WSL_PROBE_TIMEOUT_MS });
@@ -564,13 +606,17 @@ async function launchCodex(codexArgs) {
       console.error('⚠️ WSL 経路が使えないため、--allow-native の指定によりネイティブ Windows codex で実行します。\nWindows 版は read-only サンドボックス固定でファイルを書けない既知の不具合(openai/codex#35428)があり、編集が保存されない可能性が高い。');
       const nativeArgs = [...codexArgs];
       if (!fs.existsSync(path.join(cwd, '.git'))) nativeArgs.splice(-1, 0, '--skip-git-repo-check');
-      result = await execute('codex', nativeArgs, { cwd });
+      result = await execute(nativeTarget.command, [...nativeTarget.argsPrefix, ...nativeArgs], { cwd });
     }
   } else {
     if (process.platform === 'win32') console.error('⚠️ --force-native によりネイティブ Windows codex で実行します。編集が保存されない可能性があります');
     const nativeArgs = [...codexArgs];
     if (!fs.existsSync(path.join(cwd, '.git'))) nativeArgs.splice(-1, 0, '--skip-git-repo-check');
-    result = await execute('codex', nativeArgs, { cwd });
+    result = await execute(nativeTarget.command, [...nativeTarget.argsPrefix, ...nativeArgs], { cwd });
+  }
+
+  if (isSpawnFailure(result)) {
+    console.error(`🚨 codex を起動できませんでした（${result.error?.code || 'spawn error'}: ${result.error?.message || ''}）`);
   }
 
   return result;
@@ -581,8 +627,7 @@ async function launchCodex(codexArgs) {
 // 2 分後に成功していた実例があるため、即時失敗に限って 1 回だけ再試行する。
 const FAST_FAIL_SECS = 60;
 function isFastFail(result, elapsedSecs) {
-  return result?.timedOut !== true && Number(result?.status) !== 0
-    && (result?.outputChars || 0) === 0 && elapsedSecs < FAST_FAIL_SECS;
+  return isFailedResult(result) && (result?.outputChars || 0) === 0 && elapsedSecs < FAST_FAIL_SECS;
 }
 
 async function executeCodex() {
@@ -626,7 +671,10 @@ while (true) {
     continue;
   }
   const failure = failureReason(result);
-  if (!quotaCheck.matched && failure && selectedLane.slug === SOL && lane === 'auto' && !model && !noEscalate && !escalated && !astraRetreated && providerCooldownMs('codex-astra') === 0) {
+  if (!quotaCheck.matched && failure && isSpawnFailure(result)) {
+    console.error('[codex-do] codex の実行ファイルを起動できていないため Astra へ昇格しません（同じ失敗を繰り返すだけです）');
+  }
+  if (!quotaCheck.matched && failure && selectedLane.slug === SOL && lane === 'auto' && !model && !noEscalate && !escalated && !astraRetreated && providerCooldownMs('codex-astra') === 0 && !isSpawnFailure(result)) {
     console.log(`[codex-do] sol 失敗 → astra へ昇格 (理由: ${failure})`);
     escalated = true;
     selectedLane = { slug: ASTRA, effort: 'high', reason: `escalated:${failure}` };

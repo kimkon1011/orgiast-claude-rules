@@ -381,9 +381,12 @@ switch ($Mode) {
             # IgnoreNew: 前回が長引いていても多重起動しない。
             $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
             Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null
-            Write-Host "タスク $taskName を登録しました (5分ごとに実行)"
+            # 先頭の「完了:」「エラー:」は fleet-poller が Discord 要約に拾うための目印。
+            # この語が無いと中央キュー経由の実行報告が「タスク『thermal-guard』実行: 」と
+            # 本文空で届き、成功したのか失敗したのか判別できない(2026-09-15 実測)。
+            Write-Host "完了: タスク $taskName を登録しました (5分ごとに実行)"
         } catch {
-            Write-Host ("タスク登録に失敗しました: " + $_.Exception.Message)
+            Write-Host ("エラー: タスク登録に失敗しました: " + $_.Exception.Message)
         }
         exit 0
     }
@@ -392,9 +395,9 @@ switch ($Mode) {
         try {
             Get-ScheduledTask -TaskName $taskName -ErrorAction Stop | Out-Null
             Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
-            Write-Host "タスク $taskName を削除しました"
+            Write-Host "完了: タスク $taskName を削除しました"
         } catch {
-            Write-Host "タスク $taskName は登録されていません"
+            Write-Host "完了: タスク $taskName は登録されていません(削除不要)"
         }
         exit 0
     }

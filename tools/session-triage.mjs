@@ -361,7 +361,10 @@ async function addLlmJudgments(records) {
     for (const record of records) failRecord(record, 'tools/llm-ask.mjs が見つかりません');
     return llmStats;
   }
-  const providerChain = (provider || process.env.SESSION_TRIAGE_LLM_PROVIDERS || 'groq')
+  // 既定は多段。1段だけだとフォールバック鎖が名前だけになる（実測 2026-09-14: 直近7日で
+  // groq は 16回中13回が 429、openrouter と grok は 0%失敗）。鍵が無い provider は
+  // 例外になって catch から次段へ進むので、未設定の機体でも1段のときより悪くならない。
+  const providerChain = (provider || process.env.SESSION_TRIAGE_LLM_PROVIDERS || 'groq,openrouter,grok')
     .split(',').map((value) => value.trim()).filter(Boolean);
   if (!providerChain.length) providerChain.push('groq');
   const errorDetail = (error) => String(error?.stderr || error?.message || error).trim().split('\n').slice(-1)[0].slice(0, 200);

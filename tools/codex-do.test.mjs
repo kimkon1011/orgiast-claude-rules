@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { needsWorktreeRepair, detectQuotaLimit, shouldFlagEmptyFallbackDiff, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, isBackendExhausted, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS } = await import('./codex-do.mjs');
+const { needsWorktreeRepair, detectQuotaLimit, shouldFlagEmptyFallbackDiff, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, isBackendExhausted, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, isSpawnFailure, isFailedResult, resolveCodexSpawnTarget } = await import('./codex-do.mjs');
 
 function run(args, options = {}) {
   return spawnSync(process.execPath, [tool, ...args], {
@@ -914,4 +914,78 @@ console.log('done');
   assert.equal(calls[1].input, calls[2].input);
   assert.ok(calls[0].input.endsWith(instruction));
   assert.ok(calls.every((call) => !call.args.some((arg) => arg.includes('literal'))));
+});
+
+test('spawn 失敗(status:null + error)を fastFail として扱い、台帳に spawnError と理由を残す', (t) => {
+  // Windows で spawn('codex') すると ENOENT になる(codex は shell 用の .cmd シム)。旧実装は
+  // error を捨て、Number(null)===0 で「失敗ではない」と判定していたため、台帳には out:0 だけが
+  // 残り delegation-health が「出力ゼロで終了」と誤診した(2026-09-14 実害)。
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-spawnfail-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const spawnError = { status: null, output: '', stderr: '', error: { code: 'ENOENT', message: 'spawn codex ENOENT' } };
+  const result = run(['--force-native', '--cwd', home, '--model', 'sol', '--no-escalate', '説明して'], {
+    home,
+    env: { CODEX_DO_MOCK_RESULTS: JSON.stringify([spawnError, spawnError]) },
+  });
+  const rows = fs.readFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].spawnError, true);
+  assert.equal(rows[0].fastFail, true);
+  assert.equal(rows[0].attempts, 2);
+  assert.match(rows[0].stderrTail, /ENOENT/);
+  assert.match(result.stderr, /codex を起動できませんでした/);
+});
+
+test('spawn 失敗のときは Astra へ昇格しない', (t) => {
+  // 同じ実行ファイルをもう一度 spawn するだけなので、昇格は失敗を二重に台帳へ積むだけだった。
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-spawnfail-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const spawnError = { status: null, output: '', stderr: '', error: { code: 'ENOENT', message: 'spawn codex ENOENT' } };
+  const result = run(['--force-native', '--cwd', home, '説明して'], {
+    home,
+    env: { CODEX_DO_MOCK_RESULTS: JSON.stringify([spawnError, spawnError]) },
+  });
+  const rows = fs.readFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].lane, 'default_sol');
+  assert.equal(rows[0].escalated, false);
+  assert.match(result.stderr, /Astra へ昇格しません/);
+});
+
+test('isFailedResult は spawn 失敗・シグナル終了・非ゼロ exit を失敗とし、打ち切りは失敗としない', () => {
+  assert.equal(isFailedResult({ status: 0 }), false);
+  assert.equal(isFailedResult({ status: 1 }), true);
+  assert.equal(isFailedResult({ status: null, error: new Error('x') }), true);
+  assert.equal(isFailedResult({ status: null }), true);
+  assert.equal(isFailedResult({ status: 0, timedOut: true }), false);
+  assert.equal(isSpawnFailure({ status: 0 }), false);
+  assert.equal(isSpawnFailure({ status: null, error: { code: 'ENOENT' } }), true);
+});
+
+test('resolveCodexSpawnTarget は shell 用 shim を避けて node で起動できる実体を選ぶ', () => {
+  const npmDir = 'C:\\npm';
+  const nextDir = 'C:\\other';
+  const js = path.join(npmDir, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
+  const exe = path.join(npmDir, 'codex.exe');
+  const nodeExecPath = 'C:\\node\\node.exe';
+
+  // .cmd シムしか無い環境では node 経由で codex.js を起動する(ENOENT の回避)
+  assert.deepEqual(
+    resolveCodexSpawnTarget({ platform: 'win32', pathEntries: [nextDir, npmDir], exists: (file) => file === js, nodeExecPath }),
+    { command: nodeExecPath, argsPrefix: [js] }
+  );
+  // exe が在るならそちらを優先する
+  assert.deepEqual(
+    resolveCodexSpawnTarget({ platform: 'win32', pathEntries: [npmDir], exists: (file) => file === js || file === exe, nodeExecPath }),
+    { command: exe, argsPrefix: [] }
+  );
+  // どちらも無ければ現状維持(従来どおり即失敗し、isSpawnFailure で可視化される)
+  assert.deepEqual(
+    resolveCodexSpawnTarget({ platform: 'win32', pathEntries: [npmDir], exists: () => false, nodeExecPath }),
+    { command: 'codex', argsPrefix: [] }
+  );
+  assert.deepEqual(
+    resolveCodexSpawnTarget({ platform: 'linux', pathEntries: [npmDir], exists: () => true, nodeExecPath }),
+    { command: 'codex', argsPrefix: [] }
+  );
 });

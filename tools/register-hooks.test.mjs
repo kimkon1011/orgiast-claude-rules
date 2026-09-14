@@ -143,3 +143,26 @@ test('既存hookの恒久timeoutをイベント・パス表記を問わず収束
   for(const [name,timeout] of wanted) assert.equal(hooks.find((h)=>h.command.includes(name)).timeout,timeout,name);
   fs.rmSync(home,{recursive:true,force:true});
 });
+
+test('guard本体が未同期でもregister-hooksは落ちず、既存hookを保ったまま完走する', () => {
+  // matcher の正本は guard 側にあるが、同期途中のPCでは guard がまだ無いことがある。
+  // 静的に import すると ERR_MODULE_NOT_FOUND で register-hooks 全体が落ち、
+  // hook が1本も登録されない(全hookの停止)。fail-open をここで固定する。
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-failopen-'));
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-repo-'));
+  fs.mkdirSync(path.join(repo, 'tools'), { recursive: true });
+  fs.copyFileSync(path.resolve('tools', 'register-hooks.mjs'), path.join(repo, 'tools', 'register-hooks.mjs'));
+  assert.ok(!fs.existsSync(path.join(repo, 'tools', 'internal-recipient-gmail-guard.mjs')));
+  const settingsFile = path.join(home, '.claude', 'settings.json');
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  const existing = { matcher: 'Bash', hooks: [{ type: 'command', command: 'node existing.mjs' }] };
+  fs.writeFileSync(settingsFile, JSON.stringify({ custom: true, hooks: { PreToolUse: [existing] } }));
+  const stdout = execFileSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo } });
+  assert.equal(typeof stdout, 'string');
+  const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  assert.equal(settings.custom, true);
+  assert.deepEqual(settings.hooks.PreToolUse[0], existing);
+  assert.ok(!settings.hooks.PreToolUse.some((group) => (group.hooks || []).some((hook) => String(hook.command).includes('internal-recipient-gmail-guard'))));
+  fs.rmSync(home, { recursive: true, force: true });
+  fs.rmSync(repo, { recursive: true, force: true });
+});

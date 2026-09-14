@@ -5,7 +5,9 @@ import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 import { readStdin } from './transcript-tail.mjs';
 
-const TARGET = /^mcp__claude_ai_Gmail(?:_\d+)?__(create_draft|send_message|update_draft|reply|forward)$/;
+export const GMAIL_WRITE_ACTIONS = ['create_draft', 'send_message', 'update_draft', 'reply', 'forward'];
+export const TARGET = new RegExp(`^mcp__claude_ai_Gmail(?:_\\d+)?__(${GMAIL_WRITE_ACTIONS.join('|')})$`);
+export const HOOK_MATCHER = TARGET.source.replace(/^\^/, '').replace(/\$$/, '');
 const RECIPIENT_FIELD = /^(?:to|cc|bcc|recipients?|to_?recipients?|cc_?recipients?|bcc_?recipients?|to_?addresses?|cc_?addresses?|bcc_?addresses?)$/i;
 const ADDRESS_FIELD = /^(?:email|email_?address|address|value)$/i;
 

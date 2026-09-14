@@ -3,6 +3,16 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+// matcher の正本は guard 側に置く（リテラルを2箇所に持つと、片方だけ直して
+// 「テストは緑なのに実機では hook が起動しない」ずれが再発する）。
+// ただし同期が途中のPCでは guard 本体がまだ無いことがあるため、静的に import すると
+// register-hooks 全体が ERR_MODULE_NOT_FOUND で落ちて hook が1本も登録されなくなる。
+// ここは fail-open とし、読めなければ現行と同じ matcher に退避する。
+let HOOK_MATCHER = 'mcp__claude_ai_Gmail(?:_\\d+)?__(create_draft|send_message|update_draft|reply|forward)';
+try {
+  ({ HOOK_MATCHER } = await import('./internal-recipient-gmail-guard.mjs'));
+} catch { /* guard が未同期でも登録処理は続行する */ }
+
 const hooksOnly = process.argv.includes('--hooks-only');
 const home = process.env.ORGIAST_HOME || os.homedir();
 const repo = process.env.ORGIAST_REPO || path.join(home, 'orgiast-claude-rules');
@@ -56,6 +66,17 @@ function setTimeoutFor(groups, scriptName, timeout) {
   let changed = 0;
   for (const group of groups) for (const hook of (Array.isArray(group?.hooks) ? group.hooks : [])) {
     if (String(hook.command || '').includes(scriptName) && hook.timeout !== timeout) { hook.timeout = timeout; changed += 1; }
+  }
+  return changed;
+}
+function syncMatcherFor(groups, scriptName, matcher) {
+  let changed = 0;
+  for (const group of groups) {
+    const hooks = Array.isArray(group?.hooks) ? group.hooks : [];
+    if (hooks.some((hook) => String(hook.command || '').includes(scriptName)) && group.matcher !== matcher) {
+      group.matcher = matcher;
+      changed += 1;
+    }
   }
   return changed;
 }
@@ -157,7 +178,8 @@ try {
   if (add(settings.hooks.PreToolUse, 'pretooluse-lane-guard.mjs', { matcher: 'Bash|PowerShell|Edit|Write|MultiEdit', hooks: [{ type: 'command', command: command('pretooluse-lane-guard.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.PreToolUse, 'pretooluse-codex-invocation.mjs', { matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command: command('pretooluse-codex-invocation.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.PreToolUse, 'model-agent-guard.mjs', { matcher: 'Agent|Task', hooks: [{ type: 'command', command: command('model-agent-guard.mjs') }] })) added += 1;
-  if (add(settings.hooks.PreToolUse, 'internal-recipient-gmail-guard.mjs', { matcher: 'mcp__claude_ai_Gmail__create_draft|mcp__claude_ai_Gmail__send_message|mcp__claude_ai_Gmail__update_draft|mcp__claude_ai_Gmail__reply|mcp__claude_ai_Gmail__forward|mcp__claude_ai_Gmail_2__create_draft|mcp__claude_ai_Gmail_2__send_message', hooks: [{ type: 'command', command: command('internal-recipient-gmail-guard.mjs'), timeout: 5 }] })) added += 1;
+  if (add(settings.hooks.PreToolUse, 'internal-recipient-gmail-guard.mjs', { matcher: HOOK_MATCHER, hooks: [{ type: 'command', command: command('internal-recipient-gmail-guard.mjs'), timeout: 5 }] })) added += 1;
+  added += syncMatcherFor(settings.hooks.PreToolUse, 'internal-recipient-gmail-guard.mjs', HOOK_MATCHER);
   // ヘッドレス実行で消失するバックグラウンド処理を実行前に拒否する。
   if (add(settings.hooks.PreToolUse, 'pretooluse-headless-background.mjs', { matcher: 'Bash|PowerShell|ScheduleWakeup', hooks: [{ type: 'command', command: command('pretooluse-headless-background.mjs'), timeout: 5 }] })) added += 1;
   // read-only調査の逐次実行を検知し、まとめて調査するよう同期注入する。

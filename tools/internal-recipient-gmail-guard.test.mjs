@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { extractAddresses, isInternal, judge, loadLedger } from './internal-recipient-gmail-guard.mjs';
+import { extractAddresses, GMAIL_WRITE_ACTIONS, HOOK_MATCHER, isInternal, judge, loadLedger, TARGET } from './internal-recipient-gmail-guard.mjs';
 
 const ledger = JSON.parse(fs.readFileSync(new URL('./internal-recipients.default.json', import.meta.url), 'utf8'));
 const hook = (tool_input, action = 'create_draft', account = '') => ({ tool_name: `mcp__claude_ai_Gmail${account}__${action}`, tool_input });
@@ -45,10 +45,23 @@ test('ドメインは完全一致で照合する', () => {
   for (const addr of ['a@sub.orgiast.jp', 'a@orgiast.jp.evil.com', 'a@fakeorgiast.jp', 'someone@gmail.com']) assert.equal(isInternal(addr, ledger), false);
 });
 test('全対象操作と番号付きアカウントを判定する', () => {
-  for (const action of ['create_draft', 'send_message', 'update_draft', 'reply', 'forward']) {
+  for (const action of GMAIL_WRITE_ACTIONS) {
     for (const account of ['', '_2', '_12']) assert.equal(judge(hook({ bcc: 'keiri.orgiast@gmail.com' }, action, account), ledger).decision, 'block');
   }
   assert.equal(judge(hook({ to: 'keiri.orgiast@gmail.com' }, 'read_message'), ledger).decision, 'pass');
+});
+test('guard の対象 tool 名と hook matcher が一致する', () => {
+  const matcher = new RegExp(`^(?:${HOOK_MATCHER})$`);
+  for (const action of GMAIL_WRITE_ACTIONS) {
+    for (const account of ['', '_2', '_12']) {
+      const toolName = `mcp__claude_ai_Gmail${account}__${action}`;
+      assert.equal(TARGET.test(toolName), true, `TARGET: ${toolName}`);
+      assert.equal(matcher.test(toolName), true, `HOOK_MATCHER: ${toolName}`);
+    }
+  }
+  for (const toolName of ['mcp__claude_ai_Gmail__get_message', 'mcp__claude_ai_Google_Drive__create_file']) {
+    assert.equal(matcher.test(toolName), false, toolName);
+  }
 });
 test('ローカル台帳が無ければ default、あればその台帳を使用する', (t) => {
   const home = homeFor(t);
@@ -102,7 +115,31 @@ test('既存配布処理は指定 matcher・timeout で登録し、再実行で�
     assert.deepEqual(settings.hooks.PreToolUse[0], existing);
     const groups = settings.hooks.PreToolUse.filter((group) => group.hooks.some((h) => h.command.includes('internal-recipient-gmail-guard')));
     assert.equal(groups.length, 1);
-    assert.equal(groups[0].matcher, 'mcp__claude_ai_Gmail__create_draft|mcp__claude_ai_Gmail__send_message|mcp__claude_ai_Gmail__update_draft|mcp__claude_ai_Gmail__reply|mcp__claude_ai_Gmail__forward|mcp__claude_ai_Gmail_2__create_draft|mcp__claude_ai_Gmail_2__send_message');
+    assert.equal(groups[0].matcher, HOOK_MATCHER);
     assert.deepEqual(groups[0].hooks, [{ type: 'command', command: `node "${path.join(repo, 'tools', path.basename(script))}"`, timeout: 5 }]);
   }
+});
+test('既存の古い matcher を重複なしで昇格し、再実行しても変わらない', (t) => {
+  const home = homeFor(t);
+  const repo = path.join(home, 'repo');
+  fs.mkdirSync(path.join(repo, 'tools'), { recursive: true });
+  fs.copyFileSync(script, path.join(repo, 'tools', path.basename(script)));
+  const settingsFile = path.join(home, '.claude', 'settings.json');
+  const oldMatcher = 'mcp__claude_ai_Gmail__create_draft|mcp__claude_ai_Gmail__send_message|mcp__claude_ai_Gmail__update_draft|mcp__claude_ai_Gmail__reply|mcp__claude_ai_Gmail__forward|mcp__claude_ai_Gmail_2__create_draft|mcp__claude_ai_Gmail_2__send_message';
+  const command = `node "${path.join(repo, 'tools', path.basename(script))}"`;
+  fs.writeFileSync(settingsFile, JSON.stringify({ hooks: { PreToolUse: [{ matcher: oldMatcher, hooks: [{ type: 'command', command, timeout: 5 }] }] } }));
+  const register = fileURLToPath(new URL('./register-hooks.mjs', import.meta.url));
+  const env = { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo };
+  const execute = () => spawnSync(process.execPath, [register, '--hooks-only'], { encoding: 'utf8', env, timeout: 5000 });
+  const first = execute();
+  assert.equal(first.status, 0, first.stderr);
+  const promoted = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  const groups = promoted.hooks.PreToolUse.filter((group) => group.hooks.some((item) => item.command.includes('internal-recipient-gmail-guard')));
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].matcher, HOOK_MATCHER);
+  const serialized = JSON.stringify(promoted);
+  const second = execute();
+  assert.equal(second.status, 0, second.stderr);
+  assert.equal(JSON.stringify(JSON.parse(fs.readFileSync(settingsFile, 'utf8'))), serialized);
+  assert.match(second.stdout, /hook は既に登録済み\(変更なし\)/);
 });

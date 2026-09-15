@@ -6,5 +6,6 @@
   { "pattern": "Discord チャンネル ID が要る", "route": "user に聞かず tools/discord-channel-id.mjs で台帳から取得", "confidence": "high", "source": "§2.6.1" },
   { "pattern": "API キー/接続文字列/ID が要る", "route": "過去 transcript・.env.local・production bundle・keyserve から復元。user に再聞き禁止", "confidence": "high", "source": "feedback-credentials-never-reask-universal" },
   { "pattern": "GAS の関数実行が要る", "route": "clasp run / コマンドキュー経由で Claude 側から実行。『▶実行してください』は違反", "confidence": "high", "source": "§1.4" },
-  { "pattern": "permission 分類器で自動経路が止まった", "route": "推測で結論を出さない。『未確認』＋user 作業なしの代替案を提示。恒久策は settings.json の許可ルール/DWD スコープ追加を kim に1回だけ提案", "confidence": "high", "source": "2026-09-10" }
+  { "pattern": "permission 分類器で自動経路が止まった", "route": "推測で結論を出さない。『未確認』＋user 作業なしの代替案を提示。恒久策は settings.json の許可ルール/DWD スコープ追加を kim に1回だけ提案", "confidence": "high", "source": "2026-09-10" },
+  {"pattern":"コマンド実行の委譲","route":"llm-ask.mjs（テキスト生成の委譲のみ。コマンド実行そのものは委譲できない＝実行は Claude の Bash/Write）。既存権限で承認プロンプト無しに動く。2026-09-16 実測の生存経路: groq/openrouter/deepseek/gemini/grok。glm/cerebras/genspark はキー未設置、kimi は残高不足で停止中、mistral は tier 外。--max が小さいと reasoning で枠を食い content が空になるため 4000 を使う","confidence":"high","source":"2026-09-16 実測 handoff-audit:0d7217062cfd648d"}
 ]

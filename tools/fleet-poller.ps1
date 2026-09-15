@@ -3,10 +3,16 @@
 #  B) 中央キュー(公開 fleet-command.json)に【承認済みタスク】が積まれていれば実行し結果を返す。
 #  ★ホワイトリスト方式: 決まった安全タスクだけ実行。任意コマンドは絶対に実行しない(=RCEにしない/§1.1)。
 #  会話内容は読まない・送らない。Discordへ送るのは集計/実行結果の要約のみ。
-#  使い方: powershell -File fleet-poller.ps1 [-Dry]   (-Dry は送信せず表示のみ)
+#  使い方: powershell -File fleet-poller.ps1 [-Dry]
+#    -Dry は副作用ゼロ: Discord送信・スケジュールタスク登録・BOM書き戻し・PC管理表への書き込み・
+#    runId の消費・タスク本体の実行を一切行わず、何をするかだけ表示する。
 param([switch]$Dry)
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $ErrorActionPreference = 'SilentlyContinue'
+# -Dry が「表示のみ」を名乗る以上、副作用を1つも起こしてはならない。かつては Post しか抑止して
+# おらず、検証のつもりの -Dry が runId を消費しタスクを本当に実行していた
+# (2026-09-15 実測: nishi-PC が thermal-guard-rollout-2026-09-14 を消費した)。
+function DrySkip($what) { Write-Host "[DRY SKIP] $what" }
 $H = $env:USERPROFILE
 $repoCandidates = @()
 if ($PSScriptRoot) { $repoCandidates += (Split-Path -Parent $PSScriptRoot) }
@@ -17,7 +23,10 @@ $repo = @($repoCandidates | Select-Object -Unique) | Where-Object { Test-Path $_
 try {
   if ($repo -and -not (Get-ScheduledTask -TaskName 'OrgiastFleetAgent' -ErrorAction SilentlyContinue)) {
     $fleetAgentInstaller = Join-Path $repo 'tools\register-fleet-agent.ps1'
-    if (Test-Path $fleetAgentInstaller) { & powershell -NoProfile -ExecutionPolicy Bypass -File $fleetAgentInstaller *> $null }
+    if (Test-Path $fleetAgentInstaller) {
+      if ($Dry) { DrySkip 'register-fleet-agent.ps1 (OrgiastFleetAgent 未登録のため本番なら登録する)' }
+      else { & powershell -NoProfile -ExecutionPolicy Bypass -File $fleetAgentInstaller *> $null }
+    }
   }
 } catch {}
 
@@ -26,8 +35,11 @@ try {
   if ($repo -and -not (Get-ScheduledTask -TaskName 'ClaudeDailyDriveBackup' -ErrorAction SilentlyContinue)) {
     $backupTaskInstaller = Join-Path $repo 'tools\register-claude-backup-task.ps1'
     if (Test-Path $backupTaskInstaller) {
-      & powershell -NoProfile -ExecutionPolicy Bypass -File $backupTaskInstaller *> $null
-      if ($LASTEXITCODE -ne 0) { throw "register-claude-backup-task.ps1 exit $LASTEXITCODE" }
+      if ($Dry) { DrySkip 'register-claude-backup-task.ps1 (ClaudeDailyDriveBackup 未登録のため本番なら登録する)' }
+      else {
+        & powershell -NoProfile -ExecutionPolicy Bypass -File $backupTaskInstaller *> $null
+        if ($LASTEXITCODE -ne 0) { throw "register-claude-backup-task.ps1 exit $LASTEXITCODE" }
+      }
     }
   }
 } catch {
@@ -49,8 +61,11 @@ try {
   if ($repo -and -not (Get-ScheduledTask -TaskName 'OrgiastThermalGuard' -ErrorAction SilentlyContinue)) {
     $thermalGuard = Join-Path $repo 'tools\thermal-guard.ps1'
     if (Test-Path $thermalGuard) {
-      & powershell -NoProfile -ExecutionPolicy Bypass -File $thermalGuard -Install *> $null
-      if ($LASTEXITCODE -ne 0) { throw "thermal-guard.ps1 -Install exit $LASTEXITCODE" }
+      if ($Dry) { DrySkip 'thermal-guard.ps1 -Install (OrgiastThermalGuard 未登録のため本番なら登録する)' }
+      else {
+        & powershell -NoProfile -ExecutionPolicy Bypass -File $thermalGuard -Install *> $null
+        if ($LASTEXITCODE -ne 0) { throw "thermal-guard.ps1 -Install exit $LASTEXITCODE" }
+      }
     }
   }
 } catch {
@@ -65,7 +80,7 @@ try {
 
 # 自己修復: 設定ファイルの先頭BOMを除去(BOM付きだとClaude Code/nodeがJSON.parse・env読取に失敗して起動不能になるため。schtask実行なのでClaude Codeが壊れていても直せる)
 foreach ($bf in @("$H\.claude\settings.json", "$H\.claude.json", "$H\.gemini\.env", "$H\.claude\cost-reporter.env", "$H\.claude\manus.env", "$H\.claude\deepseek.env", "$H\.claude\xai.env", "$H\.claude\openrouter.env", "$H\.claude\groq.env", "$H\.claude\mistral.env", "$H\.claude\ollama.env")) {
-  try { if (Test-Path $bf) { $bc = [System.IO.File]::ReadAllText($bf); if ($bc.Length -gt 0 -and $bc[0] -eq [char]0xFEFF) { [System.IO.File]::WriteAllText($bf, $bc.TrimStart([char]0xFEFF), (New-Object System.Text.UTF8Encoding($false))) } } } catch {}
+  try { if (Test-Path $bf) { $bc = [System.IO.File]::ReadAllText($bf); if ($bc.Length -gt 0 -and $bc[0] -eq [char]0xFEFF) { if ($Dry) { DrySkip "BOM除去 $bf" } else { [System.IO.File]::WriteAllText($bf, $bc.TrimStart([char]0xFEFF), (New-Object System.Text.UTF8Encoding($false))) } } } } catch {}
 }
 
 # ラベル / webhook を cost-reporter.env から
@@ -94,7 +109,7 @@ $g = Join-Path $H '.claude\.fleet-report-guard'
 $dueDaily = $true
 if (Test-Path $g) { if (((Get-Date) - (Get-Item $g).LastWriteTime) -lt [TimeSpan]::FromHours(20)) { $dueDaily = $false } }
 if ($dueDaily -and $repo) {
-  Set-Content -Path $g -Value (Get-Date -Format o) -Encoding UTF8
+  if ($Dry) { DrySkip "日次ガード更新 $g" } else { Set-Content -Path $g -Value (Get-Date -Format o) -Encoding UTF8 }
   $out = RunPs (Join-Path $repo 'tools\verify-setup.ps1') @()
   if ($out) {
     $ok = ([regex]::Matches($out, '\[OK \]')).Count
@@ -109,8 +124,11 @@ if ($dueDaily -and $repo) {
       $fleetLogDir = Join-Path $H '.claude\logs'; New-Item -ItemType Directory -Path $fleetLogDir -Force | Out-Null
       $fleetLog = Join-Path $fleetLogDir 'fleet-poller.log'
       $stamp = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ssK')
-      & node (Join-Path $repo 'tools\fleet-sheet-report.mjs') '--specs' '--cloud' 2>&1 | ForEach-Object { Add-Content -LiteralPath $fleetLog -Value "$stamp $_" -Encoding UTF8 }
-      if ($LASTEXITCODE -ne 0) { Add-Content -LiteralPath $fleetLog -Value "$stamp WARN fleet-sheet-report exit=$LASTEXITCODE" -Encoding UTF8 }
+      if ($Dry) { DrySkip 'fleet-sheet-report.mjs --specs --cloud (PC管理表へ書き込む)' }
+      else {
+        & node (Join-Path $repo 'tools\fleet-sheet-report.mjs') '--specs' '--cloud' 2>&1 | ForEach-Object { Add-Content -LiteralPath $fleetLog -Value "$stamp $_" -Encoding UTF8 }
+        if ($LASTEXITCODE -ne 0) { Add-Content -LiteralPath $fleetLog -Value "$stamp WARN fleet-sheet-report exit=$LASTEXITCODE" -Encoding UTF8 }
+      }
     } catch {}
   }
   # 熱の日次サマリ。thermal-guard が未導入(=サンプルが無い)なら何も送らないので、
@@ -151,11 +169,14 @@ try {
     $match = ($targets -eq 'all' -or [string]::IsNullOrEmpty($targets) -or $label -like "*$targets*")
     if (($done -notcontains $runId) -and $match) {
       $processedCount++
-      Add-Content -Path $procF -Value $runId   # 先に処理済み記録(二重実行防止)
+      if ($Dry) { DrySkip "runId=$runId の処理済み記録" } else { Add-Content -Path $procF -Value $runId }   # 先に処理済み記録(二重実行防止)
       if ($WL.ContainsKey($task)) {
-        $res = & $WL[$task]
-        $sum = ((($res -split "`n") | Where-Object { $_ -match '結果:|OK |NG |完了|エラー|error' } | Select-Object -Last 3) -join ' / ')
-        Post "▶ **[$label]** タスク『$task』実行 (runId=$runId): $sum"
+        if ($Dry) { DrySkip "タスク『$task』の実行 (runId=$runId)"; Post "▶ **[$label]** タスク『$task』を実行する (runId=$runId) ※-Dry のため未実行" }
+        else {
+          $res = & $WL[$task]
+          $sum = ((($res -split "`n") | Where-Object { $_ -match '結果:|OK |NG |完了|エラー|error' } | Select-Object -Last 3) -join ' / ')
+          Post "▶ **[$label]** タスク『$task』実行 (runId=$runId): $sum"
+        }
       } else {
         Post "⚠ **[$label]** 未許可タスク『$task』は実行しません(ホワイトリスト外)"
       }

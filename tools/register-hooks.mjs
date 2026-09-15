@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // matcher の正本は guard 側に置く（リテラルを2箇所に持つと、片方だけ直して
 // 「テストは緑なのに実機では hook が起動しない」ずれが再発する）。
@@ -15,9 +16,13 @@ try {
 
 const hooksOnly = process.argv.includes('--hooks-only');
 const home = process.env.ORGIAST_HOME || os.homedir();
-const repo = process.env.ORGIAST_REPO || path.join(home, 'orgiast-claude-rules');
+// 2026-09-14: ~/orgiast-claude-rules が stale で新 hook(hook-budget-check) が無言で未登録になった。
+// 実行中スクリプトのツリーを基準にし、実行した版の hook を同じ版のツリーから登録する。
+const scriptRepo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const repo = process.env.ORGIAST_REPO || scriptRepo;
 const geminiKey = process.env.ORGIAST_GEMINI_KEY || readGeminiKey();
 const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 15);
+const skippedNames = [];
 function readGeminiKey() {
   try { return fs.readFileSync(path.join(home, '.gemini', '.env'), 'utf8').split(/\r?\n/).find((x) => x.startsWith('GEMINI_API_KEY='))?.slice(15) || ''; } catch { return ''; }
 }
@@ -37,7 +42,11 @@ function write(file, value) {
 function commands(groups) { return groups.flatMap((g) => Array.isArray(g?.hooks) ? g.hooks : []).map((h) => String(h?.command || '')); }
 function add(groups, scriptName, group) {
   // リポの同期が遅れている環境で、存在しないスクリプトを登録して毎回 ENOENT を出すのを防ぐ。
-  if (scriptName.endsWith('.mjs') && !fs.existsSync(path.join(repo, 'tools', scriptName))) return false;
+  if (scriptName.endsWith('.mjs') && !fs.existsSync(path.join(repo, 'tools', scriptName))) {
+    skippedNames.push(scriptName);
+    console.log(`  [skip] ${scriptName} — repo/tools に実ファイルが無いため未登録`);
+    return false;
+  }
   // 既存PCは .ps1 版が登録済みのことがある(Windows install)。拡張子を無視して重複判定しないと
   // .mjs と .ps1 の二重登録になり、同じ context が2回注入される。
   const base = scriptName.replace(/\.(mjs|ps1)$/, '');
@@ -219,7 +228,13 @@ try {
   if (added || settingsHadBom) { backup(settingsFile); write(settingsFile, settings); }
   if (settingsHadBom) console.log('[register-hooks] settings.json の BOM を除去しました');
   if (policyRepaired || costLoopMigrated) console.log(`hook修復: 実行ポリシー${policyRepaired}件 / cost-loop移行${costLoopMigrated}件`);
-  if (hooksOnly) { console.log(added ? `  [OK] settings.json に hook を ${added} 件追加(バックアップ済)` : '  [OK] hook は既に登録済み(変更なし)'); process.exit(0); }
+  if (hooksOnly) {
+    if (added) console.log(`  [OK] settings.json に hook を ${added} 件追加(バックアップ済)`);
+    else if (skippedNames.length) console.log(`  [注意] 登録済み(変更なし)。ただし ${skippedNames.length} 本は repo に無く未登録`);
+    else console.log('  [OK] hook は既に登録済み(変更なし)');
+    if (skippedNames.length) console.log(`[注意] hook ${skippedNames.length} 本が repo に見つからず skip: ${skippedNames.join(', ')}`);
+    process.exit(0);
+  }
 
   const claudeFile = path.join(home, '.claude.json');
   backup(claudeFile);
@@ -228,6 +243,7 @@ try {
   claude.mcpServers['gemini-cli'] = { type: 'stdio', command: 'npx', args: ['-y', 'gemini-mcp-tool'], env: { GEMINI_API_KEY: geminiKey, GEMINI_CLI_TRUST_WORKSPACE: 'true', GEMINI_MCP_BACKEND: 'gemini' } };
   write(claudeFile, claude);
   console.log(`  [OK] settings.json${added ? '(hook ' + added + '件追加)' : '(変更なし)'} / .claude.json 更新`);
+  if (skippedNames.length) console.log(`[注意] hook ${skippedNames.length} 本が repo に見つからず skip: ${skippedNames.join(', ')}`);
 } catch (e) {
   console.error(`  [注意] 設定登録に失敗: ${e.message}`);
   process.exitCode = 1;

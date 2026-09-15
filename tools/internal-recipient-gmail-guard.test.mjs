@@ -141,5 +141,9 @@ test('既存の古い matcher を重複なしで昇格し、再実行しても�
   const second = execute();
   assert.equal(second.status, 0, second.stderr);
   assert.equal(JSON.stringify(JSON.parse(fs.readFileSync(settingsFile, 'utf8'))), serialized);
-  assert.match(second.stdout, /hook は既に登録済み\(変更なし\)/);
+  // このrepoにはguard1本しか無い=他hookは全てskip。無言skip廃止により
+  // 「変更なし」単独の正常表示にはならず、[注意]とskip行が出る(2026-09-14 実害の再発防止)。
+  assert.match(second.stdout, /ただし \d+ 本は repo に無く未登録/);
+  assert.match(second.stdout, /\[skip\] /);
+  assert.doesNotMatch(second.stdout, /hook は既に登録済み\(変更なし\)/);
 });

@@ -166,3 +166,38 @@ test('guard本体が未同期でもregister-hooksは落ちず、既存hookを保
   fs.rmSync(home, { recursive: true, force: true });
   fs.rmSync(repo, { recursive: true, force: true });
 });
+
+test('ORGIAST_REPO未指定時はregister-hooks自身のツリーからhookを登録する', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-own-tree-home-'));
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-own-tree-repo-'));
+  fs.mkdirSync(path.join(repo, 'tools'), { recursive: true });
+  for (const name of ['register-hooks.mjs', 'session-relaunch.mjs']) {
+    fs.copyFileSync(path.resolve('tools', name), path.join(repo, 'tools', name));
+  }
+  const env = { ...process.env, ORGIAST_HOME: home };
+  delete env.ORGIAST_REPO;
+  const stdout = execFileSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { encoding: 'utf8', env });
+  const settings = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'));
+  const relaunch = settings.hooks.SessionStart.flatMap((group) => group.hooks || [])
+    .find((hook) => String(hook.command).includes('session-relaunch.mjs'));
+  assert.ok(relaunch);
+  assert.ok(relaunch.command.includes(repo));
+  assert.match(stdout, /\[skip\] hook-budget-check\.mjs/);
+  fs.rmSync(home, { recursive: true, force: true });
+  fs.rmSync(repo, { recursive: true, force: true });
+});
+
+test('hook実ファイルのskipがある時は注意を出し変更なしと正常表示しない', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-skip-home-'));
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-skip-repo-'));
+  fs.mkdirSync(path.join(repo, 'tools'), { recursive: true });
+  fs.copyFileSync(path.resolve('tools', 'register-hooks.mjs'), path.join(repo, 'tools', 'register-hooks.mjs'));
+  const env = { ...process.env, ORGIAST_HOME: home };
+  delete env.ORGIAST_REPO;
+  const stdout = execFileSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { encoding: 'utf8', env });
+  assert.match(stdout, /\[注意\]/);
+  assert.doesNotMatch(stdout, /hook は既に登録済み\(変更なし\)/);
+  assert.ok((stdout.match(/\[skip\]/g) || []).length >= 5);
+  fs.rmSync(home, { recursive: true, force: true });
+  fs.rmSync(repo, { recursive: true, force: true });
+});

@@ -14,7 +14,6 @@ function Quote-TaskArgument([string]$Value) {
   return '"' + $Value.Replace('"', '""') + '"'
 }
 
-$repo = Split-Path -Parent $PSScriptRoot
 $runHidden = Join-Path ([Environment]::GetFolderPath('UserProfile')) '.claude\tools\run-hidden.vbs'
 $wscript = Join-Path $env:WINDIR 'System32\wscript.exe'
 # Keep this file ASCII-only: it has no UTF-8 BOM, so PowerShell 5.1 would decode raw
@@ -28,6 +27,10 @@ $specs = @(
   [pscustomobject]@{ TaskName = 'OrgiastNightlyBatch'; ScriptName = 'ai-news-triage.mjs'; ScriptArgs = @('--confidence', 'high,medium', '--limit', '8') },
   [pscustomobject]@{ TaskName = 'OrgiastNightlyBatch'; ScriptName = 'pricing-brief.mjs'; ScriptArgs = @('--limit', '8') }
 )
+
+. (Join-Path $PSScriptRoot 'resolve-synced-repo.ps1')
+# The tasks must run from the synced repo, not from the tree this script sits in.
+$repo = Resolve-RegisterRepoRoot -Fallback (Split-Path -Parent $PSScriptRoot) -RequiredPaths @($specs | ForEach-Object { Join-Path 'tools' $_.ScriptName })
 
 # Resolve every prerequisite before changing either task.
 $taskNames = @($specs | ForEach-Object { $_.TaskName } | Select-Object -Unique)

@@ -20,9 +20,10 @@ if ($Unregister) {
   exit 0
 }
 
+. (Join-Path $PSScriptRoot 'resolve-synced-repo.ps1')
 $bootstrap = Join-Path $HOME '.claude\tools\nightly-bootstrap.ps1'
 if (-not (Test-Path -LiteralPath $bootstrap -PathType Leaf)) {
-  $bootstrap = Join-Path $PSScriptRoot 'nightly-bootstrap.ps1'
+  $bootstrap = Join-Path (Resolve-RegisterToolsDir -Fallback $PSScriptRoot -RequiredLeaves @('nightly-bootstrap.ps1')) 'nightly-bootstrap.ps1'
 }
 if (-not (Test-Path -LiteralPath $bootstrap -PathType Leaf)) { throw "nightly-bootstrap.ps1 not found: $bootstrap" }
 $bootstrap = (Resolve-Path -LiteralPath $bootstrap).Path

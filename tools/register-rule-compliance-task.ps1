@@ -15,7 +15,10 @@ if ($Unregister) {
   exit 0
 }
 
-$script = Join-Path $PSScriptRoot 'run-rule-compliance-loop.mjs'
+. (Join-Path $PSScriptRoot 'resolve-synced-repo.ps1')
+# The task must run from the synced repo, not from the tree this script sits in.
+$toolsDir = Resolve-RegisterToolsDir -Fallback $PSScriptRoot -RequiredLeaves @('run-rule-compliance-loop.mjs')
+$script = Join-Path $toolsDir 'run-rule-compliance-loop.mjs'
 if (-not (Test-Path -LiteralPath $script)) { throw "script not found: $script" }
 $script = (Resolve-Path -LiteralPath $script).Path
 $node = (Get-Command node.exe -ErrorAction SilentlyContinue).Source
@@ -25,10 +28,10 @@ if (-not $node) { throw 'node not found.' }
 $hiddenActionHelper = Join-Path $PSScriptRoot 'ensure-run-hidden.ps1'
 if (Test-Path -LiteralPath $hiddenActionHelper) {
   . $hiddenActionHelper
-  $action = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($script, '--days', '7') -WorkingDirectory $PSScriptRoot
+  $action = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($script, '--days', '7') -WorkingDirectory $toolsDir
 } else {
   $argument = '"{0}" --days 7' -f $script
-  $action = New-ScheduledTaskAction -Execute $node -Argument $argument -WorkingDirectory $PSScriptRoot
+  $action = New-ScheduledTaskAction -Execute $node -Argument $argument -WorkingDirectory $toolsDir
   Write-Host 'NOTE: ensure-run-hidden.ps1 が無いため通常起動で登録しました（実行時にコンソール窓が出ます）'
 }
 # ローカルの ~/.claude/projects/*.jsonl だけを読む純ローカル処理なので、対話ログオン不要で回せる。

@@ -12,7 +12,9 @@ if ($Unregister) {
   exit 0
 }
 
-$repo = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
+. (Join-Path $PSScriptRoot 'resolve-synced-repo.ps1')
+# The task must run from the synced repo, not from the tree this script sits in.
+$repo = Resolve-RegisterRepoRoot -Fallback (Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)) -RequiredPaths @('tools\fleet-poller.ps1', 'tools\nightly-bootstrap.ps1')
 $target = 'tools\fleet-poller.ps1'
 $script = Join-Path $repo $target
 if (-not (Test-Path -LiteralPath $script -PathType Leaf)) { throw "fleet-poller.ps1 not found: $script" }

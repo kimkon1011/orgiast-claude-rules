@@ -64,11 +64,20 @@ function reasonTop(rows) {
 // これは codex 本体の故障ではなく一過性のインフラ障害で、codex-do 側の再試行で回復する。
 const INFRA_TRANSIENT = /failed to lookup address information|failed to connect to websocket|stream error|connection reset|i\/o timeout|dns/i;
 
+// spawn 失敗は「codex が出力ゼロで終了した」ではなく「codex を起動できていない」。原因が
+// 違うので別の finding に分ける(2026-09-14: ENOENT が no_output として誤報告された)。
+const SPAWN_FAILURE_TAIL = /\bspawn\b.*\b(ENOENT|EACCES|EINVAL|ENOTDIR|EPERM)\b/i;
+export function isCodexSpawnFailure(row) {
+  if (row?.spawnError === true) return true;
+  return SPAWN_FAILURE_TAIL.test(String(row?.stderrTail || ''));
+}
+
 export function emptyOutputReason(row) {
   if (row?.timedOut === true) return 'timeout';
   // 旧行(timedOut 未記録)は経過秒数から推定する。codex の正常終了は実測で中央値~100秒、
   // 打ち切りは --timeout 到達時にのみ現れ、実測値は 300 秒以上だった。
   if (row?.timedOut == null && Number(row?.secs) >= 300) return 'timeout';
+  if (isCodexSpawnFailure(row)) return 'spawn_error';
   if (INFRA_TRANSIENT.test(String(row?.stderrTail || ''))) return 'infra_transient';
   const status = Number(row?.status);
   if (Number.isFinite(status) && status !== 0) return `exit_${status}`;
@@ -101,10 +110,16 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
   if (lowYield.length >= 2) { const models = [...new Set(lowYield.map((row) => row.model || '不明'))].join(', '); findings.push({ id: 'fallback_low_yield', severity: 'medium', title: 'フォールバックの低成果', evidence: [`${lowYield.length}件`, `model ${models}`], fixTask: `フォールバック先(${models})が長時間走って成果が無い。codex-fallback-order.json の順序と各バックエンドの実効性を見直す` }); }
   const empty = usageRows
     .filter((row) => row.provider === 'codex' && Number(row.out) === 0)
-    .map((source) => ({ reason: emptyOutputReason(source) }))
+    .map((source) => ({ reason: emptyOutputReason(source), errorCode: source.errorCode || null }))
     .filter((item) => item.reason !== 'timeout');
-  const realEmpty = empty.filter((item) => item.reason !== 'infra_transient');
-  if (realEmpty.length) findings.push({ id: 'codex_empty_output', severity: 'medium', title: 'Codex の出力ゼロ', evidence: [`${realEmpty.length}件`, ...reasonTop(realEmpty), ...(empty.length > realEmpty.length ? [`インフラ起因(名前解決/接続)で除外 ${empty.length - realEmpty.length}件`] : [])], fixTask: 'codex が出力ゼロで終了した原因（認証切れ/上限/起動失敗）を codex-do のログから特定' });
+  // 「起動できていない」と「起動したが出力が無い」は原因が違うので分けて起票する。
+  const spawnFailed = empty.filter((item) => item.reason === 'spawn_error');
+  if (spawnFailed.length) { const codes = [...new Set(spawnFailed.map((item) => item.errorCode).filter(Boolean))]; findings.push({ id: 'codex_spawn_failed', severity: 'medium', title: 'codex を起動できていない', evidence: [`${spawnFailed.length}件`, 'out=0 / status=null(spawn 失敗)', ...(codes.length ? [`code ${codes.join(', ')}`] : [])], fixTask: 'codex の実行ファイルを shell なしで spawn できていない(ENOENT 等)。codex-do.mjs の起動経路が PATH 上の shell 用 shim(.cmd/.bat) を掴んでいないか確認して修正' }); }
+  const realEmpty = empty.filter((item) => item.reason !== 'infra_transient' && item.reason !== 'spawn_error');
+  // 除外件数は「インフラ起因」だけを数える。spawn 失敗は専用の finding で名指しするので、
+  // ここに混ぜると evidence の説明と中身が食い違う。
+  const infraExcluded = empty.filter((item) => item.reason === 'infra_transient').length;
+  if (realEmpty.length) findings.push({ id: 'codex_empty_output', severity: 'medium', title: 'Codex の出力ゼロ', evidence: [`${realEmpty.length}件`, ...reasonTop(realEmpty), ...(infraExcluded ? [`インフラ起因(名前解決/接続)で除外 ${infraExcluded}件`] : [])], fixTask: 'codex が出力ゼロで終了した原因（認証切れ/上限/起動失敗）を codex-do のログから特定' });
   for (const [provider, state] of Object.entries(cooldown)) if (state?.reason === 'http_402' && Number(state.until) > nowMs) findings.push({ id: 'provider_balance_exhausted', severity: 'low', title: `${provider} の残高切れ`, evidence: [`provider ${provider}`, CLAUDE_FALLBACK_RULE] });
   return findings.length ? findings : [{ id: 'healthy', severity: 'low', title: '委譲経路は正常', evidence: [] }];
 }

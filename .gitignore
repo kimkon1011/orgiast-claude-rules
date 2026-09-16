@@ -3,6 +3,10 @@
 .codex-task.md
 memory-shared/
 
+# gpage-fetch.mjs 用の playwright-core をローカルで npm install したときの成果物
+node_modules/
+package-lock.json
+
 # Codex 委譲時のラッパーが吐く実行ログ(内容は都度使い捨て)
 /codex-rule*.log
 

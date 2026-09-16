@@ -4,6 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
+import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
+
 
 const LANE_NAMES = new Set(['consult', 'implement', 'edit-small', 'verify', 'bulk', 'mcp', 'design']);
 const IMPLEMENT = /作って|実装|修正|直して|追加して|書いて|リファクタ|バグ|\bfix\b|\bimplement\b|hook作|ツール作|スクリプト/i;
@@ -66,10 +68,8 @@ export function classifyRequest(prompt, options = {}) {
   return { lane, category, reason, ...advice };
 }
 
-let raw = '';
 if (isEntry(import.meta.url)) {
-process.stdin.setEncoding('utf8');
-for await (const chunk of process.stdin) raw += chunk;
+const raw = await readStdinWithTimeout();
 
 // ---- 仕様C: eval 実測のルーティング表(routing-table.json)を読み、分類・抽出・要約・返信の各タスクに
 // 「実測で最安の安いAI」を1行出す。計測が無い・provisional でも表があれば参照し、なければ黙る。 ----

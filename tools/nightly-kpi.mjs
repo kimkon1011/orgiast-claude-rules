@@ -29,7 +29,6 @@ export const BATCH_RESULT_PATTERNS = {
   warning: /^warn:/i,
 };
 
-const DAY_MS = 86_400_000;
 const round = (value, digits = 6) => Number.isFinite(value) ? Number(value.toFixed(digits)) : value;
 const normalizeSpace = (text) => String(text ?? '').replace(/\s+/g, ' ').trim();
 
@@ -115,6 +114,11 @@ export function nightlyWindow(date) {
   const end = new Date(year, month - 1, day, 9, 0, 59, 999);
   const start = new Date(year, month - 1, day - 1, 18, 0, 0, 0);
   return { start, end };
+}
+
+export function previousKpiDate(date) {
+  // nightlyWindow(date).start は前日18:00なので、ローカル日付はそのまま前日になる。
+  return localDate(nightlyWindow(date).start);
 }
 
 export function isInNightlyWindow(timestamp, date) {
@@ -213,7 +217,7 @@ export function parseBatchLog(content) {
 }
 
 export function calculateKpi({ date, todoParse, runs, batch, taskInfo = null, pullRequests = { prsCreated: null, prNumbers: [] } }) {
-  const previousDate = localDate(new Date(nightlyWindow(date).start.getTime()));
+  const previousDate = previousKpiDate(date);
   const completed = todoParse.todos.filter((todo) => todo.completed);
   const closedOvernight = completed.filter((todo) => todo.completedDate === date || todo.completedDate === previousDate).length;
   const backlogAtEnd = todoParse.todos.filter((todo) => !todo.completed).length;
@@ -280,7 +284,8 @@ export function improvementTodos(kpi, previous = null) {
     && day.sessions >= 5
   ));
   if (lowPrYieldStreak) todos.push(`P1: 夜間 ${kpi.sessions} セッションに対し PR は ${kpi.prsCreated} 本（成果率 ${pct(kpi.prYieldRate)}）。TODO の粒度と配り方を見直す`);
-  if (kpi.closeRate !== null && previous?.closeRate !== null && previous?.closeRate !== undefined && kpi.closeRate < previous.closeRate && kpi.closeRate < 0.2) todos.push(`P1: 消化率が ${pct(kpi.closeRate)} に低下`);
+  // バッチ未起動・未完走時の消化率低下は上のP0が原因を報告するため、二重起票しない。
+  if (kpi.batchRan && kpi.batchCompleted && kpi.closeRate !== null && previous?.closeRate !== null && previous?.closeRate !== undefined && kpi.closeRate < previous.closeRate && kpi.closeRate < 0.2) todos.push(`P1: 消化率が ${pct(kpi.closeRate)} に低下`);
   return todos;
 }
 
@@ -370,7 +375,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   let batchContent = null;
   try { batchContent = fs.readFileSync(batchFile, 'utf8'); } catch {}
   const outputDir = path.join(claude, 'nightly-kpi');
-  const previousDate = localDate(new Date(nightlyWindow(date).start.getTime() - DAY_MS));
+  const previousDate = previousKpiDate(date);
   let previous = null;
   try { previous = JSON.parse(fs.readFileSync(path.join(outputDir, `${previousDate}.json`), 'utf8')); } catch {}
   let origin = null;

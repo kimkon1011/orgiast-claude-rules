@@ -5,10 +5,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadFablePolicy, fableAllowedForSubagent } from './fable-policy.mjs';
 import { inspectTranscript } from './fable-session-guard.mjs';
+import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 
-let raw = '';
-process.stdin.setEncoding('utf8');
-for await (const chunk of process.stdin) raw += chunk;
+const raw = await readStdinWithTimeout();
 try {
   if (!raw) process.exit(0);
   const input = JSON.parse(raw);

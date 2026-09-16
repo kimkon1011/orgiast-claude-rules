@@ -44,7 +44,7 @@ test('session-relaunch hook は同期で1本だけ登録され、再実行で重
   fs.rmSync(home, { recursive: true, force: true });
 });
 
-test('stop-gate-runner hook は timeout 10 で Stop に登録される', () => {
+test('stop-gate-runner hook は timeout 30 で Stop に登録される', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-report-length-'));
   const repo = path.resolve('.');
   const settingsFile = path.join(home, '.claude', 'settings.json');
@@ -56,7 +56,7 @@ test('stop-gate-runner hook は timeout 10 で Stop に登録される', () => {
   const hooks = settings.hooks.Stop.flatMap((group) => group.hooks || [])
     .filter((hook) => String(hook.command).includes('stop-gate-runner.mjs'));
   assert.equal(hooks.length, 1);
-  assert.equal(hooks[0].timeout, 10);
+  assert.equal(hooks[0].timeout, 30);
   assert.equal('async' in hooks[0], false);
   fs.rmSync(home, { recursive: true, force: true });
 });
@@ -131,4 +131,73 @@ test('lane guard は指定matcher・timeoutで登録される', () => {
   execFileSync(process.execPath,[path.join(repo,'tools','register-hooks.mjs'),'--hooks-only'],{env:{...process.env,ORGIAST_HOME:home,ORGIAST_REPO:repo}});
   const group=JSON.parse(fs.readFileSync(path.join(home,'.claude','settings.json'),'utf8')).hooks.PreToolUse.find((x)=>x.hooks?.some((h)=>h.command.includes('pretooluse-lane-guard')));
   assert.equal(group.matcher,'Bash|PowerShell|Edit|Write|MultiEdit'); assert.equal(group.hooks[0].timeout,5);
+});
+
+test('既存hookの恒久timeoutをイベント・パス表記を問わず収束する', () => {
+  const home=fs.mkdtempSync(path.join(os.tmpdir(),'register-timeouts-')), repo=path.resolve('.');
+  const file=path.join(home,'.claude','settings.json'); fs.mkdirSync(path.dirname(file),{recursive:true});
+  const wanted=[['pretooluse-delegation-warn.mjs',5],['model-agent-guard.mjs',5],['pretooluse-serial-investigation.mjs',5],['current-session.mjs',5],['cost-loop.mjs',5],['rule-compliance-report.mjs',10],['next-actions-notice.mjs',10],['plaud-renewal-notice.mjs',5],['clear-ack.mjs',5],['verify-before-done-detector.ps1',10]];
+  fs.writeFileSync(file,JSON.stringify({hooks:{Stop:wanted.map(([name])=>({hooks:[{type:'command',command:`pwsh -File "C:\\\\Users\\\\uers\\\\.claude\\\\hooks\\\\${name}"`}]}))}}));
+  execFileSync(process.execPath,[path.join(repo,'tools','register-hooks.mjs'),'--hooks-only'],{env:{...process.env,ORGIAST_HOME:home,ORGIAST_REPO:repo}});
+  const hooks=JSON.parse(fs.readFileSync(file,'utf8')).hooks.Stop.flatMap((g)=>g.hooks||[]);
+  for(const [name,timeout] of wanted) assert.equal(hooks.find((h)=>h.command.includes(name)).timeout,timeout,name);
+  fs.rmSync(home,{recursive:true,force:true});
+});
+
+test('guard本体が未同期でもregister-hooksは落ちず、既存hookを保ったまま完走する', () => {
+  // matcher の正本は guard 側にあるが、同期途中のPCでは guard がまだ無いことがある。
+  // 静的に import すると ERR_MODULE_NOT_FOUND で register-hooks 全体が落ち、
+  // hook が1本も登録されない(全hookの停止)。fail-open をここで固定する。
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-failopen-'));
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-repo-'));
+  fs.mkdirSync(path.join(repo, 'tools'), { recursive: true });
+  fs.copyFileSync(path.resolve('tools', 'register-hooks.mjs'), path.join(repo, 'tools', 'register-hooks.mjs'));
+  assert.ok(!fs.existsSync(path.join(repo, 'tools', 'internal-recipient-gmail-guard.mjs')));
+  const settingsFile = path.join(home, '.claude', 'settings.json');
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  const existing = { matcher: 'Bash', hooks: [{ type: 'command', command: 'node existing.mjs' }] };
+  fs.writeFileSync(settingsFile, JSON.stringify({ custom: true, hooks: { PreToolUse: [existing] } }));
+  const stdout = execFileSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo } });
+  assert.equal(typeof stdout, 'string');
+  const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  assert.equal(settings.custom, true);
+  assert.deepEqual(settings.hooks.PreToolUse[0], existing);
+  assert.ok(!settings.hooks.PreToolUse.some((group) => (group.hooks || []).some((hook) => String(hook.command).includes('internal-recipient-gmail-guard'))));
+  fs.rmSync(home, { recursive: true, force: true });
+  fs.rmSync(repo, { recursive: true, force: true });
+});
+
+test('ORGIAST_REPO未指定時はregister-hooks自身のツリーからhookを登録する', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-own-tree-home-'));
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-own-tree-repo-'));
+  fs.mkdirSync(path.join(repo, 'tools'), { recursive: true });
+  for (const name of ['register-hooks.mjs', 'session-relaunch.mjs']) {
+    fs.copyFileSync(path.resolve('tools', name), path.join(repo, 'tools', name));
+  }
+  const env = { ...process.env, ORGIAST_HOME: home };
+  delete env.ORGIAST_REPO;
+  const stdout = execFileSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { encoding: 'utf8', env });
+  const settings = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'));
+  const relaunch = settings.hooks.SessionStart.flatMap((group) => group.hooks || [])
+    .find((hook) => String(hook.command).includes('session-relaunch.mjs'));
+  assert.ok(relaunch);
+  assert.ok(relaunch.command.includes(repo));
+  assert.match(stdout, /\[skip\] hook-budget-check\.mjs/);
+  fs.rmSync(home, { recursive: true, force: true });
+  fs.rmSync(repo, { recursive: true, force: true });
+});
+
+test('hook実ファイルのskipがある時は注意を出し変更なしと正常表示しない', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-skip-home-'));
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-skip-repo-'));
+  fs.mkdirSync(path.join(repo, 'tools'), { recursive: true });
+  fs.copyFileSync(path.resolve('tools', 'register-hooks.mjs'), path.join(repo, 'tools', 'register-hooks.mjs'));
+  const env = { ...process.env, ORGIAST_HOME: home };
+  delete env.ORGIAST_REPO;
+  const stdout = execFileSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { encoding: 'utf8', env });
+  assert.match(stdout, /\[注意\]/);
+  assert.doesNotMatch(stdout, /hook は既に登録済み\(変更なし\)/);
+  assert.ok((stdout.match(/\[skip\]/g) || []).length >= 5);
+  fs.rmSync(home, { recursive: true, force: true });
+  fs.rmSync(repo, { recursive: true, force: true });
 });

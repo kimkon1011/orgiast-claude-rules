@@ -137,7 +137,7 @@ const parsedUsdJpy = Number(process.env.ORGIAST_USDJPY);
 const geminiMonth = summarizeGeminiMonth(ledgerRows, { usdJpy: Number.isFinite(parsedUsdJpy) && parsedUsdJpy > 0 ? parsedUsdJpy : 150 });
 flags.push(...geminiMonth.flags);
 // 日次ループのたびにschedule実績を更新する。gh未導入・認証失敗・cron停止でも本体は継続する。
-spawnSync(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta.url)), 'cron-liveness-check.mjs')], {
+spawnSync(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta.url)), 'cron-liveness-check.mjs')], { windowsHide: true,
   env: { ...process.env, ORGIAST_HOME: HOME }, stdio: 'ignore',
 });
 const cronLivenessFile = path.join(HOME, '.claude', 'cron-liveness.json');
@@ -198,28 +198,30 @@ const blockSourceLine = formatBlockSource(claudeStats.blocks);
 const headlessJobsLine = Object.entries(claudeStats.headlessJobs || {}).sort((a, b) => b[1] - a[1]).map(([name, out]) => `${name} ${(out / 1000).toFixed(0)}k`).join(' / ') || '内訳なし';
 const health = collectProviderHealth({ home: HOME, days: DAYS });
 const healthLines = Object.entries(health.providers).sort((a, b) => b[1].calls - a[1].calls).map(([name, value]) => `- ${value.cooldown ? '🔒' : value.failRate >= 0.2 ? '⚠️' : '✅'} ${name}: ${value.calls} calls / fail ${value.fail} (${(value.failRate * 100).toFixed(1)}%) / 429 ${value.http429} / 413 ${value.http413} / 平均 ${value.averageSeconds.toFixed(1)}秒 / failover救済 ${value.rescuedByFailover}${value.cooldown ? ` / cooldown ${value.cooldown.reason}` : ''}`);
-// 定額レーン(codex / glm)の cooldown と 24h の usage-limit 到達回数(仕様C2b)。
+// 定額レーン(codex / codex-astra / glm)の cooldown と 24h の usage-limit 到達回数(仕様C2b)。
+let astraLimit24h = 0;
 const laneHealthLines = (() => {
   const claudeDir = path.join(HOME, '.claude');
   const nowMs = Date.now();
   const readCooldown = () => { try { return JSON.parse(fs.readFileSync(path.join(claudeDir, 'provider-cooldown.json'), 'utf8')); } catch { return {}; } };
   const cooldowns = readCooldown();
   const laneLines = [];
-  for (const lane of ['codex', 'glm']) {
+  for (const lane of ['codex', 'codex-astra', 'glm']) {
     const state = cooldowns?.[lane];
     const until = Number(state?.until);
     laneLines.push(state && Number.isFinite(until) && until > nowMs
       ? `- 🔒 ${lane}: usage_limit cooldown 残り${Math.max(1, Math.ceil((until - nowMs) / 3600000))}h${state.reason ? ` (${state.reason})` : ''}`
       : `- ✅ ${lane}: cooldown なし`);
   }
-  const countHits = (file, providerFilter) => { try { let n = 0; const cutoff = nowMs - 86400000; for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) { if (!line.trim()) continue; try { const r = JSON.parse(line); if (providerFilter && String(r.provider || '').toLowerCase() !== providerFilter) continue; const t = Date.parse(r.t || ''); if (Number.isFinite(t) && t >= cutoff && t <= nowMs) n++; } catch {} } return n; } catch { return 0; } };
+  const countHits = (file, providerFilter, modelFilter) => { try { let n = 0; const cutoff = nowMs - 86400000; for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) { if (!line.trim()) continue; try { const r = JSON.parse(line); if (providerFilter && String(r.provider || '').toLowerCase() !== providerFilter) continue; if (modelFilter && r.model !== modelFilter) continue; const t = Date.parse(r.t || ''); if (Number.isFinite(t) && t >= cutoff && t <= nowMs) n++; } catch {} } return n; } catch { return 0; } };
+  astraLimit24h = countHits(path.join(claudeDir, 'codex-limit-history.jsonl'), null, 'gpt-6-astra');
   const codex24h = countHits(path.join(claudeDir, 'codex-limit-history.jsonl'), null);
   const glm24h = countHits(path.join(claudeDir, 'provider-limit-history.jsonl'), 'glm');
   laneLines.push(`- codex: 24h usage-limit 到達 ${codex24h}回`);
   laneLines.push(`- glm: 24h usage-limit 到達 ${glm24h}回`);
   return laneLines;
 })();
-function runJsonTool(name) { try { const result = spawnSync(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta.url)), name), '--json'], { env: { ...process.env, ORGIAST_HOME: HOME }, encoding: 'utf8', timeout: 30000 }); return result.status === 0 ? JSON.parse(result.stdout) : null; } catch { return null; } }
+function runJsonTool(name) { try { const result = spawnSync(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta.url)), name), '--json'], { windowsHide: true, env: { ...process.env, ORGIAST_HOME: HOME }, encoding: 'utf8', timeout: 30000 }); return result.status === 0 ? JSON.parse(result.stdout) : null; } catch { return null; } }
 const planUsage = runJsonTool('claude-plan-usage.mjs');
 const budgetStatus = runJsonTool('budget-status.mjs');
 const planLine = planUsage?.available ? `Claudeプラン上限: 5h ${planUsage.fiveHour.utilization.toFixed(1)}% / 7日 ${planUsage.sevenDay.utilization.toFixed(1)}%${planUsage.sevenDay.utilization >= 80 ? ' ⚠️ 上限超過→従量課金の手前。監督の応答回数を減らし、実装/調査を Codex・Gemini へ' : ''}` : `Claudeプラン上限: 計測不能(${planUsage?.reason || '実行失敗'})`;
@@ -249,6 +251,7 @@ const md = `<!-- COST-DIRECTIVE-START -->
 - Gemini 従量: 検索 ${geminiMonth.searches.toLocaleString('ja-JP')}回 / 無料枠5,000（残り ${geminiMonth.remainingFree.toLocaleString('ja-JP')}回） / トークン実費 $${geminiMonth.tokenUsd.toFixed(2)}（≒¥${Math.round(geminiMonth.tokenUsd * geminiMonth.usdJpy).toLocaleString('ja-JP')}） / 検索超過 $${geminiMonth.searchUsd.toFixed(2)} / 月上限¥20,000 に対し ${geminiMonth.limitPercent.toFixed(1)}%（$1=¥${geminiMonth.usdJpy}）
 - Gemini MCP 経由分は未計測（gemini-mcp-tool の ask-gemini は台帳対象外のため、この金額は過小評価）
 - Codex(定額枠・実装の主経路): **out ${codexOut.toLocaleString('ja-JP')} tok** / ${codexSessions}セッション ※従量課金なし
+- Codex 内訳: astra ${codexUsage.byModel['gpt-6-astra']?.sessions || 0}セッション/${((codexUsage.byModel['gpt-6-astra']?.outputTokens || 0) / 1000).toFixed(1)}k tok ／ sol ${codexUsage.byModel['gpt-5.6-sol']?.sessions || 0}セッション/${((codexUsage.byModel['gpt-5.6-sol']?.outputTokens || 0) / 1000).toFixed(1)}k tok ／ astra 上限到達(24h) ${astraLimit24h}回
 - 作業量(${workKind}): ${work} / **作業あたり 出力 ${(outPerWork / 1000).toFixed(0)}k tok**
 - 委譲率(Claude以外へ): **${(nonClaudeDelegRatio * 100).toFixed(1)}%**
 - Claude内の格下げ(節約): **${(delegation.claudeDowngradeRatio * 100).toFixed(1)}%** (Sonnet/Haiku)

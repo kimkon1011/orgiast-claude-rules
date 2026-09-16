@@ -157,6 +157,74 @@ function statusForHome(home) {
   return collectStatus({ home, repo: process.cwd(), label: 'PC', hostname: 'host', run, platform: 'linux' });
 }
 
+function fixtureJwt(payload) {
+  return `${Buffer.from(JSON.stringify({ alg: 'none' })).toString('base64url')}.${Buffer.from(JSON.stringify(payload)).toString('base64url')}.dummy-signature`;
+}
+
+function writeCodexAuth(home, auth) {
+  fs.mkdirSync(path.join(home, '.codex'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.codex', 'auth.json'), JSON.stringify(auth));
+}
+
+test('status は Codex の id_token から email と入れ子のプランだけを取得しトークンを漏らさない', () => {
+  const home = tempHome();
+  const email = 'codex@example.com';
+  const token = fixtureJwt({ email, 'https://api.openai.com/auth': { chatgpt_plan_type: 'prolite' }, chatgpt_plan_type: 'wrong' });
+  const accessToken = fixtureJwt({ email: 'other@example.com' });
+  writeCodexAuth(home, { tokens: { id_token: token, access_token: accessToken } });
+  const status = statusForHome(home);
+  assert.match(status.text, /codex=.*@.* \/ plan=prolite/);
+  assert.deepEqual(status.data.codex, { login: true, email, plan: 'prolite' });
+  assert.match(status.text.split('\n')[1], /^hostname=/);
+  assert.equal(status.text.split('\n')[2], `codex=${email} / plan=prolite`);
+  for (const secret of [token, accessToken]) {
+    const pattern = new RegExp(secret.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    assert.doesNotMatch(status.text, pattern);
+    assert.doesNotMatch(JSON.stringify(status.data), pattern);
+  }
+});
+
+test('status は Codex 認証ファイル無しなら未ログイン', () => {
+  const status = statusForHome(tempHome());
+  assert.match(status.text, /codex=未ログイン/);
+  assert.deepEqual(status.data.codex, { login: false, email: null, plan: null });
+});
+
+test('status は Codex の空トークン・tokens欠落・壊れたJSONなら未ログイン', () => {
+  for (const auth of [{ tokens: {} }, { tokens: { id_token: '', access_token: '' } }, {}, null]) {
+    const home = tempHome();
+    writeCodexAuth(home, auth);
+    const status = statusForHome(home);
+    assert.match(status.text, /codex=未ログイン/);
+    assert.deepEqual(status.data.codex, { login: false, email: null, plan: null });
+  }
+  const home = tempHome();
+  writeCodexAuth(home, {});
+  fs.writeFileSync(path.join(home, '.codex', 'auth.json'), '{broken');
+  assert.deepEqual(statusForHome(home).data.codex, { login: false, email: null, plan: null });
+});
+
+test('status は access_token と profile email にフォールバックしフラットなプランを使わない', () => {
+  const home = tempHome();
+  writeCodexAuth(home, { tokens: { id_token: '', access_token: fixtureJwt({
+    'https://api.openai.com/profile': { email: 'fallback@example.com' }, chatgpt_plan_type: 'wrong',
+  }) } });
+  const status = statusForHome(home);
+  assert.deepEqual(status.data.codex, { login: true, email: 'fallback@example.com', plan: null });
+  assert.match(status.text, /codex=fallback@example.com \/ plan=不明/);
+});
+
+test('status は Codex JWT デコード失敗や email 欠落でもログイン済を維持する', () => {
+  for (const token of ['invalid-jwt', fixtureJwt({}), fixtureJwt({ 'https://api.openai.com/auth': { chatgpt_plan_type: 'prolite' } })]) {
+    const home = tempHome();
+    writeCodexAuth(home, { tokens: { id_token: token } });
+    const status = statusForHome(home);
+    assert.match(status.text, /codex=ログイン済\(詳細不明\)/);
+    assert.equal(status.data.codex.login, true);
+    assert.equal(status.data.codex.email, null);
+  }
+});
+
 test('status は共有memoryの件数とMEMORY.md参照有無を表示する(届いている)', () => {
   const home = memoryHome({ shared: ['a.md', 'b.md', 'c.md'], indexed: true });
   const result = statusForHome(home);
@@ -180,6 +248,7 @@ test('status はmemoryディレクトリ自体が無いと memory=なし を表�
 
 test('status はmemory行を追加しても大量の夜間ジョブ失敗込みで1800字以内に収まる(予算回帰)', () => {
   const home = memoryHome({ shared: Array.from({ length: 250 }, (_, index) => `shared-${index}.md`), indexed: true });
+  writeCodexAuth(home, { tokens: { id_token: fixtureJwt({ email: 'codex@example.com', 'https://api.openai.com/auth': { chatgpt_plan_type: 'prolite' } }) } });
   fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'kim@orgiast.jp' } }));
   const tasks = Array.from({ length: 200 }, (_, index) => ({ name: `ClaudeFailure${String(index).padStart(3, '0')}`, result: 1 }));
   const run = (program, args) => {
@@ -191,6 +260,7 @@ test('status はmemory行を追加しても大量の夜間ジョブ失敗込み�
   const result = collectStatus({ home, repo: process.cwd(), label: 'kim-PC', hostname: 'DESKTOP-2D0R4LI', run, platform: 'win32' });
   assert.ok(result.text.length <= 1800, `length=${result.text.length}`);
   assert.match(result.text, /memory=共有250件 \/ MEMORY\.md参照=yes/);
+  assert.match(result.text, /codex=codex@example.com \/ plan=prolite/);
   assert.match(result.text, /…\(他\d+件を省略\)/);
 });
 

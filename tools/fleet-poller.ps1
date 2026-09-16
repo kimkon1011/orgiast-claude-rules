@@ -40,6 +40,29 @@ try {
   } catch {}
 }
 
+# 自己修復: 熱監視(5分ごと)を全PCで登録する。読み取り専用の監視でCPU設定は変更しないため自動導入してよい。
+# 中央キューは task が1枠しかなく、入れ忘れると後続が無言で止まる。実際 thermal-guard は
+# 2026-09-01〜09-14 の13日間キューに載らず、全PCで未導入のままだった(#200/#327)。
+# キューに依存せず毎日ここで自己修復させることで、枠の取り合いと入れ忘れから切り離す。
+# CPU電力上限を変える power-save は挙動が変わるため自動化せず、キュー経由のままにする。
+try {
+  if ($repo -and -not (Get-ScheduledTask -TaskName 'OrgiastThermalGuard' -ErrorAction SilentlyContinue)) {
+    $thermalGuard = Join-Path $repo 'tools\thermal-guard.ps1'
+    if (Test-Path $thermalGuard) {
+      & powershell -NoProfile -ExecutionPolicy Bypass -File $thermalGuard -Install *> $null
+      if ($LASTEXITCODE -ne 0) { throw "thermal-guard.ps1 -Install exit $LASTEXITCODE" }
+    }
+  }
+} catch {
+  try {
+    $fleetLogDir = Join-Path $H '.claude\logs'
+    if (-not (Test-Path -LiteralPath $fleetLogDir)) { New-Item -ItemType Directory -Path $fleetLogDir -Force | Out-Null }
+    $fleetLog = Join-Path $fleetLogDir 'fleet-poller.log'
+    $line = '{0} WARN thermal-guard-self-repair-failed reason={1}' -f (Get-Date).ToString('yyyy-MM-ddTHH:mm:ssK'), ($_.Exception.Message -replace "[\r\n]+", ' ')
+    [IO.File]::AppendAllText($fleetLog, $line + [Environment]::NewLine, (New-Object Text.UTF8Encoding($false)))
+  } catch {}
+}
+
 # 自己修復: 設定ファイルの先頭BOMを除去(BOM付きだとClaude Code/nodeがJSON.parse・env読取に失敗して起動不能になるため。schtask実行なのでClaude Codeが壊れていても直せる)
 foreach ($bf in @("$H\.claude\settings.json", "$H\.claude.json", "$H\.gemini\.env", "$H\.claude\cost-reporter.env", "$H\.claude\manus.env", "$H\.claude\deepseek.env", "$H\.claude\xai.env", "$H\.claude\openrouter.env", "$H\.claude\groq.env", "$H\.claude\mistral.env", "$H\.claude\ollama.env")) {
   try { if (Test-Path $bf) { $bc = [System.IO.File]::ReadAllText($bf); if ($bc.Length -gt 0 -and $bc[0] -eq [char]0xFEFF) { [System.IO.File]::WriteAllText($bf, $bc.TrimStart([char]0xFEFF), (New-Object System.Text.UTF8Encoding($false))) } } } catch {}
@@ -82,7 +105,13 @@ if ($dueDaily -and $repo) {
     Post "$emoji **[$label]** 日次設定チェック: OK $ok / NG $ng$tail"
     # --specs を必ず付ける。付けないとハードウェアスペックを一度も送らず、
     # PC管理表 が「手で叩いた1台」だけの状態から永久に増えない(2026-08-28 実測)。
-    try { & node (Join-Path $repo 'tools\fleet-sheet-report.mjs') '--specs' '--cloud' *> $null } catch {}
+    try {
+      $fleetLogDir = Join-Path $H '.claude\logs'; New-Item -ItemType Directory -Path $fleetLogDir -Force | Out-Null
+      $fleetLog = Join-Path $fleetLogDir 'fleet-poller.log'
+      $stamp = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ssK')
+      & node (Join-Path $repo 'tools\fleet-sheet-report.mjs') '--specs' '--cloud' 2>&1 | ForEach-Object { Add-Content -LiteralPath $fleetLog -Value "$stamp $_" -Encoding UTF8 }
+      if ($LASTEXITCODE -ne 0) { Add-Content -LiteralPath $fleetLog -Value "$stamp WARN fleet-sheet-report exit=$LASTEXITCODE" -Encoding UTF8 }
+    } catch {}
   }
   # 熱の日次サマリ。thermal-guard が未導入(=サンプルが無い)なら何も送らないので、
   # 導入済みのPCだけが1日1回 直近24hの要約を返す。

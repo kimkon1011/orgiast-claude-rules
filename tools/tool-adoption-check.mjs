@@ -17,6 +17,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execSync, execFileSync, spawn } from 'node:child_process';
+import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
 import { parseEnvText } from './env-kv.mjs';
 import { codexSessionDirs } from './cost-work-loop.mjs';
 import { checkVersionDrift, formatDriftLine } from './version-drift.mjs';
@@ -72,14 +73,14 @@ function failureReason(error) {
 function cmdProbe(cmd, timeout = LOCAL_TIMEOUT_MS) {
   const remaining = remainingMs();
   if (remaining <= 0) { deadlineSkipped = true; return { ok: false, stdout: '', reason: 'deadline' }; }
-  try { return { ok: true, stdout: execSync(cmd, { stdio: ['ignore', 'pipe', 'pipe'], timeout: Math.max(1, Math.min(timeout, remaining)) }).toString().trim(), reason: 'ok' }; }
+  try { return { ok: true, stdout: execSync(cmd, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], timeout: Math.max(1, Math.min(timeout, remaining)) }).toString().trim(), reason: 'ok' }; }
   catch (error) { return { ok: false, stdout: '', reason: failureReason(error) }; }
 }
 function wslDistros() {
   if (process.platform !== 'win32') return [];
   const remaining = remainingMs();
   if (remaining <= 0) { deadlineSkipped = true; return []; }
-  try { return execSync('wsl.exe -l -q', { stdio: ['ignore', 'pipe', 'ignore'], timeout: Math.max(1, Math.min(WSL_TIMEOUT_MS, remaining)) }).toString('utf16le').split(/\r?\n/).map((s) => s.replace(/\0/g, '').trim()).filter(Boolean); } catch { return []; }
+  try { return execSync('wsl.exe -l -q', { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], timeout: Math.max(1, Math.min(WSL_TIMEOUT_MS, remaining)) }).toString('utf16le').split(/\r?\n/).map((s) => s.replace(/\0/g, '').trim()).filter(Boolean); } catch { return []; }
 }
 function preferredDistro() { const all = wslDistros(); return all.find((x) => x.toLowerCase() === 'ubuntu') || all[0] || ''; }
 // wsl -d に引用符付きで渡すと cmd.exe 経由で壊れて必ず失敗する(実測)。shellを介さず配列で渡す。
@@ -89,7 +90,7 @@ function wslRun(distro, argv) {
   for (const args of tries) {
     const remaining = remainingMs();
     if (remaining <= 0) { deadlineSkipped = true; return { ok: false, stdout: '', reason: 'deadline' }; }
-    try { return { ok: true, stdout: execFileSync('wsl.exe', args, { stdio: ['ignore', 'pipe', 'pipe'], timeout: Math.max(1, Math.min(WSL_TIMEOUT_MS, remaining)) }).toString().trim(), reason: 'ok' }; }
+    try { return { ok: true, stdout: execFileSync('wsl.exe', args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], timeout: Math.max(1, Math.min(WSL_TIMEOUT_MS, remaining)) }).toString().trim(), reason: 'ok' }; }
     catch (error) { lastReason = failureReason(error); if (lastReason === 'timeout') break; }
   }
   return { ok: false, stdout: '', reason: lastReason };
@@ -135,7 +136,7 @@ function startCodexInstall(target, distro = '', packageName = '@openai/codex') {
   const command = override || (distro ? 'wsl.exe' : 'npm');
   const args = override ? [] : (distro ? ['-d', distro, '--', 'npm', 'i', '-g', packageName] : ['i', '-g', packageName]);
   try {
-    const child = spawn(command, args, { detached: true, shell: !!override, stdio: ['ignore', logFd, logFd] });
+    const child = spawn(command, args, { ...backgroundSpawnOptions(), shell: !!override, stdio: ['ignore', logFd, logFd] });
     child.unref();
     return true;
   } catch {

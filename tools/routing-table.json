@@ -1,13 +1,13 @@
 {
-  "builtAt": "2026-09-06T16:55:19.880Z",
+  "builtAt": "2026-09-09T21:12:16.067Z",
   "categories": {
     "classification": {
-      "provider": "gemini",
-      "model": "gemini-3.7-flash",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
       "rate": 1,
-      "usdPerTask": 0.0000057,
-      "msAvg": 6497,
-      "measuredAt": "2026-08-27T07:54:28.704Z",
+      "usdPerTask": 0.00002112,
+      "msAvg": 990,
+      "measuredAt": "2026-09-09T21:11:19.631Z",
       "samples": 2
     },
     "extraction": {
@@ -15,35 +15,35 @@
       "model": "deepseek-chat",
       "rate": 1,
       "usdPerTask": 0.00005124,
-      "msAvg": 1130,
-      "measuredAt": "2026-08-27T08:12:24.315Z",
+      "msAvg": 990,
+      "measuredAt": "2026-09-09T21:11:19.631Z",
       "samples": 2
     },
     "summarize": {
-      "provider": "groq",
-      "model": "openai/gpt-oss-120b",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
       "rate": 1,
-      "usdPerTask": 0.0001098,
-      "msAvg": 476,
-      "measuredAt": "2026-08-27T08:07:34.695Z",
+      "usdPerTask": 0.00013285,
+      "msAvg": 990,
+      "measuredAt": "2026-09-09T21:11:19.631Z",
       "samples": 2
     },
     "jp_reply": {
-      "provider": "groq",
-      "model": "openai/gpt-oss-120b",
+      "provider": "openrouter",
+      "model": "meta-llama/llama-3.3-70b-instruct",
       "rate": 1,
-      "usdPerTask": 0.0001047,
-      "msAvg": 476,
-      "measuredAt": "2026-08-27T08:07:34.695Z",
+      "usdPerTask": 0.00010272,
+      "msAvg": 2078,
+      "measuredAt": "2026-09-09T21:10:01.091Z",
       "samples": 2
     },
     "code": {
-      "provider": "groq",
-      "model": "openai/gpt-oss-120b",
+      "provider": "openrouter",
+      "model": "meta-llama/llama-3.3-70b-instruct",
       "rate": 1,
-      "usdPerTask": 0.0000915,
-      "msAvg": 476,
-      "measuredAt": "2026-08-27T08:07:34.695Z",
+      "usdPerTask": 0.00010217,
+      "msAvg": 2078,
+      "measuredAt": "2026-09-09T21:10:01.091Z",
       "samples": 2
     }
   }

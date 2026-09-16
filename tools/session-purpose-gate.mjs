@@ -2,10 +2,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 
-let raw = '';
-process.stdin.setEncoding('utf8');
-for await (const chunk of process.stdin) raw += chunk;
+const raw = await readStdinWithTimeout();
 
 const stopWords = new Set(['して', 'する', 'します', 'ください', 'お願い', 'それ', 'これ', 'あの', 'the', 'and', 'for', 'with', 'this', 'that']);
 // ASCII 語は単語境界で判定する(/OK/i が "hook" に誤マッチして継続扱いになるのを防ぐ)。

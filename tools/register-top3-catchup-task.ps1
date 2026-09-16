@@ -18,9 +18,10 @@ if ($Unregister) {
 
 # 稼働中の他タスク(OrgiastMorningBatch 等)と同じく ~/.claude/tools 配下の bootstrap を起点にする。
 # リポ内の bootstrap は起動後に自己更新でコピーされるため、ここでは設置先を見る。
+. (Join-Path $PSScriptRoot 'resolve-synced-repo.ps1')
 $bootstrap = Join-Path $HOME '.claude\tools\nightly-bootstrap.ps1'
 if (-not (Test-Path -LiteralPath $bootstrap -PathType Leaf)) {
-  $bootstrap = Join-Path $PSScriptRoot 'nightly-bootstrap.ps1'
+  $bootstrap = Join-Path (Resolve-RegisterToolsDir -Fallback $PSScriptRoot -RequiredLeaves @('nightly-bootstrap.ps1')) 'nightly-bootstrap.ps1'
 }
 if (-not (Test-Path -LiteralPath $bootstrap -PathType Leaf)) { throw "nightly-bootstrap.ps1 not found: $bootstrap" }
 $bootstrap = (Resolve-Path -LiteralPath $bootstrap).Path

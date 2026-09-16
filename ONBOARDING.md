@@ -42,6 +42,10 @@ API/CLI/MCP/GitHub Actions で実行可能な操作は、手順案内せず Clau
 
 **依頼前の必須5ステップ**（順序厳守）: ①API/CLI/MCPで可能か調査 → ②CLIが無ければ自分でinstall(winget/scoop/npm) → ③認証だけ1回user依頼 → ④それでも無理なら初めて手作業依頼(直URL+完了判定つき) → ⑤手作業に頼った場合は次回に活かす学びをmemoryへ。詳細・過去事例: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/automation-first-checklist.md`
 
+**🔴 Claude 側ログの不在は、外部システムの不在の証拠ではない（kim 2026-09-10 厳命・絶対）**: 外部システム（Google / Vercel / GitHub 等のアカウント内のプロパティ・権限・設定・レコード）の有無を答えるときの証拠は、**そのシステムを直接照会した tool 結果だけ**（vendor MCP / DWD SA での API / 公式 CLI）。過去 transcript や memory の Grep は「Claude が行った操作」しか含まず、人が Web UI で作ったものは一切残らないので証拠にならない。直接照会できていないなら「存在しない可能性が高い」「痕跡がない」等の確率表現を一切使わず **「未確認」** と書き、「画面を開いて有るか無いか教えて」と user に検証を投げない（user の作業なしで進められる代替案を先に出す）。実害: TETSUKO の Search Console を「存在しない可能性が高い」と暫定回答し、kim がスクショで反証（2026-09-10）。Stop hook `external-state-claim-gate` がヘッジ付きの否定断定と検証の外注を block する。
+
+**🔴 内部宛メッセージはチャットに表示、Gmail 下書きは外部宛だけ（kim 2026-09-11 厳命・絶対）**: 社内・グループ会社（東邦鋼業 genbateam.toho@gmail.com、Reブース、NEXTForward）・スタッフ宛の連絡文は **Gmail の下書きも送信も作らない**。kim の内部連絡はリモートデスクトップ／LINE／Discord で、Gmail を見に行かせるのは余計な1操作になる。チャット本文に「宛先／用件／本文」をそのままコピペできる完成形で表示する。**Gmail 下書きは顧客・取引先・外部の人宛だけ有効**（その場合もチャットに本文を併記し、下書きの件名を1行で示す）。内部宛の判定は orgiast.jp / toho-kogyo.com ドメインとスタッフ個人 Gmail の台帳 `~/.claude/internal-recipients.json`（既定は `tools/internal-recipients.default.json`）。PreToolUse hook `internal-recipient-gmail-guard` が Gmail create_draft / send_message の宛先を照合して block する。
+
 **🔂 手作業を頼むなら「二度と発生しない状態」までを同じ依頼に含める（2026-08-26 kim厳命・絶対）**
 「今回だけ手でお願いします」で済ませ、**恒久化を後から提案するのは違反**（その時点で余計な1回を取らせている）。kim の指摘: 「**ユーザーの手間を掛けさせないということを甘く見すぎ**」。
 
@@ -525,6 +529,8 @@ kim「**ほかのアカウントでまた同じ試行錯誤が発生している
 
 ##### 🔴 keyserve に手を入れる前に必ず読む: git は本番より古い（2026-09-02 実測）
 
+legacy 秘密を削除する前に、必ず `node tools/keyserve-rotation-gate.mjs` を通す。
+
 | 観測 | 値 |
 |---|---|
 | `orgiast-keyserve` の git コミット数 | **1本**（`ebbb543` のみ） |
@@ -584,6 +590,17 @@ PCがあればその瞬間に 401 で締め出され、鍵配布が全滅する�
 ### 1.17.1 費用対効果ファースト — 追加費用ゼロの経路を先に必ず検討する（絶対ルール）
 
 従量課金トークンを使う前に必ず: ①定額枠内・トークン消費ゼロの代替があるか（ローカルスクリプト/既存自動化/Codex/Manus） ②「ツール未導入だから従量経路で」は理由にならない（自分でinstall） ③従量課金しか無ければモデル最小化（分類=Haiku、量産=Sonnet、Opusは品質差実測時のみ） ④大量トークン消費が見込まれる判断は着手前に費用見込みを1行提示。優先順位: 既存自動化・ローカルスクリプト（消費ゼロ）→Codex（コード・定額）／Manus（Web調査・エンリッチ・専用枠）→Haiku→Sonnet→Opus5（要正当化）。Fable は監督用のみ（§1.16）で、実装・量産・分類には使わない。詳細・過去事例: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/token-model-cost-routing.md`
+
+### 1.17.2 GPT-6 Astra レーン
+
+通常実装は Sol (`gpt-5.6-sol`) が既定。長時間・高難度・Sol 失敗時の昇格には Astra (`gpt-6-astra`) を使う。
+Astra の上限到達時は同じ指示を Sol で1回再実行し、Sol も上限なら従来の cheap-code 等へフォールバックする。
+`node tools/codex-do.mjs --prompt-file task.md --lane auto`（既定）。`--lane sol` / `--lane astra` で固定できる。
+`--model astra` / `--model sol` / `--model <slug>` はレーン指定より優先する。
+`--effort low|medium|high|xhigh|max` で推論量を指定（Astra は既定 high、Sol は Codex 既定）。
+指示ファイルの先頭40行に `<!-- lane: astra -->` を書いても Astra 指定になる（Sol は `<!-- lane: sol -->`）。
+auto はレビューを Sol に、2700秒以上または長時間性キーワード2種以上を Astra に振り分ける。失敗時の昇格は `--no-escalate` で停止。
+Astra クールダウン中は Sol を使う。明示の `--model astra`（または完全 slug）だけは再試行できる。
 
 ### 1.18 監督(Opus)は最小限だけ動き、実働はCodex/Sonnet/Geminiに委譲する
 

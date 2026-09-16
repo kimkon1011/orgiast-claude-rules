@@ -23,6 +23,10 @@ jobs:
       - name: selftest-guards (Windows)
         run: node tools/selftest-guards.mjs
 
+      - name: keyserve enrollment installer (mock network, real ACL)
+        shell: powershell
+        run: .\tools\keyserve-enroll-installer.test.ps1
+
       # 配布する .ps1 の構文/文字コード検査。
       # shell: powershell = Windows PowerShell 5.1 で走らせる(既定の pwsh=PS7 ではない)。
       # PS7 は BOM なし UTF-8 を正しく読むため、日本語 .ps1 の BOM 欠落を検出できない。

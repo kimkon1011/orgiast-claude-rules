@@ -102,3 +102,87 @@ test('実書き込み経路でもマーカー外の既存本文を保持する',
   await runNextActions({ home: root, now: NOW, execImpl: gh(), llm: good, log() {} });
   const actual = fs.readFileSync(file, 'utf8'); assert.match(actual, /^利用者の前文/); assert.match(actual, /利用者の後文\n$/); assert.doesNotMatch(actual, /旧自動節/);
 });
+
+function ghPrStates(prs, states, views) {
+  return (file, args, opts, cb) => {
+    assert.equal(file, 'gh');
+    assert.equal(opts.encoding, 'utf8');
+    if (args[0] === 'pr' && args[1] === 'list') return cb(null, JSON.stringify(prs));
+    assert.deepEqual(args, ['pr', 'view', args[2], '--repo', 'kimkon1011/orgiast-claude-rules', '--json', 'number,state']);
+    const number = Number(args[2]);
+    views.push(number);
+    assert.ok(Object.hasOwn(states, number), `想定外のPR照会: ${number}`);
+    const state = states[number];
+    if (state instanceof Error) return cb(state);
+    cb(null, JSON.stringify({ number, state }));
+  };
+}
+function llmActions(actions) { return async () => ({ text: JSON.stringify({ actions }) }); }
+function action(title, source) { return { title, why: '確認が必要', first_step: '詳細を確認する', source }; }
+
+test('MERGEDのPRを参照するLLMアクションは除外される', async () => {
+  const views = [], logs = [];
+  const todo = action('作業 #5 を確認', 'TODO');
+  const result = await runNextActions({
+    home: home(), now: NOW, execImpl: ghPrStates([{ number: 12 }], { 297: 'MERGED' }, views),
+    llm: llmActions([action('マージを確認', 'PR#297'), todo]), log: (line) => logs.push(line)
+  });
+  assert.deepEqual(result.actions, [todo]);
+  assert.doesNotMatch(result.body, /297/);
+  assert.doesNotMatch(fs.readFileSync(result.outputFile, 'utf8'), /297/);
+  assert.deepEqual(views, [297]);
+  assert.equal(logs.filter((line) => line === 'next-actions: PR#297 はMERGEDのため除外').length, 1);
+});
+
+test('open一覧にいるPRは再照会しない', async () => {
+  const views = [], candidate = action('PR#12 を確認', 'PR#12');
+  const result = await runNextActions({
+    home: home(), now: NOW, execImpl: ghPrStates([{ number: 12 }], {}, views),
+    llm: llmActions([candidate]), args: ['--dry-run'], log() {}
+  });
+  assert.deepEqual(result.actions, [candidate]);
+  assert.equal(views.length, 0);
+});
+
+test('pr viewが失敗したら除外せず同じPRのエラーもキャッシュする', async () => {
+  const views = [], candidates = [action('PR297 を確認', 'PR#297'), action('関連作業', 'PR #297')];
+  const result = await runNextActions({
+    home: home(), now: NOW, execImpl: ghPrStates([], { 297: new Error('gh unavailable') }, views),
+    llm: llmActions(candidates), args: ['--dry-run'], log() {}
+  });
+  assert.deepEqual(result.actions, candidates);
+  assert.deepEqual(views, [297]);
+});
+
+test('フォールバックのTODO由来も同じフィルタが効く', async () => {
+  const root = home(), views = [], logs = [];
+  put(root, 'next-session.md', '- Review & merge PR #297 (stop alarms)\n- 継続TODOを確認');
+  const result = await runNextActions({
+    home: root, now: NOW, execImpl: ghPrStates([{ number: 12, title: '未処理PR' }], { 297: 'CLOSED' }, views),
+    llm: async () => { throw new Error('LLM unavailable'); }, log: (line) => logs.push(line), error() {}
+  });
+  assert.equal(result.provider, 'fallback');
+  assert.equal(result.actions.length, 2);
+  assert.deepEqual(result.actions.map((a) => a.source), ['PR#12', 'TODO']);
+  assert.match(result.body, /継続TODOを確認/);
+  assert.doesNotMatch(result.body, /297/);
+  assert.deepEqual(views, [297]);
+  assert.ok(logs.includes('next-actions: PR#297 はCLOSEDのため除外'));
+});
+
+test('全滅したら既定アクション1件を出す', async () => {
+  const views = [];
+  const result = await runNextActions({
+    home: home(), now: NOW, execImpl: ghPrStates([], { 297: 'MERGED' }, views),
+    llm: llmActions([action('PRを処理', 'PR#297')]), log() {}
+  });
+  assert.equal(result.actions.length, 1);
+  assert.deepEqual(result.actions[0], {
+    title: '新しい依頼と未処理事項を確認',
+    why: '候補が処理済みだったため（LLM未使用・機械選択）',
+    first_step: 'PR一覧と next-session.md を確認する',
+    source: 'TODO'
+  });
+  assert.match(fs.readFileSync(result.outputFile, 'utf8'), /新しい依頼と未処理事項を確認/);
+  assert.deepEqual(views, [297]);
+});

@@ -1,14 +1,16 @@
 {
-  "runId": "register-fleet-agent-2026-09-02",
-  "task": "register-fleet-agent",
+  "runId": "thermal-guard-rollout-2026-09-14",
+  "task": "thermal-guard",
   "targets": "all",
-  "_why": "別アカウント・別PCの状況把握と指示を通す管制面(fleet-agent)を全PCで起動する。各PCは register-fleet-agent.ps1 を1回だけ実行して OrgiastFleetAgent(15分ごと)を登録する。エージェント自体は中央キュー fleet-directives.json が空なら何もしない。status は読み取り専用の自己申告で、自由文の指示(prompt)と夜間無人セッション(enable-auto-session)は ~/.claude/fleet-agent-optin.json でそのPCの人が1回承諾するまで実行されない(未承諾なら内容と承諾コマンドをDiscordへ1回出すだけ)。破壊的操作なし。止めるときは task を \"\" に戻す。",
+  "_why": "無人室に置いた遠隔操作用PC(6台)の熱対策。各PCで tools/thermal-guard.ps1 -Install を1回だけ実行し、5分ごとの監視タスク(OrgiastThermalGuard)を登録する。管理者権限は不要。CPU温度は多くの機体で取得できないため、クロック比の低下(実効上限比85%未満かつ負荷50%以上が15分連続)と異常停止(Kernel-Power 41)で代替監視する。状態が変わったときだけDiscordへ通知し、同レベルの再送は60分空ける。nishi-PC で 2026-09-01 から13日間の連続稼働を実測済み(誤検知ゼロ)。読み取り専用の監視のみでCPU設定は変更しない(電力上限を絞る power-save は別タスクのままにしてある)。破壊的操作なし。止めるときは task を \"\" に戻す。個々のPCで止めるなら thermal-guard.ps1 -Uninstall。",
   "_note": "全PCへ承認済みタスクを配る中央キュー。kim/Claudeが task と runId(毎回ユニーク) を更新→各PCが夜間03:15の実行時に1回だけ処理しDiscordへ結果を返す。task を空にすると何もしない。",
   "_allowed_tasks": [
     "verify-setup",
     "rules-resync",
     "cost-report",
-    "register-fleet-agent"
+    "register-fleet-agent",
+    "thermal-guard",
+    "power-save"
   ],
   "_targets": "all=全PC / PC名の一部文字列=そのPCだけ"
 }

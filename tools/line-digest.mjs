@@ -143,6 +143,18 @@ function loadKey(home, provider) {
   try { return parseEnvText(fs.readFileSync(path.join(home, '.claude', p.file), 'utf8'))[p.env] || ''; } catch { return ''; }
 }
 
+function attemptMetaFrom(error, startProvider) {
+  const failures = Array.isArray(error?.failures) ? error.failures : [];
+  const last = failures.length ? failures[failures.length - 1] : null;
+  const candidate = last?.candidate;
+  return {
+    provider: candidate?.provider || '',
+    model: candidate?.model || '',
+    attempt: Number(last?.attempt ?? 0),
+    failover: Boolean(candidate && candidate.provider !== startProvider),
+  };
+}
+
 export function createLlmClient({ home = os.homedir(), fetchImpl = fetch, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), usageFile } = {}) {
   return async ({ provider, messages, maxTokens = 4000, responseFormat }) => {
     const run = async (format) => callWithFallback({
@@ -156,6 +168,14 @@ export function createLlmClient({ home = os.homedir(), fetchImpl = fetch, sleep 
         if (p.special === 'kimi') Object.assign(body, { reasoning_effort: 'none', temperature: 0.6 });
         return { url: p.url, init: { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', ...(p.extraHeaders || {}) }, body: JSON.stringify(body) } };
       },
+      validateResponse(json) {
+        const choice = json?.choices?.[0];
+        if (!choice) return 'choices がありません';
+        if (choice.finish_reason === 'length') return `finish_reason=length (max_tokens=${maxTokens})`;
+        const content = choice.message?.content;
+        if (typeof content !== 'string' || !content.trim()) return 'content が空です';
+        return true;
+      },
       async onAttempt(info) {
         const usage = info.status === 'ok' ? (await info.response.clone().json().catch(() => ({}))).usage || {} : {};
         const rec = { t: new Date().toISOString(), tool: 'line-digest', provider: info.candidate.provider, model: info.candidate.model, in: usage.prompt_tokens || 0, out: usage.completion_tokens || 0, secs: Number(info.secs.toFixed(3)), status: info.status, attempt: info.attempt, failover: info.failover, ok: info.status === 'ok' };
@@ -165,12 +185,14 @@ export function createLlmClient({ home = os.homedir(), fetchImpl = fetch, sleep 
     let result;
     try { result = await run(responseFormat); }
     catch (error) {
+      error.llmAttempt = attemptMetaFrom(error, provider);
       const has400 = error.failures?.some(({ reason }) => /^HTTP400\b/.test(reason));
       if (!responseFormat || !has400) throw error;
-      result = await run(undefined);
+      try { result = await run(undefined); }
+      catch (retryError) { retryError.llmAttempt = attemptMetaFrom(retryError, provider); throw retryError; }
     }
     const json = await result.response.json();
-    return { text: String(json.choices?.[0]?.message?.content || ''), provider: result.candidate.provider, model: result.candidate.model };
+    return { text: String(json.choices?.[0]?.message?.content || ''), provider: result.candidate.provider, model: result.candidate.model, attempt: Number(result.attempt ?? 0), failover: Boolean(result.failover) };
   };
 }
 

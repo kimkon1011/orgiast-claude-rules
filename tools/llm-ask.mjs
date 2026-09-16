@@ -11,6 +11,8 @@ const PROVIDERS = {
   glm: { base: 'https://api.z.ai/api/coding/paas/v4/chat/completions', keyEnv: 'ZAI_API_KEY', keyFile: 'zai.env', model: 'glm-5.3' },
   // Cerebras Code(定額サブスク・GLM-4.7・24M tok/日)。従量プロバイダより先に使いたいので連鎖では groq の直後。
   cerebras: { base: 'https://api.cerebras.ai/v1/chat/completions', keyEnv: 'CEREBRAS_API_KEY', keyFile: 'cerebras.env', model: 'zai-glm-4.7' },
+  // Genspark Pro の前払いクレジット枠。OpenAI 互換の LLM proxy で claude-opus-5 等36モデルが1キーで叩ける。
+  genspark: { base: 'https://www.genspark.ai/api/llm_proxy/v1/chat/completions', keyEnv: 'GSK_PROXY_KEY', keyFile: 'genspark-proxy.env', model: 'gpt-5.6-luna' },
   gemini: { base: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', keyEnv: 'GEMINI_API_KEY', keyFile: 'gemini.env', model: 'gemini-3.7-flash' },
   deepseek: { base: 'https://api.deepseek.com/chat/completions', keyEnv: 'DEEPSEEK_API_KEY', keyFile: 'deepseek.env', model: 'deepseek-chat' },
   grok: { base: 'https://api.x.ai/v1/chat/completions', keyEnv: 'XAI_API_KEY', keyFile: 'xai.env', model: 'grok-3' },
@@ -22,8 +24,10 @@ const args = process.argv.slice(2);
 function opt(name, def) { const i = args.indexOf(name); return (i >= 0 && args[i + 1]) ? args[i + 1] : def; }
 const provider = (opt('--provider', '') || '').toLowerCase();
 const selected = PROVIDERS[provider];
-if (!selected) { console.error('使い方: node llm-ask.mjs --provider <openrouter|groq|glm|cerebras|gemini|deepseek|grok|kimi|mistral> "指示" [--model X] [--system S] [--max N] [--category <classification|extraction|summarize|jp_reply|code>] [--no-fallback]'); process.exit(2); }
+if (!selected) { console.error('使い方: node llm-ask.mjs --provider <openrouter|groq|glm|cerebras|genspark|gemini|deepseek|grok|kimi|mistral> "指示" [--model X] [--system S] [--max N] [--category <classification|extraction|summarize|jp_reply|code>] [--no-fallback]'); process.exit(2); }
 const model = opt('--model', selected.model);
+// claude-fable-5 系は別課金枠のため組織ルールで全用途禁止。
+if (/fable/i.test(model)) { console.error('fable を含むモデルは組織ルールにより使用できません'); process.exit(2); }
 const category = (opt('--category', '') || '').toLowerCase();
 const system = opt('--system', '');
 const maxTok = parseInt(opt('--max', '4000'), 10) || 4000;

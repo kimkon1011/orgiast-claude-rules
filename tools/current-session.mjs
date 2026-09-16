@@ -8,10 +8,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 
+
+async function main() {
 try {
-  let raw = "";
-  try { raw = fs.readFileSync(0, "utf8"); } catch { /* stdin 無しでも動く */ }
+  const raw = await readStdinWithTimeout();
   const o = JSON.parse(raw || "{}");
   const sessionId = o.session_id || "";
   if (sessionId) {
@@ -48,4 +50,6 @@ try {
     }
   }
 } catch { /* 記録失敗は握りつぶす */ }
+}
+await main().catch(() => {});
 process.exit(0);

@@ -39,13 +39,13 @@ function selectedBlobs(tree) {
 }
 
 function gitOutput(repo, args) {
-  try { return execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); }
+  try { return execFileSync('git', ['-C', repo, ...args], { windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); }
   catch { return ''; }
 }
 
 function defaultLsRemote(repo, timeoutMs) {
   try {
-    return execFileSync('git', ['-C', repo, 'ls-remote', 'origin', 'refs/heads/main'], {
+    return execFileSync('git', ['-C', repo, 'ls-remote', 'origin', 'refs/heads/main'], { windowsHide: true,
       encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: timeoutMs,
     }).trim();
   } catch { return ''; }
@@ -58,7 +58,7 @@ function parseHeadSha(output) {
 function readStatusPaths(repo) {
   const result = new Set();
   let output;
-  try { output = execFileSync('git', ['-C', repo, 'status', '--porcelain', '-z'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); }
+  try { output = execFileSync('git', ['-C', repo, 'status', '--porcelain', '-z'], { windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); }
   catch { return result; }
   const records = output.split('\0');
   for (let i = 0; i < records.length; i += 1) {
@@ -75,7 +75,7 @@ function readStatusPaths(repo) {
 function readIndexShas(repo) {
   const result = new Map();
   let output;
-  try { output = execFileSync('git', ['-C', repo, 'ls-files', '-s', '-z'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); }
+  try { output = execFileSync('git', ['-C', repo, 'ls-files', '-s', '-z'], { windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); }
   catch { return result; }
   for (const record of output.split('\0')) {
     if (!record) continue;

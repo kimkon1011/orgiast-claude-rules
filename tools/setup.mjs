@@ -49,8 +49,8 @@ function check(item) {
       // npm製CLIはWindowsでは .cmd シム(codex 等)で、execFileSync の直接指定では解決できない
       // (Node 18.20+ は shell 無しの .cmd/.bat 実行を拒否)。cmd.exe 経由で PATHEXT 解決させる。
       const raw = process.platform === 'win32'
-        ? execFileSync('cmd.exe', ['/d', '/s', '/c', `${spec.command} --version`], { encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] })
-        : execFileSync(spec.command, ['--version'], { encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] });
+        ? execFileSync('cmd.exe', ['/d', '/s', '/c', `${spec.command} --version`], { encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+        : execFileSync(spec.command, ['--version'], { encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
       const output = String(raw).trim();
       return output.length > 0 && new RegExp(spec.versionRegex || '.+').test(output);
     }
@@ -71,7 +71,7 @@ function check(item) {
     }
     if (item.type === 'scheduled-task') {
       if (process.platform !== 'win32') return false;
-      execFileSync('schtasks.exe', ['/Query', '/TN', spec.name], { stdio: 'ignore', timeout: 10000 });
+      execFileSync('schtasks.exe', ['/Query', '/TN', spec.name], { stdio: 'ignore', timeout: 10000, windowsHide: true });
       return true;
     }
   } catch { return false; }
@@ -82,7 +82,7 @@ function repair(item) {
   try {
     const [script, ...args] = item.repair;
     const target = path.isAbsolute(script) ? script : path.join(scriptDir, script);
-    execFileSync(process.execPath, [target, ...args], { timeout: 120000, stdio: 'ignore', env: { ...process.env, ORGIAST_HOME: home } });
+    execFileSync(process.execPath, [target, ...args], { timeout: 120000, stdio: 'ignore', env: { ...process.env, ORGIAST_HOME: home }, windowsHide: true });
     return true;
   } catch { return true; }
 }

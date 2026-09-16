@@ -1,0 +1,10 @@
+{
+  "domains": ["orgiast.jp", "toho-kogyo.com"],
+  "addresses": [
+    "genbateam.toho@gmail.com",
+    "keiri.orgiast@gmail.com",
+    "atsuoast3@gmail.com",
+    "kimkongyong@gmail.com"
+  ],
+  "note": "内部（社内・グループ会社・スタッフ）宛先。Gmail 下書き/送信を禁止しチャット表示に切り替える。追加は addresses に1行足すだけ。"
+}

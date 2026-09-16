@@ -2,6 +2,8 @@
 import fs from 'node:fs';
 import { isEntry } from './is-entry.mjs';
 import { latestAssistantText } from './lib/assistant-text.mjs';
+import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
+
 
 export function evaluateHandoffDetail(text) {
   const value = String(text || '');
@@ -16,7 +18,7 @@ export function evaluateHandoffDetail(text) {
 
 async function main() {
   try {
-    let raw = ''; process.stdin.setEncoding('utf8'); for await (const chunk of process.stdin) raw += chunk;
+    const raw = await readStdinWithTimeout();
     if (!raw.trim()) return;
     const input = JSON.parse(raw);
     if (input?.stop_hook_active || !input?.transcript_path || !fs.existsSync(input.transcript_path)) return;

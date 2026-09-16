@@ -4,6 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 import { loadFablePolicy, fableAllowedForSupervisor } from './fable-policy.mjs';
+import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
+
 
 const TAIL_BYTES = 256 * 1024;
 
@@ -48,9 +50,7 @@ export function inspectTranscript(transcriptPath) {
 }
 
 export async function main() {
-  let raw = '';
-  process.stdin.setEncoding('utf8');
-  for await (const chunk of process.stdin) raw += chunk;
+  const raw = await readStdinWithTimeout();
   if (!raw) return;
   let input;
   try { input = JSON.parse(raw.replace(/^﻿/, '')); } catch { return; }

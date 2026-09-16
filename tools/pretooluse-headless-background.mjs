@@ -1,9 +1,8 @@
 #!/usr/bin/env node
+import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 
 try {
-  let raw = '';
-  process.stdin.setEncoding('utf8');
-  for await (const chunk of process.stdin) raw += chunk;
+  const raw = await readStdinWithTimeout();
 
   if (process.env.CLAUDE_HEADLESS !== '1') process.exit(0);
   const input = JSON.parse(raw);

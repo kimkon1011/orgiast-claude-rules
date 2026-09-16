@@ -95,7 +95,7 @@ async function main() {
     if (!botToken) console.error('このPCにはBotトークンが無いので台帳の値をそのまま使います。');
     else {
       const ledger = fileURLToPath(new URL('./discord-channel-ledger.mjs', import.meta.url));
-      const refreshed = spawnSync(process.execPath, [ledger], { encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home } });
+      const refreshed = spawnSync(process.execPath, [ledger], { windowsHide: true, encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home } });
       if (refreshed.status !== 0) throw new Error(`Discordチャンネル台帳の更新に失敗しました: ${String(refreshed.stderr || '').trim() || `終了コード${refreshed.status}`}`);
       console.error('Discordチャンネル台帳を更新しました。');
     }

@@ -11,6 +11,7 @@ import { parseEnvText, readEnvValue } from './env-kv.mjs';
 import { repairEnvBom } from './env-repair.mjs';
 import { isEntry } from './is-entry.mjs';
 import { buildKeyserveAlert, shouldAlert } from './keyserve-alert.mjs';
+import { keyserveAuthHeaders, keyservePcId } from './keyserve-auth.mjs';
 import { installSharedMemories } from './memory-share.mjs';
 import { gitBlobSha } from './version-drift.mjs';
 
@@ -24,7 +25,8 @@ const target = targetArg ? targetArg.slice(9) : path.join(home, '.claude', 'CLAU
 const statePath = path.join(home, '.claude', '.onboarding-sync-state.json');
 const repoStatePath = path.join(home, '.claude', '.repo-sync-state.json');
 const fallbackStatePath = path.join(home, '.claude', 'onboarding-sync-fallback.json');
-const keysStatePath = path.join(home, '.claude', 'onboarding-sync-keys.json');
+const keysStatePath = path.join(home, '.claude', '.keys-sync-state.json');
+const legacyKeysStatePath = path.join(home, '.claude', 'onboarding-sync-keys.json');
 const repoPath = path.join(home, 'orgiast-claude-rules');
 const logPath = path.join(home, '.claude', 'hooks', 'onboarding-sync.log');
 const rawUrl = process.env.ORGIAST_ONBOARDING_URL || 'https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/ONBOARDING.md';
@@ -34,6 +36,7 @@ const endMarker = '<!-- END: オージャスト共通ルール -->';
 const indexLead = '全文は ~/.claude/orgiast-onboarding.md（および https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/ONBOARDING.md ）。このファイルは自動ロードされない。判断に迷ったら Read ツールで該当節を読むこと';
 export const PRESERVE_LOCAL_KEYS = new Set(['REPORTER_LABEL', 'REPORTER_HOST']);
 export const KEYS_GUARD_MS = 20 * 60 * 60 * 1000;
+export const KEYS_ALERT_STALE_MS = 48 * 60 * 60 * 1000;
 
 export function executionPlan(argv = []) {
   const onlyKeys = argv.includes('--keys-only');
@@ -45,6 +48,13 @@ export function shouldRunKeys(previous, now = new Date(), forced = false) {
   if (!previous?.lastRunAt) return true;
   const elapsed = now - new Date(previous.lastRunAt);
   return !Number.isFinite(elapsed) || elapsed >= KEYS_GUARD_MS;
+}
+
+export function keySyncIsStale(previous, now = new Date(), staleMs = KEYS_ALERT_STALE_MS) {
+  const last = previous?.last ?? previous?.lastRunAt;
+  if (!last) return true;
+  const timestamp = new Date(last);
+  return !Number.isFinite(timestamp.getTime()) || now - timestamp >= staleMs;
 }
 
 export function missingDeclaredKeys(files, exists) {
@@ -95,7 +105,12 @@ function log(message) {
 }
 function state() { try { return JSON.parse(fs.readFileSync(statePath, 'utf8')); } catch { return null; } }
 function repoState() { try { return JSON.parse(fs.readFileSync(repoStatePath, 'utf8')); } catch { return null; } }
-function keysState() { try { return JSON.parse(fs.readFileSync(keysStatePath, 'utf8')); } catch { return null; } }
+function keysState() {
+  for (const file of [keysStatePath, legacyKeysStatePath]) {
+    try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
+  }
+  return null;
+}
 function saveRepoState(now) {
   if (dryRun) return;
   try { fs.mkdirSync(path.dirname(repoStatePath), { recursive: true }); fs.writeFileSync(repoStatePath, `${JSON.stringify({ last: now.toISOString() }, null, 2)}\n`, 'utf8'); } catch {}
@@ -226,7 +241,7 @@ async function downloadZipRoot() {
   } catch (error) { fs.rmSync(temp, { recursive: true, force: true }); throw error; }
 }
 export async function updateRepositoryFiles(targetRepo, options = {}) {
-  const git = options.git || ((gitArgs, execOptions = {}) => execFileSync('git', gitArgs, execOptions));
+  const git = options.git || ((gitArgs, execOptions = {}) => execFileSync('git', gitArgs, { ...execOptions, windowsHide: true }));
   const getZipRoot = options.getZipRoot || downloadZipRoot;
   const emit = options.emit || console.log;
   const stateFile = options.fallbackStatePath || fallbackStatePath;
@@ -379,9 +394,9 @@ async function syncRepository(now) {
     // ここを1つの try に入れていたため、pull が1回失敗した PC は配布が静かに止まっていた(実測 2026-08-19)。
     try {
     if (fs.existsSync(path.join(repoPath, '.git'))) {
-      const before = execFileSync('git', ['-C', repoPath, 'rev-parse', 'HEAD'], { encoding: 'utf8', timeout: 60000 }).trim();
+      const before = execFileSync('git', ['-C', repoPath, 'rev-parse', 'HEAD'], { windowsHide: true, encoding: 'utf8', timeout: 60000 }).trim();
       const result = await updateRepositoryFiles(repoPath);
-      const after = execFileSync('git', ['-C', repoPath, 'rev-parse', 'HEAD'], { encoding: 'utf8', timeout: 60000 }).trim();
+      const after = execFileSync('git', ['-C', repoPath, 'rev-parse', 'HEAD'], { windowsHide: true, encoding: 'utf8', timeout: 60000 }).trim();
       changed = result.ok && (result.method === 'zip' ? result.changed : before !== after);
     } else {
       const result = await updateRepositoryFiles(repoPath);
@@ -399,8 +414,9 @@ async function syncRepository(now) {
     try {
       const registrar = path.join(repoPath, 'tools', 'register-hooks.mjs');
       if (fs.existsSync(registrar)) {
-        const out = execFileSync(process.execPath, [registrar, '--hooks-only'], { encoding: 'utf8', timeout: 20000, env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repoPath } }).trim();
-        if (out.includes('追加')) { console.log(`[onboarding-sync] ${out.trim()}`); log(out.replace(/\s+/g, ' ')); }
+        const out = execFileSync(process.execPath, [registrar, '--hooks-only'], { windowsHide: true, encoding: 'utf8', timeout: 20000, env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repoPath } }).trim();
+        // skip がログに届かないと hook 未登録の無言 skip が復活するため、追加と同様に転送する。
+        if (out.includes('追加') || out.includes('[skip]')) { console.log(`[onboarding-sync] ${out.trim()}`); log(out.replace(/\s+/g, ' ')); }
       }
     } catch (e) { log(`hook registration failed: ${e.message}`); }
   } catch (e) { log(`repo sync failed: ${e.message}`); }
@@ -408,7 +424,7 @@ async function syncRepository(now) {
 function saveKeysState(now) {
   try {
     fs.mkdirSync(path.dirname(keysStatePath), { recursive: true });
-    fs.writeFileSync(keysStatePath, `${JSON.stringify({ lastRunAt: now.toISOString() }, null, 2)}\n`, 'utf8');
+    fs.writeFileSync(keysStatePath, `${JSON.stringify({ last: now.toISOString(), lastRunAt: now.toISOString() }, null, 2)}\n`, 'utf8');
   } catch {}
 }
 function saveKeysAlertState(previous, now) {
@@ -448,31 +464,73 @@ async function alertKeyserveFailure(previous, now, status) {
 async function provisionKeys(now, options = {}) {
   if (dryRun) return;
   const previous = keysState();
-  if (!shouldRunKeys(previous, now, force)) return;
+  if (!shouldRunKeys(previous, now, force)) {
+    if (keySyncIsStale(previous, now)) await alertKeyserveFailure(previous, now);
+    return;
+  }
   let secret = process.env.ORGIAST_KEYSERVE_SECRET || '';
   if (!secret) secret = readEnvValue(path.join(home, '.claude', 'keyserve.env'), 'ORGIAST_KEYSERVE_SECRET');
+  const enrollPath = path.join(home, '.claude', 'enroll.env');
+  const keyserveEnvPath = path.join(home, '.claude', 'keyserve.env');
+  const previousSecretPath = path.join(home, '.claude', 'keyserve-prev.env');
+  const enrollToken = !secret ? readEnvValue(enrollPath, 'ORGIAST_ENROLL_TOKEN') : '';
+  if (enrollToken) secret = enrollToken;
+  let enrollHttpStatus = null;
+  const saveEnrollResult = (result) => {
+    if (!enrollToken) return;
+    try { fs.writeFileSync(path.join(home, '.claude', '.enroll-result.json'), JSON.stringify({ authVia: 'enroll', ...result }), { mode: 0o600 }); } catch {}
+  };
   if (!secret) {
     secret = readEnvValue(path.join(home, '.claude', 'cost-reporter.env'), 'DISCORD_COST_WEBHOOK');
     if (secret) log('legacy secret を使用中（keyserve.env 未受領）');
   }
-  if (!secret) return;
+  if (!secret) {
+    await alertKeyserveFailure(previous, now);
+    return;
+  }
   try {
-    const ts = Math.floor(Date.now() / 1000).toString();
-    const auth = crypto.createHmac('sha256', secret).update(ts).digest('hex');
-    const response = await fetch(keyserveUrl, {
+    const pcId = keyservePcId(home);
+    const requestKeys = (requestSecret) => fetch(keyserveUrl, {
       method: 'POST',
-      headers: { 'x-orgiast-ts': ts, 'x-orgiast-auth': auth },
+      headers: { ...keyserveAuthHeaders(requestSecret, Date.now(), pcId), ...(enrollToken ? { 'x-orgiast-enroll': enrollToken } : {}) },
       signal: AbortSignal.timeout(15000),
     });
+    let response = await requestKeys(secret);
+    enrollHttpStatus = response.status;
+    if (response.status === 401 && fs.existsSync(previousSecretPath)) {
+      const previousSecret = readEnvValue(previousSecretPath, 'ORGIAST_KEYSERVE_SECRET');
+      if (previousSecret) {
+        response = await requestKeys(previousSecret);
+        if (response.ok) {
+          fs.writeFileSync(keyserveEnvPath, `ORGIAST_KEYSERVE_SECRET=${previousSecret}\n`, { encoding: 'utf8', mode: 0o600 });
+          fs.chmodSync(keyserveEnvPath, 0o600);
+          fs.unlinkSync(previousSecretPath);
+          saveKeysState(now);
+          return;
+        }
+      }
+    }
     if (!response.ok) {
       const error = new Error(`HTTP ${response.status}`);
       error.status = response.status;
+      if (enrollToken) {
+        // The token is opaque. Only the server can diagnose expiry.
+        const detail = await response.json().catch(() => null);
+        const code = detail?.code ?? detail?.error?.code ?? detail?.error?.message ?? detail?.error ?? detail?.message ?? '';
+        error.enrollKind = /expired|expiry|期限切れ/i.test(String(code)) ? 'expired' : 'http';
+      }
       throw error;
+    }
+    // A successful request with the current PC identity proves the installed key works.
+    // Remove an older fallback before processing a possible newly rotated key below.
+    if (!enrollToken && pcId) {
+      try { fs.unlinkSync(previousSecretPath); } catch {}
     }
     const payload = await response.json();
     if (!payload || typeof payload.files !== 'object' || payload.files === null || Array.isArray(payload.files)) throw new Error('invalid response');
     const provisioned = [];
     const refreshed = [];
+    let enrollWriteFailed = false;
     for (const [name, contents] of Object.entries(payload.files)) {
       if (!/^[A-Za-z0-9._-]+$/.test(name) || name.includes('..') || typeof contents !== 'string') continue;
       try {
@@ -482,6 +540,14 @@ async function provisionKeys(now, options = {}) {
           const existing = fs.readFileSync(destination, 'utf8');
           const updated = mergeEnvFile(existing, cleanedContents);
           if (updated === existing) continue;
+          if (name === 'keyserve.env') {
+            const oldSecret = readEnvValue(destination, 'ORGIAST_KEYSERVE_SECRET');
+            const newSecret = parseEnvText(cleanedContents).ORGIAST_KEYSERVE_SECRET || '';
+            if (oldSecret && newSecret && oldSecret !== newSecret) {
+              fs.writeFileSync(previousSecretPath, `ORGIAST_KEYSERVE_SECRET=${oldSecret}\n`, { encoding: 'utf8', mode: 0o600 });
+              fs.chmodSync(previousSecretPath, 0o600);
+            }
+          }
           fs.writeFileSync(destination, updated, { encoding: 'utf8', mode: 0o600 });
           fs.chmodSync(destination, 0o600);
           refreshed.push(name);
@@ -492,16 +558,23 @@ async function provisionKeys(now, options = {}) {
         fs.writeFileSync(destination, cleanedContents, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
         provisioned.push(name);
         log(`provisioned: ${name}`);
-      } catch (e) { log(`key write failed (${name}): ${e.message}`); }
+      } catch (e) { enrollWriteFailed = true; log(`key write failed (${name}): ${e.message}`); }
     }
     const missing = missingDeclaredKeys(payload.files, (name) => fs.existsSync(path.join(home, '.claude', name)));
     if (missing.length) console.error(`[onboarding-sync] 未取得の鍵: ${missing.join(', ')}`);
     else saveKeysState(now);
     repairEnvBom({ home });
+    const primaryWritten = [...provisioned, ...refreshed].includes('keyserve.env')
+      && Boolean(readEnvValue(path.join(home, '.claude', 'keyserve.env'), 'ORGIAST_KEYSERVE_SECRET'));
+    if (primaryWritten && !missing.length && !enrollWriteFailed) {
+      try { fs.unlinkSync(enrollPath); } catch {}
+    }
+    saveEnrollResult({ status: response.status, kind: primaryWritten && !missing.length && !enrollWriteFailed ? 'ok' : 'write' });
     if (!options.quiet && provisioned.length) console.log(`[onboarding-sync] provisioned: ${provisioned.join(', ')}`);
     if (!options.quiet && refreshed.length) console.log(`[onboarding-sync] refreshed: ${refreshed.join(', ')}`);
   } catch (e) {
-    log(`key provisioning failed: ${e.message}`);
+    saveEnrollResult({ status: e.status ?? enrollHttpStatus, kind: e.enrollKind ?? (e instanceof SyntaxError || e.message === 'invalid response' ? 'invalid-response' : 'network') });
+    log(`key provisioning failed: ${enrollToken ? 'enroll request failed (see .enroll-result.json)' : e.message}`);
     if (!options.quiet) await alertKeyserveFailure(previous, now, e.status);
   }
 }

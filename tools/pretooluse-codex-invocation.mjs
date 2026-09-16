@@ -1,11 +1,10 @@
 #!/usr/bin/env node
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 
 try {
-  let raw = '';
-  process.stdin.setEncoding('utf8');
-  for await (const chunk of process.stdin) raw += chunk;
+  const raw = await readStdinWithTimeout();
 
   const input = JSON.parse(raw);
   const tool = String(input.tool_name || '');

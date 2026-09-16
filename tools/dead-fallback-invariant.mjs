@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
+import { acquireLock } from './lib/single-instance.mjs';
 
 export function findGuardedScripts(repoDir) {
   const toolsDir = path.join(repoDir, 'tools');
@@ -58,7 +59,11 @@ export function runCheck({ repo, home, dryRun = false } = {}) {
 }
 
 if (isEntry(import.meta.url)) {
-  const dryRun = process.argv.includes('--dry-run');
-  const records = runCheck({ dryRun });
-  if (dryRun) console.log(JSON.stringify(records, null, 2));
+  const lock = acquireLock('dead-fallback-invariant');
+  if (!lock.acquired) console.error(`[dead-fallback-invariant] already running pid=${lock.ownerPid ?? 'unknown'}`);
+  else {
+    const dryRun = process.argv.includes('--dry-run');
+    const records = runCheck({ dryRun });
+    if (dryRun) console.log(JSON.stringify(records, null, 2));
+  }
 }

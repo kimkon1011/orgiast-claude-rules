@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { bootstrapRequiredHooks, runAfterBootstrap } from './claude-cost-reporter.mjs';
+import { fileURLToPath } from 'node:url';
+import { bootstrapRequiredHooks, cacheRefreshArgs, postDecision, runAfterBootstrap } from './claude-cost-reporter.mjs';
 import { REQUIRED_HOOKS } from './hook-selfcheck.mjs';
 
 function fixture(settings = {}) {
@@ -63,4 +64,33 @@ test('ブートストラップ例外を呼び出し側で隔離して本来の�
     collect: () => report,
   });
   assert.equal(result, report);
+});
+
+test('6時間ガード中のキャッシュ更新は投稿せず集計を続ける', () => {
+  assert.equal(postDecision({ withinGuard: true, refreshCache: true }), 'cache-only');
+});
+
+test('6時間ガード中の通常実行は従来どおりスキップする', () => {
+  assert.equal(postDecision({ withinGuard: true, refreshCache: false }), 'skip');
+});
+
+test('dry-runとforceは6時間ガードを無視して投稿経路へ進む', () => {
+  assert.equal(postDecision({ withinGuard: true, dryRun: true }), 'post');
+  assert.equal(postDecision({ withinGuard: true, force: true }), 'post');
+});
+
+test('6時間ガード明けのキャッシュ更新は投稿する', () => {
+  assert.equal(postDecision({ withinGuard: false, refreshCache: true }), 'post');
+});
+
+test('裏方キャッシュ更新の引数にforceを付けない', () => {
+  const reporterFile = fileURLToPath(new URL('./claude-cost-reporter.mjs', import.meta.url));
+  assert.deepEqual(cacheRefreshArgs(), [reporterFile, '--refresh-cache']);
+  assert.equal(cacheRefreshArgs().includes('--force'), false);
+});
+
+test('ソースにforce付きキャッシュ更新の引数列を残さない', () => {
+  const reporterFile = fileURLToPath(new URL('./claude-cost-reporter.mjs', import.meta.url));
+  const source = fs.readFileSync(reporterFile, 'utf8');
+  assert.equal(source.includes("'--force', '--refresh-cache'"), false);
 });

@@ -17,15 +17,19 @@ function transcript(dir, blocks = []) {
   ].join('\n'));
   return file;
 }
-function run({ text, blocks, session = 's1', raw, enforcement = 'block' } = {}) {
+function run({ text, blocks, session = 's1', raw, enforcement = 'block', registry = 'block' } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'negative-claim-'));
+  const registryPath = path.join(home, 'rules-registry.json');
+  if (registry) {
+    fs.writeFileSync(registryPath, JSON.stringify({ rules: [{ id: 'negative-claim-primary-source', enforcement: registry }] }));
+  }
   if (enforcement) {
     fs.mkdirSync(path.join(home, '.claude'));
     fs.writeFileSync(path.join(home, '.claude', 'rule-enforcement.json'), JSON.stringify({ 'negative-claim-primary-source': { mode: enforcement } }));
   }
   const file = transcript(home, blocks);
   const input = raw ?? JSON.stringify({ session_id: session, transcript_path: file, ...(text === undefined ? {} : { assistant_text: text }) });
-  return { home, result: spawnSync(process.execPath, [gate], { input, encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home } }) };
+  return { home, result: spawnSync(process.execPath, [gate], { input, encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_RULES_REGISTRY: registryPath } }) };
 }
 
 test('一次ソースなしの否定断定をblock', () => {
@@ -84,14 +88,26 @@ test('blockを既存台帳へrule付きで追記', () => {
   const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'handoff-ledger.jsonl'), 'utf8'));
   assert.equal(record.rule, 'negative-claim-primary-source'); assert.equal(record.verdict, 'blocked');
 });
-test('enforcement=warn はstdoutを空にして警告し、台帳へwarnedを記録', () => {
-  const { home, result } = run({ text: 'Genspark には公開 API が無い。', enforcement: 'warn' });
+test('registryのenforcement=warnはstdoutを空にして警告し、台帳へwarnedを記録', () => {
+  const { home, result } = run({ text: 'Genspark には公開 API が無い。', enforcement: null, registry: 'warn' });
   assert.equal(result.stdout, ''); assert.match(result.stderr, /一次ソース未照会/);
   const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'handoff-ledger.jsonl'), 'utf8'));
   assert.equal(record.verdict, 'warned');
 });
-test('ユーザー設定ファイルが無い場合はregistry既定のwarn', () => {
-  const { home, result } = run({ text: 'Genspark には公開 API が無い。', enforcement: null });
+test('registryのenforcement=blockはstdoutでblockし、台帳へblockedを記録', () => {
+  const { home, result } = run({ text: 'Genspark には公開 API が無い。', enforcement: null, registry: 'block' });
+  assert.equal(JSON.parse(result.stdout).decision, 'block');
+  const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'handoff-ledger.jsonl'), 'utf8'));
+  assert.equal(record.verdict, 'blocked');
+});
+test('ユーザー設定はregistryより優先される', () => {
+  const { home, result } = run({ text: 'Genspark には公開 API が無い。', enforcement: 'warn', registry: 'block' });
+  assert.equal(result.stdout, ''); assert.match(result.stderr, /一次ソース未照会/);
+  const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'handoff-ledger.jsonl'), 'utf8'));
+  assert.equal(record.verdict, 'warned');
+});
+test('registryもユーザー設定も読めない場合は既定のwarn', () => {
+  const { home, result } = run({ text: 'Genspark には公開 API が無い。', enforcement: null, registry: null });
   assert.equal(result.stdout, ''); assert.match(result.stderr, /一次ソース未照会/);
   const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'handoff-ledger.jsonl'), 'utf8'));
   assert.equal(record.verdict, 'warned');

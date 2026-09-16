@@ -4,13 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { findRelevant } from './makimono-search.mjs';
+import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 
-// process.exit を絶対に呼ばない: top-level await の評価中に呼ぶと Windows の Node が
-// `Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)` で異常終了する(v24.14.1 実測)。
-// stdout に候補を書けていても exit!=0 だと Claude Code が hook 失敗として注入を捨てるため、
-// キャッシュ切れ(24h毎)の初回プロンプトだけ静かに機能が死ぬ。早期リターンで自然終了させる。
 async function main() {
-let raw = ''; process.stdin.setEncoding('utf8'); for await (const chunk of process.stdin) raw += chunk;
+const raw = await readStdinWithTimeout();
 const trigger = /作って|作成して|実装|構築|セットアップ|立ち上げ|自動化|自動投稿|連携|スクレイピング|bot|スクリプト|アプリ|ツールを|cron|デプロイ|パイプライン|ジェネレータ|build|implement|create a|set up|scaffold|automate/i;
 try {
   if (!raw) return; const input = JSON.parse(raw); const prompt = String(input.prompt || '').trim();

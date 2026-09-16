@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
 
 const home = process.env.ORGIAST_HOME || os.homedir();
 const candidates = (name) => [
@@ -12,7 +13,25 @@ const candidates = (name) => [
 ];
 const firstFile = (name) => candidates(name).find((p) => fs.existsSync(p));
 const background = (script, args = []) => {
-  try { spawn(process.execPath, [script, ...args], { detached: true, stdio: 'ignore' }).unref(); } catch {}
+  try { spawn(process.execPath, [script, ...args], { ...backgroundSpawnOptions(), stdio: 'ignore' }).unref(); } catch {}
+};
+const batchRecentlyRan = () => {
+  const lock = path.join(os.homedir(), '.claude', 'locks', 'batch-run.lock');
+  try {
+    const owner = JSON.parse(fs.readFileSync(lock, 'utf8'));
+    process.kill(Number(owner.pid), 0);
+    console.error(`[cost-loop] batch-run already running pid=${owner.pid}`);
+    return true;
+  } catch {}
+  const last = path.join(home, '.claude', 'state', 'batch-run.last');
+  try {
+    const age = Date.now() - Date.parse(fs.readFileSync(last, 'utf8').trim());
+    if (Number.isFinite(age) && age >= 0 && age < 6 * 60 * 60 * 1000) {
+      console.error('[cost-loop] batch-run skipped: last run was within 6 hours');
+      return true;
+    }
+  } catch {}
+  return false;
 };
 
 try {
@@ -20,7 +39,7 @@ try {
   const mins = now.getUTCHours() * 60 + now.getUTCMinutes();
   const pending = path.join(home, '.claude', 'batch-queue', 'pending.jsonl');
   const batch = firstFile('batch-run.mjs');
-  if ((mins >= 990 || mins < 30) && batch && fs.existsSync(pending) && fs.statSync(pending).size > 0) background(batch);
+  if ((mins >= 990 || mins < 30) && batch && fs.existsSync(pending) && fs.statSync(pending).size > 0 && !batchRecentlyRan()) background(batch);
 } catch {}
 
 try {

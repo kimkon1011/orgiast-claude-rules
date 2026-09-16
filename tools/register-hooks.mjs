@@ -2,12 +2,27 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// matcher の正本は guard 側に置く（リテラルを2箇所に持つと、片方だけ直して
+// 「テストは緑なのに実機では hook が起動しない」ずれが再発する）。
+// ただし同期が途中のPCでは guard 本体がまだ無いことがあるため、静的に import すると
+// register-hooks 全体が ERR_MODULE_NOT_FOUND で落ちて hook が1本も登録されなくなる。
+// ここは fail-open とし、読めなければ現行と同じ matcher に退避する。
+let HOOK_MATCHER = 'mcp__claude_ai_Gmail(?:_\\d+)?__(create_draft|send_message|update_draft|reply|forward)';
+try {
+  ({ HOOK_MATCHER } = await import('./internal-recipient-gmail-guard.mjs'));
+} catch { /* guard が未同期でも登録処理は続行する */ }
 
 const hooksOnly = process.argv.includes('--hooks-only');
 const home = process.env.ORGIAST_HOME || os.homedir();
-const repo = process.env.ORGIAST_REPO || path.join(home, 'orgiast-claude-rules');
+// 2026-09-14: ~/orgiast-claude-rules が stale で新 hook(hook-budget-check) が無言で未登録になった。
+// 実行中スクリプトのツリーを基準にし、実行した版の hook を同じ版のツリーから登録する。
+const scriptRepo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const repo = process.env.ORGIAST_REPO || scriptRepo;
 const geminiKey = process.env.ORGIAST_GEMINI_KEY || readGeminiKey();
 const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 15);
+const skippedNames = [];
 function readGeminiKey() {
   try { return fs.readFileSync(path.join(home, '.gemini', '.env'), 'utf8').split(/\r?\n/).find((x) => x.startsWith('GEMINI_API_KEY='))?.slice(15) || ''; } catch { return ''; }
 }
@@ -27,7 +42,11 @@ function write(file, value) {
 function commands(groups) { return groups.flatMap((g) => Array.isArray(g?.hooks) ? g.hooks : []).map((h) => String(h?.command || '')); }
 function add(groups, scriptName, group) {
   // リポの同期が遅れている環境で、存在しないスクリプトを登録して毎回 ENOENT を出すのを防ぐ。
-  if (scriptName.endsWith('.mjs') && !fs.existsSync(path.join(repo, 'tools', scriptName))) return false;
+  if (scriptName.endsWith('.mjs') && !fs.existsSync(path.join(repo, 'tools', scriptName))) {
+    skippedNames.push(scriptName);
+    console.log(`  [skip] ${scriptName} — repo/tools に実ファイルが無いため未登録`);
+    return false;
+  }
   // 既存PCは .ps1 版が登録済みのことがある(Windows install)。拡張子を無視して重複判定しないと
   // .mjs と .ps1 の二重登録になり、同じ context が2回注入される。
   const base = scriptName.replace(/\.(mjs|ps1)$/, '');
@@ -56,6 +75,17 @@ function setTimeoutFor(groups, scriptName, timeout) {
   let changed = 0;
   for (const group of groups) for (const hook of (Array.isArray(group?.hooks) ? group.hooks : [])) {
     if (String(hook.command || '').includes(scriptName) && hook.timeout !== timeout) { hook.timeout = timeout; changed += 1; }
+  }
+  return changed;
+}
+function syncMatcherFor(groups, scriptName, matcher) {
+  let changed = 0;
+  for (const group of groups) {
+    const hooks = Array.isArray(group?.hooks) ? group.hooks : [];
+    if (hooks.some((hook) => String(hook.command || '').includes(scriptName)) && group.matcher !== matcher) {
+      group.matcher = matcher;
+      changed += 1;
+    }
   }
   return changed;
 }
@@ -94,8 +124,8 @@ try {
   ];
   if (fs.existsSync(path.join(repo, 'tools', 'stop-gate-runner.mjs'))) {
     for (const oldName of oldStopGates) added += migrate(settings.hooks.Stop, oldName, 'stop-gate-runner.mjs', command('stop-gate-runner.mjs'));
-    if (add(settings.hooks.Stop, 'stop-gate-runner.mjs', { hooks: [{ type: 'command', command: command('stop-gate-runner.mjs'), timeout: 10 }] })) added += 1;
-    added += setTimeoutFor(settings.hooks.Stop, 'stop-gate-runner.mjs', 10);
+    if (add(settings.hooks.Stop, 'stop-gate-runner.mjs', { hooks: [{ type: 'command', command: command('stop-gate-runner.mjs'), timeout: 30 }] })) added += 1;
+    added += setTimeoutFor(settings.hooks.Stop, 'stop-gate-runner.mjs', 30);
   }
   const session = [
     ['onboarding-sync.mjs', 20, true, ''],
@@ -124,6 +154,7 @@ try {
   }
   added += setTimeoutFor(settings.hooks.SessionStart, 'tool-adoption-check', 60);
   if (add(settings.hooks.SessionStart, 'hook-selfcheck.mjs', { hooks: [{ type: 'command', command: command('hook-selfcheck.mjs'), timeout: 10 }] })) added += 1;
+  if (add(settings.hooks.SessionStart, 'hook-budget-check.mjs', { hooks: [{ type: 'command', command: command('hook-budget-check.mjs'), timeout: 10 }] })) added += 1;
   if (add(settings.hooks.SessionStart, 'makimono-host-detect.mjs', { hooks: [{ type: 'command', command: command('makimono-host-detect.mjs'), timeout: 10 }] })) added += 1;
   // 1セッション=1目的ゲート: SessionStart で目的宣言を要求し、UserPromptSubmit で目的ドリフト/肥大をナッジする(context注入のため async 禁止)
   if (add(settings.hooks.SessionStart, 'session-purpose-gate.mjs', { hooks: [{ type: 'command', command: command('session-purpose-gate.mjs'), timeout: 5 }] })) added += 1;
@@ -156,6 +187,8 @@ try {
   if (add(settings.hooks.PreToolUse, 'pretooluse-lane-guard.mjs', { matcher: 'Bash|PowerShell|Edit|Write|MultiEdit', hooks: [{ type: 'command', command: command('pretooluse-lane-guard.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.PreToolUse, 'pretooluse-codex-invocation.mjs', { matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command: command('pretooluse-codex-invocation.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.PreToolUse, 'model-agent-guard.mjs', { matcher: 'Agent|Task', hooks: [{ type: 'command', command: command('model-agent-guard.mjs') }] })) added += 1;
+  if (add(settings.hooks.PreToolUse, 'internal-recipient-gmail-guard.mjs', { matcher: HOOK_MATCHER, hooks: [{ type: 'command', command: command('internal-recipient-gmail-guard.mjs'), timeout: 5 }] })) added += 1;
+  added += syncMatcherFor(settings.hooks.PreToolUse, 'internal-recipient-gmail-guard.mjs', HOOK_MATCHER);
   // ヘッドレス実行で消失するバックグラウンド処理を実行前に拒否する。
   if (add(settings.hooks.PreToolUse, 'pretooluse-headless-background.mjs', { matcher: 'Bash|PowerShell|ScheduleWakeup', hooks: [{ type: 'command', command: command('pretooluse-headless-background.mjs'), timeout: 5 }] })) added += 1;
   // read-only調査の逐次実行を検知し、まとめて調査するよう同期注入する。
@@ -177,6 +210,17 @@ try {
   if (add(settings.hooks.Stop, 'url-format-guard.mjs', { hooks: [{ type: 'command', command: command('url-format-guard.mjs'), timeout: 8 }] })) added += 1;
   // 完了報告にLayer 1/2・e2e等の検証記載がなければ同期警告する。
   if (add(settings.hooks.Stop, 'check-e2e-before-stop.mjs', { hooks: [{ type: 'command', command: command('check-e2e-before-stop.mjs'), timeout: 8 }] })) added += 1;
+  const permanentTimeouts = [
+    ['pretooluse-delegation-warn.mjs', 5], ['model-agent-guard.mjs', 5],
+    ['pretooluse-serial-investigation.mjs', 5], ['current-session.mjs', 5],
+    ['cost-loop.mjs', 5], ['rule-compliance-report.mjs', 10],
+    ['next-actions-notice.mjs', 10], ['plaud-renewal-notice.mjs', 5],
+    ['clear-ack.mjs', 5], ['verify-before-done-detector.ps1', 10],
+  ];
+  for (const groups of Object.values(settings.hooks)) {
+    if (!Array.isArray(groups)) continue;
+    for (const [name, timeout] of permanentTimeouts) added += setTimeoutFor(groups, name, timeout);
+  }
   // 旧PCは hook が `powershell -NoProfile -File ...ps1` で登録され、実行ポリシーで無音死している。
   policyRepaired = repairPowerShellExecutionPolicy(settings.hooks);
   added += policyRepaired;
@@ -184,7 +228,13 @@ try {
   if (added || settingsHadBom) { backup(settingsFile); write(settingsFile, settings); }
   if (settingsHadBom) console.log('[register-hooks] settings.json の BOM を除去しました');
   if (policyRepaired || costLoopMigrated) console.log(`hook修復: 実行ポリシー${policyRepaired}件 / cost-loop移行${costLoopMigrated}件`);
-  if (hooksOnly) { console.log(added ? `  [OK] settings.json に hook を ${added} 件追加(バックアップ済)` : '  [OK] hook は既に登録済み(変更なし)'); process.exit(0); }
+  if (hooksOnly) {
+    if (added) console.log(`  [OK] settings.json に hook を ${added} 件追加(バックアップ済)`);
+    else if (skippedNames.length) console.log(`  [注意] 登録済み(変更なし)。ただし ${skippedNames.length} 本は repo に無く未登録`);
+    else console.log('  [OK] hook は既に登録済み(変更なし)');
+    if (skippedNames.length) console.log(`[注意] hook ${skippedNames.length} 本が repo に見つからず skip: ${skippedNames.join(', ')}`);
+    process.exit(0);
+  }
 
   const claudeFile = path.join(home, '.claude.json');
   backup(claudeFile);
@@ -193,6 +243,7 @@ try {
   claude.mcpServers['gemini-cli'] = { type: 'stdio', command: 'npx', args: ['-y', 'gemini-mcp-tool'], env: { GEMINI_API_KEY: geminiKey, GEMINI_CLI_TRUST_WORKSPACE: 'true', GEMINI_MCP_BACKEND: 'gemini' } };
   write(claudeFile, claude);
   console.log(`  [OK] settings.json${added ? '(hook ' + added + '件追加)' : '(変更なし)'} / .claude.json 更新`);
+  if (skippedNames.length) console.log(`[注意] hook ${skippedNames.length} 本が repo に見つからず skip: ${skippedNames.join(', ')}`);
 } catch (e) {
   console.error(`  [注意] 設定登録に失敗: ${e.message}`);
   process.exitCode = 1;

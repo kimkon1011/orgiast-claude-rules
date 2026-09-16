@@ -90,7 +90,7 @@ function parseArgs(argv) {
 }
 
 function runGh(args) {
-  return spawnSync('gh', args, { encoding: 'utf8', shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
+  return spawnSync('gh', args, { windowsHide: true, encoding: 'utf8', shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
 }
 
 function findFiles(root, basename) {

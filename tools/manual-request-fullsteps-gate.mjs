@@ -15,6 +15,14 @@ export function hasManualRequest(text) {
     return triggerPatterns.some(pattern => pattern.test(textWithoutCodeFences));
 }
 
+// 渡しているのが「実行させるコマンド」かどうか。出力例やログの貼り付けと区別するため、
+// フェンス内のいずれかの行が既知の CLI で始まるものだけを対象にする。
+export function hasCommandFence(text) {
+    const fences = text.match(/```[\s\S]*?```/g) || [];
+    const cli = /^\s*(gh|git|node|npm|npx|powershell|schtasks|curl|clasp|vercel|supabase|psql|codex|winget|choco)\s/m;
+    return fences.some(fence => cli.test(fence.replace(/^```[^\n]*\n/, '').replace(/```$/, '')));
+}
+
 export function judge(text) {
     // コードフェンスを除去
     const textWithoutCodeFences = text.replace(/```[\s\S]*?```/g, '');
@@ -43,6 +51,19 @@ export function judge(text) {
         missing.push('手順');
     }
     
+    // 貼り先のチェック。
+    // 「場所」の既存判定は『画面』『アプリ』等の単語1つで通ってしまい、コマンドを渡しているのに
+    // "何に貼るのか" を書かない依頼を素通りさせていた(2026-09-15 実測: user から「何に貼るの？」と
+    // 聞き返された)。コマンドを渡すときだけ、アプリ名・開き方・貼り付け方の3点を必須にする。
+    if (hasCommandFence(text)) {
+        const appName = /(PowerShell|パワーシェル|コマンドプロンプト|ターミナル|Terminal|iTerm|Git ?Bash)/;
+        const appOpen = /(Windows ?キー|スタートメニュー|検索ボックス|Spotlight|アプリケーション ?フォルダ|Launchpad)/;
+        const paste = /(右クリック|Ctrl\s*\+\s*V|Cmd\s*\+\s*V|⌘\s*V|貼り付け|ペースト)/;
+        if (!appName.test(text) || !appOpen.test(text) || !paste.test(text)) {
+            missing.push('貼り先(アプリ名・開き方・貼り付け方)');
+        }
+    }
+
     // 成功のチェック
     const successPattern = /(成功|完了|と表示|と出|表示されたら|出たら|出れば|消えます|閉じて)/;
     if (!successPattern.test(text)) {
@@ -93,6 +114,21 @@ function main() {
                     // 依頼の言い回しなら手順が無い限り止める
                     text: 'GitHub の画面で Merge をクリックしてください。',
                     expected: { triggered: true, missing: ['手順', '成功', '失敗'] }
+                },
+                {
+                    // 2026-09-15 の実際の取りこぼし。コマンドを渡しているのに貼り先が無い
+                    text: 'kim さんの端末で以下をそのまま貼って実行してください。\n\n```bash\ngh pr merge 413 --repo kimkon1011/orgiast-claude-rules --squash\n```\n\n1. PR を開く\n2. コマンドを実行する\n3. 結果を確認する\n成功すると Merged と表示されます。失敗したら教えてください。',
+                    expected: { triggered: true, missing: ['貼り先(アプリ名・開き方・貼り付け方)'] }
+                },
+                {
+                    // 貼り先が揃っていれば通す
+                    text: 'Windowsキー を押して「powershell」と入力し Enter で PowerShell を開いてください。青い画面で右クリックすると貼り付けできます。\n\n```bash\ngh pr merge 413 --repo kimkon1011/orgiast-claude-rules --squash\n```\n\n1. PowerShell を開く\n2. 上のコマンドを貼り付ける\n3. Enter を押す\n成功すると Merged と表示されます。失敗したら教えてください。',
+                    expected: { triggered: true, missing: [] }
+                },
+                {
+                    // コマンドを渡していない依頼では貼り先を要求しない
+                    text: 'ブラウザで画面を開いてクリックしてください。\n\n```\n結果: OK\n```\n\n1. 画面を開く\n2. ボタンを押す\n3. 閉じる\n完了と表示されます。失敗したら教えてください。',
+                    expected: { triggered: true, missing: [] }
                 },
             ];
             

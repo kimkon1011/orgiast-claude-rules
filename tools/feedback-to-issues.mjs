@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
 import { isEntry } from './is-entry.mjs';
 
 export const DEFAULT_REPO_MAP = {
@@ -157,7 +158,7 @@ export function shellQuote(value) {
 export function runGh(args, options = {}) {
   // Windows の gh.cmd は直接 spawn できないため shell を使い、値はすべて個別に quote する。
   const command = ['gh', ...args].map(shellQuote).join(' ');
-  return spawnSync(command, { shell: true, encoding: 'utf8', ...options });
+  return spawnSync(command, { shell: true, encoding: 'utf8', ...options, windowsHide: true });
 }
 
 function relayUrls(base) {
@@ -346,7 +347,7 @@ export async function chainBoothFeedbackIntake({ argv = process.argv.slice(2), s
   try {
     const { spawn } = spawnImpl ? { spawn: spawnImpl } : await import('node:child_process');
     const target = path.join(import.meta.dirname, 'booth-feedback-intake.mjs');
-    const child = spawn(process.execPath, [target], { detached: true, stdio: 'ignore', windowsHide: true });
+    const child = spawn(process.execPath, [target], { ...backgroundSpawnOptions(), stdio: 'ignore' });
     child.unref?.();
     return 'spawned';
   } catch (error) {

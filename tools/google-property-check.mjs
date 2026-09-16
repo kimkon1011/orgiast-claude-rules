@@ -149,6 +149,19 @@ const CHECKS = [
   },
 ];
 
+/**
+ * API の返却順は保証されない（Search Console の sites は実測で毎回シャッフルされる）。
+ * 一次証拠として前回実行と diff できるよう、title→detail で決定的に並べ替える。
+ */
+function sortItems(items) {
+  return [...items]
+    .sort((a, b) => {
+      const t = String(a.title ?? '').localeCompare(String(b.title ?? ''));
+      return t !== 0 ? t : String(a.detail ?? '').localeCompare(String(b.detail ?? ''));
+    })
+    .map((it) => ({ ...it, children: sortItems(it.children ?? []) }));
+}
+
 async function runCheck(check, { key, subject, timeoutMs, signal }) {
   const result = { id: check.id, label: check.label, scope: check.scope, ok: false, items: [] };
   try {
@@ -157,7 +170,7 @@ async function runCheck(check, { key, subject, timeoutMs, signal }) {
     const body = await apiGet(check.url, token, signal);
     const list = body?.[check.pageKey] ?? [];
     result.ok = true;
-    result.items = list.map(check.pick);
+    result.items = sortItems(list.map(check.pick));
     result.count = result.items.length;
   } catch (e) {
     result.ok = false;
@@ -260,7 +273,17 @@ async function main() {
 void os;
 void path;
 
-export { parseArgs, getToken, apiGet, runCheck, renderHuman, CHECKS, DEFAULT_KEY, DEFAULT_SUBJECT };
+export {
+  parseArgs,
+  getToken,
+  apiGet,
+  runCheck,
+  renderHuman,
+  sortItems,
+  CHECKS,
+  DEFAULT_KEY,
+  DEFAULT_SUBJECT,
+};
 
 // 直接実行されたときだけ走らせる（テストから import しても main が動かないように）
 const invokedDirectly =

@@ -16,9 +16,50 @@ import {
   parseArgs,
   runCheck,
   renderHuman,
+  sortItems,
   CHECKS,
   DEFAULT_SUBJECT,
 } from './google-property-check.mjs';
+
+test('sortItems: API の返却順に依存せず決定的に並ぶ（実測で SC は毎回シャッフルされる）', () => {
+  const a = [
+    { title: 'https://b.example/', detail: 'permission=siteOwner', children: [] },
+    { title: 'https://a.example/', detail: 'permission=siteOwner', children: [] },
+    { title: 'https://a.example/', detail: 'permission=siteFullUser', children: [] },
+  ];
+  const b = [a[2], a[0], a[1]]; // 同じ集合を別順で
+  assert.deepEqual(sortItems(a), sortItems(b));
+  assert.deepEqual(
+    sortItems(a).map((x) => `${x.title} ${x.detail}`),
+    [
+      'https://a.example/ permission=siteFullUser',
+      'https://a.example/ permission=siteOwner',
+      'https://b.example/ permission=siteOwner',
+    ],
+  );
+});
+
+test('sortItems: children も並べ替え、元配列を破壊しない', () => {
+  const src = [
+    {
+      title: 'acct',
+      detail: '',
+      children: [
+        { title: 'z', detail: '' },
+        { title: 'a', detail: '' },
+      ],
+    },
+  ];
+  const out = sortItems(src);
+  assert.deepEqual(
+    out[0].children.map((c) => c.title),
+    ['a', 'z'],
+  );
+  assert.deepEqual(
+    src[0].children.map((c) => c.title),
+    ['z', 'a'],
+  );
+});
 
 test('parseArgs: flags と値オプションを分離する', () => {
   const a = parseArgs(['--json', '--subject', 'x@y.z', '--key', '/k.json']);

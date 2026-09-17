@@ -85,18 +85,16 @@ function geminiRows(count, overrides = {}) {
   return Array.from({ length: count }, () => ({ t: '2026-08-15T00:00:00Z', provider: 'gemini', grounded: true, in: 0, out: 0, ...overrides }));
 }
 
-test('Gemini 検索 6,000 回は超過 1,000 件で $14', () => {
+test('Gemini legacy token-only/search rows are unmeasured, never assumed free', () => {
   const result = summarizeGeminiMonth(geminiRows(6000), { now: new Date('2026-08-30T00:00:00Z') });
-  assert.equal(result.billableSearches, 1000);
-  assert.equal(result.searchUsd, 14);
+  assert.equal(result.unmeasuredCalls, 6000);
+  assert.equal(result.level, 'unknown');
+  assert.equal(result.totalJpy, 0);
+  assert.ok(result.flags.some((flag) => flag.includes('実費はこれより大きい')));
 });
 
-test('Gemini 検索は無料枠内なら検索課金 $0', () => {
-  const result = summarizeGeminiMonth(geminiRows(5000), { now: new Date('2026-08-30T00:00:00Z') });
-  assert.equal(result.searchUsd, 0);
-});
-
-test('Gemini 検索が無料枠の 80% を超えると警告', () => {
-  const result = summarizeGeminiMonth(geminiRows(4001), { now: new Date('2026-08-30T00:00:00Z') });
-  assert.ok(result.flags.some((flag) => flag.includes('80%超（4001/5000）')));
+test('Gemini reports ledger USD without repricing old token counts', () => {
+  const result = summarizeGeminiMonth(geminiRows(2, { usd: 10, in: 999999999 }), { now: new Date('2026-08-30T00:00:00Z') });
+  assert.equal(result.totalJpy, 3000);
+  assert.equal(result.unmeasuredCalls, 0);
 });

@@ -12,6 +12,7 @@ import { callWithFallback, classifyFailure, FALLBACK_CHAIN } from './llm-fallbac
 import { batchDeadline } from './lib/batch-deadline.mjs';
 import { runEvalHarnessJobs } from './lib/eval-harness-coalesce.mjs';
 import { acquireLock } from './lib/single-instance.mjs';
+import { geminiUsage, recordGeminiUsage } from './gemini-usage-ledger.mjs';
 
 function userHome() { const h = os.homedir(), m = process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i); return process.env.USERPROFILE || m?.[1] || h; }
 const home = userHome();
@@ -77,6 +78,12 @@ function messages(job) {
   return out;
 }
 function usageRecord(provider, model, usage = {}, extra = {}) {
+  if (provider === 'gemini') {
+    const measured = geminiUsage(usage.promptTokenCount !== undefined ? { usageMetadata: usage } : { usage });
+    const mode = extra.mode === 'batch' ? 'batch' : 'standard';
+    if (!usage.__attemptRecorded) recordGeminiUsage({ model, ...measured, source: 'batch-run', mode, ...extra }, { home, usageFile: ledger });
+    return { in: measured.inTokens, out: measured.outTokens };
+  }
   const input = usage.prompt_tokens ?? usage.promptTokenCount ?? usage.input_tokens ?? 0;
   const output = usage.completion_tokens ?? usage.candidatesTokenCount ?? usage.output_tokens ?? 0;
   if (!usage.__attemptRecorded) try { fs.appendFileSync(ledger, JSON.stringify({ t: new Date().toISOString(), provider, model, in: input, out: output, status: 'ok', attempt: 0, failover: false, ...extra }) + '\n'); } catch {}
@@ -203,7 +210,7 @@ for (const group of geminiGroups.values()) {
         try { const fallback = await runStandard(job); const usage = usageRecord(job.provider, job.model, fallback.usage); saveResult(job, fallback.text, usage, fallback.mode, fallback); completed.add(job.id); console.log(`OK ${job.id} standard`); }
         catch (err) { console.error(`FAIL ${job.id}: ${out.error}; fallback: ${err.message}`); }
       } else {
-        const usage = usageRecord(job.provider, job.model, out.usage); saveResult(job, out.text, usage, out.mode); completed.add(job.id); console.log(`OK ${job.id} gemini-batch`);
+        const usage = usageRecord(job.provider, job.model, out.usage, { mode: 'batch' }); saveResult(job, out.text, usage, out.mode); completed.add(job.id); console.log(`OK ${job.id} gemini-batch`);
       }
     }
   } catch (e) {

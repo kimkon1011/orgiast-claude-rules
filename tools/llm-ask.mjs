@@ -2,6 +2,7 @@
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
 import { readEnvValue } from './env-kv.mjs';
 import { callWithFallback, FALLBACK_CHAIN, preferredForCategory } from './llm-fallback.mjs';
+import { geminiUsage, recordGeminiUsage } from './gemini-usage-ledger.mjs';
 
 const PROVIDERS = {
   // 実測で精度が高く、llama-3.3-70b より安価な共通既定モデル。
@@ -66,6 +67,21 @@ if (system) messages.push({ role: 'system', content: system });
 messages.push({ role: 'user', content: prompt });
 const ledger = path.join(home, '.claude', 'executor-usage.jsonl');
 function appendAttempt(info, usage = {}) {
+  if (info.candidate.provider === 'gemini') {
+    const measured = geminiUsage({ usage });
+    try {
+      recordGeminiUsage({
+        model: info.candidate.model,
+        ...measured,
+        source: 'llm-ask',
+        status: info.status,
+        attempt: info.attempt,
+        failover: info.failover,
+        secs: Number(info.secs.toFixed(3)),
+      }, { home, usageFile: ledger });
+    } catch {}
+    return;
+  }
   const rec = { t: new Date().toISOString(), provider: info.candidate.provider, model: info.candidate.model, in: usage.prompt_tokens || 0, out: usage.completion_tokens || 0, secs: Number(info.secs.toFixed(3)), status: info.status, attempt: info.attempt, failover: info.failover };
   try { fs.mkdirSync(path.dirname(ledger), { recursive: true }); fs.appendFileSync(ledger, JSON.stringify(rec) + '\n'); } catch {}
 }

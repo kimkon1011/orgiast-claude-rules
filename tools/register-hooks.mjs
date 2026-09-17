@@ -178,6 +178,9 @@ try {
   // 1セッション=1目的ゲート: SessionStart で目的宣言を要求し、UserPromptSubmit で目的ドリフト/肥大をナッジする(context注入のため async 禁止)
   if (add(settings.hooks.SessionStart, 'session-purpose-gate.mjs', { hooks: [{ type: 'command', command: command('session-purpose-gate.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.UserPromptSubmit, 'session-purpose-gate.mjs', { hooks: [{ type: 'command', command: command('session-purpose-gate.mjs'), timeout: 5 }] })) added += 1;
+  // 着手衝突検知: 直近8hの他セッションの目的宣言(transcriptのassistant行)と突き合わせ、同じ1目的の二重着手を警告する
+  if (add(settings.hooks.SessionStart, 'session-claim-collision.mjs', { hooks: [{ type: 'command', command: command('session-claim-collision.mjs'), timeout: 10 }] })) added += 1;
+  if (add(settings.hooks.UserPromptSubmit, 'session-claim-collision.mjs', { hooks: [{ type: 'command', command: command('session-claim-collision.mjs'), timeout: 10 }] })) added += 1;
   if (add(settings.hooks.SessionStart, 'fable-session-guard.mjs', { hooks: [{ type: 'command', command: command('fable-session-guard.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.UserPromptSubmit, 'fable-session-guard.mjs', { hooks: [{ type: 'command', command: command('fable-session-guard.mjs'), timeout: 5 }] })) added += 1;
   added += migrate(settings.hooks.SessionStart, 'purge-hidden-sessions.py', 'session-list-tidy.mjs', command('session-list-tidy.mjs'));

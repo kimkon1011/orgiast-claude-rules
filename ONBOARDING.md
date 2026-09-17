@@ -351,6 +351,7 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
     - **長文脈・大資料の要約/整形 → Gemini Flash**（`--provider gemini`・現行 `gemini-3.7-flash`・激安1M文脈。無料枠MCPの429を回避したい量産に）
     - **安いコード補助 → Mistral/Codestral**（`--provider mistral`。Codexの下位・些末なコード）
     - **中量級の生成・推論・量産を別課金プールへ逃がす → Kimi K3**（`--provider kimi`・`reasoning_effort=none`で2〜3秒/Sonnet並・Moonshot前払い＝Claude/Teamクレジットを消費しない）。常用してよい。
+  - **APIが無い／認証壁でClaudeが触れず user に手作業が残る操作（管理画面の承認・API無しSaaSの手続き）→ Grok Bot**（§1.18.2。Cursor Pro $20/月。LLM委譲ではなく「手作業そのものを消す」レーン。実装には使わない）
   - 上記で済むものをLLMの従量トークンで代替しない（§1.17.1）。実装本体はCodex、量産・分類はGroq、汎用の安い逃がしはOpenRouter、長文脈はGemini Flash、大文脈読み/検索はGemini(MCP)、と徹底的に安い/無料/定額枠へ流す
 - モデル（認知）ルーティング（費用対効果ファースト、実測ベース v2 / 2026-07）:
   - **指揮官・判断・設計 → Opus5**（GA・$5/$25・Opus4.8の2倍性能で同単価。アーキ設計/根本原因分析/横断一貫性/経営判断/タスク分解・レビュー）
@@ -674,6 +675,28 @@ Astra クールダウン中は Sol を使う。明示の `--model astra`（ま�
 | design | Fable本体、複数仮説の設計判断だけOpus | Sonnetで材料整理 |
 
 Fable/Opus本体の直接ツール実行は1ターン4回で警告、8回で停止（lane-guard）。例外はuser指示の `[LANE-OK]`。Sonnetは非Claudeが全部落ちた時の最後の手だが、MCPコネクタ操作だけは最初からSonnetサブエージェントへ渡す。2026-09-10 kim承認。
+
+### 1.18.2 Grok Bot = 「ブラウザ実操作が要るから Claude では消せなかった手作業」の消し先（2026-09-17 導入）
+
+Claude Code / Codex / 安いLLM はすべて **API があるものしか触れない**。だから「管理画面で承認ボタンを押す」「API の無い SaaS にログインして手続きする」類の作業は §1.1 の最上位原則（user の手作業を極限まで減らす）に反したまま user に残っていた。**この残りを Grok Bot が引き取る。**
+
+- **正体**: xAI の自律エージェント。アカウントごとに永続クラウドPC（Linux microVM／ブラウザ＋ファイルシステム＋ターミナル）が割り当てられ、**ローカルPCの電源が落ちていても24/7でクラウド側が動く**。API の無いサービスも人間と同じようにログインして操作する。実演1回で「スキル」として学習し、定期実行の「ルーティン」にできる。2FA・CAPTCHA・重要操作（送信／課金／本番反映）では停止して人に承認を求める。
+- **契約**: **Cursor Pro $20/月**（全有料 individual プランに Grok Bot access が含まれる。Pro+ $60 / Ultra $200 は枠が増えるだけ）。SuperGrok / SuperGrok Plus / Heavy のリンクでも可。**Cursor Teams $40/席は不要** — SSO・集中請求・Bugbot が要らないなら倍額の価値はなく、個人 Pro を kim のカードで複数件登録すれば集中請求も代替できる。
+- **アカウント方針**: 1アカウント内の全 Bot が**単一のクラウドPC（＝同じブラウザセッション・同じ認証情報）を共有**する。よって**席は「作業量」ではなく「業務分離」で分ける**。その人／そのチーム自身のメール・カレンダー・管理画面を触らせるなら、その人のアカウントで契約する。kim の席で他人の業務を回さない（§1.12 のアカウント所有権と同じ考え方）。
+  - kim@orgiast.jp — 2026-09-17 契約済み
+  - seisaku-team@orgiast.jp — 会社リソース（GCP/Supabase/Growi/Drive共有/PC台帳/LINE公式/ChatWork）のオーナーが集中しているため必須。共有アカウントなので、パスワードを持つ社員は誰でもその Bot を動かせる点に注意し、承認者を運用で決める
+  - nishi@orgiast.jp — 請求書発行など本人名義の反復作業用
+- **Claude Code 側の使い分け（必ず守る）**:
+
+| 作業 | 担当 |
+|---|---|
+| コード実装・リポジトリ変更 | Codex（§1.17）。**Grok Bot に実装をやらせない** |
+| 分類・抽出・要約・量産 | Groq / OpenRouter / Gemini（§1.13） |
+| API のある操作（Drive・Gmail・Sheets・Discord・GitHub） | Claude Code の MCP / CLI。**先にこちらを試す（§AUTOMATION-FIRST）** |
+| **API が無い／認証壁で Claude が触れず、user に手作業が残っていたもの** | **Grok Bot** |
+
+- **運用**: Claude Code は user に手作業を頼もうとした時点で、まず「これは Grok Bot のスキルにできないか」を検討し、できるなら**手順書ではなく Bot 用の指示文**を出す。Bot に渡した作業は `~/.claude/grokbot-skills.md` に「スキル名・対象アカウント・承認が要る箇所」を記録し、二重に人へ頼まない。
+- **禁止**: 認証情報を Bot に渡す判断を Claude が勝手に進めないこと。どのサービスに何の権限でログインさせるかは必ず user に明示して合意を取る（§1.1 の「安全機構の解除誘導・説明なしの一括設定は禁止」に該当）。
 
 ### 1.19 マキモノと画像デザイン
 

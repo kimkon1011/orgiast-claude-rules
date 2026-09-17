@@ -218,7 +218,7 @@ test('sectionsForTodo: 同一ブロック内の入れ子ハンドオフから対
   assert.ok(!JSON.stringify(sections).includes('vercel --prod'));
 });
 
-test('sectionsForTodo: 入れ子ハンドオフ側のTODOには自分のセグメントの条件を渡す', () => {
+test('sectionsBySegment: 入れ子ハンドオフ側の条件は自分のセグメントに保持する', () => {
   const md = `<!-- NEXT-SESSION v1 -->
 
 ## 次の1目的
@@ -243,10 +243,27 @@ test('sectionsForTodo: 入れ子ハンドオフ側のTODOには自分のセグ�
 1. **旧TODO** keyserve を作業する
 `;
   const parsed = parseHandoff(md);
-  const sections = sectionsForTodo(parsed, parsed.todos[1]);
-  assert.equal(sections['対象'], '## 対象\n- orgiast-keyserve PR#3');
-  assert.equal(sections['完了条件'], '## 完了条件\n- `vercel --prod` が通ること');
-  assert.ok(!JSON.stringify(sections).includes('memory_current.md'));
+  assert.equal(parsed.sectionsBySegment['1:2']['対象'], '## 対象\n- orgiast-keyserve PR#3');
+  assert.equal(parsed.sectionsBySegment['1:2']['完了条件'], '## 完了条件\n- `vercel --prod` が通ること');
+  assert.ok(!JSON.stringify(parsed.sectionsBySegment['1:2']).includes('memory_current.md'));
+});
+
+test('parseHandoff: 1マーカーブロックでは最初の残TODOだけを列挙する', () => {
+  const md = `<!-- NEXT-SESSION v1 -->
+## 次の1目的
+現行の目的
+## 残TODO
+1. 現行TODOを実行する
+
+## 次の1目的
+入れ子の旧ハンドオフ
+## 残TODO
+1. 旧ハンドオフTODOを実行する
+`;
+  const parsed = parseHandoff(md);
+  assert.deepEqual(parsed.todos, ['現行TODOを実行する']);
+  assert.ok(!parsed.todos.some((todo) => todo.includes('旧ハンドオフTODO')));
+  assert.deepEqual(parsed.todoSegments, ['1:1']);
 });
 
 test('sectionsForTodo: 旧ハンドオフの前置きを現行memory節に混ぜない', () => {

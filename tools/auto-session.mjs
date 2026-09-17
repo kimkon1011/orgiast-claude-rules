@@ -78,35 +78,37 @@ export function parseHandoff(md) {
       const segmentId = `${blockIndex + 1}:${segmentIndex + 1}`;
       sectionsBySegment[segmentId] = handoffSections(segment.text);
       if (segmentIndex === 0) sectionsByBlock[blockIndex + 1] = sectionsBySegment[segmentId];
-      const todoHeadings = [...segment.text.matchAll(/^##[ \t]+残TODO(?=[ \t（(]|$).*$/gm)];
-      for (const todoHeading of todoHeadings) {
-        const todoSection = sectionFrom(segment.text.slice(todoHeading.index), '残TODO');
-        const lines = todoSection.split(/\r?\n/).slice(1);
-        for (let index = 0; index < lines.length;) {
-          const match = lines[index].match(/^\s*\d+[.)、]\s+(.+?)\s*$/);
-          if (!match) { index += 1; continue; }
-          const todoLines = [match[1]];
-          index += 1;
-          let blankCount = 0;
-          while (index < lines.length) {
-            const line = lines[index];
-            // インデントのない散文や、空行後の独立したリストは TODO の外側。
-            if (/^\S/.test(line) && (blankCount > 0 || !/^[-*]\s+/.test(line))) break;
-            if (/^\s*\d+[.)、]\s+/.test(line) || /^##[ \t]+/.test(line) || /^\s*---\s*$/.test(line)) break;
-            if (!line.trim()) {
-              blankCount += 1;
-              if (blankCount >= 2) break;
-            } else {
-              while (blankCount > 0) { todoLines.push(''); blankCount -= 1; }
-              todoLines.push(line);
-            }
-            index += 1;
-          }
-          todos.push(todoLines.join('\n'));
-          todoBlocks.push(blockIndex + 1);
-          todoSegments.push(segmentId);
+    }
+    const todoHeading = /^##[ \t]+残TODO(?=[ \t（(]|$).*$/m.exec(currentBlock);
+    const todoSection = sectionFrom(currentBlock, '残TODO');
+    const todoSegmentIndex = todoHeading == null
+      ? -1
+      : segments.findIndex((segment) => todoHeading.index >= segment.start && todoHeading.index < segment.end);
+    const todoSegmentId = todoSegmentIndex < 0 ? null : `${blockIndex + 1}:${todoSegmentIndex + 1}`;
+    const lines = todoSection.split(/\r?\n/).slice(1);
+    for (let index = 0; index < lines.length;) {
+      const match = lines[index].match(/^\s*\d+[.)、]\s+(.+?)\s*$/);
+      if (!match) { index += 1; continue; }
+      const todoLines = [match[1]];
+      index += 1;
+      let blankCount = 0;
+      while (index < lines.length) {
+        const line = lines[index];
+        // インデントのない散文や、空行後の独立したリストは TODO の外側。
+        if (/^\S/.test(line) && (blankCount > 0 || !/^[-*]\s+/.test(line))) break;
+        if (/^\s*\d+[.)、]\s+/.test(line) || /^##[ \t]+/.test(line) || /^\s*---\s*$/.test(line)) break;
+        if (!line.trim()) {
+          blankCount += 1;
+          if (blankCount >= 2) break;
+        } else {
+          while (blankCount > 0) { todoLines.push(''); blankCount -= 1; }
+          todoLines.push(line);
         }
+        index += 1;
       }
+      todos.push(todoLines.join('\n'));
+      todoBlocks.push(blockIndex + 1);
+      todoSegments.push(todoSegmentId);
     }
   }
   return { block, todos, todoBlocks, todoSegments, sections: sectionsByBlock[1], sectionsByBlock, sectionsBySegment };

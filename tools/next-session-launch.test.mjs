@@ -8,6 +8,7 @@ import {
   accountConfigPath,
   accountLabel,
   applyTrust,
+  buildRecoveryCommand,
   buildVscodeExtUri,
   buildVscodeUri,
   hasUnsentVscodeTab,
@@ -84,6 +85,16 @@ test('Claude Code の open URI にプロンプトを URL エンコードする',
   assert.equal(buildVscodeUri('/session-start'), 'vscode://Anthropic.claude-code/open?prompt=%2Fsession-start');
   assert.equal(buildVscodeUri('日本語 開始'), `vscode://Anthropic.claude-code/open?prompt=${encodeURIComponent('日本語 開始')}`);
   assert.equal(buildVscodeUri(''), 'vscode://Anthropic.claude-code/open');
+});
+
+test('PowerShell 退避コマンドは code CLI の有無に応じた引用済みコマンドを返す', () => {
+  assert.equal(
+    buildRecoveryCommand({ codeCli: 'C:\\Code Folder\\bin\\code.cmd', prompt: '/session-start 日本語' }),
+    `& "C:\\Code Folder\\bin\\code.cmd" --open-url "vscode://Anthropic.claude-code/open?prompt=${encodeURIComponent('/session-start 日本語')}"`,
+  );
+  const fallback = buildRecoveryCommand({ codeCli: '', prompt: '/session-start' });
+  assert.match(fallback, /^& "\$env:LOCALAPPDATA\\Programs\\Microsoft VS Code\\bin\\code\.cmd" --open-url "/);
+  assert.match(fallback, /prompt=%2Fsession-start"$/);
 });
 
 test('自前拡張 URI は prompt/cwd/claude を個別に URL エンコードする', () => {
@@ -483,6 +494,43 @@ test('VSCode 経路は既定で URI だけを撃ち、既存ウィンドウを�
   assert.match(successLog, /タブバーの一番右端/);
   assert.match(successLog, /Enter 1回で開始/);
   assert.match(successLog, /cwd   : C:\\work/);
+});
+
+test('VSCode spawn が ENOENT の時は PowerShell 退避コマンドを出して exit 0 を保つ', async () => {
+  const codeCli = 'C:\\Code\\bin\\code.cmd';
+  const { io, calls } = fakeIo({
+    env: { VSCODE_CLI_PATH: codeCli },
+    exists: (file) => file === codeCli,
+    spawn: (...args) => {
+      calls.spawn.push(args);
+      const child = new EventEmitter();
+      child.unref = () => {};
+      queueMicrotask(() => child.emit('error', new Error('spawn cmd.exe ENOENT')));
+      return child;
+    },
+  });
+  assert.equal(await launchNextSession(['--target', 'vscode'], io), 0);
+  const output = calls.logs.join('\n');
+  assert.match(output, /PowerShell 退避:/);
+  assert.match(output, /--open-url/);
+  assert.match(output, /prompt=%2Fsession-start/);
+});
+
+test('ENOENT/spawn ではない起動失敗では PowerShell 退避を出さない', async () => {
+  const codeCli = 'C:\\Code\\bin\\code.cmd';
+  const { io, calls } = fakeIo({
+    env: { VSCODE_CLI_PATH: codeCli },
+    exists: (file) => file === codeCli,
+    spawn: (...args) => {
+      calls.spawn.push(args);
+      const child = new EventEmitter();
+      child.unref = () => {};
+      queueMicrotask(() => child.emit('error', new Error('permission denied')));
+      return child;
+    },
+  });
+  assert.equal(await launchNextSession(['--target', 'vscode'], io), 0);
+  assert.doesNotMatch(calls.logs.join('\n'), /PowerShell 退避:/);
 });
 
 test('--open-folder のときだけ新規ウィンドウ(-n)を先に開く', async () => {

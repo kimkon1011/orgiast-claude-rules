@@ -115,6 +115,11 @@ export function buildVscodeUri(prompt) {
   return prompt ? `${base}?prompt=${encodeURIComponent(prompt)}` : base;
 }
 
+export function buildRecoveryCommand({ codeCli, prompt }) {
+  const executable = codeCli || '$env:LOCALAPPDATA\\Programs\\Microsoft VS Code\\bin\\code.cmd';
+  return `& "${executable}" --open-url "${buildVscodeUri(prompt)}"`;
+}
+
 export function buildVscodeExtUri({ prompt, cwd, claude, probe = false }) {
   const params = [
     `prompt=${encodeURIComponent(prompt)}`,
@@ -472,9 +477,10 @@ export async function launchNextSession(argv = [], io = {}) {
   const wait = io.wait ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   const log = io.log ?? console.log;
   const arm = io.armToFile ?? armToFile;
+  const flags = parseArgs(argv);
+  const codeCli = resolveVscodeCli({ env, exists, homedir: home });
 
   try {
-    const flags = parseArgs(argv);
     const claudeDir = path.join(home, '.claude');
     const statePath = path.join(claudeDir, 'next-session-launch.json');
     const claudeConfigPath = path.join(home, '.claude.json');
@@ -488,7 +494,6 @@ export async function launchNextSession(argv = [], io = {}) {
     };
 
     const state = await readJson(statePath, { enabled: true });
-    const codeCli = resolveVscodeCli({ env, exists, homedir: home });
     let route = pickRoute({ codeCli, flagTarget: flags.target, env, state });
 
     if (flags.action) {
@@ -804,7 +809,14 @@ export async function launchNextSession(argv = [], io = {}) {
     log(`[next-session] 新しいセッションを起動しました: ${cwd} / prompt=${flags.prompt} / account=${accountLog}`);
     return 0;
   } catch (error) {
-    log(`[next-session] スキップ: 起動に失敗しました (${error?.message ?? error})`);
+    const message = String(error?.message ?? error);
+    log(`[next-session] スキップ: 起動に失敗しました (${message})`);
+    // Claude Code の対話セッションでは Bash tool サンドボックス配下の exe spawn がすべて
+    // ENOENT になり、PATH や ComSpec の変更では直らない。退避は PowerShell tool から
+    // code.cmd を直接実行する（2026-09-17 実測）。PR #435 の経路は再試行しない。
+    if (message.includes('ENOENT') || message.includes('spawn')) {
+      log(`[next-session] PowerShell 退避: ${buildRecoveryCommand({ codeCli, prompt: flags.prompt })}`);
+    }
     return 0;
   }
 }

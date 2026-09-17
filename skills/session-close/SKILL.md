@@ -150,8 +150,10 @@ node "$HOME/orgiast-claude-rules/tools/close-session.mjs" --session <このセ�
   - 恒久的に止めるなら `~/.claude/next-session-launch.json` に `{"enabled": false}`
 - target の変更・確認は `next-session-launch.mjs --set-target <vscode|vscode-ext|terminal|inline|headless>` / `--show-target`。
   旧手順との互換用に `--set-mode` / `--show-mode` も受けるが、新しい文書では使わない。
-- 起動結果は `[next-session] VSCode に新しいタブを開きました…`（ターミナル経路なら `新しいセッションを起動しました: <cwd>`） / `[next-session] スキップ: <理由>` の1行で出る。
-  スキップされた時だけ「新しいセッションを手で開いてください」と伝える。
+- 起動結果は `[next-session] VSCode に新しいタブを開きました…`（ターミナル経路なら `新しいセッションを起動しました: <cwd>`） / `[next-session] スキップ: <理由>` で出る。
+  対話セッションの Bash tool サンドボックスで exe spawn が禁止され、`[next-session] スキップ: 起動に失敗しました (spawn cmd.exe ENOENT)` が出た時は、user に手作業を頼まない。直後の
+  `[next-session] PowerShell 退避: & "…" --open-url "vscode://…"` のコマンド部分を **Claude が PowerShell tool でそのまま実行**する（2026-09-17 実測 exit 0。入力欄に `/session-start` が入る）。成功後は「タブが開いたので Enter 1回で始まります」とだけ伝える。
+  PowerShell tool でも失敗した時だけ、user に「新しいタブで `/session-start`」と伝える。ターミナル経路や headless では、対話セッションの Bash tool 固有制約を受けないためこの退避は不要。
 
 ## 注意
 

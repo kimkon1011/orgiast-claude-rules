@@ -86,3 +86,53 @@ test('assistant_text と transcript_path の併用でも直接照会証拠を読
   assert.equal(output.status, 0, output.stderr);
   assert.equal(output.stdout, '');
 });
+
+test('stdin経由の2行・3行・バックグラウンド矛盾を他gateと分離して検証', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-three-lines-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const body = '作業内容を整理し、関連箇所を確認しました。'.repeat(15);
+  const footer = '次に kim がすること: なし\nこの後の自動進行: なし（完了）';
+  const cases = [
+    ['two-lines', `${body}\n${footer}`, 'NEXT-ACTION-FOOTER'],
+    ['three-lines', `${body}\n${footer}\nこのセッション: もう削除してよい（残すものは無い）`, null],
+    ['background-close', `${body} Codex がバックグラウンドで実行中です。\n次に kim がすること: なし\nこの後の自動進行: 処理が完了したら私がこの画面で結果を報告します\nこのセッション: 閉じてよい（/session-close 実行済み）`, 'SESSION-BACKGROUND-CONTRADICTION'],
+  ];
+  for (const [id, text, code] of cases) {
+    const result = invoke(home, id, text);
+    assert.equal(result.status, 0, result.stderr);
+    if (code) assert.equal(JSON.parse(result.stdout).decision, 'block');
+    else assert.equal(result.stdout, '');
+    const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8').trim().split('\n').at(-1));
+    assert.equal(record.verdict, code ? 'block' : 'pass');
+    assert.deepEqual(record.blockedBy, code ? ['next-action-gate'] : []);
+    assert.deepEqual(record.reasonCodes, code ? [code] : []);
+  }
+});
+
+test('runnerと単体hookの両方が会話のsession-close証拠を評価する', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-close-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const transcript = path.join(home, 'transcript.jsonl');
+  const text = `${'作業内容を整理し、関連箇所を確認しました。'.repeat(15)}\n次に kim がすること: なし\nこの後の自動進行: なし（完了）\nこのセッション: 閉じてよい（/session-close 実行済み）`;
+  const gate = fileURLToPath(new URL('./next-action-gate.mjs', import.meta.url));
+  for (const evidence of [false, true]) {
+    fs.writeFileSync(transcript, [
+      { type: 'user', message: { role: 'user', content: evidence ? '<command-name>/session-close</command-name>' : '/session-close 実行予定' } },
+      { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] } },
+    ].map(entry => JSON.stringify(entry)).join('\n'));
+    for (const target of [runner, gate]) {
+      for (const directText of [false, true]) {
+        const result = spawnSync(process.execPath, [target], {
+          input: JSON.stringify({ session_id: `${evidence}-${directText}-${path.basename(target)}`, transcript_path: transcript, ...(directText ? { assistant_text: text } : {}) }),
+          encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_HANDOFF_AUDIT: 'off' },
+        });
+        assert.equal(result.status, 0, result.stderr);
+        if (evidence) assert.equal(result.stdout, '');
+        else {
+          assert.equal(JSON.parse(result.stdout).decision, 'block');
+          assert.match(JSON.parse(result.stdout).reason, /実行した形跡がありません/);
+        }
+      }
+    }
+  }
+});

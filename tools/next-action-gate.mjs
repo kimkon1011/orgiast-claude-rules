@@ -10,9 +10,9 @@ const WAITING_PATTERN = /(完了通知|待ち|実行中|バックグラウンド
 const BACKGROUND_PATTERN = /(バックグラウンド|実行中|完了通知|Codex が|走ってい)/i;
 const COMPLETE_PATTERN = /^なし\s*[（(]\s*完了\s*[）)]$/;
 const SESSION_STATES = [
-  ['closed', /^閉じてよい(?:\s*[（(].*[）)])?$/],
-  ['open', /^まだ閉じない(?:\s*[（(].*[）)])?$/],
-  ['delete', /^もう削除してよい(?:\s*[（(].*[）)])?$/],
+  ['closed', /^閉じて(?:よい|良い|いい)(?:\s*[（(].*[）)])?[。.]?$/],
+  ['open', /^まだ閉じない(?:\s*[（(].*[）)])?[。.]?$/],
+  ['delete', /^もう削除して(?:よい|良い|いい)(?:\s*[（(].*[）)])?[。.]?$/],
 ];
 
 export function enabled() {
@@ -30,10 +30,35 @@ export function hasRequiredFooter(text) {
   return footerValues(text) !== null;
 }
 
-export function hasSessionCloseEvidence(text, transcriptRaw = '') {
+function reportsSessionClose(text) {
+  // 末尾の自己申告だけ、実行予定、未実行は証拠にしない。
   const body = String(text || '').split(/(?:^|\n)次に kim がすること:/)[0];
-  if (/(?:\/session-close\s*(?:を)?(?:実行|完了|済み)|(?:実行|完了)済み[^\r\n]*\/session-close)/i.test(body)) return true;
-  return /<command-name>\s*\/session-close\s*<\/command-name>|<local-command[^>]*>[^<]*\/session-close/i.test(String(transcriptRaw || ''));
+  return /\/session-close(?:[ \t]|[`「」])*を?[ \t]*(?:実行済み|実行しました|実行した|完了しました|完了済み)(?=$|[\s。、（(）)])/m.test(body);
+}
+
+export function hasSessionCloseEvidence(text, transcriptRaw = '') {
+  if (reportsSessionClose(text)) return true;
+  const uses = new Set();
+  for (const line of String(transcriptRaw || '').split(/\r?\n/)) {
+    let entry;
+    try { entry = JSON.parse(line); } catch { continue; }
+    if (entry?.isSidechain === true) continue;
+    const role = entry?.message?.role || entry?.type;
+    const content = entry?.message?.content;
+    const blocks = Array.isArray(content) ? content : [];
+    const message = typeof content === 'string' ? content : blocks.filter(block => block?.type === 'text').map(block => block.text || '').join('\n');
+    // 生の JSON への部分一致では、説明やツール引数中の例まで実行証拠になる。
+    if (role === 'user' && /^\s*(?:<command-message>[^<]*<\/command-message>\s*)?<command-name>\s*\/session-close\s*<\/command-name>/.test(message)) return true;
+    if (role === 'assistant' && reportsSessionClose(message)) return true;
+    for (const block of blocks) {
+      if (role === 'assistant' && block?.type === 'tool_use' && block.name === 'Skill' && /^\/?session-close$/.test(block.input?.skill || '') && block.id) uses.add(block.id);
+      if (role === 'user' && block?.type === 'tool_result' && uses.has(block.tool_use_id) && block.is_error !== true) {
+        const result = typeof block.content === 'string' ? block.content : JSON.stringify(block.content ?? '');
+        if (!/(?:denied|拒否|\berror\b|失敗)/i.test(result)) return true;
+      }
+    }
+  }
+  return false;
 }
 
 export function judgeNextAction(text, transcriptRaw = '') {

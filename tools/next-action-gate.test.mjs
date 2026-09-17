@@ -38,7 +38,7 @@ test('kimの作業が2件ならblock', () => {
 });
 
 test('待ち状態と完了表記が矛盾すればblock', () => {
-  const result = judgeNextAction(`${body} 完了通知待ちです。\n${footer}`);
+  const result = judgeNextAction(`${body} Codex の完了通知待ちです。\n${footer}`);
   assert.equal(result.decision, 'block');
   assert.equal(result.code, 'AUTOPILOT-CONTRADICTION');
 });
@@ -101,4 +101,76 @@ test('環境変数で無効化できる', () => {
     if (previous === undefined) delete process.env.ORGIAST_NEXT_ACTION_GATE;
     else process.env.ORGIAST_NEXT_ACTION_GATE = previous;
   }
+});
+
+const closedText = `${body}\n${twoLineFooter}\nこのセッション: 閉じてよい（/session-close 実行済み）`;
+const row = (role, content, extra = {}) => JSON.stringify({ type: role, message: { role, content }, ...extra });
+
+test('本文でsession-close完了を明記すればpass', () => {
+  for (const report of ['/session-close 実行済み。', '`/session-close` を実行しました。', '/session-close を完了しました。']) {
+    assert.equal(judgeNextAction(`${report}\n${closedText}`).decision, 'pass', report);
+  }
+});
+
+test('session-close予定・未実行・失敗は実行証拠にならない', () => {
+  for (const report of ['/session-close 実行予定です。', '/session-close を実行していません。', '/session-close 実行に失敗しました。', '/session-close 完了待ちです。', '/session-close 実行済みではありません。']) {
+    const text = `${report}\n${closedText.replace('なし（完了）', '私が手続き完了後にこの画面で報告します')}`;
+    assert.equal(judgeNextAction(text).code, 'SESSION-CLOSE-NO-EVIDENCE', report);
+  }
+});
+
+test('会話中の本文でsession-close完了を報告していればpass', () => {
+  const transcript = row('assistant', [{ type: 'text', text: '/session-close を実行しました。' }]);
+  assert.equal(judgeNextAction(closedText, transcript).decision, 'pass');
+});
+
+test('会話の例示・ツール引数・別セッション・末尾自己申告は証拠にしない', () => {
+  const command = '<command-name>/session-close</command-name>';
+  for (const transcript of [
+    row('user', `実行例: ${command}`),
+    row('assistant', command),
+    row('assistant', [{ type: 'tool_use', name: 'Bash', input: { command: `echo '${command}'` } }]),
+    row('user', command, { isSidechain: true }),
+    row('assistant', closedText),
+    command,
+  ]) assert.equal(judgeNextAction(closedText, transcript).code, 'SESSION-CLOSE-NO-EVIDENCE', transcript);
+});
+
+test('Skillの成功したsession-close呼び出しを会話から検出する', () => {
+  const use = row('assistant', [{ type: 'tool_use', name: 'Skill', id: 'close-1', input: { skill: 'session-close' } }]);
+  const result = row('user', [{ type: 'tool_result', tool_use_id: 'close-1', content: '完了しました' }]);
+  assert.equal(judgeNextAction(closedText, `${use}\n${result}`).decision, 'pass');
+  for (const transcript of [use, `${result}\n${use}`, `${use}\n${row('user', [{ type: 'tool_result', tool_use_id: 'other', content: '完了しました' }])}`, `${use}\n${row('user', [{ type: 'tool_result', tool_use_id: 'close-1', is_error: true, content: '失敗' }])}`, `${use}\n${row('user', [{ type: 'tool_result', tool_use_id: 'close-1', content: 'Permission denied' }])}`]) {
+    assert.equal(judgeNextAction(closedText, transcript).code, 'SESSION-CLOSE-NO-EVIDENCE');
+  }
+});
+
+test('3分類の句点・漢字・括弧の表記ゆれを許容する', () => {
+  for (const state of ['閉じて良い。', '閉じていい(/session-close 実行済み)', 'まだ閉じない。', 'もう削除して良い（残すものは無い）。']) {
+    const text = `/session-close を実行しました。\n${body}\n${twoLineFooter}\nこのセッション: ${state}`;
+    assert.equal(judgeNextAction(text).decision, 'pass', state);
+  }
+});
+
+test('3行の順序違い・2つ以上の空行・行間の説明をblock', () => {
+  const lines = footer.split('\n');
+  for (const invalid of [[lines[1], lines[0], lines[2]].join('\n'), lines.join('\n\n\n'), lines.join('\n説明です\n')]) {
+    assert.equal(judgeNextAction(`${body}\n${invalid}`).code, 'NEXT-ACTION-FOOTER');
+  }
+  assert.equal(judgeNextAction(`${body}\r\n${lines.join('\r\n \t\r\n')}`).decision, 'pass');
+});
+
+test('指定された各バックグラウンド語と閉じる・削除の矛盾をblock', () => {
+  for (const word of ['バックグラウンド', '実行中', '完了通知', 'Codex が', '走っている']) {
+    for (const state of ['閉じてよい', 'もう削除してよい']) {
+      const text = `${body} ${word}\n次に kim がすること: なし\nこの後の自動進行: 処理の完了時に私がこの画面で報告します\nこのセッション: ${state}`;
+      assert.equal(judgeNextAction(text).code, 'SESSION-BACKGROUND-CONTRADICTION', `${word}: ${state}`);
+    }
+  }
+});
+
+test('200文字の境界と半角疑問符の除外を維持する', () => {
+  assert.equal(judgeNextAction('あ'.repeat(199)).reason, 'short-response');
+  assert.equal(judgeNextAction('あ'.repeat(200)).code, 'NEXT-ACTION-FOOTER');
+  assert.equal(judgeNextAction(`${body}?`).reason, 'question');
 });

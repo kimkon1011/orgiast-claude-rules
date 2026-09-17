@@ -48,46 +48,68 @@ export function sectionFrom(block, heading) {
   return block.slice(start, next ? afterHeading + next.index : block.length).replace(/[\r\n]+$/, '');
 }
 
+export function splitHandoffSegments(block) {
+  const source = String(block ?? '');
+  const headings = [...source.matchAll(/^##[ \t]+次の1目的(?=[ \t（(]|$).*$/gm)];
+  if (headings.length <= 1) return [{ start: 0, end: source.length, text: source }];
+  const starts = [0, ...headings.slice(1).map((match) => match.index)];
+  return starts.map((start, index) => {
+    const end = starts[index + 1] ?? source.length;
+    return { start, end, text: source.slice(start, end) };
+  });
+}
+
 export function parseHandoff(md) {
   const source = String(md ?? '');
   const { start, end } = firstBlockBounds(source);
   const block = source.slice(start, end);
   const todos = [];
   const todoBlocks = [];
+  const todoSegments = [];
   const sectionsByBlock = {};
+  const sectionsBySegment = {};
   const markerStarts = [...source.matchAll(/<!-- NEXT-SESSION v1 -->/g)].map((match) => match.index);
   const blocks = markerStarts.length
     ? markerStarts.map((blockStart, index) => source.slice(blockStart, markerStarts[index + 1] ?? source.length))
     : [source];
   for (const [blockIndex, currentBlock] of blocks.entries()) {
-    sectionsByBlock[blockIndex + 1] = handoffSections(currentBlock);
-    const todoSection = sectionFrom(currentBlock, '残TODO');
-    const lines = todoSection.split(/\r?\n/).slice(1);
-    for (let index = 0; index < lines.length;) {
-      const match = lines[index].match(/^\s*\d+[.)、]\s+(.+?)\s*$/);
-      if (!match) { index += 1; continue; }
-      const todoLines = [match[1]];
-      index += 1;
-      let blankCount = 0;
-      while (index < lines.length) {
-        const line = lines[index];
-        // インデントのない散文や、空行後の独立したリストは TODO の外側。
-        if (/^\S/.test(line) && (blankCount > 0 || !/^[-*]\s+/.test(line))) break;
-        if (/^\s*\d+[.)、]\s+/.test(line) || /^##[ \t]+/.test(line) || /^\s*---\s*$/.test(line)) break;
-        if (!line.trim()) {
-          blankCount += 1;
-          if (blankCount >= 2) break;
-        } else {
-          while (blankCount > 0) { todoLines.push(''); blankCount -= 1; }
-          todoLines.push(line);
+    const segments = splitHandoffSegments(currentBlock);
+    for (const [segmentIndex, segment] of segments.entries()) {
+      const segmentId = `${blockIndex + 1}:${segmentIndex + 1}`;
+      sectionsBySegment[segmentId] = handoffSections(segment.text);
+      if (segmentIndex === 0) sectionsByBlock[blockIndex + 1] = sectionsBySegment[segmentId];
+      const todoHeadings = [...segment.text.matchAll(/^##[ \t]+残TODO(?=[ \t（(]|$).*$/gm)];
+      for (const todoHeading of todoHeadings) {
+        const todoSection = sectionFrom(segment.text.slice(todoHeading.index), '残TODO');
+        const lines = todoSection.split(/\r?\n/).slice(1);
+        for (let index = 0; index < lines.length;) {
+          const match = lines[index].match(/^\s*\d+[.)、]\s+(.+?)\s*$/);
+          if (!match) { index += 1; continue; }
+          const todoLines = [match[1]];
+          index += 1;
+          let blankCount = 0;
+          while (index < lines.length) {
+            const line = lines[index];
+            // インデントのない散文や、空行後の独立したリストは TODO の外側。
+            if (/^\S/.test(line) && (blankCount > 0 || !/^[-*]\s+/.test(line))) break;
+            if (/^\s*\d+[.)、]\s+/.test(line) || /^##[ \t]+/.test(line) || /^\s*---\s*$/.test(line)) break;
+            if (!line.trim()) {
+              blankCount += 1;
+              if (blankCount >= 2) break;
+            } else {
+              while (blankCount > 0) { todoLines.push(''); blankCount -= 1; }
+              todoLines.push(line);
+            }
+            index += 1;
+          }
+          todos.push(todoLines.join('\n'));
+          todoBlocks.push(blockIndex + 1);
+          todoSegments.push(segmentId);
         }
-        index += 1;
       }
-      todos.push(todoLines.join('\n'));
-      todoBlocks.push(blockIndex + 1);
     }
   }
-  return { block, todos, todoBlocks, sections: sectionsByBlock[1], sectionsByBlock };
+  return { block, todos, todoBlocks, todoSegments, sections: sectionsByBlock[1], sectionsByBlock, sectionsBySegment };
 }
 
 function handoffSections(block) {
@@ -98,7 +120,9 @@ function handoffSections(block) {
   const closedPurpose = /~~[^~]*~~/.test(purpose);
   for (const name of ['対象', '完了条件', '触る前に読む memory']) {
     if (closedPurpose && name !== '触る前に読む memory') continue;
-    const value = sectionFrom(block, name);
+    // 実ファイルでは旧ハンドオフの前置きが水平線の後、次の目的見出しの前にある。
+    // その前置きを直前の memory 節の値として子セッションへ渡さない。
+    const value = sectionFrom(block, name).replace(/\r?\n\s*---\s*(?:\r?\n|$)[\s\S]*$/, '').replace(/[\r\n]+$/, '');
     if (value) sections[name] = value;
   }
   return sections;
@@ -109,6 +133,10 @@ export function sectionsForTodo(parsed, todo) {
   const index = parsed.todos.indexOf(todo);
   if (index < 0) return {};
   const blockIndex = parsed.todoBlocks[index];
+  if (parsed.sectionsByBlock[blockIndex] == null) return {};
+  if (parsed.todoSegments != null && parsed.sectionsBySegment != null) {
+    return parsed.sectionsBySegment[parsed.todoSegments[index]] ?? {};
+  }
   return parsed.sectionsByBlock[blockIndex] ?? {};
 }
 

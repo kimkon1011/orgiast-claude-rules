@@ -730,6 +730,38 @@ test('WSL codex のプローブはコールドスタートを待てる', () => {
   assert.ok(WSL_PROBE_TIMEOUT_MS >= 60000);
 });
 
+// WSL 経路の中断は win32 でしか通らないため、他OSでは明示的に skip する
+// （CI は Linux。ここを skip しても Windows 実機での回帰は検出できる）。
+test('WSL が使えず中断するときも台帳に launched:false の1行を残す', { skip: process.platform !== 'win32' }, (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-wslabort-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const result = run(['--cwd', home, '--model', 'sol', '説明して'], {
+    home,
+    env: { CODEX_DO_WSL_PROBE: 'absent' },
+  });
+  assert.equal(result.status, 3, result.stderr);
+  const ledger = path.join(home, '.claude', 'executor-usage.jsonl');
+  assert.ok(fs.existsSync(ledger), '中断経路でも台帳に行が残ること（無音故障の回帰）');
+  const rows = fs.readFileSync(ledger, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].provider, 'codex');
+  assert.equal(rows[0].out, 0);
+  assert.equal(rows[0].status, 3);
+  assert.equal(rows[0].launched, false);
+});
+
+test('起動に成功した行は launched:true で記録される', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-launched-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const result = run(['--force-native', '--cwd', home, '--model', 'sol', '説明して'], {
+    home,
+    env: { CODEX_DO_MOCK_RESULTS: JSON.stringify([{ status: 0, output: 'done', stderr: '' }]) },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const rows = fs.readFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(rows[0].launched, true);
+});
+
 const { decideCodexLane, buildCodexExecArgs, normalizeCodexModel } = await import('./codex-do.mjs');
 const ASTRA = 'gpt-6-astra', SOL = 'gpt-5.6-sol';
 for (const [name, input, slug, reason] of [

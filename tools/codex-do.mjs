@@ -502,6 +502,7 @@ function recordUsage(result, modelName, seconds, provider = 'codex', attempts = 
       t: new Date().toISOString(), provider, model: modelName,
       lane: selectedLane.reason, escalated,
       in: Math.ceil(prompt.length / 4), out: Math.ceil((result.outputChars || 0) / 4),
+      launched: result?.launched !== false,
       timedOut: result?.timedOut === true,
       status: result?.status ?? null,
       stderrTail: String(result?.stderr || '').replace(/\s+/g, ' ').trim().slice(-200),
@@ -515,7 +516,12 @@ async function launchCodex(codexArgs) {
   let result;
 
   if (process.platform === 'win32' && !forceNative) {
-    const listed = spawnSync('wsl', ['-l', '-q'], { windowsHide: true, encoding: 'utf16le', timeout: WSL_PROBE_TIMEOUT_MS });
+    // 実機の distro 有無で分岐が変わると abort 経路のテストが非決定的になるため、
+    // CODEX_DO_MOCK_RESULTS と同じ流儀でプローブ結果を注入できるようにする。
+    const fakeWslProbe = process.env.CODEX_DO_WSL_PROBE;
+    const listed = fakeWslProbe
+      ? { status: fakeWslProbe === 'absent' ? 1 : 0, stdout: '' }
+      : spawnSync('wsl', ['-l', '-q'], { windowsHide: true, encoding: 'utf16le', timeout: WSL_PROBE_TIMEOUT_MS });
     const distros = listed.status === 0 ? listed.stdout.split(/\r?\n/).map((x) => x.replace(/\0/g, '').trim()).filter(Boolean) : [];
     const distro = distros.find((x) => x.toLowerCase() === 'ubuntu') || distros[0];
     let usable = false;
@@ -562,6 +568,9 @@ async function launchCodex(codexArgs) {
       console.error(`🚨 ${failureReason}`);
       if (finalStep !== 'native') {
         console.error('🚨 WSL の codex 経路が使えないため中断しました（native Windows codex は read-only で編集が保存されない既知の不具合があるため、既定では使いません）。WSL を確認するか、承知の上で native を使うなら --allow-native を付けて再実行してください。');
+        // 起動前に抜ける経路こそが「出力ゼロ」の主因なのに、ここで記録せずに exit すると
+        // 台帳に1行も残らず完全に不可視になる（2026-09-16 診断）。launched:false で必ず残す。
+        recordUsage({ outputChars: 0, status: 3, stderr: failureReason, timedOut: false, launched: false }, `codex-cli/${selectedLane.slug}`, 0, 'codex', 0);
         process.exit(3);
       }
       console.error('⚠️ WSL 経路が使えないため、--allow-native の指定によりネイティブ Windows codex で実行します。\nWindows 版は read-only サンドボックス固定でファイルを書けない既知の不具合(openai/codex#35428)があり、編集が保存されない可能性が高い。');

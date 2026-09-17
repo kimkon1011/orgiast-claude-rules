@@ -69,6 +69,9 @@ export function emptyOutputReason(row) {
   // 旧行(timedOut 未記録)は経過秒数から推定する。codex の正常終了は実測で中央値~100秒、
   // 打ち切りは --timeout 到達時にのみ現れ、実測値は 300 秒以上だった。
   if (row?.timedOut == null && Number(row?.secs) >= 300) return 'timeout';
+  // codex を起動できずに終わった行。出力ゼロではなく「そもそも走っていない」ので、
+  // no_output に混ぜると原因が埋もれて同 id が永久に消えない（2026-09-16 診断）。
+  if (row?.launched === false) return 'launch_failed';
   if (INFRA_TRANSIENT.test(String(row?.stderrTail || ''))) return 'infra_transient';
   const status = Number(row?.status);
   if (Number.isFinite(status) && status !== 0) return `exit_${status}`;
@@ -103,8 +106,10 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
     .filter((row) => row.provider === 'codex' && Number(row.out) === 0)
     .map((source) => ({ reason: emptyOutputReason(source) }))
     .filter((item) => item.reason !== 'timeout');
-  const realEmpty = empty.filter((item) => item.reason !== 'infra_transient');
-  if (realEmpty.length) findings.push({ id: 'codex_empty_output', severity: 'medium', title: 'Codex の出力ゼロ', evidence: [`${realEmpty.length}件`, ...reasonTop(realEmpty), ...(empty.length > realEmpty.length ? [`インフラ起因(名前解決/接続)で除外 ${empty.length - realEmpty.length}件`] : [])], fixTask: 'codex が出力ゼロで終了した原因（認証切れ/上限/起動失敗）を codex-do のログから特定' });
+  const realEmpty = empty.filter((item) => item.reason !== 'infra_transient' && item.reason !== 'launch_failed');
+  const launchFailed = empty.filter((item) => item.reason === 'launch_failed');
+  if (launchFailed.length) findings.push({ id: 'codex_launch_failed', severity: 'medium', title: 'Codex の起動失敗', evidence: [`${launchFailed.length}件`, ...reasonTop(launchFailed)], fixTask: 'codex-do が codex を起動できずに終了している。WSL の状態と起動経路のログを確認し、起動失敗を再現するテストを追加して修正' });
+  if (realEmpty.length) findings.push({ id: 'codex_empty_output', severity: 'medium', title: 'Codex の出力ゼロ', evidence: [`${realEmpty.length}件`, ...reasonTop(realEmpty), ...(empty.length > realEmpty.length ? [`インフラ/起動失敗で除外 ${empty.length - realEmpty.length}件`] : [])], fixTask: 'codex が出力ゼロで終了した原因（認証切れ/上限/起動失敗）を codex-do のログから特定' });
   for (const [provider, state] of Object.entries(cooldown)) if (state?.reason === 'http_402' && Number(state.until) > nowMs) findings.push({ id: 'provider_balance_exhausted', severity: 'low', title: `${provider} の残高切れ`, evidence: [`provider ${provider}`, CLAUDE_FALLBACK_RULE] });
   return findings.length ? findings : [{ id: 'healthy', severity: 'low', title: '委譲経路は正常', evidence: [] }];
 }

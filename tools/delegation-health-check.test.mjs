@@ -86,6 +86,28 @@ test('emptyOutputReason は timeout・終了コード・原因不明を分類す
   assert.equal(emptyOutputReason({ secs: 600, timedOut: false, status: 1 }), 'exit_1');
   assert.equal(emptyOutputReason({ status: 1, stderrTail: 'failed to lookup address information' }), 'infra_transient');
   assert.equal(emptyOutputReason({ status: 1 }), 'exit_1');
+  // 起動失敗は「出力ゼロ」ではなく「そもそも走っていない」。exit_3 に埋もれさせない。
+  assert.equal(emptyOutputReason({ launched: false, status: 3, secs: 0 }), 'launch_failed');
+  assert.equal(emptyOutputReason({ launched: true, status: 3, secs: 0 }), 'exit_3');
+});
+
+test('起動失敗は codex_empty_output でなく codex_launch_failed として起票する', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, secs: 0, timedOut: false, status: 3, launched: false }));
+  const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
+  assert.deepEqual(findings.map((item) => item.id), ['codex_launch_failed']);
+  assert.deepEqual(findings[0].evidence, ['1件', 'launch_failed(1件)']);
+});
+
+test('起動失敗と本物の出力ゼロが混在しても codex_empty_output は本物だけを数える', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl',
+    row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, secs: 0, timedOut: false, status: 3, launched: false })
+    + row({ t: '2026-09-09T10:01:00Z', provider: 'codex', out: 0, secs: 5, timedOut: false, status: 1, launched: true }));
+  const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
+  const ids = findings.map((item) => item.id);
+  assert.deepEqual(ids, ['codex_launch_failed', 'codex_empty_output']);
+  assert.deepEqual(findings.find((item) => item.id === 'codex_empty_output').evidence, ['1件', 'exit_1(1件)', 'インフラ/起動失敗で除外 1件']);
 });
 
 test('インフラ起因だけの出力ゼロは codex_empty_output に数えない', () => {
@@ -101,7 +123,7 @@ test('実障害を起票し、同時に除外したインフラ起因件数も e
     + row({ t: '2026-09-09T10:01:00Z', provider: 'codex', out: 0, secs: 4, timedOut: false, status: 1, stderrTail: 'failed to connect to websocket' }));
   const finding = collectFindings({ home: dir, now: NOW, codexUsedPercent: null })[0];
   assert.equal(finding.id, 'codex_empty_output');
-  assert.deepEqual(finding.evidence, ['1件', 'exit_1(1件)', 'インフラ起因(名前解決/接続)で除外 1件']);
+  assert.deepEqual(finding.evidence, ['1件', 'exit_1(1件)', 'インフラ/起動失敗で除外 1件']);
 });
 
 test('正常時は healthy のみで next-session を変更しない', () => {

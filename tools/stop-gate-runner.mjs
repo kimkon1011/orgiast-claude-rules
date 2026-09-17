@@ -16,14 +16,14 @@ import { configuredMode, evaluateNegativeClaimFromRaw } from './negative-claim-g
 import { configuredMode as externalStateMode, evaluateExternalStateClaimFromRaw } from './external-state-claim-gate.mjs';
 import { evaluateAudit } from './handoff-audit-gate.mjs';
 import { enabled as reportLengthEnabled, judgeReportLength } from './report-length-gate.mjs';
+import { hasRequiredFooter, judgeNextAction } from './next-action-gate.mjs';
 import { findOutsourcedInvestigation, formatViolationMessage as formatSelfCheck, scanToolUsesFromRaw } from './self-check-before-asking-guard.mjs';
 import { findLocalDocLinks, formatViolationMessage as formatDocLink } from './doc-link-drive-guard.mjs';
 import { enabled as stopGateEnabled, progressQuestionReason, reasonFor, remainingItems, shouldBlock, shouldBlockProgressQuestion } from './stop-gate.mjs';
 
 
 const home = () => process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || os.homedir();
-const HANDOFF_HINT = "末尾に『次に kim がすること: なし / <1件>』を1行入れること(user が『この先はどうしたらいいの？』と聞き返した回数: 7日で9回)";
-const NEXT_ACTION = /(?:^|\n)次に kim がすること:\s*(?:なし|\S.*)\s*$/;
+const HANDOFF_HINT = "末尾に『次に kim がすること: なし / <1件>』『この後の自動進行: <誰が・何を・いつ・どう届くか> / なし（完了）』を2行で入れること(user が『この先はどうしたらいいの？』と聞き返した回数: 7日で9回)";
 
 function fullStepsReason(missing) {
   return `[FULL-STEPS] 人に手作業を頼んでいますが、次が足りません: ${missing.join('・')}（§1.5.1 絶対ルール）`;
@@ -43,6 +43,7 @@ export async function evaluateGates(ctx, auditOptions = {}) {
     ['self-check-before-asking-guard', () => { const found = findOutsourcedInvestigation(ctx.assistantText, scanToolUsesFromRaw(ctx.transcriptRaw)); return found ? { decision: 'block', reason: formatSelfCheck(found), code: 'SELF-CHECK' } : { decision: 'pass' }; }],
     ['stop-gate', () => { if (!stopGateEnabled()) return { decision: 'pass' }; const todo = shouldBlock(ctx.assistantText); const question = !todo && shouldBlockProgressQuestion(ctx.assistantText); return todo ? { decision: 'block', reason: reasonFor(remainingItems(ctx.assistantText)), code: 'remaining-todo' } : question ? { decision: 'block', reason: progressQuestionReason(), code: 'progress-question' } : { decision: 'pass' }; }],
     ['report-length-gate', () => reportLengthEnabled() ? judgeReportLength(ctx.assistantText, ctx.humanText) : { decision: 'pass' }],
+    ['next-action-gate', () => judgeNextAction(ctx.assistantText)],
     ['doc-link-drive-guard', () => { const hits = findLocalDocLinks(ctx.assistantText); return hits.length ? { decision: 'block', reason: formatDocLink(hits), code: 'DOC-LINK' } : { decision: 'pass' }; }],
   ];
   const results = [];
@@ -92,7 +93,7 @@ export async function run(input, context, auditOptions = {}) {
   const record = { ...base, verdict, blockedBy, reasonCodes, retryCap: cap.retryCap, auditEvidence: audit.record.evidence }; ledger(record);
   if (verdict !== 'block') return { record };
   const sections = evaluated.results.map(({ name, reason }) => `### ${name}\n- ${reason}`);
-  if (!NEXT_ACTION.test(assistantText)) sections.push(`### ピギーバック・ヒント\n- ${HANDOFF_HINT}`);
+  if (!blockedBy.includes('next-action-gate') && !hasRequiredFooter(assistantText)) sections.push(`### ピギーバック・ヒント\n- ${HANDOFF_HINT}`);
   return { decision: 'block', reason: sections.join('\n\n'), record };
 }
 

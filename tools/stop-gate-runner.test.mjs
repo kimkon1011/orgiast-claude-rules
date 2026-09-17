@@ -49,8 +49,19 @@ test('stop_hook_activeは評価せずskippedでpassする', () => {
 
 test('次の行があればピギーバック・ヒントを重ねない', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-hint-'));
-  const output = JSON.parse(invoke(home, 'hint', `${request}\n次に kim がすること: Merge をクリック`).stdout);
+  const output = JSON.parse(invoke(home, 'hint', `${request}\n次に kim がすること: Merge をクリック\nこの後の自動進行: kim のマージ後に Codex が確認してチャットで通知`).stdout);
   assert.doesNotMatch(output.reason, /ピギーバック・ヒント/);
+});
+
+test('他gateがpassでもnext-action-gate単独でblockする', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-next-action-'));
+  const text = '作業内容を整理し、関連箇所を確認しました。'.repeat(15);
+  const output = JSON.parse(invoke(home, 'next-action-only', text).stdout);
+  assert.equal(output.decision, 'block');
+  assert.match(output.reason, /### next-action-gate/);
+  assert.doesNotMatch(output.reason, /ピギーバック・ヒント/);
+  const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8'));
+  assert.deepEqual(record.blockedBy, ['next-action-gate']);
 });
 
 test('外部状態の否定断定を EXTERNAL-STATE で block する', t => {

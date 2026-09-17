@@ -150,6 +150,19 @@ test('gemini MCP 使用量hookはPostToolUseにmatcher付きで1本だけ登録�
   fs.rmSync(home,{recursive:true,force:true});
 });
 
+test('staleツリーパス・雑matcherのgemini MCP 使用量hookをrepo実ファイルへ収束させる', () => {
+  const home=fs.mkdtempSync(path.join(os.tmpdir(),'register-gemini-mcp-stale-')), repo=path.resolve('.');
+  const file=path.join(home,'.claude','settings.json'); fs.mkdirSync(path.dirname(file),{recursive:true});
+  // 実ファイルが存在しないパスへの手動登録 + 全ツールにマッチする雑なmatcher(2026-09-18 実機で発見した状態)
+  fs.writeFileSync(file,JSON.stringify({hooks:{PostToolUse:[{matcher:'mcp__gemini-cli__.*',hooks:[{type:'command',command:`node "C:\\Users\\x\\orgiast-claude-rules\\tools\\gemini-mcp-usage-hook.mjs"`,timeout:10}]}]}}));
+  execFileSync(process.execPath,[path.join(repo,'tools','register-hooks.mjs'),'--hooks-only'],{env:{...process.env,ORGIAST_HOME:home,ORGIAST_REPO:repo}});
+  const groups=JSON.parse(fs.readFileSync(file,'utf8')).hooks.PostToolUse;
+  assert.equal(groups.flatMap((group)=>group.hooks||[]).filter((hook)=>String(hook.command).includes('gemini-mcp-usage-hook')).length,1);
+  assert.equal(groups.find((group)=>(group.hooks||[]).some((hook)=>String(hook.command).includes('gemini-mcp-usage-hook'))).matcher,'mcp__gemini-cli__(?:ask-gemini|geminiChat|googleSearch)');
+  assert.ok(groups.find((group)=>(group.hooks||[]).some((hook)=>String(hook.command).includes('gemini-mcp-usage-hook'))).hooks[0].command.includes(path.join(repo,'tools','gemini-mcp-usage-hook.mjs')));
+  fs.rmSync(home,{recursive:true,force:true});
+});
+
 test('既存hookの恒久timeoutをイベント・パス表記を問わず収束する', () => {
   const home=fs.mkdtempSync(path.join(os.tmpdir(),'register-timeouts-')), repo=path.resolve('.');
   const file=path.join(home,'.claude','settings.json'); fs.mkdirSync(path.dirname(file),{recursive:true});

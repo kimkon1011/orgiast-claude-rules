@@ -124,9 +124,19 @@ try {
             }
 
             if ($repoSynced) {
-                $shortSha = (& $git.Source -C $repo rev-parse --short HEAD | Select-Object -Last 1)
-                if ($LASTEXITCODE -ne 0 -or -not $shortSha) { throw '短縮SHAを取得できない' }
-                Write-NightlyLog 'リポ同期' ("ok:origin/main " + $shortSha.Trim())
+                $headSha = (& $git.Source -C $repo rev-parse HEAD | Select-Object -Last 1)
+                if ($LASTEXITCODE -ne 0 -or -not $headSha) { throw 'HEADのSHAを取得できない' }
+                $remoteSha = (& $git.Source -C $repo rev-parse origin/main | Select-Object -Last 1)
+                if ($LASTEXITCODE -ne 0 -or -not $remoteSha) { throw 'origin/mainのSHAを取得できない' }
+                $headSha = ([string]$headSha).Trim()
+                $remoteSha = ([string]$remoteSha).Trim()
+                $shortHead = $headSha.Substring(0, [Math]::Min(7, $headSha.Length))
+                $shortRemote = $remoteSha.Substring(0, [Math]::Min(7, $remoteSha.Length))
+                if ($headSha -ne $remoteSha) {
+                    Write-NightlyLog 'リポ同期' ("ng:HEAD " + $shortHead + " != origin/main " + $shortRemote + " 既存版で続行")
+                } else {
+                    Write-NightlyLog 'リポ同期' ("ok:origin/main " + $shortHead)
+                }
             }
         } catch {
             Write-NightlyLog 'リポ同期' ("warn:" + $_.Exception.Message + ' 既存版で続行')

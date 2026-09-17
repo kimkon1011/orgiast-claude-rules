@@ -113,6 +113,23 @@ function allLogText(fix) {
     .join('\n');
 }
 
+// git を PATH 先頭の stub で置き換え、実 git・ネットワークなしで同期分岐を踏む。
+// 返り値は runBootstrap の extraEnv.PATH にそのまま渡せる文字列。
+function gitShimPath(fix, headSha, remoteSha) {
+  const shim = join(fix.dir, 'shim');
+  mkdirSync(shim, { recursive: true });
+  writeFileSync(join(shim, 'git.cmd'), [
+    '@echo off',
+    'rem 呼び出しは git -C <repo> <subcommand> ... の形。findstr に依存させない。',
+    'if not "%~3"=="rev-parse" exit /b 0',
+    'if "%~4"=="HEAD" echo ' + headSha,
+    'if "%~4"=="origin/main" echo ' + remoteSha,
+    'exit /b 0',
+    '',
+  ].join('\r\n'), 'utf8');
+  return `${toWindowsPath(shim)};${String.raw`C:\Windows\System32\WindowsPowerShell\v1.0`}`;
+}
+
 const hasPowerShell = (() => {
   const probe = spawnSync(powershell, ['-NoProfile', '-Command', 'exit 0']);
   return !probe.error && probe.status === 0;
@@ -461,4 +478,37 @@ test('mutex timeout logs a warning and continues with the existing target', { sk
   assert.equal(contender.status, 0, contender.stderr);
   await holder;
   assert.match(allLogText(fix), /warn:他のタスクが同期中のためタイムアウト。既存版で続行/);
+});
+
+test('logs ok:origin/main only when HEAD matches origin/main', { skip: !hasPowerShell }, () => {
+  const fix = fixture('sync-sha-match');
+  mkdirSync(join(fix.repo, '.git'), { recursive: true });
+  const target = join(fix.dir, 'target.ps1');
+  writeFileSync(target, 'exit 0\r\n', 'utf8');
+  const sha = '1111111111111111111111111111111111111111';
+
+  const result = runBootstrap(fix, target, [], { PATH: gitShimPath(fix, sha, sha) });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(logText(fix), /ok:origin\/main 1111111/);
+});
+
+test('logs ng and keeps running when HEAD does not match origin/main', { skip: !hasPowerShell }, () => {
+  const fix = fixture('sync-sha-mismatch');
+  mkdirSync(join(fix.repo, '.git'), { recursive: true });
+  const target = join(fix.dir, 'target.ps1');
+  writeFileSync(target, 'exit 0\r\n', 'utf8');
+
+  const result = runBootstrap(fix, target, [], {
+    PATH: gitShimPath(
+      fix,
+      '1111111111111111111111111111111111111111',
+      '2222222222222222222222222222222222222222',
+    ),
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const log = logText(fix);
+  assert.match(log, /ng:HEAD 1111111 != origin\/main 2222222 既存版で続行/);
+  assert.doesNotMatch(log, /ok:origin\/main/);
 });

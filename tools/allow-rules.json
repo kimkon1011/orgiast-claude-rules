@@ -1,0 +1,20 @@
+{
+  "allow": [
+    "Bash(gh pr:*)", "Bash(gh run:*)", "Bash(gh api:*)", "Bash(gh issue:*)", "Bash(gh repo view:*)",
+    "Bash(git -C:*)", "Bash(git status:*)", "Bash(git log:*)", "Bash(git diff:*)", "Bash(git show:*)",
+    "Bash(git add:*)", "Bash(git commit:*)", "Bash(git push origin:*)", "Bash(git push --force-with-lease:*)",
+    "Bash(git fetch:*)", "Bash(git worktree:*)", "Bash(git checkout:*)", "Bash(git switch:*)", "Bash(git branch:*)", "Bash(git stash:*)",
+    "Bash(node tools/*)", "Bash(node --test:*)", "Bash(node -e:*)",
+    "Bash(npm test:*)", "Bash(npm run:*)", "Bash(npm ci)", "Bash(npm install:*)",
+    "Bash(npx vitest:*)", "Bash(npx playwright test:*)", "Bash(npx tsc:*)", "Bash(npx eslint:*)",
+    "Bash(cat:*)", "Bash(ls:*)", "Bash(sed -n:*)", "Bash(grep:*)", "Bash(rg:*)", "Bash(head:*)", "Bash(tail:*)",
+    "Bash(wc:*)", "Bash(find:*)", "Bash(date:*)", "Bash(echo:*)", "Bash(mkdir:*)", "Bash(cp:*)", "Bash(mv:*)",
+    "Bash(clasp push:*)", "Bash(clasp run:*)", "Bash(clasp pull:*)",
+    "PowerShell(git -C *)", "PowerShell(gh pr *)", "PowerShell(node tools/*)", "PowerShell(Get-Content *)", "PowerShell(Get-ChildItem *)"
+  ],
+  "homeToolDirectories": ["orgiast-main/tools", "orgiast-claude-rules/tools", "Downloads/orgiast-claude-rules/tools"],
+  "denyReplacements": {
+    "Bash(git push --force*)": ["Bash(git push --force origin*)", "Bash(git push --force)"],
+    "PowerShell(*git push --force*)": ["PowerShell(*git push --force origin*)"]
+  }
+}

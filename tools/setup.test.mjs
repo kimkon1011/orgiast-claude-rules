@@ -104,3 +104,27 @@ test('project manifest has unique known item types and severities', () => {
   assert(parsed.items.every((entry) => ['command', 'file-contains', 'file-nonempty', 'json-valid', 'scheduled-task'].includes(entry.type)));
   assert(parsed.items.every((entry) => ['required', 'optional', 'manual'].includes(entry.severity)));
 });
+
+test('converge実経路がhook登録・旧通知削除・allow反映を行い再実行で不変', (t) => {
+  const home = temp('setup-classifier-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const mf = path.join(home, 'manifest.json');
+  write(mf, JSON.stringify(manifest([])));
+  const file = path.join(home, '.claude', 'settings.json');
+  write(file, JSON.stringify({ permissions: { allow: ['Bash(custom:*)'], deny: ['Bash(git push --force*)', 'Bash(git push -f*)'] }, hooks: { SessionStart: [{ hooks: [
+    { command: 'node /old/ai-news-inject.mjs' }, { command: 'node /old/gtasks-pending-notice.mjs' }, { command: 'node custom.mjs' },
+  ] }] } }));
+  const args = ['--converge', '--json', '--home', home, '--manifest', mf];
+  const first = run(args);
+  assert.equal(first.status, 0, first.stdout + first.stderr);
+  const settings = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert(settings.permissions.allow.includes('Bash(gh pr:*)'));
+  assert(settings.permissions.allow.includes('Bash(custom:*)'));
+  assert(settings.permissions.deny.includes('Bash(git push -f*)'));
+  const hooks = JSON.stringify(settings.hooks);
+  assert.doesNotMatch(hooks, /ai-news-inject|gtasks-pending-notice/);
+  assert.match(hooks, /custom\.mjs/);
+  assert.match(hooks, /setup\.mjs.*--converge/);
+  assert.equal(run(args).status, 0);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), settings);
+});

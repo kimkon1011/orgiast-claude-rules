@@ -39,6 +39,24 @@ function write(file, value) {
   const written = load(file);
   if (JSON.stringify(written) !== JSON.stringify(value)) throw new Error(`${file} のread-back検査に失敗`);
 }
+function removeDailySessionHooks(settings) {
+  const groups = settings.hooks?.SessionStart;
+  if (!Array.isArray(groups)) return 0;
+  let removed = 0;
+  for (let i = groups.length - 1; i >= 0; i--) {
+    if (!Array.isArray(groups[i]?.hooks)) continue;
+    const hooks = groups[i].hooks;
+    for (let j = hooks.length - 1; j >= 0; j--) {
+      if (/(?:^|[\\/\s"'])(?:ai-news-inject|gtasks-pending-notice)\.mjs(?=[\s"']|$)/i.test(String(hooks[j]?.command || ''))) {
+        hooks.splice(j, 1);
+        removed++;
+      }
+    }
+    if (!hooks.length) groups.splice(i, 1);
+  }
+  return removed;
+}
+
 function commands(groups) { return groups.flatMap((g) => Array.isArray(g?.hooks) ? g.hooks : []).map((h) => String(h?.command || '')); }
 function add(groups, scriptName, group) {
   // リポの同期が遅れている環境で、存在しないスクリプトを登録して毎回 ENOENT を出すのを防ぐ。
@@ -114,6 +132,7 @@ try {
   let costLoopMigrated = 0;
   if (!settings.hooks || typeof settings.hooks !== 'object' || Array.isArray(settings.hooks)) settings.hooks = {};
   for (const event of ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'Stop']) if (!Array.isArray(settings.hooks[event])) settings.hooks[event] = [];
+  added += removeDailySessionHooks(settings);
   const command = (name, extra = '') => `node "${path.join(repo, 'tools', name)}"${extra}`;
   // 2026-09-06: 9本を別プロセスで動かすと304 Stop中198回が再Stopになったため、
   // ファイル名で旧登録を拾い、PCごとに異なるrepoパスのrunner 1本へ収束させる。
@@ -167,8 +186,7 @@ try {
   if (add(settings.hooks.UserPromptSubmit, 'session-list-tidy.mjs', { hooks: [{ type: 'command', command: command('session-list-tidy.mjs'), timeout: 10, async: true }] })) added += 1;
   // inline target の予約を次セッションへ同期注入するため async は付けない。
   if (add(settings.hooks.SessionStart, 'session-relaunch.mjs', { hooks: [{ type: 'command', command: command('session-relaunch.mjs', ' --hook'), timeout: 10 }] })) added += 1;
-  // Googleタスク上の kim 待ちを毎セッション同期注入するため async は付けない。
-  if (add(settings.hooks.SessionStart, 'gtasks-pending-notice.mjs', { hooks: [{ type: 'command', command: command('gtasks-pending-notice.mjs'), timeout: 15 }] })) added += 1;
+  // AIニュースとGoogleタスクの通知は nightly の daily-notice-digest に集約する。
   added += migrate(settings.hooks.UserPromptSubmit, 'current-session.mjs', 'current-session.mjs', command('current-session.mjs'));
   if (add(settings.hooks.UserPromptSubmit, 'current-session.mjs', { hooks: [{ type: 'command', command: command('current-session.mjs'), timeout: 5 }] })) added += 1;
   added += migrate(settings.hooks.UserPromptSubmit, 'delegation-gate', 'cost-routing-gate.mjs', command('cost-routing-gate.mjs'));

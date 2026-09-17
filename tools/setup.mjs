@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { convergeAllowRules } from './allow-rules.mjs';
 
 const TYPES = new Set(['command', 'file-contains', 'file-nonempty', 'json-valid', 'scheduled-task']);
 const SEVERITIES = new Set(['required', 'optional', 'manual']);
@@ -102,6 +103,21 @@ function emit(results) {
 let manifest;
 try { manifest = loadManifest(); } catch (error) { invalid(String(error?.message || error).split(/\r?\n/)[0]); }
 if (manifest) {
+  let settingsMigration;
+  if (converge) {
+    const item = { id: 'classifier-settings', severity: 'required', description: 'hook登録・日次通知hook削除・allowルール同期' };
+    try {
+      // 実行中の版の repo を明示し、別の古いクローンを見て無言でスキップしない。
+      execFileSync(process.execPath, [path.join(scriptDir, 'register-hooks.mjs'), '--hooks-only'], {
+        env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: path.dirname(scriptDir) },
+        timeout: 30_000, stdio: 'pipe', windowsHide: true,
+      });
+      const repaired = convergeAllowRules(home);
+      settingsMigration = { item, status: 'OK', checked: true, repaired };
+    } catch {
+      settingsMigration = { item, status: 'NG', checked: true, repaired: false };
+    }
+  }
   let results = inspect(manifest.items);
   if (converge) {
     const attemptedCommands = new Set();
@@ -118,7 +134,8 @@ if (manifest) {
       for (const result of results) result.repaired = attemptedItems.has(result.item.id);
     }
   }
+  if (settingsMigration) results.push(settingsMigration);
   emit(results);
   const requiredNg = results.some((r) => r.item.severity === 'required' && r.status === 'NG');
-  process.exitCode = converge && !strict ? 0 : requiredNg ? 1 : 0;
+  process.exitCode = settingsMigration?.status === 'NG' ? 1 : converge && !strict ? 0 : requiredNg ? 1 : 0;
 }

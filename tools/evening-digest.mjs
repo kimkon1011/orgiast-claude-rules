@@ -10,6 +10,7 @@ import { notifyKim } from './notify-kim.mjs';
 import { listDecisions } from './pending-decisions.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 import { reportHeartbeat } from './lib/heartbeat.mjs';
+import { runDailyNotices } from './daily-notices.mjs';
 
 const TYPES = new Set(['results-daily-digest', 'auto-session-digest', 'executor-usage-digest', 'next-session-todo-triage']);
 const TITLES = { 'results-daily-digest': '今日の結果', 'auto-session-digest': '今日の自動セッション', 'executor-usage-digest': '今日の委譲実績', 'next-session-todo-triage': '次回TODO整理' };
@@ -77,6 +78,10 @@ export async function runEvening({ home = userHome(), now = new Date(), force = 
   return { skipped: false, sent: true, message };
 }
 export async function main(args = process.argv.slice(2)) {
+  if (args.includes('--daily-notices')) {
+    try { const result = await runDailyNotices({ dryRun: args.includes('--dry-run') }); console.log(result.message); return 0; }
+    catch (error) { console.error(`daily-notices: ${redactSecrets(error?.message ?? error)}`); return 1; }
+  }
   try { const result = await runEvening({ force: args.includes('--force'), dryRun: args.includes('--dry-run') }); console.log(result.message); return 0; }
   catch (error) { console.error(`evening-digest: ${redactSecrets(error?.message ?? error)}`); return 1; }
 }

@@ -80,19 +80,23 @@ test('旧Stop gate 9本をrunner 1本へ移行し無関係なStop hookを残す'
   assert.ok(fs.readdirSync(path.dirname(settingsFile)).some((name) => /^settings\.json\.bak\..+-installer$/.test(name)));
 });
 
-test('gtasks-pending-notice hook は同期かつtimeout 15で1本だけ登録される', () => {
+test('日次通知hookは新規登録せず既存の混在groupからも削除する', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-gtasks-'));
   const repo = path.resolve('.');
   const settingsFile = path.join(home, '.claude', 'settings.json');
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  fs.writeFileSync(settingsFile, JSON.stringify({ hooks: { SessionStart: [
+    { hooks: [{ command: 'node "C:\\old\\ai-news-inject.mjs"' }, { command: 'node keep.mjs' }] },
+    { hooks: [{ command: 'node /old/gtasks-pending-notice.mjs' }] },
+  ] } }));
   const env = { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo };
   execFileSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { encoding: 'utf8', env });
   const second = execFileSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { encoding: 'utf8', env });
   const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
   const hooks = settings.hooks.SessionStart.flatMap((group) => group.hooks || [])
-    .filter((hook) => String(hook.command).includes('gtasks-pending-notice.mjs'));
-  assert.equal(hooks.length, 1);
-  assert.equal(hooks[0].timeout, 15);
-  assert.equal('async' in hooks[0], false);
+    .filter((hook) => /ai-news-inject|gtasks-pending-notice/.test(String(hook.command)));
+  assert.equal(hooks.length, 0);
+  assert.ok(settings.hooks.SessionStart.some(g => g.hooks.some(h => h.command === 'node keep.mjs')));
   assert.match(second, /hook は既に登録済み\(変更なし\)/);
   fs.rmSync(home, { recursive: true, force: true });
 });

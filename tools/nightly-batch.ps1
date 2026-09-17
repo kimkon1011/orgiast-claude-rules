@@ -540,6 +540,21 @@ try {
         Write-NightlyLog 'makimono-check' 'error:ファイルなし'
     }
 
+    # SessionStart のAIニュース・Googleタスク通知を、既存digest経路で日次DMへ集約。
+    $dailyNotices = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\evening-digest.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $dailyNotices = $candidate; break }
+    }
+    if ($dailyNotices) {
+        $noticeOutput = $null
+        try {
+            $noticeOutput = @(& $node.Source $dailyNotices --daily-notices 2>&1)
+            $noticeExit = $LASTEXITCODE
+            Write-NightlyStepResult 'daily-notices' $noticeExit $noticeOutput
+        } catch { Write-NightlyLog 'daily-notices' ("error:" + $_.Exception.Message + ': ' + (Format-NightlyDetail $noticeOutput)) }
+    } else { Write-NightlyLog 'daily-notices' 'error:ファイルなし' }
+
     $producer = $null
     foreach ($repo in $repos) {
         $candidate = Join-Path $repo 'tools\batch-producer.mjs'

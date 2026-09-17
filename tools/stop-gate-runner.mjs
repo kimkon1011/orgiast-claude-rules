@@ -23,7 +23,7 @@ import { enabled as stopGateEnabled, progressQuestionReason, reasonFor, remainin
 
 
 const home = () => process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || os.homedir();
-const HANDOFF_HINT = "末尾に『次に kim がすること: なし / <1件>』『この後の自動進行: <誰が・何を・いつ・どう届くか> / なし（完了）』を2行で入れること(user が『この先はどうしたらいいの？』と聞き返した回数: 7日で9回)";
+const HANDOFF_HINT = "末尾に『次に kim がすること』『この後の自動進行』『このセッション: 閉じてよい / まだ閉じない / もう削除してよい』を3行で入れること(user が『この先はどうしたらいいの？』と聞き返した回数: 7日で9回)";
 
 function fullStepsReason(missing) {
   return `[FULL-STEPS] 人に手作業を頼んでいますが、次が足りません: ${missing.join('・')}（§1.5.1 絶対ルール）`;
@@ -43,7 +43,7 @@ export async function evaluateGates(ctx, auditOptions = {}) {
     ['self-check-before-asking-guard', () => { const found = findOutsourcedInvestigation(ctx.assistantText, scanToolUsesFromRaw(ctx.transcriptRaw)); return found ? { decision: 'block', reason: formatSelfCheck(found), code: 'SELF-CHECK' } : { decision: 'pass' }; }],
     ['stop-gate', () => { if (!stopGateEnabled()) return { decision: 'pass' }; const todo = shouldBlock(ctx.assistantText); const question = !todo && shouldBlockProgressQuestion(ctx.assistantText); return todo ? { decision: 'block', reason: reasonFor(remainingItems(ctx.assistantText)), code: 'remaining-todo' } : question ? { decision: 'block', reason: progressQuestionReason(), code: 'progress-question' } : { decision: 'pass' }; }],
     ['report-length-gate', () => reportLengthEnabled() ? judgeReportLength(ctx.assistantText, ctx.humanText) : { decision: 'pass' }],
-    ['next-action-gate', () => judgeNextAction(ctx.assistantText)],
+    ['next-action-gate', () => judgeNextAction(ctx.assistantText, ctx.transcriptRaw)],
     ['doc-link-drive-guard', () => { const hits = findLocalDocLinks(ctx.assistantText); return hits.length ? { decision: 'block', reason: formatDocLink(hits), code: 'DOC-LINK' } : { decision: 'pass' }; }],
   ];
   const results = [];

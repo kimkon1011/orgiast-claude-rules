@@ -49,7 +49,7 @@ test('stop_hook_activeは評価せずskippedでpassする', () => {
 
 test('次の行があればピギーバック・ヒントを重ねない', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-hint-'));
-  const output = JSON.parse(invoke(home, 'hint', `${request}\n次に kim がすること: Merge をクリック\nこの後の自動進行: kim のマージ後に Codex が確認してチャットで通知`).stdout);
+  const output = JSON.parse(invoke(home, 'hint', `${request}\n次に kim がすること: Merge をクリック\nこの後の自動進行: kim のマージ後に Codex が確認してチャットで通知\nこのセッション: まだ閉じない（マージ待ち）`).stdout);
   assert.doesNotMatch(output.reason, /ピギーバック・ヒント/);
 });
 

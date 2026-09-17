@@ -6,7 +6,7 @@ import path from 'node:path';
 
 const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-session-test-'));
 process.env.ORGIAST_HOME = isolatedHome;
-const { BUILTIN_REPO_BY_KEYWORD, boundedCount, todoDoneDecision, DEFAULT_REPO, localDate, loadConfig, detectHistoryCwd, parseHandoff, sectionsForTodo, todoExclusionReason, todoExclusionReasons, dedupeKey, dedupeTodos, filterTodos, selectTodoLanes, logSlaOverflow, pickCwd, buildChildArgs, buildPrompt, buildFeedbackPrompt, feedbackFailureBody, feedbackIssueExclusionReason, feedbackIssuesToUnmark, filterFeedbackIssues, feedbackNotifyUrl, normalizeGitHubRepo, feedbackRepoCwd, resolveClaudeExe, decideRun, markTodoDone, isTodoAlreadyDone, writeTodoDone, extractSessionId, transcriptPath, recoverSessionId, appendClosedSession, formatResultLine, parseArgs, deadlineDecision, runChild, main } = await import('./auto-session.mjs');
+const { BUILTIN_REPO_BY_KEYWORD, ROLE_NAMES, boundedCount, todoDoneDecision, DEFAULT_REPO, localDate, loadConfig, detectHistoryCwd, parseHandoff, sectionsForTodo, todoExclusionReason, todoExclusionReasons, dedupeKey, dedupeTodos, filterTodos, selectTodoLanes, logSlaOverflow, pickCwd, buildChildArgs, buildPrompt, buildFeedbackPrompt, buildRolePrompt, feedbackFailureBody, feedbackIssueExclusionReason, feedbackIssuesToUnmark, filterFeedbackIssues, feedbackNotifyUrl, normalizeGitHubRepo, feedbackRepoCwd, resolveClaudeExe, decideRun, markTodoDone, isTodoAlreadyDone, writeTodoDone, extractSessionId, transcriptPath, recoverSessionId, appendClosedSession, formatResultLine, parseArgs, deadlineDecision, runChild, main } = await import('./auto-session.mjs');
 const historyCwd = String.raw`c:\Users\example\Downloads\work`;
 const completedSummary = 'やったこと: 対象のコードを修正してコミットした。検証したこと: 回帰テストを実行し全件成功を確認した。残ったこと: なし';
 
@@ -46,6 +46,29 @@ test('boundedCount は all と数値を12件以内に制限する', () => {
   assert.equal(boundedCount('all'), 12);
   assert.equal(boundedCount(13), 12);
   assert.equal(boundedCount(0), 1);
+});
+
+test('--role は有効なロールだけを受理する', () => {
+  assert.equal(parseArgs(['--role', 'tester']).role, 'tester');
+  assert.throws(() => parseArgs(['--role', 'unknown']), /--role は/);
+});
+
+test('buildRolePrompt はロール本文と実行環境を含み、不正名は空文字を返す', () => {
+  const prompt = buildRolePrompt('tester', '/work/repo', '/tmp/role-summary.md', 30, new Date(2026, 8, 18));
+  assert.match(prompt, /テスト担当ロール/);
+  assert.match(prompt, /node --test tools\/\*\.test\.mjs/);
+  assert.match(prompt, /\/work\/repo/);
+  assert.match(prompt, /\/tmp\/role-summary\.md/);
+  assert.equal(buildRolePrompt('unknown', '/work/repo', '/tmp/role-summary.md'), '');
+});
+
+test('3ロールの定義ファイルが存在し共通のレポート制約を含む', () => {
+  assert.deepEqual(ROLE_NAMES, ['tester', 'system-review', 'cost-check']);
+  for (const role of ROLE_NAMES) {
+    const file = path.join(import.meta.dirname, 'roles', `${role}.md`);
+    assert.equal(fs.existsSync(file), true, `${role}.md が存在する`);
+    assert.match(fs.readFileSync(file, 'utf8'), /role-reports/);
+  }
 });
 
 test('todoExclusionReason は契約と個別写真を除外し通常TODOを許可する', () => {

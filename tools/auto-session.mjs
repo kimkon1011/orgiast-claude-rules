@@ -10,8 +10,10 @@ import { alternateCheapProvider, autoSessionExecutor, buildClaudeHeadlessArgs, b
 
 export { autoSessionExecutor } from './auto-session-executor.mjs';
 
+const __dirname = import.meta.dirname;
 const MARKER = '<!-- NEXT-SESSION v1 -->';
 const SIX_HOURS = 6 * 60 * 60 * 1000;
+export const ROLE_NAMES = ['tester', 'system-review', 'cost-check'];
 export const DEFAULT_REPO = path.resolve(import.meta.dirname, '..');
 export const BUILTIN_REPO_BY_KEYWORD = {
   TETSUKO: 'C:\\Users\\user\\Documents\\tetsuko-unified',
@@ -487,6 +489,21 @@ PRタイトル: <タイトル>
 CI結果: <結果と残ったこと>`;
 }
 
+export function buildRolePrompt(roleName, repoCwd, summaryFile, timeoutMin = 30, date = new Date()) {
+  if (!ROLE_NAMES.includes(roleName)) return '';
+  const roleBody = fs.readFileSync(path.join(__dirname, 'roles', `${roleName}.md`), 'utf8').trim();
+  return `${roleBody}
+
+## 実行環境
+- 実際の作業対象リポジトリは ${repoCwd}。git は必ず \`git -C ${repoCwd}\` の形で実行し、裸の \`git status\` / \`git log\` は使わない。
+- このセッションは1回きりのヘッドレス実行である。\`run_in_background: true\` と \`ScheduleWakeup\` は使用禁止。ターンを終える前に必要な前景処理を完了する。
+- \`codex-do.mjs\` を使う場合は必ず前景で実行し、\`--cwd ${repoCwd}\` とセッション残り時間より短い \`--timeout <秒>\` を付ける。
+- 作業経過と結論は ${summaryFile} に追記する。追記は \`>>\` 相当とし、全文を上書きしない。
+- 外部処理を5分を超えてポーリングしない。待ちが必要なら未検証としてレポートと残TODOに記録して終了する。
+- 開始から ${Math.max(1, timeoutMin - 5)} 分でまとめに入り、結論をレポートと ${summaryFile} に書いて終了する。
+- 実行日: ${localDate(date)}`;
+}
+
 export function feedbackNotifyUrl(base) {
   try {
     const url = new URL(String(base));
@@ -558,13 +575,18 @@ export function boundedCount(value) {
 }
 
 export function parseArgs(argv) {
-  const options = { count: 1, slaCount: 4, feedbackCount: 1, timeoutMin: 60, deadline: '', dry: false, list: false };
+  const options = { count: 1, slaCount: 4, feedbackCount: 1, timeoutMin: 60, deadline: '', role: '', dry: false, list: false };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === '--dry') options.dry = true;
     else if (argv[i] === '--list') options.list = true;
     else if (argv[i] === '--count') options.count = boundedCount(argv[++i]);
     else if (argv[i] === '--sla-count') options.slaCount = boundedCount(argv[++i]);
     else if (argv[i] === '--feedback-count') options.feedbackCount = boundedCount(argv[++i]);
+    else if (argv[i] === '--role') {
+      const roleName = argv[++i] ?? '';
+      if (!ROLE_NAMES.includes(roleName)) throw new Error(`--role は <${ROLE_NAMES.join('|')}> のいずれかで指定してください（受取: ${roleName || 'なし'}）`);
+      options.role = roleName;
+    }
     else if (argv[i] === '--timeout-min') options.timeoutMin = Math.max(1, Number(argv[++i]) || 60);
     else if (argv[i] === '--deadline') {
       options.deadline = argv[++i] ?? '';
@@ -604,10 +626,13 @@ function extensionExecutables() {
   } catch { return []; }
 }
 
-export function runChild(executable, prompt, repoCwd, historyCwd, timeoutMs) {
+export function runChild(executable, prompt, repoCwd, historyCwd, timeoutMs, runOptions = {}) {
   return new Promise((resolve) => {
     const startedAt = new Date();
-    const choice = autoSessionExecutor();
+    const configuredChoice = autoSessionExecutor();
+    const choice = runOptions.executor === 'cheap-code'
+      ? { ...configuredChoice, executor: 'cheap-code' }
+      : configuredChoice;
     let cheapProvider = choice.provider;
     let alternateTried = false;
     const promptFile = path.join(os.tmpdir(), `orgiast-auto-session-${process.pid}-${Date.now()}.txt`);
@@ -906,8 +931,38 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   let lock = {};
   try { lock = JSON.parse(fs.readFileSync(lockFile, 'utf8')); } catch {}
   const age = lock.startedAt ? Date.now() - Date.parse(lock.startedAt) : Infinity;
-  const decision = decideRun({ lockExists: fs.existsSync(lockFile), lockPid: lock.pid, lockAgeMs: age, pidAlive: pidIsAlive(lock.pid), disabled });
+  const readOnly = options.dry || options.list;
+  const decision = readOnly
+    ? { run: true }
+    : decideRun({ lockExists: fs.existsSync(lockFile), lockPid: lock.pid, lockAgeMs: age, pidAlive: pidIsAlive(lock.pid), disabled });
   if (!decision.run) { console.log(`auto-session: 起動しません (${decision.reason})`); return 0; }
+
+  const detectedHistoryCwd = config.historyCwd || detectHistoryCwd({ projectsDir: path.join(claudeDir, 'projects') });
+  if (options.role) {
+    const repoCwd = DEFAULT_REPO;
+    const historyCwd = fs.existsSync(detectedHistoryCwd) ? detectedHistoryCwd : repoCwd;
+    const day = localDate();
+    const runsDir = path.join(autoDir, 'runs');
+    const summaryFile = path.join(runsDir, `${day}-${options.role}-1.summary.md`);
+    const prompt = buildRolePrompt(options.role, repoCwd, summaryFile, options.timeoutMin);
+    if (options.list) {
+      console.log(`[role] --role <${ROLE_NAMES.join('|')}>: TODO 選択をせず、指定ロールを1セッション実行`);
+      return 0;
+    }
+    if (options.dry) {
+      console.log(prompt);
+      return 0;
+    }
+    fs.mkdirSync(runsDir, { recursive: true });
+    fs.writeFileSync(summaryFile, '', { flag: 'a' });
+    const executable = resolveExecutable();
+    const result = await runSession(executable, prompt, repoCwd, historyCwd, options.timeoutMin * 60_000, { executor: 'cheap-code' });
+    let summary = '';
+    try { summary = fs.readFileSync(summaryFile, 'utf8'); } catch {}
+    const record = { source: 'role', role: options.role, cwd: repoCwd, repoCwd, historyCwd, summaryFile, summary, prompt, ...result };
+    fs.writeFileSync(path.join(runsDir, `${day}-${options.role}-1.json`), JSON.stringify(record, null, 2));
+    return result.status === 'success' ? 0 : 1;
+  }
 
   const nextFile = path.join(claudeDir, 'next-session.md');
   // フォーム報告は next-session.md と独立した入力源なので、片方が無くてももう片方を止めない。
@@ -920,8 +975,8 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   } catch (error) {
     console.warn(`auto-session: task-ledger の取得に失敗しました（既存処理は継続します）: ${error?.message ?? error}`);
   }
-  const detectedHistoryCwd = config.historyCwd || detectHistoryCwd({ projectsDir: path.join(claudeDir, 'projects') });
   if (options.list) {
+    console.log(`[role] --role <${ROLE_NAMES.join('|')}>: TODO 選択をせず、指定ロールを1セッション実行`);
     const reasons = todoExclusionReasons(parsed.todos);
     const lanes = selectTodoLanes(parsed.todos, options);
     const slaSet = new Set(lanes.sla);

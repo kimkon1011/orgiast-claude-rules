@@ -114,3 +114,15 @@ kim 決定 2026-08-26: 「/session-start を毎回打つのが手間。自動で
 - `~/.claude/next-session.md` の全文書き換え
 - 他セッションの未コミット変更の巻き込みコミット
 - 通知やログへの秘匿値の出力
+
+## ロールセッション（`--role`）
+
+通常の残TODO選択とは独立して、役割を持つ能動的ループを1セッションだけ実行する。`tester` はテストと直近マージのスモーク確認、`system-review` は仕組みの根本問題の抽出、`cost-check` は効果を変えないコスト削減を担当する。
+
+| ロール | スケジュール | 出力先 |
+|---|---|---|
+| `tester` | 月・木 04:10 | `~/.claude/role-reports/tester/<YYYY-MM-DD>.md` |
+| `system-review` | 日 04:30 | `~/.claude/role-reports/system-review/<YYYY-MM-DD>.md` |
+| `cost-check` | 土 04:30 | `~/.claude/role-reports/cost-check/<YYYY-MM-DD>.md` |
+
+各ロールは cheap-code で25分を目安に調査し、30分以内に終了する。brakes として PR作成・マージ・デプロイ・外部送信を禁止し、変更可能範囲をレポート追記と `next-session.md` の残TODO先頭への1行追加だけに限定する。実行ログは `~/.claude/auto-session/runs/<date>-<role>-1.json` に保存する。

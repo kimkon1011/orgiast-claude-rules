@@ -18,7 +18,9 @@ export function mergeAllowRules(settings, home = os.homedir()) {
     if (/^[A-Za-z]:\//.test(full)) additions.push(`Bash(node "${full.replaceAll('/', '\\')})`);
   }
   permissions.allow = [...new Set([...(permissions.allow || []), ...additions])];
-  permissions.deny = [...new Set((permissions.deny || []).flatMap(rule => rules.denyReplacements[rule] || [rule]))];
+  const existingDeny = (permissions.deny || []).flatMap(rule => rules.denyReplacements[rule] || [rule]);
+  permissions.deny = [...new Set([...existingDeny, ...(rules.deny || [])])];
+  if (rules.defaultMode && process.env.ORGIAST_KEEP_PERMISSION_MODE !== '1') permissions.defaultMode = rules.defaultMode;
   return result;
 }
 

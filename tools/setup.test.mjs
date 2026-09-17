@@ -121,6 +121,9 @@ test('converge実経路がhook登録・旧通知削除・allow反映を行い再
   assert(settings.permissions.allow.includes('Bash(gh pr:*)'));
   assert(settings.permissions.allow.includes('Bash(custom:*)'));
   assert(settings.permissions.deny.includes('Bash(git push -f*)'));
+  assert(settings.permissions.deny.includes('Bash(rm -rf *)'));
+  assert(settings.permissions.deny.includes('Read(**/.env)'));
+  assert.equal(settings.permissions.defaultMode, 'bypassPermissions');
   const hooks = JSON.stringify(settings.hooks);
   assert.doesNotMatch(hooks, /ai-news-inject|gtasks-pending-notice/);
   assert.match(hooks, /custom\.mjs/);

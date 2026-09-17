@@ -367,13 +367,14 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
 
 effortLevelの既定は **medium**（kim 2026-09-17 改定）、lowは禁止。`settings-quality-guard` がlowへの変更をblockし、SessionStartでmediumへ復元する。highへの引き上げは設計・横断調査の時だけ、セッション単位で行う。thinking予算・監督モデル・実装先（Codex）を節約目的で下げないルールは維持し、節約は委譲・レスポンス数削減・無人ジョブの非Claude化・キャッシュ維持で行う。
 
-### 1.14 Auto Mode
+### 1.14 permission mode と安全装置
 
-Claude CodeはAuto Modeを既定にする。
+permission mode の既定は `bypassPermissions`（kim 2026-09-17 決定）。安全は deny リスト（allow-rules.json）と社内 hook の2層で担保する。
 
-**1.14 Claude Code は Auto Mode を default にする**
-
-`~/.claude/settings.json` の `permissions.defaultMode: "auto"` で恒久化済み（user settingsのみ有効、プロジェクト設定では無視される）。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/autonomy-and-reporting.md`
+理由は、auto mode classifier が Claude 自身の運用基盤の修正を必ず止め、user の手作業に直結し、classifier 自体は書き換え不能だからである。
+deny は締める方向の追加だけ Claude が自分で行ってよい。allow 追加・deny 削除・mode 変更など緩める方向は人が行う。個別PCで auto を維持したい場合は `ORGIAST_KEEP_PERMISSION_MODE=1` を設定する。
+失うものは Anthropic 側の第二の目、すなわちクレデンシャル露出・本番デプロイ・権限拡大を第三者が止める機能である。
+詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/autonomy-and-reporting.md`
 
 ### 1.15 自律進行・セッション引継ぎ
 
@@ -710,6 +711,8 @@ Fable/Opus本体の直接ツール実行は1ターン4回で警告、8回で停�
 ### 1.20 auto mode classifier と共存する Bash 規約
 
 Bashは1呼び出し1コマンドとし、専用ツールとallow済みの経路を使う。
+
+- bypass 移行後も Bash 規約は維持する（allow 不一致で止まらなくなっても、連結・パイプは Codex hang と読みにくさの原因）。
 
 1. `cd X && cmd` の連結は禁止。絶対パスか `git -C <path>` / ツールの `--cwd` を使う。
 2. `2>&1 | tail` / `| head` などのパイプ後処理を付けない（allowルール不一致とCodex hangの原因）。

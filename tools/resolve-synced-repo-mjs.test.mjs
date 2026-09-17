@@ -128,8 +128,24 @@ test('定時タスクを登録する .mjs は自分の置き場所を repo に�
   for (const { name, source } of registerScripts()) {
     assert.doesNotMatch(
       source,
-      /(?:const|let|var)\s+repo\s*=\s*[^\n]*import\.meta\.url/,
+      /(?:const|let|var)\s+repo\w*\s*=\s*[^\n]*import\.meta\.url/,
       `${name} が自分の位置から repo を決めています`,
+    );
+    // 上の検査は「同じ行で repo に代入する」形しか見ない。自己位置を一度別名に受けてから
+    // 組み立てる多段の形（const here = ...import.meta.url; const repo = path.dirname(here)）は
+    // 素通りするので、名前ではなく「どこへ渡したか」で縛る。自己位置は fallback にだけ渡してよい。
+    const self = source.match(/(?:const|let|var)\s+(\w+)\s*=[^\n]*fileURLToPath\(\s*import\.meta\.url\s*\)/);
+    if (!self) continue;
+    const selfName = self[1];
+    assert.match(
+      source,
+      new RegExp(`fallback:\\s*${selfName}\\b`),
+      `${name} の自己位置 ${selfName} が fallback として resolver に渡っていません`,
+    );
+    assert.doesNotMatch(
+      source,
+      new RegExp(`registerHourlyTask\\s*\\([^)]*\\b${selfName}\\b`),
+      `${name} が自己位置 ${selfName} をタスクの実行先に渡しています`,
     );
   }
 });

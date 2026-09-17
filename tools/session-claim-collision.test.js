@@ -37,6 +37,14 @@ function run(projects) {
   });
 }
 
+function runWithEvent(projects, home, event) {
+  return spawnSync(process.execPath, [script], {
+    cwd: projects,
+    input: JSON.stringify({ hook_event_name: event, session_id: selfId }), encoding: 'utf8',
+    env: { ...process.env, ORGIAST_HOME: home, CLAUDE_SESSION_ID: '', CLAUDE_PROJECTS_DIR: projects },
+  });
+}
+
 test('assistant行の同等な制作シート目的は相手sessionId付きで警告する', (t) => {
   const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
   write(f.projects, 'slug-a', selfId, [
@@ -103,5 +111,56 @@ test('自セッションの目的宣言がなければ静かにexit 0', (t) => {
   ]) {
     write(f.projects, 'slug', selfId, entries);
     const result = run(f.projects); assert.equal(result.status, 0, result.stderr); assert.equal(result.stdout, '', JSON.stringify(entries));
+  }
+});
+
+test('PreToolUseは初回に衝突を警告してlatchを書く', (t) => {
+  const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
+  write(f.projects, 'slug', selfId, [assistant('aujust 制作シート同期を修正する')]);
+  write(f.projects, 'slug', otherId, [assistant('aujust 制作シート同期を修正する')]);
+  const result = runWithEvent(f.projects, f.root, 'PreToolUse');
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.hookSpecificOutput.hookEventName, 'PreToolUse');
+  assert.match(output.hookSpecificOutput.additionalContext, /22222222/);
+  assert.equal(fs.existsSync(path.join(f.root, '.claude', 'session-claim-collision', `${selfId}.checked`)), true);
+});
+
+test('2回目のPreToolUseはlatchにより無音', (t) => {
+  const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
+  write(f.projects, 'slug', selfId, [assistant('aujust 制作シート同期を修正する')]);
+  write(f.projects, 'slug', otherId, [assistant('aujust 制作シート同期を修正する')]);
+  const first = runWithEvent(f.projects, f.root, 'PreToolUse');
+  assert.notEqual(first.stdout, '');
+  const second = runWithEvent(f.projects, f.root, 'PreToolUse');
+  assert.equal(second.status, 0, second.stderr);
+  assert.equal(second.stdout, '');
+});
+
+test('目的宣言前のPreToolUseはlatchを書かず宣言後に再試行する', (t) => {
+  const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
+  write(f.projects, 'slug', selfId, [{ type: 'assistant', message: { content: '目的宣言なし' } }]);
+  write(f.projects, 'slug', otherId, [assistant('aujust 制作シート同期を修正する')]);
+  const latch = path.join(f.root, '.claude', 'session-claim-collision', `${selfId}.checked`);
+  const before = runWithEvent(f.projects, f.root, 'PreToolUse');
+  assert.equal(before.status, 0, before.stderr);
+  assert.equal(before.stdout, '');
+  assert.equal(fs.existsSync(latch), false);
+  write(f.projects, 'slug', selfId, [assistant('aujust 制作シート同期を修正する')]);
+  const after = runWithEvent(f.projects, f.root, 'PreToolUse');
+  assert.equal(after.status, 0, after.stderr);
+  assert.match(JSON.parse(after.stdout).hookSpecificOutput.additionalContext, /22222222/);
+});
+
+test('SessionStartとUserPromptSubmitはPreToolUseのlatchを見ない', (t) => {
+  const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
+  write(f.projects, 'slug', selfId, [assistant('aujust 制作シート同期を修正する')]);
+  write(f.projects, 'slug', otherId, [assistant('aujust 制作シート同期を修正する')]);
+  const preToolUse = runWithEvent(f.projects, f.root, 'PreToolUse');
+  assert.notEqual(preToolUse.stdout, '');
+  for (const event of ['SessionStart', 'UserPromptSubmit']) {
+    const result = runWithEvent(f.projects, f.root, event);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).hookSpecificOutput.hookEventName, event);
   }
 });

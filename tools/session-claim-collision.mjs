@@ -69,9 +69,12 @@ try {
   const raw = await readStdinWithTimeout();
   let input = {};
   try { if (raw) input = JSON.parse(raw); } catch { process.exit(0); }
+  const event = String(input.hook_event_name || argValue('--event') || 'SessionStart');
   const sessionId = String(argValue('--session-id') || process.env.CLAUDE_SESSION_ID || input.session_id || '');
   if (!sessionId) process.exit(0);
   const home = process.env.ORGIAST_HOME || os.homedir();
+  const latchPath = path.join(home, '.claude', 'session-claim-collision', `${sessionId}.checked`);
+  if (event === 'PreToolUse' && fs.existsSync(latchPath)) process.exit(0);
   const projectsDir = process.env.CLAUDE_PROJECTS_DIR || path.join(home, '.claude', 'projects');
   const now = Date.now();
   let slugs;
@@ -101,6 +104,12 @@ try {
     const similarity = jaccard(own.tokens, candidate.tokens);
     if (similarity >= COLLISION_THRESHOLD) collisions.push({ candidate, similarity });
   }
+  if (event === 'PreToolUse') {
+    try {
+      fs.mkdirSync(path.dirname(latchPath), { recursive: true });
+      fs.writeFileSync(latchPath, new Date().toISOString());
+    } catch {}
+  }
   if (collisions.length === 0) process.exit(0);
   collisions.sort((a, b) => b.similarity - a.similarity);
   const lines = ['⚠️ 着手衝突の疑い: この目的は別セッションが先に着手している可能性がある。'];
@@ -111,6 +120,6 @@ try {
   }
   lines.push('着手前に確認せよ: (1) 相手の worktree/branch が既にあるか `git worktree list` と `git branch -a` で見る');
   lines.push('(2) 重複なら着手せず /session-start で別の目的を選び直す');
-  console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: lines.join('\n') } }));
+  console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: lines.join('\n') } }));
 } catch {}
 process.exit(0);

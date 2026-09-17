@@ -4,8 +4,7 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { check } from './handoff-branch-coverage-gate.mjs';
-import { hasManualRequest } from './manual-request-fullsteps-gate.mjs';
+import { check, hasManualRequest } from './handoff-branch-coverage-gate.mjs';
 import { isEntry } from './is-entry.mjs';
 
 const GATE = fileURLToPath(new URL('./handoff-branch-coverage-gate.mjs', import.meta.url));

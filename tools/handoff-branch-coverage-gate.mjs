@@ -1,9 +1,17 @@
 import { latestAssistantText } from './lib/assistant-text.mjs';
-import { hasManualRequest } from './manual-request-fullsteps-gate.mjs';
+import { hasManualRequest as hasSharedManualRequest } from './manual-request-fullsteps-gate.mjs';
 import { isEntry } from './is-entry.mjs';
 
 const FIRST_BRANCH = /初回(?:は|のみ)|初めて|はじめて|新規に作成|まだ登録されていない|未登録の場合/;
 const EXISTING_BRANCH = /既に|すでに|登録済み|作成済み|[2２]回目以降|設定済みの場合|既存の/;
+
+export function hasManualRequest(text) {
+    const body = text.replace(/```[\s\S]*?```/g, '');
+    // 共有判定が未対応の「登録」と「んで」の活用も、このゲートでは検査する。
+    // 共有ファイルのローカル変更の有無で結果が変わらないようにする。
+    return hasSharedManualRequest(body) ||
+        /(?:登録して|(?:選ん|進ん)で)\s*(ください|下さい|ほしい|欲しい|もらえ)/.test(body);
+}
 
 function mainProcedure(text) {
     let inFailureSection = false;

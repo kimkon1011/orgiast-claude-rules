@@ -821,7 +821,7 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
 - 止め方: `~/.claude/auto-session/disabled` という空ファイルを作る。
 - 手動実行: `tools\auto-session.cmd` をダブルクリックする（`--list` で採用/除外だけ確認できる）。
 - 履歴は VSCode の `/resume` に出る。ログは `~/.claude/auto-session/runs/` に保存し、Discord通知には transcript パスと `claude --resume <ID>` が入る。
-- `--permission-mode` は**渡さない**（`acceptEdits` は Bash を承認待ちで止めるため、既定の `auto` を継承する）。
+- `--permission-mode auto` を**明示的に渡す**（`acceptEdits` は Bash を承認待ちで止めるため不可。以前は settings.json の既定 `auto` を継承する設計だったが、2026-09-17 に実機で `permissions.defaultMode` が未設定と判明したため、継承に頼らず明示するよう修正した）。
 
 **委譲ヘルスの自動ループ（2026-09-09）**: 夜間に `tools/delegation-health-check.mjs` が委譲の台帳（codex 上限記録・cooldown・executor-usage）を実測と照合し、偽の cooldown は即時解除、根本原因は `~/.claude/next-session.md` の残TODO先頭へ起票して翌夜の auto-session(Codex) が修正する。朝の COST-DIRECTIVE に結果が出る。人が症状を指摘するのを待たない。
 

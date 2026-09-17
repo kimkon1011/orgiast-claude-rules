@@ -104,6 +104,9 @@ test('buildClaudeHeadlessArgs は既定 sonnet で cwd 違いのときだけ add
     const same = buildClaudeHeadlessArgs({ repoCwd: 'C:/repo', historyCwd: 'C:/repo' });
     assert.equal(same.filter((a) => a === '--add-dir').length, 1);
     assert.ok(different.includes('sonnet'));
+    // settings.json の permissions.defaultMode に依存せず常に明示で auto を渡す
+    // (2026-09-17: 実機の settings.json に defaultMode が無く無人実行が承認待ちで停止していたため)。
+    assert.equal(different[different.indexOf('--permission-mode') + 1], 'auto');
   } finally {
     if (previous === undefined) delete process.env.ORGIAST_AUTO_SESSION_MODEL;
     else process.env.ORGIAST_AUTO_SESSION_MODEL = previous;

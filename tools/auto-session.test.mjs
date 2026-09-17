@@ -218,6 +218,41 @@ test('sectionsForTodo: 同一ブロック内の入れ子ハンドオフから対
   assert.ok(!JSON.stringify(sections).includes('vercel --prod'));
 });
 
+test('sectionsForTodo: 同一セグメント内の2件目以降は対象・完了条件を借りない(2026-09-17実測の混成handoffの再現)', () => {
+  // 2026-09-17-4: 選ばれたTODOが「mistral skip」なのに、対象・完了条件は前日の別タスク
+  // 「register-*.mjs」のままという混成 handoff が実際に生成された。原因は、1セグメント内の
+  // 「残TODO」が複数件ある時、全件が無条件に同じ「対象/完了条件」を共有していたこと。
+  const md = `<!-- NEXT-SESSION v1 -->
+## 次の1目的
+register-*.mjs の実行先解決を直す
+
+## 対象
+- tools/register-process-hygiene-task.mjs
+
+## 完了条件
+- node --test が緑になること
+
+## 触る前に読む memory
+- [[feedback-nightly-bootstrap-silent-stale]]
+
+## 残TODO（次の1件を先頭に）
+1. register-*.mjs の実行先解決を直す(上の「次の1目的」)
+2. eval-providers.json の mistral に skip:true を1行足す
+`;
+  const parsed = parseHandoff(md);
+  const headline = sectionsForTodo(parsed, parsed.todos[0]);
+  assert.equal(headline['対象'], '## 対象\n- tools/register-process-hygiene-task.mjs');
+  assert.equal(headline['完了条件'], '## 完了条件\n- node --test が緑になること');
+
+  const other = sectionsForTodo(parsed, parsed.todos[1]);
+  assert.ok(!('対象' in other), '別件のTODOに前日の対象が混入している');
+  assert.ok(!('完了条件' in other), '別件のTODOに前日の完了条件が混入している');
+  assert.equal(other['触る前に読む memory'], '## 触る前に読む memory\n- [[feedback-nightly-bootstrap-silent-stale]]');
+
+  const prompt = buildPrompt(parsed.todos[1], other, '/repo', '/summary');
+  assert.ok(!prompt.includes('register-process-hygiene-task.mjs'), '別件TODOのプロンプトに前日の対象が混入している');
+});
+
 test('sectionsBySegment: 入れ子ハンドオフ側の条件は自分のセグメントに保持する', () => {
   const md = `<!-- NEXT-SESSION v1 -->
 
@@ -730,8 +765,10 @@ test('buildChildArgs は cwd が異なる場合だけ --add-dir を2つ渡す', 
   assert.equal(different.filter((arg) => arg === '--add-dir').length, 2);
   assert.equal(same.filter((arg) => arg === '--add-dir').length, 1);
   assert.deepEqual(same.slice(-2), ['--add-dir', repoCwd]);
-  assert.equal(different.includes('--permission-mode'), false);
-  assert.equal(same.includes('--permission-mode'), false);
+  // settings.json の permissions.defaultMode に依存せず、常に明示で auto を渡す
+  // (2026-09-17: 実機の settings.json に defaultMode が無く無人実行が承認待ちで止まっていたため)。
+  assert.equal(different[different.indexOf('--permission-mode') + 1], 'auto');
+  assert.equal(same[same.indexOf('--permission-mode') + 1], 'auto');
   assert.equal(different[different.indexOf('--model') + 1], 'sonnet');
 });
 

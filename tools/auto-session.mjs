@@ -137,7 +137,19 @@ export function sectionsForTodo(parsed, todo) {
   const blockIndex = parsed.todoBlocks[index];
   if (parsed.sectionsByBlock[blockIndex] == null) return {};
   if (parsed.todoSegments != null && parsed.sectionsBySegment != null) {
-    return parsed.sectionsBySegment[parsed.todoSegments[index]] ?? {};
+    const segmentId = parsed.todoSegments[index];
+    const sections = parsed.sectionsBySegment[segmentId] ?? {};
+    // 「対象」「完了条件」はそのセグメントの「次の1目的」(=残TODOの先頭項目、session-close の
+    // 規約で必ずそう並ぶ)専用の記述。同じセグメント内の2件目以降は自己完結した別件のTODOなので、
+    // 他タスクの対象・完了条件を押し付けない(2026-09-17実測: 選ばれたTODOが mistral skip なのに
+    // 対象・完了条件は前日の別タスク register-*.mjs のままという混成 handoff が生成されていた)。
+    // 「触る前に読む memory」は汎用の道しるべなので、先頭以外にも残す。
+    const firstIndexForSegment = parsed.todoSegments.indexOf(segmentId);
+    if (index !== firstIndexForSegment) {
+      const { '対象': omitTarget, '完了条件': omitDone, ...rest } = sections;
+      return rest;
+    }
+    return sections;
   }
   return parsed.sectionsByBlock[blockIndex] ?? {};
 }

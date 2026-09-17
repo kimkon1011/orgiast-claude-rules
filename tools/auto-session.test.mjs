@@ -400,6 +400,16 @@ test('参照だけの実文言 TODO を除外し、末尾に括弧がある通�
   assert.equal(todoExclusionReason(task), '');
 });
 
+test('「…残TODO は下の旧ブロックに全部残っている」型のポインタ行を除外する', () => {
+  const real =
+    '4. 既存の残TODO（auto-session のブロック混入バグ 1r、Supabase migration 0065/0066/0068、AIニュース提案群）は下の旧ブロックに全部残っている';
+  const real2 = '5. 旧ブロックの残TODO（auto-session のブロック混入バグ 1r）は下に全部残っている';
+  assert.equal(todoExclusionReason(real), '参照のみ（作業内容が無い）');
+  assert.equal(todoExclusionReason(real2), '参照のみ（作業内容が無い）');
+  // 「残っている」で終わっていても、ブロックを指していない実作業は除外しない
+  assert.equal(todoExclusionReason('2. 下の階層に古いキャッシュが残っている'), '');
+});
+
 test('新旧ブロックの同一 TODO は先頭の1件だけを採用する', () => {
   const md = `<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. **同じ作業**（最新）\n---\n<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. **同じ作業**（古い）\n`;
   const parsed = parseHandoff(md);

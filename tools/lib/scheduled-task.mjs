@@ -23,6 +23,11 @@ export function stopScheduledTask(taskName, { spawnImpl = spawnSync } = {}) {
   run(`Stop-ScheduledTask -TaskName '${name}' -ErrorAction Stop`, spawnImpl);
 }
 
+export function enableScheduledTask(taskName, { spawnImpl = spawnSync } = {}) {
+  const name = String(taskName).replaceAll("'", "''");
+  run(`Enable-ScheduledTask -TaskName '${name}' -ErrorAction Stop`, spawnImpl);
+}
+
 export function registerHourlyTask(taskName, script, { spawnImpl = spawnSync, home = process.env.USERPROFILE, dryRun = false } = {}) {
   const quote = (value) => `'${String(value).replaceAll("'", "''")}'`;
   const hidden = pathForPowerShell(home, '.claude\\tools\\run-hidden.vbs');

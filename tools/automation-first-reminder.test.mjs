@@ -6,4 +6,5 @@ test('認証の取得・設定は keyserve と専用ツールを案内する', (
   assert.match(additionalContext, /keyserve-status\.mjs/);
   assert.match(additionalContext, /env-kv\.mjs/);
   assert.doesNotMatch(additionalContext, /transcript|\.env\.local|gh secret set/);
+  assert.match(additionalContext, /一括拒否から個別不可を推定せず、手渡し前に最小単位で1回試す/);
 });

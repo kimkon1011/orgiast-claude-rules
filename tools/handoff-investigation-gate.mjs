@@ -18,6 +18,9 @@ export function evaluateInvestigation(text) {
   if (marker < 0) missing.push('[手渡し判定] ブロック');
 
   const block = marker < 0 ? '' : value.slice(marker);
+  if (/(?:classifier|拒否|denied|Self-Modification)/i.test(block) && !/^最小単位で再試行:/m.test(block)) {
+    return { decision: 'block', missing: [], reason: '[MINIMAL-RETRY] classifier 拒否を理由に手渡しています。手渡し前に、目的の変更だけを最小単位で1回試した結果を `最小単位で再試行: <試した操作> → <結果>` で書いてください。一括操作や緩める方向の操作の拒否から、未試行の個別操作を不可と推定するのは禁止（2026-09-17 実害）。' };
+  }
   const heading = block.match(/^\s*(?:[-*]\s*)?(?:\*{1,2})?(試したこと|調査済み)(?:\*{1,2})?\s*[:：]?\s*$/m);
   if (!heading) missing.push('試したこと（または調査済み）の見出し');
 
@@ -34,6 +37,7 @@ export function evaluateInvestigation(text) {
 }
 
 export function failureReason(missing) {
+  if (!missing?.length) return '[MINIMAL-RETRY] classifier 拒否を理由に手渡しています。手渡し前に、目的の変更だけを最小単位で1回試した結果を `最小単位で再試行: <試した操作> → <結果>` で書いてください。一括操作や緩める方向の操作の拒否から、未試行の個別操作を不可と推定するのは禁止（2026-09-17 実害）。';
   return `[INVESTIGATION] user に依頼していますが、事前調査の証拠がありません。\n不足: ${missing.join(', ')}\n\n[手渡し判定] ブロックに次を書いてください:\n  試したこと:\n    ① <実際に叩いた/検索した内容> → <結果>\n    ② <別経路> → <結果>\n  user でないと無理な理由: <OAuth初回同意 / 支払い / アカウント作成・ログイン / 物理操作 のどれか>\n\n「たぶん要る」は不可。手を動かして確かめた結果だけを書くこと。\n受け取っても使えないものを頼んでいないか(=受領後に機能する確証)も先に確かめること。`;
 }
 

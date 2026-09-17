@@ -10,6 +10,7 @@ import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { runGate as evaluateQuality } from './handoff-quality-gate.mjs';
 import { judge as judgeFullSteps } from './manual-request-fullsteps-gate.mjs';
 import { evaluateInvestigation, failureReason } from './handoff-investigation-gate.mjs';
+import { evaluateHandoffRegret } from './handoff-regret-gate.mjs';
 import { findHandoffWithoutInfo, formatViolationMessage as formatHandoffInfo } from './handoff-info-guard.mjs';
 import { configuredMode, evaluateNegativeClaimFromRaw } from './negative-claim-gate.mjs';
 import { configuredMode as externalStateMode, evaluateExternalStateClaimFromRaw } from './external-state-claim-gate.mjs';
@@ -33,6 +34,7 @@ export async function evaluateGates(ctx, auditOptions = {}) {
     ['handoff-quality-gate', () => evaluateQuality({ ...ctx.input, assistant_text: ctx.assistantText })],
     ['manual-request-fullsteps-gate', () => { const result = judgeFullSteps(ctx.assistantText); return result.triggered && result.missing.length ? { decision: 'block', reason: fullStepsReason(result.missing), code: 'FULL-STEPS' } : { decision: 'pass' }; }],
     ['handoff-investigation-gate', () => { const result = evaluateInvestigation(ctx.assistantText); return result.decision === 'block' ? { ...result, reason: failureReason(result.missing), code: 'INVESTIGATION' } : result; }],
+    ['handoff-regret-gate', () => evaluateHandoffRegret(ctx.transcriptRaw, ctx.assistantText)],
     ['handoff-info-guard', () => { const found = findHandoffWithoutInfo(ctx.assistantText); return found ? { decision: 'block', reason: formatHandoffInfo(found), code: 'HANDOFF-INFO' } : { decision: 'pass' }; }],
     ['negative-claim-gate', () => { const result = evaluateNegativeClaimFromRaw({ text: ctx.assistantText, transcriptRaw: ctx.transcriptRaw }); return result.decision === 'block' && configuredMode() !== 'block' ? { ...result, decision: 'pass' } : result; }],
     ['external-state-claim-gate', () => { const result = evaluateExternalStateClaimFromRaw({ text: ctx.assistantText, transcriptRaw: ctx.transcriptRaw }); return result.decision === 'block' && externalStateMode() !== 'block' ? { ...result, decision: 'pass' } : result; }],

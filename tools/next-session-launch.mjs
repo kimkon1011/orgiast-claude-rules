@@ -9,6 +9,41 @@ import { alternateCheapProvider, autoSessionExecutor, buildCheapCodeArgs, buildC
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..');
 
+/**
+ * `cmd.exe` を裸の名前で spawn すると PATH に System32 が無い環境(git bash 経由や
+ * サンドボックス下の node)で `spawn cmd.exe ENOENT` になり、次セッションの自動起動が
+ * 丸ごとスキップされる(2026-09-17 実測)。ComSpec → 絶対パス → 裸名 の順で解決する。
+ */
+export function resolveCmdExe(env = process.env) {
+  const candidates = [
+    env.ComSpec,
+    env.COMSPEC,
+    path.join(env.SystemRoot || env.windir || 'C:\\Windows', 'System32', 'cmd.exe'),
+  ];
+  for (const candidate of candidates) {
+    if (candidate && fs.existsSync(candidate)) return candidate;
+  }
+  return 'cmd.exe';
+}
+
+const CMD_EXE = resolveCmdExe();
+
+/**
+ * Claude の sandbox 下で走る node は cmd.exe を**実体が存在していても** spawn できず
+ * `spawn C:\WINDOWS\system32\cmd.exe ENOENT` になる(2026-09-17 実測。fs.existsSync は true)。
+ * この経路が死ぬと次セッションの自動起動が丸ごとスキップされ、user に「新しいタブを開いて」と
+ * 頼むことになる = 手作業の発生。PowerShell は同じ sandbox から起動できるので、cmd が
+ * 使えない時だけ `& '<exe>' <args>` に翻訳して撃ち直す。
+ */
+export function powershellFallbackArgs(exe, args) {
+  const quoted = args.map((arg) => `'${String(arg).replace(/'/g, "''")}'`).join(' ');
+  return ['-NoProfile', '-NonInteractive', '-Command', `& '${String(exe).replace(/'/g, "''")}' ${quoted}`];
+}
+
+export function isSpawnUnavailable(error) {
+  return Boolean(error) && (error.code === 'ENOENT' || error.code === 'EACCES' || error.code === 'EPERM');
+}
+
 export function parseHandoffCwd(text) {
   const match = String(text).match(/<!--[^\r\n]*?cwd:\s*(.*?)\s*-->/);
   return match?.[1]?.trim() ?? '';
@@ -115,26 +150,27 @@ export function buildVscodeUri(prompt) {
   return prompt ? `${base}?prompt=${encodeURIComponent(prompt)}` : base;
 }
 
-export function buildVscodeExtUri({ prompt, cwd, claude, probe = false }) {
+export function buildVscodeExtUri({ prompt, cwd, claude, ack, probe = false }) {
   const params = [
     `prompt=${encodeURIComponent(prompt)}`,
     `cwd=${encodeURIComponent(cwd)}`,
   ];
   if (claude) params.push(`claude=${encodeURIComponent(claude)}`);
+  if (ack) params.push(`ack=${encodeURIComponent(ack)}`);
   if (probe) params.push('probe=1');
   return `vscode://orgiast.next-session/start?${params.join('&')}`;
 }
 
-export function planVscodeExtLaunch({ codeCli, prompt, cwd, claude }) {
+export function planVscodeExtLaunch({ codeCli, prompt, cwd, claude, ack }) {
   if (!codeCli || !cwd) return null;
-  const uri = buildVscodeExtUri({ prompt, cwd, claude });
+  const uri = buildVscodeExtUri({ prompt, cwd, claude, ack });
   // URI は `&` 区切りの複数パラメータを持つ。cmd.exe は引用されていない `&` を
   // コマンド区切りとして解釈し、cwd/claude が別コマンド扱いで落ちる（2026-09-04 実測:
   // `'cwd' is not recognized as an internal or external command`）。cmd /c "..." の
   // 一枚文字列にして URI を引用符で囲み、windowsVerbatimArguments で node の再クォートを止める。
   return {
     label: 'open-session',
-    command: 'cmd.exe',
+    command: CMD_EXE,
     args: ['/c', `""${codeCli}" --open-url "${uri}""`],
     windowsVerbatimArguments: true,
   };
@@ -180,9 +216,9 @@ export function planVscodeLaunch({ codeCli, cwd, prompt, openFolder = false }) {
   const steps = [];
   if (openFolder) {
     if (!cwd) return null;
-    steps.push({ label: 'open-folder', command: 'cmd.exe', args: ['/c', codeCli, '-n', cwd] });
+    steps.push({ label: 'open-folder', command: CMD_EXE, args: ['/c', codeCli, '-r', cwd] });
   }
-  steps.push({ label: 'open-session', command: 'cmd.exe', args: ['/c', codeCli, '--open-url', buildVscodeUri(prompt)] });
+  steps.push({ label: 'open-session', command: CMD_EXE, args: ['/c', codeCli, '--open-url', buildVscodeUri(prompt)] });
   return steps;
 }
 
@@ -244,7 +280,7 @@ export async function runHeadlessNextSession({ env, hostname, home, cwd, prompt,
     let child;
     try {
       child = spawnImpl(cheap ? process.execPath : executable, cheap
-        ? buildCheapCodeArgs({ repoRoot: REPO_ROOT, provider: cheapProvider, promptFile, cwd })
+        ? buildCheapCodeArgs({ provider: cheapProvider, promptFile, cwd })
         : buildClaudeHeadlessArgs({ repoCwd: cwd, historyCwd: cwd }), {
         cwd,
         env: { ...env, CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: cheap ? `next-session-launch:cheap-code:${cheapProvider}` : 'next-session-launch:fallback-claude' },
@@ -393,7 +429,7 @@ export function planLaunch({ claudeBin, cwd, prompt, wt, model = '' }) {
     return { command: wt, args: ['-w', 'new-window', '-d', cwd, ...claudeArgs], cwd, detached: true };
   }
   return {
-    command: 'cmd.exe',
+    command: CMD_EXE,
     args: ['/c', 'start', '', '/D', cwd, ...claudeArgs],
     cwd,
     detached: true,
@@ -637,7 +673,8 @@ export async function launchNextSession(argv = [], io = {}) {
 
     if (route === 'vscode-ext') {
       const claudeBin = resolveClaudeBinary({ env, exists, readdir, homedir: home });
-      const step = planVscodeExtLaunch({ codeCli, cwd, prompt: flags.prompt, claude: claudeBin });
+      const ackPath = path.join(claudeDir, `next-session-vscode-ext-${process.pid}-${Date.now()}.ack`);
+      const step = planVscodeExtLaunch({ codeCli, cwd, prompt: flags.prompt, claude: claudeBin, ack: ackPath });
       if (flags.dryRun) {
         log(JSON.stringify({ route: 'vscode-ext', step, extensionId: 'orgiast.next-session', account, configDir, configDirSource }));
         return 0;
@@ -646,7 +683,7 @@ export async function launchNextSession(argv = [], io = {}) {
       try {
         if (!codeCli) throw new Error('VSCode CLI (code.cmd) が見つかりません');
         const runCodeCli = io.runCodeCli ?? (async (args) => {
-          const child = spawnProcess('cmd.exe', ['/c', codeCli, ...args], {
+          const child = spawnProcess(CMD_EXE, ['/c', codeCli, ...args], {
             cwd,
             detached: false,
             stdio: ['ignore', 'pipe', 'pipe'],
@@ -690,12 +727,27 @@ export async function launchNextSession(argv = [], io = {}) {
             let settled = false;
             const finish = (fn, value) => { if (!settled) { settled = true; clearTimeout(timer); fn(value); } };
             const timer = setTimeout(() => finish(resolve), 30000);
-            if (typeof timer.unref === 'function') timer.unref();
+            // この timer は code.cmd が exit を通知しない時の唯一の完了保証。unref すると他に
+            // event-loop handle が無い瞬間、await 中でも Node が無言で exit 0 する
+            // (2026-09-12 実測: dry-run のみ通り state もログも更新されなかった)。
             child.once('exit', () => finish(resolve));
             child.once('error', (error) => finish(reject, error));
           });
         }
         if (typeof child.unref === 'function') child.unref();
+
+        const waitForAck = io.waitForVscodeExtAck ?? (async () => {
+          // 拡張 host の初回起動は実測で約15秒かかることがある。code CLI の上限と揃える。
+          for (let elapsed = 0; elapsed < 30000; elapsed += 100) {
+            if (exists(ackPath)) return true;
+            await wait(100);
+          }
+          return false;
+        });
+        if (!await waitForAck(ackPath)) {
+          throw new Error('拡張が30秒以内に応答しませんでした (URI handler 未起動または未インストール)');
+        }
+        try { await fs.promises.rm(ackPath, { force: true }); } catch {}
 
         const nextState = { ...state, enabled: state.enabled !== false, lastLaunchAt: new Date().toISOString(), lastCwd: cwd, lastRoute: 'vscode-ext', lastPrompt: flags.prompt, lastAccount: account, lastConfigDir: configDir };
         const tmpPath = `${statePath}.tmp-${process.pid}`;
@@ -720,23 +772,38 @@ export async function launchNextSession(argv = [], io = {}) {
         return 0;
       }
 
-      for (let index = 0; index < steps.length; index += 1) {
-        const step = steps[index];
-        const child = spawnProcess(step.command, step.args, {
-          cwd,
-          detached: false,
-          stdio: 'ignore',
-          windowsHide: true,
-          env: launchEnv,
-        });
-        const isLast = index === steps.length - 1;
-        if (typeof child.once === 'function') {
-          // 先行手順は終了まで待つ。最後の1手は起動を確認したら待たない(code.cmd の終了を待つ必要はない)。
-          await new Promise((resolve, reject) => {
-            child.once(isLast ? 'spawn' : 'exit', resolve);
-            child.once('error', reject);
-          });
+      const spawnOptions = { cwd, detached: false, stdio: 'ignore', windowsHide: true, env: launchEnv };
+      // step.args は必ず ['/c', <code.cmd>, ...rest]。cmd が spawn できない環境では
+      // PowerShell 経由で code.cmd を直接叩き直す(上の powershellFallbackArgs 参照)。
+      const runStep = async (step, waitFor) => {
+        const attempts = [[step.command, step.args]];
+        if (step.args[0] === '/c' && step.args.length > 1) {
+          attempts.push(['powershell.exe', powershellFallbackArgs(step.args[1], step.args.slice(2))]);
         }
+        let lastError;
+        for (const [command, args] of attempts) {
+          try {
+            const child = spawnProcess(command, args, spawnOptions);
+            if (typeof child.once === 'function') {
+              await new Promise((resolve, reject) => {
+                child.once(waitFor, resolve);
+                child.once('error', reject);
+              });
+            }
+            return child;
+          } catch (error) {
+            lastError = error;
+            if (!isSpawnUnavailable(error)) throw error;
+            log(`[next-session] ${command} を起動できないため代替経路を試します: ${error.message}`);
+          }
+        }
+        throw lastError;
+      };
+
+      for (let index = 0; index < steps.length; index += 1) {
+        const isLast = index === steps.length - 1;
+        // 先行手順は終了まで待つ。最後の1手は起動を確認したら待たない(code.cmd の終了を待つ必要はない)。
+        const child = await runStep(steps[index], isLast ? 'spawn' : 'exit');
         if (isLast && typeof child.unref === 'function') child.unref();
         if (!isLast) await wait(2500);
       }

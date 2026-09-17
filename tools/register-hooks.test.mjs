@@ -137,6 +137,19 @@ test('lane guard は指定matcher・timeoutで登録される', () => {
   assert.equal(group.matcher,'Bash|PowerShell|Edit|Write|MultiEdit'); assert.equal(group.hooks[0].timeout,5);
 });
 
+test('gemini MCP 使用量hookはPostToolUseにmatcher付きで1本だけ登録される', () => {
+  const home=fs.mkdtempSync(path.join(os.tmpdir(),'register-gemini-mcp-')), repo=path.resolve('.');
+  const env={...process.env,ORGIAST_HOME:home,ORGIAST_REPO:repo};
+  execFileSync(process.execPath,[path.join(repo,'tools','register-hooks.mjs'),'--hooks-only'],{env});
+  execFileSync(process.execPath,[path.join(repo,'tools','register-hooks.mjs'),'--hooks-only'],{env});
+  const settings=JSON.parse(fs.readFileSync(path.join(home,'.claude','settings.json'),'utf8'));
+  const hooks=settings.hooks.PostToolUse.flatMap((group)=>group.hooks||[]).filter((hook)=>String(hook.command).includes('gemini-mcp-usage-hook.mjs'));
+  assert.equal(hooks.length,1);
+  assert.equal(settings.hooks.PostToolUse.find((group)=>(group.hooks||[]).some((hook)=>String(hook.command).includes('gemini-mcp-usage-hook.mjs'))).matcher,'mcp__gemini-cli__(?:ask-gemini|geminiChat|googleSearch)');
+  assert.equal(hooks[0].timeout,10);
+  fs.rmSync(home,{recursive:true,force:true});
+});
+
 test('既存hookの恒久timeoutをイベント・パス表記を問わず収束する', () => {
   const home=fs.mkdtempSync(path.join(os.tmpdir(),'register-timeouts-')), repo=path.resolve('.');
   const file=path.join(home,'.claude','settings.json'); fs.mkdirSync(path.dirname(file),{recursive:true});

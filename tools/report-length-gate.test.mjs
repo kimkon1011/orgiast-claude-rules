@@ -134,3 +134,47 @@ test('ledger に excerpt が非空の1行を書く', () => {
   assert.equal(lines.length, 1);
   assert.ok(JSON.parse(lines[0]).excerpt.length > 0);
 });
+
+// 2026-09-18: 台帳の block を1件ずつ本文で読み、誤爆と判定した3つの型の回帰テスト。
+test('[REPORT-OK: 理由] 形式の免除宣言も pass（案内文どおり理由を添えた形）', () => {
+  const result = judgeReportLength(`${report(30)}\n[REPORT-OK: kim が比較を明示依頼したため]`, 'やって');
+  assert.equal(result.decision, 'pass');
+  assert.equal(result.reason, 'report-ok');
+});
+test('番号付きの操作手順が3つ以上ある手渡し本文は pass（§1.5.1 と衝突させない）', () => {
+  const handoff = [
+    '完了しました。残りは kim の操作だけです。',
+    '1. デスクトップの「①承認する」をダブルクリック',
+    '2. 上部メニューの「ブース制作アプリ」をクリック',
+    '3. 「Google Meet 連携を承認」をクリック',
+    ...Array.from({ length: 12 }, (_, index) => `補足 ${index + 1}`),
+  ].join('\n');
+  assert.equal(judgeReportLength(handoff, 'やって').decision, 'pass');
+});
+test('「手渡しなし」と書いた長い完了報告は従来どおり block', () => {
+  const body = [
+    '[手渡し判定] 手渡しなし',
+    '完了しました。',
+    '1. 設定をクリックして変更',
+    '2. 画面を開いて確認',
+    '3. 値を入力して保存',
+    ...Array.from({ length: 12 }, (_, index) => `詳細 ${index + 1}`),
+  ].join('\n');
+  assert.equal(judgeReportLength(body, 'やって').decision, 'block');
+});
+test('本文に「クリック」の語があるだけの完了報告は block（手順ではない）', () => {
+  const body = [report(20), '画面では「候補の中から顧客を選んでください」と表示されます。クリックが必要です。'].join('\n');
+  assert.equal(judgeReportLength(body, 'やって').decision, 'block');
+});
+test('成果物そのものを頼まれた turn は pass', () => {
+  for (const human of ['文章を作って', '安い候補を探して', 'PDFにして', '請求と入金の表を作って']) {
+    const result = judgeReportLength(report(30), human);
+    assert.equal(result.decision, 'pass', human);
+    assert.equal(result.reason, 'deliverable-requested', human);
+  }
+});
+test('成果物依頼でない短い指示は従来どおり block', () => {
+  for (const human of ['すすめて', 'やって', '２でけして。']) {
+    assert.equal(judgeReportLength(report(30), human).decision, 'block', human);
+  }
+});

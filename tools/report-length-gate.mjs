@@ -8,7 +8,30 @@ import { readAssistantText, readLastHumanText } from './lib/assistant-text.mjs';
 export const REPORT_LINE_LIMIT = 12;
 export const COMPLETION_REPORT_PATTERN = /(完了|反映済|反映しました|push\s*済|deploy\s*完了|✅|できました|直しました|修正しました|実装しました)/;
 /** 実測で疑問文末を見逃した3件（うち1件は誤爆確定）を説明要求として扱う。 */
-export const EXPLANATION_REQUEST_PATTERN = /(調べ|教えて|まとめて|検証して|なぜ|どう|説明|比較|どれ|どちら|分析|レビュー|確認して|\?|？|(?:かな|かしら|でしょうか|だろうか|ですか|ますか)(?=[。．.!！\r\n]|\s*$))/;
+export const EXPLANATION_REQUEST_PATTERN = /(調べ|教えて|おしえて|まとめて|検証して|なぜ|なんで|どう|説明|比較|どれ|どちら|分析|レビュー|確認して|\?|？|(?:かな|かしら|でしょうか|だろうか|ですか|ますか)(?=[。．.!！\r\n]|\s*$))/;
+/**
+ * user が成果物そのもの（文章・表・調査結果・変換物）を頼んだ turn。
+ * その報告は「頼まれていない完了報告」ではないので長さを咎めない。
+ * 実測 2026-09-18: 台帳の block を1件ずつ読んだところ、誤爆20件のうち9件がこの型だった。
+ */
+export const DELIVERABLE_REQUEST_PATTERN = /(作って|つくって|書いて|探して|さがして|出して|リストアップ|一覧に|表にして|表を作|突合|調査して|読んで|変換|PDFに|資料に)/;
+/**
+ * 人に手作業を頼む本文。§1.5.1（非エンジニア向けフル手順）と
+ * manual-request-fullsteps-gate が完全な手順を要求するため、
+ * ここで短くさせるとルール同士が正面衝突する。実測: 誤爆20件のうち7件がこの型。
+ */
+export const HANDOFF_STEPS_PATTERN = /(クリック|タップ|押し|貼り付け|入力し|開いて|選んで|コピー|ログイン)/;
+const HANDOFF_DECLARATION = /\[手渡し判定\]/;
+const NO_HANDOFF_DECLARATION = /\[手渡し判定\][^\n]*手渡しなし/;
+
+/** 番号付きの操作手順が3つ以上あるか（本文のどこかに「クリック」の語があるだけでは足りない）。 */
+export function isHandoffProcedure(text) {
+  const source = String(text || '');
+  if (NO_HANDOFF_DECLARATION.test(source)) return false;
+  const steps = source.split(/\r?\n/).filter((line) => /^\s*\d+[.)]\s+\S/.test(line) && HANDOFF_STEPS_PATTERN.test(line));
+  if (steps.length < 3) return false;
+  return HANDOFF_DECLARATION.test(source) ? !NO_HANDOFF_DECLARATION.test(source) : true;
+}
 const DAY_MS = 24 * 60 * 60 * 1000;
 const home = () => process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || os.homedir();
 
@@ -22,10 +45,14 @@ export function judgeReportLength(assistantText, lastHumanText) {
   const human = String(lastHumanText || '');
   const { lines, chars } = dimensions(source);
   if (!source.trim()) return { decision: 'pass', reason: 'empty-assistant-text', lines, chars };
-  if (source.includes('[REPORT-OK]')) return { decision: 'pass', reason: 'report-ok', lines, chars };
+  // 逃げ道の案内は「`[REPORT-OK]` と理由を書けば通る」なので、実際には `[REPORT-OK: 理由]` と書かれる。
+  // 2026-09-08 の実データではその形式が素通しされず block された（案内と実装が食い違っていた）。
+  if (/\[REPORT-OK\b/.test(source)) return { decision: 'pass', reason: 'report-ok', lines, chars };
   if (!COMPLETION_REPORT_PATTERN.test(source)) return { decision: 'pass', reason: 'not-completion-report', lines, chars };
+  if (isHandoffProcedure(source)) return { decision: 'pass', reason: 'handoff-procedure', lines, chars };
   if (!human.trim()) return { decision: 'pass', reason: 'no-human-text', lines, chars };
   if (EXPLANATION_REQUEST_PATTERN.test(human)) return { decision: 'pass', reason: 'explanation-requested', lines, chars };
+  if (DELIVERABLE_REQUEST_PATTERN.test(human)) return { decision: 'pass', reason: 'deliverable-requested', lines, chars };
   if (lines <= REPORT_LINE_LIMIT) return { decision: 'pass', reason: 'within-line-limit', lines, chars };
   return {
     decision: 'block',

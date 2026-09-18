@@ -70,6 +70,21 @@ test('D案(メモリ最適化64GB)は既定予算を超える = 3万円の境界
   assert.equal(r.verdict, 'over');
 });
 
+test('期限付きの無料枠は expiring に載り、レポートに期限を明示する', () => {
+  const r = estimatePlan('E', { usdJpy: 156, budgetJpy: 30000 });
+  assert.equal(r.expiring.length, 1);
+  assert.equal(r.expiring[0].expiresOn, '2026-12-31');
+  const text = formatReport({ usdJpy: 156, planIds: ['E'] });
+  assert.match(text, /⏳ \*\*期限付き\*\*/);
+  assert.match(text, /2026-12-31 まで/);
+});
+
+test('期限付き無料枠の効果で E案は A案より安い（同一DB・同一バックアップ）', () => {
+  const e = estimatePlan('E', opts), a = estimatePlan('A', opts);
+  assert.ok(e.totalUsd < a.totalUsd, 'E案がA案より高くなっている');
+  assert.equal(a.totalUsd - e.totalUsd, 12);
+});
+
 test('レポートは全プランを含み、出典の無い金額を出さない', () => {
   const text = formatReport({ usdJpy: 156 });
   for (const p of PLANS) assert.ok(text.includes(p.name), `${p.name} が無い`);

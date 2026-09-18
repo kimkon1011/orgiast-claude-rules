@@ -28,7 +28,11 @@ node tools/aws-cost-estimate.mjs --plan C --jpy-rate 160 --budget 30000
 | A 最小（学習・個人開発） | Small 2GB + DB 1GB + snapshot 40GB | $28.72 | **¥4,480** | −¥25,520 |
 | B 標準（小規模本番・単一AZ） | Medium 4GB + DB + LB + snapshot 80GB | $60.38 | **¥9,419** | −¥20,581 |
 | C 冗長化（中規模・DB HA） | Xlarge 16GB + DB HA + LB + snapshot 160GB | $139.10 | **¥21,700** | −¥8,300 |
+| **E EC2（2026年内）** | **t4g.small 無料枠 750h/月** + DB 1GB + snapshot 40GB | $16.72 | **¥2,608** | −¥27,392 |
 | D 予算上限の確認 | メモリ最適化 2Xlarge 64GB + DB 4GB + LB | $370.53 | **¥57,803** | **+¥27,803** |
+
+**E案の注意**: AWS 公式ページに *"t4g.small instances ... free for up to 750 hours / month until Dec 31st 2026"* と明記されている
+**期限付き**の無料枠。2026-12-31 を過ぎると同じ構成でもこの金額では済まない（ツールは `⏳ 期限付き` を必ず表示する）。
 
 **3万円の境界線**: Lightsail インスタンスで 16GB（$84）までなら DB/LB/バックアップを足しても予算内（C案 ¥21,700）。
 32GB（$164）に上げると DB 1GB（$14.72）と LB（$17.66）を足した時点で **$196.38 = ¥30,635** となり予算を超える。
@@ -49,6 +53,10 @@ node tools/aws-cost-estimate.mjs --plan C --jpy-rate 160 --budget 30000
   - Paid plan: 全サービス利用可。クレジット超過分は従量課金。
 - どのプランでも **$100 のサインアップクレジット**、さらにアクティビティ達成で **最大 $100 追加**（合計最大 $200）。
 - **Always Free**（月次上限つきで永続）が 30 サービス以上ある。Lambda / CloudFront などが該当。
+- **期限付きの無料枠もある。** EC2 の `t4g.small` は **2026-12-31 まで月750時間まで無料**
+  （出典: <https://aws.amazon.com/ec2/instance-types/t4/>）。750時間はほぼ1台分（730h/月）なので、
+  **2026年内に限り**「EC2 1台 + Lightsail マネージドDB」が月 $16.72（¥2,608）で組める（E案）。
+  期限後は通常料金に戻るため、年をまたぐ構成では E案をそのまま使ってはいけない。
 - ⚠️ **Always Free の各サービスの具体的な月次上限は本調査では一次情報で確認できていない。**
   0円と断定せず、実際に使う際はアカウントの Free Tier ページで確認すること。
   （`tools/aws-cost-estimate.mjs` の Lambda / CloudFront 行は `usd: 0` だが、これは

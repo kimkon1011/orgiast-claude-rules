@@ -22,7 +22,11 @@ export const SOURCES = {
   freeTier: 'https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/free-tier.html',
   fx: '日銀 東京市場 仲値 2026-09-01〜09-15 平均 ≈155.8 JPY/USD',
   ec2Tracker: '第三者トラッカー（Spare Cores / Holori）— AWS 一次情報では未確認',
+  t4gPromo: 'https://aws.amazon.com/ec2/instance-types/t4/ — "t4g.small instances ... free for up to 750 hours / month until Dec 31st 2026"',
 };
+
+// 期限付きの無料枠。期限を過ぎたら通常料金に戻るので、レポートで必ず注意を出す。
+export const PROMO_ENDS_ON = '2026-12-31';
 
 // unit: 'month' = 月額固定 / 'gb-month' = GB 単価 × 数量 / 'hour730' = 時間単価 × 730h
 // verified:false は「一次情報で未確認」。usd:null は「未計測」で、合計に加算してはいけない。
@@ -53,6 +57,9 @@ export const CATALOG = {
   'ec2-t4g-medium-tokyo': { label: 'EC2 t4g.medium (東京, 参考)', usd: 0.0432 * 730, unit: 'month', verified: false, source: SOURCES.ec2Tracker },
   'rds-t4g-micro-tokyo':  { label: 'RDS db.t4g.micro Single-AZ (東京)', usd: null, unit: 'month', verified: false, source: SOURCES.ec2Tracker },
 
+  // --- 期限付きの無料枠（AWS 一次情報）。期限後は通常料金に戻る ---
+  'ec2-t4g-small-free': { label: `EC2 t4g.small 750h/月 無料（〜${PROMO_ENDS_ON}）`, usd: 0, unit: 'month', verified: true, source: SOURCES.t4gPromo, expiresOn: PROMO_ENDS_ON },
+
   // --- 無料枠。Always Free は上限内なら $0 だが、上限は構成が決まらないと評価できない ---
   'free-lambda':     { label: 'Lambda 無料枠 (100万req + 40万GB-s)', usd: 0, unit: 'month', verified: true, source: SOURCES.freeTier },
   'free-cloudfront': { label: 'CloudFront 無料枠 (転送1TB + 1000万req)', usd: 0, unit: 'month', verified: true, source: SOURCES.freeTier },
@@ -64,7 +71,7 @@ export function lineItem(id, qty = 1, catalog = CATALOG) {
   if (!Number.isFinite(qty) || qty < 0) throw new Error(`数量は0以上の数値が必要です: ${id}`);
   const measured = typeof item.usd === 'number' && Number.isFinite(item.usd);
   const usd = measured ? item.usd * (item.unit === 'month' ? qty : qty) : null;
-  return { id, qty, label: item.label, unit: item.unit, verified: item.verified, source: item.source, usd, measured };
+  return { id, qty, label: item.label, unit: item.unit, verified: item.verified, source: item.source, usd, measured, expiresOn: item.expiresOn ?? null };
 }
 
 /** 構成（明細の配列）を月額 USD / JPY に積む。未計測は合計に足さず件数で返す。 */
@@ -81,8 +88,11 @@ export function estimate(items, options = {}) {
     if (line.verified) confirmedUsd += line.usd; else unverifiedUsd += line.usd;
   }
   const totalJpy = totalUsd * usdJpy;
+  // 期限付きの無料枠は、期限後は同じ構成が無料でなくなる。金額を出すだけで済ませない。
+  const expiring = lines.filter((l) => l.expiresOn).map((l) => ({ label: l.label, expiresOn: l.expiresOn }));
   return {
     asOf: PRICE_AS_OF,
+    expiring,
     usdJpy,
     budgetJpy,
     lines,
@@ -116,6 +126,12 @@ export const PLANS = [
     name: 'C案 冗長化（中規模・DB HA・LB 配下）',
     summary: '16GB 1台 + DB HA + LB。DB は Multi-AZ 相当で倍額。',
     items: [{ id: 'ls-xlarge-16gb' }, { id: 'ls-db-1gb-ha' }, { id: 'ls-lb' }, { id: 'ls-snapshot', qty: 160 }],
+  },
+  {
+    id: 'E',
+    name: 'E案 EC2（2026年内は t4g.small 750h/月 無料）',
+    summary: 't4g.small 無料枠 + Lightsail マネージドDB。EC2/RDS を自前で組むより安い。期限後は要再計算。',
+    items: [{ id: 'ec2-t4g-small-free' }, { id: 'ls-db-1gb' }, { id: 'ls-snapshot', qty: 40 }],
   },
   {
     id: 'D',
@@ -163,6 +179,9 @@ export function formatReport(options = {}) {
       if (r.unverifiedJpy > 0) bits.push(`未確認分 ${yen(r.unverifiedJpy)}`);
       if (r.unmeasuredCount > 0) bits.push(`未計測 ${r.unmeasuredCount} 件（実費はこれより大きい）`);
       out.push(`> ⚠️ この合計は**一部未確定**: ${bits.join(' / ')}`);
+    }
+    if (r.expiring.length > 0) {
+      out.push(`> ⏳ **期限付き**: ${r.expiring.map((e) => `${e.label}（${e.expiresOn} まで）`).join(' / ')}。期限後は同じ構成でもこの金額では済まない。`);
     }
     out.push('');
   }

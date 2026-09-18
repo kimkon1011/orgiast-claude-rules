@@ -11,6 +11,7 @@ import { alternateCheapProvider, autoSessionExecutor, buildClaudeHeadlessArgs, b
 export { autoSessionExecutor } from './auto-session-executor.mjs';
 
 const __dirname = import.meta.dirname;
+const REPO_ROOT = path.resolve(__dirname, '..');
 const MARKER = '<!-- NEXT-SESSION v1 -->';
 const SIX_HOURS = 6 * 60 * 60 * 1000;
 export const ROLE_NAMES = ['tester', 'system-review', 'cost-check'];
@@ -646,7 +647,7 @@ export function runChild(executable, prompt, repoCwd, historyCwd, timeoutMs, run
       const cheap = choice.executor === 'cheap-code' && !fallback;
       let child;
       try { child = spawn(cheap ? process.execPath : executable, cheap
-        ? buildCheapCodeArgs({ repoRoot: repoCwd, provider: cheapProvider, promptFile, cwd: historyCwd })
+        ? buildCheapCodeArgs({ repoRoot: REPO_ROOT, provider: cheapProvider, promptFile, cwd: historyCwd })
         : buildClaudeHeadlessArgs({ repoCwd, historyCwd }), { cwd: historyCwd, env: { ...process.env, CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: cheap ? `auto-session:cheap-code:${cheapProvider}` : 'auto-session:fallback-claude' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }); }
       catch (error) { finish(null, '', String(error?.message ?? error), true, fallback); return; }
     let stdout = '';

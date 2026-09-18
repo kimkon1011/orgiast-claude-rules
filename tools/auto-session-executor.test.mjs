@@ -87,12 +87,27 @@ test('parseAutoSessionEnvText は BOM・コメント・引用符・空行を処�
 });
 
 test('buildCheapCodeArgs は指示を argv でなく prompt-file で渡す', () => {
-  const args = buildCheapCodeArgs({ repoRoot: 'C:/repo', provider: 'glm', promptFile: 'C:/tmp/p.md', cwd: 'C:/work' });
-  assert.equal(args[0], path.join('C:/repo', 'tools', 'cheap-code.mjs'));
-  assert.ok(args.includes('--provider'));
-  assert.ok(args.includes('glm'));
-  assert.ok(args.includes('--prompt-file'));
-  assert.ok(args.includes('C:/tmp/p.md'));
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'orgiast-cheap-code-test-'));
+  try {
+    fs.mkdirSync(path.join(repoRoot, 'tools'));
+    fs.writeFileSync(path.join(repoRoot, 'tools', 'cheap-code.mjs'), '');
+    const args = buildCheapCodeArgs({ repoRoot, provider: 'glm', promptFile: 'C:/tmp/p.md', cwd: 'C:/work' });
+    assert.equal(args[0], path.join(repoRoot, 'tools', 'cheap-code.mjs'));
+    assert.ok(args.includes('--provider'));
+    assert.ok(args.includes('glm'));
+    assert.ok(args.includes('--prompt-file'));
+    assert.ok(args.includes('C:/tmp/p.md'));
+  } finally { fs.rmSync(repoRoot, { recursive: true, force: true }); }
+});
+
+test('buildCheapCodeArgs は cheap-code.mjs がない repoRoot を明示的に拒否する', () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'orgiast-cheap-code-missing-test-'));
+  try {
+    assert.throws(
+      () => buildCheapCodeArgs({ repoRoot, provider: 'glm', promptFile: 'C:/tmp/p.md', cwd: 'C:/work' }),
+      /cheap-code\.mjs が見つかりません/
+    );
+  } finally { fs.rmSync(repoRoot, { recursive: true, force: true }); }
 });
 
 test('buildClaudeHeadlessArgs は既定 sonnet で cwd 違いのときだけ add-dir を増やす', () => {

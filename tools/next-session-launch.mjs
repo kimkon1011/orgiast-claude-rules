@@ -10,12 +10,27 @@ import { alternateCheapProvider, autoSessionExecutor, buildCheapCodeArgs, buildC
 const REPO_ROOT = path.resolve(import.meta.dirname, '..');
 
 export function parseHandoffCwd(text) {
-  const match = String(text).match(/<!--[^\r\n]*?cwd:\s*(.*?)\s*-->/);
-  return match?.[1]?.trim() ?? '';
+  return handoffField(text, 'cwd');
 }
 
 export function parseHandoffModel(text) {
-  return String(text).match(/<!--[^\r\n]*?model:\s*(sonnet|opus)\b[^\r\n]*-->/i)?.[1]?.toLowerCase() ?? '';
+  const value = handoffField(text, 'model').toLowerCase();
+  return value === 'sonnet' || value === 'opus' ? value : '';
+}
+
+// 引き継ぎコメントは「前セッション: <id> / 更新: <日付> / cwd: <path> / model: <name>」のように
+// ` / ` 区切りで並ぶ。cwd の値自体に `/` が含まれるのは正常だが ` / ` は含まないので、
+// セグメント単位で切り出す。`-->` まで捕まえる正規表現は「/ model: opus」まで cwd に呑み込み、
+// 実在しないパスへの spawn が `spawn cmd.exe ENOENT` として現れていた（2026-09-19 実測）。
+function handoffField(text, key) {
+  const prefix = `${key}:`;
+  for (const line of String(text).split(/\r?\n/)) {
+    const comment = line.match(/<!--(.*?)-->/)?.[1];
+    if (!comment) continue;
+    const segment = comment.split(' / ').map((part) => part.trim()).find((part) => part.startsWith(prefix));
+    if (segment) return segment.slice(prefix.length).trim();
+  }
+  return '';
 }
 
 export function pickNewestExtensionBinary(names) {
@@ -587,7 +602,19 @@ export async function launchNextSession(argv = [], io = {}) {
     const handoffCwd = parseHandoffCwd(handoffText);
     const handoffModel = parseHandoffModel(handoffText);
     const current = await readJson(currentPath, {});
-    const cwd = flags.cwd || handoffCwd || current.cwd || REPO_ROOT;
+    let cwd = flags.cwd;
+    if (!cwd) {
+      const candidates = [
+        ['handoff', handoffCwd],
+        ['current', current.cwd],
+      ].map(([source, candidate]) => [source, candidate || '', Boolean(candidate) && exists(candidate)]);
+      const selectedIndex = candidates.findIndex(([, , present]) => present);
+      cwd = selectedIndex >= 0 ? candidates[selectedIndex][1] : REPO_ROOT;
+      const skipped = selectedIndex >= 0 ? candidates.slice(0, selectedIndex) : candidates;
+      for (const [source, candidate] of skipped) {
+        log(`[next-session] 注意: ${source} の cwd(${candidate}) が存在しないため ${cwd} を使います`);
+      }
+    }
     const accountLog = accountLabel({ account, route, accountPath: firstAccountConfigPath });
     if (configDirSource === 'state' && (route === 'vscode' || route === 'vscode-ext')) {
       // 効かない指定を黙って無視すると「固定したつもり」の事故になる。terminal 経路なら env で効く。

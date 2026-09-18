@@ -365,6 +365,25 @@ try {
         }
     } else { Write-NightlyLog 'feedback-replies' 'skip:ファイルなし' }
 
+    # 未対応フィードバックを100億円計画への直結度で評価し、プロダクション異常もまとめて kim へ報告する。
+    # ヘルス異常の exit 3 と部分障害はいずれも警告扱いにして、後続の夜間処理を継続する。
+    $feedback100oku = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\feedback-100oku.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $feedback100oku = $candidate; break }
+    }
+    if ($feedback100oku) {
+        $feedback100okuOutput = $null
+        try {
+            $feedback100okuOutput = @(& $node.Source $feedback100oku --json 2>&1)
+            $feedback100okuExit = $LASTEXITCODE
+            Write-NightlyStepResult 'feedback-100oku' $feedback100okuExit $feedback100okuOutput ' (警告・後続処理続行)'
+        } catch {
+            Write-NightlyLog 'feedback-100oku' ("error:" + $_.Exception.Message + ' (警告・後続処理続行): ' + (Format-NightlyDetail $feedback100okuOutput))
+            Write-Warning ("nightly-batch: feedback-100oku: " + $_.Exception.Message)
+        }
+    } else { Write-NightlyLog 'feedback-100oku' 'skip:ファイルなし' }
+
     $growiManual = $null
     foreach ($repo in $repos) {
         $candidate = Join-Path $repo 'tools\growi-manual.mjs'

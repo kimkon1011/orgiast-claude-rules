@@ -27,3 +27,5 @@ ONBOARDING.md §1.19.2 の詳細ルール。2026-09-19、kim 決定。
 ## 代替
 
 Genspark が使えない場合、Gemini画像モデルは表紙など単発ページだけに使う。Canva は使わない。写真投入に公開URLが必要だが、GensparkのURLは外部から403となり、Driveの公開共有化は auto mode classifier に止められるため。
+
+Gemini の認証情報を新規スクリプトから直接読む操作も、手順書の実測で classifier に拒否された。既存の許可済みリポジトリスクリプト（例: `gen-image.mjs`）を使う・拡張する。

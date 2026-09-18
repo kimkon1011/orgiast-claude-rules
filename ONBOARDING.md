@@ -717,7 +717,7 @@ Claude Code / Codex / 安いLLM はすべて **API があるものしか触れ�
 
 **APIキーは自動発行**: `~/.claude/makimono.env` に保存されるメールアドレス紐づきの決定的キーで、人間の作業はゼロ。サイト/API: [マキモノ](https://makimono-md.vercel.app) / [llms.txt](https://makimono-md.vercel.app/llms.txt) / [API docs](https://makimono-md.vercel.app/docs/api)
 
-**1.19.1 「ChatGPTでデザインして」と言われたら Claude が上書きしない**
+### 1.19.1 「ChatGPTでデザインして」と言われたら Claude が上書きしない
 
 見た目のデザインを「ChatGPTで作って」と依頼されたら、**実際にOpenAIの画像生成に作らせ、その見た目に忠実に実装する**。Claude Codeが自分のCSSの好みで再解釈・簡略化するのは禁止（配色・レイアウト・アイコン・画像は生成結果に追従し、Claudeはテキスト・構成・データ配線に徹する）。
 

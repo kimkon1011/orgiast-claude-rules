@@ -60,7 +60,7 @@ export const AMBIGUOUS_REPORT_SYSTEM_PROMPT = `あなたは Claude Code の Stop
  * タイムアウト・エラー時は { llm: 'error' }（呼び出し元で fail-open）。テストからは ask を差し替える。
  */
 export function classifyAmbiguousReport(humanText, assistantText, ask) {
-  const run = ask || ((args, opts) => spawnSync(process.execPath, args, opts));
+  const run = ask || ((args, opts) => spawnSync(process.execPath, args, { windowsHide: true, ...opts }));
   const llmAsk = path.join(path.dirname(fileURLToPath(import.meta.url)), 'llm-ask.mjs');
   const prompt = `直前の user 発言:\n${String(humanText || '').slice(0, 500)}\n\nassistant 応答:\n${String(assistantText || '').slice(0, 1200)}`;
   const r = run([llmAsk, '--provider', 'deepseek', '--no-fallback', '--max', '10', '--system', AMBIGUOUS_REPORT_SYSTEM_PROMPT, prompt], { timeout: 3000, encoding: 'utf8' });

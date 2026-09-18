@@ -63,6 +63,19 @@ test('requirements-freeze に核となる文字列がすべて含まれる', () 
   assert.match(source, /user\s*の?手作業回数/, 'requirements-freeze に「user の手作業回数」がありません');
 });
 
+test('design-deck は Genspark 優先・対象外・修正時再生成を固定する', () => {
+  const source = readSkill('design-deck');
+  for (const text of [
+    '見せる資料は Genspark AI Slides',
+    '定型の量産物・数表主体の実務資料は対象外',
+    '修正依頼でも HTML を直さず、Genspark に再生成',
+    'gsk task create slides --args-file',
+    'Canva は使わない',
+  ]) {
+    assert.ok(source.includes(text), `design-deck に「${text}」がありません`);
+  }
+});
+
 if (isEntry(import.meta.url)) {
   process.exitCode = 0;
 }

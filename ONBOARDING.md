@@ -699,9 +699,9 @@ Claude Code / Codex / 安いLLM はすべて **API があるものしか触れ�
 - **運用**: Claude Code は user に手作業を頼もうとした時点で、まず「これは Grok Bot のスキルにできないか」を検討し、できるなら**手順書ではなく Bot 用の指示文**を出す。Bot に渡した作業は `~/.claude/grokbot-skills.md` に「スキル名・対象アカウント・承認が要る箇所」を記録し、二重に人へ頼まない。
 - **禁止**: 認証情報を Bot に渡す判断を Claude が勝手に進めないこと。どのサービスに何の権限でログインさせるかは必ず user に明示して合意を取る（§1.1 の「安全機構の解除誘導・説明なしの一括設定は禁止」に該当）。
 
-### 1.19 マキモノと画像デザイン
+### 1.19 マキモノと画像デザイン／見せる資料は Genspark AI Slides
 
-完成済み指示書を探してから着手し、ChatGPT指定の画像デザインは生成結果に忠実に実装する。
+完成済み指示書を探してから着手し、ChatGPT指定の画像デザインは生成結果に忠実に実装し、見せる資料は Genspark AI Slides に作らせる。
 
 **1.19 マキモノ（AI指示書マーケット）を必ず経由する**
 
@@ -717,7 +717,7 @@ Claude Code / Codex / 安いLLM はすべて **API があるものしか触れ�
 
 **APIキーは自動発行**: `~/.claude/makimono.env` に保存されるメールアドレス紐づきの決定的キーで、人間の作業はゼロ。サイト/API: [マキモノ](https://makimono-md.vercel.app) / [llms.txt](https://makimono-md.vercel.app/llms.txt) / [API docs](https://makimono-md.vercel.app/docs/api)
 
-**1.19 「ChatGPTでデザインして」と言われたら Claude が上書きしない**
+**1.19.1 「ChatGPTでデザインして」と言われたら Claude が上書きしない**
 
 見た目のデザインを「ChatGPTで作って」と依頼されたら、**実際にOpenAIの画像生成に作らせ、その見た目に忠実に実装する**。Claude Codeが自分のCSSの好みで再解釈・簡略化するのは禁止（配色・レイアウト・アイコン・画像は生成結果に追従し、Claudeはテキスト・構成・データ配線に徹する）。
 
@@ -728,6 +728,18 @@ Claude Code / Codex / 安いLLM はすべて **API があるものしか触れ�
 - **Codexに投げる時**: ブリーフはファイルに書いてファイル名だけ渡す（`codex exec "$(cat brief.md)"` はbashがバッククォートを食いコードブロックが空になる）。「コマンド実行禁止」と書くと`cat`すら拒否されるので、禁止対象は`npm`/`node`/ビルドだけと明記する（/mnt/c上でLinux側からnodeを走らせるとWindowsネイティブバイナリが壊れるのが理由。生成スクリプトは書かせるだけにして実行はWindows側から）
 
 **Why:** 2026-08-05〜06、あるLP制作で「ChatGPTで作ったものと違う／デザインレベルが落ちた」と4回連続で指摘された。原因は毎回Claude自身が最終的な見た目の決定権を握っていたこと（Codexでrewrite→抽象アートのみ生成→生成物を見て独自Tailwindに再構成→個別生成でトンマナ崩壊→アスペクト比不一致で主要被写体が42%切れる）。
+
+### 1.19.2 見せる資料のデザインは Genspark AI Slides に作らせる（kim 2026-09-19 決定・全PC）
+
+kim:「今後もデザインはそういうルールにして。デザインの修正にユーザーの負担が大きいので。ONBOARDING にも反映してどのパソコンでもそのようになるように」。
+Claude の HTML/CSS によるブースプラン案は写真の使い方で3回差し戻しになり、同じ写真素材と原稿を渡した Genspark の1版目は「すばらしい」だった。
+5点満点の実測は写真の使い方 / 余白 / 文字量で Claude 3 / 3 / 2、Genspark 5 / 4 / 4、Gemini画像 5 / 5 / 5（単発ページのみ）。
+提案書・企画書・営業資料・プレゼン・デッキ・スライド・ブースプラン・パース入り資料など、見た目が評価対象になる資料は `/design-deck` を必ず使う。
+学会1枚資料のような定型の量産物・数表主体の実務資料は対象外とし、従来の HTML→PDF を使う。
+対象資料を Claude が HTML/CSS でデザインせず、修正依頼も HTML を直さず Genspark に再生成させ、ユーザーの目視レビュー回数を減らす。
+写真は、まばら・設営中・床にゴミや養生材・私的集合写真を除外し、他社ロゴが大きければモザイクをかける。社長提供パースがあればAI生成パースは使わない。
+Canva は写真投入に公開URLが必要だが、Genspark URLは外部から403となり、Drive公開共有化は auto mode classifier に止められるため使わない。
+Genspark 不可時は Gemini 画像モデルを表紙など単発ページに限って使う。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/design-deck-genspark.md`
 
 ---
 

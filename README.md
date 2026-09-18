@@ -26,6 +26,7 @@ GitHub にログイン済みの Claude Code で:
 | skill | `gas-project-setup` | 新規 GAS 立ち上げ標準手順（clasp + コマンドキュー、手作業は setupOnce 1クリックのみ） |
 | skill | `growi-fetch` | Growi 社内マニュアルの取り込み手順（Drive 一次ソース、WebFetch 禁止、鮮度チェック） |
 | skill | `deploy-verify` | 変更後の2段検証（Layer1 ロジック再現 + Layer2 Playwright 実描画）を通してから完了報告 |
+| skill | `design-deck` | 見た目が評価対象になる資料を Genspark AI Slides で生成・修正・検証 |
 | skill | `rules-sync` | Drive ハブとの同期（pull = 全アカウント / merge = kim 環境で inbox 統合） |
 | skill | `share-knowledge` | 学んだノウハウを Drive ハブの knowledge-inbox に投稿（全アカウント共通化の入口） |
 | rules | `rules/gas.md` | GAS 開発の絶対ルール（`~/.claude/rules/` にコピーすると .gs 編集時に自動適用） |

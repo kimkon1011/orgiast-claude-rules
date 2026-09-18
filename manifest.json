@@ -1,6 +1,6 @@
 {
-  "version": 6,
-  "updatedAt": "2026-09-14",
+  "version": 7,
+  "updatedAt": "2026-09-19",
   "hubFolderId": "1RLYbK6CKyPWRJsG6LY0WB9OzlbFYSFvw",
   "folders": {
     "rules": "1cNOSlo8pcrhXiRMRK_WD3O5IW-K9lYX4",
@@ -14,6 +14,7 @@
     { "title": "gas-project-setup.md", "in": "skills", "localTarget": "~/.claude/skills/gas-project-setup/SKILL.md" },
     { "title": "growi-fetch.md", "in": "skills", "localTarget": "~/.claude/skills/growi-fetch/SKILL.md" },
     { "title": "deploy-verify.md", "in": "skills", "localTarget": "~/.claude/skills/deploy-verify/SKILL.md" },
+    { "title": "design-deck.md", "in": "skills", "localTarget": "~/.claude/skills/design-deck/SKILL.md" },
     { "title": "rules-sync.md", "in": "skills", "localTarget": "~/.claude/skills/rules-sync/SKILL.md" },
     { "title": "share-knowledge.md", "in": "skills", "localTarget": "~/.claude/skills/share-knowledge/SKILL.md" },
     { "title": "requirements-freeze.md", "in": "skills", "localTarget": "~/.claude/skills/requirements-freeze/SKILL.md" }

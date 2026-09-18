@@ -21,7 +21,7 @@ async function ensurePNG(file){
   // Decode and re-encode locally at native size; no image generation or visual edits.
   const require=createRequire(path.join(root,'package.json'));
   const {chromium}=require(settings.playwright);
-  const browser=await chromium.launch({channel:'chrome',headless:true});
+  const browser=await chromium.launch(settings.browser);
   try{
     const page=await browser.newPage();await page.goto(pathToFileURL(file).href);
     const png=await page.locator('img').evaluate(async img=>{

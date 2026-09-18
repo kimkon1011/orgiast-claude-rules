@@ -38,3 +38,15 @@ GitHub にログイン済みの Claude Code で:
 
 - Google Workspace URL は `/a/orgiast.jp/` を必ず挟む（ONBOARDING 参照）
 - プロジェクト CLAUDE.md 冒頭に ONBOARDING.md への参照を1行入れる
+
+## 既存PCへの同期と配置確認
+
+GitHubのマージだけではPCへの配置は完了しない。通常の `/rules-sync` に加え、GitHub配布経路では対象PCの通常ホーム・Nodeで次を実行する（`<repo>` は配置済みのルールリポ）。
+
+```sh
+node <repo>/tools/onboarding-sync.mjs --force
+```
+
+この経路は既存PCのリポ更新後に `deploySkills` で `skills/` を再帰配置し、`ONBOARDING.md` から圧縮索引を生成して `~/.claude/CLAUDE.md` に反映する。`setup.mjs --converge` は検出した不足を修復するため、全チェック成功だけで最新版スキルが届いたとは判定しない。
+
+配置後は `~/.claude/skills/design-deck/SKILL.md` の「ハイブリッド企画書モデル」、同フォルダ内 `pipeline/` の補助ファイルを含む全ファイル、`~/.claude/CLAUDE.md` の要約行をread-backで確認する。Windowsの通常ホームとWSLのホームを混同しない。新規PCはplugin install、既存PCはplugin updateまたは上記再帰配布でパイプラインも届く。Driveの旧manifestによるSKILL.md単体配布だけでは補助ファイルは届かない。

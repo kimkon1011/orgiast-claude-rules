@@ -12,4 +12,6 @@ Claude単独版は写真で3回差し戻し、Genspark単独版は数字・テ�
 - 写真の不満は Gemini で再合成。文字・数字・表・余白の不満は Claude が `pages.json` / CSS を修正。
 - Canva は安定した写真投入経路がないため使わない。
 
+社長パースは原図を直接表示し、`crop` で表示窓だけを変える。配布版の `timeline`・`compare` は追加型で、元v4の型と区別する。
+
 制作手順、写真選定、組版制約、目視採点、Drive更新は `skills/design-deck/SKILL.md` に従う。

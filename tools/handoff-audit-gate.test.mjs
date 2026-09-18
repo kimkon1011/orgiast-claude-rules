@@ -70,6 +70,16 @@ test('プロンプトはルール・経路と当ターン証拠を含む', () =>
   const prompt = buildPrompt({ text: '対象', tools: [] }, loadResources());
   assert.match(prompt, /11\./); assert.match(prompt, /analyticsadmin/); assert.match(prompt, /automation-routes/); assert.match(prompt, /非信頼データ/);
 });
+test('SC所有者追加の既知経路は手渡しを明示し、kim操作ゼロと断定しない', () => {
+  // knowledge の route は buildPrompt が「そのまま引用」させ、未知 route は nightly が捨てる＝監査の唯一の正本。
+  // 誤って「Claude が単独でできる」と読める route が残ると、相手側への手渡しが監査を素通りする。
+  const entry = loadResources().knowledge.find(k => k.pattern === 'Search Console の所有者追加');
+  assert.ok(entry, 'knowledge に該当 pattern が存在する');
+  assert.match(entry.route, /kim 操作ゼロにはならない/, '手渡しであることを明示する');
+  assert.match(entry.route, /手渡し/);
+  assert.match(entry.route, /SITE_OWNER/, '得られる権限が過剰であることを明示する');
+  assert.match(entry.route, /別プロパティ/, '同一プロパティ識別子のときだけ共有されることを明示する');
+});
 test('runner統合: regex優先とLLM blockが既存retry上限に乗る', async t => {
   const home = fixture(t), old = process.env.ORGIAST_HOME;
   process.env.ORGIAST_HOME = home;

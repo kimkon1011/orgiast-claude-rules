@@ -5,7 +5,7 @@
 // 設計方針（2026-09-14 の実害にもとづく）:
 //   台帳や推定値の「0円/安い」は支出ゼロの証拠にならない。ここでは usd:null を 0 として扱わず
 //   「未計測」として必ず件数を併記し、確定分の合計とは別枠で返す。
-import { pathToFileURL } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 
 export const PRICE_AS_OF = '2026-09-19';
 
@@ -169,7 +169,7 @@ export function formatReport(options = {}) {
   return out.join('\n');
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isEntry(import.meta.url)) {
   const argv = process.argv.slice(2);
   const arg = (name, fallback) => {
     const i = argv.indexOf(`--${name}`);

@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "updatedAt": "2026-09-19",
+  "assumptions": {
+    "kvBytesPerElement": 2,
+    "osOverheadGB": 8,
+    "computeOverheadRatio": 0.1,
+    "usableMemoryRatio": 0.75,
+    "bandwidthEfficiencyMin": 0.55,
+    "bandwidthEfficiencyMax": 0.75,
+    "depreciationMonths": 36,
+    "electricityYenPerKWh": 31,
+    "loadWatts": 120,
+    "hoursPerDay": 8,
+    "daysPerMonth": 21
+  },
+  "quants": [
+    { "id": "q4_k_m", "label": "Q4_K_M (4bit相当)", "bitsPerWeight": 4.8 },
+    { "id": "q8_0", "label": "Q8_0 (8bit相当)", "bitsPerWeight": 8.5 },
+    { "id": "f16", "label": "F16 (無圧縮)", "bitsPerWeight": 16.0 }
+  ],
+  "machines": [
+    { "id": "mac-mini-m6-32", "name": "Mac mini (M6)", "chip": "M6", "gpuCores": 12, "maxMemoryGB": 32, "memoryBandwidthGBs": 170, "priceYen": 221800, "priceNote": "24GB/512GB 構成の報道価格。16GB/256GB は 149,800円", "priceVerify": "media", "specVerify": "primary", "availability": "2026-09-22 発売" },
+    { "id": "mac-mini-m5-pro-64", "name": "Mac mini (M5 Pro)", "chip": "M5 Pro", "gpuCores": 20, "maxMemoryGB": 64, "memoryBandwidthGBs": 307, "priceYen": 299800, "priceNote": "24GB/512GB 構成の報道価格（最上位は 64GB）", "priceVerify": "media", "specVerify": "primary", "availability": "2026-09-22 発売" },
+    { "id": "mac-studio-m5-max-128", "name": "Mac Studio (M5 Max)", "chip": "M5 Max", "gpuCores": 40, "maxMemoryGB": 128, "memoryBandwidthGBs": 614, "priceYen": 419800, "priceNote": "最安構成の報道価格。128GB 構成はこれより高い（金額未取得）", "priceVerify": "media", "specVerify": "primary", "availability": "2026-09-22 発売" },
+    { "id": "mac-studio-m5-ultra-512", "name": "Mac Studio (M5 Ultra)", "chip": "M5 Ultra", "gpuCores": 80, "maxMemoryGB": 512, "memoryBandwidthGBs": 1200, "priceYen": 949800, "priceNote": "最安構成の報道価格。512GB 構成は 2026年10月後半に追加予定で金額未公表（256GB+16TB で約325万円との報道）", "priceVerify": "media", "specVerify": "primary", "availability": "2026-09-22 発売（512GB 構成は 2026年10月後半）" }
+  ],
+  "models": [
+    { "id": "qwen3-8b", "name": "Qwen3-8B", "paramsB": 8, "activeParamsB": null, "layers": 36, "kvHeads": 8, "headDim": 128, "nativeContextTokens": 40960, "shapeSource": "https://huggingface.co/Qwen/Qwen3-8B/raw/main/config.json", "shapeVerify": "primary" },
+    { "id": "qwen3-32b", "name": "Qwen3-32B", "paramsB": 32, "activeParamsB": null, "layers": 64, "kvHeads": 8, "headDim": 128, "nativeContextTokens": 40960, "shapeSource": "https://huggingface.co/Qwen/Qwen3-32B/raw/main/config.json", "shapeVerify": "primary" },
+    { "id": "llama-3.3-70b", "name": "Llama-3.3-70B-Instruct", "paramsB": 70, "activeParamsB": null, "layers": 80, "kvHeads": 8, "headDim": 128, "nativeContextTokens": 131072, "shapeSource": "https://huggingface.co/unsloth/Llama-3.3-70B-Instruct/raw/main/config.json", "shapeVerify": "primary" },
+    { "id": "qwen2.5-72b", "name": "Qwen2.5-72B-Instruct", "paramsB": 72, "activeParamsB": null, "layers": 80, "kvHeads": 8, "headDim": 128, "nativeContextTokens": 32768, "shapeSource": "https://huggingface.co/Qwen/Qwen2.5-72B-Instruct/raw/main/config.json", "shapeVerify": "primary" }
+  ],
+  "cloudReferences": [
+    { "id": "claude-dev-api-output", "label": "Claude Dev API 出力トークン単価", "yenPerMillionOutputTokens": null, "source": "", "verify": "unknown", "note": "未取得。単価が入るまで損益分岐は算出不能（'-' 表示）" }
+  ]
+}

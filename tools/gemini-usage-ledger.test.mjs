@@ -48,17 +48,18 @@ test('MCP hook records text-only results as unmeasured and ignores unrelated too
   const rows = [];
   const recordImpl = (args) => { const row = recordGeminiUsage(args, { home, now, fsImpl: memoryFs(), pricing }); rows.push(row); return row; };
   const event = { tool_name: 'mcp__gemini-cli__ask-gemini', tool_input: { prompt: 'private text', model: 'known' }, tool_response: { content: [{ type: 'text', text: 'answer' }] } };
-  recordGeminiMcpEvent(event, { recordImpl });
+  // home/now pinning keeps the chat-log fallback hermetic: no scan of the real ~/.gemini.
+  recordGeminiMcpEvent(event, { recordImpl, home, now });
   assert.equal(rows[0].source, 'mcp'); assert.equal(rows[0].usd, null); assert.equal(rows[0].estimated, true);
   assert.ok(!JSON.stringify(rows[0]).includes('private text'));
-  recordGeminiMcpEvent({ ...event, tool_name: 'Bash' }, { recordImpl });
+  recordGeminiMcpEvent({ ...event, tool_name: 'Bash' }, { recordImpl, home, now });
   assert.equal(rows.length, 1);
-  assert.doesNotThrow(() => recordGeminiMcpEvent(event, { recordImpl: () => { throw new Error('disk full'); } }));
+  assert.doesNotThrow(() => recordGeminiMcpEvent(event, { recordImpl: () => { throw new Error('disk full'); }, home, now }));
 });
 test('MCP structured metadata and failure responses each produce a row', () => {
   const rows = [];
   const recordImpl = (row) => rows.push(row);
-  recordGeminiMcpEvent({ tool_name: 'mcp__gemini-cli__ask-gemini', tool_response: { structuredContent: { modelVersion: 'known', usageMetadata: { promptTokenCount: 7, candidatesTokenCount: 8 } } } }, { recordImpl });
-  recordGeminiMcpEvent({ tool_name: 'mcp__gemini-cli__ask-gemini', hook_event_name: 'PostToolUseFailure' }, { recordImpl });
+  recordGeminiMcpEvent({ tool_name: 'mcp__gemini-cli__ask-gemini', tool_response: { structuredContent: { modelVersion: 'known', usageMetadata: { promptTokenCount: 7, candidatesTokenCount: 8 } } } }, { recordImpl, home, now });
+  recordGeminiMcpEvent({ tool_name: 'mcp__gemini-cli__ask-gemini', hook_event_name: 'PostToolUseFailure' }, { recordImpl, home, now });
   assert.equal(rows[0].inTokens, 7); assert.equal(rows[0].outTokens, 8); assert.equal(rows[1].status, 'error'); assert.equal(rows[1].inTokens, null);
 });

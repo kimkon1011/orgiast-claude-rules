@@ -312,6 +312,9 @@ const dryRun = args.includes('--dry-run');
 const forceNative = args.includes('--force-native');
 const allowNative = args.includes('--allow-native');
 const noFallback = args.includes('--no-fallback');
+// WSL 経路が使えず codex を起動できなかったか。true のときは再試行/昇格をせず、
+// 既存のフォールバック連鎖へそのまま渡す（2026-09-19）。
+let launchUnavailable = false;
 const review = args.includes('--review');
 const noEscalate = args.includes('--no-escalate');
 const modelIndex = args.indexOf('--model');
@@ -567,11 +570,17 @@ async function launchCodex(codexArgs) {
     else {
       console.error(`🚨 ${failureReason}`);
       if (finalStep !== 'native') {
-        console.error('🚨 WSL の codex 経路が使えないため中断しました（native Windows codex は read-only で編集が保存されない既知の不具合があるため、既定では使いません）。WSL を確認するか、承知の上で native を使うなら --allow-native を付けて再実行してください。');
-        // 起動前に抜ける経路こそが「出力ゼロ」の主因なのに、ここで記録せずに exit すると
-        // 台帳に1行も残らず完全に不可視になる（2026-09-16 診断）。launched:false で必ず残す。
-        recordUsage({ outputChars: 0, status: 3, stderr: failureReason, timedOut: false, launched: false }, `codex-cli/${selectedLane.slug}`, 0, 'codex', 0);
-        process.exit(3);
+        // 台帳には必ず1行残す。ここで記録せずに exit すると無音故障になる（2026-09-16 診断）。
+        // ただし process.exit すると codex-do 本来のフォールバック連鎖に到達せず、WSL の無い PC では
+        // 委譲が必ず死ぬ（2026-09-19 実測: この PC は `wsl -l -q` が空）。--no-fallback の明示がある
+        // ときだけ従来どおり中断し、それ以外は起動失敗を結果として返してフォールバックへ渡す。
+        if (noFallback) {
+          console.error('🚨 WSL の codex 経路が使えないため中断しました（native Windows codex は read-only で編集が保存されない既知の不具合があるため、既定では使いません）。WSL を確認するか、承知の上で native を使うなら --allow-native を付けて再実行してください。');
+          recordUsage({ outputChars: 0, status: 3, stderr: failureReason, timedOut: false, launched: false }, `codex-cli/${selectedLane.slug}`, 0, 'codex', 0);
+          process.exit(3);
+        }
+        launchUnavailable = true;
+        return { status: 3, outputChars: 0, output: '', stderr: failureReason, timedOut: false, launched: false };
       }
       console.error('⚠️ WSL 経路が使えないため、--allow-native の指定によりネイティブ Windows codex で実行します。\nWindows 版は read-only サンドボックス固定でファイルを書けない既知の不具合(openai/codex#35428)があり、編集が保存されない可能性が高い。');
       const nativeArgs = [...codexArgs];
@@ -607,6 +616,8 @@ async function executeCodex() {
     const elapsed = (Date.now() - attemptStarted) / 1000;
     seconds += elapsed;
     attempts = attempt;
+    // そもそも起動できていない(launched:false)なら再試行しても結果は変わらない。
+    if (result?.launched === false) break;
     if (!isFastFail(result, elapsed)) break;
     const tail = String(result?.stderr || '').replace(/\s+/g, ' ').trim().slice(-200);
     if (attempt === 1) console.error(`[codex-do] codex が ${elapsed.toFixed(1)} 秒で出力ゼロ(exit ${result.status})のため 1 回だけ再試行します${tail ? `: ${tail}` : ''}`);
@@ -638,7 +649,7 @@ while (true) {
     continue;
   }
   const failure = failureReason(result);
-  if (!quotaCheck.matched && failure && selectedLane.slug === SOL && lane === 'auto' && !model && !noEscalate && !escalated && !astraRetreated && providerCooldownMs('codex-astra') === 0) {
+  if (!quotaCheck.matched && failure && !launchUnavailable && selectedLane.slug === SOL && lane === 'auto' && !model && !noEscalate && !escalated && !astraRetreated && providerCooldownMs('codex-astra') === 0) {
     console.log(`[codex-do] sol 失敗 → astra へ昇格 (理由: ${failure})`);
     escalated = true;
     selectedLane = { slug: ASTRA, effort: 'high', reason: `escalated:${failure}` };
@@ -648,8 +659,9 @@ while (true) {
   if (escalationFailed && result.status === 0) result.status = 1;
   break;
 }
-const fallbackReason = quotaCheck.matched ? 'Codex usage limit を検出' : 'Astra 昇格後も失敗';
-if (quotaCheck.matched || escalationFailed) {
+const fallbackReason = launchUnavailable ? 'WSL 経路が無く codex を起動できない'
+  : quotaCheck.matched ? 'Codex usage limit を検出' : 'Astra 昇格後も失敗';
+if (quotaCheck.matched || escalationFailed || launchUnavailable) {
   if (quotaCheck.matched) {
     quotaResetUntil = parseCodexResetUntil(`${result?.output || ''}\n${result?.stderr || ''}`);
     try { writeCodexCooldown(quotaResetUntil); } catch {}
@@ -662,6 +674,7 @@ if (quotaCheck.matched || escalationFailed) {
     }
   } else {
     executorName = 'fallback';
+    if (launchUnavailable) console.error('[codex-do] WSL の codex 経路が使えないため、代替バックエンドで実行します（WSL を整備するか、承知の上で native を使うなら --allow-native）');
     console.log(`[codex-do] executor=fallback (理由: ${fallbackReason})`);
     if (quotaCheck.matched) console.error(`[codex-do] Codex usage limit detected: ${quotaCheck.pattern} at index ${quotaCheck.index}. Context: "${quotaCheck.snippet}"`);
     console.error(`[codex-do] Falling back to an agentic CLI...`);

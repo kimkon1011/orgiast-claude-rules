@@ -99,6 +99,36 @@ test('起動失敗は codex_empty_output でなく codex_launch_failed として
   assert.deepEqual(findings[0].evidence, ['1件', 'launch_failed(1件)']);
 });
 
+// WSL のディストリが1つも無い PC では codex レーンは構造的に使えず、コードでは直せない。
+// 「コードで直す欠陥」として毎日起票し続けると、直せない修正タスクが残TODOを占有し続ける(2026-09-19 実測)。
+test('WSL 不在の起動失敗は欠陥でなく環境の事実として low で残し、fixTask を付けない', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, secs: 0, timedOut: false, status: 3, launched: false, stderrTail: 'WSL ディストリが見つかりませんでした' }));
+  const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
+  assert.deepEqual(findings.map((item) => item.id), ['codex_lane_unavailable']);
+  assert.equal(findings[0].severity, 'low');
+  assert.equal(findings[0].fixTask, undefined);
+});
+
+test('WSL 不在と直せる起動失敗が混在しても、起票対象は直せる方だけ', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl',
+    row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, secs: 0, timedOut: false, status: 3, launched: false, stderrTail: 'WSL ディストリが見つかりませんでした' })
+    + row({ t: '2026-09-09T10:01:00Z', provider: 'codex', out: 0, secs: 0, timedOut: false, status: 3, launched: false, stderrTail: 'WSL Ubuntu の codex 起動確認に失敗しました' }));
+  const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
+  assert.deepEqual(findings.map((item) => item.id), ['codex_launch_failed', 'codex_lane_unavailable']);
+  assert.deepEqual(findings[0].evidence, ['1件', 'launch_failed(1件)']);
+});
+
+test('codex_lane_unavailable は low なので next-session.md へ起票しない', () => {
+  const dir = home();
+  write(dir, 'next-session.md', handoff());
+  write(dir, 'executor-usage.jsonl', row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, secs: 0, timedOut: false, status: 3, launched: false, stderrTail: 'WSL ディストリが見つかりませんでした' }));
+  const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
+  assert.equal(upsertFixTasks({ home: dir, findings, now: NOW, todayStr: '2026-09-19' }), false);
+  assert.doesNotMatch(fs.readFileSync(path.join(dir, '.claude', 'next-session.md'), 'utf8'), /codex_lane_unavailable/);
+});
+
 test('起動失敗と本物の出力ゼロが混在しても codex_empty_output は本物だけを数える', () => {
   const dir = home();
   write(dir, 'executor-usage.jsonl',

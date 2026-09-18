@@ -64,6 +64,11 @@ function reasonTop(rows) {
 // これは codex 本体の故障ではなく一過性のインフラ障害で、codex-do 側の再試行で回復する。
 const INFRA_TRANSIENT = /failed to lookup address information|failed to connect to websocket|stream error|connection reset|i\/o timeout|dns/i;
 
+// WSL のディストリが1つも無い PC では codex レーンは構造的に使えず、コードでは直せない。
+// 「そもそも走っていない」の中でも、コードで直せる起動失敗(codex_launch_failed)と分けて扱う
+// （2026-09-19 実測: この PC は `wsl -l -q` が空）。
+const WSL_LANE_ABSENT = /WSL ディストリが見つかりません/;
+
 export function emptyOutputReason(row) {
   if (row?.timedOut === true) return 'timeout';
   // 旧行(timedOut 未記録)は経過秒数から推定する。codex の正常終了は実測で中央値~100秒、
@@ -104,11 +109,15 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
   if (lowYield.length >= 2) { const models = [...new Set(lowYield.map((row) => row.model || '不明'))].join(', '); findings.push({ id: 'fallback_low_yield', severity: 'medium', title: 'フォールバックの低成果', evidence: [`${lowYield.length}件`, `model ${models}`], fixTask: `フォールバック先(${models})が長時間走って成果が無い。codex-fallback-order.json の順序と各バックエンドの実効性を見直す` }); }
   const empty = usageRows
     .filter((row) => row.provider === 'codex' && Number(row.out) === 0)
-    .map((source) => ({ reason: emptyOutputReason(source) }))
+    .map((source) => ({ reason: emptyOutputReason(source), stderrTail: source.stderrTail }))
     .filter((item) => item.reason !== 'timeout');
   const realEmpty = empty.filter((item) => item.reason !== 'infra_transient' && item.reason !== 'launch_failed');
   const launchFailed = empty.filter((item) => item.reason === 'launch_failed');
-  if (launchFailed.length) findings.push({ id: 'codex_launch_failed', severity: 'medium', title: 'Codex の起動失敗', evidence: [`${launchFailed.length}件`, ...reasonTop(launchFailed)], fixTask: 'codex-do が codex を起動できずに終了している。WSL の状態と起動経路のログを確認し、起動失敗を再現するテストを追加して修正' });
+  const laneAbsent = launchFailed.filter((item) => WSL_LANE_ABSENT.test(String(item.stderrTail || '')));
+  const fixableLaunchFailed = launchFailed.filter((item) => !WSL_LANE_ABSENT.test(String(item.stderrTail || '')));
+  if (fixableLaunchFailed.length) findings.push({ id: 'codex_launch_failed', severity: 'medium', title: 'Codex の起動失敗', evidence: [`${fixableLaunchFailed.length}件`, ...reasonTop(fixableLaunchFailed)], fixTask: 'codex-do が codex を起動できずに終了している。WSL の状態と起動経路のログを確認し、起動失敗を再現するテストを追加して修正' });
+  // 事実は消さずに名前を付けて残す。fixTask を付けない(low)ので毎日の起票対象にはならない。
+  if (laneAbsent.length) findings.push({ id: 'codex_lane_unavailable', severity: 'low', title: 'codex レーンは WSL 不在のため使用不可（代替バックエンドで実行中）', evidence: [`${laneAbsent.length}件`, 'WSL ディストリ 0 件'] });
   if (realEmpty.length) findings.push({ id: 'codex_empty_output', severity: 'medium', title: 'Codex の出力ゼロ', evidence: [`${realEmpty.length}件`, ...reasonTop(realEmpty), ...(empty.length > realEmpty.length ? [`インフラ/起動失敗で除外 ${empty.length - realEmpty.length}件`] : [])], fixTask: 'codex が出力ゼロで終了した原因（認証切れ/上限/起動失敗）を codex-do のログから特定' });
   for (const [provider, state] of Object.entries(cooldown)) if (state?.reason === 'http_402' && Number(state.until) > nowMs) findings.push({ id: 'provider_balance_exhausted', severity: 'low', title: `${provider} の残高切れ`, evidence: [`provider ${provider}`, CLAUDE_FALLBACK_RULE] });
   return findings.length ? findings : [{ id: 'healthy', severity: 'low', title: '委譲経路は正常', evidence: [] }];

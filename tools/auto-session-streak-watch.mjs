@@ -5,6 +5,13 @@ import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}-(.+)$/;
+const DAY_MS = 86_400_000;
+
+// Use the scheduler's local calendar, just like auto-session's filenames.
+function localDate(date) {
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
 
 function readJson(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
@@ -27,25 +34,25 @@ export function jobKeyFor(run, runFile) {
 
 export function resolveSummaryPath(summaryFile, { home, runsDir }) {
   if (!summaryFile) return '';
-  if (fs.existsSync(summaryFile)) return summaryFile;
   const windows = String(summaryFile).match(/^([A-Za-z]):[\\/](.*)$/);
   if (windows && process.platform !== 'win32') {
-    const mounted = `/mnt/${windows[1].toLowerCase()}/${windows[2].replaceAll('\\', '/')}`;
-    if (fs.existsSync(mounted)) return mounted;
+    return `/mnt/${windows[1].toLowerCase()}/${windows[2].replaceAll('\\', '/')}`;
   }
-  // Runs copied between Windows and WSL retain the old absolute path. The basename
-  // remains authoritative because summaries and JSON records are siblings.
-  return path.join(runsDir || path.join(home, '.claude', 'auto-session', 'runs'), path.win32.basename(String(summaryFile)));
+  // Do not substitute a same-named sibling for a missing absolute target.
+  return path.resolve(runsDir || path.join(home, '.claude', 'auto-session', 'runs'), String(summaryFile));
 }
 
 export function evaluateRun(run, runFile, stat, options) {
   const runsDir = path.dirname(runFile);
   const summaryPath = resolveSummaryPath(run?.summaryFile, { ...options, runsDir });
   let summarySize = -1;
-  try { summarySize = fs.statSync(summaryPath).size; } catch {}
+  try {
+    const summaryStat = fs.statSync(summaryPath);
+    if (summaryStat.isFile()) summarySize = summaryStat.size;
+  } catch {}
   const started = Date.parse(run?.startedAt);
   const when = Number.isFinite(started) ? new Date(started) : stat.mtime;
-  const date = when.toISOString().slice(0, 10);
+  const date = localDate(when);
   const success = run?.status === 'success'
     && run?.exitCode === 0
     && typeof run?.summary === 'string'
@@ -69,7 +76,7 @@ export function formatDecisionRequest(item) {
     '3. 無視する（既知・対応中）',
     '',
     `run JSON: ${item.latest.runFile}`,
-    `summary: ${item.latest.summaryPath || item.latest.run.summaryFile || '（指定なし）'}`
+    `summary: ${item.latest.summaryPath || item.latest.runFile.replace(/\.json$/, '.summary.md') + '（summaryFile 指定なし）'}`
   ].join('\n');
 }
 
@@ -90,10 +97,13 @@ export async function runAutoSessionStreakWatch({
 } = {}) {
   const groups = new Map();
   if (fs.existsSync(runsDir)) {
-    for (const name of fs.readdirSync(runsDir).filter((entry) => entry.endsWith('.json'))) {
+    for (const entry of fs.readdirSync(runsDir, { withFileTypes: true })) {
+      const name = entry.name;
+      // Batch plans and result arrays are metadata, not individual job runs.
+      if (!entry.isFile() || !name.endsWith('.json') || /^\d{4}-\d{2}-\d{2}-manifest(?:-\d+)?\.json$/.test(name)) continue;
       const runFile = path.resolve(runsDir, name);
       const run = readJson(runFile);
-      if (!run || name === path.basename(stateFile)) continue;
+      if (!run || typeof run !== 'object' || Array.isArray(run) || name === path.basename(stateFile)) continue;
       const evaluated = evaluateRun(run, runFile, fs.statSync(runFile), { home });
       const key = jobKeyFor(run, runFile);
       if (!groups.has(key)) groups.set(key, []);
@@ -111,15 +121,14 @@ export async function runAutoSessionStreakWatch({
     const ordered = [...days.entries()].sort(([a], [b]) => b.localeCompare(a));
     let streak = 0;
     let firstFailureDate = '';
-    let lastSuccessDate = '';
+    const lastSuccessDate = ordered.find(([, dayRuns]) => dayRuns.some((run) => run.success))?.[0] || '';
+    let previousDate = '';
     for (const [date, dayRuns] of ordered) {
       const daySucceeded = dayRuns.some((run) => run.success);
-      if (daySucceeded) {
-        lastSuccessDate = date;
-        break;
-      }
+      if (daySucceeded || (previousDate && Date.parse(previousDate) - Date.parse(date) !== DAY_MS)) break;
       streak += 1;
       firstFailureDate = date;
+      previousDate = date;
     }
     if (streak < 2) continue;
     const failedRuns = runs.filter((run) => !run.success && ordered.slice(0, streak).some(([date]) => date === run.date));
@@ -130,9 +139,10 @@ export async function runAutoSessionStreakWatch({
   }
 
   const state = readJson(stateFile) || {};
-  const today = now.toISOString().slice(0, 10);
+  const today = localDate(now);
   const notified = [];
   const suppressed = [];
+  const errors = [];
   for (const item of detected) {
     const previous = state[item.jobKey];
     if (previous?.lastNotifiedDate === today && previous.lastNotifiedStreak >= item.streak) {
@@ -140,13 +150,19 @@ export async function runAutoSessionStreakWatch({
       continue;
     }
     if (!dryRun) {
-      await notifyImpl(item.message, { home, item });
-      state[item.jobKey] = { lastNotifiedDate: today, lastNotifiedStreak: item.streak };
-      writeJsonAtomic(stateFile, state);
+      try {
+        const result = await notifyImpl(item.message, { home, item });
+        if (result?.delivered && result.delivered !== 'dm') throw new Error(`DM 未送信: ${result.reason || result.delivered}`);
+        state[item.jobKey] = { lastNotifiedDate: today, lastNotifiedStreak: item.streak };
+        writeJsonAtomic(stateFile, state);
+      } catch (error) {
+        errors.push({ jobKey: item.jobKey, message: String(error.message || error) });
+        continue;
+      }
     }
     notified.push(item);
   }
-  return { detected, notified, suppressed };
+  return { detected, notified, suppressed, errors };
 }
 
 async function main() {
@@ -154,7 +170,8 @@ async function main() {
   const result = await runAutoSessionStreakWatch({ dryRun });
   for (const item of result.detected) console.log(item.message, '\n');
   if (!result.detected.length) console.log('ok: 連続失敗なし');
-  return 0;
+  for (const error of result.errors) console.error(`${error.jobKey}: ${error.message}`);
+  return result.errors.length ? 1 : 0;
 }
 
 if (isEntry(import.meta.url)) process.exitCode = await main();

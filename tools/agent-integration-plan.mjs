@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 
 const DEFAULT_REPO = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -162,7 +163,7 @@ export function runPlan(options = {}) {
   }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isEntry(import.meta.url)) {
   const args = process.argv.slice(2);
   const known = new Set(['--write', '--check', '--json']);
   const unknown = args.filter((arg) => !known.has(arg));

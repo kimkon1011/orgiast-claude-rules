@@ -2,6 +2,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { readAssistantText, readLastHumanText } from './lib/assistant-text.mjs';
 
@@ -21,6 +23,71 @@ export const DELIVERABLE_REQUEST_PATTERN = /(作って|つくって|書いて|�
  * ここで短くさせるとルール同士が正面衝突する。実測: 誤爆20件のうち7件がこの型。
  */
 export const HANDOFF_STEPS_PATTERN = /(クリック|タップ|押し|貼り付け|入力し|開いて|選んで|コピー|ログイン)/;
+/**
+ * 2026-09-19 実測: 残る誤爆は「相槌（承認した/やった/すすめて）直後の報告」と「相談への回答」で、
+ * 正規表現では分離不能（誤爆 idx51 と正当 idx52 は直前 human が同一の「承認した」ため）。
+ * この曖昧帯の block 判定だけ deepseek 分類に回す。帯の外は従来どおり正規表現で即 block。
+ */
+const AGENT_MESSAGE_PATTERN = /^(Another Claude session|<agent-message|\[Subagent|Caveat:)/;
+/** 相槌・相談調の署名（過去形相槌・継続指示・状況報告・相談文の末尾形）。 */
+export const ACK_CONSULT_PATTERN = /(<ide_opened_file|やった|やりました|承認|了承|了解|おっけー|おｋ|いいよ|無理|できない|ないん?だけ|がない|映らない|落ちた|反応|アクセス|です|ます|おります|けれど|けど|かな|ですが|のです|んです|思います|考えて|すすめて|進めて|続けて|ぜんぶやった)/;
+/** 作業を明示的に依頼する発言は曖昧帯ではない（LLM に回さず即 block）。 */
+export const STRONG_REQUEST_PATTERN = /(して(ほしい|欲しい|ください|下さい|くれ)|お願い|直して|けして|消して|削除|変更し|変えて|作って|つくって|書いて|対応し|解決|やっ(て)?(ほしい|ください|下さい)|やって(ほしい|ください|下さ)|やる|チェック|確認し|調べ|見て|読んで|開いて|送って|入れて|依頼し)/;
+
+/** 直前 human が曖昧シグナル帯（相槌・相談調）か。 */
+export function isAmbiguousAckBand(humanText) {
+  const t = String(humanText || '').trim();
+  if (!t) return false;
+  if (AGENT_MESSAGE_PATTERN.test(t)) return false;
+  if (STRONG_REQUEST_PATTERN.test(t)) return false;
+  return ACK_CONSULT_PATTERN.test(t);
+}
+
+/** deepseek 分類のルーブリック。実 corpus（block 30件）で誤爆率 25%→11.8〜16.7%・取りこぼし0を測定済み。 */
+export const AMBIGUOUS_REPORT_SYSTEM_PROMPT = `あなたは Claude Code の Stop ゲートの分類器。直前の user 発言（相槌・相談・短い返事）に対する assistant 応答を判定する。
+判定手順（順に確認）:
+1. assistant 応答が次のいずれかのために存在するなら PASS:
+   a. user の相談・質問・意見・状況報告・見せたURLへの回答（比較表・判定結果・理由の説明を含む）
+   b. 障害・権限・上限などで止まった理由の説明
+   c. user が自分でやった操作・作業の報告（「やった」「ぜんぶやったよ」等）への確認・結果提示
+   d. user に渡す・貼るための成果物本文そのもの
+2. user が承認・相槌・継続指示（「承認した」「すすめて」等）だけの場合、それへの「完了しました」型の一方的な報告は BLOCK（3行にまとめられる）。
+3. それ以外の作業進捗・完了の一方的な長い報告も BLOCK。
+迷ったら BLOCK。出力は PASS か BLOCK の1語だけ。`;
+
+/**
+ * 曖昧帯の block を deepseek に分類させる。llm-ask.mjs（同ディレクトリ）経由。
+ * タイムアウト・エラー時は { llm: 'error' }（呼び出し元で fail-open）。テストからは ask を差し替える。
+ */
+export function classifyAmbiguousReport(humanText, assistantText, ask) {
+  const run = ask || ((args, opts) => spawnSync(process.execPath, args, opts));
+  const llmAsk = path.join(path.dirname(fileURLToPath(import.meta.url)), 'llm-ask.mjs');
+  const prompt = `直前の user 発言:\n${String(humanText || '').slice(0, 500)}\n\nassistant 応答:\n${String(assistantText || '').slice(0, 1200)}`;
+  const r = run([llmAsk, '--provider', 'deepseek', '--no-fallback', '--max', '10', '--system', AMBIGUOUS_REPORT_SYSTEM_PROMPT, prompt], { timeout: 3000, encoding: 'utf8' });
+  const out = String(r?.stdout || '');
+  if (r?.status !== 0 || !out.trim()) return { llm: 'error', raw: String(r?.stderr || '').slice(0, 200) };
+  if (/\bPASS\b/.test(out) && !/\bBLOCK\b/.test(out)) return { llm: 'pass', raw: out.slice(0, 200) };
+  if (/\bBLOCK\b/.test(out) && !/\bPASS\b/.test(out)) return { llm: 'block', raw: out.slice(0, 200) };
+  return { llm: 'error', raw: out.slice(0, 200) };
+}
+
+/** LLM レーンの kill-switch（'0' で無効化し従来の正規表現判定のみ）。 */
+export function llmLaneEnabled() {
+  return process.env.ORGIAST_REPORT_LLM_GATE !== '0';
+}
+
+/**
+ * 正規表現ゲートを前置きフィルタとして、曖昧帯の block だけ deepseek 分類に回す。
+ * LLM が PASS またはエラー（fail-open）なら pass。帯の外は正規表現の判定のまま。
+ */
+export async function judgeReportLengthWithLlm(assistantText, lastHumanText, ask) {
+  const result = judgeReportLength(assistantText, lastHumanText);
+  if (result.decision !== 'block' || !llmLaneEnabled() || !isAmbiguousAckBand(lastHumanText)) return result;
+  const c = classifyAmbiguousReport(lastHumanText, assistantText, ask);
+  if (c.llm === 'pass') return { ...result, decision: 'pass', reason: 'llm-context-expected', llm: 'pass' };
+  if (c.llm === 'error') return { ...result, decision: 'pass', reason: 'llm-unavailable-fail-open', llm: 'error' };
+  return { ...result, llm: 'block' };
+}
 const HANDOFF_DECLARATION = /\[手渡し判定\]/;
 const NO_HANDOFF_DECLARATION = /\[手渡し判定\][^\n]*手渡しなし/;
 
@@ -129,7 +196,7 @@ async function main() {
       return;
     }
     const human = readLastHumanText(input?.transcript_path);
-    const result = judgeReportLength(assistant.text, human.text);
+    const result = await judgeReportLengthWithLlm(assistant.text, human.text);
     const sessionId = input?.session_id || input?.sessionId || path.basename(input?.transcript_path || '', '.jsonl');
     const statePath = path.join(home(), '.claude', 'report-length-gate-state.json');
     let state = {};
@@ -147,7 +214,7 @@ async function main() {
     const reasonCode = result.decision === 'block'
       ? stateResult.blocked ? 'over-line-limit' : 'block-limit-reached'
       : result.reason;
-    appendLedger({ sessionId, verdict: effectiveBlock ? 'blocked' : 'passed', lines: result.lines, chars: result.chars, reasonCode, reason: result.reason, excerpt: assistant.text.slice(0, 200) });
+    appendLedger({ sessionId, verdict: effectiveBlock ? 'blocked' : 'passed', lines: result.lines, chars: result.chars, reasonCode, reason: result.reason, llm: result.llm || null, excerpt: assistant.text.slice(0, 200) });
     if (effectiveBlock) process.stdout.write(JSON.stringify({ decision: 'block', reason: result.reason }) + '\n');
   } catch (error) {
     console.error(`[report-length-gate] 例外を握って通過します: ${error instanceof Error ? error.message : String(error)}`);

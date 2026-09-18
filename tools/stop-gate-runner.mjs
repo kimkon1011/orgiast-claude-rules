@@ -15,7 +15,7 @@ import { findHandoffWithoutInfo, formatViolationMessage as formatHandoffInfo } f
 import { configuredMode, evaluateNegativeClaimFromRaw } from './negative-claim-gate.mjs';
 import { configuredMode as externalStateMode, evaluateExternalStateClaimFromRaw } from './external-state-claim-gate.mjs';
 import { evaluateAudit } from './handoff-audit-gate.mjs';
-import { enabled as reportLengthEnabled, judgeReportLength } from './report-length-gate.mjs';
+import { enabled as reportLengthEnabled, judgeReportLengthWithLlm } from './report-length-gate.mjs';
 import { hasRequiredFooter, judgeNextAction } from './next-action-gate.mjs';
 import { findOutsourcedInvestigation, formatViolationMessage as formatSelfCheck, scanToolUsesFromRaw } from './self-check-before-asking-guard.mjs';
 import { findLocalDocLinks, formatViolationMessage as formatDocLink } from './doc-link-drive-guard.mjs';
@@ -42,7 +42,7 @@ export async function evaluateGates(ctx, auditOptions = {}) {
     ['handoff-audit-gate', () => evaluateAudit({ text: ctx.assistantText, transcriptRaw: ctx.transcriptRaw, sessionId: ctx.sessionId, regexBlocked: results.length > 0 }, { home: home(), ...auditOptions })],
     ['self-check-before-asking-guard', () => { const found = findOutsourcedInvestigation(ctx.assistantText, scanToolUsesFromRaw(ctx.transcriptRaw)); return found ? { decision: 'block', reason: formatSelfCheck(found), code: 'SELF-CHECK' } : { decision: 'pass' }; }],
     ['stop-gate', () => { if (!stopGateEnabled()) return { decision: 'pass' }; const todo = shouldBlock(ctx.assistantText); const question = !todo && shouldBlockProgressQuestion(ctx.assistantText); return todo ? { decision: 'block', reason: reasonFor(remainingItems(ctx.assistantText)), code: 'remaining-todo' } : question ? { decision: 'block', reason: progressQuestionReason(), code: 'progress-question' } : { decision: 'pass' }; }],
-    ['report-length-gate', () => reportLengthEnabled() ? judgeReportLength(ctx.assistantText, ctx.humanText) : { decision: 'pass' }],
+    ['report-length-gate', () => reportLengthEnabled() ? judgeReportLengthWithLlm(ctx.assistantText, ctx.humanText) : { decision: 'pass' }],
     ['next-action-gate', () => judgeNextAction(ctx.assistantText, ctx.transcriptRaw)],
     ['doc-link-drive-guard', () => { const hits = findLocalDocLinks(ctx.assistantText); return hits.length ? { decision: 'block', reason: formatDocLink(hits), code: 'DOC-LINK' } : { decision: 'pass' }; }],
   ];
@@ -50,7 +50,7 @@ export async function evaluateGates(ctx, auditOptions = {}) {
   const errors = [];
   for (const [name, evaluate] of gates) {
     if (name === 'handoff-audit-gate') continue;
-    try { const result = evaluate(); if (result?.decision === 'block') results.push({ name, ...result }); }
+    try { const result = await evaluate(); if (result?.decision === 'block') results.push({ name, ...result }); }
     catch { errors.push(`error:${name}`); }
   }
   const audit = await gates.find(([name]) => name === 'handoff-audit-gate')[1]();

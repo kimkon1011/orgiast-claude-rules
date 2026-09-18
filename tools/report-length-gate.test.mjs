@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { bumpState, judgeReportLength, pruneState } from './report-length-gate.mjs';
+import { bumpState, isAmbiguousAckBand, judgeReportLength, judgeReportLengthWithLlm, pruneState } from './report-length-gate.mjs';
 
 const gate = fileURLToPath(new URL('./report-length-gate.mjs', import.meta.url));
 const report = lines => ['実装しました', ...Array.from({ length: lines - 1 }, (_, index) => `詳細 ${index + 1}`)].join('\n');
@@ -176,5 +176,54 @@ test('成果物そのものを頼まれた turn は pass', () => {
 test('成果物依頼でない短い指示は従来どおり block', () => {
   for (const human of ['すすめて', 'やって', '２でけして。']) {
     assert.equal(judgeReportLength(report(30), human).decision, 'block', human);
+  }
+});
+
+test('相槌・相談調は曖昧シグナル帯に入る', () => {
+  for (const human of ['すすめて', '承認した', 'やった', 'ぜんぶやったよ。', 'マニュアルにアクセスできない。', 'また映像については検討したいと考えております。']) {
+    assert.equal(isAmbiguousAckBand(human), true, human);
+  }
+});
+
+test('強い依頼・agent message・空文字は曖昧シグナル帯に入らない', () => {
+  for (const human of ['エラーが起きている、解決して。', '２でけして。', '無料相談ボタンを青に変更してほしい。', 'Another Claude session sent a message: 完了', '']) {
+    assert.equal(isAmbiguousAckBand(human), false, human);
+  }
+});
+
+test('曖昧帯で LLM が PASS なら pass にする', async () => {
+  const result = await judgeReportLengthWithLlm(report(13), '承認した', () => ({ status: 0, stdout: 'PASS\n' }));
+  assert.equal(result.decision, 'pass');
+  assert.equal(result.reason, 'llm-context-expected');
+});
+
+test('曖昧帯で LLM が BLOCK なら block のまま', async () => {
+  const result = await judgeReportLengthWithLlm(report(13), 'すすめて', () => ({ status: 0, stdout: 'BLOCK\n' }));
+  assert.equal(result.decision, 'block');
+  assert.equal(result.llm, 'block');
+});
+
+test('曖昧帯で LLM がエラーなら fail-open', async () => {
+  for (const response of [{ status: 1, stdout: '', stderr: 'failed' }, { status: 0, stdout: '' }]) {
+    const result = await judgeReportLengthWithLlm(report(13), 'やった', () => response);
+    assert.equal(result.decision, 'pass');
+    assert.equal(result.reason, 'llm-unavailable-fail-open');
+  }
+});
+
+test('曖昧帯の外なら LLM を呼ばず block のまま', async () => {
+  const result = await judgeReportLengthWithLlm(report(13), 'デプロイして', () => { throw new Error('ask must not be called'); });
+  assert.equal(result.decision, 'block');
+});
+
+test('kill-switch が 0 なら LLM を呼ばず block のまま', async () => {
+  const previous = process.env.ORGIAST_REPORT_LLM_GATE;
+  process.env.ORGIAST_REPORT_LLM_GATE = '0';
+  try {
+    const result = await judgeReportLengthWithLlm(report(13), '承認した', () => ({ status: 0, stdout: 'PASS\n' }));
+    assert.equal(result.decision, 'block');
+  } finally {
+    if (previous === undefined) delete process.env.ORGIAST_REPORT_LLM_GATE;
+    else process.env.ORGIAST_REPORT_LLM_GATE = previous;
   }
 });

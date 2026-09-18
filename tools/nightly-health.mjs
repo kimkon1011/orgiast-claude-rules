@@ -292,7 +292,8 @@ export async function runNightlyHealth({
   settingsPath = path.join(home, '.claude', 'settings.json'),
   baselinePath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'nightly-health-baseline.json'),
   scheduledTaskInfo = getScheduledTaskInfo,
-  streakWatch = runAutoSessionStreakWatch
+  streakWatch = runAutoSessionStreakWatch,
+  streakNotifyImpl
 } = {}) {
   const dirname = path.dirname(fileURLToPath(import.meta.url));
   expectations ??= readJson(path.join(dirname, 'nightly-health-expectations.json'), []);
@@ -301,6 +302,7 @@ export async function runNightlyHealth({
   const oldOffsets = readJson(offsetsPath, {});
   const newOffsets = { ...oldOffsets };
   const anomalies = [];
+  const dedicatedStreakAnomalies = new Set();
   const registeredLogs = new Set();
   const scanTargets = [];
   const logFiles = fs.existsSync(logsDir)
@@ -308,9 +310,14 @@ export async function runNightlyHealth({
     : [];
 
   try {
-    const streakResult = await streakWatch({ home, now, dryRun });
+    const streakResult = await streakWatch({ home, now, dryRun: dryRun || prime, notifyImpl: streakNotifyImpl });
     for (const item of streakResult.detected) {
-      anomalies.push({ type: 'auto_session_streak', label: item.jobKey, message: item.message });
+      const anomaly = { type: 'auto_session_streak', label: item.jobKey, message: item.message };
+      anomalies.push(anomaly);
+      dedicatedStreakAnomalies.add(anomaly);
+    }
+    for (const error of streakResult.errors || []) {
+      anomalies.push({ type: 'auto_session_streak', label: error.jobKey, message: `連続失敗の DM 通知に失敗: ${error.message}` });
     }
   } catch (error) {
     anomalies.push({ type: 'auto_session_streak', label: 'auto-session 連続失敗監視', message: `監視処理に失敗: ${error.message || error}` });
@@ -416,17 +423,21 @@ export async function runNightlyHealth({
 
   // 未登録ログ・baseline抑制は「異常」ではなく注記なので、それ単独では通知しない。
   // これらで通知が飛ぶと、平穏な夜も毎日DMが来て通知そのものが読まれなくなる。
-  if (anomalies.length === 0) {
-    const message = 'ok:異常なし';
-    if (json) console.log(JSON.stringify({ status: 'ok', anomaliesCount: 0, anomalies: [], message }, null, 2));
+  // Keep all detections in the report, but never send a second DM through the
+  // general health notifier (or bypass the watcher's per-job daily suppression).
+  const notificationAnomalies = dryRun || prime
+    ? anomalies : anomalies.filter((item) => !dedicatedStreakAnomalies.has(item));
+  if (notificationAnomalies.length === 0) {
+    const message = anomalies.length ? 'auto-session:専用 DM 経路で通知・重複抑制済み' : 'ok:異常なし';
+    if (json) console.log(JSON.stringify({ status: anomalies.length ? 'anomaly' : 'ok', anomaliesCount: anomalies.length, anomalies, message }, null, 2));
     else console.log(message);
-    return { exitCode: 0, anomalies: [], message };
+    return { exitCode: 0, anomalies, message };
   }
 
-  const visible = anomalies.slice(0, MAX_NOTIFICATION_ITEMS);
-  let notificationText = anomalies.length ? `⚠️ 夜間ジョブ異常 ${anomalies.length}件\n` : 'ℹ️ 夜間ジョブ異常 0件\n';
+  const visible = notificationAnomalies.slice(0, MAX_NOTIFICATION_ITEMS);
+  let notificationText = `⚠️ 夜間ジョブ異常 ${notificationAnomalies.length}件\n`;
   for (const anomaly of visible) notificationText += `- ${anomaly.label}: ${anomaly.message}\n`;
-  if (anomalies.length > visible.length) notificationText += `…ほか ${anomalies.length - visible.length}件（node tools/nightly-health.mjs --dry-run で全件）\n`;
+  if (notificationAnomalies.length > visible.length) notificationText += `…ほか ${notificationAnomalies.length - visible.length}件（node tools/nightly-health.mjs --dry-run で全件）\n`;
   if (suppressedCount) notificationText += `（既知の赤 ${suppressedCount}件は baseline により抑制）\n`;
   if (unregisteredLogs.length) {
     notificationText += `（未登録のログ ${unregisteredLogs.length}件: ${unregisteredLogs.slice(0, 5).join(', ')}）\n`;

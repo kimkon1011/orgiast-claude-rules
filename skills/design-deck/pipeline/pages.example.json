@@ -1,0 +1,9 @@
+[
+  {"id":"p01","type":"cover","kicker":"PROPOSAL","headline":"一言で価値を示す","body":"補足は三行以内。","footerPage":"01","subtitle":"企画名","visualBrief":"16:9フルブリード。主役を右60%、左下に明るい余白。実写真の質感を保つ。","photoSources":["../assets/photo-01.jpg","../assets/photo-02.jpg"],"fallbackPhoto":"../assets/photo-01.jpg"},
+  {"id":"p02","type":"stats","kicker":"01 / FACT","headline":"数字で結論を示す","body":"数字の意味だけを短く説明。","footerPage":"02","stats":[{"value":"57,000","unit":"名","label":"来場者"},{"value":"1,100","unit":"社","label":"出展者"}],"visualBrief":"中央に完成ブースと自然な接客。縦長クロップ用に被写体を中央へ。","photoSources":["../assets/photo-01.jpg","../assets/photo-02.jpg"],"fallbackPhoto":"../assets/photo-02.jpg"},
+  {"id":"p03","type":"visual","kicker":"02 / SCENE","headline":"体験を大きく見せる","body":"写真と文章を明確に分離。","footerPage":"03","visualBrief":"明るい完成会場。自然な接客を右側へ大きく配置。","photoSources":["../assets/photo-02.jpg","../assets/photo-03.jpg"],"fallbackPhoto":"../assets/photo-02.jpg"},
+  {"id":"p04","type":"table","kicker":"03 / OPTIONS","headline":"選択肢を比較する","body":"判断軸を先に示す。","footerPage":"04","table":{"headers":["案","費用","特徴"],"rows":[["A","100万円","余白重視"],["B","120万円","訴求重視"]]},"insight":"推奨案と理由を一文で示す。"},
+  {"id":"p05","type":"timeline","kicker":"04 / PLAN","headline":"実行順序を示す","body":"次の行動を迷わせない。","footerPage":"05","timeline":[{"date":"10月","text":"場所を確保"},{"date":"11月","text":"素材を確定"},{"date":"12月","text":"制作"},{"date":"1月","text":"最終確認"}]},
+  {"id":"p06","type":"compare","kicker":"05 / COMPARE","headline":"三案を一目で比べる","body":"差が出る項目だけを残す。","footerPage":"06","columns":[{"title":"A案","value":"4社","items":["余白重視"]},{"title":"B案","value":"5社","items":["収益重視"]},{"title":"C案","value":"6社","items":["回遊重視"]}]},
+  {"id":"p07","type":"perspective","kicker":"06 / IMAGE","headline":"完成像を共有する","body":"社長提供パースを加工せず表示。","footerPage":"07","directVisual":"../assets/perspective.png","points":["見せ場を正面に置く","回遊できる幅を保つ"],"note":"寸法は別紙図面を正とする。"}
+]

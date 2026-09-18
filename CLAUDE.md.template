@@ -35,6 +35,8 @@ Workspace のリンク提示時は必ず `/a/orgiast.jp/` パスを入れる。�
 
 デプロイ・UI・cron 等の変更は **/deploy-verify** skill の2段検証（Layer1 ロジック再現 + Layer2 Playwright 実描画）を通してから完了報告。
 
+見せる資料はハイブリッド企画書モデル（Claude組版×Gemini写真×Genspark参照）で作り、**/design-deck** skill を使う。
+
 ---
 
 ## トークン効率

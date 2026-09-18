@@ -3,110 +3,90 @@ name: design-deck
 description: 「提案書」「企画書」「営業資料」「プレゼン」「デッキ」「スライド」「ブースプラン」「パース入り資料」「見せる資料」「デザインして」「かっこよく」など、見た目が評価対象になる資料の作成・修正依頼では必ず使う。学会1枚資料のような定型の量産物・数表主体の実務資料は対象外で、従来の HTML→PDF を使う。
 ---
 
-# 見せる資料は Genspark AI Slides で作る
+# 見せる資料はハイブリッド企画書モデルで作る
 
-ユーザーの目視レビューと修正負担を減らすため、見た目が評価対象になる複数ページ資料は Claude が HTML/CSS で組まず、Genspark AI Slides に生成させる。修正依頼でも HTML を直さず、Genspark に再生成させる。
+Claude が構成・原稿・文字と数字を HTML/CSS で組版し、Gemini 画像モデルが実写真2〜4枚から文字なしの大きな写真ビジュアルを合成する。Genspark AI Slides は写真配置の面積比・余白を学ぶためにレンダを見るだけで、成果物をそのまま採用しない。
 
-## 1. 対象を判定する
+パイプラインの実体は `media-kit-node/deck-hybrid/`。別プロジェクトでは `skills/design-deck/pipeline/` を対象プロジェクトへコピーし、`pages.example.json` を `pages.json` にして内容と相対画像パスを書き換える。
 
-- 対象: 提案書、企画書、営業資料、プレゼン、デッキ、スライド、ブースプラン、パース入り資料など、見た目が評価対象になる資料。
+## 1. 対象と前提
+
+- 対象: 提案書、企画書、営業資料、プレゼン、デッキ、スライド、ブースプラン、パース入り資料など、見た目が評価対象になる複数ページ資料。
 - 対象外: 学会1枚資料のような定型の量産物、数表主体の実務資料。従来の HTML→PDF を使う。
+- 対象プロジェクトの親ディレクトリに、既存の許可済み `gen-image.mjs` と `html-to-pdf.mjs` が必要。Gemini の認証情報を新規コードで直接読まない。
+- Genspark は配置参照だけ。文字・数字・表・図解を任せず、成果物をそのまま採用しない。
 
-## 2. 前提と認証を確認する
+## 2. 写真素材を集約・選別する
 
-対象アカウントは `seisaku-team@orgiast.jp`（Genspark Pro契約）。CLI は初回実行時に自動インストールされる。
+1. Drive の素材フォルダへ写真を集約する。Reブース素材の例はフォルダ ID `1hRRRV2hAXH_cjoFOd_YF0KPFE-xwrIgb`。
+2. ファイル名やタグだけで選ばず、全候補を目視する。完成ブース、賑わい、接客・商談、清潔な施工完了写真を選ぶ。
+3. まばらな会場、設営・搬入中、床にゴミ・養生材・資材がある写真、社員だけの私的集合写真は使わない。
+4. 他社ロゴが大きければモザイクをかける。社長提供パースがある場合は AI パースを作らず、その画像を直接大きく表示する。資料全体のスクリーンショットを拡大しない。
+5. 採用素材をプロジェクト内へ置き、`pages.json` からパイプライン基準の相対パスで参照する。
 
-```text
-gsk --help
-gsk login-info
+## 3. pages.json を書く
+
+`pages.example.json` をコピーし、全ページに `id / type / kicker / headline / body / footerPage` を書く。見出しは14字以内、導入本文は3行以内を先に守る。
+
+| type | 用途 | 主な追加データ |
+|---|---|---|
+| `cover` | フルブリード写真と表紙 | `visualBrief`, `photoSources`, `fallbackPhoto`, `subtitle` |
+| `stats` | 96px級の数字と写真 | `stats` |
+| `visual` | 大写真と短い説明 | `visualBrief`, `photoSources`, `fallbackPhoto` |
+| `table` | 比較表 | `table.headers`, `table.rows`, `insight` |
+| `timeline` | 時系列 | `timeline` |
+| `compare` | 2〜3案の比較 | `columns` |
+| `perspective` | 社長提供パースを直接表示 | `directVisual`, `crop`, `points`, `note` |
+
+`visualBrief` は、フルブリードかパネルか、主役と余白の位置、実写真から残す質感を記す。数字・文字・表・図面は書かない。`perspective` に `visualBrief` を併記して Gemini 加工してはいけない。
+
+## 4. Gemini で文字なしビジュアルを作る
+
+```sh
+node deck-hybrid/gen-visuals.mjs
 ```
 
-`gsk login-info` の `data.email` が `seisaku-team@orgiast.jp`、`data.plan` が `pro` であることと、`data.credit_balance` を確認する。未ログインの場合だけ `gsk login` を実行する。
+再生成するページがある場合だけ `--force` を使う。`gen-visuals.mjs` は各ページの実写真2〜4枚を `--img` で既存 `gen-image.mjs` に渡す。共通プロンプトは次の型を守る。
 
-## 3. 素材と原稿を準備する
+> 実写真の質感を保つ。人物は自然で顔の重複なし。文字・ロゴ・数字・表・図解・透かしを描かない。看板・衣服は無地。16:9。明るい会場。施工完了後のブースと自然な接客。設営・搬入・床のゴミ・資材・私的集合写真・まばらな会場は不可。
 
-1. 写真素材を Drive の素材フォルダに集約し、アップロード前に目視選別する。Reブース写真素材の例はフォルダID `1hRRRV2hAXH_cjoFOd_YF0KPFE-xwrIgb`。
-2. 次の写真は候補から除外する。
-   - 来場者が少なく、ブースがまばら・閑散として見える写真
-   - 設営中・搬入中など未完成の状態が写っている写真
-   - 床にゴミ・養生材・梱包資材が写っている写真
-   - 社員だけの私的な集合写真
-3. 他社ロゴが大きく写っている写真はモザイクをかける。社長提供のパース素材がある場合は、AI生成パースを使わない。
-4. 採用するのは、完成後のブース、賑わっている来場者、接客・商談、施工完了後のきれいな仕上がりなど、対外的に見せてよい写真だけにする。目安は10〜15枚。
-5. 原稿を Markdown にし、全ページをページ番号付きで保持する。数値や表を含め、要約・省略しない。
+この共通文に `visualBrief` を続ける。生成画像へ文字や数字を焼き込まず、縦長パネルは16:9画像の中央へ被写体を寄せて HTML 側でクロップする。既存正常画像はスキップし、失敗時は指定した実写真へフォールバックする。
 
-## 4. 写真を Genspark にアップロードする
+## 5. Claude が HTML/CSS で組版する
 
-写真ごとに1枚ずつ順番に実行し、並列化しない。
-
-```text
-gsk upload <ローカル画像パス>
+```sh
+node deck-hybrid/build.mjs
 ```
 
-返り値の `data.file_wrapper_url` を保存する。このURLは Genspark 内部限定で、外部ツールからは403になるため使い回さない。各URLには `cover-hero(表紙向け)`、`leads-crowd 来場者の賑わい1` のような短い日本語ラベルを付ける。
+- 1ページ1メッセージ。見出し14字以内、導入本文3行以内。
+- 重要な数字は96px級。文字・数字・表・図解は編集可能な HTML/CSS/SVG にする。
+- 本文外側余白は96px以上。写真ページの写真面積は40%以上。写真を `filter` や `opacity` で暗くせず、小さな飾り写真にしない。
+- 表・図面主体ページは写真を省略してよい。40%未満の小写真と表を競合させない。
+- `build-checks.json` の14字超・推定3行超の警告を読み、警告を放置せず修正する。
 
-## 5. スライド生成タスクを作る
+## 6. 全ページを目視する
 
-プロンプト本文に改行・引用符・`$` を含むため、`--query` に直書きせず JSON の `--args-file` を使う。
-
-```json
-{
-  "task_name": "<プロジェクト名>",
-  "query": "<企画書テキスト全文 + 写真URL一覧（ラベル付き）を1本のテキストとして埋め込む>",
-  "instructions": "<構造・文体・出力形式の指示>"
-}
+```sh
+node deck-hybrid/preview.mjs
 ```
 
-`query` は次の順で組む。
+全ページを1600×900 PNGへ出力する。Read で原寸の全ページを目視し、各ページを次の5観点で5点満点採点する。
 
-1. 「以下の企画書テキスト（全◯ページ・ページ順）をもとに、日本語で『◯◯提案書』を◯ページ前後のスライドとして作成してください。写真を大きく使い、余白を多めに、見出しは短くしてください。写真素材（下記URL、内容ラベル付き）を各ページの内容に合わせて自由に配置してください。」という生成指示。
-2. `--- 企画書テキスト ---` の下に、元資料の全ページをページ番号付きでそのまま貼る。数値・表も省略しない。
-3. `--- 写真素材(URL・内容ラベル) ---` の下に、`<ラベル>: <file_wrapper_url>` 形式で全画像を1行ずつ列挙する。
-4. 写真を置くページは指定せず、Genspark の判断に任せる。
+1. 写真の質と内容
+2. 余白
+3. 文字量
+4. 数字の見せ方
+5. 全体の一貫性
 
-`instructions` には、日本語、想定読者、写真を大きく、余白を多め、見出しを短く、PPTX/PDFでエクスポート可能、写真配置はAI裁量、を記す。
+1項目でも3点以下なら原因を直し、build→preview→全ページ目視をやり直す。画像デコード、文字切れ、フッター衝突、本文実測行数、写真面積、写真の暗化も `preview-checks.json` で確認する。
 
-```text
-gsk task create slides --args-file <path-to-args.json>
-```
+## 7. PDF と Drive
 
-社長から `ultra` の明示指示がある場合だけ `--slides_tier ultra` を付ける。それ以外は standard のままにする。`--wait` は付けない。`slides` タスクでは `--attach` / `--image` / `--file` を使わず、写真は必ず `gsk upload` のURLで渡す。
+`build.mjs` は既存 `html-to-pdf.mjs` を呼び PDF 化する。完成 PDF を既存の Drive アップロード経路で保存する。Drive に同名の既存 file ID がある場合は新規作成せず PATCH して URL を不変にする。kim へ渡す URL には `?authuser=kim@orgiast.jp` を付ける。
 
-## 6. 完了を待って取得する
+## 8. 修正を正しい担当へ戻す
 
-作成時に返る `data.run_id`、`data.project_id`、`data.task_url` を保存する。30〜60秒間隔で次を実行する。
-
-```text
-gsk task status <run_id>
-```
-
-`data.state` が `queued` / `running` の間は待ち、`succeeded` になったら完成。同じ内容で `gsk task create slides` を再実行して二重生成・二重課金しない。写真15枚＋約11ページの実績は約15〜20分。
-
-```text
-gsk task export <project_id> --format pdf -o <出力先.pdf>
-gsk task export <project_id> --format pptx -o <出力先.pptx>
-```
-
-保存先は各レスポンスの `data.local_path` で確認する。
-
-## 7. Drive保存と目視確認を行う
-
-既存の `media-kit-node/drive-upload.mjs` と同じ手順で、PDFとPPTXを Drive の「作業ファイル」直下へ保存する。
-
-```text
-node drive-upload.mjs <ローカルファイル> <Drive上のファイル名> <MIMEタイプ> <作業ファイルのフォルダID>
-```
-
-- PDF: `application/pdf`
-- PPTX: `application/vnd.openxmlformats-officedocument.presentationml.presentation`
-- 続けてアップロードする場合は1〜2秒間隔を空ける。
-- 返り値の `LINK=` を共有リンクとして使う。
-
-PDFの各ページをPNG化し、Readで全ページを目視する。写真選定基準、余白、文字量、ページ抜け、崩れを確認してから完了とする。kim には Drive URL に `?authuser=kim@orgiast.jp` を付けて渡す。
-
-## 8. 修正と代替経路
-
-- 修正依頼が来たら Claude が HTML/CSS を直さず、原稿・素材・指示を直して Genspark に再生成させる。目的はユーザーの目視レビュー回数を減らすこと。
-- Genspark が使えない場合、表紙など単発ページだけは Gemini 画像モデルを使う。複数ページを一貫したデザインで作る用途には使わない。
-- Gemini の認証情報ファイル（`~/.gemini/.env` 等）を新規スクリプトから直接読む操作は、手順書の実測で classifier に拒否された。既存の許可済みリポジトリスクリプト（例: `gen-image.mjs`）を使う・拡張する。
-- Canva は使わない。写真投入には公開URLが必要だが、Genspark の `file_wrapper_url` は外部から403になり、Driveの公開共有化は auto mode classifier に止められるため、写真を渡す経路がない。
+- 写真の内容・雰囲気・構図への不満: `visualBrief` または素材を直し、Gemini で再合成する。
+- 文字・数字・表・余白への不満: Claude が `pages.json` または CSS を直す。Gemini や Genspark に文字を作らせない。
+- Genspark: 写真配置の文法（面積比、写真と文章の分離、余白）の参考としてレンダを見るだけ。
+- Canva は使わない。写真投入に公開 URL が必要だが、Genspark の素材 URL は外部から403になり、Drive の公開共有化は auto mode classifier に止められるため、安定した写真投入経路がない。

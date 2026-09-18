@@ -63,16 +63,31 @@ test('requirements-freeze に核となる文字列がすべて含まれる', () 
   assert.match(source, /user\s*の?手作業回数/, 'requirements-freeze に「user の手作業回数」がありません');
 });
 
-test('design-deck は Genspark 優先・対象外・修正時再生成を固定する', () => {
+test('design-deck はハイブリッド企画書モデルと修正分担を固定する', () => {
   const source = readSkill('design-deck');
   for (const text of [
-    '見せる資料は Genspark AI Slides',
-    '定型の量産物・数表主体の実務資料は対象外',
-    '修正依頼でも HTML を直さず、Genspark に再生成',
-    'gsk task create slides --args-file',
+    '見せる資料はハイブリッド企画書モデル',
+    '実写真2〜4枚',
+    '見出し14字以内',
+    '写真面積は40%以上',
+    '写真の内容・雰囲気・構図への不満',
+    '文字・数字・表・余白への不満',
+    'Genspark: 写真配置の文法',
     'Canva は使わない',
   ]) {
     assert.ok(source.includes(text), `design-deck に「${text}」がありません`);
+  }
+});
+
+test('design-deck pipeline は必須ファイルと7ページ型を同梱する', () => {
+  const pipeline = path.join(skillsDir, 'design-deck', 'pipeline');
+  for (const file of ['README.md', 'pages.example.json', 'gen-visuals.mjs', 'build.mjs', 'preview.mjs']) {
+    assert.ok(fs.existsSync(path.join(pipeline, file)), `pipeline/${file} がありません`);
+  }
+  const pages = JSON.parse(fs.readFileSync(path.join(pipeline, 'pages.example.json'), 'utf8'));
+  assert.deepEqual(pages.map((page) => page.type), ['cover', 'stats', 'visual', 'table', 'timeline', 'compare', 'perspective']);
+  for (const page of pages) {
+    for (const photo of page.photoSources ?? []) assert.ok(photo.startsWith('../'), `${page.id}: 写真パスが相対ではありません`);
   }
 });
 

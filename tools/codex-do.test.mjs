@@ -237,7 +237,9 @@ test('枠切れ発生時に --no-fallback を指定した場合はフォール�
   const mockResults = [
     { status: 1, output: "You've hit your usage limit. Please try again later.", stderr: "" }
   ];
-  const result = run(['--no-fallback', '指示内容'], {
+  // --force-native: このテストは「枠切れ→フォールバック」の経路だけを見る。WSL の有無で
+  // 分岐が変わると Windows 実機で必ず落ちるため、codex 実行経路を固定する。
+  const result = run(['--force-native', '--no-fallback', '指示内容'], {
     env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults) }
   });
   // フォールバックしないため非ゼロ終了
@@ -252,7 +254,7 @@ test('枠切れ発生時にフォールバックが成功した場合は 0 で�
     { status: 1, output: "You've hit your usage limit. Please try again later.", stderr: "" },
     { status: 0, output: "Qwen Code CLI has successfully edited files.", stderr: "" }
   ];
-  const result = run(['指示内容'], {
+  const result = run(['--force-native', '指示内容'], {
     env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults), GEMINI_API_KEY: '', DEEPSEEK_API_KEY: 'sk-test' }
   });
   assert.equal(result.status, 0);
@@ -266,7 +268,7 @@ test('第1フォールバックがタイムアウトしたら第2バックエン
     { status: 124, output: '', stderr: '', timedOut: true },
     { status: 0, output: 'Qwen Code CLI has successfully completed.', stderr: '' }
   ];
-  const result = run(['指示内容'], {
+  const result = run(['--force-native', '指示内容'], {
     env: {
       CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults),
       GEMINI_API_KEY: 'gemini-test',
@@ -283,7 +285,7 @@ test('Codex もフォールバック(Qwen Code) も失敗した場合は非ゼ�
     { status: 1, output: "You've hit your usage limit. Please try again later.", stderr: "" },
     { status: 12, output: "", stderr: "Qwen Code execution error" }
   ];
-  const result = run(['指示内容'], {
+  const result = run(['--force-native', '指示内容'], {
     env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults), GEMINI_API_KEY: '', DEEPSEEK_API_KEY: 'sk-test' }
   });
   assert.equal(result.status, 12);
@@ -297,7 +299,7 @@ test('枠切れ発生時に DEEPSEEK_API_KEY が無ければフォールバッ�
   const prev = process.env.DEEPSEEK_API_KEY;
   delete process.env.DEEPSEEK_API_KEY;
   try {
-    const result = run(['指示内容'], {
+    const result = run(['--force-native', '指示内容'], {
       env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults), GEMINI_API_KEY: '', OPENROUTER_API_KEY: '' }
     });
     assert.equal(result.status, 1);
@@ -735,7 +737,7 @@ test('WSL codex のプローブはコールドスタートを待てる', () => {
 test('WSL が使えず中断するときも台帳に launched:false の1行を残す', { skip: process.platform !== 'win32' }, (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-wslabort-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  const result = run(['--cwd', home, '--model', 'sol', '説明して'], {
+  const result = run(['--no-fallback', '--cwd', home, '--model', 'sol', '説明して'], {
     home,
     env: { CODEX_DO_WSL_PROBE: 'absent' },
   });
@@ -748,6 +750,32 @@ test('WSL が使えず中断するときも台帳に launched:false の1行を�
   assert.equal(rows[0].out, 0);
   assert.equal(rows[0].status, 3);
   assert.equal(rows[0].launched, false);
+});
+
+// 2026-09-19 実測: この PC は `wsl -l -q` が空で、起動失敗のまま process.exit(3) していたため
+// codex-do 本来のフォールバック連鎖へ到達せず委譲が毎回死んでいた（台帳に launched:false が残り続けた）。
+test('WSL ディストリが無くても代替バックエンドがあるなら起動失敗で死なず委譲を続ける', { skip: process.platform !== 'win32' }, (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-wslfallback-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const result = run(['--cwd', home, '--model', 'sol', '説明して'], {
+    home,
+    env: {
+      CODEX_DO_WSL_PROBE: 'absent',
+      CODEX_DO_MOCK_RESULTS: JSON.stringify([{ status: 0, output: 'done', stderr: '' }]),
+      GEMINI_API_KEY: '',
+      DEEPSEEK_API_KEY: 'sk-test'
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /executor=fallback:deepseek/);
+  const rows = fs.readFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  const codexRow = rows.find((item) => item.provider === 'codex');
+  assert.ok(codexRow, '起動失敗は台帳に残すこと（無音故障の回帰）');
+  assert.equal(codexRow.launched, false);
+  assert.equal(codexRow.out, 0);
+  assert.match(codexRow.stderrTail, /WSL ディストリが見つかりませんでした/);
+  // WSL 不在は一過性でないので再試行しない（再試行の記録 attempts が 1 のまま）
+  assert.equal(codexRow.attempts, 1);
 });
 
 test('起動に成功した行は launched:true で記録される', (t) => {

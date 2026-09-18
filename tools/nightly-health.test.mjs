@@ -53,6 +53,29 @@ function writeSettings(home, commands) {
 
 function healthyTests() { return { status: 0, stdout: 'ok', stderr: '' }; }
 
+test('auto-session の streak 検出を既存 anomaly 型へ追加する', async () => {
+  const home = createTempHome();
+  try {
+    const result = await runNightlyHealth({
+      home,
+      expectations: [],
+      dryRun: true,
+      runTests: async () => healthyTests(),
+      streakWatch: async () => ({
+        detected: [{ jobKey: 'feedback:kimkon1011/app#13', message: '2 日連続失敗。判断してください' }],
+        notified: [],
+        suppressed: []
+      })
+    });
+    assert.deepEqual(result.anomalies[0], {
+      type: 'auto_session_streak',
+      label: 'feedback:kimkon1011/app#13',
+      message: '2 日連続失敗。判断してください',
+      expectation: null
+    });
+  } finally { removeDir(home); }
+});
+
 test('scheduled task の起動拒否・時間超過・ログ未生成を判定する', () => {
   const now = new Date('2026-09-10T12:00:00.000Z');
   const expectation = { task: 'OrgiastNightlyBatch', maxRunHours: 5, label: '夜間バッチ' };

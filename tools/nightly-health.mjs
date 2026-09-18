@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 import { getScheduledTaskInfo } from './lib/scheduled-task.mjs';
+import { runAutoSessionStreakWatch } from './auto-session-streak-watch.mjs';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_NOTIFICATION_ITEMS = 12;
@@ -290,7 +291,8 @@ export async function runNightlyHealth({
   platform = getPlatform(),
   settingsPath = path.join(home, '.claude', 'settings.json'),
   baselinePath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'nightly-health-baseline.json'),
-  scheduledTaskInfo = getScheduledTaskInfo
+  scheduledTaskInfo = getScheduledTaskInfo,
+  streakWatch = runAutoSessionStreakWatch
 } = {}) {
   const dirname = path.dirname(fileURLToPath(import.meta.url));
   expectations ??= readJson(path.join(dirname, 'nightly-health-expectations.json'), []);
@@ -304,6 +306,15 @@ export async function runNightlyHealth({
   const logFiles = fs.existsSync(logsDir)
     ? fs.readdirSync(logsDir).filter((file) => file.endsWith('.log'))
     : [];
+
+  try {
+    const streakResult = await streakWatch({ home, now, dryRun });
+    for (const item of streakResult.detected) {
+      anomalies.push({ type: 'auto_session_streak', label: item.jobKey, message: item.message });
+    }
+  } catch (error) {
+    anomalies.push({ type: 'auto_session_streak', label: 'auto-session 連続失敗監視', message: `監視処理に失敗: ${error.message || error}` });
+  }
 
   for (const exp of expectations) {
     let matches = [];

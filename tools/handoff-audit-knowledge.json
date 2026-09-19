@@ -6,5 +6,6 @@
   { "pattern": "Discord チャンネル ID が要る", "route": "user に聞かず tools/discord-channel-id.mjs で台帳から取得", "confidence": "high", "source": "§2.6.1" },
   { "pattern": "API キー/接続文字列/ID が要る", "route": "過去 transcript・.env.local・production bundle・keyserve から復元。user に再聞き禁止", "confidence": "high", "source": "feedback-credentials-never-reask-universal" },
   { "pattern": "GAS の関数実行が要る", "route": "clasp run / コマンドキュー経由で Claude 側から実行。『▶実行してください』は違反", "confidence": "high", "source": "§1.4" },
-  { "pattern": "permission 分類器で自動経路が止まった", "route": "推測で結論を出さない。『未確認』＋user 作業なしの代替案を提示。恒久策は settings.json の許可ルール/DWD スコープ追加を kim に1回だけ提案", "confidence": "high", "source": "2026-09-10" }
+  { "pattern": "permission 分類器で自動経路が止まった", "route": "推測で結論を出さない。『未確認』＋user 作業なしの代替案を提示。恒久策は settings.json の許可ルール/DWD スコープ追加を kim に1回だけ提案", "confidence": "high", "source": "2026-09-10" },
+  { "pattern": "Drive 上の資料から画像を抽出する", "route": "Drive MCP の read_file_content は不要。DWD(kim impersonate / drive scope) で Drive API v3 を直に叩く。画像ファイルと PDF は files.get?alt=media、Google Doc は files.export?mimeType=application/zip の images/*、Slides は pptx export の ppt/media/* を **中央ディレクトリ経由**で取り出す（export zip はストリーミング形式でローカルヘッダのサイズが 0 のため、ローカルヘッダ走査では中身が取れない）。Slides の image/png export は 400 非対応、Docs API は本 SA プロジェクトで無効(403)", "confidence": "high", "source": "2026-09-20 実測: Doc「支柱を作ってほしい」images/image1.jpg 60439B(ffd8ff) / Slides ppt/media/image1.jpg 5957B(ffd8ff) / JPEG 単体 69615B / PDF %PDF-" }
 ]

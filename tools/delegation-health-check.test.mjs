@@ -85,6 +85,7 @@ test('emptyOutputReason は timeout・終了コード・原因不明を分類す
   assert.equal(emptyOutputReason({ secs: 300 }), 'timeout');
   assert.equal(emptyOutputReason({ secs: 600, timedOut: false, status: 1 }), 'exit_1');
   assert.equal(emptyOutputReason({ status: 1, stderrTail: 'failed to lookup address information' }), 'infra_transient');
+  assert.equal(emptyOutputReason({ status: 1, stderrTail: 'Not inside a trusted directory and --skip-git-repo-check was not specified.' }), 'untrusted_cwd');
   assert.equal(emptyOutputReason({ status: 1 }), 'exit_1');
   // 起動失敗は「出力ゼロ」ではなく「そもそも走っていない」。exit_3 に埋もれさせない。
   assert.equal(emptyOutputReason({ launched: false, status: 3, secs: 0 }), 'launch_failed');
@@ -108,6 +109,14 @@ test('起動失敗と本物の出力ゼロが混在しても codex_empty_output 
   const ids = findings.map((item) => item.id);
   assert.deepEqual(ids, ['codex_launch_failed', 'codex_empty_output']);
   assert.deepEqual(findings.find((item) => item.id === 'codex_empty_output').evidence, ['1件', 'exit_1(1件)', 'インフラ/起動失敗で除外 1件']);
+});
+
+test('信頼されていない cwd の出力ゼロは原因を隠さず起票する', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, status: 1, stderrTail: 'Not inside a trusted directory and --skip-git-repo-check was not specified.' }));
+  const finding = collectFindings({ home: dir, now: NOW, codexUsedPercent: null })[0];
+  assert.equal(finding.id, 'codex_empty_output');
+  assert.ok(finding.evidence.includes('untrusted_cwd(1件)'));
 });
 
 test('インフラ起因だけの出力ゼロは codex_empty_output に数えない', () => {

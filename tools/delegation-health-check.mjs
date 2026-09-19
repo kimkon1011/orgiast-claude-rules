@@ -73,6 +73,7 @@ export function emptyOutputReason(row) {
   // no_output に混ぜると原因が埋もれて同 id が永久に消えない（2026-09-16 診断）。
   if (row?.launched === false) return 'launch_failed';
   if (INFRA_TRANSIENT.test(String(row?.stderrTail || ''))) return 'infra_transient';
+  if (/Not inside a trusted directory/.test(String(row?.stderrTail || ''))) return 'untrusted_cwd';
   const status = Number(row?.status);
   if (Number.isFinite(status) && status !== 0) return `exit_${status}`;
   return 'no_output';

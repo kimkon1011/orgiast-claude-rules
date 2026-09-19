@@ -46,6 +46,22 @@ export function buildCodexExecArgs({ slug = SOL, effort, review = false } = {}) 
   return ['exec', '-m', slug, ...(effort ? ['-c', `model_reasoning_effort="${effort}"`] : []), '-s', review ? 'read-only' : 'workspace-write', '-'];
 }
 
+export function isInsideGitRepo(cwd, exists = fs.existsSync) {
+  let current = path.resolve(cwd);
+  while (true) {
+    if (exists(path.join(current, '.git'))) return true;
+    const parent = path.dirname(current);
+    if (parent === current) return false;
+    current = parent;
+  }
+}
+
+export function wslCodexArgs({ distro, cwd, codexArgs, inGitRepo }) {
+  const args = [...codexArgs];
+  if (inGitRepo === false) args.splice(-1, 0, '--skip-git-repo-check');
+  return ['-d', distro, '--cd', cwd, '--', 'codex', ...args];
+}
+
 export function needsWorktreeRepair(gitFileContent) {
   return /^gitdir:\s*[A-Za-z]:/i.test(String(gitFileContent ?? '').trim());
 }
@@ -505,6 +521,7 @@ function recordUsage(result, modelName, seconds, provider = 'codex', attempts = 
       launched: result?.launched !== false,
       timedOut: result?.timedOut === true,
       status: result?.status ?? null,
+      cwd,
       stderrTail: String(result?.stderr || '').replace(/\s+/g, ' ').trim().slice(-200),
       fastFail: result?.timedOut !== true && Number(result?.status) !== 0 && (result?.outputChars || 0) === 0,
       attempts,
@@ -562,7 +579,7 @@ async function launchCodex(codexArgs) {
       } catch (error) {
         if (error?.code !== 'ENOENT') console.error(`⚠️ worktree の gitdir 確認に失敗しました（処理は続行します）: ${error?.message ?? error}`);
       }
-      result = await execute('wsl', ['-d', distro, '--cd', cwd, '--', 'codex', ...codexArgs]);
+      result = await execute('wsl', wslCodexArgs({ distro, cwd, codexArgs, inGitRepo: isInsideGitRepo(cwd) }));
     }
     else {
       console.error(`🚨 ${failureReason}`);
@@ -575,13 +592,13 @@ async function launchCodex(codexArgs) {
       }
       console.error('⚠️ WSL 経路が使えないため、--allow-native の指定によりネイティブ Windows codex で実行します。\nWindows 版は read-only サンドボックス固定でファイルを書けない既知の不具合(openai/codex#35428)があり、編集が保存されない可能性が高い。');
       const nativeArgs = [...codexArgs];
-      if (!fs.existsSync(path.join(cwd, '.git'))) nativeArgs.splice(-1, 0, '--skip-git-repo-check');
+      if (!isInsideGitRepo(cwd)) nativeArgs.splice(-1, 0, '--skip-git-repo-check');
       result = await execute('codex', nativeArgs, { cwd });
     }
   } else {
     if (process.platform === 'win32') console.error('⚠️ --force-native によりネイティブ Windows codex で実行します。編集が保存されない可能性があります');
     const nativeArgs = [...codexArgs];
-    if (!fs.existsSync(path.join(cwd, '.git'))) nativeArgs.splice(-1, 0, '--skip-git-repo-check');
+    if (!isInsideGitRepo(cwd)) nativeArgs.splice(-1, 0, '--skip-git-repo-check');
     result = await execute('codex', nativeArgs, { cwd });
   }
 

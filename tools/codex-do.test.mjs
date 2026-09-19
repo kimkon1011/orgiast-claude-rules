@@ -762,7 +762,7 @@ test('起動に成功した行は launched:true で記録される', (t) => {
   assert.equal(rows[0].launched, true);
 });
 
-const { decideCodexLane, buildCodexExecArgs, normalizeCodexModel } = await import('./codex-do.mjs');
+const { decideCodexLane, buildCodexExecArgs, isInsideGitRepo, normalizeCodexModel, wslCodexArgs } = await import('./codex-do.mjs');
 const ASTRA = 'gpt-6-astra', SOL = 'gpt-5.6-sol';
 for (const [name, input, slug, reason] of [
   ['explicit model wins', { model: 'sol', lane: 'astra' }, SOL, 'explicit_model'],
@@ -803,6 +803,24 @@ test('buildCodexExecArgs: model, effort, sandbox and stdin without spaces', () =
   assert.deepEqual(args, ['exec', '-m', ASTRA, '-c', 'model_reasoning_effort="high"', '-s', 'workspace-write', '-']);
   assert.ok(args.every((arg) => !/\s/.test(arg)));
   assert.deepEqual(buildCodexExecArgs({ slug: SOL, review: true }), ['exec', '-m', SOL, '-s', 'read-only', '-']);
+});
+
+test('isInsideGitRepo: cwd または祖先の .git を検出する', () => {
+  const root = path.resolve('/virtual/repo');
+  const exists = (candidate) => candidate === path.join(root, '.git');
+  assert.equal(isInsideGitRepo(root, exists), true);
+  assert.equal(isInsideGitRepo(path.join(root, 'packages', 'app'), exists), true);
+  assert.equal(isInsideGitRepo(path.resolve('/virtual/plain'), exists), false);
+  assert.equal(isInsideGitRepo(path.resolve('/elsewhere/deep/path'), () => false), false);
+});
+
+test('wslCodexArgs: 非リポジトリだけ stdin マーカー直前に skip フラグを入れる', () => {
+  const cwd = '/work/task';
+  const codexArgs = buildCodexExecArgs({ slug: SOL });
+  assert.deepEqual(wslCodexArgs({ distro: 'Ubuntu', cwd, codexArgs, inGitRepo: false }),
+    ['-d', 'Ubuntu', '--cd', cwd, '--', 'codex', 'exec', '-m', SOL, '-s', 'workspace-write', '--skip-git-repo-check', '-']);
+  assert.deepEqual(wslCodexArgs({ distro: 'Ubuntu', cwd, codexArgs, inGitRepo: true }),
+    ['-d', 'Ubuntu', '--cd', cwd, '--', 'codex', ...codexArgs]);
 });
 
 test('CLI validates routing options and dry-run reports model/effort', () => {
@@ -944,7 +962,7 @@ console.log('done');
   assert.equal(calls.length, 3);
   const expectedArgs = (options) => {
     const args = buildCodexExecArgs(options);
-    args.splice(-1, 0, '--skip-git-repo-check');
+    if (!isInsideGitRepo(home)) args.splice(-1, 0, '--skip-git-repo-check');
     return args;
   };
   assert.deepEqual(calls[0].args, expectedArgs({ slug: ASTRA, effort: 'high' }));

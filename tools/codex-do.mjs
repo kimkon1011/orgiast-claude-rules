@@ -321,6 +321,45 @@ export function wslCodexLaunchPlan({ distroFound, codexPresent, versionOk, insta
   return allowNative ? 'native' : 'abort';
 }
 
+// qwen CLI(@qwen-code/qwen-code、npm package)は deepseek/openrouter-free フォールバック
+// (kind:'qwen')が spawn する外部バイナリ。未導入の機体では execute('qwen', ...) が ENOENT
+// で失敗し、Windows の shell:true 経由では child.on('error') が期待通り発火しないことがある
+// ため、0ファイル変更のまま status 0/1 を返す無音故障になっていた(2026-09-21 実測)。
+// WSL codex(wslCodexLaunchPlan)と同じ「本当に無いときだけ1回インストールする」パターンで
+// 自己修復する。戻り値: 'run'=そのまま使う / 'install'=1回だけ自動インストールを試す /
+// 'unavailable'=インストール済み試行後もまだ無い(諦める)。
+export function qwenLaunchPlan({ present, installAttempted }) {
+  if (present) return 'run';
+  if (!installAttempted) return 'install';
+  return 'unavailable';
+}
+
+// プロセス内メモ。deepseek・openrouter-free はどちらも kind:'qwen' なので、同じ
+// codex-do.mjs 実行中に両方がこの関数を呼んでも、プローブ＆インストール試行は1回だけにする。
+let qwenAvailability = null;
+
+// テスト専用: モジュールスコープのメモをリセットする。本番コードパスからは呼ばない。
+export function resetQwenAvailabilityForTests() {
+  qwenAvailability = null;
+}
+
+export function ensureQwenAvailable(env = process.env, { run = spawnSync } = {}) {
+  if (qwenAvailability !== null) return qwenAvailability;
+  const probe = () => run('qwen', ['--version'], { shell: process.platform === 'win32', windowsHide: true, timeout: 10000 });
+  let present = probe().status === 0;
+  const plan = qwenLaunchPlan({ present, installAttempted: false });
+  if (plan === 'install') {
+    console.error('[codex-do] qwen CLI が見つからないため自動インストールを試します');
+    const installed = run('npm', ['install', '-g', '@qwen-code/qwen-code', '--no-fund', '--no-audit'], { shell: process.platform === 'win32', windowsHide: true, stdio: 'inherit', timeout: 120000 });
+    present = probe().status === 0;
+    if (!present) {
+      console.error(`[codex-do] qwen CLI の自動インストールに失敗しました(exit ${installed.status})。手動で npm install -g @qwen-code/qwen-code を実行してください`);
+    }
+  }
+  qwenAvailability = present;
+  return qwenAvailability;
+}
+
 if (isEntry(import.meta.url)) {
 
 const args = process.argv.slice(2);
@@ -704,6 +743,10 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable) {
       const backendTimeout = fallbackBackendTimeoutSecs(timeoutSeconds);
       for (const backend of backends) {
         lastBackend = backend;
+        if (backend.kind === 'qwen' && !ensureQwenAvailable()) {
+          console.error(`[codex-do] backend=${backend.name} qwen CLI が使えないため次へ`);
+          continue;
+        }
         console.log(`[codex-do] fallback backend=${backend.name} model=${backend.model}`);
         result = backend.kind === 'gemini'
           ? await execute('gemini', buildGeminiArgs({ model: backend.model }), {

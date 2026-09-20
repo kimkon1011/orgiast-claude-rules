@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { needsWorktreeRepair, detectQuotaLimit, shouldFlagEmptyFallbackDiff, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, isBackendExhausted, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS } = await import('./codex-do.mjs');
+const { needsWorktreeRepair, detectQuotaLimit, shouldFlagEmptyFallbackDiff, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, isBackendExhausted, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, qwenLaunchPlan, ensureQwenAvailable, resetQwenAvailabilityForTests } = await import('./codex-do.mjs');
 
 function run(args, options = {}) {
   return spawnSync(process.execPath, [tool, ...args], {
@@ -726,6 +726,74 @@ test('wslCodexLaunchPlan: allowNative を明示したときだけネイティブ
   assert.equal(wslCodexLaunchPlan({ distroFound: false, codexPresent: false, versionOk: false, installAttempted: false, retried: false, allowNative: true }), 'native');
   assert.equal(wslCodexLaunchPlan({ distroFound: true, codexPresent: true, versionOk: false, installAttempted: false, retried: true, allowNative: true }), 'native');
   assert.equal(wslCodexLaunchPlan({ distroFound: true, codexPresent: false, versionOk: false, installAttempted: true, retried: false, allowNative: true }), 'native');
+});
+
+// qwenLaunchPlan: deepseek/openrouter-free(kind:'qwen')が spawn する外部バイナリ qwen が
+// 未導入の機体で自己修復するための純粋な状態遷移判定(wslCodexLaunchPlan と同じ形)。
+test('qwenLaunchPlan: 既に在るならそのまま使う', () => {
+  assert.equal(qwenLaunchPlan({ present: true, installAttempted: false }), 'run');
+});
+
+test('qwenLaunchPlan: 無くてまだインストールを試していなければ1回だけ試す', () => {
+  assert.equal(qwenLaunchPlan({ present: false, installAttempted: false }), 'install');
+});
+
+test('qwenLaunchPlan: インストールを試してもまだ無ければ諦める', () => {
+  assert.equal(qwenLaunchPlan({ present: false, installAttempted: true }), 'unavailable');
+});
+
+test('ensureQwenAvailable: 既に qwen が在ればインストールを試みず true を返す', () => {
+  resetQwenAvailabilityForTests();
+  const calls = [];
+  const run = (cmd, args) => {
+    calls.push([cmd, args]);
+    return { status: 0 };
+  };
+  const result = ensureQwenAvailable(process.env, { run });
+  assert.equal(result, true);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0], ['qwen', ['--version']]);
+});
+
+test('ensureQwenAvailable: 無ければ1回だけ自動インストールし、成功したら true を返す', () => {
+  resetQwenAvailabilityForTests();
+  const calls = [];
+  const run = (cmd, args) => {
+    calls.push([cmd, args]);
+    if (cmd === 'qwen') {
+      // 1回目のプローブは失敗、インストール後の再プローブは成功。
+      const alreadyInstalled = calls.filter(([c]) => c === 'qwen').length > 1;
+      return { status: alreadyInstalled ? 0 : 1 };
+    }
+    return { status: 0 };
+  };
+  const result = ensureQwenAvailable(process.env, { run });
+  assert.equal(result, true);
+  assert.deepEqual(calls.map(([cmd]) => cmd), ['qwen', 'npm', 'qwen']);
+  assert.deepEqual(calls[1], ['npm', ['install', '-g', '@qwen-code/qwen-code', '--no-fund', '--no-audit']]);
+});
+
+test('ensureQwenAvailable: インストールに失敗したら false を返し、npm は1回しか呼ばない', () => {
+  resetQwenAvailabilityForTests();
+  const calls = [];
+  const run = (cmd, args) => {
+    calls.push([cmd, args]);
+    return { status: 1 };
+  };
+  const result = ensureQwenAvailable(process.env, { run });
+  assert.equal(result, false);
+  assert.deepEqual(calls.map(([cmd]) => cmd), ['qwen', 'npm', 'qwen']);
+});
+
+test('ensureQwenAvailable: 同一プロセス内では2回目以降プローブし直さない(deepseek/openrouter-free の二重実行対策)', () => {
+  resetQwenAvailabilityForTests();
+  const calls = [];
+  const run = (cmd) => { calls.push(cmd); return { status: 0 }; };
+  const first = ensureQwenAvailable(process.env, { run });
+  const second = ensureQwenAvailable(process.env, { run });
+  assert.equal(first, true);
+  assert.equal(second, true);
+  assert.equal(calls.length, 1, 'メモ化により2回目は spawn しない');
 });
 
 test('WSL codex のプローブはコールドスタートを待てる', () => {

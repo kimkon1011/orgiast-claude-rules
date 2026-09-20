@@ -1,14 +1,80 @@
 [
-  { "pattern": "Google 系プロパティ(GA4/Search Console/GTM)の有無確認", "route": "DWD サービスアカウント(kim impersonate)で analyticsadmin/webmasters/tagmanager API を直接照会（tools/google-property-check.mjs、読み取り専用・追加権限不要）。Claude 履歴の Grep は証拠にならない。分類器で止まるなら『未確認』と書く。**2026-09-20 実測**: GA4 ok(accounts 17) / Search Console ok(sites 12) は追加作業ゼロで通る。**GTM だけ errorKind=scope_not_delegated(unauthorized_client)** = Admin Console の DWD に tagmanager.readonly が未登録。GTM を読む場合のみ kim の1アクション（Admin Console → ドメイン全体の委任 → SA client_id に scope 追加）が要る", "confidence": "high", "source": "2026-09-10 TETSUKO Search Console 誤判定 / 2026-09-20 実測" },
-  { "pattern": "Search Console の所有者追加", "route": "API でのユーザー追加は無い（searchconsole v1 に user/permission の resource が存在しない）。siteVerification API の getToken でトークン発行まではできるが、insert は検証を試みるだけで、トークンをサイトに置くのは配信している側の作業＝手渡しであり kim 操作ゼロにはならない。同一データが見えるのは同一プロパティ識別子のときだけ（URLプレフィックス型とドメイン型は別プロパティ＝別データ）。検証で得られるのは SITE_OWNER＝権限昇格なので、読み取り目的なら過剰", "confidence": "high", "source": "2026-09-10 起票 / 2026-09-19 Google Discovery 一次証拠で検証・是正" },
-  { "pattern": "社内・グループ会社・スタッフ宛の連絡文", "route": "Gmail 下書きにしない。チャット本文に宛先/用件/本文を完成形で表示（kim はリモートデスクトップ/LINE/Discord で渡す）。Discord MCP が使えるなら Discord 送信可", "confidence": "high", "source": "2026-09-11 kim 厳命" },
-  { "pattern": "Drive にファイル/Sheet を作る", "route": "SA 直では quota 0 で失敗。DWD で kim を impersonate（subject）して作成", "confidence": "high", "source": "2026-06-29 feedback-sa-drive-dwd-pattern" },
-  { "pattern": "Discord チャンネル ID が要る", "route": "user に聞かず tools/discord-channel-id.mjs で台帳から取得", "confidence": "high", "source": "§2.6.1" },
-  { "pattern": "API キー/接続文字列/ID が要る", "route": "過去 transcript・.env.local・production bundle・keyserve から復元。user に再聞き禁止", "confidence": "high", "source": "feedback-credentials-never-reask-universal" },
-  { "pattern": "GAS の関数実行が要る", "route": "clasp run / コマンドキュー経由で Claude 側から実行。『▶実行してください』は違反", "confidence": "high", "source": "§1.4" },
-  { "pattern": "permission 分類器で自動経路が止まった", "route": "推測で結論を出さない。『未確認』＋user 作業なしの代替案を提示。恒久策は settings.json の許可ルール/DWD スコープ追加を kim に1回だけ提案。**ただし『外部 API が使えない』と一般化しない**: 2026-09-20 実測では defaultMode=auto でも node -e fetch / curl / WebFetch(googleapis) / node tools/* の読み取り照会は 4 経路すべて拒否なしで通った。拒否はホスト名ではなく操作カテゴリ（Credential Exploration / Materialization / Permission Grant / Production Deploy / Merge Without Review 等）に対して起きる。まず読み取りで直接照会を試し、止まったらその操作だけを最小単位に分解する。許可を広げる変更は分類器 [Permission Grant]/[Self-Modification] で止まるので人が行う", "confidence": "high", "source": "2026-09-10 起票 / 2026-09-20 実測で範囲を確定（docs/classifier-denial-external-api-route.md）" },
-  { "pattern": "Drive 上の旧版ファイルをゴミ箱へ", "route": "**検出は Claude 側で可能 / 削除だけは classifier が拒否（2026-09-20 実測）**。検出=DWD(kim impersonate / drive スコープ)で Drive API v3 `files.get`/`files.list`（`tools/lib/drive-auth.mjs` の `getDriveToken`/`driveApi`）。**落とし穴: 委任済みスコープは `https://www.googleapis.com/auth/drive` のみ。`drive.readonly` を要求するとトークン交換の時点で `unauthorized_client`**（Admin Console の DWD 未登録）。trash（PATCH `{\"trashed\":true}`）は同カテゴリの連続で拒否（[Cloud Storage Mass Delete]×2・[Modify Shared Resources]×1）＝**削除候補を列挙するだけの読み取り専用スクリプトでも同カテゴリで拒否された**。恒久策は settings.json への許可ルール追加を kim が1回行うこと（分類器 [Permission Grant] のため Claude は自己追加不可）。**削除が不要な用件では手渡ししない**: 「どのファイルが旧版か」の特定までは Claude が済ませ、対象 ID・名前・親フォルダを完成形で提示する（`capabilities.canTrash` も API で確認できる）", "confidence": "high", "source": "2026-09-20 実測（handoff-audit:64cb59ef6fe88486）。元の手渡しは 2026-09-18 セッション 009374eb「③ 旧版2つ（暫定版・確定版）をゴミ箱へ（削除は classifier に阻まれ…）」で、その記述は本実測で裏付けられた" },
-  { "pattern": "Drive 上の資料から画像を抽出する", "route": "Drive MCP の read_file_content は不要。DWD(kim impersonate / drive scope) で Drive API v3 を直に叩く。画像ファイルと PDF は files.get?alt=media、Google Doc は files.export?mimeType=application/zip の images/*、Slides は pptx export の ppt/media/* を **中央ディレクトリ経由**で取り出す（export zip はストリーミング形式でローカルヘッダのサイズが 0 のため、ローカルヘッダ走査では中身が取れない）。Slides の image/png export は 400 非対応、Docs API は本 SA プロジェクトで無効(403)", "confidence": "high", "source": "2026-09-20 実測: Doc「支柱を作ってほしい」images/image1.jpg 60439B(ffd8ff) / Slides ppt/media/image1.jpg 5957B(ffd8ff) / JPEG 単体 69615B / PDF %PDF-" },
- { "pattern": "外部顧客宛の訂正メール送信要否", "route": "**Gmail MCP は本環境に無い（mcpServers=gemini-cli のみ）が、DWD 経由の読み取りは既存ツールで通る**。`node tools/gmail-search.mjs --user seisaku-team@orgiast.jp --query \"<検索式>\" [--body]`（`tools/lib/drive-auth.mjs` の `getDriveToken({scope:'https://www.googleapis.com/auth/gmail.readonly', impersonate:user})`）。**落とし穴: `--user kim@orgiast.jp` では 0 件**。学会協賛ナビの顧客メールは seisaku-team@ から送信されており、既定値（--user 省略時）が正しい。`gmail.readonly` は DWD 委任済みで素通りした（`drive.readonly` が unauthorized_client で落ちたのとは対照的）。**要否は推測せず送信済み本文を実物で読んで判定する**: 2026-09-18 の AnnJi 宛 1 通（id 1a0b3fb255d272dd, SENT）だけが同一メール内で和文30%・英文15%と矛盾しており、同種の他2通（genodive/boehringer）は 30% で正しかった＝影響範囲は 1 通 1 名。誤りは顧客に有利な方向（15%<30%）なので**要**と判定。訂正下書き（id 1a0b41220fd4a5d7, DRAFT・未送信）が完成済みで存在する。**送信はしない**（本レーンの禁止事項）。送信操作の分類器通過可否は未確認", "confidence": "high", "source": "2026-09-20 実測（handoff-audit:06b13bfb2a89b62b）。元の手渡しは 2026-09-18 セッション e03135bc「AnnJi 宛1通のみ末尾英文が旧料率15%のまま…訂正メールの下書きを作成して手渡した」。詳細は docs/gmail-correction-email-necessity.md" },
-  { "pattern": "DWD 委任スコープの追加（Admin Console のドメイン全体の委任に scope を足す）", "route": "API 不可。admin/directory_v1 の Discovery を実測すると resources に delegation が無く、DWD のスコープ一覧を変更する公開 API は存在しない（2026-09-20 実測。isDelegatedAdmin は管理者ロールの話で別物）＝Admin Console は人にしかできない。**ただし手渡しリストに載せる前に必須性を判定する**: 『GTM を読む予定があれば』等の任意項目は、委任済みスコープで目的が既に達成されているなら載せない（docs/memory に『必要になったら』として残すだけ）。①Claude に実行可能か ②目的に必須か、の両方 Yes のときだけ手渡しする", "confidence": "high", "source": "2026-09-20 handoff-regret-gate 実測 / memory feedback-optional-handoff-manufactures-work" }
+  {
+    "pattern": "Google 系プロパティ(GA4/Search Console/GTM)の有無確認",
+    "route": "DWD サービスアカウント(kim impersonate)で analyticsadmin/webmasters/tagmanager API を直接照会（tools/google-property-check.mjs、読み取り専用・追加権限不要）。Claude 履歴の Grep は証拠にならない。分類器で止まるなら『未確認』と書く。**2026-09-20 実測**: GA4 ok(accounts 17) / Search Console ok(sites 12) は追加作業ゼロで通る。**GTM だけ errorKind=scope_not_delegated(unauthorized_client)** = Admin Console の DWD に tagmanager.readonly が未登録。GTM を読む場合のみ kim の1アクション（Admin Console → ドメイン全体の委任 → SA client_id に scope 追加）が要る",
+    "confidence": "high",
+    "source": "2026-09-10 TETSUKO Search Console 誤判定 / 2026-09-20 実測"
+  },
+  {
+    "pattern": "Search Console の所有者追加",
+    "route": "API でのユーザー追加は無い（searchconsole v1 に user/permission の resource が存在しない）。siteVerification API の getToken でトークン発行まではできるが、insert は検証を試みるだけで、トークンをサイトに置くのは配信している側の作業＝手渡しであり kim 操作ゼロにはならない。同一データが見えるのは同一プロパティ識別子のときだけ（URLプレフィックス型とドメイン型は別プロパティ＝別データ）。検証で得られるのは SITE_OWNER＝権限昇格なので、読み取り目的なら過剰",
+    "confidence": "high",
+    "source": "2026-09-10 起票 / 2026-09-19 Google Discovery 一次証拠で検証・是正"
+  },
+  {
+    "pattern": "社内・グループ会社・スタッフ宛の連絡文",
+    "route": "Gmail 下書きにしない。チャット本文に宛先/用件/本文を完成形で表示（kim はリモートデスクトップ/LINE/Discord で渡す）。Discord MCP が使えるなら Discord 送信可",
+    "confidence": "high",
+    "source": "2026-09-11 kim 厳命"
+  },
+  {
+    "pattern": "Drive にファイル/Sheet を作る",
+    "route": "SA 直では quota 0 で失敗。DWD で kim を impersonate（subject）して作成",
+    "confidence": "high",
+    "source": "2026-06-29 feedback-sa-drive-dwd-pattern"
+  },
+  {
+    "pattern": "Discord チャンネル ID が要る",
+    "route": "user に聞かず tools/discord-channel-id.mjs で台帳から取得",
+    "confidence": "high",
+    "source": "§2.6.1"
+  },
+  {
+    "pattern": "API キー/接続文字列/ID が要る",
+    "route": "過去 transcript・.env.local・production bundle・keyserve から復元。user に再聞き禁止",
+    "confidence": "high",
+    "source": "feedback-credentials-never-reask-universal"
+  },
+  {
+    "pattern": "GAS の関数実行が要る",
+    "route": "clasp run / コマンドキュー経由で Claude 側から実行。『▶実行してください』は違反",
+    "confidence": "high",
+    "source": "§1.4"
+  },
+  {
+    "pattern": "permission 分類器で自動経路が止まった",
+    "route": "推測で結論を出さない。『未確認』＋user 作業なしの代替案を提示。恒久策は settings.json の許可ルール/DWD スコープ追加を kim に1回だけ提案。**ただし『外部 API が使えない』と一般化しない**: 2026-09-20 実測では defaultMode=auto でも node -e fetch / curl / WebFetch(googleapis) / node tools/* の読み取り照会は 4 経路すべて拒否なしで通った。拒否はホスト名ではなく操作カテゴリ（Credential Exploration / Materialization / Permission Grant / Production Deploy / Merge Without Review 等）に対して起きる。まず読み取りで直接照会を試し、止まったらその操作だけを最小単位に分解する。許可を広げる変更は分類器 [Permission Grant]/[Self-Modification] で止まるので人が行う",
+    "confidence": "high",
+    "source": "2026-09-10 起票 / 2026-09-20 実測で範囲を確定（docs/classifier-denial-external-api-route.md）"
+  },
+  {
+    "pattern": "Drive 上の旧版ファイルをゴミ箱へ",
+    "route": "**検出は Claude 側で可能 / 削除だけは classifier が拒否（2026-09-20 実測）**。検出=DWD(kim impersonate / drive スコープ)で Drive API v3 `files.get`/`files.list`（`tools/lib/drive-auth.mjs` の `getDriveToken`/`driveApi`）。**落とし穴: 委任済みスコープは `https://www.googleapis.com/auth/drive` のみ。`drive.readonly` を要求するとトークン交換の時点で `unauthorized_client`**（Admin Console の DWD 未登録）。trash（PATCH `{\"trashed\":true}`）は同カテゴリの連続で拒否（[Cloud Storage Mass Delete]×2・[Modify Shared Resources]×1）＝**削除候補を列挙するだけの読み取り専用スクリプトでも同カテゴリで拒否された**。恒久策は settings.json への許可ルール追加を kim が1回行うこと（分類器 [Permission Grant] のため Claude は自己追加不可）。**削除が不要な用件では手渡ししない**: 「どのファイルが旧版か」の特定までは Claude が済ませ、対象 ID・名前・親フォルダを完成形で提示する（`capabilities.canTrash` も API で確認できる）",
+    "confidence": "high",
+    "source": "2026-09-20 実測（handoff-audit:64cb59ef6fe88486）。元の手渡しは 2026-09-18 セッション 009374eb「③ 旧版2つ（暫定版・確定版）をゴミ箱へ（削除は classifier に阻まれ…）」で、その記述は本実測で裏付けられた"
+  },
+  {
+    "pattern": "Drive 上の資料から画像を抽出する",
+    "route": "Drive MCP の read_file_content は不要。DWD(kim impersonate / drive scope) で Drive API v3 を直に叩く。画像ファイルと PDF は files.get?alt=media、Google Doc は files.export?mimeType=application/zip の images/*、Slides は pptx export の ppt/media/* を **中央ディレクトリ経由**で取り出す（export zip はストリーミング形式でローカルヘッダのサイズが 0 のため、ローカルヘッダ走査では中身が取れない）。Slides の image/png export は 400 非対応、Docs API は本 SA プロジェクトで無効(403)",
+    "confidence": "high",
+    "source": "2026-09-20 実測: Doc「支柱を作ってほしい」images/image1.jpg 60439B(ffd8ff) / Slides ppt/media/image1.jpg 5957B(ffd8ff) / JPEG 単体 69615B / PDF %PDF-"
+  },
+  {
+    "pattern": "外部顧客宛の訂正メール送信要否",
+    "route": "**Gmail MCP は本環境に無い（mcpServers=gemini-cli のみ）が、DWD 経由の読み取りは既存ツールで通る**。`node tools/gmail-search.mjs --user seisaku-team@orgiast.jp --query \"<検索式>\" [--body]`（`tools/lib/drive-auth.mjs` の `getDriveToken({scope:'https://www.googleapis.com/auth/gmail.readonly', impersonate:user})`）。**落とし穴: `--user kim@orgiast.jp` では 0 件**。学会協賛ナビの顧客メールは seisaku-team@ から送信されており、既定値（--user 省略時）が正しい。`gmail.readonly` は DWD 委任済みで素通りした（`drive.readonly` が unauthorized_client で落ちたのとは対照的）。**要否は推測せず送信済み本文を実物で読んで判定する**: 2026-09-18 の AnnJi 宛 1 通（id 1a0b3fb255d272dd, SENT）だけが同一メール内で和文30%・英文15%と矛盾しており、同種の他2通（genodive/boehringer）は 30% で正しかった＝影響範囲は 1 通 1 名。誤りは顧客に有利な方向（15%<30%）なので**要**と判定。訂正下書き（id 1a0b41220fd4a5d7, DRAFT・未送信）が完成済みで存在する。**送信はしない**（本レーンの禁止事項）。送信操作の分類器通過可否は未確認",
+    "confidence": "high",
+    "source": "2026-09-20 実測（handoff-audit:06b13bfb2a89b62b）。元の手渡しは 2026-09-18 セッション e03135bc「AnnJi 宛1通のみ末尾英文が旧料率15%のまま…訂正メールの下書きを作成して手渡した」。詳細は docs/gmail-correction-email-necessity.md"
+  },
+  {
+    "pattern": "DWD 委任スコープの追加（Admin Console のドメイン全体の委任に scope を足す）",
+    "route": "API 不可。admin/directory_v1 の Discovery を実測すると resources に delegation が無く、DWD のスコープ一覧を変更する公開 API は存在しない（2026-09-20 実測。isDelegatedAdmin は管理者ロールの話で別物）＝Admin Console は人にしかできない。**ただし手渡しリストに載せる前に必須性を判定する**: 『GTM を読む予定があれば』等の任意項目は、委任済みスコープで目的が既に達成されているなら載せない（docs/memory に『必要になったら』として残すだけ）。①Claude に実行可能か ②目的に必須か、の両方 Yes のときだけ手渡しする",
+    "confidence": "high",
+    "source": "2026-09-20 handoff-regret-gate 実測 / memory feedback-optional-handoff-manufactures-work"
+  },
+  {
+    "pattern": "Google スプレッドシートの書き込み結果検証",
+    "route": "**既存権限で読み戻せる。kim に画面を見せて確認させる必要はない**（実測 2026-09-21）。対象 SS が SA に共有されていれば **SA 直**（key=`aujust-sales-automation/.gcp/sheets-sa.json`, scope=`https://www.googleapis.com/auth/spreadsheets.readonly`）で JWT を自己署名 → ① `GET /v4/spreadsheets/{id}?fields=properties.title,sheets.properties` でタブ名/gid/行列数、② `GET /v4/spreadsheets/{id}/values/{tab}!A1:BZ400?valueRenderOption=UNFORMATTED_VALUE` で全行。**検証は4点**: (a) 1行目が空白で2行目がヘッダーか (b) 書き込み行がヘッダー直下(3行目)に来ているか (c) 案件名列に重複が出ていないか (d) 列マッピング（ヘッダーごとの充足数 `filledPerCol` を出し、意図した列だけ埋まっているか）。**アプリ投入行の識別は「ステータス列が空 かつ 非空セルが 案件名+担当 の2つだけ」**（実装が deal_title / sales_owner / event_date しか書かないため。空欄列を空のままにするのが仕様）。**落とし穴: 「案件名の重複行がある」＝重複防止の失敗とは限らない。**同名でも担当・コマサイズが別の実案件がありうる（実測: デザイナー様用 行21/23 の `260120ESSEN_ＥＳキッチン株式会社様` は担当も平米数も別の2件）。重複防止は案件名の**完全一致**なので、同名別案件が2件あると3件目が `already` で弾かれる（正規化なし＝表記ゆれがあると逆に重複が増える）。判定は重複の有無ではなく**行の中身が別物か**で行う。実測スクリプト: `~/.claude/auto-session/runs/2026-09-21-11-sheets-sync-verify.mjs` / `2026-09-21-11-sheets-dup-probe.mjs`",
+    "confidence": "high",
+    "source": "2026-09-21 実測（handoff-audit:14f2bd38e35a58ce）。元の手渡しは 2026-09-18 セッション dd676e9e「Reブース案件を1件開いて、実際の運用に合っているか見てください」。詳細は docs/sheets-write-verification.md"
+  }
 ]

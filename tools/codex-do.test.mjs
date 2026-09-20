@@ -258,7 +258,7 @@ test('枠切れ発生時にフォールバックが成功した場合は 0 で�
     env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults), GEMINI_API_KEY: '', DEEPSEEK_API_KEY: 'sk-test' }
   });
   assert.equal(result.status, 0);
-  assert.match(result.stdout, /executor=fallback:deepseek/);
+  assert.match(result.stdout, /executor=fallback:cheap-code:deepseek/);
   assert.match(result.stderr, /Falling back to an agentic CLI/);
 });
 
@@ -276,7 +276,7 @@ test('第1フォールバックがタイムアウトしたら第2バックエン
     }
   });
   assert.equal(result.status, 0);
-  assert.match(result.stdout, /executor=fallback:deepseek/);
+  assert.match(result.stdout, /executor=fallback:cheap-code:deepseek/);
   assert.match(result.stderr, /タイムアウトしたため次のバックエンドへ/);
 });
 
@@ -289,7 +289,7 @@ test('Codex もフォールバック(Qwen Code) も失敗した場合は非ゼ�
     env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults), GEMINI_API_KEY: '', DEEPSEEK_API_KEY: 'sk-test' }
   });
   assert.equal(result.status, 12);
-  assert.match(result.stdout, /executor=fallback:deepseek/);
+  assert.match(result.stdout, /executor=fallback:cheap-code:deepseek/);
 });
 
 test('枠切れ発生時に DEEPSEEK_API_KEY が無ければフォールバックせず非ゼロで終了する', () => {
@@ -497,24 +497,28 @@ function withEnvKeysCleared(fn) {
   }
 }
 
-test('resolveFallbackBackends は既定で gemini-cli → deepseek → openrouter-free の順に置く', () => {
+test('resolveFallbackBackends は既定で gemini-cli → cheap-code:deepseek → cheap-code:glm の順に置く（kind:qwen は既定に出さない）', () => {
+  // 2026-09-21: deepseek/openrouter-free(kind:'qwen') は実在しない `qwen` バイナリを spawn するため
+  // 既定順から外した。既定は外部バイナリ不要の cheap-code 経路に統一する（[[project-tetsuko-growth-loop]]）。
   withEnvKeysCleared(() => {
     const dir = makeHomeWithEnv({
       'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n',
       'deepseek.env': 'DEEPSEEK_API_KEY=sk-ds-1\n',
+      'zai.env': 'ZAI_API_KEY=sk-zai-1\n',
       'gemini.env': 'GEMINI_API_KEY=sk-gemini-1\n'
     });
     const backends = resolveFallbackBackends(dir);
-    assert.deepEqual(backends.map(({ name }) => name), ['gemini-cli', 'deepseek', 'openrouter-free']);
-    assert.deepEqual(backends.map(({ kind }) => kind), ['gemini', 'qwen', 'qwen']);
+    assert.deepEqual(backends.map(({ name }) => name), ['gemini-cli', 'cheap-code:deepseek', 'cheap-code:glm']);
+    assert.deepEqual(backends.map(({ kind }) => kind), ['gemini', 'cheap-code', 'cheap-code']);
+    assert.ok(!backends.some((b) => b.kind === 'qwen'), '既定の並びに kind:qwen(実在しないqwenバイナリ依存)を含めない');
     assert.equal(backends[0].model, 'gemini-3.7-flash');
     assert.equal(backends[0].apiKey, 'sk-gemini-1');
-    assert.equal(backends[1].baseUrl, 'https://api.deepseek.com/v1');
-    assert.equal(backends[2].baseUrl, 'https://openrouter.ai/api/v1');
+    assert.equal(backends[1].provider, 'deepseek');
+    assert.equal(backends[2].provider, 'glm');
   });
 });
 
-test('resolveFallbackBackends は prefer-free でも残りを gemini-cli → deepseek の順に保つ', () => {
+test('resolveFallbackBackends は prefer-free でも cheap-code:deepseek → cheap-code:glm → gemini-cli の順に保つ', () => {
   withEnvKeysCleared(() => {
     const prev = process.env.CODEX_DO_PREFER_FREE;
     process.env.CODEX_DO_PREFER_FREE = '1';
@@ -522,10 +526,11 @@ test('resolveFallbackBackends は prefer-free でも残りを gemini-cli → dee
       const dir = makeHomeWithEnv({
         'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n',
         'deepseek.env': 'DEEPSEEK_API_KEY=sk-ds-1\n',
+        'zai.env': 'ZAI_API_KEY=sk-zai-1\n',
         'gemini.env': 'GEMINI_API_KEY=sk-gemini-1\n'
       });
       const backends = resolveFallbackBackends(dir);
-      assert.deepEqual(backends.map(({ name }) => name), ['openrouter-free', 'gemini-cli', 'deepseek']);
+      assert.deepEqual(backends.map(({ name }) => name), ['cheap-code:deepseek', 'cheap-code:glm', 'gemini-cli']);
     } finally {
       if (prev === undefined) delete process.env.CODEX_DO_PREFER_FREE;
       else process.env.CODEX_DO_PREFER_FREE = prev;
@@ -533,21 +538,22 @@ test('resolveFallbackBackends は prefer-free でも残りを gemini-cli → dee
   });
 });
 
-test('resolveFallbackBackends はキーが一部だけなら存在する分だけを順序どおり返す', () => {
+test('resolveFallbackBackends はキーが一部だけなら存在する分だけを順序どおり返す（openrouter単独は既定では無視される）', () => {
   withEnvKeysCleared(() => {
+    // openrouter-free(kind:'qwen') は既定順から外れているため、openrouterキーだけでは何も返らない。
+    // 明示的に使いたい機体は codex-fallback-order.json で 'openrouter-free' を指定する（下の別テストで検証済み）。
     const onlyOR = resolveFallbackBackends(makeHomeWithEnv({ 'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n' }));
-    assert.equal(onlyOR.length, 1);
-    assert.equal(onlyOR[0].name, 'openrouter-free');
+    assert.deepEqual(onlyOR, []);
 
     const onlyDS = resolveFallbackBackends(makeHomeWithEnv({ 'deepseek.env': 'DEEPSEEK_API_KEY=sk-ds-1\n' }));
     assert.equal(onlyDS.length, 1);
-    assert.equal(onlyDS[0].name, 'deepseek');
+    assert.equal(onlyDS[0].name, 'cheap-code:deepseek');
 
     const geminiAndOR = resolveFallbackBackends(makeHomeWithEnv({
       'gemini.env': 'GEMINI_API_KEY=sk-gemini-1\n',
       'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n'
     }));
-    assert.deepEqual(geminiAndOR.map(({ name }) => name), ['gemini-cli', 'openrouter-free']);
+    assert.deepEqual(geminiAndOR.map(({ name }) => name), ['gemini-cli']);
   });
 });
 
@@ -575,10 +581,13 @@ test('resolveFallbackBackends は codex-fallback-order.json があればその�
   });
 });
 
-test('resolveQwenBackends は CODEX_DO_FREE_MODEL で openrouter-free の model を上書きできる', () => {
+test('resolveQwenBackends は CODEX_DO_FREE_MODEL で openrouter-free の model を上書きできる（明示指定時）', () => {
+  // openrouter-free(kind:'qwen') は2026-09-21に既定順から外れたため、既定のキーだけでは出てこない。
+  // codex-fallback-order.json で明示指定した機体（qwen CLI 導入済み等）向けの挙動として検証する。
   withEnvKeysCleared(() => {
     process.env.CODEX_DO_FREE_MODEL = 'z-ai/glm-5.2:free';
     const dir = makeHomeWithEnv({ 'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n' });
+    fs.writeFileSync(path.join(dir, '.claude', 'codex-fallback-order.json'), JSON.stringify(['openrouter-free']));
     const backends = resolveQwenBackends(dir);
     assert.equal(backends[0].name, 'openrouter-free');
     assert.equal(backends[0].model, 'z-ai/glm-5.2:free');
@@ -767,7 +776,7 @@ test('WSL ディストリが無くても代替バックエンドがあるなら�
     },
   });
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /executor=fallback:deepseek/);
+  assert.match(result.stdout, /executor=fallback:cheap-code:deepseek/);
   const rows = fs.readFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
   const codexRow = rows.find((item) => item.provider === 'codex');
   assert.ok(codexRow, '起動失敗は台帳に残すこと（無音故障の回帰）');

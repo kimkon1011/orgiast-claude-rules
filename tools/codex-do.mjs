@@ -278,7 +278,9 @@ export function resolveFallbackBackends(homeDir) {
     if (backends.length) return backends;
     console.error('[codex-do] codex-fallback-order.json に使えるバックエンドが無いため従来順へ戻します');
   }
-  const ordered = preferFree ? [openrouter, gemini, deepseek] : [gemini, deepseek, openrouter];
+  const ccDeepseek = cheapCodeBackend('cheap-code:deepseek', homeDir);
+  const ccGlm = cheapCodeBackend('cheap-code:glm', homeDir);
+  const ordered = preferFree ? [ccDeepseek, ccGlm, gemini] : [gemini, ccDeepseek, ccGlm];
   return ordered.filter(Boolean);
 }
 

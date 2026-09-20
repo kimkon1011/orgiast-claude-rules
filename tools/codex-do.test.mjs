@@ -18,6 +18,11 @@ function run(args, options = {}) {
     env: {
       ...process.env,
       ORGIAST_HOME: options.home ?? fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-home-')),
+      // 既存のテストは全て sol/astra 前提。probeChatGptAuth が実機の WSL/auth.json を
+      // 読みに行くと、テストを回すマシンの実際の認証状態に依存して非決定的に壊れる
+      // (2026-09-21 実測: 開発機で ChatGPT 認証が実在し auto テストが軒並み落ちた)。
+      // ChatGPT 認証時の挙動そのものを見るテストだけ options.env で明示的に上書きする。
+      CODEX_DO_AUTH_MODE: 'apikey',
       ...options.env
     },
   });
@@ -790,7 +795,7 @@ test('起動に成功した行は launched:true で記録される', (t) => {
   assert.equal(rows[0].launched, true);
 });
 
-const { decideCodexLane, buildCodexExecArgs, isInsideGitRepo, normalizeCodexModel, wslCodexArgs } = await import('./codex-do.mjs');
+const { decideCodexLane, buildCodexExecArgs, isInsideGitRepo, normalizeCodexModel, wslCodexArgs, detectChatGptAuth, probeChatGptAuth } = await import('./codex-do.mjs');
 const ASTRA = 'gpt-6-astra', SOL = 'gpt-5.6-sol';
 for (const [name, input, slug, reason] of [
   ['explicit model wins', { model: 'sol', lane: 'astra' }, SOL, 'explicit_model'],
@@ -814,16 +819,91 @@ for (const [name, input, slug, reason] of [
   ['default Sol', {}, SOL, 'default_sol'],
   ['auto cooldown', { timeoutSecs: 2700, astraCooldownMs: 1 }, SOL, 'astra_cooldown:long_timeout'],
   ['astra lane cooldown', { lane: 'astra', astraCooldownMs: 1 }, SOL, 'astra_cooldown:lane_astra'],
+  // ChatGPT アカウント認証では sol/astra が invalid_request_error(400) で拒否される(2026-09-21実測)ため、
+  // auto かつ明示指定が無い時だけ既定モデル(slug undefined)へ倒す。
+  ['chatgpt auth overrides default sol', { chatgptAuth: true }, undefined, 'chatgpt_auth_default:default_sol'],
+  ['chatgpt auth respects explicit --model', { chatgptAuth: true, model: 'sol' }, SOL, 'explicit_model'],
+  ['chatgpt auth respects explicit --lane', { chatgptAuth: true, lane: 'astra' }, ASTRA, 'lane_astra'],
+  ['chatgpt auth false behaves like unset(apikey環境)', { chatgptAuth: false }, SOL, 'default_sol'],
+  ['chatgpt auth unknown(null)も従来どおり', { chatgptAuth: null, timeoutSecs: 2700 }, ASTRA, 'long_timeout'],
 ]) {
   test(`decideCodexLane: ${name}`, () => {
     assert.deepEqual(decideCodexLane(input), { slug, effort: slug === ASTRA ? 'high' : undefined, reason });
   });
 }
 
+test('decideCodexLane: chatgpt auth は astra 相当の選択でも effort=high は保つ(モデルだけ既定へ倒す)', () => {
+  assert.deepEqual(
+    decideCodexLane({ chatgptAuth: true, timeoutSecs: 2700 }),
+    { slug: undefined, effort: 'high', reason: 'chatgpt_auth_default:long_timeout' },
+  );
+});
+
 test('normalizeCodexModel: aliases and unknown slugs', () => {
   assert.equal(normalizeCodexModel('astra'), ASTRA);
   assert.equal(normalizeCodexModel('sol'), SOL);
   assert.equal(normalizeCodexModel('future-slug'), 'future-slug');
+});
+
+for (const [name, json, expected] of [
+  ['null/空文字は null', null, null],
+  ['壊れたJSONは null', '{not valid json', null],
+  ['配列(objectでない)は null', '[1,2,3]', null],
+  ['OPENAI_API_KEY があれば apikey(false)', JSON.stringify({ OPENAI_API_KEY: 'sk-x' }), false],
+  ['api_key があれば apikey(false)', JSON.stringify({ api_key: 'sk-x' }), false],
+  ['tokens.id_token があれば chatgpt(true)', JSON.stringify({ tokens: { id_token: 'x' } }), true],
+  ['tokens.access_token だけでも chatgpt(true)', JSON.stringify({ tokens: { access_token: 'x' } }), true],
+  ['tokens はあるが中身が空なら null', JSON.stringify({ tokens: {} }), null],
+  ['どちらの目印も無ければ null', JSON.stringify({ other: 1 }), null],
+]) {
+  test(`detectChatGptAuth: ${name}`, () => {
+    assert.equal(detectChatGptAuth(json), expected);
+  });
+}
+
+test('probeChatGptAuth: CODEX_DO_AUTH_MODE で実機を触らず上書きできる(WSL の無い CI 用)', () => {
+  assert.equal(probeChatGptAuth({ env: { CODEX_DO_AUTH_MODE: 'chatgpt' } }), true);
+  assert.equal(probeChatGptAuth({ env: { CODEX_DO_AUTH_MODE: 'apikey' } }), false);
+  assert.equal(probeChatGptAuth({ env: { CODEX_DO_AUTH_MODE: 'unknown' } }), null);
+});
+
+test('probeChatGptAuth: native 経路は auth.json を注入したファイル読み取りで判定する', () => {
+  const home = '/home/test';
+  const read = (file) => {
+    assert.equal(file, path.join(home, '.codex', 'auth.json'));
+    return JSON.stringify({ tokens: { id_token: 'x' } });
+  };
+  assert.equal(probeChatGptAuth({ forceNative: true, platform: 'win32', env: {}, readFileImpl: read, homeDir: home }), true);
+  assert.equal(probeChatGptAuth({ platform: 'linux', env: {}, readFileImpl: read, homeDir: home }), true);
+});
+
+test('probeChatGptAuth: 読めない・壊れている場合は null を返し従来動作(sol優先)を維持する', () => {
+  const throwing = () => { throw new Error('ENOENT'); };
+  assert.equal(probeChatGptAuth({ forceNative: true, platform: 'win32', env: {}, readFileImpl: throwing, homeDir: '/home/test' }), null);
+});
+
+test('probeChatGptAuth: Windows/WSL 経路は distro 一覧と auth.json 読取を spawnImpl に注入できる', () => {
+  const spawnImpl = (cmd, args) => {
+    assert.equal(cmd, 'wsl');
+    if (args[0] === '-l') return { status: 0, stdout: 'Ubuntu\0\r\n\0' };
+    assert.deepEqual(args.slice(0, 2), ['-d', 'Ubuntu']);
+    return { status: 0, stdout: JSON.stringify({ tokens: { id_token: 'x' } }) };
+  };
+  assert.equal(probeChatGptAuth({ platform: 'win32', forceNative: false, env: {}, spawnImpl }), true);
+});
+
+test('probeChatGptAuth: WSL 側の distro 一覧・cat が失敗したら null(既定sol維持)', () => {
+  assert.equal(probeChatGptAuth({
+    platform: 'win32', env: {}, spawnImpl: () => ({ status: 1, stdout: '' }),
+  }), null, 'distro一覧が失敗');
+  assert.equal(probeChatGptAuth({
+    platform: 'win32', env: {},
+    spawnImpl: (cmd, args) => args[0] === '-l' ? { status: 0, stdout: '' } : ({ status: 0, stdout: '' }),
+  }), null, 'distroが1件も無い');
+  assert.equal(probeChatGptAuth({
+    platform: 'win32', env: {},
+    spawnImpl: (cmd, args) => args[0] === '-l' ? { status: 0, stdout: 'Ubuntu\0\r\n\0' } : ({ status: 1, stdout: '' }),
+  }), null, 'auth.json の cat が失敗');
 });
 
 test('buildCodexExecArgs: model, effort, sandbox and stdin without spaces', () => {
@@ -859,6 +939,26 @@ test('CLI validates routing options and dry-run reports model/effort', () => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /executor=codex model=gpt-6-astra effort=max lane=lane_astra/);
   assert.doesNotMatch(result.stdout, /--lane|--effort|--no-escalate/);
+});
+
+test('CLI: ChatGPT アカウント認証では dry-run が sol/astra ではなく既定モデルを報告する', () => {
+  // CODEX_DO_AUTH_MODE で実機の WSL/auth.json に触らず決定的に検証する。
+  const chatgpt = run(['--dry-run', '指示'], { env: { CODEX_DO_AUTH_MODE: 'chatgpt' } });
+  assert.equal(chatgpt.status, 0, chatgpt.stderr);
+  assert.match(chatgpt.stdout, /executor=codex model=既定\(codexのデフォルト\) effort=default lane=chatgpt_auth_default:default_sol/);
+  assert.match(chatgpt.stderr, /chatgpt_auth_default: ChatGPTアカウント認証のため sol\/astra を使わず codex 既定モデルで実行します/);
+
+  // apikey/unknown(=判定不能)では従来どおり sol が既定のまま。
+  const apikey = run(['--dry-run', '指示'], { env: { CODEX_DO_AUTH_MODE: 'apikey' } });
+  assert.match(apikey.stdout, /executor=codex model=gpt-5\.6-sol effort=default lane=default_sol/);
+  const unknown = run(['--dry-run', '指示'], { env: { CODEX_DO_AUTH_MODE: 'unknown' } });
+  assert.match(unknown.stdout, /executor=codex model=gpt-5\.6-sol effort=default lane=default_sol/);
+
+  // 明示 --model / --lane は ChatGPT 認証下でも尊重される(ユーザーの意図的な指定のため)。
+  const explicitModel = run(['--dry-run', '--model', 'sol', '指示'], { env: { CODEX_DO_AUTH_MODE: 'chatgpt' } });
+  assert.match(explicitModel.stdout, /executor=codex model=gpt-5\.6-sol effort=default lane=explicit_model/);
+  const explicitLane = run(['--dry-run', '--lane', 'astra', '指示'], { env: { CODEX_DO_AUTH_MODE: 'chatgpt' } });
+  assert.match(explicitLane.stdout, /executor=codex model=gpt-6-astra effort=high lane=lane_astra/);
 });
 
 function runRouting(t, args, mocks, cooldown = null) {

@@ -20,8 +20,52 @@ export function normalizeCodexModel(model) {
   return model === 'astra' ? ASTRA : model === 'sol' ? SOL : model;
 }
 
-// I/O を持たない判定。クールダウン残時間は呼び出し側で読み取って注入する。
-export function decideCodexLane({ lane = 'auto', model, promptText = '', timeoutSecs = 1800, review = false, astraCooldownMs = 0 } = {}) {
+// gpt-5.6-sol / gpt-6-astra は API キー認証の環境向けの独自モデル名で、ChatGPT アカウント
+// 認証では invalid_request_error(400) で必ず拒否される(2026-09-21 実測: genbateam.toho@gmail.com
+// のChatGPTプランで両方とも "not supported when using Codex with a ChatGPT account"。既定の
+// codex 標準モデル(gpt-5.6-terra)は同じアカウントで正常動作する)。auth.json の中身だけで
+// 判定する純粋関数。
+export function detectChatGptAuth(authJsonText) {
+  if (!authJsonText) return null;
+  let parsed;
+  try { parsed = JSON.parse(authJsonText); } catch { return null; }
+  if (!parsed || typeof parsed !== 'object') return null;
+  if (parsed.OPENAI_API_KEY || parsed.api_key) return false;
+  if (parsed.tokens && (parsed.tokens.id_token || parsed.tokens.access_token)) return true;
+  return null;
+}
+
+// 実機の auth.json を覗く側。CODEX_DO_WSL_PROBE と同じ流儀で CODEX_DO_AUTH_MODE
+// (chatgpt|apikey|unknown) から注入できるようにし、実機 WSL の無い CI では probe しない。
+// 読めない・判定できない場合は null を返し、呼び出し側は従来どおり sol/astra を試す(安全側)。
+export function probeChatGptAuth({ forceNative = false, env = process.env, spawnImpl = spawnSync, readFileImpl, homeDir, platform = process.platform } = {}) {
+  const override = env.CODEX_DO_AUTH_MODE;
+  if (override === 'chatgpt') return true;
+  if (override === 'apikey') return false;
+  if (override === 'unknown') return null;
+  try {
+    if (platform === 'win32' && !forceNative) {
+      // launchCodex の WSL 起動確認と同じ WSL_PROBE_TIMEOUT_MS を使う。短い固定値だと
+      // WSL VM が Stopped から起きる時のコールドスタートに間に合わず、実際は ChatGPT
+      // 認証なのに毎回 null(判定不能)に落ちて sol/astra が試され続ける(2026-09-21 実測:
+      // 3000ms 固定にしていた版は初回だけ間に合わず誤フォールバックした)。
+      const listed = spawnImpl('wsl', ['-l', '-q'], { windowsHide: true, encoding: 'utf16le', timeout: WSL_PROBE_TIMEOUT_MS });
+      if (listed.status !== 0) return null;
+      const distros = String(listed.stdout || '').split(/\r?\n/).map((x) => x.replace(/\0/g, '').trim()).filter(Boolean);
+      const distro = distros.find((x) => x.toLowerCase() === 'ubuntu') || distros[0];
+      if (!distro) return null;
+      const probe = spawnImpl('wsl', ['-d', distro, '--', 'bash', '-lc', 'cat "$HOME/.codex/auth.json" 2>/dev/null'], { windowsHide: true, encoding: 'utf8', timeout: WSL_PROBE_TIMEOUT_MS });
+      if (probe.status !== 0) return null;
+      return detectChatGptAuth(probe.stdout);
+    }
+    const read = readFileImpl || fs.readFileSync;
+    const home = homeDir || os.homedir();
+    return detectChatGptAuth(read(path.join(home, '.codex', 'auth.json'), 'utf8'));
+  } catch { return null; }
+}
+
+// I/O を持たない判定。クールダウン残時間・ChatGPT認証有無は呼び出し側で読み取って注入する。
+export function decideCodexLane({ lane = 'auto', model, promptText = '', timeoutSecs = 1800, review = false, astraCooldownMs = 0, chatgptAuth = null } = {}) {
   let slug = SOL, reason = 'default_sol';
   if (model) { slug = normalizeCodexModel(model); reason = 'explicit_model'; }
   else if (lane !== 'auto') { slug = lane === 'astra' ? ASTRA : SOL; reason = `lane_${lane}`; }
@@ -39,11 +83,15 @@ export function decideCodexLane({ lane = 'auto', model, promptText = '', timeout
     }
   }
   if (slug === ASTRA && !model && astraCooldownMs > 0) { slug = SOL; reason = `astra_cooldown:${reason}`; }
-  return { slug, effort: slug === ASTRA ? 'high' : undefined, reason };
+  const effort = slug === ASTRA ? 'high' : undefined;
+  // 明示指定(--model)は尊重し、auto 判定で選んだ結果だけを既定モデルへ倒す
+  // (--lane sol/astra の明示指定も、切り分け目的で意図的に選んでいる可能性があるため尊重する)。
+  if (chatgptAuth === true && !model && lane === 'auto') return { slug: undefined, effort, reason: `chatgpt_auth_default:${reason}` };
+  return { slug, effort, reason };
 }
 
-export function buildCodexExecArgs({ slug = SOL, effort, review = false } = {}) {
-  return ['exec', '-m', slug, ...(effort ? ['-c', `model_reasoning_effort="${effort}"`] : []), '-s', review ? 'read-only' : 'workspace-write', '-'];
+export function buildCodexExecArgs({ slug, effort, review = false } = {}) {
+  return ['exec', ...(slug ? ['-m', slug] : []), ...(effort ? ['-c', `model_reasoning_effort="${effort}"`] : []), '-s', review ? 'read-only' : 'workspace-write', '-'];
 }
 
 export function isInsideGitRepo(cwd, exists = fs.existsSync) {
@@ -434,10 +482,14 @@ if (mainMemory || related.length || claudeMd) {
   if (claudeMd) context.push(`\n## 対象プロジェクト CLAUDE.md\n${claudeMd}`);
 }
 const prompt = `${context.join('\n')}\n\n## 実装指示\n${instruction}`.trim();
-let selectedLane = decideCodexLane({ lane, model, promptText: instruction, timeoutSecs: timeoutSeconds, review, astraCooldownMs: providerCooldownMs('codex-astra') });
+// WSL 実機に触るのは auto かつ明示指定が無い時だけ。--dry-run も実際の実行計画を見せる
+// ものなので probe 自体はする(モデルだけ変わって中身は実行しないので副作用は無い)。
+const chatgptAuth = (!model && lane === 'auto') ? probeChatGptAuth({ forceNative }) : null;
+let selectedLane = decideCodexLane({ lane, model, promptText: instruction, timeoutSecs: timeoutSeconds, review, astraCooldownMs: providerCooldownMs('codex-astra'), chatgptAuth });
 if (effort) selectedLane.effort = effort;
 if (selectedLane.reason.includes('astra_cooldown')) console.error('[codex-do] astra_cooldown: Astra クールダウン中のため Sol へ退避');
-const logCodex = () => console.log(`[codex-do] executor=codex model=${selectedLane.slug} effort=${selectedLane.effort || 'default'} lane=${selectedLane.reason}`);
+if (selectedLane.reason.startsWith('chatgpt_auth_default')) console.error('[codex-do] chatgpt_auth_default: ChatGPTアカウント認証のため sol/astra を使わず codex 既定モデルで実行します');
+const logCodex = () => console.log(`[codex-do] executor=codex model=${selectedLane.slug || '既定(codexのデフォルト)'} effort=${selectedLane.effort || 'default'} lane=${selectedLane.reason}`);
 if (dryRun) { logCodex(); console.log(prompt); process.exit(0); }
 
 // 実行前の作業ツリーを控える。未コミット差分が常時あるリポでは diff が空にならず、
@@ -593,7 +645,7 @@ async function launchCodex(codexArgs) {
         // ときだけ従来どおり中断し、それ以外は起動失敗を結果として返してフォールバックへ渡す。
         if (noFallback) {
           console.error('🚨 WSL の codex 経路が使えないため中断しました（native Windows codex は read-only で編集が保存されない既知の不具合があるため、既定では使いません）。WSL を確認するか、承知の上で native を使うなら --allow-native を付けて再実行してください。');
-          recordUsage({ outputChars: 0, status: 3, stderr: failureReason, timedOut: false, launched: false }, `codex-cli/${selectedLane.slug}`, 0, 'codex', 0);
+          recordUsage({ outputChars: 0, status: 3, stderr: failureReason, timedOut: false, launched: false }, `codex-cli/${selectedLane.slug || 'default'}`, 0, 'codex', 0);
           process.exit(3);
         }
         launchUnavailable = true;
@@ -639,7 +691,7 @@ async function executeCodex() {
     const tail = String(result?.stderr || '').replace(/\s+/g, ' ').trim().slice(-200);
     if (attempt === 1) console.error(`[codex-do] codex が ${elapsed.toFixed(1)} 秒で出力ゼロ(exit ${result.status})のため 1 回だけ再試行します${tail ? `: ${tail}` : ''}`);
   }
-  recordUsage(result, `codex-cli/${selectedLane.slug}`, seconds, 'codex', attempts);
+  recordUsage(result, `codex-cli/${selectedLane.slug || 'default'}`, seconds, 'codex', attempts);
   return result;
 }
 

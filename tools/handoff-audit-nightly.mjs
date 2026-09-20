@@ -28,14 +28,24 @@ export function mergeKnowledge(knowledge, learned, candidates, observation) {
 }
 export function enqueueTodos(markdown, items) {
   let output = markdown;
+  const routes = new Set();
+  for (const line of output.split(/\r?\n/)) {
+    const body = line.match(/^\s*\d+\. \[handoff-audit:[^\]]+\] (.*)$/)?.[1];
+    if (!body) continue;
+    const route = body.match(/（再発防止の経路: (.*)）/)?.[1]
+      ?? body.match(/^.*?: (.*) を既存権限で調査・検証し結果を記録する/)?.[1];
+    if (route !== undefined) routes.add(key(route));
+  }
   for (const item of items) {
     const id = hash([key(item.pattern), key(item.route)]).slice(0, 16);
     if (output.includes(`[handoff-audit:${id}]`)) continue;
+    if (routes.has(key(item.route))) continue;
     const oneLine = s => s.replace(/[\r\n]+/g, ' ').trim();
-    const todo = `1. [handoff-audit:${id}] ${oneLine(item.pattern)}: ${oneLine(item.route)} を既存権限で調査・検証し結果を記録する。送信・権限変更は既存の承認範囲を守る。kimへのDMなし。`;
+    const todo = `1. [handoff-audit:${id}] ${oneLine(item.pattern)} — この handoff が再発していないかを実物で検証し結果を記録する（再発防止の経路: ${oneLine(item.route)}）。送信・権限変更は既存の承認範囲を守る。kimへのDMなし。`;
     const heading = /^## 残TODO[^\r\n]*(?:\r?\n|$)/m;
     if (heading.test(output)) output = output.replace(heading, m => `${m.endsWith('\n') ? m : m + '\n'}${todo}\n\n`);
     else output += `\n<!-- NEXT-SESSION v1 -->\n## 残TODO\n${todo}\n`;
+    routes.add(key(item.route));
   }
   return output;
 }

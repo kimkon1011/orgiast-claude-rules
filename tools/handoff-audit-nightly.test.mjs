@@ -24,6 +24,24 @@ test('残TODO書式はauto-sessionで読める・既存本文保持・重複防�
   assert.equal(enqueueTodos(after, [item]), after);
   assert.equal(parseHandoff(enqueueTodos('', [item])).todos.length, 1);
 });
+test('同一route・別patternは1行だけ追加し、新書式の既存routeも正規化して重複防止', () => {
+  const after = enqueueTodos('', [item, { ...item, pattern: '別のAPI確認' }]);
+  assert.equal(parseHandoff(after).todos.length, 1);
+  assert.equal(enqueueTodos(after, [{ pattern: 'さらに別の確認', route: 'ｇｈ　 api' }]), after);
+});
+test('旧書式の既存routeも正規化して重複防止、別routeは追加', () => {
+  const before = '## 残TODO\n1. [handoff-audit:0123456789abcdef] 以前の確認: ｇｈ　 api を既存権限で調査・検証し結果を記録する。送信・権限変更は既存の承認範囲を守る。kimへのDMなし。\n';
+  assert.equal(enqueueTodos(before, [item]), before);
+  const after = enqueueTodos(before, [{ ...item, route: 'codex-do.mjs' }]);
+  assert.equal(parseHandoff(after).todos.length, 2);
+  assert.ok(after.includes(before.split('\n')[1]));
+});
+test('生成行はpatternを検証対象、routeを手段として含み、改行を潰し制約文を保持', () => {
+  const after = enqueueTodos('', [{ pattern: 'API\r\n確認', route: 'gh\napi' }]);
+  const todos = parseHandoff(after).todos;
+  assert.equal(todos.length, 1);
+  assert.match(todos[0], /^\[handoff-audit:[a-f0-9]{16}\] API 確認 — この handoff が再発していないかを実物で検証し結果を記録する（再発防止の経路: gh api）。送信・権限変更は既存の承認範囲を守る。kimへのDMなし。$/);
+});
 test('前日passとretry-cap/blocked後passを選ぶ、当日は除外', () => {
   const since = Date.parse('2026-09-11T00:00:00Z'), until = since + 86400000;
   const row = { ts: '2026-09-11T10:00:00Z', sessionId: 'a', fired: true, verdict: 'pass', evidence: { text: 'Gmail 下書き', tools: [] } };

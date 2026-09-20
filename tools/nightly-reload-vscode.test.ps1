@@ -10,17 +10,43 @@ Assert ($script:ES_CONTINUOUS_SYSTEM_AWAYMODE_REQUIRED -is [uint32]) '実行継�
 Assert ($script:ES_CONTINUOUS_SYSTEM_AWAYMODE_REQUIRED -eq 2147483713) '実行継続・システム・AwayMode の定数値'
 Assert ($script:ES_CONTINUOUS -is [uint32]) '実行継続の定数は UInt32'
 Assert ($script:ES_CONTINUOUS -eq 2147483648) '実行継続の定数値'
+Write-Output 'PASS: execution state constants are UInt32 (2147483713 / 2147483648)'
 
 $windowsPowerShell = Get-Command powershell.exe -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($windowsPowerShell) {
     $scriptPath = Join-Path $PSScriptRoot 'nightly-reload-vscode.ps1'
     $escapedScriptPath = $scriptPath.Replace("'", "''")
-    $command = ". '$escapedScriptPath' -FunctionsOnly; Enable-SleepInhibition; Disable-SleepInhibition"
+    # WARN must fail this smoke test; otherwise catch blocks hide argument conversion regressions.
+    $command = @'
+$ErrorActionPreference = 'Stop'
+if ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1) {
+    throw 'Expected Windows PowerShell 5.1'
+}
+. '__SCRIPT_PATH__' -FunctionsOnly
+function Write-Log($message) { throw $message }
+try { Enable-SleepInhibition } finally { Disable-SleepInhibition }
+Write-Output ('PASS: Windows PowerShell {0} sleep inhibition calls completed without warnings' -f $PSVersionTable.PSVersion)
+'@
+    $command = $command.Replace('__SCRIPT_PATH__', $escapedScriptPath)
     & $windowsPowerShell.Source -NoProfile -Command $command
     Assert ($LASTEXITCODE -eq 0) 'Windows PowerShell 5.1 実プロセスでスリープ抑止関数が例外なく通る'
 } else {
     Write-Output 'SKIP: powershell.exe が無いため Windows PowerShell 5.1 実プロセステストを省略'
 }
+
+# Keep mocks scoped so later tests still use the real functions.
+& {
+    $warnings = [Collections.Generic.List[string]]::new()
+    function Write-Log($message) { $warnings.Add($message) }
+    function Initialize-WindowApi { throw 'simulated API failure' }
+    Enable-SleepInhibition
+    Disable-SleepInhibition
+    Assert ($warnings.Count -eq 2) 'スリープ抑止の開始・解除の例外後も処理が継続する'
+    foreach ($warning in $warnings) {
+        Assert ($warning -eq 'WARN: スリープ抑止に失敗（simulated API failure）') '失敗理由を WARN として記録する'
+    }
+}
+Write-Output 'PASS: sleep inhibition failures warn and continue (enable / disable)'
 
 $ids = @(Get-InteractiveSessionIdsFromJson '[{"kind":"interactive","sessionId":"vscode-1"},{"kind":"background","sessionId":"batch-1"}]')
 Assert ($ids.Count -eq 1 -and $ids[0] -eq 'vscode-1') 'interactive の sessionId だけを抽出する'
@@ -79,7 +105,7 @@ try {
     $result = Wait-InteractiveSessions 2 360 20
     Assert ($result -eq 2 -and $script:countCalls -eq 3) '途中で目標到達したら監視を打ち切る'
 
-    Write-Output 'PASS: nightly-reload-vscode tests (9 groups)'
+    Write-Output 'PASS: nightly-reload-vscode tests (10 groups)'
 } finally {
     Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
 }

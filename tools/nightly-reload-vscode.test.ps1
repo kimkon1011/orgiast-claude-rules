@@ -6,6 +6,22 @@ function Assert($Condition, $Message) {
     if (-not $Condition) { throw "FAIL: $Message" }
 }
 
+Assert ($script:ES_CONTINUOUS_SYSTEM_AWAYMODE_REQUIRED -is [uint32]) '実行継続・システム・AwayMode の定数は UInt32'
+Assert ($script:ES_CONTINUOUS_SYSTEM_AWAYMODE_REQUIRED -eq 2147483713) '実行継続・システム・AwayMode の定数値'
+Assert ($script:ES_CONTINUOUS -is [uint32]) '実行継続の定数は UInt32'
+Assert ($script:ES_CONTINUOUS -eq 2147483648) '実行継続の定数値'
+
+$windowsPowerShell = Get-Command powershell.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($windowsPowerShell) {
+    $scriptPath = Join-Path $PSScriptRoot 'nightly-reload-vscode.ps1'
+    $escapedScriptPath = $scriptPath.Replace("'", "''")
+    $command = ". '$escapedScriptPath' -FunctionsOnly; Enable-SleepInhibition; Disable-SleepInhibition"
+    & $windowsPowerShell.Source -NoProfile -Command $command
+    Assert ($LASTEXITCODE -eq 0) 'Windows PowerShell 5.1 実プロセスでスリープ抑止関数が例外なく通る'
+} else {
+    Write-Output 'SKIP: powershell.exe が無いため Windows PowerShell 5.1 実プロセステストを省略'
+}
+
 $ids = @(Get-InteractiveSessionIdsFromJson '[{"kind":"interactive","sessionId":"vscode-1"},{"kind":"background","sessionId":"batch-1"}]')
 Assert ($ids.Count -eq 1 -and $ids[0] -eq 'vscode-1') 'interactive の sessionId だけを抽出する'
 
@@ -63,7 +79,7 @@ try {
     $result = Wait-InteractiveSessions 2 360 20
     Assert ($result -eq 2 -and $script:countCalls -eq 3) '途中で目標到達したら監視を打ち切る'
 
-    Write-Output 'PASS: nightly-reload-vscode tests (7 groups)'
+    Write-Output 'PASS: nightly-reload-vscode tests (9 groups)'
 } finally {
     Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
 }

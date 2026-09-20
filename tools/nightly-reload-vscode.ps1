@@ -20,6 +20,10 @@ param([switch]$DryRun, [switch]$FunctionsOnly)
 
 $ErrorActionPreference = 'Stop'
 
+# SetThreadExecutionState flags. Decimal literals keep these UInt32 values valid in Windows PowerShell 5.1.
+$script:ES_CONTINUOUS_SYSTEM_AWAYMODE_REQUIRED = [uint32]2147483713 # ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED
+$script:ES_CONTINUOUS = [uint32]2147483648 # ES_CONTINUOUS
+
 function Write-Log($message) {
     $line = "{0} {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $message
     try { Add-Content -Path $script:logPath -Value $line -Encoding utf8 } catch {}
@@ -108,12 +112,21 @@ public static class NightlyReloadWin32 {
 }
 
 function Enable-SleepInhibition {
-    Initialize-WindowApi
-    [void][NightlyReloadWin32]::SetThreadExecutionState(0x80000041)
+    try {
+        Initialize-WindowApi
+        [void][NightlyReloadWin32]::SetThreadExecutionState($script:ES_CONTINUOUS_SYSTEM_AWAYMODE_REQUIRED)
+    } catch {
+        Write-Log ("WARN: スリープ抑止に失敗（{0}）" -f $_.Exception.Message)
+    }
 }
 
 function Disable-SleepInhibition {
-    [void][NightlyReloadWin32]::SetThreadExecutionState(0x80000000)
+    try {
+        Initialize-WindowApi
+        [void][NightlyReloadWin32]::SetThreadExecutionState($script:ES_CONTINUOUS)
+    } catch {
+        Write-Log ("WARN: スリープ抑止に失敗（{0}）" -f $_.Exception.Message)
+    }
 }
 
 function Get-VSCodeWindowHandles {

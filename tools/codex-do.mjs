@@ -8,6 +8,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
+import { executorExitStatus } from './executor-status.mjs';
 import { parseCodexResetUntil, providerCooldownMs, writeCodexCooldown } from './codex-cooldown.mjs';
 
 // Windows の shell 経由起動では引数がクォートされないため、この値に空白を入れると
@@ -595,7 +596,8 @@ function recordUsage(result, modelName, seconds, provider = 'codex', attempts = 
       in: Math.ceil(prompt.length / 4), out: Math.ceil((result.outputChars || 0) / 4),
       launched: result?.launched !== false,
       timedOut: result?.timedOut === true,
-      status: result?.status ?? null,
+      status: executorExitStatus(result),
+      exitCode: result?.status ?? null,
       cwd,
       stderrTail: String(result?.stderr || '').replace(/\s+/g, ' ').trim().slice(-200),
       fastFail: result?.timedOut !== true && Number(result?.status) !== 0 && (result?.outputChars || 0) === 0,

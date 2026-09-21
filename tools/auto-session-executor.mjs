@@ -103,7 +103,7 @@ export function recordFallbackToClaude({ home = process.env.ORGIAST_HOME || os.h
 
 export function recordSkippedNoExecutor({ home = process.env.ORGIAST_HOME || os.homedir(), reason, provider, appendImpl = null, now = new Date() } = {}) {
   try {
-    const row = `${JSON.stringify({ t: now.toISOString(), provider: 'skipped', model: 'none', status: 'no-cheap-executor', reason: String(reason || provider || 'unknown') })}\n`;
+    const row = `${JSON.stringify({ t: now.toISOString(), provider: 'skipped', category: 'unrouted', model: 'none', status: 'no-cheap-executor', reason: String(reason || provider || 'unknown') })}\n`;
     const file = path.join(home, '.claude', 'executor-usage.jsonl');
     if (appendImpl) appendImpl(file, row, 'utf8');
     else { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.appendFileSync(file, row, 'utf8'); }

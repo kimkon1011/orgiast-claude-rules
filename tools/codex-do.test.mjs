@@ -49,7 +49,8 @@ test('即時の出力ゼロ失敗を1回だけ再試行し、成功と試行回�
   const rows = fs.readFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
   assert.equal(rows.length, 1);
   assert.equal(rows[0].attempts, 2);
-  assert.equal(rows[0].status, 0);
+  assert.equal(rows[0].status, 'ok');
+  assert.equal(rows[0].exitCode, 0);
 });
 
 test('--prompt-file の中身をそのまま指示として使う', () => {
@@ -861,7 +862,8 @@ test('WSL が使えず中断するときも台帳に launched:false の1行を�
   assert.equal(rows.length, 1);
   assert.equal(rows[0].provider, 'codex');
   assert.equal(rows[0].out, 0);
-  assert.equal(rows[0].status, 3);
+  assert.equal(rows[0].status, 'error');
+  assert.equal(rows[0].exitCode, 3);
   assert.equal(rows[0].launched, false);
 });
 
@@ -1137,7 +1139,7 @@ test('Astra and Sol quota proceed to cheap-code once', (t) => {
   assert.match(result.stdout, /executor=fallback:cheap-code:deepseek/);
   assert.ok(result.cooldown.codex.until > Date.now());
   assert.equal(result.ledger.length, 3);
-  assert.deepEqual(result.ledger.map((r) => [r.timedOut, r.status]), [[false, 1], [false, 1], [false, 0]]);
+  assert.deepEqual(result.ledger.map((r) => [r.timedOut, r.status]), [[false, 'error'], [false, 'error'], [false, 'ok']]);
 });
 
 for (const [name, first, prompt] of [
@@ -1151,7 +1153,7 @@ for (const [name, first, prompt] of [
     assert.equal(result.status, name === 'empty diff' ? 1 : 0, result.stderr);
     assert.match(result.stdout, /sol 失敗 → astra へ昇格/);
     assert.deepEqual(result.ledger.map((r) => [r.model, r.escalated]), [[`codex-cli/${SOL}`, false], [`codex-cli/${ASTRA}`, true]]);
-    assert.deepEqual(result.ledger.map((r) => [r.timedOut, r.status]), [[first.timedOut === true, first.status ?? 0], [false, 0]]);
+    assert.deepEqual(result.ledger.map((r) => [r.timedOut, r.status]), [[first.timedOut === true, first.timedOut || first.status === 124 ? 'timeout' : first.status ? 'error' : 'ok'], [false, 'ok']]);
   });
 }
 

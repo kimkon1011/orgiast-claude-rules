@@ -177,3 +177,28 @@ test('Codex byModel counts cumulative deltas, model switches, multiple sessions 
   assert.deepEqual(collectCodexOutput({ home }), expected);
   assert.deepEqual(collectCodexOutput({ home, includePatchLines: true }), { ...expected, added: 0, deleted: 0, patchFiles: 3 });
 });
+
+test('legacy codex 37/150 and gemini missing status exclude unrouted without rewriting logs', (t) => {
+  const { home } = fixture(), now = Date.now();
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const rows = [
+    ...Array.from({ length: 113 }, () => ({ provider: 'codex' })),
+    ...Array.from({ length: 32 }, () => ({ provider: 'codex', status: '1' })),
+    ...Array.from({ length: 5 }, () => ({ provider: 'codex', status: '124' })),
+    ...Array.from({ length: 1455 }, () => ({ provider: 'gemini' })),
+    ...Array.from({ length: 11 }, () => ({ provider: 'gemini', status: 'ok' })),
+    ...Array.from({ length: 4 }, () => ({ provider: 'gemini', status: 'error' })),
+    ...Array.from({ length: 23 }, () => ({ provider: 'skipped', status: 'no-cheap-executor' })),
+    { provider: 'groq', status: 'no-cheap-executor', category: 'unrouted' },
+  ].map((row) => ({ ...row, t: new Date(now).toISOString() }));
+  const file = path.join(home, '.claude', 'executor-usage.jsonl'), text = rows.map(JSON.stringify).join('\n');
+  fs.writeFileSync(file, text);
+  const result = collectProviderHealth({ home, now });
+  assert.equal(result.providers.codex.calls, 150);
+  assert.equal(result.providers.codex.failRate, 37 / 150);
+  assert.equal(result.providers.gemini.failRate, 4 / 1470);
+  assert.equal(result.providers.skipped, undefined);
+  assert.equal(result.providers.groq, undefined);
+  assert.deepEqual(result.unrouted, { calls: 24, reasons: { 'no-cheap-executor': 24 } });
+  assert.equal(fs.readFileSync(file, 'utf8'), text);
+});

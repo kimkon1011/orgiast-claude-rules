@@ -42,6 +42,7 @@ test('recordSkippedNoExecutor は no-cheap-executor の行を追記する', () =
   try {
     recordSkippedNoExecutor({ home, provider: 'glm', reason: 'cheap-code/glm exit 1', now: new Date('2026-09-07T00:00:00Z') });
     const row = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), 'utf8').trim());
+    assert.equal(row.category, 'unrouted');
     assert.deepEqual({ provider: row.provider, model: row.model, status: row.status }, { provider: 'skipped', model: 'none', status: 'no-cheap-executor' });
     assert.equal(row.reason, 'cheap-code/glm exit 1');
   } finally { fs.rmSync(home, { recursive: true, force: true }); }

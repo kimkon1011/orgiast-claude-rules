@@ -5,6 +5,7 @@ import path from 'node:path';
 import { execSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
+import { normalizeExecutorStatus } from './executor-status.mjs';
 import { extractInlineProgram, isExcludedInlineProgramCommand } from './inline-program.mjs';
 export { extractInlineProgram } from './inline-program.mjs';
 
@@ -402,12 +403,20 @@ export function calculateDelegation({ codexOut = 0, execOut = 0, byModel = {}, s
 
 export function collectProviderHealth({ home = process.env.ORGIAST_HOME || os.homedir(), days = 7, now = Date.now() } = {}) {
   const cutoff = now - days * DAY, providers = {}; let raw = '';
+  const unrouted = { calls: 0, reasons: {} };
   try { raw = fs.readFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), 'utf8'); } catch {}
   for (const line of raw.split(/\r?\n/)) {
     let row; try { row = JSON.parse(line); } catch { continue; }
     if (Date.parse(row.t || '') < cutoff) continue;
+    const normalized = normalizeExecutorStatus(row);
+    if (normalized === 'unrouted') {
+      unrouted.calls++;
+      const reason = String(row.status || 'no-cheap-executor');
+      unrouted.reasons[reason] = (unrouted.reasons[reason] || 0) + 1;
+      continue;
+    }
     const name = String(row.provider || 'unknown'), p = providers[name] ||= { calls: 0, fail: 0, failRate: 0, http429: 0, http413: 0, averageSeconds: 0, rescuedByFailover: 0, _seconds: 0 };
-    p.calls++; const ok = row.ok !== false && (row.status == null || row.status === 'ok'); if (!ok) p.fail++;
+    p.calls++; const ok = normalized === 'ok'; if (!ok) p.fail++;
     const status = String(row.status ?? ''); if (status === '429' || /(?:http[_ ]?|HTTP)429/i.test(status)) p.http429++; if (status === '413' || /(?:http[_ ]?|HTTP)413/i.test(status)) p.http413++;
     p._seconds += Number(row.secs ?? row.seconds ?? (Number(row.ms) / 1000)) || 0;
     if (ok && row.failover === true) p.rescuedByFailover++;
@@ -415,7 +424,7 @@ export function collectProviderHealth({ home = process.env.ORGIAST_HOME || os.ho
   let cooldowns = {}; try { cooldowns = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'provider-cooldown.json'), 'utf8')); } catch {}
   for (const [name, p] of Object.entries(providers)) { p.failRate = p.calls ? p.fail / p.calls : 0; p.averageSeconds = p.calls ? p._seconds / p.calls : 0; delete p._seconds; const state = cooldowns?.[name]; p.cooldown = Number(state?.until) > now ? { until: state.until, reason: state.reason || '' } : null; }
   for (const [name, state] of Object.entries(cooldowns || {})) if (Number(state?.until) > now && !providers[name]) providers[name] = { calls: 0, fail: 0, failRate: 0, http429: 0, http413: 0, averageSeconds: 0, rescuedByFailover: 0, cooldown: { until: state.until, reason: state.reason || '' } };
-  return { days, providers };
+  return { days, providers, unrouted };
 }
 /**
  * Estimate spec-authoring output tokens by apportioning Bash/PowerShell tool-use

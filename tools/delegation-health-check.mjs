@@ -69,6 +69,10 @@ const INFRA_TRANSIENT = /failed to lookup address information|failed to connect 
 // （2026-09-19 実測: この PC は `wsl -l -q` が空）。
 const WSL_LANE_ABSENT = /WSL ディストリが見つかりません/;
 
+// フォールバック先の子プロセスが OS エラーで起動できなかった行(例: spawn ENAMETOOLONG / ENOENT)。
+// 1件で発火させる: 低成果(2件閾値)では単発の故障が翌朝 healthy と判定されてしまった (2026-09-21)。
+const SPAWN_FAILED = /syscall: 'spawn'|\bspawn E[A-Z]+\b|code: 'E[A-Z]{4,}'/;
+
 // codex CLI 自身の認証欠落。WSL 側 ~/.codex/auth.json が未認証/失効だと、セッションを作る前に
 // 401 で死ぬ。コードでは直せず再ログインが要る環境要因（2026-09-22 診断: 09-20 の11件中4件）。
 const CODEX_AUTH_FAILED = /401 unauthorized|missing bearer or basic authentication/i;
@@ -116,6 +120,14 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
   });
   const claudeFallback = usageRows.filter((row) => row.provider === 'claude-fallback');
   if (claudeFallback.length) { const top = reasonTop(claudeFallback); findings.push({ id: 'unattended_claude_fallback', severity: 'high', title: '無人ジョブが Claude へフォールバック', evidence: [`${claudeFallback.length}件`, ...top], fixTask: `無人ジョブが Claude に落ちた理由(${top.join(', ')})を潰す。cheap-code 側の失敗原因を修正し、Claude フォールバックが opt-in のままであることを確認` }); }
+  const spawnFailed = usageRows.filter((row) => row.provider === 'fallback' && Number(row.out) === 0 && SPAWN_FAILED.test(String(row.stderrTail || '')));
+  if (spawnFailed.length) {
+    const models = [...new Set(spawnFailed.map((row) => row.model || '不明'))].join(', ');
+    const codes = [...new Set(spawnFailed.map((row) => (String(row.stderrTail || '').match(/\bE[A-Z]{4,}\b/) || ['不明'])[0]))].join(', ');
+    findings.push({ id: 'fallback_spawn_failed', severity: 'medium', title: 'フォールバック先の子プロセスが起動失敗',
+      evidence: [`${spawnFailed.length}件`, `model ${models}`, `code ${codes}`],
+      fixTask: `フォールバック先(${models})の子プロセス起動が OS エラー(${codes})で失敗している。spawn の引数長・実行ファイルパスを確認し、再現テストを追加して修正` });
+  }
   const lowYield = usageRows.filter((row) => row.provider === 'fallback' && Number(row.secs) > 900 && Number(row.out) < 300);
   if (lowYield.length >= 2) { const models = [...new Set(lowYield.map((row) => row.model || '不明'))].join(', '); findings.push({ id: 'fallback_low_yield', severity: 'medium', title: 'フォールバックの低成果', evidence: [`${lowYield.length}件`, `model ${models}`], fixTask: `フォールバック先(${models})が長時間走って成果が無い。codex-fallback-order.json の順序と各バックエンドの実効性を見直す` }); }
   const empty = usageRows

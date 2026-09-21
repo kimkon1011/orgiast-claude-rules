@@ -233,9 +233,10 @@ async function main(args) {
   const model = parsed.model || config.defaultModel;
   const key = readEnvValue(path.join(home, '.claude', config.envFile), config.keyName);
   const prompt = `[headless:cheap-code]\n${buildPrompt(instruction, cwd, home)}`;
-  const childArgs = ['-p', prompt, '--model', model];
+  // プロンプトは stdin で渡す。CLI 引数だと Windows のコマンドライン長上限で spawn ENAMETOOLONG になる (2026-09-21 実測)。
+  const childArgs = ['-p', '--model', model];
   if (parsed.dryRun) {
-    console.log(JSON.stringify({ provider: config.provider, base: config.base, model, keyPresent: Boolean(key), argv: ['claude', ...childArgs] }, null, 2));
+    console.log(JSON.stringify({ provider: config.provider, base: config.base, model, keyPresent: Boolean(key), argv: ['claude', ...childArgs], promptVia: 'stdin', promptChars: prompt.length }, null, 2));
     return 0;
   }
   if (!key) {
@@ -270,9 +271,11 @@ async function main(args) {
   const status = await new Promise((resolve) => {
     const child = spawn(executable, childArgs, { windowsHide: true,
       cwd,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...buildChildEnv(config, key), ORGIAST_HEADLESS_JOB: `cheap-code:${config.provider}` },
     });
+    child.stdin.on('error', () => {});   // 子が先に死んだときの EPIPE で親を落とさない
+    child.stdin.end(prompt);
     child.stdout.on('data', (chunk) => { outputChars += chunk.length; stdoutText += String(chunk); process.stdout.write(chunk); });
     child.stderr.on('data', (chunk) => { stderrText += String(chunk); process.stderr.write(chunk); });
     child.on('error', (error) => { console.error(`claude CLI を起動できません: ${error.message}`); resolve(1); });

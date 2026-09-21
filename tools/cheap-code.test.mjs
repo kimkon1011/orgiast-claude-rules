@@ -49,7 +49,28 @@ test('--prompt-file から指示を読める', () => {
     assert.equal(readInstruction(file, []), 'ファイル `sample.mjs` を作る');
     const result = run(['--dry-run', '--prompt-file', file]);
     assert.equal(result.status, 0);
-    assert.match(JSON.parse(result.stdout).argv[2], /`sample\.mjs`/);
+    const dryRun = JSON.parse(result.stdout);
+    assert.equal(dryRun.promptVia, 'stdin');
+    assert.ok(dryRun.promptChars > 0, `promptChars=${dryRun.promptChars}`);
+    assert.ok(!JSON.stringify(dryRun.argv).includes('sample.mjs'), 'プロンプト本文が argv に載っている');
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+// Windows のコマンドライン長上限で spawn ENAMETOOLONG になるため、プロンプトは CLI 引数ではなく
+// stdin で渡す(2026-09-21 実測: in=4964tok の指示で即死 / out=0 status=1)。
+test('長い指示でも argv にプロンプトを載せない（stdin 経由）', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'cheap-code-long-prompt-'));
+  try {
+    const file = path.join(directory, 'prompt.md');
+    fs.writeFileSync(file, 'あ'.repeat(40000), 'utf8');
+    const result = run(['--dry-run', '--prompt-file', file]);
+    assert.equal(result.status, 0);
+    const dryRun = JSON.parse(result.stdout);
+    assert.equal(dryRun.promptVia, 'stdin');
+    assert.ok(dryRun.promptChars >= 40000, `promptChars=${dryRun.promptChars}`);
+    assert.ok(JSON.stringify(dryRun.argv).length < 300, `argv=${JSON.stringify(dryRun.argv)}`);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

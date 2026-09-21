@@ -221,6 +221,27 @@ test('注入した WSL spawn の実測値を読み、失敗時は null にする
   assert.equal(readCodexUsedPercent({ spawnImpl: () => ({ status: 1, stdout: output }) }), null);
 });
 
+// 単発の起動失敗(OS エラー)は低成果(2件閾値)では拾えず、翌朝 healthy と判定されてしまった
+// (2026-09-21 実測: spawn ENAMETOOLONG / in=4964tok / out=0 / status=1)。
+test('fallback の spawn ENAMETOOLONG を1件で検出する', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', row({ t: '2026-09-09T11:00:00Z', provider: 'fallback', model: 'cheap-code:deepseek/deepseek-v4-flash', out: 0, status: 1, secs: 1446.7, stderrTail: "at async file:///C:/x/cheap-code.mjs:303:50 { errno: -4064, code: 'ENAMETOOLONG', syscall: 'spawn' } Node.js v24.18.0" }));
+  const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
+  assert.equal(findings[0].id, 'fallback_spawn_failed');
+  assert.match(findings[0].evidence.join('/'), /1件/);
+  assert.match(findings[0].evidence.join('/'), /ENAMETOOLONG/);
+  assert.equal(typeof findings[0].fixTask, 'string');
+  assert.match(findings[0].fixTask, /ENAMETOOLONG/);
+});
+
+test('spawn エラーでない fallback の単発失敗は fallback_spawn_failed を出さない', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', row({ t: '2026-09-09T11:00:00Z', provider: 'fallback', model: 'cheap-code:deepseek/deepseek-v4-flash', out: 0, status: 1, secs: 100, stderrTail: 'timeout waiting for gemini' }));
+  const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
+  assert.equal(findings.some((item) => item.id === 'fallback_spawn_failed'), false);
+  assert.equal(findings[0].id, 'healthy');
+});
+
 test('dry-run 相当では cooldown ファイルを変更しない', () => {
   const dir = home(), original = { codex: { until: NOW.getTime() + 9999, reason: 'usage_limit' } };
   write(dir, 'provider-cooldown.json', original); write(dir, 'codex-limit-history.jsonl', row({ t: '2026-09-09T10:00:00Z', reason: 'usage_limit' }));

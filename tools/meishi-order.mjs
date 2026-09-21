@@ -6,7 +6,8 @@
 //   order   : 名刺注文ウィザードを Playwright で進める。--yes が無い限り確定しない(DRY RUN)
 //   history : 申請履歴 + 注文履歴
 //
-// パスワードは ~/.claude/secrets/mahito-meishi.env からのみ読み、argv・stdout・stderr・ファイル名には出さない。
+// パスワードは ~/.claude/secrets/mahito-meishi.env（無ければ keyserve 配布先の ~/.claude/mahito-meishi.env）
+// からのみ読み、argv・stdout・stderr・ファイル名には出さない。
 //
 // ウィザードの 2〜4 画面(配送/用紙/出荷)の内部フォーム要素名は実測できていないため、
 // テキスト部分一致で選ぶ汎用ロジックにしてある。想定要素が無ければフォーム要素を stderr に
@@ -20,6 +21,9 @@ import { isEntry } from "./is-entry.mjs";
 
 export const BASE_URL = "https://mhtdesign.net/cloudb2";
 const SECRETS_FILE = path.join(os.homedir(), ".claude", "secrets", "mahito-meishi.env");
+// keyserve の配布先は ~/.claude/ 直下(実測: kimi-api.env 等が ~/.claude/ に実在する)。
+// secrets/ が正だが、keyserve に登録した場合は直下に落ちるため両方見る。
+const CREDS_CANDIDATES = [SECRETS_FILE, path.join(os.homedir(), ".claude", "mahito-meishi.env")];
 const SHOT_DIR = path.join(os.homedir(), ".claude", "meishi-order");
 const DEFAULT_BILLING_ID = "461";
 const DEFAULT_QTY = 100;
@@ -424,18 +428,25 @@ export function findChromium(baseDir, readdirFn = fs.readdirSync, existsFn = fs.
 // 認証情報
 // ---------------------------------------------------------------------------
 
+// 存在する最初の候補を返す。どれも無ければ第一候補(= 正規パス。エラー文言に使う)。
+export function resolveCredsFile(candidates = CREDS_CANDIDATES, existsFn = fs.existsSync) {
+  for (const p of candidates) if (existsFn(p)) return p;
+  return candidates[0];
+}
+
 function loadCreds() {
-  if (!fs.existsSync(SECRETS_FILE)) {
+  const file = resolveCredsFile();
+  if (!fs.existsSync(file)) {
     throw new Error(
       `${SECRETS_FILE} が無い。ログイン情報シート(社内)の『マヒトデザイン クラウド法人名刺』行を見て作成してください。\n` +
         `書式:\n  MAHITO_LOGIN_URL=https://mhtdesign.net/cloudb2/orgiast-meishi/login\n  MAHITO_ID=orgiast\n  MAHITO_PASSWORD=********`
     );
   }
-  const env = parseEnv(fs.readFileSync(SECRETS_FILE, "utf8"));
+  const env = parseEnv(fs.readFileSync(file, "utf8"));
   const loginUrl = env.MAHITO_LOGIN_URL || `${BASE_URL}/orgiast-meishi/login`;
   const id = env.MAHITO_ID;
   const password = env.MAHITO_PASSWORD;
-  if (!id || !password) throw new Error(`${SECRETS_FILE} に MAHITO_ID / MAHITO_PASSWORD がありません。`);
+  if (!id || !password) throw new Error(`${file} に MAHITO_ID / MAHITO_PASSWORD がありません。`);
   return { loginUrl, id, password, billingId: env.MAHITO_BILLING_ID || DEFAULT_BILLING_ID };
 }
 
@@ -525,7 +536,7 @@ async function login(client, creds) {
     headers: { "content-type": "application/x-www-form-urlencoded" },
   });
   if (/IDもしくはパスワードが間違っています/.test(posted.text)) {
-    throw new Error("ログイン失敗: ID またはパスワードが違います（" + SECRETS_FILE + " を確認）");
+    throw new Error("ログイン失敗: ID またはパスワードが違います（" + resolveCredsFile() + " を確認）");
   }
   if (/name=["']?password/i.test(posted.text) && !/logout|ログアウト/i.test(posted.text)) {
     throw new Error(`ログインできませんでした (${posted.url})`);
@@ -786,7 +797,7 @@ function printUsage() {
 注意:
   ・--to new は --new-addr "企業名|宛名|郵便番号|番地|建物名|電話" と組で使います(登録済み配送先には保存されません)
   ・500枚以上は配送方法が自動で「宅配便」になります
-  ・認証情報: ~/.claude/secrets/mahito-meishi.env`);
+  ・認証情報: ~/.claude/secrets/mahito-meishi.env （無ければ ~/.claude/mahito-meishi.env）`);
 }
 
 async function cmdCheck(args, creds) {

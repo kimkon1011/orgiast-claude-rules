@@ -484,3 +484,30 @@ test("applyHistoryQuery: クエリなしなら両方そのまま返し ordUnfilt
   assert.deepEqual(r.ordRows, ordRows);
   assert.equal(r.ordUnfiltered, false);
 });
+
+// --- resolveCredsFile: keyserve の配布先(~/.claude/ 直下)を吸収する ---
+import { resolveCredsFile } from "./meishi-order.mjs";
+
+test("resolveCredsFile は存在する最初の候補を返す", () => {
+  const primary = "X:/nope/.claude/secrets/mahito-meishi.env";
+  const keyserve = "X:/nope/.claude/mahito-meishi.env";
+  assert.equal(resolveCredsFile([primary, keyserve], (p) => p === primary), primary);
+  assert.equal(resolveCredsFile([primary, keyserve], (p) => p === keyserve), keyserve);
+});
+
+test("resolveCredsFile はどれも無ければ正規パス(第一候補)を返す", () => {
+  const primary = "X:/nope/.claude/secrets/mahito-meishi.env";
+  assert.equal(resolveCredsFile([primary, "X:/nope/.claude/mahito-meishi.env"], () => false), primary);
+});
+
+test("resolveCredsFile の既定候補は secrets/ を優先し、keyserve 配布先も含む", () => {
+  const seen = [];
+  const picked = resolveCredsFile(undefined, (p) => {
+    seen.push(p);
+    return /mahito-meishi\.env$/.test(p) && !p.includes("secrets");
+  });
+  assert.equal(seen.length, 2);
+  assert.match(seen[0], /secrets/);
+  assert.equal(picked, seen[1]);
+  assert.ok(picked.endsWith("mahito-meishi.env") && picked.includes(".claude"), picked);
+});

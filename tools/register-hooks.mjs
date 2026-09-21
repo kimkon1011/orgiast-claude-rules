@@ -203,6 +203,7 @@ try {
   // userへ頼む前に自動取得・復元・自動設定を毎プロンプトで先に検討させる。
   if (add(settings.hooks.UserPromptSubmit, 'automation-first-reminder.mjs', { hooks: [{ type: 'command', command: command('automation-first-reminder.mjs'), timeout: 5 }] })) added += 1;
   // 過去に受領済みのクレデンシャルをuserへ再質問する前に復元経路を注入する。
+  if (add(settings.hooks.UserPromptSubmit, 'fleet-inbox-context.mjs', { hooks: [{ type: 'command', command: command('fleet-inbox-context.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.UserPromptSubmit, 'credentials-reminder.mjs', { hooks: [{ type: 'command', command: command('credentials-reminder.mjs'), timeout: 5 }] })) added += 1;
   added += migrate(settings.hooks.PreToolUse, 'pretooluse-delegation-warn.ps1', 'pretooluse-delegation-warn.mjs', command('pretooluse-delegation-warn.mjs'));
   if (add(settings.hooks.PreToolUse, 'pretooluse-delegation-warn.mjs', { matcher: 'Write|Edit|MultiEdit', hooks: [{ type: 'command', command: command('pretooluse-delegation-warn.mjs') }] })) added += 1;

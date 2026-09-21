@@ -87,6 +87,10 @@ function doPost(e) {
 
   // 未知 kind は従来どおり通常点検として扱い、既存クライアントの挙動を変えない。
   const handlers = {
+    'mail-send': sendFleetMail,
+    'mail-poll': pollFleetMail,
+    'mail-reply': replyFleetMail,
+    'mail-get': getFleetMail,
     'pc-spec': upsertPcInventory,
     'extensions-describe': describeExtensionAudit,
     extensions: replaceExtensionAudit,

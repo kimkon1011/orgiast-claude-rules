@@ -71,6 +71,7 @@ function check(item) {
       return spec.requiredPath ? Boolean(nested(parsed, spec.requiredPath)) : true;
     }
     if (item.type === 'scheduled-task') {
+      if (typeof spec.ifPresent === 'string' && !fs.existsSync(resolveHome(spec.ifPresent))) return null;
       if (process.platform !== 'win32') return false;
       execFileSync('schtasks.exe', ['/Query', '/TN', spec.name], { stdio: 'ignore', timeout: 10000, windowsHide: true });
       return true;

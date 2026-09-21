@@ -131,3 +131,15 @@ test('converge実経路がhook登録・旧通知削除・allow反映を行い再
   assert.equal(run(args).status, 0);
   assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), settings);
 });
+
+test('fleet mail scheduled task is skipped until its transport config exists', () => {
+  const home = temp('setup-fleet-mail-');
+  const mf = path.join(home, 'manifest.json');
+  write(mf, JSON.stringify(manifest([item('task:fleet-mail', 'scheduled-task', { name: 'OrgiastFleetMail-test-missing', ifPresent: '.claude/fleet-sheet.env' }, 'optional')])));
+  const first = run(['--json', '--home', home, '--manifest', mf]);
+  assert.equal(JSON.parse(first.stdout).items[0].status, 'NOTICE');
+  write(path.join(home, '.claude/fleet-sheet.env'), 'configured');
+  const second = run(['--json', '--home', home, '--manifest', mf]);
+  assert.equal(JSON.parse(second.stdout).items[0].status, 'NG');
+  fs.rmSync(home, { recursive: true, force: true });
+});

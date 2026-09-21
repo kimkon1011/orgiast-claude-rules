@@ -605,6 +605,27 @@ PCがあればその瞬間に 401 で締め出され、鍵配布が全滅する�
 ②その後に `/api/memory` を足してデプロイ。復元せずに機能を足すと、足した瞬間に既存機能が消える。
 本番を触る前に「旧秘密で401か / 新秘密で200か」を**実際にHTTPで叩いて**確認する（表示や記録を完了判定にしない）。
 
+
+#### 1.15.3 PC間の Claude Code 同士の連絡（fleet-mail）
+
+別アカウントのPCへ質問・連絡を送り、返信を機械可読で受け取る。既存の `fleet-sheet.env` のURL・トークンを使い、新しい秘密情報は配らない。
+
+```bash
+node tools/fleet-mail.mjs --send --to kim-PC --kind prompt --body-file question.txt --why "状況確認" --wait 600
+node tools/fleet-mail.mjs --poll
+node tools/fleet-mail.mjs --reply <id> --body-file answer.txt
+```
+
+本文ファイルはClaudeが作る。`--why` は送信時必須。本文のargv直渡しは禁止。`--wait` は15秒ごとに返信を確認し、返信時exit 0、期限まで未返信ならexit 2を返す。送信IDは送信ログにも残る。
+
+- `prompt` は相手PCの人の1回の承諾（`fleet-agent-optin.json` の `accept` に `prompt`）が必要。未承諾なら実行せず承諾コマンドを返信する。Claudeが承諾を代行してはならない。ヘッドレス回答はSonnetでローカル読み取りだけを許可し、90秒で打ち切る。ファイル変更や外部送信を実行しない。
+- `note` は承諾不要。受信だけではAIを起動せず、次のプロンプト時に相手のClaudeが読む。未読一覧は `node tools/fleet-mail.mjs --inbox --json`、既読化は `node tools/fleet-mail.mjs --ack <id>`。
+- 到達の目安は2分（PC起動中・通信正常時）。長い受信処理、PC休止、ネットワーク遅延は加算される。対話セッションの過去の会話履歴は共有しない。
+- 他PCへの展開は `node tools/setup.mjs --converge` でhookとWindows受信タスク `OrgiastFleetMail` を自動登録。送受信設定のないPCはスキップする。人が必要なのはprompt承諾1回だけ。
+- `all` は各PCがローカルで処理済みIDを保持する。最初の返信後も未受信PCへ届けるため、all宛だけは `done` も未失効ならpoll対象。`--wait` は最初の返信を返し、追加返信はnoteとして届く。
+- **秘密情報を本文に書かない。** ログ・inbox・返信は `redactSecrets` を通す。これは任意の秘密を完全検出する仕組みではない。
+
+
 ### 1.16 Fableの用途制限
 
 FableはplanIncludedがtrueなら監督のみ可、falseなら全用途禁止。

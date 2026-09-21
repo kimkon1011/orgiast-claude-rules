@@ -19,9 +19,9 @@
   },
   {
     "pattern": "共有アカウント(seisaku-team)からの Gmail 下書き作成",
-    "route": "**可能・追加設定ゼロ・kim の手作業ゼロ**。`tools/gmail-draft.mjs`（2026-09-22 新設）が DWD で seisaku-team@orgiast.jp を impersonate して `drafts.create`（scope=gmail.compose）。SA キー既定は aujust-sales-automation/.gcp/sheets-sa.json、依存パッケージなし。`node tools/gmail-draft.mjs --check` で権限だけを非破壊に確認（Gmail API を呼ばない）。**2026-09-22 実測**: seisaku-team で gmail.readonly / **gmail.compose** / **gmail.send** の3スコープすべてトークン発行成功＝DWD 委任済みで Admin Console 操作は不要。「MCP が無い＝下書きが作れない」は誤読で、DWD 経路は既に通っていた。内部宛(orgiast.jp/toho-kogyo.com/台帳)はツール内で遮断し API を呼ばずチャット形式を出して exit 3。`--delete <id>` は下書きのみ（送信済みは消せない）。送信 API は実装していない（gmail.send は委任済みだが承認範囲外）。**未確認**: `drafts.create` の実 HTTP は classifier が書き込みを deny したため未実行（迂回せず）。詳細 docs/shared-account-gmail-draft-route.md",
+    "route": "**可能・追加設定ゼロ・kim の手作業ゼロ**。`tools/gmail-draft.mjs`（2026-09-22 新設）が DWD で seisaku-team@orgiast.jp を impersonate して `drafts.create`（scope=gmail.compose）。SA キー既定は aujust-sales-automation/.gcp/sheets-sa.json、依存パッケージなし。`node tools/gmail-draft.mjs --check` で権限だけを非破壊に確認（Gmail API を呼ばない）。**2026-09-22 実測**: seisaku-team で gmail.readonly / **gmail.compose** / **gmail.send** の3スコープすべてトークン発行成功＝DWD 委任済みで Admin Console 操作は不要。「MCP が無い＝下書きが作れない」は誤読で、DWD 経路は既に通っていた。内部宛(orgiast.jp/toho-kogyo.com/台帳)はツール内で遮断し API を呼ばずチャット形式を出して exit 3。`--delete <id>` は下書きのみ（送信済みは消せない）。送信 API は実装していない（gmail.send は委任済みだが承認範囲外）。**2026-09-22 実測で確定**: `drafts.create` の実 HTTP は成功（id=r1697484905697154238 / `in:drafts subject:verify` の読み戻しで DRAFT ラベル・宛先・件名・本文一致 / `--delete` で削除済み・残留ゼロ）。送信 API は引き続き未実装・未実行。詳細 docs/shared-account-gmail-draft-route.md, docs/approval-completion-checkin-email-route.md",
     "confidence": "high",
-    "source": "2026-09-22 実測（handoff-audit:e2715c224377adaa。--check のトークン発行成功 + テスト20/20 + 内部宛の実アドレス遮断）"
+    "source": "2026-09-22 実測（handoff-audit:e2715c224377adaa。--check のトークン発行成功 + テスト20/20 + 内部宛の実アドレス遮断） + 2026-09-22 実測（handoff-audit:f59a211cc367f15d。drafts.create の実 HTTP 成功・読み戻し・削除まで確定）"
   },
   {
     "pattern": "Drive にファイル/Sheet を作る",

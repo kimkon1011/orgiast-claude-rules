@@ -13,9 +13,15 @@
   },
   {
     "pattern": "社内・グループ会社・スタッフ宛の連絡文",
-    "route": "Gmail 下書きにしない。チャット本文に宛先/用件/本文を完成形で表示（kim はリモートデスクトップ/LINE/Discord で渡す）。Discord MCP が使えるなら Discord 送信可。**2026-09-22 実測**: 強制は `tools/internal-recipient-gmail-guard.mjs`（PreToolUse / matcher=`mcp__claude_ai_Gmail(?:_\\d+)?__(create_draft|send_message|update_draft|reply|forward)`、settings.json:475、台帳=`~/.claude/internal-recipients.json`→無ければ default の orgiast.jp/toho-kogyo.com + 明示4件）。経理(keiri.orgiast@gmail.com)宛 create_draft=**deny**・外部宛=pass・テスト14/14 pass を実測。**穴1**: claude.ai コネクタが無効な APIキー環境（`claude mcp list`=gemini-cli のみ）では MCP ツール自体が無く**発火しない**。**穴2**: Bash 経由の Gmail REST は matcher 外で素通り（下書き作成の常設ツールは無いが、アドホックなコードは誰も止めない＝分類器の可否は未試行）。**穴3**: 台帳に無いフリーメールの社内スタッフは素通り（drivers の追加は人の手）。未確認: コネクタ有効環境での実発火、書き込み系ツール名の全リスト",
+    "route": "Gmail 下書きにしない。チャット本文に宛先/用件/本文を完成形で表示（kim はリモートデスクトップ/LINE/Discord で渡す）。Discord MCP が使えるなら Discord 送信可。**2026-09-22 実測**: 強制は `tools/internal-recipient-gmail-guard.mjs`（PreToolUse / matcher=`mcp__claude_ai_Gmail(?:_\\d+)?__(create_draft|send_message|update_draft|reply|forward)`、settings.json:475、台帳=`~/.claude/internal-recipients.json`→無ければ default の orgiast.jp/toho-kogyo.com + 明示4件）。経理(keiri.orgiast@gmail.com)宛 create_draft=**deny**・外部宛=pass・テスト14/14 pass を実測。**穴1**: claude.ai コネクタが無効な APIキー環境（`claude mcp list`=gemini-cli のみ）では MCP ツール自体が無く**発火しない**。**穴2（2026-09-22 一部解消）**: Bash 経由の Gmail REST は matcher 外で素通り。常設の下書き作成ツールが無かったが、`tools/gmail-draft.mjs`（2026-09-22 新設）が `loadLedger`/`isInternal` を取り込み**ツール内で内部宛を遮断**し、Gmail API を呼ばずチャット形式を出して exit 3 で止まる（実測: keiri.orgiast@gmail.com 宛で通信ゼロ・テスト20/20 pass）。ただし自分でアドホックなコードを書けば依然素通りする。**穴3**: 台帳に無いフリーメールの社内スタッフは素通り（drivers の追加は人の手）。未確認: コネクタ有効環境での実発火、書き込み系ツール名の全リスト",
     "confidence": "high",
     "source": "2026-09-11 kim 厳命 / 2026-09-22 実測（handoff-audit:57eef0336eb2bedd。詳細 docs/internal-staff-chat-display-verification.md）"
+  },
+  {
+    "pattern": "共有アカウント(seisaku-team)からの Gmail 下書き作成",
+    "route": "**可能・追加設定ゼロ・kim の手作業ゼロ**。`tools/gmail-draft.mjs`（2026-09-22 新設）が DWD で seisaku-team@orgiast.jp を impersonate して `drafts.create`（scope=gmail.compose）。SA キー既定は aujust-sales-automation/.gcp/sheets-sa.json、依存パッケージなし。`node tools/gmail-draft.mjs --check` で権限だけを非破壊に確認（Gmail API を呼ばない）。**2026-09-22 実測**: seisaku-team で gmail.readonly / **gmail.compose** / **gmail.send** の3スコープすべてトークン発行成功＝DWD 委任済みで Admin Console 操作は不要。「MCP が無い＝下書きが作れない」は誤読で、DWD 経路は既に通っていた。内部宛(orgiast.jp/toho-kogyo.com/台帳)はツール内で遮断し API を呼ばずチャット形式を出して exit 3。`--delete <id>` は下書きのみ（送信済みは消せない）。送信 API は実装していない（gmail.send は委任済みだが承認範囲外）。**未確認**: `drafts.create` の実 HTTP は classifier が書き込みを deny したため未実行（迂回せず）。詳細 docs/shared-account-gmail-draft-route.md",
+    "confidence": "high",
+    "source": "2026-09-22 実測（handoff-audit:e2715c224377adaa。--check のトークン発行成功 + テスト20/20 + 内部宛の実アドレス遮断）"
   },
   {
     "pattern": "Drive にファイル/Sheet を作る",

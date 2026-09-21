@@ -136,3 +136,37 @@ test('runnerと単体hookの両方が会話のsession-close証拠を評価する
     }
   }
 });
+
+test('handoff-branch-coverage-gate: 初回決め打ちで既存分岐が無い手渡しを BRANCH-COVERAGE で block する', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-branch-block-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const result = invoke(home, 'branch-block', '設定してください。\n1. 初回は新規に作成します。');
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.decision, 'block');
+  assert.match(output.reason, /### handoff-branch-coverage-gate[\s\S]*\[BRANCH-COVERAGE\][\s\S]*分岐:既存の場合/);
+  const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8'));
+  assert.ok(record.blockedBy.includes('handoff-branch-coverage-gate'));
+  // 必要性(fullsteps) → 分岐網羅(branch) の順で並ぶ。
+  assert.ok(record.blockedBy.indexOf('manual-request-fullsteps-gate') < record.blockedBy.indexOf('handoff-branch-coverage-gate'));
+});
+
+test('handoff-branch-coverage-gate: 本流に既存分岐があれば他gateの結果に関わらず自分は block しない', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-branch-pass-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const result = invoke(home, 'branch-pass', '設定してください。\n1. 初回は新規に作成します。\n2. 既存の設定が表示されていたら、その設定を開きます。');
+  assert.equal(result.status, 0, result.stderr);
+  const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8'));
+  assert.ok(!record.blockedBy.includes('handoff-branch-coverage-gate'));
+  if (result.stdout) assert.doesNotMatch(JSON.parse(result.stdout).reason, /BRANCH-COVERAGE/);
+});
+
+test('handoff-branch-coverage-gate: 手作業依頼ではない完了報告では起動しない', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-branch-report-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const result = invoke(home, 'branch-report', '初回の run は success でした。完了しました。');
+  assert.equal(result.status, 0, result.stderr);
+  const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8'));
+  assert.ok(!record.blockedBy.includes('handoff-branch-coverage-gate'));
+  if (result.stdout) assert.doesNotMatch(JSON.parse(result.stdout).reason, /BRANCH-COVERAGE/);
+});

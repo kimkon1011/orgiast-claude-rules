@@ -43,6 +43,11 @@ export function check(text) {
     return { triggered: true, missing };
 }
 
+// stop-gate-runner と単体 hook が同じ文言を出すよう、理由文はここで一元化する。
+export function formatReason(missing) {
+    return `[BRANCH-COVERAGE] 状態を片方に決め打ちした手順です\n不足: ${missing.join('・')}\n本流の手順として両方の分岐を書くこと。失敗時対応表に逃がすのは不可\n既存かどうかを user に確認させるのではなく、user が画面で見分けられる目印（例: 『◯◯が表示されていたら手順Aへ、△△なら手順Bへ』）を先に書くこと\n対象が片側に限られる理由がある場合は [BRANCH-OK: 理由] を記載してください。理由なしの [BRANCH-OK] は通過しません。`;
+}
+
 async function main() {
     if (process.argv.includes('--test') || process.argv.includes('--selftest')) {
         const { runTests } = await import('./handoff-branch-coverage-gate.test.mjs');
@@ -59,7 +64,7 @@ async function main() {
         const result = check(latestAssistantText(data.transcript_path));
         if (!result.triggered || result.missing.length === 0) return;
 
-        const reason = `[BRANCH-COVERAGE] 状態を片方に決め打ちした手順です\n不足: ${result.missing.join('・')}\n本流の手順として両方の分岐を書くこと。失敗時対応表に逃がすのは不可\n既存かどうかを user に確認させるのではなく、user が画面で見分けられる目印（例: 『◯◯が表示されていたら手順Aへ、△△なら手順Bへ』）を先に書くこと\n対象が片側に限られる理由がある場合は [BRANCH-OK: 理由] を記載してください。理由なしの [BRANCH-OK] は通過しません。`;
+        const reason = formatReason(result.missing);
         console.error(reason);
         // 手本と同じ Stop hook 契約: JSON decision + exit 0。
         console.log(JSON.stringify({ decision: 'block', reason }));

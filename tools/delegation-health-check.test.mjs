@@ -92,6 +92,43 @@ test('emptyOutputReason は timeout・終了コード・原因不明を分類す
   assert.equal(emptyOutputReason({ launched: true, status: 3, secs: 0 }), 'exit_3');
 });
 
+test('emptyOutputReason は Codex の認証失敗と ChatGPT モデル認証不整合を分類する', () => {
+  assert.equal(emptyOutputReason({ status: 1, stderrTail: 'cted status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses' }), 'auth_failed');
+  assert.equal(emptyOutputReason({ status: 1, stderrTail: '..."message":"The \'gpt-5.6-sol\' model is not supported when using Codex with a ChatGPT account."}}' }), 'model_auth_mismatch');
+  assert.equal(emptyOutputReason({ status: 1 }), 'exit_1');
+});
+
+test('認証失敗とモデル認証不整合は codex_empty_output でなく名前付き finding に分離する', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl',
+    row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, status: 1, stderrTail: '401 Unauthorized: Missing bearer or basic authentication in header' })
+    + row({ t: '2026-09-09T10:01:00Z', provider: 'codex', out: 0, status: 1, stderrTail: "The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account." }));
+  const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
+  assert.deepEqual(findings.map((item) => item.id), ['codex_model_auth_mismatch', 'codex_auth_failed']);
+  assert.equal(findings.find((item) => item.id === 'codex_model_auth_mismatch').severity, 'medium');
+  assert.equal(findings.find((item) => item.id === 'codex_auth_failed').severity, 'low');
+  assert.ok(!findings.some((item) => item.id === 'codex_empty_output'));
+});
+
+test('codex_auth_failed は low なので next-session.md へ起票しない', () => {
+  const dir = home();
+  write(dir, 'next-session.md', handoff());
+  write(dir, 'executor-usage.jsonl', row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, status: 1, stderrTail: '401 Unauthorized: Missing bearer or basic authentication in header' }));
+  const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
+  assert.equal(upsertFixTasks({ home: dir, findings, now: NOW, todayStr: '2026-09-22' }), false);
+  assert.doesNotMatch(fs.readFileSync(path.join(dir, '.claude', 'next-session.md'), 'utf8'), /codex_auth_failed/);
+});
+
+test('認証失敗と本物の出力ゼロが混在しても codex_empty_output は本物だけを数える', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl',
+    row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, status: 1, stderrTail: '401 Unauthorized: Missing bearer or basic authentication in header' })
+    + row({ t: '2026-09-09T10:01:00Z', provider: 'codex', out: 0, status: 1 }));
+  const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
+  assert.deepEqual(findings.map((item) => item.id), ['codex_auth_failed', 'codex_empty_output']);
+  assert.deepEqual(findings.find((item) => item.id === 'codex_empty_output').evidence, ['1件', 'exit_1(1件)', 'インフラ/起動失敗で除外 1件']);
+});
+
 test('起動失敗は codex_empty_output でなく codex_launch_failed として起票する', () => {
   const dir = home();
   write(dir, 'executor-usage.jsonl', row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, secs: 0, timedOut: false, status: 3, launched: false }));

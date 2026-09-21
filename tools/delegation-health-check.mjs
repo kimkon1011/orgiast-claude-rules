@@ -69,6 +69,14 @@ const INFRA_TRANSIENT = /failed to lookup address information|failed to connect 
 // （2026-09-19 実測: この PC は `wsl -l -q` が空）。
 const WSL_LANE_ABSENT = /WSL ディストリが見つかりません/;
 
+// codex CLI 自身の認証欠落。WSL 側 ~/.codex/auth.json が未認証/失効だと、セッションを作る前に
+// 401 で死ぬ。コードでは直せず再ログインが要る環境要因（2026-09-22 診断: 09-20 の11件中4件）。
+const CODEX_AUTH_FAILED = /401 unauthorized|missing bearer or basic authentication/i;
+
+// ChatGPT アカウント認証なのに sol/astra を選ぶと 400 で即死する。codex-do 側のレーン選択の
+// 問題なので、直せる欠陥として起票する（2026-09-22 診断: 09-20 の11件中7件）。
+const CODEX_MODEL_AUTH_MISMATCH = /is not supported when using codex with a chatgpt account/i;
+
 export function emptyOutputReason(row) {
   if (row?.timedOut === true) return 'timeout';
   // 旧行(timedOut 未記録)は経過秒数から推定する。codex の正常終了は実測で中央値~100秒、
@@ -77,8 +85,10 @@ export function emptyOutputReason(row) {
   // codex を起動できずに終わった行。出力ゼロではなく「そもそも走っていない」ので、
   // no_output に混ぜると原因が埋もれて同 id が永久に消えない（2026-09-16 診断）。
   if (row?.launched === false) return 'launch_failed';
-  if (INFRA_TRANSIENT.test(String(row?.stderrTail || ''))) return 'infra_transient';
   if (/Not inside a trusted directory/.test(String(row?.stderrTail || ''))) return 'untrusted_cwd';
+  if (CODEX_AUTH_FAILED.test(String(row?.stderrTail || ''))) return 'auth_failed';
+  if (CODEX_MODEL_AUTH_MISMATCH.test(String(row?.stderrTail || ''))) return 'model_auth_mismatch';
+  if (INFRA_TRANSIENT.test(String(row?.stderrTail || ''))) return 'infra_transient';
   const status = Number(row?.status);
   if (Number.isFinite(status) && status !== 0) return `exit_${status}`;
   return 'no_output';
@@ -112,13 +122,20 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
     .filter((row) => row.provider === 'codex' && Number(row.out) === 0)
     .map((source) => ({ reason: emptyOutputReason(source), stderrTail: source.stderrTail }))
     .filter((item) => item.reason !== 'timeout');
-  const realEmpty = empty.filter((item) => item.reason !== 'infra_transient' && item.reason !== 'launch_failed');
+  const realEmpty = empty.filter((item) => !['infra_transient', 'launch_failed', 'auth_failed', 'model_auth_mismatch'].includes(item.reason));
   const launchFailed = empty.filter((item) => item.reason === 'launch_failed');
+  const authFailed = empty.filter((item) => item.reason === 'auth_failed');
+  const modelAuthMismatch = empty.filter((item) => item.reason === 'model_auth_mismatch');
   const laneAbsent = launchFailed.filter((item) => WSL_LANE_ABSENT.test(String(item.stderrTail || '')));
   const fixableLaunchFailed = launchFailed.filter((item) => !WSL_LANE_ABSENT.test(String(item.stderrTail || '')));
   if (fixableLaunchFailed.length) findings.push({ id: 'codex_launch_failed', severity: 'medium', title: 'Codex の起動失敗', evidence: [`${fixableLaunchFailed.length}件`, ...reasonTop(fixableLaunchFailed)], fixTask: 'codex-do が codex を起動できずに終了している。WSL の状態と起動経路のログを確認し、起動失敗を再現するテストを追加して修正' });
   // 事実は消さずに名前を付けて残す。fixTask を付けない(low)ので毎日の起票対象にはならない。
   if (laneAbsent.length) findings.push({ id: 'codex_lane_unavailable', severity: 'low', title: 'codex レーンは WSL 不在のため使用不可（代替バックエンドで実行中）', evidence: [`${laneAbsent.length}件`, 'WSL ディストリ 0 件'] });
+  // 直せる欠陥なので fixTask を付ける（medium）。
+  if (modelAuthMismatch.length) findings.push({ id: 'codex_model_auth_mismatch', severity: 'medium', title: 'Codex が ChatGPT アカウントで sol/astra を選んで失敗', evidence: [`${modelAuthMismatch.length}件`, ...reasonTop(modelAuthMismatch)], fixTask: 'codex-do のレーン選択が ChatGPT アカウント認証を検出できず sol/astra を選んでいる。detectChatGptAuth と decideCodexLane の判定を照合し、再現テストを追加して修正' });
+  // 事実は消さずに名前を付けて残す。再ログインは人が行う操作でコードでは直せないため
+  // fixTask を付けない(low)＝毎日の起票対象にはしない（codex_lane_unavailable と同じ扱い）。
+  if (authFailed.length) findings.push({ id: 'codex_auth_failed', severity: 'low', title: 'Codex CLI が未認証（WSL 側の再ログインが必要）', evidence: [`${authFailed.length}件`, 'WSL の ~/.codex/auth.json を確認し codex login を実行'] });
   if (realEmpty.length) findings.push({ id: 'codex_empty_output', severity: 'medium', title: 'Codex の出力ゼロ', evidence: [`${realEmpty.length}件`, ...reasonTop(realEmpty), ...(empty.length > realEmpty.length ? [`インフラ/起動失敗で除外 ${empty.length - realEmpty.length}件`] : [])], fixTask: 'codex が出力ゼロで終了した原因（認証切れ/上限/起動失敗）を codex-do のログから特定' });
   for (const [provider, state] of Object.entries(cooldown)) if (state?.reason === 'http_402' && Number(state.until) > nowMs) findings.push({ id: 'provider_balance_exhausted', severity: 'low', title: `${provider} の残高切れ`, evidence: [`provider ${provider}`, CLAUDE_FALLBACK_RULE] });
   return findings.length ? findings : [{ id: 'healthy', severity: 'low', title: '委譲経路は正常', evidence: [] }];

@@ -39,8 +39,14 @@ function loadManifest() {
 }
 const resolveHome = (relative) => path.resolve(home, ...String(relative).replaceAll('\\', '/').split('/'));
 function readNonempty(target, kind) {
-  const stat = fs.statSync(target);
-  return kind === 'directory' ? stat.isDirectory() : stat.isFile() && stat.size > 0;
+  try {
+    const stat = fs.statSync(target);
+    return kind === 'directory' ? stat.isDirectory() : stat.isFile() && stat.size > 0;
+  } catch (error) {
+    // paths 配列の候補のうち存在しない側で throw すると候補全体が NG になるため、欠落は false で返す
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return false;
+    throw error;
+  }
 }
 function nested(value, dotted) { return dotted.split('.').reduce((v, key) => v?.[key], value); }
 function check(item) {

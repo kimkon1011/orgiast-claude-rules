@@ -1,6 +1,8 @@
 {
   "version": 1,
   "items": [
+    { "id": "tool:autopilot-tick", "type": "file-nonempty", "severity": "required", "spec": { "paths": ["orgiast-claude-rules/tools/autopilot-tick.mjs", "Downloads/orgiast-claude-rules/tools/autopilot-tick.mjs"] }, "description": "autopilot 状態管理(repo直参照)", "repair": ["onboarding-sync.mjs", "--force"] },
+    { "id": "skill:autopilot", "type": "file-nonempty", "severity": "required", "spec": { "path": ".claude/skills/autopilot/SKILL.md" }, "description": "autopilot 自律ループ skill", "repair": ["onboarding-sync.mjs", "--force"] },
     { "id": "cmd:git", "type": "command", "severity": "required", "spec": { "command": "git", "versionRegex": ".+" }, "description": "git 導入", "repairHint": "winget install Git.Git" },
     { "id": "cmd:node", "type": "command", "severity": "required", "spec": { "command": "node", "versionRegex": "\\d+\\.\\d+\\.\\d+" }, "description": "Node.js 導入", "repairHint": "winget install OpenJS.NodeJS.LTS" },
     { "id": "cmd:claude", "type": "command", "severity": "required", "spec": { "command": "claude", "versionRegex": "\\d+\\.\\d+\\.\\d+" }, "description": "Claude Code 導入", "repairHint": "winget install Anthropic.ClaudeCode" },

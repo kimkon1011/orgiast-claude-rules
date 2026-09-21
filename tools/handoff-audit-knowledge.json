@@ -13,9 +13,9 @@
   },
   {
     "pattern": "社内・グループ会社・スタッフ宛の連絡文",
-    "route": "Gmail 下書きにしない。チャット本文に宛先/用件/本文を完成形で表示（kim はリモートデスクトップ/LINE/Discord で渡す）。Discord MCP が使えるなら Discord 送信可",
+    "route": "Gmail 下書きにしない。チャット本文に宛先/用件/本文を完成形で表示（kim はリモートデスクトップ/LINE/Discord で渡す）。Discord MCP が使えるなら Discord 送信可。**2026-09-22 実測**: 強制は `tools/internal-recipient-gmail-guard.mjs`（PreToolUse / matcher=`mcp__claude_ai_Gmail(?:_\\d+)?__(create_draft|send_message|update_draft|reply|forward)`、settings.json:475、台帳=`~/.claude/internal-recipients.json`→無ければ default の orgiast.jp/toho-kogyo.com + 明示4件）。経理(keiri.orgiast@gmail.com)宛 create_draft=**deny**・外部宛=pass・テスト14/14 pass を実測。**穴1**: claude.ai コネクタが無効な APIキー環境（`claude mcp list`=gemini-cli のみ）では MCP ツール自体が無く**発火しない**。**穴2**: Bash 経由の Gmail REST は matcher 外で素通り（下書き作成の常設ツールは無いが、アドホックなコードは誰も止めない＝分類器の可否は未試行）。**穴3**: 台帳に無いフリーメールの社内スタッフは素通り（drivers の追加は人の手）。未確認: コネクタ有効環境での実発火、書き込み系ツール名の全リスト",
     "confidence": "high",
-    "source": "2026-09-11 kim 厳命"
+    "source": "2026-09-11 kim 厳命 / 2026-09-22 実測（handoff-audit:57eef0336eb2bedd。詳細 docs/internal-staff-chat-display-verification.md）"
   },
   {
     "pattern": "Drive にファイル/Sheet を作る",

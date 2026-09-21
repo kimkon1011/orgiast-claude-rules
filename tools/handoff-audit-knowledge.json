@@ -82,5 +82,11 @@
     "route": "**到達性・描画・文言は Claude 側で完結する。認証後の画面だけは無人会話の範囲外**（実測 2026-09-22）。手順=①`curl -sS -o /dev/null -w \"%{http_code} %{redirect_url}\"` で本番 URL を1本叩く（aujust-sales-automation.vercel.app は `/` `/cases` `/api/*` すべて 307→/login を実測）。②`playwright-core`（このPCは `~/.claude/tools/node_modules/playwright-core`）＋ `%LOCALAPPDATA%\\ms-playwright\\chromium-*\\chrome-win64\\chrome.exe` を `executablePath` に渡し headless 描画。実測で login 画面の title/本文/入力欄/ボタン/スクショ(37,818B) まで取得＝**「開いて目視」の到達性確認は kim 不要**。③認証は magic link と Google OAuth の2経路のみで、無人会話では踏めない（リンク要求はメール送信＝禁止、OAuth は対話同意）。**認証後画面の描画は未確認と書く。**④論点が「運用に合っているか」＝列マッピングの正しさなら UI ではなくデータの話なので Sheets/DWD 読み戻しで判定する（`14f2bd38e35a58ce` で実証）。⑤描画そのものが論点の時だけ Playwright + `storageState`（アプリ側 e2e の auth state）を使う。**落とし穴**: Windows絶対パスは ESM 動的 import に直接渡せない（`ERR_UNSUPPORTED_ESM_URL_SCHEME: c:` → `pathToFileURL().href`）、`playwright-core` は CJS なので名前空間に `chromium` が無く `default.chromium` になる場合がある、Chromium 実体は `chrome-win64/chrome.exe`。再現: `~/.claude/auto-session/runs/2026-09-22-7-prod-ui-probe.mjs`。詳細: docs/prod-ui-visual-verification.md",
     "confidence": "high",
     "source": "2026-09-22 実測（handoff-audit:408e4194471c4ab7）。元の手渡しは 2026-09-18 セッション dd676e9e「https://aujust-sales-automation.vercel.app の Reブース案件を1件開いて、実際の運用に合っているか見てください」。詳細は docs/prod-ui-visual-verification.md"
+  },
+  {
+    "pattern": "バックグラウンド再生成の進捗待ち（証拠なしに背景ジョブの状態を断定して待たせる）",
+    "route": "待たない。長時間ジョブは前景で --timeout を切って回し切るか、実行基盤（GitHub Actions/タスクスケジューラ/auto-session 再入）に載せる。進捗は ~/.claude/executor-usage.jsonl（status/out/timedOut/secs/cwd）や `gh run view` 等の一次情報を直接照会し、照会できなければ「未確認」と書いて断定も確率表現もしない（監査基準 rule 4）。待ちは ~/.claude/next-session.md の残TODO先頭に「検証のみ1行」を足して次セッションで確認する。セッションを開いたまま「バックグラウンド実行中」と報告しない（2026-09-22 実測: codex-do.mjs は前景・単発で背景起動/進捗照会/待機の機能を持たない。docs/background-progress-wait-route.md）",
+    "confidence": "high",
+    "source": "2026-09-22 handoff-audit:64119511293ffa00"
   }
 ]

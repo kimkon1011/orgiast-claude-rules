@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { writeHandoff } from './next-session-rotate.mjs';
 import path from 'node:path';
 import { userHome } from './batch-enqueue.mjs';
 import { clipMessageBody, PER_MESSAGE_CHARS } from './discord-digest.mjs';
@@ -46,7 +47,7 @@ function appendNextSession(home, decisions, date) {
   const lines = decisions.map((item) => `- [ ] ${String(item.text).replace(/\r?\n/g, ' ')}（by ${item.author || '不明'}, ${item.source}, ${item.id}）`).join('\n');
   if (!current.includes(heading)) {
     const prefix = current && !current.endsWith('\n') ? '\n' : '';
-    fs.appendFileSync(file, `${prefix}${heading}\n${lines}\n`);
+    writeHandoff(file, `${current}${prefix}${heading}\n${lines}\n`);
     return;
   }
   const headingAt = current.indexOf(heading);
@@ -54,9 +55,7 @@ function appendNextSession(home, decisions, date) {
   const insertAt = nextHeading < 0 ? current.length : nextHeading + 1;
   const prefix = insertAt > 0 && current[insertAt - 1] !== '\n' ? '\n' : '';
   const updated = `${current.slice(0, insertAt)}${prefix}${lines}\n${current.slice(insertAt)}`;
-  const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, updated);
-  fs.renameSync(tmp, file);
+  writeHandoff(file, updated);
 }
 
 export async function runMorning({ home = userHome(), now = new Date(), dryRun = false, intakeImpl = intake, fetchMessagesImpl, fetchImpl = fetch, sleepImpl, channelId, token, webhookUrl, notifyKimImpl = notifyKim } = {}) {

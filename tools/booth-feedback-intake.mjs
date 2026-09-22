@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { writeHandoff } from './next-session-rotate.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -105,7 +106,7 @@ export async function fetchJson(url, options = {}, fetchImpl = fetch, { sleep = 
 function defaultIo() {
   return {
     read: (file) => fs.readFileSync(file, 'utf8'),
-    write: (file, text) => fs.writeFileSync(file, text, 'utf8'),
+    write: (file, text) => path.basename(file) === 'next-session.md' ? writeHandoff(file, text) : fs.writeFileSync(file, text, 'utf8'),
     now: () => new Date(),
     stdout: (text) => console.log(text),
     stderr: (text) => console.error(text),
@@ -206,9 +207,12 @@ export async function runIntake({ args = [], home = process.env.ORGIAST_HOME || 
     const nextFile = path.join(claudeDir, 'next-session.md');
     let before = '';
     try { before = io.read(nextFile); } catch {}
+    let archivedFeedback = [];
+    try { archivedFeedback = JSON.parse(io.read(path.join(claudeDir, 'archive', 'next-session-feedback.json'))); } catch {}
+    const seenFeedback = (key) => before.includes(`[FB:${key}]`) || archivedFeedback.includes(key);
     const validItems = items.filter((item) => item?.key);
-    const existingInText = validItems.filter((item) => before.includes(`[FB:${item.key}]`));
-    const missingFromText = validItems.filter((item) => !before.includes(`[FB:${item.key}]`));
+    const existingInText = validItems.filter((item) => seenFeedback(item.key));
+    const missingFromText = validItems.filter((item) => !seenFeedback(item.key));
     const reinjectedItems = missingFromText.filter((item) => ledger.items[item.key]?.injectedAt);
     const reinjectedKeys = new Set(reinjectedItems.map((item) => item.key));
     const candidates = missingFromText;

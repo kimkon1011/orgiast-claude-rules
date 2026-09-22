@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { writeHandoff } from './next-session-rotate.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -387,7 +388,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   const kpi = calculateKpi({ date, todoParse: parseTodos(handoff), runs, batch: parseBatchLog(batchContent), taskInfo: queryScheduledTaskInfo(io.spawn), pullRequests });
   const candidates = improvementTodos(kpi, previous);
   const appended = appendImprovementTodos(handoff, candidates);
-  if (!dryRun && appended.added.length) atomicWrite(handoffFile, appended.markdown);
+  if (!dryRun && appended.added.length) writeHandoff(handoffFile, appended.markdown);
   if (!dryRun) atomicWrite(path.join(outputDir, `${date}.json`), `${JSON.stringify(kpi, null, 2)}\n`);
   if (!noNotify && appended.added.length) {
     try { await (io.notify ?? notifyKim)(`🚨 夜間KPI ${date}\n${appended.added.map((todo) => `- ${todo}`).join('\n')}`, { home }); }

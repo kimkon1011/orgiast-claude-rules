@@ -103,12 +103,25 @@ export async function loginGrowi({ baseUrl, user, password, http = fetch }) {
   return async (url, options = {}) => http(url, { ...options, headers: { ...options.headers, Cookie: cookieHeader(jar) } });
 }
 
-async function growiJson(http, url) {
-  const response = await http(url);
-  if (!response.ok) throw new Error(`Growi API エラー (${response.status})`);
-  const type = response.headers?.get?.('content-type') ?? '';
-  if (type && !type.includes('json')) throw new Error('Growi API が JSON 以外を返しました');
-  return response.json();
+export async function growiJson(http, url, { attempts = 1, retryDelay = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    let response;
+    try { response = await http(url, { signal: AbortSignal.timeout(30000) }); }
+    catch (error) {
+      if (attempt + 1 < attempts) { await retryDelay(250 * 2 ** attempt); continue; }
+      throw new Error(`Growi API 通信失敗 (${error.cause?.code || error.name}): ${error.message}`);
+    }
+    if (!response.ok) {
+      if ([408, 429, 500, 502, 503, 504].includes(response.status) && attempt + 1 < attempts) {
+        await response.body?.cancel();
+        await retryDelay(250 * 2 ** attempt); continue;
+      }
+      throw new Error(`Growi API エラー (${response.status})`);
+    }
+    const type = response.headers?.get?.('content-type') ?? '';
+    if (type && !type.includes('json')) throw new Error('Growi API が JSON 以外を返しました');
+    return response.json();
+  }
 }
 
 export async function listGrowiPages(baseUrl, http, limit = 500, maxPasses = 5) {
@@ -129,7 +142,7 @@ export async function listGrowiPages(baseUrl, http, limit = 500, maxPasses = 5) 
     let interrupted = false;
     while (offset < totalCount) {
       const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
-      const json = await growiJson(http, `${baseUrl.replace(/\/$/, '')}/_api/v3/pages/recent?${params}`);
+      const json = await growiJson(http, `${baseUrl.replace(/\/$/, '')}/_api/v3/pages/recent?${params}`, { attempts: 3 });
       const batch = json.data?.pages ?? [];
       totalCount = Number(json.data?.totalCount ?? batch.length);
       if (batch.length === 0) { interrupted = true; break; }
@@ -386,6 +399,7 @@ export async function syncGrowi(options = {}) {
   if (!baseUrl || !user || !password) { console.error('Growi 認証情報が不足しています'); return 2; }
   const http = await loginGrowi({ baseUrl, user, password, http: options.http ?? fetch });
   const listed = await listGrowiPages(baseUrl, http, options.listLimit);
+  if (!listed.complete) throw new Error(`Growi ページ列挙が未完了 (${listed.pages.length}/${listed.totalCount})。Drive と既存キャッシュは更新しません`);
   let previous = {};
   try { previous = JSON.parse(fs.readFileSync(path.join(cacheDir, 'growi-pages.json'), 'utf8')).pages ?? {}; } catch { /* 初回同期 */ }
   const fetched = await fetchGrowiBodies(listed.pages, previous, { baseUrl, http, full: options.full, retryDelay: options.retryDelay });

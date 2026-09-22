@@ -424,3 +424,18 @@ test('生成した CRLF・BOM の Part は parsePart で全ページを再パー
   assert.ok(parts.every((part) => part.startsWith('\uFEFF') && part.includes('\r\n')));
   assert.equal(parts.reduce((sum, part, index) => sum + parsePart(part, index + 1).pages.length, 0), pages.length);
 });
+
+test('page listing retries transient failures but does not retry authentication failures', async () => {
+  const { growiJson } = await import('./growi-manual.mjs');
+  let calls = 0;
+  const result = await growiJson(async () => {
+    calls++;
+    if (calls === 1) throw Object.assign(new Error('fetch failed'), { cause: { code: 'ECONNRESET' } });
+    if (calls === 2) return { ok: false, status: 503 };
+    return { ok: true, headers: { get: () => 'application/json' }, json: async () => ({ ok: true }) };
+  }, 'https://example.invalid', { attempts: 3, retryDelay: async () => {} });
+  assert.deepEqual(result, { ok: true }); assert.equal(calls, 3);
+  calls = 0;
+  await assert.rejects(growiJson(async () => { calls++; return { ok: false, status: 401 }; }, 'https://example.invalid', { attempts: 3, retryDelay: async () => {} }), /401/);
+  assert.equal(calls, 1);
+});

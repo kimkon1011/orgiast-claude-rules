@@ -97,7 +97,24 @@ try {
   }
 
   const own = sessions.filter((entry) => entry.sessionId === sessionId).sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
-  if (!own) process.exit(0);
+  if (!own) {
+    if (event === 'SessionStart' || event === 'UserPromptSubmit') {
+      const others = sessions
+        .filter((entry) => entry.sessionId !== sessionId)
+        .sort((a, b) => b.mtimeMs - a.mtimeMs);
+      if (others.length > 0) {
+        const lines = ['📋 稼働中セッションの目的（着手前に引き継ぎの「次の1目的」と突き合わせること）:'];
+        for (const candidate of others.slice(0, 5)) {
+          const purpose = candidate.purpose.replace(/\s+/g, ' ').trim().slice(0, 120);
+          lines.push(`- セッション ${candidate.sessionId.slice(0, 8)} / 最終活動 ${localMinute(candidate.mtimeMs)}`);
+          lines.push(`  目的: ${purpose}`);
+        }
+        lines.push('同じ目的が既に在るなら、その目的は採らず別の1件を選ぶ（/session-start の手順2）。');
+        console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: lines.join('\n') } }));
+      }
+    }
+    process.exit(0);
+  }
   const collisions = [];
   for (const candidate of sessions) {
     if (candidate.sessionId === sessionId) continue;

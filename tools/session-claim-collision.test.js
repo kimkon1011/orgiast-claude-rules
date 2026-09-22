@@ -99,9 +99,8 @@ test('user行だけの目的宣言は拾わない', (t) => {
   const result = run(f.projects); assert.equal(result.status, 0, result.stderr); assert.equal(result.stdout, '');
 });
 
-test('自セッションの目的宣言がなければ静かにexit 0', (t) => {
+test('自セッションの目的宣言がなく他セッションも居なければ静かにexit 0', (t) => {
   const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
-  write(f.projects, 'slug', otherId, [assistant('aujust 制作シート同期を修正する')]);
   const absent = run(f.projects); assert.equal(absent.status, 0, absent.stderr); assert.equal(absent.stdout, '');
   for (const entries of [
     [{ type: 'assistant', message: { content: [{ type: 'text', text: '目的宣言なし' }] } }],
@@ -163,4 +162,43 @@ test('SessionStartとUserPromptSubmitはPreToolUseのlatchを見ない', (t) => 
     assert.equal(result.status, 0, result.stderr);
     assert.equal(JSON.parse(result.stdout).hookSpecificOutput.hookEventName, event);
   }
+});
+
+test('T1 SessionStart・自分の宣言なし・目的を宣言した peer が1件稼働中', (t) => {
+  const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
+  write(f.projects, 'slug', otherId, [assistant('aujust 制作シート同期を修正する')]);
+  const result = run(f.projects);
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.hookSpecificOutput.hookEventName, 'SessionStart');
+  assert.match(output.hookSpecificOutput.additionalContext, new RegExp(otherId.slice(0, 8)));
+  assert.match(output.hookSpecificOutput.additionalContext, /aujust 制作シート同期を修正する/);
+  assert.doesNotMatch(output.hookSpecificOutput.additionalContext, /着手衝突の疑い/);
+});
+
+test('T2 SessionStart・自分の宣言なし・peer が0件', (t) => {
+  const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
+  const result = run(f.projects);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, '');
+});
+
+test('T3 SessionStart・自分の宣言なし・peer は居るが mtime が 9 時間前', (t) => {
+  const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
+  const other = write(f.projects, 'slug', otherId, [assistant('aujust 制作シート同期を修正する')]);
+  const old = new Date(Date.now() - 9 * 60 * 60 * 1000);
+  fs.utimesSync(other, old, old);
+  const result = run(f.projects);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, '');
+});
+
+test('T4 PreToolUse・自分の宣言なし・目的を宣言した peer が1件稼働中', (t) => {
+  const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
+  write(f.projects, 'slug', otherId, [assistant('aujust 制作シート同期を修正する')]);
+  const result = runWithEvent(f.projects, f.root, 'PreToolUse');
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, '');
+  const latch = path.join(f.root, '.claude', 'session-claim-collision', `${selfId}.checked`);
+  assert.equal(fs.existsSync(latch), false);
 });

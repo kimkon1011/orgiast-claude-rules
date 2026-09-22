@@ -133,11 +133,12 @@ test('統合: dirty な作業ファイルを変えず skipped を記録する', 
     runSelfheal({ repo: f.repo, home: f.home, fetch: false });
     assert.equal(fs.readFileSync(path.join(f.repo, 'tools', 'sample.mjs'), 'utf8'), 'export const value = "mine";\n');
     const records = fs.readFileSync(f.ledger, 'utf8').trim().split('\n').map(JSON.parse);
-    assert.equal(records.length, 2);
-    assert.equal(records.find((record) => record.file === 'tools/sample.mjs').action, 'skipped');
-    assert.equal(records.find((record) => record.file === 'tools/other.mjs').action, 'updated');
-    assert.equal(fs.readFileSync(path.join(f.repo, 'tools', 'other.mjs'), 'utf8'), 'export const other = "new";\n');
-    assert.equal(git(f.repo, ['rev-parse', 'HEAD']).trim(), git(f.repo, ['rev-parse', 'HEAD~0']).trim());
+    assert.equal(records.length, 1);
+    assert.equal(records[0].action, 'skipped');
+    assert.match(records[0].reason, /DIRTY_WORKTREE_SKIP/);
+    assert.equal(fs.readFileSync(path.join(f.repo, 'tools', 'other.mjs'), 'utf8'), 'export const other = "old";\n');
+    assert.match(git(f.repo, ['branch', '--show-current']), /^rescue\/auto-session-/);
+    assert.equal(git(f.repo, ['show', 'HEAD:tools/sample.mjs']), 'export const value = "mine";\n');
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 

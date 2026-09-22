@@ -2,6 +2,7 @@
 import nodeFs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createDirtyWorktreeGuard } from './dirty-worktree-guard.mjs';
 import { isEntry } from './is-entry.mjs';
 
 const DEFAULT_TARGET = String.raw`C:\Users\uers\.claude\auto-session-tree`;
@@ -65,6 +66,7 @@ export function main({
   projectsDir = DEFAULT_PROJECTS_DIR,
   ledgerPath = DEFAULT_LEDGER_PATH,
   spawn = spawnSync,
+  allowUpdate = createDirtyWorktreeGuard(),
 } = {}) {
   try {
     const target = env.SESSION_REPO_SYNC_TARGET || DEFAULT_TARGET;
@@ -74,6 +76,7 @@ export function main({
       return;
     }
     if (!isWorkingTreeClean(status.stdout)) {
+      allowUpdate(target);
       console.error('[session-repo-sync] 未コミットあり、スキップ');
       return;
     }
@@ -104,6 +107,7 @@ export function main({
       return;
     }
 
+    if (!allowUpdate(target)) return;
     const checkoutResult = runGit(target, action.args, spawn);
     if (checkoutResult.error || checkoutResult.status !== 0) {
       console.error('[session-repo-sync] checkout失敗、スキップ');

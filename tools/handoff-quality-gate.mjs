@@ -115,6 +115,24 @@ export function evaluateHandoff(text, { catalog, enforcement = {} } = {}) {
   const tried = block.match(/試した自動化経路:\s*([^\n]+)/)?.[1]?.trim() || '';
   const rejected = block.match(/未試行で却下した経路:\s*([^\n]+)/)?.[1]?.trim() || '';
   const routesMatched = matchRoutes(tried, catalog);
+
+  // 1. 依頼元
+  const origin = block.match(/依頼元:\s*([^\n]+)/)?.[1]?.trim() || '';
+  if (!origin) return { decision: 'block', reason: '依頼元がありません。「user依頼」か「Claude起案」を書いてください。', quality, routesMatched };
+  if (origin.includes('Claude起案')) return { decision: 'block', reason: 'Claude が起案した副次タスクを user に手渡しています。user の依頼に無い作業は人に振らず、自分で完結させるか、落として報告だけにしてください。', quality, routesMatched };
+  if (!origin.includes('user依頼')) return { decision: 'block', reason: '依頼元は「user依頼」か「Claude起案」のどちらかで書いてください。', quality, routesMatched };
+
+  // 2. 目的
+  // 「- 目的:」の箇条書きも拾う。`目的の代替達成:` は別キーなので `目的:` には一致しない。
+    const purpose = block.match(/^[\s>]*(?:[-*]\s*)?目的:\s*([^\n]+)/m)?.[1]?.trim() || '';
+  if (!purpose) return { decision: 'block', reason: '目的がありません。手段ではなく、その手作業で最終的に何が分かる/できるようになるのかを書いてください。', quality, routesMatched };
+  if (/(ログイン|認証|インストール|設定を追加|セットアップ|有効化)(?:する|したい|してもらう)?$/.test(purpose)) return { decision: 'block', reason: '目的が手段になっています。「ログインする」ではなく「それで何が分かるのか」を書いてください。', quality, routesMatched };
+
+  // 3. 目的の代替達成
+  const altered = block.match(/目的の代替達成:\s*([^\n]+)/)?.[1]?.trim() || '';
+  if (!altered) return { decision: 'block', reason: '目的の代替達成がありません。手作業なしで同じ目的を満たせないか、実際に試したコマンドと結果（→ で結果を書く）を載せてください。', quality, routesMatched };
+  if (!altered.includes('→') && !altered.includes('代替なし(理由:')) return { decision: 'block', reason: '目的の代替達成に実行結果がありません。「<コマンド> → <結果>」の形か、「代替なし(理由: ...)」で書いてください。', quality, routesMatched };
+
   const enforced = enforcement['handoff-quality-only']?.mode === 'block';
   const requiredRoutes = enforced ? 4 : 3;
   const requiredRejected = enforced ? 2 : 1;

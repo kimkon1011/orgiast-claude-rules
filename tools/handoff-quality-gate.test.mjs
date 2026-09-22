@@ -10,23 +10,23 @@ const cli = (text, { enforcement, executable = gatePath } = {}) => {
   return spawnSync(process.execPath,[executable],{input:JSON.stringify({session_id:'cli-regression',assistant_text:text}),encoding:'utf8',env:{...process.env,ORGIAST_HOME:h}});
 };
 test('1 旧gateをすり抜けた実物をblock', () => assert.equal(evaluateHandoff('`clasp run-function` は NOT_FOUND で不可（Workspaceポリシー制約）\n' + handoff, { catalog }).decision, 'block'));
-test('2 正当な品質手渡しをpass', () => assert.equal(evaluateHandoff(handoff+'\n**[手渡し判定]**\n- 品質理由: 受注ステータスは経営判断のため\n- 試した自動化経路: Sheets API は権限なし・DWD は未設定・impersonate は対象外・clasp run-function は失敗\n- 未試行で却下した経路: Drive API は更新対象外', { catalog }).decision, 'pass'));
-test('3 効率理由をblock', () => assert.equal(evaluateHandoff(handoff+'\n[手渡し判定]\n品質理由: 実装が面倒なので\n試した自動化経路: Sheets API, DWD, impersonate\n未試行で却下した経路: Drive API は対象外', { catalog }).decision, 'block'));
+test('2 正当な品質手渡しをpass', () => assert.equal(evaluateHandoff(handoff+'\n**[手渡し判定]**\n- 依頼元: user依頼\n- 目的: 受注ステータスを確定する\n- 目的の代替達成: Sheets API 参照 → 403\n- 品質理由: 受注ステータスは経営判断のため\n- 試した自動化経路: Sheets API は権限なし・DWD は未設定・impersonate は対象外・clasp run-function は失敗\n- 未試行で却下した経路: Drive API は更新対象外', { catalog }).decision, 'pass'));
+test('3 効率理由をblock', () => assert.equal(evaluateHandoff(handoff+'\n[手渡し判定]\n依頼元: user依頼\n目的: 受注ステータスを確定する\n目的の代替達成: Sheets API 参照 → 403\n品質理由: 実装が面倒なので\n試した自動化経路: Sheets API, DWD, impersonate\n未試行で却下した経路: Drive API は対象外', { catalog }).decision, 'block'));
 test('4 廃止タグをblock', () => assert.equal(evaluateHandoff(handoff+'\n[HANDOFF-OK]', { catalog }).decision, 'block'));
 test('4a 手渡しゼロで廃止タグへの言及はpass', () => assert.equal(evaluateHandoff('このタグは廃止した: [HANDOFF-OK]', { catalog }).decision, 'pass'));
-test('4b 手渡しありでバックティック内の廃止タグへの言及はpass', () => assert.equal(evaluateHandoff(handoff+'\n`[HANDOFF-OK]` は旧形式です。\n[手渡し判定]\n品質理由: 経営判断のため\n試した自動化経路: Sheets API, DWD, impersonate\n未試行で却下した経路: Drive API は対象外', { catalog }).decision, 'pass'));
-test('4c 手渡しありで廃止タグの素の使用はblock', () => assert.equal(evaluateHandoff(handoff+'\n[HANDOFF-OK]\n[手渡し判定]\n品質理由: 経営判断のため\n試した自動化経路: Sheets API, DWD, impersonate\n未試行で却下した経路: Drive API は対象外', { catalog }).decision, 'block'));
-test('4d 手渡しありでコードブロック内の廃止タグへの言及はpass', () => assert.equal(evaluateHandoff(handoff+'\n```text\n[HANDOFF-OK]\n```\n[手渡し判定]\n品質理由: 経営判断のため\n試した自動化経路: Sheets API, DWD, impersonate\n未試行で却下した経路: Drive API は対象外', { catalog }).decision, 'pass'));
-test('5 経路2件をblock', () => assert.equal(evaluateHandoff(handoff+'\n[手渡し判定]\n品質理由: 経営判断のため\n試した自動化経路: Sheets API, DWD\n未試行で却下した経路: Drive API は対象外', { catalog }).decision, 'block'));
+test('4b 手渡しありでバックティック内の廃止タグへの言及はpass', () => assert.equal(evaluateHandoff(handoff+'\n`[HANDOFF-OK]` は旧形式です。\n[手渡し判定]\n依頼元: user依頼\n目的: 受注ステータスを確定する\n目的の代替達成: Sheets API 参照 → 403\n品質理由: 経営判断のため\n試した自動化経路: Sheets API, DWD, impersonate\n未試行で却下した経路: Drive API は対象外', { catalog }).decision, 'pass'));
+test('4c 手渡しありで廃止タグの素の使用はblock', () => assert.equal(evaluateHandoff(handoff+'\n[HANDOFF-OK]\n[手渡し判定]\n依頼元: user依頼\n目的: 受注ステータスを確定する\n目的の代替達成: Sheets API 参照 → 403\n品質理由: 経営判断のため\n試した自動化経路: Sheets API, DWD, impersonate\n未試行で却下した経路: Drive API は対象外', { catalog }).decision, 'block'));
+test('4d 手渡しありでコードブロック内の廃止タグへの言及はpass', () => assert.equal(evaluateHandoff(handoff+'\n```text\n[HANDOFF-OK]\n```\n[手渡し判定]\n依頼元: user依頼\n目的: 受注ステータスを確定する\n目的の代替達成: Sheets API 参照 → 403\n品質理由: 経営判断のため\n試した自動化経路: Sheets API, DWD, impersonate\n未試行で却下した経路: Drive API は対象外', { catalog }).decision, 'pass'));
+test('5 経路2件をblock', () => assert.equal(evaluateHandoff(handoff+'\n[手渡し判定]\n依頼元: user依頼\n目的: 受注ステータスを確定する\n目的の代替達成: Sheets API 参照 → 403\n品質理由: 経営判断のため\n試した自動化経路: Sheets API, DWD\n未試行で却下した経路: Drive API は対象外', { catalog }).decision, 'block'));
 test('7 過去形の完了報告はpass', () => assert.equal(evaluateHandoff('1. WSL2を導入した\n2. Nodeを設定した\n3. テストを実行した', { catalog }).decision, 'pass'));
-test('10 enforcement=block は経路4件・却下2件ならpass', () => { const h=fs.mkdtempSync(path.join(os.tmpdir(),'hqg-')); fs.mkdirSync(path.join(h,'.claude')); fs.writeFileSync(path.join(h,'.claude','rule-enforcement.json'),JSON.stringify({'handoff-quality-only':{mode:'block',forceAll:true,reason:'test'}})); const old=process.env.ORGIAST_HOME; process.env.ORGIAST_HOME=h; try { const r=runGate({assistant_text:handoff+'\n[手渡し判定]\n品質理由: 経営判断のため\n試した自動化経路: Sheets API, DWD, impersonate, clasp run-function\n未試行で却下した経路: Drive API, Apps Script API'}); assert.equal(r.decision,'pass'); } finally { old===undefined?delete process.env.ORGIAST_HOME:process.env.ORGIAST_HOME=old; } });
-test('10b enforcement=block は従来水準の経路3件・却下1件をblock', () => assert.equal(evaluateHandoff(handoff+'\n[手渡し判定]\n品質理由: 経営判断のため\n試した自動化経路: Sheets API, DWD, impersonate\n未試行で却下した経路: Drive API', { catalog, enforcement:{'handoff-quality-only':{mode:'block'}} }).decision, 'block'));
-test('11 ledger excerptが非空',()=>{const h=fs.mkdtempSync(path.join(os.tmpdir(),'hqg-ledger-'));const input={session_id:'excerpt-test',assistant_text:handoff+'\n[手渡し判定]\n品質理由: 経営判断のため\n試した自動化経路: Sheets API, DWD, impersonate\n未試行で却下した経路: Drive API'};const p=spawnSync(process.execPath,[gatePath],{input:JSON.stringify(input),encoding:'utf8',env:{...process.env,ORGIAST_HOME:h}});assert.equal(p.status,0,p.stderr);const record=JSON.parse(fs.readFileSync(path.join(h,'.claude','handoff-ledger.jsonl'),'utf8'));assert.ok(record.excerpt.length>0);assert.match(record.excerpt,/以下の手順/);});
+test('10 enforcement=block は経路4件・却下2件ならpass', () => { const h=fs.mkdtempSync(path.join(os.tmpdir(),'hqg-')); fs.mkdirSync(path.join(h,'.claude')); fs.writeFileSync(path.join(h,'.claude','rule-enforcement.json'),JSON.stringify({'handoff-quality-only':{mode:'block',forceAll:true,reason:'test'}})); const old=process.env.ORGIAST_HOME; process.env.ORGIAST_HOME=h; try { const r=runGate({assistant_text:handoff+'\n[手渡し判定]\n依頼元: user依頼\n目的: 受注ステータスを確定する\n目的の代替達成: Sheets API 参照 → 403\n品質理由: 経営判断のため\n試した自動化経路: Sheets API, DWD, impersonate, clasp run-function\n未試行で却下した経路: Drive API, Apps Script API'}); assert.equal(r.decision,'pass'); } finally { old===undefined?delete process.env.ORGIAST_HOME:process.env.ORGIAST_HOME=old; } });
+test('10b enforcement=block は従来水準の経路3件・却下1件をblock', () => assert.equal(evaluateHandoff(handoff+'\n[手渡し判定]\n依頼元: user依頼\n目的: 受注ステータスを確定する\n目的の代替達成: Sheets API 参照 → 403\n品質理由: 経営判断のため\n試した自動化経路: Sheets API, DWD, impersonate\n未試行で却下した経路: Drive API', { catalog, enforcement:{'handoff-quality-only':{mode:'block'}} }).decision, 'block'));
+test('11 ledger excerptが非空',()=>{const h=fs.mkdtempSync(path.join(os.tmpdir(),'hqg-ledger-'));const input={session_id:'excerpt-test',assistant_text:handoff+'\n[手渡し判定]\n依頼元: user依頼\n目的: 受注ステータスを確定する\n目的の代替達成: Sheets API 参照 → 403\n品質理由: 経営判断のため\n試した自動化経路: Sheets API, DWD, impersonate\n未試行で却下した経路: Drive API'};const p=spawnSync(process.execPath,[gatePath],{input:JSON.stringify(input),encoding:'utf8',env:{...process.env,ORGIAST_HOME:h}});assert.equal(p.status,0,p.stderr);const record=JSON.parse(fs.readFileSync(path.join(h,'.claude','handoff-ledger.jsonl'),'utf8'));assert.ok(record.excerpt.length>0);assert.match(record.excerpt,/以下の手順/);});
 test('12 excerptが空なら警告してledgerを書かない',()=>{const h=fs.mkdtempSync(path.join(os.tmpdir(),'hqg-empty-'));const p=spawnSync(process.execPath,[gatePath],{input:JSON.stringify({session_id:'empty',stop_hook_active:true}),encoding:'utf8',env:{...process.env,ORGIAST_HOME:h}});assert.equal(p.status,0);assert.match(p.stderr,/excerpt が空/);assert.equal(fs.existsSync(path.join(h,'.claude','handoff-ledger.jsonl')),false);});
 test('13 ledger書き込み失敗を警告してblock判定を維持',()=>{const h=fs.mkdtempSync(path.join(os.tmpdir(),'hqg-unwritable-'));fs.writeFileSync(path.join(h,'.claude'),'directory blocker');const input={session_id:'write-failure',assistant_text:handoff};const p=spawnSync(process.execPath,[gatePath],{input:JSON.stringify(input),encoding:'utf8',env:{...process.env,ORGIAST_HOME:h}});assert.equal(p.status,0,p.stderr);assert.match(p.stderr,/\[handoff-quality-gate\] ledger書き込み失敗: .+ path=/);assert.deepEqual(JSON.parse(p.stdout),{decision:'block',reason:'`[手渡し判定]` ブロックがありません。'});});
-test('14 CLI起動で経路2件のblock JSONをstdoutへ返す',()=>{const p=cli(handoff+'\n[手渡し判定]\n品質理由: 経営判断のため\n試した自動化経路: Sheets API, DWD\n未試行で却下した経路: Drive API');assert.equal(p.status,0,p.stderr);assert.equal(JSON.parse(p.stdout).decision,'block');});
-test('15 enforcement=block のCLIで経路3件をblock',()=>{const p=cli(handoff+'\n[手渡し判定]\n品質理由: 経営判断のため\n試した自動化経路: Sheets API, DWD, impersonate\n未試行で却下した経路: Drive API, Apps Script API',{enforcement:{'handoff-quality-only':{mode:'block'}}});assert.equal(p.status,0,p.stderr);assert.equal(JSON.parse(p.stdout).decision,'block');assert.match(JSON.parse(p.stdout).reason,/3件.*4件以上/);});
-test('16 enforcement=block のCLIで経路4件・却下2件をpass',()=>{const p=cli(handoff+'\n[手渡し判定]\n品質理由: 経営判断のため\n試した自動化経路: Sheets API, DWD, impersonate, clasp run-function\n未試行で却下した経路: Drive API, Apps Script API',{enforcement:{'handoff-quality-only':{mode:'block'}}});assert.equal(p.status,0,p.stderr);assert.equal(p.stdout,'');});
+test('14 CLI起動で経路2件のblock JSONをstdoutへ返す',()=>{const p=cli(handoff+'\n[手渡し判定]\n依頼元: user依頼\n目的: 受注ステータスを確定する\n目的の代替達成: Sheets API 参照 → 403\n品質理由: 経営判断のため\n試した自動化経路: Sheets API, DWD\n未試行で却下した経路: Drive API');assert.equal(p.status,0,p.stderr);assert.equal(JSON.parse(p.stdout).decision,'block');});
+test('15 enforcement=block のCLIで経路3件をblock',()=>{const p=cli(handoff+'\n[手渡し判定]\n依頼元: user依頼\n目的: 受注ステータスを確定する\n目的の代替達成: Sheets API 参照 → 403\n品質理由: 経営判断のため\n試した自動化経路: Sheets API, DWD, impersonate\n未試行で却下した経路: Drive API, Apps Script API',{enforcement:{'handoff-quality-only':{mode:'block'}}});assert.equal(p.status,0,p.stderr);assert.equal(JSON.parse(p.stdout).decision,'block');assert.match(JSON.parse(p.stdout).reason,/3件.*4件以上/);});
+test('16 enforcement=block のCLIで経路4件・却下2件をpass',()=>{const p=cli(handoff+'\n[手渡し判定]\n依頼元: user依頼\n目的: 受注ステータスを確定する\n目的の代替達成: Sheets API 参照 → 403\n品質理由: 経営判断のため\n試した自動化経路: Sheets API, DWD, impersonate, clasp run-function\n未試行で却下した経路: Drive API, Apps Script API',{enforcement:{'handoff-quality-only':{mode:'block'}}});assert.equal(p.status,0,p.stderr);assert.equal(p.stdout,'');});
 const junctionGate=path.join(os.homedir(),'orgiast-claude-rules','tools','handoff-quality-gate.mjs');
 let junctionAvailable=false;try{junctionAvailable=fs.existsSync(junctionGate)&&fs.realpathSync(junctionGate)===fs.realpathSync(gatePath);}catch{}
 test('17 ジャンクション経路でもCLIが起動する（ジャンクションなしは明示skip）',{skip:!junctionAvailable},()=>{const p=cli(handoff,{executable:junctionGate});assert.equal(p.status,0,p.stderr);assert.equal(JSON.parse(p.stdout).decision,'block');});
@@ -37,7 +37,7 @@ test('21 本文なしは警告しスキップを記録する',()=>{const h=fs.mk
 test('22 正常block入力はstderrに警告を出さない',()=>{const p=cli(handoff);assert.equal(p.status,0);assert.equal(p.stderr,'');assert.equal(JSON.parse(p.stdout).decision,'block');});
 test('23 stop_hook_active の品質未達は再判定してもpass固定',()=>{const r=runGate({stop_hook_active:true,assistant_text:handoff});assert.equal(r.decision,'pass');assert.equal(r.recheck,'block');assert.equal(r.reason,'stop_hook_active');});
 test('24 stop_hook_active の品質未達はledgerへbypassedを記録',()=>{const h=fs.mkdtempSync(path.join(os.tmpdir(),'hqg-bypassed-'));const p=spawnSync(process.execPath,[gatePath],{input:JSON.stringify({session_id:'bypassed',stop_hook_active:true,assistant_text:handoff}),encoding:'utf8',env:{...process.env,ORGIAST_HOME:h}});assert.equal(p.status,0,p.stderr);assert.equal(p.stdout,'');const record=JSON.parse(fs.readFileSync(path.join(h,'.claude','handoff-ledger.jsonl'),'utf8'));assert.equal(record.verdict,'bypassed');assert.equal(record.reason,'stop_hook_active');});
-test('25 stop_hook_active の品質合格はledgerへpassedを記録',()=>{const h=fs.mkdtempSync(path.join(os.tmpdir(),'hqg-recheck-pass-'));const text=handoff+'\n[手渡し判定]\n品質理由: 経営判断のため\n試した自動化経路: Sheets API, DWD, impersonate\n未試行で却下した経路: Drive API は対象外';const p=spawnSync(process.execPath,[gatePath],{input:JSON.stringify({session_id:'recheck-pass',stop_hook_active:true,assistant_text:text}),encoding:'utf8',env:{...process.env,ORGIAST_HOME:h}});assert.equal(p.status,0,p.stderr);const record=JSON.parse(fs.readFileSync(path.join(h,'.claude','handoff-ledger.jsonl'),'utf8'));assert.equal(record.verdict,'passed');assert.equal(record.reason,'stop_hook_active');});
+test('25 stop_hook_active の品質合格はledgerへpassedを記録',()=>{const h=fs.mkdtempSync(path.join(os.tmpdir(),'hqg-recheck-pass-'));const text=handoff+'\n[手渡し判定]\n依頼元: user依頼\n目的: 受注ステータスを確定する\n目的の代替達成: Sheets API 参照 → 403\n品質理由: 経営判断のため\n試した自動化経路: Sheets API, DWD, impersonate\n未試行で却下した経路: Drive API は対象外';const p=spawnSync(process.execPath,[gatePath],{input:JSON.stringify({session_id:'recheck-pass',stop_hook_active:true,assistant_text:text}),encoding:'utf8',env:{...process.env,ORGIAST_HOME:h}});assert.equal(p.status,0,p.stderr);const record=JSON.parse(fs.readFileSync(path.join(h,'.claude','handoff-ledger.jsonl'),'utf8'));assert.equal(record.verdict,'passed');assert.equal(record.reason,'stop_hook_active');});
 test('26 本文もpathもなしは reasonCode 付きで記録する',()=>{const h=fs.mkdtempSync(path.join(os.tmpdir(),'hqg-no-path-'));spawnSync(process.execPath,[gatePath],{input:JSON.stringify({session_id:'no-path'}),encoding:'utf8',env:{...process.env,ORGIAST_HOME:h}});const record=JSON.parse(fs.readFileSync(path.join(h,'.claude','handoff-gate-skips.jsonl'),'utf8'));assert.equal(record.reasonCode,'no-path');});
 test('27 末尾がtool_useだけでも手前の本文で判定する',()=>{const h=fs.mkdtempSync(path.join(os.tmpdir(),'hqg-tool-tail-'));const tp=path.join(h,'transcript.jsonl');fs.writeFileSync(tp,[JSON.stringify({type:'assistant',message:{content:[{type:'text',text:handoff}]}}),JSON.stringify({type:'assistant',message:{content:[{type:'tool_use',name:'Bash',input:{command:'true'}}]}})].join('\n'));const p=spawnSync(process.execPath,[gatePath],{input:JSON.stringify({session_id:'tool-tail',transcript_path:tp}),encoding:'utf8',env:{...process.env,ORGIAST_HOME:h}});assert.equal(p.status,0,p.stderr);assert.equal(JSON.parse(p.stdout).decision,'block');});
 test('28 読めないpathは unreadable コード付きで記録する',()=>{const h=fs.mkdtempSync(path.join(os.tmpdir(),'hqg-unreadable-'));const missing=path.join(h,'missing.jsonl');spawnSync(process.execPath,[gatePath],{input:JSON.stringify({session_id:'unreadable',transcript_path:missing}),encoding:'utf8',env:{...process.env,ORGIAST_HOME:h}});const record=JSON.parse(fs.readFileSync(path.join(h,'.claude','handoff-gate-skips.jsonl'),'utf8'));assert.equal(record.reasonCode,'unreadable');});
@@ -56,4 +56,53 @@ test('31 7日fixtureの命令形なし応答はすべて手渡しなし',{skip:!
   const withoutCommand=fixture.filter(({excerpt})=>!command.test(excerpt));
   assert.ok(withoutCommand.length>=71,`fixtureの命令形なし件数=${withoutCommand.length}`);
   for(const {excerpt} of withoutCommand) assert.equal(hasHandoff(excerpt),false,excerpt);
+});
+
+// --- 2026-09-22 追加: その手渡しがそもそも必要かを問う3項目 ---
+const base = handoff + '\n[手渡し判定]\n';
+const tail = '品質理由: 経営判断のため\n試した自動化経路: Sheets API, DWD, impersonate\n未試行で却下した経路: Drive API は対象外';
+const ok = '依頼元: user依頼\n目的: 受注ステータスを確定する\n目的の代替達成: Sheets API 参照 → 403\n';
+
+test('N1 依頼元が無ければblock', () => {
+  const r = evaluateHandoff(base + '目的: 受注ステータスを確定する\n目的の代替達成: Sheets API 参照 → 403\n' + tail, { catalog });
+  assert.equal(r.decision, 'block');
+  assert.match(r.reason, /依頼元がありません/);
+});
+test('N2 依頼元がClaude起案ならblock', () => {
+  const r = evaluateHandoff(base + '依頼元: Claude起案\n目的: 受注ステータスを確定する\n目的の代替達成: Sheets API 参照 → 403\n' + tail, { catalog });
+  assert.equal(r.decision, 'block');
+  assert.match(r.reason, /Claude が起案した副次タスク/);
+});
+test('N3 依頼元が二択以外ならblock', () => {
+  const r = evaluateHandoff(base + '依頼元: なんとなく\n目的: 受注ステータスを確定する\n目的の代替達成: Sheets API 参照 → 403\n' + tail, { catalog });
+  assert.equal(r.decision, 'block');
+  assert.match(r.reason, /どちらかで書いて/);
+});
+test('N4 目的が無ければblock', () => {
+  const r = evaluateHandoff(base + '依頼元: user依頼\n目的の代替達成: Sheets API 参照 → 403\n' + tail, { catalog });
+  assert.equal(r.decision, 'block');
+  assert.match(r.reason, /目的がありません/);
+});
+test('N5 目的が手段ならblock', () => {
+  const r = evaluateHandoff(base + '依頼元: user依頼\n目的: gh CLI にログインする\n目的の代替達成: Sheets API 参照 → 403\n' + tail, { catalog });
+  assert.equal(r.decision, 'block');
+  assert.match(r.reason, /目的が手段になっています/);
+});
+test('N6 目的の代替達成が無ければblock', () => {
+  const r = evaluateHandoff(base + '依頼元: user依頼\n目的: 受注ステータスを確定する\n' + tail, { catalog });
+  assert.equal(r.decision, 'block');
+  assert.match(r.reason, /目的の代替達成がありません/);
+});
+test('N7 目的の代替達成に実行結果が無ければblock', () => {
+  const r = evaluateHandoff(base + '依頼元: user依頼\n目的: 受注ステータスを確定する\n目的の代替達成: いろいろ試した\n' + tail, { catalog });
+  assert.equal(r.decision, 'block');
+  assert.match(r.reason, /実行結果がありません/);
+});
+test('N8 代替なし(理由:) は実行結果の代わりに認める', () => {
+  const r = evaluateHandoff(base + '依頼元: user依頼\n目的: 受注ステータスを確定する\n目的の代替達成: 代替なし(理由: OAuth同意は本人のみ)\n' + tail, { catalog });
+  assert.equal(r.decision, 'pass');
+});
+test('N9 3項目が揃えば従来どおりpass', () => {
+  const r = evaluateHandoff(base + ok + tail, { catalog });
+  assert.equal(r.decision, 'pass');
 });

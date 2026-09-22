@@ -94,3 +94,12 @@ test('DOMAINSにない外部サブ索引（リンク先が実在するが直下�
   assert.equal(child.status, 0, child.stderr);
   assert.doesNotMatch(child.stderr, /未知のドメイン/);
 });
+
+test('missing ../ prefix is classified in its original domain before split repair', () => {
+ const directory = fixture();
+ fs.writeFileSync(path.join(directory, 'index', 'verify.md'), '- [一](feedback_one.md)\n');
+ const child = invoke(directory, ['--fallback', 'reference']);
+ assert.equal(child.status, 0, child.stderr);
+ const result = JSON.parse(child.stdout.slice(child.stdout.indexOf('{')));
+ assert.equal(result['feedback_one.md'], 'verify');
+});

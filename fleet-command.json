@@ -1,16 +1,14 @@
 {
-  "runId": "thermal-guard-rollout-2026-09-14",
-  "task": "thermal-guard",
+  "runId": "rules-resync-2026-09-22-autopilot-skill",
+  "task": "rules-resync",
   "targets": "all",
-  "_why": "無人室に置いた遠隔操作用PC(6台)の熱対策。各PCで tools/thermal-guard.ps1 -Install を1回だけ実行し、5分ごとの監視タスク(OrgiastThermalGuard)を登録する。管理者権限は不要。CPU温度は多くの機体で取得できないため、クロック比の低下(実効上限比85%未満かつ負荷50%以上が15分連続)と異常停止(Kernel-Power 41)で代替監視する。状態が変わったときだけDiscordへ通知し、同レベルの再送は60分空ける。nishi-PC で 2026-09-01 から13日間の連続稼働を実測済み(誤検知ゼロ)。読み取り専用の監視のみでCPU設定は変更しない(電力上限を絞る power-save は別タスクのままにしてある)。破壊的操作なし。止めるときは task を \"\" に戻す。個々のPCで止めるなら thermal-guard.ps1 -Uninstall。",
+  "_why": "/autopilot skill(PR #499)を全PCへ配る。開きっぱなしで SessionStart が走らないPCでも、fleet-poller の夜間実行が onboarding-sync --force を叩いて ~/.claude/skills/autopilot/ を配備する。Claude Code は skills/ の追加を再起動なしで拾う。破壊的操作なし。",
   "_note": "全PCへ承認済みタスクを配る中央キュー。kim/Claudeが task と runId(毎回ユニーク) を更新→各PCが夜間03:15の実行時に1回だけ処理しDiscordへ結果を返す。task を空にすると何もしない。",
   "_allowed_tasks": [
     "verify-setup",
     "rules-resync",
     "cost-report",
-    "register-fleet-agent",
-    "thermal-guard",
-    "power-save"
+    "register-fleet-agent"
   ],
   "_targets": "all=全PC / PC名の一部文字列=そのPCだけ"
 }

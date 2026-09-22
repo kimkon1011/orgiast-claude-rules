@@ -1,0 +1,168 @@
+{
+  "version": 1,
+  "priceAsOf": "2026-09-23",
+  "proposalId": "P-0135",
+  "title": "レシート自動入力とカレンダー連携ツールの導入",
+  "sources": {
+    "mfPrice": "https://biz.moneyforward.com/price/",
+    "mfPlanDetail": "https://biz.moneyforward.com/price/detail/",
+    "freeeCorporate": "https://www.freee.co.jp/pricing/",
+    "concurJapan": "https://www.concur.co.jp/",
+    "concurExpenseIt": "https://help.sap.com/docs/SAP_CONCUR",
+    "fastaccountingRobota": "https://fastaccounting.ai/service/tracing-receipts/",
+    "gasCalendar": "https://developers.google.com/apps-script/reference/calendar/calendar-app",
+    "gasDriveOcr": "https://developers.google.com/apps-script/reference/drive/drive-app"
+  },
+  "assumptions": {
+    "casesPerMonth": 200,
+    "manualMinutesPerCase": 4,
+    "reconcileMinutesPerCase": 1.5,
+    "hourlyYen": 2500,
+    "llmYenPerCase": 3,
+    "devDayYen": 40000
+  },
+  "assumptionNotes": {
+    "casesPerMonth": "当社の月間レシート/領収書件数の実測値は未取得。200件/月は仮定（--cases で上書き可）。",
+    "manualMinutesPerCase": "手入力4分/件は仮定。実測には経理担当へのタイムスタディが必要。",
+    "reconcileMinutesPerCase": "カレンダー（出張・来場予定）との突き合わせ1.5分/件は仮定。",
+    "hourlyYen": "社内単価2,500円/hは仮定。実際の経理担当の人件費単価で --hourly-yen により上書きすること。",
+    "llmYenPerCase": "自前ルートのLLM API従量費3円/件は仮定。モデル単価の台帳（tools/*-catalog.json）から実測値に置き換えるまで確定値として扱わない。",
+    "devDayYen": "自前実装の人日単価40,000円/日は仮定。"
+  },
+  "facts": {
+    "conqurProductIdentity": {
+      "value": "「Conqur」という名称の製品は一次情報で確認できなかった",
+      "status": "unverified",
+      "note": "提案文の『Conqur等のRPA』は SAP Concur の誤記と推定される。導入前に製品名の確定が必要。",
+      "source": "https://www.concur.co.jp/"
+    },
+    "manualTimeMeasured": {
+      "value": false,
+      "status": "unverified",
+      "note": "当社の経費精算・レシート入力の工数実測値は未取得。"
+    },
+    "calendarReconcileAvailableInGas": {
+      "value": true,
+      "status": "verified",
+      "note": "GAS から CalendarApp で予定を読めるため、日付×金額の突合は自前実装が可能。",
+      "source": "https://developers.google.com/apps-script/reference/calendar/calendar-app"
+    },
+    "rpaPersonalAccountRisk": {
+      "value": "汎用RPAを個人アカウントのUI操作に常用すると、規約違反・アカウント停止のリスクがある",
+      "status": "unverified",
+      "note": "ベンダー規約の確認が前提。法人契約と自動化対象の明示が必要。"
+    }
+  },
+  "routes": [
+    {
+      "id": "mf-cloud",
+      "label": "マネーフォワード クラウド会計（AI-OCR内蔵）",
+      "kind": "cloud-accounting",
+      "priceVerify": "secondary",
+      "priceSource": "https://biz.moneyforward.com/price/",
+      "priceNote": "法人スモールビジネス 年払4,480円/月（税抜・3名まで）。検索結果間で税込表記・金額の相違があるため契約前に公式で要確認。",
+      "fixedYen": 0,
+      "licenseYenPerMonth": 4480,
+      "includedCasesPerMonth": 60,
+      "overageYenPerCase": 20,
+      "llmYenPerCase": 0,
+      "devDays": 0,
+      "receiptOcr": true,
+      "autoJournal": true,
+      "receiptToPdf": false,
+      "calendarReconcile": false,
+      "ocrToPdfTemplate": false,
+      "residualMinutesPerCase": 1.2,
+      "residualNote": "OCR＋AI仕訳提案の確認のみと仮定（1.2分/件）。"
+    },
+    {
+      "id": "freee-corporate",
+      "label": "freee会計（法人プラン）",
+      "kind": "cloud-accounting",
+      "priceVerify": "quote-required",
+      "priceSource": "https://www.freee.co.jp/pricing/",
+      "priceNote": "法人プランは公開価格を一次情報で確認できなかった。見積・資料請求が必要。",
+      "fixedYen": null,
+      "licenseYenPerMonth": null,
+      "includedCasesPerMonth": null,
+      "overageYenPerCase": null,
+      "llmYenPerCase": 0,
+      "devDays": 0,
+      "receiptOcr": true,
+      "autoJournal": true,
+      "receiptToPdf": false,
+      "calendarReconcile": false,
+      "ocrToPdfTemplate": false,
+      "residualMinutesPerCase": 1.2,
+      "residualNote": "未確認。MFと同等という仮定で比較表に載せる。"
+    },
+    {
+      "id": "sap-concur",
+      "label": "SAP Concur Expense（ExpenseIt／経費自動化エージェント）",
+      "kind": "expense-saas",
+      "priceVerify": "quote-required",
+      "priceSource": "https://www.concur.co.jp/",
+      "priceNote": "公開価格なし。導入は販売パートナー経由の見積のみ。Joule Premium が一部機能の前提。",
+      "fixedYen": null,
+      "licenseYenPerMonth": null,
+      "includedCasesPerMonth": null,
+      "overageYenPerCase": null,
+      "llmYenPerCase": 0,
+      "devDays": 0,
+      "receiptOcr": true,
+      "autoJournal": true,
+      "receiptToPdf": false,
+      "calendarReconcile": true,
+      "ocrToPdfTemplate": false,
+      "residualMinutesPerCase": 1,
+      "residualNote": "出張行程と領収書の突合まで自動化される想定（1分/件）。未確認。"
+    },
+    {
+      "id": "rpa-generic",
+      "label": "汎用RPA（Power Automate Desktop／UiPath／WinActor 等）＋ AI-OCR",
+      "kind": "rpa",
+      "priceVerify": "quote-required",
+      "priceSource": "https://www.concur.co.jp/",
+      "priceNote": "ライセンス形態（同時実行／named）で価格が大きく変わり、公開価格を一次情報で確認できなかった。初期費用も見積必須。",
+      "fixedYen": null,
+      "licenseYenPerMonth": null,
+      "includedCasesPerMonth": null,
+      "overageYenPerCase": null,
+      "llmYenPerCase": 0,
+      "devDays": 0,
+      "receiptOcr": true,
+      "autoJournal": false,
+      "receiptToPdf": true,
+      "calendarReconcile": true,
+      "ocrToPdfTemplate": true,
+      "residualMinutesPerCase": 1.5,
+      "residualNote": "OCR済みデータの確認と例外処理（1.5分/件）と仮定。"
+    },
+    {
+      "id": "diy-gas",
+      "label": "自前実装（既存GAS基盤＋Drive＋LLM OCR＋CalendarApp）",
+      "kind": "diy",
+      "priceVerify": "assumed",
+      "priceSource": "https://developers.google.com/apps-script/reference/calendar/calendar-app",
+      "priceNote": "ライセンス追加0円。LLM API従量のみで、単価は仮定値（assumptions.llmYenPerCase）。無料枠という概念が無く超過課金も無いため、無料枠0件・超過0円/件として扱う（従量課金の合計は0円）。",
+      "fixedYen": 0,
+      "licenseYenPerMonth": 0,
+      "includedCasesPerMonth": 0,
+      "overageYenPerCase": 0,
+      "llmYenPerCase": 3,
+      "devDays": 5,
+      "receiptOcr": true,
+      "autoJournal": false,
+      "receiptToPdf": true,
+      "calendarReconcile": true,
+      "ocrToPdfTemplate": true,
+      "residualMinutesPerCase": 1.5,
+      "residualNote": "生成物の目視確認（1.5分/件）と仮定。会計SaaSへの転記は別途。",
+      "reuse": [
+        "ブース制作アプリに既存の LLM 呼び出し（ClaudeClient.js）",
+        "Drive/Sheets 連携と clasp 運用（CommandQueue.js / JobQueue.js）",
+        "実行パネル（GAS のコマンドキュー）から手動起動できる"
+      ]
+    }
+  ]
+}

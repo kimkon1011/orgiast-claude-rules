@@ -11,12 +11,17 @@
 #      「1回パス実行 + ウォッチャー不在なら起動」する。
 #   3. /session-close 済み台帳 (closed-sessions.json): 明示的に閉じたセッションは 45 秒後に
 #      _closed へ退避する。current-session.json は、それ以外の自動退避で稼働中を守る保険にする。
+#      この台帳の id は退避しても消さない。close-session.mjs は閉じる当のセッションの中から
+#      呼ばれるため、退避後にそのセッションが発言すると .jsonl が同じパスへ作り直される。
+#      id を残せば次のパスが再退避する（片道にすると一覧に residue が残る・2026-09-21 実害）。
+#      なお VSCode でタブを開いたままのセッションは、.jsonl を退避しても拡張の一覧からは消えない。
+#      消えるのはタブを閉じた後。ファイル退避だけで「一覧から消える」と説明しないこと。
 #
 # 使い方:
 #   python purge-hidden-sessions.py                  1回パスのみ
 #   python purge-hidden-sessions.py --start-watcher  1回パス + ウォッチャー起動保証（hook 用）
 #   python purge-hidden-sessions.py --watch          常駐ループ（直接叩かず --start-watcher 経由）
-#   python purge-hidden-sessions.py --forget <IDprefix>  台帳から ID を削除（復元時用）
+#   python purge-hidden-sessions.py --forget <IDprefix>  両方の台帳から ID を削除（復元時用）
 #   -v で詳細表示。ログは purge-hidden-sessions.log に常時追記。
 # 安全策: 直近10分以内に更新された jsonl は触らない（書き込み中/稼働中セッション）。DB は read-only。
 # 復元は _deleted-backup の jsonl を「新uuidクローン」で戻すこと（同一IDのまま戻すと台帳が再退避する。
@@ -257,14 +262,18 @@ def run_pass(state):
         if not os.path.isdir(pd) or proj.startswith("_"):
             continue
         # (0) /session-close 済み（ユーザーが明示的に閉じたセッション）
+        # 退避しても closed 台帳から id を消さない（2026-09-21 の実害で片道をやめた）。
+        # close-session.mjs は「閉じる当のセッションの中から」呼ばれるので、退避した直後に
+        # そのセッションが発言すると harness が同じパスへ .jsonl を作り直す。
+        # id を消すと以後どのパスもそのファイルを見ず、一覧に residue が永久に残る。
+        # 残せば次のパスが再退避する（名前が衝突しても archive() が .dupN を付けるので履歴は失わない）。
+        # 同一 ID で復元したい時だけ --forget <IDprefix> で台帳から外すこと。
         for sid in set(closed):
             src = os.path.join(pd, sid + ".jsonl")
             if not os.path.exists(src) or now - os.path.getmtime(src) < CLOSED_SKIP_RECENT_SEC:
                 continue
             if archive(proj, sid, os.path.join(BACKUP, CLOSED_DEST_TAG), "closed"):
                 moved += 1
-                closed.discard(sid)
-                drop_closed(sid)
         # (1) 台帳/hidden ベースの退避（ユーザーが削除したセッション）
         for sid in ledger:
             if sid in closed or sid in live_sids:
@@ -371,7 +380,14 @@ def main():
         ledger = load_ledger()
         hit = {i for i in ledger if i.startswith(prefix)}
         save_ledger(ledger - hit)
+        # closed 台帳は退避後も id を残す（再生成された .jsonl を次のパスで拾い直すため）。
+        # 同一 ID で復元するなら、こちらからも外さないと次のパスで再退避される。
+        closed_hit = {i for i in load_closed() if i.startswith(prefix)}
+        for sid in closed_hit:
+            drop_closed(sid)
         print(f"forgot {len(hit)}: {sorted(hit)}")
+        if closed_hit:
+            print(f"forgot(closed) {len(closed_hit)}: {sorted(closed_hit)}")
         return
     if "--watch" in sys.argv:
         if heartbeat_pid() is not None:

@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -65,10 +65,47 @@ if (!ids.includes(sessionId)) {
   renameSync(tmpPath, closedPath);
 }
 
-const python = resolvePython();
-if (python) spawnSync(python, [purgePath], { stdio: "ignore", windowsHide: true });
+// 退避先に同名（または .dupN）の実物があるかを見る。成功文はこの実物で決める。
+// purge の標準出力や終了コードを成功の根拠にしない（stdio を捨てていた頃、
+// 退避されていないのに「45秒で消えます」と報告して user に指摘された・2026-09-21）。
+function findArchived(sid) {
+  const root = join(claudeDir, "projects", "_deleted-backup", "_closed");
+  let projects;
+  try { projects = readdirSync(root); } catch { return null; }
+  for (const proj of projects) {
+    const dir = join(root, proj);
+    let names;
+    try { names = readdirSync(dir); } catch { continue; }
+    const hit = names.find((name) => name === `${sid}.jsonl` || name.startsWith(`${sid}.jsonl.dup`));
+    if (hit) return join(dir, hit);
+  }
+  return null;
+}
 
-console.log(`closed: ${sessionId} -> will disappear from the session list within ~45s (no /clear needed)`);
+const python = resolvePython();
+let purgeWarning = null;
+if (!python) {
+  purgeWarning = "Python が見つからないため purge を実行できませんでした（退避されません）";
+} else {
+  const purge = spawnSync(python, [purgePath], { encoding: "utf8", windowsHide: true });
+  if (purge.error) {
+    purgeWarning = `purge を起動できませんでした: ${purge.error.message}`;
+  } else if (purge.status !== 0) {
+    const detail = String(purge.stderr || "").trim().slice(0, 300);
+    purgeWarning = `purge が異常終了しました (status=${purge.status})${detail ? `: ${detail}` : ""}`;
+  }
+}
+if (!existsSync(purgePath)) console.error(`warn: purge スクリプトが見つかりません: ${purgePath}`);
+if (purgeWarning) console.error(`warn: ${purgeWarning}`);
+
+const archived = findArchived(sessionId);
+console.log(archived
+  ? `closed: ${sessionId} -> 退避済み: ${archived}`
+  : `closed: ${sessionId} -> 台帳に登録（まだ退避されていない。直近45秒以内に更新されたため）`);
+// 台帳の id は退避後も残るので、この後この セッションが発言して .jsonl が作り直されても
+// 30秒間隔のウォッチャーが拾い直す。ただし VSCode の一覧から消えるのはタブを閉じた後。
+// 拡張はタブを開いている限りセッションを保持し、会話が続けば .jsonl を作り直す。
+console.log("実体は _deleted-backup/_closed に保全（/clear 不要）。VSCode の一覧から消えるのはこのタブを閉じた後です");
 
 if (!process.argv.includes("--no-launch")) {
   try {

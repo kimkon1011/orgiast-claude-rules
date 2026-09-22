@@ -59,10 +59,60 @@ test('closed/hidden セッションを削除せず安全な退避先へ move す
   assert.ok(fs.existsSync(hiddenDest), 'hidden の空セッションが通常の backup に退避される');
   assert.ok(fs.existsSync(path.join(project, `${ids.hiddenNonempty}.jsonl`)), '中身あり・120秒前の hidden は残る');
   assert.ok(fs.existsSync(path.join(project, `${ids.live}.jsonl`)), '稼働中セッションは残る');
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(claude, 'closed-sessions.json'), 'utf8')).ids, []);
+  // 退避しても closed 台帳から id を消さない。消すと、閉じた直後に .jsonl が作り直された時
+  // （close-session.mjs は閉じる当のセッションの中から呼ばれる）二度と拾えず一覧に残る。
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(claude, 'closed-sessions.json'), 'utf8')).ids, [ids.closed]);
 
   assert.ok(!fs.existsSync(path.join(project, `${ids.closed}.jsonl`)) && fs.existsSync(closedDest));
   assert.ok(!fs.existsSync(path.join(project, `${ids.hiddenEmpty}.jsonl`)) && fs.existsSync(hiddenDest));
+});
+
+test('退避後に .jsonl が作り直されても、次のパスが拾い直す（片道にしない）', (t) => {
+  const python = resolvePython();
+  if (!python) return t.skip('Python interpreter is not available');
+
+  const fakehome = fs.mkdtempSync(path.join(os.tmpdir(), 'purge-hidden-sessions-recreate-'));
+  t.after(() => fs.rmSync(fakehome, { recursive: true, force: true }));
+  const claude = path.join(fakehome, '.claude');
+  const project = path.join(claude, 'projects', 'testproj');
+  fs.mkdirSync(project, { recursive: true });
+
+  const sid = '77777777-7777-4777-8777-777777777777';
+  const live = path.join(project, `${sid}.jsonl`);
+  const old = new Date(Date.now() - 120_000);
+  const closedDir = path.join(claude, 'projects', '_deleted-backup', '_closed', 'testproj');
+  const env = { ...process.env, HOME: fakehome, USERPROFILE: fakehome };
+  const closedLedger = () => JSON.parse(fs.readFileSync(path.join(claude, 'closed-sessions.json'), 'utf8')).ids;
+
+  fs.writeFileSync(live, NONEMPTY_JSONL);
+  fs.utimesSync(live, old, old);
+  fs.writeFileSync(path.join(claude, 'closed-sessions.json'), JSON.stringify({ ids: [sid] }));
+
+  let result = spawnSync(python, [purgeScript], { encoding: 'utf8', env });
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(!fs.existsSync(live), '1回目のパスで退避される');
+  assert.ok(fs.existsSync(path.join(closedDir, `${sid}.jsonl`)), '退避先に実物がある');
+  assert.deepEqual(closedLedger(), [sid], '退避しても台帳に id が残る');
+
+  // harness がセッションを作り直した状況（Stop hook が追加ターンを強制した時に実際に起きる）
+  fs.writeFileSync(live, NONEMPTY_JSONL);
+  fs.utimesSync(live, old, old);
+
+  result = spawnSync(python, [purgeScript], { encoding: 'utf8', env });
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(!fs.existsSync(live), '作り直された .jsonl も次のパスで退避される（一覧に残らない）');
+  assert.ok(fs.existsSync(path.join(closedDir, `${sid}.jsonl.dup1`)), '先に退避した履歴は .dup1 で保全される');
+
+  // --forget は両方の台帳から外す（同一 ID で復元する時の逃げ道）
+  result = spawnSync(python, [purgeScript, '--forget', sid], { encoding: 'utf8', env });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(closedLedger(), [], '--forget で closed 台帳からも外れる');
+
+  fs.writeFileSync(live, NONEMPTY_JSONL);
+  fs.utimesSync(live, old, old);
+  result = spawnSync(python, [purgeScript], { encoding: 'utf8', env });
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(fs.existsSync(live), '--forget 後は同一 ID で復元しても再退避されない');
 });
 
 test('並行する稼働中セッションを両方保護し、明示的に closed のものだけ move する', (t) => {

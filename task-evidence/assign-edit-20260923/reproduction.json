@@ -1,0 +1,28 @@
+{
+  "sourceCommit": "4210734",
+  "networkUsed": false,
+  "findings": [
+    {
+      "name": "職種単位の除外が効かない",
+      "input": "除外:デザイナー",
+      "writtenPositions": [
+        "デザイナー",
+        "ドライバー"
+      ]
+    },
+    {
+      "name": "Doc再読込なし",
+      "documentReads": 0
+    },
+    {
+      "name": "パネル読取エラーでも送信する",
+      "sheetRows": 1,
+      "notifications": 1
+    },
+    {
+      "name": "イベント関連全体の除外は機能する",
+      "sheetRows": 0,
+      "notifications": 0
+    }
+  ]
+}

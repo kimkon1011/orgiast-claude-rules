@@ -1,0 +1,737 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <base target="_top" />
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: #f3f5f7;
+        color: #263238;
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Noto Sans JP", sans-serif;
+      }
+      main {
+        max-width: 680px;
+        margin: auto;
+        padding: 16px;
+      }
+      .box,
+      .card {
+        background: #fff;
+        border-radius: 14px;
+        padding: 16px;
+        margin: 12px 0;
+        box-shadow: 0 2px 8px #0001;
+      }
+      h1 {
+        font-size: 22px;
+        margin: 4px 0 14px;
+      }
+      label {
+        display: block;
+        font-weight: 700;
+        margin-top: 10px;
+      }
+      input,
+      select,
+      textarea,
+      button {
+        font: inherit;
+        width: 100%;
+        padding: 12px;
+        border: 1px solid #cfd8dc;
+        border-radius: 10px;
+        margin-top: 5px;
+      }
+      button {
+        background: #1565c0;
+        color: #fff;
+        font-weight: 700;
+        border: 0;
+      }
+      .roles,
+      .days {
+        display: flex;
+        gap: 8px;
+        overflow: auto;
+      }
+      .roles button,
+      .days button {
+        min-width: max-content;
+        background: #eceff1;
+        color: #37474f;
+      }
+      .roles button.on,
+      .days button.on {
+        background: #1565c0;
+        color: #fff;
+      }
+      .progress {
+        position: sticky;
+        top: 0;
+        background: #263238;
+        color: #fff;
+        padding: 12px;
+        border-radius: 10px;
+        z-index: 2;
+      }
+      .card.required-undone {
+        border: 2px solid #ef6c00;
+      }
+      .title {
+        display: flex;
+        gap: 12px;
+        align-items: flex-start;
+        font-weight: 700;
+      }
+      .title input {
+        width: 32px;
+        height: 32px;
+        margin: 0;
+        flex: none;
+      }
+      .detail {
+        white-space: pre-wrap;
+        color: #546e7a;
+        margin: 10px 0;
+      }
+      .thumbs img {
+        width: 76px;
+        height: 76px;
+        object-fit: cover;
+        border-radius: 8px;
+        margin: 4px;
+      }
+      .state {
+        font-size: 13px;
+        color: #546e7a;
+        margin-top: 8px;
+      }
+      .photoSend {
+        background: #00897b;
+      }
+      .myRushRow {
+        border-top: 1px solid #eceff1;
+        padding: 10px 0;
+      }
+      .myRushActions {
+        display: flex;
+        gap: 8px;
+      }
+      .myRushActions button,
+      .myRushActions input {
+        width: auto;
+        flex: 1;
+      }
+      .rushCancel {
+        background: #c62828;
+      }
+      .rushError,
+      .rushWarning {
+        color: #c62828;
+        font-size: 13px;
+        margin-top: 5px;
+      }
+      .link {
+        display: inline-block;
+        padding: 10px;
+        background: #5e35b1;
+        color: white;
+        border-radius: 8px;
+        text-decoration: none;
+        margin: 4px;
+      }
+      .hidden {
+        display: none;
+      }
+      footer {
+        text-align: center;
+        margin: 30px;
+      }
+      footer a {
+        color: #546e7a;
+      }
+      .adminLink {
+        position: fixed;
+        right: 12px;
+        bottom: 12px;
+        padding: 8px 12px;
+        border-radius: 999px;
+        background: #263238;
+        color: #fff;
+        font-size: 12px;
+        text-decoration: none;
+        opacity: 0.45;
+        z-index: 5;
+      }
+      .adminLink:hover {
+        opacity: 0.9;
+      }
+      .itemSearch summary {
+        cursor: pointer;
+        font-weight: 700;
+      }
+      .caseLinks .muted {
+        color: #90a4ae;
+      }
+      .chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 10px;
+      }
+      .chip {
+        display: inline-block;
+        padding: 8px 11px;
+        border-radius: 999px;
+        background: #e3f2fd;
+        color: #0d47a1;
+        text-decoration: none;
+        font-weight: 700;
+      }
+      .producerGuide {
+        background: #fff8e1;
+        border: 1px solid #ffd54f;
+      }
+      .producerGuide .link {
+        background: #ef6c00;
+      }
+      .itemSearch .muted {
+        color: #90a4ae;
+        margin: 10px 0 0;
+      }
+      .itemSearchHead {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .itemSearchHead input {
+        flex: 1;
+      }
+      .itemSearchHead button {
+        width: auto;
+        min-width: max-content;
+        background: #546e7a;
+      }
+      .itemResult {
+        border-top: 1px solid #eceff1;
+        padding: 12px 0;
+      }
+      .itemResult:first-child {
+        border-top: 0;
+      }
+      .itemMeta {
+        color: #455a64;
+        line-height: 1.7;
+        margin-top: 5px;
+      }
+      .rushBox { border: 2px solid #c62828; background: #fff7f7; }
+      .rushBox summary { color: #b71c1c; font-weight: 700; cursor: pointer; font-size: 1.1em; }
+      .rushBox[open] summary { margin-bottom: 8px; }
+      .rushGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+      .rushGrid label, .rushGrid input, .rushGrid select, .rushGrid textarea { width: 100%; }
+      .rushWide { grid-column: 1 / 3; }
+      #rushSubmit { background: #c62828; font-weight: bold; }
+      @media (max-width: 600px) { .rushGrid { grid-template-columns: 1fr; } .rushWide { grid-column: auto; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>📋 当日チェックリスト</h1>
+      <section class="box">
+        <label>
+          ① 氏名
+          <input id="name" placeholder="氏名を入力" />
+        </label>
+        <label>
+          ② 案件（任意）
+          <select id="case">
+            <option value="">選択しない</option>
+          </select>
+        </label>
+        <div class="caseLinks">
+          <strong>📎 案件の資料</strong>
+          <div id="caseLinksStatus" class="muted">②で案件を選ぶと資料リンクが出ます</div>
+          <div id="caseLinks" class="chips"></div>
+        </div>
+        <details class="itemSearch">
+          <summary>🔍 アイテムを探す</summary>
+          <div id="itemSearchDisabled" class="muted">②で案件を選ぶと、そのアイテムリストから検索できます</div>
+          <div id="itemSearchReady" class="hidden">
+            <div class="itemSearchHead">
+              <input id="itemQuery" type="search" list="itemNames" placeholder="アイテム名の一部を入力（例: バインダー）" disabled />
+              <button id="itemRefresh" type="button">↻ 最新を取得</button>
+            </div>
+            <datalist id="itemNames"></datalist>
+            <div id="itemSearchStatus" class="state"></div>
+            <div id="itemResults"></div>
+          </div>
+        </details>
+        <label>③ 役割</label>
+        <div id="roles" class="roles"></div>
+        <label>④ 日程</label>
+        <div id="days" class="days"></div>
+        <div id="vehicleWrap" class="hidden">
+          <label>
+            ⑤ 車両
+            <select id="vehicle"></select>
+          </label>
+        </div>
+      </section>
+      <div id="progress" class="progress">役割と日程を選んでください</div>
+      <details class="box rushBox">
+        <summary>🚨 倉庫へ緊急依頼</summary>
+        <div class="rushGrid">
+          <label>アイテム名<input id="rushItem" list="itemNames" placeholder="アイテム名" /></label>
+          <label>数量<input id="rushQuantity" type="number" min="1" value="1" /></label>
+          <label>必要時刻<input id="rushNeededTime" type="datetime-local" /></label>
+          <label>届け先<select id="rushDestinationType"><option>会場</option><option>搬入口</option><option>その他</option></select></label>
+          <label class="rushWide">届け先詳細<input id="rushDestinationDetail" placeholder="会場名・搬入口名など" /></label>
+          <label class="rushWide">備考<textarea id="rushNotes" placeholder="補足事項"></textarea></label>
+          <label class="rushWide">写真（任意）<input id="rushPhoto" type="file" accept="image/*" capture="environment" /></label>
+        </div>
+        <button id="rushSubmit" type="button">倉庫へ送信</button>
+        <div id="rushStatus" class="state"></div>
+        <h3>自分の依頼</h3>
+        <div id="myRushRows" class="state">このブラウザから送信した依頼はありません</div>
+      </details>
+      <section id="producerGuide" class="box producerGuide hidden">
+        <div>💡 改善・不具合は右下の「🐛 不具合・要望を報告」から送ってください。送信するとすぐ Kim に Discord DM が届き、夜間に自動で改善に着手します。</div>
+        <a class="link" href="<?= feedbackUrl ?>" target="_blank" rel="noopener">🐛 今すぐ報告する</a>
+      </section>
+      <section id="items"></section>
+      <footer><a href="<?= feedbackUrl ?>">🐛 不具合・要望を報告</a></footer>
+    </main>
+    <a class="adminLink" href="<?= adminUrl ?>">⚙ 管理</a>
+    <script>
+      const state = { role: "", day: "", items: [], progress: {}, images: {}, itemList: [], caseLinks: [] };
+      const $ = (id) => document.getElementById(id);
+
+      function call(name, args, ok) {
+        google.script.run
+          .withSuccessHandler((r) => {
+            if (!r.ok) return alert(r.error);
+            ok(r);
+          })
+          .withFailureHandler((e) => alert(e.message || e))
+          [name](...args);
+      }
+
+      function buttons(id, values, key) {
+        $(id).innerHTML = "";
+        values.forEach((v) => {
+          let b = document.createElement("button");
+          b.textContent = v;
+          b.onclick = () => {
+            state[key] = v;
+            [...$(id).children].forEach((x) =>
+              x.classList.toggle("on", x === b),
+            );
+            if (key === "role") {
+              $("vehicleWrap").classList.toggle("hidden", v !== "ドライバー");
+              $("producerGuide").classList.toggle("hidden", v !== "プロデューサー");
+              loadCaseLinks();
+            }
+            load();
+          };
+          $(id).appendChild(b);
+        });
+      }
+
+      function load() {
+        if (!state.role || !state.day) return;
+        localStorage.setItem("checklistName", $("name").value);
+        call("Checklist_getItems", [state.role, state.day], (r) => {
+          state.items = r.items;
+          call(
+            "Checklist_getProgress",
+            [$("case").value, $("name").value, state.role, state.day],
+            (p) => {
+              state.progress = p.items;
+              render();
+            },
+          );
+        });
+      }
+
+      function itemNorm(value) {
+        return String(value ?? "").normalize("NFKC").toLowerCase().replace(/\s/g, "");
+      }
+
+      function filterItemList(items, query) {
+        let q = itemNorm(query);
+        if (!q) return [];
+        return items.map((item, index) => {
+          let name = itemNorm(item.name);
+          let fields = [name, itemNorm(item.code), itemNorm(item.box), itemNorm(item.note), itemNorm(item.note2), itemNorm(item.location)];
+          if (!fields.some((value) => value.indexOf(q) >= 0)) return null;
+          return { item, index, rank: name === q ? 0 : name.indexOf(q) === 0 ? 1 : 2 };
+        }).filter(Boolean).sort((a, b) => a.rank - b.rank || a.index - b.index).slice(0, 30).map((entry) => entry.item);
+      }
+
+      function displayValue(value) {
+        return value === "" || value === null || value === undefined ? "—" : String(value);
+      }
+
+      function loadItemList(refresh) {
+        let caseId = $("case").value;
+        $("itemSearchDisabled").classList.toggle("hidden", Boolean(caseId));
+        $("itemSearchReady").classList.toggle("hidden", !caseId);
+        state.itemList = [];
+        $("itemNames").innerHTML = "";
+        $("itemResults").innerHTML = "";
+        $("itemQuery").disabled = !caseId;
+        if (!caseId) return;
+        $("itemQuery").disabled = true;
+        $("itemSearchStatus").textContent = "読み込み中…";
+        google.script.run
+          .withSuccessHandler((r) => {
+            $("itemQuery").disabled = false;
+            if (!r.ok) {
+              $("itemSearchStatus").textContent = r.error;
+              return;
+            }
+            state.itemList = r.items || [];
+            let names = [...new Set(state.itemList.map((item) => String(item.name || "")).filter(Boolean))];
+            names.forEach((name) => $("itemNames").appendChild(new Option(name)));
+            $("itemSearchStatus").textContent = `${r.total}件を読み込みました`;
+            renderItemResults();
+          })
+          .withFailureHandler((e) => {
+            $("itemQuery").disabled = false;
+            $("itemSearchStatus").textContent = e.message || String(e);
+          })
+          .Checklist_getItemList(caseId, Boolean(refresh));
+      }
+
+      function loadCaseLinks() {
+        let caseId = $("case").value;
+        state.caseLinks = [];
+        $("caseLinks").innerHTML = "";
+        if (!caseId) {
+          $("caseLinksStatus").textContent = "②で案件を選ぶと資料リンクが出ます";
+          return;
+        }
+        $("caseLinksStatus").textContent = "読み込み中…";
+        google.script.run
+          .withSuccessHandler((r) => {
+            if (!r.ok) {
+              $("caseLinksStatus").textContent = r.error;
+              return;
+            }
+            state.caseLinks = r.links || [];
+            if (!state.caseLinks.length) {
+              $("caseLinksStatus").textContent = "この案件にはまだ生成された資料がありません";
+              return;
+            }
+            $("caseLinksStatus").textContent = "";
+            $("caseLinks").innerHTML = state.caseLinks.map((x) => `<a class="chip" target="_blank" rel="noopener" href="${esc(x.url)}">${esc(x.label)}</a>`).join("");
+          })
+          .withFailureHandler((e) => {
+            $("caseLinksStatus").textContent = e.message || String(e);
+          })
+          .Checklist_getCaseLinks(caseId, state.role);
+      }
+
+      function renderItemResults() {
+        let query = $("itemQuery").value;
+        let results = filterItemList(state.itemList, query);
+        $("itemResults").innerHTML = "";
+        if (!itemNorm(query)) return;
+        if (!results.length) {
+          let prefix = itemNorm(query).slice(0, 2);
+          let similar = [...new Set(state.itemList.map((item) => String(item.name || "")).filter((name) => prefix && itemNorm(name).indexOf(prefix) === 0))].slice(0, 5);
+          let hint = similar.length ? similar.map(esc).join("、") : "なし";
+          $("itemResults").innerHTML = `<div class="itemResult">アイテムリストに「${esc(query)}」は見つかりません。アイテムリストに未登録の可能性があります。<br>似た名前: ${hint}</div>`;
+          return;
+        }
+        results.forEach((item) => {
+          let card = document.createElement("div");
+          card.className = "itemResult";
+          let box = `${displayValue(item.box)}（${displayValue(item.boxType)}）`;
+          let code = item.code ? ` <small>#${esc(item.code)}</small>` : "";
+          let assembled = item.assembled === true ? "✅ 済" : item.assembled === false ? "☐ 未" : "—";
+          let notes = displayValue(item.note) + (item.note2 ? `\n${item.note2}` : "");
+          card.innerHTML = `<strong>${esc(item.name)}</strong>${code}<div class="itemMeta">📦 ボックス: ${esc(box)}<br>現場必要数: ${esc(displayValue(item.siteQty))}<br>倉庫出荷依頼数: ${esc(displayValue(item.shipReqQty))}<br>現場到着数: ${esc(displayValue(item.arrivedQty))}<br>組み立て確認: ${assembled}<br>購入/手配/準備 担当: ${esc(displayValue(item.owner))}<br>発送時問い合わせ番号: ${esc(displayValue(item.tracking))}<br>ステータス: ${esc(displayValue(item.status))}<br>備考: ${esc(notes).replace(/\n/g, "<br>")}</div>`;
+          $("itemResults").appendChild(card);
+        });
+      }
+
+      function isWebUrl(url) {
+        return (function (u) { u = String(u || "").toLowerCase(); return u.indexOf("http:") === 0 || u.indexOf("https:") === 0; })(url);
+      }
+
+      function urls(item) {
+        if (item.type !== "vehicle_doc") {
+          return isWebUrl(item.url) ? [{ label: "開く", url: item.url }] : [];
+        }
+        try {
+          let m = JSON.parse(item.url),
+            v = $("vehicle").value;
+          let candidates =
+            v && m[v]
+              ? [{ label: v, url: m[v] }]
+              : Object.keys(m).map((k) => ({ label: k, url: m[k] }));
+          return candidates.filter((x) => isWebUrl(x.url));
+        } catch (e) {
+          return [];
+        }
+      }
+
+      function render() {
+        let done = state.items.filter(
+          (i) => state.progress[i.id]?.status === "done",
+        ).length;
+        $("progress").textContent = `${done}/${state.items.length} 完了`;
+        $("items").innerHTML = "";
+        state.items.forEach((item) => {
+          let p = state.progress[item.id] || {},
+            card = document.createElement("article");
+          card.className =
+            "card" +
+            (item.required && p.status !== "done" ? " required-undone" : "");
+          let links = urls(item)
+            .map(
+              (x) =>
+                `<a class="link" href="${esc(x.url)}" target="_blank">${esc(x.label)}を開く</a>`,
+            )
+            .join("");
+          let vehicleHint =
+            item.type === "vehicle_doc" && !$("vehicle").value
+              ? '<div class="detail">⑤で車両を選ぶと該当マニュアルだけ表示されます</div>'
+              : "";
+          card.innerHTML = `<div class="title"><input type="checkbox" ${p.status === "done" ? "checked" : ""}><span>${esc(item.title)}${item.required ? " <small>必須</small>" : ""}</span></div>${item.detail ? `<div class="detail">${esc(item.detail)}</div>` : ""}${vehicleHint}<div>${links}</div>${item.type === "photo" ? '<input class="camera" type="file" accept="image/*" capture="environment" multiple><div class="thumbs"></div><button class="photoSend">写真を送る</button>' : ""}<textarea placeholder="メモ（任意）">${esc(p.note || "")}</textarea><div class="state">${p.photoUrls?.length ? "写真 " + p.photoUrls.length + "枚送信済み" : ""}</div>`;
+          let check = card.querySelector("[type=checkbox]"),
+            note = card.querySelector("textarea"),
+            status = card.querySelector(".state");
+          check.onchange = () =>
+            save(
+              item,
+              check.checked ? "done" : "undone",
+              note.value,
+              [],
+              status,
+            );
+          note.onchange = () =>
+            save(
+              item,
+              check.checked ? "done" : "undone",
+              note.value,
+              [],
+              status,
+            );
+          let cam = card.querySelector(".camera");
+          if (cam) {
+            cam.onchange = async () => {
+              state.images[item.id] = await Promise.all(
+                [...cam.files].map(
+                  (file) =>
+                    new Promise((resolve) => {
+                      let rd = new FileReader();
+                      rd.onload = () =>
+                        resolve({
+                          name: file.name,
+                          mimeType: file.type,
+                          base64: String(rd.result).split(",")[1],
+                        });
+                      rd.readAsDataURL(file);
+                    }),
+                ),
+              );
+              let thumbs = card.querySelector(".thumbs");
+              thumbs.innerHTML = "";
+              [...cam.files].forEach((f) => {
+                let im = new Image();
+                im.src = URL.createObjectURL(f);
+                thumbs.appendChild(im);
+              });
+            };
+            card.querySelector(".photoSend").onclick = () =>
+              save(
+                item,
+                "done",
+                note.value,
+                state.images[item.id] || [],
+                status,
+              );
+          }
+          $("items").appendChild(card);
+        });
+      }
+
+      function save(item, status, note, images, el) {
+        el.textContent = "送信中…";
+        let opt = $("case").selectedOptions[0];
+        call(
+          "Checklist_saveProgress",
+          [
+            {
+              caseId: $("case").value,
+              caseLabel: $("case").value ? opt.textContent : "",
+              staffName: $("name").value,
+              role: state.role,
+              day: state.day,
+              vehicle: $("vehicle").value,
+              templateId: item.id,
+              title: item.title,
+              status,
+              note,
+              images,
+            },
+          ],
+          (r) => {
+            state.progress[item.id] = {
+              status: r.status,
+              photoUrls: r.photoUrls,
+              note,
+            };
+            el.textContent = "保存しました";
+            render();
+          },
+        );
+      }
+
+      async function submitRush() {
+        let button = $("rushSubmit");
+        let photo = $("rushPhoto").files[0];
+        let photoData = null;
+        if (photo) photoData = await new Promise((resolve) => {
+          let reader = new FileReader();
+          reader.onload = () => resolve({ base64: String(reader.result).split(",")[1], mimeType: photo.type });
+          reader.readAsDataURL(photo);
+        });
+        let selectedCase = $("case").selectedOptions[0];
+        let destination = $("rushDestinationType").value + ($("rushDestinationDetail").value.trim() ? " / " + $("rushDestinationDetail").value.trim() : "");
+        let payload = {
+          caseId: $("case").value,
+          caseName: $("case").value && selectedCase ? selectedCase.textContent : "",
+          staffName: $("name").value.trim(), role: state.role, itemName: $("rushItem").value.trim(),
+          quantity: $("rushQuantity").value, neededTime: $("rushNeededTime").value,
+          destination, notes: $("rushNotes").value,
+          photoBase64: photoData ? photoData.base64 : "", photoMimeType: photoData ? photoData.mimeType : "",
+        };
+        button.disabled = true;
+        $("rushStatus").textContent = "送信中…";
+        google.script.run.withSuccessHandler((r) => {
+          button.disabled = false;
+          if (!r.ok) { $("rushStatus").textContent = r.error; return; }
+          $("rushItem").value = ""; $("rushQuantity").value = "1"; $("rushNeededTime").value = "";
+          $("rushDestinationDetail").value = ""; $("rushNotes").value = ""; $("rushPhoto").value = "";
+          $("rushStatus").textContent = "倉庫に送信しました";
+          rememberRush({ id: r.id, itemName: payload.itemName, quantity: payload.quantity, caseId: payload.caseId });
+          loadMyRush();
+        }).withFailureHandler((e) => { button.disabled = false; $("rushStatus").textContent = e.message || e; }).Checklist_submitRush(payload);
+      }
+
+      function storedRush() {
+        try {
+          let rows = JSON.parse(localStorage.getItem("checklistMyRush") || "[]");
+          return Array.isArray(rows) ? rows : [];
+        } catch (e) {
+          return [];
+        }
+      }
+
+      function rememberRush(item) {
+        let rows = storedRush().filter((x) => x.id !== item.id);
+        rows.push(item);
+        localStorage.setItem("checklistMyRush", JSON.stringify(rows.slice(-20)));
+      }
+
+      function loadMyRush() {
+        let caseId = $("case").value;
+        let ids = storedRush().filter((x) => !caseId || x.caseId === caseId).map((x) => x.id);
+        if (!ids.length) {
+          $("myRushRows").textContent = "このブラウザから送信した依頼はありません";
+          return;
+        }
+        google.script.run.withSuccessHandler((r) => {
+          if (!r.ok) {
+            $("myRushRows").textContent = r.error;
+            return;
+          }
+          renderMyRush(r.rows.filter((x) => ids.indexOf(x.id) >= 0));
+        }).withFailureHandler((e) => { $("myRushRows").textContent = e.message || e; }).Checklist_listRush(caseId);
+      }
+
+      function renderMyRush(rows) {
+        if (!rows.length) {
+          $("myRushRows").textContent = "該当する依頼はありません";
+          return;
+        }
+        $("myRushRows").innerHTML = rows.map((x) => {
+          let editable = x.status === "new" || x.status === "対応中";
+          let actions = editable ? `<div class="myRushActions"><button type="button" data-rush-edit="${esc(x.id)}">数量を直す</button><button type="button" class="rushCancel" data-rush-cancel="${esc(x.id)}">取消</button></div>` : "";
+          return `<div class="myRushRow" data-rush-row="${esc(x.id)}"><strong>${esc(x.itemName)} × ${esc(x.quantity)}</strong>　<span>${esc(x.status)}</span>${actions}<div class="rushInline"></div><div class="rushWarning"></div><div class="rushError"></div></div>`;
+        }).join("");
+        $("myRushRows").querySelectorAll("[data-rush-edit]").forEach((button) => {
+          button.onclick = () => openRushQuantity(button.dataset.rushEdit, rows);
+        });
+        $("myRushRows").querySelectorAll("[data-rush-cancel]").forEach((button) => {
+          button.onclick = () => cancelRush(button);
+        });
+      }
+
+      function openRushQuantity(id, rows) {
+        let row = $("myRushRows").querySelector(`[data-rush-row="${id}"]`);
+        let item = rows.find((x) => x.id === id);
+        let inline = row.querySelector(".rushInline");
+        inline.innerHTML = `<div class="myRushActions"><input type="number" min="1" value="${esc(item.quantity)}"><button type="button">確定</button></div>`;
+        inline.querySelector("button").onclick = () => {
+          let quantity = inline.querySelector("input").value;
+          let error = row.querySelector(".rushError");
+          if (!quantity || Number(quantity) < 1) { error.textContent = "数量は1以上で入力してください"; return; }
+          error.textContent = "";
+          google.script.run.withSuccessHandler((r) => {
+            if (!r.ok) { error.textContent = r.error; return; }
+            loadMyRush();
+          }).withFailureHandler((e) => { error.textContent = e.message || e; }).Checklist_editRush(id, { quantity }, $("name").value.trim());
+        };
+      }
+
+      function cancelRush(button) {
+        let row = button.closest("[data-rush-row]");
+        let warning = row.querySelector(".rushWarning");
+        let error = row.querySelector(".rushError");
+        if (button.dataset.armed !== "true") {
+          button.dataset.armed = "true";
+          warning.textContent = "本当に取消しますか？もう一度押すと取消します";
+          return;
+        }
+        button.disabled = true;
+        error.textContent = "";
+        google.script.run.withSuccessHandler((r) => {
+          if (!r.ok) { button.disabled = false; error.textContent = r.error; return; }
+          loadMyRush();
+        }).withFailureHandler((e) => { button.disabled = false; error.textContent = e.message || e; }).Checklist_updateRushStatus(button.dataset.rushCancel, "取消", $("name").value.trim());
+      }
+
+      function esc(s) {
+        let d = document.createElement("div");
+        d.textContent = s || "";
+        return d.innerHTML;
+      }
+      $("name").value = localStorage.getItem("checklistName") || "";
+      $("case").onchange = () => { load(); loadItemList(false); loadCaseLinks(); loadMyRush(); };
+      $("name").onchange = load;
+      $("vehicle").onchange = render;
+      $("itemQuery").oninput = renderItemResults;
+      $("itemRefresh").onclick = () => loadItemList(true);
+      $("rushSubmit").onclick = submitRush;
+      call("Checklist_bootstrap", [], (r) => {
+        r.cases.forEach((c) => $("case").add(new Option(c.label, c.caseId)));
+        $("vehicle").add(new Option("選択してください", ""));
+        r.vehicles.forEach((v) => $("vehicle").add(new Option(v, v)));
+        buttons("roles", r.roles, "role");
+        buttons("days", r.days, "day");
+        const preset = { role: "<?= presetRole ?>", day: "<?= presetDay ?>" };
+        [...$("roles").children].forEach((b) => { if (preset.role && b.textContent === preset.role) b.onclick(); });
+        [...$("days").children].forEach((b) => { if (preset.day && b.textContent === preset.day) b.onclick(); });
+        loadMyRush();
+      });
+    </script>
+  </body>
+</html>

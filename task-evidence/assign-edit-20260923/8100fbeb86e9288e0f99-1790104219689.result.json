@@ -1,0 +1,8 @@
+{
+  "completed": false,
+  "summary": "本番93ファイルを直接確認し未配布を確認。既存6テストは成功したが、デザイナー除外不成立・Doc編集未反映・入力読取失敗時の送信継続を確認。候補全体pushは本番6ファイル消失と16ファイル上書きの危険あり。外部送信・課金禁止のため配布と本番送信検証は未実施。指定先.claudeへの結果保存は読取専用ファイルシステム（Errno 30）で失敗したため、作業領域に保存。",
+  "evidence": {
+    "file": "/mnt/c/Users/uers/orgiast-main/task-evidence/assign-edit-20260923/verification.json",
+    "sha256": "8ba463bc6755f69c87499bc52904e65be65b26d8cea44f9f55472a14dc707a55"
+  }
+}

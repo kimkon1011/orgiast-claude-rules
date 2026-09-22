@@ -1,0 +1,8 @@
+{
+  "completed": false,
+  "summary": "未完了。本番93ファイルを直接取得し修正未反映を確認。候補12テストは成功するが、読取失敗時に編集禁止領域を選ぶ問題と新規行を挿入しない差異を再現。実物シート読取は承認ポリシーneverで拒否され、本番反映・実行検証は未実施。",
+  "evidence": {
+    "file": "/mnt/c/Users/uers/orgiast-main/task-evidence/itemlist-marker-20260923/verification.json",
+    "sha256": "036a0565003381792345c93e145b5812a523f82ef131dadbdbdabc57304b010b"
+  }
+}

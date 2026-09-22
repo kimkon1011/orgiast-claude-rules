@@ -1,0 +1,38 @@
+{
+  "completed": false,
+  "target": "fb-1789353329658-2xy3pgly アイテムリストの追加位置",
+  "checkedAt": "2026-09-22T19:17:09.043840+00:00",
+  "original": "C:\\Users\\uers\\.claude\\next-session.md:17-18",
+  "sourceCommit": "91e0a6fa011b1f1f639c1e3022c2a30dd1bc0952",
+  "live": {
+    "method": "Apps Script projects.getContent、読取のみ",
+    "fileCount": 93,
+    "markerHelperPresent": false,
+    "sourceSha256": "2b75db596a4e093425ca2ba4c48633517f03e7e6be0a0cb3dd23cff986e1d372"
+  },
+  "tests": {
+    "passed": 12,
+    "failed": 0,
+    "reproduction": {
+      "live": {
+        "selectedRow": 3,
+        "insertCalls": 0
+      },
+      "candidate": {
+        "selectedRow": 5,
+        "insertCalls": 0
+      },
+      "candidateReadFailure": {
+        "selectedRow": 3,
+        "insertCalls": 0
+      }
+    }
+  },
+  "blockers": [
+    "実物シートのmetadata読取がMCP自動承認審査に拒否された（approval policy never）。迂回読取なし。",
+    "候補修正は読取失敗時にマーカー上の3行目へ戻る。行の新規挿入も行わず、要望を完全には満たさない。",
+    "本番反映・実物シートでの実行結果検証は未実施。"
+  ],
+  "sideEffects": "本番変更、送信、課金、マージ、push、削除、他セッション変更の取込なし。候補のコピーは検証用で、本番修正ではない。",
+  "resultDestination": "C:\\Users\\uers\\.claude\\a764b33a222a8142e3af-1790104493550.result.json"
+}

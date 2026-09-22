@@ -1,0 +1,14 @@
+{
+  "live": {
+    "selectedRow": 3,
+    "insertCalls": 0
+  },
+  "candidate": {
+    "selectedRow": 5,
+    "insertCalls": 0
+  },
+  "candidateReadFailure": {
+    "selectedRow": 3,
+    "insertCalls": 0
+  }
+}

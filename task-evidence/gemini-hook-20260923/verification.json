@@ -1,0 +1,101 @@
+{
+  "checkedAt": "2026-09-22T19:18:48.527Z",
+  "task": "Gemini MCP 使用量 hook 登録",
+  "finding": "PostToolUse は既に orgiast-main の対象 hook を登録済み。設定変更不要。",
+  "settingsFile": "/mnt/c/Users/uers/.claude/settings.json",
+  "settingsSha256": "6475381bb7c5f5d3013cc84db7fa09cabe4787cd3990b47fad36d68527cd2c38",
+  "registration": {
+    "matcher": "mcp__gemini-cli__(?:ask-gemini|geminiChat|googleSearch)",
+    "hooks": [
+      {
+        "type": "command",
+        "command": "node \"C:\\Users\\uers\\orgiast-main\\tools\\gemini-mcp-usage-hook.mjs\"",
+        "timeout": 10
+      }
+    ]
+  },
+  "script": "/mnt/c/Users/uers/orgiast-main/tools/gemini-mcp-usage-hook.mjs",
+  "scriptSha256": "980c8c0dbeebb8b6bb28ae38ed0a9d3cabf30f6b09f08159328a9ecf3800b2cb",
+  "cases": [
+    {
+      "tool": "mcp__gemini-cli__ask-gemini",
+      "status": "passed",
+      "row": {
+        "tool": "mcp__gemini-cli__ask-gemini",
+        "toolUseId": "isolated-ask-gemini",
+        "status": "ok",
+        "t": "2026-09-22T19:18:48.191Z",
+        "provider": "gemini",
+        "model": "test-model",
+        "in": 17,
+        "out": 7,
+        "usd": null,
+        "source": "mcp",
+        "searches": 0,
+        "pricing": "unknown"
+      }
+    },
+    {
+      "tool": "mcp__gemini-cli__geminiChat",
+      "status": "passed",
+      "row": {
+        "tool": "mcp__gemini-cli__geminiChat",
+        "toolUseId": "isolated-geminiChat",
+        "status": "ok",
+        "t": "2026-09-22T19:18:48.272Z",
+        "provider": "gemini",
+        "model": "test-model",
+        "in": 17,
+        "out": 7,
+        "usd": null,
+        "source": "mcp",
+        "searches": 0,
+        "pricing": "unknown"
+      }
+    },
+    {
+      "tool": "mcp__gemini-cli__googleSearch",
+      "status": "passed",
+      "row": {
+        "tool": "mcp__gemini-cli__googleSearch",
+        "toolUseId": "isolated-googleSearch",
+        "status": "ok",
+        "t": "2026-09-22T19:18:48.357Z",
+        "provider": "gemini",
+        "model": "test-model",
+        "in": 17,
+        "out": 7,
+        "usd": null,
+        "source": "mcp",
+        "searches": null,
+        "estimated": true,
+        "pricing": "unknown"
+      }
+    }
+  ],
+  "unrelatedToolIgnored": true,
+  "productionLedger": {
+    "exists": true,
+    "geminiMcpRows": 17,
+    "measuredRows": 6,
+    "lastTimestamp": "2026-09-22T10:14:03.293Z"
+  },
+  "settingsUnchanged": true,
+  "externalApiCalls": 0,
+  "limitations": [
+    "実 Claude セッションからの発火は未検証。外部送信・課金を避け隔離入力で直接実行した。",
+    "指定結果 JSON 保存先は書き込み許可範囲外。"
+  ],
+  "otherFailureRegistration": [
+    {
+      "matcher": "mcp__gemini-cli__.*",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "node \"C:\\Users\\uers\\orgiast-claude-rules\\tools\\gemini-mcp-usage-hook.mjs\"",
+          "timeout": 10
+        }
+      ]
+    }
+  ]
+}

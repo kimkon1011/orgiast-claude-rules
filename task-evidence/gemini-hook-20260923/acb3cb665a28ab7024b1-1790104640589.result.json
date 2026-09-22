@@ -1,0 +1,8 @@
+{
+  "completed": false,
+  "summary": "対象 hook は既に正しい PostToolUse 設定に登録済み。3種類の模擬 MCP 応答から台帳へのトークン記録を直接確認し、設定は変更していない。ただし指定の結果 JSON 保存先はセッションの書き込み許可範囲外のため、保存条件を満たせない。",
+  "evidence": {
+    "file": "/mnt/c/Users/uers/orgiast-main/task-evidence/gemini-hook-20260923/verification.json",
+    "sha256": "2354894b55a7d5ddcfaba7e634ef3c21c817c0a947b7dd38843f7d4cd5516a97"
+  }
+}

@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    body { font-family: -apple-system, "Segoe UI", "Noto Sans JP", sans-serif; margin: 0; padding: 16px; font-size: 13px; color: #202124; }
+    h2 { font-size: 15px; margin: 0 0 12px; }
+    label { display: block; font-size: 12px; color: #5f6368; margin-top: 10px; }
+    input { width: 100%; padding: 6px 8px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; }
+    .row { display: flex; gap: 8px; }
+    .row > div { flex: 1; }
+    button { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; margin-top: 16px; }
+    button.primary { background: #1a73e8; color: #fff; }
+    button.secondary { background: #fff; color: #5f6368; border: 1px solid #dadce0; }
+    .status { margin-top: 12px; padding: 8px; border-radius: 4px; font-size: 12px; white-space: pre-wrap; }
+    .status.ok { background: #e6f4ea; color: #1e8e3e; }
+    .status.err { background: #fce8e6; color: #c5221f; }
+    .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid #1a73e8; border-top: 2px solid transparent; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 6px; vertical-align: middle; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <h2>新規案件を作成</h2>
+  <label>クライアント名 <span style="color:#c5221f">*</span></label>
+  <input id="clientName" placeholder="例: ◯◯製薬株式会社">
+  <label>案件名 <span style="color:#c5221f">*</span></label>
+  <input id="caseName" placeholder="例: 第◯回学会 ブース出展">
+  <div class="row">
+    <div>
+      <label>出展開始日</label>
+      <input id="startDate" type="date">
+    </div>
+    <div>
+      <label>出展終了日</label>
+      <input id="endDate" type="date">
+    </div>
+  </div>
+  <label>ブースサイズ</label>
+  <input id="boothSize" placeholder="例: 3m × 3m / 2小間">
+
+  <div style="display:flex; justify-content:flex-end; gap:8px;">
+    <button class="secondary" onclick="google.script.host.close()">キャンセル</button>
+    <button class="primary" id="submit" onclick="submit()">作成</button>
+  </div>
+
+  <div id="status"></div>
+
+  <script>
+    function submit() {
+      const payload = {
+        clientName: document.getElementById('clientName').value.trim(),
+        caseName: document.getElementById('caseName').value.trim(),
+        startDate: document.getElementById('startDate').value,
+        endDate: document.getElementById('endDate').value,
+        boothSize: document.getElementById('boothSize').value.trim()
+      };
+      if (!payload.clientName || !payload.caseName) {
+        setStatus('クライアント名と案件名は必須です。', 'err');
+        return;
+      }
+      document.getElementById('submit').disabled = true;
+      setStatus('<span class="spinner"></span>作成中…', 'ok');
+      google.script.run
+        .withSuccessHandler(function(res) {
+          setStatus('案件 ' + res.caseId + ' を作成しました。\n2秒後に閉じます。', 'ok');
+          setTimeout(() => google.script.host.close(), 2000);
+        })
+        .withFailureHandler(function(e) {
+          document.getElementById('submit').disabled = false;
+          setStatus('エラー: ' + (e.message || e), 'err');
+        })
+        .CaseList_create(payload);
+    }
+    function setStatus(html, kind) {
+      const s = document.getElementById('status');
+      s.innerHTML = html;
+      s.className = 'status ' + (kind || '');
+    }
+  </script>
+</body>
+</html>

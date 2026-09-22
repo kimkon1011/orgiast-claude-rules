@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    body { font-family: -apple-system, "Segoe UI", "Noto Sans JP", sans-serif; margin: 0; padding: 12px; font-size: 13px; color: #202124; }
+    h2 { font-size: 14px; margin: 0 0 8px; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
+    .case-info { background: #f1f3f4; padding: 8px; border-radius: 4px; margin-bottom: 12px; }
+    .case-info .row { display: flex; justify-content: space-between; margin: 2px 0; }
+    .case-info .label { color: #5f6368; font-size: 11px; }
+    .empty { color: #80868b; font-style: italic; padding: 12px; text-align: center; }
+    .phase { background: #fff; border: 1px solid #e0e0e0; border-radius: 4px; padding: 10px; margin-bottom: 10px; }
+    .phase-title { font-weight: bold; font-size: 13px; margin-bottom: 8px; color: #1a73e8; }
+    select { width: 100%; padding: 6px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; }
+    label.picker-label { display: block; font-size: 11px; color: #5f6368; margin-bottom: 4px; }
+    button { display: block; width: 100%; padding: 8px 10px; margin: 4px 0; background: #1a73e8; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; text-align: left; }
+    button:hover { background: #1557b0; }
+    button:disabled { background: #ccc; cursor: not-allowed; }
+    button.secondary { background: #fff; color: #1a73e8; border: 1px solid #1a73e8; }
+    button.secondary:hover { background: #f1f7ff; }
+    .status { padding: 8px; margin: 8px 0; border-radius: 4px; font-size: 12px; white-space: pre-wrap; }
+    .status.ok { background: #e6f4ea; color: #1e8e3e; border: 1px solid #ceead6; }
+    .status.err { background: #fce8e6; color: #c5221f; border: 1px solid #f5c6c0; }
+    .status.run { background: #fef7e0; color: #b06000; border: 1px solid #fde293; }
+    .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid #fff; border-top: 2px solid transparent; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 6px; vertical-align: middle; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    a { color: #1a73e8; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .footer { font-size: 11px; color: #5f6368; margin-top: 16px; padding-top: 8px; border-top: 1px solid #eee; }
+  </style>
+</head>
+<body>
+  <h2>ブース制作アプリ</h2>
+
+  <label class="picker-label">作業する案件</label>
+  <select id="casePicker" onchange="onPickerChange()"><option value="">(読み込み中…)</option></select>
+
+  <div id="caseInfo" class="empty">案件を選択してください。</div>
+
+  <div id="actions" style="display:none;">
+    <div class="phase">
+      <div class="phase-title">第一段階（提案）</div>
+      <button id="btn-brief" onclick="runBrief()">① デザイナー依頼文を生成</button>
+      <button id="btn-estimate" onclick="runEstimate()">② 見積 初版 を生成</button>
+      <button id="btn-schedule" onclick="runSchedule()">③ 全体スケジュール 初版 を生成</button>
+      <button class="secondary" onclick="openConfirmation()">確認シートを開く</button>
+    </div>
+
+    <div class="phase">
+      <div class="phase-title">第二段階（制作第一フェーズ）</div>
+      <button id="btn-assign-construction" onclick="runAssign('construction','btn-assign-construction')">① 施工会社 打診文 初版 を生成</button>
+      <button id="btn-assign-ops" onclick="runAssign('ops','btn-assign-ops')">② 運営スタッフ 打診文 初版 を生成</button>
+      <button id="btn-assign-driver" onclick="runAssign('driver','btn-assign-driver')">③ ドライバー 打診文 初版 を生成</button>
+      <button id="btn-setup-teardown" onclick="run('Phase2_SetupTeardownPlan_generate','btn-setup-teardown',renderOpsPlan)">④ 設営撤去手順 初版 を生成</button>
+      <button id="btn-logistics" onclick="run('Phase2_LogisticsPlan_generate','btn-logistics',renderOpsPlan)">⑤ 搬入出計画 初版 を生成</button>
+      <button id="btn-itemlist" onclick="run('Phase2_ItemList_generate','btn-itemlist',renderItemList)">⑥ アイテムリスト 初版 を生成</button>
+      <button id="btn-submission" onclick="run('Phase2_Submission_generate','btn-submission',renderSubmission)">⑦ 提出書類チェックリスト 初版 を生成</button>
+      <button id="btn-layoutplan" onclick="run('Phase2_LayoutPlan_generate','btn-layoutplan',renderLayoutPlan)">⑧ レイアウトシート 初版 を生成</button>
+      <div style="margin-top:8px;border-top:1px dashed #ddd;padding-top:8px;">
+        <label class="picker-label">修正 feedback (原文を貼り付け)</label>
+        <textarea id="revision-input" placeholder="例: 受付カウンターを 200mm 中央に / モニタを 27→32inch に変更 / 色がイメージと違う..." rows="3"
+          style="width:100%;box-sizing:border-box;padding:6px;font-size:12px;border:1px solid #ccc;border-radius:4px;margin-bottom:4px;"></textarea>
+        <button id="btn-rev-estimate" onclick="runRevision('estimate','btn-rev-estimate')">⑨ 見積修正指示書 を生成</button>
+        <button id="btn-rev-design" onclick="runRevision('design','btn-rev-design')">⑩ パース修正指示書 を生成</button>
+      </div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-title">第三段階（制作仕上げ）</div>
+      <button id="btn-nyuko-check" onclick="run('Phase3_NyukoCheck_generate','btn-nyuko-check',renderNyukoCheck)">① 入稿データチェック を実行</button>
+    </div>
+
+    <div class="phase">
+      <div class="phase-title">第四段階（最終チェック）</div>
+      <button id="btn-day-client" onclick="runDayBrief('client','btn-day-client')">① クライアント 当日案内 を生成</button>
+      <button id="btn-day-construction" onclick="runDayBrief('construction','btn-day-construction')">② 施工会社 当日案内 を生成</button>
+      <button id="btn-day-ops" onclick="runDayBrief('ops','btn-day-ops')">③ 運営スタッフ 当日案内 を生成</button>
+      <button id="btn-day-driver" onclick="runDayBrief('driver','btn-day-driver')">④ ドライバー 当日案内 を生成</button>
+      <div style="margin-top:8px;border-top:1px dashed #ddd;padding-top:8px;">
+        <label class="picker-label">最終チェック feedback (原文を貼り付け)</label>
+        <textarea id="finalcheck-input" placeholder="例: 設営後にコンセント位置 NG / グラフィックの角がめくれ / 看板の色味調整..." rows="3"
+          style="width:100%;box-sizing:border-box;padding:6px;font-size:12px;border:1px solid #ccc;border-radius:4px;margin-bottom:4px;"></textarea>
+        <button id="btn-rev-final" onclick="runFinalCheckRevision()">⑤ 最終チェック修正指示書 を生成</button>
+      </div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-title">第五段階（現場 Q&A）</div>
+      <textarea id="qna-input" placeholder="例: 電気容量はどれくらい想定？／搬入車両証は何枚必要？" rows="3"
+        style="width:100%;box-sizing:border-box;padding:6px;font-size:12px;border:1px solid #ccc;border-radius:4px;margin-bottom:6px;"></textarea>
+      <button id="btn-qna" onclick="askQna()">質問を送信</button>
+      <div id="qna-result" style="margin-top:8px;"></div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-title">第六段階（案件終了後・振り返り）</div>
+      <button id="btn-post-report" onclick="run('Phase6_PostReport_generate','btn-post-report',renderPostReport)">① 報告書 を生成</button>
+      <button id="btn-improve-brief" onclick="run('Phase6_ImprovementBrief_generate','btn-improve-brief',renderImproveBrief)">② 改善指示書 を生成</button>
+      <button id="btn-final-estimate" onclick="run('Phase6_FinalEstimate_generate','btn-final-estimate',renderFinalEstimate)">③ 最終見積 を生成</button>
+      <button id="btn-staff-eval" onclick="run('Phase6_StaffEval_generate','btn-staff-eval',renderStaffEval)">④ スタッフ評価 を生成</button>
+    </div>
+  </div>
+
+  <div id="status"></div>
+
+  <div class="footer">
+    <a href="#" onclick="loadCaseList();return false;">案件一覧を更新</a>
+  </div>
+
+  <script>
+    let currentCase = null;
+    let allCases = [];
+
+    function loadCaseList() {
+      setStatus('<span class="spinner"></span>案件一覧を読み込み中…', 'run');
+      google.script.run
+        .withSuccessHandler(onCasesLoaded)
+        .withFailureHandler(onError)
+        .CaseList_listAll();
+    }
+
+    function onCasesLoaded(cases) {
+      allCases = cases || [];
+      const picker = document.getElementById('casePicker');
+      picker.innerHTML = '';
+      if (allCases.length === 0) {
+        picker.innerHTML = '<option value="">(案件がありません — メニューから「新規案件を作成」してください)</option>';
+        document.getElementById('caseInfo').className = 'empty';
+        document.getElementById('caseInfo').textContent = '案件がありません。';
+        document.getElementById('actions').style.display = 'none';
+        setStatus('', '');
+        return;
+      }
+      picker.innerHTML = '<option value="">— 選択してください —</option>' +
+        allCases.map(c => '<option value="' + escape(c.caseId) + '">' +
+          escape(c.caseId) + ' / ' + escape(c.clientName) + ' / ' + escape(c.caseName) +
+          ' (フェーズ' + escape(c.phase) + ')</option>').join('');
+      const latest = allCases[allCases.length - 1];
+      picker.value = latest.caseId;
+      loadCase(latest.caseId);
+      setStatus('', '');
+    }
+
+    function onPickerChange() {
+      const id = document.getElementById('casePicker').value;
+      if (!id) {
+        currentCase = null;
+        document.getElementById('caseInfo').className = 'empty';
+        document.getElementById('caseInfo').textContent = '案件を選択してください。';
+        document.getElementById('actions').style.display = 'none';
+        return;
+      }
+      loadCase(id);
+    }
+
+    function loadCase(caseId) {
+      setStatus('<span class="spinner"></span>案件を読み込み中…', 'run');
+      google.script.run
+        .withSuccessHandler(onCaseLoaded)
+        .withFailureHandler(onError)
+        .CaseList_getById(caseId);
+    }
+
+    function onCaseLoaded(c) {
+      currentCase = c;
+      const info = document.getElementById('caseInfo');
+      const actions = document.getElementById('actions');
+      if (!c) {
+        info.className = 'empty';
+        const pickedId = document.getElementById('casePicker').value || '(空)';
+        info.textContent = '案件が見つかりません。picker.value=「' + pickedId + '」 / response=' + JSON.stringify(c);
+        actions.style.display = 'none';
+      } else {
+        info.className = 'case-info';
+        info.innerHTML =
+          '<div class="row"><span class="label">案件ID</span><span>' + escape(c.caseId) + '</span></div>' +
+          '<div class="row"><span class="label">クライアント</span><span>' + escape(c.clientName) + '</span></div>' +
+          '<div class="row"><span class="label">案件名</span><span>' + escape(c.caseName) + '</span></div>' +
+          '<div class="row"><span class="label">フェーズ</span><span>' + escape(c.phase) + '</span></div>' +
+          '<div class="row"><span class="label">未回答確認</span><span>' + escape(c.unresolvedCount) + '</span></div>';
+        actions.style.display = 'block';
+      }
+      setStatus('', '');
+    }
+
+    function runBrief()    { run('Phase1_DesignerBrief_generate', 'btn-brief', renderBrief); }
+    function runEstimate() { run('Phase1_Estimate_generate',     'btn-estimate', renderEstimate); }
+    function runSchedule() { run('Phase1_Schedule_generate',     'btn-schedule', renderSchedule); }
+    function runAssign(partyType, btnId) {
+      if (!currentCase) { setStatus('案件が選択されていません。', 'err'); return; }
+      const btn = document.getElementById(btnId);
+      btn.disabled = true;
+      setStatus('<span class="spinner"></span>Phase2_AssignBrief_generate(' + partyType + ') 実行中…（30〜60秒）', 'run');
+      google.script.run
+        .withSuccessHandler(function(res) { btn.disabled = false; renderAssign(res); })
+        .withFailureHandler(function(e) { btn.disabled = false; onError(e); })
+        .Phase2_AssignBrief_generate(currentCase.caseId, partyType);
+    }
+    function runDayBrief(partyType, btnId) {
+      if (!currentCase) { setStatus('案件が選択されていません。', 'err'); return; }
+      const btn = document.getElementById(btnId);
+      btn.disabled = true;
+      setStatus('<span class="spinner"></span>Phase4_DayBrief_generate(' + partyType + ') 実行中…（30〜90秒）', 'run');
+      google.script.run
+        .withSuccessHandler(function(res) { btn.disabled = false; renderDayBrief(res); })
+        .withFailureHandler(function(e) { btn.disabled = false; onError(e); })
+        .Phase4_DayBrief_generate(currentCase.caseId, partyType);
+    }
+
+    function run(fn, btnId, renderer) {
+      if (!currentCase) { setStatus('案件が選択されていません。', 'err'); return; }
+      const btn = document.getElementById(btnId);
+      btn.disabled = true;
+      setStatus('<span class="spinner"></span>' + fn + ' 実行中…（30〜60秒）', 'run');
+      google.script.run
+        .withSuccessHandler(function(res) { btn.disabled = false; renderer(res); })
+        .withFailureHandler(function(e) { btn.disabled = false; onError(e); })
+        [fn](currentCase.caseId);
+    }
+
+    function renderBrief(res) {
+      setStatus('デザイナー依頼文を生成しました。\nGmail Draft 作成済み（件名: ' + (res.subject || '(空)') +
+        '）\n確認事項 ' + res.confirmationCount + ' 件を確認シートに追加。\n<a href="' + res.docUrl + '" target="_blank">Doc を開く</a>', 'ok');
+    }
+    function renderEstimate(res) {
+      if (res.skipped) {
+        const lines = ['(スキップ) ' + (res.reason || '既に作成済み')];
+        if (res.projectFolderUrl) lines.push('<a href="' + res.projectFolderUrl + '" target="_blank">既存プロジェクトフォルダ</a>');
+        if (res.zissiSheetUrl) lines.push('<a href="' + res.zissiSheetUrl + '" target="_blank">既存実施計画書</a>');
+        setStatus(lines.join('\n'), 'run');
+        return;
+      }
+      const lines = ['見積初版を生成しました。',
+        '明細 ' + res.itemCount + ' 件、確認事項 ' + res.confirmationCount + ' 件。',
+        '<a href="' + res.estimateSheetUrl + '" target="_blank">見積を開く</a>'];
+      if (res.projectFolderUrl) lines.push('<a href="' + res.projectFolderUrl + '" target="_blank">プロジェクトフォルダ</a>');
+      if (res.zissiSheetUrl) lines.push('<a href="' + res.zissiSheetUrl + '" target="_blank">実施計画書</a>');
+      if (res.teisyutuSheetUrl) lines.push('<a href="' + res.teisyutuSheetUrl + '" target="_blank">提出フォーマット</a>');
+      setStatus(lines.join('\n'), 'ok');
+    }
+    function renderLayoutPlan(res) {
+      const lines = ['レイアウトシート 初版を生成しました。',
+        '仕様項目 ' + res.itemCount + ' 件、画像プロンプト ' + res.promptCount + ' シーン、確認事項 ' + res.confirmationCount + ' 件。',
+        '<a href="' + res.proposalSheetUrl + '" target="_blank">Claude_レイアウト提案 (仕様) を開く</a>',
+        '<a href="' + res.promptSheetUrl + '" target="_blank">Claude_レイアウト画像プロンプト を開く</a>'];
+      setStatus(lines.join('\n'), 'ok');
+    }
+    function renderSubmission(res) {
+      const lines = ['提出書類チェックリスト 初版を生成しました。',
+        '書類 ' + res.documentCount + ' 件、確認事項 ' + res.confirmationCount + ' 件、参照マニュアル ' + res.manualPagesUsed + ' ページ。',
+        '<a href="' + res.proposalSheetUrl + '" target="_blank">Claude_提出書類チェックリスト を開く</a>'];
+      setStatus(lines.join('\n'), 'ok');
+    }
+    function renderItemList(res) {
+      const lines = ['アイテムリスト初版を生成しました。',
+        '品目 ' + res.itemCount + ' 件、確認事項 ' + res.confirmationCount + ' 件、参照マニュアル ' + res.manualPagesUsed + ' ページ。',
+        '<a href="' + res.proposalSheetUrl + '" target="_blank">Claude_アイテムリスト提案 を開く</a>'];
+      setStatus(lines.join('\n'), 'ok');
+    }
+    function runRevision(typeKey, btnId) {
+      if (!currentCase) { setStatus('案件を選択してください。', 'err'); return; }
+      const fb = document.getElementById('revision-input').value;
+      if (!fb || !fb.trim()) { setStatus('修正 feedback を入力してください。', 'err'); return; }
+      document.getElementById(btnId).disabled = true;
+      setStatus('<span class="spinner"></span>修正指示書 (' + typeKey + ') 生成中…（30〜60秒）', 'run');
+      const fn = typeKey === 'estimate'
+        ? 'Phase2_EstimateRevision_generate'
+        : 'Phase2_DesignRevision_generate';
+      google.script.run
+        .withSuccessHandler(function (res) {
+          document.getElementById(btnId).disabled = false;
+          renderRevision(res);
+        })
+        .withFailureHandler(function (err) {
+          document.getElementById(btnId).disabled = false;
+          onError(err);
+        })
+        [fn](currentCase.caseId, fb);
+    }
+    function runFinalCheckRevision() {
+      if (!currentCase) { setStatus('案件を選択してください。', 'err'); return; }
+      const fb = document.getElementById('finalcheck-input').value;
+      if (!fb || !fb.trim()) { setStatus('最終チェック feedback を入力してください。', 'err'); return; }
+      document.getElementById('btn-rev-final').disabled = true;
+      setStatus('<span class="spinner"></span>最終チェック修正指示書 生成中…（30〜60秒）', 'run');
+      google.script.run
+        .withSuccessHandler(function (res) {
+          document.getElementById('btn-rev-final').disabled = false;
+          renderRevision(res);
+        })
+        .withFailureHandler(function (err) {
+          document.getElementById('btn-rev-final').disabled = false;
+          onError(err);
+        })
+        .Phase4_FinalCheckRevision_generate(currentCase.caseId, fb);
+    }
+    function renderRevision(res) {
+      const lines = [res.typeName + '修正指示書を生成しました。',
+        'タイトル: ' + (res.title || ''),
+        '修正事項 ' + (res.revisionCount || 0) + '、未確定 ' + (res.openQuestionCount || 0) + ' 件。',
+        '所感: ' + (res.summary || ''),
+        '<a href="' + res.docUrl + '" target="_blank">' + res.typeName + '修正指示書 Doc を開く</a>'];
+      setStatus(lines.join('\n'), 'ok');
+    }
+    function askQna() {
+      if (!currentCase) { setStatus('案件を選択してください。', 'err'); return; }
+      const q = document.getElementById('qna-input').value;
+      if (!q || !q.trim()) { setStatus('質問を入力してください。', 'err'); return; }
+      document.getElementById('btn-qna').disabled = true;
+      document.getElementById('qna-result').innerHTML = '';
+      setStatus('<span class="spinner"></span>Phase5_Qna_ask 実行中…', 'run');
+      google.script.run
+        .withSuccessHandler(function (res) {
+          document.getElementById('btn-qna').disabled = false;
+          renderQna(res);
+        })
+        .withFailureHandler(function (err) {
+          document.getElementById('btn-qna').disabled = false;
+          onError(err);
+        })
+        .Phase5_Qna_ask(currentCase.caseId, q);
+    }
+    function renderQna(res) {
+      const conf = res.confidence || '';
+      const confColor = conf === 'high' ? '#1e8e3e' : conf === 'mid' ? '#b06000' : '#c5221f';
+      let html = '<div style="border:1px solid #e0e0e0;padding:8px;border-radius:4px;background:#fafafa;">' +
+        '<div style="font-weight:bold;font-size:12px;color:#5f6368;margin-bottom:4px;">回答 <span style="color:' + confColor + ';">(' + conf + ')</span></div>' +
+        '<div style="white-space:pre-wrap;font-size:12px;">' + escapeHtml(res.answer || '') + '</div>';
+      if (res.sources && res.sources.length > 0) {
+        html += '<div style="margin-top:6px;font-size:11px;color:#5f6368;">出典:<ul style="margin:2px 0 0 16px;padding:0;">';
+        res.sources.forEach(function (s) {
+          html += '<li>[' + escapeHtml(s.type || '') + '] ' + escapeHtml(s.label || '') + (s.excerpt ? ' — <i>' + escapeHtml(s.excerpt) + '</i>' : '') + '</li>';
+        });
+        html += '</ul></div>';
+      }
+      if (res.followUpQuestions && res.followUpQuestions.length > 0) {
+        html += '<div style="margin-top:6px;font-size:11px;color:#b06000;">追加確認:<ul style="margin:2px 0 0 16px;padding:0;">';
+        res.followUpQuestions.forEach(function (q) {
+          html += '<li>' + escapeHtml(q) + '</li>';
+        });
+        html += '</ul></div>';
+      }
+      html += '</div>';
+      document.getElementById('qna-result').innerHTML = html;
+      setStatus('Q&A 完了（マニュアル ' + (res.manualPagesUsed || 0) + ' ページ参照）', 'ok');
+    }
+    function escapeHtml(s) {
+      return String(s || '').replace(/[&<>"']/g, function (c) {
+        return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
+      });
+    }
+    function renderPostReport(res) {
+      const lines = ['報告書を生成しました。',
+        'タイトル: ' + (res.title || ''),
+        'セクション ' + (res.sectionCount || 0) + '、補完依頼 ' + (res.missingInputCount || 0) + ' 件。',
+        '<a href="' + res.docUrl + '" target="_blank">報告書 Doc を開く</a>'];
+      setStatus(lines.join('\n'), 'ok');
+    }
+    function renderImproveBrief(res) {
+      const lines = ['改善指示書を生成しました。',
+        'タイトル: ' + (res.title || ''),
+        '指摘 ' + (res.improvementCount || 0) + ' 件、対象 ' + ((res.audiences || []).join('/')) + '。',
+        '<a href="' + res.docUrl + '" target="_blank">改善指示書 Doc を開く</a>'];
+      setStatus(lines.join('\n'), 'ok');
+    }
+    function renderFinalEstimate(res) {
+      const lines = ['最終見積を生成しました。',
+        '品目 ' + (res.itemCount || 0) + '、補完依頼 ' + (res.missingInputCount || 0) + ' 件。',
+        '所感: ' + (res.summary || ''),
+        '<a href="' + res.sheetUrl + '" target="_blank">Claude_最終見積 を開く</a>'];
+      setStatus(lines.join('\n'), 'ok');
+    }
+    function renderStaffEval(res) {
+      const lines = ['スタッフ評価を生成しました。',
+        'メンバー ' + (res.memberCount || 0) + ' 名、補完依頼 ' + (res.missingInputCount || 0) + ' 件。',
+        '<a href="' + res.sheetUrl + '" target="_blank">Claude_スタッフ評価 を開く</a>'];
+      setStatus(lines.join('\n'), 'ok');
+    }
+    function renderNyukoCheck(res) {
+      const sev = res.severityCount || {};
+      const lines = ['入稿データチェックを実行しました。',
+        'チェック対象 PDF ' + res.pdfCount + ' 件: ' + (res.pdfLabels || []).join(' / '),
+        '指摘 ' + res.issueCount + ' 件（high ' + (sev.high||0) + ' / mid ' + (sev.mid||0) + ' / low ' + (sev.low||0) + '）',
+        '所感: ' + (res.summary || ''),
+        '<a href="' + res.checkSheetUrl + '" target="_blank">Claude_入稿データチェック を開く</a>'];
+      setStatus(lines.join('\n'), 'ok');
+    }
+    function renderOpsPlan(res) {
+      const lines = [res.planName + ' 初版を生成しました。',
+        'タイトル: ' + (res.title || '(空)'),
+        '確認事項 ' + res.confirmationCount + ' 件を確認シートに追加。',
+        '参照マニュアル ' + res.manualPagesUsed + ' ページ。',
+        '<a href="' + res.docUrl + '" target="_blank">Doc を開く</a>'];
+      setStatus(lines.join('\n'), 'ok');
+    }
+    function renderDayBrief(res) {
+      const lines = [res.partyName + ' 当日案内 初版を生成しました。',
+        'Gmail Draft 作成済み（件名: ' + (res.subject || '(空)') + '）',
+        '確認事項 ' + res.confirmationCount + ' 件を確認シートに追加。',
+        '<a href="' + res.docUrl + '" target="_blank">Doc を開く</a>'];
+      setStatus(lines.join('\n'), 'ok');
+    }
+    function renderAssign(res) {
+      const lines = [res.partyName + ' 打診文 初版を生成しました。',
+        'Gmail Draft 作成済み（件名: ' + (res.subject || '(空)') + '）',
+        '確認事項 ' + res.confirmationCount + ' 件を確認シートに追加。',
+        '参照マニュアル ' + res.manualPagesUsed + ' ページ。',
+        '<a href="' + res.docUrl + '" target="_blank">Doc を開く</a>'];
+      setStatus(lines.join('\n'), 'ok');
+    }
+    function renderSchedule(res) {
+      const lines = ['スケジュール初版を生成しました。',
+        'マイルストーン ' + res.milestoneCount + ' 件、確認事項 ' + res.confirmationCount + ' 件。'];
+      if (res.scheduleSheetUrl) lines.push('<a href="' + res.scheduleSheetUrl + '" target="_blank">スケジュールシートを開く</a>');
+      if (res.proposalSheetUrl) lines.push('<a href="' + res.proposalSheetUrl + '" target="_blank">Claude_マイルストーン提案 を開く</a>');
+      if (res.zissiSheetUrl && !res.scheduleSheetUrl) lines.push('<a href="' + res.zissiSheetUrl + '" target="_blank">実施計画書を開く</a>');
+      setStatus(lines.join('\n'), 'ok');
+    }
+    function onError(e) {
+      setStatus('エラー: ' + (e.message || e), 'err');
+    }
+    function openConfirmation() {
+      if (!currentCase) return;
+      google.script.run
+        .withSuccessHandler(function(url) {
+          if (url) window.open(url, '_blank');
+          else setStatus('確認シートはまだ作成されていません（生成を実行すると作成されます）。', 'run');
+        })
+        .withFailureHandler(onError)
+        .ConfirmationSheet_getUrl(currentCase.caseId);
+    }
+    function setStatus(html, kind) {
+      const s = document.getElementById('status');
+      if (!html) { s.innerHTML = ''; s.className = ''; return; }
+      s.innerHTML = html;
+      s.className = 'status ' + (kind || '');
+    }
+    function escape(s) {
+      if (s === null || s === undefined) return '';
+      return String(s).replace(/[&<>"']/g, c =>
+        ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+
+    loadCaseList();
+  </script>
+</body>
+</html>

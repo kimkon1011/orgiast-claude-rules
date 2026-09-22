@@ -1,0 +1,48 @@
+{
+  "liveFileCount": 93,
+  "candidateFileCount": 87,
+  "candidateAdds": [],
+  "candidateDeletes": [
+    "ElectricalCalc.js",
+    "ElectricalEquipmentMaster.js",
+    "ElectricalMailTemplates.js",
+    "Phase2_ElectricalApplication.js",
+    "Phase2_ElectricalDrawing.js",
+    "VenueParkingSpec.js"
+  ],
+  "candidateOverwrites": [
+    "CaseApi.js",
+    "Checklist.js",
+    "CommandQueue.js",
+    "FeedbackRelay.js",
+    "MasterPanel.js",
+    "Phase2_ItemList.js",
+    "Phase2_OperationsPlan.js",
+    "Phase2_VolumeCalc.js",
+    "Phase_AssignRequest.js",
+    "Phase_ProcurementRequest.js",
+    "TaskLedger.js",
+    "ui/Checklist.html",
+    "ui/ChecklistAdmin.html",
+    "ui/FeedbackForm.html",
+    "ui/ImportZissi.html",
+    "ui/Sidebar.html"
+  ],
+  "targetFiles": {
+    "Phase_AssignRequest.js": {
+      "sameAsCandidate": false,
+      "liveHasDraft": false,
+      "liveSha256": "7229d322a070490dee6cd7fef92f09f5c1638eb4a2b8a4f4a8fa2fb534a5d6d1"
+    },
+    "MasterPanel.js": {
+      "sameAsCandidate": false,
+      "liveHasDraft": false,
+      "liveSha256": "0b5c435497d508a71975064b3a6f3e2423a5ba59055dbd12da0b043dfecd1634"
+    },
+    "CommandQueue.js": {
+      "sameAsCandidate": false,
+      "liveHasDraft": false,
+      "liveSha256": "df89901523fb0900d8a5716d783b84d600f08d2daf278c90bfb6a593e220c912"
+    }
+  }
+}

@@ -1,0 +1,102 @@
+{
+  "target": {
+    "id": "fb-1789352447404-n2nilskz",
+    "name": "アサイン依頼の修正"
+  },
+  "checkedAt": "2026-09-22T19:14:28.803647+00:00",
+  "completed": false,
+  "originalTodo": "C:\\Users\\uers\\.claude\\next-session.md:15-16",
+  "ledgerStatus": "new",
+  "liveVerification": {
+    "method": "既存認証によるApps Script API projects.getContentの読取。書込なし。",
+    "finding": "本番93ファイル中、対象3ファイルにPhase_AssignRequest_draftはなく、実装は未反映。",
+    "comparison": {
+      "liveFileCount": 93,
+      "candidateFileCount": 87,
+      "candidateAdds": [],
+      "candidateDeletes": [
+        "ElectricalCalc.js",
+        "ElectricalEquipmentMaster.js",
+        "ElectricalMailTemplates.js",
+        "Phase2_ElectricalApplication.js",
+        "Phase2_ElectricalDrawing.js",
+        "VenueParkingSpec.js"
+      ],
+      "candidateOverwrites": [
+        "CaseApi.js",
+        "Checklist.js",
+        "CommandQueue.js",
+        "FeedbackRelay.js",
+        "MasterPanel.js",
+        "Phase2_ItemList.js",
+        "Phase2_OperationsPlan.js",
+        "Phase2_VolumeCalc.js",
+        "Phase_AssignRequest.js",
+        "Phase_ProcurementRequest.js",
+        "TaskLedger.js",
+        "ui/Checklist.html",
+        "ui/ChecklistAdmin.html",
+        "ui/FeedbackForm.html",
+        "ui/ImportZissi.html",
+        "ui/Sidebar.html"
+      ],
+      "targetFiles": {
+        "Phase_AssignRequest.js": {
+          "sameAsCandidate": false,
+          "liveHasDraft": false,
+          "liveSha256": "7229d322a070490dee6cd7fef92f09f5c1638eb4a2b8a4f4a8fa2fb534a5d6d1"
+        },
+        "MasterPanel.js": {
+          "sameAsCandidate": false,
+          "liveHasDraft": false,
+          "liveSha256": "0b5c435497d508a71975064b3a6f3e2423a5ba59055dbd12da0b043dfecd1634"
+        },
+        "CommandQueue.js": {
+          "sameAsCandidate": false,
+          "liveHasDraft": false,
+          "liveSha256": "df89901523fb0900d8a5716d783b84d600f08d2daf278c90bfb6a593e220c912"
+        }
+      }
+    }
+  },
+  "localVerification": {
+    "commit": "4210734fd9f47a4b0cd2f59a2a87be8944d0c836",
+    "originalTests": "✔ 車両判別は正規化した一致語と優先順位に従う (10.7423ms)\n✔ 除外指示は施工スタッフ行だけを取り除く (0.8494ms)\n✔ 除外指示は複数の区切り文字と繰り返しに対応する (0.5912ms)\n✔ 除外指定なしは全行を新しい配列で返し、元のデータを変更しない (0.6171ms)\n✔ 別の文章で言及された職種を除外しない (0.3913ms)\n✔ マニュアルに車両手配の判別ルールを含む (0.3624ms)\nℹ tests 6\nℹ suites 0\nℹ pass 6\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 177.5047\n",
+    "reproduction": {
+      "sourceCommit": "4210734",
+      "networkUsed": false,
+      "findings": [
+        {
+          "name": "職種単位の除外が効かない",
+          "input": "除外:デザイナー",
+          "writtenPositions": [
+            "デザイナー",
+            "ドライバー"
+          ]
+        },
+        {
+          "name": "Doc再読込なし",
+          "documentReads": 0
+        },
+        {
+          "name": "パネル読取エラーでも送信する",
+          "sheetRows": 1,
+          "notifications": 1
+        },
+        {
+          "name": "イベント関連全体の除外は機能する",
+          "sheetRows": 0,
+          "notifications": 0
+        }
+      ]
+    },
+    "additionalFinding": "AssignRequest_detectVehicleOwnershipは定義とテストのみで生成処理から呼ばれていない。Doc編集をシート行へ反映する再読込処理もない。"
+  },
+  "blockers": [
+    "ユーザー制約の外部送信・課金禁止により、本番の下書き生成（ClaudeClient_call）とDiscord実送信を伴う検証は行えない。配布も実施していない。",
+    "職種単位の除外・Doc編集反映・入力読取エラー時の送信抑止に未解決事項がある。",
+    "候補src全体の反映は本番のみの6ファイルを削除し16ファイルを上書きするため不可。"
+  ],
+  "sideEffects": "本番書込、Discord送信、課金API実行、FB resolve、他セッション差分の取込、ブランチ操作、ファイル削除なし。ローカル証拠ファイルのみ作成。",
+  "nextSteps": "対象差分だけを本番ミラー上で修正し、職種単位の編集と送信中止の検証を追加。その後、外部送信・課金が許される環境で配布・本番検証・FB resolveを行う。"
+}

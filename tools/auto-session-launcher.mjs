@@ -3,11 +3,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { createDirtyWorktreeGuard } from './dirty-worktree-guard.mjs';
 import { isEntry } from './is-entry.mjs';
 
-// 機種依存パスを持たない。専用 worktree は共有クローンと同じ .git を指すので、
-// ランチャーが専用 worktree 側から起動されても fetch / worktree add はそのまま通る。
-export const DEFAULT_SHARED_REPO = path.resolve(import.meta.dirname, '..');
+// ツールの設置先（人の作業ツリー）を更新対象にしない。明示指定だけ ORGIAST_REPO で受け付ける。
+export const DEFAULT_SHARED_REPO = path.join(os.homedir(), '.claude', 'nightly-repo');
 
 // pinnedTree に対する更新コマンドのうち、失敗が「ローカル tree が汚れている」ことを意味するもの。
 // これらが失敗した場合だけ使い捨て fallback tree を作る（fetch 失敗＝ネットワーク断とは区別する）。
@@ -79,7 +79,7 @@ function parseFallbackStamp(token) {
 
 // 溜まり続けた古い fallback tree を掃除する。失敗しても夜間実行を止めてはいけないため、
 // readdir / remove / prune のどこで失敗しても無視して先へ進む（呼び出し元へ例外を投げない）。
-async function cleanupStaleFallbackTrees({ sharedRepo, pinnedTree, now, run, readdir }) {
+async function cleanupStaleFallbackTrees({ sharedRepo, pinnedTree, now, run, readdir, allowUpdate }) {
   const dir = path.dirname(pinnedTree);
   const prefix = `${path.basename(pinnedTree)}-fallback-`;
   let entries;
@@ -94,7 +94,8 @@ async function cleanupStaleFallbackTrees({ sharedRepo, pinnedTree, now, run, rea
     const parsed = parseFallbackStamp(entry.slice(prefix.length));
     if (!parsed || parsed.getTime() >= cutoff) continue;
     try {
-      await run('git', ['worktree', 'remove', '--force', path.join(dir, entry)], {
+      if (!allowUpdate(path.join(dir, entry))) continue;
+      await run('git', ['worktree', 'remove', path.join(dir, entry)], {
         cwd: sharedRepo,
         stdio: ['inherit', 'inherit', 'pipe'],
       });
@@ -123,11 +124,12 @@ function exitCode(result) {
   return 0;
 }
 
-// タスクスケジューラが直接読む共有クローンも次回起動に向けて更新する。
+// 専用クローン（または明示された ORGIAST_REPO）を更新する。
 // 今回の pinnedTree 準備とは独立したベストエフォート処理なので、失敗は警告だけに留める。
-async function syncSharedRepo({ sharedRepo, run, log, bootLog, stamp }) {
+async function syncSharedRepo({ sharedRepo, run, log, bootLog, stamp, allowUpdate }) {
   for (const command of planSharedRepoSyncCommands({ sharedRepo })) {
     try {
+      if (command.args[0] !== 'fetch' && !allowUpdate(command.cwd)) return;
       const result = await run('git', command.args, {
         cwd: command.cwd,
         stdio: ['inherit', 'inherit', 'pipe'],
@@ -183,7 +185,19 @@ export async function main(argv, io = {}) {
   const started = now();
   const stamp = () => `[${localIso(now())}]`;
   bootLog(`${stamp()} start argv=${JSON.stringify(argv)} pinnedTree=${pinnedTree}`);
-  await syncSharedRepo({ sharedRepo, run, log, bootLog, stamp });
+  const allowUpdate = io.allowUpdate ?? createDirtyWorktreeGuard({
+    log: (message) => { log(message); bootLog(`${stamp()} ${message}`); },
+  });
+  if (!process.env.ORGIAST_REPO && !exists(path.join(sharedRepo, '.git'))) {
+    const result = await run('git', ['clone', '--branch', 'main', '--',
+      'https://github.com/kimkon1011/orgiast-claude-rules.git', sharedRepo],
+      { stdio: ['ignore', 'inherit', 'pipe'] });
+    if (exitCode(result) !== 0) {
+      bootLog(`${stamp()} abort dedicated clone failed: ${result?.stderrTail ?? ''}`);
+      return 1;
+    }
+  }
+  await syncSharedRepo({ sharedRepo, run, log, bootLog, stamp, allowUpdate });
   // ディレクトリだけ残った壊れた worktree を「用意できている」と誤判定しないよう、
   // 実際に起動する対象ファイルの有無で判定する。
   const initialEntryPoint = launchArgs(pinnedTree, [])[0];
@@ -196,6 +210,10 @@ export async function main(argv, io = {}) {
 
   for (const command of commands) {
     try {
+      if (LOCAL_STATE_LABELS.has(command.label) && !allowUpdate(command.cwd)) {
+        localStateFailure = true;
+        break;
+      }
       const result = await run('git', command.args, {
         cwd: command.cwd,
         stdio: ['inherit', 'inherit', 'pipe'],
@@ -217,8 +235,7 @@ export async function main(argv, io = {}) {
     }
   }
 
-  // ローカル tree の状態が原因で更新に失敗した場合だけ、pinnedTree には一切書き込まず
-  // 使い捨て tree を新規に作ってそこから起動する（他セッションの未コミット作業を壊さないため）。
+  // 汚れを検出した tree は rescue 後も更新しない。別の使い捨て tree から起動する。
   let launchTree = pinnedTree;
   if (localStateFailure) {
     const fallbackTree = fallbackTreePath(pinnedTree, now());
@@ -253,7 +270,7 @@ export async function main(argv, io = {}) {
   }
 
   // fallback tree が溜まり続けないよう、3日より古いものを掃除する。失敗しても致命にしない。
-  await cleanupStaleFallbackTrees({ sharedRepo, pinnedTree, now, run, readdir });
+  await cleanupStaleFallbackTrees({ sharedRepo, pinnedTree, now, run, readdir, allowUpdate });
 
   const entryPoint = launchArgs(launchTree, [])[0];
 

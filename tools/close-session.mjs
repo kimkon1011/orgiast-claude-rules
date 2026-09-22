@@ -1,7 +1,8 @@
-import { readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { launchPurge } from "./purge-sessions.mjs";
+import { recordClosed } from "./closed-sessions-ledger.mjs";
 import { launchNextSession } from "./next-session-launch.mjs";
 
 import { rotate } from "./next-session-rotate.mjs";
@@ -50,13 +51,12 @@ if (!sessionId) {
 
 rotate(join(claudeDir, "next-session.md"));
 
-const stored = readJson(closedPath, { ids: [] });
-const ids = Array.isArray(stored.ids) ? stored.ids : [];
-if (!ids.includes(sessionId)) {
-  ids.push(sessionId);
-  const tmpPath = `${closedPath}.tmp-${process.pid}`;
-  writeFileSync(tmpPath, `${JSON.stringify({ ids: ids.slice(-500) }, null, 2)}\n`, "utf8");
-  renameSync(tmpPath, closedPath);
+const recorded = recordClosed(sessionId, closedPath, {
+  onError: (e) => console.error(`closed-sessions.json に書けませんでした: ${e.message}`),
+});
+if (!recorded) {
+  console.error(`未完了: ${sessionId} を closed-sessions.json に記録できませんでした（一覧から消えません）`);
+  process.exit(1);
 }
 
 launchPurge();

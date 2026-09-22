@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "purpose": "全社で利用中のAIサービスを一覧化し、重複するプランの統合・解約で月額費用を削減する（AIニュース提案 P-0133）。",
+  "capabilities": {
+    "code": "コーディングCLI・実装エージェント",
+    "chat": "汎用チャット・テキスト生成",
+    "research": "調査・検索・資料生成",
+    "image": "画像生成"
+  },
+  "aiVendorPrefixes": ["anthropic", "claude", "openai", "chatgpt", "gemini", "google", "zai", "glm", "cerebras", "genspark", "groq", "deepseek", "openrouter", "grok", "xai", "kimi", "moonshot", "mistral", "perplexity", "cursor", "copilot", "elevenlabs", "runway", "suno", "heygen", "plaud", "tldv"],
+  "services": [
+    { "id": "claude-team", "name": "Claude Team seats", "vendor": "Anthropic", "kind": "seat", "monthlyJpy": null, "monthlyUsd": null, "capabilities": ["code", "chat"], "keyEnvs": ["ANTHROPIC_API_KEY"], "keyFiles": ["anthropic.env"], "evidence": "tools/budget-fixed.json fixed[0]（jpy は kim 記入待ち）", "note": "席数×月額。席数の記録がどこにも無い" },
+    { "id": "codex", "name": "ChatGPT (Codex) subscriptions", "vendor": "OpenAI", "kind": "seat", "monthlyJpy": null, "monthlyUsd": null, "capabilities": ["code"], "keyEnvs": [], "keyFiles": [], "evidence": "tools/budget-fixed.json fixed[1]／executor-usage.jsonl に codex 41件", "note": "実使用あり。月額が未記入" },
+    { "id": "glm", "name": "Z.ai GLM Coding Plan", "vendor": "Z.ai", "kind": "plan", "monthlyJpy": null, "monthlyUsd": 12.6, "capabilities": ["code"], "keyEnvs": ["ZAI_API_KEY"], "keyFiles": ["zai.env", "zai-kim.env", "zai-seisaku.env"], "evidence": "tools/budget-fixed.json fixed[2]／~/.claude/zai*.env が3本", "note": "1アカウント分の値段しか記録が無いのにキーは3本ある" },
+    { "id": "cursor", "name": "Cursor Pro", "vendor": "Anysphere", "kind": "plan", "monthlyJpy": null, "monthlyUsd": 20, "capabilities": ["code", "research"], "keyEnvs": [], "keyFiles": [], "evidence": "tools/budget-fixed.json fixed[3]（2026-09-17 契約・Grok Bot 用）", "note": "APIキーではなくIDEアプリのためキー検出は不可" },
+    { "id": "genspark", "name": "Genspark Pro", "vendor": "Genspark", "kind": "prepaid", "monthlyJpy": null, "monthlyUsd": null, "capabilities": ["chat", "research"], "keyEnvs": ["GSK_PROXY_KEY", "GSK_API_KEY"], "keyFiles": ["genspark-proxy.env", "genspark.env"], "evidence": "tools/provider-billing.json genspark（prepaid, verified:true）／llm-ask PROVIDERS", "note": "前払いクレジット。" },
+    { "id": "cerebras", "name": "Cerebras Code", "vendor": "Cerebras", "kind": "plan", "monthlyJpy": null, "monthlyUsd": null, "capabilities": ["code"], "keyEnvs": ["CEREBRAS_API_KEY"], "keyFiles": ["cerebras.env"], "evidence": "tools/llm-ask.mjs PROVIDERS.cerebras（定額サブスク・24M tok/日）", "note": "budget-fixed.json に載っていない＝固定費として把握されていない疑い" },
+    { "id": "gemini", "name": "Google Gemini（autopay 上限）", "vendor": "Google", "kind": "cap", "monthlyJpy": 20000, "monthlyUsd": null, "capabilities": ["chat", "research", "image"], "keyEnvs": ["GEMINI_API_KEY"], "keyFiles": ["~/.gemini/.env"], "evidence": "tools/budget-fixed.json fixed[4]（kind: cap）", "note": "上限であって確定額ではない。固定費集計からは除外する" },
+    { "id": "groq", "name": "Groq", "vendor": "Groq", "kind": "metered", "monthlyJpy": null, "monthlyUsd": null, "capabilities": ["chat"], "keyEnvs": ["GROQ_API_KEY"], "keyFiles": ["groq.env"], "evidence": "tools/provider-billing.json groq（postpaid）／executor-usage 138件", "note": "" },
+    { "id": "deepseek", "name": "DeepSeek", "vendor": "DeepSeek", "kind": "metered", "monthlyJpy": null, "monthlyUsd": null, "capabilities": ["chat"], "keyEnvs": ["DEEPSEEK_API_KEY"], "keyFiles": ["deepseek.env"], "evidence": "tools/provider-billing.json deepseek／executor-usage 66件", "note": "" },
+    { "id": "openrouter", "name": "OpenRouter", "vendor": "OpenRouter", "kind": "metered", "monthlyJpy": null, "monthlyUsd": null, "capabilities": ["chat", "code"], "keyEnvs": ["OPENROUTER_API_KEY"], "keyFiles": ["openrouter.env"], "evidence": "tools/provider-billing.json openrouter（autoTopUp）／executor-usage 73件", "note": "" },
+    { "id": "grok", "name": "xAI Grok", "vendor": "xAI", "kind": "metered", "monthlyJpy": null, "monthlyUsd": null, "capabilities": ["chat", "research"], "keyEnvs": ["XAI_API_KEY"], "keyFiles": ["xai.env"], "evidence": "tools/provider-billing.json xai（autoTopUp+monthlyLimit）／executor-usage 11件", "note": "" },
+    { "id": "kimi", "name": "Moonshot Kimi", "vendor": "Moonshot", "kind": "metered", "monthlyJpy": null, "monthlyUsd": null, "capabilities": ["chat"], "keyEnvs": ["MOONSHOT_API_KEY"], "keyFiles": ["kimi-api.env"], "evidence": "tools/provider-billing.json kimi／llm-ask PROVIDERS.kimi", "note": "executor-usage に実績が無い" },
+    { "id": "mistral", "name": "Mistral", "vendor": "Mistral AI", "kind": "metered", "monthlyJpy": null, "monthlyUsd": null, "capabilities": ["chat"], "keyEnvs": ["MISTRAL_API_KEY"], "keyFiles": ["mistral.env"], "evidence": "tools/llm-ask.mjs PROVIDERS.mistral", "note": "executor-usage に実績が無い" }
+  ]
+}

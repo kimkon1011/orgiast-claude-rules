@@ -665,3 +665,10 @@ test('settings.json が読めないかフックが無ければ git を呼ばず�
     assert.equal(gitCalls, 0);
   } finally { removeDir(home); }
 });
+
+test('booth feedback uses the registered Intake task name', async () => {
+  const expectations = JSON.parse(fs.readFileSync(new URL('./nightly-health-expectations.json', import.meta.url), 'utf8'));
+  const booth = expectations.find((entry) => entry.log === 'booth-feedback-intake.log');
+  assert.equal(booth.task, 'OrgiastBoothFeedbackIntake');
+  assert.equal(expectations.some((entry) => entry.task === 'OrgiastBoothFeedback'), false);
+});

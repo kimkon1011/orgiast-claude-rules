@@ -1,0 +1,58 @@
+[
+  {
+    "file": "tools/settings-quality-guard.test.mjs",
+    "exit": 0,
+    "tests": 13,
+    "pass": 13,
+    "fail": 0
+  },
+  {
+    "file": "tools/mobile-sessions.test.mjs",
+    "exit": 0,
+    "tests": 5,
+    "pass": 5,
+    "fail": 0
+  },
+  {
+    "file": "tools/nightly-health.test.mjs",
+    "exit": 0,
+    "tests": 39,
+    "pass": 39,
+    "fail": 0
+  },
+  {
+    "file": "tools/nightly-health-remediate.test.mjs",
+    "exit": 0,
+    "tests": 11,
+    "pass": 11,
+    "fail": 0
+  },
+  {
+    "file": "packages/vscode-next-session/route.test.cjs",
+    "exit": 0,
+    "tests": 8,
+    "pass": 8,
+    "fail": 0
+  },
+  {
+    "file": "packages/vscode-next-session/mobile-pool.test.cjs",
+    "exit": 0,
+    "tests": 5,
+    "pass": 5,
+    "fail": 0
+  },
+  {
+    "file": "packages/vscode-next-session/extension.test.cjs",
+    "exit": 0,
+    "tests": 1,
+    "pass": 1,
+    "fail": 0
+  },
+  {
+    "file": "packages/vscode-next-session/shell-path.test.cjs",
+    "exit": 0,
+    "tests": 2,
+    "pass": 2,
+    "fail": 0
+  }
+]

@@ -1,0 +1,184 @@
+✔ URI concurrency and tab title events replenish one without interactive rename (504.133052ms)
+✔ concurrent refill opens one; first prompt title change replenishes one (10.876799ms)
+✔ excess tabs and used tabs are preserved; failure does not spawn in a loop (0.8965ms)
+✔ unacknowledged creation stops; non-owner never opens (0.7551ms)
+✔ socket ownership serializes windows and releases on close (22.597898ms)
+✔ JSON/env configuration and stale snapshot are validated (9.870699ms)
+✔ /reload はリロードを実行する（dry指定なし） (3.666799ms)
+✔ /reload?dry=1 は dry フラグ付きでリロードを返す（実際には実行しない） (0.4783ms)
+✔ /start は start を返す（既存動作） (0.4275ms)
+✔ /mobile は count と name を返し、count を 1..10 に収める (0.6868ms)
+✔ 未知のパスは start を返す（後方互換） (0.3509ms)
+✔ 空のパスは start を返す (0.4134ms)
+✔ スマホ用タブは失敗回数が上限未満の間だけ再試行する (2.0775ms)
+✔ Claude Code タブが無いときは Open、既にあれば New Conversation を使う (0.2781ms)
+✔ 実在する絶対パスの claude または claude.exe だけを採用する (2.9817ms)
+✔ 相対パス・別名・存在しないパスはPATH上のclaudeへフォールバックする (0.5832ms)
+✔ mobile-sessions の引数は既定値と明示値を解釈する (4.2848ms)
+✔ mobile URI は名前を URL エンコードする (0.484ms)
+✔ code.cmd は cmd.exe の一枚文字列で URI ごと引用する (0.4802ms)
+✔ dry-run reports actual snapshot and never resolves CLI or spawns (3.229699ms)
+✔ unknown snapshot is not reported as zero (2.848ms)
+fixed=0 pr=0 deferred=1 escalated=0 suppressed=0
+{
+  "exitCode": 0,
+  "fixed": [],
+  "prs": [],
+  "escalated": [],
+  "deferred": [],
+  "suppressed": [],
+  "skipped": [],
+  "plan": [
+    {
+      "label": "pr-case",
+      "action": "deferred",
+      "reason": "同じfingerprintのPRがopenでマージ待ち",
+      "text": "PLAN pr-case: deferred(同じfingerprintのPRがopenでマージ待ち)"
+    }
+  ]
+}
+{
+  "exitCode": 0,
+  "fixed": [],
+  "prs": [],
+  "escalated": [],
+  "deferred": [],
+  "suppressed": [],
+  "skipped": [],
+  "plan": [
+    {
+      "label": "pr-case",
+      "action": "codex",
+      "text": "PLAN pr-case: codex"
+    }
+  ]
+}
+{
+  "exitCode": 0,
+  "fixed": [],
+  "prs": [],
+  "escalated": [],
+  "deferred": [],
+  "suppressed": [],
+  "skipped": [],
+  "plan": [
+    {
+      "label": "repeat",
+      "action": "escalate",
+      "reason": "過去7日に2回以上deferred/prを経て再発",
+      "text": "PLAN repeat: escalate(過去7日に2回以上deferred/prを経て再発)"
+    }
+  ]
+}
+fixed=0 pr=0 deferred=0 escalated=0 suppressed=0
+fixed=0 pr=0 deferred=0 escalated=1 suppressed=0
+✔ fingerprint ignores changing timestamps and counts (2.359599ms)
+✔ self-healed and failover playbooks require a later success (0.8977ms)
+✔ log contention recognizes appendLineWithRetry migration (0.3165ms)
+✔ 記録の失敗で全体を落とさない: ログ追記が失敗しても複数異常を最後まで処理し通知まで到達する (7.127099ms)
+✔ dry-run reports PLAN for a matching playbook and never calls apply or notification (1.3777ms)
+✔ repair limit defers without decision or notification (2.1985ms)
+✔ open PR defers, while merged or closed PR allows retry (3.1533ms)
+✔ third recurrence after two deferred or PR outcomes escalates (1.9438ms)
+✔ missing and empty anomaly caches print an explicit ok line (1.597299ms)
+✔ playbook exception is recorded and the next anomaly is still processed (2.4683ms)
+✔ any nonzero codex exit tries cheap-code once and reports both redacted failures (2.3449ms)
+⚠️ 夜間ジョブ異常 1件
+- ローカルテスト: テスト実行が15分でタイムアウト
+確認コマンド: node tools/nightly-health.mjs
+ok:異常なし
+sent:通知送信完了
+sent:通知送信完了
+sent:通知送信完了
+sent:通知送信完了
+sent:通知送信完了
+sent:通知送信完了
+ok:異常なし
+sent:通知送信完了
+sent:通知送信完了
+sent:通知送信完了
+ok:異常なし
+ok:異常なし
+sent:通知送信完了
+ok:異常なし
+sent:通知送信完了
+sent:通知送信完了
+sent:通知送信完了
+ok:異常なし
+sent:通知送信完了
+prime:通知せず基準を記録（検知 1件）
+prime:通知せず基準を記録（検知 1件）
+ok:異常なし
+sent:通知送信完了
+ok:異常なし
+⚠️ 夜間ジョブ異常 2件
+- フック版ずれ: nightly-health-test-NGwbMU/checkout-a が origin/main より 3 コミット遅れ / フック実行ファイル 1件が main と不一致: hook-0.mjs
+- フック版ずれ: nightly-health-test-NGwbMU/checkout-b が origin/main より 3 コミット遅れ / フック実行ファイル 1件が main と不一致: hook-1.mjs
+確認コマンド: node tools/nightly-health.mjs
+⚠️ 夜間ジョブ異常 1件
+- フック版ずれ: nightly-health-test-z3CBgF/checkout-a が origin/main より 68 コミット遅れ / フック実行ファイル 7件が main と不一致: hook-0.mjs, hook-1.mjs, hook-2.mjs, hook-3.mjs, hook-4.mjs
+確認コマンド: node tools/nightly-health.mjs
+ok:異常なし
+ok:異常なし
+ok:異常なし
+ok:異常なし
+✔ defaultRunTests enforces the 15 minute hard timeout (3.9509ms)
+✔ test timeout becomes one anomaly and still writes the nightly cache (9.147699ms)
+✔ scheduled task の起動拒否・時間超過・ログ未生成を判定する (2.294699ms)
+✔ 異常ゼロなら notify が1度も呼ばれず ok:異常なし になる (6.4347ms)
+✔ scan: keywords のログに error 行があれば検知され、通知本文にそのラベルが含まれる (13.380999ms)
+✔ 24時間より古い失敗行は拾わない（新しい行だけ拾う） (5.895799ms)
+✔ 期待リストのログが存在しなければ異常として報告される (6.923599ms)
+✔ maxAgeHours を超えて更新されていないログが stale として報告される (4.8092ms)
+✔ テストランナーが fail>0 を返したら異常として報告される (4.930899ms)
+✔ 走査済みログはオフセットにより再通知しない (11.626199ms)
+✔ 実ログのゼロ件カウンタと error=- は失敗扱いしない (1.2299ms)
+✔ git の同期出力は失敗扱いせず、通常の error 行は検知する (0.5106ms)
+✔ Windows 形式パスは win32 では維持し linux で WSL パスへ変換する (0.4478ms)
+✔ / サマリ / 行は失敗を含んでも除外する (0.1338ms)
+✔ 前回オフセット以降に追記された行だけを検知する (4.921299ms)
+✔ ファイル縮小時は末尾から読み直す (4.4601ms)
+✔ 初回は末尾200行だけを走査する (4.7598ms)
+✔ --dry-run ではオフセットを更新しない (3.333799ms)
+✔ scan 省略時は stale-only になり散文の失敗語を検知しない (4.3516ms)
+✔ 期待リストにないログは本文を読まず未登録のログを1行だけ付ける (4.381999ms)
+✔ 未登録ログが0件なら未登録のログ行を付けない (2.9182ms)
+✔ pattern は最新の日付付きログ1件だけを人間向けラベルで走査する (4.7141ms)
+✔ pattern に一致するログがなければ存在しないと報告する (5.338099ms)
+✔ baseline の既知失敗を本文から除き抑制件数を示し、未知失敗だけ通知する (1.6981ms)
+✔ --update-baseline のときだけ現状の失敗名で baseline を上書きする (0.9279ms)
+✔ 異常13件では本文を12件に制限し残数を示す (1.6027ms)
+✔ ℹ fail 10 形式から失敗件数を抽出する (0.2938ms)
+✔ 通知が例外を投げたら exit code 相当が 1 になる (5.508699ms)
+✔ --prime は通知せずオフセットと state を記録する (3.9794ms)
+✔ --prime の直後は追記が無いので異常ゼロになり通知しない (12.028799ms)
+✔ 未登録ログや baseline 抑制だけでは通知しない（平穏な夜は無音） (4.924599ms)
+✔ 全フックから node の mjs と PowerShell -File の ps1 絶対パスを抽出する (0.909ms)
+✔ 複数チェックアウトのフックをルートごとにまとめて判定する (4.6405ms)
+✔ 不一致ファイルをチェックアウトごとに1 anomalyへまとめ名前は最大5件にする (5.784699ms)
+✔ 内容が一致すれば100コミット遅れでも報告しない (4.5368ms)
+✔ origin/main に存在しないフックファイルは不一致に数えない (4.055499ms)
+✔ git fetch 失敗は理由を1行出してチェックアウト判定を異常なしでスキップする (4.5996ms)
+✔ settings.json が読めないかフックが無ければ git を呼ばず何も報告しない (7.735799ms)
+✔ booth feedback uses the registered Intake task name (3.1934ms)
+✔ medium / high は各ツールで警告も拒否も出さない (918.220713ms)
+✔ Edit は settings.json の許容外 effortLevel だけ block する (2.0361ms)
+✔ Bash による settings.json の low 化を block する (0.5148ms)
+✔ lowからmedium/highへの修復はシェル経由でも拒否しない (0.2842ms)
+✔ ORGIAST_ALLOW_EFFORT_DOWNGRADE=1 なら CLI は block しない (75.353793ms)
+✔ restoreEffortLevel は low を退避して medium に復元する (1.965ms)
+✔ restoreEffortLevel は high を変更しない (0.974299ms)
+✔ sessionstart model: fable (154.447886ms)
+✔ sessionstart model: 1m (158.284785ms)
+✔ sessionstart model: unset (165.068584ms)
+✔ sessionstart model: opus (167.543184ms)
+✔ sessionstart model: allow (157.313885ms)
+✔ sessionstart model: allow unset (150.304386ms)
+ℹ tests 84
+ℹ suites 0
+ℹ pass 84
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2167.515294

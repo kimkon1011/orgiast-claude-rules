@@ -2,7 +2,7 @@
   "name": "next-session",
   "displayName": "Orgiast Next Session",
   "description": "Starts the next Claude session and prepares mobile Remote Control tabs from a URI.",
-  "version": "0.3.2",
+  "version": "0.3.4",
   "publisher": "orgiast",
   "license": "MIT",
   "repository": {
@@ -25,10 +25,10 @@
       "properties": {
         "orgiast.nextSession.mobileTabs": {
           "type": "number",
-          "default": 0,
+          "default": 1,
           "minimum": 0,
           "maximum": 10,
-          "description": "VS Code 起動時に用意するスマホ Remote Control 用 Claude Code タブ数。0 は無効。"
+          "description": "常時補充するスマホ Remote Control 用 Claude Code タブ数。0 は無効。"
         },
         "orgiast.nextSession.mobileTabName": {
           "type": "string",
@@ -43,6 +43,7 @@
     "extension.js",
     "route.js",
     "shell-path.js",
+    "mobile-pool.js",
     "README.md",
     "LICENSE"
   ]

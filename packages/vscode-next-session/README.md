@@ -5,7 +5,7 @@
 ## インストール
 
 ```sh
-code --install-extension orgiast-next-session-0.3.2.vsix --force
+code --install-extension orgiast-next-session-0.3.4.vsix --force
 ```
 
 通常は `tools/next-session-launch.mjs --target vscode-ext` が未導入時だけ同梱 VSIX を自動インストールします。
@@ -14,15 +14,17 @@ code --install-extension orgiast-next-session-0.3.2.vsix --force
 
 ## スマホ Remote Control 用タブ
 
-`vscode://orgiast.next-session/mobile?count=3&name=%E3%82%B9%E3%83%9E%E3%83%9B%E7%94%A8%E3%82%BB%E3%83%83%E3%82%B7%E3%83%A7%E3%83%B3` を開くと、公式 Claude Code の webview タブを指定数まで補充します。既に同じ接頭辞のタブは再利用するため、繰り返し実行しても増殖しません。
+既定の待機数は1本です。最初のプロンプトによりタブの自然なタイトルが変わると、次の空タブを補充します。閉じた場合も補充します。使用中のタブや既存の余剰タブは閉じません。余剰がある間は追加を停止するため、起動済みの余剰分を削除せずに運用できます。
 
-設定 `orgiast.nextSession.mobileTabs`（既定 `0`、最大 `10`）を正数にすると VS Code 起動後にも自動補充します。接頭辞は `orgiast.nextSession.mobileTabName`（既定 `スマホ用セッション`）です。
+`~/.claude/mobile-sessions.json` の `{"count": 1}`、または `CLAUDE_MOBILE_STANDBY=1`（環境変数を優先）で1〜10本に設定できます。VS Code の `orgiast.nextSession.mobileTabs=0` は起動時の補充を無効化する既存の設定として残します。
 
-起動直後は Claude Code 拡張のコマンド登録を最長60秒待ち、その後も webview の準備が整うまで最長約2分間再試行します。URI からの補充は従来どおり1回だけ試します。
+`node tools/mobile-sessions.mjs --count 1` でも URI 経由で補充できます。`--name` は呼出元との互換性のため受け付けますが、タブの改名はしません。公式拡張2.1.278では改名コマンドが入力ダイアログを開き、固定タイトルは使用開始の検出も妨げるためです。待機判定は公式拡張の空セッション名 `Claude Code` に基づきます。待機タブに手動で固定名を付けないでください。旧版が改名済みのタブの未使用判定はできません。
 
-Claude Code タブが1つも無いときは `Claude Code: Open` で最初の1つを開き、2つ目以降は `Claude Code: New Conversation` で補充します。
+URI、起動時、タブ変更、5秒ごとの補充は同じ処理で直列化します。ウィンドウ間はループバックの39741番ポートを排他制御に使い、1つのウィンドウだけが補充します。ポートの取得に失敗した側は起動しません。起動したタブを確認できない間は追加コマンドを送らず、遅延による重複も防ぎます。
 
-公式拡張 v2.1.263 の `claude-vscode.renameSessionTab` は名前を第1引数に受け取ることを実体で確認済みです。作成したタブは `スマホ用セッション1` のように自動改名します。`claude-vscode.newConversation` の戻り値は `undefined` のため、タブ一覧の変化を最大5秒待ってから次を作ります。経過は Output の `Orgiast Next Session` に記録します。
+`node tools/mobile-sessions.mjs --dry-run` は状態ファイル（拡張が5秒ごとに更新）から「現在の待機数 / 目標 / 起動する本数」を表示します。起動・設定変更はしません。30秒以上古い状態、未導入・停止中の拡張は `不明` と表示し、0本と誤認しません。WSLからWindows側を確認するときは `ORGIAST_HOME=/mnt/c/Users/uers` を指定します。
+
+この変更はタブの補充を担当します。別の `claude-mobile` サーバーやスケジュールタスクを停止・変更しません。実機の補充には同梱0.3.4 VSIXの導入が必要です。
 
 URI は外部プロセスやブラウザからも開けるため、`claude` パラメータは実在する絶対パスかつファイル名が `claude` / `claude.exe` の場合だけ実行します。
 

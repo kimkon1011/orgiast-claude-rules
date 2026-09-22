@@ -1,0 +1,30 @@
+[
+  {
+    "case": "fable",
+    "exit": 0,
+    "modelAfter": "opus",
+    "stdout": "[settings-guard] model: fable → opus",
+    "stderr": ""
+  },
+  {
+    "case": "[1m]",
+    "exit": 0,
+    "modelAfter": "opus",
+    "stdout": "[settings-guard] model: opus[1m] → opus",
+    "stderr": ""
+  },
+  {
+    "case": "未設定",
+    "exit": 0,
+    "modelAfter": "opus",
+    "stdout": "[settings-guard] model: 未設定 → opus",
+    "stderr": ""
+  },
+  {
+    "case": "opus",
+    "exit": 0,
+    "modelAfter": "opus",
+    "stdout": "",
+    "stderr": ""
+  }
+]

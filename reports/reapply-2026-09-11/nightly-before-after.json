@@ -1,0 +1,20 @@
+[
+  {
+    "task": "OrgiastBoothFeedback",
+    "found": false,
+    "schedulerState": null,
+    "schedulerLookupError": "CmdletizationQuery_NotFound_TaskName (Get-ScheduledTask)",
+    "healthThrew": true,
+    "exitCode": 1,
+    "anomalies": []
+  },
+  {
+    "task": "OrgiastBoothFeedbackIntake",
+    "found": true,
+    "schedulerState": "Running",
+    "schedulerLookupError": null,
+    "healthThrew": false,
+    "exitCode": 0,
+    "anomalies": []
+  }
+]

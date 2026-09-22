@@ -12,8 +12,8 @@ function decideAction({ path, query }) {
     return { kind: 'reload', dry };
   }
   if (normalizedPath === '/mobile') {
-    const parsedCount = Number.parseInt(params.get('count') || '3', 10);
-    const count = Math.min(10, Math.max(1, Number.isFinite(parsedCount) ? parsedCount : 3));
+    const parsedCount = Number.parseInt(params.get('count') || '1', 10);
+    const count = Math.min(10, Math.max(1, Number.isFinite(parsedCount) ? parsedCount : 1));
     return { kind: 'mobile', count, name: params.get('name') || 'スマホ用セッション' };
   }
   return { kind: 'start' };

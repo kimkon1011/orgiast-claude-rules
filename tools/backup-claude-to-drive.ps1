@@ -262,7 +262,7 @@ try {
   Write-Event ('plan structure={0}<=~/.claude; {1}<=home files/directories/tasks/repo/npm/manifest; {2}<=~/.codex' -f $stagingClaudeDir, $stagingHomeDir, $stagingCodexDir)
 
   if ($DryRun) {
-    Write-Event 'plan robocopy=.claude:/MIR .codex:/MIR excludedDirs=cache,shell-snapshots,statsig,__pycache__,ide,node_modules,.git,sessions,tmp,logs excludedFiles=*.tmp,*.lock,*.tmp[0-9]*,*.heartbeat codexExcludedFiles=logs_*.sqlite*'
+    Write-Event 'plan robocopy=.claude:/MIR .codex:/MIR excludedDirs=cache,shell-snapshots,statsig,__pycache__,ide,node_modules,.git,sessions,tmp,logs excludedFiles=*.tmp,*.lock,*.tmp[0-9]*,*.heartbeat,.fleet-mail-poll.json codexExcludedFiles=logs_*.sqlite*'
     Write-Event 'plan home-files=.claude.json(retry=2,warn-only),.claude.json.backup(optional); excludes=.claude.json.tmp.*,.bak*'
     Write-Event 'plan extras=.gitconfig,.clasprc.json,.ssh,.gemini,AppData/gh,orgiast-claude-rules,scheduled-tasks,npm-global-packages.json,backup-manifest.json'
     Write-Event 'plan restore-set=RESTORE-claude-backup.md,restore-claude-from-drive.ps1,復元する.bat'
@@ -282,7 +282,8 @@ try {
     if ($legacyItem.Name -notin @('.claude', 'home')) { Remove-Item -LiteralPath $legacyItem.FullName -Recurse -Force }
   }
   $excludeDirs = @('cache', 'shell-snapshots', 'statsig', '__pycache__', 'ide', 'node_modules', '.git')
-  $excludeFiles = @('*.tmp', '*.lock', '*.tmp[0-9]*', '*.heartbeat')
+  # fleet-mail removes its transient request file after each poll; copying it races with that removal.
+  $excludeFiles = @('*.tmp', '*.lock', '*.tmp[0-9]*', '*.heartbeat', '.fleet-mail-poll.json')
   $roboArgs = @($claudeDir, $stagingClaudeDir, '/MIR', '/R:2', '/W:2', '/XJ', '/NP', '/NFL', '/NDL', '/NJH', '/NJS', '/XD') + $excludeDirs + @('/XF') + $excludeFiles
   & robocopy @roboArgs
   $robocopyCode = $LASTEXITCODE

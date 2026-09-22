@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import { resolvePython } from "./session-list-tidy.mjs";
 import { launchNextSession } from "./next-session-launch.mjs";
 
+import { rotate } from "./next-session-rotate.mjs";
+
 const claudeDir = join(homedir(), ".claude");
 const currentPath = join(claudeDir, "current-session.json");
 const currentSessionsDir = join(claudeDir, "current-sessions");
@@ -51,6 +53,8 @@ if (!sessionId) {
   console.error("session ID がありません（--session または current-sessions/current-session.json が必要です）");
   process.exit(1);
 }
+
+rotate(join(claudeDir, "next-session.md"));
 
 const stored = readJson(closedPath, { ids: [] });
 const ids = Array.isArray(stored.ids) ? stored.ids : [];

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { writeHandoff } from './next-session-rotate.mjs';
 import { appendLineWithRetry } from './lib/append-line.mjs';
 import { isEntry } from './is-entry.mjs';
 import os from 'node:os';
@@ -1414,7 +1415,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
         const res = appendImprovementTodos(content, [act.todoMessage]);
         if (res.added.length > 0) {
           try {
-            writeAtomic(nextSessionFile, res.markdown);
+            writeHandoff(nextSessionFile, res.markdown);
             console.log(`Added todo to next-session.md: ${act.todoMessage}`);
           } catch (error) {
             console.error(`next-session.md 書き込み失敗: ${String(error?.message ?? error)}`);

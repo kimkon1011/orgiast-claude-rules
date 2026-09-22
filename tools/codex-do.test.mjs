@@ -922,13 +922,43 @@ test('buildCodexExecArgs: model, effort, sandbox and stdin without spaces', () =
   assert.deepEqual(buildCodexExecArgs({ slug: SOL, review: true }), ['exec', '-m', SOL, '-s', 'read-only', '-']);
 });
 
-test('isInsideGitRepo: cwd または祖先の .git を検出する', () => {
-  const root = path.resolve('/virtual/repo');
-  const exists = (candidate) => candidate === path.join(root, '.git');
-  assert.equal(isInsideGitRepo(root, exists), true);
-  assert.equal(isInsideGitRepo(path.join(root, 'packages', 'app'), exists), true);
-  assert.equal(isInsideGitRepo(path.resolve('/virtual/plain'), exists), false);
-  assert.equal(isInsideGitRepo(path.resolve('/elsewhere/deep/path'), () => false), false);
+test('isInsideGitRepo: cwd または祖先の実在する .git を検出する', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-gitdir-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const nested = path.join(root, 'packages', 'app');
+  fs.mkdirSync(nested, { recursive: true });
+  // 2026-09-23 実測の再現: `.git` は在るが HEAD を持たない空殻。Windows の existsSync は true でも
+  // git は "not a git repository" を返す(auto-session の起動ディレクトリ CLAUDE.md配布 がこの形)。
+  // ここを repo と誤判定すると codex に --skip-git-repo-check が渡らず、exit 1 / 出力ゼロで死ぬ。
+  fs.mkdirSync(path.join(root, '.git', 'info'), { recursive: true });
+  assert.equal(fs.existsSync(path.join(root, '.git')), true);
+  assert.equal(isInsideGitRepo(root), false);
+  assert.equal(isInsideGitRepo(nested), false);
+  // 誤判定しないので WSL 経路には skip フラグが入る(出力ゼロ即死の回避)
+  const codexArgs = buildCodexExecArgs({ slug: SOL });
+  assert.ok(wslCodexArgs({ distro: 'Ubuntu', cwd: root, codexArgs, inGitRepo: isInsideGitRepo(root) }).includes('--skip-git-repo-check'));
+  // HEAD が生えた時点で初めてリポジトリとして扱う
+  fs.writeFileSync(path.join(root, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+  assert.equal(isInsideGitRepo(root), true);
+  assert.equal(isInsideGitRepo(nested), true);
+});
+
+test('isInsideGitRepo: worktree の gitfile は指す先が実在するときだけリポジトリ', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-gitfile-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const worktree = path.join(root, 'wt');
+  fs.mkdirSync(worktree, { recursive: true });
+  fs.writeFileSync(path.join(worktree, '.git'), `gitdir: ${path.join(root, 'missing')}\n`);
+  assert.equal(isInsideGitRepo(worktree), false);
+  fs.mkdirSync(path.join(root, 'real'));
+  fs.writeFileSync(path.join(root, 'real', 'HEAD'), 'ref: refs/heads/main\n');
+  fs.writeFileSync(path.join(worktree, '.git'), `gitdir: ${path.join(root, 'real')}\n`);
+  assert.equal(isInsideGitRepo(worktree), true);
+});
+
+test('isInsideGitRepo: 祖先方向に .git が無ければ false', () => {
+  assert.equal(isInsideGitRepo(path.resolve('/virtual/plain')), false);
+  assert.equal(isInsideGitRepo(path.resolve('/elsewhere/deep/path')), false);
 });
 
 test('wslCodexArgs: 非リポジトリだけ stdin マーカー直前に skip フラグを入れる', () => {

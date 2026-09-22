@@ -94,10 +94,27 @@ export function buildCodexExecArgs({ slug, effort, review = false } = {}) {
   return ['exec', ...(slug ? ['-m', slug] : []), ...(effort ? ['-c', `model_reasoning_effort="${effort}"`] : []), '-s', review ? 'read-only' : 'workspace-write', '-'];
 }
 
-export function isInsideGitRepo(cwd, exists = fs.existsSync) {
+// `.git` の「存在」ではなく「git がリポジトリとして認識できる実体か」を見る。
+// 空の .git ディレクトリ(HEAD が無い)は existsSync では true になるが、git 側は
+// "not a git repository" を返す。この食い違いがあると codex-do は --skip-git-repo-check を
+// 付けずに codex を起動し、codex が起動直後に exit 1 / 出力ゼロで死ぬ。
+// 2026-09-23 実測: auto-session の起動ディレクトリ C:\Users\uers\Downloads\CLAUDE.md配布 は
+// .git/info だけを持つ空殻で、毎晩 codex_empty_output として再掲されていた(真因)。
+export function isGitDir(dotGit, io = {}) {
+  const stat = io.stat || fs.statSync, readFile = io.readFile || fs.readFileSync, exists = io.exists || fs.existsSync;
+  try {
+    if (stat(dotGit).isDirectory()) return exists(path.join(dotGit, 'HEAD'));
+    // worktree / submodule の .git は `gitdir: <path>` を書いたファイル。指す先が無ければ git は認識しない。
+    const match = /^gitdir:\s*(.+?)\s*$/m.exec(String(readFile(dotGit, 'utf8')));
+    if (!match) return false;
+    return exists(path.join(path.resolve(path.dirname(dotGit), match[1]), 'HEAD'));
+  } catch { return false; }
+}
+
+export function isInsideGitRepo(cwd, io = {}) {
   let current = path.resolve(cwd);
   while (true) {
-    if (exists(path.join(current, '.git'))) return true;
+    if (isGitDir(path.join(current, '.git'), io)) return true;
     const parent = path.dirname(current);
     if (parent === current) return false;
     current = parent;

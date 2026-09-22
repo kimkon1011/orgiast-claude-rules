@@ -86,8 +86,7 @@ export function run(argv = process.argv.slice(2)) {
       continue;
     }
     for (const target of allTargets) {
-      if (!target.startsWith('../')) continue;
-      const resolved = path.resolve(indexDirectory, target);
+      const resolved = path.resolve(target.startsWith('../') ? indexDirectory : directory, target);
       if (path.dirname(resolved) !== directory) continue;
       const file = path.basename(resolved);
       if (Object.hasOwn(assignments, file) && assignments[file] !== key) {

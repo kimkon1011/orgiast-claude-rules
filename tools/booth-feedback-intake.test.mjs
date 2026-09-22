@@ -231,3 +231,10 @@ test('不具合通知の webhook は明示キーだけを拾う（無関係 chan
   assert.equal(webhookFrom({ DISCORD_COST_WEBHOOK: 'https://x/cost', SOME_WEBHOOK: 'https://x/other' }, {}), '');
   assert.equal(webhookFrom(), '');
 });
+
+test('archived feedback markers prevent reinjection after queue rotation', async () => {
+  const h = harness({ next: original });
+  h.files.set(HOME_FILE('archive/next-session-feedback.json'), JSON.stringify(['fb-123']));
+  assert.equal(await runIntake({ home: HOME, io: h.io, fetchImpl: h.fetchImpl, taskLedger: async () => {} }), 0);
+  assert.equal(h.files.get(HOME_FILE('next-session.md')), original);
+});

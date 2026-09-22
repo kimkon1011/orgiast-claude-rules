@@ -15,7 +15,8 @@ test('non-Claude models count in the non-Claude delegation numerator', () => {
 function fixture() { const home = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-stats-')), dir = path.join(home, '.claude', 'projects', 'p'); fs.mkdirSync(dir, { recursive: true }); return { home, file: path.join(dir, 'session.jsonl') }; }
 test('sessions uses row timestamps and splits main/sub/model', () => { const { home, file } = fixture(), now = Date.parse('2026-08-23T00:00:00Z'); const row = (timestamp, output_tokens, model, isSidechain = false) => JSON.stringify({ timestamp, isSidechain, message: { model, usage: { output_tokens }, content: [{ type: 'text', text: 'abc' }] } }); fs.writeFileSync(file, [row('2026-08-22T00:00:00Z', 100, 'claude-opus'), row('2026-08-21T00:00:00Z', 40, 'claude-sonnet', true), row('2026-07-01T00:00:00Z', 9999, 'claude-opus')].join('\n')); fs.utimesSync(file, new Date(now), new Date(now)); const x = collectClaudeStats({ home, days: 7, now }); assert.deepEqual(x.totals, { outputTokens: 140, main: 100, sub: 40 }); assert.deepEqual(x.byModel, { opus: 100, sonnet: 40 }); });
 test('parse cache hits unchanged files and reparses size/mtime changes', () => {
-  const { home, file } = fixture(), now = Date.parse('2026-08-23T00:00:00Z');
+  // Cache persistence expires entries against the real clock after 30 days.
+  const { home, file } = fixture(), now = Date.now();
   const row = (n) => JSON.stringify({ timestamp: new Date(now).toISOString(), message: { model: 'opus', usage: { output_tokens: n }, content: [] } });
   fs.writeFileSync(file, row(3)); fs.utimesSync(file, new Date(now), new Date(now)); resetParseCacheForTests();
   assert.equal(collectClaudeStats({ home, now }).totals.outputTokens, 3);

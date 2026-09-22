@@ -12,6 +12,36 @@
       "createdAt": "2026-09-22T01:20:13.707Z",
       "expiresAt": "2026-09-25T01:20:13.707Z",
       "timeoutSeconds": 2700
+    },
+    {
+      "id": "run-20260922-222034-9859",
+      "kind": "run",
+      "targets": "古川龍慶のノートブックコンピュータ",
+      "why": "stale_report 自動復旧",
+      "task": "fleet-sheet-report",
+      "createdBy": "uers",
+      "createdAt": "2026-09-22T22:20:34.091Z",
+      "expiresAt": "2026-09-24T22:20:34.091Z"
+    },
+    {
+      "id": "run-20260922-222034-1040",
+      "kind": "run",
+      "targets": "kimko-PC",
+      "why": "stale_report 自動復旧",
+      "task": "fleet-sheet-report",
+      "createdBy": "uers",
+      "createdAt": "2026-09-22T22:20:34.513Z",
+      "expiresAt": "2026-09-24T22:20:34.513Z"
+    },
+    {
+      "id": "run-20260922-222034-0488",
+      "kind": "run",
+      "targets": "nishi-PC",
+      "why": "stale_report 自動復旧",
+      "task": "fleet-sheet-report",
+      "createdBy": "uers",
+      "createdAt": "2026-09-22T22:20:34.848Z",
+      "expiresAt": "2026-09-24T22:20:34.848Z"
     }
   ]
 }

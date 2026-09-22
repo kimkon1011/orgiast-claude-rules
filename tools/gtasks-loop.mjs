@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { writeHandoff } from './next-session-rotate.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
@@ -162,7 +163,7 @@ export async function plan({ count = 3, dryRun = false, classify = true, stateFi
     }
     if (picked.length) {
       fs.mkdirSync(path.dirname(nextFile), { recursive: true });
-      fs.writeFileSync(nextFile, nextText, 'utf8');
+      writeHandoff(nextFile, nextText);
     }
   }
   return { picked, memos, text: nextText };

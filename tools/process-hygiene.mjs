@@ -227,7 +227,7 @@ function stopProcesses(items, spawnImpl = spawnSync) {
 }
 
 function appendLog(home, before, after) {
-  const file = path.join(home, '.claude', 'logs', 'process-hygiene.log');
+  const file = path.join(home, '.claude', 'logs', 'process-hygiene-events.log');
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.appendFileSync(file, `${new Date().toISOString()} before=${summary(before)} after=${summary(after)}\n`);
 }

@@ -263,9 +263,9 @@ export function run(argv = process.argv.slice(2)) {
   const indexBackup = path.join(directory, `index.bak-${stamp}`);
   fs.copyFileSync(memoryPath, memoryBackup, fs.constants.COPYFILE_EXCL);
   const hadIndex = fs.existsSync(indexDirectory);
-  if (hadIndex) fs.cpSync(indexDirectory, indexBackup, { recursive: true, errorOnExist: true, force: false });
+  if (hadIndex && fs.existsSync(indexBackup)) throw new Error(`バックアップが既に存在します: ${indexBackup}`);
   try {
-    fs.rmSync(indexDirectory, { recursive: true, force: true });
+    if (hadIndex) fs.renameSync(indexDirectory, indexBackup);
     fs.mkdirSync(indexDirectory);
     for (const [name, content] of plan.indexes) fs.writeFileSync(path.join(indexDirectory, name), content);
     fs.writeFileSync(memoryPath, plan.memory);
@@ -273,8 +273,10 @@ export function run(argv = process.argv.slice(2)) {
     if (!currentMatches(directory, plan)) throw new Error('read-back が生成内容と一致しません');
   } catch (error) {
     fs.copyFileSync(memoryBackup, memoryPath);
-    fs.rmSync(indexDirectory, { recursive: true, force: true });
-    if (hadIndex) fs.cpSync(indexBackup, indexDirectory, { recursive: true });
+    if (fs.existsSync(indexBackup)) {
+      if (fs.existsSync(indexDirectory)) fs.renameSync(indexDirectory, `${indexBackup}.failed-${process.pid}`);
+      fs.renameSync(indexBackup, indexDirectory);
+    }
     throw new Error(`適用後検証に失敗したためバックアップから復元しました: ${error.message}`);
   }
   console.log(`適用完了: ${memoryPath}`);

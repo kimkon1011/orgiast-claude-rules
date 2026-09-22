@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // 委譲台帳の症状を実測と照合し、即時修復と次回 auto-session への根本修正起票を行う。
 import fs from 'node:fs';
+import { writeHandoff } from './next-session-rotate.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -188,7 +189,7 @@ export function upsertFixTasks({ home, findings, now = new Date(), todayStr }) {
   block = block.split(/\r?\n/).map((line) => { if (/^##[ \t]+残TODO/.test(line)) { inTodos = true; return line; } if (inTodos && /^##[ \t]+/.test(line)) inTodos = false; return line; }).join('\n');
   let n = 0; inTodos = false;
   block = block.split('\n').map((line) => { if (/^##[ \t]+残TODO/.test(line)) { inTodos = true; return line; } if (inTodos && /^##[ \t]+/.test(line)) inTodos = false; return inTodos && /^\s*\d+[.)、]\s+/.test(line) ? line.replace(/^\s*\d+[.)、]/, `${++n}.`) : line; }).join('\n');
-  fs.writeFileSync(file, md.slice(0, start) + block + md.slice(end));
+  writeHandoff(file, md.slice(0, start) + block + md.slice(end));
   return true;
 }
 

@@ -106,5 +106,23 @@
     "route": "codex-do.mjs",
     "confidence": "high",
     "source": "handoff-audit-nightly:0c4b79ac4fa77d5095271be308d3e9bf16d62a6f27489c795dbf6923d5d7f1e2"
+  },
+  {
+    "pattern": "週リミット/トークン消費の原因調査",
+    "route": "codex-do.mjs",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:ab54f22414b575cc4d056472c984d01fbe9448369504ab8279a48b45f16a6900"
+  },
+  {
+    "pattern": "PRのCI結果待ち・ブランチ追従・順次マージ",
+    "route": "gh api",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:bfc9a4c45d74ce5d72ddbaa48192810c4c6013b5348eccb846eb0a063e6d7bd9"
+  },
+  {
+    "pattern": "止まったセッション/滞留TODOの消化を自分で流すと宣言",
+    "route": "codex-do.mjs",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:55688f3d27d33f6abc589e97859c7522e23efe99beb72cae2ed373d1dd1ce89e"
   }
 ]

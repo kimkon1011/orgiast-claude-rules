@@ -44,6 +44,7 @@
     "route.js",
     "shell-path.js",
     "mobile-pool.js",
+    "mobile-state.cjs",
     "README.md",
     "LICENSE"
   ]

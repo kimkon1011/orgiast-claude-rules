@@ -37,8 +37,8 @@
   {
     "file": "packages/vscode-next-session/mobile-pool.test.cjs",
     "exit": 0,
-    "tests": 5,
-    "pass": 5,
+    "tests": 6,
+    "pass": 6,
     "fail": 0
   },
   {
@@ -53,6 +53,20 @@
     "exit": 0,
     "tests": 2,
     "pass": 2,
+    "fail": 0
+  },
+  {
+    "file": "tools/no-undistributed-imports.test.mjs",
+    "exit": 0,
+    "tests": 2,
+    "pass": 2,
+    "fail": 0
+  },
+  {
+    "file": "tools/next-session-launch.test.mjs",
+    "exit": 0,
+    "tests": 69,
+    "pass": 69,
     "fail": 0
   }
 ]

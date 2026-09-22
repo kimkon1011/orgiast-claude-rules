@@ -21,11 +21,12 @@
 | nightly-health | 39 | 0 |
 | nightly-health-remediate | 11 | 0 |
 | 拡張route | 8 | 0 |
-| 拡張mobile-pool | 5 | 0 |
+| 拡張mobile-pool | 6 | 0 |
 | 拡張イベント結合 | 1 | 0 |
 | 拡張shell-path | 2 | 0 |
 | next-session-launch | 69 | 0 |
-| 合計 | 153 | 0 |
+| tools配布境界 | 2 | 0 |
+| 合計 | 156 | 0 |
 
 `node --test`で各ファイルを実行。VSIX 0.3.4は同梱JS・package.jsonとソースのバイト一致も検証。`git diff --check`は対象ファイルで成功。VS Code実機への新版インストール・実スマホからの使用開始は未検証。
 
@@ -61,3 +62,8 @@ ORGIAST_HOME=/mnt/c/Users/uers node tools/mobile-sessions.mjs --dry-run
 成果は `/mnt/c/Users/uers/orgiast-main` のworking treeへ直接保存した。`.git`の実体は書込禁止で `git switch -c feat/reapply-2026-09-11` がread-onlyエラーになったため、ローカルcommit/pushは使えない。GitHub APIでmainを親にしたcommitと指定ブランチを作り、PRとして永続化する。隔離リポジトリ・bundle・成果の/tmp退避は使わない。
 
 もう一方の `/mnt/c/Users/uers/orgiast-claude-rules` は書込許可範囲外のため、直接同期できない。同一リポジトリの修正をPRで提供する。実機拡張の新版導入と両ツリーへの反映は未実施。新しいhookは追加しておらずsettings登録も変更していない。PRはマージしない（自動マージ事故防止のためDraft、automergeラベルなし）。
+
+## CI切り分け
+
+初回PR CIでtoolsからpackagesへのimportが配布境界テストに違反したため修正した。CLI共通読取部はtools/libへ置き、独立配布されるVSIXにも同じ内容を収録。両者の一致をテストする。
+もう1件の `usage-stats: parse cache hits unchanged files and reparses size/mtime changes` は親main（1a1dc353）の [CI](https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/35675364817) でも同じ失敗を確認した。変更対象外の既存失敗。Windows/POSIXのguard・構文チェックは初回PR CIで成功。

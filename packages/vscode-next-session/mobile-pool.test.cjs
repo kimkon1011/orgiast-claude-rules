@@ -66,3 +66,9 @@ test('JSON/env configuration and stale snapshot are validated', (t) => {
   assert.equal(readSnapshot(home, 1001).waiting, 1);
   assert.equal(readSnapshot(home, 32000), null);
 });
+
+// The CLI is distributed as tools/ only; the extension must also be standalone.
+test('CLI and VSIX state readers are byte-identical', () => {
+  assert.equal(fs.readFileSync(path.join(__dirname, 'mobile-state.cjs'), 'utf8'),
+    fs.readFileSync(path.join(__dirname, '../../tools/lib/mobile-state.cjs'), 'utf8'));
+});

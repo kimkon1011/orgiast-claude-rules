@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import os from 'node:os';
-import pool from '../packages/vscode-next-session/mobile-pool.js';
+import pool from './lib/mobile-state.cjs';
 import { spawn } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
 import { resolveVscodeCli } from './next-session-launch.mjs';

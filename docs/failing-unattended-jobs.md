@@ -48,7 +48,9 @@ nightly-batch.ps1 parse OK
 backup-claude-to-drive.ps1 parse OK
 ```
 
-Node回帰テスト350件PASS、skillのfrontmatter検証、git diff --checkを実施。完全な本番E2EやタスクのLastTaskResult=0の証明とは区別する。
+Node回帰テスト350件PASS、追加のusage-statsテスト31件PASS、skillのfrontmatter検証、git diff --checkを実施。完全な本番E2EやタスクのLastTaskResult=0の証明とは区別する。
+
+CI初回で既存のusage-statsキャッシュテストが失敗した。固定日付2026-08-23が実時間の30日保持期限を超えたため、テスト時刻をDate.now()へ変更した（本番の保持期間は変更しない）。
 
 ## 残作業
 

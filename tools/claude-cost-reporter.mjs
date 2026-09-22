@@ -37,9 +37,40 @@ const nativeHome = os.homedir(); const HOME = process.env.ORGIAST_HOME || proces
 const OUTPUT_CACHE_FILE = path.join(HOME, '.claude', '.cost-reporter-output-cache.txt');
 const REFRESH_LOCK_FILE = path.join(HOME, '.claude', '.cost-reporter-output-cache.lock');
 const REFRESH_LOCK_MAX_AGE_MS = 10 * 60 * 1000;
+// 表示の鮮度だけを判定する。Discord 投稿の GUARD_HOURS とは独立。
+const OUTPUT_CACHE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+const ERROR_LOG_FILE = path.join(HOME, '.claude', 'logs', 'cost-reporter-error.log');
+
+function logError(error) {
+  const line = `[${new Date().toISOString()}] ${error?.stack || String(error)}\n`;
+  try {
+    fs.mkdirSync(path.dirname(ERROR_LOG_FILE), { recursive: true });
+    fs.appendFileSync(ERROR_LOG_FILE, line, 'utf8');
+  } catch {
+    process.stderr.write(line);
+  }
+}
+
+function removeRefreshLock() {
+  try { fs.unlinkSync(REFRESH_LOCK_FILE); } catch (error) {
+    if (error.code !== 'ENOENT') logError(error);
+  }
+}
 
 function readOutputCache() {
-  try { return fs.readFileSync(OUTPUT_CACHE_FILE, 'utf8'); } catch { return null; }
+  let fd;
+  try {
+    fd = fs.openSync(OUTPUT_CACHE_FILE, 'r');
+    const updatedAt = fs.fstatSync(fd).mtimeMs;
+    const output = fs.readFileSync(fd, 'utf8');
+    if (Date.now() - updatedAt < OUTPUT_CACHE_MAX_AGE_MS) return output;
+    const date = new Date(updatedAt);
+    const pad = (value) => String(value).padStart(2, '0');
+    const stamp = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    return `⚠️ この数値は ${stamp} 時点のキャッシュです（更新に失敗しています）\n${output}`;
+  } catch { return null; } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
 }
 
 export function cacheRefreshArgs(file = fileURLToPath(import.meta.url)) {
@@ -53,39 +84,54 @@ function startCacheRefresh() {
       const age = Date.now() - fs.statSync(REFRESH_LOCK_FILE).mtimeMs;
       if (age < REFRESH_LOCK_MAX_AGE_MS) return false;
       fs.unlinkSync(REFRESH_LOCK_FILE);
-    } catch {}
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
     const lockFd = fs.openSync(REFRESH_LOCK_FILE, 'wx');
     fs.closeSync(lockFd);
-  } catch { return false; }
+  } catch (error) {
+    if (error.code !== 'EEXIST') logError(error);
+    return false;
+  }
 
+  let errorFd;
   try {
+    fs.mkdirSync(path.dirname(ERROR_LOG_FILE), { recursive: true });
+    errorFd = fs.openSync(ERROR_LOG_FILE, 'a');
     const child = spawn(process.execPath, cacheRefreshArgs(), {
       ...backgroundSpawnOptions(),
-      stdio: 'ignore',
+      stdio: ['ignore', 'ignore', errorFd],
       env: process.env,
+    });
+    child.once('error', (error) => {
+      logError(error);
+      removeRefreshLock();
     });
     child.unref();
     return true;
-  } catch {
-    try { fs.unlinkSync(REFRESH_LOCK_FILE); } catch {}
+  } catch (error) {
+    logError(error);
+    removeRefreshLock();
     return false;
+  } finally {
+    if (errorFd !== undefined) fs.closeSync(errorFd);
   }
 }
 
 function captureStdoutToCache() {
   let output = '';
-  const originalWrite = process.stdout.write.bind(process.stdout);
+  const originalWrite = process.stdout.write;
   process.stdout.write = function cachedWrite(chunk, encoding, callback) {
     output += Buffer.isBuffer(chunk) ? chunk.toString(typeof encoding === 'string' ? encoding : undefined) : String(chunk);
-    return originalWrite(chunk, encoding, callback);
+    return originalWrite.call(process.stdout, chunk, encoding, callback);
   };
-  process.once('beforeExit', () => {
-    try {
+  return {
+    save() {
       fs.mkdirSync(path.dirname(OUTPUT_CACHE_FILE), { recursive: true });
       fs.writeFileSync(OUTPUT_CACHE_FILE, output, 'utf8');
-    } catch {}
-    if (REFRESH_CACHE) try { fs.unlinkSync(REFRESH_LOCK_FILE); } catch {}
-  });
+    },
+    restore() { process.stdout.write = originalWrite; },
+  };
 }
 
 const BOOTSTRAP_INTERVAL_MS = 24 * 60 * 60 * 1000;
@@ -228,7 +274,7 @@ export function postDecision({ dryRun = false, force = false, refreshCache = fal
   return refreshCache ? 'cache-only' : 'skip';
 }
 
-function runCostReporter() {
+async function runCostReporter() {
   const envPath = path.join(HOME, '.claude', 'cost-reporter.env');
   const envText = loadEnv();
   const env = parseEnvText(envText);
@@ -254,8 +300,7 @@ function runCostReporter() {
   if (!DRY_RUN && willPost) saveGuardState();
 
   if (!webhook && !DRY_RUN) {
-    console.error('DISCORD_COST_WEBHOOK が未設定です。~/.claude/cost-reporter.env を作成してください。');
-    return;
+    throw new Error('DISCORD_COST_WEBHOOK が未設定です。~/.claude/cost-reporter.env を作成してください。');
   }
 
   const now = new Date();
@@ -318,18 +363,21 @@ function runCostReporter() {
     return reportState;
   }
 
-  fetch(webhook, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content: msg.slice(0, 1950) }),
-  })
-    .then((r) => console.log(r.ok ? 'posted to Discord' : `Discord POST failed ${r.status}`))
-    .catch((e) => console.error('Discord POST error:', e.message))
-    .finally(() => saveGuardState(reportState));
+  try {
+    const response = await fetch(webhook, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: msg.slice(0, 1950) }),
+    });
+    if (!response.ok) throw new Error(`Discord POST failed ${response.status}`);
+    console.log('posted to Discord');
+  } finally {
+    saveGuardState(reportState);
+  }
   return reportState;
 }
 
-function main() {
+async function main() {
   if (CACHED) {
     const cached = readOutputCache();
     if (cached !== null) {
@@ -337,15 +385,24 @@ function main() {
       startCacheRefresh();
       return;
     }
-    // 初回だけ従来処理を同期実行し、その stdout を次回用に保存する。
-    captureStdoutToCache();
-  } else if (REFRESH_CACHE) {
-    captureStdoutToCache();
   }
-  return runAfterBootstrap({
-    bootstrap: () => bootstrapRequiredHooks({ home: HOME, repo: process.env.ORGIAST_REPO || path.dirname(path.dirname(fileURLToPath(import.meta.url))) }),
-    collect: runCostReporter,
-  });
+
+  let capture;
+  try {
+    if (CACHED || REFRESH_CACHE) capture = captureStdoutToCache();
+    await runAfterBootstrap({
+      bootstrap: () => bootstrapRequiredHooks({ home: HOME, repo: process.env.ORGIAST_REPO || path.dirname(path.dirname(fileURLToPath(import.meta.url))) }),
+      collect: runCostReporter,
+    });
+    // 非同期の投稿完了まで待ち、成功した出力だけを保存する。
+    capture?.save();
+  } catch (error) {
+    logError(error);
+    process.exitCode = 1;
+  } finally {
+    capture?.restore();
+    if (REFRESH_CACHE) removeRefreshLock();
+  }
 }
 
-if (isEntry(import.meta.url)) main();
+if (isEntry(import.meta.url)) await main();

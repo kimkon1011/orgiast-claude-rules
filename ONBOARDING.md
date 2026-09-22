@@ -923,7 +923,7 @@ Claude新規作成は標準フォルダ「作業ファイル」直下（既存�
 
 **2.10 マルチアカウント共通ナレッジ運用**
 
-Drive `claude-common-rules` が正本（ローカルはキャッシュ、GitHubはミラー）。下り=`/rules-sync`(pull)、上り=`/share-knowledge`（knowledge-inbox投稿）、統合=kim環境の`/rules-sync`(merge)。本文取得は`download_file_content`必須（`read_file_content`は文字エスケープで壊れる）。正本編集・version管理はkim環境限定。詳細・ディレクトリ構成: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/multi-account-knowledge-hub.md`
+正本は GitHub main（kim 環境の merge 反映がここへ入る）。Drive ハブは配布キャッシュで、夜間ジョブ `tools/drive-hub-mirror.mjs` が main から自動ミラーします。下り=/rules-sync(pull)（※ハブが古ければ pull しないガード付き）、上り=/share-knowledge（knowledge-inbox 投稿）、統合=kim 環境の/rules-sync(merge)。本文取得は `download_file_content` 必須（`read_file_content` は文字エスケープで壊れる）。正本編集・version 管理は kim 環境限定。詳細・ディレクトリ構成: https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/multi-account-knowledge-hub.md
 
 ---
 **2.11 社内アプリには「不具合・要望フォーム」を標準搭載する（全社標準機能 / 2026-08-18 kim指示）**

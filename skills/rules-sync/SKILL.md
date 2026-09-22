@@ -21,7 +21,7 @@ Drive ハブ（正本）: `claude-common-rules` folder `1RLYbK6CKyPWRJsG6LY0WB9O
 
 ## pull（全アカウント共通）
 1. `search_files parentId='1RLYbK6CKyPWRJsG6LY0WB9OzlbFYSFvw' and title contains 'manifest'` → modifiedTime 最新の manifest.json を read_file_content
-2. ローカル `~/.claude/orgiast-rules-version.txt` の版番号と比較。同じなら「最新です」で終了
+2. ローカル `~/.claude/orgiast-rules-version.txt` の版番号と比較。同じなら「最新です」で終了。**注意：version 番号だけで新旧を判定せず、ハブ側と手元の中身の最終日付も比較すること。もしハブ側が古ければ pull を中止し退行を防ぐこと。**（※GitHub main → Drive ハブへは、夜間ジョブ `drive-hub-mirror.mjs` が毎日自動でミラー同期します）。
 3. manifest の files を順に取得（該当フォルダを parentId 検索 → 同タイトルの最新を **download_file_content** で取得し base64 デコード）
 4. 反映先:
    - `ONBOARDING.md` → プロジェクトの ONBOARDING ローカルマスター（kim 環境: `Downloads/CLAUDE.md配布/ONBOARDING.md`。無い環境は `~/.claude/ONBOARDING.md`）

@@ -100,5 +100,11 @@
     "route": "調査は Claude 側で完結し、user へ渡さない。①症状は GitHub Actions の一次情報で取る（`gh run list -R kimkon1011/aujust-sales-automation --limit 15 --json workflowName,conclusion,createdAt,databaseId,headSha` → 失敗は `gh run view <databaseId> --log-failed`。name を持たない workflow は `--workflow=\"proni-messages.yml\"` のように**ファイル名**で引く。表示名で引くと `could not find any workflows named …` で落ちる）②コード側の修復状況は `gh api \"repos/.../commits?since=…\"` と `gh pr view <N> --json title,state,mergedAt,body,files` で確定（PR本文に未適用migrationと検証残が書かれている）③DB側の適用状況は `gh run list --workflow=\"DB Migrate\"` と `gh secret list` で別系統として確認＝「コードは緑・DBは赤」を判別④実装だけを codex-do.mjs（前景・単発）へ渡し、検証は `gh run` の緑で行う⑤照会できない項目は「未確認」と書く（rule 4）。設計判断（(a)(b)どちらで直すか等）は rule 3 の4理由に該当しないため user に選ばせず Claude が決める（2026-09-22 実測: 元セッションは kim に選択を依頼した後、同じセッション内で自分で決めて実装させていた。残存真因は本番DB migration 未適用＝`SUPABASE_DB_URL` secret 不在で `DB Migrate` が `##[error]SUPABASE_DB_URL secret が未設定です` で失敗し続け、PR #114 a113d05 の修正が効かない状態だった。docs/proni-sync-troubleshoot-route.md）",
     "confidence": "high",
     "source": "2026-09-22 handoff-audit:15a5d2433a7f91bc"
+  },
+  {
+    "pattern": "Codex への委譲で失敗し原因を断定して再投入",
+    "route": "codex-do.mjs",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:0c4b79ac4fa77d5095271be308d3e9bf16d62a6f27489c795dbf6923d5d7f1e2"
   }
 ]

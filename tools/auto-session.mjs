@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { rotate, MAX_BYTES } from './next-session-rotate.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
@@ -971,6 +972,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   }
 
   const nextFile = path.join(claudeDir, 'next-session.md');
+  if (!readOnly && fs.existsSync(nextFile) && fs.statSync(nextFile).size > MAX_BYTES) rotate(nextFile);
   // フォーム報告は next-session.md と独立した入力源なので、片方が無くてももう片方を止めない。
   const parsed = fs.existsSync(nextFile) ? parseHandoff(fs.readFileSync(nextFile, 'utf8')) : { block: '', todos: [], todoBlocks: [], sections: {} };
   const feedbackIssues = await listIssues();

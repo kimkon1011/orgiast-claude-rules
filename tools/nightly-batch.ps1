@@ -13,7 +13,7 @@ function Write-NightlyLog([string]$Step, [string]$Result, [bool]$IncludeInSummar
 }
 function Format-NightlyDetail($Output) {
     if (-not $Output) { return '(出力なし)' }
-    $lines = @($Output | ForEach-Object { "$_" } | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -First 8)
+    $lines = @($Output | ForEach-Object { "$_" } | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Last 8)
     if ($lines.Count -eq 0) { return '(出力なし)' }
     return ($lines -join ' / ')
 }
@@ -78,6 +78,11 @@ try {
     $node = Get-Command node -ErrorAction SilentlyContinue
     if (-not $node) { $summary['node'] = 'error:nodeが見つからない'; Write-NightlyLog 'node確認' 'error:nodeが見つからない'; Finish-Nightly 1 }
     Write-NightlyLog 'node確認' 'ok'
+    try {
+        $rotationOutput = @(& $node.Source (Join-Path $PSScriptRoot 'next-session-rotate.mjs') 2>&1)
+        $rotationExit = $LASTEXITCODE
+        Write-NightlyStepResult 'next-session-rotate' $rotationExit $rotationOutput
+    } catch { Write-NightlyLog 'next-session-rotate' ('error:' + $_.Exception.Message) }
     try { & $node.Source (Join-Path $PSScriptRoot 'handoff-audit-nightly.mjs'); if ($LASTEXITCODE -ne 0) { throw 'handoff-audit-nightly failed' }; Write-NightlyLog 'handoff-audit-nightly' 'ok' } catch { Write-NightlyLog 'handoff-audit-nightly' ('error:' + $_.Exception.Message) }
 
     if ($autoClose) {
@@ -152,7 +157,7 @@ try {
             $domainsTmp = [System.IO.Path]::GetTempFileName()
             $pinsTmp = [System.IO.Path]::GetTempFileName()
             try {
-                $deriveOutput = @(& $node.Source $memoryIndexDomains --dir $memoryDir --out-domains $domainsTmp --out-pins $pinsTmp 2>&1)
+                $deriveOutput = @(& $node.Source $memoryIndexDomains --dir $memoryDir --fallback reference --out-domains $domainsTmp --out-pins $pinsTmp 2>&1)
                 $deriveExit = $LASTEXITCODE
                 if ($deriveExit -eq 0) {
                     $splitOutput = @(& $node.Source $memoryIndexSplit --dir $memoryDir --domains $domainsTmp --pins $pinsTmp --apply 2>&1)
@@ -180,7 +185,7 @@ try {
             }
         }
         $splitResult = 'ok:' + $applied + '件適用'
-        if ($needsAttention.Count -gt 0) { $splitResult += '/' + $needsAttention.Count + '件要手当(' + ($needsAttention -join ',') + ')' }
+        if ($needsAttention.Count -gt 0) { $splitResult = 'NG:' + $applied + '件適用'; $splitResult += '/' + $needsAttention.Count + '件要手当(' + ($needsAttention -join ',') + ')' }
         Write-NightlyLog 'memory-index-split' $splitResult
         } finally { $ErrorActionPreference = $oldPreference }
     }

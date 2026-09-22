@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { writeHandoff } from './next-session-rotate.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { createLlmClient } from './line-digest.mjs';
@@ -201,7 +202,7 @@ export async function runTriage(options = {}) {
 
   if (!cli.dryRun && updates.size > 0) {
     fs.writeFileSync(proposalFile, nextRecords.map(JSON.stringify).join('\n') + (nextRecords.length ? '\n' : ''), 'utf8');
-    if (adopted.length && nextSessionText && !warnings.length) fs.writeFileSync(nextSessionFile, nextSessionText, 'utf8');
+    if (adopted.length && nextSessionText && !warnings.length) writeHandoff(nextSessionFile, nextSessionText);
     if (digestResult.changed) fs.writeFileSync(digestFile, digestResult.text, 'utf8');
   }
   [...new Set(warnings)].forEach(log);

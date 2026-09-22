@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { writeHandoff } from './next-session-rotate.mjs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -103,7 +104,7 @@ export async function runNightly(options = {}) {
       const nextFile = path.join(dir, 'next-session.md');
       let previous = ''; try { previous = fs.readFileSync(nextFile, 'utf8'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
       const updated = enqueueTodos(previous, learned.filter(l => l.confidence === 'high' || merged.promoted.some(p => key(p.pattern) === key(l.pattern))));
-      if (updated !== previous) fs.writeFileSync(nextFile, updated);
+      if (updated !== previous) writeHandoff(nextFile, updated);
       added += merged.promoted.length;
       knowledge = merged.knowledge; candidates = merged.candidates;
       appendJsonl(processedFile, { ts: new Date().toISOString(), observation, sessionId: target.sessionId, ...result });

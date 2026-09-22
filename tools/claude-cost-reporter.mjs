@@ -300,7 +300,10 @@ async function runCostReporter() {
   if (!DRY_RUN && willPost) saveGuardState();
 
   if (!webhook && !DRY_RUN) {
-    throw new Error('DISCORD_COST_WEBHOOK が未設定です。~/.claude/cost-reporter.env を作成してください。');
+    const message = 'DISCORD_COST_WEBHOOK が未設定です。~/.claude/cost-reporter.env を作成してください。';
+    if (CACHED || REFRESH_CACHE) throw new Error(message);
+    console.error(message);
+    return;
   }
 
   const now = new Date();

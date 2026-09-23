@@ -4,6 +4,7 @@
   "Google API": ["Sheets API", "Drive API", "spreadsheets.values", "batchUpdate", "batchClear", "Apps Script API"],
   "GAS": ["clasp push", "clasp run-function", "clasp create-script", "コマンドキュー", "setupOnce"],
   "CLI": ["vercel env", "gh secret", "gh api", "supabase db push", "psql", "npm i"],
+  "GitHub PR": ["gh pr create", "git credential fill", "GH_TOKEN", "gh pr checks", "pr-merge.mjs"],
   "復元系": [".env.local", "transcript grep", "Grep tool", "production bundle", "keyserve"],
   "委譲": ["codex-do.mjs", "llm-ask.mjs"],
   "内部連絡": ["チャット表示", "チャットに本文", "Discord MCP", "Discord 送信", "リモートデスクトップ", "LINE", "internal-recipients.json"]

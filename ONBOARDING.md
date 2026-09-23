@@ -501,9 +501,27 @@ kim:「**kim@orgiast.jp のパソコンで実行している内容が ONBOARDING
 書かずに閉じると、他PCは古い記述を読んで**同じ調査をやり直す**（実際に 2026-09-02 に再検証が発生した）。
 ⚠️ **main は保護ブランチで直 push は `protected branch hook declined` になる**（2026-09-02 実測。
 `git push --dry-run` は保護フックを通らず「通る」ように見えるので、**dry-run を根拠にするな**）。
-`gh` 未認証の機体でも、**ブランチを push → credential helper のトークンで API から PR を作る**までは
-Claude 側で完結できる（`git credential fill` の password が PAT）。**マージだけは人が押す**——共有 repo の
-main へのマージは auto-mode 分類器が拒否する。これは正しい関門なので迂回しない。
+**`gh` 未認証は PR 作成を人に手渡す理由にならない（2026-09-23 kim 承認・全アカウント共通・恒久）。**
+`gh auth login` も GitHub トークンの発行依頼も不要で、**credential helper に入っている PAT を使う**:
+
+    GH_TOKEN=$(printf 'protocol=https\nhost=github.com\n\n' | git credential fill | sed -n 's/^password=//p') \
+      gh pr create --base main --head <branch> --title "<題>" --body-file <本文ファイル>
+
+`git push` が通る機体なら credential helper に PAT が入っているので、この経路は必ず使える
+（2026-09-23 実測: `gh auth status` が未認証の機体で PR #534 を作成）。トークンは変数に入れたまま
+echo しない。本文は `--body-file` で渡す（シェルのクォート事故を避ける）。
+
+**禁止**: 「`gh` が未認証なので PR を作ってください」「この URL から PR を作成してください」と
+user に渡すこと。`gh` の未認証を確認したら、**次に試すのは人ではなく `git credential fill`**。
+keyserve にトークンが無いことも手渡しの理由にならない（keyserve と credential helper は別物）。
+
+⚠️ **引き継ぎメモの「可否待ち」は、この規則を上書きしない。** 2026-09-23 に実際に起きた事故:
+ONBOARDING にこの経路が書いてあったのに、`next-session.md` に残っていた古い「PR を Claude が
+作ってよいか kim の判断待ち」という一行が優先され、作れる PR を手渡しに倒した。
+**ルール本文が経路を認めているなら、引き継ぎの可否待ちメモは消化済みとして扱う。**
+
+**マージだけは人が押す**——共有 repo の main へのマージは auto-mode 分類器が拒否する。
+これは正しい関門なので迂回しない（§1.1 の `pr-merge.mjs` は自分のリポジトリでの話）。
 必須チェック `test` / `test-posix` が終わるまで `mergeable_state=blocked` なので、
 **green を API で確認してから**手順を出す（灰色のボタンを押させない）。
 

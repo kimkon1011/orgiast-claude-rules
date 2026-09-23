@@ -87,8 +87,15 @@ export function emptyOutputReason(row) {
   // 旧行(timedOut 未記録)は経過秒数から推定する。codex の正常終了は実測で中央値~100秒、
   // 打ち切りは --timeout 到達時にのみ現れ、実測値は 300 秒以上だった。
   if (row?.timedOut == null && Number(row?.secs) >= 300) return 'timeout';
+  // 起動前のゲートが「意図的に止めた」行。launched:false だが codex は一度も起動されておらず、
+  // 起動失敗ではない。codex-do が書く行の status は必ず数値で、起動前ゲートは文字列の番兵を書く
+  // (2026-09-23 実測: status:"spec-missing-context" / stderrTail 空)。これを launch_failed に
+  // 混ぜると「codex-do が codex を起動できずに終了している」と誤診され、直せない欠陥として
+  // 同 id が毎日起票され続ける(2026-09-24 診断: 2件がこれだった)。
+  if (row?.launched === false && typeof row?.status === 'string') return 'preflight_blocked';
   // codex を起動できずに終わった行。出力ゼロではなく「そもそも走っていない」ので、
   // no_output に混ぜると原因が埋もれて同 id が永久に消えない（2026-09-16 診断）。
+  // 起動を試みた行は必ず数値 status(3) と失敗理由の stderrTail を伴うため、ここは起動失敗のまま。
   if (row?.launched === false) return 'launch_failed';
   if (/Not inside a trusted directory/.test(String(row?.stderrTail || ''))) return 'untrusted_cwd';
   if (CODEX_AUTH_FAILED.test(String(row?.stderrTail || ''))) return 'auth_failed';
@@ -135,7 +142,7 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
     .filter((row) => row.provider === 'codex' && Number(row.out) === 0)
     .map((source) => ({ reason: emptyOutputReason(source), stderrTail: source.stderrTail }))
     .filter((item) => item.reason !== 'timeout');
-  const realEmpty = empty.filter((item) => !['infra_transient', 'launch_failed', 'auth_failed', 'model_auth_mismatch'].includes(item.reason));
+  const realEmpty = empty.filter((item) => !['infra_transient', 'launch_failed', 'auth_failed', 'model_auth_mismatch', 'preflight_blocked'].includes(item.reason));
   const launchFailed = empty.filter((item) => item.reason === 'launch_failed');
   const authFailed = empty.filter((item) => item.reason === 'auth_failed');
   const modelAuthMismatch = empty.filter((item) => item.reason === 'model_auth_mismatch');
@@ -144,6 +151,10 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
   if (fixableLaunchFailed.length) findings.push({ id: 'codex_launch_failed', severity: 'medium', title: 'Codex の起動失敗', evidence: [`${fixableLaunchFailed.length}件`, ...reasonTop(fixableLaunchFailed)], fixTask: 'codex-do が codex を起動できずに終了している。WSL の状態と起動経路のログを確認し、起動失敗を再現するテストを追加して修正' });
   // 事実は消さずに名前を付けて残す。fixTask を付けない(low)ので毎日の起票対象にはならない。
   if (laneAbsent.length) findings.push({ id: 'codex_lane_unavailable', severity: 'low', title: 'codex レーンは WSL 不在のため使用不可（代替バックエンドで実行中）', evidence: [`${laneAbsent.length}件`, 'WSL ディストリ 0 件'] });
+  // 起動前ゲートが止めた行も事実として残す。原因は codex 側ではなく指示(spec)側なので
+  // codex_launch_failed とは別 id にし、fixTask を付けない(low)＝毎日の起票対象にしない。
+  const preflightBlocked = empty.filter((item) => item.reason === 'preflight_blocked');
+  if (preflightBlocked.length) findings.push({ id: 'codex_preflight_blocked', severity: 'low', title: 'Codex は起動前ゲートで意図的に止められた（起動失敗ではない）', evidence: [`${preflightBlocked.length}件`, 'status が文字列の番兵（起動前ゲートが記録）'] });
   // 直せる欠陥なので fixTask を付ける（medium）。
   if (modelAuthMismatch.length) findings.push({ id: 'codex_model_auth_mismatch', severity: 'medium', title: 'Codex が ChatGPT アカウントで sol/astra を選んで失敗', evidence: [`${modelAuthMismatch.length}件`, ...reasonTop(modelAuthMismatch)], fixTask: 'codex-do のレーン選択が ChatGPT アカウント認証を検出できず sol/astra を選んでいる。detectChatGptAuth と decideCodexLane の判定を照合し、再現テストを追加して修正' });
   // 事実は消さずに名前を付けて残す。再ログインは人が行う操作でコードでは直せないため

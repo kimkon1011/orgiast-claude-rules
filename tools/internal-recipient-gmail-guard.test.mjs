@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { extractAddresses, GMAIL_WRITE_ACTIONS, HOOK_MATCHER, isInternal, judge, loadLedger, TARGET } from './internal-recipient-gmail-guard.mjs';
+import { extractAddresses, extractMentions, GMAIL_WRITE_ACTIONS, githubHandles, HOOK_MATCHER, isGhWriteCommand, isInternal, judge, judgeBash, loadLedger, SHELL_TOOLS, TARGET } from './internal-recipient-gmail-guard.mjs';
 
 const ledger = JSON.parse(fs.readFileSync(new URL('./internal-recipients.default.json', import.meta.url), 'utf8'));
 const hook = (tool_input, action = 'create_draft', account = '') => ({ tool_name: `mcp__claude_ai_Gmail${account}__${action}`, tool_input });
@@ -146,4 +146,100 @@ test('既存の古い matcher を重複なしで昇格し、再実行しても�
   assert.match(second.stdout, /ただし \d+ 本は repo に無く未登録/);
   assert.match(second.stdout, /\[skip\] /);
   assert.doesNotMatch(second.stdout, /hook は既に登録済み\(変更なし\)/);
+});
+
+// --- GitHub @メンション（gh の書き込み系を Bash/PowerShell 経由で叩く経路） ---
+const shellHook = (command, tool = 'Bash') => ({ tool_name: tool, tool_input: { command } });
+
+test('gh pr comment の内部ハンドル @メンションを拒否する', () => {
+  const result = judgeBash(shellHook("gh pr comment 529 --body 'LGTM @kimkon1011 確認お願いします'"), ledger);
+  assert.equal(result.decision, 'block');
+  assert.deepEqual(result.internal, ['kimkon1011']);
+  assert.match(result.reason, /\[INTERNAL-MENTION\].*@kimkon1011/);
+});
+test('大小無視で、issue/PR本文・レビュー・REST コメントも拒否する', () => {
+  for (const command of [
+    'gh issue create --title x --body "@KimKon1011"',
+    'gh pr create --title x --body "@KIMKON1011 レビューお願いします"',
+    'gh pr review 12 --comment --body "@kimkon1011"',
+    'gh pr edit 3 --body "@kimkon1011"',
+    "gh api repos/o/r/issues/1/comments -f body='cc @kimkon1011'",
+  ]) assert.equal(judgeBash(shellHook(command), ledger).decision, 'block', command);
+});
+test('複数ハンドルのうち内部のものだけを理由に出す', () => {
+  const result = judgeBash(shellHook('gh pr comment 1 --body "@dependabot @kimkon1011 @octocat"'), ledger);
+  assert.deepEqual(result.mentions, ['dependabot', 'kimkon1011', 'octocat']);
+  assert.deepEqual(result.internal, ['kimkon1011']);
+});
+test('外部ハンドル・メンション無しは通す', () => {
+  for (const command of [
+    'gh pr comment 529 --body "LGTM"',
+    'gh pr comment 529 --body "@dependabot rebase"',
+    'gh pr comment 529 --body "担当は kim です"',
+  ]) assert.equal(judgeBash(shellHook(command), ledger).decision, 'pass', command);
+});
+test('メールアドレス内の @ はメンションとして拾わない', () => {
+  const command = "gh pr comment 1 --body '連絡先は info@kimkon1011.com です'";
+  assert.equal(isGhWriteCommand(command), true);
+  assert.deepEqual(extractMentions(command), []);
+  assert.equal(judgeBash(shellHook(command), ledger).decision, 'pass');
+});
+test('より長い別ハンドルを前方一致で誤検知しない', () => {
+  // ハンドルとして丸ごと切り出すので、台帳の完全一致に落ちない＝deny しない。
+  assert.deepEqual(extractMentions('@kimkon1011x @kimkon1011-bot'), ['kimkon1011x', 'kimkon1011-bot']);
+  for (const handle of ['@kimkon1011x', '@kimkon1011-bot']) {
+    assert.equal(judgeBash(shellHook(`gh pr comment 1 --body "${handle}"`), ledger).decision, 'pass', handle);
+  }
+});
+test('GitHub の書き込み系以外は判定しない', () => {
+  for (const command of [
+    "git commit -m '@kimkon1011'",
+    'gh pr view 529',
+    'gh pr list --search "@kimkon1011"',
+    'gh api repos/o/r/issues/1',
+    'echo "@kimkon1011"',
+    'gh issue view 1 --comments',
+  ]) assert.deepEqual(judgeBash(shellHook(command), ledger), { decision: 'pass', mentions: [], internal: [] }, command);
+});
+test('PowerShell 経由でも同じ判定、対象外ツールと空入力は即 pass', () => {
+  assert.equal(judgeBash(shellHook("gh pr comment 1 --body '@kimkon1011'", 'PowerShell'), ledger).decision, 'block');
+  const other = { tool_name: 'Write', tool_input: { command: "gh pr comment 1 --body '@kimkon1011'" } };
+  assert.deepEqual(judgeBash(other, ledger), { decision: 'pass', mentions: [], internal: [] });
+  assert.deepEqual(judgeBash(null, ledger), { decision: 'pass', mentions: [], internal: [] });
+});
+test('githubHandles を持たない台帳でも落ちずに pass する', () => {
+  const legacy = { domains: ['orgiast.jp'], addresses: [] };
+  assert.deepEqual(githubHandles(legacy), []);
+  assert.equal(judgeBash(shellHook("gh pr comment 1 --body '@kimkon1011'"), legacy).decision, 'pass');
+});
+test('default 台帳が githubHandles を持ち、matcher が Bash/PowerShell を含む', () => {
+  assert.deepEqual(ledger.githubHandles, ['kimkon1011']);
+  assert.equal(SHELL_TOOLS, 'Bash|PowerShell');
+  const matcher = new RegExp(`^(?:${HOOK_MATCHER})$`);
+  for (const toolName of ['Bash', 'PowerShell']) assert.equal(matcher.test(toolName), true, toolName);
+});
+test('githubHandles が配列でない台帳は default に戻る', (t) => {
+  const home = homeFor(t);
+  fs.writeFileSync(path.join(home, '.claude', 'internal-recipients.json'), JSON.stringify({ domains: [], addresses: [], githubHandles: 'kimkon1011' }));
+  assert.deepEqual(loadLedger({ home }), ledger);
+  assert.equal(judgeBash(shellHook("gh pr comment 1 --body '@kimkon1011'"), loadLedger({ home })).decision, 'block');
+});
+test('stdin→stdout で gh メンションを deny し、メンション無しは無出力', (t) => {
+  const home = homeFor(t);
+  const blocked = run({ tool_name: 'Bash', tool_input: { command: "gh pr comment 529 --body '@kimkon1011 確認お願いします'" } }, home);
+  assert.equal(blocked.status, 0, blocked.stderr);
+  assert.equal(blocked.stderr, '');
+  assert.equal(JSON.parse(blocked.stdout).hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(JSON.parse(blocked.stdout).hookSpecificOutput.permissionDecisionReason, /\[INTERNAL-MENTION\]/);
+  for (const input of [
+    { tool_name: 'Bash', tool_input: { command: 'gh pr comment 529 --body "LGTM"' } },
+    { tool_name: 'Bash', tool_input: { command: 'gh pr comment 529 --body "@dependabot rebase"' } },
+    { tool_name: 'Bash', tool_input: { command: 'git status --porcelain' } },
+    { tool_name: 'PowerShell', tool_input: { command: 'Get-ChildItem' } },
+  ]) {
+    const pass = run(input, home);
+    assert.equal(pass.status, 0, pass.stderr);
+    assert.equal(pass.stdout, '');
+    assert.equal(pass.stderr, '');
+  }
 });

@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 // ただし同期が途中のPCでは guard 本体がまだ無いことがあるため、静的に import すると
 // register-hooks 全体が ERR_MODULE_NOT_FOUND で落ちて hook が1本も登録されなくなる。
 // ここは fail-open とし、読めなければ現行と同じ matcher に退避する。
-let HOOK_MATCHER = 'mcp__claude_ai_Gmail(?:_\\d+)?__(create_draft|send_message|update_draft|reply|forward)';
+let HOOK_MATCHER = 'mcp__claude_ai_Gmail(?:_\\d+)?__(create_draft|send_message|update_draft|reply|forward)|Bash|PowerShell';
 try {
   ({ HOOK_MATCHER } = await import('./internal-recipient-gmail-guard.mjs'));
 } catch { /* guard が未同期でも登録処理は続行する */ }

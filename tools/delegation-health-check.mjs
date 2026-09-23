@@ -121,7 +121,7 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
   });
   const claudeFallback = usageRows.filter((row) => row.provider === 'claude-fallback');
   if (claudeFallback.length) { const top = reasonTop(claudeFallback); findings.push({ id: 'unattended_claude_fallback', severity: 'high', title: '無人ジョブが Claude へフォールバック', evidence: [`${claudeFallback.length}件`, ...top], fixTask: `無人ジョブが Claude に落ちた理由(${top.join(', ')})を潰す。cheap-code 側の失敗原因を修正し、Claude フォールバックが opt-in のままであることを確認` }); }
-  const spawnFailed = usageRows.filter((row) => (row.provider === 'fallback' && Number(row.out) === 0 && SPAWN_FAILED.test(String(row.stderrTail || ''))) || (row.provider === 'fallback' && Array.isArray(row.chain) && row.chain.some((a) => a && (a.spawnFailed === true || SPAWN_FAILED.test(String(a.stderrTail || ''))))));
+  const spawnFailed = usageRows.filter((row) => row.provider === 'fallback' && Number(row.out) === 0 && SPAWN_FAILED.test(String(row.stderrTail || '')));
   if (spawnFailed.length) {
     const models = [...new Set(spawnFailed.map((row) => row.model || '不明'))].join(', ');
     const codes = [...new Set(spawnFailed.map((row) => (String(row.stderrTail || '').match(/\bE[A-Z]{4,}\b/) || ['不明'])[0]))].join(', ');
@@ -131,6 +131,17 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
   }
   const lowYield = usageRows.filter((row) => row.provider === 'fallback' && Number(row.secs) > 900 && Number(row.out) < 300);
   if (lowYield.length >= 2) { const models = [...new Set(lowYield.map((row) => row.model || '不明'))].join(', '); findings.push({ id: 'fallback_low_yield', severity: 'medium', title: 'フォールバックの低成果', evidence: [`${lowYield.length}件`, `model ${models}`], fixTask: `フォールバック先(${models})が長時間走って成果が無い。codex-fallback-order.json の順序と各バックエンドの実効性を見直す` }); }
+  const chainTimeout = usageRows.filter((row) => row.provider === 'fallback' && Array.isArray(row.chain)
+    && row.chain.some((a) => a && a.outcome === 'timeout'));
+  if (chainTimeout.length >= 2) {
+    const timeoutAttempts = chainTimeout.flatMap((row) => (row.chain || []).filter((a) => a && a.outcome === 'timeout'));
+    const backendsSet = new Set(timeoutAttempts.map((a) => a.backend).filter((b) => typeof b === 'string' && b !== ''));
+    const backends = backendsSet.size > 0 ? [...backendsSet].join(', ') : '不明';
+    const wastedSecs = Math.round(timeoutAttempts.reduce((sum, a) => sum + Number(a.secs || 0), 0));
+    findings.push({ id: 'fallback_chain_timeout', severity: 'medium', title: 'フォールバック連鎖のタイムアウト',
+      evidence: [`${chainTimeout.length}件`, `backend ${backends}`, `捨てた秒数 合計${wastedSecs}秒`],
+      fixTask: `フォールバック先(${backends})がタイムアウトして時間を捨てている。codex-fallback-order.json の順序を見直すか、そのバックエンドのタイムアウト秒数(fallbackBackendTimeoutSecs)を短くする` });
+  }
   const empty = usageRows
     .filter((row) => row.provider === 'codex' && Number(row.out) === 0)
     .map((source) => ({ reason: emptyOutputReason(source), stderrTail: source.stderrTail }))

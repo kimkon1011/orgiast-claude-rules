@@ -32,6 +32,7 @@ BACKUP = os.path.join(PROJECTS, "_deleted-backup")
 LOG = os.path.join(HOME, ".claude", "purge-hidden-sessions.log")
 LEDGER = os.path.join(HOME, ".claude", "hidden-sessions-ledger.json")
 CLOSED = os.path.join(HOME, ".claude", "closed-sessions.json")
+CLOSED_ARCHIVED = os.path.join(HOME, ".claude", "closed-sessions-archived.json")
 CURRENT = os.path.join(HOME, ".claude", "current-session.json")
 CURRENT_SESSIONS = os.path.join(HOME, ".claude", "current-sessions")
 HEARTBEAT = os.path.join(HOME, ".claude", "hidden-sessions-watcher.heartbeat")
@@ -44,6 +45,7 @@ else:
 SKIP_RECENT_SEC = 600
 CLOSED_DEST_TAG = "_closed"
 CLOSED_SKIP_RECENT_SEC = 45
+ARCHIVED_REARCHIVE_MAX = 5
 WATCH_INTERVAL = 30
 HEARTBEAT_STALE = 90
 
@@ -112,6 +114,24 @@ def drop_closed(sid):
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump({"ids": sorted(ids)}, f, indent=0)
     os.replace(tmp, CLOSED)
+
+def load_archived():
+    try:
+        data = json.load(open(CLOSED_ARCHIVED, encoding="utf-8"))
+        if isinstance(data, dict) and "entries" in data and isinstance(data["entries"], dict):
+            return data
+    except Exception:
+        pass
+    return {"entries": {}}
+
+def save_archived(data):
+    tmp = CLOSED_ARCHIVED + f".tmp{os.getpid()}"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=0)
+        os.replace(tmp, CLOSED_ARCHIVED)
+    except Exception as e:
+        log(f"FAIL: save_archived ({e})")
 
 def live_session_ids():
     ids = set()
@@ -224,7 +244,9 @@ def run_pass(state):
     if ledger != load_ledger():
         save_ledger(ledger)
     closed = load_closed()
-    if not ledger and not closed:
+    archived_data = load_archived()
+    archived_entries = archived_data.get("entries", {})
+    if not ledger and not closed and not archived_entries:
         return 0
 
     now = time.time()
@@ -265,6 +287,45 @@ def run_pass(state):
                 moved += 1
                 closed.discard(sid)
                 drop_closed(sid)
+                # 履歴へ記録
+                archived_data = load_archived()
+                entries = archived_data.setdefault("entries", {})
+                if sid not in entries or not isinstance(entries[sid], dict):
+                    entries[sid] = {"count": 0, "last": ""}
+                new_count = entries[sid].get("count", 0) + 1
+                entries[sid]["count"] = new_count
+                entries[sid]["last"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+                save_archived(archived_data)
+
+        # (0-re) 履歴 ID の再退避
+        archived_data = load_archived()
+        archived_entries = archived_data.get("entries", {})
+        for sid, info in list(archived_entries.items()):
+            if sid in live_sids:
+                continue
+            if sid in closed:
+                continue
+            if not isinstance(info, dict):
+                continue
+            count = info.get("count", 0)
+            if count >= ARCHIVED_REARCHIVE_MAX:
+                continue
+            src = os.path.join(pd, sid + ".jsonl")
+            if not os.path.exists(src):
+                continue
+            if now - os.path.getmtime(src) < CLOSED_SKIP_RECENT_SEC:
+                continue
+            if archive(proj, sid, os.path.join(BACKUP, CLOSED_DEST_TAG), "reclosed"):
+                moved += 1
+                new_count = count + 1
+                archived_data = load_archived()
+                entries = archived_data.setdefault("entries", {})
+                if sid not in entries or not isinstance(entries[sid], dict):
+                    entries[sid] = {"count": 0, "last": ""}
+                entries[sid]["count"] = new_count
+                entries[sid]["last"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+                save_archived(archived_data)
+                log(f"rearchived: {sid} (count={new_count})")
         # (1) 台帳/hidden ベースの退避（ユーザーが削除したセッション）
         for sid in ledger:
             if sid in closed or sid in live_sids:
@@ -371,6 +432,16 @@ def main():
         ledger = load_ledger()
         hit = {i for i in ledger if i.startswith(prefix)}
         save_ledger(ledger - hit)
+        
+        # closed-sessions-archived.json からも落とす
+        archived_data = load_archived()
+        entries = archived_data.get("entries", {})
+        hit_archived = [sid for sid in entries if sid.startswith(prefix)]
+        for sid in hit_archived:
+            entries.pop(sid, None)
+        if hit_archived:
+            save_archived(archived_data)
+            
         print(f"forgot {len(hit)}: {sorted(hit)}")
         return
     if "--watch" in sys.argv:

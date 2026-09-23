@@ -68,7 +68,7 @@ if (!ids.includes(sessionId)) {
 const python = resolvePython();
 if (python) spawnSync(python, [purgePath], { stdio: "ignore", windowsHide: true });
 
-console.log(`closed: ${sessionId} -> will disappear from the session list within ~45s (no /clear needed)`);
+console.log(`closed: ${sessionId} -> このタブを ✕ で閉じてください。閉じた後 45 秒で一覧から消えます（/clear は不要）`);
 
 if (!process.argv.includes("--no-launch")) {
   try {

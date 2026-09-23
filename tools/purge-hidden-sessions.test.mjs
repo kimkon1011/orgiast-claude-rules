@@ -103,3 +103,50 @@ test('並行する稼働中セッションを両方保護し、明示的に clos
   assert.ok(!fs.existsSync(path.join(project, `${first}.jsonl`)), 'closed 側は元の場所から move される');
   assert.ok(fs.existsSync(path.join(project, `${second}.jsonl`)), 'closed でない稼働中セッションは残る');
 });
+
+test('re-archives a closed session whose jsonl reappears after the first archive', (t) => {
+  const python = resolvePython();
+  if (!python) return t.skip('Python interpreter is not available');
+
+  const fakehome = fs.mkdtempSync(path.join(os.tmpdir(), 'purge-hidden-sessions-rearchive-'));
+  t.after(() => fs.rmSync(fakehome, { recursive: true, force: true }));
+  const claude = path.join(fakehome, '.claude');
+  const project = path.join(claude, 'projects', 'testproj');
+  fs.mkdirSync(project, { recursive: true });
+
+  const sid = '77777777-7777-4777-8777-777777777777';
+  const jsonlPath = path.join(project, `${sid}.jsonl`);
+  fs.writeFileSync(jsonlPath, EMPTY_JSONL);
+  const old = new Date(Date.now() - 120_000);
+  fs.utimesSync(jsonlPath, old, old);
+
+  fs.writeFileSync(path.join(claude, 'closed-sessions.json'), JSON.stringify({ ids: [sid] }));
+
+  const env = { ...process.env, HOME: fakehome, USERPROFILE: fakehome };
+
+  // First run
+  let result = spawnSync(python, [purgeScript], { encoding: 'utf8', env });
+  assert.equal(result.status, 0, result.stderr);
+
+  const closedDest = path.join(claude, 'projects', '_deleted-backup', '_closed', 'testproj', `${sid}.jsonl`);
+  assert.ok(fs.existsSync(closedDest), '1回目の実行で退避される');
+  assert.ok(!fs.existsSync(jsonlPath), '元のファイルは消える');
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(claude, 'closed-sessions.json'), 'utf8')).ids, [], 'closed-sessions.json から ids が消える');
+
+  const archived = JSON.parse(fs.readFileSync(path.join(claude, 'closed-sessions-archived.json'), 'utf8'));
+  assert.equal(archived.entries[sid].count, 1, 'count が 1 になる');
+
+  // Second run: jsonl reappears
+  fs.writeFileSync(jsonlPath, EMPTY_JSONL);
+  fs.utimesSync(jsonlPath, old, old);
+
+  result = spawnSync(python, [purgeScript], { encoding: 'utf8', env });
+  assert.equal(result.status, 0, result.stderr);
+
+  const closedDestDup = path.join(claude, 'projects', '_deleted-backup', '_closed', 'testproj', `${sid}.jsonl.dup1`);
+  assert.ok(fs.existsSync(closedDestDup), '2回目の実行で dup1 として退避される');
+  assert.ok(!fs.existsSync(jsonlPath), '元のファイルは再び消える');
+
+  const archived2 = JSON.parse(fs.readFileSync(path.join(claude, 'closed-sessions-archived.json'), 'utf8'));
+  assert.equal(archived2.entries[sid].count, 2, 'count が 2 になる');
+});

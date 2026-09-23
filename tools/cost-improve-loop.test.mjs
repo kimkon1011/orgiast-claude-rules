@@ -222,7 +222,6 @@ test('8. auto-local only runs commands that are present in the ALLOWED_LOCAL_COM
   // We manually run the main execution block logic
   const ALLOWED = [
     'node tools/tool-adoption-check.mjs --force',
-    'node tools/onboarding-sync.mjs --force',
     'node tools/register-hooks.mjs --hooks-only'
   ];
 
@@ -264,6 +263,21 @@ test('9. human escalation is neither worked nor shown in the verification sectio
     assert.ok(!result.reportText.split('### ③')[1].split('### ④')[0].includes('PC-human'));
     assert.ok(result.reportText.split('### ④')[1].includes('PC-human'));
   } finally { delete process.env.ORGIAST_HOME; cleanTempDir(tempDir); }
+});
+
+test('9-2. unused_provider is escalated to human mode and has no command', () => {
+  const decision = decideActions({
+    violations: [{
+      kind: 'unused_provider',
+      pc: 'self',
+      evidence: "Provider 'kimi' is configured but has 0 calls in last 7 days"
+    }],
+    state: { actions: [] },
+    now: NOW
+  });
+  assert.strictEqual(decision.actions[0].mode, 'human');
+  assert.strictEqual(decision.actions[0].result, 'escalated');
+  assert.strictEqual(decision.actions[0].command, undefined);
 });
 
 test('10. roster-only rows are excluded without violations and summarized', async () => {

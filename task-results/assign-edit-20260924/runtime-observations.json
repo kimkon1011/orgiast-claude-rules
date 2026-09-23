@@ -1,0 +1,21 @@
+{
+  "externalRequests": 0,
+  "observations": [
+    {
+      "panelFails": false,
+      "insertedRowsAfterTwoCalls": 2,
+      "notificationsStubbed": 2,
+      "secondMarkedRevised": true,
+      "documentReadCalls": 0,
+      "firstInsertedValue": "保存時のイベント担当"
+    },
+    {
+      "panelFails": true,
+      "insertedRowsAfterTwoCalls": 4,
+      "notificationsStubbed": 2,
+      "secondMarkedRevised": true,
+      "documentReadCalls": 0,
+      "firstInsertedValue": "保存時の施工担当"
+    }
+  ]
+}

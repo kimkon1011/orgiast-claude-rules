@@ -1,0 +1,11 @@
+{
+  "checkedAt": "2026-09-23T19:18:04.182578+00:00",
+  "initialStatus": 401,
+  "status": 200,
+  "operation": "GET Apps Script project content",
+  "remoteWrites": 0,
+  "fileCount": 95,
+  "sourceSha256": "2b75db596a4e093425ca2ba4c48633517f03e7e6be0a0cb3dd23cff986e1d372",
+  "markerHelperPresent": false,
+  "markerTextPresent": false
+}

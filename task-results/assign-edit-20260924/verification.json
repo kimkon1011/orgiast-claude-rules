@@ -1,0 +1,86 @@
+{
+  "task": "fb-1789352447404-n2nilskz アサイン依頼の修正",
+  "checkedAt": "2026-09-23T19:16:13.910627+00:00",
+  "completed": false,
+  "source": {
+    "nextSession": "C:\\Users\\uers\\.claude\\next-session.md:20-21",
+    "ledgerStatus": "new",
+    "commit": "4210734fd9f47a4b0cd2f59a2a87be8944d0c836"
+  },
+  "liveRead": {
+    "readOnlyProject": true,
+    "initialStatus": 401,
+    "credentialRefresh": "in-memory only",
+    "fileCount": 95,
+    "files": [
+      {
+        "name": "CommandQueue",
+        "sha256": "02d7e38837bf761d2a732653ab35ad71cfcc7e263b465ae130c7a94957d9b3ff",
+        "draft": false,
+        "sendDraft": false
+      },
+      {
+        "name": "MasterPanel",
+        "sha256": "0b5c435497d508a71975064b3a6f3e2423a5ba59055dbd12da0b043dfecd1634",
+        "draft": false,
+        "sendDraft": false
+      },
+      {
+        "name": "Phase_AssignRequest",
+        "sha256": "7229d322a070490dee6cd7fef92f09f5c1638eb4a2b8a4f4a8fa2fb534a5d6d1",
+        "draft": false,
+        "sendDraft": false
+      }
+    ]
+  },
+  "unitTests": {
+    "passed": 6,
+    "failed": 0
+  },
+  "runtime": {
+    "externalRequests": 0,
+    "observations": [
+      {
+        "panelFails": false,
+        "insertedRowsAfterTwoCalls": 2,
+        "notificationsStubbed": 2,
+        "secondMarkedRevised": true,
+        "documentReadCalls": 0,
+        "firstInsertedValue": "保存時のイベント担当"
+      },
+      {
+        "panelFails": true,
+        "insertedRowsAfterTwoCalls": 4,
+        "notificationsStubbed": 2,
+        "secondMarkedRevised": true,
+        "documentReadCalls": 0,
+        "firstInsertedValue": "保存時の施工担当"
+      }
+    ]
+  },
+  "findings": [
+    "本番3ファイルに下書き作成・送信の参照がなく未配布。",
+    "sendDraft は保存済み rows を使用し、Doc の修正をシート行へ読み戻さない。",
+    "入力欄の読取例外時に全行を登録することをスタブで再現。除外対象も送信される。",
+    "車両判別の純関数は定義のみで、本処理から呼び出されていない。マニュアル文言は生成プロンプトに渡される。",
+    "下書き生成も ClaudeClient_call を呼ぶため課金なしの実機検証はできない。"
+  ],
+  "notPerformed": [
+    "本番更新",
+    "Discord送信",
+    "有料APIによる下書き生成",
+    "resolve done",
+    "他セッション差分の取込み"
+  ],
+  "blockers": [
+    "外部送信・課金禁止のため配布および指定の実機送信検証は未実施。",
+    "修正内容の反映と除外指定の失敗時挙動に未解決の問題がある。",
+    "指定 .claude 結果保存先は書込許可範囲外。次回依頼の原文と台帳は未変更。"
+  ],
+  "artifacts": {
+    "unit-tests.tap": "dd674f3a039986f3fc3de2b7171ff4a7ce361c57d39d76fefbefc218907e5cc4",
+    "runtime-observations.json": "a9a9aa94ced50d5db1dbbbd572d899f35dcb6214ed2b29904af98d6ee2a9afaa",
+    "verify-send.mjs": "5c5624279a6903fdccc96374804317707e641d8fe8b48d18a5a967ac7d6ffdb4",
+    "live-read.json": "234c8171c5c98aa64a8f2cfb9d0916a50f7768354e5b3967a75c89aebcf83601"
+  }
+}

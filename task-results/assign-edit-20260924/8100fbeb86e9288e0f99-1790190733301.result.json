@@ -1,0 +1,8 @@
+{
+  "completed": false,
+  "summary": "本番を直接取得し、下書き作成・送信が未配布と確認。既存6テスト成功。ただしDocの修正が登録行へ反映されず、入力読取失敗時に全行を送信する挙動を通信なしで再現。外部送信・課金禁止により配布と実機送信検証は未実施。指定の .claude 保存先は書込許可範囲外のため作業フォルダーに代替保存。",
+  "evidence": {
+    "file": "/mnt/c/Users/uers/orgiast-main/task-results/assign-edit-20260924/verification.json",
+    "sha256": "2618da6dd302053da433784dc20305b99ddfc90135b0f4f1d4d4fc34cf2e9a38"
+  }
+}

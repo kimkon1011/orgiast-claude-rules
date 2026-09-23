@@ -1,0 +1,26 @@
+{
+  "readOnlyProject": true,
+  "initialStatus": 401,
+  "credentialRefresh": "in-memory only",
+  "fileCount": 95,
+  "files": [
+    {
+      "name": "CommandQueue",
+      "sha256": "02d7e38837bf761d2a732653ab35ad71cfcc7e263b465ae130c7a94957d9b3ff",
+      "draft": false,
+      "sendDraft": false
+    },
+    {
+      "name": "MasterPanel",
+      "sha256": "0b5c435497d508a71975064b3a6f3e2423a5ba59055dbd12da0b043dfecd1634",
+      "draft": false,
+      "sendDraft": false
+    },
+    {
+      "name": "Phase_AssignRequest",
+      "sha256": "7229d322a070490dee6cd7fef92f09f5c1638eb4a2b8a4f4a8fa2fb534a5d6d1",
+      "draft": false,
+      "sendDraft": false
+    }
+  ]
+}

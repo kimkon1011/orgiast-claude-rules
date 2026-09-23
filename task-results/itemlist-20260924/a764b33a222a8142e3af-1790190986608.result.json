@@ -1,0 +1,8 @@
+{
+  "completed": false,
+  "summary": "本番を直接取得し修正未反映を確認。既存テスト12件成功。本番コードの上側空行選択と、修正版のマーカー読取失敗時の同じ挙動を再現。外部送信禁止のため本番更新は未実施。実物シートの閲覧は承認不可で拒否され未検証。指定結果パスは書込許可範囲外のため、この作業ツリーに代替保存。",
+  "evidence": {
+    "file": "/mnt/c/Users/uers/orgiast-main/task-results/itemlist-20260924/verification.json",
+    "sha256": "257e3a25cb14bffa9ec45d1d5acc90ff0cfdd75ad4e83abf2bd4a6daa7fd3666"
+  }
+}

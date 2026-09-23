@@ -1,0 +1,8 @@
+{
+  "fixture": "4行目のB列に追加マーカー、3行目と5行目に空行",
+  "liveSelectedRow": 3,
+  "candidateSelectedRow": 5,
+  "candidateMarkerReadFailureRow": 3,
+  "remoteWrites": 0,
+  "actualSpreadsheetTested": false
+}

@@ -285,6 +285,100 @@ test('第1フォールバックがタイムアウトしたら第2バックエン
   assert.match(result.stderr, /タイムアウトしたため次のバックエンドへ/);
 });
 
+test('フォールバック連鎖の各試行が台帳1行の chain に残る', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-chain-a-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const mockResults = [
+    { status: 1, output: "You've hit your usage limit. Please try again later.", stderr: '' },
+    { status: 1, output: '', stderr: 'rate limit' },
+    { status: 124, output: '', stderr: '', timedOut: true },
+    { status: 0, output: 'Qwen Code CLI has successfully completed.', stderr: '' }
+  ];
+  const result = run(['--force-native', '--cwd', home, '指示内容'], {
+    home,
+    env: {
+      CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults),
+      GEMINI_API_KEY: 'gemini-test',
+      DEEPSEEK_API_KEY: 'deepseek-test',
+      ZAI_API_KEY: 'zai-test'
+    }
+  });
+  assert.equal(result.status, 0);
+
+  const ledgerFile = path.join(home, '.claude', 'executor-usage.jsonl');
+  const rows = fs.readFileSync(ledgerFile, 'utf8').trim().split('\n').map(JSON.parse);
+  const fallbackRows = rows.filter(r => r.provider === 'fallback');
+
+  assert.equal(fallbackRows.length, 1);
+  const row = fallbackRows[0];
+  assert.ok(row.chain);
+  assert.equal(row.chain.length, 3);
+
+  assert.equal(row.chain[0].outcome, 'exhausted');
+  assert.equal(row.chain[1].outcome, 'timeout');
+  assert.equal(row.chain[1].timedOut, true);
+  assert.equal(row.chain[2].outcome, 'ok');
+  assert.equal(row.chain[2].status, 0);
+
+  for (const item of row.chain) {
+    assert.equal(typeof item.backend, 'string');
+    assert.equal(typeof item.model, 'string');
+    assert.equal(typeof item.secs, 'number');
+    assert.equal(typeof item.stderrTail, 'string');
+  }
+
+  assert.equal(row.attempts, 1);
+});
+
+test('単一バックエンドで成功した場合 chain は1要素', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-chain-b-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const mockResults = [
+    { status: 1, output: "You've hit your usage limit. Please try again later.", stderr: '' },
+    { status: 0, output: 'done', stderr: '' }
+  ];
+  const result = run(['--force-native', '--cwd', home, '指示内容'], {
+    home,
+    env: {
+      CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults),
+      GEMINI_API_KEY: '',
+      DEEPSEEK_API_KEY: 'sk-test'
+    }
+  });
+  assert.equal(result.status, 0);
+
+  const ledgerFile = path.join(home, '.claude', 'executor-usage.jsonl');
+  const rows = fs.readFileSync(ledgerFile, 'utf8').trim().split('\n').map(JSON.parse);
+  const fallbackRows = rows.filter(r => r.provider === 'fallback');
+
+  assert.equal(fallbackRows.length, 1);
+  const row = fallbackRows[0];
+  assert.ok(row.chain);
+  assert.equal(row.chain.length, 1);
+  assert.equal(row.chain[0].outcome, 'ok');
+});
+
+test('codex 行には chain キーが付かない', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-chain-c-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const result = run(['--force-native', '--cwd', home, '--model', 'sol', '説明して'], {
+    home,
+    env: { CODEX_DO_MOCK_RESULTS: JSON.stringify([
+      { status: 1, output: '', stderr: 'failed to lookup address information' },
+      { status: 0, output: 'done', stderr: '' },
+    ]) },
+  });
+  assert.equal(result.status, 0);
+
+  const ledgerFile = path.join(home, '.claude', 'executor-usage.jsonl');
+  const rows = fs.readFileSync(ledgerFile, 'utf8').trim().split('\n').map(JSON.parse);
+  const codexRows = rows.filter(r => r.provider === 'codex');
+
+  assert.equal(codexRows.length, 1);
+  const row = codexRows[0];
+  assert.equal('chain' in row, false);
+});
+
 test('Codex もフォールバック(Qwen Code) も失敗した場合は非ゼロで終了する', () => {
   const mockResults = [
     { status: 1, output: "You've hit your usage limit. Please try again later.", stderr: "" },

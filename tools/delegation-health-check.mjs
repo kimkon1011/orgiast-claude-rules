@@ -121,7 +121,7 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
   });
   const claudeFallback = usageRows.filter((row) => row.provider === 'claude-fallback');
   if (claudeFallback.length) { const top = reasonTop(claudeFallback); findings.push({ id: 'unattended_claude_fallback', severity: 'high', title: '無人ジョブが Claude へフォールバック', evidence: [`${claudeFallback.length}件`, ...top], fixTask: `無人ジョブが Claude に落ちた理由(${top.join(', ')})を潰す。cheap-code 側の失敗原因を修正し、Claude フォールバックが opt-in のままであることを確認` }); }
-  const spawnFailed = usageRows.filter((row) => row.provider === 'fallback' && Number(row.out) === 0 && SPAWN_FAILED.test(String(row.stderrTail || '')));
+  const spawnFailed = usageRows.filter((row) => (row.provider === 'fallback' && Number(row.out) === 0 && SPAWN_FAILED.test(String(row.stderrTail || ''))) || (row.provider === 'fallback' && Array.isArray(row.chain) && row.chain.some((a) => a && (a.spawnFailed === true || SPAWN_FAILED.test(String(a.stderrTail || ''))))));
   if (spawnFailed.length) {
     const models = [...new Set(spawnFailed.map((row) => row.model || '不明'))].join(', ');
     const codes = [...new Set(spawnFailed.map((row) => (String(row.stderrTail || '').match(/\bE[A-Z]{4,}\b/) || ['不明'])[0]))].join(', ');

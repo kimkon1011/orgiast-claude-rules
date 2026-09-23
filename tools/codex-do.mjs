@@ -582,9 +582,10 @@ let result;
 let executorName = 'codex';
 let fallbackBackend = null;
 let lastBackend = null;
+let fallbackChain = [];
 
 let escalated = false;
-function recordUsage(result, modelName, seconds, provider = 'codex', attempts = 1) {
+function recordUsage(result, modelName, seconds, provider = 'codex', attempts = 1, chain = null) {
   try {
     const ledger = path.join(home, '.claude', 'executor-usage.jsonl');
     fs.mkdirSync(path.dirname(ledger), { recursive: true });
@@ -599,6 +600,7 @@ function recordUsage(result, modelName, seconds, provider = 'codex', attempts = 
       stderrTail: String(result?.stderr || '').replace(/\s+/g, ' ').trim().slice(-200),
       fastFail: result?.timedOut !== true && Number(result?.status) !== 0 && (result?.outputChars || 0) === 0,
       attempts,
+      ...(Array.isArray(chain) && chain.length ? { chain } : {}),
       secs: Number(seconds.toFixed(3))
     })}\n`, 'utf8');
   } catch {}
@@ -773,7 +775,9 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable) {
       result.status = 1;
     } else {
       const backendTimeout = fallbackBackendTimeoutSecs(timeoutSeconds);
+      fallbackChain = [];
       for (const backend of backends) {
+        const attemptStarted = Date.now();
         lastBackend = backend;
         console.log(`[codex-do] fallback backend=${backend.name} model=${backend.model}`);
         result = backend.kind === 'gemini'
@@ -791,10 +795,35 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable) {
                 shell: process.platform === 'win32',
                 timeoutSecs: backendTimeout
               });
+        const originalStatus = result.status;
         if (result.status === null) {
           console.error(`[codex-do] Failed to spawn ${backend.name} fallback:`, result.error);
           result.status = 1;
         }
+        const spawnFailed = originalStatus === null;
+        let outcome = 'failed';
+        if (spawnFailed) {
+          outcome = 'spawn_failed';
+        } else if (result.timedOut === true) {
+          outcome = 'timeout';
+        } else if (result.status === 0) {
+          outcome = 'ok';
+        } else if (isBackendExhausted(result.output, result.stderr)) {
+          outcome = 'exhausted';
+        }
+
+        fallbackChain.push({
+          backend: backend.name,
+          model: backend.model,
+          status: result.status ?? null,
+          timedOut: result.timedOut === true,
+          spawnFailed,
+          out: Math.ceil((result.outputChars || 0) / 4),
+          secs: Number(((Date.now() - attemptStarted) / 1000).toFixed(3)),
+          stderrTail: String(result.stderr || '').replace(/\s+/g, ' ').trim().slice(-200),
+          outcome
+        });
+
         if (result.timedOut) {
           console.error(`[codex-do] backend=${backend.name} が ${backendTimeout} 秒でタイムアウトしたため次のバックエンドへ移ります`);
           continue;
@@ -841,7 +870,7 @@ if (quotaCheck.matched && executorName === 'fallback' && result?.status !== 0) {
   try { writeCodexCooldown(quotaResetUntil, undefined, 'usage_limit_no_fallback'); } catch {}
 }
 if (executorName === 'fallback') {
-  recordUsage(result, `${reportedFallbackBackend?.name ?? 'unknown'}/${reportedFallbackBackend?.model ?? 'unknown'}`, secs, 'fallback');
+  recordUsage(result, `${reportedFallbackBackend?.name ?? 'unknown'}/${reportedFallbackBackend?.model ?? 'unknown'}`, secs, 'fallback', 1, fallbackChain);
 }
 
 console.log(`[codex-do] executor=${executorName}${executorName === 'fallback' ? `:${reportedFallbackBackend?.name ?? 'unknown'} (理由: ${fallbackReason})` : ''}`);

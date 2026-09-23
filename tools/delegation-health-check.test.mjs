@@ -242,6 +242,25 @@ test('spawn エラーでない fallback の単発失敗は fallback_spawn_failed
   assert.equal(findings[0].id, 'healthy');
 });
 
+test('途中バックエンドの spawn 失敗が chain にあれば最終成功でも fallback_spawn_failed を出す', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', row({
+    t: '2026-09-09T11:00:00Z',
+    provider: 'fallback',
+    model: 'cheap-code:deepseek/deepseek-v4-flash',
+    out: 500,
+    status: 0,
+    secs: 30,
+    stderrTail: '',
+    chain: [
+      { backend: 'gemini-cli', model: 'x', status: 1, timedOut: false, spawnFailed: true, out: 0, secs: 0.1, stderrTail: 'Error: spawn ENAMETOOLONG', outcome: 'spawn_failed' },
+      { backend: 'cheap-code', model: 'y', status: 0, timedOut: false, spawnFailed: false, out: 500, secs: 29, stderrTail: '', outcome: 'ok' }
+    ]
+  }));
+  const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
+  assert.equal(findings.some((item) => item.id === 'fallback_spawn_failed'), true);
+});
+
 test('dry-run 相当では cooldown ファイルを変更しない', () => {
   const dir = home(), original = { codex: { until: NOW.getTime() + 9999, reason: 'usage_limit' } };
   write(dir, 'provider-cooldown.json', original); write(dir, 'codex-limit-history.jsonl', row({ t: '2026-09-09T10:00:00Z', reason: 'usage_limit' }));

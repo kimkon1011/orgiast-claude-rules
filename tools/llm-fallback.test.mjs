@@ -141,7 +141,7 @@ test('3候補が連続失敗した場合は候補自身の理由で3ホップを
 function temporaryFiles(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'llm-fallback-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  return { cooldownFile: path.join(dir, 'cooldown.json'), ledgerFile: path.join(dir, 'ledger.jsonl') };
+  return { cooldownFile: path.join(dir, 'cooldown.json'), ledgerFile: path.join(dir, 'ledger.jsonl'), budgetFile: path.join(dir, 'budget.json') };
 }
 
 test('本文に billing を含むだけの通常429(groqのTPD)は24時間にしない', async (t) => {
@@ -354,4 +354,68 @@ test('HTTP 400応答ではvalidateResponseを呼ばない', async (t) => {
   });
   assert.equal(result.candidate.provider, 'openrouter');
   assert.equal(validations, 1);
+});
+
+// --- A: 分窓トークン残量による「429 を受ける前」の事前迂回(2026-09-25 実測 TPM 8,000 が根拠) ---
+
+const bigRequestFor = (vendor) => ({ url: `https://${vendor}.invalid`, init: { body: 'x'.repeat(8000) } });
+
+test('残量が足りない候補は HTTP を叩かずに次候補へ回す(429 を受けてから避けない)', async (t) => {
+  const files = temporaryFiles(t);
+  fs.writeFileSync(files.budgetFile, JSON.stringify({ groq: { limitTokens: 8000, remainingTokens: 100, tokensResetAt: null, updatedAt: 0 } }));
+  const hit = [];
+  const result = await callWithFallback({
+    start: { provider: 'groq', model: 'openai/gpt-oss-120b' },
+    chain: [{ provider: 'cerebras', model: 'zai-glm-4.7' }],
+    payloadFor: async (c) => bigRequestFor(c.provider),
+    ...files,
+    now: () => 1_700_000_000_000,
+    fetchImpl: async (url) => { hit.push(url); return new Response('{}'); },
+  });
+  assert.deepEqual(hit, ['https://cerebras.invalid']); // groq は1度も叩かれない
+  assert.equal(result.candidate.provider, 'cerebras');
+  assert.equal(result.failover, true);
+});
+
+test('残量が足りていれば従来どおり先頭候補を使う', async (t) => {
+  const files = temporaryFiles(t);
+  fs.writeFileSync(files.budgetFile, JSON.stringify({ groq: { limitTokens: 8000, remainingTokens: 7000, tokensResetAt: null, updatedAt: 0 } }));
+  const result = await callWithFallback({
+    start: { provider: 'groq', model: 'openai/gpt-oss-120b' }, chain: [], payloadFor: async (c) => bigRequestFor(c.provider),
+    ...files, now: () => 1_700_000_000_000, fetchImpl: async () => new Response('{}'),
+  });
+  assert.equal(result.candidate.provider, 'groq');
+});
+
+test('窓が明けていれば古い残量で締め切らない', async (t) => {
+  const files = temporaryFiles(t);
+  fs.writeFileSync(files.budgetFile, JSON.stringify({ groq: { limitTokens: 8000, remainingTokens: 100, tokensResetAt: 1_000, updatedAt: 0 } }));
+  const result = await callWithFallback({
+    start: { provider: 'groq', model: 'openai/gpt-oss-120b' }, chain: [], payloadFor: async (c) => bigRequestFor(c.provider),
+    ...files, now: () => 2_000, fetchImpl: async () => new Response('{}'),
+  });
+  assert.equal(result.candidate.provider, 'groq');
+});
+
+test('応答ヘッダの残量を次回のために永続化する', async (t) => {
+  const files = temporaryFiles(t);
+  await callWithFallback({
+    start: { provider: 'groq', model: 'openai/gpt-oss-120b' }, chain: [], payloadFor: requestFor,
+    ...files, now: () => 1_700_000_000_000,
+    fetchImpl: async () => new Response('{}', { headers: { 'x-ratelimit-limit-tokens': '8000', 'x-ratelimit-remaining-tokens': '7927', 'x-ratelimit-reset-tokens': '547ms' } }),
+  });
+  const store = JSON.parse(fs.readFileSync(files.budgetFile, 'utf8'));
+  assert.equal(store.groq.remainingTokens, 7927);
+  assert.equal(store.groq.limitTokens, 8000);
+  assert.equal(store.groq.tokensResetAt, 1_700_000_000_000 + 547);
+});
+
+test('残量ヘッダを返さない provider は素通し(既存挙動を変えない)', async (t) => {
+  const files = temporaryFiles(t);
+  const result = await callWithFallback({
+    start: { provider: 'cerebras', model: 'zai-glm-4.7' }, chain: [], payloadFor: async (c) => bigRequestFor(c.provider),
+    ...files, now: () => 1_700_000_000_000, fetchImpl: async () => new Response('{}'),
+  });
+  assert.equal(result.candidate.provider, 'cerebras');
+  assert.equal(fs.existsSync(files.budgetFile), false); // 書くものが無ければファイルも作らない
 });

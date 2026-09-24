@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { budgetVerdict, estimateTokens, noteResponse, readBudget, writeBudget } from './rate-budget.mjs';
 
 export const FALLBACK_CHAIN = Object.freeze([
   { provider: 'groq', model: 'openai/gpt-oss-120b' },
@@ -98,7 +99,7 @@ function reasonForLog(reason, maxLength = 140) {
   return singleLine.length <= maxLength ? singleLine : `${singleLine.slice(0, maxLength - 1)}…`;
 }
 
-export async function callWithFallback({ start, chain = FALLBACK_CHAIN, payloadFor, fetchImpl = fetch, onAttempt, onFailover, validateResponse, sleepImpl = defaultSleep, cooldownFile, ledgerFile, now = () => Date.now() }) {
+export async function callWithFallback({ start, chain = FALLBACK_CHAIN, payloadFor, fetchImpl = fetch, onAttempt, onFailover, validateResponse, sleepImpl = defaultSleep, cooldownFile, ledgerFile, budgetFile, now = () => Date.now() }) {
   const home = process.env.ORGIAST_HOME || os.homedir();
   const timestamp = now();
   const cost = dailyCost(ledgerFile || path.join(home, '.claude', 'executor-usage.jsonl'), timestamp);
@@ -178,6 +179,13 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, payloadF
     try { fs.mkdirSync(path.dirname(cooldownPath), { recursive: true }); fs.writeFileSync(cooldownPath, `${JSON.stringify(cooldowns, null, 2)}\n`); } catch {}
   }
 
+  // 分窓トークン残量の永続バケット(A: 429 を受ける前に絞る / C: プロセス間で同じバケットを共有)。
+  // 429 になってから cooldown で避けるのでは遅い。残量が足りない候補は投げる前に落とし、
+  // 連鎖の次の候補(実測では cerebras が定額 $0)へ回す。
+  // cooldown と同じ多重防御: テストが budgetFile を渡し忘れても実環境の受け皿を触らない。
+  const useBudget = budgetFile != null || !process.env.NODE_TEST_CONTEXT;
+  const budgetPath = budgetFile || path.join(home, '.claude', 'provider-budget.json');
+
   const failures = [];
   const requests = new Map();
   async function requestAt(index) {
@@ -198,6 +206,16 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, payloadF
     let lastAttempt = 0;
     const request = await requestAt(candidateIndex);
     if (!request) continue;
+    // 候補ごとに読み直す。並列プロセスが直前に書いた残量を取りこぼさないため(C)。
+    const budgetStore = useBudget ? readBudget(budgetPath) : {};
+    const verdict = useBudget
+      ? budgetVerdict({ store: budgetStore, provider: candidate.provider, neededTokens: estimateTokens(request), now: now() })
+      : { allow: true };
+    if (!verdict.allow) {
+      skipped.push({ provider: candidate.provider, model: candidate.model, reason: verdict.reason });
+      console.error(`[budget] ${candidate.provider} はスキップ (${verdict.reason})`);
+      continue;
+    }
     let lastReason = '';
     for (let attempt = 0; attempt < 3; attempt++) {
       lastAttempt = attempt;
@@ -208,6 +226,8 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, payloadF
       try {
         response = await fetchImpl(request.url, request.init);
         status = response.status;
+        // 残量ヘッダを下限として記録する。次に同じ provider を選ぶ時、この値で事前に絞れる。
+        if (useBudget && response?.headers && noteResponse(budgetStore, candidate.provider, response.headers, now())) writeBudget(budgetPath, budgetStore);
         if (response.ok) {
           if (validateResponse) {
             const json = await response.clone().json().catch(() => null);

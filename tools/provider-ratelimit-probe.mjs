@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { readEnvValue } from './env-kv.mjs';
 import { isEntry } from './is-entry.mjs';
+import { parseRateLimitHeaders } from './rate-budget.mjs';
 
 // endpoint は llm-ask.mjs と同じものを使う。keyEnv/keyFile も同書式。
 export const PROBE_PROVIDERS = Object.freeze({
@@ -19,39 +20,15 @@ export const PROBE_PROVIDERS = Object.freeze({
   kimi: { base: 'https://api.moonshot.ai/v1/chat/completions', keyEnv: 'MOONSHOT_API_KEY', keyFile: 'kimi-api.env', model: 'kimi-k3' },
 });
 
-const HEADER_KEYS = Object.freeze({
-  limitRequests: 'x-ratelimit-limit-requests',
-  limitTokens: 'x-ratelimit-limit-tokens',
-  remainingRequests: 'x-ratelimit-remaining-requests',
-  remainingTokens: 'x-ratelimit-remaining-tokens',
-  resetRequests: 'x-ratelimit-reset-requests',
-  resetTokens: 'x-ratelimit-reset-tokens',
-});
-
-function numeric(value) {
-  if (value == null || value === '') return null;
-  const n = Number(String(value).trim());
-  return Number.isFinite(n) ? n : null;
-}
+// ヘッダ解釈は rate-budget.mjs が正本(依存ゼロ側に置く)。ここは re-export して
+// 既存の呼び出し元・テストの import 先を変えない。
+export { parseRateLimitHeaders };
 
 // ヘッダは Headers でも素の object でも受ける(テスト・プロキシ経由の両対応)。
 function headerValue(headers, name) {
   if (!headers) return null;
   const value = typeof headers.get === 'function' ? headers.get(name) : headers[name];
   return value == null ? null : String(value);
-}
-
-// 上限系は数値化する。reset は "547ms" のような文字列なので生のまま残す(単位が実装依存のため)。
-export function parseRateLimitHeaders(headers) {
-  const raw = {};
-  const out = { raw };
-  for (const [field, name] of Object.entries(HEADER_KEYS)) {
-    const value = headerValue(headers, name);
-    if (value == null) continue;
-    raw[name] = value;
-    out[field] = field.startsWith('reset') ? value : numeric(value);
-  }
-  return Object.keys(raw).length ? out : null;
 }
 
 export function loadProbeKey(provider, { home = process.env.ORGIAST_HOME || os.homedir(), env = process.env } = {}) {

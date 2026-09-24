@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
+import { syncClaims } from './session-claims.mjs';
 
 // 2026-09-17: 無関係な目的同士の実測最大0.04。その5倍を安全側の閾値に採用。
 export const COLLISION_THRESHOLD = 0.20;
@@ -46,7 +47,16 @@ function localMinute(timestamp) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+
+// 着手印の台帳を更新する。この hook は SessionStart / UserPromptSubmit に登録済みなので、
+// 目的を宣言した次の発話で claim が自動的に載る（手で印を書く運用にしない）。
+// 台帳が書けなくても衝突警告の邪魔をしないよう、失敗は完全に握り潰す。
+function persistClaimsQuietly() {
+  try { syncClaims(path.join(os.homedir(), '.claude')); } catch { /* fail-open */ }
+}
+
 async function main() {
+  persistClaimsQuietly();
   try {
     if (process.argv.includes('--help')) return;
     const raw = await readStdinWithTimeout();

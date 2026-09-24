@@ -106,5 +106,41 @@
     "route": "恒久修正は当ターン内に実装まで終える。next-session.md に設計だけを積んで次セッションへ送らない（配布待ち・マージ待ち・fork 制約は未着手の理由にならない）。実装は codex-do.mjs を前景・単発で回し（--prompt-file / --cwd / --timeout）、WSL 不在で codex 経路が起動しない PC では内蔵フォールバック(Gemini/DeepSeek)→不可なら Claude 直で実装する。GitHub は gh CLI で fork→PR→CI green→gh pr merge まで当ターンで進め、user にはマージ1回だけを残す。実装できなかった場合は残作業を1行で記録し、断定で『完了』と書かない。",
     "confidence": "high",
     "source": "handoff-audit-nightly:13755f2bc1e6504a87e553bf97fc9c06c4b4ded1a18bf449252fe56ac0f03553"
+  },
+  {
+    "pattern": "経営判断(価格改定)を含む修正で方針をuserに選ばせて次セッションへ送る",
+    "route": "恒久修正は当ターン内に実装まで終える。next-session.md に設計だけを積んで次セッションへ送らない（配布待ち・マージ待ち・fork 制約は未着手の理由にならない）。実装は codex-do.mjs を前景・単発で回し（--prompt-file / --cwd / --timeout）、WSL 不在で codex 経路が起動しない PC では内蔵フォールバック(Gemini/DeepSeek)→不可なら Claude 直で実装する。GitHub は gh CLI で fork→PR→CI green→gh pr merge まで当ターンで進め、user にはマージ1回だけを残す。実装できなかった場合は残作業を1行で記録し、断定で『完了』と書かない。",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:1b680695e07c459bc6a46f772f25c15ec69e16964c6471f535b4f65026fda063"
+  },
+  {
+    "pattern": "DB側の適用状況とコード状況を切り分けて調査する(実装を止めずに進める)",
+    "route": "調査は Claude 側で完結し、user へ渡さない。①症状は GitHub Actions の一次情報で取る（`gh run list -R kimkon1011/aujust-sales-automation --limit 15 --json workflowName,conclusion,createdAt,databaseId,headSha` → 失敗は `gh run view <databaseId> --log-failed`。name を持たない workflow は `--workflow=\"proni-messages.yml\"` のように**ファイル名**で引く。表示名で引くと `could not find any workflows named …` で落ちる）②コード側の修復状況は `gh api \"repos/.../commits?since=…\"` と `gh pr view <N> --json title,state,mergedAt,body,files` で確定（PR本文に未適用migrationと検証残が書かれている）③DB側の適用状況は `gh run list --workflow=\"DB Migrate\"` と `gh secret list` で別系統として確認＝「コードは緑・DBは赤」を判別④実装だけを codex-do.mjs（前景・単発）へ渡し、検証は `gh run` の緑で行う⑤照会できない項目は「未確認」と書く（rule 4）。設計判断（(a)(b)どちらで直すか等）は rule 3 の4理由に該当しないため user に選ばせず Claude が決める（2026-09-22 実測: 元セッションは kim に選択を依頼した後、同じセッション内で自分で決めて実装させていた。残存真因は本番DB migration 未適用＝`SUPABASE_DB_URL` secret 不在で `DB Migrate` が `##[error]SUPABASE_DB_URL secret が未設定です` で失敗し続け、PR #114 a113d05 の修正が効かない状態だった。docs/proni-sync-troubleshoot-route.md）",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:1b680695e07c459bc6a46f772f25c15ec69e16964c6471f535b4f65026fda063"
+  },
+  {
+    "pattern": "実装完了後の残作業を選択肢提示してuserに選ばせ次セッションへ送る",
+    "route": "codex-do.mjs",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:cb90710ea80744673c923f5699cb24c599299d27fc7168fb68b1d1bbd566026a"
+  },
+  {
+    "pattern": "マイグレーション適用可否・DBロール所有者の確認",
+    "route": "supabase db push",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:1c017c0d4552eb5082b4956b50183ea015d9250960922556638558d5d8320a43"
+  },
+  {
+    "pattern": "価格関連の既存変更有無を他エージェント自己申告で判定",
+    "route": "Grep tool",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:42703a74b67db680669149c76397e6209494dfaf0664bcc1736db223465fc103"
+  },
+  {
+    "pattern": "価格改定・原価計算で係数や単価の入力をuserに聞く",
+    "route": "過去 transcript・.env.local・production bundle・keyserve から復元。user に再聞き禁止",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:ed30e1ad360110118214aac2573ea07b3fa503f9e6371fea8363138ab75f5160"
   }
 ]

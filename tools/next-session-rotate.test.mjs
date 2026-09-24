@@ -6,6 +6,20 @@ import path from 'node:path';
 import { rotate, planRotation, MAX_BYTES, writeHandoff } from './next-session-rotate.mjs';
 const now = new Date('2026-09-22T00:00:00Z');
 const block = (date, tasks) => `<!-- NEXT-SESSION v1 -->\n<!-- 更新: ${date} / cwd: /example -->\n## 残TODO\n${tasks}\n## 対象\ncontext only\n`;
+test('empty promotion queue removes stale PROMOTE tasks and preserves other items',()=>{
+ const source=block('2026-09-22','1. PROMOTE 待ち1件（先頭: foo）\n2. still open\n  PROMOTE 待ち2件（先頭: bar）');
+ const r=planRotation(source,{now,promotionPendingCount:0});
+ assert.doesNotMatch(r.text,/PROMOTE 待ち1件/); assert.equal(r.stats.stale,1);
+ assert.match(r.text,/still open/); assert.match(r.text,/PROMOTE 待ち2件/); assert.equal(r.stats.pending,1);
+});
+test('unknown promotion queue count preserves PROMOTE tasks by default',()=>{
+ const r=planRotation(block('2026-09-22','1. PROMOTE 待ち1件（先頭: foo）'),{now});
+ assert.match(r.text,/PROMOTE 待ち1件（先頭: foo）/); assert.equal(r.stats.stale,0); assert.equal(r.stats.pending,1);
+});
+test('nonempty promotion queue preserves PROMOTE tasks',()=>{
+ const r=planRotation(block('2026-09-22','1. PROMOTE 待ち1件（先頭: foo）'),{now,promotionPendingCount:2});
+ assert.match(r.text,/PROMOTE 待ち1件（先頭: foo）/); assert.equal(r.stats.stale,0); assert.equal(r.stats.pending,1);
+});
 test('archives exact original, preserves pending continuations and removes only explicit completion', () => {
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'rotate-')); const file=path.join(dir,'next-session.md');
  const source=block('2026-09-20','1. still open\n  done substep ✅\n2. ~~done~~ → ✅\n3. still open\n  done substep ✅\n4. [FB:test] new bug')+block('2026-08-01','1. old issue');

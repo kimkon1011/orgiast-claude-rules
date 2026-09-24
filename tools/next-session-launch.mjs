@@ -860,9 +860,12 @@ export async function launchNextSession(argv = [], io = {}) {
     }
     const message = String(error?.message ?? error);
     log(`[next-session] スキップ: 起動に失敗しました (${message})`);
-    // Claude Code の対話セッションでは Bash tool サンドボックス配下の exe spawn がすべて
-    // ENOENT になり、PATH や ComSpec の変更では直らない。退避は PowerShell tool から
-    // code.cmd を直接実行する（2026-09-17 実測）。PR #435 の経路は再試行しない。
+    // cwd が実在するのに spawn が ENOENT/spawn で落ちた時だけ退避を出す。2026-09-25 実測:
+    // 素の cmd.exe は実在 cwd で exit=0、ENOENT は cwd 不在の時だけ出る。`spawn cmd.exe
+    // ENOENT` の error.path は exe を指すが本体は cwd で、PATH/ComSpec を触っても直らない
+    // （cwd 起因は上の分岐で先に落ちる）。サンドボックスが cmd.exe を塞いでいる説
+    // (PR #435) は現在の環境では再現しないため再試行しない。退避は PowerShell tool から
+    // code.cmd を直接実行する（2026-09-17 実測）。
     if (cwd && (message.includes('ENOENT') || message.includes('spawn'))) {
       log(`[next-session] PowerShell 退避: ${buildRecoveryCommand({ codeCli, prompt: flags.prompt })}`);
     }

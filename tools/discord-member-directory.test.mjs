@@ -64,3 +64,10 @@ test('403 は例外にせず null を返す', async (t) => {
   assert.equal(result, null);
   assert.deepEqual(errors, ['discord-member-directory: メンバー検索が 403 で失敗（Bot の権限を確認）']);
 });
+
+test('persistCache=false は検索してもキャッシュを書き込まない', async (t) => {
+  const home = tempHome(t);
+  const result = await getDiscordMembers({ query: 'taro', home, persistCache: false, fetchImpl: async () => response(200, [{ user: { id: '1', username: 'taro' } }]) });
+  assert.equal(result[0].id, '1');
+  assert.equal(fs.existsSync(path.join(home, '.claude', 'orgiast-discord-members.json')), false);
+});

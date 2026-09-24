@@ -71,7 +71,7 @@ async function requestMembers(url, token, fetchImpl) {
   return null;
 }
 
-export async function getDiscordMembers({ query = '', home = os.homedir(), refresh = false, now = new Date(), fetchImpl = fetch } = {}) {
+export async function getDiscordMembers({ query = '', home = os.homedir(), refresh = false, now = new Date(), fetchImpl = fetch, persistCache = true } = {}) {
   const queries = searchQueries(query);
   if (queries.length === 0) return [];
   const cacheFile = path.join(home, '.claude', 'orgiast-discord-members.json');
@@ -92,8 +92,10 @@ export async function getDiscordMembers({ query = '', home = os.homedir(), refre
       members = await requestMembers(url, token, fetchImpl);
       if (members === null) return null;
       cache.queries[searchQuery] = { fetched_at: now.toISOString(), members };
-      fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
-      fs.writeFileSync(cacheFile, `${JSON.stringify(cache, null, 2)}\n`, 'utf8');
+      if (persistCache) {
+        fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
+        fs.writeFileSync(cacheFile, `${JSON.stringify(cache, null, 2)}\n`, 'utf8');
+      }
     }
     if (members.length > 0) return members;
   }

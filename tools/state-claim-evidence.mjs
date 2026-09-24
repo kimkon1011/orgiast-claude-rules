@@ -1,7 +1,7 @@
 // Shared by the external-state and reported-symptom gates.
 export const symptomDenials = /問題(?:ありません|ない|なし)|異常なし|正常です|正常に動いています|対応は不要|不要です|必要ありません|枯渇していません|影響ありません|起きていません|発生していません|実データが合っていません|報告が(?:誤り|間違)/;
 export const unknown = /未再現|未確認|まだ確認できていない|不明/;
-export const meta = /検出|パターン|正規表現|ゲート|フック|ルール|fixtures?/i;
+export const meta = /検出|パターン|正規表現|ゲート|フック|ルール|fixtures?|\bgate\b.{0,40}(?:仕様|説明|block|pass)/i;
 export const corrections = /訂正|と答えた|と書いた|と断定した|前回|先ほど|暫定回答|(?:私|自分|こちら).{0,30}誤り|誤りでした/;
 export function sentences(text) {
   return String(text || '').split(/\r?\n/).map(s => s.trim())

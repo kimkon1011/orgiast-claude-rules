@@ -45,3 +45,10 @@ test('warn preserves R1 and R3 diagnostics', () => {
     }
   } finally { if (old === undefined) delete process.env.ORGIAST_REPORTED_SYMPTOM_GATE; else process.env.ORGIAST_REPORTED_SYMPTOM_GATE = old; }
 });
+
+test('unknown wording cannot conceal a denial; gate specification is exempt', () => {
+  const transcriptRaw = raw(human('Anthropic Billing の支払いが失敗しています'));
+  assert.equal(evaluate({ text: '未確認ですが残高は枯渇していません。', transcriptRaw }).decision, 'block');
+  assert.equal(evaluateExternalStateClaimFromRaw({ text: '未確認ですが残高は枯渇していません。', transcriptRaw }).decision, 'block');
+  assert.equal(evaluate({ text: 'reported-symptom-gate の仕様は「正常です」を block することです。', transcriptRaw }).decision, 'pass');
+});

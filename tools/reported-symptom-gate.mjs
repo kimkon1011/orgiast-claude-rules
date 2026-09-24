@@ -12,7 +12,7 @@ export function evaluateReportedSymptomFromRaw({ text, transcriptRaw }) {
   const reported = new Set(reports.flatMap(s => [...claimVendors(s)]));
   const marked = new Set([...String(text).matchAll(/\[直接照会:\s*([^\]]+)\]/g)].flatMap(m => [...claimVendors(m[1])]));
   for (const sentence of sentences(text)) {
-    if (meta.test(sentence) || corrections.test(sentence) || unknown.test(sentence)) continue;
+    if (meta.test(sentence) || corrections.test(sentence) || (unknown.test(sentence) && !symptomDenials.test(sentence) && !/原因が確定しました/.test(sentence))) continue;
     if (!symptomDenials.test(sentence) && !/原因が確定しました/.test(sentence)) continue;
     // A marker alone is not evidence; every reported system must have a matching tool use.
     if (reported.size && [...reported].every(v => queried.has(v) && marked.has(v))) continue;

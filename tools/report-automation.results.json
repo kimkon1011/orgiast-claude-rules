@@ -1,0 +1,15 @@
+{
+  "updatedAt": "2026-09-24T19:35:40.928Z",
+  "runs": [
+    {
+      "t": "2026-09-24T19:35:40.928Z",
+      "period": "2026-09",
+      "previousPeriod": "2026-08",
+      "adRows": 6,
+      "dealRows": 9,
+      "duplicatesRemoved": 1,
+      "pipelineMs": 32,
+      "outDir": "report-automation"
+    }
+  ]
+}

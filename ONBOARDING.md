@@ -93,6 +93,13 @@ API/CLI/MCP/GitHub Actions で実行可能な操作は、手順案内せず Clau
 
 `tools/pr-merge.mjs` が classifier に拒否されたら、§1.20に従いカテゴリを1行報告する。直URL・レビュー観点・アカウント切替注意を残し、言い換え再試行せず次の作業へ進む。
 
+**PR の作成・マージを人に頼むときの必須記載（2026-09-24 nishi 指示・全アカウント共通）**: 作れる PR を手渡さない前提（`gh` 未認証は理由にならない。`git credential fill` で `GH_TOKEN` を作る）は変えない。そのうえで残る手渡しには、毎回次の2点を書く。どちらかが欠けた依頼は出さない。
+- **開くアカウント**: GitHub のアカウント名（例 `kimkon1011`）と、repo の owner か collaborator か。違うアカウントでは private repo が 404 になる。
+- **自分で作れない理由の一次照会**: 実際に叩いたコマンドと、返った結果（終了コード、エラー文、classifier 拒否のカテゴリ）。「未認証のため」「権限が無いはず」のような推測は理由にならない。
+
+    **[PR 手渡し]** 開くアカウント: kimkon1011（owner） / URL: https://github.com/<owner>/<repo>/pull/<番号>
+    試したこと: `node tools/pr-merge.mjs 537` → classifier 拒否（Merge Without Review）
+
 **既存リソースの再作成を絶対に振らない**: 「○○を新規作成してください」の前に必ずCLI/APIで一覧確認（GCP SA/Vercel env/GitHub secret/Drive/Discord等）。既にあれば流用。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/automation-first-checklist.md`
 
 **SAでGoogle Drive書き込みする場合はDWD impersonate必須**: SAはDrive容量0GB固定でquotaエラーになる。DWD（Workspace管理者が1回scope委任）→ `subject`付きJWTでkimをimpersonateするのが唯一の自動化経路。詳細・コードテンプレ・罠リスト: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/dwd-google-integration.md`
@@ -505,7 +512,7 @@ kim:「**kim@orgiast.jp のパソコンで実行している内容が ONBOARDING
 Claude 側で完結できる（`git credential fill` の password が PAT）。**マージだけは人が押す**——共有 repo の
 main へのマージは auto-mode 分類器が拒否する。これは正しい関門なので迂回しない。
 必須チェック `test` / `test-posix` が終わるまで `mergeable_state=blocked` なので、
-**green を API で確認してから**手順を出す（灰色のボタンを押させない）。
+**green を API で確認してから**手順を出す（灰色のボタンを押させない）。手順には `[PR 手渡し]` の必須2点（開くアカウント・試したこと）を必ず添える。
 
 <!-- MACHINE-STATE-START 各PCは自分の行だけを更新して push する -->
 

@@ -142,5 +142,11 @@
     "route": "待たない。長時間ジョブは前景で --timeout を切って回し切るか、実行基盤（GitHub Actions/タスクスケジューラ/auto-session 再入）に載せる。進捗は ~/.claude/executor-usage.jsonl（status/out/timedOut/secs/cwd）や `gh run view` 等の一次情報を直接照会し、照会できなければ「未確認」と書いて断定も確率表現もしない（監査基準 rule 4）。待ちは ~/.claude/next-session.md の残TODO先頭に「検証のみ1行」を足して次セッションで確認する。セッションを開いたまま「バックグラウンド実行中」と報告しない（2026-09-22 実測: codex-do.mjs は前景・単発で背景起動/進捗照会/待機の機能を持たない。docs/background-progress-wait-route.md）",
     "confidence": "high",
     "source": "handoff-audit-nightly:b255d4309ac27cc8dd6885961ff08ef42d367663355cce24946509b1a009c108"
+  },
+  {
+    "pattern": "バックグラウンド再生成の進捗待ち・処理中報告",
+    "route": "待たない。長時間ジョブは前景で --timeout を切って回し切るか、実行基盤（GitHub Actions/タスクスケジューラ/auto-session 再入）に載せる。進捗は ~/.claude/executor-usage.jsonl（status/out/timedOut/secs/cwd）や `gh run view` 等の一次情報を直接照会し、照会できなければ「未確認」と書いて断定も確率表現もしない（監査基準 rule 4）。待ちは ~/.claude/next-session.md の残TODO先頭に「検証のみ1行」を足して次セッションで確認する。セッションを開いたまま「バックグラウンド実行中」と報告しない（2026-09-22 実測: codex-do.mjs は前景・単発で背景起動/進捗照会/待機の機能を持たない。docs/background-progress-wait-route.md）",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:e1d3ee1cfc895f64f14a711011a375422d36a351c1ac0a82a470825ed624e24b"
   }
 ]

@@ -1,0 +1,146 @@
+[
+  {
+    "name": "balance",
+    "report": "GitHub Actions が Anthropic API の Your credit balance is too low エラーで継続的に失敗しています。Anthropic Console の Billing を確認してほしい。",
+    "text": "残高は枯渇していません。Billing 対応は不要です",
+    "decision": "block",
+    "tool": {
+      "name": "Bash",
+      "input": {
+        "command": "gh run list --limit 10"
+      }
+    }
+  },
+  {
+    "name": "runs",
+    "report": "GitHub Actions が Anthropic API の Your credit balance is too low エラーで継続的に失敗しています。Anthropic Console の Billing を確認してほしい。",
+    "text": "直近10 run は全て success、実データが合っていません",
+    "decision": "block",
+    "tool": {
+      "name": "Bash",
+      "input": {
+        "command": "gh run list --limit 10"
+      }
+    }
+  },
+  {
+    "name": "inference",
+    "report": "GitHub Actions が Anthropic API の Your credit balance is too low エラーで継続的に失敗しています。Anthropic Console の Billing を確認してほしい。",
+    "text": "リポジトリが見つからないので別 GitHub アカウント、別 Anthropic 組織です。原因が確定しました",
+    "decision": "block",
+    "tool": {
+      "name": "Bash",
+      "input": {
+        "command": "gh run list --limit 10"
+      }
+    }
+  },
+  {
+    "name": "unreachable",
+    "report": "GitHub Actions が Anthropic API の Your credit balance is too low エラーで継続的に失敗しています。Anthropic Console の Billing を確認してほしい。",
+    "text": "Anthropic Console にアクセスできません。GitHub の直近10 run は成功しました。",
+    "decision": "block",
+    "tool": {
+      "name": "Bash",
+      "input": {
+        "command": "gh run list --limit 10"
+      }
+    }
+  },
+  {
+    "name": "correction",
+    "report": "GitHub Actions が Anthropic API の Your credit balance is too low エラーで継続的に失敗しています。Anthropic Console の Billing を確認してほしい。",
+    "text": "私が「残高は枯渇していません」と答えたのは誤りでした。",
+    "decision": "pass",
+    "tool": {
+      "name": "Bash",
+      "input": {
+        "command": "gh run list --limit 10"
+      }
+    }
+  },
+  {
+    "name": "meta",
+    "report": "GitHub Actions が Anthropic API の Your credit balance is too low エラーで継続的に失敗しています。Anthropic Console の Billing を確認してほしい。",
+    "text": "gate の検出パターンは「問題ありません」「原因が確定しました」です。",
+    "decision": "pass",
+    "tool": {
+      "name": "Bash",
+      "input": {
+        "command": "gh run list --limit 10"
+      }
+    }
+  },
+  {
+    "name": "unknown",
+    "report": "GitHub Actions が Anthropic API の Your credit balance is too low エラーで継続的に失敗しています。Anthropic Console の Billing を確認してほしい。",
+    "text": "未再現（Anthropic Console は未照会）です。残高は未確認です。",
+    "decision": "pass",
+    "tool": {
+      "name": "Bash",
+      "input": {
+        "command": "gh run list --limit 10"
+      }
+    }
+  },
+  {
+    "name": "request",
+    "report": "GitHub Actions が Anthropic API の Your credit balance is too low エラーで継続的に失敗しています。Anthropic Console の Billing を確認してほしい。",
+    "text": "Anthropic Console にアクセスできません。Billing 画面のスクショを送ってください。",
+    "decision": "pass",
+    "tool": {
+      "name": "Bash",
+      "input": {
+        "command": "gh run list --limit 10"
+      }
+    }
+  },
+  {
+    "name": "matching",
+    "report": "GitHub Actions が失敗しています。",
+    "text": "[直接照会: GitHub] GitHub Actions は正常です。",
+    "decision": "pass",
+    "tool": {
+      "name": "Bash",
+      "input": {
+        "command": "gh run list --limit 10"
+      }
+    }
+  },
+  {
+    "name": "wrong_vendor",
+    "report": "GitHub Actions が Anthropic API の Your credit balance is too low エラーで継続的に失敗しています。Anthropic Console の Billing を確認してほしい。",
+    "text": "[直接照会: Anthropic] 残高は枯渇していません。",
+    "decision": "block",
+    "tool": {
+      "name": "Bash",
+      "input": {
+        "command": "gh run list --limit 10"
+      }
+    }
+  },
+  {
+    "name": "false_report",
+    "report": "GitHub Actions が Anthropic API の Your credit balance is too low エラーで継続的に失敗しています。Anthropic Console の Billing を確認してほしい。",
+    "text": "報告が誤りです。",
+    "decision": "block",
+    "tool": {
+      "name": "Bash",
+      "input": {
+        "command": "gh run list --limit 10"
+      }
+    }
+  },
+  {
+    "name": "values",
+    "report": "GitHub Actions が Anthropic API の Your credit balance is too low エラーで継続的に失敗しています。Anthropic Console の Billing を確認してほしい。",
+    "text": "Anthropic Console は確認不可です。画面の数値を教えてください。",
+    "decision": "pass",
+    "tool": {
+      "name": "Bash",
+      "input": {
+        "command": "gh run list --limit 10"
+      }
+    }
+  }
+]

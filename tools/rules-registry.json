@@ -123,6 +123,29 @@
         "sample": "実データ 12セッション / assistant応答288件 / 検出1件・真陽性1件・誤爆0件",
         "note": "誤爆3型(訂正引用・仕様説明・環境に無い)と自己言及レポート文を除外済み。回帰は negative-claim-gate.fixtures.json"
       }
+    },
+    {
+      "id": "reported-symptom-evidence",
+      "source": "user incident 2026-09-22–24",
+      "summary": "報告された不具合の否定・原因確定は対象vendor照会とマーカー必須。到達不能な証拠は即時依頼",
+      "detect": {
+        "scope": "shared:reported-symptom-gate.evaluateReportedSymptomFromRaw"
+      },
+      "gate": "reported-symptom-gate.mjs",
+      "ledger": "~/.claude/stop-gate-runner-ledger.jsonl",
+      "enforcement": "block",
+      "thresholds": {
+        "violationsToBlock": 1,
+        "daysObserved": 0
+      },
+      "validation": {
+        "fixtureCount": 12,
+        "minPrecision": 0.9,
+        "status": "validated",
+        "precision": 1,
+        "measuredOn": "2026-09-24",
+        "note": "reported-symptom-gate.fixtures.json"
+      }
     }
   ]
 }

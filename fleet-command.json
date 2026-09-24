@@ -1,8 +1,8 @@
 {
-  "runId": "rules-resync-2026-09-22-autopilot-skill",
+  "runId": "rules-resync-2026-09-24-reported-symptom-gate",
   "task": "rules-resync",
   "targets": "all",
-  "_why": "/autopilot skill(PR #499)を全PCへ配る。開きっぱなしで SessionStart が走らないPCでも、fleet-poller の夜間実行が onboarding-sync --force を叩いて ~/.claude/skills/autopilot/ を配備する。Claude Code は skills/ の追加を再起動なしで拾う。破壊的操作なし。",
+  "_why": "報告不具合の否定防止 gate (R1/R2/R3) を全PC・全アカウントへ配布。onboarding-sync --force で tools を更新し setup --converge 経由で Stop runner を登録する。",
   "_note": "全PCへ承認済みタスクを配る中央キュー。kim/Claudeが task と runId(毎回ユニーク) を更新→各PCが夜間03:15の実行時に1回だけ処理しDiscordへ結果を返す。task を空にすると何もしない。",
   "_allowed_tasks": [
     "verify-setup",

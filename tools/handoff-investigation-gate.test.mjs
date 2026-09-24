@@ -36,6 +36,13 @@ test('試行2件でも結果の矢印なしは fail', () => {
   assert.match(result.stderr, /各試行の結果/);
 });
 test('完全な証拠は pass', () => assert.equal(run(complete).status, 0));
+test('classifier 拒否の手渡しは最小単位の再試行結果があれば pass', () => assert.equal(run(`${complete}\nclassifier に拒否された\n最小単位で再試行: effortLevel の1行 Edit → denied`).status, 0));
+test('classifier 拒否の手渡しは最小単位の再試行結果がなければ block', () => {
+  const result = run(`${complete}\nSelf-Modification で拒否された`);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /\[MINIMAL-RETRY\]/);
+});
+test('classifier 言及なしは従来どおり pass', () => assert.equal(run(complete).status, 0));
 test('[INVESTIGATION-OK] は pass し ledger に免除を記録', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'investigation-bypass-'));
   const result = spawnSync(process.execPath, [gate], {

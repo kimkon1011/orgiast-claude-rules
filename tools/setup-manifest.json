@@ -1,6 +1,8 @@
 {
   "version": 1,
   "items": [
+    { "id": "tool:autopilot-tick", "type": "file-nonempty", "severity": "required", "spec": { "paths": ["orgiast-claude-rules/tools/autopilot-tick.mjs", "Downloads/orgiast-claude-rules/tools/autopilot-tick.mjs"] }, "description": "autopilot 状態管理(repo直参照)", "repair": ["onboarding-sync.mjs", "--force"] },
+    { "id": "skill:autopilot", "type": "file-nonempty", "severity": "required", "spec": { "path": ".claude/skills/autopilot/SKILL.md" }, "description": "autopilot 自律ループ skill", "repair": ["onboarding-sync.mjs", "--force"] },
     { "id": "cmd:git", "type": "command", "severity": "required", "spec": { "command": "git", "versionRegex": ".+" }, "description": "git 導入", "repairHint": "winget install Git.Git" },
     { "id": "cmd:node", "type": "command", "severity": "required", "spec": { "command": "node", "versionRegex": "\\d+\\.\\d+\\.\\d+" }, "description": "Node.js 導入", "repairHint": "winget install OpenJS.NodeJS.LTS" },
     { "id": "cmd:claude", "type": "command", "severity": "required", "spec": { "command": "claude", "versionRegex": "\\d+\\.\\d+\\.\\d+" }, "description": "Claude Code 導入", "repairHint": "winget install Anthropic.ClaudeCode" },
@@ -11,6 +13,7 @@
     { "id": "hook:delegation-warn", "type": "file-nonempty", "severity": "required", "spec": { "paths": ["orgiast-claude-rules/tools/pretooluse-delegation-warn.mjs", "Downloads/orgiast-claude-rules/tools/pretooluse-delegation-warn.mjs"] }, "description": "hook実体(repo直参照): pretooluse-delegation-warn.mjs", "repair": ["onboarding-sync.mjs", "--force"] },
     { "id": "hook:verify-before-done", "type": "file-nonempty", "severity": "required", "spec": { "paths": ["orgiast-claude-rules/tools/verify-before-done-detector.mjs", "Downloads/orgiast-claude-rules/tools/verify-before-done-detector.mjs"] }, "description": "hook実体(repo直参照): verify-before-done-detector.mjs", "repair": ["onboarding-sync.mjs", "--force"] },
     { "id": "hook:cost-loop", "type": "file-nonempty", "severity": "required", "spec": { "paths": ["orgiast-claude-rules/tools/cost-loop.mjs", "Downloads/orgiast-claude-rules/tools/cost-loop.mjs"] }, "description": "hook実体(repo直参照): cost-loop.mjs", "repair": ["onboarding-sync.mjs", "--force"] },
+    { "id": "settings:gemini-usage", "type": "file-contains", "severity": "required", "spec": { "path": ".claude/settings.json", "contains": "gemini-mcp-usage-hook.mjs" }, "description": "Gemini MCP 使用量台帳フック", "repair": ["register-hooks.mjs", "--hooks-only"] },
     { "id": "settings:onboarding-sync", "type": "file-contains", "severity": "required", "spec": { "path": ".claude/settings.json", "contains": "onboarding-sync" }, "description": "SessionStart: 共通ルール自動更新", "repair": ["register-hooks.mjs", "--hooks-only"] },
     { "id": "settings:cost-reporter", "type": "file-contains", "severity": "required", "spec": { "path": ".claude/settings.json", "contains": "claude-cost-reporter" }, "description": "SessionStart: 日次コスト報告", "repair": ["register-hooks.mjs", "--hooks-only"] },
     { "id": "settings:tool-adoption", "type": "file-contains", "severity": "required", "spec": { "path": ".claude/settings.json", "contains": "tool-adoption-check" }, "description": "SessionStart: 委譲/使い過ぎチェック", "repair": ["register-hooks.mjs", "--hooks-only"] },

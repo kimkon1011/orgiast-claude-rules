@@ -29,6 +29,19 @@ function fixture() {
   return home;
 }
 
+function ledgerFixture({ runner = [], legacy = [] } = {}) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'user-effort-kpi-ledger-'));
+  const claudeDir = path.join(home, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(path.join(claudeDir, 'stop-gate-runner-ledger.jsonl'), `${runner.map(JSON.stringify).join('\n')}\n`);
+  fs.writeFileSync(path.join(claudeDir, 'handoff-ledger.jsonl'), `${legacy.map(JSON.stringify).join('\n')}\n`);
+  return home;
+}
+
+function rewriteStops(home) {
+  return collectUserEffortKpi({ home, now: NOW, days: 7, manualMerges: () => null }).rewrite_stops;
+}
+
 test('fixture から各指標を定義どおり集計する', () => {
   const home = fixture();
   const result = collectUserEffortKpi({ home, now: NOW, days: 7, manualMerges: () => 3 });
@@ -44,6 +57,53 @@ test('2KB 以下・期間外 mtime の transcript は session に含めない', 
   fs.writeFileSync(old, ' '.repeat(2_100));
   fs.utimesSync(old, (NOW - 8 * 86_400_000) / 1000, (NOW - 8 * 86_400_000) / 1000);
   assert.equal(collectUserEffortKpi({ home, now: NOW, manualMerges: () => null }).sessions, 1);
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('runner の連続 block は 2 件目以降を数える', () => {
+  const rows = ['block', 'block', 'block'].map((verdict, index) => ({ sessionId: 'session-1', ts: recent(30 - index), verdict }));
+  const home = ledgerFixture({ runner: rows });
+  assert.equal(rewriteStops(home), 2);
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('runner の pass は block の連続を切る', () => {
+  const rows = ['block', 'pass', 'block'].map((verdict, index) => ({ sessionId: 'session-1', ts: recent(30 - index), verdict }));
+  const home = ledgerFixture({ runner: rows });
+  assert.equal(rewriteStops(home), 0);
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('runner の skipped は block の連続を切らない', () => {
+  const rows = ['block', 'skipped', 'block'].map((verdict, index) => ({ sessionId: 'session-1', ts: recent(30 - index), verdict }));
+  const home = ledgerFixture({ runner: rows });
+  assert.equal(rewriteStops(home), 1);
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('runner のテスト用 sessionId は無視する', () => {
+  const rows = ['block', 'block'].map((verdict, index) => ({ sessionId: 'e2e-live', ts: recent(30 - index), verdict }));
+  const home = ledgerFixture({ runner: rows });
+  assert.equal(rewriteStops(home), 0);
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('legacy の 2 秒クラスタリングを維持する', () => {
+  const legacy = [
+    { ts: recent(30), reason: 'stop_hook_active' },
+    { ts: recent(29), reason: 'stop_hook_active' },
+    { ts: recent(20), reason: 'stop_hook_active' },
+  ];
+  const home = ledgerFixture({ legacy });
+  assert.equal(rewriteStops(home), 2);
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('legacy と runner の rewrite stop を合算する', () => {
+  const runner = ['block', 'block'].map((verdict, index) => ({ sessionId: 'session-1', ts: recent(30 - index), verdict }));
+  const legacy = [{ ts: recent(20), reason: 'stop_hook_active' }];
+  const home = ledgerFixture({ runner, legacy });
+  assert.equal(rewriteStops(home), 2);
   fs.rmSync(home, { recursive: true, force: true });
 });
 

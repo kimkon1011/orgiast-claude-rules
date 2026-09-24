@@ -5,7 +5,7 @@ import {
   PR_YIELD_RATE_THRESHOLD, TODO_SIMILARITY_THRESHOLD,
   appendImprovementTodos, calculateKpi, clusterBySimilarity, isInNightlyWindow,
   formatText, githubRepo, improvementTodos, normalizeTodo, parseBatchLog, parseRun, parseTodos,
-  queryPullRequests, similarity, todoTokens,
+  previousKpiDate, queryPullRequests, similarity, todoTokens,
 } from './nightly-kpi.mjs';
 
 process.env.TZ = 'Asia/Tokyo';
@@ -134,6 +134,10 @@ test('夜間窓の境界をローカル時刻で判定する', () => {
   assert.equal(isInNightlyWindow('2026-09-02T09:01:00+09:00', date), false);
 });
 
+test('前日KPIの日付は夜間窓の開始日である date-1 を指す', () => {
+  assert.equal(previousKpiDate('2026-09-11'), '2026-09-10');
+});
+
 test('同内容の未消化TODOがあれば再起票せず、新規だけ先頭ブロックへ追加する', () => {
   const markdown = '## 残TODO（先頭）\n1. **P0: 同じ障害**\n## 完了条件\nx\n## 残TODO\n1. 履歴';
   const result = appendImprovementTodos(markdown, ['P0: 同じ障害', 'P1: 新しい改善']);
@@ -242,6 +246,24 @@ test('当日の成果率が20%未満でも5セッション未満なら改善TODO
     { ...base, sessions: 4, prsCreated: 0, prYieldRate: 0 },
     { ...base, sessions: 5, prsCreated: 0, prYieldRate: 0 },
   ), []);
+});
+
+test('バッチ未起動・未完走の日は消化率低下を二重起票しない', () => {
+  const base = { date, failedSteps: [], noOpRate: 0, sessions: 0, prYieldRate: null, closeRate: 0 };
+  const previous = { closeRate: 0.6 };
+  assert.doesNotMatch(improvementTodos(
+    { ...base, batchRan: false, batchCompleted: false },
+    previous,
+  ).join('\n'), /消化率が/);
+  assert.doesNotMatch(improvementTodos(
+    { ...base, batchRan: true, batchCompleted: false, lastStep: 'worker' },
+    previous,
+  ).join('\n'), /消化率が/);
+});
+
+test('バッチ完走日に消化率が20%未満へ低下したら起票する', () => {
+  const current = { date, batchRan: true, batchCompleted: true, failedSteps: [], noOpRate: 0, sessions: 0, prYieldRate: null, closeRate: 0 };
+  assert.match(improvementTodos(current, { closeRate: 0.6 }).join('\n'), /P1: 消化率が 0\.0% に低下/);
 });
 
 test('topicConcentration はJSONにもtextにも現れない', () => {

@@ -283,6 +283,8 @@ function checkCodex() {
 }
 
 // ---- Gemini ----
+// This module probes installation/authentication only; it never requests a Gemini response.
+// Actual MCP responses are recorded by gemini-mcp-usage-hook.mjs (register-hooks + setup convergence).
 function geminiApiKey() {
   const envKey = loadEnv(path.join(HOME, '.gemini', '.env')).GEMINI_API_KEY || process.env.GEMINI_API_KEY;
   if (envKey) return envKey;
@@ -375,7 +377,7 @@ function checkGemini() {
   const lastUsed = tmpUsed;
   const usedDays = lastUsed ? daysAgo(lastUsed) : Infinity;
   const used = trUsed || usedDays <= USAGE_WINDOW_DAYS;
-  return { name: 'Gemini', installed, indeterminate, version, keyed, mcpReg: mcpReg || (DO_FIX && keyed), used, usedDays, role: '超大規模文脈・Google検索(無料枠でトークン節約)' };
+  return { name: 'Gemini', installed, indeterminate, version, keyed, mcpReg: mcpReg || (DO_FIX && keyed), used, usedDays, role: '超大規模文脈・Google検索（従量・予算状態を確認）' };
 }
 
 // ---- Kimi ----

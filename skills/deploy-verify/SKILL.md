@@ -26,6 +26,12 @@ description: コード変更・デプロイ・cron・env・UI 変更後に Claud
 - Vercel Sensitive env は `vercel env pull` で空文字 → その env を使う経路側から発火
 - Vercel Hobby cron は best-effort で発火しないことがある → GHA cron か self-heal で担保
 
+## 母数照合（バッチ・移行・一括処理は必須）
+
+- `TOTAL INPUT = SUCCESS + FAILED + EXCLUDED + UNRECOGNIZED`を必ず数える。「エラー0件」を全件成功と読まない。処理対象として認識されず、失敗にも記録されなかった件を疑う。
+- 等式が成立しない報告は完了と見なさない。
+- 件数一致だけで終えず、成功分から抜き取り1件の中身を開く。
+
 ## 報告テンプレ（Layer 1/2 が空の報告は完了と見なさない）
 ```
 - 実装: <変更内容 1 行>
@@ -33,6 +39,7 @@ description: コード変更・デプロイ・cron・env・UI 変更後に Claud
 - Layer 1: <script 名> → PASS ✅
 - Layer 2: <spec 名> → e2e N passed ✅
 - deploy: <commit hash> Vercel Ready ✅
+- 母数: N = 成功 a + 失敗 b + 除外 c + 未認識 d ✅
 ```
 
 例外: UI 入力必須の関数（user 実行後に DB/Drive 読みで検証に切替）/ 第三者システムへの副作用（無断発火禁止）/ LLM 出力の質的判定（構造 assert まで）。

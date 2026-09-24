@@ -11,7 +11,7 @@
   { "log": "cost-improve-loop.log", "maxAgeHours": 26, "label": "コスト改善ループ", "scan": "keywords", "tool": "tools/cost-improve-loop.mjs" },
   { "log": "cost-weekly-improve.log", "maxAgeHours": 194, "label": "コスト週次改善ループ", "scan": "keywords", "task": "OrgiastCostWeeklyImprove", "successPattern": "完了|ok" },
   { "log": "fleet-poller.log", "maxAgeHours": 26, "label": "フリートポーラー", "scan": "stale-only", "task": "OrgiastFleetPoller", "successPattern": "OK poll done" },
-  { "log": "booth-feedback-intake.log", "maxAgeHours": 2, "label": "ブースフィードバック取り込み", "scan": "keywords", "task": "OrgiastBoothFeedback", "tool": "tools/booth-feedback-intake.mjs", "successPattern": "booth-feedback: open=" },
+  { "log": "booth-feedback-intake.log", "maxAgeHours": 2, "label": "ブースフィードバック取り込み", "scan": "keywords", "task": "OrgiastBoothFeedbackIntake", "tool": "tools/booth-feedback-intake.mjs", "successPattern": "booth-feedback: open=" },
   { "log": "funnel-probe.log", "maxAgeHours": 3, "label": "ファンネルプローブ", "scan": "keywords" },
   { "log": "plaud-to-tldv.log", "maxAgeHours": 3, "label": "Plaudからtl;dv転送", "scan": "stale-only" },
   { "log": "evening-digest.log", "maxAgeHours": 26, "label": "夕方ダイジェスト", "scan": "keywords" },

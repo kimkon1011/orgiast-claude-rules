@@ -29,7 +29,7 @@ async function defaultFetchTree() {
 
 function defaultRunTest(file) {
   return new Promise((resolve, reject) => {
-    execFile(process.execPath, [file], { encoding: 'utf8', timeout: 60_000 }, (error, stdout = '', stderr = '') => {
+    execFile(process.execPath, [file], { windowsHide: true, encoding: 'utf8', timeout: 60_000 }, (error, stdout = '', stderr = '') => {
       if (error?.killed || error?.code === 'ETIMEDOUT') { reject(error); return; }
       if (error && typeof error.code !== 'number') { reject(error); return; }
       resolve({ code: typeof error?.code === 'number' ? error.code : 0, stdout, stderr });

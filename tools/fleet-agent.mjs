@@ -149,6 +149,11 @@ export function collectStatus({ home, repo, label, hostname, run = runSync, plat
   } catch {}
   let todoCount = 0;
   try { todoCount = parseHandoff(fs.readFileSync(path.join(home, '.claude', 'next-session.md'), 'utf8')).todos.length; } catch {}
+  let mailUnread = 0;
+  try {
+    const inbox = path.join(home, '.claude', 'fleet-inbox');
+    mailUnread = fs.readdirSync(inbox).filter(f => /^mail-[A-Za-z0-9-]+\.json$/.test(f)).filter(f => { const m = readJson(path.join(inbox, f)); return m.id && !m.readAt; }).length;
+  } catch {}
   const accepts = loadOptin(path.join(home, '.claude', 'fleet-agent-optin.json'));
   const jobStatus = platform === 'win32' ? scheduledTaskStatus(run) : { tasks: [], failures: [] };
   const failures = jobStatus.failures ?? [];
@@ -162,19 +167,22 @@ export function collectStatus({ home, repo, label, hostname, run = runSync, plat
     memoryLine: formatMemoryLine(sharedMemory),
     jobStatus,
     syncLine: `onboarding-sync=${syncLast}`,
-    todoLine: `残TODO=${todoCount} / prompt opt-in=${accepts.includes('prompt') ? 'yes' : 'no'}`,
+    todoLine: `残TODO=${todoCount} / mail 未読=${mailUnread} / prompt opt-in=${accepts.includes('prompt') ? 'yes' : 'no'}`,
   });
   const text = lines.join('\n');
   return { text: redactSecrets(text), data: { label, hostname, platform, account, codex, git, syncLast, failures, todoCount, promptOptin: accepts.includes('prompt'), sharedMemory, checkedAt: new Date().toISOString() } };
 }
 
-export function runPrompt({ claudeExe, body, cwd, timeoutSeconds = 1800, spawnImpl = spawn }) {
+export function runPrompt({ claudeExe, body, cwd, timeoutSeconds = 1800, spawnImpl = spawn, readOnly = false }) {
   return new Promise((resolve) => {
     const started = Date.now();
     let stdout = '';
     let stderr = '';
     let settled = false;
-    const child = spawnImpl(claudeExe, ['-p', String(body ?? '')], {
+    const args = ['-p', String(body ?? '')];
+    // Fleet mail is answer-only; existing directives retain their original behavior.
+    if (readOnly) args.push('--tools', 'Read,Glob,Grep', '--allowedTools', 'Read,Glob,Grep', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disable-slash-commands', '--settings', '{"disableAllHooks":true}', '--model', 'sonnet');
+    const child = spawnImpl(claudeExe, args, {
       cwd, env: { ...process.env, CLAUDE_HEADLESS: '1', CI: '1' }, stdio: ['pipe', 'pipe', 'pipe'], shell: false, windowsHide: true,
     });
     child.stdin.end();
@@ -187,7 +195,7 @@ export function runPrompt({ claudeExe, body, cwd, timeoutSeconds = 1800, spawnIm
   });
 }
 
-function consentCommand(kind) {
+export function consentCommand(kind) {
   return `node -e "const f=require('fs'),o=require('os'),p=require('path').join(o.homedir(),'.claude','fleet-agent-optin.json');let a=[];try{a=JSON.parse(f.readFileSync(p,'utf8')).accept||[]}catch{};f.writeFileSync(p,JSON.stringify({accept:[...new Set([...a,'${kind}'])],acceptedAt:new Date().toISOString(),acceptedBy:o.userInfo().username},null,2))"`;
 }
 

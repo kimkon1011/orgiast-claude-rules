@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // 委譲台帳の症状を実測と照合し、即時修復と次回 auto-session への根本修正起票を行う。
 import fs from 'node:fs';
+import { writeHandoff } from './next-session-rotate.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -60,11 +61,46 @@ function reasonTop(rows) {
 // 出力ゼロの原因を分類する。打ち切り(timeout)は「codex が使えない」証拠ではない ——
 // SIGKILL されると codex は最終メッセージを stdout に書く前に死ぬため out=0 になる。
 // 2026-09-11 実測: 404秒/487秒で打ち切られた実行は rollout ログ上は tsc 実行など実作業の途中だった。
+// codex は WSL の名前解決失敗などで、セッションを作る前に exit 1 / 出力ゼロで死ぬことがある。
+// これは codex 本体の故障ではなく一過性のインフラ障害で、codex-do 側の再試行で回復する。
+const INFRA_TRANSIENT = /failed to lookup address information|failed to connect to websocket|stream error|connection reset|i\/o timeout|dns/i;
+
+// WSL のディストリが1つも無い PC では codex レーンは構造的に使えず、コードでは直せない。
+// 「そもそも走っていない」の中でも、コードで直せる起動失敗(codex_launch_failed)と分けて扱う
+// （2026-09-19 実測: この PC は `wsl -l -q` が空）。
+const WSL_LANE_ABSENT = /WSL ディストリが見つかりません/;
+
+// フォールバック先の子プロセスが OS エラーで起動できなかった行(例: spawn ENAMETOOLONG / ENOENT)。
+// 1件で発火させる: 低成果(2件閾値)では単発の故障が翌朝 healthy と判定されてしまった (2026-09-21)。
+const SPAWN_FAILED = /syscall: 'spawn'|\bspawn E[A-Z]+\b|code: 'E[A-Z]{4,}'/;
+
+// codex CLI 自身の認証欠落。WSL 側 ~/.codex/auth.json が未認証/失効だと、セッションを作る前に
+// 401 で死ぬ。コードでは直せず再ログインが要る環境要因（2026-09-22 診断: 09-20 の11件中4件）。
+const CODEX_AUTH_FAILED = /401 unauthorized|missing bearer or basic authentication/i;
+
+// ChatGPT アカウント認証なのに sol/astra を選ぶと 400 で即死する。codex-do 側のレーン選択の
+// 問題なので、直せる欠陥として起票する（2026-09-22 診断: 09-20 の11件中7件）。
+const CODEX_MODEL_AUTH_MISMATCH = /is not supported when using codex with a chatgpt account/i;
+
 export function emptyOutputReason(row) {
   if (row?.timedOut === true) return 'timeout';
   // 旧行(timedOut 未記録)は経過秒数から推定する。codex の正常終了は実測で中央値~100秒、
   // 打ち切りは --timeout 到達時にのみ現れ、実測値は 300 秒以上だった。
   if (row?.timedOut == null && Number(row?.secs) >= 300) return 'timeout';
+  // 起動前のゲートが「意図的に止めた」行。launched:false だが codex は一度も起動されておらず、
+  // 起動失敗ではない。codex-do が書く行の status は必ず数値で、起動前ゲートは文字列の番兵を書く
+  // (2026-09-23 実測: status:"spec-missing-context" / stderrTail 空)。これを launch_failed に
+  // 混ぜると「codex-do が codex を起動できずに終了している」と誤診され、直せない欠陥として
+  // 同 id が毎日起票され続ける(2026-09-24 診断: 2件がこれだった)。
+  if (row?.launched === false && typeof row?.status === 'string') return 'preflight_blocked';
+  // codex を起動できずに終わった行。出力ゼロではなく「そもそも走っていない」ので、
+  // no_output に混ぜると原因が埋もれて同 id が永久に消えない（2026-09-16 診断）。
+  // 起動を試みた行は必ず数値 status(3) と失敗理由の stderrTail を伴うため、ここは起動失敗のまま。
+  if (row?.launched === false) return 'launch_failed';
+  if (/Not inside a trusted directory/.test(String(row?.stderrTail || ''))) return 'untrusted_cwd';
+  if (CODEX_AUTH_FAILED.test(String(row?.stderrTail || ''))) return 'auth_failed';
+  if (CODEX_MODEL_AUTH_MISMATCH.test(String(row?.stderrTail || ''))) return 'model_auth_mismatch';
+  if (INFRA_TRANSIENT.test(String(row?.stderrTail || ''))) return 'infra_transient';
   const status = Number(row?.status);
   if (Number.isFinite(status) && status !== 0) return `exit_${status}`;
   return 'no_output';
@@ -92,13 +128,39 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
   });
   const claudeFallback = usageRows.filter((row) => row.provider === 'claude-fallback');
   if (claudeFallback.length) { const top = reasonTop(claudeFallback); findings.push({ id: 'unattended_claude_fallback', severity: 'high', title: '無人ジョブが Claude へフォールバック', evidence: [`${claudeFallback.length}件`, ...top], fixTask: `無人ジョブが Claude に落ちた理由(${top.join(', ')})を潰す。cheap-code 側の失敗原因を修正し、Claude フォールバックが opt-in のままであることを確認` }); }
+  const spawnFailed = usageRows.filter((row) => row.provider === 'fallback' && Number(row.out) === 0 && SPAWN_FAILED.test(String(row.stderrTail || '')));
+  if (spawnFailed.length) {
+    const models = [...new Set(spawnFailed.map((row) => row.model || '不明'))].join(', ');
+    const codes = [...new Set(spawnFailed.map((row) => (String(row.stderrTail || '').match(/\bE[A-Z]{4,}\b/) || ['不明'])[0]))].join(', ');
+    findings.push({ id: 'fallback_spawn_failed', severity: 'medium', title: 'フォールバック先の子プロセスが起動失敗',
+      evidence: [`${spawnFailed.length}件`, `model ${models}`, `code ${codes}`],
+      fixTask: `フォールバック先(${models})の子プロセス起動が OS エラー(${codes})で失敗している。spawn の引数長・実行ファイルパスを確認し、再現テストを追加して修正` });
+  }
   const lowYield = usageRows.filter((row) => row.provider === 'fallback' && Number(row.secs) > 900 && Number(row.out) < 300);
   if (lowYield.length >= 2) { const models = [...new Set(lowYield.map((row) => row.model || '不明'))].join(', '); findings.push({ id: 'fallback_low_yield', severity: 'medium', title: 'フォールバックの低成果', evidence: [`${lowYield.length}件`, `model ${models}`], fixTask: `フォールバック先(${models})が長時間走って成果が無い。codex-fallback-order.json の順序と各バックエンドの実効性を見直す` }); }
   const empty = usageRows
     .filter((row) => row.provider === 'codex' && Number(row.out) === 0)
-    .map((source) => ({ reason: emptyOutputReason(source) }))
+    .map((source) => ({ reason: emptyOutputReason(source), stderrTail: source.stderrTail }))
     .filter((item) => item.reason !== 'timeout');
-  if (empty.length) findings.push({ id: 'codex_empty_output', severity: 'medium', title: 'Codex の出力ゼロ', evidence: [`${empty.length}件`, ...reasonTop(empty)], fixTask: 'codex が出力ゼロで終了した原因（認証切れ/上限/起動失敗）を codex-do のログから特定' });
+  const realEmpty = empty.filter((item) => !['infra_transient', 'launch_failed', 'auth_failed', 'model_auth_mismatch', 'preflight_blocked'].includes(item.reason));
+  const launchFailed = empty.filter((item) => item.reason === 'launch_failed');
+  const authFailed = empty.filter((item) => item.reason === 'auth_failed');
+  const modelAuthMismatch = empty.filter((item) => item.reason === 'model_auth_mismatch');
+  const laneAbsent = launchFailed.filter((item) => WSL_LANE_ABSENT.test(String(item.stderrTail || '')));
+  const fixableLaunchFailed = launchFailed.filter((item) => !WSL_LANE_ABSENT.test(String(item.stderrTail || '')));
+  if (fixableLaunchFailed.length) findings.push({ id: 'codex_launch_failed', severity: 'medium', title: 'Codex の起動失敗', evidence: [`${fixableLaunchFailed.length}件`, ...reasonTop(fixableLaunchFailed)], fixTask: 'codex-do が codex を起動できずに終了している。WSL の状態と起動経路のログを確認し、起動失敗を再現するテストを追加して修正' });
+  // 事実は消さずに名前を付けて残す。fixTask を付けない(low)ので毎日の起票対象にはならない。
+  if (laneAbsent.length) findings.push({ id: 'codex_lane_unavailable', severity: 'low', title: 'codex レーンは WSL 不在のため使用不可（代替バックエンドで実行中）', evidence: [`${laneAbsent.length}件`, 'WSL ディストリ 0 件'] });
+  // 起動前ゲートが止めた行も事実として残す。原因は codex 側ではなく指示(spec)側なので
+  // codex_launch_failed とは別 id にし、fixTask を付けない(low)＝毎日の起票対象にしない。
+  const preflightBlocked = empty.filter((item) => item.reason === 'preflight_blocked');
+  if (preflightBlocked.length) findings.push({ id: 'codex_preflight_blocked', severity: 'low', title: 'Codex は起動前ゲートで意図的に止められた（起動失敗ではない）', evidence: [`${preflightBlocked.length}件`, 'status が文字列の番兵（起動前ゲートが記録）'] });
+  // 直せる欠陥なので fixTask を付ける（medium）。
+  if (modelAuthMismatch.length) findings.push({ id: 'codex_model_auth_mismatch', severity: 'medium', title: 'Codex が ChatGPT アカウントで sol/astra を選んで失敗', evidence: [`${modelAuthMismatch.length}件`, ...reasonTop(modelAuthMismatch)], fixTask: 'codex-do のレーン選択が ChatGPT アカウント認証を検出できず sol/astra を選んでいる。detectChatGptAuth と decideCodexLane の判定を照合し、再現テストを追加して修正' });
+  // 事実は消さずに名前を付けて残す。再ログインは人が行う操作でコードでは直せないため
+  // fixTask を付けない(low)＝毎日の起票対象にはしない（codex_lane_unavailable と同じ扱い）。
+  if (authFailed.length) findings.push({ id: 'codex_auth_failed', severity: 'low', title: 'Codex CLI が未認証（WSL 側の再ログインが必要）', evidence: [`${authFailed.length}件`, 'WSL の ~/.codex/auth.json を確認し codex login を実行'] });
+  if (realEmpty.length) findings.push({ id: 'codex_empty_output', severity: 'medium', title: 'Codex の出力ゼロ', evidence: [`${realEmpty.length}件`, ...reasonTop(realEmpty), ...(empty.length > realEmpty.length ? [`インフラ/起動失敗で除外 ${empty.length - realEmpty.length}件`] : [])], fixTask: 'codex が出力ゼロで終了した原因（認証切れ/上限/起動失敗）を codex-do のログから特定' });
   for (const [provider, state] of Object.entries(cooldown)) if (state?.reason === 'http_402' && Number(state.until) > nowMs) findings.push({ id: 'provider_balance_exhausted', severity: 'low', title: `${provider} の残高切れ`, evidence: [`provider ${provider}`, CLAUDE_FALLBACK_RULE] });
   return findings.length ? findings : [{ id: 'healthy', severity: 'low', title: '委譲経路は正常', evidence: [] }];
 }
@@ -138,7 +200,7 @@ export function upsertFixTasks({ home, findings, now = new Date(), todayStr }) {
   block = block.split(/\r?\n/).map((line) => { if (/^##[ \t]+残TODO/.test(line)) { inTodos = true; return line; } if (inTodos && /^##[ \t]+/.test(line)) inTodos = false; return line; }).join('\n');
   let n = 0; inTodos = false;
   block = block.split('\n').map((line) => { if (/^##[ \t]+残TODO/.test(line)) { inTodos = true; return line; } if (inTodos && /^##[ \t]+/.test(line)) inTodos = false; return inTodos && /^\s*\d+[.)、]\s+/.test(line) ? line.replace(/^\s*\d+[.)、]/, `${++n}.`) : line; }).join('\n');
-  fs.writeFileSync(file, md.slice(0, start) + block + md.slice(end));
+  writeHandoff(file, md.slice(0, start) + block + md.slice(end));
   return true;
 }
 

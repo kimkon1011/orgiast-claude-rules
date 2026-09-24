@@ -7,12 +7,14 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { redactSecrets } from './redact-secrets.mjs';
+import { isEntry } from './is-entry.mjs';
 
 const execFileAsync = promisify(execFile);
 const HEAD_BYTES = 64 * 1024;
 const TAIL_BYTES = 64 * 1024;
 const DAY_MS = 86_400_000;
-const args = process.argv.slice(2);
+const isMain = isEntry(import.meta.url);
+const args = isMain ? process.argv.slice(2) : [];
 
 function usage(message) {
   if (message) console.error(`エラー: ${message}`);
@@ -241,7 +243,7 @@ function analyze(file, headRaw, tailRaw, headEvents, tailEvents, tailBytes) {
   };
 }
 
-async function listFiles() {
+export async function listFiles() {
   const bySessionId = new Map();
   let closedSessionIds = new Set();
   if (!includeClosed) {
@@ -289,7 +291,7 @@ async function listFiles() {
   return [...bySessionId.values()];
 }
 
-async function inspect(file) {
+export async function inspect(file) {
   if (!file.size) { stats.emptyFiles++; return null; }
   try {
     const [headRaw, tailRaw] = await Promise.all([readWindow(file, HEAD_BYTES, false), readWindow(file, TAIL_BYTES, true)]);
@@ -305,7 +307,7 @@ async function inspect(file) {
   } catch { stats.readErrors++; return null; }
 }
 
-function parseLlmResult(stdout) {
+export function parseLlmResult(stdout) {
   const raw = String(stdout || '').trim();
   const candidates = [raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '')];
   const first = raw.indexOf('{');
@@ -315,12 +317,17 @@ function parseLlmResult(stdout) {
     try {
       const value = JSON.parse(candidate);
       if (!['未完了', '完了', '不明'].includes(value.verdict)) continue;
-      const confidence = Number(value.confidence);
+      // 数値と数値文字列だけ受ける。null/true/[] は Number() だと 0/1/0 に化けて黙って通るので弾く。
+      const rawConfidence = value.confidence;
+      const confidence = typeof rawConfidence === 'number' ? rawConfidence
+        : typeof rawConfidence === 'string' && rawConfidence.trim() !== '' ? Number(rawConfidence)
+        : NaN;
       if (!Number.isFinite(confidence) || confidence < 0 || confidence > 100) continue;
       return { verdict: value.verdict, confidence: Math.round(confidence), next: value.verdict === '完了' ? '' : shorten(value.next, 40) };
     } catch { /* フェンス除去後とJSON部分抽出後を順に試す。 */ }
   }
-  return { verdict: '不明', confidence: 0, next: '' };
+  // 正当な verdict=不明 と解析失敗を分離し、呼び出し側で次の provider を試せるようにする。
+  return null;
 }
 
 function applyLlmResult(record, result) {
@@ -354,8 +361,12 @@ async function addLlmJudgments(records) {
     for (const record of records) failRecord(record, 'tools/llm-ask.mjs が見つかりません');
     return llmStats;
   }
-  const selectedProvider = (provider || process.env.SESSION_TRIAGE_LLM_PROVIDERS || 'groq')
-    .split(',').map((value) => value.trim()).filter(Boolean)[0] || 'groq';
+  // 既定は多段。1段だけだとフォールバック鎖が名前だけになる（実測 2026-09-14: 直近7日で
+  // groq は 16回中13回が 429、openrouter と grok は 0%失敗）。鍵が無い provider は
+  // 例外になって catch から次段へ進むので、未設定の機体でも1段のときより悪くならない。
+  const providerChain = (provider || process.env.SESSION_TRIAGE_LLM_PROVIDERS || 'groq,openrouter,grok')
+    .split(',').map((value) => value.trim()).filter(Boolean);
+  if (!providerChain.length) providerChain.push('groq');
   const errorDetail = (error) => String(error?.stderr || error?.message || error).trim().split('\n').slice(-1)[0].slice(0, 200);
   let cursor = 0;
   async function worker() {
@@ -377,13 +388,19 @@ async function addLlmJudgments(records) {
       prompt = redactSecrets(prompt);
       let result;
       let failure = '';
-      try {
-        const { stdout } = await execFileAsync(process.execPath, [helper, '--provider', selectedProvider, '--max', '200', prompt], { timeout: 60_000, maxBuffer: 256 * 1024 });
-        result = parseLlmResult(stdout);
-        if (process.env.SESSION_TRIAGE_DEBUG) console.error(`DBG ${record.sessionId.slice(0, 8)} provider=${selectedProvider} promptLen=${prompt.length} raw=${JSON.stringify(String(stdout).slice(0, 300))}`);
-      } catch (error) {
-        failure = errorDetail(error);
-        if (failure && !llmStats.providerNotes.includes(failure)) llmStats.providerNotes.push(failure);
+      for (const selectedProvider of providerChain) {
+        try {
+          const { stdout } = await execFileAsync(process.execPath, [helper, '--provider', selectedProvider, '--max', '200', prompt], { timeout: 60_000, maxBuffer: 256 * 1024 });
+          result = parseLlmResult(stdout);
+          if (process.env.SESSION_TRIAGE_DEBUG) console.error(`DBG ${record.sessionId.slice(0, 8)} provider=${selectedProvider} promptLen=${prompt.length} raw=${JSON.stringify(String(stdout).slice(0, 300))}`);
+          if (result) break;
+          failure = `${selectedProvider}: LLM応答を解析できません`;
+          if (!llmStats.providerNotes.includes(failure)) llmStats.providerNotes.push(failure);
+        } catch (error) {
+          failure = errorDetail(error);
+          if (failure && !llmStats.providerNotes.includes(failure)) llmStats.providerNotes.push(failure);
+          if (process.env.SESSION_TRIAGE_DEBUG) console.error(`DBG ${record.sessionId.slice(0, 8)} provider=${selectedProvider} error=${JSON.stringify(failure)}`);
+        }
       }
       if (result) {
         applyLlmResult(record, result);
@@ -431,32 +448,34 @@ function markdown(records, summary) {
   return `<!-- SESSION-TRIAGE-START -->\n# Claude Code セッショントリアージ\n\n🔴 ${summary.counts['要対応']}本 / 🟡 ${summary.counts['要確認']}本 / 生成時刻 ${new Date().toISOString()}\n\n走査: ${summary.scanned}本\n${llmLine}\n| 分類 | score | 表示名 | titleSource | 最初のプロンプト | 検索語 | 更新 | cwd | 理由 | 次アクション | 再開 |\n|---|---:|---|---|---|---|---|---|---|---|---|\n${rows.join('\n')}\n<!-- SESSION-TRIAGE-END -->\n`;
 }
 
-try {
-  const files = await listFiles();
-  const records = (await Promise.all(files.map(inspect))).filter(Boolean).sort((a, b) => b.score - a.score || a.ageDays - b.ageDays);
-  const filtered = statusFilter ? records.filter((r) => r.status === statusFilter) : records;
-  let selected = filtered.slice(0, top);
-  let llmStats;
-  if (llmMode) {
-    llmStats = await addLlmJudgments(selected);
-    selected.sort((a, b) => {
-      const rank = (r) => r.llm?.verdict === '未完了' && r.llm.confidence >= 60 ? 0 : r.status === '要確認' ? 1 : 2;
-      return rank(a) - rank(b) || a.ageDays - b.ageDays;
-    });
-    if (!allStatus && !includeCompleted) selected = selected.filter((r) => r.llm?.verdict !== '完了' || r.llm.confidence < 60);
+if (isMain) {
+  try {
+    const files = await listFiles();
+    const records = (await Promise.all(files.map(inspect))).filter(Boolean).sort((a, b) => b.score - a.score || a.ageDays - b.ageDays);
+    const filtered = statusFilter ? records.filter((r) => r.status === statusFilter) : records;
+    let selected = filtered.slice(0, top);
+    let llmStats;
+    if (llmMode) {
+      llmStats = await addLlmJudgments(selected);
+      selected.sort((a, b) => {
+        const rank = (r) => r.llm?.verdict === '未完了' && r.llm.confidence >= 60 ? 0 : r.status === '要確認' ? 1 : 2;
+        return rank(a) - rank(b) || a.ageDays - b.ageDays;
+      });
+      if (!allStatus && !includeCompleted) selected = selected.filter((r) => r.llm?.verdict !== '完了' || r.llm.confidence < 60);
+    }
+    const counts = Object.fromEntries([...validStatuses].map((s) => [s, records.filter((r) => r.status === s).length]));
+    const llm = llmStats ? {
+      success: llmStats.success,
+      failure: llmStats.failure,
+      providerNotes: llmStats.providerNotes,
+      failureReasons: [...llmStats.failureReasons].map(([reason, count]) => ({ reason, count })),
+    } : undefined;
+    const summary = { ...stats, counts, elapsedSeconds: Number(((Date.now() - started) / 1000).toFixed(2)), projectsRoot, ...(llm && { llm }) };
+    if (mdPath) await fs.writeFile(path.resolve(mdPath), redactSecrets(markdown(selected, summary)), 'utf8');
+    if (jsonMode) console.log(redactSecrets(JSON.stringify({ summary, sessions: selected }, null, 2)));
+    else console.log(redactSecrets(terminalText(selected, summary)));
+  } catch (error) {
+    console.error(redactSecrets(`session-triage: ${error.message}`));
+    process.exitCode = 1;
   }
-  const counts = Object.fromEntries([...validStatuses].map((s) => [s, records.filter((r) => r.status === s).length]));
-  const llm = llmStats ? {
-    success: llmStats.success,
-    failure: llmStats.failure,
-    providerNotes: llmStats.providerNotes,
-    failureReasons: [...llmStats.failureReasons].map(([reason, count]) => ({ reason, count })),
-  } : undefined;
-  const summary = { ...stats, counts, elapsedSeconds: Number(((Date.now() - started) / 1000).toFixed(2)), projectsRoot, ...(llm && { llm }) };
-  if (mdPath) await fs.writeFile(path.resolve(mdPath), redactSecrets(markdown(selected, summary)), 'utf8');
-  if (jsonMode) console.log(redactSecrets(JSON.stringify({ summary, sessions: selected }, null, 2)));
-  else console.log(redactSecrets(terminalText(selected, summary)));
-} catch (error) {
-  console.error(redactSecrets(`session-triage: ${error.message}`));
-  process.exitCode = 1;
 }

@@ -1,4 +1,7 @@
 const vscode = require('vscode');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { resolveClaudeShellPath } = require('./shell-path');
 const { decideAction, shouldRetryMobileTab, mobileTabOpenCommand } = require('./route');
 
@@ -150,6 +153,17 @@ function activate(context) {
             };
         const terminal = vscode.window.createTerminal(options);
         terminal.show();
+        const ack = params.get('ack');
+        if (ack) {
+          // URI を送っただけの偽成功を防ぐ応答。任意ファイルを書けないよう ~/.claude 直下に限定する。
+          const resolvedAck = path.resolve(ack);
+          const allowedDir = `${path.resolve(os.homedir(), '.claude')}${path.sep}`;
+          const allowed = process.platform === 'win32'
+            ? resolvedAck.toLowerCase().startsWith(allowedDir.toLowerCase())
+            : resolvedAck.startsWith(allowedDir);
+          if (!allowed) throw new Error('ack path が許可範囲外です');
+          fs.writeFileSync(resolvedAck, `${Date.now()}\n`, 'utf8');
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         await vscode.window.showErrorMessage(`Orgiast next session の起動に失敗しました: ${message}`);

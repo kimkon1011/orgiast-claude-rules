@@ -2,7 +2,6 @@
 // 通常実装は Sol、長時間・高難度・auto の失敗時は Astra（既定 effort high）。
 // --lane sol|astra|auto / --model astra|sol|<slug> / --effort で指定する。
 // 先頭40行の <!-- lane: astra --> でも指定可。Astra 上限時は Sol へ退避する。
-import { recordGeminiUsage } from './gemini-usage-ledger.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -21,8 +20,52 @@ export function normalizeCodexModel(model) {
   return model === 'astra' ? ASTRA : model === 'sol' ? SOL : model;
 }
 
-// I/O を持たない判定。クールダウン残時間は呼び出し側で読み取って注入する。
-export function decideCodexLane({ lane = 'auto', model, promptText = '', timeoutSecs = 1800, review = false, astraCooldownMs = 0 } = {}) {
+// gpt-5.6-sol / gpt-6-astra は API キー認証の環境向けの独自モデル名で、ChatGPT アカウント
+// 認証では invalid_request_error(400) で必ず拒否される(2026-09-21 実測: genbateam.toho@gmail.com
+// のChatGPTプランで両方とも "not supported when using Codex with a ChatGPT account"。既定の
+// codex 標準モデル(gpt-5.6-terra)は同じアカウントで正常動作する)。auth.json の中身だけで
+// 判定する純粋関数。
+export function detectChatGptAuth(authJsonText) {
+  if (!authJsonText) return null;
+  let parsed;
+  try { parsed = JSON.parse(authJsonText); } catch { return null; }
+  if (!parsed || typeof parsed !== 'object') return null;
+  if (parsed.OPENAI_API_KEY || parsed.api_key) return false;
+  if (parsed.tokens && (parsed.tokens.id_token || parsed.tokens.access_token)) return true;
+  return null;
+}
+
+// 実機の auth.json を覗く側。CODEX_DO_WSL_PROBE と同じ流儀で CODEX_DO_AUTH_MODE
+// (chatgpt|apikey|unknown) から注入できるようにし、実機 WSL の無い CI では probe しない。
+// 読めない・判定できない場合は null を返し、呼び出し側は従来どおり sol/astra を試す(安全側)。
+export function probeChatGptAuth({ forceNative = false, env = process.env, spawnImpl = spawnSync, readFileImpl, homeDir, platform = process.platform } = {}) {
+  const override = env.CODEX_DO_AUTH_MODE;
+  if (override === 'chatgpt') return true;
+  if (override === 'apikey') return false;
+  if (override === 'unknown') return null;
+  try {
+    if (platform === 'win32' && !forceNative) {
+      // launchCodex の WSL 起動確認と同じ WSL_PROBE_TIMEOUT_MS を使う。短い固定値だと
+      // WSL VM が Stopped から起きる時のコールドスタートに間に合わず、実際は ChatGPT
+      // 認証なのに毎回 null(判定不能)に落ちて sol/astra が試され続ける(2026-09-21 実測:
+      // 3000ms 固定にしていた版は初回だけ間に合わず誤フォールバックした)。
+      const listed = spawnImpl('wsl', ['-l', '-q'], { windowsHide: true, encoding: 'utf16le', timeout: WSL_PROBE_TIMEOUT_MS });
+      if (listed.status !== 0) return null;
+      const distros = String(listed.stdout || '').split(/\r?\n/).map((x) => x.replace(/\0/g, '').trim()).filter(Boolean);
+      const distro = distros.find((x) => x.toLowerCase() === 'ubuntu') || distros[0];
+      if (!distro) return null;
+      const probe = spawnImpl('wsl', ['-d', distro, '--', 'bash', '-lc', 'cat "$HOME/.codex/auth.json" 2>/dev/null'], { windowsHide: true, encoding: 'utf8', timeout: WSL_PROBE_TIMEOUT_MS });
+      if (probe.status !== 0) return null;
+      return detectChatGptAuth(probe.stdout);
+    }
+    const read = readFileImpl || fs.readFileSync;
+    const home = homeDir || os.homedir();
+    return detectChatGptAuth(read(path.join(home, '.codex', 'auth.json'), 'utf8'));
+  } catch { return null; }
+}
+
+// I/O を持たない判定。クールダウン残時間・ChatGPT認証有無は呼び出し側で読み取って注入する。
+export function decideCodexLane({ lane = 'auto', model, promptText = '', timeoutSecs = 1800, review = false, astraCooldownMs = 0, chatgptAuth = null } = {}) {
   let slug = SOL, reason = 'default_sol';
   if (model) { slug = normalizeCodexModel(model); reason = 'explicit_model'; }
   else if (lane !== 'auto') { slug = lane === 'astra' ? ASTRA : SOL; reason = `lane_${lane}`; }
@@ -40,11 +83,48 @@ export function decideCodexLane({ lane = 'auto', model, promptText = '', timeout
     }
   }
   if (slug === ASTRA && !model && astraCooldownMs > 0) { slug = SOL; reason = `astra_cooldown:${reason}`; }
-  return { slug, effort: slug === ASTRA ? 'high' : undefined, reason };
+  const effort = slug === ASTRA ? 'high' : undefined;
+  // 明示指定(--model)は尊重し、auto 判定で選んだ結果だけを既定モデルへ倒す
+  // (--lane sol/astra の明示指定も、切り分け目的で意図的に選んでいる可能性があるため尊重する)。
+  if (chatgptAuth === true && !model && lane === 'auto') return { slug: undefined, effort, reason: `chatgpt_auth_default:${reason}` };
+  return { slug, effort, reason };
 }
 
-export function buildCodexExecArgs({ slug = SOL, effort, review = false } = {}) {
-  return ['exec', '-m', slug, ...(effort ? ['-c', `model_reasoning_effort="${effort}"`] : []), '-s', review ? 'read-only' : 'workspace-write', '-'];
+export function buildCodexExecArgs({ slug, effort, review = false } = {}) {
+  return ['exec', ...(slug ? ['-m', slug] : []), ...(effort ? ['-c', `model_reasoning_effort="${effort}"`] : []), '-s', review ? 'read-only' : 'workspace-write', '-'];
+}
+
+// `.git` の「存在」ではなく「git がリポジトリとして認識できる実体か」を見る。
+// 空の .git ディレクトリ(HEAD が無い)は existsSync では true になるが、git 側は
+// "not a git repository" を返す。この食い違いがあると codex-do は --skip-git-repo-check を
+// 付けずに codex を起動し、codex が起動直後に exit 1 / 出力ゼロで死ぬ。
+// 2026-09-23 実測: auto-session の起動ディレクトリ C:\Users\uers\Downloads\CLAUDE.md配布 は
+// .git/info だけを持つ空殻で、毎晩 codex_empty_output として再掲されていた(真因)。
+export function isGitDir(dotGit, io = {}) {
+  const stat = io.stat || fs.statSync, readFile = io.readFile || fs.readFileSync, exists = io.exists || fs.existsSync;
+  try {
+    if (stat(dotGit).isDirectory()) return exists(path.join(dotGit, 'HEAD'));
+    // worktree / submodule の .git は `gitdir: <path>` を書いたファイル。指す先が無ければ git は認識しない。
+    const match = /^gitdir:\s*(.+?)\s*$/m.exec(String(readFile(dotGit, 'utf8')));
+    if (!match) return false;
+    return exists(path.join(path.resolve(path.dirname(dotGit), match[1]), 'HEAD'));
+  } catch { return false; }
+}
+
+export function isInsideGitRepo(cwd, io = {}) {
+  let current = path.resolve(cwd);
+  while (true) {
+    if (isGitDir(path.join(current, '.git'), io)) return true;
+    const parent = path.dirname(current);
+    if (parent === current) return false;
+    current = parent;
+  }
+}
+
+export function wslCodexArgs({ distro, cwd, codexArgs, inGitRepo }) {
+  const args = [...codexArgs];
+  if (inGitRepo === false) args.splice(-1, 0, '--skip-git-repo-check');
+  return ['-d', distro, '--cd', cwd, '--', 'codex', ...args];
 }
 
 export function needsWorktreeRepair(gitFileContent) {
@@ -263,7 +343,9 @@ export function resolveFallbackBackends(homeDir) {
     if (backends.length) return backends;
     console.error('[codex-do] codex-fallback-order.json に使えるバックエンドが無いため従来順へ戻します');
   }
-  const ordered = preferFree ? [openrouter, gemini, deepseek] : [gemini, deepseek, openrouter];
+  const ccDeepseek = cheapCodeBackend('cheap-code:deepseek', homeDir);
+  const ccGlm = cheapCodeBackend('cheap-code:glm', homeDir);
+  const ordered = preferFree ? [ccDeepseek, ccGlm, gemini] : [gemini, ccDeepseek, ccGlm];
   return ordered.filter(Boolean);
 }
 
@@ -313,6 +395,9 @@ const dryRun = args.includes('--dry-run');
 const forceNative = args.includes('--force-native');
 const allowNative = args.includes('--allow-native');
 const noFallback = args.includes('--no-fallback');
+// WSL 経路が使えず codex を起動できなかったか。true のときは再試行/昇格をせず、
+// 既存のフォールバック連鎖へそのまま渡す（2026-09-19）。
+let launchUnavailable = false;
 const review = args.includes('--review');
 const noEscalate = args.includes('--no-escalate');
 const modelIndex = args.indexOf('--model');
@@ -363,6 +448,9 @@ if (promptFileIndex >= 0) {
   if (!promptFile) { console.error(`--prompt-file にファイルパスが必要です\n${usage}`); process.exit(2); }
   try {
     instruction = fs.readFileSync(promptFile, 'utf8');
+    if (!/(?:DONE_CRITERIA|完了条件|成功条件)/.test(instruction)) {
+      console.error('[codex-do] 警告: 指示ファイルに完了条件がありません（protocols/HANDOFF.md 参照）');
+    }
   } catch (error) {
     console.error(`--prompt-file を読めません: ${promptFile} (${error.code || error.message})`);
     process.exit(2);
@@ -413,15 +501,19 @@ if (mainMemory || related.length || claudeMd) {
   if (claudeMd) context.push(`\n## 対象プロジェクト CLAUDE.md\n${claudeMd}`);
 }
 const prompt = `${context.join('\n')}\n\n## 実装指示\n${instruction}`.trim();
-let selectedLane = decideCodexLane({ lane, model, promptText: instruction, timeoutSecs: timeoutSeconds, review, astraCooldownMs: providerCooldownMs('codex-astra') });
+// WSL 実機に触るのは auto かつ明示指定が無い時だけ。--dry-run も実際の実行計画を見せる
+// ものなので probe 自体はする(モデルだけ変わって中身は実行しないので副作用は無い)。
+const chatgptAuth = (!model && lane === 'auto') ? probeChatGptAuth({ forceNative }) : null;
+let selectedLane = decideCodexLane({ lane, model, promptText: instruction, timeoutSecs: timeoutSeconds, review, astraCooldownMs: providerCooldownMs('codex-astra'), chatgptAuth });
 if (effort) selectedLane.effort = effort;
 if (selectedLane.reason.includes('astra_cooldown')) console.error('[codex-do] astra_cooldown: Astra クールダウン中のため Sol へ退避');
-const logCodex = () => console.log(`[codex-do] executor=codex model=${selectedLane.slug} effort=${selectedLane.effort || 'default'} lane=${selectedLane.reason}`);
+if (selectedLane.reason.startsWith('chatgpt_auth_default')) console.error('[codex-do] chatgpt_auth_default: ChatGPTアカウント認証のため sol/astra を使わず codex 既定モデルで実行します');
+const logCodex = () => console.log(`[codex-do] executor=codex model=${selectedLane.slug || '既定(codexのデフォルト)'} effort=${selectedLane.effort || 'default'} lane=${selectedLane.reason}`);
 if (dryRun) { logCodex(); console.log(prompt); process.exit(0); }
 
 // 実行前の作業ツリーを控える。未コミット差分が常時あるリポでは diff が空にならず、
 // 下の「空diffなら書き込めていない」判定が一度も発火しないため（2026-09-03 実害）。
-const treeSnapshot = () => `${spawnSync('git', ['-C', cwd, 'diff', '--stat'], { encoding: 'utf8' }).stdout || ''}\n${spawnSync('git', ['-C', cwd, 'status', '--porcelain'], { encoding: 'utf8' }).stdout || ''}`;
+const treeSnapshot = () => `${spawnSync('git', ['-C', cwd, 'diff', '--stat'], { windowsHide: true, encoding: 'utf8' }).stdout || ''}\n${spawnSync('git', ['-C', cwd, 'status', '--porcelain'], { windowsHide: true, encoding: 'utf8' }).stdout || ''}`;
 const treeBefore = treeSnapshot();
 const wantedEdit = !review && /実装|作って|修正|直して|追加して|リファクタ|refactor|fix|implement/i.test(instruction);
 const started = Date.now();
@@ -457,7 +549,7 @@ function execute(command, commandArgs, options = {}) {
     delete spawnOptions.timeoutSecs;
     // stdio を全て pipe にして TTY を渡さない。TTY 付きで起動すると codex が端末入力を
     // 待ったまま眠り続ける(2026-08-26 に 1日00:57 hang した実害)。
-    const child = spawn(command, commandArgs, { ...spawnOptions, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(command, commandArgs, { ...spawnOptions, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     const timer = setTimeout(() => {
       timedOut = true;
       console.error(`\n⏱ ${command} が ${callTimeoutSeconds} 秒で応答を終えなかったので停止しました。--timeout で延長できます`);
@@ -492,7 +584,7 @@ let fallbackBackend = null;
 let lastBackend = null;
 
 let escalated = false;
-function recordUsage(result, modelName, seconds, provider = 'codex') {
+function recordUsage(result, modelName, seconds, provider = 'codex', attempts = 1) {
   try {
     const ledger = path.join(home, '.claude', 'executor-usage.jsonl');
     fs.mkdirSync(path.dirname(ledger), { recursive: true });
@@ -500,20 +592,27 @@ function recordUsage(result, modelName, seconds, provider = 'codex') {
       t: new Date().toISOString(), provider, model: modelName,
       lane: selectedLane.reason, escalated,
       in: Math.ceil(prompt.length / 4), out: Math.ceil((result.outputChars || 0) / 4),
+      launched: result?.launched !== false,
       timedOut: result?.timedOut === true,
       status: result?.status ?? null,
+      cwd,
+      stderrTail: String(result?.stderr || '').replace(/\s+/g, ' ').trim().slice(-200),
+      fastFail: result?.timedOut !== true && Number(result?.status) !== 0 && (result?.outputChars || 0) === 0,
+      attempts,
       secs: Number(seconds.toFixed(3))
     })}\n`, 'utf8');
   } catch {}
 }
-async function executeCodex() {
-  const attemptStarted = Date.now();
-  logCodex();
-  const codexArgs = buildCodexExecArgs({ ...selectedLane, review });
+async function launchCodex(codexArgs) {
   let result;
 
   if (process.platform === 'win32' && !forceNative) {
-    const listed = spawnSync('wsl', ['-l', '-q'], { encoding: 'utf16le', timeout: WSL_PROBE_TIMEOUT_MS });
+    // 実機の distro 有無で分岐が変わると abort 経路のテストが非決定的になるため、
+    // CODEX_DO_MOCK_RESULTS と同じ流儀でプローブ結果を注入できるようにする。
+    const fakeWslProbe = process.env.CODEX_DO_WSL_PROBE;
+    const listed = fakeWslProbe
+      ? { status: fakeWslProbe === 'absent' ? 1 : 0, stdout: '' }
+      : spawnSync('wsl', ['-l', '-q'], { windowsHide: true, encoding: 'utf16le', timeout: WSL_PROBE_TIMEOUT_MS });
     const distros = listed.status === 0 ? listed.stdout.split(/\r?\n/).map((x) => x.replace(/\0/g, '').trim()).filter(Boolean) : [];
     const distro = distros.find((x) => x.toLowerCase() === 'ubuntu') || distros[0];
     let usable = false;
@@ -521,10 +620,10 @@ async function executeCodex() {
     let finalStep = wslCodexLaunchPlan({ distroFound: Boolean(distro), codexPresent: false, versionOk: false, installAttempted: false, retried: false, allowNative });
     if (distro) {
       const versionProbe = () => {
-        const probe = spawnSync('wsl', ['-d', distro, '--', 'codex', '--version'], { encoding: 'utf8', timeout: WSL_PROBE_TIMEOUT_MS });
+        const probe = spawnSync('wsl', ['-d', distro, '--', 'codex', '--version'], { windowsHide: true, encoding: 'utf8', timeout: WSL_PROBE_TIMEOUT_MS });
         return { ok: probe.status === 0, stderr: (probe.stderr || '').toString().trim().slice(0, 300) };
       };
-      const present = spawnSync('wsl', ['-d', distro, '--', 'sh', '-lc', 'command -v codex >/dev/null 2>&1'], { timeout: WSL_PROBE_TIMEOUT_MS }).status === 0;
+      const present = spawnSync('wsl', ['-d', distro, '--', 'sh', '-lc', 'command -v codex >/dev/null 2>&1'], { windowsHide: true, timeout: WSL_PROBE_TIMEOUT_MS }).status === 0;
       const first = versionProbe();
       usable = first.ok;
       failureReason = present ? `WSL ${distro} の codex 起動確認に失敗しました` : `WSL ${distro} に codex が見つかりませんでした`;
@@ -537,7 +636,7 @@ async function executeCodex() {
         if (!usable) console.error(`WSL ${distro} の codex は再試行でも起動確認できませんでした。在るのに失敗しているため npm 再インストールはしません`);
       } else if (step === 'install') {
         console.error(`WSL ${distro} に codex が見つからないため自動インストールを試します`);
-        const installed = spawnSync('wsl', ['-d', distro, '--', 'npm', 'i', '-g', '@openai/codex'], { stdio: 'inherit', timeout: 120000 });
+        const installed = spawnSync('wsl', ['-d', distro, '--', 'npm', 'i', '-g', '@openai/codex'], { windowsHide: true, stdio: 'inherit', timeout: 120000 });
         if (installed.status === 0) usable = versionProbe().ok;
         else console.error(`WSL ${distro} への codex 自動インストールが失敗しました(exit ${installed.status})。WSL 内に手動で導入してください`);
         if (!usable) finalStep = wslCodexLaunchPlan({ distroFound: true, codexPresent: false, versionOk: false, installAttempted: true, retried: false, allowNative });
@@ -547,38 +646,71 @@ async function executeCodex() {
       const gitFile = path.join(cwd, '.git');
       try {
         if (fs.statSync(gitFile).isFile() && needsWorktreeRepair(fs.readFileSync(gitFile, 'utf8'))) {
-          const repaired = spawnSync('git', ['-C', cwd, '-c', 'worktree.useRelativePaths=true', 'worktree', 'repair'], { encoding: 'utf8' });
+          const repaired = spawnSync('git', ['-C', cwd, '-c', 'worktree.useRelativePaths=true', 'worktree', 'repair'], { windowsHide: true, encoding: 'utf8' });
           if (repaired.status === 0) console.error('⚠️ Windows 絶対パスの gitdir は WSL 側 codex が解決できないため相対パスへ直しました');
           else console.error(`⚠️ Windows 絶対パスの gitdir を相対パスへ修復できませんでした（処理は続行します）: ${(repaired.stderr || repaired.error?.message || `exit ${repaired.status}`).trim()}`);
         }
       } catch (error) {
         if (error?.code !== 'ENOENT') console.error(`⚠️ worktree の gitdir 確認に失敗しました（処理は続行します）: ${error?.message ?? error}`);
       }
-      // WSL 側 codex は cwd を /mnt/c/... で見るため ~/.codex/config.toml の Windows 形式 trust キーと
-      // 構造的に一致せず、常に "Not inside a trusted directory" で exit 1・出力ゼロになる。
-      const wslArgs = [...codexArgs];
-      wslArgs.splice(-1, 0, '--skip-git-repo-check');
-      result = await execute('wsl', ['-d', distro, '--cd', cwd, '--', 'codex', ...wslArgs]);
+      result = await execute('wsl', wslCodexArgs({ distro, cwd, codexArgs, inGitRepo: isInsideGitRepo(cwd) }));
     }
     else {
       console.error(`🚨 ${failureReason}`);
       if (finalStep !== 'native') {
-        console.error('🚨 WSL の codex 経路が使えないため中断しました（native Windows codex は read-only で編集が保存されない既知の不具合があるため、既定では使いません）。WSL を確認するか、承知の上で native を使うなら --allow-native を付けて再実行してください。');
-        process.exit(3);
+        // 台帳には必ず1行残す。ここで記録せずに exit すると無音故障になる（2026-09-16 診断）。
+        // ただし process.exit すると codex-do 本来のフォールバック連鎖に到達せず、WSL の無い PC では
+        // 委譲が必ず死ぬ（2026-09-19 実測: この PC は `wsl -l -q` が空）。--no-fallback の明示がある
+        // ときだけ従来どおり中断し、それ以外は起動失敗を結果として返してフォールバックへ渡す。
+        if (noFallback) {
+          console.error('🚨 WSL の codex 経路が使えないため中断しました（native Windows codex は read-only で編集が保存されない既知の不具合があるため、既定では使いません）。WSL を確認するか、承知の上で native を使うなら --allow-native を付けて再実行してください。');
+          recordUsage({ outputChars: 0, status: 3, stderr: failureReason, timedOut: false, launched: false }, `codex-cli/${selectedLane.slug || 'default'}`, 0, 'codex', 0);
+          process.exit(3);
+        }
+        launchUnavailable = true;
+        return { status: 3, outputChars: 0, output: '', stderr: failureReason, timedOut: false, launched: false };
       }
       console.error('⚠️ WSL 経路が使えないため、--allow-native の指定によりネイティブ Windows codex で実行します。\nWindows 版は read-only サンドボックス固定でファイルを書けない既知の不具合(openai/codex#35428)があり、編集が保存されない可能性が高い。');
       const nativeArgs = [...codexArgs];
-      if (!fs.existsSync(path.join(cwd, '.git'))) nativeArgs.splice(-1, 0, '--skip-git-repo-check');
+      if (!isInsideGitRepo(cwd)) nativeArgs.splice(-1, 0, '--skip-git-repo-check');
       result = await execute('codex', nativeArgs, { cwd });
     }
   } else {
     if (process.platform === 'win32') console.error('⚠️ --force-native によりネイティブ Windows codex で実行します。編集が保存されない可能性があります');
     const nativeArgs = [...codexArgs];
-    if (!fs.existsSync(path.join(cwd, '.git'))) nativeArgs.splice(-1, 0, '--skip-git-repo-check');
+    if (!isInsideGitRepo(cwd)) nativeArgs.splice(-1, 0, '--skip-git-repo-check');
     result = await execute('codex', nativeArgs, { cwd });
   }
 
-  recordUsage(result, `codex-cli/${selectedLane.slug}`, (Date.now() - attemptStarted) / 1000);
+  return result;
+}
+
+// codex は WSL の名前解決失敗などで、セッションを作る前に 1〜9 秒で exit 1 / 出力ゼロで死ぬことがある
+// (2026-09-14 実測・stderr に "failed to lookup address information")。同一プロンプトの再実行は
+// 2 分後に成功していた実例があるため、即時失敗に限って 1 回だけ再試行する。
+const FAST_FAIL_SECS = 60;
+function isFastFail(result, elapsedSecs) {
+  return result?.timedOut !== true && Number(result?.status) !== 0
+    && (result?.outputChars || 0) === 0 && elapsedSecs < FAST_FAIL_SECS;
+}
+
+async function executeCodex() {
+  const codexArgs = buildCodexExecArgs({ ...selectedLane, review });
+  let result = null, attempts = 0, seconds = 0;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const attemptStarted = Date.now();
+    logCodex();
+    result = await launchCodex(codexArgs);
+    const elapsed = (Date.now() - attemptStarted) / 1000;
+    seconds += elapsed;
+    attempts = attempt;
+    // そもそも起動できていない(launched:false)なら再試行しても結果は変わらない。
+    if (result?.launched === false) break;
+    if (!isFastFail(result, elapsed)) break;
+    const tail = String(result?.stderr || '').replace(/\s+/g, ' ').trim().slice(-200);
+    if (attempt === 1) console.error(`[codex-do] codex が ${elapsed.toFixed(1)} 秒で出力ゼロ(exit ${result.status})のため 1 回だけ再試行します${tail ? `: ${tail}` : ''}`);
+  }
+  recordUsage(result, `codex-cli/${selectedLane.slug || 'default'}`, seconds, 'codex', attempts);
   return result;
 }
 
@@ -605,7 +737,7 @@ while (true) {
     continue;
   }
   const failure = failureReason(result);
-  if (!quotaCheck.matched && failure && selectedLane.slug === SOL && lane === 'auto' && !model && !noEscalate && !escalated && !astraRetreated && providerCooldownMs('codex-astra') === 0) {
+  if (!quotaCheck.matched && failure && !launchUnavailable && selectedLane.slug === SOL && lane === 'auto' && !model && !noEscalate && !escalated && !astraRetreated && providerCooldownMs('codex-astra') === 0) {
     console.log(`[codex-do] sol 失敗 → astra へ昇格 (理由: ${failure})`);
     escalated = true;
     selectedLane = { slug: ASTRA, effort: 'high', reason: `escalated:${failure}` };
@@ -615,8 +747,9 @@ while (true) {
   if (escalationFailed && result.status === 0) result.status = 1;
   break;
 }
-const fallbackReason = quotaCheck.matched ? 'Codex usage limit を検出' : 'Astra 昇格後も失敗';
-if (quotaCheck.matched || escalationFailed) {
+const fallbackReason = launchUnavailable ? 'WSL 経路が無く codex を起動できない'
+  : quotaCheck.matched ? 'Codex usage limit を検出' : 'Astra 昇格後も失敗';
+if (quotaCheck.matched || escalationFailed || launchUnavailable) {
   if (quotaCheck.matched) {
     quotaResetUntil = parseCodexResetUntil(`${result?.output || ''}\n${result?.stderr || ''}`);
     try { writeCodexCooldown(quotaResetUntil); } catch {}
@@ -629,6 +762,7 @@ if (quotaCheck.matched || escalationFailed) {
     }
   } else {
     executorName = 'fallback';
+    if (launchUnavailable) console.error('[codex-do] WSL の codex 経路が使えないため、代替バックエンドで実行します（WSL を整備するか、承知の上で native を使うなら --allow-native）');
     console.log(`[codex-do] executor=fallback (理由: ${fallbackReason})`);
     if (quotaCheck.matched) console.error(`[codex-do] Codex usage limit detected: ${quotaCheck.pattern} at index ${quotaCheck.index}. Context: "${quotaCheck.snippet}"`);
     console.error(`[codex-do] Falling back to an agentic CLI...`);
@@ -657,9 +791,6 @@ if (quotaCheck.matched || escalationFailed) {
                 shell: process.platform === 'win32',
                 timeoutSecs: backendTimeout
               });
-        if (backend.kind === 'gemini') {
-          try { recordGeminiUsage({ model: backend.model, inTokens: null, outTokens: null, source: 'llm-ask', tool: 'codex-do', status: result.status, timedOut: result.timedOut === true }, { home }); } catch {}
-        }
         if (result.status === null) {
           console.error(`[codex-do] Failed to spawn ${backend.name} fallback:`, result.error);
           result.status = 1;
@@ -685,7 +816,7 @@ if (quotaCheck.matched || escalationFailed) {
 
 const secs = (Date.now() - started) / 1000;
 const reportedFallbackBackend = fallbackBackend ?? lastBackend;
-const diff = spawnSync('git', ['-C', cwd, 'diff', '--stat'], { encoding: 'utf8' });
+const diff = spawnSync('git', ['-C', cwd, 'diff', '--stat'], { windowsHide: true, encoding: 'utf8' });
 if (diff.stdout) process.stdout.write(diff.stdout);
 // 読み取り専用の質問(説明して/調べて)では空diffが正常なので、指示自体が実装系のときだけ判定する。
 // 「空か」ではなく「この実行で変わったか」を見る。
@@ -709,7 +840,7 @@ if (shouldFlagEmptyFallbackDiff({ executorName, wantedEdit, timedOut: result.tim
 if (quotaCheck.matched && executorName === 'fallback' && result?.status !== 0) {
   try { writeCodexCooldown(quotaResetUntil, undefined, 'usage_limit_no_fallback'); } catch {}
 }
-if (executorName === 'fallback' && reportedFallbackBackend?.kind !== 'gemini') {
+if (executorName === 'fallback') {
   recordUsage(result, `${reportedFallbackBackend?.name ?? 'unknown'}/${reportedFallbackBackend?.model ?? 'unknown'}`, secs, 'fallback');
 }
 

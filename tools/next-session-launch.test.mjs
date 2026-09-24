@@ -132,7 +132,7 @@ test('VSCode 起動は code.cmd を cmd.exe /c 経由で実行する', () => {
     { label: 'open-session', command: 'cmd.exe', args: ['/c', 'C:\\Code\\bin\\code.cmd', '--open-url', 'vscode://Anthropic.claude-code/open?prompt=%2Fsession-start'] },
   ]);
   assert.deepEqual(planVscodeLaunch({ codeCli: 'C:\\Code\\bin\\code.cmd', cwd: 'C:\\work', prompt: '/session-start', openFolder: true })[0], {
-    label: 'open-folder', command: 'cmd.exe', args: ['/c', 'C:\\Code\\bin\\code.cmd', '-n', 'C:\\work'],
+    label: 'open-folder', command: 'cmd.exe', args: ['/c', 'C:\\Code\\bin\\code.cmd', '-r', 'C:\\work'],
   });
   assert.equal(planVscodeLaunch({ codeCli: '', cwd: 'C:\\work', prompt: '' }), null);
   assert.equal(planVscodeLaunch({ codeCli: 'C:\\Code\\bin\\code.cmd', cwd: '', prompt: '', openFolder: true }), null);
@@ -477,7 +477,7 @@ test('VSCode 経路は既定で URI だけを撃ち、既存ウィンドウを�
   assert.match(successLog, /cwd   : C:\\work/);
 });
 
-test('--open-folder のときだけ新規ウィンドウ(-n)を先に開く', async () => {
+test('--open-folder のときだけ既存ウィンドウ再利用(-r)で先に開く', async () => {
   const codeCli = 'C:\\Code\\bin\\code.cmd';
   const waited = [];
   const { io, calls } = fakeIo({
@@ -487,8 +487,7 @@ test('--open-folder のときだけ新規ウィンドウ(-n)を先に開く', as
   });
   assert.equal(await launchNextSession(['--target', 'vscode', '--open-folder'], io), 0);
   assert.equal(calls.spawn.length, 2);
-  // -n が無いと既存ウィンドウを再読み込みしてしまう。
-  assert.deepEqual(calls.spawn[0][1], ['/c', codeCli, '-n', 'C:\\work']);
+  assert.deepEqual(calls.spawn[0][1], ['/c', codeCli, '-r', 'C:\\work']);
   assert.equal(calls.spawn[1][1][2], '--open-url');
   assert.deepEqual(waited, [2500]);
 });
@@ -507,7 +506,7 @@ test('VSCode dry-run は route と手順だけを出して spawn しない', asy
   assert.equal(output.steps[0].label, 'open-session');
 });
 
-function vscodeExtIo({ installedVersion = '', bundledVersion = '0.3.2', codeCli = 'C:\\Code\\bin\\code.cmd' } = {}) {
+function vscodeExtIo({ installedVersion = '', bundledVersion = '0.3.2', codeCli = 'C:\\Code\\bin\\code.cmd', acknowledged = true } = {}) {
   const commands = [];
   const spawnCalls = [];
   let exitListenerAttached = false;
@@ -521,6 +520,7 @@ function vscodeExtIo({ installedVersion = '', bundledVersion = '0.3.2', codeCli 
         ? { code: 0, stdout: installedVersion ? `orgiast.next-session@${installedVersion}\r\n` : 'other.extension@1.0.0\r\n', stderr: '' }
         : { code: 0, stdout: 'ok', stderr: '' };
     },
+    waitForVscodeExtAck: async () => acknowledged,
     // open-session の spawn は本物の子プロセスと同じく EventEmitter を返し、`exit` を出す。
     // ランチャーが `spawn` イベントだけを見て早期に抜けていないかをここで実地検証する
     // (2026-09-04 実測: code.cmd → Code.exe の IPC 完了前に親が抜けると URI が届かない)。
@@ -533,7 +533,7 @@ function vscodeExtIo({ installedVersion = '', bundledVersion = '0.3.2', codeCli 
         return attachOnce(event, listener);
       };
       child.unref = () => {};
-      queueMicrotask(() => child.emit('exit', 0));
+      queueMicrotask(() => { child.emit('spawn'); child.emit('exit', 0); });
       return child;
     },
   });
@@ -581,6 +581,16 @@ test('vscode-ext は導入済みでも旧版なら強制更新する', async () 
   assert.equal(commands[1][2], '--force');
 });
 
+test('vscode-ext が応答しない時は理由を出して vscode 経路へフォールバックする', async () => {
+  const { io, calls } = vscodeExtIo({ installedVersion: '0.3.2', acknowledged: false });
+  assert.equal(await launchNextSession(['--target', 'vscode-ext'], io), 0);
+  assert.equal(calls.spawn.length, 2);
+  assert.match(calls.logs[0], /拡張が30秒以内に応答しませんでした/);
+  assert.match(calls.logs[1], /Enter 1回で開始/);
+  const saved = JSON.parse(calls.writes.find(([file]) => file.includes('next-session-launch.json.tmp-'))[1]);
+  assert.equal(saved.lastRoute, 'vscode');
+});
+
 test('vscode-ext は URI を撃った子プロセスの exit を待ってから終わる', async () => {
   // `spawn` イベントだけを見て抜けると、code.cmd → Code.exe の IPC 完了前にランチャーが
   // 終了し URI が届かない（2026-09-04 実測）。ここでは exit を出すまでランチャーの
@@ -600,6 +610,7 @@ test('vscode-ext は URI を撃った子プロセスの exit を待ってから�
         ? { code: 0, stdout: 'other.extension\r\n', stderr: '' }
         : { code: 0, stdout: 'ok', stderr: '' };
     },
+    waitForVscodeExtAck: async () => true,
     spawn: (...args) => {
       const child = new EventEmitter();
       child.unref = () => {};

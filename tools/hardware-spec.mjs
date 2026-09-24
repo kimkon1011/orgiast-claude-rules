@@ -119,11 +119,11 @@ export function collectHardwareSpec({ platform = process.platform, hostname = os
       const raw = JSON.parse(execFileSync('powershell.exe', ['-NoProfile','-NonInteractive','-OutputFormat','Text','-Command', WINDOWS_SCRIPT], { encoding: 'utf8', windowsHide: true }));
       spec = normalizeWindows(raw, hostname);
     } else if (platform === 'darwin') {
-      const run = (...args) => text(execFileSync(args[0], args.slice(1), { encoding: 'utf8' }));
+      const run = (...args) => text(execFileSync(args[0], args.slice(1), { windowsHide: true, encoding: 'utf8' }));
       const hw = run('system_profiler', 'SPHardwareDataType', 'SPMemoryDataType');
       spec = { computerName: hostname, maker: 'Apple', model: hw.match(/Model Identifier:\s*(.+)/)?.[1] || '', cpu: run('sysctl','-n','machdep.cpu.brand_string'), os: run('sw_vers','-productName') + ' ' + run('sw_vers','-productVersion'), bits: run('uname','-m'), memoryGb: toGb(Number(hw.match(/Memory:\s*([\d.]+) GB/)?.[1]) * 1073741824), opticalDrive:'判定不能',lan:'判定不能',wifi:'判定不能',hdmi:'判定不能' };
     } else {
-      const run = (...args) => text(execFileSync(args[0], args.slice(1), { encoding: 'utf8' }));
+      const run = (...args) => text(execFileSync(args[0], args.slice(1), { windowsHide: true, encoding: 'utf8' }));
       let cpuInfo = ''; let release = ''; try { cpuInfo = fs.readFileSync('/proc/cpuinfo','utf8'); } catch {} try { release = fs.readFileSync('/etc/os-release','utf8'); } catch {}
       spec = { computerName: hostname, cpu: cpuInfo.match(/^model name\s*:\s*(.+)$/m)?.[1] || '', os: release.match(/^PRETTY_NAME=["']?(.+?)["']?$/m)?.[1] || '', bits: run('uname','-m'), opticalDrive:'判定不能',lan:'判定不能',wifi:'判定不能',hdmi:'判定不能' };
     }

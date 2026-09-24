@@ -1,8 +1,10 @@
 // batch-run.mjs — pending.jsonl を実行し、成功結果と使用量を記録する夜間バッチ実行器。
 // DeepSeekはUTC 16:30〜00:30だけ実行。--force で時間帯を無視、--dry で対象表示のみ。
 // --fallback-standard 指定時だけ、Anthropic Batch失敗後に通常APIで再実行する。
+// 終了コード3 = 別インスタンス実行中のためスキップ。
 // kind=eval-harness のジョブは LLM に渡さず「node tools/eval-harness.mjs --all」へ変換する
 // (eval自体が複数providerを叩くローカル計測なので、ここでLLM呼び出しすると二重課金になる)。
+import { geminiUsage, recordGeminiUsage } from './gemini-usage-ledger.mjs';
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -11,10 +13,18 @@ import { callWithFallback, classifyFailure, FALLBACK_CHAIN } from './llm-fallbac
 import { batchDeadline } from './lib/batch-deadline.mjs';
 import { acquireLock } from './lib/single-instance.mjs';
 
+function userHome() { const h = os.homedir(), m = process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i); return process.env.ORGIAST_HOME || process.env.USERPROFILE || m?.[1] || h; }
+const home = userHome();
 const batchLock = acquireLock('batch-run');
 if (!batchLock.acquired) {
-  console.error(`[batch-run] already running pid=${batchLock.ownerPid ?? 'unknown'}`);
-  process.exit(0);
+  let pendingSuffix = '';
+  try {
+    const pendingText = fs.readFileSync(path.join(home, '.claude', 'batch-queue', 'pending.jsonl'), 'utf8');
+    const pendingCount = pendingText.split(/\r?\n/).filter(line => line.trim()).length;
+    pendingSuffix = ` — 処理をスキップしました (pending ${pendingCount}件)`;
+  } catch {}
+  console.error(`[batch-run] already running pid=${batchLock.ownerPid ?? 'unknown'}${pendingSuffix}`);
+  process.exit(3);
 }
 
 const PROVIDERS = {
@@ -37,8 +47,6 @@ if (args.includes('--help')) {
   console.log('  --fallback-standard  Anthropic Batch失敗時のみ、通常APIで単発再実行する');
   process.exit(0);
 }
-function userHome() { const h = os.homedir(), m = process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i); return process.env.USERPROFILE || m?.[1] || h; }
-const home = userHome();
 const lastFile = path.join(home, '.claude', 'state', 'batch-run.last');
 process.once('exit', () => {
   try { fs.mkdirSync(path.dirname(lastFile), { recursive: true }); fs.writeFileSync(lastFile, `${new Date().toISOString()}\n`); } catch {}
@@ -69,6 +77,11 @@ function messages(job) {
   return out;
 }
 function usageRecord(provider, model, usage = {}, extra = {}) {
+  if (provider === 'gemini') {
+    const measured = geminiUsage({ usageMetadata: usage.promptTokenCount !== undefined ? usage : undefined, usage });
+    if (!usage.__attemptRecorded) try { recordGeminiUsage({ model: model || PROVIDERS.gemini.model, ...measured, source: 'llm-ask', tool: 'batch-run', ...extra }, { home }); } catch {}
+    return { in: measured.inTokens, out: measured.outTokens };
+  }
   const input = usage.prompt_tokens ?? usage.promptTokenCount ?? usage.input_tokens ?? 0;
   const output = usage.completion_tokens ?? usage.candidatesTokenCount ?? usage.output_tokens ?? 0;
   if (!usage.__attemptRecorded) try { fs.appendFileSync(ledger, JSON.stringify({ t: new Date().toISOString(), provider, model, in: input, out: output, status: 'ok', attempt: 0, failover: false, ...extra }) + '\n'); } catch {}
@@ -93,7 +106,7 @@ async function runStandard(job) {
     },
     async onAttempt(info) {
       let usage = {};
-      if (info.status === 'ok') usage = (await info.response.clone().json().catch(() => ({}))).usage || {};
+      if (info.status === 'ok') { const body = await info.response.clone().json().catch(() => ({})); usage = body.usageMetadata || body.usage || {}; }
       usageRecord(info.candidate.provider, info.candidate.model, usage, { status: info.status, attempt: info.attempt, failover: info.failover, secs: Number(info.secs.toFixed(3)) });
     },
     onFailover({ from, to, reason }) { console.error(`[failover] ${from.provider}:${from.model} ${reason} → ${to.provider}:${to.model}`); },
@@ -135,12 +148,18 @@ async function runGeminiBatch(jobs) {
     batch = await polled.json();
   }
   const rows = batch.output?.inlinedResponses?.inlinedResponses || batch.batch?.output?.inlinedResponses?.inlinedResponses || [];
+  // Record returned responses before validating the batch, including partial batches.
+  for (const row of rows) {
+    try { recordGeminiUsage({ model, ...geminiUsage(row.response || {}), source: 'llm-ask', tool: 'batch-run', mode: 'batch', status: row.error ? 'error' : 'ok' }, { home }); } catch {}
+  }
   if (rows.length !== jobs.length) throw new Error(`Batch結果件数不一致 (${rows.length}/${jobs.length})`);
   return rows.map((row) => {
     if (row.error) return { error: row.error.message || 'Gemini Batch内エラー' };
     const response = row.response || {};
     const text = (response.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join('');
-    return { text, usage: response.usageMetadata || {}, mode: 'gemini-batch' };
+    const usage = response.usageMetadata || {};
+    Object.defineProperty(usage, '__attemptRecorded', { value: true });
+    return { text, usage, mode: 'gemini-batch' };
   });
 }
 async function runAnthropicBatch(jobs) { if (deadlineReached()) throw new Error('batch wall-clock deadline reached'); const P = PROVIDERS.anthropic, key = loadKey('anthropic'); if (!key) throw new Error(`${P.keyEnv} 未設定。環境変数または ~/.claude/${P.keyFile} に ${P.keyEnv}=値 を置いてください`); const base = 'https://api.anthropic.com/v1/messages/batches'; const made = await retryFetch(base, { method: 'POST', headers: anthropicHeaders(key), body: JSON.stringify({ requests: jobs.map((j) => ({ custom_id: j.id, params: anthropicParams(j) })) }) }, 'Anthropic Batch作成'); if (!made.ok) throw new Error(`Batch作成 ${made.status}: ${(await made.text().catch(() => '')).slice(0, 400)}`); let batch = await made.json(), wait = 5000; if (!batch.id) throw new Error('Batch IDが応答にありません'); while (batch.processing_status !== 'ended') { await delay(wait); wait = Math.min(wait * 2, 60000); const p = await retryFetch(`${base}/${encodeURIComponent(batch.id)}`, { headers: anthropicHeaders(key) }, 'Anthropic Batch確認'); if (!p.ok) throw new Error(`Batch確認 ${p.status}: ${(await p.text().catch(() => '')).slice(0, 400)}`); batch = await p.json(); } const resultUrl = batch.results_url || `${base}/${encodeURIComponent(batch.id)}/results`; const got = await retryFetch(resultUrl, { headers: anthropicHeaders(key) }, 'Anthropic Batch結果'); if (!got.ok) throw new Error(`Batch結果 ${got.status}: ${(await got.text().catch(() => '')).slice(0, 400)}`); const map = new Map(); for (const line of (await got.text()).split(/\r?\n/).filter(Boolean)) { let row; try { row = JSON.parse(line); } catch { continue; } const type = row.result?.type; if (type !== 'succeeded') { map.set(row.custom_id, { error: row.result?.error?.message || `Anthropic Batch内エラー (${type || 'unknown'})` }); continue; } const msg = row.result.message || {}; map.set(row.custom_id, { text: (msg.content || []).map((x) => x.text || '').join(''), usage: msg.usage || {}, mode: 'batch' }); } return jobs.map((j) => map.get(j.id) || { error: 'Anthropic Batch結果がありません' }); }

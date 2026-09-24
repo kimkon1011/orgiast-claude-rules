@@ -90,6 +90,15 @@ function taskOutput(task) {
 
 fs.mkdirSync(claudeDir, { recursive: true });
 
+// The Mac installer schedules this entry point; Windows schedules fleet-poller.ps1.
+if (repo && fs.existsSync(path.join(repo, 'tools', 'gemini-budget-guard.mjs'))) {
+  const result = spawnSync(process.execPath, [path.join(repo, 'tools', 'gemini-budget-guard.mjs'), ...(dry ? ['--dry-run'] : [])], {
+    encoding: 'utf8', timeout: 60000, env: { ...process.env, ORGIAST_HOME: home },
+  });
+  if (result.stdout) console.log(result.stdout.trim());
+  if (result.status !== 0) console.error(`gemini-budget-guard failed: ${result.stderr || result.error || result.status}`);
+}
+
 // A) 20時間に1回の自己ヘルスレポート。
 const guard = path.join(claudeDir, '.fleet-report-guard');
 let dueDaily = true;

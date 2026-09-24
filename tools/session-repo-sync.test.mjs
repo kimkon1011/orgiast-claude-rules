@@ -58,7 +58,7 @@ test('cleanかつ静穏ならHEADをorigin/mainのSHAへ移す', () => {
   try {
     const targetSha = git(fixture.working, 'rev-parse', 'origin/main');
     assert.notEqual(fixture.oldSha, targetSha);
-    main({
+    main({ allowUpdate: () => true,
       env: { SESSION_REPO_SYNC_TARGET: fixture.working },
       projectsDir: fixture.projectsDir,
       ledgerPath: fixture.ledgerPath,
@@ -76,7 +76,7 @@ test('未コミット変更があればHEADを動かさない', () => {
   const fixture = createFixture();
   try {
     fs.appendFileSync(path.join(fixture.working, 'file.txt'), 'local work\n');
-    main({
+    main({ allowUpdate: () => true,
       env: { SESSION_REPO_SYNC_TARGET: fixture.working },
       projectsDir: fixture.projectsDir,
       ledgerPath: fixture.ledgerPath,

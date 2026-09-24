@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
 import { isEntry } from './is-entry.mjs';
 
 export const DEFAULT_REPO_MAP = {
@@ -90,6 +91,9 @@ export function buildIssueBody(item) {
   if (item?.has_attachment === true) lines.push('', 'スクショは Discord の元メッセージを参照');
   // どの DM から生まれた Issue かを後から機械的に検索できるようにする(feedback-replies.mjs が使う)。
   lines.push('', `<!-- feedback-dm:${clean(item?.message_id)} -->`);
+  const identity = JSON.stringify({ submitter: clean(item?.submitter), submitter_discord_id: clean(item?.submitter_discord_id) })
+    .replace(/</g, '\\u003c').replace(/>/g, '\\u003e');
+  lines.push('', `<!-- feedback-submitter: ${identity} -->`);
   return lines.join('\n');
 }
 
@@ -157,7 +161,7 @@ export function shellQuote(value) {
 export function runGh(args, options = {}) {
   // Windows の gh.cmd は直接 spawn できないため shell を使い、値はすべて個別に quote する。
   const command = ['gh', ...args].map(shellQuote).join(' ');
-  return spawnSync(command, { shell: true, encoding: 'utf8', ...options });
+  return spawnSync(command, { ...options, shell: true, encoding: 'utf8', windowsHide: true });
 }
 
 function relayUrls(base) {
@@ -346,7 +350,7 @@ export async function chainBoothFeedbackIntake({ argv = process.argv.slice(2), s
   try {
     const { spawn } = spawnImpl ? { spawn: spawnImpl } : await import('node:child_process');
     const target = path.join(import.meta.dirname, 'booth-feedback-intake.mjs');
-    const child = spawn(process.execPath, [target], { detached: true, stdio: 'ignore', windowsHide: true });
+    const child = spawn(process.execPath, [target], { ...backgroundSpawnOptions(), stdio: 'ignore' });
     child.unref?.();
     return 'spawned';
   } catch (error) {

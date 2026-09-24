@@ -5,21 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   apiBaseFor, regionFromToken, isWorkspaceTokenExpired, buildProxyUrl, proxyExtensionFor, tokensFromRefresh, shouldNotify, renewalMessage, renewalNoticePath, durationToSeconds, epochToIso, extensionFromUrl, isTldvSupportedUrl, meetsMinimumDuration,
-  mergeState, readState, redactSecret, regionFromRedirect, selectPlaudCookies, shouldImport, run,
+  mergeState, readState, redactSecret, regionFromRedirect, selectPlaudCookies, shouldImport,
 } from './plaud-to-tldv.mjs';
-
-const jwt = (payload) => `x.${Buffer.from(JSON.stringify(payload)).toString('base64url')}.y`;
-
-async function captureConsole(runTest) {
-  const stdout = [];
-  const stderr = [];
-  const originalLog = console.log;
-  const originalError = console.error;
-  console.log = (...args) => stdout.push(args.join(' '));
-  console.error = (...args) => stderr.push(args.join(' '));
-  try { return { result: await runTest(), stdout: stdout.join('\n'), stderr: stderr.join('\n') }; }
-  finally { console.log = originalLog; console.error = originalError; }
-}
 
 test('Set-Cookie は削除用を無視し、最後の実値を採用する', () => {
   const cookies = [
@@ -104,6 +91,7 @@ test('duration の単位は start_time/end_time の差分から実測で決ま�
 });
 
 test('リージョンは JWT の region クレームと未知ホストの両方を解決できる', () => {
+  const jwt = (payload) => `x.${Buffer.from(JSON.stringify(payload)).toString('base64url')}.y`;
   assert.equal(regionFromToken(jwt({ region: 'aws:ap-northeast-1' })), 'aws:ap-northeast-1');
   assert.equal(regionFromToken(jwt({ region: 'aws:mars-1' })), '');
   assert.equal(regionFromToken('not-a-jwt'), '');
@@ -171,71 +159,7 @@ test('通知本文は手順とコマンドを本文に含む(リンクを辿ら�
   assert.match(warn, /https:\/\/web\.plaud\.ai/);
   assert.match(warn, /allow pasting/);
   assert.match(warn, /refresh-user-token/);
-  assert.match(warn, /ログアウトしてからログインし直/);
-  assert.match(warn, /refresh だけでは延びません/);
-  assert.match(warn, /plaud-token\.json/);
-  assert.match(warn, /createObjectURL/);
-  assert.doesNotMatch(warn, /COPY:/);
-  assert.doesNotMatch(warn, /出てきた.*Claude に渡す/);
   assert.match(renewalMessage('expired'), /停止しました/);
-});
-
-test('--import-token は state をバックアップし、トークンと期限を read-back 可能な形で保存する', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'plaud-import-test-'));
-  try {
-    const statePath = path.join(dir, 'state.json');
-    const tokenPath = path.join(dir, 'plaud-token.json');
-    const oldState = mergeState({ session: { ut: 'old-ut', urt: 'old-urt', wt: 'old-wt', wtExp: 123 }, notifiedAt: { renewal: 1, expired: 2, other: 3 } });
-    fs.writeFileSync(statePath, JSON.stringify(oldState));
-    const utExp = Math.floor(Date.now() / 1000) + 86400;
-    const urtExp = Math.floor(Date.now() / 1000) + 30 * 86400;
-    fs.writeFileSync(tokenPath, JSON.stringify({ a: jwt({ exp: utExp }), r: jwt({ exp: urtExp }) }));
-    let noticeCleared = false;
-    const captured = await captureConsole(() => run(['--import-token', tokenPath], {
-      config: { statePath }, clearRenewalNotice: () => { noticeCleared = true; },
-    }));
-    assert.equal(captured.result, 0);
-    assert.match(captured.stdout, /更新トークン有効期限: .*（残り .* 日）/);
-    assert.doesNotMatch(captured.stdout + captured.stderr, /old-ut|old-urt/);
-    assert.equal(noticeCleared, true);
-    const saved = JSON.parse(fs.readFileSync(statePath, 'utf8'));
-    assert.equal(saved.session.utExp, utExp);
-    assert.equal(saved.session.urtExp, urtExp);
-    assert.equal(saved.session.wt, '');
-    assert.equal(saved.session.wtExp, 0);
-    assert.equal(saved.notifiedAt.renewal, undefined);
-    assert.equal(saved.notifiedAt.expired, undefined);
-    assert.equal(saved.notifiedAt.other, 3);
-    const backups = fs.readdirSync(dir).filter((name) => name.startsWith('state.json.backup-'));
-    assert.equal(backups.length, 1);
-    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, backups[0]), 'utf8')), oldState);
-  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
-});
-
-test('--import-token は入力エラーを区別し、state を変更しない', async (t) => {
-  const cases = [
-    ['ファイルなし', null, /トークンファイルが見つかりません/],
-    ['壊れた JSON', '{broken', /JSON が壊れています/],
-    ['a/r 欠落', JSON.stringify({ a: jwt({ exp: 123 }) }), /a（access token）と r（refresh token）の両方/],
-    ['exp なし', JSON.stringify({ a: jwt({ sub: 'a' }), r: jwt({ exp: 123 }) }), /exp（有効期限）を読み取れません/],
-  ];
-  for (const [name, content, message] of cases) await t.test(name, async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'plaud-import-invalid-'));
-    try {
-      const statePath = path.join(dir, 'state.json');
-      const tokenPath = path.join(dir, 'input.json');
-      const original = JSON.stringify(mergeState({ session: { ut: 'unchanged' } }));
-      fs.writeFileSync(statePath, original);
-      if (content !== null) fs.writeFileSync(tokenPath, content);
-      const captured = await captureConsole(() => run(['--import-token', tokenPath], {
-        config: { statePath }, clearRenewalNotice: () => assert.fail('失敗時に通知を消してはいけない'),
-      }));
-      assert.equal(captured.result, 2);
-      assert.match(captured.stderr, message);
-      assert.equal(fs.readFileSync(statePath, 'utf8'), original);
-      assert.equal(fs.readdirSync(dir).some((entry) => entry.includes('.backup-')), false);
-    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
-  });
 });
 
 test('置き手紙は ~/.claude 配下に出す(セッション開始時に読ませるため)', () => {

@@ -26,9 +26,9 @@ function prevMonthBounds(now) {
   const jst = new Date(new Date(now).getTime() + 9 * 60 * 60 * 1000);
   const year = jst.getUTCFullYear();
   const monthIndex = jst.getUTCMonth(); // 0-based
-  const start = new Date(Date.UTC(year, monthIndex - 1, 1));
-  const end = new Date(Date.UTC(year, monthIndex, 1));
-  return { key: `${start.getUTCFullYear()}-${String(start.getUTCMonth() + 1).padStart(2, '0')}`, start, end };
+  const start = new Date(Date.UTC(year, monthIndex - 1, 1) - 9 * 3600000);
+  const end = new Date(Date.UTC(year, monthIndex, 1) - 9 * 3600000);
+  return { key: jstMonthKey(start), start, end };
 }
 
 function readJson(file, fallback) {
@@ -52,7 +52,7 @@ export function previousMonthBudget({ home, now = new Date(), configFile = DEFAU
     const price = COST_PER_MILLION[row.provider];
     if (price) variableUsd += ((Number(row.in) || 0) * price[0] + (Number(row.out) || 0) * price[1]) / 1e6;
   }
-  const gemini = summarizeGeminiMonth(rows, { now: bounds.end, usdJpy });
+  const gemini = summarizeGeminiMonth(rows, { now: new Date(bounds.end.getTime() - 1), usdJpy });
   const config = readJson(configFile, { fixed: [] });
   let fixedJpy = 0;
   const fixedNames = [];
@@ -62,7 +62,7 @@ export function previousMonthBudget({ home, now = new Date(), configFile = DEFAU
     if (Number.isFinite(jpy)) { fixedJpy += jpy; fixedNames.push(item.name); }
   }
   const variableJpy = variableUsd * Number(config.usdJpy || usdJpy) + gemini.totalJpy;
-  return { month: bounds.key, fixedJpy, variableJpy, totalJpy: fixedJpy + variableJpy, fixedNames, geminiSearches: gemini.searches, executorUsd: variableUsd, usdJpy: Number(config.usdJpy || usdJpy) };
+  return { month: bounds.key, fixedJpy, variableJpy, totalJpy: fixedJpy + variableJpy, fixedNames, geminiSearches: gemini.searches, geminiUnmeasuredCalls: gemini.unmeasuredCalls, executorUsd: variableUsd, usdJpy: Number(config.usdJpy || usdJpy) };
 }
 
 export function previousMonthDelegationAverage({ home, now = new Date() } = {}) {
@@ -119,7 +119,7 @@ export function buildMonthlyReport({ home = process.env.ORGIAST_HOME || os.homed
   return `**📆 前月(${bounds.key})コスト月次レポート**\n\n` +
     `### ① 確定コスト(前月)\n` +
     `- 固定 ${yen(budget.fixedJpy)}${budget.fixedNames.length ? ` (${budget.fixedNames.join(', ')})` : ''} / 変動 ${yen(budget.variableJpy)} / 合計 ${yen(budget.totalJpy)}\n` +
-    `- 内訳: 安いAI実行者 $${budget.executorUsd.toFixed(2)} / Gemini従量 ${yen(budget.variableJpy - budget.executorUsd * budget.usdJpy)}（検索${budget.geminiSearches}回含む）\n\n` +
+    `- 内訳: 安いAI実行者 $${budget.executorUsd.toFixed(2)} / Gemini従量の計測分 ${yen(budget.variableJpy - budget.executorUsd * budget.usdJpy)}（検索${budget.geminiSearches}回含む）${budget.geminiUnmeasuredCalls > 0 ? ` / うち未計測 ${budget.geminiUnmeasuredCalls} 件（実費はこれより大きい）` : ""}\n\n` +
     `### ② 委譲率(前月平均)\n` +
     `- ${deleg ? `Claude以外への委譲率平均 ${(deleg.average * 100).toFixed(1)}%（${deleg.days}日分の実測平均）` : 'データなし(直近28日履歴に前月分が無い)'}\n\n` +
     `### ③ headlessClaude出力(前月 近似)\n` +

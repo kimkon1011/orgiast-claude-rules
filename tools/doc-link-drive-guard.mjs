@@ -44,6 +44,56 @@ export function findLocalDocLinks(text) {
   return hits;
 }
 
+// 中間生成物の置き場。ここは成果物ではないので警告しない
+const SCRATCH_SEGMENTS = ['appdata/local/temp', '/tmp/', 'node_modules', '/.git/'];
+// 人が開く場所。ここに置いた時点で「kim に渡すつもり」とみなす
+const HUMAN_DIRS = ['/desktop/', '/documents/', '/downloads/', '/デスクトップ/', '/ドキュメント/'];
+
+// markdown リンクになっていないローカルパス（バッククォート囲み・裸の絶対パス）を拾う。
+// 2026-09-24: FAX送付状PDFをデスクトップに置き `C:\...\x.pdf` と書いたら素通りした実害への対応。
+export function findBareLocalDocPaths(text) {
+  const body = String(text || '');
+  if (body.includes('[LOCAL-PATH-OK]')) return [];
+
+  const hits = [];
+  const seen = new Set();
+  const patterns = [
+    /`([^`\r\n]+)`/g,
+    /(?:^|[\s（(「【、。])([A-Za-z]:[\\/][^\s`"'）)」】、。\r\n]+)/g,
+  ];
+
+  for (const re of patterns) {
+    for (const match of body.matchAll(re)) {
+      const raw = match[1].trim();
+      if (!/^[A-Za-z]:[\\/]/.test(raw)) continue;
+      const normalized = destinationPath(raw);
+      const lower = normalized.toLowerCase();
+      if (SCRATCH_SEGMENTS.some((segment) => lower.includes(segment))) continue;
+      if (isInternalClaudePath(raw)) continue;
+
+      const extension = destinationExtension(raw);
+      if (CODE_EXTENSIONS.has(extension)) continue;
+
+      const inHumanDir = HUMAN_DIRS.some((dir) => lower.includes(dir));
+      // 文書ファイル、または人が開く場所のフォルダ（拡張子なし）を対象にする
+      const isDoc = DOC_EXTENSIONS.has(extension);
+      const isHumanFolder = inHumanDir && extension === '';
+      if (!isDoc && !isHumanFolder) continue;
+
+      if (seen.has(normalized)) continue;
+      seen.add(normalized);
+      hits.push({ label: raw, destination: raw });
+    }
+  }
+  return hits;
+}
+
+export function formatBarePathMessage(hits) {
+  if (!Array.isArray(hits) || hits.length === 0) return '';
+  const detected = hits.slice(0, 3).map(({ destination }) => `  - ${destination}`).join('\n');
+  return `[DOC-LINK-DRIVE-GUARD] kim に渡す成果物をローカルパスで案内しています（markdown リンクでなくても違反です）。\n\n検出（最大3件）:\n${detected}\n\nローカルのデスクトップに置いた成果物は kim のモバイル(Galaxy)から開けず、秘書チーム等の他人にも渡せません。Drive に上げて URL で渡してください（§2.9）。\n\n  - Drive MCP create_file の parentId: 1uA0J3kPfL7O5t0Ro1jSfi2xDEJE-Y0si（標準フォルダ「作業ファイル」）\n  - kim へ渡す URL は drive.google.com/file/d/{ID}/view?authuser=kim@orgiast.jp\n  - アップ後は read-back で検証する\n\nローカルが中間生成物（scratchpad 等）で、kim が開く必要がないなら本文に [LOCAL-PATH-OK] を入れてください。`;
+}
+
 export function formatViolationMessage(hits) {
   if (!Array.isArray(hits) || hits.length === 0) return '';
   const detected = hits.slice(0, 3).map(({ label, destination }) => `  - ${label} → ${destination}`).join('\n');

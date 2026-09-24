@@ -11,6 +11,19 @@ const pollerSource = fs.readFileSync(path.join(dir, 'fleet-poller.mjs'), 'utf8')
 const pollerPs1Source = fs.readFileSync(path.join(dir, 'fleet-poller.ps1'), 'utf8');
 const installerSource = fs.readFileSync(path.join(dir, 'install-orgiast.ps1'), 'utf8');
 
+test('Gemini budget guard reaches actual daily entry points for existing and new PCs', () => {
+  assert.match(pollerPs1Source, /gemini-budget-guard\.mjs/);
+  assert.match(pollerPs1Source, /if \(\$Dry\) \{ & node \$budgetGuard '--dry-run' \} else \{ & node \$budgetGuard \}/);
+  assert.match(pollerSource, /gemini-budget-guard\.mjs/);
+  assert.match(pollerSource, /dry \? \['--dry-run'\] : \[\]/);
+  assert.match(installerSource, /register-fleet-poller\.ps1/);
+  assert.match(installerSource, /@\('tools', 'config', 'rules-extracted', 'skills'\)/);
+  const mac = fs.readFileSync(path.join(dir, 'install-orgiast.sh'), 'utf8');
+  assert.match(mac, /plist_install "jp\.orgiast\.fleet-poller" "3" "15"/);
+  const sync = fs.readFileSync(path.join(dir, 'onboarding-sync.mjs'), 'utf8');
+  assert.match(sync, /\[registrar, '--hooks-only'\]/);
+});
+
 const callInMjs = () => {
   const source = fs.readFileSync(path.join(dir, 'fleet-poller.mjs'), 'utf8');
   const call = source.match(/fleet-sheet-report\.mjs'[^\n]*/);

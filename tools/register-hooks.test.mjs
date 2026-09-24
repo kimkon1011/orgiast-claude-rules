@@ -5,6 +5,23 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
+test('Gemini MCP response hooks migrate existing PCs additively without duplicates', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gemini-hooks-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const repo = path.resolve('.'), file = path.join(home, '.claude', 'settings.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ custom: 'preserve', hooks: { PostToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'keep-me' }] }] } }));
+  for (let i = 0; i < 2; i++) execFileSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo } });
+  const settings = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(settings.custom, 'preserve');
+  assert.equal(settings.hooks.PostToolUse[0].hooks[0].command, 'keep-me');
+  for (const event of ['PostToolUse', 'PostToolUseFailure']) {
+    const groups = settings.hooks[event].filter((group) => group.hooks.some((hook) => hook.command.includes('gemini-mcp-usage-hook.mjs')));
+    assert.equal(groups.length, 1);
+    assert.equal(groups[0].matcher, 'mcp__gemini-cli__.*');
+  }
+});
+
 test('既存PowerShell hookへExecutionPolicy Bypassを補いcost-loopをmjsへ移行する', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-'));
   const repo = path.resolve('.');
@@ -44,7 +61,7 @@ test('session-relaunch hook は同期で1本だけ登録され、再実行で重
   fs.rmSync(home, { recursive: true, force: true });
 });
 
-test('stop-gate-runner hook は timeout 10 で Stop に登録される', () => {
+test('stop-gate-runner hook は timeout 30 で Stop に登録される', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-report-length-'));
   const repo = path.resolve('.');
   const settingsFile = path.join(home, '.claude', 'settings.json');
@@ -56,7 +73,7 @@ test('stop-gate-runner hook は timeout 10 で Stop に登録される', () => {
   const hooks = settings.hooks.Stop.flatMap((group) => group.hooks || [])
     .filter((hook) => String(hook.command).includes('stop-gate-runner.mjs'));
   assert.equal(hooks.length, 1);
-  assert.equal(hooks[0].timeout, 10);
+  assert.equal(hooks[0].timeout, 30);
   assert.equal('async' in hooks[0], false);
   fs.rmSync(home, { recursive: true, force: true });
 });

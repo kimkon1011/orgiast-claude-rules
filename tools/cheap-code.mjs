@@ -7,8 +7,26 @@ import { spawn } from 'node:child_process';
 import { readEnvValue } from './env-kv.mjs';
 import { isEntry } from './is-entry.mjs';
 import { providerResetUntil, providerInCooldown } from './codex-cooldown.mjs';
+import { isUnspawnable, resolveClaudeExecutableFromDisk } from './claude-exe.mjs';
 
 const FIVE_HOURS = 5 * 60 * 60 * 1000;
+
+// Windows の npm グローバルは claude.cmd / claude.ps1 しか置かず、Node の spawn は
+// shell 無しで .cmd を実行できない(CVE-2024-27980 以降)。結果 ENOENT で「claude CLI を
+// 起動できません」になり、cheap-code が全く動かない(実測 2026-09-10)。
+// PATH 依存をやめ、実体の claude.exe を明示的に解決する。
+export function resolveClaudeBin(env = process.env, exists = fs.existsSync) {
+  if (env.CLAUDE_BIN && exists(env.CLAUDE_BIN)) return env.CLAUDE_BIN;
+  const appData = env.APPDATA || (env.USERPROFILE ? path.join(env.USERPROFILE, 'AppData', 'Roaming') : '');
+  const candidates = [
+    appData && path.join(appData, 'npm', 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe'),
+    env.LOCALAPPDATA && path.join(env.LOCALAPPDATA, 'Programs', 'claude', 'claude.exe')
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    if (exists(candidate)) return candidate;
+  }
+  return 'claude';
+}
 const COOLDOWN_FILE = () => path.join(process.env.ORGIAST_HOME || os.homedir(), '.claude', 'provider-cooldown.json');
 
 const PROVIDERS = Object.freeze({
@@ -44,6 +62,9 @@ export function resolveProvider(name = 'deepseek') {
 
 export function buildChildEnv(config, key, parentEnv = process.env) {
   const env = { ...parentEnv, ANTHROPIC_BASE_URL: config.base, ANTHROPIC_AUTH_TOKEN: key };
+  // 親から継承した Anthropic の鍵は安いレーンの子に渡さない(認証が二重に立ち、
+  // 子が「connectors を無効化した」と警告する。2026-09-10 実測)。
+  delete env.ANTHROPIC_API_KEY;
   if (config.maxContextTokens) env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(config.maxContextTokens);
   return env;
 }
@@ -212,9 +233,10 @@ async function main(args) {
   const model = parsed.model || config.defaultModel;
   const key = readEnvValue(path.join(home, '.claude', config.envFile), config.keyName);
   const prompt = `[headless:cheap-code]\n${buildPrompt(instruction, cwd, home)}`;
-  const childArgs = ['-p', prompt, '--model', model];
+  // プロンプトは stdin で渡す。CLI 引数だと Windows のコマンドライン長上限で spawn ENAMETOOLONG になる (2026-09-21 実測)。
+  const childArgs = ['-p', '--model', model];
   if (parsed.dryRun) {
-    console.log(JSON.stringify({ provider: config.provider, base: config.base, model, keyPresent: Boolean(key), argv: ['claude', ...childArgs] }, null, 2));
+    console.log(JSON.stringify({ provider: config.provider, base: config.base, model, keyPresent: Boolean(key), argv: ['claude', ...childArgs], promptVia: 'stdin', promptChars: prompt.length }, null, 2));
     return 0;
   }
   if (!key) {
@@ -230,16 +252,30 @@ async function main(args) {
     return 3;
   }
 
+  // PATH 上の claude は Windows では claude.bat で、Node は shell 無しに .bat を起動できない
+  // (2026-09-10 実測: spawn claude ENOENT で無人ジョブが毎晩落ちていた)。exe の絶対パスを解決する。
+  const { executable, candidates } = await resolveClaudeExecutableFromDisk(process);
+  if (executable === 'claude' && process.platform === 'win32') {
+    console.error('[cheap-code] claude.exe が見つかりません(候補0件)。CLAUDE_CLI に claude.exe の絶対パスを設定してください。');
+    return 4;
+  }
+  if (isUnspawnable(executable, process.platform)) {
+    console.error(`[cheap-code] ${executable} は shell 無しで起動できません(.bat/.cmd)。CLAUDE_CLI に claude.exe を指定してください。`);
+    return 4;
+  }
+
   const started = Date.now();
   let outputChars = 0;
   let stdoutText = '';
   let stderrText = '';
   const status = await new Promise((resolve) => {
-    const child = spawn('claude', childArgs, {
+    const child = spawn(executable, childArgs, { windowsHide: true,
       cwd,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...buildChildEnv(config, key), ORGIAST_HEADLESS_JOB: `cheap-code:${config.provider}` },
     });
+    child.stdin.on('error', () => {});   // 子が先に死んだときの EPIPE で親を落とさない
+    child.stdin.end(prompt);
     child.stdout.on('data', (chunk) => { outputChars += chunk.length; stdoutText += String(chunk); process.stdout.write(chunk); });
     child.stderr.on('data', (chunk) => { stderrText += String(chunk); process.stderr.write(chunk); });
     child.on('error', (error) => { console.error(`claude CLI を起動できません: ${error.message}`); resolve(1); });

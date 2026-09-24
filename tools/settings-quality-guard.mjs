@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// 一時許可: CLAUDE_MODEL_GUARD_ALLOW=1 で SessionStart の model 正規化だけを停止する。
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -6,11 +7,10 @@ import { isEntry } from './is-entry.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 
 
-const ALLOWED_EFFORT_LEVELS = new Set(['high', 'xhigh', 'max']);
-const REASON = 'kim 2026-09-09 厳命: 節約のために effortLevel/thinking/監督モデルを下げない。節約は委譲・レスポンス数削減で行う。意図的に変える場合は ORGIAST_ALLOW_EFFORT_DOWNGRADE=1 を付けて再実行';
+const REASON = 'kim 2026-09-17 改定: 既定 medium。low 禁止。監督モデルと実装先（Codex）を節約目的で下げない';
 
 export function isDowngradeValue(value) {
-  return !ALLOWED_EFFORT_LEVELS.has(String(value ?? '').toLowerCase());
+  return String(value ?? '').toLowerCase() === 'low';
 }
 
 function comparablePath(value) {
@@ -38,11 +38,26 @@ export function detectEffortDowngrade(toolName, toolInput, settingsPath) {
     const command = String(input.command || '');
     const identifiesSettings = /settings\.json/i.test(command)
       || /(?:sed\b|node\s+-e\b|Set-Content|>)/i.test(command);
-    if (/effortLevel/i.test(command) && identifiesSettings && /["'](?:low|medium)["']/i.test(command)) {
+    const assignments = [...command.replace(/\\(["'])/g, '$1').matchAll(/effortLevel["']?\]?\s*[:=]\s*["'](\w+)["']/gi)];
+    // sedの検索側にある旧lowを拒否しない。置換・代入先の最後の値を判定する。
+    if (identifiesSettings && assignments.length && isDowngradeValue(assignments.at(-1)[1])) {
       return { blocked: true, reason: REASON };
     }
   }
   return { blocked: false };
+}
+
+export function normalizeSessionSettings(settingsPath, { env = process.env } = {}) {
+  if (env.CLAUDE_MODEL_GUARD_ALLOW === '1') return { changed: false };
+  let settings;
+  try { settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')); } catch { return { changed: false }; }
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return { changed: false };
+  const model = settings.model;
+  if (model != null && model !== '' && !/fable/i.test(String(model)) && !/\[1m\]/.test(String(model))) return { changed: false };
+  const from = model == null || model === '' ? '未設定' : String(model);
+  settings.model = 'opus';
+  fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, 'utf8');
+  return { changed: true, from };
 }
 
 export function restoreEffortLevel(settingsPath, { now = Date.now(), backupDir } = {}) {
@@ -56,7 +71,7 @@ export function restoreEffortLevel(settingsPath, { now = Date.now(), backupDir }
   try {
     fs.mkdirSync(destinationDir, { recursive: true });
     fs.copyFileSync(settingsPath, path.join(destinationDir, `settings.json.bak-${timestamp}`));
-    settings.effortLevel = 'high';
+    settings.effortLevel = 'medium';
     fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, 'utf8');
   } catch { return { changed: false }; }
   return { changed: true, from };
@@ -68,8 +83,10 @@ if (isEntry(import.meta.url)) {
   const modeIndex = process.argv.indexOf('--mode');
   const mode = modeIndex >= 0 ? process.argv[modeIndex + 1] : 'pretooluse';
   if (mode === 'sessionstart') {
+    const modelResult = normalizeSessionSettings(settingsPath);
+    if (modelResult.changed) console.log(`[settings-guard] model: ${modelResult.from} → opus`);
     const result = restoreEffortLevel(settingsPath, {});
-    if (result.changed) console.log(`⚠️ effortLevel が ${result.from} だったため high へ自動復元しました（性能を下げる節約は禁止）`);
+    if (result.changed) console.log(`⚠️ effortLevel が ${result.from} だったため medium へ自動復元しました（kim 2026-09-17 改定: 既定 medium。low 禁止）`);
   } else if (process.env.ORGIAST_ALLOW_EFFORT_DOWNGRADE !== '1') {
     try {
       const input = JSON.parse(await readStdinWithTimeout());

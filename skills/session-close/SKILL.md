@@ -15,11 +15,29 @@ description: セッションを綺麗に閉じて次に引き継ぐ。「終わ�
 - `git status --short` を実行する。
 - 差分があれば commit → push → PR → **マージ**まで自分で行い、差分を放置して閉じない（2026-08-19 以降は自作PRのマージも Claude が行う。`gh pr checks` が全green・スコープ内・非破壊 を確認してから `gh pr merge --squash --delete-branch`）。
 
+## 2.5 着手印の解放
+
+- `node ~/orgiast-claude-rules/tools/session-claims.mjs --release --self <このセッションのid> --reason closed` を実行する。
+- これを忘れると、この目的は最大8時間ほか のセッションから「着手中」に見え続ける（拾えない目的が生まれる）。
+- 出力は無い。失敗しても exit 0 なので、成果報告には書かなくてよい。
+
 ## 3. memory へ永続化
 
 - 次回も効く恒久的な事実だけを `~/.claude/projects/<projectId>/memory/` に書く。
 - 既存ファイルを先に探し、重複を作らず更新を優先する。書いたら同時に `MEMORY.md` の索引へ1行追加する。
 - 会話固有の一時情報、コード構造、git 履歴が既に記録していることは書かない。
+
+### 学びの台帳（3回ルール）
+
+- 同義の既存feedbackがあれば新規作成せず、`node <repo>/tools/learning-ledger.mjs --bump <file>`を実行する。データ消失・バックアップ不全・セキュリティ・権限事故・誤送信・不可逆操作・金銭損失は`--critical`を付ける。
+- bump後に`node <repo>/tools/learning-ledger.mjs --list --queue-out ~/.claude/promotion-queue.md`を1回実行する。
+- PROMOTEが1件以上なら、成果報告と`next-session.md`の「未決」へ`PROMOTE 待ち N件（先頭: <name>）`を1行入れる。仕組み化を提案しただけで終わらせず、次セッションの目的候補へ載せる。
+- `--list`の`掃除候補`が1件以上、または`自動ロード層`が90%超なら、成果報告に1行入れ、`MEMORY.md`の該当行を削除せず`index/`側へ移す。
+
+### 重要判断の記録
+
+- 後から前提が変わり得る判断（方式選定・外部サービス採用・やらないと決めたこと）をしたら、`protocols/DECISION-TEMPLATE.md`から`decisions/DEC-XXXX.md`を作り、`decisions/README.md`の一覧へ1行足す。
+- 単なる実装手順の選択は記録しない。
 
 ## 4. マキモノへ出品（再利用できる知見だけ・全自動）
 
@@ -59,12 +77,13 @@ description: セッションを綺麗に閉じて次に引き継ぐ。「終わ�
 - **画面に出すだけで終わらせない。** kim にコピペさせるのは手作業なので、必ずファイルへ書く。
   次セッションは `/session-start` がこのファイルを読んで再開する（[[session-start]] とペア）。
 - 既存の `next-session.md` を先に読み、**まだ着手していない残TODO を消さずに引き継ぐ**（上書きで失わない）。
-- `next-session.md` を書き直すときは、本文中の `[FB:` を含む行を**必ず残す**。消してよいのは対応済みでシート側が `done` になったものだけ。不具合要望の自動注入はこの行を「積んだ証跡」にしており、消すと再注入が無限に繰り返される（2026-08-28 実害: `reinjectedCount` が5回まで増加）。
+- `next-session.md` を書き直すときは、本文中の `[FB:` を含む行を**必ず残す**（正規ローテーションによる退避は可。`archive/next-session-feedback.json` が再注入防止の証跡を引き継ぐ）。消してよいのは対応済みでシート側が `done` になったものだけ。不具合要望の自動注入はこの行を「積んだ証跡」にしており、消すと再注入が無限に繰り返される（2026-08-28 実害: `reinjectedCount` が5回まで増加）。
+- 過去セッション全文を積み重ねない。書き出し後に `node tools/next-session-rotate.mjs` を実行し、24,000B 以下と退避の read-back を確認する。完了・重複・30日超の項目と元の全文は `~/.claude/archive/next-session-YYYYMM.md` に保全される。容量を超える未完了項目は「継続キュー」リンクから辿れる。残TODOには原因と再開条件を1行で書き、詳細は退避先を参照する。
 - 書式（この見出し構成を変えない。`/session-start` が読む）:
 
 ```markdown
 <!-- NEXT-SESSION v1 -->
-<!-- 前セッション: <sessionId> / 更新: <YYYY-MM-DD> / cwd: <作業ディレクトリ> -->
+<!-- 前セッション: <sessionId> / 更新: <YYYY-MM-DD> / cwd: <作業ディレクトリ> / model: <sonnet|opus> -->
 
 ## 次の1目的
 <1件のみ。決まっていなければ「未定」>
@@ -87,6 +106,8 @@ description: セッションを綺麗に閉じて次に引き継ぐ。「終わ�
 ## 未決（kim の判断待ち）
 - …
 ```
+
+- `model:`は子セッションをterminal経路で起動する場合だけ`--model`へ変換される。省略時は現状維持、`fable`は指定禁止。
 
 - 書いたら「次のセッションは自動で立ち上がって `/session-start` から始まります」と1行で伝える（手順8 が自動でやる）。
 
@@ -136,8 +157,10 @@ node "$HOME/orgiast-claude-rules/tools/close-session.mjs" --session <このセ�
   - 恒久的に止めるなら `~/.claude/next-session-launch.json` に `{"enabled": false}`
 - target の変更・確認は `next-session-launch.mjs --set-target <vscode|vscode-ext|terminal|inline|headless>` / `--show-target`。
   旧手順との互換用に `--set-mode` / `--show-mode` も受けるが、新しい文書では使わない。
-- 起動結果は `[next-session] VSCode に新しいタブを開きました…`（ターミナル経路なら `新しいセッションを起動しました: <cwd>`） / `[next-session] スキップ: <理由>` の1行で出る。
-  スキップされた時だけ「新しいセッションを手で開いてください」と伝える。
+- 起動結果は `[next-session] VSCode に新しいタブを開きました…`（ターミナル経路なら `新しいセッションを起動しました: <cwd>`） / `[next-session] スキップ: <理由>` で出る。
+  対話セッションの Bash tool サンドボックスで exe spawn が禁止され、`[next-session] スキップ: 起動に失敗しました (spawn cmd.exe ENOENT)` が出た時は、user に手作業を頼まない。直後の
+  `[next-session] PowerShell 退避: & "…" --open-url "vscode://…"` のコマンド部分を **Claude が PowerShell tool でそのまま実行**する（2026-09-17 実測 exit 0。入力欄に `/session-start` が入る）。成功後は「タブが開いたので Enter 1回で始まります」とだけ伝える。
+  PowerShell tool でも失敗した時だけ、user に「新しいタブで `/session-start`」と伝える。ターミナル経路や headless では、対話セッションの Bash tool 固有制約を受けないためこの退避は不要。
 
 ## 注意
 

@@ -65,7 +65,7 @@ function transcriptCandidates(home) {
 function pullProductionEnv(dir) {
   const target = path.join(dir, '.env.pulled');
   if (fs.existsSync(target)) return fs.readFileSync(target, 'utf8');
-  const result = spawnSync('vercel', ['env', 'pull', '.env.pulled', '--environment=production', '--yes'], {
+  const result = spawnSync('vercel', ['env', 'pull', '.env.pulled', '--environment=production', '--yes'], { windowsHide: true,
     cwd: dir, encoding: 'utf8', shell: true,
   });
   if (!fs.existsSync(target)) throw new Error(`vercel env pull に失敗しました: ${(result.stderr || result.stdout || '').trim().slice(0, 300)}`);

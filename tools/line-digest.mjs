@@ -1,3 +1,4 @@
+import { geminiUsage, recordGeminiUsage } from './gemini-usage-ledger.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -157,7 +158,12 @@ export function createLlmClient({ home = os.homedir(), fetchImpl = fetch, sleep 
         return { url: p.url, init: { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', ...(p.extraHeaders || {}) }, body: JSON.stringify(body) } };
       },
       async onAttempt(info) {
-        const usage = info.status === 'ok' ? (await info.response.clone().json().catch(() => ({}))).usage || {} : {};
+        const body = info.status === 'ok' ? await info.response.clone().json().catch(() => ({})) : {};
+        const usage = body.usage || {};
+        if (info.candidate.provider === 'gemini') {
+          try { recordGeminiUsage({ model: info.candidate.model, ...geminiUsage(body), source: 'llm-ask', tool: 'line-digest', status: info.status, attempt: info.attempt, failover: info.failover, secs: Number(info.secs.toFixed(3)) }, { home, usageFile }); } catch {}
+          return;
+        }
         const rec = { t: new Date().toISOString(), tool: 'line-digest', provider: info.candidate.provider, model: info.candidate.model, in: usage.prompt_tokens || 0, out: usage.completion_tokens || 0, secs: Number(info.secs.toFixed(3)), status: info.status, attempt: info.attempt, failover: info.failover, ok: info.status === 'ok' };
         try { fs.mkdirSync(path.dirname(usageFile), { recursive: true }); fs.appendFileSync(usageFile, `${JSON.stringify(rec)}\n`); } catch {}
       },

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { writeHandoff } from './next-session-rotate.mjs';
 import { appendLineWithRetry } from './lib/append-line.mjs';
 import { isEntry } from './is-entry.mjs';
 import os from 'node:os';
@@ -13,7 +14,7 @@ import { KNOWN_CHEAP_PROVIDERS } from './llm-fallback.mjs';
 import { collectProviderHealth, collectClaudeStats } from './usage-stats.mjs';
 import { collectBudgetStatus } from './budget-status.mjs';
 import { shouldSendMonthlyReport, buildMonthlyReport, markMonthlyReportSent } from './cost-monthly-report.mjs';
-import { collectProviderBalances, formatBalanceLine } from './provider-balance.mjs';
+import { collectProviderBalances, formatBalanceLine, CREDIT_LOW_THRESHOLD } from './provider-balance.mjs';
 import { resolveReporterLabel } from './reporter-label.mjs';
 import { main as sendFleetDirective } from './fleet-directive-send.mjs';
 
@@ -49,7 +50,13 @@ export function evaluateBalanceSignals(rows, { directProviders = ['deepseek', 'k
   const violations = [];
   for (const row of rows || []) {
     if (row.status === 'anomaly') violations.push({ kind: 'spend_anomaly', pc: 'self', severity: 'error', provider: row.provider, evidence: `${row.provider} today $${row.todaySpendUsd.toFixed(4)} > 2x 7d avg $${row.avg7dSpendUsd.toFixed(4)}`, actualValue: row.todaySpendUsd, targetValue: row.avg7dSpendUsd * 2, trusted: true });
-    if (row.status === 'low' && row.autoTopUp !== true) violations.push({ kind: 'balance_low', pc: 'self', severity: 'warning', provider: row.provider, evidence: `${row.provider} balance $${row.balanceUsd.toFixed(2)} (< $3), auto top-up unavailable`, actualValue: row.balanceUsd, targetValue: 3, trusted: true });
+    if (row.status === 'low') {
+      if (Number.isFinite(row.credits)) {
+        violations.push({ kind: 'balance_low', pc: 'self', severity: 'warning', provider: row.provider, evidence: `${row.provider} の前払いクレジットが ${row.credits}（閾値 ${CREDIT_LOW_THRESHOLD}）`, actualValue: row.credits, targetValue: CREDIT_LOW_THRESHOLD, trusted: true });
+      } else if (row.autoTopUp !== true) {
+        violations.push({ kind: 'balance_low', pc: 'self', severity: 'warning', provider: row.provider, evidence: `${row.provider} balance $${row.balanceUsd.toFixed(2)} (< $3), auto top-up unavailable`, actualValue: row.balanceUsd, targetValue: 3, trusted: true });
+      }
+    }
     if (row.autoTopUp === false && directProviders.includes(row.provider)) violations.push({ kind: 'autotopup_missing', pc: 'self', severity: 'warning', provider: row.provider, evidence: `${row.provider} has no auto top-up and remains a direct lane`, trusted: true });
   }
   return violations;
@@ -489,6 +496,7 @@ export function buildCombinedCodexSpec(actions) {
 function humanTodoMessage(violation, now, retryCount = 0, retryMode = 'directive') {
   const pc = violation.pc;
   if (violation.kind === 'balance_low') {
+    if (violation.provider === 'genspark') return `【このPC】Genspark の前払いクレジットが ${Math.round(Number(violation.actualValue))} です（閾値 ${CREDIT_LOW_THRESHOLD}）。Genspark にチャージするか、画像生成を止めるかの判断が必要です。`;
     const switched = ['deepseek', 'kimi'].includes(violation.provider) ? '切替済み' : '未切替';
     return `【このPC】${violation.provider} の残高が $${Number(violation.actualValue).toFixed(2)} です。自動チャージが無いプロバイダです。OpenRouter 経由へ${switched}。`;
   }
@@ -697,7 +705,7 @@ export function decideActions({ violations, state, now, limits = { maxCodex: 2 }
       action.reportNote = '有料枠で解消可(例: Groq Dev tier)';
     }
     if (kind === 'spend_anomaly') action.durationHours = 24;
-    if (kind === 'balance_low') action.reportNote = `自動チャージが無いプロバイダです。OpenRouter 経由へ切替${['deepseek', 'kimi'].includes(action.provider) ? '済み' : '未'}`;
+    if (kind === 'balance_low') action.reportNote = action.provider === 'genspark' ? '前払い枠が残り少。チャージまたは画像生成レーンの停止を判断' : `自動チャージが無いプロバイダです。OpenRouter 経由へ切替${['deepseek', 'kimi'].includes(action.provider) ? '済み' : '未'}`;
 
     if (mode === 'auto-local') {
       if (playbook.command) action.command = playbook.command;
@@ -939,7 +947,7 @@ export function executeLocalAction({ act, dryRun = false, claudeDir, home, now =
   }
   console.log(`Executing auto-local command: ${act.command}`);
   const parts = splitWhitelistedCommand(act.command);
-  const res = spawnSync(parts[0], parts.slice(1), { shell: false, cwd: repoRoot, encoding: 'utf8' });
+  const res = spawnSync(parts[0], parts.slice(1), { windowsHide: true, shell: false, cwd: repoRoot, encoding: 'utf8' });
   if (res.status === 0) {
     return { ...act, result: 'pending', note: 'Command executed successfully. Awaiting verification.' };
   }
@@ -967,13 +975,13 @@ export function runAutoCodexIsolated({ acts, specFile, dryRun = false, repoPath,
   }
   const tempTree = path.join(os.tmpdir(), `orgiast-cost-improve-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   try {
-    let res = spawnSync('git', ['-C', repoPath, 'worktree', 'add', '--detach', tempTree, 'origin/main'], { encoding: 'utf8' });
+    let res = spawnSync('git', ['-C', repoPath, 'worktree', 'add', '--detach', tempTree, 'origin/main'], { windowsHide: true, encoding: 'utf8' });
     if (res.status !== 0) { fail('worktree add failed', res); return; }
-    res = spawnSync('node', [path.join(tempTree, 'tools/codex-do.mjs'), '--prompt-file', specFile, '--cwd', tempTree, '--timeout', '1800'], { cwd: tempTree, encoding: 'utf8' });
+    res = spawnSync('node', [path.join(tempTree, 'tools/codex-do.mjs'), '--prompt-file', specFile, '--cwd', tempTree, '--timeout', '1800'], { windowsHide: true, cwd: tempTree, encoding: 'utf8' });
     if (res.status !== 0) { fail('Codex execution failed', res); return; }
-    const diff = spawnSync('git', ['-C', tempTree, 'diff', '--stat'], { encoding: 'utf8' });
+    const diff = spawnSync('git', ['-C', tempTree, 'diff', '--stat'], { windowsHide: true, encoding: 'utf8' });
     if (diff.status !== 0 || !String(diff.stdout || '').trim()) { fail('変更なし', diff); return; }
-    const tests = spawnSync('node', ['--test', 'tools/*.test.mjs'], { cwd: tempTree, shell: true, encoding: 'utf8' });
+    const tests = spawnSync('node', ['--test', 'tools/*.test.mjs'], { windowsHide: true, cwd: tempTree, shell: true, encoding: 'utf8' });
     if (tests.status !== 0) { fail('verification tests failed', tests); return; }
     const dateStr = now.toISOString().slice(0, 10).replaceAll('-', '');
     const branchName = `auto/cost-improve-${dateStr}-${label}`;
@@ -984,11 +992,11 @@ export function runAutoCodexIsolated({ acts, specFile, dryRun = false, repoPath,
       ['git', ['-C', tempTree, 'commit', '-m', commitMsg], 'commit failed'],
       ['git', ['-C', tempTree, 'push', '-u', 'origin', branchName], 'push failed']
     ]) {
-      res = spawnSync(program, args, { encoding: 'utf8' });
+      res = spawnSync(program, args, { windowsHide: true, encoding: 'utf8' });
       if (res.status !== 0) { fail(stage, res); return; }
     }
     const body = `Evidence: ${first.specContent?.match(/- 根拠: (.*)/)?.[1] || label}\n\nSpec summary: ${label} on ${first.pc}; verify with node --test tools/*.test.mjs.`;
-    res = spawnSync('gh', ['pr', 'create', '--title', commitMsg, '--body', body, '--head', branchName], { cwd: tempTree, encoding: 'utf8' });
+    res = spawnSync('gh', ['pr', 'create', '--title', commitMsg, '--body', body, '--head', branchName], { windowsHide: true, cwd: tempTree, encoding: 'utf8' });
     const url = `${res.stdout || ''}\n${res.stderr || ''}`.match(/https:\/\/github\.com\/[^\s]+\/pull\/\d+/)?.[0];
     if (res.status !== 0 || !url) { fail('PR creation failed', res); return; }
     for (const act of list) {
@@ -997,7 +1005,7 @@ export function runAutoCodexIsolated({ acts, specFile, dryRun = false, repoPath,
       act.result = 'pending';
     }
   } finally {
-    spawnSync('git', ['-C', repoPath, 'worktree', 'remove', '--force', tempTree], { encoding: 'utf8' });
+    spawnSync('git', ['-C', repoPath, 'worktree', 'remove', '--force', tempTree], { windowsHide: true, encoding: 'utf8' });
   }
 }
 
@@ -1407,7 +1415,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
         const res = appendImprovementTodos(content, [act.todoMessage]);
         if (res.added.length > 0) {
           try {
-            writeAtomic(nextSessionFile, res.markdown);
+            writeHandoff(nextSessionFile, res.markdown);
             console.log(`Added todo to next-session.md: ${act.todoMessage}`);
           } catch (error) {
             console.error(`next-session.md 書き込み失敗: ${String(error?.message ?? error)}`);

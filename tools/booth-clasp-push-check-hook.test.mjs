@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { launchBoothClaspPushCheck } from './booth-clasp-push-check-hook.mjs';
+import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
 
 const scriptPath = 'C:\\Users\\uers\\.claude\\hooks\\booth-clasp-push-check.mjs';
 
@@ -17,7 +18,7 @@ test('booth clasp push check を正しいコマンドとオプションで起動
   assert.deepEqual(actual, [
     process.execPath,
     [scriptPath],
-    { detached: true, stdio: 'ignore', windowsHide: true },
+    { ...backgroundSpawnOptions(), stdio: 'ignore' },
   ]);
 });
 

@@ -10,8 +10,27 @@ import { alternateCheapProvider, autoSessionExecutor, buildCheapCodeArgs, buildC
 const REPO_ROOT = path.resolve(import.meta.dirname, '..');
 
 export function parseHandoffCwd(text) {
-  const match = String(text).match(/<!--[^\r\n]*?cwd:\s*(.*?)\s*-->/);
-  return match?.[1]?.trim() ?? '';
+  return handoffField(text, 'cwd');
+}
+
+export function parseHandoffModel(text) {
+  const value = handoffField(text, 'model').toLowerCase();
+  return value === 'sonnet' || value === 'opus' ? value : '';
+}
+
+// 引き継ぎコメントは「前セッション: <id> / 更新: <日付> / cwd: <path> / model: <name>」のように
+// ` / ` 区切りで並ぶ。cwd の値自体に `/` が含まれるのは正常だが ` / ` は含まないので、
+// セグメント単位で切り出す。`-->` まで捕まえる正規表現は「/ model: opus」まで cwd に呑み込み、
+// 実在しないパスへの spawn が `spawn cmd.exe ENOENT` として現れていた（2026-09-19 実測）。
+function handoffField(text, key) {
+  const prefix = `${key}:`;
+  for (const line of String(text).split(/\r?\n/)) {
+    const comment = line.match(/<!--(.*?)-->/)?.[1];
+    if (!comment) continue;
+    const segment = comment.split(' / ').map((part) => part.trim()).find((part) => part.startsWith(prefix));
+    if (segment) return segment.slice(prefix.length).trim();
+  }
+  return '';
 }
 
 export function pickNewestExtensionBinary(names) {
@@ -109,6 +128,11 @@ export function resolveVscodeCli(io) {
 export function buildVscodeUri(prompt) {
   const base = 'vscode://Anthropic.claude-code/open';
   return prompt ? `${base}?prompt=${encodeURIComponent(prompt)}` : base;
+}
+
+export function buildRecoveryCommand({ codeCli, prompt }) {
+  const executable = codeCli || '$env:LOCALAPPDATA\\Programs\\Microsoft VS Code\\bin\\code.cmd';
+  return `& "${executable}" --open-url "${buildVscodeUri(prompt)}"`;
 }
 
 export function buildVscodeExtUri({ prompt, cwd, claude, probe = false }) {
@@ -382,14 +406,15 @@ export function applyTrust(config, cwd) {
   return { config: changed ? { ...source, projects } : source, changed };
 }
 
-export function planLaunch({ claudeBin, cwd, prompt, wt }) {
+export function planLaunch({ claudeBin, cwd, prompt, wt, model = '' }) {
   if (!claudeBin || !cwd) return null;
+  const claudeArgs = model ? [claudeBin, '--model', model, prompt] : [claudeBin, prompt];
   if (wt) {
-    return { command: wt, args: ['-w', 'new-window', '-d', cwd, claudeBin, prompt], cwd, detached: true };
+    return { command: wt, args: ['-w', 'new-window', '-d', cwd, ...claudeArgs], cwd, detached: true };
   }
   return {
     command: 'cmd.exe',
-    args: ['/c', 'start', '', '/D', cwd, claudeBin, prompt],
+    args: ['/c', 'start', '', '/D', cwd, ...claudeArgs],
     cwd,
     detached: true,
   };
@@ -467,9 +492,10 @@ export async function launchNextSession(argv = [], io = {}) {
   const wait = io.wait ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   const log = io.log ?? console.log;
   const arm = io.armToFile ?? armToFile;
+  const flags = parseArgs(argv);
+  const codeCli = resolveVscodeCli({ env, exists, homedir: home });
 
   try {
-    const flags = parseArgs(argv);
     const claudeDir = path.join(home, '.claude');
     const statePath = path.join(claudeDir, 'next-session-launch.json');
     const claudeConfigPath = path.join(home, '.claude.json');
@@ -483,7 +509,6 @@ export async function launchNextSession(argv = [], io = {}) {
     };
 
     const state = await readJson(statePath, { enabled: true });
-    const codeCli = resolveVscodeCli({ env, exists, homedir: home });
     let route = pickRoute({ codeCli, flagTarget: flags.target, env, state });
 
     if (flags.action) {
@@ -573,9 +598,23 @@ export async function launchNextSession(argv = [], io = {}) {
       return 0;
     }
 
-    const handoffCwd = parseHandoffCwd(await readText(handoffPath));
+    const handoffText = await readText(handoffPath);
+    const handoffCwd = parseHandoffCwd(handoffText);
+    const handoffModel = parseHandoffModel(handoffText);
     const current = await readJson(currentPath, {});
-    const cwd = flags.cwd || handoffCwd || current.cwd || REPO_ROOT;
+    let cwd = flags.cwd;
+    if (!cwd) {
+      const candidates = [
+        ['handoff', handoffCwd],
+        ['current', current.cwd],
+      ].map(([source, candidate]) => [source, candidate || '', Boolean(candidate) && exists(candidate)]);
+      const selectedIndex = candidates.findIndex(([, , present]) => present);
+      cwd = selectedIndex >= 0 ? candidates[selectedIndex][1] : REPO_ROOT;
+      const skipped = selectedIndex >= 0 ? candidates.slice(0, selectedIndex) : candidates;
+      for (const [source, candidate] of skipped) {
+        log(`[next-session] 注意: ${source} の cwd(${candidate}) が存在しないため ${cwd} を使います`);
+      }
+    }
     const accountLog = accountLabel({ account, route, accountPath: firstAccountConfigPath });
     if (configDirSource === 'state' && (route === 'vscode' || route === 'vscode-ext')) {
       // 効かない指定を黙って無視すると「固定したつもり」の事故になる。terminal 経路なら env で効く。
@@ -751,7 +790,7 @@ export async function launchNextSession(argv = [], io = {}) {
     }
 
     const wt = resolveWt({ env, readdir, homedir: home, flagWt: flags.wt });
-    const plan = planLaunch({ claudeBin, cwd, prompt: `[headless:next-session-launch] ${flags.prompt}`, wt });
+    const plan = planLaunch({ claudeBin, cwd, prompt: `[headless:next-session-launch] ${flags.prompt}`, wt, model: handoffModel });
     if (flags.dryRun) {
       log(JSON.stringify({ ...plan, account, configDir, configDirSource }));
       return 0;
@@ -797,7 +836,14 @@ export async function launchNextSession(argv = [], io = {}) {
     log(`[next-session] 新しいセッションを起動しました: ${cwd} / prompt=${flags.prompt} / account=${accountLog}`);
     return 0;
   } catch (error) {
-    log(`[next-session] スキップ: 起動に失敗しました (${error?.message ?? error})`);
+    const message = String(error?.message ?? error);
+    log(`[next-session] スキップ: 起動に失敗しました (${message})`);
+    // Claude Code の対話セッションでは Bash tool サンドボックス配下の exe spawn がすべて
+    // ENOENT になり、PATH や ComSpec の変更では直らない。退避は PowerShell tool から
+    // code.cmd を直接実行する（2026-09-17 実測）。PR #435 の経路は再試行しない。
+    if (message.includes('ENOENT') || message.includes('spawn')) {
+      log(`[next-session] PowerShell 退避: ${buildRecoveryCommand({ codeCli, prompt: flags.prompt })}`);
+    }
     return 0;
   }
 }

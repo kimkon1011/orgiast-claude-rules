@@ -42,6 +42,48 @@ function Stop-Nightly([string]$Step, [string]$Result, [int]$Code) {
     exit $Code
 }
 
+# Fail closed, including status errors. Never resume updates after a rescue.
+$script:blockedNightlyTrees = @{}
+function Test-NightlyTreeClean([string]$Tree) {
+    if ($script:blockedNightlyTrees.ContainsKey($Tree)) { return $false }
+    $dirty = @(& $git.Source -C $Tree status --porcelain --untracked-files=all)
+    if ($LASTEXITCODE -ne 0) {
+        $script:blockedNightlyTrees[$Tree] = $true
+        Write-NightlyLog 'DIRTY_WORKTREE_SKIP' ("status failed: " + $Tree)
+        return $false
+    }
+    if ($dirty.Count -eq 0) { return $true }
+    $script:blockedNightlyTrees[$Tree] = $true
+    Write-NightlyLog 'DIRTY_WORKTREE_SKIP' ("uncommitted changes: " + $Tree)
+    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $base = 'rescue/auto-session-' + $stamp
+    $branch = $base
+    $n = 0
+    while ($true) {
+        & $git.Source -C $Tree show-ref --verify --quiet ("refs/heads/" + $branch)
+        if ($LASTEXITCODE -ne 0) { break }
+        $n++
+        $branch = $base + '-' + $n
+    }
+    try {
+        & $git.Source -C $Tree switch -c $branch | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'rescue branch failed' }
+        & $git.Source -C $Tree add -A | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'rescue add failed' }
+        & $git.Source -C $Tree -c user.name='Auto Session Rescue' -c user.email=auto-session-rescue@localhost commit -m ("auto-session-rescue-" + $stamp) | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'rescue commit failed' }
+        $sha = & $git.Source -C $Tree rev-parse HEAD
+        if ($LASTEXITCODE -ne 0) { throw 'rescue verification failed' }
+        Write-NightlyLog 'RESCUE_LOCAL_OK' ("$Tree $branch $sha")
+        try {
+            Add-Content -LiteralPath (Join-Path $HOME '.claude\next-session.md') -Encoding UTF8 -Value ("`n- [ ] rescue ブランチ " + $branch + " に退避した変更のレビューが必要（" + $Tree + "; " + $sha + "）") -ErrorAction Stop
+        } catch { Write-NightlyLog 'RESCUE_HANDOFF_FAILED' $_.Exception.Message }
+        & $git.Source -C $Tree push -u origin $branch | Out-Null
+        if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'RESCUE_PUSH_FAILED_LOCAL_SAVED' $branch }
+    } catch { Write-NightlyLog 'RESCUE_FAILED' $_.Exception.Message }
+    return $false
+}
+
 function Get-NightlyFileSha256([string]$Path) {
     $sha256 = [System.Security.Cryptography.SHA256]::Create()
     try {
@@ -98,7 +140,7 @@ try {
           try {
             $gitDir = Join-Path $repo '.git'
             $repoSynced = $true
-            if (-not (Test-Path -LiteralPath $gitDir -PathType Container)) {
+            if (-not (Test-Path -LiteralPath $gitDir)) {
                 $canClone = $true
                 if (Test-Path -LiteralPath $repo) {
                     $repoHasContents = $null -ne (Get-ChildItem -LiteralPath $repo -Force | Select-Object -First 1)
@@ -117,16 +159,34 @@ try {
             } else {
                 & $git.Source -C $repo fetch origin main
                 if ($LASTEXITCODE -ne 0) { throw "git fetch終了コード=$LASTEXITCODE" }
-                & $git.Source -C $repo reset --hard origin/main
-                if ($LASTEXITCODE -ne 0) { throw "git reset終了コード=$LASTEXITCODE" }
-                & $git.Source -C $repo clean -qfd
-                if ($LASTEXITCODE -ne 0) { throw "git clean終了コード=$LASTEXITCODE" }
+                if (Test-NightlyTreeClean $repo) {
+                    & $git.Source -C $repo checkout --detach origin/main
+                    if ($LASTEXITCODE -ne 0) { throw "git checkout終了コード=$LASTEXITCODE" }
+                    if (Test-NightlyTreeClean $repo) {
+                        & $git.Source -C $repo reset --hard origin/main
+                        if ($LASTEXITCODE -ne 0) { throw "git reset終了コード=$LASTEXITCODE" }
+                        if (Test-NightlyTreeClean $repo) {
+                            & $git.Source -C $repo clean -qfd
+                            if ($LASTEXITCODE -ne 0) { throw "git clean終了コード=$LASTEXITCODE" }
+                        }
+                    }
+                }
             }
 
             if ($repoSynced) {
-                $shortSha = (& $git.Source -C $repo rev-parse --short HEAD | Select-Object -Last 1)
-                if ($LASTEXITCODE -ne 0 -or -not $shortSha) { throw '短縮SHAを取得できない' }
-                Write-NightlyLog 'リポ同期' ("ok:origin/main " + $shortSha.Trim())
+                $headSha = (& $git.Source -C $repo rev-parse HEAD | Select-Object -Last 1)
+                if ($LASTEXITCODE -ne 0 -or -not $headSha) { throw 'HEADのSHAを取得できない' }
+                $remoteSha = (& $git.Source -C $repo rev-parse origin/main | Select-Object -Last 1)
+                if ($LASTEXITCODE -ne 0 -or -not $remoteSha) { throw 'origin/mainのSHAを取得できない' }
+                $headSha = ([string]$headSha).Trim()
+                $remoteSha = ([string]$remoteSha).Trim()
+                $shortHead = $headSha.Substring(0, [Math]::Min(7, $headSha.Length))
+                $shortRemote = $remoteSha.Substring(0, [Math]::Min(7, $remoteSha.Length))
+                if ($headSha -ne $remoteSha) {
+                    Write-NightlyLog 'リポ同期' ("ng:HEAD " + $shortHead + " != origin/main " + $shortRemote + " 既存版で続行")
+                } else {
+                    Write-NightlyLog 'リポ同期' ("ok:origin/main " + $shortHead)
+                }
             }
         } catch {
             Write-NightlyLog 'リポ同期' ("warn:" + $_.Exception.Message + ' 既存版で続行')

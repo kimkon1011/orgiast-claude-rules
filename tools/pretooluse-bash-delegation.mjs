@@ -12,13 +12,15 @@ try {
   const j = JSON.parse(raw), tool = String(j.tool_name || ''); if (!/^(Bash|PowerShell)$/.test(tool)) process.exit(0);
   const command = String(j.tool_input?.command || '');
   if (classifyBashCommand(command) !== 'inline-program') process.exit(0);
-  const size = command.length, lines = command.split(/\r?\n/).length;
-  if (size < 900 && lines < 25) process.exit(0);
+  const size = command.length;
+  if (size < 6000) process.exit(0);
+  // 標準出力だけの集計・調査は委譲警告の対象外。書き込みを示す構文があれば対象に残す。
+  if (!/>|\btee\b|\bSet-Content\b|\bOut-File\b|\bfs\s*\.\s*writeFile/i.test(command)) process.exit(0);
   const home = process.env.ORGIAST_HOME || os.homedir(), repo = process.env.ORGIAST_REPO || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   let mode = 'warn'; try { mode = String(JSON.parse(fs.readFileSync(path.join(home, '.claude', 'cost-enforce.json'), 'utf8')).mode); } catch {}
   const override = fs.existsSync(path.join(home, '.claude', 'cost-enforce-override'));
   const example = `node "${path.join(repo, 'tools', 'codex-do.mjs')}" --prompt-file <指示ファイル> --cwd <対象パス> --timeout 1800`;
-  if (mode === 'block' && !override && size >= 1500) {
+  if (mode === 'block' && !override) {
     const cooldown = codexHardBlockBypass();
     if (cooldown.bypass) {
       const resetAt = new Date(cooldown.until);

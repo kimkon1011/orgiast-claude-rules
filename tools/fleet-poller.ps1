@@ -95,6 +95,17 @@ if ($dueDaily -and $repo) {
   try { RunPs (Join-Path $repo 'tools\thermal-guard.ps1') @('-Report') | Out-Null } catch {}
 }
 
+# Gemini budget guard: daily Task Scheduler entry point, for new and existing PCs.
+if ($repo) {
+  try {
+    $budgetGuard = Join-Path $repo 'tools\gemini-budget-guard.mjs'
+    if (Test-Path $budgetGuard) {
+      if ($Dry) { & node $budgetGuard '--dry-run' } else { & node $budgetGuard }
+      if ($LASTEXITCODE -ne 0) { Write-Warning "gemini-budget-guard exit=$LASTEXITCODE" }
+    }
+  } catch { Write-Warning ("gemini-budget-guard: " + $_.Exception.Message) }
+}
+
 # --- B) 中央コマンドキュー(ホワイトリストのみ) ---
 $processedCount = 0
 $WL = @{

@@ -5,9 +5,10 @@ import { fileURLToPath } from 'node:url';
 
 export const FALLBACK_CHAIN = Object.freeze([
   { provider: 'groq', model: 'openai/gpt-oss-120b' },
-  // 無料の Groq、定額の GLM、以降の従量プロバイダの順で費用を抑える。
-  { provider: 'glm', model: 'glm-5.3' },
+  // 無料の Groq、定額の Cerebras、以降の従量プロバイダの順で費用を抑える。
+  // Groq が 429 で落ちた直後は、失敗率の高い GLM より費用ゼロの Cerebras を先に試す。
   { provider: 'cerebras', model: 'zai-glm-4.7' },
+  { provider: 'glm', model: 'glm-5.3' },
   // Genspark Pro は前払いクレジットなので従量課金プロバイダより先に使う。
   { provider: 'genspark', model: 'gpt-5.6-luna' },
   { provider: 'openrouter', model: 'openai/gpt-oss-120b' },
@@ -62,6 +63,7 @@ function dailyCost(file, timestamp) {
       let record;
       try { record = JSON.parse(line); } catch { return total; }
       if (localDay(record.t) !== day) return total;
+      if (record.provider === 'gemini') return total + (typeof record.usd === 'number' && Number.isFinite(record.usd) && record.usd >= 0 ? record.usd : 0);
       const rates = COST_PER_MILLION[record.provider];
       return rates ? total + ((Number(record.in) || 0) * rates[0] + (Number(record.out) || 0) * rates[1]) / 1_000_000 : total;
     }, 0);
@@ -74,7 +76,8 @@ function threshold(name, fallback) {
 }
 
 export function classifyFailure(status) {
-  if (status == null || status === 429 || (status >= 500 && status <= 599)) return 'retry';
+  // 429 は容量不足なので即時再試行しても通らない。同一プロバイダへ投げ直さず次候補へ回す。
+  if (status == null || (status >= 500 && status <= 599)) return 'retry';
   return 'next';
 }
 
@@ -134,10 +137,15 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, payloadF
     } catch {}
   }
   if (demotedProviders.length) {
-    const rank = (candidate) => (demotedProviders.includes(candidate.provider) && candidate.provider !== start.provider ? 1 : 0);
+    // Budget demotion must also apply to explicitly requested long-context Gemini.
+    if (start.provider === 'gemini' && demotedProviders.includes('gemini') && chain.length) {
+      const gateway = candidates.findIndex((candidate) => candidate.provider === 'openrouter');
+      if (gateway >= 0) candidates.unshift(...candidates.splice(gateway, 1));
+    }
+    const rank = (candidate) => (demotedProviders.includes(candidate.provider) && (candidate.provider === 'gemini' || candidate.provider !== start.provider) ? 1 : 0);
     candidates.sort((a, b) => rank(a) - rank(b)); // Array#sort は安定なので同 rank 内の元順を保つ
     for (const provider of demotedProviders) {
-      if (provider !== start.provider) console.error(`[routing] ${provider} はdemote中のため連鎖の末尾へ回します`);
+      if (provider === 'gemini' || provider !== start.provider) console.error(`[routing] ${provider} はdemote中のため連鎖の末尾へ回します`);
     }
   }
 
@@ -148,22 +156,24 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, payloadF
   const cooldowns = useCooldown ? readJson(cooldownPath, {}) : {};
   const available = useCooldown ? candidates.filter(({ provider }) => !(Number(cooldowns?.[provider]?.until) > timestamp)) : candidates;
   const selectedCandidates = available.length ? available : candidates;
+  const skipped = [];
   if (useCooldown && available.length) {
     for (const candidate of candidates) {
       const state = cooldowns?.[candidate.provider];
       if (Number(state?.until) <= timestamp || !state) continue;
       const minutes = Math.max(1, Math.ceil((state.until - timestamp) / 60000));
+      skipped.push({ provider: candidate.provider, model: candidate.model, reason: 'cooldown', minutesLeft: minutes });
       console.error(`[cooldown] ${candidate.provider} はスキップ (${state.reason || 'unknown'}, 残り${minutes}分)`);
     }
   }
 
   let cooldownDirty = false;
-  function setCooldown(provider, status, response) {
+  function setCooldown(provider, status, response, permanentBilling = false) {
     if (!useCooldown) return;
     let duration = 0;
-    if (status === 402) duration = 24 * 60 * 60 * 1000;
+    if (status === 402 || permanentBilling) duration = 24 * 60 * 60 * 1000;
     else if ([401, 403].includes(status)) duration = 6 * 60 * 60 * 1000;
-    else if (status === 429) duration = retryAfterMs(response, timestamp) ?? 30 * 60 * 1000;
+    else if (status === 429) duration = Math.max(retryAfterMs(response, timestamp) ?? 0, threshold('ORGIAST_LLM_429_COOLDOWN_MIN_MS', 60_000));
     if (!duration) return;
     cooldowns[provider] = { until: timestamp + duration, reason: `http_${status}`, at: timestamp };
     cooldownDirty = true;
@@ -179,7 +189,14 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, payloadF
   const failures = [];
   const requests = new Map();
   async function requestAt(index) {
-    if (!requests.has(index)) requests.set(index, await payloadFor(selectedCandidates[index]));
+    if (!requests.has(index)) {
+      const request = await payloadFor(selectedCandidates[index]);
+      requests.set(index, request);
+      if (!request) {
+        const candidate = selectedCandidates[index];
+        skipped.push({ provider: candidate.provider, model: candidate.model, reason: 'no-request' });
+      }
+    }
     return requests.get(index);
   }
 
@@ -210,10 +227,13 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, payloadF
       }
       attempted++;
       await onAttempt?.({ candidate, attempt, status: statusName(status), response, reason: lastReason, secs: (Date.now() - began) / 1000, failover: candidate.provider !== start.provider });
-      setCooldown(candidate.provider, status, response);
+      // groq の通常429の本文には `https://console.groq.com/settings/billing` が含まれるため、
+      // 素の `billing` で判定すると日次上限(TPD)を恒久障害と誤判定する。恒久障害の文面だけを拾う。
+      const permanentBilling = status === 429 && /prepayment credits are depleted|insufficient_quota|exceeded your current quota/i.test(detail);
+      setCooldown(candidate.provider, status, response, permanentBilling);
 
       const kind = classifyFailure(status);
-      if (kind !== 'retry' || attempt === 2) break;
+      if (permanentBilling || kind !== 'retry' || attempt === 2) break;
       const specified = retryAfterMs(response);
       if (specified != null && specified > 60000) break;
       await sleepImpl(specified ?? 1000 * 2 ** attempt);
@@ -230,8 +250,12 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, payloadF
   const summary = failures.length
     ? failures.map(({ candidate, reason }) => `${candidate.provider}:${candidate.model} ${reason}`).join('; ')
     : '利用可能なキーを持つ候補がありません';
-  const error = new Error(`全候補が失敗しました: ${summary}`);
+  const skippedSummary = skipped.length
+    ? ` ; スキップ: ${skipped.map(({ provider, reason, minutesLeft }) => `${provider}(${reason}${minutesLeft != null ? `, 残り${minutesLeft}分` : ''})`).join(', ')}`
+    : '';
+  const error = new Error(`全候補が失敗しました: ${summary}${skippedSummary}`);
   error.failures = failures;
+  error.skipped = skipped;
   saveCooldowns();
   throw error;
 }

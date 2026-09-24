@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { writeHandoff } from './next-session-rotate.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
 import { parseEnvText } from './env-kv.mjs';
 import { isEntry } from './is-entry.mjs';
 import { decideRun, firstBlockBounds, sectionFrom } from './auto-session.mjs';
@@ -104,14 +106,14 @@ export async function fetchJson(url, options = {}, fetchImpl = fetch, { sleep = 
 function defaultIo() {
   return {
     read: (file) => fs.readFileSync(file, 'utf8'),
-    write: (file, text) => fs.writeFileSync(file, text, 'utf8'),
+    write: (file, text) => path.basename(file) === 'next-session.md' ? writeHandoff(file, text) : fs.writeFileSync(file, text, 'utf8'),
     now: () => new Date(),
     stdout: (text) => console.log(text),
     stderr: (text) => console.error(text),
     append: (file, text) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.appendFileSync(file, text, 'utf8'); },
     exists: (file) => fs.existsSync(file),
     pidAlive: (pid) => { try { process.kill(Number(pid), 0); return Number(pid) > 0; } catch { return false; } },
-    spawn: (...args) => spawn(...args),
+    spawn: (command, args, options = {}) => spawn(command, args, { ...options, windowsHide: true }),
     notify: async (url, content) => {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 5_000);
@@ -205,9 +207,12 @@ export async function runIntake({ args = [], home = process.env.ORGIAST_HOME || 
     const nextFile = path.join(claudeDir, 'next-session.md');
     let before = '';
     try { before = io.read(nextFile); } catch {}
+    let archivedFeedback = [];
+    try { archivedFeedback = JSON.parse(io.read(path.join(claudeDir, 'archive', 'next-session-feedback.json'))); } catch {}
+    const seenFeedback = (key) => before.includes(`[FB:${key}]`) || archivedFeedback.includes(key);
     const validItems = items.filter((item) => item?.key);
-    const existingInText = validItems.filter((item) => before.includes(`[FB:${item.key}]`));
-    const missingFromText = validItems.filter((item) => !before.includes(`[FB:${item.key}]`));
+    const existingInText = validItems.filter((item) => seenFeedback(item.key));
+    const missingFromText = validItems.filter((item) => !seenFeedback(item.key));
     const reinjectedItems = missingFromText.filter((item) => ledger.items[item.key]?.injectedAt);
     const reinjectedKeys = new Set(reinjectedItems.map((item) => item.key));
     const candidates = missingFromText;
@@ -265,7 +270,7 @@ export async function runIntake({ args = [], home = process.env.ORGIAST_HOME || 
         io.write(lockFile, `${JSON.stringify({ pid: process.pid, startedAt: now, keys: newImmediate.map((item) => item.key) }, null, 2)}\n`);
         try {
           const launcher = path.join(import.meta.dirname, 'auto-session-launcher.mjs');
-          const child = io.spawn(process.execPath, [launcher], { detached: true, stdio: 'ignore', windowsHide: true });
+          const child = io.spawn(process.execPath, [launcher], { ...backgroundSpawnOptions(), stdio: 'ignore' });
           child.unref();
           for (const item of newImmediate) {
             ledger.items[item.key].immediateLaunchedAt = now;

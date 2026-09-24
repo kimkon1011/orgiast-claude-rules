@@ -8,7 +8,9 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'ensure-run-hidden.ps1')
 
-$repo = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
+. (Join-Path $PSScriptRoot 'resolve-synced-repo.ps1')
+# The task must run from the synced repo, not from the tree this script sits in.
+$repo = Resolve-RegisterRepoRoot -Fallback (Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)) -RequiredPaths @('tools\plaud-to-tldv.mjs')
 $script = Join-Path $repo 'tools\plaud-to-tldv.mjs'
 if (-not (Test-Path $script)) { throw "script not found: $script" }
 

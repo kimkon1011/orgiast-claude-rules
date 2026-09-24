@@ -8,7 +8,7 @@ description: セッション中に確立した Claude Code 開発ノウハウ・
 投稿先: `knowledge-inbox` folder `1AyZcrlK9JCNPUkhKCBOezet9a2QoSwK2`（Drive ハブ claude-common-rules 配下）
 
 ## 手順
-1. 投稿内容を下記フォーマットに整形（1投稿 = 1ノウハウ。複数あればファイルを分ける）
+1. 投稿内容を下記フォーマットに整形（1投稿 = 1ノウハウ。複数あればファイルを分ける）。取り込み可否は`protocols/INTAKE-TWO-AXES.md`の2軸表で判定し、B軸が空なら差し戻す
 2. Drive MCP `create_file`:
    - parentId: `1AyZcrlK9JCNPUkhKCBOezet9a2QoSwK2`
    - title: `YYYYMMDD-<アカウント短縮名>-<slug>.md`（例: `20260706-kim-vercel-cron-unreliable.md`。アカウント = このマシンの Drive コネクタ owner）

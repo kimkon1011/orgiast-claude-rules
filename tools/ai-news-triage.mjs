@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { writeHandoff } from './next-session-rotate.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { createLlmClient } from './line-digest.mjs';
@@ -16,10 +17,12 @@ export function parseArgs(args) {
   const limit = Number(value('--limit', 3));
   const confidence = String(value('--confidence', 'high')).split(',').filter(Boolean);
   const provider = value('--provider', 'groq');
+  const budgetSeconds = Number(value('--budget-seconds', 900));
   if (!Number.isInteger(limit) || limit < 1) throw new Error('--limit は1以上の整数で指定してください');
+  if (!Number.isInteger(budgetSeconds) || budgetSeconds < 0) throw new Error('--budget-seconds は1以上の整数で指定してください');
   if (!confidence.length || confidence.some((item) => !CONFIDENCES.has(item))) throw new Error('--confidence は low,medium,high の組み合わせで指定してください');
   if (!PROVIDERS.has(provider)) throw new Error('--provider は groq または deepseek を指定してください');
-  return { dryRun: args.includes('--dry-run'), list: args.includes('--list'), limit, confidence: new Set(confidence), provider, id: value('--id') };
+  return { dryRun: args.includes('--dry-run'), list: args.includes('--list'), limit, confidence: new Set(confidence), provider, budgetSeconds, id: value('--id') };
 }
 
 export function readProposalLines(text) {
@@ -135,19 +138,49 @@ export async function runTriage(options = {}) {
   const updates = new Map();
   const adopted = [];
   const failures = [];
-  const system = 'LINE投稿由来の提案を検索結果だけから検証する。検索結果に無いことを書かない。不明なら必ず unclear と書く。verdictは投稿内容が裏取りできたか、adoptはオージャストのコスト削減または品質向上に直結し実際に手を打つ価値があるかで決める。JSONのみを返す。形式: {"verdict":"confirmed|refuted|unclear","finding":"120字以内の日本語","adopt":true|false,"reason":"80字以内"}';
-  for (const record of targets) {
+  let deferred = 0;
+  const system = 'LINE投稿由来の提案を検索結果だけから検証する。検索結果に無いことを書かない。不明なら必ず unclear と書く。verdictは投稿内容が裏取りできたか、adoptはオージャストのコスト削減または品質向上に直結し実際に手を打つ価値があるかで決める。安全・手順・再発防止だけでなく、B軸のコスト削減・速度・人手削減・売上への効果も必ず検討し、B軸が空なら採用判定を完了しない。JSONのみを返す。形式: {"verdict":"confirmed|refuted|unclear","finding":"120字以内の日本語","adopt":true|false,"reason":"80字以内"}';
+  const startedAt = Date.now();
+  for (const [index, record] of targets.entries()) {
+    if (cli.budgetSeconds > 0 && Date.now() - startedAt >= cli.budgetSeconds * 1000) {
+      deferred = targets.length - index;
+      break;
+    }
+    let stage = 'search';
+    let meta = { provider: '', model: '', attempt: 0, failover: false };
+    let provider = '';
     try {
       const found = await search(`${record.title}\n${record.action}`);
-      const response = await llm({ provider: cli.provider, messages: [{ role: 'system', content: system }, { role: 'user', content: `提案: ${JSON.stringify({ title: record.title, action: record.action, evidence: record.evidence })}\n検索結果: ${formatSearch(found)}` }], maxTokens: 500, responseFormat: { type: 'json_object' } });
+      stage = 'llm';
+      const response = await llm({ provider: cli.provider, messages: [{ role: 'system', content: system }, { role: 'user', content: `提案: ${JSON.stringify({ title: record.title, action: record.action, evidence: record.evidence })}\n検索結果: ${formatSearch(found)}` }], maxTokens: 1600, responseFormat: { type: 'json_object' } });
+      provider = response.provider || cli.provider;
+      meta = { provider: response.provider || '', model: response.model || '', attempt: Number(response.attempt ?? 0), failover: Boolean(response.failover) };
       const result = parseVerdict(response.text);
-      const updated = applyTriageResult(record, result, { now: now(), provider: response.provider || cli.provider });
+      const updated = applyTriageResult(record, result, { now: now(), provider });
       updates.set(record.id, updated);
       if (updated.status === 'done' && updated.adopt === true) adopted.push(updated);
       log(`${cli.dryRun ? '[dry-run] ' : ''}${record.id} ${updated.verdict} adopt=${updated.adopt} → ${updated.status}: ${updated.finding}`);
     } catch (error) {
-      failures.push({ id: record.id, error });
+      const fromError = (error && error.llmAttempt) || {};
+      const failure = {
+        id: record.id,
+        stage,
+        error,
+        provider: meta.provider || fromError.provider || provider || (stage === 'llm' ? cli.provider : '') || '',
+        model: meta.model || fromError.model || '',
+        attempt: Number(meta.attempt ?? fromError.attempt ?? 0) || Number(fromError.attempt ?? 0) || 0,
+        failover: Boolean(meta.failover || fromError.failover),
+      };
+      failures.push(failure);
       log(`warn:${record.id} 判定失敗: ${error.message}`);
+      if (!cli.dryRun) {
+        try {
+          const file = path.join(base, 'ai-news-triage-failures.jsonl');
+          fs.mkdirSync(path.dirname(file), { recursive: true });
+          const message = String(error && error.message || error).slice(0, 300);
+          fs.appendFileSync(file, `${JSON.stringify({ t: new Date().toISOString(), id: record.id, stage, provider: failure.provider, model: failure.model, attempt: failure.attempt, failover: failure.failover, message })}\n`, 'utf8');
+        } catch {}
+      }
     }
   }
 
@@ -169,11 +202,16 @@ export async function runTriage(options = {}) {
 
   if (!cli.dryRun && updates.size > 0) {
     fs.writeFileSync(proposalFile, nextRecords.map(JSON.stringify).join('\n') + (nextRecords.length ? '\n' : ''), 'utf8');
-    if (adopted.length && nextSessionText && !warnings.length) fs.writeFileSync(nextSessionFile, nextSessionText, 'utf8');
+    if (adopted.length && nextSessionText && !warnings.length) writeHandoff(nextSessionFile, nextSessionText);
     if (digestResult.changed) fs.writeFileSync(digestFile, digestResult.text, 'utf8');
   }
   [...new Set(warnings)].forEach(log);
-  return { status, processed: updates.size, records: nextRecords };
+  const searchFailures = failures.filter((item) => item.stage === 'search').length;
+  const llmFailures = failures.filter((item) => item.stage === 'llm').length;
+  const diagnostic = failures.length
+    ? `診断:検索失敗${searchFailures}件 / LLM失敗${llmFailures}件${deferred ? ` / 時間切れ残${deferred}件` : ''}`
+    : '';
+  return { status, processed: updates.size, records: nextRecords, deferred, diagnostic };
 }
 
 export async function runCli(args, options = {}) {
@@ -181,6 +219,7 @@ export async function runCli(args, options = {}) {
   try {
     const result = await runTriage({ ...options, args, log });
     log(result.status);
+    if (result.diagnostic) log(result.diagnostic);
   } catch (error) {
     log(`error:${error.message}`);
   }

@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createDirtyWorktreeGuard } from './dirty-worktree-guard.mjs';
 import { isEntry } from './is-entry.mjs';
 import { acquireLock } from './lib/single-instance.mjs';
 
@@ -153,7 +154,7 @@ function healthCheck(repo, file) {
   return { ok: true, reason: '構文・同名テスト成功' };
 }
 
-function runPerFile({ tree, files, ledgerFile, lastWritten, dryRun, list }) {
+function runPerFile({ tree, files, ledgerFile, lastWritten, dryRun, list, allowUpdate }) {
   const results = [];
   for (const file of files) {
     const fullPath = path.join(tree, file);
@@ -166,6 +167,11 @@ function runPerFile({ tree, files, ledgerFile, lastWritten, dryRun, list }) {
     if (dryRun || list) continue;
     if (decision.action !== 'updated') { appendLedger(ledgerFile, result); continue; }
     try {
+      if (!allowUpdate(tree)) {
+        Object.assign(result, { action: 'skipped', reason: 'DIRTY_WORKTREE_SKIP' });
+        appendLedger(ledgerFile, result);
+        break;
+      }
       git(tree, ['checkout', 'origin/main', '--', file]);
       const health = healthCheck(tree, file);
       if (!health.ok) {
@@ -194,11 +200,18 @@ export function runSelfheal({ repo, home, dryRun = false, list = false, fetch = 
   }
   const lastWritten = readLedger(ledgerFile);
   const allResults = [];
+  const allowUpdate = createDirtyWorktreeGuard({ home: resolvedHome });
   for (const candidate of trees) {
     let tree;
     try { tree = fs.realpathSync(git(candidate, ['rev-parse', '--show-toplevel']).trim()); } catch { continue; }
     if (fetch) try { git(tree, ['fetch', 'origin', '--quiet']); } catch (error) { console.error(`[hook-tree-selfheal] ${tree}: git fetch 失敗（続行）: ${error.message}`); }
     const files = discoverHookFiles(settings, tree);
+    if (!dryRun && !list && !allowUpdate(tree)) {
+      const result = { tree, action: 'skipped', reason: 'DIRTY_WORKTREE_SKIP: rescue attempted; updates skipped' };
+      allResults.push(result);
+      appendLedger(ledgerFile, result);
+      continue;
+    }
     const dirty = git(tree, ['status', '--porcelain']).trim() !== '';
     let detached = false;
     try { git(tree, ['symbolic-ref', '-q', 'HEAD'], { stdio: ['ignore', 'pipe', 'ignore'] }); }
@@ -212,20 +225,22 @@ export function runSelfheal({ repo, home, dryRun = false, list = false, fetch = 
       allResults.push(result);
       if (!dryRun && !list) {
         try {
+          if (!allowUpdate(tree)) continue;
           git(tree, ['checkout', '--detach', 'origin/main']);
           const failed = files.map((file) => ({ file, health: syntaxCheck(tree, file) })).find(({ health }) => !health.ok);
           if (failed) {
+            if (!allowUpdate(tree)) continue;
             git(tree, ['checkout', '--detach', headSha]);
             Object.assign(result, { action: 'reverted', reason: `${failed.file}: ${failed.health.reason}` });
           }
         } catch (error) {
-          try { git(tree, ['checkout', '--detach', headSha]); } catch {}
+          try { if (allowUpdate(tree)) git(tree, ['checkout', '--detach', headSha]); } catch {}
           Object.assign(result, { action: 'reverted', reason: `ツリー更新失敗: ${error.message}` });
         }
         appendLedger(ledgerFile, result);
       }
     } else {
-      const results = runPerFile({ tree, files, ledgerFile, lastWritten, dryRun, list });
+      const results = runPerFile({ tree, files, ledgerFile, lastWritten, dryRun, list, allowUpdate });
       allResults.push(...results);
       if ((dryRun || list) && treeDecision.action === 'uptodate' && results.every((item) => item.action === 'uptodate')) {
         // Per-file details retain exact counts while the header exposes the tree decision.

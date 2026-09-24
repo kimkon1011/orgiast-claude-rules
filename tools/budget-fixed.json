@@ -5,6 +5,7 @@
     { "name": "Claude Team seats", "jpy": null, "note": "kim 記入" },
     { "name": "ChatGPT (Codex) subscriptions", "jpy": null },
     { "name": "Z.ai GLM Coding Plan (kim)", "usd": 12.6 },
+    { "name": "Cursor Pro (kim@orgiast.jp / Grok Bot access)", "usd": 20, "note": "2026-09-17 契約。Grok Bot は全有料 individual プランに含まれる。枠不足なら Pro+ $60 → Ultra $200" },
     { "name": "Gemini autopay 上限", "jpy": 20000, "kind": "cap" }
   ]
 }

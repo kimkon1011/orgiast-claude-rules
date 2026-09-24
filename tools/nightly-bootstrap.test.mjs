@@ -113,6 +113,23 @@ function allLogText(fix) {
     .join('\n');
 }
 
+// git を PATH 先頭の stub で置き換え、実 git・ネットワークなしで同期分岐を踏む。
+// 返り値は runBootstrap の extraEnv.PATH にそのまま渡せる文字列。
+function gitShimPath(fix, headSha, remoteSha) {
+  const shim = join(fix.dir, 'shim');
+  mkdirSync(shim, { recursive: true });
+  writeFileSync(join(shim, 'git.cmd'), [
+    '@echo off',
+    'rem 呼び出しは git -C <repo> <subcommand> ... の形。findstr に依存させない。',
+    'if not "%~3"=="rev-parse" exit /b 0',
+    'if "%~4"=="HEAD" echo ' + headSha,
+    'if "%~4"=="origin/main" echo ' + remoteSha,
+    'exit /b 0',
+    '',
+  ].join('\r\n'), 'utf8');
+  return `${toWindowsPath(shim)};${String.raw`C:\Windows\System32\WindowsPowerShell\v1.0`}`;
+}
+
 const hasPowerShell = (() => {
   const probe = spawnSync(powershell, ['-NoProfile', '-Command', 'exit 0']);
   return !probe.error && probe.status === 0;
@@ -461,4 +478,92 @@ test('mutex timeout logs a warning and continues with the existing target', { sk
   assert.equal(contender.status, 0, contender.stderr);
   await holder;
   assert.match(allLogText(fix), /warn:他のタスクが同期中のためタイムアウト。既存版で続行/);
+});
+
+test('logs ok:origin/main only when HEAD matches origin/main', { skip: !hasPowerShell }, () => {
+  const fix = fixture('sync-sha-match');
+  mkdirSync(join(fix.repo, '.git'), { recursive: true });
+  const target = join(fix.dir, 'target.ps1');
+  writeFileSync(target, 'exit 0\r\n', 'utf8');
+  const sha = '1111111111111111111111111111111111111111';
+
+  const result = runBootstrap(fix, target, [], { PATH: gitShimPath(fix, sha, sha) });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(logText(fix), /ok:origin\/main 1111111/);
+});
+
+test('logs ng and keeps running when HEAD does not match origin/main', { skip: !hasPowerShell }, () => {
+  const fix = fixture('sync-sha-mismatch');
+  mkdirSync(join(fix.repo, '.git'), { recursive: true });
+  const target = join(fix.dir, 'target.ps1');
+  writeFileSync(target, 'exit 0\r\n', 'utf8');
+
+  const result = runBootstrap(fix, target, [], {
+    PATH: gitShimPath(
+      fix,
+      '1111111111111111111111111111111111111111',
+      '2222222222222222222222222222222222222222',
+    ),
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const log = logText(fix);
+  assert.match(log, /ng:HEAD 1111111 != origin\/main 2222222 既存版で続行/);
+  assert.doesNotMatch(log, /ok:origin\/main/);
+});
+
+const windowsGit = process.platform === 'win32'
+  ? 'C:\\Program Files\\Git\\cmd\\git.exe'
+  : '/mnt/c/Program Files/Git/cmd/git.exe';
+for (const dirty of [true, false]) test(`real git bootstrap preserves dirty tree / updates clean tree: dirty=${dirty}`, {
+  skip: !hasPowerShell || !existsSync(windowsGit),
+}, () => {
+  const fix = fixture(`real-git-${dirty}`);
+  const git = (dir, args) => execFileSync(windowsGit, ['-C', toWindowsPath(dir), ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  const remote = join(fix.dir, 'remote.git');
+  git(fix.dir, ['init', '--bare', toWindowsPath(remote)]);
+  git(fix.repo, ['init', '-b', 'main']);
+  git(fix.repo, ['config', 'user.name', 'Test']);
+  git(fix.repo, ['config', 'user.email', 'test@example.invalid']);
+  const target = join(fix.repo, 'target.ps1');
+  writeFileSync(target, 'exit 0\r\n');
+  writeFileSync(join(fix.repo, 'tracked'), 'original');
+  git(fix.repo, ['add', 'tracked', 'target.ps1']);
+  git(fix.repo, ['commit', '-m', 'initial']);
+  git(fix.repo, ['remote', 'add', 'origin', toWindowsPath(remote)]);
+  git(fix.repo, ['push', '-u', 'origin', 'main']);
+  if (dirty) {
+    writeFileSync(join(fix.repo, 'tracked'), 'changed');
+    writeFileSync(join(fix.repo, 'untracked'), 'precious');
+  } else {
+    git(fix.repo, ['commit', '--allow-empty', '-m', 'upstream']);
+    git(fix.repo, ['push', 'origin', 'main']);
+    git(fix.repo, ['checkout', '--detach', 'HEAD~1']);
+  }
+  const shim = join(fix.dir, 'real-shim');
+  mkdirSync(shim);
+  const trace = join(fix.dir, 'git-trace.txt');
+  writeFileSync(join(shim, 'git.cmd'), [
+    '@echo off',
+    `echo %* >> "${toWindowsPath(trace)}"`,
+    `"C:\\Program Files\\Git\\cmd\\git.exe" %*`,
+    'exit /b %errorlevel%', '',
+  ].join('\r\n'));
+  const result = runBootstrap(fix, target, [], { PATH: `${toWindowsPath(shim)};C:\\Windows\\System32\\WindowsPowerShell\\v1.0` });
+  assert.equal(result.status, 0, result.stderr);
+  const commands = readFileSync(trace, 'utf8');
+  if (dirty) {
+    assert.doesNotMatch(commands, /reset --hard|clean -qfd|checkout --detach/);
+    assert.equal(readFileSync(join(fix.repo, 'untracked'), 'utf8'), 'precious');
+    const branch = git(fix.repo, ['branch', '--show-current']).trim();
+    assert.match(branch, /^rescue\/auto-session-/);
+    assert.equal(git(remote, ['show', `${branch}:tracked`]), 'changed');
+    assert.equal(git(remote, ['show', `${branch}:untracked`]), 'precious');
+    assert.match(readFileSync(join(fix.home, '.claude', 'next-session.md'), 'utf8'), /レビューが必要/);
+  } else {
+    assert.match(commands, /reset --hard/);
+    assert.match(commands, /clean -qfd/);
+    assert.equal(git(fix.repo, ['rev-parse', 'HEAD']), git(fix.repo, ['rev-parse', 'origin/main']));
+  }
 });

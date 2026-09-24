@@ -1,4 +1,5 @@
 // 複数プロバイダのLLMを1本で叩く統合CLIヘルパー。
+import { geminiUsage, recordGeminiUsage } from './gemini-usage-ledger.mjs';
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
 import { readEnvValue } from './env-kv.mjs';
 import { callWithFallback, FALLBACK_CHAIN, preferredForCategory } from './llm-fallback.mjs';
@@ -66,6 +67,10 @@ if (system) messages.push({ role: 'system', content: system });
 messages.push({ role: 'user', content: prompt });
 const ledger = path.join(home, '.claude', 'executor-usage.jsonl');
 function appendAttempt(info, usage = {}) {
+  if (info.candidate.provider === 'gemini') {
+    try { recordGeminiUsage({ model: info.candidate.model, ...geminiUsage({ usageMetadata: usage.promptTokenCount !== undefined ? usage : undefined, usage }), source: 'llm-ask', status: info.status, attempt: info.attempt, failover: info.failover, secs: Number(info.secs.toFixed(3)) }, { home }); } catch {}
+    return;
+  }
   const rec = { t: new Date().toISOString(), provider: info.candidate.provider, model: info.candidate.model, in: usage.prompt_tokens || 0, out: usage.completion_tokens || 0, secs: Number(info.secs.toFixed(3)), status: info.status, attempt: info.attempt, failover: info.failover };
   try { fs.mkdirSync(path.dirname(ledger), { recursive: true }); fs.appendFileSync(ledger, JSON.stringify(rec) + '\n'); } catch {}
 }
@@ -83,7 +88,7 @@ try {
     },
     async onAttempt(info) {
       let usage = {};
-      if (info.status === 'ok') usage = (await info.response.clone().json().catch(() => ({}))).usage || {};
+      if (info.status === 'ok') { const body = await info.response.clone().json().catch(() => ({})); usage = body.usageMetadata || body.usage || {}; }
       appendAttempt(info, usage);
     },
     onFailover({ from, to, reason }) { console.error(`[failover] ${from.provider}:${from.model} ${reason} → ${to.provider}:${to.model}`); },

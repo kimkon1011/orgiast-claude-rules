@@ -65,3 +65,11 @@ Why: 2026-06-30、 イベント見積/実施計画 + PJ フォルダ 自動作�
 - 「マージしてください」を user に頼まない。CI が赤なら Claude が原因を直し、緑になるまで確認する。
 - 応答は必ず末尾の 1 行を `**次に kim がすること: なし**` または `**次に kim がすること: <1件だけ>**` とする。直近 7 日に「この先はどうしたらいいの？」という聞き返しが 9 回あったため、次の行動を曖昧にしない。
 - 完了報告の結論は 3 行以内に収める。詳細はファイルへ書き、クリック可能なリンクを 1 本だけ示す。
+
+### 1.21 司令塔プロトコルの差分運用
+
+実行役への指示は`protocols/HANDOFF.md`、前提が変わり得る判断は`protocols/DECISION-TEMPLATE.md`を使う。
+同じ学びはmemory frontmatterの`metadata.count`で数え、3回または重大事故1回でPROMOTEする。
+仕組み化は提案で止めず、実装・試験・有効化後に`PROMOTED`と昇格先を記録する。
+バッチ・移行・一括処理は`TOTAL INPUT = SUCCESS + FAILED + EXCLUDED + UNRECOGNIZED`を照合する。
+詳細は`protocols/LEARNING-LEDGER.md`と各skillを正本とする。

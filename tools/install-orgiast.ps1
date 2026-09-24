@@ -110,7 +110,7 @@ function Update-DirtyRepoFromZip($repo) {
 
     # 汚れたPCを救える唯一の配布経路なので、repo自体は決して削除しない。
     # 未コミット作業を守りつつ、配布対象のうち変更されていないファイルだけを更新する。
-    foreach ($dir in @('tools', 'rules-extracted', 'skills')) {
+    foreach ($dir in @('tools', 'config', 'rules-extracted', 'skills')) {
       $sourceDir = Join-Path $src $dir
       if (-not (Test-Path $sourceDir)) { continue }
       foreach ($sourceFile in @(Get-ChildItem $sourceDir -File -Recurse)) {

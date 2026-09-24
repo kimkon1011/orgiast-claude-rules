@@ -12,10 +12,17 @@ const { needsWorktreeRepair, detectQuotaLimit, shouldFlagEmptyFallbackDiff, buil
 function run(args, options = {}) {
   return spawnSync(process.execPath, [tool, ...args], {
     encoding: 'utf8',
-    timeout: 30000,
+    // /mnt/c の大きい worktree では終了時の git read-back が30秒境界に触れる。
+    // 子プロセス自体のタイムアウト検証とは独立なので、test harness側には余裕を持たせる。
+    timeout: 45000,
     env: {
       ...process.env,
       ORGIAST_HOME: options.home ?? fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-home-')),
+      // 既存のテストは全て sol/astra 前提。probeChatGptAuth が実機の WSL/auth.json を
+      // 読みに行くと、テストを回すマシンの実際の認証状態に依存して非決定的に壊れる
+      // (2026-09-21 実測: 開発機で ChatGPT 認証が実在し auto テストが軒並み落ちた)。
+      // ChatGPT 認証時の挙動そのものを見るテストだけ options.env で明示的に上書きする。
+      CODEX_DO_AUTH_MODE: 'apikey',
       ...options.env
     },
   });
@@ -50,6 +57,12 @@ test('--prompt-file の中身をそのまま指示として使う', () => {
   const result = run(['--dry-run', '--prompt-file', file]);
   assert.equal(result.status, 0);
   assert.match(result.stdout, /新規ファイルを作る/);
+});
+
+test('--prompt-file に完了条件が無ければ警告するがブロックしない', () => {
+  const result = run(['--dry-run', '--prompt-file', writePrompt('# 指示\n新規ファイルを作る\n')]);
+  assert.equal(result.status, 0);
+  assert.match(result.stderr, /\[codex-do\] 警告: 指示ファイルに完了条件がありません/);
 });
 
 test('バッククォート・$()・改行を含む指示が欠落せず原文のまま届く', () => {
@@ -229,7 +242,9 @@ test('枠切れ発生時に --no-fallback を指定した場合はフォール�
   const mockResults = [
     { status: 1, output: "You've hit your usage limit. Please try again later.", stderr: "" }
   ];
-  const result = run(['--no-fallback', '指示内容'], {
+  // --force-native: このテストは「枠切れ→フォールバック」の経路だけを見る。WSL の有無で
+  // 分岐が変わると Windows 実機で必ず落ちるため、codex 実行経路を固定する。
+  const result = run(['--force-native', '--no-fallback', '指示内容'], {
     env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults) }
   });
   // フォールバックしないため非ゼロ終了
@@ -244,11 +259,11 @@ test('枠切れ発生時にフォールバックが成功した場合は 0 で�
     { status: 1, output: "You've hit your usage limit. Please try again later.", stderr: "" },
     { status: 0, output: "Qwen Code CLI has successfully edited files.", stderr: "" }
   ];
-  const result = run(['指示内容'], {
+  const result = run(['--force-native', '指示内容'], {
     env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults), GEMINI_API_KEY: '', DEEPSEEK_API_KEY: 'sk-test' }
   });
   assert.equal(result.status, 0);
-  assert.match(result.stdout, /executor=fallback:deepseek/);
+  assert.match(result.stdout, /executor=fallback:cheap-code:deepseek/);
   assert.match(result.stderr, /Falling back to an agentic CLI/);
 });
 
@@ -258,7 +273,7 @@ test('第1フォールバックがタイムアウトしたら第2バックエン
     { status: 124, output: '', stderr: '', timedOut: true },
     { status: 0, output: 'Qwen Code CLI has successfully completed.', stderr: '' }
   ];
-  const result = run(['指示内容'], {
+  const result = run(['--force-native', '指示内容'], {
     env: {
       CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults),
       GEMINI_API_KEY: 'gemini-test',
@@ -266,7 +281,7 @@ test('第1フォールバックがタイムアウトしたら第2バックエン
     }
   });
   assert.equal(result.status, 0);
-  assert.match(result.stdout, /executor=fallback:deepseek/);
+  assert.match(result.stdout, /executor=fallback:cheap-code:deepseek/);
   assert.match(result.stderr, /タイムアウトしたため次のバックエンドへ/);
 });
 
@@ -275,11 +290,11 @@ test('Codex もフォールバック(Qwen Code) も失敗した場合は非ゼ�
     { status: 1, output: "You've hit your usage limit. Please try again later.", stderr: "" },
     { status: 12, output: "", stderr: "Qwen Code execution error" }
   ];
-  const result = run(['指示内容'], {
+  const result = run(['--force-native', '指示内容'], {
     env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults), GEMINI_API_KEY: '', DEEPSEEK_API_KEY: 'sk-test' }
   });
   assert.equal(result.status, 12);
-  assert.match(result.stdout, /executor=fallback:deepseek/);
+  assert.match(result.stdout, /executor=fallback:cheap-code:deepseek/);
 });
 
 test('枠切れ発生時に DEEPSEEK_API_KEY が無ければフォールバックせず非ゼロで終了する', () => {
@@ -289,7 +304,7 @@ test('枠切れ発生時に DEEPSEEK_API_KEY が無ければフォールバッ�
   const prev = process.env.DEEPSEEK_API_KEY;
   delete process.env.DEEPSEEK_API_KEY;
   try {
-    const result = run(['指示内容'], {
+    const result = run(['--force-native', '指示内容'], {
       env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults), GEMINI_API_KEY: '', OPENROUTER_API_KEY: '' }
     });
     assert.equal(result.status, 1);
@@ -487,24 +502,28 @@ function withEnvKeysCleared(fn) {
   }
 }
 
-test('resolveFallbackBackends は既定で gemini-cli → deepseek → openrouter-free の順に置く', () => {
+test('resolveFallbackBackends は既定で gemini-cli → cheap-code:deepseek → cheap-code:glm の順に置く（kind:qwen は既定に出さない）', () => {
+  // 2026-09-21: deepseek/openrouter-free(kind:'qwen') は実在しない `qwen` バイナリを spawn するため
+  // 既定順から外した。既定は外部バイナリ不要の cheap-code 経路に統一する（[[project-tetsuko-growth-loop]]）。
   withEnvKeysCleared(() => {
     const dir = makeHomeWithEnv({
       'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n',
       'deepseek.env': 'DEEPSEEK_API_KEY=sk-ds-1\n',
+      'zai.env': 'ZAI_API_KEY=sk-zai-1\n',
       'gemini.env': 'GEMINI_API_KEY=sk-gemini-1\n'
     });
     const backends = resolveFallbackBackends(dir);
-    assert.deepEqual(backends.map(({ name }) => name), ['gemini-cli', 'deepseek', 'openrouter-free']);
-    assert.deepEqual(backends.map(({ kind }) => kind), ['gemini', 'qwen', 'qwen']);
+    assert.deepEqual(backends.map(({ name }) => name), ['gemini-cli', 'cheap-code:deepseek', 'cheap-code:glm']);
+    assert.deepEqual(backends.map(({ kind }) => kind), ['gemini', 'cheap-code', 'cheap-code']);
+    assert.ok(!backends.some((b) => b.kind === 'qwen'), '既定の並びに kind:qwen(実在しないqwenバイナリ依存)を含めない');
     assert.equal(backends[0].model, 'gemini-3.7-flash');
     assert.equal(backends[0].apiKey, 'sk-gemini-1');
-    assert.equal(backends[1].baseUrl, 'https://api.deepseek.com/v1');
-    assert.equal(backends[2].baseUrl, 'https://openrouter.ai/api/v1');
+    assert.equal(backends[1].provider, 'deepseek');
+    assert.equal(backends[2].provider, 'glm');
   });
 });
 
-test('resolveFallbackBackends は prefer-free でも残りを gemini-cli → deepseek の順に保つ', () => {
+test('resolveFallbackBackends は prefer-free でも cheap-code:deepseek → cheap-code:glm → gemini-cli の順に保つ', () => {
   withEnvKeysCleared(() => {
     const prev = process.env.CODEX_DO_PREFER_FREE;
     process.env.CODEX_DO_PREFER_FREE = '1';
@@ -512,10 +531,11 @@ test('resolveFallbackBackends は prefer-free でも残りを gemini-cli → dee
       const dir = makeHomeWithEnv({
         'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n',
         'deepseek.env': 'DEEPSEEK_API_KEY=sk-ds-1\n',
+        'zai.env': 'ZAI_API_KEY=sk-zai-1\n',
         'gemini.env': 'GEMINI_API_KEY=sk-gemini-1\n'
       });
       const backends = resolveFallbackBackends(dir);
-      assert.deepEqual(backends.map(({ name }) => name), ['openrouter-free', 'gemini-cli', 'deepseek']);
+      assert.deepEqual(backends.map(({ name }) => name), ['cheap-code:deepseek', 'cheap-code:glm', 'gemini-cli']);
     } finally {
       if (prev === undefined) delete process.env.CODEX_DO_PREFER_FREE;
       else process.env.CODEX_DO_PREFER_FREE = prev;
@@ -523,21 +543,22 @@ test('resolveFallbackBackends は prefer-free でも残りを gemini-cli → dee
   });
 });
 
-test('resolveFallbackBackends はキーが一部だけなら存在する分だけを順序どおり返す', () => {
+test('resolveFallbackBackends はキーが一部だけなら存在する分だけを順序どおり返す（openrouter単独は既定では無視される）', () => {
   withEnvKeysCleared(() => {
+    // openrouter-free(kind:'qwen') は既定順から外れているため、openrouterキーだけでは何も返らない。
+    // 明示的に使いたい機体は codex-fallback-order.json で 'openrouter-free' を指定する（下の別テストで検証済み）。
     const onlyOR = resolveFallbackBackends(makeHomeWithEnv({ 'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n' }));
-    assert.equal(onlyOR.length, 1);
-    assert.equal(onlyOR[0].name, 'openrouter-free');
+    assert.deepEqual(onlyOR, []);
 
     const onlyDS = resolveFallbackBackends(makeHomeWithEnv({ 'deepseek.env': 'DEEPSEEK_API_KEY=sk-ds-1\n' }));
     assert.equal(onlyDS.length, 1);
-    assert.equal(onlyDS[0].name, 'deepseek');
+    assert.equal(onlyDS[0].name, 'cheap-code:deepseek');
 
     const geminiAndOR = resolveFallbackBackends(makeHomeWithEnv({
       'gemini.env': 'GEMINI_API_KEY=sk-gemini-1\n',
       'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n'
     }));
-    assert.deepEqual(geminiAndOR.map(({ name }) => name), ['gemini-cli', 'openrouter-free']);
+    assert.deepEqual(geminiAndOR.map(({ name }) => name), ['gemini-cli']);
   });
 });
 
@@ -565,10 +586,13 @@ test('resolveFallbackBackends は codex-fallback-order.json があればその�
   });
 });
 
-test('resolveQwenBackends は CODEX_DO_FREE_MODEL で openrouter-free の model を上書きできる', () => {
+test('resolveQwenBackends は CODEX_DO_FREE_MODEL で openrouter-free の model を上書きできる（明示指定時）', () => {
+  // openrouter-free(kind:'qwen') は2026-09-21に既定順から外れたため、既定のキーだけでは出てこない。
+  // codex-fallback-order.json で明示指定した機体（qwen CLI 導入済み等）向けの挙動として検証する。
   withEnvKeysCleared(() => {
     process.env.CODEX_DO_FREE_MODEL = 'z-ai/glm-5.2:free';
     const dir = makeHomeWithEnv({ 'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n' });
+    fs.writeFileSync(path.join(dir, '.claude', 'codex-fallback-order.json'), JSON.stringify(['openrouter-free']));
     const backends = resolveQwenBackends(dir);
     assert.equal(backends[0].name, 'openrouter-free');
     assert.equal(backends[0].model, 'z-ai/glm-5.2:free');
@@ -722,7 +746,65 @@ test('WSL codex のプローブはコールドスタートを待てる', () => {
   assert.ok(WSL_PROBE_TIMEOUT_MS >= 60000);
 });
 
-const { decideCodexLane, buildCodexExecArgs, normalizeCodexModel } = await import('./codex-do.mjs');
+// WSL 経路の中断は win32 でしか通らないため、他OSでは明示的に skip する
+// （CI は Linux。ここを skip しても Windows 実機での回帰は検出できる）。
+test('WSL が使えず中断するときも台帳に launched:false の1行を残す', { skip: process.platform !== 'win32' }, (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-wslabort-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const result = run(['--no-fallback', '--cwd', home, '--model', 'sol', '説明して'], {
+    home,
+    env: { CODEX_DO_WSL_PROBE: 'absent' },
+  });
+  assert.equal(result.status, 3, result.stderr);
+  const ledger = path.join(home, '.claude', 'executor-usage.jsonl');
+  assert.ok(fs.existsSync(ledger), '中断経路でも台帳に行が残ること（無音故障の回帰）');
+  const rows = fs.readFileSync(ledger, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].provider, 'codex');
+  assert.equal(rows[0].out, 0);
+  assert.equal(rows[0].status, 3);
+  assert.equal(rows[0].launched, false);
+});
+
+// 2026-09-19 実測: この PC は `wsl -l -q` が空で、起動失敗のまま process.exit(3) していたため
+// codex-do 本来のフォールバック連鎖へ到達せず委譲が毎回死んでいた（台帳に launched:false が残り続けた）。
+test('WSL ディストリが無くても代替バックエンドがあるなら起動失敗で死なず委譲を続ける', { skip: process.platform !== 'win32' }, (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-wslfallback-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const result = run(['--cwd', home, '--model', 'sol', '説明して'], {
+    home,
+    env: {
+      CODEX_DO_WSL_PROBE: 'absent',
+      CODEX_DO_MOCK_RESULTS: JSON.stringify([{ status: 0, output: 'done', stderr: '' }]),
+      GEMINI_API_KEY: '',
+      DEEPSEEK_API_KEY: 'sk-test'
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /executor=fallback:cheap-code:deepseek/);
+  const rows = fs.readFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  const codexRow = rows.find((item) => item.provider === 'codex');
+  assert.ok(codexRow, '起動失敗は台帳に残すこと（無音故障の回帰）');
+  assert.equal(codexRow.launched, false);
+  assert.equal(codexRow.out, 0);
+  assert.match(codexRow.stderrTail, /WSL ディストリが見つかりませんでした/);
+  // WSL 不在は一過性でないので再試行しない（再試行の記録 attempts が 1 のまま）
+  assert.equal(codexRow.attempts, 1);
+});
+
+test('起動に成功した行は launched:true で記録される', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-launched-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const result = run(['--force-native', '--cwd', home, '--model', 'sol', '説明して'], {
+    home,
+    env: { CODEX_DO_MOCK_RESULTS: JSON.stringify([{ status: 0, output: 'done', stderr: '' }]) },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const rows = fs.readFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(rows[0].launched, true);
+});
+
+const { decideCodexLane, buildCodexExecArgs, isInsideGitRepo, normalizeCodexModel, wslCodexArgs, detectChatGptAuth, probeChatGptAuth } = await import('./codex-do.mjs');
 const ASTRA = 'gpt-6-astra', SOL = 'gpt-5.6-sol';
 for (const [name, input, slug, reason] of [
   ['explicit model wins', { model: 'sol', lane: 'astra' }, SOL, 'explicit_model'],
@@ -746,11 +828,25 @@ for (const [name, input, slug, reason] of [
   ['default Sol', {}, SOL, 'default_sol'],
   ['auto cooldown', { timeoutSecs: 2700, astraCooldownMs: 1 }, SOL, 'astra_cooldown:long_timeout'],
   ['astra lane cooldown', { lane: 'astra', astraCooldownMs: 1 }, SOL, 'astra_cooldown:lane_astra'],
+  // ChatGPT アカウント認証では sol/astra が invalid_request_error(400) で拒否される(2026-09-21実測)ため、
+  // auto かつ明示指定が無い時だけ既定モデル(slug undefined)へ倒す。
+  ['chatgpt auth overrides default sol', { chatgptAuth: true }, undefined, 'chatgpt_auth_default:default_sol'],
+  ['chatgpt auth respects explicit --model', { chatgptAuth: true, model: 'sol' }, SOL, 'explicit_model'],
+  ['chatgpt auth respects explicit --lane', { chatgptAuth: true, lane: 'astra' }, ASTRA, 'lane_astra'],
+  ['chatgpt auth false behaves like unset(apikey環境)', { chatgptAuth: false }, SOL, 'default_sol'],
+  ['chatgpt auth unknown(null)も従来どおり', { chatgptAuth: null, timeoutSecs: 2700 }, ASTRA, 'long_timeout'],
 ]) {
   test(`decideCodexLane: ${name}`, () => {
     assert.deepEqual(decideCodexLane(input), { slug, effort: slug === ASTRA ? 'high' : undefined, reason });
   });
 }
+
+test('decideCodexLane: chatgpt auth は astra 相当の選択でも effort=high は保つ(モデルだけ既定へ倒す)', () => {
+  assert.deepEqual(
+    decideCodexLane({ chatgptAuth: true, timeoutSecs: 2700 }),
+    { slug: undefined, effort: 'high', reason: 'chatgpt_auth_default:long_timeout' },
+  );
+});
 
 test('normalizeCodexModel: aliases and unknown slugs', () => {
   assert.equal(normalizeCodexModel('astra'), ASTRA);
@@ -758,11 +854,120 @@ test('normalizeCodexModel: aliases and unknown slugs', () => {
   assert.equal(normalizeCodexModel('future-slug'), 'future-slug');
 });
 
+for (const [name, json, expected] of [
+  ['null/空文字は null', null, null],
+  ['壊れたJSONは null', '{not valid json', null],
+  ['配列(objectでない)は null', '[1,2,3]', null],
+  ['OPENAI_API_KEY があれば apikey(false)', JSON.stringify({ OPENAI_API_KEY: 'sk-x' }), false],
+  ['api_key があれば apikey(false)', JSON.stringify({ api_key: 'sk-x' }), false],
+  ['tokens.id_token があれば chatgpt(true)', JSON.stringify({ tokens: { id_token: 'x' } }), true],
+  ['tokens.access_token だけでも chatgpt(true)', JSON.stringify({ tokens: { access_token: 'x' } }), true],
+  ['tokens はあるが中身が空なら null', JSON.stringify({ tokens: {} }), null],
+  ['どちらの目印も無ければ null', JSON.stringify({ other: 1 }), null],
+]) {
+  test(`detectChatGptAuth: ${name}`, () => {
+    assert.equal(detectChatGptAuth(json), expected);
+  });
+}
+
+test('probeChatGptAuth: CODEX_DO_AUTH_MODE で実機を触らず上書きできる(WSL の無い CI 用)', () => {
+  assert.equal(probeChatGptAuth({ env: { CODEX_DO_AUTH_MODE: 'chatgpt' } }), true);
+  assert.equal(probeChatGptAuth({ env: { CODEX_DO_AUTH_MODE: 'apikey' } }), false);
+  assert.equal(probeChatGptAuth({ env: { CODEX_DO_AUTH_MODE: 'unknown' } }), null);
+});
+
+test('probeChatGptAuth: native 経路は auth.json を注入したファイル読み取りで判定する', () => {
+  const home = '/home/test';
+  const read = (file) => {
+    assert.equal(file, path.join(home, '.codex', 'auth.json'));
+    return JSON.stringify({ tokens: { id_token: 'x' } });
+  };
+  assert.equal(probeChatGptAuth({ forceNative: true, platform: 'win32', env: {}, readFileImpl: read, homeDir: home }), true);
+  assert.equal(probeChatGptAuth({ platform: 'linux', env: {}, readFileImpl: read, homeDir: home }), true);
+});
+
+test('probeChatGptAuth: 読めない・壊れている場合は null を返し従来動作(sol優先)を維持する', () => {
+  const throwing = () => { throw new Error('ENOENT'); };
+  assert.equal(probeChatGptAuth({ forceNative: true, platform: 'win32', env: {}, readFileImpl: throwing, homeDir: '/home/test' }), null);
+});
+
+test('probeChatGptAuth: Windows/WSL 経路は distro 一覧と auth.json 読取を spawnImpl に注入できる', () => {
+  const spawnImpl = (cmd, args) => {
+    assert.equal(cmd, 'wsl');
+    if (args[0] === '-l') return { status: 0, stdout: 'Ubuntu\0\r\n\0' };
+    assert.deepEqual(args.slice(0, 2), ['-d', 'Ubuntu']);
+    return { status: 0, stdout: JSON.stringify({ tokens: { id_token: 'x' } }) };
+  };
+  assert.equal(probeChatGptAuth({ platform: 'win32', forceNative: false, env: {}, spawnImpl }), true);
+});
+
+test('probeChatGptAuth: WSL 側の distro 一覧・cat が失敗したら null(既定sol維持)', () => {
+  assert.equal(probeChatGptAuth({
+    platform: 'win32', env: {}, spawnImpl: () => ({ status: 1, stdout: '' }),
+  }), null, 'distro一覧が失敗');
+  assert.equal(probeChatGptAuth({
+    platform: 'win32', env: {},
+    spawnImpl: (cmd, args) => args[0] === '-l' ? { status: 0, stdout: '' } : ({ status: 0, stdout: '' }),
+  }), null, 'distroが1件も無い');
+  assert.equal(probeChatGptAuth({
+    platform: 'win32', env: {},
+    spawnImpl: (cmd, args) => args[0] === '-l' ? { status: 0, stdout: 'Ubuntu\0\r\n\0' } : ({ status: 1, stdout: '' }),
+  }), null, 'auth.json の cat が失敗');
+});
+
 test('buildCodexExecArgs: model, effort, sandbox and stdin without spaces', () => {
   const args = buildCodexExecArgs({ slug: ASTRA, effort: 'high' });
   assert.deepEqual(args, ['exec', '-m', ASTRA, '-c', 'model_reasoning_effort="high"', '-s', 'workspace-write', '-']);
   assert.ok(args.every((arg) => !/\s/.test(arg)));
   assert.deepEqual(buildCodexExecArgs({ slug: SOL, review: true }), ['exec', '-m', SOL, '-s', 'read-only', '-']);
+});
+
+test('isInsideGitRepo: cwd または祖先の実在する .git を検出する', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-gitdir-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const nested = path.join(root, 'packages', 'app');
+  fs.mkdirSync(nested, { recursive: true });
+  // 2026-09-23 実測の再現: `.git` は在るが HEAD を持たない空殻。Windows の existsSync は true でも
+  // git は "not a git repository" を返す(auto-session の起動ディレクトリ CLAUDE.md配布 がこの形)。
+  // ここを repo と誤判定すると codex に --skip-git-repo-check が渡らず、exit 1 / 出力ゼロで死ぬ。
+  fs.mkdirSync(path.join(root, '.git', 'info'), { recursive: true });
+  assert.equal(fs.existsSync(path.join(root, '.git')), true);
+  assert.equal(isInsideGitRepo(root), false);
+  assert.equal(isInsideGitRepo(nested), false);
+  // 誤判定しないので WSL 経路には skip フラグが入る(出力ゼロ即死の回避)
+  const codexArgs = buildCodexExecArgs({ slug: SOL });
+  assert.ok(wslCodexArgs({ distro: 'Ubuntu', cwd: root, codexArgs, inGitRepo: isInsideGitRepo(root) }).includes('--skip-git-repo-check'));
+  // HEAD が生えた時点で初めてリポジトリとして扱う
+  fs.writeFileSync(path.join(root, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+  assert.equal(isInsideGitRepo(root), true);
+  assert.equal(isInsideGitRepo(nested), true);
+});
+
+test('isInsideGitRepo: worktree の gitfile は指す先が実在するときだけリポジトリ', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-gitfile-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const worktree = path.join(root, 'wt');
+  fs.mkdirSync(worktree, { recursive: true });
+  fs.writeFileSync(path.join(worktree, '.git'), `gitdir: ${path.join(root, 'missing')}\n`);
+  assert.equal(isInsideGitRepo(worktree), false);
+  fs.mkdirSync(path.join(root, 'real'));
+  fs.writeFileSync(path.join(root, 'real', 'HEAD'), 'ref: refs/heads/main\n');
+  fs.writeFileSync(path.join(worktree, '.git'), `gitdir: ${path.join(root, 'real')}\n`);
+  assert.equal(isInsideGitRepo(worktree), true);
+});
+
+test('isInsideGitRepo: 祖先方向に .git が無ければ false', () => {
+  assert.equal(isInsideGitRepo(path.resolve('/virtual/plain')), false);
+  assert.equal(isInsideGitRepo(path.resolve('/elsewhere/deep/path')), false);
+});
+
+test('wslCodexArgs: 非リポジトリだけ stdin マーカー直前に skip フラグを入れる', () => {
+  const cwd = '/work/task';
+  const codexArgs = buildCodexExecArgs({ slug: SOL });
+  assert.deepEqual(wslCodexArgs({ distro: 'Ubuntu', cwd, codexArgs, inGitRepo: false }),
+    ['-d', 'Ubuntu', '--cd', cwd, '--', 'codex', 'exec', '-m', SOL, '-s', 'workspace-write', '--skip-git-repo-check', '-']);
+  assert.deepEqual(wslCodexArgs({ distro: 'Ubuntu', cwd, codexArgs, inGitRepo: true }),
+    ['-d', 'Ubuntu', '--cd', cwd, '--', 'codex', ...codexArgs]);
 });
 
 test('CLI validates routing options and dry-run reports model/effort', () => {
@@ -773,6 +978,26 @@ test('CLI validates routing options and dry-run reports model/effort', () => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /executor=codex model=gpt-6-astra effort=max lane=lane_astra/);
   assert.doesNotMatch(result.stdout, /--lane|--effort|--no-escalate/);
+});
+
+test('CLI: ChatGPT アカウント認証では dry-run が sol/astra ではなく既定モデルを報告する', () => {
+  // CODEX_DO_AUTH_MODE で実機の WSL/auth.json に触らず決定的に検証する。
+  const chatgpt = run(['--dry-run', '指示'], { env: { CODEX_DO_AUTH_MODE: 'chatgpt' } });
+  assert.equal(chatgpt.status, 0, chatgpt.stderr);
+  assert.match(chatgpt.stdout, /executor=codex model=既定\(codexのデフォルト\) effort=default lane=chatgpt_auth_default:default_sol/);
+  assert.match(chatgpt.stderr, /chatgpt_auth_default: ChatGPTアカウント認証のため sol\/astra を使わず codex 既定モデルで実行します/);
+
+  // apikey/unknown(=判定不能)では従来どおり sol が既定のまま。
+  const apikey = run(['--dry-run', '指示'], { env: { CODEX_DO_AUTH_MODE: 'apikey' } });
+  assert.match(apikey.stdout, /executor=codex model=gpt-5\.6-sol effort=default lane=default_sol/);
+  const unknown = run(['--dry-run', '指示'], { env: { CODEX_DO_AUTH_MODE: 'unknown' } });
+  assert.match(unknown.stdout, /executor=codex model=gpt-5\.6-sol effort=default lane=default_sol/);
+
+  // 明示 --model / --lane は ChatGPT 認証下でも尊重される(ユーザーの意図的な指定のため)。
+  const explicitModel = run(['--dry-run', '--model', 'sol', '指示'], { env: { CODEX_DO_AUTH_MODE: 'chatgpt' } });
+  assert.match(explicitModel.stdout, /executor=codex model=gpt-5\.6-sol effort=default lane=explicit_model/);
+  const explicitLane = run(['--dry-run', '--lane', 'astra', '指示'], { env: { CODEX_DO_AUTH_MODE: 'chatgpt' } });
+  assert.match(explicitLane.stdout, /executor=codex model=gpt-6-astra effort=high lane=lane_astra/);
 });
 
 function runRouting(t, args, mocks, cooldown = null) {
@@ -904,7 +1129,7 @@ console.log('done');
   assert.equal(calls.length, 3);
   const expectedArgs = (options) => {
     const args = buildCodexExecArgs(options);
-    args.splice(-1, 0, '--skip-git-repo-check');
+    if (!isInsideGitRepo(home)) args.splice(-1, 0, '--skip-git-repo-check');
     return args;
   };
   assert.deepEqual(calls[0].args, expectedArgs({ slug: ASTRA, effort: 'high' }));
@@ -914,48 +1139,4 @@ console.log('done');
   assert.equal(calls[1].input, calls[2].input);
   assert.ok(calls[0].input.endsWith(instruction));
   assert.ok(calls.every((call) => !call.args.some((arg) => arg.includes('literal'))));
-});
-
-test('WSL 起動では git リポジトリかどうかに関係なく末尾の - より前に --skip-git-repo-check を渡す', { skip: process.platform === 'win32' }, (t) => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-wsl-args-'));
-  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  const capture = path.join(home, 'capture.jsonl');
-  const preload = path.join(home, 'win32-platform.cjs');
-  fs.writeFileSync(preload, "Object.defineProperty(process, 'platform', { value: 'win32' });\n");
-  const executable = path.join(home, 'wsl');
-  fs.writeFileSync(executable, `#!/usr/bin/env node
-const fs = require('node:fs');
-const args = process.argv.slice(2);
-if (args[0] === '-l') {
-  process.stdout.write(Buffer.from('Ubuntu\\n', 'utf16le'));
-} else if (args.includes('--version') || args.includes('command -v codex >/dev/null 2>&1')) {
-  process.stdout.write('codex 1.0\\n');
-} else {
-  fs.appendFileSync(process.env.CAPTURE, JSON.stringify(args) + '\\n');
-  process.stdout.write('done\\n');
-}
-`, { mode: 0o755 });
-
-  for (const isGitRepository of [false, true]) {
-    const cwd = path.join(home, isGitRepository ? 'git-cwd' : 'plain-cwd');
-    fs.mkdirSync(cwd);
-    if (isGitRepository) fs.mkdirSync(path.join(cwd, '.git'));
-    const result = run(['--cwd', cwd, '--model', 'sol', '説明して'], {
-      home,
-      env: {
-        PATH: `${home}${path.delimiter}${process.env.PATH}`,
-        NODE_OPTIONS: `--require=${preload}`,
-        CAPTURE: capture,
-      },
-    });
-    assert.equal(result.status, 0, result.stderr);
-  }
-
-  const calls = fs.readFileSync(capture, 'utf8').trim().split('\n').map(JSON.parse);
-  assert.equal(calls.length, 2);
-  for (const args of calls) {
-    const codexArgs = args.slice(args.indexOf('codex') + 1);
-    assert.ok(codexArgs.includes('--skip-git-repo-check'));
-    assert.ok(codexArgs.indexOf('--skip-git-repo-check') < codexArgs.lastIndexOf('-'));
-  }
 });

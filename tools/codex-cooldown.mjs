@@ -137,7 +137,7 @@ export function codexHardBlockBypass(now = Date.now(), cooldownFile, opts = {}) 
   let hasGemini = opts.hasGemini;
   if (hasGemini === undefined) {
     const finder = process.platform === 'win32' ? 'where' : 'which';
-    hasGemini = spawnSync(finder, ['gemini'], { stdio: 'ignore' }).status === 0;
+    hasGemini = spawnSync(finder, ['gemini'], { windowsHide: true, stdio: 'ignore' }).status === 0;
   }
   return {
     bypass: reason === 'usage_limit_no_fallback' || hasGemini === false,

@@ -88,11 +88,17 @@ test('parseAutoSessionEnvText は BOM・コメント・引用符・空行を処�
 
 test('buildCheapCodeArgs は指示を argv でなく prompt-file で渡す', () => {
   const args = buildCheapCodeArgs({ repoRoot: 'C:/repo', provider: 'glm', promptFile: 'C:/tmp/p.md', cwd: 'C:/work' });
-  assert.equal(args[0], path.join('C:/repo', 'tools', 'cheap-code.mjs'));
+  assert.equal(path.basename(args[0]), 'cheap-code.mjs');
   assert.ok(args.includes('--provider'));
   assert.ok(args.includes('glm'));
   assert.ok(args.includes('--prompt-file'));
   assert.ok(args.includes('C:/tmp/p.md'));
+});
+
+test('buildCheapCodeArgs が返す cheap-code の絶対パスは実在する', () => {
+  const [script] = buildCheapCodeArgs({ provider: 'glm', promptFile: 'C:/tmp/p.md', cwd: 'C:/work' });
+  assert.equal(path.isAbsolute(script), true);
+  assert.equal(fs.existsSync(script), true);
 });
 
 test('buildClaudeHeadlessArgs は既定 sonnet で cwd 違いのときだけ add-dir を増やす', () => {

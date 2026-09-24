@@ -69,7 +69,7 @@ function fetchLastSuccess(entry) {
   const result = spawnSync('gh', [
     'run', 'list', '--repo', entry.repo, '--workflow', entry.workflow,
     '--event=schedule', '--status', 'success', '--limit', '1', '--json', 'updatedAt',
-  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  ], { windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
   if (result.error || result.status !== 0) return undefined;
   try {
     const runs = JSON.parse(result.stdout);

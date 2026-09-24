@@ -16,7 +16,7 @@ test('dry-run and removal switches are part of the contract', () => {
 });
 
 test('all three nightly scripts are wired', () => {
-  for (const script of ['next-actions.mjs', 'nightly-health.mjs', 'pricing-brief.mjs']) {
+  for (const script of ['next-actions.mjs', 'nightly-health.mjs', 'pricing-brief.mjs', 'drive-hub-mirror.mjs']) {
     assert.ok(source.includes(script), `${script} is missing`);
   }
 });

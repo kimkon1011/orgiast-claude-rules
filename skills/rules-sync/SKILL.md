@@ -8,10 +8,12 @@ description: オージャスト共通ルール Drive ハブ（claude-common-rule
 Drive ハブ（正本）: `claude-common-rules` folder `1RLYbK6CKyPWRJsG6LY0WB9OzlbFYSFvw`（作業ファイル配下、owner kim@orgiast.jp）
 サブフォルダ: rules=`1cNOSlo8pcrhXiRMRK_WD3O5IW-K9lYX4` / skills=`1oSlYjJdlIy5GRYa3-AasAeybARKh4v-E` / knowledge-inbox=`1AyZcrlK9JCNPUkhKCBOezet9a2QoSwK2`
 
+kim 環境の `tools/hub-push.mjs` が毎晩自動 push するため、配布の正本は hub。新規・既存の kim PC とも `powershell -NoProfile -ExecutionPolicy Bypass -File tools/register-hub-push-task.ps1` で夜間タスクを登録する（毎日 02:40 JST、冪等。他アカウントには登録しない）。
+
 ## 前提となる Drive MCP 制約
 - **ファイル本文の取得は必ず `download_file_content`（base64 → デコード）を使う**。`read_file_content` は自然言語表現に変換され `_` `[` 等がエスケープされて**ファイルが壊れる**（2026-07-06 実測）。read はフォルダ内容の人間向け確認のみ
-- update/delete/move ツールが無い → MCP 経由の更新 = 同タイトルで create_file し直し。読む側は「同タイトル複数 → modifiedTime 最新を正」（search_files 結果の modifiedTime で判定）
-- kim 環境には in-place 更新できる CLI がある: `node <orgiast-claude-rules>/scripts/drive-hub-sync.mjs push/pull/list`（SA DWD 認証、fileId 保持。90KB 級のファイルもコンテキストを消費しない）→ **kim 環境の push/pull はこちらを優先**
+- MCP に update/delete/move ツールが無いため、正本の更新は kim 環境の `node tools/hub-push.mjs` を使う。読む側は「同タイトル複数 → modifiedTime 最新を正」（search_files 結果の modifiedTime で判定）
+- kim 環境には in-place 更新できる CLI がある: `node <orgiast-claude-rules>/scripts/drive-hub-sync.mjs push/pull/list`（SA DWD 認証、fileId 保持。90KB 級のファイルもコンテキストを消費しない）→ **kim 環境の pull/list はこちらを優先。一括 push は `node tools/hub-push.mjs`**
 - fileId は版ごとに変わりうる → **ファイル ID をハードコードしない**（フォルダ ID のみ固定）
 - MCP でアップロードする場合は `contentMimeType: text/plain` + `disableConversionToGoogleType: true`（Google Docs 変換させない）
 
@@ -28,14 +30,14 @@ Drive ハブ（正本）: `claude-common-rules` folder `1RLYbK6CKyPWRJsG6LY0WB9O
    - `rules/*.md` → `~/.claude/rules/`
    - `skills/<name>.md` → `~/.claude/skills/<name>/SKILL.md`
    - `CLAUDE.md.template` → `~/.claude/CLAUDE.md` が**無い場合のみ**新規作成。既存があれば上書きせず差分を提示するだけ
-5. 反映前に既存ファイルを `~/.claude/backups/` にバックアップ
-6. `orgiast-rules-version.txt` を新版番号で更新 → 完了報告（版番号 + 反映ファイル一覧）
+5. **比較前に hub・手元の双方を必ず CRLF → LF に正規化**する。CRLF 差だけなら同一としてスキップし、上書きしない。手元の方が内容的に新しいと判明した場合は上書きせず保留し、`/share-knowledge` で hub へ戻す。反映前に既存ファイルを `~/.claude/backups/` にバックアップ
+6. 保留がなければ `orgiast-rules-version.txt` を新版番号で更新（保留があれば旧版を維持） → 完了報告（版番号 + 反映ファイル一覧）
 
 ## merge（管理者 = kim 環境のみ）
 1. knowledge-inbox を parentId 検索 → 最新の `knowledge-merged.json`（台帳）に載っていないファイルを列挙
-2. 各投稿を read → 既存ルールとの重複・矛盾をチェック → 反映先を判定（ONBOARDING §x.x / rules/ / skills/ / 却下）
+2. 各投稿を read → 既存ルールとの重複・矛盾をチェック → 反映先を判定（ONBOARDING §x.x / rules/ / skills/ / 却下）。取り込み可否は`protocols/INTAKE-TWO-AXES.md`の2軸表で判定し、B軸が空なら差し戻す
 3. 反映案を1行/件で user に提示 → 承認後、**ローカル正本を編集**
-4. 正本を Drive に再アップ（同タイトル create_file）→ `manifest.json` を version+1 で再アップ → `knowledge-merged.json` に処理済み（fileId / タイトル / 反映先 / 日付）を追記して再アップ
+4. repo 直下で `node tools/hub-push.mjs` を実行する（LF 正規化・fileId 保持、変更時のみ manifest の version+1）→ `knowledge-merged.json` に処理済み（fileId / タイトル / 反映先 / 日付）を追記して再アップ
 5. GitHub ミラー: `orgiast-claude-rules` repo に ONBOARDING / skills / rules を同期して commit + push
 6. 完了報告に新 version と反映内容を列挙
 

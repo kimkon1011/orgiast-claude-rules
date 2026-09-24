@@ -84,6 +84,157 @@ test('emptyOutputReason は timeout・終了コード・原因不明を分類す
   assert.equal(emptyOutputReason({ secs: 299 }), 'no_output');
   assert.equal(emptyOutputReason({ secs: 300 }), 'timeout');
   assert.equal(emptyOutputReason({ secs: 600, timedOut: false, status: 1 }), 'exit_1');
+  assert.equal(emptyOutputReason({ status: 1, stderrTail: 'failed to lookup address information' }), 'infra_transient');
+  assert.equal(emptyOutputReason({ status: 1, stderrTail: 'Not inside a trusted directory and --skip-git-repo-check was not specified.' }), 'untrusted_cwd');
+  assert.equal(emptyOutputReason({ status: 1 }), 'exit_1');
+  // 起動失敗は「出力ゼロ」ではなく「そもそも走っていない」。exit_3 に埋もれさせない。
+  assert.equal(emptyOutputReason({ launched: false, status: 3, secs: 0 }), 'launch_failed');
+  assert.equal(emptyOutputReason({ launched: true, status: 3, secs: 0 }), 'exit_3');
+});
+
+test('emptyOutputReason は Codex の認証失敗と ChatGPT モデル認証不整合を分類する', () => {
+  assert.equal(emptyOutputReason({ status: 1, stderrTail: 'cted status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses' }), 'auth_failed');
+  assert.equal(emptyOutputReason({ status: 1, stderrTail: '..."message":"The \'gpt-5.6-sol\' model is not supported when using Codex with a ChatGPT account."}}' }), 'model_auth_mismatch');
+  assert.equal(emptyOutputReason({ status: 1 }), 'exit_1');
+});
+
+test('認証失敗とモデル認証不整合は codex_empty_output でなく名前付き finding に分離する', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl',
+    row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, status: 1, stderrTail: '401 Unauthorized: Missing bearer or basic authentication in header' })
+    + row({ t: '2026-09-09T10:01:00Z', provider: 'codex', out: 0, status: 1, stderrTail: "The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account." }));
+  const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
+  assert.deepEqual(findings.map((item) => item.id), ['codex_model_auth_mismatch', 'codex_auth_failed']);
+  assert.equal(findings.find((item) => item.id === 'codex_model_auth_mismatch').severity, 'medium');
+  assert.equal(findings.find((item) => item.id === 'codex_auth_failed').severity, 'low');
+  assert.ok(!findings.some((item) => item.id === 'codex_empty_output'));
+});
+
+test('codex_auth_failed は low なので next-session.md へ起票しない', () => {
+  const dir = home();
+  write(dir, 'next-session.md', handoff());
+  write(dir, 'executor-usage.jsonl', row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, status: 1, stderrTail: '401 Unauthorized: Missing bearer or basic authentication in header' }));
+  const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
+  assert.equal(upsertFixTasks({ home: dir, findings, now: NOW, todayStr: '2026-09-22' }), false);
+  assert.doesNotMatch(fs.readFileSync(path.join(dir, '.claude', 'next-session.md'), 'utf8'), /codex_auth_failed/);
+});
+
+test('認証失敗と本物の出力ゼロが混在しても codex_empty_output は本物だけを数える', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl',
+    row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, status: 1, stderrTail: '401 Unauthorized: Missing bearer or basic authentication in header' })
+    + row({ t: '2026-09-09T10:01:00Z', provider: 'codex', out: 0, status: 1 }));
+  const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
+  assert.deepEqual(findings.map((item) => item.id), ['codex_auth_failed', 'codex_empty_output']);
+  assert.deepEqual(findings.find((item) => item.id === 'codex_empty_output').evidence, ['1件', 'exit_1(1件)', 'インフラ/起動失敗で除外 1件']);
+});
+
+test('起動失敗は codex_empty_output でなく codex_launch_failed として起票する', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, secs: 0, timedOut: false, status: 3, launched: false }));
+  const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
+  assert.deepEqual(findings.map((item) => item.id), ['codex_launch_failed']);
+  assert.deepEqual(findings[0].evidence, ['1件', 'launch_failed(1件)']);
+});
+
+// WSL のディストリが1つも無い PC では codex レーンは構造的に使えず、コードでは直せない。
+// 「コードで直す欠陥」として毎日起票し続けると、直せない修正タスクが残TODOを占有し続ける(2026-09-19 実測)。
+test('WSL 不在の起動失敗は欠陥でなく環境の事実として low で残し、fixTask を付けない', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, secs: 0, timedOut: false, status: 3, launched: false, stderrTail: 'WSL ディストリが見つかりませんでした' }));
+  const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
+  assert.deepEqual(findings.map((item) => item.id), ['codex_lane_unavailable']);
+  assert.equal(findings[0].severity, 'low');
+  assert.equal(findings[0].fixTask, undefined);
+});
+
+test('WSL 不在と直せる起動失敗が混在しても、起票対象は直せる方だけ', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl',
+    row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, secs: 0, timedOut: false, status: 3, launched: false, stderrTail: 'WSL ディストリが見つかりませんでした' })
+    + row({ t: '2026-09-09T10:01:00Z', provider: 'codex', out: 0, secs: 0, timedOut: false, status: 3, launched: false, stderrTail: 'WSL Ubuntu の codex 起動確認に失敗しました' }));
+  const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
+  assert.deepEqual(findings.map((item) => item.id), ['codex_launch_failed', 'codex_lane_unavailable']);
+  assert.deepEqual(findings[0].evidence, ['1件', 'launch_failed(1件)']);
+});
+
+// 台帳(~/.claude/executor-usage.jsonl)の実データをそのまま使う。手写しの要約にすると
+// 「reason/status が文字列の番兵」という判別条件そのものが抜け落ちて偽の緑になる。
+const PREFLIGHT_BLOCKED_ROW = {
+  t: '2026-09-22T18:27:08.929Z', provider: 'codex', model: 'codex-cli', in: 298, out: 0,
+  secs: 0.005, cwd: 'C:\\Users\\kimko\\nf-minpaku-automation', launched: false, timedOut: false,
+  stderrTail: '', reason: 'spec-missing-context', status: 'spec-missing-context',
+};
+// 2026-09-23T18:05 に生成された delegation-health.json が codex_launch_failed 2件と報告した窓。
+const WHEN_REPORTED = new Date('2026-09-23T18:05:00.424Z');
+
+test('emptyOutputReason は起動前ゲートが止めた行を launch_failed と混同しない', () => {
+  assert.equal(emptyOutputReason(PREFLIGHT_BLOCKED_ROW), 'preflight_blocked');
+  // 対照群: 起動を試みて失敗した行(数値 status)は従来どおり launch_failed のまま。
+  // ここが preflight_blocked に流れると本物の起動失敗が消えるので、必ず両方を張る。
+  assert.equal(emptyOutputReason({ launched: false, status: 3, secs: 0 }), 'launch_failed');
+  assert.equal(emptyOutputReason({ launched: false, status: 3, secs: 0, stderrTail: 'WSL ディストリが見つかりませんでした' }), 'launch_failed');
+});
+
+test('起動前ゲートが止めた行は codex_launch_failed として起票しない', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl',
+    row(PREFLIGHT_BLOCKED_ROW) + row({ ...PREFLIGHT_BLOCKED_ROW, t: '2026-09-22T18:27:44.522Z', secs: 0.004 }));
+  const findings = collectFindings({ home: dir, now: WHEN_REPORTED, codexUsedPercent: null });
+  assert.deepEqual(findings.map((item) => item.id), ['codex_preflight_blocked']);
+  assert.equal(findings[0].severity, 'low');
+  assert.equal(findings[0].fixTask, undefined);
+});
+
+test('起動前ゲートで止めた行を codex_empty_output としても数えない', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', row(PREFLIGHT_BLOCKED_ROW));
+  const findings = collectFindings({ home: dir, now: WHEN_REPORTED, codexUsedPercent: null });
+  assert.equal(findings.find((item) => item.id === 'codex_empty_output'), undefined);
+});
+
+test('codex_lane_unavailable は low なので next-session.md へ起票しない', () => {
+  const dir = home();
+  write(dir, 'next-session.md', handoff());
+  write(dir, 'executor-usage.jsonl', row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, secs: 0, timedOut: false, status: 3, launched: false, stderrTail: 'WSL ディストリが見つかりませんでした' }));
+  const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
+  assert.equal(upsertFixTasks({ home: dir, findings, now: NOW, todayStr: '2026-09-19' }), false);
+  assert.doesNotMatch(fs.readFileSync(path.join(dir, '.claude', 'next-session.md'), 'utf8'), /codex_lane_unavailable/);
+});
+
+test('起動失敗と本物の出力ゼロが混在しても codex_empty_output は本物だけを数える', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl',
+    row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, secs: 0, timedOut: false, status: 3, launched: false })
+    + row({ t: '2026-09-09T10:01:00Z', provider: 'codex', out: 0, secs: 5, timedOut: false, status: 1, launched: true }));
+  const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
+  const ids = findings.map((item) => item.id);
+  assert.deepEqual(ids, ['codex_launch_failed', 'codex_empty_output']);
+  assert.deepEqual(findings.find((item) => item.id === 'codex_empty_output').evidence, ['1件', 'exit_1(1件)', 'インフラ/起動失敗で除外 1件']);
+});
+
+test('信頼されていない cwd の出力ゼロは原因を隠さず起票する', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, status: 1, stderrTail: 'Not inside a trusted directory and --skip-git-repo-check was not specified.' }));
+  const finding = collectFindings({ home: dir, now: NOW, codexUsedPercent: null })[0];
+  assert.equal(finding.id, 'codex_empty_output');
+  assert.ok(finding.evidence.includes('untrusted_cwd(1件)'));
+});
+
+test('インフラ起因だけの出力ゼロは codex_empty_output に数えない', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, secs: 5, timedOut: false, status: 1, stderrTail: 'failed to lookup address information' }));
+  assert.equal(collectFindings({ home: dir, now: NOW, codexUsedPercent: null })[0].id, 'healthy');
+});
+
+test('実障害を起票し、同時に除外したインフラ起因件数も evidence に出す', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl',
+    row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, secs: 5, timedOut: false, status: 1 })
+    + row({ t: '2026-09-09T10:01:00Z', provider: 'codex', out: 0, secs: 4, timedOut: false, status: 1, stderrTail: 'failed to connect to websocket' }));
+  const finding = collectFindings({ home: dir, now: NOW, codexUsedPercent: null })[0];
+  assert.equal(finding.id, 'codex_empty_output');
+  assert.deepEqual(finding.evidence, ['1件', 'exit_1(1件)', 'インフラ/起動失敗で除外 1件']);
 });
 
 test('正常時は healthy のみで next-session を変更しない', () => {
@@ -103,6 +254,27 @@ test('注入した WSL spawn の実測値を読み、失敗時は null にする
   const output = '{"rate_limits":{"primary":{"used_percent":7,"window_minutes":300,"resets_at":42}}}';
   assert.deepEqual(readCodexUsedPercent({ spawnImpl: () => ({ status: 0, stdout: output }) }), { usedPercent: 7, windowMinutes: 300, resetsAt: 42 });
   assert.equal(readCodexUsedPercent({ spawnImpl: () => ({ status: 1, stdout: output }) }), null);
+});
+
+// 単発の起動失敗(OS エラー)は低成果(2件閾値)では拾えず、翌朝 healthy と判定されてしまった
+// (2026-09-21 実測: spawn ENAMETOOLONG / in=4964tok / out=0 / status=1)。
+test('fallback の spawn ENAMETOOLONG を1件で検出する', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', row({ t: '2026-09-09T11:00:00Z', provider: 'fallback', model: 'cheap-code:deepseek/deepseek-v4-flash', out: 0, status: 1, secs: 1446.7, stderrTail: "at async file:///C:/x/cheap-code.mjs:303:50 { errno: -4064, code: 'ENAMETOOLONG', syscall: 'spawn' } Node.js v24.18.0" }));
+  const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
+  assert.equal(findings[0].id, 'fallback_spawn_failed');
+  assert.match(findings[0].evidence.join('/'), /1件/);
+  assert.match(findings[0].evidence.join('/'), /ENAMETOOLONG/);
+  assert.equal(typeof findings[0].fixTask, 'string');
+  assert.match(findings[0].fixTask, /ENAMETOOLONG/);
+});
+
+test('spawn エラーでない fallback の単発失敗は fallback_spawn_failed を出さない', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', row({ t: '2026-09-09T11:00:00Z', provider: 'fallback', model: 'cheap-code:deepseek/deepseek-v4-flash', out: 0, status: 1, secs: 100, stderrTail: 'timeout waiting for gemini' }));
+  const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
+  assert.equal(findings.some((item) => item.id === 'fallback_spawn_failed'), false);
+  assert.equal(findings[0].id, 'healthy');
 });
 
 test('dry-run 相当では cooldown ファイルを変更しない', () => {

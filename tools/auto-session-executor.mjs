@@ -5,6 +5,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 
 function claudeDirFor(home) { return path.join(home, '.claude'); }
@@ -50,8 +51,9 @@ export function alternateCheapProvider(provider, home = process.env.ORGIAST_HOME
 }
 
 // cheap-code 子プロセスの引数。指示は argv でなく prompt-file 経由(§1.17 argv経由の指示破壊防止)。
-export function buildCheapCodeArgs({ repoRoot, provider, promptFile, cwd }) {
-  return [path.join(repoRoot, 'tools', 'cheap-code.mjs'), '--provider', provider, '--prompt-file', promptFile, '--cwd', cwd];
+export function buildCheapCodeArgs({ provider, promptFile, cwd }) {
+  const cheapCode = path.join(path.dirname(fileURLToPath(import.meta.url)), 'cheap-code.mjs');
+  return [cheapCode, '--provider', provider, '--prompt-file', promptFile, '--cwd', cwd];
 }
 
 // cheap-code が失敗した時の最終手段: claude -p(headless) 。無人の残TODO消化に Opus は過剰なので Sonnet。

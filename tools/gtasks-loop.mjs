@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { writeHandoff } from './next-session-rotate.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
@@ -67,7 +68,7 @@ export function askClassifier(rows) {
   const prompt = rows.map((row, index) => `${index + 1}. ${String(row.title ?? '').replace(/[\r\n]+/g, ' ')}`).join('\n');
   return new Promise((resolve, reject) => {
     execFile(process.execPath, [path.join(import.meta.dirname, 'llm-ask.mjs'), '--provider', 'groq', '--system', CLASSIFY_SYSTEM, '--max', '1000', prompt],
-      { timeout: 20_000, maxBuffer: 1024 * 1024 }, (error, stdout) => error ? reject(error) : resolve(stdout));
+      { windowsHide: true, timeout: 20_000, maxBuffer: 1024 * 1024 }, (error, stdout) => error ? reject(error) : resolve(stdout));
   });
 }
 
@@ -162,7 +163,7 @@ export async function plan({ count = 3, dryRun = false, classify = true, stateFi
     }
     if (picked.length) {
       fs.mkdirSync(path.dirname(nextFile), { recursive: true });
-      fs.writeFileSync(nextFile, nextText, 'utf8');
+      writeHandoff(nextFile, nextText);
     }
   }
   return { picked, memos, text: nextText };

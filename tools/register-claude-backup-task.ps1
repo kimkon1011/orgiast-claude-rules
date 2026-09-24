@@ -14,7 +14,10 @@ if ($Unregister) {
   exit 0
 }
 
-$script = Join-Path $PSScriptRoot 'backup-claude-to-drive.ps1'
+. (Join-Path $PSScriptRoot 'resolve-synced-repo.ps1')
+# The task must run from the synced repo, not from the tree this script sits in.
+$toolsDir = Resolve-RegisterToolsDir -Fallback $PSScriptRoot -RequiredLeaves @('backup-claude-to-drive.ps1')
+$script = Join-Path $toolsDir 'backup-claude-to-drive.ps1'
 if (-not (Test-Path -LiteralPath $script)) { throw "script not found: $script" }
 $script = (Resolve-Path -LiteralPath $script).Path
 $pwsh = (Get-Command pwsh.exe -ErrorAction SilentlyContinue).Source
@@ -52,10 +55,10 @@ if (-not $pwsh) {
 $hiddenActionHelper = Join-Path $PSScriptRoot 'ensure-run-hidden.ps1'
 if (Test-Path -LiteralPath $hiddenActionHelper) {
   . $hiddenActionHelper
-  $action = New-HiddenScheduledTaskAction -Execute $pwsh -ChildArgument @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $script) -WorkingDirectory $PSScriptRoot
+  $action = New-HiddenScheduledTaskAction -Execute $pwsh -ChildArgument @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $script) -WorkingDirectory $toolsDir
 } else {
   $argument = '-NoProfile -ExecutionPolicy Bypass -File "{0}"' -f $script
-  $action = New-ScheduledTaskAction -Execute $pwsh -Argument $argument -WorkingDirectory $PSScriptRoot
+  $action = New-ScheduledTaskAction -Execute $pwsh -Argument $argument -WorkingDirectory $toolsDir
   Write-Host 'NOTE: ensure-run-hidden.ps1 が無いため通常起動で登録しました（実行時にコンソール窓が出ます）'
 }
 Write-Host ('Execute: {0}' -f $pwsh)

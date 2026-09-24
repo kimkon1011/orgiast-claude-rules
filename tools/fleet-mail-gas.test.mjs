@@ -73,7 +73,7 @@ test('write failures and lock contention cannot report success', () => {
 });
 test('WebApp authenticates before dispatch and keeps unknown kind status fallback', () => {
   const h = harness();
-  const web = fs.readFileSync(new URL('../gas/fleet-status-sheet/WebApp.gs', import.meta.url), 'utf8');
+  const web = fs.readFileSync(new URL('../gas/fleet-status-sheet/WebApp.gs', import.meta.url), 'utf8').replaceAll('\r\n', '\n');
   for (const match of web.matchAll(/(?:'[^']+'|\w+): (\w+),?\n/g)) if (!h.c[match[1]]) h.c[match[1]] = () => ({ ok: true });
   h.c.ContentService = { MimeType: { JSON: 'json' }, createTextOutput: value => ({ setMimeType: () => JSON.parse(value) }) };
   vm.runInContext(web, h.c);

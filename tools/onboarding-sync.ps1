@@ -308,9 +308,10 @@ try {
         else { Split-Path -Parent $PSScriptRoot }
     $env:ORGIAST_HOME = $homeRoot
     $env:ORGIAST_REPO = $repoRoot
-    $registrar = Join-Path $repoRoot 'tools\register-hooks.mjs'
+    $registrar = Join-Path $repoRoot 'tools\setup.mjs'
     if ((Get-Command node -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath $registrar)) {
-        & node $registrar --hooks-only 2>$null | Out-Null
+        & node $registrar --converge --home $homeRoot 2>$null | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "setup --converge failed: $LASTEXITCODE" }
     }
 } catch {
     Write-SyncLog "hook registration failed: $($_.Exception.Message)"

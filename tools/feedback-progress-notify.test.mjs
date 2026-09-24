@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { runProgressNotify, selectProgress, loadProgressIssue, submitterSources } from './feedback-progress-notify.mjs';
+import { runProgressNotify, selectProgress, loadProgressIssue, submitterSources, matchFeedbackSource } from './feedback-progress-notify.mjs';
 
 const now = new Date('2026-09-24T12:00:00Z');
 const issue = { number: 21, state: 'open', title: '購入の登録', body: '', html_url: 'https://github.com/example/app/issues/21', updated_at: now.toISOString(), comments: [] };
@@ -164,7 +164,7 @@ test('submitterの優先順、壊れたマーカーと日本語ラベル', () =>
 test('本文マーカーで解決し台帳へbackfill、次回は名簿照会不要', async (t) => {
   const f = fixture(t, { known: false, discovered: true });
   const loadIssue = async () => ({ issue: { ...issue, body: '<!-- feedback-submitter: {"submitter":"山田", "submitter_discord_id":"42"} -->' }, prs: [pr] });
-  await runProgressNotify({ ...f.options, loadIssue });
+  await runProgressNotify({ ...f.options, args: ['--json', '--backfill'], loadIssue });
   const ledger = JSON.parse(fs.readFileSync(path.join(f.dir, 'feedback-issue-ledger.json')));
   assert.equal(ledger.items[0].submitter_discord_id, '42');
   await runProgressNotify({ ...f.options, getMembers: async () => { throw new Error('must not query'); } });
@@ -202,4 +202,83 @@ test('PRのブランチ名・同repoのIssue URLも照合し、別repo URLと番
     assert.equal(loaded.prs.length, expected);
   }
   assert.doesNotThrow(() => submitterSources({}, null));
+});
+
+
+test('要望見出しは受領セッションの名前ではなく依頼主を抽出する', () => {
+  const sources = submitterSources({}, '## 要望（kim / 2026-09-22、nishi の Claude Code セッションで受領）');
+  assert.equal(sources.at(-1).submitter, 'kim');
+  assert.ok(!sources.some((s) => s.submitter === 'nishi'));
+});
+test('一次ソースは重複・タイトルのみ・別アプリ・破損テキストを照合しない', () => {
+  const i = { ...issue, title: '[要望] 購入の登録', body: '内容\n\n提出者: 不明\n提出元URL: https://app.example/' };
+  const item = { title: '購入の登録', body: '内容', source_url: 'https://app.example/', email: 'a@example.com' };
+  assert.equal(matchFeedbackSource(i, [item]), item);
+  assert.equal(matchFeedbackSource(i, [item, item]), null);
+  assert.equal(matchFeedbackSource(i, [{ ...item, body: '別の内容' }]), null);
+  assert.equal(matchFeedbackSource(i, [{ ...item, source_url: 'https://other.example/' }]), null);
+  assert.equal(matchFeedbackSource(i, [{ ...item, source_url: undefined }]), null);
+});
+test('backfill dry-runは台帳不変、明示backfillだけ保存し送信しない', async (t) => {
+  const f = fixture(t, { known: false });
+  const file = path.join(f.dir, 'feedback-issue-ledger.json');
+  const before = fs.readFileSync(file, 'utf8');
+  const options = { ...f.options,
+    loadSource: async () => ({ sheetUrl: 'https://docs.google.com/spreadsheets/d/test/edit', items: [
+      { issue_url: issue.html_url, submitter: 'kim', submitter_discord_id: '715210673642012733' },
+    ] }),
+  };
+  await runProgressNotify({ ...options, args: ['--json', '--backfill', '--dry-run'] });
+  assert.equal(fs.readFileSync(file, 'utf8'), before);
+  assert.equal(f.output.at(-1).items[0].resolution, 'owner_is_kim');
+  assert.equal(f.output.at(-1).items[0].escalated, false);
+  await runProgressNotify({ ...options, args: ['--json', '--backfill'] });
+  assert.equal(JSON.parse(fs.readFileSync(file)).items[0].submitter_discord_id, '715210673642012733');
+  assert.equal(f.sent.length, 0);
+  assert.equal(fs.existsSync(path.join(f.dir, 'feedback-progress-ledger.json')), false);
+});
+test('不明のsource画面名を人名にせずシートリンクと理由を返す', async (t) => {
+  const f = fixture(t, { known: false });
+  await runProgressNotify({ ...f.options, args: ['--json', '--dry-run'], loadSource: async () => ({
+    sheetUrl: 'https://docs.google.com/spreadsheets/d/test/edit', items: [{ issue_url: issue.html_url, source: 'kim' }],
+  }) });
+  const row = f.output.at(-1).items[0];
+  assert.equal(row.resolution, 'escalated');
+  assert.match(row.content, /元シートの行を確認してください/);
+  assert.match(row.content, /https:\/\/docs.google.com\/spreadsheets\/d\/test\/edit/);
+});
+
+test('部分人名・メール断片だけでは宛先を復元せず通常実行でもbackfillしない', async (t) => {
+  for (const submitter of ['山田', 'yamada@example.com']) {
+    const f = fixture(t, { known: false });
+    const file = path.join(f.dir, 'feedback-issue-ledger.json');
+    const before = fs.readFileSync(file, 'utf8');
+    await runProgressNotify({ ...f.options,
+      loadIssue: async () => ({ issue: { ...issue, body: `報告者: ${submitter}` }, prs: [] }),
+      getMembers: async () => [{ id: '42', nick: '山田太郎', username: 'yamada' }],
+    });
+    assert.equal(f.output.at(-1).items[0].resolution, 'escalated');
+    assert.equal(fs.readFileSync(file, 'utf8'), before);
+  }
+});
+test('通常通知の名前解決はresolvedになり、明示フラグなしでは台帳を保存しない', async (t) => {
+  const f = fixture(t, { known: false });
+  const file = path.join(f.dir, 'feedback-issue-ledger.json');
+  const before = fs.readFileSync(file, 'utf8');
+  await runProgressNotify({ ...f.options,
+    loadIssue: async () => ({ issue: { ...issue, body: '報告者: 山田太郎' }, prs: [] }),
+    getMembers: async () => [{ id: '42', nick: '山田太郎' }],
+  });
+  assert.equal(f.output.at(-1).items[0].resolution, 'resolved');
+  assert.equal(fs.readFileSync(file, 'utf8'), before);
+});
+test('kim は設定済みowner IDの別名として解決しKimiとは混同しない', async (t) => {
+  const f = fixture(t, { known: false });
+  await runProgressNotify({ ...f.options, args: ['--json', '--dry-run'],
+    loadIssue: async () => ({ issue: { ...issue, body: '## 要望（kim / 2026-09-22、nishi の Claude Code セッションで受領）' }, prs: [] }),
+    getMembers: async () => [{ id: '43', username: 'kimi_74244', global_name: 'Kimi' },
+      { id: '715210673642012733', username: 'kimkon.', nick: '金功勇' }],
+  });
+  assert.equal(f.output.at(-1).items[0].resolution, 'owner_is_kim');
+  assert.equal(f.output.at(-1).items[0].escalated, false);
 });

@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { DEFAULT_REPO_MAP, parseRepoMap, parseHostMap, parseEnvText, runGh } from './feedback-to-issues.mjs';
 import { pickRecipient } from './feedback-done-notify.mjs';
-import { getDiscordMembers } from './discord-member-directory.mjs';
+import { getDiscordMembers, normalizeName } from './discord-member-directory.mjs';
 import { sendDiscordDm } from './feedback-nag.mjs';
 import { isEntry } from './is-entry.mjs';
 
@@ -107,7 +107,57 @@ export function submitterSources(item, body = '') {
   try { marker = JSON.parse(body.match(/<!--\s*feedback-submitter:\s*(.*?)\s*-->/s)?.[1] || '{}'); } catch {}
   const labels = [...body.matchAll(/^\s*(?:提出者|報告者|送信元|依頼者)[:：]\s*(.+)$/gm)]
     .map((match) => ({ submitter: match[1].trim() }));
-  return [item, marker, ...labels].filter((source) => source && typeof source === 'object');
+  const headings = [...body.matchAll(/^\s*#{1,6}\s*(?:要望|不具合|報告)[（(]\s*([^/\n]+?)\s*[/／]\s*\d{4}-\d{2}-\d{2}[^\n]*[）)]\s*$/gm)]
+    .map((match) => ({ submitter: match[1].trim() }));
+  return [item, marker, ...labels, ...headings].filter((source) => source && typeof source === 'object');
+}
+
+// Only explicit issue links or an exact title + body + application URL establish provenance.
+// A timestamp or a unique title alone cannot establish who owns an issue.
+export function matchFeedbackSource(issue, items = []) {
+  const body = String(issue.body || '');
+  const sourceUrl = body.match(/^提出元URL[:：]\s*(\S+)\s*$/m)?.[1];
+  const title = String(issue.title || '').replace(/^\[(?:要望|不具合)\]\s*/, '');
+  const detail = body.split(/\n\s*提出者[:：]/)[0].trim().replace(/\r\n/g, '\n');
+  const matches = items.filter((item) => {
+    const explicit = item.issue_url || item.github_issue_url;
+    if (explicit) return explicit === (issue.html_url || issue.url);
+    return sourceUrl && item.source_url === sourceUrl && item.title === title
+      && detail && !title.includes('�') && !detail.includes('�')
+      && String(item.body || '').trim().replace(/\r\n/g, '\n') === detail;
+  });
+  return matches.length === 1 ? matches[0] : null;
+}
+
+export async function loadFeedbackSource({ home, io, fetchImpl }) {
+  const env = parseEnvText(optionalText(path.join(home, '.claude', 'booth-feedback.env'), io));
+  if (!env.BOOTH_FEEDBACK_URL || !env.BOOTH_FEEDBACK_TOKEN) return { items: [], unavailable: 'feedback API 未設定' };
+  const url = new URL(env.BOOTH_FEEDBACK_URL);
+  url.searchParams.set('action', 'feedback');
+  url.searchParams.set('token', env.BOOTH_FEEDBACK_TOKEN);
+  const response = await fetchImpl(url.toString(), { signal: AbortSignal.timeout(30000) });
+  if (!response.ok) throw new Error(`feedback API HTTP ${response.status}`);
+  const data = await response.json();
+  if (!data.ok || !Array.isArray(data.items)) throw new Error('feedback API の応答形式が不正です');
+  return data;
+}
+
+function exactMembers(query, members) {
+  const value = String(query || '').trim();
+  if (!value || value === '不明') return [];
+  // kim is the configured owner alias, not a prefix search (Kimi is another member).
+  const candidates = (members || []).map((member) => value.toLowerCase() === 'kim' && String(member.id) === KIM_USER_ID
+    ? { ...member, nick: 'kim' } : member);
+  return candidates.filter((member) => value.includes('@')
+    ? member.emails?.some((email) => email.toLowerCase() === value.toLowerCase())
+    : [member.nick, member.global_name, member.username].some((name) => name && normalizeName(name) === normalizeName(value)));
+}
+
+export function sourceIdentity(source) {
+  if (!source) return {};
+  // source is commonly a screen name, so it is deliberately not treated as a person.
+  return { submitter: source.submitter || source.email || source.name || '',
+    submitter_discord_id: source.submitter_discord_id || source.discord_id || '' };
 }
 
 export function displayTitle(issue, item) {
@@ -117,10 +167,11 @@ export function displayTitle(issue, item) {
 }
 
 export async function runProgressNotify({ args = process.argv.slice(2), home = userHome(), io = defaultIo,
-  fetchImpl = fetch, sendDm = sendDiscordDm, gh = runGh, loadIssue = loadProgressIssue, getMembers = getDiscordMembers } = {}) {
+  fetchImpl = fetch, sendDm = sendDiscordDm, gh = runGh, loadIssue = loadProgressIssue, getMembers = getDiscordMembers, loadSource = loadFeedbackSource } = {}) {
   io = { ...defaultIo, ...io };
   const dryRun = args.includes('--dry-run');
-  const report = { ok: true, dryRun, items: [], errors: [] };
+  const backfill = args.includes('--backfill');
+  const report = { ok: true, dryRun, backfill, items: [], errors: [] };
   const warn = (context, error) => {
     report.ok = false;
     const message = `${context}: ${error.message || error}`;
@@ -129,6 +180,11 @@ export async function runProgressNotify({ args = process.argv.slice(2), home = u
   };
   try {
     const dir = path.join(home, '.claude');
+    let source = { items: [], unavailable: 'feedback API 取得失敗' };
+    try { source = await loadSource({ home, io, fetchImpl }); }
+    catch { warn('一次ソース', new Error('feedback API 取得失敗（URL・トークンは非表示）')); }
+    report.source = { count: source.items.length, sheetUrl: source.sheetUrl || '', unavailable: source.unavailable || null,
+      coverage: 'API が返した items のみ。全履歴の取得を保証しない' };
     const ledger = readJson(path.join(dir, 'feedback-issue-ledger.json'), { items: [] }, io);
     if (!Array.isArray(ledger.items)) throw new Error('Issue 台帳の items が配列ではありません');
     const progressFile = path.join(dir, 'feedback-progress-ledger.json');
@@ -164,11 +220,15 @@ export async function runProgressNotify({ args = process.argv.slice(2), home = u
           .map((check) => ({ name: check.name || check.context || '', state: check.conclusion || check.state || check.status || 'PENDING' }));
         let recipient = null, submitter = '';
         const attemptedSubmitters = new Set();
-        for (const identity of submitterSources(item, issue.body)) {
+        const matchedSource = matchFeedbackSource(issue, source.items);
+        const identities = [...submitterSources(item, issue.body), sourceIdentity(matchedSource)];
+        row.sourceEvidence = matchedSource ? { matched: true, key: matchedSource.key, rowNumber: matchedSource.rowNumber }
+          : { matched: false, reason: source.unavailable || 'API が返した items に厳密一致する報告なし' };
+        for (const identity of identities) {
           recipient = pickRecipient(identity, []);
           if (!recipient && identity.submitter && !attemptedSubmitters.has(identity.submitter)) {
             attemptedSubmitters.add(identity.submitter);
-            try { recipient = pickRecipient(identity, await getMembers({ query: identity.submitter, home, fetchImpl, persistCache: !dryRun })); }
+            try { recipient = pickRecipient(identity, exactMembers(identity.submitter, await getMembers({ query: identity.submitter, home, fetchImpl, persistCache: !dryRun }))); }
             catch (error) { warn(`${key} 名簿取得`, error); }
           }
           if (recipient) { submitter = identity.submitter || item.submitter || ''; break; }
@@ -178,7 +238,7 @@ export async function runProgressNotify({ args = process.argv.slice(2), home = u
         row.titleFallback = Boolean(issue.title?.includes('\uFFFD'));
         if (recipient && item.submitter_discord_id !== recipient.id) {
           row.backfill = { submitter, submitter_discord_id: recipient.id, submitter_discord_label: recipient.label };
-          if (!dryRun) {
+          if (backfill && !dryRun) {
             // Re-read to preserve entries appended by the intake since this run started.
             const file = path.join(dir, 'feedback-issue-ledger.json');
             const fresh = readJson(file, { items: [] }, io);
@@ -189,7 +249,11 @@ export async function runProgressNotify({ args = process.argv.slice(2), home = u
             io.write(file, `${JSON.stringify(fresh, null, 2)}\n`);
           }
         }
+        row.resolution = recipient ? (recipient.id === KIM_USER_ID ? 'owner_is_kim' : 'resolved') : 'escalated';
         row.escalated = !recipient;
+        if (!recipient) row.unresolvedReason = identities.some((entry) => entry.submitter && entry.submitter !== '不明')
+          ? '本文・一次ソースの識別情報から Discord メンバーを一意に解決できません'
+          : '本文・照合できた一次ソースに依頼主の識別情報がありません';
         row.recipient = recipient?.label || 'kim';
         const last = progress.items[key];
         // エスカレーションと依頼主への通知は別配送。名前解決後は同じ状態でも依頼主へ届ける。
@@ -198,8 +262,10 @@ export async function runProgressNotify({ args = process.argv.slice(2), home = u
         if (last && last.lastState === row.state && (last.delivery === delivery || (!last.delivery && recipient))) { row.skipped = 'unchanged'; continue; }
         row.content = recipient
           ? `【${row.title.slice(0, 150)}】\n${messages[row.state]}\n${row.url}`
-          : `この Issue の依頼主が特定できません。\n【${row.title.slice(0, 150)}】\n${selected ? messages[row.state] + '\n' : ''}${issue.html_url || issue.url}${selected && row.url !== (issue.html_url || issue.url) ? '\n' + row.url : ''}`;
-        if (dryRun) continue;
+          : `この報告の依頼主が特定できません。元シートの行を確認してください。\n【${row.title.slice(0, 150)}】\n${selected ? messages[row.state] + '\n' : ''}${issue.html_url || issue.url}${selected && row.url !== (issue.html_url || issue.url) ? '\n' + row.url : ''}`;
+        if (!recipient && source.sheetUrl) row.content += `\n照合元シート（該当行は未特定）: ${source.sheetUrl}`;
+        // Explicit maintenance mode never sends DMs or advances the notification ledger.
+        if (dryRun || backfill) continue;
         const token = process.env.DISCORD_BOT_TOKEN?.trim() || optionalText(path.join(dir, 'orgiast-discord-bot-token.txt'), io).trim();
         if (!token) throw new Error('Discord Bot トークンが見つかりません');
         await sendDm({ token, userId: recipient?.id || KIM_USER_ID, content: row.content, fetchImpl });

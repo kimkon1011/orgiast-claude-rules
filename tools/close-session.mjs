@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,6 +7,7 @@ import { resolvePython } from "./session-list-tidy.mjs";
 import { launchNextSession } from "./next-session-launch.mjs";
 
 import { rotate } from "./next-session-rotate.mjs";
+import { recordClosed } from "./closed-sessions-ledger.mjs";
 
 const claudeDir = join(homedir(), ".claude");
 const currentPath = join(claudeDir, "current-session.json");
@@ -56,19 +57,38 @@ if (!sessionId) {
 
 rotate(join(claudeDir, "next-session.md"));
 
-const stored = readJson(closedPath, { ids: [] });
-const ids = Array.isArray(stored.ids) ? stored.ids : [];
-if (!ids.includes(sessionId)) {
-  ids.push(sessionId);
-  const tmpPath = `${closedPath}.tmp-${process.pid}`;
-  writeFileSync(tmpPath, `${JSON.stringify({ ids: ids.slice(-500) }, null, 2)}\n`, "utf8");
-  renameSync(tmpPath, closedPath);
-}
+const recorded = recordClosed(sessionId, closedPath, {
+  onError: (e) => console.error(`closed-sessions.json に書けませんでした: ${e.message}`),
+});
 
 const python = resolvePython();
-if (python) spawnSync(python, [purgePath], { stdio: "ignore", windowsHide: true });
+let purgeFailed = null;
+if (!python) {
+  purgeFailed = "python が見つかりません";
+} else {
+  // stdio を捨てると purge の失敗に誰も気付けない（2026-09-22 実害）。必ず結果を見る。
+  const purge = spawnSync(python, [purgePath], { encoding: "utf8", windowsHide: true });
+  if (purge.error) purgeFailed = purge.error.message;
+  else if (purge.status !== 0) {
+    const tail = purge.stderr ? `: ${purge.stderr.trim().split("\n").slice(-3).join(" / ")}` : "";
+    purgeFailed = `exit ${purge.status}${tail}`;
+  }
+}
 
-console.log(`closed: ${sessionId} -> will disappear from the session list within ~45s (no /clear needed)`);
+if (!recorded) {
+  console.error(`未完了: ${sessionId} を closed-sessions.json に記録できませんでした（一覧から消えません）`);
+  if (purgeFailed) console.error(`  purge も失敗しています: ${purgeFailed}`);
+  process.exit(1);
+}
+if (purgeFailed) {
+  console.error(`警告: 台帳には記録しましたが purge が失敗しました: ${purgeFailed}`);
+  console.error("  常駐ウォッチャーが拾えば退避されますが、消えない場合は手で確認してください");
+} else {
+  // 退避条件は「jsonl が 45 秒間更新されていないこと」。閉じた本人のセッションで
+  // 会話を続けている間は書き込みが続くので、その間は一覧に残る（仕様）。
+  console.log(`closed: ${sessionId} -> このセッションの書き込みが 45 秒止まった時点で一覧から消えます（/clear 不要）`);
+  console.log("  ※ 続けて会話するとその都度カウントし直しになります");
+}
 
 if (!process.argv.includes("--no-launch")) {
   try {

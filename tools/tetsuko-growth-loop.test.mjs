@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import test from 'node:test';
+import { test } from 'node:test';
 import {
   atomicAppend,
   atomicWrite,
@@ -167,17 +167,54 @@ test('buildCodeCheckItems: amazonカテゴリはコードチェック対象が�
 
 test('commitAndPush: add/commit/pushを順に呼び、途中失敗で以降を止める', () => {
   const calls = [];
-  const fakeSpawn = (cmd, args) => { calls.push(args[0]); return { status: args[0] === 'commit' ? 1 : 0, stdout: '', stderr: args[0] === 'commit' ? 'conflict' : '', error: null }; };
+  const fakeSpawn = (cmd, args) => {
+    calls.push(args[0]);
+    return { status: args[0] === 'commit' ? 1 : 0, stdout: args[0] === 'rev-parse' ? 'main\n' : '', stderr: args[0] === 'commit' ? 'conflict' : '', error: null };
+  };
   const result = commitAndPush('C:\\fake', 36, fakeSpawn);
-  assert.deepEqual(calls, ['add', 'commit']);
+  assert.deepEqual(calls, ['rev-parse', 'pull', 'add', 'commit']);
+  assert.deepEqual(result.steps.map(({ step }) => step), ['branch-check', 'pull', 'add', 'commit']);
   assert.equal(result.ok, false);
 });
 
 test('commitAndPush: 全て成功すればokになる', () => {
   const calls = [];
-  const fakeSpawn = (cmd, args) => { calls.push(args[0]); return { status: 0, stdout: '', stderr: '', error: null }; };
+  const fakeSpawn = (cmd, args) => { calls.push(args[0]); return { status: 0, stdout: args[0] === 'rev-parse' ? 'main\n' : '', stderr: '', error: null }; };
   const result = commitAndPush('C:\\fake', 36, fakeSpawn);
-  assert.deepEqual(calls, ['add', 'commit', 'push']);
+  assert.deepEqual(calls, ['rev-parse', 'pull', 'add', 'commit', 'push']);
+  assert.deepEqual(result.steps.map(({ step }) => step), ['branch-check', 'pull', 'add', 'commit', 'push']);
+  assert.equal(result.ok, true);
+});
+
+test('commitAndPush: main以外では変更系git操作を実行しない', () => {
+  const calls = [];
+  const fakeSpawn = (cmd, args) => {
+    calls.push(args);
+    return { status: 0, stdout: args[0] === 'rev-parse' ? 'fix/other\n' : '', stderr: '', error: null };
+  };
+  const result = commitAndPush('C:\\fake', 36, fakeSpawn);
+  assert.deepEqual(calls, [['rev-parse', '--abbrev-ref', 'HEAD']]);
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'wrong_branch');
+  assert.equal(result.branch, 'fix/other');
+});
+
+test('commitAndPush: push失敗後のrebaseと再pushが成功すればokになる', () => {
+  const calls = [];
+  let pushCount = 0;
+  const fakeSpawn = (cmd, args) => {
+    calls.push(args);
+    if (args[0] === 'rev-parse') return { status: 0, stdout: 'main\n', stderr: '', error: null };
+    if (args[0] === 'push') {
+      pushCount += 1;
+      return { status: pushCount === 1 ? 1 : 0, stdout: '', stderr: '', error: null };
+    }
+    return { status: 0, stdout: '', stderr: '', error: null };
+  };
+  const result = commitAndPush('C:\\fake', 36, fakeSpawn);
+  assert.deepEqual(calls.map((args) => args[0]), ['rev-parse', 'pull', 'add', 'commit', 'push', 'pull', 'push']);
+  assert.deepEqual(calls.slice(-2), [['pull', '--rebase'], ['push']]);
+  assert.deepEqual(result.steps.map(({ step }) => step), ['branch-check', 'pull', 'add', 'commit', 'push', 'push-retry-pull', 'push-retry']);
   assert.equal(result.ok, true);
 });
 

@@ -31,6 +31,21 @@ test('overflow rotation is idempotent and does not create nested pending queues'
  const r=rotate(file,{now}); const first=fs.readFileSync(file,'utf8'); const archive=fs.readFileSync(r.archive,'utf8');
  assert.equal(rotate(file,{now}).changed,false); assert.equal(fs.readFileSync(file,'utf8'),first); assert.equal(fs.readFileSync(r.archive,'utf8'),archive);
 });
+test('accumulated continuation entries are budget-checked and overflow instead of exceeding MAX_BYTES',()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'rotate-')); const file=path.join(dir,'next-session.md');
+ const regular=Array.from({length:120},(_,i)=>`${i+1}. TODO ${i} ${'日本語'.repeat(60)}`).join('\n');
+ const continuations=Array.from({length:8},(_,i)=>`${120+i+1}. [継続キュー: 未完了 ${i}件](archive/old-${i}.pending.md) — 過去の退避キュー`).join('\n');
+ const source=block('2026-09-22',`${regular}\n${continuations}`);
+ fs.writeFileSync(file,source);
+ const r=rotate(file,{now});
+ assert.equal(r.changed,true);
+ const text=fs.readFileSync(file,'utf8');
+ assert.ok(Buffer.byteLength(text)<=MAX_BYTES);
+ // every continuation reference must survive, either inlined in the active queue or in the overflow pending file
+ const pendingRef=text.match(/\[継続キュー[^\]]*\]\(([^)]+)\)/g)?.at(-1)?.match(/\(([^)]+)\)/)[1];
+ const pendingText=pendingRef?fs.readFileSync(path.join(dir,pendingRef),'utf8'):'';
+ for(let i=0;i<8;i++) assert.ok(text.includes(`old-${i}.pending.md`)||pendingText.includes(`old-${i}.pending.md`),`continuation ${i} lost`);
+});
 test('normalized queues still retire subsequently completed and newly expired items',()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'rotate-')); const file=path.join(dir,'next-session.md');
  fs.writeFileSync(file,block('2026-09-22','1. open')); rotate(file,{now});

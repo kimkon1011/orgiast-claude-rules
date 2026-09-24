@@ -56,12 +56,18 @@ export function planRotation(source, { now = new Date(), maxBytes = MAX_BYTES, a
   const overflow = [];
   const continuations = [];
   for (const item of pending) {
-    if (item.text.startsWith('[継続キュー:')) { continuations.push(item.text); continue; }
+    if (item.text.startsWith('[継続キュー:')) { continuations.push(item); continue; }
     const entry = `${stats.pending + 1}. ${item.text}${item.cwd ? ` （作業場所: ${item.cwd}）` : ''}${item.date && !/更新:/.test(item.text) ? ` （更新: ${item.date}）` : ''}\n`;
     if (Buffer.byteLength(output + entry) > maxBytes - 1000) { overflow.push(item); continue; }
     output += entry; stats.pending++;
   }
-  for (const item of continuations) output += `${stats.pending + 1}. ${item}\n`;
+  // Continuations (references into a prior overflow queue) must also pass the byte budget check,
+  // otherwise they accumulate across rotations and push the header over maxBytes (see history).
+  for (const item of continuations) {
+    const entry = `${stats.pending + 1}. ${item.text}\n`;
+    if (Buffer.byteLength(output + entry) > maxBytes - 1000) { overflow.push(item); continue; }
+    output += entry; stats.pending++;
+  }
   if (overflow.length) {
     stats.overflow = overflow.length;
     output += `${stats.pending + 1}. [継続キュー: 未完了 ${overflow.length}件](${archiveRef}.pending.md) — このファイルの項目を消化後に確認する。\n`;

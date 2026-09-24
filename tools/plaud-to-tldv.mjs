@@ -142,7 +142,7 @@ export function shouldNotify(state, reason, now = Date.now(), intervalMs = 24 * 
   return !last || now - last >= intervalMs;
 }
 
-const CONSOLE_SNIPPET = "fetch('https://api-apne1.plaud.ai/auth/refresh-user-token',{method:'POST',credentials:'include',headers:{'content-type':'application/json'},body:'{}'}).then(r=>r.json()).then(j=>console.log('COPY:'+JSON.stringify({a:j.access_token,r:j.refresh_token})))";
+const CONSOLE_SNIPPET = "fetch('https://api-apne1.plaud.ai/auth/refresh-user-token',{method:'POST',credentials:'include',headers:{'content-type':'application/json'},body:'{}'}).then(r=>r.json()).then(j=>{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify({a:j.access_token,r:j.refresh_token})],{type:'application/json'}));a.download='plaud-token.json';document.body.appendChild(a);a.click()})";
 
 /** 取り直しが必要な時の通知本文。手順を本文に全部入れる(リンクを辿らせない)。 */
 export function renewalMessage(kind, daysLeft) {
@@ -150,13 +150,20 @@ export function renewalMessage(kind, daysLeft) {
     ? '🚨 **Plaud→tl;dv の自動取り込みが停止しました**（接続トークンが失効）'
     : `⚠️ **Plaud→tl;dv の接続トークンが残り ${daysLeft} 日です**（切れると自動取り込みが止まります）`;
   return [head, '',
-    '復旧手順（1回だけ・2分）:',
-    '1. https://web.plaud.ai を開く（ログイン済みの状態で）',
-    '2. F12 → Console タブ',
-    '3. 貼り付けを拒否されたら、手入力で `allow pasting` → Enter',
-    '4. 次の1行を貼って Enter:',
+    '復旧手順（1回だけ・約3分）:',
+    '1. https://web.plaud.ai を開きます。',
+    '2. すでにログイン済みでも、必ず一度ログアウトしてからログインし直します。トークン期限はログイン時刻から約30日で、refresh だけでは延びません。',
+    '3. F12 キーを押し、開いた開発者ツールの `Console` タブを選びます。',
+    '4. 貼り付けを拒否された場合は、Console の入力欄に `allow pasting` と手で入力して Enter を押します。',
+    '5. 次の1行を貼り付けて Enter を押します:',
     '```', CONSOLE_SNIPPET, '```',
-    '5. 出てきた `COPY:{...}` の行を Claude に渡す',
+    '6. ダウンロードフォルダに `plaud-token.json` が保存されます。Claude に「落ちた」と伝えるだけで完了です。文字の書き写しは不要です。',
+    '',
+    '成功時: ブラウザに `plaud-token.json` のダウンロード表示が出ます。Console に長い文字列は表示されません。',
+    '失敗時:',
+    '- 赤字で `401` または `token invalid` と出た場合は、ログアウト後にログインし直し、もう一度実行してください。',
+    '- ダウンロードがブロックされた場合は、ブラウザの表示で「許可」を選んでください。',
+    '- 何も起きない場合は、`allow pasting` を手入力して Enter を押してから、1行を貼り直してください。',
   ].join('\n');
 }
 
@@ -261,6 +268,57 @@ export function jwtExp(token) {
   } catch { return 0; }
 }
 
+/** ブラウザからダウンロードした UT/URT を、バックアップと read-back 検証付きで取り込む。 */
+export function importTokenFile(inputPath, statePath, options = {}) {
+  let text;
+  try { text = fs.readFileSync(inputPath, 'utf8'); }
+  catch (error) {
+    if (error?.code === 'ENOENT') throw new Error(`トークンファイルが見つかりません: ${inputPath}`);
+    throw new Error(`トークンファイルを読めません: ${error.message}`);
+  }
+  let imported;
+  try { imported = JSON.parse(text.replace(/^\uFEFF/, '')); }
+  catch { throw new Error('トークンファイルの JSON が壊れています'); }
+  if (typeof imported?.a !== 'string' || !imported.a || typeof imported?.r !== 'string' || !imported.r) {
+    throw new Error('トークンファイルに a（access token）と r（refresh token）の両方が必要です');
+  }
+  const utExp = jwtExp(imported.a);
+  const urtExp = jwtExp(imported.r);
+  if (!utExp || !urtExp) throw new Error('トークンの JWT payload から exp（有効期限）を読み取れません');
+
+  let state = defaultState();
+  let existed = false;
+  try {
+    state = mergeState(JSON.parse(fs.readFileSync(statePath, 'utf8').replace(/^\uFEFF/, '')));
+    existed = true;
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw new Error(`既存の state ファイルを読めません: ${error.message}`);
+  }
+  const backupPath = `${statePath}.backup-${options.now ?? Date.now()}`;
+  if (existed) fs.copyFileSync(statePath, backupPath);
+  state.session.ut = imported.a;
+  state.session.urt = imported.r;
+  state.session.utExp = utExp;
+  state.session.urtExp = urtExp;
+  state.session.wt = '';
+  state.session.wtExp = 0;
+  delete state.notifiedAt.renewal;
+  delete state.notifiedAt.expired;
+  writeStateAtomic(statePath, state);
+
+  let saved;
+  try { saved = JSON.parse(fs.readFileSync(statePath, 'utf8')); }
+  catch (error) { throw new Error(`保存後の state を再読込できません: ${error.message}`); }
+  if (saved?.session?.ut !== imported.a || saved?.session?.urt !== imported.r
+      || saved?.session?.utExp !== utExp || saved?.session?.urtExp !== urtExp
+      || saved?.session?.wt !== '' || saved?.session?.wtExp !== 0
+      || saved?.notifiedAt?.renewal !== undefined || saved?.notifiedAt?.expired !== undefined) {
+    throw new Error('保存後の state の read-back 検証に失敗しました');
+  }
+  (options.clearNotice || clearRenewalNotice)();
+  return { utExp, urtExp, backupPath: existed ? backupPath : '' };
+}
+
 export function getSetCookies(headers) {
   if (typeof headers?.getSetCookie === 'function') return headers.getSetCookie();
   if (typeof headers?.raw === 'function') return headers.raw()['set-cookie'] || [];
@@ -284,7 +342,7 @@ async function fetchWithRetry(url, init = {}, fetchImpl = fetch) {
 }
 
 function parseArgs(argv) {
-  const options = { dryRun: false, minMinutes: 5, backfill: false, since: null, limit: 10, doctor: false, json: false, verbose: false, allowUnsupported: false, proxyExt: 'ogg' };
+  const options = { dryRun: false, minMinutes: 5, backfill: false, since: null, limit: 10, doctor: false, json: false, verbose: false, allowUnsupported: false, proxyExt: 'ogg', importToken: '' };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--dry-run') options.dryRun = true;
@@ -296,6 +354,10 @@ function parseArgs(argv) {
     // tl;dv 側がデコードできるかを実測するために使う。
     else if (arg === '--allow-unsupported') options.allowUnsupported = true;
     else if (arg === '--proxy-ext') options.proxyExt = String(argv[++i] || 'ogg').toLowerCase();
+    else if (arg === '--import-token') {
+      options.importToken = argv[++i] || '';
+      if (!options.importToken) throw new Error('--import-token の後に plaud-token.json のパスを指定してください');
+    }
     else if (arg === '--min-minutes') options.minMinutes = Number(argv[++i]);
     else if (arg === '--limit') options.limit = Number(argv[++i]);
     else if (arg === '--since') {
@@ -396,6 +458,8 @@ function meetingName(record, iso) {
   return `Plaud録音 ${parts}`;
 }
 
+// refresh-user-token は旧 UT/URT を即座に失効させてローテートする。返された新トークンを
+// 必ず保存しないと連携が即死するため、この endpoint をツール外から手動で叩いてはいけない。
 async function refreshTokens(state, client, persist, fetchImpl) {
   let response;
   let body;
@@ -414,11 +478,21 @@ async function refreshTokens(state, client, persist, fetchImpl) {
     envelopeError(body, 'UT更新');
     break;
   }
-  const tokens = tokensFromRefresh(getSetCookies(response.headers), body, state.session);
+  const tokens = tokensFromRefresh(getSetCookies(response.headers), body, {});
+  if (!tokens.ut || !tokens.urt) throw new Error('UT更新レスポンスに新しい access_token / refresh_token が揃っていません。旧トークンは失効した可能性があります');
   state.session.ut = tokens.ut; state.session.urt = tokens.urt;
   state.session.utExp = jwtExp(tokens.ut); state.session.urtExp = jwtExp(tokens.urt);
   state.session.wt = ''; state.session.wtExp = 0;
-  persist();
+  try { persist(); } catch (error) {
+    const recoveryPath = `${persist.statePath || 'plaud-to-tldv-state.json'}.refresh-recovery.json`;
+    try {
+      writeStateAtomic(recoveryPath, state);
+      console.error(`Plaud の新トークンを通常の state に保存できなかったため、復旧ファイル ${recoveryPath} に退避しました。ファイルを削除しないでください。`);
+    } catch {
+      console.error('Plaud の新トークンを state に保存できませんでした。現在のプロセスを終了せず、管理者に連絡してください。');
+    }
+    throw error;
+  }
 }
 
 async function listWorkspaces(state, client) {
@@ -508,6 +582,14 @@ export async function run(argv = process.argv.slice(2), dependencies = {}) {
   try { options = parseArgs(argv); } catch (error) { console.error(error.message); return 2; }
   const log = logger(options);
   const config = dependencies.config || bootstrapValues();
+  if (options.importToken) {
+    try {
+      const result = importTokenFile(options.importToken, config.statePath, { clearNotice: dependencies.clearRenewalNotice });
+      const daysLeft = (result.urtExp * 1000 - Date.now()) / 86400000;
+      console.log(`Plaud トークンを取り込みました。更新トークン有効期限: ${new Date(result.urtExp * 1000).toISOString()}（残り ${daysLeft.toFixed(1)} 日）`);
+      return 0;
+    } catch (error) { console.error(`トークン取り込み失敗: ${error.message}`); return 2; }
+  }
   if (!config.apiKey) { console.error('TLDV_API_KEY がありません。~/.claude/tldv.env に TLDV_API_KEY=... を保存してください。'); return 2; }
   const statePath = config.statePath;
   const lockPath = `${statePath}.lock`;
@@ -527,6 +609,7 @@ export async function run(argv = process.argv.slice(2), dependencies = {}) {
     const tokenRegion = regionFromToken(state.session.ut);
     if (tokenRegion && tokenRegion !== state.session.region) { state.session.region = tokenRegion; }
     const persist = () => writeStateAtomic(statePath, state);
+    persist.statePath = statePath;
     notifyCtx = { state, persist };
     const fetchImpl = dependencies.fetch || fetch;
     const client = makePlaudClient(state, persist, log, fetchImpl);

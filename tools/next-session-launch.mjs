@@ -9,6 +9,21 @@ import { alternateCheapProvider, autoSessionExecutor, buildCheapCodeArgs, buildC
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..');
 
+// 空の候補も従来どおり不在として記録し、最初に実在する候補で探索を止める。
+export function resolveLaunchCwd({ candidates, exists, fallback }) {
+  const missing = [];
+  let explicitMissing = false;
+  for (const [source, value] of candidates) {
+    const candidate = value || '';
+    if (candidate && exists(candidate)) {
+      return { cwd: candidate, missing, usedFallback: false, explicitMissing };
+    }
+    missing.push({ source, candidate });
+    if (source === '--cwd') explicitMissing = true;
+  }
+  return { cwd: fallback, missing, usedFallback: true, explicitMissing };
+}
+
 export function parseHandoffCwd(text) {
   return handoffField(text, 'cwd');
 }
@@ -494,6 +509,7 @@ export async function launchNextSession(argv = [], io = {}) {
   const arm = io.armToFile ?? armToFile;
   const flags = parseArgs(argv);
   const codeCli = resolveVscodeCli({ env, exists, homedir: home });
+  let cwd;
 
   try {
     const claudeDir = path.join(home, '.claude');
@@ -602,18 +618,20 @@ export async function launchNextSession(argv = [], io = {}) {
     const handoffCwd = parseHandoffCwd(handoffText);
     const handoffModel = parseHandoffModel(handoffText);
     const current = await readJson(currentPath, {});
-    let cwd = flags.cwd;
-    if (!cwd) {
-      const candidates = [
-        ['handoff', handoffCwd],
-        ['current', current.cwd],
-      ].map(([source, candidate]) => [source, candidate || '', Boolean(candidate) && exists(candidate)]);
-      const selectedIndex = candidates.findIndex(([, , present]) => present);
-      cwd = selectedIndex >= 0 ? candidates[selectedIndex][1] : REPO_ROOT;
-      const skipped = selectedIndex >= 0 ? candidates.slice(0, selectedIndex) : candidates;
-      for (const [source, candidate] of skipped) {
-        log(`[next-session] 注意: ${source} の cwd(${candidate}) が存在しないため ${cwd} を使います`);
-      }
+    const resolvedCwd = resolveLaunchCwd({
+      candidates: flags.cwd
+        ? [['--cwd', flags.cwd]]
+        : [['handoff', handoffCwd], ['current', current.cwd]],
+      exists,
+      fallback: REPO_ROOT,
+    });
+    cwd = resolvedCwd.cwd;
+    for (const { source, candidate } of resolvedCwd.missing) {
+      log(`[next-session] 注意: ${source} の cwd(${candidate}) が存在しないため ${cwd} を使います`);
+    }
+    if (resolvedCwd.explicitMissing) {
+      log(`[next-session] スキップ: --cwd が指すフォルダが存在しません: ${flags.cwd}`);
+      return 0;
     }
     const accountLog = accountLabel({ account, route, accountPath: firstAccountConfigPath });
     if (configDirSource === 'state' && (route === 'vscode' || route === 'vscode-ext')) {
@@ -836,12 +854,16 @@ export async function launchNextSession(argv = [], io = {}) {
     log(`[next-session] 新しいセッションを起動しました: ${cwd} / prompt=${flags.prompt} / account=${accountLog}`);
     return 0;
   } catch (error) {
+    if (cwd && !exists(cwd)) {
+      log(`[next-session] スキップ: 起動に失敗しました (cwd が存在しません: ${cwd})`);
+      return 0;
+    }
     const message = String(error?.message ?? error);
     log(`[next-session] スキップ: 起動に失敗しました (${message})`);
     // Claude Code の対話セッションでは Bash tool サンドボックス配下の exe spawn がすべて
     // ENOENT になり、PATH や ComSpec の変更では直らない。退避は PowerShell tool から
     // code.cmd を直接実行する（2026-09-17 実測）。PR #435 の経路は再試行しない。
-    if (message.includes('ENOENT') || message.includes('spawn')) {
+    if (cwd && (message.includes('ENOENT') || message.includes('spawn'))) {
       log(`[next-session] PowerShell 退避: ${buildRecoveryCommand({ codeCli, prompt: flags.prompt })}`);
     }
     return 0;

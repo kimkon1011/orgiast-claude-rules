@@ -626,12 +626,14 @@ export async function launchNextSession(argv = [], io = {}) {
       fallback: REPO_ROOT,
     });
     cwd = resolvedCwd.cwd;
-    for (const { source, candidate } of resolvedCwd.missing) {
-      log(`[next-session] 注意: ${source} の cwd(${candidate}) が存在しないため ${cwd} を使います`);
-    }
+    // 明示 --cwd が不在のときは起動せずに落ちるので、「…を使います」と告知してから
+    // 使わずに終わる矛盾したログを出さない（不在は下の1行だけで足りる）。
     if (resolvedCwd.explicitMissing) {
       log(`[next-session] スキップ: --cwd が指すフォルダが存在しません: ${flags.cwd}`);
       return 0;
+    }
+    for (const { source, candidate } of resolvedCwd.missing) {
+      log(`[next-session] 注意: ${source} の cwd(${candidate}) が存在しないため ${cwd} を使います`);
     }
     const accountLog = accountLabel({ account, route, accountPath: firstAccountConfigPath });
     if (configDirSource === 'state' && (route === 'vscode' || route === 'vscode-ext')) {

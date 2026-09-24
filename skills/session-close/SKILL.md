@@ -15,6 +15,12 @@ description: セッションを綺麗に閉じて次に引き継ぐ。「終わ�
 - `git status --short` を実行する。
 - 差分があれば commit → push → PR → **マージ**まで自分で行い、差分を放置して閉じない（2026-08-19 以降は自作PRのマージも Claude が行う。`gh pr checks` が全green・スコープ内・非破壊 を確認してから `gh pr merge --squash --delete-branch`）。
 
+## 2.5 着手印の解放
+
+- `node ~/orgiast-claude-rules/tools/session-claims.mjs --release --self <このセッションのid> --reason closed` を実行する。
+- これを忘れると、この目的は最大8時間ほか のセッションから「着手中」に見え続ける（拾えない目的が生まれる）。
+- 出力は無い。失敗しても exit 0 なので、成果報告には書かなくてよい。
+
 ## 3. memory へ永続化
 
 - 次回も効く恒久的な事実だけを `~/.claude/projects/<projectId>/memory/` に書く。

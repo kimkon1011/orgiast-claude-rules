@@ -17,6 +17,12 @@ description: 新しいセッションを前セッションの引き継ぎから�
 ## 2. 目的を1件に確定する
 
 - 引き継ぎに目的が書いてあればそれを採用し、着手前に1行で宣言する（`**[本セッションの目的]** …`）。
+- **候補を kim に見せる前に、着手済みを機械で落とす**（重複着手の防止・トークン増ゼロ）:
+  候補を1行1件でスクラッチパッドのファイルに書き、
+  `node ~/orgiast-claude-rules/tools/session-claims.mjs --filter --self <このセッションのid> --candidates <そのファイル>`
+  を通す。**stdout に残った候補だけ**を AskUserQuestion に出す。落ちた分は stderr に理由が出るが、kim には見せない。
+  （このツールは他セッションの `**[本セッションの目的]**` 宣言を transcript から拾って突合する。
+   着手印は自動で付くので、手で書く運用にしない）
 - 未定・複数ある場合は AskUserQuestion で**1件だけ**選ばせる。候補は次から集める:
   - `~/.claude/next-session.md` の残TODO
   - `~/.claude/session-handoffs.md`（放置セッションの再開一覧。`/session-triage` が生成）

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { isEntry } from './is-entry.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
@@ -243,12 +244,6 @@ async function updateCache(base, file, log) {
   }
 }
 
-const invokedAsScript = () => {
-  if (!process.argv[1]) return false;
-  const real = q => { try { return fs.realpathSync(q); } catch { return path.resolve(q); } };
-  // symlink 経由の呼び出しでも真になるよう実体パスで比較する（hook は orgiast-claude-rules 経由で呼ぶ）
-  return pathToFileURL(real(fileURLToPath(import.meta.url))).href === pathToFileURL(real(process.argv[1])).href;
-};
-if (invokedAsScript()) {
+if (isEntry(import.meta.url)) {
   try { await main(); } catch (error) { caught('main', error); } // fail-open; natural exit preserves buffered output.
 }

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { isEntry } from './is-entry.mjs';
 import { purposeTokens, jaccard } from './lib/purpose-tokens.mjs';
 import os from 'node:os';
 import path from 'node:path';
@@ -97,5 +98,4 @@ async function main() {
   } catch {}
 }
 
-const isEntry = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
-if (isEntry) await main();
+if (isEntry(import.meta.url)) await main();

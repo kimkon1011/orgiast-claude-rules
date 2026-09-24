@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "priceAsOf": "2026-09-19",
+  "creditUsd": 0.01,
+  "sources": {
+    "plansDocs": "https://docs.github.com/en/copilot/get-started/plans",
+    "plansPage": "https://github.com/features/copilot/plans",
+    "organizationBilling": "https://docs.github.com/en/copilot/concepts/billing/organizations-and-enterprises",
+    "individualBilling": "https://docs.github.com/en/copilot/concepts/billing/individual-plans"
+  },
+  "facts": {
+    "codeCompletionConsumesCredits": false,
+    "nextEditSuggestionsConsumeCredits": false,
+    "teamCreditsArePooled": true,
+    "budgetControlLevels": ["user", "cost center", "enterprise"],
+    "pauseAtBudget": {
+      "value": "Copilot pauses until the next cycle",
+      "verifiedAsHardStop": false,
+      "status": "unverified",
+      "source": "https://docs.github.com/en/copilot/concepts/billing/organizations-and-enterprises"
+    }
+  },
+  "plans": [
+    { "id": "free", "label": "Copilot Free", "usdPerSeatMonth": 0, "creditsPerSeat": null, "verified": true, "source": "https://docs.github.com/en/copilot/get-started/plans" },
+    { "id": "pro", "label": "Copilot Pro", "usdPerSeatMonth": 10, "creditsPerSeat": 1500, "verified": true, "source": "https://docs.github.com/en/copilot/concepts/billing/individual-plans" },
+    { "id": "pro-plus", "label": "Copilot Pro+", "usdPerSeatMonth": 39, "creditsPerSeat": 7000, "verified": true, "source": "https://docs.github.com/en/copilot/concepts/billing/individual-plans" },
+    { "id": "max", "label": "Copilot Max", "usdPerSeatMonth": 100, "creditsPerSeat": 20000, "verified": true, "source": "https://docs.github.com/en/copilot/concepts/billing/individual-plans" },
+    { "id": "business", "label": "Copilot Business", "usdPerSeatMonth": 19, "creditsPerSeat": 1900, "verified": true, "source": "https://docs.github.com/en/copilot/concepts/billing/organizations-and-enterprises" },
+    { "id": "enterprise", "label": "Copilot Enterprise", "usdPerSeatMonth": 39, "creditsPerSeat": 3900, "verified": true, "source": "https://docs.github.com/en/copilot/concepts/billing/organizations-and-enterprises" }
+  ]
+}

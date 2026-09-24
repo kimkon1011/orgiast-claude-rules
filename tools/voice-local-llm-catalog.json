@@ -1,0 +1,149 @@
+{
+  "version": 1,
+  "priceAsOf": "2026-09-23",
+  "proposalId": "P-0136",
+  "title": "低価格ハードウェア上の音声制御ローカルLLM導入",
+  "sources": {
+    "esp32p4": "https://www.espressif.com/en/products/socs/esp32-p4",
+    "raspberryPi5": "https://www.raspberrypi.com/products/raspberry-pi-5/",
+    "openaiPricing": "https://openai.com/api/pricing/",
+    "whisperCpp": "https://github.com/ggml-org/whisper.cpp",
+    "llamaCpp": "https://github.com/ggml-org/llama.cpp"
+  },
+  "assumptions": {
+    "opsPerMonth": 150,
+    "manualMinutesPerOp": 2,
+    "hourlyYen": 2500,
+    "cloudYenPerOp": 10,
+    "devDayYen": 40000
+  },
+  "assumptionNotes": {
+    "opsPerMonth": "音声で操作したい件数150件/月は仮定。当社の実測は未取得（--ops で上書き可）。",
+    "manualMinutesPerOp": "現状は手作業で2分/件かかると仮定。内訳の実測は未取得。",
+    "hourlyYen": "社内単価2,500円/hは仮定。--hourly-yen で実際の人件費単価に上書きすること。",
+    "cloudYenPerOp": "クラウド音声APIの1操作あたり10円は仮定。公式は音声トークン/分単位の従量で、1操作あたりへの換算は仮定に依存する。**この値がクラウドAPI削減額と結論を支配する**（--cloud-yen-per-op で上書き可）。",
+    "devDayYen": "立上げ人日単価40,000円/日は仮定。マイコン側ファームと音声前端の作り込み工数を含む。"
+  },
+  "facts": {
+    "esp32CannotHostUsableLlm": {
+      "value": "ESP32-P4 の SRAM は 768KB・PSRAM は最大32MBで、日本語の実用対話に耐えるLLMは載らない（載るのは超小型モデルに限られる）",
+      "status": "verified",
+      "note": "したがって『ESP32にローカルLLMを配置する』は単体では成立しない。ESP32は音声入出力の前端（ウェイクワード検出・音声ストリーム送出）に置き、LLMはLAN内ホストで動かす構成が唯一現実的。提案の必須要件（ローカルLLM）を単体構成では満たさない。",
+      "source": "https://www.espressif.com/en/products/socs/esp32-p4"
+    },
+    "localShiftIsNotCostDriven": {
+      "value": "低件数ではクラウド音声APIの従量がローカル構築の初期費用を下回る。ローカル化の根拠はコストではなくオフライン動作・データを社外に出さないこと・ベンダー依存の回避に置くべき",
+      "status": "unverified",
+      "note": "クラウドAPI削減額は opsPerMonth × cloudYenPerOp で、150件/月・10円/件なら1,500円/月にしかならない。初期費用12万円台の回収は主に工数削減側で賄われる。件数が小さいほどローカル化の経済的優位は消える。"
+    },
+    "latencyIsHostBound": {
+      "value": "応答速度はローカルLLMを動かすホストの性能とLANに律速され、ESP32は音声入出力の前端にすぎない",
+      "status": "unverified",
+      "note": "『ESP32を載せれば速くなる』は誤り。速度改善幅はホストのCPU/GPUと音声区間検出の実装に依存し、未実測。"
+    },
+    "asrQualityDecidesUsability": {
+      "value": "日本語ASRの精度と誤認識訂正の手間が実用性を決める。ウェイクワード検出（ESP32側）と ASR/LLM（ホスト側）は別物",
+      "status": "unverified",
+      "note": "residualMinutesPerOp は誤認識訂正・言い直しの残作業を表す仮定値。ここが大きいと音声化の効果は消える。"
+    }
+  },
+  "routes": [
+    {
+      "id": "esp32-satellite-local",
+      "label": "ESP32音声サテライト＋既存PC上のローカルLLM",
+      "kind": "satellite",
+      "priceVerify": "assumed",
+      "priceSource": "https://www.espressif.com/en/products/socs/esp32-p4",
+      "priceNote": "ESP32ボード＋マイク＋スピーカーで8,000円は仮定値。実売は未確認。ホストは既存PCを流用する前提で、その費用は計上していない。",
+      "gadgetYen": 8000,
+      "buildDays": 3,
+      "powerYenPerMonth": 200,
+      "residualMinutesPerOp": 0.6,
+      "residualNote": "ウェイクワード誤検出と言い直しの訂正（0.6分/件と仮定）。",
+      "voiceControl": true,
+      "localLLM": true,
+      "reuse": [
+        "ブース制作アプリの GAS 基盤（clasp 運用・コマンドキュー）から起動・ログ収集できる",
+        "既存PCを常時稼働のホストに流用できるなら追加のハード購入はゼロ"
+      ]
+    },
+    {
+      "id": "esp32-p4-standalone",
+      "label": "ESP32-P4 単体（オンデバイスLLM）",
+      "kind": "standalone-mcu",
+      "priceVerify": "assumed",
+      "priceSource": "https://www.espressif.com/en/products/socs/esp32-p4",
+      "priceNote": "ESP32-P4 評価ボード＋周辺で12,000円は仮定値。実売は未確認。",
+      "gadgetYen": 12000,
+      "buildDays": 5,
+      "powerYenPerMonth": 100,
+      "residualMinutesPerOp": 1.6,
+      "residualNote": "実用モデルが載らないため認識後の処理はクラウドへ落ち、聞き取り直しが頻発する前提（1.6分/件と仮定）。",
+      "voiceControl": true,
+      "localLLM": false,
+      "requirementFailReason": "ESP32-P4 は SRAM 768KB・PSRAM 最大32MB で、日本語の実用対話に耐えるLLMが載らない。LLMはLAN内ホストに置くしかなく、単体構成は『ローカルLLM』の必須要件を満たさない（認識後の処理はクラウドに落ちるため台帳の localLLM は false）。"
+    },
+    {
+      "id": "rpi5-local",
+      "label": "Raspberry Pi 5 ＋ whisper.cpp ＋ llama.cpp（完全ローカル）",
+      "kind": "sbc",
+      "priceVerify": "assumed",
+      "priceSource": "https://www.raspberrypi.com/products/raspberry-pi-5/",
+      "priceNote": "Pi 5 8GB＋ケース＋電源＋ストレージ＋マイクで20,000円は仮定値。為替・品薄で変動するため発注前に実売の確認が必要。",
+      "gadgetYen": 20000,
+      "buildDays": 4,
+      "powerYenPerMonth": 400,
+      "residualMinutesPerOp": 0.7,
+      "residualNote": "推論待ちと言い直しの訂正（0.7分/件と仮定）。",
+      "voiceControl": true,
+      "localLLM": true
+    },
+    {
+      "id": "minipc-local",
+      "label": "ミニPC（N100級）＋ ローカルLLM",
+      "kind": "minipc",
+      "priceVerify": "assumed",
+      "priceSource": "https://github.com/ggml-org/llama.cpp",
+      "priceNote": "ミニPC 45,000円＋マイク・スピーカー3,000円で48,000円は仮定値。実売は未確認。",
+      "gadgetYen": 48000,
+      "buildDays": 2,
+      "powerYenPerMonth": 1200,
+      "residualMinutesPerOp": 0.4,
+      "residualNote": "ホスト性能が高く待ち時間と訂正が小さい前提（0.4分/件と仮定）。",
+      "voiceControl": true,
+      "localLLM": true
+    },
+    {
+      "id": "cloud-voice-api",
+      "label": "クラウド音声API（現行延長・ローカルLLMなし）",
+      "kind": "cloud",
+      "priceVerify": "secondary",
+      "priceSource": "https://openai.com/api/pricing/",
+      "priceNote": "公式は音声トークン/分単位の従量。1操作あたり10円への換算は仮定。実額は操作の長さに依存する。",
+      "gadgetYen": 0,
+      "buildDays": 1,
+      "powerYenPerMonth": 0,
+      "residualMinutesPerOp": 0.5,
+      "residualNote": "認識誤りの訂正（0.5分/件と仮定）。",
+      "voiceControl": true,
+      "localLLM": false,
+      "requirementFailReason": "クラウドLLMをそのまま使うため、提案が目的とする『クラウドAPI呼び出しの削減』がゼロ。必須要件（ローカルLLM）を満たさない。"
+    },
+    {
+      "id": "esp32-cloud-bridge",
+      "label": "ESP32音声サテライト＋クラウドLLM（ローカルLLMなし）",
+      "kind": "satellite",
+      "priceVerify": "assumed",
+      "priceSource": "https://www.espressif.com/en/products/socs/esp32-p4",
+      "priceNote": "ESP32ボード＋マイク＋スピーカーで8,000円は仮定値。LLMはクラウドのため従量が別途かかる。",
+      "gadgetYen": 8000,
+      "buildDays": 2,
+      "powerYenPerMonth": 200,
+      "residualMinutesPerOp": 0.5,
+      "residualNote": "認識誤りの訂正（0.5分/件と仮定）。",
+      "voiceControl": true,
+      "localLLM": false,
+      "requirementFailReason": "音声前端は安価なESP32で満たすが、LLMはクラウドのままなのでクラウドAPI呼び出しは減らない。必須要件（ローカルLLM）を満たさない。"
+    }
+  ]
+}

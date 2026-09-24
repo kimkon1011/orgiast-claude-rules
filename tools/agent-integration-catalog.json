@@ -1,0 +1,99 @@
+{
+  "version": 1,
+  "updatedAt": "2026-09-19",
+  "domains": [
+    { "key": "inquiry", "label": "問い合わせ処理" },
+    { "key": "transaction", "label": "取引補助" },
+    { "key": "internal", "label": "社内運用" }
+  ],
+  "processes": [
+    {
+      "id": "inquiry-ai-news",
+      "domain": "inquiry",
+      "name": "AIニュースの収集→提案化→採否判定",
+      "manualRemainder": "採否の最終判断（人の1クリック）",
+      "owner": { "kind": "artifact", "path": "tools/ai-news-triage.mjs" },
+      "evidence": "ai-news-triage.mjs が ai-news-proposals.jsonl を読み、LLM 判定結果を next-session.md の残TODO に追記する"
+    },
+    {
+      "id": "inquiry-manual-lookup",
+      "domain": "inquiry",
+      "name": "社内マニュアル（Growi）の問い合わせ対応",
+      "manualRemainder": "質問文の作成",
+      "owner": { "kind": "artifact", "path": "skills/growi-fetch/SKILL.md" },
+      "evidence": "growi-fetch スキルが Growi の社内マニュアルを検索・取得する"
+    },
+    {
+      "id": "inquiry-schedule",
+      "domain": "inquiry",
+      "name": "日程調整・空き時間の回答",
+      "manualRemainder": "最終の確定連絡",
+      "owner": { "kind": "external", "ref": "~/.claude/skills/secretary-schedule" },
+      "evidence": "kim 環境のローカルスキルとしては存在するが、本リポジトリ（配布ミラー）には含まれないため、本リポジトリからは検証できない"
+    },
+    {
+      "id": "inquiry-staff-survey",
+      "domain": "inquiry",
+      "name": "社員への一斉問い合わせと回答回収",
+      "manualRemainder": "回答が揃わない場合の督促",
+      "owner": { "kind": "external", "ref": "~/.claude/skills/secretary-ask" },
+      "evidence": "kim 環境のローカルスキルとしては存在するが、本リポジトリ（配布ミラー）には含まれないため、本リポジトリからは検証できない"
+    },
+    {
+      "id": "inquiry-booth-feedback",
+      "domain": "inquiry",
+      "name": "ブース案件のフィードバック取込",
+      "manualRemainder": "内容の最終確認",
+      "owner": { "kind": "artifact", "path": "tools/booth-feedback-intake.mjs" },
+      "evidence": "booth-feedback-intake.mjs がブース案件のフィードバックを取り込む"
+    },
+    {
+      "id": "inquiry-estimate-request",
+      "domain": "inquiry",
+      "name": "見積依頼の受付〜見積書作成",
+      "manualRemainder": "型番・数量の聞き取りから送付まで全工程が人手",
+      "owner": { "kind": "manual" },
+      "evidence": "本リポジトリに対応する自動化資産が無い"
+    },
+    {
+      "id": "transaction-meishi-order",
+      "domain": "transaction",
+      "name": "名刺の発注",
+      "manualRemainder": "発注内容の最終承認",
+      "owner": { "kind": "artifact", "path": "skills/meishi-order/SKILL.md" },
+      "evidence": "meishi-order スキルが名刺の発注手続きを実行する"
+    },
+    {
+      "id": "transaction-aujust-proni-sync",
+      "domain": "transaction",
+      "name": "aujust リードの PRONI 同期",
+      "manualRemainder": "不明（外部リポジトリのため本リポジトリからは未確認）",
+      "owner": { "kind": "external", "ref": "kimkon1011/aujust-sales-automation" },
+      "evidence": "外部リポジトリに自動化資産があるが本リポジトリからは検証できない"
+    },
+    {
+      "id": "transaction-purchase-order",
+      "domain": "transaction",
+      "name": "購買部の受発注処理",
+      "manualRemainder": "発注起票から検収まで全工程が人手",
+      "owner": { "kind": "manual" },
+      "evidence": "本リポジトリに対応する自動化資産が無い"
+    },
+    {
+      "id": "internal-auto-session",
+      "domain": "internal",
+      "name": "夜間の自動セッション実行",
+      "manualRemainder": "マージ判断（自動マージ条件の設計）",
+      "owner": { "kind": "artifact", "path": "tools/auto-session.mjs" },
+      "evidence": "auto-session.mjs が夜間の自動セッションを起動・管理する"
+    },
+    {
+      "id": "internal-handoff-audit",
+      "domain": "internal",
+      "name": "セッションの手渡し監査",
+      "manualRemainder": "監査結果の是正",
+      "owner": { "kind": "artifact", "path": "tools/handoff-audit-nightly.mjs" },
+      "evidence": "handoff-audit-nightly.mjs がセッションの手渡し状況を監査する"
+    }
+  ]
+}

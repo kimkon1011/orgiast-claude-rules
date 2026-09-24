@@ -1,0 +1,20 @@
+{
+  "updatedAt": "2026-09-20",
+  "assumptions": { "fixMinutesPerFailure": 3, "tasksPerMonth": 100, "hourlyYen": 3000, "selfWriteMinutes": 10, "paybackMonthsTarget": 3, "noiseBand": 0.10, "usdJpy": 150 },
+  "products": [
+    { "id": "generic-pack", "name": "汎用プロンプト集（ロール付与・一般論型）", "variant": "pack", "priceYen": 3980, "priceBandYen": [1000, 30000], "priceVerify": "assumed", "note": "価格帯は市場観察に基づく想定値。個別商品の実売価格を確認したものではない。" },
+    { "id": "workflow-pack", "name": "業務ロジック埋め込み型プロンプト", "variant": "workflow", "priceYen": 29800, "priceBandYen": [5000, 300000], "priceVerify": "assumed", "note": "同上。導入支援込みの価格帯を含む。" }
+  ],
+  "models": [
+    { "id": "groq-gpt-oss-120b", "provider": "groq", "model": "openai/gpt-oss-120b", "params": { "reasoning_effort": "low" } },
+    { "id": "deepseek-chat", "provider": "deepseek", "model": "deepseek-chat" }
+  ],
+  "tasks": [
+    { "id": "minutes-decisions", "category": "抽出", "input": "9/18 定例議事録\n・佐藤: 見積書の再提出が必要。9/25まで。\n・田中: 在庫確認を9/22までに実施。\n・鈴木: 来週の展示会は参加見送りで合意。", "plainAsk": "次の議事録から決定事項をまとめてください。", "workflowSpec": "次の議事録から決定事項だけを抽出し、JSONで出力してください。\n出力契約: {\"decisions\":[{\"owner\":\"<担当者>\",\"due\":\"<M/D>\"}]} 以外の文字列を出力しないこと。\n規則: 「決定事項」以外（見送り・合意のみの行）は含めない。並び順は議事録の登場順。", "expect": { "type": "json_path", "value": { "decisions": [{ "owner": "佐藤", "due": "9/25" }, { "owner": "田中", "due": "9/22" }] } } },
+    { "id": "inquiry-routing", "category": "分類", "input": "お問い合わせ本文:\n「先月ご請求いただいた請求書の金額が、こちらの発注書と一致していません。至急ご確認ください。なお、先週から管理画面のログインもできない状態です。」", "plainAsk": "次のお問い合わせを、請求 / 技術 / 営業 / その他 のどれか1つに分類してください。", "workflowSpec": "次のお問い合わせを 請求 / 技術 / 営業 / その他 の1語だけに分類してください。\n出力契約: 上記4語のうち1語のみを出力し、他の文字列・記号・説明を一切出力しないこと。\n規則: 複数に該当する場合は 請求 > 技術 > 営業 > その他 の優先順で1つに決める。", "expect": { "type": "enum", "values": ["請求", "技術", "営業", "その他"], "equal": "請求" } },
+    { "id": "sales-top3", "category": "整形", "input": "商品A,98000\n商品B,98000\n商品C,120000\n商品D,45000", "plainAsk": "次の売上データから上位3件を出してください。", "workflowSpec": "次のCSVから売上上位3件を出力してください。\n出力契約: 1行1件で「商品名,金額円」の形式。金額は3桁カンマ区切り+「円」。ヘッダ行・説明・コードフェンスは出力しないこと。\n規則: 金額の降順。同額の場合は商品名の五十音順（昇順）。", "expect": { "type": "exact_lines", "value": ["商品C,120,000円", "商品A,98,000円", "商品B,98,000円"] } },
+    { "id": "voice-exclusion", "category": "抽出+除外", "input": "・応答が遅い\n・説明が分かりにくい\n・(対応済み) ログイン不具合\n・料金が高い", "plainAsk": "次のお客様の声から改善要望を抽出してください。", "workflowSpec": "次の箇条書きから改善要望のみを抽出してください。\n出力契約: JSON配列（文字列の配列）のみを出力すること。前後に説明を付けない。\n規則: 行頭に「(対応済み)」が付く行は除外する。それ以外の行は原文のまま（先頭の「・」と空白は除く）。並び順は原文順。", "expect": { "type": "json_path", "value": ["応答が遅い", "説明が分かりにくい", "料金が高い"] } },
+    { "id": "company-normalize", "category": "表記ゆれ", "input": "(株)山田製作所\n株式会社山田製作所\n山田製作所㈱\n(株)鈴木工業", "plainAsk": "次の会社名の表記をそろえてください。", "workflowSpec": "次の会社名の表記を統一してください。\n出力契約: 1行1社。余計な説明・見出し・コードフェンスは出力しないこと。\n規則: 法人格は「株式会社」に統一し、必ず社名の前に置く。同じ会社は1行にまとめる。並び順は初出順。", "expect": { "type": "exact_lines", "value": ["株式会社山田製作所", "株式会社鈴木工業"] } },
+    { "id": "summary-constraint", "category": "制約付き要約", "input": "オージャストの第2四半期決算は、売上高が前年同期比12%増の1億2000万円となった。ブース制作が好調で、受注件数は前年同期の48件から61件に増えた。一方で、資材費の高騰により営業利益率は前年同期の8.1%から6.4%に低下した。", "plainAsk": "次の文章を要約してください。", "workflowSpec": "次の文章を要約してください。\n出力契約: 120文字以内の1文のみ。改行・箇条書き・見出しは禁止。\n規則: 必ず「オージャスト」を1回含めること。必ず金額（「1億2000万円」）を含めること。", "expect": { "type": "constraints", "maxChars": 120, "containsAll": ["オージャスト", "1億2000万"], "noNewline": true } }
+  ]
+}

@@ -1,0 +1,110 @@
+[
+  {
+    "pattern": "Google 系プロパティ(GA4/Search Console/GTM)の有無確認",
+    "route": "DWD サービスアカウント(kim impersonate)で analyticsadmin/webmasters/tagmanager API を直接照会（tools/google-property-check.mjs、読み取り専用・追加権限不要）。Claude 履歴の Grep は証拠にならない。分類器で止まるなら『未確認』と書く。**2026-09-20 実測**: GA4 ok(accounts 17) / Search Console ok(sites 12) は追加作業ゼロで通る。**GTM だけ errorKind=scope_not_delegated(unauthorized_client)** = Admin Console の DWD に tagmanager.readonly が未登録。GTM を読む場合のみ kim の1アクション（Admin Console → ドメイン全体の委任 → SA client_id に scope 追加）が要る",
+    "confidence": "high",
+    "source": "2026-09-10 TETSUKO Search Console 誤判定 / 2026-09-20 実測"
+  },
+  {
+    "pattern": "Search Console の所有者追加",
+    "route": "API でのユーザー追加は無い（searchconsole v1 に user/permission の resource が存在しない）。siteVerification API の getToken でトークン発行まではできるが、insert は検証を試みるだけで、トークンをサイトに置くのは配信している側の作業＝手渡しであり kim 操作ゼロにはならない。同一データが見えるのは同一プロパティ識別子のときだけ（URLプレフィックス型とドメイン型は別プロパティ＝別データ）。検証で得られるのは SITE_OWNER＝権限昇格なので、読み取り目的なら過剰",
+    "confidence": "high",
+    "source": "2026-09-10 起票 / 2026-09-19 Google Discovery 一次証拠で検証・是正"
+  },
+  {
+    "pattern": "社内・グループ会社・スタッフ宛の連絡文",
+    "route": "Gmail 下書きにしない。チャット本文に宛先/用件/本文を完成形で表示（kim はリモートデスクトップ/LINE/Discord で渡す）。Discord MCP が使えるなら Discord 送信可。**2026-09-22 実測**: 強制は `tools/internal-recipient-gmail-guard.mjs`（PreToolUse / matcher=`mcp__claude_ai_Gmail(?:_\\d+)?__(create_draft|send_message|update_draft|reply|forward)`、settings.json:475、台帳=`~/.claude/internal-recipients.json`→無ければ default の orgiast.jp/toho-kogyo.com + 明示4件）。経理(keiri.orgiast@gmail.com)宛 create_draft=**deny**・外部宛=pass・テスト14/14 pass を実測。**穴1**: claude.ai コネクタが無効な APIキー環境（`claude mcp list`=gemini-cli のみ）では MCP ツール自体が無く**発火しない**。**穴2（2026-09-22 一部解消）**: Bash 経由の Gmail REST は matcher 外で素通り。常設の下書き作成ツールが無かったが、`tools/gmail-draft.mjs`（2026-09-22 新設）が `loadLedger`/`isInternal` を取り込み**ツール内で内部宛を遮断**し、Gmail API を呼ばずチャット形式を出して exit 3 で止まる（実測: keiri.orgiast@gmail.com 宛で通信ゼロ・テスト20/20 pass）。ただし自分でアドホックなコードを書けば依然素通りする。**穴3**: 台帳に無いフリーメールの社内スタッフは素通り（drivers の追加は人の手）。未確認: コネクタ有効環境での実発火、書き込み系ツール名の全リスト",
+    "confidence": "high",
+    "source": "2026-09-11 kim 厳命 / 2026-09-22 実測（handoff-audit:57eef0336eb2bedd。詳細 docs/internal-staff-chat-display-verification.md）"
+  },
+  {
+    "pattern": "共有アカウント(seisaku-team)からの Gmail 下書き作成",
+    "route": "**可能・追加設定ゼロ・kim の手作業ゼロ**。`tools/gmail-draft.mjs`（2026-09-22 新設）が DWD で seisaku-team@orgiast.jp を impersonate して `drafts.create`（scope=gmail.compose）。SA キー既定は aujust-sales-automation/.gcp/sheets-sa.json、依存パッケージなし。`node tools/gmail-draft.mjs --check` で権限だけを非破壊に確認（Gmail API を呼ばない）。**2026-09-22 実測**: seisaku-team で gmail.readonly / **gmail.compose** / **gmail.send** の3スコープすべてトークン発行成功＝DWD 委任済みで Admin Console 操作は不要。「MCP が無い＝下書きが作れない」は誤読で、DWD 経路は既に通っていた。内部宛(orgiast.jp/toho-kogyo.com/台帳)はツール内で遮断し API を呼ばずチャット形式を出して exit 3。`--delete <id>` は下書きのみ（送信済みは消せない）。送信 API は実装していない（gmail.send は委任済みだが承認範囲外）。**2026-09-22 実測で確定**: `drafts.create` の実 HTTP は成功（id=r1697484905697154238 / `in:drafts subject:verify` の読み戻しで DRAFT ラベル・宛先・件名・本文一致 / `--delete` で削除済み・残留ゼロ）。送信 API は引き続き未実装・未実行。詳細 docs/shared-account-gmail-draft-route.md, docs/approval-completion-checkin-email-route.md",
+    "confidence": "high",
+    "source": "2026-09-22 実測（handoff-audit:e2715c224377adaa。--check のトークン発行成功 + テスト20/20 + 内部宛の実アドレス遮断） + 2026-09-22 実測（handoff-audit:f59a211cc367f15d。drafts.create の実 HTTP 成功・読み戻し・削除まで確定）"
+  },
+  {
+    "pattern": "Drive にファイル/Sheet を作る",
+    "route": "SA 直では quota 0 で失敗。DWD で kim を impersonate（subject）して作成",
+    "confidence": "high",
+    "source": "2026-06-29 feedback-sa-drive-dwd-pattern"
+  },
+  {
+    "pattern": "Discord チャンネル ID が要る",
+    "route": "user に聞かず tools/discord-channel-id.mjs で台帳から取得",
+    "confidence": "high",
+    "source": "§2.6.1"
+  },
+  {
+    "pattern": "API キー/接続文字列/ID が要る",
+    "route": "過去 transcript・.env.local・production bundle・keyserve から復元。user に再聞き禁止",
+    "confidence": "high",
+    "source": "feedback-credentials-never-reask-universal"
+  },
+  {
+    "pattern": "GAS の関数実行が要る",
+    "route": "clasp run / コマンドキュー経由で Claude 側から実行。『▶実行してください』は違反",
+    "confidence": "high",
+    "source": "§1.4"
+  },
+  {
+    "pattern": "permission 分類器で自動経路が止まった",
+    "route": "推測で結論を出さない。『未確認』＋user 作業なしの代替案を提示。恒久策は settings.json の許可ルール/DWD スコープ追加を kim に1回だけ提案。**ただし『外部 API が使えない』と一般化しない**: 2026-09-20 実測では defaultMode=auto でも node -e fetch / curl / WebFetch(googleapis) / node tools/* の読み取り照会は 4 経路すべて拒否なしで通った。拒否はホスト名ではなく操作カテゴリ（Credential Exploration / Materialization / Permission Grant / Production Deploy / Merge Without Review 等）に対して起きる。まず読み取りで直接照会を試し、止まったらその操作だけを最小単位に分解する。許可を広げる変更は分類器 [Permission Grant]/[Self-Modification] で止まるので人が行う",
+    "confidence": "high",
+    "source": "2026-09-10 起票 / 2026-09-20 実測で範囲を確定（docs/classifier-denial-external-api-route.md）"
+  },
+  {
+    "pattern": "Drive 上の旧版ファイルをゴミ箱へ",
+    "route": "**検出は Claude 側で可能 / 削除だけは classifier が拒否（2026-09-20 実測）**。検出=DWD(kim impersonate / drive スコープ)で Drive API v3 `files.get`/`files.list`（`tools/lib/drive-auth.mjs` の `getDriveToken`/`driveApi`）。**落とし穴: 委任済みスコープは `https://www.googleapis.com/auth/drive` のみ。`drive.readonly` を要求するとトークン交換の時点で `unauthorized_client`**（Admin Console の DWD 未登録）。trash（PATCH `{\"trashed\":true}`）は同カテゴリの連続で拒否（[Cloud Storage Mass Delete]×2・[Modify Shared Resources]×1）＝**削除候補を列挙するだけの読み取り専用スクリプトでも同カテゴリで拒否された**。恒久策は settings.json への許可ルール追加を kim が1回行うこと（分類器 [Permission Grant] のため Claude は自己追加不可）。**削除が不要な用件では手渡ししない**: 「どのファイルが旧版か」の特定までは Claude が済ませ、対象 ID・名前・親フォルダを完成形で提示する（`capabilities.canTrash` も API で確認できる）",
+    "confidence": "high",
+    "source": "2026-09-20 実測（handoff-audit:64cb59ef6fe88486）。元の手渡しは 2026-09-18 セッション 009374eb「③ 旧版2つ（暫定版・確定版）をゴミ箱へ（削除は classifier に阻まれ…）」で、その記述は本実測で裏付けられた"
+  },
+  {
+    "pattern": "Drive 上の資料から画像を抽出する",
+    "route": "Drive MCP の read_file_content は不要。DWD(kim impersonate / drive scope) で Drive API v3 を直に叩く。画像ファイルと PDF は files.get?alt=media、Google Doc は files.export?mimeType=application/zip の images/*、Slides は pptx export の ppt/media/* を **中央ディレクトリ経由**で取り出す（export zip はストリーミング形式でローカルヘッダのサイズが 0 のため、ローカルヘッダ走査では中身が取れない）。Slides の image/png export は 400 非対応、Docs API は本 SA プロジェクトで無効(403)",
+    "confidence": "high",
+    "source": "2026-09-20 実測: Doc「支柱を作ってほしい」images/image1.jpg 60439B(ffd8ff) / Slides ppt/media/image1.jpg 5957B(ffd8ff) / JPEG 単体 69615B / PDF %PDF-"
+  },
+  {
+    "pattern": "外部顧客宛の訂正メール送信要否",
+    "route": "**Gmail MCP は本環境に無い（mcpServers=gemini-cli のみ）が、DWD 経由の読み取りは既存ツールで通る**。`node tools/gmail-search.mjs --user seisaku-team@orgiast.jp --query \"<検索式>\" [--body]`（`tools/lib/drive-auth.mjs` の `getDriveToken({scope:'https://www.googleapis.com/auth/gmail.readonly', impersonate:user})`）。**落とし穴: `--user kim@orgiast.jp` では 0 件**。学会協賛ナビの顧客メールは seisaku-team@ から送信されており、既定値（--user 省略時）が正しい。`gmail.readonly` は DWD 委任済みで素通りした（`drive.readonly` が unauthorized_client で落ちたのとは対照的）。**要否は推測せず送信済み本文を実物で読んで判定する**: 2026-09-18 の AnnJi 宛 1 通（id 1a0b3fb255d272dd, SENT）だけが同一メール内で和文30%・英文15%と矛盾しており、同種の他2通（genodive/boehringer）は 30% で正しかった＝影響範囲は 1 通 1 名。誤りは顧客に有利な方向（15%<30%）なので**要**と判定。訂正下書き（id 1a0b41220fd4a5d7, DRAFT・未送信）が完成済みで存在する。**送信はしない**（本レーンの禁止事項）。送信操作の分類器通過可否は未確認",
+    "confidence": "high",
+    "source": "2026-09-20 実測（handoff-audit:06b13bfb2a89b62b）。元の手渡しは 2026-09-18 セッション e03135bc「AnnJi 宛1通のみ末尾英文が旧料率15%のまま…訂正メールの下書きを作成して手渡した」。詳細は docs/gmail-correction-email-necessity.md"
+  },
+  {
+    "pattern": "DWD 委任スコープの追加（Admin Console のドメイン全体の委任に scope を足す）",
+    "route": "API 不可。admin/directory_v1 の Discovery を実測すると resources に delegation が無く、DWD のスコープ一覧を変更する公開 API は存在しない（2026-09-20 実測。isDelegatedAdmin は管理者ロールの話で別物）＝Admin Console は人にしかできない。**ただし手渡しリストに載せる前に必須性を判定する**: 『GTM を読む予定があれば』等の任意項目は、委任済みスコープで目的が既に達成されているなら載せない（docs/memory に『必要になったら』として残すだけ）。①Claude に実行可能か ②目的に必須か、の両方 Yes のときだけ手渡しする",
+    "confidence": "high",
+    "source": "2026-09-20 handoff-regret-gate 実測 / memory feedback-optional-handoff-manufactures-work"
+  },
+  {
+    "pattern": "Google スプレッドシートの書き込み結果検証",
+    "route": "**既存権限で読み戻せる。kim に画面を見せて確認させる必要はない**（実測 2026-09-21）。対象 SS が SA に共有されていれば **SA 直**（key=`aujust-sales-automation/.gcp/sheets-sa.json`, scope=`https://www.googleapis.com/auth/spreadsheets.readonly`）で JWT を自己署名 → ① `GET /v4/spreadsheets/{id}?fields=properties.title,sheets.properties` でタブ名/gid/行列数、② `GET /v4/spreadsheets/{id}/values/{tab}!A1:BZ400?valueRenderOption=UNFORMATTED_VALUE` で全行。**検証は4点**: (a) 1行目が空白で2行目がヘッダーか (b) 書き込み行がヘッダー直下(3行目)に来ているか (c) 案件名列に重複が出ていないか (d) 列マッピング（ヘッダーごとの充足数 `filledPerCol` を出し、意図した列だけ埋まっているか）。**アプリ投入行の識別は「ステータス列が空 かつ 非空セルが 案件名+担当 の2つだけ」**（実装が deal_title / sales_owner / event_date しか書かないため。空欄列を空のままにするのが仕様）。**落とし穴: 「案件名の重複行がある」＝重複防止の失敗とは限らない。**同名でも担当・コマサイズが別の実案件がありうる（実測: デザイナー様用 行21/23 の `260120ESSEN_ＥＳキッチン株式会社様` は担当も平米数も別の2件）。重複防止は案件名の**完全一致**なので、同名別案件が2件あると3件目が `already` で弾かれる（正規化なし＝表記ゆれがあると逆に重複が増える）。判定は重複の有無ではなく**行の中身が別物か**で行う。実測スクリプト: `~/.claude/auto-session/runs/2026-09-21-11-sheets-sync-verify.mjs` / `2026-09-21-11-sheets-dup-probe.mjs`",
+    "confidence": "high",
+    "source": "2026-09-21 実測（handoff-audit:14f2bd38e35a58ce）。元の手渡しは 2026-09-18 セッション dd676e9e「Reブース案件を1件開いて、実際の運用に合っているか見てください」。詳細は docs/sheets-write-verification.md"
+  },
+  {
+    "pattern": "本番UIの動作確認を kim に目視依頼",
+    "route": "**到達性・描画・文言は Claude 側で完結する。認証後の画面だけは無人会話の範囲外**（実測 2026-09-22）。手順=①`curl -sS -o /dev/null -w \"%{http_code} %{redirect_url}\"` で本番 URL を1本叩く（aujust-sales-automation.vercel.app は `/` `/cases` `/api/*` すべて 307→/login を実測）。②`playwright-core`（このPCは `~/.claude/tools/node_modules/playwright-core`）＋ `%LOCALAPPDATA%\\ms-playwright\\chromium-*\\chrome-win64\\chrome.exe` を `executablePath` に渡し headless 描画。実測で login 画面の title/本文/入力欄/ボタン/スクショ(37,818B) まで取得＝**「開いて目視」の到達性確認は kim 不要**。③認証は magic link と Google OAuth の2経路のみで、無人会話では踏めない（リンク要求はメール送信＝禁止、OAuth は対話同意）。**認証後画面の描画は未確認と書く。**④論点が「運用に合っているか」＝列マッピングの正しさなら UI ではなくデータの話なので Sheets/DWD 読み戻しで判定する（`14f2bd38e35a58ce` で実証）。⑤描画そのものが論点の時だけ Playwright + `storageState`（アプリ側 e2e の auth state）を使う。**落とし穴**: Windows絶対パスは ESM 動的 import に直接渡せない（`ERR_UNSUPPORTED_ESM_URL_SCHEME: c:` → `pathToFileURL().href`）、`playwright-core` は CJS なので名前空間に `chromium` が無く `default.chromium` になる場合がある、Chromium 実体は `chrome-win64/chrome.exe`。再現: `~/.claude/auto-session/runs/2026-09-22-7-prod-ui-probe.mjs`。詳細: docs/prod-ui-visual-verification.md",
+    "confidence": "high",
+    "source": "2026-09-22 実測（handoff-audit:408e4194471c4ab7）。元の手渡しは 2026-09-18 セッション dd676e9e「https://aujust-sales-automation.vercel.app の Reブース案件を1件開いて、実際の運用に合っているか見てください」。詳細は docs/prod-ui-visual-verification.md"
+  },
+  {
+    "pattern": "バックグラウンド再生成の進捗待ち（証拠なしに背景ジョブの状態を断定して待たせる）",
+    "route": "待たない。長時間ジョブは前景で --timeout を切って回し切るか、実行基盤（GitHub Actions/タスクスケジューラ/auto-session 再入）に載せる。進捗は ~/.claude/executor-usage.jsonl（status/out/timedOut/secs/cwd）や `gh run view` 等の一次情報を直接照会し、照会できなければ「未確認」と書いて断定も確率表現もしない（監査基準 rule 4）。待ちは ~/.claude/next-session.md の残TODO先頭に「検証のみ1行」を足して次セッションで確認する。セッションを開いたまま「バックグラウンド実行中」と報告しない（2026-09-22 実測: codex-do.mjs は前景・単発で背景起動/進捗照会/待機の機能を持たない。docs/background-progress-wait-route.md）",
+    "confidence": "high",
+    "source": "2026-09-22 handoff-audit:64119511293ffa00"
+  },
+  {
+    "pattern": "PRONI再スクレイピングの同期不具合調査・修正方針の提示（同期失敗をコード側の問題と決めつけ、判断をuserに選ばせる）",
+    "route": "調査は Claude 側で完結し、user へ渡さない。①症状は GitHub Actions の一次情報で取る（`gh run list -R kimkon1011/aujust-sales-automation --limit 15 --json workflowName,conclusion,createdAt,databaseId,headSha` → 失敗は `gh run view <databaseId> --log-failed`。name を持たない workflow は `--workflow=\"proni-messages.yml\"` のように**ファイル名**で引く。表示名で引くと `could not find any workflows named …` で落ちる）②コード側の修復状況は `gh api \"repos/.../commits?since=…\"` と `gh pr view <N> --json title,state,mergedAt,body,files` で確定（PR本文に未適用migrationと検証残が書かれている）③DB側の適用状況は `gh run list --workflow=\"DB Migrate\"` と `gh secret list` で別系統として確認＝「コードは緑・DBは赤」を判別④実装だけを codex-do.mjs（前景・単発）へ渡し、検証は `gh run` の緑で行う⑤照会できない項目は「未確認」と書く（rule 4）。設計判断（(a)(b)どちらで直すか等）は rule 3 の4理由に該当しないため user に選ばせず Claude が決める（2026-09-22 実測: 元セッションは kim に選択を依頼した後、同じセッション内で自分で決めて実装させていた。残存真因は本番DB migration 未適用＝`SUPABASE_DB_URL` secret 不在で `DB Migrate` が `##[error]SUPABASE_DB_URL secret が未設定です` で失敗し続け、PR #114 a113d05 の修正が効かない状態だった。docs/proni-sync-troubleshoot-route.md）",
+    "confidence": "high",
+    "source": "2026-09-22 handoff-audit:15a5d2433a7f91bc"
+  },
+  {
+    "pattern": "恒久修正を設計のみで次セッションへ送る",
+    "route": "恒久修正は当ターン内に実装まで終える。next-session.md に設計だけを積んで次セッションへ送らない（配布待ち・マージ待ち・fork 制約は未着手の理由にならない）。実装は codex-do.mjs を前景・単発で回し（--prompt-file / --cwd / --timeout）、WSL 不在で codex 経路が起動しない PC では内蔵フォールバック(Gemini/DeepSeek)→不可なら Claude 直で実装する。GitHub は gh CLI で fork→PR→CI green→gh pr merge まで当ターンで進め、user にはマージ1回だけを残す。実装できなかった場合は残作業を1行で記録し、断定で『完了』と書かない。",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:13755f2bc1e6504a87e553bf97fc9c06c4b4ded1a18bf449252fe56ac0f03553"
+  }
+]

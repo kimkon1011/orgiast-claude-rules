@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "updatedAt": "2026-09-19",
+  "assumptions": {
+    "vramBytesPerElement": { "value": 2, "verify": "assumed", "note": "KVキャッシュの要素あたりバイト数。実測ではない" },
+    "runtimeOverheadRatio": { "value": 0.1, "verify": "assumed", "note": "LLMランタイムの重み比overhead。実測ではない" },
+    "usableVramRatio": { "value": 0.9, "verify": "assumed", "note": "物理VRAMのうち推論に使える割合。実測ではない" },
+    "osVramReserveGB": { "value": 0.8, "verify": "assumed", "note": "OS等の予約領域。実測ではない" },
+    "diffusionOverheadRatio": { "value": 0.15, "verify": "assumed", "note": "画像生成ランタイムの追加領域比率。実測ではない" },
+    "vaeTileThresholdGB": { "value": null, "verify": "assumed", "note": "自動VAE tiling閾値はバックエンド依存のため未設定" },
+    "offloadSpeedPenaltyMin": { "value": 0.05, "verify": "assumed", "note": "offload時の速度倍率の下限。実測ではない" },
+    "offloadSpeedPenaltyMax": { "value": 0.2, "verify": "assumed", "note": "offload時の速度倍率の上限。実測ではない" },
+    "fp8VramRatio": { "value": 0.6, "verify": "assumed", "note": "fp16比の推定VRAM係数。実測ではない" },
+    "nf4VramRatio": { "value": 0.45, "verify": "assumed", "note": "fp16比の推定VRAM係数。実測ではない" }
+  },
+  "quants": [
+    { "id": "q4_k_m", "label": "Q4_K_M", "bitsPerWeight": 4.8, "qualityImpact": "medium", "verify": "assumed", "source": "", "note": "代表的な4bit量子化。係数は推定" },
+    { "id": "q8_0", "label": "Q8_0", "bitsPerWeight": 8.5, "qualityImpact": "low", "verify": "assumed", "source": "", "note": "8bit量子化。係数は推定" },
+    { "id": "f16", "label": "F16", "bitsPerWeight": 16.0, "qualityImpact": "none", "verify": "assumed", "source": "", "note": "品質比較の基準" },
+    { "id": "nf4", "label": "NF4", "bitsPerWeight": 4.5, "qualityImpact": "high", "verify": "assumed", "source": "", "note": "画像生成で使われる4bit。LLM量子化より品質影響を大きく扱う" }
+  ],
+  "gpus": [
+    { "id": "rtx-3060-12", "name": "GeForce RTX 3060 12GB", "vramGB": 12, "specVerify": "assumed", "source": "", "note": "公知スペック・出典URL未取得（要確認）" },
+    { "id": "rtx-4060ti-16", "name": "GeForce RTX 4060 Ti 16GB", "vramGB": 16, "specVerify": "assumed", "source": "", "note": "公知スペック・出典URL未取得（要確認）" },
+    { "id": "rtx-4090-24", "name": "GeForce RTX 4090 24GB", "vramGB": 24, "specVerify": "assumed", "source": "", "note": "公知スペック・出典URL未取得（要確認）" },
+    { "id": "none-cpu-only", "name": "GPUなし（CPUのみ）", "vramGB": 0, "specVerify": "assumed", "source": "", "note": "GPUなし=CPU実行の基準線" }
+  ],
+  "models": [
+    { "id": "llama-3.1-8b", "name": "Llama-3.1-8B-Instruct", "paramsB": 8, "activeParamsB": null, "layers": 32, "kvHeads": 8, "headDim": 128, "nativeContextTokens": 131072, "shapeVerify": "assumed", "shapeSource": "", "note": "公知スペック・出典URL未取得（要確認）" },
+    { "id": "mistral-7b", "name": "Mistral-7B-Instruct-v0.3", "paramsB": 7, "activeParamsB": null, "layers": 32, "kvHeads": 8, "headDim": 128, "nativeContextTokens": 32768, "shapeVerify": "assumed", "shapeSource": "", "note": "公知スペック・出典URL未取得（要確認）" },
+    { "id": "llama-3.1-70b", "name": "Llama-3.1-70B-Instruct", "paramsB": 70, "activeParamsB": null, "layers": 80, "kvHeads": 8, "headDim": 128, "nativeContextTokens": 131072, "shapeVerify": "assumed", "shapeSource": "", "note": "Llama-3.3-70B相当の構成を仮定。出典URL未取得（要確認）" },
+    { "id": "mixtral-8x7b", "name": "Mixtral-8x7B-Instruct", "paramsB": 46.7, "activeParamsB": 12.9, "layers": 32, "kvHeads": 8, "headDim": 128, "nativeContextTokens": 32768, "shapeVerify": "assumed", "shapeSource": "", "note": "VRAMは総パラメータ、速度はactiveParamsBに依存。公知スペック・出典URL未取得（要確認）" }
+  ],
+  "diffusionModels": [
+    { "id": "sd15", "name": "Stable Diffusion 1.5", "baseVramGB": 2.8, "vramPerMegapixelGB": 1.2, "precisionOptions": ["fp16", "fp8", "nf4"], "verify": "assumed", "source": "", "note": "512x512・fp16・batch1基準の推定係数。実測ではない" },
+    { "id": "sdxl", "name": "Stable Diffusion XL", "baseVramGB": 6.5, "vramPerMegapixelGB": 2.8, "precisionOptions": ["fp16", "fp8", "nf4"], "verify": "assumed", "source": "", "note": "512x512・fp16・batch1基準の推定係数。実測ではない" },
+    { "id": "flux1-dev", "name": "FLUX.1-dev", "baseVramGB": 14, "vramPerMegapixelGB": 4.5, "precisionOptions": ["fp16", "fp8", "nf4"], "verify": "assumed", "source": "", "note": "512x512・fp16・batch1基準の推定係数。実測ではない" }
+  ],
+  "qualityFallbacks": [
+    { "id": "cpu-offload", "label": "CPU offload / sequential offload", "qualityImpact": "none", "speedImpact": "大（転送待ち）", "trigger": "GPU VRAM不足時に重みをCPUへ退避", "verify": "assumed", "source": "", "appliesTo": ["llm", "diffusion"], "note": "出力精度を変えず、GPU上の常駐量だけを減らす" },
+    { "id": "attention-slicing", "label": "Attention slicing", "qualityImpact": "none", "speedImpact": "中", "trigger": "attention作業領域が不足", "verify": "assumed", "source": "", "appliesTo": ["llm", "diffusion"], "note": "分割計算でピークVRAMを下げる" },
+    { "id": "vae-tiling", "label": "VAE tiling", "qualityImpact": "none", "speedImpact": "中", "trigger": "VAE処理のピークVRAM不足", "verify": "assumed", "source": "", "appliesTo": ["diffusion"], "note": "タイル処理でピークVRAMを下げる" },
+    { "id": "precision-downgrade-fp8", "label": "fp16→fp8精度降格", "qualityImpact": "low", "speedImpact": "環境依存", "trigger": "無劣化退避後もVRAM不足", "verify": "assumed", "source": "", "appliesTo": ["llm", "diffusion"], "note": "数値精度を下げるため画質に影響し得る" },
+    { "id": "precision-downgrade-nf4", "label": "fp8→NF4精度降格", "qualityImpact": "high", "speedImpact": "環境依存", "trigger": "fp8でもVRAM不足", "verify": "assumed", "source": "", "appliesTo": ["llm", "diffusion"], "note": "4bit化により画質低下リスクが高い" },
+    { "id": "resolution-downscale", "label": "解像度切り下げ", "qualityImpact": "high", "speedImpact": "高速化", "trigger": "NF4でもVRAM不足", "verify": "assumed", "source": "", "appliesTo": ["diffusion"], "note": "画素数そのものを減らす" },
+    { "id": "step-reduction", "label": "ステップ数削減", "qualityImpact": "high", "speedImpact": "高速化", "trigger": "時間・計算量制約", "verify": "assumed", "source": "", "appliesTo": ["diffusion"], "note": "VRAMより実行時間制約で選ばれることが多い" },
+    { "id": "context-reduction", "label": "文脈長の切下げ", "qualityImpact": "medium", "speedImpact": "高速化", "trigger": "NF4でも収容不可", "verify": "assumed", "source": "", "appliesTo": ["llm"], "note": "長文の取りこぼしが起きる。画像の画質ではなく回答品質に影響する" }
+  ],
+  "sources": [
+    { "id": "unverified-specs", "label": "公知スペックおよび推定係数", "url": "", "verify": "unknown", "note": "このセッションでは一次・二次URLを取得していない。全数要確認" }
+  ]
+}

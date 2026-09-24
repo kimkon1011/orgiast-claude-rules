@@ -1,0 +1,198 @@
+[
+  {
+    "pid": 71128,
+    "sessionId": "611eccc2-465f-4d74-a060-9068597c5028",
+    "name": "claude-md-9c",
+    "status": "idle",
+    "startedAt": 1790106708747
+  },
+  {
+    "pid": 43644,
+    "sessionId": "6863d1a1-aad8-4418-9eb1-54d8d8451c4a",
+    "name": "claude-md-e2",
+    "status": "idle",
+    "startedAt": 1790106716690
+  },
+  {
+    "pid": 113976,
+    "sessionId": "9e045c82-80bd-4dc6-b716-1f85a11db3b2",
+    "name": "claude-md-a6",
+    "status": "idle",
+    "startedAt": 1790106727721
+  },
+  {
+    "pid": 135084,
+    "sessionId": "115ac876-b15c-4309-9892-711120de5d7d",
+    "name": "claude-md-4b",
+    "status": "idle",
+    "startedAt": 1790106728665
+  },
+  {
+    "pid": 124104,
+    "sessionId": "f31131e1-63c3-4db2-8ff9-674414c45f35",
+    "name": "claude-md-78",
+    "status": "idle",
+    "startedAt": 1790106754567
+  },
+  {
+    "pid": 128024,
+    "sessionId": "f8793738-f5ac-4abf-aeff-cf36ebd44850",
+    "name": "claude-md-90",
+    "status": "idle",
+    "startedAt": 1790127579246
+  },
+  {
+    "pid": 122060,
+    "sessionId": "f8a6ae85-b6a6-427c-80da-e15a2551801e",
+    "name": "claude-md-66",
+    "status": "idle",
+    "startedAt": 1790132460065
+  },
+  {
+    "pid": 91664,
+    "sessionId": "7136e951-72b0-4024-bcc6-224fb3f7005d",
+    "name": "claude-md-e0",
+    "status": "idle",
+    "startedAt": 1790144582958
+  },
+  {
+    "pid": 129652,
+    "sessionId": "4aa187cf-2763-435a-a4a9-3b5b2958c125",
+    "name": "claude-md-92",
+    "status": "idle",
+    "startedAt": 1790145022190
+  },
+  {
+    "pid": 109000,
+    "sessionId": "eec6ca02-3ac1-4e6b-b2bd-6c85b18d3037",
+    "name": "claude-md-ba",
+    "status": "idle",
+    "startedAt": 1790146068283
+  },
+  {
+    "pid": 136444,
+    "sessionId": "e935bf27-d127-42fe-8d89-7106ee0bed25",
+    "name": "claude-md-e1",
+    "status": "idle",
+    "startedAt": 1790167918586
+  },
+  {
+    "pid": 29432,
+    "sessionId": "34ef3462-60c5-4bee-8e8d-12600516d1ae",
+    "name": "claude-md-3d",
+    "status": "idle",
+    "startedAt": 1790207507385
+  },
+  {
+    "pid": 132428,
+    "sessionId": "642e6f54-60cc-4da1-9a2d-f3b9eb9da33e",
+    "name": "claude-md-9c",
+    "status": "idle",
+    "startedAt": 1790207722885
+  },
+  {
+    "pid": 125788,
+    "sessionId": "12770593-d94b-4dfe-b381-162d711e36c0",
+    "name": "claude-md-23",
+    "status": "idle",
+    "startedAt": 1790213140275
+  },
+  {
+    "pid": 125764,
+    "sessionId": "3da0a308-b161-497d-b816-417511ee20dd",
+    "name": "claude-md-2b",
+    "status": "idle",
+    "startedAt": 1790237728313
+  },
+  {
+    "pid": 53368,
+    "sessionId": "4ca142dc-83d8-42b0-8f66-ce8bf4bd946f",
+    "name": "claude-md-fb",
+    "status": "idle",
+    "startedAt": 1790238246652
+  },
+  {
+    "pid": 117912,
+    "sessionId": "fd918ab3-d718-47cf-8a52-687ea2cf25a1",
+    "name": "claude-md-79",
+    "status": "idle",
+    "startedAt": 1790238852453
+  },
+  {
+    "pid": 130040,
+    "sessionId": "c03f9390-3ae4-4eb0-8260-3a8695e6ec5d",
+    "name": "作業用019に返す。 PR #529 merge and nishiOrgiast collaborator setup",
+    "status": "idle",
+    "startedAt": 1790239644039
+  },
+  {
+    "pid": 133656,
+    "sessionId": "053c3f6e-9632-458c-8eb0-ad311ba59669",
+    "name": "claude-md-18",
+    "status": "idle",
+    "startedAt": 1790242055134
+  },
+  {
+    "pid": 132832,
+    "sessionId": "2dda8b52-bd18-4cb2-bdd4-d9e15a94b87b",
+    "name": "claude-md-5c",
+    "status": "idle",
+    "startedAt": 1790242129954
+  },
+  {
+    "pid": 140964,
+    "sessionId": "c6fb0622-ae6a-4576-b370-c8e3b89de1b2",
+    "name": "claude-md-ce",
+    "status": "idle",
+    "startedAt": 1790242188710
+  },
+  {
+    "pid": 131120,
+    "sessionId": "276a6a6b-1d38-4ff1-b663-5c547bbcf22c",
+    "name": "claude-md-9b",
+    "status": "idle",
+    "startedAt": 1790242237951
+  },
+  {
+    "pid": 138492,
+    "sessionId": "9b6df152-8087-4e4d-8058-c00ebd58df6e",
+    "name": "claude-md-2a",
+    "status": "idle",
+    "startedAt": 1790242409049
+  },
+  {
+    "pid": 128568,
+    "sessionId": "762fcae9-f7a4-4d16-bd64-82789316d113",
+    "name": "claude-md-a5",
+    "status": "idle",
+    "startedAt": 1790242550706
+  },
+  {
+    "pid": 144424,
+    "sessionId": "88cf4641-1058-4fc2-9b62-c51136e6cbf4",
+    "name": "claude-md-25",
+    "status": "busy",
+    "startedAt": 1790242671580
+  },
+  {
+    "pid": 143548,
+    "sessionId": "22eb3238-8764-4d24-94e3-ffad05610197",
+    "name": "claude-md-a3",
+    "status": "busy",
+    "startedAt": 1790242720329
+  },
+  {
+    "pid": 52028,
+    "sessionId": "ffd20032-25e4-472b-839e-c8431f5567f7",
+    "name": "claude-md-a1",
+    "status": "idle",
+    "startedAt": 1790243498619
+  },
+  {
+    "pid": 128088,
+    "sessionId": "a8106b73-bea0-4e95-818c-246ea6f46ca0",
+    "name": "claude-md-32",
+    "status": "idle",
+    "startedAt": 1790243708997
+  }
+]

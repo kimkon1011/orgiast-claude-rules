@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "priceAsOf": "2026-09-20",
+  "usdPerMTok": true,
+  "sources": {
+    "pricing": "https://developers.openai.com/api/docs/pricing"
+  },
+  "models": {
+    "gpt-6-astra": {
+      "label": "GPT-6 Astra",
+      "tiers": {
+        "standard": { "shortInput": 10.0, "shortCached": 1.0, "shortWrites": 12.5, "shortOutput": 50.0, "longInput": 20.0, "longCached": 2.0, "longWrites": 25.0, "longOutput": 75.0 },
+        "flex":      { "shortInput": 5.0,  "shortCached": 0.5, "shortWrites": 6.25, "shortOutput": 25.0, "longInput": 10.0, "longCached": 1.0, "longWrites": 12.5, "longOutput": 37.5 },
+        "batch":     { "shortInput": 5.0,  "shortCached": 0.5, "shortWrites": 6.25, "shortOutput": 25.0, "longInput": 10.0, "longCached": 1.0, "longWrites": 12.5, "longOutput": 37.5 },
+        "fast":      { "shortInput": 20.0, "shortCached": 2.0, "shortWrites": 25.0, "shortOutput": 100.0, "longInput": 40.0, "longCached": 4.0, "longWrites": 50.0, "longOutput": 150.0 }
+      }
+    },
+    "gpt-5.6-sol": {
+      "label": "GPT-5.6 Sol",
+      "tiers": {
+        "standard": { "shortInput": 4.0,  "shortCached": 0.4, "shortWrites": 5.0,  "shortOutput": 20.0, "longInput": 8.0,  "longCached": 0.8, "longWrites": 10.0, "longOutput": 30.0 },
+        "flex":      { "shortInput": 2.0,  "shortCached": 0.2, "shortWrites": 2.5,  "shortOutput": 10.0, "longInput": 4.0,  "longCached": 0.4, "longWrites": 5.0,  "longOutput": 15.0 },
+        "batch":     { "shortInput": 2.0,  "shortCached": 0.2, "shortWrites": 2.5,  "shortOutput": 10.0, "longInput": 4.0,  "longCached": 0.4, "longWrites": 5.0,  "longOutput": 15.0 },
+        "fast":      { "shortInput": 8.0,  "shortCached": 0.8, "shortWrites": 10.0, "shortOutput": 40.0, "longInput": 16.0, "longCached": 1.6, "longWrites": 20.0, "longOutput": 60.0 }
+      }
+    }
+  },
+  "facts": {
+    "priceRatioAstraOverSol": 2.5,
+    "solPromotionalPricingThrough": "2026-11-21",
+    "fastModeDoubleStandard": true,
+    "batchFlexHalfStandard": true,
+    "regionalUpliftPct": 10,
+    "contextWindowTokens": { "value": 1050000, "bothModels": true, "status": "unverified-secondary" },
+    "astraTokenEfficiencyClaim": {
+      "claim": "Astraを最高推理強度で使うとトークン使用量がSol比で約69%少ない",
+      "status": "unverified-secondary",
+      "source": "tech.ifeng.com（二次報道・2026-09 検索経由）"
+    }
+  }
+}

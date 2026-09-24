@@ -1,0 +1,14 @@
+{
+  "sessionId": "22222222-2222-4222-8222-222222222222",
+  "startedAt": "2026-09-15T06:08:35.979Z",
+  "promptCount": 22,
+  "purpose": "keyserve 暗号鍵ローテーション",
+  "purposeTokens": [
+    "keyserve",
+    "暗号",
+    "ローテーション"
+  ],
+  "lastNudgeAt": 16,
+  "nudgeCount": 1,
+  "nudgedAtCount": 16
+}

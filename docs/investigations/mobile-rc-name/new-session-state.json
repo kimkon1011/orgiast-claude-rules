@@ -1,0 +1,18 @@
+[
+  {
+    "pid": 142568,
+    "sessionId": "9401aac8-c7b4-4cca-8572-9dc18b42817a",
+    "name": "claude-md-58",
+    "entrypoint": "claude-vscode",
+    "bridgeSessionId": "session_018nWnPqE5WW2WUZSC6sqpZE",
+    "startedAt": 1790243854956
+  },
+  {
+    "pid": 144568,
+    "sessionId": "9e58f1c1-a45d-4c96-870a-702a7d9bae3e",
+    "name": "claude-md-a6",
+    "entrypoint": "claude-vscode",
+    "bridgeSessionId": "session_01Sdq17FCWZPCrn66Lv2LqCb",
+    "startedAt": 1790243856113
+  }
+]

@@ -136,3 +136,9 @@ test('R2 unknown MCP and command mentions do not count', () => {
   for (const tool of [use('mcp__filesystem__read'), use('Bash', { command: 'echo gh run list' }), use('Bash', { command: 'rg gh README.md' }), use('mcp__anthropic__billing'), use('WebFetch', { url: 'https://console.anthropic.com/settings/billing' })])
     assert.equal(hasDirectQueryEvidenceFromRaw(raw(human, tool)), false);
 });
+
+test('R2 marker names cannot relabel a billing claim; diagnostics name the missing vendor', () => {
+  const transcriptRaw = raw(human, use('Bash', { command: 'gh run list' }));
+  assert.equal(evaluate({ text: '[直接照会: GitHub] 残高は枯渇していません。', transcriptRaw }).decision, 'block');
+  assert.match(evaluate({ text: 'GitHub と Anthropic の課金に問題ありません。', transcriptRaw }).reason, /anthropic を照会せずに github/);
+});

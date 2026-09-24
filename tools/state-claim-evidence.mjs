@@ -37,6 +37,7 @@ const vendors = [
   ['stripe', /Stripe/i], ['discord', /Discord/i], ['notion', /Notion/i], ['slack', /Slack/i],
 ];
 export function claimVendors(sentence) {
+  sentence = String(sentence).replace(/\[直接照会:[^\]]+\]/g, "");
   const found = vendors.filter(([, pattern]) => pattern.test(sentence)).map(([name]) => name);
   if (!found.length && /Console|Billing|残高|クレジット|支払い|自動チャージ|オートチャージ/.test(sentence)) found.push('anthropic');
   return new Set(found);

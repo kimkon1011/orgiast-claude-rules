@@ -49,10 +49,11 @@ export function evaluateExternalStateClaimFromRaw({ text, transcriptRaw }) {
     const vendors = claimVendors(s);
     return !vendors.size || [...vendors].some(v => !queried.has(v));
   });
+  const missingVendor = claim && [...claimVendors(claim)].find(v => !queried.has(v));
   const direct = hasDirectQueryEvidenceFromRaw(transcriptRaw);
   const decision = configuredMode() === 'warn' ? 'pass' : 'block';
   if (claim) return { decision, code: 'EXTERNAL-STATE', claim,
-    reason: `[EXTERNAL-STATE] 「${claim}」は ${claimVendor(claim) || "対象 vendor 不明"} を照会せずに ${[...queried].join(", ") || "照会なし"} の証拠で断定している、対象システムを直接照会していない外部状態の否定断定です。Claude 側の履歴・memory に無いことは証拠になりません（人が Web UI で作ったものは残らない）。vendor MCP / API / 公式 CLI で直接照会してから断定するか、確率表現を使わず「未確認」と書き、user に確認作業を頼まないこと。` };
+    reason: `[EXTERNAL-STATE] 「${claim}」は ${missingVendor || "対象 vendor 不明"} を照会せずに ${[...queried].join(", ") || "照会なし"} の証拠で断定している、対象システムを直接照会していない外部状態の否定断定です。Claude 側の履歴・memory に無いことは証拠になりません（人が Web UI で作ったものは残らない）。vendor MCP / API / 公式 CLI で直接照会してから断定するか、確率表現を使わず「未確認」と書き、user に確認作業を頼まないこと。` };
   // R3 explicitly requires a concrete request when the reported evidence is unreachable.
   const outsourced = needsEvidenceRequest(text, transcriptRaw) && evidenceRequest(text) ? "" : findOutsourcedVerification(text);
   if (outsourced && (!direct || !hasPermissionDenialFromRaw(transcriptRaw) || !String(text).includes('[手渡し判定]'))) {

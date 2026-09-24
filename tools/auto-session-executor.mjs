@@ -57,7 +57,7 @@ export function buildCheapCodeArgs({ repoRoot, provider, promptFile, cwd }) {
 }
 
 // cheap-code が失敗した時の最終手段: claude -p(headless) 。無人の残TODO消化に Opus は過剰なので Sonnet。
-export function buildClaudeHeadlessArgs({ repoCwd, historyCwd, model = process.env.ORGIAST_AUTO_SESSION_MODEL || 'sonnet' }) {
+export function buildClaudeHeadlessArgs({ repoCwd, historyCwd, model = process.env.ORGIAST_AUTO_SESSION_MODEL || 'sonnet', resumeSessionId }) {
   // --permission-mode auto を明示的に渡す。以前は「渡さず ~/.claude/settings.json の既定 auto を
   // 継承する」設計だったが、2026-09-17 に実機の settings.json を直接確認したところ
   // permissions.defaultMode が未設定（allow は4件のみ）だった。継承先が存在しない前提だったため、
@@ -65,6 +65,7 @@ export function buildClaudeHeadlessArgs({ repoCwd, historyCwd, model = process.e
   // （acceptEdits はファイル編集だけ自動承認し Bash が最初のコマンドで止まるため使えない。2026-08-26 実測）。
   // auto は「危険操作は依然ブロックする」既定の安全モードなので --dangerously-skip-permissions とは別物。
   const args = ['-p', '', '--permission-mode', 'auto', '--output-format', 'json', '--model', model, '--add-dir', repoCwd];
+  if (resumeSessionId) args.push('--resume', resumeSessionId);
   if (historyCwd !== repoCwd) args.push('--add-dir', historyCwd);
   return args;
 }

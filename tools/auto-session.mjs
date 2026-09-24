@@ -649,7 +649,7 @@ export function runChild(executable, prompt, repoCwd, historyCwd, timeoutMs, run
       let child;
       try { child = spawn(cheap ? process.execPath : executable, cheap
         ? buildCheapCodeArgs({ repoRoot: REPO_ROOT, provider: cheapProvider, promptFile, cwd: historyCwd })
-        : buildClaudeHeadlessArgs({ repoCwd, historyCwd }), { cwd: historyCwd, env: { ...process.env, CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: cheap ? `auto-session:cheap-code:${cheapProvider}` : 'auto-session:fallback-claude' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }); }
+        : buildClaudeHeadlessArgs({ repoCwd, historyCwd, resumeSessionId: runOptions.resumeSessionId }), { detached: process.platform !== 'win32', cwd: historyCwd, env: { ...process.env, CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: cheap ? `auto-session:cheap-code:${cheapProvider}` : 'auto-session:fallback-claude' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }); }
       catch (error) { finish(null, '', String(error?.message ?? error), true, fallback); return; }
     let stdout = '';
     let stderr = '';
@@ -664,7 +664,7 @@ export function runChild(executable, prompt, repoCwd, historyCwd, timeoutMs, run
       timedOut = true;
       if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true });
       else { try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch {} } }
-    }, timeoutMs);
+    }, Math.max(1, timeoutMs - (Date.now() - startedAt.getTime())));
     child.on('close', (code) => {
       clearTimeout(timer);
       if (cheap && !timedOut && code !== 0) {

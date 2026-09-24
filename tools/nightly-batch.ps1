@@ -100,6 +100,17 @@ try {
         }
     } else { Write-NightlyLog 'session-auto-close' 'skip:ファイルなし' }
 
+    try {
+        $triageOutput = @(& $node.Source (Join-Path $PSScriptRoot 'session-triage.mjs') --md (Join-Path $HOME '.claude/session-triage.md') 2>&1)
+        $triageExit = $LASTEXITCODE
+        Write-NightlyStepResult 'session-triage' $triageExit $triageOutput
+        if ($triageExit -eq 0) {
+            $resumeOutput = @(& $node.Source (Join-Path $PSScriptRoot 'stalled-session-resume.mjs') 2>&1)
+            $resumeExit = $LASTEXITCODE
+            Write-NightlyStepResult 'stalled-session-resume' $resumeExit $resumeOutput
+        } else { Write-NightlyLog 'stalled-session-resume' 'skip:triage failed' }
+    } catch { Write-NightlyLog 'stalled-session-resume' ('error:' + $_.Exception.Message) }
+
     $memoryIndexCompact = $null
     foreach ($repo in $repos) {
         $candidate = Join-Path $repo 'tools\memory-index-compact.mjs'

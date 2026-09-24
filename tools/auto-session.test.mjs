@@ -541,6 +541,28 @@ test('禁止メモの除外は必要条件（〜しないと壊れる）を巻�
   assert.equal(todoExclusionReason('3. **settings.json に defaultMode を入れるかの判断（kim待ち）**'), '人間の作業が前提');
 });
 
+test('意思決定型（〜するか）のTODOを実行TODOとして採用しない', () => {
+  // 2026-09-25実測: 二者択一の判断が成果物のTODOが除外されず、launcher がこれを「次の1目的」に
+  // 採用して実作業ゼロの空振りセッションを生んだ（本セッションの manifest の目的そのもの）。
+  const real = 'マキモノ出品を通すか、既存 `md-8dac5cb2` への追記にするか （作業場所: C:\\Users\\user\\Documents\\orgiast-rules-fix） （更新: 2026-09-22）';
+  assert.equal(todoExclusionReason(real), '判断待ち');
+  assert.equal(todoExclusionReason('`~/.claude/settings.json` に `"permissions": { "defaultMode": "auto" }` を入れるか'), '判断待ち');
+  assert.deepEqual(filterTodos([real, 'プライバシーポリシーの残り1箇所を修正する']),
+    ['プライバシーポリシーの残り1箇所を修正する']);
+});
+
+test('意思決定型の除外は末尾アンカー付き＝本文に「〜するか」を含む本物のTODOを消さない', () => {
+  // 実物の項目0（この除外規則自身を直す依頼）は本文に「〜するか」が現れるが、末尾は
+  // 「…を非除外で固定する」なので除外してはならない。非アンカーの /するか/ だと自分で消える。
+  const self = '0. [新規・2026-09-25 / 実測仕様つき] PR #549 と同型の続き: `todoExclusionReason` が'
+    + '「〜するか」で終わる**意思決定型**を除外できない件に、末尾アンカー付きの除外語形を足し、'
+    + '実物TODOで巻き添えゼロを確認する （作業場所: C:\\Users\\user\\.claude\\auto-session-repo）';
+  assert.equal(todoExclusionReason(self), '');
+  // 末尾が「か」でも、疑問で終わらない通常TODOは巻き込まない。
+  assert.equal(todoExclusionReason('定期的に実行しないと古くなるので cron を見直す'), '');
+  assert.equal(todoExclusionReason('[継続キュー: 未完了 2件](archive/x.pending.md) — このファイルの項目を消化後に確認する。'), '');
+});
+
 test('フォーム報告用プロンプトは TODO 用と分離し、PR をマージしない制約を含む', () => {
   const issue = { number: 42, title: '保存できない', url: 'https://github.com/acme/app/issues/42', body: '保存ボタンが反応しません' };
   const prompt = buildFeedbackPrompt(issue, 'acme/app', '/repos/app', '/tmp/feedback.summary.md', 60);

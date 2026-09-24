@@ -106,5 +106,11 @@
     "route": "恒久修正は当ターン内に実装まで終える。next-session.md に設計だけを積んで次セッションへ送らない（配布待ち・マージ待ち・fork 制約は未着手の理由にならない）。実装は codex-do.mjs を前景・単発で回し（--prompt-file / --cwd / --timeout）、WSL 不在で codex 経路が起動しない PC では内蔵フォールバック(Gemini/DeepSeek)→不可なら Claude 直で実装する。GitHub は gh CLI で fork→PR→CI green→gh pr merge まで当ターンで進め、user にはマージ1回だけを残す。実装できなかった場合は残作業を1行で記録し、断定で『完了』と書かない。",
     "confidence": "high",
     "source": "handoff-audit-nightly:13755f2bc1e6504a87e553bf97fc9c06c4b4ded1a18bf449252fe56ac0f03553"
+  },
+  {
+    "pattern": "GA4/Search Console プロパティの有無・測定ID確認",
+    "route": "DWD サービスアカウント(kim impersonate)で analyticsadmin/webmasters/tagmanager API を直接照会（tools/google-property-check.mjs、読み取り専用・追加権限不要）。Claude 履歴の Grep は証拠にならない。分類器で止まるなら『未確認』と書く。**2026-09-20 実測**: GA4 ok(accounts 17) / Search Console ok(sites 12) は追加作業ゼロで通る。**GTM だけ errorKind=scope_not_delegated(unauthorized_client)** = Admin Console の DWD に tagmanager.readonly が未登録。GTM を読む場合のみ kim の1アクション（Admin Console → ドメイン全体の委任 → SA client_id に scope 追加）が要る",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:e36781d5eb6885eacb080dbec3ce57dad49b517fcfa4cd2971106cb86cdcaba6"
   }
 ]

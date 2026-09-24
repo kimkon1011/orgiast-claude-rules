@@ -14,7 +14,7 @@ const messages = {
   answered: '調査が終わり、確認したいことがあります。リンク先をご確認ください。',
   pr_open: '修正を作成しました。承認をお待ちしています。',
   pr_blocked: '修正を作成しましたが自動テストで問題が出ています。修正中です。',
-  stalled: 'まだ対応中です。遅れています。',
+  stalled: 'まだ対応中です。',
 };
 
 function userHome() {
@@ -63,13 +63,9 @@ export function selectProgress(issue, prs = [], now = new Date()) {
     if (states.some((state) => ['FAILURE', 'ERROR', 'CANCELLED', 'TIMED_OUT', 'ACTION_REQUIRED', 'STARTUP_FAILURE', 'STALE'].includes(state))) {
       return { state: 'pr_blocked', url: pr.url };
     }
-    if (states.some((state) => state === 'SUCCESS') && states.every((state) => ['SUCCESS', 'NEUTRAL', 'SKIPPED'].includes(state))) {
-      return { state: 'pr_open', url: pr.url };
-    }
+    return { state: 'pr_open', url: pr.url };
   }
-  const updated = Math.max(timestamp(issue.updated_at || issue.updatedAt), ...prs.map((entry) => timestamp(entry.updatedAt || entry.createdAt)));
-  if (updated > 0 && now.getTime() - updated >= 7 * 86400000) return { state: 'stalled', url: issue.html_url || issue.url };
-  return null;
+  return { state: 'stalled', url: issue.html_url || issue.url };
 }
 
 function githubJson(args, gh) {
@@ -85,13 +81,39 @@ export function loadProgressIssue(item, gh = runGh) {
   const issue = githubJson(['api', endpoint], gh);
   if (issue.state !== 'open') return { issue, prs: [] };
   issue.comments = pages(`${endpoint}/comments?per_page=100`, gh);
-  const references = pages(`${endpoint}/timeline?per_page=100`, gh)
-    .filter((event) => event.event === 'cross-referenced' && event.source?.issue?.pull_request)
-    .map((event) => event.source.issue.pull_request.html_url);
-  const prs = [...new Set(references)].map((url) => githubJson([
-    'pr', 'view', url, '--json', 'state,url,createdAt,updatedAt,statusCheckRollup',
-  ], gh));
+  // Paginate within the issue repository; cross-repository timeline mentions are not links.
+  const candidates = githubJson(['api', '--paginate', '--slurp',
+    `repos/${item.repo}/pulls?state=open&per_page=100`], gh).flat();
+  const linked = candidates.filter((pr) => {
+    const prefix = `https://github.com/${item.repo}/pull/`;
+    if (!(pr.html_url || pr.url || '').startsWith(prefix)) return false;
+    const text = `${pr.title || ''}\n${pr.body || ''}`;
+    // Remove qualified references before testing bare #N, so other/repo#N cannot match.
+    const localText = text.replace(/https:\/\/github\.com\/[^\s)]+/g, '')
+      .replace(/[\w.-]+\/[\w.-]+#\d+/g, '');
+    return new RegExp(`(^|[^\\w/#])#${item.number}(?!\\d)`).test(localText)
+      || [...text.matchAll(/https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/issues\/(\d+)\b/g)]
+        .some((match) => match[1] === item.repo && Number(match[2]) === item.number)
+      || new RegExp(`(?:^|[/_-])issue[-_]${item.number}(?:$|[/_-])`, 'i').test(pr.head?.ref || '');
+  });
+  const prs = linked.map((pr) => githubJson(['pr', 'view', String(pr.number), '--repo', item.repo,
+    '--json', 'state,url,createdAt,updatedAt,statusCheckRollup'], gh));
   return { issue, prs };
+}
+
+export function submitterSources(item, body = '') {
+  body = String(body || '');
+  let marker = {};
+  try { marker = JSON.parse(body.match(/<!--\s*feedback-submitter:\s*(.*?)\s*-->/s)?.[1] || '{}'); } catch {}
+  const labels = [...body.matchAll(/^\s*(?:提出者|報告者|送信元|依頼者)[:：]\s*(.+)$/gm)]
+    .map((match) => ({ submitter: match[1].trim() }));
+  return [item, marker, ...labels].filter((source) => source && typeof source === 'object');
+}
+
+export function displayTitle(issue, item) {
+  const title = issue.title || item.title || 'フォームからのご報告';
+  // U+FFFD already in GitHub cannot be decoded back. Use an explicit, non-invented label.
+  return title.includes('\uFFFD') ? `フォームからのご報告 #${issue.number}（原題の文字化けあり）` : title;
 }
 
 export async function runProgressNotify({ args = process.argv.slice(2), home = userHome(), io = defaultIo,
@@ -136,14 +158,36 @@ export async function runProgressNotify({ args = process.argv.slice(2), home = u
         const { issue, prs } = await loadIssue(item, gh);
         if (String(issue.state).toUpperCase() !== 'OPEN') continue;
         const selected = selectProgress(issue, prs, io.now());
-        const row = { key, title: issue.title || item.title || 'フォームからのご報告', state: selected?.state || null, url: selected?.url || issue.html_url || issue.url, sent: false };
+        const row = { key, title: displayTitle(issue, item), state: selected?.state || null, url: selected?.url || issue.html_url || issue.url, sent: false };
         report.items.push(row);
-        const submitter = item.submitter || issue.body?.match(/^\s*提出者[:：]\s*(.+)$/m)?.[1]?.trim() || '';
-        const identity = { ...item, submitter };
-        let recipient = pickRecipient(identity, []);
-        if (!recipient && submitter) {
-          try { recipient = pickRecipient(identity, await getMembers({ query: submitter, home, fetchImpl, persistCache: !dryRun })); }
-          catch (error) { warn(`${key} 名簿取得`, error); }
+        row.checks = prs.filter((pr) => pr.url === row.url).flatMap((pr) => pr.statusCheckRollup || [])
+          .map((check) => ({ name: check.name || check.context || '', state: check.conclusion || check.state || check.status || 'PENDING' }));
+        let recipient = null, submitter = '';
+        const attemptedSubmitters = new Set();
+        for (const identity of submitterSources(item, issue.body)) {
+          recipient = pickRecipient(identity, []);
+          if (!recipient && identity.submitter && !attemptedSubmitters.has(identity.submitter)) {
+            attemptedSubmitters.add(identity.submitter);
+            try { recipient = pickRecipient(identity, await getMembers({ query: identity.submitter, home, fetchImpl, persistCache: !dryRun })); }
+            catch (error) { warn(`${key} 名簿取得`, error); }
+          }
+          if (recipient) { submitter = identity.submitter || item.submitter || ''; break; }
+        }
+        row.recipientId = recipient?.id || KIM_USER_ID;
+        row.submitter = submitter || submitterSources(item, issue.body).find((source) => source.submitter)?.submitter || '';
+        row.titleFallback = Boolean(issue.title?.includes('\uFFFD'));
+        if (recipient && item.submitter_discord_id !== recipient.id) {
+          row.backfill = { submitter, submitter_discord_id: recipient.id, submitter_discord_label: recipient.label };
+          if (!dryRun) {
+            // Re-read to preserve entries appended by the intake since this run started.
+            const file = path.join(dir, 'feedback-issue-ledger.json');
+            const fresh = readJson(file, { items: [] }, io);
+            if (!Array.isArray(fresh.items)) throw new Error('Issue 台帳の items が配列ではありません');
+            const existing = fresh.items.find((entry) => entry.repo === item.repo && entry.number === item.number);
+            if (existing) Object.assign(existing, row.backfill);
+            else fresh.items.push({ ...item, ...row.backfill });
+            io.write(file, `${JSON.stringify(fresh, null, 2)}\n`);
+          }
         }
         row.escalated = !recipient;
         row.recipient = recipient?.label || 'kim';

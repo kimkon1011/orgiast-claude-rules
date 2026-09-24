@@ -19,6 +19,10 @@ function memberLabels(member) {
 export function matchMember(query, members) {
   const source = String(query ?? '').trim();
   const email = /^[^@\s]+@[^@\s]+$/.test(source);
+  if (email) {
+    const exact = (members || []).filter((member) => member.emails?.some((value) => value.toLowerCase() === source.toLowerCase()));
+    if (exact.length) return exact.length === 1 ? { id: String(exact[0].id), label: memberLabels(exact[0])[0] } : null;
+  }
   const lookup = normalizeName(email ? source.slice(0, source.indexOf('@')) : source);
   if (!lookup) return null;
   const rows = (Array.isArray(members) ? members : []).map((member) => ({ member, labels: memberLabels(member) }));
@@ -71,8 +75,19 @@ async function requestMembers(url, token, fetchImpl) {
   return null;
 }
 
+// Use the existing secretary's calendar identity directory, not email-fragment guesses.
+export function emailIdentityName(query, home) {
+  if (!/^[^@\s]+@[^@\s]+$/.test(query)) return '';
+  const directory = readJson(path.join(home, '.claude', 'secretary-state', 'calendar-cache.json'));
+  const names = [...new Set(Object.values(directory?.calendars || {})
+    .filter((entry) => entry.id?.toLowerCase() === query.toLowerCase() && entry.label)
+    .map((entry) => normalizeName(entry.label)))];
+  return names.length === 1 ? names[0] : '';
+}
+
 export async function getDiscordMembers({ query = '', home = os.homedir(), refresh = false, now = new Date(), fetchImpl = fetch, persistCache = true } = {}) {
-  const queries = searchQueries(query);
+  const identityName = emailIdentityName(query, home);
+  const queries = searchQueries(identityName || query);
   if (queries.length === 0) return [];
   const cacheFile = path.join(home, '.claude', 'orgiast-discord-members.json');
   const cached = readJson(cacheFile);
@@ -97,7 +112,16 @@ export async function getDiscordMembers({ query = '', home = os.homedir(), refre
         fs.writeFileSync(cacheFile, `${JSON.stringify(cache, null, 2)}\n`, 'utf8');
       }
     }
-    if (members.length > 0) return members;
+    if (members.length > 0) {
+      if (identityName) {
+        const exact = members.filter((member) => memberLabels(member).some((label) => normalizeName(label) === identityName));
+        if (exact.length === 1) return [{ ...exact[0], emails: [query] }];
+        // Ambiguous directory identities must never be guessed.
+        if (exact.length > 1) return [];
+        continue;
+      }
+      return members;
+    }
   }
   return [];
 }

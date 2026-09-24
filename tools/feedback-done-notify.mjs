@@ -15,7 +15,7 @@ function readItems(file) {
 
 export function pickRecipient(ledgerItem, members) {
   const direct = clean(ledgerItem?.submitter_discord_id);
-  if (direct) return { id: direct, label: direct };
+  if (direct) return { id: direct, label: clean(ledgerItem?.submitter_discord_label) || direct };
   return matchMember(ledgerItem?.submitter, members);
 }
 

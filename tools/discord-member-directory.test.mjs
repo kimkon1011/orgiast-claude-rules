@@ -71,3 +71,17 @@ test('persistCache=false は検索してもキャッシュを書き込まない'
   assert.equal(result[0].id, '1');
   assert.equal(fs.existsSync(path.join(home, '.claude', 'orgiast-discord-members.json')), false);
 });
+
+test('カレンダーのメールと氏名からDiscordの完全一致を解決、メール断片を推測しない', async (t) => {
+  const home = tempHome(t);
+  fs.mkdirSync(path.join(home, '.claude', 'secretary-state'));
+  const file = path.join(home, '.claude', 'secretary-state', 'calendar-cache.json');
+  fs.writeFileSync(file, JSON.stringify({ calendars: { person: { id: 'different.mail@example.com', label: '山田 太郎' } } }));
+  const options = { query: 'different.mail@example.com', home, persistCache: false,
+    fetchImpl: async () => response(200, [{ user: { id: '42', username: 'unrelated' }, nick: '山田太郎' }]) };
+  assert.deepEqual(matchMember(options.query, await getDiscordMembers(options)), { id: '42', label: '山田太郎' });
+  assert.deepEqual(await getDiscordMembers({ ...options,
+    fetchImpl: async () => response(200, [{ user: { id: '42' }, nick: '山田太郎' }, { user: { id: '43' }, nick: '山田 太郎' }]) }), []);
+  assert.deepEqual(await getDiscordMembers({ ...options,
+    fetchImpl: async () => response(200, [{ user: { id: '42' }, nick: '山田太郎別人' }]) }), []);
+});

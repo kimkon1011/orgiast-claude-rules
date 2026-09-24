@@ -166,5 +166,11 @@
     "route": "恒久修正は当ターン内に実装まで終える。next-session.md に設計だけを積んで次セッションへ送らない（配布待ち・マージ待ち・fork 制約は未着手の理由にならない）。実装は codex-do.mjs を前景・単発で回し（--prompt-file / --cwd / --timeout）、WSL 不在で codex 経路が起動しない PC では内蔵フォールバック(Gemini/DeepSeek)→不可なら Claude 直で実装する。GitHub は gh CLI で fork→PR→CI green→gh pr merge まで当ターンで進め、user にはマージ1回だけを残す。実装できなかった場合は残作業を1行で記録し、断定で『完了』と書かない。",
     "confidence": "high",
     "source": "handoff-audit-nightly:dea4e11379d460699ee1e2b30912c0b1921b6e49f6a7bcfb30ca2187cf02387e"
+  },
+  {
+    "pattern": "PR のマージ可否を kim に一言伺う",
+    "route": "gh api",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:e491ffef4605a106a8c0653d2216247d3ded5f60460805b21d64712f4565ef47"
   }
 ]

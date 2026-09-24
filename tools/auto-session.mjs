@@ -177,7 +177,16 @@ export function todoExclusionReason(todo, today = new Date()) {
   if (/(要判断|判断待ち|未決)/.test(text)) return '判断待ち';
   if (/ブロック中/.test(text)) return 'ブロック中';
   if (/(別|他)セッション/.test(text) && /(着手|進行中|作業中|未コミット差分)/.test(text)) return '他セッションが着手中';
-  if (/このPC(では実行不可|の残TODOではない|で再試行させない)/.test(text)) return 'このPCでは実行不可';
+  // 2026-09-25実測: 「⛔ 2〜5 を再度このPCで回さないこと」という**禁止メモ**が除外されず、
+  // launcher が毎晩これを「次の1目的」に採用し続けた(実作業ゼロの空振り)。既存3語形は
+  // 「〜ない」の語尾が違うだけで意味は同じなので、語形を一般化して拾う。
+  // 「実行しないと壊れる」のような**必要条件**を巻き込まないよう、禁止は「こと」で名詞化
+  // されているか、再実行抑止の副詞(再度/二度と/再実行)を伴う場合に限る((?!と) で二重に守る)。
+  if (/(このPC|再度|二度と|再実行|もう一度)[^。\n]{0,30}?(回さない|実行しない|着手しない|試さない|やらない|触らない)(?!と)こと/.test(text)
+    || /このPC(では実行不可|の残TODOではない|で再試行させない)/.test(text)) return 'このPCでは実行不可';
+  // ⛔ は next-session.md の慣行で「ブロック中／実行対象外」を意味する見出し記号。項目の
+  // 先頭に付いた ⛔ は作業内容を持たない注意書きなので、語形に依存せず除外する(防御の二重化)。
+  if (/^\s*(?:\d+[a-z]?[.)、]\s*)?(?:\*\*)?\s*⛔/.test(body)) return 'ブロック中';
   const todayNumber = today.getFullYear() * 10000 + (today.getMonth() + 1) * 100 + today.getDate();
   for (const match of text.matchAll(/(\d{4})-(\d{2})-(\d{2})\s*以降/g)) {
     const date = `${match[1]}-${match[2]}-${match[3]}`;

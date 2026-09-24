@@ -524,6 +524,23 @@ test('このPCでは実行不可と明記された実物由来TODOを除外す�
   assert.deepEqual(filterTodos([todo, '実行可能']), ['実行可能']);
 });
 
+test('実物の禁止メモ（⛔ …を再度このPCで回さないこと）を実行TODOとして採用しない', () => {
+  // 2026-09-25実測: 09-19 のセッションが残した禁止メモが除外されず、launcher が毎晩
+  // 「次の1目的」に採用して実作業ゼロの空振りセッションを生んでいた（manifest の selectedTodos 先頭）。
+  const prohibition = '**⛔ 2〜5 を再度このPCで回さないこと**（09-19 時点で3回とも同一結末。SA鍵が置かれるまで着手しても空振りする）';
+  assert.equal(todoExclusionReason(prohibition), 'このPCでは実行不可');
+  assert.deepEqual(filterTodos([prohibition, 'プライバシーポリシーの残り1箇所を修正する']),
+    ['プライバシーポリシーの残り1箇所を修正する']);
+});
+
+test('禁止メモの除外は必要条件（〜しないと壊れる）を巻き込まない', () => {
+  // 誤爆防止: 「実行しないと」は禁止ではなく必要条件。
+  assert.equal(todoExclusionReason('定期的に実行しないと古くなるので cron を見直す'), '');
+  // ⛔ の判定は項目の先頭だけ。文中の ⛔ は既存のラベル判定を変えない（実物 item15 の文型）。
+  assert.equal(todoExclusionReason('成長ループのバックログが累計35サイクル。kim と話す機会があればどの提案を ⛔ ブロック中（優先順位が kim の判断待ち）'), '判断待ち');
+  assert.equal(todoExclusionReason('3. **settings.json に defaultMode を入れるかの判断（kim待ち）**'), '人間の作業が前提');
+});
+
 test('フォーム報告用プロンプトは TODO 用と分離し、PR をマージしない制約を含む', () => {
   const issue = { number: 42, title: '保存できない', url: 'https://github.com/acme/app/issues/42', body: '保存ボタンが反応しません' };
   const prompt = buildFeedbackPrompt(issue, 'acme/app', '/repos/app', '/tmp/feedback.summary.md', 60);

@@ -170,3 +170,15 @@ test('handoff-branch-coverage-gate: 手作業依頼ではない完了報告で�
   assert.ok(!record.blockedBy.includes('handoff-branch-coverage-gate'));
   if (result.stdout) assert.doesNotMatch(JSON.parse(result.stdout).reason, /BRANCH-COVERAGE/);
 });
+
+test('gh-handoff-gate: gh が未認証であることを理由に PR 作成などを人に頼むと block する', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-gh-block-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const result = invoke(home, 'gh-block', 'gh が未認証なので、PR の作成をお願いします');
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.decision, 'block');
+  assert.match(output.reason, /### gh-handoff-gate[\s\S]*\[GH-HANDOFF\]/);
+  const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8'));
+  assert.ok(record.blockedBy.includes('gh-handoff-gate'));
+});

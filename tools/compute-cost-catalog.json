@@ -1,0 +1,194 @@
+{
+  "purpose": "計算リソース（配信・API・DB）の単価カタログ。高額な構成を低コストな構成へ置換したときの月額を、実測値と一次情報の単価だけで算定するために使う。",
+  "priceAsOf": "2026-09-26",
+  "usdJpy": 156,
+  "usdJpySource": "tools/aws-cost-estimate.mjs の DEFAULT_USD_JPY と同一の根拠（日銀 東京市場 仲値 2026-09 実測平均 ≈155.8 JPY/USD）。台帳・見積もり間でレートを二重定義しないため、この値は aws-cost-estimate.mjs と同じ前提に合わせている。",
+  "method": "各プロバイダの公式価格ページを Claude が WebFetch で直接取得し、取得できた数値だけを verified:true とする。取得できなかったものは verified:false とし、出典URLのみを持つ（金額は推測で埋めない）。",
+  "caveat": "ここに載るのはすべて『定価』であり、実際の請求額ではない。実際の請求額は各プロバイダの請求画面が一次情報であり、このカタログだけから支出を断定してはならない。",
+  "meterUnits": {
+    "requests": "百万リクエスト/月",
+    "cpuMs": "百万CPUミリ秒/月",
+    "transferGb": "GB/月",
+    "dbGb": "GB（保存量）",
+    "fnInvocations": "百万回/月"
+  },
+  "commercialUseValues": {
+    "allowed": "商用利用可",
+    "noncommercial-only": "無料枠は非商用限定（商用は有料プラン必須）",
+    "unknown": "商用条件を一次情報で確認できていない"
+  },
+  "providers": [
+    {
+      "id": "cloudflare-workers-free",
+      "vendor": "Cloudflare",
+      "plan": "Workers Free",
+      "url": "https://developers.cloudflare.com/workers/platform/pricing/",
+      "verified": true,
+      "fixedUsdMonthly": 0,
+      "dailyRequestLimitMillions": 0.1,
+      "included": {},
+      "meters": {},
+      "commercialUse": "allowed",
+      "note": "無料枠は『10万リクエスト/日』の日次上限。月間合計ではなく日次ピークで判定する必要がある（月300万でも1日に10万を超えた日があれば翌日以降は有料プランが要る）。"
+    },
+    {
+      "id": "cloudflare-workers-paid",
+      "vendor": "Cloudflare",
+      "plan": "Workers Paid",
+      "url": "https://developers.cloudflare.com/workers/platform/pricing/",
+      "verified": true,
+      "fixedUsdMonthly": 5,
+      "included": { "requests": 10, "cpuMs": 30 },
+      "meters": { "requests": 0.3, "cpuMs": 0.02 },
+      "commercialUse": "allowed",
+      "note": "公式ページの実測値: 基本 $5/月・1000万リクエスト同梱・3000万CPUミリ秒同梱・超過 $0.30/百万リクエスト・$0.02/百万CPUミリ秒。"
+    },
+    {
+      "id": "vercel-hobby",
+      "vendor": "Vercel",
+      "plan": "Hobby",
+      "url": "https://vercel.com/pricing",
+      "verified": true,
+      "fixedUsdMonthly": 0,
+      "included": { "transferGb": 100, "requests": 1, "fnInvocations": 1 },
+      "meters": {},
+      "commercialUse": "noncommercial-only",
+      "note": "公式ページの実測値: $0/月・Fast Data Transfer 100GB/月・Edge Requests 100万/月・Function Invocations 100万/月・Fluid Active CPU 4時間/月。**商用利用は不可**（商用は Pro 以上）。"
+    },
+    {
+      "id": "vercel-pro",
+      "vendor": "Vercel",
+      "plan": "Pro",
+      "url": "https://vercel.com/pricing",
+      "verified": true,
+      "fixedUsdMonthly": 20,
+      "included": { "transferGb": 1024, "requests": 10 },
+      "meters": { "transferGb": 0.15, "requests": 2, "fnInvocations": 0.6 },
+      "commercialUse": "allowed",
+      "note": "公式ページの実測値: $20/月（開発者1席あたり）。Fast Data Transfer 1TB/月同梱・超過 $0.15/GB。Edge Requests 1000万/月同梱・超過 $2/百万から。Function Invocations は $0.60/百万から（同梱枠の記載なし＝未確認のため included に入れていない）。"
+    },
+    {
+      "id": "netlify-free",
+      "vendor": "Netlify",
+      "plan": "Free",
+      "url": "https://www.netlify.com/pricing/",
+      "verified": true,
+      "fixedUsdMonthly": 0,
+      "included": {},
+      "meters": {},
+      "commercialUse": "unknown",
+      "note": "公式ページの実測値: $0/月。ただし同梱帯域（GB）はページに記載が無く、『20 credits per GB』の従量表記のみ。無料枠の帯域上限は未確認なので included に入れない（推測で埋めない）。"
+    },
+    {
+      "id": "netlify-pro",
+      "vendor": "Netlify",
+      "plan": "Pro",
+      "url": "https://www.netlify.com/pricing/",
+      "verified": true,
+      "fixedUsdMonthly": 20,
+      "included": {},
+      "meters": {},
+      "commercialUse": "allowed",
+      "note": "公式ページの実測値: $20/月（unlimited members 表記。席単価ではない）。帯域の同梱枠はページに記載が無いため未確認。"
+    },
+    {
+      "id": "supabase-free",
+      "vendor": "Supabase",
+      "plan": "Free",
+      "url": "https://supabase.com/pricing",
+      "verified": true,
+      "fixedUsdMonthly": 0,
+      "included": { "dbGb": 0.5, "transferGb": 5 },
+      "meters": {},
+      "commercialUse": "allowed",
+      "note": "公式ページの実測値: $0/月・DB 500MB・egress 5GB。"
+    },
+    {
+      "id": "supabase-pro",
+      "vendor": "Supabase",
+      "plan": "Pro",
+      "url": "https://supabase.com/pricing",
+      "verified": true,
+      "fixedUsdMonthly": 25,
+      "included": { "dbGb": 8, "transferGb": 250 },
+      "meters": {},
+      "commercialUse": "allowed",
+      "note": "公式ページの実測値: $25/月（プロジェクトあたり DB 8GB・egress 250GB・ファイルストレージ 100GB）。超過単価はページから取得できていないため meters に入れない。"
+    },
+    {
+      "id": "github-pages-free",
+      "vendor": "GitHub",
+      "plan": "Pages (public repo)",
+      "url": "https://docs.github.com/en/pages/getting-started-with-github-pages/about-github-pages",
+      "verified": false,
+      "fixedUsdMonthly": 0,
+      "included": {},
+      "meters": {},
+      "commercialUse": "unknown",
+      "note": "公開リポジトリの Pages は無料という記載は広く知られているが、今回の一次情報取得では金額を確認できていない（verified:false）。プライベートリポジトリでは有料プランが要る点も未確認。金額は台帳に載せるが、確定分には数えない。"
+    },
+    {
+      "id": "gas-webapp-free",
+      "vendor": "Google",
+      "plan": "Apps Script Web App",
+      "url": "https://developers.google.com/apps-script/guides/services/quotas",
+      "verified": false,
+      "fixedUsdMonthly": 0,
+      "included": {},
+      "meters": {},
+      "commercialUse": "unknown",
+      "note": "オージャストの現行配信基盤（fleet-status-sheet 等）。Consumer/Workspace アカウントの割当内は無料だが、今回の一次情報取得では金額を確認できていない（verified:false）。日次クォータは種類ごとに別で、月額への換算は単純化できない。"
+    }
+  ],
+  "workloads": [
+    {
+      "id": "internal-static-apps",
+      "label": "社内向け静的アプリ配信（apps/ の4アプリ相当）",
+      "profile": { "requests": 0.3, "cpuMs": 0, "transferGb": 20, "dbGb": 0, "fnInvocations": 0, "peakRequestsPerDayMillions": 0.05 },
+      "commercial": false,
+      "currentProviderId": "gas-webapp-free",
+      "candidates": [
+        "gas-webapp-free",
+        "github-pages-free",
+        "cloudflare-workers-free",
+        "cloudflare-workers-paid",
+        "vercel-hobby",
+        "vercel-pro",
+        "netlify-free",
+        "netlify-pro"
+      ]
+    },
+    {
+      "id": "customer-static-site",
+      "label": "社外公開の静的サイト（学会協賛ナビ等・商用）",
+      "profile": { "requests": 2, "cpuMs": 0, "transferGb": 60, "dbGb": 0, "fnInvocations": 0, "peakRequestsPerDayMillions": 0.2 },
+      "commercial": true,
+      "candidates": [
+        "cloudflare-workers-free",
+        "cloudflare-workers-paid",
+        "vercel-pro",
+        "netlify-pro",
+        "github-pages-free"
+      ]
+    },
+    {
+      "id": "internal-api-with-db",
+      "label": "社内API + DB（フィードバック受付・購買部等）",
+      "profile": { "requests": 1, "cpuMs": 5, "transferGb": 30, "dbGb": 1, "fnInvocations": 1, "peakRequestsPerDayMillions": 0.1 },
+      "commercial": false,
+      "candidates": [
+        "cloudflare-workers-paid",
+        "vercel-pro",
+        "supabase-free",
+        "supabase-pro"
+      ]
+    },
+    {
+      "id": "db-heavy-scale",
+      "label": "DB が無料枠を超えた場合の比較",
+      "profile": { "requests": 3, "cpuMs": 10, "transferGb": 120, "dbGb": 10, "fnInvocations": 3, "peakRequestsPerDayMillions": 0.3 },
+      "commercial": true,
+      "candidates": ["cloudflare-workers-paid", "vercel-pro", "supabase-pro"]
+    }
+  ]
+}

@@ -82,3 +82,18 @@ test('夜間実行: candidates永続化・別応答で昇格・再実行冪等�
   assert.equal((await runNightly(options)).promoted, 0);
   assert.equal(fs.readFileSync(promotionFile(home), 'utf8'), persisted);
 });
+// route が重複すると enqueueTodos の重複スキップに掛かり、同じ route を持つ pattern の
+// うち片方の監査TODOが黙って落ちる（2026-09-25 に「外部サービスの課金・購入画面の操作」が
+// 「社内・グループ会社・スタッフ宛の連絡文」の route を流用して実際に発生）。
+test('knowledge.json の route は enqueueTodos と同じ正規化で一意', () => {
+  const knowledge = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, 'handoff-audit-knowledge.json'), 'utf8'));
+  const normalize = value => String(value).normalize('NFKC').trim().replace(/\s+/g, ' ');
+  const seen = new Map();
+  for (const entry of knowledge) {
+    const route = normalize(entry.route);
+    assert.notEqual(route, '', `route が空: ${entry.pattern}`);
+    assert.ok(!seen.has(route),
+      `route が重複: 「${entry.pattern}」と「${seen.get(route)}」 → 片方の監査TODOが追加されない\n${route.slice(0, 120)}`);
+    seen.set(route, entry.pattern);
+  }
+});

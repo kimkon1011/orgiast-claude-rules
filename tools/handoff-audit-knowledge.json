@@ -142,5 +142,11 @@
     "route": "gh api",
     "confidence": "high",
     "source": "handoff-audit-nightly:9932cd0ee4ffac95b74decc7d8427c399678cfd0d7805bbbe2f9fdd2b0385a5e"
+  },
+  {
+    "pattern": "設計判断や方針選択を user に投げる",
+    "route": "gh api",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:7dfaa3c7efdfa8635296673be93833005bd47f01a8670fc884b6b67006f78c50"
   }
 ]

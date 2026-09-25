@@ -64,7 +64,12 @@ jobs:
           unsafe_path=""
           while IFS= read -r file; do
             case "$file" in
-              .github/workflows/*|*keyserve*|*secrets*|*.env*|*fleet-command.json|*fleet-directives.json)
+              # 2026-09-22 kim の判断で fleet-command.json / fleet-directives.json を除外リストから外した。
+              # 遠隔指示に人のマージを必須にしていたが、承認待ちで指示が滞留するほうが実害が大きいと判断。
+              # 遠隔実行の同意は各PCの ~/.claude/fleet-agent-optin.json が引き続き担保する
+              # (fleet-agent.mjs の optin 判定。オプトインしていない機体では prompt 指示は実行されない)。
+              # 資格情報系とワークフロー自体は引き続き人のマージを必須にする。
+              .github/workflows/*|*keyserve*|*secrets*|*.env*)
                 unsafe_path="$file"
                 break
                 ;;

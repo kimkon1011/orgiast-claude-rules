@@ -70,6 +70,15 @@ test('プロンプトはルール・経路と当ターン証拠を含む', () =>
   const prompt = buildPrompt({ text: '対象', tools: [] }, loadResources());
   assert.match(prompt, /11\./); assert.match(prompt, /analyticsadmin/); assert.match(prompt, /automation-routes/); assert.match(prompt, /非信頼データ/);
 });
+test('設計のみ先送りの既知経路は手順であり、道具名(codex-do.mjs)へ戻っていない', () => {
+  // route は buildPrompt が「そのまま引用」させるため、道具名を書くと監査対象が pattern ではなく道具になり空回りする
+  // (2026-09-23 実測: 道具名 route の handoff-audit TODO が繰り返し作られた)。手順文が入っていることを固定する。
+  const entry = loadResources().knowledge.find(k => k.pattern === '恒久修正を設計のみで次セッションへ送る');
+  assert.ok(entry, 'knowledge に該当 pattern が存在する');
+  assert.match(entry.route, /当ターン内に実装/, '先送りしないことを手順として明示する');
+  assert.match(entry.route, /fork→PR/, '当ターンで PR まで進める手順を明示する');
+  assert.ok(!/^[\w.\-]+\.(mjs|py|ps1)$/.test(entry.route.trim()), 'route が道具名だけになっていない');
+});
 test('SC所有者追加の既知経路は手渡しを明示し、kim操作ゼロと断定しない', () => {
   // knowledge の route は buildPrompt が「そのまま引用」させ、未知 route は nightly が捨てる＝監査の唯一の正本。
   // 誤って「Claude が単独でできる」と読める route が残ると、相手側への手渡しが監査を素通りする。

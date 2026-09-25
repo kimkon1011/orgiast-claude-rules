@@ -243,7 +243,7 @@ function analyze(file, headRaw, tailRaw, headEvents, tailEvents, tailBytes) {
   };
 }
 
-async function listFiles() {
+export async function listFiles() {
   const bySessionId = new Map();
   let closedSessionIds = new Set();
   if (!includeClosed) {
@@ -291,7 +291,7 @@ async function listFiles() {
   return [...bySessionId.values()];
 }
 
-async function inspect(file) {
+export async function inspect(file) {
   if (!file.size) { stats.emptyFiles++; return null; }
   try {
     const [headRaw, tailRaw] = await Promise.all([readWindow(file, HEAD_BYTES, false), readWindow(file, TAIL_BYTES, true)]);

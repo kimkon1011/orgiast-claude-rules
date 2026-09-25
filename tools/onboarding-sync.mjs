@@ -412,9 +412,9 @@ async function syncRepository(now) {
     } catch (e) { log(`memory-share install failed(continue): ${e.message}`); }
     // 新しく配布された hook を全PCへ自動登録する(add-only・差分が無ければ何も書かない)。
     try {
-      const registrar = path.join(repoPath, 'tools', 'register-hooks.mjs');
+      const registrar = path.join(repoPath, 'tools', 'setup.mjs');
       if (fs.existsSync(registrar)) {
-        const out = execFileSync(process.execPath, [registrar, '--hooks-only'], { windowsHide: true, encoding: 'utf8', timeout: 20000, env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repoPath } }).trim();
+        const out = execFileSync(process.execPath, [registrar, '--converge', '--home', home], { windowsHide: true, encoding: 'utf8', timeout: 60000, env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repoPath } }).trim();
         // skip がログに届かないと hook 未登録の無言 skip が復活するため、追加と同様に転送する。
         if (out.includes('追加') || out.includes('[skip]')) { console.log(`[onboarding-sync] ${out.trim()}`); log(out.replace(/\s+/g, ' ')); }
       }

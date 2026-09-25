@@ -327,16 +327,32 @@ function runGit(args, cwd, spawn = spawnSync) {
   return { ok: !result.error && result.status === 0, status: result.status, stdout: result.stdout, stderr: result.stderr, error: result.error };
 }
 
-export function commitAndPush(tetsukoDir, cycleNumber, spawn = spawnSync) {
+export function commitAndPush(tetsukoDir, cycleNumber, spawn = spawnSync, { expectedBranch = 'main' } = {}) {
   const steps = [];
+  const branchCheck = runGit(['rev-parse', '--abbrev-ref', 'HEAD'], tetsukoDir, spawn);
+  steps.push({ step: 'branch-check', ...branchCheck });
+  const branch = branchCheck.stdout?.trim() || '';
+  if (!branchCheck.ok) return { ok: false, steps, reason: 'branch_check_failed', branch };
+  if (branch !== expectedBranch) return { ok: false, steps, reason: 'wrong_branch', branch };
+
+  const pull = runGit(['pull', '--ff-only'], tetsukoDir, spawn);
+  steps.push({ step: 'pull', ...pull });
   const add = runGit(['add', 'data/growth-loop-log.md', 'TETSUKO_DAILY_BRIEFING.md'], tetsukoDir, spawn);
   steps.push({ step: 'add', ...add });
   if (!add.ok) return { ok: false, steps };
   const commit = runGit(['commit', '-m', `TETSUKO成長ループ サイクル#${cycleNumber}: 施策ログ追記 + 日次ブリーフィング更新`], tetsukoDir, spawn);
   steps.push({ step: 'commit', ...commit });
   if (!commit.ok) return { ok: false, steps };
-  const push = runGit(['push'], tetsukoDir, spawn);
+  let push = runGit(['push'], tetsukoDir, spawn);
   steps.push({ step: 'push', ...push });
+  if (!push.ok) {
+    const retryPull = runGit(['pull', '--rebase'], tetsukoDir, spawn);
+    steps.push({ step: 'push-retry-pull', ...retryPull });
+    if (retryPull.ok) {
+      push = runGit(['push'], tetsukoDir, spawn);
+      steps.push({ step: 'push-retry', ...push });
+    }
+  }
   return { ok: push.ok, steps };
 }
 

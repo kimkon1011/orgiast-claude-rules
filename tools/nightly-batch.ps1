@@ -100,6 +100,17 @@ try {
         }
     } else { Write-NightlyLog 'session-auto-close' 'skip:ファイルなし' }
 
+    try {
+        $triageOutput = @(& $node.Source (Join-Path $PSScriptRoot 'session-triage.mjs') --md (Join-Path $HOME '.claude/session-triage.md') 2>&1)
+        $triageExit = $LASTEXITCODE
+        Write-NightlyStepResult 'session-triage' $triageExit $triageOutput
+        if ($triageExit -eq 0) {
+            $resumeOutput = @(& $node.Source (Join-Path $PSScriptRoot 'stalled-session-resume.mjs') 2>&1)
+            $resumeExit = $LASTEXITCODE
+            Write-NightlyStepResult 'stalled-session-resume' $resumeExit $resumeOutput
+        } else { Write-NightlyLog 'stalled-session-resume' 'skip:triage failed' }
+    } catch { Write-NightlyLog 'stalled-session-resume' ('error:' + $_.Exception.Message) }
+
     $memoryIndexCompact = $null
     foreach ($repo in $repos) {
         $candidate = Join-Path $repo 'tools\memory-index-compact.mjs'
@@ -369,6 +380,40 @@ try {
             Write-Warning ("nightly-batch: feedback-replies: " + $_.Exception.Message)
         }
     } else { Write-NightlyLog 'feedback-replies' 'skip:ファイルなし' }
+
+    $feedbackDoneNotify = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\feedback-done-notify.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $feedbackDoneNotify = $candidate; break }
+    }
+    if ($feedbackDoneNotify) {
+        $feedbackDoneNotifyOutput = $null
+        try {
+            $feedbackDoneNotifyOutput = @(& $node.Source $feedbackDoneNotify 2>&1)
+            $feedbackDoneNotifyExit = $LASTEXITCODE
+            Write-NightlyStepResult 'feedback-done-notify' $feedbackDoneNotifyExit $feedbackDoneNotifyOutput ' (警告・後続処理続行)'
+        } catch {
+            Write-NightlyLog 'feedback-done-notify' ("error:" + $_.Exception.Message + ' (警告・後続処理続行): ' + (Format-NightlyDetail $feedbackDoneNotifyOutput))
+            Write-Warning ("nightly-batch: feedback-done-notify: " + $_.Exception.Message)
+        }
+    } else { Write-NightlyLog 'feedback-done-notify' 'skip:ファイルなし' }
+
+    $feedbackProgressNotify = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\feedback-progress-notify.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $feedbackProgressNotify = $candidate; break }
+    }
+    if ($feedbackProgressNotify) {
+        $feedbackProgressNotifyOutput = $null
+        try {
+            $feedbackProgressNotifyOutput = @(& $node.Source $feedbackProgressNotify 2>&1)
+            $feedbackProgressNotifyExit = $LASTEXITCODE
+            Write-NightlyStepResult 'feedback-progress-notify' $feedbackProgressNotifyExit $feedbackProgressNotifyOutput ' (警告・後続処理続行)'
+        } catch {
+            Write-NightlyLog 'feedback-progress-notify' ("error:" + $_.Exception.Message + ' (警告・後続処理続行): ' + (Format-NightlyDetail $feedbackProgressNotifyOutput))
+            Write-Warning ("nightly-batch: feedback-progress-notify: " + $_.Exception.Message)
+        }
+    } else { Write-NightlyLog 'feedback-progress-notify' 'skip:ファイルなし' }
 
     # 未対応フィードバックを100億円計画への直結度で評価し、プロダクション異常もまとめて kim へ報告する。
     # ヘルス異常の exit 3 と部分障害はいずれも警告扱いにして、後続の夜間処理を継続する。

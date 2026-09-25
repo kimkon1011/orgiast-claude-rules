@@ -5,11 +5,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { isEntry } from './is-entry.mjs';
+import { defaultMemoryDirs, scanMemory } from './learning-ledger.mjs';
 export const MAX_BYTES = 24_000;
 const marker = '<!-- NEXT-SESSION v1 -->';
 const hash = (text) => createHash('sha256').update(text).digest('hex');
 
-export function planRotation(source, { now = new Date(), maxBytes = MAX_BYTES, archiveRef = 'archive/next-session.md' } = {}) {
+export function planRotation(source, { now = new Date(), maxBytes = MAX_BYTES, archiveRef = 'archive/next-session.md', promotionPendingCount = null } = {}) {
   const items = [];
   const seen = new Set();
   let date = '';
@@ -36,7 +37,7 @@ export function planRotation(source, { now = new Date(), maxBytes = MAX_BYTES, a
     else if (line.trim() && !/^(?:<!--|---|>)/.test(line)) { flush(); current = { lines: [line], date, cwd }; }
   }
   flush();
-  const stats = { completed: 0, duplicate: 0, old: 0, context: 0, pending: 0, overflow: 0 };
+  const stats = { completed: 0, duplicate: 0, old: 0, context: 0, pending: 0, overflow: 0, stale: 0 };
   const pending = [];
   for (const item of items) {
     const text = item.lines.join('\n').trim();
@@ -49,6 +50,8 @@ export function planRotation(source, { now = new Date(), maxBytes = MAX_BYTES, a
     if (age > 30 * 86400000 && !/着手中/.test(text)) { stats.old++; continue; }
     const key = text.replace(/^\d+[.)、]\s+/, '').replace(/\s+/g, ' ').trim();
     if (seen.has(key)) { stats.duplicate++; continue; }
+    // Stale items remain reachable in the complete source snapshot archived by rotate().
+    if (promotionPendingCount === 0 && /^PROMOTE 待ち\s*\d+\s*件/.test(first)) { stats.stale++; continue; }
     seen.add(key); pending.push({ text: first + text.slice(item.lines[0].length), date: explicit || item.date, cwd: item.cwd });
   }
   const header = `${marker}\n<!-- rotated queue v1 -->\n> 原文・完了・重複・30日超・詳細文脈: [退避先](${archiveRef})\n## 次の1目的\n未定（残TODOの先頭から確認）\n## 残TODO\n`;
@@ -56,12 +59,18 @@ export function planRotation(source, { now = new Date(), maxBytes = MAX_BYTES, a
   const overflow = [];
   const continuations = [];
   for (const item of pending) {
-    if (item.text.startsWith('[継続キュー:')) { continuations.push(item.text); continue; }
+    if (item.text.startsWith('[継続キュー:')) { continuations.push(item); continue; }
     const entry = `${stats.pending + 1}. ${item.text}${item.cwd ? ` （作業場所: ${item.cwd}）` : ''}${item.date && !/更新:/.test(item.text) ? ` （更新: ${item.date}）` : ''}\n`;
     if (Buffer.byteLength(output + entry) > maxBytes - 1000) { overflow.push(item); continue; }
     output += entry; stats.pending++;
   }
-  for (const item of continuations) output += `${stats.pending + 1}. ${item}\n`;
+  // Continuations (references into a prior overflow queue) must also pass the byte budget check,
+  // otherwise they accumulate across rotations and push the header over maxBytes (see history).
+  for (const item of continuations) {
+    const entry = `${stats.pending + 1}. ${item.text}\n`;
+    if (Buffer.byteLength(output + entry) > maxBytes - 1000) { overflow.push(item); continue; }
+    output += entry; stats.pending++;
+  }
   if (overflow.length) {
     stats.overflow = overflow.length;
     output += `${stats.pending + 1}. [継続キュー: 未完了 ${overflow.length}件](${archiveRef}.pending.md) — このファイルの項目を消化後に確認する。\n`;
@@ -70,18 +79,25 @@ export function planRotation(source, { now = new Date(), maxBytes = MAX_BYTES, a
   return { text: output, overflow, stats, beforeBytes: Buffer.byteLength(source), afterBytes: Buffer.byteLength(output) };
 }
 
-export function rotate(file, { now = new Date(), maxBytes = MAX_BYTES, source: supplied } = {}) {
+export function rotate(file, { now = new Date(), maxBytes = MAX_BYTES, source: supplied, promotionPendingCount } = {}) {
   if (!fs.existsSync(file) && supplied === undefined) return { changed: false, reason: 'absent' };
   const original = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
   const source = supplied ?? original;
+  if (promotionPendingCount === undefined) {
+    promotionPendingCount = null;
+    if (source.includes('PROMOTE 待ち')) {
+      try { promotionPendingCount = scanMemory(defaultMemoryDirs(), { onError: () => {} }).targets.length; }
+      catch { promotionPendingCount = null; }
+    }
+  }
   // Re-evaluate completion/age even after normalization; unchanged queues are byte-stable.
   const oldRef = source.match(/\[退避先\]\(([^)]+)\)/)?.[1];
-  if (oldRef && source === original && planRotation(source, { now, maxBytes, archiveRef: oldRef }).text === source) return { changed: false, beforeBytes: Buffer.byteLength(source), afterBytes: Buffer.byteLength(source) };
+  if (oldRef && source === original && planRotation(source, { now, maxBytes, archiveRef: oldRef, promotionPendingCount }).text === source) return { changed: false, beforeBytes: Buffer.byteLength(source), afterBytes: Buffer.byteLength(source) };
   const month = now.toISOString().slice(0, 7).replace('-', '');
   const archive = path.join(path.dirname(file), 'archive', `next-session-${month}.md`);
   const digest = hash(source);
   const ref = `archive/next-session-${month}.md#snapshot-${digest}`;
-  const result = planRotation(source, { now, maxBytes, archiveRef: ref });
+  const result = planRotation(source, { now, maxBytes, archiveRef: ref, promotionPendingCount });
   fs.mkdirSync(path.dirname(archive), { recursive: true });
   const previousArchive = fs.existsSync(archive) ? fs.readFileSync(archive, 'utf8') : '';
   if (!previousArchive.includes(`<!-- snapshot:${digest} -->`)) {

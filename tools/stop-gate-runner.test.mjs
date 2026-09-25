@@ -182,3 +182,60 @@ test('gh-handoff-gate: gh が未認証であることを理由に PR 作成な�
   const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8'));
   assert.ok(record.blockedBy.includes('gh-handoff-gate'));
 });
+
+// 単体判定と実際の Stop ランナーの両方で同じケースを検証する。
+import { judgeUserBurden } from './user-burden-gate.mjs';
+const burdenAudit = '手間監査: CLI を試したが OAuth の本人同意が必要。user は1クリック・年1回。';
+const burdenCommand = '```powershell\nStart-Process https://example.com/consent\n```';
+const burdenCases = [
+  ['遡り参照の実例', '次に kim がすること: 前に送った PowerShell の1行を実行する', true, /遡り参照/],
+  ['完成品と監査を再掲', `次に kim がすること: PowerShell で実行する\n${burdenCommand}\n${burdenAudit}`, false],
+  ['完成品なし', `次に kim がすること: 同意ボタンを押す\n${burdenAudit}`, true, /完成品/],
+  ['監査なし', `次に kim がすること: PowerShell で実行する\n${burdenCommand}`, true, /手間監査/],
+  ['依頼なし', '次に kim がすること: なし', false],
+  ['理由付き例外', '次に kim がすること: ケーブルを挿す\n[BURDEN-OK] 物理作業で渡すファイルがないため。', false],
+  ['本文だけの依頼', 'リンクを開いてください。', true, /完成品/],
+  ['なしでも本文に依頼', 'ボタンを押してください。\n次に kim がすること: なし', true, /完成品/],
+  ['監査に根拠なし', '次に kim がすること: 同意する\nhttps://example.com\n手間監査: こちらでは無理。1クリック。', true, /手間監査/],
+  ['監査に操作回数なし', '次に kim がすること: 同意する\nhttps://example.com\n手間監査: OAuth 本人同意のため。', true, /手間監査/],
+  ['根拠は同じ監査行に必要', '次に kim がすること: 同意する\nhttps://example.com\n手間監査: 1クリック\nOAuth 本人同意のため。', true, /手間監査/],
+  ['理由なしの例外は無効', '次に kim がすること: 実行する\n[BURDEN-OK]', true],
+  ['URL同梱', `次に kim がすること: 本人同意する\nhttps://example.com/consent\n${burdenAudit}`, false],
+  ['Desktop完成品', `次に kim がすること: ショートカットを開く\nC:\\Users\\kim\\Desktop\\consent.lnk\n${burdenAudit}`, false],
+  ['コード中の依頼では発火しない', '```text\n次に kim がすること: 実行する\n```\n修正済みです。', false],
+  ['コード中の監査は無効', `次に kim がすること: 同意する\n\`\`\`text\n${burdenAudit}\n\`\`\``, true, /手間監査/],
+  ['通常報告の参照は対象外', '以前のファイルを修正しました。\n次に kim がすること: なし（完了）', false],
+];
+for (const prefix of ['前に送った', '先ほどの', 'さっきの', '上の', '前述の', '以前の', '前回の']) {
+  burdenCases.push([`${prefix}の参照`, `次に kim がすること: ${prefix}コマンドを実行する\n${burdenCommand}\n${burdenAudit}`, true, /遡り参照/]);
+}
+for (const [name, text, blocked, reason] of burdenCases) {
+  test(`user-burden-gate: ${name}`, t => {
+    const judged = judgeUserBurden(text);
+    assert.equal(judged.decision, blocked ? 'block' : 'pass');
+    if (reason) assert.match(judged.reason, reason);
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-burden-'));
+    t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+    const result = invoke(home, 'burden', text);
+    assert.equal(result.status, 0, result.stderr);
+    const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8'));
+    assert.equal(record.blockedBy.includes('user-burden-gate'), blocked);
+    assert.ok(!record.reasonCodes.includes('error:user-burden-gate'));
+    if (blocked) assert.match(JSON.parse(result.stdout).reason, /### user-burden-gate[\s\S]*USER-BURDEN/);
+  });
+}
+
+test('user-burden-gate: transcript の最後の assistant だけを監査する', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-burden-transcript-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const transcript = path.join(home, 'transcript.jsonl');
+  const bad = '次に kim がすること: 前に送った PowerShell の1行を実行する';
+  const good = '次に kim がすること: なし';
+  for (const [index, texts] of [[bad, good], [good, bad]].entries()) {
+    fs.writeFileSync(transcript, texts.map(text => JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] } })).join('\n'));
+    const result = invoke(home, `transcript-${index}`, undefined, { transcript_path: transcript });
+    assert.equal(result.status, 0, result.stderr);
+    const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8').trim().split('\n').at(-1));
+    assert.equal(record.blockedBy.includes('user-burden-gate'), index === 1);
+  }
+});

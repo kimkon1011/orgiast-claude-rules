@@ -432,7 +432,7 @@ def main():
         ledger = load_ledger()
         hit = {i for i in ledger if i.startswith(prefix)}
         save_ledger(ledger - hit)
-        
+
         # closed-sessions-archived.json からも落とす
         archived_data = load_archived()
         entries = archived_data.get("entries", {})
@@ -441,7 +441,7 @@ def main():
             entries.pop(sid, None)
         if hit_archived:
             save_archived(archived_data)
-            
+
         print(f"forgot {len(hit)}: {sorted(hit)}")
         return
     if "--watch" in sys.argv:

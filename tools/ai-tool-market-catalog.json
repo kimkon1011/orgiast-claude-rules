@@ -1,0 +1,651 @@
+{
+  "version": 1,
+  "purpose": "AIニュース提案 P-0153: AIツールの商用/趣味レベル実態調査。世の中に出ているAIツールをカテゴリ別に、機能・価格帯・商用利用の可否でマッピングする。",
+  "researchedAt": "2026-09-26",
+  "method": "WebSearch による二次情報の突き合わせ。価格は複数ソースで一致した範囲を priceBand として記録し、単一ソースのみ／ソース間で食い違う場合は confidence を low に落とした。断定できない値は null のまま残す（推測で埋めない）。",
+  "caveat": "価格は 2026-09 時点の公開情報。為替・値改定・地域差で変動するため、契約直前に各社公式の価格ページで確認する。円換算は 1USD=150JPY の目安。",
+  "usdJpyAssumption": 150,
+  "levels": {
+    "hobby": "趣味・個人。無料〜月20USD未満。商用利用が不可／条件付きのことが多く、入力が学習に使われる場合がある。",
+    "prosumer": "副業・小規模商用。月20〜100USD。商用利用ライセンスが付き始める帯。",
+    "business": "法人・チーム。月100USD以上または席課金。学習オプトアウト・権限管理・IP補償が付く帯。"
+  },
+  "commercialUseValues": {
+    "allowed": "商用利用可（有料プランで明示的に許諾）",
+    "restricted": "条件付き（用途・プラン・クレジット種別で制限。例: 配信不可、ウォーターマーク有、生成物が既定公開）",
+    "not-allowed": "商用利用不可（無料プランは非商用のみ等）",
+    "varies": "ソース間で見解が割れている／プランにより異なる"
+  },
+  "pricingModels": {
+    "seat": "席課金（1ユーザーあたり月額）",
+    "credit": "クレジット消費型",
+    "metered": "従量課金（API・秒・枚）",
+    "selfhost": "自前ホスト（ソフト本体は無料、インフラ費のみ）"
+  },
+  "orgLenses": [
+    {
+      "capability": "実装・コーディング",
+      "categoryId": "code",
+      "current": "Claude Code / Codex / GLM Coding Plan / Cursor / Cerebras を併用（tools/ai-subscription-catalog.json）",
+      "marketEntry": "GitHub Copilot Pro 10USD/席",
+      "gap": "GLM は2026年に2度値上げし、年払いを避けるよう警告している記事がある。同じ作業を Copilot Pro(10USD) で代替できるなら、価格変動リスクを1社に集めない方が安全。"
+    },
+    {
+      "capability": "調査・リサーチ",
+      "categoryId": "research",
+      "current": "Genspark Plus（契約済み）",
+      "marketEntry": "Perplexity Free / NotebookLM Free",
+      "gap": "出典付きの軽い調査は無料枠で足りる。Genspark の Plus は成果物生成（Sparkpage・スライド）に価値があり、単純検索の代替には不要。"
+    },
+    {
+      "capability": "画像生成",
+      "categoryId": "image",
+      "current": "契約なし",
+      "marketEntry": "FLUX.1 schnell（Apache 2.0・無料）／Adobe Firefly（IP補償付き）",
+      "gap": "社外提案書に使うなら無料プランは全て不可（ウォーターマーク・既定公開・非商用）。法務リスクを避けるなら Firefly、コストを避けるなら schnell の自前ホスト。"
+    },
+    {
+      "capability": "動画生成",
+      "categoryId": "video",
+      "current": "契約なし",
+      "marketEntry": "Kling Standard 5.99USD/月",
+      "gap": "ブース動線の再現は Kling の最安枠で試作し、採用が決まった案件だけ Runway / Veo に上げる二段構えが妥当。クレジットは翌月に繰り越されないため、試作と本番で契約を分ける。"
+    },
+    {
+      "capability": "会議・議事録",
+      "categoryId": "meeting",
+      "current": "契約なし",
+      "marketEntry": "Notta Premium 1,980円/月（日本語1,800分）",
+      "gap": "日本語会議が中心なら Notta。無料枠を選ぶと Otter(英語のみ)・tl;dv(要約10回通算・3ヶ月で削除) は実務に届かない。円建てなので為替リスクが無い。"
+    },
+    {
+      "capability": "業務自動化",
+      "categoryId": "automation",
+      "current": "社内は Node スクリプト＋GitHub Actions が主体",
+      "marketEntry": "n8n Community（自前ホスト・無料）",
+      "gap": "既にコードで回している処理を Zapier に移すと、課金単位がタスク（ステップ数）であるため逆に高くつく。自動化SaaSを検討するなら n8n の自前ホストが唯一整合する。"
+    }
+  ],
+  "marketStats": [
+    { "metric": "724ツール中 freemium の割合", "value": "53%（386件）", "source": "https://toolchase.com/state-of-ai-tools-2026/" },
+    { "metric": "完全無料のツール", "value": "6%（44件）", "source": "https://toolchase.com/state-of-ai-tools-2026/" },
+    { "metric": "何らかの無料アクセスを提供", "value": "59%", "source": "https://toolchase.com/state-of-ai-tools-2026/" },
+    { "metric": "主要アシスタントの標準月額", "value": "20USD。10USD未満のライト層（ChatGPT Go 8USD / Gemini Plus 4.99USD）が出現", "source": "https://toolchase.com/state-of-ai-tools-2026/" }
+  ],
+  "categories": [
+    {
+      "id": "chat",
+      "name": "汎用チャット・推論",
+      "role": "社内の下書き・要約・翻訳・壁打ちの土台。ここが最も「無料で足りる」ため、趣味とビジネスの差が最も出にくいカテゴリ。",
+      "businessTrigger": "入力データを学習に使わせない契約（Team/Enterprise）と SSO・権限管理が要る時点でビジネス帯に上がる。",
+      "tools": [
+        {
+          "name": "ChatGPT",
+          "vendor": "OpenAI",
+          "levels": ["hobby", "prosumer", "business"],
+          "pricingModel": "seat",
+          "priceBandUsdMonthly": [0, 200],
+          "tiers": [
+            { "name": "Free", "usdMonthly": 0 },
+            { "name": "Go", "usdMonthly": 8 },
+            { "name": "Plus", "usdMonthly": 20 },
+            { "name": "Pro", "usdMonthly": 100 },
+            { "name": "Business", "usdMonthly": 20, "note": "年払い/席。月払いは25USD/席。2席から" }
+          ],
+          "commercialUse": "allowed",
+          "hobbyLimit": "無料でもテキストチャットの回数制限は2026年8月に撤廃。ただし入力が学習に使われ得る。",
+          "businessNote": "Business 以上で既定で学習に使わない。Pro は上位モデルと高枠。",
+          "confidence": "medium",
+          "sources": ["https://chatgpt.com/ja-JP/pricing", "https://www.cloudzero.com/blog/how-much-does-chatgpt-cost/"]
+        },
+        {
+          "name": "Claude",
+          "vendor": "Anthropic",
+          "levels": ["hobby", "prosumer", "business"],
+          "pricingModel": "seat",
+          "priceBandUsdMonthly": [0, 200],
+          "tiers": [
+            { "name": "Free", "usdMonthly": 0 },
+            { "name": "Pro", "usdMonthly": 20, "note": "年払い17USD" },
+            { "name": "Max 5x", "usdMonthly": 100 },
+            { "name": "Max 20x", "usdMonthly": 200 },
+            { "name": "Team Standard", "usdMonthly": 25, "note": "年払い20USD/席。5席から（2席とするソースもあり）" },
+            { "name": "Team Premium", "usdMonthly": 125, "note": "年払い100USD/席。Claude Code を含む" }
+          ],
+          "commercialUse": "allowed",
+          "hobbyLimit": "長文処理は無料範囲でも強い。5時間あたりの利用上限あり（2026-05-06 に倍増）。",
+          "businessNote": "Team 以上で管理者控制・SSO・学習オプトアウト。Claude Code を使うなら Team Premium 以上。",
+          "confidence": "medium",
+          "sources": ["https://benchlm.ai/claude/pricing-plans", "https://www.spendhound.com/blog/claude-pricing-negotiation-guide"]
+        },
+        {
+          "name": "Google Gemini",
+          "vendor": "Google",
+          "levels": ["hobby", "prosumer", "business"],
+          "pricingModel": "seat",
+          "priceBandUsdMonthly": [0, 200],
+          "tiers": [
+            { "name": "Free", "usdMonthly": 0 },
+            { "name": "AI Plus", "usdMonthly": 7.99, "note": "日本円 1,200円/月" },
+            { "name": "AI Pro", "usdMonthly": 19.99, "note": "日本円 2,900円/月。5TB・YouTube Premium Lite 付帯" },
+            { "name": "AI Ultra 5x", "usdMonthly": 99.99, "note": "日本円 14,500円/月。月払いのみ" },
+            { "name": "AI Ultra 20x", "usdMonthly": 200, "note": "日本円 32,000円/月。旧250USDから値下げ" }
+          ],
+          "commercialUse": "varies",
+          "hobbyLimit": "無料でも高速モデルにアクセス可。無料の画像生成はウォーターマーク付き・1日約20枚。",
+          "businessNote": "Workspace 契約とは別建て。日本は円建てプランに移行済みで、ドル建てより為替リスクが小さい。",
+          "confidence": "medium",
+          "sources": ["https://pc.watch.impress.co.jp/docs/news/2110129.html", "https://mashable.com/article/google-io-2026-gemini-ultra-ai-subscription-tiers"]
+        }
+      ]
+    },
+    {
+      "id": "code",
+      "name": "コーディングエージェント",
+      "role": "実装の自動化。単価が最も高く、かつ「定額サブスク vs API従量」の損益分岐がはっきりしているカテゴリ。",
+      "businessTrigger": "複数人で同じ枠を共有する／社外に出せないコードを扱う／監査ログが要る時点でビジネス帯。",
+      "tools": [
+        {
+          "name": "GitHub Copilot",
+          "vendor": "GitHub",
+          "levels": ["hobby", "prosumer", "business"],
+          "pricingModel": "seat",
+          "priceBandUsdMonthly": [0, 100],
+          "tiers": [
+            { "name": "Free", "usdMonthly": 0, "note": "補完2,000回/月・チャット50回/月" },
+            { "name": "Pro", "usdMonthly": 10 },
+            { "name": "Pro+", "usdMonthly": 39 },
+            { "name": "Max", "usdMonthly": 100 },
+            { "name": "Business", "usdMonthly": 19 }
+          ],
+          "commercialUse": "allowed",
+          "hobbyLimit": "Free は補完回数に上限。2026-06-01 から AI credits 課金（1 credit = 0.01USD）に移行。",
+          "businessNote": "最安の入口。他社エージェント（Claude Code / Codex）を Copilot から動かす経路もある。",
+          "confidence": "medium",
+          "sources": ["https://openclawlaunch.com/guides/ai-coding-plans-compared", "https://rankllms.com/coding-plans/"]
+        },
+        {
+          "name": "Cursor",
+          "vendor": "Anysphere",
+          "levels": ["hobby", "prosumer", "business"],
+          "pricingModel": "seat",
+          "priceBandUsdMonthly": [0, 200],
+          "tiers": [
+            { "name": "Hobby", "usdMonthly": 0, "note": "プレミアムリクエスト50回/月" },
+            { "name": "Pro", "usdMonthly": 20, "note": "フロンティアモデル枠 20USD 込み" },
+            { "name": "Ultra", "usdMonthly": 200, "note": "終日エージェント運用向け" }
+          ],
+          "commercialUse": "allowed",
+          "hobbyLimit": "Free はプレミアムリクエスト50回/月。タブ補完は無制限。",
+          "businessNote": "IDE 型。API キーを検出できないため社内の利用実態把握は契約台帳側で行う必要がある。",
+          "confidence": "medium",
+          "sources": ["https://www.aimadetools.com/blog/how-to-choose-ai-coding-agent-2026", "https://andrew.ooo/answers/cheapest-ai-coding-subscription-2026-glm-copilot-claude-cursor/"]
+        },
+        {
+          "name": "GLM Coding Plan",
+          "vendor": "Z.ai (Zhipu)",
+          "levels": ["prosumer", "business"],
+          "pricingModel": "seat",
+          "priceBandUsdMonthly": [10, 160],
+          "tiers": [
+            { "name": "Lite (海外)", "usdMonthly": 18, "note": "2026-02 に約10USD、2026-04 に18USDへ二段階値上げ。年払い12.6USD" },
+            { "name": "Pro (海外)", "usdMonthly": 72 },
+            { "name": "Max (海外)", "usdMonthly": 160 },
+            { "name": "中国国内 Lite", "usdMonthly": 7, "note": "約20元。海外版と同一枠で2倍以上の差" }
+          ],
+          "commercialUse": "allowed",
+          "hobbyLimit": "Lite でも Claude Code / Cline / Codex 等 20以上のツールから使える。ピーク時間はポイント2倍消費。",
+          "businessNote": "2026年に2度値上げしており年間契約は非推奨とする記事が多い。データ所在地が中国である点は要確認。",
+          "confidence": "low",
+          "sources": ["https://www.remio.ai/post/the-glm-coding-plan-went-viral-in-north-america-then-the-price-doubled"]
+        }
+      ]
+    },
+    {
+      "id": "research",
+      "name": "調査・検索・資料化",
+      "role": "外部情報の収集と一次資料の読み込み。無料枠が最も実用的なカテゴリで、趣味レベルでも業務品質に届く。",
+      "businessTrigger": "社内文書を大量に読み込ませる／出典の監査が要る時点でビジネス帯。",
+      "tools": [
+        {
+          "name": "Perplexity",
+          "vendor": "Perplexity AI",
+          "levels": ["hobby", "prosumer"],
+          "pricingModel": "seat",
+          "priceBandUsdMonthly": [0, 20],
+          "tiers": [
+            { "name": "Free", "usdMonthly": 0, "note": "基本検索は無制限、Pro検索 約5回/日" },
+            { "name": "Pro", "usdMonthly": 20, "note": "Pro検索 約300回/日、ファイル投入・画像生成" }
+          ],
+          "commercialUse": "allowed",
+          "hobbyLimit": "無料でも出典付き検索が無制限。日常の調査はここで足りる。",
+          "businessNote": "円建て未対応（USD建て）。出典URLが残るため根拠提示に向く。",
+          "confidence": "medium",
+          "sources": ["https://aiagentsquare.com/category/research-ai-agents", "https://eyalmarcus.com/en/blog/ai-tools-guide-2026/"]
+        },
+        {
+          "name": "Genspark",
+          "vendor": "Genspark",
+          "levels": ["prosumer", "business"],
+          "pricingModel": "seat",
+          "priceBandUsdMonthly": [24.99, 249.99],
+          "tiers": [
+            { "name": "Plus", "usdMonthly": 24.99, "note": "年払い19.99USD" },
+            { "name": "Pro", "usdMonthly": 249.99 }
+          ],
+          "commercialUse": "allowed",
+          "hobbyLimit": "無料枠はあるが、Sparkpage・スライド・シート生成は Plus 以上が実用的。",
+          "businessNote": "調査結果を成果物の形で出す点が他と違う。社内では既に契約済み（tools/ai-subscription-catalog.json）。",
+          "confidence": "medium",
+          "sources": ["https://eyalmarcus.com/en/blog/ai-tools-guide-2026/", "https://aiagentsquare.com/category/research-ai-agents"]
+        },
+        {
+          "name": "NotebookLM",
+          "vendor": "Google",
+          "levels": ["hobby", "prosumer"],
+          "pricingModel": "seat",
+          "priceBandUsdMonthly": [0, 19.99],
+          "tiers": [
+            { "name": "Free", "usdMonthly": 0, "note": "ノートブック100・ソース50/冊・チャット50回/日・音声概要3回/日" },
+            { "name": "Plus (Google AI Plus 経由)", "usdMonthly": 7.99 },
+            { "name": "Plus (Google AI Pro 経由)", "usdMonthly": 19.99 }
+          ],
+          "commercialUse": "allowed",
+          "hobbyLimit": "単体課金は廃止され Google AI サブスクに同梱。無料枠が「たいていの用途に足りる」と複数ソースが評価。",
+          "businessNote": "読み込ませた文書だけを根拠にするため、社内文書の要約に向く。",
+          "confidence": "low",
+          "sources": ["https://jiangren.com.au/blog/notebooklm-guide-05-faq"]
+        }
+      ]
+    },
+    {
+      "id": "doc",
+      "name": "資料・スライド作成",
+      "role": "提案書・スライドの初稿生成。単価は安く、趣味と商用の差はほぼ「クレジット数」だけ。",
+      "businessTrigger": "PPTX 書き出しや自社テンプレート適用、複数人編集が要る時点でビジネス帯。",
+      "tools": [
+        {
+          "name": "Gamma",
+          "vendor": "Gamma",
+          "levels": ["hobby", "prosumer"],
+          "pricingModel": "credit",
+          "priceBandUsdMonthly": [0, 90],
+          "tiers": [
+            { "name": "Free", "usdMonthly": 0, "note": "登録時400クレジットの買い切り（毎月補充なし）" },
+            { "name": "Plus", "usdMonthly": 9, "note": "1,000クレジット/月" },
+            { "name": "Pro", "usdMonthly": 18, "note": "4,000クレジット/月" },
+            { "name": "Ultra", "usdMonthly": 90 }
+          ],
+          "commercialUse": "allowed",
+          "hobbyLimit": "無料枠は買い切りで、再生成やPPTX出力のたびに減るため業務では早期に尽きる。",
+          "businessNote": "有料プラン前提で考えるのが現実的。デザインより速度のツール。",
+          "confidence": "medium",
+          "sources": ["https://www.anygen.io/showcase/zi-liao-zuo-cheng-ai-bi-jiao/index.html"]
+        },
+        {
+          "name": "Napkin AI",
+          "vendor": "Napkin",
+          "levels": ["hobby", "prosumer"],
+          "pricingModel": "credit",
+          "priceBandUsdMonthly": [0, 22],
+          "tiers": [
+            { "name": "Free", "usdMonthly": 0, "note": "週500クレジット（毎週リセット）" },
+            { "name": "Plus", "usdMonthly": 9, "note": "10,000クレジット/月" },
+            { "name": "Pro", "usdMonthly": 22, "note": "30,000クレジット/月" }
+          ],
+          "commercialUse": "allowed",
+          "hobbyLimit": "無料枠が毎週戻るため、趣味用途では継続的に使える珍しい型。",
+          "businessNote": "文章から図解を作る専用機。スライド全体生成の Gamma とは役割が別。",
+          "confidence": "medium",
+          "sources": ["https://www.anygen.io/showcase/zi-liao-zuo-cheng-ai-bi-jiao/index.html"]
+        }
+      ]
+    },
+    {
+      "id": "image",
+      "name": "画像生成",
+      "role": "ブースのパース・資料のビジュアル。ここは「商用利用の可否」が価格以上に重要になるカテゴリ。",
+      "businessTrigger": "広告・提案書など社外に出る成果物に使う時点で、無料プランは全て失格になる。",
+      "tools": [
+        {
+          "name": "Midjourney",
+          "vendor": "Midjourney",
+          "levels": ["prosumer", "business"],
+          "pricingModel": "seat",
+          "priceBandUsdMonthly": [10, 120],
+          "tiers": [
+            { "name": "Basic", "usdMonthly": 10, "note": "年払い8USD。Fast 3.3時間" },
+            { "name": "Standard", "usdMonthly": 30, "note": "Relax 無制限" },
+            { "name": "Pro", "usdMonthly": 60, "note": "Stealth Mode" },
+            { "name": "Mega", "usdMonthly": 120 }
+          ],
+          "commercialUse": "allowed",
+          "hobbyLimit": "無料プランが存在しない（=趣味でも最低10USD）。",
+          "businessNote": "年商100万USD超の企業は Pro 以上が要るとされる。法人の利用条件は要確認。",
+          "confidence": "medium",
+          "sources": ["https://toolradar.com/guides/best-ai-image-generators", "https://aiweekly.co/learning-ai/ai-applications/best-ai-image-generators"]
+        },
+        {
+          "name": "Ideogram",
+          "vendor": "Ideogram",
+          "levels": ["hobby", "prosumer"],
+          "pricingModel": "credit",
+          "priceBandUsdMonthly": [0, 42],
+          "tiers": [
+            { "name": "Free", "usdMonthly": 0, "note": "約10プロンプト/日" },
+            { "name": "Basic", "usdMonthly": 8 },
+            { "name": "Plus", "usdMonthly": 15 },
+            { "name": "Pro", "usdMonthly": 42 }
+          ],
+          "commercialUse": "restricted",
+          "hobbyLimit": "無料プランは生成物が既定で公開される。文字入れが得意。",
+          "businessNote": "有料プランは商用可だが、オープンウェイト版(Ideogram 4.0)は非商用のみで、商用自前ホストは別ライセンス。",
+          "confidence": "low",
+          "sources": ["https://www.layer3labs.io/comparisons/ideogram-alternatives", "https://zenn.dev/donaldxs/articles/5bb7fd8327a1d1"]
+        },
+        {
+          "name": "Adobe Firefly",
+          "vendor": "Adobe",
+          "levels": ["prosumer", "business"],
+          "pricingModel": "credit",
+          "priceBandUsdMonthly": [0, null],
+          "tiers": [
+            { "name": "無料枠", "usdMonthly": 0, "note": "10クレジットのみ（補充なし）" }
+          ],
+          "commercialUse": "allowed",
+          "hobbyLimit": "無料枠は事実上お試しのみ。",
+          "businessNote": "商用可かつ法人向けIP補償がある点が他社との決定的な差。法務が絡む案件ではここが安全側。",
+          "confidence": "medium",
+          "sources": ["https://zenn.dev/donaldxs/articles/5bb7fd8327a1d1"]
+        },
+        {
+          "name": "FLUX (Black Forest Labs)",
+          "vendor": "Black Forest Labs",
+          "levels": ["prosumer", "business"],
+          "pricingModel": "metered",
+          "priceBandUsdMonthly": [null, null],
+          "tiers": [
+            { "name": "FLUX.2 klein 4B", "usdPerMegapixel": 0.014 },
+            { "name": "FLUX.2 pro", "usdPerMegapixel": 0.03 },
+            { "name": "FLUX.2 max", "usdPerMegapixel": 0.07 },
+            { "name": "FLUX.1 schnell (Apache 2.0)", "usdPerMegapixel": 0, "note": "自前ホストで商用可" },
+            { "name": "FLUX.2 dev", "usdPerMegapixel": 0, "note": "オープンウェイトだが非商用" }
+          ],
+          "commercialUse": "varies",
+          "hobbyLimit": "月額プランが存在せず、枚数課金のみ。",
+          "businessNote": "モデルごとに商用可否が違う。schnell(Apache 2.0)だけが無料で商用可。dev は非商用なので取り違えると事故になる。",
+          "confidence": "medium",
+          "sources": ["https://www.layer3labs.io/comparisons/stable-diffusion-alternatives"]
+        }
+      ]
+    },
+    {
+      "id": "video",
+      "name": "動画生成",
+      "role": "ブース提案の動線再現・SNS用の短尺。2026年は無料枠が縮小し、趣味とビジネスの断絶が最も大きいカテゴリ。",
+      "businessTrigger": "社外に出す映像に使う時点で、無料枠はウォーターマークと商用不可の二重で失格。",
+      "tools": [
+        {
+          "name": "Kling",
+          "vendor": "Kuaishou",
+          "levels": ["hobby", "prosumer"],
+          "pricingModel": "credit",
+          "priceBandUsdMonthly": [5.99, 92],
+          "tiers": [
+            { "name": "Standard", "usdMonthly": 5.99, "note": "Kling 2.0 / 660クレジット。3.0 は6.99USD" },
+            { "name": "Pro", "usdMonthly": 25.99 },
+            { "name": "Premier", "usdMonthly": 92, "note": "1080p〜4K・商用利用" }
+          ],
+          "commercialUse": "allowed",
+          "hobbyLimit": "月6USDで約66本の5秒動画。動画生成としては最安の入口。",
+          "businessNote": "商用利用の明示が Premier 帯。コスパ最優先の選択肢。",
+          "confidence": "low",
+          "sources": ["https://parallax.kr/en/blog/ai-video-generator-pricing-compared-2026", "https://socialsight.ai/blog/best-ai-video-models-2026-costs"]
+        },
+        {
+          "name": "Runway",
+          "vendor": "Runway",
+          "levels": ["prosumer", "business"],
+          "pricingModel": "credit",
+          "priceBandUsdMonthly": [12, 95],
+          "tiers": [
+            { "name": "Standard", "usdMonthly": 15, "note": "年払い12USD。625クレジット" },
+            { "name": "Pro", "usdMonthly": 35, "note": "年払い28USD。2,250クレジット" },
+            { "name": "Unlimited", "usdMonthly": 95, "note": "年払い76USD" }
+          ],
+          "commercialUse": "allowed",
+          "hobbyLimit": "無料は125クレジットの使い切り・720p・ウォーターマーク付き。",
+          "businessNote": "クレジットの減りがモデルで5〜25倍違う。Gen-4.5 は毎秒25クレジットで、Standard 枠だと月25秒分しかない。見積は「完成秒数×モデル係数」で行う。",
+          "confidence": "medium",
+          "sources": ["https://academy.techpresso.co/reviews/is-runway-worth-it", "https://parallax.kr/en/blog/ai-video-generator-pricing-compared-2026"]
+        },
+        {
+          "name": "Sora",
+          "vendor": "OpenAI",
+          "levels": ["prosumer", "business"],
+          "pricingModel": "seat",
+          "priceBandUsdMonthly": [20, 200],
+          "tiers": [
+            { "name": "ChatGPT Plus 経由", "usdMonthly": 20, "note": "720p・5〜10秒・ウォーターマーク" },
+            { "name": "ChatGPT Pro 経由", "usdMonthly": 200, "note": "1080p・ウォーターマーク無し" }
+          ],
+          "commercialUse": "varies",
+          "hobbyLimit": "単体契約は無く ChatGPT に同梱。",
+          "businessNote": "コンシューマ向けアプリは2026-04-26 に終了との情報があり、提供形態が流動的。導入判断は保留が妥当。",
+          "confidence": "low",
+          "sources": ["https://toolindex.net/blog/ai-video-generation-sora-vs-kling-vs-runway-2026"]
+        },
+        {
+          "name": "Wan 2.2 / LTX Video（オープンソース）",
+          "vendor": "Alibaba / Lightricks ほか",
+          "levels": ["prosumer"],
+          "pricingModel": "selfhost",
+          "priceBandUsdMonthly": [null, null],
+          "tiers": [
+            { "name": "自前GPU", "usdMonthly": null, "note": "Apache 2.0・商用無制限。VRAM 12GB以上（Helios は6GB）" }
+          ],
+          "commercialUse": "allowed",
+          "hobbyLimit": "ソフトは無料。実費はGPUのみ。",
+          "businessNote": "従量課金を完全に回避できる唯一の型。ただしGPUの初期費用と運用工数が価格に乗らない点に注意。",
+          "confidence": "medium",
+          "sources": ["https://www.creativeainews.com/articles/best-free-ai-tools-creators-2026/"]
+        }
+      ]
+    },
+    {
+      "id": "audio",
+      "name": "音声・音楽",
+      "role": "動画のBGM・ナレーション・効果音。権利条件がプラン単位で細かく切られており、最も事故りやすいカテゴリ。",
+      "businessTrigger": "広告・配信・企業案件に使う時点で、用途別にプランが上がる。",
+      "tools": [
+        {
+          "name": "Suno",
+          "vendor": "Suno",
+          "levels": ["hobby", "prosumer"],
+          "pricingModel": "seat",
+          "priceBandUsdMonthly": [0, 30],
+          "tiers": [
+            { "name": "Basic", "usdMonthly": 0, "note": "50クレジット/日（約10曲）・非商用のみ" },
+            { "name": "Pro", "usdMonthly": 10, "note": "年払い8USD。2,500クレジット/月・商用可" },
+            { "name": "Premier", "usdMonthly": 30, "note": "年払い24USD。10,000クレジット/月・Studio DAW" }
+          ],
+          "commercialUse": "restricted",
+          "hobbyLimit": "無料枠は非商用のみ。しかも権利は生成時に確定するため、後から有料プランに上げても遡及しない。",
+          "businessNote": "有料プランで作った曲は解約後も商用権利が残る。他ユーザーの曲をリミックスすると商用権利が外れる。学習データを巡る訴訟が継続中で、Content ID リスクは残る。",
+          "confidence": "medium",
+          "sources": ["https://www.licenseorg.com/blog/ai-music-licensing-suno-elevenlabs", "https://www.rightsdocket.com/insights/ai-music-rights-by-platform-2026"]
+        },
+        {
+          "name": "ElevenLabs",
+          "vendor": "ElevenLabs",
+          "levels": ["prosumer", "business"],
+          "pricingModel": "seat",
+          "priceBandUsdMonthly": [0, 990],
+          "tiers": [
+            { "name": "Free", "usdMonthly": 0, "note": "10,000クレジット/月・非商用" },
+            { "name": "Starter", "usdMonthly": 5, "note": "商用ライセンスはここから。配信は不可" },
+            { "name": "Creator", "usdMonthly": 22 },
+            { "name": "Pro", "usdMonthly": 99 },
+            { "name": "Scale", "usdMonthly": 299, "note": "広告・配信・企業・podcast がここで解禁" },
+            { "name": "Business", "usdMonthly": 990 },
+            { "name": "Enterprise", "usdMonthly": null, "note": "映画・TV・劇場・ラジオ" }
+          ],
+          "commercialUse": "restricted",
+          "hobbyLimit": "無料は非商用かつ「Eleven Music」のクレジット表記が要る。",
+          "businessNote": "権利が用途別に切られており、用途に合うプランに上げないと使えない（配信は Scale 以上、映画は Enterprise）。逆にアップグレードは過去の生成物にも遡及する。",
+          "confidence": "medium",
+          "sources": ["https://www.licenseorg.com/blog/ai-music-licensing-suno-elevenlabs"]
+        },
+        {
+          "name": "Kokoro TTS",
+          "vendor": "オープンソース",
+          "levels": ["hobby", "prosumer"],
+          "pricingModel": "selfhost",
+          "priceBandUsdMonthly": [0, 0],
+          "tiers": [
+            { "name": "自前実行", "usdMonthly": 0, "note": "Apache 2.0・商用可・CPUで動作" }
+          ],
+          "commercialUse": "allowed",
+          "hobbyLimit": "無制限・無料。",
+          "businessNote": "読み上げ用途なら商用ライセンス料をゼロにできる。GPU不要な点が導入障壁を下げる。",
+          "confidence": "medium",
+          "sources": ["https://www.creativeainews.com/articles/best-free-ai-tools-creators-2026/"]
+        }
+      ]
+    },
+    {
+      "id": "meeting",
+      "name": "会議・議事録",
+      "role": "商談・現場打ち合わせの記録。日本語精度とデータ保管場所が選定の決定要因。",
+      "businessTrigger": "機微な商談を扱う／日本語会議が中心／録音の保存期間を管理する時点でビジネス帯。",
+      "tools": [
+        {
+          "name": "tl;dv",
+          "vendor": "tl;dv",
+          "levels": ["hobby", "prosumer"],
+          "pricingModel": "seat",
+          "priceBandUsdMonthly": [0, 29],
+          "tiers": [
+            { "name": "Free", "usdMonthly": 0, "note": "録音は無制限だがAIノートは通算10回・録音は3ヶ月で自動削除" },
+            { "name": "Pro", "usdMonthly": 18, "note": "年払い/席" },
+            { "name": "Business", "usdMonthly": 26, "note": "年払い/席。ソースにより29USD" }
+          ],
+          "commercialUse": "allowed",
+          "hobbyLimit": "無料はAI要約が通算10回で月次リセットなし。しかも3ヶ月で録音が消える。",
+          "businessNote": "EU拠点でデータを欧州に保管。GDPR / EU AI Act 対応を明示。クリップ共有が強い。",
+          "confidence": "medium",
+          "sources": ["https://theaiagentindex.com/agents/tldv", "https://toolchase.com/blog/best-ai-note-takers-2026/"]
+        },
+        {
+          "name": "Notta",
+          "vendor": "Notta",
+          "levels": ["hobby", "prosumer"],
+          "pricingModel": "seat",
+          "priceBandUsdMonthly": [0, null],
+          "tiers": [
+            { "name": "Free", "usdMonthly": 0, "note": "120分/月・1回3分・要約10回/月" },
+            { "name": "Premium", "usdMonthly": null, "jpyMonthly": 1980, "note": "1,800分/月" }
+          ],
+          "commercialUse": "allowed",
+          "hobbyLimit": "無料枠は1回3分までなので会議には短い。",
+          "businessNote": "日本語の公表精度98.86%・58言語。国内データ保管を重視する用途で第一候補。円建てで価格が読める。",
+          "confidence": "medium",
+          "sources": ["https://uravation.com/media/ai-meeting-notetaker-comparison-2026/"]
+        },
+        {
+          "name": "Otter.ai",
+          "vendor": "Otter.ai",
+          "levels": ["hobby", "prosumer"],
+          "pricingModel": "seat",
+          "priceBandUsdMonthly": [0, 30],
+          "tiers": [
+            { "name": "Free", "usdMonthly": 0, "note": "300分/月・1回30分・英語のみ" },
+            { "name": "Pro", "usdMonthly": 16.99, "note": "年払い約8.33USD。1,200分/月" },
+            { "name": "Business", "usdMonthly": 19.99 }
+          ],
+          "commercialUse": "allowed",
+          "hobbyLimit": "無料プランは英語のみで日本語非対応。日本語会議には使えない。",
+          "businessNote": "英語会議が中心なら最も安い。Pro の分数が6,000→1,200分に減った点は導入前に確認する。",
+          "confidence": "medium",
+          "sources": ["https://uravation.com/media/ai-meeting-notetaker-comparison-2026/"]
+        },
+        {
+          "name": "Plaud",
+          "vendor": "Plaud",
+          "levels": ["prosumer", "business"],
+          "pricingModel": "seat",
+          "priceBandUsdMonthly": [null, null],
+          "tiers": [
+            { "name": "デバイス＋サブスク", "usdMonthly": null, "note": "本体2〜3万円台＋月額。月額はソースに明示なし" }
+          ],
+          "commercialUse": "allowed",
+          "hobbyLimit": "無料枠という概念が無く、ハード購入が前提。",
+          "businessNote": "対面・現場・移動中の録音の現実解。Web会議ボット型ではないので、オンライン会議の自動参加には使えない。費用対効果は対面会議の本数で見積もる。",
+          "confidence": "low",
+          "sources": ["https://uravation.com/media/ai-meeting-notetaker-comparison-2026/"]
+        }
+      ]
+    },
+    {
+      "id": "automation",
+      "name": "業務自動化",
+      "role": "アプリ間の連携と定型処理。課金単位（タスク/クレジット/実行回数）の違いが実費を最も大きく左右する。",
+      "businessTrigger": "実行回数が月5万回を超えるあたりで、自前ホストとの損益分岐が逆転する。",
+      "tools": [
+        {
+          "name": "Zapier",
+          "vendor": "Zapier",
+          "levels": ["hobby", "prosumer", "business"],
+          "pricingModel": "credit",
+          "priceBandUsdMonthly": [0, 69],
+          "tiers": [
+            { "name": "Free", "usdMonthly": 0, "note": "100タスク/月・2ステップのみ" },
+            { "name": "Professional", "usdMonthly": 29.99, "note": "年払い19.99USD。750タスク。49USDとするソースもあり" },
+            { "name": "Team", "usdMonthly": 69, "note": "年払い。2,000タスク・25席" }
+          ],
+          "commercialUse": "allowed",
+          "hobbyLimit": "無料は2ステップまでなので実務の自動化は組めない。",
+          "businessNote": "課金単位がタスク（=ステップ数）なので、多段のワークフローほど高くつく。AIステップは1回で3〜5タスク消費する。連携先は7,000以上で最大。",
+          "confidence": "medium",
+          "sources": ["https://momentumsquads.com/blog/n8n-vs-make-vs-zapier/", "https://toolchase.com/blog/ai-workflow-automation-guide/"]
+        },
+        {
+          "name": "Make",
+          "vendor": "Make",
+          "levels": ["hobby", "prosumer"],
+          "pricingModel": "credit",
+          "priceBandUsdMonthly": [0, 38],
+          "tiers": [
+            { "name": "Free", "usdMonthly": 0, "note": "1,000クレジット/月・2シナリオ" },
+            { "name": "Core", "usdMonthly": 12, "note": "10,000クレジット。9USDとするソースもあり" },
+            { "name": "Pro", "usdMonthly": 29, "note": "16USDとするソースもあり" },
+            { "name": "Teams", "usdMonthly": 38 }
+          ],
+          "commercialUse": "allowed",
+          "hobbyLimit": "無料でも1,000クレジット／月あり、分岐の組み方次第で趣味用途は回る。",
+          "businessNote": "同規模のワークフローで Zapier の1/6〜1/10の実費という試算。中小規模の ops に向く。",
+          "confidence": "medium",
+          "sources": ["https://momentumsquads.com/blog/n8n-vs-make-vs-zapier/", "https://www.buildberg.co/blog/n8n-vs-make-vs-zapier"]
+        },
+        {
+          "name": "n8n",
+          "vendor": "n8n",
+          "levels": ["prosumer", "business"],
+          "pricingModel": "selfhost",
+          "priceBandUsdMonthly": [0, 667],
+          "tiers": [
+            { "name": "Community（自前ホスト）", "usdMonthly": 0, "note": "fair-code。社内利用は無料。VPS 5〜20USD/月" },
+            { "name": "Cloud Starter", "usdMonthly": 24, "note": "年払い€20〜24。2,500実行" },
+            { "name": "Cloud Pro", "usdMonthly": 60, "note": "€50〜60。10,000実行" },
+            { "name": "Business", "usdMonthly": 667, "note": "40,000実行＋自前ホストライセンス" }
+          ],
+          "commercialUse": "allowed",
+          "hobbyLimit": "自前ホストなら実行回数無制限。学習曲線は3つの中で最も急。",
+          "businessNote": "課金単位が実行回数（ステップ数を見ない）。10ステップ×1万回でも1万実行。同条件で Zapier の約50分の1・Make の約6〜10分の1という試算。ただし再販（SaaS化）には有償ライセンスが要る。",
+          "confidence": "medium",
+          "sources": ["https://momentumsquads.com/blog/n8n-vs-make-vs-zapier/", "https://www.bdemerson.com/article/n8n-vs-zapier"]
+        }
+      ]
+    }
+  ]
+}

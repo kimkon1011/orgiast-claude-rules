@@ -25,6 +25,13 @@ jobs:
       - name: reported symptom gates and distribution read-back
         run: node --test "tools/reported-symptom*.test.mjs" tools/state-claim-evidence.test.mjs tools/external-state-claim-gate.test.mjs tools/no-undistributed-imports.test.mjs
 
+      # 市況マップの本文は tools/ai-tool-market-catalog.json から生成する（P-0153）。
+      # 手で本文だけ直すとデータと食い違ったまま残るため、生成物と保存済みレポートの
+      # 一致を CI で強制する。drift したらレポートではなく JSON を直して --write する。
+      - name: ai-tool-market-map drift gate
+        if: ${{ !cancelled() }}
+        run: node --test tools/ai-tool-market-map.test.mjs
+
       - name: keyserve enrollment installer (mock network, real ACL)
         shell: powershell
         run: .\tools\keyserve-enroll-installer.test.ps1
@@ -51,3 +58,6 @@ jobs:
         run: node tools/selftest-guards.mjs
       - name: reported symptom gates and distribution read-back
         run: node --test "tools/reported-symptom*.test.mjs" tools/state-claim-evidence.test.mjs tools/external-state-claim-gate.test.mjs tools/no-undistributed-imports.test.mjs
+      - name: ai-tool-market-map drift gate
+        if: ${{ !cancelled() }}
+        run: node --test tools/ai-tool-market-map.test.mjs

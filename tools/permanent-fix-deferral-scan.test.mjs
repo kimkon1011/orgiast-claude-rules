@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { scan } from './permanent-fix-deferral-scan.mjs';
+import { scan, detect } from './permanent-fix-deferral-scan.mjs';
 
 function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'deferral-scan-'));
@@ -49,5 +49,42 @@ test('CLIはJSON・人間向け表示・不正ISOの終了コードを守る', t
     const result = run(['--since', value]);
     assert.equal(result.status, 2);
     assert.match(result.stderr, /Usage:/);
+  }
+});
+
+test('既知の実違反原文を検出する', () => {
+  const quotes = [
+    'やりますか。これは配布の挙動を変えるので、勝手には進めません。',
+    `次に kim がすること: \`task:nightly\` に自動修復を付けてよいかの可否。Codex のサインインも未実施のままです。`
+  ];
+  for (const quote of quotes) assert.ok(detect(quote).length >= 1, quote);
+  assert.equal(detect(quotes[0])[0].pattern, 'P4');
+  assert.equal(detect(quotes[1])[0].pattern, 'P3');
+});
+test('手渡しなし・進捗報告・修正完了は検出しない', () => {
+  for (const quote of [
+    '次に kim がすること: なし',
+    '次に kim がすること: ありません（このタスクは自動完結。強いて言えば、明朝の price-snapshots を次セッションが読み戻します）',
+    '修正が完了しました'
+  ]) assert.deepEqual(detect(quote), [], quote);
+});
+test('委譲の完了待ちはW(待機)であって先送り(P1-P4)ではない', () => {
+  const quote = 'Codex の2本の完了を待っています。';
+  assert.deepEqual(detect(quote).map(found => found.pattern), ['W']);
+});
+test('全台帳で最初の一致だけをパターン別に集計する', t => {
+  const home = fixture(t);
+  const quotes = ['恒久修正は次セッションで行う', '後日に実装する',
+    '次に kim がすること: 自動修復の可否', 'やりますか。配布を変えます。', '少々お待ちください'];
+  for (const source of scan({ home }).sources) {
+    assert.deepEqual(source.byPattern, { P1: 0, P2: 0, P3: 0, P4: 0, W: 0 });
+    fs.writeFileSync(source.file, quotes.map(quote => JSON.stringify({
+      ts: '2026-09-26T00:00:00Z', excerpt: quote, violations: [{ quote }]
+    })).join('\n'));
+  }
+  for (const source of scan({ home }).sources) {
+    assert.equal(source.hits, 5);
+    assert.deepEqual(source.byPattern, { P1: 1, P2: 1, P3: 1, P4: 1, W: 1 });
+    assert.deepEqual(source.rows.map(row => row.pattern), ['P1', 'P2', 'P3', 'P4', 'W']);
   }
 });

@@ -112,5 +112,35 @@
     "route": "Claude 側の認証済み Vercel CLI で完結する。`npx vercel deploy --prod --yes` を対象リポジトリのルートで実行（event-shop は `cd D:\\Claude\\event-shop`）。**2026-09-25 03:23 実測: exit 0 / readyState=READY / `event-shop.jp` へエイリアス / 分類器ブロックなし**。`vercel whoami`・`vercel env ls production`・`vercel alias ls`・`vercel inspect <本番URL>`・`vercel deploy --prod` の5経路が全て通る。反映確認は CLI の exit code でなく `vercel inspect` の id/created とエイリアス先で行う（CLI は BLOCKED でも成功に見える）。コミット author が GitHub アカウントに紐づかないメールだと BLOCKED になるので `git log -1 --format=%ae` を先に見る。分類器が止めた場合も「未確認」と書き user に実行させない。詳細 docs/production-deploy-claude-side-route.md",
     "confidence": "high",
     "source": "2026-09-25 auto-session 実測 / handoff-audit:a50af9c008c0c626"
+  },
+  {
+    "pattern": "列マッピング/Z列条件など運用仕様の A/B 選択を user に投げる",
+    "route": "DWD サービスアカウント(kim impersonate)で analyticsadmin/webmasters/tagmanager API を直接照会（tools/google-property-check.mjs、読み取り専用・追加権限不要）。Claude 履歴の Grep は証拠にならない。分類器で止まるなら『未確認』と書く。**2026-09-20 実測**: GA4 ok(accounts 17) / Search Console ok(sites 12) は追加作業ゼロで通る。**GTM だけ errorKind=scope_not_delegated(unauthorized_client)** = Admin Console の DWD に tagmanager.readonly が未登録。GTM を読む場合のみ kim の1アクション（Admin Console → ドメイン全体の委任 → SA client_id に scope 追加）が要る",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:38419955dd90b8fb94c56d63a66a8ce40148a0aa4c5ec7de0e3b3b1399100b6a"
+  },
+  {
+    "pattern": "codex-do.mjs をバックグラウンド起動し『実行中』として待たせる",
+    "route": "待たない。長時間ジョブは前景で --timeout を切って回し切るか、実行基盤（GitHub Actions/タスクスケジューラ/auto-session 再入）に載せる。進捗は ~/.claude/executor-usage.jsonl（status/out/timedOut/secs/cwd）や `gh run view` 等の一次情報を直接照会し、照会できなければ「未確認」と書いて断定も確率表現もしない（監査基準 rule 4）。待ちは ~/.claude/next-session.md の残TODO先頭に「検証のみ1行」を足して次セッションで確認する。セッションを開いたまま「バックグラウンド実行中」と報告しない（2026-09-22 実測: codex-do.mjs は前景・単発で背景起動/進捗照会/待機の機能を持たない。docs/background-progress-wait-route.md）",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:195ac3b69b8085c15a69ff74f9adabae05fbdbd2a9b5f662f150f8943d30b8e7"
+  },
+  {
+    "pattern": "セッション横断検索で見たいセッションを選ばせる",
+    "route": "Grep tool",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:f5bbefb5bb0a415288750ff0922156999a2e461991e75788bbedcdbc07f2c879"
+  },
+  {
+    "pattern": "設計判断の A/B 選択を user に投げる",
+    "route": "gh api",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:9932cd0ee4ffac95b74decc7d8427c399678cfd0d7805bbbe2f9fdd2b0385a5e"
+  },
+  {
+    "pattern": "権限付与・ブランチ保護設定の要否判断",
+    "route": "gh api",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:9932cd0ee4ffac95b74decc7d8427c399678cfd0d7805bbbe2f9fdd2b0385a5e"
   }
 ]

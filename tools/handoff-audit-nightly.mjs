@@ -11,6 +11,9 @@ export function readJsonl(file) {
   try { return fs.readFileSync(file, 'utf8').split(/\r?\n/).flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } }); }
   catch (e) { if (e.code === 'ENOENT') return []; throw e; }
 }
+export function promotionFile(home) {
+  return path.join(home, '.claude', 'handoff-audit-promotions.jsonl');
+}
 const key = value => String(value).normalize('NFKC').trim().replace(/\s+/g, ' ');
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 export function mergeKnowledge(knowledge, learned, candidates, observation) {
@@ -90,7 +93,7 @@ export async function runNightly(options = {}) {
     const done = new Set(readJsonl(processedFile).filter(r => r.verdict !== 'audit-unavailable').map(r => r.observation));
     const targets = selectTargets(readJsonl(path.join(dir, 'handoff-audit-ledger.jsonl')), readJsonl(path.join(dir, 'stop-gate-runner-ledger.jsonl')), +since, +until);
     const knownRoutes = new Set([...knowledge.map(k => k.route), ...Object.values(resources.routes).flat()]);
-    let reviewed = 0, added = 0;
+    let reviewed = 0, added = 0, promoted = 0;
     for (const target of targets) {
       const observation = hash([target.sessionId, target.evidence]);
       if (done.has(observation)) continue;
@@ -100,6 +103,11 @@ export async function runNightly(options = {}) {
       const learned = result.learned.filter(l => knownRoutes.has(l.route));
       const merged = mergeKnowledge(knowledge, learned, candidates, observation);
       if (merged.knowledge.length !== knowledge.length) fs.writeFileSync(knowledgeFile, JSON.stringify(merged.knowledge, null, 2) + '\n');
+      // nightly-bootstrap が毎回 reset --hard する tree の外に置く。reset で route 文が消えないようにするため。
+      for (const entry of merged.promoted) {
+        appendJsonl(promotionFile(home), { ts: new Date().toISOString(), observation, ...entry });
+        promoted++;
+      }
       for (const candidate of merged.candidates.slice(candidates.length)) appendJsonl(candidateFile, candidate);
       const nextFile = path.join(dir, 'next-session.md');
       let previous = ''; try { previous = fs.readFileSync(nextFile, 'utf8'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
@@ -109,7 +117,7 @@ export async function runNightly(options = {}) {
       knowledge = merged.knowledge; candidates = merged.candidates;
       appendJsonl(processedFile, { ts: new Date().toISOString(), observation, sessionId: target.sessionId, ...result });
     }
-    return { targets: targets.length, reviewed, added };
+    return { targets: targets.length, reviewed, added, promoted };
   } finally { fs.closeSync(fd); fs.unlinkSync(lock); }
 }
 if (isEntry(import.meta.url)) {

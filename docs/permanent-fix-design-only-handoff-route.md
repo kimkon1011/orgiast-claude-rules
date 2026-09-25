@@ -95,3 +95,46 @@ nightly の knowledge 書き込み先が git 管理外の実行時ツリーで�
   **nightly の書き込みが成功していたことを直接見たわけではない**（書き込み先が実行時ツリーであることは `$PSScriptRoot` とタスク定義から確認済み）。
 - 監査台帳の「学習後」の窓は **0 行**（gate ledger 最終 15:24:31Z < 学習 18:00:47Z）＝ **本 pattern の今後の再発は未確認**。
 - 対話セッションの summary は存在しないため、§2 の 14 行すべてが本 pattern とは限らない（逐語で本 pattern と確認できたのは `832c5064` の 1 例）。
+
+## 9. 2026-09-26 再検証（`[handoff-audit:118179e5fdc98641]`）— §7 は前回監査自身が先送りしていた
+
+### 9.1 本 pattern の再発（実測・前回監査 2026-09-23 以降）
+
+`tools/permanent-fix-deferral-scan.mjs --since 2026-09-23T00:00:00Z` の実測:
+
+| 台帳 | hits / 総行 | 内訳 | 判定 |
+|---|---|---|---|
+| `stop-gate-runner-ledger.jsonl` | **2** / 1890 | 09-23:1, 09-24:1 | いずれも「Codex の実装完了を待っている」＝§1.18 の正規委譲待ち。両方とも `次に kim がすること: なし` で、**待たせている相手は user ではない** |
+| `handoff-audit-ledger.jsonl` | **0** / 894 | — | 手渡しゲートは本 pattern を一度も捕まえていない（前回と同じ） |
+| `handoff-audit-nightly-ledger.jsonl` | **1** / 325 | 09-25:1 | `次に kim がすること: なし（Codex の完了待ちです）` ＝同上 |
+
+→ **有害形（恒久修正を実装せず次セッションの TODO 番号へ送る）の再発は 0 件。** 前回監査が逐語で捕まえた `832c5064`（09-22）以降、同型は観測されていない。
+
+### 9.2 §6 の恒久化は生き残っている（実測）
+
+`tools/handoff-audit-knowledge.json` の `恒久修正` は main の HEAD 版に存在し、実行時ツリー（`~/orgiast-claude-rules/tools/`）にも入っている（前回監査の懸念「sync で消える」は**この entry に関しては起きなかった**）。
+
+### 9.3 本題: 前回監査は §7 を「設計のみ」で先送りした ＝ 本 pattern の自己適用
+
+前回監査 §7 は「nightly の knowledge 書き込み先が git 管理外の実行時ツリーである限り昇格した lesson は消える」と正しく診断しながら、見出し自体が **「推奨（class 側・本セッションでは未実施）」** であり、3日後の本日まで**未実装**だった。監査対象の pattern を監査した当のセッションが、その pattern を実行している。
+
+**真因の精密化（前回診断の是正）**: 前回は「毎時 sync が上書きする」と推定した（§3）。今回の実測では、消去は sync を待たずに**毎晩の起動時に確定で起きる**:
+
+- `Get-ScheduledTask OrgiastNightlyBatch` → `~/.claude/tools/nightly-bootstrap.ps1 -Target tools\nightly-batch.ps1`
+- bootstrap は `$repo = ~/.claude/nightly-repo` に対し **`git reset --hard origin/main` ＋ `git clean -qfd`** を実行してから target を走らせる（`nightly-bootstrap.ps1:162-173`, `:258`）。
+- `handoff-audit-nightly.mjs:84` の knowledge は `import.meta.url` 相対＝**その reset 対象ツリーの中**。`:102` の書き込みは翌晩の起動時に必ず捨てられる。
+- ※前回 §3 が記録した実行パスは `C:\Users\user\orgiast-claude-rules\tools\nightly-batch.ps1`（別ユーザー名）だった。現在のタスク定義は上記のとおりで、**書き込み先が変わっている**。前回の記述は現状に一致しない。
+
+**被害の範囲（過大評価しない）**: route 文は消えるが、pattern 名は `enqueueTodos`（`handoff-audit-nightly.mjs:106`）で `~/.claude/next-session.md` の handoff-audit TODO 行に残る（このファイルは git 管理外で reset 対象でもない）。したがって**全損ではなく、毎晩 route 文だけが失われ、次セッションが再導出する**コストが払われ続けている。
+
+### 9.4 本セッションで実装した恒久修正（§7 の実施）
+
+- `tools/handoff-audit-nightly.mjs`: 昇格した lesson を `~/.claude/handoff-audit-promotions.jsonl`（**どの git ツリーにも属さない append-only 台帳**）へ追記。`promotionFile(home)` を export。戻り値に `promoted` 件数を追加。＝ reset で route 文が消えなくなる。
+- `tools/permanent-fix-deferral-scan.mjs`（＋ test）: 本 pattern の再発を3台帳から再実行可能に測るレポータ。次回以降の監査は手書きスキャンを要さない。
+- テスト: `node --test tools/handoff-audit-nightly.test.mjs tools/permanent-fix-deferral-scan.test.mjs` = **11/11 pass**。
+
+### 9.5 未確認（断定も確率表現もしない）
+
+- `~/.claude/handoff-audit-promotions.jsonl` は本セッションで新設したため**実データは 0 行**。次回以降の nightly で初めて書かれる。実書き込みは未確認。
+- §7 の (A)（nightly が fork→PR を自動で出す）は**未実装のまま**。今回の修正は「消えなくする」までで、「main へ自動で届く」ところまでは行っていない。
+- stop-gate 台帳の最終行は 2026-09-25T17:55Z。**2026-09-26 の対話セッションは 0 行**のため、直近1日の再発は未確認。

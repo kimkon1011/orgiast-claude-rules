@@ -2,9 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { mergeKnowledge, enqueueTodos, selectTargets, runNightly, readJsonl } from './handoff-audit-nightly.mjs';
+import { mergeKnowledge, enqueueTodos, selectTargets, runNightly, readJsonl, promotionFile } from './handoff-audit-nightly.mjs';
 import { parseHandoff } from './auto-session.mjs';
 const item = { pattern: 'API 確認', route: 'gh api', confidence: 'high' };
+test('promotionFileはhome配下のgit管理外台帳を返す', () => {
+  assert.equal(promotionFile('/example/home'), path.join('/example/home', '.claude', 'handoff-audit-promotions.jsonl'));
+});
 test('patternキーで重複排除、mediumは候補、別観測でhighへ', () => {
   const first = mergeKnowledge([], [item, item], [], 'one');
   assert.equal(first.knowledge.length, 1);
@@ -59,10 +62,23 @@ test('夜間実行: candidates永続化・別応答で昇格・再実行冪等�
   const rows = ['a', 'b'].map(sessionId => ({ ts: yesterday, sessionId, verdict: 'pass', fired: true, evidence: { text: '[手渡し判定]', tools: [] } }));
   fs.writeFileSync(path.join(dir, 'handoff-audit-ledger.jsonl'), rows.map(JSON.stringify).join('\n'));
   const options = { home, now, knowledgeFile, ask: async () => ({ verdict: 'block', violations: [{ rule: 2, quote: '依頼', fix: 'gh api' }], learned: [{ ...item, confidence: 'medium' }, { pattern: '架空', route: 'invented', confidence: 'high' }] }) };
+  const existing = JSON.stringify({ pattern: '既存', route: '保持' }) + '\n';
+  fs.writeFileSync(promotionFile(home), existing);
   const result = await runNightly(options);
+  assert.equal(result.promoted, 1);
+  const promotions = readJsonl(promotionFile(home));
+  assert.equal(promotions.length, 2);
+  assert.equal(promotions[1].route, item.route);
+  assert.equal(promotions[1].source, `handoff-audit-nightly:${promotions[1].observation}`);
+  assert.ok(Number.isFinite(Date.parse(promotions[1].ts)));
+  const persisted = fs.readFileSync(promotionFile(home), 'utf8');
+  assert.ok(persisted.startsWith(existing));
   assert.equal(result.added, 1); assert.equal(result.reviewed, 2);
   assert.equal(readJsonl(path.join(dir, 'handoff-audit-candidates.jsonl')).length, 1);
   assert.equal(JSON.parse(fs.readFileSync(knowledgeFile))[0].confidence, 'high');
   assert.match(fs.readFileSync(path.join(dir, 'next-session.md'), 'utf8'), /gh api/);
   assert.equal((await runNightly(options)).reviewed, 0);
+  fs.writeFileSync(knowledgeFile, '[]'); // bootstrapのreset相当でも台帳は残る。
+  assert.equal((await runNightly(options)).promoted, 0);
+  assert.equal(fs.readFileSync(promotionFile(home), 'utf8'), persisted);
 });

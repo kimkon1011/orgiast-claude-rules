@@ -185,10 +185,28 @@ try {
   if (add(settings.hooks.PreToolUse, 'session-claim-collision.mjs', { matcher: 'Bash|PowerShell|Edit|Write|MultiEdit', hooks: [{ type: 'command', command: command('session-claim-collision.mjs'), timeout: 10 }] })) added += 1;
   if (add(settings.hooks.SessionStart, 'fable-session-guard.mjs', { hooks: [{ type: 'command', command: command('fable-session-guard.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.UserPromptSubmit, 'fable-session-guard.mjs', { hooks: [{ type: 'command', command: command('fable-session-guard.mjs'), timeout: 5 }] })) added += 1;
-  added += migrate(settings.hooks.SessionStart, 'purge-hidden-sessions.py', 'session-list-tidy.mjs', command('session-list-tidy.mjs'));
-  added += migrate(settings.hooks.UserPromptSubmit, 'purge-hidden-sessions.py', 'session-list-tidy.mjs', command('session-list-tidy.mjs'));
-  if (add(settings.hooks.SessionStart, 'session-list-tidy.mjs', { hooks: [{ type: 'command', command: command('session-list-tidy.mjs'), timeout: 10, async: true }] })) added += 1;
-  if (add(settings.hooks.UserPromptSubmit, 'session-list-tidy.mjs', { hooks: [{ type: 'command', command: command('session-list-tidy.mjs'), timeout: 10, async: true }] })) added += 1;
+  // Replace frozen Python/watcher hooks on existing PCs, including obsolete prompt hooks.
+  if (fs.existsSync(path.join(repo, 'tools', 'purge-sessions.mjs'))) {
+    for (const groups of Object.values(settings.hooks)) {
+      if (!Array.isArray(groups)) continue;
+      for (let i = groups.length - 1; i >= 0; i--) {
+        const hooks = groups[i]?.hooks;
+        if (!Array.isArray(hooks)) continue;
+        for (let j = hooks.length - 1; j >= 0; j--) {
+          if (/purge-hidden-sessions\.py|purge-closed-sessions\.mjs|session-list-tidy\.mjs/.test(String(hooks[j]?.command || ''))) { hooks.splice(j, 1); added++; }
+        }
+        if (!hooks.length) groups.splice(i, 1);
+      }
+    }
+    for (const event of ['SessionStart', 'Stop']) {
+      added += migrate(settings.hooks[event], 'purge-sessions.mjs', 'purge-sessions.mjs', command('purge-sessions.mjs', ' --hook'));
+      if (add(settings.hooks[event], 'purge-sessions.mjs', { hooks: [{ type: 'command', command: command('purge-sessions.mjs', ' --hook'), timeout: 5, async: true }] })) added++;
+      added += setTimeoutFor(settings.hooks[event], 'purge-sessions.mjs', 5);
+      for (const group of settings.hooks[event]) for (const hook of (group.hooks || [])) {
+        if (String(hook.command || '').includes('purge-sessions.mjs') && hook.async !== true) { hook.async = true; added++; }
+      }
+    }
+  }
   // inline target の予約を次セッションへ同期注入するため async は付けない。
   if (add(settings.hooks.SessionStart, 'session-relaunch.mjs', { hooks: [{ type: 'command', command: command('session-relaunch.mjs', ' --hook'), timeout: 10 }] })) added += 1;
   // AIニュースとGoogleタスクの通知は nightly の daily-notice-digest に集約する。

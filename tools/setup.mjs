@@ -74,6 +74,11 @@ function check(item) {
       const raw = fs.readFileSync(resolveHome(spec.path), 'utf8');
       if (spec.bom === false && raw.startsWith('\uFEFF')) return false;
       const parsed = JSON.parse(raw);
+      if (spec.hookEvent) {
+        const hooks = parsed.hooks?.[spec.hookEvent]?.flatMap(group => group.hooks || []) || [];
+        const expected = `node "${path.join(scriptDir, spec.hookScript)}" --hook`;
+        return hooks.some(hook => hook.type === 'command' && hook.command === expected && hook.async === true && hook.timeout === 5);
+      }
       return spec.requiredPath ? Boolean(nested(parsed, spec.requiredPath)) : true;
     }
     if (item.type === 'scheduled-task') {

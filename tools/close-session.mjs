@@ -1,9 +1,7 @@
-import { spawnSync } from "node:child_process";
 import { readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { resolvePython } from "./session-list-tidy.mjs";
+import { join } from "node:path";
+import { launchPurge } from "./purge-sessions.mjs";
 import { launchNextSession } from "./next-session-launch.mjs";
 
 import { rotate } from "./next-session-rotate.mjs";
@@ -12,10 +10,6 @@ const claudeDir = join(homedir(), ".claude");
 const currentPath = join(claudeDir, "current-session.json");
 const currentSessionsDir = join(claudeDir, "current-sessions");
 const closedPath = join(claudeDir, "closed-sessions.json");
-const repoPurgePath = join(dirname(fileURLToPath(import.meta.url)), "purge-hidden-sessions.py");
-let purgePath = repoPurgePath;
-try { readFileSync(repoPurgePath); } catch { purgePath = join(claudeDir, "purge-hidden-sessions.py"); }
-
 function readJson(path, fallback) {
   try {
     return JSON.parse(readFileSync(path, "utf8"));
@@ -65,10 +59,9 @@ if (!ids.includes(sessionId)) {
   renameSync(tmpPath, closedPath);
 }
 
-const python = resolvePython();
-if (python) spawnSync(python, [purgePath], { stdio: "ignore", windowsHide: true });
+launchPurge();
 
-console.log(`closed: ${sessionId} -> このタブを ✕ で閉じてください。閉じた後 45 秒で一覧から消えます（/clear は不要）`);
+console.log(`closed: ${sessionId} -> このタブを ✕ で閉じてください。次回の SessionStart/Stop で退避されます（稼働中セッションは保護されます）`);
 
 if (!process.argv.includes("--no-launch")) {
   try {

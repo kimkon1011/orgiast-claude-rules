@@ -1,6 +1,8 @@
 {
   "version": 1,
   "items": [
+    {"id":"settings:purge-sessions-SessionStart","type":"json-valid","severity":"required","spec":{"path":".claude/settings.json","hookEvent":"SessionStart","hookScript":"purge-sessions.mjs"},"description":"SessionStart: 単発セッション退避 (repo直参照)","repair":["register-hooks.mjs","--hooks-only"]},
+    {"id":"settings:purge-sessions-Stop","type":"json-valid","severity":"required","spec":{"path":".claude/settings.json","hookEvent":"Stop","hookScript":"purge-sessions.mjs"},"description":"Stop: 単発セッション退避 (repo直参照)","repair":["register-hooks.mjs","--hooks-only"]},
     { "id": "tool:stalled-session-resume", "type": "file-nonempty", "severity": "optional", "spec": { "path": "orgiast-claude-rules/tools/stalled-session-resume.mjs" }, "description": "停滞セッション夜間再開(repo直参照)", "repair": ["onboarding-sync.mjs", "--force"] },
     { "id": "tool:autopilot-tick", "type": "file-nonempty", "severity": "optional", "spec": { "paths": ["orgiast-claude-rules/tools/autopilot-tick.mjs", "Downloads/orgiast-claude-rules/tools/autopilot-tick.mjs"] }, "description": "autopilot 状態管理(repo直参照)", "repair": ["onboarding-sync.mjs", "--force"] },
     { "id": "tool:drive-hub-mirror", "type": "file-nonempty", "severity": "optional", "spec": { "paths": ["orgiast-claude-rules/tools/drive-hub-mirror.mjs", "Downloads/orgiast-claude-rules/tools/drive-hub-mirror.mjs"] }, "description": "Google Drive ハブ自動ミラー(repo直参照)", "repair": ["onboarding-sync.mjs", "--force"] },

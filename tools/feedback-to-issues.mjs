@@ -8,6 +8,8 @@ import { isEntry } from './is-entry.mjs';
 
 export const DEFAULT_REPO_MAP = {
   '購買部管理アプリ': 'kimkon1011/purchasing-management-app',
+  'オージャスト営業自動化': 'kimkon1011/aujust-sales-automation',
+  'aujust-sales-automation': 'kimkon1011/aujust-sales-automation',
 };
 
 export function clean(value) {

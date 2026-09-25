@@ -244,7 +244,8 @@ test('枠切れ発生時に --no-fallback を指定した場合はフォール�
   ];
   // --force-native: このテストは「枠切れ→フォールバック」の経路だけを見る。WSL の有無で
   // 分岐が変わると Windows 実機で必ず落ちるため、codex 実行経路を固定する。
-  const result = run(['--force-native', '--no-fallback', '指示内容'], {
+  // Mock-only quota test: avoid scanning the developer's large real worktree.
+  const result = run(['--force-native', '--cwd', os.tmpdir(), '--no-fallback', '指示内容'], {
     env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults) }
   });
   // フォールバックしないため非ゼロ終了
@@ -259,7 +260,8 @@ test('枠切れ発生時にフォールバックが成功した場合は 0 で�
     { status: 1, output: "You've hit your usage limit. Please try again later.", stderr: "" },
     { status: 0, output: "Qwen Code CLI has successfully edited files.", stderr: "" }
   ];
-  const result = run(['--force-native', '指示内容'], {
+  // Mock-only quota test: avoid scanning the developer's large real worktree.
+  const result = run(['--force-native', '--cwd', os.tmpdir(), '指示内容'], {
     env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults), GEMINI_API_KEY: '', DEEPSEEK_API_KEY: 'sk-test' }
   });
   assert.equal(result.status, 0);
@@ -273,7 +275,8 @@ test('第1フォールバックがタイムアウトしたら第2バックエン
     { status: 124, output: '', stderr: '', timedOut: true },
     { status: 0, output: 'Qwen Code CLI has successfully completed.', stderr: '' }
   ];
-  const result = run(['--force-native', '指示内容'], {
+  // Mock-only quota test: avoid scanning the developer's large real worktree.
+  const result = run(['--force-native', '--cwd', os.tmpdir(), '指示内容'], {
     env: {
       CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults),
       GEMINI_API_KEY: 'gemini-test',
@@ -384,7 +387,8 @@ test('Codex もフォールバック(Qwen Code) も失敗した場合は非ゼ�
     { status: 1, output: "You've hit your usage limit. Please try again later.", stderr: "" },
     { status: 12, output: "", stderr: "Qwen Code execution error" }
   ];
-  const result = run(['--force-native', '指示内容'], {
+  // Mock-only quota test: avoid scanning the developer's large real worktree.
+  const result = run(['--force-native', '--cwd', os.tmpdir(), '指示内容'], {
     env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults), GEMINI_API_KEY: '', DEEPSEEK_API_KEY: 'sk-test' }
   });
   assert.equal(result.status, 12);
@@ -398,7 +402,8 @@ test('枠切れ発生時に DEEPSEEK_API_KEY が無ければフォールバッ�
   const prev = process.env.DEEPSEEK_API_KEY;
   delete process.env.DEEPSEEK_API_KEY;
   try {
-    const result = run(['--force-native', '指示内容'], {
+    // Mock-only quota test: avoid scanning the developer's large real worktree.
+    const result = run(['--force-native', '--cwd', os.tmpdir(), '指示内容'], {
       env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults), GEMINI_API_KEY: '', OPENROUTER_API_KEY: '' }
     });
     assert.equal(result.status, 1);

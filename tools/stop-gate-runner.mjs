@@ -20,7 +20,7 @@ import { evaluateReportedSymptomFromRaw } from './reported-symptom-gate.mjs';
 import { evaluateAudit } from './handoff-audit-gate.mjs';
 import { enabled as reportLengthEnabled, judgeReportLengthWithLlm } from './report-length-gate.mjs';
 import { hasRequiredFooter, judgeNextAction } from './next-action-gate.mjs';
-import { judgeUserBurden } from './user-burden-gate.mjs';
+import { judgeUserBurden, desktopLauncherPattern } from './user-burden-gate.mjs';
 import { findOutsourcedInvestigation, formatViolationMessage as formatSelfCheck, scanToolUsesFromRaw } from './self-check-before-asking-guard.mjs';
 import { findLocalDocLinks, formatViolationMessage as formatDocLink } from './doc-link-drive-guard.mjs';
 import { enabled as stopGateEnabled, progressQuestionReason, reasonFor, remainingItems, shouldBlock, shouldBlockProgressQuestion } from './stop-gate.mjs';
@@ -38,7 +38,7 @@ function fullStepsReason(missing) {
 export async function evaluateGates(ctx, auditOptions = {}) {
   const gates = [
     ['handoff-quality-gate', () => evaluateQuality({ ...ctx.input, assistant_text: ctx.assistantText })],
-    ['manual-request-fullsteps-gate', () => { const result = judgeFullSteps(ctx.assistantText); return result.triggered && result.missing.length ? { decision: 'block', reason: fullStepsReason(result.missing), code: 'FULL-STEPS' } : { decision: 'pass' }; }],
+    ['manual-request-fullsteps-gate', () => { if (desktopLauncherPattern.test(ctx.assistantText) && judgeUserBurden(ctx.assistantText, ctx.humanText).decision === 'pass') return { decision: 'pass' }; const result = judgeFullSteps(ctx.assistantText); return result.triggered && result.missing.length ? { decision: 'block', reason: fullStepsReason(result.missing), code: 'FULL-STEPS' } : { decision: 'pass' }; }],
     ['handoff-branch-coverage-gate', () => { const result = checkBranchCoverage(ctx.assistantText); return result.triggered && result.missing.length ? { decision: 'block', reason: branchCoverageReason(result.missing), code: 'BRANCH-COVERAGE' } : { decision: 'pass' }; }],
     ['handoff-investigation-gate', () => { const result = evaluateInvestigation(ctx.assistantText); return result.decision === 'block' ? { ...result, reason: failureReason(result.missing), code: 'INVESTIGATION' } : result; }],
     ['handoff-regret-gate', () => evaluateHandoffRegret(ctx.transcriptRaw, ctx.assistantText)],
@@ -55,7 +55,7 @@ export async function evaluateGates(ctx, auditOptions = {}) {
     ['stop-gate', () => { if (!stopGateEnabled()) return { decision: 'pass' }; const todo = shouldBlock(ctx.assistantText); const question = !todo && shouldBlockProgressQuestion(ctx.assistantText); return todo ? { decision: 'block', reason: reasonFor(remainingItems(ctx.assistantText)), code: 'remaining-todo' } : question ? { decision: 'block', reason: progressQuestionReason(), code: 'progress-question' } : { decision: 'pass' }; }],
     ['report-length-gate', () => reportLengthEnabled() ? judgeReportLengthWithLlm(ctx.assistantText, ctx.humanText) : { decision: 'pass' }],
     ['next-action-gate', () => judgeNextAction(ctx.assistantText, ctx.transcriptRaw)],
-    ['user-burden-gate', () => judgeUserBurden(ctx.assistantText)],
+    ['user-burden-gate', () => judgeUserBurden(ctx.assistantText, ctx.humanText)],
     ['doc-link-drive-guard', () => { const hits = findLocalDocLinks(ctx.assistantText); return hits.length ? { decision: 'block', reason: formatDocLink(hits), code: 'DOC-LINK' } : { decision: 'pass' }; }],
   ];
   const results = [];

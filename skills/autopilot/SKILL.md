@@ -46,6 +46,7 @@ kim への DM は「完了」「判断待ち」「異常停止（上限・runner
 ## 実行経路と復帰
 
 VSCode / CLI の `/loop` は画面を開いたままにし、PC をスリープさせない。夜間・無人は `tools/autopilot-run.mjs` をタスクスケジューラで30分ごとに実行する。`tools/register-autopilot-task.ps1` は **kim の承認後にだけ**実行する。setup / onboarding は skill・tools を配布するが、タスクを自動登録しない。
+承認後に user の操作が必要な場合の手渡しは、`tools/make-desktop-launcher.mjs --name "autopilot登録" --ps-file "<register-autopilot-task.ps1 の絶対パス>"` で作るデスクトップのダブルクリック用ファイルで行う。
 
 ヘッドレスモードでは1周だけ実行し、Codex の完了をフォアグラウンドで待つ。ScheduleWakeup / `/loop` は使わない。停止後も runner の定期 pre が Discord を確認するため、Discord の再開指示を受け取れる。対話ループだけを停止した場合は読み取り主体も止まるため、kim が `/autopilot resume` を実行するか、承認済みの定期 runner が必要。
 

@@ -187,9 +187,15 @@ test('gh-handoff-gate: gh が未認証であることを理由に PR 作成な�
 import { judgeUserBurden } from './user-burden-gate.mjs';
 const burdenAudit = '手間監査: CLI を試したが OAuth の本人同意が必要。user は1クリック・年1回。';
 const burdenCommand = '```powershell\nStart-Process https://example.com/consent\n```';
+const desktopPath = 'C:\\Users\\日本語 user\\OneDrive\\Desktop\\登録（ダブルクリック）.cmd';
+const desktopAudit = '手間監査: ①Claude の実行は classifier に拒否。②MCP を試したが権限不足で失敗。user は1操作。';
 const burdenCases = [
+  ['pwsh 単独は block', `実行してください。\n\`\`\`pwsh\npwsh -File task.ps1\n\`\`\`\n${burdenAudit}`, true, /make-desktop-launcher/],
+  ['Desktop cmd と二経路の監査', `次に kim がすること: ダブルクリックする\n${desktopPath}\n${desktopAudit}`, false],
+  ['Desktop cmd だけは監査不足', `次に kim がすること: ダブルクリックする\n${desktopPath}\n${burdenAudit}`, true, /①Claude/],
+  ['Claude 自身の実行説明', 'Claude 自身が実行しました。\n```pwsh\npwsh -File task.ps1\n```', false],
   ['遡り参照の実例', '次に kim がすること: 前に送った PowerShell の1行を実行する', true, /遡り参照/],
-  ['完成品と監査を再掲', `次に kim がすること: PowerShell で実行する\n${burdenCommand}\n${burdenAudit}`, false],
+  ['コマンドと監査だけでは不可', `次に kim がすること: PowerShell で実行する\n${burdenCommand}\n${burdenAudit}`, true, /make-desktop-launcher/],
   ['完成品なし', `次に kim がすること: 同意ボタンを押す\n${burdenAudit}`, true, /完成品/],
   ['監査なし', `次に kim がすること: PowerShell で実行する\n${burdenCommand}`, true, /手間監査/],
   ['依頼なし', '次に kim がすること: なし', false],
@@ -238,4 +244,25 @@ test('user-burden-gate: transcript の最後の assistant だけを監査する'
     const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8').trim().split('\n').at(-1));
     assert.equal(record.blockedBy.includes('user-burden-gate'), index === 1);
   }
+});
+
+test('desktop handoff does not require the old three-step paste instructions', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-desktop-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const result = invoke(home, 'desktop', `ダブルクリックしてください。\n${desktopPath}\n${desktopAudit}`);
+  assert.equal(result.status, 0, result.stderr);
+  const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8').trim());
+  assert.ok(!record.blockedBy.includes('manual-request-fullsteps-gate'));
+  assert.ok(!record.blockedBy.includes('user-burden-gate'));
+});
+
+test('user command request from transcript is passed to burden gate', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-command-request-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const transcript = path.join(home, 'transcript.jsonl');
+  fs.writeFileSync(transcript, JSON.stringify({ type: 'user', message: { role: 'user', content: 'コマンドを教えて' } }) + '\n');
+  const result = invoke(home, 'command-request', `実行してください。\n${burdenCommand}\n${burdenAudit}`, { transcript_path: transcript });
+  assert.equal(result.status, 0, result.stderr);
+  const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8').trim());
+  assert.ok(!record.blockedBy.includes('user-burden-gate'));
 });

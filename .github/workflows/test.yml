@@ -25,6 +25,9 @@ jobs:
       - name: reported symptom gates and distribution read-back
         run: node --test "tools/reported-symptom*.test.mjs" tools/state-claim-evidence.test.mjs tools/external-state-claim-gate.test.mjs tools/no-undistributed-imports.test.mjs
 
+      - name: Desktop launcher (real Windows cmd and Japanese paths)
+        run: node --test tools/make-desktop-launcher.test.mjs tools/user-burden-gate.test.mjs
+
       - name: keyserve enrollment installer (mock network, real ACL)
         shell: powershell
         run: .\tools\keyserve-enroll-installer.test.ps1

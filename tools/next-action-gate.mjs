@@ -9,11 +9,14 @@ const MULTIPLE_ACTIONS_PATTERN = /[、,，・]/;
 const WAITING_PATTERN = /(完了通知|待ち|実行中|バックグラウンド|cron|定期実行|CI)/i;
 const BACKGROUND_PATTERN = /(バックグラウンド|実行中|完了通知|Codex が|走ってい)/i;
 const COMPLETE_PATTERN = /^なし\s*[（(]\s*完了\s*[）)]$/;
-const SESSION_STATES = [
-  ['closed', /^閉じて(?:よい|良い|いい)(?:\s*[（(].*[）)])?[。.]?$/],
-  ['open', /^まだ閉じない(?:\s*[（(].*[）)])?[。.]?$/],
-  ['delete', /^もう削除して(?:よい|良い|いい)(?:\s*[（(].*[）)])?[。.]?$/],
-];
+// kim が毎回同じ文で判断できるよう、表記ゆれを許さない完全一致の定型3文にする（2026-09-25 kim 指示）。
+export const SESSION_PHRASES = {
+  closed: 'アーカイブしてよい（/session-close 実行済み）',
+  delete: 'アーカイブしてよい（/session-close 不要）',
+  open: 'まだアーカイブしない（/session-close 未実行）',
+};
+const SESSION_PHRASE_LIST = Object.values(SESSION_PHRASES).map(phrase => `「${phrase}」`).join('');
+const SESSION_STATES = Object.entries(SESSION_PHRASES).map(([state, phrase]) => [state, { test: value => value === phrase }]);
 
 export function enabled() {
   return process.env.ORGIAST_NEXT_ACTION_GATE !== '0';
@@ -85,11 +88,11 @@ export function judgeNextAction(text, transcriptRaw = '') {
     return { decision: 'block', code: 'AUTOPILOT-EMPTY', reason: '「この後の自動進行:」の値が空です。誰が・何を・いつ・どうやって kim に届けるかを書いてください。' };
   }
   if (!footer.session) {
-    return { decision: 'block', code: 'SESSION-EMPTY', reason: '「このセッション:」の値が空です。「閉じてよい」「まだ閉じない」「もう削除してよい」のいずれかを書いてください。' };
+    return { decision: 'block', code: 'SESSION-EMPTY', reason: `「このセッション:」の値が空です。${SESSION_PHRASE_LIST}のいずれかを一字一句そのまま書いてください。` };
   }
   const sessionState = SESSION_STATES.find(([, pattern]) => pattern.test(footer.session))?.[0];
   if (!sessionState) {
-    return { decision: 'block', code: 'SESSION-INVALID', reason: '「このセッション:」は「閉じてよい」「まだ閉じない」「もう削除してよい」の3分類のいずれかで書いてください。' };
+    return { decision: 'block', code: 'SESSION-INVALID', reason: `「このセッション:」は定型3文${SESSION_PHRASE_LIST}のいずれかを一字一句そのまま書いてください（理由は「この後の自動進行」に書く）。` };
   }
   const body = source.slice(0, source.lastIndexOf('次に kim がすること:'));
   const isComplete = COMPLETE_PATTERN.test(footer.autopilot);
@@ -100,10 +103,10 @@ export function judgeNextAction(text, transcriptRaw = '') {
     return { decision: 'block', code: 'AUTOPILOT-CONTRADICTION', reason: '本文に待ち状態があるのに「この後の自動進行: なし（完了）」となっており矛盾しています。次に誰がいつ動き、結果がどう届くかを書いてください。' };
   }
   if (sessionState !== 'open' && BACKGROUND_PATTERN.test(body)) {
-    return { decision: 'block', code: 'SESSION-BACKGROUND-CONTRADICTION', reason: '本文ではバックグラウンド処理が進行中なのに、セッションを閉じるか削除すると書かれており矛盾しています。ジョブが宙に浮かないよう「まだ閉じない」としてください。' };
+    return { decision: 'block', code: 'SESSION-BACKGROUND-CONTRADICTION', reason: `本文ではバックグラウンド処理が進行中なのに、アーカイブしてよいと書かれており矛盾しています。ジョブが宙に浮かないよう「${SESSION_PHRASES.open}」としてください。` };
   }
   if (sessionState === 'closed' && !hasSessionCloseEvidence(source, transcriptRaw)) {
-    return { decision: 'block', code: 'SESSION-CLOSE-NO-EVIDENCE', reason: '「このセッション: 閉じてよい」とありますが、本文または会話に /session-close を実行した形跡がありません。未実行を実行済みとして扱わないでください。' };
+    return { decision: 'block', code: 'SESSION-CLOSE-NO-EVIDENCE', reason: `「このセッション: ${SESSION_PHRASES.closed}」とありますが、本文または会話に /session-close を実行した形跡がありません。/session-close を実行するか、「${SESSION_PHRASES.open}」にしてください。` };
   }
   return { decision: 'pass', reason: 'valid-footer' };
 }

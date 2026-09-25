@@ -28,7 +28,7 @@ import { evaluatePrHandoff } from './pr-handoff-gate.mjs';
 
 
 const home = () => process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || os.homedir();
-const HANDOFF_HINT = "末尾に『次に kim がすること』『この後の自動進行』『このセッション: 閉じてよい / まだ閉じない / もう削除してよい』を3行で入れること(user が『この先はどうしたらいいの？』と聞き返した回数: 7日で9回)";
+const HANDOFF_HINT = "末尾に『次に kim がすること』『この後の自動進行』『このセッション: アーカイブしてよい（/session-close 実行済み） / アーカイブしてよい（/session-close 不要） / まだアーカイブしない（/session-close 未実行）』の定型文を3行で入れること(user が『この先はどうしたらいいの？』と聞き返した回数: 7日で9回)";
 
 function fullStepsReason(missing) {
   return `[FULL-STEPS] 人に手作業を頼んでいますが、次が足りません: ${missing.join('・')}（§1.5.1 絶対ルール）`;

@@ -1,17 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { judgeNextAction } from './next-action-gate.mjs';
+import { judgeNextAction, SESSION_PHRASES } from './next-action-gate.mjs';
 
 const body = '調査と実装と検証が完了しました。'.repeat(15);
 const twoLineFooter = '次に kim がすること: なし\nこの後の自動進行: なし（完了）';
-const footer = `${twoLineFooter}\nこのセッション: もう削除してよい（残すものは無い）`;
+const footer = `${twoLineFooter}\nこのセッション: アーカイブしてよい（/session-close 不要）`;
 
 test('3行が末尾に揃っていればpass', () => {
   assert.equal(judgeNextAction(`${body}\n${footer}`).decision, 'pass');
 });
 
 test('3行の各行間に空行1つまで許容する', () => {
-  const spaced = '次に kim がすること: なし\n\nこの後の自動進行: なし（完了）\n\nこのセッション: もう削除してよい（残すものは無い）';
+  const spaced = '次に kim がすること: なし\n\nこの後の自動進行: なし（完了）\n\nこのセッション: アーカイブしてよい（/session-close 不要）';
   assert.equal(judgeNextAction(`${body}\n${spaced}`).decision, 'pass');
 });
 
@@ -32,7 +32,7 @@ test('3行が本文途中にあればblock', () => {
 });
 
 test('kimの作業が2件ならblock', () => {
-  const result = judgeNextAction(`${body}\n次に kim がすること: 承認、送信\nこの後の自動進行: Codex が確認後すぐ結果をチャットで通知します\nこのセッション: まだ閉じない（結果待ち）`);
+  const result = judgeNextAction(`${body}\n次に kim がすること: 承認、送信\nこの後の自動進行: Codex が確認後すぐ結果をチャットで通知します\nこのセッション: まだアーカイブしない（/session-close 未実行）`);
   assert.equal(result.decision, 'block');
   assert.equal(result.code, 'NEXT-ACTION-MULTIPLE');
 });
@@ -56,7 +56,7 @@ test('このセッションの値が空ならblock', () => {
 });
 
 test('バックグラウンド実行中なのに閉じてよいならblock', () => {
-  const text = `${body} Codex がバックグラウンドで実行中です。 /session-close 実行済み。\n次に kim がすること: なし\nこの後の自動進行: Codex が完了時にチャットで通知します\nこのセッション: 閉じてよい`;
+  const text = `${body} Codex がバックグラウンドで実行中です。 /session-close 実行済み。\n次に kim がすること: なし\nこの後の自動進行: Codex が完了時にチャットで通知します\nこのセッション: アーカイブしてよい（/session-close 実行済み）`;
   const result = judgeNextAction(text);
   assert.equal(result.decision, 'block');
   assert.equal(result.code, 'SESSION-BACKGROUND-CONTRADICTION');
@@ -67,19 +67,19 @@ test('待ち語が無く、もう削除してよいならpass', () => {
 });
 
 test('待ち語があり、まだ閉じないならpass', () => {
-  const text = `${body} 結果待ちです。\n次に kim がすること: なし\nこの後の自動進行: 処理完了時に Codex がチャットで通知します\nこのセッション: まだ閉じない（Codex の結果待ち）`;
+  const text = `${body} 結果待ちです。\n次に kim がすること: なし\nこの後の自動進行: 処理完了時に Codex がチャットで通知します\nこのセッション: まだアーカイブしない（/session-close 未実行）`;
   assert.equal(judgeNextAction(text).decision, 'pass');
 });
 
 test('session-close実行証拠なしで閉じてよいならblock', () => {
-  const text = `${body}\n次に kim がすること: なし\nこの後の自動進行: なし（完了）\nこのセッション: 閉じてよい（/session-close 実行済み）`;
+  const text = `${body}\n次に kim がすること: なし\nこの後の自動進行: なし（完了）\nこのセッション: アーカイブしてよい（/session-close 実行済み）`;
   const result = judgeNextAction(text);
   assert.equal(result.decision, 'block');
   assert.equal(result.code, 'SESSION-CLOSE-NO-EVIDENCE');
 });
 
 test('会話にsession-close実行証拠があれば閉じてよいがpass', () => {
-  const text = `${body}\n次に kim がすること: なし\nこの後の自動進行: なし（完了）\nこのセッション: 閉じてよい（/session-close 実行済み）`;
+  const text = `${body}\n次に kim がすること: なし\nこの後の自動進行: なし（完了）\nこのセッション: アーカイブしてよい（/session-close 実行済み）`;
   const transcript = JSON.stringify({ type: 'user', message: { role: 'user', content: '<command-name>/session-close</command-name>' } });
   assert.equal(judgeNextAction(text, transcript).decision, 'pass');
 });
@@ -103,7 +103,7 @@ test('環境変数で無効化できる', () => {
   }
 });
 
-const closedText = `${body}\n${twoLineFooter}\nこのセッション: 閉じてよい（/session-close 実行済み）`;
+const closedText = `${body}\n${twoLineFooter}\nこのセッション: アーカイブしてよい（/session-close 実行済み）`;
 const row = (role, content, extra = {}) => JSON.stringify({ type: role, message: { role, content }, ...extra });
 
 test('本文でsession-close完了を明記すればpass', () => {
@@ -145,8 +145,15 @@ test('Skillの成功したsession-close呼び出しを会話から検出する',
   }
 });
 
-test('3分類の句点・漢字・括弧の表記ゆれを許容する', () => {
-  for (const state of ['閉じて良い。', '閉じていい(/session-close 実行済み)', 'まだ閉じない。', 'もう削除して良い（残すものは無い）。']) {
+test('定型3文以外（旧表記・表記ゆれ・理由の付け足し）はblock', () => {
+  for (const state of ['閉じてよい（/session-close 実行済み）', 'まだ閉じない（結果待ち）', 'もう削除してよい（残すものは無い）', 'アーカイブしてよい', 'アーカイブしてよい(/session-close 実行済み)', 'アーカイブしてよい（/session-close 実行済み）。', 'まだアーカイブしない（Codex の結果待ち）']) {
+    const text = `/session-close を実行しました。\n${body}\n${twoLineFooter}\nこのセッション: ${state}`;
+    assert.equal(judgeNextAction(text).code, 'SESSION-INVALID', state);
+  }
+});
+
+test('定型3文はそれぞれpass', () => {
+  for (const state of [SESSION_PHRASES.closed, SESSION_PHRASES.delete, SESSION_PHRASES.open]) {
     const text = `/session-close を実行しました。\n${body}\n${twoLineFooter}\nこのセッション: ${state}`;
     assert.equal(judgeNextAction(text).decision, 'pass', state);
   }
@@ -162,7 +169,7 @@ test('3行の順序違い・2つ以上の空行・行間の説明をblock', () =
 
 test('指定された各バックグラウンド語と閉じる・削除の矛盾をblock', () => {
   for (const word of ['バックグラウンド', '実行中', '完了通知', 'Codex が', '走っている']) {
-    for (const state of ['閉じてよい', 'もう削除してよい']) {
+    for (const state of ['アーカイブしてよい（/session-close 実行済み）', 'アーカイブしてよい（/session-close 不要）']) {
       const text = `${body} ${word}\n次に kim がすること: なし\nこの後の自動進行: 処理の完了時に私がこの画面で報告します\nこのセッション: ${state}`;
       assert.equal(judgeNextAction(text).code, 'SESSION-BACKGROUND-CONTRADICTION', `${word}: ${state}`);
     }

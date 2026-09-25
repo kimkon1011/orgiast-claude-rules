@@ -1,0 +1,3 @@
+Run exactly this one command (relative path, cwd is already the nightly-repo) and print its full stdout JSON verbatim (no commentary, no other actions):
+
+node tools/autopilot-tick.mjs post --summary "Codexで滞留監査レポート作成(scratchpad/feedback-audit-report-20260926.md)。共通監視は購買部1repoのみで他6アプリ未監視。購買部PR#15/16/17/22がCI緑・競合なし・レビュー0でマージ待ち、intake未マッピング5件、ブース未完了3件。催促・マージは未実施" --progress 15 --next-delay 1800 --codex

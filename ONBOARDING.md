@@ -93,6 +93,13 @@ API/CLI/MCP/GitHub Actions で実行可能な操作は、手順案内せず Clau
 
 `tools/pr-merge.mjs` が classifier に拒否されたら、§1.20に従いカテゴリを1行報告する。直URL・レビュー観点・アカウント切替注意を残し、言い換え再試行せず次の作業へ進む。
 
+**PR の作成・マージを人に頼むときの必須記載（2026-09-24 nishi 指示・全アカウント共通）**: 作れる PR を手渡さない前提（`gh` 未認証は理由にならない。`git credential fill` で `GH_TOKEN` を作る）は変えない。そのうえで残る手渡しには、毎回次の2点を書く。どちらかが欠けた依頼は出さない。
+- **開くアカウント**: GitHub のアカウント名（例 `kimkon1011`）と、repo の owner か collaborator か。違うアカウントでは private repo が 404 になる。
+- **自分で作れない理由の一次照会**: 実際に叩いたコマンドと、返った結果（終了コード、エラー文、classifier 拒否のカテゴリ）。「未認証のため」「権限が無いはず」のような推測は理由にならない。
+
+    **[PR 手渡し]** 開くアカウント: kimkon1011（owner） / URL: https://github.com/<owner>/<repo>/pull/<番号>
+    試したこと: `node tools/pr-merge.mjs 537` → classifier 拒否（Merge Without Review）
+
 **既存リソースの再作成を絶対に振らない**: 「○○を新規作成してください」の前に必ずCLI/APIで一覧確認（GCP SA/Vercel env/GitHub secret/Drive/Discord等）。既にあれば流用。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/automation-first-checklist.md`
 
 **SAでGoogle Drive書き込みする場合はDWD impersonate必須**: SAはDrive容量0GB固定でquotaエラーになる。DWD（Workspace管理者が1回scope委任）→ `subject`付きJWTでkimをimpersonateするのが唯一の自動化経路。詳細・コードテンプレ・罠リスト: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/dwd-google-integration.md`
@@ -149,6 +156,8 @@ API/CLI/MCP/GitHub Actions で実行可能な操作は、手順案内せず Clau
 user に何かを依頼する前に、実際の API 呼び出し・検索など異なる経路を2件以上試し、各結果を確認する。
 依頼文の `[手渡し判定]` に「試したこと」と結果（`→`）、および「user でないと無理な理由」を書く。
 受け取る情報や認証情報が現行経路で本当に機能することも先に確かめる。「たぶん必要」は調査に含めない。
+
+**計測の前提を疑う（対照群・正本導出／2026-09-24 学習台帳から昇格）**: 「無い／売切／空」を報告する前に、正常と分かっている対照群を同じ方法で測る（対照群も異常なら計測器の癖＝測定不能）。テストの fixture は正本から import して導出し、手写ししない。委譲 spec の必須記載は `protocols/HANDOFF.md`「テストを含む委譲の必須記載」。
 
 ### 1.3 GASの管理と実行（§1.3〜1.4）
 
@@ -505,7 +514,7 @@ kim:「**kim@orgiast.jp のパソコンで実行している内容が ONBOARDING
 Claude 側で完結できる（`git credential fill` の password が PAT）。**マージだけは人が押す**——共有 repo の
 main へのマージは auto-mode 分類器が拒否する。これは正しい関門なので迂回しない。
 必須チェック `test` / `test-posix` が終わるまで `mergeable_state=blocked` なので、
-**green を API で確認してから**手順を出す（灰色のボタンを押させない）。
+**green を API で確認してから**手順を出す（灰色のボタンを押させない）。手順には `[PR 手渡し]` の必須2点（開くアカウント・試したこと）を必ず添える。
 
 <!-- MACHINE-STATE-START 各PCは自分の行だけを更新して push する -->
 
@@ -923,7 +932,7 @@ Claude新規作成は標準フォルダ「作業ファイル」直下（既存�
 
 **2.10 マルチアカウント共通ナレッジ運用**
 
-Drive `claude-common-rules` が正本（ローカルはキャッシュ、GitHubはミラー）。下り=`/rules-sync`(pull)、上り=`/share-knowledge`（knowledge-inbox投稿）、統合=kim環境の`/rules-sync`(merge)。本文取得は`download_file_content`必須（`read_file_content`は文字エスケープで壊れる）。正本編集・version管理はkim環境限定。詳細・ディレクトリ構成: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/multi-account-knowledge-hub.md`
+正本は GitHub main（kim 環境の merge 反映がここへ入る）。Drive ハブは配布キャッシュで、夜間ジョブ `tools/drive-hub-mirror.mjs` が main から自動ミラーします。下り=/rules-sync(pull)（※ハブが古ければ pull しないガード付き）、上り=/share-knowledge（knowledge-inbox 投稿）、統合=kim 環境の/rules-sync(merge)。本文取得は `download_file_content` 必須（`read_file_content` は文字エスケープで壊れる）。正本編集・version 管理は kim 環境限定。詳細・ディレクトリ構成: https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/multi-account-knowledge-hub.md
 
 ---
 **2.11 社内アプリには「不具合・要望フォーム」を標準搭載する（全社標準機能 / 2026-08-18 kim指示）**

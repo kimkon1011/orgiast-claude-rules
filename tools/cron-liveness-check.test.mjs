@@ -1,10 +1,90 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluate, evaluateGateSkips, evaluateTop3Delivery } from './cron-liveness-check.mjs';
+import { evaluate, evaluateGateSkips, evaluateTop3Delivery, parseDunningSummary, evaluateDunningDelivery } from './cron-liveness-check.mjs';
 
 const now = Date.parse('2026-08-21T00:00:00.000Z');
 const entry = { label: '日次', repo: 'owner/repo', workflow: 'daily.yml', everyDays: 1 };
 const key = 'owner/repo#daily.yml';
+
+const dunningSummary = {
+  evaluated: 236,
+  items: [{ customerName: '非公開顧客名', token: 'secret-token-do-not-display' }],
+  dmSent: 1, dmFailed: 0, channelPosted: false, invoicePosted: false,
+  errors: [
+    '責任者グループ投稿失敗: Discord HTTP 403: {"message": "Missing Access", "code": 50001}',
+    '請求チャンネル投稿失敗: Discord HTTP 403',
+  ],
+};
+
+test('dunning: プレフィックスとANSIコマンドエコーを含む実ログ形式から要約を読む', () => {
+  const prefix = 'push\tUNKNOWN STEP\t2026-09-22T01:57:59.9356272Z ';
+  const log = [
+    `${prefix}##[group]Run curl -sS --fail-with-body -m 120 \\`,
+    `${prefix}\u001b[36;1mcurl -H 'Content-Type: application/json' -d '${JSON.stringify(dunningSummary)}'\u001b[0m`,
+    `${prefix}${JSON.stringify(dunningSummary)}`,
+    `${prefix}Cleaning up orphan processes`,
+  ].join('\n');
+  assert.deepEqual(parseDunningSummary(log), dunningSummary);
+  assert.equal(parseDunningSummary(log.split('\n').slice(0, 2).join('\n')), null);
+});
+
+test('dunning: 無関係なJSONと要約の必須配列がないJSONを拾わない', () => {
+  for (const value of [{ evaluated: 'x' }, { foo: 1 }, { evaluated: 'x', items: [], errors: [] }, { evaluated: 1, items: [] }, { evaluated: 1, errors: [] }]) {
+    assert.equal(parseDunningSummary(JSON.stringify(value)), null);
+  }
+});
+
+test('dunning: 非文字列・該当なし・不正JSONは投げずnull', () => {
+  for (const value of [null, undefined, 1, {}, [], '', 'no summary', '{broken json']) {
+    assert.equal(parseDunningSummary(value), null);
+  }
+});
+
+test('dunning: 複数の要約があれば最後を採用する', () => {
+  const last = { ...dunningSummary, errors: [] };
+  assert.deepEqual(parseDunningSummary([dunningSummary, last, { foo: 1 }].map(JSON.stringify).join('\n')), last);
+});
+
+test('dunning: errors非空なら件数と最初のエラーでalert', () => {
+  assert.deepEqual(evaluateDunningDelivery(dunningSummary, now), {
+    key: 'aujust#dunning-push#delivery', label: 'aujust督促(配達)', lastSuccess: null, ageDays: null, status: 'alert',
+    line: `🚨 aujust督促(配達): 直近runで 2件の失敗 — ${dunningSummary.errors[0]}`,
+  });
+});
+
+test('dunning: エラーの改行を潰し先頭120文字に制限する', () => {
+  const first = '失敗\r\n詳細\n' + 'あ'.repeat(150);
+  const actual = evaluateDunningDelivery({ ...dunningSummary, errors: [first, '表示しない2件目'] }, now);
+  assert.equal(actual.line, `🚨 aujust督促(配達): 直近runで 2件の失敗 — ${first.replace(/[\r\n]+/g, ' ').slice(0, 120)}`);
+});
+
+test('dunning: 対象0件でチャンネル未投稿でもerrorsが空ならok', () => {
+  const actual = evaluateDunningDelivery({ ...dunningSummary, items: [], dmSent: 0, errors: [] }, now);
+  assert.equal(actual.status, 'ok');
+  assert.equal(actual.line, '✅ aujust督促(配達): 対象 0件 / DM 0 / チャンネル false / 請求 false');
+});
+
+test('dunning: 取得失敗と要約なしは異なるunknown文言', () => {
+  for (const [summary, message] of [[undefined, '実行ログを取得できません'], [null, '実行ログから配達結果を読めません']]) {
+    const actual = evaluateDunningDelivery(summary);
+    assert.equal(actual.status, 'unknown');
+    assert.equal(actual.line, `⚠️ aujust督促(配達): ${message}`);
+  }
+});
+
+test('dunning: 正常時の件数・DM・投稿結果を表示し不正な型は?にする', () => {
+  const actual = evaluateDunningDelivery({ ...dunningSummary, errors: [], channelPosted: true }, now);
+  assert.equal(actual.line, '✅ aujust督促(配達): 対象 1件 / DM 1 / チャンネル true / 請求 false');
+  const invalid = evaluateDunningDelivery({ ...dunningSummary, errors: [], dmSent: 'secret', channelPosted: 'secret', invoicePosted: undefined }, now);
+  assert.equal(invalid.line, '✅ aujust督促(配達): 対象 1件 / DM ? / チャンネル ? / 請求 ?');
+});
+
+test('dunning: 顧客名や要約内のトークンをlineに含めない', () => {
+  for (const errors of [[], dunningSummary.errors]) {
+    const actual = evaluateDunningDelivery({ ...dunningSummary, errors, token: 'top-level-secret-token' }, now);
+    assert.doesNotMatch(actual.line, /非公開顧客名|secret-token-do-not-display|top-level-secret-token/);
+  }
+});
 
 function result(value) {
   return evaluate([entry], { [key]: value }, now)[0];

@@ -65,6 +65,64 @@ export function evaluateGateSkips(records, nowMs) {
   return { key: 'local#handoff-gate-skips', label: 'gate判定スキップ', lastSuccess: null, ageDays: null, status: 'alert', line: `🚨 gate判定スキップ（要調査）${recent.length}件` };
 }
 
+export function parseDunningSummary(logText) {
+  if (typeof logText !== 'string') return null;
+  let summary = null;
+  for (const line of logText.split(/\r?\n/)) {
+    const start = line.indexOf('{');
+    if (start < 0) continue;
+    try {
+      const parsed = JSON.parse(line.slice(start));
+      if (typeof parsed.evaluated === 'number' && Array.isArray(parsed.items) && Array.isArray(parsed.errors)) summary = parsed;
+    } catch { }
+  }
+  return summary;
+}
+
+export function evaluateDunningDelivery(summary, nowMs) {
+  const key = 'aujust#dunning-push#delivery';
+  const label = 'aujust督促(配達)';
+  let status;
+  let line;
+  if (summary === undefined) {
+    status = 'unknown';
+    line = `⚠️ ${label}: 実行ログを取得できません`;
+  } else if (summary === null) {
+    status = 'unknown';
+    line = `⚠️ ${label}: 実行ログから配達結果を読めません`;
+  } else if (summary.errors.length > 0) {
+    status = 'alert';
+    const firstError = String(summary.errors[0]).replace(/[\r\n]+/g, ' ').slice(0, 120);
+    line = `🚨 ${label}: 直近runで ${summary.errors.length}件の失敗 — ${firstError}`;
+  } else {
+    status = 'ok';
+    const dmSent = Number.isFinite(summary.dmSent) ? summary.dmSent : '?';
+    const channelPosted = typeof summary.channelPosted === 'boolean' ? summary.channelPosted : '?';
+    const invoicePosted = typeof summary.invoicePosted === 'boolean' ? summary.invoicePosted : '?';
+    line = `✅ ${label}: 対象 ${summary.items.length}件 / DM ${dmSent} / チャンネル ${channelPosted} / 請求 ${invoicePosted}`;
+  }
+  return { key, label, lastSuccess: null, ageDays: null, status, line };
+}
+
+function fetchDunningLog(entry) {
+  try {
+    const result = spawnSync('gh', [
+      'run', 'list', '--repo', entry.repo, '--workflow', entry.workflow,
+      '--event=schedule', '--limit', '1', '--json', 'databaseId',
+    ], { windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    if (result.error || result.status !== 0) return undefined;
+    const runs = JSON.parse(result.stdout);
+    const id = Array.isArray(runs) ? runs[0]?.databaseId : undefined;
+    if (!Number.isSafeInteger(id) || id <= 0) return undefined;
+    const log = spawnSync('gh', ['run', 'view', String(id), '--repo', entry.repo, '--log'],
+      { windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    if (log.error || log.status !== 0) return undefined;
+    return log.stdout;
+  } catch {
+    return undefined;
+  }
+}
+
 function fetchLastSuccess(entry) {
   const result = spawnSync('gh', [
     'run', 'list', '--repo', entry.repo, '--workflow', entry.workflow,
@@ -86,6 +144,11 @@ function main() {
   for (const entry of entries) lastSuccessByKey[`${entry.repo}#${entry.workflow}`] = fetchLastSuccess(entry);
   const nowMs = Date.now();
   const results = evaluate(entries, lastSuccessByKey, nowMs);
+  const dunningEntry = entries.find((entry) => entry.deliveryProbe === 'dunning-json');
+  if (dunningEntry) {
+    const log = fetchDunningLog(dunningEntry);
+    results.push(evaluateDunningDelivery(log === undefined ? undefined : parseDunningSummary(log), nowMs));
+  }
   const home = process.env.ORGIAST_HOME || os.homedir();
   const outputDir = path.join(home, '.claude');
   const complianceState = path.join(outputDir, 'rule-compliance-state.json');

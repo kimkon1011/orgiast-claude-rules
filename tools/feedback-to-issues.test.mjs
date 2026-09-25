@@ -67,9 +67,10 @@ test('Issue 本文は提出元なしと添付ありを明示する', () => {
   assert.match(body, /スクショは Discord の元メッセージを参照/);
 });
 
-test('Issue 本文の末尾に feedback-dm マーカーが入る(feedback-replies.mjs のマーカー検索用)', () => {
+test('Issue 本文に feedback-dm マーカーが残る(feedback-replies.mjs のマーカー検索用)', () => {
   const body = buildIssueBody({ body: '報告本文', message_id: 'abc123' });
-  assert.equal(body.trimEnd().split('\n').at(-1), '<!-- feedback-dm:abc123 -->');
+  assert.ok(body.includes('<!-- feedback-dm:abc123 -->'));
+  assert.match(body.trimEnd().split('\n').at(-1), /^<!-- feedback-submitter:/);
 });
 
 test('parse_ok false は Issue 対象外になる', () => {
@@ -167,4 +168,12 @@ test('--dry-run と --no-chain では相乗り起動しない', async () => {
 test('相乗り起動の失敗はこのタスクを落とさない', async () => {
   const boom = () => { throw new Error('spawn boom'); };
   assert.equal(await chainBoothFeedbackIntake({ argv: [], spawnImpl: boom }), 'failed');
+});
+
+test('submitterマーカーはJSONで復元でき、コメント終端をエスケープする', () => {
+  const submitter = '山田 --> <test@example.com>';
+  const body = buildIssueBody({ submitter, submitter_discord_id: '42' });
+  const marker = body.match(/<!-- feedback-submitter: (.*?) -->/)[1];
+  assert.deepEqual(JSON.parse(marker), { submitter, submitter_discord_id: '42' });
+  assert.ok(!marker.includes('-->'));
 });

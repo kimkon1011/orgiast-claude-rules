@@ -175,9 +175,27 @@ export function todoExclusionReason(todo, today = new Date()) {
   if (parenthesized || referenceOnly) return '参照のみ（作業内容が無い）';
   if (/~~[^~]*~~/.test(text)) return '取り消し線（完了済み）';
   if (/(要判断|判断待ち|未決)/.test(text)) return '判断待ち';
+  // 2026-09-25実測: 「〜するか」で終わる**意思決定型**のTODO（実物:「マキモノ出品を通すか、
+  // 既存 `md-8dac5cb2` への追記にするか」）が除外されず、launcher がこれを「次の1目的」に採用して
+  // 実作業ゼロの空振りセッションを生んだ。二者択一の判断そのものが成果物で、子セッションは
+  // 決定権を持たない（外部への公開可否を含むため独断で決められない）ので、実行TODOにしない。
+  // ⚠️ 単純な /するか/ は使えない: 本物のTODOの本文にも「〜するか」が現れる（この除外規則自身を
+  // 直す起票が実例）ため、末尾にアンカーを打ち、末尾の「（作業場所:…）（更新:…）」を除いた
+  // 本体が疑問の「か」で終わる時だけ除外する。戻り値は上の既存カテゴリに相乗りする。
+  const decisionBody = body.replace(/(?:\s*（(?:作業場所|更新):[^）]*）)+\s*$/, '').trim();
+  if (/[うくすつぬぶむる]か[。？?]?$/.test(decisionBody)) return '判断待ち';
   if (/ブロック中/.test(text)) return 'ブロック中';
   if (/(別|他)セッション/.test(text) && /(着手|進行中|作業中|未コミット差分)/.test(text)) return '他セッションが着手中';
-  if (/このPC(では実行不可|の残TODOではない|で再試行させない)/.test(text)) return 'このPCでは実行不可';
+  // 2026-09-25実測: 「⛔ 2〜5 を再度このPCで回さないこと」という**禁止メモ**が除外されず、
+  // launcher が毎晩これを「次の1目的」に採用し続けた(実作業ゼロの空振り)。既存3語形は
+  // 「〜ない」の語尾が違うだけで意味は同じなので、語形を一般化して拾う。
+  // 「実行しないと壊れる」のような**必要条件**を巻き込まないよう、禁止は「こと」で名詞化
+  // されているか、再実行抑止の副詞(再度/二度と/再実行)を伴う場合に限る((?!と) で二重に守る)。
+  if (/(このPC|再度|二度と|再実行|もう一度)[^。\n]{0,30}?(回さない|実行しない|着手しない|試さない|やらない|触らない)(?!と)こと/.test(text)
+    || /このPC(では実行不可|の残TODOではない|で再試行させない)/.test(text)) return 'このPCでは実行不可';
+  // ⛔ は next-session.md の慣行で「ブロック中／実行対象外」を意味する見出し記号。項目の
+  // 先頭に付いた ⛔ は作業内容を持たない注意書きなので、語形に依存せず除外する(防御の二重化)。
+  if (/^\s*(?:\d+[a-z]?[.)、]\s*)?(?:\*\*)?\s*⛔/.test(body)) return 'ブロック中';
   const todayNumber = today.getFullYear() * 10000 + (today.getMonth() + 1) * 100 + today.getDate();
   for (const match of text.matchAll(/(\d{4})-(\d{2})-(\d{2})\s*以降/g)) {
     const date = `${match[1]}-${match[2]}-${match[3]}`;
@@ -649,7 +667,7 @@ export function runChild(executable, prompt, repoCwd, historyCwd, timeoutMs, run
       let child;
       try { child = spawn(cheap ? process.execPath : executable, cheap
         ? buildCheapCodeArgs({ repoRoot: REPO_ROOT, provider: cheapProvider, promptFile, cwd: historyCwd })
-        : buildClaudeHeadlessArgs({ repoCwd, historyCwd }), { cwd: historyCwd, env: { ...process.env, CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: cheap ? `auto-session:cheap-code:${cheapProvider}` : 'auto-session:fallback-claude' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }); }
+        : buildClaudeHeadlessArgs({ repoCwd, historyCwd, resumeSessionId: runOptions.resumeSessionId }), { detached: process.platform !== 'win32', cwd: historyCwd, env: { ...process.env, CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: cheap ? `auto-session:cheap-code:${cheapProvider}` : 'auto-session:fallback-claude' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }); }
       catch (error) { finish(null, '', String(error?.message ?? error), true, fallback); return; }
     let stdout = '';
     let stderr = '';
@@ -664,7 +682,7 @@ export function runChild(executable, prompt, repoCwd, historyCwd, timeoutMs, run
       timedOut = true;
       if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true });
       else { try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch {} } }
-    }, timeoutMs);
+    }, Math.max(1, timeoutMs - (Date.now() - startedAt.getTime())));
     child.on('close', (code) => {
       clearTimeout(timer);
       if (cheap && !timedOut && code !== 0) {

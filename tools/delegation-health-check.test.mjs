@@ -158,6 +158,41 @@ test('WSL 不在と直せる起動失敗が混在しても、起票対象は直�
   assert.deepEqual(findings[0].evidence, ['1件', 'launch_failed(1件)']);
 });
 
+// 台帳(~/.claude/executor-usage.jsonl)の実データをそのまま使う。手写しの要約にすると
+// 「reason/status が文字列の番兵」という判別条件そのものが抜け落ちて偽の緑になる。
+const PREFLIGHT_BLOCKED_ROW = {
+  t: '2026-09-22T18:27:08.929Z', provider: 'codex', model: 'codex-cli', in: 298, out: 0,
+  secs: 0.005, cwd: 'C:\\Users\\kimko\\nf-minpaku-automation', launched: false, timedOut: false,
+  stderrTail: '', reason: 'spec-missing-context', status: 'spec-missing-context',
+};
+// 2026-09-23T18:05 に生成された delegation-health.json が codex_launch_failed 2件と報告した窓。
+const WHEN_REPORTED = new Date('2026-09-23T18:05:00.424Z');
+
+test('emptyOutputReason は起動前ゲートが止めた行を launch_failed と混同しない', () => {
+  assert.equal(emptyOutputReason(PREFLIGHT_BLOCKED_ROW), 'preflight_blocked');
+  // 対照群: 起動を試みて失敗した行(数値 status)は従来どおり launch_failed のまま。
+  // ここが preflight_blocked に流れると本物の起動失敗が消えるので、必ず両方を張る。
+  assert.equal(emptyOutputReason({ launched: false, status: 3, secs: 0 }), 'launch_failed');
+  assert.equal(emptyOutputReason({ launched: false, status: 3, secs: 0, stderrTail: 'WSL ディストリが見つかりませんでした' }), 'launch_failed');
+});
+
+test('起動前ゲートが止めた行は codex_launch_failed として起票しない', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl',
+    row(PREFLIGHT_BLOCKED_ROW) + row({ ...PREFLIGHT_BLOCKED_ROW, t: '2026-09-22T18:27:44.522Z', secs: 0.004 }));
+  const findings = collectFindings({ home: dir, now: WHEN_REPORTED, codexUsedPercent: null });
+  assert.deepEqual(findings.map((item) => item.id), ['codex_preflight_blocked']);
+  assert.equal(findings[0].severity, 'low');
+  assert.equal(findings[0].fixTask, undefined);
+});
+
+test('起動前ゲートで止めた行を codex_empty_output としても数えない', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', row(PREFLIGHT_BLOCKED_ROW));
+  const findings = collectFindings({ home: dir, now: WHEN_REPORTED, codexUsedPercent: null });
+  assert.equal(findings.find((item) => item.id === 'codex_empty_output'), undefined);
+});
+
 test('codex_lane_unavailable は low なので next-session.md へ起票しない', () => {
   const dir = home();
   write(dir, 'next-session.md', handoff());

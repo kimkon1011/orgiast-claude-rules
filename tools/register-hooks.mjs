@@ -202,6 +202,9 @@ try {
   if (add(settings.hooks.UserPromptSubmit, 'makimono-gate.mjs', { hooks: [{ type: 'command', command: command('makimono-gate.mjs'), timeout: 6 }] })) added += 1;
   // userへ頼む前に自動取得・復元・自動設定を毎プロンプトで先に検討させる。
   if (add(settings.hooks.UserPromptSubmit, 'automation-first-reminder.mjs', { hooks: [{ type: 'command', command: command('automation-first-reminder.mjs'), timeout: 5 }] })) added += 1;
+  // 外部知見の取り込み報告を A軸(安全/手順)・B軸(コスパ/価値創出)の2軸で出させる。
+  added += migrate(settings.hooks.UserPromptSubmit, 'intake-two-axes-hook.mjs', 'intake-two-axes-hook.mjs', command('intake-two-axes-hook.mjs'));
+  if (add(settings.hooks.UserPromptSubmit, 'intake-two-axes-hook.mjs', { hooks: [{ type: 'command', command: command('intake-two-axes-hook.mjs'), timeout: 5 }] })) added += 1;
   // 過去に受領済みのクレデンシャルをuserへ再質問する前に復元経路を注入する。
   if (add(settings.hooks.UserPromptSubmit, 'fleet-inbox-context.mjs', { hooks: [{ type: 'command', command: command('fleet-inbox-context.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.UserPromptSubmit, 'credentials-reminder.mjs', { hooks: [{ type: 'command', command: command('credentials-reminder.mjs'), timeout: 5 }] })) added += 1;

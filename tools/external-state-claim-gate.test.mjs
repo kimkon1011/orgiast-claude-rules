@@ -47,7 +47,7 @@ for (const tool of [query, use('Bash', { command: 'gcloud projects list' }),
   test(`直接照会: ${JSON.stringify(tool)}`, () => {
     const transcriptRaw = raw(human, tool);
     assert.equal(hasDirectQueryEvidenceFromRaw(transcriptRaw), true);
-    assert.equal(evaluate({ text: claim, transcriptRaw }).decision, 'pass');
+    assert.equal(evaluate({ text: claim, transcriptRaw }).decision, /gcloud|googleapis|Google_Drive/.test(JSON.stringify(tool)) ? 'pass' : 'block');
   });
 }
 
@@ -122,4 +122,23 @@ test('mode は既定 block、不正値も block、warn は理由を保って pas
     if (previous === undefined) delete process.env.ORGIAST_EXTERNAL_STATE_GATE;
     else process.env.ORGIAST_EXTERNAL_STATE_GATE = previous;
   }
+});
+
+test('R2 checks every claim and never substitutes another vendor', () => {
+  const transcriptRaw = raw(human, use('Bash', { command: 'gh run list' }));
+  for (const text of ['Anthropic の残高は枯渇していません。', 'GitHub のリポジトリはありません。Vercel の設定はありません。', 'OpenAI の課金に問題ありません。']) {
+    assert.equal(evaluate({ text, transcriptRaw }).decision, 'block');
+  }
+  assert.match(evaluate({ text: 'Anthropic Billing 対応は不要です', transcriptRaw }).reason, /anthropic を照会せずに github/);
+  assert.equal(evaluate({ text: 'GitHub のリポジトリはありません', transcriptRaw }).decision, 'pass');
+});
+test('R2 unknown MCP and command mentions do not count', () => {
+  for (const tool of [use('mcp__filesystem__read'), use('Bash', { command: 'echo gh run list' }), use('Bash', { command: 'rg gh README.md' }), use('mcp__anthropic__billing'), use('WebFetch', { url: 'https://console.anthropic.com/settings/billing' })])
+    assert.equal(hasDirectQueryEvidenceFromRaw(raw(human, tool)), false);
+});
+
+test('R2 marker names cannot relabel a billing claim; diagnostics name the missing vendor', () => {
+  const transcriptRaw = raw(human, use('Bash', { command: 'gh run list' }));
+  assert.equal(evaluate({ text: '[直接照会: GitHub] 残高は枯渇していません。', transcriptRaw }).decision, 'block');
+  assert.match(evaluate({ text: 'GitHub と Anthropic の課金に問題ありません。', transcriptRaw }).reason, /anthropic を照会せずに github/);
 });

@@ -91,6 +91,9 @@ export function buildIssueBody(item) {
   if (item?.has_attachment === true) lines.push('', 'スクショは Discord の元メッセージを参照');
   // どの DM から生まれた Issue かを後から機械的に検索できるようにする(feedback-replies.mjs が使う)。
   lines.push('', `<!-- feedback-dm:${clean(item?.message_id)} -->`);
+  const identity = JSON.stringify({ submitter: clean(item?.submitter), submitter_discord_id: clean(item?.submitter_discord_id) })
+    .replace(/</g, '\\u003c').replace(/>/g, '\\u003e');
+  lines.push('', `<!-- feedback-submitter: ${identity} -->`);
   return lines.join('\n');
 }
 
@@ -158,7 +161,7 @@ export function shellQuote(value) {
 export function runGh(args, options = {}) {
   // Windows の gh.cmd は直接 spawn できないため shell を使い、値はすべて個別に quote する。
   const command = ['gh', ...args].map(shellQuote).join(' ');
-  return spawnSync(command, { shell: true, encoding: 'utf8', ...options, windowsHide: true });
+  return spawnSync(command, { ...options, shell: true, encoding: 'utf8', windowsHide: true });
 }
 
 function relayUrls(base) {

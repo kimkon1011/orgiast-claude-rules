@@ -1,0 +1,8 @@
+{
+  "completed": false,
+  "summary": "部分検証済み。内部宛拒否15件、無通信のチャット出力6宛先、関連テスト10件を確認。9月22日以降の対象ログでは既知内部宛の再発は未検出。Gmailには9月10日の事故下書きが残存。実コネクタでの強制・ID参照宛先等は未確認。指定結果パスは書込み許可範囲外のため保存できず、リポジトリ内に代替保存。",
+  "evidence": {
+    "file": "/mnt/c/Users/uers/orgiast-main/docs/internal-recipient-audit-20260926-report.json",
+    "sha256": "cbb9e8de8b6835cdaff76b4ae2877a9bd41bd79779c746d28c7d8440569483fb"
+  }
+}

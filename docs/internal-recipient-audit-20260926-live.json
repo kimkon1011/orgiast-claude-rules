@@ -1,0 +1,219 @@
+{
+  "observedAt": "2026-09-25T19:18:18.046Z",
+  "scope": "接続済み Gmail の下書き一覧の先頭ページのみ。次ページあり。全アカウント・削除済み下書きは対象外。",
+  "nextPagePresent": true,
+  "drafts": [
+    {
+      "draft_id": "r-994750859161666683",
+      "subject": "【お見積り依頼】10/9(金) 新潟県胎内市・屋外社内パーティー 音響機材＋オペレーターのご相談",
+      "to": [
+        "bigsound@siren.ocn.ne.jp"
+      ],
+      "cc": [],
+      "bcc": [],
+      "email_ts": "2026-09-22T03:12:35+00:00"
+    },
+    {
+      "draft_id": "r-7811856817844381277",
+      "subject": "【お見積り依頼】10/9(金) 新潟県胎内市・屋外社内パーティー 音響機材＋オペレーターのご相談",
+      "to": [
+        "studioash@otonohako.co.jp"
+      ],
+      "cc": [],
+      "bcc": [],
+      "email_ts": "2026-09-21T23:11:22-04:00"
+    },
+    {
+      "draft_id": "r-6499323301078458280",
+      "subject": "[C0012] マイクロウェーブ展 【パース図作成依頼】国立研究開発法人海上・港湾・航空技術研究所_マイクロウェーブ展",
+      "to": [],
+      "cc": [],
+      "bcc": [],
+      "email_ts": "2026-09-21T10:24:49+00:00"
+    },
+    {
+      "draft_id": "r6531237984653076591",
+      "subject": "【音響オペレーター・機材レンタルのご相談】10/9(金) 新潟県胎内市・屋外イベント(約500名)の件／株式会社オージャスト",
+      "to": [
+        "shibata@apollonmusic.com"
+      ],
+      "cc": [],
+      "bcc": [],
+      "email_ts": "2026-09-20T13:26:10-04:00"
+    },
+    {
+      "draft_id": "r-7220267258088411800",
+      "subject": "【音響オペレーターのご相談】10/9(金) 新潟県胎内市・屋外イベント(約500名)の件／株式会社オージャスト",
+      "to": [
+        "info@moa-industry.com"
+      ],
+      "cc": [],
+      "bcc": [],
+      "email_ts": "2026-09-20T17:25:36+00:00"
+    },
+    {
+      "draft_id": "r3145547581818259567",
+      "subject": "【音響オペレーターのご相談】10/9(金) 新潟県胎内市・屋外イベント(約500名)の件／株式会社オージャスト",
+      "to": [
+        "studioash@otonohako.co.jp"
+      ],
+      "cc": [],
+      "bcc": [],
+      "email_ts": "2026-09-20T13:25:29-04:00"
+    },
+    {
+      "draft_id": "r5588052762823506150",
+      "subject": "Re: 高砂鐵工/杉本です",
+      "to": [
+        "杉本　昌司 sugimoto-m@takasago-t.co.jp"
+      ],
+      "cc": [
+        "東邦鋼業 野村功勇 nomuraisao@toho-kogyo.com",
+        "河野賢成 toho.k.kawano@gmail.com",
+        "向井篤 toho.kogyo1@gmail.com",
+        "和気 n-waki.toho@onyx.ocn.ne.jp",
+        "tohoikeda0316@gmail.com"
+      ],
+      "bcc": [],
+      "email_ts": "2026-09-16T14:30:57+09:00"
+    },
+    {
+      "draft_id": "r1068976736119596222",
+      "subject": "Re: TETSUKO GA4 測定ID・Search Console 権限の確認依頼（回答）",
+      "to": [
+        "genbateam.toho@gmail.com"
+      ],
+      "cc": [],
+      "bcc": [],
+      "email_ts": "2026-09-10T08:11:14-04:00"
+    },
+    {
+      "draft_id": "r3611817155668590183",
+      "subject": "[C0036] 2026年10月/Japan IT Week 【パース図作成のご依頼】2026年10月 Japan IT Week 関東（千葉）／株式会社メディアネットワーク様案件",
+      "to": [],
+      "cc": [],
+      "bcc": [],
+      "email_ts": "2026-09-06T19:50:48-07:00"
+    },
+    {
+      "draft_id": "r1631028993873769951",
+      "subject": "[C0001] コンテンツ東京 【パース図作成依頼】コンテンツ東京 出展ブース（株式会社トラストスタジオ様）",
+      "to": [],
+      "cc": [],
+      "bcc": [],
+      "email_ts": "2026-09-05T06:37:22-07:00"
+    },
+    {
+      "draft_id": "r-2172916519015840777",
+      "subject": "【人工のご相談】病院外壁イルミネーション施工リーダー1名（大阪市東淀川区・11/22想定）",
+      "to": [
+        "o-info@anchor-link.co.jp"
+      ],
+      "cc": [
+        "satou@orgiast.jp",
+        "seisaku-team@orgiast.jp"
+      ],
+      "bcc": [],
+      "email_ts": "2026-09-04T18:30:13-07:00"
+    },
+    {
+      "draft_id": "r7561119545185850275",
+      "subject": "【施工リーダー1名のご相談】病院外壁イルミネーション施工（大阪市東淀川区・11/22想定）",
+      "to": [
+        "yuki-nakajima@unity-grp.co.jp"
+      ],
+      "cc": [
+        "satou@orgiast.jp",
+        "seisaku-team@orgiast.jp"
+      ],
+      "bcc": [],
+      "email_ts": "2026-09-04T18:29:54-07:00"
+    },
+    {
+      "draft_id": "r-7568315267070149370",
+      "subject": "【再開のご相談】現地調査が完了しました／高所作業車の要否と見積再発行のお願い",
+      "to": [
+        "info@plus-co.jp"
+      ],
+      "cc": [
+        "satou@orgiast.jp",
+        "seisaku-team@orgiast.jp"
+      ],
+      "bcc": [],
+      "email_ts": "2026-09-03T04:39:57-07:00"
+    },
+    {
+      "draft_id": "r-546365295478178859",
+      "subject": "【お詫びとご報告】現地調査結果および今後の進め方について",
+      "to": [
+        "kohno@kuroda-dc.jp"
+      ],
+      "cc": [
+        "satou@orgiast.jp",
+        "kim@orgiast.jp",
+        "seisaku-team@orgiast.jp"
+      ],
+      "bcc": [],
+      "email_ts": "2026-09-03T04:38:31-07:00"
+    },
+    {
+      "draft_id": "r-5169529009249104053",
+      "subject": "[C0036][施工会社] 2026年10月/Japan IT Week 【株式会社オージャスト】展示会ブース施工・撤去人員手配のお見積りのご相談（2026年10月・11月）",
+      "to": [],
+      "cc": [],
+      "bcc": [],
+      "email_ts": "2026-08-28T10:53:25-04:00"
+    },
+    {
+      "draft_id": "r4381980585510025656",
+      "subject": "[C0038][施工会社] 【株式会社オージャスト】展示会ブース施工・撤去人員手配のお見積りのご相談（2026年9月）",
+      "to": [],
+      "cc": [],
+      "bcc": [],
+      "email_ts": "2026-08-08T09:20:55-04:00"
+    },
+    {
+      "draft_id": "r962269556632245371",
+      "subject": "[C0038][施工会社] 【株式会社オージャスト】展示会ブース施工・撤去人員手配のお見積りのご相談",
+      "to": [],
+      "cc": [],
+      "bcc": [],
+      "email_ts": "2026-08-08T09:12:07-04:00"
+    },
+    {
+      "draft_id": "r-8498254218100151699",
+      "subject": "[C0038] 【パース図作成依頼】サステナブル経営WEEK[秋]2026 脱炭素経営EXPO／株式会社グリーンエナジー＆カンパニー様",
+      "to": [],
+      "cc": [],
+      "bcc": [],
+      "email_ts": "2026-08-08T08:57:17-04:00"
+    },
+    {
+      "draft_id": "r5424130278950750347",
+      "subject": "[未使用/転記済み] 学会協賛ナビ フォロー3",
+      "to": [
+        "sawa.saito@boehringer-ingelheim.com"
+      ],
+      "cc": [],
+      "bcc": [],
+      "email_ts": "2026-08-05T07:13:43-05:00"
+    },
+    {
+      "draft_id": "r-853714364594002507",
+      "subject": "[未使用/転記済み] 学会協賛ナビ フォロー2",
+      "to": [
+        "sawa.saito@boehringer-ingelheim.com"
+      ],
+      "cc": [],
+      "bcc": [],
+      "email_ts": "2026-08-05T05:13:41-07:00"
+    }
+  ],
+  "tools": [
+    "mcp__codex_apps__gmail_create_draft",
+    "mcp__codex_apps__gmail_forward_emails",
+    "mcp__codex_apps__gmail_send_draft",
+    "mcp__codex_apps__gmail_send_email",
+    "mcp__codex_apps__gmail_update_draft"
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "completed": false,
+  "summary": "原文TODO・過去の作成成功応答を確認。現在のDWD 3スコープ成功、Gmail読取HTTP 200、検証下書き検索0件、内部宛は無通信遮断、19テスト成功。関連する作業保留候補2件があり再発ゼロは未確定。指定結果JSON保存先は書込許可範囲外のため保存不能。証拠と代替JSONを作業リポジトリに保存。",
+  "evidence": {
+    "file": "/mnt/c/Users/uers/orgiast-main/docs/shared-account-gmail-audit-20260926.md",
+    "sha256": "0ceab6616819a7a40b0df0a662c91a4b77f0ffd3ee81767dd4626da08c42fcf3"
+  }
+}

@@ -1,5 +1,7 @@
 # 共有アカウント(seisaku-team)の Gmail 下書き作成 — DWD を既存権限で実測（2026-09-22）
 
+> 2026-09-26 監査注記: 以下は新設時点の記録です。「実HTTP未確認」は後続の[実測記録](approval-completion-checkin-email-route.md)で解消済み。今回もDWD認証・Gmail読取HTTP 200・検証下書き検索0件を確認しました。再発状況と確認限界は[監査結果](shared-account-gmail-audit-20260926.md)を参照してください。
+
 handoff-audit:e2715c224377adaa。元の手渡しは「共有アカウント seisaku-team@orgiast.jp の Gmail 下書き作成」。
 本ドキュメントは、それが **Claude 側の既存権限だけで可能か** を実測した結果と、作った正規経路を記録する。
 

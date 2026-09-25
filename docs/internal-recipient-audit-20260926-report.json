@@ -1,0 +1,36 @@
+{
+  "task": "社内・グループ会社・スタッフ宛連絡文の再発検証（handoff-audit:c1366575775b1837）",
+  "observedAt": "2026-09-25T19:19:06.809999+00:00",
+  "status": "部分検証済み・未完了",
+  "original": {
+    "file": "/mnt/c/Users/uers/.claude/next-session.md",
+    "line": 15,
+    "text": "7. [handoff-audit:c1366575775b1837] 社内・グループ会社・スタッフ宛の連絡文 — この handoff が再発していないかを実物で検証し結果を記録する（再発防止の経路: Gmail 下書きにしない。チャット本文に宛先/用件/本文を完成形で表示（kim はリモートデスクトップ/LINE/Discord で渡す）。Discord MCP が使えるなら Discord 送信可。**2026-09-22 実測**: 強制は `tools/internal-recipient-gmail-guard.mjs`（PreToolUse / matcher=`mcp__claude_ai_Gmail(?:_\\d+)?__(create_draft|send_message|update_draft|reply|forward)`、settings.json:475、台帳=`~/.claude/internal-recipients.json`→無ければ default の orgiast.jp/toho-kogyo.com + 明示4件）。経理(keiri.orgiast@gmail.com)宛 create_draft=**deny**・外部宛=pass・テスト14/14 pass を実測。**穴1**: claude.ai コネクタが無効な APIキー環境（`claude mcp list`=gemini-cli のみ）では MCP ツール自体が無く**発火しない**。**穴2（2026-09-22 一部解消）**: Bash 経由の Gmail REST は matcher 外で素通り。常設の下書き作成ツールが無かったが、`tools/gmail-draft.mjs`（2026-09-22 新設）が `loadLedger`/`isInternal` を取り込み**ツール内で内部宛を遮断**し、Gmail API を呼ばずチャット形式を出して exit 3 で止まる（実測: keiri.orgiast@gmail.com 宛で通信ゼロ・テスト20/20 pass）。ただし自分でアドホックなコードを書けば依然素通りする。**穴3**: 台帳に無いフリーメールの社内スタッフは素通り（drivers の追加は人の手）。未確認: コネクタ有効環境での実発火、書き込み系ツール名の全リスト）。送信・権限変更は既存の承認範囲を守る。kimへのDMなし。"
+  },
+  "findings": [
+    "対象は next-session.md に未完了項目として残存。",
+    "Windows settings.json の Gmail matcher と実体ファイルを確認。個別台帳は存在せず既定2ドメイン・4アドレスを使用。",
+    "本番ガードの Node 実プロセスに5操作×3アカウント名、内部 Bcc を入力し15件すべて deny を検証。外部宛は空出力の pass。Claudeランタイムによる実発火とは区別。",
+    "常設 gmail-draft の6内部宛で exit 3、認証0・通信0、宛先／用件／本文の完全一致を検証。",
+    "削除を伴う既存テストを避け、対象の10テストを選択実行し全件成功。全テスト成功とは主張しない。",
+    "2026-09-22以降を対象に更新済み207ログファイル・31890レコードを走査。Gmail書込みツール3件はいずれも既定リスト上の内部宛ではない。うち1件はエラー。再実行はしていない。対象パターンに該当するBash候補0件。欠落ログ・別環境・アドホック経路・未登録スタッフは網羅しない。",
+    "接続済みGmail下書き先頭ページ20件を直接取得（次ページあり）。genbateam.toho 宛「Re: TETSUKO GA4 測定ID・Search Console 権限の確認依頼（回答）」の2026-09-10付下書きが残存。今回期間の新規再発の証拠ではない。",
+    "同ページには外部To・内部Ccの旧下書きも存在。宛先未入力の下書きは内部宛と断定できない。メール作成主体・後日の編集の有無は一覧だけでは判定できない。",
+    "現在利用可能なCodex Gmail書込みツール5種をメタデータから列挙。いずれも既存Claude用matcherと異なる名前。Codexでの強制を確認できない。",
+    "宛先なしmessage_idのみのreply入力はpassを実測。任意REST・台帳外スタッフ・実コネクタ経由の拒否は未解決／未確認。"
+  ],
+  "actions": "送信、下書き作成・更新・削除、権限変更、Claude CLI、失敗操作再実行、git変更操作は行っていない。別セッション差分は編集していない。",
+  "remaining": [
+    "実コネクタ書込みの安全な拒否検証と名前／ID参照宛先の網羅確認",
+    "指定パスへの結果JSON保存（現セッションはworkspaceと/tmpのみ書込み可、承認不可）"
+  ],
+  "requestedResultPath": "C:\\Users\\uers\\.claude\\92fa5178e594157560b8-1790363743223.result.json",
+  "artifactSha256": {
+    "/mnt/c/Users/uers/orgiast-main/docs/internal-recipient-audit-20260926-logs.json": "0209fef619ab1536947d52a94d7398bb0440d8a1d6f8645a46b6275772dcb42c",
+    "/mnt/c/Users/uers/orgiast-main/docs/internal-recipient-audit-20260926-probes.json": "2afb63cecc5146328f0eac956ae89d19d9072282d1e0958a98c8b4b4cedc674f",
+    "/mnt/c/Users/uers/orgiast-main/docs/internal-recipient-audit-20260926-tests.txt": "f05d87c4e2314b4e26373534a84aa6f5a69d266b292318f7c35c98aa43c07636",
+    "/mnt/c/Users/uers/orgiast-main/docs/internal-recipient-audit-20260926-live.json": "a687f865a6e813533367c2d6a060d455462a379a0267a1a172a41f9106c22ac9",
+    "/mnt/c/Users/uers/orgiast-main/docs/internal-recipient-audit-20260926-claim.md": "9707f1ac9112817101792300d56443898dba7255ab40e809b91ae881c0d79b0d"
+  },
+  "persistence": "新規記録は未コミット。リポジトリ清掃による消失の可能性があり恒久保存済みとは扱わない。"
+}

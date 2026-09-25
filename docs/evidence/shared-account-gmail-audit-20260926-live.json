@@ -1,0 +1,42 @@
+{
+  "checkedAt": "2026-09-25T19:13:34.875Z",
+  "user": "seisaku-team@orgiast.jp",
+  "scopes": [
+    {
+      "scope": "https://www.googleapis.com/auth/gmail.readonly",
+      "ok": true
+    },
+    {
+      "scope": "https://www.googleapis.com/auth/gmail.compose",
+      "ok": true
+    },
+    {
+      "scope": "https://www.googleapis.com/auth/gmail.send",
+      "ok": true
+    }
+  ],
+  "gmail": {
+    "method": "GET",
+    "query": "in:drafts to:dwd-verify@example.invalid subject:verify",
+    "httpStatus": 200,
+    "responseValid": true,
+    "messageCount": 0,
+    "resultSizeEstimate": 0
+  },
+  "internalGuard": {
+    "exitCode": 3,
+    "networkCalls": 0,
+    "output": [
+      {
+        "action": "chat-display",
+        "user": "seisaku-team@orgiast.jp",
+        "ok": false,
+        "errorKind": "internal_recipient",
+        "internal": [
+          "keiri.orgiast@gmail.com"
+        ],
+        "chatDisplay": "宛先：keiri.orgiast@gmail.com\n用件：監査・内部宛遮断確認\n本文：\n検証のみ"
+      }
+    ]
+  }
+}

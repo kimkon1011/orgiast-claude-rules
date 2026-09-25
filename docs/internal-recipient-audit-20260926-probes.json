@@ -1,0 +1,180 @@
+{
+  "time": "2026-09-25T19:17:37.649Z",
+  "settings": [
+    {
+      "matcher": "mcp__claude_ai_Gmail(?:_\\d+)?__(create_draft|send_message|update_draft|reply|forward)",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "node \"C:\\Users\\uers\\orgiast-main\\tools\\internal-recipient-gmail-guard.mjs\"",
+          "timeout": 5
+        }
+      ]
+    }
+  ],
+  "ledger": {
+    "domains": [
+      "orgiast.jp",
+      "toho-kogyo.com"
+    ],
+    "addresses": [
+      "genbateam.toho@gmail.com",
+      "keiri.orgiast@gmail.com",
+      "atsuoast3@gmail.com",
+      "kimkongyong@gmail.com"
+    ],
+    "githubHandles": [
+      "kimkon1011"
+    ],
+    "note": "内部（社内・グループ会社・スタッフ）宛先。Gmail 下書き/送信を禁止しチャット表示に切り替える。githubHandles は GitHub のコメント/PR本文で @メンションしてはいけない内部アカウント。追加は addresses / githubHandles に1行足すだけ。"
+  },
+  "cases": [
+    {
+      "name": "mcp__claude_ai_Gmail__create_draft",
+      "field": "bcc",
+      "decision": "deny",
+      "exit": 0
+    },
+    {
+      "name": "mcp__claude_ai_Gmail_2__create_draft",
+      "field": "bcc",
+      "decision": "deny",
+      "exit": 0
+    },
+    {
+      "name": "mcp__claude_ai_Gmail_12__create_draft",
+      "field": "bcc",
+      "decision": "deny",
+      "exit": 0
+    },
+    {
+      "name": "mcp__claude_ai_Gmail__send_message",
+      "field": "bcc",
+      "decision": "deny",
+      "exit": 0
+    },
+    {
+      "name": "mcp__claude_ai_Gmail_2__send_message",
+      "field": "bcc",
+      "decision": "deny",
+      "exit": 0
+    },
+    {
+      "name": "mcp__claude_ai_Gmail_12__send_message",
+      "field": "bcc",
+      "decision": "deny",
+      "exit": 0
+    },
+    {
+      "name": "mcp__claude_ai_Gmail__update_draft",
+      "field": "bcc",
+      "decision": "deny",
+      "exit": 0
+    },
+    {
+      "name": "mcp__claude_ai_Gmail_2__update_draft",
+      "field": "bcc",
+      "decision": "deny",
+      "exit": 0
+    },
+    {
+      "name": "mcp__claude_ai_Gmail_12__update_draft",
+      "field": "bcc",
+      "decision": "deny",
+      "exit": 0
+    },
+    {
+      "name": "mcp__claude_ai_Gmail__reply",
+      "field": "bcc",
+      "decision": "deny",
+      "exit": 0
+    },
+    {
+      "name": "mcp__claude_ai_Gmail_2__reply",
+      "field": "bcc",
+      "decision": "deny",
+      "exit": 0
+    },
+    {
+      "name": "mcp__claude_ai_Gmail_12__reply",
+      "field": "bcc",
+      "decision": "deny",
+      "exit": 0
+    },
+    {
+      "name": "mcp__claude_ai_Gmail__forward",
+      "field": "bcc",
+      "decision": "deny",
+      "exit": 0
+    },
+    {
+      "name": "mcp__claude_ai_Gmail_2__forward",
+      "field": "bcc",
+      "decision": "deny",
+      "exit": 0
+    },
+    {
+      "name": "mcp__claude_ai_Gmail_12__forward",
+      "field": "bcc",
+      "decision": "deny",
+      "exit": 0
+    },
+    {
+      "address": "genbateam.toho@gmail.com",
+      "code": 3,
+      "fetchCalls": 0,
+      "tokenCalls": 0,
+      "chatDisplay": "宛先：genbateam.toho@gmail.com\n用件：送信しない監査用件\n本文：\n送信しない監査本文"
+    },
+    {
+      "address": "keiri.orgiast@gmail.com",
+      "code": 3,
+      "fetchCalls": 0,
+      "tokenCalls": 0,
+      "chatDisplay": "宛先：keiri.orgiast@gmail.com\n用件：送信しない監査用件\n本文：\n送信しない監査本文"
+    },
+    {
+      "address": "atsuoast3@gmail.com",
+      "code": 3,
+      "fetchCalls": 0,
+      "tokenCalls": 0,
+      "chatDisplay": "宛先：atsuoast3@gmail.com\n用件：送信しない監査用件\n本文：\n送信しない監査本文"
+    },
+    {
+      "address": "kimkongyong@gmail.com",
+      "code": 3,
+      "fetchCalls": 0,
+      "tokenCalls": 0,
+      "chatDisplay": "宛先：kimkongyong@gmail.com\n用件：送信しない監査用件\n本文：\n送信しない監査本文"
+    },
+    {
+      "address": "audit@orgiast.jp",
+      "code": 3,
+      "fetchCalls": 0,
+      "tokenCalls": 0,
+      "chatDisplay": "宛先：audit@orgiast.jp\n用件：送信しない監査用件\n本文：\n送信しない監査本文"
+    },
+    {
+      "address": "audit@toho-kogyo.com",
+      "code": 3,
+      "fetchCalls": 0,
+      "tokenCalls": 0,
+      "chatDisplay": "宛先：audit@toho-kogyo.com\n用件：送信しない監査用件\n本文：\n送信しない監査本文"
+    }
+  ],
+  "limitations": [
+    "本番コネクタ経由の実発火は未検証。Node実プロセスに同型入力を渡した検証。",
+    "設定 matcher は Gmail のみ。Bash の任意REST実行を防がない。",
+    "台帳にない個人メールは内部と識別できない。",
+    "宛先を含まないID指定の返信・転送・下書き更新は既存実装で検出できない。"
+  ],
+  "external": {
+    "decision": "pass",
+    "stdout": ""
+  },
+  "idOnlyProbe": {
+    "decision": "pass",
+    "addresses": [],
+    "internal": []
+  }
+}

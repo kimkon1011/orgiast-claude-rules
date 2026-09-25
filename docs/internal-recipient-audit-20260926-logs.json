@@ -1,0 +1,60 @@
+{
+  "since": "2026-09-22",
+  "files": 207,
+  "records": 31890,
+  "parse_errors": 0,
+  "gmail_write_calls": [
+    {
+      "file": "/mnt/c/Users/uers/.claude/projects/c--Users-uers-Downloads-CLAUDE-md--/8ef840b8-52b4-460b-910c-dcb1fe8ff92b.jsonl",
+      "line": 75,
+      "timestamp": "2026-09-22T03:10:56.371Z",
+      "name": "mcp__claude_ai_Gmail__create_draft",
+      "id": "toolu_017BN46WopscjgPqdhLRJSx1",
+      "recipient_fields": {
+        "to": [
+          "studioash@otonohako.co.jp"
+        ]
+      },
+      "result": {
+        "is_error": false,
+        "guard_marker": false,
+        "sha256": "83ed3ed01baafbb3c1b9fee4f6f0a4d6c4778bad535167a7a72ab8f25a0927ec"
+      }
+    },
+    {
+      "file": "/mnt/c/Users/uers/.claude/projects/c--Users-uers-Downloads-CLAUDE-md--/8ef840b8-52b4-460b-910c-dcb1fe8ff92b.jsonl",
+      "line": 76,
+      "timestamp": "2026-09-22T03:11:04.373Z",
+      "name": "mcp__claude_ai_Gmail__create_draft",
+      "id": "toolu_018n3PbeH2B9PRDeL2s1d8nj",
+      "recipient_fields": {
+        "to": [
+          "support@mice-support.net"
+        ]
+      },
+      "result": {
+        "is_error": true,
+        "guard_marker": false,
+        "sha256": "299937264667a1fbf39646abd5cb42120b08aac2daea7210dacd7b83817f3603"
+      }
+    },
+    {
+      "file": "/mnt/c/Users/uers/.claude/projects/c--Users-uers-Downloads-CLAUDE-md--/8ef840b8-52b4-460b-910c-dcb1fe8ff92b.jsonl",
+      "line": 77,
+      "timestamp": "2026-09-22T03:11:11.711Z",
+      "name": "mcp__claude_ai_Gmail__create_draft",
+      "id": "toolu_01PvPH4qQdgnpQ9NjhZbQEGL",
+      "recipient_fields": {
+        "to": [
+          "bigsound@siren.ocn.ne.jp"
+        ]
+      },
+      "result": {
+        "is_error": false,
+        "guard_marker": false,
+        "sha256": "aa84c7d0933cfa542b94dddf7459aa3d15c891f7a5acf9d64ca41f4a125c3a4f"
+      }
+    }
+  ],
+  "shell_candidates": []
+}

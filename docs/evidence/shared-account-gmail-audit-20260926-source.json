@@ -1,0 +1,35 @@
+{
+  "todoFile": "/mnt/c/Users/uers/.claude/next-session.md",
+  "todoLine": "4. [handoff-audit:cc3427eaf5cf8ffb] 共有アカウント(seisaku-team)からの Gmail 下書き作成 — この handoff が再発していないかを実物で検証し結果を記録する（再発防止の経路: **可能・追加設定ゼロ・kim の手作業ゼロ**。`tools/gmail-draft.mjs`（2026-09-22 新設）が DWD で seisaku-team@orgiast.jp を impersonate して `drafts.create`（scope=gmail.compose）。SA キー既定は aujust-sales-automation/.gcp/sheets-sa.json、依存パッケージなし。`node tools/gmail-draft.mjs --check` で権限だけを非破壊に確認（Gmail API を呼ばない）。**2026-09-22 実測**: seisaku-team で gmail.readonly / **gmail.compose** / **gmail.send** の3スコープすべてトークン発行成功＝DWD 委任済みで Admin Console 操作は不要。「MCP が無い＝下書きが作れない」は誤読で、DWD 経路は既に通っていた。内部宛(orgiast.jp/toho-kogyo.com/台帳)はツール内で遮断し API を呼ばずチャット形式を出して exit 3。`--delete <id>` は下書きのみ（送信済みは消せない）。送信 API は実装していない（gmail.send は委任済みだが承認範囲外）。**2026-09-22 実測で確定**: `drafts.create` の実 HTTP は成功（id=r1697484905697154238 / `in:drafts subject:verify` の読み戻しで DRAFT ラベル・宛先・件名・本文一致 / `--delete` で削除済み・残留ゼロ）。送信 API は引き続き未実装・未実行。詳細 docs/shared-account-gmail-draft-route.md, docs/approval-completion-checkin-email-route.md）。送信・権限変更は既存の承認範囲を守る。kimへのDMなし。",
+  "priorRecord": {
+    "file": "/mnt/c/Users/uers/.claude/handoff-audit-ledger.jsonl",
+    "line": 642,
+    "ts": "2026-09-21T18:26:54.553Z",
+    "tools": [
+      {
+        "name": "Bash",
+        "detail": "node \"C:/Users/uers/.claude/auto-session-tree-fallback-20260922-003005/tools/gmail-draft.mjs\" --to dwd-verify@example.invalid --subject \"[verify] gmail-draft route\" --body \"handoff-audit f59a211cc367f",
+        "outcome": "returned",
+        "result": "\"{\\\"action\\\":\\\"create-draft\\\",\\\"user\\\":\\\"seisaku-team@orgiast.jp\\\",\\\"ok\\\":true,\\\"id\\\":\\\"r1697484905697154238\\\",\\\"messageId\\\":\\\"1a0c53251a3baaca\\\",\\\"threadId\\\":\\\"1a0c53251a3baaca\\\"}\""
+      },
+      {
+        "name": "Bash",
+        "detail": "printf '%s\\n' \"- 実測: node tools/gmail-draft.mjs --check → gmail.readonly/compose/send すべて OK（DWD 委任済み）\" \"- 実測: **drafts.create が実 HTTP で成功**（前セッション未確認の唯一の点を閉じた）: id=r1697484905697154238 messageId=1a0c",
+        "outcome": "returned",
+        "result": "\"(Bash completed with no output)\""
+      },
+      {
+        "name": "Bash",
+        "detail": "node \"C:/Users/uers/.claude/auto-session-tree-fallback-20260922-003005/tools/gmail-search.mjs\" --user seisaku-team@orgiast.jp --query \"in:drafts subject:verify\" --max 5",
+        "outcome": "returned",
+        "result": "\"{\\n  \\\"estimate\\\": 1,\\n  \\\"messages\\\": [\\n    {\\n      \\\"id\\\": \\\"1a0c53251a3baaca\\\",\\n      \\\"threadId\\\": \\\"1a0c53251a3baaca\\\",\\n      \\\"date\\\": \\\"Mon, 21 Sep 2026 13:20:04 -0500\\\",\\n      \\\"from\\\": "
+      },
+      {
+        "name": "Bash",
+        "detail": "node \"C:/Users/uers/.claude/auto-session-tree-fallback-20260922-003005/tools/gmail-draft.mjs\" --delete r1697484905697154238",
+        "outcome": "returned",
+        "result": "\"下書きを削除しました: r1697484905697154238 (seisaku-team@orgiast.jp)\""
+      }
+    ]
+  }
+}

@@ -25,6 +25,11 @@ jobs:
       - name: reported symptom gates and distribution read-back
         run: node --test "tools/reported-symptom*.test.mjs" tools/state-claim-evidence.test.mjs tools/external-state-claim-gate.test.mjs tools/no-undistributed-imports.test.mjs
 
+      # 単価カタログ → docs/compute-cost-pilot.md のドリフト検出。
+      # 生成物を手で直すとカタログと食い違い、置換試算が実態とずれる。
+      - name: compute cost pilot drift gate
+        run: node --test tools/compute-cost-pilot.test.mjs && node tools/compute-cost-pilot.mjs --check
+
       - name: keyserve enrollment installer (mock network, real ACL)
         shell: powershell
         run: .\tools\keyserve-enroll-installer.test.ps1
@@ -51,3 +56,8 @@ jobs:
         run: node tools/selftest-guards.mjs
       - name: reported symptom gates and distribution read-back
         run: node --test "tools/reported-symptom*.test.mjs" tools/state-claim-evidence.test.mjs tools/external-state-claim-gate.test.mjs tools/no-undistributed-imports.test.mjs
+
+      # 単価カタログ → docs/compute-cost-pilot.md のドリフト検出。
+      # 生成物を手で直すとカタログと食い違い、置換試算が実態とずれる。
+      - name: compute cost pilot drift gate
+        run: node --test tools/compute-cost-pilot.test.mjs && node tools/compute-cost-pilot.mjs --check

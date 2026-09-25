@@ -3,15 +3,24 @@
   "_note": "kim/監督Claude が指示を1件書き、各PCの fleet-agent が15分以内に拾って結果を Discord へ返す。kind は status / prompt / enable-auto-session の3つだけ。prompt と enable-auto-session はそのPCの人がオプトイン済みの場合のみ実行される。空配列にすると全PCで何も起きない。 PC間メッセージは fleet-mail.mjs（双方向）を使う。",
   "directives": [
     {
-      "id": "prompt-20260922-012013-8367",
-      "kind": "prompt",
-      "targets": "all",
-      "why": "マキモノ出品15件が審査待ちで滞留。本文は本体PCでしか読めないため、本体を持つPCで審査と承認、および滞留の再発防止までを行う",
-      "body": "マキモノ本体（makimono-md.vercel.app）のリポジトリを持つPCだけが対象の作業です。\n\n## 0. 自分が対象かの判定（最初に必ず行う。違えば何もせず終了）\n\n`node ~/orgiast-claude-rules/tools/makimono-host-detect.mjs` を実行する。\n本体リポが見つからなければ「このPCにマキモノ本体リポは無い」と1行だけ報告して**終了**する。\n「たぶんここだろう」で別のリポを触らないこと。見つかった場合は `git remote -v` で\n`makimono` 本体であることを確かめてから先へ進む。\n\n## 1. 背景（出品側PCで実測済み。再調査不要）\n\n- 出品ログ 66 件のうち **published 50 / rejected 1 / pending 15**。\n- pending 15 件は実 API（`GET /api/v1/listings/{id}`）でも `status: \"pending\"`。ローカルログが古いのではない。\n- **日付でもカテゴリでも出品メールでも切れない。** 2026-09-13 は published と pending が同居し、\n  09-14 の10件は全部 pending、09-15/18/20 は全部 published。出品メールは1種類のみ。\n- `GET /api/v1/admin/approve` は 401 を返す＝**ルートは実装済み**。\n- pending は `slug: null` で、本文を返す API が無い。**出品側PCからは中身を読めない。**\n  だから審査はあなた（本体を持つPC）にしかできない。\n\npending の submissionId（15件）:\nsub_9bd40764, sub_edf7968e, sub_fa90a0d9, sub_a299bbd4, sub_1017b956, sub_0c5bae11,\nsub_7e78d01b, sub_950327c5, sub_217f3e3b, sub_da1384e5, sub_bc235834, sub_07661dad,\nsub_ca64b9e7, sub_8c869c60, sub_3c215f2c\n\n## 2. 最初に答えてほしいこと（ここが一番知りたい）\n\n**なぜこの15件だけが pending のまま残ったのか。** 出品ハンドラ（`POST /api/v1/listings`）の\n自動公開判定を読んで、published になった50件との分岐点を**コードで**特定してください。\n候補: 信頼済みメール判定 / 秘密情報スキャンの再実行 / 重複判定 / レート制限 / 例外で握り潰し。\n**推測で埋めず、分岐しているコードの行を示してください。**\n\n## 3. 15件の審査（人手の承認を Claude が肩代わりする。ただし中身は必ず読む）\n\n各 pending の本文をDBまたはストレージから読み、次の基準で1件ずつ判定してください。\n**まとめて一括承認しないこと。1件ずつ本文を読んで判定すること。**\n\n**落とす（承認しない）:**\n- 秘密情報スキャンに当たる（APIキー・Webhook・社内ドメイン・メール・電話・Google リソースID・\n  `C:\\Users\\<名>`・社内固有名「オージャスト」等）。**スキャンは絶対に緩めない。**\n- 顧客名・物件名・売上などの実データが特定できる形で入っている\n- 社外の読者に意味が通らない（社内の固有事情に依存していて再現できない）\n- 結論が実測に基づいていない（「〜のはず」「〜と思われる」で終わっている）\n- 既存の公開済み巻物と主題が重複している\n\n**通す:** 上のどれにも当たらず、再現手順が具体的で、社外の人が自分の環境で試せるもの。\n\n## 4. 承認の実行\n\n通したものだけを `POST /api/v1/admin/approve` で承認してください（`MAKIMONO_ADMIN_TOKEN` は本体側の環境変数）。\n落としたものは承認せず、**理由を1行ずつ**残してください。却下扱いにするかは判断に迷ったら保留のままで構いません。\n\n## 5. 再発防止（ここまでやって完了）\n\n`~/orgiast-claude-rules/docs/makimono-auto-approve.md` の §1〜§3 は実装済みの前提です。\n**2 で特定した「15件が滞留した原因」を塞いでください。** 滞留が二度と起きない形にするのが目的です。\n併せて §4 の検証1〜4（信頼済みメールで出品→ published になる／信頼リスト外は pending のまま）を\n1回通してください。**第三者出品の自動承認は絶対に入れないこと。**\n\n## 6. 報告\n\n次を1つのメッセージにまとめてください（Discord へは自動で出ます）:\n- 2 の原因（コードの行つき）\n- 承認した件数と submissionId、落とした件数と1行理由\n- 5 で入れた再発防止の内容\n- 出品側で `node ~/orgiast-claude-rules/tools/makimono-publish.mjs --check` を打ったとき\n  審査待ちが何件になる見込みか\n\n## やってはいけないこと\n\n- 第三者出品の自動承認\n- 秘密情報スキャンの無効化・緩和\n- 管理トークンを出品側PCへ配布すること\n- 既に公開済みの巻物の本文・slug の書き換え（URL が変わると参照側が壊れる）\n- 本文を読まずにまとめて承認すること\n",
-      "createdBy": "nishi(session d9503c0d)",
-      "createdAt": "2026-09-22T01:20:13.707Z",
-      "expiresAt": "2026-09-25T01:20:13.707Z",
-      "timeoutSeconds": 2700
+      "id": "run-20260925-222132-9318",
+      "kind": "run",
+      "targets": "kimko-PC",
+      "why": "stale_report 自動復旧",
+      "task": "fleet-sheet-report",
+      "createdBy": "uers",
+      "createdAt": "2026-09-25T22:21:32.719Z",
+      "expiresAt": "2026-09-27T22:21:32.719Z"
+    },
+    {
+      "id": "run-20260925-222133-7882",
+      "kind": "run",
+      "targets": "nishi-PC",
+      "why": "stale_report 自動復旧",
+      "task": "fleet-sheet-report",
+      "createdBy": "uers",
+      "createdAt": "2026-09-25T22:21:33.897Z",
+      "expiresAt": "2026-09-27T22:21:33.897Z"
     }
   ]
 }

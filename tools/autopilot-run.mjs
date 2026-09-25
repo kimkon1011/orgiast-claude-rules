@@ -61,6 +61,10 @@ export async function runOnce(options = {}) {
     if (after.state?.status === 'running' && after.state.totalIterations === before.state.totalIterations) {
       await runAutopilot('post', { summary: `ヘッドレス周回で post 未記録 (exit=${result.exitCode}${result.timedOut ? ', timeout' : ''})`, progress: pre.recentLog.at(-1)?.progress ?? 0, noop: true, 'next-delay': 1800 }, options);
     }
+    if (result.launchError || result.timedOut || result.exitCode !== 0) {
+      const failed = await runAutopilot('status', {}, options);
+      if (failed.state?.status === 'running') await runAutopilot('pause', { reason: 'runner_error' }, options);
+    }
     const final = await runAutopilot('status', {}, options);
     if (final.state?.status !== 'running') await runAutopilot('handoff', {}, options);
     return { ...result, model, status: final.state?.status };

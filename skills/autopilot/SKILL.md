@@ -27,13 +27,21 @@ description: '/autopilot start "<目的>" で自律ループ開始。/autopilot 
 4. `node "<repo>/tools/autopilot-tick.mjs" post --summary "<何をしたか1〜2行>" --progress <0-100> --next-delay <秒> [--noop] [--codex]` を実行する。Codex を利用したら `--codex`。進捗が前周と同じ・後退・施策が実行できなかった周は必ず `--noop`。単にコマンドが成功したことを進捗として数えない。完了条件の検証に成功した場合だけ 100 とする。
 5. post の status が paused / stopped / done なら、手順2と同様に handoff と停止を行う。running なら ScheduleWakeup の `prompt` は `/autopilot tick` 固定、`noop` は post が返した値、delay は post の `nextDelaySec` とする。通常 1200〜1800秒、Codex 待ちなど外部待ちは短くしてよいが、noop 周は必ず1800秒以上。
 
+## 自動補充と Discord 通知
+
+`pre` は未開始（not_started）・完了（done）時に `~/.claude/next-actions.md` の「推奨アクション」を上から確認する。`tools/llm-ask.mjs` の安価なモデルに候補ごとに1回 Yes/No を問い、Claude だけで完結できる候補を開始する。電話・物理作業・ピック作業などは除外。直近の done/stopped の目的は state の履歴に保持し、連続選択しない。候補なし・判定不能なら開始も通知もしない。停止・一時停止は自動補充しない。補充時も当日の回数・時間、累計回数と既存の上限を引き継ぐ。
+
+kim への DM は「完了」「判断待ち」「異常停止（上限・runner_error・noop 連続）」と、補充時の「次の目的: <目的>（止めるなら『止めて』と返信）」1通だけ。すべて3行以内とし、途中経過・日次ダイジェストは送らず log.jsonl / run.log に残す。通知は tick の既存 notify-kim 経路に任せ、別途重複送信しない。
+
+判断が必要なら、はい／いいえで答えられる1問を `pause --question "<質問>"` に渡す。はいで実行してよい具体的な操作を質問に含め、保留した操作を handoff に記録する。DM の「はい」で再開、「いいえ」で停止する。
+
 ## モデル規約
 
 監督に Fable を使えるのは `tools/fable-policy.mjs` / `tools/fable-policy.json` の `planIncluded=true` が確認されたアカウントのみ。それ以外は Opus。共有設定を他アカウントの定額内利用の証明に流用しない。どちらも実装はしない。生成・要約は `tools/llm-ask.mjs` 経由。ヘッドレス runner はこの policy に従ってモデルを選ぶ。
 
 ## status / stop / pause / resume
 
-対応する `node "<repo>/tools/autopilot-tick.mjs" <サブコマンド>` を実行し、JSON の結果を1〜3行で報告する。status には `--pretty` を使える。stop / pause は handoff を書き、対話ループの ScheduleWakeup も stop にする。resume 成功時、対話セッションなら start と同じ `/loop` を再開する。日次・累計上限は resume でリセットされない。noop 連続数は kim の明示的な再開時に0に戻る。done は新しい start または目的変更でのみ再開する。
+対応する `node "<repo>/tools/autopilot-tick.mjs" <サブコマンド>` を実行し、JSON の結果を1〜3行で報告する。status には `--pretty` を使える。stop / pause は handoff を書き、対話ループの ScheduleWakeup も stop にする。resume 成功時、対話セッションなら start と同じ `/loop` を再開する。日次・累計上限は resume でリセットされない。noop 連続数は kim の明示的な再開時に0に戻る。done は次回 pre で次の目的を自動補充する。
 
 ## 実行経路と復帰
 

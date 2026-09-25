@@ -46,10 +46,10 @@ test('models follow planIncluded; prompt comes from skill and headless uses one 
   }
 });
 
-test('repeated missing posts and timeouts are counted and trip the noop watchdog', async (t) => {
+test('repeated missing posts are counted and trip the noop watchdog', async (t) => {
   const opts = fixture(t);
   await runAutopilot('start', { objective: 'test', 'max-noop': 2 }, opts);
-  const invokeImpl = async () => ({ exitCode: 1, timedOut: true, stdout: '' });
+  const invokeImpl = async () => ({ exitCode: 0, timedOut: false, stdout: '' });
   assert.equal((await runOnce({ ...opts, invokeImpl })).status, 'running');
   assert.equal((await runOnce({ ...opts, invokeImpl })).status, 'paused');
   const state = (await runAutopilot('status', {}, opts)).state;
@@ -88,4 +88,30 @@ test('real child timeout is bounded and missing executable returns failure', asy
   assert.notEqual(timed.exitCode, 0);
   const missing = await invokeClaude({ executable: path.join(opts.home, 'not-a-real-executable'), args: [], prompt: '', cwd: opts.home, timeoutMs: 1000 });
   assert.equal(missing.launchError, 'ENOENT');
+});
+
+test('runner failures pause and send one short runner_error DM', async (t) => {
+  for (const invokeImpl of [async () => { throw new Error('broken'); }, async () => ({ exitCode: 1, timedOut: true }), async () => ({ exitCode: 1, launchError: 'ENOENT' })]) {
+    const sent = [];
+    const opts = { ...fixture(t), notifyImpl: async text => { sent.push(text); return { delivered: 'dm' }; }, invokeImpl };
+    await runAutopilot('start', { objective: 'test' }, opts);
+    await runOnce(opts);
+    assert.equal((await runAutopilot('status', {}, opts)).state.pausedReason, 'runner_error');
+    assert.equal(sent.length, 1);
+    assert.match(sent[0], /異常停止: runner_error/);
+    assert.ok(sent[0].split('\n').length <= 3);
+  }
+});
+
+test('existing runner entry replenishes before launching Claude without explicit start', async (t) => {
+  const opts = fixture(t), sent = [];
+  fs.mkdirSync(path.join(opts.home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(opts.home, '.claude', 'next-actions.md'), '## 推奨アクション\n1. テスト修正');
+  const result = await runOnce({ ...opts, askImpl: async () => 'Yes', notifyImpl: async text => { sent.push(text); }, invokeImpl: async () => {
+    assert.equal((await runAutopilot('status', {}, opts)).objective.objective, 'テスト修正');
+    await runAutopilot('post', { summary: 'work', progress: 10 }, opts);
+    return { exitCode: 0 };
+  } });
+  assert.equal(result.status, 'running');
+  assert.equal(sent.length, 1);
 });

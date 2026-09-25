@@ -6,6 +6,8 @@ ONBOARDING.compressed.md §1.5 系（1.5, 1.5.1, 1.5.1.1, 1.5.2, 1.5.2.1, 1.5.2-
 
 ## 1.5 Google Workspace URL は `/a/orgiast.jp/` を挟む
 
+kim が読む Doc は `tools/gdoc-publish.mjs`（URL をハイパーリンク化・read-back 検証）で作る。Drive MCP の text/plain 直投は URL がリンク化されないので使わない。
+
 オージャストメンバーの多くは Chrome デフォルトが個人 Gmail（@gmail.com）になっている。Apps Script / Sheets / Docs / Drive の URL を素の形（`https://script.google.com/d/...` / `https://docs.google.com/spreadsheets/d/...`）で渡すと、個人アカウントで開いてしまい「アクセス権が必要です」画面で詰まる。
 
 必ず `/a/orgiast.jp/` パスを挟んだ URL を渡す:

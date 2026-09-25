@@ -22,6 +22,8 @@ jobs:
           node-version: '24'
       - name: selftest-guards (Windows)
         run: node tools/selftest-guards.mjs
+      - name: Google Doc hyperlinks and provider billing
+        run: node --test tools/gdoc-publish.test.mjs tools/provider-balance.test.mjs
       - name: reported symptom gates and distribution read-back
         run: node --test "tools/reported-symptom*.test.mjs" tools/state-claim-evidence.test.mjs tools/external-state-claim-gate.test.mjs tools/no-undistributed-imports.test.mjs
 
@@ -52,5 +54,7 @@ jobs:
           node-version: '24'
       - name: selftest-guards (Linux/macOS 相当)
         run: node tools/selftest-guards.mjs
+      - name: Google Doc hyperlinks and provider billing
+        run: node --test tools/gdoc-publish.test.mjs tools/provider-balance.test.mjs
       - name: reported symptom gates and distribution read-back
         run: node --test "tools/reported-symptom*.test.mjs" tools/state-claim-evidence.test.mjs tools/external-state-claim-gate.test.mjs tools/no-undistributed-imports.test.mjs

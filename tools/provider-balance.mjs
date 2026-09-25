@@ -77,7 +77,9 @@ export function classifyBalance(row) {
   return 'ok';
 }
 export function formatBalanceLine(rows) {
-  const item = (r) => Number.isFinite(r.credits)
+  const item = (r) => r.provider === 'groq' && r.billing === 'free'
+    ? `${r.provider} 無料枠(有料化不可)`
+    : Number.isFinite(r.credits)
     ? `${r.provider} ${r.credits}cr(前払い)`
     : `${r.provider} ${r.balanceUsd === null ? '監視不能' : `$${r.balanceUsd.toFixed(2)}`}(${r.autoTopUp === true ? '自動あり' : r.autoTopUp === false ? '自動なし' : '自動不明'})`;
   return `💳 残高: ${rows.map(item).join(' / ')}`;
@@ -97,7 +99,7 @@ export async function collectProviderBalances({ home = process.env.ORGIAST_HOME 
     row.status = classifyBalance(row); results.push(row);
   }
   for (const provider of ['xai', 'groq']) {
-    const row = { provider, balanceUsd: null, autoTopUp: billing[provider]?.autoTopUp ?? 'unknown', ...summarizeLedger(ledger, provider === 'xai' ? 'grok' : provider, now), reason: provider === 'groq' ? 'postpaid; balance does not apply (ledger estimate only)' : 'no official balance API found; ledger estimate only' };
+    const row = { provider, balanceUsd: null, autoTopUp: billing[provider]?.autoTopUp ?? 'unknown', billing: billing[provider]?.billing, ...summarizeLedger(ledger, provider === 'xai' ? 'grok' : provider, now), reason: provider === 'groq' ? (billing.groq?.billing === 'free' ? `${billing.groq.note}; free tier; monitor spend_anomaly and 429` : 'postpaid; balance does not apply (ledger estimate only)') : 'no official balance API found; ledger estimate only' };
     row.status = classifyBalance(row); results.push(row);
   }
   const geminiRows = ledger.filter((x) => ['gemini', 'gemini-cli'].includes(x.provider));

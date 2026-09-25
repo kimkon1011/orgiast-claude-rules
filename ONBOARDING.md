@@ -193,6 +193,8 @@ URL規約を守り、内部IDに名前を併記し、初心者向けの完全な
 
 **1.5 Google Workspace URL は `/a/orgiast.jp/` を挟む**
 
+kim が読む Doc は `tools/gdoc-publish.mjs`（URL をハイパーリンク化・read-back 検証）で作る。Drive MCP の text/plain 直投は URL がリンク化されないので使わない。
+
 素URLは個人Gmailアカウントで開いて404/アクセス権エラーになる。Apps Script/Sheets/Docs/Slides/Formsは `/a/orgiast.jp/` を挟む。**Drive（file/folder）だけは `/a/` 非対応**なので `?authuser={運用者自身のorgiast.jpメール}` を付ける（他人に渡すリンクにはauthuser付けない→ファイル共有＋アカウント切替案内に切替）。特定個人メールをハードコードしない（配布物のため）。モバイルはURLよりドライブアプリ+ファイル名検索が確実。例外: `/home/...`系ページは素URL+アカウント切替案内。詳細・past cases: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/url-and-handoff-format.md`
 
 **URLはMarkdownリンク形式`[text](URL)`で書く**。生URL直後に句読点や文章を隙間なく続けるとクリック時に巻き込まれ404になる。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/url-and-handoff-format.md`

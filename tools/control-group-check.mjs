@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 
 export function defaultLedgerPath() {
   return path.join(process.env.ORGIAST_HOME || homedir(), '.claude', 'control-group-ledger.jsonl');
@@ -329,7 +330,7 @@ async function main(args) {
   process.exitCode = exitCodeFor(results);
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isEntry(import.meta.url)) {
   main(process.argv.slice(2)).catch((error) => {
     process.stderr.write(`control-group-check: ${String(error.message).replace(/[\r\n]+/g, ' ')}\n`);
     process.exitCode = 1;

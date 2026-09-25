@@ -112,7 +112,7 @@ export function renderText(report) {
 }
 
 function defaultRun(args) {
-  const result = spawnSync('gh', args, { encoding: 'utf8', timeout: 60000 });
+  const result = spawnSync('gh', args, { encoding: 'utf8', timeout: 60000, windowsHide: true });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`gh ${args.join(' ')} が失敗: ${(result.stderr ?? '').trim()}`);
   return result.stdout;

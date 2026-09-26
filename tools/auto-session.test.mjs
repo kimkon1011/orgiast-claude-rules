@@ -90,6 +90,17 @@ test('todoExclusionReason は同意画面のコピー修正を除外しない', 
   assert.equal(todoExclusionReason('4. 同意画面のコピーを直す'), '');
 });
 
+// 2026-09-27 実測: 回転後の next-session.md 先頭に `1. ### 触る前に読む memory` が並び、
+// launcher がこれを次の1目的に採用して実作業ゼロの回を1回消費した
+// (runs/2026-09-27-manifest.json の selectedTodos が実物)。
+test('todoExclusionReason は見出しだけの項目を除外する', () => {
+  assert.equal(todoExclusionReason('1. ### 触る前に読む memory'), '見出しのみ（作業内容が無い）');
+  assert.equal(todoExclusionReason('### 触る前に読む memory'), '見出しのみ（作業内容が無い）');
+  // 見出し記号で始まらない本物の TODO は巻き込まない。
+  assert.equal(todoExclusionReason('26. makimono-sns-poster キュー補充: 未投稿 86本'), '');
+  assert.equal(todoExclusionReason('3. #1 の見出しを直す'), '');
+});
+
 test('parseHandoff はリスト後の見出し段落と取り消し線をTODOに含めない', () => {
   for (const separator of ['', '\n']) {
     const parsed = parseHandoff(`## 残TODO\n1. 実装する\n13. kim相談\n   継続本文\n${separator}**見出し**\n~~別の完了済み作業~~\n   散文の補足\n`);

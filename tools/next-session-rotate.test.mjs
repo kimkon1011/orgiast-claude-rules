@@ -65,3 +65,20 @@ test('normalized queues still retire subsequently completed and newly expired it
  fs.writeFileSync(file,block('2026-09-22','1. open')); rotate(file,{now});
  const r=rotate(file,{now:new Date('2026-11-01')});assert.equal(r.stats.old,1);assert.equal(r.stats.pending,0);
 });
+// 2026-09-27 実測の再現。`## 次の1目的` の直後に置かれた H3 見出しとその箇条書きが
+// 項目として繰り上がり、回転後の next-session.md 先頭が `1. ### 触る前に読む memory` になった
+// (archive/next-session-202609.md#snapshot-a274891d… が実物のソース)。
+test('lower-level headings end the active section instead of becoming items',()=>{
+ const source=`<!-- NEXT-SESSION v1 -->\n<!-- 更新: 2026-09-26 -->\n## 次の1目的\n未定（残TODOの先頭から確認）\n\n### 触る前に読む memory\n- feedback-register-hooks-no-change-message.md（hook 配線は実測で確かめる）\n- project-internal-recipient-gmail-guard.md（誤検知あり）\n## 残TODO\n1. 本物のTODO\n`;
+ const r=planRotation(source,{now});
+ assert.doesNotMatch(r.text,/### 触る前に読む memory/);
+ assert.doesNotMatch(r.text,/feedback-register-hooks-no-change-message/);
+ assert.equal(r.stats.pending,1);
+ assert.match(r.text,/\n1\. 本物のTODO/);
+});
+test('a level-2 heading still activates its own section',()=>{
+ const source=`<!-- NEXT-SESSION v1 -->\n<!-- 更新: 2026-09-26 -->\n## 未決（kim の判断待ち）\n1. 見出し境界の確認\n`;
+ const r=planRotation(source,{now});
+ assert.equal(r.stats.pending,1);
+ assert.match(r.text,/見出し境界の確認/);
+});

@@ -27,8 +27,17 @@ export function planRotation(source, { now = new Date(), maxBytes = MAX_BYTES, a
     if (stamp) date = stamp[1];
     const location = line.match(/^<!--.*cwd:\s*(.*?)(?:\s*\/\s*model:|\s*-->)/);
     if (location) cwd = location[1].trim();
-    if (/^##\s/.test(line)) {
-      flush(); active = /^##\s+(?:残TODO|次の1目的|未決|朝バッチ取り込み|🔁)/.test(line); continue;
+    // 2026-09-27実測: `## 次の1目的` の直後に置かれた `### 触る前に読む memory`(H3) と
+    // その下の memory 箇条書きが「次の1目的」セクションの続きとして項目化され、
+    // 回転後の next-session.md 先頭に `1. ### 触る前に読む memory` として並んだ。auto-session は
+    // それを次の1目的に採用し、実作業ゼロの回を1回消費した(runs/2026-09-27-manifest.json が実物)。
+    // 見出しはレベルを問わずセクション境界として扱い、下位見出し配下の箇条書きを巻き込まない。
+    const heading = line.match(/^(#{1,6})\s/);
+    if (heading) {
+      flush();
+      active = heading[1] === '##'
+        && /^##\s+(?:残TODO|次の1目的|未決|朝バッチ取り込み|🔁)/.test(line);
+      continue;
     }
     if (!active) continue;
     const task = line.match(/^(?:\d+[.)、]|[-*](?:\s+\[[ xX]\])?)\s+(.+)/);

@@ -25,6 +25,30 @@ test('parse cache hits unchanged files and reparses size/mtime changes', () => {
   resetParseCacheForTests();
   assert.equal(collectClaudeStats({ home, now }).totals.outputTokens, 8); assert.equal(parseCacheStats(home).misses, 1);
 });
+test('parse cache retention keeps the 30-day boundary and expires older files', (t) => {
+  const { home, file } = fixture(), now = Date.parse('2026-08-23T00:00:00Z');
+  let wallTime = now + 30 * 864e5;
+  t.mock.method(Date, 'now', () => wallTime);
+  t.after(() => { resetParseCacheForTests(); fs.rmSync(home, { recursive: true, force: true }); });
+  fs.writeFileSync(file, JSON.stringify({ timestamp: new Date(now).toISOString(), message: { model: 'opus', usage: { output_tokens: 3 }, content: [] } }));
+  fs.utimesSync(file, new Date(now), new Date(now));
+  const cache = path.join(home, '.claude', 'cost-loop-parse-cache.json');
+  const readCache = () => JSON.parse(fs.readFileSync(cache, 'utf8')).files;
+  resetParseCacheForTests();
+  assert.equal(collectClaudeStats({ home, now }).totals.outputTokens, 3);
+  assert.ok(readCache()[file]);
+  resetParseCacheForTests();
+  assert.equal(collectClaudeStats({ home, now }).totals.outputTokens, 3);
+  assert.deepEqual(parseCacheStats(home), { hits: 1, misses: 0 });
+
+  // Start a fresh cache write one millisecond past the retention boundary.
+  fs.unlinkSync(cache); resetParseCacheForTests(); wallTime++;
+  assert.equal(collectClaudeStats({ home, now }).totals.outputTokens, 3);
+  assert.equal(readCache()[file], undefined);
+  resetParseCacheForTests();
+  assert.equal(collectClaudeStats({ home, now }).totals.outputTokens, 3);
+  assert.deepEqual(parseCacheStats(home), { hits: 0, misses: 1 });
+});
 test('corrupt parse cache is ignored and rebuilt', () => {
   const { home, file } = fixture(), now = Date.now(), cache = path.join(home, '.claude', 'cost-loop-parse-cache.json');
   fs.writeFileSync(file, JSON.stringify({ timestamp: new Date(now).toISOString(), message: { model: 'opus', usage: { output_tokens: 7 }, content: [] } }));

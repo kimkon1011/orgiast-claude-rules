@@ -118,5 +118,77 @@
     "route": "支払い・カード登録は rule 3 の正当な手渡し理由（X の課金は API が無く画面操作のみ。2026-09-25 session 56e5c1e7 実測: `gh api repos/*/actions/secrets` は名前のみ・`node tools/env-kv.mjs --list` は出力0件でローカルに鍵が無い）。**2026-09-26 実測**: `console.x.com` を Playwright headless(chromium) で開くと 200 → `https://x.com/login?redirect_after_login=…` へ遷移し **403**（本文・ラベル・入力欄は取得不可）＝Claude 側で残高や項目名を読む経路は無い。よって改善点は手渡しの作り方だけ: ①**見ていない画面の多段手順を推測で書かない**（『表示が違ったら教えてください』は往復を強制＝rule 5 違反。2026-09-25 session 12e72c80 が『一般的な課金画面の構成に基づく』10段手順で実際に違反）②**購入前後にスクショを求めない**（rule 6: 余分な手作業。2026-09-25 session 56e5c1e7）③**kim 1人が同じ画面で購入まで完結する1回の手順**を渡し、Claude は結果の報告だけを受ける ④照会できない設定値（自動チャージ条件・補充額・月上限）は断定せず**『未確認』**と書く（rule 4）",
     "confidence": "high",
     "source": "handoff-audit-nightly:a3fdf40662a661547fc0f4c6daeee1590f5dd0ce573769545bd17e4fcbea0989 / 2026-09-26 auto-session 実測（handoff-audit:13b51c81aad5a98a。再発を実物で確認し route を是正。詳細 docs/billing-screen-handoff-route.md）"
+  },
+  {
+    "pattern": "既送信メッセージの内容を再掲せず『前に送った〇〇』と参照させる",
+    "route": "チャット表示",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:ad8d23604317c1b1d59c389991898d2720ad8b64b0a9c9a4f8b1617968c16730"
+  },
+  {
+    "pattern": "PR 作成〜マージを user に残す",
+    "route": "gh pr create",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:7cf022528bc23f20042863b5e04561628c94ac70ccadd7cdddcee274ec24e5a0"
+  },
+  {
+    "pattern": "classifier 拒否を理由に代替経路を探さず手渡しする",
+    "route": "推測で結論を出さない。『未確認』＋user 作業なしの代替案を提示。恒久策は settings.json の許可ルール/DWD スコープ追加を kim に1回だけ提案。**ただし『外部 API が使えない』と一般化しない**: 2026-09-20 実測では defaultMode=auto でも node -e fetch / curl / WebFetch(googleapis) / node tools/* の読み取り照会は 4 経路すべて拒否なしで通った。拒否はホスト名ではなく操作カテゴリ（Credential Exploration / Materialization / Permission Grant / Production Deploy / Merge Without Review 等）に対して起きる。まず読み取りで直接照会を試し、止まったらその操作だけを最小単位に分解する。許可を広げる変更は分類器 [Permission Grant]/[Self-Modification] で止まるので人が行う",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:8f672a8a9f7104e661a139ab8c50d861c121a2fcb5911dc24536d3c1c93a9f38"
+  },
+  {
+    "pattern": "フリマ/オークションの実在出品の条件絞り込み",
+    "route": "推測で結論を出さない。『未確認』＋user 作業なしの代替案を提示。恒久策は settings.json の許可ルール/DWD スコープ追加を kim に1回だけ提案。**ただし『外部 API が使えない』と一般化しない**: 2026-09-20 実測では defaultMode=auto でも node -e fetch / curl / WebFetch(googleapis) / node tools/* の読み取り照会は 4 経路すべて拒否なしで通った。拒否はホスト名ではなく操作カテゴリ（Credential Exploration / Materialization / Permission Grant / Production Deploy / Merge Without Review 等）に対して起きる。まず読み取りで直接照会を試し、止まったらその操作だけを最小単位に分解する。許可を広げる変更は分類器 [Permission Grant]/[Self-Modification] で止まるので人が行う",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:7bd1352ded8c6bfd4ac8168d9e3c23c57b734c7c927cc1ea65e04141bfc4f2d2"
+  },
+  {
+    "pattern": "CI green の PR を次周送りにしてマージ確認を先延ばし",
+    "route": "gh pr create",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:5528a39037060efd43a65965f841c1db4d8a1cc23b2672993a57ab584ea8d935"
+  },
+  {
+    "pattern": "ローカル未コミット変更を理由に反映を丸ごと見送る",
+    "route": "codex-do.mjs",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:5528a39037060efd43a65965f841c1db4d8a1cc23b2672993a57ab584ea8d935"
+  },
+  {
+    "pattern": "CI green・競合なしの PR のマージ判断を user に仰ぐ",
+    "route": "gh pr create",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:ddd5e6dd79bda5c48769d689c3f2b7feaeeff5a5b90b084ef98ed11bbfd7b021"
+  },
+  {
+    "pattern": "未コミット変更の整理と本番反映を次周送りにする",
+    "route": "codex-do.mjs",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:ddd5e6dd79bda5c48769d689c3f2b7feaeeff5a5b90b084ef98ed11bbfd7b021"
+  },
+  {
+    "pattern": "外部状態の断定（リポジトリ不在等）",
+    "route": "gh api",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:5511c27ac655e8f574132918b130577902780fd5b092dc48bdb404686c4f1b18"
+  },
+  {
+    "pattern": "社内スタッフ宛の連絡文を user に依頼",
+    "route": "チャット表示",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:a52d197eb0b9e88f65f8c387c0ba3fbd0e18bc6d5c722fa35f2cee68f63369e7"
+  },
+  {
+    "pattern": "シート書き込み結果の検証を目視に投げる",
+    "route": "Sheets API",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:a52d197eb0b9e88f65f8c387c0ba3fbd0e18bc6d5c722fa35f2cee68f63369e7"
+  },
+  {
+    "pattern": "内部スタッフへの質問依頼",
+    "route": "チャット表示",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:c6814b4e86c1f75a8366edf22f0be5a1ea61dd0edd0f6e8f2be057317d1fd37d"
   }
 ]

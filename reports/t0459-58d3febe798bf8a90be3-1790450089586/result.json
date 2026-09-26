@@ -1,0 +1,9 @@
+{
+  "completed": false,
+  "summary": "展示プラン決定は実施済み。9月17日16:32 JSTに森下様がプラン②を選択し、9月18日20:13 JSTに制作側が受領。台帳の未着手表示は実態と不一致。再決定や催促は不要。 ただし指定結果JSONの保存に失敗したため、今回の完了条件は未達。外部更新は未実施。",
+  "evidence": {
+    "file": "/mnt/c/Users/uers/orgiast-main/reports/t0459-58d3febe798bf8a90be3-1790450089586/verification.json",
+    "sha256": "5db6afd1bfcd8ab9901bd7b9b67bc187fb887f3de95803437569be9799c7875b"
+  },
+  "reason": "指定パスへの書き込み失敗: EROFS"
+}

@@ -1,0 +1,66 @@
+{
+  "checkedAt": "2026-09-26T19:20:26.917404+00:00",
+  "taskId": "T-0431",
+  "completed": false,
+  "summary": "T-0431は台帳で未着手。元メールで2026年9月7日14:30～15:00の山佐輝氏の面談、担当佐藤氏と確認。9月6日以降9月27日までの対象メール検索は日程了承の1件のみで、参加実績は確認できない。人による実施確認が必要なため完了扱いしない。指定結果パスは環境の書き込み許可範囲外のため未作成。",
+  "original": {
+    "file": "/mnt/c/Users/uers/.claude/open-work.md",
+    "matches": [
+      {
+        "line": 38,
+        "text": "- P1 T-0431 面談参加（状態: 未着手）"
+      }
+    ]
+  },
+  "ledger": {
+    "spreadsheetId": "1WtsSiDlId8EgyzA15pJbeCGfvMHUgBqrUMmucax4A24",
+    "range": "タスク!A6:O6",
+    "row": [
+      "T-0431",
+      "2026-09-07 6:30",
+      "P1",
+      "92",
+      "タスク",
+      "面談参加",
+      "山佐氏がGoogle Meet面談に参加する",
+      "山佐",
+      "2026-09-07",
+      "✉ 'ヤマサヤマサ' via saiyo採用メール",
+      "明日14:30よりよろしくお願いいたします。",
+      "https://mail.google.com/mail/u/seisaku-team@orgiast.jp/#all/1a06e541826d4cdf",
+      "未着手",
+      null,
+      "2026-09-26 6:35"
+    ]
+  },
+  "mailVerification": {
+    "account": "seisaku-team@orgiast.jp",
+    "threadId": "1a06e541826d4cdf",
+    "messageIds": [
+      "1a06e5428d194cbe",
+      "1a076d538fb9c07c"
+    ],
+    "searchQuery": "after:2026/09/06 before:2026/09/28 {\"山佐\" \"ヤマサヤマサ\" \"ruuun2243bhyw_urq@indeedemail.com\"}",
+    "searchResultCount": 1,
+    "allPagesRead": true,
+    "limitation": "このメール検索で出席記録が見つからないことは欠席の証明ではない。"
+  },
+  "nextAction": "面談担当の佐藤氏または採用担当が9月7日の実施実績を確認する。確認連絡は送信していない。",
+  "changes": "外部システムの更新・送信なし。他セッションの差分は変更・コミットしていない。",
+  "requestedResult": "C:\\Users\\uers\\.claude\\9e60239b3c090a0b0c6d-1790450255341.result.json",
+  "requestedResultWritten": false,
+  "artifacts": [
+    {
+      "file": "/mnt/c/Users/uers/orgiast-main/reports/t0431-9e60239b3c090a0b0c6d-1790450255341/source-thread.json",
+      "sha256": "6cb1ae429797b0684dedd43e1021c4b6057fd69b0b24c014f69ce95bc651d49a"
+    },
+    {
+      "file": "/mnt/c/Users/uers/orgiast-main/reports/t0431-9e60239b3c090a0b0c6d-1790450255341/followup-search.json",
+      "sha256": "795d7bd04bf4774203c6aa8dcaa123bf2dc1f23084869ad890380b95c02af878"
+    },
+    {
+      "file": "/mnt/c/Users/uers/orgiast-main/reports/t0431-9e60239b3c090a0b0c6d-1790450255341/ledger-verification.json",
+      "sha256": "8d334d27c58e16e47f76e6fb6db5382bf198f27a6ccf7be44231e83a5ece72b1"
+    }
+  ]
+}

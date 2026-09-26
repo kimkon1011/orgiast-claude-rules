@@ -1,0 +1,119 @@
+{
+  "taskId": "T-1606",
+  "checkedAt": "2026-09-26T19:23:43.309Z",
+  "original": {
+    "file": "/mnt/c/Users/uers/.claude/open-work.md",
+    "line": 39,
+    "text": "- P1 T-1606 搬入時のヤマト架電を対応（状態: 未着手）",
+    "sha256": "312d93a37b02de417bd2f5f03bcf04527d93c0efcdd71817f5625bf7a362152c"
+  },
+  "liveSheet": {
+    "checkedAt": "2026-09-26T19:22:01.972Z",
+    "spreadsheetId": "1WtsSiDlId8EgyzA15pJbeCGfvMHUgBqrUMmucax4A24",
+    "range": "'タスク'!A1:O3048",
+    "header": [
+      "ID",
+      "起票日",
+      "優先ランク",
+      "優先度スコア",
+      "種別",
+      "タイトル",
+      "具体アクション",
+      "担当",
+      "期限",
+      "チャンネル",
+      "根拠(発言抜粋)",
+      "Discordリンク",
+      "状態",
+      "実行メモ",
+      "最終更新"
+    ],
+    "matches": [
+      {
+        "rowNumber": 7,
+        "values": [
+          "T-1606",
+          "2026-09-16 6:36",
+          "P1",
+          "92",
+          "タスク",
+          "搬入時のヤマト架電を対応",
+          "担当者が搬入時のヤマトへの架電を行う",
+          "",
+          "2026-09-16",
+          "0918神奈川nxa日本マススクリーニング学会",
+          "搬入時のヤマトへの架電が明日まで期限なのですが、私の方が今日明日の電話対応が難しいです。対応お願いしても良いでしょうか？",
+          "https://discord.com/channels/715211007307284530/1382878379543494736/1549252577281974364",
+          "未着手",
+          "",
+          "2026-09-26 6:35"
+        ]
+      }
+    ]
+  },
+  "discord": {
+    "checkedAt": "2026-09-26T19:22:48.836Z",
+    "messages": [
+      {
+        "id": "1549614401529577513",
+        "timestamp": "2026-09-16T02:54:23.768000+00:00",
+        "content": "<@1382627787759943781> \n本番前までのすべてのタスクが完了しました。\n※17日到着予定のため、アイテムの到着確認のみ残っています\n全体確認をお願いいたします。\nhttps://orgiast-manual.com/626d7596a6214d036d87a17c",
+        "url": "https://discord.com/channels/715211007307284530/1382878379543494736/1549614401529577513"
+      },
+      {
+        "id": "1549272948987396127",
+        "timestamp": "2026-09-15T04:17:35.138000+00:00",
+        "content": "<@1288790954186375168> \nありがとうございます。助かります",
+        "reference": {
+          "type": 0,
+          "channel_id": "1382878379543494736",
+          "message_id": "1549261350633742369",
+          "guild_id": "715211007307284530"
+        },
+        "url": "https://discord.com/channels/715211007307284530/1382878379543494736/1549272948987396127"
+      },
+      {
+        "id": "1549261350633742369",
+        "timestamp": "2026-09-15T03:31:29.875000+00:00",
+        "content": "<@1085170051046457404> \n搬入と搬出の架電対応いたします！",
+        "reference": {
+          "type": 0,
+          "channel_id": "1382878379543494736",
+          "message_id": "1549252577281974364",
+          "guild_id": "715211007307284530"
+        },
+        "url": "https://discord.com/channels/715211007307284530/1382878379543494736/1549261350633742369"
+      },
+      {
+        "id": "1549252577281974364",
+        "timestamp": "2026-09-15T02:56:38.145000+00:00",
+        "content": "<@1288790954186375168> \n搬入時のヤマトへの架電が明日まで期限なのですが、私の方が今日明日の電話対応が難しいです。\n対応お願いしても良いでしょうか？\nもしくは再度ヤマト架電チャンネルでお願いしてみても良いでしょうか？",
+        "url": "https://discord.com/channels/715211007307284530/1382878379543494736/1549252577281974364"
+      }
+    ],
+    "readScope": "元メッセージと同一チャンネル最新100件。対象原文を含む2026-09-13〜2026-09-26。",
+    "firstCredentialResult": "HTTP 403 Missing Access",
+    "existingCredentialResult": "既存の別資格情報でGET成功。権限変更なし。"
+  },
+  "assessment": {
+    "ledgerStatus": "未着手",
+    "acceptanceConfirmed": true,
+    "preEventCompletionReportConfirmed": true,
+    "specificCallCompletionConfirmed": false,
+    "conclusion": "未着手表示と原文の進捗が不一致。架電実施そのものの明示記録は確認できず、完了確定不可。",
+    "nextAction": "既存担当者の架電実施記録と台帳の不一致を確認する必要がある。今回は外部送信禁止のため問い合わせ・架電・台帳更新は未実施。"
+  },
+  "actions": {
+    "externalMessagesSent": 0,
+    "phoneCallsMade": 0,
+    "remoteMutations": 0,
+    "permissionChanges": 0,
+    "jobsRerun": 0,
+    "repositoryCodeChanges": 0
+  },
+  "resultDestination": {
+    "requested": "C:\\Users\\uers\\.claude\\d2e1b1edeefbe3b83ee8-1790450439008.result.json",
+    "written": false,
+    "reason": "指定先はセッションの書き込み許可範囲外。承認要求も許可されていないため、ワークスペース内へ代替保存。"
+  }
+}

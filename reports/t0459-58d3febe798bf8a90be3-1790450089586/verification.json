@@ -1,0 +1,60 @@
+{
+  "taskId": "T-0459",
+  "verifiedAt": "2026-09-26T19:17:15.634Z",
+  "original": {
+    "file": "C:\\Users\\uers\\.claude\\open-work.md",
+    "line": "- P1 T-0459 プラン決定締切（状態: 未着手）"
+  },
+  "ledger": {
+    "spreadsheetId": "1WtsSiDlId8EgyzA15pJbeCGfvMHUgBqrUMmucax4A24",
+    "range": "タスク!A5:O5",
+    "status": "未着手",
+    "lastUpdated": "2026-09-26 6:35",
+    "readDirectly": true
+  },
+  "mailbox": "seisaku-team@orgiast.jp",
+  "threadId": "1a06a695a66fa6e6",
+  "threadReadAt": "2026-09-26T19:16:16.420Z",
+  "messages": [
+    {
+      "id": "1a08992c3ca2143b",
+      "date": "Thu, 10 Sep 2026 13:28:11 +0900",
+      "from": "\"株式会社オージャスト 百瀬かなう\" <m.kanau@orgiast.jp>",
+      "subject": "Re: 今後のスケジュールのご連絡",
+      "excerpt": "合わせてご確認の上、*明日のAMまでをめどに*プランをお決めいただけましたら幸いです。",
+      "url": "https://mail.google.com/mail/u/seisaku-team@orgiast.jp/#all/1a08992c3ca2143b"
+    },
+    {
+      "id": "1a08aba42b369c80",
+      "date": "Thu, 10 Sep 2026 18:50:57 +0900",
+      "from": "\"株式会社オージャスト 制作チーム\" <seisaku-team@orgiast.jp>",
+      "subject": "Re: 今後のスケジュールのご連絡",
+      "excerpt": "大きな方向性はプランA（正面側巨大壁案）にて進行",
+      "url": "https://mail.google.com/mail/u/seisaku-team@orgiast.jp/#all/1a08aba42b369c80"
+    },
+    {
+      "id": "1a0ae47bd2565de8",
+      "date": "Thu, 17 Sep 2026 07:32:00 +0000",
+      "from": "\"森下雄 Ｗ２株式会社\" <y.morishita@w2solution.co.jp>",
+      "subject": "Re: 今後のスケジュールのご連絡",
+      "excerpt": "いただいた下記のプランにてお願いでいたします。\r\n\r\n② 通路壁面 片面内照式＋片面合成紙プラン｜税込 2,235,182円",
+      "url": "https://mail.google.com/mail/u/seisaku-team@orgiast.jp/#all/1a0ae47bd2565de8"
+    },
+    {
+      "id": "1a0b43911e4402fa",
+      "date": "Fri, 18 Sep 2026 20:13:34 +0900",
+      "from": "\"橋本あかね\" <akanengela@gmail.com>",
+      "subject": "Re: 今後のスケジュールのご連絡",
+      "excerpt": "こちら、プランのご決定ありがとうございます。",
+      "url": "https://mail.google.com/mail/u/seisaku-team@orgiast.jp/#all/1a0b43911e4402fa"
+    }
+  ],
+  "conclusion": "展示プラン決定は実施済み。9月17日16:32 JSTに森下様がプラン②を選択し、9月18日20:13 JSTに制作側が受領。台帳の未着手表示は実態と不一致。再決定や催促は不要。",
+  "actions": {
+    "externalWrites": false,
+    "messagesSent": false,
+    "taskUpdates": false,
+    "jobReruns": false
+  },
+  "scope": "T-0459のみ。電気申請やデザイン入稿等は完了判定の対象外。"
+}

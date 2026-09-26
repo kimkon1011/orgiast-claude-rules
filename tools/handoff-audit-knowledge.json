@@ -124,5 +124,65 @@
     "route": "チャット表示",
     "confidence": "high",
     "source": "handoff-audit-nightly:ad8d23604317c1b1d59c389991898d2720ad8b64b0a9c9a4f8b1617968c16730"
+  },
+  {
+    "pattern": "PR 作成〜マージを user に残す",
+    "route": "gh pr create",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:7cf022528bc23f20042863b5e04561628c94ac70ccadd7cdddcee274ec24e5a0"
+  },
+  {
+    "pattern": "classifier 拒否を理由に代替経路を探さず手渡しする",
+    "route": "推測で結論を出さない。『未確認』＋user 作業なしの代替案を提示。恒久策は settings.json の許可ルール/DWD スコープ追加を kim に1回だけ提案。**ただし『外部 API が使えない』と一般化しない**: 2026-09-20 実測では defaultMode=auto でも node -e fetch / curl / WebFetch(googleapis) / node tools/* の読み取り照会は 4 経路すべて拒否なしで通った。拒否はホスト名ではなく操作カテゴリ（Credential Exploration / Materialization / Permission Grant / Production Deploy / Merge Without Review 等）に対して起きる。まず読み取りで直接照会を試し、止まったらその操作だけを最小単位に分解する。許可を広げる変更は分類器 [Permission Grant]/[Self-Modification] で止まるので人が行う",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:8f672a8a9f7104e661a139ab8c50d861c121a2fcb5911dc24536d3c1c93a9f38"
+  },
+  {
+    "pattern": "フリマ/オークションの実在出品の条件絞り込み",
+    "route": "推測で結論を出さない。『未確認』＋user 作業なしの代替案を提示。恒久策は settings.json の許可ルール/DWD スコープ追加を kim に1回だけ提案。**ただし『外部 API が使えない』と一般化しない**: 2026-09-20 実測では defaultMode=auto でも node -e fetch / curl / WebFetch(googleapis) / node tools/* の読み取り照会は 4 経路すべて拒否なしで通った。拒否はホスト名ではなく操作カテゴリ（Credential Exploration / Materialization / Permission Grant / Production Deploy / Merge Without Review 等）に対して起きる。まず読み取りで直接照会を試し、止まったらその操作だけを最小単位に分解する。許可を広げる変更は分類器 [Permission Grant]/[Self-Modification] で止まるので人が行う",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:7bd1352ded8c6bfd4ac8168d9e3c23c57b734c7c927cc1ea65e04141bfc4f2d2"
+  },
+  {
+    "pattern": "CI green の PR を次周送りにしてマージ確認を先延ばし",
+    "route": "gh pr create",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:5528a39037060efd43a65965f841c1db4d8a1cc23b2672993a57ab584ea8d935"
+  },
+  {
+    "pattern": "ローカル未コミット変更を理由に反映を丸ごと見送る",
+    "route": "codex-do.mjs",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:5528a39037060efd43a65965f841c1db4d8a1cc23b2672993a57ab584ea8d935"
+  },
+  {
+    "pattern": "CI green・競合なしの PR のマージ判断を user に仰ぐ",
+    "route": "gh pr create",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:ddd5e6dd79bda5c48769d689c3f2b7feaeeff5a5b90b084ef98ed11bbfd7b021"
+  },
+  {
+    "pattern": "未コミット変更の整理と本番反映を次周送りにする",
+    "route": "codex-do.mjs",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:ddd5e6dd79bda5c48769d689c3f2b7feaeeff5a5b90b084ef98ed11bbfd7b021"
+  },
+  {
+    "pattern": "外部状態の断定（リポジトリ不在等）",
+    "route": "gh api",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:5511c27ac655e8f574132918b130577902780fd5b092dc48bdb404686c4f1b18"
+  },
+  {
+    "pattern": "社内スタッフ宛の連絡文を user に依頼",
+    "route": "チャット表示",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:a52d197eb0b9e88f65f8c387c0ba3fbd0e18bc6d5c722fa35f2cee68f63369e7"
+  },
+  {
+    "pattern": "シート書き込み結果の検証を目視に投げる",
+    "route": "Sheets API",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:a52d197eb0b9e88f65f8c387c0ba3fbd0e18bc6d5c722fa35f2cee68f63369e7"
   }
 ]

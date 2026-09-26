@@ -196,6 +196,11 @@ export function todoExclusionReason(todo, today = new Date()) {
   // ⛔ は next-session.md の慣行で「ブロック中／実行対象外」を意味する見出し記号。項目の
   // 先頭に付いた ⛔ は作業内容を持たない注意書きなので、語形に依存せず除外する(防御の二重化)。
   if (/^\s*(?:\d+[a-z]?[.)、]\s*)?(?:\*\*)?\s*⛔/.test(body)) return 'ブロック中';
+  // 2026-09-27実測: 見出し行そのものが項目として混入した実物がある。回転後の next-session.md 先頭に
+  // `1. ### 触る前に読む memory` が並び、launcher がこれを次の1目的に採用して実作業ゼロの回を
+  // 1回消費した(runs/2026-09-27-manifest.json)。作業内容を持たない見出しは語形に依存せず除外する
+  // (生成側 next-session-rotate.mjs の見出し境界と二重の防御)。
+  if (/^#{1,6}\s/.test(body)) return '見出しのみ（作業内容が無い）';
   const todayNumber = today.getFullYear() * 10000 + (today.getMonth() + 1) * 100 + today.getDate();
   for (const match of text.matchAll(/(\d{4})-(\d{2})-(\d{2})\s*以降/g)) {
     const date = `${match[1]}-${match[2]}-${match[3]}`;

@@ -91,6 +91,17 @@ test('spec-authoring tokens use Bash and PowerShell character share and tolerate
   assert.equal(estimateSpecAuthoringTokens({ blocks: { tools: { Bash: 80, PowerShell: 20 } }, profile: { totalChars: 200, byCategory: { 'spec-authoring': { chars: 50 } } } }), 25);
   assert.equal(estimateSpecAuthoringTokens({ blocks: { tools: { Bash: 100 } }, profile: { totalChars: 0, byCategory: { 'spec-authoring': { chars: 1 } } } }), 0);
 });
+test('deleg CLI reports spec-authoring preparation instead of collapsing it into delegRatio', () => {
+  const blocks = { tools: { Bash: 100 } };
+  const profile = { totalChars: 200, byCategory: { 'spec-authoring': { chars: 100 } } };
+  const specAuthoringOut = estimateSpecAuthoringTokens({ blocks, profile });
+  assert.equal(specAuthoringOut, 50);
+  const wired = calculateDelegation({ codexOut: 10, byModel: { opus: 90, sonnet: 10 }, specAuthoringOut });
+  const unwired = calculateDelegation({ codexOut: 10, byModel: { opus: 90, sonnet: 10 } });
+  assert.equal(unwired.delegRatioWithPrep, unwired.delegRatio);
+  assert.ok(wired.delegRatioWithPrep > wired.delegRatio);
+  assert.equal(wired.delegRatioWithPrep, (wired.delegated + specAuthoringOut) / wired.total);
+});
 test('deleg command source counts latest cumulative Codex usage per session', () => { const { home } = fixture(), dir = path.join(home, '.codex', 'sessions'), previous = process.env.CODEX_SESSIONS_DIRS; fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, 'x.jsonl'), '{"total_token_usage":{"output_tokens":3}}\n{"total_token_usage":{"output_tokens":8}}'); process.env.CODEX_SESSIONS_DIRS = dir; try { assert.deepEqual(collectCodexOutput({ home }), { outputTokens: 8, sessions: 1, byModel: { unknown: { sessions: 1, outputTokens: 8 } } }); } finally { if (previous === undefined) delete process.env.CODEX_SESSIONS_DIRS; else process.env.CODEX_SESSIONS_DIRS = previous; } });
 test('countPatchLines counts patch changes but not headers or non-apply_patch commands', () => {
   const patch = '*** Begin Patch\n--- old/file\n+++ new/file\n@@ -1 +1 @@\n-old\n+new\n+added\n*** End Patch';

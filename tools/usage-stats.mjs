@@ -465,7 +465,13 @@ if (isEntry(import.meta.url)) {
   else if (sub === 'blocks') result = claude.blocks;
   else if (sub === 'bash') result = collectBashProfile({ home, days });
   else if (sub === 'ledger') result = collectLedger({ home, days });
-  else if (sub === 'deleg') { const ledger = collectLedger({ home, days }), codex = collectCodexUsage({ home, days }); result = { ...calculateDelegation({ codexOut: codex.outputTokens, execOut: ledger.totals.outputTokens, byModel: claude.byModel }), headlessClaudeOut: claude.headlessClaudeOut, headlessJobs: claude.headlessJobs }; }
+  else if (sub === 'deleg') {
+    const ledger = collectLedger({ home, days }), codex = collectCodexUsage({ home, days });
+    // cost-work-loop と同じ入力で算出する。specAuthoringOut を渡さないと delegRatioWithPrep が
+    // delegRatio と同値になり、「委譲の準備(仕様書執筆)」という最大の漏れ口が調査から見えなくなる。
+    const specAuthoringOut = estimateSpecAuthoringTokens({ blocks: claude.blocks, profile: collectBashProfile({ home, days }) });
+    result = { ...calculateDelegation({ codexOut: codex.outputTokens, execOut: ledger.totals.outputTokens, byModel: claude.byModel, specAuthoringOut }), headlessClaudeOut: claude.headlessClaudeOut, headlessJobs: claude.headlessJobs };
+  }
   else if (sub === 'health') result = collectProviderHealth({ home, days });
   else if (sub === 'turns') result = collectTurnStats({ home, days });
   else { console.error('usage: node tools/usage-stats.mjs <sessions|blocks|bash|ledger|deleg|health|turns> [--days 7] [--json]'); process.exitCode = 2; }

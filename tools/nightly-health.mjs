@@ -37,7 +37,14 @@ export function evaluateScheduledTaskHealth(expectation, info, { now = new Date(
   // 「起動したのにログが1行も動いていない」ときだけ鳴らす。0x800710E0 は
   // 前回インスタンスが生存していた証拠なので原因として併記するが、**ログが動いている回は黙る**
   // （実測 2026-09-13: 起動拒否の記録が残っていても当日のログは正常に伸びていた＝拒否だけでは異常と言えない）。
-  const lostRun = elapsedMs > 3_600_000 && (logMtimeMs === null || logMtimeMs < lastRunMs);
+  // 多段アクションのタスクでは LastRunTime が最終アクションの開始時刻に更新される
+  // （実測 2026-09-26: OrgiastNightlyBatch = nightly-batch.ps1→ai-news-triage→pricing-brief の3アクション。
+  // 03:00:43 起動のインスタンスが全アクション正常終了したのに LastRunTime=03:37:57（=最終アクション開始、
+  // ai-news-triage.log の最終書込 03:37:57 と一致）となり、先頭アクションのログ最終書込 03:36:34 より後ろと
+  // 判定されて毎回誤報した）。lastTaskResult=0 は全アクション正常終了の積極証拠なので mtime 比較から除外する。
+  // ログファイル自体が無い場合だけは result=0 でも鳴らす（成功したならログがあるはずだから）。
+  const completedOk = Number(info.lastTaskResult) === 0;
+  const lostRun = elapsedMs > 3_600_000 && (logMtimeMs === null || (logMtimeMs < lastRunMs && !completedOk));
   if (lostRun) {
     const where = logMtimeMs === null
       ? '対応するログファイルが 1 つも作られていません'

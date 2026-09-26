@@ -75,7 +75,14 @@ test('scheduled task の起動拒否・時間超過・ログ未生成を判定�
   assert.deepEqual(types(info({ lastTaskResult: 2147946720, lastRunTime: '2026-09-08T23:00:00.000Z' })), ['task_started_no_log']);
   assert.deepEqual(types(info({ state: 'Running', lastRunTime: '2026-09-10T06:00:00.000Z' }), { logMtimeMs: now.getTime() }), ['task_overrun']);
   assert.deepEqual(types(info({ state: 'Running', lastRunTime: '2026-09-10T10:00:00.000Z' }), { logMtimeMs: now.getTime() }), []);
-  assert.deepEqual(types(info(), { logMtimeMs: new Date('2026-09-10T08:00:00.000Z').getTime() }), ['task_started_no_log']);
+  // 多段アクションのタスクが正常完走（lastTaskResult=0）した場合、LastRunTime は最終アクションの
+  // 開始時刻に更新されるため先頭アクションのログ最終書込より後ろになる。これは異常ではないので黙る
+  // （2026-09-26 の実状態: 03:00:43 起動・全アクション正常終了なのに LastRunTime=03:37:57 で誤報した）
+  assert.deepEqual(types(info(), { logMtimeMs: new Date('2026-09-10T08:00:00.000Z').getTime() }), []);
+  // 完走の積極証拠が無い（lastTaskResult≠0）うえ、ログが LastRunTime から1行も動いていなければ鳴る
+  assert.deepEqual(types(info({ lastTaskResult: 1 }), { logMtimeMs: new Date('2026-09-10T08:00:00.000Z').getTime() }), ['task_started_no_log']);
+  // 実行中（267009）のままログが動かなくても鳴る（ハング起動の検知を弱めない）
+  assert.deepEqual(types(info({ state: 'Running', lastTaskResult: 267009 }), { logMtimeMs: new Date('2026-09-10T08:00:00.000Z').getTime() }), ['task_started_no_log']);
   assert.deepEqual(types(info(), { logMtimeMs: new Date('2026-09-10T11:50:00.000Z').getTime() }), []);
   assert.deepEqual(types(info()), ['task_started_no_log']);
   assert.deepEqual(types(info({ lastRunTime: '2026-09-10T11:30:00.000Z' })), []);

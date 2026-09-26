@@ -118,5 +118,11 @@
     "route": "支払い・カード登録は rule 3 の正当な手渡し理由（X の課金は API が無く画面操作のみ。2026-09-25 session 56e5c1e7 実測: `gh api repos/*/actions/secrets` は名前のみ・`node tools/env-kv.mjs --list` は出力0件でローカルに鍵が無い）。**2026-09-26 実測**: `console.x.com` を Playwright headless(chromium) で開くと 200 → `https://x.com/login?redirect_after_login=…` へ遷移し **403**（本文・ラベル・入力欄は取得不可）＝Claude 側で残高や項目名を読む経路は無い。よって改善点は手渡しの作り方だけ: ①**見ていない画面の多段手順を推測で書かない**（『表示が違ったら教えてください』は往復を強制＝rule 5 違反。2026-09-25 session 12e72c80 が『一般的な課金画面の構成に基づく』10段手順で実際に違反）②**購入前後にスクショを求めない**（rule 6: 余分な手作業。2026-09-25 session 56e5c1e7）③**kim 1人が同じ画面で購入まで完結する1回の手順**を渡し、Claude は結果の報告だけを受ける ④照会できない設定値（自動チャージ条件・補充額・月上限）は断定せず**『未確認』**と書く（rule 4）",
     "confidence": "high",
     "source": "handoff-audit-nightly:a3fdf40662a661547fc0f4c6daeee1590f5dd0ce573769545bd17e4fcbea0989 / 2026-09-26 auto-session 実測（handoff-audit:13b51c81aad5a98a。再発を実物で確認し route を是正。詳細 docs/billing-screen-handoff-route.md）"
+  },
+  {
+    "pattern": "実装タスクの続行可否を user に一言求める",
+    "route": "聞かずに当ターンで実装を続ける。実装の実行は codex-do.mjs（前景・単発）。**2026-09-27 実測: codex-do.mjs は WSL 経由（`wsl -l -q`）で、このPCは WSL ディストリ未導入のため codex レーンが起動せず内蔵フォールバック(Gemini→DeepSeek)で約20分かかる**（native `codex` 0.154.0 は存在するが経路外）。時間が尽きるなら Claude 直で実装し、user の一言を待って止まらない。**機械側の受け皿は `tools/stop-gate.mjs#shouldBlockProgressQuestion`（runner 経由 code=progress-question）だが ONBOARDING.md:1049 のとおり既定オフ。このPCは `~/.claude/stop-gate-enabled` 不在＝無効で、他人のPCで勝手に有効化しない**。よって応答は「次に kim がすること: なし」で終えられる形にする。",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:ff41f255bd35c4dd 起点（2026-09-25 の block 2件: fdbd2ff8「『続けて』等の一言で TJP-04 以降を継続します」/ cdc529a3「このまま次のファイルに進んでよいですか？」）。**2026-09-27 実測**: 台帳3本（handoff-audit-ledger / handoff-audit-nightly-ledger / stop-gate-runner-ledger）の 2026-09-25T18:02:02Z 以降 26 件を走査 → 同型は 2026-09-25T19:32Z の cdc529a3（「PR #24 を見て、ここで「OK」か修正点を返してください」）1 件のみ＝**同一セッション内の再発**。**2026-09-26 の監査済み 2 セッション（579e1f3e / 3cf5a07b）は双方「次に kim がすること: なし」で再発 0**。走査: runs/2026-09-27-3-recurrence-scan.mjs / 2026-09-27-3-nextkim-scan.mjs"
   }
 ]

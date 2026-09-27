@@ -174,6 +174,12 @@ export function todoExclusionReason(todo, today = new Date()) {
     || /(下の(旧)?ブロック|前のブロック|下に).{0,20}(全部|すべて)?残って(いる|います)[。\s]*$/.test(body);
   if (parenthesized || referenceOnly) return '参照のみ（作業内容が無い）';
   if (/~~[^~]*~~/.test(text)) return '取り消し線（完了済み）';
+  // 2026-09-28実測: 完了の印が `~~…~~` 以外に `[完了 2026-09-27 #584] …` の形で書かれた項目があり、
+  // この規則に該当せず素通りして、完了済みTODOが次の1目的に選ばれた
+  // (runs/2026-09-28-manifest.json の selectedTodos[0] が実物。自動セッション1回分を消費)。
+  // 行頭の印だけを見る。本文中の「完了」(例「完了報告の文面を直す」)を拾うと生きたTODOを落とすので
+  // アンカーは外さない。生成側 next-session-rotate.mjs の同判定と二重に塞ぐ。
+  if (/^(?:\*\*)?\s*(?:\[完了|\[[xX]\]|✅)/.test(body)) return '完了済み（印あり）';
   if (/(要判断|判断待ち|未決)/.test(text)) return '判断待ち';
   // 2026-09-25実測: 「〜するか」で終わる**意思決定型**のTODO（実物:「マキモノ出品を通すか、
   // 既存 `md-8dac5cb2` への追記にするか」）が除外されず、launcher がこれを「次の1目的」に採用して
@@ -419,7 +425,9 @@ export function isTodoAlreadyDone(md, todoText) {
   const firstLine = String(todoText).split(/\r?\n/, 1)[0];
   if (!firstLine.trim()) return false;
   const escaped = firstLine.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const lineRe = new RegExp(`^\\s*\\d+[.)、]\\s+~~${escaped}~~`, 'm');
+  // 2026-09-28: 完了印の書き方が `~~…~~` 以外（`[完了 …] 本文`）でも「済み」と判定する。
+  // 印の形が増えるたびに再実行保護が片方だけ効かなくなるのを避ける。
+  const lineRe = new RegExp(`^\\s*\\d+[.)、]\\s+(?:~~${escaped}~~|\\[完了[^\\]]*\\]\\s+${escaped})`, 'm');
   return lineRe.test(String(md));
 }
 

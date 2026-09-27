@@ -52,7 +52,10 @@ export function planRotation(source, { now = new Date(), maxBytes = MAX_BYTES, a
     const text = item.lines.join('\n').trim();
     const first = item.lines[0].replace(/^(?:\d+[.)、]|[-*])\s+/, '');
     // Only explicit completion on the task's first line counts; a completed substep is not the task.
-    if (/^(?:~~|\[[xX]\]|✅)|~~\s*(?:→\s*)?✅/.test(first)) { stats.completed++; continue; }
+    // 2026-09-28実測: 完了の印が `~~…~~` 以外に `[完了 2026-09-27 #584] …` の形で書かれた項目があり、
+    // 完了と認識されずに毎回の回転で次代へ持ち越されていた(残TODO 41件中13件がこの形)。
+    // auto-session 側の除外規則(todoExclusionReason)と二重に塞ぐ。
+    if (/^(?:~~|\[[xX]\]|\[完了|✅)|~~\s*(?:→\s*)?✅/.test(first)) { stats.completed++; continue; }
     if (/^(?:未定|なし|（なし|以下は既存|上の「|下の既存)/.test(first)) { stats.context++; continue; }
     const explicit = [...first.matchAll(/(?:起票|更新)\s*[:：]?\s*(\d{4}-\d{2}-\d{2})/g)].at(-1)?.[1];
     const age = now - Date.parse(explicit || item.date);

@@ -10,6 +10,8 @@ export const DEFAULT_REPO_MAP = {
   '購買部管理アプリ': 'kimkon1011/purchasing-management-app',
 };
 
+export const DEDICATED_PIPELINE_APPS = new Set(['ブース制作アプリ']);
+
 export function clean(value) {
   return String(value ?? '').trim();
 }
@@ -254,6 +256,11 @@ export async function main(args = process.argv.slice(2)) {
     if (item?.parse_ok !== true) {
       console.log(`feedback-to-issues: 解析できないのでスキップ message_id=${messageId}`);
       increment(reasons, '解析失敗');
+      continue;
+    }
+    if (DEDICATED_PIPELINE_APPS.has(item?.app_name)) {
+      console.log(`feedback-to-issues: 専用経路なのでスキップ(ブースintake) app=${item.app_name} message_id=${messageId}`);
+      increment(reasons, '専用経路');
       continue;
     }
     const appRepo = resolveRepo(item?.app_name, repoMapValue);

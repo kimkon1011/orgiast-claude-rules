@@ -9,6 +9,7 @@ import {
   chainBoothFeedbackIntake,
   buildIssueTitle,
   isIssueCandidate,
+  main,
   parseDismissId,
   parseHostMap,
   parseRepoMap,
@@ -50,6 +51,25 @@ test('既定・上書き・未マッピングからリポジトリを解決す�
   assert.equal(resolveRepo('購買部管理アプリ'), 'kimkon1011/purchasing-management-app');
   assert.equal(resolveRepo('購買部管理アプリ', '購買部管理アプリ=new/repo'), 'new/repo');
   assert.equal(resolveRepo('未知のアプリ'), null);
+});
+
+test('ブース制作アプリは専用経路、同定できないアプリは未マッピングに分類する', async (t) => {
+  const originalEnv = process.env;
+  process.env = { ...originalEnv, FEEDBACK_RELAY_URL: 'https://relay.example/feedback', FEEDBACK_RELAY_SECRET: 'test', FEEDBACK_REPO_MAP: '', FEEDBACK_HOST_MAP: '' };
+  t.after(() => { process.env = originalEnv; });
+  const logs = [];
+  t.mock.method(console, 'log', (line) => logs.push(line));
+  t.mock.method(globalThis, 'fetch', async (_url, options) => {
+    assert.equal(options.method, undefined);
+    return { ok: true, json: async () => ({ ok: true, items: [
+      { message_id: 'booth', parse_ok: true, app_name: 'ブース制作アプリ', kind: 'bug', title: '障害' },
+      { message_id: 'unknown', parse_ok: true, app_name: '�', kind: 'bug', title: '障害' },
+    ] }) };
+  });
+  assert.equal(await main(['--dry', '--no-chain']), 0);
+  assert.ok(logs.includes('feedback-to-issues: 専用経路なのでスキップ(ブースintake) app=ブース制作アプリ message_id=booth'));
+  assert.ok(logs.includes('feedback-to-issues: 未マッピングなのでスキップ app=� message_id=unknown'));
+  assert.ok(logs.includes('作成: 0件 / スキップ: 2件（専用経路:1, 未マッピング:1）/ 残り: 2件'));
 });
 
 test('bug と request の Issue タイトルを組み立てる', () => {

@@ -55,7 +55,10 @@ export function waitingForReply(comments = []) {
 
 export function selectProgress(issue, prs = [], now = new Date()) {
   if (String(issue.state).toUpperCase() !== 'OPEN') return null;
-  if (waitingForReply(issue.comments)) return { state: 'answered', url: issue.html_url || issue.url };
+  if (waitingForReply(issue.comments)) {
+    const latest = [...issue.comments].sort((a, b) => timestamp(b.created_at || b.createdAt) - timestamp(a.created_at || a.createdAt))[0];
+    return { state: 'answered', url: latest.html_url || latest.url || (latest.id ? `${issue.html_url || issue.url}#issuecomment-${latest.id}` : issue.html_url || issue.url) };
+  }
   const pr = prs.filter((entry) => entry.state === 'OPEN').sort((a, b) => timestamp(b.createdAt) - timestamp(a.createdAt))[0];
   if (pr) {
     const checks = pr.statusCheckRollup || [];
@@ -179,6 +182,14 @@ export async function runProgressNotify({ args = process.argv.slice(2), home = u
     io.stderr(`feedback-progress-notify: ${message}`);
   };
   try {
+    const limitIndex = args.indexOf('--max-reminders');
+    const limit = limitIndex < 0 ? 20 : Number(args[limitIndex + 1]);
+    if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('--max-reminders は1以上の整数を指定してください');
+    const jobs = [];
+    const current = io.now();
+    const today = current.toISOString().slice(0, 10);
+    const dayMs = 86400000;
+    const stageAt = (days) => days >= 14 ? Math.floor(days / 14) * 14 : days >= 7 ? 7 : days >= 3 ? 3 : 0;
     const dir = path.join(home, '.claude');
     let source = { items: [], unavailable: 'feedback API 取得失敗' };
     try { source = await loadSource({ home, io, fetchImpl }); }
@@ -259,20 +270,77 @@ export async function runProgressNotify({ args = process.argv.slice(2), home = u
         // エスカレーションと依頼主への通知は別配送。名前解決後は同じ状態でも依頼主へ届ける。
         const delivery = recipient?.id || 'unresolved';
         if (!selected && recipient) continue;
-        if (last && last.lastState === row.state && (last.delivery === delivery || (!last.delivery && recipient))) { row.skipped = 'unchanged'; continue; }
+        const sameState = last?.lastState === row.state;
+        const firstSeenAt = sameState ? last.firstSeenAt || last.notifiedAt : current.toISOString();
+        const unchanged = sameState && (last.delivery === delivery || (!last.delivery && recipient));
+        if (unchanged) {
+          const days = Math.max(0, Math.floor((current - timestamp(firstSeenAt)) / dayMs));
+          const stage = stageAt(days);
+          const previousStage = last.remindedAt ? stageAt(Math.floor((timestamp(last.remindedAt) - timestamp(firstSeenAt)) / dayMs)) : 0;
+          if (!stage || stage <= previousStage || last.remindedAt?.slice(0, 10) === today) {
+            row.skipped = 'unchanged'; continue;
+          }
+          const reason = {
+            answered: `あなたの回答待ちで ${days} 日止まっています。リンク先の質問に回答してください。`,
+            pr_open: `あなたの承認待ちで ${days} 日止まっています。PR を確認してください。`,
+            pr_blocked: `自動修復が止まっています。自動テストの失敗が ${days} 日続いています。`,
+            stalled: `対応が ${days} 日止まっています。状況を確認してください。`,
+          }[row.state];
+          row.reminder = { days, stage, firstSeenAt, recipientIds: [KIM_USER_ID] };
+          if (stage >= 7 && recipient && recipient.id !== KIM_USER_ID) row.reminder.recipientIds.push(recipient.id);
+          row.content = `【${row.title.slice(0, 150)}】\n${stage >= 7 ? '対応が遅れています。' : ''}${reason}\n${row.url}`;
+          const deliveries = { ...(last.reminderDeliveries || {}) };
+          for (const userId of row.reminder.recipientIds) {
+            if (deliveries[userId]?.slice(0, 10) === today) continue;
+            jobs.push({ row, userId, content: userId === KIM_USER_ID ? row.content
+              : `【${row.title.slice(0, 150)}】\nお待たせしています。まだ対応中です。\n${row.url}`,
+              save: () => {
+                deliveries[userId] = current.toISOString();
+                const complete = row.reminder.recipientIds.every((id) => deliveries[id]?.slice(0, 10) === today);
+                progress.items[key] = { ...last, firstSeenAt, reminderDeliveries: { ...deliveries },
+                  remindedAt: complete ? current.toISOString() : last.remindedAt,
+                  reminderCount: (last.reminderCount || 0) + (complete ? 1 : 0) };
+              } });
+          }
+          continue;
+        }
         row.content = recipient
           ? `【${row.title.slice(0, 150)}】\n${messages[row.state]}\n${row.url}`
           : `この報告の依頼主が特定できません。元シートの行を確認してください。\n【${row.title.slice(0, 150)}】\n${selected ? messages[row.state] + '\n' : ''}${issue.html_url || issue.url}${selected && row.url !== (issue.html_url || issue.url) ? '\n' + row.url : ''}`;
         if (!recipient && source.sheetUrl) row.content += `\n照合元シート（該当行は未特定）: ${source.sheetUrl}`;
-        // Explicit maintenance mode never sends DMs or advances the notification ledger.
-        if (dryRun || backfill) continue;
-        const token = process.env.DISCORD_BOT_TOKEN?.trim() || optionalText(path.join(dir, 'orgiast-discord-bot-token.txt'), io).trim();
-        if (!token) throw new Error('Discord Bot トークンが見つかりません');
-        await sendDm({ token, userId: recipient?.id || KIM_USER_ID, content: row.content, fetchImpl });
-        row.sent = true;
-        progress.items[key] = { lastState: row.state, notifiedAt: io.now().toISOString(), delivery };
-        io.write(progressFile, `${JSON.stringify(progress, null, 2)}\n`);
+        jobs.push({ row, userId: row.recipientId, content: row.content, save: () => {
+          progress.items[key] = { ...(sameState ? last : {}), lastState: row.state,
+            notifiedAt: current.toISOString(), delivery, firstSeenAt,
+            remindedAt: sameState ? last.remindedAt || null : null,
+            reminderCount: sameState ? last.reminderCount || 0 : 0 };
+        } });
       } catch (error) { warn(key, error); }
+    }
+    // Reserve one DM for the overflow summary, keeping the total within the limit.
+    const individualCount = jobs.length > limit ? limit - 1 : jobs.length;
+    const overflow = jobs.slice(individualCount);
+    report.deliveryPlan = { limit, individualCount, overflowCount: overflow.length };
+    for (const job of overflow) job.row.skipped = 'limit';
+    if (overflow.length) {
+      const keys = [...new Set(overflow.map((job) => job.row.key))];
+      report.overflow = { recipientId: KIM_USER_ID,
+        content: `通知上限のため ${overflow.length} 通（${keys.length} 件）を保留しました。次回以降に再試行します。\n${keys.slice(0, 10).join('\n')}${keys.length > 10 ? '\nほか ' + (keys.length - 10) + ' 件' : ''}` };
+    }
+    if (!dryRun && !backfill && jobs.length) {
+      const token = process.env.DISCORD_BOT_TOKEN?.trim() || optionalText(path.join(dir, 'orgiast-discord-bot-token.txt'), io).trim();
+      if (!token) throw new Error('Discord Bot トークンが見つかりません');
+      for (const job of jobs.slice(0, individualCount)) {
+        try {
+          await sendDm({ token, userId: job.userId, content: job.content, fetchImpl });
+          job.row.sent = true;
+          job.save();
+          io.write(progressFile, `${JSON.stringify(progress, null, 2)}\n`);
+        } catch (error) { warn(job.row.key, error); }
+      }
+      if (report.overflow) {
+        try { await sendDm({ token, userId: KIM_USER_ID, content: report.overflow.content, fetchImpl }); }
+        catch (error) { warn('上限超過の集約通知', error); }
+      }
     }
   } catch (error) { warn('処理失敗', error); }
   io.stdout(args.includes('--json') ? JSON.stringify(report) : report.items.map((item) => `${item.key} ${item.state || '対応中'} ${item.skipped || (item.sent ? '通知済み' : '未送信')}\n${item.content || item.url}`).join('\n') || 'feedback-progress-notify: 対象なし');

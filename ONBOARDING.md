@@ -382,7 +382,7 @@ PowerShell hookのstdinは`Read-StdinUtf8`ヘルパーでUTF-8として読む（
 
 ### 1.8〜1.10 プロジェクト立ち上げ
 
-作成・設定・CLI導入は自動化し、人にしかできない操作の準備を済ませる。
+作成・設定・CLI導入は自動化し、人にしかできない操作の準備を済ませる。新規アプリの基盤は Cloudflare に寄せ、秘密は Binding で渡す（§1.10.1）。
 
 **1.8〜1.10 プロジェクト立ち上げの自動化可否・標準シーケンス・CLI導入**
 
@@ -393,6 +393,28 @@ GCPプロジェクト作成/API有効化/SA発行/GitHub repo/Vercel/Supabase等
 CLI未インストールは「手作業で…」と言わず自分で`winget`/`scoop`/`npm i -g`でinstallする。認証コマンドの実行だけがuser 1クリックの許容範囲。
 
 詳細・ツール別installコマンド表: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/project-launch-playbook.md`
+
+**1.10.1 新規アプリの基盤は Cloudflare に寄せる（kim 2026-09-28 決定・全アカウント全PC）**
+
+新規の社内アプリ・個人開発・PoC は、まず Cloudflare の中だけで組めるかを検討する。部品を1つずつ最高のサービスから集めるより、十分に良い部品を1つの基盤に集めて作ることに集中する方が強い。ベンダーロックインより「つなぎ込みが面倒で作るのをやめる」方が怖い、という判断。根拠: [個人開発はCloudflareにすべて賭けろ](https://speakerdeck.com/ashunar0/kojin-kaihatsu-ha-cloudflare-ni-subete-kakero)（[紹介投稿](https://x.com/connect24h/status/2104007747515859450)）。
+
+| 必要なもの | 第一候補 |
+|---|---|
+| 計算・API・静的配信 | Workers（Static Assets） |
+| DB | D1 |
+| ファイル | R2（転送料なし） |
+| 設定・キャッシュ | KV |
+| 非同期処理・定期実行 | Queues / Cron Triggers |
+| チャット・共同編集・WebSocket・状態を持つエージェント | Durable Objects |
+| 社内限定公開・ログイン | Zero Trust Access（自前ログインを作らない） |
+| 社内サーバーへの接続 | Tunnel |
+| LLM 呼び出し | AI Gateway（費用ログ・キャッシュ・フォールバック） |
+| 隔離実行・ブラウザ操作 | Sandbox / Browser Rendering |
+
+- **秘密は `.env` で渡さない**: D1・R2・KV・Queues などは Binding で Worker に渡す（接続文字列もキーも持たない）。外部 API キーだけ `wrangler secret put` にし、`.env` やリポジトリに置かない。
+- **作成・デプロイは Claude が `wrangler` で完結させる**（`wrangler d1 create` / `r2 bucket create` / `kv namespace create` / `deploy`）。user の操作は初回の `wrangler login` の承認だけ。アカウントは §1.12 に従って最初に宣言する。
+- **Cloudflare 以外を選ぶ条件**: Cloudflare に代わりがない場合（Google Workspace と連携する GAS、Supabase Auth が必要な既存の仕組みなど）、または既に動いているアプリ。その時は理由を1行書く。
+- **既存の Vercel / Supabase アプリは移行しない**。大きな改修のついでに、移行した方が得かを検討するだけにする（移行作業そのものが手間とリスクになるため）。
 
 ### 1.11 DWDとアカウント所有権（§1.11〜1.12）
 

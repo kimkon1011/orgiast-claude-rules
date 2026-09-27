@@ -52,6 +52,7 @@ Stop の `user-burden-gate` が依頼のある最終応答を監査する。本�
 **AUTOMATION-FIRST**（順序厳守）: (1) MCP/CLIで取得（CLI未導入なら自分でinstall） (2) keyserve（`tools/keyserve-status.mjs` / `tools/env-kv.mjs`）から取得 (3) production bundleから公開設定値を確認 (4) 自動設定は専用ツール経由のみ（`tools/env-kv.mjs` など）。生の `gh secret set` / `.env.local` 直書き / transcript grep は classifier のCredential系カテゴリで止まるので書かない (5) 全部不可の時だけ理由・直URL・完了判定を併記してuserに依頼し、学びをmemoryへ残す。人にしかできない初回同意等を除き準備はClaude側で完結する。
 
 **🔴 Claude 側ログの不在は外部システムの不在の証拠ではない。外部の状態は直接照会だけで判定し、未照会は「未確認」と書く。確率付き否定やuserへの検証丸投げは禁止。**
+**🔴 「Claude にはできない」「未接続」も断定であり、登録済み経路（memory の reference_* ツール・DWD・GAS・CLI）を当ターンに試した失敗記録だけが証拠。セッションのツール一覧は読込状態であって、接続状態・実行可能性の証拠ではない。未試行のまま user に設定・接続を頼まない。**
 
 **🔴 内部宛メッセージはチャットに「宛先／用件／本文」を表示し、Gmail下書き・送信は禁止。Gmail下書きは外部宛だけとし、本文と下書き件名もチャットに併記する。**
 

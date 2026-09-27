@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fired, evaluateAudit, turnEvidence, requestAudit, loadResources, buildPrompt } from './handoff-audit-gate.mjs';
+import { fired, asksUser, claimsInability, evaluateAudit, turnEvidence, requestAudit, loadResources, buildPrompt, parseAudit } from './handoff-audit-gate.mjs';
 import { run } from './stop-gate-runner.mjs';
 const pass = { verdict: 'pass', violations: [], learned: [] };
 const block = { verdict: 'block', violations: [{ rule: 4, quote: 'GA4は存在しない', fix: 'DWDで直接照会する' }], learned: [] };
@@ -17,6 +17,83 @@ for (const text of ['[手渡し判定]', '次に kim がすること: ログイ�
 for (const text of ['完了しました。\n次に kim がすること: なし', '次に kim がすること: なし\n', 'ドラフトを更新しました', 'Gmailを検索しました', 'GA4 は未確認']) {
   test(`非発火: ${text}`, () => assert.equal(fired(text), false));
 }
+test('未接続と断定してGoogle Docs有効化を依頼した事故の実文で発火', () => {
+  assert.equal(fired('Google Docsの編集コネクタがこのチャットでは未接続で、直接編集できません（Driveの作成・検索はできても更新不可)。チャットのコネクタ設定でGoogle Docsをオンにしてもらえれば、同じドキュメント・同じリンクのまま10/13を追記します。'), true);
+  assert.equal(fired('10/13(火)17:30〜は空いています。終日「東京」滞在の予定です。'), false);
+});
+test('依頼と能力不足を広く検出して監査を起動する', () => {
+  for (const text of ['確認してください', '確認して下さい', '共有してもらえれば', '見てもらえますか', '選んでいただければ', 'お願いします', 'オンにして', '有効にして', '接続して', '許可して', '設定して', '承認して', 'ログインして']) {
+    assert.equal(asksUser(text), true, text);
+    assert.equal(fired(text), true, text);
+  }
+  for (const text of ['できません', 'できない', '不可', '不可能', '未接続', '接続されていない', '読み込まれていない', '使えません', '使えない', '対応していない', '非対応', '権限がない', 'アクセスできない', 'ツールが無い']) {
+    assert.equal(claimsInability(text), true, text);
+    assert.equal(fired(text), true, text);
+  }
+});
+test('依頼・能力不足がフェンスや引用内だけなら発火しない', () => {
+  for (const content of ['設定してください', '未接続で編集できません']) {
+    for (const text of [`完了しました。\n\`\`\`text\n${content}\n\`\`\``, `完了しました。\n~~~\n${content}\n~~~`, `完了しました。\n  > ${content}`]) {
+      assert.equal(asksUser(text), false, text);
+      assert.equal(claimsInability(text), false, text);
+      assert.equal(fired(text), false, text);
+      assert.equal(fired(`${text}\n確認してください`), true);
+      assert.equal(fired(`${text}\n直接編集できません`), true);
+    }
+  }
+});
+test('memoryからreference_とdwd_のfrontmatterだけを取り込む', t => {
+  const home = fixture(t);
+  assert.deepEqual(loadResources(home).capabilities, []);
+  const memory = path.join(home, '.claude/projects/x/memory');
+  fs.mkdirSync(memory, { recursive: true });
+  const write = (file, content) => fs.writeFileSync(path.join(memory, file), content);
+  write('reference_foo.md', '---\nname: foo\ndescription: node foo.mjs\nmetadata:\n  name: nested\n---\nname: BODY_ONLY\ndescription: BODY_ONLY\n');
+  write('dwd_bar.md', '---\r\nname: "bar"\r\ndescription: \'node bar.mjs\'\r\n---\r\nBODY_ONLY');
+  write('project_other.md', '---\nname: ignored\ndescription: ignored\n---\n');
+  write('reference_no_header.md', 'name: BODY_ONLY\ndescription: BODY_ONLY');
+  write('reference_unclosed.md', '---\nname: invalid\ndescription: invalid');
+  fs.mkdirSync(path.join(home, '.claude/projects/without-memory'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude/projects/without-memory/memory'), 'not a directory');
+  const resources = loadResources(home);
+  assert.deepEqual(resources.capabilities, [{ name: 'bar', description: 'node bar.mjs' }, { name: 'foo', description: 'node foo.mjs' }]);
+  const prompt = buildPrompt({ text: '編集できません', tools: [] }, resources);
+  assert.match(prompt, /\(f\)/);
+  assert.match(prompt, /6点/);
+  assert.ok(prompt.includes(`capabilities: ${JSON.stringify(resources.capabilities)}`));
+  assert.ok(!prompt.includes('BODY_ONLY'));
+  assert.match(prompt, /ToolSearch で見つからない.*証拠ではない/);
+  assert.match(prompt, /1〜12/);
+});
+test('capabilitiesは複数project合計80件、descriptionは200文字まで', t => {
+  const home = fixture(t);
+  for (const project of ['x', 'y']) {
+    const memory = path.join(home, `.claude/projects/${project}/memory`);
+    fs.mkdirSync(memory, { recursive: true });
+    for (let i = 0; i < 45; i++) fs.writeFileSync(path.join(memory, `reference_${i}.md`), `---\nname: ${project}-${i}\ndescription: ${'長'.repeat(250)}\n---\n`);
+  }
+  const capabilities = loadResources(home).capabilities;
+  assert.equal(capabilities.length, 80);
+  assert.ok(capabilities.some(c => c.name.startsWith('y-')));
+  assert.ok(capabilities.every(c => c.description === '長'.repeat(200)));
+});
+test('複数行descriptionと読み込めないmemoryを扱う', t => {
+  const home = fixture(t), memory = path.join(home, '.claude/projects/x/memory');
+  fs.mkdirSync(memory, { recursive: true });
+  fs.writeFileSync(path.join(memory, 'reference_multiline.md'), '---\nname: multiline\ndescription: >-\n  node foo.mjs\n  --check\n---\nBODY_ONLY');
+  assert.deepEqual(loadResources(home).capabilities, [{ name: 'multiline', description: 'node foo.mjs --check' }]);
+  const open = fs.openSync;
+  t.mock.method(fs, 'openSync', (file, ...args) => {
+    if (String(file).startsWith(memory)) throw Object.assign(new Error('unreadable'), { code: 'EACCES' });
+    return open(file, ...args);
+  });
+  assert.deepEqual(loadResources(home).capabilities, []);
+});
+test('parseAuditはrule 12を受け付け、rule 13を拒否する', () => {
+  const result = { ...block, violations: [{ rule: 12, quote: '未接続', fix: 'gdoc-update.mjsを試す' }] };
+  assert.deepEqual(parseAudit(JSON.stringify(result)), result);
+  assert.throws(() => parseAudit({ ...result, violations: [{ ...result.violations[0], rule: 13 }] }), /invalid-json/);
+});
 test('block/pass・台帳・最大5理由', async t => {
   const home = fixture(t);
   for (const verdict of [pass, block]) {

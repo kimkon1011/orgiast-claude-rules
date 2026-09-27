@@ -20,9 +20,12 @@ export const SHELL_TOOL = new RegExp(`^(?:${SHELL_TOOLS})$`);
 // 2本登録はできない（2本目は no-op になり、1本目の matcher も潰れる）。matcher は1本に合成する。
 export const HOOK_MATCHER = `${TARGET.source.replace(/^\^/, '').replace(/\$$/, '')}|${SHELL_TOOLS}`;
 // gh の書き込み系。`--body` を伴う PR/Issue 本文・レビュー・コメントが該当する。
-const GH_WRITE = /(?:^|[\s;&|(])gh\s+(?:pr|issue)\s+(?:comment|create|review|edit)\b/i;
+// 境界には引用符・バッククォートも含める。`bash -c "gh pr comment …"` の引用符の中や
+// `` `gh pr comment …` `` のコマンド置換は「実行される gh」であり、`"` を境界から外すと
+// 素通りする（2026-09-27 実測: LIVE 版で backtick / bash -lc / bash -c が pass していた）。
+const GH_WRITE = /(?:^|[\s;&|("'`])gh\s+(?:pr|issue)\s+(?:comment|create|review|edit)\b/i;
 // `gh api repos/o/r/issues/1/comments -f body='…'` のような REST 経由の投稿。
-const GH_API_COMMENT = /(?:^|[\s;&|(])gh\s+api\b[^\n]*\/comments\b/i;
+const GH_API_COMMENT = /(?:^|[\s;&|("'`])gh\s+api\b[^\n]*\/comments\b/i;
 // 境界付きハンドル抽出。直後が英数/- なら長い別ハンドルの一部、直前がメールのローカル部
 // （[A-Za-z0-9._%+-]）ならメールアドレスなので拾わない。
 const MENTION = /(?<![\w.%+-])@([A-Za-z0-9][A-Za-z0-9-]{0,38})(?![A-Za-z0-9-])/g;
@@ -63,10 +66,77 @@ export function githubHandles(ledger) {
   return Array.isArray(handles) ? handles.map((item) => String(item).trim().toLowerCase()).filter(Boolean) : [];
 }
 
+// 実行されない文字列（heredoc 本文・引用符の中身）を除いた「実行される文字列」を返す。
+export function executableText(command) {
+  const raw = String(command ?? '');
+  const lines = raw.split(/\r?\n/);
+  const resultLines = [];
+
+  let inHeredoc = false;
+  let delimiter = '';
+  let dashOption = false;
+  let keepHeredoc = false;
+
+  const heredocRegex = /(<<|<<-)\s*(?:'([A-Za-z_]\w*)'|"([A-Za-z_]\w*)"|([A-Za-z_]\w*))/;
+  const shellRegex = /\b(?:bash|sh|zsh|dash|ksh|pwsh|powershell)\b/i;
+
+  for (const line of lines) {
+    if (inHeredoc) {
+      const lineNoCr = line.replace(/\r$/, '');
+      const checkLine = dashOption ? lineNoCr.replace(/^\t+/, '') : lineNoCr;
+      if (checkLine === delimiter) {
+        inHeredoc = false;
+        resultLines.push(line);
+      } else {
+        if (keepHeredoc) {
+          resultLines.push(line);
+        }
+      }
+    } else {
+      resultLines.push(line);
+      const match = line.match(heredocRegex);
+      if (match) {
+        inHeredoc = true;
+        dashOption = (match[1] === '<<-');
+        delimiter = match[2] || match[3] || match[4];
+        const before = line.slice(0, match.index);
+        keepHeredoc = shellRegex.test(before);
+      }
+    }
+  }
+
+  const processedText = resultLines.join('\n');
+
+  // シングルクォート '...'（エスケープなし）とダブルクォート "..."（\ エスケープを考慮）を
+  // 1個の空白に置換する。
+  return processedText.replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, ' ');
+}
+
 export function isGhWriteCommand(command) {
-  const text = String(command ?? '');
-  if (!/\bgh\b/.test(text)) return false;
-  return GH_WRITE.test(text) || GH_API_COMMENT.test(text);
+  const raw = String(command ?? '');
+  const scan = executableText(raw);
+
+  // 設計上の割り切り：
+  // python -c / node -e のようなインタプリタのペイロード内は、テキストだけでは「データ」と
+  // 「実行されるコード」を区別できないため除去側に倒す。これは意図した既知の割り切りで、
+  // 直接の gh 呼び出しとシェル -c / heredoc 実行は引き続き塞ぐ。
+  //
+  // シェルの実行オプションは `-c` だけではない。`bash -lc '…'` / `sh -ec '…'` / `pwsh -Command`
+  // のように引用符の中身が「実行される」形があるため、c を含むオプション束（`-[A-Za-z]*c[A-Za-z]*`）
+  // と `-Command`（/i により同パターンに含まれる）をまとめて拾う。ここは fail-closed 側に倒す。
+  const hasShellC = /\b(?:bash|sh|zsh|dash|ksh|pwsh|powershell)\b[^\n]*?\s-[A-Za-z]*c[A-Za-z]*\b/i.test(raw);
+  const hasEval = /\b(?:eval|iex|Invoke-Expression)\b/i.test(raw);
+
+  const scanCheck = (text) => {
+    if (!/\bgh\b/.test(text)) return false;
+    return GH_WRITE.test(text) || GH_API_COMMENT.test(text);
+  };
+
+  if (scanCheck(scan)) return true;
+  if (hasShellC || hasEval) {
+    if (scanCheck(raw)) return true;
+  }
+  return false;
 }
 
 export function extractMentions(command) {

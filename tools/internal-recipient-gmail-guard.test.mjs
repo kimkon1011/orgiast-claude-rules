@@ -243,3 +243,20 @@ test('stdin→stdout で gh メンションを deny し、メンション無し�
     assert.equal(pass.stderr, '');
   }
 });
+
+test('誤検知防止（executableText・引用符・Heredoc除去）の検証', () => {
+  // deny のままであること（回帰防止・重要）
+  assert.equal(judgeBash(shellHook('gh pr comment 1 --body "@kimkon1011"'), ledger).decision, 'block');
+  assert.equal(judgeBash(shellHook("gh api repos/o/r/issues/1/comments -f body='@kimkon1011'"), ledger).decision, 'block');
+  assert.equal(judgeBash(shellHook("bash -c \"gh pr comment 1 --body '@kimkon1011'\""), ledger).decision, 'block');
+  assert.equal(judgeBash(shellHook("bash <<EOF\ngh pr comment 1 --body '@kimkon1011'\nEOF"), ledger).decision, 'block');
+  // 実行経路の穴（2026-09-27 に LIVE 版で pass を実測）: バッククォート置換と c を含むオプション束。
+  assert.equal(judgeBash(shellHook('echo `gh pr comment 1 --body "@kimkon1011"`'), ledger).decision, 'block');
+  assert.equal(judgeBash(shellHook("bash -lc 'gh pr comment 1 --body \"@kimkon1011\"'"), ledger).decision, 'block');
+
+  // pass になること（今回の修正対象）
+  assert.equal(judgeBash(shellHook("python - <<PY\nopen(\"note.md\",\"w\").write(\"gh pr comment @kimkon1011\")\nPY"), ledger).decision, 'pass');
+  assert.equal(judgeBash(shellHook("cat <<EOF\ngh pr comment @kimkon1011\nEOF"), ledger).decision, 'pass');
+  assert.equal(judgeBash(shellHook("git commit -m \"gh pr comment @kimkon1011\""), ledger).decision, 'pass');
+  assert.equal(judgeBash(shellHook("node -e \"console.log('gh pr comment @kimkon1011')\""), ledger).decision, 'pass');
+});

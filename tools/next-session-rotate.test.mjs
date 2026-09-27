@@ -29,6 +29,15 @@ test('archives exact original, preserves pending continuations and removes only 
  const archived=fs.readFileSync(r.archive,'utf8'); const bytes=fs.readFileSync(file);
  assert.equal(rotate(file,{now}).changed,false); assert.deepEqual(fs.readFileSync(file),bytes); assert.equal(fs.readFileSync(r.archive,'utf8'),archived);
 });
+test('[完了 …] 形の印も完了として回転で落とす(2026-09-28実測の再現)', () => {
+ // 実物: 残TODO の13件が `1. [完了 2026-09-27 #584] …` の形で、`~~…~~` と違って完了と認識されず
+ // 回転のたびに次代へ持ち越されていた。auto-session がそれを次の1目的に選び自動セッション1回分を
+ // 消費した(runs/2026-09-28-manifest.json)。選択側の除外規則と二重に塞ぐ。
+ const source=block('2026-09-22','1. [完了 2026-09-27 #584] 済んだ作業\n2. まだやる作業\n3. 完了報告の文面を直す');
+ const r=planRotation(source,{now});
+ assert.equal(r.stats.completed,1); assert.equal(r.stats.pending,2);
+ assert.doesNotMatch(r.text,/済んだ作業/); assert.match(r.text,/まだやる作業/); assert.match(r.text,/完了報告の文面を直す/);
+});
 test('oversized pending queue remains reachable, cap is bytes not characters', () => {
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'rotate-')); const file=path.join(dir,'next-session.md');
  const source=block('2026-09-22',Array.from({length:150},(_,i)=>`${i+1}. TODO ${i} ${'日本語'.repeat(80)}`).join('\n'));

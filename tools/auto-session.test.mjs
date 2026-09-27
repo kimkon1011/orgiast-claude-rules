@@ -432,6 +432,20 @@ test('filterTodos は完了・判断待ち・未決・ブロック中を除外�
   assert.deepEqual(filterTodos(['実行', '~~完了~~', '要判断 X', '判断待ち X', '未決 X', 'ブロック中 X']), ['実行']);
 });
 
+test('filterTodos は行頭の [完了 …] / [x] / ✅ の印も完了として除外する(2026-09-28実測の再現)', () => {
+  // 実物: 残TODO 先頭が `1. [完了 2026-09-27 #584] …` で、この印は「取り消し線」に該当せず素通りし、
+  // 完了済みTODOが次の1目的に選ばれて自動セッション1回分を消費した
+  // (auto-session/runs/2026-09-28-manifest.json の selectedTodos[0] が実物)。
+  assert.deepEqual(
+    filterTodos(['実行', '[完了 2026-09-27 #584] 済み', '[x] 済み', '✅ 済み', '完了報告の文面を直す']),
+    ['実行', '完了報告の文面を直す'],
+  );
+  assert.equal(todoExclusionReason('[完了 2026-09-27 #584] 済み'), '完了済み（印あり）');
+  // 本文中に「完了」を含むだけの生きたTODOや、既存の継続キュー行を巻き込まないこと(アンカーの回帰)。
+  assert.equal(todoExclusionReason('完了報告の文面を直す'), '');
+  assert.equal(todoExclusionReason('[継続キュー: 未完了 2件](archive/x.pending.md) — このファイルの項目を消化後に確認する。'), '');
+});
+
 test('--count all は3件を超えるフィルタ後の全TODOを選択する', () => {
   const todos = ['実行1', '~~完了~~', '実行2', '実行3', '実行4'];
   const options = parseArgs(['--count', 'all']);
@@ -1034,6 +1048,15 @@ test('isTodoAlreadyDone は複数行 TODO の1行目だけで判定し、空の�
   assert.equal(isTodoAlreadyDone(md, 'P1: 消化率が 14.3% に低下\n   詳細な本文'), true);
   assert.equal(isTodoAlreadyDone(md, ''), false);
   assert.equal(isTodoAlreadyDone(md, ' \t '), false);
+});
+
+test('isTodoAlreadyDone は [完了 …] 形の印でも検出する(2026-09-28)', () => {
+  // 印の書き方が増えるたびに再実行保護が片方だけ効かなくなるのを避け、両形式を同じ判定にする。
+  const md = `## 残TODO\n1. [完了 2026-09-27 #584] 済んだ作業\n2. ~~済んだ作業2~~ → ✅ 完了\n3. [完了 2026-09-27 #584] 別の作業\n`;
+  assert.equal(isTodoAlreadyDone(md, '済んだ作業'), true);
+  assert.equal(isTodoAlreadyDone(md, '済んだ作業2'), true);
+  assert.equal(isTodoAlreadyDone(md, '別の作業'), true);
+  assert.equal(isTodoAlreadyDone(md, 'やっていない作業'), false);
 });
 
 test('isTodoAlreadyDone は正規表現メタ文字をタイトルの文字として扱う', () => {

@@ -386,3 +386,33 @@ test('firstSeenAtを優先し、実行が遅れても過去の段階を連続送
   assert.equal(f.sent.length, 2);
   assert.equal(f.output[0].items[0].reminder.stage, 28);
 });
+
+test('督促上限による片方の保留は翌実行で残りだけ再試行する', async (t) => {
+  const f = reminderFixture(t);
+  fs.writeFileSync(path.join(f.dir, 'feedback-issue-ledger.json'), JSON.stringify({ items: [
+    { repo: 'example/app', number: 21, submitter_discord_id: '42' },
+    { repo: 'example/app', number: 22, submitter_discord_id: '42' },
+  ] }));
+  await f.at(7, { args: ['--json', '--max-reminders', '2'] });
+  assert.equal(f.sent.length, 2);
+  assert.equal(f.sent[0].userId, kim);
+  assert.match(f.sent[1].content, /通知上限/);
+  assert.equal(f.read().reminderCount, 0);
+  await f.at(7);
+  assert.equal(f.sent.length, 4);
+  assert.equal(f.sent[2].userId, '42');
+  assert.equal(f.read().reminderCount, 1);
+  await f.at(7);
+  assert.equal(f.sent.length, 4);
+});
+
+test('不正な上限値は送信も台帳更新もしない', async (t) => {
+  for (const value of ['0', '-1', '1.5', 'bad', undefined]) {
+    const f = reminderFixture(t);
+    const before = fs.readFileSync(f.file, 'utf8');
+    await f.at(7, { args: ['--json', '--max-reminders', ...(value === undefined ? [] : [value])] });
+    assert.equal(f.output[0].ok, false);
+    assert.equal(f.sent.length, 0);
+    assert.equal(fs.readFileSync(f.file, 'utf8'), before);
+  }
+});

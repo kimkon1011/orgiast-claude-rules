@@ -1,0 +1,81 @@
+{
+  "task": "T-0431",
+  "checkedAt": "2026-09-27T19:19:50.727Z",
+  "source": {
+    "file": "/mnt/c/Users/uers/.claude/open-work.md",
+    "matches": [
+      {
+        "line": 38,
+        "text": "- P1 T-0431 面談参加（状態: 未着手）"
+      }
+    ]
+  },
+  "sheet": {
+    "markdown": "| Row | ID | 起票日 | 優先ランク | 優先度スコア | 種別 | タイトル | 具体アクション | 担当 | 期限 | チャンネル | 根拠(発言抜粋) | Discordリンク | 状態 | 実行メモ | 最終更新 |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n|  | ID | 起票日 | 優先ランク | 優先度スコア | 種別 | タイトル | 具体アクション | 担当 | 期限 | チャンネル | 根拠(発言抜粋) | Discordリンク | 状態 | 実行メモ | 最終更新 |\n| 6 | T-0431 | 2026-09-07 6:30 | P1 | 92 | タスク | 面談参加 | 山佐氏がGoogle Meet面談に参加する | 山佐 | 2026-09-07 | ✉ 'ヤマサヤマサ' via saiyo採用メール | 明日14:30よりよろしくお願いいたします。 | https://mail.google.com/mail/u/seisaku-team@orgiast.jp/#all/1a06e541826d4cdf | 未着手 |  | 2026-09-27 6:35 |",
+    "scanned_range": "A1:O3300",
+    "scanned_row_count": 3300,
+    "scanned_column_count": 15,
+    "matched_row_count": 1,
+    "returned_matching_row_count": 1,
+    "truncated": false,
+    "truncated_rows": false,
+    "truncated_columns": false,
+    "truncated_row_count": 0,
+    "truncated_column_count": 0
+  },
+  "mail": {
+    "account": "seisaku-team@orgiast.jp",
+    "threadId": "1a06e541826d4cdf",
+    "messageIds": [
+      "1a06e5428d194cbe",
+      "1a076d538fb9c07c"
+    ],
+    "meeting": "2026-09-07 14:30–15:00 JST",
+    "interviewer": "佐藤",
+    "latestMessage": "2026-09-06 22:07:44 +0900: 明日14:30よりよろしくお願いいたします。",
+    "search": {
+      "messages": [
+        {
+          "id": "1a076d538fb9c07c",
+          "threadId": "1a06e541826d4cdf"
+        },
+        {
+          "id": "1a06e5428d194cbe",
+          "threadId": "1a06e541826d4cdf"
+        },
+        {
+          "id": "1a06dd061c31eb45",
+          "threadId": "1a068983dca98d3e"
+        },
+        {
+          "id": "1a06899dba23f5a2",
+          "threadId": "1a068983dca98d3e"
+        }
+      ],
+      "resultSizeEstimate": 4
+    }
+  },
+  "findings": [
+    "台帳の状態は未着手、実行メモは空欄。",
+    "面談案内と日程了承は確認できたが、参加実績は確認できない。",
+    "人間の面談参加を代理実行できず、担当者の確認または参加実績が必要。未参加と断定はしない。"
+  ],
+  "completed": false,
+  "humanRequired": true,
+  "sideEffects": {
+    "externalWrites": false,
+    "mailSent": false,
+    "taskUpdated": false,
+    "jobsRerun": false
+  },
+  "artifacts": [
+    {
+      "file": "/mnt/c/Users/uers/orgiast-main/reports/t0431-verification-20260928/gmail.json",
+      "sha256": "ae61b5d7b1dea60622676e41e560e66be9547910cb0f261e1522daa7e66df527"
+    },
+    {
+      "file": "/mnt/c/Users/uers/orgiast-main/reports/t0431-verification-20260928/sheet.json",
+      "sha256": "fcc4d00a208ad40d620da05e2034ff97747e17c374709506eda2f5708b8351ae"
+    }
+  ]
+}

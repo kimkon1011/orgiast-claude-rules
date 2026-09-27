@@ -1,0 +1,8 @@
+{
+  "completed": false,
+  "summary": "T-0431は台帳で未着手。元メールを所在アカウントから直接確認したが、9月7日14:30の面談案内と前日の了承のみで参加実績は確認できない。面談担当・佐藤氏の確認が必要。外部送信・台帳変更なし。指定結果パスは書き込み許可範囲外のため作業フォルダ内に保存。",
+  "evidence": {
+    "file": "/mnt/c/Users/uers/orgiast-main/reports/t0431-verification-20260928/evidence.json",
+    "sha256": "e1e8ef0e9e181c1ef958271ab4fc915febd8f7974089f0ceb0cb467fc6fa6645"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "completed": false,
+  "summary": "T-1606は管理元のタスク台帳でも未着手。元Discord投稿の閲覧はHTTP 403 Missing Accessで拒否され、架電済みか検証できない。外部送信禁止のため架電や台帳更新は未実施。指定結果保存先は書込許可範囲外のため作業ディレクトリに保存。",
+  "evidence": {
+    "file": "/mnt/c/Users/uers/orgiast-main/T-1606-verification.json",
+    "sha256": "6a0b08d7c0cc1d58cabac1fbbd34dd8c6b4847f4ba046ed3050cd292d9f0b94c"
+  }
+}

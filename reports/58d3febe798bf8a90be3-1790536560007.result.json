@@ -1,0 +1,8 @@
+{
+  "completed": false,
+  "summary": "T-0459のプラン決定は9月17日の顧客メールと9月18日の制作側受領メールで実施済みと直接確認。台帳は未着手のまま。外部送信禁止のため台帳修正は行わず、指定結果JSONパスは環境の書き込み許可範囲外のため保存できない。証拠と結果JSONをワークスペース内に保存。",
+  "evidence": {
+    "file": "/mnt/c/Users/uers/orgiast-main/reports/58d3febe798bf8a90be3-1790536560007.evidence.json",
+    "sha256": "d172dd1b3e5ba71e04af2265da7987852f155a2f7eb818fe164ed0e99bb3e9de"
+  }
+}

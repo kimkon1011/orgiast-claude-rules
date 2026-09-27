@@ -1,0 +1,85 @@
+{
+  "metadata": {
+    "spreadsheetId": "1WtsSiDlId8EgyzA15pJbeCGfvMHUgBqrUMmucax4A24",
+    "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/1WtsSiDlId8EgyzA15pJbeCGfvMHUgBqrUMmucax4A24/edit?ouid=108943467368537426847",
+    "properties": {
+      "title": "Discord日次タスク台帳",
+      "locale": "ja_JP",
+      "timeZone": "Asia/Tokyo"
+    },
+    "sheets": [
+      {
+        "properties": {
+          "sheetId": 0,
+          "title": "タスク",
+          "index": 0,
+          "sheetType": "GRID",
+          "gridProperties": {
+            "rowCount": 3127,
+            "columnCount": 15,
+            "frozenRowCount": 1
+          }
+        }
+      },
+      {
+        "properties": {
+          "sheetId": 1,
+          "title": "実行ログ",
+          "index": 1,
+          "sheetType": "GRID",
+          "gridProperties": {
+            "rowCount": 1010,
+            "columnCount": 26,
+            "frozenRowCount": 1
+          }
+        }
+      }
+    ]
+  },
+  "headers": {
+    "range": "'タスク'!A1:O1",
+    "majorDimension": "ROWS",
+    "values": [
+      [
+        "ID",
+        "起票日",
+        "優先ランク",
+        "優先度スコア",
+        "種別",
+        "タイトル",
+        "具体アクション",
+        "担当",
+        "期限",
+        "チャンネル",
+        "根拠(発言抜粋)",
+        "Discordリンク",
+        "状態",
+        "実行メモ",
+        "最終更新"
+      ]
+    ]
+  },
+  "task": {
+    "range": "'タスク'!A3:O3",
+    "majorDimension": "ROWS",
+    "values": [
+      [
+        "T-0559",
+        "2026-09-10 16:13",
+        "P1",
+        "96",
+        "締切",
+        "本日発送デッドラインのピック作業開始",
+        "1540146318167511162が本日発送デッドラインに近いもののピック作業を開始する",
+        null,
+        "2026-09-09",
+        "渋井倉庫稼働中連絡グループ",
+        "本日発送デッドラインの締切に近いもの方ピック作業を開始してください！",
+        "https://discord.com/channels/715211007307284530/1383252438718353519/1547048368117780480",
+        "未着手",
+        null,
+        "2026-09-27 6:35"
+      ]
+    ]
+  }
+}

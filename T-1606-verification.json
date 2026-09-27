@@ -1,0 +1,78 @@
+{
+  "taskId": "T-1606",
+  "completed": false,
+  "verifiedAt": "2026-09-27T19:22:36.487Z",
+  "source": {
+    "file": "C:\\Users\\uers\\.claude\\open-work.md",
+    "line": 39,
+    "text": "P1 T-1606 搬入時のヤマト架電を対応（状態: 未着手）"
+  },
+  "liveSheet": {
+    "spreadsheetId": "1WtsSiDlId8EgyzA15pJbeCGfvMHUgBqrUMmucax4A24",
+    "headers": {
+      "range": "'タスク'!A1:O1",
+      "majorDimension": "ROWS",
+      "values": [
+        [
+          "ID",
+          "起票日",
+          "優先ランク",
+          "優先度スコア",
+          "種別",
+          "タイトル",
+          "具体アクション",
+          "担当",
+          "期限",
+          "チャンネル",
+          "根拠(発言抜粋)",
+          "Discordリンク",
+          "状態",
+          "実行メモ",
+          "最終更新"
+        ]
+      ]
+    },
+    "row": {
+      "range": "'タスク'!A7:O7",
+      "majorDimension": "ROWS",
+      "values": [
+        [
+          "T-1606",
+          "2026-09-16 6:36",
+          "P1",
+          "92",
+          "タスク",
+          "搬入時のヤマト架電を対応",
+          "担当者が搬入時のヤマトへの架電を行う",
+          null,
+          "2026-09-16",
+          "0918神奈川nxa日本マススクリーニング学会",
+          "搬入時のヤマトへの架電が明日まで期限なのですが、私の方が今日明日の電話対応が難しいです。対応お願いしても良いでしょうか？",
+          "https://discord.com/channels/715211007307284530/1382878379543494736/1549252577281974364",
+          "未着手",
+          null,
+          "2026-09-27 6:35"
+        ]
+      ]
+    }
+  },
+  "conclusion": "台帳上は未着手。担当者未設定。元Discord投稿および後続の完了報告はHTTP 403 Missing Accessにより検証不能。実際の架電完了・未完了は確定できない。外部送信禁止のため架電・確認依頼・台帳更新は実施しない。",
+  "nextAction": "対象チャンネルを閲覧できる担当者が2026-09-16の依頼と後続の対応報告を確認し、実績があれば台帳へ反映する。実績不明の場合は期限経過案件のため現在も架電が必要か確認してから対応する。",
+  "changes": {
+    "externalWrites": false,
+    "phoneCalls": false,
+    "permissionsChanged": false,
+    "tasksDeleted": false,
+    "repositoryCodeChanged": false
+  },
+  "resultDestinationLimitation": "指定先 C:\\Users\\uers\\.claude はこのセッションの書込許可範囲外。許可範囲内の作業ディレクトリに結果JSONを保存する。",
+  "discordRead": {
+    "checkedAt": "2026-09-27T19:22:02.626Z",
+    "url": "https://discord.com/api/v10/channels/1382878379543494736/messages?around=1549252577281974364&limit=100",
+    "http": 403,
+    "messages": {
+      "message": "Missing Access",
+      "code": 50001
+    }
+  }
+}

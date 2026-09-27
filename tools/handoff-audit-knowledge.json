@@ -148,5 +148,11 @@
     "route": "gh pr checks",
     "confidence": "high",
     "source": "handoff-audit-nightly:76af289ce1c8ed495db4dda9c421caf8f6a9768e4dee195ccc448930fd76b658"
+  },
+  {
+    "pattern": "PR merge を classifier 拒否を理由に user へ手渡す",
+    "route": "gh pr checks",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:6a5c078fc91d9162b1ba7bad7710b7e5e2e7898d4162083cf9dccd8bfc275bd6"
   }
 ]

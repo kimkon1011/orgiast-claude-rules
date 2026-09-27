@@ -64,11 +64,21 @@ export function hasSessionCloseEvidence(text, transcriptRaw = '') {
   return false;
 }
 
+// session-close SKILL.md §7.1: 閉じ際は「誰が・何を・どの順で」の 1./2./3.（close-session.mjs 実行 →
+// 新タブで Enter → このタブを ✕、/clear は使わない）を出す。この文面は定型3行フッターを持たないが、
+// 3行そのものが次の一手の指示なので block しない（block すると余分な1ターンでログが書き戻り、
+// 退避したはずのセッションが一覧に復活する／[[feedback-close-session-then-keep-talking-recreates-jsonl]]）。
+export function reportsCloseSteps(text) {
+  const body = String(text || '');
+  return /close-session\.mjs/.test(body) && /✕/.test(body) && /\/clear/.test(body);
+}
+
 export function judgeNextAction(text, transcriptRaw = '') {
   const source = String(text || '').trimEnd();
   if (!enabled()) return { decision: 'pass', reason: 'disabled' };
   if (source.length < MIN_ENFORCED_LENGTH) return { decision: 'pass', reason: 'short-response' };
   if (/[?？]$/.test(source)) return { decision: 'pass', reason: 'question' };
+  if (reportsCloseSteps(source)) return { decision: 'pass', reason: 'close-steps' };
 
   const footer = footerValues(source);
   if (!footer) {

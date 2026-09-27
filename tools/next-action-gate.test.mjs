@@ -181,3 +181,17 @@ test('200文字の境界と半角疑問符の除外を維持する', () => {
   assert.equal(judgeNextAction('あ'.repeat(200)).code, 'NEXT-ACTION-FOOTER');
   assert.equal(judgeNextAction(`${body}?`).reason, 'question');
 });
+
+// session-close SKILL.md §7.1: 閉じ際の「誰が・何を・どの順で」3行は、定型3行フッターを持たなくても
+// それ自体が次の一手の指示なので通す（block すると余分な1ターンでログが書き戻る）。
+test('§7.1の閉じ際3行はフッター無しでもpass', () => {
+  const closing = `${body}\n1. 私（Claude）が close-session.mjs --session abc123 を実行します（これがこのタブへの最後の送信です）\n2. 新しいタブで Enter を1回押してください\n3. 続けて、この古いタブを ✕ で閉じてください。**/clear は使わないでください**`;
+  const result = judgeNextAction(closing);
+  assert.equal(result.decision, 'pass', JSON.stringify(result));
+  assert.equal(result.reason, 'close-steps');
+});
+
+test('§7.1の3要素が欠けた長文は従来どおりblock', () => {
+  const partial = `${body}\nclose-session.mjs で退避します。✕ で閉じてください。`;
+  assert.equal(judgeNextAction(partial).code, 'NEXT-ACTION-FOOTER');
+});

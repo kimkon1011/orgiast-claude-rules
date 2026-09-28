@@ -124,5 +124,11 @@
     "route": "clasp run / コマンドキュー経由で Claude 側から実行。『▶実行してください』は違反",
     "confidence": "high",
     "source": "handoff-audit-nightly:1823bfafa8652b04ecd43c361fab9da5d73fbb16f2e0b38c9603ab0ce865de04"
+  },
+  {
+    "pattern": "GAS へのスクリプト反映（clasp push）が classifier で止まり user に可否確認を手渡す",
+    "route": "clasp run / コマンドキュー経由で Claude 側から実行。『▶実行してください』は違反",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:f08089d984a61133725ecafeeb70d8919594d3d04fb3bc32344aa1ce3b62b87d"
   }
 ]

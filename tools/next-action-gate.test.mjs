@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { judgeNextAction, SESSION_PHRASES } from './next-action-gate.mjs';
+import { judgeNextAction, reportsCloseSteps, SESSION_PHRASES } from './next-action-gate.mjs';
 
 const body = '調査と実装と検証が完了しました。'.repeat(15);
 const twoLineFooter = '次に kim がすること: なし\nこの後の自動進行: なし（完了）';
@@ -194,4 +194,10 @@ test('§7.1の閉じ際3行はフッター無しでもpass', () => {
 test('§7.1の3要素が欠けた長文は従来どおりblock', () => {
   const partial = `${body}\nclose-session.mjs で退避します。✕ で閉じてください。`;
   assert.equal(judgeNextAction(partial).code, 'NEXT-ACTION-FOOTER');
+});
+
+test('§7.1の3語に言及しただけ（番号付き3行が無い）長文は閉じ際とみなさない', () => {
+  const mention = `${body}\nclose-session.mjs と ✕ と /clear の扱いを直したレポートです。`;
+  assert.equal(reportsCloseSteps(mention), false);
+  assert.equal(judgeNextAction(mention).code, 'NEXT-ACTION-FOOTER');
 });

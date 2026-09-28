@@ -19,7 +19,7 @@ import { configuredMode as externalStateMode, evaluateExternalStateClaimFromRaw 
 import { evaluateReportedSymptomFromRaw } from './reported-symptom-gate.mjs';
 import { evaluateAudit } from './handoff-audit-gate.mjs';
 import { enabled as reportLengthEnabled, judgeReportLengthWithLlm } from './report-length-gate.mjs';
-import { hasRequiredFooter, judgeNextAction } from './next-action-gate.mjs';
+import { hasRequiredFooter, judgeNextAction, reportsCloseSteps } from './next-action-gate.mjs';
 import { judgeUserBurden, desktopLauncherPattern } from './user-burden-gate.mjs';
 import { findOutsourcedInvestigation, formatViolationMessage as formatSelfCheck, scanToolUsesFromRaw } from './self-check-before-asking-guard.mjs';
 import { findLocalDocLinks, formatViolationMessage as formatDocLink } from './doc-link-drive-guard.mjs';
@@ -96,6 +96,15 @@ export async function run(input, context, auditOptions = {}) {
   const base = { sessionId, blockedBy: [], reasonCodes: [], excerpt: String(assistantText || '').slice(0, 200) };
   if (input?.stop_hook_active) { const record = { ...base, verdict: 'skipped', reasonCodes: ['stop_hook_active'] }; ledger(record); return { record }; }
   if (!assistantText) { const record = { ...base, verdict: 'skipped', reasonCodes: [context.reason || 'no-assistant-text'] }; ledger(record); return { record }; }
+  // session-close SKILL.md §7.1 の閉じ際3行は、それ自体が user への次の一手の指示なので手渡し系ゲートを適用しない。
+  // 適用すると「ルール通りに閉じる」だけで FULL-STEPS／INVESTIGATION／USER-BURDEN が発火して余分な1ターンを強制し、
+  // タブが開いている限りプロセスが会話ログを書き戻して退避済みセッションが一覧に復活する
+  // （[[feedback-close-session-then-keep-talking-recreates-jsonl]]）。
+  if (reportsCloseSteps(assistantText)) {
+    const record = { ...base, verdict: 'pass', reasonCodes: ['close-steps'], auditEvidence: 'close-steps' };
+    ledger(record);
+    return { record };
+  }
   const evaluated = await evaluateGates({ input, assistantText, humanText: context.humanText, transcriptRaw: context.raw, sessionId }, auditOptions);
   const audit = evaluated.audit;
   const blockedBy = evaluated.results.map(({ name }) => name);

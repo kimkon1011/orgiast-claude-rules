@@ -70,7 +70,11 @@ export function hasSessionCloseEvidence(text, transcriptRaw = '') {
 // 退避したはずのセッションが一覧に復活する／[[feedback-close-session-then-keep-talking-recreates-jsonl]]）。
 export function reportsCloseSteps(text) {
   const body = String(text || '');
-  return /close-session\.mjs/.test(body) && /✕/.test(body) && /\/clear/.test(body);
+  if (!/close-session\.mjs/.test(body) || !/✕/.test(body) || !/\/clear/.test(body)) return false;
+  // §7.1 は必ず「1./2./3.」の番号付き3行で出す。3語に"言及しただけ"の長文レポート
+  // （閉じ際の仕組みを説明する完了報告など）を閉じ際と誤認しないための最低条件。
+  const numbered = step => new RegExp(`(?:^|\\n)[ \\t]*${step}[.．、)）]`).test(body);
+  return numbered('1') && numbered('2') && numbered('3');
 }
 
 export function judgeNextAction(text, transcriptRaw = '') {

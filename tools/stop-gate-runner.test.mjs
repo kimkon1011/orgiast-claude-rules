@@ -266,3 +266,29 @@ test('user command request from transcript is passed to burden gate', t => {
   const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8').trim());
   assert.ok(!record.blockedBy.includes('user-burden-gate'));
 });
+
+// session-close SKILL.md §7.1: 閉じ際の3行（close-session.mjs 実行 → 新タブで Enter → このタブを ✕、/clear は使わない）
+// は、それ自体が user への次の一手の指示。runner は手渡し系ゲートを適用せず pass させる
+// （適用するとルール通りに閉じるだけで余分な1ターンが発生し、ログの書き戻しで退避済みセッションが一覧に復活する）。
+const closeSteps = `本セッションの作業は完了しました。PR #585 は main に取り込まれ、回帰テストも 30 pass / 0 fail です。\n\nそれでは閉じます。次の順でお願いします。\n\n1. 私（Claude）が close-session.mjs --session abc123 を実行します（これがこのタブへの最後の送信です）\n2. kim さんは、自動で開いた新しいタブで Enter を1回押してください\n3. 続けて、この古いタブを ✕ で閉じてください。**/clear は使わないでください**\n\n理由: タブが開いている限りプロセスが会話ログを書き戻し、退避したはずのセッションが一覧に復活します。だから 1→2→3 の順で、3 の後にこのタブへ話しかけないでください。`;
+
+test('§7.1の閉じ際3行は手渡し系gateをすべて通す', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-close-steps-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const result = invoke(home, 'close-steps', closeSteps);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, '');
+  const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8').trim());
+  assert.equal(record.verdict, 'pass');
+  assert.deepEqual(record.reasonCodes, ['close-steps']);
+});
+
+test('§7.1の3語に言及しただけの番号無し長文は従来どおりblockする', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-close-mention-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const mention = `GitHub の画面で Merge をクリックしてください。close-session.mjs と ✕ と /clear の扱いは別途レポートします。${'補足の説明。'.repeat(12)}`;
+  const output = JSON.parse(invoke(home, 'close-mention', mention).stdout);
+  assert.equal(output.decision, 'block');
+  const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8').trim());
+  assert.notDeepEqual(record.reasonCodes, ['close-steps']);
+});

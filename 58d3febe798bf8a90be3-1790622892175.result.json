@@ -1,0 +1,8 @@
+{
+  "completed": false,
+  "summary": "T-0459は完了済みと原文メールで直接検証。9月17日に森下様が②片面内照式＋片面合成紙プランを選択し、9月18日に制作側が確認。台帳は未着手のまま。外部送信禁止のため台帳更新・メール送信は行っていない。 指定結果JSONの保存は未完了。書き込み許可範囲外のため保存できない: [Errno 30] Read-only file system: '/mnt/c/Users/uers/.claude/58d3febe798bf8a90be3-1790622892175.result.json'",
+  "evidence": {
+    "file": "/mnt/c/Users/uers/orgiast-main/t0459-1790622892175.evidence.json",
+    "sha256": "908189bcc1480b84002b103e82b4b40d26996bf107379c1065d8cb735c12f793"
+  }
+}

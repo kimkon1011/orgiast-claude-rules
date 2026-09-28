@@ -1,0 +1,49 @@
+{
+  "task": "T-0459",
+  "verifiedAt": "2026-09-28T19:17:10.013580+00:00",
+  "sourceFile": "C:\\Users\\uers\\.claude\\open-work.md",
+  "sourceLine": 37,
+  "spreadsheet": {
+    "id": "1WtsSiDlId8EgyzA15pJbeCGfvMHUgBqrUMmucax4A24",
+    "range": "タスク!A5:O5",
+    "state": "未着手",
+    "lastUpdated": "2026-09-28 6:34",
+    "directReadVerified": true
+  },
+  "gmail": {
+    "account": "seisaku-team@orgiast.jp",
+    "threadId": "1a06a695a66fa6e6",
+    "retrievedAt": "2026-09-28T19:16:16.408Z",
+    "messages": [
+      {
+        "id": "1a08992c3ca2143b",
+        "date": "Thu, 10 Sep 2026 13:28:11 +0900",
+        "from": "\"株式会社オージャスト 百瀬かなう\" <m.kanau@orgiast.jp>",
+        "subject": "Re: 今後のスケジュールのご連絡",
+        "body": "森下様\r\nお世話になっております。\r\n\r\n大変お待たせいたしました。\r\n\r\nブースの修正案をお送りいたします。\r\nそれぞれに狙いと懸念事項（ご決定の際にはデザイン的に配慮等した方がいい点）を整理いたしましたので\r\n合わせてご確認の上、*明日のAMまでをめどに*プランをお決めいただけましたら幸いです。\r\n（その後電気申請をいたします）\r\n\r\nデザイン面のサイズについては、事務所に確認している点など少々あり\r\nプラン決めていただいたあとに、正式なものをお伝えいたします。\r\n\r\nご多忙のところ恐れ入りますが\r\nどうぞよろしくお願いいたします。\r\n\r\n橋本\r\n"
+      },
+      {
+        "id": "1a0ae47bd2565de8",
+        "date": "Thu, 17 Sep 2026 07:32:00 +0000",
+        "from": "\"森下雄 Ｗ２株式会社\" <y.morishita@w2solution.co.jp>",
+        "subject": "Re: 今後のスケジュールのご連絡",
+        "body": "百瀬様　橋本様\r\n\r\nお世話になっております。\r\nW2森下です。\r\n\r\nお見積もりありがとうござました。\r\nいただいた内容、社内で確認いたしまして\r\nいただいた下記のプランにてお願いでいたします。\r\n\r\n② 通路壁面 片面内照式＋片面合成紙プラン｜税込 2,235,182円\r\n\r\nまた昨日のMTGでお見せしたデザインラフと、決定した内容などメモ書きしたPDFを添付いたしましたので、こちら別途ご確認いただけたらと思います。\r\n\r\n毎回、無理なご相談などさせていただき大変恐縮です。\r\n引き続きどうぞよろしくお願いいたします。\r\n\r\n​[https://res.public.onecdn.static.microsoft/assets/fluentui-resources/1.1.0/app-min/assets/item-types/24/pdf.png]JAPAN IT week2026秋_デザイン_c3.pdf<https://w2solutioncojp-my.sharepoint.com/:b:/g/personal/y_morishita_w2solution_co_jp/IQDX0_METOp_Q4gR71KuBqjkAYLllirlw7f4Dr4ApOermC4>​\r\n\r\n"
+      },
+      {
+        "id": "1a0b43911e4402fa",
+        "date": "Fri, 18 Sep 2026 20:13:34 +0900",
+        "from": "\"橋本あかね\" <akanengela@gmail.com>",
+        "subject": "Re: 今後のスケジュールのご連絡",
+        "body": "森下様\r\nお世話になっております。\r\n\r\nこちら、プランのご決定ありがとうございます。\r\nデザインをmicrosoftの添付でいただいているのですが\r\nあいにく開くことができず・・・\r\n大変恐縮ですが、PDFそのままメールに添付をいただいてもよろしいでしょうか？\r\n\r\nどうぞよろしくお願いいたします。\r\n\r\n橋本\r\n"
+      }
+    ]
+  },
+  "conclusion": "プラン決定は2026-09-17に完了済み。9月18日に制作側も確認。台帳の未着手表示は実態と不一致。",
+  "changes": {
+    "externalWrites": false,
+    "ledgerChanged": false,
+    "messagesSent": false,
+    "repositoryCodeChanged": false
+  },
+  "scope": "T-0459のみ。電気申請・データ受領等の別タスクの完了は判定対象外。"
+}

@@ -1,0 +1,8 @@
+{
+  "completed": false,
+  "summary": "T-0431は台帳で未着手。山佐氏本人の面談参加が必要。元メールは接続中のGmailで404、関連検索は0件のため実施済みか検証できず、完了扱いにしていない。外部変更なし。指定されたC:\\Users\\uers\\.claude配下は書き込み許可範囲外のため、作業フォルダに結果を代替保存した。",
+  "evidence": {
+    "file": "/mnt/c/Users/uers/orgiast-main/9e60239b3c090a0b0c6d-1790623040450.evidence.json",
+    "sha256": "d2eb24ab156194e327a0b4b8c713d44c3ef6e7f4b30a0ece58fc7d2d41d25b0f"
+  }
+}

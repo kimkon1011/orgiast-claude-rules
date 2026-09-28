@@ -31,6 +31,29 @@ test('3台帳で先送り・待機を検出し、無関係な行を除外、sinc
     assert.equal(source.total, 6);
   }
 });
+test('untilで上限を切れる（境界のts===untilは含めない）', t => {
+  const home = fixture(t);
+  const quotes = ['恒久修正は次セッションで行う'];
+  for (const source of scan({ home }).sources) {
+    const entries = [
+      { ts: '2026-09-24T00:00:00Z', sessionId: 'before', excerpt: quotes[0], violations: [{ quote: quotes[0] }] },
+      { ts: '2026-09-26T00:00:00Z', sessionId: 'boundary', excerpt: quotes[0], violations: [{ quote: quotes[0] }] }
+    ];
+    fs.writeFileSync(source.file, entries.map(JSON.stringify).join('\n') + '\n');
+  }
+  for (const source of scan({ home, until: '2026-09-26T00:00:00Z' }).sources) {
+    assert.equal(source.hits, 1);
+    assert.equal(source.rows[0].sessionId, 'before');
+  }
+  for (const source of scan({ home, since: '2026-09-24T00:00:00Z', until: '2026-09-26T00:00:00Z' }).sources) {
+    assert.equal(source.hits, 1);
+    assert.equal(source.rows[0].sessionId, 'before');
+    assert.equal(source.total, 2);
+  }
+  for (const source of scan({ home, since: '2026-09-26T00:00:00Z', until: '2026-09-26T00:00:00Z' }).sources) {
+    assert.equal(source.hits, 0);
+  }
+});
 test('台帳がなくても空のレポートを返す', t => {
   for (const source of scan({ home: fixture(t) }).sources) {
     assert.equal(source.hits, 0);
@@ -52,6 +75,18 @@ test('CLIはJSON・人間向け表示・不正ISOの終了コードを守る', t
   }
 });
 
+test('CLIの--untilは不正ISOでexit 2、正常値では窓を絞る', t => {
+  const home = fixture(t);
+  const run = args => spawnSync(process.execPath, [path.join(import.meta.dirname, 'permanent-fix-deferral-scan.mjs'), ...args], { encoding: 'utf8', env: { ...process.env, HOME: home, USERPROFILE: home } });
+  for (const value of ['invalid', '2026-02-30T00:00:00Z', '']) {
+    const result = run(['--until', value]);
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /Usage:/);
+  }
+  fs.writeFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'),
+    JSON.stringify({ ts: '2026-09-26T00:00:00Z', excerpt: '恒久修正は次セッションで行う' }) + '\n');
+  assert.match(run(['--until', '2026-09-26T00:00:00Z']).stdout, /stop-gate-runner-ledger\.jsonl: hits=0 \/ 1/);
+});
 test('既知の実違反原文を検出する', () => {
   const quotes = [
     'やりますか。これは配布の挙動を変えるので、勝手には進めません。',

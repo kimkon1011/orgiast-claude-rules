@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { mergeKnowledge, enqueueTodos, selectTargets, runNightly, readJsonl, promotionFile } from './handoff-audit-nightly.mjs';
+import { mergeKnowledge, enqueueTodos, selectTargets, runNightly, readJsonl, promotionFile, deferralLedgerFile, deferralTodo } from './handoff-audit-nightly.mjs';
 import { parseHandoff } from './auto-session.mjs';
 const item = { pattern: 'API 確認', route: 'gh api', confidence: 'high' };
 test('promotionFileはhome配下のgit管理外台帳を返す', () => {
@@ -81,6 +81,66 @@ test('夜間実行: candidates永続化・別応答で昇格・再実行冪等�
   fs.writeFileSync(knowledgeFile, '[]'); // bootstrapのreset相当でも台帳は残る。
   assert.equal((await runNightly(options)).promoted, 0);
   assert.equal(fs.readFileSync(promotionFile(home), 'utf8'), persisted);
+});
+function deferralHome(t, lines = []) {
+  const home = fs.mkdtempSync(path.join(import.meta.dirname, '.audit-nightly-test-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const dir = path.join(home, '.claude'); fs.mkdirSync(dir);
+  const knowledgeFile = path.join(home, 'knowledge.json'); fs.writeFileSync(knowledgeFile, '[]');
+  if (lines.length) fs.writeFileSync(path.join(dir, 'handoff-audit-ledger.jsonl'), lines.map(JSON.stringify).join('\n'));
+  return { home, dir, knowledgeFile, options: { home, now: new Date(2026, 8, 12, 10), knowledgeFile, ask: async () => ({ verdict: 'pass', violations: [], learned: [] }) } };
+}
+test('先送り文を検出すると原文とセッションID入りのTODOを積み、台帳に窓と実測行を残す', async t => {
+  const quote = '恒久修正は次セッションで行う';
+  const ts = new Date(2026, 8, 11, 10).toISOString();
+  const filed = deferralHome(t, [{ ts, sessionId: 'deadbeefcafe', verdict: 'pass', fired: false, excerpt: quote, violations: [{ quote }] }]);
+  const result = await runNightly(filed.options);
+  const handoff = fs.readFileSync(path.join(filed.dir, 'next-session.md'), 'utf8');
+  assert.ok(handoff.includes(quote));
+  assert.ok(handoff.includes('deadbeef'));
+  assert.equal(result.deferral.hits, 1);
+  assert.equal(result.deferral.total, 1);
+  assert.equal(result.deferral.byPattern.P1, 1);
+  assert.equal(result.deferral.enqueued, 1);
+  assert.equal(result.deferral.error, undefined);
+  const ledger = readJsonl(deferralLedgerFile(filed.home));
+  assert.equal(ledger.filter(r => r.kind === 'window').length, 1);
+  const hits = ledger.filter(r => r.kind === 'hit');
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].source, 'handoff-audit-ledger.jsonl');
+  assert.equal(hits[0].match, quote);
+});
+test('同じ窓で再実行してもTODOは増えず、窓の実測行だけが積まれる', async t => {
+  const quote = '恒久修正は次セッションで行う';
+  const ts = new Date(2026, 8, 11, 10).toISOString();
+  const filed = deferralHome(t, [{ ts, sessionId: 'deadbeefcafe', verdict: 'pass', fired: false, excerpt: quote, violations: [{ quote }] }]);
+  await runNightly(filed.options);
+  const before = fs.readFileSync(path.join(filed.dir, 'next-session.md'), 'utf8');
+  assert.equal(parseHandoff(before).todos.length, 1);
+  const second = await runNightly(filed.options);
+  assert.equal(fs.readFileSync(path.join(filed.dir, 'next-session.md'), 'utf8'), before);
+  assert.equal(second.deferral.enqueued, 0);
+  const ledger = readJsonl(deferralLedgerFile(filed.home));
+  assert.equal(ledger.filter(r => r.kind === 'hit').length, 1);
+  assert.equal(ledger.filter(r => r.kind === 'window').length, 2);
+});
+test('先送り文が無い窓でも hits:0 の実測行を残す', async t => {
+  const filed = deferralHome(t, [{ ts: new Date(2026, 8, 11, 10).toISOString(), sessionId: 'feedface', verdict: 'pass', fired: false, excerpt: '修正が完了しました' }]);
+  const result = await runNightly(filed.options);
+  assert.equal(result.deferral.hits, 0);
+  assert.equal(result.deferral.enqueued, 0);
+  const windows = readJsonl(deferralLedgerFile(filed.home)).filter(r => r.kind === 'window');
+  assert.equal(windows.length, 1);
+  assert.equal(windows[0].hits, 0);
+  assert.equal(windows[0].total, 1);
+  assert.equal(fs.existsSync(path.join(filed.dir, 'next-session.md')), false);
+});
+test('deferralTodoのpatternは実例を80文字で切って含む', () => {
+  const todo = deferralTodo({ ts: '2026-09-26T00:00:00Z', sessionId: 'abcdefgh12345678', pattern: 'P2', match: 'あ'.repeat(200) });
+  assert.ok(todo.pattern.includes('あ'.repeat(80)));
+  assert.ok(!todo.pattern.includes('あ'.repeat(81)));
+  assert.equal(todo.pattern, `恒久修正の先送り文を検出（2026-09-26T00:00:00Z / abcdefgh / P2）「${'あ'.repeat(80)}」`);
+  assert.match(todo.route, /abcdefgh12345678/);
 });
 // route が重複すると enqueueTodos の重複スキップに掛かり、同じ route を持つ pattern の
 // うち片方の監査TODOが黙って落ちる（2026-09-25 に「外部サービスの課金・購入画面の操作」が

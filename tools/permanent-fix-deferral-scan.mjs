@@ -41,7 +41,7 @@ export function detect(text) {
 const DEFAULT_SINCE = '1970-01-01T00:00:00Z';
 const NAMES = ['stop-gate-runner-ledger.jsonl', 'handoff-audit-ledger.jsonl', 'handoff-audit-nightly-ledger.jsonl'];
 
-export function scan({ home = os.homedir(), since = DEFAULT_SINCE } = {}) {
+export function scan({ home = os.homedir(), since = DEFAULT_SINCE, until = null } = {}) {
   const sources = NAMES.map((name, index) => {
     const file = path.join(home, '.claude', name);
     let lines = [];
@@ -52,7 +52,9 @@ export function scan({ home = os.homedir(), since = DEFAULT_SINCE } = {}) {
     for (const line of lines) {
       let entry;
       try { entry = JSON.parse(line); } catch { continue; }
-      if (!entry || !(Date.parse(entry.ts) >= Date.parse(since))) continue;
+      if (!entry) continue;
+      const at = Date.parse(entry.ts);
+      if (!(at >= Date.parse(since)) || (until !== null && !(at < Date.parse(until)))) continue;
       const text = index === 0 ? String(entry.excerpt ?? '')
         : (Array.isArray(entry.violations) ? entry.violations : []).map(v => v?.quote ?? '').join(' ~ ');
       const found = detect(text)[0];
@@ -76,17 +78,18 @@ function validIso(value) {
   return date.toISOString().slice(0, 10) === value.slice(0, 10);
 }
 export function main(args = process.argv.slice(2)) {
-  let since = DEFAULT_SINCE, json = false;
+  let since = DEFAULT_SINCE, until = null, json = false;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--json') json = true;
     else if (args[i] === '--since' && validIso(args[i + 1] ?? '')) since = args[++i];
+    else if (args[i] === '--until' && validIso(args[i + 1] ?? '')) until = args[++i];
     else {
-      console.error('Usage: node tools/permanent-fix-deferral-scan.mjs [--since <ISO>] [--json]');
+      console.error('Usage: node tools/permanent-fix-deferral-scan.mjs [--since <ISO>] [--until <ISO>] [--json]');
       return 2;
     }
   }
   try {
-    const report = scan({ since });
+    const report = scan({ since, until });
     if (json) console.log(JSON.stringify(report, null, 2));
     else for (const source of report.sources) {
       console.log(`${source.name}: hits=${source.hits} / ${source.total}`);

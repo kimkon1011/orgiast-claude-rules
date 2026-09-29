@@ -136,5 +136,11 @@
     "route": "clasp run / コマンドキュー経由で Claude 側から実行。『▶実行してください』は違反",
     "confidence": "high",
     "source": "handoff-audit-nightly:2678ba73df571eed3b5b26ceba86de8b649130f835f8cb33a63c0179ef0bae9c"
+  },
+  {
+    "pattern": "GAS を再 push して再デプロイする",
+    "route": "clasp run / コマンドキュー経由で Claude 側から実行。『▶実行してください』は違反",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:f6a02ffdf3c68c3088a0823d7c8523ddfe64ed1c6d4f73a85395906ce8d51a39"
   }
 ]

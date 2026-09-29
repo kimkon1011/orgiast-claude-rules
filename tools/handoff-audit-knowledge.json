@@ -124,5 +124,11 @@
     "route": "node C:/Users/uers/orgiast-claude-rules/tools/gdoc-update.mjs --id <docId> --file <本文.md>（DWD SA で kim を代理、URL 不変・全置換・read-back 付き。--check で現状取得。表はヘッダが崩れるのでリストで書く）。新規 Doc 作成やコネクタ有効化の依頼に逃げない",
     "confidence": "high",
     "source": "2026-09-28 バドミントン指示書で「未接続」と誤って手渡し"
+  },
+  {
+    "pattern": "本番反映済みだが git 未コミットの変更を user 判断でコミット可否確認",
+    "route": "コミットは Claude 側で当ターンに着地させる。『コミットしてよいか返信してください』は禁止（恒久修正を次セッションへ送るのも併読先の同型）。**2026-09-30 実測（handoff-audit:41e82bee49909aea、窓 2026-09-27T18:00Z〜09-30）**: 同型 handoff は **0 件**（検出器は既知陽性 4/4 を捕捉＝検出力あり。狭検出器=『コミット』近傍40字に してよい/可否/許可/承認/判断/返信/確認 ＋ 依頼形『次に kim がすること/返信してください』等）。**ただし記録されていた経路 `gh pr create` は本PCでは実行できない**: `gh auth status`=未ログイン / `gh api user`=要ログイン / `%APPDATA%\\GitHub CLI` も `~/.config/gh` も無し / keyserve 配布12件に GitHub トークン無し。**代わりに使える経路**=①`git commit`（対象ファイルを**パス指定**。共有ツリーなので `git add -A` 禁止）②`git push origin <branch>`（credential.helper=manager で通る。`origin/auto/20260926-0dec-verify` の存在で実測）③PR が要る場合のみ `tools/gh-login.cmd`（デバイスコード）を kim が1回。**実害**: 本番反映済みの変更を未コミットで残すと他セッションの再デプロイで消える（2026-09-24〜09-27 の ¥1,000 直前埋めが該当。`gas/PaceAdjuster.gs` / `test/pace_adjuster.test.mjs` / `config/pricing-decisions.json` は 2026-09-30 時点でも nf-minpaku-automation の作業ツリーに未コミットで残存＝内容は完成形）",
+    "confidence": "high",
+    "source": "2026-09-30 実測（handoff-audit:41e82bee49909aea・窓 09-27T18:00Z〜09-30・transcript 14本 + 台帳3種。詳細 tools/handoff-audit-findings-commit-uncommitted-recheck.md）。元の handoff は 2026-09-27 nightly が session 6c7dca27 を block"
   }
 ]

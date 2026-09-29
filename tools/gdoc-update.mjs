@@ -15,6 +15,9 @@
  *   node <このファイル> --id <docId> --file <本文.md> --dry     # 認証と権限だけ確認して書き込まない
  *   node <このファイル> --id <docId> --check                    # 現在の本文の先頭を表示（読み取りのみ）
  *
+ * 常用例（標準設定書: 正本はリポジトリ直下の STANDARD-PC-SETUP.md。md を直したら必ずこれで Doc を揃える）:
+ *   node tools/gdoc-update.mjs --id 1p9_YkCIXDRbGrFsRDbtNxHVmZ7AglDOqBlamn2Ij4NA --file STANDARD-PC-SETUP.md
+ *
  * オプション:
  *   --key <path>      サービスアカウント JSON（既定: 下記 DEFAULT_KEY）
  *   --subject <mail>  代理するユーザー（既定: kim@orgiast.jp）

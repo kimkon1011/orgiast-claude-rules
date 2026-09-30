@@ -26,6 +26,16 @@ function Write-NightlyStepResult([string]$Step, [int]$ExitCode, $Output, [string
     Write-Warning ("nightly-batch: " + $Step + " exited " + $ExitCode + ': ' + ($reason))
 }
 function Finish-Nightly([int]$Code) {
+    # Run once after the nightly jobs, including empty-queue and error exits.
+    # Existing PCs execute this synced script through nightly-bootstrap as well.
+    if ($script:staleWorkReady -and -not $script:staleWorkRan) {
+        $script:staleWorkRan = $true
+        try {
+            $watchOutput = @(& $node.Source (Join-Path $PSScriptRoot 'stale-work-watch.mjs') 2>&1)
+            $watchExit = $LASTEXITCODE
+            Write-NightlyStepResult 'stale-work-watch' $watchExit $watchOutput
+        } catch { Write-NightlyLog 'stale-work-watch' ('error:' + $_.Exception.Message) }
+    }
     $parts = @($summary.Keys | ForEach-Object { $_ + '=' + $summary[$_] })
     Write-NightlyLog 'サマリ' ("nightly-batch 完了: " + ($parts -join ', '))
     if ($script:pidFile -and (Test-Path -LiteralPath $script:pidFile)) { Remove-Item -LiteralPath $script:pidFile -Force -ErrorAction SilentlyContinue }
@@ -77,6 +87,7 @@ try {
 
     $node = Get-Command node -ErrorAction SilentlyContinue
     if (-not $node) { $summary['node'] = 'error:nodeが見つからない'; Write-NightlyLog 'node確認' 'error:nodeが見つからない'; Finish-Nightly 1 }
+    $script:staleWorkReady = $true
     Write-NightlyLog 'node確認' 'ok'
     try {
         $rotationOutput = @(& $node.Source (Join-Path $PSScriptRoot 'next-session-rotate.mjs') 2>&1)

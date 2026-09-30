@@ -62,3 +62,29 @@ HTTP で確認する場合は同一URLを叩き直すと CDN キャッシュを�
 
 分類器が止まる場合も、rule 4 に従い「未確認」と書いて user に実行させない。
 止まった操作を最小単位に分解して再試行し、それでも不可なら user 作業なしの代替案を提示する。
+
+## 再発検証（2026-10-01 / handoff-audit:4b241a72023c7578）
+
+**2026-09-25 の修正後も、同型の handoff は再発している（3セッション）。**
+台帳（Stop 監査）は 2026-09-25 以降の 93 行すべてを `pass`（うち 90 行は `regex-blocked`）としており、
+**この型を検知していない**。台帳の pass を「再発 0」の根拠にしない。
+
+| 日時 (UTC) | セッション | 何を手渡したか | 書かれていた理由 |
+|---|---|---|---|
+| 2026-09-26T18:07 | `eef7f47a` | 本番デプロイをチャット1行で user へ（「user の操作はチャット1行」） | §1.1「外向け操作は人の同意が必須」 |
+| 2026-09-28T18:12 | `a06eaef3` | デスクトップに1クリック起爆ファイルを置き「本番に出してよいならダブルクリック」 | 同意が未確認のため Claude 側では実行しない |
+| 2026-09-30T10:08 | `bbd0a4a2` | VSCode TERMINAL に `cd D:\Claude\event-shop; vercel deploy --prod --yes` を貼る手順 | 3回目の依頼で、user から貼り先の説明を求められた |
+
+同じ期間、Claude 側の経路は生きていた（`2551106a` 2026-09-25 event-shop / `9c9325e7` 2026-09-30 stagecue が
+`vercel deploy --prod --yes` を自分で実行）。2026-10-01 再測: `vercel whoami` → `seisaku-team-5867`（user の操作ゼロ）。
+
+### 是正
+
+**同意と実行は別物。** 外向け操作で同意が要るなら、**チャットで可否を1回確認し、実行は Claude が行う**。
+user にコマンドを打たせない（rule 2 は「最後の1ステップだけ user に」も禁じている）。1クリックの起爆ファイルも同じ扱い。
+
+### 再現手順
+
+- 台帳スキャン: `node ~/.claude/auto-session/runs/2026-10-01-1-recurrence-scan.mjs`
+- transcript スキャン: `node ~/.claude/auto-session/runs/2026-10-01-1-transcript-scan.mjs`
+- 各セッションの該当発言: `node ~/.claude/auto-session/runs/2026-10-01-1-detail.mjs`

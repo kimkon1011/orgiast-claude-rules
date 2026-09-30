@@ -57,3 +57,33 @@ export const DEFAULT_REPO_MAP = {
 - 文字化け 2 件の中継元エンコード調査（原票の片側で破損。`JSON.stringify` でも置換文字のみで同定不能）
 - GAS 系 5 アプリの原票実測（本番試験投稿の可否判断を含む）
 - aujust の共通監視要否の判断
+
+## 6. GAS 系アプリの原票実測（2026-10-01・ソース読解）
+
+§5「GAS 系 5 アプリの原票実測」をソース読解でどこまで確定できるか実測した結果を記録する。
+
+**事実 1 — 原票（記録先）はコードに存在しない。**
+5 アプリ（イベントショップレンタル／決算書リンク取込／稼働管理点検／トライアル合格審査／W列GAS）はいずれも、共通フォーム基盤 `FeedbackRelay.js`（GAS 版）を各プロジェクトに内蔵している。記録先はコードに書かれず、Script Property から読む:
+
+- `FEEDBACK_LOG_SS_ID`: 記録先スプレッドシート ID（未設定ならアクティブなスプレッドシート。シート名は既定 `不具合要望`、無ければ自動作成）
+- `FEEDBACK_RELAY_URL` / `FEEDBACK_RELAY_SECRET`: 全社共通の中継の POST 先とシークレット
+- `FEEDBACK_APP_NAME`: 呼び出し側が省略したときの既定アプリ名
+- 根拠: `orgiast-kado-inspect/FeedbackRelay.js:44-48`（config 読取）、同 `:345-355`（優先順位 `payload 指定 > FEEDBACK_LOG_SS_ID > アクティブSS`）、`kessan-link-importer/MediaRadarRelay.gs:23`（URL/SECRET 未設定なら throw）
+
+⇒ **「原票実測」はソース読解では完了できない。** 各 GAS プロジェクトの Script Properties を読む（clasp pull・Apps Script API・エディタ）か、設置者への確認が必要。原票が未確認なのは調査漏れではなく、設計上コードからは辿れないため。
+
+**事実 2 — フォーム送信は共通の 1 エンドポイントに集約されている。**
+少なくとも次の 2 アプリは、同一の共通フォーム・エンドポイントへ送る（app 名は UTF-8 URL エンコード済み）:
+
+`.../macros/s/AKfycbz…lC/exec?form=feedback&app=<app名>`
+
+- `トライアル合格審査アプリ/index.html:60`（`app=トライアル合格審査アプリ`）
+- `w-col-gas/コード.js:74-76`（`app=w-col-gas 案件管理`、`src=` に自スプレッドシート URL）
+
+この共通エンドポイントは `FeedbackRelay_serveForm`（doGet `?form=feedback`）を公開する 1 デプロイ。提出時は各アプリの `FeedbackRelay` が `FEEDBACK_RELAY_URL` へ POST する。
+
+**事実 3 — リレー接続済みの送信は「沈黙」ではなく「未マッピング」として観測される。**
+`tools/feedback-to-issues.mjs` は共通リレーの pending を読み、`app_name` が `DEFAULT_REPO_MAP` に無い件を `未マッピング` として記録する（`:259-263`）。したがってリレーに接続済みのアプリの投稿は、行き先 repo が未登録でも**取込には現れる**。§4 の「未監視 6 アプリ＝監視対象外のため滞留検知が発生しない」は、リレー未接続のアプリにのみ当てはまる（要再点検）。
+
+**次の実測手順（Script Properties 読み）で確定できること:**
+各 GAS プロジェクトの Script Properties から `FEEDBACK_LOG_SS_ID`（原票 Sheet）・`FEEDBACK_RELAY_URL`・`FEEDBACK_APP_NAME` を記録すれば、原票と送信 app 名が確定する。§4 の未マッピング 2 件（文字化け）についても、送信側が付ける app 名の実値が分かり次第、同定できる可能性がある。

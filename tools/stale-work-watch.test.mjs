@@ -18,6 +18,7 @@ function setup(t, { prs = [], refs = '', ghFail = false, mergeFail = false } = {
   const calls = { exec: [], merge: [], notify: [] };
   const deps = {
     exec(file, args, opts) {
+      assert.equal(opts.windowsHide, true);
       calls.exec.push({ file, args, opts });
       if (file === 'git' && args[0] === 'for-each-ref') return refs;
       if (file === 'gh' && args.includes('list')) { if (ghFail) throw new Error('gh unavailable'); return JSON.stringify(prs); }
@@ -130,6 +131,7 @@ test('real merge helper is repository-bound and emits no branch deletion', async
   const mutations = [];
   f.deps.merge = mergePr;
   f.deps.exec = (file, args, opts) => {
+    assert.equal(opts.windowsHide, true);
     if (args.includes('list') || args[0] === 'api' || file === 'git') return originalExec(file, args, opts);
     assert.deepEqual(args.slice(0, 2), ['-R', 'kimkon1011/orgiast-claude-rules']);
     if (args.includes('checks')) return JSON.stringify([{ name: 'test', bucket: 'pass' }]);

@@ -160,7 +160,7 @@ export async function runWatch({ home = os.homedir(), repo = ROOT, staleDays = 3
     try {
       // Bind gh's implicit repository to the same repository used for collection.
       const merged = await merge({ pr: item.number, repo, keepBranch: true }, {
-        exec: (file, args, opts) => exec(file, file === 'gh' ? ['-R', REPO, ...args] : args, opts),
+        exec: (file, args, opts) => exec(file, file === 'gh' ? ['-R', REPO, ...args] : args, { ...opts, windowsHide: true }),
       });
       if (merged?.state !== 'MERGED' || !merged.mergedAt) throw new Error('Merge read-back not confirmed');
       item.action = 'merged';

@@ -1,9 +1,9 @@
 [
   {
     "pattern": "Google 系プロパティ(GA4/Search Console/GTM)の有無確認",
-    "route": "DWD サービスアカウント(kim impersonate)で analyticsadmin/webmasters/tagmanager API を直接照会（tools/google-property-check.mjs、読み取り専用・追加権限不要）。Claude 履歴の Grep は証拠にならない。分類器で止まるなら『未確認』と書く。**2026-09-20 実測**: GA4 ok(accounts 17) / Search Console ok(sites 12) は追加作業ゼロで通る。**GTM だけ errorKind=scope_not_delegated(unauthorized_client)** = Admin Console の DWD に tagmanager.readonly が未登録。GTM を読む場合のみ kim の1アクション（Admin Console → ドメイン全体の委任 → SA client_id に scope 追加）が要る",
+    "route": "DWD サービスアカウント(kim impersonate)で analyticsadmin/webmasters/tagmanager API を直接照会（tools/google-property-check.mjs、読み取り専用・追加権限不要）。Claude 履歴の Grep は証拠にならない。分類器で止まるなら『未確認』と書く。**2026-09-20 実測**: GA4 ok(accounts 17) / Search Console ok(sites 12) は追加作業ゼロで通る。**GTM だけ errorKind=scope_not_delegated(unauthorized_client)** = Admin Console の DWD に tagmanager.readonly が未登録。GTM を読む場合のみ kim の1アクション（Admin Console → ドメイン全体の委任 → SA client_id に scope 追加）が要る。**前提（2026-10-01 実測）**: この照会は SA 鍵のある PC でしか動かない。DESKTOP-PPD5V8I では鍵が無く `node tools/google-property-check.mjs` は exit 2（`SA key not found`）で終わる。不在は5経路で確認済み＝①既定パス `~/Downloads/CLAUDE.md配布/aujust-sales-automation/.gcp/sheets-sa.json` ②環境変数 GOOGLE_SA_KEY / GOOGLE_APPLICATION_CREDENTIALS（プロセス・Machine・User）③keyserve 配布12ファイル ④`C:\\Users\\kimko` 配下の再帰探索 ⑤Windows 資格情報マネージャ。**鍵の無い PC では GA4/GSC/GTM を『未確認』で止める**（exit 2 は分類器の拒否でも API 拒否でもない＝権限の話ではない。推測で埋めない）。ただし**鍵の有無に関わらず再発監査はできる**: `node tools/handoff-audit-oauth-consent-scan.mjs --since <日付>`（読み取り専用）が台帳 `~/.claude/handoff-audit-ledger.jsonl` と `~/.claude/projects/*/*.jsonl` を『Google プロパティ語 ∧ OAuth 同意語 ∧ 他ベンダー（GitHub device flow / codex login 等は正当な手渡しなので除外）』で走査する。報告前に `--selftest`（陽性2・陰性3）を通すこと（2026-10-01 実測: 窓 2026-09-20〜10-01・台帳 347 行・transcript 35,073 turn で再発 0 件、対照 5/5）。詳細: tools/handoff-audit-findings-oauth-first-consent-recheck.md",
     "confidence": "high",
-    "source": "2026-09-10 TETSUKO Search Console 誤判定 / 2026-09-20 実測"
+    "source": "2026-09-10 TETSUKO Search Console 誤判定 / 2026-09-20 実測 / 2026-10-01 再検証（鍵の無い PC の前提と再発走査手順を追記）"
   },
   {
     "pattern": "Search Console の所有者追加",

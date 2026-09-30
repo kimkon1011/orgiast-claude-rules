@@ -12,6 +12,26 @@
       "createdAt": "2026-09-29T09:48:39.219Z",
       "expiresAt": "2026-10-06T09:48:39.219Z",
       "timeoutSeconds": 900
+    },
+    {
+      "id": "run-20260930-222058-1448",
+      "kind": "run",
+      "targets": "kimko-PC",
+      "why": "stale_report 自動復旧",
+      "task": "fleet-sheet-report",
+      "createdBy": "uers",
+      "createdAt": "2026-09-30T22:20:58.803Z",
+      "expiresAt": "2026-10-02T22:20:58.803Z"
+    },
+    {
+      "id": "run-20260930-222059-1981",
+      "kind": "run",
+      "targets": "nishi-PC",
+      "why": "stale_report 自動復旧",
+      "task": "fleet-sheet-report",
+      "createdBy": "uers",
+      "createdAt": "2026-09-30T22:20:59.459Z",
+      "expiresAt": "2026-10-02T22:20:59.459Z"
     }
   ]
 }

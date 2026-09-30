@@ -1,0 +1,8 @@
+{
+  "completed": false,
+  "summary": "T-2573の原文・現行台帳・根拠メールを直接確認。9/24に会場回答を受領済みで、台帳には会場名誤記がある。5会場分割、前日19時以降仕込み、予算の確認および詳細見積が残る。外部送信・台帳更新は未実施。指定の.claude配下は環境の書き込み許可範囲外のため、このJSONは作業フォルダに代替保存した。",
+  "evidence": {
+    "file": "/mnt/c/Users/uers/orgiast-main/reports/t2573-20261001/verification.json",
+    "sha256": "f8779463da5098c3be2e09d0a88b3a7c4a23dd5c30dd039ddc23ce373dc97505"
+  }
+}

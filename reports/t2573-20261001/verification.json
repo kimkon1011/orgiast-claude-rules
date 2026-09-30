@@ -1,0 +1,235 @@
+{
+  "task": "T-2573",
+  "verifiedAt": "2026-09-30T19:24:12.734223+00:00",
+  "source": {
+    "file": "/mnt/c/Users/uers/.claude/open-work.md",
+    "sha256": "2ac0ff9b15f3af71f02a62a6443e0e0483d8e77d4cdefc27726dbdda59dd0025",
+    "line": 43,
+    "text": "- P1 T-2573 会場空き状況等の回答依頼（状態: 未着手）"
+  },
+  "ledger": {
+    "markdown": "| Row | ID | 起票日 | 優先ランク | 優先度スコア | 種別 | タイトル | 具体アクション | 担当 | 期限 | チャンネル | 根拠(発言抜粋) | Discordリンク | 状態 | 実行メモ | 最終更新 |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n|  | ID | 起票日 | 優先ランク | 優先度スコア | 種別 | タイトル | 具体アクション | 担当 | 期限 | チャンネル | 根拠(発言抜粋) | Discordリンク | 状態 | 実行メモ | 最終更新 |\n| 11 | T-2573 | 2026-09-24 6:30 | P1 | 92 | タスク | 会場空き状況等の回答依頼 | ホテルニューオータニ大阪が本日中に会場空き状況と予約情報を回答する |  | 2026-09-23 | ✉ ザ・ガーデンオリエンタル大阪 | ご多用のところ恐れ入りますが、可能でしたら本日中にご回答を頂けますと大変助かります。 | https://mail.google.com/mail/u/seisaku-team@orgiast.jp/#all/1a0ce8882359ae7f | 未着手 |  | 2026-09-30 6:35 |",
+    "scanned_range": "A1:O3300",
+    "scanned_row_count": 3300,
+    "scanned_column_count": 15,
+    "matched_row_count": 1,
+    "returned_matching_row_count": 1,
+    "truncated": false,
+    "truncated_rows": false,
+    "truncated_columns": false,
+    "truncated_row_count": 0,
+    "truncated_column_count": 0
+  },
+  "sourceMessages": [
+    {
+      "id": "1a0d24b10d46a2fc",
+      "threadId": "1a0d17524e442eda",
+      "labels": [
+        "YELLOW_STAR",
+        "IMPORTANT",
+        "STARRED",
+        "CATEGORY_PERSONAL",
+        "INBOX"
+      ],
+      "headers": [
+        {
+          "name": "From",
+          "value": "\"橋本雅子\" <masako.hashimoto@plandosee.co.jp>"
+        },
+        {
+          "name": "Date",
+          "value": "Thu, 24 Sep 2026 16:21:31 +0900"
+        },
+        {
+          "name": "Subject",
+          "value": "Re: 【お問い合わせについて】THE GARDEN ORIENTAL OSAKA"
+        },
+        {
+          "name": "To",
+          "value": "seisaku-team@orgiast.jp"
+        }
+      ],
+      "body": "株式会社オージャスト\r\n佐藤 優奈 様\r\n\r\n平素より大変お世話になっております。\r\nTHE GARDEN ORIENTAL OSAKA 営業担当の橋本雅子と申します。\r\n\r\n先ほど、荒巻より確認のメールを送らせて頂きましたが\r\nお急ぎのご要件もあるかと思いますので、続けてご案内いたします。\r\n\r\nまず、\r\n1. 収容人数・会場レイアウトについて\r\n2. 前日仕込み・準備のお時間について\r\nに関しては、荒巻よりお送りしたメールをご確認願います。\r\n\r\n佐藤様よりご質問頂きました内容に関して、\r\n以下青字にて回答いたします。\r\n\r\nご確認のほど、よろしくお願いいたします。\r\n\r\n【ご確認いただきたい事項】\r\n1. 上記日程の空き状況\r\n→2027年11月8日（月）は現時点で空きがございますので、ご案内可能です。\r\n\r\n2. 予約受付の開始時期と申込方法（抽選・先着の別）\r\n→先着順となり、現在佐藤様のお問合せを最優先にて承ることが可能でございます。\r\n\r\n3. 仮押さえの可否、保持期間、キャンセル料の発生時期\r\n→1週間の無料仮押さえが可能でございます。\r\nそれ以降の延長も随時ご相談を承ります。\r\nキャンセル料の発生は、正式にご予約を確定頂いてからとなります。\r\n\r\n4. 500名（最大550名）での使用可否とレイアウト例\r\n→全館貸し切りとなり、5会場に分かれてのご利用となります。\r\nご了承いただけましたら、ぜひ詳しくご案内いたします。\r\n\r\n5. 外部ケータリングの持ち込み可否と持込料\r\n→内容によって、ご相談を承ります。\r\nなお、衛生的な観点より飲食物をお持ち込みの場合は\r\nお持ち込み承諾書へのサインを頂戴しております。\r\n\r\n\r\n6. 屋内特効（スモーク・紙吹雪等）の可否と条件\r\n→お受けすることが可能でございますが、\r\n詳細をお聞かせ頂き、危険が発生する場合にはご遠慮頂く場合がございます。\r\n\r\n7. 天井高、吊り込みの可否、電源容量\r\n→各会場によって異なりますので、改めてご案内出来ればと存じます。\r\n\r\n8. 指定業者（電気・音響・装飾・警備）の有無\r\n→音響設備は、パートナー様企業がございますが、\r\nお持ち込みも可能でございます。\r\n\r\n9. 前日搬入・仕込みの可否と追加料金\r\n→前日のお時間によって、料金が異なりますが、可能でございます。\r\n\r\n10. 大型バス10〜13台の乗降スペースおよび待機場所\r\n→常駐待機出来ますのは、2台でございます。\r\nその他の車輌は別の場所に、回送をお願いしております。\r\n\r\n11. 会場使用料および付帯費用の概算\r\n→上記ご了承頂けましたら、改めて算出させて頂きます。\r\n\r\n12. 主催企業はアミューズメント事業（パチンコホール運営）を営む法人です。業種による利用制限の有無\r\n→業種による制限はございませんが\r\n周辺住居への騒音や、暴力団及び暴力団と関係する企業、団体・関係者のご利用はご遠慮頂いております。\r\n\r\n\r\n\r\n>\r\n> ---------- Forwarded message ---------\r\n> From: THE GARDEN ORIENTAL OSAKA_マーケティング＆セールス <party-tgoo@plandosee.co.jp>\r\n> Date: 2026年9月24日(木) 12:27\r\n> Subject: 【お問い合わせについて】THE GARDEN ORIENTAL OSAKA\r\n> To: <seisaku-team@orgiast.jp>\r\n>\r\n>\r\n> 株式会社オージャスト\r\n> 佐藤 優奈 様\r\n>\r\n> 平素より大変お世話になっております。\r\n> THE GARDEN ORIENTAL OSAKAの荒巻（あらまき）と申します。\r\n>\r\n> この度は、貴社クライアント企業様の設立60周年記念行事におきまして、弊社会場をご検討いただき誠にありがとうございます。\r\n> 先ほどご質問内容の確認のためお電話を差し上げましたが、お忙しい時間帯かと存じましたので、取り急ぎメールにてご連絡いたしました。\r\n>\r\n> お問い合わせいただいた日程のうち、2027年11月8日（月）は現時点で空きがございますので、ご案内可能です。\r\n> ただし、ご案内するにあたり下記2点の確認事項がございます。\r\n>\r\n> 【ご案内に関する確認事項】\r\n>\r\n> 1. 収容人数・会場レイアウトについて\r\n> 当会場では1つの会場で500名様を一括収容することが難しくなっております。\r\n> そのため、「複数会場に分かれてのご利用」となりますが、そのような運用でもご検討可能でしょうか。\r\n>\r\n> 2. 前日仕込み・準備のお時間について\r\n>\r\n> 前日（11月7日）の準備につきましては、婚礼のご予約等の兼ね合いにより「19:00以降」のご案内となる可能性がございます。お時間的に問題ないかご確認いただけますでしょうか。\r\n>\r\n> もし上記2点でのご利用が可能でございましたら、詳細な会場資料や概算のお見積書と併せまして、いただいたその他のご質問事項（仮押さえ・設備・バス乗降スペース等）につきましても回答をお送りさせていただきます。\r\n>\r\n> つきましては、大変恐れ入りますが、まずは上記2点についてご検討・ご返答をいただけますと幸いです。\r\n>\r\n> また、大体で構いませんので、全体のご予算感（またはおひとり様あたりのご予算）につきましても併せてご教示いただけますと幸いです。お見積もり作成の参考とさせていただきます。\r\n>\r\n> お手数をおかけいたしますが、何卒よろしくお願い申し上げます。\r\n>\r\n> THE GARDEN ORIENTAL OSAKA\r\n> 荒巻\r\n>\r\n>\r\n> ┏━━━┓ Plan Do See inc.\r\n> ┃＼＿／┃ THE GARDEN ORIENTAL OSAKA\r\n> ┗━━━┛ Marketing & Sales\r\n> ━━━━━━━━━━━━━━━━━━━━━━━━━━\r\n> 【THE GARDEN ORIENTAL OSAKA】\r\n>  〒534-0026 大阪府大阪市都島区網島町10-35\r\n> <https://www.google.com/maps/search/534-0026+%E5%A4%A7%E9%98%AA%E5%BA%9C%E5%A4%A7%E9%98%AA%E5%B8%82%E9%83%BD%E5%B3%B6%E5%8C%BA%E7%B6%B2%E5%B3%B6%E7%94%BA10-35?entry=gmail&source=g>\r\n>  TEL：06-6353-8810 FAX：06-6353-8815\r\n> ＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊\r\n> ＜営業時間＞\r\n> 電 話：平日 10:00〜17:30\r\n> メール：平日 10:00～17:00\r\n> 定休日：土・日・祝\r\n>\r\n> [image: https://lin.ee/PLXcEgC] <https://lin.ee/PLXcEgC>\r\n> ＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊\r\n>  会社HP  ：https://www.plandosee.co.jp\r\n>  店舗HP  ：https://www.gardenoriental.com/party/\r\n> Instagram：https://www.instagram.com/thegardenorientalosaka\r\n> ━━━━━━━━━━━━━━━━━━━━━━━━━━\r\n>\r\n\r\n\r\n-- \r\n﻿\r\n﻿問い合わせ番号:651\r\n団体名・法人名 : 株式会社オージャスト\r\nお名前 : 佐藤優奈\r\n電話番号 : 09020708333\r\nメールアドレス : seisaku-team@orgiast.jp\r\nご希望・ご質問など : 【空き状況のお問い合わせ】2027年11月 企業周年行事（約500名）会場利用について\r\n\r\nご担当者様\r\n\r\nはじめてご連絡いたします。\r\n株式会社オージャストの佐藤と申します。\r\n弊社は法人向けイベントの企画・制作・運営を行っております。\r\n\r\nこのたびクライアント企業様の設立60周年記念行事につきまして、\r\n貴会場での開催を検討しております。\r\n下記の条件で空き状況をご確認いただけますでしょうか。\r\n\r\n【開催概要】\r\n・日程：2027年11月中旬の平日（複数日で検討中） 11/8が最有力候補\r\n・本番時間：12:00〜17:00（前日仕込み当日撤収を希望）\r\n・人数：約500名\r\n・内容：式典、表彰式、映像上映、ステージ演出、軽食\r\n・参加者：企業の従業員およびそのご家族（お子様を含む）\r\n\r\n\r\n【ご確認いただきたい事項】\r\n1. 上記日程の空き状況\r\n2. 予約受付の開始時期と申込方法（抽選・先着の別）\r\n3. 仮押さえの可否、保持期間、キャンセル料の発生時期\r\n4. 500名（最大550名）での使用可否とレイアウト例\r\n5. 外部ケータリングの持ち込み可否と持込料\r\n6. 屋内特効（スモーク・紙吹雪等）の可否と条件\r\n7. 天井高、吊り込みの可否、電源容量\r\n8. 指定業者（電気・音響・装飾・警備）の有無\r\n9. 前日搬入・仕込みの可否と追加料金\r\n10. 大型バス10〜13台の乗降スペースおよび待機場所\r\n11. 会場使用料および付帯費用の概算\r\n12. 主催企業はアミューズメント事業（パチンコホール運営）を営む法人です。業種による利用制限の有無\r\n\r\nご多用のところ恐れ入りますが、可能でしたら本日中にご回答を頂けますと大変助かります。\r\n何卒宜しくお願い申し上げます。\r\n\r\nMasakoHashimoto\r\n\r\n\r\n[image: mobilePhone] 06-6353-8810    M: 070 5371 9769\r\n[image: emailAddress] masako.hashimoto@plandosee.co.jp\r\n<yui.tsuda@plandosee.co.jp>\r\n[image: website] https://www.gardenoriental.com/party/\r\n【THE GARDEN ORIENTAL OSAKA】\r\n 〒534-0026 大阪府大阪市都島区網島町10-35\r\n[image: https://lin.ee/PLXcEgC] <https://lin.ee/PLXcEgC>\r\n＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊\r\n 会社HP  ：https://www.plandosee.co.jp\r\nInstagram：https://www.instagram.com/thegardenorientalosaka\r\n━━━━━━━━━━━━━━━━━━━━━━━━━━\r\n\n"
+    },
+    {
+      "id": "1a0d17524e442eda",
+      "threadId": "1a0d17524e442eda",
+      "labels": [
+        "YELLOW_STAR",
+        "IMPORTANT",
+        "STARRED",
+        "CATEGORY_PERSONAL",
+        "INBOX"
+      ],
+      "headers": [
+        {
+          "name": "From",
+          "value": "\"THE GARDEN ORIENTAL OSAKA_マーケティング＆セールス\" <party-tgoo@plandosee.co.jp>"
+        },
+        {
+          "name": "Date",
+          "value": "Thu, 24 Sep 2026 12:27:53 +0900"
+        },
+        {
+          "name": "Subject",
+          "value": "【お問い合わせについて】THE GARDEN ORIENTAL OSAKA"
+        },
+        {
+          "name": "To",
+          "value": "seisaku-team@orgiast.jp"
+        }
+      ],
+      "body": "株式会社オージャスト\r\n佐藤 優奈 様\r\n\r\n平素より大変お世話になっております。\r\nTHE GARDEN ORIENTAL OSAKAの荒巻（あらまき）と申します。\r\n\r\nこの度は、貴社クライアント企業様の設立60周年記念行事におきまして、弊社会場をご検討いただき誠にありがとうございます。\r\n先ほどご質問内容の確認のためお電話を差し上げましたが、お忙しい時間帯かと存じましたので、取り急ぎメールにてご連絡いたしました。\r\n\r\nお問い合わせいただいた日程のうち、2027年11月8日（月）は現時点で空きがございますので、ご案内可能です。\r\nただし、ご案内するにあたり下記2点の確認事項がございます。\r\n\r\n【ご案内に関する確認事項】\r\n\r\n1. 収容人数・会場レイアウトについて\r\n当会場では1つの会場で500名様を一括収容することが難しくなっております。\r\nそのため、「複数会場に分かれてのご利用」となりますが、そのような運用でもご検討可能でしょうか。\r\n\r\n2. 前日仕込み・準備のお時間について\r\n前日（11月7日）の準備につきましては、婚礼のご予約等の兼ね合いにより「19:00以降」のご案内となる可能性がございます。お時間的に問題ないかご確認いただけますでしょうか。\r\nもし上記2点でのご利用が可能でございましたら、詳細な会場資料や概算のお見積書と併せまして、いただいたその他のご質問事項（仮押さえ・設備・バス乗降スペース等）につきましても回答をお送りさせていただきます。\r\n\r\nつきましては、大変恐れ入りますが、まずは上記2点についてご検討・ご返答をいただけますと幸いです。\r\nまた、大体で構いませんので、全体のご予算感（またはおひとり様あたりのご予算）につきましても併せてご教示いただけますと幸いです。お見積もり作成の参考とさせていただきます。\r\n\r\nお手数をおかけいたしますが、何卒よろしくお願い申し上げます。\r\n\r\nTHE GARDEN ORIENTAL OSAKA\r\n荒巻\r\n\r\n\r\n┏━━━┓ Plan Do See inc.\r\n┃＼＿／┃ THE GARDEN ORIENTAL OSAKA\r\n┗━━━┛ Marketing & Sales\r\n━━━━━━━━━━━━━━━━━━━━━━━━━━\r\n【THE GARDEN ORIENTAL OSAKA】\r\n 〒534-0026 大阪府大阪市都島区網島町10-35\r\n TEL：06-6353-8810 FAX：06-6353-8815\r\n＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊\r\n＜営業時間＞\r\n電 話：平日 10:00〜17:30\r\nメール：平日 10:00～17:00\r\n定休日：土・日・祝\r\n\r\n[image: https://lin.ee/PLXcEgC] <https://lin.ee/PLXcEgC>\r\n＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊\r\n 会社HP  ：https://www.plandosee.co.jp\r\n 店舗HP  ：https://www.gardenoriental.com/party/\r\nInstagram：https://www.instagram.com/thegardenorientalosaka\r\n━━━━━━━━━━━━━━━━━━━━━━━━━━\r\n\n"
+    },
+    {
+      "id": "1a0ce8882359ae7f",
+      "threadId": "1a0ce8882359ae7f",
+      "labels": [
+        "YELLOW_STAR",
+        "IMPORTANT",
+        "STARRED",
+        "CATEGORY_PERSONAL",
+        "INBOX"
+      ],
+      "headers": [
+        {
+          "name": "Date",
+          "value": "Wed, 23 Sep 2026 13:50:44 +0000"
+        },
+        {
+          "name": "To",
+          "value": "seisaku-team@orgiast.jp"
+        },
+        {
+          "name": "From",
+          "value": "\"ザ・ガーデンオリエンタル大阪\" <party-tgoo@plandosee.co.jp>"
+        },
+        {
+          "name": "Subject",
+          "value": "【ザ・ガーデンオリエンタル大阪】お問い合わせいただきありがとうございます"
+        }
+      ],
+      "body": "お客様各位\r\n\r\n平素は格別の高配を賜り、厚く御礼申し上げます。\r\nこの度はメールをいただき、誠にありがとうございます。\r\n\r\nお問い合わせ内容に関しましては、\r\n内容を確認後、48時間以内にご連絡差し上げます。\r\n\r\nお客様へはご不便とご心配をお掛けし誠に恐れ入りますが、\r\n何卒よろしくお願いします。\r\n時節柄一層のご自愛の程お祈り申し上げます。\r\n\r\n------------------------------------------------------------------------\r\n\r\n問い合わせ番号:651\r\n団体名・法人名 : 株式会社オージャスト\r\nお名前 : 佐藤優奈\r\n電話番号 : 09020708333\r\nメールアドレス : seisaku-team@orgiast.jp\r\nご希望・ご質問など : 【空き状況のお問い合わせ】2027年11月 企業周年行事（約500名）会場利用について\r\n\r\nご担当者様\r\n\r\nはじめてご連絡いたします。\r\n株式会社オージャストの佐藤と申します。\r\n弊社は法人向けイベントの企画・制作・運営を行っております。\r\n\r\nこのたびクライアント企業様の設立60周年記念行事につきまして、\r\n貴会場での開催を検討しております。\r\n下記の条件で空き状況をご確認いただけますでしょうか。\r\n\r\n【開催概要】\r\n・日程：2027年11月中旬の平日（複数日で検討中）　11/8が最有力候補\r\n・本番時間：12:00〜17:00（前日仕込み当日撤収を希望）\r\n・人数：約500名\r\n・内容：式典、表彰式、映像上映、ステージ演出、軽食\r\n・参加者：企業の従業員およびそのご家族（お子様を含む）\r\n\r\n\r\n【ご確認いただきたい事項】\r\n1. 上記日程の空き状況\r\n2. 予約受付の開始時期と申込方法（抽選・先着の別）\r\n3. 仮押さえの可否、保持期間、キャンセル料の発生時期\r\n4. 500名（最大550名）での使用可否とレイアウト例\r\n5. 外部ケータリングの持ち込み可否と持込料\r\n6. 屋内特効（スモーク・紙吹雪等）の可否と条件\r\n7. 天井高、吊り込みの可否、電源容量\r\n8. 指定業者（電気・音響・装飾・警備）の有無\r\n9. 前日搬入・仕込みの可否と追加料金\r\n10. 大型バス10〜13台の乗降スペースおよび待機場所\r\n11. 会場使用料および付帯費用の概算\r\n12. 主催企業はアミューズメント事業（パチンコホール運営）を営む法人です。業種による利用制限の有無\r\n\r\nご多用のところ恐れ入りますが、可能でしたら本日中にご回答を頂けますと大変助かります。\r\n何卒宜しくお願い申し上げます。\r\n\r\n------------------------------------------------------------------------\r\n\r\n▼このメールに心あたりがない場合\r\n当メールを破棄くださいますようお願いいたします。\r\n\r\n\r\n▼お問い合わせ\r\nTHE GARDEN ORIENTAL OSAKA （ザ・ガーデンオリエンタル・大阪）\r\n\r\n電話番号：06-6353-8810\r\n（10:00〜18:30）\r\n\r\nアクセスのご案内\r\nhttps://www.gardenoriental.com/access/\r\n\r\n"
+    }
+  ],
+  "followupVerification": {
+    "observedAt": "2026-09-30T19:23:14.511Z",
+    "threadHttp": 200,
+    "thread": "1a0d17524e442eda",
+    "messages": [
+      {
+        "id": "1a0d17524e442eda",
+        "labels": [
+          "YELLOW_STAR",
+          "IMPORTANT",
+          "STARRED",
+          "CATEGORY_PERSONAL",
+          "INBOX"
+        ],
+        "headers": [
+          {
+            "name": "From",
+            "value": "\"THE GARDEN ORIENTAL OSAKA_マーケティング＆セールス\" <party-tgoo@plandosee.co.jp>"
+          },
+          {
+            "name": "Date",
+            "value": "Thu, 24 Sep 2026 12:27:53 +0900"
+          },
+          {
+            "name": "Subject",
+            "value": "【お問い合わせについて】THE GARDEN ORIENTAL OSAKA"
+          },
+          {
+            "name": "To",
+            "value": "seisaku-team@orgiast.jp"
+          }
+        ]
+      },
+      {
+        "id": "1a0d24b10d46a2fc",
+        "labels": [
+          "YELLOW_STAR",
+          "IMPORTANT",
+          "STARRED",
+          "CATEGORY_PERSONAL",
+          "INBOX"
+        ],
+        "headers": [
+          {
+            "name": "From",
+            "value": "\"橋本雅子\" <masako.hashimoto@plandosee.co.jp>"
+          },
+          {
+            "name": "Date",
+            "value": "Thu, 24 Sep 2026 16:21:31 +0900"
+          },
+          {
+            "name": "Subject",
+            "value": "Re: 【お問い合わせについて】THE GARDEN ORIENTAL OSAKA"
+          },
+          {
+            "name": "To",
+            "value": "seisaku-team@orgiast.jp"
+          }
+        ]
+      }
+    ],
+    "searchHttp": 200,
+    "query": "in:anywhere after:2026/09/23 {from:masako.hashimoto@plandosee.co.jp to:masako.hashimoto@plandosee.co.jp from:party-tgoo@plandosee.co.jp to:party-tgoo@plandosee.co.jp subject:\"GARDEN ORIENTAL\"}",
+    "list": {
+      "messages": [
+        {
+          "id": "1a0d6d4a52078609",
+          "threadId": "1a0d6d4a52078609"
+        },
+        {
+          "id": "1a0d24b10d46a2fc",
+          "threadId": "1a0d17524e442eda"
+        },
+        {
+          "id": "1a0d17524e442eda",
+          "threadId": "1a0d17524e442eda"
+        },
+        {
+          "id": "1a0ce8882359ae7f",
+          "threadId": "1a0ce8882359ae7f"
+        }
+      ],
+      "resultSizeEstimate": 4
+    }
+  },
+  "findings": [
+    "現行台帳A11:O11は未着手。具体アクションにホテルニューオータニ大阪とあるが、原文はザ・ガーデンオリエンタル大阪への問い合わせ番号651。",
+    "元メールは9月23日の問い合わせ受領自動返信。別スレッドで9月24日12:27、16:21に担当者回答を受領済み。単純な未回答催促は不要。",
+    "9月24日時点で2027年11月8日は空きあり。現在の空きや仮押さえ実施を示す証拠ではない。先着順、無料仮押さえ1週間、正式予約確定後にキャンセル料発生。",
+    "500名は5会場に分割。前日仕込みは19時以降となる可能性。大型バス常駐は2台。設備詳細・見積・追加料金などは未確定。",
+    "先方は分割運用・前日仕込み時間の可否と予算を求めている。確認したスレッドと記録したメール検索の範囲では、それに対する返信は確認できない。電話・別メールアカウント等のやり取りは未検証。"
+  ],
+  "proposedLedgerCorrection": {
+    "具体アクション": "ザ・ガーデンオリエンタル大阪から9/24回答受領済み。5会場分割・前日19時以降仕込みの可否と予算を確認後、設備詳細・概算費用を確認する。",
+    "実行メモ": "会場名誤記あり。返信根拠: https://mail.google.com/mail/u/seisaku-team@orgiast.jp/#all/1a0d17524e442eda 。外部更新・返信は未実施。"
+  },
+  "completion": {
+    "completed": false,
+    "reasons": [
+      "回答受領は確認済みだが、運用条件の判断・予算・設備詳細と見積が残る。外部送信禁止のため返信や台帳更新は実施していない。",
+      "指定結果パスは書き込み許可範囲外。作業フォルダに代替結果JSONを保存。"
+    ]
+  },
+  "actions": {
+    "externalMessagesSent": 0,
+    "externalRecordsUpdated": 0,
+    "jobsRerun": 0,
+    "taskDeletions": 0
+  },
+  "readErrors": [
+    {
+      "operation": "task-sheet.env のWebアプリにtaskId指定GET",
+      "result": "HTTP 200 / rows=[]。open-work.mjsの実際の参照先とは異なるため完了根拠に使わない。"
+    },
+    {
+      "operation": "接続Gmailで元スレッドGET",
+      "result": "404。元リンクのseisaku-teamメールボックスを既存の読み取り専用認証で参照しHTTP 200で検証。"
+    }
+  ]
+}

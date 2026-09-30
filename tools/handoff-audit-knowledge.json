@@ -148,5 +148,29 @@
     "route": "待たない。長時間ジョブは前景で --timeout を切って回し切るか、実行基盤（GitHub Actions/タスクスケジューラ/auto-session 再入）に載せる。進捗は ~/.claude/executor-usage.jsonl（status/out/timedOut/secs/cwd）や `gh run view` 等の一次情報を直接照会し、照会できなければ「未確認」と書いて断定も確率表現もしない（監査基準 rule 4）。待ちは ~/.claude/next-session.md の残TODO先頭に「検証のみ1行」を足して次セッションで確認する。セッションを開いたまま「バックグラウンド実行中」と報告しない（2026-09-22 実測: codex-do.mjs は前景・単発で背景起動/進捗照会/待機の機能を持たない。docs/background-progress-wait-route.md）",
     "confidence": "high",
     "source": "handoff-audit-nightly:0bbf5a13904592e637151d6edc15a91a7ac7ee95d1acd8676e99f31faa55a5d8"
+  },
+  {
+    "pattern": "デプロイ用 .cmd スクリプトの再実行を kim にダブルクリックで依頼",
+    "route": "Claude 側の認証済み Vercel CLI で完結する。`npx vercel deploy --prod --yes` を対象リポジトリのルートで実行（event-shop は `cd D:\\Claude\\event-shop`）。**2026-09-25 03:23 実測: exit 0 / readyState=READY / `event-shop.jp` へエイリアス / 分類器ブロックなし**。`vercel whoami`・`vercel env ls production`・`vercel alias ls`・`vercel inspect <本番URL>`・`vercel deploy --prod` の5経路が全て通る。反映確認は CLI の exit code でなく `vercel inspect` の id/created とエイリアス先で行う（CLI は BLOCKED でも成功に見える）。コミット author が GitHub アカウントに紐づかないメールだと BLOCKED になるので `git log -1 --format=%ae` を先に見る。分類器が止めた場合も「未確認」と書き user に実行させない。詳細 docs/production-deploy-claude-side-route.md",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:7a4dbae5cd59db0dbbbf201e3b2b8e7be4e38f0df436c919d984f357771b9d1b"
+  },
+  {
+    "pattern": "依存取得（npm ci）完了待ちを user の再操作条件にする",
+    "route": "待たない。長時間ジョブは前景で --timeout を切って回し切るか、実行基盤（GitHub Actions/タスクスケジューラ/auto-session 再入）に載せる。進捗は ~/.claude/executor-usage.jsonl（status/out/timedOut/secs/cwd）や `gh run view` 等の一次情報を直接照会し、照会できなければ「未確認」と書いて断定も確率表現もしない（監査基準 rule 4）。待ちは ~/.claude/next-session.md の残TODO先頭に「検証のみ1行」を足して次セッションで確認する。セッションを開いたまま「バックグラウンド実行中」と報告しない（2026-09-22 実測: codex-do.mjs は前景・単発で背景起動/進捗照会/待機の機能を持たない。docs/background-progress-wait-route.md）",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:7a4dbae5cd59db0dbbbf201e3b2b8e7be4e38f0df436c919d984f357771b9d1b"
+  },
+  {
+    "pattern": "依存取得(npm ci/pnpm install)完了待ちを user の再オペレーション条件にする",
+    "route": "待たない。長時間ジョブは前景で --timeout を切って回し切るか、実行基盤（GitHub Actions/タスクスケジューラ/auto-session 再入）に載せる。進捗は ~/.claude/executor-usage.jsonl（status/out/timedOut/secs/cwd）や `gh run view` 等の一次情報を直接照会し、照会できなければ「未確認」と書いて断定も確率表現もしない（監査基準 rule 4）。待ちは ~/.claude/next-session.md の残TODO先頭に「検証のみ1行」を足して次セッションで確認する。セッションを開いたまま「バックグラウンド実行中」と報告しない（2026-09-22 実測: codex-do.mjs は前景・単発で背景起動/進捗照会/待機の機能を持たない。docs/background-progress-wait-route.md）",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:2473c984e2802cec09237f5c0011d04634a7a4b9f4351bd5d7847c5f78799c90"
+  },
+  {
+    "pattern": "デプロイ用 .cmd/.ps1 の再クリックを kim に依頼",
+    "route": "Claude 側の認証済み Vercel CLI で完結する。`npx vercel deploy --prod --yes` を対象リポジトリのルートで実行（event-shop は `cd D:\\Claude\\event-shop`）。**2026-09-25 03:23 実測: exit 0 / readyState=READY / `event-shop.jp` へエイリアス / 分類器ブロックなし**。`vercel whoami`・`vercel env ls production`・`vercel alias ls`・`vercel inspect <本番URL>`・`vercel deploy --prod` の5経路が全て通る。反映確認は CLI の exit code でなく `vercel inspect` の id/created とエイリアス先で行う（CLI は BLOCKED でも成功に見える）。コミット author が GitHub アカウントに紐づかないメールだと BLOCKED になるので `git log -1 --format=%ae` を先に見る。分類器が止めた場合も「未確認」と書き user に実行させない。詳細 docs/production-deploy-claude-side-route.md",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:2473c984e2802cec09237f5c0011d04634a7a4b9f4351bd5d7847c5f78799c90"
   }
 ]

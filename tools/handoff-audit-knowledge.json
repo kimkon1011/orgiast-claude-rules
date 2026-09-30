@@ -124,5 +124,17 @@
     "route": "node C:/Users/uers/orgiast-claude-rules/tools/gdoc-update.mjs --id <docId> --file <本文.md>（DWD SA で kim を代理、URL 不変・全置換・read-back 付き。--check で現状取得。表はヘッダが崩れるのでリストで書く）。新規 Doc 作成やコネクタ有効化の依頼に逃げない",
     "confidence": "high",
     "source": "2026-09-28 バドミントン指示書で「未接続」と誤って手渡し"
+  },
+  {
+    "pattern": "新規自動化パイプラインの設計/実装を新セッション送り＋kim 承認待ちにする",
+    "route": "DWD サービスアカウント(kim impersonate)で analyticsadmin/webmasters/tagmanager API を直接照会（tools/google-property-check.mjs、読み取り専用・追加権限不要）。Claude 履歴の Grep は証拠にならない。分類器で止まるなら『未確認』と書く。**2026-09-20 実測**: GA4 ok(accounts 17) / Search Console ok(sites 12) は追加作業ゼロで通る。**GTM だけ errorKind=scope_not_delegated(unauthorized_client)** = Admin Console の DWD に tagmanager.readonly が未登録。GTM を読む場合のみ kim の1アクション（Admin Console → ドメイン全体の委任 → SA client_id に scope 追加）が要る",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:c10fb278e9343780040aeeba31da87a6ba4c291819bfac8d095df992b0900601"
+  },
+  {
+    "pattern": "フォーム処理エラー修正後のSetup.gs再実行を『▶実行してください』でkimに手渡す",
+    "route": "clasp run / コマンドキュー経由で Claude 側から実行。『▶実行してください』は違反",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:57264ff4d6d5a121f6b1792f76769a0e8520fd6044a42446fc4f53cef8d2a0eb"
   }
 ]

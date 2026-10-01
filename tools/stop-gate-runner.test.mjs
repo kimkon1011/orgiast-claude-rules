@@ -49,7 +49,7 @@ test('stop_hook_activeは評価せずskippedでpassする', () => {
 
 test('次の行があればピギーバック・ヒントを重ねない', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-hint-'));
-  const output = JSON.parse(invoke(home, 'hint', `${request}\n次に kim がすること: Merge をクリック\nこの後の自動進行: kim のマージ後に Codex が確認してチャットで通知\nこのセッション: まだアーカイブしない（/session-close 未実行）`).stdout);
+  const output = JSON.parse(invoke(home, 'hint', `${request}\n次に kim がすること: Merge をクリック\nこの後の自動進行: kim のマージ後に Codex が確認してチャットで通知\nこのセッション: まだ閉じない（作業中）`).stdout);
   assert.doesNotMatch(output.reason, /ピギーバック・ヒント/);
 });
 
@@ -94,8 +94,8 @@ test('stdin経由の2行・3行・バックグラウンド矛盾を他gateと分
   const footer = '次に kim がすること: なし\nこの後の自動進行: なし（完了）';
   const cases = [
     ['two-lines', `${body}\n${footer}`, 'NEXT-ACTION-FOOTER'],
-    ['three-lines', `${body}\n${footer}\nこのセッション: アーカイブしてよい（/session-close 不要）`, null],
-    ['background-close', `${body} Codex がバックグラウンドで実行中です。\n次に kim がすること: なし\nこの後の自動進行: 処理が完了したら私がこの画面で結果を報告します\nこのセッション: アーカイブしてよい（/session-close 実行済み）`, 'SESSION-BACKGROUND-CONTRADICTION'],
+    ['three-lines', `${body}\n${footer}\nこのセッション: /session-close は不要なので、このセッションを閉じてよい`, null],
+    ['background-close', `${body} Codex がバックグラウンドで実行中です。\n次に kim がすること: なし\nこの後の自動進行: 処理が完了したら私がこの画面で結果を報告します\nこのセッション: /session-close は終わっているので、このセッションを閉じてよい`, 'SESSION-BACKGROUND-CONTRADICTION'],
   ];
   for (const [id, text, code] of cases) {
     const result = invoke(home, id, text);
@@ -113,7 +113,7 @@ test('runnerと単体hookの両方が会話のsession-close証拠を評価する
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-close-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const transcript = path.join(home, 'transcript.jsonl');
-  const text = `${'作業内容を整理し、関連箇所を確認しました。'.repeat(15)}\n次に kim がすること: なし\nこの後の自動進行: なし（完了）\nこのセッション: アーカイブしてよい（/session-close 実行済み）`;
+  const text = `${'作業内容を整理し、関連箇所を確認しました。'.repeat(15)}\n次に kim がすること: なし\nこの後の自動進行: なし（完了）\nこのセッション: /session-close は終わっているので、このセッションを閉じてよい`;
   const gate = fileURLToPath(new URL('./next-action-gate.mjs', import.meta.url));
   for (const evidence of [false, true]) {
     fs.writeFileSync(transcript, [

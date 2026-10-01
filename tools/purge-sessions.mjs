@@ -7,11 +7,21 @@ import { spawn } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
+import { SESSION_PHRASES } from './next-action-gate.mjs';
 
 const root = () => path.join(os.homedir(), '.claude');
 const MINUTE = 60_000;
 const MAX_FILES = 500;
 const MAX_LINE_BYTES = 32 * 1024 * 1024;
+// 旧表記「このセッション: アーカイブしてよい」に加え、新定型の closed/delete（「…このセッションを閉じてよい」）を承認扱いにする。
+function sessionApproved(text) {
+  if (text.includes('このセッション: アーカイブしてよい')) return true;
+  const lines = text.split(/\r?\n/).filter(l => l.startsWith('このセッション:'));
+  const last = lines.at(-1);
+  if (last === undefined) return false;
+  const value = last.slice('このセッション:'.length).trim();
+  return value === SESSION_PHRASES.closed || value === SESSION_PHRASES.delete;
+}
 function json(file, fallback = {}) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; } }
 function write(file, data) {
   const tmp = `${file}.${process.pid}.tmp`;
@@ -127,7 +137,7 @@ function inspectLarge(file, stat, deadline, now, closed) {
     const text = content(row).trim();
     if (!foundAssistant && row.type === 'user' && ((text && !commandOnly(text)) || (Array.isArray(row.message?.content) && row.message.content.some(x => x.type !== 'text')))) userAfter = true;
     if (row.type !== 'assistant') continue;
-    if (!foundAssistant) { data.approved = text.includes('このセッション: アーカイブしてよい') && !userAfter; foundAssistant = true; }
+    if (!foundAssistant) { data.approved = sessionApproved(text) && !userAfter; foundAssistant = true; }
     if (data.approved || now - data.lastAt < 72 * 60 * MINUTE) return data;
     data.nextKim ??= handoff(text, '次に kim がすること');
     data.automatic ??= handoff(text, 'この後の自動進行');
@@ -158,7 +168,7 @@ function inspect(file, stat, deadline, now, closed) {
       automatic = handoff(text, 'この後の自動進行') ?? automatic;
     } else if (row.type === 'user' && Array.isArray(row.message?.content) && row.message.content.some(x => x.type !== 'text')) { empty = false; userAfter = true; }
   }
-  return { empty, title, lastAt, approved: lastAssistant.includes('このセッション: アーカイブしてよい') && !userAfter, nextKim, automatic };
+  return { empty, title, lastAt, approved: sessionApproved(lastAssistant) && !userAfter, nextKim, automatic };
 }
 export function dropClosed(base, removed) {
   const file = path.join(base, 'closed-sessions.json');

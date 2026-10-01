@@ -13,7 +13,7 @@
 |---|---|---|
 | closed | closed-sessions.json に記録済み、45秒以上 | mtime |
 | empty | 実発言・応答がなく、90秒以上（200KB以下のみ） | mtime |
-| approved | 最後の assistant が「このセッション: アーカイブしてよい」、以降に user 発話なし、10分以上 | JSONL 最終行の timestamp |
+| approved | 最後の assistant が「このセッション: …このセッションを閉じてよい」（旧表記「このセッション: アーカイブしてよい」も可。pending/open は対象外）、以降に user 発話なし、10分以上 | JSONL 最終行の timestamp |
 | abandoned | 72時間以上 | JSONL 最終行の timestamp |
 
 退避先は `~/.claude/projects-archive/<projectId>/`。JSONL と同名の付属ディレクトリを

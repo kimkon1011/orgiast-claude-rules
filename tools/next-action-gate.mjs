@@ -9,13 +9,17 @@ const MULTIPLE_ACTIONS_PATTERN = /[、,，・]/;
 const WAITING_PATTERN = /(完了通知|待ち|実行中|バックグラウンド|cron|定期実行|CI)/i;
 const BACKGROUND_PATTERN = /(バックグラウンド|実行中|完了通知|Codex が|走ってい)/i;
 const COMPLETE_PATTERN = /^なし\s*[（(]\s*完了\s*[）)]$/;
-// kim が毎回同じ文で判断できるよう、表記ゆれを許さない完全一致の定型3文にする（2026-09-25 kim 指示）。
+// kim が毎回同じ文で判断できるよう、表記ゆれを許さない完全一致の定型文にする（2026-09-25 kim 指示）。
+// 「閉じてよい」だけでは /session-close をこれからするのか、済んだので消してよいのかが分からない
+// （2026-10-01 kim 指示）ので、/session-close の状態とタブを閉じてよいかを1文に両方書く。
 export const SESSION_PHRASES = {
-  closed: 'アーカイブしてよい（/session-close 実行済み）',
-  delete: 'アーカイブしてよい（/session-close 不要）',
-  open: 'まだアーカイブしない（/session-close 未実行）',
+  closed: '/session-close は終わっているので、このセッションを閉じてよい',
+  delete: '/session-close は不要なので、このセッションを閉じてよい',
+  pending: '/session-close をして（まだ閉じない）',
+  open: 'まだ閉じない（作業中）',
 };
 const SESSION_PHRASE_LIST = Object.values(SESSION_PHRASES).map(phrase => `「${phrase}」`).join('');
+const CLOSABLE_STATES = new Set(['closed', 'delete']);
 const SESSION_STATES = Object.entries(SESSION_PHRASES).map(([state, phrase]) => [state, { test: value => value === phrase }]);
 
 export function enabled() {
@@ -106,7 +110,7 @@ export function judgeNextAction(text, transcriptRaw = '') {
   }
   const sessionState = SESSION_STATES.find(([, pattern]) => pattern.test(footer.session))?.[0];
   if (!sessionState) {
-    return { decision: 'block', code: 'SESSION-INVALID', reason: `「このセッション:」は定型3文${SESSION_PHRASE_LIST}のいずれかを一字一句そのまま書いてください（理由は「この後の自動進行」に書く）。` };
+    return { decision: 'block', code: 'SESSION-INVALID', reason: `「このセッション:」は定型文${SESSION_PHRASE_LIST}のいずれかを一字一句そのまま書いてください（理由は「この後の自動進行」に書く）。` };
   }
   const body = source.slice(0, source.lastIndexOf('次に kim がすること:'));
   const isComplete = COMPLETE_PATTERN.test(footer.autopilot);
@@ -116,11 +120,11 @@ export function judgeNextAction(text, transcriptRaw = '') {
   if (isComplete && WAITING_PATTERN.test(body)) {
     return { decision: 'block', code: 'AUTOPILOT-CONTRADICTION', reason: '本文に待ち状態があるのに「この後の自動進行: なし（完了）」となっており矛盾しています。次に誰がいつ動き、結果がどう届くかを書いてください。' };
   }
-  if (sessionState !== 'open' && BACKGROUND_PATTERN.test(body)) {
-    return { decision: 'block', code: 'SESSION-BACKGROUND-CONTRADICTION', reason: `本文ではバックグラウンド処理が進行中なのに、アーカイブしてよいと書かれており矛盾しています。ジョブが宙に浮かないよう「${SESSION_PHRASES.open}」としてください。` };
+  if (CLOSABLE_STATES.has(sessionState) && BACKGROUND_PATTERN.test(body)) {
+    return { decision: 'block', code: 'SESSION-BACKGROUND-CONTRADICTION', reason: `本文ではバックグラウンド処理が進行中なのに、このセッションを閉じてよいと書かれており矛盾しています。ジョブが宙に浮かないよう「${SESSION_PHRASES.open}」としてください。` };
   }
   if (sessionState === 'closed' && !hasSessionCloseEvidence(source, transcriptRaw)) {
-    return { decision: 'block', code: 'SESSION-CLOSE-NO-EVIDENCE', reason: `「このセッション: ${SESSION_PHRASES.closed}」とありますが、本文または会話に /session-close を実行した形跡がありません。/session-close を実行するか、「${SESSION_PHRASES.open}」にしてください。` };
+    return { decision: 'block', code: 'SESSION-CLOSE-NO-EVIDENCE', reason: `「このセッション: ${SESSION_PHRASES.closed}」とありますが、本文または会話に /session-close を実行した形跡がありません。/session-close を実行するか、「${SESSION_PHRASES.pending}」にしてください。` };
   }
   return { decision: 'pass', reason: 'valid-footer' };
 }

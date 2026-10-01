@@ -38,10 +38,11 @@ function routedBulkProvider(category, home = process.env.ORGIAST_HOME || os.home
 }
 export function laneAdvice(lane, repoDir = repoRoot(), options = {}) {
   const codex = `node "${path.join(repoDir, 'tools', 'codex-do.mjs')}"`;
-  if (lane === 'implement') return { primary: `${codex} --prompt-file <指示> --cwd <対象> --timeout 1800`, fallback: 'codex-do 内蔵 Gemini/DeepSeek → Agent(model:"sonnet")' };
-  if (lane === 'edit-small') return { primary: `${codex} --prompt-file <指示> --cwd <対象> --timeout 600（または gemini -p）`, fallback: 'Agent(model:"sonnet")' };
-  if (lane === 'verify') return { primary: `${codex} --review --prompt-file <file>（または gemini -p --include-directories <dir>）`, fallback: 'Agent(model:"sonnet")' };
-  if (lane === 'bulk') { const cat = options.category || 'summarize', provider = options.provider || routedBulkProvider(cat, options.home); return { primary: `node "${path.join(repoDir, 'tools', 'llm-ask.mjs')}" --category ${cat} --provider ${provider} "指示"`, fallback: 'Agent(model:"sonnet")' }; }
+  const stopAndAsk = '非Claude レーンが全滅したら停止し、費用見込みを提示して kim の承認を取る（Sonnet 実装は承認後のみ）';
+  if (lane === 'implement') return { primary: `${codex} --prompt-file <指示> --cwd <対象> --timeout 1800`, fallback: `codex-do 内蔵 Gemini/DeepSeek → ${stopAndAsk}` };
+  if (lane === 'edit-small') return { primary: `${codex} --prompt-file <指示> --cwd <対象> --timeout 600（または gemini -p）`, fallback: stopAndAsk };
+  if (lane === 'verify') return { primary: `${codex} --review --prompt-file <file>（または gemini -p --include-directories <dir>）`, fallback: stopAndAsk };
+  if (lane === 'bulk') { const cat = options.category || 'summarize', provider = options.provider || routedBulkProvider(cat, options.home); return { primary: `node "${path.join(repoDir, 'tools', 'llm-ask.mjs')}" --category ${cat} --provider ${provider} "指示"`, fallback: stopAndAsk }; }
   if (lane === 'mcp') return { primary: 'Agent(model:"sonnet") で MCP コネクタ操作', fallback: 'Fable/Opus 本体が結果確認' };
   if (lane === 'design') return { primary: 'Fable 本体で判断（複数仮説の検証時だけ Agent(model:"opus")）', fallback: 'Sonnet で材料整理' };
   return { primary: 'Fable 本体（ツールなし、または Read/Grep 数回）', fallback: '実装・調査に踏み込むなら該当レーンへ委譲' };
@@ -110,7 +111,7 @@ try {
   const codex = `node "${path.join(repo, 'tools', 'codex-do.mjs')}" "指示"`;
   const ask = `node "${path.join(repo, 'tools', 'llm-ask.mjs')}"`;
   const enqueue = `node "${path.join(repo, 'tools', 'batch-enqueue.mjs')}"`;
-  const parts = [`[実行レーン] ${route.lane}（理由: ${route.reason}）→ 主: ${route.primary} ／ 失敗時: ${route.fallback} ／ Fable/Opus 本体は「判定・委譲・結果確認」の 3 ターン以内。Sonnet は非Claude が全部落ちた時だけ、Opus は設計判断だけ。${route.lane === 'consult' ? ' ツールを使わず、または Read/Grep 数回で答える。実装・調査に踏み込むなら委譲。' : ''}`];
+  const parts = [`[実行レーン] ${route.lane}（理由: ${route.reason}）→ 主: ${route.primary} ／ 失敗時: ${route.fallback} ／ Fable/Opus 本体は「判定・委譲・結果確認」の 3 ターン以内。Sonnet 実装は非Claude レーン全滅＋kim の承認後のみ、Opus は設計判断だけ。${route.lane === 'consult' ? ' ツールを使わず、または Read/Grep 数回で答える。実装・調査に踏み込むなら委譲。' : ''}`];
   const fableExplicit = /fable\s*-?\s*5|fable5|claude-fable-5|fable\s*(?:で|を使)/i;
   const fableNegative = /(?:fable\s*-?\s*5|fable5|claude-fable-5|fable)\s*(?:は|を)?\s*(?:使うな|使わない|使わず|使わなく|使わん|使用しない|利用しない|禁止|使用中止|不可)/i;
   if (fableExplicit.test(prompt) && !fableNegative.test(prompt)) {

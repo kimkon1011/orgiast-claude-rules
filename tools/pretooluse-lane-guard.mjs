@@ -36,7 +36,7 @@ async function main() {
     let config = { warnAt: 4, blockAt: 8, mode: 'block' }; try { config = { ...config, ...JSON.parse(fs.readFileSync(path.join(home, '.claude', 'lane-guard.json'), 'utf8').replace(/^\uFEFF/, '')) }; } catch {}
     if (state.toolCalls < Number(config.warnAt)) return;
     const advice = state.primary || laneAdvice(state.lane, repo, { category: state.category, home }).primary;
-    const reason = `このターンで Fable/Opus 本体が直接 ${state.toolCalls} 回ツールを叩いている。残りは ${advice} か Agent(model:"sonnet") に丸ごと渡し、結果だけ受け取れ。例外は user 指示に [LANE-OK]、または ~/.claude/cost-enforce-override`;
+    const reason = `このターンで Fable/Opus 本体が直接 ${state.toolCalls} 回ツールを叩いている。残りは ${advice} に丸ごと渡し、結果だけ受け取れ（Sonnet 実装は非Claude レーン全滅＋kim の承認後のみ）。例外は user 指示に [LANE-OK]、または ~/.claude/cost-enforce-override`;
     const blockable = ['implement', 'edit-small', 'verify', 'bulk'].includes(state.lane);
     const bypass = codexHardBlockBypass(Date.now(), path.join(home, '.claude', 'provider-cooldown.json')).bypass;
     if (blockable && state.toolCalls >= Number(config.blockAt) && config.mode === 'block' && !state.laneOk && !bypass) output({ permissionDecision: 'deny', permissionDecisionReason: reason });

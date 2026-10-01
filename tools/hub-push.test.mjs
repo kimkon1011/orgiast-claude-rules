@@ -149,5 +149,5 @@ test('registration preserves the deployed hidden task, working directory and sch
   assert.match(script, /New-HiddenScheduledTaskAction.*-WorkingDirectory \$repo/);
   assert.match(script, /-TaskName 'OrgiastHubPush'.*-Force/);
   assert.match(script, /-Daily -At '02:40'/);
-  assert.match(script, /\$repo = Split-Path -Parent \$PSScriptRoot/);
+  assert.match(script, /Resolve-RegisterRepoRoot/);
 });

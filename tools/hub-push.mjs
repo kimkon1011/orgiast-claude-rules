@@ -4,6 +4,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 import { getDriveToken, driveApi as api } from './lib/drive-auth.mjs';
 import { uploadFileContent } from './lib/drive-files.mjs';
 
@@ -129,7 +130,7 @@ export async function pushHub({ targets, token, apiFn = api, dryRun = false,
   }
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isEntry(import.meta.url)) {
   let started = false;
   try {
     if (process.argv.slice(2).some((arg) => arg !== '--dry-run')) throw new Error('usage: node tools/hub-push.mjs [--dry-run]');

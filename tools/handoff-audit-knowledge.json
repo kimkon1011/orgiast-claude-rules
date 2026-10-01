@@ -148,5 +148,17 @@
     "route": "codex-do.mjs",
     "confidence": "high",
     "source": "handoff-audit-nightly:61cc1923cb1a1d79de444d1acbf1f85cdaa2be510c8becc7c350eb9568b6f27f"
+  },
+  {
+    "pattern": "GAS自動化の検証・live切替をuserに判断させ手渡す",
+    "route": "clasp run / コマンドキュー経由で Claude 側から実行。『▶実行してください』は違反",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:3a55177d3e5f95f6b67cd90edabe9105096491b04676dea7afe16676679e7feb"
+  },
+  {
+    "pattern": "本番デプロイ元ブランチの特定",
+    "route": "gh api",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:de6b96adacbf2e97aed604ce022d68ccda1ebc3f8920e6f6d5b43196d3c71220"
   }
 ]

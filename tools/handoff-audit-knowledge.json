@@ -124,5 +124,29 @@
     "route": "node C:/Users/uers/orgiast-claude-rules/tools/gdoc-update.mjs --id <docId> --file <本文.md>（DWD SA で kim を代理、URL 不変・全置換・read-back 付き。--check で現状取得。表はヘッダが崩れるのでリストで書く）。新規 Doc 作成やコネクタ有効化の依頼に逃げない",
     "confidence": "high",
     "source": "2026-09-28 バドミントン指示書で「未接続」と誤って手渡し"
+  },
+  {
+    "pattern": "社内・関係者宛の連絡文を外部Gmail下書きで作る",
+    "route": "チャット表示",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:30cabc65b0f577c00890dffdb0e385783afc23dfa7a131856f05166f96aa4eac"
+  },
+  {
+    "pattern": "セッション退避・claim release の完了断定",
+    "route": "codex-do.mjs",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:41bdd1bf4cb0b32eddb4b7c240d2c5bd6c1ff902b6105e3fb5505c6054aec2d4"
+  },
+  {
+    "pattern": "バックグラウンドジョブの進捗待ちで user に画面を開かせる/待たせる",
+    "route": "待たない。長時間ジョブは前景で --timeout を切って回し切るか、実行基盤（GitHub Actions/タスクスケジューラ/auto-session 再入）に載せる。進捗は ~/.claude/executor-usage.jsonl（status/out/timedOut/secs/cwd）や `gh run view` 等の一次情報を直接照会し、照会できなければ「未確認」と書いて断定も確率表現もしない（監査基準 rule 4）。待ちは ~/.claude/next-session.md の残TODO先頭に「検証のみ1行」を足して次セッションで確認する。セッションを開いたまま「バックグラウンド実行中」と報告しない（2026-09-22 実測: codex-do.mjs は前景・単発で背景起動/進捗照会/待機の機能を持たない。docs/background-progress-wait-route.md）",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:d5741d27a692da61576018cbf03585684ed2ece238039f351b97d8b5d520047b"
+  },
+  {
+    "pattern": "稼働中プロセス停止をkimのターミナル貼り付けで依頼",
+    "route": "codex-do.mjs",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:61cc1923cb1a1d79de444d1acbf1f85cdaa2be510c8becc7c350eb9568b6f27f"
   }
 ]

@@ -1,0 +1,24 @@
+# Register the shared task ledger reminder at 09:13 every day.
+# This file must remain ASCII-only for Windows PowerShell 5.1 compatibility.
+$ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'ensure-run-hidden.ps1')
+. (Join-Path $PSScriptRoot 'resolve-synced-repo.ps1')
+# The task must run from the synced repo, not from the tree this script sits in.
+$repo = Resolve-RegisterRepoRoot -Fallback (Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)) -RequiredPaths @('tools\ledger-stale-nag.mjs')
+$script = Join-Path $repo 'tools\ledger-stale-nag.mjs'
+if (-not (Test-Path $script)) { throw "script not found: $script" }
+$powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+$bootstrap = Join-Path $env:USERPROFILE '.claude\tools\nightly-bootstrap.ps1'
+if (-not (Test-Path $bootstrap)) { throw "nightly bootstrap not found: $bootstrap" }
+$action = New-HiddenScheduledTaskAction -Execute $powershell -ChildArgument @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $bootstrap, '-Target', 'tools\ledger-stale-nag.mjs') -WorkingDirectory $repo
+$trigger = New-ScheduledTaskTrigger -Daily -At 9:13am
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
+$taskName = 'OrgiastLedgerStaleNag'
+if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
+    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction Stop
+}
+Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Description 'Send stale shared tasks by Discord DM every day at 09:13' -Force -ErrorAction Stop | Out-Null
+$registered = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+if (-not $registered) { throw "register failed: task '$taskName' does not exist after Register-ScheduledTask" }
+Write-Host 'OK: task OrgiastLedgerStaleNag registered (daily at 09:13)'
+$registered | Select-Object TaskName, State

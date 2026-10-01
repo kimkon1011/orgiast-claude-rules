@@ -1,0 +1,8 @@
+{
+  "completed": false,
+  "summary": "T-2378はGmail原本で2026/9/28 23:20の勤務確定返信と23:56の受領返信を確認し、返信済みと検証。台帳は未着手のまま。外部送信・台帳変更なし。指定結果JSON保存先が書き込み許可範囲外のため完了条件未達。",
+  "evidence": {
+    "file": "/mnt/c/Users/uers/orgiast-main/.task-results/t2378-f6e8aa8c85c8eb967e26-1790882185345/evidence.json",
+    "sha256": "0dfe6892c12790c96327b3196b8d43d03804e781c1f426fd7f9327499a297f42"
+  }
+}

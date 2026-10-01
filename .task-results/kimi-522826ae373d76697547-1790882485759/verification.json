@@ -1,0 +1,141 @@
+{
+  "target": {
+    "kind": "failed_job",
+    "id": "kimi:不明",
+    "eventTime": "2026-09-27T16:05:41.741Z"
+  },
+  "verifiedAt": "2026-10-01T19:24:30.799879+00:00",
+  "scope": "指定の失敗した下書き生成のみ。記事公開・メディア実装は対象外。",
+  "findings": [
+    "台帳のKimi試行0〜2はHTTP429。元セッションの応答には account ... is suspended due to ins… とある。本文が途中で切れているため停止の詳細原因は確定できない。単なる一時的レート制限と断定しない。",
+    "元コマンドは llm-ask.mjs --provider kimi --file <brief path>。現行実装に--file読込処理がなく、同時刻のGroq応答はローカルファイルを読めない旨のみ。exit=0やstatus=okは成果物完成を意味しない。",
+    "同セッションでプロンプト本文を引数としてOpenRouterへ再送し、16:08:25Zに生成済み。今回の新規外部呼出しは0件。",
+    "16:09:03.489ZのWrite内容と現存expohack-final.mdが全文一致。企画書・創刊記事①・創刊記事②の本文を直接確認した。下書きは既に回復済みで重複再実行不要。公開品質や原依頼の全要件充足を保証するものではない。",
+    "過去セッションにはDrive作成後のexport 200と見出し5件確認記録もある。現在のDrive状態は外部通信禁止のため再照会していない。",
+    "detectFailedJobはprovider:cwd（cwdなしは不明）ごとの最終行を評価する。Groq/OpenRouterの回復をKimi行に関連付けられず、この候補が残る。恒久修正は本件では行わない。"
+  ],
+  "checks": {
+    "final_file_matches_original_write": true,
+    "required_sections_present": true,
+    "ledger_retry_and_recovery_sequence_verified": true
+  },
+  "usage_records": [
+    {
+      "line": 8781,
+      "record": {
+        "t": "2026-09-27T16:05:38.526Z",
+        "provider": "kimi",
+        "model": "kimi-k3",
+        "in": 0,
+        "out": 0,
+        "secs": 0.315,
+        "status": "http_429",
+        "attempt": 0,
+        "failover": false
+      }
+    },
+    {
+      "line": 8782,
+      "record": {
+        "t": "2026-09-27T16:05:39.636Z",
+        "provider": "kimi",
+        "model": "kimi-k3",
+        "in": 0,
+        "out": 0,
+        "secs": 0.093,
+        "status": "http_429",
+        "attempt": 1,
+        "failover": false
+      }
+    },
+    {
+      "line": 8783,
+      "record": {
+        "t": "2026-09-27T16:05:41.741Z",
+        "provider": "kimi",
+        "model": "kimi-k3",
+        "in": 0,
+        "out": 0,
+        "secs": 0.095,
+        "status": "http_429",
+        "attempt": 2,
+        "failover": false
+      }
+    },
+    {
+      "line": 8784,
+      "record": {
+        "t": "2026-09-27T16:05:42.339Z",
+        "provider": "groq",
+        "model": "openai/gpt-oss-120b",
+        "in": 89,
+        "out": 138,
+        "secs": 0.591,
+        "status": "ok",
+        "attempt": 0,
+        "failover": true
+      }
+    },
+    {
+      "line": 8785,
+      "record": {
+        "t": "2026-09-27T16:08:25.325Z",
+        "provider": "openrouter",
+        "model": "openai/gpt-oss-120b",
+        "in": 885,
+        "out": 3513,
+        "secs": 0.848,
+        "status": "ok",
+        "attempt": 0,
+        "failover": false
+      }
+    }
+  ],
+  "source_files": [
+    {
+      "path": "/mnt/c/Users/uers/.claude/scratchpad/expohack-final.md",
+      "sha256": "ea608151e3d696370584d411d47ca740d3f8f01343b32548361148a4588557cf",
+      "bytes": 7890
+    },
+    {
+      "path": "/mnt/c/Users/uers/.claude/scratchpad/expohack-brief.md",
+      "sha256": "a8ad154e5bca7df869c373b04301307b78f86d23f1ecfde6e96a03c7bb170b0a",
+      "bytes": 2853
+    },
+    {
+      "path": "/mnt/c/Users/uers/.claude/scratchpad/expohack-draft.txt",
+      "sha256": "beac06732d4570a7c0fa5e39cb437a58182099684110f481f292e47a7d3c240d",
+      "bytes": 9921
+    },
+    {
+      "path": "/mnt/c/Users/uers/.claude/projects/_deleted-backup/_closed/c--Users-uers-Downloads-CLAUDE-md--/c254bec5-cc09-4592-b293-02f0387888b4.jsonl",
+      "sha256": "00d1ca90e64d87233fe339cfcc25068d67dc5156269e7597ed16495090bce646",
+      "bytes": 683302
+    },
+    {
+      "path": "/mnt/c/Users/uers/orgiast-main/tools/llm-ask.mjs",
+      "sha256": "ca54ab141e4951624b880c68e2f89edbee795d8f0c0c49dfe649a98e970b8e97",
+      "bytes": 7835
+    },
+    {
+      "path": "/mnt/c/Users/uers/orgiast-main/tools/stall-sweeper.mjs",
+      "sha256": "d6d84c188919c434758451686c7bd633ebe7877b38d6dba491fc48d7951ea14d",
+      "bytes": 33579
+    }
+  ],
+  "actions": {
+    "external_requests": 0,
+    "reruns": 0,
+    "repository_code_changes": 0,
+    "other_session_changes_imported": false,
+    "new_user_handoffs": 0
+  },
+  "result_path_constraint": {
+    "requested": "C:\\Users\\uers\\.claude\\522826ae373d76697547-1790882485759.result.json",
+    "writable_roots": [
+      "/mnt/c/Users/uers/orgiast-main",
+      "/tmp"
+    ],
+    "status": "指定先は許可範囲外。権限変更・別経路による回避は行わず、ワークスペースに結果を保存。"
+  }
+}

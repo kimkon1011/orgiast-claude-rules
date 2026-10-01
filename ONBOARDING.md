@@ -188,6 +188,14 @@ bound scriptのscriptId不明時はDrive MCPで`mimeType='application/vnd.google
 
 **cron の生存は「手動実行が通ること」で判定しない（絶対ルール・2026-08-11 実害）**: GitHub Actions は `gh run list --event=schedule --limit 15 --json createdAt,conclusion` の**直近成功日時**で見る。`workflow_dispatch` は権限も分岐も別経路になりがちで、schedule だけ死んでいても手動は通り続ける（実際に週次配信が3週間止まったのに気付けなかった）。`gh run list`/Actions APIを叩くjobには `permissions: {actions: read}` が必須（無いと403で全滅）。定期配信を持つリポは push/PR で回る最小 CI（回帰テスト）も併設し、配信当日ではなくpush時点で壊れを止める。
 
+**外に出ている状態は、変更の有無を問わずブラウザで実表示を読み戻してから語る（2026-08-26 指示）**。調査・分析・報告も対象とし、価格・料金合計・在庫・最低条件・手数料・税・割引・写真・規約・通知の見え方まで確認する。API/DB/シート/成功ログだけで実表示を断定しない。「値が取れていない」と「値が空」を区別する。
+
+- 各リポに Playwright の検証スクリプトを置き、`node tools/browser/verify-live.mjs <URL> --expect "出ているはず" --not-expect "出てはいけない" --shot out.png --wait 8000 --click "セレクタ"` を状態の報告前に通す。導入は `npm i playwright` と `npx playwright install chromium`。
+- `--expect` / `--not-expect` は複数指定可とし、1件でも不一致なら exit 1。変更後は新値の表示と旧値の消失をセットで判定する。遅延描画には `--wait`、操作後の表示には `--click` を使う。スクショは自分で開き、描画崩れ・文字化け・二重表示を目視する。
+- 部屋・プラン・チャネル・言語・環境が複数なら全件をループし、成功/失敗を一覧にする。代表1件だけで完了としない。
+
+**実害（2026-08-25）**: 別フィールドとの取り違え・無効な `includeTexts=true` の黙殺・45,000字での応答切断が重なり「7室の説明文が空」と誤報した。実表示では8室すべてに掲載済みだった。
+
 ### 1.5 URL・名前・自己完結した手順（§1.5〜1.5.3）
 
 URL規約を守り、内部IDに名前を併記し、初心者向けの完全な手順を毎回示す。
@@ -205,6 +213,13 @@ kim が読む Doc は `tools/gdoc-publish.mjs`（URL をハイパーリンク化
 **手作業手順は毎ステップで5要素を書く（絶対ルール）**: ①直リンクURL ②選ぶ選択肢を完全コピペで明示 ③触らない項目を明示 ④完了判定の見え方 ⑤入力値は略さないフル値を1値=1コードフェンスでコピペ可能な形に（scope/URL/IDを短縮しない、GCP有効化等はエラーが返す直リンクをそのまま貼る）。GAS関数の▶実行依頼は「対象.gsファイルを先に開かせる」ステップを必ず入れる（関数プルダウンは開いているファイル内しか出ない）。詳細・NG/OK例・past cases: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/url-and-handoff-format.md`
 
 **共有config（DwD/IAM/DNS/Secrets/SaaS連携）を変更する手順を渡す前に既存の有無を必ず確認する**。上書きトグルは他アプリを壊す破壊力があるため、既存があればmerge、なければそのまま追加、と事前に明示。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/url-and-handoff-format.md`
+
+**URLは対象アカウントのブラウザプロファイルを指定して開く（2026-09-30 指示）**。所有アカウントを先に確定し（§1.12）、ランチャー・手順では `pwsh -NoProfile -File "<...>\.claude\open-url-as.ps1" -Account <メールアドレス> -Url <URL>` を使う。「そのアカウントで開いて」と書くだけで user に判断させない。ヘルパーが無ければ手順を渡す前に各PCの `~/.claude/open-url-as.ps1` へ設置し、対応表は同スクリプトの `-List` で確認する。
+
+- `%LOCALAPPDATA%\Google\Chrome\User Data\Local State` の `profile.info_cache` を毎回読み、Chrome を `--profile-directory=<プロファイルのディレクトリ名>` 付きで起動する。対応表を固定しない。
+- chrome.exe または指定アカウントのプロファイルが無い場合は、指定が効かなかった警告を user と Claude に見える形で出してから既定で開く。黙って別アカウントで開かない。
+
+**実害（2026-09-30）**: Supabase 管理画面のランチャーが直前に触った別アカウントの窓で開いた。`Start-Process <url>` や既定ブラウザ任せでは制御できなかった。
 
 **1.5.1 手作業を頼むときは「システムに詳しくない人」向けに毎回フル手順を書く（絶対ルール）**
 
@@ -226,12 +241,9 @@ kim が読む Doc は `tools/gdoc-publish.mjs`（URL をハイパーリンク化
 - **専門用語を避ける。使うなら言い換えを添える**: 「マージ」「デプロイ」「環境変数」は、
   何が起きるのかを1行の日本語で補う。
 - コマンドは **1コマンド = 1コードフェンス**。複数行に分けず、コピペ1回で完結させる。
-- **コマンドを渡すときは「何に貼るのか」を必ず書く（2026-09-15 kim 指摘でルール化）**。
-  「以下をそのまま貼って実行してください」だけでは、**どのアプリに貼るのかが分からず user が止まる**
-  （実際に「何に貼るの？」と聞き返された / 2026-09-15）。次の3点を毎回セットで書く。
-  ① **アプリ名**（PowerShell / ターミナル / コマンドプロンプト のどれか）
-  ② **開き方**（「Windowsキー → \`powershell\` と入力 → Enter → 青い画面が開く」）
-  ③ **貼り付け方**（PowerShell は青い画面で右クリック、Mac のターミナルは Cmd+V）
+- **コマンドは「貼る場所」と4点セットで渡す（2026-09-15 kim / 2026-09-30 nishi 指示）**。①アプリ名と画面上の正確な場所（例: エディタ下部の `PROBLEMS / OUTPUT / DEBUG CONSOLE / TERMINAL / PORTS` の `TERMINAL`）②その画面の開き方（「ターミナル → 新しいターミナル」/ `Terminal → New Terminal`）③貼り付け方と実行キー（「Ctrl を押しながら V → Enter」、効かなければ右クリック貼り付け）④成功表示（例: `Ready in ○○s` と対象URL）を同じメッセージに書き、症状→対処の表も添える。
+  コードブロックだけ・「ターミナルで実行」だけで済ませない。送信前に4点を読み返し、2回目以降も省略しない。画面の文言が不明なら創作せずスクショ1枚を頼む（下記「見ていない画面の手順を書かない」）。
+  **実害（2026-09-30）**: 同じ本番反映を3回頼みながら貼る場所を毎回省略し、聞き返しの往復を生んだ。
 - **コマンドを渡す前に「その端末で実行できるか」を確かめる（2026-09-16 実害でルール化）**。
   「◯◯でログイン済みの端末で実行してください」のような**条件付きの手渡しをしない**。
   条件を満たせない相手が受け取ると、そのまま実行して失敗する。
@@ -247,6 +259,14 @@ kim が読む Doc は `tools/gdoc-publish.mjs`（URL をハイパーリンク化
 判断: user 依頼を書き終えたら「**パソコンに詳しくない人がこれだけ読んで、迷わず終われるか**」を自問する。
 「たぶん分かるだろう」は毎回外れる。§1.1 の自動化原則で手作業自体を消すのが第一で、
 どうしても残る1操作だけを**この粒度**で書く。
+
+**手作業にはアカウント文脈も毎回添える（2026-08-28 指示）**。Google / Vercel / GitHub / Supabase / Discord / ChatGPT 等では、①使うアカウントのメールアドレス ②別アカウントだと起きるエラー ③切り替え方（ログアウト・シークレットウィンドウ・アカウント選択）④切り替えられない場合の別担当/認証済みCLI等の代替経路を省略しない。URLを開く操作は§1.5のヘルパーでアカウントを指定し、この説明を添える。
+
+- 操作主体と現在のログイン先を、`vercel whoami` / `gh auth status` / `git config user.email` / `gcloud auth list` 等で先に調べる。CLIの認証とブラウザのログインは別に確認する。推測なら推測と明示し、外れた場合の復旧手順も同じ文に書く。
+- クリック経路を書く前に直リンクを探す。例: `https://github.com/apps/<app>/installations/new` / `https://vercel.com/<team>/<project>/settings/git`。文章によるナビゲーションは直リンクが無い場合だけにする。
+- user の対話シェルは Claude 側より制約が強い前提にする。npm系CLIは `.cmd` シムを明示するか `node "<...>\node_modules\<pkg>\dist\<entry>.js" <args>` で呼び、`.ps1` の実行ポリシーを回避する。`Set-ExecutionPolicy` による安全設定の緩和を提案しない。
+
+**実害（2026-08-28）**: CLIは会社アカウントでもブラウザは個人アカウントで、Vercel が `account_not_found`（`Social Account is not yet connected to any Vercel user`）になった。対話 PowerShell では `vercel.ps1` が `PSSecurityException / UnauthorizedAccess` でも停止した。説明のトークン節約より user の往復削減を優先する。
 
 #### 見ていない画面の手順を書かない（絶対ルール / 2026-08-30 kim厳命）
 
@@ -323,6 +343,13 @@ nishi 指摘:「**『閉じてよい』というのは Close 処理をこれか�
   **ゲートを満たしても user が迷えば説明として失敗**。分類の直後に上の3行を必ず書く。
 - 判定: **user が次の1アクションで迷ったら、その説明は失敗**とみなす。
 
+**依頼は応答末尾の「やること」1か所にまとめる（2026-09-30 指示）**。本文に手順・パス・コマンド・URLを散らさず、初心者が上から順になぞれる番号付き手順にする。本文には結果と根拠を書き、操作に必要な値・リンクは末尾に揃える。値の調査・ファイル生成・検証手段・URLの到達確認は Claude 側で先に済ませ、権限上できない操作だけを残す。
+
+- 残る手順を数え、2つ以上なら `tools/make-desktop-launcher.mjs` でデスクトップのダブルクリック1個に畳む。前提確認→本処理→結果の自動検証→後続処理を組み込み、完了済み工程は自動スキップする。
+- 末尾にファイル名と実行内容を書き、症状→対処の表を添える。失敗時は「Claude にこう伝えてください」で止め、user に原因調査をさせない。§1.5.1の完全手順と併用する。
+
+**実害（2026-09-30）**: event-shop のDB列追加・アカウント指定・本番反映を別々の場所に書き、user に手順を組み立て直させた。
+
 **1.5.2 内部IDを単独で書かない — 人が読める名前を必ず併記する（絶対ルール / 2026-08-21 kim指示）**
 
 kim 指示:「**C0038がなんの案件かわからないので、案件名で毎回書くように**」。
@@ -384,6 +411,20 @@ kim が過去ログを掘る必要が生じ、その場で恒久ルール化の�
 **1.7 Claude Code hook を書くときの定石**
 
 PowerShell hookのstdinは`Read-StdinUtf8`ヘルパーでUTF-8として読む（Shift-JIS化けを防ぐ）。context注入する hook（UserPromptSubmit/Stop/SessionStart/Notification）に `async: true` を付けない（黙殺される）。`additionalContext` はVSCode UIに非表示なので、外部経路のメッセージは「冒頭で受信を明示せよ」と自己ディレクティブを書き込む。PSScriptAnalyzerの赤線はfalse positiveが多いので実パーサで判定する。settings.json変更はバックアップ＋Claude Code再起動が必要な場合がある。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/claude-settings-hooks.md`
+
+**Windows の `.cmd` / `.bat` / `.vbs` は ASCII only にする（2026-09-10 実害）**。日本語の説明は呼び出す `.mjs` のヘッダー等へ移す。`chcp 65001` では防げず、cscript/wscript は UTF-8 BOM も誤読する。
+
+- `grep -c -P '[^\x00-\x7F]' <file>` が 0 であることを確認する。本体出力をログへリダイレクトしている場合、`cmd /c <file>.cmd 2>&1` のコンソール出力が0行であることも確認する。CP932で化ける日本語エラーの文字列grepや終了コードだけで正常としない。
+- 既存 `.cmd` に日本語REMがあれば、先に上の実行で断片実行を確認してからASCIIへ置き換える。2026-09-10、REM断片が命令として実行されたが、node本体と終了コードは正常でログにもエラーが残らなかった。
+
+**gate/guard は作成・配線・実測・自己修復登録を同じセッションで済ませる（2026-09-01 実害）**。①`--selftest` ②`settings.json` の該当イベントへの配線 ③実際に止めたい失敗文を `judge()` に渡して block を確認 ④`hook-selfcheck.mjs` の `REQUIRED_HOOKS` 相当への登録、の4つを完了条件にする。新規インストールだけでなく、既存PCの日次実行・自己修復からも登録される経路を用意する。
+
+- 恒久的な機体ローカルの自作hookは `~/.claude/hooks/` に置く。配布先 `~/orgiast-claude-rules/tools/` は `onboarding-sync` が日次で上書きするため、未収録の自作hookを残さない（`settings.json` と `~/.claude/hooks/` は同期対象外）。
+- 各PCで `node -e "const s=require('fs').readFileSync(process.env.USERPROFILE+'/.claude/settings.json','utf8');console.log(s.includes('manual-request-evidence-gate')?'配線済み':'未配線 → 要対応')"` を実行する。未配線なら `hooks.Stop` に `node "<HOME>/orgiast-claude-rules/tools/manual-request-evidence-gate.mjs"` を追加し、`manual-request-fullsteps-gate.mjs` より前に置く（必要性→手順品質）。
+- `tools/*-gate.mjs` / `*-guard.mjs` のうち、settings未登録・他の非テスト `.mjs` からimportなし・インストーラ（`export function install` / `--apply`）でないものを報告する SessionStart hook を `~/.claude/hooks/` に置く。ライブラリとインストーラを除外し、`REQUIRED_HOOKS` への追記漏れも検出する。
+- 「classifierが拒否する」「user手作業が必要」という過去記録は依頼前に1回実行して確かめる。読み取りと書き込みは別判定（例: `vercel env pull` / `env ls` は通っても `vercel env add` は拒否され得る）。
+
+**実害（2026-09-01）**: 未配線の `manual-request-evidence-gate.mjs` は実際の失敗文なら block したのに動かず、不要な手作業約10分を依頼した。必須リストだけの自己診断は登録漏れを見逃し、手順品質ゲートは不要な依頼を丁寧にするだけだった。memoryの助言だけに頼らず判断時に動くgateで止める。
 
 ### 1.8〜1.10 プロジェクト立ち上げ
 
@@ -493,6 +534,16 @@ deny は締める方向の追加だけ Claude が自分で行ってよい。allo
 PR は原則 `gh pr create ... --label automerge` で作り、CI が赤なら Claude が直す。「マージしてください」と user に頼まない。
 workflow・keyserve・secrets・env・fleet 指令ファイルに触る時だけ label を付けず、PR 冒頭に kim の手動マージが必要な理由を書く。
 完了結論は 3 行以内、詳細はファイルへのリンク 1 本とし、応答末尾を必ず `**次に kim がすること: なし**` または 1 件だけの行動で終える。
+
+**目的を1つ与えた継続運転は `/autopilot start "<目的>"` を使う（2026-09-22 追加）**。毎回セッションを開閉して施策を指示させない。各PCへは SessionStart の `onboarding-sync` で `~/.claude/skills/autopilot/` を配布する。
+
+- 1周は `tools/autopilot-tick.mjs pre`（上限・Discord指示判定）→次の1施策を決定→`tools/codex-do.mjs` に実装委譲→Claudeが検証→`post` で記録→次回起床予約。既定上限は日20周・日6時間・noop連続3・総200周。超過時は自動一時停止し、`notify-kim` 経由でhostname付きDiscord DMと毎朝のダイジェストを送る。
+- userはDMまたは制御チャンネルに「続けて／止めて／一時停止／目的変更: …」と返すだけとし、投稿者userIdの発言だけを有効にする。監督は `fable-policy.json` の `planIncluded=true` のアカウントだけFable可、それ以外はOpus。実装はCodexへ渡す。
+- VSCode/CLI経路は画面を開けたまま・PCスリープ不可。夜間・外出中は `tools/autopilot-run.mjs`（ヘッドレス1周）と `tools/register-autopilot-task.ps1`（30分間隔、登録はuser承認後）を使う。
+- 配布項目は setup-manifest で optional にする。main未マージのファイルをrequiredにしてclean-install CIを落とさない。repairはseverityに関係なく実行される。
+- `autopilot-tick.mjs handoff` は本物の `~/.claude/next-session.md` を上書きするためテスト目的で実行しない。`AUTOPILOT_HOME` を変えても同じ。
+
+**発端（2026-09-21）**: kimがセッション開閉の手間をなくし、他PCでも目的から施策・実行を回す運用を要望した。無意味なループのコストは上限・番犬・DMで監視する。
 
 **1.15.1 セッションを閉じたら次のセッションを自動で立ち上げる（全アカウント・全PC共通 / 2026-08-30 kim 指示）**
 
@@ -608,10 +659,8 @@ ONBOARDING にこの経路が書いてあったのに、`next-session.md` に残
 作ってよいか kim の判断待ち」という一行が優先され、作れる PR を手渡しに倒した。
 **ルール本文が経路を認めているなら、引き継ぎの可否待ちメモは消化済みとして扱う。**
 
-**マージだけは人が押す**——共有 repo の main へのマージは auto-mode 分類器が拒否する。
-これは正しい関門なので迂回しない（§1.1 の `pr-merge.mjs` は自分のリポジトリでの話）。
-必須チェック `test` / `test-posix` が終わるまで `mergeable_state=blocked` なので、
-**green を API で確認してから**手順を出す（灰色のボタンを押させない）。手順には `[PR 手渡し]` の必須2点（開くアカウント・試したこと）を必ず添える。
+**通常PRは正本ブランチ＋`automerge`でマージまで完結させる**（§1.21）。write権限と適格条件を実測し、`autoMergeRequest` がnullでないことと必須チェック `test` / `test-posix` のgreenを確認する。古いclassifier拒否の記録を恒久的な不可理由にしない。
+安全弁の対象と§1.15のfleet指令ファイルだけはラベルを付けず、kimの手動マージが必要な理由をPR冒頭に書く。安全弁を迂回せず、手渡し前にはgreenをAPIで確認し、`[PR 手渡し]` の必須2点（開くアカウント・試したこと）を添える。
 
 <!-- MACHINE-STATE-START 各PCは自分の行だけを更新して push する -->
 
@@ -773,6 +822,27 @@ Fableは `fable-policy.json` の `planIncluded: true` のアカウントで、�
 
 従量課金トークンを使う前に必ず: ①定額枠内・トークン消費ゼロの代替があるか（ローカルスクリプト/既存自動化/Codex/Manus） ②「ツール未導入だから従量経路で」は理由にならない（自分でinstall） ③従量課金しか無ければモデル最小化（分類=Haiku、量産=Sonnet、Opusは品質差実測時のみ） ④大量トークン消費が見込まれる判断は着手前に費用見込みを1行提示。優先順位: 既存自動化・ローカルスクリプト（消費ゼロ）→Codex（コード・定額）／Manus（Web調査・エンリッチ・専用枠）→Haiku→Sonnet→Opus5（要正当化）。Fable は監督用のみ（§1.16）で、実装・量産・分類には使わない。詳細・過去事例: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/token-model-cost-routing.md`
 
+**無料枠は着手前に「上限×既存使用状況」を調べ、$0案を最初から提示する（2026-07-13 指示）**。Supabase / Vercel / GitHub / GCP等の有料案を出す前に、別/新規アカウントの無料枠・無料の別サービス・自前実装/既存無料リソースの流用を検討する。上限に当たりそうなら最初の提案で回避策を併記する。
+
+- 費用発生案には$0代替・機能差を添え、「$0だがアカウント分散」対「統一だが有料/枠解放」を比較する。基本は無料で始めてスケール時に課金し、既存スタックのアカウントに統一する。分散はuserが明示選択した場合だけにする。
+
+**実害（2026-07-13）**: Supabase無料枠が埋まっていると判明して直ちにPro $25/月を提案し、別アカウントや既存GitHub非公開リポの$0案をuserに指摘させた。最終的には既存リポで恒久保存できた。
+
+**Drive MCPの大きな結果は保存先ファイルを解析し、必要な値だけ取り出す（2026-09-02 追加）**。`read_file_content` が上限超過時に返すローカル保存パスをエラーと誤認しない。全文をコンテキストに載せず `node` で処理する。保存JSONの `{fileContent: string}` には `\_` / `\#` / `\[` / `\]` 等が混ざるため、JSON正規のエスケープ以外を外してからparseする。
+
+```js
+const body = JSON.parse(fs.readFileSync(p, "utf8")).fileContent;
+const clean = body.replace(/\\(?!["\\/bfnrtu])/g, "");
+const data = JSON.parse(clean);
+```
+
+この処理は必ず `.mjs` に書き `node file.mjs` で実行する。シェル経由の `node -e` ではバックスラッシュが壊れる。バッククォート・`$` 等も層をまたぐargvへ載せない。
+
+- スプレッドシートIDを `read_file_content` に渡すと全シートがMarkdown表で返り、日付シリアル値等も確認できる（この場合は表として解析する）。共通知識本文の配布・取込は§2.10の `download_file_content` を使う。
+- 結果ファイル検索の `createdTime > '...'` は秒単位で厳密なため、下限はジョブ投入時刻の1分前にする。
+
+**実測（2026-09-01）**: 53KBのJSONを約10回読んでも、抽出すれば毎回1〜2行で済んだ。全文投入は1回約15kトークンを消費し、投入時刻ちょうどの検索下限では約10秒で出た結果を取りこぼした。
+
 **1.17.2 GPT-6 Astra レーン**
 
 通常実装は Sol (`gpt-5.6-sol`) が既定。長時間・高難度・Sol 失敗時の昇格には Astra (`gpt-6-astra`) を使う。
@@ -794,7 +864,7 @@ Astra クールダウン中は Sol を使う。明示の `--model astra`（ま�
 
 **方針（2026-08-06 管理者kim決定・既定変更）: 既定の"監督(main loop)"は Opus。監督は最小限しか動かず、実働を Codex/Sonnet/Gemini にうまく流すことでコストを下げ品質を上げる。**（旧「既定Sonnet」から変更。真のコストレバーは Opus/Sonnet の別ではなく「監督が実装を自分で手打ちせず委譲しているか」＝この長大セッションで Opus 4.8 が委譲せず直接編集・pushを挽いたのが高騰の主因＝反面教師。）
 - **監督(既定・指揮官)＝Opus**：設計/根本原因/横断一貫性/経営判断/タスク分解/レビュー/verify という"頭"。ただし**最小限＝考える・分解する・指示する・検証するだけ。大きな実装は絶対に自分で書かない**（挽きそうになったら即Codexへ）。この規律が崩れるとOpus既定は高コスト化するので per-PC コストレポーターで常時監視し逸脱を検知する。
-- **実装本体＝Codex(WSL・定額枠)** に必ず委譲（§1.17）。**生成・返信・要約・量産・分類抽出＝Sonnet/Haiku**（subagentは`model:"sonnet"`等を明示）。**超大規模文脈・Web検索＝Gemini(無料枠)**。定型・軽作業は監督が抱えずSonnetに流す。
+- **実装本体＝Codex(WSL・定額枠)** に必ず委譲（§1.17）。**生成・返信・要約・量産・分類抽出＝Sonnet/Haiku**（subagentは`model:"sonnet"`等を明示）。**超大規模文脈・Web検索＝Gemini(無料枠)**。定型・軽作業は監督が抱えず用途別レーンへ流す。コード実装・軽微編集のSonnet / Opusへの切替には、下記の費用提示とkimの明示承認を必須とする。
 - verify は監督の責務（§1.2・§1.4／Opusの判断が最も効く所）。**作った/変えたものは必ず"実行して"動作確認してから完了と言う（2026-08-12 kim厳命・初歩的エラー多発への対策）**: スクリプトは実際に走らせ出力を目視（文字化け・構文エラー・二重実行/重複送信・空出力が無いか）、UIはブラウザ描画、送信・DB系はread-back。Codexに実装させた場合もClaude側で実行テストして結果を見て直すまでが1タスク。「たぶん動く」で完了報告しない。
 - **委譲規律の"仕組み化"**: 監督が実装を抱えていないか(Opus高消費×Codex未使用)を per-PC の tool-adoption-check が日次で🚨検知（§3.0.4）。🚨が出たら即、実装をCodexへ移す。監視だけで是正しないのは違反。
 - 効果は per-PC コストレポーターのモデル別内訳で実測して調整（憶測で決めない）。
@@ -803,23 +873,30 @@ Astra クールダウン中は Sol を使う。明示の `--model astra`（ま�
 - **1セッション=1目的は hook で機械的に担保する**: SessionStart の `session-purpose-gate` が「このセッションの目的を1行宣言せよ」と要求し、最初の依頼をそのセッションの目的として記録する。以後 UserPromptSubmit で**目的ドリフト**（別目的の依頼＝キーワードの重なりが薄い／「別件」「ところで」「次は」等）を検知したら、**着手前に**『ここで /session-close して新セッションで』と1行提案することを強制する（ブロックはしない。userが「続けて」と言えばそのまま継続）。16ターンを超えたセッションには区切り提案のナッジも出る。判定は純ローカル（API課金ゼロ・状態は `~/.claude/session-purpose/<session_id>.json`）。
 - セッションを閉じる時は `/session-close` skill で 成果要約→commit/PR→memory永続化→残TODO→次セッション用テンプレ→`/clear`促し まで完結させる。1セッション=1目的を守り、長い会話に複数タスクを積まない（文脈肥大は精度低下とコスト増を招く）。
 
+**非Claude実装レーンの全滅をSonnetへの自動切替理由にしない（2026-09-15 改定）**。①`codex-do` → `cheap-code` の順に、指示をファイルで渡して試す。②両方不可なら `tools/llm-ask.mjs --provider deepseek|kimi|groq`（providerは1つ選ぶ）でファイル単位に生成し、コードブロックをWriteで保存してverifyする。プロンプトには「出力はコードブロック1個のみ。説明不要。ファイルパス: <path>」を含め、保存後にtypecheck/testを実行する。素のAPI呼び出しは自律CLIとは別経路だが、拒否された操作自体の禁止・安全弁を迂回してはならない。
+
+- ③それも不可なら無人セッションでも実装を停止する。`next-session.md` に「レーン全滅・費用見込み（トークン概算）・選択肢（WSL導入でCodex復旧 / llm-ask / Sonnet承認）」を記録する。④Sonnet / Opusによる実装は費用見込みを提示し、kimの明示承認後だけにする。hookのフォールバック文言を免責にしない。
+- WindowsでCodexが書けないPCは、`wsl --install -d Ubuntu`（管理者操作・再起動＝人手1回）でWSL経路の復旧を検討する。
+
+**実害（2026-09-11〜15）**: StageCue実装でcodex-do/cheap-codeの拒否後にSonnetへP1〜P3を渡し、費用提示なしで約150万トークンを消費した。
+
 **委譲しない条件**: 単一ファイルの確認・grep 1発・数ステップのgit操作（status/diff/log/worktree）・直前の文脈を強く共有する確認は、AgentやCodexの起動コストの方が大きいため監督が直接実行してよい。独立した確認は1レスポンスにまとめて同時に投げる。
 実装本体（ファイル生成・複数ファイル編集・テスト作成）は従来どおりCodex／安い経路へ委譲する。lane-guardの閾値（4回警告/8回停止）は変更しない。
 
 詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/token-model-cost-routing.md`
 
-**1.18.1 実行レーン制（Fable は相談と判定、実行は非Claude → Sonnet → Opus(設計のみ)）**
+**1.18.1 実行レーン制（Fableは相談と判定、実装は非Claudeを優先し、全滅時は停止・費用提示・kim承認）**
 
 | lane | 主経路 | 失敗時 |
 |---|---|---|
 | consult | Fable本体（ツールなし、Read/Grep数回まで） | 実行へ進むなら該当レーンへ委譲 |
-| implement / edit-small | Codex（軽微編集はGemini可） | Codex内蔵fallback → Sonnet |
+| implement / edit-small | Codex（軽微編集はGemini可） | cheap-code → llm-askでファイル単位生成 → 不可なら停止・費用提示。Sonnet / Opus実装はkim承認後のみ |
 | verify | Codex review または Gemini | Sonnet |
 | bulk | `llm-ask`（20件以上・全件は夜間`batch-enqueue`） | Sonnet |
 | mcp | Sonnetサブエージェント | Fable/Opusは結果確認のみ |
 | design | Fable本体、複数仮説の設計判断だけOpus | Sonnetで材料整理 |
 
-Fable/Opus本体の直接ツール実行は1ターン4回で警告、8回で停止（lane-guard）。例外はuser指示の `[LANE-OK]`。Sonnetは非Claudeが全部落ちた時の最後の手だが、MCPコネクタ操作だけは最初からSonnetサブエージェントへ渡す。2026-09-10 kim承認。
+Fable/Opus本体の直接ツール実行は1ターン4回で警告、8回で停止（lane-guard）。例外はuser指示の `[LANE-OK]`。非Claude実装レーンが全滅してもSonnetへ自動切替せず、§1.18の順序で停止・費用提示・kim承認を守る。verify / bulkのSonnet経路を実装の代用にしない。MCPコネクタ操作は最初からSonnetサブエージェントへ渡してよいが、アプリ実装は含めない（2026-09-10承認、2026-09-15実装fallback改定）。
 
 ### 1.18.2 Grok Bot = 「ブラウザ実操作が要るから Claude では消せなかった手作業」の消し先（2026-09-17 導入）
 
@@ -912,6 +989,22 @@ Bashは1呼び出し1コマンドとし、専用ツールとallow済みの経路
 仕組み化は提案で止めず、実装・試験・有効化後に`PROMOTED`と昇格先を記録する。
 バッチ・移行・一括処理は`TOTAL INPUT = SUCCESS + FAILED + EXCLUDED + UNRECOGNIZED`を照合する。
 詳細は`protocols/LEARNING-LEDGER.md`と各skillを正本とする。
+
+**正本へのPRはforkを使わず、正本ブランチ＋`automerge`で完結させる（2026-09-25 改定）**。`kimkon1011/orgiast-claude-rules` にwrite権限があるアカウントは正本へブランチを直接pushする。mainへの直pushとは区別する。着手時に `gh api repos/<repo> --jq .permissions` で権限を実測し、`origin` が正本を指すことを確認して次を実行する。
+
+```
+gh api repos/kimkon1011/orgiast-claude-rules --jq .permissions   # push:true を確認
+git push origin HEAD:refs/heads/<branch>
+gh pr create --repo kimkon1011/orgiast-claude-rules --base main --head <branch> --title ... --body-file -
+gh pr edit <番号> --repo kimkon1011/orgiast-claude-rules --add-label automerge
+gh pr view <番号> --repo kimkon1011/orgiast-claude-rules --json autoMergeRequest   # null でないこと
+```
+
+- 自動マージには①正本内のブランチ ②draftでない ③authorがcollaborator ④`automerge`ラベル ⑤`.github/workflows/*` / `*keyserve*` / `*secrets*` / `*.env*` を変更しない、の全条件を満たす。安全弁対象と§1.15のfleet指令ファイルはラベルを付けず、kimの手動マージが必要な理由をPR冒頭に書く。安全弁を迂回しない。
+- CIのgreenだけで有効化済みと判断しない。ラベルなしでは `enable-auto-merge` がpassでも `eligible=false` のままなので、`autoMergeRequest` がnullでないことを毎回確認する。
+- `gh`未認証でも§1.15のcredential helper経路でClaudeがPRを作る。`gh pr merge` のGraphQL `mergePullRequest` が拒否されても、それだけで不可能と断定しない。安全弁の対象外ならRESTの `gh api -X PUT repos/<repo>/pulls/<番号>/merge -f merge_method=squash` が通る場合もある。`docs/pr-flow-canonical-branch.md` を参照する（onboarding-syncはdocsを配布しないため、必要なら `gh api repos/kimkon1011/orgiast-claude-rules/contents/docs/pr-flow-canonical-branch.md -H "Accept: application/vnd.github.raw+json"` で読む）。
+
+**実害（2026-09-23〜25）**: fork PRはCIがgreen・MERGEABLEでも2日滞留した。正本ブランチ＋ラベルで出し直したPR #562は約8分でgithub-actionsがマージした。fork除外は第三者コード/tokenへ書き込み権限を渡さない設計であり、対象をforkに広げない。
 
 ## 2. 重要な運用ルール
 
@@ -1026,6 +1119,15 @@ Driveの移動・知識の正本管理を守り、社内アプリには投稿窓
 **2.9 Google Drive 運用ルール**
 
 Claude新規作成は標準フォルダ「作業ファイル」直下（既存自動化フォルダは例外）。**`copy_file`を移動の代用にしない**（新IDの複製が残る）。実際の移動はkimのUI ドラッグのみ。絶対に動かさないもの（weekly-bot参照フォルダ、GASコマンドキュー、bound script付きSheet等）。マイドライブ⇔共有ドライブ跨ぎの移動は禁止。移動後はClaudeがread-back検証。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/drive-operations.md`
+
+**案件の成果物は、その案件の実施計画書スプレッドシート内に新しいタブとして作る（2026-09-22 kim厳命）**。打診先リスト・候補表・調査結果・比較表・見積比較を独立した新規Sheet/Docに分散させない。タブ名は短い日本語（例:「音響打診先」）にし、末尾に案件条件（日時・会場・規模・予算・先方担当）を添え、単独で判断できるようにする。
+
+- Drive MCPではタブ追加ができないためSheets APIを直接使う。`tools/lib/drive-auth.mjs` の `getDriveToken({ scope: 'https://www.googleapis.com/auth/spreadsheets' })` で認証し、`POST https://sheets.googleapis.com/v4/spreadsheets/{spreadsheetId}:batchUpdate` の `addSheet` で追加する。同名タブがあればスキップして冪等にする。
+- `PUT https://sheets.googleapis.com/v4/spreadsheets/{spreadsheetId}/values/'タブ名'!A1?valueInputOption=USER_ENTERED` で書き、`GET https://sheets.googleapis.com/v4/spreadsheets/{spreadsheetId}/values/'タブ名'!A1` 等で書き込み範囲をread-backしてから報告する。
+- スクリプトはscratchpadのファイルにして `node <file>` で実行する。Windowsの絶対パスimportには `file:///` を付け、`ERR_UNSUPPORTED_ESM_URL_SCHEME` を避ける。
+- 書き込み後に `GET https://sheets.googleapis.com/v4/spreadsheets/{spreadsheetId}?fields=sheets.properties` でgidを取得し、`https://docs.google.com/a/orgiast.jp/spreadsheets/d/{ID}/edit#gid={gid}` の該当タブ直リンクを渡す。
+
+**実害（2026-09-22）**: 音響機材レンタルの打診先を別ファイルに作ろうとして差し戻された。kimが同じシートへ回答・判断・打診結果を記入し、制作ディレクターやアシスタントも参照する。1ファイルへ集約して検索・権限設定・行き来を減らし、過去の打診先・単価・断られた理由を再利用する。
 
 **2.10 マルチアカウント共通ナレッジ運用**
 

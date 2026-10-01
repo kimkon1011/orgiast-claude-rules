@@ -21,21 +21,21 @@ Drive ハブ（正本）: `claude-common-rules` folder `1RLYbK6CKyPWRJsG6LY0WB9O
 
 ## pull（全アカウント共通）
 1. `search_files parentId='1RLYbK6CKyPWRJsG6LY0WB9OzlbFYSFvw' and title contains 'manifest'` → modifiedTime 最新の manifest.json を read_file_content
-2. ローカル `~/.claude/orgiast-rules-version.txt` の版番号と比較。同じなら「最新です」で終了。**注意：version 番号だけで新旧を判定せず、ハブ側と手元の中身の最終日付も比較すること。もしハブ側が古ければ pull を中止し退行を防ぐこと。**（※GitHub main → Drive ハブへは、夜間ジョブ `drive-hub-mirror.mjs` が毎日自動でミラー同期します）。
+2. ローカル `~/.claude/orgiast-rules-version.txt` の版番号と比較。同じなら「最新です」で終了。**注意：version 番号だけで新旧を判定せず、ハブ側と手元の中身の最終日付も比較すること。もしハブ側が古ければ pull を中止し退行を防ぐこと。**（※GitHub main → Drive ハブへは、夜間ジョブ `drive-hub-mirror.mjs` が毎日自動でミラー同期します）。kim 環境の `tools/hub-push.mjs` も毎晩ローカル正本を自動 push するため、配布の正本は hub。それでも手元の方が内容的に新しければ、上書きせず保留し `/share-knowledge` で hub へ戻す。
 3. manifest の files を順に取得（該当フォルダを parentId 検索 → 同タイトルの最新を **download_file_content** で取得し base64 デコード）
 4. 反映先:
    - `ONBOARDING.md` → プロジェクトの ONBOARDING ローカルマスター（kim 環境: `Downloads/CLAUDE.md配布/ONBOARDING.md`。無い環境は `~/.claude/ONBOARDING.md`）
    - `rules/*.md` → `~/.claude/rules/`
    - `skills/<name>.md` → `~/.claude/skills/<name>/SKILL.md`
    - `CLAUDE.md.template` → `~/.claude/CLAUDE.md` が**無い場合のみ**新規作成。既存があれば上書きせず差分を提示するだけ
-5. 反映前に既存ファイルを `~/.claude/backups/` にバックアップ
+5. **比較前に hub と手元の両方の改行コードを必ず CRLF → LF に正規化する。CRLF 差だけで「違う」と判定して上書きしない。** 内容差がある場合のみ、反映前に既存ファイルを `~/.claude/backups/` にバックアップ。手元の方が新しい場合は反映を保留し、版番号も更新しない
 6. `orgiast-rules-version.txt` を新版番号で更新 → 完了報告（版番号 + 反映ファイル一覧）
 
 ## merge（管理者 = kim 環境のみ）
 1. knowledge-inbox を parentId 検索 → 最新の `knowledge-merged.json`（台帳）に載っていないファイルを列挙
 2. 各投稿を read → 既存ルールとの重複・矛盾をチェック → 反映先を判定（ONBOARDING §x.x / rules/ / skills/ / 却下）。取り込み可否は`protocols/INTAKE-TWO-AXES.md`の2軸表で判定し、B軸が空なら差し戻す
 3. 反映案を1行/件で user に提示 → 承認後、**ローカル正本を編集**
-4. 正本を Drive に再アップ（同タイトル create_file）→ `manifest.json` を version+1 で再アップ → `knowledge-merged.json` に処理済み（fileId / タイトル / 反映先 / 日付）を追記して再アップ
+4. リポジトリ root で `node tools/hub-push.mjs` を実行（LF 正規化・fileId 保持、変更時のみ `manifest.json` の version+1）→ `knowledge-merged.json` に処理済み（fileId / タイトル / 反映先 / 日付）を追記して再アップ
 5. GitHub ミラー: `orgiast-claude-rules` repo に ONBOARDING / skills / rules を同期して commit + push
 6. 完了報告に新 version と反映内容を列挙
 

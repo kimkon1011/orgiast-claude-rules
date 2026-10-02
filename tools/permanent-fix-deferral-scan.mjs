@@ -55,9 +55,17 @@ export function scan({ home = os.homedir(), since = DEFAULT_SINCE, until = null 
       if (!entry) continue;
       const at = Date.parse(entry.ts);
       if (!(at >= Date.parse(since)) || (until !== null && !(at < Date.parse(until)))) continue;
-      const text = index === 0 ? String(entry.excerpt ?? '')
-        : (Array.isArray(entry.violations) ? entry.violations : []).map(v => v?.quote ?? '').join(' ~ ');
-      const found = detect(text)[0];
+      const quotes = index === 0 ? [String(entry.excerpt ?? '')]
+        : (Array.isArray(entry.violations) ? entry.violations : []).map(v => String(v?.quote ?? ''));
+      let text = '';
+      let found = null;
+      for (const quote of quotes) {
+        found = detect(quote)[0];
+        if (found) {
+          text = quote;
+          break;
+        }
+      }
       if (!found) continue;
       const { pattern, match } = found;
       byPattern[pattern]++;

@@ -123,3 +123,35 @@ test('全台帳で最初の一致だけをパターン別に集計する', t => 
     assert.deepEqual(source.rows.map(row => row.pattern), ['P1', 'P2', 'P3', 'P4', 'W']);
   }
 });
+
+test('連結で境界を越えた別引用の語では誤検出しない', t => {
+  const home = fixture(t);
+  const entry = {
+    ts: '2026-09-30T18:03:05.859Z',
+    excerpt: '一致しない引用',
+    violations: [
+      { quote: '次に kim がすること: PR #14 を確認（マージ判断のみ）。Vercel Previewでの動作確認も可能です' },
+      { quote: 'ご指摘を恒久ルールとして保存しました' },
+      { quote: 'この後の自動進行: なし' }
+    ]
+  };
+  for (const source of scan({ home }).sources) fs.writeFileSync(source.file, `${JSON.stringify(entry)}\n`);
+  for (const source of scan({ home }).sources) {
+    assert.equal(source.hits, 0);
+    assert.deepEqual(source.byPattern, { P1: 0, P2: 0, P3: 0, P4: 0, W: 0 });
+  }
+});
+
+test('handoff行自体に修正語がある場合は引き続き検出する', t => {
+  const home = fixture(t);
+  const entry = {
+    ts: '2026-09-30T18:03:05.859Z',
+    excerpt: '次に kim がすること: 自動修復の恒久化を次回に回す',
+    violations: [{ quote: '次に kim がすること: 自動修復の恒久化を次回に回す' }]
+  };
+  for (const source of scan({ home }).sources) fs.writeFileSync(source.file, `${JSON.stringify(entry)}\n`);
+  for (const source of scan({ home }).sources) {
+    assert.equal(source.hits, 1);
+    assert.equal(source.byPattern.P3, 1);
+  }
+});

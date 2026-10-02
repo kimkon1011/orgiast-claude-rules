@@ -27,6 +27,7 @@
   ],
   "defaultMode": "bypassPermissions",
   "homeToolDirectories": ["orgiast-main/tools", "orgiast-claude-rules/tools", "Downloads/orgiast-claude-rules/tools"],
+  "homeToolFiles": ["pr-merge.mjs", "codex-do.mjs", "notify-kim.mjs", "makimono-publish.mjs"],
   "denyReplacements": {
     "Bash(git push --force*)": ["Bash(git push --force origin*)", "Bash(git push --force)"],
     "PowerShell(*git push --force*)": ["PowerShell(*git push --force origin*)"]

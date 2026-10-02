@@ -16,6 +16,15 @@ export function mergeAllowRules(settings, home = os.homedir()) {
     const full = `${home.replaceAll('\\', '/').replace(/\/$/, '')}/${directory}/*`;
     additions.push(`Bash(node ${full})`, `Bash(node "${full})`);
     if (/^[A-Za-z]:\//.test(full)) additions.push(`Bash(node "${full.replaceAll('/', '\\')})`);
+    // ディレクトリ末尾の `*` だけでは auto mode の allow 照合に乗らず classifier に回ることがある
+    // （2026-10-02 実測: pr-merge.mjs が [Merge Without Review] で2回拒否。ファイル名を明示した
+    // codex-do.mjs の allow は同じ日に通った）。外向き操作を担う tool はファイル名単位でも配る。
+    const dir = full.replace(/\/\*$/, '');
+    for (const file of rules.homeToolFiles || []) {
+      const script = `${dir}/${file}`;
+      additions.push(`Bash(node ${script}:*)`, `Bash(node "${script}" *)`);
+      if (/^[A-Za-z]:\//.test(script)) additions.push(`Bash(node "${script.replaceAll('/', '\\')}" *)`);
+    }
   }
   permissions.allow = [...new Set([...(permissions.allow || []), ...additions])];
   const existingDeny = (permissions.deny || []).flatMap(rule => rules.denyReplacements[rule] || [rule]);

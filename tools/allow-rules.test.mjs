@@ -15,6 +15,14 @@ test('別PCのホームからパスを生成し、既存ルールを保持して
     assert(result.permissions.allow.includes('Bash(git push --force-with-lease:*)'));
     assert(result.permissions.allow.includes(`Bash(node "${home.replaceAll('\\', '/')}/orgiast-main/tools/*)`));
     if (home.startsWith('C:')) assert(result.permissions.allow.includes(`Bash(node "${home}\\orgiast-main\\tools\\*)`));
+    // 外向き tool はファイル名を明示した allow も配る（ディレクトリ `*` だけだと classifier に回る実測あり）
+    const posixHome = home.replaceAll('\\', '/');
+    for (const file of ['pr-merge.mjs', 'codex-do.mjs', 'notify-kim.mjs']) {
+      assert(result.permissions.allow.includes(`Bash(node ${posixHome}/orgiast-main/tools/${file}:*)`));
+      assert(result.permissions.allow.includes(`Bash(node "${posixHome}/orgiast-main/tools/${file}" *)`));
+      assert(result.permissions.allow.includes(`Bash(node "${posixHome}/Downloads/orgiast-claude-rules/tools/${file}" *)`));
+      if (home.startsWith('C:')) assert(result.permissions.allow.includes(`Bash(node "${home}\\orgiast-main\\tools\\${file}" *)`));
+    }
     for (const rule of ['Edit(~/.claude/settings.json)', 'Edit(~/.claude/CLAUDE.md)', 'Edit(~/.claude/next-session.md)', 'Edit(~/.claude/projects/**/memory/**)', 'Write(~/.claude/projects/**/memory/**)', 'Write(~/.claude/next-session.md)']) assert(result.permissions.allow.includes(rule));
     for (const rule of ['Bash(git push --force origin*)', 'Bash(git push --force)', 'PowerShell(*git push --force origin*)', 'Bash(git push -f*)', 'Read(secret)', 'Bash(rm -rf *)', 'Read(**/.env)']) assert(result.permissions.deny.includes(rule));
     assert.equal(result.permissions.defaultMode, 'bypassPermissions');

@@ -2,6 +2,7 @@
 // 2026-09-06: Stop 304回中198回が再Stop、handoff-quality 78件中71件が誤爆だった。
 // 9プロセスの逐次差し戻しを1回の評価・1つのblockへまとめ、userの再読を最大1回にする。
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
@@ -71,15 +72,22 @@ export async function evaluateGates(ctx, auditOptions = {}) {
   return { results, errors, audit };
 }
 
-function stateResult(sessionId, requestedBlock) {
+function stateResult(sessionId, requestedBlock, assistantText) {
+  if (!requestedBlock || !sessionId) return { retryCap: false };
   const stateFile = path.join(home(), '.claude', 'stop-gate-runner-state.json');
   let state = {}; try { state = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch {}
-  const blocks = Math.max(0, Number(state?.[sessionId]?.blocks) || 0);
-  if (!requestedBlock || !sessionId) return { retryCap: false };
-  if (blocks >= 2) return { retryCap: true };
-  state[sessionId] = { blocks: blocks + 1, lastTs: new Date().toISOString() };
+  const lastHash = crypto.createHash('sha256').update(String(assistantText ?? '')).digest('hex').slice(0, 16);
+  const blocks = state?.[sessionId]?.lastHash === lastHash
+    ? Math.max(0, Number(state?.[sessionId]?.blocks) || 0) : 0;
+  const sameTextRetries = blocks + 1;
+  const now = Date.now();
+  state = Object.fromEntries(Object.entries(state || {}).filter(([, entry]) => {
+    const lastTs = Date.parse(entry?.lastTs);
+    return Number.isFinite(lastTs) && lastTs >= now - 7 * 24 * 60 * 60 * 1000;
+  }));
+  state[sessionId] = { blocks: sameTextRetries, lastTs: new Date(now).toISOString(), lastHash };
   try { fs.mkdirSync(path.dirname(stateFile), { recursive: true }); fs.writeFileSync(stateFile, JSON.stringify(state, null, 2) + '\n'); } catch {}
-  return { retryCap: false };
+  return { retryCap: blocks >= 2, sameTextRetries };
 }
 
 function ledger(record) {
@@ -109,9 +117,9 @@ export async function run(input, context, auditOptions = {}) {
   const audit = evaluated.audit;
   const blockedBy = evaluated.results.map(({ name }) => name);
   const reasonCodes = [...evaluated.results.map(({ code, name }) => code || name), ...evaluated.errors];
-  const cap = stateResult(sessionId, blockedBy.length > 0);
+  const cap = stateResult(sessionId, blockedBy.length > 0, assistantText);
   const verdict = cap.retryCap ? 'retry-cap' : blockedBy.length ? 'block' : 'pass';
-  const record = { ...base, verdict, blockedBy, reasonCodes, retryCap: cap.retryCap, auditEvidence: audit.record.evidence }; ledger(record);
+  const record = { ...base, verdict, blockedBy, reasonCodes, retryCap: cap.retryCap, sameTextRetries: cap.sameTextRetries ?? 0, auditEvidence: audit.record.evidence }; ledger(record);
   if (verdict !== 'block') return { record };
   const sections = evaluated.results.map(({ name, reason }) => `### ${name}\n- ${reason}`);
   if (!blockedBy.includes('next-action-gate') && !hasRequiredFooter(assistantText)) sections.push(`### ピギーバック・ヒント\n- ${HANDOFF_HINT}`);

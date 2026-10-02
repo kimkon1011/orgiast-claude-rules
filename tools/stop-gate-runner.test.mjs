@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -30,13 +31,78 @@ test('複数gateの理由を1つのblockへ合流する', () => {
   assert.ok(record.blockedBy.includes('handoff-info-guard'));
 });
 
-test('同一sessionの3回目はretry-capでpassする', () => {
+test('同一本文の3回目以降はretry-capでpassし回数を保存する', t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-cap-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   assert.equal(JSON.parse(invoke(home, 'cap', request).stdout).decision, 'block');
   assert.equal(JSON.parse(invoke(home, 'cap', request).stdout).decision, 'block');
   assert.equal(invoke(home, 'cap', request).stdout, '');
+  assert.equal(invoke(home, 'cap', request).stdout, '');
   const records = fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8').trim().split(/\r?\n/).map(JSON.parse);
-  assert.deepEqual(records.map(({ verdict }) => verdict), ['block', 'block', 'retry-cap']);
+  assert.deepEqual(records.map(({ verdict }) => verdict), ['block', 'block', 'retry-cap', 'retry-cap']);
+  assert.deepEqual(records.map(({ sameTextRetries }) => sameTextRetries), [1, 2, 3, 4]);
+  const state = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-state.json'), 'utf8'));
+  assert.equal(state.cap.blocks, 4);
+  assert.equal(state.cap.lastHash, crypto.createHash('sha256').update(request).digest('hex').slice(0, 16));
+});
+
+for (const [name, texts, counts] of [
+  ['本文A・B・Cはすべてblock', [request, `${request} B`, `${request} C`], [1, 1, 1]],
+  ['本文変更で2回ずつblockできる', [request, request, `${request} B`, `${request} B`], [1, 2, 1, 2]],
+]) {
+  test(name, t => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-reset-'));
+    t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+    for (const text of texts) {
+      const result = invoke(home, 'reset', text);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(JSON.parse(result.stdout).decision, 'block');
+    }
+    const records = fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+    assert.deepEqual(records.map(record => record.sameTextRetries), counts);
+    assert.ok(records.every(record => record.retryCap === false));
+  });
+}
+
+test('block不要ならstateを作成・変更せず、sessionIdなしでも変更しない', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-no-write-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const stateFile = path.join(home, '.claude', 'stop-gate-runner-state.json');
+  const passText = '次に kim がすること: なし';
+  assert.equal(invoke(home, 'pass', passText).stdout, '');
+  assert.equal(fs.existsSync(stateFile), false);
+  assert.equal(JSON.parse(invoke(home, 'pass', request).stdout).decision, 'block');
+  const before = fs.readFileSync(stateFile, 'utf8');
+  const mtime = fs.statSync(stateFile).mtimeMs;
+  assert.equal(invoke(home, 'pass', passText).stdout, '');
+  assert.equal(JSON.parse(invoke(home, '', request).stdout).decision, 'block');
+  assert.equal(fs.readFileSync(stateFile, 'utf8'), before);
+  assert.equal(fs.statSync(stateFile).mtimeMs, mtime);
+  const records = fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(records[2].verdict, 'pass');
+  assert.equal(records[2].sameTextRetries, 0);
+});
+
+test('書き込み時に7日超・不正日時を削除し、旧形式の累計はリセットする', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-prune-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const stateFile = path.join(home, '.claude', 'stop-gate-runner-state.json');
+  const now = Date.now();
+  const recent = { blocks: 2, lastTs: new Date(now - 6 * 86400000).toISOString(), lastHash: 'other' };
+  fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+  fs.writeFileSync(stateFile, JSON.stringify({
+    old: { blocks: 2, lastTs: new Date(now - 8 * 86400000).toISOString() },
+    invalid: { lastTs: 'invalid' }, missing: {}, recent,
+    legacy: { blocks: 99, lastTs: new Date(now).toISOString() },
+  }));
+  const result = invoke(home, 'legacy', request);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).decision, 'block');
+  const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+  assert.deepEqual(Object.keys(state).sort(), ['legacy', 'recent']);
+  assert.deepEqual(state.recent, recent);
+  assert.equal(state.legacy.blocks, 1);
+  assert.ok(Date.parse(state.legacy.lastTs) >= now);
 });
 
 test('stop_hook_activeは評価せずskippedでpassする', () => {

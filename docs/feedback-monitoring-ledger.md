@@ -56,7 +56,7 @@ export const DEFAULT_REPO_MAP = {
 
 - ~~文字化け 2 件の中継元エンコード調査~~ → **解消（§7・2026-10-02）。** 正体は Shift_JIS の UTF-8 誤解釈で、実体は `ブース制作アプリ`。専用経路に重複登録済みのため中継から対象外化し、未マッピング 0 件。
 - GAS 系 5 アプリの原票実測（本番試験投稿の可否判断を含む）
-- aujust の共通監視要否の判断
+- ~~aujust の共通監視要否の判断~~ → **決定（§8・2026-10-03）。** 共通監視（GAS 中継 → feedback-to-issues）には組入れない。aujust は Supabase `app_feedback` 専用パイプラインで完結しており、中継へ投稿しないため共通パイプラインでは観測不能。滞留の実因は消化（未対応 18 件）で、監視経路の追加では解消しない。
 
 ## 6. GAS 系アプリの原票実測（2026-10-01・ソース読解）
 
@@ -118,3 +118,22 @@ app_name(生) = "�u�[�X����A�v��"
 フィードバックは専用経路側で追跡済みのため、中継 pending の重複 2 件を `tools/feedback-to-issues.mjs --dismiss <message_id> --no-chain` で対象外化した。pending の実読みで **5 件 → 3 件**に減り、残る 3 件はすべて正常エンコードの `ブース制作アプリ`（`DEDICATED_PIPELINE_APPS` により「専用経路」分類）であることを確認。したがって **未マッピング（＝監視漏れの警示対象）は 0 件**になった。
 
 **残る修正（恒久対策）:** 送信側（ブース制作アプリ GAS/フォーム）の `app` 名送信を UTF-8 に統一する。これは同アプリの GAS 修正として別施策で扱う（本台帳の点検としては滞留解消済み）。
+
+## 8. aujust の共通監視要否の判断（2026-10-03 実測）
+
+§5「aujust の共通監視要否の判断」をソース読解 + Supabase 実読で確定した。
+
+**結論 — 共通監視（GAS 中継 → `feedback-to-issues`）には組入れない。専用パイプラインで完結しているため。**
+
+**事実 1 — aujust のフォームは中継へ投稿しない。**
+`aujust-sales-automation/src/app/actions/feedback.ts` の `submitFeedback` は Supabase `app_feedback` テーブルへ直接 insert し（`:68` 付近）、Discord チャンネル（`DISCORD_FEEDBACK_CHANNEL_ID` 既定 `1382597595070726205`）へ通知する。GAS 中継（`FEEDBACK_RELAY_URL` / `macros/s/…/exec`）への送信コードは存在しない。よって共通パイプライン（`tools/feedback-to-issues.mjs` が中継 pending を読む方式）では aujust の投稿は一切観測できない。組入れにはアプリ側の送信変更が必要で、二重通知になるだけの価値がない。
+
+**事実 2 — 専用の状態管理と既読ツールが既にある。**
+`app_feedback` は `status`（new / triaged / in_progress / done / rejected）と `kind`（bug / request）、`priority` を持つ管理済みキュー。読み取りツール `aujust-sales-automation/scripts/list-feedback.ts`（オープン件 = new/triaged/in_progress を一覧）も実装済み。検知経路（Discord 通知）も投稿ごとに動く。
+
+**事実 3 — 実読: 未対応 18 件（2026-10-03 時点・読み取り専用クエリ）。**
+`list-feedback.ts` と等価のクエリ（`status in (new, triaged, in_progress)`）を実行した結果: **18 件、すべて `status=new`、最古 2026-08-06「案件重複」、最新 2026-10-02。** 約 2 ヶ月分の未消化滞留があり、`triaged` 以降へ進んだ件は 0。⇒ ギャップは「監視の有無」ではなく**未対応件の消化**であり、共通監視への組入れでは解消しない。
+
+**次施策（本項の着地点）:**
+1. aujust の未対応件消化は autopilot の現行目的（営業アプリ・制作アプリの未対応を毎日 0 件）の本体。`list-feedback.ts` 等価クエリを日次巡回に組み込み、件数を継続記録する。
+2. `feedback-to-issues.mjs` の `DEDICATED_PIPELINE_APPS` 方式（ブース制作アプリと同じ）で aujust の Supabase 直読を専用経路として追加することは将来候補。本項では未実施（コード変更を伴うため別 PR）。

@@ -594,6 +594,56 @@ test('in-progress ラベル付き Issue はフォーム報告の対象から除�
   assert.deepEqual(filterFeedbackIssues([available, active]), [available]);
 });
 
+test('feedbackRetryExclusionReason: 0回=実行 / 1回+6h以内=スキップ / 1回+6h経過=実行 / 3回=恒久スキップ', async () => {
+  const { feedbackRetryExclusionReason } = await import('./auto-session.mjs');
+  const now = new Date('2026-10-02T12:00:00Z');
+  const ago = (hours) => new Date(now.getTime() - hours * 3600_000).toISOString();
+  assert.equal(feedbackRetryExclusionReason(undefined, now), '');
+  assert.equal(feedbackRetryExclusionReason({ fails: 0 }, now), '');
+  assert.notEqual(feedbackRetryExclusionReason({ fails: 1, lastFailAt: ago(5) }, now), '');
+  assert.equal(feedbackRetryExclusionReason({ fails: 1, lastFailAt: ago(7) }, now), '');
+  assert.notEqual(feedbackRetryExclusionReason({ fails: 3, lastFailAt: ago(100) }, now), '');
+});
+
+test('in-progress は24時間以上古ければ除外せず、新しければ除外する', () => {
+  const now = new Date('2026-10-02T12:00:00Z');
+  const issue = (hours) => ({ repo: 'acme/app', number: 13, labels: [{ name: 'in-progress' }], updatedAt: new Date(now.getTime() - hours * 3600_000).toISOString() });
+  assert.equal(feedbackIssueExclusionReason(issue(1), undefined, now), 'in-progress（対応中）');
+  assert.equal(feedbackIssueExclusionReason(issue(25), undefined, now), '');
+  assert.deepEqual(filterFeedbackIssues([issue(1), issue(25)], {}, now), [issue(25)]);
+  // 時効後でも失敗回数の打ち切りは効く
+  assert.deepEqual(filterFeedbackIssues([issue(25)], { 'acme/app#13': { fails: 3, lastFailAt: '2026-09-01T00:00:00Z' } }, now), []);
+});
+
+test('成功でカウンタのキーが削除され、失敗は加算される', async () => {
+  const { recordFeedbackResult } = await import('./auto-session.mjs');
+  const issue = { repo: 'acme/app', number: 5 };
+  const attempts = {};
+  assert.deepEqual(recordFeedbackResult(attempts, issue, { success: false, error: 'boom' }), { gaveUp: false, fails: 1 });
+  recordFeedbackResult(attempts, issue, { success: false, error: 'boom' });
+  assert.equal(attempts['acme/app#5'].fails, 2);
+  assert.equal(attempts['acme/app#5'].lastError, 'boom');
+  recordFeedbackResult(attempts, issue, { success: true });
+  assert.equal('acme/app#5' in attempts, false);
+  recordFeedbackResult(attempts, issue, { success: false });
+  recordFeedbackResult(attempts, issue, { success: false });
+  assert.equal(recordFeedbackResult(attempts, issue, { success: false }).gaveUp, true);
+});
+
+test('3回到達で next-session.md の残TODOに1行だけ起票する（重複しない）', async () => {
+  const { appendGiveUpTodo } = await import('./auto-session.mjs');
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'giveup-')), 'next-session.md');
+  fs.writeFileSync(file, '<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. 既存\n');
+  const issue = { repo: 'acme/app', number: 13, title: '倉庫アプリとの連動' };
+  assert.equal(appendGiveUpTodo(file, issue, 'module not found'), true);
+  assert.equal(appendGiveUpTodo(file, issue, 'module not found'), false);
+  const md = fs.readFileSync(file, 'utf8');
+  assert.equal(md.split('自動修正が3回失敗した報告を手当て').length - 1, 1);
+  assert.match(md, /- \[ \] 自動修正が3回失敗した報告を手当て: acme\/app#13 「倉庫アプリとの連動」 — 最終エラー: module not found/);
+  assert.ok(md.indexOf('## 残TODO') < md.indexOf('自動修正が3回'));
+  assert.match(feedbackFailureBody([{ issue, status: 'failure', givingUp: true }]), /自動修正が3回失敗したので自動再試行を停止しました。/);
+});
+
 test('PR URL が無いフォーム報告だけ in-progress ラベル解除対象にする', () => {
   const stdoutPr = { issue: { number: 1 }, stdout: 'https://github.com/acme/app/pull/10', summary: '' };
   const summaryPr = { issue: { number: 2 }, stdout: '', summary: 'PR: https://github.com/acme/app/pull/11' };

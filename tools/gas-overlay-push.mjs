@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 
 export function parseArgs(args) {
   const options = {};
@@ -209,7 +209,7 @@ export function runOverlay(options, { runner = claspRunner, stdout = s => proces
   return result.ok ? 0 : 1;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+if (isEntry(import.meta.url)) {
   try { process.exitCode = runOverlay(parseArgs(process.argv.slice(2))); }
   catch (error) { process.stderr.write(`${error.message}\n`); process.exitCode = 1; }
 }

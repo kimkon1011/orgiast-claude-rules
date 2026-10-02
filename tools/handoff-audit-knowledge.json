@@ -142,5 +142,35 @@
     "route": "Gmail 下書きにしない。チャット本文に宛先/用件/本文を完成形で表示（kim はリモートデスクトップ/LINE/Discord で渡す）。Discord MCP が使えるなら Discord 送信可。**2026-09-22 実測**: 強制は `tools/internal-recipient-gmail-guard.mjs`（PreToolUse / matcher=`mcp__claude_ai_Gmail(?:_\\d+)?__(create_draft|send_message|update_draft|reply|forward)`、settings.json:475、台帳=`~/.claude/internal-recipients.json`→無ければ default の orgiast.jp/toho-kogyo.com + 明示4件）。経理(keiri.orgiast@gmail.com)宛 create_draft=**deny**・外部宛=pass・テスト14/14 pass を実測。**穴1**: claude.ai コネクタが無効な APIキー環境（`claude mcp list`=gemini-cli のみ）では MCP ツール自体が無く**発火しない**。**穴2（2026-09-22 一部解消）**: Bash 経由の Gmail REST は matcher 外で素通り。常設の下書き作成ツールが無かったが、`tools/gmail-draft.mjs`（2026-09-22 新設）が `loadLedger`/`isInternal` を取り込み**ツール内で内部宛を遮断**し、Gmail API を呼ばずチャット形式を出して exit 3 で止まる（実測: keiri.orgiast@gmail.com 宛で通信ゼロ・テスト20/20 pass）。ただし自分でアドホックなコードを書けば依然素通りする。**穴3**: 台帳に無いフリーメールの社内スタッフは素通り（drivers の追加は人の手）。未確認: コネクタ有効環境での実発火、書き込み系ツール名の全リスト",
     "confidence": "high",
     "source": "handoff-audit-nightly:ef7f9a4852ff71ec4c90c2b0780b7a52eb3778a56c5d3682923b9ceb2c02c978"
+  },
+  {
+    "pattern": "通知DMの実送信前の疎通確認をuserに選択させる",
+    "route": "Discord MCP",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:d1879ca457af2bd2d277b353681e3688d6b3a666079edb058e3bd471027df22c"
+  },
+  {
+    "pattern": "Codex へ編集・テストを任せて完了通知を待ち、PR作成を次段に送る",
+    "route": "codex-do.mjs",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:f736bec40b59a97db9dc13a4bc365e1e19f46e46a979d95d6a70921cccc4df16"
+  },
+  {
+    "pattern": "CI green の PR のマージを kim に1クリックで手渡す",
+    "route": "pr-merge.mjs",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:08d7fe078c5ec1e96871de2d7f7775f37302d2739a3d9956e4f271b9714a3c51"
+  },
+  {
+    "pattern": "新セッション起動・コマンド投入をユーザーのEnterに手渡す",
+    "route": "codex-do.mjs",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:e5b05b30ff79ae8c8b618d031c3e6e21d8613540abd827296133b541287a466c"
+  },
+  {
+    "pattern": "新セッションへの引き継ぎを user の Enter/タブ操作に手渡す",
+    "route": "codex-do.mjs",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:635a2e6334d6badc1ed7f53612de6b432e66f28767f68e4e2fafc217c3e96db8"
   }
 ]

@@ -2,7 +2,7 @@ import { latestAssistantText } from './lib/assistant-text.mjs';
 import { isEntry } from './is-entry.mjs';
 
 export function formatReason() {
-  return `[GH-HANDOFF] gh が未認証であることを理由に GitHub 操作を人に頼んでいますが、git credential fill を試した結果が書かれていません。gh 未認証は手渡しの理由になりません（ONBOARDING §1.1）。\n\n  printf "protocol=https\\nhost=github.com\\n\\n" | git credential fill\n\nの password を GH_TOKEN に入れて gh / gh api で自分で作ってください。試して失敗した場合は、実行したコマンドと結果（exit code・エラー文）を本文に書けば通過します。どうしても不要なときだけ [GH-HANDOFF-OK] と書いてください。`;
+  return `[GH-HANDOFF] gh が未認証であることを理由に GitHub 操作を人に頼んでいますが、git credential fill を試した結果が書かれていません。GitHub のデバイス認証・gh auth login を人に頼む前にも、同じ経路を先に試してください。gh 未認証は手渡しの理由になりません（ONBOARDING §1.1）。\n\n  printf "protocol=https\\nhost=github.com\\n\\n" | git credential fill\n\nの password を GH_TOKEN に入れて gh / gh api で自分で作ってください。試して失敗した場合は、実行したコマンドと結果（exit code・エラー文）を本文に書けば通過します。どうしても不要なときだけ [GH-HANDOFF-OK] と書いてください。`;
 }
 
 export function judge(text) {
@@ -22,7 +22,17 @@ export function judge(text) {
   const hasRequest = requestRegex.test(textWithoutCodeFences);
   const hasReason = reasonRegex.test(textWithoutCodeFences);
 
-  if (!hasRequest || !hasReason) {
+  // 2b. トリガー (c) GitHub 認証そのものの操作依頼
+  // 「gh 未認証だから PR を作って」型（(a)&(b)）とは別に、
+  // 「デバイス認証のコードを入力して承認してください」型の手渡しも止める。
+  // GitHub 認証の目印と人への操作依頼が同じ本文にあれば発火する（改行をまたいでよい）。
+  const ghAuthMarkerRegex = /(github\.com\/login\/device|gh\s+auth\s+login|gh-device-login|GitHub\s*の\s*デバイス\s*認証|GitHub\s*の\s*OAuth)/i;
+  const handoffRequestRegex = /(入力して|承認して|開いて|押して|してください|して下さい|お願いします|お願い)/;
+
+  const isAuthHandoff = ghAuthMarkerRegex.test(textWithoutCodeFences)
+    && handoffRequestRegex.test(textWithoutCodeFences);
+
+  if ((!hasRequest || !hasReason) && !isAuthHandoff) {
     return { triggered: false, missing: [] };
   }
 

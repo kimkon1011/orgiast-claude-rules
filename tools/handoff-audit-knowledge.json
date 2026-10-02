@@ -178,5 +178,23 @@
     "route": "待たない。長時間ジョブは前景で --timeout を切って回し切るか、実行基盤（GitHub Actions/タスクスケジューラ/auto-session 再入）に載せる。進捗は ~/.claude/executor-usage.jsonl（status/out/timedOut/secs/cwd）や `gh run view` 等の一次情報を直接照会し、照会できなければ「未確認」と書いて断定も確率表現もしない（監査基準 rule 4）。待ちは ~/.claude/next-session.md の残TODO先頭に「検証のみ1行」を足して次セッションで確認する。セッションを開いたまま「バックグラウンド実行中」と報告しない（2026-09-22 実測: codex-do.mjs は前景・単発で背景起動/進捗照会/待機の機能を持たない。docs/background-progress-wait-route.md）",
     "confidence": "high",
     "source": "handoff-audit-nightly:00b46f82eab2a741b92f56e59a34c6a2284e947887dd3dbd8884189d5d51f77e"
+  },
+  {
+    "pattern": "内部スタッフ宛メッセージの送信をLINE/Discordで手渡す",
+    "route": "Discord MCP",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:564c34181ccad24f8ff309d13905d69f3a1e3096770a8f89f81d1e0b54d4ab0a"
+  },
+  {
+    "pattern": "背景ジョブ完了待ちを user に開いたまま待たせる",
+    "route": "codex-do.mjs",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:d41b798b969bf5c466833f7098dfe7adb18ccfd536520451ae98583914a1d412"
+  },
+  {
+    "pattern": "Supabase 接続設定を kim の Dashboard 操作に手渡す",
+    "route": "pr-merge.mjs",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:d41b798b969bf5c466833f7098dfe7adb18ccfd536520451ae98583914a1d412"
   }
 ]

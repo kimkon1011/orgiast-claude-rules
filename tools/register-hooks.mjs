@@ -13,6 +13,12 @@ let HOOK_MATCHER = 'mcp__claude_ai_Gmail(?:_\\d+)?__(create_draft|send_message|u
 try {
   ({ HOOK_MATCHER } = await import('./internal-recipient-gmail-guard.mjs'));
 } catch { /* guard が未同期でも登録処理は続行する */ }
+// live-artifact-read-gate も同じ Gmail 書き込み系 + Bash/PowerShell を対象にする。
+// matcher の正本は guard 側。未同期PCでは上の退避値と同じ形に倒す(fail-open)。
+let LIVE_ARTIFACT_MATCHER = HOOK_MATCHER;
+try {
+  ({ HOOK_MATCHER: LIVE_ARTIFACT_MATCHER } = await import('./live-artifact-read-gate.mjs'));
+} catch { /* guard が未同期でも登録処理は続行する */ }
 
 const hooksOnly = process.argv.includes('--hooks-only');
 const home = process.env.ORGIAST_HOME || os.homedir();
@@ -234,6 +240,10 @@ try {
   if (add(settings.hooks.PreToolUse, 'model-agent-guard.mjs', { matcher: 'Agent|Task', hooks: [{ type: 'command', command: command('model-agent-guard.mjs') }] })) added += 1;
   if (add(settings.hooks.PreToolUse, 'internal-recipient-gmail-guard.mjs', { matcher: HOOK_MATCHER, hooks: [{ type: 'command', command: command('internal-recipient-gmail-guard.mjs'), timeout: 5 }] })) added += 1;
   added += syncMatcherFor(settings.hooks.PreToolUse, 'internal-recipient-gmail-guard.mjs', HOOK_MATCHER);
+  // 社外宛メールで説明している Google ファイルを、直近に中身として読んだかを確かめる。
+  // 3.4MB の transcript で初回 18 秒かかった実測があるため 30 秒にする（5 秒だと時間切れで素通りする）。
+  if (add(settings.hooks.PreToolUse, 'live-artifact-read-gate.mjs', { matcher: LIVE_ARTIFACT_MATCHER, hooks: [{ type: 'command', command: command('live-artifact-read-gate.mjs'), timeout: 30 }] })) added += 1;
+  added += syncMatcherFor(settings.hooks.PreToolUse, 'live-artifact-read-gate.mjs', LIVE_ARTIFACT_MATCHER);
   // ヘッドレス実行で消失するバックグラウンド処理を実行前に拒否する。
   if (add(settings.hooks.PreToolUse, 'pretooluse-headless-background.mjs', { matcher: 'Bash|PowerShell|ScheduleWakeup', hooks: [{ type: 'command', command: command('pretooluse-headless-background.mjs'), timeout: 5 }] })) added += 1;
   // read-only調査の逐次実行を検知し、まとめて調査するよう同期注入する。

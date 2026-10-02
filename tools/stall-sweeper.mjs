@@ -20,6 +20,11 @@ const read = file => fs.readFileSync(file, 'utf8');
 const clean = value => redactSecrets(String(value)).replace(/[\r\n|]+/g, ' ').slice(0, 600);
 export function localPath(value) {
   if (process.platform !== 'win32' && /^[A-Za-z]:[\\/]/.test(value || '')) return `/mnt/${value[0].toLowerCase()}/${value.slice(3).replaceAll('\\', '/')}`;
+  if (process.platform === 'win32' && /^\/mnt\/[A-Za-z]\//.test(value || '')) return `${value[5].toUpperCase()}:\\${value.slice(7).replaceAll('/', '\\')}`;
+  return value;
+}
+export function delegatedPath(value) {
+  if (/^[A-Za-z]:[\\/]/.test(value || '')) return `/mnt/${value[0].toLowerCase()}/${value.slice(3).replaceAll('\\', '/')}`;
   return value;
 }
 function item(kind, id, title, location, staleDays, nextAction, reason, extra = {}) {
@@ -330,15 +335,26 @@ export async function advanceDelegated(candidate, { outputDir, run = command }) 
   const cwd = candidate.cwd || ROOT;
   if (!fs.existsSync(cwd)) throw new Error('対象ディレクトリを確認できません');
   const stem = `${hash(candidate.id)}-${Date.now()}`;
-  const prompt = path.join(outputDir, `${stem}.prompt.md`), receipt = path.join(outputDir, `${stem}.result.json`);
-  fs.writeFileSync(prompt, promptFor(candidate, receipt));
+  const prompt = path.join(outputDir, `${stem}.prompt.md`);
+  const receiptDir = path.join(cwd, '.stall-sweeper');
+  const receipt = path.join(receiptDir, `${stem}.result.json`);
+  fs.mkdirSync(receiptDir, { recursive: true });
+  fs.writeFileSync(prompt, promptFor(candidate, delegatedPath(receipt)));
   const stdout = run(process.execPath, [path.join(ROOT, 'tools/codex-do.mjs'), '--prompt-file', prompt, '--cwd', cwd, '--timeout', '1800'], { cwd, timeout: 1900000 });
-  fs.writeFileSync(path.join(outputDir, `${stem}.log`), redactSecrets(stdout));
-  const result = JSON.parse(read(receipt));
+  let foundReceipt = receipt, recovery = '';
+  if (!fs.existsSync(foundReceipt)) {
+    const paths = [...stdout.matchAll(/(?:\/[^\r\n"'`]*|[A-Za-z]:[\\/][^\r\n"'`]*)\.result\.json\b/g)].map(m => localPath(m[0]));
+    foundReceipt = paths.reverse().find(file => fs.existsSync(file));
+    if (foundReceipt) recovery = `[stall-sweeper] 指定先に無いためstdout記載の受け取りファイルを回収: ${foundReceipt}`;
+  }
+  fs.writeFileSync(path.join(outputDir, `${stem}.log`), redactSecrets(`${stdout}${recovery ? `\n${recovery}\n` : ''}`));
+  if (!foundReceipt) throw Object.assign(new Error('委譲結果ファイルを確認できません'), { code: 'RECEIPT_MISSING' });
+  const result = JSON.parse(read(foundReceipt));
+  if (result.completed === false) return { completed: false, summary: result.summary || result.reason || '対応不要または未完了', recovery };
   if (result.completed !== true || !result.summary || !result.evidence?.file || !/^[a-f0-9]{64}$/.test(result.evidence.sha256 || '')) throw new Error('委譲成果の完了証拠がありません');
   const actual = crypto.createHash('sha256').update(fs.readFileSync(localPath(result.evidence.file))).digest('hex');
   if (actual !== result.evidence.sha256) throw new Error('委譲成果の検証ファイルが一致しません');
-  return { summary: result.summary, evidence: result.evidence };
+  return { completed: true, summary: result.summary, evidence: result.evidence, recovery };
 }
 export function parseArgs(args) {
   const out = { apply: false, max: 5, home: process.env.ORGIAST_HOME || (process.platform !== 'win32' && fs.existsSync('/mnt/c/Users/uers/.claude') ? '/mnt/c/Users/uers' : os.homedir()), repos: [] };
@@ -366,7 +382,17 @@ export function parseArgs(args) {
 export function report(items, warnings, results, apply) {
   const counts = KINDS.map(kind => `| ${kind} | ${items.filter(i => i.kind === kind).length} |`).join('\n');
   const human = items.filter(i => i.humanRequired);
-  return `# 停滞スイーパー報告\n\n${new Date().toISOString()} / ${apply ? '実行' : '検出のみ'}\n\n進んだ件数: ${results.filter(r => r.result === '成功').length} / 失敗: ${results.filter(r => r.result === '失敗').length} / human送り: ${human.length}\n\n| カテゴリ | 検出件数 |\n|---|---:|\n${counts}\n\n## 検出項目\n\n${items.map(i => `- ${clean(i.title)}（${i.kind}, ${i.staleDays}日）: ${clean(i.reason)} / ${clean(i.nextAction)} / ${clean(i.location)}`).join('\n') || 'なし'}\n\n## 実行記録・起票\n\n${results.map(r => `- ${r.kind} ${clean(r.id)}: ${r.result} ${clean(r.error || r.url || r.summary || r.commit || '')} ${r.issue || ''}`).join('\n') || 'なし'}\n\n## 未確認・保留\n\n${warnings.map(w => `- ${clean(w)}`).join('\n') || 'なし'}\n\n## 再利用\n\ncodex-do.mjs（実行委譲）、notify-kim.mjs（通知）、auto-session.mjs（残TODO解析・除外・GitHubリポジトリ名解析）、session-triage.mjs（会話ログの読取り）。open-work.mjsは既存の生成済みopen-work.mdを読み、Drive照会やfetchを伴う再生成は行わない。登録はensure-run-hidden.ps1とresolve-synced-repo.ps1を使用。\n`;
+  const total = name => results.filter(r => r.result === name).length;
+  const rated = total('成功') + total('失敗');
+  const failureRate = rated ? `${Math.round(total('失敗') / rated * 100)}%` : '対象なし';
+  return `# 停滞スイーパー報告\n\n${new Date().toISOString()} / ${apply ? '実行' : '検出のみ'}\n\n成功: ${total('成功')} / 未完了: ${total('未完了')} / 中止（安全側スキップ）: ${total('中止（安全側スキップ）')} / 失敗: ${total('失敗')} / human送り: ${human.length} / 失敗率: ${failureRate}（中止・未完了を除外）\n\n| カテゴリ | 検出件数 |\n|---|---:|\n${counts}\n\n## 検出項目\n\n${items.map(i => `- ${clean(i.title)}（${i.kind}, ${i.staleDays}日）: ${clean(i.reason)} / ${clean(i.nextAction)} / ${clean(i.location)}`).join('\n') || 'なし'}\n\n## 実行記録・起票\n\n${results.map(r => `- ${r.kind} ${clean(r.id)}: ${r.result} ${clean(r.error || r.url || r.summary || r.commit || '')} ${r.issue || ''}`).join('\n') || 'なし'}\n\n## 未確認・保留\n\n${warnings.map(w => `- ${clean(w)}`).join('\n') || 'なし'}\n\n## 再利用\n\ncodex-do.mjs（実行委譲）、notify-kim.mjs（通知）、auto-session.mjs（残TODO解析・除外・GitHubリポジトリ名解析）、session-triage.mjs（会話ログの読取り）。open-work.mjsは既存の生成済みopen-work.mdを読み、Drive照会やfetchを伴う再生成は行わない。登録はensure-run-hidden.ps1とresolve-synced-repo.ps1を使用。\n`;
+}
+export function finishExecution(candidate, runId, detail, error) {
+  const base = { kind: candidate.kind, id: candidate.id, action: '終了', runId };
+  if (!error) return { ...base, result: detail.completed === false ? '未完了' : '成功',
+    fingerprint: hash(JSON.stringify([candidate.eventTime, candidate.sourceText, candidate.snapshot])), ...detail };
+  const safelySkipped = /(?:安全|中止|秘密情報|検出後の変更|時刻不明)/.test(error.message);
+  return { ...base, result: safelySkipped ? '中止（安全側スキップ）' : '失敗', error: clean(error.message) };
 }
 // 世代ごとのwx作成で排他する。古い世代も消さず、削除禁止を守る。
 export function acquireLock(outputDir) {
@@ -422,13 +448,14 @@ export async function main(args = process.argv.slice(2)) {
         const queue = items.filter(i => !alreadyDone(i) && !i.humanRequired && order.includes(i.kind) && (!options.kind || i.kind === options.kind))
           .sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind)).slice(0, options.max);
         for (const candidate of queue) {
-          log({ kind: candidate.kind, id: candidate.id, action: '着手', result: '実行中' });
+          const runId = `${hash(candidate.id)}-${Date.now()}`;
+          log({ kind: candidate.kind, id: candidate.id, action: '着手', result: '実行中', runId });
           let row;
           try {
             const detail = candidate.kind === 'uncommitted' ? await advanceUncommitted(candidate, { log: r => log({ kind: candidate.kind, id: candidate.id, ...r }) }) : await advanceDelegated(candidate, options);
-            row = { kind: candidate.kind, id: candidate.id, action: '自動処理', result: '成功', fingerprint: hash(JSON.stringify([candidate.eventTime, candidate.sourceText, candidate.snapshot])), ...detail };
+            row = finishExecution(candidate, runId, detail);
           } catch (e) {
-            row = { kind: candidate.kind, id: candidate.id, action: '自動処理', result: '失敗', error: clean(e.message) };
+            row = finishExecution(candidate, runId, null, e);
             if (e.code === 'TEST_FAILED') {
               try { row.issue = fileTestFailure(candidate, e); }
               catch (issueError) { row.error += ` / GitHub起票未完了、報告に記録: ${clean(issueError.message)}`; }

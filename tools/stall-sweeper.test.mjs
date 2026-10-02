@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { detectUncommitted, detectOpenPr, detectStaleBranch, detectOpenTodo, detectFailedJob, detectStalledSession,
   detectUnverifiedDelegation, consecutiveFailures, escalate, parseArgs, advanceUncommitted, advanceDelegated,
-  inspectRepo, command, acquireLock, releaseLock } from './stall-sweeper.mjs';
+  inspectRepo, command, acquireLock, releaseLock, finishExecution, report, localPath } from './stall-sweeper.mjs';
 const now = Date.parse('2026-09-22T00:00:00Z'), day = 86400000;
 const ago = n => new Date(now - n * day).toISOString();
 const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'stall-sweeper-test-'));
@@ -107,6 +107,37 @@ test('テストでファイル更新: コミットを停止', async () => {
 test('委譲exit=0でも完了証拠なしなら失敗', async () => {
   const outputDir = temp();
   await assert.rejects(advanceDelegated({ id: 'x', cwd: outputDir }, { outputDir, run: () => '' }));
+});
+test('委譲receiptはcwd配下に置き、完了証拠を受け取る', async () => {
+  const outputDir = temp(), cwd = temp(), evidence = path.join(cwd, 'evidence.txt');
+  fs.writeFileSync(evidence, 'verified');
+  const sha256 = (await import('node:crypto')).createHash('sha256').update('verified').digest('hex');
+  const result = await advanceDelegated({ id: 'writable', cwd }, { outputDir, run: (_exe, args) => {
+    const prompt = fs.readFileSync(args[args.indexOf('--prompt-file') + 1], 'utf8');
+    const receipt = prompt.match(/((?:\/|[A-Za-z]:[\\/])[^\s]+\.result\.json) にJSON/)[1];
+    const local = localPath(receipt);
+    assert.ok(local.startsWith(path.join(cwd, '.stall-sweeper')));
+    fs.writeFileSync(local, JSON.stringify({ completed: true, summary: '完了', evidence: { file: evidence, sha256 } }));
+    return '';
+  } });
+  assert.equal(result.summary, '完了');
+});
+test('指定receiptが無い時はstdoutの絶対パスから回収する', async () => {
+  const outputDir = temp(), cwd = temp(), fallback = path.join(temp(), 'fallback.result.json');
+  fs.writeFileSync(fallback, JSON.stringify({ completed: false, reason: '再実行不要' }));
+  const result = await advanceDelegated({ id: 'fallback', cwd }, { outputDir, run: () => `別の場所へ保存: ${fallback}\n` });
+  assert.equal(result.completed, false); assert.match(result.recovery, /stdout記載/);
+  const log = fs.readFileSync(path.join(outputDir, fs.readdirSync(outputDir).find(f => f.endsWith('.log'))), 'utf8');
+  assert.match(log, /stdout記載の受け取りファイルを回収/);
+});
+test('completed:falseは未完了として終了し、着手runIdを閉じる', () => {
+  const candidate = { kind: 'failed_job', id: 'job' }, row = finishExecution(candidate, 'run-1', { completed: false, summary: '対応不要' });
+  assert.deepEqual({ action: row.action, result: row.result, runId: row.runId }, { action: '終了', result: '未完了', runId: 'run-1' });
+});
+test('結果区分と失敗率は未完了・安全側スキップを除外する', () => {
+  const text = report([{ humanRequired: true, kind: 'open_pr', title: 'p', staleDays: 1, reason: 'r', nextAction: 'n', location: 'u' }], [],
+    ['成功', '失敗', '未完了', '中止（安全側スキップ）'].map((result, i) => ({ kind: 'x', id: String(i), result })), true);
+  assert.match(text, /成功: 1 \/ 未完了: 1 \/ 中止（安全側スキップ）: 1 \/ 失敗: 1 \/ human送り: 1 \/ 失敗率: 50%/);
 });
 
 test('文字列の成功statusを失敗にしない', () => {

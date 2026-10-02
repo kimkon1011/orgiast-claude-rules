@@ -124,5 +124,23 @@
     "route": "node C:/Users/uers/orgiast-claude-rules/tools/gdoc-update.mjs --id <docId> --file <本文.md>（DWD SA で kim を代理、URL 不変・全置換・read-back 付き。--check で現状取得。表はヘッダが崩れるのでリストで書く）。新規 Doc 作成やコネクタ有効化の依頼に逃げない",
     "confidence": "high",
     "source": "2026-09-28 バドミントン指示書で「未接続」と誤って手渡し"
+  },
+  {
+    "pattern": "資格情報（Channel secret）を user に聞き直す",
+    "route": "過去 transcript・.env.local・production bundle・keyserve から復元。user に再聞き禁止",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:5722ee7e953e6d5a4bf4ee280502a6574981328dffa2092ea55ac81ed331715c"
+  },
+  {
+    "pattern": "社内・グループ会社・スタッフ宛の連絡文で「Claudeは直接送れない」と手渡し",
+    "route": "Gmail 下書きにしない。チャット本文に宛先/用件/本文を完成形で表示（kim はリモートデスクトップ/LINE/Discord で渡す）。Discord MCP が使えるなら Discord 送信可。**2026-09-22 実測**: 強制は `tools/internal-recipient-gmail-guard.mjs`（PreToolUse / matcher=`mcp__claude_ai_Gmail(?:_\\d+)?__(create_draft|send_message|update_draft|reply|forward)`、settings.json:475、台帳=`~/.claude/internal-recipients.json`→無ければ default の orgiast.jp/toho-kogyo.com + 明示4件）。経理(keiri.orgiast@gmail.com)宛 create_draft=**deny**・外部宛=pass・テスト14/14 pass を実測。**穴1**: claude.ai コネクタが無効な APIキー環境（`claude mcp list`=gemini-cli のみ）では MCP ツール自体が無く**発火しない**。**穴2（2026-09-22 一部解消）**: Bash 経由の Gmail REST は matcher 外で素通り。常設の下書き作成ツールが無かったが、`tools/gmail-draft.mjs`（2026-09-22 新設）が `loadLedger`/`isInternal` を取り込み**ツール内で内部宛を遮断**し、Gmail API を呼ばずチャット形式を出して exit 3 で止まる（実測: keiri.orgiast@gmail.com 宛で通信ゼロ・テスト20/20 pass）。ただし自分でアドホックなコードを書けば依然素通りする。**穴3**: 台帳に無いフリーメールの社内スタッフは素通り（drivers の追加は人の手）。未確認: コネクタ有効環境での実発火、書き込み系ツール名の全リスト",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:0e67a4f02b0d176b478f775093276fb703041c4bed32f55c707360594b03552d"
+  },
+  {
+    "pattern": "アシスタント/スタッフ宛の連絡文をチャット本文表示したうえで、さらにkimに「そのまま送ってください」と送信を手渡す",
+    "route": "Gmail 下書きにしない。チャット本文に宛先/用件/本文を完成形で表示（kim はリモートデスクトップ/LINE/Discord で渡す）。Discord MCP が使えるなら Discord 送信可。**2026-09-22 実測**: 強制は `tools/internal-recipient-gmail-guard.mjs`（PreToolUse / matcher=`mcp__claude_ai_Gmail(?:_\\d+)?__(create_draft|send_message|update_draft|reply|forward)`、settings.json:475、台帳=`~/.claude/internal-recipients.json`→無ければ default の orgiast.jp/toho-kogyo.com + 明示4件）。経理(keiri.orgiast@gmail.com)宛 create_draft=**deny**・外部宛=pass・テスト14/14 pass を実測。**穴1**: claude.ai コネクタが無効な APIキー環境（`claude mcp list`=gemini-cli のみ）では MCP ツール自体が無く**発火しない**。**穴2（2026-09-22 一部解消）**: Bash 経由の Gmail REST は matcher 外で素通り。常設の下書き作成ツールが無かったが、`tools/gmail-draft.mjs`（2026-09-22 新設）が `loadLedger`/`isInternal` を取り込み**ツール内で内部宛を遮断**し、Gmail API を呼ばずチャット形式を出して exit 3 で止まる（実測: keiri.orgiast@gmail.com 宛で通信ゼロ・テスト20/20 pass）。ただし自分でアドホックなコードを書けば依然素通りする。**穴3**: 台帳に無いフリーメールの社内スタッフは素通り（drivers の追加は人の手）。未確認: コネクタ有効環境での実発火、書き込み系ツール名の全リスト",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:ef7f9a4852ff71ec4c90c2b0780b7a52eb3778a56c5d3682923b9ceb2c02c978"
   }
 ]

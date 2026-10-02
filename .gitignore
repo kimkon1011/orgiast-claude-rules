@@ -1,4 +1,7 @@
 
+# 接続文字列などの秘密(freee-query.mjs が読む)。絶対にコミットしない
+.env.local
+
 # Codex CLI が作業ごとに置く一時ファイル(コミット対象外)
 .codex-task.md
 memory-shared/

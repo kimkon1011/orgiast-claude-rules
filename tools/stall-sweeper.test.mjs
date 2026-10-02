@@ -159,13 +159,17 @@ test('テスト失敗の起票は同じ項目で重複作成しない', async ()
 // ---- 保留(deferred)と作業種別 ----
 import { delegationKind, deferredUntil, DeferredError, report } from './stall-sweeper.mjs';
 
-test('delegationKind: open_todo の「調査/確認/検証(読み取り)」は investigate、実装系は implement', () => {
-  assert.equal(delegationKind({ kind: 'open_todo', nextAction: 'Codexで残作業を確認し再開' }), 'investigate');
-  assert.equal(delegationKind({ kind: 'open_todo', nextAction: '原因を調査する' }), 'investigate');
-  assert.equal(delegationKind({ kind: 'open_todo', nextAction: '検証(読み取り)だけ行う' }), 'investigate');
-  assert.equal(delegationKind({ kind: 'open_todo', nextAction: '機能を実装する' }), 'implement');
+test('delegationKind: open_todo は項目自身の文面だけで判定し、既定 nextAction は無視する', () => {
+  const def = 'Codexで残作業を確認し再開';
+  assert.equal(delegationKind({ kind: 'open_todo', title: 'cron が止まる原因を調査する', nextAction: def }), 'investigate');
+  assert.equal(delegationKind({ kind: 'open_todo', title: '議事録を要約する', nextAction: def }), 'summarize');
+  assert.equal(delegationKind({ kind: 'open_todo', title: '機能を実装する', nextAction: def }), 'implement');
   assert.equal(delegationKind({ kind: 'unverified_delegation', nextAction: 'Codexで成果とコミットの対応を検証' }), 'verify');
   assert.equal(delegationKind({ kind: 'failed_job', nextAction: 'Codexで原因を調査して安全に再実行' }), 'implement');
+});
+
+test('既定 nextAction だけの open_todo(文面に明確な語なし)は implement(Codex)', () => {
+  assert.equal(delegationKind({ kind: 'open_todo', title: 'あの件', sourceText: 'あの件', nextAction: 'Codexで残作業を確認し再開' }), 'implement');
 });
 
 test('委譲先が保留(終了コード75)を返したら DeferredError。失敗ではなく retryAt を持つ', async () => {
@@ -185,7 +189,7 @@ test('委譲には --origin unattended と --kind を渡す', async () => {
   const outputDir = temp();
   let seen;
   const run = (exe, args) => { seen = args; return '[codex-do] 調査結果: 問題なし\n'; };
-  const result = await advanceDelegated({ kind: 'open_todo', id: 'x', cwd: outputDir, nextAction: 'Codexで残作業を確認し再開' }, { outputDir, run });
+  const result = await advanceDelegated({ kind: 'open_todo', id: 'x', cwd: outputDir, title: '原因を調査する', nextAction: 'Codexで残作業を確認し再開' }, { outputDir, run });
   assert.deepEqual(seen.slice(seen.indexOf('--origin'), seen.indexOf('--origin') + 4), ['--origin', 'unattended', '--kind', 'investigate']);
   assert.match(result.summary, /調査メモ/);
   assert.match(result.evidence.sha256, /^[a-f0-9]{64}$/);

@@ -99,7 +99,7 @@ if (isEntry(import.meta.url)) {
   // 同一プロセスでimportするとsendDiscordDmの循環参照で停止するため別プロセスにする。
   try {
     const script = fileURLToPath(new URL('./ledger-stale-nag.mjs', import.meta.url));
-    const child = spawnSync(process.execPath, [script, ...process.argv.slice(2)], { stdio: 'inherit' });
+    const child = spawnSync(process.execPath, [script, ...process.argv.slice(2)], { stdio: 'inherit', windowsHide: true });
     if (child.error || child.status !== 0) throw child.error || new Error(`exit ${child.status}, signal ${child.signal || 'none'}`);
   } catch (error) { console.error(`feedback-nag: ledger-stale-nag failed: ${String(error.message).replace(/\s+/g, ' ')}`); }
 }

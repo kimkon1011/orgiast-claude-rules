@@ -64,9 +64,34 @@ export function acquireLock(file, { now = Date.now, pid = process.pid } = {}) {
   }
   return null;
 }
+export function findPriorReply(dir, id) {
+  const sentFile = path.join(dir, 'fleet-mail-sent.jsonl');
+  let sentLines;
+  try {
+    sentLines = fs.readFileSync(sentFile, 'utf8').split('\n').filter(l => l.trim());
+  } catch (e) {
+    if (e.code === 'ENOENT') sentLines = [];
+    else throw e;
+  }
+  for (const line of sentLines) {
+    try {
+      const entry = JSON.parse(line);
+      if (entry.id === id && (entry.action === 'reply' || entry.action === 'auto-reply')) {
+        return { at: entry.at, action: entry.action };
+      }
+    } catch { /* skip malformed line */ }
+  }
+  const inboxPath = path.join(dir, 'fleet-inbox', `${id}.json`);
+  let mail = null;
+  try { mail = readJson(inboxPath, null); } catch { /* damaged inbox file: sent.jsonl stays the source of truth */ }
+  if (mail && mail.status === 'done') {
+    return { at: mail.resultAt ?? null, action: 'inbox-done' };
+  }
+  return null;
+}
 export function parseArgs(argv) {
   const options = {};
-  const flags = new Set(['--send', '--poll', '--dry-run', '--json', '--inbox']);
+  const flags = new Set(['--send', '--poll', '--dry-run', '--json', '--inbox', '--force']);
   const values = new Set(['--to', '--kind', '--body-file', '--why', '--expires-hours', '--wait', '--reply', '--ack']);
   for (let i = 0; i < argv.length; i++) {
     const key = argv[i];
@@ -79,7 +104,7 @@ export function parseArgs(argv) {
   if (actions.length !== 1) throw new Error('指定は --send / --poll / --reply / --inbox / --ack のいずれか1つ');
   const allowed = {
     '--send': ['--to', '--kind', '--body-file', '--why', '--expires-hours', '--wait'],
-    '--poll': ['--dry-run', '--json'], '--inbox': ['--json'], '--reply': ['--body-file'], '--ack': []
+    '--poll': ['--dry-run', '--json'], '--inbox': ['--json'], '--reply': ['--body-file', '--force'], '--ack': []
   };
   for (const key of Object.keys(options)) if (key !== actions[0] && !allowed[actions[0]].includes(key)) throw new Error(`option not applicable: ${key}`);
   if (options['--send']) {
@@ -162,8 +187,27 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   }
   if (options['--reply']) {
     const id = options['--reply'];
-    await request('mail-reply', { id, from: label, resultBody: redactSecrets(fs.readFileSync(options['--body-file'], 'utf8')).slice(0, 20000) });
-    log('sent', { action: 'reply', id }); out(`返信済み: ${id}`); return 0;
+    const body = redactSecrets(fs.readFileSync(options['--body-file'], 'utf8')).slice(0, 20000);
+    if (!options['--force']) {
+      const prior = findPriorReply(dir, id);
+      if (prior !== null) {
+        err(`fleet-mail: ${id} は ${prior.at ?? '日時不明'} に返信済み（${prior.action}）のため送信しません。意図的に再送するときだけ --force`);
+        return 3;
+      }
+    }
+    await request('mail-reply', { id, from: label, resultBody: body });
+    log('sent', { action: 'reply', id, ...(options['--force'] ? { forced: true } : {}) });
+    const file = inboxFile(id);
+    // Record the reply locally too: a resumed session reads the inbox and must not answer the same id again.
+    try {
+      const mail = readJson(file, null);
+      if (mail) {
+        const nowISO = new Date(now()).toISOString();
+        writeJson(file, { ...mail, status: 'done', resultAt: nowISO, resultBody: body, readAt: mail.readAt ?? nowISO });
+      }
+    } catch (e) { err(`fleet-mail: inbox への返信記録に失敗（送信は成功）: ${e.message}`); }
+    out(`返信済み: ${id}`);
+    return 0;
   }
   const dryRun = !!options['--dry-run'];
   const release = dryRun ? () => {} : acquireLock(path.join(dir, 'fleet-mail.lock'), { now });
@@ -222,6 +266,10 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
         }
         await request('mail-reply', { id: mail.id, from: label, resultBody: result.outputTail });
         log('sent', { action: 'auto-reply', id: mail.id, exitCode: result.exitCode, timedOut: result.timedOut || false });
+        try {
+          const inboxMail = readJson(inboxFile(mail.id), null);
+          if (inboxMail) writeJson(inboxFile(mail.id), { ...inboxMail, status: 'done', resultAt: new Date(now()).toISOString(), resultBody: result.outputTail });
+        } catch (e) { err(`fleet-mail: inbox への返信記録に失敗（送信は成功）: ${e.message}`); }
       }
       fs.appendFileSync(processedFile, `${mail.id}\n`, { mode: 0o600 }); processed.add(mail.id); handled.push(mail.id);
     }

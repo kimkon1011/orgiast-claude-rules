@@ -8,7 +8,7 @@ paths:
 # GAS 開発ルール（orgiast 全プロジェクト共通・絶対ルール）
 
 ## 1. clasp 統一
-手作業コピペ禁止。反映は必ず `clasp push -f`。既存プロジェクトを触る時も `.clasp.json` を置いて統一。push 後に time-based トリガーは**古いコードで動き続ける**ので、トリガー再作成（Web App `?cmd=setup` 再踏み or setupOnce 再実行）+ `clasp deploy --deploymentId <ID>` で同一 URL を最新化。
+手作業コピペ禁止。反映は必ず `clasp push -f`。共有作業ツリーから直接 push せず、`node C:/Users/uers/Downloads/orgiast-claude-rules/tools/gas-overlay-push.mjs --project <repo> --files <変更ファイル>` を使う（本番pull→変更ファイルだけ重ね→差分表示→push→read-back。他セッションの古いファイルで本番を巻き戻さないため。kim 承認 2026-09-29）。既存プロジェクトを触る時も `.clasp.json` を置いて統一。push 後に time-based トリガーは**古いコードで動き続ける**ので、トリガー再作成（Web App `?cmd=setup` 再踏み or setupOnce 再実行）+ `clasp deploy --deploymentId <ID>` で同一 URL を最新化。
 
 ## 2. コマンドキュー方式（省略禁止・retrofit 禁止）
 Workspace ポリシーで `clasp run-function` と ANYONE_ANONYMOUS Web App が使えないため、**最初の clasp push に必ず組み込む**:

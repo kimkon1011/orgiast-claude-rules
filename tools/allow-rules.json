@@ -10,6 +10,7 @@
     "Bash(cat:*)", "Bash(ls:*)", "Bash(sed -n:*)", "Bash(grep:*)", "Bash(rg:*)", "Bash(head:*)", "Bash(tail:*)",
     "Bash(wc:*)", "Bash(find:*)", "Bash(date:*)", "Bash(echo:*)", "Bash(mkdir:*)", "Bash(cp:*)", "Bash(mv:*)",
     "Bash(clasp push:*)", "Bash(clasp run:*)", "Bash(clasp pull:*)",
+    "Bash(node C:/Users/uers/Downloads/orgiast-claude-rules/tools/gas-overlay-push.mjs:*)",
     "PowerShell(git -C *)", "PowerShell(gh pr *)", "PowerShell(node tools/*)", "PowerShell(Get-Content *)", "PowerShell(Get-ChildItem *)",
     "Edit(~/.claude/settings.json)", "Edit(~/.claude/CLAUDE.md)", "Edit(~/.claude/next-session.md)",
     "Edit(~/.claude/projects/**/memory/**)", "Write(~/.claude/projects/**/memory/**)", "Write(~/.claude/next-session.md)"

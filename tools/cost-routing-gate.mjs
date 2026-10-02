@@ -166,7 +166,7 @@ try {
     }
   }
   // "codex" という語だけでは処理全体をバイパスしない。分類なしの場合も監督責務を注入する。
-  parts.push('[監督の担当] 設計・分解・指示・verify。実装・レビュー・テスト作成・調査レポートは Codex または用途別の安い経路へ流す(§1.18)。');
+  parts.push('[監督の担当] 設計・分解・指示・verify。調査・分類・要約は llm-ask(gemini/deepseek/groq)、実装・検証(コマンド実行を伴うテスト・レビュー)だけ Codex へ流す(§1.18)。');
   for (const line of measuredRoutingLines(prompt)) parts.push(line);
   const output = { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: parts.join('\n') } };
   if (suggestCodexDelegation) {

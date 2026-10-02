@@ -11,6 +11,8 @@ import { fetchFleetKPIs, getClaudeDir } from './fleet-kpi-fetch.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { appendImprovementTodos } from './nightly-kpi.mjs';
 import { KNOWN_CHEAP_PROVIDERS } from './llm-fallback.mjs';
+import { classifyTaskKind, CODEX_KINDS } from './lib/task-kind.mjs';
+import { parseDeferred } from './lib/executor-gate.mjs';
 import { collectProviderHealth, collectClaudeStats } from './usage-stats.mjs';
 import { collectBudgetStatus } from './budget-status.mjs';
 import { shouldSendMonthlyReport, buildMonthlyReport, markMonthlyReportSent } from './cost-monthly-report.mjs';
@@ -628,6 +630,8 @@ export function decideActions({ violations, state, now, limits = { maxCodex: 2 }
 
     const isCooldown = nextActionsState.some(act => {
       if (act.kind === kind && act.pc === pc) {
+        // 保留(上限・無人割当)は失敗ではない。retryAt が過ぎるまでだけ待ち、過ぎたら再試行する。
+        if (act.result === 'deferred' && Number.isFinite(Number(act.retryAt))) return nowMs < Number(act.retryAt);
         const dispatchedTime = new Date(act.dispatchedAt).getTime();
         return nowMs - dispatchedTime < 3 * 86400000;
       }
@@ -977,7 +981,16 @@ export function runAutoCodexIsolated({ acts, specFile, dryRun = false, repoPath,
   try {
     let res = spawnSync('git', ['-C', repoPath, 'worktree', 'add', '--detach', tempTree, 'origin/main'], { windowsHide: true, encoding: 'utf8' });
     if (res.status !== 0) { fail('worktree add failed', res); return; }
-    res = spawnSync('node', [path.join(tempTree, 'tools/codex-do.mjs'), '--prompt-file', specFile, '--cwd', tempTree, '--timeout', '1800'], { windowsHide: true, cwd: tempTree, encoding: 'utf8' });
+    // 差分が要るレーンなので Codex 系(implement / verify)に限る。文面が調査系でも implement に倒す。
+    const guessedKind = classifyTaskKind(String(first.specContent || ''));
+    const kind = CODEX_KINDS.has(guessedKind) ? guessedKind : 'implement';
+    res = spawnSync('node', [path.join(tempTree, 'tools/codex-do.mjs'), '--prompt-file', specFile, '--cwd', tempTree, '--timeout', '1800', '--origin', 'unattended', '--kind', kind], { windowsHide: true, cwd: tempTree, encoding: 'utf8' });
+    const deferred = parseDeferred(res.status, res.stdout);
+    if (deferred) {
+      // 終了コード75: 上限中/無人割当超過。失敗に数えず、retryAt まで再試行しない。
+      for (const act of list) { act.result = 'deferred'; act.retryAt = deferred.retryAt; act.note = `保留(${deferred.reason}): ${new Date(deferred.retryAt).toISOString()} 以降に再試行`; }
+      return;
+    }
     if (res.status !== 0) { fail('Codex execution failed', res); return; }
     const diff = spawnSync('git', ['-C', tempTree, 'diff', '--stat'], { windowsHide: true, encoding: 'utf8' });
     if (diff.status !== 0 || !String(diff.stdout || '').trim()) { fail('変更なし', diff); return; }
@@ -1392,7 +1405,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
       }
 
       const repoPath = path.resolve(import.meta.dirname, '..');
-      const codexCmd = `node tools/codex-do.mjs --prompt-file ${act.specPath} --cwd ${repoPath} --timeout 1800`;
+      const codexCmd = `node tools/codex-do.mjs --prompt-file ${act.specPath} --cwd ${repoPath} --timeout 1800 --origin unattended`;
       console.log(`Running auto-codex command: ${codexCmd}`);
 
       if (dryRun) {

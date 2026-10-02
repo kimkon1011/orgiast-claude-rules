@@ -11,6 +11,7 @@ import { addDecision } from './pending-decisions.mjs';
 import { appendLineWithRetry } from './lib/append-line.mjs';
 import { getScheduledTaskInfo, startScheduledTask, stopScheduledTask } from './lib/scheduled-task.mjs';
 import { playbooks as defaultPlaybooks } from './lib/remediate-playbooks/index.mjs';
+import { parseDeferred } from './lib/executor-gate.mjs';
 
 const DAY = 86400000;
 export function normalizeMessage(value) { return String(value || '').replace(/\d{4}-\d\d-\d\d[T ]\d\d:\d\d(?::\d\d)?/g, '<time>').replace(/\b\d+\b/g, '<n>').replace(/\s+/g, ' ').trim(); }
@@ -138,6 +139,13 @@ export async function runRemediation({
       }
       continue;
     }
+    // Codex が保留(上限・無人割当)で返した項目は、retryAt まで再試行しない。失敗でも deferred(持ち越し)にも数えない。
+    const quotaWait = history.findLast?.((row) => row.outcome === 'quota_deferred') || [...history].reverse().find((row) => row.outcome === 'quota_deferred');
+    if (quotaWait && Number(quotaWait.retryAt) > now.getTime()) {
+      const reason = `Codex保留中(${quotaWait.reason}): ${new Date(Number(quotaWait.retryAt)).toISOString()} 以降に再試行`;
+      if (dryRun) plan(anomaly, 'deferred', reason); else result.deferred.push({ fingerprint, label: anomaly.label, outcome: 'quota_deferred', reason });
+      continue;
+    }
     const overCount = codexCount >= maxCodex;
     const overTime = Date.now() - started >= maxMinutes * 60000;
     if (overCount || overTime) {
@@ -155,11 +163,15 @@ export async function runRemediation({
       const prompt = redactAll(`夜間ジョブ異常を修復してください。\nlabel: ${anomaly.label}\nmessage: ${anomaly.message}\ntool: ${anomaly.expectation?.tool || '要調査'}\nredacted log tail:\n${anomaly.logTail}\n\n真因を特定し最小差分で直す。回帰テストを tools/*.test.mjs に追加。node --test tools/*.test.mjs tools/lib/*.test.mjs が全緑になること。コミットメッセージは fix(${slug}): … 。push はしない。`);
       fs.mkdirSync(path.dirname(worktree), { recursive: true }); fs.writeFileSync(promptFile, prompt, 'utf8');
       let laneReason = '';
+      let deferredInfo = null;
       try {
         const added = run('git', ['worktree', 'add', worktree, '-b', branch, 'origin/main'], { cwd: repo });
         if (added.status !== 0) throw new Error(added.stderr || 'worktree add failed');
-        const codex = run(process.execPath, [path.join(repo, 'tools', 'codex-do.mjs'), '--prompt-file', promptFile, '--cwd', worktree, '--timeout', '1800'], { cwd: repo, timeout: 31 * 60000 });
+        const codex = run(process.execPath, [path.join(repo, 'tools', 'codex-do.mjs'), '--prompt-file', promptFile, '--cwd', worktree, '--timeout', '1800', '--origin', 'unattended', '--kind', 'implement'], { cwd: repo, timeout: 31 * 60000 });
         let coded = codex;
+        // 終了コード75は保留(上限中/無人割当超過)。失敗ではないので、retryAt を控えて cheap-code へ回す。
+        const deferred = parseDeferred(codex.status, codex.stdout);
+        if (deferred) { deferredInfo = deferred; console.error(`[nightly-health-remediate] codex 保留(${deferred.reason}): ${new Date(deferred.retryAt).toISOString()} 以降`); }
         if (codex.status !== 0) coded = run(process.execPath, [path.join(repo, 'tools', 'cheap-code.mjs'), '--provider', 'auto', '--prompt-file', promptFile, '--cwd', worktree], { cwd: repo, timeout: 31 * 60000 });
         if (coded.status !== 0) throw new Error(`修理レーン失敗 codex exit ${codex.status}: ${redactAll(codex.stderr).slice(-200)} / cheap-code exit ${coded.status}: ${redactAll(coded.stderr).slice(-200)}`);
         const tested = run(process.execPath, ['--test', 'tools/*.test.mjs', 'tools/lib/*.test.mjs'], { cwd: worktree, timeout: 20 * 60000 });
@@ -173,6 +185,10 @@ export async function runRemediation({
       } catch (error) { laneReason = redactAll(error.message || error); }
       finally { run('git', ['worktree', 'remove', '--force', worktree], { cwd: repo }); try { fs.unlinkSync(promptFile); } catch {} }
       if (handled) continue;
+      if (deferredInfo) {
+        result.deferred.push(await record(anomaly, 'quota_deferred', { reason: deferredInfo.reason, retryAt: deferredInfo.retryAt }));
+        continue;
+      }
       anomaly.laneReason = laneReason;
     }
     const reason = anomaly.laneReason || 'Codexとcheap-codeの修理レーンが失敗';

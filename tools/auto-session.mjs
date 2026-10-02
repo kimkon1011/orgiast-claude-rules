@@ -456,7 +456,7 @@ export function buildPrompt(todo, sections, repoCwd, summaryFile, timeoutMin = 6
     attached,
     `## 固定の作業規約
 - セッションの作業ディレクトリは履歴を揃えるためのフォルダであり、実際の作業対象リポジトリは ${repoCwd} である。git は必ず \`git -C ${repoCwd}\` の形で実行し、codex-do.mjs は \`--cwd ${repoCwd}\` を付ける。裸の \`git status\` / \`git checkout\` は使わない。
-- 実装本体は \`node tools/codex-do.mjs "<指示>" --cwd ${repoCwd}\` で Codex に委譲する（§1.18）。監督は設計・レビュー・検証だけ。
+- 実装本体は \`node tools/codex-do.mjs "<指示>" --cwd ${repoCwd} --origin unattended\` で Codex に委譲する（§1.18）。監督は設計・レビュー・検証だけ。調査・分類・要約だけの作業は \`--kind investigate|classify|summarize\` を付けて llm-ask(gemini/deepseek/groq)へ回し、Codex は実装・テスト実行だけに使う。終了コード75（stdout が \`{"status":"deferred"}\`）は失敗ではなく保留（Codex 上限中または無人割当超過）なので、\`retryAt\` 以降まで同じ項目を再試行せず、${summaryFile} に「保留」と記録して次の項目へ進む。
 - このセッションは \`claude -p\` の1回きりのヘッドレス実行である。ターンを終えた瞬間にプロセスごと終了し、起動中の子プロセスはすべて kill される。\`run_in_background: true\` と \`ScheduleWakeup\` は使用禁止で、フックでも deny される。「バックグラウンドで走らせて完了を待つ」と書いてターンを終えてはいけない。
 - \`codex-do.mjs\` は必ず前景で実行し、\`--timeout <秒>\` にセッションの残り時間より短い秒数を渡す。時間内に終わらない見込みなら待たず、そこまでの状態を ${summaryFile} に書き、作りかけのブランチを push して draft PR にするか、次回へ引き継いで終了する。
 - 他セッションと作業ツリーを共有している。\`git add -A\` / \`git commit -a\` / \`git stash\` / \`git checkout -- .\` は禁止。自分が作成・変更したファイルだけをパス指定で \`git add\` する。着手前とコミット直前に \`git status --porcelain\` を撮り、差分が自分の変更だけであることを確認する。
@@ -514,7 +514,7 @@ ${issue.body || '（本文なし）'}
 - 秘匿値をコード、PR、ログへ書かない。
 
 ## 実行環境
-- 実リポジトリは ${repoCwd}。git は \`git -C ${repoCwd}\`、実装委譲は \`node tools/codex-do.mjs "<指示>" --cwd ${repoCwd}\` のように対象を明示する。
+- 実リポジトリは ${repoCwd}。git は \`git -C ${repoCwd}\`、実装委譲は \`node tools/codex-do.mjs "<指示>" --cwd ${repoCwd} --origin unattended\`（調査・分類・要約だけなら \`--kind investigate|classify|summarize\`）のように対象を明示する。終了コード75は失敗ではなく保留で、\`retryAt\` まで再試行しない。
 - このセッションは \`claude -p\` の1回きりのヘッドレス実行である。ターンを終えた瞬間にプロセスごと終了し、起動中の子プロセスはすべて kill される。\`run_in_background: true\` と \`ScheduleWakeup\` は使用禁止で、フックでも deny される。「バックグラウンドで走らせて完了を待つ」と書いてターンを終えてはいけない。
 - \`codex-do.mjs\` は必ず前景で実行し、\`--timeout <秒>\` にセッションの残り時間より短い秒数を渡す。時間内に終わらない見込みなら待たず、そこまでの状態を ${summaryFile} に書き、作りかけのブランチを push して draft PR にするか、次回へ引き継いで終了する。
 - 作業経過を ${summaryFile} に逐次追記する。PR URL・PRタイトル・CI結果を必ず最後に記録する。
@@ -535,7 +535,7 @@ export function buildRolePrompt(roleName, repoCwd, summaryFile, timeoutMin = 30,
 ## 実行環境
 - 実際の作業対象リポジトリは ${repoCwd}。git は必ず \`git -C ${repoCwd}\` の形で実行し、裸の \`git status\` / \`git log\` は使わない。
 - このセッションは1回きりのヘッドレス実行である。\`run_in_background: true\` と \`ScheduleWakeup\` は使用禁止。ターンを終える前に必要な前景処理を完了する。
-- \`codex-do.mjs\` を使う場合は必ず前景で実行し、\`--cwd ${repoCwd}\` とセッション残り時間より短い \`--timeout <秒>\` を付ける。
+- \`codex-do.mjs\` を使う場合は必ず前景で実行し、\`--cwd ${repoCwd}\` と \`--origin unattended\` とセッション残り時間より短い \`--timeout <秒>\` を付ける。終了コード75は失敗ではなく保留（\`retryAt\` まで再試行しない）。
 - 作業経過と結論は ${summaryFile} に追記する。追記は \`>>\` 相当とし、全文を上書きしない。
 - 外部処理を5分を超えてポーリングしない。待ちが必要なら未検証としてレポートと残TODOに記録して終了する。
 - 開始から ${Math.max(1, timeoutMin - 5)} 分でまとめに入り、結論をレポートと ${summaryFile} に書いて終了する。

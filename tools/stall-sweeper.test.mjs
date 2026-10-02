@@ -155,3 +155,60 @@ test('テスト失敗の起票は同じ項目で重複作成しない', async ()
   assert.equal(fileTestFailure(c, new Error('テストが失敗'), run), existing[0].url);
   assert.equal(calls.filter(c => c[1] === 'create').length, 1);
 });
+
+// ---- 保留(deferred)と作業種別 ----
+import { delegationKind, deferredUntil, DeferredError, report } from './stall-sweeper.mjs';
+
+test('delegationKind: open_todo の「調査/確認/検証(読み取り)」は investigate、実装系は implement', () => {
+  assert.equal(delegationKind({ kind: 'open_todo', nextAction: 'Codexで残作業を確認し再開' }), 'investigate');
+  assert.equal(delegationKind({ kind: 'open_todo', nextAction: '原因を調査する' }), 'investigate');
+  assert.equal(delegationKind({ kind: 'open_todo', nextAction: '検証(読み取り)だけ行う' }), 'investigate');
+  assert.equal(delegationKind({ kind: 'open_todo', nextAction: '機能を実装する' }), 'implement');
+  assert.equal(delegationKind({ kind: 'unverified_delegation', nextAction: 'Codexで成果とコミットの対応を検証' }), 'verify');
+  assert.equal(delegationKind({ kind: 'failed_job', nextAction: 'Codexで原因を調査して安全に再実行' }), 'implement');
+});
+
+test('委譲先が保留(終了コード75)を返したら DeferredError。失敗ではなく retryAt を持つ', async () => {
+  const outputDir = temp();
+  const retryAt = Date.now() + 3600000;
+  const run = () => { throw Object.assign(new Error('codex-do: 終了コード 75'), { exitStatus: 75, stdout: `${JSON.stringify({ status: 'deferred', reason: 'codex_cooldown', retryAt })}\n` }); };
+  await assert.rejects(advanceDelegated({ kind: 'open_todo', id: 'x', cwd: outputDir, nextAction: '実装する' }, { outputDir, run }), (e) => e instanceof DeferredError && e.code === 'DEFERRED' && e.retryAt === retryAt && e.reason === 'codex_cooldown');
+});
+
+test('通常の失敗(終了コード1)は DeferredError にしない', async () => {
+  const outputDir = temp();
+  const run = () => { throw Object.assign(new Error('codex-do: 終了コード 1'), { exitStatus: 1, stdout: '' }); };
+  await assert.rejects(advanceDelegated({ kind: 'open_todo', id: 'x', cwd: outputDir, nextAction: '実装する' }, { outputDir, run }), (e) => !(e instanceof DeferredError));
+});
+
+test('委譲には --origin unattended と --kind を渡す', async () => {
+  const outputDir = temp();
+  let seen;
+  const run = (exe, args) => { seen = args; return '[codex-do] 調査結果: 問題なし\n'; };
+  const result = await advanceDelegated({ kind: 'open_todo', id: 'x', cwd: outputDir, nextAction: 'Codexで残作業を確認し再開' }, { outputDir, run });
+  assert.deepEqual(seen.slice(seen.indexOf('--origin'), seen.indexOf('--origin') + 4), ['--origin', 'unattended', '--kind', 'investigate']);
+  assert.match(result.summary, /調査メモ/);
+  assert.match(result.evidence.sha256, /^[a-f0-9]{64}$/);
+});
+
+test('deferredUntil: retryAt が未来の保留だけ待つ。成功・過去の保留は待たない', () => {
+  const c = { kind: 'open_todo', id: 'a' };
+  const future = Date.now() + 60000;
+  assert.equal(deferredUntil([{ ...c, result: '保留', retryAt: future }], c), future);
+  assert.equal(deferredUntil([{ ...c, result: '保留', retryAt: Date.now() - 1 }], c), 0);
+  assert.equal(deferredUntil([{ ...c, result: '保留', retryAt: future }, { ...c, result: '成功' }], c), 0);
+  assert.equal(deferredUntil([{ kind: 'open_todo', id: 'b', result: '保留', retryAt: future }], c), 0);
+});
+
+test('保留は連続失敗に数えず、報告には保留として出る', () => {
+  const c = { kind: 'open_todo', id: 'a' };
+  const history = [{ ...c, result: '失敗' }, { ...c, result: '保留', retryAt: Date.now() + 1000 }, { ...c, result: '失敗' }];
+  assert.equal(consecutiveFailures(history, c), 2);
+  const md = report([], [], [{ kind: 'open_todo', id: 'a', result: '保留', reason: 'unattended_budget', retryAt: Date.now() + 1000 }], true);
+  assert.match(md, /保留\(上限・無人割当。失敗ではない\): 1/);
+  assert.match(md, /失敗: 0/);
+});
+
+test('実行失敗の検出は status=deferred の行を失敗扱いにしない', () => {
+  assert.deepEqual(detectFailedJob([{ provider: 'codex', cwd: 'C:/x', status: 'deferred', t: ago(1) }], now), []);
+});

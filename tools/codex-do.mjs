@@ -10,6 +10,8 @@ import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { executorExitStatus } from './executor-status.mjs';
 import { parseCodexResetUntil, providerCooldownMs, writeCodexCooldown } from './codex-cooldown.mjs';
+import { classifyTaskKind, CODEX_KINDS, TASK_KINDS } from './lib/task-kind.mjs';
+import { EX_TEMPFAIL, budgetSummary, claudeFile, decideCodexGate, deferredPayload, isUsageLimitText, parseUsageLimitUntil, providerLimitedUntil, writeCodexCooldownFile } from './lib/executor-gate.mjs';
 
 // Windows の shell 経由起動では引数がクォートされないため、この値に空白を入れると
 // -p の値が割れて Gemini が使い方(ヘルプ)を出して終わる。空白を入れないこと。
@@ -309,8 +311,13 @@ function cheapCodeBackend(name, homeDir) {
   // キーが無い機体で cheap-code を先頭にすると毎回即死するので、キーがある時だけ候補に入れる。
   const cooldownFile = path.join(homeDir, '.claude', 'provider-cooldown.json');
   // 仕様C2b: 定額レーン glm が usage_limit でクールダウン中のときは、同じ位置を deepseek へ自動差し替えする。
-  if (provider === 'glm' && providerCooldownMs('glm', Date.now(), cooldownFile) > 0) {
+  // provider-limit-history.jsonl で until が未来の provider は候補から外す(glm は deepseek へ差し替え、deepseek は除外)。
+  const historyFile = path.join(homeDir, '.claude', 'provider-limit-history.jsonl');
+  const limitedByHistory = providerLimitedUntil(historyFile, provider) > 0;
+  if (provider === 'deepseek' && limitedByHistory) return null;
+  if (provider === 'glm' && (limitedByHistory || providerCooldownMs('glm', Date.now(), cooldownFile) > 0)) {
     if (!loadEnvKey(homeDir, 'deepseek.env', 'DEEPSEEK_API_KEY')) return null;
+    if (providerLimitedUntil(historyFile, 'deepseek') > 0) return null;
     console.error('[codex-do] cheap-code:glm は usage_limit クールダウン中のため cheap-code:deepseek へフォールバックします');
     return { kind: 'cheap-code', name: 'cheap-code:deepseek', provider: 'deepseek', model: 'deepseek-v4-flash' };
   }
@@ -401,6 +408,11 @@ const noFallback = args.includes('--no-fallback');
 let launchUnavailable = false;
 const review = args.includes('--review');
 const noEscalate = args.includes('--no-escalate');
+const showBudget = args.includes('--budget');
+const originIndex = args.indexOf('--origin');
+const kindIndex = args.indexOf('--kind');
+const origin = originIndex >= 0 ? args[originIndex + 1] : 'interactive';
+const explicitKind = kindIndex >= 0 ? args[kindIndex + 1] : undefined;
 const modelIndex = args.indexOf('--model');
 const effortIndex = args.indexOf('--effort');
 const laneIndex = args.indexOf('--lane');
@@ -419,19 +431,30 @@ if (allowNative) omitted.add(args.indexOf('--allow-native'));
 if (noFallback) omitted.add(args.indexOf('--no-fallback'));
 if (review) omitted.add(args.indexOf('--review'));
 if (noEscalate) omitted.add(args.indexOf('--no-escalate'));
-for (const index of [modelIndex, effortIndex, laneIndex]) {
+if (showBudget) omitted.add(args.indexOf('--budget'));
+for (const index of [modelIndex, effortIndex, laneIndex, originIndex, kindIndex]) {
   if (index >= 0) { omitted.add(index); omitted.add(index + 1); }
 }
 if (cwdIndex >= 0) { omitted.add(cwdIndex); omitted.add(cwdIndex + 1); }
 if (promptFileIndex >= 0) { omitted.add(promptFileIndex); omitted.add(promptFileIndex + 1); }
 if (timeoutIndex >= 0) { omitted.add(timeoutIndex); omitted.add(timeoutIndex + 1); }
-const usage = '使い方: node tools/codex-do.mjs "<指示>" [--cwd <path>] [--prompt-file <file>] [--review] [--timeout <秒>] [--model <slug|astra|sol>] [--effort <low|medium|high|xhigh|max>] [--lane <sol|astra|auto>] [--no-escalate] [--dry-run] [--no-fallback] [--force-native] [--allow-native]';
+const usage = '使い方: node tools/codex-do.mjs "<指示>" [--cwd <path>] [--prompt-file <file>] [--review] [--timeout <秒>] [--model <slug|astra|sol>] [--effort <low|medium|high|xhigh|max>] [--lane <sol|astra|auto>] [--no-escalate] [--dry-run] [--no-fallback] [--force-native] [--allow-native] [--origin <unattended|interactive>] [--kind <implement|verify|investigate|classify|summarize>] [--budget]';
 
 if ((modelIndex >= 0 && (!model || !/^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(model))) ||
     (effortIndex >= 0 && !['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) ||
-    !['sol', 'astra', 'auto'].includes(lane)) {
-  console.error(`--model / --effort / --lane の指定が不正です\n${usage}`);
+    !['sol', 'astra', 'auto'].includes(lane) ||
+    !['unattended', 'interactive'].includes(origin) ||
+    (kindIndex >= 0 && !TASK_KINDS.includes(explicitKind))) {
+  console.error(`--model / --effort / --lane / --origin / --kind の指定が不正です\n${usage}`);
   process.exit(2);
+}
+
+// 残り割当の表示(Codex も GLM も起動しない)。
+if (showBudget) {
+  const summary = budgetSummary({ home: process.env.ORGIAST_HOME || os.homedir() });
+  console.log(JSON.stringify(summary));
+  console.log(`[codex-do] 無人ジョブの残り割当 ${summary.date}: codex ${summary.codex.remaining}/${summary.codex.limit} (使用 ${summary.codex.used}) / glm ${summary.glm.remaining}/${summary.glm.limit} (使用 ${summary.glm.used})`);
+  process.exit(0);
 }
 
 // タイムアウト既定30分。無限に待って気付かないより、切って原因を見に行くほうが安い。
@@ -510,7 +533,30 @@ if (effort) selectedLane.effort = effort;
 if (selectedLane.reason.includes('astra_cooldown')) console.error('[codex-do] astra_cooldown: Astra クールダウン中のため Sol へ退避');
 if (selectedLane.reason.startsWith('chatgpt_auth_default')) console.error('[codex-do] chatgpt_auth_default: ChatGPTアカウント認証のため sol/astra を使わず codex 既定モデルで実行します');
 const logCodex = () => console.log(`[codex-do] executor=codex model=${selectedLane.slug || '既定(codexのデフォルト)'} effort=${selectedLane.effort || 'default'} lane=${selectedLane.reason}`);
-if (dryRun) { logCodex(); console.log(prompt); process.exit(0); }
+// 作業の種類。明示 --kind を最優先。--model/--lane/--review の明示は「Codex で」という意思なので自動判定しない。
+// 長い --prompt-file(仕様書)は文面から判定すると誤爆するため、1500字未満のときだけ自動判定する。
+const kindAuto = !explicitKind && !model && lane === 'auto' && !review && (promptFileIndex < 0 || instruction.length < 1500);
+const taskKind = explicitKind || (kindAuto ? classifyTaskKind(instruction) : 'implement');
+const useCodex = CODEX_KINDS.has(taskKind);
+if (dryRun) { console.log(`[codex-do] kind=${taskKind} origin=${origin} route=${useCodex ? 'codex' : 'llm-ask'}`); if (useCodex) logCodex(); console.log(prompt); process.exit(0); }
+
+// 保留判定: 上限中・無人枠超過なら Codex を起動せず deferred(終了コード 75)で返す。失敗ではない。
+function recordDeferred(gate) {
+  try {
+    const ledger = path.join(home, '.claude', 'executor-usage.jsonl');
+    fs.mkdirSync(path.dirname(ledger), { recursive: true });
+    fs.appendFileSync(ledger, `${JSON.stringify({ t: new Date().toISOString(), provider: 'codex', model: `codex-cli/${selectedLane.slug || 'default'}`, status: 'deferred', reason: gate.reason, retryAt: gate.retryAt, origin, kind: taskKind, launched: false, cwd })}\n`, 'utf8');
+  } catch {}
+}
+if (useCodex) {
+  const gate = decideCodexGate({ home, origin });
+  if (gate.deferred) {
+    recordDeferred(gate);
+    console.error(`[codex-do] 保留: ${gate.reason}（${new Date(gate.retryAt).toLocaleString()} 以降に再試行）`);
+    console.log(JSON.stringify(deferredPayload(gate, { origin, kind: taskKind })));
+    process.exit(EX_TEMPFAIL);
+  }
+}
 
 // 実行前の作業ツリーを控える。未コミット差分が常時あるリポでは diff が空にならず、
 // 下の「空diffなら書き込めていない」判定が一度も発火しないため（2026-09-03 実害）。
@@ -597,6 +643,7 @@ function recordUsage(result, modelName, seconds, provider = 'codex', attempts = 
       launched: result?.launched !== false,
       timedOut: result?.timedOut === true,
       status: executorExitStatus(result),
+      origin, kind: taskKind,
       exitCode: result?.status ?? null,
       cwd,
       stderrTail: String(result?.stderr || '').replace(/\s+/g, ' ').trim().slice(-200),
@@ -607,6 +654,32 @@ function recordUsage(result, modelName, seconds, provider = 'codex', attempts = 
     })}\n`, 'utf8');
   } catch {}
 }
+// investigate / classify / summarize は Codex を使わず llm-ask(gemini → deepseek → groq)へ回す。
+async function runLlmAsk() {
+  const llmAsk = path.join(path.dirname(fileURLToPath(import.meta.url)), 'llm-ask.mjs');
+  const category = taskKind === 'classify' ? 'classification' : taskKind === 'summarize' ? 'summarize' : '';
+  const chain = [];
+  let last = null;
+  for (const provider of ['gemini', 'deepseek', 'groq']) {
+    const attemptStarted = Date.now();
+    console.log(`[codex-do] kind=${taskKind} → llm-ask provider=${provider}`);
+    const res = await execute(process.execPath, [llmAsk, '--provider', provider, ...(category ? ['--category', category] : []), '--no-fallback', instruction], { cwd, timeoutSecs: Math.min(timeoutSeconds, 600) });
+    last = res;
+    const ok = res.status === 0 && String(res.output || '').trim().length > 0;
+    chain.push({ backend: provider, status: res.status ?? null, out: Math.ceil((res.outputChars || 0) / 4), secs: Number(((Date.now() - attemptStarted) / 1000).toFixed(3)), outcome: ok ? 'ok' : 'failed' });
+    if (ok) return { result: res, provider, chain };
+  }
+  return { result: last || { status: 1, outputChars: 0, output: '', stderr: '' }, provider: null, chain };
+}
+if (!useCodex) {
+  const started2 = Date.now();
+  const routed = await runLlmAsk();
+  recordUsage({ ...routed.result, status: routed.provider ? 0 : (routed.result.status || 1) }, `llm-ask/${routed.provider || 'none'}`, (Date.now() - started2) / 1000, 'llm-ask', routed.chain.length, routed.chain);
+  if (!routed.provider) console.error(`[codex-do] llm-ask(gemini/deepseek/groq)がすべて失敗しました。Codex が必要な作業なら --kind implement を付けて再実行してください`);
+  console.log(`[codex-do] executor=llm-ask${routed.provider ? `:${routed.provider}` : ''} kind=${taskKind}`);
+  process.exit(routed.provider ? 0 : (routed.result.status || 1));
+}
+
 async function launchCodex(codexArgs) {
   let result;
 
@@ -750,6 +823,14 @@ while (true) {
   escalationFailed = escalated && Boolean(failure);
   if (escalationFailed && result.status === 0) result.status = 1;
   break;
+}
+if (quotaCheck.matched && selectedLane.slug !== ASTRA) {
+  // Sol/既定モデルの上限: 次回以降の起動を保留にするため codex-cooldown.json を書く。
+  // 本文に上限メッセージ(You've hit your usage limit)がある時だけ。解析できなければ24時間後。
+  const limitText = `${result?.output || ''}\n${result?.stderr || ''}`;
+  if (isUsageLimitText(limitText)) {
+    try { writeCodexCooldownFile(claudeFile(home, 'codex-cooldown.json'), parseUsageLimitUntil(limitText)); } catch {}
+  }
 }
 const fallbackReason = launchUnavailable ? 'WSL 経路が無く codex を起動できない'
   : quotaCheck.matched ? 'Codex usage limit を検出' : 'Astra 昇格後も失敗';

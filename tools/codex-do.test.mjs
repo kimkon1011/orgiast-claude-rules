@@ -1241,3 +1241,177 @@ console.log('done');
   assert.ok(calls[0].input.endsWith(instruction));
   assert.ok(calls.every((call) => !call.args.some((arg) => arg.includes('literal'))));
 });
+
+// ---- 実行レーンの保留(A) / 無人割当(B) / 作業種別の振り分け(C) ----
+const MONTHS_EN = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function futureLimitText(daysAhead = 2) {
+  const d = new Date(Date.now() + daysAhead * 86400000);
+  d.setHours(3, 12, 0, 0);
+  return `ERROR: You've hit your usage limit. Upgrade to Pro, or try again at ${MONTHS_EN[d.getMonth()]} ${d.getDate()}th, ${d.getFullYear()} 3:12 AM.`;
+}
+const readLedger = (home) => fs.readFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+const lastJson = (stdout) => JSON.parse(stdout.trim().split('\n').filter((l) => l.startsWith('{')).pop());
+const tmpHome = (t, name) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), `${name}-`));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  return home;
+};
+const unattendedRow = (extra = {}) => JSON.stringify({ t: new Date().toISOString(), provider: 'codex', origin: 'unattended', status: 'ok', ...extra });
+
+test('A: 上限メッセージの stderr で codex-cooldown.json が書かれ、次回起動は Codex を呼ばず deferred(75) になる', (t) => {
+  const home = tmpHome(t, 'codex-cooldown-gate');
+  const first = run(['--force-native', '--cwd', home, '--no-fallback', '--model', 'sol', '新機能を実装して'], {
+    home,
+    env: { CODEX_DO_MOCK_RESULTS: JSON.stringify([{ status: 1, output: 'partial', stderr: futureLimitText(2) }]) },
+  });
+  assert.notEqual(first.status, 0);
+  const cooldown = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'codex-cooldown.json'), 'utf8'));
+  assert.equal(cooldown.reason, 'usage_limit');
+  assert.ok(cooldown.until > Date.now() + 86400000, 'until は約2日後');
+  assert.ok(Math.abs(cooldown.t - Date.now()) < 60000);
+  // 2回目はモックを渡さない。本物の Codex を起動しようとしたら deferred にならず失敗する。
+  const second = run(['--force-native', '--cwd', home, '新機能を実装して'], { home });
+  assert.equal(second.status, 75, second.stderr);
+  const payload = lastJson(second.stdout);
+  assert.equal(payload.status, 'deferred');
+  assert.equal(payload.reason, 'codex_cooldown');
+  assert.equal(payload.retryAt, cooldown.until);
+  const row = readLedger(home).at(-1);
+  assert.equal(row.status, 'deferred');
+  assert.equal(row.launched, false);
+});
+
+test('A: 解析できない上限メッセージは24時間後を until にする', (t) => {
+  const home = tmpHome(t, 'codex-cooldown-24h');
+  run(['--force-native', '--cwd', home, '--no-fallback', '--model', 'sol', '実装して'], {
+    home,
+    env: { CODEX_DO_MOCK_RESULTS: JSON.stringify([{ status: 1, output: 'partial', stderr: "ERROR: You've hit your usage limit. Please try again later." }]) },
+  });
+  const cooldown = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'codex-cooldown.json'), 'utf8'));
+  assert.ok(Math.abs(cooldown.until - (Date.now() + 86400000)) < 120000);
+});
+
+test('A: cooldown が過去なら通常どおり Codex を起動する', (t) => {
+  const home = tmpHome(t, 'codex-cooldown-past');
+  fs.writeFileSync(path.join(home, '.claude', 'codex-cooldown.json'), JSON.stringify({ until: Date.now() - 1000, reason: 'usage_limit', t: 1 }));
+  const result = run(['--force-native', '--cwd', home, '--model', 'sol', '実装して'], { home, env: { CODEX_DO_MOCK_RESULTS: JSON.stringify([{ status: 0, output: 'done' }]) } });
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('A: provider-limit-history で until が未来の glm は候補から外れ、deepseek へ差し替わる', (t) => {
+  const home = tmpHome(t, 'codex-glm-history');
+  fs.writeFileSync(path.join(home, '.claude', 'zai.env'), 'ZAI_API_KEY=z\n');
+  fs.writeFileSync(path.join(home, '.claude', 'deepseek.env'), 'DEEPSEEK_API_KEY=d\n');
+  fs.writeFileSync(path.join(home, '.claude', 'codex-fallback-order.json'), JSON.stringify(['cheap-code:glm']));
+  const history = path.join(home, '.claude', 'provider-limit-history.jsonl');
+  fs.writeFileSync(history, `${JSON.stringify({ t: new Date().toISOString(), provider: 'glm', until: Date.now() + 3600000, reason: 'usage_limit' })}\n`);
+  assert.deepEqual(resolveFallbackBackends(home).map((b) => b.name), ['cheap-code:deepseek']);
+  fs.appendFileSync(history, `${JSON.stringify({ t: new Date().toISOString(), provider: 'deepseek', until: Date.now() + 3600000, reason: 'usage_limit' })}\n`);
+  assert.equal(resolveFallbackBackends(home).some((b) => b.provider === 'deepseek' || b.provider === 'glm'), false);
+});
+
+test('B: 当日の unattended Codex が8件あれば9件目は unattended_budget で deferred(75)、interactive は通る', (t) => {
+  const home = tmpHome(t, 'codex-budget-gate');
+  const lines = Array.from({ length: 8 }, () => unattendedRow());
+  // 数えない行: 一昨日 / interactive / deferred / 他 provider
+  lines.push(unattendedRow({ t: new Date(Date.now() - 2 * 86400000).toISOString() }));
+  lines.push(unattendedRow({ origin: 'interactive' }));
+  lines.push(unattendedRow({ status: 'deferred' }));
+  lines.push(unattendedRow({ provider: 'fallback' }));
+  fs.writeFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), `${lines.join('\n')}\n`);
+  const ninth = run(['--force-native', '--cwd', home, '--origin', 'unattended', '実装して'], { home });
+  assert.equal(ninth.status, 75, ninth.stderr);
+  const payload = lastJson(ninth.stdout);
+  assert.equal(payload.reason, 'unattended_budget');
+  assert.ok(payload.retryAt > Date.now());
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, '.claude', 'executor-budget.json'), 'utf8')), { codex: { unattendedPerDay: 8 }, glm: { unattendedPerDay: 20 } });
+  const interactive = run(['--force-native', '--cwd', home, '--model', 'sol', '実装して'], { home, env: { CODEX_DO_MOCK_RESULTS: JSON.stringify([{ status: 0, output: 'done' }]) } });
+  assert.equal(interactive.status, 0, interactive.stderr);
+});
+
+test('B: 8件に満たなければ unattended でも通り、台帳に origin=unattended が残る', (t) => {
+  const home = tmpHome(t, 'codex-budget-under');
+  fs.writeFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), `${Array.from({ length: 7 }, () => unattendedRow()).join('\n')}\n`);
+  const result = run(['--force-native', '--cwd', home, '--model', 'sol', '--origin', 'unattended', '実装して'], { home, env: { CODEX_DO_MOCK_RESULTS: JSON.stringify([{ status: 0, output: 'done' }]) } });
+  assert.equal(result.status, 0, result.stderr);
+  const row = readLedger(home).at(-1);
+  assert.equal(row.origin, 'unattended');
+  assert.equal(row.provider, 'codex');
+});
+
+test('B: 既存の executor-budget.json は尊重される(上限2なら3件目で保留)', (t) => {
+  const home = tmpHome(t, 'codex-budget-custom');
+  fs.writeFileSync(path.join(home, '.claude', 'executor-budget.json'), JSON.stringify({ codex: { unattendedPerDay: 2 }, glm: { unattendedPerDay: 20 } }));
+  fs.writeFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), `${[1, 2].map(() => unattendedRow()).join('\n')}\n`);
+  assert.equal(run(['--force-native', '--cwd', home, '--origin', 'unattended', '実装して'], { home }).status, 75);
+});
+
+test('B: --budget で残り割当を表示し、Codex は起動しない', (t) => {
+  const home = tmpHome(t, 'codex-budget-show');
+  fs.writeFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), `${[1, 2, 3].map(() => unattendedRow()).join('\n')}\n`);
+  const result = run(['--budget'], { home });
+  assert.equal(result.status, 0, result.stderr);
+  const summary = JSON.parse(result.stdout.split('\n')[0]);
+  assert.deepEqual(summary.codex, { limit: 8, used: 3, remaining: 5 });
+  assert.equal(summary.glm.limit, 20);
+});
+
+test('B: 不正な --origin / --kind は終了コード2', () => {
+  assert.equal(run(['--origin', 'robot', '--dry-run', '実装して']).status, 2);
+  assert.equal(run(['--kind', 'magic', '--dry-run', '実装して']).status, 2);
+});
+
+test('C: investigate は Codex を使わず llm-ask(gemini)の結果を返し、台帳に llm-ask として残る', (t) => {
+  const home = tmpHome(t, 'codex-kind-llm');
+  const result = run(['--force-native', '--cwd', home, '原因を調査してレポートにまとめて'], {
+    home,
+    env: { CODEX_DO_MOCK_RESULTS: JSON.stringify([{ status: 0, output: '調査結果: 原因は X' }]) },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /調査結果: 原因は X/);
+  assert.match(result.stdout, /executor=llm-ask:gemini kind=investigate/);
+  const row = readLedger(home).at(-1);
+  assert.equal(row.provider, 'llm-ask');
+  assert.equal(row.kind, 'investigate');
+});
+
+test('C: llm-ask は gemini → deepseek の順に失敗時フォールバックする', (t) => {
+  const home = tmpHome(t, 'codex-kind-chain');
+  const result = run(['--force-native', '--cwd', home, '--kind', 'summarize', 'この文書'], {
+    home,
+    env: { CODEX_DO_MOCK_RESULTS: JSON.stringify([{ status: 1, output: '', stderr: 'quota' }, { status: 0, output: '要約です' }]) },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /executor=llm-ask:deepseek kind=summarize/);
+});
+
+test('C: llm-ask が全滅しても Codex には落とさず失敗を返す', (t) => {
+  const home = tmpHome(t, 'codex-kind-allfail');
+  const bad = { status: 1, output: '', stderr: 'x' };
+  const result = run(['--force-native', '--cwd', home, '--kind', 'classify', '分類して'], { home, env: { CODEX_DO_MOCK_RESULTS: JSON.stringify([bad, bad, bad]) } });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--kind implement/);
+});
+
+test('C: --kind implement / verify と、--model 明示は従来どおり Codex を使う', (t) => {
+  const home = tmpHome(t, 'codex-kind-codex');
+  const ok = { CODEX_DO_MOCK_RESULTS: JSON.stringify([{ status: 0, output: 'done' }]) };
+  for (const extra of [['--kind', 'implement'], ['--kind', 'verify'], ['--model', 'sol']]) {
+    const result = run(['--force-native', '--cwd', home, ...extra, '原因を調査して'], { home, env: ok });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /executor=codex/);
+  }
+});
+
+test('C: --dry-run は kind と経路を表示する', () => {
+  const result = run(['--dry-run', '--origin', 'unattended', 'この議事録を要約して']);
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /kind=summarize origin=unattended route=llm-ask/);
+});
+
+test('C: 長い --prompt-file は自動判定せず implement(Codex)として扱う', () => {
+  const file = writePrompt(`# 仕様\n${'調査 '.repeat(600)}\n完了条件: なし\n`);
+  const result = run(['--dry-run', '--prompt-file', file]);
+  assert.match(result.stdout, /kind=implement/);
+});

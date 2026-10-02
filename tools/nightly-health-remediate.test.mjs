@@ -141,3 +141,35 @@ test('any nonzero codex exit tries cheap-code once and reports both redacted fai
   assert.equal(result.escalated[0].reason.includes('a'.repeat(30)), false);
   assert.equal(result.escalated[0].reason.includes('b'.repeat(20)), false);
 });
+
+test('codex-do が保留(75)なら escalated にせず quota_deferred を台帳に残し、retryAt までは再試行しない', async (t) => {
+  const home = makeHome(t, { anomalies: [{ label: 'repair', message: 'bad' }] });
+  const retryAt = Date.now() + 3 * 3600000;
+  const calls = [];
+  const run = (_exe, args) => {
+    calls.push(args);
+    if (args.some((arg) => String(arg).endsWith('codex-do.mjs'))) return { status: 75, stdout: `${JSON.stringify({ status: 'deferred', reason: 'codex_cooldown', retryAt })}\n`, stderr: '' };
+    if (args.some((arg) => String(arg).endsWith('cheap-code.mjs'))) return { status: 7, stdout: '', stderr: 'cheap failed' };
+    return { status: 0, stdout: '', stderr: '' };
+  };
+  const codexArgs = () => calls.find((args) => args.some((arg) => String(arg).endsWith('codex-do.mjs')));
+  const result = await runRemediation({ home, playbooks: [], run, decision: () => {}, notify: async () => {} });
+  assert.equal(result.escalated.length, 0);
+  assert.equal(result.deferred.length, 1);
+  assert.equal(result.deferred[0].outcome, 'quota_deferred');
+  assert.equal(result.deferred[0].retryAt, retryAt);
+  const args = codexArgs();
+  assert.deepEqual(args.slice(args.indexOf('--origin'), args.indexOf('--origin') + 4), ['--origin', 'unattended', '--kind', 'implement']);
+  const ledger = fs.readFileSync(path.join(home, '.claude', 'nightly-health-remediate-ledger.jsonl'), 'utf8');
+  assert.match(ledger, /quota_deferred/);
+  // 2日後(重複スキップの1日窓は過ぎる)でも retryAt(3時間後)ではなく… 実時刻の now を未来に進めると retryAt も過ぎるので、
+  // ここでは retryAt が未来の間は Codex を呼ばないことだけ確認する: 台帳の ranAt を2日前にして再実行。
+  const ledgerFile = path.join(home, '.claude', 'nightly-health-remediate-ledger.jsonl');
+  const rows = ledger.trim().split('\n').map(JSON.parse).map((row) => ({ ...row, ranAt: new Date(Date.now() - 2 * 86400000).toISOString() }));
+  fs.writeFileSync(ledgerFile, `${rows.map(JSON.stringify).join('\n')}\n`);
+  calls.length = 0;
+  const second = await runRemediation({ home, playbooks: [], run, decision: () => {}, notify: async () => {} });
+  assert.equal(codexArgs(), undefined, 'retryAt 前は codex-do を呼ばない');
+  assert.equal(second.deferred.length, 1);
+  assert.match(second.deferred[0].reason, /Codex保留中/);
+});

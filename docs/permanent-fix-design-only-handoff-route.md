@@ -138,3 +138,66 @@ nightly の knowledge 書き込み先が git 管理外の実行時ツリーで�
 - `~/.claude/handoff-audit-promotions.jsonl` は本セッションで新設したため**実データは 0 行**。次回以降の nightly で初めて書かれる。実書き込みは未確認。
 - §7 の (A)（nightly が fork→PR を自動で出す）は**未実装のまま**。今回の修正は「消えなくする」までで、「main へ自動で届く」ところまでは行っていない。
 - stop-gate 台帳の最終行は 2026-09-25T17:55Z。**2026-09-26 の対話セッションは 0 行**のため、直近1日の再発は未確認。
+
+## 10. 2026-10-04 再検証（`[handoff-audit:fa94cbb0569e2066]` / `[handoff-audit:cfa639f9ba586821]`）
+
+対象（本 TODO が名指しする2件。いずれも原価フロア実装の先送り）:
+
+| 検出 | ts | session | pattern | 逐語 |
+|---|---|---|---|---|
+| `fa94cbb0` | 2026-10-01T18:08:25.122Z | `299ef38c` | P1 | 「この後の自動進行: next-session.md item 2（原価フロア実装）を**次セッションで** Codex へ委譲して実施」 |
+| `cfa639f9` | 2026-10-01T15:34:19.422Z | `2811a555` | P2 | 「この後の自動進行: **次セッションが** next-session.md の新TODO「原価フロアを実装し…」を拾って着手する」 |
+
+### 10.1 結論
+
+1. **先送りされた恒久修正は着地済み。** 原価フロアは tetsuko-unified PR #18（`df54f37`）で origin/main に入った（§10.2 実物確認）。先送り宣言から約22時間で実装まで到達しており、有害形（実装せず TODO 番号へ送るだけ）には至っていない。
+2. **この pattern の再発は 2026-10-01 の2件を最後に 0 件**（10-03 JST 窓まで実測・§10.3/10.4）。
+3. 前回 10-01 窓に出た P3×2 は引用連結の越境誤検出で、#619 で解消済み（§10.6）。
+
+### 10.2 先送りされた修正は着地している（実測）
+
+- `gh pr view 18 -R .../tetsuko-unified`: **MERGED 2026-10-02T16:07:49Z**（＝2026-10-03 01:07 JST）。
+- `git merge-base --is-ancestor df54f37 origin/main` → **true**。`git ls-tree origin/main` に `db/migrations/20261003_cost_floor.sql` と `tools/verify-cost-floor.mjs` が実在。
+- ＝ 10-02 03:08 JST の先送り宣言から **約22時間**で着地。本 PC では「Codex へ委譲（§1.18）」自体は正規の実装経路であり、有害なのは「実装せず次セッションの TODO 番号へ送るだけ」の形。今回は後者になっていない。
+
+### 10.3 再発の実測（検出器・3台帳の全履歴）
+
+`node tools/permanent-fix-deferral-scan.mjs`（`--since` 無し＝1970 から全件）:
+
+| 台帳 | hits / 総行 | 日別 |
+|---|---|---|
+| `stop-gate-runner-ledger.jsonl` | **5** / 335 | 09-20:1, 09-24:1, 09-25:1, **10-01:2** |
+| `handoff-audit-ledger.jsonl` | **0** / 225 | — |
+| `handoff-audit-nightly-ledger.jsonl` | **1** / 57 | 09-24:1 |
+
+→ **最後の検出は 2026-10-01（本 TODO の2件）。それ以降の検出は 0 件**。手渡しゲート（handoff-audit-ledger）は §9 と同じく本 pattern を一件も捕まえていない。
+
+### 10.4 未記録だった 10-03 JST 窓を先に実測（「測った 0」）
+
+nightly による 10-03 窓の記録は今夜 03:00 の実行待ちのため、その窓を手で先に測定した:
+
+`node tools/permanent-fix-deferral-scan.mjs --since 2026-10-02T15:00:00Z --until 2026-10-03T15:00:00Z`
+→ 3台帳すべて **hits=0**。窓内の実データ行は stop-gate **10行** / audit-ledger **5行**（nightly 0行）。
+**空の 0 ではなく、行のある窓を測った 0。**
+
+### 10.5 検出器は稼働している（「0 は測った 0」の裏取り）
+
+- `Get-ScheduledTaskInfo OrgiastNightlyBatch`: 最終実行 **2026-10-03 03:01:01 / LastTaskResult 0**。次回 2026-10-04 03:00。
+- `~/.claude/handoff-audit-deferral-ledger.jsonl` の window 行（窓＝前日0時〜当日0時 JST）:
+
+| 窓（JST） | hits | 内訳 |
+|---|---|---|
+| 09-29 | 0 | — |
+| 09-30 | 0 | — |
+| 10-01 | 2 | P3×2（§10.6 の誤検出） |
+| 10-02 | 2 | P1×1, P2×1（＝本 TODO の2件） |
+| 10-03 | （未記録） | 本 doc §10.4 で先に実測=0 |
+
+### 10.6 検出器側の既知誤検出は解消済み
+
+10-01 窓の P3×2（session `964d909c`）は `violations[].quote` を `' ~ '` 連結して detect していたことによる越境検出。**#619（2026-10-02T15:37:18Z merge）**で quote 単位の detect に修正済み。
+
+### 10.7 未確認（断定も確率表現もしない）
+
+- 10-03 JST 窓の **nightly による**記録はまだ無い（今夜 03:00）。§10.4 は同窓を手で先に測ったもの。10-04 JST 窓以降は未測定。
+- 原価フロアの**本番DB実測**（原価割れ 0 行）は 2026-10-03 のセッションが確認済み（memory `project-tetsuko-cost-floor-applied-verified`）。本 doc ではコード側（origin/main の実在）のみ再確認し、DB は再測定していない。

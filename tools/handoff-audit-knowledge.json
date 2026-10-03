@@ -124,5 +124,17 @@
     "route": "node C:/Users/uers/orgiast-claude-rules/tools/gdoc-update.mjs --id <docId> --file <本文.md>（DWD SA で kim を代理、URL 不変・全置換・read-back 付き。--check で現状取得。表はヘッダが崩れるのでリストで書く）。新規 Doc 作成やコネクタ有効化の依頼に逃げない",
     "confidence": "high",
     "source": "2026-09-28 バドミントン指示書で「未接続」と誤って手渡し"
+  },
+  {
+    "pattern": "PRマージ/CI待ちを user の一言待ちで停止",
+    "route": "gh pr create",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:0985cf844b173cbfe0e34c73321845dc2a31be1a4a3d4142b667c1d4ed84a4d9"
+  },
+  {
+    "pattern": "PRマージ/DBマイグレーション可否をuserに確認",
+    "route": "gh pr create",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:e6f50ed18acd4e7122e8ebaf227c8aa373af5105c0ae9b0bc14350fc09bff514"
   }
 ]

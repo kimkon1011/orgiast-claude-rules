@@ -583,8 +583,64 @@ export function resolveGet(value, cacheDir = CACHE_DIR) {
   return [];
 }
 
+export function extractBodyCsrf(html) {
+  const match = String(html).match(/<body[^>]*\sdata-csrftoken="([^"]+)"/i);
+  if (!match) throw new Error('Growi ページから CSRF (body[data-csrftoken]) を取得できません');
+  return match[1];
+}
+
+export async function growiApiCsrf(baseUrl, http) {
+  const response = await http(`${String(baseUrl).replace(/\/$/, '')}/`);
+  if (!response.ok) throw new Error(`Growi ページの取得に失敗しました (${response.status})`);
+  return extractBodyCsrf(await response.text());
+}
+
+// 実測: GET /_api/pages.get?path= → {page:{...}}（存在）or {ok:false}（不在）
+export async function resolveGrowiPage(baseUrl, http, pagePath) {
+  const json = await growiJson(http, `${String(baseUrl).replace(/\/$/, '')}/_api/pages.get?path=${encodeURIComponent(pagePath)}`);
+  return json?.page && typeof json.page === 'object' ? json.page : null;
+}
+
+// 実測: 現行revisionは revisions/list の docs[0] ではなく pages.get の page.revision ポインタが正
+export function currentRevisionOf(page) {
+  const revision = page?.revision;
+  const revisionId = typeof revision === 'object' ? revision?._id : revision;
+  if (!revisionId) throw new Error('ページの現行リビジョンを特定できません');
+  return String(revisionId);
+}
+
+// 戻り値: { status: 'created' | 'updated' | 'exists', url, pageId, chars }
+export async function createGrowiPage({ baseUrl, http, csrf, pagePath, body, overwrite = false }) {
+  const base = String(baseUrl).replace(/\/$/, '');
+  const result = { status: 'created', url: `${base}${pagePath}`, pageId: '', chars: body.length };
+  const existing = await resolveGrowiPage(base, http, pagePath);
+  if (existing) {
+    if (!overwrite) return { ...result, status: 'exists', pageId: existing._id ?? '' };
+    const revisionId = currentRevisionOf(existing);
+    const response = await http(`${base}/_api/pages.update`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ page_id: String(existing._id), revision_id: revisionId, body, _csrf: csrf }),
+    });
+    if (!response.ok) throw new Error(`Growi ページ更新に失敗しました (HTTP ${response.status})`);
+    return { ...result, status: 'updated', pageId: existing._id ?? '' };
+  }
+  const response = await http(`${base}/_api/v3/pages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: pagePath, body, grant: 1, _csrf: csrf }),
+  });
+  if (response.status === 500) {
+    const json = await response.json().catch(() => null);
+    if (json?.errors?.some((item) => item.code === 'page_exists')) return { ...result, status: 'exists' };
+  }
+  if (!response.ok) throw new Error(`Growi ページ作成に失敗しました (HTTP ${response.status})`);
+  result.pageId = (await response.json())?.data?.page?._id ?? '';
+  return result;
+}
+
 function usage() {
-  console.error('usage: growi-manual.mjs sync-growi [--full] | sync | publish-index | install-index <file>... | ingest <file>... | index | search <query> [--limit N] [--path <prefix>] [--body] | get <id|title|path> | status');
+  console.error('usage: growi-manual.mjs sync-growi [--full] | sync | publish-index | install-index <file>... | ingest <file>... | index | search <query> [--limit N] [--path <prefix>] [--body] | get <id|title|path> | create-page --path <パス> --file <ファイル> [--overwrite] | status');
 }
 
 export async function main(args = process.argv.slice(2)) {
@@ -626,6 +682,28 @@ export async function main(args = process.argv.slice(2)) {
       if (missing.length) console.error(`注意: 未取得の Part ${missing.join(',')} は本文検索の対象外です`);
     }
     console.log(matches.length ? matches.map(formatEntry).join('\n') : 'no match');
+    return 0;
+  }
+  if (command === 'create-page') {
+    const options = { overwrite: false };
+    while (rest.length) {
+      const option = rest.shift();
+      if (option === '--overwrite') options.overwrite = true;
+      else if (option === '--path') { options.path = rest.shift(); if (options.path === undefined) throw new Error('--path に値が必要です'); }
+      else if (option === '--file') { options.file = rest.shift(); if (options.file === undefined) throw new Error('--file に値が必要です'); }
+      else throw new Error(`不明なオプション: ${option}`);
+    }
+    if (!options.path?.startsWith('/') || !options.file) { usage(); return 2; }
+    const body = normalizeText(fs.readFileSync(options.file, 'utf8'));
+    const env = readEnvFile(path.join(os.homedir(), '.claude', 'growi.env'));
+    if (!env) { console.error('Growi 認証情報がありません'); return 2; }
+    if (!env.GROWI_BASE_URL || !env.GROWI_USER || !env.GROWI_PASS) { console.error('Growi 認証情報が不足しています'); return 2; }
+    const http = await loginGrowi({ baseUrl: env.GROWI_BASE_URL, user: env.GROWI_USER, password: env.GROWI_PASS });
+    const csrf = await growiApiCsrf(env.GROWI_BASE_URL, http);
+    const result = await createGrowiPage({ baseUrl: env.GROWI_BASE_URL, http, csrf, pagePath: options.path, body, overwrite: options.overwrite });
+    if (result.status === 'exists') { console.error(`既に存在します: ${result.url}（--overwrite で更新）`); return 1; }
+    console.log(result.url);
+    console.error(`文字数: ${result.chars}（${result.status === 'updated' ? '更新' : '作成'}）`);
     return 0;
   }
   if (command === 'get') {

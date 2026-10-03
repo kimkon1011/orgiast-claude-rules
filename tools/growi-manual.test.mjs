@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { buildIndex, extractGrowiCsrf, fetchGrowiBodies, generateGrowiParts, ingestFiles, installIndexFiles, listGrowiPages, loginGrowi, parsePart, publishIndex, syncGrowi } from './growi-manual.mjs';
+import { buildIndex, createGrowiPage, currentRevisionOf, extractBodyCsrf, extractGrowiCsrf, fetchGrowiBodies, generateGrowiParts, ingestFiles, installIndexFiles, listGrowiPages, loginGrowi, parsePart, publishIndex, syncGrowi } from './growi-manual.mjs';
 
 const tool = fileURLToPath(new URL('./growi-manual.mjs', import.meta.url));
 const delimiter = '================================================== 次のページ ==================================================';
@@ -438,4 +438,86 @@ test('page listing retries transient failures but does not retry authentication 
   calls = 0;
   await assert.rejects(growiJson(async () => { calls++; return { ok: false, status: 401 }; }, 'https://example.invalid', { attempts: 3, retryDelay: async () => {} }), /401/);
   assert.equal(calls, 1);
+});
+
+test('extractBodyCsrf は body タグの data-csrftoken を取り出す', () => {
+  assert.equal(extractBodyCsrf('<html><body class="editor" data-csrftoken="TOKEN123">本文</body></html>'), 'TOKEN123');
+  assert.throws(() => extractBodyCsrf('<body>csrfなし</body>'), /data-csrftoken/);
+});
+
+test('currentRevisionOf は文字列とオブジェクト両方の revision ポインタを正規化する', () => {
+  assert.equal(currentRevisionOf({ revision: 'r1' }), 'r1');
+  assert.equal(currentRevisionOf({ revision: { _id: 'r2' } }), 'r2');
+  assert.throws(() => currentRevisionOf({ revision: null }), /現行リビジョン/);
+  assert.throws(() => currentRevisionOf({}), /現行リビジョン/);
+});
+
+test('createGrowiPage は新規パスを v3 API で作成する', async () => {
+  const calls = [];
+  const http = async (url, options = {}) => {
+    calls.push({ url, options });
+    const pathname = new URL(url).pathname;
+    if (pathname === '/_api/pages.get') return Response.json({ ok: false });
+    if (pathname === '/_api/v3/pages') return Response.json({ data: { page: { _id: 'p1', path: '/新規/手順' } } }, { status: 201 });
+    throw new Error(`想定外の HTTP 呼び出し: ${url}`);
+  };
+  const result = await createGrowiPage({ baseUrl: 'https://growi.example/', http, csrf: 'tok', pagePath: '/新規/手順', body: '本文' });
+  assert.equal(result.status, 'created');
+  assert.equal(result.pageId, 'p1');
+  assert.equal(result.url, 'https://growi.example/新規/手順');
+  assert.equal(result.chars, 2);
+  const post = calls.find((call) => call.options.method === 'POST');
+  const sent = JSON.parse(post.options.body);
+  assert.equal(sent.path, '/新規/手順');
+  assert.equal(sent.grant, 1);
+  assert.equal(sent._csrf, 'tok');
+});
+
+test('createGrowiPage は既存パスを overwrite 無しでは上書きしない', async () => {
+  const posts = [];
+  const http = async (url, options = {}) => {
+    if (options.method === 'POST') posts.push(url);
+    return Response.json({ page: { _id: 'p9', path: '/既存' } });
+  };
+  const result = await createGrowiPage({ baseUrl: 'https://growi.example', http, csrf: 'tok', pagePath: '/既存', body: '本文' });
+  assert.equal(result.status, 'exists');
+  assert.equal(result.pageId, 'p9');
+  assert.deepEqual(posts, []);
+});
+
+test('createGrowiPage は overwrite で page.revision ポインタを指定して pages.update する', async () => {
+  const posts = [];
+  const http = async (url, options = {}) => {
+    const pathname = new URL(url).pathname;
+    if (pathname === '/_api/pages.get') return Response.json({ page: { _id: 'p9', path: '/既存', revision: 'r7' } });
+    if (pathname === '/_api/pages.update') { posts.push(String(options.body)); return Response.json({ page: { _id: 'p9' } }); }
+    throw new Error(`想定外の HTTP 呼び出し: ${url}`);
+  };
+  const result = await createGrowiPage({ baseUrl: 'https://growi.example', http, csrf: 'tok', pagePath: '/既存', body: '更新本文', overwrite: true });
+  assert.equal(result.status, 'updated');
+  assert.equal(posts.length, 1);
+  const params = new URLSearchParams(posts[0]);
+  assert.equal(params.get('page_id'), 'p9');
+  assert.equal(params.get('revision_id'), 'r7');
+  assert.equal(params.get('body'), '更新本文');
+  assert.equal(params.get('_csrf'), 'tok');
+});
+
+test('createGrowiPage は作成時の page_exists を exists 扱いにする', async () => {
+  const http = async (url) => {
+    const pathname = new URL(url).pathname;
+    if (pathname === '/_api/pages.get') return Response.json({ ok: false });
+    if (pathname === '/_api/v3/pages') return new Response(JSON.stringify({ errors: [{ message: 'Failed to post page', code: 'page_exists' }] }), { status: 500 });
+    throw new Error(`想定外の HTTP 呼び出し: ${url}`);
+  };
+  const result = await createGrowiPage({ baseUrl: 'https://growi.example', http, csrf: 'tok', pagePath: '/競合', body: '本文' });
+  assert.equal(result.status, 'exists');
+});
+
+test('create-page は引数が不正なら usage で exit 2（ネットワーク不使用）', (t) => {
+  const cache = temporaryCache(t);
+  const noSlash = run(cache, ['create-page', '--path', 'prefix-only', '--file', 'x.md']);
+  assert.equal(noSlash.status, 2);
+  const noFile = run(cache, ['create-page', '--path', '/ok/path']);
+  assert.equal(noFile.status, 2);
 });

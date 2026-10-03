@@ -5,6 +5,22 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
+test('未設定またはOpus固定の主経路をSonnetへ収束し、他モデルは保持する', () => {
+  const repo = path.resolve('.');
+  for (const [initial, expected] of [[undefined, 'sonnet'], ['opus', 'sonnet'], ['claude-opus-5', 'sonnet'], ['haiku', 'haiku']]) {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-model-'));
+    const settingsFile = path.join(home, '.claude', 'settings.json');
+    fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+    fs.writeFileSync(settingsFile, JSON.stringify(initial ? { model: initial } : {}));
+    const env = { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo };
+    execFileSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { encoding: 'utf8', env });
+    assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).model, expected);
+    const second = execFileSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { encoding: 'utf8', env });
+    assert.match(second, /hook は既に登録済み\(変更なし\)/);
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test('既存PowerShell hookへExecutionPolicy Bypassを補いcost-loopをmjsへ移行する', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-'));
   const repo = path.resolve('.');

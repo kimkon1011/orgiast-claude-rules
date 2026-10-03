@@ -636,6 +636,10 @@ function recordUsage(result, modelName, seconds, provider = 'codex', attempts = 
   try {
     const ledger = path.join(home, '.claude', 'executor-usage.jsonl');
     fs.mkdirSync(path.dirname(ledger), { recursive: true });
+    // child.on('error') で spawn 自体に失敗した行は status が数値で残らず、原因は result.error にしか無い。
+    // stderr は空のままなので、放っておくと台帳からは「codex が走って何も出さなかった」と区別できない
+    // （2026-10-04 診断: 直近24hの codex out=0 のうち3件がこの形）。spawnError として必ず残す。
+    const spawnError = result?.error ? String(result.error.message ?? result.error).replace(/\s+/g, ' ').trim().slice(-200) : '';
     fs.appendFileSync(ledger, `${JSON.stringify({
       t: new Date().toISOString(), provider, model: modelName,
       lane: selectedLane.reason, escalated,
@@ -646,7 +650,8 @@ function recordUsage(result, modelName, seconds, provider = 'codex', attempts = 
       origin, kind: taskKind,
       exitCode: result?.status ?? null,
       cwd,
-      stderrTail: String(result?.stderr || '').replace(/\s+/g, ' ').trim().slice(-200),
+      stderrTail: String(result?.stderr || spawnError || '').replace(/\s+/g, ' ').trim().slice(-200),
+      ...(spawnError ? { spawnError } : {}),
       fastFail: result?.timedOut !== true && Number(result?.status) !== 0 && (result?.outputChars || 0) === 0,
       attempts,
       ...(Array.isArray(chain) && chain.length ? { chain } : {}),

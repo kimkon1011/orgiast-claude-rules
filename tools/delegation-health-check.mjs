@@ -97,6 +97,12 @@ export function emptyOutputReason(row) {
   // no_output に混ぜると原因が埋もれて同 id が永久に消えない（2026-09-16 診断）。
   // 起動を試みた行は必ず数値 status(3) と失敗理由の stderrTail を伴うため、ここは起動失敗のまま。
   if (row?.launched === false) return 'launch_failed';
+  // 子プロセスの spawn 自体が失敗した行。execute() の child.on('error') 経路では status が
+  // 数値で残らず(exitCode:null)、原因は stderr ではなく result.error に載る。
+  // 出力ゼロの実体は「codex が走って何も出さなかった」ではなく「そもそも起動できていない」ので
+  // no_output に混ぜてはならない（2026-10-04 診断: 直近24hの no_output 3件は全てこれ）。
+  // status を欠く旧行・部分行(undefined)は spawn_failed にしない。
+  if (row?.launched !== false && row?.exitCode == null && (row?.status === 'error' || row?.status === null)) return 'spawn_failed';
   if (/Not inside a trusted directory/.test(String(row?.stderrTail || ''))) return 'untrusted_cwd';
   if (CODEX_AUTH_FAILED.test(String(row?.stderrTail || ''))) return 'auth_failed';
   if (CODEX_MODEL_AUTH_MISMATCH.test(String(row?.stderrTail || ''))) return 'model_auth_mismatch';
@@ -153,7 +159,7 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
     .filter((row) => row.provider === 'codex' && Number(row.out) === 0)
     .map((source) => ({ reason: emptyOutputReason(source), stderrTail: source.stderrTail }))
     .filter((item) => item.reason !== 'timeout');
-  const realEmpty = empty.filter((item) => !['infra_transient', 'launch_failed', 'auth_failed', 'model_auth_mismatch', 'preflight_blocked'].includes(item.reason));
+  const realEmpty = empty.filter((item) => !['infra_transient', 'launch_failed', 'auth_failed', 'model_auth_mismatch', 'preflight_blocked', 'spawn_failed'].includes(item.reason));
   const launchFailed = empty.filter((item) => item.reason === 'launch_failed');
   const authFailed = empty.filter((item) => item.reason === 'auth_failed');
   const modelAuthMismatch = empty.filter((item) => item.reason === 'model_auth_mismatch');
@@ -166,6 +172,11 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
   // codex_launch_failed とは別 id にし、fixTask を付けない(low)＝毎日の起票対象にしない。
   const preflightBlocked = empty.filter((item) => item.reason === 'preflight_blocked');
   if (preflightBlocked.length) findings.push({ id: 'codex_preflight_blocked', severity: 'low', title: 'Codex は起動前ゲートで意図的に止められた（起動失敗ではない）', evidence: [`${preflightBlocked.length}件`, 'status が文字列の番兵（起動前ゲートが記録）'] });
+  // spawn 自体の失敗は「そもそも起動できていない」ので、no_output として起票しない。
+  // 直せる欠陥というより環境側の spawn 失敗なので fixTask を付けない(low)＝毎日の起票対象にしない
+  // （codex_lane_unavailable / codex_auth_failed と同じ扱い）。
+  const spawnFailedRows = empty.filter((item) => item.reason === 'spawn_failed');
+  if (spawnFailedRows.length) findings.push({ id: 'codex_spawn_failed', severity: 'low', title: 'Codex の子プロセスが spawn に失敗（起動できていない）', evidence: [`${spawnFailedRows.length}件`, ...reasonTop(spawnFailedRows)] });
   // 直せる欠陥なので fixTask を付ける（medium）。
   if (modelAuthMismatch.length) findings.push({ id: 'codex_model_auth_mismatch', severity: 'medium', title: 'Codex が ChatGPT アカウントで sol/astra を選んで失敗', evidence: [`${modelAuthMismatch.length}件`, ...reasonTop(modelAuthMismatch)], fixTask: 'codex-do のレーン選択が ChatGPT アカウント認証を検出できず sol/astra を選んでいる。detectChatGptAuth と decideCodexLane の判定を照合し、再現テストを追加して修正' });
   // 事実は消さずに名前を付けて残す。再ログインは人が行う操作でコードでは直せないため

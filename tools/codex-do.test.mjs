@@ -905,6 +905,30 @@ test('起動に成功した行は launched:true で記録される', (t) => {
   assert.equal(rows[0].launched, true);
 });
 
+test('spawn エラーのメッセージを台帳の spawnError と stderrTail に残す', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-spawnerr-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  // child.on('error') 経路の模擬: status が数値で残らず、原因は error だけに載る(spawn codex ENOENT)。
+  // 即時失敗は1回だけ再試行されるので mock は2件ぶん用意する。
+  const spawnError = 'spawn codex ENOENT';
+  const result = run(['--force-native', '--cwd', home, '--model', 'sol', '説明して'], {
+    home,
+    env: { CODEX_DO_MOCK_RESULTS: JSON.stringify([
+      { status: null, error: spawnError },
+      { status: null, error: spawnError },
+    ]) },
+  });
+  assert.notEqual(result.status, 0);
+  const rows = fs.readFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].provider, 'codex');
+  assert.equal(rows[0].launched, true);
+  assert.equal(rows[0].status, 'error');
+  assert.equal(rows[0].exitCode, null);
+  assert.equal(rows[0].spawnError, spawnError);
+  assert.equal(rows[0].stderrTail, spawnError);
+});
+
 const { decideCodexLane, buildCodexExecArgs, isInsideGitRepo, normalizeCodexModel, wslCodexArgs, detectChatGptAuth, probeChatGptAuth } = await import('./codex-do.mjs');
 const ASTRA = 'gpt-6-astra', SOL = 'gpt-5.6-sol';
 for (const [name, input, slug, reason] of [

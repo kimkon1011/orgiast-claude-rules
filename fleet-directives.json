@@ -12,6 +12,36 @@
       "createdAt": "2026-09-29T09:48:39.219Z",
       "expiresAt": "2026-10-06T09:48:39.219Z",
       "timeoutSeconds": 900
+    },
+    {
+      "id": "run-20261003-222023-3741",
+      "kind": "run",
+      "targets": "kimko-PC",
+      "why": "stale_report 自動復旧",
+      "task": "fleet-sheet-report",
+      "createdBy": "uers",
+      "createdAt": "2026-10-03T22:20:23.815Z",
+      "expiresAt": "2026-10-05T22:20:23.815Z"
+    },
+    {
+      "id": "run-20261003-222024-3275",
+      "kind": "run",
+      "targets": "nishi-PC",
+      "why": "stale_report 自動復旧",
+      "task": "fleet-sheet-report",
+      "createdBy": "uers",
+      "createdAt": "2026-10-03T22:20:24.051Z",
+      "expiresAt": "2026-10-05T22:20:24.051Z"
+    },
+    {
+      "id": "run-20261003-222024-3995",
+      "kind": "run",
+      "targets": "DESKTOP-BDOAK99",
+      "why": "stale_report 自動復旧",
+      "task": "fleet-sheet-report",
+      "createdBy": "uers",
+      "createdAt": "2026-10-03T22:20:24.277Z",
+      "expiresAt": "2026-10-05T22:20:24.277Z"
     }
   ]
 }

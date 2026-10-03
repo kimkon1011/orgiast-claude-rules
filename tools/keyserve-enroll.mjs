@@ -64,7 +64,21 @@ export async function main(argv = process.argv.slice(2), {
           body: JSON.stringify({ pc, ttlHours }), signal: AbortSignal.timeout(15000),
         });
       } catch { throw new Error('発行APIへ接続できません。ネットワーク接続を確認してください。'); }
-      if (!response.ok) throw new Error(`発行APIが HTTP ${response.status} を返しました。${response.status === 401 ? 'primary 認証を確認してください。' : 'サーバの実装・稼働状況を確認してください。'}`);
+      // 401 は「鍵が無効」ではなく「派生鍵(per-PC key)で発行しようとした」が実際の最頻原因。
+      // api/keys.js は primary に加えて derivePcKey(master, pcId) を受け付けるが、api/enroll.js は
+      // primary と、ORGIAST_ENROLL_ISSUER_PCS に載ったPCの派生鍵しか受け付けない。enroll 済みPCの
+      // keyserve.env に入るのは派生鍵なので、「keyserve-status は primary / HTTP 200 なのに発行だけ 401」
+      // が起きる（2026-10-01 実測。kim-PC / nishi-PC の両方で再現）。
+      if (response.status === 401) {
+        throw new Error([
+          '発行APIが HTTP 401 を返しました。このPCの鍵では enroll トークンを発行できません。',
+          'このPCの ~/.claude/keyserve.env に入っているのは、enroll 時に配られた「このPC専用の派生鍵」です。',
+          '鍵の取得(/api/keys)は派生鍵でも通りますが、発行(/api/enroll)はマスター、または発行を許可されたPCだけが行えます。',
+          'そのため keyserve-status が「認証経路: primary / HTTP 200」と出ていても発行はできません（status は取得可否しか見ていません）。',
+          '対処: keyserve の環境変数 ORGIAST_ENROLL_ISSUER_PCS にこのPC名を追加して再デプロイするか、既に許可されたPCで実行してください。',
+        ].join('\n'));
+      }
+      if (!response.ok) throw new Error(`発行APIが HTTP ${response.status} を返しました。${response.status === 403 ? 'legacy/enroll 鍵では発行できません。マスターか、発行を許可されたPCで実行してください。' : 'サーバの実装・稼働状況を確認してください。'}`);
       try { issued = await response.json(); } catch { throw new Error('発行APIの応答がJSONではありません'); }
       if (typeof issued?.token !== 'string' || !issued.token) throw new Error('発行APIの応答にトークンがありません');
     }

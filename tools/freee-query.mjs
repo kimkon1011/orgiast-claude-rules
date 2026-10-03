@@ -13,6 +13,7 @@ import { writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import postgres from 'postgres';
+import { isEntry } from './is-entry.mjs';
 
 const COMPANY_ID = 11975741;
 const API = 'https://api.freee.co.jp';
@@ -138,7 +139,9 @@ async function main() {
   }
 }
 
-main().catch((e) => {
-  console.error(`ERROR: ${e.message}`);
-  process.exit(1);
-});
+if (isEntry(import.meta.url)) {
+  main().catch((e) => {
+    console.error(`ERROR: ${e.message}`);
+    process.exit(1);
+  });
+}

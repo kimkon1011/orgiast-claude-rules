@@ -474,15 +474,82 @@ export function buildPrompt(todo, sections, repoCwd, summaryFile, timeoutMin = 6
   ].filter(Boolean).join('\n\n');
 }
 
-export function feedbackIssueExclusionReason(issue) {
-  const labels = Array.isArray(issue?.labels) ? issue.labels : [];
-  return labels.some((label) => (typeof label === 'string' ? label : label?.name) === 'in-progress')
-    ? 'in-progress（対応中）'
-    : '';
+const FEEDBACK_MAX_FAILS = 3;
+const FEEDBACK_IN_PROGRESS_TTL = 24 * 60 * 60 * 1000;
+
+export function feedbackAttemptKey(issue) {
+  return `${issue?.repo}#${issue?.number}`;
 }
 
-export function filterFeedbackIssues(issues) {
-  return (Array.isArray(issues) ? issues : []).filter((issue) => !feedbackIssueExclusionReason(issue));
+// 失敗回数による打ち切り。3回で恒久スキップ、1回以上なら最終失敗から6時間はクールダウン。
+export function feedbackRetryExclusionReason(attempt, now = new Date()) {
+  const fails = Number(attempt?.fails) || 0;
+  if (fails >= FEEDBACK_MAX_FAILS) return `自動修正が${FEEDBACK_MAX_FAILS}回失敗したため自動再試行を停止中`;
+  if (fails >= 1) {
+    const last = Date.parse(attempt?.lastFailAt);
+    if (Number.isFinite(last) && now.getTime() - last <= SIX_HOURS) return `直近の失敗から6時間以内（クールダウン中, ${fails}回失敗）`;
+  }
+  return '';
+}
+
+function hasInProgressLabel(issue) {
+  const labels = Array.isArray(issue?.labels) ? issue.labels : [];
+  return labels.some((label) => (typeof label === 'string' ? label : label?.name) === 'in-progress');
+}
+
+// in-progress の時効。ラベル付与時刻は API から直接取れないため updatedAt を代理値にする
+// （ラベルを付けた時点で updatedAt は必ず更新され、以後 issue が触られなければ古いまま残る）。
+// updatedAt が無い／解釈できない場合は時効扱いにせず、従来どおり除外する。
+export function feedbackInProgressStale(issue, now = new Date()) {
+  if (!hasInProgressLabel(issue)) return false;
+  const updated = Date.parse(issue?.updatedAt);
+  return Number.isFinite(updated) && now.getTime() - updated >= FEEDBACK_IN_PROGRESS_TTL;
+}
+
+export function feedbackIssueExclusionReason(issue, attempt, now = new Date()) {
+  if (hasInProgressLabel(issue) && !feedbackInProgressStale(issue, now)) return 'in-progress（対応中）';
+  return feedbackRetryExclusionReason(attempt, now);
+}
+
+export function filterFeedbackIssues(issues, attempts = {}, now = new Date()) {
+  return (Array.isArray(issues) ? issues : []).filter((issue) => !feedbackIssueExclusionReason(issue, attempts?.[feedbackAttemptKey(issue)], now));
+}
+
+export function loadFeedbackAttempts(file) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch { return {}; }
+}
+
+export function saveFeedbackAttempts(file, attempts) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(attempts, null, 2));
+}
+
+// 成功(PR作成)ならキーごと削除、失敗なら回数を加算する。fails が上限に達した瞬間だけ gaveUp=true を返す。
+export function recordFeedbackResult(attempts, issue, { success, error = '' }, now = new Date()) {
+  const key = feedbackAttemptKey(issue);
+  if (success) { delete attempts[key]; return { gaveUp: false, fails: 0 }; }
+  const fails = (Number(attempts[key]?.fails) || 0) + 1;
+  attempts[key] = { fails, lastFailAt: now.toISOString(), lastError: String(error ?? '').replace(/\s+/g, ' ').trim().slice(0, 200) };
+  return { gaveUp: fails === FEEDBACK_MAX_FAILS, fails };
+}
+
+// 3回失敗した報告を next-session.md の `## 残TODO` に1行起票する（同じ Issue の行は重複させない）。
+export function appendGiveUpTodo(nextFile, issue, lastError = '') {
+  const marker = `${issue.repo}#${issue.number} 「`;
+  const line = `- [ ] 自動修正が3回失敗した報告を手当て: ${marker}${issue.title ?? ''}」 — 最終エラー: ${String(lastError ?? '').replace(/\s+/g, ' ').trim().slice(0, 200)}`;
+  let md = '';
+  try { md = fs.readFileSync(nextFile, 'utf8'); } catch {}
+  if (md.split(/\r?\n/).some((existing) => existing.includes('自動修正が3回失敗した報告を手当て') && existing.includes(marker))) return false;
+  const heading = md.match(/^## 残TODO.*$/m);
+  const next = heading
+    ? md.slice(0, heading.index + heading[0].length) + `\n${line}` + md.slice(heading.index + heading[0].length)
+    : `${md}${md && !md.endsWith('\n') ? '\n' : ''}\n## 残TODO\n${line}\n`;
+  fs.mkdirSync(path.dirname(nextFile), { recursive: true });
+  fs.writeFileSync(nextFile, next);
+  return true;
 }
 
 export function buildFeedbackPrompt(issue, repo, repoCwd, summaryFile, timeoutMin = 60) {
@@ -737,7 +804,7 @@ function listFeedbackIssues() {
   if (probe.error || probe.status !== 0) return [];
   const found = [];
   for (const repo of feedbackRepos()) {
-    const result = runGh(['issue', 'list', '--repo', repo, '--label', 'feedback', '--state', 'open', '--json', 'number,title,url,body,labels']);
+    const result = runGh(['issue', 'list', '--repo', repo, '--label', 'feedback', '--state', 'open', '--json', 'number,title,url,body,labels,updatedAt']);
     if (result.error || result.status !== 0) {
       console.warn(`auto-session: フォーム報告の取得失敗 repo=${repo}`);
       continue;
@@ -815,6 +882,11 @@ function setInProgress(issue, add) {
   return runGh(['issue', 'edit', String(issue.number), '--repo', issue.repo, add ? '--add-label' : '--remove-label', 'in-progress']);
 }
 
+function markGivingUp(issue) {
+  runGh(['label', 'create', 'auto-fix-giving-up', '--repo', issue.repo, '--color', 'B60205', '--description', '自動修正が3回失敗したため自動再試行を停止']);
+  return runGh(['issue', 'edit', String(issue.number), '--repo', issue.repo, '--add-label', 'auto-fix-giving-up']);
+}
+
 function relayConfig(claudeDir) {
   let url = process.env.FEEDBACK_RELAY_URL || '';
   let secret = process.env.FEEDBACK_RELAY_SECRET || '';
@@ -879,6 +951,7 @@ export function feedbackFailureBody(results) {
     ];
     const sessionId = result.sessionId || extractSessionId(result.stdout);
     if (sessionId) lines.push(`再開: claude --resume ${sessionId}`);
+    if (result.givingUp) lines.push('自動修正が3回失敗したので自動再試行を停止しました。');
     const stderr = String(result.stderr ?? '')
       .replace(/\r?\n/g, ' ')
       .replace(/(authorization\s*:\s*bearer\s+)\S+/gi, '$1[REDACTED]')
@@ -951,6 +1024,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   const runSession = io.runChild ?? runChild;
   const prepareFeedbackRepo = io.ensureFeedbackRepo ?? ensureFeedbackRepo;
   const markInProgress = io.setInProgress ?? setInProgress;
+  const markGiveUp = io.markGivingUp ?? markGivingUp;
   const sendNotification = io.notify ?? notify;
   const sendFeedbackNotification = io.notifyFeedback ?? notifyFeedback;
   const options = parseArgs(argv);
@@ -1007,6 +1081,9 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   // フォーム報告は next-session.md と独立した入力源なので、片方が無くてももう片方を止めない。
   const parsed = fs.existsSync(nextFile) ? parseHandoff(fs.readFileSync(nextFile, 'utf8')) : { block: '', todos: [], todoBlocks: [], sections: {} };
   const feedbackIssues = await listIssues();
+  const attemptsFile = path.join(autoDir, 'feedback-attempts.json');
+  const feedbackAttempts = loadFeedbackAttempts(attemptsFile);
+  const attemptOf = (issue) => feedbackAttempts[feedbackAttemptKey(issue)];
   let taskLedgerItems = [];
   try {
     const listed = await listTaskLedgerItems({ 状態: '未着手' });
@@ -1022,7 +1099,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
     const normalSet = new Set(lanes.normal);
     parsed.todos.forEach((todo, i) => console.log(`[next-session] ${i + 1}. [block ${parsed.todoBlocks[i]}] ${reasons[i] ? `除外: ${reasons[i]}` : slaSet.has(todo) ? '[SLA] 採用' : normalSet.has(todo) ? '[通常] 採用' : '実行可能（今回の上限外）'} | ${todo}`));
     logSlaOverflow(lanes);
-    feedbackIssues.forEach((issue) => console.log(`[feedback] ${issue.repo}#${issue.number}. ${feedbackIssueExclusionReason(issue) ? `除外: ${feedbackIssueExclusionReason(issue)}` : '採用'} | ${issue.title}`));
+    feedbackIssues.forEach((issue) => console.log(`[feedback] ${issue.repo}#${issue.number}. ${feedbackIssueExclusionReason(issue, attemptOf(issue)) ? `除外: ${feedbackIssueExclusionReason(issue, attemptOf(issue))}` : '採用'} | ${issue.title}`));
     if (!feedbackIssues.length) console.log('[feedback] 0件（対象リポジトリに未対応 Issue なし、または gh なし）');
     taskLedgerItems.forEach((item, index) => console.log(`[task-ledger] ${index + 1}. 採用 | ${item.taskId} ${item.件名 || '無題'}`));
     if (!taskLedgerItems.length) console.log('[task-ledger] 0件（未着手タスクなし、または取得失敗）');
@@ -1032,7 +1109,10 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   const selected = todoLanes.selected;
   const laneOf = (todo) => todoLanes.sla.includes(todo) ? 'SLA' : '通常';
   logSlaOverflow(todoLanes);
-  const selectedFeedback = filterFeedbackIssues(feedbackIssues).slice(0, options.feedbackCount);
+  const selectedFeedback = filterFeedbackIssues(feedbackIssues, feedbackAttempts).slice(0, options.feedbackCount);
+  for (const issue of selectedFeedback) {
+    if (feedbackInProgressStale(issue)) console.log(`[feedback] ${issue.repo}#${issue.number}: in-progress が24時間以上古いため再試行します`);
+  }
   const selectedTaskLedger = taskLedgerItems.slice(0, options.count);
   if (!selected.length && !selectedFeedback.length && !selectedTaskLedger.length) { console.log('auto-session: 実行可能な TODO、フォーム報告、task-ledger タスクはありません'); return 0; }
   if (options.dry) {
@@ -1261,6 +1341,21 @@ ${result.summary ?? ''}`);
     console.warn(`auto-session: 完走通知の送信に失敗しました（本体の成否には影響させません）: ${error?.message ?? error}`);
   }
   const relay = relayConfig(claudeDir);
+  // 失敗回数を永続化する。PR が作れた issue はキーごと削除、3回目の失敗でラベル+TODO起票して自動再試行を止める。
+  if (feedbackResults.length) {
+    for (const result of feedbackResults) {
+      const success = Boolean(feedbackPrDetails(`${result.stdout ?? ''}\n${result.summary ?? ''}`).url);
+      const error = result.stderr || result.summary || result.stdout || String(result.status ?? '');
+      const recorded = recordFeedbackResult(feedbackAttempts, result.issue, { success, error });
+      if (!recorded.gaveUp) continue;
+      result.givingUp = true;
+      try { markGiveUp(result.issue); } catch { console.warn(`auto-session: auto-fix-giving-up ラベル付与失敗 (${result.issue.repo}#${result.issue.number})`); }
+      try { appendGiveUpTodo(nextFile, result.issue, feedbackAttempts[feedbackAttemptKey(result.issue)].lastError); }
+      catch (e) { console.warn(`auto-session: 残TODO への起票失敗 (${result.issue.repo}#${result.issue.number}): ${e?.message ?? e}`); }
+    }
+    try { saveFeedbackAttempts(attemptsFile, feedbackAttempts); }
+    catch (e) { console.warn(`auto-session: feedback-attempts.json の保存失敗: ${e?.message ?? e}`); }
+  }
   let feedbackSucceeded = 0;
   for (const result of feedbackResults) {
     const details = enrichFeedbackPrDetails(feedbackPrDetails(`${result.stdout ?? ''}\n${result.summary ?? ''}`));

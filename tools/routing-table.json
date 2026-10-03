@@ -1,49 +1,49 @@
 {
-  "builtAt": "2026-09-09T21:12:16.067Z",
+  "builtAt": "2026-10-02T18:05:50.765Z",
   "categories": {
     "classification": {
       "provider": "deepseek",
       "model": "deepseek-chat",
       "rate": 1,
-      "usdPerTask": 0.00002112,
-      "msAvg": 990,
-      "measuredAt": "2026-09-09T21:11:19.631Z",
+      "usdPerTask": 0.00002139,
+      "msAvg": 714,
+      "measuredAt": "2026-10-02T18:05:50.760Z",
       "samples": 2
     },
     "extraction": {
       "provider": "deepseek",
       "model": "deepseek-chat",
       "rate": 1,
-      "usdPerTask": 0.00005124,
-      "msAvg": 990,
-      "measuredAt": "2026-09-09T21:11:19.631Z",
+      "usdPerTask": 0.00004601,
+      "msAvg": 714,
+      "measuredAt": "2026-10-02T18:05:50.760Z",
       "samples": 2
     },
     "summarize": {
-      "provider": "deepseek",
-      "model": "deepseek-chat",
+      "provider": "groq",
+      "model": "openai/gpt-oss-120b",
       "rate": 1,
-      "usdPerTask": 0.00013285,
-      "msAvg": 990,
-      "measuredAt": "2026-09-09T21:11:19.631Z",
+      "usdPerTask": 0.0001116,
+      "msAvg": 554,
+      "measuredAt": "2026-10-02T18:04:01.617Z",
       "samples": 2
     },
     "jp_reply": {
       "provider": "openrouter",
       "model": "meta-llama/llama-3.3-70b-instruct",
       "rate": 1,
-      "usdPerTask": 0.00010272,
-      "msAvg": 2078,
-      "measuredAt": "2026-09-09T21:10:01.091Z",
+      "usdPerTask": 0.00009815,
+      "msAvg": 3324,
+      "measuredAt": "2026-10-02T18:04:40.408Z",
       "samples": 2
     },
     "code": {
-      "provider": "openrouter",
-      "model": "meta-llama/llama-3.3-70b-instruct",
+      "provider": "groq",
+      "model": "openai/gpt-oss-120b",
       "rate": 1,
-      "usdPerTask": 0.00010217,
-      "msAvg": 2078,
-      "measuredAt": "2026-09-09T21:10:01.091Z",
+      "usdPerTask": 0.0000778,
+      "msAvg": 554,
+      "measuredAt": "2026-10-02T18:04:01.617Z",
       "samples": 2
     }
   }

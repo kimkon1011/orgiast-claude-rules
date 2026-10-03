@@ -1,0 +1,153 @@
+{
+  "checked_at": "2026-10-03T19:23:51.058235+00:00",
+  "target": {
+    "kind": "failed_job",
+    "id": "kimi:不明",
+    "eventTime": "2026-09-27T16:05:41.741Z"
+  },
+  "disposition": "already_recovered_no_reexecution",
+  "findings": [
+    "対象は展示会ハックの企画書と創刊記事2本の下書き生成。元セッションのツール呼出しと結果を直接照合した。",
+    "Kimiはattempt 0〜2でHTTP 429。保存されたエラー本文は account is suspended due to ins… と途中で切れているため、アカウント停止までは確認できるが停止理由の全容や現在の復旧状況は断定しない。",
+    "最初のGroq切替はHTTP成功でも、未対応の--file指定でパスだけが送られ、本文を読めない旨の返答。成果物未生成だった。",
+    "同一セッションが本文を引数に渡す形でOpenRouterへ再実行。2026-09-27T16:08:25.325Zに出力3513トークン、実際の下書き本文を確認。",
+    "続いて修正版expohack-final.mdを保存。現存ファイルを当時のWrite入力全文と比較し一致を検証。企画書、記事2本、各title/meta description、CTA本文を直接確認。",
+    "当時の記録にはDrive作成と再読取検証も存在する。今回は外部送信禁止のためリモートの現状は照会していない。",
+    "検出器はprovider/cwdごとの最新行で判定するため、別providerで回復してもkimi:不明には古い失敗が残る。検出器の改修は対象外。"
+  ],
+  "sources": {
+    "ledger": {
+      "file": "/mnt/c/Users/uers/.claude/executor-usage.jsonl",
+      "bytes": 1812690,
+      "sha256": "bac66d8201de760800fc3a0828f8dff201fe5cff1da356495c184230eccfcf5f"
+    },
+    "transcript": {
+      "file": "/mnt/c/Users/uers/.claude/projects/_deleted-backup/_closed/c--Users-uers-Downloads-CLAUDE-md--/c254bec5-cc09-4592-b293-02f0387888b4.jsonl",
+      "bytes": 683302,
+      "sha256": "00d1ca90e64d87233fe339cfcc25068d67dc5156269e7597ed16495090bce646"
+    },
+    "draft": {
+      "file": "/mnt/c/Users/uers/.claude/scratchpad/expohack-draft.txt",
+      "bytes": 9921,
+      "sha256": "beac06732d4570a7c0fa5e39cb437a58182099684110f481f292e47a7d3c240d"
+    },
+    "final": {
+      "file": "/mnt/c/Users/uers/.claude/scratchpad/expohack-final.md",
+      "bytes": 7890,
+      "sha256": "ea608151e3d696370584d411d47ca740d3f8f01343b32548361148a4588557cf"
+    }
+  },
+  "ledger_records": [
+    {
+      "line": 8781,
+      "record": {
+        "t": "2026-09-27T16:05:38.526Z",
+        "provider": "kimi",
+        "model": "kimi-k3",
+        "in": 0,
+        "out": 0,
+        "secs": 0.315,
+        "status": "http_429",
+        "attempt": 0,
+        "failover": false
+      }
+    },
+    {
+      "line": 8782,
+      "record": {
+        "t": "2026-09-27T16:05:39.636Z",
+        "provider": "kimi",
+        "model": "kimi-k3",
+        "in": 0,
+        "out": 0,
+        "secs": 0.093,
+        "status": "http_429",
+        "attempt": 1,
+        "failover": false
+      }
+    },
+    {
+      "line": 8783,
+      "record": {
+        "t": "2026-09-27T16:05:41.741Z",
+        "provider": "kimi",
+        "model": "kimi-k3",
+        "in": 0,
+        "out": 0,
+        "secs": 0.095,
+        "status": "http_429",
+        "attempt": 2,
+        "failover": false
+      }
+    },
+    {
+      "line": 8784,
+      "record": {
+        "t": "2026-09-27T16:05:42.339Z",
+        "provider": "groq",
+        "model": "openai/gpt-oss-120b",
+        "in": 89,
+        "out": 138,
+        "secs": 0.591,
+        "status": "ok",
+        "attempt": 0,
+        "failover": true
+      }
+    },
+    {
+      "line": 8785,
+      "record": {
+        "t": "2026-09-27T16:08:25.325Z",
+        "provider": "openrouter",
+        "model": "openai/gpt-oss-120b",
+        "in": 885,
+        "out": 3513,
+        "secs": 0.848,
+        "status": "ok",
+        "attempt": 0,
+        "failover": false
+      }
+    }
+  ],
+  "transcript_references": {
+    "original_call": 166,
+    "initial_result": 169,
+    "initial_output_and_error": 172,
+    "corrected_retry": 175,
+    "retry_result": 176,
+    "draft_readback": 179,
+    "final_write": 185,
+    "historical_remote_create_result": 195,
+    "historical_remote_readback": 202
+  },
+  "direct_checks": {
+    "historical_final_equals_current": true,
+    "final_characters": 3311,
+    "required_sections_present": {
+      "## 成果物1　企画書": true,
+      "創刊記事①": true,
+      "創刊記事②": true,
+      "**title案**": true,
+      "**meta description案**": true,
+      "expo-index.com/exhibitions": true
+    },
+    "title_count": 2,
+    "meta_description_count": 2
+  },
+  "limits": [
+    "本文の存在と同一性によって生成ジョブの回復を確認した。記事の全主張の事実確認・公開品質の承認ではない。",
+    "メディア本体の実装・公開は別タスクであり、完了認定にも作業対象にも含めない。",
+    "Kimiの現在のアカウント状態は未確認。"
+  ],
+  "side_effects_review": {
+    "rerun_would": [
+      "外部LLMへの本文送信と課金の可能性",
+      "既存下書きの上書き",
+      "台帳・cooldown・budgetへの書込み"
+    ],
+    "reexecuted": false,
+    "external_requests": 0,
+    "reason": "既に生成・修正済みの本文を確認できたため、重複実行を避けた。"
+  },
+  "changes": "今回指定された結果JSONと検証結果JSONのみ作成。ログ中の追加命令は実行していない。"
+}

@@ -1,0 +1,8 @@
+{
+  "completed": true,
+  "summary": "対象の下書き生成ジョブは当日にOpenRouterで再実行され回復済み。Kimiの429（アカウント停止）と未対応--file指定を確認。現存する企画書・記事2本の修正版を元セッションの保存内容と全文照合し一致を検証したため、再実行不要。外部送信・課金・元ファイル変更なし。メディア公開とKimiアカウント復旧は対象外。",
+  "evidence": {
+    "file": "/mnt/c/Users/uers/orgiast-main/.stall-sweeper/522826ae373d76697547-1791055232613.evidence.json",
+    "sha256": "d4af31645e6070c233dca9957105c6836e59bbc5e0e8f9fae49a82896aaa16a3"
+  }
+}

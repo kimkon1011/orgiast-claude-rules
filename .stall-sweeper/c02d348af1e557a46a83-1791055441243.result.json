@@ -1,0 +1,8 @@
+{
+  "completed": true,
+  "summary": "対象は既に完了済み。原文からPowerShell 5.1 UInt32修正（PR #485）と特定し、マージ済みコミット・現コード・定期タスク参照先を直接照合。PowerShell 5.1で型・引数値・例外時継続を検証。コミット後の空diff判定による不要なfallbackの記録と判断し、重複再実行はしなかった。",
+  "evidence": {
+    "file": "/mnt/c/Users/uers/orgiast-main/.stall-sweeper/c02d348af1e557a46a83-1791055441243.evidence.json",
+    "sha256": "4481c5df692c8e66d94dd693c991952164f391fe77e7f3ff7501449e91fe0cb0"
+  }
+}

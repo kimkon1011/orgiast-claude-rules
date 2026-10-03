@@ -1,0 +1,5 @@
+{
+  "exitCode": 0,
+  "stdout": "PASS: UInt32 constants, typed API arguments, warn-and-continue; C:\\Users\\uers\\orgiast-main\\tools\\nightly-reload-vscode.ps1\r\n2026-10-04 04:26:07 SKIP: ��ƒ��i����15���ɍX�V���ꂽ�Z�b�V���� 1 ��: 7f610cf1-f3a0-41fb-a197-566c4b58241c.jsonl�j\r\nPASS: UInt32 constants, typed API arguments, warn-and-continue; C:\\Users\\uers\\.claude\\tools\\nightly-reload-vscode.ps1\r\nPowerShell 5.1.26100.9444\r\n",
+  "stderr": "#< CLIXML\r\n<Objs Version=\"1.1.0.1\" xmlns=\"http://schemas.microsoft.com/powershell/2004/04\"><Obj S=\"progress\" RefId=\"0\"><TN RefId=\"0\"><T>System.Management.Automation.PSCustomObject</T><T>System.Object</T></TN><MS><I64 N=\"SourceId\">1</I64><PR N=\"Record\"><AV>���W���[�������߂Ďg�p���邽�߂̏������Ă��܂��B</AV><AI>0</AI><Nil /><PI>-1</PI><PC>-1</PC><T>Completed</T><SR>-1</SR><SD> </SD></PR></MS></Obj><Obj S=\"progress\" RefId=\"1\"><TNRef RefId=\"0\" /><MS><I64 N=\"SourceId\">2</I64><PR N=\"Record\"><AV>���W���[�������߂Ďg�p���邽�߂̏������Ă��܂��B</AV><AI>0</AI><Nil /><PI>-1</PI><PC>-1</PC><T>Completed</T><SR>-1</SR><SD> </SD></PR></MS></Obj></Objs>"
+}

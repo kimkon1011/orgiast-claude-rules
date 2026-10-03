@@ -1,0 +1,8 @@
+{
+  "completed": false,
+  "summary": "T-3502のみ原文一覧とGoogle Sheets台帳を直接照合。台帳は未着手、期限2026-09-29。根拠Discord原文はHTTP 403 Missing Accessで閲覧できず、実際の購入済み・取消状況は未確認。外部送信・課金・権限変更禁止に従い購入や台帳更新は未実施。完了を検証できないため未完了。",
+  "evidence": {
+    "file": "/mnt/c/Users/uers/orgiast-main/.stall-sweeper/95d2b06be76c762cff24-1791055061301.evidence.json",
+    "sha256": "629b68ad8065251dea6c1fc27e3c592b684e53c5c275f45a0bd07cb48d565cdc"
+  }
+}

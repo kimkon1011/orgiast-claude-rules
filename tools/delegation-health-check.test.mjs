@@ -92,6 +92,18 @@ test('emptyOutputReason は timeout・終了コード・原因不明を分類す
   assert.equal(emptyOutputReason({ launched: true, status: 3, secs: 0 }), 'exit_3');
 });
 
+test('emptyOutputReason は spawn 自体の失敗を spawn_failed に分類する', () => {
+  // 子プロセスの起動失敗は exitCode が null で残る(child.on('error') 経路)。実障害と混ぜない。
+  assert.equal(emptyOutputReason({ launched: true, status: 'error', exitCode: null, secs: 0.15 }), 'spawn_failed');
+  assert.equal(emptyOutputReason({ launched: true, status: null, secs: 0.15 }), 'spawn_failed');
+  // 数値 exit の本物の失敗は従来どおり exit_N のまま。対照群を張らないと spawn_failed の張りすぎに気づけない。
+  assert.equal(emptyOutputReason({ launched: true, status: 1, exitCode: 1, secs: 0.15 }), 'exit_1');
+  // 実台帳は status が文字列 'error'・exitCode が数値なので、この形でも spawn_failed にしない。
+  assert.notEqual(emptyOutputReason({ launched: true, status: 'error', exitCode: 1, secs: 0.15 }), 'spawn_failed');
+  // launched / status を欠く旧行・部分行(undefined)は spawn_failed にしない。
+  assert.equal(emptyOutputReason({ secs: 0 }), 'no_output');
+});
+
 test('emptyOutputReason は Codex の認証失敗と ChatGPT モデル認証不整合を分類する', () => {
   assert.equal(emptyOutputReason({ status: 1, stderrTail: 'cted status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses' }), 'auth_failed');
   assert.equal(emptyOutputReason({ status: 1, stderrTail: '..."message":"The \'gpt-5.6-sol\' model is not supported when using Codex with a ChatGPT account."}}' }), 'model_auth_mismatch');
@@ -156,6 +168,31 @@ test('WSL 不在と直せる起動失敗が混在しても、起票対象は直�
   const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
   assert.deepEqual(findings.map((item) => item.id), ['codex_launch_failed', 'codex_lane_unavailable']);
   assert.deepEqual(findings[0].evidence, ['1件', 'launch_failed(1件)']);
+});
+
+// spawn 自体の失敗(exitCode:null)は「codex が走って何も出さなかった」ではない。
+// no_output に混ぜると毎日 codex_empty_output が誤起票され続ける(2026-10-04 診断: 直近24hの3件がこれ)。
+test('spawn 失敗だけの出力ゼロは codex_empty_output でなく codex_spawn_failed(low) に分離する', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, launched: true, timedOut: false, status: 'error', exitCode: null, secs: 0.15, stderrTail: 'spawn codex ENOENT' }));
+  const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
+  assert.deepEqual(findings.map((item) => item.id), ['codex_spawn_failed']);
+  const spawnFailed = findings[0];
+  assert.equal(spawnFailed.severity, 'low');
+  assert.equal(spawnFailed.fixTask, undefined);
+  assert.equal(spawnFailed.title, 'Codex の子プロセスが spawn に失敗（起動できていない）');
+  assert.deepEqual(spawnFailed.evidence, ['1件', 'spawn_failed(1件)']);
+  assert.equal(findings.some((item) => item.id === 'codex_empty_output'), false);
+});
+
+// 対照群: 数値 exit を持つ本物の出力ゼロ行は従来どおり codex_empty_output に出る。
+// ここを張らないと spawn_failed 判定が広すぎても緑になってしまう。
+test('数値 exit の本物の出力ゼロ行は従来どおり codex_empty_output に出る', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, launched: true, timedOut: false, status: 'error', exitCode: 1, secs: 0.15 }));
+  const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
+  assert.deepEqual(findings.map((item) => item.id), ['codex_empty_output']);
+  assert.equal(findings.some((item) => item.id === 'codex_spawn_failed'), false);
 });
 
 // 台帳(~/.claude/executor-usage.jsonl)の実データをそのまま使う。手写しの要約にすると

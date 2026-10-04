@@ -152,7 +152,7 @@ test('本文に billing を含むだけの通常429(groqのTPD)は24時間にし
     fetchImpl: async () => ++calls <= 3 ? new Response(body, { status: 429 }) : new Response('{}', { status: 200 }),
   });
   const state = JSON.parse(fs.readFileSync(files.cooldownFile, 'utf8'));
-  assert.equal(state.groq.until, timestamp + 30 * 60 * 1000, 'retry-after の無い通常の429は既定30分のまま');
+  assert.equal(state.groq.until, timestamp + 60_000, 'retry-after の無い通常の429は既定下限60秒');
 });
 
 test('402 はプロバイダを24時間クールダウンに記録する', async (t) => {
@@ -225,14 +225,14 @@ test('恒久的な課金切れの429はリトライせず次候補へ進む', as
   assert.equal(result.candidate.provider, 'openrouter');
 });
 
-test('恒久的な課金切れの429は24時間クールダウンに記録する', async (t) => {
+test('恒久的な課金切れの429にも上限を適用する', async (t) => {
   const files = temporaryFiles(t), timestamp = 1_700_000_000_000; let calls = 0;
   await callWithFallback({ start, chain: [second], payloadFor: requestFor, ...files, now: () => timestamp,
     fetchImpl: async () => ++calls === 1
       ? new Response('{"error":{"message":"insufficient_quota"}}', { status: 429 })
       : new Response('{}', { status: 200 }) });
   const state = JSON.parse(fs.readFileSync(files.cooldownFile, 'utf8'));
-  assert.deepEqual(state.groq, { until: timestamp + 24 * 60 * 60 * 1000, reason: 'http_429', at: timestamp });
+  assert.deepEqual(state.groq, { until: timestamp + 60_000, reason: 'http_429', at: timestamp });
 });
 
 test('成功したプロバイダのクールダウンを削除する', async (t) => {
@@ -418,4 +418,161 @@ test('残量ヘッダを返さない provider は素通し(既存挙動を変え
   });
   assert.equal(result.candidate.provider, 'cerebras');
   assert.equal(fs.existsSync(files.budgetFile), false); // 書くものが無ければファイルも作らない
+});
+
+for (const [label, retryAfter, min, max, expected] of [
+  ['14-hour header', '50400', undefined, undefined, 900000],
+  ['HTTP date', new Date(1700000000000 + 50400000).toUTCString(), undefined, undefined, 900000],
+  ['invalid header', 'invalid', undefined, undefined, 60000],
+  ['zero header', '0', undefined, undefined, 60000],
+  ['custom floor', '1', '120000', undefined, 120000],
+  ['custom cap', '50400', undefined, '300000', 300000],
+  ['cap wins over floor', '50400', '1800000', undefined, 900000],
+  ['invalid cap', '50400', undefined, 'NaN', 900000],
+]) test(`429 cooldown bounds: ${label}`, async (t) => {
+  const files = temporaryFiles(t), timestamp = 1700000000000;
+  for (const [name, value] of [['ORGIAST_LLM_429_COOLDOWN_MIN_MS', min], ['ORGIAST_LLM_429_COOLDOWN_MAX_MS', max]]) {
+    const previous = process.env[name];
+    t.after(() => { if (previous === undefined) delete process.env[name]; else process.env[name] = previous; });
+    if (value === undefined) delete process.env[name]; else process.env[name] = value;
+  }
+  await assert.rejects(callWithFallback({ start, chain: [second], ...files, now: () => timestamp,
+    payloadFor: (candidate) => candidate.provider === 'groq' ? requestFor() : null,
+    fetchImpl: async () => new Response('rate limit', { status: 429, headers: { 'retry-after': retryAfter } }), sleepImpl: async () => {} }));
+  const state = JSON.parse(fs.readFileSync(files.cooldownFile, 'utf8'));
+  assert.equal(state.groq.until - state.groq.at, expected);
+});
+
+test('legacy 14-hour cooldown expires from original at and persists correction', async (t) => {
+  const files = temporaryFiles(t), timestamp = 1700000000000, providers = [];
+  fs.writeFileSync(files.cooldownFile, JSON.stringify({ groq: { at: timestamp - 3600000, until: timestamp + 50400000, reason: 'http_429' } }));
+  await callWithFallback({ start, chain: [second], ...files, now: () => timestamp,
+    payloadFor: (candidate) => { providers.push(candidate.provider); return requestFor(); },
+    fetchImpl: async () => {
+      assert.equal(JSON.parse(fs.readFileSync(files.cooldownFile, 'utf8')).groq.until, timestamp - 3600000 + 900000);
+      return new Response('{}');
+    } });
+  assert.deepEqual(providers, ['groq']);
+});
+
+function depleted(files, providers = ['groq']) {
+  fs.writeFileSync(files.budgetFile, JSON.stringify(Object.fromEntries(providers.map(provider =>
+    [provider, { remainingTokens: 100, tokensResetAt: 999999, updatedAt: 1000 }]))));
+}
+const budgetRequestFor = candidate => bigRequestFor(candidate.provider);
+
+test('budget: 入力見積もりに対して残量不足の候補は fetch せず次候補へ進む', async (t) => {
+  const files = temporaryFiles(t), hits = [];
+  depleted(files);
+  const result = await callWithFallback({ start, chain: [second], ...files, now: () => 1000, payloadFor: budgetRequestFor,
+    fetchImpl: async url => { hits.push(url); return new Response('{}'); } });
+  assert.deepEqual(hits, ['https://openrouter.invalid']);
+  assert.equal(result.candidate.provider, 'openrouter');
+});
+
+test('budget: スキップ理由を記録する', async (t) => {
+  const files = temporaryFiles(t), hits = [];
+  depleted(files);
+  await assert.rejects(callWithFallback({ start, chain: [second], ...files, now: () => 1000, payloadFor: budgetRequestFor,
+    fetchImpl: async url => { hits.push(url); return new Response('bad', { status: 400 }); } }), error => {
+    assert.deepEqual(error.skipped, [{ ...start, reason: 'rate-limit' }]);
+    return true;
+  });
+  assert.deepEqual(hits, ['https://openrouter.invalid']);
+});
+
+for (const single of [false, true]) test(`budget: ${single ? '明示指定の単独候補' : '全候補'}が不足なら制限を無視する`, async (t) => {
+  const files = temporaryFiles(t), hits = [];
+  depleted(files, ['groq', 'openrouter']);
+  await assert.rejects(callWithFallback({ start, chain: single ? [] : [second], ...files, now: () => 1000, payloadFor: budgetRequestFor,
+    fetchImpl: async url => { hits.push(url); return new Response('bad', { status: 400 }); } }), error => {
+    assert.deepEqual(error.skipped, []);
+    return true;
+  });
+  assert.deepEqual(hits, single ? ['https://groq.invalid'] : ['https://groq.invalid', 'https://openrouter.invalid']);
+});
+
+test('budget: キーなし候補を救済判定の残量あり候補に数えない', async (t) => {
+  const files = temporaryFiles(t), hits = [];
+  depleted(files);
+  await callWithFallback({ start, chain: [second], ...files, now: () => 1000,
+    payloadFor: candidate => candidate.provider === 'groq' ? budgetRequestFor(candidate) : null,
+    fetchImpl: async url => { hits.push(url); return new Response('{}'); } });
+  assert.deepEqual(hits, ['https://groq.invalid']);
+});
+
+for (const status of [200, 400]) test(`budget: HTTP ${status} の応答ヘッダを直ちに保存する`, async (t) => {
+  const files = temporaryFiles(t);
+  const pending = callWithFallback({ start, chain: [], ...files, now: () => 1000, payloadFor: budgetRequestFor,
+    fetchImpl: async () => new Response('{}', { status, headers: { 'x-ratelimit-remaining-tokens': '7927', 'x-ratelimit-reset-tokens': '547ms' } }),
+    onAttempt: () => {
+      const state = JSON.parse(fs.readFileSync(files.budgetFile)).groq;
+      assert.equal(state.remainingTokens, 7927);
+      assert.equal(state.tokensResetAt, 1547);
+    } });
+  if (status === 200) await pending; else await assert.rejects(pending, /HTTP400/);
+});
+
+test('budget: 候補ごとに最新の共有状態を判定に使う', async (t) => {
+  const files = temporaryFiles(t), hits = [];
+  await callWithFallback({ start, chain: [second, { provider: 'gemini', model: 'test' }], ...files, now: () => 1000,
+    payloadFor: budgetRequestFor,
+    fetchImpl: async url => {
+      hits.push(url);
+      if (url.includes('groq')) { depleted(files, ['openrouter']); return new Response('bad', { status: 400 }); }
+      return new Response('{}');
+    } });
+  assert.deepEqual(hits, ['https://groq.invalid', 'https://gemini.invalid']);
+});
+
+test('budget: 429 の残量不足ヘッダを受けたら再送せず次候補へ進む', async (t) => {
+  const files = temporaryFiles(t), hits = [];
+  await callWithFallback({ start, chain: [second], ...files, now: () => 1000, payloadFor: budgetRequestFor, sleepImpl: async () => {},
+    fetchImpl: async url => {
+      hits.push(url);
+      return url.includes('groq')
+        ? new Response('quota', { status: 429, headers: { 'x-ratelimit-remaining-tokens': '0', 'x-ratelimit-reset-tokens': '1m' } })
+        : new Response('{}');
+    } });
+  assert.deepEqual(hits, ['https://groq.invalid', 'https://openrouter.invalid']);
+});
+
+test('429 cooldown はリトライ待機に入る前に保存する', async (t) => {
+  const files = temporaryFiles(t), timestamp = 1700000000000;
+  let waits = 0;
+  await callWithFallback({ start, chain: [second], ...files, now: () => timestamp,
+    payloadFor: budgetRequestFor,
+    fetchImpl: async url => url.includes('groq')
+      ? new Response('quota', { status: 429 }) : new Response('{}'),
+    sleepImpl: async () => {
+      waits++;
+      const state = JSON.parse(fs.readFileSync(files.cooldownFile, 'utf8'));
+      assert.deepEqual(state.groq, { at: timestamp, until: timestamp + 60000, reason: 'http_429' });
+    } });
+  assert.equal(waits, 2);
+});
+
+test('budget: 応答保存時に他プロセスが更新した別候補の残量を保持する', async (t) => {
+  const files = temporaryFiles(t);
+  await callWithFallback({ start, chain: [], ...files, now: () => 1000,
+    payloadFor: budgetRequestFor,
+    fetchImpl: async () => {
+      depleted(files, ['openrouter']);
+      return new Response('{}', { headers: { 'x-ratelimit-remaining-tokens': '7000' } });
+    } });
+  const store = JSON.parse(fs.readFileSync(files.budgetFile, 'utf8'));
+  assert.equal(store.groq.remainingTokens, 7000);
+  assert.equal(store.openrouter.remainingTokens, 100);
+});
+
+test('budget: リトライ待機中の共有状態の更新も再判定する', async (t) => {
+  const files = temporaryFiles(t), hits = [];
+  await callWithFallback({ start, chain: [second], ...files, now: () => 1000,
+    payloadFor: budgetRequestFor,
+    fetchImpl: async url => {
+      hits.push(url);
+      return url.includes('groq') ? new Response('temporary', { status: 503 }) : new Response('{}');
+    },
+    sleepImpl: async () => depleted(files) });
+  assert.deepEqual(hits, ['https://groq.invalid', 'https://openrouter.invalid']);
 });

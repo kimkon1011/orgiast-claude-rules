@@ -147,6 +147,17 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, payloadF
   const useCooldown = chain.length > 0 && (cooldownFile != null || !process.env.NODE_TEST_CONTEXT);
   const cooldownPath = cooldownFile || path.join(home, '.claude', 'provider-cooldown.json');
   const cooldowns = useCooldown ? readJson(cooldownPath, {}) : {};
+  const cooldownMax = threshold('ORGIAST_LLM_429_COOLDOWN_MAX_MS', 900_000);
+  const cooldownMin = Math.min(cooldownMax, threshold('ORGIAST_LLM_429_COOLDOWN_MIN_MS', 60_000));
+  let cooldownDirty = false;
+  // 古い429エントリは読み込み時刻ではなく、元の開始時刻を起点に上限で切り詰める。
+  for (const state of Object.values(cooldowns)) {
+    if (state?.reason !== 'http_429') continue;
+    const began = Number.isFinite(state.at) ? state.at : timestamp;
+    const until = Math.min(Number(state.until), began + cooldownMax);
+    if (until < Number(state.until)) { state.until = until; cooldownDirty = true; }
+  }
+  saveCooldowns();
   const available = useCooldown ? candidates.filter(({ provider }) => !(Number(cooldowns?.[provider]?.until) > timestamp)) : candidates;
   const selectedCandidates = available.length ? available : candidates;
   const skipped = [];
@@ -160,16 +171,17 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, payloadF
     }
   }
 
-  let cooldownDirty = false;
   function setCooldown(provider, status, response, permanentBilling = false) {
     if (!useCooldown) return;
     let duration = 0;
-    if (status === 402 || permanentBilling) duration = 24 * 60 * 60 * 1000;
+    if (status === 429) duration = Math.min(cooldownMax, Math.max(cooldownMin, retryAfterMs(response, now()) ?? cooldownMin));
+    else if (status === 402 || permanentBilling) duration = 24 * 60 * 60 * 1000;
     else if ([401, 403].includes(status)) duration = 6 * 60 * 60 * 1000;
-    else if (status === 429) duration = retryAfterMs(response, timestamp) ?? 30 * 60 * 1000;
     if (!duration) return;
-    cooldowns[provider] = { until: timestamp + duration, reason: `http_${status}`, at: timestamp };
+    const at = now();
+    cooldowns[provider] = { until: at + duration, reason: `http_${status}`, at };
     cooldownDirty = true;
+    saveCooldowns();
   }
   function clearCooldown(provider) {
     if (useCooldown && cooldowns?.[provider]) { delete cooldowns[provider]; cooldownDirty = true; }
@@ -200,24 +212,45 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, payloadF
     return requests.get(index);
   }
 
+  function capacityFor(candidate, request) {
+    return !useBudget || budgetVerdict({ store: readBudget(budgetPath), provider: candidate.provider,
+      neededTokens: estimateTokens(request), now: now() }).allow;
+  }
+
+  let ignoreBudget = false;
+  let capacityChecked = false;
   let attempted = 0;
   for (let candidateIndex = 0; candidateIndex < selectedCandidates.length; candidateIndex++) {
     const candidate = selectedCandidates[candidateIndex];
     let lastAttempt = 0;
     const request = await requestAt(candidateIndex);
     if (!request) continue;
-    // 候補ごとに読み直す。並列プロセスが直前に書いた残量を取りこぼさないため(C)。
-    const budgetStore = useBudget ? readBudget(budgetPath) : {};
-    const verdict = useBudget
-      ? budgetVerdict({ store: budgetStore, provider: candidate.provider, neededTokens: estimateTokens(request), now: now() })
-      : { allow: true };
-    if (!verdict.allow) {
-      skipped.push({ provider: candidate.provider, model: candidate.model, reason: verdict.reason });
-      console.error(`[budget] ${candidate.provider} はスキップ (${verdict.reason})`);
-      continue;
+    if (!ignoreBudget && !capacityFor(candidate, request)) {
+      // 実際に送信できる候補が全て不足なら、cooldown と同じく制限を無視する。
+      if (!capacityChecked) {
+        ignoreBudget = true;
+        for (let index = 0; index < selectedCandidates.length; index++) {
+          const other = await requestAt(index);
+          if (other && capacityFor(selectedCandidates[index], other)) { ignoreBudget = false; break; }
+        }
+        capacityChecked = true;
+      }
+      if (!ignoreBudget) {
+        skipped.push({ provider: candidate.provider, model: candidate.model, reason: 'rate-limit' });
+        console.error(`[budget] ${candidate.provider} は残量不足のためスキップ`);
+        continue;
+      }
+    } else {
+      capacityChecked = true;
     }
     let lastReason = '';
     for (let attempt = 0; attempt < 3; attempt++) {
+      // リトライ時も直前の応答や他プロセスの更新を反映する。
+      if (attempt > 0 && !ignoreBudget && !capacityFor(candidate, request)) {
+        skipped.push({ provider: candidate.provider, model: candidate.model, reason: 'rate-limit' });
+        console.error(`[budget] ${candidate.provider} は残量不足のためスキップ`);
+        break;
+      }
       lastAttempt = attempt;
       const began = Date.now();
       let response;
@@ -227,7 +260,10 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, payloadF
         response = await fetchImpl(request.url, request.init);
         status = response.status;
         // 残量ヘッダを下限として記録する。次に同じ provider を選ぶ時、この値で事前に絞れる。
-        if (useBudget && response?.headers && noteResponse(budgetStore, candidate.provider, response.headers, now())) writeBudget(budgetPath, budgetStore);
+        if (useBudget && response?.headers) {
+          const budgetStore = readBudget(budgetPath);
+          if (noteResponse(budgetStore, candidate.provider, response.headers, now())) writeBudget(budgetPath, budgetStore);
+        }
         if (response.ok) {
           if (validateResponse) {
             const json = await response.clone().json().catch(() => null);

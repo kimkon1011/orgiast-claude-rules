@@ -1,0 +1,157 @@
+◇ injected env (30) from .env.local // tip: ◈ encrypted .env [www.dotenvx.com]
+[
+  {
+    "id": "73f35da5-573c-41da-adce-38b0214131d1",
+    "kind": "bug",
+    "priority": "normal",
+    "status": "new",
+    "title": "案件重複",
+    "body": "さくらコミュニティサービス案件が重複している\r\n同一案件と判断できるものは自動で統合してほしい",
+    "page_path": "/dashboard",
+    "submitter": "k.ujiie7811",
+    "created_at": "2026-08-06T12:54:57.07291+00:00"
+  },
+  {
+    "id": "10d2d14c-5978-4dc8-8c86-3ff9b037b787",
+    "kind": "request",
+    "priority": "normal",
+    "status": "new",
+    "title": "アイミツ当選案件について",
+    "body": "アイミツで当選したら\r\n次回連絡日を当選日にしてダッシュボードにすぐに乗るようにしてほしい",
+    "page_path": "/dashboard",
+    "submitter": "satou",
+    "created_at": "2026-08-07T02:32:41.446884+00:00"
+  },
+  {
+    "id": "f214cfe0-ca10-4f23-b7ac-772fcb8f5764",
+    "kind": "bug",
+    "priority": "normal",
+    "status": "new",
+    "title": "他の会社の失注理由が入っていた",
+    "body": "株式会社オージャスト\r\n岩本様\r\n\r\nお世話になっております。\r\nこの度は、弊社の商品写真および動画撮影の案件にご応募いただき、\r\nまた貴重な御見積をご提示いただき誠にありがとうございました。\r\n\r\nいただいた内容をもとに社内で検討いたしました結果、諸般の事情により、\r\n今回は本案件の募集自体を一度クローズすることとなりました。\r\nせっかく迅速にご対応いただきましたのに、このような結果となり誠に申し訳ございません。\r\n\r\n今後、状況が変わって本案件を再開する運びとなりました際には、改めてご相談させていただけますと幸いです。\r\n情報が少ないなか、丁寧に概算見積を作成していただきましたことに深く感謝申し上げます。\r\n\r\n取り急ぎ、案件終了のご連絡とお礼申し上げます。\r\n今後とも何卒よろしくお願い申し上げます。\r\n\r\n株式会社アグレイド\r\n由留佐\r\n\r\n\r\n上記の内容が株式会社アクシスビジョンの失注理由に入っていた\r\nそもそも失注していないし他の会社の内容です\r\n\r\n株式会社アクシスビジョンのところは消しておくので、株式会社アグレイドの失注理由のところに記載しておいてください",
+    "page_path": "/deals/10d33d70-5438-4f22-9615-d644023f5816",
+    "submitter": "satou",
+    "created_at": "2026-08-07T11:48:57.550824+00:00"
+  },
+  {
+    "id": "851c91f1-18fe-4f70-8fc0-875d03ec6b21",
+    "kind": "request",
+    "priority": "normal",
+    "status": "new",
+    "title": "進捗状況の選択項目についての要望",
+    "body": "案件の進捗の選択項目に、ヒアリングMTG不可見積もり作成中を追加してください",
+    "page_path": "/deals/d2609462-9794-4ac5-a254-b84915f5efef",
+    "submitter": "satou",
+    "created_at": "2026-08-10T05:03:43.345846+00:00"
+  },
+  {
+    "id": "6a3581ce-703d-4678-b0ba-2752db4fcb80",
+    "kind": "request",
+    "priority": "normal",
+    "status": "new",
+    "title": "IPOご案内（問い合わせフォーム経由で送信）の案件について",
+    "body": "IPOご案内（問い合わせフォーム経由で送信）の案件は全て営業担当を佐藤優奈にして登録してください\r\nまた、返信があった場合は次回連絡日を当日にして案件情報の更新を行なってください",
+    "page_path": "/deals/5a2adf57-d4cb-4e3a-9010-838d4c6565a6",
+    "submitter": "satou",
+    "created_at": "2026-09-04T11:42:38.413255+00:00"
+  },
+  {
+    "id": "7e973562-290f-43ee-9b18-8750450e558b",
+    "kind": "bug",
+    "priority": "normal",
+    "status": "new",
+    "title": "名刺リストに名刺がアップロードされない",
+    "body": "9/6に名刺登録フォームから38枚登録もリストに1枚も反映されていない。",
+    "page_path": "/exhibitions",
+    "submitter": "制作チーム",
+    "created_at": "2026-09-06T12:26:53.169533+00:00"
+  },
+  {
+    "id": "a55430c9-8878-4a6f-b5ed-d19b2cd508f7",
+    "kind": "request",
+    "priority": "normal",
+    "status": "new",
+    "title": "倉庫アプリとの連動に関して",
+    "body": "この購買部のアプリにはどうやったら新規依頼が登録できるのでしょうか？\r\n今備品管理アプリの消耗品購入依頼は購買部のグーグルフォームを備品管理表の内容で自動入力・送信してくれているので、その入力する先を、この購買部アプリの依頼フォームか何かに変更すればできると思うので、それを教えてください。",
+    "page_path": "/help/%E3%80%90%E8%B3%BC%E8%B2%B7%E9%83%A8%E3%80%91%E6%A5%AD%E5%8B%99%E3%83%9E%E3%83%8B%E3%83%A5%E3%82%A2%E3%83%AB%EF%BC%88%E8%A6%AA%E3%83%9A%E3%83%BC%E3%82%B8%EF%BC%89",
+    "submitter": "miho.furukawa0430@gmail.com",
+    "created_at": "2026-09-09T05:03:34.414925+00:00"
+  },
+  {
+    "id": "10cffab8-63f1-4a72-8a63-3cb645441fa6",
+    "kind": "bug",
+    "priority": "normal",
+    "status": "new",
+    "title": "名刺登録の反映不足",
+    "body": "SMART ENERGY WEEKへの名刺登録が8件反映されていない",
+    "page_path": "/customers",
+    "submitter": "制作チーム",
+    "created_at": "2026-09-14T01:10:31.49667+00:00"
+  },
+  {
+    "id": "7c3fe604-df32-49b3-b452-419d9d6033b7",
+    "kind": "bug",
+    "priority": "normal",
+    "status": "new",
+    "title": "返信しているのに未返信になっている",
+    "body": "返信しているのに未返信になっている",
+    "page_path": "/deals/26a4435d-87d8-4b1f-8657-61960bce7e41",
+    "submitter": "金功勇",
+    "created_at": "2026-09-16T05:34:26.590385+00:00"
+  },
+  {
+    "id": "b82969df-0b7c-4746-bd00-42d9d720abb8",
+    "kind": "request",
+    "priority": "normal",
+    "status": "new",
+    "title": "アイミツサイトの連絡で1年以上,先方からの返信がないものは失注に変えて次回連絡日も消す",
+    "body": "アイミツサイトの連絡で1年以上,先方からの返信がないものは失注に変えて次回連絡日も消してください",
+    "page_path": "/dashboard",
+    "submitter": "オージャスト百瀬",
+    "created_at": "2026-09-16T05:50:46.159439+00:00"
+  },
+  {
+    "id": "c03bcd22-f139-47e8-a3ff-1bb30eea4b55",
+    "kind": "bug",
+    "priority": "normal",
+    "status": "new",
+    "title": "IPOご案内（問い合わせフォーム経由で送信）の案件について",
+    "body": "IPOご案内（問い合わせフォーム経由で送信）の案件は全て営業担当を佐藤優奈にして登録してください\r\nまた、返信があった場合は次回連絡日を当日にして案件情報の更新を行なってください\r\n\r\n上記2回目の修正要望です、早急に反映してください",
+    "page_path": "/deals",
+    "submitter": "satou",
+    "created_at": "2026-09-17T06:52:12.173939+00:00"
+  },
+  {
+    "id": "b5c26c1a-cec2-4cbb-a9fd-b655a0108d3f",
+    "kind": "request",
+    "priority": "normal",
+    "status": "new",
+    "title": "電話番号が欲しい",
+    "body": "できればこの状態で電話番号も確認できるようにしてほしいです。",
+    "page_path": "/customers",
+    "submitter": "制作チーム",
+    "created_at": "2026-09-24T15:09:35.0918+00:00"
+  },
+  {
+    "id": "f789fe33-7e37-472c-a3ab-203332b666d9",
+    "kind": "bug",
+    "priority": "normal",
+    "status": "new",
+    "title": "領収書に関して",
+    "body": "モノタロウは購入直後だと、確認中になり領収書の発行ができません。一度作業が止まってしまいます。スクショでいいのか記載していただきたいです。",
+    "page_path": "/cases/1f9571ba-6bf5-4bee-82f8-f51cb9b9fd78",
+    "submitter": "miho.furukawa0430@gmail.com",
+    "created_at": "2026-09-29T08:35:35.004426+00:00"
+  },
+  {
+    "id": "1d4a5d1f-6428-4ecf-a839-0754150ffeae",
+    "kind": "bug",
+    "priority": "normal",
+    "status": "new",
+    "title": "ご提案MTGをカレンダーでしていたら　勝手に議事録を見て見積もりをつくって次回連絡日も議事録から",
+    "body": "ご提案MTGをカレンダーでしていたら、勝手に議事録を見て見積もりの中身ををつくっておいて次回連絡日も議事録から、拾って提出日の前日にして",
+    "page_path": "/customers/efefcad8-7bcb-4f26-94dc-4e5ae7acf867",
+    "submitter": "オージャスト百瀬",
+    "created_at": "2026-09-30T10:48:49.465219+00:00"
+  }
+]

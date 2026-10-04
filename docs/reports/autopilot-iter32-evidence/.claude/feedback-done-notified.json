@@ -1,0 +1,67 @@
+{
+  "items": [
+    {
+      "message_id": "b9beb973-9ccc-43d6-96cb-7034b7d1495b",
+      "submitter_discord_id": "1382566741464449124",
+      "notified_at": "2026-10-04T02:18:52.562Z",
+      "url": "https://aujust-sales-automation.vercel.app/feedback",
+      "dm_message_id": "1556128493560008779",
+      "kim_delivered": false,
+      "owner_delivered": null
+    },
+    {
+      "message_id": "00caf01e-e845-49e0-a441-e20f1e838569",
+      "submitter_discord_id": "1382566741464449124",
+      "notified_at": "2026-10-04T02:18:53.367Z",
+      "url": "https://aujust-sales-automation.vercel.app/feedback",
+      "dm_message_id": "1556128497737408642",
+      "kim_delivered": false,
+      "owner_delivered": null
+    },
+    {
+      "message_id": "40ba3003-930c-41a6-a437-eb03deef66b3",
+      "submitter_discord_id": "1382566741464449124",
+      "notified_at": "2026-10-04T02:18:54.401Z",
+      "url": "https://aujust-sales-automation.vercel.app/feedback",
+      "dm_message_id": "1556128502011535390",
+      "kim_delivered": false,
+      "owner_delivered": null
+    },
+    {
+      "message_id": "9b1d6ba9-64ee-4837-b4c9-8b488daaaac5",
+      "submitter_discord_id": "1382566741464449124",
+      "notified_at": "2026-10-04T02:18:55.245Z",
+      "url": "https://aujust-sales-automation.vercel.app/feedback",
+      "dm_message_id": "1556128505643663431",
+      "kim_delivered": false,
+      "owner_delivered": null
+    },
+    {
+      "message_id": "8cca7287-b10a-41f4-9848-e68a8fde4eb5",
+      "submitter_discord_id": "1382566741464449124",
+      "notified_at": "2026-10-04T02:18:56.108Z",
+      "url": "https://aujust-sales-automation.vercel.app/feedback",
+      "dm_message_id": "1556128508747714566",
+      "kim_delivered": false,
+      "owner_delivered": null
+    },
+    {
+      "message_id": "63a2b1f4-5222-4128-8350-c38bee2b930b",
+      "submitter_discord_id": "1382566741464449124",
+      "notified_at": "2026-10-04T02:18:56.921Z",
+      "url": "https://aujust-sales-automation.vercel.app/feedback",
+      "dm_message_id": "1556128512715264041",
+      "kim_delivered": false,
+      "owner_delivered": null
+    },
+    {
+      "message_id": "6323be60-2d2b-4c01-8062-ac2e526f7721",
+      "submitter_discord_id": "1382566741464449124",
+      "notified_at": "2026-10-04T02:18:57.770Z",
+      "url": "https://aujust-sales-automation.vercel.app/feedback",
+      "dm_message_id": "1556128516226027562",
+      "kim_delivered": false,
+      "owner_delivered": null
+    }
+  ]
+}

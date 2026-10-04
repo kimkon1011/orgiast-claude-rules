@@ -1,0 +1,32 @@
+✔ normalizeName は空白・大小・全角・記号を畳む (3.4924ms)
+✔ matchMember は一意な完全一致を返す (10.1816ms)
+✔ matchMember は候補なしなら null (0.6741ms)
+✔ matchMember は複数候補なら推測しない (0.369ms)
+✔ matchMember はメールの @ より前を照合する (0.6525ms)
+✔ matchMember は先頭 @ をメールと誤認しない (0.4116ms)
+✔ 検索語を段階的に短くし、2回目の候補を返す (5.45ms)
+✔ 候補0件なら最大3回で打ち切る (9.7583ms)
+✔ 同じ検索語の24時間以内のキャッシュを使い、期限後は再取得する (2.6244ms)
+✔ 403 は例外にせず null を返す (4.4012ms)
+✔ persistCache=false は検索してもキャッシュを書き込まない (1.6965ms)
+✔ カレンダーのメールと氏名からDiscordの完全一致を解決、メール断片を推測しない (9.7324ms)
+✔ 百瀬の確認済みメール対応は氏名表記差を解決し別IDには送らない (1.7396ms)
+feedback-done-notify: dry message_id=known payload={"submitter_discord_id":"42","app_name":"営業","title":"修正","summary":"対応が完了しました（GitHub Issue #undefined クローズ）","url":"","notify_kim":false}
+feedback-done-notify: 通知済み message_id=known
+feedback-done-notify: 通知済みのためスキップ message_id=known
+feedback-done-notify: 未達 message_id=unknown
+✔ pickRecipient は台帳の Discord ID を優先する (3.7684ms)
+✔ pickRecipient は名前を解決し、解決不能なら null (2.9399ms)
+✔ buildDonePayload は既定 summary と Issue URL を入れる (0.5412ms)
+✔ selectPending は通知済みと未クローズを除き limit を守る (0.7846ms)
+✔ formatUndeliverable は0件なら空文字、項目があれば指定形式にする (0.5463ms)
+✔ 本人のみの通知はkimへの控えを無効化する (0.3465ms)
+✔ recipient-onlyはdryで送信せず本送信と重複抑止・未達時もkimへ送らない (10.5987ms)
+ℹ tests 20
+ℹ suites 0
+ℹ pass 20
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 297.150099

@@ -1,0 +1,67 @@
+{
+  "items": [
+    {
+      "message_id": "b9beb973-9ccc-43d6-96cb-7034b7d1495b",
+      "app_name": "営業アプリ",
+      "title": "お見積りファイル作った時に本来は制作フォルダも制作さえるのにない",
+      "submitter": "m.kanau@orgiast.jp",
+      "url": "https://aujust-sales-automation.vercel.app/feedback"
+    },
+    {
+      "message_id": "00caf01e-e845-49e0-a441-e20f1e838569",
+      "app_name": "営業アプリ",
+      "title": "見積もりファイルを作ったときに制作ファルだや実施計画書が違う案件のものが一緒に制作されている",
+      "submitter": "m.kanau@orgiast.jp",
+      "url": "https://aujust-sales-automation.vercel.app/feedback"
+    },
+    {
+      "message_id": "40ba3003-930c-41a6-a437-eb03deef66b3",
+      "app_name": "営業アプリ",
+      "title": "営業アプリから作った見積もりシートの編集権限の変更",
+      "submitter": "m.kanau@orgiast.jp",
+      "url": "https://aujust-sales-automation.vercel.app/feedback"
+    },
+    {
+      "message_id": "9b1d6ba9-64ee-4837-b4c9-8b488daaaac5",
+      "app_name": "営業アプリ",
+      "title": "イベント種類がリブースだと見積もりと実施計画書ファイルがエラーで作れません",
+      "submitter": "m.kanau@orgiast.jp",
+      "url": "https://aujust-sales-automation.vercel.app/feedback"
+    },
+    {
+      "message_id": "8cca7287-b10a-41f4-9848-e68a8fde4eb5",
+      "app_name": "営業アプリ",
+      "title": "エラー識別子: 1111253393（",
+      "submitter": "m.kanau@orgiast.jp",
+      "url": "https://aujust-sales-automation.vercel.app/feedback"
+    },
+    {
+      "message_id": "63a2b1f4-5222-4128-8350-c38bee2b930b",
+      "app_name": "営業アプリ",
+      "title": "株式会社トミナガがメールでやりとりしているに未反映",
+      "submitter": "m.kanau@orgiast.jp",
+      "url": "https://aujust-sales-automation.vercel.app/feedback"
+    },
+    {
+      "message_id": "6323be60-2d2b-4c01-8062-ac2e526f7721",
+      "app_name": "営業アプリ",
+      "title": "次回連絡日の更新",
+      "submitter": "m.kanau@orgiast.jp",
+      "url": "https://aujust-sales-automation.vercel.app/feedback"
+    },
+    {
+      "message_id": "ff1d3b5c-4cff-41a7-a263-a64db1031092",
+      "app_name": "営業アプリ",
+      "title": "一括日付変更に日付の更新だけでなく、削除もできるようにしたい。",
+      "submitter": "m.kanau@orgiast.jp",
+      "url": "https://aujust-sales-automation.vercel.app/feedback"
+    },
+    {
+      "message_id": "14beb3ad-a4e7-4fc7-876d-417356d030fb",
+      "app_name": "営業アプリ",
+      "title": "新規案件登録時のエラー",
+      "submitter": "m.kanau@orgiast.jp",
+      "url": "https://aujust-sales-automation.vercel.app/feedback"
+    }
+  ]
+}

@@ -85,3 +85,14 @@ test('カレンダーのメールと氏名からDiscordの完全一致を解決�
   assert.deepEqual(await getDiscordMembers({ ...options,
     fetchImpl: async () => response(200, [{ user: { id: '42' }, nick: '山田太郎別人' }]) }), []);
 });
+
+test('百瀬の確認済みメール対応は氏名表記差を解決し別IDには送らない', async (t) => {
+  const home = tempHome(t);
+  const query = 'm.kanau@orgiast.jp';
+  const options = { query, home, persistCache: false };
+  const row = { user: { id: '1382566741464449124', username: 'kanaumomose', global_name: '百瀬' } };
+  assert.deepEqual(matchMember(query, await getDiscordMembers({ ...options,
+    fetchImpl: async () => response(200, [row]) })), { id: row.user.id, label: '百瀬' });
+  assert.deepEqual(await getDiscordMembers({ ...options,
+    fetchImpl: async () => response(200, [{ user: { ...row.user, id: '999' } }]) }), []);
+});

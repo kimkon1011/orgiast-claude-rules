@@ -1,0 +1,13 @@
+{
+  "before": {
+    "id": "6f5aa1a0-65a9-4481-9957-105e7e29a55f",
+    "status": "new",
+    "submitter": "����m�F(Claude)"
+  },
+  "after": {
+    "id": "6f5aa1a0-65a9-4481-9957-105e7e29a55f",
+    "status": "rejected",
+    "updated_at": "2026-10-04T02:14:07.051+00:00",
+    "admin_note": "[2026-10-04 Codex iteration32] Claude動作確認用テスト行のため却下。"
+  }
+}

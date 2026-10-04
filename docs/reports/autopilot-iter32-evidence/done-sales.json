@@ -1,0 +1,83 @@
+[
+  {
+    "id": "b9beb973-9ccc-43d6-96cb-7034b7d1495b",
+    "status": "done",
+    "title": "お見積りファイル作った時に本来は制作フォルダも制作さえるのにない",
+    "submitter": "オージャスト百瀬",
+    "submitter_email": "m.kanau@orgiast.jp",
+    "admin_note": "[2026-10-02 Claude] 本番反映済み(commit cbbebde)。見積作成時に案件フォルダ配下へ「制作」フォルダ(標準サブフォルダ付き)を必ず作成・再利用するようにしました。261125MPAT は制作フォルダ作成済み: https://drive.google.com/drive/folders/1op2fsYmsebi-dLdGsiyksOFg2HhIcnTT 。過去案件の一括作成(不足92件)は別途実施します。",
+    "resolved_ref": "cost-opt-haiku cbbebde / dpl_6BiQ4GGXnNsf74xBpBoRdkyHFAy5"
+  },
+  {
+    "id": "00caf01e-e845-49e0-a441-e20f1e838569",
+    "status": "done",
+    "title": "見積もりファイルを作ったときに制作ファルだや実施計画書が違う案件のものが一緒に制作されている",
+    "submitter": "オージャスト百瀬",
+    "submitter_email": "m.kanau@orgiast.jp",
+    "admin_note": "[2026-10-02 Claude] 本番反映済み(commit cbbebde)。見積・実施計画書・制作フォルダは案件IDで厳密に案件フォルダを特定して作成し、書き込み後に読み戻して別案件のリンクが残っていないか確認するようにしました。対象案件(クラレ)の既存ファイルは監査済みで、別案件の混入は現在ありません。",
+    "resolved_ref": "cost-opt-haiku cbbebde / dpl_6BiQ4GGXnNsf74xBpBoRdkyHFAy5"
+  },
+  {
+    "id": "40ba3003-930c-41a6-a437-eb03deef66b3",
+    "status": "done",
+    "title": "営業アプリから作った見積もりシートの編集権限の変更",
+    "submitter": "オージャスト百瀬",
+    "submitter_email": "m.kanau@orgiast.jp",
+    "admin_note": "[2026-10-02 Claude] 本番反映済み(commit cbbebde)。生成した案件フォルダ(見積・実施計画書・制作フォルダを含む)に orgiast.jp ドメイン全員とアシスタント/制作チームの編集権限を自動付与するようにしました。対象案件のフォルダは権限確認済み。過去案件への一括付与(約1,400件)は別途実施します。",
+    "resolved_ref": "cost-opt-haiku cbbebde / dpl_6BiQ4GGXnNsf74xBpBoRdkyHFAy5"
+  },
+  {
+    "id": "9b1d6ba9-64ee-4837-b4c9-8b488daaaac5",
+    "status": "done",
+    "title": "イベント種類がリブースだと見積もりと実施計画書ファイルがエラーで作れません",
+    "submitter": "オージャスト百瀬",
+    "submitter_email": "m.kanau@orgiast.jp",
+    "admin_note": "[2026-10-02 Claude] 本番反映済み(commit cbbebde)。イベント種類がリブースの案件でも 📝見積・実施計画書の生成を有効化しました(リブース向けの見積項目プロファイル)。🚀ブースアプリボタンも併存します。",
+    "resolved_ref": "cost-opt-haiku cbbebde / dpl_6BiQ4GGXnNsf74xBpBoRdkyHFAy5"
+  },
+  {
+    "id": "8cca7287-b10a-41f4-9848-e68a8fde4eb5",
+    "status": "done",
+    "title": "エラー識別子: 1111253393（",
+    "submitter": "オージャスト百瀬",
+    "submitter_email": "m.kanau@orgiast.jp",
+    "admin_note": "[2026-10-02 Claude] 本番反映済み(commit cbbebde)。新規案件登録の「エラー識別子」画面を解消。外部連携の失敗は登録を止めず、入力不備は該当欄に日本語で表示されます。",
+    "resolved_ref": "cost-opt-haiku cbbebde / dpl_6BiQ4GGXnNsf74xBpBoRdkyHFAy5"
+  },
+  {
+    "id": "63a2b1f4-5222-4128-8350-c38bee2b930b",
+    "status": "done",
+    "title": "株式会社トミナガがメールでやりとりしているに未反映",
+    "submitter": "オージャスト百瀬",
+    "submitter_email": "m.kanau@orgiast.jp",
+    "admin_note": "[2026-10-04 Codex] Gmailの全ページ取得と7日間検索に対応し、トミナガ案件の既存4通の反映を確認しました。 本番反映済み。HTTP配信確認（画面307/API401）。認証後UI操作の検証ではありません。報告者DMは宛先を一意に特定できず未送信。",
+    "resolved_ref": "PR #128 / 676effe + ab5f137 / dpl_Gcwa6kCknKAarrFLTADjwavm7GWA"
+  },
+  {
+    "id": "6323be60-2d2b-4c01-8062-ac2e526f7721",
+    "status": "done",
+    "title": "次回連絡日の更新",
+    "submitter": "オージャスト百瀬",
+    "submitter_email": "m.kanau@orgiast.jp",
+    "admin_note": "[2026-10-04 Codex] 返信送信の翌日に次回連絡日を自動更新します（将来の手動・相手指定日は保護）。 本番反映済み。HTTP配信確認（画面307/API401）。認証後UI操作の検証ではありません。報告者DMは宛先を一意に特定できず未送信。",
+    "resolved_ref": "PR #128 / 676effe + ab5f137 / dpl_Gcwa6kCknKAarrFLTADjwavm7GWA"
+  },
+  {
+    "id": "ff1d3b5c-4cff-41a7-a263-a64db1031092",
+    "status": "done",
+    "title": "一括日付変更に日付の更新だけでなく、削除もできるようにしたい。",
+    "submitter": "オージャスト百瀬",
+    "submitter_email": "m.kanau@orgiast.jp",
+    "admin_note": "[2026-10-04 Codex] 次回連絡日を一括削除できるようにしました。 本番反映済み。HTTP配信確認（画面307/API401）。認証後UI操作の検証ではありません。報告者DMは宛先を一意に特定できず未送信。",
+    "resolved_ref": "PR #128 / 676effe + ab5f137 / dpl_Gcwa6kCknKAarrFLTADjwavm7GWA"
+  },
+  {
+    "id": "14beb3ad-a4e7-4fc7-876d-417356d030fb",
+    "status": "done",
+    "title": "新規案件登録時のエラー",
+    "submitter": "オージャスト百瀬",
+    "submitter_email": "m.kanau@orgiast.jp",
+    "admin_note": "[2026-10-02 Claude] 本番反映済み(commit cbbebde)。新規案件登録で、DB登録後のシート転記・Drive・通知の失敗が「エラー識別子」画面になっていた経路を直し、失敗理由を登録フォーム上に日本語で表示するようにしました。登録自体は外部連携が失敗しても完了します。",
+    "resolved_ref": "cost-opt-haiku cbbebde / dpl_6BiQ4GGXnNsf74xBpBoRdkyHFAy5"
+  }
+]

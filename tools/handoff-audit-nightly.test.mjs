@@ -204,3 +204,21 @@ test('先送り検出器: クローンが違っても読めないときは runNi
   assert.equal(result.deferral.enqueued, 1);
   assert.equal(readJsonl(deferralLedgerFile(filed.home)).filter(r => r.kind === 'window')[0].detector, 'local');
 });
+test('先送り検出器: クローンが読めるならクローンの検出器で走り、窓に clone と残る', async t => {
+  const quote = 'クローン側だけが検出する ZZZ特殊パターン';
+  const ts = new Date(2026, 8, 11, 10).toISOString();
+  const filed = deferralHome(t, [{ ts, sessionId: 'clone0001', verdict: 'pass', fired: false, excerpt: quote, violations: [{ quote }] }]);
+  const dir = path.join(filed.home, 'clone', 'tools'); fs.mkdirSync(dir, { recursive: true });
+  // クローン側だけが持つパターンを1つ足した検出器を置く（実物と同じく兄弟モジュールも置く）。
+  fs.writeFileSync(path.join(dir, 'permanent-fix-deferral-scan.mjs'), `${detectorSource}\nPATTERNS.__verify__ = /ZZZ特殊パターン/;\n`);
+  fs.copyFileSync(new URL('./is-entry.mjs', import.meta.url), path.join(dir, 'is-entry.mjs'));
+  const result = await runNightly({ ...filed.options, env: { ORGIAST_NIGHTLY_REPO: path.join(filed.home, 'clone') } });
+  assert.equal(result.deferral.error, undefined);
+  assert.equal(result.deferral.detector, 'clone');
+  assert.equal(result.deferral.detectorDiffers, true);
+  assert.equal(result.deferral.byPattern.__verify__, 1);
+  assert.equal(result.deferral.enqueued, 1);
+  const window = readJsonl(deferralLedgerFile(filed.home)).filter(r => r.kind === 'window')[0];
+  assert.equal(window.detector, 'clone');
+  assert.equal(window.hits, 1);
+});

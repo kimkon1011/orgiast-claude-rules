@@ -2,8 +2,19 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { mergeKnowledge, enqueueTodos, selectTargets, runNightly, readJsonl, promotionFile, deferralLedgerFile, deferralTodo } from './handoff-audit-nightly.mjs';
+import { mergeKnowledge, enqueueTodos, selectTargets, runNightly, readJsonl, promotionFile, deferralLedgerFile, deferralTodo, deferralDetectorFile } from './handoff-audit-nightly.mjs';
 import { parseHandoff } from './auto-session.mjs';
+const detectorSource = fs.readFileSync(new URL('./permanent-fix-deferral-scan.mjs', import.meta.url), 'utf8');
+const cloneHome = t => {
+  const home = fs.mkdtempSync(path.join(import.meta.dirname, '.audit-detector-test-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  return home;
+};
+const writeClone = (home, text) => {
+  const dir = path.join(home, 'clone', 'tools'); fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'permanent-fix-deferral-scan.mjs'), text);
+  return { ORGIAST_NIGHTLY_REPO: path.join(home, 'clone') };
+};
 const item = { pattern: 'API 確認', route: 'gh api', confidence: 'high' };
 test('promotionFileはhome配下のgit管理外台帳を返す', () => {
   assert.equal(promotionFile('/example/home'), path.join('/example/home', '.claude', 'handoff-audit-promotions.jsonl'));
@@ -156,4 +167,40 @@ test('knowledge.json の route は enqueueTodos と同じ正規化で一意', ()
       `route が重複: 「${entry.pattern}」と「${seen.get(route)}」 → 片方の監査TODOが追加されない\n${route.slice(0, 120)}`);
     seen.set(route, entry.pattern);
   }
+});
+test('先送り検出器: クローンが同じ本文（改行コード差のみ）なら同梱コピーを使う', t => {
+  const home = cloneHome(t);
+  const env = writeClone(home, detectorSource.replace(/\n/g, '\r\n'));
+  const picked = deferralDetectorFile(home, env);
+  assert.equal(picked.source, 'local');
+  assert.equal(picked.differs, false);
+  assert.equal(fs.readFileSync(picked.file, 'utf8'), detectorSource);
+});
+test('先送り検出器: クローンの本文が違えば新しい方（クローン）を使う', t => {
+  const home = cloneHome(t);
+  const env = writeClone(home, detectorSource + '\n// 修正済み\n');
+  const picked = deferralDetectorFile(home, env);
+  assert.equal(picked.source, 'clone');
+  assert.equal(picked.differs, true);
+  assert.equal(picked.file, path.join(home, 'clone', 'tools', 'permanent-fix-deferral-scan.mjs'));
+});
+test('先送り検出器: クローンが無ければ同梱コピーへ落ちて例外を投げない', t => {
+  const home = cloneHome(t);
+  const picked = deferralDetectorFile(home, { ORGIAST_NIGHTLY_REPO: path.join(home, 'missing') });
+  assert.equal(picked.source, 'local');
+  assert.equal(picked.differs, false);
+});
+test('先送り検出器: クローンが違っても読めないときは runNightly が同梱コピーで完走する', async t => {
+  const quote = '恒久修正は次セッションで行う';
+  const ts = new Date(2026, 8, 11, 10).toISOString();
+  const filed = deferralHome(t, [{ ts, sessionId: 'deadbeefcafe', verdict: 'pass', fired: false, excerpt: quote, violations: [{ quote }] }]);
+  // 中身が壊れた検出器をクローン側に置く（import はできるが scan が無い）。
+  const env = writeClone(filed.home, 'export const nothing = 1;\n');
+  const result = await runNightly({ ...filed.options, env });
+  assert.equal(result.deferral.error, undefined);
+  assert.equal(result.deferral.hits, 1);
+  assert.equal(result.deferral.detector, 'local');
+  assert.equal(result.deferral.detectorDiffers, true);
+  assert.equal(result.deferral.enqueued, 1);
+  assert.equal(readJsonl(deferralLedgerFile(filed.home)).filter(r => r.kind === 'window')[0].detector, 'local');
 });

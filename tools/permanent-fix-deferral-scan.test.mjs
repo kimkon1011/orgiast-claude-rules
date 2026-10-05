@@ -103,6 +103,17 @@ test('手渡しなし・進捗報告・修正完了は検出しない', () => {
     '修正が完了しました'
   ]) assert.deepEqual(detect(quote), [], quote);
 });
+test('先送りを名詞句で説明した自己言及はP1と誤検出しない', () => {
+  for (const quote of [
+    '**[本セッションの目的]** handoff-audit が検出した「恒久修正の先送り文」が再発していないかを実物で検証し、結果を記録する。',
+    '2026-10-01 検出の先送り2件（`299ef38c`/P1・`2811a555`/P2＝原価フロア実装の先送り）を実物検証し、記録を追記。'
+  ]) assert.deepEqual(detect(quote).map(found => found.pattern), [], quote);
+});
+test('名詞句でなく行為の先送りは引き続きP1で検出する', () => {
+  for (const quote of ['恒久修正の対応は先送りする', 'この実装は先送りした']) {
+    assert.equal(detect(quote)[0].pattern, 'P1', quote);
+  }
+});
 test('委譲の完了待ちはW(待機)であって先送り(P1-P4)ではない', () => {
   const quote = 'Codex の2本の完了を待っています。';
   assert.deepEqual(detect(quote).map(found => found.pattern), ['W']);

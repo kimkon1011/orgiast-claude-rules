@@ -8,18 +8,18 @@ const APP_CMD = 'C:\\Program Files\\WindowsApps\\Claude_1.0_x64__abc\\app\\claud
 const vscProc = (pid, startedAt, cmd = VSC_CMD) => ({ Name: 'claude.exe', ProcessId: pid, ParentProcessId: 1, CommandLine: cmd, CreationDate: new Date(startedAt).toISOString(), WorkingSetSize: 200 * 1024 * 1024 });
 const idleSession = (pid, startedAt, idleMinutes, extra = {}) => ({ pid, sessionId: `sid-${pid}`, startedAt, entrypoint: 'claude-vscode', status: 'idle', statusUpdatedAt: now - idleMinutes * 60_000, updatedAt: now - idleMinutes * 60_000, ...extra });
 const idleRun = (procs, sessions, opts = {}) => classifyVscodeIdle(procs, now, { readSession: (pid) => sessions[pid] ?? null, transcriptMtime: () => null, ...opts });
-const t0 = Date.parse('2026-09-11T06:00:00Z') - 10 * 3600_000;
+const t0 = Date.parse('2026-09-11T06:00:00Z') - 20 * 3600_000;
 
-test('vscode-idle: 3時間超の idle は止める', () => {
-  const r = idleRun([vscProc(1, t0)], { 1: idleSession(1, t0, 181) });
+test('vscode-idle: 12時間超の idle は止める', () => {
+  const r = idleRun([vscProc(1, t0)], { 1: idleSession(1, t0, 721) });
   assert.equal(r.length, 1);
   assert.equal(r[0].kind, 'vscode-claude-idle');
-  assert.equal(Math.round(r[0].idleMin), 181);
+  assert.equal(Math.round(r[0].idleMin), 721);
 });
 
-test('vscode-idle: busy と 2時間は止めない', () => {
+test('vscode-idle: busy と 11時間は止めない', () => {
   assert.equal(idleRun([vscProc(1, t0)], { 1: idleSession(1, t0, 500, { status: 'busy' }) }).length, 0);
-  assert.equal(idleRun([vscProc(1, t0)], { 1: idleSession(1, t0, 120) }).length, 0);
+  assert.equal(idleRun([vscProc(1, t0)], { 1: idleSession(1, t0, 660) }).length, 0);
 });
 
 test('vscode-idle: sessions 読めない・壊れ・entrypoint違いは止めない', () => {
@@ -29,23 +29,23 @@ test('vscode-idle: sessions 読めない・壊れ・entrypoint違いは止めな
 });
 
 test('vscode-idle: デスクトップアプリは止めない', () => {
-  assert.equal(idleRun([vscProc(1, t0, APP_CMD)], { 1: idleSession(1, t0, 500) }).length, 0);
+  assert.equal(idleRun([vscProc(1, t0, APP_CMD)], { 1: idleSession(1, t0, 800) }).length, 0);
 });
 
 test('vscode-idle: 起動時刻ずれ(PID再利用)は止めない', () => {
-  assert.equal(idleRun([vscProc(1, t0 + 5 * 60_000)], { 1: idleSession(1, t0, 500) }).length, 0);
-  assert.equal(idleRun([vscProc(1, t0 + 60_000)], { 1: idleSession(1, t0, 500) }).length, 1);
+  assert.equal(idleRun([vscProc(1, t0 + 5 * 60_000)], { 1: idleSession(1, t0, 800) }).length, 0);
+  assert.equal(idleRun([vscProc(1, t0 + 60_000)], { 1: idleSession(1, t0, 800) }).length, 1);
 });
 
 test('vscode-idle: transcript が新しければ止めない / バッチロック中は止めない', () => {
-  const s = { 1: idleSession(1, t0, 500) };
+  const s = { 1: idleSession(1, t0, 800) };
   assert.equal(idleRun([vscProc(1, t0)], s, { transcriptMtime: () => now - 60 * 60_000 }).length, 0);
   assert.equal(idleRun([vscProc(1, t0)], s, { batchLockActive: true }).length, 0);
 });
 
 test('vscode-idle: 1回の上限は15個', () => {
   const procs = Array.from({ length: 20 }, (_, i) => vscProc(i + 1, t0));
-  const sessions = Object.fromEntries(procs.map((p) => [p.ProcessId, idleSession(p.ProcessId, t0, 200 + p.ProcessId)]));
+  const sessions = Object.fromEntries(procs.map((p) => [p.ProcessId, idleSession(p.ProcessId, t0, 730 + p.ProcessId)]));
   const r = idleRun(procs, sessions);
   assert.equal(r.length, 15);
   assert.equal(r[0].pid, 20);
@@ -113,7 +113,7 @@ test('閾値は超えた時だけ対象になり上書きできる', () => {
   const rows = [processInfo('node.exe', 'node C:\\x\\orgiast-main\\tools\\x.mjs', 10), processInfo('node.exe', 'node batch-run.mjs', 20)];
   assert.equal(classify(rows, now, { maxAgeMin: 10, maxBatchAgeMin: 20 }).length, 0);
   assert.equal(classify(rows, now + 1, { maxAgeMin: 10, maxBatchAgeMin: 20 }).length, 2);
-  assert.deepEqual(parseOptions(['--kill', '--max-age-min', '3', '--max-batch-age-min', '4', '--alert-threshold', '5']), { kill: true, dryRun: false, maxAgeMin: 3, maxBatchAgeMin: 4, alertThreshold: 5, vscodeIdleMin: 180 });
+  assert.deepEqual(parseOptions(['--kill', '--max-age-min', '3', '--max-batch-age-min', '4', '--alert-threshold', '5']), { kill: true, dryRun: false, maxAgeMin: 3, maxBatchAgeMin: 4, alertThreshold: 5, vscodeIdleMin: 720 });
   assert.equal(parseOptions(['--vscode-idle-min', '60']).vscodeIdleMin, 60);
 });
 

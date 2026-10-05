@@ -44,7 +44,7 @@ export function parseOptions(argv = process.argv.slice(2)) {
     maxAgeMin: numberAfter(argv, '--max-age-min', 120),
     maxBatchAgeMin: numberAfter(argv, '--max-batch-age-min', 240),
     alertThreshold: numberAfter(argv, '--alert-threshold', 10),
-    vscodeIdleMin: numberAfter(argv, '--vscode-idle-min', 180),
+    vscodeIdleMin: numberAfter(argv, '--vscode-idle-min', 720),
   };
 }
 
@@ -110,7 +110,7 @@ export function isVscodeClaude(processInfo) {
 
 // 純粋関数: opts.readSession(pid) -> sessions JSON か null、opts.transcriptMtime(sessionId) -> ms か null。
 export function classifyVscodeIdle(processes, now = Date.now(), opts = {}) {
-  const idleMin = opts.idleMin ?? 180;
+  const idleMin = opts.idleMin ?? 720;
   const max = opts.max ?? VSCODE_IDLE_MAX_KILLS;
   const rows = Array.isArray(processes) ? processes : processes ? [processes] : [];
   if (opts.batchLockActive) return [];

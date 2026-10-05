@@ -319,3 +319,89 @@ P1 regex の `先送り` を `(?<!の)先送り(?!文)` に変更。**名詞句�
 - 名詞句除外の副作用として、真の先送りを「修正の先送りを決めた」のように `〜の先送り` と書いた場合は
   取り逃がしうる。観測済みの実例は無い。
 - self言及の他の語形（例: 検出器名を別の言い回しで引用）が将来 P1/P2 を自己トリガする可能性は未検証。
+
+## 13. 2026-10-06 再検証（`[handoff-audit:66d0727148557cc6]`）— 10-04 の P1 も自己言及の誤検出、再発の原因は「古い検出器で走った夜間実行」
+
+対象: `2026-10-04T18:25:51.243Z` / session `d401053d` / pattern **P1** / verdict block。
+検出器バージョン: `tools/permanent-fix-deferral-scan.mjs`（`origin/main` = `4445115` / #639）。
+
+### 13.1 結論
+
+1. **この検出も誤検出**（§12 と同型の自己言及）。`d401053d` は前夜の監査結果を再検証した側のセッションで、
+   報告本文が検出器自身の名称「恒久修正の先送り文」を引用している。
+2. **ただし handoff 自体は実際に再発した。** 2026-10-06 03:00:03 JST の夜間実行がこの原文を P1 として
+   **新規 hit として台帳に記録し、新しい TODO を積んだ**（本 doc §13 の検証セッションがその handoff）。
+3. 再発した原因は検出器のロジックではなく**実行時の鮮度**。修正 #639 は当該 run の 2時間7分前に
+   `origin/main` に入っていたが、**その夜の run は修正前のコピーで走った**（§13.3）。
+
+### 13.2 逐語（実測）
+
+原文は `stop-gate-runner-ledger.jsonl` 618 行目（`verdict: block` / reasonCode `NEXT-ACTION-FOOTER`）:
+
+> …`[handoff-audit:9058ecf9c24d8dca]`（2026-10-03T18:00:41 / session bbd0a4a2 / **P3「恒久修正の先送り文」**）の再発検証。元 entry を現行検出器で quote 単位に当てると…
+
+同じ原文に対する新旧 regex の実測:
+
+| 検出器 | 一致 | 一致した文字列 |
+|---|---|---|
+| #639 前 | **する** | `恒久修正の先送り` |
+| 現行（#639 後） | しない | — |
+
+現行検出器の `detect()` をこの excerpt に当てると **0 件**。`node tools/permanent-fix-deferral-scan.mjs` の
+全履歴走査でも、この entry は hit にならない。
+
+### 13.3 誰がいつ記録したか（台帳の実測）
+
+`~/.claude/handoff-audit-deferral-ledger.jsonl` の実測:
+
+- 当該 hit は `ts 2026-10-04T18:25:51.243Z / kind hit / pattern P1 / sessionId d401053d` の1行のみ。
+- これを書いたのは run `ts 2026-10-05T18:00:03.119Z · kind window · since 2026-10-04T15:00Z · until 2026-10-05T15:00Z ·
+  total 1214 · hits 1 · byPattern {P1:1}`。窓は前日 1 日分で、当該 entry はその窓に入る。
+- 同 run の 2分後に、デプロイ済みコピー `C:\Users\user\orgiast-claude-rules\tools\permanent-fix-deferral-scan.mjs`
+  が更新されている（ファイル mtime `2026-10-06 03:02`）。**現在のデプロイ済みコピーは `origin/main` と byte 一致**。
+- タスク `OrgiastNightlyBatch` の action は `C:\Users\user\orgiast-claude-rules\tools\nightly-batch.ps1`
+  （＝git クローンではなく**デプロイ済みツリー**）。同スクリプトは `$PSScriptRoot` の
+  `handoff-audit-nightly.mjs` を起動し、**実行前の自己更新ステップを持たない**
+  （実測ログ: `2026-10-06 03:00:02 開始` → `03:00:03 handoff-audit-nightly ok`）。
+- `#639` のマージは `2026-10-05T15:53:41Z`（= 10-06 00:53 JST）。run はその 2時間7分後だが、
+  **その時点のデプロイ済みコピーはまだ修正前**だった。
+
+**したがって、この P1 は「修正済みの検出器なら出ない検出」を、修正が入る前のコピーで実行したために
+記録されたもの**であり、検出器側のバグは残っていない。
+
+### 13.4 全履歴の再発（現行検出器・実測）
+
+| 台帳 | 行数 | hits | パターン内訳 | 最終 hit |
+|---|---|---|---|---|
+| stop-gate-runner-ledger.jsonl | 640 | 8 | P2:2 P3:3 P4:2 W:1（**P1:0**） | 2026-10-03T14:33:41Z（W） |
+| handoff-audit-ledger.jsonl | 431 | 0 | — | — |
+| handoff-audit-nightly-ledger.jsonl | 155 | 1 | P1:1 | 2026-09-22T18:00:47Z |
+
+**P1 の最終ヒットは 2026-09-22**。10-04 18:25 の P1 は現行検出器では出ない＝**同じ誤検出の再検出は
+これ以上発生しない**。真の検出（P2/P3/P4/W の 8 件）は不変。
+
+### 13.5 恒久修正（本セッションで実施）
+
+再発の原因は「夜間実行がデプロイ済みツリーの検出器をそのまま使う」ことなので、
+`tools/handoff-audit-nightly.mjs` に**検出器の鮮度ガード**を入れた。
+
+- `deferralDetectorFile(home, env)` を追加。同梱コピーと git クローン側
+  （`process.env.ORGIAST_NIGHTLY_REPO` または `<home>/.claude/nightly-repo`）の
+  `tools/permanent-fix-deferral-scan.mjs` を `\r\n`→`\n` 正規化して比較し、
+  **異なるときだけクローン側を使う**（同一・クローン無しは従来どおり同梱コピー）。
+- クローン側の読み込みに失敗した場合、または読み込んだ module に `scan` が無い場合は
+  **同梱コピーへフォールバックして夜間監査を落とさない**（fail-open は既存方針のまま）。
+- `kind:'window'` 行に `detector`（`local`/`clone`）と `detectorDiffers` を追加し、
+  **どの検出器で測った窓なのかを後から検証できる**ようにした（`deferral` の返り値にも同値を載せる）。
+- ネットワークアクセスは追加していない（ファイルの読み比べのみ）。
+- テスト4本追加（同一本文＝CRLF差のみ→local / 本文差→clone / クローン無し→local /
+  壊れた検出器を掴んでも runNightly が完走）。`node --test tools/handoff-audit-nightly.test.mjs` = **17/17 pass**。
+
+### 13.6 未確認（断定も確率表現もしない）
+
+- デプロイ済みツリーを 03:02 に更新している主体（同期ジョブ）は特定できていない。
+- git クローンの `origin/main` が fetch 失敗で古い場合、このガードは古い検出器を選びうる（未検証）。
+- 同梱コピーがクローンより新しい場合（デプロイが先行した場合）も「クローン側」を選ぶ。実測例は無い。
+- 全体テスト `node --test tools/*.test.mjs` は 3701 件中 4 件失敗
+  （`auto-session-launcher` / `booth-feedback-intake` / `feedback-to-issues` / `pretooluse-bash-delegation`）。
+  いずれも本変更が触れていないモジュールのテストで、本変更の import 依存も無い（環境要因の切り分けは未了）。

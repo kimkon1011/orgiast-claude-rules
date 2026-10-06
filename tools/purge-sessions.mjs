@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// One-shot, reversible transcript archival. Never accesses the extension DB.
+// One-shot, reversible transcript archival. Reads the VSCode state DBs only as bytes to detect sessions the extension still shows (open tabs, bookmarks, archived list); never writes them.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -61,6 +61,37 @@ function liveIds(base, now) {
     if (row.sessionId && now - Date.parse(row.at) <= 10 * MINUTE) ids.add(row.sessionId);
   }
   return ids;
+}
+// The Claude Code extension keeps session IDs (open tabs, bookmarks, the archived list) as
+// plain UTF-8 bytes inside its state DBs. Moving a transcript it still references makes the
+// tab fail with "Couldn't load this conversation's saved history"; the extension itself never
+// archives open/running/unread sessions for the same reason.
+function vscodeStateFiles() {
+  const override = process.env.ORGIAST_VSCODE_USER_DIRS;
+  const dirs = override !== undefined ? override.split(path.delimiter).filter(Boolean)
+    : ['Code', 'Code - Insiders'].map(product => {
+      if (process.platform === 'win32') return path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), product, 'User');
+      if (process.platform === 'darwin') return path.join(os.homedir(), 'Library', 'Application Support', product, 'User');
+      return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), product, 'User');
+    });
+  const files = [];
+  for (const dir of dirs) {
+    files.push(path.join(dir, 'globalStorage', 'state.vscdb'));
+    for (const entry of entries(path.join(dir, 'workspaceStorage'))) {
+      if (entry.isDirectory()) files.push(path.join(dir, 'workspaceStorage', entry.name, 'state.vscdb'));
+    }
+  }
+  return files;
+}
+function vscodeReferences() {
+  const buffers = [];
+  let unreadable = false, files;
+  try { files = vscodeStateFiles(); } catch { return { buffers, unreadable: true }; }
+  for (const file of files) {
+    try { buffers.push(fs.readFileSync(file)); } // Bytes only: the DB is never parsed or written.
+    catch (error) { if (error.code !== 'ENOENT') unreadable = true; }
+  }
+  return { buffers, unreadable };
 }
 function content(row) {
   const c = row.message?.content;
@@ -188,7 +219,7 @@ function movePair(from, to, id) {
 }
 export function purge({ dryRun = false, restore, after = '' } = {}) {
   const base = root(), now = Date.now(), deadline = now + 4500;
-  const result = { sessions: [], scanned: 0, limited: false };
+  const result = { sessions: [], scanned: 0, limited: false, protected: 0 };
   if (!fs.existsSync(base)) return result;
   const release = dryRun ? () => {} : acquire(path.join(base, 'purge-sessions.lock'));
   if (!release) return { ...result, skipped: 'locked' };
@@ -210,6 +241,7 @@ export function purge({ dryRun = false, restore, after = '' } = {}) {
     if (!dryRun && now - state.at < 5 * MINUTE) return { ...result, skipped: 'cooldown' };
     const closed = new Set(json(path.join(base, 'closed-sessions.json')).ids || []);
     const live = liveIds(base, now);
+    let vscodeRefs;
     // Enumerate incrementally: collecting every project first can consume the entire
     // budget on Windows before inspecting even one transcript. Cursor also advances
     // across empty project directories, so every account eventually gets a full pass.
@@ -233,6 +265,11 @@ export function purge({ dryRun = false, restore, after = '' } = {}) {
       result.scanned++;
       const [projectId, filename] = key.split('/'), sessionId = filename.slice(0, -6);
       if (live.has(sessionId)) continue;
+      // Judged before inspect(): a session the extension still shows must not move for any
+      // reason, and skipping it here also saves scan budget.
+      const refs = vscodeRefs ??= vscodeReferences();
+      if (refs.unreadable) { result.vscodeState = 'unreadable'; continue; }
+      if (refs.buffers.some(b => b.includes(sessionId))) { result.protected++; continue; }
       const from = path.join(base, 'projects', projectId), file = path.join(from, filename);
       try {
         const stat = fs.statSync(file), data = inspect(file, stat, deadline, now, closed.has(sessionId) && now - stat.mtimeMs >= 45_000);

@@ -15,7 +15,7 @@ function fixture(t) {
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const base = path.join(home, '.claude');
   const put = (name, data) => { const p = path.join(base, name); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, data); return p; };
-  const env = { ...process.env, HOME: home, USERPROFILE: home, ORGIAST_HOME: home, ORGIAST_REPO: path.dirname(dir) };
+  const env = { ...process.env, HOME: home, USERPROFILE: home, ORGIAST_HOME: home, ORGIAST_REPO: path.dirname(dir), ORGIAST_VSCODE_USER_DIRS: path.join(home, 'vscode-user') };
   const run = (...args) => { const r = spawnSync(process.execPath, [script, ...args], { env, encoding: 'utf8', timeout: 10_000 }); assert.equal(r.status, 0, r.stderr); return JSON.parse(r.stdout); };
   const session = (id, rows, age = 20 * minute) => { const raw = rows.map(x => JSON.stringify(x)).join('\n') + '\n'; const p = put(`projects/project/${id}.jsonl`, raw); fs.utimesSync(p, new Date(now - age), new Date(now - age)); return raw; };
   return { home, base, put, env, run, session };
@@ -185,6 +185,49 @@ test('large transcripts use UTF-8-safe reverse reads and retain the latest hando
   assert.equal(fs.readFileSync(path.join(f.base,'projects-archive/project/large-old.jsonl'),'utf8'),raw);
 });
 
+test('sessions still referenced by a VSCode state DB are never archived, for any reason', t => {
+  const f = fixture(t);
+  // Not real SQLite: only the byte substring matters, which is exactly how the guard reads it.
+  const db = path.join(f.home, 'vscode-user', 'workspaceStorage', 'abc', 'state.vscdb');
+  fs.mkdirSync(path.dirname(db), { recursive: true });
+  fs.writeFileSync(db, Buffer.concat([
+    Buffer.from('SQLite format 3\0', 'utf8'), Buffer.alloc(48, 7),
+    Buffer.from('memento/workbench.parts.editor','utf8'), Buffer.from('"sessionId":"tab-closed"', 'utf8'),
+    Buffer.from('"hiddenSessionIds":["tab-approved"]', 'utf8'),
+    Buffer.from('"bookmarkedSessions":[{"sessionId":"tab-abandoned"}]', 'utf8'),
+  ]));
+  const closedRows = () => [msg('user', 'closed title')];
+  const approvedRows = () => [msg('user', 'approved title'), msg('assistant', 'このセッション: アーカイブしてよい')];
+  const abandonedRows = () => [msg('user', 'old task', 74*60*minute), msg('assistant', '次に kim がすること\n確認する\nこの後の自動進行\nテストする', 73*60*minute)];
+  for (const id of ['tab-closed', 'free-closed']) f.session(id, closedRows(), 46_000);
+  for (const id of ['tab-approved', 'free-approved']) f.session(id, approvedRows());
+  for (const id of ['tab-abandoned', 'free-abandoned']) f.session(id, abandonedRows());
+  f.put('closed-sessions.json', JSON.stringify({ ids: ['tab-closed', 'free-closed'] }));
+  const free = ['free-abandoned', 'free-approved', 'free-closed'], tabs = ['tab-abandoned', 'tab-approved', 'tab-closed'];
+  const ids = r => r.sessions.map(x => x.sessionId).sort();
+  const dry = f.run('--dry-run');
+  assert.deepEqual(ids(dry), free);
+  assert.equal(dry.protected, 3);
+  for (const id of tabs) assert.ok(fs.existsSync(path.join(f.base, `projects/project/${id}.jsonl`)), id);
+  const real = f.run();
+  assert.deepEqual(ids(real), free);
+  assert.equal(real.protected, 3);
+  for (const id of tabs) assert.ok(fs.existsSync(path.join(f.base, `projects/project/${id}.jsonl`)), id);
+  for (const id of free) {
+    assert.equal(fs.existsSync(path.join(f.base, `projects/project/${id}.jsonl`)), false, id);
+    assert.ok(fs.existsSync(path.join(f.base, `projects-archive/project/${id}.jsonl`)), id);
+  }
+});
+test('an unreadable VSCode state DB blocks every archive in that pass', t => {
+  const f = fixture(t);
+  fs.mkdirSync(path.join(f.home, 'vscode-user', 'globalStorage', 'state.vscdb'), { recursive: true });
+  f.session('free-closed', [msg('user', 'closed title')], 46_000);
+  f.put('closed-sessions.json', JSON.stringify({ ids: ['free-closed'] }));
+  const r = f.run();
+  assert.equal(r.vscodeState, 'unreadable');
+  assert.equal(r.sessions.length, 0);
+  assert.ok(fs.existsSync(path.join(f.base, 'projects/project/free-closed.jsonl')));
+});
 test('new session footer wording: closed/delete approved, pending/open not', t => {
   const f = fixture(t);
   f.session('new-closed', [msg('user', 't'), msg('assistant', 'このセッション: /session-close は終わっているので、このセッションを閉じてよい')], 0);

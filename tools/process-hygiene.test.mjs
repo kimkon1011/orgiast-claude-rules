@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { classify, classifyDetailed, classifyOrphanConsoleWindows, classifyVscodeIdle, parseOptions, parseProcessLines } from './process-hygiene.mjs';
+import { classify, classifyDetailed, classifyOrphanConsoleWindows, classifyVscodeIdle, parseOptions, parseProcessLines, shouldKillVscodeIdle } from './process-hygiene.mjs';
 
 const now = Date.parse('2026-09-11T06:00:00Z');
 const VSC_CMD = 'C:\\Users\\kim\\.vscode\\extensions\\anthropic.claude-code-2.1.285-win32-x64\\resources\\native-binary\\claude.exe --output-format stream-json';
@@ -49,6 +49,23 @@ test('vscode-idle: 1回の上限は15個', () => {
   const r = idleRun(procs, sessions);
   assert.equal(r.length, 15);
   assert.equal(r[0].pid, 20);
+});
+
+test('vscode-idle gate: コミット空きが閾値以上なら止めない', () => {
+  assert.equal(shouldKillVscodeIdle(63.5, 16).kill, false);
+  assert.equal(shouldKillVscodeIdle(16, 16).kill, false);
+});
+
+test('vscode-idle gate: コミット空きが閾値未満なら止める', () => {
+  assert.equal(shouldKillVscodeIdle(8, 16).kill, true);
+  assert.equal(shouldKillVscodeIdle(15.9, 16).kill, true);
+});
+
+test('vscode-idle gate: 空き不明なら止めない / 閾値0ならゲート無効', () => {
+  assert.equal(shouldKillVscodeIdle(Number.NaN, 16).kill, false);
+  assert.equal(shouldKillVscodeIdle(undefined, 16).kill, false);
+  assert.equal(shouldKillVscodeIdle(Number.NaN, 0).kill, true);
+  assert.equal(shouldKillVscodeIdle(100, 0).kill, true);
 });
 
 const processInfo = (name, commandLine, ageMin, mb = 100, parentPid = 999_999) => ({ Name: name, ProcessId: ageMin, ParentProcessId: parentPid, CommandLine: commandLine, CreationDate: new Date(now - ageMin * 60_000).toISOString(), WorkingSetSize: mb * 1024 * 1024 });
@@ -113,8 +130,10 @@ test('閾値は超えた時だけ対象になり上書きできる', () => {
   const rows = [processInfo('node.exe', 'node C:\\x\\orgiast-main\\tools\\x.mjs', 10), processInfo('node.exe', 'node batch-run.mjs', 20)];
   assert.equal(classify(rows, now, { maxAgeMin: 10, maxBatchAgeMin: 20 }).length, 0);
   assert.equal(classify(rows, now + 1, { maxAgeMin: 10, maxBatchAgeMin: 20 }).length, 2);
-  assert.deepEqual(parseOptions(['--kill', '--max-age-min', '3', '--max-batch-age-min', '4', '--alert-threshold', '5']), { kill: true, dryRun: false, maxAgeMin: 3, maxBatchAgeMin: 4, alertThreshold: 5, vscodeIdleMin: 720 });
+  assert.deepEqual(parseOptions(['--kill', '--max-age-min', '3', '--max-batch-age-min', '4', '--alert-threshold', '5']), { kill: true, dryRun: false, maxAgeMin: 3, maxBatchAgeMin: 4, alertThreshold: 5, vscodeIdleMin: 720, vscodeIdleMinFreeGb: 16 });
   assert.equal(parseOptions(['--vscode-idle-min', '60']).vscodeIdleMin, 60);
+  assert.equal(parseOptions([]).vscodeIdleMinFreeGb, 16);
+  assert.equal(parseOptions(['--vscode-idle-min-free-gb', '4']).vscodeIdleMinFreeGb, 4);
 });
 
 test('--dry-run は --kill より優先する', () => {

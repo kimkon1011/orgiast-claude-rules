@@ -37,6 +37,7 @@ export async function getDriveToken({
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: `grant_type=${encodeURIComponent('urn:ietf:params:oauth:grant-type:jwt-bearer')}&assertion=${jwt}`,
   });
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
   const json = await res.json();
   if (!json.access_token) throw new Error(`token error: ${JSON.stringify(json)}`);
   return json.access_token;

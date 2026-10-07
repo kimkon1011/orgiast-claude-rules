@@ -21,6 +21,10 @@ try {
 } catch { /* guard が未同期でも登録処理は続行する */ }
 
 const hooksOnly = process.argv.includes('--hooks-only');
+let SHEETS_FIRST_TAB_MATCHER = 'mcp__claude_ai_Google_Drive__read_file_content|mcp__claude_ai_Google_Drive__download_file_content';
+try {
+  ({ HOOK_MATCHER: SHEETS_FIRST_TAB_MATCHER } = await import('./hooks/sheets-first-tab-warn.mjs'));
+} catch { /* 同期途中で未配布でも他のhook登録を継続する */ }
 const home = process.env.ORGIAST_HOME || os.homedir();
 // 2026-09-14: ~/orgiast-claude-rules が stale で新 hook(hook-budget-check) が無言で未登録になった。
 // 実行中スクリプトのツリーを基準にし、実行した版の hook を同じ版のツリーから登録する。
@@ -74,7 +78,7 @@ function add(groups, scriptName, group) {
   // 既存PCは .ps1 版が登録済みのことがある(Windows install)。拡張子を無視して重複判定しないと
   // .mjs と .ps1 の二重登録になり、同じ context が2回注入される。
   const base = scriptName.replace(/\.(mjs|ps1)$/, '');
-  if (commands(groups).some((cmd) => cmd.includes(base))) return false;
+  if (commands(groups).some((cmd) => cmd.replace(/\\/g, '/').includes(base))) return false;
   groups.push(group); return true;
 }
 function migrate(groups, oldName, newName, newCommand) {
@@ -106,7 +110,7 @@ function syncMatcherFor(groups, scriptName, matcher) {
   let changed = 0;
   for (const group of groups) {
     const hooks = Array.isArray(group?.hooks) ? group.hooks : [];
-    if (hooks.some((hook) => String(hook.command || '').includes(scriptName)) && group.matcher !== matcher) {
+    if (hooks.some((hook) => String(hook.command || '').replace(/\\/g, '/').includes(scriptName)) && group.matcher !== matcher) {
       group.matcher = matcher;
       changed += 1;
     }
@@ -238,6 +242,8 @@ try {
   if (add(settings.hooks.PreToolUse, 'pretooluse-lane-guard.mjs', { matcher: 'Bash|PowerShell|Edit|Write|MultiEdit', hooks: [{ type: 'command', command: command('pretooluse-lane-guard.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.PreToolUse, 'pretooluse-codex-invocation.mjs', { matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command: command('pretooluse-codex-invocation.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.PreToolUse, 'model-agent-guard.mjs', { matcher: 'Agent|Task', hooks: [{ type: 'command', command: command('model-agent-guard.mjs') }] })) added += 1;
+  if (add(settings.hooks.PreToolUse, 'hooks/sheets-first-tab-warn.mjs', { matcher: SHEETS_FIRST_TAB_MATCHER, hooks: [{ type: 'command', command: command('hooks/sheets-first-tab-warn.mjs'), timeout: 10 }] })) added += 1;
+  added += syncMatcherFor(settings.hooks.PreToolUse, 'hooks/sheets-first-tab-warn.mjs', SHEETS_FIRST_TAB_MATCHER);
   if (add(settings.hooks.PreToolUse, 'internal-recipient-gmail-guard.mjs', { matcher: HOOK_MATCHER, hooks: [{ type: 'command', command: command('internal-recipient-gmail-guard.mjs'), timeout: 5 }] })) added += 1;
   added += syncMatcherFor(settings.hooks.PreToolUse, 'internal-recipient-gmail-guard.mjs', HOOK_MATCHER);
   // 社外宛メールで説明している Google ファイルを、直近に中身として読んだかを確かめる。

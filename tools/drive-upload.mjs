@@ -45,7 +45,7 @@ export function buildMultipartBody({ metadata, content, mimeType, boundary }) {
   return Buffer.concat([head, content, Buffer.from(`\r\n--${boundary}--`)]);
 }
 
-export function resolveAs(args, env = process.env, gitEmail = () => execFileSync('git', ['config', 'user.email'], { encoding: 'utf8' }).trim()) {
+export function resolveAs(args, env = process.env, gitEmail = () => execFileSync('git', ['config', 'user.email'], { encoding: 'utf8', windowsHide: true }).trim()) {
   const email = args.as || env.GOOGLE_IMPERSONATE || (() => { try { return gitEmail(); } catch { return ''; } })();
   if (!email) throw new Error('impersonate 先が不明: --as <email> か GOOGLE_IMPERSONATE か git config user.email を設定する');
   return email;

@@ -231,3 +231,26 @@ test('hook実ファイルのskipがある時は注意を出し変更なしと正
   fs.rmSync(home, { recursive: true, force: true });
   fs.rmSync(repo, { recursive: true, force: true });
 });
+
+test('Sheets warning registers once and repairs matcher with Windows path separators', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-sheets-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const repo = path.resolve('.');
+  const env = { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo };
+  const file = path.join(home, '.claude', 'settings.json');
+  const register = () => execFileSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { env, encoding: 'utf8' });
+  register();
+  const settings = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const group = settings.hooks.PreToolUse.find(g => g.hooks.some(h => h.command.includes('sheets-first-tab-warn.mjs')));
+  assert.ok(group);
+  assert.equal(group.hooks[0].timeout, 10);
+  assert.equal(group.hooks[0].async, undefined);
+  assert.ok(fs.existsSync(path.join(repo, 'tools', 'hooks', 'sheets-first-tab-warn.mjs')));
+  group.hooks[0].command = 'node "C:\\Users\\uers\\orgiast-main\\tools\\hooks\\sheets-first-tab-warn.mjs"';
+  group.matcher = 'stale';
+  fs.writeFileSync(file, JSON.stringify(settings));
+  register();
+  const updated = JSON.parse(fs.readFileSync(file, 'utf8')).hooks.PreToolUse.filter(g => g.hooks.some(h => h.command.includes('sheets-first-tab-warn.mjs')));
+  assert.equal(updated.length, 1);
+  assert.equal(updated[0].matcher, 'mcp__claude_ai_Google_Drive__read_file_content|mcp__claude_ai_Google_Drive__download_file_content');
+});

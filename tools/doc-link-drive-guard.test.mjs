@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { findLocalDocLinks, formatViolationMessage } from './doc-link-drive-guard.mjs';
+import { findLocalDocLinks, findBareLocalDocPaths, formatBarePathMessage, formatViolationMessage } from './doc-link-drive-guard.mjs';
 
 test('文書種別の相対パスと絶対パスを違反として検出する', () => {
   const hits = findLocalDocLinks('[手順書](docs/foo.md) [資料](C:/Users/x/Downloads/plan.pdf) [表](out/report.xlsx)');
@@ -63,4 +63,24 @@ test('メッセージに表示する違反は最大3件', () => {
   assert.match(message, /一 → 1\.md/);
   assert.match(message, /三 → 3\.txt/);
   assert.doesNotMatch(message, /四 → 4\.csv/);
+});
+
+const B = '\\';
+const D = ['C:', 'Users', 'x', 'Desktop'].join(B);
+const P = (name) => D + B + name;
+test('バッククォートと裸の Desktop パスを検出する', () => {
+  const text = `保存: \`${P('出展者証.pdf')}\` と ${P('a.png')} です。`;
+  const hits = findBareLocalDocPaths(text);
+  assert.deepEqual(hits.map((h) => h.destination), [P('出展者証.pdf'), P('a.png')]);
+  assert.match(formatBarePathMessage(hits), /Google Drive/);
+});
+
+test('裸パス: scratchpad・Temp・LOCAL-PATH-OK・コードブロック・Drive URL・cmd は除外', () => {
+  const scratch = ['C:', 'Users', 'x', 'AppData', 'Local', 'Temp', 'claude', 'scratchpad', 'a.pdf'].join(B);
+  assert.deepEqual(findBareLocalDocPaths('`' + scratch + '`'), []);
+  assert.deepEqual(findBareLocalDocPaths(`[LOCAL-PATH-OK] ${P('a.pdf')}`), []);
+  assert.deepEqual(findBareLocalDocPaths('```\nnode x.mjs ' + P('a.csv') + '\n```'), []);
+  assert.deepEqual(findBareLocalDocPaths('https://drive.google.com/file/d/abc/view?authuser=a@b.jp'), []);
+  assert.deepEqual(findBareLocalDocPaths(P('run.cmd')), []);
+  assert.equal(formatBarePathMessage([]), '');
 });

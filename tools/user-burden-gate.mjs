@@ -35,8 +35,8 @@ export function judgeUserBurden(text, humanText = '') {
   }
   if (backReference.test(prose)) missing.push('遡り参照は禁止。依頼に必要なものを、この応答の中にすべて再掲するか、デスクトップのワンクリック・ショートカットにする');
   const hasFence = (source.match(fencePattern) || []).some(block => block.replace(/^(?:```|~~~)[^\n]*\n/, '').replace(/(?:```|~~~)$/, '').trim());
-  if (!hasLauncher && !hasFence && !/https?:\/\/[^\s<>"`]+/i.test(source) && !/C:\\Users\\[^\\\r\n]+\\Desktop\\[^\s<>"`]+/i.test(source)) {
-    missing.push('完成品（コードブロック・URL・デスクトップ上のファイルパス）を同じ応答に同梱する');
+  if (!hasLauncher && !hasFence && !/https?:\/\/[^\s<>"`]+/i.test(source)) {
+    missing.push('完成品（コードブロック・URL）を同梱する。ファイルの成果物は Google Drive にアップして URL で渡す');
   }
   const audits = [...prose.matchAll(/^[ \t]*手間監査[:：][ \t]*([^\r\n]*)/gm)].map(([, line]) => line);
   if (!audits.some(line => evidence.test(line) && operationCount.test(line))) {

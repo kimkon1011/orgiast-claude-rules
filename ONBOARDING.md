@@ -1122,6 +1122,12 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
 
 Driveの移動・知識の正本管理を守り、社内アプリには投稿窓口と通知・完了報告を標準搭載する。
 
+**ユーザー・他人に渡す成果物（PDF/画像/文書/表/ZIP 等）はすべて Google Drive にアップし、リンクを貼って渡す。** ローカルパス（Desktop 等）や SendUserFile・チャット添付だけで渡したら未完了（スマホ併用で開けず、他人にも渡せないため）。
+**置き場:** 案件に属するデータは**その案件の制作フォルダ**（Drive で `制作フォルダ`・案件コード `C0040` 等・顧客名で検索して特定する）。案件外のものは「作業ファイル」直下。
+リンクは URL 規約に従う（自分用は `?authuser=<自分のorgiast.jpメール>`、他人宛は共有設定とアカウント切替の案内を付ける）。アップロード経路は Drive MCP か `node tools/drive-upload.mjs --file <path> --folder <folderId>`。
+**サブエージェント／Codex に生成を委ねるときも、指示に保存先＝Drive の該当フォルダを書く**（Desktop を指定しない）。
+機械化: stop hook の doc-link-drive-guard（裸パス検出）と user-burden-gate（Desktop ファイルパスは完成品として受理しない）。
+
 **2.9 Google Drive 運用ルール**
 
 Claude新規作成は標準フォルダ「作業ファイル」直下（既存自動化フォルダは例外）。**`copy_file`を移動の代用にしない**（新IDの複製が残る）。実際の移動はkimのUI ドラッグのみ。絶対に動かさないもの（weekly-bot参照フォルダ、GASコマンドキュー、bound script付きSheet等）。マイドライブ⇔共有ドライブ跨ぎの移動は禁止。移動後はClaudeがread-back検証。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/drive-operations.md`

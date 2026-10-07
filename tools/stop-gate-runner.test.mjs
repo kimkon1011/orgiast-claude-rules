@@ -273,7 +273,7 @@ const burdenCases = [
   ['根拠は同じ監査行に必要', '次に kim がすること: 同意する\nhttps://example.com\n手間監査: 1クリック\nOAuth 本人同意のため。', true, /手間監査/],
   ['理由なしの例外は無効', '次に kim がすること: 実行する\n[BURDEN-OK]', true],
   ['URL同梱', `次に kim がすること: 本人同意する\nhttps://example.com/consent\n${burdenAudit}`, false],
-  ['Desktop完成品', `次に kim がすること: ショートカットを開く\nC:\\Users\\kim\\Desktop\\consent.lnk\n${burdenAudit}`, false],
+  ['Desktopファイルパスは完成品でない', `次に kim がすること: ショートカットを開く\nC:\\Users\\kim\\Desktop\\consent.lnk\n${burdenAudit}`, true, /Google Drive/],
   ['コード中の依頼では発火しない', '```text\n次に kim がすること: 実行する\n```\n修正済みです。', false],
   ['コード中の監査は無効', `次に kim がすること: 同意する\n\`\`\`text\n${burdenAudit}\n\`\`\``, true, /手間監査/],
   ['通常報告の参照は対象外', '以前のファイルを修正しました。\n次に kim がすること: なし（完了）', false],

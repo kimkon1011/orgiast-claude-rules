@@ -259,6 +259,8 @@ try {
   if (add(settings.hooks.PostToolUse, 'gemini-mcp-usage-hook.mjs', { matcher: 'mcp__gemini-cli__(?:ask-gemini|geminiChat|googleSearch)', hooks: [{ type: 'command', command: command('gemini-mcp-usage-hook.mjs'), timeout: 10 }] })) added += 1;
   // パイプ等で連結された全ステージが許可済みBashプレフィックスなら自動承認する。
   if (add(settings.hooks.PreToolUse, 'pipe-stage-permissions.mjs', { matcher: 'Bash', hooks: [{ type: 'command', command: command('pipe-stage-permissions.mjs'), timeout: 5 }] })) added += 1;
+  // 社内アプリを不具合・要望フォーム未搭載のまま本番反映させない(§2.11・2026-10-08 カフェアプリ事故の再発防止)。
+  if (add(settings.hooks.PreToolUse, 'feedback-form-gate.mjs', { matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command: command('feedback-form-gate.mjs'), timeout: 10 }] })) added += 1;
   // 人に手作業を頼むとき、初見の人でも実行できる手順になっているかを検査する(§1.5.1)。
   if (add(settings.hooks.Stop, 'verify-before-done-detector.mjs', { hooks: [{ type: 'command', command: command('verify-before-done-detector.mjs') }] })) added += 1;
   // kim が読む文書をローカルパスのリンクで渡す違反を止める(モバイルで1クリックで開けない・2026-08-07 kim確定ルール)

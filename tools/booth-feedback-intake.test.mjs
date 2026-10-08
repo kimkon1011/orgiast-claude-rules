@@ -73,7 +73,13 @@ test('不具合の新規注入は detached launcher を起動し台帳へ記録�
   const h = harness({ next: original, fetchImpl: async () => response({ ...api, items: [bug] }) });
   assert.equal(await runIntake({ home: HOME, io: h.io, fetchImpl: h.fetchImpl }), 0);
   assert.equal(h.spawns.length, 1);
-  assert.equal(h.spawns[0][2].detached, true);
+  // #422: win32 は detached が CREATE_NO_WINDOW を無効化するため windowsHide のみ。
+  if (process.platform === 'win32') {
+    assert.equal(h.spawns[0][2].windowsHide, true);
+    assert.notEqual(h.spawns[0][2].detached, true);
+  } else {
+    assert.equal(h.spawns[0][2].detached, true);
+  }
   assert.equal(h.spawns[0][2].stdio, 'ignore');
   const saved = JSON.parse(h.files.get(HOME_FILE('booth-feedback-ledger.json')));
   assert.equal(saved.items['fb-123'].immediateLaunchedAt, '2026-08-28T03:00:00.000Z');

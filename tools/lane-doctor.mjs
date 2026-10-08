@@ -24,8 +24,19 @@ export function atomicJson(file, value) {
   try { fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 }); fs.renameSync(tmp, file); }
   finally { try { fs.unlinkSync(tmp); } catch {} }
 }
+const MAX_HISTORY_RESET_MS = 7 * 86400_000;
 const time = v => typeof v === 'number' ? v : Date.parse(v);
 export const freshProbe = (v, now = Date.now()) => Number.isFinite(time(v)) && now - time(v) >= 0 && now - time(v) < 30 * 60_000;
+// Migrate successful probes written before lastProbeOkAt was introduced.
+function probeHistory(state = {}) {
+  const lastProbeOkAt = state.lastProbeOkAt ||
+    (state.alive && /^(?:auth_ok:)?probe_ok(?::stale)?$/.test(state.reason) ? state.probedAt : undefined);
+  return {
+    ...(state.probedAt ? { probedAt: state.probedAt } : {}),
+    ...(lastProbeOkAt ? { lastProbeOkAt } : {}),
+    ...(state.probeReason || state.probedAt ? { probeReason: state.probeReason || state.reason } : {}),
+  };
+}
 function history(home, name) {
   const file = path.join(home, '.claude', name);
   try {
@@ -53,9 +64,15 @@ function persist(file, value, health) {
 export function laneDoctorQuick({ home = laneHome(), now = Date.now(), save = true } = {}) {
   const dir = path.join(home, '.claude');
   const old = readJson(path.join(dir, 'lane-health.json'));
-  const health = { ts: new Date(now).toISOString(), probedAt: old.probedAt || null, lanes: {}, implementOrder: [], askOrder: [], repairs: [], deadNeedsUser: [], errors: [] };
+  const health = { ts: new Date(now).toISOString(), probedAt: old.probedAt || null, lanes: {}, implementOrder: [], askOrder: [], repairs: [], deadNeedsUser: [], errors: [], ignored: [] };
   const cooldown = readJson(path.join(dir, 'provider-cooldown.json')), routing = readJson(path.join(dir, 'routing-overrides.json'));
-  const limits = [...history(home, 'provider-limit-history.jsonl'), ...history(home, 'codex-limit-history.jsonl').map(x => ({ ...x, provider: 'codex' }))];
+  const limits = [...history(home, 'provider-limit-history.jsonl'), ...history(home, 'codex-limit-history.jsonl').map(x => ({ ...x, provider: 'codex' }))].filter(x => {
+    if (time(x.until) > now + MAX_HISTORY_RESET_MS) {
+      health.ignored.push({ provider: x.provider, reason: 'until_beyond_7d', until: x.until });
+      return false;
+    }
+    return true;
+  });
   for (const [name, state] of [['provider-cooldown.json', cooldown], ['routing-overrides.json', routing.demote || {}]]) {
     const repairs = [], removed = {};
     for (const p of PROVIDERS) {
@@ -70,17 +87,21 @@ export function laneDoctorQuick({ home = laneHome(), now = Date.now(), save = tr
   const keys = { gemini: loadGeminiKey(home), deepseek: loadDeepseekKey(home), glm: loadEnvKey(home, 'zai.env', 'ZAI_API_KEY'), groq: loadEnvKey(home, 'groq.env', 'GROQ_API_KEY'), openrouter: loadEnvKey(home, 'openrouter.env', 'OPENROUTER_API_KEY') };
   for (const p of PROVIDERS) {
     const configured = p === 'codex' ? codexAuthStatus(home).login : !!keys[p];
-    const recent = limits.filter(x => x.provider === p && time(x.until) > now && !(old.lanes?.[p]?.alive && time(old.lanes[p].probedAt) >= time(x.t || x.ts || x.at))).at(-1);
+    const previous = old.lanes?.[p] || {}, evidence = probeHistory(previous);
+    const recent = limits.filter(x => x.provider === p && time(x.until) > now && !(time(evidence.lastProbeOkAt) >= time(x.t ?? x.ts ?? x.at))).at(-1);
     const blocked = cooldown[p] || recent;
     let state = { alive: configured, reason: configured ? 'configured:unprobed' : p === 'codex' ? 'dead:oauth_consent' : 'missing_key' };
     if (old.lanes?.[p]?.reason === 'dead:payment_required') state = { ...old.lanes[p] };
     else if (blocked && time(blocked.until) > now) state = { alive: false, reason: blocked.reason || 'cooldown', until: blocked.until };
     else if (routing.demote?.[p]) state = { alive: false, reason: 'demoted', until: routing.demote[p]?.until ?? routing.demote[p] };
     else if (configured && freshProbe(old.lanes?.[p]?.probedAt, now) && !(old.lanes[p].until && time(old.lanes[p].until) <= now)) state = { ...old.lanes[p] };
-    health.lanes[p] = state;
+    else if (configured && evidence.lastProbeOkAt) state = { alive: true, reason: 'probe_ok:stale' };
+    else if (configured && evidence.probedAt) state = previous.until && time(previous.until) <= now
+      ? { alive: true, reason: 'probe_expired' } : { ...previous };
+    health.lanes[p] = { ...state, ...evidence };
   }
   // API key の生存と CLI の有無は別条件。CLI が無い場合は実装候補にしない。
-  health.lanes['gemini-cli'] = { alive: health.lanes.gemini.alive && executable('gemini'), reason: executable('gemini') ? health.lanes.gemini.reason : 'cli_missing' };
+  health.lanes['gemini-cli'] = { ...health.lanes.gemini, alive: health.lanes.gemini.alive && executable('gemini'), reason: executable('gemini') ? health.lanes.gemini.reason : 'cli_missing' };
   orders(health);
   if (save) persist(path.join(dir, 'lane-health.json'), health, health);
   return health;
@@ -123,16 +144,19 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
   let cooldownChanged = false, routingChanged = false;
   for (const [p, result] of results) {
     if (!result) continue;
-    if (result.cached && !result.cached.alive) { health.lanes[p] = result.cached; continue; }
+    if (result.cached && !result.cached.alive) { health.lanes[p] = { ...result.cached, ...probeHistory(result.cached) }; continue; }
     const text = result.text || '', stamp = new Date(now).toISOString();
     if (result.code === 0 || result.cached?.alive) {
-      health.lanes[p] = result.cached || { alive: true, reason: p === 'codex' ? 'auth_ok:probe_ok' : 'probe_ok', probedAt: stamp };
+      health.lanes[p] = result.cached
+        ? { ...result.cached, ...probeHistory(result.cached) }
+        : { alive: true, reason: p === 'codex' ? 'auth_ok:probe_ok' : 'probe_ok', probedAt: stamp, lastProbeOkAt: stamp, probeReason: p === 'codex' ? 'auth_ok:probe_ok' : 'probe_ok' };
       if (routing.demote?.[p] !== undefined) { delete routing.demote[p]; routingChanged = true; health.repairs.push({ provider: p, action: 'demote_removed', detail: '実測成功' }); }
       if (cooldown[p]) { delete cooldown[p]; cooldownChanged = true; health.repairs.push({ provider: p, action: 'cooldown_removed', detail: '実測成功' }); }
     } else {
       const payment = /HTTP\s*402\b|credits are depleted|insufficient/i.test(text);
       const limited = /HTTP\s*429\b|usage limit|RESOURCE_EXHAUSTED|rate.limit/i.test(text);
-      health.lanes[p] = { alive: false, reason: payment ? 'dead:payment_required' : limited ? 'cooldown' : /HTTP\s*401|unauthorized|login required|token.*expired/i.test(text) ? (p === 'codex' ? 'dead:oauth_consent' : 'auth_invalid') : /Read-only file system|EROFS/i.test(text) ? 'execution_unavailable:read_only' : 'probe_failed', probedAt: stamp, ...(result.authOk ? { authOk: true } : {}) };
+      health.lanes[p] = { ...probeHistory(previous.lanes?.[p]), alive: false, reason: payment ? 'dead:payment_required' : limited ? 'cooldown' : /HTTP\s*401|unauthorized|login required|token.*expired/i.test(text) ? (p === 'codex' ? 'dead:oauth_consent' : 'auth_invalid') : /Read-only file system|EROFS/i.test(text) ? 'execution_unavailable:read_only' : 'probe_failed', probedAt: stamp, ...(result.authOk ? { authOk: true } : {}) };
+      health.lanes[p].probeReason = health.lanes[p].reason;
       if (limited && !payment) { const until = providerResetUntil(text, now); cooldown[p] = { until, at: now, reason: 'lane_doctor_usage_limit' }; cooldownChanged = true; health.lanes[p].until = until; }
     }
   }
@@ -158,7 +182,7 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
   return health;
 }
 export function summarize(health) {
-  const alive = Object.entries(health.lanes).filter(([,s]) => s.alive).map(([p]) => `${p} ✅`).join(' ') || 'なし';
+  const alive = Object.entries(health.lanes).filter(([,s]) => s.alive).map(([p,s]) => `${p} ✅${s.reason === 'probe_ok:stale' ? `(stale ${Math.floor((time(health.ts) - time(s.lastProbeOkAt)) / 60000)}m)` : ''}`).join(' ') || 'なし';
   const dead = Object.entries(health.lanes).filter(([,s]) => !s.alive).map(([p,s]) => `${p} ❌(${s.reason})`).join(' ') || 'なし';
   return `生存: ${alive} ／ 停止: ${dead} ／ 修復: ${health.repairs.map(r => `${r.provider} ${r.action}`).join(', ') || 'なし'}${health.errors.length ? ` ／ 保存エラー: ${health.errors.join(', ')}` : ''}`;
 }

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { laneDoctorQuick, laneDoctorProbe, atomicJson, notificationText, freshProbe } from './lane-doctor.mjs';
+import { laneDoctorQuick, laneDoctorProbe, atomicJson, notificationText, freshProbe, summarize } from './lane-doctor.mjs';
 const now = Date.parse('2026-10-08T06:00:00Z');
 function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-doctor-'));
@@ -60,4 +60,77 @@ test('failed notification is retried, while successful delivery is deduped',asyn
   const notify=async()=>{calls++;return {delivered:calls===1?'none':'dm'};};
   for(let i=0;i<3;i++)await laneDoctorProbe({home:h,now:now+i*1000,probe,notify});
   assert.equal(calls,2);
+});
+
+for (const filename of ['provider-limit-history.jsonl', 'codex-limit-history.jsonl']) {
+  test(`successful probe survives two stale quick runs with older ${filename}`, async t => {
+    const h = fixture(t), stamp = new Date(now).toISOString();
+    fs.writeFileSync(path.join(h, '.claude', filename), JSON.stringify({ provider: 'codex', t: now - 1000, until: now + 86400000, reason: 'usage_limit_no_fallback' }) + '\n');
+    const probed = await laneDoctorProbe({ home: h, now, probe: async () => ({ code: 0, text: 'PONG' }) });
+    assert.equal(probed.lanes.codex.lastProbeOkAt, stamp);
+    for (const minutes of [31, 49]) {
+      const result = laneDoctorQuick({ home: h, now: now + minutes * 60000 });
+      assert.equal(result.lanes.codex.alive, true);
+      assert.equal(result.lanes.codex.reason, 'probe_ok:stale');
+      assert.equal(result.lanes.codex.probedAt, stamp);
+      assert.equal(result.lanes.codex.lastProbeOkAt, stamp);
+      assert.equal(result.lanes.codex.probeReason, 'auth_ok:probe_ok');
+      assert.ok(summarize(result).includes(`codex ✅(stale ${minutes}m)`));
+    }
+  });
+  test(`ignores until beyond seven days in ${filename}`, t => {
+    const h = fixture(t), until = now + 100 * 86400000;
+    fs.writeFileSync(path.join(h, '.claude', filename), JSON.stringify({ provider: 'codex', t: now - 1000, until, reason: 'usage_limit_no_fallback' }) + '\n');
+    const result = laneDoctorQuick({ home: h, now });
+    assert.equal(result.lanes.codex.alive, true);
+    assert.deepEqual(result.ignored, [{ provider: 'codex', reason: 'until_beyond_7d', until }]);
+  });
+}
+test('newer limits block without erasing probe history across quick runs', async t => {
+  const h = fixture(t), stamp = new Date(now).toISOString();
+  await laneDoctorProbe({ home: h, now, probe: async () => ({ code: 0, text: 'PONG' }) });
+  fs.writeFileSync(path.join(h, '.claude/codex-limit-history.jsonl'), JSON.stringify({ t: now + 1000, until: now + 86400000, reason: 'usage_limit_no_fallback' }) + '\n');
+  for (const minutes of [31, 32]) {
+    const result = laneDoctorQuick({ home: h, now: now + minutes * 60000 });
+    assert.equal(result.lanes.codex.alive, false);
+    assert.equal(result.lanes.codex.reason, 'usage_limit_no_fallback');
+    assert.equal(result.lanes.codex.lastProbeOkAt, stamp);
+    assert.equal(result.lanes.codex.probedAt, stamp);
+  }
+});
+test('migrates legacy successful probe and keeps seven-day boundary valid', t => {
+  const h = fixture(t), stamp = new Date(now - 49 * 60000).toISOString();
+  write(h, 'lane-health.json', { lanes: { codex: { alive: true, reason: 'auth_ok:probe_ok', probedAt: stamp } } });
+  let result = laneDoctorQuick({ home: h, now });
+  assert.equal(result.lanes.codex.lastProbeOkAt, stamp);
+  assert.equal(result.lanes.codex.reason, 'probe_ok:stale');
+  fs.writeFileSync(path.join(h, '.claude/codex-limit-history.jsonl'), JSON.stringify({ t: now, until: now + 7 * 86400000, reason: 'usage_limit' }) + '\n');
+  result = laneDoctorQuick({ home: h, now });
+  assert.equal(result.lanes.codex.alive, false);
+  assert.deepEqual(result.ignored, []);
+});
+
+test('cached and failed probes retain the last real success time', async t => {
+  const h = fixture(t), stamp = new Date(now).toISOString();
+  const probe = async () => ({ code: 0, text: 'PONG' });
+  await laneDoctorProbe({ home: h, now, probe });
+  const cached = await laneDoctorProbe({ home: h, now: now + 60000, probe });
+  assert.equal(cached.lanes.codex.lastProbeOkAt, stamp);
+  assert.equal(cached.lanes.codex.probedAt, stamp);
+  const failed = await laneDoctorProbe({ home: h, now: now + 31 * 60000,
+    probe: async () => ({ code: 1, text: 'HTTP 429 retry in 1 hour' }) });
+  assert.equal(failed.lanes.codex.lastProbeOkAt, stamp);
+  assert.equal(failed.lanes.codex.probeReason, 'cooldown');
+  const quick = laneDoctorQuick({ home: h, now: now + 62 * 60000 });
+  assert.equal(quick.lanes.codex.alive, false);
+  assert.equal(quick.lanes.codex.lastProbeOkAt, stamp);
+  assert.equal(quick.lanes.codex.probedAt, failed.lanes.codex.probedAt);
+  assert.equal(quick.lanes.codex.probeReason, 'cooldown');
+});
+test('unprobed configuration remains distinct and equal-time limits are superseded', t => {
+  const h = fixture(t), stamp = new Date(now).toISOString();
+  assert.equal(laneDoctorQuick({ home: h, now }).lanes.codex.reason, 'configured:unprobed');
+  write(h, 'lane-health.json', { lanes: { codex: { alive: true, reason: 'auth_ok:probe_ok', probedAt: stamp, lastProbeOkAt: stamp } } });
+  fs.writeFileSync(path.join(h, '.claude/codex-limit-history.jsonl'), JSON.stringify({ t: now, until: now + 86400000 }) + '\n');
+  for (const minutes of [31, 32]) assert.equal(laneDoctorQuick({ home: h, now: now + minutes * 60000 }).lanes.codex.alive, true);
 });

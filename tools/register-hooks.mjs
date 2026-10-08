@@ -178,7 +178,7 @@ try {
     if (add(settings.hooks.SessionStart, name, { hooks: [hook] })) added += 1;
   }
   added += setTimeoutFor(settings.hooks.SessionStart, 'tool-adoption-check', 60);
-  if (add(settings.hooks.SessionStart, 'sessionstart-lane-health.mjs', { hooks: [{ type: 'command', command: command('sessionstart-lane-health.mjs'), timeout: 5 }] })) added += 1;
+  if (add(settings.hooks.SessionStart, 'sessionstart-lane-health.mjs', { hooks: [{ type: 'command', command: command('sessionstart-lane-health.mjs', ' --hook'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.SessionStart, 'hook-selfcheck.mjs', { hooks: [{ type: 'command', command: command('hook-selfcheck.mjs'), timeout: 10 }] })) added += 1;
   if (add(settings.hooks.SessionStart, 'hook-budget-check.mjs', { hooks: [{ type: 'command', command: command('hook-budget-check.mjs'), timeout: 10 }] })) added += 1;
   if (add(settings.hooks.SessionStart, 'makimono-host-detect.mjs', { hooks: [{ type: 'command', command: command('makimono-host-detect.mjs'), timeout: 10 }] })) added += 1;

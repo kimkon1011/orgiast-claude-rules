@@ -77,7 +77,9 @@ function check(item) {
       if (spec.hookEvent) {
         const hooks = parsed.hooks?.[spec.hookEvent]?.flatMap(group => group.hooks || []) || [];
         const expected = `node "${path.join(scriptDir, spec.hookScript)}" --hook`;
-        return hooks.some(hook => hook.type === 'command' && hook.command === expected && hook.async === true && hook.timeout === 5);
+        return hooks.some(hook => hook.type === 'command' && hook.command === expected
+          && (spec.async !== false ? hook.async === true : hook.async === undefined || hook.async === false)
+          && hook.timeout === (spec.timeout ?? 5));
       }
       return spec.requiredPath ? Boolean(nested(parsed, spec.requiredPath)) : true;
     }

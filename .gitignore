@@ -24,3 +24,6 @@ tools/.ps.tmp.ps1
 
 # Genspark Tool CLI の自動生成スキル (gsk init-skills)。ベンダー成果物なのでコミットしない
 .gsk/
+
+# Isolated CI verification home and evidence
+/.tmp-home-ci/

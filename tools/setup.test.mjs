@@ -143,3 +143,41 @@ test('fleet mail scheduled task is skipped until its transport config exists', (
   assert.equal(JSON.parse(second.stdout).items[0].status, 'NG');
   fs.rmSync(home, { recursive: true, force: true });
 });
+
+test('async:false manifest accepts synchronous hooks and rejects async hooks', (t) => {
+  const home = temp('setup-sync-hook-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const entry = JSON.parse(fs.readFileSync(path.join(toolsDir, 'setup-manifest.json'), 'utf8'))
+    .items.find(entry => entry.id === 'settings:lane-health-SessionStart');
+  assert.equal(entry.spec.async, false);
+  const mf = path.join(home, 'manifest.json');
+  for (const timeout of [undefined, 9]) {
+    const spec = { ...entry.spec, ...(timeout === undefined ? {} : { timeout }) };
+    write(mf, JSON.stringify(manifest([{ ...entry, spec }])));
+    const hook = { type: 'command', command: `node "${path.join(toolsDir, spec.hookScript)}" --hook`, timeout: timeout ?? 5 };
+    for (const [change, expected] of [[{}, 0], [{ async: false }, 0], [{ async: true }, 1], [{ async: null }, 1], [{ timeout: 3 }, 1], [{ command: hook.command.replace(' --hook', '') }, 1]]) {
+      write(path.join(home, spec.path), JSON.stringify({ hooks: { [spec.hookEvent]: [{ hooks: [{ ...hook, ...change }] }] } }));
+      const result = run(['--verify', '--home', home, '--manifest', mf]);
+      assert.equal(result.status, expected, result.stdout + result.stderr);
+    }
+  }
+});
+
+test('manifest async default still requires async:true for both purge-sessions events', (t) => {
+  const home = temp('setup-async-hook-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const entries = JSON.parse(fs.readFileSync(path.join(toolsDir, 'setup-manifest.json'), 'utf8'))
+    .items.filter(entry => entry.id.startsWith('settings:purge-sessions-'));
+  assert.equal(entries.length, 2);
+  const mf = path.join(home, 'manifest.json');
+  for (const entry of entries) {
+    assert.equal(entry.spec.async, undefined);
+    write(mf, JSON.stringify(manifest([entry])));
+    const hook = { type: 'command', command: `node "${path.join(toolsDir, entry.spec.hookScript)}" --hook`, timeout: 5 };
+    for (const [change, expected] of [[{}, 1], [{ async: false }, 1], [{ async: true }, 0], [{ async: true, timeout: 9 }, 1], [{ async: true, command: hook.command.replace(' --hook', '') }, 1]]) {
+      write(path.join(home, entry.spec.path), JSON.stringify({ hooks: { [entry.spec.hookEvent]: [{ hooks: [{ ...hook, ...change }] }] } }));
+      const result = run(['--verify', '--home', home, '--manifest', mf]);
+      assert.equal(result.status, expected, entry.id + ': ' + result.stdout + result.stderr);
+    }
+  }
+});

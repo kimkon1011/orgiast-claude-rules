@@ -237,6 +237,7 @@ test('SessionStart lane health は定義元から1本に収束する',()=>{
     for(let i=0;i<2;i++) {const r=spawnSync(process.execPath,['tools/register-hooks.mjs','--hooks-only'],{encoding:'utf8',env:{...process.env,ORGIAST_HOME:home,ORGIAST_REPO:repo}});assert.equal(r.status,0,r.stderr);}
     const s=JSON.parse(fs.readFileSync(path.join(home,'.claude/settings.json'),'utf8'));
     const hooks=s.hooks.SessionStart.flatMap(g=>g.hooks).filter(h=>h.command.includes('sessionstart-lane-health.mjs'));
-    assert.equal(hooks.length,1);assert.equal(hooks[0].timeout,5);
+    assert.equal(hooks.length,1);
+    assert.deepEqual(hooks[0], { type: 'command', command: `node "${path.join(repo, 'tools', 'sessionstart-lane-health.mjs')}" --hook`, timeout: 5 });
   } finally {fs.rmSync(home,{recursive:true,force:true});}
 });

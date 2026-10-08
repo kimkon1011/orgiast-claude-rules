@@ -35,7 +35,7 @@ test('probe repairs healthy demotes, classifies payment and rate limits, caches 
     if(p==='codex' && !options.dryRun) codexTasks++;
     return p==='gemini' ? {code:1,text:'HTTP 402 prepayment credits are depleted'} : p==='glm' ? {code:1,text:'HTTP 429 retry in 10 minutes'} : {code:0,text:'PONG'};
   };
-  const notify = async text => { notifications++; assert.match(text,/kim@orgiast.jp/); assert.match(text,/オートチャージ ON/); return {delivered:'dm'}; };
+  const notify = async text => { notifications++; assert.match(text,/kim@orgiast.jp/); assert.match(text,/Setup auto-reload/); return {delivered:'dm'}; };
   const result = await laneDoctorProbe({home:h,now,probe,notify});
   assert.equal(result.lanes.gemini.reason,'dead:payment_required'); assert.equal(result.lanes.codex.alive,true);
   assert.deepEqual(read(h,'routing-overrides.json').demote,{}); assert.equal(result.lanes.glm.until,now+600000);
@@ -133,4 +133,10 @@ test('unprobed configuration remains distinct and equal-time limits are supersed
   write(h, 'lane-health.json', { lanes: { codex: { alive: true, reason: 'auth_ok:probe_ok', probedAt: stamp, lastProbeOkAt: stamp } } });
   fs.writeFileSync(path.join(h, '.claude/codex-limit-history.jsonl'), JSON.stringify({ t: now, until: now + 86400000 }) + '\n');
   for (const minutes of [31, 32]) assert.equal(laneDoctorQuick({ home: h, now: now + minutes * 60000 }).lanes.codex.alive, true);
+});
+
+test('Gemini billing notification includes official steps, account, outcome and fallback', t => {
+  const text = notificationText({provider:'gemini',reason:'dead:payment_required'},fixture(t));
+  for (const expected of ['https://aistudio.google.com/billing','kim@orgiast.jp','個人 Gmail','シークレットウィンドウ','右上アバター','Available credits','Setup auto-reload','Manage auto-reload','支払い方法・補充額・最低残高しきい値','monthly auto-charge limit','保存','0 より大きく','03:00','次セッション開始','gemini ✅','キー所有アカウントが別','Gemini まだ 402']) assert.ok(text.includes(expected), expected);
+  assert.match(text,/\n根拠: https:\/\/ai.google.dev\/gemini-api\/docs\/billing$/);
 });

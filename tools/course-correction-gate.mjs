@@ -13,7 +13,14 @@ export function evaluateCourseCorrections(ctx, { home = laneHome(), rules = JSON
   for (const rule of rules) {
     const textPatterns = (rule.detectText || []).map(p => new RegExp(p, 'i'));
     const evidencePatterns = (rule.detectEvidence || []).map(p => new RegExp(p, 'i'));
-    const textHit = textPatterns.some(p => p.test(text));
+    const excluded = (rule.excludeText || []).map(p => new RegExp(p, 'i'));
+    // 除外は一致単位。免責 URL と未確認 URL が混在しても後者は検出する。
+    const matched = textPatterns.some(p => [...text.matchAll(new RegExp(p.source, 'gi'))]
+      .some(match => !excluded.some(ex => ex.test(match[0]))));
+    const evidenceTools = (rule.requireEvidenceTools || []).map(p => new RegExp(p, 'i'));
+    const hasEvidenceTool = events.some(e => e.type === 'tool_use' && evidenceTools.some(p =>
+      [e.name, e.input?.command, e.input?.script].some(value => typeof value === 'string' && p.test(value))));
+    const textHit = matched && !hasEvidenceTool;
     const evidenceIndex = events.findIndex(e => e.type === 'tool_result' && evidencePatterns.some(p => p.test(resultText(e.content))));
     // 証跡だけの一致は台帳への警告に留め、放置の判定は lane-abandonment-gate に任せる。
     const hit = textHit || evidenceIndex >= 0;

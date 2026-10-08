@@ -118,7 +118,14 @@ export function notificationText(item, home) {
     for (const f of [path.join(home, '.claude/gemini.env'), path.join(home, '.gemini/.env')]) {
       try { const comments = fs.readFileSync(f, 'utf8').split('\n').filter(l => /^\s*#/.test(l)).join('\n'); owner = comments.match(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/i)?.[0] || owner; } catch {}
     }
-    return `Gemini が停止しています（${item.reason}）。1. https://aistudio.google.com/ を kim@orgiast.jp で開く。2. 右上のアカウントが kim@orgiast.jp であることを確認（使用キーの所有アカウント: ${owner}）。3. 使用キーに対応するプロジェクトの請求・残高設定を開く。4. オートチャージ ON を推奨（手動チャージは禁止ルール）。必要なら支払い方法を登録し、自動補充の金額・しきい値を確認して保存する。5. 保存後は Claude が lane-doctor --probe で復旧を確認します。`;
+    return `Gemini が停止しています（${item.reason}）。
+1. https://aistudio.google.com/billing を kim@orgiast.jp で開く（既定アカウントが個人 Gmail のためシークレットウィンドウ推奨）。
+2. 右上アバターが kim@orgiast.jp か確認（使用キーの所有アカウント: ${owner}）。
+3. 「Available credits」の「Setup auto-reload」（既に設定済みなら「Manage auto-reload」）を開く。
+4. 支払い方法・補充額・最低残高しきい値を設定し、月間上限（Monthly Limit / monthly auto-charge limit）も設定して保存する。
+5. 成功の見え方: Available credits が 0 より大きくなる。翌 03:00 の夜間 probe か次セッション開始の 1 行で gemini ✅。
+6. 失敗時: 402 が続けばキー所有アカウントが別の可能性。「Gemini まだ 402」と Claude に一言。
+根拠: https://ai.google.dev/gemini-api/docs/billing`;
   }
   const urls = { codex: 'https://chatgpt.com/', deepseek: 'https://platform.deepseek.com/', glm: 'https://z.ai/', groq: 'https://console.groq.com/', openrouter: 'https://openrouter.ai/' };
   const account = item.provider === 'codex' ? codexAuthStatus(home).email || 'kim@orgiast.jp（保存認証のアカウントは未確認）' : '契約したアカウント（キー所有者は未確認）';

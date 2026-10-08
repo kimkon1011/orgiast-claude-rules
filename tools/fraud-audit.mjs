@@ -7,7 +7,7 @@
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 
 const DAY = 86_400_000;
 const SEVERITIES = ['high', 'medium', 'info'];
@@ -252,6 +252,6 @@ export async function main(args = process.argv.slice(2), { fetchImpl = globalThi
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+if (isEntry(import.meta.url)) {
   process.exitCode = await main();
 }

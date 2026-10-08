@@ -17,6 +17,19 @@ export function keyservePcId(home, env = process.env) {
   return /^[A-Za-z0-9._-]{1,64}$/.test(pcId) ? pcId : '';
 }
 
+/** The server verifies the signature; this only selects the pcId claimed by the enroll request. */
+export function keyserveEnrollPcId(token) {
+  if (typeof token !== 'string' || !token.startsWith('ORG1.')) return '';
+  const parts = token.split('.');
+  if (parts.length !== 4) return '';
+  try {
+    const pcId = Buffer.from(parts[1], 'base64url').toString('ascii');
+    return /^[A-Za-z0-9._-]{1,64}$/.test(pcId) ? pcId : '';
+  } catch {
+    return '';
+  }
+}
+
 export function keyserveAuthHeaders(secret, now = Date.now(), pcId = '') {
   const ts = Math.floor(now / 1000).toString();
   return {

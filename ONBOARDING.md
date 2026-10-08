@@ -1168,6 +1168,8 @@ node -e "fetch('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rule
 
 **投稿時は「開発した人 + kim」の2名に DM する（全アカウント絶対 / 2026-09-06 kim厳命）**。開発者IDは `FEEDBACK_OWNER_DISCORD_ID`（Next.js は env、GAS は Script Property）で渡し、インストーラが `~/.claude/orgiast-discord-user-id.txt` から自動設定するので user には聞かない。**対応完了時は投稿者本人へ必ず DM で完了報告する**。経路は夜間バッチ登録済みの `tools/feedback-done-notify.mjs` → 中継 `POST /api/feedback-done`、完了判定はその投稿から作られた GitHub Issue が closed になったこと。Issue を経由せず直した場合は `node tools/feedback-done-notify.mjs --message-id <id> --summary "..."` を手動実行する。投稿者を一意に特定できない場合は推測で別人へ送らず、kim にまとめて届く「返せなかった件」を確認し、名簿（Discord の表示名）を直して再実行する。**今後作るアプリはこの2つなしで「完成」と呼ばない**。導入完了条件は、実際に開発者へ着信し、完了報告が投稿者へ着信したことを確認したこと（§1.4）。
 
+**機械検査で止める（全アカウント / 2026-10-08 追加）**。`tools/feedback-form-gate.mjs`（PreToolUse・`register-hooks.mjs` で全PCに配布）が本番反映コマンド（`vercel deploy`/`vc.js deploy`/`clasp push`/`gas/deploy.mjs` 等）の直前に、①フォーム未搭載（Next.js は `FeedbackWidget`、GAS は `FeedbackRelay`）②Next.js のアプリ名が完了報告の台帳 `tools/feedback-apps.json` に未登録、のどちらかなら deny する。台帳は `feedback-to-issues.mjs` の対応表に合流するので、**1行足せば Issue 化と完了報告の対象に自動で入る**（足すのは導入した Claude の仕事。正本ブランチ + automerge ラベルの PR で出す）。社員が使わないアプリは user に確認したうえで、理由を1行書いた `.feedback-exempt` をリポジトリ直下に置けば対象外。経緯: カフェ業務チェックアプリが 2026-08-27 の作成後に3回改修・本番デプロイされても未搭載のままだった（ルールが文章だけで検査が無く、台帳もハードコードで新アプリが完了報告の対象に入らなかった）。
+
 ---
 
 

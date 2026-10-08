@@ -8,10 +8,11 @@
   },
   "kimko-PC": {
     "sheetName": "作業用011",
+    "remoteName": "作業用011",
     "hostname": "DESKTOP-PPD5V8I",
     "person": "金功勇",
     "aliases": ["作業用011(=DESKTOP-PPD5V8I)"],
-    "_evidence": "2026-08-27 20:0x に Discord へ初報告し 🖥 hostname=DESKTOP-PPD5V8I を送ってきた（webhook 復旧の実証）。シート行『作業用011(=DESKTOP-PPD5V8I)』と hostname 一致"
+    "_evidence": "2026-08-27 20:0x に Discord へ初報告し 🖥 hostname=DESKTOP-PPD5V8I を送ってきた（webhook 復旧の実証）。シート行『作業用011(=DESKTOP-PPD5V8I)』と hostname 一致。remoteName 根拠(2026-10-08): 台帳『PC稼働状況』D列=作業用011 の行(担当 金功勇)の fleet-mail疎通の根拠に『kimko-PCが送信/返信8通…紐付け=fleet-pc-map(作業用011)』とあり、作業用011=kimko-PC を台帳側が明示"
   },
   "HP": {
     "sheetName": "東邦2階HP",
@@ -26,7 +27,22 @@
   },
   "作業用999": {
     "sheetName": "作業用999",
+    "remoteName": "作業用999",
     "installedAt": "2026-09-03",
-    "_evidence": "配布インストーラ完走(結果 OK 29 / NG 3)と claude --version 2.1.258 を kim のスクリーンショットで実機確認(2026-09-03)。hostname は未報告のため未記入。fleet-sheet.env 未取得で未報告 → PR #285 の自己修復待ち"
+    "_evidence": "remoteName 根拠: 既存 sheetName=作業用999(シートD列表記)。ただし hostname 未報告のため fleet-mail では照合値=キー名『作業用999』になり、実機の label/hostname と一致する保証なし。配布インストーラ完走(結果 OK 29 / NG 3)と claude --version 2.1.258 を kim のスクリーンショットで実機確認(2026-09-03)。hostname は未報告のため未記入。fleet-sheet.env 未取得で未報告 → PR #285 の自己修復待ち"
+  },
+  "_unverified": {
+    "_note": "証拠が弱く確定できない対応。fleet-mail の宛先解決(remoteName 照合)には使わない。確定したらトップレベルのエントリへ remoteName 付きで移す。",
+    "作業用019": {
+      "remoteName": "作業用019",
+      "candidate": "nishi-PC",
+      "candidateHostname": "DESKTOP-04U31RG",
+      "person": "nishi@orgiast.jp",
+      "_evidence": "memory feedback_fleet_pc_login_per_assigned_account『作業用019 = nishi@orgiast.jp でログイン』。nishi-PC(DESKTOP-04U31RG, git=seisaku-team@orgiast.jp) と同一PCかは未確定(memory project_lahaina_handover_to_nishi 明記)。台帳『PC稼働状況』タブは取得できたのが先頭4行のみで 作業用019 の行も DESKTOP-04U31RG の行も確認できず(2026-10-08)"
+    },
+    "作業用004民泊用": {
+      "remoteName": "作業用004民泊用",
+      "_evidence": "台帳に手書き行(金功勇)あり、hostname 紐付け証拠なし・fleet-mailタブ記録なし。DESKTOP-2D0R4LI は kim-PC であり民泊用ではない(kim 回答 2026-08-27)"
+    }
   }
 }

@@ -19,7 +19,7 @@
       "https?://[^\\s)）]+"
     ],
     "detectEvidence": [],
-    "severity": "block",
+    "severity": "warn",
     "gate": "course-correction-gate",
     "fix": "WebFetch か curl で到達確認し、404/ログイン以外の到達結果を得てから提示。公式 doc 記載なら doc URL を根拠として併記",
     "requireEvidenceTools": [
@@ -27,12 +27,22 @@
       "curl",
       "gh api",
       "playwright",
-      "mcp__claude_ai_"
+      "gh ",
+      "vercel",
+      "clasp",
+      "mcp__",
+      "Artifact"
     ],
     "excludeText": [
       "^https?://localhost(?::[0-9]+)?(?:[/?#]|$)",
       "^https?://github\\.com/[^/?#]+/[^/?#]+/pull/[0-9]+/?(?:[?#].*)?$",
-      "^https?://claude\\.ai/artifact(?:[/?#]|$)"
-    ]
+      "^https?://claude\\.ai/artifact(?:[/?#]|$)",
+      "^https?://docs\\.google\\.com/a/orgiast\\.jp/",
+      "^https?://script\\.google\\.com/a/",
+      "^https?://drive\\.google\\.com/.*[?&]authuser="
+    ],
+    "promoteTo": "block",
+    "promoteAfter": "2026-10-15",
+    "promoteCondition": "ledger の CC-002 warn のうち偽陽性が 20% 未満"
   }
 ]

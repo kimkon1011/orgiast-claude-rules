@@ -1,7 +1,14 @@
 
+# 接続文字列などの秘密(freee-query.mjs が読む)。絶対にコミットしない
+.env.local
+
 # Codex CLI が作業ごとに置く一時ファイル(コミット対象外)
 .codex-task.md
 memory-shared/
+
+# gpage-fetch.mjs 用の playwright-core をローカルで npm install したときの成果物
+node_modules/
+package-lock.json
 
 # Codex 委譲時のラッパーが吐く実行ログ(内容は都度使い捨て)
 /codex-rule*.log
@@ -17,3 +24,10 @@ tools/.ps.tmp.ps1
 
 # Genspark Tool CLI の自動生成スキル (gsk init-skills)。ベンダー成果物なのでコミットしない
 .gsk/
+
+# Isolated CI verification home and evidence
+/.tmp-home-ci/
+
+# 夜間 eval-harness が ~/.claude/eval-results.jsonl から再生成するマシンローカル生成物。
+# 追跡すると毎晩 dirty になり dirty-worktree-guard が rescue ブランチを作るため追跡しない。
+tools/routing-table.json

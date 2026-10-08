@@ -2,9 +2,10 @@
 # ASCII only for Windows PowerShell 5.1.
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'ensure-run-hidden.ps1')
+. (Join-Path $PSScriptRoot 'resolve-synced-repo.ps1')
 
-# Use this repository: another account's synced checkout is not the local master.
-$repo = Split-Path -Parent $PSScriptRoot
+# Prefer the synced repo so the task runs code kept up to date.
+$repo = Resolve-RegisterRepoRoot -Fallback (Split-Path -Parent $PSScriptRoot) -RequiredPaths @('tools\hub-push.mjs')
 $script = Join-Path $repo 'tools\hub-push.mjs'
 if (-not (Test-Path -LiteralPath $script)) { throw "script not found: $script" }
 $node = (Get-Command node -ErrorAction SilentlyContinue).Source

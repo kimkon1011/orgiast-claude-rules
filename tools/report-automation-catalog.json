@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "asOf": "2026-09-25",
+  "title": "AI支援レポート自動化による人手削減（P-0147）",
+  "sources": {
+    "adMetrics": "広告管理ツールのキャンペーン別CSVエクスポート（フィクスチャで再現）",
+    "hubspot": "HubSpotのディールCSVエクスポート（フィクスチャで再現）"
+  },
+  "stageAliases": {
+    "won": ["closedwon", "closed won", "closed_won", "受注"],
+    "lost": ["closedlost", "closed lost", "closed_lost", "失注"],
+    "open": ["open", "進行中", "appointment scheduled"]
+  },
+  "manualSteps": [
+    { "id": "export-ad",      "label": "広告管理ツールからキャンペーン別CSVを書き出す", "minutes": 5,  "residualMinutes": 1,  "basis": "assumed", "autoStatus": "automated",   "automatedBy": "ファイル配置のみ（取り込み）" },
+    { "id": "export-hubspot", "label": "HubSpotからディールCSVを書き出す",             "minutes": 5,  "residualMinutes": 1,  "basis": "assumed", "autoStatus": "automated",   "automatedBy": "ファイル配置のみ（取り込み）" },
+    { "id": "clean-ad",       "label": "広告CSVの不要列削除・日付整形",                "minutes": 15, "residualMinutes": 0,  "basis": "assumed", "autoStatus": "automated",   "automatedBy": "parseCsv + normalizeAdRows" },
+    { "id": "clean-hubspot",  "label": "HubSpot CSVのステージ名寄せ・重複除去",        "minutes": 15, "residualMinutes": 0,  "basis": "assumed", "autoStatus": "automated",   "automatedBy": "normalizeStage + deal_id 重複除去" },
+    { "id": "join",           "label": "キャンペーン名で広告とディールを突合",          "minutes": 20, "residualMinutes": 0,  "basis": "assumed", "autoStatus": "automated",   "automatedBy": "buildReport の merge" },
+    { "id": "calc",           "label": "CPA/ROAS/リード単価を計算",                    "minutes": 15, "residualMinutes": 0,  "basis": "assumed", "autoStatus": "automated",   "automatedBy": "metricsFor" },
+    { "id": "chart",          "label": "前月比を含む集計表を作る",                      "minutes": 20, "residualMinutes": 0,  "basis": "assumed", "autoStatus": "automated",   "automatedBy": "monthOverMonth" },
+    { "id": "narrative",      "label": "所感・考察の文章を書く",                        "minutes": 25, "residualMinutes": 25, "basis": "assumed", "autoStatus": "manual",      "automatedBy": "未自動化（ChatGPTレーンは未実測のため本計測に含めない）" },
+    { "id": "format",         "label": "レポートに整形（表・体裁）",                    "minutes": 15, "residualMinutes": 0,  "basis": "assumed", "autoStatus": "automated",   "automatedBy": "renderReportMarkdown" },
+    { "id": "distribute",     "label": "共有用に書き出して配布",                        "minutes": 10, "residualMinutes": 2,  "basis": "assumed", "autoStatus": "automated",   "automatedBy": "out ディレクトリへの書き出し（配布自体は未検証）" }
+  ],
+  "assumptions": {
+    "reportsPerMonth": 4,
+    "hourlyRateJpy": 4000,
+    "implementationMinutes": 180
+  },
+  "thresholds": { "minReductionPct": 0.5 }
+}

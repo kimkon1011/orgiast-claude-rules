@@ -282,3 +282,137 @@ test('kim は設定済みowner IDの別名として解決しKimiとは混同し�
   assert.equal(f.output.at(-1).items[0].resolution, 'owner_is_kim');
   assert.equal(f.output.at(-1).items[0].escalated, false);
 });
+
+const kim = '715210673642012733';
+function reminderFixture(t, state = 'answered', extra = {}) {
+  const f = fixture(t);
+  const file = path.join(f.dir, 'feedback-progress-ledger.json');
+  fs.writeFileSync(file, JSON.stringify({ version: 1, items: {
+    'example/app#21': { lastState: state, notifiedAt: now.toISOString(), delivery: '42', ...extra },
+  } }));
+  f.options.loadIssue = async () => ({ issue: { ...issue, comments: state === 'answered'
+    ? [{ ...question, html_url: `${issue.html_url}#issuecomment-123` }] : [] },
+  prs: state.startsWith('pr_') ? [{ ...pr, statusCheckRollup: [{ conclusion: state === 'pr_blocked' ? 'FAILURE' : 'SUCCESS' }] }] : [] });
+  f.at = (days, options = {}) => runProgressNotify({ ...f.options, ...options,
+    io: { ...f.options.io, now: () => new Date(+now + days * 86400000) } });
+  f.read = () => JSON.parse(fs.readFileSync(file)).items['example/app#21'];
+  return { ...f, file };
+}
+
+test('旧台帳の3/7/14/28日境界と同日再実行、answeredはkimへ質問リンクを送る', async (t) => {
+  const f = reminderFixture(t);
+  for (const [days, count] of [[2.999, 0], [3, 1], [3, 1], [6.999, 1], [7, 3], [7, 3],
+    [13.999, 3], [14, 5], [14, 5], [27.999, 5], [28, 7], [28, 7]]) {
+    await f.at(days);
+    assert.equal(f.sent.length, count, `day ${days}`);
+  }
+  assert.deepEqual(f.sent.map((dm) => dm.userId), [kim, kim, '42', kim, '42', kim, '42']);
+  assert.match(f.sent[0].content, /あなたの回答待ちで 3 日/);
+  assert.match(f.sent[0].content, /#issuecomment-123/);
+  assert.match(f.sent[1].content, /遅れています/);
+  for (const dm of f.sent.filter((dm) => dm.userId === '42')) assert.match(dm.content, /お待たせしています。まだ対応中です/);
+  assert.equal(f.read().firstSeenAt, now.toISOString());
+  assert.equal(f.read().notifiedAt, now.toISOString());
+  assert.equal(f.read().reminderCount, 4);
+});
+
+test('全状態のkim督促、依頼主がkimなら7日目も1通だけ', async (t) => {
+  for (const [state, pattern] of [['pr_open', /あなたの承認待ち/], ['pr_blocked', /自動修復が止まっています/], ['stalled', /状況を確認してください/]]) {
+    const f = reminderFixture(t, state);
+    await f.at(3);
+    assert.equal(f.sent.length, 1);
+    assert.equal(f.sent[0].userId, kim);
+    assert.match(f.sent[0].content, pattern);
+    if (state.startsWith('pr_')) assert.ok(f.sent[0].content.includes(pr.url));
+  }
+  const f = reminderFixture(t, 'answered', { delivery: kim });
+  fs.writeFileSync(path.join(f.dir, 'feedback-issue-ledger.json'), JSON.stringify({ items: [{ repo: 'example/app', number: 21, submitter_discord_id: kim }] }));
+  await f.at(7);
+  await f.at(7);
+  assert.equal(f.sent.length, 1);
+  assert.equal(f.sent[0].userId, kim);
+});
+
+test('状態変更はfirstSeenAtと督促回数をリセットする', async (t) => {
+  const f = reminderFixture(t);
+  await f.at(3);
+  await f.at(7, { loadIssue: async () => ({ issue, prs: [pr] }) });
+  assert.equal(f.read().lastState, 'pr_open');
+  assert.equal(f.read().firstSeenAt, new Date(+now + 7 * 86400000).toISOString());
+  assert.equal(f.read().reminderCount, 0);
+  assert.equal(f.read().remindedAt, null);
+  assert.equal(f.read().reminderDeliveries, undefined);
+});
+
+test('督促dry-runは既存台帳もDMも変更しない', async (t) => {
+  const f = reminderFixture(t);
+  const before = fs.readFileSync(f.file, 'utf8');
+  await f.at(7, { args: ['--dry-run', '--json'] });
+  assert.equal(f.sent.length, 0);
+  assert.equal(fs.readFileSync(f.file, 'utf8'), before);
+  assert.deepEqual(f.output.at(-1).items[0].reminder.recipientIds, [kim, '42']);
+});
+
+test('既定20通と指定上限は通常通知も集約1通も含む。保留分は台帳を進めない', async (t) => {
+  for (const [limit, args] of [[20, ['--json']], [3, ['--json', '--max-reminders', '3']], [1, ['--json', '--max-reminders', '1']]]) {
+    const f = fixture(t);
+    const items = Array.from({ length: 25 }, (_, i) => ({ repo: 'example/app', number: i + 1, submitter_discord_id: '42' }));
+    fs.writeFileSync(path.join(f.dir, 'feedback-issue-ledger.json'), JSON.stringify({ items }));
+    await runProgressNotify({ ...f.options, args });
+    assert.equal(f.sent.length, limit);
+    assert.equal(f.sent.at(-1).userId, kim);
+    assert.match(f.sent.at(-1).content, /通知上限/);
+    const file = path.join(f.dir, 'feedback-progress-ledger.json');
+    assert.equal(fs.existsSync(file) ? Object.keys(JSON.parse(fs.readFileSync(file)).items).length : 0, limit - 1);
+  }
+});
+
+test('督促の片方が失敗しても同日に成功済み宛先へ重複送信しない', async (t) => {
+  const f = reminderFixture(t);
+  await f.at(7, { sendDm: async (dm) => {
+    if (dm.userId === '42') throw new Error('failure');
+    f.sent.push(dm);
+  } });
+  assert.equal(f.read().reminderCount, 0);
+  await f.at(7);
+  assert.deepEqual(f.sent.map((dm) => dm.userId), [kim, '42']);
+  assert.equal(f.read().reminderCount, 1);
+});
+
+test('firstSeenAtを優先し、実行が遅れても過去の段階を連続送信しない', async (t) => {
+  const f = reminderFixture(t, 'answered', { firstSeenAt: new Date(+now - 28 * 86400000).toISOString() });
+  await f.at(0);
+  await f.at(1);
+  assert.equal(f.sent.length, 2);
+  assert.equal(f.output[0].items[0].reminder.stage, 28);
+});
+
+test('督促上限による片方の保留は翌実行で残りだけ再試行する', async (t) => {
+  const f = reminderFixture(t);
+  fs.writeFileSync(path.join(f.dir, 'feedback-issue-ledger.json'), JSON.stringify({ items: [
+    { repo: 'example/app', number: 21, submitter_discord_id: '42' },
+    { repo: 'example/app', number: 22, submitter_discord_id: '42' },
+  ] }));
+  await f.at(7, { args: ['--json', '--max-reminders', '2'] });
+  assert.equal(f.sent.length, 2);
+  assert.equal(f.sent[0].userId, kim);
+  assert.match(f.sent[1].content, /通知上限/);
+  assert.equal(f.read().reminderCount, 0);
+  await f.at(7);
+  assert.equal(f.sent.length, 4);
+  assert.equal(f.sent[2].userId, '42');
+  assert.equal(f.read().reminderCount, 1);
+  await f.at(7);
+  assert.equal(f.sent.length, 4);
+});
+
+test('不正な上限値は送信も台帳更新もしない', async (t) => {
+  for (const value of ['0', '-1', '1.5', 'bad', undefined]) {
+    const f = reminderFixture(t);
+    const before = fs.readFileSync(f.file, 'utf8');
+    await f.at(7, { args: ['--json', '--max-reminders', ...(value === undefined ? [] : [value])] });
+    assert.equal(f.output[0].ok, false);
+    assert.equal(f.sent.length, 0);
+    assert.equal(fs.readFileSync(f.file, 'utf8'), before);
+  }
+});

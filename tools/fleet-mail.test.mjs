@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { main, parseArgs, createClient, waitForReply, acquireLock, LOCK_MS, readInbox } from './fleet-mail.mjs';
+import { main, parseArgs, createClient, waitForReply, acquireLock, LOCK_MS, readInbox, findPriorReply } from './fleet-mail.mjs';
 import { main as register } from './register-fleet-mail.mjs';
 import { consentCommand } from './fleet-agent.mjs';
 
@@ -156,4 +156,80 @@ test('dry-run secret redaction preserves valid JSON', async t => {
   f.deps.request = async () => ({ messages: [mail({ body: 'token=secret' })] });
   await main(['--poll', '--dry-run'], f.deps);
   assert.equal(JSON.parse(f.output[0])[0].body, '[REDACTED]');
+});
+test('findPriorReply: sent.jsonl with reply line blocks reply without --force', async t => {
+  const f = fixture(t);
+  const sentFile = path.join(f.dir, 'fleet-mail-sent.jsonl');
+  fs.writeFileSync(sentFile, `${JSON.stringify({ at: '2025-01-01T00:00:00Z', action: 'reply', id: 'mail-123' })}\n`);
+  assert.equal(await main(['--reply', 'mail-123', '--body-file', f.body], f.deps), 3);
+  assert.equal(f.calls.length, 0);
+  assert.ok(f.errors.some(e => e.includes('返信済み')));
+});
+test('findPriorReply: --force sends and marks forced', async t => {
+  const f = fixture(t);
+  const sentFile = path.join(f.dir, 'fleet-mail-sent.jsonl');
+  fs.writeFileSync(sentFile, `${JSON.stringify({ at: '2025-01-01T00:00:00Z', action: 'reply', id: 'mail-123' })}\n`);
+  assert.equal(await main(['--reply', 'mail-123', '--body-file', f.body, '--force'], f.deps), 0);
+  assert.equal(f.calls.length, 1);
+  const sentLog = fs.readFileSync(sentFile, 'utf8').trim().split('\n').map(l => JSON.parse(l));
+  assert.equal(sentLog[sentLog.length - 1].forced, true);
+});
+test('inbox updated after reply, second reply blocked', async t => {
+  const f = fixture(t);
+  const inboxDir = path.join(f.dir, 'fleet-inbox');
+  fs.mkdirSync(inboxDir);
+  const mailObj = mail({ status: 'new', resultBody: '' });
+  fs.writeFileSync(path.join(inboxDir, 'mail-20260921-1234.json'), JSON.stringify(mailObj));
+  fs.writeFileSync(f.body, 'test reply');
+  assert.equal(await main(['--reply', 'mail-20260921-1234', '--body-file', f.body], f.deps), 0);
+  const updated = JSON.parse(fs.readFileSync(path.join(inboxDir, 'mail-20260921-1234.json'), 'utf8'));
+  assert.equal(updated.status, 'done');
+  assert.equal(updated.resultBody, 'test reply');
+  assert.ok(updated.readAt);
+  assert.ok(updated.resultAt);
+  assert.equal(f.calls.length, 1);
+  // second attempt without --force should fail
+  assert.equal(await main(['--reply', 'mail-20260921-1234', '--body-file', f.body], f.deps), 3);
+  assert.equal(f.calls.length, 1); // no extra network call
+  assert.ok(f.errors.some(e => e.includes('返信済み')));
+});
+test('request fails: inbox unchanged, no sent log', async t => {
+  const f = fixture(t);
+  const inboxDir = path.join(f.dir, 'fleet-inbox');
+  fs.mkdirSync(inboxDir);
+  const mailObj = mail({ status: 'new', resultBody: '' });
+  fs.writeFileSync(path.join(inboxDir, 'mail-20260921-1234.json'), JSON.stringify(mailObj));
+  f.deps.request = async () => { throw new Error('network error'); };
+  await assert.rejects(() => main(['--reply', 'mail-20260921-1234', '--body-file', f.body], f.deps), /network error/);
+  // inbox should still be 'new'
+  const after = JSON.parse(fs.readFileSync(path.join(inboxDir, 'mail-20260921-1234.json'), 'utf8'));
+  assert.equal(after.status, 'new');
+  // sent.jsonl should not have a reply line
+  const sentFile = path.join(f.dir, 'fleet-mail-sent.jsonl');
+  if (fs.existsSync(sentFile)) {
+    const lines = fs.readFileSync(sentFile, 'utf8').trim().split('\n');
+    assert.equal(lines.filter(l => l.includes('"action":"reply"')).length, 0);
+  }
+});
+test('findPriorReply: malformed lines ignored, different id ignored', async t => {
+  const f = fixture(t);
+  const sentFile = path.join(f.dir, 'fleet-mail-sent.jsonl');
+  fs.writeFileSync(sentFile, `garbage\n${JSON.stringify({ at: '2025-01-01T00:00:00Z', action: 'reply', id: 'mail-other' })}\n`);
+  // no prior for mail-123 → should proceed
+  assert.equal(await main(['--reply', 'mail-123', '--body-file', f.body], f.deps), 0);
+  assert.equal(f.calls.length, 1);
+});
+test('parseArgs: --poll --force rejects, --reply --body-file --force accepts', t => {
+  assert.throws(() => parseArgs(['--poll', '--force']), /option not applicable/);
+  const opts = parseArgs(['--reply', 'mail-1', '--body-file', 'x', '--force']);
+  assert.equal(opts['--reply'], 'mail-1');
+  assert.equal(opts['--body-file'], 'x');
+  assert.equal(opts['--force'], true);
+});
+test('findPriorReply treats a damaged inbox file as no record', t => {
+  const f = fixture(t); fs.mkdirSync(path.join(f.dir, 'fleet-inbox'));
+  fs.writeFileSync(path.join(f.dir, 'fleet-inbox', 'mail-9.json'), '{broken');
+  assert.equal(findPriorReply(f.dir, 'mail-9'), null);
+  fs.writeFileSync(path.join(f.dir, 'fleet-inbox', 'mail-9.json'), JSON.stringify({ id: 'mail-9', status: 'done', resultAt: '2026-10-01T00:00:00Z' }));
+  assert.deepEqual(findPriorReply(f.dir, 'mail-9'), { at: '2026-10-01T00:00:00Z', action: 'inbox-done' });
 });

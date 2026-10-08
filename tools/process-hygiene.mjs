@@ -44,6 +44,8 @@ export function parseOptions(argv = process.argv.slice(2)) {
     maxAgeMin: numberAfter(argv, '--max-age-min', 120),
     maxBatchAgeMin: numberAfter(argv, '--max-batch-age-min', 240),
     alertThreshold: numberAfter(argv, '--alert-threshold', 10),
+    vscodeIdleMin: numberAfter(argv, '--vscode-idle-min', 720),
+    vscodeIdleMinFreeGb: numberAfter(argv, '--vscode-idle-min-free-gb', 16),
   };
 }
 
@@ -93,6 +95,111 @@ export function classifyOrphanConsoleWindows(processes) {
     const bytes = Number(terminal.WorkingSetSize ?? terminal.workingSetSize ?? 0);
     return [{ pid: terminalPid, name, commandLine: String(terminal.CommandLine ?? terminal.commandLine ?? ''), kind: 'orphan-console-window', ageMin: 0, mb: Number.isFinite(bytes) ? bytes / 1024 / 1024 : 0 }];
   });
+}
+
+const VSCODE_IDLE_MAX_KILLS = 15;
+const START_TIME_TOLERANCE_MS = 2 * MINUTE;
+
+// VSCode 拡張の claude.exe だけを対象にする。WindowsApps の Claude デスクトップアプリは含めない。
+export function isVscodeClaude(processInfo) {
+  const name = String(processInfo.Name ?? processInfo.name ?? '').toLowerCase();
+  const command = String(processInfo.CommandLine ?? processInfo.commandLine ?? '').replaceAll('/', '\\').toLowerCase();
+  if (name !== 'claude.exe') return false;
+  if (command.includes('\\windowsapps\\claude_')) return false;
+  return command.includes('\\.vscode\\extensions\\anthropic.claude-code-') && command.includes('\\native-binary\\claude.exe');
+}
+
+// 純粋関数: opts.readSession(pid) -> sessions JSON か null、opts.transcriptMtime(sessionId) -> ms か null。
+export function classifyVscodeIdle(processes, now = Date.now(), opts = {}) {
+  const idleMin = opts.idleMin ?? 720;
+  const max = opts.max ?? VSCODE_IDLE_MAX_KILLS;
+  const rows = Array.isArray(processes) ? processes : processes ? [processes] : [];
+  if (opts.batchLockActive) return [];
+  const found = [];
+  for (const processInfo of rows) {
+    if (!isVscodeClaude(processInfo)) continue;
+    const pid = Number(processInfo.ProcessId ?? processInfo.pid);
+    if (!Number.isInteger(pid) || pid <= 0) continue;
+    let session = null;
+    try { session = opts.readSession?.(pid) ?? null; } catch { session = null; }
+    if (!session || typeof session !== 'object') continue;
+    if (session.entrypoint !== 'claude-vscode' || session.status === 'busy') continue;
+    const activity = Math.max(Number(session.statusUpdatedAt) || 0, Number(session.updatedAt) || 0);
+    if (!activity) continue;
+    let lastMs = activity;
+    let mtime = null;
+    try { mtime = session.sessionId ? opts.transcriptMtime?.(session.sessionId) ?? null : null; } catch { mtime = null; }
+    if (Number.isFinite(mtime)) lastMs = Math.max(lastMs, mtime);
+    const idle = (now - lastMs) / MINUTE;
+    if (!(idle >= idleMin)) continue;
+    const startedAt = Number(session.startedAt);
+    const createdAt = creationTime(processInfo.CreationDate ?? processInfo.creationDate);
+    if (!Number.isFinite(startedAt) || !Number.isFinite(createdAt) || Math.abs(createdAt - startedAt) > START_TIME_TOLERANCE_MS) continue;
+    const bytes = Number(processInfo.WorkingSetSize ?? processInfo.workingSetSize ?? 0);
+    found.push({ pid, name: 'claude.exe', commandLine: String(processInfo.CommandLine ?? processInfo.commandLine ?? ''), kind: 'vscode-claude-idle', sessionId: session.sessionId ?? '', idleMin: idle, ageMin: idle, mb: Number.isFinite(bytes) ? bytes / 1024 / 1024 : 0 });
+  }
+  return found.sort((a, b) => b.idleMin - a.idleMin).slice(0, max);
+}
+
+// コミットメモリに余裕がある PC では VSCode 放置タブを止めない。止めると拡張が赤枠を出すため。
+// 空きが閾値未満のときだけ kill を許可する。
+export function shouldKillVscodeIdle(freeCommitGb, minFreeGb) {
+  if (minFreeGb === 0) return { kill: true, reason: 'gate disabled' };
+  if (!Number.isFinite(freeCommitGb)) return { kill: false, reason: 'commit free unknown' };
+  if (freeCommitGb < minFreeGb) return { kill: true, reason: 'commit free below threshold' };
+  return { kill: false, reason: 'commit free sufficient' };
+}
+
+// コミットメモリの空き（Win32_OperatingSystem.FreeVirtualMemory, KB）を GB で返す。失敗時は NaN。
+function commitFreeGb(spawnImpl = spawnSync) {
+  const command = '[Console]::Out.WriteLine((Get-CimInstance Win32_OperatingSystem).FreeVirtualMemory)';
+  const result = spawnImpl('powershell', ['-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8', windowsHide: true, timeout: 20_000 });
+  if (result.error || result.status !== 0) return Number.NaN;
+  const kb = Number(String(result.stdout ?? '').trim());
+  if (!Number.isFinite(kb)) return Number.NaN;
+  return kb / 1024 / 1024;
+}
+
+function readSessionFile(home, pid) {
+  try { return JSON.parse(fs.readFileSync(path.join(home, '.claude', 'sessions', `${pid}.json`), 'utf8')); }
+  catch { return null; }
+}
+
+function findTranscriptMtime(home, sessionId) {
+  try {
+    if (!/^[0-9a-f-]{8,64}$/i.test(String(sessionId))) return null;
+    const root = path.join(home, '.claude', 'projects');
+    let best = null;
+    for (const dir of fs.readdirSync(root, { withFileTypes: true })) {
+      if (!dir.isDirectory()) continue;
+      try { const m = fs.statSync(path.join(root, dir.name, `${sessionId}.jsonl`)).mtimeMs; if (best === null || m > best) best = m; } catch {}
+    }
+    return best;
+  } catch { return null; }
+}
+
+function batchLockActive(lock, processes, now) {
+  if (!lock) return false;
+  const age = now - Date.parse(lock.startedAt);
+  if (!Number.isFinite(age) || age < 0 || age > BATCH_LOCK_MAX_AGE_MS) return false;
+  return processes.some((row) => Number(row.ProcessId ?? row.pid) === Number(lock.pid));
+}
+
+// 子プロセスツリーごと停止する。
+function stopProcessTrees(items, spawnImpl = spawnSync) {
+  const failed = [];
+  for (const item of items) {
+    const result = spawnImpl('taskkill', ['/PID', String(item.pid), '/T', '/F'], { encoding: 'utf8', windowsHide: true, timeout: 20_000 });
+    if (result.error || result.status !== 0) failed.push(item.pid);
+  }
+  return failed;
+}
+
+function appendIdleLog(home, items, now = new Date()) {
+  if (!items.length) return;
+  const file = path.join(home, '.claude', 'logs', 'process-hygiene-events.log');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.appendFileSync(file, items.map((item) => `${now.toISOString()} category=vscode-claude-idle pid=${item.pid} sessionId=${item.sessionId} idleMin=${Math.round(item.idleMin)}\n`).join(''));
 }
 
 function targetKind(commandLine) {
@@ -265,6 +372,24 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     for (const item of stale) console.log(`pid=${item.pid} age=${item.ageMin.toFixed(0)}min mb=${item.mb.toFixed(1)} ${item.commandLine}`);
     console.log(`process-hygiene: orphan-console-windows ${opts.kill ? 'kill' : 'dry-run'} ${summary(orphanWindows)}`);
     for (const item of orphanWindows) console.log(`terminal-pid=${item.pid} mb=${item.mb.toFixed(1)} ${item.commandLine}`);
+    const freeGb = deps.commitFreeGb !== undefined ? Number(deps.commitFreeGb) : commitFreeGb(deps.spawnImpl);
+    const idleGate = shouldKillVscodeIdle(freeGb, opts.vscodeIdleMinFreeGb);
+    console.log(`process-hygiene: vscode-claude-idle gate コミット空き=${Number.isFinite(freeGb) ? freeGb.toFixed(1) : '不明'}GB 閾値=${opts.vscodeIdleMinFreeGb}GB → ${idleGate.kill ? 'kill有効' : 'skip'} (${idleGate.reason})`);
+    const idleClaude = classifyVscodeIdle(processes, now, {
+      idleMin: opts.vscodeIdleMin,
+      readSession: deps.readSession ?? ((pid) => readSessionFile(home, pid)),
+      transcriptMtime: deps.transcriptMtime ?? ((id) => findTranscriptMtime(home, id)),
+      batchLockActive: batchLockActive(deps.batchLock ?? readBatchLock(home), processes, now),
+    });
+    console.log(`process-hygiene: vscode-claude-idle ${opts.kill ? 'kill' : 'dry-run'} 候補=${idleClaude.length}件 (${summary(idleClaude)}, 閾値=${opts.vscodeIdleMin}分)`);
+    for (const item of idleClaude) console.log(`category=vscode-claude-idle pid=${item.pid} sessionId=${item.sessionId} idleMin=${Math.round(item.idleMin)} mb=${item.mb.toFixed(1)}`);
+    if (opts.kill && idleGate.kill) {
+      const failedIdle = (deps.stopTrees ?? ((items) => stopProcessTrees(items, deps.spawnImpl)))(idleClaude);
+      appendIdleLog(home, idleClaude.filter((item) => !failedIdle.includes(item.pid)));
+      console.log(`process-hygiene: vscode-claude-idle stopped=${idleClaude.length - failedIdle.length} failed=${failedIdle.length}`);
+    } else if (opts.kill) {
+      console.log(`process-hygiene: vscode-claude-idle stopped=0 skipped=${idleClaude.length} (gate: ${idleGate.reason})`);
+    }
     if (opts.kill) {
       await maybeAlert(stale, opts.alertThreshold, home, now, deps.notify ?? notifyKim);
       const failed = (deps.stopProcesses ?? ((items) => stopProcesses(items, deps.spawnImpl)))(stale);

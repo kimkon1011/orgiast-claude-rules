@@ -33,7 +33,8 @@ function transcriptPurpose(file) {
   let purpose = '';
   for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
     let rec;
-    if (!line.trim()) continue;
+    // マーカー無し行は解析を省く。ただし閉じていない（壊れた）行は従来どおり parse して debug に出す。
+    if (!line.includes(PURPOSE_MARKER) && (!line.trim() || line.trimEnd().endsWith('}'))) continue;
     try { rec = JSON.parse(line); } catch (error) { caught(file, error); continue; }
     if (rec?.type !== 'assistant') continue;
     const content = rec.message?.content ?? rec.content;

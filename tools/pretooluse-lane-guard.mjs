@@ -5,13 +5,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inspectTranscript } from './fable-session-guard.mjs';
 import { classifyBashCommand } from './usage-stats.mjs';
-import { codexHardBlockBypass } from './codex-cooldown.mjs';
+import { laneDoctorQuick, readJson, freshProbe } from './lane-doctor.mjs';
+import { isEntry } from './is-entry.mjs';
 import { laneAdvice } from './cost-routing-gate.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 
 
 const repo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const delegated = /codex-do\.mjs|llm-ask\.mjs|batch-(?:enqueue|run)\.mjs|(?:^|\s)gemini\s|(?:^|\s)codex\s|wsl[^\r\n]*\bcodex\b|claude\s+-p|node[^\r\n]*usage-stats\.mjs/i;
+export const delegated = /pr-merge\.mjs|lane-doctor\.mjs|codex-do\.mjs|llm-ask\.mjs|batch-(?:enqueue|run)\.mjs|(?:^|\s)gemini\s|(?:^|\s)codex\s|wsl[^\r\n]*\bcodex\b|claude\s+-p|node[^\r\n]*usage-stats\.mjs/i;
 function output(value) { console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', ...value } })); }
 function editPath(input) { return String(input.file_path || input.path || ''); }
 function isDocEdit(name, input, home) {
@@ -19,7 +20,7 @@ function isDocEdit(name, input, home) {
   const target = editPath(input).replace(/\\/g, '/'), claude = path.join(home, '.claude').replace(/\\/g, '/');
   return target.startsWith(claude) || /(?:memory|scratchpad)/i.test(target) || /\.md$/i.test(target);
 }
-async function main() {
+export async function main() {
   const raw = await readStdinWithTimeout();
   try {
     const input = JSON.parse(raw.replace(/^\uFEFF/, '')), home = process.env.ORGIAST_HOME || os.homedir();
@@ -38,9 +39,19 @@ async function main() {
     const advice = state.primary || laneAdvice(state.lane, repo, { category: state.category, home }).primary;
     const reason = `このターンで Fable/Opus 本体が直接 ${state.toolCalls} 回ツールを叩いている。残りは ${advice} か Agent(model:"sonnet") に丸ごと渡し、結果だけ受け取れ。例外は user 指示に [LANE-OK]、または ~/.claude/cost-enforce-override`;
     const blockable = ['implement', 'edit-small', 'verify', 'bulk'].includes(state.lane);
-    const bypass = codexHardBlockBypass(Date.now(), path.join(home, '.claude', 'provider-cooldown.json')).bypass;
-    if (blockable && state.toolCalls >= Number(config.blockAt) && config.mode === 'block' && !state.laneOk && !bypass) output({ permissionDecision: 'deny', permissionDecisionReason: reason });
-    else output({ additionalContext: `⚠️ ${reason}` });
+    if (blockable && state.toolCalls >= Number(config.blockAt) && config.mode === 'block' && !state.laneOk) {
+      const decision = laneHealthDecision(home);
+      output(decision);
+    } else output({ additionalContext: `⚠️ ${reason}` });
   } catch {}
 }
-await main();
+export function laneHealthDecision(home, now = Date.now()) {
+  let health;
+  try { health = readJson(path.join(home, '.claude', 'lane-health.json'), null) || laneDoctorQuick({ home, now }); }
+  catch { return { permissionDecision: 'deny', permissionDecisionReason: 'レーン状態を読めません。先に node tools/lane-doctor.mjs --probe を実行せよ。' }; }
+  if (health.implementOrder?.[0] === 'codex') return { permissionDecision: 'deny', permissionDecisionReason: 'Codex は生きている。node tools/codex-do.mjs --prompt-file <指示> --cwd <対象> へ渡せ' };
+  if (Array.isArray(health.implementOrder) && health.implementOrder.length) return { permissionDecision: 'deny', permissionDecisionReason: `Codex が使えない時は ${health.implementOrder[0]} へ。生存レーン: ${health.implementOrder.join(', ')}。例: node tools/codex-do.mjs --prompt-file <指示> --cwd <対象>（内蔵フォールバックで deepseek/glm/gemini へ流れる）` };
+  if (Array.isArray(health.implementOrder) && freshProbe(health.probedAt, now)) return { additionalContext: `[LANE-FALLBACK] 非Claude 全滅（lane-doctor 確認済み ${health.probedAt}）。Agent(model:"sonnet") に渡し、本文に [LANE-FALLBACK] と理由を明記せよ` };
+  return { permissionDecision: 'deny', permissionDecisionReason: '生存レーンが未確認。先に node tools/lane-doctor.mjs --probe を実行せよ。' };
+}
+if (isEntry(import.meta.url)) await main();

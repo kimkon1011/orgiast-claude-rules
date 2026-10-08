@@ -3,13 +3,32 @@ import fs from 'node:fs';
 import { writeHandoff } from './next-session-rotate.mjs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { auditHome, loadResources, buildPrompt, requestAudit, appendJsonl, fired } from './handoff-audit-gate.mjs';
+import { scan } from './permanent-fix-deferral-scan.mjs';
 
 export function readJsonl(file) {
   try { return fs.readFileSync(file, 'utf8').split(/\r?\n/).flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } }); }
   catch (e) { if (e.code === 'ENOENT') return []; throw e; }
+}
+export function promotionFile(home) {
+  return path.join(home, '.claude', 'handoff-audit-promotions.jsonl');
+}
+// 先送り検出器はこのファイルの隣のコピー（＝nightly-batch.ps1 が起動するデプロイ済みツリー）で走る。
+// 夜間バッチは実行前に自己更新しないため、修正が origin/main に入ってもその夜は1日古い検出器で回り、
+// 検証セッション自身の報告文（パターン名「恒久修正の先送り文」の引用）を P1 と誤検出して
+// 余計な handoff を積んだ（2026-10-06 03:00:03 JST / session d401053d。検出器の更新は 03:02 着）。
+// git クローン（nightly-bootstrap が origin/main を保つ）の方が新しいときはそちらを読む。
+export function deferralDetectorFile(home, env = process.env) {
+  const local = fileURLToPath(new URL('./permanent-fix-deferral-scan.mjs', import.meta.url));
+  const root = env.ORGIAST_NIGHTLY_REPO || path.join(home, '.claude', 'nightly-repo');
+  const clone = path.join(root, 'tools', 'permanent-fix-deferral-scan.mjs');
+  // 改行コード差だけで「別物」と判定しないよう正規化してから比べる。
+  const read = file => { try { return fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n'); } catch { return null; } };
+  const cloneText = read(clone);
+  if (cloneText === null || cloneText === read(local)) return { file: local, source: 'local', differs: false };
+  return { file: clone, source: 'clone', differs: true };
 }
 const key = value => String(value).normalize('NFKC').trim().replace(/\s+/g, ' ');
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -49,6 +68,19 @@ export function enqueueTodos(markdown, items) {
     routes.add(key(item.route));
   }
   return output;
+}
+export function deferralLedgerFile(home) {
+  return path.join(home, '.claude', 'handoff-audit-deferral-ledger.jsonl');
+}
+export function deferralObservation(row) {
+  return hash([row.ts, row.sessionId, row.pattern, row.match]);
+}
+export function deferralTodo(row) {
+  const quote = String(row.match ?? '').replace(/[\r\n]+/g, ' ').trim().slice(0, 80);
+  return {
+    pattern: `恒久修正の先送り文を検出（${row.ts} / ${String(row.sessionId).slice(0, 8)} / ${row.pattern}）「${quote}」`,
+    route: `違反セッションの先送りを当ターン内に実装まで終える（例: ${row.ts} / ${row.sessionId}）。検出は handoff-audit-nightly が毎晩自動実行する（tools/permanent-fix-deferral-scan.mjs）`
+  };
 }
 export function selectTargets(audits, runners, since, until) {
   const inDay = r => Date.parse(r.ts) >= since && Date.parse(r.ts) < until;
@@ -90,7 +122,7 @@ export async function runNightly(options = {}) {
     const done = new Set(readJsonl(processedFile).filter(r => r.verdict !== 'audit-unavailable').map(r => r.observation));
     const targets = selectTargets(readJsonl(path.join(dir, 'handoff-audit-ledger.jsonl')), readJsonl(path.join(dir, 'stop-gate-runner-ledger.jsonl')), +since, +until);
     const knownRoutes = new Set([...knowledge.map(k => k.route), ...Object.values(resources.routes).flat()]);
-    let reviewed = 0, added = 0;
+    let reviewed = 0, added = 0, promoted = 0;
     for (const target of targets) {
       const observation = hash([target.sessionId, target.evidence]);
       if (done.has(observation)) continue;
@@ -100,6 +132,11 @@ export async function runNightly(options = {}) {
       const learned = result.learned.filter(l => knownRoutes.has(l.route));
       const merged = mergeKnowledge(knowledge, learned, candidates, observation);
       if (merged.knowledge.length !== knowledge.length) fs.writeFileSync(knowledgeFile, JSON.stringify(merged.knowledge, null, 2) + '\n');
+      // nightly-bootstrap が毎回 reset --hard する tree の外に置く。reset で route 文が消えないようにするため。
+      for (const entry of merged.promoted) {
+        appendJsonl(promotionFile(home), { ts: new Date().toISOString(), observation, ...entry });
+        promoted++;
+      }
       for (const candidate of merged.candidates.slice(candidates.length)) appendJsonl(candidateFile, candidate);
       const nextFile = path.join(dir, 'next-session.md');
       let previous = ''; try { previous = fs.readFileSync(nextFile, 'utf8'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
@@ -109,7 +146,47 @@ export async function runNightly(options = {}) {
       knowledge = merged.knowledge; candidates = merged.candidates;
       appendJsonl(processedFile, { ts: new Date().toISOString(), observation, sessionId: target.sessionId, ...result });
     }
-    return { targets: targets.length, reviewed, added };
+    // 先送り検出器（恒久修正を設計のみで次セッションへ送る型）を夜間監査に載せる。
+    // ここで失敗しても監査本体は落とさない（fail-open）。ただし黙らず deferral.error に残す。
+    let deferral = { total: 0, hits: 0, byPattern: {}, enqueued: 0 };
+    try {
+      const from = since.toISOString(), to = until.toISOString();
+      const detector = deferralDetectorFile(home, options.env || process.env);
+      let usedDetector = detector.source;
+      let detect = scan;
+      if (detector.source === 'clone') {
+        // クローン側が読めなければローカルの検出器で続行する（夜間監査を落とさない）。
+        try {
+          const module = await import(pathToFileURL(detector.file).href);
+          if (typeof module.scan !== 'function') throw new Error('scan が無い検出器');
+          detect = module.scan;
+        } catch { detect = scan; usedDetector = 'local'; }
+      }
+      const report = detect({ home, since: from, until: to });
+      const rows = report.sources.flatMap(source => (source.rows || []).map(row => ({ ...row, source: source.name })));
+      const byPattern = {};
+      let total = 0;
+      for (const source of report.sources) {
+        total += source.total || 0;
+        for (const [pattern, count] of Object.entries(source.byPattern || {})) byPattern[pattern] = (byPattern[pattern] || 0) + count;
+      }
+      const ledgerFile = deferralLedgerFile(home);
+      const seen = new Set(readJsonl(ledgerFile).filter(r => r.kind === 'hit').map(r => r.observation));
+      const fresh = rows.filter(row => !seen.has(deferralObservation(row)));
+      const ts = new Date().toISOString();
+      // hits が 0 でも必ず書く（「0 は測った 0」を後から証明できるようにする）。
+      appendJsonl(ledgerFile, { ts, kind: 'window', since: from, until: to, total, hits: rows.length, byPattern, detector: usedDetector, detectorDiffers: detector.differs });
+      for (const row of fresh) appendJsonl(ledgerFile, { ts, kind: 'hit', observation: deferralObservation(row), ...row });
+      let enqueued = 0;
+      if (fresh.length > 0) {
+        const nextFile = path.join(dir, 'next-session.md');
+        let previous = ''; try { previous = fs.readFileSync(nextFile, 'utf8'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+        const updated = enqueueTodos(previous, fresh.map(deferralTodo));
+        if (updated !== previous) { writeHandoff(nextFile, updated); enqueued = fresh.length; }
+      }
+      deferral = { total, hits: rows.length, byPattern, enqueued, detector: usedDetector, detectorDiffers: detector.differs };
+    } catch (error) { deferral = { ...deferral, error: error.message }; }
+    return { targets: targets.length, reviewed, added, promoted, deferral };
   } finally { fs.closeSync(fd); fs.unlinkSync(lock); }
 }
 if (isEntry(import.meta.url)) {

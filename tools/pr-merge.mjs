@@ -36,7 +36,7 @@ export function mergePr(options, { exec = execFileSync } = {}) {
   if (!Array.isArray(checks) || !checks.length || checks.some(check => check.bucket !== 'pass')) throw new Error(`PR #${pr}: gh pr checks が全成功ではありません`);
   // 検査後に新しいpushが入った場合は、未検査のheadをマージしない。
   if (!/^[a-f0-9]{40}$/i.test(view.headRefOid || '')) throw new Error(`PR #${pr}: head SHA を確認できません`);
-  gh(['pr', 'merge', pr, `--${method}`, '--delete-branch', '--match-head-commit', view.headRefOid]);
+  gh(['pr', 'merge', pr, `--${method}`, ...(options.keepBranch ? [] : ['--delete-branch']), '--match-head-commit', view.headRefOid]);
   const result = JSON.parse(gh(['pr', 'view', pr, '--json', 'state,mergedAt']));
   if (result.state !== 'MERGED' || !result.mergedAt) throw new Error(`PR #${pr}: マージ後の read-back が MERGED ではありません`);
   return { pr, ...result };

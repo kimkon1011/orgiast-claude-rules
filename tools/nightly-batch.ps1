@@ -26,6 +26,16 @@ function Write-NightlyStepResult([string]$Step, [int]$ExitCode, $Output, [string
     Write-Warning ("nightly-batch: " + $Step + " exited " + $ExitCode + ': ' + ($reason))
 }
 function Finish-Nightly([int]$Code) {
+    # Run once after the nightly jobs, including empty-queue and error exits.
+    # Existing PCs execute this synced script through nightly-bootstrap as well.
+    if ($script:staleWorkReady -and -not $script:staleWorkRan) {
+        $script:staleWorkRan = $true
+        try {
+            $watchOutput = @(& $node.Source (Join-Path $PSScriptRoot 'stale-work-watch.mjs') 2>&1)
+            $watchExit = $LASTEXITCODE
+            Write-NightlyStepResult 'stale-work-watch' $watchExit $watchOutput
+        } catch { Write-NightlyLog 'stale-work-watch' ('error:' + $_.Exception.Message) }
+    }
     $parts = @($summary.Keys | ForEach-Object { $_ + '=' + $summary[$_] })
     Write-NightlyLog 'サマリ' ("nightly-batch 完了: " + ($parts -join ', '))
     if ($script:pidFile -and (Test-Path -LiteralPath $script:pidFile)) { Remove-Item -LiteralPath $script:pidFile -Force -ErrorAction SilentlyContinue }
@@ -77,6 +87,7 @@ try {
 
     $node = Get-Command node -ErrorAction SilentlyContinue
     if (-not $node) { $summary['node'] = 'error:nodeが見つからない'; Write-NightlyLog 'node確認' 'error:nodeが見つからない'; Finish-Nightly 1 }
+    $script:staleWorkReady = $true
     Write-NightlyLog 'node確認' 'ok'
     try {
         $rotationOutput = @(& $node.Source (Join-Path $PSScriptRoot 'next-session-rotate.mjs') 2>&1)
@@ -326,6 +337,22 @@ try {
             Write-NightlyStepResult 'rule-compliance-loop' $ruleComplianceExit $ruleComplianceOutput ' (警告・後続処理続行)'
         } catch { Write-NightlyLog 'rule-compliance-loop' ("error:" + $_.Exception.Message + ' (警告・後続処理続行): ' + (Format-NightlyDetail $ruleComplianceOutput)) }
     } else { Write-NightlyLog 'rule-compliance-loop' 'skip:ファイルなし' }
+
+    # 日次の実測で復旧したレーンを再検出し、demote/cooldown を解除する。
+    # probe の失敗でも委譲ヘルス確認と後続処理は続行する。
+    $laneDoctor = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\lane-doctor.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $laneDoctor = $candidate; break }
+    }
+    if ($laneDoctor) {
+        $laneDoctorOutput = $null
+        try {
+            $laneDoctorOutput = @(& $node.Source $laneDoctor '--probe' 2>&1)
+            $laneDoctorExit = $LASTEXITCODE
+            Write-NightlyStepResult 'lane-doctor-probe' $laneDoctorExit $laneDoctorOutput ' (警告・後続処理続行)'
+        } catch { Write-NightlyLog 'lane-doctor-probe' ("error:" + $_.Exception.Message + ' (警告・後続処理続行): ' + (Format-NightlyDetail $laneDoctorOutput)) }
+    } else { Write-NightlyLog 'lane-doctor-probe' 'skip:ファイルなし' }
 
     # 委譲台帳を実測と照合し、偽 cooldown を修復して根本修正を auto-session へ起票する。
     # high が見つかっても、このブロック自身の失敗時も後続処理は必ず続ける。

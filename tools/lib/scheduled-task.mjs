@@ -28,13 +28,16 @@ export function enableScheduledTask(taskName, { spawnImpl = spawnSync } = {}) {
   run(`Enable-ScheduledTask -TaskName '${name}' -ErrorAction Stop`, spawnImpl);
 }
 
-export function registerHourlyTask(taskName, script, { spawnImpl = spawnSync, home = process.env.USERPROFILE, dryRun = false } = {}) {
+// System ログ Power-Troubleshooter EventID 1（スリープ復帰）で起動するイベントトリガー。
+const WAKE_TRIGGER_PS = `$q='<QueryList><Query Id="0" Path="System"><Select Path="System">*[System[Provider[@Name=''Microsoft-Windows-Power-Troubleshooter''] and EventID=1]]</Select></Query></QueryList>';$c=Get-CimClass -ClassName MSFT_TaskEventTrigger -Namespace Root/Microsoft/Windows/TaskScheduler;$w=New-CimInstance -CimClass $c -ClientOnly;$w.Subscription=$q;$w.Delay='PT1M';$w.Enabled=$true;`;
+
+export function registerHourlyTask(taskName, script, { spawnImpl = spawnSync, home = process.env.USERPROFILE, dryRun = false, wakeTrigger = false } = {}) {
   const quote = (value) => `'${String(value).replaceAll("'", "''")}'`;
   const hidden = pathForPowerShell(home, '.claude\\tools\\run-hidden.vbs');
   const workingDirectory = String(script).replace(/[\\/][^\\/]+$/, '');
   const argumentsText = `//nologo "${hidden}" "${process.execPath}" "${script}" "--kill"`;
-  const command = `$a=New-ScheduledTaskAction -Execute "$env:SystemRoot\\System32\\wscript.exe" -Argument ${quote(argumentsText)} -WorkingDirectory ${quote(workingDirectory)};$t=New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2);$r=New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2) -RepetitionInterval (New-TimeSpan -Hours 1);$t.Repetition=$r.Repetition;$s=New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 10);Register-ScheduledTask -TaskName ${quote(taskName)} -Action $a -Trigger $t -Settings $s -Description 'hook/batch stale process and orphan console cleanup (hourly)' -Force|Out-Null`;
-  if (dryRun) return { taskName, execute: 'wscript.exe', arguments: argumentsText, interval: 'PT1H' };
+  const command = `$a=New-ScheduledTaskAction -Execute "$env:SystemRoot\\System32\\wscript.exe" -Argument ${quote(argumentsText)} -WorkingDirectory ${quote(workingDirectory)};$t=New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2);$r=New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2) -RepetitionInterval (New-TimeSpan -Hours 1);$t.Repetition=$r.Repetition;${wakeTrigger ? WAKE_TRIGGER_PS : ''}$s=New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 10);Register-ScheduledTask -TaskName ${quote(taskName)} -Action $a -Trigger ${wakeTrigger ? '@($t,$w)' : '$t'} -Settings $s -Description 'hook/batch stale process and orphan console cleanup (hourly)' -Force|Out-Null`;
+  if (dryRun) return { taskName, execute: 'wscript.exe', arguments: argumentsText, interval: 'PT1H', wakeTrigger };
   return run(command, spawnImpl);
 }
 

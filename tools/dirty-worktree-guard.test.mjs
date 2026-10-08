@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { createDirtyWorktreeGuard } from './dirty-worktree-guard.mjs';
 import { main } from './auto-session-launcher.mjs';
 
@@ -137,4 +138,22 @@ test('recheck before each destructive command catches a new edit after checkout'
   assert.equal(calls.some(c => c.cwd === repo && ['reset', 'clean'].includes(c.args[0])), false);
   assert.equal(fs.readFileSync(path.join(repo, 'late-edit'), 'utf8'), 'saved');
   assert.equal(git(repo, ['show', 'HEAD:late-edit']), 'saved');
+});
+
+test('gitignored generated files do not trigger rescue', t => {
+  const { root, repo, git } = fixture(t);
+  fs.writeFileSync(path.join(repo, '.gitignore'), 'generated.json\n');
+  git(repo, ['add', '.gitignore']);
+  git(repo, ['commit', '-m', 'ignore generated']);
+  fs.writeFileSync(path.join(repo, 'generated.json'), '{"builtAt":"x"}');
+  const guard = createDirtyWorktreeGuard({ home: root, log: () => {} });
+  assert.equal(guard(repo), true, 'ignored file must not dirty/block the tree');
+  assert.equal(git(repo, ['branch', '--list', 'rescue/*']).trim(), '');
+});
+
+test('routing-table.json は追跡されず gitignore される', () => {
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const git = (...args) => execFileSync('git', ['-C', repoRoot, ...args], { encoding: 'utf8' }).trim();
+  assert.equal(git('ls-files', '--', 'tools/routing-table.json'), '', 'routing-table.json must not be tracked');
+  assert.equal(git('check-ignore', '--', 'tools/routing-table.json'), 'tools/routing-table.json', 'routing-table.json must be gitignored');
 });

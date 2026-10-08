@@ -6,6 +6,20 @@ import path from 'node:path';
 import { rotate, planRotation, MAX_BYTES, writeHandoff } from './next-session-rotate.mjs';
 const now = new Date('2026-09-22T00:00:00Z');
 const block = (date, tasks) => `<!-- NEXT-SESSION v1 -->\n<!-- 更新: ${date} / cwd: /example -->\n## 残TODO\n${tasks}\n## 対象\ncontext only\n`;
+test('empty promotion queue removes stale PROMOTE tasks and preserves other items',()=>{
+ const source=block('2026-09-22','1. PROMOTE 待ち1件（先頭: foo）\n2. still open\n  PROMOTE 待ち2件（先頭: bar）');
+ const r=planRotation(source,{now,promotionPendingCount:0});
+ assert.doesNotMatch(r.text,/PROMOTE 待ち1件/); assert.equal(r.stats.stale,1);
+ assert.match(r.text,/still open/); assert.match(r.text,/PROMOTE 待ち2件/); assert.equal(r.stats.pending,1);
+});
+test('unknown promotion queue count preserves PROMOTE tasks by default',()=>{
+ const r=planRotation(block('2026-09-22','1. PROMOTE 待ち1件（先頭: foo）'),{now});
+ assert.match(r.text,/PROMOTE 待ち1件（先頭: foo）/); assert.equal(r.stats.stale,0); assert.equal(r.stats.pending,1);
+});
+test('nonempty promotion queue preserves PROMOTE tasks',()=>{
+ const r=planRotation(block('2026-09-22','1. PROMOTE 待ち1件（先頭: foo）'),{now,promotionPendingCount:2});
+ assert.match(r.text,/PROMOTE 待ち1件（先頭: foo）/); assert.equal(r.stats.stale,0); assert.equal(r.stats.pending,1);
+});
 test('archives exact original, preserves pending continuations and removes only explicit completion', () => {
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'rotate-')); const file=path.join(dir,'next-session.md');
  const source=block('2026-09-20','1. still open\n  done substep ✅\n2. ~~done~~ → ✅\n3. still open\n  done substep ✅\n4. [FB:test] new bug')+block('2026-08-01','1. old issue');
@@ -14,6 +28,15 @@ test('archives exact original, preserves pending continuations and removes only 
  assert.ok(fs.readFileSync(r.archive,'utf8').includes(source)); assert.match(fs.readFileSync(file,'utf8'),/done substep ✅/);
  const archived=fs.readFileSync(r.archive,'utf8'); const bytes=fs.readFileSync(file);
  assert.equal(rotate(file,{now}).changed,false); assert.deepEqual(fs.readFileSync(file),bytes); assert.equal(fs.readFileSync(r.archive,'utf8'),archived);
+});
+test('[完了 …] 形の印も完了として回転で落とす(2026-09-28実測の再現)', () => {
+ // 実物: 残TODO の13件が `1. [完了 2026-09-27 #584] …` の形で、`~~…~~` と違って完了と認識されず
+ // 回転のたびに次代へ持ち越されていた。auto-session がそれを次の1目的に選び自動セッション1回分を
+ // 消費した(runs/2026-09-28-manifest.json)。選択側の除外規則と二重に塞ぐ。
+ const source=block('2026-09-22','1. [完了 2026-09-27 #584] 済んだ作業\n2. まだやる作業\n3. 完了報告の文面を直す');
+ const r=planRotation(source,{now});
+ assert.equal(r.stats.completed,1); assert.equal(r.stats.pending,2);
+ assert.doesNotMatch(r.text,/済んだ作業/); assert.match(r.text,/まだやる作業/); assert.match(r.text,/完了報告の文面を直す/);
 });
 test('oversized pending queue remains reachable, cap is bytes not characters', () => {
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'rotate-')); const file=path.join(dir,'next-session.md');
@@ -50,4 +73,21 @@ test('normalized queues still retire subsequently completed and newly expired it
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'rotate-')); const file=path.join(dir,'next-session.md');
  fs.writeFileSync(file,block('2026-09-22','1. open')); rotate(file,{now});
  const r=rotate(file,{now:new Date('2026-11-01')});assert.equal(r.stats.old,1);assert.equal(r.stats.pending,0);
+});
+// 2026-09-27 実測の再現。`## 次の1目的` の直後に置かれた H3 見出しとその箇条書きが
+// 項目として繰り上がり、回転後の next-session.md 先頭が `1. ### 触る前に読む memory` になった
+// (archive/next-session-202609.md#snapshot-a274891d… が実物のソース)。
+test('lower-level headings end the active section instead of becoming items',()=>{
+ const source=`<!-- NEXT-SESSION v1 -->\n<!-- 更新: 2026-09-26 -->\n## 次の1目的\n未定（残TODOの先頭から確認）\n\n### 触る前に読む memory\n- feedback-register-hooks-no-change-message.md（hook 配線は実測で確かめる）\n- project-internal-recipient-gmail-guard.md（誤検知あり）\n## 残TODO\n1. 本物のTODO\n`;
+ const r=planRotation(source,{now});
+ assert.doesNotMatch(r.text,/### 触る前に読む memory/);
+ assert.doesNotMatch(r.text,/feedback-register-hooks-no-change-message/);
+ assert.equal(r.stats.pending,1);
+ assert.match(r.text,/\n1\. 本物のTODO/);
+});
+test('a level-2 heading still activates its own section',()=>{
+ const source=`<!-- NEXT-SESSION v1 -->\n<!-- 更新: 2026-09-26 -->\n## 未決（kim の判断待ち）\n1. 見出し境界の確認\n`;
+ const r=planRotation(source,{now});
+ assert.equal(r.stats.pending,1);
+ assert.match(r.text,/見出し境界の確認/);
 });

@@ -2,6 +2,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { parseEnvText } from './env-kv.mjs';
 import { isEntry } from './is-entry.mjs';
 
@@ -92,4 +94,12 @@ export async function runNag({ args = process.argv.slice(2), home = userHome(), 
   }
 }
 
-if (isEntry(import.meta.url)) process.exitCode = await runNag();
+if (isEntry(import.meta.url)) {
+  process.exitCode = await runNag();
+  // 同一プロセスでimportするとsendDiscordDmの循環参照で停止するため別プロセスにする。
+  try {
+    const script = fileURLToPath(new URL('./ledger-stale-nag.mjs', import.meta.url));
+    const child = spawnSync(process.execPath, [script, ...process.argv.slice(2)], { stdio: 'inherit', windowsHide: true });
+    if (child.error || child.status !== 0) throw child.error || new Error(`exit ${child.status}, signal ${child.signal || 'none'}`);
+  } catch (error) { console.error(`feedback-nag: ledger-stale-nag failed: ${String(error.message).replace(/\s+/g, ' ')}`); }
+}

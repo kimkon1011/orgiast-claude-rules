@@ -23,6 +23,8 @@ node ~/orgiast-claude-rules/tools/session-triage.mjs --llm --top 20
 - Markdown 書き出し: `--md "$HOME/.claude/session-triage.md"`（Windows は `$env:USERPROFILE\.claude\session-triage.md`）
 - 全分類を見る: `--all-status` / 期間: `--days 30` / 絞り込み: `--status 要対応`
 
+退避済みの積み残しは `~/.claude/archived-sessions.jsonl` の `title`・`nextKim`（次に kim がすること）・`automatic`（この後の自動進行）も読み、一覧から退避されたセッションの残作業も棚卸しに含める。
+
 ## 自動クローズ済みの扱い
 7日以上放置のセッションは夜間バッチ（`tools/session-auto-close.mjs`）が非破壊で自動クローズし、引き継ぎは `~/.claude/session-handoffs.md` に蓄積する。
 一覧から消えたセッションも削除されたのではなく、台帳でクローズ済みになっただけ。`--include-closed` でクローズ済みも確認できる。

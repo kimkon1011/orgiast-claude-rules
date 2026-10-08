@@ -30,6 +30,59 @@ export function resolveHome(env = process.env) {
   return env.ORGIAST_HOME || os.homedir();
 }
 
+// 成長ループの出力は必ず main に載る必要がある。しかし共有作業ツリー
+// (TETSUKO_DIR_DEFAULT)は人間や他セッションが別ブランチをチェックアウトしている
+// ことがあり、実際に 2026-09-21〜23 のサイクル#39-44 は別ブランチ側へ push されて
+// main に届いていなかった(2026-09-24 に復元)。
+// そのため main 専用の worktree を用意し、読み書きと commit/push はそこで行う。
+export function resolveMainWorktreePath(home = resolveHome(), env = process.env) {
+  return env.TETSUKO_GROWTH_WORKTREE || path.join(home, '.claude', 'tetsuko-growth-main');
+}
+
+function worktreeIsClean(dir, spawn) {
+  const status = runGit(['status', '--porcelain'], dir, spawn);
+  return status.ok && !(status.stdout || '').trim();
+}
+
+// main 専用 worktree を用意する。作成済みなら main に同期する。
+// 別ブランチかつ未コミット変更がある場合は、その変更を壊さないよう触らずに失敗を返す。
+export function ensureMainWorktree(repoDir, worktreePath, spawn = spawnSync, expectedBranch = 'main') {
+  const steps = [];
+  if (!fs.existsSync(path.join(worktreePath, '.git'))) {
+    try { fs.mkdirSync(path.dirname(worktreePath), { recursive: true }); } catch {}
+    let add = runGit(['worktree', 'add', worktreePath, expectedBranch], repoDir, spawn);
+    if (!add.ok) {
+      // ローカルに main が無い場合は origin/main から作る
+      add = runGit(['worktree', 'add', '-b', expectedBranch, worktreePath, `origin/${expectedBranch}`], repoDir, spawn);
+    }
+    steps.push({ step: 'worktree-add', ...add });
+    return add.ok ? { ok: true, steps, created: true } : { ok: false, steps, reason: 'worktree_add_failed' };
+  }
+
+  const branchResult = runGit(['rev-parse', '--abbrev-ref', 'HEAD'], worktreePath, spawn);
+  steps.push({ step: 'worktree-branch', ...branchResult });
+  if (!branchResult.ok) return { ok: false, steps, reason: 'worktree_branch_check_failed' };
+  const branch = (branchResult.stdout || '').trim();
+
+  if (branch === expectedBranch) {
+    const pull = runGit(['pull', '--ff-only'], worktreePath, spawn);
+    steps.push({ step: 'worktree-pull', ...pull });
+    return { ok: true, steps };
+  }
+  if (!worktreeIsClean(worktreePath, spawn)) {
+    return { ok: false, steps, reason: 'worktree_dirty_wrong_branch', branch };
+  }
+  const fetch = runGit(['fetch', 'origin', expectedBranch], worktreePath, spawn);
+  steps.push({ step: 'worktree-fetch', ...fetch });
+  const checkout = runGit(['checkout', '-f', expectedBranch], worktreePath, spawn);
+  steps.push({ step: 'worktree-checkout', ...checkout });
+  const reset = runGit(['reset', '--hard', `origin/${expectedBranch}`], worktreePath, spawn);
+  steps.push({ step: 'worktree-reset', ...reset });
+  return checkout.ok && reset.ok
+    ? { ok: true, steps, repaired: true }
+    : { ok: false, steps, reason: 'worktree_repair_failed', branch };
+}
+
 // ---- ファイルI/O(安全書き込み) ----
 
 export function atomicWrite(file, content) {
@@ -365,8 +418,18 @@ export async function runCycle({
   spawn = spawnSync,
   skipGit = false,
 } = {}) {
-  const logFile = path.join(tetsukoDir, 'data', 'growth-loop-log.md');
-  const briefingFile = path.join(tetsukoDir, 'TETSUKO_DAILY_BRIEFING.md');
+  // 出力は main に載る必要があるため、main 専用 worktree を用意してから書き込む。
+  // 用意できない場合のみ共有ツリーへフォールバック(commitAndPush 側のブランチガードで守られる)。
+  const mainWorktreePath = resolveMainWorktreePath(home);
+  const worktreeResult = skipGit
+    ? { ok: false, skipped: true, steps: [] }
+    : ensureMainWorktree(tetsukoDir, mainWorktreePath, spawn);
+  const workDir = worktreeResult.ok ? mainWorktreePath : tetsukoDir;
+  if (!worktreeResult.ok && !worktreeResult.skipped) {
+    console.error(`tetsuko-growth-loop: main worktree を用意できませんでした(${worktreeResult.reason})。共有ツリーで続行します。`);
+  }
+  const logFile = path.join(workDir, 'data', 'growth-loop-log.md');
+  const briefingFile = path.join(workDir, 'TETSUKO_DAILY_BRIEFING.md');
 
   let logText = '';
   try { logText = fs.readFileSync(logFile, 'utf8'); } catch (error) {
@@ -382,7 +445,7 @@ export async function runCycle({
   const date = localDate(now);
 
   const providersTried = [];
-  const codeItems = category.key === 'amazon' ? [] : buildCodeCheckItems(category, tetsukoDir);
+  const codeItems = category.key === 'amazon' ? [] : buildCodeCheckItems(category, workDir);
   const codeContextText = codeItems.map((item, i) => `${i + 1}. ${item.label}: ${item.evidenceNote}`).join('\n');
 
   const itemsNeededFromLlm = Math.max(1, 3 - codeItems.length);
@@ -466,7 +529,7 @@ export async function runCycle({
 
   let gitResult = { ok: true, steps: [], skipped: true };
   if (!skipGit) {
-    try { gitResult = commitAndPush(tetsukoDir, cycleNumber, spawn); }
+    try { gitResult = commitAndPush(workDir, cycleNumber, spawn); }
     catch (error) { gitResult = { ok: false, steps: [], error: error?.message || String(error) }; }
   }
 

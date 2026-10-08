@@ -53,6 +53,29 @@ function writeSettings(home, commands) {
 
 function healthyTests() { return { status: 0, stdout: 'ok', stderr: '' }; }
 
+test('auto-session の streak 検出を既存 anomaly 型へ追加する', async () => {
+  const home = createTempHome();
+  try {
+    const result = await runNightlyHealth({
+      home,
+      expectations: [],
+      dryRun: true,
+      runTests: async () => healthyTests(),
+      streakWatch: async () => ({
+        detected: [{ jobKey: 'feedback:kimkon1011/app#13', message: '2 日連続失敗。判断してください' }],
+        notified: [],
+        suppressed: []
+      })
+    });
+    assert.deepEqual(result.anomalies[0], {
+      type: 'auto_session_streak',
+      label: 'feedback:kimkon1011/app#13',
+      message: '2 日連続失敗。判断してください',
+      expectation: null
+    });
+  } finally { removeDir(home); }
+});
+
 test('scheduled task の起動拒否・時間超過・ログ未生成を判定する', () => {
   const now = new Date('2026-09-10T12:00:00.000Z');
   const expectation = { task: 'OrgiastNightlyBatch', maxRunHours: 5, label: '夜間バッチ' };
@@ -75,7 +98,14 @@ test('scheduled task の起動拒否・時間超過・ログ未生成を判定�
   assert.deepEqual(types(info({ lastTaskResult: 2147946720, lastRunTime: '2026-09-08T23:00:00.000Z' })), ['task_started_no_log']);
   assert.deepEqual(types(info({ state: 'Running', lastRunTime: '2026-09-10T06:00:00.000Z' }), { logMtimeMs: now.getTime() }), ['task_overrun']);
   assert.deepEqual(types(info({ state: 'Running', lastRunTime: '2026-09-10T10:00:00.000Z' }), { logMtimeMs: now.getTime() }), []);
-  assert.deepEqual(types(info(), { logMtimeMs: new Date('2026-09-10T08:00:00.000Z').getTime() }), ['task_started_no_log']);
+  // 多段アクションのタスクが正常完走（lastTaskResult=0）した場合、LastRunTime は最終アクションの
+  // 開始時刻に更新されるため先頭アクションのログ最終書込より後ろになる。これは異常ではないので黙る
+  // （2026-09-26 の実状態: 03:00:43 起動・全アクション正常終了なのに LastRunTime=03:37:57 で誤報した）
+  assert.deepEqual(types(info(), { logMtimeMs: new Date('2026-09-10T08:00:00.000Z').getTime() }), []);
+  // 完走の積極証拠が無い（lastTaskResult≠0）うえ、ログが LastRunTime から1行も動いていなければ鳴る
+  assert.deepEqual(types(info({ lastTaskResult: 1 }), { logMtimeMs: new Date('2026-09-10T08:00:00.000Z').getTime() }), ['task_started_no_log']);
+  // 実行中（267009）のままログが動かなくても鳴る（ハング起動の検知を弱めない）
+  assert.deepEqual(types(info({ state: 'Running', lastTaskResult: 267009 }), { logMtimeMs: new Date('2026-09-10T08:00:00.000Z').getTime() }), ['task_started_no_log']);
   assert.deepEqual(types(info(), { logMtimeMs: new Date('2026-09-10T11:50:00.000Z').getTime() }), []);
   assert.deepEqual(types(info()), ['task_started_no_log']);
   assert.deepEqual(types(info({ lastRunTime: '2026-09-10T11:30:00.000Z' })), []);
@@ -671,4 +701,79 @@ test('booth feedback uses the registered Intake task name', async () => {
   const booth = expectations.find((entry) => entry.log === 'booth-feedback-intake.log');
   assert.equal(booth.task, 'OrgiastBoothFeedbackIntake');
   assert.equal(expectations.some((entry) => entry.task === 'OrgiastBoothFeedback'), false);
+});
+
+function createStreakFixture(home) {
+  const runsDir = path.join(home, '.claude', 'auto-session', 'runs');
+  fs.mkdirSync(runsDir, { recursive: true });
+  for (const day of ['17', '18']) {
+    const stem = `2026-09-${day}-feedback-app-13`;
+    const summaryFile = path.join(runsDir, `${stem}.summary.md`);
+    fs.writeFileSync(summaryFile, '');
+    fs.writeFileSync(path.join(runsDir, `${stem}.json`), JSON.stringify({
+      source: 'feedback', issue: { repo: 'kimkon1011/app', number: 13 },
+      startedAt: `2026-09-${day}T03:00:00Z`, status: 'failure', exitCode: 1,
+      summary: '', summaryFile, stderr: 'integration failure'
+    }));
+  }
+}
+
+test('streak 専用 DM は1回だけ送り、通常通知は他の anomaly のみ送る', async (t) => {
+  const home = createTempHome(); t.after(() => removeDir(home));
+  createStreakFixture(home);
+  const messages = []; const dms = [];
+  const opts = {
+    home, now: new Date('2026-09-19T03:00:00Z'),
+    expectations: [{ log: 'missing.log', label: '別ジョブ', maxAgeHours: 26 }],
+    runTests: async () => healthyTests(),
+    streakNotifyImpl: async (text) => { dms.push(text); },
+    notify: async (text) => { messages.push(text); }
+  };
+  await runNightlyHealth(opts);
+  const second = await runNightlyHealth(opts);
+  assert.equal(dms.length, 1); assert.equal(messages.length, 1);
+  assert.match(dms[0], /2 日連続失敗/);
+  assert.match(messages[0], /別ジョブ/); assert.doesNotMatch(messages[0], /feedback:|integration failure/);
+  assert.equal(second.anomalies.filter((a) => a.type === 'auto_session_streak').length, 1);
+  const cache = JSON.parse(fs.readFileSync(path.join(home, '.claude', '.nightly-health-last.json')));
+  assert.ok(cache.anomalies.some((a) => a.type === 'auto_session_streak'));
+});
+
+test('streak のみなら通常通知を呼ばず anomaly は返す', async (t) => {
+  const home = createTempHome(); t.after(() => removeDir(home)); createStreakFixture(home);
+  let dms = 0;
+  const result = await runNightlyHealth({
+    home, expectations: [], runTests: async () => healthyTests(),
+    streakNotifyImpl: async () => { dms++; },
+    notify: async () => { assert.fail('通常経路で二重通知してはいけない'); }
+  });
+  assert.equal(dms, 1); assert.equal(result.anomalies.length, 1);
+  assert.equal(result.exitCode, 0);
+});
+
+test('dry-run と prime は実 watcher でも DM を送らず streak state を更新しない', async (t) => {
+  for (const mode of ['dryRun', 'prime']) {
+    const home = createTempHome(); t.after(() => removeDir(home)); createStreakFixture(home);
+    const result = await runNightlyHealth({
+      home, expectations: [], [mode]: true, runTests: async () => healthyTests(),
+      streakNotifyImpl: async () => { assert.fail(`${mode} で DM を送信`); },
+      notify: async () => { assert.fail(`${mode} で通常通知を送信`); }
+    });
+    assert.equal(result.anomalies.length, 1);
+    assert.equal(fs.existsSync(path.join(home, '.claude/auto-session/streak-watch-state.json')), false);
+  }
+});
+
+test('DM 失敗でも検出したジョブと他の監視結果を失わず通常経路で通知障害を報告する', async (t) => {
+  const home = createTempHome(); t.after(() => removeDir(home)); createStreakFixture(home);
+  let message = '';
+  const result = await runNightlyHealth({
+    home, expectations: [{ log: 'missing.log', label: '別ジョブ', maxAgeHours: 26 }],
+    runTests: async () => healthyTests(),
+    streakNotifyImpl: async () => { throw new Error('DM offline'); },
+    notify: async (text) => { message = text; }
+  });
+  assert.equal(result.anomalies.filter((a) => a.type === 'auto_session_streak').length, 2);
+  assert.match(message, /DM 通知に失敗: DM offline/); assert.match(message, /別ジョブ/);
+  assert.equal(fs.existsSync(path.join(home, '.claude/auto-session/streak-watch-state.json')), false);
 });

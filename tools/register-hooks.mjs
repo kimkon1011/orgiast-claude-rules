@@ -9,9 +9,15 @@ import { fileURLToPath } from 'node:url';
 // ただし同期が途中のPCでは guard 本体がまだ無いことがあるため、静的に import すると
 // register-hooks 全体が ERR_MODULE_NOT_FOUND で落ちて hook が1本も登録されなくなる。
 // ここは fail-open とし、読めなければ現行と同じ matcher に退避する。
-let HOOK_MATCHER = 'mcp__claude_ai_Gmail(?:_\\d+)?__(create_draft|send_message|update_draft|reply|forward)';
+let HOOK_MATCHER = 'mcp__claude_ai_Gmail(?:_\\d+)?__(create_draft|send_message|update_draft|reply|forward)|Bash|PowerShell';
 try {
   ({ HOOK_MATCHER } = await import('./internal-recipient-gmail-guard.mjs'));
+} catch { /* guard が未同期でも登録処理は続行する */ }
+// live-artifact-read-gate も同じ Gmail 書き込み系 + Bash/PowerShell を対象にする。
+// matcher の正本は guard 側。未同期PCでは上の退避値と同じ形に倒す(fail-open)。
+let LIVE_ARTIFACT_MATCHER = HOOK_MATCHER;
+try {
+  ({ HOOK_MATCHER: LIVE_ARTIFACT_MATCHER } = await import('./live-artifact-read-gate.mjs'));
 } catch { /* guard が未同期でも登録処理は続行する */ }
 
 const hooksOnly = process.argv.includes('--hooks-only');
@@ -172,6 +178,7 @@ try {
     if (add(settings.hooks.SessionStart, name, { hooks: [hook] })) added += 1;
   }
   added += setTimeoutFor(settings.hooks.SessionStart, 'tool-adoption-check', 60);
+  if (add(settings.hooks.SessionStart, 'sessionstart-lane-health.mjs', { hooks: [{ type: 'command', command: command('sessionstart-lane-health.mjs', ' --hook'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.SessionStart, 'hook-selfcheck.mjs', { hooks: [{ type: 'command', command: command('hook-selfcheck.mjs'), timeout: 10 }] })) added += 1;
   if (add(settings.hooks.SessionStart, 'hook-budget-check.mjs', { hooks: [{ type: 'command', command: command('hook-budget-check.mjs'), timeout: 10 }] })) added += 1;
   if (add(settings.hooks.SessionStart, 'makimono-host-detect.mjs', { hooks: [{ type: 'command', command: command('makimono-host-detect.mjs'), timeout: 10 }] })) added += 1;
@@ -185,10 +192,28 @@ try {
   if (add(settings.hooks.PreToolUse, 'session-claim-collision.mjs', { matcher: 'Bash|PowerShell|Edit|Write|MultiEdit', hooks: [{ type: 'command', command: command('session-claim-collision.mjs'), timeout: 10 }] })) added += 1;
   if (add(settings.hooks.SessionStart, 'fable-session-guard.mjs', { hooks: [{ type: 'command', command: command('fable-session-guard.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.UserPromptSubmit, 'fable-session-guard.mjs', { hooks: [{ type: 'command', command: command('fable-session-guard.mjs'), timeout: 5 }] })) added += 1;
-  added += migrate(settings.hooks.SessionStart, 'purge-hidden-sessions.py', 'session-list-tidy.mjs', command('session-list-tidy.mjs'));
-  added += migrate(settings.hooks.UserPromptSubmit, 'purge-hidden-sessions.py', 'session-list-tidy.mjs', command('session-list-tidy.mjs'));
-  if (add(settings.hooks.SessionStart, 'session-list-tidy.mjs', { hooks: [{ type: 'command', command: command('session-list-tidy.mjs'), timeout: 10, async: true }] })) added += 1;
-  if (add(settings.hooks.UserPromptSubmit, 'session-list-tidy.mjs', { hooks: [{ type: 'command', command: command('session-list-tidy.mjs'), timeout: 10, async: true }] })) added += 1;
+  // Replace frozen Python/watcher hooks on existing PCs, including obsolete prompt hooks.
+  if (fs.existsSync(path.join(repo, 'tools', 'purge-sessions.mjs'))) {
+    for (const groups of Object.values(settings.hooks)) {
+      if (!Array.isArray(groups)) continue;
+      for (let i = groups.length - 1; i >= 0; i--) {
+        const hooks = groups[i]?.hooks;
+        if (!Array.isArray(hooks)) continue;
+        for (let j = hooks.length - 1; j >= 0; j--) {
+          if (/purge-hidden-sessions\.py|purge-closed-sessions\.mjs|session-list-tidy\.mjs/.test(String(hooks[j]?.command || ''))) { hooks.splice(j, 1); added++; }
+        }
+        if (!hooks.length) groups.splice(i, 1);
+      }
+    }
+    for (const event of ['SessionStart', 'Stop']) {
+      added += migrate(settings.hooks[event], 'purge-sessions.mjs', 'purge-sessions.mjs', command('purge-sessions.mjs', ' --hook'));
+      if (add(settings.hooks[event], 'purge-sessions.mjs', { hooks: [{ type: 'command', command: command('purge-sessions.mjs', ' --hook'), timeout: 5, async: true }] })) added++;
+      added += setTimeoutFor(settings.hooks[event], 'purge-sessions.mjs', 5);
+      for (const group of settings.hooks[event]) for (const hook of (group.hooks || [])) {
+        if (String(hook.command || '').includes('purge-sessions.mjs') && hook.async !== true) { hook.async = true; added++; }
+      }
+    }
+  }
   // inline target の予約を次セッションへ同期注入するため async は付けない。
   if (add(settings.hooks.SessionStart, 'session-relaunch.mjs', { hooks: [{ type: 'command', command: command('session-relaunch.mjs', ' --hook'), timeout: 10 }] })) added += 1;
   // AIニュースとGoogleタスクの通知は nightly の daily-notice-digest に集約する。
@@ -216,6 +241,10 @@ try {
   if (add(settings.hooks.PreToolUse, 'model-agent-guard.mjs', { matcher: 'Agent|Task', hooks: [{ type: 'command', command: command('model-agent-guard.mjs') }] })) added += 1;
   if (add(settings.hooks.PreToolUse, 'internal-recipient-gmail-guard.mjs', { matcher: HOOK_MATCHER, hooks: [{ type: 'command', command: command('internal-recipient-gmail-guard.mjs'), timeout: 5 }] })) added += 1;
   added += syncMatcherFor(settings.hooks.PreToolUse, 'internal-recipient-gmail-guard.mjs', HOOK_MATCHER);
+  // 社外宛メールで説明している Google ファイルを、直近に中身として読んだかを確かめる。
+  // 3.4MB の transcript で初回 18 秒かかった実測があるため 30 秒にする（5 秒だと時間切れで素通りする）。
+  if (add(settings.hooks.PreToolUse, 'live-artifact-read-gate.mjs', { matcher: LIVE_ARTIFACT_MATCHER, hooks: [{ type: 'command', command: command('live-artifact-read-gate.mjs'), timeout: 30 }] })) added += 1;
+  added += syncMatcherFor(settings.hooks.PreToolUse, 'live-artifact-read-gate.mjs', LIVE_ARTIFACT_MATCHER);
   // ヘッドレス実行で消失するバックグラウンド処理を実行前に拒否する。
   if (add(settings.hooks.PreToolUse, 'pretooluse-headless-background.mjs', { matcher: 'Bash|PowerShell|ScheduleWakeup', hooks: [{ type: 'command', command: command('pretooluse-headless-background.mjs'), timeout: 5 }] })) added += 1;
   // read-only調査の逐次実行を検知し、まとめて調査するよう同期注入する。
@@ -231,6 +260,8 @@ try {
   if (add(settings.hooks.PostToolUse, 'gemini-mcp-usage-hook.mjs', { matcher: 'mcp__gemini-cli__(?:ask-gemini|geminiChat|googleSearch)', hooks: [{ type: 'command', command: command('gemini-mcp-usage-hook.mjs'), timeout: 10 }] })) added += 1;
   // パイプ等で連結された全ステージが許可済みBashプレフィックスなら自動承認する。
   if (add(settings.hooks.PreToolUse, 'pipe-stage-permissions.mjs', { matcher: 'Bash', hooks: [{ type: 'command', command: command('pipe-stage-permissions.mjs'), timeout: 5 }] })) added += 1;
+  // 社内アプリを不具合・要望フォーム未搭載のまま本番反映させない(§2.11・2026-10-08 カフェアプリ事故の再発防止)。
+  if (add(settings.hooks.PreToolUse, 'feedback-form-gate.mjs', { matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command: command('feedback-form-gate.mjs'), timeout: 10 }] })) added += 1;
   // 人に手作業を頼むとき、初見の人でも実行できる手順になっているかを検査する(§1.5.1)。
   if (add(settings.hooks.Stop, 'verify-before-done-detector.mjs', { hooks: [{ type: 'command', command: command('verify-before-done-detector.mjs') }] })) added += 1;
   // kim が読む文書をローカルパスのリンクで渡す違反を止める(モバイルで1クリックで開けない・2026-08-07 kim確定ルール)

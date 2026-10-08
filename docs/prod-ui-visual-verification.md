@@ -79,3 +79,24 @@ handoff-audit: `408e4194471c4ab7` / 実測日: 2026-09-21〜22
 
 - `~/.claude/auto-session/runs/2026-09-22-7-prod-ui-probe.mjs` — 1 コマンドで遷移・本文・操作要素・スクショを取得
 - 出力例: `runs/2026-09-22-7-prod-ui-login.png`
+
+## 再検証ログ
+
+### 2026-09-26（handoff-audit:cf8e3e3a3506e5dd）— 再発なし
+
+上の経路が**今も再現するか**を実測し、あわせて同型 handoff の再発を台帳で走査した。
+
+| 項目 | 実測値 |
+|---|---|
+| 到達性 | `curl -sS -o /dev/null -w "%{http_code} %{redirect_url}"` → `307 https://aujust-sales-automation.vercel.app/login` |
+| 描画 | `node ~/.claude/auto-session/runs/2026-09-26-12-prod-ui-probe.mjs`（headless / 読取のみ） |
+| 遷移 | `307 /` → `200 /login` / title `オージャスト営業自動化` |
+| 操作要素 | `form` 1 / `input[type=email]` 1 / ボタン2 |
+| スクショ | `runs/2026-09-26-12-prod-ui-login.png` **37,818 B**（2026-09-22 と同バイト＝画面不変） |
+| 再発走査 | 修正カット `2026-09-21T18:05Z` 以降 **89 行 / block 59 / pass 13**、うち本番UI目視依頼型 **0 件** |
+
+走査は `~/.claude/auto-session/runs/2026-09-26-12-recurrence-scan.mjs`。
+元の手渡しは台帳 **line 162**（`2026-09-18T18:10:15Z` / session `dd676e9e`）の1件のみで、修正以降の再発はない。
+
+**結論**: 到達性・描画・文言は Claude 側で完結する、という本ドキュメントの結論は 2026-09-26 時点でも有効。
+認証後画面の描画は引き続き**未確認**（magic link はメール送信＝禁止、OAuth は対話同意）。

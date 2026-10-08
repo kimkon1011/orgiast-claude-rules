@@ -6,9 +6,25 @@ import { spawnSync } from 'node:child_process';
 import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
 import { isEntry } from './is-entry.mjs';
 
+// アプリ名→リポの台帳。新アプリはここに1行足すと Issue 化と完了報告(feedback-done-notify)の対象に入る。
+// 追加漏れは feedback-form-gate.mjs が本番反映時に止める(§2.11)。
+export function loadFeedbackApps(file = new URL('./feedback-apps.json', import.meta.url)) {
+  try {
+    const entries = Object.entries(JSON.parse(fs.readFileSync(file, 'utf8')));
+    return Object.fromEntries(entries.filter(([name, repo]) => name && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)));
+  } catch {
+    return {};
+  }
+}
+
 export const DEFAULT_REPO_MAP = {
   '購買部管理アプリ': 'kimkon1011/purchasing-management-app',
+  ...loadFeedbackApps(),
 };
+
+// 専用の intake（booth-feedback-intake）が存在し、GitHub Issue 経路に載せないアプリ。
+// 未マッピング（監視漏れの警示）と区別して専用経路扱いにする。
+export const DEDICATED_PIPELINE_APPS = new Set(['ブース制作アプリ']);
 
 export function clean(value) {
   return String(value ?? '').trim();
@@ -254,6 +270,12 @@ export async function main(args = process.argv.slice(2)) {
     if (item?.parse_ok !== true) {
       console.log(`feedback-to-issues: 解析できないのでスキップ message_id=${messageId}`);
       increment(reasons, '解析失敗');
+      continue;
+    }
+    const appName = clean(item?.app_name);
+    if (DEDICATED_PIPELINE_APPS.has(appName)) {
+      console.log(`feedback-to-issues: 専用経路なのでスキップ(ブースintake) app=${appName} message_id=${messageId}`);
+      increment(reasons, '専用経路');
       continue;
     }
     const appRepo = resolveRepo(item?.app_name, repoMapValue);

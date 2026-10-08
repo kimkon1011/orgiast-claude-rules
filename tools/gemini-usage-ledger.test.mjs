@@ -14,7 +14,7 @@ const input = { model: 'known', inTokens: 100, outTokens: 50, source: 'llm-ask' 
 test('unknown model appends usd:null and pricing:unknown in the required row format', () => {
   const fsImpl = memoryFs({ [file]: '{"existing":true}\n' });
   const row = recordGeminiUsage({ ...input, model: 'unlisted' }, { home, now, fsImpl, pricing });
-  assert.deepEqual(row, { t: now.toISOString(), provider: 'gemini', model: 'unlisted', in: 100, out: 50, usd: null, source: 'llm-ask', searches: 0, pricing: 'unknown' });
+  assert.deepEqual(row, { status: 'ok', t: now.toISOString(), provider: 'gemini', model: 'unlisted', in: 100, out: 50, usd: null, source: 'llm-ask', searches: 0, pricing: 'unknown' });
   assert.equal(fsImpl.files.get(file), `{"existing":true}\n${JSON.stringify(row)}\n`);
   assert.deepEqual(fsImpl.writes, [file]);
 });
@@ -62,4 +62,11 @@ test('MCP structured metadata and failure responses each produce a row', () => {
   recordGeminiMcpEvent({ tool_name: 'mcp__gemini-cli__ask-gemini', tool_response: { structuredContent: { modelVersion: 'known', usageMetadata: { promptTokenCount: 7, candidatesTokenCount: 8 } } } }, { recordImpl, home, now });
   recordGeminiMcpEvent({ tool_name: 'mcp__gemini-cli__ask-gemini', hook_event_name: 'PostToolUseFailure' }, { recordImpl, home, now });
   assert.equal(rows[0].inTokens, 7); assert.equal(rows[0].outTokens, 8); assert.equal(rows[1].status, 'error'); assert.equal(rows[1].inTokens, null);
+});
+
+test('Gemini always records status and preserves explicit failures', () => {
+  for (const [extra, expected] of [[{}, 'ok'], [{ status: undefined }, 'ok'], [{ ok: false }, 'error'], [{ status: 'error' }, 'error'], [{ status: 'http_429' }, 'http_429']]) {
+    const row = recordGeminiUsage({ ...input, ...extra }, { home, now, fsImpl: memoryFs(), pricing });
+    assert.equal(row.status, expected);
+  }
 });

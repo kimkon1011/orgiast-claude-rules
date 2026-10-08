@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { launchPurge } from './purge-sessions.mjs';
 import { isEntry } from './is-entry.mjs';
 
 export function resolvePython() {
@@ -12,13 +11,6 @@ export function resolvePython() {
   return null;
 }
 
-function main() {
-  const python = resolvePython();
-  if (!python) return;
-  const script = path.join(path.dirname(fileURLToPath(import.meta.url)), 'purge-hidden-sessions.py');
-  const args = [script];
-  if (!process.argv.includes('--once')) args.push('--start-watcher');
-  spawnSync(python, args, { stdio: 'ignore', windowsHide: true });
-}
+function main() { launchPurge(); }
 
 if (isEntry(import.meta.url)) main();

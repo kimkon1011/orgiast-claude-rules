@@ -174,6 +174,12 @@ export function todoExclusionReason(todo, today = new Date()) {
     || /(下の(旧)?ブロック|前のブロック|下に).{0,20}(全部|すべて)?残って(いる|います)[。\s]*$/.test(body);
   if (parenthesized || referenceOnly) return '参照のみ（作業内容が無い）';
   if (/~~[^~]*~~/.test(text)) return '取り消し線（完了済み）';
+  // 2026-09-28実測: 完了の印が `~~…~~` 以外に `[完了 2026-09-27 #584] …` の形で書かれた項目があり、
+  // この規則に該当せず素通りして、完了済みTODOが次の1目的に選ばれた
+  // (runs/2026-09-28-manifest.json の selectedTodos[0] が実物。自動セッション1回分を消費)。
+  // 行頭の印だけを見る。本文中の「完了」(例「完了報告の文面を直す」)を拾うと生きたTODOを落とすので
+  // アンカーは外さない。生成側 next-session-rotate.mjs の同判定と二重に塞ぐ。
+  if (/^(?:\*\*)?\s*(?:\[完了|\[[xX]\]|✅)/.test(body)) return '完了済み（印あり）';
   if (/(要判断|判断待ち|未決)/.test(text)) return '判断待ち';
   // 2026-09-25実測: 「〜するか」で終わる**意思決定型**のTODO（実物:「マキモノ出品を通すか、
   // 既存 `md-8dac5cb2` への追記にするか」）が除外されず、launcher がこれを「次の1目的」に採用して
@@ -196,6 +202,11 @@ export function todoExclusionReason(todo, today = new Date()) {
   // ⛔ は next-session.md の慣行で「ブロック中／実行対象外」を意味する見出し記号。項目の
   // 先頭に付いた ⛔ は作業内容を持たない注意書きなので、語形に依存せず除外する(防御の二重化)。
   if (/^\s*(?:\d+[a-z]?[.)、]\s*)?(?:\*\*)?\s*⛔/.test(body)) return 'ブロック中';
+  // 2026-09-27実測: 見出し行そのものが項目として混入した実物がある。回転後の next-session.md 先頭に
+  // `1. ### 触る前に読む memory` が並び、launcher がこれを次の1目的に採用して実作業ゼロの回を
+  // 1回消費した(runs/2026-09-27-manifest.json)。作業内容を持たない見出しは語形に依存せず除外する
+  // (生成側 next-session-rotate.mjs の見出し境界と二重の防御)。
+  if (/^#{1,6}\s/.test(body)) return '見出しのみ（作業内容が無い）';
   const todayNumber = today.getFullYear() * 10000 + (today.getMonth() + 1) * 100 + today.getDate();
   for (const match of text.matchAll(/(\d{4})-(\d{2})-(\d{2})\s*以降/g)) {
     const date = `${match[1]}-${match[2]}-${match[3]}`;
@@ -414,7 +425,9 @@ export function isTodoAlreadyDone(md, todoText) {
   const firstLine = String(todoText).split(/\r?\n/, 1)[0];
   if (!firstLine.trim()) return false;
   const escaped = firstLine.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const lineRe = new RegExp(`^\\s*\\d+[.)、]\\s+~~${escaped}~~`, 'm');
+  // 2026-09-28: 完了印の書き方が `~~…~~` 以外（`[完了 …] 本文`）でも「済み」と判定する。
+  // 印の形が増えるたびに再実行保護が片方だけ効かなくなるのを避ける。
+  const lineRe = new RegExp(`^\\s*\\d+[.)、]\\s+(?:~~${escaped}~~|\\[完了[^\\]]*\\]\\s+${escaped})`, 'm');
   return lineRe.test(String(md));
 }
 
@@ -443,7 +456,7 @@ export function buildPrompt(todo, sections, repoCwd, summaryFile, timeoutMin = 6
     attached,
     `## 固定の作業規約
 - セッションの作業ディレクトリは履歴を揃えるためのフォルダであり、実際の作業対象リポジトリは ${repoCwd} である。git は必ず \`git -C ${repoCwd}\` の形で実行し、codex-do.mjs は \`--cwd ${repoCwd}\` を付ける。裸の \`git status\` / \`git checkout\` は使わない。
-- 実装本体は \`node tools/codex-do.mjs "<指示>" --cwd ${repoCwd}\` で Codex に委譲する（§1.18）。監督は設計・レビュー・検証だけ。
+- 実装本体は \`node tools/codex-do.mjs "<指示>" --cwd ${repoCwd} --origin unattended\` で Codex に委譲する（§1.18）。監督は設計・レビュー・検証だけ。調査・分類・要約だけの作業は \`--kind investigate|classify|summarize\` を付けて llm-ask(gemini/deepseek/groq)へ回し、Codex は実装・テスト実行だけに使う。終了コード75（stdout が \`{"status":"deferred"}\`）は失敗ではなく保留（Codex 上限中または無人割当超過）なので、\`retryAt\` 以降まで同じ項目を再試行せず、${summaryFile} に「保留」と記録して次の項目へ進む。
 - このセッションは \`claude -p\` の1回きりのヘッドレス実行である。ターンを終えた瞬間にプロセスごと終了し、起動中の子プロセスはすべて kill される。\`run_in_background: true\` と \`ScheduleWakeup\` は使用禁止で、フックでも deny される。「バックグラウンドで走らせて完了を待つ」と書いてターンを終えてはいけない。
 - \`codex-do.mjs\` は必ず前景で実行し、\`--timeout <秒>\` にセッションの残り時間より短い秒数を渡す。時間内に終わらない見込みなら待たず、そこまでの状態を ${summaryFile} に書き、作りかけのブランチを push して draft PR にするか、次回へ引き継いで終了する。
 - 他セッションと作業ツリーを共有している。\`git add -A\` / \`git commit -a\` / \`git stash\` / \`git checkout -- .\` は禁止。自分が作成・変更したファイルだけをパス指定で \`git add\` する。着手前とコミット直前に \`git status --porcelain\` を撮り、差分が自分の変更だけであることを確認する。
@@ -501,7 +514,7 @@ ${issue.body || '（本文なし）'}
 - 秘匿値をコード、PR、ログへ書かない。
 
 ## 実行環境
-- 実リポジトリは ${repoCwd}。git は \`git -C ${repoCwd}\`、実装委譲は \`node tools/codex-do.mjs "<指示>" --cwd ${repoCwd}\` のように対象を明示する。
+- 実リポジトリは ${repoCwd}。git は \`git -C ${repoCwd}\`、実装委譲は \`node tools/codex-do.mjs "<指示>" --cwd ${repoCwd} --origin unattended\`（調査・分類・要約だけなら \`--kind investigate|classify|summarize\`）のように対象を明示する。終了コード75は失敗ではなく保留で、\`retryAt\` まで再試行しない。
 - このセッションは \`claude -p\` の1回きりのヘッドレス実行である。ターンを終えた瞬間にプロセスごと終了し、起動中の子プロセスはすべて kill される。\`run_in_background: true\` と \`ScheduleWakeup\` は使用禁止で、フックでも deny される。「バックグラウンドで走らせて完了を待つ」と書いてターンを終えてはいけない。
 - \`codex-do.mjs\` は必ず前景で実行し、\`--timeout <秒>\` にセッションの残り時間より短い秒数を渡す。時間内に終わらない見込みなら待たず、そこまでの状態を ${summaryFile} に書き、作りかけのブランチを push して draft PR にするか、次回へ引き継いで終了する。
 - 作業経過を ${summaryFile} に逐次追記する。PR URL・PRタイトル・CI結果を必ず最後に記録する。
@@ -522,7 +535,7 @@ export function buildRolePrompt(roleName, repoCwd, summaryFile, timeoutMin = 30,
 ## 実行環境
 - 実際の作業対象リポジトリは ${repoCwd}。git は必ず \`git -C ${repoCwd}\` の形で実行し、裸の \`git status\` / \`git log\` は使わない。
 - このセッションは1回きりのヘッドレス実行である。\`run_in_background: true\` と \`ScheduleWakeup\` は使用禁止。ターンを終える前に必要な前景処理を完了する。
-- \`codex-do.mjs\` を使う場合は必ず前景で実行し、\`--cwd ${repoCwd}\` とセッション残り時間より短い \`--timeout <秒>\` を付ける。
+- \`codex-do.mjs\` を使う場合は必ず前景で実行し、\`--cwd ${repoCwd}\` と \`--origin unattended\` とセッション残り時間より短い \`--timeout <秒>\` を付ける。終了コード75は失敗ではなく保留（\`retryAt\` まで再試行しない）。
 - 作業経過と結論は ${summaryFile} に追記する。追記は \`>>\` 相当とし、全文を上書きしない。
 - 外部処理を5分を超えてポーリングしない。待ちが必要なら未検証としてレポートと残TODOに記録して終了する。
 - 開始から ${Math.max(1, timeoutMin - 5)} 分でまとめに入り、結論をレポートと ${summaryFile} に書いて終了する。

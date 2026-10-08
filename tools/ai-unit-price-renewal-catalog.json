@@ -1,0 +1,64 @@
+{
+  "proposalId": "P-0149",
+  "title": "AI導入後の単価変化と契約更新率の検証",
+  "question": "AI活用が始まる前と後で、案件の単価と契約更新率はどう変わったか（過去半年の案件が対象）",
+  "dataStatus": "not-connected",
+  "dataStatusNote": "社内の案件台帳（受注日・契約金額・契約更新の有無）は本リポジトリにも自動セッションの到達範囲にも存在しない（2026-09-26 実測: tools/ 615ファイル・docs/ を横断検索して該当なし。Drive の読み取り経路は本セッションでは未接続）。したがって本ツールは実データを接続するまで数値を一切出力しない。",
+  "asOfDefault": "2026-09-26",
+  "asOfNote": "基準日は --asof > 台帳JSONの asOf > catalog の asOfDefault の順に解決する。--write/--check は基準日が固定されないと毎日 drift するため、既定値はこの静的な日付にする（分析をやり直すときは人間が更新する）。",
+  "windowMonths": 6,
+  "windowNote": "分析対象は基準日（--asof、既定は実行日）から遡って windowMonths ヶ月以内に契約した案件。基準日より後に契約した案件は対象外。",
+  "splitMode": "case-flag",
+  "splitModes": {
+    "case-flag": "案件ごとの aiUsed フラグで AI活用前(before)/後(after) に分ける。aiUsed が null の案件は unknown として集計から外し、件数を必ず報告する。",
+    "cutoff-date": "catalog の aiAdoptedAt を全社のAI導入日とみなし、contractDate < aiAdoptedAt を before、>= を after とする。"
+  },
+  "aiAdoptedAt": null,
+  "unitPriceBasisLabel": {
+    "case": "件あたり受注額",
+    "person-day": "人日単価",
+    "month": "月額単価"
+  },
+  "metrics": [
+    {
+      "id": "unit-price",
+      "name": "平均単価",
+      "definition": "案件ごとの unitPrice = amountYen / quantity を単価基準(unitPriceBasis)ごとに集計する。基準が違う単価を1つの平均に混ぜない。",
+      "outputs": ["n", "mean", "median", "min", "max", "totalYen"]
+    },
+    {
+      "id": "renewal-rate",
+      "name": "契約更新率",
+      "definition": "分母 = renewalTarget が true かつ renewalDueDate が基準日以前（=更新時期が到来済み）の案件。分子 = そのうち renewalRenewed が true の案件。",
+      "outputs": ["n", "renewed", "rate"]
+    }
+  ],
+  "censoringRule": "更新時期がまだ来ていない案件（renewalDueDate > asOf）は分母から除外する。除外した件数を必ず出力する。これを分母に入れると更新率が実態より低く出る（打ち切りバイアス）。",
+  "minSampleForClaim": 5,
+  "minSampleNote": "before/after のいずれかで n < minSampleForClaim のときは差分を『参考値』と表示し、reliable=false を付ける。少人数の平均差を効果として断定しない。",
+  "confounders": [
+    "案件種別（ブース/映像/コンサル等）の構成比が before と after で変わると、単価差がAIの効果に見えてしまう",
+    "顧客規模・継続顧客か新規か",
+    "季節性（繁忙期・閑期）と基準日の選び方",
+    "aiUsed が自己申告のため、AIを使った案件ほど記録が残りやすい（記録バイアス）",
+    "受注額は値引き後か定価か。混在すると単価が歪む",
+    "更新率は契約期間の長さに依存するため、before/after で契約期間の分布が違うと比較できない"
+  ],
+  "requiredFields": [
+    { "name": "id", "type": "string", "note": "案件ID（台帳内で一意）" },
+    { "name": "name", "type": "string", "note": "案件名" },
+    { "name": "contractDate", "type": "YYYY-MM-DD", "note": "契約日（分析期間の判定に使う）" },
+    { "name": "amountYen", "type": "number", "note": "契約金額（円）" },
+    { "name": "quantity", "type": "number", "note": "単価の分母。件あたりなら 1、人日単価なら人日数、月額なら月数" },
+    { "name": "unitPriceBasis", "type": "case|person-day|month", "note": "単価の基準" },
+    { "name": "aiUsed", "type": "boolean|null", "note": "この案件でAIを活用したか。splitMode=case-flag のとき必須。null は unknown" },
+    { "name": "renewalTarget", "type": "boolean", "note": "契約更新の対象案件か" },
+    { "name": "renewalDueDate", "type": "YYYY-MM-DD|null", "note": "更新時期。到来前は更新率の分母から外す" },
+    { "name": "renewalRenewed", "type": "boolean|null", "note": "実際に更新されたか" }
+  ],
+  "csvNote": "同じ列名のヘッダ行を持つ CSV も読める（--analyze <file>.csv）。真偽値は true/false/1/0/yes/no、空欄は null。",
+  "limits": [
+    "本ツールは集計と検定前の記述統計まで。因果（AI導入が単価を上げた）は言えない。相関と交絡の切り分けは別途。",
+    "更新率の比較は before/after で契約期間の分布が揃っていることを前提にする。揃っていない場合は比較せず、その旨を出力する。"
+  ]
+}

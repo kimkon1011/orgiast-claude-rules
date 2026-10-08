@@ -27,6 +27,7 @@ import {
   pickRoute,
   resolveClaudeBinary,
   resolveConfigDir,
+  resolveLaunchCwd,
   resolveVscodeCli,
   resolveWt,
   runHeadlessNextSession,
@@ -35,6 +36,38 @@ import {
   shouldInstallBundledVsix,
   trustKeyVariants,
 } from './next-session-launch.mjs';
+
+test('cwd は不在の先頭候補を記録し、次の実在候補で探索を止める', () => {
+  const checked = [];
+  assert.deepEqual(resolveLaunchCwd({
+    candidates: [['handoff', '/missing'], ['current', '/present'], ['later', '/unused']],
+    exists: (candidate) => { checked.push(candidate); return candidate === '/present'; },
+    fallback: '/repo',
+  }), {
+    cwd: '/present', missing: [{ source: 'handoff', candidate: '/missing' }],
+    usedFallback: false, explicitMissing: false,
+  });
+  assert.deepEqual(checked, ['/missing', '/present']);
+});
+
+test('cwd 候補が全て不在なら基準パスへフォールバックする', () => {
+  assert.deepEqual(resolveLaunchCwd({
+    candidates: [['handoff', '/missing'], ['current', '']],
+    exists: () => false, fallback: '/repo',
+  }), {
+    cwd: '/repo', missing: [{ source: 'handoff', candidate: '/missing' }, { source: 'current', candidate: '' }],
+    usedFallback: true, explicitMissing: false,
+  });
+});
+
+test('--cwd の不在は explicitMissing として返す', () => {
+  assert.deepEqual(resolveLaunchCwd({
+    candidates: [['--cwd', '/missing']], exists: () => false, fallback: '/repo',
+  }), {
+    cwd: '/repo', missing: [{ source: '--cwd', candidate: '/missing' }],
+    usedFallback: true, explicitMissing: true,
+  });
+});
 
 test('config dir は state、env、既定の順で解決し state の ~ を展開する', () => {
   const home = 'C:\\Users\\test';
@@ -520,6 +553,47 @@ test('VSCode 経路は既定で URI だけを撃ち、既存ウィンドウを�
   assert.match(successLog, /タブバーの一番右端/);
   assert.match(successLog, /Enter 1回で開始/);
   assert.match(successLog, /cwd   : C:\\work/);
+});
+
+for (const dryRun of [false, true]) {
+  test(`不在の --cwd は起動せず PowerShell 退避も出さない (dry-run=${dryRun})`, async () => {
+    const codeCli = '/fake/code.cmd';
+    const { io, calls } = fakeIo({
+      env: { VSCODE_CLI_PATH: codeCli },
+      exists: (file) => file === codeCli || file === 'C:\\work',
+    });
+    const args = ['--target', 'vscode', '--cwd', '/missing'];
+    if (dryRun) args.push('--dry-run');
+    assert.equal(await launchNextSession(args, io), 0);
+    assert.ok(calls.logs.includes('[next-session] スキップ: --cwd が指すフォルダが存在しません: /missing'));
+    assert.doesNotMatch(calls.logs.join('\n'), /PowerShell 退避:/);
+    assert.equal(calls.spawn.length, 0);
+    assert.equal(calls.writes.length, 0);
+    assert.equal(calls.renames.length, 0);
+  });
+}
+
+test('解決後に cwd が消えた場合は cwd の不在を通知し PowerShell 退避を出さない', async () => {
+  const codeCli = '/fake/code.cmd';
+  const cwd = '/work';
+  let present = true;
+  const { io, calls } = fakeIo({
+    env: { VSCODE_CLI_PATH: codeCli },
+    exists: (file) => file === codeCli || (file === cwd && present),
+    spawn: (...args) => {
+      calls.spawn.push(args);
+      const child = new EventEmitter();
+      queueMicrotask(() => {
+        present = false;
+        child.emit('error', new Error('spawn cmd.exe ENOENT'));
+      });
+      return child;
+    },
+  });
+  assert.equal(await launchNextSession(['--target', 'vscode', '--cwd', cwd], io), 0);
+  assert.equal(calls.spawn[0][2].cwd, cwd);
+  assert.deepEqual(calls.logs, [`[next-session] スキップ: 起動に失敗しました (cwd が存在しません: ${cwd})`]);
+  assert.equal(calls.writes.length, 0);
 });
 
 test('VSCode spawn が ENOENT の時は PowerShell 退避コマンドを出して exit 0 を保つ', async () => {

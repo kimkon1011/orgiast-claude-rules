@@ -1,9 +1,8 @@
-import { spawnSync } from "node:child_process";
-import { readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { resolvePython } from "./session-list-tidy.mjs";
+import { join } from "node:path";
+import { launchPurge } from "./purge-sessions.mjs";
+import { recordClosed } from "./closed-sessions-ledger.mjs";
 import { launchNextSession } from "./next-session-launch.mjs";
 
 import { rotate } from "./next-session-rotate.mjs";
@@ -12,10 +11,6 @@ const claudeDir = join(homedir(), ".claude");
 const currentPath = join(claudeDir, "current-session.json");
 const currentSessionsDir = join(claudeDir, "current-sessions");
 const closedPath = join(claudeDir, "closed-sessions.json");
-const repoPurgePath = join(dirname(fileURLToPath(import.meta.url)), "purge-hidden-sessions.py");
-let purgePath = repoPurgePath;
-try { readFileSync(repoPurgePath); } catch { purgePath = join(claudeDir, "purge-hidden-sessions.py"); }
-
 function readJson(path, fallback) {
   try {
     return JSON.parse(readFileSync(path, "utf8"));
@@ -56,19 +51,17 @@ if (!sessionId) {
 
 rotate(join(claudeDir, "next-session.md"));
 
-const stored = readJson(closedPath, { ids: [] });
-const ids = Array.isArray(stored.ids) ? stored.ids : [];
-if (!ids.includes(sessionId)) {
-  ids.push(sessionId);
-  const tmpPath = `${closedPath}.tmp-${process.pid}`;
-  writeFileSync(tmpPath, `${JSON.stringify({ ids: ids.slice(-500) }, null, 2)}\n`, "utf8");
-  renameSync(tmpPath, closedPath);
+const recorded = recordClosed(sessionId, closedPath, {
+  onError: (e) => console.error(`closed-sessions.json に書けませんでした: ${e.message}`),
+});
+if (!recorded) {
+  console.error(`未完了: ${sessionId} を closed-sessions.json に記録できませんでした（一覧から消えません）`);
+  process.exit(1);
 }
 
-const python = resolvePython();
-if (python) spawnSync(python, [purgePath], { stdio: "ignore", windowsHide: true });
+launchPurge();
 
-console.log(`closed: ${sessionId} -> will disappear from the session list within ~45s (no /clear needed)`);
+console.log(`closed: ${sessionId} -> このタブを ✕ で閉じてください。次回の SessionStart/Stop で退避されます（稼働中セッションは保護されます）`);
 
 if (!process.argv.includes("--no-launch")) {
   try {

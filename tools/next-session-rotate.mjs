@@ -5,11 +5,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { isEntry } from './is-entry.mjs';
+import { defaultMemoryDirs, scanMemory } from './learning-ledger.mjs';
 export const MAX_BYTES = 24_000;
 const marker = '<!-- NEXT-SESSION v1 -->';
 const hash = (text) => createHash('sha256').update(text).digest('hex');
 
-export function planRotation(source, { now = new Date(), maxBytes = MAX_BYTES, archiveRef = 'archive/next-session.md' } = {}) {
+export function planRotation(source, { now = new Date(), maxBytes = MAX_BYTES, archiveRef = 'archive/next-session.md', promotionPendingCount = null } = {}) {
   const items = [];
   const seen = new Set();
   let date = '';
@@ -26,8 +27,17 @@ export function planRotation(source, { now = new Date(), maxBytes = MAX_BYTES, a
     if (stamp) date = stamp[1];
     const location = line.match(/^<!--.*cwd:\s*(.*?)(?:\s*\/\s*model:|\s*-->)/);
     if (location) cwd = location[1].trim();
-    if (/^##\s/.test(line)) {
-      flush(); active = /^##\s+(?:残TODO|次の1目的|未決|朝バッチ取り込み|🔁)/.test(line); continue;
+    // 2026-09-27実測: `## 次の1目的` の直後に置かれた `### 触る前に読む memory`(H3) と
+    // その下の memory 箇条書きが「次の1目的」セクションの続きとして項目化され、
+    // 回転後の next-session.md 先頭に `1. ### 触る前に読む memory` として並んだ。auto-session は
+    // それを次の1目的に採用し、実作業ゼロの回を1回消費した(runs/2026-09-27-manifest.json が実物)。
+    // 見出しはレベルを問わずセクション境界として扱い、下位見出し配下の箇条書きを巻き込まない。
+    const heading = line.match(/^(#{1,6})\s/);
+    if (heading) {
+      flush();
+      active = heading[1] === '##'
+        && /^##\s+(?:残TODO|次の1目的|未決|朝バッチ取り込み|🔁)/.test(line);
+      continue;
     }
     if (!active) continue;
     const task = line.match(/^(?:\d+[.)、]|[-*](?:\s+\[[ xX]\])?)\s+(.+)/);
@@ -36,19 +46,24 @@ export function planRotation(source, { now = new Date(), maxBytes = MAX_BYTES, a
     else if (line.trim() && !/^(?:<!--|---|>)/.test(line)) { flush(); current = { lines: [line], date, cwd }; }
   }
   flush();
-  const stats = { completed: 0, duplicate: 0, old: 0, context: 0, pending: 0, overflow: 0 };
+  const stats = { completed: 0, duplicate: 0, old: 0, context: 0, pending: 0, overflow: 0, stale: 0 };
   const pending = [];
   for (const item of items) {
     const text = item.lines.join('\n').trim();
     const first = item.lines[0].replace(/^(?:\d+[.)、]|[-*])\s+/, '');
     // Only explicit completion on the task's first line counts; a completed substep is not the task.
-    if (/^(?:~~|\[[xX]\]|✅)|~~\s*(?:→\s*)?✅/.test(first)) { stats.completed++; continue; }
+    // 2026-09-28実測: 完了の印が `~~…~~` 以外に `[完了 2026-09-27 #584] …` の形で書かれた項目があり、
+    // 完了と認識されずに毎回の回転で次代へ持ち越されていた(残TODO 41件中13件がこの形)。
+    // auto-session 側の除外規則(todoExclusionReason)と二重に塞ぐ。
+    if (/^(?:~~|\[[xX]\]|\[完了|✅)|~~\s*(?:→\s*)?✅/.test(first)) { stats.completed++; continue; }
     if (/^(?:未定|なし|（なし|以下は既存|上の「|下の既存)/.test(first)) { stats.context++; continue; }
     const explicit = [...first.matchAll(/(?:起票|更新)\s*[:：]?\s*(\d{4}-\d{2}-\d{2})/g)].at(-1)?.[1];
     const age = now - Date.parse(explicit || item.date);
     if (age > 30 * 86400000 && !/着手中/.test(text)) { stats.old++; continue; }
     const key = text.replace(/^\d+[.)、]\s+/, '').replace(/\s+/g, ' ').trim();
     if (seen.has(key)) { stats.duplicate++; continue; }
+    // Stale items remain reachable in the complete source snapshot archived by rotate().
+    if (promotionPendingCount === 0 && /^PROMOTE 待ち\s*\d+\s*件/.test(first)) { stats.stale++; continue; }
     seen.add(key); pending.push({ text: first + text.slice(item.lines[0].length), date: explicit || item.date, cwd: item.cwd });
   }
   const header = `${marker}\n<!-- rotated queue v1 -->\n> 原文・完了・重複・30日超・詳細文脈: [退避先](${archiveRef})\n## 次の1目的\n未定（残TODOの先頭から確認）\n## 残TODO\n`;
@@ -76,18 +91,25 @@ export function planRotation(source, { now = new Date(), maxBytes = MAX_BYTES, a
   return { text: output, overflow, stats, beforeBytes: Buffer.byteLength(source), afterBytes: Buffer.byteLength(output) };
 }
 
-export function rotate(file, { now = new Date(), maxBytes = MAX_BYTES, source: supplied } = {}) {
+export function rotate(file, { now = new Date(), maxBytes = MAX_BYTES, source: supplied, promotionPendingCount } = {}) {
   if (!fs.existsSync(file) && supplied === undefined) return { changed: false, reason: 'absent' };
   const original = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
   const source = supplied ?? original;
+  if (promotionPendingCount === undefined) {
+    promotionPendingCount = null;
+    if (source.includes('PROMOTE 待ち')) {
+      try { promotionPendingCount = scanMemory(defaultMemoryDirs(), { onError: () => {} }).targets.length; }
+      catch { promotionPendingCount = null; }
+    }
+  }
   // Re-evaluate completion/age even after normalization; unchanged queues are byte-stable.
   const oldRef = source.match(/\[退避先\]\(([^)]+)\)/)?.[1];
-  if (oldRef && source === original && planRotation(source, { now, maxBytes, archiveRef: oldRef }).text === source) return { changed: false, beforeBytes: Buffer.byteLength(source), afterBytes: Buffer.byteLength(source) };
+  if (oldRef && source === original && planRotation(source, { now, maxBytes, archiveRef: oldRef, promotionPendingCount }).text === source) return { changed: false, beforeBytes: Buffer.byteLength(source), afterBytes: Buffer.byteLength(source) };
   const month = now.toISOString().slice(0, 7).replace('-', '');
   const archive = path.join(path.dirname(file), 'archive', `next-session-${month}.md`);
   const digest = hash(source);
   const ref = `archive/next-session-${month}.md#snapshot-${digest}`;
-  const result = planRotation(source, { now, maxBytes, archiveRef: ref });
+  const result = planRotation(source, { now, maxBytes, archiveRef: ref, promotionPendingCount });
   fs.mkdirSync(path.dirname(archive), { recursive: true });
   const previousArchive = fs.existsSync(archive) ? fs.readFileSync(archive, 'utf8') : '';
   if (!previousArchive.includes(`<!-- snapshot:${digest} -->`)) {

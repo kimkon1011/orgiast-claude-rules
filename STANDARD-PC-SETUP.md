@@ -32,35 +32,51 @@ https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/STANDARD-
 
 このPCで動いているClaude Codeが、この章を読んで自分で実行するための手順。エラーが出たら推測で回避せず、エラー文をそのまま示して止まること（「止まる条件」参照）。
 
-1. **復旧コマンドを実行する**（git/Node.js/Claude Code/Codex CLIをまとめて自動導入・更新するインストーラ）。PowerShellで次を実行する。
+### 手順1 復旧コマンドを実行する
 
-   ```
-   powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=Join-Path $env:TEMP 'install-orgiast.ps1'; Invoke-WebRequest -UseBasicParsing ('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/tools/install-orgiast.ps1?cb='+[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) -OutFile $p; & $p -NoOllama"
-   ```
+（git/Node.js/Claude Code/Codex CLIをまとめて自動導入・更新するインストーラ）。PowerShellで次を実行する。
 
-2. **導入確認**: `git --version` / `node --version` / `claude --version` / `codex --version` を実行し、それぞれバージョンが返ることを確認する。1つでも失敗したら、その時点のエラーをそのまま提示して止まる。
+```
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=Join-Path $env:TEMP 'install-orgiast.ps1'; Invoke-WebRequest -UseBasicParsing ('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/tools/install-orgiast.ps1?cb='+[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) -OutFile $p; & $p -NoOllama"
+```
 
-3. **ONBOARDING.md を取り込む**: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/ONBOARDING.md` を取得し、`~/.claude/CLAUDE.md` に取り込む（既存があればBEGIN/ENDマーカーでマージ、取り込み前に必ずバックアップを取る）。
+### 手順2 導入確認
 
-4. **`setup --converge` を実行する**（共通の許可ルール・hookをあるべき状態へ収束させる）: `node "$HOME/orgiast-claude-rules/tools/setup.mjs" --converge`。「許可ルール・hookをN件反映しました」の趣旨の結果が出ることを確認する。
+`git --version` / `node --version` / `claude --version` / `codex --version` を実行し、それぞれバージョンが返ることを確認する。1つでも失敗したら、その時点のエラーをそのまま提示して止まる。
 
-5. **4.3の3点チェックを行う**（下の「4.3 導入できているかの確認方法」と同じ）:
-   - `<ホームフォルダ>\.claude\skills\session-start\SKILL.md` が存在する
-   - `<ホームフォルダ>\orgiast-claude-rules\tools\onboarding-sync.mjs` が存在し、中に `provisionKeys` という文字列が含まれる
-   - `<ホームフォルダ>\.claude\settings.json` の `SessionStart` に `onboarding-sync.mjs` が登録されている
-   いずれか欠けていたら手順1をもう一度実行する。
+### 手順3 ONBOARDING.md を取り込む
 
-6. **各サービスへのログインは、ここで必ず止まって本人に案内する**（パスワード・トークンはチャットで絶対に聞かない）。
-   - GitHub: `gh auth login` を実行し、表示された認証用URLをブラウザで開いて承認してもらう。完了の見え方: `gh auth status` が「Logged in to github.com」。
-   - Google（clasp用）: `npx clasp login` を実行し、表示された認証用URLをブラウザで開いて会社のGoogleアカウントでログインしてもらう。完了の見え方: ターミナルに「You are logged in as ...」。
-   - Vercel: `npx vercel login` を実行し、表示されたURL・確認コードでブラウザ承認してもらう。完了の見え方: ターミナルに「Success!」。
-   - どの認証も、画面が開かない・エラーが出る場合は無理に繰り返さず、その場でエラーを提示して止まる。
+`https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/ONBOARDING.md` を取得し、`~/.claude/CLAUDE.md` に取り込む（既存があればBEGIN/ENDマーカーでマージ、取り込み前に必ずバックアップを取る）。
 
-7. **許可ルール15行（下記5.3）は、Claude Code自身が /permissions を編集しない**（安全上の関門のため）。次の順で進める。
-   a. まずAグループ（本番反映9行）を追加してよいか、一文で説明したうえで利用者本人に聞く（「アプリの本番反映コマンドを、毎回の確認なしで実行できるようにする設定です。開発をしない場合は不要です」）。
-   b. 回答に応じて、下記5.2の手順を人に案内する形で進行する（`/permissions` → 「Add rule…」→ 1行ずつ貼り付け → 「Add rule」）。Claude Code は画面遷移の案内だけを行い、ルールの追加・削除操作そのものは行わない。
+### 手順4 `setup --converge` を実行する
 
-8. **最後に6章の最終チェックリスト（1〜6項目）を実行し、各項目をOK/NGで報告する。** NGがあれば、どの手順に戻ればよいかを添えて報告する。
+（共通の許可ルール・hookをあるべき状態へ収束させる）: `node "$HOME/orgiast-claude-rules/tools/setup.mjs" --converge`。「許可ルール・hookをN件反映しました」の趣旨の結果が出ることを確認する。
+
+### 手順5 4.3の3点チェックを行う
+
+（下の「4.3 導入できているかの確認方法」と同じ）:
+- `<ホームフォルダ>\.claude\skills\session-start\SKILL.md` が存在する
+- `<ホームフォルダ>\orgiast-claude-rules\tools\onboarding-sync.mjs` が存在し、中に `provisionKeys` という文字列が含まれる
+- `<ホームフォルダ>\.claude\settings.json` の `SessionStart` に `onboarding-sync.mjs` が登録されている
+いずれか欠けていたら手順1をもう一度実行する。
+
+### 手順6 各サービスへのログインは、ここで必ず止まって本人に案内する
+
+（パスワード・トークンはチャットで絶対に聞かない）。
+- GitHub: `gh auth login` を実行し、表示された認証用URLをブラウザで開いて承認してもらう。完了の見え方: `gh auth status` が「Logged in to github.com」。
+- Google（clasp用）: `npx clasp login` を実行し、表示された認証用URLをブラウザで開いて会社のGoogleアカウントでログインしてもらう。完了の見え方: ターミナルに「You are logged in as ...」。
+- Vercel: `npx vercel login` を実行し、表示されたURL・確認コードでブラウザ承認してもらう。完了の見え方: ターミナルに「Success!」。
+- どの認証も、画面が開かない・エラーが出る場合は無理に繰り返さず、その場でエラーを提示して止まる。
+
+### 手順7 許可ルール15行（下記5.3）は、Claude Code自身が /permissions を編集しない
+
+（安全上の関門のため）。次の順で進める。
+- まずAグループ（本番反映9行）を追加してよいか、一文で説明したうえで利用者本人に聞く（「アプリの本番反映コマンドを、毎回の確認なしで実行できるようにする設定です。開発をしない場合は不要です」）。
+- 回答に応じて、下記5.2の手順を人に案内する形で進行する（`/permissions` → 「Add rule…」→ 1行ずつ貼り付け → 「Add rule」）。Claude Code は画面遷移の案内だけを行い、ルールの追加・削除操作そのものは行わない。
+
+### 手順8 最後に6章の最終チェックリスト（1〜6項目）を実行し、各項目をOK/NGで報告する
+
+NGがあれば、どの手順に戻ればよいかを添えて報告する。
 
 **止まる条件**: どの手順でもエラーが出たら、エラーメッセージをそのまま提示して次の手順へ進まず止まる。ログイン・許可ルール追加など本人の操作が必要な箇所は、必ず一度立ち止まって案内する。
 
@@ -109,7 +125,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=Join-Path $env:TEMP '
 |---|---|---|
 | onboarding-sync.mjs | 1日1回（差分がある時だけ） | GitHubの最新ルール（ONBOARDING.md / tools / skills）を取得し、差分をマーカーでマージ |
 | setup --converge | セッション開始時 | 共通の許可ルール（allow-rules.json）・hook登録を自動反映 |
-| claude-cost-reporter.mjs | 日次 | 当月概算コスト（PC名・$合計・モデル別内訳のみ）をDiscordへ自己申告。$150超⚠️／$300超🚨／Fable5検出🚨 |
+| claude-cost-reporter.mjs | 日次 | 当月概算コスト（PC名・$合計・モデル別内訳のみ）をDiscordへ自己申告。$150超で「注意」／$300超で「警告」／Fable5検出で「警告」 |
 | settings-quality-guard.mjs | 設定変更時・セッション開始時 | effortLevelがlowにされたらmediumへ自動復元 |
 | fable-session-guard.mjs / model-agent-guard.mjs | 常時 | Fableの用途制限（監督のみ・planIncluded判定）を自動監視 |
 | interaction-loop.mjs | 夜間 | 「何回・なぜ手入力させられたか」をローカル計測（外部送信なし） |

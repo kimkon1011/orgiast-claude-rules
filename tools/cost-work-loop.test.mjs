@@ -16,9 +16,12 @@ const base = { claudeOut: 1_000_000, history: [], target: 0.5, previousMode: 'wa
 test.after(() => fs.rmSync(isolatedHome, { recursive: true, force: true }));
 
 test('委譲ヘルスをプロバイダ健全性の直前へ挿入する', () => {
+  fs.writeFileSync(path.join(isolatedHome, '.claude', 'executor-usage.jsonl'), JSON.stringify({ t: new Date().toISOString(), provider: 'skipped', status: 'no-cheap-executor' }) + '\n');
   const run = spawnSync(process.execPath, [path.join(import.meta.dirname, 'cost-work-loop.mjs')], { env: { ...process.env, ORGIAST_HOME: isolatedHome }, encoding: 'utf8', timeout: 120_000 });
   assert.equal(run.status, 0, run.stderr);
   const directive = fs.readFileSync(path.join(isolatedHome, '.claude', 'cost-directive.md'), 'utf8');
+  assert.match(directive, /未ルーティング: 1件/);
+  assert.doesNotMatch(directive, /skipped:.*fail/);
   assert.ok(directive.indexOf('## 🩺 委譲ヘルス') < directive.indexOf('### プロバイダ健全性'));
 });
 

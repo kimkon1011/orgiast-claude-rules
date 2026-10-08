@@ -1,9 +1,9 @@
 [
   {
     "pattern": "Google 系プロパティ(GA4/Search Console/GTM)の有無確認",
-    "route": "DWD サービスアカウント(kim impersonate)で analyticsadmin/webmasters/tagmanager API を直接照会（tools/google-property-check.mjs、読み取り専用・追加権限不要）。Claude 履歴の Grep は証拠にならない。分類器で止まるなら『未確認』と書く。**2026-09-20 実測**: GA4 ok(accounts 17) / Search Console ok(sites 12) は追加作業ゼロで通る。**GTM だけ errorKind=scope_not_delegated(unauthorized_client)** = Admin Console の DWD に tagmanager.readonly が未登録。GTM を読む場合のみ kim の1アクション（Admin Console → ドメイン全体の委任 → SA client_id に scope 追加）が要る",
+    "route": "DWD サービスアカウント(kim impersonate)で analyticsadmin/webmasters/tagmanager API を直接照会（tools/google-property-check.mjs、読み取り専用・追加権限不要）。Claude 履歴の Grep は証拠にならない。分類器で止まるなら『未確認』と書く。**2026-09-20 実測**: GA4 ok(accounts 17) / Search Console ok(sites 12) は追加作業ゼロで通る。**GTM だけ errorKind=scope_not_delegated(unauthorized_client)** = Admin Console の DWD に tagmanager.readonly が未登録。GTM を読む場合のみ kim の1アクション（Admin Console → ドメイン全体の委任 → SA client_id に scope 追加）が要る。**前提（2026-10-01 実測）**: この照会は SA 鍵のある PC でしか動かない。DESKTOP-PPD5V8I では鍵が無く `node tools/google-property-check.mjs` は exit 2（`SA key not found`）で終わる。不在は5経路で確認済み＝①既定パス `~/Downloads/CLAUDE.md配布/aujust-sales-automation/.gcp/sheets-sa.json` ②環境変数 GOOGLE_SA_KEY / GOOGLE_APPLICATION_CREDENTIALS（プロセス・Machine・User）③keyserve 配布12ファイル ④`C:\\Users\\kimko` 配下の再帰探索 ⑤Windows 資格情報マネージャ。**鍵の無い PC では GA4/GSC/GTM を『未確認』で止める**（exit 2 は分類器の拒否でも API 拒否でもない＝権限の話ではない。推測で埋めない）。ただし**鍵の有無に関わらず再発監査はできる**: `node tools/handoff-audit-oauth-consent-scan.mjs --since <日付>`（読み取り専用）が台帳 `~/.claude/handoff-audit-ledger.jsonl` と `~/.claude/projects/*/*.jsonl` を『Google プロパティ語 ∧ OAuth 同意語 ∧ 他ベンダー（GitHub device flow / codex login 等は正当な手渡しなので除外）』で走査する。報告前に `--selftest`（陽性2・陰性3）を通すこと（2026-10-01 実測: 窓 2026-09-20〜10-01・台帳 347 行・transcript 35,073 turn で再発 0 件、対照 5/5）。詳細: tools/handoff-audit-findings-oauth-first-consent-recheck.md",
     "confidence": "high",
-    "source": "2026-09-10 TETSUKO Search Console 誤判定 / 2026-09-20 実測"
+    "source": "2026-09-10 TETSUKO Search Console 誤判定 / 2026-09-20 実測 / 2026-10-01 再検証（鍵の無い PC の前提と再発走査手順を追記）"
   },
   {
     "pattern": "Search Console の所有者追加",
@@ -87,7 +87,7 @@
     "pattern": "本番UIの動作確認を kim に目視依頼",
     "route": "**到達性・描画・文言は Claude 側で完結する。認証後の画面だけは無人会話の範囲外**（実測 2026-09-22）。手順=①`curl -sS -o /dev/null -w \"%{http_code} %{redirect_url}\"` で本番 URL を1本叩く（aujust-sales-automation.vercel.app は `/` `/cases` `/api/*` すべて 307→/login を実測）。②`playwright-core`（このPCは `~/.claude/tools/node_modules/playwright-core`）＋ `%LOCALAPPDATA%\\ms-playwright\\chromium-*\\chrome-win64\\chrome.exe` を `executablePath` に渡し headless 描画。実測で login 画面の title/本文/入力欄/ボタン/スクショ(37,818B) まで取得＝**「開いて目視」の到達性確認は kim 不要**。③認証は magic link と Google OAuth の2経路のみで、無人会話では踏めない（リンク要求はメール送信＝禁止、OAuth は対話同意）。**認証後画面の描画は未確認と書く。**④論点が「運用に合っているか」＝列マッピングの正しさなら UI ではなくデータの話なので Sheets/DWD 読み戻しで判定する（`14f2bd38e35a58ce` で実証）。⑤描画そのものが論点の時だけ Playwright + `storageState`（アプリ側 e2e の auth state）を使う。**落とし穴**: Windows絶対パスは ESM 動的 import に直接渡せない（`ERR_UNSUPPORTED_ESM_URL_SCHEME: c:` → `pathToFileURL().href`）、`playwright-core` は CJS なので名前空間に `chromium` が無く `default.chromium` になる場合がある、Chromium 実体は `chrome-win64/chrome.exe`。再現: `~/.claude/auto-session/runs/2026-09-22-7-prod-ui-probe.mjs`。詳細: docs/prod-ui-visual-verification.md",
     "confidence": "high",
-    "source": "2026-09-22 実測（handoff-audit:408e4194471c4ab7）。元の手渡しは 2026-09-18 セッション dd676e9e「https://aujust-sales-automation.vercel.app の Reブース案件を1件開いて、実際の運用に合っているか見てください」。詳細は docs/prod-ui-visual-verification.md"
+    "source": "2026-09-22 実測（handoff-audit:408e4194471c4ab7）。元の手渡しは 2026-09-18 セッション dd676e9e「https://aujust-sales-automation.vercel.app の Reブース案件を1件開いて、実際の運用に合っているか見てください」。詳細は docs/prod-ui-visual-verification.md ＋ **2026-09-26 再実測（handoff-audit:cf8e3e3a3506e5dd）**: 同経路を再実行し `307 → 200 /login`・title・input・ボタン2・スクショ 37,818B を再現（2026-09-22 と同バイト＝画面不変）。台帳の修正カット `2026-09-21T18:05Z` 以降 89 行（block 59 / pass 13）を走査し、**同型 handoff の再発は 0 件**。再現 `~/.claude/auto-session/runs/2026-09-26-12-prod-ui-probe.mjs` / 走査 `.../2026-09-26-12-recurrence-scan.mjs`"
   },
   {
     "pattern": "バックグラウンド再生成の進捗待ち（証拠なしに背景ジョブの状態を断定して待たせる）",
@@ -106,5 +106,23 @@
     "route": "恒久修正は当ターン内に実装まで終える。next-session.md に設計だけを積んで次セッションへ送らない（配布待ち・マージ待ち・fork 制約は未着手の理由にならない）。実装は codex-do.mjs を前景・単発で回し（--prompt-file / --cwd / --timeout）、WSL 不在で codex 経路が起動しない PC では内蔵フォールバック(Gemini/DeepSeek)→不可なら Claude 直で実装する。GitHub は gh CLI で fork→PR→CI green→gh pr merge まで当ターンで進め、user にはマージ1回だけを残す。実装できなかった場合は残作業を1行で記録し、断定で『完了』と書かない。",
     "confidence": "high",
     "source": "handoff-audit-nightly:13755f2bc1e6504a87e553bf97fc9c06c4b4ded1a18bf449252fe56ac0f03553"
+  },
+  {
+    "pattern": "本番デプロイを user のターミナル操作に手渡す",
+    "route": "Claude 側の認証済み Vercel CLI で完結する。`npx vercel deploy --prod --yes` を対象リポジトリのルートで実行（event-shop は `cd D:\\Claude\\event-shop`）。**2026-09-25 03:23 実測: exit 0 / readyState=READY / `event-shop.jp` へエイリアス / 分類器ブロックなし**。`vercel whoami`・`vercel env ls production`・`vercel alias ls`・`vercel inspect <本番URL>`・`vercel deploy --prod` の5経路が全て通る。反映確認は CLI の exit code でなく `vercel inspect` の id/created とエイリアス先で行う（CLI は BLOCKED でも成功に見える）。コミット author が GitHub アカウントに紐づかないメールだと BLOCKED になるので `git log -1 --format=%ae` を先に見る。分類器が止めた場合も「未確認」と書き user に実行させない。**2026-10-01 再検証（handoff-audit:4b241a72023c7578）: 同型 handoff は 2026-09-25 の修正後も再発している（3セッション）。** 2026-09-26 `eef7f47a`（チャット1行で user へ渡した）／2026-09-28 `a06eaef3`（デスクトップに1クリック起爆ファイルを置き「本番に出してよいならダブルクリックしてください」）／2026-09-30 `bbd0a4a2`（VSCode TERMINAL に貼る `cd D:\\Claude\\event-shop; vercel deploy --prod --yes` の手順を提示。同じデプロイを3回依頼し、user から「貼る場所を書け」と指摘されて CLAUDE.md の恒久ルールになった）。いずれも理由は効率ではなく §1.1「外向け操作は人の同意を優先」。**同意と実行は別物** — 外向けで同意が要るなら、チャットで可否を1回確認し、**実行は Claude が行う**（rule 2 は「最後の1ステップだけ user に」も禁じている）。user にコマンドを打たせない。同じ期間に Claude 側経路が生きていた実測: 2026-09-25 `2551106a` が event-shop、2026-09-30 `9c9325e7` が stagecue を `vercel deploy --prod --yes` で自ら本番反映。2026-10-01 再測 `vercel whoami`=seisaku-team-5867。**Stop 監査の台帳はこの型を検知していない**（2026-09-25 以降 93 行すべて verdict=pass、うち 90 行は regex-blocked）ので、台帳の pass を再発 0 の根拠にしない。詳細 docs/production-deploy-claude-side-route.md",
+    "confidence": "high",
+    "source": "2026-09-25 auto-session 実測 / handoff-audit:a50af9c008c0c626 / **2026-10-01 再検証（handoff-audit:4b241a72023c7578）**: 実物で再発3件を確認し route を是正。再現 `~/.claude/auto-session/runs/2026-10-01-1-recurrence-scan.mjs`・`2026-10-01-1-transcript-scan.mjs`・`2026-10-01-1-detail.mjs`"
+  },
+  {
+    "pattern": "外部サービスの課金・購入画面の操作",
+    "route": "支払い・カード登録は rule 3 の正当な手渡し理由（X の課金は API が無く画面操作のみ。2026-09-25 session 56e5c1e7 実測: `gh api repos/*/actions/secrets` は名前のみ・`node tools/env-kv.mjs --list` は出力0件でローカルに鍵が無い）。**2026-09-26 実測**: `console.x.com` を Playwright headless(chromium) で開くと 200 → `https://x.com/login?redirect_after_login=…` へ遷移し **403**（本文・ラベル・入力欄は取得不可）＝Claude 側で残高や項目名を読む経路は無い。よって改善点は手渡しの作り方だけ: ①**見ていない画面の多段手順を推測で書かない**（『表示が違ったら教えてください』は往復を強制＝rule 5 違反。2026-09-25 session 12e72c80 が『一般的な課金画面の構成に基づく』10段手順で実際に違反）②**購入前後にスクショを求めない**（rule 6: 余分な手作業。2026-09-25 session 56e5c1e7）③**kim 1人が同じ画面で購入まで完結する1回の手順**を渡し、Claude は結果の報告だけを受ける ④照会できない設定値（自動チャージ条件・補充額・月上限）は断定せず**『未確認』**と書く（rule 4）",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:a3fdf40662a661547fc0f4c6daeee1590f5dd0ce573769545bd17e4fcbea0989 / 2026-09-26 auto-session 実測（handoff-audit:13b51c81aad5a98a。再発を実物で確認し route を是正。詳細 docs/billing-screen-handoff-route.md）"
+  },
+  {
+    "pattern": "既存 Google Doc の本文更新（Docs 編集ツールがセッションに無い）",
+    "route": "node C:/Users/uers/orgiast-claude-rules/tools/gdoc-update.mjs --id <docId> --file <本文.md>（DWD SA で kim を代理、URL 不変・全置換・read-back 付き。--check で現状取得。表はヘッダが崩れるのでリストで書く）。新規 Doc 作成やコネクタ有効化の依頼に逃げない",
+    "confidence": "high",
+    "source": "2026-09-28 バドミントン指示書で「未接続」と誤って手渡し"
   }
 ]

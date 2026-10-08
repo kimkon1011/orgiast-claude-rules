@@ -124,6 +124,27 @@ node "$HOME/orgiast-claude-rules/tools/close-session.mjs" --session <このセ�
 - 実体は削除せず move するため復元できる。
 - 積み残しは `/session-triage` で後から拾える。
 
+### 7.1 終わり方は「誰が・何を・どの順で」を3行で出す（絶対ルール）
+
+「閉じてよい」「完了です」のような**主語のない状態語で終わらせない**。許可は手順ではない。
+user には `/session-close` と `/clear` の違いも、タブを閉じる操作が要ることも見えていない。
+退避コマンドを**実行する前**に、必ず次の3行を出す（実行後では user はもう次の行動を始めている）。
+
+```
+1. 私（Claude）が close-session.mjs --session <id> を実行します（これがこのタブへの最後の送信です）
+2. <user 名>さんは、自動で開いた新しいタブで Enter を1回押してください（/session-start が入っています）
+3. 続けて、この古いタブを ✕ で閉じてください。**/clear は使わないでください**
+```
+
+- 退避前の最後の送信の末尾は「このセッション: /session-close は終わっているので、このセッションを閉じてよい」で終える。「閉じてよい」単独や「このセッション: 閉じてよい」は禁止（2026-10-01 kim 指示: /session-close をこれからするのか、済んで消してよいのか分からない）。
+
+- **理由を1行添える**: タブが開いている限りプロセスが会話ログを書き戻し、退避したはずのセッションが一覧に復活する（633KB 復活を実測）。だから 1→2→3 の順で、3 の後にこのタブへ話しかけない。
+- **`--no-launch`・headless・起動スキップ時は2行目を差し替える**（新タブは開かないので「開きました」と書かない）:
+  「新しいタブを開いて `/session-start` と入力してください」。起動結果は `[next-session] …` の行を読んで判定する。
+- 退避後は「完了しました」の1行以上を書かない（書き戻しで 7.1 の 3 が無効になる）。
+- 判定: **user が次の1アクションで迷ったら、この説明は失敗**とみなす
+  （正本 ONBOARDING.md §1.5「次の一手は『誰が・何を・どの順で』書く — 状態語で終わらせない」）。
+
 ## 8. 次のセッションは自動で立ち上がる（user に「新しいセッションを開いて」と言わない）
 
 - 手順7 の `close-session.mjs` が、退避したあとに `tools/next-session-launch.mjs` を呼び、
@@ -158,8 +179,16 @@ node "$HOME/orgiast-claude-rules/tools/close-session.mjs" --session <このセ�
 - target の変更・確認は `next-session-launch.mjs --set-target <vscode|vscode-ext|terminal|inline|headless>` / `--show-target`。
   旧手順との互換用に `--set-mode` / `--show-mode` も受けるが、新しい文書では使わない。
 - 起動結果は `[next-session] VSCode に新しいタブを開きました…`（ターミナル経路なら `新しいセッションを起動しました: <cwd>`） / `[next-session] スキップ: <理由>` で出る。
-  対話セッションの Bash tool サンドボックスで exe spawn が禁止され、`[next-session] スキップ: 起動に失敗しました (spawn cmd.exe ENOENT)` が出た時は、user に手作業を頼まない。直後の
-  `[next-session] PowerShell 退避: & "…" --open-url "vscode://…"` のコマンド部分を **Claude が PowerShell tool でそのまま実行**する（2026-09-17 実測 exit 0。入力欄に `/session-start` が入る）。成功後は「タブが開いたので Enter 1回で始まります」とだけ伝える。
+- **`spawn cmd.exe ENOENT` は cmd.exe の問題ではない（2026-09-25 実測で確定）**。Node は
+  `options.cwd` が存在しない時も同じ ENOENT（`error.path='cmd.exe'`）を返す。素の `cmd.exe` は
+  実在 cwd で exit 0 になる。だから **まず cwd を疑い、`--cwd` が不在なら
+  `[next-session] スキップ: --cwd が指すフォルダが存在しません: <path>` が出る**（PR #553 で対応済み）。
+- 退避（下記）を実行してよいのは **cwd が実在するのに spawn が ENOENT/spawn で落ちた時だけ**。
+  cwd 不在の時に code.cmd を直叩きすると **cwd を失ったまま別フォルダでセッションが開く**二次被害になる。
+  その場合は user に手作業を頼まず、`--cwd` を正しい実在パスにして1回やり直す（`--force-launch`）。
+- cwd 実在時の退避: `[next-session] PowerShell 退避: & "…" --open-url "vscode://…"` のコマンド部分を
+  **Claude が PowerShell tool でそのまま実行**する（2026-09-17 実測 exit 0。入力欄に `/session-start` が入る）。
+  成功後は「タブが開いたので Enter 1回で始まります」とだけ伝える。
   PowerShell tool でも失敗した時だけ、user に「新しいタブで `/session-start`」と伝える。ターミナル経路や headless では、対話セッションの Bash tool 固有制約を受けないためこの退避は不要。
 
 ## 注意

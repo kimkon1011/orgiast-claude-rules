@@ -34,7 +34,7 @@ function prevMonthBounds(now) {
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
 }
-function readLedger(home) {
+export function readLedger(home) {
   try {
     return fs.readFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), 'utf8').split(/\r?\n/).flatMap((line) => { try { return [JSON.parse(line)]; } catch { return []; } });
   } catch { return []; }

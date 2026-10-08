@@ -862,3 +862,32 @@ test('名簿16行は除外し計測不能3行だけを①と④に表示する',
     assert.equal((section4.match(/^- /gm) || []).length, 3);
   } finally { delete process.env.ORGIAST_HOME; cleanTempDir(tempDir); }
 });
+
+// ---- 保留(deferred): Codex の上限・無人割当は失敗ではない ----
+test('runAutoCodexIsolated: codex-do が保留(75)を返したら failed にせず deferred と retryAt を記録する', async () => {
+  const { runAutoCodexIsolated } = await import('./cost-improve-loop.mjs');
+  const retryAt = Date.now() + 3600000;
+  const seen = [];
+  const spawn = (program, args) => {
+    seen.push([program, ...args]);
+    if (args.some((a) => String(a).endsWith('codex-do.mjs'))) return { status: 75, stdout: `${JSON.stringify({ status: 'deferred', reason: 'unattended_budget', retryAt })}\n`, stderr: '' };
+    return { status: 0, stdout: '', stderr: '' };
+  };
+  const acts = [{ kind: 'x', pc: 'p', specContent: '- 根拠: テスト\n機能を実装する' }];
+  runAutoCodexIsolated({ acts, specFile: 'spec.md', repoPath: os.tmpdir(), spawnSync: spawn });
+  assert.equal(acts[0].result, 'deferred');
+  assert.equal(acts[0].retryAt, retryAt);
+  assert.match(acts[0].note, /unattended_budget/);
+  const codexCall = seen.find((c) => c.some((a) => String(a).endsWith('codex-do.mjs')));
+  assert.deepEqual(codexCall.slice(codexCall.indexOf('--origin'), codexCall.indexOf('--origin') + 4), ['--origin', 'unattended', '--kind', 'implement']);
+  // PR 作成や commit には進まない
+  assert.equal(seen.some((c) => c[0] === 'gh'), false);
+});
+
+test('runAutoCodexIsolated: 通常の失敗(終了コード1)は従来どおり failed', async () => {
+  const { runAutoCodexIsolated } = await import('./cost-improve-loop.mjs');
+  const spawn = (program, args) => args.some((a) => String(a).endsWith('codex-do.mjs')) ? { status: 1, stdout: '', stderr: 'boom' } : { status: 0, stdout: '', stderr: '' };
+  const acts = [{ kind: 'x', pc: 'p', specContent: '修正する' }];
+  runAutoCodexIsolated({ acts, specFile: 'spec.md', repoPath: os.tmpdir(), spawnSync: spawn });
+  assert.equal(acts[0].result, 'failed');
+});

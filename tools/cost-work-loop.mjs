@@ -182,6 +182,7 @@ const blockSourceLine = formatBlockSource(claudeStats.blocks);
 const headlessJobsLine = Object.entries(claudeStats.headlessJobs || {}).sort((a, b) => b[1] - a[1]).map(([name, out]) => `${name} ${(out / 1000).toFixed(0)}k`).join(' / ') || '内訳なし';
 const health = collectProviderHealth({ home: HOME, days: DAYS });
 const healthLines = Object.entries(health.providers).sort((a, b) => b[1].calls - a[1].calls).map(([name, value]) => `- ${value.cooldown ? '🔒' : value.failRate >= 0.2 ? '⚠️' : '✅'} ${name}: ${value.calls} calls / fail ${value.fail} (${(value.failRate * 100).toFixed(1)}%) / 429 ${value.http429} / 413 ${value.http413} / 平均 ${value.averageSeconds.toFixed(1)}秒 / failover救済 ${value.rescuedByFailover}${value.cooldown ? ` / cooldown ${value.cooldown.reason}` : ''}`);
+healthLines.push(`- 未ルーティング: ${health.unrouted.calls}件（プロバイダのfail%集計対象外）`);
 // 定額レーン(codex / codex-astra / glm)の cooldown と 24h の usage-limit 到達回数(仕様C2b)。
 let astraLimit24h = 0;
 const laneHealthLines = (() => {

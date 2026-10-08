@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { normalizeExecutorStatus } from './executor-status.mjs';
 
 export const DEFAULT_PRICING_FILE = fileURLToPath(new URL('../config/gemini-pricing.default.json', import.meta.url));
 export function geminiHome() {
@@ -51,7 +52,7 @@ export function recordGeminiUsage({ model, inTokens, outTokens, source, searchCa
   const usd = measured && priced
     ? ((input - cached) * rate.inputUsdPerMillion + cached * (rate.cachedInputUsdPerMillion ?? 0) + output * rate.outputUsdPerMillion) / 1e6 * multiplier + searches * (rate.searchUsdPerCall ?? 0)
     : null;
-  const row = { ...extra, t: new Date(now).toISOString(), provider: 'gemini', model: model || 'unknown', in: input, out: output, usd, source, searches };
+  const row = { ...extra, status: normalizeExecutorStatus(extra), t: new Date(now).toISOString(), provider: 'gemini', model: model || 'unknown', in: input, out: output, usd, source, searches };
   if (!measured) row.estimated = true;
   if (!priced) row.pricing = 'unknown';
   if (mode !== 'standard') row.mode = mode;

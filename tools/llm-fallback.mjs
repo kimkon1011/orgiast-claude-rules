@@ -99,7 +99,7 @@ function reasonForLog(reason, maxLength = 140) {
   return singleLine.length <= maxLength ? singleLine : `${singleLine.slice(0, maxLength - 1)}…`;
 }
 
-export async function callWithFallback({ start, chain = FALLBACK_CHAIN, payloadFor, fetchImpl = fetch, onAttempt, onFailover, validateResponse, sleepImpl = defaultSleep, cooldownFile, ledgerFile, budgetFile, now = () => Date.now() }) {
+export async function callWithFallback({ start, chain = FALLBACK_CHAIN, allowGatewayFallback = true, payloadFor, fetchImpl = fetch, onAttempt, onFailover, validateResponse, sleepImpl = defaultSleep, cooldownFile, ledgerFile, budgetFile, now = () => Date.now() }) {
   const home = process.env.ORGIAST_HOME || os.homedir();
   const timestamp = now();
   const cost = dailyCost(ledgerFile || path.join(home, '.claude', 'executor-usage.jsonl'), timestamp);
@@ -111,7 +111,7 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, payloadF
   const candidates = [];
   const seen = new Set();
   const deepseekGateway = { provider: 'openrouter', model: 'deepseek/deepseek-v4-flash' };
-  const expanded = start?.provider === 'deepseek' ? [start, deepseekGateway, ...chain] : [start, ...chain];
+  const expanded = allowGatewayFallback && start?.provider === 'deepseek' ? [start, deepseekGateway, ...chain] : [start, ...chain];
   for (const candidate of expanded.filter(Boolean)) {
     if (seen.has(candidate.provider)) continue;
     seen.add(candidate.provider);
@@ -147,6 +147,17 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, payloadF
   const useCooldown = chain.length > 0 && (cooldownFile != null || !process.env.NODE_TEST_CONTEXT);
   const cooldownPath = cooldownFile || path.join(home, '.claude', 'provider-cooldown.json');
   const cooldowns = useCooldown ? readJson(cooldownPath, {}) : {};
+  const cooldownMax = threshold('ORGIAST_LLM_429_COOLDOWN_MAX_MS', 900_000);
+  const cooldownMin = Math.min(cooldownMax, threshold('ORGIAST_LLM_429_COOLDOWN_MIN_MS', 60_000));
+  let cooldownDirty = false;
+  // Bound legacy 429 entries from their original start, not from every read.
+  for (const state of Object.values(cooldowns)) {
+    if (state?.reason !== 'http_429') continue;
+    const began = Number.isFinite(state.at) ? state.at : timestamp;
+    const until = Math.min(Number(state.until), began + cooldownMax);
+    if (until < Number(state.until)) { state.until = until; cooldownDirty = true; }
+  }
+  saveCooldowns();
   const available = useCooldown ? candidates.filter(({ provider }) => !(Number(cooldowns?.[provider]?.until) > timestamp)) : candidates;
   const selectedCandidates = available.length ? available : candidates;
   const skipped = [];
@@ -160,16 +171,17 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, payloadF
     }
   }
 
-  let cooldownDirty = false;
   function setCooldown(provider, status, response, permanentBilling = false) {
     if (!useCooldown) return;
     let duration = 0;
-    if (status === 402 || permanentBilling) duration = 24 * 60 * 60 * 1000;
+    if (status === 429) duration = Math.min(cooldownMax, Math.max(cooldownMin, retryAfterMs(response, now()) ?? cooldownMin));
+    else if (status === 402 || permanentBilling) duration = 24 * 60 * 60 * 1000;
     else if ([401, 403].includes(status)) duration = 6 * 60 * 60 * 1000;
-    else if (status === 429) duration = retryAfterMs(response, timestamp) ?? 30 * 60 * 1000;
     if (!duration) return;
-    cooldowns[provider] = { until: timestamp + duration, reason: `http_${status}`, at: timestamp };
+    const at = now();
+    cooldowns[provider] = { until: at + duration, reason: `http_${status}`, at };
     cooldownDirty = true;
+    saveCooldowns();
   }
   function clearCooldown(provider) {
     if (useCooldown && cooldowns?.[provider]) { delete cooldowns[provider]; cooldownDirty = true; }

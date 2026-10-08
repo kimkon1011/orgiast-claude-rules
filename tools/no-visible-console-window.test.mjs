@@ -78,7 +78,7 @@ test('全ての子プロセス起動はコンソール窓を隠す', () => {
   assert.deepEqual(violations, [], `windowsHide: true がない子プロセス起動:\n${violations.join('\n')}`);
 });
 
-test('detached は非Windows分岐と可視セッション起動以外で使わない', () => {
+test('detached は非Windows分岐・可視セッション・明示許可された単発退避だけで使う', () => {
   const violations = [];
   for (const file of [...filesUnder(toolsDir), ...filesUnder(hooksDir)]) {
     const source = fs.readFileSync(file, 'utf8');
@@ -88,7 +88,11 @@ test('detached は非Windows分岐と可視セッション起動以外で使わ�
       const context = source.slice(Math.max(0, match.index - 120), match.index + match[0].length + 120);
       const platformGuarded = /(?:process\.platform|platform)\s*===\s*['"]win32['"][\s\S]*?windowsHide\s*:\s*true[\s\S]*?:\s*\{\s*detached\s*:\s*true/.test(context);
       const visibleSession = name === 'tools/next-session-launch.mjs';
-      if (!platformGuarded && !visibleSession) violations.push(`${name}:${line}`);
+      // Session archival explicitly requires detached + windowsHide on all platforms.
+      // Keep this exception local to the one-shot launcher and still audit hidden stdio.
+      const oneShotPurge = name === 'tools/purge-sessions.mjs' &&
+        /detached:\s*true, windowsHide:\s*true, stdio:\s*'ignore'/.test(context);
+      if (!platformGuarded && !visibleSession && !oneShotPurge) violations.push(`${name}:${line}`);
     }
   }
   assert.deepEqual(violations, [], `無条件の detached: true:\n${violations.join('\n')}`);

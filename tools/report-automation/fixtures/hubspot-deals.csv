@@ -1,0 +1,10 @@
+deal_id,deal_name,stage,amount_jpy,source_campaign,close_month
+D-1001,ブース制作A,closedwon,1800000,spring-booth,2026-09
+D-1001,ブース制作A,Closed Won,1800000,spring-booth,2026-09
+D-1002,ブース制作B,closed_won,1200000,spring-booth,2026-09
+D-1003,学会協賛C,closedwon,900000,summer-seminar,2026-08
+D-1004,備品D,closedlost,400000,always-on,2026-09
+D-1005,ブース制作E,closedwon,2400000,spring-booth,2026-08
+D-1006,学会協賛F,closedwon,600000,summer-seminar,2026-09
+D-1007,相談G,open,300000,always-on,2026-09
+D-1008,ブース制作H,closedwon,1500000,spring-booth,2026-09

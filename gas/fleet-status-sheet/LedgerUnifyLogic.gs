@@ -45,7 +45,7 @@ function buildIndexRows(tabNames, ledgerId, pcInventoryId, legacyFleetId) {
   var names = Array.isArray(tabNames) ? tabNames : [];
   var fleetName = names.filter(function(name) {
     return name && name !== '目次' && name !== 'プロジェクト所在地図' && name !== 'クラウド契約' &&
-      name !== 'PCログイン' && name !== '拡張機能監査' && name.indexOf(LEDGER_UNIFIED_PREFIX_) !== 0;
+      name !== 'AI費用サマリ' && name !== 'freee登録待ち' && name !== 'PCログイン' && name !== '拡張機能監査' && name.indexOf(LEDGER_UNIFIED_PREFIX_) !== 0;
   })[0] || LEDGER_FLEET_TAB_NAME_;
   var inventoryUrl = pcInventoryId
     ? 'https://docs.google.com/a/orgiast.jp/spreadsheets/d/' + pcInventoryId + '/edit'
@@ -59,6 +59,8 @@ function buildIndexRows(tabNames, ledgerId, pcInventoryId, legacyFleetId) {
     ['目次', '–', 'このシートの案内', '機械', '統合ジョブ実行時'],
     ['プロジェクト所在地図', '1プロジェクト', 'どのリポ/Vercel/本番URL/どのPCで開発しているか', '機械(project-locator) + 人', 'kim機で実行時'],
     ['クラウド契約', '1契約', '何を契約していて誰のアカウントか・支払い元', '人 + 機械(検出済みフラグ)', '随時'],
+    ['AI費用サマリ', '年月×サービス', '各AIに月いくら払い・いくら使ったか', '機械', '月次'],
+    ['freee登録待ち', '未登録候補1件', 'freeeに記録が無いAI費用', '機械＋経理', '月次'],
     ['PCログイン', 'PC×サービス', '各PCがどのクラウドにログインしているか', '全PCが自己申告', '毎日夜間'],
     [fleetName, '1PC', '各PCの稼働状態・Claudeコスト・委譲率・開発中プロジェクト', '全PCが自己申告 + 人', '毎日夜間 / 毎朝09:23'],
     ['拡張機能監査', 'PC×ブラウザ×拡張', '各PCのブラウザ拡張とリスク', '全PCが自己申告', '毎日夜間'],

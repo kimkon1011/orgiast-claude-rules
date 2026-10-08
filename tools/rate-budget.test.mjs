@@ -22,6 +22,15 @@ test('estimateTokens は本文長から安全側に多めに見積もる', () =>
   assert.equal(estimateTokens(null), 0);
 });
 
+test('estimateTokens は日本語を1文字≒1トークンで数える(413 の事前抑止)', () => {
+  // 旧実装は 400文字 → 120 と見積もり、実際の ~400 トークンを 3.3 倍過小評価していた
+  assert.equal(estimateTokens({ init: { body: '日'.repeat(400) } }), 480); // 400*1 * 1.2
+  // ASCII と日本語の混在はそれぞれの係数で合算する: (4/4 + 10*1) * 1.2 = 13.2 → 14
+  assert.equal(estimateTokens({ init: { body: `abcd${'あ'.repeat(10)}` } }), 14);
+  // 8,000トークン上限を超える日本語本文は 8,000 を上回る見積もりになる(旧実装では 2,400 で素通りしていた)
+  assert.ok(estimateTokens({ init: { body: 'あ'.repeat(7000) } }) > 8000);
+});
+
 test('refreshEntry は窓が明けたら残量を満タンに戻す', () => {
   const entry = { limitTokens: 8000, remainingTokens: 100, tokensResetAt: 1000 };
   assert.equal(refreshEntry(entry, 999).remainingTokens, 100);

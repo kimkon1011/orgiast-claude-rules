@@ -77,7 +77,7 @@ test('hours cap uses the range of today log timestamps and fires immediately on 
   const result = await f.call('post', { summary: 'second', progress: 20 }, { now: new Date(NOW.getTime() + 3_600_000) });
   assert.equal(result.status, 'paused');
   assert.equal(result.watchdog.reason, 'daily_hours_cap');
-  assert.match(f.sent[0], /\[autopilot@test-pc\] 自動一時停止: daily_hours_cap/);
+  assert.match(f.sent[0], /\[autopilot@test-pc\] 異常停止: daily_hours_cap/);
 });
 
 test('consecutiveNoop resets on progress, unchanged progress is noop, watchdog only notifies on transition', async (t) => {
@@ -94,7 +94,7 @@ test('consecutiveNoop resets on progress, unchanged progress is noop, watchdog o
   const fired = await f.call('post', { summary: 'blocked', progress: 10 });
   assert.deepEqual(fired.watchdog, { reason: 'noop_streak' });
   await f.call('pre');
-  assert.equal(f.sent.filter((s) => s.includes('自動一時停止')).length, 1);
+  assert.equal(f.sent.filter((s) => s.includes('異常停止')).length, 1);
   assert.equal((await f.call('resume')).status, 'running');
   assert.equal((await f.call('status')).state.consecutiveNoop, 0);
 });
@@ -161,21 +161,14 @@ test('inbox fallback, history before start excluded, pagination processes over 1
   assert.equal((await f.call('pre')).control, null);
 });
 
-test('daily digest summarizes yesterday once, limits summaries to 3, retries failed delivery', async (t) => {
+test('running pre/post and day rollover never send progress DMs; logs retain work', async (t) => {
   const f = discord(t);
   await f.call('start', { objective: 'digest goal' });
-  for (let n = 1; n <= 4; n++) await f.call('post', { summary: `work${n}`, progress: n * 10, codex: n < 3 });
-  const tomorrow = { now: new Date('2026-09-22T01:00:00Z') };
-  f.unavailable.add('dm');
-  await f.call('pre', {}, tomorrow);
-  assert.equal((await f.call('status')).state.lastDigestDate, null);
-  f.unavailable.clear();
-  await f.call('pre', {}, tomorrow);
-  await f.call('pre', {}, tomorrow);
-  assert.equal(f.sent.length, 1);
-  assert.match(f.sent[0], /昨日: 4周 \/ 進捗 10%→40% \/ noop 0 \/ Codex 2回/);
-  assert.doesNotMatch(f.sent[0], /work1/);
-  assert.match(f.sent[0], /work2[\s\S]*work3[\s\S]*work4/);
+  await f.call('pre');
+  for (let n = 1; n <= 4; n++) await f.call('post', { summary: `work${n}`, progress: n * 10 });
+  await f.call('pre', {}, { now: new Date('2026-09-22T01:00:00Z') });
+  assert.equal(f.sent.length, 0);
+  assert.match(fs.readFileSync(f.paths.log, 'utf8'), /work1[\s\S]*work4/);
 });
 
 test('done is durable, notifies once, and handoff contains the seven session-close headings', async (t) => {
@@ -262,4 +255,113 @@ test('crash after appending log does not lose a charged iteration or allow bypas
   fs.appendFileSync(f.paths.log, JSON.stringify({ ts: NOW.toISOString(), iteration: 1, summary: 'appended before crash', progress: 10, noop: false }) + '\n');
   assert.equal((await f.call('pre')).verdict, 'stop');
   assert.equal((await f.call('status')).state.totalIterations, 1);
+});
+
+function candidates(f, body) {
+  fs.mkdirSync(path.join(f.opts.home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(f.opts.home, '.claude', 'next-actions.md'), body);
+}
+
+test('done pre replenishes in priority order, skips human work and previous objective, sends once', async (t) => {
+  const asked = [];
+  const f = discord(t, { askImpl: async (candidate) => { asked.push(candidate); return candidate.objective === '電話する' ? 'No' : 'Yes'; } });
+  await f.call('start', { objective: '前の目的' });
+  await f.call('post', { summary: 'verified', progress: 100 });
+  f.sent.length = 0;
+  candidates(f, '## 明日の推奨アクション（今日）\n1. 前の目的\n2. 電話する\n   - first_step: 顧客へ電話\n3. テスト修正\n   - first_step: テストを実行\n4. 後回し\n');
+  const pre = await f.call('pre');
+  assert.equal(pre.verdict, 'run');
+  assert.equal(pre.objective.objective, 'テスト修正');
+  assert.match(pre.objective.context, /テストを実行/);
+  assert.equal(pre.objective.done, '');
+  assert.deepEqual(asked.map(c => c.objective), ['電話する', 'テスト修正']);
+  assert.match(asked[0].context, /顧客へ電話/);
+  assert.deepEqual(pre.recentLog, []);
+  await f.call('pre');
+  assert.deepEqual(f.sent, ['次の目的: テスト修正（止めるなら『止めて』と返信）']);
+  const state = (await f.call('status')).state;
+  assert.equal(state.objectiveHistory.at(-1).objective, '前の目的');
+  assert.equal(state.iterationsToday, 1);
+  assert.equal(state.totalIterations, 1);
+  assert.equal((await f.call('post', { summary: 'new work', progress: 10 })).noop, false);
+});
+
+test('never-started pre starts a candidate with mocked classifier and notifier', async (t) => {
+  const sent = [];
+  const f = fixture(t, { askImpl: async () => 'Yes', notifyImpl: async text => { sent.push(text); return { delivered: 'dm' }; } });
+  candidates(f, '## 推奨アクション\n- 自動テスト修正\n');
+  assert.equal((await f.call('pre')).verdict, 'run');
+  assert.equal((await f.call('status')).objective.objective, '自動テスト修正');
+  assert.equal(sent.length, 1);
+});
+
+test('no eligible candidates leaves absent/done state and files unchanged, without DM', async (t) => {
+  for (const done of [false, true]) {
+    const f = discord(t, { askImpl: async () => 'No' });
+    if (done) { await f.call('start', { objective: 'previous' }); await f.call('post', { summary: 'verified', progress: 100 }); }
+    f.sent.length = 0;
+    for (const body of ['', '## 別の節\n1. テスト修正', '## 推奨アクション\n1. ピック作業\n']) {
+      candidates(f, body);
+      const before = fs.existsSync(f.paths.state) ? fs.readFileSync(f.paths.state, 'utf8') : null;
+      const pre = await f.call('pre');
+      assert.equal(pre.verdict, done ? 'done' : 'stop');
+      assert.equal(fs.existsSync(f.paths.state) ? fs.readFileSync(f.paths.state, 'utf8') : null, before);
+      assert.deepEqual(f.sent, []);
+    }
+  }
+});
+
+test('replenishment preserves daily, time and lifetime caps', async (t) => {
+  for (const [flag, limit, reason] of [['max-iter-per-day', 1, 'daily_iter_cap'], ['max-total-iter', 1, 'total_cap'], ['max-hours-per-day', 1, 'daily_hours_cap']]) {
+    const f = discord(t, { askImpl: async () => 'Yes' });
+    await f.call('start', { objective: 'first', [flag]: limit });
+    if (flag === 'max-hours-per-day') await f.call('post', { summary: 'start work', progress: 10 });
+    const extra = { now: new Date(NOW.getTime() + 3_600_000) };
+    await f.call('post', { summary: 'verified', progress: 100 }, extra);
+    candidates(f, '## 推奨アクション\n1. second');
+    const pre = await f.call('pre', {}, extra);
+    assert.equal(pre.reason, reason);
+    assert.notEqual(pre.verdict, 'run');
+    assert.equal(pre.objective[flag === 'max-iter-per-day' ? 'maxIterPerDay' : flag === 'max-total-iter' ? 'maxTotalIter' : 'maxHoursPerDay'], limit);
+    assert.ok(f.sent.every(text => text.split('\n').length <= 3));
+  }
+});
+
+test('stop controls take precedence over refill and terminal history survives start', async (t) => {
+  const f = discord(t, { askImpl: async () => { throw new Error('must not classify'); } });
+  await f.call('start', { objective: 'first' });
+  await f.call('post', { summary: 'verified', progress: 100 });
+  candidates(f, '## 推奨アクション\n1. second');
+  f.channels.dm.push(f.message('止めて', 1));
+  assert.equal((await f.call('pre')).verdict, 'stop');
+  assert.equal((await f.call('status')).state.objectiveHistory.at(-1).status, 'stopped');
+  await f.call('start', { objective: 'manual' });
+  assert.equal((await f.call('status')).state.objectiveHistory.at(-1).objective, 'first');
+});
+
+test('one decision DM accepts yes/no only while pending and does not repeat', async (t) => {
+  for (const [answer, verdict] of [['はい', 'run'], ['いいえ', 'stop']]) {
+    const f = discord(t);
+    await f.call('start', { objective: 'first' });
+    await f.call('pause', { question: 'この変更を適用しますか？' });
+    await f.call('pause', { question: 'この変更を適用しますか？' });
+    await f.call('pre');
+    assert.equal(f.sent.length, 1);
+    assert.equal(f.sent[0].split('\n').length, 3);
+    f.channels.dm.push(f.message(answer, 1));
+    const pre = await f.call('pre');
+    assert.equal(pre.verdict, verdict);
+    assert.equal(pre.decision.question, 'この変更を適用しますか？');
+    assert.equal((await f.call('pre')).decision.answer, answer);
+  }
+});
+
+test('classifier errors or uncertain answers never authorize work', async (t) => {
+  for (const askImpl of [async () => { throw new Error('offline'); }, async () => 'Maybe']) {
+    const f = discord(t, { askImpl });
+    candidates(f, '## 推奨アクション\n1. テスト修正');
+    assert.equal((await f.call('pre')).reason, 'not_started');
+    assert.equal(fs.existsSync(f.paths.state), false);
+    assert.deepEqual(f.sent, []);
+  }
 });

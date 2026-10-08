@@ -2,6 +2,7 @@
 // 2026-09-06: Stop 304回中198回が再Stop、handoff-quality 78件中71件が誤爆だった。
 // 9プロセスの逐次差し戻しを1回の評価・1つのblockへまとめ、userの再読を最大1回にする。
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
@@ -14,19 +15,25 @@ import { evaluateInvestigation, failureReason } from './handoff-investigation-ga
 import { evaluateHandoffRegret } from './handoff-regret-gate.mjs';
 import { findHandoffWithoutInfo, formatViolationMessage as formatHandoffInfo } from './handoff-info-guard.mjs';
 import { judge as judgeGhHandoff, formatReason as ghHandoffReason } from './gh-handoff-gate.mjs';
+import { judge as judgeUrlAccount, formatReason as urlAccountReason } from './url-account-gate.mjs';
 import { configuredMode, evaluateNegativeClaimFromRaw } from './negative-claim-gate.mjs';
 import { configuredMode as externalStateMode, evaluateExternalStateClaimFromRaw } from './external-state-claim-gate.mjs';
 import { evaluateReportedSymptomFromRaw } from './reported-symptom-gate.mjs';
+import { evaluateLaneAbandonment } from './lane-abandonment-gate.mjs';
+import { evaluateCourseCorrections } from './course-correction-gate.mjs';
 import { evaluateAudit } from './handoff-audit-gate.mjs';
 import { enabled as reportLengthEnabled, judgeReportLengthWithLlm } from './report-length-gate.mjs';
-import { hasRequiredFooter, judgeNextAction } from './next-action-gate.mjs';
+import { hasRequiredFooter, judgeNextAction, reportsCloseSteps } from './next-action-gate.mjs';
+import { judgeUserBurden, desktopLauncherPattern } from './user-burden-gate.mjs';
 import { findOutsourcedInvestigation, formatViolationMessage as formatSelfCheck, scanToolUsesFromRaw } from './self-check-before-asking-guard.mjs';
-import { findLocalDocLinks, formatViolationMessage as formatDocLink } from './doc-link-drive-guard.mjs';
+import { findLocalDocLinks, findBareLocalDocPaths, formatBarePathMessage, formatViolationMessage as formatDocLink } from './doc-link-drive-guard.mjs';
 import { enabled as stopGateEnabled, progressQuestionReason, reasonFor, remainingItems, shouldBlock, shouldBlockProgressQuestion } from './stop-gate.mjs';
+import { runControlGroup } from './control-group-stop-gate.mjs';
+import { evaluatePrHandoff } from './pr-handoff-gate.mjs';
 
 
 const home = () => process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || os.homedir();
-const HANDOFF_HINT = "末尾に『次に kim がすること』『この後の自動進行』『このセッション: 閉じてよい / まだ閉じない / もう削除してよい』を3行で入れること(user が『この先はどうしたらいいの？』と聞き返した回数: 7日で9回)";
+const HANDOFF_HINT = "末尾に『次に kim がすること』『この後の自動進行』『このセッション: /session-close は終わっているので、このセッションを閉じてよい / /session-close は不要なので、このセッションを閉じてよい / /session-close をして（まだ閉じない） / まだ閉じない（作業中）』の定型文を3行で入れること(user が『この先はどうしたらいいの？』と聞き返した回数: 7日で9回)";
 
 function fullStepsReason(missing) {
   return `[FULL-STEPS] 人に手作業を頼んでいますが、次が足りません: ${missing.join('・')}（§1.5.1 絶対ルール）`;
@@ -35,22 +42,28 @@ function fullStepsReason(missing) {
 export async function evaluateGates(ctx, auditOptions = {}) {
   const gates = [
     ['handoff-quality-gate', () => evaluateQuality({ ...ctx.input, assistant_text: ctx.assistantText })],
-    ['manual-request-fullsteps-gate', () => { const result = judgeFullSteps(ctx.assistantText); return result.triggered && result.missing.length ? { decision: 'block', reason: fullStepsReason(result.missing), code: 'FULL-STEPS' } : { decision: 'pass' }; }],
+    ['manual-request-fullsteps-gate', () => { if (desktopLauncherPattern.test(ctx.assistantText) && judgeUserBurden(ctx.assistantText, ctx.humanText).decision === 'pass') return { decision: 'pass' }; const result = judgeFullSteps(ctx.assistantText); return result.triggered && result.missing.length ? { decision: 'block', reason: fullStepsReason(result.missing), code: 'FULL-STEPS' } : { decision: 'pass' }; }],
     ['handoff-branch-coverage-gate', () => { const result = checkBranchCoverage(ctx.assistantText); return result.triggered && result.missing.length ? { decision: 'block', reason: branchCoverageReason(result.missing), code: 'BRANCH-COVERAGE' } : { decision: 'pass' }; }],
     ['handoff-investigation-gate', () => { const result = evaluateInvestigation(ctx.assistantText); return result.decision === 'block' ? { ...result, reason: failureReason(result.missing), code: 'INVESTIGATION' } : result; }],
     ['handoff-regret-gate', () => evaluateHandoffRegret(ctx.transcriptRaw, ctx.assistantText)],
     ['handoff-info-guard', () => { const found = findHandoffWithoutInfo(ctx.assistantText); return found ? { decision: 'block', reason: formatHandoffInfo(found), code: 'HANDOFF-INFO' } : { decision: 'pass' }; }],
     ['gh-handoff-gate', () => { const result = judgeGhHandoff(ctx.assistantText); return result.triggered && result.missing.length ? { decision: 'block', reason: ghHandoffReason(), code: 'GH-HANDOFF' } : { decision: 'pass' }; }],
+    ['url-account-gate', () => { const result = judgeUrlAccount(ctx.assistantText); return result.triggered && result.missing.length ? { decision: 'block', reason: urlAccountReason(result.missing), code: 'URL-ACCOUNT' } : { decision: 'pass' }; }],
     ['negative-claim-gate', () => { const result = evaluateNegativeClaimFromRaw({ text: ctx.assistantText, transcriptRaw: ctx.transcriptRaw }); return result.decision === 'block' && configuredMode() !== 'block' ? { ...result, decision: 'pass' } : result; }],
     ['external-state-claim-gate', () => { const result = evaluateExternalStateClaimFromRaw({ text: ctx.assistantText, transcriptRaw: ctx.transcriptRaw }); return result.decision === 'block' && externalStateMode() !== 'block' ? { ...result, decision: 'pass' } : result; }],
+    ['control-group-gate', () => runControlGroup({ cwd: ctx.input?.cwd })],
+    ['pr-handoff-gate', () => evaluatePrHandoff(ctx.assistantText)],
     ['reported-symptom-gate', () => evaluateReportedSymptomFromRaw({ text: ctx.assistantText, transcriptRaw: ctx.transcriptRaw })],
+    ['lane-abandonment-gate', () => evaluateLaneAbandonment(ctx, { home: home(), ...auditOptions })],
+    ['course-correction-gate', () => evaluateCourseCorrections(ctx, { home: home(), ...auditOptions })],
     // 第2段は全regexの結果確定後に評価する。
     ['handoff-audit-gate', () => evaluateAudit({ text: ctx.assistantText, transcriptRaw: ctx.transcriptRaw, sessionId: ctx.sessionId, regexBlocked: results.length > 0 }, { home: home(), ...auditOptions })],
     ['self-check-before-asking-guard', () => { const found = findOutsourcedInvestigation(ctx.assistantText, scanToolUsesFromRaw(ctx.transcriptRaw)); return found ? { decision: 'block', reason: formatSelfCheck(found), code: 'SELF-CHECK' } : { decision: 'pass' }; }],
     ['stop-gate', () => { if (!stopGateEnabled()) return { decision: 'pass' }; const todo = shouldBlock(ctx.assistantText); const question = !todo && shouldBlockProgressQuestion(ctx.assistantText); return todo ? { decision: 'block', reason: reasonFor(remainingItems(ctx.assistantText)), code: 'remaining-todo' } : question ? { decision: 'block', reason: progressQuestionReason(), code: 'progress-question' } : { decision: 'pass' }; }],
     ['report-length-gate', () => reportLengthEnabled() ? judgeReportLengthWithLlm(ctx.assistantText, ctx.humanText) : { decision: 'pass' }],
     ['next-action-gate', () => judgeNextAction(ctx.assistantText, ctx.transcriptRaw)],
-    ['doc-link-drive-guard', () => { const hits = findLocalDocLinks(ctx.assistantText); return hits.length ? { decision: 'block', reason: formatDocLink(hits), code: 'DOC-LINK' } : { decision: 'pass' }; }],
+    ['user-burden-gate', () => judgeUserBurden(ctx.assistantText, ctx.humanText)],
+    ['doc-link-drive-guard', () => { const hits = findLocalDocLinks(ctx.assistantText); if (hits.length) return { decision: 'block', reason: formatDocLink(hits), code: 'DOC-LINK' }; const bare = findBareLocalDocPaths(ctx.assistantText); return bare.length ? { decision: 'block', reason: formatBarePathMessage(bare), code: 'DOC-LINK' } : { decision: 'pass' }; }],
   ];
   const results = [];
   const errors = [];
@@ -65,15 +78,22 @@ export async function evaluateGates(ctx, auditOptions = {}) {
   return { results, errors, audit };
 }
 
-function stateResult(sessionId, requestedBlock) {
+function stateResult(sessionId, requestedBlock, assistantText) {
+  if (!requestedBlock || !sessionId) return { retryCap: false };
   const stateFile = path.join(home(), '.claude', 'stop-gate-runner-state.json');
   let state = {}; try { state = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch {}
-  const blocks = Math.max(0, Number(state?.[sessionId]?.blocks) || 0);
-  if (!requestedBlock || !sessionId) return { retryCap: false };
-  if (blocks >= 2) return { retryCap: true };
-  state[sessionId] = { blocks: blocks + 1, lastTs: new Date().toISOString() };
+  const lastHash = crypto.createHash('sha256').update(String(assistantText ?? '')).digest('hex').slice(0, 16);
+  const blocks = state?.[sessionId]?.lastHash === lastHash
+    ? Math.max(0, Number(state?.[sessionId]?.blocks) || 0) : 0;
+  const sameTextRetries = blocks + 1;
+  const now = Date.now();
+  state = Object.fromEntries(Object.entries(state || {}).filter(([, entry]) => {
+    const lastTs = Date.parse(entry?.lastTs);
+    return Number.isFinite(lastTs) && lastTs >= now - 7 * 24 * 60 * 60 * 1000;
+  }));
+  state[sessionId] = { blocks: sameTextRetries, lastTs: new Date(now).toISOString(), lastHash };
   try { fs.mkdirSync(path.dirname(stateFile), { recursive: true }); fs.writeFileSync(stateFile, JSON.stringify(state, null, 2) + '\n'); } catch {}
-  return { retryCap: false };
+  return { retryCap: blocks >= 2, sameTextRetries };
 }
 
 function ledger(record) {
@@ -90,13 +110,22 @@ export async function run(input, context, auditOptions = {}) {
   const base = { sessionId, blockedBy: [], reasonCodes: [], excerpt: String(assistantText || '').slice(0, 200) };
   if (input?.stop_hook_active) { const record = { ...base, verdict: 'skipped', reasonCodes: ['stop_hook_active'] }; ledger(record); return { record }; }
   if (!assistantText) { const record = { ...base, verdict: 'skipped', reasonCodes: [context.reason || 'no-assistant-text'] }; ledger(record); return { record }; }
+  // session-close SKILL.md §7.1 の閉じ際3行は、それ自体が user への次の一手の指示なので手渡し系ゲートを適用しない。
+  // 適用すると「ルール通りに閉じる」だけで FULL-STEPS／INVESTIGATION／USER-BURDEN が発火して余分な1ターンを強制し、
+  // タブが開いている限りプロセスが会話ログを書き戻して退避済みセッションが一覧に復活する
+  // （[[feedback-close-session-then-keep-talking-recreates-jsonl]]）。
+  if (reportsCloseSteps(assistantText)) {
+    const record = { ...base, verdict: 'pass', reasonCodes: ['close-steps'], auditEvidence: 'close-steps' };
+    ledger(record);
+    return { record };
+  }
   const evaluated = await evaluateGates({ input, assistantText, humanText: context.humanText, transcriptRaw: context.raw, sessionId }, auditOptions);
   const audit = evaluated.audit;
   const blockedBy = evaluated.results.map(({ name }) => name);
   const reasonCodes = [...evaluated.results.map(({ code, name }) => code || name), ...evaluated.errors];
-  const cap = stateResult(sessionId, blockedBy.length > 0);
+  const cap = stateResult(sessionId, blockedBy.length > 0, assistantText);
   const verdict = cap.retryCap ? 'retry-cap' : blockedBy.length ? 'block' : 'pass';
-  const record = { ...base, verdict, blockedBy, reasonCodes, retryCap: cap.retryCap, auditEvidence: audit.record.evidence }; ledger(record);
+  const record = { ...base, verdict, blockedBy, reasonCodes, retryCap: cap.retryCap, sameTextRetries: cap.sameTextRetries ?? 0, auditEvidence: audit.record.evidence }; ledger(record);
   if (verdict !== 'block') return { record };
   const sections = evaluated.results.map(({ name, reason }) => `### ${name}\n- ${reason}`);
   if (!blockedBy.includes('next-action-gate') && !hasRequiredFooter(assistantText)) sections.push(`### ピギーバック・ヒント\n- ${HANDOFF_HINT}`);

@@ -1,9 +1,9 @@
 {
-  "deepseek": { "autoTopUp": false, "monthlyLimit": false, "verified": false },
-  "openrouter": { "autoTopUp": true, "monthlyLimit": false, "verified": false },
+  "deepseek": { "autoTopUp": false, "monthlyLimit": false, "verified": true, "lastManualTopUp": "2026-09-09", "amountUsd": 100 },
+  "openrouter": { "autoTopUp": true, "monthlyLimit": false, "verified": true },
   "kimi": { "autoTopUp": false, "monthlyLimit": false, "verified": false },
   "genspark": { "autoTopUp": null, "monthlyLimit": null, "billing": "prepaid", "verified": true },
-  "xai": { "autoTopUp": true, "monthlyLimit": true, "verified": false },
-  "groq": { "autoTopUp": null, "monthlyLimit": null, "billing": "postpaid", "verified": false },
+  "xai": { "autoTopUp": true, "monthlyLimit": true, "verified": true },
+  "groq": { "autoTopUp": null, "monthlyLimit": null, "billing": "free", "note": "Developer tier upgrade unavailable (high demand) 2026-09-09", "verified": true },
   "gemini": { "autoTopUp": true, "monthlyLimit": true, "verified": false }
 }

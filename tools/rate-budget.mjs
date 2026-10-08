@@ -72,12 +72,22 @@ export function writeBudget(file, store) {
   } catch {}
 }
 
-// プロンプトのトークン数は厳密には数えられないので、本文長/4 の粗い見積もりに係数を掛けて安全側に倒す。
-export function estimateTokens(request, { charsPerToken = 4, safety = 1.2 } = {}) {
+// プロンプトのトークン数は厳密には数えられないので粗い見積もりに係数を掛けて安全側に倒す。
+// ASCII は 4文字≒1トークンだが、日本語(CJK)は 1文字≒1トークン。全文を 4 で割るだけでは
+// 日本語主体のプロンプトを 3〜4倍過小評価し、分窓上限を超えた送信(http_413)を事前に止められない。
+// (2026-09-29 実測: groq の 413 は全て入力 > 8,000トークン、prompt は日本語)
+export function estimateTokens(request, { asciiCharsPerToken = 4, nonAsciiTokensPerChar = 1, safety = 1.2 } = {}) {
   const body = request?.init?.body;
   if (body == null) return 0;
-  const size = typeof body === 'string' ? body.length : Buffer.byteLength(String(body));
-  return Math.ceil((size / charsPerToken) * safety);
+  const text = typeof body === 'string' ? body : String(body);
+  let ascii = 0;
+  let nonAscii = 0;
+  // for...of はコードポイント単位(サロゲートペアを1文字として数える)
+  for (const ch of text) {
+    if (ch.codePointAt(0) < 0x80) ascii += 1;
+    else nonAscii += 1;
+  }
+  return Math.ceil((ascii / asciiCharsPerToken + nonAscii * nonAsciiTokensPerChar) * safety);
 }
 
 // 窓が明けていれば残量を limit まで回復させてから見る(古い残量で不当に締め切らない)。

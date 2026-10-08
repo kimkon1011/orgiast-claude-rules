@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -30,13 +31,78 @@ test('複数gateの理由を1つのblockへ合流する', () => {
   assert.ok(record.blockedBy.includes('handoff-info-guard'));
 });
 
-test('同一sessionの3回目はretry-capでpassする', () => {
+test('同一本文の3回目以降はretry-capでpassし回数を保存する', t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-cap-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   assert.equal(JSON.parse(invoke(home, 'cap', request).stdout).decision, 'block');
   assert.equal(JSON.parse(invoke(home, 'cap', request).stdout).decision, 'block');
   assert.equal(invoke(home, 'cap', request).stdout, '');
+  assert.equal(invoke(home, 'cap', request).stdout, '');
   const records = fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8').trim().split(/\r?\n/).map(JSON.parse);
-  assert.deepEqual(records.map(({ verdict }) => verdict), ['block', 'block', 'retry-cap']);
+  assert.deepEqual(records.map(({ verdict }) => verdict), ['block', 'block', 'retry-cap', 'retry-cap']);
+  assert.deepEqual(records.map(({ sameTextRetries }) => sameTextRetries), [1, 2, 3, 4]);
+  const state = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-state.json'), 'utf8'));
+  assert.equal(state.cap.blocks, 4);
+  assert.equal(state.cap.lastHash, crypto.createHash('sha256').update(request).digest('hex').slice(0, 16));
+});
+
+for (const [name, texts, counts] of [
+  ['本文A・B・Cはすべてblock', [request, `${request} B`, `${request} C`], [1, 1, 1]],
+  ['本文変更で2回ずつblockできる', [request, request, `${request} B`, `${request} B`], [1, 2, 1, 2]],
+]) {
+  test(name, t => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-reset-'));
+    t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+    for (const text of texts) {
+      const result = invoke(home, 'reset', text);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(JSON.parse(result.stdout).decision, 'block');
+    }
+    const records = fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+    assert.deepEqual(records.map(record => record.sameTextRetries), counts);
+    assert.ok(records.every(record => record.retryCap === false));
+  });
+}
+
+test('block不要ならstateを作成・変更せず、sessionIdなしでも変更しない', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-no-write-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const stateFile = path.join(home, '.claude', 'stop-gate-runner-state.json');
+  const passText = '次に kim がすること: なし';
+  assert.equal(invoke(home, 'pass', passText).stdout, '');
+  assert.equal(fs.existsSync(stateFile), false);
+  assert.equal(JSON.parse(invoke(home, 'pass', request).stdout).decision, 'block');
+  const before = fs.readFileSync(stateFile, 'utf8');
+  const mtime = fs.statSync(stateFile).mtimeMs;
+  assert.equal(invoke(home, 'pass', passText).stdout, '');
+  assert.equal(JSON.parse(invoke(home, '', request).stdout).decision, 'block');
+  assert.equal(fs.readFileSync(stateFile, 'utf8'), before);
+  assert.equal(fs.statSync(stateFile).mtimeMs, mtime);
+  const records = fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(records[2].verdict, 'pass');
+  assert.equal(records[2].sameTextRetries, 0);
+});
+
+test('書き込み時に7日超・不正日時を削除し、旧形式の累計はリセットする', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-prune-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const stateFile = path.join(home, '.claude', 'stop-gate-runner-state.json');
+  const now = Date.now();
+  const recent = { blocks: 2, lastTs: new Date(now - 6 * 86400000).toISOString(), lastHash: 'other' };
+  fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+  fs.writeFileSync(stateFile, JSON.stringify({
+    old: { blocks: 2, lastTs: new Date(now - 8 * 86400000).toISOString() },
+    invalid: { lastTs: 'invalid' }, missing: {}, recent,
+    legacy: { blocks: 99, lastTs: new Date(now).toISOString() },
+  }));
+  const result = invoke(home, 'legacy', request);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).decision, 'block');
+  const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+  assert.deepEqual(Object.keys(state).sort(), ['legacy', 'recent']);
+  assert.deepEqual(state.recent, recent);
+  assert.equal(state.legacy.blocks, 1);
+  assert.ok(Date.parse(state.legacy.lastTs) >= now);
 });
 
 test('stop_hook_activeは評価せずskippedでpassする', () => {
@@ -49,7 +115,7 @@ test('stop_hook_activeは評価せずskippedでpassする', () => {
 
 test('次の行があればピギーバック・ヒントを重ねない', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-hint-'));
-  const output = JSON.parse(invoke(home, 'hint', `${request}\n次に kim がすること: Merge をクリック\nこの後の自動進行: kim のマージ後に Codex が確認してチャットで通知\nこのセッション: まだ閉じない（マージ待ち）`).stdout);
+  const output = JSON.parse(invoke(home, 'hint', `${request}\n次に kim がすること: Merge をクリック\nこの後の自動進行: kim のマージ後に Codex が確認してチャットで通知\nこのセッション: まだ閉じない（作業中）`).stdout);
   assert.doesNotMatch(output.reason, /ピギーバック・ヒント/);
 });
 
@@ -94,8 +160,8 @@ test('stdin経由の2行・3行・バックグラウンド矛盾を他gateと分
   const footer = '次に kim がすること: なし\nこの後の自動進行: なし（完了）';
   const cases = [
     ['two-lines', `${body}\n${footer}`, 'NEXT-ACTION-FOOTER'],
-    ['three-lines', `${body}\n${footer}\nこのセッション: もう削除してよい（残すものは無い）`, null],
-    ['background-close', `${body} Codex がバックグラウンドで実行中です。\n次に kim がすること: なし\nこの後の自動進行: 処理が完了したら私がこの画面で結果を報告します\nこのセッション: 閉じてよい（/session-close 実行済み）`, 'SESSION-BACKGROUND-CONTRADICTION'],
+    ['three-lines', `${body}\n${footer}\nこのセッション: /session-close は不要なので、このセッションを閉じてよい`, null],
+    ['background-close', `${body} Codex がバックグラウンドで実行中です。\n次に kim がすること: なし\nこの後の自動進行: 処理が完了したら私がこの画面で結果を報告します\nこのセッション: /session-close は終わっているので、このセッションを閉じてよい`, 'SESSION-BACKGROUND-CONTRADICTION'],
   ];
   for (const [id, text, code] of cases) {
     const result = invoke(home, id, text);
@@ -113,7 +179,7 @@ test('runnerと単体hookの両方が会話のsession-close証拠を評価する
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-close-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const transcript = path.join(home, 'transcript.jsonl');
-  const text = `${'作業内容を整理し、関連箇所を確認しました。'.repeat(15)}\n次に kim がすること: なし\nこの後の自動進行: なし（完了）\nこのセッション: 閉じてよい（/session-close 実行済み）`;
+  const text = `${'作業内容を整理し、関連箇所を確認しました。'.repeat(15)}\n次に kim がすること: なし\nこの後の自動進行: なし（完了）\nこのセッション: /session-close は終わっているので、このセッションを閉じてよい`;
   const gate = fileURLToPath(new URL('./next-action-gate.mjs', import.meta.url));
   for (const evidence of [false, true]) {
     fs.writeFileSync(transcript, [
@@ -181,4 +247,114 @@ test('gh-handoff-gate: gh が未認証であることを理由に PR 作成な�
   assert.match(output.reason, /### gh-handoff-gate[\s\S]*\[GH-HANDOFF\]/);
   const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8'));
   assert.ok(record.blockedBy.includes('gh-handoff-gate'));
+});
+
+// 単体判定と実際の Stop ランナーの両方で同じケースを検証する。
+import { judgeUserBurden } from './user-burden-gate.mjs';
+const burdenAudit = '手間監査: CLI を試したが OAuth の本人同意が必要。user は1クリック・年1回。';
+const burdenCommand = '```powershell\nStart-Process https://example.com/consent\n```';
+const desktopPath = 'C:\\Users\\日本語 user\\OneDrive\\Desktop\\登録（ダブルクリック）.cmd';
+const desktopAudit = '手間監査: ①Claude の実行は classifier に拒否。②MCP を試したが権限不足で失敗。user は1操作。';
+const burdenCases = [
+  ['pwsh 単独は block', `実行してください。\n\`\`\`pwsh\npwsh -File task.ps1\n\`\`\`\n${burdenAudit}`, true, /make-desktop-launcher/],
+  ['Desktop cmd と二経路の監査', `次に kim がすること: ダブルクリックする\n${desktopPath}\n${desktopAudit}`, false],
+  ['Desktop cmd だけは監査不足', `次に kim がすること: ダブルクリックする\n${desktopPath}\n${burdenAudit}`, true, /①Claude/],
+  ['Claude 自身の実行説明', 'Claude 自身が実行しました。\n```pwsh\npwsh -File task.ps1\n```', false],
+  ['遡り参照の実例', '次に kim がすること: 前に送った PowerShell の1行を実行する', true, /遡り参照/],
+  ['コマンドと監査だけでは不可', `次に kim がすること: PowerShell で実行する\n${burdenCommand}\n${burdenAudit}`, true, /make-desktop-launcher/],
+  ['完成品なし', `次に kim がすること: 同意ボタンを押す\n${burdenAudit}`, true, /完成品/],
+  ['監査なし', `次に kim がすること: PowerShell で実行する\n${burdenCommand}`, true, /手間監査/],
+  ['依頼なし', '次に kim がすること: なし', false],
+  ['理由付き例外', '次に kim がすること: ケーブルを挿す\n[BURDEN-OK] 物理作業で渡すファイルがないため。', false],
+  ['本文だけの依頼', 'リンクを開いてください。', true, /完成品/],
+  ['なしでも本文に依頼', 'ボタンを押してください。\n次に kim がすること: なし', true, /完成品/],
+  ['監査に根拠なし', '次に kim がすること: 同意する\nhttps://example.com\n手間監査: こちらでは無理。1クリック。', true, /手間監査/],
+  ['監査に操作回数なし', '次に kim がすること: 同意する\nhttps://example.com\n手間監査: OAuth 本人同意のため。', true, /手間監査/],
+  ['根拠は同じ監査行に必要', '次に kim がすること: 同意する\nhttps://example.com\n手間監査: 1クリック\nOAuth 本人同意のため。', true, /手間監査/],
+  ['理由なしの例外は無効', '次に kim がすること: 実行する\n[BURDEN-OK]', true],
+  ['URL同梱', `次に kim がすること: 本人同意する\nhttps://example.com/consent\n${burdenAudit}`, false],
+  ['Desktopファイルパスは完成品でない', `次に kim がすること: ショートカットを開く\nC:\\Users\\kim\\Desktop\\consent.lnk\n${burdenAudit}`, true, /Google Drive/],
+  ['コード中の依頼では発火しない', '```text\n次に kim がすること: 実行する\n```\n修正済みです。', false],
+  ['コード中の監査は無効', `次に kim がすること: 同意する\n\`\`\`text\n${burdenAudit}\n\`\`\``, true, /手間監査/],
+  ['通常報告の参照は対象外', '以前のファイルを修正しました。\n次に kim がすること: なし（完了）', false],
+];
+for (const prefix of ['前に送った', '先ほどの', 'さっきの', '上の', '前述の', '以前の', '前回の']) {
+  burdenCases.push([`${prefix}の参照`, `次に kim がすること: ${prefix}コマンドを実行する\n${burdenCommand}\n${burdenAudit}`, true, /遡り参照/]);
+}
+for (const [name, text, blocked, reason] of burdenCases) {
+  test(`user-burden-gate: ${name}`, t => {
+    const judged = judgeUserBurden(text);
+    assert.equal(judged.decision, blocked ? 'block' : 'pass');
+    if (reason) assert.match(judged.reason, reason);
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-burden-'));
+    t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+    const result = invoke(home, 'burden', text);
+    assert.equal(result.status, 0, result.stderr);
+    const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8'));
+    assert.equal(record.blockedBy.includes('user-burden-gate'), blocked);
+    assert.ok(!record.reasonCodes.includes('error:user-burden-gate'));
+    if (blocked) assert.match(JSON.parse(result.stdout).reason, /### user-burden-gate[\s\S]*USER-BURDEN/);
+  });
+}
+
+test('user-burden-gate: transcript の最後の assistant だけを監査する', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-burden-transcript-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const transcript = path.join(home, 'transcript.jsonl');
+  const bad = '次に kim がすること: 前に送った PowerShell の1行を実行する';
+  const good = '次に kim がすること: なし';
+  for (const [index, texts] of [[bad, good], [good, bad]].entries()) {
+    fs.writeFileSync(transcript, texts.map(text => JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] } })).join('\n'));
+    const result = invoke(home, `transcript-${index}`, undefined, { transcript_path: transcript });
+    assert.equal(result.status, 0, result.stderr);
+    const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8').trim().split('\n').at(-1));
+    assert.equal(record.blockedBy.includes('user-burden-gate'), index === 1);
+  }
+});
+
+test('desktop handoff does not require the old three-step paste instructions', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-desktop-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const result = invoke(home, 'desktop', `ダブルクリックしてください。\n${desktopPath}\n${desktopAudit}`);
+  assert.equal(result.status, 0, result.stderr);
+  const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8').trim());
+  assert.ok(!record.blockedBy.includes('manual-request-fullsteps-gate'));
+  assert.ok(!record.blockedBy.includes('user-burden-gate'));
+});
+
+test('user command request from transcript is passed to burden gate', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-command-request-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const transcript = path.join(home, 'transcript.jsonl');
+  fs.writeFileSync(transcript, JSON.stringify({ type: 'user', message: { role: 'user', content: 'コマンドを教えて' } }) + '\n');
+  const result = invoke(home, 'command-request', `実行してください。\n${burdenCommand}\n${burdenAudit}`, { transcript_path: transcript });
+  assert.equal(result.status, 0, result.stderr);
+  const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8').trim());
+  assert.ok(!record.blockedBy.includes('user-burden-gate'));
+});
+
+// session-close SKILL.md §7.1: 閉じ際の3行（close-session.mjs 実行 → 新タブで Enter → このタブを ✕、/clear は使わない）
+// は、それ自体が user への次の一手の指示。runner は手渡し系ゲートを適用せず pass させる
+// （適用するとルール通りに閉じるだけで余分な1ターンが発生し、ログの書き戻しで退避済みセッションが一覧に復活する）。
+const closeSteps = `本セッションの作業は完了しました。PR #585 は main に取り込まれ、回帰テストも 30 pass / 0 fail です。\n\nそれでは閉じます。次の順でお願いします。\n\n1. 私（Claude）が close-session.mjs --session abc123 を実行します（これがこのタブへの最後の送信です）\n2. kim さんは、自動で開いた新しいタブで Enter を1回押してください\n3. 続けて、この古いタブを ✕ で閉じてください。**/clear は使わないでください**\n\n理由: タブが開いている限りプロセスが会話ログを書き戻し、退避したはずのセッションが一覧に復活します。だから 1→2→3 の順で、3 の後にこのタブへ話しかけないでください。`;
+
+test('§7.1の閉じ際3行は手渡し系gateをすべて通す', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-close-steps-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const result = invoke(home, 'close-steps', closeSteps);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, '');
+  const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8').trim());
+  assert.equal(record.verdict, 'pass');
+  assert.deepEqual(record.reasonCodes, ['close-steps']);
+});
+
+test('§7.1の3語に言及しただけの番号無し長文は従来どおりblockする', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-close-mention-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const mention = `GitHub の画面で Merge をクリックしてください。close-session.mjs と ✕ と /clear の扱いは別途レポートします。${'補足の説明。'.repeat(12)}`;
+  const output = JSON.parse(invoke(home, 'close-mention', mention).stdout);
+  assert.equal(output.decision, 'block');
+  const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8').trim());
+  assert.notDeepEqual(record.reasonCodes, ['close-steps']);
 });

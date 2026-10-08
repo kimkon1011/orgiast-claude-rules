@@ -6,6 +6,8 @@ ONBOARDING.compressed.md §1.5 系（1.5, 1.5.1, 1.5.1.1, 1.5.2, 1.5.2.1, 1.5.2-
 
 ## 1.5 Google Workspace URL は `/a/orgiast.jp/` を挟む
 
+kim が読む Doc は `tools/gdoc-publish.mjs`（URL をハイパーリンク化・read-back 検証）で作る。Drive MCP の text/plain 直投は URL がリンク化されないので使わない。
+
 オージャストメンバーの多くは Chrome デフォルトが個人 Gmail（@gmail.com）になっている。Apps Script / Sheets / Docs / Drive の URL を素の形（`https://script.google.com/d/...` / `https://docs.google.com/spreadsheets/d/...`）で渡すと、個人アカウントで開いてしまい「アクセス権が必要です」画面で詰まる。
 
 必ず `/a/orgiast.jp/` パスを挟んだ URL を渡す:
@@ -269,10 +271,10 @@ kim は「システム関係はさっぱりわからない」と明言してい�
     6. **完了の合図**：<画面がどう変わるか>
     7. **失敗したら**：<何が出たら失敗か> → <何を送ればよいか>。<壊れないことの明記>
 
-### アプリの起動から書く
+### コマンド実行の手渡しはデスクトップのファイルで行う
 
-- ❌「PowerShell で実行してください」
-- ✅「Windowsキー → `powershell` と入力 → Enter → 青い画面が開く → 下をコピーして**右クリックで貼り付け** → Enter」
+Claude 自身の実行 → MCP・CLI・既存ジョブ・fleet 自己修復等の別経路を試す。それでも実行できないときだけ `tools/make-desktop-launcher.mjs --name "<表示名>" --ps-file "<絶対パス>"`（本文ファイルなら `--command-file`）で作成し、stdout の JSON にある `.cmd` パスだけを示す。PowerShell への貼り付けは頼まない。
+`手間監査:` の同じ行に①②それぞれの試した経路・結果と user の操作回数を書く。確認用 PowerShell は `--verify-cmd` に設定し、完了後は同じ `--name` と `--remove` で片付ける。
 
 ### 順序依存と安全性は必ず書く
 

@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyBalance, fetchProviderBalance, formatBalanceLine } from './provider-balance.mjs';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { classifyBalance, collectProviderBalances, fetchProviderBalance, formatBalanceLine } from './provider-balance.mjs';
 
 test('confirmed provider response shapes are parsed', async () => {
   const cases = [
@@ -41,4 +44,16 @@ test('genspark credit threshold and formatting are independent of USD balance', 
   assert.equal(classifyBalance({ credits: 4999, balanceUsd: 100, autoTopUp: true }), 'low');
   assert.equal(classifyBalance({ credits: 5000, balanceUsd: 0, autoTopUp: false }), 'ok');
   assert.match(formatBalanceLine([{ provider: 'genspark', credits: 124857.7, autoTopUp: null }]), /genspark 124857\.7cr\(前払い\)/);
+});
+
+test('Groq の課金台帳が無料枠表示まで伝わり、異常判定は維持される', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'provider-billing-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const rows = await collectProviderBalances({ home, appendHistory: false, fetchImpl: async () => new Response('{}') });
+  const groq = rows.find(r => r.provider === 'groq');
+  assert.equal(groq.billing, 'free');
+  assert.match(groq.reason, /high demand.*2026-09-09.*spend_anomaly.*429/);
+  assert.equal(formatBalanceLine([groq]), '💳 残高: groq 無料枠(有料化不可)');
+  assert.equal(classifyBalance({ ...groq, todaySpendUsd: 2, avg7dSpendUsd: 0.1 }), 'anomaly');
+  assert.match(formatBalanceLine([{ ...groq, billing: 'postpaid' }]), /自動不明/);
 });

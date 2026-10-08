@@ -90,6 +90,17 @@ test('todoExclusionReason は同意画面のコピー修正を除外しない', 
   assert.equal(todoExclusionReason('4. 同意画面のコピーを直す'), '');
 });
 
+// 2026-09-27 実測: 回転後の next-session.md 先頭に `1. ### 触る前に読む memory` が並び、
+// launcher がこれを次の1目的に採用して実作業ゼロの回を1回消費した
+// (runs/2026-09-27-manifest.json の selectedTodos が実物)。
+test('todoExclusionReason は見出しだけの項目を除外する', () => {
+  assert.equal(todoExclusionReason('1. ### 触る前に読む memory'), '見出しのみ（作業内容が無い）');
+  assert.equal(todoExclusionReason('### 触る前に読む memory'), '見出しのみ（作業内容が無い）');
+  // 見出し記号で始まらない本物の TODO は巻き込まない。
+  assert.equal(todoExclusionReason('26. makimono-sns-poster キュー補充: 未投稿 86本'), '');
+  assert.equal(todoExclusionReason('3. #1 の見出しを直す'), '');
+});
+
 test('parseHandoff はリスト後の見出し段落と取り消し線をTODOに含めない', () => {
   for (const separator of ['', '\n']) {
     const parsed = parseHandoff(`## 残TODO\n1. 実装する\n13. kim相談\n   継続本文\n${separator}**見出し**\n~~別の完了済み作業~~\n   散文の補足\n`);
@@ -419,6 +430,20 @@ test('新旧ブロックの同一 TODO は先頭の1件だけを採用する', (
 
 test('filterTodos は完了・判断待ち・未決・ブロック中を除外する', () => {
   assert.deepEqual(filterTodos(['実行', '~~完了~~', '要判断 X', '判断待ち X', '未決 X', 'ブロック中 X']), ['実行']);
+});
+
+test('filterTodos は行頭の [完了 …] / [x] / ✅ の印も完了として除外する(2026-09-28実測の再現)', () => {
+  // 実物: 残TODO 先頭が `1. [完了 2026-09-27 #584] …` で、この印は「取り消し線」に該当せず素通りし、
+  // 完了済みTODOが次の1目的に選ばれて自動セッション1回分を消費した
+  // (auto-session/runs/2026-09-28-manifest.json の selectedTodos[0] が実物)。
+  assert.deepEqual(
+    filterTodos(['実行', '[完了 2026-09-27 #584] 済み', '[x] 済み', '✅ 済み', '完了報告の文面を直す']),
+    ['実行', '完了報告の文面を直す'],
+  );
+  assert.equal(todoExclusionReason('[完了 2026-09-27 #584] 済み'), '完了済み（印あり）');
+  // 本文中に「完了」を含むだけの生きたTODOや、既存の継続キュー行を巻き込まないこと(アンカーの回帰)。
+  assert.equal(todoExclusionReason('完了報告の文面を直す'), '');
+  assert.equal(todoExclusionReason('[継続キュー: 未完了 2件](archive/x.pending.md) — このファイルの項目を消化後に確認する。'), '');
 });
 
 test('--count all は3件を超えるフィルタ後の全TODOを選択する', () => {
@@ -1023,6 +1048,15 @@ test('isTodoAlreadyDone は複数行 TODO の1行目だけで判定し、空の�
   assert.equal(isTodoAlreadyDone(md, 'P1: 消化率が 14.3% に低下\n   詳細な本文'), true);
   assert.equal(isTodoAlreadyDone(md, ''), false);
   assert.equal(isTodoAlreadyDone(md, ' \t '), false);
+});
+
+test('isTodoAlreadyDone は [完了 …] 形の印でも検出する(2026-09-28)', () => {
+  // 印の書き方が増えるたびに再実行保護が片方だけ効かなくなるのを避け、両形式を同じ判定にする。
+  const md = `## 残TODO\n1. [完了 2026-09-27 #584] 済んだ作業\n2. ~~済んだ作業2~~ → ✅ 完了\n3. [完了 2026-09-27 #584] 別の作業\n`;
+  assert.equal(isTodoAlreadyDone(md, '済んだ作業'), true);
+  assert.equal(isTodoAlreadyDone(md, '済んだ作業2'), true);
+  assert.equal(isTodoAlreadyDone(md, '別の作業'), true);
+  assert.equal(isTodoAlreadyDone(md, 'やっていない作業'), false);
 });
 
 test('isTodoAlreadyDone は正規表現メタ文字をタイトルの文字として扱う', () => {

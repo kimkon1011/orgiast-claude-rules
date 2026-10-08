@@ -15,7 +15,7 @@
 
 | PC | 担当者 | アカウント | hostname | Claude Code 導入状況 | fleet-mail 宛先の書き方 |
 |---|---|---|---|---|---|
-| kim-PC（開発機） | 金功勇 | kim@orgiast.jp | DESKTOP-2D0R4LI | 導入済み。OrgiastFleetMail タスクが Disabled との報告あり（返信受信不可） | `--to kim-PC` |
+| kim-PC（開発機） | 金功勇 | kim@orgiast.jp | DESKTOP-2D0R4LI | 導入済み。OrgiastFleetMail タスクは 2026-10-08 に再有効化（Ready / LastTaskResult 0） | `--to kim-PC` |
 | nishi-PC | 未確認 | seisaku-team@orgiast.jp（git メール） | DESKTOP-04U31RG | 導入済み（2026-08-28/29 に報告実績） | `--to nishi-PC` |
 | HP（東邦2階HP） | 木下真弓 | 未確認 | 未確認 | 2026-08-18 を最後に停止 | `--to HP` |
 
@@ -23,10 +23,11 @@
 
 | 作業用番号 | 担当者 | アカウント | hostname | Claude Code 導入状況 | fleet-mail 宛先の書き方 |
 |---|---|---|---|---|---|
-| 作業用019 | nishi 担当 | nishi@orgiast.jp でログインする運用 | 未確認（候補: nishi-PC = DESKTOP-04U31RG） | 未確認 | 現状 `--to 作業用019` は名簿に無いので素通しになり届かない。当面は `--to nishi-PC` か `--to DESKTOP-04U31RG`。同一PCと確定したら名簿へ昇格 |
-| 作業用004民泊用 | 金功勇 | 未確認 | 未確認 | 報告実績なし | 未確認 |
+| 作業用019 | nishi | nishi@orgiast.jp（kim 回答 2026-10-08・確定） | 未確認（候補: nishi-PC = DESKTOP-04U31RG） | 未確認 | 現状 `--to 作業用019` は素通しになり届かない。当面は `--to nishi-PC`。hostname 確定後に名簿へ昇格 |
+| 作業用004民泊用 | nishi | nishi@orgiast.jp（kim 回答 2026-10-08・確定。台帳の担当欄「金功勇」より優先） | 未確認（候補: nishi-PC = DESKTOP-04U31RG） | 未確認 | 未確認。nishi@ のPCが019と004の2台あり、DESKTOP-04U31RG がどちらかは未確定 |
+| 作業用018 | 未確認 | cr@orgiast.jp（kim 回答 2026-10-08・確定） | 未確認 | 未確認 | 未確認 |
 
 ## 確定のしかた
 
-1. 作業用019 のPCで `hostname` と `claude` のログインアカウントを確認する（またはそのPCの Claude Code に `fleet-mail` で自己報告させる）。
-2. `DESKTOP-04U31RG` と一致したら、`fleet-pc-map.json` の `_unverified.作業用019` を `nishi-PC` エントリの `remoteName` に移す。
+1. 対象PCで Chrome リモートデスクトップ名（管理者 PowerShell で `(Get-Content "$env:ProgramData\Google\Chrome Remote Desktop\host.json" -Raw | ConvertFrom-Json).host_name`）と `hostname` を確認する。そのPCの Claude Code に `fleet-mail` で自己報告させてよい（作業用019 は 2026-10-08 に nishi-PC へ照会済み: mail-20261008142734267-9107）。
+2. 一致したら、`fleet-pc-map.json` の `_unverified.<作業用番号>` を該当PCのエントリの `remoteName` に移す。

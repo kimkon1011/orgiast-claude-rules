@@ -38,11 +38,18 @@
       "candidate": "nishi-PC",
       "candidateHostname": "DESKTOP-04U31RG",
       "person": "nishi@orgiast.jp",
-      "_evidence": "memory feedback_fleet_pc_login_per_assigned_account『作業用019 = nishi@orgiast.jp でログイン』。nishi-PC(DESKTOP-04U31RG, git=seisaku-team@orgiast.jp) と同一PCかは未確定(memory project_lahaina_handover_to_nishi 明記)。台帳『PC稼働状況』タブは取得できたのが先頭4行のみで 作業用019 の行も DESKTOP-04U31RG の行も確認できず(2026-10-08)"
+      "account": "nishi@orgiast.jp",
+      "_evidence": "kim 明示回答『作業用019 と作業用004民泊用は nishi@orgiast.jp』(2026-10-08)＝アカウントは確定、hostname は未確定。memory feedback_fleet_pc_login_per_assigned_account『作業用019 = nishi@orgiast.jp でログイン』。nishi-PC(DESKTOP-04U31RG, git=seisaku-team@orgiast.jp) と同一PCかは未確定(memory project_lahaina_handover_to_nishi 明記)。台帳『PC稼働状況』タブは取得できたのが先頭4行のみで 作業用019 の行も DESKTOP-04U31RG の行も確認できず(2026-10-08)"
     },
     "作業用004民泊用": {
       "remoteName": "作業用004民泊用",
-      "_evidence": "台帳に手書き行(金功勇)あり、hostname 紐付け証拠なし・fleet-mailタブ記録なし。DESKTOP-2D0R4LI は kim-PC であり民泊用ではない(kim 回答 2026-08-27)"
+      "account": "nishi@orgiast.jp",
+      "_evidence": "kim 明示回答『作業用019 と作業用004民泊用は nishi@orgiast.jp』(2026-10-08)＝アカウントは確定(台帳の担当欄『金功勇』より優先)。hostname 紐付け証拠なし・fleet-mailタブ記録なし。DESKTOP-2D0R4LI は kim-PC であり民泊用ではない(kim 回答 2026-08-27)。nishi@ のPCが019と004の2台あるため、DESKTOP-04U31RG がどちらかは未確定"
+    },
+    "作業用018": {
+      "remoteName": "作業用018",
+      "account": "cr@orgiast.jp",
+      "_evidence": "kim 明示回答『018 は cr@orgiast.jp』(2026-10-08)＝アカウントは確定。hostname・Claude Code 導入状況・報告実績は未確認"
     }
   }
 }

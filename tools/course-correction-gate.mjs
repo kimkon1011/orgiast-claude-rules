@@ -15,11 +15,11 @@ export function evaluateCourseCorrections(ctx, { home = laneHome(), rules = JSON
     const evidencePatterns = (rule.detectEvidence || []).map(p => new RegExp(p, 'i'));
     const textHit = textPatterns.some(p => p.test(text));
     const evidenceIndex = events.findIndex(e => e.type === 'tool_result' && evidencePatterns.some(p => p.test(resultText(e.content))));
-    // 本文・当ターン証跡のいずれかが規則に一致したら適用する。レーン修復済みの免責は下で判定。
+    // 証跡だけの一致は台帳への警告に留め、放置の判定は lane-abandonment-gate に任せる。
     const hit = textHit || evidenceIndex >= 0;
     const exempt = rule.gate === 'lane-abandonment-gate' && (exemptions(ctx, events, evidenceIndex) || /sonnet|haiku/i.test(currentModel(ctx)));
     if (!hit || exempt) continue;
-    const verdict = rule.severity === 'block' ? 'block' : 'warn';
+    const verdict = textHit && rule.severity === 'block' ? 'block' : 'warn';
     try { appendCorrection(home, { sessionId: ctx.sessionId || '', gate: 'course-correction', id: rule.id, verdict, signals: [rule.id], excerpt: text }); } catch {}
     if (verdict === 'block') violations.push(`[${rule.id}] ${rule.rule}。修復: ${rule.fix || '規則に従って修正し、再検証する。'}`);
   }

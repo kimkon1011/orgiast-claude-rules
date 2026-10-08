@@ -15,3 +15,13 @@ test('生存レーンありは旧bypass条件でもdeny',()=>{const h=setup('imp
 test('全滅かつ新鮮なprobeはallowとcontext',()=>{const h=setup('implement','claude-opus-5',{toolCalls:7});fs.writeFileSync(path.join(h,'.claude/lane-health.json'),JSON.stringify({implementOrder:[],probedAt:new Date().toISOString()}));const r=run(h).hookSpecificOutput;assert.equal(r.permissionDecision,undefined);assert.match(r.additionalContext,/\[LANE-FALLBACK\].*sonnet/);});
 test('全滅かつ古いprobeはdeny',()=>{const h=setup('implement','claude-opus-5',{toolCalls:7});fs.writeFileSync(path.join(h,'.claude/lane-health.json'),JSON.stringify({implementOrder:[],probedAt:new Date(Date.now()-3600000).toISOString()}));const r=run(h).hookSpecificOutput;assert.equal(r.permissionDecision,'deny');assert.match(r.permissionDecisionReason,/lane-doctor\.mjs --probe/);});
 test('lane-doctor呼び出しは委譲扱い',()=>{const h=setup('implement','claude-opus-5',{toolCalls:100});assert.equal(run(h,{tool_name:'Bash',tool_input:{command:'node tools/lane-doctor.mjs --probe'}}),null);});
+
+test('Codex alive deny points directly to codex-do without unavailable wording',t=>{
+  const h=setup('implement','claude-opus-5',{toolCalls:7});
+  t.after(()=>fs.rmSync(h,{recursive:true,force:true}));
+  fs.writeFileSync(path.join(h,'.claude/lane-health.json'),JSON.stringify({implementOrder:['codex','deepseek']}));
+  const r=run(h).hookSpecificOutput;
+  assert.equal(r.permissionDecision,'deny');
+  assert.match(r.permissionDecisionReason,/Codex は生きている。node tools\/codex-do\.mjs --prompt-file <指示> --cwd <対象> へ渡せ/);
+  assert.doesNotMatch(r.permissionDecisionReason,/使えない時/);
+});

@@ -338,6 +338,22 @@ try {
         } catch { Write-NightlyLog 'rule-compliance-loop' ("error:" + $_.Exception.Message + ' (警告・後続処理続行): ' + (Format-NightlyDetail $ruleComplianceOutput)) }
     } else { Write-NightlyLog 'rule-compliance-loop' 'skip:ファイルなし' }
 
+    # 日次の実測で復旧したレーンを再検出し、demote/cooldown を解除する。
+    # probe の失敗でも委譲ヘルス確認と後続処理は続行する。
+    $laneDoctor = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\lane-doctor.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $laneDoctor = $candidate; break }
+    }
+    if ($laneDoctor) {
+        $laneDoctorOutput = $null
+        try {
+            $laneDoctorOutput = @(& $node.Source $laneDoctor '--probe' 2>&1)
+            $laneDoctorExit = $LASTEXITCODE
+            Write-NightlyStepResult 'lane-doctor-probe' $laneDoctorExit $laneDoctorOutput ' (警告・後続処理続行)'
+        } catch { Write-NightlyLog 'lane-doctor-probe' ("error:" + $_.Exception.Message + ' (警告・後続処理続行): ' + (Format-NightlyDetail $laneDoctorOutput)) }
+    } else { Write-NightlyLog 'lane-doctor-probe' 'skip:ファイルなし' }
+
     # 委譲台帳を実測と照合し、偽 cooldown を修復して根本修正を auto-session へ起票する。
     # high が見つかっても、このブロック自身の失敗時も後続処理は必ず続ける。
     $delegationHealth = $null

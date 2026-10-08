@@ -12,7 +12,7 @@ import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 
 
 const repo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const delegated = /lane-doctor\.mjs|codex-do\.mjs|llm-ask\.mjs|batch-(?:enqueue|run)\.mjs|(?:^|\s)gemini\s|(?:^|\s)codex\s|wsl[^\r\n]*\bcodex\b|claude\s+-p|node[^\r\n]*usage-stats\.mjs/i;
+export const delegated = /pr-merge\.mjs|lane-doctor\.mjs|codex-do\.mjs|llm-ask\.mjs|batch-(?:enqueue|run)\.mjs|(?:^|\s)gemini\s|(?:^|\s)codex\s|wsl[^\r\n]*\bcodex\b|claude\s+-p|node[^\r\n]*usage-stats\.mjs/i;
 function output(value) { console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', ...value } })); }
 function editPath(input) { return String(input.file_path || input.path || ''); }
 function isDocEdit(name, input, home) {
@@ -49,6 +49,7 @@ export function laneHealthDecision(home, now = Date.now()) {
   let health;
   try { health = readJson(path.join(home, '.claude', 'lane-health.json'), null) || laneDoctorQuick({ home, now }); }
   catch { return { permissionDecision: 'deny', permissionDecisionReason: 'レーン状態を読めません。先に node tools/lane-doctor.mjs --probe を実行せよ。' }; }
+  if (health.implementOrder?.[0] === 'codex') return { permissionDecision: 'deny', permissionDecisionReason: 'Codex は生きている。node tools/codex-do.mjs --prompt-file <指示> --cwd <対象> へ渡せ' };
   if (Array.isArray(health.implementOrder) && health.implementOrder.length) return { permissionDecision: 'deny', permissionDecisionReason: `Codex が使えない時は ${health.implementOrder[0]} へ。生存レーン: ${health.implementOrder.join(', ')}。例: node tools/codex-do.mjs --prompt-file <指示> --cwd <対象>（内蔵フォールバックで deepseek/glm/gemini へ流れる）` };
   if (Array.isArray(health.implementOrder) && freshProbe(health.probedAt, now)) return { additionalContext: `[LANE-FALLBACK] 非Claude 全滅（lane-doctor 確認済み ${health.probedAt}）。Agent(model:"sonnet") に渡し、本文に [LANE-FALLBACK] と理由を明記せよ` };
   return { permissionDecision: 'deny', permissionDecisionReason: '生存レーンが未確認。先に node tools/lane-doctor.mjs --probe を実行せよ。' };

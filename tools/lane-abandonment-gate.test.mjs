@@ -18,3 +18,16 @@ test('doctor before failure does not exempt',t=>assert.equal(evaluate(t,[use('Ba
 test('line numbers and zero exit are not failures',()=>{assert.equal(failureSignal('HTTP source.ts:429:12'), '');assert.equal(failureSignal('exit code 0','codex-do.mjs'), '');});
 test('documentation edits and pre-failure edits do not count',t=>assert.equal(evaluate(t,[use('Edit',{file_path:'a.js'}),...failure,use('Edit',{file_path:'note.md'})]).decision,'pass'));
 test('prior turn and quoted user failures are excluded',t=>{const home=fs.mkdtempSync(path.join(os.tmpdir(),'lane-turn-'));t.after(()=>fs.rmSync(home,{recursive:true,force:true}));const raw=transcript([...failure,use('Edit',{file_path:'a.js'})])+'\n'+JSON.stringify({type:'user',message:{role:'user',content:'引用: HTTP 429 / 全候補が失敗'}})+'\n'+JSON.stringify({type:'assistant',message:{model:'claude-opus-5',content:[use('Edit',{file_path:'a.js'})]}});assert.equal(evaluateLaneAbandonment({transcriptRaw:raw,assistantText:'完了'},{home}).decision,'pass');});
+
+for (const name of ['Bash', 'PowerShell']) {
+  const shell = command => use(name, name === 'PowerShell' ? {script:command} : {command});
+  test(`${name}: five read-only calls after failure pass`, t => {
+    assert.equal(evaluate(t,[...failure,...['cat a.txt','git log -1','ls tools','grep foo a.txt','head a.txt'].map(shell)]).decision,'pass');
+  });
+  test(`${name}: three writes after failure block`, t => {
+    assert.equal(evaluate(t,[...failure,...['echo a > a.txt','mkdir out','cp a.txt out/'].map(shell)]).decision,'block');
+  });
+  test(`${name}: delegation commands do not count toward abandonment`, t => {
+    assert.equal(evaluate(t,[...failure,...['codex-do','llm-ask','pr-merge'].map(tool => shell(`node tools/${tool}.mjs`)),shell('npm test'),shell('npm test')]).decision,'pass');
+  });
+}

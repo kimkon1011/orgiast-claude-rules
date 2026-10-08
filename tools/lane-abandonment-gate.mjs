@@ -6,6 +6,8 @@ import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { turnEntries, redact } from './handoff-audit-gate.mjs';
 import { inspectTranscript, inspectTranscriptRaw } from './fable-session-guard.mjs';
 import { laneHome, readJson } from './lane-doctor.mjs';
+import { classifyBashCommand } from './usage-stats.mjs';
+import { delegated } from './pretooluse-lane-guard.mjs';
 import { redactAll } from './lib/redact.mjs';
 
 export const safeText = value => redactAll(redact(value));
@@ -56,7 +58,10 @@ export function evaluateLaneAbandonment(ctx, { home = laneHome() } = {}) {
     if (event.type !== 'tool_use') continue;
     uses.set(event.id, event);
     if (failedAt < 0) continue;
-    if (/^(?:Bash|PowerShell)$/.test(event.name)) shellCalls++;
+    if (/^(?:Bash|PowerShell)$/.test(event.name)) {
+      const command = String(event.input?.command || event.input?.script || '');
+      if (!delegated.test(command) && !['read-only', 'git'].includes(classifyBashCommand(command))) shellCalls++;
+    }
     const target = String(event.input?.file_path || event.input?.path || '').replace(/\\/g, '/');
     const doc = /\.md$/i.test(target) || /memory|scratchpad/i.test(target) || /(?:^|\/)\.claude(?:\/|$)/i.test(target);
     if ((/^(?:Edit|Write|MultiEdit)$/.test(event.name) && !doc) || (event.name === 'Agent' && /opus|fable/i.test(event.input?.model || '')) || shellCalls >= 3) abandoned = true;

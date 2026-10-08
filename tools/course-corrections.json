@@ -1,0 +1,11 @@
+[
+  {
+    "id": "CC-001",
+    "rule": "他AIレーンの失敗を放置して Claude 本体に戻すことを禁止する",
+    "detectText": ["(Codex|Gemini|DeepSeek|他(?:の)?AI)(?:が|は)(?:使えない|落ちている|不調|上限)[^。\\n]{0,40}(?:ので|ため)[^。\\n]{0,20}(?:自分で|直接|Claude で|本体で)"],
+    "detectEvidence": ["全候補が失敗|demote中|usage limit|HTTP\\s*4(?:02|29)\\b(?!\\s*:)|credits are depleted|RESOURCE_EXHAUSTED"],
+    "severity": "block",
+    "gate": "lane-abandonment-gate",
+    "fix": "node tools/lane-doctor.mjs --probe で復旧し、生存レーンへ委譲する。全滅時だけ Sonnet に渡し [LANE-FALLBACK] と理由を本文に書く。"
+  }
+]

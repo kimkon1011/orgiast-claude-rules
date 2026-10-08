@@ -59,11 +59,11 @@ test('memoryからreference_とdwd_のfrontmatterだけを取り込む', t => {
   assert.deepEqual(resources.capabilities, [{ name: 'bar', description: 'node bar.mjs' }, { name: 'foo', description: 'node foo.mjs' }]);
   const prompt = buildPrompt({ text: '編集できません', tools: [] }, resources);
   assert.match(prompt, /\(f\)/);
-  assert.match(prompt, /6点/);
+  assert.match(prompt, /7点/);
   assert.ok(prompt.includes(`capabilities: ${JSON.stringify(resources.capabilities)}`));
   assert.ok(!prompt.includes('BODY_ONLY'));
   assert.match(prompt, /ToolSearch で見つからない.*証拠ではない/);
-  assert.match(prompt, /1〜12/);
+  assert.match(prompt, /1〜13/);
 });
 test('capabilitiesは複数project合計80件、descriptionは200文字まで', t => {
   const home = fixture(t);
@@ -89,10 +89,10 @@ test('複数行descriptionと読み込めないmemoryを扱う', t => {
   });
   assert.deepEqual(loadResources(home).capabilities, []);
 });
-test('parseAuditはrule 12を受け付け、rule 13を拒否する', () => {
-  const result = { ...block, violations: [{ rule: 12, quote: '未接続', fix: 'gdoc-update.mjsを試す' }] };
+test('parseAuditはrule 13を受け付け、rule 14を拒否する', () => {
+  const result = { ...block, violations: [{ rule: 13, quote: '未接続', fix: 'gdoc-update.mjsを試す' }] };
   assert.deepEqual(parseAudit(JSON.stringify(result)), result);
-  assert.throws(() => parseAudit({ ...result, violations: [{ ...result.violations[0], rule: 13 }] }), /invalid-json/);
+  assert.throws(() => parseAudit({ ...result, violations: [{ ...result.violations[0], rule: 14 }] }), /invalid-json/);
 });
 test('block/pass・台帳・最大5理由', async t => {
   const home = fixture(t);
@@ -181,4 +181,11 @@ test('runner統合: regex優先とLLM blockが既存retry上限に乗る', async
     assert.ok(result.record.auditEvidence);
   }
   assert.equal(calls, 3);
+});
+test('rule 13 は失敗tool_resultから本文の能力否定なしでも監査を起動する', async t => {
+  const home=fixture(t);
+  const transcriptRaw=[{type:'user',message:{role:'user',content:'実装して'}},{type:'assistant',message:{role:'assistant',model:'claude-opus-5',content:[{type:'tool_use',id:'x',name:'Bash',input:{command:'node tools/llm-ask.mjs'}}]}},{type:'user',message:{role:'user',content:[{type:'tool_result',tool_use_id:'x',content:'全候補が失敗'}]}}].map(JSON.stringify).join('\n');
+  let called=0;
+  const r=await evaluateAudit({text:'実装完了',transcriptRaw},{home,ask:async()=>{called++;return {verdict:'pass',violations:[],learned:[]};}});
+  assert.equal(r.record.fired,true);assert.ok(called>0);
 });

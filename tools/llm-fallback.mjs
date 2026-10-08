@@ -99,7 +99,7 @@ function reasonForLog(reason, maxLength = 140) {
   return singleLine.length <= maxLength ? singleLine : `${singleLine.slice(0, maxLength - 1)}…`;
 }
 
-export async function callWithFallback({ start, chain = FALLBACK_CHAIN, payloadFor, fetchImpl = fetch, onAttempt, onFailover, validateResponse, sleepImpl = defaultSleep, cooldownFile, ledgerFile, budgetFile, now = () => Date.now() }) {
+export async function callWithFallback({ start, chain = FALLBACK_CHAIN, allowGatewayFallback = true, payloadFor, fetchImpl = fetch, onAttempt, onFailover, validateResponse, sleepImpl = defaultSleep, cooldownFile, ledgerFile, budgetFile, now = () => Date.now() }) {
   const home = process.env.ORGIAST_HOME || os.homedir();
   const timestamp = now();
   const cost = dailyCost(ledgerFile || path.join(home, '.claude', 'executor-usage.jsonl'), timestamp);
@@ -111,7 +111,7 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, payloadF
   const candidates = [];
   const seen = new Set();
   const deepseekGateway = { provider: 'openrouter', model: 'deepseek/deepseek-v4-flash' };
-  const expanded = start?.provider === 'deepseek' ? [start, deepseekGateway, ...chain] : [start, ...chain];
+  const expanded = allowGatewayFallback && start?.provider === 'deepseek' ? [start, deepseekGateway, ...chain] : [start, ...chain];
   for (const candidate of expanded.filter(Boolean)) {
     if (seen.has(candidate.provider)) continue;
     seen.add(candidate.provider);

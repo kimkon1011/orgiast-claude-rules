@@ -454,3 +454,8 @@ test('legacy 14-hour cooldown expires from original at and persists correction',
     } });
   assert.deepEqual(providers, ['groq']);
 });
+test('no-fallback probe cannot report a DeepSeek gateway success as direct provider health',async t=>{
+  const calls=[];
+  await assert.rejects(callWithFallback({start:{provider:'deepseek',model:'deepseek-chat'},chain:[],allowGatewayFallback:false,...temporaryFiles(t),payloadFor(candidate){calls.push(candidate.provider);return requestFor();},fetchImpl:async()=>new Response('payment required',{status:402}),sleepImpl:async()=>{}}));
+  assert.deepEqual(calls,['deepseek']);
+});

@@ -33,6 +33,7 @@ export async function notifyKim(text, {
   token,
   fetchImpl = globalThis.fetch,
   webhookFallback = true,
+  signal,
 } = {}) {
   const resolvedUserId = userId !== undefined ? userId : (process.env.ORGIAST_DISCORD_USER_ID?.trim()
     || readTrimmed(path.join(home, '.claude', 'orgiast-discord-user-id.txt')));
@@ -49,13 +50,13 @@ export async function notifyKim(text, {
         'User-Agent': USER_AGENT,
       };
       const dm = await fetchImpl(`${API}/users/@me/channels`, {
-        method: 'POST', headers, body: JSON.stringify({ recipient_id: resolvedUserId }), signal: AbortSignal.timeout(20_000),
+        method: 'POST', headers, body: JSON.stringify({ recipient_id: resolvedUserId }), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20_000)]) : AbortSignal.timeout(20_000),
       });
       if (!dm.ok) throw new Error(`DMチャンネル作成が HTTP ${dm.status}`);
       const channelId = (await dm.json()).id;
       if (!channelId) throw new Error('DMチャンネルIDを取得できません');
       const sent = await fetchImpl(`${API}/channels/${channelId}/messages`, {
-        method: 'POST', headers, body: JSON.stringify({ content }), signal: AbortSignal.timeout(20_000),
+        method: 'POST', headers, body: JSON.stringify({ content }), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20_000)]) : AbortSignal.timeout(20_000),
       });
       if (!sent.ok) throw new Error(`DM送信が HTTP ${sent.status}`);
       return { delivered: 'dm' };

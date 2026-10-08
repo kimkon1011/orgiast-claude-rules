@@ -90,6 +90,7 @@ try {
   const result = await callWithFallback({
     start,
     chain: args.includes('--no-fallback') ? [] : FALLBACK_CHAIN,
+    allowGatewayFallback: !args.includes('--no-fallback'),
     payloadFor(candidate) {
       const P = PROVIDERS[candidate.provider]; const key = loadKey(candidate.provider);
       if (!P || !key) return null;

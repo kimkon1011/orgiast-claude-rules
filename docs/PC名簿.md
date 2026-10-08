@@ -1,33 +1,34 @@
 # PC名簿（Chrome リモートデスクトップ名 → fleet-mail 宛先）
 
-最終更新: 2026-10-08。正本は `fleet-pc-map.json`（証拠付き）。台帳「オージャスト クラウド契約・プロジェクト台帳」の「PC稼働状況」タブ（kim@orgiast.jp 所有）が元データ。
+最終更新: 2026-10-09。正本は `fleet-pc-map.json`（証拠付き）。台帳「オージャスト クラウド契約・プロジェクト台帳」の「PC稼働状況」タブ（kim@orgiast.jp 所有）が元データ。
 
-`fleet-mail --send --to 作業用011 ...` のように、リモートデスクトップ名をそのまま宛先に書ける。全角数字・前後の空白は自動で直る。名簿に無い値は従来どおり部分一致（ラベル／hostname）。
+`fleet-mail --send --to 作業用019 ...` のように、リモートデスクトップ名をそのまま宛先に書ける。全角数字・前後の空白は自動で直る。名簿の番号は **PCのラベル（REPORTER_LABEL）** に変換して送る。hostname には変換しない（複製PCで hostname が重複するため。作業用004 と kimko-PC がどちらも DESKTOP-PPD5V8I）。名簿に無い値は従来どおり部分一致（ラベル／hostname）。
 
 ## 確定
 
 | 作業用番号 | 担当者 | アカウント | hostname | Claude Code 導入状況 | fleet-mail 宛先の書き方 |
 |---|---|---|---|---|---|
-| 作業用011 | 金功勇 | 未確認 | DESKTOP-PPD5V8I（kimko-PC） | 導入済み。ただし台帳上は 2026-09-17 に停止、最終やり取り 2026-09-30 | `--to 作業用011` |
-| 作業用999 | 未確認 | 未確認 | 未確認（未報告） | 導入完了を 2026-09-03 に実機確認。以後の報告なし | `--to 作業用999`（hostname が無いのでキー名で照合。実機のラベルと一致する保証なし） |
+| 作業用019 | nishi | nishi@orgiast.jp | DESKTOP-04U31RG（nishi-PC。Precision T3610） | 導入済み（2026-10-08 に fleet-mail で返信あり） | `--to 作業用019`（→ nishi-PC） |
+| 作業用999 | 未確認 | 未確認 | 未確認（未報告） | 導入完了を 2026-09-03 に実機確認。以後の報告なし | `--to 作業用999`（ラベルが不明なのでキー名で送る。実機のラベルと一致する保証なし） |
 
 ## 番号なし（作業用番号が未割当または不明）
 
 | PC | 担当者 | アカウント | hostname | Claude Code 導入状況 | fleet-mail 宛先の書き方 |
 |---|---|---|---|---|---|
 | kim-PC（開発機） | 金功勇 | kim@orgiast.jp | DESKTOP-2D0R4LI | 導入済み。OrgiastFleetMail タスクは 2026-10-08 に再有効化（Ready / LastTaskResult 0） | `--to kim-PC` |
-| nishi-PC | 未確認 | seisaku-team@orgiast.jp（git メール） | DESKTOP-04U31RG | 導入済み（2026-08-28/29 に報告実績） | `--to nishi-PC` |
+| kimko-PC | 金功勇 | 未確認 | DESKTOP-PPD5V8I | 導入済み。台帳上は 2026-09-17 に停止、最終やり取り 2026-09-30 | `--to kimko-PC`（作業用011 の可能性あり。下の未確認を参照） |
 | HP（東邦2階HP） | 木下真弓 | 未確認 | 未確認 | 2026-08-18 を最後に停止 | `--to HP` |
 
 ## 未確認（宛先解決には使われない）
 
-| 作業用番号 | 担当者 | アカウント | hostname | Claude Code 導入状況 | fleet-mail 宛先の書き方 |
+| 作業用番号 | 担当者 | アカウント | hostname | Claude Code 導入状況 | 未確認の理由 |
 |---|---|---|---|---|---|
-| 作業用019 | nishi | nishi@orgiast.jp（kim 回答 2026-10-08・確定） | 未確認（候補: nishi-PC = DESKTOP-04U31RG） | 未確認 | 現状 `--to 作業用019` は素通しになり届かない。当面は `--to nishi-PC`。hostname 確定後に名簿へ昇格 |
-| 作業用004民泊用 | nishi | nishi@orgiast.jp（kim 回答 2026-10-08・確定。台帳の担当欄「金功勇」より優先） | 未確認（候補: nishi-PC = DESKTOP-04U31RG） | 未確認 | 未確認。nishi@ のPCが019と004の2台あり、DESKTOP-04U31RG がどちらかは未確定 |
-| 作業用018 | 未確認 | cr@orgiast.jp（kim 回答 2026-10-08・確定） | 未確認 | 未確認 | 未確認 |
+| 作業用011 | 金功勇（台帳） | 未確認 | 候補 DESKTOP-PPD5V8I（kimko-PC） | 未確認 | 作業用004 の接続先も DESKTOP-PPD5V8I。011 の接続先のデバイス名とデバイスIDで照合するまで確定しない |
+| 作業用004民泊用 | nishi | nishi@orgiast.jp（kim 回答。台帳の担当欄「金功勇」より優先） | DESKTOP-PPD5V8I（デバイスID 3BF4B9EF-B428-450D-9AC2-C59AF0D1C9B3） | 未確認 | どのラベルで受信しているかが不明。kimko-PC と hostname が重複 |
+| 作業用018 | 未確認 | cr@orgiast.jp（kim 回答 2026-10-08） | 未確認 | 未確認 | hostname・ラベル・報告実績が無い |
 
 ## 確定のしかた
 
-1. 対象PCで Chrome リモートデスクトップ名（管理者 PowerShell で `(Get-Content "$env:ProgramData\Google\Chrome Remote Desktop\host.json" -Raw | ConvertFrom-Json).host_name`）と `hostname` を確認する。そのPCの Claude Code に `fleet-mail` で自己報告させてよい（作業用019 は 2026-10-08 に nishi-PC へ照会済み: mail-20261008142734267-9107）。
-2. 一致したら、`fleet-pc-map.json` の `_unverified.<作業用番号>` を該当PCのエントリの `remoteName` に移す。
+1. Chrome リモートデスクトップ（remotedesktop.google.com/access、kim@orgiast.jp で開く）で対象PCに接続し、そのPCの「設定 → システム → 詳細情報」でデバイス名とデバイスIDを見る（作業用019/004 は 2026-10-09 にこの方法で確認）。
+2. そのPCが fleet-mail を受信するときのラベル（`~/.claude/cost-reporter.env` の REPORTER_LABEL、無ければ hostname）を確認する。そのPCの Claude Code に自己報告させてよい。
+3. 両方そろったら、`fleet-pc-map.json` の `_unverified.<作業用番号>` を、そのラベルのエントリの `remoteName` に移す。

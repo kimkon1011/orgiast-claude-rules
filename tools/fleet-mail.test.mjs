@@ -42,14 +42,14 @@ test('send uses file body, reporter identity, reason, expiry and mail-send envel
   assert.match(fs.readFileSync(path.join(f.dir, 'fleet-mail-sent.jsonl'), 'utf8'), /send-attempt/);
 });
 for (const to of ['作業用011', '作業用０１１', '  作業用011　']) {
-  test(`send resolves remoteName ${JSON.stringify(to)} to hostname and logs the original target`, async t => {
+  test(`send resolves remoteName ${JSON.stringify(to)} to the PC label (not a possibly shared hostname)`, async t => {
     const f = fixture(t);
     f.deps.pcMap = { 'kimko-PC': { remoteName: '作業用011', hostname: 'DESKTOP-PPD5V8I' } };
     assert.equal(await main(['--send', '--to', to, '--kind', 'note', '--body-file', f.body, '--why', 'test'], f.deps), 0);
-    assert.equal(f.calls[0].payload.to, 'DESKTOP-PPD5V8I');
-    assert.deepEqual(f.errors, [`${to} → DESKTOP-PPD5V8I`]);
+    assert.equal(f.calls[0].payload.to, 'kimko-PC');
+    assert.deepEqual(f.errors, [`${to} → kimko-PC`]);
     const logs = fs.readFileSync(path.join(f.dir, 'fleet-mail-sent.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l));
-    assert.ok(logs.every(entry => entry.to === 'DESKTOP-PPD5V8I'));
+    assert.ok(logs.every(entry => entry.to === 'kimko-PC'));
   });
 }
 test('send preserves unmatched targets without stderr output', async t => {

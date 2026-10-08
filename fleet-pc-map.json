@@ -8,8 +8,8 @@
   },
   "kimko-PC": {
     "sheetName": "作業用011",
-    "remoteName": "作業用011",
     "hostname": "DESKTOP-PPD5V8I",
+    "_conflict": "2026-10-09 kim のスクリーンショットで、Chrome リモートデスクトップ『作業用004 民泊』の接続先のデバイス名も DESKTOP-PPD5V8I（デバイスID 3BF4B9EF-B428-450D-9AC2-C59AF0D1C9B3）。同じ hostname が2台あるのか、011 の紐付けが誤りなのか未確定のため、remoteName は _unverified に移した",
     "person": "金功勇",
     "aliases": ["作業用011(=DESKTOP-PPD5V8I)"],
     "_evidence": "2026-08-27 20:0x に Discord へ初報告し 🖥 hostname=DESKTOP-PPD5V8I を送ってきた（webhook 復旧の実証）。シート行『作業用011(=DESKTOP-PPD5V8I)』と hostname 一致。remoteName 根拠(2026-10-08): 台帳『PC稼働状況』D列=作業用011 の行(担当 金功勇)の fleet-mail疎通の根拠に『kimko-PCが送信/返信8通…紐付け=fleet-pc-map(作業用011)』とあり、作業用011=kimko-PC を台帳側が明示"
@@ -20,6 +20,9 @@
     "_evidence": "ラベル名がシートD列『東邦2階HP』と一致。8/17申告と同日にラベル初登場。2026-08-18 を最後に停止（webhook削除と同時期）"
   },
   "nishi-PC": {
+    "remoteName": "作業用019",
+    "account": "nishi@orgiast.jp",
+    "_evidenceRemoteName": "kim のスクリーンショット(2026-10-09): Chrome リモートデスクトップ『作業用019/nishi』の接続先の設定→詳細情報でデバイス名 DESKTOP-04U31RG（Precision T3610、デバイスID 9D75ACC5-EB0D-48FB-B27E-D60113A9417B）。nishi-PC 自己申告の hostname=DESKTOP-04U31RG(2026-10-08 fleet-mail 返信)と一致。アカウント nishi@ は kim 回答(2026-10-08)",
     "hostname": "DESKTOP-04U31RG",
     "aliases": ["DESKTOP-04U31RG"],
     "_gap": "手書き行が無い(PC稼働状況シートに追加が必要)",
@@ -33,18 +36,18 @@
   },
   "_unverified": {
     "_note": "証拠が弱く確定できない対応。fleet-mail の宛先解決(remoteName 照合)には使わない。確定したらトップレベルのエントリへ remoteName 付きで移す。",
-    "作業用019": {
-      "remoteName": "作業用019",
-      "candidate": "nishi-PC",
-      "candidateHostname": "DESKTOP-04U31RG",
-      "person": "nishi@orgiast.jp",
-      "account": "nishi@orgiast.jp",
-      "_evidence": "kim 明示回答『作業用019 と作業用004民泊用は nishi@orgiast.jp』(2026-10-08)＝アカウントは確定、hostname は未確定。memory feedback_fleet_pc_login_per_assigned_account『作業用019 = nishi@orgiast.jp でログイン』。nishi-PC(DESKTOP-04U31RG, git=seisaku-team@orgiast.jp) と同一PCかは未確定(memory project_lahaina_handover_to_nishi 明記)。台帳『PC稼働状況』タブは取得できたのが先頭4行のみで 作業用019 の行も DESKTOP-04U31RG の行も確認できず(2026-10-08)"
+    "作業用011": {
+      "remoteName": "作業用011",
+      "candidate": "kimko-PC",
+      "candidateHostname": "DESKTOP-PPD5V8I",
+      "_evidence": "台帳『PC稼働状況』D列=作業用011 の行に『紐付け=fleet-pc-map(作業用011)』とあり、シート行『作業用011(=DESKTOP-PPD5V8I)』。ただし 2026-10-09 に作業用004 の接続先も DESKTOP-PPD5V8I と判明（kimko-PC._conflict 参照）。作業用011 の接続先のデバイス名・デバイスIDで照合するまで未確定"
     },
     "作業用004民泊用": {
       "remoteName": "作業用004民泊用",
       "account": "nishi@orgiast.jp",
-      "_evidence": "kim 明示回答『作業用019 と作業用004民泊用は nishi@orgiast.jp』(2026-10-08)＝アカウントは確定(台帳の担当欄『金功勇』より優先)。hostname 紐付け証拠なし・fleet-mailタブ記録なし。DESKTOP-2D0R4LI は kim-PC であり民泊用ではない(kim 回答 2026-08-27)。nishi@ のPCが019と004の2台あるため、DESKTOP-04U31RG がどちらかは未確定"
+      "hostname": "DESKTOP-PPD5V8I",
+      "deviceId": "3BF4B9EF-B428-450D-9AC2-C59AF0D1C9B3",
+      "_evidence": "kim のスクリーンショット(2026-10-09): Chrome リモートデスクトップ『作業用004 民泊』の接続先の設定→詳細情報で、デバイス名 DESKTOP-PPD5V8I、メーカー欄は To Be Filled By O.E.M.、デバイスIDは上記。アカウント nishi@ は kim 回答(2026-10-08、台帳の担当欄『金功勇』より優先)。kimko-PC(作業用011)と hostname が衝突。この PC がどのラベルで fleet-mail を受信しているか（Claude Code 導入の有無を含む）は未確認"
     },
     "作業用018": {
       "remoteName": "作業用018",

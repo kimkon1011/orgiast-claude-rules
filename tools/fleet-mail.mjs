@@ -22,7 +22,8 @@ export function resolveRemoteName(to, pcMap) {
     for (const [label, entry] of Object.entries(pcMap)) {
       if (label.startsWith('_') || typeof entry?.remoteName !== 'string') continue;
       if (entry.remoteName.normalize('NFKC').trim() === normalized) {
-        return { to: typeof entry.hostname === 'string' && entry.hostname ? entry.hostname : label, resolved: true };
+        // Resolve to the reporter label: cloned PCs can share a hostname (作業用004 and kimko-PC both report DESKTOP-PPD5V8I).
+        return { to: label, resolved: true };
       }
     }
   }

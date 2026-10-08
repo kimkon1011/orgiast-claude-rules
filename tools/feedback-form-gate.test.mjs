@@ -145,7 +145,7 @@ function makeNextWithForm(appName) {
   const dir = makeFixture();
   fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ dependencies: { next: '15.0.0' } }));
   fs.mkdirSync(path.join(dir, 'app', 'api', 'feedback'), { recursive: true });
-  fs.writeFileSync(path.join(dir, 'app', 'layout.js'), "import FeedbackWidget from '../components/FeedbackWidget';\n");
+  fs.writeFileSync(path.join(dir, 'app', 'layout.js'), 'export default function Layout() { return <FeedbackWidget />; }\n');
   fs.writeFileSync(path.join(dir, 'app', 'api', 'feedback', 'route.ts'), `const APP_NAME = "${appName}";\n`);
   return dir;
 }

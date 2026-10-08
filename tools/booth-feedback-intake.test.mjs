@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { injectFeedbackTodos, immediateThrottleReason, runIntake, webhookFrom } from './booth-feedback-intake.mjs';
+import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
 import { firstBlockBounds, sectionFrom, parseHandoff, todoExclusionReason } from './auto-session.mjs';
 
 // path.sep 始まりにして Windows/POSIX どちらでも io スタブのキーと一致させる
@@ -73,7 +74,11 @@ test('不具合の新規注入は detached launcher を起動し台帳へ記録�
   const h = harness({ next: original, fetchImpl: async () => response({ ...api, items: [bug] }) });
   assert.equal(await runIntake({ home: HOME, io: h.io, fetchImpl: h.fetchImpl }), 0);
   assert.equal(h.spawns.length, 1);
-  assert.equal(h.spawns[0][2].detached, true);
+  // detached は Windows 以外。Windows では windowsHide で隠しコンソールを根絶つ(lib/background-spawn)。
+  assert.deepEqual(
+    { detached: h.spawns[0][2].detached, windowsHide: h.spawns[0][2].windowsHide },
+    { detached: backgroundSpawnOptions().detached, windowsHide: backgroundSpawnOptions().windowsHide },
+  );
   assert.equal(h.spawns[0][2].stdio, 'ignore');
   const saved = JSON.parse(h.files.get(HOME_FILE('booth-feedback-ledger.json')));
   assert.equal(saved.items['fb-123'].immediateLaunchedAt, '2026-08-28T03:00:00.000Z');

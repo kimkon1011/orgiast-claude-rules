@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
 import {
   appendFeedbackIssueLedger,
   buildIssueBody,
@@ -154,7 +155,11 @@ test('booth-feedback-intake を 10分タスクから相乗り起動する', asyn
   assert.equal(await chainBoothFeedbackIntake({ argv: [], spawnImpl: fakeSpawn }), 'spawned');
   assert.equal(calls.length, 1);
   assert.match(calls[0][1][0], /booth-feedback-intake\.mjs$/);
-  assert.equal(calls[0][2].detached, true);
+  // detached は Windows 以外。Windows では windowsHide で隠しコンソールを根絶つ(lib/background-spawn)。
+  assert.deepEqual(
+    { detached: calls[0][2].detached, windowsHide: calls[0][2].windowsHide },
+    { detached: backgroundSpawnOptions().detached, windowsHide: backgroundSpawnOptions().windowsHide },
+  );
 });
 
 test('--dry-run と --no-chain では相乗り起動しない', async () => {

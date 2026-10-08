@@ -30,7 +30,7 @@ test('main は pinnedTree の準備前に共有リポジトリ同期コマンド
   try {
     const code = await main([], {
       allowUpdate: () => true,
-      exists: (candidate) => candidate.endsWith('/.git') || candidate === launchArgs(pinnedTree, [])[0],
+      exists: (candidate) => /[\\/]\.git$/.test(candidate) || candidate === launchArgs(pinnedTree, [])[0],
       log: () => {},
       bootLog: () => {},
       readdir: () => [],
@@ -60,7 +60,7 @@ test('共有リポジトリ同期失敗は pinnedTree の localStateFailure と 
   try {
     const code = await main([], {
       allowUpdate: () => true,
-      exists: (candidate) => candidate.endsWith('/.git') || candidate === launchArgs(pinnedTree, [])[0],
+      exists: (candidate) => /[\\/]\.git$/.test(candidate) || candidate === launchArgs(pinnedTree, [])[0],
       log: () => {},
       bootLog: (message) => bootLogs.push(message),
       readdir: () => [],
@@ -131,7 +131,7 @@ test('fetch 失敗でも既存の専用 tree があれば子を起動する', as
     const code = await main(['--dry-run'], {
       // 用意できているかは worktree ディレクトリではなく起動対象ファイルで判定される。
       allowUpdate: () => true,
-      exists: (candidate) => candidate.endsWith('/.git') || candidate === launchArgs(pinnedTree, [])[0],
+      exists: (candidate) => /[\\/]\.git$/.test(candidate) || candidate === launchArgs(pinnedTree, [])[0],
       log: (message) => logs.push(message),
       bootLog: (message) => bootLogs.push(message),
       run: async (command, args, options) => {
@@ -159,7 +159,7 @@ test('準備コマンド失敗時は stderr の末尾を警告に残す', async 
   try {
     await main([], {
       allowUpdate: () => true,
-      exists: (candidate) => candidate.endsWith('/.git') || candidate === launchArgs(pinnedTree, [])[0],
+      exists: (candidate) => /[\\/]\.git$/.test(candidate) || candidate === launchArgs(pinnedTree, [])[0],
       log: (message) => logs.push(message),
       bootLog: (message) => bootLogs.push(message),
       run: async (command) => command === 'git'
@@ -180,7 +180,7 @@ test('最終起動失敗時は stderr の末尾を boot log に残す', async ()
   try {
     const code = await main([], {
       allowUpdate: () => true,
-      exists: (candidate) => candidate.endsWith('/.git') || candidate === launchArgs(pinnedTree, [])[0],
+      exists: (candidate) => /[\\/]\.git$/.test(candidate) || candidate === launchArgs(pinnedTree, [])[0],
       log: () => {},
       bootLog: (message) => bootLogs.push(message),
       run: async (command) => command === 'git'
@@ -225,7 +225,7 @@ test('detach 失敗時は pinnedTree に破壊的コマンドを一切発行し�
   try {
     await main([], {
       allowUpdate: () => true,
-      exists: (candidate) => candidate.endsWith('/.git') || candidate === launchArgs(pinnedTree, [])[0],
+      exists: (candidate) => /[\\/]\.git$/.test(candidate) || candidate === launchArgs(pinnedTree, [])[0],
       log: () => {},
       bootLog: () => {},
       readdir: () => { throw new Error('no such directory'); },
@@ -260,7 +260,7 @@ test('detach 失敗時は使い捨て fallback tree を作ってそこから起�
     const code = await main(['--count', 'all'], {
       now: () => fixedNow,
       allowUpdate: () => true,
-      exists: (candidate) => candidate.endsWith('/.git') || candidate === launchArgs(pinnedTree, [])[0] || candidate === launchArgs(fallbackTree, [])[0],
+      exists: (candidate) => /[\\/]\.git$/.test(candidate) || candidate === launchArgs(pinnedTree, [])[0] || candidate === launchArgs(fallbackTree, [])[0],
       log: () => {},
       bootLog: (message) => bootLogs.push(message),
       readdir: () => { throw new Error('no such directory'); },
@@ -291,7 +291,7 @@ test('fetch のみ失敗した場合は fallback tree を作らず既存 tree �
   try {
     const code = await main([], {
       allowUpdate: () => true,
-      exists: (candidate) => candidate.endsWith('/.git') || candidate === launchArgs(pinnedTree, [])[0],
+      exists: (candidate) => /[\\/]\.git$/.test(candidate) || candidate === launchArgs(pinnedTree, [])[0],
       log: () => {},
       bootLog: (message) => bootLogs.push(message),
       readdir: () => { throw new Error('no such directory'); },
@@ -319,7 +319,7 @@ test('fallback tree の作成にも失敗したら stale マーカーを残し�
   try {
     const code = await main([], {
       allowUpdate: () => true,
-      exists: (candidate) => candidate.endsWith('/.git') || candidate === launchArgs(pinnedTree, [])[0],
+      exists: (candidate) => /[\\/]\.git$/.test(candidate) || candidate === launchArgs(pinnedTree, [])[0],
       log: () => {},
       bootLog: (message) => bootLogs.push(message),
       readdir: () => { throw new Error('no such directory'); },
@@ -350,7 +350,7 @@ test('3日より古い fallback tree だけ削除し、掃除が失敗しても�
     const code = await main([], {
       now: () => fixedNow,
       allowUpdate: () => true,
-      exists: (candidate) => candidate.endsWith('/.git') || candidate === launchArgs(pinnedTree, [])[0],
+      exists: (candidate) => /[\\/]\.git$/.test(candidate) || candidate === launchArgs(pinnedTree, [])[0],
       log: () => {},
       bootLog: () => {},
       readdir: (target) => (target === dir

@@ -52,8 +52,17 @@ export function main(argv = process.argv.slice(2), options = {}) {
   parsed.directives.push(directive);
   fs.writeFileSync(file, `${JSON.stringify(parsed, null, 2)}\n`);
   if (argv.includes('--push')) {
-    const result = (options.spawnSync || spawnSync)('git', ['add', 'fleet-directives.json', '&&', 'git', 'commit', '-m', `fleet: add directive ${directive.id}`, '&&', 'git', 'push'], { cwd: repo, encoding: 'utf8', shell: true, windowsHide: true });
-    if (result.status !== 0) throw new Error(`git push failed: ${result.stderr || result.stdout}`);
+    // shell:true + 引数結合はメッセージの引用符が消えて DEP0190 警告も出るため、
+    // 1コマンドずつ引数配列で実行する。
+    const run = (args) => (options.spawnSync || spawnSync)('git', args, { cwd: repo, encoding: 'utf8', windowsHide: true });
+    const add = run(['add', 'fleet-directives.json']);
+    const commit = run(['commit', '-m', `fleet: add directive ${directive.id}`]);
+    if (add.status !== 0 || commit.status !== 0) throw new Error(`git commit failed: ${(commit.stderr || commit.stdout || add.stderr || '').slice(0, 400)}`);
+    // 夜間実行ツリー(nightly-repo)は bootstrap が意図的に detach させるため、refspec 無しの
+    // `git push` は「not currently on a branch」で必ず落ちる。detached のときは HEAD:main を明示する。
+    const onBranch = run(['symbolic-ref', '--quiet', 'HEAD']);
+    const push = onBranch.status === 0 ? run(['push']) : run(['push', 'origin', 'HEAD:main']);
+    if (push.status !== 0) throw new Error(`git push failed: ${(push.stderr || push.stdout).slice(0, 400)}`);
   }
   console.log(directive.id);
   return directive;

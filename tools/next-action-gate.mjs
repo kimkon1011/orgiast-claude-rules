@@ -84,16 +84,17 @@ export function reportsCloseSteps(text) {
 export function judgeNextAction(text, transcriptRaw = '') {
   const source = String(text || '').trimEnd();
   if (!enabled()) return { decision: 'pass', reason: 'disabled' };
-  if (source.length < MIN_ENFORCED_LENGTH) return { decision: 'pass', reason: 'short-response' };
   if (/[?？]$/.test(source)) return { decision: 'pass', reason: 'question' };
   if (reportsCloseSteps(source)) return { decision: 'pass', reason: 'close-steps' };
 
   const footer = footerValues(source);
+  // フッターを書いた短文も定型文を検査する（短文素通しで『閉じてOKです』が通った 2026-10-09 実害）。
+  if (!footer && source.length < MIN_ENFORCED_LENGTH) return { decision: 'pass', reason: 'short-response' };
   if (!footer) {
     return {
       decision: 'block',
       code: 'NEXT-ACTION-FOOTER',
-      reason: '応答末尾に「次に kim がすること」「この後の自動進行」「このセッション」の3行を、この順で連続して書いてください（各行間の空行は1つまで）。',
+      reason: `応答末尾に「次に kim がすること」「この後の自動進行」「このセッション」の3行を、この順で連続して書いてください（各行間の空行は1つまで）。「このセッション:」は定型文${SESSION_PHRASE_LIST}のいずれかを一字一句そのまま書く。`,
     };
   }
   if (!footer.nextAction) {

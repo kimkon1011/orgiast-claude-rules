@@ -206,3 +206,23 @@ test('§7.1の3語に言及しただけ（番号付き3行が無い）長文は�
   assert.equal(reportsCloseSteps(mention), false);
   assert.equal(judgeNextAction(mention).code, 'NEXT-ACTION-FOOTER');
 });
+
+test('短文でもフッターがあれば定型外の「このセッション」を block する', () => {
+  const text = 'PR はマージ済みです。\n\n次に kim がすること: なし\nこの後の自動進行: なし（完了）\nこのセッション: 目的完了。セッション判定: 閉じてOKです';
+  assert.ok(text.length < 200);
+  const r = judgeNextAction(text);
+  assert.equal(r.decision, 'block');
+  assert.equal(r.code, 'SESSION-INVALID');
+});
+
+test('短文でもフッターが定型どおりなら pass する', () => {
+  const text = `作業は完了しました。\n\n次に kim がすること: なし\nこの後の自動進行: なし（完了）\nこのセッション: ${SESSION_PHRASES.pending}`;
+  assert.ok(text.length < 200);
+  assert.equal(judgeNextAction(text).decision, 'pass');
+});
+
+test('フッター欠落の block 理由に定型4文を載せる', () => {
+  const r = judgeNextAction('あ'.repeat(250));
+  assert.equal(r.code, 'NEXT-ACTION-FOOTER');
+  for (const phrase of Object.values(SESSION_PHRASES)) assert.ok(r.reason.includes(phrase));
+});

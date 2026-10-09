@@ -131,6 +131,7 @@ function gitShimPath(fix, headSha, remoteSha) {
 }
 
 const hasPowerShell = (() => {
+  if (process.platform !== 'win32' && (!existsSync(powershell) || !/^[A-Za-z]:[\\/]/.test(toWindowsPath(script)))) return false;
   const probe = spawnSync(powershell, ['-NoProfile', '-Command', 'exit 0']);
   return !probe.error && probe.status === 0;
 })();

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+export const GATE_CONTRACT = {"name": "feedback-form-gate", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "feedback-form-gate"}, {"kind": "repo-file", "ref": "packages/feedback-gas/INSTALL.md"}, {"kind": "repo-file", "ref": "packages/feedback-widget/install.mjs"}, {"kind": "repo-file", "ref": "tools/feedback-apps.json"}, {"kind": "keyserve-key", "ref": "feedback-relay.env#FEEDBACK_SHARED_FORM_URL"}, {"kind": "user-consent", "ref": ".feedback-exempt", "reason": "社員が利用しないアプリの適用除外は用途の確認が必要"}]};
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';

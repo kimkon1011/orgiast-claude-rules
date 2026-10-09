@@ -55,3 +55,7 @@ VSCode / CLI の `/loop` は画面を開いたままにし、PC をスリープ�
 次に kim がすること: <判断待ちなら判断内容。なければ「なし」>
 この後の自動進行: <次の1施策と予定、または停止理由>
 このセッション: <継続／停止／完了>
+
+## 制作アプリの本番反映と GitHub 同期
+
+- 制作アプリの本番 GAS へ clasp push したら同じターンで GitHub master へも push（ff 不可なら PR）。GitHub push 前に隔離ディレクトリで clasp pull し、本番と同期対象 src の差分 0 を確認する。`gas-overlay-push.mjs` は read-back 後に専用 clone で src を commit → `git push origin HEAD` → `git push origin HEAD:master`（force 禁止）を実行する。JSON の `gitSync.status` が `failed` なら GAS 成功と GitHub 未同期を分けて記録し、同期を完了するまで完了扱いにしない。共有ツリーの index は触らない。

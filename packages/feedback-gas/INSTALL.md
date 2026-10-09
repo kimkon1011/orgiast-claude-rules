@@ -222,7 +222,9 @@ io.open(path, 'w', encoding='utf-8', newline='\n').write(json.dumps(cfg, ensure_
 
 `app` に渡した名前がそのまま Discord 通知の見出し（`🐛 **[アプリ名]** 不具合: …`）になります。`src` は報告元ページの URL で、通知に添えられます。
 
-**共通フォームの exec URL は、public リポであるここには書きません。** 各PCの `~/.claude/feedback-relay.env` の `FEEDBACK_SHARED_FORM_URL` にあります（分からなければ kim に確認）。
+**共通フォームの exec URL は、public リポであるここには書きません。** 各PCの `~/.claude/feedback-relay.env` の `FEEDBACK_SHARED_FORM_URL` へ、既存の非公開 keyserve 配布から取得します。新規PCはインストール時、既存PCは SessionStart の `onboarding-sync.mjs` で自動取得・キー単位マージされます。即時取得は正本リポジトリで `node tools/onboarding-sync.mjs --keys-only --force` を実行してください。取得後にゲートを再実行すると、フォルダ名をアプリ名として URL エンコードし、HTML エスケープ済みの方式Bリンクを表示します。正式なアプリ名が違う場合は `app=` を `encodeURIComponent(正式名)` で置き換えてください。
+
+配布元の管理: keyserve の既存 `ORGIAST_KEYS_JSON_EXTRA*` 経路に、`feedback-relay.env` の `FEEDBACK_SHARED_FORM_URL` だけを追加する（既存の鍵 JSON 全体は上書きしない）。登録・本番反映後に認証付き `/api/keys` の read-back と、上記取得コマンドによるローカル反映を確認して配布完了とする。`feedback-relay.env` が配布元に既にある場合は、その既存キーも保持する。ローカルの Bot トークンや webhook などをファイル丸ごと配布しない。
 
 ## 方式Bの手順（対象アプリ側の作業はリンク1本だけ）
 

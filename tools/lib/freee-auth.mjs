@@ -4,7 +4,6 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import postgres from 'postgres';
 const TOKEN_URL = 'https://accounts.secure.freee.co.jp/public_api/token';
 const EXPIRY_MARGIN_MS = 120 * 1000;
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -24,6 +23,7 @@ function loadDbUrl() {
 
 
 export async function getAccessToken() {
+  const { default: postgres } = await import('postgres');
   const sql = postgres(loadDbUrl(), { max: 1, ssl: 'require', onnotice: () => {} });
   try {
     const [row] = await sql`select client_id, client_secret, refresh_token, access_token, access_expires_at

@@ -25,6 +25,13 @@ function atomic(file, text) {
   try { fs.writeFileSync(tmp, text); fs.renameSync(tmp, file); }
   finally { fs.rmSync(tmp, { force: true }); }
 }
+function appendLog(file, text) {
+  let size = 0;
+  try { size = fs.statSync(file).size; }
+  catch (e) { if (e.code !== 'ENOENT') throw e; }
+  if (size > 1_048_576) fs.renameSync(file, `${file}.1`);
+  fs.appendFileSync(file, text);
+}
 export function parseJson(raw) {
   if (typeof raw !== 'string') throw new Error('LLM response must be text');
   const start = raw.indexOf('{'), end = raw.lastIndexOf('}');
@@ -179,7 +186,7 @@ export async function runOnce(options = {}) {
   const env = options.env ?? process.env, dryRun = !!options.dryRun;
   const dir = path.join(home, '.claude', 'discord-autoreply'), file = name => path.join(dir, name);
   const result = { ok: true, scanned: 0, replied: 0, skipped: { kim_replied: 0, fyi: 0, excluded: 0, old: 0, bot: 0 }, learned: { corrected: 0, confirmed: 0, expired: 0 }, errors: [], ...(dryRun ? { wouldSend: [] } : {}) };
-  let release, token = '';
+  let release, state, token = '';
   const errorText = e => String(e.message || e).replaceAll(token || '\0', '[redacted]').slice(0, 1000);
   try {
     if (fs.existsSync(file('PAUSE'))) return { ...result, paused: true };
@@ -192,7 +199,7 @@ export async function runOnce(options = {}) {
       if (!release) return { ...result, locked: true };
       if (fs.existsSync(file('PAUSE'))) return { ...result, paused: true };
     }
-    const state = loadState(file('state.json'), now);
+    state = loadState(file('state.json'), now);
     const save = () => { if (!dryRun) atomic(file('state.json'), JSON.stringify(state, null, 2) + '\n'); };
     if (!dryRun) {
       save(); // Baseline is durable before the very first network request.
@@ -359,8 +366,16 @@ export async function runOnce(options = {}) {
   finally {
     if (release) {
       try {
-        fs.appendFileSync(file('log.jsonl'), JSON.stringify({ ts: now, ...result }) + '\n');
-        fs.appendFileSync(file('run.log'), `${new Date(now).toISOString()} ok=${result.ok} scanned=${result.scanned} replied=${result.replied} learned=${JSON.stringify(result.learned)} errors=${result.errors.length}\n`);
+        const quiet = result.replied === 0 && Object.values(result.learned).every(count => count === 0)
+          && result.errors.length === 0 && !result.wouldSend?.length;
+        if (!quiet || !Number.isFinite(state?.lastQuietLogTs) || now - state.lastQuietLogTs >= HOUR) {
+          appendLog(file('log.jsonl'), JSON.stringify({ ts: now, ...result }) + '\n');
+          appendLog(file('run.log'), `${new Date(now).toISOString()} ok=${result.ok} scanned=${result.scanned} replied=${result.replied} learned=${JSON.stringify(result.learned)} errors=${result.errors.length}\n`);
+          if (quiet && state) {
+            state.lastQuietLogTs = now;
+            atomic(file('state.json'), JSON.stringify(state, null, 2) + '\n');
+          }
+        }
       } catch (e) { result.ok = false; result.errors.push(`log: ${errorText(e)}`); }
       release();
     }

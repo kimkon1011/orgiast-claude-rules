@@ -8,28 +8,13 @@
 //   node tools/freee-query.mjs --partners "クラフトフィックス"
 //   node tools/freee-query.mjs --partner "クラフトフィックス|*" --from 2025-10-01 --to 2026-09-30 [--type income|expense] [--out path.json]
 
-import { readFileSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import postgres from 'postgres';
+import { getAccessToken } from './lib/freee-auth.mjs';
 import { isEntry } from './is-entry.mjs';
 
 const COMPANY_ID = 11975741;
 const API = 'https://api.freee.co.jp';
-const TOKEN_URL = 'https://accounts.secure.freee.co.jp/public_api/token';
-const EXPIRY_MARGIN_MS = 120 * 1000;
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-function loadDbUrl() {
-  if (process.env.PURCHASING_APP_DATABASE_URL) return process.env.PURCHASING_APP_DATABASE_URL;
-  const text = readFileSync(join(ROOT, '.env.local'), 'utf8');
-  for (const line of text.split(/\r?\n/)) {
-    const m = line.match(/^\s*(?:export\s+)?PURCHASING_APP_DATABASE_URL\s*=\s*(.*)$/);
-    if (m) return m[1].trim().replace(/^(['"])(.*)\1$/, '$2');
-  }
-  throw new Error('PURCHASING_APP_DATABASE_URL が .env.local に見つかりません');
-}
 
 function parseArgs(argv) {
   const a = {};
@@ -39,35 +24,6 @@ function parseArgs(argv) {
   return a;
 }
 
-async function getAccessToken() {
-  const sql = postgres(loadDbUrl(), { max: 1, ssl: 'require', onnotice: () => {} });
-  try {
-    const [row] = await sql`select client_id, client_secret, refresh_token, access_token, access_expires_at
-      from freee_tokens where id = 'default' limit 1`;
-    if (!row) throw new Error('freee_tokens に default 行がありません');
-    if (row.access_token && row.access_expires_at && new Date(row.access_expires_at).getTime() > Date.now() + EXPIRY_MARGIN_MS) {
-      return row.access_token;
-    }
-    const res = await fetch(TOKEN_URL, {
-      method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'refresh_token',
-        client_id: row.client_id,
-        client_secret: row.client_secret,
-        refresh_token: row.refresh_token,
-      }),
-    });
-    if (!res.ok) throw new Error(`freee トークン更新に失敗: HTTP ${res.status}`);
-    const j = await res.json();
-    const expiresAt = new Date(Date.now() + j.expires_in * 1000);
-    await sql`update freee_tokens set refresh_token = ${j.refresh_token}, access_token = ${j.access_token},
-      access_expires_at = ${expiresAt}, updated_at = now() where id = 'default'`;
-    return j.access_token;
-  } finally {
-    await sql.end({ timeout: 5 });
-  }
-}
 
 async function freeeGet(token, path, params) {
   const url = new URL(API + path);

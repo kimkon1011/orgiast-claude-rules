@@ -19,6 +19,8 @@ GitHub にログイン済みの Claude Code で:
 
 以後の更新は `/plugin` から update するだけで全スキルが同期されます。
 
+- [経費漏れチェック](tools/expense-leak-check.README.md): freee登録待ち明細とメール証跡を週次照合し、専用SheetタブとkimのDMへ報告。
+
 ## 含まれるもの
 
 | 種類 | 名前 | 用途 |

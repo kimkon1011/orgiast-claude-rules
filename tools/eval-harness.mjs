@@ -165,6 +165,9 @@ const requested = (opt('--provider', '') || '').toLowerCase(); let targets; if (
 for (const x of targets) { if (!PROVIDERS[x.provider]) { console.log(`SKIP ${x.provider}: 未対応provider`); continue; } if (x.skip) { console.log(`SKIP ${x.provider}: モデル未導入のためスキップ`); continue; } const skip = dailyCooldownSkip(x.provider); if (skip) { console.log(skip); continue; } if (!loadKey(x.provider)) { const P = PROVIDERS[x.provider]; console.log(`SKIP ${x.provider}: ${P.keyEnv} 未設定（env または ~/.claude/${P.keyFile}）`); continue; } const model = x.model || PROVIDERS[x.provider].model; if (x.provider === 'ollama' && (!model || !(await ollamaHasModel(model)))) { console.log('SKIP ollama: モデル未導入のためスキップ'); continue; } try { await runOne(x.provider, model, x); } catch (e) { console.error(`${x.provider} 実行失敗: ${e.message}`); if (!has('--all')) process.exitCode = 1; } }
 if (has('--all')) {
   // 全provider計測の完了で routing-table.json を再生成する(仕様C: eval 結果に連動するルーティング表)。
+  // 再生成前の採用モデルと比較して提案を登録する。提案失敗でも既存評価処理は続行。
+  try { const { proposeSavedEvaluations } = await import('./model-scout.mjs'); await proposeSavedEvaluations({ home: HOME, resultsFile: RESULTS }); }
+  catch { console.error('model-scout: eval 完了後の提案登録に失敗。次回 scout で再試行します。'); }
   try { rebuildRoutingTable({ resultsFile: RESULTS }); }
   catch (error) { console.error(`routing-table 再生成失敗: ${String(error?.message ?? error)}`); }
 }

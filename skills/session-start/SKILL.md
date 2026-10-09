@@ -14,6 +14,16 @@ description: 新しいセッションを前セッションの引き継ぎから�
 - `## 触る前に読む memory` に挙がっているファイルを実際に読む（`MEMORY.md` の索引ではなく本体）。**ここを飛ばすと前セッションの失敗を繰り返す。**
 - `~/.claude/promotion-queue.md`を読む。PROMOTE待ちがあれば手順2の目的候補へ`仕組み化: <name>`として含める。
 
+## 1.5 実装提案が先頭にある場合
+
+`next-session.md` の先頭が `<!-- PROPOSAL-SESSION START -->` なら、この提案1件の判断を本セッションの目的にする。後ろの別目的・後続キューはこのセッションで実行しない。
+
+1. `~/.claude/proposals/<id>.json` と同名 `.md` を読み、提案・根拠・変更内容・費用効果・リスク・承認/却下後の動作を提示する。「承認なら『承認』、却下なら『却下 <理由>』」と案内し、回答前は Codex や autopilot を起動しない。提案IDと `revision` を控える。
+2. kim がこの提案を「承認」したら JSON を再読し、提示した `revision` と一致することを確認する。追記で変わっていれば更新差分を提示して改めて判断を受ける。`onApprove.kind` が `codex-task` であることと指示書の実在・内容を確認し、配布元リポジトリの `node tools/codex-do.mjs --prompt-file "<onApprove.promptFile>" --cwd "<対象repo>"` を実行する。別目的への包括承認として扱わない。
+3. Codex の結果を read-back し、関連テストと `git diff --check` を監督も実行する。生成doc型の変更なら `--write` → `--check` → 関連テスト。PR を作成（既存があれば再利用）して URL を提案 JSON に記録し、再開時は同じ PR を使う。CI と差分を確認後 `node tools/pr-merge.mjs <PR番号>` を実行し、GitHub の `state=MERGED`・`mergedAt` を確認する。失敗中・CI待ちは提案を未処理のまま保持する。
+4. マージ確認後 `node tools/proposal-session.mjs --complete "<id>" --revision "<提示時の番号>" --decision approved --pr "<PR URL>"`。却下なら実装をせず `node tools/proposal-session.mjs --complete "<id>" --revision "<提示時の番号>" --decision rejected --reason "<理由>"`。シェル引数を適切に引用する。完了メッセージだけでなく `proposals/done/<id>.json` の status・理由・PR と次の引き継ぎを read-back する。
+5. 完了処理は `.json`・`.md`・生成指示書を `done/` へ移し、キューの次の1件を先頭に登録する。元の引き継ぎは残る。次の提案は次セッションで扱う。`next-session.md` の提案ブロックを手で削除しない。
+
 ## 2. 目的を1件に確定する
 
 - 引き継ぎに目的が書いてあればそれを採用し、着手前に1行で宣言する（`**[本セッションの目的]** …`）。

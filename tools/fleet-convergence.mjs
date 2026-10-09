@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { parseEnvText } from './env-kv.mjs';
 
@@ -54,7 +55,7 @@ export function collectConvergence({ home, repo, hostname = os.hostname(), usern
   } catch { /* ZIP/offline/missing remote is unknown, never zero. */ }
   try {
     const expected = expectedHooks || JSON.parse(execFileSync(process.execPath,
-      [path.join(repo, 'tools/register-hooks.mjs'), '--expected-json'],
+      [fileURLToPath(new URL('./register-hooks.mjs', import.meta.url)), '--expected-json'],
       { encoding: 'utf8', timeout: 30000, windowsHide: true, env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo } }));
     const actual = readJson(path.join(home, '.claude/settings.json'));
     row.hookMissing = (actual.disableAllHooks === true ? hookEntries(expected.hooks).length : missingHooks(actual.hooks, expected.hooks).length) + (expected.skippedNames?.length || 0);

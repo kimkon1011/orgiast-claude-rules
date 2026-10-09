@@ -88,6 +88,16 @@ try {
     $node = Get-Command node -ErrorAction SilentlyContinue
     if (-not $node) { $summary['node'] = 'error:nodeが見つからない'; Write-NightlyLog 'node確認' 'error:nodeが見つからない'; Finish-Nightly 1 }
     $script:staleWorkReady = $true
+    # Runtime wiring: the existing nightly task picks this up without re-registration.
+    $expenseLeak = Join-Path $PSScriptRoot 'expense-leak-check.mjs'
+    if (Test-Path -LiteralPath $expenseLeak -PathType Leaf) {
+        try {
+            $expenseOutput = @(& $node.Source $expenseLeak --weekly 2>&1)
+            $expenseExit = $LASTEXITCODE
+            Write-NightlyStepResult 'expense-leak-check' $expenseExit $expenseOutput
+        } catch { Write-NightlyLog 'expense-leak-check' ('error:' + $_.Exception.Message) }
+    } else { Write-NightlyLog 'expense-leak-check' 'skip:script missing' }
+
     Write-NightlyLog 'node確認' 'ok'
     try {
         $rotationOutput = @(& $node.Source (Join-Path $PSScriptRoot 'next-session-rotate.mjs') 2>&1)

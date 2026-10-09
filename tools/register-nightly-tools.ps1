@@ -26,7 +26,8 @@ $specs = @(
   [pscustomobject]@{ TaskName = 'OrgiastMorningBatch'; ScriptName = 'nightly-health-remediate.mjs'; ScriptArgs = @() },
   [pscustomobject]@{ TaskName = 'OrgiastNightlyBatch'; ScriptName = 'ai-news-triage.mjs'; ScriptArgs = @('--confidence', 'high,medium', '--limit', '8') },
   [pscustomobject]@{ TaskName = 'OrgiastNightlyBatch'; ScriptName = 'pricing-brief.mjs'; ScriptArgs = @('--limit', '8') },
-  [pscustomobject]@{ TaskName = 'OrgiastNightlyBatch'; ScriptName = 'drive-hub-mirror.mjs'; ScriptArgs = @() }
+  [pscustomobject]@{ TaskName = 'OrgiastNightlyBatch'; ScriptName = 'drive-hub-mirror.mjs'; ScriptArgs = @() },
+  [pscustomobject]@{ TaskName = 'OrgiastNightlyBatch'; ScriptName = 'expense-leak-check.mjs'; ScriptArgs = @('--weekly') }
 )
 
 . (Join-Path $PSScriptRoot 'resolve-synced-repo.ps1')

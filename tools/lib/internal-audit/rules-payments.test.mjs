@@ -32,3 +32,45 @@ test('R13 exact member match; substring not sufficient',()=>{const s=base();s.pa
 test('R14 free mail exact domain only',()=>{const s=base();s.payments=[pay(1)];s.partners[0].email=`a@${t.free_mail_domains[0]}`;assert.ok(has(s,'R14'));s.partners[0].email='a@example.invalid';assert.ok(!has(s,'R14'));});
 test('R15 full six months required and ratio strict',()=>{const s=base();s.payments=[pay(t.spike_min),pay(t.spike_min*t.spike_months/t.spike_ratio-1,'2026-04-01')];assert.ok(has(s,'R15'));s.payments[1].amount++;assert.ok(!has(s,'R15'));s.payments[1].amount--;s.coverage.historyComplete=false;assert.ok(!has(s,'R15'));});
 test('allowlist suppresses only R02 R07 R08, inputs immutable',()=>{const s=structuredClone(sample),before=JSON.stringify(s);const custom={...patterns,allowlist_partners:['sample-a']};for(const r of ['R02','R07','R08'])assert.ok(!has(s,r,custom));assert.ok(has(s,'R05',custom));assert.ok(has(s,'R06',custom));assert.equal(JSON.stringify(s),before);});
+
+test('payment agents normalize kana, lower R07 and exclude R08; unrelated bank remains high', () => {
+  const s = base();
+  s.partners[0].name = '株式会社テスト';
+  s.partners[0].bank.account_name = 'ﾈｯﾄﾌﾟﾛﾃｸｼｮﾝｽﾞ ｶ)';
+  s.payments = [pay(t.name_mismatch_amount)];
+  assert.match(findings(s).find(f => f.rule === 'R07').detail, /収納代行経由（ネットプロテクションズ）/);
+  assert.equal(findings(s).find(f => f.rule === 'R07').severity, 'info');
+  assert.ok(!has(s, 'R08'));
+  s.partners[0].bank.account_name = 'ベツジン';
+  assert.equal(findings(s).find(f => f.rule === 'R07').severity, 'medium');
+  assert.ok(has(s, 'R08'));
+});
+test('R13 personal contractor medium, corporate personal bank high with reciprocal R08 references', () => {
+  const s = base(); s.payments = [pay(100)];
+  s.partners[0].name = '川西美沙'; s.partners[0].name_kana = 'カワニシミサ';
+  s.staff = [{ names: ['カワニシミサ'] }];
+  assert.equal(findings(s).find(f => f.rule === 'R13').severity, 'medium');
+  s.partners[0].name = '株式会社MUGUET'; s.partners[0].name_kana = 'ミュゲ';
+  s.partners[0].bank.account_name = 'ｶﾜﾆｼ ﾐｻ';
+  assert.equal(findings(s).find(f => f.rule === 'R13').severity, 'high');
+  assert.match(findings(s).find(f => f.rule === 'R13').detail, /R08/);
+  assert.match(findings(s).find(f => f.rule === 'R08').detail, /R13-high/);
+  s.partners[0].bank.account_name = 'カ)カワニシミサ';
+  assert.ok(!has(s, 'R13'));
+});
+test('generic partner cannot trigger R02 even with verified zeros', () => {
+  const s = base(); s.partners[0].name = 'その他'; s.payments = [pay(500000)];
+  s.footprint.p = Object.fromEntries(['gmail','drive','discord'].map(k => [k, { status: 'ok', count: 0, controlVerified: true }]));
+  assert.ok(!has(s, 'R02'));
+  assert.match(runPaymentRules(s, s.footprint, patterns).unverified.find(f => f.rule === 'R02').detail, /汎用取引先名/);
+});
+test('unregistered payments aggregate all amounts, keep threshold boundary; R15 is one row', () => {
+  const s = base(); s.coverage.historyComplete = false;
+  s.partners.push({ id: 'q', name: 'Another' });
+  s.payments = [pay(1), { ...pay(1), partner_id: 'q' }, ...[145, 49999, 50000].map(amount => ({ ...pay(amount), partner_id: '' }))];
+  const rows = runPaymentRules(s, {}, patterns).unverified;
+  assert.equal(rows.filter(r => r.rule === 'R15').length, 1);
+  const unknown = rows.filter(r => r.rule === 'payments');
+  assert.equal(unknown.length, 2); assert.match(unknown[0].detail, /3件・合計 100144円/);
+  assert.match(unknown[1].detail, /50000円/);
+});

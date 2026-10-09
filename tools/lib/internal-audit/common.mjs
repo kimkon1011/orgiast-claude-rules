@@ -75,5 +75,26 @@ export function runProcess(command, args, { timeout = 120000, env = process.env,
     child.on('close', code => { clearTimeout(timer); code === 0 && !over ? resolve(output) : reject(auditError(over ? '子プロセス タイムアウト/出力上限' : `子プロセス終了コード ${code}`)); });
   });
 }
-export function parseModelJson(text) { return JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')); }
+export function parseModelJson(text) {
+  const start = text.search(/[\[{]/);
+  if (start < 0) throw new SyntaxError('JSON start missing');
+  const stack = [];
+  let quoted = false, escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const c = text[i];
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (c === '\\') escaped = true;
+      else if (c === '"') quoted = false;
+      continue;
+    }
+    if (c === '"') quoted = true;
+    else if (c === '[' || c === '{') stack.push(c === '[' ? ']' : '}');
+    else if (c === ']' || c === '}') {
+      if (stack.pop() !== c) throw new SyntaxError('JSON brackets mismatch');
+      if (!stack.length) return JSON.parse(text.slice(start, i + 1));
+    }
+  }
+  throw new SyntaxError('JSON incomplete');
+}
 export const normalize = value => String(value ?? '').normalize('NFKC').toLowerCase().replace(/株式会社|有限会社|合同会社|\(株\)|\(有\)|\(同\)/g, '').replace(/[\s\p{P}\p{S}ーｰ]+/gu, '');

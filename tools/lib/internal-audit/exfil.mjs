@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { DAY, USERS, maskNumbers, reason, auditError } from './common.mjs';
+import { shareDomain, summarizeShares, baselineFinding, sharingFinding } from './sharing-baseline.mjs';
 export const ADMIN_SCOPE = 'https://www.googleapis.com/auth/admin.reports.audit.readonly';
 export function adminScopeMessage(clientId = '（鍵ファイルの client_id を確認）') {
   return `Workspace 監査ログ: 未確認（DWD スコープ未付与）。付与手順: Google 管理コンソール（kim@orgiast.jp で開く）→ セキュリティ → アクセスとデータ管理 → API の制御 → ドメイン全体の委任 → クライアント ID \`${clientId}\` を編集 → スコープに \`${ADMIN_SCOPE}\` を追加 → 承認。付与後は次回実行から自動で有効。`;
@@ -16,41 +17,97 @@ export function diffExternalShares(files, known = []) {
   for (const file of files) for (const p of file.permissions || []) if (isExternalPermission(p)) {
     const key = permissionKey(file, p); if (keys.has(key)) continue; keys.add(key);
     if (previous.has(key)) { knownCount++; continue; }
-    findings.push({ rule: 'exfil', severity: p.type === 'anyone' ? 'medium' : 'high', subject: maskNumbers(file.name),
-      url: file.webViewLink || `https://drive.google.com/file/d/${encodeURIComponent(file.id)}/view`,
-      detail: `新規検出の外部共有（初回は既存共有を含む）: ${p.type === 'anyone' ? 'リンクを知っている全員' : p.emailAddress || p.domain} / ${p.role}` });
+    findings.push(sharingFinding(file, p));
   }
   if (knownCount) findings.push({ rule: 'exfil', severity: 'info', subject: '既知の外部共有', detail: `${knownCount}権限（前回と同一）` });
   return { findings, keys: [...keys], knownCount };
 }
-export async function scanDrive({ google, known = [], userBudgetMs = 120000, nowMillis = Date.now }) {
-  const files = new Map(), sources = {};
+const VISIBILITY = "(visibility = 'anyoneWithLink' or visibility = 'anyoneCanFind' or visibility = 'domainCanFind' or visibility = 'domainWithLink')";
+const DRIVE_FIELDS = 'nextPageToken,incompleteSearch,files(id,name,mimeType,modifiedTime,permissions(id,type,role,emailAddress,domain,allowFileDiscovery,deleted),webViewLink)';
+export async function scanDrive({ google, state = {}, known = state.knownExternalShares, userBudgetMs = 200000, nowMillis = Date.now, save = async () => {} }) {
+  const sources = {}, findings = [], acknowledgedKeys = [], keys = new Set(known || []), priorKeys = new Set(known || []);
+  state.driveScan ||= {};
+  state.drivePriorityScan ||= {};
+  state.externalShareFiles ||= {};
+  let building = known === undefined;
   for (const user of USERS) {
-    let count = 0; const until = nowMillis() + userBudgetMs;
+    const scan = state.driveScan[user] ||= { pageToken: null, startedAt: null, completedAt: null, modifiedCursor: null };
+    const priority = state.drivePriorityScan[user] ||= { pageToken: null, startedAt: null, completedAt: null, modifiedCursor: null };
+    const baseline = known === undefined || !scan.completedAt || !!scan.pageToken || !!priority.pageToken || !priority.completedAt;
+    const canDetect = known !== undefined && !!scan.completedAt && !!priority.completedAt;
+    state.pendingExternalFindings ||= {};
+    building ||= baseline;
+    let count = 0;
+    const until = nowMillis() + userBudgetMs;
     try {
-      let pageToken; const pageTokens = new Set();
-      do {
-        if (nowMillis() >= until) throw auditError('Drive 所有ファイル走査の時間上限（未走査のページあり）。直近更新順の部分取得');
-        const url = new URL('https://www.googleapis.com/drive/v3/files');
-        url.search = new URLSearchParams({ q: "trashed = false and 'me' in owners", orderBy: 'modifiedTime desc', pageSize: '1000', fields: 'nextPageToken,incompleteSearch,files(id,name,mimeType,modifiedTime,permissions(id,type,role,emailAddress,domain,allowFileDiscovery,deleted),webViewLink)', ...(pageToken ? { pageToken } : {}) });
-        const j = await google.request(url, user);
-        if (!Array.isArray(j.files) || j.incompleteSearch) throw auditError('Drive 一覧が不完全');
-        for (const f of j.files) {
-          if (!Array.isArray(f.permissions)) throw auditError('Drive permissions 未取得');
-          files.set(f.id, f); count++;
-        }
-        pageToken = j.nextPageToken;
-        if (pageToken && pageTokens.has(pageToken)) throw auditError('ページトークンが反復したため取得中断（不完全）');
-        if (pageToken) pageTokens.add(pageToken);
-      } while (pageToken);
-      sources[`drive-sharing:${user}`] = { status: 'ok', count, reason: '所有ファイルの権限を取得。共有ドライブ・非所有ファイルは対象外' };
-    } catch (e) { sources[`drive-sharing:${user}`] = { status: 'unverified', count, reason: reason(e) }; }
+      // Public/link-visible files are paginated before the complete ownership scan.
+      for (const [cursor, visibility] of [[priority, true], [scan, false]]) {
+        if (!cursor.pageToken) cursor.startedAt = new Date(nowMillis()).toISOString();
+        const pageTokens = new Set(cursor.pageToken ? [cursor.pageToken] : []);
+        do {
+          if (nowMillis() >= until) throw auditError('Drive 所有ファイル走査の時間上限（再開位置あり・次回継続）');
+          const url = new URL('https://www.googleapis.com/drive/v3/files');
+          const q = ["trashed = false and 'me' in owners", visibility ? VISIBILITY : '',
+            cursor.modifiedCursor ? `modifiedTime > '${cursor.modifiedCursor}'` : ''].filter(Boolean).join(' and ');
+          url.search = new URLSearchParams({ q, orderBy: 'modifiedTime desc', pageSize: '1000', fields: DRIVE_FIELDS,
+            ...(cursor.pageToken ? { pageToken: cursor.pageToken } : {}) });
+          let j;
+          try { j = await google.request(url, user); }
+          catch (e) {
+            // Expired continuation tokens restart the same interval, never advance its cursor.
+            if (e.status === 400 && cursor.pageToken) cursor.pageToken = null;
+            throw e;
+          }
+          if (!Array.isArray(j.files) || j.incompleteSearch) throw auditError('Drive 一覧が不完全（次回継続）');
+          if (j.files.some(f => !Array.isArray(f.permissions))) throw auditError('Drive permissions 未取得');
+          for (const raw of j.files) {
+            const file = { ...raw, owner: user }, external = file.permissions.filter(isExternalPermission);
+            state.externalShareFiles[`${user}:${file.id}`] = external.map(p => ({ owner: user, type: p.type, domain: shareDomain(p) }));
+            count++;
+            for (const p of external) {
+              const key = permissionKey(file, p);
+              if (canDetect && !priorKeys.has(key) && !keys.has(key)) {
+                const finding = sharingFinding(file, p);
+                state.pendingExternalFindings[key] = finding;
+              }
+              keys.add(key);
+            }
+          }
+          const next = j.nextPageToken || null;
+          if (next && pageTokens.has(next)) throw auditError('ページトークンが反復したため取得中断（再開位置あり・次回継続）');
+          cursor.pageToken = next;
+          if (next) pageTokens.add(next);
+          else {
+            cursor.completedAt = new Date(nowMillis()).toISOString();
+            cursor.modifiedCursor = cursor.startedAt;
+          }
+          state.knownExternalShares = [...keys];
+          await save(state);
+        } while (cursor.pageToken);
+      }
+
+      sources[`drive-sharing:${user}`] = { status: 'ok', count, reason: `${baseline ? 'ベースライン構築（今回完了）' : '差分走査完了'}。所有ファイルのみ・共有ドライブ対象外` };
+    } catch (e) {
+      building = true;
+      sources[`drive-sharing:${user}`] = { status: 'unverified', count, reason: `${reason(e)}。${scan.pageToken || priority.pageToken ? '再開位置あり・次回継続' : '未完了区間を次回再試行'}。ベースライン構築中` };
+      // Incomplete user scans suppress individual findings. Retain these keys as unreported
+      // so a completed later incremental scan can still report them.
+
+      await save(state);
+    }
+    if (sources[`drive-sharing:${user}`].status === 'ok' && !baseline) {
+      for (const [key, f] of Object.entries(state.pendingExternalFindings || {})) if (f.owner === user) {
+        findings.push(f); acknowledgedKeys.push(key);
+      }
+    }
   }
-  const diff = diffExternalShares([...files.values()], known);
-  // Retain previous keys on partial scans, so an inaccessible source cannot reset its baseline.
-  const complete = Object.values(sources).every(s => s.status === 'ok');
-  return { ...diff, keys: complete ? diff.keys : [...new Set([...known, ...diff.keys])], sources, count: files.size };
+  state.knownExternalShares = [...keys];
+  const summary = summarizeShares(Object.values(state.externalShareFiles).flat());
+  findings.push(baselineFinding(summary, building));
+  return { findings, acknowledgedKeys, keys: [...keys], sources, baseline: { building, summary,
+    limitation: '所有ファイルの取得済み権限を集計。権限数でありファイル数ではありません。差分走査では削除・所有者変更を追跡しないため最終確認時点の集計です。' } };
 }
+
 function params(event) {
   return Object.fromEntries((event.parameters || []).map(p => [p.name, p.value ?? p.intValue ?? p.boolValue ?? p.multiValue ?? p.multiIntValue ?? '']));
 }

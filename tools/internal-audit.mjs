@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Read-only audit. The only optional write to an external service is a --notify DM.
+// Read-only audit; --notify permits our report upload and a DM to kim.
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -8,13 +8,16 @@ import { notifyKim } from './notify-kim.mjs';
 import { ROOT, DAY, dateOnly, USERS, UNAVAILABLE_USERS, SEVERITIES, cell, parseEnv, safeText, maskNumbers, readJson, writePrivate, scrub, reason, auditError, runProcess } from './lib/internal-audit/common.mjs';
 import { collectFreee, getReadOnlyToken } from './lib/internal-audit/collect-freee.mjs';
 import { runPaymentRules } from './lib/internal-audit/rules-payments.mjs';
-import { createGoogle, createGmailSource, createDriveSource, createDiscord, buildFootprint, cachedStaff } from './lib/internal-audit/footprint.mjs';
+import { createGoogle, createGmailSource, createDriveSource, createDiscord, buildFootprint, cachedStaff, normalizeSavedFootprint } from './lib/internal-audit/footprint.mjs';
 import { scanDrive, scanAdmin } from './lib/internal-audit/exfil.mjs';
 import { searchLeaks, webSearch, askJson, safeUrl } from './lib/internal-audit/leak-search.mjs';
 import { refreshPatterns } from './lib/internal-audit/patterns-refresh.mjs';
+import { acquireLock } from './lib/internal-audit/lock.mjs';
+import { replaySharing } from './lib/internal-audit/sharing-baseline.mjs';
+import { reportLocation } from './lib/internal-audit/report-notify.mjs';
 export function parseArgs(argv) {
-  const out = { 'window-days': 180, 'min-severity': 'info', 'state-dir': path.join(os.homedir(), '.claude', 'internal-audit'), skip: [] }, seen = new Set();
-  const flags = ['notify', 'fail-on-high'], values = ['window-days', 'json', 'snapshot', 'out', 'skip', 'min-severity', 'state-dir'];
+  const out = { 'window-days': 180, 'drive-budget-seconds': 600, 'min-severity': 'info', 'state-dir': path.join(os.homedir(), '.claude', 'internal-audit'), skip: [] }, seen = new Set();
+  const flags = ['notify', 'fail-on-high'], values = ['drive-budget-seconds', 'window-days', 'json', 'snapshot', 'out', 'skip', 'min-severity', 'state-dir'];
   for (let i = 0; i < argv.length; i++) {
     const key = argv[i].slice(2);
     if (!argv[i].startsWith('--') || ![...flags, ...values].includes(key) || seen.has(key)) throw auditError('CLI 引数の重複または不正値');
@@ -24,6 +27,8 @@ export function parseArgs(argv) {
   }
   if (!/^\d+$/.test(String(out['window-days'])) || +out['window-days'] < 1 || +out['window-days'] > 3650) throw auditError('--window-days は1〜3650の整数');
   out['window-days'] = +out['window-days'];
+  if (!/^\d+$/.test(String(out['drive-budget-seconds'])) || +out['drive-budget-seconds'] < 1 || +out['drive-budget-seconds'] > 1680) throw auditError('--drive-budget-seconds は1〜1680の整数');
+  out['drive-budget-seconds'] = +out['drive-budget-seconds'];
   if (!SEVERITIES.includes(out['min-severity'])) throw auditError('--min-severity はhigh|medium|info');
   if (typeof out.skip === 'string') out.skip = out.skip.split(',');
   if (out.skip.some(s => !['gmail','drive','discord','admin','web','patterns'].includes(s)) || new Set(out.skip).size !== out.skip.length) throw auditError('--skip が不正（freee は除外できません）');
@@ -39,12 +44,12 @@ export function validatePatterns(p) {
   const numeric = ['new_partner_days','new_partner_amount','no_footprint_high','round_unit','round_min','approval_lower_ratio','repeat_count','duplicate_days','split_days','name_mismatch_amount','unregistered_days','unregistered_min','ignored_min','benford_min_count','benford_chi_square','spike_months','spike_ratio','spike_min','download_day','download_week'];
   if (p?.version !== 1 || !p.thresholds || numeric.some(k => !Number.isFinite(p.thresholds[k]) || p.thresholds[k] <= 0) || p.thresholds.approval_lower_ratio >= 1 ||
       !Array.isArray(p.thresholds.approval) || !p.thresholds.approval.length || p.thresholds.approval.some((v,i,a) => !Number.isFinite(v) || v <= 0 || i > 0 && v <= a[i-1]) ||
-      !Array.isArray(p.thresholds.free_mail_domains) || !Array.isArray(p.holidays_jp) || !Array.isArray(p.patterns) || !Array.isArray(p.allowlist_partners || [])) throw auditError('patterns.json のしきい値・構造が不正');
+      !Array.isArray(p.thresholds.free_mail_domains) || !Array.isArray(p.holidays_jp) || !Array.isArray(p.patterns) || !Array.isArray(p.allowlist_partners || []) || ['payment_agents', 'generic_partner_names'].some(k => !Array.isArray(p[k]) || p[k].some(v => typeof v !== 'string' || !v.trim()))) throw auditError('patterns.json のしきい値・構造が不正');
   return p;
 }
 export function findingCounts(findings) { return Object.fromEntries(SEVERITIES.map(s => [s, findings.filter(f => f.severity === s).length])); }
 function link(label, url) { return safeUrl(url) ? `[${cell(label).replace(/[\[\]]/g, '')}](<${url.replace(/[<>\r\n]/g, '')}>)` : cell(label); }
-export function renderReport({ snapshot, findings, unverified = [], sources, candidates = [], patterns, minSeverity = 'info', secrets = [], replay = false }) {
+export function renderReport({ snapshot, findings, unverified = [], sources, candidates = [], patterns, minSeverity = 'info', secrets = [], replay = false, findingsFile = 'findings.jsonl' }) {
   const counts = findingCounts(findings), at = snapshot.fetchedAt, payments = snapshot.payments.filter(p => p.date >= snapshot.window.start && p.date <= snapshot.window.end);
   const lines = ['# 社内不正・リスク監査レポート', '', '**検出結果は確認の手掛かりであり、不正を断定するものではありません。未確認のデータソースがある場合、問題がないとは判断できません。**', '',
     `対象: ${snapshot.window.start}〜${snapshot.window.end} / snapshot取得: ${at}${replay ? ' / 再評価（保存された形跡を使用）' : ''}`,
@@ -55,17 +60,21 @@ export function renderReport({ snapshot, findings, unverified = [], sources, can
   const missing = Object.entries(sources).filter(([, s]) => s.status !== 'ok');
   if (!missing.length) lines.push('なし（取得範囲内）');
   for (const [name, s] of missing) lines.push(`- ${cell(name)}: ${cell(s.reason)}`);
-  lines.push('', '## 取得範囲と制約', '', ...[...(snapshot.coverage?.limitations || []), `Gmail 未照合ユーザー（既知の権限制限のため試行しない）: ${UNAVAILABLE_USERS.join(', ')}`, 'Drive は指定3ユーザーの所有ファイルのみ。初回の新規共有検出は、以前からの共有も含む。', 'レポートはローカル保存。読み取り専用制約により Drive へのフォルダ作成・アップロードは行わない。'].map(s => `- ${cell(s)}`));
+  lines.push('', '## 取得範囲と制約', '', ...[...(snapshot.coverage?.limitations || []), `Gmail 未照合ユーザー（既知の権限制限のため試行しない）: ${UNAVAILABLE_USERS.join(', ')}`, 'Drive は指定3ユーザーの所有ファイルのみ。初回と走査未完了ユーザーはベースライン構築中。', 'レポートはローカル保存。--notify 時のみ自社 Drive にアップロードしてDMで通知。'].map(s => `- ${cell(s)}`));
   lines.push('', '## ルール別件数', '', '| ルール | 件数 |', '|---|---:|');
   for (const rule of [...Array.from({ length: 15 }, (_, i) => `R${String(i + 1).padStart(2, '0')}`), 'exfil', 'exfil-admin', 'leak-search']) lines.push(`| ${rule} | ${findings.filter(f => f.rule === rule).length} |`);
   for (const severity of SEVERITIES.slice(0, SEVERITIES.indexOf(minSeverity) + 1)) {
     lines.push('', `## ${severity}`, '', '| ルール | 対象 | 確認の手掛かり |', '|---|---|---|');
-    for (const f of findings.filter(f => f.severity === severity)) lines.push(`| ${cell(f.rule)} | ${cell(f.subject)} | ${cell(f.detail)}${f.url ? ` ${link('出典', f.url)}` : ''} |`);
+    const rows = findings.filter(f => f.severity === severity);
+    const visible = rows.length > 200 ? rows.slice(0, 199) : rows;
+    for (const f of visible) lines.push(`| ${cell(f.rule)} | ${cell(f.subject)} | ${cell(f.detail)}${f.url ? ` ${link('出典', f.url)}${f.owner ? `（**${cell(f.owner)}** で開く）` : ''}` : ''} |`);
+    if (rows.length > visible.length) lines.push(`| — | 他 ${rows.length - visible.length} 件 | ${cell(findingsFile)} 参照 |`);
   }
+  renderSharingBaseline(lines, snapshot.externalSharing);
   lines.push('', '## 支払先の仕事の形跡', '', '| 取引先 | Gmail | Drive | Discord |', '|---|---|---|---|');
   for (const p of snapshot.partners) {
     const fp = snapshot.footprint?.[String(p.id)]; if (!fp) continue;
-    lines.push(`| ${cell(p.name)} | ${['gmail','drive','discord'].map(k => { const f = fp[k] || {}; return cell(`${f.count ?? '未照合'}件 / ${f.status || 'unverified'} / ${f.latest || ''} / ${f.representative || ''}${f.controlVerified ? '（対照確認済）' : ''}`); }).join(' | ')} |`);
+    lines.push(`| ${cell(p.name)} | ${['gmail','drive','discord'].map(k => { const f = fp[k] || {}; return cell(`${f.countKind?.includes('推定') ? '未確認（旧推定値）' : `${f.count ?? '未照合'}${f.lowerBound ? '+' : ''}`}件 / ${f.status || 'unverified'} / ${f.latest || ''} / ${f.representative || ''} / ${f.reason || ''}${f.controlVerified ? '（対照確認済）' : ''}`); }).join(' | ')} |`);
   }
   lines.push('', '## 支払い判定の未照合', '', '| ルール | 対象 | 理由 |', '|---|---|---|');
   for (const r of unverified) lines.push(`| ${[r.rule, r.subject, r.detail].map(cell).join(' | ')} |`);
@@ -75,18 +84,41 @@ export function renderReport({ snapshot, findings, unverified = [], sources, can
   for (const p of candidates) lines.push(`| ${cell(p.name)} | ${cell(`${p.signal} / ${p.rule_sketch}`)} | ${p.rules.length ? `ルール化済み(${p.rules.join(', ')})` : '未ルール化'} | ${link('出典', p.source_url)} |`);
   return safeText(lines.join('\n') + '\n', secrets);
 }
+export function renderSharingBaseline(lines, baseline) {
+  lines.push('', '## 外部共有の現状（ベースライン）', '', baseline?.building ? 'ベースライン構築中（ファイル単位の初回警告は省略）' : '取得済みベースライン', '');
+  if (baseline?.limitation) lines.push(cell(baseline.limitation), '');
+  lines.push('| 所有ユーザー | 共有種別 | ドメイン | 権限数 |', '|---|---|---|---:|');
+  const summary = baseline?.summary || [], totals = new Map(), rest = new Map();
+  for (const row of summary) if (row.type !== 'anyone') totals.set(row.domain, (totals.get(row.domain) || 0) + row.count);
+  const top = new Set([...totals].sort((a, b) => b[1] - a[1]).slice(0, 30).map(([domain]) => domain));
+  for (const row of summary) {
+    if (row.type === 'anyone' || top.has(row.domain)) lines.push(`| ${[row.owner, row.type, row.domain, row.count].map(cell).join(' | ')} |`);
+    else {
+      const key = JSON.stringify([row.owner, row.type]);
+      const group = rest.get(key) || { domains: new Set(), count: 0 };
+      group.domains.add(row.domain); group.count += row.count; rest.set(key, group);
+    }
+  }
+  for (const [key, group] of rest) lines.push(`| ${JSON.parse(key).map(cell).join(' | ')} | 他 ${group.domains.size} ドメイン ${group.count} 件 | ${group.count} |`);
+  if (!summary.length) lines.push('| — | — | 取得済み集計なし（未走査の場合は共有なしを意味しません） | — |');
+}
 export function notificationText(findings, reportPath, date) {
   const c = findingCounts(findings);
   return ['内部監査: 確認の手掛かりであり不正の断定ではありません。', `high ${c.high} / medium ${c.medium} / info ${c.info}`,
-    ...findings.filter(f => f.severity === 'high').slice(0, 5).map(f => `- ${f.rule}: ${f.subject.slice(0, 80)} ${f.detail.slice(0, 120)}`), `内部監査レポート ${date}: ${reportPath}`].join('\n');
+    ...findings.filter(f => f.severity === 'high').slice(0, 5).map(f => `- ${f.rule}: ${f.subject.slice(0, 80)} ${f.detail.slice(0, 120)}`), safeUrl(reportPath) ? `[内部監査レポート ${date}](${reportPath})（**kim@orgiast.jp** で開く）` : `内部監査レポート ${date}: ${reportPath}`].join('\n');
 }
 async function checkPaths(options, daily) {
-  const outputs = [options.out, options.json, daily].filter(Boolean).map(p => path.resolve(p));
+  const sidecar = daily.replace(/\.md$/, '.findings.jsonl');
+  const outputs = [options.out, options.json, daily, sidecar].filter(Boolean).map(p => path.resolve(p));
   const protectedPaths = [options.snapshot, path.join(ROOT, '.env.local'), path.join(ROOT, 'tools/internal-audit-patterns.json'), ...['state.json','footprint-cache.json','discord-cache.json','pattern-candidates.jsonl','run.lock'].map(n => path.join(options['state-dir'], n))].filter(Boolean).map(p => path.resolve(p));
+  if ([options.out, options.json].filter(Boolean).some(p => path.resolve(p) === path.resolve(sidecar))) throw auditError('検出結果JSONLと出力先が衝突');
   const identities = new Map();
   for (const p of [...protectedPaths, ...outputs]) {
     if (/(^|[/\\])(?:\.env(?:\.[^/\\]*)?|\.git)(?:[/\\]|$)/.test(p)) { if (outputs.includes(p)) throw auditError('資格情報・Git 管理ファイルへの出力は禁止'); }
     try { const stat = await fs.lstat(p); if (stat.isSymbolicLink()) throw auditError('入出力 symlink は使用できません'); identities.set(p, `${stat.dev}:${stat.ino}`); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+  }
+  for (const output of [options.out, options.json].filter(Boolean).map(p => path.resolve(p))) {
+    if (identities.has(output) && identities.get(output) === identities.get(path.resolve(sidecar))) throw auditError('検出結果JSONLと出力先が衝突');
   }
   for (const output of outputs) if (protectedPaths.some(p => p === output || identities.has(p) && identities.get(p) === identities.get(output))) throw auditError('入力・状態・出力ファイルの衝突');
   if (options.json && (path.resolve(options.json) === path.resolve(daily) || identities.has(path.resolve(options.json)) && identities.get(path.resolve(options.json)) === identities.get(path.resolve(daily)))) throw auditError('JSON と日次レポートは別ファイルを指定');
@@ -105,12 +137,11 @@ export async function main(argv = process.argv.slice(2)) {
   const token = process.env.DISCORD_BOT_TOKEN || (await optionalText(path.join(defaultHome, '.claude/orgiast-discord-bot-token.txt'))).trim(); if (token) secrets.push(token);
   const patterns = validatePatterns(await readJson(path.join(ROOT, 'tools/internal-audit-patterns.json')));
   await fs.mkdir(stateDir, { recursive: true, mode: 0o700 });
-  let lock;
-  try { lock = await fs.open(path.join(stateDir, 'run.lock'), 'wx', 0o600); }
-  catch { throw auditError('監査は実行中、または state-dir に書き込めません'); }
+  const lock = await acquireLock(stateDir);
+  if (lock.recovered) console.error('internal-audit: 前回の中断を検出。古いrun.lockを回復');
   try {
     const state = await readJson(path.join(stateDir, 'state.json'), {}), sources = {}, findings = [], unverified = [];
-    let snapshot, candidates = [];
+    let snapshot, candidates = [], sharingAcknowledgedKeys = [];
     const checkpoint = async () => {
       if (options.json) await writePrivate(path.resolve(options.json), { ...snapshot, runStatus: 'incomplete', sources: { ...sources, collection: { status: 'unverified', reason: '収集中の途中snapshot（完了レポートではない）' } } }, secrets);
     };
@@ -121,12 +152,15 @@ export async function main(argv = process.argv.slice(2)) {
     }
     for (const key of ['GEMINI_API_KEY','GROQ_API_KEY','DEEPSEEK_API_KEY']) if (childEnv[key]) secrets.push(childEnv[key]);
     const budgetRun = (cmd, args) => { if (Date.now() >= deadline) throw auditError('全体実行時間の上限'); return runProcess(cmd, args, { timeout: Math.min(120000, deadline - Date.now()), env: childEnv }); };
-    const search = q => webSearch(q, budgetRun), ask = p => askJson(p, budgetRun);
+    const search = q => webSearch(q, budgetRun), ask = p => askJson(p, budgetRun, secrets);
     if (options.snapshot) {
       snapshot = validateSnapshot(await readJson(options.snapshot));
       Object.assign(sources, snapshot.sources || {});
       sources.freee = { status: snapshot.sources?.freee?.status || 'ok', count: snapshot.deals.length, reason: `snapshot 再評価（freee API不使用）。${snapshot.sources?.freee?.reason || ''}` };
-      for (const finding of snapshot.exfilFindings || []) findings.push(finding);
+      const sharing = replaySharing(snapshot);
+      snapshot.externalSharing = sharing.baseline;
+      normalizeSavedFootprint(snapshot, patterns, sources);
+      for (const finding of sharing.findings) findings.push(finding);
     } else {
       try {
         const freeeToken = await getReadOnlyToken(databaseUrl); secrets.push(freeeToken);
@@ -146,7 +180,7 @@ export async function main(argv = process.argv.slice(2)) {
       const discord = createDiscord({ token, stateDir, partners: paidPartners, now, signal });
       const adapters = { gmail: createGmailSource({ google, signal }), drive: createDriveSource({ google, now }), discord: discord.search };
       for (const k of options.skip) delete adapters[k];
-      snapshot.footprint = await buildFootprint(paidPartners, { window: options['window-days'], sources: adapters, state: { secrets }, stateDir, now });
+      snapshot.footprint = await buildFootprint(paidPartners, { window: options['window-days'], sources: adapters, patterns, state: { secrets }, stateDir, now });
       for (const source of ['gmail','drive','discord']) {
         const results = Object.values(snapshot.footprint).map(f => f[source]);
         const bad = results.filter(r => r.status !== 'ok');
@@ -168,10 +202,19 @@ export async function main(argv = process.argv.slice(2)) {
         const result = await scanAdmin({ google, state, clientId, thresholds: patterns.thresholds, now }); for (const finding of result.findings) findings.push(finding); Object.assign(sources, result.sources); state.knownOAuth = result.knownOAuth; state.adminCursors = result.cursors;
       } else sources.admin = { status: 'unverified', count: 0, reason: 'skip 指定' };
       if (!options.skip.includes('drive')) {
-        const result = await scanDrive({ google, known: state.knownExternalShares || [] }); for (const finding of result.findings) findings.push(finding); Object.assign(sources, result.sources); state.knownExternalShares = result.keys;
+        const result = await scanDrive({ google, state, userBudgetMs: options['drive-budget-seconds'] * 1000 / USERS.length,
+          save: value => writePrivate(path.join(stateDir, 'state.json'), value, secrets) });
+        for (const finding of result.findings) findings.push(finding);
+        Object.assign(sources, result.sources);
+        snapshot.externalSharing = result.baseline;
+        sharingAcknowledgedKeys = result.acknowledgedKeys;
       } else sources['drive-sharing'] = { status: 'unverified', count: 0, reason: 'skip 指定' };
       console.error('internal-audit: 形跡・外部共有・監査ログの収集完了');
       snapshot.exfilFindings = findings.slice();
+    }
+    if (lock.recovered) {
+      snapshot.coverage ||= {};
+      snapshot.coverage.limitations = [...(snapshot.coverage.limitations || []), '前回の中断を検出。停止済みまたは3時間超のrun.lockを回復して続行'];
     }
     const payments = runPaymentRules(snapshot, snapshot.footprint, patterns); for (const finding of payments.findings) findings.push(finding); for (const row of payments.unverified) unverified.push(row);
     for (const key of Object.keys(sources)) if (/^(web(?:[:]|$)|github$|patterns(?:[:]|$))/.test(key)) delete sources[key];
@@ -183,19 +226,23 @@ export async function main(argv = process.argv.slice(2)) {
     } catch (e) { sources.patterns = { status: 'failed', count: 0, reason: reason(e) }; }
     else sources.patterns = { status: 'unverified', count: 0, reason: 'skip 指定' };
     snapshot.sources = sources; snapshot.runStatus = 'complete';
-    const report = renderReport({ snapshot, findings, unverified, sources, candidates, patterns, minSeverity: options['min-severity'], secrets, replay: !!options.snapshot });
+    const findingsFile = path.join(stateDir, 'reports', `${date}.findings.jsonl`);
+    await writePrivate(findingsFile, findings.map(f => JSON.stringify(scrub(f, secrets))).join('\n') + '\n', secrets);
+    const report = renderReport({ snapshot, findings, unverified, sources, candidates, patterns, minSeverity: options['min-severity'], secrets, replay: !!options.snapshot, findingsFile });
     await writePrivate(daily, report, secrets);
     if (options.out && path.resolve(options.out) !== daily) await writePrivate(path.resolve(options.out), report, secrets);
     if (options.json) await writePrivate(path.resolve(options.json), snapshot, secrets);
     if (!options.snapshot) { state.lastRun = now.toISOString(); if (sources.freee.status === 'ok') state.knownPartnerIds = snapshot.partners.map(p => p.id); }
+    for (const key of sharingAcknowledgedKeys) delete state.pendingExternalFindings[key];
     // Replays may discover public URLs, but never advance freee/admin/sharing baselines.
     await writePrivate(path.join(stateDir, 'state.json'), state, secrets);
     if (options.notify) {
-      const result = await notifyKim(safeText(notificationText(findings, options.out ? path.resolve(options.out) : daily, date), secrets), { home: defaultHome, token, webhookFallback: false });
+      const location = await reportLocation(options.out ? path.resolve(options.out) : daily, { keyPath });
+      const result = await notifyKim(safeText(notificationText(findings, location, date), secrets), { home: defaultHome, token, webhookFallback: false });
       if (result.delivered !== 'dm') throw auditError('レポート保存済み。kim への DM 配信失敗');
     }
     if (!options.out) process.stdout.write(report);
     return options['fail-on-high'] && findings.some(f => f.severity === 'high') ? 2 : 0;
-  } finally { await lock.close(); await fs.unlink(path.join(stateDir, 'run.lock')); }
+  } finally { await lock.release(); }
 }
 if (isEntry(import.meta.url)) main().then(code => { process.exitCode = code; }).catch(e => { console.error(`internal-audit: ${reason(e)}`); process.exitCode = 1; });

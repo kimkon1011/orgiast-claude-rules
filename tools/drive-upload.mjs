@@ -51,9 +51,9 @@ export function resolveAs(args, env = process.env, gitEmail = () => execFileSync
   return email;
 }
 
-export async function upload({ file, folder, name, as }) {
+export async function upload({ file, folder, name, as, keyPath }) {
   const content = readFileSync(file);
-  const token = await getDriveToken({ impersonate: as });
+  const token = await getDriveToken({ impersonate: as, keyPath });
   const boundary = `drive-upload-${Date.now().toString(36)}`;
   const body = buildMultipartBody({
     metadata: { name: name || basename(file), parents: [folder] },

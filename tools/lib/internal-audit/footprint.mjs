@@ -2,11 +2,12 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { getDriveToken } from '../drive-auth.mjs';
-import { searchGmail } from '../../gmail-search.mjs';
+import { compactMessage } from '../../gmail-search.mjs';
+import { genericPartner } from './rules-payments.mjs';
 import { DAY, USERS, normalize, maskNumbers, mapLimit, getJson, readJson, writePrivate, reason, auditError } from './common.mjs';
 export function searchTerm(name) {
   const clean = String(name ?? '').normalize('NFKC').replace(/株式会社|有限会社|合同会社|\(株\)|\(有\)|\(同\)/g, '').trim().replace(/\s+/g, ' ');
-  return clean.length > 40 ? clean.split(' ').slice(0, 2).join(' ').slice(0, 80) : clean;
+  return clean;
 }
 export const escapeDrive = value => value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 export const gmailTerm = value => value.replace(/["\\]/g, ' ');
@@ -22,16 +23,31 @@ export function createGoogle({ keyPath, fetchImpl = fetch, signal } = {}) {
 }
 export function createGmailSource({ google, fetchImpl = fetch, signal } = {}) {
   return async (term, days) => {
-    let count = 0, latest = '', representative = '', failed = [];
+    let count = 0, latest = '', representative = '', preferred = false, lowerBound = false;
+    const failed = [];
     for (const user of USERS) try {
-      const result = await searchGmail({ user, query: `"${gmailTerm(term)}" newer_than:${days}d`, max: 1,
-        getToken: google.getToken, fetchImpl: (url, init) => fetchImpl(url, { ...init, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000) }) });
-      count += result.estimate;
-      const msg = result.messages[0];
-      const date = msg?.date && Number.isFinite(Date.parse(msg.date)) ? new Date(msg.date).toISOString() : '';
-      if (msg && (!latest || date > latest)) { latest = date; representative = maskNumbers(msg.subject); }
+      const token = await google.getToken({ scope: 'https://www.googleapis.com/auth/gmail.readonly', impersonate: user });
+      const request = suffix => getJson(`https://gmail.googleapis.com/gmail/v1/users/me${suffix}`, {
+        headers: { Authorization: `Bearer ${token}` }, fetchImpl, signal,
+      });
+      const list = await request(`/messages?${new URLSearchParams({ q: `"${gmailTerm(term)}" newer_than:${days}d`, maxResults: '100' })}`);
+      if (list.messages !== undefined && !Array.isArray(list.messages)) throw auditError('Gmail 一覧形式不正');
+      const stubs = list.messages || [];
+      count += stubs.length;
+      lowerBound ||= stubs.length >= 100;
+      for (const stub of stubs) {
+        let msg;
+        try { msg = compactMessage(await request(`/messages/${encodeURIComponent(stub.id)}?format=metadata&metadataHeaders=Date&metadataHeaders=From&metadataHeaders=Subject`)); }
+        catch (e) { if ([404, 410].includes(e.status)) continue; throw e; }
+        const match = [msg.subject, msg.from].some(text => text.normalize('NFKC').toLowerCase().includes(term.toLowerCase()));
+        const date = Number.isFinite(Date.parse(msg.date)) ? new Date(msg.date).toISOString() : '';
+        if (!representative || match && !preferred || match === preferred && date > latest) {
+          latest = date; representative = maskNumbers(msg.subject || msg.from); preferred = match;
+        }
+      }
     } catch (e) { failed.push(`${user}: ${reason(e)}`); }
-    return { status: failed.length ? 'unverified' : 'ok', count, latest, representative, reason: failed.join('; '), countKind: '推定件数（ユーザー間の重複あり）' };
+    return { status: failed.length ? 'unverified' : 'ok', count, lowerBound, latest, representative,
+      reason: failed.join('; '), countKind: '一覧の実件数（各ユーザー最大100件・ユーザー間の重複あり）' };
   };
 }
 export function createDriveSource({ google, now = new Date() } = {}) {
@@ -41,7 +57,7 @@ export function createDriveSource({ google, now = new Date() } = {}) {
       let pageToken; const pageTokens = new Set();
       do {
         const u = new URL('https://www.googleapis.com/drive/v3/files');
-        u.search = new URLSearchParams({ q: `trashed = false and fullText contains '${escapeDrive(term)}' and modifiedTime >= '${new Date(+now - days * DAY).toISOString()}'`, fields: 'nextPageToken,incompleteSearch,files(id,name,modifiedTime)', pageSize: '1000', orderBy: 'modifiedTime desc', ...(pageToken ? { pageToken } : {}) });
+        u.search = new URLSearchParams({ q: `trashed = false and fullText contains '${escapeDrive(`"${term}"`)}' and modifiedTime >= '${new Date(+now - days * DAY).toISOString()}'`, fields: 'nextPageToken,incompleteSearch,files(id,name,modifiedTime)', pageSize: '1000', orderBy: 'modifiedTime desc', ...(pageToken ? { pageToken } : {}) });
         const j = await google.request(u, user);
         if (!Array.isArray(j.files) || j.incompleteSearch) throw auditError('Drive 検索が不完全');
         for (const f of j.files) files.set(f.id, f);
@@ -90,7 +106,7 @@ export function createDiscord({ token, fetchImpl = fetch, signal, stateDir, part
   return { request, async search(term, days) {
     const minId = ((BigInt(Math.floor(+now - days * DAY)) - 1420070400000n) << 22n).toString();
     try {
-      const j = await request(`guilds/715211007307284530/messages/search?${new URLSearchParams({ content: term, limit: '25', min_id: minId, sort_by: 'timestamp', sort_order: 'desc' })}`);
+      const j = await request(`guilds/715211007307284530/messages/search?${new URLSearchParams({ content: `"${term}"`, limit: '25', min_id: minId, sort_by: 'timestamp', sort_order: 'desc' })}`);
       if (!Array.isArray(j.messages) || !Number.isFinite(j.total_results)) throw auditError('Discord 検索: インデックス未完了または応答形式不明');
       const hit = j.messages.flat().filter(m => m.hit !== false).sort((a, b) => b.timestamp.localeCompare(a.timestamp))[0];
       const channel = hit ? (await channels()).find(c => c.id === hit.channel_id)?.name : '';
@@ -108,20 +124,25 @@ export function createDiscord({ token, fetchImpl = fetch, signal, stateDir, part
     return members;
   } };
 }
-export async function buildFootprint(partners, { window = 180, sources, state = {}, stateDir = path.join(os.homedir(), '.claude/internal-audit'), now = new Date() } = {}) {
+export async function buildFootprint(partners, { window = 180, sources, patterns = {}, state = {}, stateDir = path.join(os.homedir(), '.claude/internal-audit'), now = new Date() } = {}) {
   const file = path.join(stateDir, 'footprint-cache.json'), cache = await readJson(file, {});
   const month = now.toISOString().slice(0, 7);
   const entries = await mapLimit(partners, 3, async p => {
     const term = searchTerm(p.name), key = `${p.id}+${month}`, cached = cache[key];
     const fp = {};
     for (const name of ['gmail', 'drive', 'discord']) {
+      if (genericPartner(p.name, patterns)) { fp[name] = { status: 'unverified', count: null, reason: '汎用取引先名のため照合不能' }; continue; }
       if (!sources[name]) { fp[name] = { status: 'unverified', count: null, reason: 'skip 指定' }; continue; }
-      if (cached?.term === term && cached.window === window && +now - Date.parse(cached.results?.[name]?.fetchedAt || cached.at) < 30 * DAY && cached.results?.[name]?.status === 'ok') { fp[name] = cached.results[name]; continue; }
+      if (cached?.term === term && cached.window === window && +now - Date.parse(cached.results?.[name]?.fetchedAt || cached.at) < 30 * DAY && (cached.results?.[name]?.status === 'ok' || cached.results?.[name]?.countKind?.includes('推定'))) { fp[name] = { ...cached.results[name] };
+        if (name === 'gmail' && fp[name].countKind?.includes('推定')) {
+          fp[name] = { ...fp[name], count: null, status: 'unverified', controlVerified: false, reason: '旧キャッシュは推定件数のため件数未確認（再取得を省略）' };
+        }
+        continue; }
       try { fp[name] = term.length >= 2 ? await sources[name](term, window + 90) : { status: 'unverified', count: null, reason: '検索語が短すぎます' }; }
       catch (e) { fp[name] = { status: 'failed', count: null, reason: reason(e) }; }
       fp[name].fetchedAt = now.toISOString();
     }
-    cache[key] = { at: now.toISOString(), term, window, results: fp };
+    cache[key] = { at: cached?.at || now.toISOString(), term, window, results: fp };
     return [String(p.id), fp];
   });
   // Same queries against paid vendors constitute positive controls. Zero-only runs are never evidence of absence.
@@ -145,4 +166,27 @@ export async function cachedStaff(home, now = new Date()) {
     for (const m of entry.members || []) if (m.id) members.set(m.id, { names: [m.nick, m.global_name, m.username].filter(Boolean), emails: m.emails || [] });
   }
   return [...members.values()];
+}
+
+// Old snapshots and caches do not contain an actual Gmail list count.
+export function normalizeSavedFootprint(snapshot, patterns, sources) {
+  const affected = new Set();
+  for (const partner of snapshot.partners) {
+    const fp = snapshot.footprint?.[String(partner.id)];
+    if (!fp) continue;
+    for (const name of ['gmail', 'drive', 'discord']) {
+      if (genericPartner(partner.name, patterns)) {
+        fp[name] = { status: 'unverified', count: null, controlVerified: false, reason: '汎用取引先名のため照合不能' };
+        affected.add(name);
+      } else if (name === 'gmail' && fp[name]?.countKind?.includes('推定')) {
+        fp[name] = { ...fp[name], status: 'unverified', count: null, controlVerified: false, reason: '旧snapshotは推定件数のため件数未確認（再取得を省略）' };
+        affected.add(name);
+      }
+    }
+  }
+  for (const name of affected) {
+    const results = Object.values(snapshot.footprint).map(fp => fp[name]).filter(Boolean);
+    sources[name] = { status: 'unverified', count: results.reduce((sum, r) => sum + (r.count || 0), 0),
+      reason: [...new Set(results.filter(r => r.status !== 'ok').map(r => r.reason))].join('; ') };
+  }
 }

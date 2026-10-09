@@ -33,3 +33,73 @@ test('one large owner cannot consume every source budget',async()=>{
 test('large external-share collections are representable without variadic array calls',()=>{
  const files=Array.from({length:150000},(_,i)=>({id:`f-${i}`,name:'synthetic',permissions:[{id:'p',type:'anyone',role:'reader'}]}));const r=diffExternalShares(files);assert.equal(r.findings.length,files.length);assert.equal(r.keys.length,files.length);
 });
+
+test('first complete scan builds baseline; later modified-only run reports only new shares with owner', async () => {
+  const state = {}; let added = false;
+  const queries = [];
+  const google = { request: async (url, user) => {
+    queries.push(new URL(url).searchParams.get('q'));
+    return { files: [{ id: user, name: 'file', webViewLink: 'https://drive.google.com/file/d/test/view',
+      permissions: [{ id: 'old', type: 'anyone', role: 'reader' }, ...(added ? [{ id: 'new', type: 'domain', domain: 'example.invalid', role: 'reader' }] : [])] }] };
+  } };
+  const first = await scanDrive({ google, state });
+  assert.equal(first.findings.length, 1); assert.equal(first.findings[0].severity, 'info');
+  assert.equal(first.baseline.summary.reduce((n, r) => n + r.count, 0), 3);
+  assert.ok(queries[0].includes("visibility = 'anyoneWithLink'"));
+  assert.ok(Object.values(state.driveScan).every(c => c.completedAt && c.modifiedCursor && !c.pageToken));
+  added = true; queries.length = 0;
+  const next = await scanDrive({ google, state });
+  assert.equal(next.findings.filter(f => f.severity === 'high').length, 3);
+  assert.ok(next.findings.filter(f => f.severity === 'high').every(f => f.owner && f.url));
+  assert.ok(queries.every(q => q.includes('modifiedTime >')));
+  // Only report persistence acknowledges discoveries.
+  assert.equal(Object.keys(state.pendingExternalFindings).length, 3);
+  for (const key of next.acknowledgedKeys) delete state.pendingExternalFindings[key];
+  assert.equal((await scanDrive({ google, state })).findings.length, 1);
+});
+test('partial ownership baseline resumes exact page without modified cursor advancement', async () => {
+  let clock = Date.parse('2026-10-09'), resume = false;
+  const state = {}, calls = [];
+  const google = { request: async (url, user) => {
+    const u = new URL(url); calls.push([user, u.searchParams.get('pageToken')]);
+    if (u.searchParams.get('q').includes('visibility')) return { files: [] };
+    if (!resume) { clock += 100; return { files: [{ id: user, permissions: [{ id: 'a', type: 'anyone', role: 'reader' }] }], nextPageToken: 'resume-here' }; }
+    assert.equal(u.searchParams.get('pageToken'), 'resume-here');
+    return { files: [] };
+  } };
+  const first = await scanDrive({ google, state, userBudgetMs: 100, nowMillis: () => clock });
+  assert.equal(first.findings.length, 1);
+  assert.ok(Object.values(state.driveScan).every(c => c.pageToken === 'resume-here' && !c.completedAt && !c.modifiedCursor));
+  assert.ok(Object.values(first.sources).every(s => s.reason.includes('再開位置あり・次回継続')));
+  resume = true;
+  const second = await scanDrive({ google, state, userBudgetMs: 1000, nowMillis: () => clock });
+  assert.equal(second.findings.length, 1);
+  assert.ok(Object.values(state.driveScan).every(c => !c.pageToken && c.completedAt));
+});
+test('missing knownExternalShares suppresses file findings even with completed legacy cursor', async () => {
+  const state = { driveScan: { 'kim@orgiast.jp': { completedAt: '2026-10-08', modifiedCursor: '2026-10-08T00:00:00Z' } } };
+  const r = await scanDrive({ state, google: { request: async () => ({ files: [{ id: 'f', permissions: [{ type: 'anyone' }] }] }) } });
+  assert.ok(r.findings.every(f => f.severity === 'info'));
+});
+
+test('partial incremental discoveries wait until a later complete run and survive checkpoints', async () => {
+  let clock = 0, partial = false;
+  const state = {};
+  const google = { request: async (url, user) => {
+    const u = new URL(url);
+    if (u.searchParams.get('q').includes('visibility')) return { files: [] };
+    if (partial && user === 'kim@orgiast.jp') { clock += 100; return { files: [{ id: 'new-file', name: 'new', permissions: [{ id: 'p', type: 'anyone', role: 'reader' }] }], nextPageToken: 'remaining' }; }
+    return { files: [] };
+  } };
+  await scanDrive({ google, state, nowMillis: () => clock });
+  partial = true;
+  const incomplete = await scanDrive({ google, state, userBudgetMs: 100, nowMillis: () => clock });
+  assert.ok(incomplete.findings.every(f => f.severity === 'info'));
+  assert.equal(Object.keys(state.pendingExternalFindings).length, 1);
+  partial = false;
+  const resumed = await scanDrive({ google, state, nowMillis: () => clock });
+  assert.ok(resumed.findings.every(f => f.severity === 'info'));
+  const complete = await scanDrive({ google, state, nowMillis: () => clock });
+  assert.equal(complete.findings.filter(f => f.severity === 'medium').length, 1);
+  assert.equal(complete.acknowledgedKeys.length, 1);
+});

@@ -31,3 +31,6 @@ tools/.ps.tmp.ps1
 # 夜間 eval-harness が ~/.claude/eval-results.jsonl から再生成するマシンローカル生成物。
 # 追跡すると毎晩 dirty になり dirty-worktree-guard が rescue ブランチを作るため追跡しない。
 tools/routing-table.json
+
+.wt/
+/evidence/internal-audit-v11/

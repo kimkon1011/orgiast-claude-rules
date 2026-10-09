@@ -3,6 +3,14 @@ export function normalizeAccount(value) {
   return normalize(String(value ?? '').normalize('NFKC').replace(/(?:\(?)(?:カ|ユ|ド|シャ|ザイ|トクヒ)(?:\)|\()/g, '').replace(/[ぁ-ゖ]/g, c => String.fromCharCode(c.charCodeAt(0) + 0x60)));
 }
 export const corporateAccount = value => /(?:カ|ユ|ド|シャ|ザイ|トクヒ)[)(]|[(](?:カ|ユ|ド|シャ|ザイ|トクヒ)|株式会社|有限会社|合同会社/.test(String(value ?? '').normalize('NFKC'));
+export const corporatePartner = value => /株式会社|有限会社|合同会社|合資会社|合名会社|法人|[（(](?:株|有|同)[)）]/.test(String(value ?? '').normalize('NFKC'));
+export function paymentAgent(account, patterns) {
+  const name = normalizeAccount(account);
+  return (patterns.payment_agents || []).find(term => normalizeAccount(term) && name.includes(normalizeAccount(term)));
+}
+export function genericPartner(name, patterns) {
+  return (patterns.generic_partner_names || []).some(term => normalize(term) === normalize(name));
+}
 export function runPaymentRules(snapshot, footprint = {}, patterns) {
   const t = patterns.thresholds, end = snapshot.window.end, start = snapshot.window.start;
   const now = Date.parse(end), findings = [], unverified = [];
@@ -16,6 +24,10 @@ export function runPaymentRules(snapshot, footprint = {}, patterns) {
     const rows = (grouped.get(String(p.id)) || []).slice().sort((a, b) => a.date.localeCompare(b.date));
     if (!rows.length) continue;
     const sum = rows.reduce((s, r) => s + r.amount, 0), bank = p.bank || {}, fp = footprint[String(p.id)] || {};
+    const agent = paymentAgent(bank.account_name, patterns);
+    const corporate = corporatePartner(p.name);
+    const memberNames = (snapshot.staff || []).flatMap(m => m.names || []).map(normalizeAccount).filter(Boolean);
+    const personalBankMatch = corporate && !agent && !corporateAccount(bank.account_name) && memberNames.includes(normalizeAccount(bank.account_name));
     const known = snapshot.baseline?.knownPartnerIds;
     const recentFirst = now - Date.parse(rows[0].date) <= t.new_partner_days * DAY;
     if (sum >= t.new_partner_amount && recentFirst) {
@@ -25,16 +37,17 @@ export function runPaymentRules(snapshot, footprint = {}, patterns) {
     }
     if (!allow.has(String(p.id))) {
       const sources = ['gmail', 'drive', 'discord'].map(k => fp[k]);
-      if (!sources.some(s => s?.count > 0)) {
+      if (genericPartner(p.name, patterns)) unknown('R02', p, '汎用取引先名のため照合不能');
+      else if (!sources.some(s => s?.count > 0)) {
         if (sources.every(s => s?.status === 'ok' && s.controlVerified === true && s.count === 0)) add('R02', sum >= t.no_footprint_high ? 'high' : 'medium', p, `3ソースの形跡なし（検証済みの検索範囲内）: ${sum}円`);
         else unknown('R02', p, '形跡未照合: skip/失敗/対照未確認のソースあり');
       }
       if (sum >= t.name_mismatch_amount && bank.account_name) {
         const a = normalizeAccount(bank.account_name), b = normalizeAccount(p.name_kana || p.name);
         if (!p.name_kana && !/^[\p{Script=Katakana}a-z\sーｰ]+$/iu.test(normalize(p.name))) add('R07', 'info', p, '比較不能: 取引先名のカナ未登録（不一致とは判定しない）');
-        else if (a && b && !a.includes(b) && !b.includes(a)) add('R07', 'medium', p, `名義不一致: ${bank.account_name} / ${bank.account_number || ''}`);
+        else if (a && b && !a.includes(b) && !b.includes(a)) add('R07', agent ? 'info' : 'medium', p, agent ? `収納代行経由（${agent}）: ${bank.account_name}` : `名義不一致: ${bank.account_name} / ${bank.account_number || ''}`);
       }
-      if (/株式会社|有限会社|合同会社/.test(p.name) && bank.account_name && !corporateAccount(bank.account_name)) add('R08', 'high', p, `法人取引先の口座名義に法人略号なし: ${bank.account_name} / ${bank.account_number || ''}`);
+      if (corporate && !agent && bank.account_name && !corporateAccount(bank.account_name)) add('R08', 'high', p, `法人取引先の口座名義に法人略号なし: ${bank.account_name} / ${bank.account_number || ''}${personalBankMatch ? '（R13-highも参照）' : ''}`);
     }
     const round = rows.filter(r => r.amount >= t.round_min && r.amount % t.round_unit === 0);
     if (round.length) add('R03', 'info', p, `丸い金額: ${round.length}件`);
@@ -54,9 +67,8 @@ export function runPaymentRules(snapshot, footprint = {}, patterns) {
     if (split) add('R09', 'medium', p, `${t.split_days}日以内に${t.repeat_count}件以上、合計${t.approval[0]}円以上`);
     const holiday = rows.filter(r => [0, 6].includes(new Date(`${r.date}T00:00:00Z`).getUTCDay()) || patterns.holidays_jp.includes(r.date));
     if (holiday.length) add('R11', 'info', p, `休日の支払: ${holiday.length}件（実行時刻は不明）`);
-    const names = [normalize(p.name), normalizeAccount(p.name_kana), normalizeAccount(bank.account_name)].filter(Boolean);
-    const staff = (snapshot.staff || []).find(m => (m.names || []).some(n => names.includes(normalizeAccount(n))) || p.email && (m.emails || []).some(e => e.toLowerCase() === p.email.toLowerCase()));
-    if (staff) add('R13', 'high', p, '取引先名・名義・メールと Discord メンバー情報が一致（社員所属の確認が必要）');
+    if (personalBankMatch) add('R13', 'high', p, `法人取引先の振込先が社員個人名義: ${bank.account_name}（Discord一致・社員所属は要確認。R08も参照${allow.has(String(p.id)) ? '、allowlistによりR08は抑制' : ''}）`);
+    else if (!corporate && ([p.name, p.name_kana].filter(Boolean).some(n => memberNames.includes(normalizeAccount(n))) || p.email && (snapshot.staff || []).some(m => (m.emails || []).some(e => e.toLowerCase() === p.email.toLowerCase())))) add('R13', 'medium', p, '業務委託の可能性。社員兼業なら要確認（取引先個人名・メールとDiscordメンバー情報が一致）');
     if (t.free_mail_domains.includes(String(p.email).split('@')[1]?.toLowerCase())) add('R14', 'info', p, 'フリーメールの取引先');
     const month = end.slice(0, 7), monthStart = Date.parse(`${month}-01`);
     const six = new Date(monthStart); six.setUTCMonth(six.getUTCMonth() - t.spike_months);
@@ -82,7 +94,14 @@ export function runPaymentRules(snapshot, footprint = {}, patterns) {
     if (chi > t.benford_chi_square) add('R12', 'info', null, `先頭桁分布 χ²=${chi.toFixed(2)}, n=${payments.length}（固定単価等で偏り得る）`);
   }
   const partnerIds = new Set((snapshot.partners || []).map(p => String(p.id)));
-  for (const p of payments) if (!partnerIds.has(String(p.partner_id))) unknown('payments', null, `取引先未登録の支払 ${p.amount}円`);
+  const unregistered = payments.filter(p => !partnerIds.has(String(p.partner_id)));
+  if (unregistered.length) unknown('payments', null, `取引先未登録の支払: ${unregistered.length}件・合計 ${unregistered.reduce((sum, p) => sum + p.amount, 0)}円（${t.unregistered_min}円以上を以下に個別記載）`);
+  for (const p of unregistered.filter(p => p.amount >= t.unregistered_min)) unknown('payments', null, `取引先未登録の支払 ${p.date} ${p.amount}円`);
+  const historyMissing = unverified.filter(r => r.rule === 'R15');
+  if (historyMissing.length) {
+    for (let i = unverified.length - 1; i >= 0; i--) if (unverified[i].rule === 'R15') unverified.splice(i, 1);
+    unknown('R15', null, `過去6か月の完全な比較期間を取得できていません（${historyMissing.length}取引先）`);
+  }
   const holidayYears = new Set(patterns.holidays_jp.map(d => d.slice(0, 4)));
   if (payments.some(p => !holidayYears.has(p.date.slice(0, 4)))) unknown('R11', null, '対象支払年の祝日定義が未収録（土日のみ判定）');
   if (!snapshot.staffVerified) unknown('R13', null, 'メンバー名簿未取得または社員属性・メール未確認。Discord メンバー一致のみ判定可能');

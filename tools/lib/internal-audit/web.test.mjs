@@ -18,3 +18,20 @@ test('pattern source URL must be grounded, name dedup, append without executing 
 test('empty public searches never establish absence of leaks',async()=>{
  const r=await searchLeaks({search:async()=>[],run:async()=>JSON.stringify({items:[]}),ask:async()=>{throw Error('no results to classify')}});assert.equal(r.sources.github.status,'unverified');assert.equal(r.sources['web:1'].status,'unverified');assert.equal(r.findings.length,0);
 });
+
+test('LLM JSON handles preamble, fences, nested brackets and escaped quotes', async () => {
+  const value = { text: 'a \\" } ]', nested: [{ ok: true }] };
+  assert.deepEqual(await askJson('test', async () => '前置き\n```json\n' + JSON.stringify(value) + '\n```\n末尾'), value);
+});
+test('LLM malformed JSON retries once, masks diagnostics and refresh reports failed', async t => {
+  const calls = [];
+  assert.deepEqual(await askJson('test', async (cmd, args) => { calls.push(args); return calls.length === 1 ? '{broken' : '[{"ok":true}]'; }), [{ ok: true }]);
+  assert.match(calls[1].at(-1), /JSON のみを返せ/);
+  let count = 0;
+  await assert.rejects(askJson('test', async () => { count++; return 'Bearer secret-token ' + 'x'.repeat(100); }), e => !e.message.includes('secret-token') && e.message.includes('[AUTH REDACTED]'));
+  assert.equal(count, 2);
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ia-json-'));
+  t.after(() => fs.rm(stateDir, { recursive: true, force: true }));
+  const r = await refreshPatterns({ stateDir, patterns: { patterns: [] }, search: async () => [{ url: 'https://example.invalid' }], ask: p => askJson(p, async () => 'bad JSON') });
+  assert.ok(Object.values(r.sources).every(s => s.status === 'failed'));
+});

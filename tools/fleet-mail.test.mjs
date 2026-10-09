@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { main, parseArgs, createClient, waitForReply, acquireLock, LOCK_MS, readInbox, findPriorReply } from './fleet-mail.mjs';
+import { main, parseArgs, createClient, waitForReply, acquireLock, LOCK_MS, readInbox, findPriorReply, resolveRemoteName } from './fleet-mail.mjs';
 import { main as register } from './register-fleet-mail.mjs';
 import { consentCommand } from './fleet-agent.mjs';
 
@@ -40,6 +40,41 @@ test('send uses file body, reporter identity, reason, expiry and mail-send envel
   assert.equal(await main(['--send', '--to', 'other-PC', '--kind', 'prompt', '--body-file', f.body, '--why', '調査'], f.deps), 0);
   assert.deepEqual(transport[0].payload, { id: 'mail-20260921000000000-1234', from: 'kim-PC', to: 'other-PC', messageKind: 'prompt', body: '質問 $() `literal`', why: '調査', expiresAt: '2026-09-22T00:00:00.000Z', kind: 'mail-send', token: 'test-token' });
   assert.match(fs.readFileSync(path.join(f.dir, 'fleet-mail-sent.jsonl'), 'utf8'), /send-attempt/);
+});
+for (const to of ['作業用011', '作業用０１１', '  作業用011　']) {
+  test(`send resolves remoteName ${JSON.stringify(to)} to the PC label (not a possibly shared hostname)`, async t => {
+    const f = fixture(t);
+    f.deps.pcMap = { 'kimko-PC': { remoteName: '作業用011', hostname: 'DESKTOP-PPD5V8I' } };
+    assert.equal(await main(['--send', '--to', to, '--kind', 'note', '--body-file', f.body, '--why', 'test'], f.deps), 0);
+    assert.equal(f.calls[0].payload.to, 'kimko-PC');
+    assert.deepEqual(f.errors, [`${to} → kimko-PC`]);
+    const logs = fs.readFileSync(path.join(f.dir, 'fleet-mail-sent.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l));
+    assert.ok(logs.every(entry => entry.to === 'kimko-PC'));
+  });
+}
+test('send preserves unmatched targets without stderr output', async t => {
+  const f = fixture(t);
+  f.deps.pcMap = { 'kimko-PC': { remoteName: '作業用011', hostname: 'DESKTOP-PPD5V8I' } };
+  for (const to of ['other-PC', '  other-ＰＣ　', 'all', '作業用01']) {
+    assert.equal(await main(['--send', '--to', to, '--kind', 'note', '--body-file', f.body, '--why', 'test'], f.deps), 0);
+    assert.equal(f.calls.at(-1).payload.to, to);
+  }
+  assert.deepEqual(f.errors, []);
+});
+test('resolveRemoteName normalizes roster names and falls back to the PC label', () => {
+  assert.deepEqual(resolveRemoteName('作業用011', { 'kimko-PC': { remoteName: '　作業用０１１ ' } }), { to: 'kimko-PC', resolved: true });
+});
+test('resolveRemoteName excludes reserved keys and unverified entries', () => {
+  const pcMap = {
+    _note: { remoteName: '作業用011', hostname: 'wrong-note' },
+    _unverified: { remoteName: '作業用011', hostname: 'wrong-unverified', 'other-PC': { remoteName: '作業用012', hostname: 'wrong-nested' } }
+  };
+  for (const to of ['作業用011', '作業用012']) assert.deepEqual(resolveRemoteName(to, pcMap), { to, resolved: false });
+});
+test('resolveRemoteName passes through missing or invalid roster data', () => {
+  for (const pcMap of [undefined, null, 'broken', [], { bad: null, other: { remoteName: 11 } }]) {
+    assert.deepEqual(resolveRemoteName(' 作業用０１１ ', pcMap), { to: ' 作業用０１１ ', resolved: false });
+  }
 });
 test('invalid CLI never accepts inline body, missing why, unsafe ids, invalid wait or mixed modes', () => {
   for (const args of [['--send','--body','oops'], ['--send'], ['--poll','--inbox'], ['--ack','../../escape'], ['--poll','--wait','-1'], ['--reply','mail-1']]) assert.throws(() => parseArgs(args));

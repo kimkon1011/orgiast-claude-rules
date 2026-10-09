@@ -8,10 +8,14 @@
   },
   "kimko-PC": {
     "sheetName": "作業用011",
+    "remoteName": "作業用004民泊用",
+    "account": "nishi@orgiast.jp",
     "hostname": "DESKTOP-PPD5V8I",
+    "deviceId": "3BF4B9EF-B428-450D-9AC2-C59AF0D1C9B3",
+    "_correction": "2026-10-09 kim のスクリーンショット2枚で確定: Chrome リモートデスクトップ『作業用004 民泊』の接続先のデバイス名＝DESKTOP-PPD5V8I（デバイスID 上記）。『作業用011』の接続先のデバイス名は『作業用011』（HP EliteDesk 800 G3 SFF、デバイスID B79CA602-6163-4252-B2A0-2A96C61F6767）で別のPC。よって kimko-PC の実体は作業用004民泊用で、シート行『作業用011(=DESKTOP-PPD5V8I)』の紐付けは誤り。sheetName と aliases は fleet-liveness がシート行の統合に使うため、シート側の表記を直すまで残す。アカウント nishi@ は kim 回答(2026-10-08)",
     "person": "金功勇",
     "aliases": ["作業用011(=DESKTOP-PPD5V8I)"],
-    "_evidence": "2026-08-27 20:0x に Discord へ初報告し 🖥 hostname=DESKTOP-PPD5V8I を送ってきた（webhook 復旧の実証）。シート行『作業用011(=DESKTOP-PPD5V8I)』と hostname 一致"
+    "_evidence": "2026-08-27 20:0x に Discord へ初報告し 🖥 hostname=DESKTOP-PPD5V8I を送ってきた（webhook 復旧の実証）。シート行『作業用011(=DESKTOP-PPD5V8I)』と hostname 一致。remoteName 根拠(2026-10-08): 台帳『PC稼働状況』D列=作業用011 の行(担当 金功勇)の fleet-mail疎通の根拠に『kimko-PCが送信/返信8通…紐付け=fleet-pc-map(作業用011)』とあり、作業用011=kimko-PC を台帳側が明示"
   },
   "HP": {
     "sheetName": "東邦2階HP",
@@ -19,6 +23,9 @@
     "_evidence": "ラベル名がシートD列『東邦2階HP』と一致。8/17申告と同日にラベル初登場。2026-08-18 を最後に停止（webhook削除と同時期）"
   },
   "nishi-PC": {
+    "remoteName": "作業用019",
+    "account": "nishi@orgiast.jp",
+    "_evidenceRemoteName": "kim のスクリーンショット(2026-10-09): Chrome リモートデスクトップ『作業用019/nishi』の接続先の設定→詳細情報でデバイス名 DESKTOP-04U31RG（Precision T3610、デバイスID 9D75ACC5-EB0D-48FB-B27E-D60113A9417B）。nishi-PC 自己申告の hostname=DESKTOP-04U31RG(2026-10-08 fleet-mail 返信)と一致。アカウント nishi@ は kim 回答(2026-10-08)",
     "hostname": "DESKTOP-04U31RG",
     "aliases": ["DESKTOP-04U31RG"],
     "_gap": "手書き行が無い(PC稼働状況シートに追加が必要)",
@@ -26,7 +33,23 @@
   },
   "作業用999": {
     "sheetName": "作業用999",
+    "remoteName": "作業用999",
     "installedAt": "2026-09-03",
-    "_evidence": "配布インストーラ完走(結果 OK 29 / NG 3)と claude --version 2.1.258 を kim のスクリーンショットで実機確認(2026-09-03)。hostname は未報告のため未記入。fleet-sheet.env 未取得で未報告 → PR #285 の自己修復待ち"
+    "_evidence": "remoteName 根拠: 既存 sheetName=作業用999(シートD列表記)。ただし hostname 未報告のため fleet-mail では照合値=キー名『作業用999』になり、実機の label/hostname と一致する保証なし。配布インストーラ完走(結果 OK 29 / NG 3)と claude --version 2.1.258 を kim のスクリーンショットで実機確認(2026-09-03)。hostname は未報告のため未記入。fleet-sheet.env 未取得で未報告 → PR #285 の自己修復待ち"
+  },
+  "作業用011": {
+    "remoteName": "作業用011",
+    "hostname": "作業用011",
+    "deviceId": "B79CA602-6163-4252-B2A0-2A96C61F6767",
+    "person": "金功勇",
+    "_evidence": "kim のスクリーンショット(2026-10-09): Chrome リモートデスクトップ『作業用011』の接続先で 設定→システム→バージョン情報 のデバイス名『作業用011』（HP EliteDesk 800 G3 SFF、i7-7700、デバイスID 上記、Windows 11 Pro 22H2、Windows のサインインは 金功勇 / kimkongyong@gmail.com）。Claude Code の導入と REPORTER_LABEL は未確認。ラベルが未設定なら hostname『作業用011』で受信するため、キー名＝hostname で照合できる"
+  },
+  "_unverified": {
+    "_note": "証拠が弱く確定できない対応。fleet-mail の宛先解決(remoteName 照合)には使わない。確定したらトップレベルのエントリへ remoteName 付きで移す。",
+    "作業用018": {
+      "remoteName": "作業用018",
+      "account": "cr@orgiast.jp",
+      "_evidence": "kim 明示回答『018 は cr@orgiast.jp』(2026-10-08)＝アカウントは確定。hostname・Claude Code 導入状況・報告実績は未確認"
+    }
   }
 }

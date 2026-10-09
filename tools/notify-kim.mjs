@@ -75,8 +75,8 @@ export async function notifyKim(text, {
   }
 
   if (webhookFallback) {
-    const webhook = readTrimmed(path.join(home, '.claude', 'orgiast-discord-webhook.txt'))
-      || (fleetFallback ? readEnvValue(path.join(home, '.claude', 'cost-reporter.env'), 'DISCORD_COST_WEBHOOK') : '');
+    const webhook = (fleetFallback ? readEnvValue(path.join(home, '.claude', 'cost-reporter.env'), 'DISCORD_COST_WEBHOOK') : '')
+      || readTrimmed(path.join(home, '.claude', 'orgiast-discord-webhook.txt'));
     if (webhook) {
       try {
         await postWebhook(webhook, content, fetchImpl, signal);

@@ -54,7 +54,7 @@ export async function reportGate(contract, verdict, statuses, { home = homeDir()
   try { fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(file, JSON.stringify({ name, verdict, statuses, delivery: 'pending' }), { flag: 'wx', mode: 0o600 }); }
   catch { return { delivered: 'suppressed' }; }
   let result;
-  try { result = await notify(line, { home, signal: AbortSignal.timeout(2000), fleetFallback: true }); }
+  try { result = await notify(line, { home, userId: '', signal: AbortSignal.timeout(2000), fleetFallback: true }); }
   catch { result = { delivered: 'none' }; }
   try { fs.writeFileSync(file, JSON.stringify({ name, verdict, statuses, delivery: result.delivered }), { mode: 0o600 }); } catch {}
   if (result.delivered === 'none') process.stderr.write(`[gate-report] ${name}: 通報未達（ローカル記録済み）。node tools/keyserve-status.mjs --json\n`);

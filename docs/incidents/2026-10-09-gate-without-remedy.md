@@ -114,7 +114,7 @@ B: 禁止lintを追加し実案内5行を修正。C: GASの実テンプレート
 
 D: 共通corpusと複合書込の負例。E: register-hooksで新規/既存のPreToolUse・単独Stopを共通wrapperへ収束、集約Stopは各子結果へ適用。新ゲートはmanifestのdistributedAt/denyAfterと各PCの初回受領日時の両方で7日間warn。pilotHostsは `kim-PC`（実hostnameとの一致は未確認）。既存37本はlegacy denyのまま。未宣言/不正manifestはwarn。
 
-F: PC名・ゲート名・remedy参照とavailable/missing/manualだけを既存notify-kimへ送る。DM/webhookに加え既存全PC配布のcost-reporter通知経路をfallbackとして利用。理由本文・URL・鍵値・会話は送らない。gate×PC×UTC日で排他作成し1日1回、未達はローカル記録と診断コマンドを表示。通知不能のPCで配送成功を保証することはできず、全PCへの実配送は未確認。
+F: PC名・ゲート名・remedy参照とavailable/missing/manualだけを既存notify-kimへ送る。全PC配布のcost-reporter通知経路を優先し、既存webhookをfallbackとして利用。各PCの個人Discord IDをkimのIDと取り違えてDMしない。理由本文・URL・鍵値・会話は送らない。gate×PC×UTC日で排他作成し1日1回、未達はローカル記録と診断コマンドを表示。通知不能のPCで配送成功を保証することはできず、全PCへの実配送は未確認。
 
 G: keyserve remedy欠落時、SessionStartのprovisionKeysを関数として再利用し、制限時間付きで1回取得して判定を再実行する。元の搭載/権限条件が満たされない場合は取得成功だけで免除しない。H: ONBOARDING §1.14.xへ5行で追加。
 

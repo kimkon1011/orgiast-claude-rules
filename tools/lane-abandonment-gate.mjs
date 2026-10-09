@@ -22,16 +22,22 @@ export function resultText(content) {
 export function failureSignal(text, command = '') {
   for (const line of String(text).split(/\r?\n/)) {
     if (/全候補が失敗|demote中|usage limit|credits are depleted|RESOURCE_EXHAUSTED|PreToolUse:Bash hook error: このターンで Fable\/Opus 本体が直接/i.test(line)
+      || /WSL ディストリが見つかりません|spawn \S+ ENOENT/.test(line)
+      || ((delegated.test(command) || /(?:^|[\s/\\])(?:codex-do|cheap-code|llm-ask|gemini|qwen)(?:\.mjs)?(?=[\s"']|$)/i.test(command)) && /is not recognized as an internal or external command|command not found/i.test(line))
       || /HTTP\s*4(?:02|29)\b(?!\s*:)/i.test(line)
       || (/codex-do(?:\.mjs)?/i.test(command) && /\bexit code\s*[:=]?\s*[1-9]\d*\b/i.test(line))) return safeText(line).slice(0, 180);
   }
   return '';
 }
-export function exemptions(ctx, events, failureIndex = -1) {
+export function repairReported(text) {
+  return String(text || '').split(/\r?\n/).some(line => /^\[LANE-REPAIR\][ \t]+[^:\r\n]+:[ \t]*(?:修復済み[ \t]+\S[^\r\n]*|修復不可[ \t]+試行:[ \t]*\S[^\r\n]*)$/.test(line.trim()));
+}
+export function exemptions(ctx, events, failureIndex = -1, { requireRepair = false } = {}) {
   const users = turnEntries(ctx.transcriptRaw || '').filter(r => r.type === 'human' || r.message?.role === 'user');
   const userText = users.flatMap(r => typeof r.message?.content === 'string' ? [r.message.content] : (r.message?.content || []).filter(b => b.type === 'text').map(b => b.text)).join('\n');
   if (userText.includes('[LANE-OK]')) return 'lane-ok';
-  if (/\[LANE-FALLBACK\][ \t]*\S[^\r\n]*/.test(ctx.assistantText || '')) return 'fallback';
+  // 汎用 course-correction の免除判定は互換性を維持し、この gate は修理必須で呼ぶ。
+  if ((!requireRepair || repairReported(ctx.assistantText)) && /\[LANE-FALLBACK\][ \t]*\S[^\r\n]*/.test(ctx.assistantText || '')) return 'fallback';
   if (events.slice(failureIndex + 1).some(e => e.type === 'tool_use' && /^(?:Bash|PowerShell)$/.test(e.name) && /(?:^|[\s/\\"'])lane-doctor\.mjs(?:\s|["']|$)/.test(e.input?.command || e.input?.script || ''))) return 'doctor';
   return '';
 }
@@ -51,6 +57,7 @@ export function evaluateLaneAbandonment(ctx, { home = laneHome() } = {}) {
     const event = events[i];
     if (event.type === 'tool_result') {
       const use = uses.get(event.tool_use_id);
+      if (!use || !/^(?:Bash|PowerShell)$/.test(use.name)) continue;
       const text = resultText(event.content);
       const signal = failureSignal(text, use?.input?.command || use?.input?.script || '');
       if (signal) { signals.push(signal); if (failedAt < 0) failedAt = i; }
@@ -66,11 +73,16 @@ export function evaluateLaneAbandonment(ctx, { home = laneHome() } = {}) {
     const doc = /\.md$/i.test(target) || /memory|scratchpad/i.test(target) || /(?:^|\/)\.claude(?:\/|$)/i.test(target);
     if ((/^(?:Edit|Write|MultiEdit)$/.test(event.name) && !doc) || (event.name === 'Agent' && /opus|fable/i.test(event.input?.model || '')) || shellCalls >= 3) abandoned = true;
   }
-  const exemption = exemptions(ctx, events, failedAt);
-  const block = /fable|opus/i.test(currentModel(ctx)) && failedAt >= 0 && abandoned && !exemption;
+  const exemption = exemptions(ctx, events, failedAt, { requireRepair: true });
+  const eligible = /fable|opus/i.test(currentModel(ctx)) && failedAt >= 0;
+  const unrepaired = eligible && exemption !== 'lane-ok' && !repairReported(ctx.assistantText);
+  const abandon = eligible && abandoned && !exemption;
+  const block = abandon || unrepaired;
+  const repairReason = `他AIレーンの失敗(${signals[0]})を直さずに終えようとしている。原因を調べてその場で修復し、修復後に1回実行して成功を実測してから [LANE-REPAIR] <レーン>: 修復済み <内容> を書け。どうしても直せない場合だけ [LANE-REPAIR] <レーン>: 修復不可 試行: <試した手段> を書け（nishi 2026-10-09: user のコストパフォーマンス最優先）`;
   const health = readJson(path.join(home, '.claude', 'lane-health.json'));
-  const result = { decision: block ? 'block' : 'pass', code: 'LANE-ABANDON', signals, exemption };
-  if (block) result.reason = `[LANE-ABANDON] 他AIレーンの失敗(${signals[0]})を放置して Claude 本体で作業した。先に node tools/lane-doctor.mjs --probe を実行し、生存レーン(${(health.implementOrder || []).join(', ') || '未確認'})へ委譲し直せ。全滅なら本文に [LANE-FALLBACK] <理由> を書け（§1.18 / kim 2026-10-08）`;
+  const result = { decision: block ? 'block' : 'pass', code: unrepaired && !abandon ? 'LANE-UNREPAIRED' : 'LANE-ABANDON', signals, exemption };
+  if (abandon) result.reason = `[LANE-ABANDON] 他AIレーンの失敗(${signals[0]})を放置して Claude 本体で作業した。先に node tools/lane-doctor.mjs --probe を実行し、生存レーン(${(health.implementOrder || []).join(', ') || '未確認'})へ委譲し直せ。全滅なら有効な [LANE-REPAIR] 行とともに本文に [LANE-FALLBACK] <理由> を書け（§1.18 / kim 2026-10-08）`;
+  if (unrepaired) result.reason = abandon ? `${result.reason} ${repairReason}` : repairReason;
   try { appendCorrection(home, { sessionId: ctx.sessionId || '', gate: 'lane-abandonment', verdict: result.decision, signals, excerpt: ctx.assistantText }); } catch { result.ledgerError = true; }
   return result;
 }

@@ -5,6 +5,7 @@ import { writeHandoff } from './next-session-rotate.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { normalizeExecutorStatus } from './executor-status.mjs';
 import { isEntry } from './is-entry.mjs';
 
 const DAY = 86_400_000;
@@ -65,7 +66,7 @@ function reasonTop(rows) {
 // これは codex 本体の故障ではなく一過性のインフラ障害で、codex-do 側の再試行で回復する。
 const INFRA_TRANSIENT = /failed to lookup address information|failed to connect to websocket|stream error|connection reset|i\/o timeout|dns/i;
 
-// WSL のディストリが1つも無い PC では codex レーンは構造的に使えず、コードでは直せない。
+// WSL のディストリが1つも無い PC では codex レーンを環境修復する必要がある。
 // 「そもそも走っていない」の中でも、コードで直せる起動失敗(codex_launch_failed)と分けて扱う
 // （2026-09-19 実測: この PC は `wsl -l -q` が空）。
 const WSL_LANE_ABSENT = /WSL ディストリが見つかりません/;
@@ -75,7 +76,7 @@ const WSL_LANE_ABSENT = /WSL ディストリが見つかりません/;
 const SPAWN_FAILED = /syscall: 'spawn'|\bspawn E[A-Z]+\b|code: 'E[A-Z]{4,}'/;
 
 // codex CLI 自身の認証欠落。WSL 側 ~/.codex/auth.json が未認証/失効だと、セッションを作る前に
-// 401 で死ぬ。コードでは直せず再ログインが要る環境要因（2026-09-22 診断: 09-20 の11件中4件）。
+// 401 で死ぬ。Windows 側の認証情報をコピーして復旧を試す環境要因（2026-09-22 診断: 09-20 の11件中4件）。
 const CODEX_AUTH_FAILED = /401 unauthorized|missing bearer or basic authentication/i;
 
 // ChatGPT アカウント認証なのに sol/astra を選ぶと 400 で即死する。codex-do 側のレーン選択の
@@ -87,6 +88,7 @@ export function emptyOutputReason(row) {
   // 旧行(timedOut 未記録)は経過秒数から推定する。codex の正常終了は実測で中央値~100秒、
   // 打ち切りは --timeout 到達時にのみ現れ、実測値は 300 秒以上だった。
   if (row?.timedOut == null && Number(row?.secs) >= 300) return 'timeout';
+  if (WSL_LANE_ABSENT.test(String(row?.stderrTail || ''))) return 'launch_failed';
   // 起動前のゲートが「意図的に止めた」行。launched:false だが codex は一度も起動されておらず、
   // 起動失敗ではない。codex-do が書く行の status は必ず数値で、起動前ゲートは文字列の番兵を書く
   // (2026-09-23 実測: status:"spec-missing-context" / stderrTail 空)。これを launch_failed に
@@ -157,8 +159,16 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
   }
   const empty = usageRows
     .filter((row) => row.provider === 'codex' && Number(row.out) === 0)
-    .map((source) => ({ reason: emptyOutputReason(source), stderrTail: source.stderrTail }))
+    .map((source) => ({ t: source.t, reason: emptyOutputReason(source), stderrTail: source.stderrTail }))
     .filter((item) => item.reason !== 'timeout');
+  const codexSuccessTimes = usageRows
+    .filter((row) => row.provider === 'codex' && normalizeExecutorStatus(row) === 'ok' && Number(row.out) > 0)
+    .map((row) => Date.parse(row.t));
+  // 台帳の並び順ではなく、種類ごとの最後の失敗より後の成功で修復を確認する。
+  const repairedAfter = (failures) => {
+    const lastFailureTime = Math.max(...failures.map((row) => Date.parse(row.t)));
+    return codexSuccessTimes.some((time) => time > lastFailureTime);
+  };
   const realEmpty = empty.filter((item) => !['infra_transient', 'launch_failed', 'auth_failed', 'model_auth_mismatch', 'preflight_blocked', 'spawn_failed'].includes(item.reason));
   const launchFailed = empty.filter((item) => item.reason === 'launch_failed');
   const authFailed = empty.filter((item) => item.reason === 'auth_failed');
@@ -166,24 +176,35 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
   const laneAbsent = launchFailed.filter((item) => WSL_LANE_ABSENT.test(String(item.stderrTail || '')));
   const fixableLaunchFailed = launchFailed.filter((item) => !WSL_LANE_ABSENT.test(String(item.stderrTail || '')));
   if (fixableLaunchFailed.length) findings.push({ id: 'codex_launch_failed', severity: 'medium', title: 'Codex の起動失敗', evidence: [`${fixableLaunchFailed.length}件`, ...reasonTop(fixableLaunchFailed)], fixTask: 'codex-do が codex を起動できずに終了している。WSL の状態と起動経路のログを確認し、起動失敗を再現するテストを追加して修正' });
-  // 事実は消さずに名前を付けて残す。fixTask を付けない(low)ので毎日の起票対象にはならない。
-  if (laneAbsent.length) findings.push({ id: 'codex_lane_unavailable', severity: 'low', title: 'codex レーンは WSL 不在のため使用不可（代替バックエンドで実行中）', evidence: [`${laneAbsent.length}件`, 'WSL ディストリ 0 件'] });
+  // 2026-10-09: 環境故障を low にして Codex が43日・112回起動不能のまま放置された。環境故障こそ high + fixTask の修理対象。
+  if (laneAbsent.length && !repairedAfter(laneAbsent)) findings.push({ id: 'codex_lane_unavailable', severity: 'high', title: 'codex レーンは WSL 不在のため使用不可（要修理）', evidence: [`${laneAbsent.length}件`, 'WSL ディストリ 0 件'], fixTask: "WSL にディストリが無い。wsl --install -d Ubuntu --no-launch → wsl -d Ubuntu -u root -- bash -lc 'curl -fsSL https://deb.nodesource.com/setup_22.x | bash -; apt-get install -y nodejs; npm i -g @openai/codex' → Windows の %USERPROFILE%\\.codex\\auth.json を WSL の /root/.codex/auth.json にコピー → codex login status で確認 → codex-do で1ファイル作成を試し実測" });
   // 起動前ゲートが止めた行も事実として残す。原因は codex 側ではなく指示(spec)側なので
   // codex_launch_failed とは別 id にし、fixTask を付けない(low)＝毎日の起票対象にしない。
   const preflightBlocked = empty.filter((item) => item.reason === 'preflight_blocked');
   if (preflightBlocked.length) findings.push({ id: 'codex_preflight_blocked', severity: 'low', title: 'Codex は起動前ゲートで意図的に止められた（起動失敗ではない）', evidence: [`${preflightBlocked.length}件`, 'status が文字列の番兵（起動前ゲートが記録）'] });
   // spawn 自体の失敗は「そもそも起動できていない」ので、no_output として起票しない。
-  // 直せる欠陥というより環境側の spawn 失敗なので fixTask を付けない(low)＝毎日の起票対象にしない
-  // （codex_lane_unavailable / codex_auth_failed と同じ扱い）。
   const spawnFailedRows = empty.filter((item) => item.reason === 'spawn_failed');
-  if (spawnFailedRows.length) findings.push({ id: 'codex_spawn_failed', severity: 'low', title: 'Codex の子プロセスが spawn に失敗（起動できていない）', evidence: [`${spawnFailedRows.length}件`, ...reasonTop(spawnFailedRows)] });
+  if (spawnFailedRows.length && !repairedAfter(spawnFailedRows)) findings.push({ id: 'codex_spawn_failed', severity: 'high', title: 'Codex の子プロセスが spawn に失敗（起動できていない）', evidence: [`${spawnFailedRows.length}件`, ...reasonTop(spawnFailedRows)], fixTask: 'where codex／WSL 内 command -v codex で実体を確認し、無ければ npm i -g @openai/codex で入れ直す' });
   // 直せる欠陥なので fixTask を付ける（medium）。
   if (modelAuthMismatch.length) findings.push({ id: 'codex_model_auth_mismatch', severity: 'medium', title: 'Codex が ChatGPT アカウントで sol/astra を選んで失敗', evidence: [`${modelAuthMismatch.length}件`, ...reasonTop(modelAuthMismatch)], fixTask: 'codex-do のレーン選択が ChatGPT アカウント認証を検出できず sol/astra を選んでいる。detectChatGptAuth と decideCodexLane の判定を照合し、再現テストを追加して修正' });
-  // 事実は消さずに名前を付けて残す。再ログインは人が行う操作でコードでは直せないため
-  // fixTask を付けない(low)＝毎日の起票対象にはしない（codex_lane_unavailable と同じ扱い）。
-  if (authFailed.length) findings.push({ id: 'codex_auth_failed', severity: 'low', title: 'Codex CLI が未認証（WSL 側の再ログインが必要）', evidence: [`${authFailed.length}件`, 'WSL の ~/.codex/auth.json を確認し codex login を実行'] });
+  if (authFailed.length && !repairedAfter(authFailed)) findings.push({ id: 'codex_auth_failed', severity: 'high', title: 'Codex CLI が未認証（WSL 側の再ログインが必要）', evidence: [`${authFailed.length}件`, 'WSL の ~/.codex/auth.json を確認し codex login を実行'], fixTask: 'Windows の %USERPROFILE%\\.codex\\auth.json を WSL の ~/.codex/ にコピーし codex login status。Windows 側も未ログインのときだけ人の codex login が要る' });
   if (realEmpty.length) findings.push({ id: 'codex_empty_output', severity: 'medium', title: 'Codex の出力ゼロ', evidence: [`${realEmpty.length}件`, ...reasonTop(realEmpty), ...(empty.length > realEmpty.length ? [`インフラ/起動失敗で除外 ${empty.length - realEmpty.length}件`] : [])], fixTask: 'codex が出力ゼロで終了した原因（認証切れ/上限/起動失敗）を codex-do のログから特定' });
   for (const [provider, state] of Object.entries(cooldown)) if (state?.reason === 'http_402' && Number(state.until) > nowMs) findings.push({ id: 'provider_balance_exhausted', severity: 'low', title: `${provider} の残高切れ`, evidence: [`provider ${provider}`, CLAUDE_FALLBACK_RULE] });
+  const providers = new Map();
+  for (const row of usageRows) {
+    if (!row.provider) continue;
+    const rows = providers.get(row.provider) || [];
+    rows.push(row); providers.set(row.provider, rows);
+  }
+  for (const [provider, rows] of providers) {
+    // llm-ask は status:'ok'、cheap-code は ok、codex-do は終了状態と出力を記録する。
+    const succeeded = rows.some(row => normalizeExecutorStatus(row) === 'ok' && Number(row.out) > 0);
+    if (rows.length < 3 || succeeded) continue;
+    const times = rows.map(row => row.t).sort((a, b) => Date.parse(a) - Date.parse(b));
+    findings.push({ id: 'lane_outage_unrepaired', provider, severity: 'high', title: `${provider} レーンが全滅したまま（未修理）`,
+      evidence: [`${rows.length}件すべて失敗`, `最初 ${times[0]}`, `最後 ${times.at(-1)}`, ...reasonTop(rows.map(row => ({ reason: row.stderrTail || row.reason || emptyOutputReason(row) })))],
+      fixTask: `${provider} が直近 ${rows.length} 件すべて失敗している。代替レーンや Claude 本体へ逃げて放置せず、stderrTail から原因を特定して修復し、修復後に1回実行して成功を実測する。直せないときは試した手段と出力を記録する` });
+  }
   return findings.length ? findings : [{ id: 'healthy', severity: 'low', title: '委譲経路は正常', evidence: [] }];
 }
 

@@ -118,17 +118,17 @@ test('認証失敗とモデル認証不整合は codex_empty_output でなく名
   const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
   assert.deepEqual(findings.map((item) => item.id), ['codex_model_auth_mismatch', 'codex_auth_failed']);
   assert.equal(findings.find((item) => item.id === 'codex_model_auth_mismatch').severity, 'medium');
-  assert.equal(findings.find((item) => item.id === 'codex_auth_failed').severity, 'low');
+  assert.equal(findings.find((item) => item.id === 'codex_auth_failed').severity, 'high');
   assert.ok(!findings.some((item) => item.id === 'codex_empty_output'));
 });
 
-test('codex_auth_failed は low なので next-session.md へ起票しない', () => {
+test('codex_auth_failed は high で next-session.md へ起票する', () => {
   const dir = home();
   write(dir, 'next-session.md', handoff());
   write(dir, 'executor-usage.jsonl', row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, status: 1, stderrTail: '401 Unauthorized: Missing bearer or basic authentication in header' }));
   const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
-  assert.equal(upsertFixTasks({ home: dir, findings, now: NOW, todayStr: '2026-09-22' }), false);
-  assert.doesNotMatch(fs.readFileSync(path.join(dir, '.claude', 'next-session.md'), 'utf8'), /codex_auth_failed/);
+  assert.equal(upsertFixTasks({ home: dir, findings, now: NOW, todayStr: '2026-09-22' }), true);
+  assert.match(fs.readFileSync(path.join(dir, '.claude', 'next-session.md'), 'utf8'), /codex_auth_failed/);
 });
 
 test('認証失敗と本物の出力ゼロが混在しても codex_empty_output は本物だけを数える', () => {
@@ -149,18 +149,16 @@ test('起動失敗は codex_empty_output でなく codex_launch_failed として
   assert.deepEqual(findings[0].evidence, ['1件', 'launch_failed(1件)']);
 });
 
-// WSL のディストリが1つも無い PC では codex レーンは構造的に使えず、コードでは直せない。
-// 「コードで直す欠陥」として毎日起票し続けると、直せない修正タスクが残TODOを占有し続ける(2026-09-19 実測)。
-test('WSL 不在の起動失敗は欠陥でなく環境の事実として low で残し、fixTask を付けない', () => {
+test('WSL 不在の起動失敗は high で修理手順を付ける', () => {
   const dir = home();
   write(dir, 'executor-usage.jsonl', row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, secs: 0, timedOut: false, status: 3, launched: false, stderrTail: 'WSL ディストリが見つかりませんでした' }));
   const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
   assert.deepEqual(findings.map((item) => item.id), ['codex_lane_unavailable']);
-  assert.equal(findings[0].severity, 'low');
-  assert.equal(findings[0].fixTask, undefined);
+  assert.equal(findings[0].severity, 'high');
+  assert.match(findings[0].fixTask, /wsl --install.*node.*22.*codex login status/);
 });
 
-test('WSL 不在と直せる起動失敗が混在しても、起票対象は直せる方だけ', () => {
+test('WSL 不在と他の起動失敗を別々に起票する', () => {
   const dir = home();
   write(dir, 'executor-usage.jsonl',
     row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, secs: 0, timedOut: false, status: 3, launched: false, stderrTail: 'WSL ディストリが見つかりませんでした' })
@@ -172,14 +170,14 @@ test('WSL 不在と直せる起動失敗が混在しても、起票対象は直�
 
 // spawn 自体の失敗(exitCode:null)は「codex が走って何も出さなかった」ではない。
 // no_output に混ぜると毎日 codex_empty_output が誤起票され続ける(2026-10-04 診断: 直近24hの3件がこれ)。
-test('spawn 失敗だけの出力ゼロは codex_empty_output でなく codex_spawn_failed(low) に分離する', () => {
+test('spawn 失敗だけの出力ゼロは codex_empty_output でなく codex_spawn_failed(high) に分離する', () => {
   const dir = home();
   write(dir, 'executor-usage.jsonl', row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, launched: true, timedOut: false, status: 'error', exitCode: null, secs: 0.15, stderrTail: 'spawn codex ENOENT' }));
   const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
   assert.deepEqual(findings.map((item) => item.id), ['codex_spawn_failed']);
   const spawnFailed = findings[0];
-  assert.equal(spawnFailed.severity, 'low');
-  assert.equal(spawnFailed.fixTask, undefined);
+  assert.equal(spawnFailed.severity, 'high');
+  assert.match(spawnFailed.fixTask, /where codex.*command -v codex.*npm i -g/);
   assert.equal(spawnFailed.title, 'Codex の子プロセスが spawn に失敗（起動できていない）');
   assert.deepEqual(spawnFailed.evidence, ['1件', 'spawn_failed(1件)']);
   assert.equal(findings.some((item) => item.id === 'codex_empty_output'), false);
@@ -230,13 +228,13 @@ test('起動前ゲートで止めた行を codex_empty_output としても数え
   assert.equal(findings.find((item) => item.id === 'codex_empty_output'), undefined);
 });
 
-test('codex_lane_unavailable は low なので next-session.md へ起票しない', () => {
+test('codex_lane_unavailable は high で next-session.md へ起票する', () => {
   const dir = home();
   write(dir, 'next-session.md', handoff());
   write(dir, 'executor-usage.jsonl', row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, secs: 0, timedOut: false, status: 3, launched: false, stderrTail: 'WSL ディストリが見つかりませんでした' }));
   const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
-  assert.equal(upsertFixTasks({ home: dir, findings, now: NOW, todayStr: '2026-09-19' }), false);
-  assert.doesNotMatch(fs.readFileSync(path.join(dir, '.claude', 'next-session.md'), 'utf8'), /codex_lane_unavailable/);
+  assert.equal(upsertFixTasks({ home: dir, findings, now: NOW, todayStr: '2026-09-19' }), true);
+  assert.match(fs.readFileSync(path.join(dir, '.claude', 'next-session.md'), 'utf8'), /codex_lane_unavailable/);
 });
 
 test('起動失敗と本物の出力ゼロが混在しても codex_empty_output は本物だけを数える', () => {
@@ -384,4 +382,80 @@ test('dry-run 相当では cooldown ファイルを変更しない', () => {
   write(dir, 'provider-cooldown.json', original); write(dir, 'codex-limit-history.jsonl', row({ t: '2026-09-09T10:00:00Z', reason: 'usage_limit' }));
   collectFindings({ home: dir, now: NOW, codexUsedPercent: 1 });
   assert.deepEqual(readCooldown(dir), original);
+});
+
+test('文字列 status の WSL 不在3件は high の環境故障と未修理全滅になる', () => {
+  const dir = home();
+  const rows = [2, 0, 1].map(i => ({ t: `2026-09-09T10:0${i}:00Z`, provider: 'codex', out: 0, launched: false, status: '3', stderrTail: 'WSL ディストリが見つかりませんでした' }));
+  write(dir, 'executor-usage.jsonl', rows.map(row).join(''));
+  const findings = collectFindings({ home: dir, now: NOW });
+  assert.equal(emptyOutputReason(rows[0]), 'launch_failed');
+  const absent = findings.find(f => f.id === 'codex_lane_unavailable');
+  assert.equal(absent.severity, 'high'); assert.ok(absent.fixTask);
+  assert.ok(!findings.some(f => f.id === 'codex_preflight_blocked'));
+  const outage = findings.find(f => f.id === 'lane_outage_unrepaired');
+  assert.equal(outage.provider, 'codex'); assert.equal(outage.severity, 'high');
+  assert.deepEqual(outage.evidence, ['3件すべて失敗', '最初 2026-09-09T10:00:00Z', '最後 2026-09-09T10:02:00Z', 'WSL ディストリが見つかりませんでした(3件)']);
+});
+test('全レーンの未修理全滅は provider ごとに集計し集計窓外を除く', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', ['gemini', 'qwen'].flatMap(provider => Array.from({length:3}, (_,i) => row({t:`2026-09-09T10:0${i}:00Z`,provider,status:'error',out:5,stderrTail:'HTTP 402'}))).join('') + row({t:'2020-01-01T00:00:00Z',provider:'gemini',status:'ok',out:10}));
+  assert.deepEqual(collectFindings({home:dir,now:NOW}).filter(f=>f.id==='lane_outage_unrepaired').map(f=>f.provider), ['gemini','qwen']);
+});
+test('失敗2件だけまたは失敗2件と成功1件では未修理全滅を出さない', () => {
+  const dir = home();
+  const failed = [0,1].map(i=>({t:`2026-09-09T10:0${i}:00Z`,provider:'gemini',status:'error',out:0}));
+  for (const success of [null, {status:'ok'}, {status:0}, {status:'0'}, {ok:true}]) {
+    write(dir,'executor-usage.jsonl', [...failed,...(success?[{t:'2026-09-09T10:02:00Z',provider:'gemini',out:10,...success}]:[])].map(row).join(''));
+    assert.ok(!collectFindings({home:dir,now:NOW}).some(f=>f.id==='lane_outage_unrepaired'));
+  }
+});
+
+const ENVIRONMENT_FAILURES = [
+  ['codex_lane_unavailable', { launched: false, status: 3, stderrTail: 'WSL ディストリが見つかりませんでした' }],
+  ['codex_spawn_failed', { launched: true, status: 'error', exitCode: null, stderrTail: 'spawn codex ENOENT' }],
+  ['codex_auth_failed', { status: 1, stderrTail: '401 Unauthorized: Missing bearer or basic authentication in header' }],
+];
+
+for (const [id, failure] of ENVIRONMENT_FAILURES) {
+  test(`${id}: 失敗3件の後に codex の成功1件があれば出さない`, () => {
+    const dir = home();
+    const failed = [2, 0, 1].map(i => ({ t: `2026-09-09T10:0${i}:00Z`, provider: 'codex', out: 0, ...failure }));
+    // 成功を先頭に書き、ファイル順ではなく時刻で判断することも確認する。
+    write(dir, 'executor-usage.jsonl', [{ t: '2026-09-09T10:03:00Z', provider: 'codex', status: '0', out: 10 }, ...failed].map(row).join(''));
+    const findings = collectFindings({ home: dir, now: NOW });
+    assert.equal(findings.some(f => f.id === id), false);
+    assert.equal(findings.some(f => f.id === 'lane_outage_unrepaired'), false);
+  });
+
+  test(`${id}: 成功1件の後に失敗3件があれば high で出る`, () => {
+    const dir = home();
+    const failed = [2, 0, 1].map(i => ({ t: `2026-09-09T10:0${i}:00Z`, provider: 'codex', out: 0, ...failure }));
+    write(dir, 'executor-usage.jsonl', [...failed, { t: '2026-09-09T09:59:00Z', provider: 'codex', status: 'ok', out: 10 }].map(row).join(''));
+    const finding = collectFindings({ home: dir, now: NOW }).find(f => f.id === id);
+    assert.equal(finding?.severity, 'high');
+    assert.equal(finding.evidence[0], '3件');
+  });
+
+  test(`${id}: 同時刻の成功・別 provider の成功・出力ゼロ・失敗状態は修復扱いしない`, () => {
+    const dir = home();
+    write(dir, 'executor-usage.jsonl', [
+      { t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, ...failure },
+      { t: '2026-09-09T10:00:00Z', provider: 'codex', status: 0, out: 10 },
+      { t: '2026-09-09T10:01:00Z', provider: 'fallback', status: 0, out: 10 },
+      { t: '2026-09-09T10:02:00Z', provider: 'codex', status: 0, out: 0 },
+      { t: '2026-09-09T10:03:00Z', provider: 'codex', status: 1, out: 10 },
+    ].map(row).join(''));
+    assert.equal(collectFindings({ home: dir, now: NOW }).find(f => f.id === id)?.severity, 'high');
+  });
+}
+
+test('環境故障は種類ごとの最後の失敗時刻で修復を判定する', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', [
+    { t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, ...ENVIRONMENT_FAILURES[0][1] },
+    { t: '2026-09-09T10:01:00Z', provider: 'codex', status: 0, out: 10 },
+    { t: '2026-09-09T10:02:00Z', provider: 'codex', out: 0, ...ENVIRONMENT_FAILURES[2][1] },
+  ].map(row).join(''));
+  assert.deepEqual(collectFindings({ home: dir, now: NOW }).map(f => f.id), ['codex_auth_failed']);
 });

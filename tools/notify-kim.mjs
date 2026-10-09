@@ -12,6 +12,12 @@ const USER_AGENT = 'orgiast-notify-kim/1.0';
 
 function readTrimmed(file) { try { return fs.readFileSync(file, 'utf8').trim(); } catch { return ''; } }
 
+// 監視側も同じ秘密の取得経路を使う。
+export function resolveDiscordBotToken(home = process.env.ORGIAST_HOME || os.homedir()) {
+  return process.env.DISCORD_BOT_TOKEN?.trim()
+    || readTrimmed(path.join(home, '.claude', 'orgiast-discord-bot-token.txt'));
+}
+
 export function clipDiscordContent(text) {
   const content = String(text ?? '');
   return content.length <= MAX_CONTENT ? content : `${content.slice(0, MAX_CONTENT - OMITTED.length)}${OMITTED}`;
@@ -37,8 +43,7 @@ export async function notifyKim(text, {
 } = {}) {
   const resolvedUserId = userId !== undefined ? userId : (process.env.ORGIAST_DISCORD_USER_ID?.trim()
     || readTrimmed(path.join(home, '.claude', 'orgiast-discord-user-id.txt')));
-  const resolvedToken = token !== undefined ? token : (process.env.DISCORD_BOT_TOKEN?.trim()
-    || readTrimmed(path.join(home, '.claude', 'orgiast-discord-bot-token.txt')));
+  const resolvedToken = token !== undefined ? token : resolveDiscordBotToken(home);
   const content = clipDiscordContent(text);
   let dmReason = '';
 

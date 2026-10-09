@@ -34,3 +34,7 @@ tools/routing-table.json
 
 # Disposable eval clones must never trigger nightly rescue.
 scratch/
+
+# Codex のサブクローン作業ツリーと internal-audit の検証証跡（機械ローカル）
+.wt/
+/evidence/internal-audit-v11/

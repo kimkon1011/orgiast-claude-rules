@@ -2,7 +2,11 @@
 
 Without ORGIAST_REPO, register-hooks selects ~/.claude/nightly-repo,
 then ~/orgiast-claude-rules (onboarding-sync's default). It requires a clean
-main branch with no commits ahead of origin/main. It never selects the invoking
+main branch or detached HEAD at origin/main, or an ancestor whose commit is at
+most 24 hours old. Exact matches remain eligible regardless of commit age.
+Dirty trees, feature branches, local/divergent commits and older ancestors are
+rejected. No eligible anchor prints an onboarding-sync --force repair command.
+It never selects the invoking
 session's checkout. No eligible anchor means failure before writing settings.
 The selected checkout supplies both the registration definitions and runtime.
 ORGIAST_REPO remains an explicit override for installation and isolated tests.

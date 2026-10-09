@@ -36,13 +36,22 @@ function selectAnchor() {
   for (const candidate of [path.join(home, '.claude', 'nightly-repo'), path.join(home, 'orgiast-claude-rules')]) {
     try {
       const git = (...args) => execFileSync('git', ['-C', candidate, ...args], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-      if (git('branch', '--show-current') !== 'main' || git('status', '--porcelain')) continue;
-      if (git('rev-list', '--count', 'origin/main..HEAD') !== '0') continue;
+      const branch = git('branch', '--show-current');
+      if ((branch && branch !== 'main') || git('status', '--porcelain')) continue;
+      const head = git('rev-parse', 'HEAD');
+      const main = git('rev-parse', 'refs/remotes/origin/main');
+      if (head !== main) {
+        // nightly-bootstrap follows origin/main with a detached HEAD. Allow a
+        // short sync delay, but never a local/divergent commit or a stale tree.
+        git('merge-base', '--is-ancestor', head, main);
+        const age = Date.now() / 1000 - Number(git('show', '-s', '--format=%ct', head));
+        if (!Number.isFinite(age) || age < 0 || age > 86400) continue;
+      }
       if (!fs.existsSync(path.join(candidate, 'tools/register-hooks.mjs'))) continue;
       return candidate;
-    } catch { /* missing/ZIP/working checkout is not a clean main anchor */ }
+    } catch { /* missing/ZIP/divergent checkout is not a clean main anchor */ }
   }
-  throw new Error('clean main の nightly-repo / orgiast-claude-rules がありません。専用同期 checkout を用意してください');
+  throw new Error(`clean な main / detached HEAD の同期 checkout がありません。自己修復: node "${path.join(scriptRepo, 'tools/onboarding-sync.mjs')}" --force`);
 }
 let repo;
 try { repo = selectAnchor(); } catch (e) { console.error(e.message); process.exit(1); }

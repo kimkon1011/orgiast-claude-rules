@@ -66,6 +66,40 @@ jobs:
             Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'clean-install-logs\converge-pr.log')
           if ($LASTEXITCODE -ne 0) { throw "setup.mjs --converge failed with exit code $LASTEXITCODE" }
 
+      - name: Register hooks from an automatically selected detached nightly checkout
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:Path = @(
+            [Environment]::GetEnvironmentVariable('Path', 'Machine'),
+            [Environment]::GetEnvironmentVariable('Path', 'User'),
+            (Join-Path $env:USERPROFILE '.local\bin')
+          ) -join ';'
+          Remove-Item Env:ORGIAST_REPO -ErrorAction SilentlyContinue
+          Remove-Item Env:ORGIAST_HOME -ErrorAction SilentlyContinue
+          $nightly = Join-Path $env:USERPROFILE '.claude\nightly-repo'
+          git clone --no-hardlinks --no-checkout . $nightly
+          if ($LASTEXITCODE -ne 0) { throw 'nightly fixture clone failed' }
+          # Model the PR commit as the fetched main tip, then use bootstrap's checkout command.
+          $tip = git rev-parse HEAD
+          git -C $nightly update-ref refs/remotes/origin/main $tip
+          if ($LASTEXITCODE -ne 0) { throw 'nightly main ref setup failed' }
+          git -C $nightly checkout --detach origin/main
+          if ($LASTEXITCODE -ne 0) { throw 'nightly detached checkout failed' }
+          if (git -C $nightly branch --show-current) { throw 'nightly fixture is not detached' }
+          if (git -C $nightly status --porcelain) { throw 'nightly fixture is dirty' }
+          node '.\tools\register-hooks.mjs' --hooks-only 2>&1 |
+            Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'clean-install-logs\register-detached.log')
+          if ($LASTEXITCODE -ne 0) { throw 'detached nightly registration failed' }
+          $settings = Get-Content (Join-Path $env:USERPROFILE '.claude\settings.json') -Raw | ConvertFrom-Json
+          $commands = @($settings.hooks.SessionStart) | ForEach-Object { @($_.hooks) } | ForEach-Object { $_.command }
+          $expected = Join-Path $nightly 'tools\onboarding-sync.mjs'
+          if (-not ($commands | Where-Object { $_.Contains($expected) })) {
+            throw 'registrar did not select the detached nightly anchor'
+          }
+          node --test tools/register-hooks.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'registrar regression tests failed' }
+
       - name: Verify installed behavior with Windows PowerShell 5.1
         shell: powershell
         run: |

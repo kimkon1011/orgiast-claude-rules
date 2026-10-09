@@ -149,7 +149,13 @@ try {
                         & $git.Source -C $repo reset --hard origin/main
                         if ($LASTEXITCODE -ne 0) { throw "git reset終了コード=$LASTEXITCODE" }
                         if (Test-NightlyTreeClean $repo) {
-                            & $git.Source -C $repo clean -qfd -e scratch/
+                            $excludesHelper = Join-Path $PSScriptRoot 'nightly-rescue.mjs'
+                            if (-not (Test-Path -LiteralPath $excludesHelper)) { $excludesHelper = Join-Path $repo 'tools\nightly-rescue.mjs' }
+                            $excludesJson = & node $excludesHelper --clean-excludes
+                            if ($LASTEXITCODE -ne 0) { throw 'clean exclusions unavailable; tree preserved' }
+                            $cleanArgs = @('clean', '-qfd')
+                            foreach ($excluded in ($excludesJson | ConvertFrom-Json)) { $cleanArgs += @('-e', $excluded) }
+                            & $git.Source -C $repo @cleanArgs
                             if ($LASTEXITCODE -ne 0) { throw "git clean終了コード=$LASTEXITCODE" }
                         }
                     }
@@ -238,6 +244,27 @@ try {
           } catch {
             Write-NightlyLog '自己更新' ("warn:run-hidden.vbs更新 " + $_.Exception.Message)
           }
+        }
+
+        # The existing bootstrap self-update brings this block in on the next tick.
+        # Update only an already-installed hourly task script, from a verified clean main.
+        if ($mutexAcquired -and $env:ORGIAST_NIGHTLY_NO_SELF_UPDATE -ne '1' -and
+            -not $script:blockedNightlyTrees.ContainsKey($repo) -and $headSha -and $headSha -eq $remoteSha) {
+            $syncSource = Join-Path $repo 'tools\sync-orgiast-main.ps1'
+            $syncInstalled = Join-Path $HOME '.claude\tools\sync-orgiast-main.ps1'
+            if ((Test-Path -LiteralPath $syncSource -PathType Leaf) -and (Test-Path -LiteralPath $syncInstalled -PathType Leaf)) {
+                $syncTemp = $syncInstalled + '.new-' + $PID
+                try {
+                    if ((Get-NightlyFileSha256 $syncSource) -ne (Get-NightlyFileSha256 $syncInstalled)) {
+                        Copy-Item -LiteralPath $syncSource -Destination $syncTemp -Force
+                        Move-Item -LiteralPath $syncTemp -Destination $syncInstalled -Force
+                        Write-NightlyLog 'SYNC_SELF_UPDATE' ('sync-orgiast-main.ps1 updated ' + $shortHead)
+                    }
+                } catch {
+                    Remove-Item -LiteralPath $syncTemp -Force -ErrorAction SilentlyContinue
+                    Write-NightlyLog 'SYNC_SELF_UPDATE_FAILED' $_.Exception.Message
+                }
+            }
         }
 
         $targetCandidate = if ([IO.Path]::IsPathRooted($Target)) { $Target } else { Join-Path $repo $Target }

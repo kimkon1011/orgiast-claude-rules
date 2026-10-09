@@ -41,6 +41,30 @@ function inputContainsTarget(input, target) {
   return false;
 }
 
+const READ_ONLY_SEGMENTS = [
+  /^gh\s+pr\s+(?:view|checks|diff|list|status)\b/,
+  /^gh\s+(?:issue\s+(?:view|list)|run\s+(?:list|view)|workflow\s+(?:list|view)|repo\s+view|release\s+(?:view|list)|auth\s+status)\b/,
+  /^git\s+(?:status|log|diff|show|rev-parse|ls-files|branch|remote)\b/,
+  /^vercel\s+(?:inspect|ls|whoami|logs)\b/,
+  /^(?:cat|head|tail|ls|wc|grep|rg|jq|file|stat|type|dir|Get-Content|Select-String)\b/,
+  /^(?:gh\s+api|curl)\b/,
+];
+const WRITE_FLAGS = /(?:-X\s+|--method[=\s]|--raw-field|--input|-f\s+|-F\s+|--field\s+|--form\b|-d\s+|--data\b|-T\s+|--upload\b)/;
+
+function readOnlySegment(segment) {
+  const stripped = segment.replace(/^(?:[A-Za-z_]\w*=(?:"[^"]*"|'[^']*'|\S+)\s+)+/, '').trim();
+  if (!stripped || /\$\(|`/.test(stripped)) return false;
+  const bare = stripped.replace(/2>&1|2>\s*(?:\/dev\/null|\$null|NUL)\b/g, ' ');
+  if (/>|\btee\b/.test(bare)) return false;
+  if (/^(?:gh\s+api|curl)\b/.test(bare) && WRITE_FLAGS.test(bare)) return false;
+  return READ_ONLY_SEGMENTS.some(pattern => pattern.test(bare));
+}
+
+export function isReadOnlyCommand(command) {
+  const parts = String(command ?? '').split(/\r?\n|&&|\|\||[;|&]/).map(part => part.trim()).filter(Boolean);
+  return parts.length > 0 && parts.every(readOnlySegment);
+}
+
 export function evaluateHandoffRegret(transcriptRaw, finalText = '') {
   const entries = String(transcriptRaw).split(/\r?\n/).flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } });
   const handedOff = new Map();
@@ -51,6 +75,7 @@ export function evaluateHandoffRegret(transcriptRaw, finalText = '') {
     if (block) for (const target of absolutePaths(block)) if (!handedOff.has(target)) handedOff.set(target, index);
     for (const use of blocks(entry, 'tool_use')) {
       if (!TOOL_NAMES.has(use.name) || !use.id) continue;
+      if ((use.name === 'Bash' || use.name === 'PowerShell') && isReadOnlyCommand(use.input?.command)) continue;
       const targets = [...handedOff].filter(([target, handoffIndex]) => handoffIndex < index && inputContainsTarget(use.input, target)).map(([target]) => target);
       if (targets.length) uses.set(use.id, { targets, index });
     }

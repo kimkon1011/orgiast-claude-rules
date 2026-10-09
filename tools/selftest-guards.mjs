@@ -88,7 +88,7 @@ test('register-hooks: BOM付き settings.json でも登録でき、BOM が除去
   const temp = makeTempHome('orgiast-settings-bom-test-'); const claude = path.join(temp, '.claude'); fs.mkdirSync(claude, { recursive: true });
   const file = path.join(claude, 'settings.json'); fs.writeFileSync(file, '\uFEFF{"hooks":{}}');
   const r = run('register-hooks.mjs', undefined, ['--hooks-only'], { ORGIAST_HOME: temp, ORGIAST_REPO: repo }); const data = fs.readFileSync(file);
-  assert(r.status === 0 && r.stdout.includes('追加'), r.stdout || r.stderr); assert(!data.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf])), 'BOMが残っている'); JSON.parse(data.toString('utf8'));
+  assert(r.status === 0 && r.stdout.includes('期待集合へ収束'), r.stdout || r.stderr); assert(!data.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf])), 'BOMが残っている'); JSON.parse(data.toString('utf8'));
 });
 test('register-hooks: 旧PCを .mjs へ移行し、独自設定を保ったまま冪等', () => {
   const temp = makeTempHome('orgiast-hooks-upgrade-test-'); const claude = path.join(temp, '.claude'); fs.mkdirSync(claude, { recursive: true });

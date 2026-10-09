@@ -8,6 +8,7 @@ import { PassThrough } from 'node:stream';
 import { main, parseArgs, createClient, waitForReply, acquireLock, LOCK_MS, readInbox, findPriorReply, resolveRemoteName } from './fleet-mail.mjs';
 import { main as register } from './register-fleet-mail.mjs';
 import { consentCommand } from './fleet-agent.mjs';
+import { listDecisions, markDecisions, queuePath } from './pending-decisions.mjs';
 
 function fixture(t, configured = true) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-mail-test-'));
@@ -267,4 +268,59 @@ test('findPriorReply treats a damaged inbox file as no record', t => {
   assert.equal(findPriorReply(f.dir, 'mail-9'), null);
   fs.writeFileSync(path.join(f.dir, 'fleet-inbox', 'mail-9.json'), JSON.stringify({ id: 'mail-9', status: 'done', resultAt: '2026-10-01T00:00:00Z' }));
   assert.deepEqual(findPriorReply(f.dir, 'mail-9'), { at: '2026-10-01T00:00:00Z', action: 'inbox-done' });
+});
+
+for (const [why, body, subject] of [
+  ['  [判断依頼] 見積承認', '詳細', '見積承認'],
+  ['', '  [判断依頼] 本文の件名\n詳細', '本文の件名'],
+  ['優先する件名', '[判断依頼] 本文', '優先する件名'],
+  ['[判断依頼] ', '[判断依頼] 本文の件名\n詳細', '本文の件名'],
+]) {
+  test(`decision note uses subject ${JSON.stringify(why)} / ${JSON.stringify(body)}`, async t => {
+    const f = fixture(t);
+    f.deps.request = async () => ({ messages: [mail({ why, body })] });
+    assert.equal(await main(['--poll'], f.deps), 0);
+    const decisions = listDecisions({ home: f.home });
+    assert.equal(decisions.length, 1);
+    assert.equal(decisions[0].source, `fleet-mail:other-PC:${mail().id}`);
+    assert.equal(decisions[0].text, `[判断依頼] ${subject} / from=other-PC id=${mail().id}`);
+    assert.equal(decisions[0].status, 'pending');
+  });
+}
+test('ordinary notes and marked prompts do not create decisions', async t => {
+  const f = fixture(t);
+  f.deps.request = async kind => kind === 'mail-poll' ? { messages: [mail(), mail({ id: 'mail-prompt', kind: 'prompt', why: '[判断依頼] 確認' })] } : { mail: {} };
+  await main(['--poll'], f.deps);
+  assert.deepEqual(listDecisions({ home: f.home }), []);
+});
+test('repeated decision note stays unique, including an already batched source', async t => {
+  const f = fixture(t);
+  f.deps.request = async () => ({ messages: [mail({ why: '[判断依頼] 承認' })] });
+  await main(['--poll'], f.deps);
+  await main(['--poll'], f.deps);
+  const decisions = listDecisions({ home: f.home });
+  assert.equal(decisions.length, 1);
+  markDecisions([decisions[0].id], { home: f.home, status: 'batched' });
+  // Exercise source deduplication even when local mail receipt tracking was lost.
+  fs.unlinkSync(path.join(f.dir, '.fleet-mail-processed'));
+  fs.unlinkSync(path.join(f.dir, 'fleet-inbox', `${mail().id}.json`));
+  await main(['--poll'], f.deps);
+  assert.deepEqual(listDecisions({ home: f.home }), [{ ...decisions[0], status: 'batched' }]);
+});
+test('decision text is limited to 200 characters', async t => {
+  const f = fixture(t);
+  const why = '[判断依頼] ' + '件'.repeat(300);
+  f.deps.request = async () => ({ messages: [mail({ why })] });
+  await main(['--poll'], f.deps);
+  assert.equal(listDecisions({ home: f.home })[0].text, `${why} / from=other-PC id=${mail().id}`.slice(0, 200));
+});
+test('decision storage failure is logged without stopping receipt of the batch', async t => {
+  const f = fixture(t);
+  fs.mkdirSync(queuePath({ home: f.home }));
+  f.deps.request = async () => ({ messages: [mail({ why: '[判断依頼] 承認' }), mail({ id: 'mail-next' })] });
+  assert.equal(await main(['--poll'], f.deps), 0);
+  assert.equal(readInbox(f.home).length, 2);
+  const failure = JSON.parse(fs.readFileSync(path.join(f.dir, 'fleet-mail-decision-intake-failed.jsonl'), 'utf8'));
+  assert.equal(failure.id, mail().id);
+  assert.ok(failure.error);
 });

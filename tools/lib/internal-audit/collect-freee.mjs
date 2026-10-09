@@ -1,10 +1,11 @@
 import { createHmac, randomBytes } from 'node:crypto';
-import postgres from 'postgres';
 import { DAY, dateOnly, getJson, maskNumbers, auditError } from './common.mjs';
 export const COMPANY_ID = 11975741;
 // The shared getAccessToken refreshes OAuth and UPDATEs the database. Audit must not do either.
 export async function getReadOnlyToken(databaseUrl) {
   if (!databaseUrl) throw auditError('freee 未接続: PURCHASING_APP_DATABASE_URL がありません');
+  // CI runs `node --test` without `npm install`; load the driver only when a live token is needed (same as lib/freee-auth.mjs).
+  const { default: postgres } = await import('postgres');
   const sql = postgres(databaseUrl, { max: 1, ssl: 'require', connect_timeout: 15, idle_timeout: 5,
     connection: { statement_timeout: 20000, default_transaction_read_only: 'on' }, onnotice: () => {} });
   try {

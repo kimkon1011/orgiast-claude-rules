@@ -2,7 +2,7 @@ import { getDriveToken, driveApi } from '../drive-auth.mjs';
 import { upload } from '../../drive-upload.mjs';
 import { auditError } from './common.mjs';
 
-export async function uploadReport(file, { getToken = getDriveToken, api = driveApi, uploadFile = upload, keyPath } = {}) {
+export async function uploadReport(file, { getToken = getDriveToken, api = driveApi, uploadFile = upload, keyPath, name } = {}) {
   const as = 'kim@orgiast.jp';
   const token = await getToken({ impersonate: as, keyPath });
   const url = new URL('https://www.googleapis.com/drive/v3/files');
@@ -18,5 +18,5 @@ export async function uploadReport(file, { getToken = getDriveToken, api = drive
     folder = created.id;
   }
   if (!folder) throw auditError('レポートフォルダID未取得');
-  return uploadFile({ file, folder, as, keyPath });
+  return uploadFile({ file, folder, as, keyPath, name });
 }

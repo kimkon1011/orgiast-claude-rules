@@ -237,7 +237,7 @@ export async function main(argv = process.argv.slice(2)) {
     // Replays may discover public URLs, but never advance freee/admin/sharing baselines.
     await writePrivate(path.join(stateDir, 'state.json'), state, secrets);
     if (options.notify) {
-      const location = await reportLocation(options.out ? path.resolve(options.out) : daily, { keyPath });
+      const location = await reportLocation(options.out ? path.resolve(options.out) : daily, { keyPath, date });
       const result = await notifyKim(safeText(notificationText(findings, location, date), secrets), { home: defaultHome, token, webhookFallback: false });
       if (result.delivered !== 'dm') throw auditError('レポート保存済み。kim への DM 配信失敗');
     }

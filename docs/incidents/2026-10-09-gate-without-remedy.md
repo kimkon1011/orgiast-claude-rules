@@ -112,7 +112,7 @@ A: 全37本にliteral `GATE_CONTRACT`。CIは独立探索で契約漏れ・repo-
 
 B: 禁止lintを追加し実案内5行を修正。C: GASの実テンプレート、Nextの実installer＋台帳、autopilotの推奨codex-do、session-closeの閉じ際、公開Docリンクをfixtureで再現。方式B・新規/既存PCのkeyserve配布は#667の回帰テストを維持。外部Google/Discord本番投稿をCIで行ったとは主張しない。
 
-D: 共通corpusと複合書込の負例。E: register-hooksで新規/既存のPreToolUse・単独Stopを共通wrapperへ収束、集約Stopは各子結果へ適用。新ゲートはmanifestのdistributedAt/denyAfterと各PCの初回受領日時の両方で7日間warn。pilotHostsは `kim-PC`（実hostnameとの一致は未確認）。既存37本はlegacy denyのまま。未宣言/不正manifestはwarn。
+D: 共通corpusと複合書込の負例。E: register-hooksで新規/既存のPreToolUse・単独Stopを共通wrapperへ収束、集約Stopは各子結果へ適用。新ゲートはmanifestのdistributedAt/denyAfterと各PCの初回受領日時の両方で7日間warn。pilotHostsは `kim-PC` と正本 `fleet-pc-map.json` に実測記録のあるhostname（DESKTOP-2D0R4LI）。既存37本はlegacy denyのまま。未宣言/不正manifestはwarn。
 
 F: PC名・ゲート名・remedy参照とavailable/missing/manualだけを既存notify-kimへ送る。全PC配布のcost-reporter通知経路を優先し、既存webhookをfallbackとして利用。各PCの個人Discord IDをkimのIDと取り違えてDMしない。理由本文・URL・鍵値・会話は送らない。gate×PC×UTC日で排他作成し1日1回、未達はローカル記録と診断コマンドを表示。通知不能のPCで配送成功を保証することはできず、全PCへの実配送は未確認。
 

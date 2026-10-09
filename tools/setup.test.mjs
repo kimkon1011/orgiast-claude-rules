@@ -10,7 +10,7 @@ const toolsDir = path.dirname(fileURLToPath(import.meta.url));
 const setup = path.join(toolsDir, 'setup.mjs');
 const temp = (name) => fs.mkdtempSync(path.join(os.tmpdir(), name));
 const write = (file, value) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, value); };
-const run = (args) => spawnSync(process.execPath, [setup, ...args], { encoding: 'utf8' });
+const run = (args) => spawnSync(process.execPath, [setup, ...args], { encoding: 'utf8', env: { ...process.env, ORGIAST_REPO: path.dirname(toolsDir) } });
 const manifest = (items) => ({ version: 1, items });
 const item = (id, type, spec, severity = 'required', extra = {}) => ({ id, type, severity, spec, description: id, ...extra });
 

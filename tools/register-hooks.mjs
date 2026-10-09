@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 let wrapRegisteredGates = () => 0;
 let gateRuntimeReady = false;
 try { ({ wrapRegisteredGates } = await import('./gate-hook-runner.mjs')); gateRuntimeReady = true; } catch { /* 同期途中でも既存登録を維持 */ }
@@ -29,7 +30,29 @@ const home = process.env.ORGIAST_HOME || os.homedir();
 // 2026-09-14: ~/orgiast-claude-rules が stale で新 hook(hook-budget-check) が無言で未登録になった。
 // 実行中スクリプトのツリーを基準にし、実行した版の hook を同じ版のツリーから登録する。
 const scriptRepo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const repo = process.env.ORGIAST_REPO || scriptRepo;
+// Only dedicated, automatically refreshed checkouts are eligible by default.
+function selectAnchor() {
+  if (process.env.ORGIAST_REPO) return path.resolve(process.env.ORGIAST_REPO);
+  for (const candidate of [path.join(home, '.claude', 'nightly-repo'), path.join(home, 'orgiast-claude-rules')]) {
+    try {
+      const git = (...args) => execFileSync('git', ['-C', candidate, ...args], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+      if (git('branch', '--show-current') !== 'main' || git('status', '--porcelain')) continue;
+      if (git('rev-list', '--count', 'origin/main..HEAD') !== '0') continue;
+      if (!fs.existsSync(path.join(candidate, 'tools/register-hooks.mjs'))) continue;
+      return candidate;
+    } catch { /* missing/ZIP/working checkout is not a clean main anchor */ }
+  }
+  throw new Error('clean main の nightly-repo / orgiast-claude-rules がありません。専用同期 checkout を用意してください');
+}
+let repo;
+try { repo = selectAnchor(); } catch (e) { console.error(e.message); process.exit(1); }
+// Definitions and runtime must come from the selected anchor too.
+if (path.resolve(repo) !== scriptRepo) {
+  const result = (await import('node:child_process')).spawnSync(process.execPath,
+    [path.join(repo, 'tools/register-hooks.mjs'), ...process.argv.slice(2)],
+    { stdio: 'inherit', env: { ...process.env, ORGIAST_REPO: repo } });
+  process.exit(result.status ?? 1);
+}
 const geminiKey = process.env.ORGIAST_GEMINI_KEY || readGeminiKey();
 const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 15);
 const skippedNames = [];
@@ -147,6 +170,8 @@ try {
   const settingsFile = path.join(home, '.claude', 'settings.json');
   const settingsHadBom = fs.existsSync(settingsFile) && fs.readFileSync(settingsFile, 'utf8').startsWith('\uFEFF');
   const settings = expectedJson ? {} : load(settingsFile);
+  const before = JSON.stringify(settings);
+  const originalHooks = structuredClone(settings.hooks || {});
   let added = 0;
   let policyRepaired = 0;
   let costLoopMigrated = 0;
@@ -314,13 +339,43 @@ try {
   // 旧PCは hook が `powershell -NoProfile -File ...ps1` で登録され、実行ポリシーで無音死している。
   policyRepaired = repairPowerShellExecutionPolicy(settings.hooks);
   added += policyRepaired;
-  for (const groups of Object.values(settings.hooks)) for (const group of groups) for (const hook of group.hooks || []) {
-    const old = String(hook.command || '');
-    const updated = old.replace(/"[^"\r\n]*[\\/]([\w-]+\.mjs)"/g, (full, name) =>
-      fs.existsSync(path.join(repo, 'tools', name)) ? `"${path.join(repo, 'tools', name)}"` : full);
-    if (updated !== old) { hook.command = updated; added++; }
-  }
   added += wrapRegisteredGates(settings, repo);
+  if (!expectedJson) {
+    const expected = JSON.parse(execFileSync(process.execPath, [fileURLToPath(import.meta.url), '--expected-json'], {
+      encoding: 'utf8', env: { ...process.env, ORGIAST_REPO: repo }, windowsHide: true,
+    }));
+    const known = new Set(fs.readdirSync(path.join(repo, 'tools')).map(name => name.replace(/\.(mjs|ps1)$/, '')));
+    const managed = command => {
+      const text = String(command || '').replace(/\\/g, '/');
+      return [...text.matchAll(/(?:"([^"\r\n]+)"|'([^'\r\n]+)'|([^\s"']+))/g)].some(match => {
+        const file = match[1] || match[2] || match[3];
+        const name = path.posix.basename(file).replace(/\.(mjs|ps1)$/, '');
+        return /\/tools\//.test(file) && (known.has(name) || /\/(?:orgiast-main|orgiast-claude-rules|nightly-repo)\/tools\//.test(file));
+      });
+    };
+    // Keep custom hooks from the original input: do not migrate, wrap or rewrite
+    // a user's script merely because its basename matches one of our tools.
+    const retained = {};
+    for (const [event, groups] of Object.entries(originalHooks)) {
+      if (!Array.isArray(groups)) continue;
+      retained[event] = groups.flatMap(group => {
+        const hooks = (group.hooks || []).filter(hook => !managed(hook.command));
+        return hooks.length ? [{ ...group, hooks }] : [];
+      });
+    }
+    // Preserve supported legacy migrations outside tools/ (old installer copies).
+    for (const [event, groups] of Object.entries(retained)) {
+      for (const group of groups) group.hooks = group.hooks.filter(hook =>
+        !/(?:ai-news-inject|gtasks-pending-notice|purge-hidden-sessions|purge-closed-sessions|session-list-tidy)\.(?:mjs|ps1|py)(?:["'\s]|$)/.test(hook.command || '') && !/(?:cost-loop|onboarding-sync|verify-before-done-detector)\.ps1(?:["'\s]|$)/.test(hook.command || ''));
+      retained[event] = groups.filter(group => group.hooks.length);
+    }
+    repairPowerShellExecutionPolicy(retained);
+    // Retain historical timeout repair for copied hooks, without changing paths.
+    for (const groups of Object.values(retained)) for (const [name, timeout] of permanentTimeouts) setTimeoutFor(groups, name, timeout);
+    settings.hooks = retained;
+    for (const [event, groups] of Object.entries(expected.hooks)) settings.hooks[event] = [...(retained[event] || []), ...groups];
+    added = JSON.stringify(settings) === before ? 0 : 1;
+  }
   // Reporting uses exactly the registrar's expected set without touching user files.
   if (expectedJson) { console.log(JSON.stringify({ hooks: settings.hooks, skippedNames })); process.exit(0); }
   // 差分が無い時は書かない(日次実行で .bak が積み上がるのを防ぐ)
@@ -328,7 +383,7 @@ try {
   if (settingsHadBom) console.log('[register-hooks] settings.json の BOM を除去しました');
   if (policyRepaired || costLoopMigrated) console.log(`hook修復: 実行ポリシー${policyRepaired}件 / cost-loop移行${costLoopMigrated}件`);
   if (hooksOnly) {
-    if (added) console.log(`  [OK] settings.json に hook を ${added} 件追加(バックアップ済)`);
+    if (added) console.log(`  [OK] settings.json の hook を期待集合へ収束(バックアップ済)`);
     else if (skippedNames.length) console.log(`  [注意] 登録済み(変更なし)。ただし ${skippedNames.length} 本は repo に無く未登録`);
     else console.log('  [OK] hook は既に登録済み(変更なし)');
     if (skippedNames.length) console.log(`[注意] hook ${skippedNames.length} 本が repo に見つからず skip: ${skippedNames.join(', ')}`);

@@ -122,3 +122,17 @@ test('monitor hides matched manual aliases but keeps every reported OS user and 
   const rows=[{pcName:'手書PC'},healthy(),{...healthy(),username:'bob'},{pcName:'unknown'},{pcName:'unknown'},{}];
   assert.deepEqual(convergenceTargets(rows,roster).map(x=>x.username||x.pcName),['alice','bob','unknown']);
 });
+
+test('missing names include definition drift and unavailable tools without exposing command arguments', t => {
+  const h = home(t);
+  const hook = { type: 'command', command: 'node "/repo/tools/gate-hook-runner.mjs" "/repo/tools/check.mjs" --secret=VALUE' };
+  const expectedHooks = { hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [hook] }] }, skippedNames: ['missing.mjs'] };
+  fs.writeFileSync(path.join(h, '.claude/settings.json'), JSON.stringify({ hooks: expectedHooks.hooks }));
+  let row = collectConvergence({ home: h, repo, expectedHooks });
+  assert.deepEqual(row.hookMissingNames, ['unavailable:missing.mjs']);
+  fs.writeFileSync(path.join(h, '.claude/settings.json'), JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Edit', hooks: [hook] }] } }));
+  row = collectConvergence({ home: h, repo, expectedHooks });
+  assert.deepEqual(row.hookMissingNames, ['PreToolUse:check.mjs', 'unavailable:missing.mjs']);
+  assert.equal(row.hookMissing, 2);
+  assert.equal(JSON.stringify(row).includes('VALUE'), false);
+});

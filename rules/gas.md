@@ -67,3 +67,7 @@ function dropNulls(o) {
 - jsdomの `virtualConsole` で `jsdomError` と `console.error` を拾い、1件でもあればexit 1にする。単体テストpass・API正常・データ一致だけで画面が動くと判断せず、Claude側で検証を完結する。
 
 **実害（2026-09-01）**: プレビュー更新の `forecastPreview.textContent = ...` が入力のたびにReferenceErrorになり、後続の追加ボタン有効化へ到達しなかった。単体テスト6ファイルと58件のデータ検証はすべて正常でも、既定の操作導線は使えなかった。
+
+## 制作アプリの本番反映と GitHub 同期
+
+- 制作アプリの本番 GAS へ clasp push したら同じターンで GitHub master へも push（ff 不可なら PR）。GitHub push 前に隔離ディレクトリで clasp pull し、本番と同期対象 src の差分 0 を確認する。`gas-overlay-push.mjs` は read-back 後に専用 clone で src を commit → `git push origin HEAD` → `git push origin HEAD:master`（force 禁止）を実行する。JSON の `gitSync.status` が `failed` なら GAS 成功と GitHub 未同期を分けて記録し、同期を完了するまで完了扱いにしない。共有ツリーの index は触らない。

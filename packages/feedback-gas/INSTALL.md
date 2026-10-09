@@ -68,8 +68,8 @@ Web アプリとして未デプロイの場合は、GAS エディタで「デプ
 
 `Admin_setFeedbackRelay(url, secret, appName, formUrl, ownerDiscordId)` を1回だけ実行します。引数は以下の通りです。
 
-- `url`: 全社共通の中継エンドポイント URL（既存の GAS アプリで動いている値を流用。分からなければ kim に確認）
-- `secret`: 中継の共有シークレット（同上）
+- `url`: 全社共通の中継エンドポイント URL（既存GASの Script Properties `FEEDBACK_RELAY_URL` を利用。設定済みアプリの権限が無ければ、秘密値が不要な方式Bを選び `node tools/onboarding-sync.mjs --keys-only --force` で `FEEDBACK_SHARED_FORM_URL` を取得）
+- `secret`: 設定済みGASの Script Properties `FEEDBACK_RELAY_SECRET`（未取得なら方式Bを選択。全員配布を前提にしない）
 - `appName`: このアプリの表示名（例: `"予約管理アプリ"`）。通知やフォームの案内文に出ます
 - `formUrl`: 手順4で控えた `/exec` URL（各画面に「🐛 不具合・要望」リンクを置く場合に使う。省略可）
 - `ownerDiscordId`: このアプリを開発した人の Discord user ID（17〜20桁）。`FEEDBACK_OWNER_DISCORD_ID` として保存され、kim と開発者の両方へ DM するため必須

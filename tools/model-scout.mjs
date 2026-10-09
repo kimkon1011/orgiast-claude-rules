@@ -4,10 +4,10 @@ import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import { submitProposal } from './proposal-session.mjs';
 import { aggregateMeasurements } from './routing-table.mjs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
+import { readConfig, userHome } from './eval-harness.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { COST_PER_MILLION } from './llm-fallback.mjs';
 
@@ -74,8 +74,8 @@ export function selectCandidates(changes, models, routing) {
 export function enqueueCandidates(candidates, configFile, dryRun) {
   if (!candidates.length) return '評価候補なし';
   try {
-    const config = readJson(configFile, null);
-    if (!Array.isArray(config)) throw new Error('invalid config');
+    const config = readJson(configFile, []);
+    if (!Array.isArray(config) || config.some((x) => !x || typeof x.provider !== 'string' || typeof x.model !== 'string')) throw new Error('invalid config');
     for (const model of candidates) {
       const existing = config.find((x) => x.provider === 'openrouter' && x.model === model.id);
       if (existing?.skip) continue; // 人が明示的に止めた評価は復活させない。
@@ -85,9 +85,9 @@ export function enqueueCandidates(candidates, configFile, dryRun) {
     }
     if (!dryRun) writeAtomic(configFile, json(config));
     return candidates.some((m) => config.some((x) => x.provider === 'openrouter' && x.model === m.id && x.skip))
-      ? 'eval 追加は手動（tools/eval-providers.json: skip 指定あり）'
+      ? 'eval 追加は手動（~/.claude/eval/providers.local.json: skip 指定あり）'
       : dryRun ? 'eval 投入予定（dry-run）' : 'eval に投入済み';
-  } catch { return 'eval 追加は手動（tools/eval-providers.json: 読込・更新不可）'; }
+  } catch { return 'eval 追加は手動（~/.claude/eval/providers.local.json: 読込・更新不可）'; }
 }
 
 function candidateLine(model, action) {
@@ -151,7 +151,7 @@ export async function proposeEvaluated(candidates, { home, dryRun = false, resul
 }
 
 // eval --all の完了時にも呼ぶ。カタログ再取得や週次差分の再検出は不要。
-export async function proposeSavedEvaluations({ home = process.env.ORGIAST_HOME || os.homedir(), ...options } = {}) {
+export async function proposeSavedEvaluations({ home = process.env.ORGIAST_HOME || userHome(), ...options } = {}) {
   const state = readJson(path.join(home, '.claude', 'model-scout-state.json'), null);
   const routing = readJson(options.routingFile || path.join(HERE, 'routing-table.json'), null);
   const pending = (state?.pendingCandidates || []).map(candidate => ({ ...candidate,
@@ -162,8 +162,8 @@ export async function proposeSavedEvaluations({ home = process.env.ORGIAST_HOME 
   return proposeEvaluated(pending, { home, ...options });
 }
 
-export async function runScout({ home = process.env.ORGIAST_HOME || os.homedir(), dryRun = false, now = new Date(),
-  routingFile = path.join(HERE, 'routing-table.json'), configFile = path.join(HERE, 'eval-providers.json'),
+export async function runScout({ home = process.env.ORGIAST_HOME || userHome(), dryRun = false, now = new Date(),
+  routingFile = path.join(HERE, 'routing-table.json'), configFile = path.join(home, '.claude', 'eval', 'providers.local.json'),
   fetchImpl = globalThis.fetch, notify = notifyKim, log = console.log, submit = submitProposal, resultsFile } = {}) {
   const dir = path.join(home, '.claude'), stateFile = path.join(dir, 'model-scout-state.json');
   let notifyAttempted = false;
@@ -175,8 +175,7 @@ export async function runScout({ home = process.env.ORGIAST_HOME || os.homedir()
     const changes = detectChanges(models, previous, now);
     const { candidates, warnings } = selectCandidates(changes, models, readJson(routingFile, null));
     const action = enqueueCandidates(candidates, configFile, dryRun);
-    let config = [];
-    try { const loaded = readJson(configFile, []); if (Array.isArray(loaded)) config = loaded; } catch { /* enqueueCandidates の既存警告を維持する */ }
+    const config = readConfig({ overlayFile: configFile });
     // 既に週次差分を消費した候補も eval 完了時に再判定する（既存状態の移行も兼ねる）。
     const trackedIds = new Set([...(previous?.pendingCandidates || []).map(x => x.id), ...config.filter(x => x.provider === 'openrouter' && !x.skip).map(x => x.model), ...candidates.map(x => x.id)]);
     const skippedIds = new Set(config.filter(x => x.provider === 'openrouter' && x.skip).map(x => x.model));

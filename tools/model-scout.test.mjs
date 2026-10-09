@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { detectChanges, normalizeModels, selectCandidates, runScout, formatDm, main } from './model-scout.mjs';
 import { notifyKim } from './notify-kim.mjs';
-import { evaluationCost } from './eval-harness.mjs';
+import { evaluationCost, readConfig } from './eval-harness.mjs';
 import { runModelScoutStep } from './cost-weekly-improve.mjs';
 
 const now = new Date('2026-10-09T00:00:00Z');
@@ -16,13 +16,14 @@ function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-scout-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const dir = path.join(home, '.claude'); fs.mkdirSync(dir);
-  const routingFile = path.join(home, 'routing-table.json'), configFile = path.join(home, 'eval-providers.json');
+  const routingFile = path.join(home, 'routing-table.json'), configFile = path.join(dir, 'eval', 'providers.local.json');
   const baseline = model('vendor/current', 30, 0.00001, 0.00002), candidate = model('vendor/new');
   fs.writeFileSync(routingFile, JSON.stringify({ categories: { summarize: { provider: 'openrouter', model: baseline.id } } }));
+  fs.mkdirSync(path.dirname(configFile), { recursive: true });
   fs.writeFileSync(configFile, JSON.stringify([{ provider: 'openrouter', model: baseline.id, params: { temperature: 0 } }]));
   const notifications = [], output = [];
   return { home, dir, routingFile, configFile, baseline, candidate, notifications, output,
-    options: { home, routingFile, configFile, now, log: (s) => output.push(s),
+    options: { home, routingFile, now, log: (s) => output.push(s),
       fetchImpl: async (url) => { assert.equal(url, 'https://openrouter.ai/api/v1/models'); return { ok: true, json: async () => catalog([baseline, candidate]) }; },
       notify: async (text) => { notifications.push(text); return { delivered: 'dm' }; } } };
 }
@@ -92,7 +93,7 @@ test('dry-run は stdout のみ、DM・状態・Markdown・eval設定を変更�
   const f = fixture(t), before = fs.readFileSync(f.configFile, 'utf8');
   assert.equal(await main(['--once', '--dry-run'], f.options), 0);
   assert.equal(f.notifications.length, 0);
-  assert.deepEqual(fs.readdirSync(f.dir), []);
+  assert.deepEqual(fs.readdirSync(f.dir), ['eval']);
   assert.equal(fs.readFileSync(f.configFile, 'utf8'), before);
   assert.match(f.output.join('\n'), /eval 投入予定/);
 });
@@ -117,7 +118,7 @@ test('DM失敗時は差分を消費しない。次回のeval追加は冪等', as
 test('設定の破損は上書きせず、ファイル名付きの手動投入通知', async (t) => {
   const f = fixture(t); fs.writeFileSync(f.configFile, 'broken');
   const result = await runScout(f.options);
-  assert.match(result.dm, /eval 追加は手動（tools\/eval-providers.json/);
+  assert.match(result.dm, /eval 追加は手動（~\/\.claude\/eval\/providers\.local\.json/);
   assert.equal(fs.readFileSync(f.configFile, 'utf8'), 'broken');
 });
 test('skip済み候補を勝手に再開しない', async (t) => {
@@ -150,4 +151,61 @@ test('週次の偵察ステップは--once、dry-run伝播、承認時skip、失
 });
 test('未知のCLI引数もexit 0、APIを呼ばない', async () => {
   assert.equal(await main(['--unknown'], { log: () => {}, fetchImpl: () => assert.fail('called') }), 0);
+});
+
+test('scout creates the default user overlay and leaves repository JSON unchanged', async (t) => {
+  const f = fixture(t), repoFile = new URL('eval-providers.json', import.meta.url);
+  const before = fs.readFileSync(repoFile, 'utf8');
+  fs.rmSync(path.join(f.dir, 'eval'), { recursive: true });
+  const result = await runScout(f.options);
+  assert.match(result.action, /eval に投入済み/);
+  const expected = { provider: 'openrouter', model: f.candidate.id, costPerMillion: [1, 2] };
+  assert.deepEqual(JSON.parse(fs.readFileSync(f.configFile)), [expected]);
+  assert.equal(fs.readFileSync(repoFile, 'utf8'), before);
+  assert.deepEqual(readConfig({ overlayFile: f.configFile }).find((x) => x.model === f.candidate.id), expected);
+});
+
+test('missing overlay stays absent on dry-run', async (t) => {
+  const f = fixture(t);
+  fs.rmSync(path.join(f.dir, 'eval'), { recursive: true });
+  const result = await runScout({ ...f.options, dryRun: true });
+  assert.match(result.action, /eval 投入予定/);
+  assert.equal(fs.existsSync(path.join(f.dir, 'eval')), false);
+});
+
+test('overlay write failure reports the local path instead of claiming successful enqueue', async (t) => {
+  const f = fixture(t);
+  fs.rmSync(path.join(f.dir, 'eval'), { recursive: true });
+  fs.writeFileSync(path.join(f.dir, 'eval'), 'not a directory');
+  const result = await runScout(f.options);
+  assert.match(result.action, /providers\.local\.json: 読込・更新不可/);
+  assert.doesNotMatch(result.dm, /eval に投入済み/);
+  assert.equal(fs.readFileSync(path.join(f.dir, 'eval'), 'utf8'), 'not a directory');
+});
+
+test('既知のoverlay候補はeval完了後に提案し、skip上書きとdry-run無変更を守る', async (t) => {
+  const f = fixture(t), proposals = [];
+  fs.writeFileSync(f.routingFile, JSON.stringify({ categories: { summarize: { provider: 'openrouter', model: f.baseline.id, rate: 1 } } }));
+  fs.writeFileSync(path.join(f.dir, 'model-scout-state.json'), JSON.stringify(state([f.baseline, f.candidate])));
+  const candidateConfig = { provider: 'openrouter', model: f.candidate.id };
+  fs.writeFileSync(f.configFile, JSON.stringify([candidateConfig]));
+  fs.writeFileSync(path.join(f.dir, 'eval-results.jsonl'), JSON.stringify({
+    t: now.toISOString(), provider: 'openrouter', model: f.candidate.id,
+    byCategory: { summarize: { n: 3, graded: 3, pass: 3, errors: 0, truncated: 0 } }
+  }) + '\n');
+  const before = fs.readFileSync(f.configFile, 'utf8');
+  const options = { ...f.options, dryRun: true, submit: async (proposal, opts) => {
+    assert.equal(opts.dryRun, true); proposals.push(proposal); return { ok: true };
+  } };
+  const result = await runScout(options);
+  assert.equal(result.ok, true);
+  assert.equal(result.changes.length, 0);
+  assert.equal(result.proposed, 1);
+  assert.match(proposals[0].proposal.changes[0].before, /summarize: openrouter\/vendor\/current/);
+  assert.match(proposals[0].proposal.changes[0].after, /summarize: openrouter\/vendor\/new/);
+  assert.equal(fs.readFileSync(f.configFile, 'utf8'), before);
+  assert.equal(f.notifications.length, 0);
+  fs.writeFileSync(f.configFile, JSON.stringify([{ ...candidateConfig, skip: true }]));
+  assert.equal((await runScout(options)).proposed, 0);
+  assert.equal(proposals.length, 1);
 });

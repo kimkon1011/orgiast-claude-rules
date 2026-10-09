@@ -1,0 +1,158 @@
+{
+  "version": 1,
+  "pilotHosts": [
+    "kim-PC",
+    "DESKTOP-2D0R4LI"
+  ],
+  "gates": {
+    "askuser-selfcheck-gate": {
+      "rollout": "deny",
+      "legacy": true
+    },
+    "control-group-stop-gate": {
+      "rollout": "deny",
+      "legacy": true
+    },
+    "course-correction-gate": {
+      "rollout": "deny",
+      "legacy": true
+    },
+    "doc-link-drive-guard": {
+      "rollout": "deny",
+      "legacy": true
+    },
+    "external-state-claim-gate": {
+      "rollout": "deny",
+      "legacy": true
+    },
+    "feedback-form-gate": {
+      "rollout": "deny",
+      "legacy": true
+    },
+    "gh-handoff-gate": {
+      "rollout": "deny",
+      "legacy": true
+    },
+    "handoff-audit-gate": {
+      "rollout": "deny",
+      "legacy": true
+    },
+    "handoff-branch-coverage-gate": {
+      "rollout": "deny",
+      "legacy": true
+    },
+    "handoff-detail-guard": {
+      "rollout": "deny",
+      "legacy": true
+    },
+    "handoff-info-guard": {
+      "rollout": "deny",
+      "legacy": true
+    },
+    "handoff-investigation-gate": {
+      "rollout": "deny",
+      "legacy": true
+    },
+    "handoff-quality-gate": {
+      "rollout": "deny",
+      "legacy": true
+    },
+    "handoff-regret-gate": {
+      "rollout": "deny",
+      "legacy": true
+    },
+    "internal-recipient-gmail-guard": {
+      "rollout": "deny",
+      "legacy": true
+    },
+    "lane-abandonment-gate": {
+      "rollout": "deny",
+      "legacy": true
+    },
+    "live-artifact-read-gate": {
+      "rollout": "deny",
+      "legacy": true
+    },
+    "manual-request-evidence-gate": {
+      "rollout": "deny",
+      "legacy": true
+    },
+    "manual-request-fullsteps-gate": {
+      "rollout": "deny",
+      "legacy": true
+    },
+    "model-agent-guard": {
+      "rollout": "deny",
+      "legacy": true
+    },
+    "negative-claim-gate": {
+      "rollout": "deny",
+      "legacy": true
+    },
+    "next-action-gate": {
+      "rollout": "deny",
+      "legacy": true
+    },
+    "pr-handoff-gate": {
+      "rollout": "deny",
+      "legacy": true
+    },
+    "pretooluse-bash-delegation": {
+      "rollout": "deny",
+      "legacy": true
+    },
+    "pretooluse-delegation-warn": {
+      "rollout": "deny",
+      "legacy": true
+    },
+    "pretooluse-headless-background": {
+      "rollout": "deny",
+      "legacy": true
+    },
+    "pretooluse-lane-guard": {
+      "rollout": "deny",
+      "legacy": true
+    },
+    "report-length-gate": {
+      "rollout": "deny",
+      "legacy": true
+    },
+    "reported-symptom-gate": {
+      "rollout": "deny",
+      "legacy": true
+    },
+    "self-check-before-asking-guard": {
+      "rollout": "deny",
+      "legacy": true
+    },
+    "settings-quality-guard": {
+      "rollout": "deny",
+      "legacy": true
+    },
+    "stop-gate": {
+      "rollout": "deny",
+      "legacy": true
+    },
+    "stop-gate-runner": {
+      "rollout": "deny",
+      "legacy": true
+    },
+    "url-account-gate": {
+      "rollout": "deny",
+      "legacy": true
+    },
+    "url-format-guard": {
+      "rollout": "deny",
+      "legacy": true
+    },
+    "user-burden-gate": {
+      "rollout": "deny",
+      "legacy": true
+    },
+    "verify-before-done-detector": {
+      "rollout": "deny",
+      "legacy": true
+    }
+  },
+  "pilotHostsEvidence": "fleet-pc-map.json: kim-PC.hostname (2026-08-27 recorded observation)"
+}

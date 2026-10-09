@@ -777,3 +777,23 @@ test('DM 失敗でも検出したジョブと他の監視結果を失わず通�
   assert.match(message, /DM 通知に失敗: DM offline/); assert.match(message, /別ジョブ/);
   assert.equal(fs.existsSync(path.join(home, '.claude/auto-session/streak-watch-state.json')), false);
 });
+
+test('GAS 週次監査は夜間経路から呼ばれ、prime/dry-run と notifier を引き継ぐ', async t => {
+  const home = createTempHome(); t.after(() => removeDir(home));
+  const notify = async () => { throw new Error('unexpected DM'); };
+  let seen;
+  await runNightlyHealth({ home, prime: true, expectations: [], notify,
+    runTests: async () => healthyTests(), streakWatch: async () => ({ detected: [] }),
+    gasDrift: async options => { seen = options; return { status: 'dry-run' }; },
+  });
+  assert.equal(seen.home, home); assert.equal(seen.dryRun, true); assert.equal(seen.notify, notify);
+});
+
+test('GAS 監査エラーを異常として残し、他の夜間チェックは継続する', async t => {
+  const home = createTempHome(); t.after(() => removeDir(home)); let tested = false;
+  const result = await runNightlyHealth({ home, dryRun: true, expectations: [],
+    runTests: async () => { tested = true; return healthyTests(); },
+    streakWatch: async () => ({ detected: [] }), gasDrift: async () => { throw new Error('pull failed'); },
+  });
+  assert.equal(tested, true); assert.equal(result.anomalies[0].type, 'gas_master_drift_error');
+});

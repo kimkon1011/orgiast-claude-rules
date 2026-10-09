@@ -1,7 +1,7 @@
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, realpathSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -21,7 +21,7 @@ function toWindowsPath(path) {
 }
 
 before(() => {
-  root = mkdtempSync(join(tmpdir(), 'repair-task-paths-'));
+  root = realpathSync.native(mkdtempSync(join(tmpdir(), 'repair-task-paths-')));
 });
 
 after(() => {

@@ -4,7 +4,9 @@ import { runCheck } from './eval-exec-checks.mjs';
 import { isEntry } from './is-entry.mjs';
 import { rebuildRoutingTable } from './routing-table.mjs';
 import { activeDailyCooldown, markDailyProviderCooldown, isDailyQuotaResponse } from './lib/provider-daily-cooldown.mjs';
-const HERE = path.dirname(fileURLToPath(import.meta.url)); function userHome() { const h = os.homedir(), m = process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i); return process.env.USERPROFILE || m?.[1] || h; } const HOME = userHome(); const EVAL_DIR = path.join(HOME, '.claude', 'eval'); const TASKS = path.join(EVAL_DIR, 'tasks.jsonl'); const SEED = path.join(HERE, 'eval-tasks.seed.jsonl'); const SEED_SYNCED = path.join(EVAL_DIR, '.seed-synced.jsonl'); const RESULTS = path.join(HOME, '.claude', 'eval-results.jsonl');
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+export function userHome() { const h = os.homedir(), m = process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i); return process.env.USERPROFILE || m?.[1] || h; }
+const HOME = userHome(); const EVAL_DIR = path.join(HOME, '.claude', 'eval'); const TASKS = path.join(EVAL_DIR, 'tasks.jsonl'); const SEED = path.join(HERE, 'eval-tasks.seed.jsonl'); const SEED_SYNCED = path.join(EVAL_DIR, '.seed-synced.jsonl'); const RESULTS = path.join(HOME, '.claude', 'eval-results.jsonl');
 import { COST_PER_MILLION } from './llm-fallback.mjs';
 const PRICE = { ...COST_PER_MILLION, anthropic: [1, 5] };
 // model-scout が追加したモデルは、プロバイダ既定ではなく実際のモデル単価で採点する。
@@ -25,7 +27,21 @@ const PROVIDERS = {
 };
 const CONFIG_FILE = path.join(HERE, 'eval-providers.json');
 const args = process.argv.slice(2); const has = (x) => args.includes(x); function opt(n, d = '') { const i = args.indexOf(n); return i >= 0 && args[i + 1] ? args[i + 1] : d; }
-function readConfig() { try { return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')); } catch { return []; } }
+// ローカル候補は nightly-repo の reset --hard / clean の対象外に置く。
+export function readConfig({ configFile = CONFIG_FILE, overlayFile = path.join(EVAL_DIR, 'providers.local.json') } = {}) {
+  const read = (file) => {
+    try {
+      const entries = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if (!Array.isArray(entries) || entries.some((x) => !x || typeof x.provider !== 'string' || typeof x.model !== 'string')) return [];
+      return entries;
+    } catch { return []; }
+  };
+  const merged = new Map();
+  for (const entry of [...read(configFile), ...read(overlayFile)]) {
+    merged.set(JSON.stringify([entry.provider, entry.model]), entry);
+  }
+  return [...merged.values()];
+}
 function providerConfig(name, model = '') { return readConfig().find((x) => x.provider === name && (!model || x.model === model)) || {}; }
 function loadKey(name) { const P = PROVIDERS[name]; if (P.local) return 'local'; if (process.env[P.keyEnv]) return process.env[P.keyEnv]; const files = [path.join(HOME, '.claude', P.keyFile)]; if (name === 'gemini') files.unshift(path.join(HOME, '.gemini', '.env')); for (const f of files) try { for (const l of fs.readFileSync(f, 'utf8').split(/\r?\n/)) if (l.startsWith(P.keyEnv + '=')) return l.slice(P.keyEnv.length + 1).trim(); } catch {} return ''; }
 function readJsonl(f) { const out = []; try { for (const l of fs.readFileSync(f, 'utf8').split(/\r?\n/).filter(Boolean)) try { out.push(JSON.parse(l)); } catch {} } catch {} return out; }

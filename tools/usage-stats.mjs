@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isReadonlyCommand } from './readonly-command.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -181,6 +182,7 @@ export function classifyBashCommand(command) {
   if (extractInlineProgram(command)) return 'inline-program';
   if (heredoc.test(command) || /(?:^|\s)(?:>|>>)(?![>&])\s*[^\s;&|]+/.test(command)) return 'spec-authoring';
   if (/^\s*git(?:\s|$)/i.test(command)) return 'git';
+  if (isReadonlyCommand(command)) return 'read-only';
   if (/^\s*(?:cat|head|tail|sed\s+-n|grep|ls|wc|find)(?:\s|$)/i.test(command) && !/(?:^|[^<])>{1,2}/.test(command)) return 'read-only';
   return 'other';
 }
@@ -188,6 +190,7 @@ export function isReadOnlyToolUse(name, input = {}) {
   if (['Read', 'Grep', 'Glob'].includes(name)) return true;
   if (!['Bash', 'PowerShell'].includes(name)) return false;
   const command = String(input?.command || '');
+  if (isReadonlyCommand(command)) return true;
   if (/(?:^|[^<])>{1,2}|\brm\s|\bmv\s|\bcp\s|\bmkdir\s|\binstall\b|\bpush\b|\bdeploy\b|\bcodex\b|\bnpm\s|\bgit\s+commit\b|\bgit\s+push\b|\bclasp\b/i.test(command)) return false;
   const allowed = /^(?:cat|head|tail|sed|grep|rg|ls|find|wc|stat|jq|awk|cut|sort|uniq|echo|which|type)(?:\s|$)|^node\s+--test(?:\s|$)|^git\s+(?:status|log|diff|show|rev-parse|branch)(?:\s|$)/i;
   const segments = command.split(/&&|\|\||;|\|(?!\|)/).map((x) => x.trim()).filter(Boolean);

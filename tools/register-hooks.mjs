@@ -47,7 +47,7 @@ function selectAnchor() {
 let repo;
 try { repo = selectAnchor(); } catch (e) { console.error(e.message); process.exit(1); }
 // Definitions and runtime must come from the selected anchor too.
-if (path.resolve(repo) !== scriptRepo) {
+if (!process.env.ORGIAST_REPO && path.resolve(repo) !== scriptRepo) {
   const result = (await import('node:child_process')).spawnSync(process.execPath,
     [path.join(repo, 'tools/register-hooks.mjs'), ...process.argv.slice(2)],
     { stdio: 'inherit', env: { ...process.env, ORGIAST_REPO: repo } });

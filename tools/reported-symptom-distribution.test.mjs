@@ -19,7 +19,7 @@ test('onboarding distribution → setup --converge → registered runner → sym
     assert.deepEqual(fs.readFileSync(path.join(repo, 'tools', name)), fs.readFileSync(path.join(source, 'tools', name)));
   const manifest = path.join(home, 'manifest.json');
   fs.writeFileSync(manifest, JSON.stringify({ version: 1, items: [{ id: 'symptom:runner', type: 'file-contains', severity: 'required', description: 'Stop runner registered', spec: { path: '.claude/settings.json', contains: 'stop-gate-runner.mjs' } }] }));
-  const setup = spawnSync(process.execPath, [path.join(repo, 'tools/setup.mjs'), '--converge', '--strict', '--home', home, '--manifest', manifest, '--json'], { encoding: 'utf8' });
+  const setup = spawnSync(process.execPath, [path.join(repo, 'tools/setup.mjs'), '--converge', '--strict', '--home', home, '--manifest', manifest, '--json'], { encoding: 'utf8', env: { ...process.env, ORGIAST_REPO: repo } });
   assert.equal(setup.status, 0, setup.stdout + setup.stderr);
   assert.ok(JSON.parse(setup.stdout).items.every(item => item.status === 'OK'));
   const settings = JSON.parse(fs.readFileSync(path.join(home, '.claude/settings.json'), 'utf8'));

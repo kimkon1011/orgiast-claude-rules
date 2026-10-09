@@ -1,7 +1,9 @@
 #!/usr/bin/env node
+export const GATE_CONTRACT = {"name": "stop-gate-runner", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "stop-gate-runner"}]};
 // 2026-09-06: Stop 304回中198回が再Stop、handoff-quality 78件中71件が誤爆だった。
 // 9プロセスの逐次差し戻しを1回の評価・1つのblockへまとめ、userの再読を最大1回にする。
 import fs from 'node:fs';
+import { applyNamedGatePolicy } from './gate-runtime.mjs';
 import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -49,8 +51,8 @@ export async function evaluateGates(ctx, auditOptions = {}) {
     ['handoff-info-guard', () => { const found = findHandoffWithoutInfo(ctx.assistantText); return found ? { decision: 'block', reason: formatHandoffInfo(found), code: 'HANDOFF-INFO' } : { decision: 'pass' }; }],
     ['gh-handoff-gate', () => { const result = judgeGhHandoff(ctx.assistantText); return result.triggered && result.missing.length ? { decision: 'block', reason: ghHandoffReason(), code: 'GH-HANDOFF' } : { decision: 'pass' }; }],
     ['url-account-gate', () => { const result = judgeUrlAccount(ctx.assistantText); return result.triggered && result.missing.length ? { decision: 'block', reason: urlAccountReason(result.missing), code: 'URL-ACCOUNT' } : { decision: 'pass' }; }],
-    ['negative-claim-gate', () => { const result = evaluateNegativeClaimFromRaw({ text: ctx.assistantText, transcriptRaw: ctx.transcriptRaw }); return result.decision === 'block' && configuredMode() !== 'block' ? { ...result, decision: 'pass' } : result; }],
-    ['external-state-claim-gate', () => { const result = evaluateExternalStateClaimFromRaw({ text: ctx.assistantText, transcriptRaw: ctx.transcriptRaw }); return result.decision === 'block' && externalStateMode() !== 'block' ? { ...result, decision: 'pass' } : result; }],
+    ['negative-claim-gate', () => { const result = evaluateNegativeClaimFromRaw({ text: ctx.assistantText, transcriptRaw: ctx.transcriptRaw }); return result.decision === 'block' && configuredMode() !== 'block' ? { ...result, decision: 'warn' } : result; }],
+    ['external-state-claim-gate', () => { const result = evaluateExternalStateClaimFromRaw({ text: ctx.assistantText, transcriptRaw: ctx.transcriptRaw }); return result.decision === 'block' && externalStateMode() !== 'block' ? { ...result, decision: 'warn' } : result; }],
     ['control-group-gate', () => runControlGroup({ cwd: ctx.input?.cwd })],
     ['pr-handoff-gate', () => evaluatePrHandoff(ctx.assistantText)],
     ['reported-symptom-gate', () => evaluateReportedSymptomFromRaw({ text: ctx.assistantText, transcriptRaw: ctx.transcriptRaw })],
@@ -69,11 +71,11 @@ export async function evaluateGates(ctx, auditOptions = {}) {
   const errors = [];
   for (const [name, evaluate] of gates) {
     if (name === 'handoff-audit-gate') continue;
-    try { const result = await evaluate(); if (result?.decision === 'block') results.push({ name, ...result }); }
+    try { const result = await evaluate(); if (['block', 'warn'].includes(result?.decision)) results.push({ name, ...result }); }
     catch { errors.push(`error:${name}`); }
   }
   const audit = await gates.find(([name]) => name === 'handoff-audit-gate')[1]();
-  if (audit.decision === 'block') results.push({ name: 'handoff-audit-gate', ...audit });
+  if (['block', 'warn'].includes(audit.decision)) results.push({ name: 'handoff-audit-gate', ...audit });
   results.sort((a, b) => gates.findIndex(([name]) => name === a.name) - gates.findIndex(([name]) => name === b.name));
   return { results, errors, audit };
 }
@@ -121,15 +123,25 @@ export async function run(input, context, auditOptions = {}) {
   }
   const evaluated = await evaluateGates({ input, assistantText, humanText: context.humanText, transcriptRaw: context.raw, sessionId }, auditOptions);
   const audit = evaluated.audit;
+  const warnings = [];
+  const effective = [];
+  const policyResults = await Promise.all(evaluated.results.map(result => applyNamedGatePolicy(result.name, result, { home: home(), ...auditOptions.policyOptions })));
+  for (const value of policyResults) {
+    const result = value;
+    if (value.decision === 'block') effective.push(value);
+    else if (value.decision === 'warn') warnings.push(`${result.name}: ${value.reason}`);
+  }
+  evaluated.results = effective;
+  const systemMessage = warnings.length ? warnings.join('\n') : undefined;
   const blockedBy = evaluated.results.map(({ name }) => name);
   const reasonCodes = [...evaluated.results.map(({ code, name }) => code || name), ...evaluated.errors];
   const cap = stateResult(sessionId, blockedBy.length > 0, assistantText);
   const verdict = cap.retryCap ? 'retry-cap' : blockedBy.length ? 'block' : 'pass';
   const record = { ...base, verdict, blockedBy, reasonCodes, retryCap: cap.retryCap, sameTextRetries: cap.sameTextRetries ?? 0, auditEvidence: audit.record.evidence }; ledger(record);
-  if (verdict !== 'block') return { record };
+  if (verdict !== 'block') return { record, ...(systemMessage ? { systemMessage } : {}) };
   const sections = evaluated.results.map(({ name, reason }) => `### ${name}\n- ${reason}`);
   if (!blockedBy.includes('next-action-gate') && !hasRequiredFooter(assistantText)) sections.push(`### ピギーバック・ヒント\n- ${HANDOFF_HINT}`);
-  return { decision: 'block', reason: sections.join('\n\n'), record };
+  return { decision: 'block', reason: sections.join('\n\n'), record, ...(systemMessage ? { systemMessage } : {}) };
 }
 
 async function main() {
@@ -139,7 +151,8 @@ async function main() {
     let input; try { input = JSON.parse(raw); } catch { ledger({ sessionId: '', verdict: 'skipped', blockedBy: [], reasonCodes: ['invalid-json'], excerpt: raw.slice(0, 200) }); return; }
     const context = readTranscriptContext(input?.transcript_path);
     const result = await run(input, context);
-    if (result.decision === 'block') process.stdout.write(JSON.stringify({ decision: 'block', reason: result.reason }) + '\n');
+    if (result.decision === 'block') process.stdout.write(JSON.stringify({ decision: 'block', reason: result.reason, ...(result.systemMessage ? { systemMessage: result.systemMessage } : {}) }) + '\n');
+    else if (result.systemMessage) process.stdout.write(JSON.stringify({ systemMessage: result.systemMessage }) + '\n');
   } catch { /* 1本の例外で Claude の応答を止めないため、ランナー全体も fail-open。 */ }
 }
 

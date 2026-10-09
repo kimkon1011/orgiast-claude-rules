@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+export const GATE_CONTRACT = {"name": "pretooluse-headless-background", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "pretooluse-headless-background"}]};
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 
 try {

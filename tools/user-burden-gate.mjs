@@ -1,3 +1,4 @@
+export const GATE_CONTRACT = {"name": "user-burden-gate", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "user-burden-gate"}]};
 import { hasManualRequest } from './manual-request-fullsteps-gate.mjs';
 
 const fencePattern = /```[^\n]*\n[\s\S]*?```|~~~[^\n]*\n[\s\S]*?~~~/g;

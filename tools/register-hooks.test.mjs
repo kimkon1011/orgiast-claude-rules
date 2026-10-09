@@ -108,7 +108,7 @@ test('手間削減hook 8本を正しいイベントへ登録しstop-gateは登�
   const env = { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo };
   execFileSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { encoding: 'utf8', env });
   const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
-  const names = (event) => settings.hooks[event].flatMap((group) => group.hooks || []).map((hook) => path.basename(String(hook.command).match(/"([^"]+\.mjs)"/)?.[1] || ''));
+  const names = (event) => settings.hooks[event].flatMap((group) => group.hooks || []).map((hook) => path.basename([...String(hook.command).matchAll(/"([^"]+\.mjs)"/g)].at(-1)?.[1] || ''));
   assert.deepEqual(['automation-first-reminder.mjs', 'credentials-reminder.mjs'].every((name) => names('UserPromptSubmit').includes(name)), true);
   assert.deepEqual(['pretooluse-headless-background.mjs', 'pretooluse-serial-investigation.mjs', 'pipe-stage-permissions.mjs'].every((name) => names('PreToolUse').includes(name)), true);
   assert.deepEqual(['stop-gate-runner.mjs', 'handoff-detail-guard.mjs', 'url-format-guard.mjs', 'check-e2e-before-stop.mjs'].every((name) => names('Stop').includes(name)), true);
@@ -134,7 +134,7 @@ test('lane guard は指定matcher・timeoutで登録される', () => {
   const home=fs.mkdtempSync(path.join(os.tmpdir(),'register-lane-')), repo=path.resolve('.');
   execFileSync(process.execPath,[path.join(repo,'tools','register-hooks.mjs'),'--hooks-only'],{env:{...process.env,ORGIAST_HOME:home,ORGIAST_REPO:repo}});
   const group=JSON.parse(fs.readFileSync(path.join(home,'.claude','settings.json'),'utf8')).hooks.PreToolUse.find((x)=>x.hooks?.some((h)=>h.command.includes('pretooluse-lane-guard')));
-  assert.equal(group.matcher,'Bash|PowerShell|Edit|Write|MultiEdit'); assert.equal(group.hooks[0].timeout,5);
+  assert.equal(group.matcher,'Bash|PowerShell|Edit|Write|MultiEdit'); assert.equal(group.hooks[0].timeout,15);
 });
 
 test('gemini MCP 使用量hookはPostToolUseにmatcher付きで1本だけ登録される', () => {
@@ -170,7 +170,7 @@ test('既存hookの恒久timeoutをイベント・パス表記を問わず収束
   fs.writeFileSync(file,JSON.stringify({hooks:{Stop:wanted.map(([name])=>({hooks:[{type:'command',command:`pwsh -File "C:\\\\Users\\\\uers\\\\.claude\\\\hooks\\\\${name}"`}]}))}}));
   execFileSync(process.execPath,[path.join(repo,'tools','register-hooks.mjs'),'--hooks-only'],{env:{...process.env,ORGIAST_HOME:home,ORGIAST_REPO:repo}});
   const hooks=JSON.parse(fs.readFileSync(file,'utf8')).hooks.Stop.flatMap((g)=>g.hooks||[]);
-  for(const [name,timeout] of wanted) assert.equal(hooks.find((h)=>h.command.includes(name)).timeout,timeout,name);
+  for(const [name,timeout] of wanted) { const migrated=name==='verify-before-done-detector.ps1'; assert.equal(hooks.find((h)=>h.command.includes(migrated?'verify-before-done-detector.mjs':name)).timeout,migrated?15:timeout,name); }
   fs.rmSync(home,{recursive:true,force:true});
 });
 

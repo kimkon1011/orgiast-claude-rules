@@ -536,6 +536,12 @@ deny は締める方向の追加だけ Claude が自分で行ってよい。allo
 失うものは Anthropic 側の第二の目、すなわちクレデンシャル露出・本番デプロイ・権限拡大を第三者が止める機能である。
 詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/autonomy-and-reporting.md`
 
+#### 1.14.x deny ゲートの契約
+拒否ゲートは `GATE_CONTRACT` に復旧手段を宣言し、リポ実在・keyserve配布をCIで検証する。
+担当者への質問だけで解除させず、取得コマンドを示し、keyserve依存は拒否前に1回自動取得する。
+新ゲートは各PCへの初回配布から7日間warn。manifestの配布日・昇格日でdenyへ進める（既存は維持）。
+deny/warnはPC・ゲート・復旧手段の到達状況だけを既存通知経路へ1日1回通報する。
+
 ### 1.15 自律進行・セッション引継ぎ
 
 完了報告で止まらず、目的単位で区切り次セッションへの引継ぎを自動化する。

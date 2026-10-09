@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+export const GATE_CONTRACT = {"name": "internal-recipient-gmail-guard", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "internal-recipient-gmail-guard"}, {"kind": "repo-file", "ref": "tools/internal-recipients.default.json"}]};
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

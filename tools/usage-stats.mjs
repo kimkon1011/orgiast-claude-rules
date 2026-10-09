@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isReadonlyCommand } from './readonly-command.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -176,6 +177,7 @@ export function collectClaudeStats({ home = process.env.ORGIAST_HOME || os.homed
 }
 export function classifyBashCommand(command) {
   command = String(command || '');
+  if (isReadonlyCommand(command)) return 'read-only';
   if (isExcludedInlineProgramCommand(command)) return 'delegated';
   const heredoc = /<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1/;
   if (extractInlineProgram(command)) return 'inline-program';
@@ -188,6 +190,7 @@ export function isReadOnlyToolUse(name, input = {}) {
   if (['Read', 'Grep', 'Glob'].includes(name)) return true;
   if (!['Bash', 'PowerShell'].includes(name)) return false;
   const command = String(input?.command || '');
+  if (isReadonlyCommand(command)) return true;
   if (/(?:^|[^<])>{1,2}|\brm\s|\bmv\s|\bcp\s|\bmkdir\s|\binstall\b|\bpush\b|\bdeploy\b|\bcodex\b|\bnpm\s|\bgit\s+commit\b|\bgit\s+push\b|\bclasp\b/i.test(command)) return false;
   const allowed = /^(?:cat|head|tail|sed|grep|rg|ls|find|wc|stat|jq|awk|cut|sort|uniq|echo|which|type)(?:\s|$)|^node\s+--test(?:\s|$)|^git\s+(?:status|log|diff|show|rev-parse|branch)(?:\s|$)/i;
   const segments = command.split(/&&|\|\||;|\|(?!\|)/).map((x) => x.trim()).filter(Boolean);

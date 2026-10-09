@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+export const GATE_CONTRACT = {"name": "lane-abandonment-gate", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "lane-abandonment-gate"}, {"kind": "command", "ref": "node tools/lane-doctor.mjs --probe"}, {"kind": "keyserve-key", "ref": "deepseek.env#DEEPSEEK_API_KEY"}]};
 import fs from 'node:fs';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';

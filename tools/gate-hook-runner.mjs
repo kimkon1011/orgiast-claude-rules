@@ -17,8 +17,8 @@ export async function runHook(script, raw, { args = [], timeout = 30000, env = p
   };
   const normalize = value => value?.hookSpecificOutput?.permissionDecision === 'deny'
     ? { decision: 'block', reason: value.hookSpecificOutput.permissionDecisionReason }
-    : value?.decision === 'block' ? value
-      : value?.hookSpecificOutput?.additionalContext ? { decision: 'warn', reason: value.hookSpecificOutput.additionalContext } : { decision: 'pass' };
+    : ['block', 'warn'].includes(value?.decision) ? value
+      : value?.hookSpecificOutput?.additionalContext || value?.systemMessage ? { decision: 'warn', reason: value.hookSpecificOutput?.additionalContext || value.systemMessage } : { decision: 'pass' };
   let payload = parse(child.stdout);
   let result = child.status === 2 ? { decision: 'block', reason: child.stderr } : normalize(payload);
   if (!['block', 'warn'].includes(result.decision)) return child;

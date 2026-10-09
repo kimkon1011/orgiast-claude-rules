@@ -39,6 +39,19 @@ test('retrieval alone does not bypass missing application setup',async t=>{
  const value=await applyGatePolicy({...contract,name:'old'},{decision:'block',reason:'form absent'}, {home,manifest,refresh:async()=>{},retry:()=>{retries++;return {decision:'block',reason:'install form'};},notify:async()=>({delivered:'dm'})});
  assert.equal(retries,1);assert.equal(value.decision,'block');assert.match(value.reason,/install form/);
 });
+test('a retry that changes denial to a warning still reports the warning',async t=>{
+ const home=temp(t);let line='';
+ const value=await applyGatePolicy({...contract,name:'old'},{decision:'block',reason:'missing'}, {home,manifest,refresh:async()=>{},retry:()=>({decision:'warn',reason:'remaining advice'}),notify:async s=>{line=s;return {delivered:'dm'};}});
+ assert.equal(value.decision,'warn');assert.match(line,/verdict=warn/);
+});
+test('standalone Stop warnings stay visible and use the common reporting path',async t=>{
+ for(const output of [{decision:'warn',reason:'advice'},{systemMessage:'advice'}]) {
+  const home=temp(t),file=path.join(home,'old.mjs');let line='';
+  fs.writeFileSync(file,`export const GATE_CONTRACT = ${JSON.stringify({name:'old',remedies:[{kind:'command',ref:'node --version'}]})};\nconsole.log(${JSON.stringify(JSON.stringify(output))});\n`);
+  const result=await runHook(file,'{"hook_event_name":"Stop"}',{policyOptions:{home,manifest,notify:async s=>{line=s;return {delivered:'dm'};}}});
+  assert.match(JSON.parse(result.stdout).systemMessage,/advice/);assert.match(line,/verdict=warn/);assert.equal(result.status,0);
+ }
+});
 test('report deduplication is atomic per PC/gate/day, values never transmitted',async t=>{
  const home=temp(t);let calls=0;const opts={home,hostname:'member',now:start,notify:async line=>{calls++;assert.equal(line.split('\n').length,1);return {delivered:'dm'};}};
  await Promise.all(Array.from({length:8},()=>reportGate(contract,'warn',remedyStatus(contract,{home}),opts)));

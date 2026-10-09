@@ -63,7 +63,7 @@ export async function reportGate(contract, verdict, statuses, { home = homeDir()
 export async function applyGatePolicy(contract, result, { retry, refresh, ...options } = {}) {
   if (!contract) contract = { name: options.name || 'uncontracted-gate', remedies: [] };
   const blocked = result?.decision === 'block' || result?.deny === true;
-  const warned = result?.decision === 'warn';
+  let warned = result?.decision === 'warn';
   if (!blocked && !warned) return result;
   let statuses = remedyStatus(contract, options);
   if (blocked && statuses.some(r => r.kind === 'keyserve-key' && r.status === 'missing')) {
@@ -73,7 +73,8 @@ export async function applyGatePolicy(contract, result, { retry, refresh, ...opt
       else { const { provisionKeys } = await import('./onboarding-sync.mjs'); await provisionKeys(new Date(), { force: true, quiet: true, timeoutMs: 2000, singleAttempt: true }); }
       if (retry) result = await retry();
     } catch { /* Keep the original denial and show the acquisition path. */ }
-    if (result?.decision !== 'block' && result?.deny !== true) return result;
+    warned = result?.decision === 'warn';
+    if (result?.decision !== 'block' && result?.deny !== true && !warned) return result;
     statuses = remedyStatus(contract, options);
   }
   const mode = warned ? 'warn' : rolloutMode(contract.name, options);

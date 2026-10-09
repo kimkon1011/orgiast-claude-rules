@@ -234,6 +234,8 @@ test('hook実ファイルのskipがある時は注意を出し変更なしと正
 test('SessionStart lane health は定義元から1本に収束する',()=>{
   const home=fs.mkdtempSync(path.join(os.tmpdir(),'register-lane-health-')), repo=path.resolve('.');
   try {
+    fs.mkdirSync(path.join(home,'.claude'),{recursive:true});
+    fs.writeFileSync(path.join(home,'.claude/settings.json'),JSON.stringify({hooks:{SessionStart:[{hooks:[{type:'command',command:'node "C:/old/tools/sessionstart-lane-health.mjs"',timeout:3,async:true}]}]}}));
     for(let i=0;i<2;i++) {const r=spawnSync(process.execPath,['tools/register-hooks.mjs','--hooks-only'],{encoding:'utf8',env:{...process.env,ORGIAST_HOME:home,ORGIAST_REPO:repo}});assert.equal(r.status,0,r.stderr);}
     const s=JSON.parse(fs.readFileSync(path.join(home,'.claude/settings.json'),'utf8'));
     const hooks=s.hooks.SessionStart.flatMap(g=>g.hooks).filter(h=>h.command.includes('sessionstart-lane-health.mjs'));

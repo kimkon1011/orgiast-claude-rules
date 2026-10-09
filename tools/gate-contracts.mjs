@@ -40,7 +40,7 @@ export function contractErrors(contract, { root = repoDir, manifest = JSON.parse
     if (r.kind === 'repo-file') {
       const file = path.resolve(root, r.ref);
       if (path.relative(root, file).startsWith('..') || !fs.existsSync(file)) errors.push(`missing repo-file: ${r.ref}`);
-      else if (r.section && !fs.readFileSync(file, 'utf8').includes(`## ${r.section}\n`)) errors.push(`missing section: ${r.section}`);
+      else if (r.section && !fs.readFileSync(file, 'utf8').replace(/\r\n?/g, '\n').includes(`## ${r.section}\n`)) errors.push(`missing section: ${r.section}`);
     } else if (r.kind === 'keyserve-key') {
       if (!manifest.distributions.some(d => d.keys.some(k => `${d.file}#${k}` === r.ref))) errors.push(`undistributed key: ${r.ref}`);
     } else if (r.kind === 'user-consent') {

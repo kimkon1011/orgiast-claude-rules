@@ -29,3 +29,8 @@ test('new rollout entries must declare the seven day window; legacy inventory is
     }
   }
 });
+test('repo remedy sections accept Windows CRLF checkouts',async t=>{
+ const os=await import('node:os');const root=fs.mkdtempSync(path.join(os.tmpdir(),'gate-crlf-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ fs.writeFileSync(path.join(root,'remedy.md'),'# remedies\r\n\r\n## example\r\n\r\nDo the documented step.\r\n');
+ assert.deepEqual(contractErrors({name:'example',remedies:[{kind:'repo-file',ref:'remedy.md',section:'example'}]},{root,manifest:{distributions:[]}}),[]);
+});

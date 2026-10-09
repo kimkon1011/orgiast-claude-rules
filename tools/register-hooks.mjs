@@ -191,7 +191,12 @@ try {
     if (add(settings.hooks.SessionStart, name, { hooks: [hook] })) added += 1;
   }
   added += setTimeoutFor(settings.hooks.SessionStart, 'tool-adoption-check', 60);
+  added += migrate(settings.hooks.SessionStart, 'sessionstart-lane-health.mjs', 'sessionstart-lane-health.mjs', command('sessionstart-lane-health.mjs', ' --hook'));
   if (add(settings.hooks.SessionStart, 'sessionstart-lane-health.mjs', { hooks: [{ type: 'command', command: command('sessionstart-lane-health.mjs', ' --hook'), timeout: 5 }] })) added += 1;
+  added += setTimeoutFor(settings.hooks.SessionStart, 'sessionstart-lane-health.mjs', 5);
+  for (const group of settings.hooks.SessionStart) for (const hook of group.hooks || []) {
+    if (String(hook.command || '').includes('sessionstart-lane-health.mjs') && hook.async === true) { delete hook.async; added++; }
+  }
   if (add(settings.hooks.SessionStart, 'hook-selfcheck.mjs', { hooks: [{ type: 'command', command: command('hook-selfcheck.mjs'), timeout: 10 }] })) added += 1;
   if (add(settings.hooks.SessionStart, 'hook-budget-check.mjs', { hooks: [{ type: 'command', command: command('hook-budget-check.mjs'), timeout: 10 }] })) added += 1;
   if (add(settings.hooks.SessionStart, 'makimono-host-detect.mjs', { hooks: [{ type: 'command', command: command('makimono-host-detect.mjs'), timeout: 10 }] })) added += 1;

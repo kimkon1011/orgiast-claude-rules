@@ -15,8 +15,8 @@ test('eval-providers.json は provider/model を持つ配列', () => {
     assert.equal(typeof entry.model, 'string', `model が文字列でない: ${JSON.stringify(entry)}`);
     if ('skip' in entry) assert.equal(typeof entry.skip, 'boolean', 'skip は真偽値');
   }
-  const names = config.map((x) => x.provider);
-  assert.equal(new Set(names).size, names.length, `provider が重複している: ${names.join(',')}`);
+  const names = config.map((x) => `${x.provider}/${x.model}`);
+  assert.equal(new Set(names).size, names.length, `provider/model が重複している: ${names.join(',')}`);
 });
 
 test('mistral は skip:true（mistral-large-latest は契約で tier_not_allowed 403 になる）', () => {

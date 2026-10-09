@@ -5,11 +5,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { isDailyLimit, isUnmeasurable, JUDGE_CHAIN, paretoClassification, recommendations, resolveJudgeChain, resultRecord, retryDelay, suspiciousTasks } from './eval-harness.mjs';
+import { readConfig, isDailyLimit, isUnmeasurable, JUDGE_CHAIN, paretoClassification, recommendations, resolveJudgeChain, resultRecord, retryDelay, suspiciousTasks } from './eval-harness.mjs';
 
 // Run the real CLI with isolated home/config/results and a fetch stub; --all also
 // writes a routing table, so copy its modules rather than touching the checkout.
-function runHarness(t, { cooldown = {}, tasks, config, responses = [], args = ['--provider', 'openrouter'] } = {}) {
+function runHarness(t, { cooldown = {}, tasks, config, overlay, responses = [], args = ['--provider', 'openrouter'] } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'eval-cooldown-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const tools = path.join(home, 'tools'), evalDir = path.join(home, '.claude', 'eval');
@@ -21,6 +21,7 @@ function runHarness(t, { cooldown = {}, tasks, config, responses = [], args = ['
   const seed = tasks || [{ id: 'one', category: 'classification', prompt: 'test', expect: { type: 'contains', value: 'ok' } }];
   fs.writeFileSync(path.join(tools, 'eval-tasks.seed.jsonl'), seed.map(JSON.stringify).join('\n') + '\n');
   fs.writeFileSync(path.join(tools, 'eval-providers.json'), JSON.stringify(config || [{ provider: 'groq', model: 'test' }, { provider: 'openrouter', model: 'test' }]));
+  if (overlay !== undefined) fs.writeFileSync(path.join(evalDir, 'providers.local.json'), typeof overlay === 'string' ? overlay : JSON.stringify(overlay));
   fs.writeFileSync(path.join(home, '.claude', 'provider-cooldown.json'), JSON.stringify(cooldown));
   const preload = path.join(home, 'mock-fetch.mjs');
   fs.writeFileSync(preload, `
@@ -196,10 +197,48 @@ test('scout candidates run through --all with model-specific prices', (t) => {
     { provider: 'openrouter', model: 'scouted', costPerMillion: [0.1, 0.2] },
   ];
   const response = { body: JSON.stringify({ choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }], usage: { prompt_tokens: 1000, completion_tokens: 1000 } }) };
-  const all = runHarness(t, { config, responses: [response, response], args: ['--all'] });
+  const all = runHarness(t, { config: config.slice(0, 1), overlay: config.slice(1), responses: [response, response], args: ['--all'] });
   assert.deepEqual(all.results.map((r) => [r.model, r.costUsd]), [['existing', 0.003], ['scouted', 0.0003]]);
-  const selected = runHarness(t, { config, responses: [response], args: ['--provider', 'openrouter', '--model', 'scouted'] });
+  const selected = runHarness(t, { config: config.slice(0, 1), overlay: config.slice(1), responses: [response], args: ['--provider', 'openrouter', '--model', 'scouted'] });
   assert.equal(selected.results[0].costUsd, 0.0003);
   const unknown = runHarness(t, { config, responses: [response], args: ['--provider', 'openrouter', '--model', 'unconfigured'] });
   assert.equal(unknown.results[0].costUsd, 0.00138);
+});
+
+test('readConfig merges by provider+model with overlay precedence, including skip', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'eval-config-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const configFile = path.join(dir, 'repo.json'), overlayFile = path.join(dir, 'local.json');
+  const repo = [{ provider: 'openrouter', model: 'same', costPerMillion: [1, 2] },
+    { provider: 'groq', model: 'same' }, { provider: 'mistral', model: 'blocked', skip: true }];
+  const overlay = [{ provider: 'openrouter', model: 'same', costPerMillion: [0, 0], skip: true },
+    { provider: 'openrouter', model: 'new' }];
+  fs.writeFileSync(configFile, JSON.stringify(repo));
+  fs.writeFileSync(overlayFile, JSON.stringify(overlay));
+  assert.deepEqual(readConfig({ configFile, overlayFile }), [overlay[0], repo[1], repo[2], overlay[1]]);
+  for (const invalid of ['broken', '{}', 'null', '[null]', '[{"provider":"openrouter"}]']) {
+    fs.writeFileSync(overlayFile, invalid);
+    assert.deepEqual(readConfig({ configFile, overlayFile }), repo);
+  }
+  fs.unlinkSync(overlayFile);
+  assert.deepEqual(readConfig({ configFile, overlayFile }), repo);
+  fs.mkdirSync(overlayFile); // unreadable as a regular file on Windows and Linux
+  assert.deepEqual(readConfig({ configFile, overlayFile }), repo);
+  fs.rmdirSync(overlayFile);
+  fs.writeFileSync(overlayFile, JSON.stringify(overlay));
+  fs.writeFileSync(configFile, 'broken');
+  assert.deepEqual(readConfig({ configFile, overlayFile }), overlay);
+});
+
+test('--all honors overlay skip and replacement price without duplicate execution', (t) => {
+  const result = runHarness(t, {
+    config: [{ provider: 'groq', model: 'blocked' }, { provider: 'openrouter', model: 'same', costPerMillion: [1, 2] }],
+    overlay: [{ provider: 'groq', model: 'blocked', skip: true },
+      { provider: 'openrouter', model: 'same', costPerMillion: [0, 0] },
+      { provider: 'openrouter', model: 'new', costPerMillion: [0, 0] }],
+    responses: [success, success], args: ['--all', '--limit', '1', '--category', 'classification'],
+  });
+  assert.match(result.stdout, /SKIP groq/);
+  assert.equal(result.calls.length, 2);
+  assert.deepEqual(result.results.map((r) => [r.model, r.costUsd]), [['same', 0], ['new', 0]]);
 });

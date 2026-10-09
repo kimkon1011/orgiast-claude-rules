@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // 新モデルと値下げを週次で偵察する。品質は未検証なので採用せず eval にだけ追加する。
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
+import { userHome } from './eval-harness.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { COST_PER_MILLION } from './llm-fallback.mjs';
 
@@ -71,8 +71,8 @@ export function selectCandidates(changes, models, routing) {
 export function enqueueCandidates(candidates, configFile, dryRun) {
   if (!candidates.length) return '評価候補なし';
   try {
-    const config = readJson(configFile, null);
-    if (!Array.isArray(config)) throw new Error('invalid config');
+    const config = readJson(configFile, []);
+    if (!Array.isArray(config) || config.some((x) => !x || typeof x.provider !== 'string' || typeof x.model !== 'string')) throw new Error('invalid config');
     for (const model of candidates) {
       const existing = config.find((x) => x.provider === 'openrouter' && x.model === model.id);
       if (existing?.skip) continue; // 人が明示的に止めた評価は復活させない。
@@ -82,9 +82,9 @@ export function enqueueCandidates(candidates, configFile, dryRun) {
     }
     if (!dryRun) writeAtomic(configFile, json(config));
     return candidates.some((m) => config.some((x) => x.provider === 'openrouter' && x.model === m.id && x.skip))
-      ? 'eval 追加は手動（tools/eval-providers.json: skip 指定あり）'
+      ? 'eval 追加は手動（~/.claude/eval/providers.local.json: skip 指定あり）'
       : dryRun ? 'eval 投入予定（dry-run）' : 'eval に投入済み';
-  } catch { return 'eval 追加は手動（tools/eval-providers.json: 読込・更新不可）'; }
+  } catch { return 'eval 追加は手動（~/.claude/eval/providers.local.json: 読込・更新不可）'; }
 }
 
 function candidateLine(model, action) {
@@ -105,8 +105,8 @@ export function formatDm(candidates, count, action, warnings = []) {
   return dm.slice(0, 1800);
 }
 
-export async function runScout({ home = process.env.ORGIAST_HOME || os.homedir(), dryRun = false, now = new Date(),
-  routingFile = path.join(HERE, 'routing-table.json'), configFile = path.join(HERE, 'eval-providers.json'),
+export async function runScout({ home = process.env.ORGIAST_HOME || userHome(), dryRun = false, now = new Date(),
+  routingFile = path.join(HERE, 'routing-table.json'), configFile = path.join(home, '.claude', 'eval', 'providers.local.json'),
   fetchImpl = globalThis.fetch, notify = notifyKim, log = console.log } = {}) {
   const dir = path.join(home, '.claude'), stateFile = path.join(dir, 'model-scout-state.json');
   let notifyAttempted = false;

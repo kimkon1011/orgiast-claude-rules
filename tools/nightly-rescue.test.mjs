@@ -40,6 +40,8 @@ test('failed commit is attempted once per dirty status, including staging; retry
 
 test('scratch and nested git directories/files are ignored; real changes are rescued without them', async t => {
   const f = fixture(t);
+  fs.writeFileSync(path.join(f.repo, '.gitignore'), 'scratch/\n');
+  f.git('add', '.gitignore'); f.git('commit', '-m', 'ignore scratch');
   fs.mkdirSync(path.join(f.repo, 'scratch'), { recursive: true });
   fs.writeFileSync(path.join(f.repo, 'scratch', 'result'), 'precious');
   f.git('init', path.join(f.repo, 'nested clone'));
@@ -52,7 +54,7 @@ test('scratch and nested git directories/files are ignored; real changes are res
   await rescueTree(f.repo, f.home, f);
   assert.equal(branches(f).length, 1);
   assert.equal(f.git('show', 'HEAD:tracked'), 'real change');
-  assert.equal(f.git('ls-tree', '--name-only', 'HEAD'), 'tracked\n');
+  assert.equal(f.git('ls-tree', '--name-only', 'HEAD'), '.gitignore\ntracked\n');
   assert.equal(f.messages.length, 1);
   f.git('clean', '-qfd', '-e', 'scratch/');
   assert.equal(fs.readFileSync(path.join(f.repo, 'scratch', 'result'), 'utf8'), 'precious');
@@ -95,4 +97,25 @@ test('unreadable state fails closed without making a branch', async t => {
   fs.writeFileSync(path.join(f.repo, 'tracked'), 'changed');
   assert.equal((await rescueTree(f.repo, f.home, f)).clean, false);
   assert.equal(branches(f).length, 0);
+});
+
+ test('literal staging handles renames, deletions and pathspec-looking filenames', async t => {
+  const f = fixture(t);
+  fs.renameSync(path.join(f.repo, 'tracked'), path.join(f.repo, 'renamed file'));
+  f.git('add', '-A');
+  fs.writeFileSync(path.join(f.repo, '[literal]'), 'keep');
+  const result = await rescueTree(f.repo, f.home, f);
+  assert.ok(result.events.some(e => e.step === 'RESCUE_LOCAL_OK'), JSON.stringify(result.events));
+  assert.equal(f.git('show', 'HEAD:renamed file'), 'original');
+  assert.equal(f.git('show', 'HEAD:[literal]'), 'keep');
+  assert.equal(f.git('ls-tree', '--name-only', 'HEAD').includes('tracked'), false);
+});
+
+for (const staged of [false, true]) test(`rescues a deletion: staged=${staged}`, async t => {
+  const f = fixture(t);
+  fs.unlinkSync(path.join(f.repo, 'tracked'));
+  if (staged) f.git('add', '-A');
+  const result = await rescueTree(f.repo, f.home, f);
+  assert.ok(result.events.some(e => e.step === 'RESCUE_LOCAL_OK'), JSON.stringify(result.events));
+  assert.equal(f.git('ls-tree', '--name-only', 'HEAD'), '');
 });

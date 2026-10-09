@@ -149,7 +149,9 @@ jobs:
             (Join-Path $env:APPDATA 'npm')
           ) | Where-Object { $_ }
           $env:Path = $pathParts -join ';'
-          $output = & node '.\tools\setup.mjs' --verify 2>&1
+          # Verify from the selected runtime anchor, as the installed setup hook does.
+          $setup = Join-Path $env:USERPROFILE '.claude\nightly-repo\tools\setup.mjs'
+          $output = & node $setup --verify 2>&1
           $output | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'clean-install-logs\verify-setup.log')
           if ($LASTEXITCODE -ne 0) { throw "setup.mjs failed with exit code $LASTEXITCODE" }
 

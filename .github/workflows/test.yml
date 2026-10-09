@@ -20,6 +20,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - name: feedback form gate and private distribution
+        run: node --test tools/feedback-form-gate.test.mjs tools/onboarding-sync-keyserve-refresh.test.mjs
       - name: selftest-guards (Windows)
         run: node tools/selftest-guards.mjs
       - name: Google Doc hyperlinks and provider billing
@@ -52,6 +54,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - name: feedback form gate and private distribution
+        run: node --test tools/feedback-form-gate.test.mjs tools/onboarding-sync-keyserve-refresh.test.mjs
       - name: selftest-guards (Linux/macOS 相当)
         run: node tools/selftest-guards.mjs
       - name: Google Doc hyperlinks and provider billing

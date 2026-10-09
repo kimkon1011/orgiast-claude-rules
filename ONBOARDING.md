@@ -800,6 +800,10 @@ node tools/fleet-mail.mjs --reply <id> --body-file answer.txt
 - **秘密情報を本文に書かない。** ログ・inbox・返信は `redactSecrets` を通す。これは任意の秘密を完全検出する仕組みではない。
 
 
+**配布収束の受領確認（2026-10-09）**
+
+全PCの配布状態はPC×OSユーザーでフリートシートへ報告する。同期終了時にHEAD・不足hook数・欠落キー数を記録し、kim-PCのnightly-healthが遅延を検知して固定rules-resyncをfleet-mail経由で日次送付する。24時間改善しない端末だけ日次DM。初回は配布リポのプロジェクトSessionStartからユーザー単位で自己登録する。Mac/LinuxはSessionStart自己更新を使用。Webはローカル個人hookを引き継がない。詳細・制限・検証手順は [配布収束仕様](docs/fleet-convergence.md)。
+
 ### 1.16 Fableの用途制限
 
 FableはplanIncludedがtrueなら監督のみ可、falseなら全用途禁止。

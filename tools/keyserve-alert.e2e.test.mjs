@@ -61,7 +61,7 @@ test('keyserve 401 を実経路で Discord webhook へ通報し24時間抑止す
     const env = {
       ...process.env,
       ORGIAST_HOME: tempHome,
-      ORGIAST_REPO: repoPath,
+      ORGIAST_REPO: path.join(tempHome, 'orgiast-claude-rules'),
       ORGIAST_KEYSERVE_URL: `${baseUrl}/keys`,
       ORGIAST_ONBOARDING_URL: `${baseUrl}/onboarding`,
       ORGIAST_KEYSERVE_SECRET: secret,

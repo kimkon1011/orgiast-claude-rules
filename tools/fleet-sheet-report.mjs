@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { collectConvergence } from './fleet-convergence.mjs';
 import { isEntry } from './is-entry.mjs';
 import fs from 'node:fs';
 import { codexAuthStatus, formatCodexLogin } from './codex-auth-status.mjs';
@@ -132,7 +133,8 @@ async function main() {
     hostname: identity.hostname,
     username: identity.username,
     gitEmail: identity.gitEmail,
-    reportedAt: toJst(cost.t || adoption.last || reporter.lastRun),
+    reportedAt: toJst(),
+    ...collectConvergence({ home, repo: process.env.ORGIAST_REPO || repo, hostname: identity.hostname, username: identity.username }),
     claudeUsd: claudeUsd === null ? '' : Math.round(claudeUsd * 100) / 100,
     mainModel: topModel,
     // 既存行が "0%" 表記なので、人が読む列で表記が混ざらないようパーセント文字列にする。

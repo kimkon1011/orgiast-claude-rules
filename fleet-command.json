@@ -1,8 +1,8 @@
 {
-  "runId": "rules-resync-2026-09-24-reported-symptom-gate",
+  "runId": "rules-resync-2026-10-09-fleet-convergence",
   "task": "rules-resync",
   "targets": "all",
-  "_why": "報告不具合の否定防止 gate (R1/R2/R3) を全PC・全アカウントへ配布。onboarding-sync --force で tools を更新し setup --converge 経由で Stop runner を登録する。",
+  "_why": "全PCの配布収束レポートとユーザー別再同期受信を導入。既存の許可済み rules-resync を1回実行し、以後は収束シートから日次指示。",
   "_note": "全PCへ承認済みタスクを配る中央キュー。kim/Claudeが task と runId(毎回ユニーク) を更新→各PCが夜間03:15の実行時に1回だけ処理しDiscordへ結果を返す。task を空にすると何もしない。",
   "_allowed_tasks": [
     "verify-setup",

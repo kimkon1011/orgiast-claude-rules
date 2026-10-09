@@ -27,7 +27,7 @@ const repoStatePath = path.join(home, '.claude', '.repo-sync-state.json');
 const fallbackStatePath = path.join(home, '.claude', 'onboarding-sync-fallback.json');
 const keysStatePath = path.join(home, '.claude', '.keys-sync-state.json');
 const legacyKeysStatePath = path.join(home, '.claude', 'onboarding-sync-keys.json');
-const repoPath = path.join(home, 'orgiast-claude-rules');
+const repoPath = process.env.ORGIAST_REPO || path.join(home, 'orgiast-claude-rules');
 const logPath = path.join(home, '.claude', 'hooks', 'onboarding-sync.log');
 const rawUrl = process.env.ORGIAST_ONBOARDING_URL || 'https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/ONBOARDING.md';
 const keyserveUrl = process.env.ORGIAST_KEYSERVE_URL || 'https://orgiast-keyserve.vercel.app/api/keys';
@@ -464,9 +464,17 @@ async function alertKeyserveFailure(previous, now, status) {
 export async function provisionKeys(now, options = {}) {
   if (dryRun) return;
   const previous = keysState();
+  const attemptFile = path.join(home, '.claude', '.key-enroll-attempt.json');
+  let lastAttempt; try { lastAttempt = JSON.parse(fs.readFileSync(attemptFile, 'utf8')).at; } catch {}
+  const primary = readEnvValue(path.join(home, '.claude', 'keyserve.env'), 'ORGIAST_KEYSERVE_SECRET');
+  if (!primary && !options.force && !force && Date.parse(lastAttempt) > now.getTime() - 86400000) return;
   if (!shouldRunKeys(previous, now, options.force || force)) {
     if (keySyncIsStale(previous, now)) await alertKeyserveFailure(previous, now);
     return;
+  }
+  if (!primary) {
+    fs.mkdirSync(path.dirname(attemptFile), { recursive: true });
+    fs.writeFileSync(attemptFile, JSON.stringify({ at: now.toISOString() }), { mode: 0o600 });
   }
   let secret = process.env.ORGIAST_KEYSERVE_SECRET || '';
   if (!secret) secret = readEnvValue(path.join(home, '.claude', 'keyserve.env'), 'ORGIAST_KEYSERVE_SECRET');
@@ -693,6 +701,15 @@ async function main() { try {
     console.log(`[onboarding-sync] updated CLAUDE.md (hash ${hash.slice(0, 8)} / from ${source})`);
     log(`updated (hash ${hash.slice(0, 8)} / from ${source})`);
   }
-} catch (e) { log(`unexpected error: ${e.message}`); } }
+} catch (e) { log(`unexpected error: ${e.message}`); }
+finally {
+  if (!dryRun && !keysOnly) {
+    try {
+      const report = path.join(repoPath, 'tools/fleet-convergence-report.mjs');
+      if (fs.existsSync(report)) execFileSync(process.execPath, [report], { windowsHide: true, timeout: 90000,
+        stdio: 'pipe', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repoPath } });
+    } catch { log('convergence report failed (transport or receipt unavailable)'); }
+  }
+} }
 
 if (isEntry(import.meta.url)) await main();

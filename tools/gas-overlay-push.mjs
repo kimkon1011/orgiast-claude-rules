@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { BOOTH_SCRIPT, assertGasEqual, syncGasMaster } from './gas-master-sync.mjs';
 import { isEntry } from './is-entry.mjs';
 
 export function parseArgs(args) {
@@ -100,7 +101,7 @@ export function diff(before, after, file) {
   return { added, removed, text: [`--- a/${file}`, `+++ b/${file}`, `@@ -${a.length ? 1 : 0},${a.length} +${b.length ? 1 : 0},${b.length} @@`, ...operations].slice(0, 80).join('\n') };
 }
 
-export function runOverlay(options, { runner = claspRunner, stdout = s => process.stdout.write(s), stderr = s => process.stderr.write(s) } = {}) {
+export function runOverlay(options, { runner = claspRunner, syncMaster = syncGasMaster, stdout = s => process.stdout.write(s), stderr = s => process.stderr.write(s) } = {}) {
   const temporary = [];
   const result = { ok: false, pushed: [], unchanged: [], readBack: 'skipped', deployed: null };
   const printDiff = (before, after, file) => {
@@ -162,6 +163,9 @@ export function runOverlay(options, { runner = claspRunner, stdout = s => proces
         printDiff(before, after, file);
       }
     }
+    if (options.dryRun && config.scriptId === BOOTH_SCRIPT) {
+      result.gitSync = syncMaster({ project, dryRun: true }, { stdout, stderr });
+    }
     if (changed.length && !options.dryRun) {
       call(['push', '-f'], work);
       result.pushed = changed;
@@ -180,6 +184,15 @@ export function runOverlay(options, { runner = claspRunner, stdout = s => proces
       }
       if (mismatched.length) { result.readBack = 'failed'; throw new Error(`read-back 不一致: ${mismatched.join(', ')}`); }
       result.readBack = 'ok';
+      if (config.scriptId === BOOTH_SCRIPT) {
+        try {
+          assertGasEqual(workRoot, inside(readBack, rootDir, true));
+          result.gitSync = syncMaster({ project, snapshot: inside(readBack, rootDir, true) }, { stdout, stderr });
+        } catch (error) {
+          result.gitSync = { status: 'failed', error: error.message };
+          stderr(`GitHub 同期失敗（clasp push の結果は維持）: ${error.message}\n`);
+        }
+      }
       let deployment = options.deploy;
       if (options.deployWebapp) {
         const output = call(['deployments'], work);

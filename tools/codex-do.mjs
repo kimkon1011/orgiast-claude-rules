@@ -9,6 +9,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { executorExitStatus } from './executor-status.mjs';
+import { verifyExternalWork } from './codex-work-evidence.mjs';
 import { parseCodexResetUntil, providerCooldownMs, writeCodexCooldown } from './codex-cooldown.mjs';
 import { classifyTaskKind, CODEX_KINDS, TASK_KINDS } from './lib/task-kind.mjs';
 import { EX_TEMPFAIL, budgetSummary, claudeFile, decideCodexGate, deferredPayload, isUsageLimitText, parseUsageLimitUntil, providerLimitedUntil, writeCodexCooldownFile } from './lib/executor-gate.mjs';
@@ -188,7 +189,8 @@ export function snapshotWorkingTree(cwd, spawnImpl = spawnSync) {
     if (gitCheck && gitCheck.status === 0) {
       const diff = spawnImpl('git', ['-C', cwd, 'diff', '--stat'], { windowsHide: true, encoding: 'utf8' }).stdout || '';
       const status = spawnImpl('git', ['-C', cwd, 'status', '--porcelain'], { windowsHide: true, encoding: 'utf8' }).stdout || '';
-      return `${diff}\n${status}`;
+      const head = spawnImpl('git', ['-C', cwd, 'rev-parse', 'HEAD'], { windowsHide: true, encoding: 'utf8' }).stdout || '';
+      return `${head}\n${diff}\n${status}`;
     }
   } catch (err) {
     // Fall through
@@ -853,9 +855,17 @@ async function executeCodex() {
   return result;
 }
 
+const workEvidence = new WeakMap();
+function hasExternalWork(result) {
+  if (!workEvidence.has(result)) workEvidence.set(result, verifyExternalWork({
+    output: `${result.output || ''}\n${result.stderr || ''}`, cwd, started,
+    status: result.status, timedOut: result.timedOut,
+  }));
+  return Boolean(workEvidence.get(result));
+}
 const failureReason = (result) => result.timedOut ? 'timedOut'
   : result.status !== 0 ? `exit_${result.status}`
-  : wantedEdit && treeBefore.trim() === treeSnapshot().trim() ? 'empty_diff' : '';
+  : wantedEdit && treeBefore.trim() === treeSnapshot().trim() && !hasExternalWork(result) ? 'empty_diff' : '';
 let quotaCheck;
 let quotaResetUntil = 0;
 let escalationFailed = false;
@@ -994,7 +1004,7 @@ const diff = spawnSync('git', ['-C', cwd, 'diff', '--stat'], { windowsHide: true
 if (diff.stdout) process.stdout.write(diff.stdout);
 // 読み取り専用の質問(説明して/調べて)では空diffが正常なので、指示自体が実装系のときだけ判定する。
 // 「空か」ではなく「この実行で変わったか」を見る。
-const treeUnchanged = treeBefore.trim() === treeSnapshot().trim();
+const treeUnchanged = treeBefore.trim() === treeSnapshot().trim() && !hasExternalWork(result);
 if (executorName === 'codex') {
   if (wantedEdit && !result.timedOut && treeUnchanged && /実装|変更|修正|implemented|updated|modified/i.test(result.output || '')) {
     console.error('🚨 Codex は変更を書き込めていません（read-only サンドボックスの疑い）。WSL 経路で再実行してください');

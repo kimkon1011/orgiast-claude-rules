@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 import { getScheduledTaskInfo } from './lib/scheduled-task.mjs';
+import { checkGasMasterDrift } from './gas-master-drift.mjs';
 import { runAutoSessionStreakWatch } from './auto-session-streak-watch.mjs';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -300,7 +301,8 @@ export async function runNightlyHealth({
   baselinePath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'nightly-health-baseline.json'),
   scheduledTaskInfo = getScheduledTaskInfo,
   streakWatch = runAutoSessionStreakWatch,
-  streakNotifyImpl
+  streakNotifyImpl,
+  gasDrift = checkGasMasterDrift
 } = {}) {
   const dirname = path.dirname(fileURLToPath(import.meta.url));
   expectations ??= readJson(path.join(dirname, 'nightly-health-expectations.json'), []);
@@ -310,6 +312,11 @@ export async function runNightlyHealth({
   const newOffsets = { ...oldOffsets };
   const anomalies = [];
   const dedicatedStreakAnomalies = new Set();
+  try {
+    await gasDrift({ home, now, dryRun: dryRun || prime, notify });
+  } catch (error) {
+    anomalies.push({ type: 'gas_master_drift_error', label: 'GAS/master 週次監査', message: error.message });
+  }
   const registeredLogs = new Set();
   const scanTargets = [];
   const logFiles = fs.existsSync(logsDir)

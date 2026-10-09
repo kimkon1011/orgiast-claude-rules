@@ -144,6 +144,23 @@ test('collects all rule markdown and skill entry points, including onboarding', 
   } finally { rmSync(repo, { recursive: true, force: true }); }
 });
 
+test('collectTargets defaults to the repository onboarding and identifies its path when missing', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'hub-push-test-'));
+  try {
+    mkdirSync(join(repo, 'rules'));
+    mkdirSync(join(repo, 'skills'));
+    const onboarding = join(repo, 'ONBOARDING.md');
+    writeFileSync(onboarding, 'repository onboarding\r\n');
+    assert.deepEqual(collectTargets(repo), [
+      { title: 'ONBOARDING.md', in: 'hub', path: onboarding, content: 'repository onboarding\n' },
+    ]);
+    rmSync(onboarding);
+    assert.throws(() => collectTargets(repo), {
+      message: `ONBOARDING.md not found: ${onboarding}`,
+    });
+  } finally { rmSync(repo, { recursive: true, force: true }); }
+});
+
 test('registration preserves the deployed hidden task, working directory and schedule', () => {
   const script = readFileSync(new URL('./register-hub-push-task.ps1', import.meta.url), 'utf8');
   assert.match(script, /New-HiddenScheduledTaskAction.*-WorkingDirectory \$repo/);

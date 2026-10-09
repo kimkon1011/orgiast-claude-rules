@@ -9,6 +9,7 @@ import { spawnSync as defaultSpawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { fetchFleetKPIs, getClaudeDir } from './fleet-kpi-fetch.mjs';
 import { notifyKim } from './notify-kim.mjs';
+import { submitProposal } from './proposal-session.mjs';
 import { appendImprovementTodos } from './nightly-kpi.mjs';
 import { KNOWN_CHEAP_PROVIDERS } from './llm-fallback.mjs';
 import { classifyTaskKind, CODEX_KINDS } from './lib/task-kind.mjs';
@@ -16,7 +17,7 @@ import { parseDeferred } from './lib/executor-gate.mjs';
 import { collectProviderHealth, collectClaudeStats } from './usage-stats.mjs';
 import { collectBudgetStatus } from './budget-status.mjs';
 import { shouldSendMonthlyReport, buildMonthlyReport, markMonthlyReportSent } from './cost-monthly-report.mjs';
-import { collectProviderBalances, formatBalanceLine, CREDIT_LOW_THRESHOLD } from './provider-balance.mjs';
+import { collectProviderBalances, formatBalanceLine, alertProviderBalances, BALANCE_LOW_THRESHOLD_USD, CREDIT_LOW_THRESHOLD } from './provider-balance.mjs';
 import { resolveReporterLabel } from './reporter-label.mjs';
 import { main as sendFleetDirective } from './fleet-directive-send.mjs';
 
@@ -56,7 +57,7 @@ export function evaluateBalanceSignals(rows, { directProviders = ['deepseek', 'k
       if (Number.isFinite(row.credits)) {
         violations.push({ kind: 'balance_low', pc: 'self', severity: 'warning', provider: row.provider, evidence: `${row.provider} の前払いクレジットが ${row.credits}（閾値 ${CREDIT_LOW_THRESHOLD}）`, actualValue: row.credits, targetValue: CREDIT_LOW_THRESHOLD, trusted: true });
       } else if (row.autoTopUp !== true) {
-        violations.push({ kind: 'balance_low', pc: 'self', severity: 'warning', provider: row.provider, evidence: `${row.provider} balance $${row.balanceUsd.toFixed(2)} (< $3), auto top-up unavailable`, actualValue: row.balanceUsd, targetValue: 3, trusted: true });
+        violations.push({ kind: 'balance_low', pc: 'self', severity: 'warning', provider: row.provider, evidence: `${row.provider} balance $${row.balanceUsd.toFixed(2)} (< $${BALANCE_LOW_THRESHOLD_USD}), auto top-up unavailable`, actualValue: row.balanceUsd, targetValue: BALANCE_LOW_THRESHOLD_USD, trusted: true });
       }
     }
     if (row.autoTopUp === false && directProviders.includes(row.provider)) violations.push({ kind: 'autotopup_missing', pc: 'self', severity: 'warning', provider: row.provider, evidence: `${row.provider} has no auto top-up and remains a direct lane`, trusted: true });
@@ -1240,6 +1241,23 @@ export function writeBudgetPressure({ claudeDir, writeImpl = null }) {
   return { file, changed: true };
 }
 
+// 人の判断が必要な対処もセッションへ届ける。日次上限・未処理への追記は共通キューが守る。
+export async function proposeHumanActions(actions, { home, now = new Date(), dryRun = false, submit = submitProposal,
+  notify = notifyKim, log = console.log, sendNotification = true } = {}) {
+  if (!actions.length) return { ok: true, skipped: '項目なし' };
+  const date = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Tokyo' }).format(now);
+  const id = `cost-improve-${date}`;
+  const proposal = { id, title: `AIコスト改善の判断（${date}）`, source: 'cost-improve',
+    evidence: actions.map(a => `${a.pc}: ${a.kind} / ${a.todoMessage || a.evidence || '計測結果を確認'}`),
+    proposal: { summary: '自動対処できなかった項目の実装可能な改善を行う。',
+      changes: actions.map(a => ({ setting: `${a.pc}: ${a.kind}`, before: a.evidence || a.kind, after: a.todoMessage || '原因を確認し改善する' })),
+      costImpact: { perMonthUsd: null, basis: '項目ごとの効果は実装前に計測する。未計測の月額削減額は推定しない。' },
+      risks: ['外部権限や物理作業を必要とする項目はコードだけでは解決できない。実装可能な範囲を確認する。'] },
+    onApprove: { kind: 'codex-task', promptFile: path.join(home, '.claude', 'proposals', `${id}.codex.md`) },
+    onReject: '現行設定を維持し、却下理由を次の改善判断に残す。' };
+  return submit(proposal, { home, now, dryRun, notify, log, sendNotification, promptText: 'cost-improve の承認済み項目を実装する。' });
+}
+
 export async function main(argv = process.argv.slice(2), io = {}) {
   const dryRun = argv.includes('--dry-run');
   const jsonOutput = argv.includes('--json');
@@ -1324,6 +1342,15 @@ export async function main(argv = process.argv.slice(2), io = {}) {
     signals = await collectSignals();
   } catch (error) {
     console.error(`ローカル信号の収集に失敗(B4判定をスキップ): ${String(error?.message ?? error)}`);
+  }
+  // 総合レポートの文字数制限・対処件数制限に依存せず残高専用DMを届ける。
+  // 既存の日次取得結果を再利用し、通知障害でも本体は継続する。
+  if (!dryRun && !noNotify && !io.noNotify) {
+    try {
+      await (io.alertProviderBalances ?? alertProviderBalances)(signals?.providerBalances || [], {
+        home, now, notify: io.notifyKim ?? notifyKim,
+      });
+    } catch { console.error('provider-balance: 日次残高DMに失敗。次回再試行します'); }
   }
   // heartbeat metrics(headlessOut / budgetPace)は常に実測を載せる。
   if (localState && typeof localState === 'object' && signals) {
@@ -1562,6 +1589,22 @@ export async function main(argv = process.argv.slice(2), io = {}) {
     reportText += `- なし\n`;
   }
   for (const row of unmeasurableRows) reportText += `- **${row.pcName || row.label || 'unknown'}**: 自動では復旧不可 — そのPCで Claude Code を1回起動してください\n`;
+
+  // 人へ上げた内容と同じ情報をセッションへ登録。失敗は見える形で残す。
+  const proposalActions = [...new Map([...(state.proposalRetry || []), ...newlyHuman].map(a => [a.id || `${a.pc}:${a.kind}`, a])).values()];
+  let proposalResult;
+  try {
+    proposalResult = await proposeHumanActions(proposalActions, {
+      home, now, dryRun, submit: io.submitProposal ?? submitProposal, notify: io.notifyKim ?? notifyKim,
+      sendNotification: !noNotify && !io.noNotify, log: message => console.error(message)
+    });
+  } catch { proposalResult = { ok: false }; }
+  finalState.proposalRetry = proposalResult.ok ? [] : proposalActions;
+  if (!proposalResult.ok) console.error('cost-improve: 提案セッション登録失敗。次回再試行します。');
+  if (!dryRun) {
+    try { writeAtomic(stateFile, JSON.stringify(finalState, null, 2)); }
+    catch { stateWriteFailed = true; console.error('cost-improve: 提案再試行状態の保存失敗。'); }
+  }
 
   if (jsonOutput) {
     process.stdout.write(JSON.stringify({

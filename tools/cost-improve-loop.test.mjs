@@ -320,12 +320,18 @@ test('9. human escalation is neither worked nor shown in the verification sectio
   process.env.ORGIAST_HOME = tempDir;
   try {
     fs.writeFileSync(path.join(tempDir, '.claude', 'cost-improve-state.json'), JSON.stringify({ version: 1, actions: [], lastKpis: {}, staleRetry: { 'PC-human': { sentAt: '2026-09-01T00:00:00Z', count: 1 } } }));
+    const proposals = [];
     const result = await main(['--dry-run', '--no-notify'], {
+      submitProposal: async (proposal, options) => { proposals.push({ proposal, options }); return { ok: true }; },
       fetchFleetSheetRows: async () => [{ pcName: 'PC-human', label: 'human', reportedAt: '2026-09-01 00:00:00', delegRatio: '60%', claudeUsd: '1' }],
       readLedger: () => ({ codex: 1 }), localState: {}, noNotify: true
     });
     assert.ok(!result.reportText.split('### ③')[1].split('### ④')[0].includes('PC-human'));
     assert.ok(result.reportText.split('### ④')[1].includes('PC-human'));
+    assert.equal(proposals.length, 1);
+    assert.equal(proposals[0].proposal.source, 'cost-improve');
+    assert.ok(proposals[0].proposal.evidence.some(x => x.includes('PC-human')));
+    assert.equal(proposals[0].options.dryRun, true);
   } finally { delete process.env.ORGIAST_HOME; cleanTempDir(tempDir); }
 });
 
@@ -890,4 +896,37 @@ test('runAutoCodexIsolated: 通常の失敗(終了コード1)は従来どおり 
   const acts = [{ kind: 'x', pc: 'p', specContent: '修正する' }];
   runAutoCodexIsolated({ acts, specFile: 'spec.md', repoPath: os.tmpdir(), spawnSync: spawn });
   assert.equal(acts[0].result, 'failed');
+});
+
+test('日次ループは残高専用DMへ取得済みデータを渡し、通知失敗でも完走する', async () => {
+  const home = createTempDir();
+  const previousHome = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  const balances = [{ provider: 'kimi', balanceUsd: 0, autoTopUp: false, status: 'low', todaySpendUsd: 0, avg7dSpendUsd: 0 }];
+  let calls = 0;
+  const inputs = {
+    now: NOW, localState: {}, readLedger: () => ({ codex: 1 }),
+    fetchFleetSheetRows: async () => [{ pcName: 'PC-ok', reportedAt: '2026-09-06 11:00:00', delegRatio: '60%', claudeUsd: '1' }],
+    signals: { providerBalances: balances, providerHealth: [], codexLimit24h: 0, headlessClaudeOut: 0, budgetPacePct: 0, evalAgeDays: 0 },
+    alertProviderBalances: async (rows, options) => {
+      calls++;
+      assert.equal(rows, balances);
+      assert.equal(options.home, home);
+      assert.equal(options.now, NOW);
+      throw new Error('mock notification failure');
+    },
+    notifyKim: async () => ({ delivered: 'dm' }),
+    sendHeartbeat: async () => {}, shouldSendMonthlyReport: async () => false,
+  };
+  try {
+    assert.equal((await main([], inputs)).ok, true);
+    assert.equal(calls, 1);
+    await main(['--dry-run'], inputs);
+    await main(['--no-notify'], inputs);
+    assert.equal(calls, 1);
+  } finally {
+    if (previousHome === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previousHome;
+    cleanTempDir(home);
+  }
 });

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+export const GATE_CONTRACT = {"name": "pretooluse-lane-guard", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "pretooluse-lane-guard"}, {"kind": "command", "ref": "node tools/lane-doctor.mjs --probe"}, {"kind": "repo-file", "ref": "tools/codex-do.mjs"}, {"kind": "keyserve-key", "ref": "deepseek.env#DEEPSEEK_API_KEY"}]};
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

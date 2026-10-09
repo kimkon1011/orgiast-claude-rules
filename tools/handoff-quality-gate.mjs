@@ -1,3 +1,4 @@
+export const GATE_CONTRACT = {"name": "handoff-quality-gate", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "handoff-quality-gate"}]};
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';

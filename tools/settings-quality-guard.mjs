@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+export const GATE_CONTRACT = {"name": "settings-quality-guard", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "settings-quality-guard"}]};
 // 一時許可: CLAUDE_MODEL_GUARD_ALLOW=1 で SessionStart の model 正規化だけを停止する。
 import fs from 'node:fs';
 import os from 'node:os';

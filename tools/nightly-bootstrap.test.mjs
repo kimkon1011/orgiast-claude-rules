@@ -131,6 +131,7 @@ function gitShimPath(fix, headSha, remoteSha) {
 }
 
 const hasPowerShell = (() => {
+  if (process.platform !== 'win32' && (!existsSync(powershell) || !/^[A-Za-z]:[\\/]/.test(toWindowsPath(script)))) return false;
   const probe = spawnSync(powershell, ['-NoProfile', '-Command', 'exit 0']);
   return !probe.error && probe.status === 0;
 })();
@@ -550,11 +551,13 @@ for (const dirty of [true, false]) test(`real git bootstrap preserves dirty tree
     `"C:\\Program Files\\Git\\cmd\\git.exe" %*`,
     'exit /b %errorlevel%', '',
   ].join('\r\n'));
-  const result = runBootstrap(fix, target, [], { PATH: `${toWindowsPath(shim)};C:\\Windows\\System32\\WindowsPowerShell\\v1.0` });
+  const result = runBootstrap(fix, target, [], { PATH: `${toWindowsPath(shim)};${toWindowsPath(dirname(process.execPath))};C:\\Program Files\\Git\\cmd;C:\\Windows\\System32\\WindowsPowerShell\\v1.0` });
   assert.equal(result.status, 0, result.stderr);
   const commands = readFileSync(trace, 'utf8');
   if (dirty) {
     assert.doesNotMatch(commands, /reset --hard|clean -qfd|checkout --detach/);
+    assert.match(logText(fix), /skip:dirty worktree preserved/);
+    assert.doesNotMatch(logText(fix), /ok:origin\/main/);
     assert.equal(readFileSync(join(fix.repo, 'untracked'), 'utf8'), 'precious');
     const branch = git(fix.repo, ['branch', '--show-current']).trim();
     assert.match(branch, /^rescue\/auto-session-/);

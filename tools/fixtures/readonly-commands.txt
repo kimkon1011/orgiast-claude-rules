@@ -1,0 +1,17 @@
+# Executed as hook input only; never executed as shell commands.
+clasp deployments
+clasp status
+clasp versions
+vercel ls
+vercel inspect example
+vercel deployments ls
+vc.js deployments ls
+git push --dry-run
+git push origin main --dry-run
+gh pr view 667
+gh pr list
+gh issue view 1
+git status
+git log -1
+git diff
+rg --files

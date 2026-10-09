@@ -307,3 +307,103 @@ test('LLMは既存envとfallbackを使い返信textと利用記録を返す', as
   const usage = JSON.parse(fs.readFileSync(path.join(f.home, '.claude', 'executor-usage.jsonl'), 'utf8'));
   assert.equal(usage.tool, 'discord-autoreply'); assert.equal(usage.in, 10); assert.equal(usage.out, 20);
 });
+
+const LOG_NAMES = ['run.log', 'log.jsonl'];
+const logLines = (f, name) => fs.readFileSync(f.file(name), 'utf8').trim().split('\n');
+
+test('静穏パス2連続はログ1行、lastRunTsは毎回保存', async t => {
+  const f = fixture(t, { messages: [] });
+  await runOnce(f.options);
+  await runOnce({ ...f.options, now: () => NOW + 20000 });
+  for (const name of LOG_NAMES) assert.equal(logLines(f, name).length, 1);
+  assert.equal(f.readState().lastQuietLogTs, NOW);
+  assert.equal(f.readState().lastRunTs, NOW + 20000);
+});
+test('静穏ログは1時間未満を省略し、ちょうど1時間後に2行目', async t => {
+  const f = fixture(t, { messages: [] });
+  await runOnce(f.options);
+  await runOnce({ ...f.options, now: () => NOW + 3600000 - 1 });
+  for (const name of LOG_NAMES) assert.equal(logLines(f, name).length, 1);
+  await runOnce({ ...f.options, now: () => NOW + 3600000 });
+  for (const name of LOG_NAMES) assert.equal(logLines(f, name).length, 2);
+  assert.equal(f.readState().lastQuietLogTs, NOW + 3600000);
+  assert.equal(JSON.parse(logLines(f, 'log.jsonl')[1]).ts, NOW + 3600000);
+});
+test('静穏直後でも返信は記録し静穏ログ時刻を動かさない', async t => {
+  const messages = [], f = fixture(t, { messages });
+  await runOnce(f.options);
+  messages.push(message());
+  const result = await runOnce({ ...f.options, now: () => NOW + 20000 });
+  assert.equal(result.replied, 1);
+  for (const name of LOG_NAMES) assert.equal(logLines(f, name).length, 2);
+  assert.equal(JSON.parse(logLines(f, 'log.jsonl')[1]).replied, 1);
+  assert.equal(f.readState().lastQuietLogTs, NOW);
+});
+test('1MB超の各ログを1世代へローテーションし既存の.1を上書き', async t => {
+  const f = fixture(t, { messages: [] });
+  const previous = 'x'.repeat(1_048_577);
+  for (const name of LOG_NAMES) fs.writeFileSync(f.file(name), previous);
+  const first = await runOnce(f.options);
+  assert.equal(first.ok, true);
+  for (const name of LOG_NAMES) {
+    assert.equal(fs.readFileSync(f.file(name + '.1'), 'utf8'), previous);
+    assert.equal(logLines(f, name).length, 1);
+    fs.writeFileSync(f.file(name), 'y'.repeat(1_048_577));
+  }
+  const second = await runOnce({ ...f.options, now: () => NOW + 3600000 });
+  assert.equal(second.ok, true);
+  for (const name of LOG_NAMES) {
+    assert.equal(fs.readFileSync(f.file(name + '.1'), 'utf8'), 'y'.repeat(1_048_577));
+    assert.equal(logLines(f, name).length, 1);
+    assert.equal(fs.existsSync(f.file(name + '.2')), false);
+  }
+});
+for (const outcome of ['corrected', 'confirmed', 'expired']) {
+  test(`静穏直後でも学習 ${outcome} を記録`, async t => {
+    const f = fixture(t, { messages: [], after: outcome === 'expired' ? [] : [kim()],
+      llmResult: { is_correction: outcome === 'corrected', is_confirmation: outcome === 'confirmed', rule: null, fact: null } });
+    await runOnce(f.options);
+    const state = f.readState();
+    state.replies = [prior({ ts: outcome === 'expired' ? NOW - 72 * 3600000 : NOW - 10000 })];
+    fs.writeFileSync(f.file('state.json'), JSON.stringify(state));
+    const result = await runOnce({ ...f.options, now: () => NOW + 20000 });
+    assert.equal(result.learned[outcome], 1);
+    assert.equal(result.errors.length, 0);
+    for (const name of LOG_NAMES) assert.equal(logLines(f, name).length, 2);
+    assert.equal(JSON.parse(logLines(f, 'log.jsonl')[1]).learned[outcome], 1);
+    assert.equal(f.readState().lastQuietLogTs, NOW);
+  });
+}
+test('静穏直後でもエラーを記録', async t => {
+  const f = fixture(t, { messages: [] });
+  await runOnce(f.options);
+  const result = await runOnce({ ...f.options, now: () => NOW + 20000,
+    fetchImpl: async () => { throw new Error('fake network failure'); } });
+  assert.equal(result.ok, false);
+  for (const name of LOG_NAMES) assert.equal(logLines(f, name).length, 2);
+  assert.match(JSON.parse(logLines(f, 'log.jsonl')[1]).errors[0], /fake network failure/);
+  assert.equal(f.readState().lastQuietLogTs, NOW);
+});
+test('1MBちょうどではローテーションしない', async t => {
+  const f = fixture(t, { messages: [] });
+  for (const name of LOG_NAMES) fs.writeFileSync(f.file(name), 'x'.repeat(1_048_576));
+  const result = await runOnce(f.options);
+  assert.equal(result.ok, true);
+  for (const name of LOG_NAMES) {
+    assert.equal(fs.existsSync(f.file(name + '.1')), false);
+    assert.ok(fs.statSync(f.file(name)).size > 1_048_576);
+  }
+});
+test('dry-runは1MB超ログも時刻も変更しない', async t => {
+  const f = fixture(t, { messages: [] });
+  await runOnce(f.options);
+  for (const name of LOG_NAMES) fs.writeFileSync(f.file(name), 'x'.repeat(1_048_577));
+  const before = fs.readFileSync(f.file('state.json'), 'utf8');
+  const result = await runOnce({ ...f.options, dryRun: true, now: () => NOW + 3600000 });
+  assert.equal(result.ok, true);
+  assert.equal(fs.readFileSync(f.file('state.json'), 'utf8'), before);
+  for (const name of LOG_NAMES) {
+    assert.equal(fs.existsSync(f.file(name + '.1')), false);
+    assert.equal(fs.readFileSync(f.file(name), 'utf8'), 'x'.repeat(1_048_577));
+  }
+});

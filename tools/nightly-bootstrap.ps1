@@ -46,41 +46,24 @@ function Stop-Nightly([string]$Step, [string]$Result, [int]$Code) {
 $script:blockedNightlyTrees = @{}
 function Test-NightlyTreeClean([string]$Tree) {
     if ($script:blockedNightlyTrees.ContainsKey($Tree)) { return $false }
-    $dirty = @(& $git.Source -C $Tree status --porcelain --untracked-files=all)
+    $dirty = @(& $git.Source -C $Tree status --porcelain --untracked-files=all --ignore-submodules=all)
     if ($LASTEXITCODE -ne 0) {
         $script:blockedNightlyTrees[$Tree] = $true
         Write-NightlyLog 'DIRTY_WORKTREE_SKIP' ("status failed: " + $Tree)
         return $false
     }
     if ($dirty.Count -eq 0) { return $true }
-    $script:blockedNightlyTrees[$Tree] = $true
-    Write-NightlyLog 'DIRTY_WORKTREE_SKIP' ("uncommitted changes: " + $Tree)
-    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-    $base = 'rescue/auto-session-' + $stamp
-    $branch = $base
-    $n = 0
-    while ($true) {
-        & $git.Source -C $Tree show-ref --verify --quiet ("refs/heads/" + $branch)
-        if ($LASTEXITCODE -ne 0) { break }
-        $n++
-        $branch = $base + '-' + $n
-    }
+    # The helper persists the attempt BEFORE creating a branch, under this bootstrap's mutex.
     try {
-        & $git.Source -C $Tree switch -c $branch | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw 'rescue branch failed' }
-        & $git.Source -C $Tree add -A | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw 'rescue add failed' }
-        & $git.Source -C $Tree -c user.name='Auto Session Rescue' -c user.email=auto-session-rescue@localhost commit -m ("auto-session-rescue-" + $stamp) | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw 'rescue commit failed' }
-        $sha = & $git.Source -C $Tree rev-parse HEAD
-        if ($LASTEXITCODE -ne 0) { throw 'rescue verification failed' }
-        Write-NightlyLog 'RESCUE_LOCAL_OK' ("$Tree $branch $sha")
-        try {
-            Add-Content -LiteralPath (Join-Path $HOME '.claude\next-session.md') -Encoding UTF8 -Value ("`n- [ ] rescue ブランチ " + $branch + " に退避した変更のレビューが必要（" + $Tree + "; " + $sha + "）") -ErrorAction Stop
-        } catch { Write-NightlyLog 'RESCUE_HANDOFF_FAILED' $_.Exception.Message }
-        & $git.Source -C $Tree push -u origin $branch | Out-Null
-        if ($LASTEXITCODE -ne 0) { Write-NightlyLog 'RESCUE_PUSH_FAILED_LOCAL_SAVED' $branch }
-    } catch { Write-NightlyLog 'RESCUE_FAILED' $_.Exception.Message }
+        $helper = Join-Path $PSScriptRoot 'nightly-rescue.mjs'
+        if (-not (Test-Path -LiteralPath $helper)) { $helper = Join-Path $Tree 'tools\nightly-rescue.mjs' }
+        $resultText = & node $helper $Tree $HOME
+        if ($LASTEXITCODE -ne 0) { throw 'rescue helper failed; tree preserved' }
+        $result = $resultText | ConvertFrom-Json
+        foreach ($entry in $result.events) { Write-NightlyLog $entry.step $entry.message }
+        if ($result.clean -eq $true) { return $true }
+    } catch { Write-NightlyLog 'DIRTY_WORKTREE_SKIP' $_.Exception.Message }
+    $script:blockedNightlyTrees[$Tree] = $true
     return $false
 }
 
@@ -166,7 +149,7 @@ try {
                         & $git.Source -C $repo reset --hard origin/main
                         if ($LASTEXITCODE -ne 0) { throw "git reset終了コード=$LASTEXITCODE" }
                         if (Test-NightlyTreeClean $repo) {
-                            & $git.Source -C $repo clean -qfd
+                            & $git.Source -C $repo clean -qfd -e scratch/
                             if ($LASTEXITCODE -ne 0) { throw "git clean終了コード=$LASTEXITCODE" }
                         }
                     }

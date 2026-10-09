@@ -320,12 +320,18 @@ test('9. human escalation is neither worked nor shown in the verification sectio
   process.env.ORGIAST_HOME = tempDir;
   try {
     fs.writeFileSync(path.join(tempDir, '.claude', 'cost-improve-state.json'), JSON.stringify({ version: 1, actions: [], lastKpis: {}, staleRetry: { 'PC-human': { sentAt: '2026-09-01T00:00:00Z', count: 1 } } }));
+    const proposals = [];
     const result = await main(['--dry-run', '--no-notify'], {
+      submitProposal: async (proposal, options) => { proposals.push({ proposal, options }); return { ok: true }; },
       fetchFleetSheetRows: async () => [{ pcName: 'PC-human', label: 'human', reportedAt: '2026-09-01 00:00:00', delegRatio: '60%', claudeUsd: '1' }],
       readLedger: () => ({ codex: 1 }), localState: {}, noNotify: true
     });
     assert.ok(!result.reportText.split('### ③')[1].split('### ④')[0].includes('PC-human'));
     assert.ok(result.reportText.split('### ④')[1].includes('PC-human'));
+    assert.equal(proposals.length, 1);
+    assert.equal(proposals[0].proposal.source, 'cost-improve');
+    assert.ok(proposals[0].proposal.evidence.some(x => x.includes('PC-human')));
+    assert.equal(proposals[0].options.dryRun, true);
   } finally { delete process.env.ORGIAST_HOME; cleanTempDir(tempDir); }
 });
 

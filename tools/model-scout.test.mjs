@@ -182,3 +182,30 @@ test('overlay write failure reports the local path instead of claiming successfu
   assert.doesNotMatch(result.dm, /eval に投入済み/);
   assert.equal(fs.readFileSync(path.join(f.dir, 'eval'), 'utf8'), 'not a directory');
 });
+
+test('既知のoverlay候補はeval完了後に提案し、skip上書きとdry-run無変更を守る', async (t) => {
+  const f = fixture(t), proposals = [];
+  fs.writeFileSync(f.routingFile, JSON.stringify({ categories: { summarize: { provider: 'openrouter', model: f.baseline.id, rate: 1 } } }));
+  fs.writeFileSync(path.join(f.dir, 'model-scout-state.json'), JSON.stringify(state([f.baseline, f.candidate])));
+  const candidateConfig = { provider: 'openrouter', model: f.candidate.id };
+  fs.writeFileSync(f.configFile, JSON.stringify([candidateConfig]));
+  fs.writeFileSync(path.join(f.dir, 'eval-results.jsonl'), JSON.stringify({
+    t: now.toISOString(), provider: 'openrouter', model: f.candidate.id,
+    byCategory: { summarize: { n: 3, graded: 3, pass: 3, errors: 0, truncated: 0 } }
+  }) + '\n');
+  const before = fs.readFileSync(f.configFile, 'utf8');
+  const options = { ...f.options, dryRun: true, submit: async (proposal, opts) => {
+    assert.equal(opts.dryRun, true); proposals.push(proposal); return { ok: true };
+  } };
+  const result = await runScout(options);
+  assert.equal(result.ok, true);
+  assert.equal(result.changes.length, 0);
+  assert.equal(result.proposed, 1);
+  assert.match(proposals[0].proposal.changes[0].before, /summarize: openrouter\/vendor\/current/);
+  assert.match(proposals[0].proposal.changes[0].after, /summarize: openrouter\/vendor\/new/);
+  assert.equal(fs.readFileSync(f.configFile, 'utf8'), before);
+  assert.equal(f.notifications.length, 0);
+  fs.writeFileSync(f.configFile, JSON.stringify([{ ...candidateConfig, skip: true }]));
+  assert.equal((await runScout(options)).proposed, 0);
+  assert.equal(proposals.length, 1);
+});

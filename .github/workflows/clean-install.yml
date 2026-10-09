@@ -60,6 +60,8 @@ jobs:
             (Join-Path $env:APPDATA 'npm')
           ) | Where-Object { $_ }
           $env:Path = $pathParts -join ';'
+          # Exercise this PR explicitly; normal installs auto-select the dedicated main anchor.
+          $env:ORGIAST_REPO = (Get-Location).Path
           node '.\tools\setup.mjs' --converge --home $env:USERPROFILE 2>&1 |
             Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'clean-install-logs\converge-pr.log')
           if ($LASTEXITCODE -ne 0) { throw "setup.mjs --converge failed with exit code $LASTEXITCODE" }

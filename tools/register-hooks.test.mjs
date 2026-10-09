@@ -197,7 +197,7 @@ test('guard本体が未同期でもregister-hooksは落ちず、既存hookを保
   fs.rmSync(repo, { recursive: true, force: true });
 });
 
-test('ORGIAST_REPO未指定時はregister-hooks自身のツリーからhookを登録する', () => {
+test('ORGIAST_REPO明示時は指定された同期途中のツリーからhookを登録する', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-own-tree-home-'));
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-own-tree-repo-'));
   fs.mkdirSync(path.join(repo, 'tools'), { recursive: true });
@@ -205,7 +205,7 @@ test('ORGIAST_REPO未指定時はregister-hooks自身のツリーからhookを�
     fs.copyFileSync(path.resolve('tools', name), path.join(repo, 'tools', name));
   }
   const env = { ...process.env, ORGIAST_HOME: home };
-  delete env.ORGIAST_REPO;
+  env.ORGIAST_REPO = repo;
   const stdout = execFileSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { encoding: 'utf8', env });
   const settings = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'));
   const relaunch = settings.hooks.SessionStart.flatMap((group) => group.hooks || [])
@@ -223,7 +223,7 @@ test('hook実ファイルのskipがある時は注意を出し変更なしと正
   fs.mkdirSync(path.join(repo, 'tools'), { recursive: true });
   fs.copyFileSync(path.resolve('tools', 'register-hooks.mjs'), path.join(repo, 'tools', 'register-hooks.mjs'));
   const env = { ...process.env, ORGIAST_HOME: home };
-  delete env.ORGIAST_REPO;
+  env.ORGIAST_REPO = repo;
   const stdout = execFileSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { encoding: 'utf8', env });
   assert.match(stdout, /\[注意\]/);
   assert.doesNotMatch(stdout, /hook は既に登録済み\(変更なし\)/);
@@ -242,4 +242,57 @@ test('SessionStart lane health は定義元から1本に収束する',()=>{
     assert.equal(hooks.length,1);
     assert.deepEqual(hooks[0], { type: 'command', command: `node "${path.join(repo, 'tools', 'sessionstart-lane-health.mjs')}" --hook`, timeout: 5 });
   } finally {fs.rmSync(home,{recursive:true,force:true});}
+});
+
+test('mixed roots, wrappers and obsolete tools converge once; custom hooks survive byte-for-byte', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-converge-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const repo = path.resolve('.'), file = path.join(home, '.claude/settings.json');
+  const env = { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo };
+  const run = (...args) => execFileSync(process.execPath, ['tools/register-hooks.mjs', ...args], { env, encoding: 'utf8' });
+  const expected = JSON.parse(run('--expected-json')).hooks;
+  const custom = { type: 'command', command: 'node "/my-hooks/session-relaunch.mjs"', timeout: 42 };
+  const input = structuredClone(expected);
+  input.SessionStart.push({ matcher: 'custom', hooks: [custom, { type: 'command', command: 'node "C:\\Users\\x\\orgiast-main\\tools\\retired-hook.mjs"' }] });
+  input.SessionStart.push({ hooks: [{ type: 'command', command: 'node "C:/old/tools/session-relaunch.mjs"' }] });
+  input.SessionStart[0].hooks[0].command = 'node "C:/Users/x/.claude/hooks/bg-launch.mjs" ' + input.SessionStart[0].hooks[0].command;
+  input.PreToolUse[0].matcher = 'wrong';
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ customSetting: 17, hooks: input }));
+  run('--hooks-only');
+  const first = fs.readFileSync(file, 'utf8'), stamp = fs.statSync(file).mtimeMs;
+  const result = JSON.parse(first);
+  assert.equal(result.customSetting, 17);
+  assert.deepEqual(result.hooks, { ...expected, SessionStart: [{ matcher: 'custom', hooks: [custom] }, ...expected.SessionStart] });
+  assert.match(run('--hooks-only'), /変更なし/);
+  assert.equal(fs.readFileSync(file, 'utf8'), first);
+  assert.equal(fs.statSync(file).mtimeMs, stamp);
+});
+
+test('automatic anchor prefers clean dedicated main, rejects dirty/feature/ahead checkouts without writing settings', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-anchor-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const nightly = path.join(home, '.claude/nightly-repo'), fallback = path.join(home, 'orgiast-claude-rules');
+  const makeRepo = repo => {
+    fs.mkdirSync(path.join(repo, 'tools'), { recursive: true });
+    for (const name of ['register-hooks.mjs', 'session-relaunch.mjs']) fs.copyFileSync(path.resolve('tools', name), path.join(repo, 'tools', name));
+    const git = (...args) => execFileSync('git', ['-C', repo, ...args], { stdio: 'pipe' });
+    git('init', '-b', 'main'); git('add', '.');
+    git('-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-m', 'fixture');
+    git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+    return git;
+  };
+  const git = makeRepo(nightly); makeRepo(fallback);
+  const env = { ...process.env, ORGIAST_HOME: home }; delete env.ORGIAST_REPO;
+  const run = () => spawnSync(process.execPath, ['tools/register-hooks.mjs', '--expected-json'], { env, encoding: 'utf8' });
+  assert.ok(run().stdout.includes(JSON.stringify(nightly).slice(1, -1)));
+  fs.writeFileSync(path.join(nightly, 'dirty'), 'dirty');
+  assert.ok(run().stdout.includes(JSON.stringify(fallback).slice(1, -1)));
+  fs.unlinkSync(path.join(nightly, 'dirty')); git('switch', '-c', 'feature');
+  assert.ok(run().stdout.includes(JSON.stringify(fallback).slice(1, -1)));
+  git('switch', 'main'); git('-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--allow-empty', '-m', 'ahead');
+  assert.ok(run().stdout.includes(JSON.stringify(fallback).slice(1, -1)));
+  fs.writeFileSync(path.join(fallback, 'dirty'), 'dirty');
+  assert.equal(run().status, 1);
+  assert.equal(fs.existsSync(path.join(home, '.claude/settings.json')), false);
 });

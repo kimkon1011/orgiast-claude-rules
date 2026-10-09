@@ -121,9 +121,9 @@ if (manifest) {
   if (converge) {
     const item = { id: 'classifier-settings', severity: 'required', description: 'hook登録・日次通知hook削除・allowルール同期' };
     try {
-      // 実行中の版の repo を明示し、別の古いクローンを見て無言でスキップしない。
+      // Let the registrar select the dedicated main anchor unless explicitly overridden.
       execFileSync(process.execPath, [path.join(scriptDir, 'register-hooks.mjs'), '--hooks-only'], {
-        env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: path.dirname(scriptDir) },
+        env: { ...process.env, ORGIAST_HOME: home },
         timeout: 30_000, stdio: 'pipe', windowsHide: true,
       });
       const repaired = convergeAllowRules(home);

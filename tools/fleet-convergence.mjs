@@ -58,7 +58,11 @@ export function collectConvergence({ home, repo, hostname = os.hostname(), usern
       [fileURLToPath(new URL('./register-hooks.mjs', import.meta.url)), '--expected-json'],
       { encoding: 'utf8', timeout: 30000, windowsHide: true, env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo } }));
     const actual = readJson(path.join(home, '.claude/settings.json'));
-    row.hookMissing = (actual.disableAllHooks === true ? hookEntries(expected.hooks).length : missingHooks(actual.hooks, expected.hooks).length) + (expected.skippedNames?.length || 0);
+    row.hookMissingNames = actual.disableAllHooks === true
+      ? hookEntries(expected.hooks).map(h => `${h.event}:${h.command.match(/[\w-]+\.mjs/g)?.at(-1) || 'unknown'}`)
+      : missingHooks(actual.hooks, expected.hooks);
+    row.hookMissingNames.push(...(expected.skippedNames || []).map(name => `unavailable:${name}`));
+    row.hookMissing = row.hookMissingNames.length;
   } catch { /* failed expected-set generation remains unknown */ }
   const missing = keyDeficits(home, readJson(path.join(repo, 'tools/keyserve-distribution-manifest.json')));
   row.keyMissing = missing?.length ?? null;

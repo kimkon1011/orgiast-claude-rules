@@ -307,7 +307,7 @@ try {
         elseif (Test-Path -LiteralPath (Join-Path $homeRoot 'orgiast-claude-rules\tools')) { Join-Path $homeRoot 'orgiast-claude-rules' }
         else { Split-Path -Parent $PSScriptRoot }
     $env:ORGIAST_HOME = $homeRoot
-    $env:ORGIAST_REPO = $repoRoot
+    # Leave automatic hook anchor selection to register-hooks.
     $registrar = Join-Path $repoRoot 'tools\setup.mjs'
     if ((Get-Command node -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath $registrar)) {
         & node $registrar --converge --home $homeRoot 2>$null | Out-Null

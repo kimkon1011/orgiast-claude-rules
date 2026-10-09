@@ -1,4 +1,40 @@
-# 接続文字列などの秘密(freee-query.mjs が読む)。絶対にコミットしない.env.local# Codex CLI が作業ごとに置く一時ファイル(コミット対象外).codex-task.mdmemory-shared/# gpage-fetch.mjs 用の playwright-core をローカルで npm install したときの成果物node_modules/package-lock.json# Codex 委譲時のラッパーが吐く実行ログ(内容は都度使い捨て)/codex-rule*.log# nightly-bootstrap のテストが作る一時ディレクトリ(後始末前に落ちると残る)tools/.nightly-bootstrap-test-*/# PowerShell を repo 直下で走らせたときの一時スクリプトtools/.ps.tmp.ps1# $env:LOCALAPPDATA が未設定のまま PowerShell を起動すると repo 直下に掘られるキャッシュ/Microsoft/# Genspark Tool CLI の自動生成スキル (gsk init-skills)。ベンダー成果物なのでコミットしない.gsk/# Isolated CI verification home and evidence/.tmp-home-ci/# 夜間 eval-harness が ~/.claude/eval-results.jsonl から再生成するマシンローカル生成物。# 追跡すると毎晩 dirty になり dirty-worktree-guard が rescue ブランチを作るため追跡しない。tools/routing-table.json# Disposable eval clones must never trigger nightly rescue.scratch/
-.wt/
 
+# 接続文字列などの秘密(freee-query.mjs が読む)。絶対にコミットしない
+.env.local
+
+# Codex CLI が作業ごとに置く一時ファイル(コミット対象外)
+.codex-task.md
+memory-shared/
+
+# gpage-fetch.mjs 用の playwright-core をローカルで npm install したときの成果物
+node_modules/
+package-lock.json
+
+# Codex 委譲時のラッパーが吐く実行ログ(内容は都度使い捨て)
+/codex-rule*.log
+
+# nightly-bootstrap のテストが作る一時ディレクトリ(後始末前に落ちると残る)
+tools/.nightly-bootstrap-test-*/
+
+# PowerShell を repo 直下で走らせたときの一時スクリプト
+tools/.ps.tmp.ps1
+
+# $env:LOCALAPPDATA が未設定のまま PowerShell を起動すると repo 直下に掘られるキャッシュ
+/Microsoft/
+
+# Genspark Tool CLI の自動生成スキル (gsk init-skills)。ベンダー成果物なのでコミットしない
+.gsk/
+
+# Isolated CI verification home and evidence
+/.tmp-home-ci/
+
+# 夜間 eval-harness が ~/.claude/eval-results.jsonl から再生成するマシンローカル生成物。
+# 追跡すると毎晩 dirty になり dirty-worktree-guard が rescue ブランチを作るため追跡しない。
+tools/routing-table.json
+
+# Disposable eval clones must never trigger nightly rescue.
+scratch/
+
+# Codex のサブクローン作業ツリーと internal-audit の検証証跡（機械ローカル）
+.wt/
 /evidence/internal-audit-v11/

@@ -46,6 +46,10 @@ function writeJson(file, value) {
 function envFile(file) {
   try { return parseEnvText(fs.readFileSync(file, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return {}; throw e; }
 }
+// Discord監視も fleet-mail と同じPCラベルで動作を判定する。
+export function resolveFleetLabel(home, identity = machineIdentity()) {
+  return envFile(path.join(home, '.claude', 'cost-reporter.env')).REPORTER_LABEL || identity.hostname;
+}
 export function readInbox(home, { unreadOnly = true } = {}) {
   const dir = path.join(home, '.claude', 'fleet-inbox');
   let files;
@@ -186,7 +190,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   const config = envFile(path.join(dir, 'fleet-sheet.env'));
   if (!config.FLEET_SHEET_URL || !config.FLEET_SHEET_TOKEN) { err('fleet-mail: fleet-sheet.env 未設定のためスキップ'); return 0; }
   const identity = deps.identity ?? machineIdentity();
-  const label = envFile(path.join(dir, 'cost-reporter.env')).REPORTER_LABEL || identity.hostname;
+  const label = resolveFleetLabel(home, identity);
   const request = deps.request ?? createClient({ url: config.FLEET_SHEET_URL, token: config.FLEET_SHEET_TOKEN, fetchImpl: deps.fetch });
   if (options['--send']) {
     let pcMap = deps.pcMap;

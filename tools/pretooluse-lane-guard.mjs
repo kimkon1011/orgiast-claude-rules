@@ -13,7 +13,7 @@ import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 
 
 const repo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-export const delegated = /pr-merge\.mjs|lane-doctor\.mjs|codex-do\.mjs|llm-ask\.mjs|batch-(?:enqueue|run)\.mjs|(?:^|\s)gemini\s|(?:^|\s)codex\s|wsl[^\r\n]*\bcodex\b|claude\s+-p|node[^\r\n]*usage-stats\.mjs/i;
+export const delegated = /pr-merge\.mjs|lane-doctor\.mjs|codex-do\.mjs|autopilot-tick\.mjs|llm-ask\.mjs|batch-(?:enqueue|run)\.mjs|(?:^|\s)gemini\s|(?:^|\s)codex\s|wsl[^\r\n]*\bcodex\b|claude\s+-p|node[^\r\n]*usage-stats\.mjs/i;
 function output(value) { console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', ...value } })); }
 function editPath(input) { return String(input.file_path || input.path || ''); }
 function isDocEdit(name, input, home) {

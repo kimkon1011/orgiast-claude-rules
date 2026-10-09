@@ -24,6 +24,7 @@ try {
 } catch { /* guard が未同期でも登録処理は続行する */ }
 
 const hooksOnly = process.argv.includes('--hooks-only');
+const expectedJson = process.argv.includes('--expected-json');
 const home = process.env.ORGIAST_HOME || os.homedir();
 // 2026-09-14: ~/orgiast-claude-rules が stale で新 hook(hook-budget-check) が無言で未登録になった。
 // 実行中スクリプトのツリーを基準にし、実行した版の hook を同じ版のツリーから登録する。
@@ -71,7 +72,7 @@ function add(groups, scriptName, group) {
   // リポの同期が遅れている環境で、存在しないスクリプトを登録して毎回 ENOENT を出すのを防ぐ。
   if (scriptName.endsWith('.mjs') && !fs.existsSync(path.join(repo, 'tools', scriptName))) {
     skippedNames.push(scriptName);
-    console.log(`  [skip] ${scriptName} — repo/tools に実ファイルが無いため未登録`);
+    if (!expectedJson) console.log(`  [skip] ${scriptName} — repo/tools に実ファイルが無いため未登録`);
     return false;
   }
   if (!gateRuntimeReady && scriptName.endsWith('.mjs')) {
@@ -80,7 +81,7 @@ function add(groups, scriptName, group) {
     if (/GATE_CONTRACT/.test(source)) {
       let legacy = false;
       try { legacy = JSON.parse(fs.readFileSync(path.join(repo, 'tools/gate-rollout-manifest.json'), 'utf8')).gates?.[scriptName.slice(0, -4)]?.legacy === true; } catch {}
-      if (!legacy) { skippedNames.push(scriptName); console.log(`  [skip] ${scriptName} — gate runtime 同期待ち`); return false; }
+      if (!legacy) { skippedNames.push(scriptName); if (!expectedJson) console.log(`  [skip] ${scriptName} — gate runtime 同期待ち`); return false; }
     }
   }
   // 既存PCは .ps1 版が登録済みのことがある(Windows install)。拡張子を無視して重複判定しないと
@@ -145,7 +146,7 @@ export function repairPowerShellExecutionPolicy(hooks) {
 try {
   const settingsFile = path.join(home, '.claude', 'settings.json');
   const settingsHadBom = fs.existsSync(settingsFile) && fs.readFileSync(settingsFile, 'utf8').startsWith('\uFEFF');
-  const settings = load(settingsFile);
+  const settings = expectedJson ? {} : load(settingsFile);
   let added = 0;
   let policyRepaired = 0;
   let costLoopMigrated = 0;
@@ -166,7 +167,8 @@ try {
     added += setTimeoutFor(settings.hooks.Stop, 'stop-gate-runner.mjs', 30);
   }
   const session = [
-    ['onboarding-sync.mjs', 20, true, ''],
+    ['onboarding-sync.mjs', 300, true, ''],
+    ['fleet-convergence-sync.mjs', 360, true, ''],
     // あるべき状態への収束(検査→修復→再検査)。onboarding-sync が repo を新しくした後に走る。
     // リポジトリ直接参照・コピー配布なし = main を変えれば全PC追従(配り直し不要)。
     ['setup.mjs', 60, true, ' --converge'],
@@ -178,7 +180,7 @@ try {
   if (fs.existsSync(path.join(repo, 'tools', 'onboarding-sync.mjs'))) {
     added += migrate(settings.hooks.SessionStart, 'onboarding-sync.ps1', 'onboarding-sync.mjs', command('onboarding-sync.mjs'));
     for (const group of settings.hooks.SessionStart) for (const hook of (Array.isArray(group?.hooks) ? group.hooks : [])) {
-      if (String(hook.command || '').includes('onboarding-sync.mjs')) { hook.timeout = 20; hook.async = true; }
+      if (String(hook.command || '').includes('onboarding-sync.mjs')) { hook.timeout = 300; hook.async = true; }
     }
   }
   if (fs.existsSync(path.join(repo, 'tools', 'cost-loop.mjs'))) {
@@ -312,7 +314,15 @@ try {
   // 旧PCは hook が `powershell -NoProfile -File ...ps1` で登録され、実行ポリシーで無音死している。
   policyRepaired = repairPowerShellExecutionPolicy(settings.hooks);
   added += policyRepaired;
+  for (const groups of Object.values(settings.hooks)) for (const group of groups) for (const hook of group.hooks || []) {
+    const old = String(hook.command || '');
+    const updated = old.replace(/"[^"\r\n]*[\\/]([\w-]+\.mjs)"/g, (full, name) =>
+      fs.existsSync(path.join(repo, 'tools', name)) ? `"${path.join(repo, 'tools', name)}"` : full);
+    if (updated !== old) { hook.command = updated; added++; }
+  }
   added += wrapRegisteredGates(settings, repo);
+  // Reporting uses exactly the registrar's expected set without touching user files.
+  if (expectedJson) { console.log(JSON.stringify({ hooks: settings.hooks, skippedNames })); process.exit(0); }
   // 差分が無い時は書かない(日次実行で .bak が積み上がるのを防ぐ)
   if (added || settingsHadBom) { backup(settingsFile); write(settingsFile, settings); }
   if (settingsHadBom) console.log('[register-hooks] settings.json の BOM を除去しました');

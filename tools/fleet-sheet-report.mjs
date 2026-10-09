@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { collectConvergence } from './fleet-convergence.mjs';
 import { isEntry } from './is-entry.mjs';
 import fs from 'node:fs';
 import { codexAuthStatus, formatCodexLogin } from './codex-auth-status.mjs';
@@ -91,6 +92,12 @@ async function main() {
     console.error('fleet-sheet: FLEET_SHEET_URL/TOKEN 未設定のため送信しません(~/.claude/fleet-sheet.env)');
     return;
   }
+  // Both Windows and POSIX scheduled pollers call this reporter. The lightweight
+  // post-sync reporter is separate, so a received sync cannot recurse here.
+  if (!dryRun) {
+    try { const { receiveConvergence } = await import('./fleet-convergence-sync.mjs'); await receiveConvergence({ home, repo }); }
+    catch { console.error('fleet-sheet: convergence mail check failed (secrets omitted)'); }
+  }
   const reporterEnvPath = path.join(claudeDir, 'cost-reporter.env');
   const reporterEnvText = readText(reporterEnvPath);
   const labelResolution = resolveReporterLabel({ envText: reporterEnvText, hostname: os.hostname() });
@@ -132,7 +139,8 @@ async function main() {
     hostname: identity.hostname,
     username: identity.username,
     gitEmail: identity.gitEmail,
-    reportedAt: toJst(cost.t || adoption.last || reporter.lastRun),
+    reportedAt: toJst(),
+    ...collectConvergence({ home, repo: process.env.ORGIAST_REPO || repo, hostname: identity.hostname, username: identity.username }),
     claudeUsd: claudeUsd === null ? '' : Math.round(claudeUsd * 100) / 100,
     mainModel: topModel,
     // 既存行が "0%" 表記なので、人が読む列で表記が混ざらないようパーセント文字列にする。

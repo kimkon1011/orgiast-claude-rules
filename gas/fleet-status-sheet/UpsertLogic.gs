@@ -9,10 +9,23 @@ const FLEET_HEADERS_ = {
   interactionLoop: '対話ループ適用', interactionSelftest: '対話ループ自己テスト',
   costLoopRanAt: 'コスト改善ループ最終実行', costLoopStatus: 'コスト改善ループ結果',
   costWeeklyRanAt: 'コスト週次改善ループ最終実行', costWeeklyStatus: 'コスト週次改善ループ結果',
+  convergenceId: '配布収束ID',
+  platform: 'OS種別',
+  claudeAccount: 'Claudeアカウント',
+  syncRepo: '同期リポパス',
+  syncHead: '同期HEAD',
+  mainHead: '参照main HEAD',
+  behindMain: 'main未反映commit数',
+  missingSince: '最古未反映commit日時',
+  hookMissing: '不足hook数',
+  keyMissing: '欠落キー数',
+  convergenceReportedAt: '配布収束報告時刻',
   keyserveAuth: 'keyserve認証経路', keyserveStatus: 'keyserve HTTP', keyserveCheckedAt: 'keyserve確認時刻'
 };
 
-const FLEET_OPTIONAL_HEADERS_ = ['delegRatioLegacy', 'planSevenDayPct', 'planFiveHourPct', 'budgetPacePct', 'settingsModel', 'osUser', 'realHostname', 'gitEmail', 'activeProjects', 'artifacts', 'lastCommit', 'livenessState', 'livenessReason', 'livenessCheckedAt', 'interactionLoop', 'interactionSelftest', 'costLoopRanAt', 'costLoopStatus', 'costWeeklyRanAt', 'costWeeklyStatus', 'keyserveAuth', 'keyserveStatus', 'keyserveCheckedAt'];
+const FLEET_CONVERGENCE_KEYS_ = ['convergenceId', 'platform', 'claudeAccount', 'syncRepo', 'syncHead', 'mainHead', 'behindMain', 'missingSince', 'hookMissing', 'keyMissing', 'convergenceReportedAt'];
+
+const FLEET_OPTIONAL_HEADERS_ = ['convergenceId','platform','claudeAccount','syncRepo','syncHead','mainHead','behindMain','missingSince','hookMissing','keyMissing','convergenceReportedAt', 'delegRatioLegacy', 'planSevenDayPct', 'planFiveHourPct', 'budgetPacePct', 'settingsModel', 'osUser', 'realHostname', 'gitEmail', 'activeProjects', 'artifacts', 'lastCommit', 'livenessState', 'livenessReason', 'livenessCheckedAt', 'interactionLoop', 'interactionSelftest', 'costLoopRanAt', 'costLoopStatus', 'costWeeklyRanAt', 'costWeeklyStatus', 'keyserveAuth', 'keyserveStatus', 'keyserveCheckedAt'];
 
 // ヘッダ照合は正規化してから行う。全角/半角の括弧・英数、前後の空白、改行の違いで
 // 「タブが見つからない」と誤判定するのを防ぐ(実セルの表記は目視できないため厳密一致に賭けない)。
@@ -49,16 +62,35 @@ function fleetPlanUpsert(headers, rows, payload) {
   const mappedName = typeof payload.mappedName === 'string' && payload.mappedName !== '' ? payload.mappedName : null;
   const label = typeof payload.label === 'string' ? payload.label : '';
   // label が空だと「F列が空の行」に軒並み一致して他PCの行を奪うため、空のときは探さない。
-  let index = label ? rows.findIndex(function(row) { return row[columns.hostname] === label; }) : -1;
-  if (index < 0 && mappedName) {
-    index = rows.findIndex(function(row) { return row[columns.selfPc] === mappedName && !row[columns.hostname]; });
-  }
+  const username = String(payload.username || '');
+  const host = String(payload.hostname || '');
+  const userAt = function(row) { return columns.osUser >= 0 ? String(row[columns.osUser] || '') : ''; };
+  const hostAt = function(row) { return columns.realHostname >= 0 ? String(row[columns.realHostname] || '') : ''; };
+  let index = host && username ? rows.findIndex(function(row) { return hostAt(row) === host && userAt(row) === username; }) : -1;
+  if (index < 0 && label) index = rows.findIndex(function(row) {
+    return row[columns.hostname] === label && userAt(row) === username && (!hostAt(row) || !host || hostAt(row) === host);
+  });
+  // Migrate an unclaimed legacy row once; never replace another OS user's row.
+  if (index < 0 && label) index = rows.findIndex(function(row) {
+    return row[columns.hostname] === label && !userAt(row) && (!hostAt(row) || hostAt(row) === host);
+  });
+  if (index < 0 && mappedName) index = rows.findIndex(function(row) { return row[columns.selfPc] === mappedName && !row[columns.hostname] && !userAt(row); });
   // 既存行に紐付けられた(F列一致 or 未紐付けのD列一致)なら、fleet-pc-map.json に登録が無くても
   // それは「紐付いている」。O列には kim の手書きメモが入っているので触らない。
   // 新規追記した時だけ「未マッピング」を立てる。
   const appended = index < 0;
 
   const values = {};
+  FLEET_CONVERGENCE_KEYS_.forEach(function(key) {
+    if (columns[key] >= 0 && Object.prototype.hasOwnProperty.call(payload, key)) values[columns[key]] = payload[key] == null ? '未確認' : payload[key];
+  });
+  if (payload.convergenceOnly === true) {
+    values[columns.hostname] = label;
+    if (columns.keyserveAuth >= 0 && payload.keyserveAuth) values[columns.keyserveAuth] = payload.keyserveAuth;
+    if (columns.osUser >= 0) values[columns.osUser] = username;
+    if (columns.realHostname >= 0) values[columns.realHostname] = host;
+    return { action: appended ? 'appended' : 'updated', rowIndex: appended ? rows.length : index, columns: columns, values: values };
+  }
   values[columns.hostname] = label;
   values[columns.reportedAt] = payload.reportedAt || '';
   // 計測不能の空文字は既存の実測値を消さない。0 / "0.0%" は実測値なので更新する。

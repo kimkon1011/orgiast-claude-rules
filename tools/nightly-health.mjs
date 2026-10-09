@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { runConvergenceWatch } from './fleet-convergence-watch.mjs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -302,7 +303,8 @@ export async function runNightlyHealth({
   scheduledTaskInfo = getScheduledTaskInfo,
   streakWatch = runAutoSessionStreakWatch,
   streakNotifyImpl,
-  gasDrift = checkGasMasterDrift
+  gasDrift = checkGasMasterDrift,
+  convergenceWatch = runConvergenceWatch
 } = {}) {
   const dirname = path.dirname(fileURLToPath(import.meta.url));
   expectations ??= readJson(path.join(dirname, 'nightly-health-expectations.json'), []);
@@ -317,6 +319,8 @@ export async function runNightlyHealth({
   } catch (error) {
     anomalies.push({ type: 'gas_master_drift_error', label: 'GAS/master 週次監査', message: error.message });
   }
+  try { await convergenceWatch({ home, now: now.getTime(), dryRun: dryRun || prime }); }
+  catch { anomalies.push({ type: 'fleet_convergence', label: '配布収束監視', message: 'シート取得または送付に失敗（秘密情報省略）' }); }
   const registeredLogs = new Set();
   const scanTargets = [];
   const logFiles = fs.existsSync(logsDir)

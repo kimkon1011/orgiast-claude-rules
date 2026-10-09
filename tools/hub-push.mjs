@@ -39,10 +39,15 @@ export function buildManifest(prev, pushed, today) {
 }
 
 export function collectTargets(repo = resolve(dirname(fileURLToPath(import.meta.url)), '..'),
-  onboarding = process.platform === 'win32'
-    ? 'C:/Users/uers/Downloads/CLAUDE.md配布/ONBOARDING.md'
-    : '/mnt/c/Users/uers/Downloads/CLAUDE.md配布/ONBOARDING.md') {
-  const targets = [{ title: 'ONBOARDING.md', in: 'hub', path: onboarding }];
+  onboarding = join(repo, 'ONBOARDING.md')) {
+  let content;
+  try {
+    content = normalizeLf(readFileSync(onboarding));
+  } catch (error) {
+    if (error.code === 'ENOENT') throw new Error(`ONBOARDING.md not found: ${onboarding}`, { cause: error });
+    throw error;
+  }
+  const targets = [{ title: 'ONBOARDING.md', in: 'hub', path: onboarding, content }];
   for (const entry of readdirSync(join(repo, 'rules'), { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
     if (entry.isFile() && entry.name.endsWith('.md')) targets.push({ title: entry.name, in: 'rules', path: join(repo, 'rules', entry.name) });
   }

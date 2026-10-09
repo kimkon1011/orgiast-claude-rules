@@ -37,7 +37,7 @@ export async function checkGasMasterDrift({ home, now = new Date(), dryRun = fal
         fs.writeFileSync(dest, file.text);
       }
     }
-    const diff = spawn('git', ['diff', '--no-index', '--stat', '-w', '--exit-code', ...dirs], { cwd: temp });
+    const diff = spawn('git', ['diff', '--no-index', '--stat', '-w', '--exit-code', ...dirs], { cwd: temp, windowsHide: true });
     if (diff.error || ![0, 1].includes(diff.status)) throw new Error(`GAS diff 失敗: ${diff.error?.message || diff.stderr || diff.status}`);
     const drift = diff.status === 1;
     const summary = String(diff.stdout || '').trim().split('\n').at(-1)?.trim();

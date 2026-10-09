@@ -10,7 +10,7 @@ export const spawnCommand = (command, args, options = {}) => spawnSync(command, 
   maxBuffer: 32 * 1024 * 1024, ...options,
 });
 export function checked(spawn, command, args, cwd) {
-  const r = spawn(command, args, { cwd });
+  const r = spawn(command, args, { cwd, windowsHide: true });
   if (r.error || r.status !== 0) throw new Error(`${command} ${args[0]}: ${r.error?.message || r.stderr || r.status}`);
   return String(r.stdout || '').trim();
 }
@@ -78,14 +78,14 @@ export function syncGasMaster({ project, snapshot, dryRun = false }, {
     if (staged.length) git('commit', '-m', 'fix(gas): 本番 read-back を GitHub に同期\n\nCo-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>');
     git('push', 'origin', 'HEAD');
     git('fetch', 'origin', 'master');
-    const ff = spawn('git', ['merge-base', '--is-ancestor', 'FETCH_HEAD', 'HEAD'], { cwd });
+    const ff = spawn('git', ['merge-base', '--is-ancestor', 'FETCH_HEAD', 'HEAD'], { cwd, windowsHide: true });
     if (ff.error || ![0, 1].includes(ff.status)) throw new Error('master の fast-forward 判定に失敗');
     if (ff.status === 0) {
-      const pushed = spawn('git', ['push', 'origin', 'HEAD:master'], { cwd });
+      const pushed = spawn('git', ['push', 'origin', 'HEAD:master'], { cwd, windowsHide: true });
       if (!pushed.error && pushed.status === 0) return { status: 'pushed', branch };
       // Re-fetch to distinguish a concurrent master advance from auth/network failure.
       git('fetch', 'origin', 'master');
-      const retry = spawn('git', ['merge-base', '--is-ancestor', 'FETCH_HEAD', 'HEAD'], { cwd });
+      const retry = spawn('git', ['merge-base', '--is-ancestor', 'FETCH_HEAD', 'HEAD'], { cwd, windowsHide: true });
       if (retry.error || retry.status !== 1) throw new Error(`master push 失敗: ${pushed.error?.message || pushed.stderr || pushed.status}`);
     }
     const body = path.join(temp, 'pr.md');

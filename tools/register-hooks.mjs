@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 let wrapRegisteredGates = () => 0;
-try { ({ wrapRegisteredGates } = await import('./gate-hook-runner.mjs')); } catch { /* 同期途中でも既存登録を維持 */ }
+let gateRuntimeReady = false;
+try { ({ wrapRegisteredGates } = await import('./gate-hook-runner.mjs')); gateRuntimeReady = true; } catch { /* 同期途中でも既存登録を維持 */ }
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -72,6 +73,15 @@ function add(groups, scriptName, group) {
     skippedNames.push(scriptName);
     console.log(`  [skip] ${scriptName} — repo/tools に実ファイルが無いため未登録`);
     return false;
+  }
+  if (!gateRuntimeReady && scriptName.endsWith('.mjs')) {
+    // Do not introduce a new hard denial during a partially downloaded update.
+    const source = fs.readFileSync(path.join(repo, 'tools', scriptName), 'utf8');
+    if (/GATE_CONTRACT/.test(source)) {
+      let legacy = false;
+      try { legacy = JSON.parse(fs.readFileSync(path.join(repo, 'tools/gate-rollout-manifest.json'), 'utf8')).gates?.[scriptName.slice(0, -4)]?.legacy === true; } catch {}
+      if (!legacy) { skippedNames.push(scriptName); console.log(`  [skip] ${scriptName} — gate runtime 同期待ち`); return false; }
+    }
   }
   // 既存PCは .ps1 版が登録済みのことがある(Windows install)。拡張子を無視して重複判定しないと
   // .mjs と .ps1 の二重登録になり、同じ context が2回注入される。

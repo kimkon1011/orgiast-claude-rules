@@ -25,7 +25,6 @@ jobs:
       - name: selftest-guards (Windows)
         run: node tools/selftest-guards.mjs
 
-
       - name: keyserve enrollment installer (mock network, real ACL)
         shell: powershell
         run: .\tools\keyserve-enroll-installer.test.ps1

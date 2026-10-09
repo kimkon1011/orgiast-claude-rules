@@ -77,7 +77,7 @@ export async function evaluateGates(ctx, auditOptions = {}) {
   const audit = await gates.find(([name]) => name === 'handoff-audit-gate')[1]();
   if (['block', 'warn'].includes(audit.decision)) results.push({ name: 'handoff-audit-gate', ...audit });
   results.sort((a, b) => gates.findIndex(([name]) => name === a.name) - gates.findIndex(([name]) => name === b.name));
-  return { results, errors, audit };
+  return { results, errors, audit, retry: async name => ({ name, ...await gates.find(([gate]) => gate === name)[1]() }) };
 }
 
 function stateResult(sessionId, requestedBlock, assistantText) {
@@ -125,11 +125,10 @@ export async function run(input, context, auditOptions = {}) {
   const audit = evaluated.audit;
   const warnings = [];
   const effective = [];
-  const policyResults = await Promise.all(evaluated.results.map(result => applyNamedGatePolicy(result.name, result, { home: home(), ...auditOptions.policyOptions })));
+  const policyResults = await Promise.all(evaluated.results.map(result => applyNamedGatePolicy(result.name, result, { home: home(), retry: () => evaluated.retry(result.name), ...auditOptions.policyOptions })));
   for (const value of policyResults) {
-    const result = value;
     if (value.decision === 'block') effective.push(value);
-    else if (value.decision === 'warn') warnings.push(`${result.name}: ${value.reason}`);
+    else if (value.decision === 'warn') warnings.push(`${value.name}: ${value.reason}`);
   }
   evaluated.results = effective;
   const systemMessage = warnings.length ? warnings.join('\n') : undefined;

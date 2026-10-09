@@ -177,12 +177,12 @@ export function collectClaudeStats({ home = process.env.ORGIAST_HOME || os.homed
 }
 export function classifyBashCommand(command) {
   command = String(command || '');
-  if (isReadonlyCommand(command)) return 'read-only';
   if (isExcludedInlineProgramCommand(command)) return 'delegated';
   const heredoc = /<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1/;
   if (extractInlineProgram(command)) return 'inline-program';
   if (heredoc.test(command) || /(?:^|\s)(?:>|>>)(?![>&])\s*[^\s;&|]+/.test(command)) return 'spec-authoring';
   if (/^\s*git(?:\s|$)/i.test(command)) return 'git';
+  if (isReadonlyCommand(command)) return 'read-only';
   if (/^\s*(?:cat|head|tail|sed\s+-n|grep|ls|wc|find)(?:\s|$)/i.test(command) && !/(?:^|[^<])>{1,2}/.test(command)) return 'read-only';
   return 'other';
 }

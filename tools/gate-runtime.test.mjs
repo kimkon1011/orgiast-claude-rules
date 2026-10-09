@@ -89,3 +89,10 @@ test('fleet notification uses the already distributed cost webhook without a DM 
  let sent=0;const result=await notifyKim('gate status',{home,userId:'',token:'',fleetFallback:true,fetchImpl:async(url,options)=>{sent++;assert.equal(url,'https://example.invalid/mock-only');assert.equal(JSON.parse(options.body).content,'gate status');return {ok:true};}});
  assert.equal(sent,1);assert.equal(result.delivered,'webhook');
 });
+test('Stop aggregate applies warning policy to each child and keeps its reason visible',async t=>{
+ const {run}=await import('./stop-gate-runner.mjs');const {discoverGates}=await import('./gate-contracts.mjs');
+ const home=temp(t);const old=process.env.ORGIAST_HOME;process.env.ORGIAST_HOME=home;t.after(()=>{if(old===undefined)delete process.env.ORGIAST_HOME;else process.env.ORGIAST_HOME=old;});
+ const text='PR を作成してください';let notifications=[];
+ const result=await run({session_id:'warn-stop',assistant_text:text},{assistantText:text,humanText:'',raw:''},{mode:'off',policyOptions:{home,manifest:{gates:Object.fromEntries(discoverGates().map(n=>[n,{rollout:'warn'}]))},notify:async line=>{notifications.push(line);return {delivered:'dm'};}}});
+ assert.notEqual(result.decision,'block');assert.match(result.systemMessage,/pr-handoff-gate/);assert.ok(notifications.some(line=>line.includes('name=pr-handoff-gate verdict=warn')));
+});

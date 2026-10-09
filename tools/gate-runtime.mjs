@@ -10,10 +10,10 @@ const DAY = 86400000;
 const homeDir = () => process.env.ORGIAST_HOME || os.homedir();
 function readRollout() { try { return JSON.parse(fs.readFileSync(path.join(toolsDir, 'gate-rollout-manifest.json'), 'utf8')); } catch { return { gates: {} }; } }
 export function rolloutMode(name, { manifest = readRollout(), home = homeDir(), hostname = os.hostname(), now = Date.now() } = {}) {
-  const entry = manifest.gates[name];
+  const entry = manifest?.gates?.[name];
   if (entry?.legacy === true && entry.rollout === 'deny') return 'deny';
   if (entry?.rollout === 'warn') return 'warn';
-  if ((manifest.pilotHosts || []).some(h => h.toLowerCase() === hostname.toLowerCase())) return entry?.rollout === 'deny' ? 'deny' : 'warn';
+  if ((Array.isArray(manifest?.pilotHosts) ? manifest.pilotHosts : []).some(h => h.toLowerCase() === hostname.toLowerCase())) return entry?.rollout === 'deny' ? 'deny' : 'warn';
   // First receipt is per PC, so an offline PC never skips its observation week.
   const file = path.join(home, '.claude', 'gate-rollout', `${name}.json`);
   let firstSeen;

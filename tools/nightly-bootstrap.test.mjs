@@ -556,6 +556,8 @@ for (const dirty of [true, false]) test(`real git bootstrap preserves dirty tree
   const commands = readFileSync(trace, 'utf8');
   if (dirty) {
     assert.doesNotMatch(commands, /reset --hard|clean -qfd|checkout --detach/);
+    assert.match(logText(fix), /skip:dirty worktree preserved/);
+    assert.doesNotMatch(logText(fix), /ok:origin\/main/);
     assert.equal(readFileSync(join(fix.repo, 'untracked'), 'utf8'), 'precious');
     const branch = git(fix.repo, ['branch', '--show-current']).trim();
     assert.match(branch, /^rescue\/auto-session-/);

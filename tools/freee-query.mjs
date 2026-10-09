@@ -69,7 +69,7 @@ async function getAccessToken() {
   }
 }
 
-async function freeeGet(token, path, params) {
+export async function freeeGet(token, path, params) {
   const url = new URL(API + path);
   for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== '') url.searchParams.set(k, String(v));
   const res = await fetch(url, { method: 'GET', headers: { authorization: `Bearer ${token}` } });
@@ -77,7 +77,7 @@ async function freeeGet(token, path, params) {
   return res.json();
 }
 
-async function listPartners(token, keyword) {
+export async function listPartners(token, keyword) {
   const out = [];
   for (let offset = 0; ; offset += 100) {
     const j = await freeeGet(token, '/api/1/partners', { company_id: COMPANY_ID, keyword, limit: 100, offset });
@@ -145,3 +145,5 @@ if (isEntry(import.meta.url)) {
     process.exit(1);
   });
 }
+
+export { getAccessToken };

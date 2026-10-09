@@ -1,0 +1,383 @@
+{
+  "version": 1,
+  "thresholds": {
+    "new_partner_days": 60,
+    "new_partner_amount": 100000,
+    "no_footprint_high": 300000,
+    "round_unit": 100000,
+    "round_min": 300000,
+    "approval": [
+      100000,
+      300000,
+      500000,
+      1000000
+    ],
+    "approval_lower_ratio": 0.9,
+    "repeat_count": 3,
+    "duplicate_days": 14,
+    "split_days": 7,
+    "name_mismatch_amount": 100000,
+    "unregistered_days": 30,
+    "unregistered_min": 50000,
+    "ignored_min": 100000,
+    "benford_min_count": 200,
+    "benford_chi_square": 15.5,
+    "spike_months": 6,
+    "spike_ratio": 3,
+    "spike_min": 300000,
+    "download_day": 20,
+    "download_week": 50,
+    "free_mail_domains": [
+      "gmail.com",
+      "yahoo.co.jp",
+      "yahoo.com",
+      "icloud.com",
+      "outlook.com",
+      "hotmail.com",
+      "live.jp",
+      "aol.com"
+    ]
+  },
+  "allowlist_partners": [],
+  "holidays_jp": [
+    "2026-01-01",
+    "2026-01-12",
+    "2026-02-11",
+    "2026-02-23",
+    "2026-03-20",
+    "2026-04-29",
+    "2026-05-03",
+    "2026-05-04",
+    "2026-05-05",
+    "2026-05-06",
+    "2026-07-20",
+    "2026-08-11",
+    "2026-09-21",
+    "2026-09-22",
+    "2026-09-23",
+    "2026-10-12",
+    "2026-11-03",
+    "2026-11-23"
+  ],
+  "holiday_source": "https://www8.cao.go.jp/chosei/shukujitsu/gaiyou.html",
+  "taxonomy_source": "https://www.acfe.com/fraud-resources/fraud-101-what-is-fraud",
+  "patterns": [
+    {
+      "id": "P01",
+      "name": "架空業者・ペーパーカンパニーへの支払い",
+      "category": "asset-misappropriation",
+      "description": "架空業者・ペーパーカンパニーへの支払い。確認の手掛かりであり断定ではない。",
+      "rules": [
+        "R02",
+        "R06",
+        "R07",
+        "R08"
+      ],
+      "data_sources": [
+        "freee",
+        "gmail",
+        "drive",
+        "discord"
+      ],
+      "status": "rule"
+    },
+    {
+      "id": "P02",
+      "name": "パススルー業者",
+      "category": "asset-misappropriation",
+      "description": "パススルー業者。確認の手掛かりであり断定ではない。",
+      "rules": [
+        "R15",
+        "R02"
+      ],
+      "data_sources": [
+        "freee",
+        "gmail",
+        "drive",
+        "discord"
+      ],
+      "status": "rule"
+    },
+    {
+      "id": "P03",
+      "name": "個人的支出の経費化",
+      "category": "asset-misappropriation",
+      "description": "個人的支出の経費化。確認の手掛かりであり断定ではない。",
+      "rules": [
+        "R14",
+        "R03"
+      ],
+      "data_sources": [
+        "freee"
+      ],
+      "status": "rule"
+    },
+    {
+      "id": "P04",
+      "name": "重複請求",
+      "category": "asset-misappropriation",
+      "description": "重複請求。確認の手掛かりであり断定ではない。",
+      "rules": [
+        "R05"
+      ],
+      "data_sources": [
+        "freee"
+      ],
+      "status": "rule"
+    },
+    {
+      "id": "P05",
+      "name": "承認閾値回避の分割",
+      "category": "asset-misappropriation",
+      "description": "承認閾値回避の分割。確認の手掛かりであり断定ではない。",
+      "rules": [
+        "R04",
+        "R09"
+      ],
+      "data_sources": [
+        "freee"
+      ],
+      "status": "rule"
+    },
+    {
+      "id": "P06",
+      "name": "キックバック・業者癒着",
+      "category": "corruption",
+      "description": "キックバック・業者癒着。確認の手掛かりであり断定ではない。",
+      "rules": [
+        "R15",
+        "R13"
+      ],
+      "data_sources": [
+        "freee",
+        "discord"
+      ],
+      "status": "rule"
+    },
+    {
+      "id": "P07",
+      "name": "幽霊社員",
+      "category": "asset-misappropriation",
+      "description": "幽霊社員。確認の手掛かりであり断定ではない。",
+      "rules": [],
+      "data_sources": [
+        "payroll"
+      ],
+      "status": "manual"
+    },
+    {
+      "id": "P08",
+      "name": "経費精算の水増し",
+      "category": "asset-misappropriation",
+      "description": "経費精算の水増し。確認の手掛かりであり断定ではない。",
+      "rules": [],
+      "data_sources": [
+        "receipts"
+      ],
+      "status": "manual"
+    },
+    {
+      "id": "P09",
+      "name": "小切手・振込の改ざん・BEC",
+      "category": "asset-misappropriation",
+      "description": "小切手・振込の改ざん・BEC。確認の手掛かりであり断定ではない。",
+      "rules": [],
+      "data_sources": [
+        "gmail",
+        "bank-change-history"
+      ],
+      "status": "manual"
+    },
+    {
+      "id": "P10",
+      "name": "レジ・現金の抜き取り",
+      "category": "asset-misappropriation",
+      "description": "レジ・現金の抜き取り。確認の手掛かりであり断定ではない。",
+      "rules": [],
+      "data_sources": [
+        "cash-register"
+      ],
+      "status": "manual"
+    },
+    {
+      "id": "P11",
+      "name": "売上の除外",
+      "category": "financial-statement-fraud",
+      "description": "売上の除外。確認の手掛かりであり断定ではない。",
+      "rules": [],
+      "data_sources": [
+        "fraud-audit"
+      ],
+      "status": "manual"
+    },
+    {
+      "id": "P12",
+      "name": "利益相反・従業員と業者の一致",
+      "category": "corruption",
+      "description": "利益相反・従業員と業者の一致。確認の手掛かりであり断定ではない。",
+      "rules": [
+        "R13"
+      ],
+      "data_sources": [
+        "freee",
+        "discord"
+      ],
+      "status": "rule"
+    },
+    {
+      "id": "P13",
+      "name": "在庫・資産の私的流用",
+      "category": "asset-misappropriation",
+      "description": "在庫・資産の私的流用。確認の手掛かりであり断定ではない。",
+      "rules": [],
+      "data_sources": [
+        "inventory"
+      ],
+      "status": "manual"
+    },
+    {
+      "id": "P14",
+      "name": "未登録出金",
+      "category": "asset-misappropriation",
+      "description": "未登録出金。確認の手掛かりであり断定ではない。",
+      "rules": [
+        "R10"
+      ],
+      "data_sources": [
+        "freee"
+      ],
+      "status": "rule"
+    },
+    {
+      "id": "P15",
+      "name": "時間外・休日の取引",
+      "category": "asset-misappropriation",
+      "description": "時間外・休日の取引。確認の手掛かりであり断定ではない。",
+      "rules": [
+        "R11"
+      ],
+      "data_sources": [
+        "freee"
+      ],
+      "status": "rule"
+    },
+    {
+      "id": "P16",
+      "name": "ベンフォード異常",
+      "category": "financial-statement-fraud",
+      "description": "ベンフォード異常。確認の手掛かりであり断定ではない。",
+      "rules": [
+        "R12"
+      ],
+      "data_sources": [
+        "freee"
+      ],
+      "status": "rule"
+    },
+    {
+      "id": "P17",
+      "name": "新規業者への急速な支払い",
+      "category": "asset-misappropriation",
+      "description": "新規業者への急速な支払い。確認の手掛かりであり断定ではない。",
+      "rules": [
+        "R01"
+      ],
+      "data_sources": [
+        "freee"
+      ],
+      "status": "rule"
+    },
+    {
+      "id": "P18",
+      "name": "口座名義不一致",
+      "category": "asset-misappropriation",
+      "description": "口座名義不一致。確認の手掛かりであり断定ではない。",
+      "rules": [
+        "R07",
+        "R08"
+      ],
+      "data_sources": [
+        "freee"
+      ],
+      "status": "rule"
+    },
+    {
+      "id": "P19",
+      "name": "同一口座の複数業者",
+      "category": "asset-misappropriation",
+      "description": "同一口座の複数業者。確認の手掛かりであり断定ではない。",
+      "rules": [
+        "R06"
+      ],
+      "data_sources": [
+        "freee"
+      ],
+      "status": "rule"
+    },
+    {
+      "id": "P20",
+      "name": "データ持ち出し・外部共有",
+      "category": "information-theft",
+      "description": "データ持ち出し・外部共有。確認の手掛かりであり断定ではない。",
+      "rules": [
+        "exfil"
+      ],
+      "data_sources": [
+        "drive"
+      ],
+      "status": "rule"
+    },
+    {
+      "id": "P21",
+      "name": "大量ダウンロード",
+      "category": "information-theft",
+      "description": "大量ダウンロード。確認の手掛かりであり断定ではない。",
+      "rules": [
+        "exfil-admin"
+      ],
+      "data_sources": [
+        "admin"
+      ],
+      "status": "rule"
+    },
+    {
+      "id": "P22",
+      "name": "OAuth アプリ経由の持ち出し",
+      "category": "information-theft",
+      "description": "OAuth アプリ経由の持ち出し。確認の手掛かりであり断定ではない。",
+      "rules": [
+        "exfil-admin"
+      ],
+      "data_sources": [
+        "admin"
+      ],
+      "status": "rule"
+    },
+    {
+      "id": "P23",
+      "name": "退職前後の大量アクセス",
+      "category": "information-theft",
+      "description": "退職前後の大量アクセス。確認の手掛かりであり断定ではない。",
+      "rules": [],
+      "data_sources": [
+        "hr",
+        "admin"
+      ],
+      "status": "manual"
+    },
+    {
+      "id": "P24",
+      "name": "情報の外部販売",
+      "category": "information-theft",
+      "description": "情報の外部販売。確認の手掛かりであり断定ではない。",
+      "rules": [
+        "leak-search"
+      ],
+      "data_sources": [
+        "web",
+        "github"
+      ],
+      "status": "rule"
+    }
+  ]
+}

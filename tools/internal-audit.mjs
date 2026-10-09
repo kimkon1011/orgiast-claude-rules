@@ -129,10 +129,14 @@ export async function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv), now = new Date(), date = dateOnly(now), stateDir = path.resolve(options['state-dir']); options['state-dir'] = stateDir;
   const daily = path.join(stateDir, 'reports', `${date}.md`);
   await checkPaths(options, daily);
-  const env = parseEnv(await optionalText(path.join(ROOT, '.env.local'))), secrets = Object.values(env).filter(Boolean);
-  const databaseUrl = process.env.PURCHASING_APP_DATABASE_URL || env.PURCHASING_APP_DATABASE_URL;
-  if (databaseUrl) secrets.push(databaseUrl);
   const defaultHome = process.platform === 'win32' ? os.homedir() : '/mnt/c/Users/uers';
+  // The weekly task runs from ~/.claude/nightly-repo, which has no .env.local: fall back to the
+  // main working tree the same way tools/lib/freee-auth.mjs does. Every value read is a secret.
+  const env = parseEnv(await optionalText(path.join(ROOT, '.env.local'))), secrets = Object.values(env).filter(Boolean);
+  const fallbackEnv = parseEnv(await optionalText(path.join(defaultHome, 'orgiast-main', '.env.local')));
+  secrets.push(...Object.values(fallbackEnv).filter(Boolean));
+  const databaseUrl = process.env.PURCHASING_APP_DATABASE_URL || env.PURCHASING_APP_DATABASE_URL || fallbackEnv.PURCHASING_APP_DATABASE_URL;
+  if (databaseUrl) secrets.push(databaseUrl);
   const keyPath = process.env.GOOGLE_SA_KEY || path.join(defaultHome, 'Downloads/CLAUDE.md配布/aujust-sales-automation/.gcp/sheets-sa.json');
   const token = process.env.DISCORD_BOT_TOKEN || (await optionalText(path.join(defaultHome, '.claude/orgiast-discord-bot-token.txt'))).trim(); if (token) secrets.push(token);
   const patterns = validatePatterns(await readJson(path.join(ROOT, 'tools/internal-audit-patterns.json')));

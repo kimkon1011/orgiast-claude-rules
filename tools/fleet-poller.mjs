@@ -45,8 +45,6 @@ function run(program, args) {
   return `${result.stdout || ''}${result.stderr || ''}`;
 }
 function runFleetSheetReport() {
-  const receiver = path.join(repo, 'tools', 'fleet-convergence-sync.mjs');
-  if (fs.existsSync(receiver)) run(process.execPath, [receiver]);
   const result = spawnSync('node', [path.join(repo, 'tools', 'fleet-sheet-report.mjs'), '--specs', '--cloud'], { windowsHide: true, encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home } });
   const log = path.join(claudeDir, 'logs', 'fleet-poller.log'); fs.mkdirSync(path.dirname(log), { recursive: true });
   const stamp = new Date().toISOString();

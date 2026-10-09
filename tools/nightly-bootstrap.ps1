@@ -165,7 +165,9 @@ try {
                 $remoteSha = ([string]$remoteSha).Trim()
                 $shortHead = $headSha.Substring(0, [Math]::Min(7, $headSha.Length))
                 $shortRemote = $remoteSha.Substring(0, [Math]::Min(7, $remoteSha.Length))
-                if ($headSha -ne $remoteSha) {
+                if ($script:blockedNightlyTrees.ContainsKey($repo)) {
+                    Write-NightlyLog 'リポ同期' 'skip:dirty worktree preserved'
+                } elseif ($headSha -ne $remoteSha) {
                     Write-NightlyLog 'リポ同期' ("ng:HEAD " + $shortHead + " != origin/main " + $shortRemote + " 既存版で続行")
                 } else {
                     Write-NightlyLog 'リポ同期' ("ok:origin/main " + $shortHead)

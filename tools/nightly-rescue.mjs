@@ -8,8 +8,8 @@ import { notifyKim } from './notify-kim.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 
 const RETRY_MS = 6 * 60 * 60 * 1000;
-function git(tree, args) {
-  const r = spawnSync('git', ['-C', tree, ...args], { encoding: 'utf8', timeout: 120000, maxBuffer: 16 * 1024 * 1024, windowsHide: true });
+function git(tree, args, input) {
+  const r = spawnSync('git', ['-C', tree, ...args], { input, encoding: 'utf8', timeout: 120000, maxBuffer: 16 * 1024 * 1024, windowsHide: true });
   if (r.error || r.status !== 0) {
     const first = (r.stderr || r.error?.message || `exit ${r.status}`).trim().split(/\r?\n/)[0];
     throw new Error(`${args[0]}: ${redactSecrets(first)}`);
@@ -26,19 +26,20 @@ function nestedRoot(tree, name) {
 }
 export function dirtyStatus(tree) {
   const records = git(tree, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=all']).split('\0');
-  const kept = [], excluded = new Set(['scratch']);
+  const kept = [], paths = [];
   for (let i = 0; i < records.length; i++) {
     const entry = records[i];
     if (!entry) continue;
     const name = entry.slice(3);
     const from = /[RC]/.test(entry.slice(0, 2)) ? records[++i] : null;
     const nested = entry.startsWith('?? ') && nestedRoot(tree, name);
-    if (nested) excluded.add(nested);
     if (name === 'scratch' || name.startsWith('scratch/') || nested) continue;
     kept.push(entry + (from == null ? '' : `\0${from}`));
+    // Already-staged deletions no longer exist in the index; re-adding them fails.
+    if (entry.slice(0, 2) !== 'D ') paths.push(name);
   }
   const text = kept.sort().join('\0');
-  return { clean: kept.length === 0, hash: createHash('sha256').update(text).digest('hex'), excluded: [...excluded] };
+  return { clean: kept.length === 0, hash: createHash('sha256').update(text).digest('hex'), paths: [...new Set(paths)] };
 }
 
 export async function rescueTree(tree, home, { now = Date.now(), notify = notifyKim } = {}) {
@@ -108,7 +109,10 @@ export async function rescueTree(tree, home, { now = Date.now(), notify = notify
     while (branches.has(branch)) branch = `${base}-${++n}`;
     try {
       git(tree, ['switch', '-c', branch]);
-      git(tree, ['add', '-A', '--', '.', ...status.excluded.map(p => `:(top,exclude,literal)${p}`)]);
+      // Explicit, NUL-delimited literal paths avoid Git treating ignored exclude
+      // pathspecs as errors, and cannot sweep up a clone created after status.
+      if (status.paths.length) git(tree, ['add', '-A', '--pathspec-from-file=-', '--pathspec-file-nul'],
+        status.paths.map(p => `:(top,literal)${p}\0`).join(''));
       git(tree, ['-c', 'user.name=Auto Session Rescue', '-c', 'user.email=auto-session-rescue@localhost', 'commit', '-m', `auto-session-rescue-${stamp}`]);
       const sha = git(tree, ['rev-parse', 'HEAD']).trim();
       log('RESCUE_LOCAL_OK', `${tree} ${branch} ${sha}`);

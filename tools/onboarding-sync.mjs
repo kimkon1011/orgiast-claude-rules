@@ -7,11 +7,11 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { inflateRawSync } from 'node:zlib';
-import { parseEnvText, readEnvValue } from './env-kv.mjs';
+import { parseEnvText, readEnvValue, upsertEnvValue } from './env-kv.mjs';
 import { repairEnvBom } from './env-repair.mjs';
 import { isEntry } from './is-entry.mjs';
 import { buildKeyserveAlert, shouldAlert } from './keyserve-alert.mjs';
-import { keyserveAuthHeaders, keyservePcId } from './keyserve-auth.mjs';
+import { keyserveAuthHeaders, requireKeyservePcId, isEnrollToken } from './keyserve-auth.mjs';
 import { installSharedMemories } from './memory-share.mjs';
 import { gitBlobSha } from './version-drift.mjs';
 
@@ -473,7 +473,9 @@ export async function provisionKeys(now, options = {}) {
   const enrollPath = path.join(home, '.claude', 'enroll.env');
   const keyserveEnvPath = path.join(home, '.claude', 'keyserve.env');
   const previousSecretPath = path.join(home, '.claude', 'keyserve-prev.env');
-  const enrollToken = !secret ? readEnvValue(enrollPath, 'ORGIAST_ENROLL_TOKEN') : '';
+  const misplacedEnroll = isEnrollToken(secret);
+  if (misplacedEnroll) console.error('[onboarding-sync] enroll トークンは enroll.env の ORGIAST_ENROLL_TOKEN に置いてください。今回は enroll 経路で処理します。');
+  const enrollToken = misplacedEnroll ? secret : (!secret ? readEnvValue(enrollPath, 'ORGIAST_ENROLL_TOKEN') : '');
   if (enrollToken) secret = enrollToken;
   let enrollHttpStatus = null;
   const saveEnrollResult = (result) => {
@@ -489,7 +491,9 @@ export async function provisionKeys(now, options = {}) {
     return;
   }
   try {
-    const pcId = keyservePcId(home);
+    const enrollPc = enrollToken ? readEnvValue(enrollPath, 'ORGIAST_KEYSERVE_PC') : '';
+    const pcId = requireKeyservePcId(home, { ...process.env,
+      ORGIAST_KEYSERVE_PC: process.env.ORGIAST_KEYSERVE_PC || enrollPc });
     const requestKeys = (requestSecret) => fetch(keyserveUrl, {
       method: 'POST',
       headers: { ...keyserveAuthHeaders(requestSecret, Date.now(), pcId), ...(enrollToken ? { 'x-orgiast-enroll': enrollToken } : {}) },
@@ -497,7 +501,7 @@ export async function provisionKeys(now, options = {}) {
     });
     let response = await requestKeys(secret);
     enrollHttpStatus = response.status;
-    if (!options.singleAttempt && response.status === 401 && fs.existsSync(previousSecretPath)) {
+    if (!enrollToken && !options.singleAttempt && response.status === 401 && fs.existsSync(previousSecretPath)) {
       const previousSecret = readEnvValue(previousSecretPath, 'ORGIAST_KEYSERVE_SECRET');
       if (previousSecret) {
         response = await requestKeys(previousSecret);
@@ -543,7 +547,7 @@ export async function provisionKeys(now, options = {}) {
           if (name === 'keyserve.env') {
             const oldSecret = readEnvValue(destination, 'ORGIAST_KEYSERVE_SECRET');
             const newSecret = parseEnvText(cleanedContents).ORGIAST_KEYSERVE_SECRET || '';
-            if (oldSecret && newSecret && oldSecret !== newSecret) {
+            if (oldSecret && !isEnrollToken(oldSecret) && newSecret && oldSecret !== newSecret) {
               fs.writeFileSync(previousSecretPath, `ORGIAST_KEYSERVE_SECRET=${oldSecret}\n`, { encoding: 'utf8', mode: 0o600 });
               fs.chmodSync(previousSecretPath, 0o600);
             }
@@ -566,6 +570,12 @@ export async function provisionKeys(now, options = {}) {
     repairEnvBom({ home });
     const primaryWritten = [...provisioned, ...refreshed].includes('keyserve.env')
       && Boolean(readEnvValue(path.join(home, '.claude', 'keyserve.env'), 'ORGIAST_KEYSERVE_SECRET'));
+    if (enrollToken && primaryWritten && !missing.length && !enrollWriteFailed) {
+      // Keep the successful identity after enroll.env is removed, even if the server
+      // returns only the secret or cost-reporter.env has a different label.
+      const primaryText = fs.readFileSync(keyserveEnvPath, 'utf8');
+      fs.writeFileSync(keyserveEnvPath, upsertEnvValue(primaryText, 'ORGIAST_KEYSERVE_PC', pcId), { mode: 0o600 });
+    }
     if (primaryWritten && !missing.length && !enrollWriteFailed) {
       try { fs.unlinkSync(enrollPath); } catch {}
     }
@@ -573,6 +583,10 @@ export async function provisionKeys(now, options = {}) {
     if (!options.quiet && provisioned.length) console.log(`[onboarding-sync] provisioned: ${provisioned.join(', ')}`);
     if (!options.quiet && refreshed.length) console.log(`[onboarding-sync] refreshed: ${refreshed.join(', ')}`);
   } catch (e) {
+    if (e.code === 'KEYSERVE_PC_UNRESOLVED') {
+      console.error(`[onboarding-sync] ${e.message}`);
+      e.enrollKind = 'pc-id';
+    }
     saveEnrollResult({ status: e.status ?? enrollHttpStatus, kind: e.enrollKind ?? (e instanceof SyntaxError || e.message === 'invalid response' ? 'invalid-response' : 'network') });
     log(`key provisioning failed: ${enrollToken ? 'enroll request failed (see .enroll-result.json)' : e.message}`);
     if (!options.quiet) await alertKeyserveFailure(previous, now, e.status);

@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { readEnvValue } from './env-kv.mjs';
-import { keyserveAuthHeaders, keyservePcId } from './keyserve-auth.mjs';
+import { keyserveAuthHeaders, requireKeyservePcId, validKeyservePcId } from './keyserve-auth.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { isEntry } from './is-entry.mjs';
 
@@ -11,11 +11,13 @@ const ENROLL_URL = process.env.ORGIAST_KEYSERVE_ENROLL_URL || 'https://orgiast-k
 const INSTALL_URL = 'https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/tools/install-orgiast.ps1';
 const DRY_TOKEN = 'DRY_RUN_TOKEN_NOT_VALID';
 
-export function buildInstallCommand(token) {
+export function buildInstallCommand(token, pc) {
   // Escape PowerShell literals, without interpreting the token's contents.
   if (typeof token !== 'string' || !token || /[\r\n\0]/.test(token)) throw new Error('トークンを1行コマンドに格納できません');
+  if (pc !== undefined && !validKeyservePcId(pc)) throw new Error('PC名は ASCII（例: cr-PC）。日本語名は fleet-pc-map.json の sheetName に書く');
+  const pcCommand = pc ? `$env:ORGIAST_KEYSERVE_PC='${pc}'; ` : '';
   const literal = `'${token.replaceAll("'", "''")}'`;
-  return `Set-ExecutionPolicy -Scope Process Bypass -Force; $p=Join-Path $env:TEMP ('orgiast-install-'+[guid]::NewGuid().ToString('N')+'.ps1'); [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing '${INSTALL_URL}' -OutFile $p; & $p -Enroll ${literal} -Yes -NonInteractive -NoOllama -NoReboot`;
+  return `${pcCommand}Set-ExecutionPolicy -Scope Process Bypass -Force; $p=Join-Path $env:TEMP ('orgiast-install-'+[guid]::NewGuid().ToString('N')+'.ps1'); [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing '${INSTALL_URL}' -OutFile $p; & $p -Enroll ${literal} -Yes -NonInteractive -NoOllama -NoReboot`;
 }
 
 export function formatInstructions({ pc, command, fingerprint, dryRun }) {
@@ -26,6 +28,11 @@ export function formatInstructions({ pc, command, fingerprint, dryRun }) {
     '3. 「Windows PowerShell」をクリックして開きます。管理者として開く必要はありません。',
     '4. 次の1行を行末までコピーし、PowerShell の画面で右クリックして貼り付け、Enter キーを押します。',
     command,
+    '内部の復帰手順（既存 clone での再実行も同じ）:',
+    '  ~/.claude/enroll.env に ORGIAST_ENROLL_TOKEN=<token> を書きます（ORGIAST_KEYSERVE_SECRET には入れません）。',
+    `  日本語 hostname のPCは同じファイルに ORGIAST_KEYSERVE_PC=${pc} も書きます。上の1行コマンドは両方を自動設定します。`,
+    '  node <clone>/tools/onboarding-sync.mjs --force を実行します。',
+    '  node <clone>/tools/keyserve-status.mjs で primary / HTTP 200 を確認します。',
     '5. ダウンロードが終わるまで待ちます。「鍵の復帰に成功：認証経路 primary / HTTP 200」が出れば鍵の設定は完了です。続くセットアップが終わるまで画面を開いておいてください。',
     '6. 赤字の失敗が出たら、表示された理由とPC名を kim に伝えてください。期限切れの場合は新しいコマンドを受け取ってやり直します。',
     'このコマンドには秘密が含まれます。共有チャンネルへ貼らず、対象PCの人だけに渡してください。',
@@ -50,17 +57,19 @@ export async function main(argv = process.argv.slice(2), {
       else throw new Error('使い方: node tools/keyserve-enroll.mjs --pc "PC名" [--ttl-hours 24] [--dm] [--json] [--dry-run]');
     }
     if (!pc?.trim() || /[\r\n\0]/.test(pc)) throw new Error('--pc に対象PC名を指定してください');
+    if (!validKeyservePcId(pc)) throw new Error('PC名は ASCII（例: cr-PC）。日本語名は fleet-pc-map.json の sheetName に書く（英数字・ピリオド・ハイフン・アンダースコア、1〜64文字）');
     if (!Number.isFinite(ttlHours) || ttlHours <= 0) throw new Error('--ttl-hours は正の時間数を指定してください');
     // Issuance must use the primary file, never a legacy webhook or an enrollment token.
     const secret = readEnvValue(path.join(home, '.claude', 'keyserve.env'), 'ORGIAST_KEYSERVE_SECRET');
-    if (!secret) throw new Error('このPCは primary を持っていないので発行できません。primary を持つ別PCで実行してください。');
+    if (!secret && !flags.has('--dry-run')) throw new Error('このPCは primary を持っていないので発行できません。primary を持つ別PCで実行してください。');
     const dryRun = flags.has('--dry-run');
     let issued = { token: DRY_TOKEN, pc, expiresAt: null, ttlHours };
     if (!dryRun) {
+      const issuerPc = requireKeyservePcId(home);
       let response;
       try {
         response = await fetchImpl(ENROLL_URL, {
-          method: 'POST', headers: { ...keyserveAuthHeaders(secret, Date.now(), keyservePcId(home)), 'Content-Type': 'application/json' },
+          method: 'POST', headers: { ...keyserveAuthHeaders(secret, Date.now(), issuerPc), 'Content-Type': 'application/json' },
           body: JSON.stringify({ pc, ttlHours }), signal: AbortSignal.timeout(15000),
         });
       } catch { throw new Error('発行APIへ接続できません。ネットワーク接続を確認してください。'); }
@@ -84,7 +93,7 @@ export async function main(argv = process.argv.slice(2), {
     }
     const result = { token: issued.token, pc, expiresAt: issued.expiresAt, ttlHours: issued.ttlHours,
       fingerprint: crypto.createHash('sha256').update(issued.token).digest('hex').slice(0, 10),
-      command: buildInstallCommand(issued.token), dryRun };
+      command: buildInstallCommand(issued.token, pc), dryRun };
     const instructions = formatInstructions(result);
     if (flags.has('--json')) stdout(JSON.stringify({ ...result, instructions }));
     else stdout(instructions);

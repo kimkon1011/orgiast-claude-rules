@@ -44,7 +44,12 @@ try {
   $rule = New-Object Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', 'Allow')
   $acl.AddAccessRule($rule)
   Set-Acl -LiteralPath $enrollFile -AclObject $acl
-  [IO.File]::WriteAllText($enrollFile, "ORGIAST_ENROLL_TOKEN=$Enroll`n", [Text.UTF8Encoding]::new($false))
+  $enrollContents = "ORGIAST_ENROLL_TOKEN=$Enroll`n"
+  if ($env:ORGIAST_KEYSERVE_PC) {
+    if ($env:ORGIAST_KEYSERVE_PC -cnotmatch '^[A-Za-z0-9._-]{1,64}$') { throw 'invalid-pc-name' }
+    $enrollContents += "ORGIAST_KEYSERVE_PC=$env:ORGIAST_KEYSERVE_PC`n"
+  }
+  [IO.File]::WriteAllText($enrollFile, $enrollContents, [Text.UTF8Encoding]::new($false))
   $stage = 'sync'
   # Preserve primary-first semantics; only quarantine a file proven to be rejected.
   # A network outage must never cause a working primary to be replaced.

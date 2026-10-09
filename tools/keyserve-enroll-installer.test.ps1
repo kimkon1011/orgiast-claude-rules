@@ -12,7 +12,7 @@ function global:node {
     $global:enrollTest_statusCalls++
     Assert ($env:ORGIAST_HOME -eq $global:enrollTest_testHome) 'status must use isolated home'
     Assert (-not $env:ORGIAST_KEYSERVE_SECRET) 'inherited secret must not mask file authentication'
-    if ($global:enrollTest_scenario -eq 'existing-primary' -or ($global:enrollTest_scenario -in @('success', 'notify-failure', 'stale-primary') -and $global:enrollTest_statusCalls -gt 1)) {
+    if ($global:enrollTest_scenario -eq 'existing-primary' -or ($global:enrollTest_scenario -in @('success', 'success-with-pc', 'notify-failure', 'stale-primary') -and $global:enrollTest_statusCalls -gt 1)) {
       '{"auth":"primary","status":200,"success":true}'
     } elseif ($global:enrollTest_scenario -eq 'stale-primary' -and $global:enrollTest_statusCalls -eq 1) {
       '{"auth":"primary","status":401,"success":false}'
@@ -29,7 +29,9 @@ function global:node {
     Assert ($aces[0].IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -eq $sid.Value) 'wrong ACL principal'
     $bytes = [IO.File]::ReadAllBytes($tokenFile)
     Assert ($bytes[0] -eq 79) 'env file must not have a BOM'
-    Assert ([IO.File]::ReadAllText($tokenFile) -eq "ORGIAST_ENROLL_TOKEN=opaque-test-token`n") 'token must be stored unchanged'
+    $expectedEnv = "ORGIAST_ENROLL_TOKEN=opaque-test-token`n"
+    if ($env:ORGIAST_KEYSERVE_PC) { $expectedEnv += "ORGIAST_KEYSERVE_PC=cr-PC`n" }
+    Assert ([IO.File]::ReadAllText($tokenFile) -eq $expectedEnv) 'token must be stored unchanged'
     if ($global:enrollTest_scenario -eq 'stale-primary') {
       Assert (-not (Test-Path (Join-Path $env:ORGIAST_HOME '.claude\keyserve.env'))) 'rejected primary must be quarantined'
       Assert (@(Get-ChildItem (Join-Path $env:ORGIAST_HOME '.claude') -Filter 'keyserve.env.pre-enroll-*').Count -eq 1) 'rejected primary backup missing'
@@ -42,7 +44,7 @@ function global:node {
       'network' { $kind = 'network'; $status = $null }
       'write' { $kind = 'write' }
     }
-    if ($global:enrollTest_scenario -in @('success', 'notify-failure', 'stale-primary')) {
+    if ($global:enrollTest_scenario -in @('success', 'success-with-pc', 'notify-failure', 'stale-primary')) {
       [IO.File]::WriteAllText((Join-Path $env:ORGIAST_HOME '.claude\keyserve.env'), 'ORGIAST_KEYSERVE_SECRET=primary-test')
       Remove-Item -LiteralPath $tokenFile -Force
     }
@@ -58,8 +60,10 @@ function global:node {
 }
 $previousHome = $env:ORGIAST_HOME
 $previousSecret = $env:ORGIAST_KEYSERVE_SECRET
+$previousPc = $env:ORGIAST_KEYSERVE_PC
 try {
-  foreach ($scenarioName in @('success', 'existing-primary', 'stale-primary', 'expired', 'unauthorized', 'network', 'write', 'notify-failure')) {
+  foreach ($scenarioName in @('success', 'success-with-pc', 'existing-primary', 'stale-primary', 'expired', 'unauthorized', 'network', 'write', 'notify-failure')) {
+    $env:ORGIAST_KEYSERVE_PC = if ($scenarioName -eq 'success-with-pc') { 'cr-PC' } else { $null }
     $global:enrollTest_scenario = $scenarioName
     $global:enrollTest_statusCalls = 0; $global:enrollTest_syncChecked = $false; $global:enrollTest_reported = $false
     $global:enrollTest_testHome = Join-Path $ScratchRoot ('enroll-mock-' + [guid]::NewGuid().ToString('N'))
@@ -72,7 +76,7 @@ try {
     try {
       $output = & (Join-Path $PSScriptRoot 'install-orgiast.ps1') -Enroll 'opaque-test-token' -EnrollOnly -Yes -NonInteractive -NoReboot 6>&1 | Out-String
       $code = $LASTEXITCODE
-      $expectSuccess = $scenarioName -in @('success', 'existing-primary', 'stale-primary', 'notify-failure')
+      $expectSuccess = $scenarioName -in @('success', 'success-with-pc', 'existing-primary', 'stale-primary', 'notify-failure')
       Assert ($code -eq $(if ($expectSuccess) { 0 } else { 1 })) "unexpected exit: $code / $output"
       Assert $global:enrollTest_syncChecked 'sync not reached or ACL assertions failed'
       Assert $global:enrollTest_reported 'result not reported'
@@ -94,6 +98,7 @@ try {
 } finally {
   $env:ORGIAST_HOME = $previousHome
   $env:ORGIAST_KEYSERVE_SECRET = $previousSecret
+  $env:ORGIAST_KEYSERVE_PC = $previousPc
   Remove-Item Function:\node
 }
 Write-Host "$global:enrollTest_passed passed / $global:enrollTest_failed failed"

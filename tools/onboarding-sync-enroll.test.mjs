@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const token = 'ORG1.test-only.signature';
 const toolsDir = path.dirname(fileURLToPath(import.meta.url));
@@ -14,7 +14,7 @@ function run(file, home, url, preload, extra = {}) {
   const env = { ...process.env, ORGIAST_HOME: home, ORGIAST_KEYSERVE_URL: url,
     ORGIAST_KEYSERVE_SECRET: '', ORGIAST_KEYSERVE_PC: '', ...extra };
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ['--import', preload, path.join(toolsDir, file),
+    const child = spawn(process.execPath, ['--import', pathToFileURL(preload).href, path.join(toolsDir, file),
       ...(file === 'onboarding-sync.mjs' ? ['--keys-only', '--force'] : ['--json'])], { env });
     let stdout = '', stderr = '';
     child.stdout.on('data', s => { stdout += s; });

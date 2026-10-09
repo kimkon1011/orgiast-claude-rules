@@ -9,7 +9,7 @@ import { isDailyLimit, isUnmeasurable, JUDGE_CHAIN, paretoClassification, recomm
 
 // Run the real CLI with isolated home/config/results and a fetch stub; --all also
 // writes a routing table, so copy its modules rather than touching the checkout.
-function runHarness(t, { cooldown = {}, tasks, responses = [], args = ['--provider', 'openrouter'] } = {}) {
+function runHarness(t, { cooldown = {}, tasks, config, responses = [], args = ['--provider', 'openrouter'] } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'eval-cooldown-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const tools = path.join(home, 'tools'), evalDir = path.join(home, '.claude', 'eval');
@@ -20,7 +20,7 @@ function runHarness(t, { cooldown = {}, tasks, responses = [], args = ['--provid
   }
   const seed = tasks || [{ id: 'one', category: 'classification', prompt: 'test', expect: { type: 'contains', value: 'ok' } }];
   fs.writeFileSync(path.join(tools, 'eval-tasks.seed.jsonl'), seed.map(JSON.stringify).join('\n') + '\n');
-  fs.writeFileSync(path.join(tools, 'eval-providers.json'), JSON.stringify([{ provider: 'groq', model: 'test' }, { provider: 'openrouter', model: 'test' }]));
+  fs.writeFileSync(path.join(tools, 'eval-providers.json'), JSON.stringify(config || [{ provider: 'groq', model: 'test' }, { provider: 'openrouter', model: 'test' }]));
   fs.writeFileSync(path.join(home, '.claude', 'provider-cooldown.json'), JSON.stringify(cooldown));
   const preload = path.join(home, 'mock-fetch.mjs');
   fs.writeFileSync(preload, `
@@ -187,4 +187,19 @@ test('resolveJudgeChain は --judge-provider を先頭に置き重複除去す�
   assert.deepEqual(resolveJudgeChain('deepseek'), ['deepseek', 'groq', 'openrouter', 'gemini', 'anthropic']);
   assert.deepEqual(resolveJudgeChain(''), JUDGE_CHAIN);
   assert.equal(new Set(resolveJudgeChain('gemini')).size, JUDGE_CHAIN.length);
+});
+
+// 同一providerの複数モデルを実際のCLIで走らせ、候補ごとの単価が結果へ届くことを検証。
+test('scout candidates run through --all with model-specific prices', (t) => {
+  const config = [
+    { provider: 'openrouter', model: 'existing', costPerMillion: [1, 2] },
+    { provider: 'openrouter', model: 'scouted', costPerMillion: [0.1, 0.2] },
+  ];
+  const response = { body: JSON.stringify({ choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }], usage: { prompt_tokens: 1000, completion_tokens: 1000 } }) };
+  const all = runHarness(t, { config, responses: [response, response], args: ['--all'] });
+  assert.deepEqual(all.results.map((r) => [r.model, r.costUsd]), [['existing', 0.003], ['scouted', 0.0003]]);
+  const selected = runHarness(t, { config, responses: [response], args: ['--provider', 'openrouter', '--model', 'scouted'] });
+  assert.equal(selected.results[0].costUsd, 0.0003);
+  const unknown = runHarness(t, { config, responses: [response], args: ['--provider', 'openrouter', '--model', 'unconfigured'] });
+  assert.equal(unknown.results[0].costUsd, 0.00138);
 });

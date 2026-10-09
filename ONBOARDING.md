@@ -889,7 +889,14 @@ Astra クールダウン中は Sol を使う。明示の `--model astra`（ま�
 **非Claude実装レーンの全滅をSonnetへの自動切替理由にしない（2026-09-15 改定）**。①`codex-do` → `cheap-code` の順に、指示をファイルで渡して試す。②両方不可なら `tools/llm-ask.mjs --provider deepseek|kimi|groq`（providerは1つ選ぶ）でファイル単位に生成し、コードブロックをWriteで保存してverifyする。プロンプトには「出力はコードブロック1個のみ。説明不要。ファイルパス: <path>」を含め、保存後にtypecheck/testを実行する。素のAPI呼び出しは自律CLIとは別経路だが、拒否された操作自体の禁止・安全弁を迂回してはならない。
 
 - ③それも不可なら無人セッションでも実装を停止する。`next-session.md` に「レーン全滅・費用見込み（トークン概算）・選択肢（WSL導入でCodex復旧 / llm-ask / Sonnet承認）」を記録する。④Sonnet / Opusによる実装は費用見込みを提示し、kimの明示承認後だけにする。hookのフォールバック文言を免責にしない。
-- WindowsでCodexが書けないPCは、`wsl --install -d Ubuntu`（管理者操作・再起動＝人手1回）でWSL経路の復旧を検討する。
+- WindowsでCodexが書けないPCは、Claude がその場でWSL経路を復旧する: `wsl --install -d Ubuntu --no-launch` → `wsl -d Ubuntu -u root -- bash -lc "<NodeSource で node 22>; npm i -g @openai/codex"` → `%USERPROFILE%\.codex\auth.json` を WSL の `/root/.codex/` へコピー → `codex login status` → codex-do で1ファイル作成を実測（2026-10-09 nishi-PC 実測: WSL 本体が入っていれば管理者権限・再起動とも不要）。
+
+**他AIレーンが落ちたら、その場で直す。代替や Claude 本体へ逃げて放置しない（2026-10-09 nishi 厳命）**。user のコストパフォーマンスが最優先で、Claude 本体はいちばん高い経路。
+- 失敗出力から原因を特定し、Claude が実行できる修理（環境導入・認証の引き継ぎ・設定修正）をそのターン中に試す。修理後は1回実行して成功を実測する。
+- 応答に `[LANE-REPAIR] <レーン>: 修復済み <内容>` か `[LANE-REPAIR] <レーン>: 修復不可 試行: <試した手段>` を書く。Stop hook の `lane-abandonment-gate` が、失敗シグナルのあるターンでこの行が無いと block する（`[LANE-FALLBACK]` 1行だけでは通らない）。
+- `delegation-health-check` は環境故障（WSL 不在・spawn 失敗・未認証）と「3件以上すべて失敗したレーン」（`lane_outage_unrepaired`）を high＋修理タスクで出す。朝に出ていたら、その日の作業より先に直す。
+- 「アカウント追加」「有料化」は、故障の修復と実測が済んでから検討する。
+- **実害（2026-08-27〜10-09）**: nishi-PC の Codex は WSL ディストリ不在で43日・112回起動に失敗していた。ヘルス判定が low（起票しない）、exit 3 の行は「起動前ゲートで意図的に止めた」と誤分類され、毎回 Claude 本体へ戻って誰も直さなかった。user は上限を疑ってアカウント追加を検討していた。修理は数分で終わった。
 
 **実害（2026-09-11〜15）**: StageCue実装でcodex-do/cheap-codeの拒否後にSonnetへP1〜P3を渡し、費用提示なしで約150万トークンを消費した。
 

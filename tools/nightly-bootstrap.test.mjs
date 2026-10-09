@@ -127,7 +127,7 @@ function gitShimPath(fix, headSha, remoteSha) {
     'exit /b 0',
     '',
   ].join('\r\n'), 'utf8');
-  return `${toWindowsPath(shim)};${String.raw`C:\Windows\System32\WindowsPowerShell\v1.0`}`;
+  return `${toWindowsPath(shim)};${toWindowsPath(dirname(process.execPath))};${String.raw`C:\Windows\System32\WindowsPowerShell\v1.0`}`;
 }
 
 const hasPowerShell = (() => {
@@ -569,4 +569,22 @@ for (const dirty of [true, false]) test(`real git bootstrap preserves dirty tree
     assert.match(commands, /clean -qfd/);
     assert.equal(git(fix.repo, ['rev-parse', 'HEAD']), git(fix.repo, ['rev-parse', 'origin/main']));
   }
+});
+
+for (const enabled of [true, false]) test(`hourly sync installed script follows verified main: enabled=${enabled}`, { skip: !hasPowerShell }, () => {
+  const fix = fixture(`sync-self-update-${enabled}`);
+  mkdirSync(join(fix.repo, '.git'));
+  mkdirSync(join(fix.repo, 'tools'));
+  const source = join(fix.repo, 'tools', 'sync-orgiast-main.ps1');
+  const installed = join(fix.home, '.claude', 'tools', 'sync-orgiast-main.ps1');
+  mkdirSync(dirname(installed), { recursive: true });
+  writeFileSync(source, 'new sync script'); writeFileSync(installed, 'old sync script');
+  const target = join(fix.dir, 'target.ps1'); writeFileSync(target, 'exit 0');
+  const sha = '1111111111111111111111111111111111111111';
+  const result = runBootstrap(fix, target, [], {
+    PATH: gitShimPath(fix, sha, sha), ORGIAST_NIGHTLY_NO_SELF_UPDATE: enabled ? '0' : '1',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(readFileSync(installed, 'utf8'), enabled ? 'new sync script' : 'old sync script');
+  if (enabled) assert.match(logText(fix), /SYNC_SELF_UPDATE \/ sync-orgiast-main.ps1 updated 1111111/);
 });

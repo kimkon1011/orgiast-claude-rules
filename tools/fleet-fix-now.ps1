@@ -77,6 +77,30 @@ if ($codex) {
     & codex login
     & codex login status 2>&1 | Out-Null; $codexOk = ($LASTEXITCODE -eq 0)
   }
+  # ログイン中のアカウントを PC 名簿(fleet-pc-map.json の account)と照合する。共有アカウント(例: seisaku-team@)で
+  # ログインしていると複数PCで1つの週間枠を取り合い、1台の上限が全台を止める（2026-10-10 nishi-PC と作業用999 が同一アカウント）。
+  function Get-CodexEmail {
+    try {
+      $j = Get-Content (Join-Path $userHome '.codex\auth.json') -Raw | ConvertFrom-Json
+      $p = $j.tokens.id_token.Split('.')[1].Replace('-', '+').Replace('_', '/'); while ($p.Length % 4) { $p += '=' }
+      $c = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($p)) | ConvertFrom-Json
+      return @{ email = $c.email; plan = $c.'https://api.openai.com/auth'.chatgpt_plan_type }
+    } catch { return $null }
+  }
+  $expected = ''
+  try {
+    $map = Get-Content (Join-Path $repo 'fleet-pc-map.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    $entry = $map.PSObject.Properties | Where-Object { $_.Name -eq $curLabel } | Select-Object -First 1
+    if ($entry -and $entry.Value.account) { $expected = [string]$entry.Value.account }
+  } catch {}
+  $acct = Get-CodexEmail
+  if ($codexOk -and $acct -and $expected -and $acct.email -ne $expected -and -not $NoLogin) {
+    Write-Host ''; Write-Host (">>> Codex が " + $acct.email + " でログインしています。このPCの担当は " + $expected + " です。ブラウザが開いたら " + $expected + " でログインしてください <<<") -ForegroundColor Yellow
+    & codex logout 2>&1 | Out-Null
+    & codex login
+    & codex login status 2>&1 | Out-Null; $codexOk = ($LASTEXITCODE -eq 0); $acct = Get-CodexEmail
+  }
+  if ($acct) { Say ('codex account: ' + $acct.email + ' plan=' + $acct.plan + $(if ($expected) { ' 担当=' + $expected + $(if ($acct.email -eq $expected) { ' 一致' } else { ' 不一致' }) } else { '' })) }
   Say ('codex login: ' + $(if ($codexOk) { 'OK' } else { 'NG' }))
 } else { Say 'codex login: codex コマンドが無い（このPCでは Codex 実装は deepseek 等へ自動退避）' }
 

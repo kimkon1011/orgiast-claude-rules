@@ -106,8 +106,16 @@ export function usesDeprecatedHandoffTag(text) {
   }
   return false;
 }
-export function evaluateHandoff(text, { catalog, enforcement = {} } = {}) {
+import { findUnbackedExternalHandoff } from './handoff-action-evidence.mjs';
+
+export function evaluateHandoff(text, { catalog, enforcement = {}, transcriptRaw } = {}) {
   if (!hasHandoff(text)) return { decision: 'pass', reason: '手渡しなし', routesMatched: [] };
+  if (transcriptRaw) {
+    const violation = findUnbackedExternalHandoff(text, transcriptRaw);
+    if (violation) {
+      return { decision: 'block', reason: violation.reason, code: violation.code, routesMatched: [] };
+    }
+  }
   if (usesDeprecatedHandoffTag(text)) return { decision: 'block', reason: 'このタグは廃止。`[手渡し判定]` を書いてください。', routesMatched: [] };
   const marker = text.search(/\[手渡し判定\]/);
   if (marker < 0) return { decision: 'block', reason: '`[手渡し判定]` ブロックがありません。', routesMatched: [] };
@@ -132,6 +140,7 @@ export function latestAssistantText(transcript) {
 }
 export function runGate(input) {
   const text = input?.assistant_text || latestAssistantText(input?.transcript_path);
+  const transcriptRaw = input?.transcript_raw || (input?.transcript_path && fs.existsSync(input.transcript_path) ? fs.readFileSync(input.transcript_path, 'utf8') : '');
   // stop_hook_active はブロック後の再実行なので、ここで例外を投げると応答を出せなくなる。
   // カタログが読めない配布不備でも、判定を諦めて通す側に倒す。
   let catalog = null;
@@ -142,11 +151,11 @@ export function runGate(input) {
   let enforcement = {}; try { enforcement = JSON.parse(fs.readFileSync(path.join(home(), '.claude', 'rule-enforcement.json'), 'utf8')); } catch {}
   if (input?.stop_hook_active) {
     if (!text) return { decision: 'pass', reason: 'stop_hook_active', routesMatched: [], text };
-    const evaluated = evaluateHandoff(text, { catalog, enforcement });
+    const evaluated = evaluateHandoff(text, { catalog, enforcement, transcriptRaw });
     // 無限ループを防ぐため decision は pass に固定する。判定結果は recheck に残して可視化する。
     return { ...evaluated, decision: 'pass', reason: 'stop_hook_active', recheck: evaluated.decision, text };
   }
-  return { ...evaluateHandoff(text, { catalog, enforcement }), text };
+  return { ...evaluateHandoff(text, { catalog, enforcement, transcriptRaw }), text };
 }
 function recordSkip({ sessionId = '', reason, reasonCode = '', rawHead = '' }) {
   const skips = path.join(home(), '.claude', 'handoff-gate-skips.jsonl');

@@ -19,6 +19,7 @@ import { isEntry } from './is-entry.mjs';
 import { loadFablePolicy } from './fable-policy.mjs';
 import { COST_PER_MILLION } from './llm-fallback.mjs';
 import { calculateDelegation, calculateLinesDelegation, collectBashProfile, collectClaudeActivityDays, collectClaudeCostStats, collectClaudeStats, collectCodexUsage, collectGitActivity, collectProviderHealth, estimateSpecAuthoringTokens, formatBlockSource } from './usage-stats.mjs';
+import { collectUserReworkStats } from './lib/user-rework-stats.mjs';
 export { codexSessionDirs, collectCodexUsage } from './usage-stats.mjs';
 export const EXECUTOR_PRICING = COST_PER_MILLION;
 
@@ -228,8 +229,10 @@ const pricingBriefLine = (() => {
 const delegationHealthSummary = (() => {
   try { return fs.readFileSync(path.join(HOME, '.claude', 'delegation-health.md'), 'utf8').trim(); } catch { return ''; }
 })();
+const userReworkStats = collectUserReworkStats({ home: HOME, days: DAYS });
 const md = `<!-- COST-DIRECTIVE-START -->
 ## 📊 Claude Code out ${(claudeOut / 1000).toFixed(0)}k tok / 委譲率(Claude以外へ) ${(nonClaudeDelegRatio * 100).toFixed(1)}% (直近${DAYS}日 / このPC)
+- 👤 user 手戻り: **今セッション ${userReworkStats.currentSessionCount}回 / 直近${DAYS}日 ${userReworkStats.sevenDayCount}回** ← トークンより優先して下げる指標
 - Claude Code利用: **out ${(claudeOut / 1000).toFixed(0)}k tok** ${arrow} (${claudeModelLine}) ※定額シート課金＝請求$は発生しない
 - (参考: list価格換算 $${claudeUSD.toFixed(1)} — 実請求ではない)
 - 安いAI実行者: **台帳計測分 $${execUSD.toFixed(2)}**（従量課金）— ${execLine}

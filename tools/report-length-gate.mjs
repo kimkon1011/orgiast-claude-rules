@@ -124,7 +124,7 @@ export function judgeReportLength(assistantText, lastHumanText) {
   if (lines <= REPORT_LINE_LIMIT) return { decision: 'pass', reason: 'within-line-limit', lines, chars };
   return {
     decision: 'block',
-    reason: `頼まれていない完了報告が ${lines} 行（${chars} 文字）ある。CLAUDE.md の既定は 1〜3 行。\nチャットには結論を 3 行以内で書け。詳細が必要ならファイルに書き、リンクを1本だけ貼れ: kim が読む文書は Drive の Doc URL（docs.google.com/document/d/{ID}/edit?authuser={userEmail}。本文に「<メール> で開いてください」を書く）、開発資料（コード・設定）は相対パス。ローカルの .md/.pdf 等を kim 読み文書として直リンクすると doc-link-drive-guard で再度 block される（2026-09-10 実測: 片方の助言に従ったらもう片方に差し戻された）。\n実測: user の読字量531,000字のうち34%がこの型の報告から出ている（132/1831 turn）。\nuser が実際に詳細を求めている場合や、どうしても本文に必要な場合は応答に \`[REPORT-OK]\` と理由を書けば通る。`,
+    reason: `頼まれていない完了報告が ${lines} 行（${chars} 文字）ある。CLAUDE.md の既定は 1〜3 行。\nチャットには結論を 3 行以内で書け。詳細が必要ならファイルに書き、リンクを1本だけ貼れ: kim が読む文書は Drive の Doc URL（docs.google.com/document/d/{ID}/edit?authuser={userEmail}。本文に「<メール> で開いてください」を書く）、開発資料（コード・設定）は相対パス。ローカルの .md/.pdf 等を kim 読み文書として直リンクすると doc-link-drive-guard で再度 block される（2026-09-10 実測: 片方の助言に従ったらもう片方に差し戻された）。\n実測: user の読字量531,000字のうち34%がこの型の報告から出ている（132/1831 turn）。\nuser が実際に詳細を求めている場合や、どうしても本文に必要な場合は応答に \`[REPORT-OK]\` と理由を書けば通る。\nただし user への聞き直し・やり直しを1回でも増やす形での削減は禁止。調査のツール呼び出し10回は、user への聞き直し1回より安い。削減は委譲・キャッシュ・出力長で行い、調査の深さと判断の質では行わない。`,
     lines,
     chars,
   };

@@ -6,13 +6,22 @@ import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 import { latestAssistantText } from './lib/assistant-text.mjs';
 import { hasManualRequest } from './manual-request-fullsteps-gate.mjs';
+import { findUnbackedExternalHandoff, formatHandoffActionReason } from './handoff-action-evidence.mjs';
 
 const home = () => process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || os.homedir();
 
-export function evaluateInvestigation(text) {
+export function evaluateInvestigation(text, options = {}) {
   const value = String(text || '');
   if (!hasManualRequest(value)) return { decision: 'pass', reason: '手作業依頼なし', exempt: false };
   if (value.includes('[INVESTIGATION-OK]')) return { decision: 'pass', reason: 'INVESTIGATION-OK', exempt: true };
+
+  const rawTranscript = typeof options === 'string' ? options : options?.transcriptRaw;
+  if (rawTranscript) {
+    const violation = findUnbackedExternalHandoff(value, rawTranscript);
+    if (violation) {
+      return { decision: 'block', missing: [], reason: formatHandoffActionReason(), code: 'HANDOFF-ACTION', exempt: false };
+    }
+  }
 
   const missing = [];
   const marker = value.search(/\[手渡し判定\]/);
@@ -37,7 +46,8 @@ export function evaluateInvestigation(text) {
   return missing.length ? { decision: 'block', missing, exempt: false } : { decision: 'pass', reason: '調査証拠あり', missing: [], exempt: false };
 }
 
-export function failureReason(missing) {
+export function failureReason(missing, actionReason) {
+  if (actionReason) return actionReason;
   if (!missing?.length) return '[MINIMAL-RETRY] classifier 拒否を理由に手渡しています。手渡し前に、目的の変更だけを最小単位で1回試した結果を `最小単位で再試行: <試した操作> → <結果>` で書いてください。一括操作や緩める方向の操作の拒否から、未試行の個別操作を不可と推定するのは禁止（2026-09-17 実害）。';
   return `[INVESTIGATION] user に依頼していますが、事前調査の証拠がありません。\n不足: ${missing.join(', ')}\n\n[手渡し判定] ブロックに次を書いてください:\n  試したこと:\n    ① <実際に叩いた/検索した内容> → <結果>\n    ② <別経路> → <結果>\n  user でないと無理な理由: <OAuth初回同意 / 支払い / アカウント作成・ログイン / 物理操作 のどれか>\n\n「たぶん要る」は不可。手を動かして確かめた結果だけを書くこと。\n受け取っても使えないものを頼んでいないか(=受領後に機能する確証)も先に確かめること。`;
 }
@@ -68,10 +78,11 @@ async function main() {
     const input = JSON.parse(raw);
     const text = input.assistant_text || latestAssistantText(input.transcript_path);
     if (!text) return;
-    const result = evaluateInvestigation(text);
+    const rawTranscript = input.transcript_raw || (input.transcript_path && fs.existsSync(input.transcript_path) ? fs.readFileSync(input.transcript_path, 'utf8') : '');
+    const result = evaluateInvestigation(text, rawTranscript);
     record(input, result, text);
     if (input.stop_hook_active || result.decision === 'pass') return;
-    console.error(failureReason(result.missing));
+    console.error(failureReason(result.missing, result.reason));
     process.exitCode = 2;
   } catch {
     // 想定外エラーは既存ゲートと同じく fail-open。

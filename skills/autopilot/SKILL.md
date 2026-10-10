@@ -24,14 +24,19 @@ description: '/autopilot start "<目的>" で自律ループ開始。/autopilot 
    `node "<repo>/tools/codex-do.mjs" --prompt-file "<指示ファイル>" --cwd "<対象ディレクトリ>" --timeout 1200`
 
    監督モデルが Fable / Opus のどちらでも自分で実装しない。Codex の結果を Claude 側でテスト実行と read-back により検証し、目的の完了条件に基づいて進捗 0〜100 を判定する。失敗・委譲不能も必ず post まで記録する。
-4. `node "<repo>/tools/autopilot-tick.mjs" post --summary "<何をしたか1〜2行>" --progress <0-100> --next-delay <秒> [--noop] [--codex]` を実行する。Codex を利用したら `--codex`。進捗が前周と同じ・後退・施策が実行できなかった周は必ず `--noop`。単にコマンドが成功したことを進捗として数えない。完了条件の検証に成功した場合だけ 100 とする。
+4. `node "<repo>/tools/autopilot-tick.mjs" post --summary "<何をしたか1〜2行>" --progress <0-100> --next-delay <秒> [--noop] [--codex]` を実行する。Codex を利用したら `--codex`。進捗が前周と同じ・後退・施策が実行できなかった周は必ず `--noop`。単にコマンドが成功したことを進捗として数えない。
+
+   **progress 100 は、目的が意図した「実際の結果」を確認できた時だけ**にする（例: 実際に返信が1件出た、実際に相手に届いた、実際にデータが更新された）。テスト・CI・デプロイの成功だけでは 100 にしない。実際の結果がまだ起きていないなら `--progress 100 --unverified "<まだ確かめられていないこと>"` を付ける（`--evidence "<実際に起きた結果を確認した内容>"` は 100 の必須項目。どちらも無い 100 は `evidence_required` で拒否される）。`--unverified` を付けた目的は「見張り」に回り、毎日1回結果を確認して `watch` で報告する。
 5. post の status が paused / stopped / done なら、手順2と同様に handoff と停止を行う。running なら ScheduleWakeup の `prompt` は `/autopilot tick` 固定、`noop` は post が返した値、delay は post の `nextDelaySec` とする。通常 1200〜1800秒、Codex 待ちなど外部待ちは短くしてよいが、noop 周は必ず1800秒以上。
+6. 毎周の最初に `pre` の `watchesDue` を見る。あれば**1件だけ**実際の結果を確かめ、`node "<repo>/tools/autopilot-tick.mjs" watch --id <id> --result ok|ng --note "<確認内容>"` を呼ぶ。ok なら見張りは外れる。ng が3回、または開始から7日経つと「うまくいっていない」と1回だけ通知され、見張りから外れる。
 
 ## 自動補充と Discord 通知
 
 `pre` は未開始（not_started）・完了（done）時に `~/.claude/next-actions.md` の「推奨アクション」を上から確認する。`tools/llm-ask.mjs` の安価なモデルに候補ごとに1回 Yes/No を問い、Claude だけで完結できる候補を開始する。電話・物理作業・ピック作業などは除外。直近の done/stopped の目的は state の履歴に保持し、連続選択しない。候補なし・判定不能なら開始も通知もしない。停止・一時停止は自動補充しない。補充時も当日の回数・時間、累計回数と既存の上限を引き継ぐ。
 
-kim への DM は「完了」「判断待ち」「異常停止（上限・runner_error・noop 連続）」と、補充時の「次の目的: <目的>（止めるなら『止めて』と返信）」1通だけ。すべて3行以内とし、途中経過・日次ダイジェストは送らず log.jsonl / run.log に残す。通知は tick の既存 notify-kim 経路に任せ、別途重複送信しない。
+kim への DM は「完了」「見張り開始」「見張りの結果」「判断待ち」「異常停止（上限・runner_error・noop 連続）」と、補充時の「次の目的」1通だけ。すべて3行以内とし、途中経過・日次ダイジェストは送らず log.jsonl / run.log に残す。通知は tick の既存 notify-kim 経路に任せ、別途重複送信しない。
+
+**Discord への文言は、システムを知らない高校生でもわかる簡単な日本語**にする。専門用語・英語の内部コード（daily_iter_cap, runner_error, noop, P1, PR, iter など）・コマンド・ID を本文に出さない。1文は短く、最大3〜4行。PC名は末尾に「（<hostname>）」で小さく付ける程度は可。目的文の中の `[P1タスク]` のような角括弧タグは通知時に除去する。
 
 判断が必要なら、はい／いいえで答えられる1問を `pause --question "<質問>"` に渡す。はいで実行してよい具体的な操作を質問に含め、保留した操作を handoff に記録する。DM の「はい」で再開、「いいえ」で停止する。
 

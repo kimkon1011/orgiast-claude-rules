@@ -139,7 +139,8 @@
     },
     "decision-research-gate": {
       "rollout": "deny",
-      "legacy": true
+      "distributedAt": "2026-10-10T00:00:00Z",
+      "denyAfter": "2026-10-17T00:00:00Z"
     },
     "url-account-gate": {
       "rollout": "deny",

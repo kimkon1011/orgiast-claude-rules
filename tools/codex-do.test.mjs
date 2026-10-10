@@ -1350,6 +1350,27 @@ test('A: 上限メッセージの stderr で codex-cooldown.json が書かれ、
   assert.equal(row.launched, false);
 });
 
+test('A: cooldown 中でも代替バックエンドがあれば deferred にせず codex を起動しないままフォールバックへ回る', (t) => {
+  const home = tmpHome(t, 'codex-cooldown-fallback');
+  fs.writeFileSync(path.join(home, '.claude', 'codex-cooldown.json'), JSON.stringify({ until: Date.now() + 4 * 86400000, reason: 'usage_limit', t: Date.now() }));
+  // モックは1件だけ。codex が起動されればこの1件を codex が消費してフォールバックが失敗する。
+  const mock = JSON.stringify([{ status: 0, output: 'Qwen Code CLI has successfully completed.', stderr: '' }]);
+  const result = run(['--force-native', '--cwd', home, '--kind', 'implement', '指示内容'], {
+    home, env: { CODEX_DO_MOCK_RESULTS: mock, GEMINI_API_KEY: '', DEEPSEEK_API_KEY: 'sk-test' },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /executor=fallback:cheap-code:deepseek \(理由: Codex usage limit クールダウン中\)/);
+  assert.match(result.stderr, /codex_cooldown.*代替バックエンドへ回します/);
+  assert.doesNotMatch(result.stderr, /保留: codex_cooldown/);
+  assert.doesNotMatch(result.stdout, /"status":"deferred"/);
+  // --no-fallback の明示があれば従来どおり保留(75)。
+  const strict = run(['--force-native', '--cwd', home, '--kind', 'implement', '--no-fallback', '指示内容'], {
+    home, env: { CODEX_DO_MOCK_RESULTS: mock, GEMINI_API_KEY: '', DEEPSEEK_API_KEY: 'sk-test' },
+  });
+  assert.equal(strict.status, 75, strict.stderr);
+  assert.equal(lastJson(strict.stdout).reason, 'codex_cooldown');
+});
+
 test('A: 解析できない上限メッセージは24時間後を until にする', (t) => {
   const home = tmpHome(t, 'codex-cooldown-24h');
   run(['--force-native', '--cwd', home, '--no-fallback', '--model', 'sol', '実装して'], {

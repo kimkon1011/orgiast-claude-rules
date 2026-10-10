@@ -915,7 +915,8 @@ if (quotaCheck.matched && selectedLane.slug !== ASTRA) {
     try { writeCodexCooldownFile(claudeFile(home, 'codex-cooldown.json'), parseUsageLimitUntil(limitText)); } catch {}
   }
 }
-const fallbackReason = launchUnavailable ? 'WSL 経路が無く codex を起動できない'
+const fallbackReason = cooldownSkipCodex ? 'Codex usage limit クールダウン中'
+  : launchUnavailable ? 'WSL 経路が無く codex を起動できない'
   : quotaCheck.matched ? 'Codex usage limit を検出' : 'Astra 昇格後も失敗';
 if (quotaCheck.matched || escalationFailed || launchUnavailable) {
   if (quotaCheck.matched) {
@@ -930,7 +931,7 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable) {
     }
   } else {
     executorName = 'fallback';
-    if (launchUnavailable) console.error('[codex-do] WSL の codex 経路が使えないため、代替バックエンドで実行します（WSL を整備するか、承知の上で native を使うなら --allow-native）');
+    if (launchUnavailable && !cooldownSkipCodex) console.error('[codex-do] WSL の codex 経路が使えないため、代替バックエンドで実行します（WSL を整備するか、承知の上で native を使うなら --allow-native）');
     console.log(`[codex-do] executor=fallback (理由: ${fallbackReason})`);
     if (quotaCheck.matched) console.error(`[codex-do] Codex usage limit detected: ${quotaCheck.pattern} at index ${quotaCheck.index}. Context: "${quotaCheck.snippet}"`);
     console.error(`[codex-do] Falling back to an agentic CLI...`);

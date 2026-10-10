@@ -131,6 +131,13 @@ async function main() {
   const settings = readJson(path.join(claudeDir, 'settings.json'));
   const nonClaudeRatio = firstFiniteNumber(cost.nonClaudeDelegRatio, enforce.nonClaudeDelegRatio);
   const legacyRatio = firstFiniteNumber(cost.delegRatio, enforce.delegRatio);
+  // 委譲率セルは「判定に使う値」を載せる。#186 で強制判定は行ベース(linesRatio)へ切り替わり、
+  // トークン比は監査のthinkingが監督出力の約7割を占めるため上限が約40%で目標50%に構造的に届かない
+  // （= トークン比は併記専用）。ところが本セルは nonClaudeDelegRatio(トークン比) を載せており、
+  // cost-improve-loop がこれを平坦50%と比較して「低委譲」を誤検知し、成功し得ない自動改善を
+  // 空振りさせ続けていた（実測: low_delegation の自動改善は17件全滅・人間エスカレーション多発）。
+  // 判定に使う行ベース比を主セルに載せ、未計測のときだけ従来のトークン比へフォールバックする。
+  const linesRatio = firstFiniteNumber(cost.linesRatio, enforce.linesRatio);
   const claudeUsd = firstFiniteNumber(cost.claudeUSD, reporter.mtdUsd);
   const payload = {
     token: fleetEnv.FLEET_SHEET_TOKEN,
@@ -144,7 +151,8 @@ async function main() {
     claudeUsd: claudeUsd === null ? '' : Math.round(claudeUsd * 100) / 100,
     mainModel: topModel,
     // 既存行が "0%" 表記なので、人が読む列で表記が混ざらないようパーセント文字列にする。
-    delegRatio: formatRatio(nonClaudeRatio),
+    // 主セルは判定に使う行ベース比(#186)。未計測なら従来どおりトークン比へフォールバック。
+    delegRatio: formatRatio(linesRatio === null ? nonClaudeRatio : linesRatio),
     delegRatioLegacy: formatRatio(legacyRatio),
     planFiveHourPct: planUsage.available ? planUsage.fiveHour.utilization : null,
     planSevenDayPct: planUsage.available ? planUsage.sevenDay.utilization : null,

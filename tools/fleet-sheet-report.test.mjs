@@ -54,6 +54,23 @@ test('stateに計測値があればパーセント表記で送る', () => {
   assert.equal(payload.claudeUsd, 1.23);
 });
 
+test('委譲率セルは判定に使う行ベース比(#186)を優先し、無いときだけトークン比へフォールバックする', () => {
+  // #186: 強制判定は行ベース(linesRatio)。トークン比は上限約40%で目標50%に届かず併記専用。
+  // 主セルにトークン比を載せると cost-improve-loop が「低委譲」を誤検知し続けるため、
+  // 行ベース比が計測できていればそれを送る。
+  const withLines = reportPayload({
+    'cost-loop-state.json': { linesRatio: 0.564, nonClaudeDelegRatio: 0.381, delegRatio: 0.814, claudeUSD: 2 },
+  });
+  assert.equal(withLines.delegRatio, '56.4%');
+  assert.equal(withLines.delegRatioLegacy, '81.4%');
+
+  // 未計測(linesRatio 無し)は従来どおりトークン比へフォールバックし、後方互換を保つ。
+  const withoutLines = reportPayload({
+    'cost-loop-state.json': { nonClaudeDelegRatio: 0.381, delegRatio: 0.381, claudeUSD: 2 },
+  });
+  assert.equal(withoutLines.delegRatio, '38.1%');
+});
+
 test('keyserve status を既存 status payload に相乗りさせる', () => {
   const checkedAt = '2026-09-12T00:00:00.000Z';
   const old = process.env.ORGIAST_KEYSERVE_STATUS_JSON;

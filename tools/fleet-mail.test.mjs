@@ -1,4 +1,5 @@
 import test from 'node:test';
+process.env.FLEET_NO_SELF_HEAL = '1';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';

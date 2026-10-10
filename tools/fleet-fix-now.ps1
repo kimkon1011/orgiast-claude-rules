@@ -2,7 +2,7 @@
 # Windows PowerShell 5.1 向け UTF-8 BOM。このスクリプトを貼った人＝そのPCの担当者の承諾（prompt/codex）として扱う。
 # 使い方（PowerShell で1行）:
 #   [Net.ServicePointManager]::SecurityProtocol='Tls12'; iwr -UseBasicParsing https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/tools/fleet-fix-now.ps1 -OutFile $env:TEMP\fleet-fix-now.ps1; powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\fleet-fix-now.ps1
-param([string]$ReportTo = 'kim-PC', [switch]$NoOptin, [string]$Label = '')
+param([string]$ReportTo = 'kim-PC', [switch]$NoOptin, [string]$Label = '', [string]$Enroll = '', [switch]$NoLogin)
 $ErrorActionPreference = 'Continue'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 $report = New-Object System.Collections.Generic.List[string]
@@ -19,56 +19,7 @@ Say ("[fleet-fix-now] " + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + " hostname=
 $curLabel = ''
 $envFile = Join-Path $claudeDir 'cost-reporter.env'
 if (Test-Path $envFile) { $m = Select-String -Path $envFile -Pattern '^REPORTER_LABEL=(.*)$' | Select-Object -First 1; if ($m) { $curLabel = $m.Matches[0].Groups[1].Value.Trim() } }
-# 注意: PowerShell の変数名は大小を区別しないので、現在値は $curLabel、引数は $Label と別名にする（2026-10-10 同名で -Label が消えた）
-# -Label 指定時は REPORTER_LABEL を書き換える（2026-10-10: 作業用018 が kimko-PC のラベルを複製しており宛先が衝突した）
-if ($Label) {
-  $lines = @(); if (Test-Path $envFile) { $lines = @(Get-Content $envFile | Where-Object { $_ -notmatch '^REPORTER_LABEL=' }) }
-  $lines += "REPORTER_LABEL=$Label"
-  [IO.File]::WriteAllText($envFile, (($lines -join "`r`n") + "`r`n"), (New-Object Text.UTF8Encoding($false)))
-  Say ("label: " + $(if ($curLabel) { $curLabel } else { '(未設定)' }) + " → " + $Label + " に変更")
-  $curLabel = $Label
-}
-Say ("label(REPORTER_LABEL)=" + $(if ($curLabel) { $curLabel } else { '(未設定 → hostname で受信)' }))
-$fleetEnv = Join-Path $claudeDir 'fleet-sheet.env'
-Say ("fleet-sheet.env=" + $(if (Test-Path $fleetEnv) { 'あり' } else { '無し（送受信不可。このPCは fleet 未配布）' }))
-
-# 1. nightly-repo を origin/main 最新にする（PR #698 / #700 を取り込む）
-$git = Get-Command git -ErrorAction SilentlyContinue
-if (-not $git) {
-  # cr-PC(作業用011) 2026-10-10 実測: git 無しで止まった。winget で入れて同じセッションの PATH に足す。
-  Say 'git が無いので winget でインストールします（1〜3分）'
-  $winget = Get-Command winget -ErrorAction SilentlyContinue
-  if ($winget) { & winget install --id Git.Git -e --silent --accept-package-agreements --accept-source-agreements 2>&1 | Out-Null }
-  foreach ($p in @('C:\Program Files\Git\cmd', (Join-Path $env:LOCALAPPDATA 'Programs\Git\cmd'))) { if (Test-Path $p) { $env:PATH = "$p;$env:PATH" } }
-  $git = Get-Command git -ErrorAction SilentlyContinue
-  Say ("git: " + $(if ($git) { 'インストール OK ' + $git.Source } else { 'インストール失敗（winget ' + $(if ($winget) { 'あり' } else { '無し' }) + '）→ zip 取得に切替' }))
-}
-if (-not $git) {
-  # git が無くても動けるように zip で main を展開する（.git 無し＝日次 self-sync は動かないが tools は動く）
-  $zip = Join-Path $env:TEMP 'orgiast-claude-rules-main.zip'
-  $tmpDir = Join-Path $env:TEMP 'orgiast-claude-rules-zip'
-  try {
-    Invoke-WebRequest -UseBasicParsing 'https://github.com/kimkon1011/orgiast-claude-rules/archive/refs/heads/main.zip' -OutFile $zip
-    if (Test-Path $tmpDir) { Remove-Item -Recurse -Force $tmpDir }
-    Expand-Archive -Path $zip -DestinationPath $tmpDir -Force
-    $src = Get-ChildItem $tmpDir | Select-Object -First 1
-    if (Test-Path $repo) { Remove-Item -Recurse -Force $repo }
-    Move-Item -Path $src.FullName -Destination $repo
-    Say 'repo: zip 展開 OK（git 無し）'
-  } catch { Say ('NG: zip 取得に失敗: ' + $_.Exception.Message) }
-} else {
-  if (-not (Test-Path (Join-Path $repo '.git'))) {
-    git clone --quiet $repoUrl $repo 2>&1 | Out-Null
-    Say ("repo: clone " + $(if (Test-Path (Join-Path $repo '.git')) { 'OK' } else { 'NG' }))
-  } else {
-    $dirty = git -C $repo status --porcelain 2>$null
-    git -C $repo fetch --quiet origin main 2>&1 | Out-Null
-    if ($dirty) { git -C $repo stash push -u -q -m 'fleet-fix-now' 2>&1 | Out-Null; Say 'repo: 未コミット変更を stash に退避' }
-    git -C $repo checkout -q main 2>&1 | Out-Null
-    git -C $repo reset -q --hard origin/main 2>&1 | Out-Null
-  }
-  Say ("repo: " + (git -C $repo log --oneline -1 2>$null))
-}
+# 注意: PowerShell の変数名は大小を区別しないので、現在値は $curLabel、引数は $Label と別名にする
 $fleetMail = Join-Path $repo 'tools\fleet-mail.mjs'
 if (-not (Test-Path $fleetMail)) { Say "NG: $fleetMail が無いので中断"; $report -join "`n" | Out-Host; exit 1 }
 
@@ -95,6 +46,45 @@ if ($t) {
 # 5. claude CLI の解決（PR #700 と同じ関数）
 $exeJson = (& node --input-type=module -e "import('file:///' + process.argv[1].replace(/\\/g,'/')).then(m=>m.resolveClaudeExecutableFromDisk()).then(r=>console.log(JSON.stringify(r))).catch(e=>console.log('ERR '+e.message))" (Join-Path $repo 'tools\claude-exe.mjs') 2>&1 | Out-String)
 Say ("claude exe: " + $exeJson.Trim())
+
+# 5b. 熱監視タスクが無ければ登録
+if (-not (Get-ScheduledTask -TaskName 'OrgiastThermalGuard' -ErrorAction SilentlyContinue)) {
+  $tg = Join-Path $repo 'tools\thermal-guard.ps1'
+  if (Test-Path $tg) { & powershell -NoProfile -ExecutionPolicy Bypass -File $tg -Mode install 2>&1 | Out-Null }
+  Say ('thermal-guard: ' + $(if (Get-ScheduledTask -TaskName 'OrgiastThermalGuard' -ErrorAction SilentlyContinue) { '登録 OK' } else { '登録失敗' }))
+}
+
+# 5c. ログイン切れをその場で直す（OAuth は本人の同意が要るのでブラウザが開く。-NoLogin で省略）
+$claudeExe = ''
+try { $claudeExe = (($exeJson | ConvertFrom-Json).executable) } catch {}
+if (-not $claudeExe) { $c = Get-Command claude -ErrorAction SilentlyContinue; if ($c) { $claudeExe = $c.Source } }
+if ($claudeExe -and (Test-Path $claudeExe)) {
+  $st = (& $claudeExe auth status 2>&1 | Out-String)
+  $loggedIn = ($LASTEXITCODE -eq 0) -and ($st -notmatch 'not logged in|Not logged|expired|ログインしていません')
+  if (-not $loggedIn -and -not $NoLogin) {
+    Write-Host ''; Write-Host '>>> Claude のログインが切れています。ブラウザが開くので、このPCの担当者のアカウントでログインしてください <<<' -ForegroundColor Yellow
+    & $claudeExe auth login
+    $st = (& $claudeExe auth status 2>&1 | Out-String); $loggedIn = ($LASTEXITCODE -eq 0) -and ($st -notmatch 'not logged in|Not logged|expired')
+  }
+  Say ('claude login: ' + $(if ($loggedIn) { 'OK' } else { 'NG ' + (Tail $st 2) }))
+} else { Say 'claude login: claude.exe が見つからず確認できません' }
+$codex = Get-Command codex -ErrorAction SilentlyContinue
+if ($codex) {
+  & codex login status 2>&1 | Out-Null
+  $codexOk = ($LASTEXITCODE -eq 0)
+  if (-not $codexOk -and -not $NoLogin) {
+    Write-Host ''; Write-Host '>>> Codex のログインが必要です。ブラウザが開くので、このPCの担当者の ChatGPT アカウントでログインしてください <<<' -ForegroundColor Yellow
+    & codex login
+    & codex login status 2>&1 | Out-Null; $codexOk = ($LASTEXITCODE -eq 0)
+  }
+  Say ('codex login: ' + $(if ($codexOk) { 'OK' } else { 'NG' }))
+} else { Say 'codex login: codex コマンドが無い（このPCでは Codex 実装は deepseek 等へ自動退避）' }
+
+# 5d. 自己テスト: 受信タスクと同じ claude で短い応答が返るか
+if ($claudeExe -and (Test-Path $claudeExe)) {
+  $t = (& $claudeExe -p 'OK とだけ返してください' --model haiku 2>&1 | Out-String)
+  Say ('self-test(claude -p): ' + $(if ($t -match 'OK') { 'OK' } else { 'NG ' + (Tail $t 2) }))
+}
 
 # 6. 受信を1回実行（溜まっている note/prompt を取り込み、prompt は実行して返信）
 $pollOut = (& node $fleetMail --poll 2>&1 | Out-String)

@@ -21,7 +21,7 @@ const args = process.argv.slice(2); const options = { target: process.cwd(), app
 function value(name) { const index = args.indexOf(name); if (index < 0 || !args[index + 1]) return ""; return args[index + 1]; }
 options.target = resolve(value("--target") || options.target); options.appName = value("--app-name"); options.channel = value("--discord-channel") || options.channel; options.webhook = value("--webhook"); options.relay = value("--relay"); options.relaySecret = value("--relay-secret"); options.ownerDiscordId = value("--owner-discord-id");
 options.admin = !args.includes("--no-admin-page"); options.dryRun = args.includes("--dry-run"); options.force = args.includes("--force");
-const known = new Set(["--target", "--app-name", "--discord-channel", "--webhook", "--relay", "--relay-secret", "--owner-discord-id", "--no-admin-page", "--dry-run", "--force"]);
+const known = new Set(["--target", "--app-name", "--discord-channel", "--webhook", "--relay", "--relay-secret", "--owner-discord-id", "--no-admin-page", "--dry-run", "--force", "--files-only"]);
 for (let i = 0; i < args.length; i++) { if (!known.has(args[i])) throw new Error(`不明なオプション: ${args[i]}`); if (["--target", "--app-name", "--discord-channel", "--webhook", "--relay", "--relay-secret", "--owner-discord-id"].includes(args[i])) i++; }
 
 const packageFile = join(options.target, "package.json");
@@ -40,13 +40,13 @@ for (const name of ["tsconfig.json", "jsconfig.json"]) { try { const raw = readF
 function envFiles() { const result = { ...process.env }; for (const name of [".env", ".env.local"]) { const path = join(options.target, name); if (!existsSync(path)) continue; for (const line of readFileSync(path, "utf8").split(/\r?\n/)) { const match = line.match(/^\s*([A-Za-z_][\w]*)\s*=\s*(.*)\s*$/); if (match) result[match[1]] = match[2].replace(/^(['"])(.*)\1$/, "$2"); } } return result; }
 // チャンネル ID は公開リポジトリに書かず、--discord-channel か対象アプリの env から取る。
 const env = envFiles();
-options.channel ||= String(env.DISCORD_FEEDBACK_CHANNEL_ID || "");
+if (!args.includes("--files-only")) options.channel ||= String(env.DISCORD_FEEDBACK_CHANNEL_ID || "");
 const changed = []; const skipped = []; const pending = [];
 function log(line = "") { console.log(line); }
 function put(path, content, updateExisting = false) { const rel = relative(options.target, path); const normalized = content.replace(/\r\n/g, "\n"); if (existsSync(path) && readFileSync(path, "utf8").replace(/\r\n/g, "\n") === normalized) return; if (existsSync(path) && !options.force && !updateExisting) { skipped.push(rel); return; } changed.push(rel); if (!options.dryRun) { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, normalized, "utf8"); } }
 const discoveredOwnerDiscordId = options.ownerDiscordId || readOwnerDiscordId();
 const ownerDiscordId = DISCORD_ID_PATTERN.test(discoveredOwnerDiscordId) ? discoveredOwnerDiscordId : "";
-if (!env.FEEDBACK_OWNER_DISCORD_ID && ownerDiscordId) {
+if (!args.includes("--files-only") && !env.FEEDBACK_OWNER_DISCORD_ID && ownerDiscordId) {
   const envLocal = join(options.target, ".env.local");
   const before = existsSync(envLocal) ? readFileSync(envLocal, "utf8") : "";
   const separator = before && !before.endsWith("\n") ? "\n" : "";
@@ -74,7 +74,7 @@ async function template(name) {
   }
   throw new Error(`テンプレート取得失敗: ${name} (${lastStatus}) — GitHub raw の一時障害の可能性があります。数分おいて再実行してください`);
 }
-function tokens(text) { return text.replaceAll("{{APP_NAME}}", options.appName.replaceAll('"', '\\"')).replaceAll("{{DISCORD_CHANNEL_ID}}", options.channel).replaceAll("{{ADMIN_PAGE}}", options.admin ? "true" : "false").replaceAll("{{IMPORT_PREFIX}}", alias ? "@" : "relative"); }
+function tokens(text) { return text.replaceAll("{{APP_NAME}}", JSON.stringify(options.appName).slice(1, -1)).replaceAll("{{DISCORD_CHANNEL_ID}}", options.channel).replaceAll("{{ADMIN_PAGE}}", options.admin ? "true" : "false").replaceAll("{{IMPORT_PREFIX}}", alias ? "@" : "relative"); }
 
 const destinations = [
   ["api-route.ts", join(appRoot, "api/feedback/route.ts")], ["FeedbackWidget.tsx", join(componentRoot, "FeedbackWidget.tsx")], ["FeedbackTriggerButton.tsx", join(componentRoot, "FeedbackTriggerButton.tsx")], ["list-feedback.mjs", join(options.target, "scripts/list-feedback.mjs")],
@@ -124,7 +124,7 @@ const migrationFile = join(migrationDir, feedbackMigrations[0]?.name || `${nextN
 
 function commandExists(command) { try { execFileSync(process.platform === "win32" ? "where" : "which", [command], { stdio: "ignore" }); return true; } catch { return false; } }
 let migrationApplied = false;
-if (!options.dryRun && changed.includes(relative(options.target, migrationFile))) { try { if (commandExists("supabase") && existsSync(join(options.target, "supabase/config.toml"))) { execFileSync("supabase", ["db", "push"], { cwd: options.target, stdio: "inherit" }); migrationApplied = true; } else { const dbUrl = env.DATABASE_URL || env.POSTGRES_URL_NON_POOLING || env.POSTGRES_URL; if (dbUrl && commandExists("psql")) { execFileSync("psql", [dbUrl, "-f", migrationFile], { cwd: options.target, stdio: "inherit" }); migrationApplied = true; } } } catch (error) { pending.push(`マイグレーション自動適用失敗: ${error.message}`); } }
+if (!args.includes("--files-only") && !options.dryRun && changed.includes(relative(options.target, migrationFile))) { try { if (commandExists("supabase") && existsSync(join(options.target, "supabase/config.toml"))) { execFileSync("supabase", ["db", "push"], { cwd: options.target, stdio: "inherit" }); migrationApplied = true; } else { const dbUrl = env.DATABASE_URL || env.POSTGRES_URL_NON_POOLING || env.POSTGRES_URL; if (dbUrl && commandExists("psql")) { execFileSync("psql", [dbUrl, "-f", migrationFile], { cwd: options.target, stdio: "inherit" }); migrationApplied = true; } } } catch (error) { pending.push(`マイグレーション自動適用失敗: ${error.message}`); } }
 if (!migrationApplied) { const match = String(env.NEXT_PUBLIC_SUPABASE_URL || "").match(/^https:\/\/([^.]+)\.supabase\.co/); const link = match ? `https://supabase.com/dashboard/project/${match[1]}/sql/new` : "Supabase Dashboard の SQL Editor"; pending.push(`マイグレーション: ${link} を開き ${migrationFile} の SQL 全文を貼って Run。完了判定 = Success. No rows returned\n\n${migrationSql}`); }
 if (options.webhook && !env.FEEDBACK_DISCORD_WEBHOOK_URL) pending.push(`FEEDBACK_DISCORD_WEBHOOK_URL=${options.webhook} を .env.local と本番環境へ設定`);
 // secret は生成ファイルへ埋め込まず、利用者が明示的にサーバー環境へ設定する残作業としてだけ案内する。

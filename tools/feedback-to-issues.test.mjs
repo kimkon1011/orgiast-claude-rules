@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  ensureFeedbackIssue,
   appendFeedbackIssueLedger,
   buildIssueBody,
   chainBoothFeedbackIntake,
@@ -174,6 +175,42 @@ test('--dry-run と --no-chain では相乗り起動しない', async () => {
 test('相乗り起動の失敗はこのタスクを落とさない', async () => {
   const boom = () => { throw new Error('spawn boom'); };
   assert.equal(await chainBoothFeedbackIntake({ argv: [], spawnImpl: boom }), 'failed');
+});
+
+test('ensureFeedbackIssue は作成→台帳記録し、2回目は gh を呼ばず台帳から返す', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fti-home-'));
+  const calls = [];
+  const gh = (args) => {
+    calls.push(args);
+    if (args[0] === 'issue' && args[1] === 'list') return { status: 0, stdout: '[]' };
+    if (args[0] === 'issue' && args[1] === 'create') return { status: 0, stdout: 'https://github.com/o/r/issues/7\n' };
+    return { status: 0, stdout: '' };
+  };
+  try {
+    const item = { message_id: 'm-1', app_name: 'a', kind: 'bug', title: 't', body: 'b' };
+    const first = ensureFeedbackIssue(item, 'o/r', { home, gh });
+    assert.equal(first.number, 7);
+    const before = calls.length;
+    const second = ensureFeedbackIssue(item, 'o/r', { home, gh });
+    assert.equal(second.number, 7);
+    assert.equal(calls.length, before);
+    assert.throws(() => ensureFeedbackIssue({ ...item, message_id: 'x"y' }, 'o/r', { home, gh }), /Invalid/);
+    assert.throws(() => ensureFeedbackIssue(item, 'bad repo', { home, gh }), /Invalid/);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test('ensureFeedbackIssue は既存 Issue（marker 一致）を再利用し、新規作成しない', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fti-home-'));
+  const created = [];
+  const gh = (args) => {
+    if (args[1] === 'list') return { status: 0, stdout: JSON.stringify([{ number: 3, url: 'https://github.com/o/r/issues/3', body: '<!-- feedback-dm:m-2 -->' }]) };
+    if (args[1] === 'create') created.push(args);
+    return { status: 0, stdout: '' };
+  };
+  try {
+    assert.equal(ensureFeedbackIssue({ message_id: 'm-2', kind: 'bug', title: 't' }, 'o/r', { home, gh }).number, 3);
+    assert.equal(created.length, 0);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
 
 test('submitterマーカーはJSONで復元でき、コメント終端をエスケープする', () => {

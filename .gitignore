@@ -38,3 +38,8 @@ scratch/
 # Codex のサブクローン作業ツリーと internal-audit の検証証跡（機械ローカル）
 .wt/
 /evidence/internal-audit-v11/
+
+# Local feedback-kit state and supervisor report
+tools/.feedback-zero-local.json
+FEEDBACK_KIT_REPORT.md
+.feedback-kit-backup/

@@ -8,6 +8,7 @@ const APP_NAME = "{{APP_NAME}}";
 const DEFAULT_CHANNEL_ID = "{{DISCORD_CHANNEL_ID}}";
 // 管理画面 /feedback を入れなかった構成では、通知に存在しないリンクを出さない。
 const ADMIN_PAGE = {{ADMIN_PAGE}};
+const MAX_IMAGES = 5;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_TITLE = 200;
 const MAX_BODY = 4000;
@@ -184,12 +185,12 @@ export async function POST(request: NextRequest) {
   try {
     const form = await request.formData();
     const kind = String(form.get("kind") || "bug") === "request" ? "request" : "bug";
-    const title = String(form.get("title") || "").trim().slice(0, MAX_TITLE);
+    const title = String(form.get("title") || form.get("body") || "").trim().slice(0, MAX_TITLE);
     const body = String(form.get("body") || "").trim().slice(0, MAX_BODY);
     const pagePath = String(form.get("page_path") || "").trim() || null;
     // ハニーポット: 人間には見えない欄。埋まっていれば bot なので、気付かせないよう成功を装って捨てる。
     if (String(form.get("company") || "").trim()) return NextResponse.json({ ok: true, id: null, sinks: { db: false, discord: false } });
-    if (!title || !body) return NextResponse.json({ ok: false, error: "タイトルと内容は必須です" }, { status: 400 });
+    if (!body) return NextResponse.json({ ok: false, error: "内容は必須です" }, { status: 400 });
     if (rateLimited(request)) return NextResponse.json({ ok: false, error: "送信が続いています。しばらく待ってから再度お試しください" }, { status: 429 });
 
     const url = (process.env.NEXT_PUBLIC_SUPABASE_URL || "").replace(/\/$/, "");
@@ -199,16 +200,24 @@ export async function POST(request: NextRequest) {
     const submitterDiscordId = /^\d{17,20}$/.test(rawSubmitterDiscordId) ? rawSubmitterDiscordId : null;
     const email = hasDb ? await authEmail(request, url) : null;
     const submitter = email || clientSubmitter;
-    const screenshot = form.get("screenshot");
-    const upload = screenshot instanceof File && screenshot.size > 0 && screenshot.size <= MAX_IMAGE_BYTES && screenshot.type.startsWith("image/") ? screenshot : null;
-    const screenshotPath = hasDb && upload ? await uploadImage(url, upload) : null;
-    // DB 保存の成否にかかわらず、中継または Discord へ同じ画像を渡せるようバイト列を保持する。
+    const uploads = form.getAll("screenshot").filter((value): value is File => value instanceof File && value.size > 0);
+    if (uploads.length > MAX_IMAGES || uploads.some(file => file.size > MAX_IMAGE_BYTES || !file.type.startsWith("image/"))) return NextResponse.json({ ok: false, error: "画像は最大5枚、1枚8MBまでです" }, { status: 400 });
+    // 中継の添付契約は1枚。追加分は既存の非公開ストレージへ保存して署名リンクを渡す。
+    if (uploads.length > 1 && !hasDb) return NextResponse.json({ ok: false, error: "複数画像用の保存先が未設定です（Supabase Storage）" }, { status: 503 });
+    const screenshotPaths = hasDb ? await Promise.all(uploads.map(file => uploadImage(url, file))) : [];
+    if (hasDb && screenshotPaths.some(value => !value)) return NextResponse.json({ ok: false, error: "画像の保存に失敗しました" }, { status: 503 });
+    const screenshotPath = screenshotPaths[0] || null;
+    const imageLinks = await Promise.all(screenshotPaths.map(value => signedUrl(url, value!, 60 * 60 * 24 * 7)));
+    if (imageLinks.some(value => !value)) return NextResponse.json({ ok: false, error: "画像リンクの生成に失敗しました" }, { status: 503 });
+    const imageNote = imageLinks.length ? "\n画像:\n" + imageLinks.join("\n") : "";
+    const notificationBody = body.slice(0, Math.max(0, MAX_BODY - imageNote.length)) + imageNote;
+    const upload = uploads[0];
     const attachment = upload ? { name: upload.name, type: upload.type, data: Buffer.from(await upload.arrayBuffer()) } : null;
     let id: string | null = null;
     let db = false;
     if (hasDb) {
       try {
-        const response = await fetch(`${url}/rest/v1/app_feedback`, { method: "POST", headers: supabaseHeaders({ "Content-Type": "application/json", Prefer: "return=representation" }), body: JSON.stringify({ kind, title, body, page_path: pagePath, submitter, submitter_email: email, submitter_discord_id: submitterDiscordId, screenshot_path: screenshotPath }) });
+        const response = await fetch(`${url}/rest/v1/app_feedback`, { method: "POST", headers: supabaseHeaders({ "Content-Type": "application/json", Prefer: "return=representation" }), body: JSON.stringify({ kind, title, body: notificationBody, page_path: pagePath, submitter, submitter_email: email, submitter_discord_id: submitterDiscordId, screenshot_path: screenshotPath }) });
         if (response.ok) { const rows = await response.json(); id = rows?.[0]?.id || null; db = true; }
         else console.error("feedback DB insert failed:", await responseText(response));
       } catch (error) { console.error("feedback DB insert failed:", error); }
@@ -218,7 +227,7 @@ export async function POST(request: NextRequest) {
     const sourceUrl = `${baseUrl}${pagePath || "/"}`;
     const content = [`🐛 **[${APP_NAME}] ${kind === "bug" ? "不具合" : "要望"}: ${title}**`, body.slice(0, 300), `提出者: ${submitter || "不明"}`, `画面: ${pagePath || "不明"}`, ADMIN_PAGE ? `管理画面: ${baseUrl}/feedback` : `提出元: ${baseUrl}${pagePath || "/"}`, screenshotLink ? `📎 スクショ: ${screenshotLink}` : null].filter(Boolean).join("\n");
     let notification: NotificationResult = { sent: false };
-    if (await notifyRelay({ kind, title, body, pagePath, submitter, submitterDiscordId, sourceUrl }, attachment)) notification = { sent: true, via: "relay" };
+    if (await notifyRelay({ kind, title, body: notificationBody, pagePath, submitter, submitterDiscordId, sourceUrl }, attachment)) notification = { sent: true, via: "relay" };
     else notification = await notifyDiscord(content, attachment);
     const discord = notification.sent;
     if (!db && !discord) return NextResponse.json({ ok: false, error: hasDb ? "DB保存と通知の両方に失敗しました" : "保存先が未設定です。Supabaseまたは通知経路を設定してください" }, { status: 503 });

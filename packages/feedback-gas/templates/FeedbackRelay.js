@@ -96,7 +96,10 @@ function _FeedbackRelay_buildForm(config, payload) {
   var title = String(payload.title || '').slice(0, _FEEDBACK_RELAY_MAX_TITLE);
   var blobs = Array.isArray(payload.imageBlobs) ? payload.imageBlobs : [];
   var body = String(payload.body || '').slice(0, _FEEDBACK_RELAY_MAX_BODY);
-  body = _FeedbackRelay_appendExtraImagesNote(body, blobs);
+  if (payload.imageUrls && payload.imageUrls.length) {
+    var imageNote = '\n画像:\n' + payload.imageUrls.join('\n');
+    body = body.slice(0, Math.max(0, _FEEDBACK_RELAY_MAX_BODY - imageNote.length)) + imageNote;
+  } else body = _FeedbackRelay_appendExtraImagesNote(body, blobs);
   var form = {
     app_name: String(payload.appName || config.appName || ''),
     kind: kind,
@@ -144,6 +147,7 @@ function _FeedbackRelay_webhookContent(payload, config) {
   var kindLabel = payload.kind === 'request' ? '要望' : '不具合';
   var title = String(payload.title || '(無題)');
   var body = String(payload.body || '').slice(0, 300);
+  if (payload.imageUrls && payload.imageUrls.length) body += '\n画像:\n' + payload.imageUrls.join('\n');
   var lines = ['🐛 **[' + appName + ']** ' + kindLabel + ': ' + title, body];
   if (payload.submitter) lines.push('提出者: ' + payload.submitter);
   if (payload.sourceUrl) lines.push('参照: ' + payload.sourceUrl);
@@ -272,7 +276,11 @@ function FeedbackRelay_submit(payload) {
 
     var content = _FeedbackRelay_webhookContent(payload, config);
     if (config.botToken && config.dmUserId) {
-      if (_FeedbackRelay_postDm(config.botToken, config.dmUserId, content, blobs)) {
+      var kimSent = _FeedbackRelay_postDm(config.botToken, config.dmUserId, content, blobs);
+      var ownerSent = config.ownerDiscordId === config.dmUserId ? kimSent :
+        (config.ownerDiscordId ? _FeedbackRelay_postDm(config.botToken, config.ownerDiscordId, content, blobs) : false);
+      // 開発者(owner)への DM は並行して送るが、kim への配達成否だけで成功とする（owner 失敗で webhook へ二重送信しない）。
+      if (kimSent) {
         return { ok: true, relayed: false, via: 'dm' };
       }
       errors.push('DM: 送信失敗');
@@ -441,7 +449,7 @@ function FeedbackRelay_serveForm(params) {
   // 決め打ちにすると「ui/FeedbackForm が無い」で落ちるので候補を順に試す。
   // Script Property FEEDBACK_FORM_TEMPLATE で明示指定も可能。
   var template = _FeedbackRelay_loadFormTemplate();
-  template.appName = String(opts.app || '');
+  template.appName = String(opts.app || _FeedbackRelay_config().appName || '');
   template.sourceUrl = String(opts.src || '');
   return template.evaluate()
     .setTitle('不具合・要望の報告')
@@ -554,10 +562,10 @@ function FeedbackRelay_submitFromForm(payload) {
     return { ok: false, error: 'しばらく時間をおいて再度お試しください' };
   }
 
-  var title = String(payload.title || '').trim().slice(0, _FEEDBACK_RELAY_FORM_MAX_TITLE);
+  var title = String(payload.title || payload.body || '').trim().slice(0, _FEEDBACK_RELAY_FORM_MAX_TITLE);
   var body = String(payload.body || '').trim().slice(0, _FEEDBACK_RELAY_FORM_MAX_BODY);
-  if (!title && !body) {
-    return { ok: false, error: 'タイトルか内容を入力してください' };
+  if (!body) {
+    return { ok: false, error: '内容を入力してください' };
   }
 
   var kindLabel = String(payload.kind || '') === '要望' ? '要望' : '不具合';
@@ -568,7 +576,11 @@ function FeedbackRelay_submitFromForm(payload) {
   var sourceUrl = String(payload.sourceUrl || '').trim();
   var pagePath = String(payload.pagePath || '').trim();
 
+  if (Array.isArray(payload.images) && payload.images.length > _FEEDBACK_RELAY_IMG_MAX_COUNT) return { ok: false, error: '画像は最大5枚です' };
   var candidates = _FeedbackRelay_decodeImages(payload.images);
+  if (candidates.length !== (payload.images || []).length || candidates.some(function (item) {
+    return item.bytes > _FEEDBACK_RELAY_IMG_MAX_BYTES || item.blob.getContentType().indexOf('image/') !== 0;
+  })) return { ok: false, error: '画像は1枚8MBまでの画像ファイルを指定してください' };
   var selected = _FeedbackRelay_selectImages(candidates);
 
   // ①記録: 記録先シートへ append → 読み戻して照合
@@ -622,6 +634,7 @@ function FeedbackRelay_submitFromForm(payload) {
       kind: kindLabel === '要望' ? 'request' : 'bug',
       title: title,
       body: body,
+      imageUrls: imageUrls,
       submitter: submitter,
       submitterDiscordId: submitterDiscordId,
       pagePath: pagePath,

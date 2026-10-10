@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 export const GATE_CONTRACT = {"name": "feedback-form-gate", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "feedback-form-gate"}, {"kind": "repo-file", "ref": "packages/feedback-gas/INSTALL.md"}, {"kind": "repo-file", "ref": "packages/feedback-widget/install.mjs"}, {"kind": "repo-file", "ref": "tools/feedback-apps.json"}, {"kind": "keyserve-key", "ref": "feedback-relay.env#FEEDBACK_SHARED_FORM_URL"}, {"kind": "user-consent", "ref": ".feedback-exempt", "reason": "社員が利用しないアプリの適用除外は用途の確認が必要"}]};
 import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -248,7 +249,40 @@ function buildRegistryReason(appName, root) {
 マージ後の配布を待たずに反映したい場合は、この PC の環境変数 FEEDBACK_REPO_MAP に ${appName}=<owner>/<repo> を足すと通ります（feedback-to-issues.mjs も同じ値を使います）。`;
 }
 
-export function judge({ command, cwd }, { registryFile, env, home } = {}) {
+// 自アプリに埋め込んだフォーム（Next の FeedbackWidget / GAS の FeedbackRelay）だけが kit の検査対象。
+// 方式B（共通フォームへのリンクのみ）は共通フォーム側が版を持つため対象外。
+export function hasEmbeddedForm(root, kind) {
+  if (kind === 'next') return hasFeedback(root, kind);
+  if (kind !== 'gas') return false;
+  const result = walkFiles(readClaspRootDir(root), ['.js', '.gs', '.html'], (file) => {
+    try { return fs.readFileSync(file, 'utf8').includes('FeedbackRelay'); } catch { return false; }
+  });
+  return Boolean(result.found || result.truncated);
+}
+
+// feedback-kit の版・必須機能を検査する。verify.mjs が無い PC（旧配布）では .feedback-kit.json の有無だけを見る。
+export function checkKit(root, { env = process.env, home = env.ORGIAST_HOME || env.USERPROFILE || os.homedir(), zeroRegistryFile } = {}) {
+  if (!fs.existsSync(path.join(root, '.feedback-kit.json'))) return { ok: false, missing: ['.feedback-kit.json'] };
+  const candidates = [env.ORGIAST_REPO, path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), path.join(home, 'orgiast-claude-rules'), path.join(home, 'orgiast-main')].filter(Boolean);
+  const repo = candidates.find((dir) => fs.existsSync(path.join(dir, 'packages/feedback-kit/verify.mjs')));
+  if (!repo) return { ok: true, missing: [] };
+  const verifyArgs = [path.join(repo, 'packages/feedback-kit/verify.mjs'), '--app', root];
+  if (zeroRegistryFile) verifyArgs.push('--registry', zeroRegistryFile);
+  const result = spawnSync(process.execPath, verifyArgs, { encoding: 'utf8', timeout: 20000, windowsHide: true });
+  try {
+    const data = JSON.parse(result.stdout);
+    return result.status === 0 && data.ok ? { ok: true, missing: [] } : { ok: false, missing: data.missing?.length ? data.missing : ['verify-failed'] };
+  } catch { return { ok: false, missing: ['verify-failed'] }; }
+}
+
+function buildKitReason(root, missing) {
+  return `[FEEDBACK-FORM] §2.11: ${root} の不具合・要望フォームが feedback-kit の必須条件（版・画像添付など6機能）を満たしていないため、本番反映を止めました。
+不足: ${missing.join(', ')}
+node packages/feedback-kit/install.mjs --app "${root}" --upgrade を実行してから再デプロイしてください（正本リポジトリ orgiast-claude-rules で実行。変更前の版は .feedback-kit-backup/ に退避されます）。
+社員が使わないアプリは、理由を書いた .feedback-exempt で除外できます。`;
+}
+
+export function judge({ command, cwd }, { registryFile, env, home, kitCheck = checkKit, zeroRegistryFile } = {}) {
   if (!isDeployCommand(command)) return { deny: false };
   const targetDir = resolveTargetDir(command, cwd);
   const root = findProjectRoot(targetDir);
@@ -257,6 +291,10 @@ export function judge({ command, cwd }, { registryFile, env, home } = {}) {
   if (!kind) return { deny: false };
   if (exemptReason(root)) return { deny: false };
   if (!hasFeedback(root, kind)) return { deny: true, reason: buildReason(kind, root, { env, home }) };
+  if (hasEmbeddedForm(root, kind)) {
+    const kitResult = kitCheck(root, { env: env || process.env, home, zeroRegistryFile });
+    if (!kitResult.ok) return { deny: true, reason: buildKitReason(root, kitResult.missing) };
+  }
   if (kind === 'next') {
     const appName = readAppName(root);
     if (appName && !isRegistered(appName, registryFile, env)) return { deny: true, reason: buildRegistryReason(appName, root) };

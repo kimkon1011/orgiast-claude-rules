@@ -32,6 +32,8 @@ function cleanup(dir) {
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+const okKit = () => ({ ok: true, missing: [] });
+
 test('Next.js で FeedbackWidget なし + vercel deploy --prod → deny', () => {
   const dir = makeFixture();
   try {
@@ -49,7 +51,7 @@ test('Next.js で FeedbackWidget あり → 通す', () => {
   try {
     writeFile(path.join(dir, 'package.json'), JSON.stringify({ dependencies: { next: '14.0.0' } }));
     writeFile(path.join(dir, 'app', 'layout.js'), "import FeedbackWidget from './FeedbackWidget';\n");
-    const result = judge({ command: 'vercel deploy --prod', cwd: dir });
+    const result = judge({ command: 'vercel deploy --prod', cwd: dir }, { kitCheck: okKit });
     assert.equal(result.deny, false);
   } finally {
     cleanup(dir);
@@ -155,7 +157,7 @@ test('フォームはあるが台帳未登録 → deny、理由に feedback-apps
   const registry = path.join(dir, 'registry.json');
   fs.writeFileSync(registry, JSON.stringify({ '別アプリ': 'a/b' }));
   try {
-    const result = judge({ command: 'vercel deploy --prod', cwd: dir }, { registryFile: registry, env: {} });
+    const result = judge({ command: 'vercel deploy --prod', cwd: dir }, { registryFile: registry, env: {}, kitCheck: okKit });
     assert.equal(result.deny, true);
     assert.match(result.reason, /feedback-apps\.json/);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
@@ -166,9 +168,9 @@ test('台帳登録済み、または FEEDBACK_REPO_MAP にあれば通す', () =
   const registry = path.join(dir, 'registry.json');
   fs.writeFileSync(registry, JSON.stringify({ 'カフェ業務チェック': 'nishiOrgiast/cafe-checklist-app' }));
   try {
-    assert.equal(judge({ command: 'vercel deploy --prod', cwd: dir }, { registryFile: registry, env: {} }).deny, false);
+    assert.equal(judge({ command: 'vercel deploy --prod', cwd: dir }, { registryFile: registry, env: {}, kitCheck: okKit }).deny, false);
     fs.writeFileSync(registry, '{}');
-    assert.equal(judge({ command: 'vercel deploy --prod', cwd: dir }, { registryFile: registry, env: { FEEDBACK_REPO_MAP: 'x=a/b,カフェ業務チェック=nishiOrgiast/cafe-checklist-app' } }).deny, false);
+    assert.equal(judge({ command: 'vercel deploy --prod', cwd: dir }, { registryFile: registry, env: { FEEDBACK_REPO_MAP: 'x=a/b,カフェ業務チェック=nishiOrgiast/cafe-checklist-app' }, kitCheck: okKit }).deny, false);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -205,7 +207,7 @@ for (const [name, source, expected] of [
       writeFile(path.join(dir, 'outside.html'), `<a href="${fakeSharedUrl}?form=feedback">外側</a>`);
       writeFile(path.join(dir, 'src', `Code.${name === 'JS' ? 'js' : name === 'GS' ? 'gs' : 'html'}`), source);
       assert.equal(hasFeedback(dir, 'gas'), expected);
-      assert.equal(judge({ command: 'clasp push', cwd: dir }, { env: {}, home: dir }).deny, !expected);
+      assert.equal(judge({ command: 'clasp push', cwd: dir }, { env: {}, home: dir, kitCheck: okKit }).deny, !expected);
     } finally { cleanup(dir); }
   });
 }
@@ -255,4 +257,52 @@ test('GAS hook process は ORGIAST_HOME の env を読み PowerShell にリン�
     assert.equal(output.permissionDecision, 'deny');
     assert.ok(output.permissionDecisionReason.includes(fakeSharedUrl));
   } finally { cleanup(home); }
+});
+
+function makeOldGas({ stamp = false } = {}) {
+  const dir = makeFixture();
+  writeFile(path.join(dir, 'appsscript.json'), '{}');
+  writeFile(path.join(dir, 'Code.gs'), 'function doGet(){}\n');
+  writeFile(path.join(dir, 'FeedbackRelay.gs'), 'function FeedbackRelay_submit(){}\n');
+  writeFile(path.join(dir, 'FeedbackForm.html'), '<select name="kind"><option>不具合</option><option>要望</option></select><input name="title"><textarea name="body"></textarea>');
+  if (stamp) writeFile(path.join(dir, '.feedback-kit.json'), JSON.stringify({ kitVersion: '1.0.0', kind: 'gas', appName: 'old', installedAt: new Date().toISOString() }));
+  return dir;
+}
+const gasDeploy = ['clasp', 'push'].join(' ');
+
+test('画像添付の無い古い GAS フォーム（kit 未導入）→ deny、upgrade コマンドを表示', () => {
+  const dir = makeOldGas();
+  try {
+    const result = judge({ command: gasDeploy, cwd: dir }, { env: {}, home: dir });
+    assert.equal(result.deny, true);
+    assert.match(result.reason, /feedback-kit\/install\.mjs --app .* --upgrade/);
+    assert.match(result.reason, /\.feedback-kit\.json/);
+  } finally { cleanup(dir); }
+});
+
+test('刻印があっても実 UI に画像添付が無ければ deny（verify.mjs を実行）', () => {
+  const dir = makeOldGas({ stamp: true });
+  try {
+    const result = judge({ command: gasDeploy, cwd: dir }, { env: {}, home: dir });
+    assert.equal(result.deny, true);
+    assert.match(result.reason, /image-attach/);
+  } finally { cleanup(dir); }
+});
+
+test('古いフォームでも .feedback-exempt があれば通す（除外は維持）', () => {
+  const dir = makeOldGas();
+  try {
+    writeFile(path.join(dir, '.feedback-exempt'), '社員は使わない個人ツール');
+    assert.equal(judge({ command: gasDeploy, cwd: dir }, { env: {}, home: dir }).deny, false);
+  } finally { cleanup(dir); }
+});
+
+test('kitCheck が ok を返せば通り、不足を返せば不足名が理由に出る', () => {
+  const dir = makeOldGas();
+  try {
+    assert.equal(judge({ command: gasDeploy, cwd: dir }, { env: {}, home: dir, kitCheck: okKit }).deny, false);
+    const result = judge({ command: gasDeploy, cwd: dir }, { env: {}, home: dir, kitCheck: () => ({ ok: false, missing: ['kit-version'] }) });
+    assert.equal(result.deny, true);
+    assert.match(result.reason, /kit-version/);
+  } finally { cleanup(dir); }
 });

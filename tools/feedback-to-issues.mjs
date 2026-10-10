@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -180,6 +181,47 @@ export function runGh(args, options = {}) {
   return spawnSync(command, { ...options, shell: true, encoding: 'utf8', windowsHide: true });
 }
 
+// Both the fast intake and daily sweep use this idempotent Issue/ledger operation.
+export function ensureFeedbackIssue(item, repo, { home = os.homedir(), gh = runGh } = {}) {
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo) || !/^[^"\\\r\n]+$/.test(String(item.message_id || ''))) throw new Error('Invalid feedback identity');
+  const ledgerFile = path.join(home, '.claude', 'feedback-issue-ledger.json');
+  const lock = path.join(home, '.claude', 'feedback-issue-locks', createHash('sha256').update(String(item.message_id)).digest('hex'));
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  try { fs.mkdirSync(lock); } catch {
+    // 異常終了で残った古い錠は 10 分で破棄する（永久に Issue 化できなくなるのを防ぐ）。
+    try { if (Date.now() - fs.statSync(lock).mtimeMs > 10 * 60 * 1000) { fs.rmSync(lock, { recursive: true, force: true }); fs.mkdirSync(lock); } else throw new Error('busy'); }
+    catch { throw new Error('Issue operation already in progress; retry next sweep'); }
+  }
+  let temp;
+  try {
+    let ledger = { items: [] };
+    try { ledger = JSON.parse(fs.readFileSync(ledgerFile, 'utf8')); } catch (e) { if(e.code !== 'ENOENT') throw e; }
+    if(!Array.isArray(ledger.items)) throw new Error('Invalid Issue ledger');
+    const recorded = ledger.items.find(row => String(row.message_id) === String(item.message_id));
+    if(recorded) return recorded;
+    const marker = `<!-- feedback-dm:${item.message_id} -->`;
+    const lookup = gh(['issue','list','--repo',repo,'--state','all','--search',`"feedback-dm:${item.message_id}" in:body`,'--json','number,url,body','--limit','100']);
+    if(lookup.error || lookup.status !== 0) throw new Error('Issue lookup failed');
+    const results = JSON.parse(lookup.stdout);
+    let issue = results.find(row => row.body?.includes(marker));
+    if(!issue) {
+      temp = fs.mkdtempSync(path.join(os.tmpdir(), 'feedback-issue-'));
+      const bodyFile = path.join(temp,'body.md');
+      fs.writeFileSync(bodyFile,buildIssueBody(item));
+      gh(['label','create','feedback','--repo',repo,'--color','D93F0B','--description','アプリ内フォームからの不具合・要望']);
+      const created=gh(['issue','create','--repo',repo,'--title',buildIssueTitle(item) || '[不具合] '+clean(item.title),'--label','feedback','--body-file',bodyFile]);
+      if(created.error || created.status !== 0) throw new Error('Issue creation failed');
+      issue=issueIdentity(created.stdout);
+      if(!issue) throw new Error('Issue URL missing');
+    }
+    const entry={message_id:item.message_id,repo,number:issue.number,url:issue.url,app_name:clean(item.app_name),title:clean(item.title),submitter:clean(item.submitter),submitter_discord_id:clean(item.submitter_discord_id)||null,created_at:new Date().toISOString()};
+    // 台帳記録の失敗は従来どおり警告に留める（Issue は作成済みで、次回は marker 検索で重複を避ける）。
+    try { appendFeedbackIssueLedger(ledgerFile,entry); }
+    catch (error) { console.warn(`feedback-to-issues: Issue 台帳への記録に失敗 message_id=${item.message_id} (${error.message})`); }
+    return entry;
+  } finally { if(temp)fs.rmSync(temp,{recursive:true,force:true});fs.rmSync(lock,{recursive:true,force:true}); }
+}
+
 function relayUrls(base) {
   const pending = new URL(base);
   pending.searchParams.set('pending', '1');
@@ -206,7 +248,7 @@ function increment(reasons, reason) {
 }
 
 export async function main(args = process.argv.slice(2)) {
-  const dry = args.includes('--dry');
+  const dry = args.includes('--dry') || args.includes('--dry-run');
   const dismissId = parseDismissId(args);
   const limitIndex = args.indexOf('--limit');
   const requestedLimit = limitIndex >= 0 ? Number.parseInt(args[limitIndex + 1], 10) : 5;
@@ -305,32 +347,9 @@ export async function main(args = process.argv.slice(2)) {
       continue;
     }
 
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'feedback-issue-'));
-    const bodyFile = path.join(tempDir, 'body.md');
     try {
-      fs.writeFileSync(bodyFile, buildIssueBody(item), 'utf8');
-      // ラベルが既にある場合の失敗は無視し、Issue 作成の成否だけを ack の条件にする。
-      runGh(['label', 'create', 'feedback', '--repo', repo, '--color', 'D93F0B', '--description', 'アプリ内フォームからの不具合・要望']);
-      const result = runGh(['issue', 'create', '--repo', repo, '--title', title, '--label', 'feedback', '--body-file', bodyFile]);
-      if (result.error || result.status !== 0) throw new Error(clean(result.stderr) || result.error?.message || `gh exit ${result.status}`);
+      ensureFeedbackIssue(item, repo);
       created += 1;
-      try {
-        const issue = issueIdentity(result.stdout);
-        if (!issue) throw new Error('Issue URL を取得できない');
-        appendFeedbackIssueLedger(path.join(os.homedir(), '.claude', 'feedback-issue-ledger.json'), {
-          message_id: item.message_id,
-          repo,
-          number: issue.number,
-          url: issue.url,
-          app_name: clean(item?.app_name),
-          title: clean(item?.title),
-          submitter: clean(item?.submitter),
-          submitter_discord_id: clean(item?.submitter_discord_id) || null,
-          created_at: new Date().toISOString(),
-        });
-      } catch (error) {
-        console.warn(`feedback-to-issues: Issue 台帳への記録に失敗 message_id=${messageId} (${error.message})`);
-      }
       console.log(`feedback-to-issues: 作成済み repo=${repo} title=${title} message_id=${messageId}`);
       try {
         const ack = await relayRequest(urls.ack, config.secret, {
@@ -347,8 +366,6 @@ export async function main(args = process.argv.slice(2)) {
     } catch (error) {
       console.error(`feedback-to-issues: Issue 作成失敗 message_id=${messageId} (${error.message})`);
       increment(reasons, '作成失敗');
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
     }
   }
 
@@ -368,7 +385,7 @@ export async function main(args = process.argv.slice(2)) {
 // 「専用タスクが無くても拾える」状態を作る。専用タスクがある場合は二重に走るが、
 // intake は [FB:<key>] と台帳で冪等なので重複注入は起きない。
 export async function chainBoothFeedbackIntake({ argv = process.argv.slice(2), spawnImpl } = {}) {
-  if (argv.includes('--dry-run') || argv.includes('--no-chain')) return 'skipped';
+  if (argv.includes('--dry') || argv.includes('--dry-run') || argv.includes('--no-chain')) return 'skipped';
   try {
     const { spawn } = spawnImpl ? { spawn: spawnImpl } : await import('node:child_process');
     const target = path.join(import.meta.dirname, 'booth-feedback-intake.mjs');

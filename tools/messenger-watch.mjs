@@ -11,6 +11,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { readdirSync, existsSync } from "node:fs";
 import { isEntry } from "./is-entry.mjs";
 import { notifyKim } from "./notify-kim.mjs";
+import { resolveBrowserExecutable, runHumanLogin } from "./lib/human-login.mjs";
 
 export const MESSAGES_URL = "https://www.facebook.com/messages/";
 export const MAX_SEEN = 500;
@@ -89,6 +90,15 @@ export function splitConversationText(text) {
   if (match) {
     time = match[1].trim();
     rest = (raw.slice(0, match.index) + " " + raw.slice(match.index + match[0].length)).replace(/\s+/g, " ").trim();
+  }
+  // 先頭のオンライン表示はアバターのバッジで、会話名ではない(2026-10-10 実測で name=オンライン中 になった)。
+  rest = rest.replace(/^(?:オンライン中|Active now|アクティブ(?:中)?)\s*/i, "");
+  // 未読行は「<会話名> 未読メッセージ: <送信者>: <本文> · 2時間」。マーカーで区切れば空白入りの会話名も壊れない。
+  const unreadMarker = rest.match(/\s*(?:未読メッセージ|Unread message)\s*[:：]\s*/i);
+  if (unreadMarker) {
+    const name = rest.slice(0, unreadMarker.index).trim();
+    const snippet = rest.slice(unreadMarker.index + unreadMarker[0].length).replace(/\s*·\s*\d+\s*(?:分|時間|日|週|[mhdw])$/i, "").trim();
+    return { name, snippet, time };
   }
   const parts = rest.split(" ").filter(Boolean);
   const name = parts.shift() ?? "";
@@ -259,31 +269,29 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   }
   // 正規版 Chrome を優先する。Playwright 同梱 Chromium は playwright-core と revision がずれると
   // ログイン後の遷移でブラウザごと落ちた(2026-10-10 実測: 1.58 + chromium-1243 でログイン画面が消えた)。
-  const installedChrome = process.env.PROGRAMFILES ? path.join(process.env.PROGRAMFILES, "Google", "Chrome", "Application", "chrome.exe") : null;
-  const executablePath = deps.executablePath ?? (installedChrome && existsSync(installedChrome) ? installedChrome : findChromium(getBrowsersBaseDir()));
+  // 解決は lib/human-login.mjs に一本化(PF → PF86 → LOCALAPPDATA → mac → 同梱 Chromium)。
+  const executablePath = deps.executablePath ?? resolveBrowserExecutable({ findChromium: () => findChromium(getBrowsersBaseDir()) });
   if (!executablePath) {
     stderr("messenger-watch: Chromium が見つかりません。npx playwright install chromium を実行してください");
     return 4;
   }
 
+  if (args.login) {
+    // 人がログインする一連の流れは lib/human-login.mjs に一本化(ツール側からは絶対に閉じない)。
+    // 2段階認証(checkpoint)の途中を「ログイン済み」と誤判定して閉じた実害の再発防止(2026-10-10)。
+    const result = await runHumanLogin({
+      chromium,
+      profileDir,
+      url: MESSAGES_URL,
+      requiredCookies: ["c_user", "xs"],
+      cookieDomain: ".facebook.com",
+      deps: { log: stdout, sleep },
+    });
+    return result.code;
+  }
+
   let context = null;
   try {
-    if (args.login) {
-      context = await chromium.launchPersistentContext(profileDir, { headless: false, executablePath });
-      const page = context.pages()[0] || (await context.newPage());
-      await page.goto(MESSAGES_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
-      stdout("ブラウザで Facebook にログインし、Messenger が表示されたらウィンドウを閉じてください。");
-      // 自動で閉じない。2段階認証(checkpoint)の途中を「ログイン済み」と誤判定して閉じた実害あり(2026-10-10)。
-      // 人がウィンドウを閉じるまで待つ。
-      const start = now();
-      while (now() - start < 15 * 60 * 1000) {
-        await sleep(2000);
-        if (context.pages().length === 0) break;
-      }
-      stdout("ログインを保存しました");
-      return 0;
-    }
-
     context = await chromium.launchPersistentContext(profileDir, { headless: true, executablePath });
     const page = context.pages()[0] || (await context.newPage());
     await page.goto(MESSAGES_URL, { waitUntil: "domcontentloaded", timeout: 60000 });

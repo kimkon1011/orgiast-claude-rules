@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { isEntry } from "./is-entry.mjs";
+import { resolveBrowserExecutable, runHumanLogin } from "./lib/human-login.mjs";
 
 export function parseArgs(argv) {
   const args = { url: null, login: false, json: false, links: false, out: null, timeout: 60000 };
@@ -83,7 +84,9 @@ async function main() {
   const { chromium } = await import("playwright-core");
   const args = parseArgs(process.argv.slice(2));
   const baseDir = getBrowsersBaseDir();
-  const executablePath = findChromium(baseDir);
+  // 正規版 Chrome を優先(lib/human-login.mjs)。同梱 Chromium は playwright-core と revision が
+  // ずれると落ちることがある(2026-10-10 実測)。
+  const executablePath = resolveBrowserExecutable({ findChromium: () => findChromium(baseDir) });
   const profileDir = path.join(os.homedir(), ".claude", "google-profile");
 
   if (!executablePath) {
@@ -97,34 +100,24 @@ async function main() {
     process.exit(2);
   }
 
+  if (args.login) {
+    // 人がログインする一連の流れは lib/human-login.mjs に一本化(ツール側からは絶対に閉じない)。
+    // URL ヒューリスティックでログイン済みを誤判定して閉じた実害の再発防止(2026-10-10)。
+    const result = await runHumanLogin({
+      chromium,
+      profileDir,
+      url: "https://accounts.google.com/",
+      requiredCookies: ["SID"],
+      cookieDomain: ".google.com",
+      deps: { log: (m) => console.log(m) },
+    });
+    process.exit(result.code);
+  }
+
   let context = null;
   let code = 0;
   try {
-    if (args.login) {
-      context = await chromium.launchPersistentContext(profileDir, {
-        headless: false,
-        executablePath,
-      });
-      const page = context.pages()[0] || (await context.newPage());
-      await page.goto("https://accounts.google.com/", { waitUntil: "networkidle", timeout: 60000 });
-      const start = Date.now();
-      while (Date.now() - start < 15 * 60 * 1000) {
-        await new Promise((r) => setTimeout(r, 30000));
-        const currentUrl = page.url();
-        if (!isLoginUrl(currentUrl)) {
-          console.log("ログインを保存しました");
-          return;
-        }
-        try {
-          await page.goto("https://myaccount.google.com/", { waitUntil: "networkidle", timeout: 60000 });
-        } catch {
-          // ignore
-        }
-      }
-      console.error("ログインが完了しませんでした。タイムアウトしました");
-      code = 5;
-      return;
-    } else {
+    {
       context = await chromium.launchPersistentContext(profileDir, {
         headless: true,
         executablePath,

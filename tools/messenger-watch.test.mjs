@@ -55,6 +55,13 @@ test('splitConversationText: 名前・時刻・抜粋に分解する', () => {
   assert.deepEqual(splitConversationText(''), { name: '', snippet: '', time: '' });
 });
 
+test('splitConversationText: 実測の未読行（オンライン表示・空白入り会話名・経過時間）', () => {
+  assert.deepEqual(
+    splitConversationText('オンライン中 AI廃人部（多動か過集中の人、大歓迎） 未読メッセージ: ヤマサン: 速報 · 2時間'),
+    { name: 'AI廃人部（多動か過集中の人、大歓迎）', snippet: 'ヤマサン: 速報', time: '' },
+  );
+});
+
 test('parseConversations: 未読だけを抽出し href を正規化・重複排除する', () => {
   const rows = [
     { href: '/messages/t/1/?x=1', text: 'A 12:00 未読 hello', ariaLabel: 'Unread', bold: true },

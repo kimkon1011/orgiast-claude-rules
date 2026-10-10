@@ -323,3 +323,27 @@ test('opt-in prompt は argv 配列・shell false・stdin EOF で起動する', 
   assert.equal(invocation.ended, true);
   assert.match(posts[0], /exit=0/);
 });
+
+// 2026-10-10: 受信タスクが `spawn claude ENOENT` で失敗した。実行ファイルは claude-exe.mjs が解決する。
+test('processDirective は解決済みの claude 実行ファイルで起動する', async () => {
+  const home = tempHome();
+  fs.writeFileSync(path.join(home, '.claude', 'fleet-agent-optin.json'), '{"accept":["prompt"]}');
+  let invocation;
+  const spawnImpl = (exe, args, options) => {
+    invocation = { exe, args, options };
+    const child = new EventEmitter();
+    child.stdin = { end: () => {} };
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = () => {};
+    queueMicrotask(() => { child.stdout.emit('data', 'done'); child.emit('close', 0); });
+    return child;
+  };
+  const resolved = [];
+  const result = await processDirective({ id: 'p-exe', kind: 'prompt', targets: 'all', why: 'test', body: 'x' },
+    { home, repo: process.cwd(), label: 'PC', hostname: 'host', dryRun: false, post: async () => {}, spawnImpl,
+      resolveClaudeExe: async () => { resolved.push(1); return { executable: 'C:/resolved/claude.exe', candidates: ['C:/resolved/claude.exe'] }; } });
+  assert.equal(result.action, 'prompt');
+  assert.equal(invocation.exe, 'C:/resolved/claude.exe');
+  assert.equal(resolved.length, 1, '解決は spawn の直前に1回だけ');
+});

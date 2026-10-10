@@ -16,18 +16,19 @@ $repoUrl = 'https://github.com/kimkon1011/orgiast-claude-rules.git'
 New-Item -ItemType Directory -Force -Path $claudeDir | Out-Null
 
 Say ("[fleet-fix-now] " + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + " hostname=" + $env:COMPUTERNAME + " user=" + $env:USERNAME + " home=" + $userHome)
-$label = ''
+$curLabel = ''
 $envFile = Join-Path $claudeDir 'cost-reporter.env'
-if (Test-Path $envFile) { $m = Select-String -Path $envFile -Pattern '^REPORTER_LABEL=(.*)$' | Select-Object -First 1; if ($m) { $label = $m.Matches[0].Groups[1].Value.Trim() } }
+if (Test-Path $envFile) { $m = Select-String -Path $envFile -Pattern '^REPORTER_LABEL=(.*)$' | Select-Object -First 1; if ($m) { $curLabel = $m.Matches[0].Groups[1].Value.Trim() } }
+# 注意: PowerShell の変数名は大小を区別しないので、現在値は $curLabel、引数は $Label と別名にする（2026-10-10 同名で -Label が消えた）
 # -Label 指定時は REPORTER_LABEL を書き換える（2026-10-10: 作業用018 が kimko-PC のラベルを複製しており宛先が衝突した）
 if ($Label) {
   $lines = @(); if (Test-Path $envFile) { $lines = @(Get-Content $envFile | Where-Object { $_ -notmatch '^REPORTER_LABEL=' }) }
   $lines += "REPORTER_LABEL=$Label"
   [IO.File]::WriteAllText($envFile, (($lines -join "`r`n") + "`r`n"), (New-Object Text.UTF8Encoding($false)))
-  Say ("label: " + $(if ($label) { $label } else { '(未設定)' }) + " → " + $Label + " に変更")
-  $label = $Label
+  Say ("label: " + $(if ($curLabel) { $curLabel } else { '(未設定)' }) + " → " + $Label + " に変更")
+  $curLabel = $Label
 }
-Say ("label(REPORTER_LABEL)=" + $(if ($label) { $label } else { '(未設定 → hostname で受信)' }))
+Say ("label(REPORTER_LABEL)=" + $(if ($curLabel) { $curLabel } else { '(未設定 → hostname で受信)' }))
 $fleetEnv = Join-Path $claudeDir 'fleet-sheet.env'
 Say ("fleet-sheet.env=" + $(if (Test-Path $fleetEnv) { 'あり' } else { '無し（送受信不可。このPCは fleet 未配布）' }))
 

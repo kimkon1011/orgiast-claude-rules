@@ -1,4 +1,5 @@
 const { targetCount, readConfig, readSnapshot } = require('./mobile-state.cjs');
+const { newRetryState, canAttemptMobileOpen, recordMobileOpenAttempt } = require('./route');
 
 // A loopback socket is an OS-owned mutex shared by all VS Code windows. A dead
 // host releases it automatically; there is no stale-file deletion race.
@@ -31,8 +32,9 @@ function createOwnershipLease(port = 39741) {
 // No custom title: Claude changes its natural title after the first prompt. Custom
 // names suppress that signal and renameSessionTab now opens an interactive dialog.
 function isWaitingTab(tab) { return String(tab.label) === 'Claude Code'; }
-function createPool({ tabs, open, publish, own = () => true }) {
+function createPool({ tabs, open, publish, own = () => true, now = Date.now }) {
   let running;
+  let retry = newRetryState();
   return {
     ensure(count) {
       if (running) return running;
@@ -41,7 +43,10 @@ function createPool({ tabs, open, publish, own = () => true }) {
         let waiting = tabs().filter(isWaitingTab).length;
         publish(waiting, count);
         while (waiting < count) {
-          if (!await open()) break;
+          if (!canAttemptMobileOpen(retry, now())) break;
+          const opened = await open();
+          retry = recordMobileOpenAttempt(retry, now(), opened);
+          if (!opened) break;
           const next = tabs().filter(isWaitingTab).length;
           if (next <= waiting) break; // No acknowledged empty tab: don't blindly retry.
           waiting = next;

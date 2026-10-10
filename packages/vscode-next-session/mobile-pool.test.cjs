@@ -72,3 +72,48 @@ test('CLI and VSIX state readers are byte-identical', () => {
   assert.equal(fs.readFileSync(path.join(__dirname, 'mobile-state.cjs'), 'utf8'),
     fs.readFileSync(path.join(__dirname, '../../tools/lib/mobile-state.cjs'), 'utf8'));
 });
+
+test('failure is retried only after the 30s cooldown (no permanent jam)', async () => {
+  let opens = 0, now = 1000000;
+  const pool = createPool({ tabs: () => [], publish() {}, now: () => now, async open() { opens++; return false; } });
+  await pool.ensure(1);
+  assert.equal(opens, 1);
+  now += 29000;
+  await pool.ensure(1);
+  assert.equal(opens, 1);
+  now += 1000;
+  await pool.ensure(1);
+  assert.equal(opens, 2);
+});
+test('five consecutive failures pause retries for 10 minutes', async () => {
+  let opens = 0, now = 1000000;
+  const pool = createPool({ tabs: () => [], publish() {}, now: () => now, async open() { opens++; return false; } });
+  for (let i = 0; i < 5; i++) { await pool.ensure(1); now += 30000; }
+  assert.equal(opens, 5);
+  await pool.ensure(1);
+  assert.equal(opens, 5);
+  now += 600000;
+  await pool.ensure(1);
+  assert.equal(opens, 6);
+});
+test('at most 20 attempts per hour even when each one succeeds', async () => {
+  let opens = 0, now = 1000000;
+  const tabs = [];
+  const pool = createPool({ tabs: () => tabs, publish() {}, now: () => now, async open() { opens++; tabs.push({ label: 'Claude Code' }); return true; } });
+  for (let i = 0; i < 25; i++) { tabs.length = 0; await pool.ensure(1); now += 1000; }
+  assert.equal(opens, 20);
+  now += 3600000;
+  tabs.length = 0;
+  await pool.ensure(1);
+  assert.equal(opens, 21);
+});
+test('config order: env > JSON > fallback (VS Code setting) > 1', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-order-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  assert.equal(readConfig(home, {}), 1);
+  assert.equal(readConfig(home, {}, 4), 4);
+  fs.mkdirSync(path.join(home, '.claude'));
+  fs.writeFileSync(path.join(home, '.claude', 'mobile-sessions.json'), '{"count":2}');
+  assert.equal(readConfig(home, {}, 4), 2);
+  assert.equal(readConfig(home, { CLAUDE_MOBILE_STANDBY: '3' }, 4), 3);
+});

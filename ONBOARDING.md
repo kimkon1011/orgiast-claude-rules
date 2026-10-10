@@ -1155,7 +1155,7 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
 
 ### 2.9 Drive・共通知識・社内アプリ（§2.9〜2.11）
 
-Driveの移動・知識の正本管理を守り、社内アプリには投稿窓口と通知・完了報告を標準搭載する。
+Driveの移動・知識の正本管理を守り、社内アプリには投稿窓口と通知・完了報告を標準搭載する（`tools/feedback-kit/` の必須6機能を1コマンド導入）。
 
 **ユーザー・他人に渡す成果物（PDF/画像/文書/表/ZIP 等）はすべて Google Drive にアップし、リンクを貼って渡す。** ローカルパス（Desktop 等）や SendUserFile・チャット添付だけで渡したら未完了（スマホ併用で開けず、他人にも渡せないため）。
 **置き場:** 案件に属するデータは**その案件の制作フォルダ**（Drive で `制作フォルダ`・案件コード `C0040` 等・顧客名で検索して特定する）。案件外のものは「作業ファイル」直下。
@@ -1183,17 +1183,28 @@ Claude新規作成は標準フォルダ「作業ファイル」直下（既存�
 ---
 **2.11 社内アプリには「不具合・要望フォーム」を標準搭載する（全社標準機能 / 2026-08-18 kim指示）**
 
-**社員が使う自社 Web アプリは、アプリ内から不具合・要望を投稿できる窓口を必ず持たせる**（社員→kim→開発者 の手動橋渡しを廃止するため）。新規アプリを作る時・既存アプリを触る時に未搭載なら、その場で導入する。実装は都度書かず**標準パッケージ `packages/feedback-widget/`** を使う（ドロップイン・npm依存ゼロ・Tailwind非依存のinline style・Supabase無しでもDiscord通知のみで動く3モード）。
+**社員が使う自社 Web アプリは、アプリ内から不具合・要望を投稿できる窓口を必ず持たせる**（社員→kim→開発者 の手動橋渡しを廃止するため）。新規アプリを作る時・既存アプリを触る時に未搭載なら、その場で導入する。実装は都度書かず**標準パッケージ `tools/feedback-kit/`** を使う。kit は GAS / Next.js の両方を1コマンドで導入する入口で、内部で `tools/feedback-kit/gas/`（GAS）と `tools/feedback-kit/widget/`（Next.js）を呼ぶ（ドロップイン・npm依存ゼロ・Tailwind非依存のinline style・Supabase無しでもDiscord通知のみで動く3モード）。
 
-1行導入（アプリのリポジトリ直下で実行。SHA固定しない=常に最新）:
+**必須6機能（`tools/feedback-kit/kit.json` の `requiredFeatures`。1つでも欠けたら未導入扱い）**:
+
+| 機能 | 内容 |
+|---|---|
+| `image-attach` | 画像添付（複数選択・`accept="image/*"`・カメラ/ギャラリー・クリップボード貼付・サムネ表示と削除。最大5枚・1枚8MB） |
+| `kind-toggle` | 不具合 / 要望 の種別切替 |
+| `title-optional-body-required` | タイトル任意・本文必須 |
+| `notify-on-submit` | 投稿時に kim と開発者（`FEEDBACK_OWNER_DISCORD_ID`）へ DM |
+| `dm-submitter-on-done` | 対応完了時に投稿者本人へ DM |
+| `zero-backlog-registered` | 滞留ゼロ巡回（`tools/feedback-zero-registry.json`）に登録済み |
+
+1行導入（正本リポジトリ orgiast-claude-rules、または `tools/` が自動配布された各PCの共通ルールフォルダで実行。kit は `tools/feedback-kit/` 一式で動くため単体ファイルの取得では動かない）:
 
 ```
-node -e "fetch('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/packages/feedback-widget/install.mjs?cb='+Date.now()).then(r=>r.text()).then(t=>require('fs').writeFileSync('install-feedback.mjs',t))" && node install-feedback.mjs --app-name "<アプリ名>"
+node tools/feedback-kit/install.mjs --app <対象アプリのパス> --name "<アプリ名>"
 ```
 
-導入後は `node verify.mjs --url <本番URL>` で実投稿+read-back検証まで通してから完了とする（§1.4）。開発側の対応キューは `node scripts/list-feedback.mjs`。**任意staffの自由記述が本番コードを無人で駆動しない**（実装はkimトリガ or レビューゲート付き）。仕様・手移植手順（Pages Router/Remix等）: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/packages/feedback-widget/INSTALL.md`
+既存アプリの更新は `node tools/feedback-kit/install.mjs --app <対象アプリのパス> --upgrade`（旧フォームは `.feedback-kit-backup/` へ退避してから置換）。導入後は `node tools/feedback-kit/verify.mjs --app <対象アプリのパス>` が必須6機能の欠落を JSON で返す（欠落があれば exit 1）。実投稿+read-back検証は `node tools/feedback-kit/widget/verify.mjs --url <本番URL>`（Next.js）まで通してから完了とする（§1.4）。開発側の対応キューは `node scripts/list-feedback.mjs`。**任意staffの自由記述が本番コードを無人で駆動しない**（実装はkimトリガ or レビューゲート付き）。仕様・手移植手順（Pages Router/Remix等）: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/tools/feedback-kit/widget/INSTALL.md`
 
-**GAS（Apps Script / スプレッドシート業務アプリ）は `packages/feedback-gas/` を使う**。方式Aは `FeedbackRelay.js` / `FeedbackForm.html` と `doGet` への追加、方式Bは社員が開く HTML に共通フォームへのリンクを1本置く方式。機微データを持つアプリは INSTALL.md の方式Bを使い、公開範囲やスコープを変更しない。共通フォーム URL は public リポには書かず、非公開 keyserve から `~/.claude/feedback-relay.env` の `FEEDBACK_SHARED_FORM_URL` へ配布する。新規PCはインストール時、既存PCは SessionStart の `onboarding-sync.mjs` で取得・キー単位マージされる。即時取得: 正本リポジトリで `node tools/onboarding-sync.mjs --keys-only --force`。ゲートを再実行すれば、その場で貼れる方式Bリンク（フォルダ名をアプリ名としてエンコード済み）が表示される。手順・検証: `packages/feedback-gas/INSTALL.md`。
+**GAS（Apps Script / スプレッドシート業務アプリ）は `tools/feedback-kit/gas/` を使う**。方式Aは `FeedbackRelay.js` / `FeedbackForm.html` と `doGet` への追加、方式Bは社員が開く HTML に共通フォームへのリンクを1本置く方式。機微データを持つアプリは INSTALL.md の方式Bを使い、公開範囲やスコープを変更しない。共通フォーム URL は public リポには書かず、非公開 keyserve から `~/.claude/feedback-relay.env` の `FEEDBACK_SHARED_FORM_URL` へ配布する。新規PCはインストール時、既存PCは SessionStart の `onboarding-sync.mjs` で取得・キー単位マージされる。即時取得: 正本リポジトリで `node tools/onboarding-sync.mjs --keys-only --force`。ゲートを再実行すれば、その場で貼れる方式Bリンク（フォルダ名をアプリ名としてエンコード済み）が表示される。手順・検証: `tools/feedback-kit/gas/INSTALL.md`。
 
 **通知先はチャンネルではなく kim の個別 DM（中継 `/api/feedback-intake` 経由）**。webhook 直叩きは中継が落ちた時のフォールバックとしてのみ残す。**kim が DM に返信すると、その内容が夜間 `tools/feedback-replies.mjs` で Issue/PR のコメント（＝実行指示）として貼られる**（2026-09-03 本番検証済み）。貼り先が特定できない返信は推測で書き込まずスキップする。
 

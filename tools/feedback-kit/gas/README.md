@@ -40,4 +40,4 @@ Google Apps Script（GAS）で作った社内アプリへ、不具合・要望�
 
 ## 関連パッケージ
 
-Next.js アプリ向けの同等パッケージは [`packages/feedback-widget`](../feedback-widget) です（本パッケージとは独立、互いに依存しません）。
+Next.js アプリ向けの同等パッケージは [`tools/feedback-kit/widget`](../widget/README.md) です（本パッケージとは独立、互いに依存しません）。

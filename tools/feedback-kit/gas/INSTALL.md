@@ -6,21 +6,32 @@
 
 以下は非エンジニアでもそのまま実行できるよう、コマンドをそのまま貼り付けられる形で書いています。実際の作業は Claude Code に「このファイルの手順で feedback フォームを入れて」と頼めば、Claude が代行できます（clasp push・デプロイ・Script Properties 設定まで自動化可能）。
 
-## 2. templates の2ファイルを対象アプリにコピーする
+## 2. kit install で導入する（推奨・1コマンド）
 
-対象の GAS プロジェクト（clasp でローカル管理しているフォルダ）に、次の2ファイルをそのままコピーします。ファイルの中身は変更不要です。
+正本リポジトリ（orgiast-claude-rules。各PCでは `tools/` が自動配布されています）で次を実行します。`src/FeedbackRelay.js` と `src/ui/FeedbackForm.html`（clasp の `rootDir` に従う）の配置、`doGet` への統合、`.feedback-kit.json` の書き込み、滞留ゼロ巡回台帳への登録までを1回で行い、`feedback-form-gate` の kit 検査（verify・版・必須6機能）を通る状態になります。
 
-- `packages/feedback-gas/templates/FeedbackRelay.js` → 対象アプリの `src/FeedbackRelay.js`
-- `packages/feedback-gas/templates/FeedbackForm.html` → 対象アプリの `src/ui/FeedbackForm.html`
+```powershell
+node tools/feedback-kit/install.mjs --app <対象アプリのパス> --name "<アプリ名>"
+node tools/feedback-kit/verify.mjs --app <対象アプリのパス>
+```
+
+既存フォームがある場合は `--upgrade`（変更前の版は `.feedback-kit-backup/` に退避）を付けます。verify が `"ok": true` を返せば導入完了です。以降の手順3の `doGet` 追加は kit が自動統合するため不要で、手順4（clasp push・デプロイ）以降を進めます。
+
+### 手動で配置する場合（kit が使えない時だけ）
+
+対象の GAS プロジェクト（clasp でローカル管理しているフォルダ）に、次の2ファイルをそのままコピーします。ファイルの中身は変更不要です。手動配置だけでは gate の kit 検査（`.feedback-kit.json`）を通らないため、最後に上の kit install を実行してください。
+
+- `tools/feedback-kit/gas/templates/FeedbackRelay.js` → 対象アプリの `src/FeedbackRelay.js`
+- `tools/feedback-kit/gas/templates/FeedbackForm.html` → 対象アプリの `src/ui/FeedbackForm.html`
 
 対象アプリの `src/ui/` フォルダが無い場合は先に作成してください。
 
 コピーコマンド例（PowerShell、`<対象アプリのパス>` は実際のフォルダに置き換える）:
 
 ```powershell
-Copy-Item "C:\Users\uers\Downloads\orgiast-claude-rules\packages\feedback-gas\templates\FeedbackRelay.js" "<対象アプリのパス>\src\FeedbackRelay.js"
+Copy-Item "C:\Users\uers\Downloads\orgiast-claude-rules\tools\feedback-kit\gas\templates\FeedbackRelay.js" "<対象アプリのパス>\src\FeedbackRelay.js"
 New-Item -ItemType Directory -Force "<対象アプリのパス>\src\ui" | Out-Null
-Copy-Item "C:\Users\uers\Downloads\orgiast-claude-rules\packages\feedback-gas\templates\FeedbackForm.html" "<対象アプリのパス>\src\ui\FeedbackForm.html"
+Copy-Item "C:\Users\uers\Downloads\orgiast-claude-rules\tools\feedback-kit\gas\templates\FeedbackForm.html" "<対象アプリのパス>\src\ui\FeedbackForm.html"
 ```
 
 ## 3. doGet に1行足す

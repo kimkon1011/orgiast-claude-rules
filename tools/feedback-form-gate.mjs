@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-export const GATE_CONTRACT = {"name": "feedback-form-gate", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "feedback-form-gate"}, {"kind": "repo-file", "ref": "packages/feedback-gas/INSTALL.md"}, {"kind": "repo-file", "ref": "packages/feedback-widget/install.mjs"}, {"kind": "repo-file", "ref": "tools/feedback-apps.json"}, {"kind": "keyserve-key", "ref": "feedback-relay.env#FEEDBACK_SHARED_FORM_URL"}, {"kind": "user-consent", "ref": ".feedback-exempt", "reason": "社員が利用しないアプリの適用除外は用途の確認が必要"}]};
+export const GATE_CONTRACT = {"name": "feedback-form-gate", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "feedback-form-gate"}, {"kind": "repo-file", "ref": "tools/feedback-kit/gas/INSTALL.md"}, {"kind": "repo-file", "ref": "tools/feedback-kit/install.mjs"}, {"kind": "repo-file", "ref": "tools/feedback-kit/widget/INSTALL.md"}, {"kind": "repo-file", "ref": "tools/feedback-apps.json"}, {"kind": "keyserve-key", "ref": "feedback-relay.env#FEEDBACK_SHARED_FORM_URL"}, {"kind": "user-consent", "ref": ".feedback-exempt", "reason": "社員が利用しないアプリの適用除外は用途の確認が必要"}]};
 import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -208,18 +209,26 @@ function gasInstall(root, { env = process.env, home = env.ORGIAST_HOME || env.US
   return `方式B: 社員が開く HTML に共通フォームへのリンクを1本置きます。\n${link
     ? `アプリ名はフォルダ名「${appName}」から生成しています。正式名が異なる場合は app= を encodeURIComponent(正式名) で置き換えてください。\n${link}`
     : `共通フォームURLが未取得または不正です。keyserve から ~/.claude/feedback-relay.env を取得してください（既存の他キーは保持されます）。\nnode "${sync}" --keys-only --force\n取得後に元のコマンドを再実行すると、貼り付け用リンクを表示します。`}
-方式A（FeedbackRelay）と方式Bの詳細: https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/packages/feedback-gas/INSTALL.md`;
+方式A（FeedbackRelay・kit 導入）は次の1コマンドです（機微データを持たない社員向けアプリ向け。結果は verify が検査します）:
+${kitInstallCommand(root)}
+方式Aと方式Bの詳細: https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/tools/feedback-kit/gas/INSTALL.md`;
+}
+
+// 正本の tools/feedback-kit/install.mjs を、このゲート自身の位置から絶対パスで案内する（配布先PCでも同じ tools/ 配下にある）。
+function kitInstallCommand(root) {
+  const installer = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'feedback-kit', 'install.mjs');
+  return `node "${installer}" --app "${root}" --name "${path.basename(root)}"`;
 }
 
 function buildReason(kind, root, options) {
   const formName = kind === 'gas' ? 'FeedbackRelay または方式Bリンク' : 'FeedbackWidget';
   const install = kind === 'gas'
     ? gasInstall(root, options)
-    : 'node -e "fetch(\'https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/packages/feedback-widget/install.mjs?cb=\'+Date.now()).then(r=>r.text()).then(t=>require(\'fs\').writeFileSync(\'install-feedback.mjs\',t))" && node install-feedback.mjs --app-name "<アプリ名>"';
+    : kitInstallCommand(root);
   return `[FEEDBACK-FORM] §2.11: 社員が使う社内アプリは「不具合・要望フォーム」と「対応完了時の投稿者への完了報告」の搭載が必須です。${root} にはフォーム（${formName}）が見当たらないため、本番反映を止めました。
 導入（アプリのリポジトリ直下で実行）:
 ${install}
-${kind === 'gas' ? '導入後は INSTALL.md の方式別検証手順でフォームを開き、アプリ名・実投稿・通知を確認してください。' : '導入後 node verify.mjs --url <本番URL> で実投稿と read-back まで確認してください。'}
+${kind === 'gas' ? '導入後は INSTALL.md の方式別検証手順でフォームを開き、アプリ名・実投稿・通知を確認してください。' : '導入後は tools/feedback-kit/widget/verify.mjs --url <本番URL> で実投稿と read-back まで確認してください。'}
 社員が使わないアプリ（個人ツール・ライブラリ・社外向け LP 等）なら、user に確認を取ったうえで、理由を1行書いた .feedback-exempt をリポジトリ直下に置けば通ります。`;
 }
 
@@ -248,7 +257,40 @@ function buildRegistryReason(appName, root) {
 マージ後の配布を待たずに反映したい場合は、この PC の環境変数 FEEDBACK_REPO_MAP に ${appName}=<owner>/<repo> を足すと通ります（feedback-to-issues.mjs も同じ値を使います）。`;
 }
 
-export function judge({ command, cwd }, { registryFile, env, home } = {}) {
+// 自アプリに埋め込んだフォーム（Next の FeedbackWidget / GAS の FeedbackRelay）だけが kit の検査対象。
+// 方式B（共通フォームへのリンクのみ）は共通フォーム側が版を持つため対象外。
+export function hasEmbeddedForm(root, kind) {
+  if (kind === 'next') return hasFeedback(root, kind);
+  if (kind !== 'gas') return false;
+  const result = walkFiles(readClaspRootDir(root), ['.js', '.gs', '.html'], (file) => {
+    try { return fs.readFileSync(file, 'utf8').includes('FeedbackRelay'); } catch { return false; }
+  });
+  return Boolean(result.found || result.truncated);
+}
+
+// feedback-kit の版・必須機能を検査する。verify.mjs が無い PC（旧配布）では .feedback-kit.json の有無だけを見る。
+export function checkKit(root, { env = process.env, home = env.ORGIAST_HOME || env.USERPROFILE || os.homedir(), zeroRegistryFile } = {}) {
+  if (!fs.existsSync(path.join(root, '.feedback-kit.json'))) return { ok: false, missing: ['.feedback-kit.json'] };
+  const candidates = [env.ORGIAST_REPO, path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), path.join(home, 'orgiast-claude-rules'), path.join(home, 'orgiast-main')].filter(Boolean);
+  const repo = candidates.find((dir) => fs.existsSync(path.join(dir, 'tools/feedback-kit/verify.mjs')));
+  if (!repo) return { ok: true, missing: [] };
+  const verifyArgs = [path.join(repo, 'tools/feedback-kit/verify.mjs'), '--app', root];
+  if (zeroRegistryFile) verifyArgs.push('--registry', zeroRegistryFile);
+  const result = spawnSync(process.execPath, verifyArgs, { encoding: 'utf8', timeout: 20000, windowsHide: true });
+  try {
+    const data = JSON.parse(result.stdout);
+    return result.status === 0 && data.ok ? { ok: true, missing: [] } : { ok: false, missing: data.missing?.length ? data.missing : ['verify-failed'] };
+  } catch { return { ok: false, missing: ['verify-failed'] }; }
+}
+
+function buildKitReason(root, missing) {
+  return `[FEEDBACK-FORM] §2.11: ${root} の不具合・要望フォームが feedback-kit の必須条件（版・画像添付など6機能）を満たしていないため、本番反映を止めました。
+不足: ${missing.join(', ')}
+node tools/feedback-kit/install.mjs --app "${root}" --upgrade を実行してから再デプロイしてください（正本リポジトリ orgiast-claude-rules で実行。変更前の版は .feedback-kit-backup/ に退避されます）。
+社員が使わないアプリは、理由を書いた .feedback-exempt で除外できます。`;
+}
+
+export function judge({ command, cwd }, { registryFile, env, home, kitCheck = checkKit, zeroRegistryFile } = {}) {
   if (!isDeployCommand(command)) return { deny: false };
   const targetDir = resolveTargetDir(command, cwd);
   const root = findProjectRoot(targetDir);
@@ -257,6 +299,10 @@ export function judge({ command, cwd }, { registryFile, env, home } = {}) {
   if (!kind) return { deny: false };
   if (exemptReason(root)) return { deny: false };
   if (!hasFeedback(root, kind)) return { deny: true, reason: buildReason(kind, root, { env, home }) };
+  if (hasEmbeddedForm(root, kind)) {
+    const kitResult = kitCheck(root, { env: env || process.env, home, zeroRegistryFile });
+    if (!kitResult.ok) return { deny: true, reason: buildKitReason(root, kitResult.missing) };
+  }
   if (kind === 'next') {
     const appName = readAppName(root);
     if (appName && !isRegistered(appName, registryFile, env)) return { deny: true, reason: buildRegistryReason(appName, root) };

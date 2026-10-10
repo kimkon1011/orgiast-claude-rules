@@ -11,6 +11,7 @@
     { "title": "ONBOARDING.md", "in": "hub", "localTarget": "ONBOARDING ローカルマスター" },
     { "title": "CLAUDE.md.template", "in": "hub", "localTarget": "~/.claude/CLAUDE.md (無い場合のみ)" },
     { "title": "gas.md", "in": "rules", "localTarget": "~/.claude/rules/gas.md" },
+    { "title": "nextjs.md", "in": "rules", "localTarget": "~/.claude/rules/nextjs.md" },
     { "title": "gas-project-setup.md", "in": "skills", "localTarget": "~/.claude/skills/gas-project-setup/SKILL.md" },
     { "title": "growi-fetch.md", "in": "skills", "localTarget": "~/.claude/skills/growi-fetch/SKILL.md" },
     { "title": "deploy-verify.md", "in": "skills", "localTarget": "~/.claude/skills/deploy-verify/SKILL.md" },

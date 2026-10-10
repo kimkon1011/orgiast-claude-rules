@@ -13,24 +13,34 @@ import { findLocalDocLinks } from './doc-link-drive-guard.mjs';
 
 function fixture(t){const home=fs.mkdtempSync(path.join(os.tmpdir(),'gate-recommend-'));t.after(()=>fs.rmSync(home,{recursive:true,force:true}));return home;}
 function hook(name,input,home){const r=spawnSync(process.execPath,[path.join(toolsDir,name+'.mjs')],{input:JSON.stringify(input),encoding:'utf8',env:{...process.env,ORGIAST_HOME:home,CLAUDE_HEADLESS:'1'}});assert.equal(r.status,0,r.stderr);return r.stdout;}
-test('feedback GAS INSTALL method A copies actual templates and passes deploy',t=>{
+// 推奨手順 = kit install。登録先(台帳)は一時ファイルへ向け、正本リポジトリを汚さない。
+function kitInstall(home,name){
+ const reg=path.join(home,'zero-registry.json'),apps=path.join(home,'apps-ledger.json'),local=path.join(home,'zero-local.json');
+ const r=spawnSync(process.execPath,[path.join(repoDir,'tools/feedback-kit/install.mjs'),'--app',home,'--name',name,'--registry',reg,'--apps',apps,'--local',local],{encoding:'utf8',env:{...process.env,ORGIAST_HOME:home}});
+ assert.equal(r.status,0,r.stderr+r.stdout);return {reg,apps};
+}
+const KIT_CMD=/node tools\/feedback-kit\/install\.mjs --app <対象アプリのパス> --name "<アプリ名>"/;
+const KIT_REMEDY=/feedback-kit[\\/]install\.mjs/;
+test('feedback GAS INSTALL recommended kit install passes deploy',t=>{
  const home=fixture(t);fs.writeFileSync(path.join(home,'.clasp.json'),'{"rootDir":"src"}');fs.mkdirSync(path.join(home,'src/ui'),{recursive:true});
- assert.equal(feedback({command:'clasp push',cwd:home},{home}).deny,true);
- const doc=fs.readFileSync(path.join(repoDir,'packages/feedback-gas/INSTALL.md'),'utf8');assert.match(doc,/src\/FeedbackRelay\.js/);
- fs.copyFileSync(path.join(repoDir,'packages/feedback-gas/templates/FeedbackRelay.js'),path.join(home,'src/FeedbackRelay.js'));
- fs.copyFileSync(path.join(repoDir,'packages/feedback-gas/templates/FeedbackForm.html'),path.join(home,'src/ui/FeedbackForm.html'));
- assert.equal(feedback({command:'clasp push',cwd:home},{home}).deny,false);
+ const denied=feedback({command:'clasp push',cwd:home},{home,env:{}});assert.equal(denied.deny,true);
+ assert.match(denied.reason,KIT_REMEDY,'gate remedy must show the kit install command');
+ const doc=fs.readFileSync(path.join(repoDir,'tools/feedback-kit/gas/INSTALL.md'),'utf8');assert.match(doc,KIT_CMD);assert.match(doc,/src\/FeedbackRelay\.js/);
+ const {reg}=kitInstall(home,'fixture');
+ assert.ok(fs.existsSync(path.join(home,'src/FeedbackRelay.js')));
+ assert.equal(feedback({command:'clasp push',cwd:home},{home,env:{},zeroRegistryFile:reg}).deny,false);
 });
-test('feedback widget INSTALL executes real installer; documented registry step clears denial',t=>{
+test('feedback widget INSTALL recommended kit install passes the kit check; documented registry step clears denial',t=>{
  const home=fixture(t);fs.writeFileSync(path.join(home,'package.json'),'{"dependencies":{"next":"15.0.0"}}');fs.mkdirSync(path.join(home,'app'));
  fs.writeFileSync(path.join(home,'app/layout.tsx'),'export default function Layout({ children }) { return <html><body>{children}</body></html>; }');
- assert.equal(feedback({command:'vercel deploy',cwd:home},{home}).deny,true);
- const result=spawnSync(process.execPath,[path.join(repoDir,'packages/feedback-widget/install.mjs'),'--target',home,'--app-name','fixture','--owner-discord-id','123456789012345678'],{encoding:'utf8',env:{...process.env,ORGIAST_HOME:home}});
- assert.equal(result.status,0,result.stderr);
+ const denied=feedback({command:'vercel deploy',cwd:home},{home,env:{}});assert.equal(denied.deny,true);
+ assert.match(denied.reason,KIT_REMEDY,'gate remedy must show the kit install command');
+ const doc=fs.readFileSync(path.join(repoDir,'tools/feedback-kit/widget/INSTALL.md'),'utf8');assert.match(doc,KIT_CMD);
+ const {reg}=kitInstall(home,'fixture');
  const registry=path.join(home,'registry.json');fs.writeFileSync(registry,'{}');
- assert.equal(feedback({command:'vercel deploy',cwd:home},{home,registryFile:registry,env:{}}).deny,true);
+ assert.equal(feedback({command:'vercel deploy',cwd:home},{home,registryFile:registry,env:{},zeroRegistryFile:reg}).deny,true);
  fs.writeFileSync(registry,'{"fixture":"example/app"}');
- assert.equal(feedback({command:'vercel deploy',cwd:home},{home,registryFile:registry,env:{}}).deny,false);
+ assert.equal(feedback({command:'vercel deploy',cwd:home},{home,registryFile:registry,env:{},zeroRegistryFile:reg}).deny,false);
 });
 test('autopilot SKILL recommended codex-do invocation passes active delegation gates',t=>{
  const home=fixture(t);fs.mkdirSync(path.join(home,'.claude/session-lane'),{recursive:true});fs.writeFileSync(path.join(home,'.claude/cost-enforce.json'),'{"mode":"block"}');

@@ -85,7 +85,7 @@
 
 | 基準ファイル:行 | 問題の用途 | 修正 |
 |---|---|---|
-| packages/feedback-gas/INSTALL.md:71 | 方式Aの中継URL | Script Propertiesを使える場合のみA。未認可なら方式Bと取得コマンドへ |
+| tools/feedback-kit/gas/INSTALL.md:71 | 方式Aの中継URL | Script Propertiesを使える場合のみA。未認可なら方式Bと取得コマンドへ |
 | rules-extracted/onboarding-setup-prompts.md:126 | 初期通知webhook | `node tools/onboarding-sync.mjs --keys-only --force` |
 | tools/install-keyserve-enroll.ps1:88 | 応答形式異常時の稼働確認 | `node tools/keyserve-status.mjs --json` |
 | tools/install-keyserve-enroll.ps1:90 | HTTP認証失敗時の稼働確認 | 同上 |

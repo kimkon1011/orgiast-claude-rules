@@ -66,12 +66,12 @@
       </div>
     </fieldset>
 
-    <label class="field">タイトル <span class="req">*</span>
+    <label class="field">タイトル（任意）
       <input type="text" id="title" maxlength="200" placeholder="例: ○○ボタンを押すとエラーになる">
     </label>
 
-    <label class="field">内容
-      <textarea id="body" maxlength="4000" placeholder="状況・再現手順・要望の詳細など"></textarea>
+    <label class="field">内容 <span class="req">*</span>
+      <textarea id="body" required maxlength="4000" placeholder="状況・再現手順・要望の詳細など"></textarea>
     </label>
 
     <label class="field">お名前（Discord の表示名）
@@ -82,7 +82,7 @@
     <label class="field">画像（任意）
       <div class="dropzone" id="dropzone">
         Ctrl+V で貼り付け / ドラッグ&ドロップ、または
-        <span class="fileBtn" id="fileBtn">ファイルを選択</span>
+        <button type="button" class="fileBtn" id="fileBtn">📷 画像を添付</button>
         <input type="file" id="fileInput" accept="image/*" multiple style="display:none">
       </div>
       <div class="thumbs" id="thumbs"></div>
@@ -105,20 +105,42 @@
       var fileInput = document.getElementById('fileInput');
       var fileBtn = document.getElementById('fileBtn');
       var submitBtn = document.getElementById('submitBtn');
+      var MAX_IMAGES = 5;
+      var MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+      var reading = 0;
+      var sending = false;
       var images = []; // { name, mimeType, base64 }
 
+      function renderImages() {
+        thumbsEl.innerHTML = '';
+        images.forEach(function (item, index) {
+          var box = document.createElement('span');
+          var img = document.createElement('img');
+          img.src = 'data:' + item.mimeType + ';base64,' + item.base64;
+          img.alt = item.name;
+          var remove = document.createElement('button');
+          remove.type = 'button'; remove.textContent = '削除';
+          remove.setAttribute('aria-label', item.name + ' を削除');
+          remove.addEventListener('click', function () {
+            if (sending) return;
+            images.splice(index, 1); renderImages();
+          });
+          box.appendChild(img); box.appendChild(remove); thumbsEl.appendChild(box);
+        });
+      }
       function addImageFile(file) {
-        if (!file || String(file.type || '').indexOf('image/') !== 0) return;
+        if (sending || !file || String(file.type || '').indexOf('image/') !== 0) return;
+        if (images.length + reading >= MAX_IMAGES) { setStatus('画像は最大5枚です', 'err'); return; }
+        if (file.size > MAX_IMAGE_BYTES) { setStatus('画像は1枚8MBまでです', 'err'); return; }
+        reading += 1; submitBtn.disabled = true;
         var reader = new FileReader();
         reader.onload = function () {
-          var dataUrl = String(reader.result || '');
-          var m = /^data:([^;]+);base64,(.*)$/.exec(dataUrl);
-          if (!m) return;
-          images.push({ name: file.name || 'screenshot.png', mimeType: m[1], base64: m[2] });
-          var img = document.createElement('img');
-          img.src = dataUrl;
-          thumbsEl.appendChild(img);
+          var m = /^data:([^;]+);base64,(.*)$/.exec(String(reader.result || ''));
+          if (m) images.push({ name: file.name || 'screenshot.png', mimeType: m[1], base64: m[2] });
+          renderImages();
         };
+        reader.onerror = function () { setStatus('画像の読込に失敗しました', 'err'); };
+        reader.onloadend = function () { reading -= 1; submitBtn.disabled = sending || reading > 0; };
         reader.readAsDataURL(file);
       }
 
@@ -166,6 +188,7 @@
       }
 
       submitBtn.addEventListener('click', function () {
+        if (sending || reading) return;
         // 送信ハンドラの冒頭でフォーム要素と入力値をローカル変数に確保する
         // (非同期コールバック内で辿ると null になり得るため)。
         var btn = submitBtn;
@@ -182,25 +205,28 @@
           images: images.slice()
         };
 
-        if (!payload.title && !payload.body) {
-          setStatus('タイトルか内容を入力してください', 'err');
+        if (!payload.body) {
+          setStatus('内容を入力してください', 'err');
           return;
         }
 
+        sending = true;
         btn.disabled = true;
         setStatus('送信中…', 'ok');
 
         google.script.run
           .withSuccessHandler(function (res) {
+            sending = false;
             btn.disabled = false;
             if (res && res.ok) {
-              setStatus('送信しました。ご協力ありがとうございます。', 'ok');
+              setStatus(res.notified === false ? '記録しました。通知は未達のため担当者が確認します。' : '送信しました。ご協力ありがとうございます。', 'ok');
               clearForm();
             } else {
               setStatus('エラー: ' + (res && res.error ? res.error : '送信に失敗しました'), 'err');
             }
           })
           .withFailureHandler(function (err) {
+            sending = false;
             btn.disabled = false;
             setStatus('エラー: ' + (err && err.message ? err.message : err), 'err');
           })

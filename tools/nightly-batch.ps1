@@ -452,6 +452,25 @@ try {
         }
     } else { Write-NightlyLog 'feedback-progress-notify' 'skip:ファイルなし' }
 
+    # 全社アプリの未対応フィードバックを滞留ゼロへ寄せる（登録簿の各アプリを巡回し、未対応を Issue 化＋実装キューへ積む）。
+    # 予算・クールダウンで打ち切った分は翌日へ繰り越す。残0かつ未取得0のときは kim へ DM しない。
+    $feedbackZeroSweep = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\feedback-zero-sweep.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $feedbackZeroSweep = $candidate; break }
+    }
+    if ($feedbackZeroSweep) {
+        $feedbackZeroSweepOutput = $null
+        try {
+            $feedbackZeroSweepOutput = @(& $node.Source $feedbackZeroSweep 2>&1)
+            $feedbackZeroSweepExit = $LASTEXITCODE
+            Write-NightlyStepResult 'feedback-zero-sweep' $feedbackZeroSweepExit $feedbackZeroSweepOutput ' (警告・後続処理続行)'
+        } catch {
+            Write-NightlyLog 'feedback-zero-sweep' ("error:" + $_.Exception.Message + ' (警告・後続処理続行): ' + (Format-NightlyDetail $feedbackZeroSweepOutput))
+            Write-Warning ("nightly-batch: feedback-zero-sweep: " + $_.Exception.Message)
+        }
+    } else { Write-NightlyLog 'feedback-zero-sweep' 'skip:ファイルなし' }
+
     # 未対応フィードバックを100億円計画への直結度で評価し、プロダクション異常もまとめて kim へ報告する。
     # ヘルス異常の exit 3 と部分障害はいずれも警告扱いにして、後続の夜間処理を継続する。
     $feedback100oku = $null

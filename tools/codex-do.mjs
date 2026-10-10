@@ -12,6 +12,7 @@ import { executorExitStatus } from './executor-status.mjs';
 import { verifyExternalWork } from './codex-work-evidence.mjs';
 import { parseCodexResetUntil, providerCooldownMs, writeCodexCooldown } from './codex-cooldown.mjs';
 import { classifyTaskKind, CODEX_KINDS, TASK_KINDS } from './lib/task-kind.mjs';
+import { syncWslCodexAuth } from './lib/codex-wsl-auth-sync.mjs';
 import { EX_TEMPFAIL, budgetSummary, claudeFile, decideCodexGate, deferredPayload, isUsageLimitText, parseUsageLimitUntil, providerLimitedUntil, writeCodexCooldownFile } from './lib/executor-gate.mjs';
 
 // Windows の shell 経由起動では引数がクォートされないため、この値に空白を入れると
@@ -611,6 +612,13 @@ function recordDeferred(gate) {
     fs.mkdirSync(path.dirname(ledger), { recursive: true });
     fs.appendFileSync(ledger, `${JSON.stringify({ t: new Date().toISOString(), provider: 'codex', model: `codex-cli/${selectedLane.slug || 'default'}`, status: 'deferred', reason: gate.reason, retryAt: gate.retryAt, origin, kind: taskKind, launched: false, cwd })}\n`, 'utf8');
   } catch {}
+}
+// WSL 側の Codex ログインが Windows 側と別アカウントなら揃える（揃えたら古いアカウントの上限待ちも消す）。
+// テスト（NODE_TEST_CONTEXT）と明示無効化（CODEX_DO_NO_AUTH_SYNC=1）では実機の WSL に触らない。
+if (useCodex && !forceNative && !process.env.NODE_TEST_CONTEXT && process.env.CODEX_DO_NO_AUTH_SYNC !== '1') {
+  try {
+    syncWslCodexAuth({ clearCooldown: () => fs.rmSync(claudeFile(home, 'codex-cooldown.json'), { force: true }), log: m => console.error(m) });
+  } catch (e) { console.error(`[codex-do] WSL の Codex ログイン照合に失敗（続行）: ${e.message}`); }
 }
 if (useCodex) {
   const gate = decideCodexGate({ home, origin });

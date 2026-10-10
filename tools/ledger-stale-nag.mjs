@@ -25,18 +25,21 @@ export function stagnationLabel(updated, now = new Date()) {
 }
 
 export function formatLedgerNag(items, now, criticalHours) {
-  const header = `📋 共有タスク台帳: 動きのない依頼 ${items.length}件`;
+  const header = `⏳ ずっと止まっている仕事: ${items.length}件`;
   const render = (row, compact = false) => {
-    const critical = now.getTime() - Date.parse(row.最終更新) > criticalHours * HOUR ? '⚠️ 長期停滞 ' : '';
-    return `- ${critical}[${clip(row.taskId, compact ? 40 : 200)}] ${clip(row.件名, compact ? 50 : 500)}\n  担当PC: ${clip(row.担当PC, compact ? 30 : 200)} / 状態: ${line(row.状態)} / 停滞: ${stagnationLabel(row.最終更新, now)}\n  次アクション: ${clip(row.次アクション, 120)}\n  ${line(row.成果物リンク)}`;
+    const critical = now.getTime() - Date.parse(row.最終更新) > criticalHours * HOUR ? '⚠️ 長く止まっています ' : '';
+    const raw = clip(row.次アクション, compact ? 60 : 120);
+    // コマンドは高校生が読んでもわからないので本文に出さない。
+    const next = /(^|\s|→)(gh|git|node|npm|npx|pwsh|clasp)\s/.test(String(row.次アクション || '')) ? '内容を確認する' : raw;
+    return `- ${critical}${clip(row.件名, compact ? 50 : 500)}（${stagnationLabel(row.最終更新, now)}）\n  次にやること: ${next || '内容を確認する'}`;
   };
   let shown = items;
   let content = [header, ...shown.map((row) => render(row))].join('\n');
   if (content.length > 2000) {
     shown = items.slice(0, 5);
-    const footer = shown.length < items.length ? `\n他${items.length - shown.length}件` : '';
+    const footer = shown.length < items.length ? `\nほか${items.length - shown.length}件` : '';
     const budget = Math.floor((2000 - header.length - footer.length - shown.length) / shown.length);
-    // 各行にも上限を設け、長大なリンクや件名でもDiscordの制限を守る。
+    // 各行にも上限を設け、長大な件名でもDiscordの制限を守る。
     content = [header, ...shown.map((row) => {
       const text = render(row, true);
       return text.length > budget ? `${text.slice(0, budget - 1)}…` : text;

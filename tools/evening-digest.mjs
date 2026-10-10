@@ -27,9 +27,12 @@ export function formatEvening(date, results, unresolved, alerts = null) {
   for (const item of results) lines.push(`### ${TITLES[item.jobType]}`, String(item.text || '').slice(0, 300));
   if (alerts) {
     lines.push(alerts.count ? `🚨 今日のアラート: ${alerts.count}件` : '🚨 今日のアラート: なし');
-    for (const summary of alerts.summaries) lines.push(`- ${summary}`);
+    for (const summary of alerts.summaries) {
+      const text = String(summary || '').replace(/[#*_`>]+/g, ' ').replace(/\s+/g, ' ').trim();
+      if (text) lines.push(`- ${text.length > 60 ? `${text.slice(0, 59)}…` : text}`);
+    }
   }
-  lines.push(`未処理の判断: ${unresolved}件`);
+  lines.push(unresolved ? `❓ あなたの返事を待っていること: ${unresolved}件` : '❓ あなたの返事を待っていること: なし');
   return lines.join('\n');
 }
 async function readTodayAlerts({ home, now, token, channelId, fetchMessagesImpl }) {

@@ -80,3 +80,11 @@ test('heartbeat 失敗でも送信結果と state を維持する', async () => 
     assert.ok(warnings.some((line) => /heartbeat送信失敗.*heartbeat unavailable/.test(line)));
   } finally { console.warn = originalWarn; }
 });
+
+test('アラート要約から見出し記号や太字記号を取り除き、内部用語を出さない', async () => {
+  const { formatEvening } = await import('./evening-digest.mjs');
+  const text = formatEvening('2026-10-09', [], 83, { count: 2, summaries: ['# フリート生存判定', '💰 **Claude API課金 日次監視**'] });
+  assert.doesNotMatch(text, /[#*]/);
+  assert.doesNotMatch(text, /未処理の判断/);
+  assert.match(text, /あなたの返事を待っていること: 83件/);
+});

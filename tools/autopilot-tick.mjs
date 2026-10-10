@@ -69,7 +69,7 @@ export function parseControl(text) {
   if (change?.[1].trim()) return { command: 'objective', objective: change[1].trim() };
   if (/^(止めて|停止|stop)[。！!]?$/i.test(value)) return { command: 'stop' };
   if (/^(一時停止|pause)[。！!]?$/i.test(value)) return { command: 'pause' };
-  if (/^(続けて|再開|continue|go)[。！!]?$/i.test(value)) return { command: 'run' };
+  if (/^(続けて|再開|直して|continue|go)[。！!]?$/i.test(value)) return { command: 'run' };
   return null;
 }
 const validId = (id) => /^\d+$/.test(String(id ?? ''));
@@ -116,8 +116,44 @@ async function readControls(state, ctx) {
   return { messages: messages.sort((a, b) => compareId(a.id, b.id)), cursors, errors };
 }
 const oneLine = (value) => String(value || '').replace(/\s+/g, ' ').trim().slice(0, 600);
-export function formatDigest({ hostname, objective, reason, completed = false }) {
-  return `[autopilot@${oneLine(hostname)}] ${completed ? '完了' : `異常停止: ${oneLine(reason)}`}\n${oneLine(objective.objective)}\n${completed ? '完了条件を検証しました。' : '再開するなら「続けて」、終了するなら「止めて」と返信'}`;
+// 通知は「システムを知らない高校生」でも読める日本語にする。内部コード・コマンド・IDは本文に出さない。
+const stripTags = (value) => oneLine(value).replace(/\[[^\]]*\]/g, '').replace(/\s+/g, ' ').trim();
+const STOP_HINT = '続けるなら「続けて」、やめるなら「止めて」と返信してください。';
+const REASON_TEXT = {
+  daily_iter_cap: '今日の作業回数の上限になりました。明日また続けます。',
+  daily_hours_cap: '今日の作業時間の上限になりました。明日また続けます。',
+  noop_streak: '3回続けて進みませんでした。いったん止めています。',
+  total_cap: '決めておいた回数の上限になったので止めました。',
+  runner_error: 'エラーで止まりました。',
+};
+const reasonText = (reason) => REASON_TEXT[reason] || '止まりました。';
+const autoResumes = (reason) => reason === 'daily_iter_cap' || reason === 'daily_hours_cap';
+export function formatDigest({ hostname, objective, reason, completed = false, evidence = '', unverified = '' }) {
+  const host = hostname ? `（${oneLine(hostname)}）` : '';
+  const goal = stripTags(objective.objective);
+  if (completed && unverified) {
+    return `🟡 だいたい終わりました: ${goal}\nまだ確かめられていないこと: ${oneLine(unverified)}\n毎日たしかめて、結果をまた知らせます。${host}`;
+  }
+  if (completed) {
+    return `✅ 終わりました: ${goal}\n確かめたこと: ${oneLine(evidence)}${host}`;
+  }
+  const lines = [`⚠️ 止まりました: ${goal}`, reasonText(reason)];
+  if (!autoResumes(reason)) lines.push(STOP_HINT);
+  return lines.join('\n') + host;
+}
+export function formatWatchNotice({ hostname, objective, result, note }) {
+  const host = hostname ? `（${oneLine(hostname)}）` : '';
+  const goal = stripTags(objective);
+  if (result === 'ok') return `✅ 確かめられました: ${goal}\n${oneLine(note)}${host}`;
+  return `⚠️ うまくいっていません: ${goal}\nわかったこと: ${oneLine(note)}\n直すなら「直して」、やめるなら「止めて」と返信してください。${host}`;
+}
+export function formatNextObjective({ hostname, objective }) {
+  const host = hostname ? `（${oneLine(hostname)}）` : '';
+  return `▶ 次はこれをやります: ${stripTags(objective)}\nやめてほしいときは「止めて」と返信してください。${host}`;
+}
+export function formatQuestion({ hostname, question }) {
+  const host = hostname ? `（${oneLine(hostname)}）` : '';
+  return `❓ 決めてほしいこと: ${oneLine(question)}\n「はい」なら続けます。「いいえ」なら止めます。${host}`;
 }
 export function recommendedActions(text) {
   const actions = [];
@@ -172,6 +208,18 @@ function resumeState(state) {
   // Explicit human continuation gives a stalled objective one fresh attempt.
   state.consecutiveNoop = 0;
 }
+const WATCH_DAY_MS = 24 * 3600 * 1000;
+const WATCH_FAIL_DAYS = 7;
+export function watchesDue(state, now) {
+  const stale = (ts) => !ts || now.getTime() - Date.parse(ts) >= WATCH_DAY_MS;
+  return (state.watches || []).filter((w) => stale(w.lastCheckAt) && stale(w.lastListedAt));
+}
+function nextWatchId(state) {
+  const used = new Set((state.watches || []).map((w) => w.id));
+  let n = 1;
+  while (used.has(`w${n}`)) n++;
+  return `w${n}`;
+}
 export function renderHandoff(objective, state, log, target) {
   const recent = log.slice(-3).map((r) => r.summary.replace(/\r?\n/g, ' '));
   while (recent.length < 3) recent.unshift('記録なし');
@@ -197,7 +245,7 @@ async function execute(command, args, ctx) {
     }
     writeObjective(paths.objective, objective);
     fs.writeFileSync(paths.log, '', 'utf8');
-    state = { objectiveHistory: state?.objectiveHistory || [], startedAt: now.toISOString(), lastTickAt: null, iterationsToday: 0, dateKey: dateKey(now), consecutiveNoop: 0, totalIterations: 0, status: 'running', pausedReason: null, lastDigestDate: null, lastControlMessageId: null, controlCursors: {}, objectiveStartIteration: 0 };
+    state = { objectiveHistory: state?.objectiveHistory || [], watches: state?.watches || [], startedAt: now.toISOString(), lastTickAt: null, iterationsToday: 0, dateKey: dateKey(now), consecutiveNoop: 0, totalIterations: 0, status: 'running', pausedReason: null, lastDigestDate: null, lastControlMessageId: null, controlCursors: {}, objectiveStartIteration: 0 };
     writeJson(paths.state, state);
     return { ok: true, status: state.status, objective };
   }
@@ -205,7 +253,7 @@ async function execute(command, args, ctx) {
     const candidate = await nextObjective(null, null, ctx);
     if (candidate) {
       await execute('start', { objective: candidate.objective, context: candidate.context.trim() }, ctx);
-      await sendNotice(`次の目的: ${oneLine(candidate.objective)}（止めるなら『止めて』と返信）`, ctx);
+      await sendNotice(formatNextObjective({ hostname: ctx.hostname, objective: candidate.objective }), ctx);
       return execute('pre', {}, ctx);
     }
   }
@@ -223,7 +271,7 @@ async function execute(command, args, ctx) {
   }
   const currentLog = () => log.filter((row) => row.iteration > (state.objectiveStartIteration || 0));
   const save = () => { rememberObjective(state, objective, now); writeJson(paths.state, state); };
-  const notify = (reason, completed = false) => sendNotice(formatDigest({ hostname: ctx.hostname, objective, reason, completed }), ctx);
+  const notify = (reason, completed = false, extra = {}) => sendNotice(formatDigest({ hostname: ctx.hostname, objective, reason, completed, ...extra }), ctx);
   const watchdog = async () => {
     if (state.status !== 'running') return null;
     const reason = capReason(state, objective, summarize(log, todayKey));
@@ -262,7 +310,7 @@ async function execute(command, args, ctx) {
         writeObjective(paths.objective, objective); resumeState(state);
         state.objectiveStartIteration = state.totalIterations; state.lastDecision = null;
         save();
-        await sendNotice(`次の目的: ${oneLine(candidate.objective)}（止めるなら『止めて』と返信）`, ctx);
+        await sendNotice(formatNextObjective({ hostname: ctx.hostname, objective: candidate.objective }), ctx);
       }
     }
     // No candidate and no command: leave a completed run byte-for-byte intact.
@@ -273,14 +321,20 @@ async function execute(command, args, ctx) {
       save();
     }
     const today = summarize(log, todayKey);
+    const due = watchesDue(state, now);
+    if (due.length) { for (const w of due) w.lastListedAt = now.toISOString(); writeJson(paths.state, state); }
     return { verdict: { running: 'run', paused: 'pause', stopped: 'stop', done: 'done' }[state.status], reason: state.pausedReason,
-      objective, decision: state.lastDecision || null, budget: { iterationsLeftToday: Math.max(0, objective.maxIterPerDay - state.iterationsToday), hoursLeftToday: Math.max(0, objective.maxHoursPerDay - today.hours), consecutiveNoop: state.consecutiveNoop }, control, recentLog: currentLog().slice(-5), controlErrors: result.errors };
+      objective, decision: state.lastDecision || null, budget: { iterationsLeftToday: Math.max(0, objective.maxIterPerDay - state.iterationsToday), hoursLeftToday: Math.max(0, objective.maxHoursPerDay - today.hours), consecutiveNoop: state.consecutiveNoop }, control, recentLog: currentLog().slice(-5), controlErrors: result.errors, watchesDue: due };
   }
   if (command === 'post') {
     if (state.status !== 'running') return { error: 'not_running', status: state.status };
     const progress = Number(args.progress), nextDelaySec = Number(args['next-delay'] ?? 1500);
     if (!args.summary?.trim() || args.progress === undefined || !Number.isFinite(progress) || progress < 0 || progress > 100 || !Number.isFinite(nextDelaySec) || nextDelaySec < 0) return { error: 'invalid_post' };
     if (args['tokens-out'] !== undefined && (!Number.isFinite(Number(args['tokens-out'])) || Number(args['tokens-out']) < 0)) return { error: 'invalid_tokens_out' };
+    // 完了(100)は「実際に起きた結果」を確認した証拠が要る。未確認なら --unverified で見張りに回す。
+    const evidence = String(args.evidence ?? '').trim();
+    const unverified = String(args.unverified ?? '').trim();
+    if (progress >= 100 && !evidence && !unverified) return { error: 'evidence_required' };
     const noop = Boolean(args.noop) || progress <= (currentLog().at(-1)?.progress ?? 0);
     const row = { ts: now.toISOString(), host: ctx.hostname, iteration: state.totalIterations + 1, summary: args.summary.trim(), progress, noop, codexUsed: Boolean(args.codex), nextDelaySec: noop ? Math.max(1800, nextDelaySec) : nextDelaySec };
     if (args['tokens-out'] !== undefined) row.tokensOut = Number(args['tokens-out']);
@@ -288,11 +342,45 @@ async function execute(command, args, ctx) {
     log.push(row);
     state.totalIterations++; state.iterationsToday++; state.lastTickAt = now.toISOString(); state.consecutiveNoop = noop ? state.consecutiveNoop + 1 : 0;
     if (progress >= 100) {
-      state.status = 'done'; state.pausedReason = null; save(); await notify(null, true);
-      return { ok: true, watchdog: null, status: 'done', noop, nextDelaySec: row.nextDelaySec };
+      state.status = 'done'; state.pausedReason = null;
+      if (unverified) {
+        state.watches ||= [];
+        state.watches.push({ id: nextWatchId(state), objective: objective.objective, unverified, evidence, since: now.toISOString(), lastCheckAt: null, checks: 0, ng: 0 });
+      }
+      save(); await notify(null, true, { evidence, unverified });
+      return { ok: true, watchdog: null, status: 'done', noop, nextDelaySec: row.nextDelaySec, watch: unverified ? state.watches.at(-1).id : null };
     }
     const fired = await watchdog(); save();
     return { ok: true, watchdog: fired, status: state.status, noop, nextDelaySec: row.nextDelaySec };
+  }
+  if (command === 'watch') {
+    const id = String(args.id ?? '').trim();
+    const result = String(args.result ?? '').trim();
+    const note = String(args.note ?? '').trim();
+    if (!id || !['ok', 'ng'].includes(result) || !note) return { error: 'invalid_watch' };
+    state.watches ||= [];
+    const watch = state.watches.find((w) => w.id === id);
+    if (!watch) return { error: 'watch_not_found', id };
+    if (result === 'ok') {
+      state.watches = state.watches.filter((w) => w.id !== id);
+      save();
+      await sendNotice(formatWatchNotice({ hostname: ctx.hostname, objective: watch.objective, result: 'ok', note }), ctx);
+      return { ok: true, status: 'ok', id };
+    }
+    watch.ng = (watch.ng || 0) + 1; watch.checks = (watch.checks || 0) + 1; watch.lastCheckAt = now.toISOString();
+    const expired = now.getTime() - Date.parse(watch.since) >= WATCH_FAIL_DAYS * WATCH_DAY_MS;
+    if (watch.ng >= 3 || expired) {
+      state.watches = state.watches.filter((w) => w.id !== id);
+      state.objectiveHistory ||= [];
+      state.objectiveHistory.push({ objective: watch.objective, status: 'failed_check', iteration: state.totalIterations, endedAt: now.toISOString() });
+      state.objectiveHistory = state.objectiveHistory.slice(-20);
+      // save() would append the current (done) objective after this entry; write directly.
+      writeJson(paths.state, state);
+      await sendNotice(formatWatchNotice({ hostname: ctx.hostname, objective: watch.objective, result: 'ng', note }), ctx);
+      return { ok: true, status: 'failed_check', id };
+    }
+    save();
+    return { ok: true, status: 'ng', id, ng: watch.ng };
   }
   if (command === 'status') return { state, objective, today: summarize(log, todayKey) };
   if (command === 'handoff') {
@@ -309,7 +397,7 @@ async function execute(command, args, ctx) {
     if (command === 'pause' && args.question) { state.pendingQuestion = oneLine(args.question); state.pausedReason = 'needs_kim'; }
     const fired = await watchdog(); save();
     if (command === 'pause' && args.reason === 'runner_error') await notify('runner_error');
-    else if (command === 'pause' && args.question && previousQuestion !== state.pendingQuestion) await sendNotice(`判断待ち\n${state.pendingQuestion}\n「はい」で再開、「いいえ」で停止`, ctx);
+    else if (command === 'pause' && args.question && previousQuestion !== state.pendingQuestion) await sendNotice(formatQuestion({ hostname: ctx.hostname, question: state.pendingQuestion }), ctx);
     return { ok: true, status: state.status, reason: state.pausedReason, watchdog: fired };
   }
   return { error: 'unknown_command' };
@@ -352,7 +440,7 @@ export async function runAutopilot(command, args = {}, options = {}) {
 
 export async function main(argv = process.argv.slice(2)) {
   try {
-    const options = Object.fromEntries(['objective', 'done', 'max-iter-per-day', 'max-hours-per-day', 'max-noop', 'max-total-iter', 'summary', 'progress', 'tokens-out', 'next-delay', 'reason', 'question'].map((key) => [key, { type: 'string' }]));
+    const options = Object.fromEntries(['objective', 'done', 'max-iter-per-day', 'max-hours-per-day', 'max-noop', 'max-total-iter', 'summary', 'progress', 'tokens-out', 'next-delay', 'reason', 'question', 'evidence', 'unverified', 'id', 'result', 'note'].map((key) => [key, { type: 'string' }]));
     for (const key of ['noop', 'codex', 'pretty']) options[key] = { type: 'boolean' };
     const { values, positionals } = parseArgs({ args: argv, options, allowPositionals: true });
     const result = await runAutopilot(positionals[0], values);

@@ -77,7 +77,9 @@ test('hours cap uses the range of today log timestamps and fires immediately on 
   const result = await f.call('post', { summary: 'second', progress: 20 }, { now: new Date(NOW.getTime() + 3_600_000) });
   assert.equal(result.status, 'paused');
   assert.equal(result.watchdog.reason, 'daily_hours_cap');
-  assert.match(f.sent[0], /\[autopilot@test-pc\] 異常停止: daily_hours_cap/);
+  assert.match(f.sent[0], /⚠️ 止まりました: test/);
+  assert.match(f.sent[0], /今日の作業時間の上限になりました。明日また続けます。/);
+  assert.doesNotMatch(f.sent[0], /daily_hours_cap/);
 });
 
 test('consecutiveNoop resets on progress, unchanged progress is noop, watchdog only notifies on transition', async (t) => {
@@ -94,7 +96,9 @@ test('consecutiveNoop resets on progress, unchanged progress is noop, watchdog o
   const fired = await f.call('post', { summary: 'blocked', progress: 10 });
   assert.deepEqual(fired.watchdog, { reason: 'noop_streak' });
   await f.call('pre');
-  assert.equal(f.sent.filter((s) => s.includes('異常停止')).length, 1);
+  assert.equal(f.sent.filter((s) => s.includes('止まりました')).length, 1);
+  assert.match(f.sent[0], /3回続けて進みませんでした。いったん止めています。/);
+  assert.doesNotMatch(f.sent[0], /noop_streak/);
   assert.equal((await f.call('resume')).status, 'running');
   assert.equal((await f.call('status')).state.consecutiveNoop, 0);
 });
@@ -174,8 +178,9 @@ test('running pre/post and day rollover never send progress DMs; logs retain wor
 test('done is durable, notifies once, and handoff contains the seven session-close headings', async (t) => {
   const f = discord(t);
   await f.call('start', { objective: 'test', done: 'pass tests' });
-  assert.equal((await f.call('post', { summary: 'verified', progress: 100 })).status, 'done');
-  assert.match(f.sent[0], /\[autopilot@test-pc\] 完了/);
+  assert.equal((await f.call('post', { summary: 'verified', progress: 100, evidence: 'テストが全部通った' })).status, 'done');
+  assert.match(f.sent[0], /✅ 終わりました: test/);
+  assert.match(f.sent[0], /確かめたこと: テストが全部通った/);
   assert.equal((await f.call('post', { summary: 'duplicate', progress: 100 })).error, 'not_running');
   assert.equal((await f.call('resume')).error, 'already_done');
   f.channels.dm.push(f.message('continue', 1));
@@ -237,7 +242,7 @@ test('CLI smoke with HOME and AUTOPILOT_HOME isolated; stdout always JSON and ex
 test('objective change resets progress baseline but preserves daily and lifetime budgets', async (t) => {
   const f = discord(t);
   await f.call('start', { objective: 'first' });
-  await f.call('post', { summary: 'complete first', progress: 100 });
+  await f.call('post', { summary: 'complete first', progress: 100, evidence: '完了を確認' });
   f.channels.dm.push(f.message('目的変更: second', 1));
   const pre = await f.call('pre');
   assert.equal(pre.verdict, 'run');
@@ -266,7 +271,7 @@ test('done pre replenishes in priority order, skips human work and previous obje
   const asked = [];
   const f = discord(t, { askImpl: async (candidate) => { asked.push(candidate); return candidate.objective === '電話する' ? 'No' : 'Yes'; } });
   await f.call('start', { objective: '前の目的' });
-  await f.call('post', { summary: 'verified', progress: 100 });
+  await f.call('post', { summary: 'verified', progress: 100, evidence: '完了を確認' });
   f.sent.length = 0;
   candidates(f, '## 明日の推奨アクション（今日）\n1. 前の目的\n2. 電話する\n   - first_step: 顧客へ電話\n3. テスト修正\n   - first_step: テストを実行\n4. 後回し\n');
   const pre = await f.call('pre');
@@ -278,7 +283,7 @@ test('done pre replenishes in priority order, skips human work and previous obje
   assert.match(asked[0].context, /顧客へ電話/);
   assert.deepEqual(pre.recentLog, []);
   await f.call('pre');
-  assert.deepEqual(f.sent, ['次の目的: テスト修正（止めるなら『止めて』と返信）']);
+  assert.deepEqual(f.sent, ['▶ 次はこれをやります: テスト修正\nやめてほしいときは「止めて」と返信してください。（test-pc）']);
   const state = (await f.call('status')).state;
   assert.equal(state.objectiveHistory.at(-1).objective, '前の目的');
   assert.equal(state.iterationsToday, 1);
@@ -298,7 +303,7 @@ test('never-started pre starts a candidate with mocked classifier and notifier',
 test('no eligible candidates leaves absent/done state and files unchanged, without DM', async (t) => {
   for (const done of [false, true]) {
     const f = discord(t, { askImpl: async () => 'No' });
-    if (done) { await f.call('start', { objective: 'previous' }); await f.call('post', { summary: 'verified', progress: 100 }); }
+    if (done) { await f.call('start', { objective: 'previous' }); await f.call('post', { summary: 'verified', progress: 100, evidence: '完了を確認' }); }
     f.sent.length = 0;
     for (const body of ['', '## 別の節\n1. テスト修正', '## 推奨アクション\n1. ピック作業\n']) {
       candidates(f, body);
@@ -317,7 +322,7 @@ test('replenishment preserves daily, time and lifetime caps', async (t) => {
     await f.call('start', { objective: 'first', [flag]: limit });
     if (flag === 'max-hours-per-day') await f.call('post', { summary: 'start work', progress: 10 });
     const extra = { now: new Date(NOW.getTime() + 3_600_000) };
-    await f.call('post', { summary: 'verified', progress: 100 }, extra);
+    await f.call('post', { summary: 'verified', progress: 100, evidence: '完了を確認' }, extra);
     candidates(f, '## 推奨アクション\n1. second');
     const pre = await f.call('pre', {}, extra);
     assert.equal(pre.reason, reason);
@@ -330,7 +335,7 @@ test('replenishment preserves daily, time and lifetime caps', async (t) => {
 test('stop controls take precedence over refill and terminal history survives start', async (t) => {
   const f = discord(t, { askImpl: async () => { throw new Error('must not classify'); } });
   await f.call('start', { objective: 'first' });
-  await f.call('post', { summary: 'verified', progress: 100 });
+  await f.call('post', { summary: 'verified', progress: 100, evidence: '完了を確認' });
   candidates(f, '## 推奨アクション\n1. second');
   f.channels.dm.push(f.message('止めて', 1));
   assert.equal((await f.call('pre')).verdict, 'stop');
@@ -347,7 +352,8 @@ test('one decision DM accepts yes/no only while pending and does not repeat', as
     await f.call('pause', { question: 'この変更を適用しますか？' });
     await f.call('pre');
     assert.equal(f.sent.length, 1);
-    assert.equal(f.sent[0].split('\n').length, 3);
+    assert.equal(f.sent[0].split('\n').length, 2);
+    assert.match(f.sent[0], /^❓ 決めてほしいこと: この変更を適用しますか？/);
     f.channels.dm.push(f.message(answer, 1));
     const pre = await f.call('pre');
     assert.equal(pre.verdict, verdict);
@@ -365,3 +371,119 @@ test('classifier errors or uncertain answers never authorize work', async (t) =>
     assert.deepEqual(f.sent, []);
   }
 });
+
+test('progress 100 without evidence or unverified is rejected and does not change state', async (t) => {
+  const f = discord(t);
+  await f.call('start', { objective: 'test' });
+  const before = fs.readFileSync(f.paths.state, 'utf8');
+  assert.equal((await f.call('post', { summary: 'done', progress: 100 })).error, 'evidence_required');
+  assert.equal(fs.readFileSync(f.paths.state, 'utf8'), before);
+  assert.equal((await f.call('status')).state.status, 'running');
+  assert.equal((await f.call('status')).state.totalIterations, 0);
+  assert.deepEqual(f.sent, []);
+});
+
+test('progress 100 with unverified completes and registers a watch', async (t) => {
+  const f = discord(t);
+  await f.call('start', { objective: '返信を送る' });
+  const post = await f.call('post', { summary: 'sent', progress: 100, unverified: '相手に届いたか' });
+  assert.equal(post.status, 'done');
+  assert.equal(post.watch, 'w1');
+  const state = (await f.call('status')).state;
+  assert.equal(state.watches.length, 1);
+  assert.deepEqual({ ...state.watches[0], since: undefined }, { id: 'w1', objective: '返信を送る', unverified: '相手に届いたか', evidence: '', since: undefined, lastCheckAt: null, checks: 0, ng: 0 });
+  assert.match(f.sent[0], /🟡 だいたい終わりました: 返信を送る/);
+  assert.match(f.sent[0], /まだ確かめられていないこと: 相手に届いたか/);
+  assert.match(f.sent[0], /毎日たしかめて、結果をまた知らせます。/);
+});
+
+test('watch ok removes the watch and notifies once', async (t) => {
+  const f = discord(t);
+  await f.call('start', { objective: '返信を送る' });
+  await f.call('post', { summary: 'sent', progress: 100, unverified: '相手に届いたか' });
+  f.sent.length = 0;
+  const result = await f.call('watch', { id: 'w1', result: 'ok', note: '相手から返事が来た' });
+  assert.equal(result.status, 'ok');
+  assert.equal((await f.call('status')).state.watches.length, 0);
+  assert.equal(f.sent.length, 1);
+  assert.match(f.sent[0], /✅ 確かめられました: 返信を送る/);
+  assert.match(f.sent[0], /相手から返事が来た/);
+});
+
+test('watch ng three times fails the check, notifies once and records history', async (t) => {
+  const f = discord(t);
+  await f.call('start', { objective: '返信を送る' });
+  await f.call('post', { summary: 'sent', progress: 100, unverified: '相手に届いたか' });
+  f.sent.length = 0;
+  assert.equal((await f.call('watch', { id: 'w1', result: 'ng', note: 'まだ届いていない' })).status, 'ng');
+  assert.equal((await f.call('watch', { id: 'w1', result: 'ng', note: 'まだ届いていない' })).status, 'ng');
+  assert.deepEqual(f.sent, []);
+  const third = await f.call('watch', { id: 'w1', result: 'ng', note: 'まだ届いていない' });
+  assert.equal(third.status, 'failed_check');
+  assert.equal((await f.call('status')).state.watches.length, 0);
+  assert.equal((await f.call('status')).state.objectiveHistory.at(-1).status, 'failed_check');
+  assert.equal(f.sent.length, 1);
+  assert.match(f.sent[0], /⚠️ うまくいっていません: 返信を送る/);
+  assert.match(f.sent[0], /わかったこと: まだ届いていない/);
+  assert.match(f.sent[0], /直すなら「直して」、やめるなら「止めて」と返信してください。/);
+});
+
+test('watch expires after seven days and notifies once', async (t) => {
+  const f = discord(t);
+  await f.call('start', { objective: '返信を送る' });
+  await f.call('post', { summary: 'sent', progress: 100, unverified: '相手に届いたか' });
+  f.sent.length = 0;
+  const later = { now: new Date(NOW.getTime() + 8 * 24 * 3600 * 1000) };
+  const result = await f.call('watch', { id: 'w1', result: 'ng', note: 'まだ届いていない' }, later);
+  assert.equal(result.status, 'failed_check');
+  assert.equal((await f.call('status', {}, later)).state.watches.length, 0);
+  assert.equal(f.sent.length, 1);
+  assert.match(f.sent[0], /⚠️ うまくいっていません: 返信を送る/);
+});
+
+test('watch validates input and reports unknown ids', async (t) => {
+  const f = discord(t);
+  await f.call('start', { objective: 'test' });
+  assert.equal((await f.call('watch', { id: '', result: 'ok', note: 'x' })).error, 'invalid_watch');
+  assert.equal((await f.call('watch', { id: 'w1', result: 'maybe', note: 'x' })).error, 'invalid_watch');
+  assert.equal((await f.call('watch', { id: 'w1', result: 'ok', note: '' })).error, 'invalid_watch');
+  assert.equal((await f.call('watch', { id: 'w9', result: 'ok', note: 'x' })).error, 'watch_not_found');
+});
+
+test('watchesDue lists never-checked and stale watches only', async (t) => {
+  const f = discord(t);
+  await f.call('start', { objective: '返信を送る' });
+  await f.call('post', { summary: 'sent', progress: 100, unverified: '相手に届いたか' });
+  const pre = await f.call('pre');
+  assert.equal(pre.watchesDue.length, 1);
+  assert.equal(pre.watchesDue[0].id, 'w1');
+  const soon = { now: new Date(NOW.getTime() + 3600 * 1000) };
+  assert.equal((await f.call('pre', {}, soon)).watchesDue.length, 0);
+  const nextDay = { now: new Date(NOW.getTime() + 25 * 3600 * 1000) };
+  assert.equal((await f.call('pre', {}, nextDay)).watchesDue.length, 1);
+});
+
+test('Discord notices never leak internal codes, commands or ids', async (t) => {
+  const f = discord(t);
+  await f.call('start', { objective: '[P1タスク] 返信を送る' });
+  await f.call('post', { summary: 'sent', progress: 100, unverified: '相手に届いたか' });
+  await f.call('watch', { id: 'w1', result: 'ng', note: 'まだ届いていない' });
+  await f.call('watch', { id: 'w1', result: 'ng', note: 'まだ届いていない' });
+  await f.call('watch', { id: 'w1', result: 'ng', note: 'まだ届いていない' });
+  await f.call('start', { objective: 'second', 'max-noop': 1 });
+  await f.call('post', { summary: 'blocked', progress: 0, noop: true });
+  await f.call('post', { summary: 'blocked', progress: 0, noop: true });
+  await f.call('pause', { question: 'この変更を適用しますか？' });
+  assert.ok(f.sent.length >= 4);
+  for (const text of f.sent) {
+    assert.doesNotMatch(text, /_cap|runner_error|noop|P1|gh |FB-fb-|daily_iter|daily_hours|total_cap/);
+    assert.doesNotMatch(text, /\[P1タスク\]/);
+    assert.ok(text.split('\n').length <= 4, text);
+  }
+});
+
+test('直して resumes like 続けて', () => {
+  assert.equal(parseControl('直して').command, 'run');
+  assert.equal(parseControl('直して！').command, 'run');
+});
+

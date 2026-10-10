@@ -249,8 +249,16 @@ export async function runOnce(options = {}) {
     };
     const stopped = await emergency();
     if (!stopped) {
-      const search = await api(`/guilds/${guildId}/messages/search?mentions=${kimId}&limit=25`);
-      if (!Array.isArray(search.messages)) throw new Error('Discord search response invalid');
+      // author_type=user: bot posts mentioning kim used to fill the 25-result window and hide humans.
+      const pages = [];
+      for (let offset = 0; offset < 125; offset += 25) {
+        const page = await api(`/guilds/${guildId}/messages/search?mentions=${kimId}&author_type=user&limit=25${offset ? `&offset=${offset}` : ''}`);
+        if (!Array.isArray(page.messages)) throw new Error('Discord search response invalid');
+        pages.push(...page.messages);
+        const hits = page.messages.flat().filter(m => m.hit !== false);
+        if (page.messages.length < 25 || hits.some(m => Date.parse(m.timestamp) < state.baselineTs)) break;
+      }
+      const search = { messages: pages };
       // Search results carry context neighbours without `hit`; only answer posts that actually mention kim.
       const mentionsKim = m => m.hit === true || m.mentions?.some(x => x.id === kimId) || new RegExp(`<@!?${kimId}>`).test(m.content || '');
       const mentions = [...new Map(search.messages.flat().filter(m => m.hit !== false && mentionsKim(m)).map(m => [m.id, m])).values()];

@@ -22,7 +22,7 @@ test('runner does not invoke Claude when unstarted, paused, stopped, or done', a
   await runAutopilot('stop', {}, opts);
   assert.equal((await runOnce(opts)).skipped, 'manual_stop');
   await runAutopilot('resume', {}, opts);
-  await runAutopilot('post', { summary: 'complete', progress: 100 }, opts);
+  await runAutopilot('post', { summary: 'complete', progress: 100, evidence: '結果を確認' }, opts);
   assert.equal((await runOnce(opts)).skipped, 'done');
 });
 
@@ -98,7 +98,8 @@ test('runner failures pause and send one short runner_error DM', async (t) => {
     await runOnce(opts);
     assert.equal((await runAutopilot('status', {}, opts)).state.pausedReason, 'runner_error');
     assert.equal(sent.length, 1);
-    assert.match(sent[0], /異常停止: runner_error/);
+    assert.match(sent[0], /エラーで止まりました/);
+    assert.doesNotMatch(sent[0], /runner_error/);
     assert.ok(sent[0].split('\n').length <= 3);
   }
 });

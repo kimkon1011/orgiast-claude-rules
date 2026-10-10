@@ -407,3 +407,14 @@ test('dry-runは1MB超ログも時刻も変更しない', async t => {
     assert.equal(fs.readFileSync(f.file(name), 'utf8'), 'x'.repeat(1_048_577));
   }
 });
+
+test('メンション検索は人間の投稿だけを対象にし、25件ちょうどなら次のページも取る', async t => {
+  const many = Array.from({ length: 25 }, (_, i) => message({ id: String(1000 + i), content: `報告です <@${KIM}>` }));
+  const f = fixture(t, { messages: many, llmResult: { needs_reply: false, needs_kim_decision: false, answer: '', confidence: 0.9 } });
+  await runOnce(f.options);
+  const searches = f.calls.filter(c => c.path.endsWith('/messages/search'));
+  assert.ok(searches.length >= 2);
+  assert.equal(searches[0].query.get('author_type'), 'user');
+  assert.equal(searches[0].query.get('offset'), null);
+  assert.equal(searches[1].query.get('offset'), '25');
+});

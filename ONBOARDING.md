@@ -211,13 +211,17 @@ URL規約を守り、内部IDに名前を併記し、初心者向けの完全な
 
 **1.5.0 URL を出すときは「どのアカウントで開くか」を必ず併記する（kim 2026-10-04 厳命・全PC全アカウント・絶対）**
 
-リンクを提示するときは、**そのURLをどのアカウントでログインして開くのか**を必ず同じ場所に書く。ブラウザの既定アカウントは人ごとに違い、別アカウント所有のリソースは 404／アクセス権エラーになるか、**気付かず別アカウントのまま操作して意図しない結果になる**。形式は `<URL>（**<アカウント名>** で開く）`。既定アカウントと違う場合は「シークレットウィンドウで開く」も併記する。Google Workspace は 1.5 の規約（`/a/orgiast.jp/`・Drive は `?authuser=`）で吸収されるが、**GitHub / Vercel / npm / X / Discord / Supabase など authuser 相当の仕組みが無いサービスは必ず明記**する。デスクトップのショートカットを配る場合もファイル名か本文にアカウント名を入れる。あわせて**選択肢の既定値が意図と違う箇所**も書く（実害 2026-10-04: GitHub の Add people で Role を選ばなかったため admin 依頼が write で発行された／settings/access をどのアカウントで開くか書かず kim の手が止まった）。この規約は stop gate `tools/url-account-gate.mjs` が全PCで強制する（理由コード URL-ACCOUNT、例外は `[URL-ACCOUNT-OK]`）。
+リンクを提示するときは、**そのURLをどのアカウントでログインして開くのか**を必ず同じ場所に書く。ブラウザの既定アカウントは人ごとに違い、別アカウント所有のリソースは 404／アクセス権エラーになるか、**気付かず別アカウントのまま操作して意図しない結果になる**。形式は `<URL>（**<アカウント名>** で開く）`。既定アカウントと違う場合は「シークレットウィンドウで開く」も併記する。Google Workspace は 1.5 の規約（全 Workspace で `authuser=開く人のメール`＋本文に同じメールを明記）で吸収されるが、**GitHub / Vercel / npm / X / Discord / Supabase など authuser 相当の仕組みが無いサービスは必ず明記**する。デスクトップのショートカットを配る場合もファイル名か本文にアカウント名を入れる。あわせて**選択肢の既定値が意図と違う箇所**も書く（実害 2026-10-04: GitHub の Add people で Role を選ばなかったため admin 依頼が write で発行された／settings/access をどのアカウントで開くか書かず kim の手が止まった）。この規約は stop gate `tools/url-account-gate.mjs` が全PCで強制する（理由コード URL-ACCOUNT、例外は `[URL-ACCOUNT-OK]`）。
 
-**1.5 Google Workspace URL は `/a/orgiast.jp/` を挟む**
+**1.5 Google Workspace URL は開くアカウントを URL と本文で指定**
 
-kim が読む Doc は `tools/gdoc-publish.mjs`（URL をハイパーリンク化・read-back 検証）で作る。Drive MCP の text/plain 直投は URL がリンク化されないので使わない。
+Workspace の URL は authuser=開く人のメール を付け、本文に開くアカウントを書く。自分宛はその Claude 環境の userEmail、他人宛は共有済みの相手メールを使い、特定個人をハードコードしない。既存クエリには &authuser= を追加し、#gid 等のフラグメントより前に置く。本文の同じ行か直前に「<メール> で開いてください」と書く。script.google.com の /home/ 系だけは素URL＋アカウント切替案内の例外を維持する。
 
-素URLは個人Gmailアカウントで開いて404/アクセス権エラーになる。Apps Script/Sheets/Docs/Slides/Formsは `/a/orgiast.jp/` を挟む。**Drive（file/folder）だけは `/a/` 非対応**なので `?authuser={運用者自身のorgiast.jpメール}` を付ける（他人に渡すリンクにはauthuser付けない→ファイル共有＋アカウント切替案内に切替）。特定個人メールをハードコードしない（配布物のため）。モバイルはURLよりドライブアプリ+ファイル名検索が確実。例外: `/home/...`系ページは素URL+アカウント切替案内。詳細・past cases: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/url-and-handoff-format.md`
+2026-10-10、nishi@orgiast.jp が `/a/orgiast.jp/` 形式の Doc を開けなかった。ブラウザの既定アカウントが別だとドメイン指定だけでは解決しないため、nishi の原文「リンクを出すときは必ずどのアカウントで開くかを明記して、ブラウザもそのアカウントで開くように設定して」に従い、URL と本文の両方で受け手を指定する。
+
+kim が読む Doc は `tools/gdoc-publish.mjs --authuser <開く人のメール>`（リンク化・read-back 検証）で作る。Drive MCP の text/plain 直投は URL がリンク化されないので使わない。
+
+詳細・URL 表: `rules-extracted/url-and-handoff-format.md`
 
 **URLはMarkdownリンク形式`[text](URL)`で書く**。生URL直後に句読点や文章を隙間なく続けるとクリック時に巻き込まれ404になる。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/url-and-handoff-format.md`
 
@@ -1155,7 +1159,7 @@ Driveの移動・知識の正本管理を守り、社内アプリには投稿窓
 
 **ユーザー・他人に渡す成果物（PDF/画像/文書/表/ZIP 等）はすべて Google Drive にアップし、リンクを貼って渡す。** ローカルパス（Desktop 等）や SendUserFile・チャット添付だけで渡したら未完了（スマホ併用で開けず、他人にも渡せないため）。
 **置き場:** 案件に属するデータは**その案件の制作フォルダ**（Drive で `制作フォルダ`・案件コード `C0040` 等・顧客名で検索して特定する）。案件外のものは「作業ファイル」直下。
-リンクは URL 規約に従う（自分用は `?authuser=<自分のorgiast.jpメール>`、他人宛は共有設定とアカウント切替の案内を付ける）。アップロード経路は Drive MCP か `node tools/drive-upload.mjs --file <path> --folder <folderId>`。
+リンクは URL 規約に従う（自分宛・他人宛とも `authuser=<開く人のメール>` を付け、本文に「<メール> で開いてください」と書く。他人宛は事前に共有する）。アップロード経路は Drive MCP か `node tools/drive-upload.mjs --file <path> --folder <folderId>`。
 **サブエージェント／Codex に生成を委ねるときも、指示に保存先＝Drive の該当フォルダを書く**（Desktop を指定しない）。
 機械化: stop hook の doc-link-drive-guard（裸パス検出）と user-burden-gate（Desktop ファイルパスは完成品として受理しない）。
 
@@ -1168,7 +1172,7 @@ Claude新規作成は標準フォルダ「作業ファイル」直下（既存�
 - Drive MCPではタブ追加ができないためSheets APIを直接使う。`tools/lib/drive-auth.mjs` の `getDriveToken({ scope: 'https://www.googleapis.com/auth/spreadsheets' })` で認証し、`POST https://sheets.googleapis.com/v4/spreadsheets/{spreadsheetId}:batchUpdate` の `addSheet` で追加する。同名タブがあればスキップして冪等にする。
 - `PUT https://sheets.googleapis.com/v4/spreadsheets/{spreadsheetId}/values/'タブ名'!A1?valueInputOption=USER_ENTERED` で書き、`GET https://sheets.googleapis.com/v4/spreadsheets/{spreadsheetId}/values/'タブ名'!A1` 等で書き込み範囲をread-backしてから報告する。
 - スクリプトはscratchpadのファイルにして `node <file>` で実行する。Windowsの絶対パスimportには `file:///` を付け、`ERR_UNSUPPORTED_ESM_URL_SCHEME` を避ける。
-- 書き込み後に `GET https://sheets.googleapis.com/v4/spreadsheets/{spreadsheetId}?fields=sheets.properties` でgidを取得し、`https://docs.google.com/a/orgiast.jp/spreadsheets/d/{ID}/edit#gid={gid}` の該当タブ直リンクを渡す。
+- 書き込み後に `GET https://sheets.googleapis.com/v4/spreadsheets/{spreadsheetId}?fields=sheets.properties` でgidを取得し、`https://docs.google.com/spreadsheets/d/{ID}/edit?authuser={開く人のメール}#gid={gid}` の該当タブ直リンクを渡す。
 
 **実害（2026-09-22）**: 音響機材レンタルの打診先を別ファイルに作ろうとして差し戻された。kimが同じシートへ回答・判断・打診結果を記入し、制作ディレクターやアシスタントも参照する。1ファイルへ集約して検索・権限設定・行き来を減らし、過去の打診先・単価・断られた理由を再利用する。
 

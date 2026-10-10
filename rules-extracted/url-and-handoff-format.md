@@ -4,32 +4,30 @@ ONBOARDING.compressed.md §1.5 系（1.5, 1.5.1, 1.5.1.1, 1.5.2, 1.5.2.1, 1.5.2-
 
 > 編集メモ: 原本 ONBOARDING.md の §1.5.2 以降には同一ブロック（Discord 権限設定の NG/OK 例・スクショルール・完了判定表・過去事例・1.5.2-GAS 全文）が丸ごと2回連続で存在していた（コピペ事故と思われる）。情報量はゼロ差分のため、本ファイルでは1回のみ記載し重複を排除している（削除したのは重複コピーのみで、ユニークな内容は削除していない）。
 
-## 1.5 Google Workspace URL は `/a/orgiast.jp/` を挟む
+## 1.5 Google Workspace URL は開くアカウントを URL と本文の両方で指定
 
-kim が読む Doc は `tools/gdoc-publish.mjs`（URL をハイパーリンク化・read-back 検証）で作る。Drive MCP の text/plain 直投は URL がリンク化されないので使わない。
+Workspace の URL は authuser=開く人のメール を付け、本文に開くアカウントを書く。自分宛はその Claude 環境の userEmail、他人宛は共有済みの相手メールを使い、特定個人をハードコードしない。既存クエリには &authuser= を追加し、#gid 等のフラグメントより前に置く。本文の同じ行か直前に「<メール> で開いてください」と書く。script.google.com の /home/ 系だけは素URL＋アカウント切替案内の例外を維持する。
 
-オージャストメンバーの多くは Chrome デフォルトが個人 Gmail（@gmail.com）になっている。Apps Script / Sheets / Docs / Drive の URL を素の形（`https://script.google.com/d/...` / `https://docs.google.com/spreadsheets/d/...`）で渡すと、個人アカウントで開いてしまい「アクセス権が必要です」画面で詰まる。
+2026-10-10、nishi@orgiast.jp が `/a/orgiast.jp/` 形式の Doc を開けなかった。ブラウザの既定アカウントが別だとドメイン指定だけでは解決しないため、nishi の原文「リンクを出すときは必ずどのアカウントで開くかを明記して、ブラウザもそのアカウントで開くように設定して」に従い、URL と本文の両方で受け手を指定する。
 
-必ず `/a/orgiast.jp/` パスを挟んだ URL を渡す:
+`/a/orgiast.jp/` を使わない。authuser は権限付与ではないため、他人に渡す前に相手へ共有する。
 
-| サービス | NG（素のURL） | OK |
-|---|---|---|
-| Apps Script エディタ | `https://script.google.com/d/{ID}/edit` | `https://script.google.com/a/orgiast.jp/d/{ID}/edit` |
-| Apps Script マクロ | `https://script.google.com/macros/d/{ID}/...` | `https://script.google.com/a/macros/orgiast.jp/d/{ID}/...` |
-| Google Sheets | `https://docs.google.com/spreadsheets/d/{ID}/edit` | `https://docs.google.com/a/orgiast.jp/spreadsheets/d/{ID}/edit` |
-| Google Docs | `https://docs.google.com/document/d/{ID}/edit` | `https://docs.google.com/a/orgiast.jp/document/d/{ID}/edit` |
-| Drive file (view) | `https://drive.google.com/file/d/{ID}/view`（既定アカで404） / `/a/orgiast.jp/file/...`（パス無し404） | `https://drive.google.com/file/d/{ID}/view?authuser={運用者自身のメール}` |
-| Drive folder | `https://drive.google.com/drive/folders/{ID}`（既定アカで404） / `/a/orgiast.jp/drive/...`（パス無し404） | `https://drive.google.com/drive/folders/{ID}?authuser={運用者自身のメール}` |
+| サービス | URL（本文にも同じメールを明記） |
+|---|---|
+| Apps Script エディタ | `https://script.google.com/d/{ID}/edit?authuser={開く人のメール}` |
+| Apps Script マクロ | `https://script.google.com/macros/s/{ID}/exec?authuser={開く人のメール}` |
+| Sheets | `https://docs.google.com/spreadsheets/d/{ID}/edit?authuser={開く人のメール}` |
+| Docs | `https://docs.google.com/document/d/{ID}/edit?authuser={開く人のメール}` |
+| Slides | `https://docs.google.com/presentation/d/{ID}/edit?authuser={開く人のメール}` |
+| Forms | `https://docs.google.com/forms/d/{ID}/edit?authuser={開く人のメール}` |
+| Drive file | `https://drive.google.com/file/d/{ID}/view?authuser={開く人のメール}` |
+| Drive folder | `https://drive.google.com/drive/folders/{ID}?authuser={開く人のメール}` |
 
-⚠ Drive URL は `?authuser={運用者自身の orgiast.jp メール}` が必須（再発防止の確定策・2026-07-07）。`{運用者自身のメール}` = その Claude 環境の userEmail（kim 環境なら `kim@orgiast.jp`、seisaku-team 環境なら `seisaku-team@orgiast.jp`）。特定個人のメールをハードコードしない——このドキュメントは全社員に配布され、他人のアカウントを固定すると受け手が開けなくなる。過去に「素URLが正」「ドメイン共有すれば開ける」と2回直したがまた404が再発した。真因は二重で、authuser 明示だけが両方を同時に潰す:
-1. `drive.google.com` に `/a/{domain}/` パスは存在しない → `/a/orgiast.jp/drive/folders/` は生の404（`docs`/`script` ホストだけが `/a/` 対応）。
-2. 素URLはブラウザ既定アカウントで開く → orgiast.jp メンバーの Chrome 既定は個人Gmailが多い。自分のマイドライブ内（＝未共有の私物）フォルダは、既定=個人アカではアクセス権画面すら出ず生の404。
-→ 自分（運用者）が開く Drive リンクは `?authuser={自分の orgiast.jp メール}` を付ける（email でアカウント強制。未ログインなら追加を促す＝404にならない）。
-- 自分以外の人に渡す Drive リンクでは authuser を付けない（相手が開けない）→ ファイルを相手アカウントへ共有し、素URL＋「右上アバターで自分の orgiast.jp に切替」を併記。
-- モバイルは URL より Google ドライブアプリ＋ファイル名が最確実。Claude 側がアップロード済みを取り込む用途なら相手にリンクを踏ませず `search_files` で名前検索して取得（URL 不要）。
-- 実測: 2026-06-12 ブース制作 / 2026-07-06 AEO / 2026-07-07 expo-index いずれも `/a/` と素URL両方で404 → 自分の `?authuser=` で解消。
+例: 追記（nishi@orgiast.jp で開いてください）: https://docs.google.com/document/d/{ID}/edit?authuser=nishi@orgiast.jp
 
-例外: `script.google.com/home/usersettings` のような `/home/...` 系ページは `/a/orgiast.jp/` を入れると「ファイルを開くことができません」エラーになる。素のURLで案内し、ユーザーに「右上アバターから orgiast.jp アカウントに切替」と併記する。
+kim が読む Doc は `tools/gdoc-publish.mjs --authuser <開く人のメール>`（リンク化・read-back 検証）で作る。Drive MCP の text/plain 直投は URL がリンク化されないので使わない。
+
+モバイルではドライブアプリ＋ファイル名検索も案内できる。Claude が取り込む場合は search_files で取得する。
 
 ## 1.5.1 user 側のアクションが必要なものには毎回必ず URL を併記する (絶対ルール、2026-06-11 強化 / 2026-07-05 判断・確認系に拡張)
 
@@ -42,7 +40,7 @@ user に手作業を頼む全シーン、および user に確認・判断・承
 - 同じ会話で同じ URL を複数回貼ることになっても省略しない (毎回貼る)
 - 「Apps Script のエディタを開いて〜」「Vercel ダッシュボードで〜」のような場所だけ書く案内は禁止。URL を一次情報として扱う
 - URL を持っていない場合は「持っていないので教えてほしい」と明示する、または API/MCP で取得してから貼る
-- フォーマットは 1.5 に準拠 (`/a/orgiast.jp/` 必須など)
+- フォーマットは 1.5 に準拠 (authuser と本文のアカウント指定が必須)
 
 対象になる操作の例 (網羅ではない):
 - Apps Script エディタで関数を実行
@@ -66,7 +64,7 @@ user に手作業を頼む全シーン、および user に確認・判断・承
 ❌ Step 1: setupColumns を ▶ 実行 → OAuth 承認
    (URL なしで「実行してください」だけ書く)
 
-✅ Step 1: [GAS エディタ](https://script.google.com/a/orgiast.jp/d/{ID}/edit) を開く
+✅ Step 1: [GAS エディタ](https://script.google.com/d/{ID}/edit?authuser={開く人のメール}) を開く
    → 関数選択で setupColumns → ▶ 実行 → OAuth 承認
 ```
 
@@ -173,7 +171,7 @@ Why: Discord/Vercel/Supabase の UI は 複数項目を 一画面で同時設定
 
 Apps Script Web エディタの 関数選択プルダウンは、現在開いている .gs ファイル内の関数しか出さない（プロジェクト全体の関数が出るとは限らない）。`clasp push` で関数を追加しても、user が別のファイル（例: `task工数取得.gs`）を開いたままだとプルダウンに自分の追加関数が出ず、「実行する関数が無い」で詰まる。これを毎回防ぐため、GAS の ▶実行 依頼では 必ず次の順序で書く:
 
-1. 直リンク URL で GAS エディタを開く（`/a/orgiast.jp/` 形式）
+1. 直リンク URL で GAS エディタを開く（authuser=開く人のメール 付き形式）
 2. 左のファイル一覧で対象 .gs ファイルをクリックして開く（関数がどのファイルにあるか ファイル名を明示。例: 「左の一覧で `コード.gs` をクリック」）
 3. 上部の関数プルダウン（初期表示は別関数名のことが多い）を開いて 対象関数名を完全コピペで指定して選ぶ
 4. 「実行」→ 初回は OAuth 同意「許可」
@@ -189,8 +187,8 @@ Apps Script Web エディタの 関数選択プルダウンは、現在開いて
 素のファイルID/ファイル名だけを書かない。kim 明示要望「クリックですぐ開けないと逆にこちらに手間がかかる」。
 
 - ❌ 「ファイル `13CRscpB6Ks8HTsVvQYJJ66tKcFhyI3Mmpx7yTAzeiGI` を共有してください」 → user がURLを組み立てる/検索する手間が発生
-- ✅ 「[こちら](https://docs.google.com/a/orgiast.jp/spreadsheets/d/13CRscpB6Ks8HTsVvQYJJ66tKcFhyI3Mmpx7yTAzeiGI/edit) を共有してください」 → クリックで即開く
-- 対象が Drive file/folder/Doc/Sheet/Slide のどれであっても、ファイルID・ファイル名・パスを裸で提示するのは禁止。必ず 1.5 のURL形式(`/a/orgiast.jp/` 等)に整形したリンクにする
+- ✅ 「[こちら](https://docs.google.com/spreadsheets/d/13CRscpB6Ks8HTsVvQYJJ66tKcFhyI3Mmpx7yTAzeiGI/edit?authuser={開く人のメール}) を共有してください」 → クリックで即開く
+- 対象が Drive file/folder/Doc/Sheet/Slide のどれであっても、ファイルID・ファイル名・パスを裸で提示するのは禁止。必ず 1.5 のURL形式(authuser=開く人のメール 等)に整形したリンクにする
 - 共有依頼・確認依頼・「このファイルであってますか」等、ファイルに言及するあらゆる文脈に適用する(手作業依頼に限らない)
 
 ## 1.5.3 共有 config (DwD/IAM/DNS/Secrets/SaaS) を変更する手順を user に渡す前に「既存があるか」を必ず確認する (絶対ルール、2026-06-23 新設)

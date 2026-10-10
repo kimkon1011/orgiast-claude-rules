@@ -59,7 +59,7 @@ test('buildMultipartBody は親フォルダなしのメタデータも保持す�
 });
 
 test('docUrl は必ず orgiast.jp のアカウント指定を含む', () => {
-  assert.equal(docUrl('doc-id'), 'https://docs.google.com/a/orgiast.jp/document/d/doc-id/edit');
+  assert.equal(docUrl('doc-id', 'reader@example.com'), 'https://docs.google.com/document/d/doc-id/edit?authuser=reader%40example.com');
 });
 
 test('checkReadBack は先頭非空行を使い、見出し記号を除いて照合する', () => {

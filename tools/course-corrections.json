@@ -37,9 +37,8 @@
       "^https?://localhost(?::[0-9]+)?(?:[/?#]|$)",
       "^https?://github\\.com/[^/?#]+/[^/?#]+/pull/[0-9]+/?(?:[?#].*)?$",
       "^https?://claude\\.ai/artifact(?:[/?#]|$)",
-      "^https?://docs\\.google\\.com/a/orgiast\\.jp/",
-      "^https?://script\\.google\\.com/a/",
-      "^https?://drive\\.google\\.com/.*[?&]authuser="
+      "^https?://(?:docs|drive|sheets|slides|forms|script)\\.google\\.com/(?!a/)[^?#]*\\?(?:[^#]*&)?authuser=[\\w.+%-]+(?:@|%40)[\\w.-]+\\.[a-zA-Z]{2,}(?:[&#]|$)",
+      "^https?://script\\.google\\.com/home(?:/|$)"
     ],
     "promoteTo": "block",
     "promoteAfter": "2026-10-15",

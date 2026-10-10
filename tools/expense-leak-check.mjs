@@ -13,7 +13,7 @@ import { isEntry } from './is-entry.mjs';
 export const COMPANY_ID = 11975741;
 export const SPREADSHEET_ID = '1n4KyUN6iEGwj0Tg0boZjhZUDhCCiJovvgEaRBCT26gE';
 export const TAB = 'AI経費漏れチェック';
-export const SHEET_LINK = `https://docs.google.com/a/orgiast.jp/spreadsheets/d/${SPREADSHEET_ID}/edit`;
+export const SHEET_LINK = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/edit`;
 export const HEADER = ['検出日', '取引日', '口座', '利用先(内容)', '金額', '判定', '証跡の受信箱', '証跡メール件名', '証跡メール日付', '証跡リンク', '推定プロジェクトコード', 'freee wallet_txn id', '対応状況'];
 export const RULES = {
   alwaysPrivate: [
@@ -219,7 +219,7 @@ export function dmText(result) {
   const unknown = result.results.filter((r) => r.verdict === '不明(要確認)').slice(0, 10);
   const text = [`経費漏れチェック ${result.today}`, `候補総数 ${result.candidateTotal} / 今回 ${result.results.length} / 証跡あり ${result.results.filter((r) => r.evidence.length).length} / 不明 ${counts('不明(要確認)')} / 私用 ${counts('私用(自動)')} / 確認不要 ${counts('経費(確認不要)')} / 未完了 ${result.results.filter((r) => r.deferred).length}`,
     ...unknown.map((r) => `${r.date} ${r.description.replace(/\s+/g, ' ').slice(0, 60)} ${r.amount.toLocaleString('ja-JP')}円`),
-    SHEET_LINK, 'kim@orgiast.jp で開く'];
+    `${SHEET_LINK}?authuser=${encodeURIComponent('kim@orgiast.jp')}`, 'kim@orgiast.jp で開いてください'];
   if (result.yahooUnavailable) text.push('デスクトップ『ヤフオク再ログイン（ダブルクリック）』をお願いします');
   if (result.issues.length) text.push(`一部検索を完了できませんでした (${result.issues.length}件)。結果JSONを確認してください。`);
   return text.join('\n');

@@ -10,6 +10,7 @@
  *       Drive v3 files.update に Markdown を media アップロード → Google Doc に変換して上書き。
  *       依存パッケージなし（Node 18+ の fetch と標準 crypto で JWT を自己署名）。
  *
+ * --authuser <開く人のメール> を指定。他人宛は事前にその相手へ共有する。
  * 使い方:
  *   node <このファイル> --id <docId> --file <本文.md>
  *   node <このファイル> --id <docId> --file <本文.md> --dry     # 認証と権限だけ確認して書き込まない
@@ -23,6 +24,7 @@
  *   --subject <mail>  代理するユーザー（既定: kim@orgiast.jp）
  */
 
+import { workspaceUrl } from './lib/workspace-url.mjs';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import path from 'node:path';
@@ -108,6 +110,7 @@ if (!fs.existsSync(keyPath)) {
 const key = JSON.parse(fs.readFileSync(keyPath, 'utf8'));
 const subject = args.subject || DEFAULT_SUBJECT;
 
+const authuser = args.authuser || args.subject || process.env.GOOGLE_IMPERSONATE;
 const token = await getAccessToken(key, subject);
 console.log(`auth OK (sa=${key.client_email} → ${subject})`);
 
@@ -146,6 +149,7 @@ if (!args.file) {
   console.error('--file <本文.md> は必須です（--check / --dry を除く）。');
   process.exit(2);
 }
+const outputUrl = workspaceUrl(`https://docs.google.com/document/d/${docId}/edit`, authuser);
 const md = fs.readFileSync(path.resolve(args.file), 'utf8');
 
 await api(
@@ -163,5 +167,5 @@ const ok = firstLine ? after.includes(firstLine.slice(0, 30)) : after.length > 0
 
 console.log(`updated: ${meta.name}`);
 console.log(`read-back: ${after.length} 字 / 先頭行の一致 = ${ok ? 'OK' : 'NG'}`);
-console.log(`https://docs.google.com/a/orgiast.jp/document/d/${docId}/edit`);
+console.log(`${authuser} で開いてください: ${outputUrl}`);
 if (!ok) process.exit(1);

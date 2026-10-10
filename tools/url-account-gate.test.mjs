@@ -46,11 +46,11 @@ test('管理パス・サービス限定パス', () => {
 });
 
 test('Workspace は明示アカウントのある URL のみ免除', () => {
-  for (const host of ['docs.google.com', 'drive.google.com', 'sheets.google.com', 'script.google.com']) {
+  for (const host of ['docs.google.com', 'drive.google.com', 'sheets.google.com', 'script.google.com', 'slides.google.com', 'forms.google.com']) {
     const url = `https://${host}/document/d/123`;
     assert.deepEqual(judge(url).missing, [url]);
-    assert.equal(judge(`${url}?authuser=1`).triggered, false);
-    assert.equal(judge(`https://${host}/a/orgiast.jp/document/d/123`).triggered, false);
+    assert.deepEqual(judge(`${url}?authuser=1`).missing, [`${url}?authuser=1`]);
+    assert.equal(judge(`https://${host}/a/orgiast.jp/document/d/123`).missing.length, 1);
     assert.deepEqual(judge(`${url}?q=authuser=1`).missing, [`${url}?q=authuser=1`]);
   }
 });
@@ -128,4 +128,33 @@ test('runner に登録され、アカウント追記で当該理由が消える'
     assert.equal((output.reason || '').includes('[URL-ACCOUNT]'), blocked);
     if (blocked) assert.equal(output.decision, 'block');
   }
+});
+
+for (const [label, account] of [['自分宛', 'operator@example.com'], ['相手宛', 'recipient@example.com']]) {
+  test(`Workspace 合格: ${label}`, () => {
+    const url = `https://docs.google.com/document/d/ID/edit?usp=sharing&authuser=${encodeURIComponent(account)}#heading=h`;
+    assert.deepEqual(judge(`${account} で開いてください\n${url}`).missing, []);
+    assert.deepEqual(judge(`${url}（${account} で開いてください）`).missing, []);
+  });
+}
+for (const [label, text] of [
+  ['ドメインパスのみ', 'a@example.com で開いてください https://docs.google.com/a/orgiast.jp/document/d/ID/edit'],
+  ['本文なし', 'https://docs.google.com/document/d/ID/edit?authuser=a@example.com'],
+  ['メール不一致', 'b@example.com で開いてください https://docs.google.com/document/d/ID/edit?authuser=a@example.com'],
+  ['他URL内のメール', 'https://docs.google.com/document/d/ID/edit?authuser=a@example.com https://example.com/?email=a@example.com'],
+  ['離れた全体宣言', '以下の URL はすべて a@example.com で開く\n\nhttps://docs.google.com/document/d/ID/edit?authuser=a@example.com'],
+  ['重複authuser', 'a@example.com で開いてください https://docs.google.com/document/d/ID/edit?authuser=a@example.com&authuser=b@example.com'],
+  ['部分一致', 'other-a@example.com で開いてください https://docs.google.com/document/d/ID/edit?authuser=a@example.com'],
+]) test(`Workspace 不合格: ${label}`, () => assert.ok(judge(text).missing.length));
+test('script /home/ 例外と境界', () => {
+  assert.equal(judge('https://script.google.com/home/usersettings').triggered, false);
+  assert.ok(judge('https://script.google.com/homeother').missing.length);
+});
+
+test('Workspace は前後1行に限定し、旧パスに authuser を足しても拒否する', () => {
+  const url = 'https://docs.google.com/document/d/ID/edit?authuser=reader%40example.com';
+  assert.deepEqual(judge(`${url}\nreader@example.com で開いてください`).missing, []);
+  assert.deepEqual(judge(`${url}\n\nreader@example.com で開いてください`).missing, [url]);
+  const legacy = url.replace('/document/', '/a/orgiast.jp/document/');
+  assert.deepEqual(judge(`${legacy} reader@example.com で開いてください`).missing, [legacy]);
 });

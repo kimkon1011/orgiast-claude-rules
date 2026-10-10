@@ -69,7 +69,7 @@ test('tier A のメッセージは過去参照を指摘する', () => {
 const REAL_VIOLATION_DOC_GUIDANCE = `この5人は「再実行」のお願いです。Doc の中身は変えていないので、前と同じ1行を貼り直すだけで修正版が入ります。そのまま送れる文面：
 
 AI設定の配布に不具合があり、8/17〜18 に設定した方のPCへ最新版が届いていませんでした。お手数ですが、前回と同じコマンドをもう一度 PowerShell に貼って Enter してください（新しいコマンドはありません）。
-https://docs.google.com/a/orgiast.jp/document/d/1LbkbWZKsbzjucjAG1kzdDnmeYjz1BWgZiLeTWSIvNyw/edit`;
+https://docs.google.com/document/d/1LbkbWZKsbzjucjAG1kzdDnmeYjz1BWgZiLeTWSIvNyw/edit`;
 
 const REAL_VIOLATION_FIX_REPORT = `直りました。リモートPCで同じ1行をもう一度貼れば通ります。
 
@@ -100,7 +100,7 @@ test('言い切り形の依頼(〜すれば通ります)も依頼として扱う
 
 test('依頼ブロック内に URL とコマンドがあれば違反にしない', () => {
   const text = `下のコマンドを PowerShell に貼って Enter してください。
-対象: https://docs.google.com/a/orgiast.jp/document/d/1LbkbW/edit
+対象: https://docs.google.com/document/d/1LbkbW/edit
 \`\`\`
 irm 'https://example.com/install.ps1' -OutFile "$env:TEMP\\i.ps1"
 \`\`\``;

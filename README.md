@@ -38,7 +38,7 @@ GitHub にログイン済みの Claude Code で:
 
 各自の `~/.claude/CLAUDE.md` に最低限:
 
-- Google Workspace URL は `/a/orgiast.jp/` を必ず挟む（ONBOARDING 参照）
+- Google Workspace URL は authuser=開く人のメール を付け、本文に開くアカウントを書く（ONBOARDING 参照）
 - プロジェクト CLAUDE.md 冒頭に ONBOARDING.md への参照を1行入れる
 
 ## 既存PCへの同期と配置確認

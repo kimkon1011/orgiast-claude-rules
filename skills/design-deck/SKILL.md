@@ -86,7 +86,7 @@ node deck-hybrid/preview.mjs
 
 ## 7. PDF と Drive
 
-`build.mjs` は既存 `html-to-pdf.mjs` を呼び PDF 化する。完成 PDF を既存の Drive アップロード経路で保存する。Drive に同名の既存 file ID がある場合は新規作成せず PATCH して URL を不変にする。kim へ渡す URL には `?authuser=kim@orgiast.jp` を付ける。
+`build.mjs` は既存 `html-to-pdf.mjs` を呼び PDF 化する。完成 PDF を既存の Drive アップロード経路で保存する。Drive に同名の既存 file ID がある場合は新規作成せず PATCH して URL を不変にする。渡す URL には `authuser=<開く人のメール>` を付け、本文に「<メール> で開いてください」を書く。
 
 ## 8. 修正を正しい担当へ戻す
 

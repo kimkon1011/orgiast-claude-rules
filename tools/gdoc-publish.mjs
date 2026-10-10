@@ -2,10 +2,12 @@
 /**
  * kim 向け Doc を作成/同一 ID で置換し、リンクを Docs API から読み戻して検証する。
  * node tools/gdoc-publish.mjs --title "題名" --file 本文.md [--folder ID] [--update ID]
+ * --authuser <開く人のメール> は必須。他人宛は事前にその相手へ共有する。
  * 認証は lib/drive-auth.mjs の既存 DWD 鍵 (GOOGLE_SA_KEY) と drive scope を再利用。
  * 本文は ■ / 1. 等の通常テキスト。Markdown の見出し・リンク・太字・コードは表示文字に変換。
  * --update は単一タブの本文を置換。folder 省略時は既存の配置を保持する。
  */
+import { workspaceUrl } from './lib/workspace-url.mjs';
 import { readFileSync } from 'node:fs';
 import { getDriveToken, driveApi } from './lib/drive-auth.mjs';
 import { isEntry } from './is-entry.mjs';
@@ -18,7 +20,7 @@ export function parseArgs(argv) {
   const args = {};
   for (let i = 0; i < argv.length; i += 2) {
     const flag = argv[i];
-    if (!['--title', '--file', '--folder', '--update'].includes(flag) ||
+    if (!['--title', '--file', '--folder', '--update', '--authuser'].includes(flag) ||
         !argv[i + 1]?.trim() || argv[i + 1].startsWith('--') || flag.slice(2) in args) {
       throw new Error(`不正な引数: ${flag}`);
     }
@@ -122,9 +124,10 @@ export function verifyReadBack(rendered, doc) {
   return { linkCount: rendered.links.length };
 }
 
-export async function publishDocument({ title, source, folder, update }, {
+export async function publishDocument({ title, source, folder, update, authuser }, {
   getToken = getDriveToken, api = driveApi,
 } = {}) {
+  workspaceUrl('https://docs.google.com/', authuser);
   const rendered = renderDocument(source);
   const token = await getToken({ impersonate: 'kim@orgiast.jp' });
   const request = async (url, method = 'GET', body) => (await api(token, url, {
@@ -159,7 +162,7 @@ export async function publishDocument({ title, source, folder, update }, {
   if (parent || update) await request(`${DRIVE}/${encodeURIComponent(id)}?${params}`, 'PATCH', { name: title });
   const after = await request(`${docEndpoint}?includeTabsContent=true`);
   const verified = verifyReadBack(rendered, after);
-  return { id, url: `https://docs.google.com/a/orgiast.jp/document/d/${id}/edit`, ...verified };
+  return { id, url: workspaceUrl(`https://docs.google.com/document/d/${id}/edit`, authuser), ...verified };
 }
 
 export async function main(argv = process.argv.slice(2), dependencies = {}) {
@@ -168,7 +171,7 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
     const args = parseArgs(argv);
     const result = await publishDocument({ ...args, source: readFileSync(args.file, 'utf8') }, publishDependencies);
     stderr(`read-back: 本文一致 / リンク ${result.linkCount}/${result.linkCount} 件 OK`);
-    stdout(result.url);
+    stdout(`${args.authuser} で開いてください: ${result.url}`);
     return 0;
   } catch (error) {
     stderr(`gdoc-publish: ${error.message}`);

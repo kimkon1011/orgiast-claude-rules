@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-export const GATE_CONTRACT = {"name": "doc-link-drive-guard", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "doc-link-drive-guard"}, {"kind": "command", "ref": "node tools/gdoc-publish.mjs --title <題名> --file <本文.md>"}, {"kind": "user-consent", "ref": "GOOGLE_SA_KEY / Google Docs connector", "reason": "文書作成権限は接続済みアカウントまたは組織管理者が認可するDWD鍵が必要。秘密鍵を全PCへ一括配布しない"}]};
+export const GATE_CONTRACT = {"name": "doc-link-drive-guard", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "doc-link-drive-guard"}, {"kind": "command", "ref": "node tools/gdoc-publish.mjs --title <題名> --file <本文.md> --authuser <開く人のメール>"}, {"kind": "user-consent", "ref": "GOOGLE_SA_KEY / Google Docs connector", "reason": "文書作成権限は接続済みアカウントまたは組織管理者が認可するDWD鍵が必要。秘密鍵を全PCへ一括配布しない"}]};
 import fs from 'node:fs';
 import { isEntry } from './is-entry.mjs';
 import { lastAssistantText, readStdin } from './transcript-tail.mjs';
@@ -79,7 +79,7 @@ export function formatBarePathMessage(hits) {
 export function formatViolationMessage(hits) {
   if (!Array.isArray(hits) || hits.length === 0) return '';
   const detected = hits.slice(0, 3).map(({ label, destination }) => `  - ${label} → ${destination}`).join('\n');
-  return `[DOC-LINK-DRIVE-GUARD] kim が読む文書へのローカルパスリンクを検出しました。\n\n検出したリンク（最大3件）:\n${detected}\n\nkim が読む文書は Google Drive に上げて docs.google.com/a/orgiast.jp/document/d/{ID}/edit の URL で渡してください。\n\n作成方法:\n  - Drive MCP create_file の parentId: 1uA0J3kPfL7O5t0Ro1jSfi2xDEJE-Y0si（標準フォルダ「作業ファイル」）\n  - contentMimeType: text/plain\n  - Markdown 記号（# - *）は Doc 変換でエスケープされて \\#\\# と表示されるため、本文はプレーン整形（■・など）で作る\n  - アップ後は read_file_content で read-back 検証する\n\n開発上の位置指定（ソース行を指す）なら path#L42 形式にするか、本文に [LOCAL-PATH-OK] を入れてください。`;
+  return `[DOC-LINK-DRIVE-GUARD] kim が読む文書へのローカルパスリンクを検出しました。\n\n検出したリンク（最大3件）:\n${detected}\n\nkim が読む文書は Google Drive に上げて docs.google.com/document/d/{ID}/edit?authuser={userEmail} の URL で渡してください。開く人に合わせた authuser（自分宛は userEmail、他人宛は共有済みの相手メール）を指定し、本文に「<メール> で開いてください」を書く。\n\n作成方法:\n  - Drive MCP create_file の parentId: 1uA0J3kPfL7O5t0Ro1jSfi2xDEJE-Y0si（標準フォルダ「作業ファイル」）\n  - contentMimeType: text/plain\n  - Markdown 記号（# - *）は Doc 変換でエスケープされて \\#\\# と表示されるため、本文はプレーン整形（■・など）で作る\n  - アップ後は read_file_content で read-back 検証する\n\n開発上の位置指定（ソース行を指す）なら path#L42 形式にするか、本文に [LOCAL-PATH-OK] を入れてください。`;
 }
 
 async function main() {

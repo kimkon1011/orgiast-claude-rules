@@ -465,6 +465,10 @@ const noFallback = args.includes('--no-fallback');
 // WSL 経路が使えず codex を起動できなかったか。true のときは再試行/昇格をせず、
 // 既存のフォールバック連鎖へそのまま渡す（2026-09-19）。
 let launchUnavailable = false;
+// codex が usage_limit クールダウン中で、代替バックエンド(deepseek/glm/gemini-cli)が使えるとき true。
+// 保留(exit 75)で終わらせず、codex 起動を飛ばしてフォールバック連鎖へ渡す（2026-10-10 実害: autopilot が
+// 4日先の cooldown で deferred を返され、監督が自分で実装する羽目になった）。
+let cooldownSkipCodex = false;
 const review = args.includes('--review');
 const noEscalate = args.includes('--no-escalate');
 const showBudget = args.includes('--budget');
@@ -609,7 +613,11 @@ function recordDeferred(gate) {
 }
 if (useCodex) {
   const gate = decideCodexGate({ home, origin });
-  if (gate.deferred) {
+  if (gate.deferred && gate.reason === 'codex_cooldown' && !noFallback && resolveFallbackBackends(home).length > 0) {
+    cooldownSkipCodex = true;
+    launchUnavailable = true;
+    console.error(`[codex-do] codex_cooldown（${new Date(gate.retryAt).toLocaleString()} まで）のため codex を起動せず代替バックエンドへ回します`);
+  } else if (gate.deferred) {
     recordDeferred(gate);
     console.error(`[codex-do] 保留: ${gate.reason}（${new Date(gate.retryAt).toLocaleString()} 以降に再試行）`);
     console.log(JSON.stringify(deferredPayload(gate, { origin, kind: taskKind })));
@@ -836,6 +844,9 @@ function isFastFail(result, elapsedSecs) {
 }
 
 async function executeCodex() {
+  if (cooldownSkipCodex) {
+    return { status: 3, outputChars: 0, output: '', stderr: 'codex_cooldown', timedOut: false, launched: false };
+  }
   const codexArgs = buildCodexExecArgs({ ...selectedLane, review });
   let result = null, attempts = 0, seconds = 0;
   for (let attempt = 1; attempt <= 2; attempt++) {

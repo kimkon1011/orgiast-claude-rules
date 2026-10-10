@@ -1,0 +1,10 @@
+{"t":"2026-10-09T13:16:31.881Z","provider":"gemini","model":"gemini-3.6-flash","in":200,"out":1640,"secs":27.051,"grounded":true}
+{"t":"2026-10-09T13:16:40.067Z","provider":"deepseek","model":"deepseek-chat","in":22819,"out":1746,"secs":0.617,"status":"ok","attempt":0,"failover":false}
+{"t":"2026-10-09T13:17:01.371Z","provider":"gemini","model":"gemini-3.6-flash","in":233,"out":1488,"secs":21.109,"grounded":true}
+{"t":"2026-10-09T13:17:15.514Z","provider":"deepseek","model":"deepseek-chat","in":12825,"out":3185,"secs":0.726,"status":"ok","attempt":0,"failover":false}
+{"t":"2026-10-09T13:17:34.286Z","provider":"gemini","model":"gemini-3.6-flash","in":199,"out":1215,"secs":18.584,"grounded":true}
+{"t":"2026-10-09T13:17:45.546Z","provider":"deepseek","model":"deepseek-chat","in":4901,"out":2751,"secs":0.421,"status":"ok","attempt":0,"failover":false}
+{"t":"2026-10-09T13:18:00.463Z","provider":"gemini","model":"gemini-3.6-flash","in":215,"out":992,"secs":14.324,"grounded":true}
+{"t":"2026-10-09T13:18:10.162Z","provider":"deepseek","model":"deepseek-chat","in":5094,"out":2305,"secs":0.661,"status":"ok","attempt":0,"failover":false}
+{"t":"2026-10-09T13:18:30.357Z","provider":"gemini","model":"gemini-3.6-flash","in":209,"out":1299,"secs":19.923,"grounded":true}
+{"t":"2026-10-09T13:18:47.587Z","provider":"deepseek","model":"deepseek-chat","in":14371,"out":3940,"secs":0.775,"status":"ok","attempt":0,"failover":false}

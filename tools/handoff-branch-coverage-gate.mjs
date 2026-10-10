@@ -1,3 +1,4 @@
+export const GATE_CONTRACT = {"name": "handoff-branch-coverage-gate", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "handoff-branch-coverage-gate"}]};
 import { latestAssistantText } from './lib/assistant-text.mjs';
 import { hasManualRequest as hasSharedManualRequest } from './manual-request-fullsteps-gate.mjs';
 import { isEntry } from './is-entry.mjs';

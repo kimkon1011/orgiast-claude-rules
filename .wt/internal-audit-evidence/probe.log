@@ -1,0 +1,167 @@
+freee token usable true
+partners 200 keys [
+  'id',
+  'code',
+  'company_id',
+  'name',
+  'update_date',
+  'available',
+  'shortcut1',
+  'shortcut2',
+  'org_code',
+  'country_code',
+  'long_name',
+  'name_kana',
+  'default_title',
+  'phone',
+  'contact_name',
+  'email',
+  'invoice_registration_number',
+  'qualified_invoice_issuer',
+  'payer_walletable_id',
+  'transfer_fee_handling_side',
+  'address_attributes',
+  'partner_bank_account_attributes'
+] bank [
+  'bank_name',
+  'bank_name_kana',
+  'bank_code',
+  'branch_name',
+  'branch_kana',
+  'branch_code',
+  'account_type',
+  'account_number',
+  'account_name',
+  'long_account_name'
+] payment []
+partner detail 200 [
+  'id',
+  'code',
+  'company_id',
+  'name',
+  'update_date',
+  'available',
+  'shortcut1',
+  'shortcut2',
+  'org_code',
+  'country_code',
+  'long_name',
+  'name_kana',
+  'default_title',
+  'phone',
+  'contact_name',
+  'email',
+  'invoice_registration_number',
+  'qualified_invoice_issuer',
+  'payer_walletable_id',
+  'transfer_fee_handling_side',
+  'address_attributes',
+  'partner_bank_account_attributes'
+] bank [
+  'bank_name',
+  'bank_name_kana',
+  'bank_code',
+  'branch_name',
+  'branch_kana',
+  'branch_code',
+  'account_type',
+  'account_number',
+  'account_name',
+  'long_account_name'
+]
+deals 200 keys [
+  'id',           'company_id',
+  'issue_date',   'due_date',
+  'amount',       'due_amount',
+  'type',         'partner_id',
+  'partner_code', 'ref_number',
+  'status',       'deal_origin_name',
+  'details',      'payments',
+  'receipts'
+] bank [] payment [
+  'id',
+  'date',
+  'from_walletable_type',
+  'from_walletable_id',
+  'amount',
+  'partner_id',
+  'partner_code',
+  'item_id',
+  'item_code',
+  'section_id',
+  'section_code',
+  'tag_ids'
+]
+wallet_txns 200 keys [
+  'id',
+  'company_id',
+  'amount',
+  'balance',
+  'description',
+  'due_amount',
+  'date',
+  'entry_side',
+  'walletable_type',
+  'walletable_id',
+  'status',
+  'rule_matched'
+] bank [] payment []
+walletables 200 keys [ 'id', 'name', 'bank_id', 'type', 'update_date' ] bank [] payment []
+account_items 200 keys [
+  'id',
+  'name',
+  'tax_code',
+  'shortcut',
+  'shortcut_num',
+  'account_category_id',
+  'corresponding_income_name',
+  'corresponding_expense_name',
+  'corresponding_income_id',
+  'corresponding_expense_id',
+  'group_name',
+  'group_id',
+  'default_tax_code',
+  'account_category',
+  'categories',
+  'available',
+  'walletable_id',
+  'update_date'
+] bank [] payment []
+drive 200 keys [ 'files' ] item keys [ 'permissions', 'id', 'name' ] permission keys [ 'id', 'type', 'emailAddress', 'role' ]
+gmail.readonly 200 keys [ 'messages', 'nextPageToken', 'resultSizeEstimate' ] item keys [ 'id', 'threadId' ] permission keys []
+admin.reports.audit.readonly unauthorized_client
+discord guilds/715211007307284530/messages/search 200 keys [
+  'analytics_id',
+  'messages',
+  'doing_deep_historical_index',
+  'total_results'
+]
+discord guilds/715211007307284530/channels 200 keys [
+  'id',
+  'type',
+  'flags',
+  'guild_id',
+  'name',
+  'parent_id',
+  'position',
+  'permission_overwrites'
+]
+discord guilds/715211007307284530/members 200 keys [
+  'avatar',
+  'banner',
+  'communication_disabled_until',
+  'flags',
+  'joined_at',
+  'nick',
+  'pending',
+  'premium_since',
+  'roles',
+  'unusual_dm_activity_until',
+  'collectibles',
+  'display_name_styles',
+  'vad_colors',
+  'member_gaming_leaderboard_data',
+  'user',
+  'mute',
+  'deaf'
+]

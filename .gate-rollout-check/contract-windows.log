@@ -1,0 +1,140 @@
+✔ askuser-selfcheck-gate: reachable remedy contract (15.06ms)
+✖ claude-artifact-url-gate: reachable remedy contract (3.5288ms)
+✔ control-group-stop-gate: reachable remedy contract (3.6282ms)
+✔ course-correction-gate: reachable remedy contract (22.7743ms)
+✔ doc-link-drive-guard: reachable remedy contract (2.1807ms)
+✔ external-state-claim-gate: reachable remedy contract (1.6948ms)
+✔ feedback-form-gate: reachable remedy contract (2.5498ms)
+✔ gh-handoff-gate: reachable remedy contract (3.3008ms)
+✔ handoff-audit-gate: reachable remedy contract (2.058ms)
+✔ handoff-branch-coverage-gate: reachable remedy contract (1.8019ms)
+✔ handoff-detail-guard: reachable remedy contract (15.7378ms)
+✔ handoff-info-guard: reachable remedy contract (3.0166ms)
+✔ handoff-investigation-gate: reachable remedy contract (27.1893ms)
+✔ handoff-quality-gate: reachable remedy contract (1.767ms)
+✔ handoff-regret-gate: reachable remedy contract (2.0239ms)
+✔ internal-recipient-gmail-guard: reachable remedy contract (17.3174ms)
+✖ japanese-reply-gate: reachable remedy contract (29.2477ms)
+✔ lane-abandonment-gate: reachable remedy contract (3.0108ms)
+✔ live-artifact-read-gate: reachable remedy contract (3.1016ms)
+✔ manual-request-evidence-gate: reachable remedy contract (1.6764ms)
+✔ manual-request-fullsteps-gate: reachable remedy contract (45.6739ms)
+✔ model-agent-guard: reachable remedy contract (1.2345ms)
+✔ negative-claim-gate: reachable remedy contract (4.5089ms)
+✔ next-action-gate: reachable remedy contract (2.6713ms)
+✔ pr-handoff-gate: reachable remedy contract (2.2357ms)
+✔ pretooluse-bash-delegation: reachable remedy contract (2.4824ms)
+✖ pretooluse-claude-docs-guard: reachable remedy contract (0.5811ms)
+✔ pretooluse-delegation-warn: reachable remedy contract (0.8042ms)
+✔ pretooluse-headless-background: reachable remedy contract (0.7582ms)
+✔ pretooluse-lane-guard: reachable remedy contract (0.8423ms)
+✔ report-length-gate: reachable remedy contract (0.8006ms)
+✔ reported-symptom-gate: reachable remedy contract (1.1166ms)
+✔ self-check-before-asking-guard: reachable remedy contract (3.8699ms)
+✔ settings-quality-guard: reachable remedy contract (1.5413ms)
+✔ stop-gate: reachable remedy contract (5.885ms)
+✔ stop-gate-runner: reachable remedy contract (1.8645ms)
+✔ url-account-gate: reachable remedy contract (4.5136ms)
+✔ url-format-guard: reachable remedy contract (2.172ms)
+✔ user-burden-gate: reachable remedy contract (12.8126ms)
+✔ verify-before-done-detector: reachable remedy contract (1.0487ms)
+✔ reject missing declaration, nonexistent repo file, undeployed key and unexplained consent (1.9489ms)
+✖ new rollout entries must declare the seven day window; legacy inventory is frozen (230.5527ms)
+✔ repo remedy sections accept Windows CRLF checkouts (16.5444ms)
+ℹ tests 43
+ℹ suites 0
+ℹ pass 39
+ℹ fail 4
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 631.3698
+
+✖ failing tests:
+
+test at tools\gate-contract.test.mjs:7:37
+✖ claude-artifact-url-gate: reachable remedy contract (3.5288ms)
+  AssertionError [ERR_ASSERTION]: deny hook has no contract
+  + actual - expected
+  
+  + undefined
+  - 'claude-artifact-url-gate'
+  
+      at TestContext.<anonymous> (file:///C:/Users/uers/orgiast-main/tools/gate-contract.test.mjs:9:10)
+      at Test.runInAsyncScope (node:async_hooks:228:14)
+      at Test.run (node:internal/test_runner/test:1118:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:787:18)
+      at Test.postRun (node:internal/test_runner/test:1247:19)
+      at Test.run (node:internal/test_runner/test:1175:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:358:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'claude-artifact-url-gate',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tools\gate-contract.test.mjs:7:37
+✖ japanese-reply-gate: reachable remedy contract (29.2477ms)
+  AssertionError [ERR_ASSERTION]: deny hook has no contract
+  + actual - expected
+  
+  + undefined
+  - 'japanese-reply-gate'
+  
+      at TestContext.<anonymous> (file:///C:/Users/uers/orgiast-main/tools/gate-contract.test.mjs:9:10)
+      at Test.runInAsyncScope (node:async_hooks:228:14)
+      at Test.run (node:internal/test_runner/test:1118:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:787:18)
+      at Test.postRun (node:internal/test_runner/test:1247:19)
+      at Test.run (node:internal/test_runner/test:1175:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:787:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'japanese-reply-gate',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tools\gate-contract.test.mjs:7:37
+✖ pretooluse-claude-docs-guard: reachable remedy contract (0.5811ms)
+  AssertionError [ERR_ASSERTION]: deny hook has no contract
+  + actual - expected
+  
+  + undefined
+  - 'pretooluse-claude-docs-guard'
+  
+      at TestContext.<anonymous> (file:///C:/Users/uers/orgiast-main/tools/gate-contract.test.mjs:9:10)
+      at Test.runInAsyncScope (node:async_hooks:228:14)
+      at Test.run (node:internal/test_runner/test:1118:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:787:18)
+      at Test.postRun (node:internal/test_runner/test:1247:19)
+      at Test.run (node:internal/test_runner/test:1175:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:787:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'pretooluse-claude-docs-guard',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tools\gate-contract.test.mjs:18:1
+✖ new rollout entries must declare the seven day window; legacy inventory is frozen (230.5527ms)
+  AssertionError [ERR_ASSERTION]: claude-artifact-url-gate: missing rollout entry
+      at TestContext.<anonymous> (file:///C:/Users/uers/orgiast-main/tools/gate-contract.test.mjs:24:12)
+      at Test.runInAsyncScope (node:async_hooks:228:14)
+      at Test.run (node:internal/test_runner/test:1118:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:787:18)
+      at Test.postRun (node:internal/test_runner/test:1247:19)
+      at Test.run (node:internal/test_runner/test:1175:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:787:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }

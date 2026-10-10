@@ -1,0 +1,39 @@
+✔ CLI uses JST window, validates dates, and bounds verification to five (5.1292ms)
+✔ private and expense expectations derive from exported RULES (11.135ms)
+✔ merchant/amount/date normalization prevents query syntax injection (60.489701ms)
+✔ weekly Tuesday skip, Monday run, same-day duplicate and old state (0.5691ms)
+✔ paginates 100 + remainder, client-filters status, and verifies absent cached ids (9.790201ms)
+✔ date or account filter mismatch fails instead of leaking other accounts into output (2.6531ms)
+✔ Yahoo children are serial and exit 2 disables all later Yahoo queries (43.184401ms)
+✔ Yahoo parser requires date-window, merchant and exact amount (1.9203ms)
+✔ query budgets never exceed exported limits and return deferred (0.7323ms)
+✔ dry run does not write state, Sheet or DM (2.6524ms)
+✔ verification writes at most five RAW rows, marks them and caches all ids (5.751ms)
+✔ existing Sheet id is never appended again and human status is untouched (2.5119ms)
+✔ Gmail outage remains retryable and raw child error is not persisted (2.7906ms)
+✔ verified Gmail evidence survives Yahoo unavailable and uses account-specific thread link (2.2061ms)
+✔ time cutoff checkpoints pending ids without a verdict (0.511ms)
+✔ expense rule still searches both mailboxes; private rule never searches (1.3934ms)
+✔ Sheet error checkpoints classification for retry without another inbox search (1.2972ms)
+✔ Sheets helper appends RAW and checks existing headers without rewriting (1.4598ms)
+✔ real CLI weekly skip exits 0 without credentials and leaves state unchanged (322.009207ms)
+✔ new Sheet tab and header are created atomically without shifting frozen rows (1.3269ms)
+✔ 個別取得の404だけをスキップして残りを返す (111.638402ms)
+✔ 個別取得の410もスキップする (12.9798ms)
+✔ 個別取得の500は握りつぶさずthrowする (3.8884ms)
+✔ 一覧取得自体の404は握りつぶさずthrowする (1.0651ms)
+✔ nightly step failures are not logged or summarized without output detail (2.8061ms)
+✔ Write-NightlyStepResult formats captured output before logging failures (2.4269ms)
+✔ captured nightly node steps save LASTEXITCODE on the following line (9.781101ms)
+✔ existing scheduled tasks are extended without creating tasks (2.6977ms)
+✔ dry-run and removal switches are part of the contract (0.4234ms)
+✔ all three nightly scripts are wired (0.4194ms)
+✔ changes are read back and machine-specific paths are absent (0.4165ms)
+ℹ tests 31
+ℹ suites 0
+ℹ pass 31
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1055.804622

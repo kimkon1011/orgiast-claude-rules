@@ -1,0 +1,42 @@
+{
+  "files": [
+    {
+      "file": "snapshot-first.json",
+      "secretMatches": 0,
+      "forbidden": false,
+      "sevenDigitRuns": 26141,
+      "mode": "777"
+    },
+    {
+      "file": "state.json",
+      "secretMatches": 0,
+      "forbidden": false,
+      "sevenDigitRuns": 56924,
+      "mode": "777"
+    },
+    {
+      "file": "reports/first-run.md",
+      "secretMatches": 0,
+      "forbidden": false,
+      "sevenDigitRuns": 8753,
+      "mode": "777"
+    },
+    {
+      "file": "reports/public-replay.md",
+      "secretMatches": 0,
+      "forbidden": false,
+      "sevenDigitRuns": 8752,
+      "mode": "777"
+    },
+    {
+      "file": "pattern-candidates.jsonl",
+      "secretMatches": 0,
+      "forbidden": false,
+      "sevenDigitRuns": 0,
+      "mode": "777"
+    }
+  ],
+  "bankFields": 80,
+  "unmaskedBankFields": 0,
+  "pass": true
+}

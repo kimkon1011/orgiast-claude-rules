@@ -1,0 +1,15 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import {parseEnv} from '../internal-audit/tools/fraud-audit.mjs';
+const state=process.argv[2];
+const files=['snapshot-first.json','state.json','reports/first-run.md','reports/public-replay.md','pattern-candidates.jsonl'].map(f=>path.join(state,f)).filter(f=>fs.existsSync(f));
+const env=parseEnv(fs.readFileSync('/mnt/c/Users/uers/orgiast-main/.env.local','utf8'));
+const procurement=parseEnv(fs.readFileSync('/mnt/c/Users/uers/Downloads/CLAUDE.md配布/購買部管理アプリ/.env.local','utf8'));
+const secrets=[...Object.values(env),...Object.entries(procurement).filter(([k])=>/PASSWORD|SECRET|TOKEN|DATABASE_URL|POSTGRES_URL/.test(k)).map(([,v])=>v)].filter(v=>v&&v.length>=6);
+let failures=0;
+const result=files.map(file=>{const text=fs.readFileSync(file,'utf8');const secretMatches=secrets.filter(v=>text.includes(v)).length;const forbidden=/(postgres(?:ql)?:\/\/|private_key|Bearer )/i.test(text);failures+=secretMatches+(forbidden?1:0);return{file:path.relative(state,file),secretMatches,forbidden,sevenDigitRuns:(text.match(/\d{7,}/g)||[]).length,mode:(fs.statSync(file).mode&0o777).toString(8)};});
+const snapshot=JSON.parse(fs.readFileSync(path.join(state,'snapshot-first.json'),'utf8'));
+const banks=snapshot.partners.map(p=>p.bank?.account_number).filter(n=>n&&!/^\*+$/.test(n));
+const unmaskedBankFields=banks.filter(n=>!/^\*{4}.{1,4}$/.test(n)).length;failures+=unmaskedBankFields;
+console.log(JSON.stringify({files:result,bankFields:banks.length,unmaskedBankFields,pass:failures===0},null,2));
+process.exitCode=failures?1:0;

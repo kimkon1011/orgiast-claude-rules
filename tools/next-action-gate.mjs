@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+export const GATE_CONTRACT = {"name": "next-action-gate", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "next-action-gate"}]};
 import { isEntry } from './is-entry.mjs';
 import { readTranscriptContext } from './lib/assistant-text.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';

@@ -1,0 +1,162 @@
+{
+  "search": {
+    "content": [
+      {
+        "type": "text",
+        "text": "Action completed."
+      }
+    ],
+    "structuredContent": {
+      "markdown": "| Row | ID |\n| --- | --- |\n|  | ID |\n| 10 | T-4173 |",
+      "scanned_range": "A1:A4760",
+      "scanned_row_count": 4760,
+      "scanned_column_count": 1,
+      "matched_row_count": 1,
+      "returned_matching_row_count": 1,
+      "truncated": false,
+      "truncated_rows": false,
+      "truncated_columns": false,
+      "truncated_row_count": 0,
+      "truncated_column_count": 0
+    },
+    "isError": false
+  },
+  "row": {
+    "status": "fulfilled",
+    "value": {
+      "content": [
+        {
+          "type": "text",
+          "text": "Action completed."
+        }
+      ],
+      "structuredContent": {
+        "range": "'タスク'!A10:O10",
+        "majorDimension": "ROWS",
+        "values": [
+          [
+            "T-4173",
+            "2026-10-03 6:33",
+            "P1",
+            "96",
+            "締切",
+            "提出書類の確認と修正連絡",
+            "対象ユーザーが提出書類を確認し、必要なら宮地さんに修正連絡を行う。",
+            null,
+            "2026-10-02",
+            "1023富山nxa日本心不全学会",
+            "<@1382626504386543708> 送信前に提出書類のメールを入れていますのでご確認お願いいたします。また提出期限が今日なのですが、私がこのあと17時ごろまで対応できないため修正等がありましたら宮地さんにご連絡お願いいたします。",
+            "https://discord.com/channels/715211007307284530/1387960696570118144/1555433860915789905",
+            "未着手",
+            null,
+            "2026-10-08 6:33"
+          ]
+        ]
+      },
+      "isError": false
+    }
+  },
+  "headers": {
+    "status": "fulfilled",
+    "value": {
+      "content": [
+        {
+          "type": "text",
+          "text": "Action completed."
+        }
+      ],
+      "structuredContent": {
+        "range": "'タスク'!A1:O1",
+        "majorDimension": "ROWS",
+        "values": [
+          [
+            "ID",
+            "起票日",
+            "優先ランク",
+            "優先度スコア",
+            "種別",
+            "タイトル",
+            "具体アクション",
+            "担当",
+            "期限",
+            "チャンネル",
+            "根拠(発言抜粋)",
+            "Discordリンク",
+            "状態",
+            "実行メモ",
+            "最終更新"
+          ]
+        ]
+      },
+      "isError": false
+    }
+  },
+  "gmailSearch": {
+    "content": [
+      {
+        "type": "text",
+        "text": "Action completed."
+      }
+    ],
+    "structuredContent": {
+      "emails": [
+        {
+          "id": "1a10c123c621224e",
+          "thread_id": "1a10bb38d0dfa520",
+          "from_": "\"株式会社オージャスト 経理部2\" keiri2@orgiast.jp",
+          "to": [
+            "keiri2@orgiast.jp"
+          ],
+          "cc": [],
+          "bcc": [],
+          "subject": "Re: 【JHFS2026】 請求書送付のご連絡_2_10005",
+          "snippet": "お疲れ様です。 請求書を受理いたしましたので手続きに回します。 転送いただきありがとうございます。 株式会社オージャスト経理部 担当：宮地 2026年10月5日(月) 19:53 株式会社オージャスト 医学会併設企業展示コーディネート事業部 <coordinate@orgiast.jp>: オージャスト振込担当者様 いつもお世話になっております。 第30回日本心不全学会学術集会 から請求",
+          "labels": [
+            "IMPORTANT",
+            "CATEGORY_FORUMS"
+          ],
+          "has_attachment": false,
+          "attachments": [],
+          "inline_images": [],
+          "email_ts": "2026-10-05T21:37:22+09:00",
+          "display_url": "https://mail.google.com/mail/u/?authuser=kim%40orgiast.jp#all/1a10c123c621224e",
+          "display_title": "Re: 【JHFS2026】 請求書送付のご連絡_2_10005"
+        },
+        {
+          "id": "1a10bb38d0dfa520",
+          "thread_id": "1a10bb38d0dfa520",
+          "from_": "\"株式会社オージャスト　医学会併設企業展示コーディネート事業部\" coordinate@orgiast.jp",
+          "to": [
+            "keiri2@orgiast.jp"
+          ],
+          "cc": [
+            "金功勇 kim@orgiast.jp"
+          ],
+          "bcc": [],
+          "subject": "Fwd: 【JHFS2026】 請求書送付のご連絡_2_10005",
+          "snippet": "オージャスト振込担当者様 いつもお世話になっております。 第30回日本心不全学会学術集会 から請求書が届きましたので、転送させていただきます。 よろしくお願いいたします。 ---------- Forwarded message --------- From: 第30回日本心不全学会学術集会 運営事務局 <jhfs2026-sponsored@m.congre.co.jp> Date:",
+          "labels": [
+            "IMPORTANT",
+            "CATEGORY_PERSONAL"
+          ],
+          "has_attachment": true,
+          "attachments": [
+            {
+              "filename": "【JHFS2026】請求書_株式会社オージャスト 御中（2_10005）.pdf",
+              "mime_type": "application/pdf",
+              "size_bytes": 413699,
+              "attachment_id": "ANGjdJ_WJOJ8lyb0mNeeFCX8JcDnFCa5Fq4lQhXCTWpaERbJlAQJFoWnTtCQPZu6KLjg7pV3PoAmqFVWoCguHvPUoR-X8y7hg60mfd1jHY8tnf5Mwj07l56MccA66W_kKLRy4fcFIYju7DarOOFu6Ol14zjlz3xzwreoBD9hMqQlzNauR4xBoKSRxaG2wEjx-7M-whuizDAMfAh3JP2qxg02HhOrxPCybq9N_q3Dh40fR2KhViC4gThxODw4c3DRM790zTHPuhmyE6-yuXKEjLd3s7CU-jSMWzP9i4oJ8cw4z8cL-vndb2m4yyZ4yZqSIo_AQEdyfOynMdAtZp9le1EFwPuUgJovUQoO2Rxxus-R7vP9whQFpSXBBNw8EeTd1gYTJhJjmY-1QMib_c3O",
+              "read_attachment_supported": true
+            }
+          ],
+          "inline_images": [],
+          "email_ts": "2026-10-05T19:53:59+09:00",
+          "display_url": "https://mail.google.com/mail/u/?authuser=kim%40orgiast.jp#all/1a10bb38d0dfa520",
+          "display_title": "Fwd: 【JHFS2026】 請求書送付のご連絡_2_10005"
+        }
+      ],
+      "next_page_token": null
+    },
+    "isError": false
+  }
+}

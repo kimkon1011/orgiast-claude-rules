@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+export const GATE_CONTRACT = {"name": "handoff-investigation-gate", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "handoff-investigation-gate"}]};
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

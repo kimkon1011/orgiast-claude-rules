@@ -1,0 +1,7 @@
+{
+  "checkedAt": "2026-10-09T19:12:20.890Z",
+  "user": "assing@orgiast.jp",
+  "query": "in:anywhere from:jack510tspr@gmail.com after:2026/10/02 before:2026/10/11",
+  "safety": "前回はtoken取得時unauthorized_client。読み取り専用認証とGETのみ、副作用・権限変更なし。再確認は1回のみ。",
+  "error": "token error: {\"error\":\"unauthorized_client\",\"error_description\":\"Client is unauthorized to retrieve access tokens using this method, or client not authorized for any of the scopes requested.\"}"
+}

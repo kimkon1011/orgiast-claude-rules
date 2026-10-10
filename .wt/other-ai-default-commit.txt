@@ -1,0 +1,3 @@
+docs: 他AIの積極利用を配布ルールの既定として明文化
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>

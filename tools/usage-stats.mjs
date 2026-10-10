@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isReadonlyCommand } from './readonly-command.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -181,6 +182,7 @@ export function classifyBashCommand(command) {
   if (extractInlineProgram(command)) return 'inline-program';
   if (heredoc.test(command) || /(?:^|\s)(?:>|>>)(?![>&])\s*[^\s;&|]+/.test(command)) return 'spec-authoring';
   if (/^\s*git(?:\s|$)/i.test(command)) return 'git';
+  if (isReadonlyCommand(command)) return 'read-only';
   if (/^\s*(?:cat|head|tail|sed\s+-n|grep|ls|wc|find)(?:\s|$)/i.test(command) && !/(?:^|[^<])>{1,2}/.test(command)) return 'read-only';
   return 'other';
 }
@@ -188,6 +190,7 @@ export function isReadOnlyToolUse(name, input = {}) {
   if (['Read', 'Grep', 'Glob'].includes(name)) return true;
   if (!['Bash', 'PowerShell'].includes(name)) return false;
   const command = String(input?.command || '');
+  if (isReadonlyCommand(command)) return true;
   if (/(?:^|[^<])>{1,2}|\brm\s|\bmv\s|\bcp\s|\bmkdir\s|\binstall\b|\bpush\b|\bdeploy\b|\bcodex\b|\bnpm\s|\bgit\s+commit\b|\bgit\s+push\b|\bclasp\b/i.test(command)) return false;
   const allowed = /^(?:cat|head|tail|sed|grep|rg|ls|find|wc|stat|jq|awk|cut|sort|uniq|echo|which|type)(?:\s|$)|^node\s+--test(?:\s|$)|^git\s+(?:status|log|diff|show|rev-parse|branch)(?:\s|$)/i;
   const segments = command.split(/&&|\|\||;|\|(?!\|)/).map((x) => x.trim()).filter(Boolean);
@@ -487,7 +490,13 @@ if (isEntry(import.meta.url)) {
   else if (sub === 'blocks') result = claude.blocks;
   else if (sub === 'bash') result = collectBashProfile({ home, days });
   else if (sub === 'ledger') result = collectLedger({ home, days });
-  else if (sub === 'deleg') { const ledger = collectLedger({ home, days }), codex = collectCodexUsage({ home, days }); result = { ...calculateDelegation({ codexOut: codex.outputTokens, execOut: ledger.totals.outputTokens, byModel: claude.byModel }), headlessClaudeOut: claude.headlessClaudeOut, headlessJobs: claude.headlessJobs }; }
+  else if (sub === 'deleg') {
+    const ledger = collectLedger({ home, days }), codex = collectCodexUsage({ home, days });
+    // cost-work-loop と同じ入力で算出する。specAuthoringOut を渡さないと delegRatioWithPrep が
+    // delegRatio と同値になり、「委譲の準備(仕様書執筆)」という最大の漏れ口が調査から見えなくなる。
+    const specAuthoringOut = estimateSpecAuthoringTokens({ blocks: claude.blocks, profile: collectBashProfile({ home, days }) });
+    result = { ...calculateDelegation({ codexOut: codex.outputTokens, execOut: ledger.totals.outputTokens, byModel: claude.byModel, specAuthoringOut }), headlessClaudeOut: claude.headlessClaudeOut, headlessJobs: claude.headlessJobs };
+  }
   else if (sub === 'health') result = collectProviderHealth({ home, days });
   else if (sub === 'turns') result = collectTurnStats({ home, days });
   else { console.error('usage: node tools/usage-stats.mjs <sessions|blocks|bash|ledger|deleg|health|turns> [--days 7] [--json]'); process.exitCode = 2; }

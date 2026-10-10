@@ -1,0 +1,35 @@
+{
+  "directory": "/tmp/internal-audit-v1-2026-10-09-824b57f",
+  "files": [
+    {
+      "file": "snapshot-first.json",
+      "mode": "600",
+      "identical": true
+    },
+    {
+      "file": "state.json",
+      "mode": "600",
+      "identical": true
+    },
+    {
+      "file": "footprint-cache.json",
+      "mode": "600",
+      "identical": true
+    },
+    {
+      "file": "pattern-candidates.jsonl",
+      "mode": "600",
+      "identical": true
+    },
+    {
+      "file": "reports/first-run.md",
+      "mode": "600",
+      "identical": true
+    },
+    {
+      "file": "reports/public-replay.md",
+      "mode": "600",
+      "identical": true
+    }
+  ]
+}

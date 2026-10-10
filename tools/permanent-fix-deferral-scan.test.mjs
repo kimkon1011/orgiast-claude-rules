@@ -114,6 +114,19 @@ test('名詞句でなく行為の先送りは引き続きP1で検出する', () 
     assert.equal(detect(quote)[0].pattern, 'P1', quote);
   }
 });
+test('監査項目名の引用（括弧で閉じた先送り＋直後が検証・記録）はP1と誤検出しない', () => {
+  // 実測原文（stop-gate-runner-ledger.jsonl / 2026-10-06T18:23:57Z・2026-10-07T18:26:59Z）。
+  // どちらも「監査項目ID（<項目名>の恒久修正先送り）」を引用した検証側の文で、先送りは実行されていない。
+  for (const quote of [
+    'dit:3d27cec1990452c9（event-shop.jp「AUJUST」誤記の恒久修正先送り）の再発を実物検証し記録 — 完了。 **やったこと** — 先送り検出器を実測',
+    't `59f6caca0d69166e`（event-shop.jp「AUJUST」誤記の恒久修正先送り）の実物検証と記録 **やったこと** — 検出元 handoff の元ネタを実物で追跡。'
+  ]) assert.deepEqual(detect(quote).map(found => found.pattern), [], quote);
+});
+test('括弧で閉じていても直後が検証・記録でなければP1で検出する', () => {
+  for (const quote of ['恒久修正を先送り）したまま次へ進む', '恒久修正は先送り）と決めた']) {
+    assert.equal(detect(quote)[0].pattern, 'P1', quote);
+  }
+});
 test('委譲の完了待ちはW(待機)であって先送り(P1-P4)ではない', () => {
   const quote = 'Codex の2本の完了を待っています。';
   assert.deepEqual(detect(quote).map(found => found.pattern), ['W']);

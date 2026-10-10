@@ -1,0 +1,22 @@
+{
+  "bankNumbersChecked": 80,
+  "checks": [
+    {
+      "file": "snapshot-first.json",
+      "fullBankNumberMatches": 0
+    },
+    {
+      "file": "state.json",
+      "fullBankNumberMatches": 0
+    },
+    {
+      "file": "reports/first-run.md",
+      "fullBankNumberMatches": 0
+    },
+    {
+      "file": "reports/public-replay.md",
+      "fullBankNumberMatches": 0
+    }
+  ],
+  "pass": true
+}

@@ -1,0 +1,55 @@
+✔ only selected files overlay the pulled production snapshot; separate read-back workspace (11.305101ms)
+✔ unchanged content skips push and deployment, including CRLF differences (3.3197ms)
+✔ dry-run shows differences without push or deployment (2.050601ms)
+✔ mixed selection reports unchanged files and pushes a new empty file (4.245ms)
+✔ read-back also verifies selected files that were initially unchanged (5.0432ms)
+✔ read-back mismatch returns exit code 1 and prevents deployment (4.071501ms)
+✔ missing read-back file fails even for empty local content (2.7535ms)
+✖ read-back accepts CRLF and explicit deployment preserves argument boundaries (5.2565ms)
+✔ deploy-webapp ignores HEAD and updates sole versioned deployment after verification (3.046601ms)
+✔ deploy-webapp reports every candidate and rejects multiple deployments (2.6321ms)
+✔ deploy-webapp fails when there is no versioned deployment (2.1802ms)
+✔ pull failure returns 1 and cleans temporary directories (2.1887ms)
+✔ push failure returns 1 and cleans temporary directories (1.4277ms)
+✔ deploy failure returns 1 and cleans temporary directories (2.074101ms)
+✔ missing selected file fails before any clasp call (0.8192ms)
+✔ unsafe file path is rejected: "../outside.gs" (0.9444ms)
+✔ unsafe file path is rejected: "/absolute.gs" (0.9194ms)
+✔ unsafe file path is rejected: "C:\\outside.gs" (0.9386ms)
+✔ unsafe file path is rejected: ".clasp.json" (0.9253ms)
+✔ unsafe file path is rejected: "" (1.7582ms)
+✔ rootDir outside temporary workspace is rejected before pull (0.7914ms)
+✔ argument parsing requires values, rejects conflicts and splits file list (0.8191ms)
+✔ LCS counts additions/deletions, preserves newline changes and caps diff output at 80 lines (0.4411ms)
+✔ Windows npm clasp.cmd resolves to a Node script without shell execution (1.114201ms)
+ℹ tests 24
+ℹ suites 0
+ℹ pass 23
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 246.698396
+
+✖ failing tests:
+
+test at tools/gas-overlay-push.test.mjs:119:1
+✖ read-back accepts CRLF and explicit deployment preserves argument boundaries (5.2565ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  1 !== 0
+  
+      at TestContext.<anonymous> (file:///mnt/c/Users/uers/orgiast-main/.wt/clasp-then-master/tools/gas-overlay-push.test.mjs:123:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

@@ -1,0 +1,44 @@
+✔ freee GET pagination, company, paid-only and masked stable bank equality (13.870297ms)
+✔ retry 429 respects retry_after then 5xx backs off, finite retries (31.199892ms)
+✔ missing database never refreshes credentials; scrub strips forbidden fields (1.0998ms)
+✔ R01 recent unknown positive, known/old/low negative; missing creation unverified (3.279799ms)
+✔ R02 all verified zero required; any hit/skip/failure cannot be high (1.2195ms)
+✔ R03 round amounts boundary (0.7156ms)
+✔ R04 approval lower bound and repeat severity (12.606197ms)
+✔ R05 same vendor same amount within window only (0.833799ms)
+✔ R06 bank identity cannot use last four alone (0.6532ms)
+✔ R07 normalized kana comparison and no kana info (1.0305ms)
+✔ R08 company without corporate abbreviation only (0.5834ms)
+✔ R09 count, total and 7 day boundary (0.4341ms)
+✔ R10 status/age/amount/expense filters (0.462ms)
+✔ R11 weekend and statutory holiday but not weekday (0.3598ms)
+✔ R12 adequate sample only and Benford-consistent negative (6.685798ms)
+✔ R13 exact member match; substring not sufficient (0.764ms)
+✔ R14 free mail exact domain only (0.3099ms)
+✔ R15 full six months required and ratio strict (0.802699ms)
+✔ allowlist suppresses only R02 R07 R08, inputs immutable (1.0978ms)
+✔ name normalization removes corporate prefix and preserves query words (0.3287ms)
+✔ all-zero controls unverified, a positive paid vendor validates zero; skip ignores cache (36.027692ms)
+✔ one source failure does not block positive source; cache window invalidation (7.601398ms)
+✔ Drive all three identities, fullText escaping and pagination (1.6792ms)
+✔ Discord search 403 fallback uses GET and caches metadata only (6.181899ms)
+✔ external sharing diff, anyone medium, exact internal domain and role change (1.4199ms)
+✔ unauthorized_client is unverified with setup instructions and no API call (0.6232ms)
+✔ download rolling day/week, view ignored, external changes and OAuth dedup (2.711299ms)
+✔ partial Drive scan preserves known baseline (0.9727ms)
+✔ document shared_externally and folder addition detected; revoked access not high (0.3193ms)
+✔ repeated page token marks Drive incomplete and does not erase baseline (0.687699ms)
+✔ one large owner cannot consume every source budget (0.6529ms)
+✔ large external-share collections are representable without variadic array calls (806.437213ms)
+✔ web CLI string URLs supported and shell-safe argv (0.5138ms)
+✔ LLM explicitly deepseek with no fallback (0.3942ms)
+✔ leak classification/dedup and failure not marked seen (1.1463ms)
+✔ pattern source URL must be grounded, name dedup, append without executing candidate (9.488298ms)
+ℹ tests 36
+ℹ suites 0
+ℹ pass 36
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1596.211128

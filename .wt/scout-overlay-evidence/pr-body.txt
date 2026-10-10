@@ -1,0 +1,29 @@
+model-scout が nightly-repo 内の追跡ファイルへ候補を追加していたため、次回 bootstrap の `git reset --hard origin/main` で候補が消え、「eval に投入済み」と通知しても評価されない状態でした。投入先を `~/.claude/eval/providers.local.json` に移し、eval がリポジトリ設定と合わせて読み込みます。
+
+- `tools/eval-harness.mjs`: provider+model 単位でオーバーレイを優先。skip を保持し、不在・読込不可・壊れたJSON・不正な配列でもリポジトリ設定を利用。既存 userHome() を使用し、readConfig() を副作用なく検証可能にしました。
+- `tools/model-scout.mjs`: ユーザー領域に候補を保存。初回はディレクトリと配列を作成し、既存の skip・破損時の保護・atomic write・dry-run を維持。標準のHOME解決はevalと共有し、既存 ORGIAST_HOME 指定も保持します。
+- 両テストファイル: マージ、重複、skip、不在、破損、書込失敗、repo JSON不変、実CLIの --all と --model にオーバーレイの候補・単価が届くことを検証。
+
+検証結果:
+```
+node --test tools/model-scout.test.mjs tools/eval-harness.test.mjs tools/eval-providers.test.mjs tools/cost-weekly-improve.test.mjs
+ℹ tests 48
+ℹ pass 48
+ℹ fail 0
+```
+`git diff --check`: exit 0。`tools/eval-providers.json` の差分なし。課金API・DM送信なし。
+
+このPCの救済状況（未完了）:
+- 調査時には nightly-repo の作業差分が消えており、自動退避コミット `82702fd`（auto-session-rescue-20261009-222810）から4件を値を変えず回収しました。
+- 全件 provider は `openrouter`。model と costPerMillion は次の通りです。
+  - `anthropic/claude-haiku-5.5`: `[0.09999999999999999, 0.5]`
+  - `anthropic/claude-haiku-5.5:batch`: `[0.049999999999999996, 0.25]`
+  - `apodex/apodex-1.1-mini:free`: `[0, 0]`
+  - `inclusionai/ling-3.1-flash`: `[0, 0]`
+- 実オーバーレイへの書込を試行しましたが、sandbox がユーザー領域を読み取り専用にしており `EROFS` で拒否されました。実オーバーレイは未作成です。復旧データと再読込確認つきの復旧スクリプトは作業元の `.wt/scout-overlay-evidence/` に保存しました（PR外のローカル成果物）。
+- `readConfig()` の実環境候補は0件。回収ファイルを overlayFile に指定したdry検証では4件すべてが対象になり、値の完全一致と skip 無しを確認しました。
+- nightly-repo の `git status --short` は空（0 bytes）。既に差分が無いため checkout は実行していません。
+
+作業元のdirtyツリーは維持し、`.wt/scout-overlay-clone` から origin/main (`3e7c513`) 起点の `.wt/scout-overlay` と指定ブランチを作成。マージ・夜間実行版への適用は未実施です。
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)

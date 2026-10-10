@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+export const GATE_CONTRACT = {"name": "report-length-gate", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "report-length-gate"}]};
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

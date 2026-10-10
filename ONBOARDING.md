@@ -56,6 +56,13 @@ Stop の `user-burden-gate` が依頼のある最終応答を監査する。本�
 **🔴 Claude 側ログの不在は外部システムの不在の証拠ではない。外部の状態は直接照会だけで判定し、未照会は「未確認」と書く。確率付き否定やuserへの検証丸投げは禁止。**
 **🔴 「Claude にはできない」「未接続」も断定であり、登録済み経路（memory の reference_* ツール・DWD・GAS・CLI）を当ターンに試した失敗記録だけが証拠。セッションのツール一覧は読込状態であって、接続状態・実行可能性の証拠ではない。未試行のまま user に設定・接続を頼まない。**
 
+**🔴 完了報告は「依頼範囲の全要素 × 実データ」の検証表で出し、できていない要素は Claude から対処案を出す。user に発見させない（2026-10-09 nishi 指示・全業務）。**
+- 依頼範囲を成果が届く単位（フォルダ・部屋・チャネル・宛先・機能・期間・アカウント等）に全部分解し、代表1件で全体を代表させない。
+- 要素ごとに本番の実データが届いた証拠を直接照会で取り、`| 要素 | 結果（できた／できていない／未検証）| 証拠 |` の表を完了報告に入れる。「対象に含めた」「設定した」は結果ではない。実データが未着の要素は「未検証（理由）」とし、合格に数えない。
+- 初期調査で見えた前提崩れの兆候（新規0件・最終更新が古い・設定が空）は、その要素の行に必ず転記する。
+- できていない・未検証の行には「原因（事実と推測を分ける）→ 次の一手（実行者・手順）」を併記し、Claude が実行できる分は報告前に着手する。
+- 事例: 複合機スキャン→Drive 自動アップで FAX フォルダを「対象に含めた」と報告し、テストは別フォルダだけで合格とした。初期調査で FAX の「直近30日 0件・最終 2024/3」を取得していたのに報告せず、複合機入替で FAX 保存設定が消えていたことを user の問い合わせで初めて発見した。
+
 **🔴 内部宛メッセージはチャットに「宛先／用件／本文」を表示し、Gmail下書き・送信は禁止。Gmail下書きは外部宛だけとし、本文と下書き件名もチャットに併記する。**
 
 内部判定: 社内・グループ会社（東邦鋼業 genbateam.toho@gmail.com、Reブース、NEXTForward）・スタッフ。orgiast.jp / toho-kogyo.com と `~/.claude/internal-recipients.json`（既定 `tools/internal-recipients.default.json`）を使い、`internal-recipient-gmail-guard` が宛先を照合する。
@@ -529,6 +536,12 @@ deny は締める方向の追加だけ Claude が自分で行ってよい。allo
 失うものは Anthropic 側の第二の目、すなわちクレデンシャル露出・本番デプロイ・権限拡大を第三者が止める機能である。
 詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/autonomy-and-reporting.md`
 
+#### 1.14.x deny ゲートの契約
+拒否ゲートは `GATE_CONTRACT` に復旧手段を宣言し、リポ実在・keyserve配布をCIで検証する。
+担当者への質問だけで解除させず、取得コマンドを示し、keyserve依存は拒否前に1回自動取得する。
+新ゲートは各PCへの初回配布から7日間warn。manifestの配布日・昇格日でdenyへ進める（既存は維持）。
+deny/warnはPC・ゲート・復旧手段の到達状況だけを既存通知経路へ1日1回通報する。
+
 ### 1.15 自律進行・セッション引継ぎ
 
 完了報告で止まらず、目的単位で区切り次セッションへの引継ぎを自動化する。
@@ -882,7 +895,14 @@ Astra クールダウン中は Sol を使う。明示の `--model astra`（ま�
 **非Claude実装レーンの全滅をSonnetへの自動切替理由にしない（2026-09-15 改定）**。①`codex-do` → `cheap-code` の順に、指示をファイルで渡して試す。②両方不可なら `tools/llm-ask.mjs --provider deepseek|kimi|groq`（providerは1つ選ぶ）でファイル単位に生成し、コードブロックをWriteで保存してverifyする。プロンプトには「出力はコードブロック1個のみ。説明不要。ファイルパス: <path>」を含め、保存後にtypecheck/testを実行する。素のAPI呼び出しは自律CLIとは別経路だが、拒否された操作自体の禁止・安全弁を迂回してはならない。
 
 - ③それも不可なら無人セッションでも実装を停止する。`next-session.md` に「レーン全滅・費用見込み（トークン概算）・選択肢（WSL導入でCodex復旧 / llm-ask / Sonnet承認）」を記録する。④Sonnet / Opusによる実装は費用見込みを提示し、kimの明示承認後だけにする。hookのフォールバック文言を免責にしない。
-- WindowsでCodexが書けないPCは、`wsl --install -d Ubuntu`（管理者操作・再起動＝人手1回）でWSL経路の復旧を検討する。
+- WindowsでCodexが書けないPCは、Claude がその場でWSL経路を復旧する: `wsl --install -d Ubuntu --no-launch` → `wsl -d Ubuntu -u root -- bash -lc "<NodeSource で node 22>; npm i -g @openai/codex"` → `%USERPROFILE%\.codex\auth.json` を WSL の `/root/.codex/` へコピー → `codex login status` → codex-do で1ファイル作成を実測（2026-10-09 nishi-PC 実測: WSL 本体が入っていれば管理者権限・再起動とも不要）。
+
+**他AIレーンが落ちたら、その場で直す。代替や Claude 本体へ逃げて放置しない（2026-10-09 nishi 厳命）**。user のコストパフォーマンスが最優先で、Claude 本体はいちばん高い経路。
+- 失敗出力から原因を特定し、Claude が実行できる修理（環境導入・認証の引き継ぎ・設定修正）をそのターン中に試す。修理後は1回実行して成功を実測する。
+- 応答に `[LANE-REPAIR] <レーン>: 修復済み <内容>` か `[LANE-REPAIR] <レーン>: 修復不可 試行: <試した手段>` を書く。Stop hook の `lane-abandonment-gate` が、失敗シグナルのあるターンでこの行が無いと block する（`[LANE-FALLBACK]` 1行だけでは通らない）。
+- `delegation-health-check` は環境故障（WSL 不在・spawn 失敗・未認証）と「3件以上すべて失敗したレーン」（`lane_outage_unrepaired`）を high＋修理タスクで出す。朝に出ていたら、その日の作業より先に直す。
+- 「アカウント追加」「有料化」は、故障の修復と実測が済んでから検討する。
+- **実害（2026-08-27〜10-09）**: nishi-PC の Codex は WSL ディストリ不在で43日・112回起動に失敗していた。ヘルス判定が low（起票しない）、exit 3 の行は「起動前ゲートで意図的に止めた」と誤分類され、毎回 Claude 本体へ戻って誰も直さなかった。user は上限を疑ってアカウント追加を検討していた。修理は数分で終わった。
 
 **実害（2026-09-11〜15）**: StageCue実装でcodex-do/cheap-codeの拒否後にSonnetへP1〜P3を渡し、費用提示なしで約150万トークンを消費した。
 
@@ -925,6 +945,13 @@ Claude Code / Codex / 安いLLM はすべて **API があるものしか触れ�
 
 - **運用**: Claude Code は user に手作業を頼もうとした時点で、まず「これは Grok Bot のスキルにできないか」を検討し、できるなら**手順書ではなく Bot 用の指示文**を出す。Bot に渡した作業は `~/.claude/grokbot-skills.md` に「スキル名・対象アカウント・承認が要る箇所」を記録し、二重に人へ頼まない。
 - **禁止**: 認証情報を Bot に渡す判断を Claude が勝手に進めないこと。どのサービスに何の権限でログインさせるかは必ず user に明示して合意を取る（§1.1 の「安全機構の解除誘導・説明なしの一括設定は禁止」に該当）。
+
+## 他AIは「積極的に使う」のが既定（kim 2026-10-09 厳命・全PC全アカウント）
+
+Codex／Gemini／DeepSeek／Groq／Kimi／Mistral／OpenRouter／GLM などの他AIは**使うのが既定**。Claude だけで済ませる方が例外で、例外には理由の明記が要る。
+- 残高切れ → 「入金する（オートチャージ ON）」が既定。キー失効・403 → 「再発行する」が既定。429 → 別の他AIへ自動切替。**「外す／やめる／縮小」を kim への選択肢に並べない。**
+- 他AIの障害は Claude で代替せず、別の他AIで吸収し、復旧したら戻す。Claude（監督）へ逆流させるのが最も高くつく。
+- 作業の割り振りは他AIレーン名を**先に・具体的に**書く（例: 要約=Gemini、下書き=Kimi、実装=Codex、Claude=verify のみ）。「必要なら他AIも使う」のような弱い表現は禁止。
 
 ### 1.19 マキモノと画像デザイン／見せる資料はハイブリッド企画書モデル
 
@@ -1158,7 +1185,7 @@ node -e "fetch('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rule
 
 導入後は `node verify.mjs --url <本番URL>` で実投稿+read-back検証まで通してから完了とする（§1.4）。開発側の対応キューは `node scripts/list-feedback.mjs`。**任意staffの自由記述が本番コードを無人で駆動しない**（実装はkimトリガ or レビューゲート付き）。仕様・手移植手順（Pages Router/Remix等）: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/packages/feedback-widget/INSTALL.md`
 
-**GAS（Apps Script / スプレッドシート業務アプリ）は `packages/feedback-gas/` を使う**（2026-09-03 追加）。Next.js 用の feedback-widget は使えないため別パッケージ。`templates/` の2ファイル（`FeedbackRelay.js` / `FeedbackForm.html`）を対象プロジェクトの `src/` にコピーし、`doGet` の**token検証より前**に1行足して Web アプリをデプロイするだけ。フォームは未認証で開けるので、シートの閲覧者や社外の取引先にも URL を渡せる（honeypot + 10分5件のレート制限を常時有効で内蔵）。手順: `packages/feedback-gas/INSTALL.md`
+**GAS（Apps Script / スプレッドシート業務アプリ）は `packages/feedback-gas/` を使う**。方式Aは `FeedbackRelay.js` / `FeedbackForm.html` と `doGet` への追加、方式Bは社員が開く HTML に共通フォームへのリンクを1本置く方式。機微データを持つアプリは INSTALL.md の方式Bを使い、公開範囲やスコープを変更しない。共通フォーム URL は public リポには書かず、非公開 keyserve から `~/.claude/feedback-relay.env` の `FEEDBACK_SHARED_FORM_URL` へ配布する。新規PCはインストール時、既存PCは SessionStart の `onboarding-sync.mjs` で取得・キー単位マージされる。即時取得: 正本リポジトリで `node tools/onboarding-sync.mjs --keys-only --force`。ゲートを再実行すれば、その場で貼れる方式Bリンク（フォルダ名をアプリ名としてエンコード済み）が表示される。手順・検証: `packages/feedback-gas/INSTALL.md`。
 
 **通知先はチャンネルではなく kim の個別 DM（中継 `/api/feedback-intake` 経由）**。webhook 直叩きは中継が落ちた時のフォールバックとしてのみ残す。**kim が DM に返信すると、その内容が夜間 `tools/feedback-replies.mjs` で Issue/PR のコメント（＝実行指示）として貼られる**（2026-09-03 本番検証済み）。貼り先が特定できない返信は推測で書き込まずスキップする。
 
@@ -1168,7 +1195,7 @@ node -e "fetch('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rule
 
 **投稿時は「開発した人 + kim」の2名に DM する（全アカウント絶対 / 2026-09-06 kim厳命）**。開発者IDは `FEEDBACK_OWNER_DISCORD_ID`（Next.js は env、GAS は Script Property）で渡し、インストーラが `~/.claude/orgiast-discord-user-id.txt` から自動設定するので user には聞かない。**対応完了時は投稿者本人へ必ず DM で完了報告する**。経路は夜間バッチ登録済みの `tools/feedback-done-notify.mjs` → 中継 `POST /api/feedback-done`、完了判定はその投稿から作られた GitHub Issue が closed になったこと。Issue を経由せず直した場合は `node tools/feedback-done-notify.mjs --message-id <id> --summary "..."` を手動実行する。投稿者を一意に特定できない場合は推測で別人へ送らず、kim にまとめて届く「返せなかった件」を確認し、名簿（Discord の表示名）を直して再実行する。**今後作るアプリはこの2つなしで「完成」と呼ばない**。導入完了条件は、実際に開発者へ着信し、完了報告が投稿者へ着信したことを確認したこと（§1.4）。
 
-**機械検査で止める（全アカウント / 2026-10-08 追加）**。`tools/feedback-form-gate.mjs`（PreToolUse・`register-hooks.mjs` で全PCに配布）が本番反映コマンド（`vercel deploy`/`vc.js deploy`/`clasp push`/`gas/deploy.mjs` 等）の直前に、①フォーム未搭載（Next.js は `FeedbackWidget`、GAS は `FeedbackRelay`）②Next.js のアプリ名が完了報告の台帳 `tools/feedback-apps.json` に未登録、のどちらかなら deny する。台帳は `feedback-to-issues.mjs` の対応表に合流するので、**1行足せば Issue 化と完了報告の対象に自動で入る**（足すのは導入した Claude の仕事。正本ブランチ + automerge ラベルの PR で出す）。社員が使わないアプリは user に確認したうえで、理由を1行書いた `.feedback-exempt` をリポジトリ直下に置けば対象外。経緯: カフェ業務チェックアプリが 2026-08-27 の作成後に3回改修・本番デプロイされても未搭載のままだった（ルールが文章だけで検査が無く、台帳もハードコードで新アプリが完了報告の対象に入らなかった）。
+**機械検査で止める（全アカウント / 2026-10-08 追加）**。`tools/feedback-form-gate.mjs`（PreToolUse・`register-hooks.mjs` で全PCに配布）が本番反映コマンド（`vercel deploy`/`vc.js deploy`/`clasp push`/`gas/deploy.mjs` 等）の直前に、①フォーム未搭載（Next.js は `FeedbackWidget`、GAS は `FeedbackRelay` または `script.google.com/macros/s/<id>/exec?form=feedback` の方式Bリンク）②Next.js のアプリ名が完了報告の台帳 `tools/feedback-apps.json` に未登録、のどちらかなら deny する。台帳は `feedback-to-issues.mjs` の対応表に合流するので、**1行足せば Issue 化と完了報告の対象に自動で入る**（足すのは導入した Claude の仕事。正本ブランチ + automerge ラベルの PR で出す）。社員が使わないアプリは user に確認したうえで、理由を1行書いた `.feedback-exempt` をリポジトリ直下に置けば対象外。経緯: カフェ業務チェックアプリが 2026-08-27 の作成後に3回改修・本番デプロイされても未搭載のままだった（ルールが文章だけで検査が無く、台帳もハードコードで新アプリが完了報告の対象に入らなかった）。
 
 ---
 

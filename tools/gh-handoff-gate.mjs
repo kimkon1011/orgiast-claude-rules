@@ -1,3 +1,4 @@
+export const GATE_CONTRACT = {"name": "gh-handoff-gate", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "gh-handoff-gate"}]};
 import { latestAssistantText } from './lib/assistant-text.mjs';
 import { isEntry } from './is-entry.mjs';
 

@@ -115,7 +115,9 @@ if ($codex) {
   try {
     $map = Get-Content (Join-Path $repo 'fleet-pc-map.json') -Raw -Encoding UTF8 | ConvertFrom-Json
     $entry = $map.PSObject.Properties | Where-Object { $_.Name -eq $curLabel } | Select-Object -First 1
-    if ($entry -and $entry.Value.account) { $expected = [string]$entry.Value.account }
+    # Codex の照合先: PC個別の codexAccount → 全PC共通の _codexAccountDefault。account は Claude の担当席なので使わない（2026-10-10 C案）。
+    if ($entry -and $entry.Value.codexAccount) { $expected = [string]$entry.Value.codexAccount }
+    elseif ($map._codexAccountDefault) { $expected = [string]$map._codexAccountDefault }
   } catch {}
   $acct = Get-CodexEmail
   if ($codexOk -and $acct -and $expected -and $acct.email -ne $expected -and -not $NoLogin) {

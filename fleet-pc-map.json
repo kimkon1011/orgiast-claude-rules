@@ -1,9 +1,14 @@
 {
   "_note": "Discordラベル → シートD列表記 / hostname / 担当者 の対応表。fleet-liveness.mjs が同一PCの二重計上を防ぐために使う。証拠のあるものだけを書く（推測でマージすると他PCのシート行を奪う）。証拠 = ①報告本文の `🖥 hostname=…` ②ラベル名がシートD列と一致 ③申告日と同日のラベル初登場 ④kim の明示回答。aliases は同じPCを指す別表記（1台が手入力行と機械書き込み行に分かれているため）。",
+  "_codexAccountDefault": "seisaku-team@orgiast.jp",
+  "_codexAccountNote": "Codex(ChatGPT)は全PC共通で seisaku-team@ の Pro 5x を使う（kim 2026-10-10 決定・C案: 月$100固定・Auto top-up オフ）。account は Claude の担当席で、Codex とは別。PC個別にする場合だけ各エントリに codexAccount を書く。",
   "kim-PC": {
     "hostname": "DESKTOP-2D0R4LI",
     "person": "金功勇",
-    "aliases": ["DESKTOP-2D0R4LI", "kim-PC(開発機/kim)"],
+    "aliases": [
+      "DESKTOP-2D0R4LI",
+      "kim-PC(開発機/kim)"
+    ],
     "_evidence": "報告本文の 🖥 hostname=DESKTOP-2D0R4LI / user=uers / git=kim@orgiast.jp（2026-08-27 実測）。kim 明示回答『18行目(kim-PC)と22行目(DESKTOP-2D0R4LI)は同じパソコン』（2026-08-27）。kim が DESKTOP-2D0R4LI を『作業用004民泊用』行から独立行へ移動済み＝作業用004民泊用 は開発機ではないことが確定"
   },
   "kimko-PC": {
@@ -14,7 +19,10 @@
     "deviceId": "3BF4B9EF-B428-450D-9AC2-C59AF0D1C9B3",
     "_correction": "2026-10-09 kim のスクリーンショット2枚で確定: Chrome リモートデスクトップ『作業用004 民泊』の接続先のデバイス名＝DESKTOP-PPD5V8I（デバイスID 上記）。『作業用011』の接続先のデバイス名は『作業用011』（HP EliteDesk 800 G3 SFF、デバイスID B79CA602-6163-4252-B2A0-2A96C61F6767）で別のPC。よって kimko-PC の実体は作業用004民泊用で、シート行『作業用011(=DESKTOP-PPD5V8I)』の紐付けは誤り。sheetName と aliases は fleet-liveness がシート行の統合に使うため、シート側の表記を直すまで残す。アカウント nishi@ は kim 回答(2026-10-08)",
     "person": "金功勇",
-    "aliases": ["作業用011(=DESKTOP-PPD5V8I)", "作業用004民泊用"],
+    "aliases": [
+      "作業用011(=DESKTOP-PPD5V8I)",
+      "作業用004民泊用"
+    ],
     "_evidence": "【訂正 2026-10-09】kim スクリーンショット 2026-10-09 で DESKTOP-PPD5V8I=作業用004民泊用 と確定。旧記載『作業用011(=DESKTOP-PPD5V8I)』は誤り。【以下は旧証拠・残置】2026-08-27 20:0x に Discord へ初報告し 🖥 hostname=DESKTOP-PPD5V8I を送ってきた（webhook 復旧の実証）。シート行『作業用011(=DESKTOP-PPD5V8I)』と hostname 一致。remoteName 根拠(2026-10-08): 台帳『PC稼働状況』D列=作業用011 の行(担当 金功勇)の fleet-mail疎通の根拠に『kimko-PCが送信/返信8通…紐付け=fleet-pc-map(作業用011)』とあり、作業用011=kimko-PC を台帳側が明示"
   },
   "HP": {
@@ -27,7 +35,9 @@
     "account": "nishi@orgiast.jp",
     "_evidenceRemoteName": "kim のスクリーンショット(2026-10-09): Chrome リモートデスクトップ『作業用019/nishi』の接続先の設定→詳細情報でデバイス名 DESKTOP-04U31RG（Precision T3610、デバイスID 9D75ACC5-EB0D-48FB-B27E-D60113A9417B）。nishi-PC 自己申告の hostname=DESKTOP-04U31RG(2026-10-08 fleet-mail 返信)と一致。アカウント nishi@ は kim 回答(2026-10-08)",
     "hostname": "DESKTOP-04U31RG",
-    "aliases": ["DESKTOP-04U31RG"],
+    "aliases": [
+      "DESKTOP-04U31RG"
+    ],
     "_gap": "手書き行が無い(PC稼働状況シートに追加が必要)",
     "_evidence": "2026-08-28/29 に Discord へ hostname=DESKTOP-04U31RG / user=user / git=seisaku-team@orgiast.jp を含む報告を送信（rules-resync runId=rules-resync-2026-08-28-nightly-cost-fix 実行報告 および 日次トークン報告、いずれも実測）"
   },
@@ -48,7 +58,9 @@
     "sheetName": "作業用011",
     "hostname": "作業用011",
     "account": "cr@orgiast.jp",
-    "aliases": ["作業用011"],
+    "aliases": [
+      "作業用011"
+    ],
     "_evidence": "cr-PC の Claude Code が Discord #claude-code（msg 1558060797459169290, 2026-10-09）で hostname『作業用011』を自己申告。kim 回答 2026-10-08: cr@orgiast.jp 担当。HANDOVER-cr-2026-10-09 の『作業用018』表記は誤りで実機は 011。enroll は PC名 cr-PC で 2026-10-09 発行"
   },
   "_unverified": {

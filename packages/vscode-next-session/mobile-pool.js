@@ -1,4 +1,4 @@
-const { targetCount, readConfig, readSnapshot } = require('./mobile-state.cjs');
+const { targetCount, readConfig, readSnapshot, readRefreshConfig, readLastRefreshAt, inRefreshHours } = require('./mobile-state.cjs');
 const { newRetryState, canAttemptMobileOpen, recordMobileOpenAttempt } = require('./route');
 
 // A loopback socket is an OS-owned mutex shared by all VS Code windows. A dead
@@ -57,4 +57,25 @@ function createPool({ tabs, open, publish, own = () => true, now = Date.now }) {
     }
   };
 }
-module.exports = { targetCount, readConfig, readSnapshot, createOwnershipLease, isWaitingTab, createPool };
+// --- 定期リフレッシュ判定（純粋関数） ---
+// 待機タブのうち最古の 1 本を閉じ、補充で新セッションとして作り直す（スマホ一覧の上に出すため）。
+const REFRESH_MIN_AGE_MS = 10 * 60000; // 出現から 10 分未満は対象外（レース回避）
+// tabs: [{ label, appearedAt, isActive }]。force=true（URI の refresh=1）は時間帯・間隔・無効設定を無視する。
+// 不足中（待機数 < target）は常に no。補充を優先する。
+function decideRefresh({ now, minutes, hoursOk, lastRefreshAt, target, tabs, force = false }) {
+  const waiting = tabs.filter(isWaitingTab);
+  if (waiting.length < target) return { refresh: false, reason: 'shortage', waiting: waiting.length };
+  if (!force) {
+    if (!(minutes > 0)) return { refresh: false, reason: 'disabled', waiting: waiting.length };
+    if (!hoursOk) return { refresh: false, reason: 'outside-hours', waiting: waiting.length };
+    if (lastRefreshAt && now - lastRefreshAt < minutes * 60000) return { refresh: false, reason: 'interval', waiting: waiting.length };
+  }
+  const candidates = waiting.filter((tab) => !tab.isActive && now - tab.appearedAt >= REFRESH_MIN_AGE_MS);
+  if (candidates.length === 0) return { refresh: false, reason: 'no-candidate', waiting: waiting.length };
+  const tab = candidates.reduce((oldest, current) => (current.appearedAt < oldest.appearedAt ? current : oldest));
+  return { refresh: true, reason: 'ok', tab, waiting: waiting.length, ageMinutes: Math.floor((now - tab.appearedAt) / 60000) };
+}
+module.exports = {
+  targetCount, readConfig, readSnapshot, createOwnershipLease, isWaitingTab, createPool,
+  REFRESH_MIN_AGE_MS, decideRefresh, readRefreshConfig, readLastRefreshAt, inRefreshHours,
+};

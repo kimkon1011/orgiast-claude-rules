@@ -35,6 +35,20 @@ test('dry-run reports actual snapshot and never resolves CLI or spawns', async (
   assert.equal(await main(['--dry-run', '--count', '2'], { env: {}, homedir: home, log: (s) => output.push(s), exists() { assert.fail('CLI lookup'); }, spawn() { assert.fail('spawn'); } }), 0);
   assert.match(output[0], /現在の待機数: 1 \/ 目標: 2 \/ 起動する本数: 1/);
 });
+test('--refresh は URI に refresh=1 を付け、--count と併用できる。dry-run は最終リフレッシュを表示', async (t) => {
+  assert.deepEqual(parseMobileArgs(['--refresh', '--count', '2']), { count: 2, name: 'スマホ用セッション', refresh: true });
+  assert.equal(buildMobileSessionsUri({ count: 2, name: 'a', refresh: true }), 'vscode://orgiast.next-session/mobile?count=2&name=a&refresh=1');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-refresh-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const output = [];
+  await main(['--dry-run'], { env: {}, homedir: home, log: (s) => output.push(s) });
+  assert.match(output[1], /最終リフレッシュ: なし/);
+  fs.mkdirSync(path.join(home, '.claude'));
+  fs.writeFileSync(path.join(home, '.claude', 'mobile-sessions-state.json'), JSON.stringify({ waiting: 1, updatedAt: Date.now(), lastRefreshAt: Date.UTC(2026, 9, 10, 1, 2, 3) }));
+  const output2 = [];
+  await main(['--dry-run'], { env: {}, homedir: home, log: (s) => output2.push(s) });
+  assert.match(output2[1], /最終リフレッシュ: 2026-10-10T01:02:03/);
+});
 test('unknown snapshot is not reported as zero', async (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-unknown-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));

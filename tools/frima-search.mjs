@@ -10,6 +10,8 @@
 //   --shops は原則付けない（全サイト横断が既定。絞ると PayPayフリマ等の最安を取りこぼす: 2026-10-10 実害）
 // shop: amazon rakuten yahoo_shop kakaku yahoo(ヤフオク) jmty mercari rakuma paypayfrima
 
+import { isEntry } from './is-entry.mjs';
+
 const ALL_SHOPS = ['amazon', 'rakuten', 'yahoo_shop', 'kakaku', 'yahoo', 'jmty', 'mercari', 'rakuma', 'paypayfrima'];
 const DEFAULT_SHOPS = ['yahoo', 'mercari', 'rakuma', 'paypayfrima', 'yahoo_shop', 'rakuten', 'amazon', 'jmty'];
 
@@ -103,7 +105,6 @@ async function main() {
   }
 }
 
-import { pathToFileURL } from 'node:url';
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isEntry(import.meta.url)) {
   main().catch(e => { console.error(e); process.exit(1); });
 }

@@ -10,6 +10,7 @@ import { parseEnvText } from './env-kv.mjs';
 import { machineIdentity } from './machine-identity.mjs';
 import { addDecision, listDecisions } from './pending-decisions.mjs';
 import { loadOptin, redactSecrets, targetMatches, runPrompt, consentCommand } from './fleet-agent.mjs';
+import { resolveClaudeExecutableFromDisk } from './claude-exe.mjs';
 import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
 
 const ownRepo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -29,6 +30,16 @@ export function parseExecMarkers(body) {
   const cwdMatch = (lines[index] ?? '').match(execCwdMarker);
   if (cwdMatch) { cwd = cwdMatch[1]; index += 1; }
   return { exec: 'codex', cwd, body: lines.slice(index).join('\n') };
+}
+// 受信タスクが claude CLI を見つけられない事故（2026-10-10 nishi-PC: spawn claude ENOENT）を
+// 相手が追える形にする。Windows の npm グローバルは claude.cmd しか置かず shell:false では起動できない。
+export function isMissingClaudeError(value) {
+  return /ENOENT/i.test(String(value?.error ?? value?.message ?? value ?? ''));
+}
+export function missingClaudeMessage(executable, candidates = []) {
+  const resolved = executable || 'claude';
+  const list = Array.isArray(candidates) && candidates.length ? candidates.join(' / ') : '(候補0件)';
+  return `実行失敗: claude CLI が見つかりません（実行ファイル: ${resolved} / 候補: ${list}）。受信側PCで CLAUDE_CLI_PATH を設定するか claude を再インストールしてください`;
 }
 export const LOCK_MS = 10 * 60 * 1000;
 export function validId(id) {
@@ -196,6 +207,10 @@ export async function pollOnce(deps = {}) {
   const dryRun = !!deps.dryRun;
   const json = !!deps.json;
   const executePrompts = deps.executePrompts !== false;
+  // PATH 上の claude は Windows では claude.cmd で、shell 無しの spawn では ENOENT になる。
+  // 実行ファイルは受信側PCが決める（送信側の指示では変えられない）ので、ここで1回だけ解決する。
+  const resolveClaudeExe = deps.resolveClaudeExe
+    ?? (() => resolveClaudeExecutableFromDisk({ platform: process.platform, env: deps.env ?? process.env }));
   const inboxFile = id => path.join(dir, 'fleet-inbox', `${validId(id)}.json`);
   const log = (name, value) => {
     fs.mkdirSync(dir, { recursive: true });
@@ -316,6 +331,7 @@ export async function pollOnce(deps = {}) {
         if (promptHandled) continue;
         promptHandled = true;
         const resultFile = path.join(dir, 'fleet-agent-results', `${validId(mail.id)}.json`);
+        let claudeExeName = null;
         let result = readJson(resultFile);
         if (!result) {
           if (mail.executionStartedAt) result = { exitCode: null, outputTail: '前回の実行が中断されました。二重実行防止のため自動再実行しません。' };
@@ -324,17 +340,26 @@ export async function pollOnce(deps = {}) {
           else {
             writeJson(inboxFile(mail.id), { ...readJson(inboxFile(mail.id)), executionStartedAt: new Date(now()).toISOString() });
             const header = `これは ${mail.from} PC の Claude Code からのメッセージです。回答は標準出力に書けば自動で相手に返ります。ファイル変更や外部送信が要る内容は実行せず、必要な理由と手順を回答に書いてください。`;
+            const resolved = await resolveClaudeExe();
+            const executable = (typeof resolved === 'string' ? resolved : resolved?.executable) || 'claude';
+            const candidates = Array.isArray(resolved?.candidates) ? resolved.candidates : [];
+            claudeExeName = path.basename(executable);
             try {
-              result = await runPrompt({ claudeExe: process.env.CLAUDE_CLI_PATH || 'claude', body: `${header}\n\n${mail.body}`,
+              const runResult = await runPrompt({ claudeExe: executable, body: `${header}\n\n${mail.body}`,
                 cwd: deps.repo ?? process.env.ORGIAST_REPO ?? ownRepo, timeoutSeconds: 90, readOnly: true, spawnImpl: deps.spawnImpl });
-            } catch (e) { result = { exitCode: null, outputTail: `実行失敗: ${redactSecrets(e.message)}` }; }
+              result = isMissingClaudeError(runResult)
+                ? { ...runResult, outputTail: missingClaudeMessage(executable, candidates) }
+                : runResult;
+            } catch (e) {
+              result = { exitCode: null, outputTail: isMissingClaudeError(e) ? missingClaudeMessage(executable, candidates) : `実行失敗: ${redactSecrets(e.message)}` };
+            }
           }
           result = { ...result, outputTail: redactSecrets(result.outputTail || result.error || '(出力なし)').slice(-8000) };
           if (result.error) result.error = redactSecrets(result.error);
           writeJson(resultFile, result);
         }
         await request('mail-reply', { id: mail.id, from: label, resultBody: result.outputTail });
-        log('sent', { action: 'auto-reply', id: mail.id, exitCode: result.exitCode, timedOut: result.timedOut || false });
+        log('sent', { action: 'auto-reply', id: mail.id, exitCode: result.exitCode, timedOut: result.timedOut || false, ...(claudeExeName ? { claudeExe: claudeExeName } : {}) });
         try {
           const inboxMail = readJson(inboxFile(mail.id), null);
           if (inboxMail) writeJson(inboxFile(mail.id), { ...inboxMail, status: 'done', resultAt: new Date(now()).toISOString(), resultBody: result.outputTail });

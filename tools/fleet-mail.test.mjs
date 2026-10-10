@@ -548,3 +548,56 @@ test('exec codex is not executed when executePrompts is false', async t => {
   assert.equal(readInbox(f.home).length, 1);
 });
 
+// --- 2026-10-10 事故: 受信タスクが `spawn claude ENOENT` で返信できなかった ---
+test('opted-in prompt spawns the executable resolved by claude-exe, not the bare PATH name', async t => {
+  const f = fixture(t); const spawns = [];
+  fs.writeFileSync(path.join(f.dir, 'fleet-agent-optin.json'), '{"accept":["prompt"]}');
+  f.deps.spawnImpl = spawnDouble(spawns);
+  f.deps.repo = f.home;
+  f.deps.resolveClaudeExe = async () => ({ executable: 'C:/x/claude.exe', candidates: ['C:/x/claude.exe'] });
+  f.deps.request = async (kind, payload) => { f.calls.push({ kind, payload }); return kind === 'mail-poll' ? { messages: [mail({ kind: 'prompt' })] } : { mail: {} }; };
+  await main(['--poll'], f.deps);
+  assert.equal(spawns.length, 1);
+  assert.equal(spawns[0].program, 'C:/x/claude.exe');
+  const sent = fs.readFileSync(path.join(f.dir, 'fleet-mail-sent.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l));
+  assert.equal(sent.find(entry => entry.action === 'auto-reply').claudeExe, 'claude.exe');
+});
+
+test('CLAUDE_CLI_PATH injected through deps.env wins over disk discovery', async t => {
+  const f = fixture(t); const spawns = [];
+  fs.writeFileSync(path.join(f.dir, 'fleet-agent-optin.json'), '{"accept":["prompt"]}');
+  f.deps.spawnImpl = spawnDouble(spawns);
+  f.deps.repo = f.home;
+  f.deps.env = { CLAUDE_CLI_PATH: 'C:/custom/claude.exe' };
+  f.deps.request = async (kind, payload) => { f.calls.push({ kind, payload }); return kind === 'mail-poll' ? { messages: [mail({ kind: 'prompt' })] } : { mail: {} }; };
+  await main(['--poll'], f.deps);
+  assert.equal(spawns.length, 1);
+  assert.equal(spawns[0].program, 'C:/custom/claude.exe');
+});
+
+test('spawn ENOENT replies with the resolver candidates and still marks the mail processed', async t => {
+  const f = fixture(t); const spawns = [];
+  fs.writeFileSync(path.join(f.dir, 'fleet-agent-optin.json'), '{"accept":["prompt"]}');
+  f.deps.spawnImpl = (program, args, options) => {
+    spawns.push({ program, args, options });
+    const child = new EventEmitter();
+    child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.kill = () => {};
+    queueMicrotask(() => { const error = new Error(`spawn ${program} ENOENT`); error.code = 'ENOENT'; child.emit('error', error); });
+    return child;
+  };
+  f.deps.repo = f.home;
+  f.deps.resolveClaudeExe = async () => ({ executable: 'C:/missing/claude.exe', candidates: ['C:/a/claude.exe', 'C:/b/claude.exe'] });
+  f.deps.request = async (kind, payload) => { f.calls.push({ kind, payload }); return kind === 'mail-poll' ? { messages: [mail({ kind: 'prompt' })] } : { mail: {} }; };
+  await main(['--poll'], f.deps);
+  assert.equal(spawns[0].program, 'C:/missing/claude.exe');
+  const replies = f.calls.filter(c => c.kind === 'mail-reply');
+  assert.equal(replies.length, 1);
+  assert.match(replies[0].payload.resultBody, /claude CLI が見つかりません/);
+  assert.ok(replies[0].payload.resultBody.includes('C:/a/claude.exe'));
+  assert.ok(replies[0].payload.resultBody.includes('C:/b/claude.exe'));
+  assert.ok(fs.readFileSync(path.join(f.dir, '.fleet-mail-processed'), 'utf8').includes(mail().id));
+  // 二重実行しない: 次の poll でも再返信しない
+  await main(['--poll'], f.deps);
+  assert.equal(f.calls.filter(c => c.kind === 'mail-reply').length, 1);
+});
+

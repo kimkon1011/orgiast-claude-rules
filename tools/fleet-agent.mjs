@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { machineIdentity } from './machine-identity.mjs';
 import { parseHandoff } from './auto-session.mjs';
 import { isEntry } from './is-entry.mjs';
+import { resolveClaudeExecutableFromDisk } from './claude-exe.mjs';
 import { findLatestMemoryDir } from './memory-share.mjs';
 
 const ALLOWED_KINDS = new Set(['status', 'prompt', 'enable-auto-session', 'run']);
@@ -205,7 +206,7 @@ function warningFromResult(result) {
 }
 
 export async function processDirective(directive, context) {
-  const { home, repo, label, hostname, dryRun, post, spawnImpl = spawn, run = runSync } = context;
+  const { home, repo, label, hostname, dryRun, post, spawnImpl = spawn, resolveClaudeExe, run = runSync } = context;
   const id = String(directive.id ?? '');
   const kind = String(directive.kind ?? '');
   if (!id || !targetMatches(directive.targets, label, hostname)) return { action: 'skipped' };
@@ -254,7 +255,14 @@ export async function processDirective(directive, context) {
   }
   const cwd = directive.cwd ? path.resolve(String(directive.cwd)) : repo;
   if (!cwd || !fs.existsSync(cwd)) { const message = `⚠ **[${label}]** cwd が存在しないため実行しません: ${cwd} (id=${id})`; await post(message); return { action: 'bad-cwd', message }; }
-  const result = await runPrompt({ claudeExe: process.env.CLAUDE_CLI_PATH || 'claude', body: directive.body, cwd, timeoutSeconds: directive.timeoutSeconds ?? 1800, spawnImpl });
+  // PATH 上の claude は Windows では claude.cmd で、shell 無しの spawn では ENOENT になる
+  // (2026-10-10: 受信タスクの runPrompt が spawn claude ENOENT で毎回失敗した)。実行ファイルは
+  // 受信側PCが決める（指示側からは選べない）ので、spawn の直前に1回だけ解決する。
+  const resolveExe = resolveClaudeExe
+    ?? (() => resolveClaudeExecutableFromDisk({ platform: process.platform, env: process.env }));
+  const resolved = await resolveExe();
+  const claudeExe = (typeof resolved === 'string' ? resolved : resolved?.executable) || 'claude';
+  const result = await runPrompt({ claudeExe, body: directive.body, cwd, timeoutSeconds: directive.timeoutSeconds ?? 1800, spawnImpl });
   const resultsDir = path.join(home, '.claude', 'fleet-agent-results');
   fs.mkdirSync(resultsDir, { recursive: true });
   fs.writeFileSync(path.join(resultsDir, `${id}.json`), `${JSON.stringify(result, null, 2)}\n`);

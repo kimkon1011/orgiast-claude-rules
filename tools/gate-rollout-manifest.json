@@ -40,7 +40,8 @@
     },
     "handoff-action-gate": {
       "rollout": "deny",
-      "legacy": true
+      "distributedAt": "2026-10-10T00:00:00Z",
+      "denyAfter": "2026-10-17T00:00:00Z"
     },
     "handoff-audit-gate": {
       "rollout": "deny",
@@ -140,7 +141,8 @@
     },
     "shallow-answer-gate": {
       "rollout": "deny",
-      "legacy": true
+      "distributedAt": "2026-10-10T00:00:00Z",
+      "denyAfter": "2026-10-17T00:00:00Z"
     },
     "stop-gate": {
       "rollout": "deny",

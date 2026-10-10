@@ -13,7 +13,7 @@ const request = 'GitHub の画面で Merge をクリックしてください。'
 function invoke(home, sessionId, text, extra = {}) {
   return spawnSync(process.execPath, [runner], {
     input: JSON.stringify({ session_id: sessionId, assistant_text: text, ...extra }),
-    encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_HANDOFF_AUDIT: 'off' },
+    encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_HANDOFF_AUDIT: 'off', ORGIAST_HOSTNAME: 'kim-PC' },
   });
 }
 
@@ -190,7 +190,7 @@ test('runnerと単体hookの両方が会話のsession-close証拠を評価する
       for (const directText of [false, true]) {
         const result = spawnSync(process.execPath, [target], {
           input: JSON.stringify({ session_id: `${evidence}-${directText}-${path.basename(target)}`, transcript_path: transcript, ...(directText ? { assistant_text: text } : {}) }),
-          encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_HANDOFF_AUDIT: 'off' },
+          encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_HANDOFF_AUDIT: 'off', ORGIAST_HOSTNAME: 'kim-PC' },
         });
         assert.equal(result.status, 0, result.stderr);
         if (evidence) assert.equal(result.stdout, '');

@@ -257,7 +257,10 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       return 4;
     }
   }
-  const executablePath = deps.executablePath ?? findChromium(getBrowsersBaseDir());
+  // 正規版 Chrome を優先する。Playwright 同梱 Chromium は playwright-core と revision がずれると
+  // ログイン後の遷移でブラウザごと落ちた(2026-10-10 実測: 1.58 + chromium-1243 でログイン画面が消えた)。
+  const installedChrome = process.env.PROGRAMFILES ? path.join(process.env.PROGRAMFILES, "Google", "Chrome", "Application", "chrome.exe") : null;
+  const executablePath = deps.executablePath ?? (installedChrome && existsSync(installedChrome) ? installedChrome : findChromium(getBrowsersBaseDir()));
   if (!executablePath) {
     stderr("messenger-watch: Chromium が見つかりません。npx playwright install chromium を実行してください");
     return 4;

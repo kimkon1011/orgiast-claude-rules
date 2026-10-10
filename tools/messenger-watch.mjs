@@ -28,7 +28,7 @@ export function parseArgs(argv) {
 // ログイン画面へリダイレクトされたか。URL に login を含む / パスワード欄がある、のいずれか。
 export function isLoginUrl(url, hasPasswordField = false) {
   if (hasPasswordField) return true;
-  return typeof url === "string" && /(^|[/.])login([/?#.]|$)/i.test(url);
+  return typeof url === "string" && (/(^|[/.])login([/?#.]|$)/i.test(url) || /\/(checkpoint|two_step_verification)(\/|\?|$)/i.test(url));
 }
 
 // 会話一覧の1行から未読かどうかを判定する。aria-label・太字・「未読」表示のいずれか。
@@ -270,15 +270,12 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       const page = context.pages()[0] || (await context.newPage());
       await page.goto(MESSAGES_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
       stdout("ブラウザで Facebook にログインし、Messenger が表示されたらウィンドウを閉じてください。");
+      // 自動で閉じない。2段階認証(checkpoint)の途中を「ログイン済み」と誤判定して閉じた実害あり(2026-10-10)。
+      // 人がウィンドウを閉じるまで待つ。
       const start = now();
       while (now() - start < 15 * 60 * 1000) {
-        await sleep(5000);
+        await sleep(2000);
         if (context.pages().length === 0) break;
-        const url = page.url();
-        if (!isLoginUrl(url) && !(await hasPasswordField(page))) {
-          stdout("ログインを保存しました");
-          return 0;
-        }
       }
       stdout("ログインを保存しました");
       return 0;
@@ -294,7 +291,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     if (isLoginUrl(url, await hasPasswordField(page))) {
       const state = readState(stateFile);
       const today = new Date(now()).toISOString().slice(0, 10);
-      if (state.loginNotifiedAt !== today) {
+      if (!args.dryRun && state.loginNotifiedAt !== today) {
         await notify("Messenger監視: ログインが切れています。再ログインが必要", { home });
         state.loginNotifiedAt = today;
         writeJson(stateFile, state);

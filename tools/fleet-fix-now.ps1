@@ -2,7 +2,7 @@
 # Windows PowerShell 5.1 向け UTF-8 BOM。このスクリプトを貼った人＝そのPCの担当者の承諾（prompt/codex）として扱う。
 # 使い方（PowerShell で1行）:
 #   [Net.ServicePointManager]::SecurityProtocol='Tls12'; iwr -UseBasicParsing https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/tools/fleet-fix-now.ps1 -OutFile $env:TEMP\fleet-fix-now.ps1; powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\fleet-fix-now.ps1
-param([string]$ReportTo = 'kim-PC', [switch]$NoOptin)
+param([string]$ReportTo = 'kim-PC', [switch]$NoOptin, [string]$Label = '')
 $ErrorActionPreference = 'Continue'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 $report = New-Object System.Collections.Generic.List[string]
@@ -19,14 +19,43 @@ Say ("[fleet-fix-now] " + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + " hostname=
 $label = ''
 $envFile = Join-Path $claudeDir 'cost-reporter.env'
 if (Test-Path $envFile) { $m = Select-String -Path $envFile -Pattern '^REPORTER_LABEL=(.*)$' | Select-Object -First 1; if ($m) { $label = $m.Matches[0].Groups[1].Value.Trim() } }
+# -Label 指定時は REPORTER_LABEL を書き換える（2026-10-10: 作業用018 が kimko-PC のラベルを複製しており宛先が衝突した）
+if ($Label) {
+  $lines = @(); if (Test-Path $envFile) { $lines = @(Get-Content $envFile | Where-Object { $_ -notmatch '^REPORTER_LABEL=' }) }
+  $lines += "REPORTER_LABEL=$Label"
+  [IO.File]::WriteAllText($envFile, (($lines -join "`r`n") + "`r`n"), (New-Object Text.UTF8Encoding($false)))
+  Say ("label: " + $(if ($label) { $label } else { '(未設定)' }) + " → " + $Label + " に変更")
+  $label = $Label
+}
 Say ("label(REPORTER_LABEL)=" + $(if ($label) { $label } else { '(未設定 → hostname で受信)' }))
 $fleetEnv = Join-Path $claudeDir 'fleet-sheet.env'
 Say ("fleet-sheet.env=" + $(if (Test-Path $fleetEnv) { 'あり' } else { '無し（送受信不可。このPCは fleet 未配布）' }))
 
 # 1. nightly-repo を origin/main 最新にする（PR #698 / #700 を取り込む）
 $git = Get-Command git -ErrorAction SilentlyContinue
-if (-not $git) { Say 'NG: git が見つかりません。Git for Windows を入れてから再実行してください'; }
-else {
+if (-not $git) {
+  # cr-PC(作業用011) 2026-10-10 実測: git 無しで止まった。winget で入れて同じセッションの PATH に足す。
+  Say 'git が無いので winget でインストールします（1〜3分）'
+  $winget = Get-Command winget -ErrorAction SilentlyContinue
+  if ($winget) { & winget install --id Git.Git -e --silent --accept-package-agreements --accept-source-agreements 2>&1 | Out-Null }
+  foreach ($p in @('C:\Program Files\Git\cmd', (Join-Path $env:LOCALAPPDATA 'Programs\Git\cmd'))) { if (Test-Path $p) { $env:PATH = "$p;$env:PATH" } }
+  $git = Get-Command git -ErrorAction SilentlyContinue
+  Say ("git: " + $(if ($git) { 'インストール OK ' + $git.Source } else { 'インストール失敗（winget ' + $(if ($winget) { 'あり' } else { '無し' }) + '）→ zip 取得に切替' }))
+}
+if (-not $git) {
+  # git が無くても動けるように zip で main を展開する（.git 無し＝日次 self-sync は動かないが tools は動く）
+  $zip = Join-Path $env:TEMP 'orgiast-claude-rules-main.zip'
+  $tmpDir = Join-Path $env:TEMP 'orgiast-claude-rules-zip'
+  try {
+    Invoke-WebRequest -UseBasicParsing 'https://github.com/kimkon1011/orgiast-claude-rules/archive/refs/heads/main.zip' -OutFile $zip
+    if (Test-Path $tmpDir) { Remove-Item -Recurse -Force $tmpDir }
+    Expand-Archive -Path $zip -DestinationPath $tmpDir -Force
+    $src = Get-ChildItem $tmpDir | Select-Object -First 1
+    if (Test-Path $repo) { Remove-Item -Recurse -Force $repo }
+    Move-Item -Path $src.FullName -Destination $repo
+    Say 'repo: zip 展開 OK（git 無し）'
+  } catch { Say ('NG: zip 取得に失敗: ' + $_.Exception.Message) }
+} else {
   if (-not (Test-Path (Join-Path $repo '.git'))) {
     git clone --quiet $repoUrl $repo 2>&1 | Out-Null
     Say ("repo: clone " + $(if (Test-Path (Join-Path $repo '.git')) { 'OK' } else { 'NG' }))

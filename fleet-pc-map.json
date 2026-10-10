@@ -1,7 +1,7 @@
 {
   "_note": "Discordラベル → シートD列表記 / hostname / 担当者 の対応表。fleet-liveness.mjs が同一PCの二重計上を防ぐために使う。証拠のあるものだけを書く（推測でマージすると他PCのシート行を奪う）。証拠 = ①報告本文の `🖥 hostname=…` ②ラベル名がシートD列と一致 ③申告日と同日のラベル初登場 ④kim の明示回答。aliases は同じPCを指す別表記（1台が手入力行と機械書き込み行に分かれているため）。",
   "_codexAccountDefault": "seisaku-team@orgiast.jp",
-  "_codexAccountNote": "Codex(ChatGPT)のアカウントは PC ごとに codexAccount で分担し、未指定のPCは _codexAccountDefault(seisaku-team@)。kim 2026-10-10 決定: kim@=kim-PC、nishi@=nishi-PC・kimko-PC、cr@=cr-PC・w018-PC、seisaku-team@=作業用999・カフェ用015。各アカウントは Plus 以上・Auto top-up オフ。account は Claude の担当席で別物。",
+  "_codexAccountNote": "Codex(ChatGPT)は C案: kim-PC 以外の全PCで seisaku-team@ の Pro 5x を共有する（kim 2026-10-10 最終決定。月$100固定・Auto top-up オフ）。kim-PC は kim@ の既存 Pro を使うため codexAccount=kim@。account は Claude の担当席で別物。",
   "kim-PC": {
     "hostname": "DESKTOP-2D0R4LI",
     "person": "金功勇",
@@ -24,8 +24,7 @@
       "作業用011(=DESKTOP-PPD5V8I)",
       "作業用004民泊用"
     ],
-    "_evidence": "【訂正 2026-10-09】kim スクリーンショット 2026-10-09 で DESKTOP-PPD5V8I=作業用004民泊用 と確定。旧記載『作業用011(=DESKTOP-PPD5V8I)』は誤り。【以下は旧証拠・残置】2026-08-27 20:0x に Discord へ初報告し 🖥 hostname=DESKTOP-PPD5V8I を送ってきた（webhook 復旧の実証）。シート行『作業用011(=DESKTOP-PPD5V8I)』と hostname 一致。remoteName 根拠(2026-10-08): 台帳『PC稼働状況』D列=作業用011 の行(担当 金功勇)の fleet-mail疎通の根拠に『kimko-PCが送信/返信8通…紐付け=fleet-pc-map(作業用011)』とあり、作業用011=kimko-PC を台帳側が明示",
-    "codexAccount": "nishi@orgiast.jp"
+    "_evidence": "【訂正 2026-10-09】kim スクリーンショット 2026-10-09 で DESKTOP-PPD5V8I=作業用004民泊用 と確定。旧記載『作業用011(=DESKTOP-PPD5V8I)』は誤り。【以下は旧証拠・残置】2026-08-27 20:0x に Discord へ初報告し 🖥 hostname=DESKTOP-PPD5V8I を送ってきた（webhook 復旧の実証）。シート行『作業用011(=DESKTOP-PPD5V8I)』と hostname 一致。remoteName 根拠(2026-10-08): 台帳『PC稼働状況』D列=作業用011 の行(担当 金功勇)の fleet-mail疎通の根拠に『kimko-PCが送信/返信8通…紐付け=fleet-pc-map(作業用011)』とあり、作業用011=kimko-PC を台帳側が明示"
   },
   "HP": {
     "sheetName": "東邦2階HP",
@@ -41,8 +40,7 @@
       "DESKTOP-04U31RG"
     ],
     "_gap": "手書き行が無い(PC稼働状況シートに追加が必要)",
-    "_evidence": "2026-08-28/29 に Discord へ hostname=DESKTOP-04U31RG / user=user / git=seisaku-team@orgiast.jp を含む報告を送信（rules-resync runId=rules-resync-2026-08-28-nightly-cost-fix 実行報告 および 日次トークン報告、いずれも実測）",
-    "codexAccount": "nishi@orgiast.jp"
+    "_evidence": "2026-08-28/29 に Discord へ hostname=DESKTOP-04U31RG / user=user / git=seisaku-team@orgiast.jp を含む報告を送信（rules-resync runId=rules-resync-2026-08-28-nightly-cost-fix 実行報告 および 日次トークン報告、いずれも実測）"
   },
   "作業用999": {
     "sheetName": "作業用999",
@@ -64,8 +62,7 @@
     "aliases": [
       "作業用011"
     ],
-    "_evidence": "cr-PC の Claude Code が Discord #claude-code（msg 1558060797459169290, 2026-10-09）で hostname『作業用011』を自己申告。kim 回答 2026-10-08: cr@orgiast.jp 担当。HANDOVER-cr-2026-10-09 の『作業用018』表記は誤りで実機は 011。enroll は PC名 cr-PC で 2026-10-09 発行",
-    "codexAccount": "cr@orgiast.jp"
+    "_evidence": "cr-PC の Claude Code が Discord #claude-code（msg 1558060797459169290, 2026-10-09）で hostname『作業用011』を自己申告。kim 回答 2026-10-08: cr@orgiast.jp 担当。HANDOVER-cr-2026-10-09 の『作業用018』表記は誤りで実機は 011。enroll は PC名 cr-PC で 2026-10-09 発行"
   },
   "_unverified": {
     "_note": "証拠が弱く確定できない対応。fleet-mail の宛先解決(remoteName 照合)には使わない。確定したらトップレベルのエントリへ remoteName 付きで移す。",
@@ -79,7 +76,6 @@
     "remoteName": "作業用018",
     "hostname": "DESKTOP-N429M3V",
     "account": "cr@orgiast.jp",
-    "codexAccount": "cr@orgiast.jp",
     "aliases": [
       "DESKTOP-N429M3V"
     ],

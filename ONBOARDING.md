@@ -797,6 +797,7 @@ node tools/fleet-mail.mjs --reply <id> --body-file answer.txt
 本文ファイルはClaudeが作る。`--why` は送信時必須。本文のargv直渡しは禁止。`--wait` は15秒ごとに返信を確認し、返信時exit 0、期限まで未返信ならexit 2を返す。送信IDは送信ログにも残る。
 
 - `prompt` は相手PCの人の1回の承諾（`fleet-agent-optin.json` の `accept` に `prompt`）が必要。未承諾なら実行せず承諾コマンドを返信する。Claudeが承諾を代行してはならない。ヘッドレス回答はSonnetでローカル読み取りだけを許可し、90秒で打ち切る。ファイル変更や外部送信を実行しない。
+- 実装まで任せるなら `--exec codex` を付ける（相手PCの Codex 定額枠で実行。相手PCの人が `codex` を承諾済みであること。承諾コマンドは未承諾時の返信に入る）。`--wait 1800` と組み合わせ、実行ディレクトリは `--exec-cwd <相手PC上のパス>`（存在し `.git` を持つディレクトリのみ採用）で指定する。`--exec` は `--kind prompt` でのみ使え、既定期限は送信時刻+6時間。承諾コマンド例: `node -e "const f=require('fs'),o=require('os'),p=require('path').join(o.homedir(),'.claude','fleet-agent-optin.json');let a=[];try{a=JSON.parse(f.readFileSync(p,'utf8')).accept||[]}catch{};f.writeFileSync(p,JSON.stringify({accept:[...new Set([...a,'codex'])],acceptedAt:new Date().toISOString(),acceptedBy:o.userInfo().username},null,2))"`
 - `note` は承諾不要。受信だけではAIを起動せず、次のプロンプト時に相手のClaudeが読む。未読一覧は `node tools/fleet-mail.mjs --inbox --json`、既読化は `node tools/fleet-mail.mjs --ack <id>`。
 - 到達の目安は2分（PC起動中・通信正常時）。長い受信処理、PC休止、ネットワーク遅延は加算される。対話セッションの過去の会話履歴は共有しない。
 - 他PCへの展開は `node tools/setup.mjs --converge` でhookとWindows受信タスク `OrgiastFleetMail` を自動登録。送受信設定のないPCはスキップする。人が必要なのはprompt承諾1回だけ。

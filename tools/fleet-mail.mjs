@@ -17,6 +17,9 @@ const ownRepo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const decisionPrefix = /^\s*\[判断依頼\]/;
 export function hasDecisionRequest(mail) {
+  // 返信（mail-reply-* / replyTo あり）は原本の why を引き継ぐので判断依頼として扱わない。
+  // 扱うと受領返信に相手が受領返信を返し、2分ごとに PC 間で無限に往復する（2026-10-10 kim-PC⇔cr-PC 実測）。
+  if (mail?.replyTo || String(mail?.id ?? '').startsWith('mail-reply-')) return false;
   return decisionPrefix.test(mail.body ?? '') || decisionPrefix.test(mail.why ?? '');
 }
 // 本文先頭の実行モードマーカー（送信側 --exec codex が挿入する）。GAS は messageKind を prompt のまま扱う。

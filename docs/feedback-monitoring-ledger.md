@@ -20,7 +20,7 @@ export const DEFAULT_REPO_MAP = {
 
 ## 2. アプリ別台帳
 
-`kit版` 列は `packages/feedback-kit/` の導入バージョン（各アプリ直下の `.feedback-kit.json` の `kitVersion`）。`—` は未導入（kit 管理外）。必須6機能の欠落は `node packages/feedback-kit/verify.mjs --app <dir>` で検出する。
+`kit版` 列は `tools/feedback-kit/` の導入バージョン（各アプリ直下の `.feedback-kit.json` の `kitVersion`）。`—` は未導入（kit 管理外）。必須6機能の欠落は `node tools/feedback-kit/verify.mjs --app <dir>` で検出する。
 
 | アプリ | 投稿窓口 | 原票 | 反映先 repo | kit版 | 現状の監視 | 必要な修正 | 根拠 |
 |---|---|---|---|---|---|---|---|
@@ -33,7 +33,7 @@ export const DEFAULT_REPO_MAP = {
 | トライアル合格審査アプリ | あり（報告フォームリンク） | 未確認 | 未確認 | — | 未監視。リンク先の稼働未確認 | 同上 | `トライアル合格審査アプリ/index.html`（ローカル） |
 | W列GAS（w-col-gas） | 報告メニューあり | 未確認 | 未確認 | — | 未監視。関数・遷移先の稼働未確認 | 導線の稼働確認が先 | `w-col-gas/コード.js`（ローカル） |
 
-補足: 上記のうち GitHub repo が実在するのは `aujust-sales-automation` のみ（`gh repo list kimkon1011` 2026-09-29 実測。他はローカル GAS／静的ファイルで repo が無い）。`kit版` が `—` のアプリは `packages/feedback-kit/install.mjs --app <dir>` で導入し、`tools/feedback-zero-registry.json` へ登録すると滞留ゼロ巡回（`tools/feedback-zero-sweep.mjs`）の対象になる。
+補足: 上記のうち GitHub repo が実在するのは `aujust-sales-automation` のみ（`gh repo list kimkon1011` 2026-09-29 実測。他はローカル GAS／静的ファイルで repo が無い）。`kit版` が `—` のアプリは `tools/feedback-kit/install.mjs --app <dir>` で導入し、`tools/feedback-zero-registry.json` へ登録すると滞留ゼロ巡回（`tools/feedback-zero-sweep.mjs`）の対象になる。
 
 ## 3. 監視対象の修正を実施可能な単位に落とす
 

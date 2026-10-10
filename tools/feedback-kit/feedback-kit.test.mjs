@@ -6,8 +6,8 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { installApp } from './install.mjs';
 import { verifyApp } from './verify.mjs';
-import { judge } from '../../tools/feedback-form-gate.mjs';
-import { scanApps } from '../../tools/feedback-kit-migrate.mjs';
+import { judge } from '../feedback-form-gate.mjs';
+import { scanApps } from '../feedback-kit-migrate.mjs';
 import { atLeast } from './common.mjs';
 function fixture(t,kind='gas') {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'feedback-kit-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
@@ -46,7 +46,7 @@ test('registry missing is not zero-backlog registered',t=>{const f=fixture(t);in
 test('scan finds clasp root only and skips backups and node_modules',t=>{const f=fixture(t);installApp(f);fs.writeFileSync(path.join(f.app,'src/appsscript.json'),'{}');assert.deepEqual(scanApps([f.root,f.app]),[f.app]);});
 test('semver numeric comparison and malformed versions fail closed',()=>{assert.equal(atLeast('1.10.0','1.2.0'),true);for(const v of ['1.0','garbage','1.0.0-beta','01.0.0'])assert.equal(atLeast(v,'1.0.0'),false);});
 test('GAS backend rejects title-only and too many images before saving',()=>{
-  const code=fs.readFileSync(new URL('../feedback-gas/templates/FeedbackRelay.js',import.meta.url),'utf8');
+  const code=fs.readFileSync(new URL('./gas/templates/FeedbackRelay.js',import.meta.url),'utf8');
   const ctx=vm.createContext({});vm.runInContext(code,ctx);ctx._FeedbackRelay_checkRateLimit=()=>true;
   assert.equal(ctx.FeedbackRelay_submitFromForm({title:'only'}).ok,false);
   assert.equal(ctx.FeedbackRelay_submitFromForm({body:'required',images:Array(6).fill({})}).ok,false);

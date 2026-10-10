@@ -28,8 +28,8 @@ export async function main(args=process.argv.slice(2)) {
     else throw new Error('不明な引数: '+arg);
   }
   if(!dirs.length) throw new Error('--scan <dir>... が必要です');
-  const {verifyApp}=await import('../packages/feedback-kit/verify.mjs');
-  const {installApp}=await import('../packages/feedback-kit/install.mjs');
+  const {verifyApp}=await import('./feedback-kit/verify.mjs');
+  const {installApp}=await import('./feedback-kit/install.mjs');
   const rows=[];
   for(const app of scanApps(dirs)) {
     let result=verifyApp(app), error='';

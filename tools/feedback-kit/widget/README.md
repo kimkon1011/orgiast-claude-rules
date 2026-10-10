@@ -3,7 +3,7 @@
 オージャスト社内の Next.js アプリへ、不具合・要望フォーム、Discord 通知、管理キューを1コマンドで導入する標準パッケージです。追加 npm パッケージは不要です。
 
 ```sh
-node -e "fetch('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/packages/feedback-widget/install.mjs?cb='+Date.now()).then(r=>r.text()).then(t=>{require('fs').writeFileSync('install-feedback.mjs',t);})" && node install-feedback.mjs --app-name "<アプリ名>"
+node tools/feedback-kit/install.mjs --app <対象アプリのパス> --name "<アプリ名>"
 ```
 
 ## 保存モード

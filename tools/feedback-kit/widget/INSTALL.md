@@ -2,11 +2,16 @@
 
 ## 自動導入（推奨）
 
+正本リポジトリ（orgiast-claude-rules。各PCでは `tools/` が自動配布されています）で、kit install を実行します。`widget/install.mjs` によるファイル配置、`.feedback-kit.json` の書き込み、滞留ゼロ巡回台帳への登録までを1回で行い、`feedback-form-gate` の kit 検査（verify・版・必須6機能）を通る状態になります。
+
 ```sh
-node -e "fetch('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/packages/feedback-widget/install.mjs?cb='+Date.now()).then(r=>r.text()).then(t=>{require('fs').writeFileSync('install-feedback.mjs',t);})" && node install-feedback.mjs --app-name "<アプリ名>"
+node tools/feedback-kit/install.mjs --app <対象アプリのパス> --name "<アプリ名>"
+node tools/feedback-kit/verify.mjs --app <対象アプリのパス>
 ```
 
-`--target <path> --relay <url> --relay-secret <secret> --owner-discord-id <id> --discord-channel <id> --webhook <url> --no-admin-page --dry-run --force` を指定できます。Node.js 18 以降、Next.js App Router が対象です。テンプレートが手元に無い単体実行時も GitHub `main` から自動取得します。
+既存フォームがある場合は `--upgrade` を付けます（変更前の版は `.feedback-kit-backup/` に退避）。verify が `"ok": true` を返せば導入完了です。ファイル配置だけを行う低レベルの `widget/install.mjs`（下記オプション）を単体で使うと `.feedback-kit.json` が作られず、gate の kit 検査を通りません。
+
+`widget/install.mjs` 単体のオプション: `--target <path> --relay <url> --relay-secret <secret> --owner-discord-id <id> --discord-channel <id> --webhook <url> --no-admin-page --dry-run --force` を指定できます。Node.js 18 以降、Next.js App Router が対象です。テンプレートが手元に無い単体実行時も GitHub `main` から自動取得します。
 
 既定の通知先は中継エンドポイント経由の kim への個別 DM です。Bot と webhook によるチャンネル通知は、既存アプリのための後方互換経路です。
 
@@ -67,13 +72,13 @@ UIは右下 amber `#f59e0b` の浮遊ボタン、最大幅480pxの白いモー�
 デプロイ後、パッケージ一式が手元にある場合は次を実行します。
 
 ```sh
-node packages/feedback-widget/verify.mjs --url https://<app>.vercel.app --target <repo>
+node tools/feedback-kit/widget/verify.mjs --url https://<app>.vercel.app --target <repo>
 ```
 
 1行導入でローカルに `verify.mjs` が無い場合は、インストーラーの最終出力にも表示される次のコマンドを実行します。
 
 ```sh
-node -e "fetch('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/packages/feedback-widget/verify.mjs?cb='+Date.now()).then(r=>r.text()).then(t=>require('fs').writeFileSync('verify-feedback.mjs',t))" && node verify-feedback.mjs --url https://<app>.vercel.app
+node -e "fetch('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/tools/feedback-kit/widget/verify.mjs?cb='+Date.now()).then(r=>r.text()).then(t=>require('fs').writeFileSync('verify-feedback.mjs',t))" && node verify-feedback.mjs --url https://<app>.vercel.app
 ```
 
 API投稿、sinks、service role がローカルにあればDB read-backを確認し、テスト行を削除せず `rejected` に更新します。`--keep` なら更新もしません。管理画面で提出が見え、Discord本文と署名画像が開けることが完了判定です。

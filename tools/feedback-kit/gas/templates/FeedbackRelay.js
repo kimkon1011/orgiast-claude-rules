@@ -3,7 +3,7 @@
  *
  * 背景: 社内アプリの不具合・要望は全社共通の中継 (POST <FEEDBACK_RELAY_URL>) を通って
  * 開発担当の Discord DM に届く仕組みが本番稼働している（Next.js 版は
- * orgiast-claude-rules/packages/feedback-widget）。本ファイルはその GAS 版で、
+ * orgiast-claude-rules/tools/feedback-kit/widget）。本ファイルはその GAS 版で、
  * どの GAS プロジェクトへもそのまま移植できるよう、Script Properties 読み取り以外の
  * 外部依存を持たない（このファイルと ui/FeedbackForm.html の2つをコピーすれば動く）。
  *

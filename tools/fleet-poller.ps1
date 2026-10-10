@@ -30,6 +30,28 @@ try {
   }
 } catch {}
 
+# 自己修復: fleet-mail 受信タスク(OrgiastFleetMail)が未登録/Disabled/最終実行が24時間以上前なら再登録する。
+# 2026-10-10 事故: cr-PC の受信タスクが止まり、返信4通が deliveredAt 空きのまま届かなかった。
+# register-fleet-mail.mjs --ensure が側で健康判定するので、ここは冪等に毎日呼ぶだけでよい。
+try {
+  $fleetMailRepair = Join-Path $repo 'tools\register-fleet-mail.mjs'
+  if ($repo -and (Test-Path $fleetMailRepair -PathType Leaf)) {
+    if ($Dry) { DrySkip 'register-fleet-mail.mjs --ensure (OrgiastFleetMail 未登録/無効/24h未実行なら本番なら再登録する)' }
+    else {
+      & node $fleetMailRepair '--ensure' *> $null
+      if ($LASTEXITCODE -ne 0) { throw "register-fleet-mail.mjs --ensure exit $LASTEXITCODE" }
+    }
+  }
+} catch {
+  try {
+    $fleetLogDir = Join-Path $H '.claude\logs'
+    if (-not (Test-Path -LiteralPath $fleetLogDir)) { New-Item -ItemType Directory -Path $fleetLogDir -Force | Out-Null }
+    $fleetLog = Join-Path $fleetLogDir 'fleet-poller.log'
+    $line = '{0} WARN fleet-mail-self-repair-failed reason={1}' -f (Get-Date).ToString('yyyy-MM-ddTHH:mm:ssK'), ($_.Exception.Message -replace "[\r\n]+", ' ')
+    [IO.File]::AppendAllText($fleetLog, $line + [Environment]::NewLine, (New-Object Text.UTF8Encoding($false)))
+  } catch {}
+}
+
 # 自己修復: 全PCで Claude 環境の Google Drive 日次バックアップを登録する
 try {
   if ($repo -and -not (Get-ScheduledTask -TaskName 'ClaudeDailyDriveBackup' -ErrorAction SilentlyContinue)) {

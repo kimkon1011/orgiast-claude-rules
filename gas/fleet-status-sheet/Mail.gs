@@ -123,18 +123,30 @@ function replyFleetMail(payload) {
     const index = rows.findIndex(function(mail) { return mail.id === payload.id; });
     if (index < 0) return { ok: false, status: 404, error: 'mail_not_found' };
     const original = rows[index];
+    const body = String(payload.resultBody || '').slice(0, 20000);
     // A stable reply id makes retry after a lost HTTP response idempotent, per PC.
-    const id = 'mail-reply-' + _fleetMailDigest_(original.id + '\n' + payload.from);
-    let reply = rows.find(function(mail) { return mail.id === id; });
-    if (!reply) {
+    const stableId = 'mail-reply-' + _fleetMailDigest_(original.id + '\n' + payload.from);
+    let reply = rows.find(function(mail) { return mail.id === stableId; });
+    // A changed body must arrive as a NEW message: if an acknowledgement used the stable
+    // id first, overwriting it would silently drop the real answer (2026-10-10 incident).
+    // Reply lifetime is 72h so a receiver's dead poll task cannot expire it in one day.
+    let replyId = stableId;
+    if (reply && reply.body !== body) {
+      let stamp = now;
+      do {
+        replyId = 'mail-reply-' + _fleetMailDigest_(original.id + '\n' + payload.from + '\n' + String(stamp));
+        stamp++;
+      } while (rows.some(function(mail) { return mail.id === replyId; }));
+    }
+    if (!reply || reply.body !== body) {
       reply = {
-        id: id, from: payload.from, to: original.from, replyTo: original.id, kind: 'note',
-        body: String(payload.resultBody || '').slice(0, 20000), why: original.why,
-        createdAt: new Date(now).toISOString(), expiresAt: new Date(now + 86400000).toISOString(), status: 'new'
+        id: replyId, from: payload.from, to: original.from, replyTo: original.id, kind: 'note',
+        body: body, why: original.why,
+        createdAt: new Date(now).toISOString(), expiresAt: new Date(now + 3 * 86400000).toISOString(), status: 'new'
       };
       _fleetMailWrite_(sheet, rows.length + 2, fleetMailRow(reply));
     }
-    original.status = 'done'; original.resultBody = reply.body; original.resultAt = reply.createdAt;
+    original.status = 'done'; original.resultBody = body; original.resultAt = new Date(now).toISOString();
     _fleetMailWrite_(sheet, index + 2, fleetMailRow(original));
     return { ok: true, mail: original, reply: reply };
   });

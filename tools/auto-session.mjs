@@ -468,6 +468,7 @@ export function buildPrompt(todo, sections, repoCwd, summaryFile, timeoutMin = 6
 - 外部の定期実行（GitHub Actions の schedule など）の結果を待つ場合、5分を超えるポーリングをしてはいけない。待ちが必要なら ${summaryFile} に「検証は次回の自動セッションで行う」と追記し、~/.claude/next-session.md の残TODO先頭に検証だけの1行を追加して終了する。
 - 開始から ${Math.max(0, timeoutMin - 10)} 分でまとめに入り、サマリ追記と残TODO更新を先に済ませる。
 - 終了時は ~/.claude/next-session.md の該当 TODO 行だけを \`~~…~~ → ✅ <日付> 完了（PR #N）\` に行単位で置換し、ファイル全体を上書きしない。該当 TODO 行はどのブロックにあってもよく、成功時は runner 側でも印を付けるので、取り消し線が既に付いていたら何もしなくてよい。
+- fleet-mail の受信メールに \`[判断依頼]\` を含むものへは返信も判断も行わない。kim の判断待ちとして放置すること（ヘッドレスでは未読注入からも除外される）。
 - 秘匿値を出力しない。
 - 外部への送信（メール、社外向け Discord、SNS、顧客連絡）は行わない。`,
     '## 完了報告\n最後に3行以内で「やったこと / 検証したこと / 残ったこと」を出力する。',

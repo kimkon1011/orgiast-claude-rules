@@ -50,6 +50,8 @@
     { "id": "task:nightly", "type": "scheduled-task", "severity": "optional", "spec": { "name": "OrgiastNightlyBatch" }, "description": "夜間バッチ 定時タスク(毎日03:00、triage直後に停滞セッション再開)", "repair": ["register-stalled-session-nightly.mjs"] },
     { "id": "task:thermal-guard", "type": "scheduled-task", "severity": "optional", "spec": { "name": "OrgiastThermalGuard" }, "description": "熱監視 常駐タスク(5分ごと)", "repairHint": "fleet-command.json の task を thermal-guard にして配る" },
     { "id": "task:process-hygiene", "type": "scheduled-task", "severity": "optional", "spec": { "name": "OrgiastProcessHygiene" }, "description": "hook/バッチ残留プロセス・孤児コンソール掃除(1時間ごと)", "repair": ["register-process-hygiene-task.mjs"] },
+    { "id": "tool:fleet-mail-watchdog", "type": "file-nonempty", "severity": "optional", "spec": { "paths": ["orgiast-claude-rules/tools/fleet-mail-watchdog.mjs", "Downloads/orgiast-claude-rules/tools/fleet-mail-watchdog.mjs"] }, "description": "fleet-mail 未配達ウォッチドッグ(kim-PC毎時・repo直参照)", "repair": ["onboarding-sync.mjs", "--force"] },
+    { "id": "task:fleet-mail-watchdog", "type": "scheduled-task", "severity": "optional", "spec": { "name": "OrgiastFleetMailWatchdog", "ifPresent": ".claude/fleet-sheet.env" }, "description": "fleet-mail 未配達を毎時監視し通知(fleet-sheet設定済PCのみ)", "repair": ["register-fleet-mail.mjs"] },
     { "id": "auth:codex", "type": "json-valid", "severity": "manual", "spec": { "path": ".codex/auth.json", "requiredPath": "tokens.id_token", "bom": false }, "description": "Codexログイン済(auth.jsonにトークン)", "repairHint": "codex login" }
   ]
 }

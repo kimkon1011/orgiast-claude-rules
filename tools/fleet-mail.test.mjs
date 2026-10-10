@@ -476,7 +476,9 @@ test('exec codex first poll detaches runner, records executionStartedAt and does
   f.deps.request = async (kind, p) => { f.calls.push({ kind, p }); return kind === 'mail-poll' ? { messages: [execMail()] } : { mail: {} }; };
   await main(['--poll'], f.deps);
   assert.equal(spawns.length, 1);
-  assert.equal(spawns[0].options.detached, true);
+  // win32 は detached を使わず windowsHide（可視コンソール防止）、それ以外は detached。
+  assert.equal(spawns[0].options.detached ?? false, process.platform !== 'win32');
+  assert.equal(spawns[0].options.windowsHide, true);
   assert.equal(spawns[0].options.stdio, 'ignore');
   assert.equal(spawns[0].unrefed, true);
   assert.match(spawns[0].args[0], /fleet-task-runner\.mjs$/);

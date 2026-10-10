@@ -10,6 +10,7 @@ import { parseEnvText } from './env-kv.mjs';
 import { machineIdentity } from './machine-identity.mjs';
 import { addDecision, listDecisions } from './pending-decisions.mjs';
 import { loadOptin, redactSecrets, targetMatches, runPrompt, consentCommand } from './fleet-agent.mjs';
+import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
 
 const ownRepo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -296,8 +297,9 @@ export async function pollOnce(deps = {}) {
             // 初回: 開始印を書いて runner をデタッチ起動する。この時点では返信しない（結果ファイル待ち）。
             writeJson(inboxFile(mail.id), { ...readJson(inboxFile(mail.id)), executionStartedAt: new Date(now()).toISOString() });
             const spawnImpl = deps.spawnImpl ?? spawn;
+            // Windows では detached が可視コンソールを出すので backgroundSpawnOptions（win32: windowsHide / それ以外: detached）に従う。
             const child = spawnImpl(process.execPath, [path.join(ownRepo, 'tools', 'fleet-task-runner.mjs'), '--id', mail.id],
-              { detached: true, stdio: 'ignore', windowsHide: true });
+              { ...backgroundSpawnOptions(), stdio: 'ignore', windowsHide: true });
             child.unref();
             log('exec-started', { id: mail.id, exec: 'codex' });
             continue; // 返信も processed 記録もしない: 結果ファイルができたら次回返信する

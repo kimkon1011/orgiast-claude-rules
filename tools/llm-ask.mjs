@@ -3,6 +3,7 @@ import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'
 import { readEnvValue } from './env-kv.mjs';
 import { callWithFallback, FALLBACK_CHAIN, preferredForCategory } from './llm-fallback.mjs';
 import { geminiUsage, recordGeminiUsage } from './gemini-usage-ledger.mjs';
+import { checkEgress, describeFindings, scanSensitive } from './lib/egress-guard.mjs';
 
 const PROVIDERS = {
   // 実測で精度が高く、llama-3.3-70b より安価な共通既定モデル。
@@ -65,6 +66,18 @@ if (!prompt) { console.error('指示テキストがありません'); process.ex
 const messages = [];
 if (system) messages.push({ role: 'system', content: system });
 messages.push({ role: 'user', content: prompt });
+
+// 送信前 egress ガード。Kimi/DeepSeek/GLM などの中国系・無料学習枠プロバイダへ機密を出さない。
+// 機密そのもの(秘密鍵/APIキー/JWT/カード/個人番号/.env 代入)はプロバイダを問わず送信しない。
+// 迂回路(--allow-sensitive)は作らない。フォールバック先の判定は payloadFor 側でも通す。
+const sensitiveFindings = scanSensitive([system, prompt].filter(Boolean).join('\n\n'));
+const preflight = checkEgress({ provider: start.provider, findings: sensitiveFindings });
+if (!preflight.allowed) {
+  console.error(`egress-guard: ${start.provider} への送信を止めました（検出: ${describeFindings(preflight.findings)}）。機密を除くか、restricted でないプロバイダ（社内レーン）を使ってください`);
+  console.error(`egress-guard: ${preflight.reason}`);
+  process.exit(3);
+}
+
 const ledger = path.join(home, '.claude', 'executor-usage.jsonl');
 function appendAttempt(info, usage = {}) {
   if (info.candidate.provider === 'gemini') {
@@ -94,6 +107,12 @@ try {
     payloadFor(candidate) {
       const P = PROVIDERS[candidate.provider]; const key = loadKey(candidate.provider);
       if (!P || !key) return null;
+      // フォールバック先も同じ判定を通す。restricted な候補は送信せず落とし、次の候補へ回す。
+      const verdict = checkEgress({ provider: candidate.provider, findings: sensitiveFindings });
+      if (!verdict.allowed) {
+        console.error(`egress-guard: フォールバック先 ${candidate.provider} への送信を止めました（検出: ${describeFindings(verdict.findings)}）`);
+        return null;
+      }
       const payload = { model: candidate.model || P.model, messages, max_tokens: maxTok, stream: false };
       if (P.special === 'kimi') Object.assign(payload, { reasoning_effort: 'none', temperature: 0.6 });
       return { url: P.base, init: { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', ...(P.extraHeaders || {}) }, body: JSON.stringify(payload) } };

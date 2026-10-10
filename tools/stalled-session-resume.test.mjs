@@ -53,6 +53,19 @@ test('closed and auto-close eligible sessions excluded', async t => {
   f.io.stat = async () => ({ mtimeMs: f.io.now() - 7 * 86400000 });
   const r = await run(options([], {}), f.io); assert.deepEqual(r.rows.map(r => r.skip), ['closed', 'session-auto-close対象']); assert.equal(f.calls(), 0);
 });
+test('missing transcript is skipped without aborting the run', async t => {
+  const f = await fixture(t, 2);
+  f.io.stat = async file => { if (file === 'file-0') throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); return { mtimeMs: f.io.now() - 86400000 }; };
+  const r = await run(options([], {}), f.io);
+  assert.equal(r.rows[0].skip, '会話ファイル欠損'); assert.equal(r.rows[1].skip, '');
+  assert.equal(f.calls(), 1); assert.equal(r.results.length, 1);
+  assert.equal((await f.ledger()).sessions['session-0'].skipReason, '会話ファイル欠損');
+});
+test('non-ENOENT stat errors still reject', async t => {
+  const f = await fixture(t, 1);
+  f.io.stat = async () => { throw Object.assign(new Error('EACCES'), { code: 'EACCES' }); };
+  await assert.rejects(run(options([], {}), f.io), { code: 'EACCES' });
+});
 test('overlapping runs cannot acquire the same lock', async t => {
   const f = await fixture(t, 1); let release, entered;
   const started = new Promise(r => { entered = r; });

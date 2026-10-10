@@ -85,7 +85,15 @@ export async function run(config = options(), io = {}) {
     for (const record of records) {
       const entry = ledger.sessions[record.sessionId] ?? { attempts: [], noProgress: 0 };
       const closed = await loadClosed();
-      const { mtimeMs } = await stat(record.file);
+      let mtimeMs;
+      try {
+        ({ mtimeMs } = await stat(record.file));
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+        rows.push({ sessionId: record.sessionId, title: record.displayTitle, attempts: entry.attempts.length, skip: '会話ファイル欠損' });
+        if (!readonly) { entry.skipReason = '会話ファイル欠損'; ledger.sessions[record.sessionId] = entry; }
+        continue;
+      }
       let reason = skipReason(record, entry, night, closed, mtimeMs, now(), config.activeMs);
       if (!reason && state.aborted) reason = '連続2件エラーで今晩中止';
       if (!reason && state.count >= config.limit) reason = '今晩の件数上限';

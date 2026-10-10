@@ -95,7 +95,7 @@ function installCommandQueue() {
     if (t.getHandlerFunction() === 'processCommandQueue') ScriptApp.deleteTrigger(t);
   });
   ScriptApp.newTrigger('processCommandQueue').timeBased().everyMinutes(1).create();
-  return { folder_id: folder.getId(), folder_url: 'https://drive.google.com/drive/folders/' + folder.getId() }; // folder は素URL（/a/orgiast.jp/ を挟むと404）
+  return { folder_id: folder.getId(), folder_url: 'https://drive.google.com/drive/folders/' + folder.getId() + '?authuser=' + encodeURIComponent(Session.getActiveUser().getEmail()) }; // 渡す相手に合わせて authuser を設定し、本文にも同じメールを書く
 }
 
 function processCommandQueue() {
@@ -138,7 +138,7 @@ function processCommandQueue() {
 
 ### kim 側の手作業 (各プロジェクトで 1 回だけ)
 
-[GAS エディタ](https://script.google.com/a/orgiast.jp/d/<SCRIPT_ID>/edit) を開く → 関数選択 `setupOnce` → ▶ 実行 → OAuth 承認
+[GAS エディタ](https://script.google.com/d/<SCRIPT_ID>/edit?authuser={開く人のメール}) を開く → 関数選択 `setupOnce` → ▶ 実行 → OAuth 承認
 
 これで OAuth + フォルダ + トリガー が一気に揃う。2 回目以降の ▶ 実行は不要。
 

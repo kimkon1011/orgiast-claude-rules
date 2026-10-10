@@ -16,7 +16,7 @@ tools/course-corrections.json の該当ルールに従い訂正後の手順を�
 
 ## doc-link-drive-guard
 
-読む文書は node tools/gdoc-publish.mjs で公開してDocリンクを渡す。
+読む文書は node tools/gdoc-publish.mjs --authuser <開く人のメール> で公開してDocリンクを渡す。本文にも「<同じメール> で開いてください」を書く。
 
 ## external-state-claim-gate
 
@@ -136,7 +136,7 @@ effortLevel を medium/high、model を既定監督モデルに戻す。
 
 ## url-account-gate
 
-URLに開くアカウント名を添える。既定と違う場合はシークレットウィンドウも指定。
+Workspace の URL は authuser=開く人のメール を付け、本文の同じ行か直前に「<同じメール> で開いてください」と書く。自分宛は userEmail、他人宛は共有済みの相手メール。script.google.com/home/ 系は例外。他サービスはアカウント名を添え、既定と違う場合はシークレットウィンドウも指定。
 
 ## url-format-guard
 

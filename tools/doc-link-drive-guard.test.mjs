@@ -12,7 +12,7 @@ test('文書種別の相対パスと絶対パスを違反として検出する',
 });
 
 test('コード、行アンカー、内部メモリ、Web URL は除外する', () => {
-  const text = '[コード](tools/foo.mjs) [該当箇所](docs/foo.md#L42) [メモリ](C:/Users/x/.claude/projects/p/memory/feedback_x.md) [手順書](https://docs.google.com/a/orgiast.jp/document/d/ID/edit)';
+  const text = '[コード](tools/foo.mjs) [該当箇所](docs/foo.md#L42) [メモリ](C:/Users/x/.claude/projects/p/memory/feedback_x.md) [手順書](https://docs.google.com/document/d/ID/edit)';
   assert.deepEqual(findLocalDocLinks(text), []);
 });
 
@@ -83,4 +83,11 @@ test('裸パス: scratchpad・Temp・LOCAL-PATH-OK・コードブロック・Dri
   assert.deepEqual(findBareLocalDocPaths('https://drive.google.com/file/d/abc/view?authuser=a@b.jp'), []);
   assert.deepEqual(findBareLocalDocPaths(P('run.cmd')), []);
   assert.equal(formatBarePathMessage([]), '');
+});
+
+test('案内は authuser と本文のアカウントを要求する', () => {
+  const message = formatViolationMessage(findLocalDocLinks('[文書](docs/guide.md)'));
+  assert.ok(message.includes('docs.google.com/document/d/{ID}/edit?authuser={userEmail}'));
+  assert.ok(message.includes('<メール> で開いてください'));
+  assert.ok(!message.includes('/a/orgiast.jp/'));
 });

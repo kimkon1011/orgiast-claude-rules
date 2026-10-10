@@ -27,7 +27,7 @@ Claude 側運用: Drive MCP `create_file` で `cmd_<unique>.json`（`{"command":
 `setValue`/`setFormula` は merge セルの non-top-left / protected range / データ検証違反で **silent ignore**。書いたら `SpreadsheetApp.flush()` → `getValue()` で実値 assert。数式が `#REF!`/`#NUM!` のまま残るなら `getFormulas→setFormulas` で強制再評価。
 
 ## 4. URL 提示
-GAS エディタリンクは必ず `https://script.google.com/a/orgiast.jp/d/{SCRIPT_ID}/edit` 形式（素URL禁止、詳細は ~/.claude/CLAUDE.md）。
+GAS エディタリンクは必ず `https://script.google.com/d/{SCRIPT_ID}/edit?authuser={開く人のメール}` 形式（素URL禁止、詳細は ~/.claude/CLAUDE.md）。
 
 詳細テンプレ: memory `feedback_gas_command_queue.md` / ONBOARDING §1.4.1。新規立ち上げ手順は `/gas-project-setup` skill。
 

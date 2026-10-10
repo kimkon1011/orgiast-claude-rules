@@ -89,8 +89,8 @@ test('作成は既定フォルダへ移動し、全リンクの読み戻し後�
   const source = '# 題名\n[設定](https://example.test)';
   const rendered = renderDocument(source);
   const mock = mockApi(rendered, { existing: document('\n') });
-  const result = await publishDocument({ title: '題名', source }, mock);
-  assert.equal(result.url, 'https://docs.google.com/a/orgiast.jp/document/d/doc-id/edit');
+  const result = await publishDocument({ authuser: 'reader@example.com', title: '題名', source }, mock);
+  assert.equal(result.url, 'https://docs.google.com/document/d/doc-id/edit?authuser=reader%40example.com');
   assert.equal(result.linkCount, 1);
   const create = mock.calls.find(c => c.url.endsWith('/documents'));
   assert.deepEqual(create.body, { title: '題名' });
@@ -103,7 +103,7 @@ test('作成は既定フォルダへ移動し、全リンクの読み戻し後�
 test('--update は同じID・配置を維持し revisionId で競合を防ぐ', async () => {
   const source = '[設定](https://example.test)';
   const mock = mockApi(renderDocument(source));
-  const result = await publishDocument({ title: '題名', source, update: 'existing-id' }, mock);
+  const result = await publishDocument({ authuser: 'reader@example.com', title: '題名', source, update: 'existing-id' }, mock);
   assert.equal(result.id, 'existing-id');
   assert.ok(mock.calls.every(c => c.url.includes('existing-id')));
   const batch = mock.calls.find(c => c.url.endsWith(':batchUpdate'));
@@ -115,7 +115,7 @@ test('--update は同じID・配置を維持し revisionId で競合を防ぐ', 
 test('明示フォルダはupdate時も適用される', async () => {
   const source = 'リンクなしでも本文を検証';
   const mock = mockApi(renderDocument(source));
-  const result = await publishDocument({ title: '題名', source, update: 'existing-id', folder: 'chosen' }, mock);
+  const result = await publishDocument({ authuser: 'reader@example.com', title: '題名', source, update: 'existing-id', folder: 'chosen' }, mock);
   assert.equal(result.linkCount, 0);
   assert.equal(new URL(mock.calls.find(c => c.method === 'PATCH').url).searchParams.get('addParents'), 'chosen');
 });
@@ -123,7 +123,7 @@ test('明示フォルダはupdate時も適用される', async () => {
 test('APIエラー・revision競合は成功にせず、後続の変更も行わない', async () => {
   const source = '本文';
   const mock = mockApi(renderDocument(source), { failBatch: true });
-  await assert.rejects(publishDocument({ title: '題名', source, update: 'existing-id' }, mock), /revision conflict/);
+  await assert.rejects(publishDocument({ authuser: 'reader@example.com', title: '題名', source, update: 'existing-id' }, mock), /revision conflict/);
   assert.equal(mock.calls.at(-1).url.endsWith(':batchUpdate'), true);
 });
 
@@ -134,7 +134,7 @@ test('空本文・制御文字・複数タブは書き込み前に拒否する',
   const existing = document('古い本文\n');
   existing.tabs.push(existing.tabs[0]);
   const mock = mockApi(renderDocument(source), { existing });
-  await assert.rejects(publishDocument({ title: '題名', source, update: 'existing-id' }, mock), /複数タブ/);
+  await assert.rejects(publishDocument({ authuser: 'reader@example.com', title: '題名', source, update: 'existing-id' }, mock), /複数タブ/);
   assert.ok(mock.calls.every(c => c.method === 'GET'));
 });
 
@@ -146,11 +146,11 @@ test('CLI は成功時stdoutにURLだけ、リンク欠落時はexit 1を返す'
   writeFileSync(file, source);
   for (const missingLinks of [false, true]) {
     const out = [], err = [];
-    const code = await main(['--title', '題名', '--file', file, '--update', 'existing-id'], {
+    const code = await main(['--authuser', 'reader@example.com', '--title', '題名', '--file', file, '--update', 'existing-id'], {
       ...mockApi(renderDocument(source), { missingLinks }), stdout: s => out.push(s), stderr: s => err.push(s),
     });
     assert.equal(code, missingLinks ? 1 : 0);
-    assert.deepEqual(out, missingLinks ? [] : ['https://docs.google.com/a/orgiast.jp/document/d/existing-id/edit']);
+    assert.deepEqual(out, missingLinks ? [] : ['reader@example.com で開いてください: https://docs.google.com/document/d/existing-id/edit?authuser=reader%40example.com']);
     assert.match(err.join('\n'), missingLinks ? /リンク未設定/ : /リンク 1\/1 件 OK/);
   }
 });

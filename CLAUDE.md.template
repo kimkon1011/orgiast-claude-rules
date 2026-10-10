@@ -4,21 +4,29 @@
 
 ---
 
-## Google Workspace URL は `/a/orgiast.jp/` を必ず挟む
+## Google Workspace URL は開くアカウントを URL と本文の両方で指定
 
-Workspace のリンク提示時は必ず `/a/orgiast.jp/` パスを入れる。素の URL 禁止（Chrome デフォルトが個人 Gmail のメンバーが多く、「アクセス権が必要です」→毎回アカウント切替になるため。ドメインベースなので他の orgiast.jp メンバーにもそのまま渡せる）。
+Workspace の URL は authuser=開く人のメール を付け、本文に開くアカウントを書く。自分宛はその Claude 環境の userEmail、他人宛は共有済みの相手メールを使い、特定個人をハードコードしない。既存クエリには &authuser= を追加し、#gid 等のフラグメントより前に置く。本文の同じ行か直前に「<メール> で開いてください」と書く。script.google.com の /home/ 系だけは素URL＋アカウント切替案内の例外を維持する。
 
-| サービス | 形式 |
+2026-10-10、nishi@orgiast.jp が `/a/orgiast.jp/` 形式の Doc を開けなかった。ブラウザの既定アカウントが別だとドメイン指定だけでは解決しないため、nishi の原文「リンクを出すときは必ずどのアカウントで開くかを明記して、ブラウザもそのアカウントで開くように設定して」に従い、URL と本文の両方で受け手を指定する。
+
+`/a/orgiast.jp/` を使わない。authuser は権限付与ではないため、他人に渡す前に相手へ共有する。
+
+| サービス | URL（本文にも同じメールを明記） |
 |---|---|
-| Apps Script エディタ | `script.google.com/a/orgiast.jp/d/{ID}/edit` |
-| Apps Script マクロ実行 | `script.google.com/a/macros/orgiast.jp/d/{ID}/...` |
-| Sheets / Docs / Slides / Forms | `docs.google.com/a/orgiast.jp/{spreadsheets|document|presentation|forms}/d/{ID}/edit` |
-| Drive **file** (view) | `drive.google.com/a/orgiast.jp/file/d/{ID}/view` |
-| Drive **folder** | `drive.google.com/drive/folders/{ID}`（**素URL。`/a/orgiast.jp/` を付けると404**） |
+| Apps Script エディタ | `https://script.google.com/d/{ID}/edit?authuser={開く人のメール}` |
+| Apps Script マクロ | `https://script.google.com/macros/s/{ID}/exec?authuser={開く人のメール}` |
+| Sheets | `https://docs.google.com/spreadsheets/d/{ID}/edit?authuser={開く人のメール}` |
+| Docs | `https://docs.google.com/document/d/{ID}/edit?authuser={開く人のメール}` |
+| Slides | `https://docs.google.com/presentation/d/{ID}/edit?authuser={開く人のメール}` |
+| Forms | `https://docs.google.com/forms/d/{ID}/edit?authuser={開く人のメール}` |
+| Drive file | `https://drive.google.com/file/d/{ID}/view?authuser={開く人のメール}` |
+| Drive folder | `https://drive.google.com/drive/folders/{ID}?authuser={開く人のメール}` |
 
-- **Drive folder だけは `/a/orgiast.jp/` 非対応**: `drive.google.com/a/orgiast.jp/drive/folders/{ID}` は Google が **404** を返す（`/a/{domain}/` 形式が生きているのは docs.google.com / script.google.com のエディタ系ホストと drive.google.com の `/file/d/` のみ。`/drive/folders/` パスには存在しない）。folder は素URLで渡し、フォルダを orgiast.jp ドメイン共有にした上で、個人Gmailデフォルトの相手には「右上アバターで orgiast.jp に切替」を併記。2026-06-12 / 2026-07-06 に404実測。
-- `?authuser=kim@orgiast.jp` は付けない（他メンバーが踏めなくなる）
-- 例外: `script.google.com/home/usersettings` 等の `/home/...` 系は素URL + 「右上アバターで kim@orgiast.jp に切替」を併記
+例: 追記（nishi@orgiast.jp で開いてください）: https://docs.google.com/document/d/{ID}/edit?authuser=nishi@orgiast.jp
+
+kim が読む Doc は `tools/gdoc-publish.mjs --authuser <開く人のメール>`（リンク化・read-back 検証）で作る。
+
 
 ---
 

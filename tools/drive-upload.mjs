@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // 任意のローカルファイルを Drive フォルダへ DWD でアップロードする。
-// 使い方: node tools/drive-upload.mjs --file <path> --folder <folderId> [--name <name>] [--as <email>]
+// 使い方: node tools/drive-upload.mjs --file <path> --folder <folderId> [--name <name>] [--as <email>] [--authuser <開く人のメール>]
+import { workspaceUrl } from './lib/workspace-url.mjs';
 import { readFileSync } from 'node:fs';
 import { basename, extname } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -21,7 +22,7 @@ export function parseArgs(argv) {
     const arg = argv[i];
     if (!arg.startsWith('--')) throw new Error(`unexpected argument: ${arg}`);
     const key = arg.slice(2);
-    if (!['file', 'folder', 'name', 'as'].includes(key)) throw new Error(`unknown option: ${arg}`);
+    if (!['file', 'folder', 'name', 'as', 'authuser'].includes(key)) throw new Error(`unknown option: ${arg}`);
     const value = argv[i + 1];
     if (value === undefined || value.startsWith('--')) throw new Error(`missing value for ${arg}`);
     out[key] = value;
@@ -33,7 +34,7 @@ export function parseArgs(argv) {
 }
 
 export function driveViewUrl(id, as) {
-  return `https://drive.google.com/file/d/${id}/view${as ? `?authuser=${encodeURIComponent(as)}` : ''}`;
+  return workspaceUrl(`https://drive.google.com/file/d/${id}/view`, as);
 }
 
 export function mimeFor(file) {
@@ -51,7 +52,8 @@ export function resolveAs(args, env = process.env, gitEmail = () => execFileSync
   return email;
 }
 
-export async function upload({ file, folder, name, as, keyPath }) {
+export async function upload({ file, folder, name, as, authuser = as, keyPath }) {
+  workspaceUrl('https://drive.google.com/', authuser);
   const content = readFileSync(file);
   const token = await getDriveToken({ impersonate: as, keyPath });
   const boundary = `drive-upload-${Date.now().toString(36)}`;
@@ -67,7 +69,7 @@ export async function upload({ file, folder, name, as, keyPath }) {
     body,
   });
   const json = await res.json();
-  return { id: json.id, name: json.name, url: driveViewUrl(json.id, as) };
+  return { id: json.id, name: json.name, url: driveViewUrl(json.id, authuser), accountInstruction: `${authuser} で開いてください` };
 }
 
 async function main() {

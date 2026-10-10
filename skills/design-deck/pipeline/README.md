@@ -91,6 +91,6 @@ node --input-type=module -e "import('./deck-hybrid/report.mjs').then(m => m.writ
 
 ## PDF・Drive・修正分担
 
-`build.mjs` は既存 `html-to-pdf.mjs` でPDF化し、PDFシグネチャとページ数を確認する。Drive・Git操作は含まない。完成PDFは既存のDriveアップロード経路で保存し、既存file IDがあればPATCHしてURLを維持する。kimへは `?authuser=kim@orgiast.jp` 付きURLを渡す。
+`build.mjs` は既存 `html-to-pdf.mjs` でPDF化し、PDFシグネチャとページ数を確認する。Drive・Git操作は含まない。完成PDFは既存のDriveアップロード経路で保存し、既存file IDがあればPATCHしてURLを維持する。URL は `authuser=<開く人のメール>` 付きにし、本文に「<メール> で開いてください」を書く。
 
 写真の不満はGeminiで再合成。文字・数字の不満はClaudeが `pages.json` / CSSを修正。Gensparkは写真配置の面積比・余白の参考にレンダを見るだけ。Canvaを使わない理由は [../SKILL.md](../SKILL.md) を参照。

@@ -23,7 +23,7 @@ clasp create --type sheets --title "<名前>"   # 既存シートにバインド
 実装テンプレの詳細: memory `feedback_gas_command_queue.md`（cmd/result の JSON 形式、セキュリティ、やってはいけない一覧）。
 
 ## 3. kim への依頼（1回だけ・4要素形式で）
-- 直URL: `https://script.google.com/a/orgiast.jp/d/<SCRIPT_ID>/edit`（**/a/orgiast.jp/ 必須**）
+- 直URL: `https://script.google.com/d/<SCRIPT_ID>/edit?authuser={開く人のメール}`（**authuser と本文に開くアカウントを指定**）
 - 対象 `.gs` ファイル（Setup.gs）を**先に開いてもらう**（関数プルダウンは開いているファイルの関数しか出ない）
 - 選ぶ関数名: `setupOnce` → ▶実行 → OAuth「許可」
 - 完了判定の見え方: 実行ログに `command queue installed` 等

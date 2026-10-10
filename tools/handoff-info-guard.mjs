@@ -121,7 +121,7 @@ export function formatViolationMessage(result) {
   } else if (Array.isArray(result.blocks) && result.blocks.length) {
     sample = `\n\n該当箇所:\n  ${result.blocks[0].split(/\r?\n/)[0].slice(0, 80)}`;
   }
-  return `[HANDOFF-INFO-GUARD] user に作業を頼んでいますが、その場で実行できる情報が同じ場所にありません。${past}${sample}\n\n依頼と同じブロックに次を書いてください(ONBOARDING §1.5.3):\n  - URL(開く先・対象の Doc/PR/画面)\n  - 実際に貼るコマンドの全文(「同じコマンド」で参照しない)\n  - 対象ファイルのパスと人が読める名前\nGoogle Workspace の URL は /a/orgiast.jp/ を挟み、Drive の file/folder は ?authuser=kim@orgiast.jp を付けてください。\n\n例外的に追加情報が不要な依頼なら、本文に [HANDOFF-INFO-OK] を入れてください。`;
+  return `[HANDOFF-INFO-GUARD] user に作業を頼んでいますが、その場で実行できる情報が同じ場所にありません。${past}${sample}\n\n依頼と同じブロックに次を書いてください(ONBOARDING §1.5.3):\n  - URL(開く先・対象の Doc/PR/画面)\n  - 実際に貼るコマンドの全文(「同じコマンド」で参照しない)\n  - 対象ファイルのパスと人が読める名前\nGoogle Workspace の URL は authuser=開く人のメール を付け、本文に「<同じメール> で開いてください」を書く。自分宛は環境の userEmail、他人宛は共有した相手のメールを使う。\n\n例外的に追加情報が不要な依頼なら、本文に [HANDOFF-INFO-OK] を入れてください。`;
 }
 
 async function main() {

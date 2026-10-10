@@ -167,10 +167,10 @@ export function collectStatus({ home, repo, label, hostname, run = runSync, plat
     memoryLine: formatMemoryLine(sharedMemory),
     jobStatus,
     syncLine: `onboarding-sync=${syncLast}`,
-    todoLine: `残TODO=${todoCount} / mail 未読=${mailUnread} / prompt opt-in=${accepts.includes('prompt') ? 'yes' : 'no'}`,
+    todoLine: `残TODO=${todoCount} / mail 未読=${mailUnread} / prompt opt-in=${accepts.includes('prompt') ? 'yes' : 'no'} / codex opt-in=${accepts.includes('codex') ? 'yes' : 'no'}`,
   });
   const text = lines.join('\n');
-  return { text: redactSecrets(text), data: { label, hostname, platform, account, codex, git, syncLast, failures, todoCount, promptOptin: accepts.includes('prompt'), sharedMemory, checkedAt: new Date().toISOString() } };
+  return { text: redactSecrets(text), data: { label, hostname, platform, account, codex, git, syncLast, failures, todoCount, promptOptin: accepts.includes('prompt'), codexOptin: accepts.includes('codex'), sharedMemory, checkedAt: new Date().toISOString() } };
 }
 
 export function runPrompt({ claudeExe, body, cwd, timeoutSeconds = 1800, spawnImpl = spawn, readOnly = false }) {

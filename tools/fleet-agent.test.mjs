@@ -73,6 +73,20 @@ test('status は webhook URL と API key を伏せる', () => {
   assert.match(status.text, /\[REDACTED\]/);
 });
 
+test('status は prompt と codex の opt-in 状態を別々に表示する', () => {
+  const home = tempHome();
+  fs.writeFileSync(path.join(home, '.claude', 'fleet-agent-optin.json'), JSON.stringify({ accept: ['prompt'] }));
+  const run = (_program, args) => {
+    if (args.includes('--abbrev-ref')) return { status: 0, stdout: 'main\n', stderr: '' };
+    if (args.includes('--count')) return { status: 0, stdout: '0\n', stderr: '' };
+    return { status: 0, stdout: '', stderr: '' };
+  };
+  const status = collectStatus({ home, repo: process.cwd(), label: 'PC', hostname: 'host', run, platform: 'linux' });
+  assert.match(status.text, /prompt opt-in=yes \/ codex opt-in=no/);
+  assert.equal(status.data.promptOptin, true);
+  assert.equal(status.data.codexOptin, false);
+});
+
 function statusWithPowerShell(stdout, status = 0, stderr = '') {
   const home = tempHome();
   fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'kim@orgiast.jp' } }));

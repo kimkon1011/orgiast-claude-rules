@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { randomInt, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
@@ -15,6 +16,18 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const decisionPrefix = /^\s*\[判断依頼\]/;
 export function hasDecisionRequest(mail) {
   return decisionPrefix.test(mail.body ?? '') || decisionPrefix.test(mail.why ?? '');
+}
+// 本文先頭の実行モードマーカー（送信側 --exec codex が挿入する）。GAS は messageKind を prompt のまま扱う。
+const execMarker = /^<!--\s*fleet-exec:\s*codex\s*-->\s*$/;
+const execCwdMarker = /^<!--\s*fleet-exec-cwd:\s*(.*?)\s*-->\s*$/;
+export function parseExecMarkers(body) {
+  const lines = String(body ?? '').split(/\r?\n/);
+  if (!execMarker.test(lines[0] ?? '')) return { exec: null, cwd: null, body: String(body ?? '') };
+  let index = 1;
+  let cwd = null;
+  const cwdMatch = (lines[index] ?? '').match(execCwdMarker);
+  if (cwdMatch) { cwd = cwdMatch[1]; index += 1; }
+  return { exec: 'codex', cwd, body: lines.slice(index).join('\n') };
 }
 export const LOCK_MS = 10 * 60 * 1000;
 export function validId(id) {
@@ -114,7 +127,7 @@ export function findPriorReply(dir, id) {
 export function parseArgs(argv) {
   const options = {};
   const flags = new Set(['--send', '--poll', '--dry-run', '--json', '--inbox', '--force']);
-  const values = new Set(['--to', '--kind', '--body-file', '--why', '--expires-hours', '--wait', '--reply', '--ack', '--sent-status']);
+  const values = new Set(['--to', '--kind', '--body-file', '--why', '--expires-hours', '--wait', '--reply', '--ack', '--sent-status', '--exec', '--exec-cwd']);
   for (let i = 0; i < argv.length; i++) {
     const key = argv[i];
     if (Object.hasOwn(options, key)) throw new Error(`duplicate option: ${key}`);
@@ -125,7 +138,7 @@ export function parseArgs(argv) {
   const actions = ['--send', '--poll', '--inbox', '--reply', '--ack', '--sent-status'].filter(k => options[k]);
   if (actions.length !== 1) throw new Error('指定は --send / --poll / --reply / --inbox / --ack / --sent-status のいずれか1つ');
   const allowed = {
-    '--send': ['--to', '--kind', '--body-file', '--why', '--expires-hours', '--wait'],
+    '--send': ['--to', '--kind', '--body-file', '--why', '--expires-hours', '--wait', '--exec', '--exec-cwd'],
     '--poll': ['--dry-run', '--json'], '--inbox': ['--json'], '--reply': ['--body-file', '--force'], '--ack': [],
     '--sent-status': []
   };
@@ -134,6 +147,11 @@ export function parseArgs(argv) {
     for (const key of ['--to', '--kind', '--body-file', '--why']) if (!options[key]?.trim()) throw new Error(`${key} 必須`);
     if (!['prompt', 'note'].includes(options['--kind'])) throw new Error('--kind must be prompt or note');
     if (options['--to'].length > 128 || options['--why'].length > 1000) throw new Error('宛先または理由が長すぎます');
+    if (options['--exec'] !== undefined) {
+      if (options['--exec'] !== 'codex') throw new Error('--exec は codex のみ対応');
+      if (options['--kind'] !== 'prompt') throw new Error('--exec は --kind prompt でのみ使えます');
+    }
+    if (options['--exec-cwd'] !== undefined && options['--exec'] === undefined) throw new Error('--exec-cwd は --exec codex と併用してください');
   }
   if (options['--reply'] && !options['--body-file']) throw new Error('--body-file 必須');
   for (const key of ['--reply', '--ack', '--sent-status']) if (options[key]) validId(options[key]);
@@ -256,6 +274,42 @@ export async function pollOnce(deps = {}) {
           continue;
         }
         if (!executePrompts) continue; // hook からの受信: 実行は受信タスク/対話セッションに任せる
+        // --exec codex: 本文先頭のマーカーで相手PCの Codex に実装させる経路（デタッチ起動・結果ファイル待ち）。
+        const exec = parseExecMarkers(mail.body);
+        if (exec.exec === 'codex') {
+          const resultFile = path.join(dir, 'fleet-agent-results', `${validId(mail.id)}.json`);
+          const result = readJson(resultFile);
+          if (result) {
+            await request('mail-reply', { id: mail.id, from: label, resultBody: result.outputTail });
+            log('sent', { action: 'auto-reply', id: mail.id, exitCode: result.exitCode, exec: 'codex' });
+            try {
+              const inboxMail = readJson(inboxFile(mail.id), null);
+              if (inboxMail) writeJson(inboxFile(mail.id), { ...inboxMail, status: 'done', resultAt: new Date(now()).toISOString(), resultBody: result.outputTail });
+            } catch (e) { err(`fleet-mail: inbox への返信記録に失敗（送信は成功）: ${e.message}`); }
+          } else if (Date.parse(mail.expiresAt) <= now()) {
+            await request('mail-reply', { id: mail.id, from: label, resultBody: '有効期限切れのため実行しません。' });
+            log('sent', { action: 'auto-reply', id: mail.id, exitCode: null, exec: 'codex' });
+          } else if (!loadOptin(path.join(dir, 'fleet-agent-optin.json')).includes('codex')) {
+            await request('mail-reply', { id: mail.id, from: label, resultBody: `未オプトイン。承諾コマンド: ${consentCommand('codex')}` });
+            log('sent', { action: 'auto-reply', id: mail.id, exitCode: null, exec: 'codex' });
+          } else if (!mail.executionStartedAt) {
+            // 初回: 開始印を書いて runner をデタッチ起動する。この時点では返信しない（結果ファイル待ち）。
+            writeJson(inboxFile(mail.id), { ...readJson(inboxFile(mail.id)), executionStartedAt: new Date(now()).toISOString() });
+            const spawnImpl = deps.spawnImpl ?? spawn;
+            const child = spawnImpl(process.execPath, [path.join(ownRepo, 'tools', 'fleet-task-runner.mjs'), '--id', mail.id],
+              { detached: true, stdio: 'ignore', windowsHide: true });
+            child.unref();
+            log('exec-started', { id: mail.id, exec: 'codex' });
+            continue; // 返信も processed 記録もしない: 結果ファイルができたら次回返信する
+          } else if (now() - Date.parse(mail.executionStartedAt) >= 2 * 3600000) {
+            await request('mail-reply', { id: mail.id, from: label, resultBody: 'codex 実行がタイムアウト（結果ファイル未生成）' });
+            log('sent', { action: 'auto-reply', id: mail.id, exitCode: null, exec: 'codex', timedOut: true });
+          } else {
+            continue; // 実行中: 結果ファイルができるまで待つ（返信も processed 記録もしない）
+          }
+          fs.appendFileSync(processedFile, `${mail.id}\n`, { mode: 0o600 }); processed.add(mail.id); handled.push(mail.id);
+          continue;
+        }
         // Keep each poll short enough for the next two-minute delivery tick.
         if (promptHandled) continue;
         promptHandled = true;
@@ -336,12 +390,21 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     const target = resolveRemoteName(options['--to'], pcMap);
     if (target.resolved) err(`${options['--to']} → ${target.to}`);
     const id = `mail-${new Date(now()).toISOString().replace(/[-:.TZ]/g, '')}-${(deps.randomInt ?? randomInt)(1000, 10000)}`;
+    // --exec codex: 本文先頭にマーカー行を挿入して受信側に実行モードを伝える（本文ファイル自体は変更しない）。
+    let body = redactSecrets(fs.readFileSync(options['--body-file'], 'utf8')).slice(0, 20000);
+    if (options['--exec'] === 'codex') {
+      const markers = ['<!-- fleet-exec: codex -->'];
+      if (options['--exec-cwd'] !== undefined) markers.push(`<!-- fleet-exec-cwd: ${options['--exec-cwd']} -->`);
+      body = `${markers.join('\n')}\n${body}`;
+    }
+    // --exec codex は相手PCの Codex が最長1800秒走るため、通常 prompt より長い既定期限(+6h)にする。
+    const defaultExpiresHours = options['--exec'] === 'codex' ? 6 : 24;
     const payload = { id, from: label, to: target.to, messageKind: options['--kind'],
-      body: redactSecrets(fs.readFileSync(options['--body-file'], 'utf8')).slice(0, 20000), why: redactSecrets(options['--why']),
-      expiresAt: new Date(now() + Number(options['--expires-hours'] ?? 24) * 3600000).toISOString() };
+      body, why: redactSecrets(options['--why']),
+      expiresAt: new Date(now() + Number(options['--expires-hours'] ?? defaultExpiresHours) * 3600000).toISOString() };
     // Record the id BEFORE transport; uncertain delivery can be inspected without resending a new id.
-    log('sent', { action: 'send-attempt', ...payload });
-    await request('mail-send', payload); log('sent', { action: 'sent', id, to: payload.to });
+    log('sent', { action: 'send-attempt', ...payload, ...(options['--exec'] === 'codex' ? { exec: 'codex' } : {}) });
+    await request('mail-send', payload); log('sent', { action: 'sent', id, to: payload.to, ...(options['--exec'] === 'codex' ? { exec: 'codex' } : {}) });
     if (options['--wait'] !== undefined) {
       err(`送信済み: ${id}`);
       const result = await waitForReply(id, Number(options['--wait']), { request, now, sleepImpl: deps.sleep });

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { main, parseArgs, createClient, waitForReply, acquireLock, LOCK_MS, readInbox, findPriorReply, resolveRemoteName } from './fleet-mail.mjs';
+import { main, parseArgs, createClient, waitForReply, acquireLock, LOCK_MS, readInbox, findPriorReply, resolveRemoteName, parseExecMarkers } from './fleet-mail.mjs';
 import { main as register } from './register-fleet-mail.mjs';
 import { consentCommand } from './fleet-agent.mjs';
 import { listDecisions, markDecisions, queuePath } from './pending-decisions.mjs';
@@ -414,3 +414,135 @@ test('register --ensure skips PowerShell when both tasks probe healthy', t => {
   register({ home: f.home, platform: 'win32', spawnImpl, ensure: true });
   assert.ok(calls.every(c => c.args.join(' ').includes('-Command')), '健康判定の probe のみで再登録しない');
 });
+
+// --- --exec codex: 相手PCの Codex に実装させる経路 ---
+const execMail = (overrides = {}) => mail({ kind: 'prompt', body: '<!-- fleet-exec: codex -->\n実装して', ...overrides });
+function detachedDouble(calls) {
+  return (program, args, options) => {
+    calls.push({ program, args, options });
+    return { unref: () => { calls.at(-1).unrefed = true; } };
+  };
+}
+
+test('parseExecMarkers strips the exec marker and optional cwd marker', () => {
+  assert.deepEqual(parseExecMarkers('<!-- fleet-exec: codex -->\n本文'), { exec: 'codex', cwd: null, body: '本文' });
+  assert.deepEqual(parseExecMarkers('<!-- fleet-exec: codex -->\n<!-- fleet-exec-cwd: /repo -->\n本文'), { exec: 'codex', cwd: '/repo', body: '本文' });
+  assert.deepEqual(parseExecMarkers('普通の本文'), { exec: null, cwd: null, body: '普通の本文' });
+});
+
+test('send --exec codex inserts markers, defaults expiry to +6h and logs exec', async t => {
+  const f = fixture(t); const transport = [];
+  f.deps.now = () => Date.parse('2026-09-21T00:00:00Z'); f.deps.randomInt = () => 1234;
+  delete f.deps.request;
+  f.deps.fetch = async (url, opts) => { transport.push({ url, payload: JSON.parse(opts.body) }); return { ok: true, json: async () => ({ ok: true, mail: {} }) }; };
+  assert.equal(await main(['--send', '--to', 'other-PC', '--kind', 'prompt', '--body-file', f.body, '--why', '実装', '--exec', 'codex', '--exec-cwd', '/repo'], f.deps), 0);
+  assert.equal(transport[0].payload.body, '<!-- fleet-exec: codex -->\n<!-- fleet-exec-cwd: /repo -->\n質問 $() `literal`');
+  assert.equal(transport[0].payload.expiresAt, '2026-09-21T06:00:00.000Z');
+  const logs = fs.readFileSync(path.join(f.dir, 'fleet-mail-sent.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l));
+  assert.ok(logs.every(entry => entry.exec === 'codex'));
+  // 本文ファイル自体は変更しない
+  assert.equal(fs.readFileSync(f.body, 'utf8'), '質問 $() `literal`');
+});
+
+test('send --exec codex without cwd inserts only the exec marker', async t => {
+  const f = fixture(t); const transport = [];
+  f.deps.now = () => Date.parse('2026-09-21T00:00:00Z'); f.deps.randomInt = () => 1234;
+  delete f.deps.request;
+  f.deps.fetch = async (url, opts) => { transport.push({ payload: JSON.parse(opts.body) }); return { ok: true, json: async () => ({ ok: true, mail: {} }) }; };
+  await main(['--send', '--to', 'other-PC', '--kind', 'prompt', '--body-file', f.body, '--why', '実装', '--exec', 'codex'], f.deps);
+  assert.equal(transport[0].payload.body, '<!-- fleet-exec: codex -->\n質問 $() `literal`');
+});
+
+test('parseArgs rejects --exec with note and unknown exec values', () => {
+  assert.throws(() => parseArgs(['--send', '--to', 'PC', '--kind', 'note', '--body-file', 'x', '--why', 'y', '--exec', 'codex']), /--exec は --kind prompt でのみ使えます/);
+  assert.throws(() => parseArgs(['--send', '--to', 'PC', '--kind', 'prompt', '--body-file', 'x', '--why', 'y', '--exec', 'gemini']), /--exec は codex のみ対応/);
+  assert.throws(() => parseArgs(['--send', '--to', 'PC', '--kind', 'prompt', '--body-file', 'x', '--why', 'y', '--exec-cwd', '/repo']), /--exec-cwd は --exec codex と併用/);
+});
+
+test('exec codex without opt-in replies with consent command and never spawns', async t => {
+  const f = fixture(t);
+  f.deps.spawnImpl = () => assert.fail('未オプトインで runner を起動してはならない');
+  f.deps.request = async (kind, p) => { f.calls.push({ kind, p }); return kind === 'mail-poll' ? { messages: [execMail()] } : { mail: {} }; };
+  await main(['--poll'], f.deps);
+  const reply = f.calls.find(c => c.kind === 'mail-reply');
+  assert.equal(reply.p.resultBody, `未オプトイン。承諾コマンド: ${consentCommand('codex')}`);
+  assert.equal(fs.existsSync(path.join(f.dir, 'fleet-agent-results', `${execMail().id}.json`)), false);
+});
+
+test('exec codex first poll detaches runner, records executionStartedAt and does not reply', async t => {
+  const f = fixture(t); const spawns = [];
+  fs.writeFileSync(path.join(f.dir, 'fleet-agent-optin.json'), '{"accept":["codex"]}');
+  f.deps.spawnImpl = detachedDouble(spawns);
+  f.deps.request = async (kind, p) => { f.calls.push({ kind, p }); return kind === 'mail-poll' ? { messages: [execMail()] } : { mail: {} }; };
+  await main(['--poll'], f.deps);
+  assert.equal(spawns.length, 1);
+  assert.equal(spawns[0].options.detached, true);
+  assert.equal(spawns[0].options.stdio, 'ignore');
+  assert.equal(spawns[0].unrefed, true);
+  assert.match(spawns[0].args[0], /fleet-task-runner\.mjs$/);
+  assert.deepEqual(spawns[0].args.slice(1), ['--id', execMail().id]);
+  assert.ok(!f.calls.some(c => c.kind === 'mail-reply'), '初回は返信しない');
+  const inbox = JSON.parse(fs.readFileSync(path.join(f.dir, 'fleet-inbox', `${execMail().id}.json`), 'utf8'));
+  assert.ok(inbox.executionStartedAt);
+  // 実行中は processed に入れない（結果ファイル待ち）
+  assert.ok(!fs.existsSync(path.join(f.dir, '.fleet-mail-processed')) || !fs.readFileSync(path.join(f.dir, '.fleet-mail-processed'), 'utf8').includes(execMail().id));
+});
+
+test('exec codex replies and marks processed once the result file exists', async t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.dir, 'fleet-agent-optin.json'), '{"accept":["codex"]}');
+  fs.mkdirSync(path.join(f.dir, 'fleet-agent-results'), { recursive: true });
+  fs.writeFileSync(path.join(f.dir, 'fleet-agent-results', `${execMail().id}.json`), JSON.stringify({ exitCode: 0, outputTail: '[fleet-exec codex] exit=0 cwd=/repo 所要=3分' }));
+  f.deps.spawnImpl = () => assert.fail('結果ファイルがあるときは runner を起動しない');
+  f.deps.request = async (kind, p) => { f.calls.push({ kind, p }); return kind === 'mail-poll' ? { messages: [execMail()] } : { mail: {} }; };
+  await main(['--poll'], f.deps);
+  const reply = f.calls.find(c => c.kind === 'mail-reply');
+  assert.match(reply.p.resultBody, /\[fleet-exec codex\] exit=0/);
+  assert.ok(fs.readFileSync(path.join(f.dir, '.fleet-mail-processed'), 'utf8').includes(execMail().id));
+});
+
+test('exec codex times out after two hours without a result file', async t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.dir, 'fleet-agent-optin.json'), '{"accept":["codex"]}');
+  const started = '2026-09-21T00:00:00Z';
+  f.deps.now = () => Date.parse('2026-09-21T03:00:00Z');
+  f.deps.spawnImpl = () => assert.fail('タイムアウト時は runner を起動しない');
+  f.deps.request = async (kind, p) => { f.calls.push({ kind, p }); return kind === 'mail-poll' ? { messages: [execMail({ executionStartedAt: started })] } : { mail: {} }; };
+  await main(['--poll'], f.deps);
+  const reply = f.calls.find(c => c.kind === 'mail-reply');
+  assert.equal(reply.p.resultBody, 'codex 実行がタイムアウト（結果ファイル未生成）');
+  assert.ok(fs.readFileSync(path.join(f.dir, '.fleet-mail-processed'), 'utf8').includes(execMail().id));
+});
+
+test('exec codex still running within two hours neither replies nor spawns', async t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.dir, 'fleet-agent-optin.json'), '{"accept":["codex"]}');
+  f.deps.now = () => Date.parse('2026-09-21T01:00:00Z');
+  f.deps.spawnImpl = () => assert.fail('実行中は runner を再起動しない');
+  f.deps.request = async (kind, p) => { f.calls.push({ kind, p }); return kind === 'mail-poll' ? { messages: [execMail({ executionStartedAt: '2026-09-21T00:00:00Z' })] } : { mail: {} }; };
+  await main(['--poll'], f.deps);
+  assert.ok(!f.calls.some(c => c.kind === 'mail-reply'));
+});
+
+test('exec codex with a decision request is skipped headlessly', async t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.dir, 'fleet-agent-optin.json'), '{"accept":["codex"]}');
+  f.deps.spawnImpl = () => assert.fail('判断依頼は実行しない');
+  f.deps.request = async (kind, p) => { f.calls.push({ kind, p }); return kind === 'mail-poll' ? { messages: [execMail({ why: '[判断依頼] 方針' })] } : { mail: {} }; };
+  await main(['--poll'], f.deps);
+  assert.ok(!f.calls.some(c => c.kind === 'mail-reply'));
+  const skip = JSON.parse(fs.readFileSync(path.join(f.dir, 'fleet-mail-decision-request-skipped.jsonl'), 'utf8'));
+  assert.equal(skip.id, execMail().id);
+});
+
+test('exec codex is not executed when executePrompts is false', async t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.dir, 'fleet-agent-optin.json'), '{"accept":["codex"]}');
+  f.deps.spawnImpl = () => assert.fail('hook 経由の受信で runner を起動してはならない');
+  f.deps.request = async () => ({ messages: [execMail()] });
+  const { pollOnce } = await import('./fleet-mail.mjs');
+  const result = await pollOnce({ home: f.home, identity: { hostname: 'host-kim' }, request: f.deps.request, executePrompts: false, spawnImpl: f.deps.spawnImpl, stdout: () => {}, stderr: () => {} });
+  assert.equal(result.handled.length, 0);
+  assert.equal(readInbox(f.home).length, 1);
+});
+

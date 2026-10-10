@@ -19,7 +19,7 @@ export function parseUsageLimitUntil(text, now = Date.now()) {
 }
 
 export function isUsageLimitText(text) {
-  return /You(?:'ve| have) hit your usage limit/i.test(String(text || ''));
+  return /You(?:['’]ve| have) hit your usage limit/i.test(String(text || ''));
 }
 
 export function writeCodexCooldownFile(file, until, now = Date.now()) {

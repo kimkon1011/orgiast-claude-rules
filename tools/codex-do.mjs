@@ -143,8 +143,9 @@ export function detectQuotaLimit(stdout, stderr, exitStatus = null, promptText =
     { text: stdoutText, offset: 0 },
     { text: String(stderr || ''), offset: stdoutText.length + 1 },
   ];
-  const prefixed = /^\s*(?:\[[^\]]*\]\s*)?(?:ERROR|Error|error|WARN(?:ING)?)\s*[:\-]?\s*(You(?:'ve| have) hit your usage limit|Usage limit (?:reached|exceeded)|Rate limit (?:reached|exceeded)|Too many requests|Upgrade to Pro)/;
-  const raw = /^(You've hit your usage limit|Too many requests)/i;
+  const prefixed = /^\s*(?:\[[^\]]*\]\s*)?(?:ERROR|Error|error|WARN(?:ING)?)\s*[:\-]?\s*(You(?:['’]ve| have) hit your usage limit|Usage limit (?:reached|exceeded)|Rate limit (?:reached|exceeded)|Too many requests|Upgrade to Pro)/;
+  // ChatGPT 認証の codex は You’ve(U+2019) を出す（2026-10-10 nishi-PC 3回再現: 半角 ' だけだと上限を検出できず cooldown も代替切替も起きなかった）。
+  const raw = /^(You['’]ve hit your usage limit|Too many requests)/i;
   // コロン隣接の 429 は grep -h / sed などが出力した行番号とみなす。
   const status429 = /^\s*(?:\[[^\]]*\]\s*)?(?:ERROR|Error|error|WARN(?:ING)?)?\s*[:\-]?\s*(?:HTTP\s*)?429(?!:)\b/i;
   const ignoredPrefix = /^(?:✔|✓|✖|×|ok\s|not ok\s|#)/i;

@@ -135,13 +135,18 @@ export function needsWorktreeRepair(gitFileContent) {
   return /^gitdir:\s*[A-Za-z]:/i.test(String(gitFileContent ?? '').trim());
 }
 
+// Codex CLI の上限メッセージは「You’ve」のように U+2019 の引用符で出る（2026-10-10 nishi-PC 実測、3 回再現）。
+// ASCII の ' で書いた正規表現に当たらず、クールダウンも代替バックエンドへの切替も起きなかったので、判定前に正規化する。
+export function normalizeQuotes(text) {
+  return String(text || '').replace(/[\u2018\u2019\u02BC]/g, "'").replace(/[\u201C\u201D]/g, '"');
+}
 export function detectQuotaLimit(stdout, stderr, exitStatus = null, promptText = '') {
   void exitStatus;
-  const stdoutText = String(stdout || '');
-  const prompt = String(promptText || '');
+  const stdoutText = normalizeQuotes(stdout);
+  const prompt = normalizeQuotes(promptText);
   const sources = [
     { text: stdoutText, offset: 0 },
-    { text: String(stderr || ''), offset: stdoutText.length + 1 },
+    { text: normalizeQuotes(stderr), offset: stdoutText.length + 1 },
   ];
   const prefixed = /^\s*(?:\[[^\]]*\]\s*)?(?:ERROR|Error|error|WARN(?:ING)?)\s*[:\-]?\s*(You(?:'ve| have) hit your usage limit|Usage limit (?:reached|exceeded)|Rate limit (?:reached|exceeded)|Too many requests|Upgrade to Pro)/;
   const raw = /^(You've hit your usage limit|Too many requests)/i;
@@ -910,7 +915,7 @@ while (true) {
 if (quotaCheck.matched && selectedLane.slug !== ASTRA) {
   // Sol/既定モデルの上限: 次回以降の起動を保留にするため codex-cooldown.json を書く。
   // 本文に上限メッセージ(You've hit your usage limit)がある時だけ。解析できなければ24時間後。
-  const limitText = `${result?.output || ''}\n${result?.stderr || ''}`;
+  const limitText = normalizeQuotes(`${result?.output || ''}\n${result?.stderr || ''}`);
   if (isUsageLimitText(limitText)) {
     try { writeCodexCooldownFile(claudeFile(home, 'codex-cooldown.json'), parseUsageLimitUntil(limitText)); } catch {}
   }

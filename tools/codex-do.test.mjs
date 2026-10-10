@@ -1504,3 +1504,12 @@ test('C: 長い --prompt-file は自動判定せず implement(Codex)として扱
   const result = run(['--dry-run', '--prompt-file', file]);
   assert.match(result.stdout, /kind=implement/);
 });
+
+// 2026-10-10 nishi-PC 実測: Codex CLI の上限文言は U+2019（’）付きで出る。ASCII の ' だけでは検出できず、
+// クールダウンも代替バックエンドへの切替も起きずに同じ失敗を 3 回繰り返した。
+test('detectQuotaLimit: U+2019 の引用符つき usage limit 文言を検出する', () => {
+  const stderr = 'ERROR: You\u2019ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Oct 14th, 2026 9:53 PM.';
+  const r = detectQuotaLimit('', stderr, 1, '');
+  assert.equal(r.matched, true);
+  assert.equal(r.pattern, "You've hit your usage limit");
+});

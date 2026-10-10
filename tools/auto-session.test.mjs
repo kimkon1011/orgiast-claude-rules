@@ -1142,3 +1142,8 @@ test('「以下は下の別ブロックの残TODO…」型の案内文は参照�
   const normal = '10. **`is-entry.mjs` 未統一の掃除**（`line-digest.mjs` は素の比較のまま）。以下の手順で直す';
   assert.equal(todoExclusionReason(normal, new Date(2026, 7, 30)), '');
 });
+
+test('buildPrompt は fleet-mail の [判断依頼] へ返信も判断もしないよう指示する', () => {
+  const prompt = buildPrompt('実装する', {}, '/repo', '/tmp/run.summary.md', 60);
+  assert.match(prompt, /\[判断依頼\][^\n]*返信も判断も行わない/);
+});

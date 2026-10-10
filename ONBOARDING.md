@@ -802,6 +802,9 @@ node tools/fleet-mail.mjs --reply <id> --body-file answer.txt
 - 他PCへの展開は `node tools/setup.mjs --converge` でhookとWindows受信タスク `OrgiastFleetMail` を自動登録。送受信設定のないPCはスキップする。人が必要なのはprompt承諾1回だけ。
 - `all` は各PCがローカルで処理済みIDを保持する。最初の返信後も未受信PCへ届けるため、all宛だけは `done` も未失効ならpoll対象。`--wait` は最初の返信を返し、追加返信はnoteとして届く。
 - **秘密情報を本文に書かない。** ログ・inbox・返信は `redactSecrets` を通す。これは任意の秘密を完全検出する仕組みではない。
+- `[判断依頼]` への本回答は `--reply` ではなく `--send --to <送信元> --kind note` で新しいメッセージとして送る（受領確認の自動返信が先に返信 id を使うため）。
+- 送った側は `node tools/fleet-mail.mjs --sent-status <id>` で配達（deliveredAt）と返信（resultAt）を確認できる。
+- 受信タスクが止まっていても、対話セッションを開けば hook（fleet-inbox-context）が2分以上前の未受信を自動で取りに行く。
 
 
 **配布収束の受領確認（2026-10-09）**

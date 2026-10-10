@@ -72,3 +72,24 @@ test('install-orgiast.ps1 は register-fleet-agent.ps1 を呼ぶ', () => {
   assert.match(installerSource, /& powershell\.exe[^\r\n]*-File \$fa/);
   assert.match(installerSource, /register-fleet-agent\.ps1/);
 });
+
+// --- 2026-10-10 事故: 受信タスク(OrgiastFleetMail)の自己修復とウォッチドッグ登録 ---
+test('fleet-poller.ps1 は日次で register-fleet-mail.mjs --ensure を呼ぶ（未登録/Disabled/24h未実行なら再登録）', () => {
+  const line = pollerPs1Source.split(/\r?\n/).find(l => l.includes('register-fleet-mail.mjs') && l.includes('--ensure') && !l.trim().startsWith('#'));
+  assert.ok(line, 'register-fleet-mail.mjs --ensure の呼び出しが見つからない');
+});
+test('register-fleet-mail.mjs --ensure は Disabled と 24時間未実行を健康判定に含む', () => {
+  const source = fs.readFileSync(path.join(dir, 'register-fleet-mail.mjs'), 'utf8');
+  assert.match(source, /'Disabled'\) \{ 'disabled'/);
+  assert.match(source, /FromHours\(/);
+  assert.match(source, /STALE_TASK_HOURS = 24/);
+});
+test('register-fleet-mail.ps1 は FLEET_MAIL_WATCHDOG=1 のときだけ OrgiastFleetMailWatchdog を登録し、Unregister でも削除する', () => {
+  const source = fs.readFileSync(path.join(dir, 'register-fleet-mail.ps1'), 'utf8');
+  assert.match(source, /FLEET_MAIL_WATCHDOG=1/);
+  assert.match(source, /'OrgiastFleetMailWatchdog'/);
+  const registerLine = source.split(/\r?\n/).find(l => l.includes("Register-ScheduledTask -TaskName $watchdogTask"));
+  assert.ok(registerLine, 'ウォッチドッグタスクの Register-ScheduledTask が見つからない');
+  const unregisterBlock = source.slice(source.indexOf('$Unregister'), source.indexOf('exit 0'));
+  assert.match(unregisterBlock, /OrgiastFleetMailWatchdog/);
+});

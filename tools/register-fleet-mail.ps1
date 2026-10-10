@@ -9,6 +9,8 @@ if ($Unregister) {
   $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
   if ($existing) { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false; Write-Host "OK: task $taskName unregistered" }
   else { Write-Host "OK: task $taskName was not registered" }
+  $watchdogExisting = Get-ScheduledTask -TaskName 'OrgiastFleetMailWatchdog' -ErrorAction SilentlyContinue
+  if ($watchdogExisting) { Unregister-ScheduledTask -TaskName 'OrgiastFleetMailWatchdog' -Confirm:$false; Write-Host 'OK: task OrgiastFleetMailWatchdog unregistered' }
   exit 0
 }
 
@@ -42,4 +44,28 @@ try {
   throw
 }
 Write-Host "OK: task $taskName registered (every 2 minutes, limit 40 min)"
+
+# 中央の未配達ウォッチドッグ（kim-PC 専用）: fleet-sheet.env に FLEET_MAIL_WATCHDOG=1 があるときだけ
+# 毎時タスク OrgiastFleetMailWatchdog を一緒に登録する。status=new が30分以上残ったメッセージを
+# Discord #claude-code と kim DM へ報告する（2026-10-10 事故: 返信4通が受信停止に気付かれなかった）。
+$watchdogEnabled = $false
+try {
+  $fleetEnv = Join-Path $env:USERPROFILE '.claude\fleet-sheet.env'
+  if (Test-Path -LiteralPath $fleetEnv -PathType Leaf) {
+    $watchdogEnabled = [bool](Select-String -LiteralPath $fleetEnv -Pattern '^\s*FLEET_MAIL_WATCHDOG=1' -Quiet)
+  }
+} catch {}
+if ($watchdogEnabled) {
+  $watchdogTask = 'OrgiastFleetMailWatchdog'
+  $watchdogTarget = 'tools\fleet-mail-watchdog.mjs'
+  $watchdogScript = Join-Path $repo $watchdogTarget
+  if (-not (Test-Path -LiteralPath $watchdogScript -PathType Leaf)) { throw "fleet-mail-watchdog.mjs not found: $watchdogScript" }
+  $watchdogAction = New-HiddenScheduledTaskAction -Execute 'powershell.exe' -ChildArgument @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $bootstrap, '-Target', $watchdogTarget) -WorkingDirectory $repo
+  $watchdogTrigger = New-ScheduledTaskTrigger -Daily -At '00:05'
+  $watchdogRepetition = New-ScheduledTaskTrigger -Once -At '00:05' -RepetitionInterval (New-TimeSpan -Hours 1) -RepetitionDuration (New-TimeSpan -Hours 24)
+  $watchdogTrigger.Repetition = $watchdogRepetition.Repetition
+  $watchdogSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 20)
+  Register-ScheduledTask -TaskName $watchdogTask -Action $watchdogAction -Trigger $watchdogTrigger -Settings $watchdogSettings -Principal $principal -Description 'fleet-mail の未配達メッセージを毎時監視し Discord #claude-code と kim DM へ通知する' -Force | Out-Null
+  Write-Host "OK: task $watchdogTask registered (every hour, limit 20 min)"
+}
 Get-ScheduledTask -TaskName $taskName | Select-Object TaskName, State

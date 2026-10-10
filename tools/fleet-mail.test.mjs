@@ -324,3 +324,93 @@ test('decision storage failure is logged without stopping receipt of the batch',
   assert.equal(failure.id, mail().id);
   assert.ok(failure.error);
 });
+
+// --- 2026-10-10 事故の再発防止: --sent-status / 返信ガイド / 受領確認自動返信 / 判断依頼ガード ---
+test('--sent-status shows status, deliveredAt and resultAt without side effects', async t => {
+  const f = fixture(t);
+  f.deps.request = async (kind, p) => { f.calls.push({ kind, p }); return { mail: { id: p.id, status: 'done', deliveredAt: '2026-10-10T01:00:00Z', resultAt: '2026-10-10T02:00:00Z' } }; };
+  assert.equal(await main(['--sent-status', 'mail-1'], f.deps), 0);
+  assert.deepEqual(f.calls, [{ kind: 'mail-get', p: { id: 'mail-1' } }]);
+  assert.match(f.output[0], /status: done/);
+  assert.match(f.output[0], /deliveredAt: 2026-10-10T01:00:00Z/);
+  assert.match(f.output[0], /resultAt: 2026-10-10T02:00:00Z/);
+});
+test('--sent-status reports missing mail as exit 4', async t => {
+  const f = fixture(t);
+  f.deps.request = async () => ({ mail: null });
+  assert.equal(await main(['--sent-status', 'mail-1'], f.deps), 4);
+  assert.ok(f.errors.some(e => e.includes('見つかりません')));
+});
+test('--reply prints delivery guidance pointing to --sent-status', async t => {
+  const f = fixture(t);
+  f.deps.request = async () => ({ mail: {} });
+  assert.equal(await main(['--reply', 'mail-1', '--body-file', f.body], f.deps), 0);
+  assert.deepEqual(f.output, ['返信済み: mail-1', '返信は相手の受信タスクが拾うまで届きません。届いたかは --sent-status mail-1 で確認']);
+});
+test('decision note auto-acknowledges with decision id and original deadline', async t => {
+  const f = fixture(t);
+  f.deps.request = async (kind, p) => { f.calls.push({ kind, p }); return kind === 'mail-poll' ? { messages: [mail({ why: '[判断依頼] 承認' })] } : { mail: {} }; };
+  await main(['--poll'], f.deps);
+  const ack = f.calls.find(c => c.kind === 'mail-reply');
+  assert.ok(ack, '受領確認の mail-reply が送信されている');
+  assert.equal(ack.p.id, mail().id);
+  assert.equal(ack.p.from, 'kim-PC');
+  assert.match(ack.p.resultBody, /^受領しました。kim の判断待ちとして登録（決定ID \d{8,}-\d{3}）。回答は kim が決めた後に別の note で送ります。期限: 2099-01-01T00:00:00Z$/);
+  const sentLog = fs.readFileSync(path.join(f.dir, 'fleet-mail-sent.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l));
+  assert.ok(sentLog.some(entry => entry.action === 'decision-ack' && entry.id === mail().id));
+  // 受領確認で inbox を既読化しない: 対話セッションが kim へ聞くまで残る
+  assert.equal(readInbox(f.home).length, 1);
+});
+test('decision ack failure does not fail the poll and is logged', async t => {
+  const f = fixture(t);
+  f.deps.request = async kind => { if (kind === 'mail-poll') return { messages: [mail({ why: '[判断依頼] 承認' })] }; throw new Error('ack offline'); };
+  assert.equal(await main(['--poll'], f.deps), 0);
+  assert.equal(readInbox(f.home).length, 1);
+  const failure = JSON.parse(fs.readFileSync(path.join(f.dir, 'fleet-mail-decision-ack-failed.jsonl'), 'utf8'));
+  assert.equal(failure.id, mail().id);
+  assert.ok(failure.error);
+});
+test('prompt containing a decision request is skipped headlessly: no spawn, no reply, logged', async t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.dir, 'fleet-agent-optin.json'), '{"accept":["prompt"]}');
+  f.deps.spawnImpl = () => assert.fail('判断依頼プロンプトを実行してはならない');
+  f.deps.request = async (kind, p) => { f.calls.push({ kind, p }); return kind === 'mail-poll' ? { messages: [mail({ kind: 'prompt', why: '[判断依頼] 進行方針' })] } : { mail: {} }; };
+  await main(['--poll'], f.deps);
+  assert.ok(!f.calls.some(c => c.kind === 'mail-reply'), '判断依頼への返信は行わない');
+  const skip = JSON.parse(fs.readFileSync(path.join(f.dir, 'fleet-mail-decision-request-skipped.jsonl'), 'utf8'));
+  assert.equal(skip.id, mail().id);
+  const result = JSON.parse(fs.readFileSync(path.join(f.dir, 'fleet-agent-results', `${mail().id}.json`), 'utf8'));
+  assert.match(result.outputTail, /decision-request-skipped/);
+  // 処理済みとして記録され、次の poll で再扱いしない
+  await main(['--poll'], f.deps);
+  const skips = fs.readFileSync(path.join(f.dir, 'fleet-mail-decision-request-skipped.jsonl'), 'utf8').trim().split('\n');
+  assert.equal(skips.length, 1);
+});
+test('pollOnce with executePrompts:false receives notes and leaves prompts for the task', async t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.dir, 'fleet-agent-optin.json'), '{"accept":["prompt"]}');
+  f.deps.spawnImpl = () => assert.fail('hook 経由の受信で prompt を実行してはならない');
+  f.deps.request = async () => ({ messages: [mail({ kind: 'prompt' }), mail({ id: 'mail-note-2' })] });
+  const { pollOnce } = await import('./fleet-mail.mjs');
+  const output = [], errors = [];
+  const result = await pollOnce({ home: f.home, identity: { hostname: 'host-kim' }, request: f.deps.request, executePrompts: false, spawnImpl: f.deps.spawnImpl, stdout: t2 => output.push(t2), stderr: t2 => errors.push(t2) });
+  assert.equal(result.handled.length, 1); // note のみ処理済み
+  assert.equal(readInbox(f.home).length, 2);
+  const processed = fs.readFileSync(path.join(f.dir, '.fleet-mail-processed'), 'utf8').trim().split('\n');
+  assert.ok(!processed.includes(mail().id), 'prompt は未処理のまま受信タスクに残す');
+  assert.ok(processed.includes('mail-note-2'));
+  const lastPoll = JSON.parse(fs.readFileSync(path.join(f.dir, '.fleet-mail-last-poll.json'), 'utf8'));
+  assert.ok(lastPoll.at);
+});
+test('register --ensure skips PowerShell when both tasks probe healthy', t => {
+  const f = fixture(t);
+  const calls = [];
+  const spawnImpl = (program, args) => {
+    calls.push({ program, args });
+    const command = args.find(a => a.includes('Get-ScheduledTask')) || '';
+    if (command) return { status: 0, stdout: 'ok' };
+    return { status: 0, stdout: 'registered' };
+  };
+  register({ home: f.home, platform: 'win32', spawnImpl, ensure: true });
+  assert.ok(calls.every(c => c.args.join(' ').includes('-Command')), '健康判定の probe のみで再登録しない');
+});

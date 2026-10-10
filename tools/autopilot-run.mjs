@@ -11,7 +11,8 @@ import { isEntry } from './is-entry.mjs';
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export function buildPrompt(repo = REPO) {
   const skill = fs.readFileSync(path.join(repo, 'skills', 'autopilot', 'SKILL.md'), 'utf8').replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '');
-  return `${skill}\n\n<実行コンテキスト>\nrepo: ${repo}\n/autopilot tick を1周だけ実行する。ヘッドレスモード。ScheduleWakeup と /loop は使用しない。Codex はフォアグラウンドで完了まで待ち、post と必要な handoff を書いて終了する。次の起床はタスクスケジューラが担う。pre が error なら実装せず終了する。\n</実行コンテキスト>\n`;
+  return `${skill}\n\n<実行コンテキスト>\nrepo: ${repo}\n/autopilot tick を1周だけ実行する。ヘッドレスモード。ScheduleWakeup と /loop は使用しない。Codex はフォアグラウンドで完了まで待ち、post と必要な handoff を書いて終了する。次の起床はタスクスケジューラが担う。pre が error なら実装せず終了する。
+fleet-mail の受信メールに [判断依頼] を含むものへは返信も判断も行わない。kim の判断待ちとして放置すること（ヘッドレスでは未読注入からも除外される）。\n</実行コンテキスト>\n`;
 }
 export function invokeClaude({ executable, args, prompt, cwd, timeoutMs, env = process.env }) {
   return new Promise((resolve) => {

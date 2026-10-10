@@ -116,3 +116,7 @@ test('existing runner entry replenishes before launching Claude without explicit
   assert.equal(result.status, 'running');
   assert.equal(sent.length, 1);
 });
+
+test('buildPrompt は fleet-mail の [判断依頼] へ返信も判断もしないよう指示する', () => {
+  assert.match(buildPrompt(), /\[判断依頼\][^\n]*返信も判断も行わない/);
+});

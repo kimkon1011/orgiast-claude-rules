@@ -17,6 +17,11 @@ New-Item -ItemType Directory -Force -Path $claudeDir | Out-Null
 
 Say ("[fleet-fix-now] " + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + " hostname=" + $env:COMPUTERNAME + " user=" + $env:USERNAME + " home=" + $userHome)
 $curLabel = ''
+$fleetEnv = Join-Path $claudeDir 'fleet-sheet.env'
+$envFile = Join-Path $claudeDir 'cost-reporter.env'
+if (Test-Path $envFile) { $m0 = Select-String -Path $envFile -Pattern '^REPORTER_LABEL=(.*)$' | Select-Object -First 1; if ($m0) { $curLabel = $m0.Matches[0].Groups[1].Value.Trim() } }
+Say ("label(REPORTER_LABEL)=" + $(if ($curLabel) { $curLabel } else { '(未設定 → hostname で受信)' }))
+Say ("fleet-sheet.env=" + $(if (Test-Path $fleetEnv) { 'あり' } else { '無し' }))
 $envFile = Join-Path $claudeDir 'cost-reporter.env'
 if (Test-Path $envFile) { $m = Select-String -Path $envFile -Pattern '^REPORTER_LABEL=(.*)$' | Select-Object -First 1; if ($m) { $curLabel = $m.Matches[0].Groups[1].Value.Trim() } }
 # 注意: PowerShell の変数名は大小を区別しないので、現在値は $curLabel、引数は $Label と別名にする
@@ -54,6 +59,25 @@ if (-not (Get-ScheduledTask -TaskName 'OrgiastThermalGuard' -ErrorAction Silentl
   Say ('thermal-guard: ' + $(if (Get-ScheduledTask -TaskName 'OrgiastThermalGuard' -ErrorAction SilentlyContinue) { '登録 OK' } else { '登録失敗' }))
 }
 
+# Codex のログイン画面を Chrome/Edge のシークレットウィンドウで開く。通常ウィンドウだと既にログイン中の
+# ChatGPT アカウント（例: seisaku-team@）しか選べず切り替えられない（2026-10-10 nishi-PC 実測）。
+function Invoke-CodexLoginPrivate {
+  $out = Join-Path $env:TEMP ('codex-login-' + [guid]::NewGuid().ToString('N') + '.txt')
+  $p = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/c', 'set BROWSER=none&& codex login > "' + $out + '" 2>&1') -WindowStyle Hidden -PassThru
+  $url = $null
+  for ($i = 0; $i -lt 60 -and -not $url; $i++) {
+    Start-Sleep -Milliseconds 500
+    if (Test-Path $out) { $m = Select-String -Path $out -Pattern 'https://auth\.openai\.com/\S+' | Select-Object -First 1; if ($m) { $url = $m.Matches[0].Value } }
+  }
+  if (-not $url) { Say 'codex login: ログイン用アドレスを取得できませんでした'; return }
+  $chrome = @("$env:ProgramFiles\Google\Chrome\Application\chrome.exe", "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe", "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
+  if ($chrome) { Start-Process $chrome -ArgumentList @('--incognito', $url) }
+  else { $edge = "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe"; if (Test-Path $edge) { Start-Process $edge -ArgumentList @('--inprivate', $url) } else { Start-Process $url } }
+  Write-Host '>>> シークレットウィンドウでログイン画面を開きました。担当のアカウントでログインし「続行」を押してください（最大5分待ちます） <<<' -ForegroundColor Yellow
+  $null = $p.WaitForExit(300000)
+  if (-not $p.HasExited) { try { $p.Kill() } catch {} }
+}
+
 # 5c. ログイン切れをその場で直す（OAuth は本人の同意が要るのでブラウザが開く。-NoLogin で省略）
 $claudeExe = ''
 try { $claudeExe = (($exeJson | ConvertFrom-Json).executable) } catch {}
@@ -73,8 +97,8 @@ if ($codex) {
   & codex login status 2>&1 | Out-Null
   $codexOk = ($LASTEXITCODE -eq 0)
   if (-not $codexOk -and -not $NoLogin) {
-    Write-Host ''; Write-Host '>>> Codex のログインが必要です。ブラウザが開くので、このPCの担当者の ChatGPT アカウントでログインしてください <<<' -ForegroundColor Yellow
-    & codex login
+    Write-Host ''; Write-Host '>>> Codex のログインが必要です。シークレットウィンドウが開くので、このPCの担当者の ChatGPT アカウントでログインしてください <<<' -ForegroundColor Yellow
+    Invoke-CodexLoginPrivate
     & codex login status 2>&1 | Out-Null; $codexOk = ($LASTEXITCODE -eq 0)
   }
   # ログイン中のアカウントを PC 名簿(fleet-pc-map.json の account)と照合する。共有アカウント(例: seisaku-team@)で
@@ -97,7 +121,7 @@ if ($codex) {
   if ($codexOk -and $acct -and $expected -and $acct.email -ne $expected -and -not $NoLogin) {
     Write-Host ''; Write-Host (">>> Codex が " + $acct.email + " でログインしています。このPCの担当は " + $expected + " です。ブラウザが開いたら " + $expected + " でログインしてください <<<") -ForegroundColor Yellow
     & codex logout 2>&1 | Out-Null
-    & codex login
+    Invoke-CodexLoginPrivate
     & codex login status 2>&1 | Out-Null; $codexOk = ($LASTEXITCODE -eq 0); $acct = Get-CodexEmail
   }
   if ($acct) { Say ('codex account: ' + $acct.email + ' plan=' + $acct.plan + $(if ($expected) { ' 担当=' + $expected + $(if ($acct.email -eq $expected) { ' 一致' } else { ' 不一致' }) } else { '' })) }
@@ -118,9 +142,11 @@ Start-ScheduledTask -TaskName 'OrgiastFleetMail' -ErrorAction SilentlyContinue
 # 7. 結果を kim-PC へ送る
 $reportFile = Join-Path $env:TEMP 'fleet-fix-now-report.txt'
 [IO.File]::WriteAllText($reportFile, ($report -join "`n"), (New-Object Text.UTF8Encoding($false)))
+$sendOut = ''
 if (Test-Path $fleetEnv) {
   $sendOut = (& node $fleetMail --send --to $ReportTo --kind note --body-file $reportFile --why 'fleet-fix-now の実行結果' 2>&1 | Out-String)
   Write-Host ("report -> " + $ReportTo + ": " + $sendOut.Trim())
 } else { Write-Host 'report: fleet-sheet.env が無いので送信できません。上の出力を kim に見せてください' }
 Write-Host ''
-Write-Host '=== fleet-fix-now 完了。上の内容は kim-PC にも送信済み（2分以内に届く） ==='
+if ($sendOut -match '送信済み') { Write-Host '=== fleet-fix-now 完了。上の内容は kim-PC にも送信済み（2分以内に届く） ===' }
+else { Write-Host '=== fleet-fix-now 完了。kim-PC への送信はできていません。この画面を kim に見せてください ===' -ForegroundColor Yellow }

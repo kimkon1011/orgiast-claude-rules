@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { randomInt, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
@@ -40,6 +40,15 @@ export function missingClaudeMessage(executable, candidates = []) {
   const resolved = executable || 'claude';
   const list = Array.isArray(candidates) && candidates.length ? candidates.join(' / ') : '(候補0件)';
   return `実行失敗: claude CLI が見つかりません（実行ファイル: ${resolved} / 候補: ${list}）。受信側PCで CLAUDE_CLI_PATH を設定するか claude を再インストールしてください`;
+}
+// Windows: Win32_Process.Create でジョブオブジェクトの外に起動する。ShowWindow=0 で可視コンソールを出さない。
+export function launchDetachedWin(file, args, spawnSyncImpl = spawnSync) {
+  const quote = s => (/[\s"]/.test(s) ? `"${String(s).replace(/"/g, '\\"')}"` : String(s));
+  const commandLine = [file, ...args].map(quote).join(' ').replace(/'/g, "''");
+  const ps = `$s = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ShowWindow=[uint16]0}; $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine='${commandLine}'; ProcessStartupInformation=$s}; exit [int]$r.ReturnValue`;
+  const result = spawnSyncImpl('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', ps], { windowsHide: true, stdio: 'ignore', timeout: 60_000 });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(`Win32_Process.Create failed: ${result.status}`);
 }
 export const LOCK_MS = 10 * 60 * 1000;
 export function validId(id) {
@@ -311,11 +320,16 @@ export async function pollOnce(deps = {}) {
           } else if (!mail.executionStartedAt) {
             // 初回: 開始印を書いて runner をデタッチ起動する。この時点では返信しない（結果ファイル待ち）。
             writeJson(inboxFile(mail.id), { ...readJson(inboxFile(mail.id)), executionStartedAt: new Date(now()).toISOString() });
-            const spawnImpl = deps.spawnImpl ?? spawn;
-            // Windows では detached が可視コンソールを出すので backgroundSpawnOptions（win32: windowsHide / それ以外: detached）に従う。
-            const child = spawnImpl(process.execPath, [path.join(ownRepo, 'tools', 'fleet-task-runner.mjs'), '--id', mail.id],
-              { ...backgroundSpawnOptions(), stdio: 'ignore', windowsHide: true });
-            child.unref();
+            const runnerArgs = [path.join(ownRepo, 'tools', 'fleet-task-runner.mjs'), '--id', mail.id];
+            if (deps.spawnImpl || process.platform !== 'win32') {
+              // Windows では detached が可視コンソールを出すので backgroundSpawnOptions（win32: windowsHide / それ以外: detached）に従う。
+              const child = (deps.spawnImpl ?? spawn)(process.execPath, runnerArgs, { ...backgroundSpawnOptions(), stdio: 'ignore', windowsHide: true });
+              child.unref();
+            } else {
+              // 受信タスク(スケジュールタスク)のジョブが終わると子プロセスも終了させられる（2026-10-10 nishi-PC: runner が
+              // prompt.md すら書かずに消えた。kim-PC の一時タスクで再現し、WMI 起動なら生き残ることを実測）。
+              (deps.launchDetachedWin ?? launchDetachedWin)(process.execPath, runnerArgs);
+            }
             log('exec-started', { id: mail.id, exec: 'codex' });
             continue; // 返信も processed 記録もしない: 結果ファイルができたら次回返信する
           } else if (now() - Date.parse(mail.executionStartedAt) >= 2 * 3600000) {

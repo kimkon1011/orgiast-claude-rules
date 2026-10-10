@@ -13,7 +13,7 @@ const request = 'GitHub の画面で Merge をクリックしてください。'
 function invoke(home, sessionId, text, extra = {}) {
   return spawnSync(process.execPath, [runner], {
     input: JSON.stringify({ session_id: sessionId, assistant_text: text, ...extra }),
-    encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_HANDOFF_AUDIT: 'off' },
+    encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_HANDOFF_AUDIT: 'off', ORGIAST_HOSTNAME: 'kim-PC' },
   });
 }
 
@@ -190,7 +190,7 @@ test('runnerと単体hookの両方が会話のsession-close証拠を評価する
       for (const directText of [false, true]) {
         const result = spawnSync(process.execPath, [target], {
           input: JSON.stringify({ session_id: `${evidence}-${directText}-${path.basename(target)}`, transcript_path: transcript, ...(directText ? { assistant_text: text } : {}) }),
-          encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_HANDOFF_AUDIT: 'off' },
+          encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_HANDOFF_AUDIT: 'off', ORGIAST_HOSTNAME: 'kim-PC' },
         });
         assert.equal(result.status, 0, result.stderr);
         if (evidence) assert.equal(result.stdout, '');
@@ -357,4 +357,19 @@ test('§7.1の3語に言及しただけの番号無し長文は従来どおりbl
   assert.equal(output.decision, 'block');
   const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8').trim());
   assert.notDeepEqual(record.reasonCodes, ['close-steps']);
+});
+
+test('handoff-action-gate が stop-gate-runner 配線で動くことを確認', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-handoff-action-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const transcript = path.join(home, 'transcript.jsonl');
+  fs.writeFileSync(transcript, [
+    { type: 'user', message: { role: 'user', content: 'Yahooメールを確認してください' } },
+  ].map(entry => JSON.stringify(entry)).join('\n'));
+  const text = 'Yahoo メールを見てください。IMAP に接続できません。認証情報がありません。';
+  const result = invoke(home, 'action-gate-test', text, { transcript_path: transcript });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).decision, 'block');
+  const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8').trim().split('\n').at(-1));
+  assert.ok(record.blockedBy.includes('handoff-action-gate'));
 });

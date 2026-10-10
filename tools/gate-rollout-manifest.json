@@ -17,6 +17,11 @@
       "rollout": "deny",
       "legacy": true
     },
+    "decision-research-gate": {
+      "rollout": "deny",
+      "distributedAt": "2026-10-10T00:00:00Z",
+      "denyAfter": "2026-10-17T00:00:00Z"
+    },
     "doc-link-drive-guard": {
       "rollout": "deny",
       "legacy": true
@@ -32,6 +37,11 @@
     "gh-handoff-gate": {
       "rollout": "deny",
       "legacy": true
+    },
+    "handoff-action-gate": {
+      "rollout": "deny",
+      "distributedAt": "2026-10-10T00:00:00Z",
+      "denyAfter": "2026-10-17T00:00:00Z"
     },
     "handoff-audit-gate": {
       "rollout": "deny",
@@ -129,6 +139,11 @@
       "rollout": "deny",
       "legacy": true
     },
+    "shallow-answer-gate": {
+      "rollout": "deny",
+      "distributedAt": "2026-10-10T00:00:00Z",
+      "denyAfter": "2026-10-17T00:00:00Z"
+    },
     "stop-gate": {
       "rollout": "deny",
       "legacy": true
@@ -136,11 +151,6 @@
     "stop-gate-runner": {
       "rollout": "deny",
       "legacy": true
-    },
-    "decision-research-gate": {
-      "rollout": "deny",
-      "distributedAt": "2026-10-10T00:00:00Z",
-      "denyAfter": "2026-10-17T00:00:00Z"
     },
     "url-account-gate": {
       "rollout": "deny",

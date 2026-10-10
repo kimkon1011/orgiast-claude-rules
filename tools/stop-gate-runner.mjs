@@ -11,6 +11,7 @@ import { isEntry } from './is-entry.mjs';
 import { readTranscriptContext } from './lib/assistant-text.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { runGate as evaluateQuality } from './handoff-quality-gate.mjs';
+import { evaluateHandoffActionFromRaw } from './handoff-action-gate.mjs';
 import { judge as judgeFullSteps } from './manual-request-fullsteps-gate.mjs';
 import { check as checkBranchCoverage, formatReason as branchCoverageReason } from './handoff-branch-coverage-gate.mjs';
 import { evaluateInvestigation, failureReason } from './handoff-investigation-gate.mjs';
@@ -33,6 +34,7 @@ import { findLocalDocLinks, findBareLocalDocPaths, formatBarePathMessage, format
 import { enabled as stopGateEnabled, progressQuestionReason, reasonFor, remainingItems, shouldBlock, shouldBlockProgressQuestion } from './stop-gate.mjs';
 import { runControlGroup } from './control-group-stop-gate.mjs';
 import { evaluatePrHandoff } from './pr-handoff-gate.mjs';
+import { evaluateShallowAnswer } from './shallow-answer-gate.mjs';
 
 
 const home = () => process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || os.homedir();
@@ -44,10 +46,12 @@ function fullStepsReason(missing) {
 
 export async function evaluateGates(ctx, auditOptions = {}) {
   const gates = [
-    ['handoff-quality-gate', () => evaluateQuality({ ...ctx.input, assistant_text: ctx.assistantText })],
+    ['handoff-quality-gate', () => evaluateQuality({ ...ctx.input, assistant_text: ctx.assistantText, transcript_raw: ctx.transcriptRaw })],
+    ['handoff-action-gate', () => evaluateHandoffActionFromRaw({ text: ctx.assistantText, transcriptRaw: ctx.transcriptRaw })],
     ['manual-request-fullsteps-gate', () => { if (desktopLauncherPattern.test(ctx.assistantText) && judgeUserBurden(ctx.assistantText, ctx.humanText).decision === 'pass') return { decision: 'pass' }; const result = judgeFullSteps(ctx.assistantText); return result.triggered && result.missing.length ? { decision: 'block', reason: fullStepsReason(result.missing), code: 'FULL-STEPS' } : { decision: 'pass' }; }],
     ['handoff-branch-coverage-gate', () => { const result = checkBranchCoverage(ctx.assistantText); return result.triggered && result.missing.length ? { decision: 'block', reason: branchCoverageReason(result.missing), code: 'BRANCH-COVERAGE' } : { decision: 'pass' }; }],
-    ['handoff-investigation-gate', () => { const result = evaluateInvestigation(ctx.assistantText); return result.decision === 'block' ? { ...result, reason: failureReason(result.missing), code: 'INVESTIGATION' } : result; }],
+    ['handoff-investigation-gate', () => { const result = evaluateInvestigation(ctx.assistantText, { transcriptRaw: ctx.transcriptRaw }); return result.decision === 'block' ? { ...result, reason: failureReason(result.missing, result.reason), code: result.code || 'INVESTIGATION' } : result; }],
+    ['shallow-answer-gate', () => evaluateShallowAnswer({ text: ctx.assistantText, transcriptRaw: ctx.transcriptRaw })],
     ['handoff-regret-gate', () => evaluateHandoffRegret(ctx.transcriptRaw, ctx.assistantText)],
     ['handoff-info-guard', () => { const found = findHandoffWithoutInfo(ctx.assistantText); return found ? { decision: 'block', reason: formatHandoffInfo(found), code: 'HANDOFF-INFO' } : { decision: 'pass' }; }],
     ['gh-handoff-gate', () => { const result = judgeGhHandoff(ctx.assistantText); return result.triggered && result.missing.length ? { decision: 'block', reason: ghHandoffReason(), code: 'GH-HANDOFF' } : { decision: 'pass' }; }],

@@ -30,6 +30,11 @@ tools/course-corrections.json の該当ルールに従い訂正後の手順を�
 
 PR URL と対象ブランチ、CI/マージ状態、次の操作を書く。
 
+## handoff-action-gate
+
+手渡す前に、対象システム（メール/Drive/Vercel/GitHub 等）へ実際にアクセスして失敗のエラー本文を確認する。
+ローカルの Grep/Glob は証拠にならない。
+
 ## handoff-audit-gate
 
 tools/automation-routes.json の既存経路を実行してから証拠を示す。
@@ -121,6 +126,10 @@ node tools/lane-doctor.mjs --probe で状態更新し、node tools/codex-do.mjs 
 ## self-check-before-asking-guard
 
 質問対象を既存のAPI/ファイル/CLIで調べ、取得済み情報を提示する。
+
+## shallow-answer-gate
+
+件名・一覧・ファイル名だけでなく、候補となるメッセージ・ファイルの中身を開いて確認（read_file_content / get_message / WebFetch 等）した上で回答する。どうしても確認不能な場合は本文に [DEPTH-OK: 理由] を書く。
 
 ## settings-quality-guard
 

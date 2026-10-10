@@ -9,7 +9,10 @@ import { notifyKim } from './notify-kim.mjs';
 const DAY = 86400000;
 const homeDir = () => process.env.ORGIAST_HOME || os.homedir();
 function readRollout() { try { return JSON.parse(fs.readFileSync(path.join(toolsDir, 'gate-rollout-manifest.json'), 'utf8')); } catch { return { gates: {} }; } }
-export function rolloutMode(name, { manifest = readRollout(), home = homeDir(), hostname = os.hostname(), now = Date.now() } = {}) {
+// ホスト名はテストから固定できるようにする。pilotHosts 判定が実行機のホスト名に依存すると、
+// 同じテストが kim-PC では pass、CI では fail になる(2026-10-10 実測)。
+const hostName = () => process.env.ORGIAST_HOSTNAME || os.hostname();
+export function rolloutMode(name, { manifest = readRollout(), home = homeDir(), hostname = hostName(), now = Date.now() } = {}) {
   const entry = manifest?.gates?.[name];
   if (entry?.legacy === true && entry.rollout === 'deny') return 'deny';
   if (entry?.rollout === 'warn') return 'warn';

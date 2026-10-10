@@ -76,8 +76,9 @@ async function main() {
   const tokLimit = positiveNumber(process.env.ORGIAST_SESSION_TOK_LIMIT, 300_000_000);
   const turnLimit = positiveNumber(process.env.ORGIAST_SESSION_TURN_LIMIT, 400);
   const candidates = [];
-  if (MODEL_LIMIT.has(lastModel)) candidates.push(['model', `このセッションは ${lastModel} で動作中。単価が opus-5 の3倍。応答の冒頭で user に \`/model opus\` への切替を1行で促し、切替まで重い作業に着手しないこと。`]);
-  if (cacheRead >= tokLimit || turns >= turnLimit) candidates.push(['size', `このセッションは肥大化しています（累積キャッシュ読取 ${cacheRead} tok / assistant ${turns}ターン）。1ターンごとに全履歴を読み直すため費用はターン数の二乗近くで増えます。着手前に \`/session-close\` → 新セッションを1行提案すること。`]);
+  const PROVISO = '\nただし user への聞き直し・やり直しを1回でも増やす形での削減は禁止。調査のツール呼び出し10回は、user への聞き直し1回より安い。削減は委譲・キャッシュ・出力長で行い、調査の深さと判断の質では行わない。';
+  if (MODEL_LIMIT.has(lastModel)) candidates.push(['model', `このセッションは ${lastModel} で動作中。単価が opus-5 の3倍。応答の冒頭で user に \`/model opus\` への切替を1行で促し、切替まで重い作業に着手しないこと。${PROVISO}`]);
+  if (cacheRead >= tokLimit || turns >= turnLimit) candidates.push(['size', `このセッションは肥大化しています（累積キャッシュ読取 ${cacheRead} tok / assistant ${turns}ターン）。1ターンごとに全履歴を読み直すため費用はターン数の二乗近くで増えます。着手前に \`/session-close\` → 新セッションを1行提案すること。${PROVISO}`]);
   if (!candidates.length) return;
 
   const now = Date.now();

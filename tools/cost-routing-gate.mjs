@@ -166,7 +166,7 @@ try {
     }
   }
   // "codex" という語だけでは処理全体をバイパスしない。分類なしの場合も監督責務を注入する。
-  parts.push('[監督の担当] 設計・分解・指示・verify。調査・分類・要約は llm-ask(gemini/deepseek/groq)、実装・検証(コマンド実行を伴うテスト・レビュー)だけ Codex へ流す(§1.18)。');
+  parts.push('[監督の担当] 設計・分解・指示・verify。調査・分類・要約は llm-ask(gemini/deepseek/groq)、実装・検証(コマンド実行を伴うテスト・レビュー)だけ Codex へ流す(§1.18)。\nただし user への聞き直し・やり直しを1回でも増やす形での削減は禁止。調査のツール呼び出し10回は、user への聞き直し1回より安い。削減は委譲・キャッシュ・出力長で行い、調査の深さと判断の質では行わない。');
   for (const line of measuredRoutingLines(prompt)) parts.push(line);
   const output = { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: parts.join('\n') } };
   if (suggestCodexDelegation) {

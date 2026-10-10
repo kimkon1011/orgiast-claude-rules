@@ -291,6 +291,37 @@ test('done pre replenishes in priority order, skips human work and previous obje
   assert.equal((await f.call('post', { summary: 'new work', progress: 10 })).noop, false);
 });
 
+test('refill skips every objective already closed in history, not just the most recent', async (t) => {
+  const asked = [];
+  const f = discord(t, { askImpl: async (candidate) => { asked.push(candidate.objective); return 'Yes'; } });
+  await f.call('start', { objective: 'A' });
+  await f.call('post', { summary: 'A done', progress: 100, evidence: '完了を確認' });
+  f.channels.dm.push(f.message('目的変更: B', 1));
+  await f.call('pre');
+  await f.call('post', { summary: 'B done', progress: 100, evidence: '完了を確認' });
+  const history = (await f.call('status')).state.objectiveHistory.map((e) => e.objective);
+  assert.deepEqual(history, ['A', 'B']);
+  f.sent.length = 0;
+  candidates(f, '## 推奨アクション\n1. A\n2. B\n3. C\n');
+  const pre = await f.call('pre');
+  assert.equal(pre.verdict, 'run');
+  assert.equal(pre.objective.objective, 'C');
+  assert.deepEqual(asked, ['C']);
+});
+
+test('refill with only the current objective in history still picks the first eligible candidate', async (t) => {
+  const asked = [];
+  const f = discord(t, { askImpl: async (candidate) => { asked.push(candidate.objective); return 'Yes'; } });
+  await f.call('start', { objective: 'current' });
+  await f.call('post', { summary: 'current done', progress: 100, evidence: '完了を確認' });
+  assert.deepEqual((await f.call('status')).state.objectiveHistory.map((e) => e.objective), ['current']);
+  candidates(f, '## 推奨アクション\n1. A\n2. B\n');
+  const pre = await f.call('pre');
+  assert.equal(pre.verdict, 'run');
+  assert.equal(pre.objective.objective, 'A');
+  assert.deepEqual(asked, ['A']);
+});
+
 test('never-started pre starts a candidate with mocked classifier and notifier', async (t) => {
   const sent = [];
   const f = fixture(t, { askImpl: async () => 'Yes', notifyImpl: async text => { sent.push(text); return { delivered: 'dm' }; } });

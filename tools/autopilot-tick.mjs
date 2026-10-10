@@ -182,9 +182,13 @@ async function askCandidate(candidate, ctx) {
   return stdout;
 }
 async function nextObjective(state, objective, ctx) {
-  const previous = state?.objectiveHistory?.at(-1)?.objective;
+  // Every objective already closed in history (done/stopped/failed_check) must stay closed,
+  // not just the most recent one, or a completed objective gets re-selected from next-actions.
+  const closed = new Set((state?.objectiveHistory || [])
+    .filter((entry) => ['done', 'stopped', 'failed_check'].includes(entry.status))
+    .map((entry) => entry.objective));
   for (const candidate of recommendedActions(readText(path.join(ctx.home, '.claude', 'next-actions.md')))) {
-    if (candidate.objective === previous || candidate.objective === objective?.objective) continue;
+    if (closed.has(candidate.objective) || candidate.objective === objective?.objective) continue;
     try {
       if (/^yes[.!]?$/i.test(String(await ctx.askImpl(candidate, ctx)).trim())) return candidate;
     } catch { /* An unavailable classifier is not permission to start. */ }

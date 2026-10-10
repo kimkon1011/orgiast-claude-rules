@@ -50,7 +50,7 @@ Say ("claude exe: " + $exeJson.Trim())
 # 5b. 熱監視タスクが無ければ登録
 if (-not (Get-ScheduledTask -TaskName 'OrgiastThermalGuard' -ErrorAction SilentlyContinue)) {
   $tg = Join-Path $repo 'tools\thermal-guard.ps1'
-  if (Test-Path $tg) { & powershell -NoProfile -ExecutionPolicy Bypass -File $tg -Mode install 2>&1 | Out-Null }
+  if (Test-Path $tg) { & powershell -NoProfile -ExecutionPolicy Bypass -File $tg -Install 2>&1 | Out-Null }
   Say ('thermal-guard: ' + $(if (Get-ScheduledTask -TaskName 'OrgiastThermalGuard' -ErrorAction SilentlyContinue) { '登録 OK' } else { '登録失敗' }))
 }
 

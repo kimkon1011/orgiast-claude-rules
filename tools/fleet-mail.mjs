@@ -53,6 +53,23 @@ export function launchDetachedWin(file, args, spawnSyncImpl = spawnSync) {
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`Win32_Process.Create failed: ${result.status}`);
 }
+// 受信タスク(2分ごと・全PC)に相乗りする1日1回の自己修復。夜間ジョブが無いPCでも熱監視が入る
+// （2026-10-10 cr-PC・カフェ用015 で OrgiastThermalGuard 未登録のまま。nightly の自己修復は fleet-poller があるPCだけ）。
+export function dailySelfHeal({ dir, now = Date.now, platform = process.platform, spawnSyncImpl = spawnSync, repo = ownRepo }) {
+  if (platform !== 'win32') return { skipped: 'platform' };
+  if (process.env.FLEET_NO_SELF_HEAL === '1') return { skipped: 'disabled' };
+  const marker = path.join(dir, '.fleet-self-heal-day');
+  const day = new Date(now()).toISOString().slice(0, 10);
+  let last = '';
+  try { last = fs.readFileSync(marker, 'utf8').trim(); } catch {}
+  if (last === day) return { skipped: 'today' };
+  fs.writeFileSync(marker, day);
+  const script = path.join(repo, 'tools', 'thermal-guard.ps1');
+  if (!fs.existsSync(script)) return { skipped: 'no-script' };
+  const ps = `if (-not (Get-ScheduledTask -TaskName 'OrgiastThermalGuard' -ErrorAction SilentlyContinue)) { & powershell -NoProfile -ExecutionPolicy Bypass -File '${script.replace(/'/g, "''")}' -Install *> $null; 'installed' } else { 'ok' }`;
+  const r = spawnSyncImpl('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', ps], { encoding: 'utf8', windowsHide: true, timeout: 120_000, stdio: ['ignore', 'pipe', 'pipe'] });
+  return { thermalGuard: String(r.stdout || '').trim() || `exit=${r.status}` };
+}
 export const LOCK_MS = 10 * 60 * 1000;
 export function validId(id) {
   if (!/^mail-[A-Za-z0-9-]{1,180}$/.test(String(id ?? ''))) throw new Error('invalid mail id');
@@ -384,6 +401,7 @@ export async function pollOnce(deps = {}) {
       }
       fs.appendFileSync(processedFile, `${mail.id}\n`, { mode: 0o600 }); processed.add(mail.id); handled.push(mail.id);
     }
+    if (!dryRun) { try { (deps.dailySelfHeal ?? dailySelfHeal)({ dir, now }); } catch (e) { err(`fleet-mail: 自己修復に失敗（受信は成功）: ${e.message}`); } }
     out(json ? JSON.stringify({ received, processed: handled }) : `受信=${received.length} / 処理=${handled.length}`);
     return { received, handled };
   } finally { release(); }

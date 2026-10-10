@@ -138,6 +138,10 @@ effortLevel を medium/high、model を既定監督モデルに戻す。
 
 Workspace の URL は authuser=開く人のメール を付け、本文の同じ行か直前に「<同じメール> で開いてください」と書く。自分宛は userEmail、他人宛は共有済みの相手メール。script.google.com/home/ 系は例外。他サービスはアカウント名を添え、既定と違う場合はシークレットウィンドウも指定。
 
+## decision-research-gate
+
+費用・プラン・契約・アカウント作成・招待など user の判断や支払いを伴う提案は、user に聞かれる前に Claude が調べる。比較表（現状維持・無料の代替を含む2案以上 × 月額・得られる枠や効果・user の手間）、出典（~/.claude/pricing-brief.md か WebSearch の一次情報 URL）、推奨案と理由を付けてから出す。比較不要な場合だけ [RESEARCH-OK] <理由>。
+
 ## url-format-guard
 
 URLをMarkdownリンクまたは空白で囲み、日本語/全角文字との直接隣接を除く。

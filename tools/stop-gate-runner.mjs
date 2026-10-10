@@ -18,6 +18,7 @@ import { evaluateHandoffRegret } from './handoff-regret-gate.mjs';
 import { findHandoffWithoutInfo, formatViolationMessage as formatHandoffInfo } from './handoff-info-guard.mjs';
 import { judge as judgeGhHandoff, formatReason as ghHandoffReason } from './gh-handoff-gate.mjs';
 import { judge as judgeUrlAccount, formatReason as urlAccountReason } from './url-account-gate.mjs';
+import { judge as judgeDecisionResearch, formatReason as decisionResearchReason } from './decision-research-gate.mjs';
 import { configuredMode, evaluateNegativeClaimFromRaw } from './negative-claim-gate.mjs';
 import { configuredMode as externalStateMode, evaluateExternalStateClaimFromRaw } from './external-state-claim-gate.mjs';
 import { evaluateReportedSymptomFromRaw } from './reported-symptom-gate.mjs';
@@ -51,6 +52,7 @@ export async function evaluateGates(ctx, auditOptions = {}) {
     ['handoff-info-guard', () => { const found = findHandoffWithoutInfo(ctx.assistantText); return found ? { decision: 'block', reason: formatHandoffInfo(found), code: 'HANDOFF-INFO' } : { decision: 'pass' }; }],
     ['gh-handoff-gate', () => { const result = judgeGhHandoff(ctx.assistantText); return result.triggered && result.missing.length ? { decision: 'block', reason: ghHandoffReason(), code: 'GH-HANDOFF' } : { decision: 'pass' }; }],
     ['url-account-gate', () => { const result = judgeUrlAccount(ctx.assistantText); return result.triggered && result.missing.length ? { decision: 'block', reason: urlAccountReason(result.missing), code: 'URL-ACCOUNT' } : { decision: 'pass' }; }],
+    ['decision-research-gate', () => { const result = judgeDecisionResearch(ctx.assistantText); return result.triggered ? { decision: 'block', reason: decisionResearchReason(result.missing), code: 'RESEARCH-FIRST' } : { decision: 'pass' }; }],
     ['negative-claim-gate', () => { const result = evaluateNegativeClaimFromRaw({ text: ctx.assistantText, transcriptRaw: ctx.transcriptRaw }); return result.decision === 'block' && configuredMode() !== 'block' ? { ...result, decision: 'warn' } : result; }],
     ['external-state-claim-gate', () => { const result = evaluateExternalStateClaimFromRaw({ text: ctx.assistantText, transcriptRaw: ctx.transcriptRaw }); return result.decision === 'block' && externalStateMode() !== 'block' ? { ...result, decision: 'warn' } : result; }],
     ['control-group-gate', () => runControlGroup({ cwd: ctx.input?.cwd })],

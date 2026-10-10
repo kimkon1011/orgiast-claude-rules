@@ -5,7 +5,7 @@
 ## インストール
 
 ```sh
-code --install-extension orgiast-next-session-0.3.5.vsix --force
+code --install-extension orgiast-next-session-0.3.6.vsix --force
 ```
 
 通常は `tools/next-session-launch.mjs --target vscode-ext` が未導入時だけ同梱 VSIX を自動インストールします。
@@ -26,7 +26,25 @@ URI、起動時、タブ変更、5秒ごとの補充は同じ処理で直列化�
 
 `node tools/mobile-sessions.mjs --dry-run` は状態ファイル（拡張が5秒ごとに更新）から「現在の待機数 / 目標 / 起動する本数」を表示します。起動・設定変更はしません。30秒以上古い状態、未導入・停止中の拡張は `不明` と表示し、0本と誤認しません。WSLからWindows側を確認するときは `ORGIAST_HOME=/mnt/c/Users/uers` を指定します。
 
-この変更はタブの補充を担当します。別の `claude-mobile` サーバーやスケジュールタスクを停止・変更しません。実機の補充には同梱0.3.5 VSIXの導入が必要です。
+### 定期リフレッシュ
+
+スマホの Claude Code（Remote Control）一覧は新しい順に並ぶため、何時間も前に作った待機タブは下に沈んで見つかりません。待機セッションに発言させると消費してしまうので、代わりに**古い待機タブ（ラベル `Claude Code`）を 1 本閉じ、補充で新しい待機タブを作り直します**（新セッションとして登録され直し、一覧の上に出ます）。
+
+- 条件（ownership を持つウィンドウだけ、1 分ごとに判定）: 有効、時間帯内、前回から間隔以上、待機タブが目標数以上（不足中は補充を優先して何もしません）。
+- 対象は待機タブのうち最古の 1 本です。古さは拡張が記録したタブ出現時刻（起動時に既存タブは起動時刻）で判定し、出現から 10 分未満のタブと、いま開いている（アクティブな）タブは対象外です。
+- 実行時は Output に `mobile refresh closed=<ラベル> age=<分> waitingBefore=<本数>` を出し、状態ファイルへ `lastRefreshAt` を保存します。`node tools/mobile-sessions.mjs --dry-run` が「最終リフレッシュ」を表示します。
+- 即時実行: `node tools/mobile-sessions.mjs --refresh`（`--count` と併用可、URI は `/mobile?refresh=1`）。時間帯・間隔の条件は無視しますが、10 分未満除外と不足中の除外は維持します。
+
+設定キー（決定順: 環境変数 → `~/.claude/mobile-sessions.json` → VS Code 設定 → 既定）:
+
+| 項目 | 環境変数 | JSON キー | VS Code 設定 | 既定 |
+|---|---|---|---|---|
+| 間隔（分、0 で無効） | `CLAUDE_MOBILE_REFRESH_MINUTES` | `refreshMinutes` | `orgiast.nextSession.mobileRefreshMinutes` | 60 |
+| 時間帯（ローカル時刻、終了は排他） | `CLAUDE_MOBILE_REFRESH_HOURS` | `refreshHours` | `orgiast.nextSession.mobileRefreshHours` | `06-24` |
+
+副作用: 閉じた古い待機セッションの行は、スマホ一覧に offline として残ります（セッション自体は未使用のため実害はありません）。
+
+この変更はタブの補充を担当します。別の `claude-mobile` サーバーやスケジュールタスクを停止・変更しません。実機の補充・定期リフレッシュには同梱0.3.6 VSIXの導入が必要です。
 
 URI は外部プロセスやブラウザからも開けるため、`claude` パラメータは実在する絶対パスかつファイル名が `claude` / `claude.exe` の場合だけ実行します。
 

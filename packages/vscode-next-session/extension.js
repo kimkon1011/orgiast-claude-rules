@@ -2,7 +2,10 @@ const vscode = require('vscode');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { readConfig, createOwnershipLease, createPool } = require('./mobile-pool');
+const {
+  readConfig, createOwnershipLease, createPool, isWaitingTab, decideRefresh,
+  readRefreshConfig, readLastRefreshAt, inRefreshHours,
+} = require('./mobile-pool');
 const { resolveClaudeShellPath } = require('./shell-path');
 const { decideAction, orderMobileOpenMethods } = require('./route');
 
@@ -78,6 +81,50 @@ let lastGoodMethod;
 let lastLoggedState = '';
 const EXTERNAL_OPEN_URI = 'vscode://Anthropic.claude-code/open';
 function log(message) { getOutputChannel().appendLine(`${new Date().toISOString()} ${message}`); }
+let lastRefreshAt = null;
+try { lastRefreshAt = readLastRefreshAt(mobileHome); } catch { lastRefreshAt = null; }
+function vscodeRefreshConfig() {
+  const config = vscode.workspace.getConfiguration('orgiast.nextSession');
+  return { minutes: config.get('mobileRefreshMinutes'), hours: config.get('mobileRefreshHours') };
+}
+// タブ出現時刻のマップ。Tab オブジェクトは拡張ホスト内で同一タブに対し同一インスタンスが
+// 使い回される前提でオブジェクト自体をキーにする。同一性が崩れた場合は「新規出現」扱い
+// （出現時刻=現在）になり、age が短く見えるだけで誤って古いタブを閉じることは無い（安全側）。
+// 閉じたタブは sync で削除する。起動時に既存のタブは activate 時刻で初期化する。
+const tabAppearedAt = new Map();
+function syncTabTimes(now = Date.now()) {
+  const current = claudeTabs();
+  for (const tab of current) if (!tabAppearedAt.has(tab)) tabAppearedAt.set(tab, now);
+  for (const tab of [...tabAppearedAt.keys()]) if (!current.includes(tab)) tabAppearedAt.delete(tab);
+  return current;
+}
+// リフレッシュ判定（ownership lease を持つウィンドウだけ）。force=true は URI の refresh=1。
+async function refreshWaitingTab({ force = false } = {}) {
+  if (!mobileEnabled || !await mobileLease.acquire()) return false;
+  const now = Date.now();
+  const current = syncTabTimes(now);
+  let config;
+  try { config = readRefreshConfig(mobileHome, process.env, vscodeRefreshConfig()); }
+  catch (error) { log(`mobile refresh config error: ${error.message}`); return false; }
+  const decision = decideRefresh({
+    now,
+    minutes: config.minutes,
+    hoursOk: inRefreshHours(new Date(now), config.hours),
+    lastRefreshAt,
+    target: mobileTarget,
+    force,
+    tabs: current.map((tab) => ({ label: String(tab.label), appearedAt: tabAppearedAt.get(tab), isActive: Boolean(tab.isActive), tab })),
+  });
+  if (!decision.refresh) return false;
+  const target = decision.tab;
+  if (target.tab.isActive) return false; // 閉じる直前に再確認（kim が触っている可能性）
+  log(`mobile refresh closed=${target.label} age=${decision.ageMinutes} waitingBefore=${decision.waiting}`);
+  lastRefreshAt = now;
+  const closed = await vscode.window.tabGroups.close(target.tab);
+  if (!closed) log('mobile refresh: タブを閉じられませんでした');
+  await pool.ensure(mobileTarget); // 補充は 5 秒タイマーでも動くが、ここで即時に回す
+  return closed;
+}
 function vscodeMobileTabs() {
   const value = vscode.workspace.getConfiguration('orgiast.nextSession').get('mobileTabs');
   return Number.isInteger(value) && value >= 1 ? value : 1;
@@ -110,7 +157,7 @@ const pool = createPool({
   publish(waiting, target) {
     fs.mkdirSync(path.join(mobileHome, '.claude'), { recursive: true });
     fs.writeFileSync(path.join(mobileHome, '.claude', 'mobile-sessions-state.json'),
-      JSON.stringify({ waiting, target, updatedAt: Date.now(), pid: process.pid }));
+      JSON.stringify({ waiting, target, updatedAt: Date.now(), pid: process.pid, ...(lastRefreshAt ? { lastRefreshAt } : {}) }));
     const state = `${waiting}/${target}`;
     if (state !== lastLoggedState) { lastLoggedState = state; log(`mobile tabs: waiting=${waiting} target=${target}`); }
   },
@@ -140,6 +187,7 @@ function activate(context) {
         }
         if (action.kind === 'mobile') {
           await ensureMobileTabs(action);
+          if (action.refresh) await refreshWaitingTab({ force: true });
           return;
         }
         const cwd = params.get('cwd') || undefined;
@@ -169,9 +217,14 @@ function activate(context) {
   const refill = () => {
     if (mobileEnabled) pool.ensure(mobileTarget).catch((error) => log(`mobile refill failed: ${error.message}`));
   };
-  context.subscriptions.push(vscode.window.tabGroups.onDidChangeTabs(refill));
+  context.subscriptions.push(vscode.window.tabGroups.onDidChangeTabs(() => { syncTabTimes(); refill(); }));
   const timer = setInterval(refill, 5000);
-  context.subscriptions.push({ dispose() { clearInterval(timer); mobileLease.release(); } });
+  // 起動時に既存タブの出現時刻を初期化し、以後 opened は onDidChangeTabs 経由の sync で記録する。
+  syncTabTimes();
+  const refreshTimer = setInterval(
+    () => refreshWaitingTab().catch((error) => log(`mobile refresh failed: ${error.message}`)), 60000);
+  refreshTimer?.unref?.();
+  context.subscriptions.push({ dispose() { clearInterval(timer); clearInterval(refreshTimer); mobileLease.release(); } });
   const configuredTabs = vscode.workspace.getConfiguration('orgiast.nextSession').get('mobileTabs');
   const mobileTabs = configuredTabs === 0 ? 0 : readConfig(mobileHome, process.env, vscodeMobileTabs());
   if (mobileTabs > 0) {

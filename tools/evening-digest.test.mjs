@@ -10,6 +10,8 @@ const response = () => ({ ok: true, status: 204, text: async () => '' });
 test('formats no-results case and dry-run stays side-effect free', async () => {
   const dir = home(); const result = await runEvening({ home: dir, now: new Date('2026-08-31T18:00:00'), dryRun: true });
   assert.match(result.message, /特筆事項なし/); assert.equal(fs.existsSync(path.join(dir, '.claude', 'evening-digest-state.json')), false);
+  assert.match(result.message, /❓ あなたの返事を待っていること: なし/);
+  assert.doesNotMatch(result.message, /未処理の判断/);
 });
 test('formats results, skips second send, and force sends again', async () => {
   const dir = home(); const now = new Date('2026-08-31T18:00:00'); const resultDir = path.join(dir, '.claude', 'batch-queue');

@@ -1,3 +1,4 @@
+export const GATE_CONTRACT = {"name": "url-account-gate", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "url-account-gate"}]};
 import { latestAssistantText } from './lib/assistant-text.mjs';
 import { isEntry } from './is-entry.mjs';
 

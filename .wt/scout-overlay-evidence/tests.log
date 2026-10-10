@@ -1,0 +1,73 @@
+rejected proposal badcmd: 配列でない command は許可しません
+- [human] 別ツールで改善 (¥100/月, medium)
+- [reject] 不正なcommand (¥0/月, low)
+- [human] 人間判断 (¥3,000/月, high)
+OK / proposals=3 applied=0 human=2 rejected=1 suppressed=0 provider=deepseek
+- [auto] ルーティング表再生成 (¥500/月, high)
+- [human] プラン見直し (¥2,000/月, low)
+OK / proposals=2 applied=1 human=1 rejected=0 suppressed=0 provider=deepseek
+4週間抑止で 1件の同種提案を除外
+- [reject] auto-session を cheap-code に移管 (¥1,000/月, high)
+OK / proposals=0 applied=0 human=0 rejected=1 suppressed=1 provider=deepseek
+- [auto] 委譲率を上げる (¥800/月, medium)
+OK / proposals=1 applied=1 human=0 rejected=0 suppressed=0 provider=deepseek
+- [auto] ルーティング再生成 (¥700/月, high)
+- [human] 契約見直し (¥3,000/月, medium)
+OK / proposals=2 applied=1 human=1 rejected=0 suppressed=0 provider=gemini
+✔ 提案JSONを fenced でもパースできる (2.4318ms)
+✔ anthropic/claude は提案生成 provider に使えない (0.5425ms)
+✔ command 分類: 許可リスト固定/不正/許可外 (1.9488ms)
+✔ 提案 metric 推定: 無人→headlessClaudeOut, 予算→pacePercent, 既定→delegRatio (0.5417ms)
+✔ 許可リスト外 command は実行されず human に落ちる / 配列でない command は拒否 (32.619097ms)
+✔ 許可済み command は自動適用され actions に auto-weekly で入る (3.4712ms)
+✔ 4週間以内の no_effect 同種提案は抑止する (2.1113ms)
+✔ 提案 metric delegRatio の baseline は委譲率の現在値を使う (2.8088ms)
+✔ --json は全提案と applied/human を出し、dry-run 監査ファイルだけを保存する (2.5159ms)
+✔ 通常実行の DM に自動適用 title・削減額・command と human 提案を含める (3.083599ms)
+✔ judge はクールダウン中の候補をスキップし次の候補へ自動切替する（日次上限でevalが全滅しない） (137.95369ms)
+✔ --all skips all tasks for a cooled-down provider and runs the next provider (129.947791ms)
+✔ single-provider run skips before executing any tasks or fetching (85.798594ms)
+✔ OpenRouter daily quota records OpenRouter and call skips the next task without fetching (128.392591ms)
+✔ ordinary HTTP 429 still retries three times without marking cooldown (121.457092ms)
+✔ ordinary HTTP 503 still retries three times without marking cooldown (149.898389ms)
+✔ expired cooldown allows HTTP and normal task execution (155.118489ms)
+✔ attemptedRate は pass/n、既存 rate は pass/graded のまま (0.9144ms)
+✔ errors + truncated が n の1割超なら計測不能で推薦されない (2.639ms)
+✔ 半数以上が fail/error のタスクは警告され推薦根拠から外れる (1.0516ms)
+✔ isDailyLimit は本文の RPD 文字列で日次上限を判定する (0.3647ms)
+✔ retryDelay は retry-after を30秒にクランプする (0.2743ms)
+✔ resultRecord は空配列でも例外を投げず n:0 rate:null を返す（中断時の部分結果パス） (0.278ms)
+✔ resolveJudgeChain は --judge-provider を先頭に置き重複除去する (0.3234ms)
+✔ scout candidates run through --all with model-specific prices (459.129468ms)
+✔ readConfig merges by provider+model with overlay precedence, including skip (3.3385ms)
+✔ --all honors overlay skip and replacement price without duplicate execution (267.232581ms)
+✔ eval-providers.json は provider/model を持つ配列 (1.3928ms)
+✔ mistral は skip:true（mistral-large-latest は契約で tier_not_allowed 403 になる） (0.2743ms)
+model-scout: 起動失敗。本体の週次改善を継続します。
+✔ 新規は前回集合との差分。再登場した既知モデルは新規にしない (4.946999ms)
+✔ 値下げは入力または出力が20%以上。ゼロ価格も検出 (0.804ms)
+✔ 初回14日窓は境界を含み、未来の日付を除く (0.4928ms)
+✔ API の価格文字列を正規化し、不正価格と空カタログを拒否 (0.9144ms)
+✔ 両単価が同額以下かつ片方が安く、文脈が同等以上のtext候補だけ評価 (0.7065ms)
+✔ 候補ゼロでも notifyKim 経由で DM を1通送る（fetchモック） (5.2299ms)
+✔ 状態・Markdownを更新し、eval設定へ追加。再実行で重複しない (3.471699ms)
+✔ dry-run は stdout のみ、DM・状態・Markdown・eval設定を変更しない (1.4849ms)
+✔ 取得失敗は状態維持・失敗通知1通・秘密値を出さずexit 0 (1.1974ms)
+✔ DM失敗時は差分を消費しない。次回のeval追加は冪等 (2.1449ms)
+✔ 設定の破損は上書きせず、ファイル名付きの手動投入通知 (1.3641ms)
+✔ skip済み候補を勝手に再開しない (1.1423ms)
+✔ 1800字制限と全候補のMarkdown参照 (0.4781ms)
+✔ eval は設定モデルの単価を利用し、別モデルへのCLI上書きには流用しない (0.371ms)
+✔ 週次の偵察ステップは--once、dry-run伝播、承認時skip、失敗隔離 (1.2887ms)
+✔ 未知のCLI引数もexit 0、APIを呼ばない (0.1802ms)
+✔ scout creates the default user overlay and leaves repository JSON unchanged (11.793899ms)
+✔ missing overlay stays absent on dry-run (1.0904ms)
+✔ overlay write failure reports the local path instead of claiming successful enqueue (1.066ms)
+ℹ tests 48
+ℹ suites 0
+ℹ pass 48
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1865.576769

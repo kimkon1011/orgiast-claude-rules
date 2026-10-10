@@ -1,0 +1,102 @@
+{
+  "metadata": {
+    "content": [
+      {
+        "type": "text",
+        "text": "Action completed."
+      }
+    ],
+    "structuredContent": {
+      "spreadsheetId": "1WtsSiDlId8EgyzA15pJbeCGfvMHUgBqrUMmucax4A24",
+      "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/1WtsSiDlId8EgyzA15pJbeCGfvMHUgBqrUMmucax4A24/edit?ouid=108943467368537426847",
+      "properties": {
+        "title": "Discord日次タスク台帳",
+        "locale": "ja_JP",
+        "timeZone": "Asia/Tokyo"
+      },
+      "sheets": [
+        {
+          "properties": {
+            "sheetId": 0,
+            "title": "タスク",
+            "index": 0,
+            "sheetType": "GRID",
+            "gridProperties": {
+              "rowCount": 4958,
+              "columnCount": 15,
+              "frozenRowCount": 1
+            }
+          }
+        },
+        {
+          "properties": {
+            "sheetId": 1,
+            "title": "実行ログ",
+            "index": 1,
+            "sheetType": "GRID",
+            "gridProperties": {
+              "rowCount": 1010,
+              "columnCount": 26,
+              "frozenRowCount": 1
+            }
+          }
+        }
+      ]
+    },
+    "isError": false
+  },
+  "row": {
+    "content": [
+      {
+        "type": "text",
+        "text": "Action completed."
+      }
+    ],
+    "structuredContent": {
+      "range": "'タスク'!A4:O4",
+      "majorDimension": "ROWS",
+      "values": [
+        [
+          "T-4071",
+          "2026-10-03 6:30",
+          "P1",
+          "100",
+          "締切",
+          "デュトロドライバー兼設営スタッフ勤務確定返信",
+          "後藤大輔が氏名・勤務日・時間・会場名を記載し、10月3日までに返信する",
+          "後藤大輔",
+          "2026-10-03",
+          "✉ 株式会社オージャスト アサイングループ",
+          "確定連絡へのご返信は氏名・勤務日・勤務時間・会場名を入れて返信期限までにご返信ください。*【返信期限】10月3日（土）中*",
+          "https://mail.google.com/mail/u/seisaku-team@orgiast.jp/#all/1a0fcd9a61dd6219",
+          "未着手",
+          null,
+          "2026-10-09 6:32"
+        ]
+      ]
+    },
+    "isError": false
+  },
+  "connectorThreadFailure": {
+    "content": [
+      {
+        "type": "text",
+        "text": "ActionError: Gmail `get_thread` failed: Gmail API request failed. HTTP status: 404. Retryable: no."
+      }
+    ],
+    "structuredContent": {
+      "error": "ActionError: Gmail `get_thread` failed: Gmail API request failed. HTTP status: 404. Retryable: no.",
+      "error_code": "NOT_FOUND",
+      "error_data": {
+        "type": "http_error",
+        "message": "Gmail `get_thread` failed: Gmail API request failed. HTTP status: 404. Retryable: no.",
+        "code": 404,
+        "response": {
+          "status": 404,
+          "payload": "{\n  \"error\": {\n    \"code\": 404,\n    \"message\": \"Requested entity was not found.\",\n    \"errors\": [\n      {\n        \"message\": \"Requested entity was not found.\",\n        \"domain\": \"global\",\n        \"reason\": \"notFound\"\n      }\n    ],\n    \"status\": \"NOT_FOUND\"\n  }\n}\n"
+        }
+      }
+    },
+    "isError": true
+  }
+}

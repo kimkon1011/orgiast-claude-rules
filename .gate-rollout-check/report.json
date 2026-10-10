@@ -1,0 +1,132 @@
+{
+  "task": "gate-rollout PR667 -> PR673",
+  "prs": {
+    "667": {
+      "state": "MERGED",
+      "sha": "09b7ab9574e41c81b77e1772c553c8335d7328a2"
+    },
+    "673": {
+      "state": "MERGED",
+      "sha": "70a19b4d7f0712ab2ead14f5d7ee114b11e019a3"
+    },
+    "678": {
+      "url": "https://github.com/kimkon1011/orgiast-claude-rules/pull/678",
+      "automerge": true,
+      "checks": "all pass",
+      "state": "MERGED",
+      "mergedAt": "2026-10-09T13:51:44Z",
+      "sha": "db4a165fa4f138b9a8ee9779bf03482a49005be4"
+    }
+  },
+  "runtime": {
+    "sourceMain": "70a19b4d7f0712ab2ead14f5d7ee114b11e019a3",
+    "filesUpdated": 109,
+    "method": "three-way runtime file overlay; preserved concurrent local changes",
+    "gitHeadUpdated": false,
+    "reason": "git fetch: FETCH_HEAD read-only file system",
+    "backup": "/tmp/gate-rollout-backup",
+    "localPreservedGates": [
+      "claude-artifact-url-gate",
+      "japanese-reply-gate",
+      "pretooluse-claude-docs-guard"
+    ]
+  },
+  "registration": {
+    "onboardingSync": {
+      "attempted": true,
+      "exit": 0,
+      "verified": false
+    },
+    "setupConverge": {
+      "attempted": true,
+      "exit": 1,
+      "classifierSettings": "NG"
+    },
+    "registerHooksOnly": {
+      "attempted": true,
+      "exit": 1,
+      "error": "EROFS creating settings.json backup"
+    },
+    "gateHookRunnerCount": 0,
+    "commands": {
+      "PreToolUse": "node \"C:\\Users\\uers\\orgiast-main\\tools\\feedback-form-gate.mjs\"",
+      "Stop": "node \"C:\\Users\\uers\\orgiast-main\\tools\\stop-gate-runner.mjs\""
+    },
+    "stopDesign": "Stop runner is deliberately excluded from wrapping; internally invokes applyNamedGatePolicy"
+  },
+  "tests": {
+    "gate-contract-runtime": {
+      "pass": 39,
+      "fail": 4,
+      "platforms": [
+        "Linux/WSL",
+        "Windows Node 24.14.1"
+      ],
+      "cause": "pre-existing uncommitted gates lack contracts and rollout manifest entries",
+      "gates": [
+        "claude-artifact-url-gate",
+        "japanese-reply-gate",
+        "pretooluse-claude-docs-guard"
+      ]
+    },
+    "gate-contract-clean-main": {
+      "pass": 40,
+      "fail": 0
+    },
+    "gate-readonly-runtime": {
+      "platforms": [
+        "Linux/WSL",
+        "Windows Node 24.14.1"
+      ],
+      "pass": 42,
+      "fail": 0
+    },
+    "codex-do-and-import": {
+      "pass": 157,
+      "fail": 0,
+      "skip": 2
+    },
+    "codex-work-evidence-final": {
+      "pass": 5,
+      "fail": 0
+    }
+  },
+  "smoke": [
+    {
+      "command": "clasp deployments",
+      "exit": 0,
+      "decision": "pass",
+      "reasonFirst2Lines": []
+    },
+    {
+      "command": "clasp push -f",
+      "exit": 0,
+      "decision": "pass",
+      "reasonFirst2Lines": []
+    }
+  ],
+  "smokeDiagnosis": {
+    "projectKind": "gas",
+    "feedbackExists": true,
+    "exemption": false,
+    "pushReasonLines": []
+  },
+  "notification": {
+    "dryRun": {
+      "delivered": "dry-run"
+    },
+    "actual": {
+      "delivered": "webhook",
+      "reason": "kim の Discord ユーザーIDがありません",
+      "note": "F経路は意図的に個人IDを使わず中央webhookを優先するため、IDなしの表示は今回の送信失敗を意味しない"
+    }
+  },
+  "notificationBody": "gate-rollout 通報テスト",
+  "notificationDelivery": "送信済み（着信は kim 確認）; reportGate F transport -> central webhook; test ledger in /tmp",
+  "remaining": [
+    "settings registration requires a session permitted to write C:/Users/uers/.claude/settings.json; do not bypass sandbox",
+    "git HEAD main convergence requires writable git metadata and preservation of other active feature branch",
+    "three pre-existing uncommitted gates need their own contracts and rollout entries"
+  ],
+  "supervisorRegistrationCommand": "ORGIAST_REPO=\"C:\\Users\\uers\\orgiast-main\" node tools/register-hooks.mjs --hooks-only"
+}

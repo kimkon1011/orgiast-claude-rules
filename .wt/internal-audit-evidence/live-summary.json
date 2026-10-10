@@ -1,0 +1,82 @@
+{
+  "runStatus": "complete",
+  "partners": 403,
+  "deals": 2981,
+  "payments": 706,
+  "wallet_txns": 877,
+  "ruleCounts": {
+    "R07": 16,
+    "R03": 3,
+    "R05": 8,
+    "R04": 7,
+    "R09": 5,
+    "R11": 1,
+    "R13": 6,
+    "R08": 1,
+    "R10": 10,
+    "exfil": 68802
+  },
+  "severityCounts": {
+    "high": 59321,
+    "medium": 9517,
+    "info": 21
+  },
+  "sources": {
+    "freee": {
+      "status": "ok",
+      "count": 2981,
+      "reason": "GETのみ。トークン更新なし"
+    },
+    "gmail": {
+      "status": "ok",
+      "count": 29748,
+      "reason": "59取引先を照合。正の対照確認済み"
+    },
+    "drive": {
+      "status": "ok",
+      "count": 49352,
+      "reason": "59取引先を照合。正の対照確認済み"
+    },
+    "discord": {
+      "status": "ok",
+      "count": 87,
+      "reason": "59取引先を照合。正の対照確認済み"
+    },
+    "discord:members": {
+      "status": "ok",
+      "count": 677,
+      "reason": "既存検索名簿 14件を先に利用しguild一覧で補完。社員属性・未登録メールは未確認"
+    },
+    "admin": {
+      "status": "unverified",
+      "count": 0,
+      "reason": "Workspace 監査ログ: 未確認（DWD スコープ未付与）。付与手順: Google 管理コンソール（kim@orgiast.jp で開く）→ セキュリティ → アクセスとデータ管理 → API の制御 → ドメイン全体の委任 → クライアント ID `110910358431552197763` を編集 → スコープに `https://www.googleapis.com/auth/admin.reports.audit.readonly` を追加 → 承認。付与後は次回実行から自動で有効。"
+    },
+    "drive-sharing:kim@orgiast.jp": {
+      "status": "unverified",
+      "count": 14700,
+      "reason": "Drive 所有ファイル走査の時間上限（未走査のページあり）。直近更新順の部分取得"
+    },
+    "drive-sharing:seisaku-team@orgiast.jp": {
+      "status": "unverified",
+      "count": 11600,
+      "reason": "Drive 所有ファイル走査の時間上限（未走査のページあり）。直近更新順の部分取得"
+    },
+    "drive-sharing:cr@orgiast.jp": {
+      "status": "unverified",
+      "count": 6400,
+      "reason": "Drive 所有ファイル走査の時間上限（未走査のページあり）。直近更新順の部分取得"
+    },
+    "web": {
+      "status": "unverified",
+      "count": 0,
+      "reason": "skip 指定"
+    },
+    "patterns": {
+      "status": "unverified",
+      "count": 0,
+      "reason": "skip 指定"
+    }
+  },
+  "unverified": 115
+}

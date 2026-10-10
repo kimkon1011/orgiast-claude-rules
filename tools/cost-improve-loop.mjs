@@ -16,7 +16,7 @@ import { parseDeferred } from './lib/executor-gate.mjs';
 import { collectProviderHealth, collectClaudeStats } from './usage-stats.mjs';
 import { collectBudgetStatus } from './budget-status.mjs';
 import { shouldSendMonthlyReport, buildMonthlyReport, markMonthlyReportSent } from './cost-monthly-report.mjs';
-import { collectProviderBalances, formatBalanceLine, CREDIT_LOW_THRESHOLD } from './provider-balance.mjs';
+import { collectProviderBalances, formatBalanceLine, alertProviderBalances, BALANCE_LOW_THRESHOLD_USD, CREDIT_LOW_THRESHOLD } from './provider-balance.mjs';
 import { resolveReporterLabel } from './reporter-label.mjs';
 import { main as sendFleetDirective } from './fleet-directive-send.mjs';
 
@@ -56,7 +56,7 @@ export function evaluateBalanceSignals(rows, { directProviders = ['deepseek', 'k
       if (Number.isFinite(row.credits)) {
         violations.push({ kind: 'balance_low', pc: 'self', severity: 'warning', provider: row.provider, evidence: `${row.provider} の前払いクレジットが ${row.credits}（閾値 ${CREDIT_LOW_THRESHOLD}）`, actualValue: row.credits, targetValue: CREDIT_LOW_THRESHOLD, trusted: true });
       } else if (row.autoTopUp !== true) {
-        violations.push({ kind: 'balance_low', pc: 'self', severity: 'warning', provider: row.provider, evidence: `${row.provider} balance $${row.balanceUsd.toFixed(2)} (< $3), auto top-up unavailable`, actualValue: row.balanceUsd, targetValue: 3, trusted: true });
+        violations.push({ kind: 'balance_low', pc: 'self', severity: 'warning', provider: row.provider, evidence: `${row.provider} balance $${row.balanceUsd.toFixed(2)} (< $${BALANCE_LOW_THRESHOLD_USD}), auto top-up unavailable`, actualValue: row.balanceUsd, targetValue: BALANCE_LOW_THRESHOLD_USD, trusted: true });
       }
     }
     if (row.autoTopUp === false && directProviders.includes(row.provider)) violations.push({ kind: 'autotopup_missing', pc: 'self', severity: 'warning', provider: row.provider, evidence: `${row.provider} has no auto top-up and remains a direct lane`, trusted: true });
@@ -1324,6 +1324,15 @@ export async function main(argv = process.argv.slice(2), io = {}) {
     signals = await collectSignals();
   } catch (error) {
     console.error(`ローカル信号の収集に失敗(B4判定をスキップ): ${String(error?.message ?? error)}`);
+  }
+  // 総合レポートの文字数制限・対処件数制限に依存せず残高専用DMを届ける。
+  // 既存の日次取得結果を再利用し、通知障害でも本体は継続する。
+  if (!dryRun && !noNotify && !io.noNotify) {
+    try {
+      await (io.alertProviderBalances ?? alertProviderBalances)(signals?.providerBalances || [], {
+        home, now, notify: io.notifyKim ?? notifyKim,
+      });
+    } catch { console.error('provider-balance: 日次残高DMに失敗。次回再試行します'); }
   }
   // heartbeat metrics(headlessOut / budgetPace)は常に実測を載せる。
   if (localState && typeof localState === 'object' && signals) {

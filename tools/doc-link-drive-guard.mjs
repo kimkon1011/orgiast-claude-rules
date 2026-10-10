@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+export const GATE_CONTRACT = {"name": "doc-link-drive-guard", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "doc-link-drive-guard"}, {"kind": "command", "ref": "node tools/gdoc-publish.mjs --title <題名> --file <本文.md>"}, {"kind": "user-consent", "ref": "GOOGLE_SA_KEY / Google Docs connector", "reason": "文書作成権限は接続済みアカウントまたは組織管理者が認可するDWD鍵が必要。秘密鍵を全PCへ一括配布しない"}]};
 import fs from 'node:fs';
 import { isEntry } from './is-entry.mjs';
 import { lastAssistantText, readStdin } from './transcript-tail.mjs';

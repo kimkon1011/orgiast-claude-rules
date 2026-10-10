@@ -1,0 +1,30 @@
+{
+  "id": "proposal-session-sample",
+  "title": "要約モデルの採用提案（動作確認）",
+  "source": "model-scout",
+  "evidence": [
+    "サンプル: 候補97%、現行100%（実測採用案ではありません）"
+  ],
+  "proposal": {
+    "summary": "評価後の採用案をセッションで判断する",
+    "changes": [
+      {
+        "file": "tools/routing-table.json",
+        "before": "現行モデル",
+        "after": "評価済み候補"
+      }
+    ],
+    "costImpact": {
+      "perMonthUsd": null,
+      "basis": "月間トークン数未集計のため未算定"
+    },
+    "risks": [
+      "評価対象外の品質差"
+    ]
+  },
+  "onApprove": {
+    "kind": "codex-task",
+    "promptFile": "~/.claude/proposals/proposal-session-sample.codex.md"
+  },
+  "onReject": "現行モデルを維持する"
+}

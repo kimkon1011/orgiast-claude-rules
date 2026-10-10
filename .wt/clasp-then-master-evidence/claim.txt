@@ -1,0 +1,2 @@
+2026-10-09 Codex: clasp push 後の GitHub master 同期・週次 drift 検知・2 PR。専用 clone/worktree で作業中。
+完了: 関連テスト pass 82 / fail 0。PR rules #679 / booth #3 を作成、未マージ。本番デプロイなし。

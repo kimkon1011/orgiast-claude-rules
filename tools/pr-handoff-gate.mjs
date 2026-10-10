@@ -1,6 +1,7 @@
+export const GATE_CONTRACT = {"name": "pr-handoff-gate", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "pr-handoff-gate"}, {"kind": "command", "ref": "gh auth status"}, {"kind": "command", "ref": "gh auth login"}, {"kind": "user-consent", "ref": "GitHub OAuth / credential helper", "reason": "各人のGitHubアカウントでリポジトリ作成/PR権限を認証する必要がある"}]};
 const REASON = [
   '[PR-HANDOFF] `gh` 未認証は PR 作成を手渡す理由にならない。',
-  'credential helper に PAT が入っているので、`git push` が通る機体なら必ず作れる。',
+  'まず `gh auth status` で認証を確認。未認証なら既存 credential helper、または `gh auth login` で認証する（各人の権限は未確認のまま断定しない）。',
   'Git Bash 等で次のコマンドを使い、作成・ラベル付けを人に手渡さず実行すること:',
   "GH_TOKEN=$(printf 'protocol=https\\nhost=github.com\\n\\n' | git credential fill | sed -n 's/^password=//p') gh pr create --base main --head <branch> --title \"<題>\" --body-file <本文ファイル>",
 ].join('\n');

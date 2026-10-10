@@ -28,7 +28,9 @@ test('24時間超はkimへ通知し履歴を保存する', async () => {
   await runLedgerNag(h.options);
   assert.equal(h.sends.length, 1);
   assert.equal(h.sends[0].userId, '715210673642012733');
-  assert.match(h.sends[0].content, /停滞: 2日3時間/);
+  assert.match(h.sends[0].content, /^⏳ ずっと止まっている仕事: 1件/);
+  assert.match(h.sends[0].content, /レビュー・Approve・Merge（2日3時間）/);
+  assert.match(h.sends[0].content, /次にやること: レビューする/);
   assert.equal(h.writes[0]['assign-app-pr1'], NOW.toISOString());
 });
 test('クールダウン内はスキップ、ちょうど24時間は再通知する', async () => {
@@ -36,7 +38,7 @@ test('クールダウン内はスキップ、ちょうど24時間は再通知す
   await runLedgerNag(h.options);
   assert.doesNotMatch(h.sends[0].content, /assign-app-pr1/);
   assert.match(h.sends[0].content, /again/);
-  assert.match(h.sends[0].content, /⚠️ 長期停滞/);
+  assert.match(h.sends[0].content, /⚠️ 長く止まっています /);
 });
 test('0件なら送信関数も履歴書き込みも呼ばない', async () => {
   const h = harness([]);
@@ -50,15 +52,14 @@ test('2000字超では停滞順の上位5件と他N件に丸め、表示分だ�
   const content = h.sends[0].content;
   assert.ok(content.length <= 2000);
   assert.equal((content.match(/^- /gm) || []).length, 5);
-  assert.match(content, /他7件$/);
-  assert.match(content, /task-11/);
-  assert.doesNotMatch(content, /task-6\]/);
+  assert.match(content, /ほか7件$/);
+  assert.doesNotMatch(content, /task-11/);
   assert.equal(Object.keys(h.writes[0]).length, 5);
 });
 test('dry-runは本文だけ出し送信も履歴更新もしない', async () => {
   const h = harness([row(25)]);
   await runLedgerNag({ ...h.options, args: ['--dry-run'] });
-  assert.match(h.stdout[0], /^📋 共有タスク台帳/);
+  assert.match(h.stdout[0], /^⏳ ずっと止まっている仕事/);
   assert.equal(h.sends.length, 0);
   assert.equal(h.writes.length, 0);
 });
@@ -70,7 +71,7 @@ test('3状態だけ対象にし、不正日時・未来日時を除外する', a
 test('環境変数でしきい値とクールダウンを変更できる', async () => {
   const h = harness([row(3)], { 'assign-app-pr1': new Date(NOW.getTime() - 2 * 3600000).toISOString() });
   await runLedgerNag({ ...h.options, env: { ...h.options.env, LEDGER_NAG_WARN_HOURS: '1', LEDGER_NAG_CRITICAL_HOURS: '2', LEDGER_NAG_COOLDOWN_HOURS: '1' } });
-  assert.match(h.sends[0].content, /⚠️ 長期停滞/);
+  assert.match(h.sends[0].content, /⚠️ 長く止まっています /);
 });
 test('送信失敗時は履歴を更新しない', async () => {
   const h = harness([row(25)]);

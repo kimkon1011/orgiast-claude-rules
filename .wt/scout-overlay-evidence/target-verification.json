@@ -1,0 +1,39 @@
+{
+  "home": "/mnt/c/Users/uers",
+  "actualCandidateCount": 0,
+  "recoveredOverlayCandidateCount": 4,
+  "recoveredOverlayTargets": [
+    {
+      "provider": "openrouter",
+      "model": "anthropic/claude-haiku-5.5",
+      "costPerMillion": [
+        0.09999999999999999,
+        0.5
+      ]
+    },
+    {
+      "provider": "openrouter",
+      "model": "anthropic/claude-haiku-5.5:batch",
+      "costPerMillion": [
+        0.049999999999999996,
+        0.25
+      ]
+    },
+    {
+      "provider": "openrouter",
+      "model": "apodex/apodex-1.1-mini:free",
+      "costPerMillion": [
+        0,
+        0
+      ]
+    },
+    {
+      "provider": "openrouter",
+      "model": "inclusionai/ling-3.1-flash",
+      "costPerMillion": [
+        0,
+        0
+      ]
+    }
+  ]
+}

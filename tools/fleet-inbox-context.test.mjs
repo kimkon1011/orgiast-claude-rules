@@ -20,3 +20,15 @@ test('empty, malformed input and missing inbox produce no hook output', async ()
     assert.deepEqual(outputs, []);
   }
 });
+
+test('decision notice follows header, counts body or why once and preserves context budget', () => {
+  const entries = Array.from({ length: 100 }, (_, i) => ({ id: `mail-${i}`, from: 'PC', kind: 'note', why: '確認', body: 'あ'.repeat(20000) }));
+  assert.doesNotMatch(buildContext(entries), /⚠ 判断依頼/);
+  entries[0].why = '  [判断依頼] 承認';
+  entries[0].body = '[判断依頼] 詳細';
+  entries[99].body = '\n[判断依頼] 確認';
+  const result = buildContext(entries);
+  assert.equal(result.split('\n')[1], '⚠ 判断依頼 2 件: 他の作業より先に kim へその場で聞き、--reply で返すこと');
+  assert.ok(result.length <= 1500);
+  assert.ok(result.endsWith(FOOTER));
+});

@@ -1,0 +1,873 @@
+From 8b253b2bfea43c28b207a06765bf3ac47be36db0 Mon Sep 17 00:00:00 2001
+From: kim <kim@orgiast.jp>
+Date: Fri, 9 Oct 2026 22:03:43 +0900
+Subject: [PATCH] feat: add read-only weekly expense leak reconciliation
+
+---
+ README.md                          |   2 +
+ tools/expense-leak-check.README.md |  43 ++++
+ tools/expense-leak-check.mjs       | 327 +++++++++++++++++++++++++++++
+ tools/expense-leak-check.test.mjs  | 230 ++++++++++++++++++++
+ tools/freee-query.mjs              |  46 +---
+ tools/lib/freee-auth.mjs           |  50 +++++
+ tools/lib/sheets-dwd.mjs           |  50 +++++
+ tools/nightly-batch.ps1            |  10 +
+ tools/register-nightly-tools.ps1   |   3 +-
+ 9 files changed, 715 insertions(+), 46 deletions(-)
+ create mode 100644 tools/expense-leak-check.README.md
+ create mode 100644 tools/expense-leak-check.mjs
+ create mode 100644 tools/expense-leak-check.test.mjs
+ create mode 100644 tools/lib/freee-auth.mjs
+ create mode 100644 tools/lib/sheets-dwd.mjs
+
+diff --git a/README.md b/README.md
+index e9ae9b4..8bc119f 100644
+--- a/README.md
++++ b/README.md
+@@ -19,6 +19,8 @@ GitHub にログイン済みの Claude Code で:
+ 
+ 以後の更新は `/plugin` から update するだけで全スキルが同期されます。
+ 
++- [経費漏れチェック](tools/expense-leak-check.README.md): freee登録待ち明細とメール証跡を週次照合し、専用SheetタブとkimのDMへ報告。
++
+ ## 含まれるもの
+ 
+ | 種類 | 名前 | 用途 |
+diff --git a/tools/expense-leak-check.README.md b/tools/expense-leak-check.README.md
+new file mode 100644
+index 0000000..d42fe15
+--- /dev/null
++++ b/tools/expense-leak-check.README.md
+@@ -0,0 +1,43 @@
++# 経費漏れチェック（freee は読み取り専用）
++
++`expense-leak-check.mjs` は会社 11975741 の `金立替` 口座の登録待ち明細だけを正本にし、Gmail 2受信箱と Yahoo!メールを検索します。既存明細タブは読みません。出力先は指定ブックの `AI経費漏れチェック` タブだけです。
++
++```powershell
++node "C:\Users\uers\orgiast-main\tools\expense-leak-check.mjs" --dry-run --limit 5 --no-yahoo
++node "C:\Users\uers\orgiast-main\tools\expense-leak-check.mjs" --weekly
++node "C:\Users\uers\orgiast-main\tools\expense-leak-check.mjs" --limit 5 --verification
++```
++
++最後のコマンドは本番の Sheet/DM 検証用です。`--verification` は `--limit 5` 以下を必須とし、追記行の「対応状況」に `検証(削除可)` を入れます。通常実行では対応状況を空欄にします。検証コマンドは送信を伴うため反復実行しないでください。
++
++- `--from` / `--to`: YYYY-MM-DD。省略時は JST の今日と90日前。
++- `--weekly`: 月曜以外は前回実行から6日以内なら skip。同日再実行も skip。
++- `--dry-run`: 結果 JSON のみ保存・表示。Sheet、DM、state は変更しません（同時実行防止ロックだけ一時作成）。
++- `--no-yahoo` / `--no-gmail`: 指定した検索を停止。証跡がなく検索未完了なら確定判定を保存せず再試行対象にします。
++- `--limit N`: 取引日・id順にN件まで処理。既存cacheもN件に含みます。本番週次には付けません。
++- `--out`: 結果 JSON の絶対パス。既定 `~/.claude/logs/expense-leak/YYYY-MM-DD.json`。
++- `EXPENSE_LEAK_TODAY=YYYY-MM-DD`: JST日付の検証用上書き。
++- `EXPENSE_LEAK_HOME`: state/logの保存ルート上書き。標準は OS のホーム。WSL検証では書込可能な作業ディレクトリ内を指定します。
++- `EXPENSE_LEAK_YAHOO_SCRIPT`: Yahooスクリプトの絶対パス上書き。既定はホーム配下の `Downloads/CLAUDE.md配布/yahoo-auction-sniper/yahoo-mail-search.mjs`。
++
++freeeの接続設定はリポジトリ直下 `.env.local` の `PURCHASING_APP_DATABASE_URL`、または同名環境変数を使います。既存 `freee-query.mjs` の OAuth 更新処理を `lib/freee-auth.mjs` へそのまま切り出しました。会計APIはGETのみです。OAuthトークン更新の既存POSTとトークンDB更新は維持しています。トークン値やDB接続文字列は出力しません。
++
++Google認証は既存 `lib/drive-auth.mjs` と同じSA鍵、Sheetsは `kim@orgiast.jp`、Gmailは各受信箱をimpersonateします。Gmailにはreadonly scopeを使い、Yahooは `--open` を付けず検索一覧のみ読みます。Yahooの共有ブラウザプロファイルが使用中ならブラウザ側のロックエラーを記録し、別プロファイルを起動しません。ジョブ自身の検索は必ず直列です。
++
++金額バリアントと正規化した利用先先頭語で検索し、取引日±10日のJST範囲を適用します。GmailのURLは受信箱別のthreadリンクです。Yahoo既存CLIは件名・送信者を構造化せず一覧テキストを260文字で切るため、明示的な日付・利用先・金額が揃う結果のみ証跡に採用します。Yahooの件名欄は一覧テキスト、送信者は空欄、リンクは受信箱トップになります。曖昧なヒット数は `searches.yahooUnverified` に記録します。メール本文の取得・既読化は行いません。
++
++stateの確定verdictは再検索しません。期間外に残ったidも個別GETでstatusを確認し、status≠1と確認できたものだけstateから外します。検索上限（Gmail各300 / Yahoo150）、実行時間（40分、終了処理に90秒確保）、サービス障害の未完了項目は確定verdictを付けず翌週再試行します。未完了行は結果JSONに残し、Sheetへの追記を保留します。Yahooのexit 2だけは依頼仕様通り以後YahooをスキップしてGmailの結果で判定し、DMに再ログイン依頼を付けます。exit 1とexit 2は区別します。
++
++SheetsはRAWで書き込み、数式として解釈されないようにします。id列による重複除外、ヘッダーの一致確認、追記範囲のread-backを行います。人が記入する対応状況や既存行は更新しません。Sheet追記後に処理が止まっても次回id列を確認するため二重追記しません。DMは `notifyKim` を使い、別チャネルへのwebhook fallbackは無効です。DM応答喪失時の送信済み判定はできないため、同一実行内での自動再送は行いません（後日の週次・手動実行は別通知です）。
++
++`nightly-batch.ps1` はジョブを直接呼ぶ固定実装です。`--weekly` の呼び出しをその実行経路に追加済みなので、現在のタスクが当該ファイルを参照していればタスク再登録は不要です。`register-nightly-tools.ps1` のspecにも登録情報を追加しています。この登録スクリプトはタスクの追加Actionを作るため、適用済み環境では同日skipとロックにより二重実行を防ぎます。タスクスケジューラの登録・変更は今回実行していません。2026-10-09の実登録は `~/.claude/tools/nightly-bootstrap.ps1 -Target tools\nightly-batch.ps1` で、実行先は `ORGIAST_NIGHTLY_REPO` または既定 `~/.claude/nightly-repo` です。今回の未pushコミットを同期元へ反映するまで自動ジョブは有効になりません。反映時はその実行先 `.env.local` またはプロセス環境のDB設定も確認してください。
++
++同時実行ロックはstateファイルと同じ場所の `.lock` です。プロセス強制終了後に残った場合は、記載されたpidのプロセスが動いていないことを確認してから当該ロックだけ削除してください。
++
++PDF化とDriveへの保存（Phase E）は未実装です。freeeへの無視・コメント・ファイルボックス書込は実装していません。
++
++テスト:
++
++```powershell
++node --test "C:\Users\uers\orgiast-main\tools\expense-leak-check.test.mjs"
++```
+diff --git a/tools/expense-leak-check.mjs b/tools/expense-leak-check.mjs
+new file mode 100644
+index 0000000..f10cec1
+--- /dev/null
++++ b/tools/expense-leak-check.mjs
+@@ -0,0 +1,327 @@
++#!/usr/bin/env node
++// Read-only freee/Gmail/Yahoo reconciliation. Only the dedicated Sheet tab and kim DM are written.
++import { readFile, writeFile, mkdir, rename, open, unlink } from 'node:fs/promises';
++import { homedir } from 'node:os';
++import { dirname, join, resolve } from 'node:path';
++import { fileURLToPath } from 'node:url';
++import { execFile } from 'node:child_process';
++import { getAccessToken } from './lib/freee-auth.mjs';
++import { sheetsMetadata, sheetsGet, sheetsAppend, ensureSheetTab, quoteTab } from './lib/sheets-dwd.mjs';
++import { notifyKim } from './notify-kim.mjs';
++import { isEntry } from './is-entry.mjs';
++
++export const COMPANY_ID = 11975741;
++export const SPREADSHEET_ID = '1n4KyUN6iEGwj0Tg0boZjhZUDhCCiJovvgEaRBCT26gE';
++export const TAB = 'AI経費漏れチェック';
++export const SHEET_LINK = `https://docs.google.com/a/orgiast.jp/spreadsheets/d/${SPREADSHEET_ID}/edit`;
++export const HEADER = ['検出日', '取引日', '口座', '利用先(内容)', '金額', '判定', '証跡の受信箱', '証跡メール件名', '証跡メール日付', '証跡リンク', '推定プロジェクトコード', 'freee wallet_txn id', '対応状況'];
++export const RULES = {
++  alwaysPrivate: [
++    { terms: ['So-net', 'ソネット'], amounts: [324, 1440, 2, 3682] },
++    { terms: ['赤ちゃん', 'ベビー', 'おむつ', 'オムツ', '哺乳瓶', '粉ミルク', '乳児'] },
++  ],
++  alwaysExpense: ['PC', 'パソコン', '電子機器', '炭酸水', '文房具', '事務用品', '消耗品', '電池'],
++};
++export const LIMITS = { gmail: 300, yahoo: 150, runtimeMs: 40 * 60_000, reserveMs: 90_000 };
++const USERS = ['kim@orgiast.jp', 'seisaku-team@orgiast.jp'];
++const HERE = dirname(fileURLToPath(import.meta.url));
++const DAY = 86_400_000;
++export const normalize = (text) => String(text ?? '').normalize('NFKC').toLowerCase();
++const compact = (text) => normalize(text).replace(/[^\p{L}\p{N}]/gu, '');
++export const jstDay = (date = new Date()) => new Date(date.getTime() + 9 * 3_600_000).toISOString().slice(0, 10);
++export const shiftDay = (day, count) => new Date(Date.parse(`${day}T00:00:00Z`) + count * DAY).toISOString().slice(0, 10);
++export const projectCode = (day) => `${day.slice(2, 4)}${day.slice(5, 7)}01OR`;
++function validDay(day) { return /^\d{4}-\d{2}-\d{2}$/.test(day) && !Number.isNaN(Date.parse(day)) && shiftDay(day, 0) === day; }
++export function parseArgs(argv, env = process.env) {
++  const opts = { today: env.EXPENSE_LEAK_TODAY || jstDay(), dryRun: false, weekly: false, noYahoo: false, noGmail: false, limit: Infinity, verification: false };
++  const flags = { '--dry-run': 'dryRun', '--weekly': 'weekly', '--no-yahoo': 'noYahoo', '--no-gmail': 'noGmail', '--verification': 'verification' };
++  for (let i = 0; i < argv.length; i++) {
++    const arg = argv[i];
++    if (flags[arg]) opts[flags[arg]] = true;
++    else if (['--from', '--to', '--limit', '--out'].includes(arg)) {
++      if (!argv[i + 1] || argv[i + 1].startsWith('--')) throw new Error(`Missing value: ${arg}`);
++      opts[arg.slice(2)] = argv[++i];
++    } else throw new Error(`Unknown option: ${arg}`);
++  }
++  if (!validDay(opts.today)) throw new Error('Invalid EXPENSE_LEAK_TODAY');
++  opts.to ??= opts.today;
++  if (!validDay(opts.to)) throw new Error('Invalid --to');
++  opts.from ??= shiftDay(opts.to, -90);
++  if (!validDay(opts.from) || opts.from > opts.to) throw new Error('Invalid date range');
++  opts.limit = Number(opts.limit);
++  if (opts.limit !== Infinity && (!Number.isSafeInteger(opts.limit) || opts.limit < 1)) throw new Error('Invalid --limit');
++  if (opts.verification && opts.limit > 5) throw new Error('--verification requires --limit <= 5');
++  const home = env.EXPENSE_LEAK_HOME || homedir();
++  opts.statePath = join(home, '.claude', 'state', 'expense-leak-check.json');
++  opts.out = resolve(opts.out || join(home, '.claude', 'logs', 'expense-leak', `${opts.today}.json`));
++  opts.yahooScript = env.EXPENSE_LEAK_YAHOO_SCRIPT || join(homedir(), 'Downloads', 'CLAUDE.md配布', 'yahoo-auction-sniper', 'yahoo-mail-search.mjs');
++  return opts;
++}
++export function weeklySkip(today, lastRunAt) {
++  if (!lastRunAt || !Number.isFinite(Date.parse(lastRunAt))) return false;
++  const lastDay = jstDay(new Date(lastRunAt));
++  const age = Date.parse(today) - Date.parse(lastDay);
++  // Same-day protection also covers a second Scheduler action on Monday.
++  return age === 0 || (new Date(`${today}T00:00:00Z`).getUTCDay() !== 1 && age >= 0 && age <= 6 * DAY);
++}
++export function merchantToken(description) {
++  const first = normalize(description).replace(/[^\p{L}\p{N}\s]/gu, ' ').trim().split(/\s+/)[0] || '';
++  return /^[\u30a0-\u30ff]+$/.test(first) ? first.slice(0, 4) : first;
++}
++export function amountVariants(amount) {
++  const raw = String(Math.abs(Number(amount)));
++  const comma = Math.abs(Number(amount)).toLocaleString('en-US', { maximumFractionDigits: 10 });
++  return [...new Set([raw, comma, `¥${comma}`, `${raw}円`])];
++}
++export function ruleVerdict(txn, privateTerms = []) {
++  const description = compact(txn.description);
++  if (RULES.alwaysPrivate.some((rule) => rule.terms.some((word) => description.includes(compact(word))) && (!rule.amounts || rule.amounts.includes(Math.abs(txn.amount)))) ||
++      privateTerms.some((word) => compact(word) && description.includes(compact(word)))) return '私用(自動)';
++  if (RULES.alwaysExpense.some((word) => word === 'PC' ? /(^|[^a-z])pc([^a-z]|$)/i.test(normalize(txn.description)) : description.includes(compact(word)))) return '経費(確認不要)';
++  return null;
++}
++export function gmailQuery(txn) {
++  const amounts = amountVariants(txn.amount).map((x) => `"${x}"`).join(' ');
++  const merchant = merchantToken(txn.description);
++  // after/before epoch seconds pin the ±10-day inclusive interval to JST.
++  const after = Math.floor(Date.parse(`${shiftDay(txn.date, -10)}T00:00:00+09:00`) / 1000);
++  const before = Math.floor(Date.parse(`${shiftDay(txn.date, 11)}T00:00:00+09:00`) / 1000);
++  return `{${amounts}}${merchant ? ` "${merchant}"` : ''} after:${after} before:${before}`;
++}
++function inWindow(day, txn) { return validDay(day) && day >= shiftDay(txn.date, -10) && day <= shiftDay(txn.date, 10); }
++export function parseYahoo(text, txn, today) {
++  const evidence = [];
++  let unverified = 0;
++  for (const line of text.split(/\r?\n/)) {
++    const row = line.match(/^\d+\.\s+(.+)$/)?.[1];
++    if (!row) continue;
++    const full = row.match(/(20\d{2})[\/年-](\d{1,2})[\/月-](\d{1,2})日?/);
++    const short = !full && row.match(/(?:^|\s)(\d{1,2})[\/月](\d{1,2})(?:日|\s)/);
++    let day = full ? `${full[1]}-${full[2].padStart(2, '0')}-${full[3].padStart(2, '0')}` : '';
++    if (short) {
++      day = `${today.slice(0, 4)}-${short[1].padStart(2, '0')}-${short[2].padStart(2, '0')}`;
++      if (day > today) day = `${Number(today.slice(0, 4)) - 1}${day.slice(4)}`;
++    }
++    const merchant = merchantToken(txn.description);
++    // Plain-text search output cannot prove an amount hidden in the mail body.
++    const amounts = normalize(row).match(/\d[\d,]*(?:\.\d+)?/g) || [];
++    const hasAmount = amounts.some((n) => Number(n.replaceAll(',', '')) === Math.abs(txn.amount));
++    if (day && inWindow(day, txn) && merchant && compact(row).includes(compact(merchant)) && hasAmount) {
++      evidence.push({ box: 'kimkon1011@yahoo.co.jp', subject: row, date: day, from: '', link: 'https://mail.yahoo.co.jp/u/pc/f/', metadataLimited: true });
++    } else unverified++;
++  }
++  return { evidence, unverified };
++}
++export function childSearch(script, args, timeout) {
++  return new Promise((resolveChild) => {
++    execFile(process.execPath, [script, ...args], { windowsHide: true, timeout, maxBuffer: 2 * 1024 * 1024 }, (error, stdout) => {
++      // Do not propagate raw child stderr (may contain credentials or browser settings).
++      resolveChild({ code: error ? (typeof error.code === 'number' ? error.code : 1) : 0, stdout: stdout || '', timedOut: !!error?.killed });
++    });
++  });
++}
++export async function makeFreeeGet() {
++  let token;
++  try { token = await getAccessToken(); } catch { throw new Error('freee authentication failed (check DB/token configuration)'); }
++  return async (path, params = {}) => {
++    if (!/^\/api\/1\/(walletables|wallet_txns(?:\/\d+)?)$/.test(path)) throw new Error('Unsupported freee read');
++    const url = new URL(`https://api.freee.co.jp${path}`);
++    for (const [key, value] of Object.entries({ company_id: COMPANY_ID, ...params })) url.searchParams.set(key, String(value));
++    const response = await fetch(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30_000) });
++    if (!response.ok) throw new Error(`freee GET HTTP ${response.status}`);
++    return response.json();
++  };
++}
++export async function collectTxns(get, opts, state, timeLeft = () => true) {
++  const json = await get('/api/1/walletables');
++  if (!Array.isArray(json.walletables)) throw new Error('Invalid walletables response');
++  const wallets = json.walletables.filter((w) => String(w.name).normalize('NFKC').startsWith('金立替'));
++  const seen = new Map();
++  const statusCounts = {};
++  let complete = true;
++  for (const wallet of wallets) {
++    for (let offset = 0; ; offset += 100) {
++      if (!timeLeft()) { complete = false; break; }
++      const page = await get('/api/1/wallet_txns', { walletable_id: wallet.id, walletable_type: wallet.type, start_date: opts.from, end_date: opts.to, limit: 100, offset });
++      if (!Array.isArray(page.wallet_txns)) throw new Error('Invalid wallet_txns response');
++      let added = 0;
++      for (const txn of page.wallet_txns) {
++        if (Number(txn.walletable_id) !== Number(wallet.id) || txn.walletable_type !== wallet.type) throw new Error('freee wallet filter mismatch');
++        if (!Number.isSafeInteger(txn.id) || !validDay(txn.date) || !Number.isFinite(txn.amount) || typeof txn.status !== 'number') throw new Error('Invalid wallet transaction fields');
++        if (txn.date < opts.from || txn.date > opts.to) throw new Error('freee date filter mismatch');
++        if (!seen.has(String(txn.id))) { added++; statusCounts[txn.status] = (statusCounts[txn.status] || 0) + 1; }
++        seen.set(String(txn.id), { id: txn.id, date: txn.date, amount: txn.amount, description: txn.description || '', status: txn.status, entry_side: txn.entry_side, walletable_id: txn.walletable_id, walletable_type: txn.walletable_type, account: wallet.name });
++        if (txn.status !== 1) delete state.txns[String(txn.id)];
++      }
++      if (page.wallet_txns.length < 100) break;
++      if (!added) throw new Error('freee pagination made no progress');
++    }
++    if (!complete) break;
++  }
++  // Out-of-window/absent ids are not presumed resolved. Confirm each with GET.
++  for (const id of Object.keys(state.txns)) {
++    if (seen.has(id)) continue;
++    if (!timeLeft()) { complete = false; break; }
++    if (!/^\d+$/.test(id)) throw new Error('Invalid state transaction id');
++    const detail = await get(`/api/1/wallet_txns/${id}`);
++    if (!detail.wallet_txn || typeof detail.wallet_txn.status !== 'number') throw new Error('Invalid wallet_txn detail');
++    if (detail.wallet_txn.status !== 1) delete state.txns[id];
++  }
++  return { wallets, statusCounts, complete, candidates: [...seen.values()].filter((t) => t.status === 1).sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id) };
++}
++export async function searchEvidence(txn, opts, budget, deps) {
++  const evidence = [];
++  const issues = [];
++  let deferred = '';
++  for (const user of USERS) {
++    if (opts.noGmail) { deferred ||= '未検索(無効化)'; continue; }
++    if (budget.gmail[user] >= LIMITS.gmail) { deferred = '未検索(上限)'; continue; }
++    if (!deps.timeLeft()) { deferred = '未検索(時間上限)'; break; }
++    budget.gmail[user]++;
++    const result = await deps.search(join(HERE, 'gmail-search.mjs'), ['--user', user, '--query', gmailQuery(txn), '--max', '20'], deps.timeout());
++    if (result.code !== 0) { issues.push(`Gmail ${user}: exit ${result.code}`); deferred ||= '未検索(障害)'; continue; }
++    let messages;
++    try { const parsed = JSON.parse(result.stdout); messages = parsed.messages; if (parsed.skipped) { deferred ||= '未検索(障害)'; issues.push(`Gmail ${user}: skipped ${parsed.skipped}`); } } catch { /* handled below */ }
++    if (!Array.isArray(messages)) { issues.push(`Gmail ${user}: invalid JSON`); deferred ||= '未検索(障害)'; continue; }
++    for (const message of messages) {
++      const timestamp = Date.parse(message.date);
++      if (!message.threadId || !Number.isFinite(timestamp) || !inWindow(jstDay(new Date(timestamp)), txn)) continue;
++      evidence.push({ box: user, subject: message.subject || '', date: message.date, from: message.from || '', link: `https://mail.google.com/mail/u/${user}/#all/${message.threadId}` });
++    }
++  }
++  if (opts.noYahoo) deferred ||= '未検索(無効化)';
++  else if (budget.yahooFailed) deferred ||= '未検索(障害)';
++  else if (budget.yahooUnavailable) { /* Explicitly skip Yahoo after exit 2; Gmail results remain usable. */ }
++  else {
++    const queries = [...amountVariants(txn.amount), merchantToken(txn.description)].filter(Boolean);
++    // Await every browser child before launching another; never use --open.
++    for (const query of queries) {
++      if (budget.yahoo >= LIMITS.yahoo) { deferred = '未検索(上限)'; break; }
++      if (!deps.timeLeft()) { deferred = '未検索(時間上限)'; break; }
++      budget.yahoo++;
++      const result = await deps.search(opts.yahooScript, ['--query', query, '--max', '50'], deps.timeout());
++      if (result.code === 2) { budget.yahooUnavailable = true; break; }
++      if (result.code !== 0) { budget.yahooFailed = true; issues.push(`Yahoo: exit ${result.code}`); deferred ||= '未検索(障害)'; break; }
++      const parsed = parseYahoo(result.stdout, txn, opts.today);
++      evidence.push(...parsed.evidence);
++      budget.yahooUnverified += parsed.unverified;
++      if (parsed.evidence.length) break;
++    }
++  }
++  return { evidence: [...new Map(evidence.map((e) => [`${e.box}:${e.link}:${e.subject}`, e])).values()], issues, deferred };
++}
++export function sheetRows(results, today, verification = false) {
++  return results.filter((r) => !r.deferred).map((r) => [today, r.date, r.account, r.description, r.amount, r.verdict,
++    r.evidence.map((e) => e.box).join('\n'), r.evidence.map((e) => e.subject).join('\n'), r.evidence.map((e) => e.date).join('\n'), r.evidence.map((e) => e.link).join('\n'), projectCode(r.date), String(r.id), verification ? '検証(削除可)' : '']);
++}
++export function dmText(result) {
++  const counts = (v) => result.results.filter((r) => r.verdict === v).length;
++  const unknown = result.results.filter((r) => r.verdict === '不明(要確認)').slice(0, 10);
++  const text = [`経費漏れチェック ${result.today}`, `候補総数 ${result.candidateTotal} / 今回 ${result.results.length} / 証跡あり ${result.results.filter((r) => r.evidence.length).length} / 不明 ${counts('不明(要確認)')} / 私用 ${counts('私用(自動)')} / 確認不要 ${counts('経費(確認不要)')} / 未完了 ${result.results.filter((r) => r.deferred).length}`,
++    ...unknown.map((r) => `${r.date} ${r.description.replace(/\s+/g, ' ').slice(0, 60)} ${r.amount.toLocaleString('ja-JP')}円`),
++    SHEET_LINK, 'kim@orgiast.jp で開く'];
++  if (result.yahooUnavailable) text.push('デスクトップ『ヤフオク再ログイン（ダブルクリック）』をお願いします');
++  if (result.issues.length) text.push(`一部検索を完了できませんでした (${result.issues.length}件)。結果JSONを確認してください。`);
++  return text.join('\n');
++}
++async function readState(path) {
++  try {
++    const state = JSON.parse(await readFile(path, 'utf8'));
++    if (!state.txns || typeof state.txns !== 'object' || Array.isArray(state.txns)) throw new Error('Invalid state');
++    return state;
++  } catch (error) { if (error.code === 'ENOENT') return { lastRunAt: null, txns: {} }; throw new Error('Cannot read state; refusing to discard prior progress'); }
++}
++export async function atomicJson(path, value) {
++  await mkdir(dirname(path), { recursive: true });
++  const temp = `${path}.${process.pid}.tmp`;
++  await writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
++  await rename(temp, path);
++}
++const defaultSheets = { metadata: sheetsMetadata, get: sheetsGet, append: sheetsAppend, ensure: ensureSheetTab };
++export async function runCheck(opts, injected = {}) {
++  const started = Date.now();
++  const timeLeft = injected.timeLeft || (() => Date.now() - started < LIMITS.runtimeMs - LIMITS.reserveMs);
++  const timeout = () => Math.max(1, Math.min(90_000, LIMITS.runtimeMs - LIMITS.reserveMs - (Date.now() - started)));
++  const sheets = injected.sheets || defaultSheets;
++  const save = injected.save || atomicJson;
++  const state = injected.state || await readState(opts.statePath);
++  if (opts.weekly && weeklySkip(opts.today, state.lastRunAt)) return { skip: true };
++  const result = { today: opts.today, from: opts.from, to: opts.to, dryRun: opts.dryRun, wallets: [], statusCounts: {}, candidateTotal: 0, results: [], cacheHits: 0, yahooUnavailable: false, issues: [], appended: 0, complete: false };
++  const budget = { gmail: Object.fromEntries(USERS.map((u) => [u, 0])), yahoo: 0, yahooUnavailable: false, yahooFailed: false, yahooUnverified: 0 };
++  result.searches = budget;
++  async function checkpoint() { await save(opts.out, result); if (!opts.dryRun) await save(opts.statePath, state); }
++  try {
++    const get = injected.freeeGet || await makeFreeeGet();
++    const inventory = await collectTxns(get, opts, state, timeLeft);
++    Object.assign(result, { wallets: inventory.wallets, statusCounts: inventory.statusCounts, candidateTotal: inventory.candidates.length });
++    const metadata = await sheets.metadata(SPREADSHEET_ID);
++    const privateTab = metadata.sheets?.find((s) => s.properties.title === '毎回私的利用')?.properties;
++    const privateTerms = privateTab ? (await sheets.get(SPREADSHEET_ID, `${quoteTab(privateTab.title)}!A1:A${privateTab.gridProperties.rowCount}`)).flat().map(String).filter((s) => s.trim() && !['項目名', '利用先', '内容', '毎回私的利用'].includes(s.trim())) : [];
++    for (const txn of inventory.candidates.slice(0, opts.limit)) {
++      const cached = state.txns[String(txn.id)];
++      if (cached?.verdict) {
++        result.results.push({ ...txn, verdict: cached.verdict, evidence: cached.evidence || [], checkedAt: cached.checkedAt, cached: true }); result.cacheHits++; continue;
++      }
++      if (!timeLeft()) { result.results.push({ ...txn, verdict: '未検索(時間上限)', evidence: [], deferred: true }); continue; }
++      const rule = ruleVerdict(txn, privateTerms);
++      const search = rule === '私用(自動)' ? { evidence: [], issues: [], deferred: '' } : await searchEvidence(txn, opts, budget, { search: injected.search || childSearch, timeLeft, timeout });
++      result.issues.push(...search.issues);
++      // A verified receipt is enough to ask for submission even when another mailbox is offline.
++      const deferred = !!search.deferred && !search.evidence.length;
++      const verdict = rule === '私用(自動)' ? rule : search.evidence.length ? '証跡あり(要申請)' : rule || (deferred ? search.deferred : '不明(要確認)');
++      const checkedAt = new Date().toISOString();
++      result.results.push({ ...txn, verdict, evidence: search.evidence, checkedAt, ...(rule ? { ruleVerdict: rule } : {}), ...(deferred ? { deferred: true, searchStatus: search.deferred } : {}) });
++      // Deferred entries deliberately have no verdict: retry next run; never pin an outage as unknown.
++      state.txns[String(txn.id)] = deferred ? { evidence: search.evidence, checkedAt, searchStatus: search.deferred } : { verdict, evidence: search.evidence, checkedAt };
++      result.yahooUnavailable = budget.yahooUnavailable;
++      await checkpoint();
++    }
++    result.yahooUnavailable = budget.yahooUnavailable;
++    result.complete = inventory.complete && !result.results.some((r) => r.deferred) && result.results.length === inventory.candidates.length;
++    result.deferredTotal = result.results.filter((r) => r.deferred).length;
++    if (!opts.dryRun) {
++      const tab = await sheets.ensure(SPREADSHEET_ID, TAB, HEADER);
++      const existing = await sheets.get(SPREADSHEET_ID, `${quoteTab(TAB)}!L2:L${Math.max(2, tab.gridProperties.rowCount)}`);
++      const ids = new Set(existing.flat().map(String));
++      const rows = sheetRows(result.results, opts.today, opts.verification).filter((row) => !ids.has(row[11]));
++      if (rows.length) {
++        const appended = await sheets.append(SPREADSHEET_ID, `${quoteTab(TAB)}!A:M`, rows);
++        result.appended = rows.length;
++        const range = appended.updates?.updatedRange;
++        if (!range) throw new Error('Sheet append missing updated range');
++        const verified = await sheets.get(SPREADSHEET_ID, range);
++        if (verified.length !== rows.length || verified.some((row, i) => HEADER.some((_, c) => String(row[c] ?? '') !== String(rows[i][c])))) throw new Error('Sheet append read-back mismatch');
++        result.appendedRange = range;
++      }
++      result.notification = await (injected.notify || notifyKim)(dmText(result), { webhookFallback: false });
++      if (result.notification.delivered !== 'dm') throw new Error('Discord DM not delivered');
++      state.lastRunAt = `${opts.today}T03:00:00+09:00`;
++    }
++    await checkpoint();
++    return result;
++  } catch (error) {
++    // Only our controlled messages are safe to persist; low-level errors can include secrets.
++    result.issues.push(/^(freee |Invalid |Unsupported |Sheets |Sheet |Output tab |Discord |Cannot read)/.test(error.message) ? error.message : 'Run failed (network, filesystem or response error)');
++    result.failed = true;
++    await checkpoint();
++    return result;
++  }
++}
++async function main() {
++  const opts = parseArgs(process.argv.slice(2));
++  // Lock dry runs too: all processes share the Yahoo browser profile and state.
++  await mkdir(dirname(opts.statePath), { recursive: true });
++  const lockPath = `${opts.statePath}.lock`;
++  let lock;
++  try { lock = await open(lockPath, 'wx'); }
++  catch (error) { if (error.code === 'EEXIST') { console.log('skip: expense-leak-check already running (lock)'); return; } throw error; }
++  try {
++    await lock.writeFile(JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }));
++    const result = await runCheck(opts);
++    if (result.skip) console.log('skip: weekly expense-leak-check');
++    else if (opts.dryRun) console.log(JSON.stringify(result, null, 2));
++    else console.log(`expense-leak-check: candidates=${result.candidateTotal} processed=${result.results.length} cached=${result.cacheHits} deferred=${result.deferredTotal || 0} appended=${result.appended} dm=${result.notification?.delivered || 'none'} yahooFailed=${result.searches.yahooFailed} failed=${!!result.failed}`);
++    if (result.failed) process.exitCode = 1;
++  } finally { await lock.close(); await unlink(lockPath); }
++}
++if (isEntry(import.meta.url)) main().catch(() => { console.error('expense-leak-check: configuration/state/filesystem error; no credential details logged'); process.exitCode = 1; });
+diff --git a/tools/expense-leak-check.test.mjs b/tools/expense-leak-check.test.mjs
+new file mode 100644
+index 0000000..a2da9d1
+--- /dev/null
++++ b/tools/expense-leak-check.test.mjs
+@@ -0,0 +1,230 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import { readFile, mkdtemp, rm } from 'node:fs/promises';
++import { tmpdir } from 'node:os';
++import { join } from 'node:path';
++import { execFileSync } from 'node:child_process';
++import { RULES, LIMITS, HEADER, TAB, parseArgs, ruleVerdict, merchantToken, amountVariants, gmailQuery, parseYahoo, weeklySkip, collectTxns, searchEvidence, runCheck, sheetRows, dmText, atomicJson } from './expense-leak-check.mjs';
++import { createSheetsClient } from './lib/sheets-dwd.mjs';
++
++const opts = (args = []) => parseArgs(args, { EXPENSE_LEAK_TODAY: '2026-10-09', EXPENSE_LEAK_HOME: '/tmp/expense-test' });
++const wallet = { id: 7, type: 'credit_card', name: '金立替／テスト' };
++const txn = (id, extra = {}) => ({ id, walletable_id: wallet.id, walletable_type: wallet.type, status: 1, date: '2026-10-01', description: 'テスト商店', amount: 1599, account: wallet.name, ...extra });
++const budget = () => ({ gmail: { 'kim@orgiast.jp': 0, 'seisaku-team@orgiast.jp': 0 }, yahoo: 0, yahooUnavailable: false, yahooFailed: false, yahooUnverified: 0 });
++const emptySearch = async (script) => ({ code: 0, stdout: script.includes('gmail-search') ? '{"messages":[]}' : '（該当なし）' });
++const metadata = { sheets: [{ properties: { title: TAB, gridProperties: { rowCount: 1000 } } }] };
++function harness(transactions, overrides = {}) {
++  const calls = { searches: 0, notify: 0, append: [], save: [] };
++  let written = [];
++  const state = overrides.state || { lastRunAt: null, txns: {} };
++  const injected = {
++    state,
++    freeeGet: async (path) => path.endsWith('walletables') ? { walletables: [wallet] } : { wallet_txns: transactions },
++    search: async (...args) => { calls.searches++; return emptySearch(...args); },
++    sheets: {
++      metadata: async () => metadata,
++      ensure: async () => metadata.sheets[0].properties,
++      get: async (_, range) => range.includes('L2:') ? (overrides.existing || []) : written,
++      append: async (_, range, rows) => { calls.append.push(rows); written = rows; return { updates: { updatedRange: `'${TAB}'!A2:M${rows.length + 1}` } }; },
++    },
++    notify: async (_, options) => { assert.equal(options.webhookFallback, false); calls.notify++; return { delivered: 'dm' }; },
++    save: async (path, value) => calls.save.push({ path, value: structuredClone(value) }),
++    ...overrides,
++  };
++  return { injected, calls, state };
++}
++
++test('CLI uses JST window, validates dates, and bounds verification to five', () => {
++  assert.equal(opts().from, '2026-07-11');
++  assert.equal(opts().to, '2026-10-09');
++  assert.throws(() => opts(['--from', '2026-02-30']));
++  assert.throws(() => opts(['--limit', '0']));
++  assert.throws(() => opts(['--verification']));
++  assert.equal(opts(['--verification', '--limit', '5']).verification, true);
++});
++test('private and expense expectations derive from exported RULES', () => {
++  for (const rule of RULES.alwaysPrivate) for (const term of rule.terms) for (const amount of rule.amounts || [1599]) {
++    assert.equal(ruleVerdict(txn(1, { description: term, amount })), '私用(自動)');
++  }
++  const specific = RULES.alwaysPrivate.find((r) => r.amounts);
++  const unmatched = Math.max(...specific.amounts) + 1;
++  assert.equal(ruleVerdict(txn(1, { description: specific.terms[0], amount: unmatched })), null);
++  for (const word of RULES.alwaysExpense) assert.equal(ruleVerdict(txn(1, { description: word })), '経費(確認不要)');
++  assert.equal(ruleVerdict(txn(1, { description: 'ｱｲﾃﾑ' }), ['アイテム']), '私用(自動)');
++  assert.equal(ruleVerdict(txn(1, { description: 'APCO STORE' })), null);
++});
++test('merchant/amount/date normalization prevents query syntax injection', () => {
++  assert.equal(merchantToken('ｱﾏｿﾞﾝﾏｰｹｯﾄ／カード'), 'アマゾン');
++  assert.deepEqual(amountVariants(1599), ['1599', '1,599', '¥1,599', '1599円']);
++  const q = gmailQuery(txn(1));
++  assert.ok(q.includes('"テスト商店"'));
++  for (const value of amountVariants(txn(1).amount)) assert.ok(q.includes(`"${value}"`));
++  const times = [...q.matchAll(/(?:after|before):(\d+)/g)].map((m) => Number(m[1]));
++  assert.equal(times[1] - times[0], 21 * 86400);
++});
++test('weekly Tuesday skip, Monday run, same-day duplicate and old state', () => {
++  assert.equal(weeklySkip('2026-10-13', '2026-10-12T03:00:00+09:00'), true);
++  assert.equal(weeklySkip('2026-10-12', '2026-10-09T03:00:00+09:00'), false);
++  assert.equal(weeklySkip('2026-10-12', '2026-10-12T03:00:00+09:00'), true);
++  assert.equal(weeklySkip('2026-10-13', '2026-10-01T03:00:00+09:00'), false);
++  assert.equal(weeklySkip('2026-10-13', null), false);
++});
++test('paginates 100 + remainder, client-filters status, and verifies absent cached ids', async () => {
++  const state = { txns: { '2': { verdict: 'x' }, '999': { verdict: 'x' }, '1000': { verdict: 'x' } } };
++  const offsets = [];
++  const r = await collectTxns(async (path, params) => {
++    if (path.endsWith('walletables')) return { walletables: [wallet, { ...wallet, id: 8, name: '会社口座' }] };
++    if (path.endsWith('/999')) return { wallet_txn: { status: 3 } };
++    if (path.endsWith('/1000')) return { wallet_txn: { status: 1 } };
++    offsets.push(params.offset);
++    assert.equal(params.limit, 100);
++    assert.equal(params.walletable_type, wallet.type);
++    return { wallet_txns: params.offset === 0 ? Array.from({ length: 100 }, (_, i) => txn(i + 1, { status: i === 1 ? 2 : 1 })) : [txn(101, { status: 4 })] };
++  }, opts(), state);
++  assert.deepEqual(offsets, [0, 100]);
++  assert.equal(r.candidates.length, 99);
++  assert.deepEqual(r.statusCounts, { 1: 99, 2: 1, 4: 1 });
++  assert.deepEqual(Object.keys(state.txns), ['1000']);
++});
++test('date or account filter mismatch fails instead of leaking other accounts into output', async () => {
++  await assert.rejects(() => collectTxns(async (path) => path.endsWith('walletables') ? { walletables: [wallet] } : { wallet_txns: [txn(1, { walletable_id: 999 })] }, opts(), { txns: {} }), /mismatch/);
++});
++test('Yahoo children are serial and exit 2 disables all later Yahoo queries', async () => {
++  let active = 0; let maximum = 0; let yahooCalls = 0;
++  const b = budget();
++  const search = async (script, args) => {
++    assert.ok(!args.includes('--open'));
++    active++; maximum = Math.max(maximum, active);
++    await new Promise((r) => setTimeout(r, 2));
++    active--;
++    if (script.includes('yahoo')) { yahooCalls++; return { code: 2, stdout: '' }; }
++    return { code: 0, stdout: '{"messages":[]}' };
++  };
++  for (let i = 0; i < 3; i++) await searchEvidence(txn(i), opts(), b, { search, timeLeft: () => true, timeout: () => 1000 });
++  assert.equal(maximum, 1);
++  assert.equal(yahooCalls, 1);
++  assert.equal(b.yahooUnavailable, true);
++  assert.equal(b.gmail['kim@orgiast.jp'], 3);
++});
++test('Yahoo parser requires date-window, merchant and exact amount', () => {
++  const t = txn(1);
++  assert.equal(parseYahoo('1. テスト商店 領収書 1,599円 2026/10/02 12:00', t, opts().today).evidence.length, 1);
++  assert.equal(parseYahoo('1. テスト商店 領収書 1,599円 2025/10/02 12:00', t, opts().today).evidence.length, 0);
++  assert.equal(parseYahoo('1. 別の店舗 領収書 1,599円 2026/10/02 12:00', t, opts().today).evidence.length, 0);
++  assert.equal(parseYahoo('1. テスト商店 領収書 11599円 2026/10/02 12:00', t, opts().today).evidence.length, 0);
++  assert.equal(parseYahoo('1. テスト商店 領収書 1599円 12:00', t, opts().today).unverified, 1);
++});
++test('query budgets never exceed exported limits and return deferred', async () => {
++  const b = budget();
++  b.gmail = Object.fromEntries(Object.keys(b.gmail).map((u) => [u, LIMITS.gmail])); b.yahoo = LIMITS.yahoo;
++  const r = await searchEvidence(txn(1), opts(), b, { search: () => assert.fail('budget should prevent search'), timeLeft: () => true, timeout: () => 1 });
++  assert.equal(r.deferred, '未検索(上限)');
++});
++test('dry run does not write state, Sheet or DM', async () => {
++  const h = harness([txn(1)]);
++  const r = await runCheck(opts(['--dry-run']), h.injected);
++  assert.equal(r.results[0].verdict, '不明(要確認)');
++  assert.equal(h.calls.notify, 0); assert.equal(h.calls.append.length, 0);
++  assert.ok(h.calls.save.every((x) => x.path === opts().out));
++});
++test('verification writes at most five RAW rows, marks them and caches all ids', async () => {
++  const h = harness(Array.from({ length: 6 }, (_, i) => txn(i + 1)));
++  const o = opts(['--limit', '5', '--verification']);
++  const first = await runCheck(o, h.injected);
++  assert.equal(first.failed, undefined);
++  assert.equal(first.appended, 5); assert.equal(h.calls.notify, 1);
++  assert.ok(h.calls.append[0].every((row) => row.length === HEADER.length && row[12] === '検証(削除可)'));
++  const searched = h.calls.searches;
++  const second = await runCheck({ ...o, dryRun: true }, h.injected);
++  assert.equal(second.cacheHits, 5);
++  assert.equal(h.calls.searches, searched);
++  assert.equal(h.calls.notify, 1);
++});
++test('existing Sheet id is never appended again and human status is untouched', async () => {
++  const h = harness([txn(1)], { existing: [['1']] });
++  const r = await runCheck(opts(), h.injected);
++  assert.equal(r.appended, 0);
++  assert.equal(h.calls.append.length, 0);
++});
++test('Gmail outage remains retryable and raw child error is not persisted', async () => {
++  const h = harness([txn(1)], { search: async () => ({ code: 1, stdout: 'secret must not be logged' }) });
++  const r = await runCheck(opts(), h.injected);
++  assert.equal(r.results[0].deferred, true);
++  assert.equal(h.state.txns['1'].verdict, undefined);
++  assert.equal(r.appended, 0);
++  assert.ok(!JSON.stringify(r).includes('secret must'));
++});
++test('verified Gmail evidence survives Yahoo unavailable and uses account-specific thread link', async () => {
++  const h = harness([txn(1)], { search: async (script) => script.includes('yahoo') ? { code: 2, stdout: '' } : { code: 0, stdout: JSON.stringify({ messages: [{ threadId: 'abc', date: '2026-10-01T12:00:00+09:00', subject: '領収書', from: 'shop@example.test' }] }) } });
++  const r = await runCheck(opts(['--dry-run']), h.injected);
++  assert.equal(r.yahooUnavailable, true);
++  assert.equal(r.results[0].verdict, '証跡あり(要申請)');
++  assert.equal(r.results[0].evidence[0].link, 'https://mail.google.com/mail/u/kim@orgiast.jp/#all/abc');
++  assert.match(dmText(r), /ヤフオク再ログイン/);
++});
++test('time cutoff checkpoints pending ids without a verdict', async () => {
++  let calls = 0;
++  const h = harness([txn(1)], { timeLeft: () => ++calls <= 1 });
++  const r = await runCheck(opts(['--dry-run']), h.injected);
++  assert.equal(r.results[0].verdict, '未検索(時間上限)');
++  assert.equal(h.calls.searches, 0);
++  assert.ok(h.calls.save.length > 0);
++});
++test('expense rule still searches both mailboxes; private rule never searches', async () => {
++  const privateRule = RULES.alwaysPrivate.find((r) => !r.amounts);
++  const h = harness([txn(1, { description: RULES.alwaysExpense[0] }), txn(2, { description: privateRule.terms[0] })]);
++  const r = await runCheck(opts(['--dry-run']), h.injected);
++  assert.equal(r.results[0].verdict, '経費(確認不要)');
++  assert.equal(r.results[1].verdict, '私用(自動)');
++  assert.equal(r.searches.gmail['kim@orgiast.jp'], 1);
++});
++test('Sheet error checkpoints classification for retry without another inbox search', async () => {
++  const h = harness([txn(1)]);
++  h.injected.sheets.append = async () => { throw new Error('Sheets POST HTTP 503'); };
++  const r = await runCheck(opts(), h.injected);
++  assert.equal(r.failed, true);
++  assert.equal(h.calls.notify, 0);
++  assert.equal(h.state.lastRunAt, null);
++  assert.equal(h.state.txns['1'].verdict, '不明(要確認)');
++});
++test('Sheets helper appends RAW and checks existing headers without rewriting', async () => {
++  const requests = [];
++  const client = createSheetsClient({ getToken: async () => 'fake-token', fetchImpl: async (url, init) => {
++    requests.push({ url, init });
++    return { ok: true, json: async () => url.includes('fields=') ? metadata : { values: [HEADER] } };
++  } });
++  await client.ensure('test', TAB, HEADER);
++  assert.ok(requests.every((r) => r.init.method === 'GET'));
++  await client.append('test', `'${TAB}'!A:M`, [sheetRows([{ ...txn(1), verdict: '不明(要確認)', evidence: [] }], opts().today)[0]]);
++  assert.match(requests.at(-1).url, /valueInputOption=RAW/);
++});
++test('real CLI weekly skip exits 0 without credentials and leaves state unchanged', async () => {
++  const home = await mkdtemp(join(tmpdir(), 'expense-weekly-'));
++  const env = { ...process.env, EXPENSE_LEAK_HOME: home, EXPENSE_LEAK_TODAY: '2026-10-13' };
++  const o = parseArgs(['--weekly'], env);
++  const state = { lastRunAt: '2026-10-13T03:00:00+09:00', txns: {} };
++  await atomicJson(o.statePath, state);
++  const before = await readFile(o.statePath, 'utf8');
++  const stdout = execFileSync(process.execPath, [new URL('./expense-leak-check.mjs', import.meta.url).pathname, '--weekly'], { env, encoding: 'utf8' });
++  assert.equal(stdout.trim(), 'skip: weekly expense-leak-check');
++  assert.equal(await readFile(o.statePath, 'utf8'), before);
++  await rm(home, { recursive: true });
++});
++
++test('new Sheet tab and header are created atomically without shifting frozen rows', async () => {
++  let created = false;
++  const writes = [];
++  const client = createSheetsClient({ getToken: async () => 'fake-token', fetchImpl: async (url, init) => {
++    if (init.method === 'POST') {
++      const body = JSON.parse(init.body); writes.push(body);
++      created = true;
++      return { ok: true, json: async () => ({ replies: [{ addSheet: { properties: body.requests[0].addSheet.properties } }, {}] }) };
++    }
++    return { ok: true, json: async () => url.includes('fields=') ? { sheets: [{ properties: { sheetId: 1, title: '既存' } }] } : { values: created ? [HEADER] : [] } };
++  } });
++  await client.ensure('test', TAB, HEADER);
++  assert.equal(writes.length, 1);
++  assert.equal(writes[0].requests.length, 2);
++  assert.equal(writes[0].requests[0].addSheet.properties.gridProperties.frozenRowCount, 1);
++  assert.equal(writes[0].requests[1].updateCells.start.sheetId, writes[0].requests[0].addSheet.properties.sheetId);
++});
+diff --git a/tools/freee-query.mjs b/tools/freee-query.mjs
+index dd3b4b1..1c86558 100644
+--- a/tools/freee-query.mjs
++++ b/tools/freee-query.mjs
+@@ -8,28 +8,13 @@
+ //   node tools/freee-query.mjs --partners "クラフトフィックス"
+ //   node tools/freee-query.mjs --partner "クラフトフィックス|*" --from 2025-10-01 --to 2026-09-30 [--type income|expense] [--out path.json]
+ 
+-import { readFileSync } from 'node:fs';
+ import { writeFile } from 'node:fs/promises';
+-import { dirname, join } from 'node:path';
+-import { fileURLToPath } from 'node:url';
+-import postgres from 'postgres';
++import { getAccessToken } from './lib/freee-auth.mjs';
+ import { isEntry } from './is-entry.mjs';
+ 
+ const COMPANY_ID = 11975741;
+ const API = 'https://api.freee.co.jp';
+-const TOKEN_URL = 'https://accounts.secure.freee.co.jp/public_api/token';
+-const EXPIRY_MARGIN_MS = 120 * 1000;
+-const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+ 
+-function loadDbUrl() {
+-  if (process.env.PURCHASING_APP_DATABASE_URL) return process.env.PURCHASING_APP_DATABASE_URL;
+-  const text = readFileSync(join(ROOT, '.env.local'), 'utf8');
+-  for (const line of text.split(/\r?\n/)) {
+-    const m = line.match(/^\s*(?:export\s+)?PURCHASING_APP_DATABASE_URL\s*=\s*(.*)$/);
+-    if (m) return m[1].trim().replace(/^(['"])(.*)\1$/, '$2');
+-  }
+-  throw new Error('PURCHASING_APP_DATABASE_URL が .env.local に見つかりません');
+-}
+ 
+ function parseArgs(argv) {
+   const a = {};
+@@ -39,35 +24,6 @@ function parseArgs(argv) {
+   return a;
+ }
+ 
+-async function getAccessToken() {
+-  const sql = postgres(loadDbUrl(), { max: 1, ssl: 'require', onnotice: () => {} });
+-  try {
+-    const [row] = await sql`select client_id, client_secret, refresh_token, access_token, access_expires_at
+-      from freee_tokens where id = 'default' limit 1`;
+-    if (!row) throw new Error('freee_tokens に default 行がありません');
+-    if (row.access_token && row.access_expires_at && new Date(row.access_expires_at).getTime() > Date.now() + EXPIRY_MARGIN_MS) {
+-      return row.access_token;
+-    }
+-    const res = await fetch(TOKEN_URL, {
+-      method: 'POST',
+-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+-      body: new URLSearchParams({
+-        grant_type: 'refresh_token',
+-        client_id: row.client_id,
+-        client_secret: row.client_secret,
+-        refresh_token: row.refresh_token,
+-      }),
+-    });
+-    if (!res.ok) throw new Error(`freee トークン更新に失敗: HTTP ${res.status}`);
+-    const j = await res.json();
+-    const expiresAt = new Date(Date.now() + j.expires_in * 1000);
+-    await sql`update freee_tokens set refresh_token = ${j.refresh_token}, access_token = ${j.access_token},
+-      access_expires_at = ${expiresAt}, updated_at = now() where id = 'default'`;
+-    return j.access_token;
+-  } finally {
+-    await sql.end({ timeout: 5 });
+-  }
+-}
+ 
+ async function freeeGet(token, path, params) {
+   const url = new URL(API + path);
+diff --git a/tools/lib/freee-auth.mjs b/tools/lib/freee-auth.mjs
+new file mode 100644
+index 0000000..73151b7
+--- /dev/null
++++ b/tools/lib/freee-auth.mjs
+@@ -0,0 +1,50 @@
++// Shared freee OAuth lifecycle, extracted unchanged from freee-query.mjs.
++// Accounting endpoints are GET-only. The existing OAuth refresh is the sole POST.
++import { readFileSync } from 'node:fs';
++import { dirname, join } from 'node:path';
++import { fileURLToPath } from 'node:url';
++import postgres from 'postgres';
++const TOKEN_URL = 'https://accounts.secure.freee.co.jp/public_api/token';
++const EXPIRY_MARGIN_MS = 120 * 1000;
++const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
++
++function loadDbUrl() {
++  if (process.env.PURCHASING_APP_DATABASE_URL) return process.env.PURCHASING_APP_DATABASE_URL;
++  const text = readFileSync(join(ROOT, '.env.local'), 'utf8');
++  for (const line of text.split(/\r?\n/)) {
++    const m = line.match(/^\s*(?:export\s+)?PURCHASING_APP_DATABASE_URL\s*=\s*(.*)$/);
++    if (m) return m[1].trim().replace(/^(['"])(.*)\1$/, '$2');
++  }
++  throw new Error('PURCHASING_APP_DATABASE_URL が .env.local に見つかりません');
++}
++
++
++export async function getAccessToken() {
++  const sql = postgres(loadDbUrl(), { max: 1, ssl: 'require', onnotice: () => {} });
++  try {
++    const [row] = await sql`select client_id, client_secret, refresh_token, access_token, access_expires_at
++      from freee_tokens where id = 'default' limit 1`;
++    if (!row) throw new Error('freee_tokens に default 行がありません');
++    if (row.access_token && row.access_expires_at && new Date(row.access_expires_at).getTime() > Date.now() + EXPIRY_MARGIN_MS) {
++      return row.access_token;
++    }
++    const res = await fetch(TOKEN_URL, {
++      method: 'POST',
++      headers: { 'content-type': 'application/x-www-form-urlencoded' },
++      body: new URLSearchParams({
++        grant_type: 'refresh_token',
++        client_id: row.client_id,
++        client_secret: row.client_secret,
++        refresh_token: row.refresh_token,
++      }),
++    });
++    if (!res.ok) throw new Error(`freee トークン更新に失敗: HTTP ${res.status}`);
++    const j = await res.json();
++    const expiresAt = new Date(Date.now() + j.expires_in * 1000);
++    await sql`update freee_tokens set refresh_token = ${j.refresh_token}, access_token = ${j.access_token},
++      access_expires_at = ${expiresAt}, updated_at = now() where id = 'default'`;
++    return j.access_token;
++  } finally {
++    await sql.end({ timeout: 5 });
++  }
++}
+diff --git a/tools/lib/sheets-dwd.mjs b/tools/lib/sheets-dwd.mjs
+new file mode 100644
+index 0000000..8d72361
+--- /dev/null
++++ b/tools/lib/sheets-dwd.mjs
+@@ -0,0 +1,50 @@
++import { getDriveToken } from './drive-auth.mjs';
++
++const API = 'https://sheets.googleapis.com/v4/spreadsheets';
++const SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
++export const quoteTab = (title) => `'${title.replaceAll("'", "''")}'`;
++
++// No mutation retries: an ambiguous append response must be read back by id.
++export function createSheetsClient({ fetchImpl = fetch, getToken = getDriveToken } = {}) {
++  let token;
++  let expires = 0;
++  async function request(id, suffix = '', method = 'GET', body) {
++    if (!token || Date.now() >= expires) {
++      try { token = await getToken({ scope: SCOPE, impersonate: 'kim@orgiast.jp', signal: AbortSignal.timeout(30_000) }); }
++      catch { throw new Error('Sheets authentication failed'); }
++      expires = Date.now() + 50 * 60_000;
++    }
++    const response = await fetchImpl(`${API}/${encodeURIComponent(id)}${suffix}`, {
++      method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
++      ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(30_000),
++    });
++    if (!response.ok) throw new Error(`Sheets ${method} HTTP ${response.status}`);
++    return response.json();
++  }
++  const metadata = (id) => request(id, '?fields=spreadsheetId,spreadsheetUrl,sheets(properties)');
++  const get = async (id, range) => (await request(id, `/values/${encodeURIComponent(range)}?valueRenderOption=UNFORMATTED_VALUE`)).values ?? [];
++  const append = (id, range, rows) => request(id, `/values/${encodeURIComponent(range)}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, 'POST', { range, majorDimension: 'ROWS', values: rows });
++  async function ensure(id, title, header) {
++    const meta = await metadata(id);
++    let tab = meta.sheets?.find((s) => s.properties.title === title)?.properties;
++    if (!tab) {
++      const sheetId = Math.max(0, ...meta.sheets.map((s) => s.properties.sheetId)) + 1;
++      const result = await request(id, ':batchUpdate', 'POST', { requests: [
++        { addSheet: { properties: { sheetId, title, gridProperties: { frozenRowCount: 1, columnCount: header.length } } } },
++        { updateCells: { start: { sheetId, rowIndex: 0, columnIndex: 0 }, rows: [{ values: header.map((value) => ({ userEnteredValue: { stringValue: value } })) }], fields: 'userEnteredValue' } },
++      ] });
++      tab = result.replies[0].addSheet.properties;
++    }
++    const range = `${quoteTab(title)}!A1:M1`;
++    const existing = await get(id, range);
++    if (!existing.length) await request(id, `/values/${encodeURIComponent(range)}?valueInputOption=RAW`, 'PUT', { range, majorDimension: 'ROWS', values: [header] });
++    else if (JSON.stringify(existing[0]) !== JSON.stringify(header)) throw new Error('Output tab header mismatch; no rows changed');
++    return tab;
++  }
++  return { metadata, get, append, ensure };
++}
++const client = createSheetsClient();
++export const sheetsMetadata = client.metadata;
++export const sheetsGet = client.get;
++export const sheetsAppend = client.append;
++export const ensureSheetTab = client.ensure;
+diff --git a/tools/nightly-batch.ps1 b/tools/nightly-batch.ps1
+index 32e98d9..7a212d6 100644
+--- a/tools/nightly-batch.ps1
++++ b/tools/nightly-batch.ps1
+@@ -88,6 +88,16 @@ try {
+     $node = Get-Command node -ErrorAction SilentlyContinue
+     if (-not $node) { $summary['node'] = 'error:nodeが見つからない'; Write-NightlyLog 'node確認' 'error:nodeが見つからない'; Finish-Nightly 1 }
+     $script:staleWorkReady = $true
++    # Runtime wiring: the existing nightly task picks this up without re-registration.
++    $expenseLeak = Join-Path $PSScriptRoot 'expense-leak-check.mjs'
++    if (Test-Path -LiteralPath $expenseLeak -PathType Leaf) {
++        try {
++            $expenseOutput = @(& $node.Source $expenseLeak --weekly 2>&1)
++            $expenseExit = $LASTEXITCODE
++            Write-NightlyStepResult 'expense-leak-check' $expenseExit $expenseOutput
++        } catch { Write-NightlyLog 'expense-leak-check' ('error:' + $_.Exception.Message) }
++    } else { Write-NightlyLog 'expense-leak-check' 'skip:script missing' }
++
+     Write-NightlyLog 'node確認' 'ok'
+     try {
+         $rotationOutput = @(& $node.Source (Join-Path $PSScriptRoot 'next-session-rotate.mjs') 2>&1)
+diff --git a/tools/register-nightly-tools.ps1 b/tools/register-nightly-tools.ps1
+index 4d7d26d..bf0d2d0 100644
+--- a/tools/register-nightly-tools.ps1
++++ b/tools/register-nightly-tools.ps1
+@@ -26,7 +26,8 @@ $specs = @(
+   [pscustomobject]@{ TaskName = 'OrgiastMorningBatch'; ScriptName = 'nightly-health-remediate.mjs'; ScriptArgs = @() },
+   [pscustomobject]@{ TaskName = 'OrgiastNightlyBatch'; ScriptName = 'ai-news-triage.mjs'; ScriptArgs = @('--confidence', 'high,medium', '--limit', '8') },
+   [pscustomobject]@{ TaskName = 'OrgiastNightlyBatch'; ScriptName = 'pricing-brief.mjs'; ScriptArgs = @('--limit', '8') },
+-  [pscustomobject]@{ TaskName = 'OrgiastNightlyBatch'; ScriptName = 'drive-hub-mirror.mjs'; ScriptArgs = @() }
++  [pscustomobject]@{ TaskName = 'OrgiastNightlyBatch'; ScriptName = 'drive-hub-mirror.mjs'; ScriptArgs = @() },
++  [pscustomobject]@{ TaskName = 'OrgiastNightlyBatch'; ScriptName = 'expense-leak-check.mjs'; ScriptArgs = @('--weekly') }
+ )
+ 
+ . (Join-Path $PSScriptRoot 'resolve-synced-repo.ps1')
+-- 
+2.53.0
+

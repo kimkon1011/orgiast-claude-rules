@@ -1,0 +1,28 @@
+✔ won-amount-edited: strictly beyond 30 days; won_at also qualifies non-won status (14.4365ms)
+✔ profit-mismatch: numeric strings and both sides of strict 1.0pp boundary (0.8697ms)
+✔ profit-mismatch: missing/invalid numbers skip; zero profit is set (1.0125ms)
+✔ won-but-archived: won only, self archive requires matching nonblank owner (0.7692ms)
+✔ won-no-owner: null, empty and whitespace, won status required (0.5959ms)
+✔ duplicate-deal: inclusive 7-day boundary, unordered input and pair detail (1.0624ms)
+✔ duplicate-deal: different customer/amount, nonpositive/missing amounts and invalid dates excluded (0.835ms)
+✔ duplicate-deal: three close deals produce three unique pairs without mutating inputs (5.733699ms)
+✔ big-discount: inclusive 40% boundary, numeric strings, won and positive amounts required (2.7347ms)
+✔ after-hours-update: JST 22:00/05:00 boundaries from UTC, independent of host timezone (1.046ms)
+✔ after-hours-update: JST Sunday daytime and UTC Sunday that is JST Monday (0.6826ms)
+✔ customer lookup and first eight characters fallback (0.4455ms)
+✔ dotenv: CRLF, comments, quotes, export prefix, BOM and no interpolation (1.8166ms)
+✔ fetchSnapshot: only specified GET requests, columns, limits and auth headers (2.5382ms)
+✔ fetch failures: HTTP status/body preserved, credentials redacted, network errors sanitized (3.0467ms)
+✔ report: severities, full counts, minimum filter, escaped cells and empty sections (3.945ms)
+✔ snapshot CLI: real process exit codes 0/2, stdout and --out, no network (384.031194ms)
+✔ snapshot CLI: fail-on-high stays zero when only medium findings exist (7.8192ms)
+✔ CLI validates arguments, snapshot schema and file paths; returns 1 (28.289999ms)
+✔ fetch CLI: snapshot round trip, report output, no secret output even if API echoes it (32.1015ms)
+ℹ tests 20
+ℹ suites 0
+ℹ pass 20
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 788.635587

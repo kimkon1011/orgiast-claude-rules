@@ -1,10 +1,71 @@
 {
   "version": 1,
   "apps": [
-    {"appName":"購買部管理アプリ","kind":"next","intake":"relay","refs":{"url":"FEEDBACK_RELAY_URL","secret":"FEEDBACK_RELAY_SECRET","repo":"PURCHASING_REPO","appDir":"PURCHASING_APP_DIR"}},
-    {"appName":"カフェ業務チェック","kind":"next","intake":"relay","refs":{"url":"FEEDBACK_RELAY_URL","secret":"FEEDBACK_RELAY_SECRET","repo":"CAFE_REPO","appDir":"CAFE_APP_DIR"}},
-    {"appName":"イベントショップ","kind":"gas","intake":"relay","refs":{"url":"FEEDBACK_RELAY_URL","secret":"FEEDBACK_RELAY_SECRET","repo":"EVENT_SHOP_REPO","appDir":"EVENT_SHOP_APP_DIR"}},
-    {"appName":"ブース制作アプリ","kind":"gas","intake":"booth-sheet","refs":{"url":"BOOTH_FEEDBACK_URL","secret":"BOOTH_FEEDBACK_TOKEN","repo":"BOOTH_FEEDBACK_REPO","appDir":"BOOTH_FEEDBACK_APP_DIR"}},
-    {"appName":"aujust／営業自動化","kind":"next","intake":"supabase","refs":{"url":"AUJUST_SUPABASE_URL","secret":"AUJUST_SUPABASE_SERVICE_ROLE_KEY","repo":"AUJUST_REPO","appDir":"AUJUST_APP_DIR"}}
+    {
+      "appName": "購買部管理アプリ",
+      "kind": "next",
+      "intake": "relay",
+      "refs": {
+        "url": "FEEDBACK_RELAY_URL",
+        "secret": "FEEDBACK_RELAY_SECRET",
+        "repo": "PURCHASING_REPO",
+        "appDir": "PURCHASING_APP_DIR"
+      }
+    },
+    {
+      "appName": "カフェ業務チェック",
+      "kind": "next",
+      "intake": "relay",
+      "refs": {
+        "url": "FEEDBACK_RELAY_URL",
+        "secret": "FEEDBACK_RELAY_SECRET",
+        "repo": "CAFE_REPO",
+        "appDir": "CAFE_APP_DIR"
+      }
+    },
+    {
+      "appName": "イベントショップ",
+      "kind": "gas",
+      "intake": "relay",
+      "refs": {
+        "url": "FEEDBACK_RELAY_URL",
+        "secret": "FEEDBACK_RELAY_SECRET",
+        "repo": "EVENT_SHOP_REPO",
+        "appDir": "EVENT_SHOP_APP_DIR"
+      }
+    },
+    {
+      "appName": "ブース制作アプリ",
+      "kind": "gas",
+      "intake": "booth-sheet",
+      "refs": {
+        "url": "BOOTH_FEEDBACK_URL",
+        "secret": "BOOTH_FEEDBACK_TOKEN",
+        "repo": "BOOTH_FEEDBACK_REPO",
+        "appDir": "BOOTH_FEEDBACK_APP_DIR"
+      }
+    },
+    {
+      "appName": "aujust／営業自動化",
+      "kind": "next",
+      "intake": "supabase",
+      "refs": {
+        "url": "AUJUST_SUPABASE_URL",
+        "secret": "AUJUST_SUPABASE_SERVICE_ROLE_KEY",
+        "repo": "AUJUST_REPO",
+        "appDir": "AUJUST_APP_DIR"
+      }
+    },
+    {
+      "appName": "nf-minpaku-automation",
+      "kind": "gas",
+      "intake": "relay",
+      "refs": {
+        "url": "FEEDBACK_RELAY_URL",
+        "secret": "FEEDBACK_RELAY_SECRET",
+        "repo": "FEEDBACK_B95CAA0E058B_REPO",
+        "appDir": "FEEDBACK_B95CAA0E058B_APP_DIR"
+      }
+    }
   ]
 }

@@ -137,6 +137,10 @@
       "rollout": "deny",
       "legacy": true
     },
+    "decision-research-gate": {
+      "rollout": "deny",
+      "legacy": true
+    },
     "url-account-gate": {
       "rollout": "deny",
       "legacy": true

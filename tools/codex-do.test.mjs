@@ -157,6 +157,19 @@ test('detectQuotaLimit: exit 0 の stdout でも Codex の上限エラー行を�
   assert.equal(detectQuotaLimit(stdout, '', 0).matched, true);
 });
 
+// 2026-10-10 18:23 JST に実際に出た行(U+2019・Upgrade to Pro のURL2本・AM/PM 付き再開時刻)。
+// この検出は本物だった(同じ秒の codex rollout に "codex_error_info":"usage_limit_exceeded")ので、
+// 「偽陽性」として緩めない。誤っていたのは実測値の側(delegation-health-check の primary 読み)。
+test('detectQuotaLimit: 実機の usage limit 行(U+2019/URL/AM PM)を検出する', () => {
+  const real = 'ERROR: You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Oct 14th, 2026 9:53 PM.';
+  const check = detectQuotaLimit('', real, 1, 'do something');
+  assert.equal(check.matched, true);
+  assert.equal(check.pattern, "You've hit your usage limit");
+  // executor-usage.jsonl は stderr の末尾200字しか残さないため、先頭が切れた断片は検出できない。
+  // 台帳の stderrTail だけを見て「検出漏れ」と誤診しないための記録。
+  assert.equal(detectQuotaLimit('', `M. ${real}`, 1, '').matched, false);
+});
+
 test('detectQuotaLimit: テストランナー、コード、行番号の疑似一致を除外する', () => {
   assert.equal(detectQuotaLimit("✔ detectQuotaLimit: 枠切れメッセージ (You've hit your usage limit) を検出する (1.2ms)", '', 0).matched, false);
   assert.equal(detectQuotaLimit('return json({ ok:false, error:"rate limit exceeded" }, 429)', '', 0).matched, false);

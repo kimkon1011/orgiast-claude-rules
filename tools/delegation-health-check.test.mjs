@@ -291,6 +291,32 @@ test('注入した WSL spawn の実測値を読み、失敗時は null にする
   assert.equal(readCodexUsedPercent({ spawnImpl: () => ({ status: 1, stdout: output }) }), null);
 });
 
+// 2026-10-10 18:23 JST の実測: codex は本物の usage_limit を出した(rollout に
+// "codex_error_info":"usage_limit_exceeded")が、delegation-health は上限到達前に記録された
+// primary 58% を最新値として読み、偽陽性と判定して生きていた cooldown を解除していた。
+// 上限に達した codex は primary を null で返す(68セッション中、上限到達の2本だけが null)。
+test('primary が null になったら古い used_percent を最新値として返さない', () => {
+  const stream = '{"rate_limits":{"primary":{"used_percent":58.0,"window_minutes":43200,"resets_at":1792516579}}}\n'
+    + '{"rate_limits":{"primary":null,"secondary":null,"credits":{"has_credits":false,"unlimited":false,"balance":"0"}}}';
+  assert.deepEqual(parseRateLimitsFromText(stream), { exhausted: true });
+  // 回復後は再び数値が返る(一度 null を見ただけでは以後ずっと exhausted にしない)。
+  assert.deepEqual(parseRateLimitsFromText(`${stream}\n{"rate_limits":{"primary":{"used_percent":3,"window_minutes":43200,"resets_at":1792516579}}}`),
+    { usedPercent: 3, windowMinutes: 43200, resetsAt: 1792516579 });
+  // "null" で始まる別キー(nullify 等)を null と誤読しない。
+  assert.deepEqual(parseRateLimitsFromText('{"primary":nullish}'), null);
+});
+
+test('primary が null の間は cooldown を解除しない', () => {
+  const dir = home();
+  write(dir, 'codex-limit-history.jsonl', row({ t: '2026-09-09T11:00:00Z', until: 1791982380000, reason: 'usage_limit' }));
+  write(dir, 'provider-cooldown.json', { codex: { until: NOW.getTime() + 1000, reason: 'usage_limit' } });
+  write(dir, 'next-session.md', handoff());
+  const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: { exhausted: true } });
+  assert.deepEqual(findings.map((item) => item.id), ['healthy']);
+  assert.equal(applyAutoHeal({ home: dir, findings, now: NOW }), false);
+  assert.equal(readCooldown(dir).codex.until, NOW.getTime() + 1000);
+});
+
 // 単発の起動失敗(OS エラー)は低成果(2件閾値)では拾えず、翌朝 healthy と判定されてしまった
 // (2026-09-21 実測: spawn ENAMETOOLONG / in=4964tok / out=0 / status=1)。
 test('fallback の spawn ENAMETOOLONG を1件で検出する', () => {

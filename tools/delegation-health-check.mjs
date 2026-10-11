@@ -28,8 +28,12 @@ function measured(value) {
 export function parseRateLimitsFromText(text) {
   let last = null;
   const source = String(text ?? '').replace(/\\"/g, '"');
-  const anchors = [...source.matchAll(/"primary"\s*:\s*\{/g)];
+  // primary が null の行も拾う。上限に達した codex は rate_limits.primary を null にして返すため
+  // (2026-10-10 実測: 上限到達の2セッションだけが "primary":null、他66ファイルには無い)。
+  const anchors = [...source.matchAll(/"primary"\s*:\s*(\{|null\b)/g)];
   for (const anchor of anchors) {
+    // 古い非 null 値を最新値として返すと「実測 58% なのに上限」という誤った反証になる。
+    if (anchor[1] === 'null') { last = { exhausted: true }; continue; }
     const fragment = source.slice(anchor.index, anchor.index + 1200);
     const used = fragment.match(/"used_percent"\s*:\s*(\d+(?:\.\d+)?)/);
     if (!used) continue;
@@ -46,7 +50,7 @@ export function readCodexUsedPercent(options = {}) {
   if (!options.spawnImpl && process.platform !== 'win32' && !process.env.WSL_DISTRO_NAME) return null;
   try {
     // ログ1本が数MBあるので全文 cat せず primary ブロックだけ抜く(ENOBUFS 再発防止)。新しいファイルほど後ろに並べ、最後の行を最新値にする。
-    const script = `find ~/.codex/sessions -type f -name "*.jsonl" -printf "%T@ %p\n" 2>/dev/null | sort -nr | head -n 3 | sort -n | cut -d" " -f2- | xargs -r grep -ho "\\"primary\\":{[^}]*}" 2>/dev/null | tail -n 40`;
+    const script = `find ~/.codex/sessions -type f -name "*.jsonl" -printf "%T@ %p\n" 2>/dev/null | sort -nr | head -n 3 | sort -n | cut -d" " -f2- | xargs -r grep -ho "\\"primary\\":{[^}]*}\\|\\"primary\\":null" 2>/dev/null | tail -n 40`;
     const result = spawnImpl('wsl', ['-d', 'Ubuntu', '--', 'bash', '-c', script], { encoding: 'utf8', timeout: 20_000, maxBuffer: 16 * 1024 * 1024 });
     if (result?.error || (result?.status != null && result.status !== 0)) return null;
     return parseRateLimitsFromText(result.stdout);
@@ -122,6 +126,10 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
   const limitRows = recent(readJsonl(path.join(claudeDir, 'codex-limit-history.jsonl'))).filter((row) => String(row.reason || '').includes('usage_limit'));
   const usageRows = recent(readJsonl(path.join(claudeDir, 'executor-usage.jsonl')));
   const cooldown = readJson(path.join(claudeDir, 'provider-cooldown.json'), {});
+  // 上限到達中の codex は primary を null で返す＝実測値は「不明」であって「58%」ではない。
+  // measured() は exhausted を null にするので、ここで metric が無ければ偽陽性とは判定しない
+  // (2026-10-10 実測: 本物の上限メッセージ + 期限切れの primary 58% を突き合わせて
+  //  「偽陽性」と誤判定し、生きていた cooldown を解除していた)。
   const metric = measured(codexUsedPercent);
   const findings = [];
   if (limitRows.length && metric && metric.usedPercent < 90) findings.push({
@@ -250,7 +258,7 @@ export function upsertFixTasks({ home, findings, now = new Date(), todayStr }) {
 export function renderSummary(report) {
   const lines = ['## 🩺 委譲ヘルス（直近24h）'];
   for (const item of report.findings) lines.push(`- ${item.severity} / ${item.title} / 自動修復:${item.autoHealed ? 'あり' : 'なし'} / 起票先:${item.fixTask && ['high', 'medium'].includes(item.severity) ? '~/.claude/next-session.md' : 'なし'}`);
-  if (lines.length < 5) lines.push(`- Codex実測: ${report.codexUsedPercent === null ? '計測不能' : `${report.codexUsedPercent}%`}`, `- 生成日時: ${report.generatedAt}`, '- high があっても夜間処理は継続');
+  if (lines.length < 5) lines.push(`- Codex実測: ${report.codexExhausted ? '上限到達（primary なし）' : report.codexUsedPercent === null ? '計測不能' : `${report.codexUsedPercent}%`}`, `- 生成日時: ${report.generatedAt}`, '- high があっても夜間処理は継続');
   return `${lines.slice(0, 15).join('\n')}\n`;
 }
 
@@ -260,7 +268,7 @@ export function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv), metric = readCodexUsedPercent({});
   const findings = collectFindings({ home: args.home, now: args.now, codexUsedPercent: metric });
   if (!args.dryRun) { fs.mkdirSync(path.join(args.home, '.claude'), { recursive: true }); applyAutoHeal({ home: args.home, findings, now: args.now }); upsertFixTasks({ home: args.home, findings, now: args.now }); }
-  const report = { generatedAt: args.now.toISOString(), codexUsedPercent: measured(metric)?.usedPercent ?? null, findings };
+  const report = { generatedAt: args.now.toISOString(), codexUsedPercent: measured(metric)?.usedPercent ?? null, codexExhausted: metric?.exhausted === true, findings };
   const summary = renderSummary(report);
   if (!args.dryRun) { fs.writeFileSync(path.join(args.home, '.claude', 'delegation-health.json'), `${JSON.stringify(report, null, 2)}\n`); fs.writeFileSync(path.join(args.home, '.claude', 'delegation-health.md'), summary); }
   process.stdout.write(summary);

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { parseHandoff } from './auto-session.mjs';
-import { applyAutoHeal, collectFindings, emptyOutputReason, parseRateLimitsFromText, readCodexUsedPercent, upsertFixTasks } from './delegation-health-check.mjs';
+import { applyAutoHeal, collectFindings, emptyOutputReason, parseRateLimitsFromText, readCodexUsedPercent, upsertFixTasks, windowResetsAfterLimit } from './delegation-health-check.mjs';
 
 const NOW = new Date('2026-09-09T12:00:00.000Z');
 const homes = [];
@@ -366,6 +366,57 @@ test('primary が null の間は cooldown を解除しない', () => {
   assert.deepEqual(findings.map((item) => item.id), ['healthy']);
   assert.equal(applyAutoHeal({ home: dir, findings, now: NOW }), false);
   assert.equal(readCooldown(dir).codex.until, NOW.getTime() + 1000);
+});
+
+// 2026-10-10T12:16Z の起票の証拠になった実際の WSL 出力。その時点で「最新3本」だった
+// セッションを find|sort -nr|head -3|sort -n の順(古い→新しい)に連結した grep 結果で、
+// 末尾2行が上限到達セッションの "primary":null。古い 67%/10080分/resets_at 1791982428 は
+// 8時間前のセッションの値なので、最新値として採用してはならない。
+const REAL_20261010_REPLAY = [
+  '"primary":{"used_percent":66.0,"window_minutes":10080,"resets_at":1791982427}',
+  '"primary":{"used_percent":67.0,"window_minutes":10080,"resets_at":1791982427}',
+  '"primary":{"used_percent":67.0,"window_minutes":10080,"resets_at":1791982427}',
+  '"primary":{"used_percent":67.0,"window_minutes":10080,"resets_at":1791982428}',
+  '"primary":null',
+  '"primary":null',
+].join('\n');
+
+test('実機ログ(2026-10-10): 最新セッションが primary:null なら古い 67% を実測値にしない', () => {
+  assert.deepEqual(parseRateLimitsFromText(REAL_20261010_REPLAY), { exhausted: true });
+  assert.deepEqual(readCodexUsedPercent({ spawnImpl: () => ({ status: 0, stdout: REAL_20261010_REPLAY }) }), { exhausted: true });
+});
+
+// 上限到達(12:16Z, until 1791982380000)の後、codex は別の窓(43200分=30日枠 / resets_at
+// 1794249388)で回復し used_percent 3 を返した。これを反証に使うと、本物の上限を毎晩
+// 起票し直し、生きている cooldown まで消す。窓が進んでいたら反証にしない。
+test('上限より後に別の窓へ進んだ低い使用率は偽陽性と判定しない', () => {
+  const dir = home();
+  write(dir, 'codex-limit-history.jsonl', row({ t: '2026-09-09T11:00:00Z', until: 1791982380000, reason: 'usage_limit' }));
+  write(dir, 'provider-cooldown.json', { codex: { until: NOW.getTime() + 86_400_000, reason: 'usage_limit' } });
+  write(dir, 'next-session.md', handoff());
+  const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: { usedPercent: 3, windowMinutes: 43200, resetsAt: 1794249388 } });
+  assert.deepEqual(findings.map((item) => item.id), ['healthy']);
+  assert.equal(applyAutoHeal({ home: dir, findings, now: NOW }), false);
+  assert.equal(readCooldown(dir).codex.until, NOW.getTime() + 86_400_000);
+});
+
+// 窓が進んでいない(同じ枠のまま低い)ときは従来どおり起票する。判定を緩めすぎていないことの固定。
+test('同じ窓のまま低い使用率なら従来どおり偽陽性として起票する', () => {
+  const dir = home();
+  write(dir, 'codex-limit-history.jsonl', row({ t: '2026-09-09T11:00:00Z', until: 1791982380000, reason: 'usage_limit' }));
+  const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: { usedPercent: 67, windowMinutes: 10080, resetsAt: 1791982428 } });
+  assert.equal(findings[0].id, 'codex_false_usage_limit');
+  assert.match(findings[0].evidence.join('/'), /used_percent 67/);
+});
+
+test('windowResetsAfterLimit: 窓が進んだ時だけ true、until 不明なら判定しない', () => {
+  assert.equal(windowResetsAfterLimit([{ reason: 'usage_limit' }], { usedPercent: 1, resetsAt: 1794249388 }), false);
+  assert.equal(windowResetsAfterLimit([{ reason: 'usage_limit' }], null), false);
+  assert.equal(windowResetsAfterLimit([{ until: 1791982380000 }], { usedPercent: 1, resetsAt: 1794249388 }), true);
+  assert.equal(windowResetsAfterLimit([{ until: 1791982380000 }], { usedPercent: 1, resetsAt: 1791982428 }), false);
+  assert.equal(windowResetsAfterLimit([{ until: 1791982380000 }], { usedPercent: 1, resetsAt: null }), false);
+  // until が壊れていても throw せず従来どおり起票する側に倒す。
+  assert.equal(windowResetsAfterLimit([{ until: 'x' }], { usedPercent: 1, resetsAt: 1794249388 }), false);
 });
 
 // 単発の起動失敗(OS エラー)は低成果(2件閾値)では拾えず、翌朝 healthy と判定されてしまった

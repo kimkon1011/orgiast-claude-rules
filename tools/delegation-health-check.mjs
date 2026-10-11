@@ -9,7 +9,22 @@ import { normalizeExecutorStatus } from './executor-status.mjs';
 import { isEntry } from './is-entry.mjs';
 
 const DAY = 86_400_000;
+const HOUR = 3_600_000;
 const CLAUDE_FALLBACK_RULE = '従量課金AIはオートチャージON＋Claude側監視が全社ルール（2026-09-09）';
+
+// 記録された上限の再開時刻(until)からこの余裕を超えて「次のレート制限ウィンドウ」へ進んでいたら、
+// codex は上限を抜けて回復している＝その低い使用率は「検出が偽陽性だった」証拠にならない。
+// 2026-10-10 実測: 12:16Z に usage_limit 2件(until 1791982380000) を記録した後、18:56Z の
+// 次セッションは別の窓(window_minutes 43200 / resets_at 1794249388)で used_percent 3 を返した。
+// これを「実測 used_percent 3」として突き合わせ、本物の上限を毎晩起票し直し、生きている
+// cooldown まで消していた（同じ fixTask が永久に消えない起票ループ）。
+export function windowResetsAfterLimit(limitRows, metric) {
+  if (!metric || metric.resetsAt === null || metric.resetsAt === undefined) return false;
+  const untils = limitRows.map((row) => Number(row.until)).filter((until) => Number.isFinite(until));
+  // until を持つ行が無い(旧形式・不明)ときは判定しない＝従来どおり起票する側に倒す。
+  if (!untils.length) return false;
+  return metric.resetsAt * 1000 > Math.max(...untils) + HOUR;
+}
 
 function readJson(file, fallback = {}) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
@@ -136,8 +151,10 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
   // (2026-10-10 実測: 本物の上限メッセージ + 期限切れの primary 58% を突き合わせて
   //  「偽陽性」と誤判定し、生きていた cooldown を解除していた)。
   const metric = measured(codexUsedPercent);
+  // 上限後に別の窓へ進んでいたら、その低い使用率は反証にならない（windowResetsAfterLimit の説明を参照）。
+  const supersededWindow = windowResetsAfterLimit(limitRows, metric);
   const findings = [];
-  if (limitRows.length && metric && metric.usedPercent < 90) findings.push({
+  if (limitRows.length && metric && !supersededWindow && metric.usedPercent < 90) findings.push({
     id: 'codex_false_usage_limit', severity: 'high', title: 'Codex 上限検出の偽陽性',
     evidence: [`usage_limit記録 ${limitRows.length}件`, `実測 used_percent ${metric.usedPercent}`, `window ${metric.windowMinutes ?? '不明'}分`, `resets_at ${metric.resetsAt ?? '不明'}`],
     autoHealed: Number(cooldown.codex?.until) > nowMs ? 'codex cooldown を解除' : undefined,

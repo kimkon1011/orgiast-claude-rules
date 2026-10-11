@@ -326,7 +326,8 @@ export async function updateRepositoryFiles(targetRepo, options = {}) {
     archive = await getZipRoot();
     let changed = false;
     const hashes = {};
-    for (const name of ['tools', 'rules-extracted', 'skills']) {
+    // packages は同梱 VSIX（スマホ待機タブ拡張）の置き場。zip 経路で欠けると converge が拡張を導入できない。
+    for (const name of ['tools', 'rules-extracted', 'skills', 'packages']) {
       const source = path.join(archive.root, name);
       if (fs.existsSync(source)) changed = copyTreeExcluding(source, path.join(targetRepo, name), excluded, hashes, name) || changed;
     }
@@ -414,7 +415,7 @@ async function syncRepository(now) {
     try {
       const registrar = path.join(repoPath, 'tools', 'setup.mjs');
       if (fs.existsSync(registrar)) {
-        const out = execFileSync(process.execPath, [registrar, '--converge', '--home', home], { windowsHide: true, encoding: 'utf8', timeout: 60000, env: { ...process.env, ORGIAST_HOME: home } }).trim();
+        const out = execFileSync(process.execPath, [registrar, '--converge', '--home', home], { windowsHide: true, encoding: 'utf8', timeout: 180000, env: { ...process.env, ORGIAST_HOME: home } }).trim();
         // skip がログに届かないと hook 未登録の無言 skip が復活するため、追加と同様に転送する。
         if (out.includes('追加') || out.includes('[skip]')) { console.log(`[onboarding-sync] ${out.trim()}`); log(out.replace(/\s+/g, ' ')); }
       }

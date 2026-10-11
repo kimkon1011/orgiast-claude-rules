@@ -56,7 +56,7 @@ test('JSON/env configuration and stale snapshot are validated', (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-config-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   fs.mkdirSync(path.join(home, '.claude'));
-  assert.equal(readConfig(home, {}), 1);
+  assert.equal(readConfig(home, {}), 3);
   fs.writeFileSync(path.join(home, '.claude', 'mobile-sessions.json'), '{"count":2}');
   assert.equal(readConfig(home, {}), 2);
   assert.equal(readConfig(home, { CLAUDE_MOBILE_STANDBY: '3' }), 3);
@@ -107,10 +107,10 @@ test('at most 20 attempts per hour even when each one succeeds', async () => {
   await pool.ensure(1);
   assert.equal(opens, 21);
 });
-test('config order: env > JSON > fallback (VS Code setting) > 1', (t) => {
+test('config order: env > JSON > fallback (VS Code setting) > 3', (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-order-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  assert.equal(readConfig(home, {}), 1);
+  assert.equal(readConfig(home, {}), 3);
   assert.equal(readConfig(home, {}, 4), 4);
   fs.mkdirSync(path.join(home, '.claude'));
   fs.writeFileSync(path.join(home, '.claude', 'mobile-sessions.json'), '{"count":2}');

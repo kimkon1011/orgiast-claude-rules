@@ -533,3 +533,13 @@ test('the next sync automatically uses the received primary without an enroll he
   const { createHmac } = await import('node:crypto');
   assert.equal(headers['x-orgiast-auth'], createHmac('sha256', 'new-primary').update(headers['x-orgiast-ts']).digest('hex'));
 });
+
+test('zip fallback は packages（同梱 VSIX）も配る', async () => {
+  const f = repositoryFixture();
+  fs.mkdirSync(path.join(f.archive, 'packages', 'vscode-next-session'), { recursive: true });
+  fs.writeFileSync(path.join(f.archive, 'packages', 'vscode-next-session', 'orgiast-next-session-9.9.9.vsix'), 'vsix');
+  const git = (args) => args.includes('rev-list') ? '5\n' : '';
+  const result = await updateRepositoryFiles(f.repo, fallbackOptions(f, git));
+  assert.equal(result.method, 'zip');
+  assert.equal(fs.readFileSync(path.join(f.repo, 'packages', 'vscode-next-session', 'orgiast-next-session-9.9.9.vsix'), 'utf8'), 'vsix');
+});

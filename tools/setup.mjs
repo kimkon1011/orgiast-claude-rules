@@ -5,6 +5,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { convergeAllowRules } from './allow-rules.mjs';
+import { convergeMobileStandby } from './mobile-standby.mjs';
 
 const TYPES = new Set(['command', 'file-contains', 'file-nonempty', 'json-valid', 'scheduled-task']);
 const SEVERITIES = new Set(['required', 'optional', 'manual']);
@@ -149,6 +150,15 @@ if (manifest) {
     }
   }
   if (settingsMigration) results.push(settingsMigration);
+  // スマホ用待機タブ: 拡張導入・count=3・mobileTabs=0 除去。--manifest 指定時(テスト/臨時検査)は実機を触らない。
+  if (converge && !valueAfter('--manifest')) {
+    const item = { id: 'mobile-standby', severity: 'optional', description: 'スマホ用 Claude Code 待機タブ3本（拡張導入・設定収束）' };
+    try {
+      const outcome = convergeMobileStandby({ home, repoRoot: path.dirname(scriptDir) });
+      if (!jsonOutput) for (const line of outcome.lines) console.log(line);
+      results.push({ item, status: outcome.ok ? 'OK' : 'NG', checked: true, repaired: Boolean(outcome.config?.changed || outcome.settings?.changed || outcome.extension?.status === 'installed') });
+    } catch { results.push({ item, status: 'NG', checked: true, repaired: false }); }
+  }
   emit(results);
   const requiredNg = results.some((r) => r.item.severity === 'required' && r.status === 'NG');
   process.exitCode = settingsMigration?.status === 'NG' ? 1 : converge && !strict ? 0 : requiredNg ? 1 : 0;

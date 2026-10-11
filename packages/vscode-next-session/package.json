@@ -2,7 +2,7 @@
   "name": "next-session",
   "displayName": "Orgiast Next Session",
   "description": "Starts the next Claude session and prepares mobile Remote Control tabs from a URI.",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "publisher": "orgiast",
   "license": "MIT",
   "repository": {
@@ -25,7 +25,7 @@
       "properties": {
         "orgiast.nextSession.mobileTabs": {
           "type": "number",
-          "default": 1,
+          "default": 3,
           "minimum": 0,
           "maximum": 10,
           "description": "常時補充するスマホ Remote Control 用 Claude Code タブ数。0 は無効。"

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { buildMobileSessionsUri, parseMobileArgs, planMobileSessionsLaunch } from './mobile-sessions.mjs';
 
 test('mobile-sessions の引数は既定値と明示値を解釈する', () => {
-  assert.deepEqual(parseMobileArgs([]), { count: 1, name: 'スマホ用セッション' });
+  assert.deepEqual(parseMobileArgs([]), { count: 3, name: 'スマホ用セッション' });
   assert.deepEqual(parseMobileArgs(['--count', '7', '--name', '携帯']), { count: 7, name: '携帯' });
   assert.throws(() => parseMobileArgs(['--count', '11']), /1\.\.10/);
   assert.throws(() => parseMobileArgs(['--unknown']), /不明な引数/);

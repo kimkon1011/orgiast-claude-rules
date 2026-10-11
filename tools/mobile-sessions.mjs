@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
 import { resolveVscodeCli } from './next-session-launch.mjs';
 
-export function parseMobileArgs(argv, defaultCount = 1) {
+export function parseMobileArgs(argv, defaultCount = 3) {
   let count = defaultCount;
   let dryRun = false;
   let refresh = false;

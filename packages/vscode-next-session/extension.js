@@ -127,7 +127,7 @@ async function refreshWaitingTab({ force = false } = {}) {
 }
 function vscodeMobileTabs() {
   const value = vscode.workspace.getConfiguration('orgiast.nextSession').get('mobileTabs');
-  return Number.isInteger(value) && value >= 1 ? value : 1;
+  return Number.isInteger(value) && value >= 1 ? value : 3;
 }
 const OPEN_METHODS = {
   newConversation: () => vscode.commands.executeCommand('claude-vscode.newConversation'),

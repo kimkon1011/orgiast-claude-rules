@@ -2,13 +2,13 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-function targetCount(value = 1) {
+function targetCount(value = 3) {
   const count = Number(value);
   if (!Number.isInteger(count) || count < 1 || count > 10) throw new Error('待機数は 1..10 の整数で指定してください');
   return count;
 }
-// 決定順: env CLAUDE_MOBILE_STANDBY -> JSON の count -> fallback（VS Code 設定値）-> 1
-function readConfig(home, env = process.env, fallback = 1) {
+// 決定順: env CLAUDE_MOBILE_STANDBY -> JSON の count -> fallback（VS Code 設定値）-> 3
+function readConfig(home, env = process.env, fallback = 3) {
   let config = {};
   try { config = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'mobile-sessions.json'), 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw error; }

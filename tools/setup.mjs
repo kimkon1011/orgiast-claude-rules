@@ -156,7 +156,7 @@ if (manifest) {
     try {
       const outcome = convergeMobileStandby({ home, repoRoot: path.dirname(scriptDir) });
       if (!jsonOutput) for (const line of outcome.lines) console.log(line);
-      results.push({ item, status: outcome.ok ? 'OK' : 'NG', checked: true, repaired: Boolean(outcome.config?.changed || outcome.settings?.changed || outcome.extension?.status === 'installed'),
+      results.push({ item, status: outcome.ok ? 'OK' : 'NG', checked: true, repaired: Boolean(outcome.config?.changed || outcome.settings?.changed || outcome.extension?.status === 'installed' || outcome.rcPrefix?.changed),
         reason: outcome.ok ? '' : outcome.lines.filter((line) => /失敗|NG/.test(line)).join(' / ') });
     } catch { results.push({ item, status: 'NG', checked: true, repaired: false }); }
   }

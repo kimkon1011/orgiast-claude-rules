@@ -9,6 +9,10 @@ import {
 } from './next-session-launch.mjs';
 
 export const MOBILE_STANDBY_COUNT = 3;
+// Remote Control のセッション名接頭辞。短くしてスマホの一覧で切れないようにする。
+// 意味は「まだ発言していない＝未使用のセッション枠」。
+export const RC_NAME_PREFIX = '待機';
+const RC_PREFIX_ENV = 'CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX';
 const EXTENSION_ID = 'orgiast.next-session';
 const toolsDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -60,6 +64,44 @@ export function removeMobileTabsZero(settingsPath) {
   return { changed: true, note: 'orgiast.nextSession.mobileTabs=0 を除去' };
 }
 
+// powershell.exe を -EncodedCommand(UTF-16LE の Base64)で呼ぶ。日本語が化けないための必須手順。
+function runPowershell(script) {
+  const encoded = Buffer.from(script, 'utf16le').toString('base64');
+  return execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], {
+    encoding: 'utf8', timeout: 20_000, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
+}
+
+// powershell.exe(5.1) の stdout はコンソールのコードページで出るため、日本語は Base64 経由で受け取る。
+// （UTF-8 として読むと "待機" が "�ҋ@" になり、既に同じ値でも毎回書き込んでしまう。）
+function defaultReadUserEnv(name) {
+  const q = String(name).replace(/'/g, "''");
+  const encoded = runPowershell(`[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string][Environment]::GetEnvironmentVariable('${q}','User')))`);
+  return Buffer.from(encoded, 'base64').toString('utf8');
+}
+
+function defaultWriteUserEnv(name, value) {
+  // PowerShell の単一引用符リテラルは ' を '' に二重化してエスケープする。
+  const q = (text) => String(text).replace(/'/g, "''");
+  runPowershell(`[Environment]::SetEnvironmentVariable('${q(name)}','${q(value)}','User')`);
+}
+
+// Windows のユーザー環境変数に RC のセッション名接頭辞を配る。冪等。
+// VS Code 拡張ホスト(Code.exe)の環境に入れておけば、拡張の spawn が process.env 経由で CLI に届ける。
+export function convergeRcNamePrefix({ platform = process.platform, readUserEnv, writeUserEnv, prefix = RC_NAME_PREFIX } = {}) {
+  if (platform !== 'win32') return { changed: false, ok: true, note: 'Windows 以外はスキップ' };
+  const read = readUserEnv ?? defaultReadUserEnv;
+  const write = writeUserEnv ?? defaultWriteUserEnv;
+  try {
+    const current = String(read(RC_PREFIX_ENV) ?? '').trim();
+    if (current === prefix) return { changed: false, ok: true, note: `${RC_PREFIX_ENV} は既に "${prefix}"` };
+    write(RC_PREFIX_ENV, prefix);
+    return { changed: true, ok: true, note: `${RC_PREFIX_ENV}: "${current || '未設定'}" -> "${prefix}"` };
+  } catch (error) {
+    return { changed: false, ok: false, note: `${RC_PREFIX_ENV} の設定に失敗 ${error.message}` };
+  }
+}
+
 function installedVersionFromDisk(home, readdir) {
   try {
     const versions = readdir(path.join(home, '.vscode', 'extensions'))
@@ -99,7 +141,7 @@ export function convergeMobileExtension({ home, repoRoot, env = process.env, exi
   return { status: 'installed', note: `${EXTENSION_ID}@${bundled} を導入（VSCode ウィンドウの再読み込みで有効化）` };
 }
 
-export function convergeMobileStandby({ home, repoRoot = path.dirname(toolsDir), env = process.env, runCodeCli, exists, readdir, settingsPath } = {}) {
+export function convergeMobileStandby({ home, repoRoot = path.dirname(toolsDir), env = process.env, runCodeCli, exists, readdir, settingsPath, rcPrefix = {} } = {}) {
   const lines = [];
   const result = { ok: true, lines };
   const note = (label, outcome) => lines.push(`[mobile-standby] ${label}: ${outcome.note}`);
@@ -113,5 +155,9 @@ export function convergeMobileStandby({ home, repoRoot = path.dirname(toolsDir),
     const r = convergeMobileExtension({ home, repoRoot, env, runCodeCli, exists, readdir }); note('拡張', r); result.extension = r;
     if (r.status === 'ng') result.ok = false;
   } catch (error) { result.ok = false; lines.push(`[mobile-standby] 拡張: 失敗 ${error.message}`); }
+  try {
+    const r = convergeRcNamePrefix(rcPrefix); note('RC接頭辞', r); result.rcPrefix = r;
+    if (r.ok === false) result.ok = false;
+  } catch (error) { result.ok = false; lines.push(`[mobile-standby] RC接頭辞: 失敗 ${error.message}`); }
   return result;
 }

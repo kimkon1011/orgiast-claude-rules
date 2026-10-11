@@ -4,7 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import pool from './lib/mobile-state.cjs';
-import { convergeMobileConfig, removeMobileTabsZero, convergeMobileExtension, convergeMobileStandby } from './mobile-standby.mjs';
+import {
+  convergeMobileConfig, removeMobileTabsZero, convergeMobileExtension, convergeMobileStandby,
+  convergeRcNamePrefix, RC_NAME_PREFIX,
+} from './mobile-standby.mjs';
 
 const temp = (name) => fs.mkdtempSync(path.join(os.tmpdir(), name));
 const cfg = (home) => path.join(home, '.claude', 'mobile-sessions.json');
@@ -101,16 +104,90 @@ test('convergeMobileStandby は 3 ステップを通し冪等', () => {
   const f = extFixture();
   const settingsPath = path.join(f.home, 'settings.json');
   fs.writeFileSync(settingsPath, '{"orgiast.nextSession.mobileTabs":0}');
-  const first = convergeMobileStandby({ ...f, settingsPath });
+  // 実 powershell を呼ばないようスタブを注入（rcPrefix 自体の検証は別テスト）。
+  const rcPrefix = { platform: 'win32', readUserEnv: () => RC_NAME_PREFIX, writeUserEnv: () => { throw new Error('呼ばれないはず'); } };
+  const first = convergeMobileStandby({ ...f, settingsPath, rcPrefix });
   assert.equal(first.ok, true);
   assert.equal(first.config.changed, true);
   assert.equal(first.settings.changed, true);
   assert.equal(first.extension.status, 'installed');
   fs.mkdirSync(path.join(f.home, '.vscode', 'extensions', 'orgiast.next-session-0.3.7'), { recursive: true });
-  const second = convergeMobileStandby({ ...f, settingsPath });
+  const second = convergeMobileStandby({ ...f, settingsPath, rcPrefix });
   assert.equal(second.config.changed, false);
   assert.equal(second.settings.changed, false);
   assert.equal(second.extension.status, 'ok');
+});
+
+test('RC セッション名接頭辞は "待機" 固定', () => {
+  assert.equal(RC_NAME_PREFIX, '待機');
+});
+
+test('RC接頭辞: 既に同じ値なら write せず changed=false（冪等）', () => {
+  const writes = [];
+  const r = convergeRcNamePrefix({
+    platform: 'win32',
+    readUserEnv: () => RC_NAME_PREFIX,
+    writeUserEnv: (...args) => { writes.push(args); },
+  });
+  assert.equal(r.changed, false);
+  assert.equal(r.ok, true);
+  assert.equal(writes.length, 0);
+  assert.match(r.note, /既に "待機"/);
+});
+
+test('RC接頭辞: 未設定なら書き込み、changed=true、note に -> "待機"', () => {
+  const writes = [];
+  const r = convergeRcNamePrefix({
+    platform: 'win32',
+    readUserEnv: () => '',
+    writeUserEnv: (...args) => { writes.push(args); },
+  });
+  assert.equal(r.changed, true);
+  assert.equal(r.ok, true);
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0][0], 'CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX');
+  assert.equal(writes[0][1], RC_NAME_PREFIX);
+  assert.match(r.note, /-> "待機"/);
+  assert.match(r.note, /未設定/);
+});
+
+test('RC接頭辞: Windows 以外はスキップ（read/write を呼ばない）', () => {
+  let touched = 0;
+  const r = convergeRcNamePrefix({
+    platform: 'linux',
+    readUserEnv: () => { touched += 1; return ''; },
+    writeUserEnv: () => { touched += 1; },
+  });
+  assert.equal(r.changed, false);
+  assert.equal(r.ok, true);
+  assert.equal(touched, 0);
+  assert.match(r.note, /スキップ/);
+});
+
+test('RC接頭辞: 書き込み失敗は ok=false を返す（例外を投げない）', () => {
+  const r = convergeRcNamePrefix({
+    platform: 'win32',
+    readUserEnv: () => '',
+    writeUserEnv: () => { throw new Error('boom'); },
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.changed, false);
+  assert.match(r.note, /失敗/);
+  assert.match(r.note, /boom/);
+});
+
+test('convergeMobileStandby: result.rcPrefix が入り、ok=false なら result.ok も false', () => {
+  const f = extFixture();
+  const settingsPath = path.join(f.home, 'settings.json');
+  const okRun = convergeMobileStandby({ ...f, settingsPath, rcPrefix: { platform: 'win32', readUserEnv: () => RC_NAME_PREFIX, writeUserEnv: () => {} } });
+  assert.equal(okRun.ok, true);
+  assert.equal(okRun.rcPrefix.ok, true);
+  assert.equal(okRun.rcPrefix.changed, false);
+  assert.ok(okRun.lines.some((line) => line.startsWith('[mobile-standby] RC接頭辞:')));
+
+  const ngRun = convergeMobileStandby({ ...f, settingsPath, rcPrefix: { platform: 'win32', readUserEnv: () => '', writeUserEnv: () => { throw new Error('denied'); } } });
+  assert.equal(ngRun.rcPrefix.ok, false);
+  assert.equal(ngRun.ok, false);
 });
 
 test('同梱 VSIX の最新版と package.json の版が一致する', () => {

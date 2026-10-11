@@ -550,12 +550,15 @@ test('buildQwenEnv は model と baseUrl を上書きできる', () => {
   assert.equal(env.OPENAI_BASE_URL, 'https://example.com/v1');
 });
 
-test('buildGeminiArgs は auto_edit を使い -y を含めず、末尾に空白なし marker を置く', () => {
+test('buildGeminiArgs は yolo を使い -y を含めず、末尾に空白なし marker を置く', () => {
+  // 2026-10-12 実測: auto_edit は編集ツールのみ自動承認でシェル実行ツールが使えず、
+  // 代替実行者がテスト・git を一度も実行できない（qwen の --exclude-tools と同じ実害）。
+  // yolo は全ツール自動承認なのでシェルが使える。
   const marker = 'Custom-marker-without-spaces.';
   const args = buildGeminiArgs({ marker });
   const approvalIndex = args.indexOf('--approval-mode');
   assert.ok(approvalIndex >= 0);
-  assert.equal(args[approvalIndex + 1], 'auto_edit');
+  assert.equal(args[approvalIndex + 1], 'yolo');
   assert.ok(!args.includes('-y'));
   assert.deepEqual(args.slice(-2), ['-p', marker]);
   for (const arg of args) assert.ok(!/\s/.test(arg), `argv 要素に空白が含まれる: ${JSON.stringify(arg)}`);

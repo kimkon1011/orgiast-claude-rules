@@ -268,8 +268,12 @@ export function buildQwenArgs({ model = 'deepseek-chat', timeoutSecs = 1800, max
   ];
 }
 
+// --approval-mode は yolo（全ツール自動承認）。auto_edit は編集ツールのみ自動承認で、
+// シェル実行ツールは非対話では承認できず使えない。2026-10-12 実測: auto_edit だと
+// 「I do not have access to a shell or terminal tool in this environment」と回答し、
+// echo 1つ実行できない（qwen の --exclude-tools と同じ実害。代替実行者はテスト・git を回す必要がある）。
 export function buildGeminiArgs({ model = 'gemini-3.7-flash', marker = 'Follow-the-instructions-provided-on-stdin.' } = {}) {
-  return ['-m', model, '--approval-mode', 'auto_edit', '--skip-trust', '-p', marker];
+  return ['-m', model, '--approval-mode', 'yolo', '--skip-trust', '-p', marker];
 }
 
 export function buildGeminiEnv(baseEnv, apiKey) {
@@ -349,7 +353,8 @@ export function loadGeminiKey(homeDir) {
 }
 
 // 2026-09-03 実測: Gemini Flash 5/5、DeepSeek 5/5、OpenRouter free 1/5。
-// 同品質なら正規の auto_edit を持つ Gemini を安全性から第1候補にする。
+// 同品質なら正規の承認モードを持つ Gemini を第1候補にする（2026-10-12: auto_edit は
+// 非対話でシェル不可のため yolo へ変更。順位の根拠は下の実測値を参照）。
 // 費用ゼロを優先するときだけ CODEX_DO_PREFER_FREE=1 で free を先頭へ移す。
 export function codexFallbackOrderFile(homeDir) {
   return path.join(homeDir, '.claude', 'codex-fallback-order.json');

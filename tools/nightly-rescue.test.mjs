@@ -119,3 +119,21 @@ for (const staged of [false, true]) test(`rescues a deletion: staged=${staged}`,
   assert.ok(result.events.some(e => e.step === 'RESCUE_LOCAL_OK'), JSON.stringify(result.events));
   assert.equal(f.git('ls-tree', '--name-only', 'HEAD'), '');
 });
+
+test('preserved-tree rescues skip a snapshot tree a rescue branch already holds', async t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.repo, 'tracked'), 'changed');
+  const first = await rescueTree(f.repo, f.home, { ...f, preserveTree: true });
+  assert.ok(first.events.some(e => e.step === 'RESCUE_LOCAL_OK'), JSON.stringify(first.events));
+  assert.equal(branches(f).length, 1);
+  // Same dirty content after the six-hour throttle expires: no new branch.
+  const second = await rescueTree(f.repo, f.home, { ...f, preserveTree: true, now: f.now + 6 * 3600000 });
+  assert.ok(second.events.some(e => e.step === 'RESCUE_DUPLICATE'), JSON.stringify(second.events));
+  assert.equal(branches(f).length, 1);
+  // A genuinely different snapshot still gets its own branch.
+  fs.writeFileSync(path.join(f.repo, 'tracked'), 'different');
+  const third = await rescueTree(f.repo, f.home, { ...f, preserveTree: true, now: f.now + 12 * 3600000 });
+  assert.ok(third.events.some(e => e.step === 'RESCUE_LOCAL_OK'), JSON.stringify(third.events));
+  assert.equal(branches(f).length, 2);
+});
+

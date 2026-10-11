@@ -24,7 +24,7 @@ function fixture(t) {
 }
 const branches = f => f.git('for-each-ref', '--format=%(refname:short)', 'refs/heads/rescue/').trim().split('\n').filter(Boolean);
 
-test('same dirty status creates one remote branch, preserving HEAD, index and worktree; retries at six hours', async t => {
+test('same dirty status creates one remote branch, preserving HEAD, index and worktree; an unchanged snapshot never duplicates', async t => {
   const f = fixture(t);
   fs.writeFileSync(path.join(f.repo, 'tracked'), 'staged'); f.git('add', 'tracked');
   fs.writeFileSync(path.join(f.repo, 'tracked'), 'unstaged');
@@ -46,7 +46,14 @@ test('same dirty status creates one remote branch, preserving HEAD, index and wo
   assert.equal(f.git('show', `${branches(f)[0]}:tracked`), 'unstaged');
   assert.equal(f.git('show', `${branches(f)[0]}:untracked`), 'precious');
   assert.equal(f.messages.length, 0);
-  await syncTree(f.repo, f.home, { ...f, now: f.now + 6 * 3600000 });
+  // Six hours later the throttled fingerprint frees up, but the snapshot tree is
+  // unchanged: re-branching it is what produced the endless rescue/* duplicates.
+  const third = await syncTree(f.repo, f.home, { ...f, now: f.now + 6 * 3600000 });
+  assert.ok(third.events.some(e => e.step === 'RESCUE_DUPLICATE'), JSON.stringify(third));
+  assert.equal(branches(f).length, 1);
+  // A different dirty set is a different snapshot and still gets its own branch.
+  fs.writeFileSync(path.join(f.repo, 'untracked-2'), 'later');
+  await syncTree(f.repo, f.home, { ...f, now: f.now + 7 * 3600000 });
   assert.equal(branches(f).length, 2);
 });
 

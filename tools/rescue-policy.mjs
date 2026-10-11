@@ -51,6 +51,18 @@ export function dirtyStatus(tree) {
   return { clean: kept.length === 0, count: kept.length, snapshotPaths: [...new Set(snapshotPaths)], hash: createHash('sha256').update(text).digest('hex'), paths: [...new Set(paths)] };
 }
 
+// A repeated rescue of unchanged dirty content rewrites the same tree under a new
+// timestamp. The tree SHA — not the commit SHA — identifies the snapshot, so an
+// existing rescue branch with the same tree already preserves these changes.
+function rescuedTrees(tree) {
+  const refs = git(tree, ['for-each-ref', '--format=%(objectname) %(refname:short)',
+    'refs/heads/rescue/', 'refs/remotes/origin/rescue/']).split(/\r?\n/).filter(Boolean);
+  const byCommit = refs.map(line => { const i = line.indexOf(' '); return [line.slice(0, i), line.slice(i + 1).trim()]; });
+  if (!byCommit.length) return new Map();
+  const trees = git(tree, ['rev-parse', ...byCommit.map(([sha]) => `${sha}^{tree}`)]).trim().split(/\r?\n/);
+  return new Map(byCommit.map(([sha, name], i) => [trees[i], name]).filter(([t]) => t));
+}
+
 export async function rescueTree(tree, home, { now = Date.now(), notify = notifyKim, preserveTree = false, pc = os.hostname() } = {}) {
   const events = [];
   let dirtyCount;
@@ -141,6 +153,11 @@ export async function rescueTree(tree, home, { now = Date.now(), notify = notify
           if (status.snapshotPaths.length) git(tree, ['add', '-A', '--pathspec-from-file=-', '--pathspec-file-nul'],
             status.snapshotPaths.map(p => `:(top,literal)${p}\0`).join(''), env);
           const snapshot = git(tree, ['write-tree'], undefined, env).trim();
+          const alreadyRescued = rescuedTrees(tree).get(snapshot);
+          if (alreadyRescued) {
+            log('RESCUE_DUPLICATE', `${tree} snapshot already rescued as ${alreadyRescued}`);
+            return { clean: false, dirtyCount, events };
+          }
           sha = git(tree, ['-c', 'user.name=Auto Session Rescue', '-c', 'user.email=auto-session-rescue@localhost',
             'commit-tree', snapshot, '-p', parent, '-m', `sync-orgiast-main-rescue-${stamp}`]).trim();
           git(tree, ['update-ref', `refs/heads/${branch}`, sha, '0000000000000000000000000000000000000000']);

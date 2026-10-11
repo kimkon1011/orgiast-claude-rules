@@ -1,0 +1,545 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "path": "packages/feedback-kit",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "packages/feedback-widget",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "packages/vscode-next-session",
+      "scope": "fleet",
+      "step": "mobile-standby",
+      "reason": "converge ステップ mobile-standby が同梱の vsix を導入する（mobile-standby.mjs が参照）"
+    },
+    {
+      "path": "tools/RESTORE-claude-backup.md",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "ドキュメントで実行体なし（~/.claude 設定名の記載による誤検出を許容）"
+    },
+    {
+      "path": "tools/allow-rules.json",
+      "scope": "fleet",
+      "step": "classifier-settings",
+      "reason": "setup.mjs --converge の classifier-settings ステップ（allow ルール同期）が読む定義"
+    },
+    {
+      "path": "tools/allow-rules.mjs",
+      "scope": "fleet",
+      "step": "classifier-settings",
+      "reason": "classifier-settings ステップが allow ルール同期に実行する"
+    },
+    {
+      "path": "tools/audit.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/audit.py",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/auto-session-executor.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/auto-session-verify.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/auto-session.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/backup-claude-to-drive.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/cheap-code.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/claude-cost-reporter.mjs",
+      "scope": "fleet",
+      "step": "settings:cost-reporter",
+      "reason": "settings:cost-reporter ステップの対象（SessionStart コスト報告 hook）"
+    },
+    {
+      "path": "tools/codex-do.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/discord-admin-token-install.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/distribution-manifest.json",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/expense-leak-check.README.md",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "ドキュメントで実行体なし（~/.claude 設定名の記載による誤検出を許容）"
+    },
+    {
+      "path": "tools/expense-leak-check.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/fleet-agent.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/fleet-convergence.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/fleet-poller.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/fleet-sheet-report.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/glm-code.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/handoff-audit-findings-oauth-first-consent-recheck.md",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "ドキュメントで実行体なし（~/.claude 設定名の記載による誤検出を許容）"
+    },
+    {
+      "path": "tools/handoff-audit-findings-permission-classifier-recheck.md",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "ドキュメントで実行体なし（~/.claude 設定名の記載による誤検出を許容）"
+    },
+    {
+      "path": "tools/handoff-audit-knowledge.json",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "データで実行体なし（~/.claude 設定名の記載による誤検出を許容）"
+    },
+    {
+      "path": "tools/hook-budget-check.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/hook-selfcheck.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/hook-tree-selfheal.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/install-handoff-gate.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/install-orgiast.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/internal-audit.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/makimono-host-detect.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/makimono-publish.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/manual-request-fullsteps-gate.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/memory-index-ab.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/memory-share.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/mobile-standby.mjs",
+      "scope": "fleet",
+      "step": "mobile-standby",
+      "reason": "mobile-standby ステップの実装本体"
+    },
+    {
+      "path": "tools/next-session-launch.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/nightly-health.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/onboarding-sync.mjs",
+      "scope": "fleet",
+      "step": "hook:onboarding-sync",
+      "reason": "hook:onboarding-sync ステップの実体（全PCの SessionStart でルール更新）"
+    },
+    {
+      "path": "tools/onboarding-sync.ps1",
+      "scope": "fleet",
+      "step": "hook:onboarding-sync",
+      "reason": "hook:onboarding-sync の PowerShell 入口"
+    },
+    {
+      "path": "tools/pc-health.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/pipe-stage-permissions.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/prompt-memory-guideline.json",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "データで実行体なし（~/.claude 設定名の記載による誤検出を許容）"
+    },
+    {
+      "path": "tools/prompt-memory-guideline.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/register-auto-session-verify.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/register-auto-session.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/register-autopilot-task.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/register-booth-feedback-task.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/register-claude-backup-task.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/register-cost-improve-task.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/register-decision-watch.ps1",
+      "scope": "fleet",
+      "step": "task:decision-watch",
+      "reason": "task:decision-watch ステップの登録スクリプト"
+    },
+    {
+      "path": "tools/register-discord-autoreply.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/register-discord-task-digest.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/register-evening-digest-task.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/register-feedback-nag-task.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/register-fleet-agent.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/register-fleet-mail.ps1",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "task:fleet-mail ステップの登録スクリプト"
+    },
+    {
+      "path": "tools/register-fleet-poller.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/register-funnel-probe-task.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/register-gtasks-plan-task.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/register-hooks.mjs",
+      "scope": "fleet",
+      "step": "classifier-settings",
+      "reason": "classifier-settings ステップが hook 登録に実行する"
+    },
+    {
+      "path": "tools/register-hub-push-task.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/register-internal-audit-task.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/register-ledger-nag-task.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/register-messenger-watch.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/register-morning-batch-task.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/register-nightly-kpi-task.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/register-plaud-task.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/register-role-sessions.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/register-rule-compliance-task.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/register-stall-sweeper.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/register-stalled-session-nightly.ps1",
+      "scope": "fleet",
+      "step": "task:nightly",
+      "reason": "task:nightly ステップの登録スクリプト"
+    },
+    {
+      "path": "tools/register-tetsuko-growth-task.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/register-top3-catchup-task.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/report-length-gate.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/restore-claude-from-drive.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/self-check-before-asking-guard.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/selftest-guards.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "リポジトリの静的検査。CI 専用で配布先PCでは実行しない"
+    },
+    {
+      "path": "tools/selftest-install.sh",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/settings-quality-guard.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/setup-manifest.json",
+      "scope": "fleet",
+      "step": "settings:setup-converge",
+      "reason": "settings:setup-converge（setup.mjs --converge）が読む converge 定義"
+    },
+    {
+      "path": "tools/setup.mjs",
+      "scope": "fleet",
+      "step": "settings:setup-converge",
+      "reason": "settings:setup-converge ステップの実装本体"
+    },
+    {
+      "path": "tools/stall-sweeper.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/thermal-guard.ps1",
+      "scope": "fleet",
+      "step": "task:thermal-guard",
+      "reason": "task:thermal-guard ステップの実体（fleet-command.json で配布）"
+    },
+    {
+      "path": "tools/tool-adoption-check.mjs",
+      "scope": "fleet",
+      "step": "settings:tool-adoption",
+      "reason": "settings:tool-adoption ステップの対象（SessionStart 委譲チェック hook）"
+    },
+    {
+      "path": "tools/version-drift.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/web-search.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    }
+  ]
+}

@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
@@ -10,7 +11,7 @@ const toolsDir = path.dirname(fileURLToPath(import.meta.url));
 const setup = path.join(toolsDir, 'setup.mjs');
 const temp = (name) => fs.mkdtempSync(path.join(os.tmpdir(), name));
 const write = (file, value) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, value); };
-const run = (args) => spawnSync(process.execPath, [setup, ...args], { encoding: 'utf8', env: { ...process.env, ORGIAST_REPO: path.dirname(toolsDir) } });
+const run = (args) => spawnSync(process.execPath, [setup, ...args], { encoding: 'utf8', env: { ...process.env, ORGIAST_REPO: path.dirname(toolsDir), FLEET_BEACON: '0' } });
 const manifest = (items) => ({ version: 1, items });
 const item = (id, type, spec, severity = 'required', extra = {}) => ({ id, type, severity, spec, description: id, ...extra });
 
@@ -180,4 +181,84 @@ test('manifest async default still requires async:true for both purge-sessions e
       assert.equal(result.status, expected, entry.id + ': ' + result.stdout + result.stderr);
     }
   }
+});
+
+// --- fleet ビーコン送信（実 GAS には絶対に出ない。ローカル http サーバーか未到達ポートのみ） ---
+const beaconEnv = (home, extra = {}) => ({ ...process.env, ORGIAST_REPO: path.dirname(toolsDir), FLEET_BEACON_ALLOW_MANIFEST: '1', ...extra });
+const writeSheetEnv = (home, url) => write(path.join(home, '.claude', 'fleet-sheet.env'), `FLEET_SHEET_URL=${url}\nFLEET_SHEET_TOKEN=test-token\n`);
+const beaconManifest = (home) => {
+  const mf = path.join(home, 'manifest.json');
+  write(mf, JSON.stringify(manifest([item('beacon-item', 'file-nonempty', { path: 'present.txt' })])));
+  write(path.join(home, 'present.txt'), 'x');
+  return mf;
+};
+
+test('beacon: --manifest converge does not send even when fleet-sheet.env exists', (t) => {
+  const home = temp('setup-beacon-manifest-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const mf = beaconManifest(home);
+  // 到達しない捨てポート。送れば接続失敗するが、そもそも送らないので exit 0 のまま。
+  writeSheetEnv(home, 'http://127.0.0.1:1/exec');
+  const env = { ...process.env, ORGIAST_REPO: path.dirname(toolsDir) };
+  delete env.FLEET_BEACON_ALLOW_MANIFEST;
+  const result = spawnSync(process.execPath, [setup, '--converge', '--home', home, '--manifest', mf], { encoding: 'utf8', env });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.doesNotMatch(result.stdout, /\[beacon\]/);
+});
+
+test('beacon: --no-beacon and FLEET_BEACON=0 suppress sending', (t) => {
+  const home = temp('setup-beacon-off-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const mf = beaconManifest(home);
+  writeSheetEnv(home, 'http://127.0.0.1:1/exec');
+  const noBeacon = spawnSync(process.execPath, [setup, '--converge', '--no-beacon', '--home', home, '--manifest', mf], { encoding: 'utf8', env: beaconEnv(home) });
+  assert.equal(noBeacon.status, 0, noBeacon.stdout + noBeacon.stderr);
+  assert.doesNotMatch(noBeacon.stdout, /\[beacon\]/);
+  const envOff = spawnSync(process.execPath, [setup, '--converge', '--home', home, '--manifest', mf], { encoding: 'utf8', env: beaconEnv(home, { FLEET_BEACON: '0' }) });
+  assert.equal(envOff.status, 0, envOff.stdout + envOff.stderr);
+  assert.doesNotMatch(envOff.stdout, /\[beacon\]/);
+});
+
+test('beacon: converge posts kind=fleet-beacon without secrets or absolute paths', async (t) => {
+  const home = temp('setup-beacon-send-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const mf = beaconManifest(home);
+  const received = [];
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (chunk) => { body += chunk; });
+    req.on('end', () => {
+      received.push(JSON.parse(body));
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, beacon: { label: 'test', reportedAt: new Date().toISOString() } }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => server.close());
+  writeSheetEnv(home, `http://127.0.0.1:${server.address().port}/exec`);
+  const child = spawn(process.execPath, [setup, '--converge', '--home', home, '--manifest', mf], { encoding: 'utf8', env: beaconEnv(home) });
+  let stdout = '';
+  child.stdout.on('data', (chunk) => { stdout += chunk; });
+  const code = await new Promise((resolve) => child.on('close', resolve));
+  assert.equal(code, 0, stdout);
+  assert.equal(received.length, 1);
+  const payload = received[0];
+  assert.equal(payload.kind, 'fleet-beacon');
+  assert.equal(payload.token, 'test-token');
+  const { token, ...rest } = payload;
+  const serialized = JSON.stringify(rest);
+  assert.doesNotMatch(serialized, /test-token/); // token 以外に秘密を含まない
+  assert.doesNotMatch(serialized, /[A-Za-z]:\\/); // home の絶対パスを含まない
+  assert.ok(payload.steps.some((step) => step.id === 'beacon-item'));
+  assert.match(stdout, /\[beacon\] sent/);
+});
+
+test('beacon: server 500 or unreachable keeps exit code unchanged', (t) => {
+  const home = temp('setup-beacon-fail-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const mf = beaconManifest(home);
+  writeSheetEnv(home, 'http://127.0.0.1:1/exec');
+  const result = spawnSync(process.execPath, [setup, '--converge', '--home', home, '--manifest', mf], { encoding: 'utf8', env: beaconEnv(home) });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /\[beacon\] failed/);
 });

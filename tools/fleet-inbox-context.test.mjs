@@ -36,6 +36,10 @@ test('decision notice follows header, counts body or why once and preserves cont
   assert.ok(result.length <= 1500);
   assert.ok(result.endsWith(FOOTER));
 });
+test('decision notice tells the receiver to reply "converge 化が必要" instead of executing', () => {
+  const result = buildContext([{ id: 'mail-1', from: 'PC', kind: 'note', why: '[判断依頼] 設定変更', body: '詳細' }], { headless: false });
+  assert.match(result, /『converge 化が必要』と送信元へ --reply で返す/);
+});
 
 // --- 2026-10-10 事故: hook の自律受信とヘッドレスの判断依頼除外 ---
 test('headless context excludes decision-request mails and says so', () => {

@@ -111,11 +111,31 @@ function pollFleetMail(payload) {
         if (deleted < 100 && fleetMailPrunable(mail, now)) { sheet.deleteRow(i + 2); deleted++; }
       }
     }
+    // 実 poll の成功時だけ最終 poll を記録する（dryRun では記録しない）。記録失敗は poll 成功を妨げない。
+    if (!payload.dryRun) { try { fleetRecordPoll_(properties, payload.to, now); } catch (error) {} }
     return { ok: true, messages: messages };
   });
 }
 function _fleetMailDigest_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, text).map(function(b) { return ('0' + ((b + 256) % 256).toString(16)).slice(-2); }).join('').slice(0, 16);
+}
+// 実 poll の成功時に「そのPCが最後に受信処理をした時刻」をサーバー側で記録する。
+// converge 未実行のPCでも最終 poll が分かるようにするのが目的。JSON が 8500 字を超えたら古い順に削る。
+function fleetRecordPoll_(properties, label, now) {
+  let polls = {};
+  try {
+    const parsed = JSON.parse(properties.getProperty('FLEET_LAST_POLL') || '{}');
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) polls = parsed;
+  } catch (error) { polls = {}; }
+  polls[label] = new Date(now).toISOString();
+  let keys = Object.keys(polls);
+  while (keys.length > 1 && JSON.stringify(polls).length > 8500) {
+    const oldest = keys.reduce(function(a, b) { return Date.parse(polls[a]) <= Date.parse(polls[b]) ? a : b; });
+    delete polls[oldest];
+    keys = Object.keys(polls);
+  }
+  properties.setProperty('FLEET_LAST_POLL', JSON.stringify(polls));
+  return polls;
 }
 function replyFleetMail(payload) {
   fleetMailId(payload.id); fleetMailRequired(payload.from, 'from', 128);

@@ -97,6 +97,16 @@ if (Have node) { OK ("Node.js あり (" + (node -v) + ")") } else { Warn "Node.j
 Step "共通ルール一式のダウンロード"
 $gotRepo = $false
 $preserveRepo = $false
+# 配布対象の単一定義は tools/distribution-manifest.json（壊れていれば既定）。distribution-coverage.test.mjs が一致を検査する。
+function Get-OrgiastDistribution($root) {
+  $dirs = @('tools', 'rules-extracted', 'skills', 'packages', 'protocols'); $files = @()
+  try {
+    $m = Get-Content -LiteralPath (Join-Path $root 'tools/distribution-manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    $d = @($m.dirs); $f = @($m.files)
+    if ($m.version -eq 1 -and $d.Count -gt 0 -and -not @($d + $f | Where-Object { $_ -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$' })) { $dirs = $d; $files = $f }
+  } catch {}
+  return @{ dirs = $dirs; files = $files }
+}
 function Update-DirtyRepoFromZip($repo) {
   $zip = Join-Path $env:TEMP ('orgiast-rules-' + [guid]::NewGuid().ToString('N') + '.zip')
   $ext = Join-Path $env:TEMP ('orgiast-rules-ext-' + [guid]::NewGuid().ToString('N'))
@@ -121,7 +131,8 @@ function Update-DirtyRepoFromZip($repo) {
 
     # 汚れたPCを救える唯一の配布経路なので、repo自体は決して削除しない。
     # 未コミット作業を守りつつ、配布対象のうち変更されていないファイルだけを更新する。
-    foreach ($dir in @('tools', 'rules-extracted', 'skills')) {
+    $distribution = Get-OrgiastDistribution $src
+    foreach ($dir in $distribution.dirs) {
       $sourceDir = Join-Path $src $dir
       if (-not (Test-Path $sourceDir)) { continue }
       foreach ($sourceFile in @(Get-ChildItem $sourceDir -File -Recurse)) {
@@ -132,6 +143,11 @@ function Update-DirtyRepoFromZip($repo) {
         if (-not (Test-Path $destinationDir)) { New-Item -ItemType Directory -Force -Path $destinationDir | Out-Null }
         Copy-Item $sourceFile.FullName $destination -Force
       }
+    }
+    foreach ($name in $distribution.files) {
+      $sourceFile = Join-Path $src $name
+      if (-not (Test-Path -LiteralPath $sourceFile -PathType Leaf) -or $protected.Contains($name)) { continue }
+      Copy-Item -LiteralPath $sourceFile (Join-Path $repo $name) -Force
     }
     Warn ("pull できないため zip で tools を更新しました(ローカル変更 " + $currentStatus.Count + " 件は保護)")
     return $true

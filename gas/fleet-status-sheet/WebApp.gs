@@ -92,6 +92,8 @@ function doPost(e) {
     'mail-poll': pollFleetMail,
     'mail-reply': replyFleetMail,
     'mail-get': getFleetMail,
+    'fleet-beacon': upsertFleetBeacon,
+    'fleet-beacon-list': listFleetBeacons,
     'pc-spec': upsertPcInventory,
     'extensions-describe': describeExtensionAudit,
     extensions: replaceExtensionAudit,

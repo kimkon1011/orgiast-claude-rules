@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { main, parseArgs, createClient, waitForReply, acquireLock, LOCK_MS, readInbox, findPriorReply, resolveRemoteName, parseExecMarkers } from './fleet-mail.mjs';
+import { main, parseArgs, createClient, waitForReply, acquireLock, LOCK_MS, readInbox, findPriorReply, resolveRemoteName, parseExecMarkers, looksLikeInstallRequest, describeTargetFreshness } from './fleet-mail.mjs';
 import { main as register } from './register-fleet-mail.mjs';
 import { consentCommand } from './fleet-agent.mjs';
 import { listDecisions, markDecisions, queuePath } from './pending-decisions.mjs';
@@ -20,6 +20,8 @@ function fixture(t, configured = true) {
   const body = path.join(home, 'body.txt'); fs.writeFileSync(body, '質問 $() `literal`');
   const calls = [], output = [], errors = [];
   const deps = { home, identity: { hostname: 'host-kim' }, stdout: t => output.push(t), stderr: t => errors.push(t),
+    // 送信前の宛先鮮度表示は既定で「不明」を返す（実ネットワークに出ない・stderr を決定的にする）。
+    fetchBeacons: async () => ({ ok: false, beacons: [], serverPolls: {}, reason: 'unconfigured' }),
     request: async (kind, payload) => { calls.push({ kind, payload }); return kind === 'mail-poll' ? { messages: [] } : { mail: payload }; } };
   return { home, dir, body, deps, calls, output, errors };
 }
@@ -49,19 +51,21 @@ for (const to of ['作業用011', '作業用０１１', '  作業用011　']) {
     f.deps.pcMap = { 'kimko-PC': { remoteName: '作業用011', hostname: 'DESKTOP-PPD5V8I' } };
     assert.equal(await main(['--send', '--to', to, '--kind', 'note', '--body-file', f.body, '--why', 'test'], f.deps), 0);
     assert.equal(f.calls[0].payload.to, 'kimko-PC');
-    assert.deepEqual(f.errors, [`${to} → kimko-PC`]);
+    assert.deepEqual(f.errors, [`${to} → kimko-PC`, '宛先 kimko-PC: 最終 poll 不明（ビーコン取得失敗: unconfigured）']);
     const logs = fs.readFileSync(path.join(f.dir, 'fleet-mail-sent.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l));
     assert.ok(logs.every(entry => entry.to === 'kimko-PC'));
   });
 }
-test('send preserves unmatched targets without stderr output', async t => {
+test('send preserves unmatched targets without resolution stderr output', async t => {
   const f = fixture(t);
   f.deps.pcMap = { 'kimko-PC': { remoteName: '作業用011', hostname: 'DESKTOP-PPD5V8I' } };
   for (const to of ['other-PC', '  other-ＰＣ　', 'all', '作業用01']) {
     assert.equal(await main(['--send', '--to', to, '--kind', 'note', '--body-file', f.body, '--why', 'test'], f.deps), 0);
     assert.equal(f.calls.at(-1).payload.to, to);
   }
-  assert.deepEqual(f.errors, []);
+  // 宛先解決の stderr は出ない（送信ごとの鮮度表示1行のみ＝4件）
+  assert.equal(f.errors.length, 4);
+  assert.ok(f.errors.every(line => line.includes('最終 poll 不明（ビーコン取得失敗: unconfigured）')));
 });
 test('resolveRemoteName normalizes roster names and falls back to the PC label', () => {
   assert.deepEqual(resolveRemoteName('作業用011', { 'kimko-PC': { remoteName: '　作業用０１１ ' } }), { to: 'kimko-PC', resolved: true });
@@ -600,5 +604,101 @@ test('spawn ENOENT replies with the resolver candidates and still marks the mail
   // 二重実行しない: 次の poll でも再返信しない
   await main(['--poll'], f.deps);
   assert.equal(f.calls.filter(c => c.kind === 'mail-reply').length, 1);
+});
+
+// --- 2026-10-11 事故: 全PCの設定変更を fleet-mail で配ると PC ごとに手作業が発生する ---
+test('looksLikeInstallRequest detects install/setup/settings requests and passes ordinary text', () => {
+  for (const body of [
+    '--install-extension foo を実行して',
+    'install してほしい',
+    'setup --converge を回して',
+    'settings.json を書き換えて',
+    '.claude.json を更新',
+    'ファイルに書き込んで',
+    '拡張をインストールして',
+    '設定を変更して',
+    '設定変更をお願い',
+    'セットアップして'
+  ]) assert.equal(looksLikeInstallRequest(body), true, body);
+  for (const body of ['進捗を教えて', '見積の件で相談', 'この設計でよいか確認したい', '']) {
+    assert.equal(looksLikeInstallRequest(body), false, body);
+  }
+});
+test('send --kind prompt with an install request exits 5 without sending', async t => {
+  const f = fixture(t); const transport = [];
+  fs.writeFileSync(f.body, 'settings.json を書き換えて全PCに配って');
+  delete f.deps.request;
+  f.deps.fetch = async (url, opts) => { transport.push(JSON.parse(opts.body)); return { ok: true, json: async () => ({ ok: true, mail: {} }) }; };
+  assert.equal(await main(['--send', '--to', 'other-PC', '--kind', 'prompt', '--body-file', f.body, '--why', '配布'], f.deps), 5);
+  assert.equal(transport.length, 0);
+  assert.ok(f.errors.some(e => e.includes('setup --converge 経由')));
+});
+test('send --kind prompt with --force bypasses the install-request guard', async t => {
+  const f = fixture(t); const transport = [];
+  fs.writeFileSync(f.body, 'settings.json を書き換えて');
+  delete f.deps.request;
+  f.deps.fetch = async (url, opts) => { transport.push(JSON.parse(opts.body)); return { ok: true, json: async () => ({ ok: true, mail: {} }) }; };
+  assert.equal(await main(['--send', '--to', 'other-PC', '--kind', 'prompt', '--body-file', f.body, '--why', '再送', '--force'], f.deps), 0);
+  assert.equal(transport.length, 1);
+});
+test('send --kind note with an install request is allowed', async t => {
+  const f = fixture(t); const transport = [];
+  fs.writeFileSync(f.body, 'settings.json の件で相談したい');
+  delete f.deps.request;
+  f.deps.fetch = async (url, opts) => { transport.push(JSON.parse(opts.body)); return { ok: true, json: async () => ({ ok: true, mail: {} }) }; };
+  assert.equal(await main(['--send', '--to', 'other-PC', '--kind', 'note', '--body-file', f.body, '--why', '相談'], f.deps), 0);
+  assert.equal(transport.length, 1);
+});
+
+// --- 2026-10-11: 送信前に宛先の最終 poll／ビーコンを stderr に出す（fail-open） ---
+const beaconResult = (overrides = {}) => ({ ok: true, beacons: [], serverPolls: {}, ...overrides });
+test('describeTargetFreshness reports a recent poll without a stale warning', async () => {
+  const now = Date.parse('2026-10-11T00:30:00Z');
+  const result = await describeTargetFreshness({
+    to: 'kim-PC', home: '/unused', now: () => now,
+    fetchBeacons: async () => beaconResult({ beacons: [{ label: 'kim-PC', reportedAt: '2026-10-11T00:00:00Z', pollAt: '2026-10-11T00:00:00Z' }] })
+  });
+  assert.equal(result.stale, false);
+  assert.match(result.text, /^宛先 kim-PC: 最終poll 10\/11 09:00 \(30m前\) \/ ビーコン 10\/11 09:00$/);
+});
+test('describeTargetFreshness flags a poll older than 24 hours as stale', async () => {
+  const now = Date.parse('2026-10-11T00:00:00Z');
+  const result = await describeTargetFreshness({
+    to: 'kim-PC', home: '/unused', now: () => now,
+    fetchBeacons: async () => beaconResult({ beacons: [{ label: 'kim-PC', reportedAt: '2026-10-09T00:00:00Z', pollAt: '2026-10-09T00:00:00Z' }] })
+  });
+  assert.equal(result.stale, true);
+  assert.match(result.text, /最終poll 10\/09 09:00 \(2d前\)/);
+});
+test('describeTargetFreshness is fail-open when beacons cannot be fetched', async () => {
+  const result = await describeTargetFreshness({ to: 'kim-PC', home: '/unused', fetchBeacons: async () => ({ ok: false, beacons: [], serverPolls: {}, reason: 'HTTP 500' }) });
+  assert.equal(result.unknown, true);
+  assert.equal(result.stale, false);
+  assert.match(result.text, /宛先 kim-PC: 最終 poll 不明（ビーコン取得失敗: HTTP 500）/);
+});
+test('describeTargetFreshness is fail-open when the fetch throws', async () => {
+  const result = await describeTargetFreshness({ to: 'kim-PC', home: '/unused', fetchBeacons: async () => { throw new Error('offline'); } });
+  assert.equal(result.unknown, true);
+  assert.match(result.text, /最終 poll 不明（ビーコン取得失敗: offline）/);
+});
+test('send prints the target freshness line and a stale warning before sending', async t => {
+  const f = fixture(t); const transport = [];
+  f.deps.now = () => Date.parse('2026-10-11T00:00:00Z');
+  delete f.deps.request;
+  f.deps.fetch = async (url, opts) => { transport.push(JSON.parse(opts.body)); return { ok: true, json: async () => ({ ok: true, mail: {} }) }; };
+  f.deps.fetchBeacons = async () => beaconResult({ beacons: [{ label: 'other-PC', reportedAt: '2026-10-09T00:00:00Z', pollAt: '2026-10-09T00:00:00Z' }] });
+  assert.equal(await main(['--send', '--to', 'other-PC', '--kind', 'note', '--body-file', f.body, '--why', 'test'], f.deps), 0);
+  assert.equal(transport.length, 1);
+  assert.ok(f.errors.some(e => /^宛先 other-PC: 最終poll 10\/09 09:00 \(2d前\)/.test(e)));
+  assert.ok(f.errors.some(e => e.includes('⚠ 宛先は24時間以上 poll していない可能性。返信が遅れます')));
+});
+test('send continues when the freshness lookup fails', async t => {
+  const f = fixture(t); const transport = [];
+  delete f.deps.request;
+  f.deps.fetch = async (url, opts) => { transport.push(JSON.parse(opts.body)); return { ok: true, json: async () => ({ ok: true, mail: {} }) }; };
+  f.deps.fetchBeacons = async () => { throw new Error('offline'); };
+  assert.equal(await main(['--send', '--to', 'other-PC', '--kind', 'note', '--body-file', f.body, '--why', 'test'], f.deps), 0);
+  assert.equal(transport.length, 1);
+  assert.ok(f.errors.some(e => e.includes('最終 poll 不明')));
 });
 

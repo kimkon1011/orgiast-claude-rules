@@ -15,6 +15,19 @@ import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
 
 const ownRepo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
+// 宛先の最終 poll 表示用（fleet-status.mjs と同じ JST 表記・経過時間表記）。
+function jstShort(ms) {
+  const date = new Date(ms + JST_OFFSET_MS);
+  const pad = n => String(n).padStart(2, '0');
+  return `${pad(date.getUTCMonth() + 1)}/${pad(date.getUTCDate())} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
+}
+function formatAge(ms) {
+  if (ms === null || !Number.isFinite(ms)) return '不明';
+  if (ms < 60 * 60 * 1000) return `${Math.max(0, Math.round(ms / 60000))}m`;
+  if (ms < 24 * 60 * 60 * 1000) return `${Math.round(ms / 3600000)}h`;
+  return `${Math.round(ms / 86400000)}d`;
+}
 const decisionPrefix = /^\s*\[判断依頼\]/;
 export function hasDecisionRequest(mail) {
   // 返信（mail-reply-* / replyTo あり）は原本の why を引き継ぐので判断依頼として扱わない。
@@ -25,6 +38,48 @@ export function hasDecisionRequest(mail) {
 // 本文先頭の実行モードマーカー（送信側 --exec codex が挿入する）。GAS は messageKind を prompt のまま扱う。
 const execMarker = /^<!--\s*fleet-exec:\s*codex\s*-->\s*$/;
 const execCwdMarker = /^<!--\s*fleet-exec-cwd:\s*(.*?)\s*-->\s*$/;
+// 全PCの設定変更・インストール・ファイル書き込みを依頼する本文を検出する。
+// fleet-mail は相談・確認用で、設定変更は setup --converge 経由に一本化する（2026-10-11 事故: 手順を mail で配って
+// PC ごとに手作業が発生し、converge に載っていない変更が fleet に残った）。
+const installRequestPatterns = [
+  /--install-extension/i,
+  /\binstall\b/i,
+  /\bsetup\b/i,
+  /settings\.json/i,
+  /\.claude\.json/i,
+  /書き込/,
+  /インストール/,
+  /設定を変更/,
+  /設定変更/,
+  /セットアップ/
+];
+export function looksLikeInstallRequest(body) {
+  const text = String(body ?? '');
+  return installRequestPatterns.some(pattern => pattern.test(text));
+}
+// 宛先の最終 poll／ビーコンを stderr に出す。取得は fail-open（失敗・未設定なら「不明」を出して送信は続行）。
+// fleet-beacon.mjs は fleet-mail.mjs を import しているので、循環 import を避けるため動的 import() で読む。
+export async function describeTargetFreshness({ to, home, now = Date.now, fetchBeacons, pcMap } = {}) {
+  const label = String(to ?? '');
+  let result;
+  try {
+    const fetchImpl = fetchBeacons ?? (await import('./fleet-beacon.mjs')).fetchBeacons;
+    result = await fetchImpl({ home });
+  } catch (error) {
+    return { text: `宛先 ${label}: 最終 poll 不明（ビーコン取得失敗: ${redactSecrets(error?.message || error)}）`, stale: false, unknown: true };
+  }
+  if (!result?.ok) {
+    return { text: `宛先 ${label}: 最終 poll 不明（ビーコン取得失敗: ${result?.reason || '不明'}）`, stale: false, unknown: true };
+  }
+  const { buildFleetStatus } = await import('./fleet-status.mjs');
+  const rows = buildFleetStatus({ pcMap: pcMap ?? {}, beacons: result.beacons, serverPolls: result.serverPolls, now: now() });
+  const row = rows.find(candidate => candidate.label === label);
+  if (!row) return { text: `宛先 ${label}: 最終 poll 不明（ビーコン無し）`, stale: false, unknown: true };
+  const poll = row.pollAt ? `${jstShort(Date.parse(row.pollAt))} (${formatAge(row.pollAgeMs)}前)` : '不明';
+  const beacon = row.hasBeacon ? jstShort(Date.parse(row.beaconAt)) : 'ビーコン無し';
+  const stale = row.pollAgeMs === null || row.pollAgeMs > 24 * 60 * 60 * 1000;
+  return { text: `宛先 ${label}: 最終poll ${poll} / ビーコン ${beacon}`, stale, unknown: row.pollAgeMs === null };
+}
 export function parseExecMarkers(body) {
   const lines = String(body ?? '').split(/\r?\n/);
   if (!execMarker.test(lines[0] ?? '')) return { exec: null, cwd: null, body: String(body ?? '') };
@@ -179,7 +234,7 @@ export function parseArgs(argv) {
   const actions = ['--send', '--poll', '--inbox', '--reply', '--ack', '--sent-status'].filter(k => options[k]);
   if (actions.length !== 1) throw new Error('指定は --send / --poll / --reply / --inbox / --ack / --sent-status のいずれか1つ');
   const allowed = {
-    '--send': ['--to', '--kind', '--body-file', '--why', '--expires-hours', '--wait', '--exec', '--exec-cwd'],
+    '--send': ['--to', '--kind', '--body-file', '--why', '--expires-hours', '--wait', '--exec', '--exec-cwd', '--force'],
     '--poll': ['--dry-run', '--json'], '--inbox': ['--json'], '--reply': ['--body-file', '--force'], '--ack': [],
     '--sent-status': []
   };
@@ -458,6 +513,21 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       const markers = ['<!-- fleet-exec: codex -->'];
       if (options['--exec-cwd'] !== undefined) markers.push(`<!-- fleet-exec-cwd: ${options['--exec-cwd']} -->`);
       body = `${markers.join('\n')}\n${body}`;
+    }
+    // 全PCの設定変更・インストール・ファイル書き込みの依頼は fleet-mail で配らず setup --converge に載せる。
+    // 相談・確認（--kind note）や、意図的な再送（--force）は通す。
+    if (options['--kind'] === 'prompt' && !options['--force'] && looksLikeInstallRequest(parseExecMarkers(body).body)) {
+      err('全PCの設定変更は setup --converge 経由。fleet-mail は相談・確認用。');
+      return 5;
+    }
+    // 宛先が受信できているかを送信前に見せる（2026-10-10 事故: 受信タスク停止で返事が永遠に届かない）。
+    // 取得失敗・未設定でも送信は続行する（fail-open）。
+    try {
+      const freshness = await (deps.describeTargetFreshness ?? describeTargetFreshness)({ to: target.to, home, now, fetchBeacons: deps.fetchBeacons, pcMap });
+      err(freshness.text);
+      if (freshness.stale) err('⚠ 宛先は24時間以上 poll していない可能性。返信が遅れます');
+    } catch (error) {
+      err(`宛先 ${target.to}: 最終 poll 不明（ビーコン取得失敗: ${redactSecrets(error?.message || error)}）`);
     }
     // --exec codex は相手PCの Codex が最長1800秒走るため、通常 prompt より長い既定期限(+6h)にする。
     const defaultExpiresHours = options['--exec'] === 'codex' ? 6 : 24;

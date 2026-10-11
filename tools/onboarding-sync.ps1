@@ -21,6 +21,16 @@ $BeginMarkerPrefix = '<!-- BEGIN: オージャスト共通ルール'
 $EndMarker         = '<!-- END: オージャスト共通ルール -->'
 $GuardHours  = 20
 
+# 配布対象の単一定義は tools/distribution-manifest.json（壊れていれば既定）。distribution-coverage.test.mjs が一致を検査する。
+function Get-OrgiastDistribution($root) {
+    $dirs = @('tools', 'rules-extracted', 'skills', 'packages', 'protocols'); $files = @()
+    try {
+        $m = Get-Content -LiteralPath (Join-Path $root 'tools/distribution-manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+        $d = @($m.dirs); $f = @($m.files)
+        if ($m.version -eq 1 -and $d.Count -gt 0 -and -not @($d + $f | Where-Object { $_ -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$' })) { $dirs = $d; $files = $f }
+    } catch {}
+    return @{ dirs = $dirs; files = $files }
+}
 function Write-SyncLog {
     param([string]$Message)
     try {
@@ -262,7 +272,8 @@ try {
                     $repoZip = Join-Path $repoSyncTemp 'main.zip'; $repoExpanded = Join-Path $repoSyncTemp 'expanded'
                     Invoke-WebRequest -Uri 'https://github.com/kimkon1011/orgiast-claude-rules/archive/refs/heads/main.zip' -OutFile $repoZip -UseBasicParsing
                     Expand-Archive -LiteralPath $repoZip -DestinationPath $repoExpanded -Force
-                    $repoSource = Join-Path $repoExpanded 'orgiast-claude-rules-main'; foreach ($name in @('tools', 'rules-extracted', 'skills')) {
+                    $repoSource = Join-Path $repoExpanded 'orgiast-claude-rules-main'; $repoDistribution = Get-OrgiastDistribution $repoSource
+                    foreach ($name in @($repoDistribution.dirs + $repoDistribution.files)) {
                         $source = Join-Path $repoSource $name
                         if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination $repoRoot -Recurse -Force }
                     }

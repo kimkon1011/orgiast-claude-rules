@@ -169,6 +169,25 @@ function copyTreeExcluding(source, destination, excluded, hashes, relative = '')
   }
   return copied;
 }
+export const DEFAULT_DISTRIBUTION = { dirs: ['tools', 'rules-extracted', 'skills', 'packages', 'protocols'], files: [] };
+// 配布定義: ダウンロードした最新 zip → ローカル repo → 組み込み既定の順で読む（壊れていれば次へ）。
+export function loadDistribution(...roots) {
+  for (const root of roots) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(path.join(root, 'tools', 'distribution-manifest.json'), 'utf8'));
+      const ok = (list) => Array.isArray(list) && list.every((x) => typeof x === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(x));
+      if (parsed?.version === 1 && ok(parsed.dirs) && parsed.dirs.length && ok(parsed.files ?? [])) return { dirs: parsed.dirs, files: parsed.files ?? [] };
+    } catch {}
+  }
+  return DEFAULT_DISTRIBUTION;
+}
+function copyFileExcluding(source, destination, excluded, hashes, rel) {
+  if (excluded.has(rel)) return false;
+  const same = fs.existsSync(destination) && fs.readFileSync(source).equals(fs.readFileSync(destination));
+  if (!same) { fs.mkdirSync(path.dirname(destination), { recursive: true }); fs.copyFileSync(source, destination); }
+  hashes[rel] = sha256File(destination);
+  return !same;
+}
 function extractZip(buffer, destination) {
   const eocd = buffer.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
   if (eocd < 0) throw new Error('zip central directory がありません');
@@ -326,10 +345,15 @@ export async function updateRepositoryFiles(targetRepo, options = {}) {
     archive = await getZipRoot();
     let changed = false;
     const hashes = {};
-    // packages は同梱 VSIX（スマホ待機タブ拡張）の置き場。zip 経路で欠けると converge が拡張を導入できない。
-    for (const name of ['tools', 'rules-extracted', 'skills', 'packages']) {
+    // 配布対象は tools/distribution-manifest.json が単一定義（packages 等の漏れをテストで検出する）。
+    const distribution = loadDistribution(archive.root, targetRepo);
+    for (const name of distribution.dirs) {
       const source = path.join(archive.root, name);
       if (fs.existsSync(source)) changed = copyTreeExcluding(source, path.join(targetRepo, name), excluded, hashes, name) || changed;
+    }
+    for (const name of distribution.files) {
+      const source = path.join(archive.root, name);
+      if (fs.existsSync(source) && fs.statSync(source).isFile()) changed = copyFileExcluding(source, path.join(targetRepo, name), excluded, hashes, name) || changed;
     }
     saveFallbackState(stateFile, hashes, options.now || new Date());
     const names = [...excluded].filter((rel) => !untrackedOutput.has(rel)).sort();

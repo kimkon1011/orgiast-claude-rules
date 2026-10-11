@@ -129,8 +129,8 @@ if (manifest) {
       });
       const repaired = convergeAllowRules(home);
       settingsMigration = { item, status: 'OK', checked: true, repaired };
-    } catch {
-      settingsMigration = { item, status: 'NG', checked: true, repaired: false };
+    } catch (error) {
+      settingsMigration = { item, status: 'NG', checked: true, repaired: false, reason: String(error?.message || error).split(/\r?\n/)[0] };
     }
   }
   let results = inspect(manifest.items);
@@ -156,10 +156,25 @@ if (manifest) {
     try {
       const outcome = convergeMobileStandby({ home, repoRoot: path.dirname(scriptDir) });
       if (!jsonOutput) for (const line of outcome.lines) console.log(line);
-      results.push({ item, status: outcome.ok ? 'OK' : 'NG', checked: true, repaired: Boolean(outcome.config?.changed || outcome.settings?.changed || outcome.extension?.status === 'installed') });
+      results.push({ item, status: outcome.ok ? 'OK' : 'NG', checked: true, repaired: Boolean(outcome.config?.changed || outcome.settings?.changed || outcome.extension?.status === 'installed'),
+        reason: outcome.ok ? '' : outcome.lines.filter((line) => /失敗|NG/.test(line)).join(' / ') });
     } catch { results.push({ item, status: 'NG', checked: true, repaired: false }); }
   }
   emit(results);
+  // fleet ビーコン: converge の結果を GAS へ送る。fail-open（exit code に一切影響させない）。
+  // --manifest 指定時(テスト/臨時検査)は実機を触らない。FLEET_BEACON_ALLOW_MANIFEST=1 のときだけ許可。
+  const beaconAllowed = converge && !argv.includes('--no-beacon') && process.env.FLEET_BEACON !== '0'
+    && (!valueAfter('--manifest') || process.env.FLEET_BEACON_ALLOW_MANIFEST === '1');
+  if (beaconAllowed) {
+    try {
+      const { buildBeacon, sendBeacon } = await import('./fleet-beacon.mjs');
+      const beacon = buildBeacon({ home, results });
+      const outcome = await sendBeacon(beacon, { home, timeoutMs: 15000 });
+      if (!jsonOutput) console.log(`[beacon] ${outcome.ok ? 'sent' : outcome.skipped ? 'skip' : 'failed'}: ${outcome.reason || beacon.label}`);
+    } catch (error) {
+      if (!jsonOutput) console.log(`[beacon] failed: ${String(error?.message || error).split(/\r?\n/)[0]}`);
+    }
+  }
   const requiredNg = results.some((r) => r.item.severity === 'required' && r.status === 'NG');
   process.exitCode = settingsMigration?.status === 'NG' ? 1 : converge && !strict ? 0 : requiredNg ? 1 : 0;
 }

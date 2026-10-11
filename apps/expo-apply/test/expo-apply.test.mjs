@@ -1,5 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import {
   STATUS_VALUES,
   SERVICE_KEYS,
@@ -204,4 +206,50 @@ test('toMarkdown generates formatted markdown table', () => {
   const entries = [normalizeEntry(sampleValidInput, '12345678-uuid', '2026-10-10T12:00:00Z')];
   const md = toMarkdown(entries, 'en');
   assert.ok(md.includes('| 12345678 | Global Tech Inc. | United States |'));
+});
+
+const indexPath = fileURLToPath(new URL('../index.html', import.meta.url));
+
+test('i18n keeps the confirmation reference element reachable (#confRef)', () => {
+  const html = readFileSync(indexPath, 'utf8');
+
+  // applyLanguage() runs `document.getElementById(key).textContent = text` for every
+  // i18n string key. If the i18n key were `confBody`, that assignment would wipe the
+  // <strong id="confRef"> child, and the valid-submit handler would then throw on
+  // `document.getElementById('confRef').textContent` and never show the confirmation.
+  assert.match(
+    html,
+    /<p id="confBody"><span id="confBodyText">[\s\S]*?<\/span><strong id="confRef"><\/strong>/,
+    'the confirmation body must keep #confRef as a sibling of the translatable text',
+  );
+  assert.match(html, /confBodyText:\s*"/, 'the i18n leading text must be keyed as confBodyText');
+  assert.doesNotMatch(
+    html,
+    /(^|\s)confBody:\s*"/m,
+    'an i18n key named confBody would overwrite #confBody and delete #confRef',
+  );
+});
+
+test('no i18n string key targets an element that wraps child elements', () => {
+  const html = readFileSync(indexPath, 'utf8');
+
+  const VOID_TAGS = new Set(['input', 'img', 'br', 'hr', 'meta', 'link', 'source', 'area', 'base', 'col', 'embed', 'param', 'track', 'wbr']);
+  const wrappingIds = new Set();
+  const idRe = /<([A-Za-z][\w-]*)\b[^>]*\bid="([A-Za-z][\w-]*)"[^>]*>([\s\S]*?)<\//g;
+  let m;
+  while ((m = idRe.exec(html))) {
+    if (VOID_TAGS.has(m[1].toLowerCase())) continue;
+    if (/<[a-zA-Z]/.test(m[3])) wrappingIds.add(m[2]);
+  }
+
+  const keys = new Set();
+  const keyRe = /^\s{6,}([a-z][A-Za-z0-9]*):\s*"/gm;
+  while ((m = keyRe.exec(html))) keys.add(m[1]);
+
+  const offenders = [...keys].filter((k) => wrappingIds.has(k));
+  assert.deepEqual(
+    offenders,
+    [],
+    `i18n keys would overwrite containers and delete their children: ${offenders.join(', ')}`,
+  );
 });

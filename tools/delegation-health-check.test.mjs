@@ -110,6 +110,57 @@ test('emptyOutputReason は Codex の認証失敗と ChatGPT モデル認証不�
   assert.equal(emptyOutputReason({ status: 1 }), 'exit_1');
 });
 
+test('emptyOutputReason は U+2019 と U+0027 の両方の usage limit 行を usage_limit に分類する', () => {
+  // U+2019 (’)
+  assert.equal(emptyOutputReason({
+    status: 'error',
+    exitCode: 1,
+    launched: true,
+    timedOut: false,
+    stderrTail: 'M. ERROR: You\u2019ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Oct 14th, 2026 9:53 PM.',
+  }), 'usage_limit');
+  // U+0027 (')
+  assert.equal(emptyOutputReason({
+    status: 1,
+    exitCode: 1,
+    launched: true,
+    timedOut: false,
+    stderrTail: "ERROR: You've hit your usage limit. Upgrade to Pro",
+  }), 'usage_limit');
+  // 対照群: stderrTail なしの status:1 は従来どおり exit_1、{secs:0} は no_output（張りすぎ検出）
+  assert.equal(emptyOutputReason({ status: 1 }), 'exit_1');
+  assert.equal(emptyOutputReason({ secs: 0 }), 'no_output');
+});
+
+test('実台帳行の Codex 上限到達行で collectFindings が codex_empty_output を出さず codex_usage_limit を出す', () => {
+  const dir = home();
+  const realUsageRow = {
+    t: '2026-10-10T18:23:32.573Z',
+    provider: 'codex',
+    model: 'codex-cli/default',
+    lane: 'chatgpt_auth_default:default_sol',
+    in: 3531,
+    out: 0,
+    launched: true,
+    timedOut: false,
+    status: 'error',
+    exitCode: 1,
+    fastFail: true,
+    attempts: 2,
+    secs: 32.193,
+    stderrTail: 'M. ERROR: You\u2019ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Oct 14th, 2026 9:53 PM.',
+  };
+  write(dir, 'executor-usage.jsonl', row(realUsageRow));
+  const findings = collectFindings({ home: dir, now: new Date('2026-10-10T18:23:35.000Z'), codexUsedPercent: null });
+  const ids = findings.map((f) => f.id);
+  assert.ok(ids.includes('codex_usage_limit'), 'codex_usage_limit が含まれること');
+  assert.ok(!ids.includes('codex_empty_output'), 'codex_empty_output が含まれないこと');
+  const limitFinding = findings.find((f) => f.id === 'codex_usage_limit');
+  assert.equal(limitFinding.severity, 'low');
+  assert.equal(limitFinding.fixTask, undefined);
+  assert.deepEqual(limitFinding.evidence, ['1件', 'usage_limit(1件)']);
+});
+
 test('認証失敗とモデル認証不整合は codex_empty_output でなく名前付き finding に分離する', () => {
   const dir = home();
   write(dir, 'executor-usage.jsonl',

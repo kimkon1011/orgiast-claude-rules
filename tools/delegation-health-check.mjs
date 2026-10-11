@@ -87,6 +87,10 @@ const CODEX_AUTH_FAILED = /401 unauthorized|missing bearer or basic authenticati
 // 問題なので、直せる欠陥として起票する（2026-09-22 診断: 09-20 の11件中7件）。
 const CODEX_MODEL_AUTH_MISMATCH = /is not supported when using codex with a chatgpt account/i;
 
+// Codex の利用上限到達。コードの欠陥ではなく上限到達による停止。
+// アポストロフィは U+2019(’) と U+0027(') の両方に一致させる。
+const CODEX_USAGE_LIMIT = /You[’']ve hit your usage limit/i;
+
 export function emptyOutputReason(row) {
   if (row?.timedOut === true) return 'timeout';
   // 旧行(timedOut 未記録)は経過秒数から推定する。codex の正常終了は実測で中央値~100秒、
@@ -112,6 +116,7 @@ export function emptyOutputReason(row) {
   if (/Not inside a trusted directory/.test(String(row?.stderrTail || ''))) return 'untrusted_cwd';
   if (CODEX_AUTH_FAILED.test(String(row?.stderrTail || ''))) return 'auth_failed';
   if (CODEX_MODEL_AUTH_MISMATCH.test(String(row?.stderrTail || ''))) return 'model_auth_mismatch';
+  if (CODEX_USAGE_LIMIT.test(String(row?.stderrTail || ''))) return 'usage_limit';
   if (INFRA_TRANSIENT.test(String(row?.stderrTail || ''))) return 'infra_transient';
   const status = Number(row?.status);
   if (Number.isFinite(status) && status !== 0) return `exit_${status}`;
@@ -177,15 +182,18 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
     const lastFailureTime = Math.max(...failures.map((row) => Date.parse(row.t)));
     return codexSuccessTimes.some((time) => time > lastFailureTime);
   };
-  const realEmpty = empty.filter((item) => !['infra_transient', 'launch_failed', 'auth_failed', 'model_auth_mismatch', 'preflight_blocked', 'spawn_failed'].includes(item.reason));
+  const realEmpty = empty.filter((item) => !['infra_transient', 'launch_failed', 'auth_failed', 'model_auth_mismatch', 'preflight_blocked', 'spawn_failed', 'usage_limit'].includes(item.reason));
   const launchFailed = empty.filter((item) => item.reason === 'launch_failed');
   const authFailed = empty.filter((item) => item.reason === 'auth_failed');
   const modelAuthMismatch = empty.filter((item) => item.reason === 'model_auth_mismatch');
+  const usageLimit = empty.filter((item) => item.reason === 'usage_limit');
   const laneAbsent = launchFailed.filter((item) => WSL_LANE_ABSENT.test(String(item.stderrTail || '')));
   const fixableLaunchFailed = launchFailed.filter((item) => !WSL_LANE_ABSENT.test(String(item.stderrTail || '')));
   if (fixableLaunchFailed.length) findings.push({ id: 'codex_launch_failed', severity: 'medium', title: 'Codex の起動失敗', evidence: [`${fixableLaunchFailed.length}件`, ...reasonTop(fixableLaunchFailed)], fixTask: 'codex-do が codex を起動できずに終了している。WSL の状態と起動経路のログを確認し、起動失敗を再現するテストを追加して修正' });
   // 2026-10-09: 環境故障を low にして Codex が43日・112回起動不能のまま放置された。環境故障こそ high + fixTask の修理対象。
   if (laneAbsent.length && !repairedAfter(laneAbsent)) findings.push({ id: 'codex_lane_unavailable', severity: 'high', title: 'codex レーンは WSL 不在のため使用不可（要修理）', evidence: [`${laneAbsent.length}件`, 'WSL ディストリ 0 件'], fixTask: "WSL にディストリが無い。wsl --install -d Ubuntu --no-launch → wsl -d Ubuntu -u root -- bash -lc 'curl -fsSL https://deb.nodesource.com/setup_22.x | bash -; apt-get install -y nodejs; npm i -g @openai/codex' → Windows の %USERPROFILE%\\.codex\\auth.json を WSL の /root/.codex/auth.json にコピー → codex login status で確認 → codex-do で1ファイル作成を試し実測" });
+  // 上限到達は欠陥ではないので fixTask を付けない low の可視化 finding とする。
+  if (usageLimit.length) findings.push({ id: 'codex_usage_limit', severity: 'low', title: 'Codex は上限到達で停止（欠陥ではない）', evidence: [`${usageLimit.length}件`, ...reasonTop(usageLimit)] });
   // 起動前ゲートが止めた行も事実として残す。原因は codex 側ではなく指示(spec)側なので
   // codex_launch_failed とは別 id にし、fixTask を付けない(low)＝毎日の起票対象にしない。
   const preflightBlocked = empty.filter((item) => item.reason === 'preflight_blocked');

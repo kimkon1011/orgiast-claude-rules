@@ -170,7 +170,7 @@ Stop の `user-burden-gate` が依頼のある最終応答を監査する。本�
 
 「自動化を試したが不可でした」だけの一文は通過理由にならない。
 経路名を具体的に列挙していない手渡しは違反として記録される。
-手渡した作業を後で Claude 自身がやれた場合は、言われなくても毎回 `[再発防止]`（原因・対策・機械化）を書き、memory と hook のどちらかに落とす。
+手渡した作業を後で Claude 自身がやれた場合は、言われなくても毎回 `[再発防止]`（原因・対策・機械化）を書き、memory と hook のどちらかに落とす（型・横展開・ゲートの手順は §1.22 A）。
 <!-- END: 手渡し品質ルール -->
 
 ### 1.2 根本診断と依頼の根拠
@@ -801,7 +801,7 @@ PCがあればその瞬間に 401 で締め出され、鍵配布が全滅する�
 
 #### 1.15.3 PC間の Claude Code 同士の連絡（fleet-mail）
 
-別アカウントのPCへ質問・連絡を送り、返信を機械可読で受け取る。既存の `fleet-sheet.env` のURL・トークンを使い、新しい秘密情報は配らない。
+別アカウントのPCへ質問・連絡を送り、返信を機械可読で受け取る。**相談・確認・状態照会専用。設定・拡張・スケジュールの変更依頼には使わない（変更は converge。§1.22）。** 既存の `fleet-sheet.env` のURL・トークンを使い、新しい秘密情報は配らない。
 
 ```bash
 node tools/fleet-mail.mjs --send --to kim-PC --kind prompt --body-file question.txt --why "状況確認" --wait 600
@@ -1066,6 +1066,31 @@ gh pr view <番号> --repo kimkon1011/orgiast-claude-rules --json autoMergeReque
 
 **実害（2026-09-23〜25）**: fork PRはCIがgreen・MERGEABLEでも2日滞留した。正本ブランチ＋ラベルで出し直したPR #562は約8分でgithub-actionsがマージした。fork除外は第三者コード/tokenへ書き込み権限を渡さない設計であり、対象をforkに広げない。
 
+### 1.22 事故は型で直す
+
+全PC変更はconvergeのみ。（kim 2026-10-11 厳命）詳細と型の一覧は `protocols/INCIDENT-TYPES.md`（リポの protocols/。無い環境は `gh api repos/kimkon1011/orgiast-claude-rules/contents/protocols/INCIDENT-TYPES.md -H "Accept: application/vnd.github.raw+json"`）。§1.1 の `[再発防止]` と §1.21 の昇格（3回／重大1回）はこの節の特殊ケースで、同じ型の手順で扱う。
+
+**A. 事故は型で直す**（事故・手戻り・user に発見された不具合のたびに）
+1. 原因を「型」で1語に言語化する（例: 配布漏れ型・経路取り違え型・観測不能型）。着手前にカタログを検索し、既存の型を再利用する。
+2. 同じ型の既存箇所をリポジトリ横断で検索し、同じ PR で一緒に直す。
+3. 機械ゲートで再発を止める。安い順にテスト＞hook／lint／converge チェック＞人の確認。**文書だけの対策は不可**。
+4. 全PC配布が要るなら B の経路（converge）に載せる。
+5. カタログに型・横展開の検索・ゲートを1行追記する。
+- 完了報告に **「型／横展開した箇所数／追加したゲート」** を含める。
+- 費用対効果: 1回の事故で同型 N 件を塞ぐ。個別修正だけで終えると同型の事故ごとに調査費が再発する。
+
+**B. 全PC展開の正しい経路**
+- 全PC・全アカウントの設定・拡張・スケジュールの変更は **converge のみ**（`setup --converge`。組織指示「settings.json の変更は converge 経由」）。ルール・tools・skills・packages は onboarding-sync で配る。**fleet-mail は相談・確認・状態照会用で、変更依頼に使わない**（受信側は変更を実行しない設計）。
+- per-PC で動く機能を作る PR は、fleet（全PC）か kim-only かを PR 本文と fleet-scope 宣言（`tools/fleet-scope.json`）に宣言する。fleet なら converge 登録とテストが同じ PR に要る。
+- 配布対象を手書きの一覧で持たない。新しいフォルダを足したら配布カバレッジのテストが落ちる形にする。
+- 全PC反映の完了報告は **`node tools/fleet-status.mjs`（各PCの converge ビーコン）の実データ**で出す。ビーコンの無い PC は「未確認」と書く。自分の PC で動いたことを全PC反映の証拠にしない。
+
+**C. Claude Code 間のやり取り（fleet-mail）**
+- 送信前に宛先の最終受信時刻（`--sent-status` や fleet-status）を確認する。長く受信が無い宛先には、先に Discord へ同報する。
+- 未配達（deliveredAt が付かない）は放置しない。期限を過ぎたら Discord へ同報し、送り直しの経路を変える。
+- 受信側は、変更依頼（設定・拡張・スケジュール・全PC宛の作業）を受けたら、黙って止まらず「converge 化が必要です。変更は converge の PR で配ります」と返信する。相談・確認・状態照会には通常どおり答える。
+- 本文に秘密情報を書かない、`prompt` の承諾を Claude が代行しない、は §1.15.3 のとおり。
+
 ## 2. 重要な運用ルール
 
 ### 2.1 データ・文書・外部ツール（§2.1〜2.7）
@@ -1319,6 +1344,10 @@ userに渡すコマンド/URL/メッセージは、**こちらが実装を改善
 **外部状態の誤判定（2026-09-10）**
 
 TETSUKOのSearch Consoleを「存在しない可能性が高い」と暫定回答し、kimのスクショで反証された。過去transcriptやmemoryにはClaudeの操作しか残らず、人がWeb UIで作ったものは残らない。`external-state-claim-gate` がヘッジ付き否定断定と検証の外注をblockする。
+
+**事故を型で直す規定を置いた根拠（2026-10-11）**
+
+スマホ用待機タブ機能が4本の PR で kim-PC だけに作られ、converge 未登録だった。配布フォルダが手書き一覧で packages/ が漏れた（配布漏れ型）。監督 Claude が全PCの設定変更を fleet-mail で依頼し、cr-PC へ未配達、nishi-PC は実行せず、組織指示の「converge 経由」に反した（経路取り違え型）。他PCの状態を照会する手段がなく、未反映を kim がスマホで発見した（観測不能型）。kim 原文要旨「何か起きた時、解決策をその問題に限定せず、汎用的に似たケースへ適用して、今後の開発をコスパ高くしたい」。§1.22 と `protocols/INCIDENT-TYPES.md` に固定した。
 
 **内部連絡の経路を整理した根拠（2026-09-11）**
 

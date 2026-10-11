@@ -52,6 +52,10 @@ kim が読む Doc は `tools/gdoc-publish.mjs --authuser <開く人のメール>
 
 ---
 
+## 事故は型で直す（全PC・全アカウント。詳細は ONBOARDING §1.22 と protocols/INCIDENT-TYPES.md）
+
+事故・手戻り・user に発見された不具合は、その場の修正に加え ①原因を型で言語化 ②同型を横断検索して一緒に直す ③機械ゲートで再発を止める（文書だけは不可）④全PC配布は converge ⑤カタログに1行追記。完了報告に「型／横展開した箇所数／追加したゲート」を書く。全PC・全アカウントの変更は converge のみ。fleet-mail は相談・状態照会用で変更依頼に使わない。全PC反映の報告は fleet-status の実データで出し、未ビーコンは「未確認」。
+
 ## トークン効率
 
 - **出力は Caveman**: 前置きなし、完了報告 1〜3 行（output-styles/caveman.md）

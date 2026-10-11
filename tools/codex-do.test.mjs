@@ -472,12 +472,14 @@ test('枠切れ発生時に DEEPSEEK_API_KEY が無ければフォールバッ�
   }
 });
 
-test('buildQwenArgs は -y と --exclude-tools run_shell_command を必ず両方含む', () => {
+test('buildQwenArgs は -y を含み、run_shell_command を除外しない', () => {
+  // 2026-10-12 実測: --exclude-tools run_shell_command を付けると qwen からシェル実行ツールが
+  // 消え、`echo` 1つ実行できない(モデルが「shell 実行ツールが無い」と回答する)。
+  // 代替実行者はテスト・git を回す必要があるので除外しない。
   const args = buildQwenArgs();
   assert.ok(args.includes('-y'));
-  const excludeIndex = args.indexOf('--exclude-tools');
-  assert.ok(excludeIndex >= 0);
-  assert.equal(args[excludeIndex + 1], 'run_shell_command');
+  assert.ok(!args.includes('--exclude-tools'));
+  assert.ok(!args.includes('run_shell_command'));
 });
 
 test('buildQwenArgs は --approval-mode を含まない', () => {
@@ -514,7 +516,6 @@ test('buildQwenArgs は既定値と上書き値の両方で正しい引数を返
     '--auth-type', 'openai',
     '-m', 'deepseek-chat',
     '-y',
-    '--exclude-tools', 'run_shell_command',
     '--max-wall-time', '1800',
     '--max-tool-calls', '80',
     '-p', 'Follow-the-instructions-provided-on-stdin.'
@@ -524,7 +525,6 @@ test('buildQwenArgs は既定値と上書き値の両方で正しい引数を返
     '--auth-type', 'openai',
     '-m', 'deepseek-reasoner',
     '-y',
-    '--exclude-tools', 'run_shell_command',
     '--max-wall-time', '300',
     '--max-tool-calls', '40',
     '-p', 'Follow-the-instructions-provided-on-stdin.'

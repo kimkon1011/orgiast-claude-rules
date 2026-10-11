@@ -253,12 +253,15 @@ export function shouldFlagEmptyFallbackDiff({ executorName, wantedEdit, timedOut
 // Windows の shell:true で壊れる。§1.17）
 // shell:true の Windows では引数がエスケープされず連結されるので、
 // どの引数にも空白を含めない（含めると qwen が位置引数と誤認して即死する。2026-09-03 実測）
+// -y は qwen の全ツール自動承認(YOLO)。2026-10-12 実測で `--exclude-tools run_shell_command` を
+// 併用すると run_shell_command ごと消え、代替実行者が「編集はできるがテストも git も一切
+// 実行できない」状態になる(未検証の編集だけ残して 80 呼び出しで停止。2026-10-10 実害)。
+// Codex クールダウン中の代替は実装レーンなので、シェルは塞がない。
 export function buildQwenArgs({ model = 'deepseek-chat', timeoutSecs = 1800, maxToolCalls = 80, marker = 'Follow-the-instructions-provided-on-stdin.' } = {}) {
   return [
     '--auth-type', 'openai',
     '-m', model,
     '-y',
-    '--exclude-tools', 'run_shell_command',
     '--max-wall-time', String(timeoutSecs),
     '--max-tool-calls', String(maxToolCalls),
     '-p', marker

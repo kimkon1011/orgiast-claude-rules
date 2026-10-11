@@ -1,0 +1,24 @@
+OrgiastDecisionWatch registered
+✔ 新着2件でDM2回・state更新・hookから読めるinbox (57.810798ms)
+✔ seen済みは再送しない (4.8165ms)
+✔ 初回の48hより古い投稿は無視してcursorのみ進める (1.8158ms)
+✔ [kim-PC]マーカーは除外 (10.1828ms)
+✔ トークン無しはexit 0 + stderr 1行 (1.7542ms)
+✔ dry-runはDM・state・inboxを書かない (2.1515ms)
+✔ 失敗はcursorを越えて再試行、3回で諦めseenに入れない (6.6589ms)
+✔ DM失敗後の成功は既読inboxを保持 (13.152999ms)
+✔ kim-PC以外は通信しない・ラベルはfleet-mailと共用 (85.909098ms)
+✔ API失敗や不正引数もexit 0、秘密をログしない (2.0184ms)
+✔ 1800文字でもリンク・件名・投稿者・時刻を保持 (0.7094ms)
+✔ 50件を超える新着はページを進める (2.4671ms)
+✔ setup修復はWindows登録を呼ぶ・他OSは何もしない (8.1948ms)
+✔ 同時起動ではロック取得済みの実行だけが送信する (5.0987ms)
+✔ 登録定義は10分間隔・同期repo・重複起動抑止を指定する (5.6117ms)
+ℹ tests 15
+ℹ suites 0
+ℹ pass 15
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 808.882076

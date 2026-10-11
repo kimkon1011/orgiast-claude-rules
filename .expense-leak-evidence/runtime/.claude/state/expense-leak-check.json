@@ -1,0 +1,30 @@
+{
+  "lastRunAt": "2026-10-09T03:00:00+09:00",
+  "txns": {
+    "2359642107": {
+      "evidence": [],
+      "checkedAt": "2026-10-09T12:58:26.935Z",
+      "searchStatus": "未検索(障害)"
+    },
+    "2359642108": {
+      "evidence": [],
+      "checkedAt": "2026-10-09T12:58:31.358Z",
+      "searchStatus": "未検索(障害)"
+    },
+    "2363394982": {
+      "evidence": [],
+      "checkedAt": "2026-10-09T12:58:35.066Z",
+      "searchStatus": "未検索(障害)"
+    },
+    "2363394983": {
+      "evidence": [],
+      "checkedAt": "2026-10-09T12:58:36.856Z",
+      "searchStatus": "未検索(障害)"
+    },
+    "2363394986": {
+      "evidence": [],
+      "checkedAt": "2026-10-09T12:58:33.333Z",
+      "searchStatus": "未検索(障害)"
+    }
+  }
+}

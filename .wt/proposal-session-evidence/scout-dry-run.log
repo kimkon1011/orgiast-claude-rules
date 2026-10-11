@@ -1,0 +1,27 @@
+eval 未了のため提案なし
+# model-scout 2026-10-09T13:44:01.982Z
+
+今週の新AI候補 0 件
+監視 462 モデル / 差分 2 件
+
+## 評価候補
+新規なし（監視 462 モデル）
+
+価格比較は入力・出力の両方が同額以下、片方以上が安価で、文脈長が同等以上。品質は eval で確認する。
+
+## 検出した差分
+- 値下げ（20%以上）: deepseek/deepseek-v4-flash-0731 / $0.006 入力・$1.28 出力 per MTok / 文脈 1048576 / text->text
+- 値下げ（20%以上）: deepseek/deepseek-v4-flash / $0.0173 入力・$1.28 出力 per MTok / 文脈 1048576 / text->text
+
+## 比較保留
+なし
+
+## 参考情報
+スキップ: tools/llm-ask.mjs の Gemini 呼び出しは Web 検索に未対応。
+
+情報源: https://openrouter.ai/api/v1/models
+既存単価: OpenRouter はカタログ、それ以外は tools/llm-fallback.mjs の COST_PER_MILLION。
+
+## DM 予定（送信なし）
+今週の新AI候補 0 件
+新規なし（監視 462 モデル）

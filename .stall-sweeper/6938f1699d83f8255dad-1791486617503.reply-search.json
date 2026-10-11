@@ -1,0 +1,15 @@
+[
+  {
+    "user": "seisaku-team@orgiast.jp",
+    "query": "in:anywhere from:jack510tspr@gmail.com after:2026/10/02 before:2026/10/10",
+    "checkedAt": "2026-10-08T19:11:43.927Z",
+    "estimate": 0,
+    "messages": [],
+    "skipped": 0
+  },
+  {
+    "user": "assing@orgiast.jp",
+    "query": "in:anywhere from:jack510tspr@gmail.com after:2026/10/02 before:2026/10/10",
+    "error": "token error: {\"error\":\"unauthorized_client\",\"error_description\":\"Client is unauthorized to retrieve access tokens using this method, or client not authorized for any of the scopes requested.\"}"
+  }
+]

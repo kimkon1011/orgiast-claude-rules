@@ -1,0 +1,7 @@
+Task: PR #681 Windows ESM preload URL fix
+Owner: Codex /root
+Status: complete; pushed and PR head verified
+File: tools/onboarding-sync-enroll.test.mjs:8,17
+Windows Node v24.14.1: before pass 0 fail 6; after pass 6 fail 0
+Windows related tests: pass 70 fail 0
+Head: 4884042a64bd1a36f841b5b8b2fadf5c49bdb419

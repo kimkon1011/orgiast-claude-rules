@@ -85,9 +85,9 @@ try {
   } elseif ($attempt -and $attempt.kind -eq 'write') {
     $reason = '鍵の応答は届きましたが、primary を含む鍵一式を保存できません。配布内容・フォルダー権限・空き容量を確認してください。'
   } elseif ($attempt -and $attempt.kind -eq 'invalid-response') {
-    $reason = 'keyserve の応答形式が不正です。サーバのデプロイ状態を kim に確認してください。'
+    $reason = 'keyserve の応答形式が不正です。node tools/keyserve-status.mjs --json で応答と登録状態を取得してください。'
   } elseif ($httpStatus) {
-    $reason = "HTTP $httpStatus：primary 認証を確認できませんでした。サーバの稼働状況を kim に確認してください。"
+    $reason = "HTTP $httpStatus：primary 認証を確認できませんでした。node tools/keyserve-status.mjs --json で認証状態を取得してください。"
   } else {
     $reason = 'primary が保存されていません。鍵同期クライアントとサーバが enroll 対応版か確認してください。'
   }

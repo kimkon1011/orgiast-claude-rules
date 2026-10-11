@@ -1,0 +1,8 @@
+{
+  "completed": false,
+  "summary": "T-4071はライブ台帳で未着手。原文を確認し、勤務日10/5・返信期限10/3、後藤大輔本人が返信する案件と特定。共有メールの返信検索は0件だが、送信元アカウントは認証エラーで確認不能のため未返信とは断定しない。外部送信禁止につき返信・督促・台帳更新は実施せず、未完了として記録。",
+  "evidence": {
+    "file": "/mnt/c/Users/uers/orgiast-main/.stall-sweeper/6938f1699d83f8255dad-1791486617503.verification.json",
+    "sha256": "c5fe7f4b6a5d94fb06c0224ac1ed9096d788fe9cf1c67faaf4a00617605f79cd"
+  }
+}

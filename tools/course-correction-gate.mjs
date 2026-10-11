@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+export const GATE_CONTRACT = {"name": "course-correction-gate", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "course-correction-gate"}, {"kind": "repo-file", "ref": "tools/course-corrections.json"}]};
 import fs from 'node:fs';
 import { isEntry } from './is-entry.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';

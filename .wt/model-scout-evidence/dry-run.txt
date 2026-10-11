@@ -1,0 +1,45 @@
+# model-scout 2026-10-09T13:13:55.066Z
+
+今週の新AI候補 4 件
+監視 462 モデル / 差分 15 件
+
+## 評価候補
+- Anthropic: Claude Haiku 5.5 (anthropic/claude-haiku-5.5)／$0.1 入力・$0.5 出力 per MTok／classification: deepseek/deepseek-chat, extraction: deepseek/deepseek-chat, summarize: groq/openai/gpt-oss-120b, jp_reply: openrouter/meta-llama/llama-3.3-70b-instruct, code: groq/openai/gpt-oss-120b を置換候補／次アクション＝eval 投入: eval 投入予定（dry-run）
+- Anthropic: Claude Haiku 5.5 (batch) (anthropic/claude-haiku-5.5:batch)／$0.05 入力・$0.25 出力 per MTok／classification: deepseek/deepseek-chat, extraction: deepseek/deepseek-chat, summarize: groq/openai/gpt-oss-120b, jp_reply: openrouter/meta-llama/llama-3.3-70b-instruct, code: groq/openai/gpt-oss-120b を置換候補／次アクション＝eval 投入: eval 投入予定（dry-run）
+- Apodex: Apodex 1.1 Mini (free) (apodex/apodex-1.1-mini:free)／$0 入力・$0 出力 per MTok／classification: deepseek/deepseek-chat, extraction: deepseek/deepseek-chat, summarize: groq/openai/gpt-oss-120b, jp_reply: openrouter/meta-llama/llama-3.3-70b-instruct, code: groq/openai/gpt-oss-120b を置換候補／次アクション＝eval 投入: eval 投入予定（dry-run）
+- inclusionAI: Ling 3.1 Flash (inclusionai/ling-3.1-flash)／$0 入力・$0 出力 per MTok／classification: deepseek/deepseek-chat, extraction: deepseek/deepseek-chat, summarize: groq/openai/gpt-oss-120b, jp_reply: openrouter/meta-llama/llama-3.3-70b-instruct, code: groq/openai/gpt-oss-120b を置換候補／次アクション＝eval 投入: eval 投入予定（dry-run）
+
+価格比較は入力・出力の両方が同額以下、片方以上が安価で、文脈長が同等以上。品質は eval で確認する。
+
+## 検出した差分
+- 新規モデル: stepfun/step-5-preview / $1 入力・$2.7 出力 per MTok / 文脈 1000000 / text+image+video->text
+- 新規モデル: anthropic/claude-haiku-5.5 / $0.1 入力・$0.5 出力 per MTok / 文脈 1000000 / text+image+file->text
+- 新規モデル: anthropic/claude-haiku-5.5:batch / $0.05 入力・$0.25 出力 per MTok / 文脈 1000000 / text+image+file->text
+- 新規モデル: google/gemini-nano-banana-2.1 / $1.5 入力・$7.5 出力 per MTok / 文脈 65536 / text+image->text+image
+- 新規モデル: mistralai/mistral-large-4-0 / $0.68 入力・$2.09 出力 per MTok / 文脈 1048576 / text+image->text
+- 新規モデル: inclusionai/ling-3.1-flash / $0 入力・$0 出力 per MTok / 文脈 262144 / text->text
+- 新規モデル: apodex/apodex-1.1-mini:free / $0 入力・$0 出力 per MTok / 文脈 262144 / text->text
+- 新規モデル: unbiased/pareto-26.10-preview / $0.8 入力・$3.2 出力 per MTok / 文脈 1048576 / text+image->text
+- 新規モデル: openai/gpt-6.1-sol-pro / $2 入力・$10 出力 per MTok / 文脈 1050000 / text+image+file->text
+- 新規モデル: openai/gpt-6.1-sol-pro:batch / $1 入力・$5 出力 per MTok / 文脈 1050000 / text+image+file->text
+- 新規モデル: openai/gpt-6.1-sol / $2 入力・$10 出力 per MTok / 文脈 1050000 / text+image+file->text
+- 新規モデル: openai/gpt-6.1-sol:batch / $1 入力・$5 出力 per MTok / 文脈 1050000 / text+image+file->text
+- 新規モデル: anthropic/claude-sonnet-5.5 / $2 入力・$10 出力 per MTok / 文脈 1000000 / text+image+file->text
+- 新規モデル: anthropic/claude-sonnet-5.5:batch / $1 入力・$5 出力 per MTok / 文脈 1000000 / text+image+file->text
+- 新規モデル: perceptron/perceptron-mk1.5 / $0.15 入力・$1.5 出力 per MTok / 文脈 36864 / text+image+audio+video->text
+
+## 比較保留
+なし
+
+## 参考情報
+スキップ: tools/llm-ask.mjs の Gemini 呼び出しは Web 検索に未対応。
+
+情報源: https://openrouter.ai/api/v1/models
+既存単価: OpenRouter はカタログ、それ以外は tools/llm-fallback.mjs の COST_PER_MILLION。
+
+## DM 予定（送信なし）
+今週の新AI候補 4 件
+Anthropic: Claude Haiku 5.5 (anthropic/claude-haiku-5.5)／$0.1 入力・$0.5 出力 per MTok／classification: deepseek/deepseek-chat, extraction: deepseek/deepseek-chat, summarize: groq/openai/gpt-oss-120b, jp_reply: openrouter/meta-llama/llama-3.3-70b-instruct, code: groq/openai/gpt-oss-120b を置換候補／次アクション＝eval 投入: eval 投入予定（dry-run）
+Anthropic: Claude Haiku 5.5 (batch) (anthropic/claude-haiku-5.5:batch)／$0.05 入力・$0.25 出力 per MTok／classification: deepseek/deepseek-chat, extraction: deepseek/deepseek-chat, summarize: groq/openai/gpt-oss-120b, jp_reply: openrouter/meta-llama/llama-3.3-70b-instruct, code: groq/openai/gpt-oss-120b を置換候補／次アクション＝eval 投入: eval 投入予定（dry-run）
+Apodex: Apodex 1.1 Mini (free) (apodex/apodex-1.1-mini:free)／$0 入力・$0 出力 per MTok／classification: deepseek/deepseek-chat, extraction: deepseek/deepseek-chat, summarize: groq/openai/gpt-oss-120b, jp_reply: openrouter/meta-llama/llama-3.3-70b-instruct, code: groq/openai/gpt-oss-120b を置換候補／次アクション＝eval 投入: eval 投入予定（dry-run）
+inclusionAI: Ling 3.1 Flash (inclusionai/ling-3.1-flash)／$0 入力・$0 出力 per MTok／classification: deepseek/deepseek-chat, extraction: deepseek/deepseek-chat, summarize: groq/openai/gpt-oss-120b, jp_reply: openrouter/meta-llama/llama-3.3-70b-instruct, code: groq/openai/gpt-oss-120b を置換候補／次アクション＝eval 投入: eval 投入予定（dry-run）

@@ -7,14 +7,32 @@ import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { parseEnvText } from './env-kv.mjs';
 import { machineIdentity } from './machine-identity.mjs';
+import { addDecision, listDecisions } from './pending-decisions.mjs';
 import { loadOptin, redactSecrets, targetMatches, runPrompt, consentCommand } from './fleet-agent.mjs';
 
 const ownRepo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const decisionPrefix = /^\s*\[判断依頼\]/;
+export function hasDecisionRequest(mail) {
+  return decisionPrefix.test(mail.body ?? '') || decisionPrefix.test(mail.why ?? '');
+}
 export const LOCK_MS = 10 * 60 * 1000;
 export function validId(id) {
   if (!/^mail-[A-Za-z0-9-]{1,180}$/.test(String(id ?? ''))) throw new Error('invalid mail id');
   return id;
+}
+export function resolveRemoteName(to, pcMap) {
+  if (typeof to === 'string' && pcMap && typeof pcMap === 'object' && !Array.isArray(pcMap)) {
+    const normalized = to.normalize('NFKC').trim();
+    for (const [label, entry] of Object.entries(pcMap)) {
+      if (label.startsWith('_') || typeof entry?.remoteName !== 'string') continue;
+      if (entry.remoteName.normalize('NFKC').trim() === normalized) {
+        // Resolve to the reporter label: cloned PCs can share a hostname (作業用004 and kimko-PC both report DESKTOP-PPD5V8I).
+        return { to: label, resolved: true };
+      }
+    }
+  }
+  return { to, resolved: false };
 }
 function readJson(file, fallback = null) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return fallback; throw e; }
@@ -27,6 +45,10 @@ function writeJson(file, value) {
 }
 function envFile(file) {
   try { return parseEnvText(fs.readFileSync(file, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return {}; throw e; }
+}
+// Discord監視も fleet-mail と同じPCラベルで動作を判定する。
+export function resolveFleetLabel(home, identity = machineIdentity()) {
+  return envFile(path.join(home, '.claude', 'cost-reporter.env')).REPORTER_LABEL || identity.hostname;
 }
 export function readInbox(home, { unreadOnly = true } = {}) {
   const dir = path.join(home, '.claude', 'fleet-inbox');
@@ -168,11 +190,18 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   const config = envFile(path.join(dir, 'fleet-sheet.env'));
   if (!config.FLEET_SHEET_URL || !config.FLEET_SHEET_TOKEN) { err('fleet-mail: fleet-sheet.env 未設定のためスキップ'); return 0; }
   const identity = deps.identity ?? machineIdentity();
-  const label = envFile(path.join(dir, 'cost-reporter.env')).REPORTER_LABEL || identity.hostname;
+  const label = resolveFleetLabel(home, identity);
   const request = deps.request ?? createClient({ url: config.FLEET_SHEET_URL, token: config.FLEET_SHEET_TOKEN, fetchImpl: deps.fetch });
   if (options['--send']) {
+    let pcMap = deps.pcMap;
+    if (pcMap === undefined) {
+      try { pcMap = readJson(new URL('../fleet-pc-map.json', import.meta.url)); }
+      catch { /* An unavailable or damaged roster must not prevent sending. */ }
+    }
+    const target = resolveRemoteName(options['--to'], pcMap);
+    if (target.resolved) err(`${options['--to']} → ${target.to}`);
     const id = `mail-${new Date(now()).toISOString().replace(/[-:.TZ]/g, '')}-${(deps.randomInt ?? randomInt)(1000, 10000)}`;
-    const payload = { id, from: label, to: options['--to'], messageKind: options['--kind'],
+    const payload = { id, from: label, to: target.to, messageKind: options['--kind'],
       body: redactSecrets(fs.readFileSync(options['--body-file'], 'utf8')).slice(0, 20000), why: redactSecrets(options['--why']),
       expiresAt: new Date(now() + Number(options['--expires-hours'] ?? 24) * 3600000).toISOString() };
     // Record the id BEFORE transport; uncertain delivery can be inspected without resending a new id.
@@ -233,6 +262,18 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       if (!fs.existsSync(file)) {
         const mail = { ...raw, from: redactSecrets(raw.from), why: redactSecrets(raw.why), body: redactSecrets(raw.body), readAt: null, receivedAt: new Date(now()).toISOString() };
         writeJson(file, mail); log('received', { id: mail.id, from: mail.from, kind: mail.kind });
+        if (mail.kind === 'note' && hasDecisionRequest(mail)) {
+          try {
+            const source = `fleet-mail:${mail.from}:${mail.id}`;
+            if (!listDecisions({ home }).some(decision => decision.source === source)) {
+              const subject = String(mail.why ?? '').replace(decisionPrefix, '').trim()
+                || String(mail.body ?? '').trimStart().split(/\r?\n/)[0].replace(decisionPrefix, '').trim();
+              addDecision({ source, text: `[判断依頼] ${subject} / from=${mail.from} id=${mail.id}`.slice(0, 200) }, { home, now: new Date(now()) });
+            }
+          } catch (error) {
+            log('decision-intake-failed', { id: mail.id, error: redactSecrets(error.message) });
+          }
+        }
       }
       received.push(raw.id);
     }

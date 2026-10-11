@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+export const GATE_CONTRACT = {"name": "url-format-guard", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "url-format-guard"}]};
 import fs from 'node:fs';
 import { isEntry } from './is-entry.mjs';
 import { latestAssistantText } from './lib/assistant-text.mjs';

@@ -703,6 +703,34 @@ test('booth feedback uses the registered Intake task name', async () => {
   assert.equal(expectations.some((entry) => entry.task === 'OrgiastBoothFeedback'), false);
 });
 
+test('毎日09:00実行の feedback-nag.log は翌朝のヘルスで stale 誤検知しない', async () => {
+  const expectations = JSON.parse(fs.readFileSync(new URL('./nightly-health-expectations.json', import.meta.url), 'utf8'));
+  const nag = expectations.filter((entry) => entry.log === 'feedback-nag.log');
+  assert.equal(nag.length, 1);
+  // OrgiastFeedbackNag は毎日09:00の1回だけで、-RepetitionInterval を持たない。
+  // 3時間の陳腐化許容は funnel-probe / plaud-to-tldv のような毎時繰り返しジョブ用で、
+  // 日次ジョブに当てると 12:00 以降に毎日必ず stale になる（2026-10-11 実害）。
+  const register = fs.readFileSync(new URL('./register-feedback-nag-task.ps1', import.meta.url), 'utf8');
+  assert.match(register, /-Daily\b/);
+  assert.doesNotMatch(register, /-RepetitionInterval\b/);
+  assert.ok(nag[0].maxAgeHours >= 24, `日次実行のため maxAgeHours は24以上が必要（現在: ${nag[0].maxAgeHours}）`);
+
+  const home = createTempHome();
+  try {
+    const now = new Date('2026-10-12T07:00:00+09:00');     // 翌朝のヘルス実行（前日09:00から22時間後）
+    const lastRun = new Date('2026-10-11T09:00:14+09:00'); // 直前の成功実行
+    const logPath = path.join(home, '.claude', 'logs', 'feedback-nag.log');
+    fs.writeFileSync(logPath, `${formatDate(lastRun)} 10 件を送信\n`, 'utf8');
+    fs.utimesSync(logPath, lastRun, lastRun);
+
+    const result = await runNightlyHealth({
+      home, now, expectations: nag,
+      runTests: healthyTests, notify: async () => {}
+    });
+    assert.equal(result.anomalies.filter((item) => item.type === 'stale').length, 0);
+  } finally { removeDir(home); }
+});
+
 function createStreakFixture(home) {
   const runsDir = path.join(home, '.claude', 'auto-session', 'runs');
   fs.mkdirSync(runsDir, { recursive: true });

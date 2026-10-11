@@ -16,7 +16,7 @@
   { "log": "plaud-to-tldv.log", "maxAgeHours": 3, "label": "Plaudからtl;dv転送", "scan": "stale-only" },
   { "log": "evening-digest.log", "maxAgeHours": 26, "label": "夕方ダイジェスト", "scan": "keywords" },
   { "log": "ai-news-triage.log", "maxAgeHours": 26, "label": "AIニュース選別", "scan": "keywords" },
-  { "log": "feedback-nag.log", "maxAgeHours": 3, "label": "フィードバック催促", "scan": "stale-only" },
+  { "log": "feedback-nag.log", "maxAgeHours": 26, "label": "フィードバック催促", "scan": "stale-only" },
   { "log": "feedback-to-issues.log", "maxAgeHours": 3, "label": "フィードバック課題化", "scan": "keywords" },
   { "log": "fleet-agent.log", "maxAgeHours": 26, "label": "フリートエージェント", "scan": "stale-only" },
   { "log": "gtasks-loop.log", "maxAgeHours": 3, "label": "Google Tasks同期", "scan": "keywords" },

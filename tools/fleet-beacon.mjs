@@ -9,7 +9,7 @@ import { isEntry } from './is-entry.mjs';
 import { parseEnvText } from './env-kv.mjs';
 import { machineIdentity } from './machine-identity.mjs';
 import { redactSecrets } from './fleet-agent.mjs';
-import { resolveFleetLabel } from './fleet-mail.mjs';
+import { resolveFleetLabel } from './lib/fleet-label.mjs';
 
 const ownRepo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const STATUS_MAP = { OK: 'ok', NOTICE: 'skip', NG: 'fail' };

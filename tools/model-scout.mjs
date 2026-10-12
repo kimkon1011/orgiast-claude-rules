@@ -7,7 +7,7 @@ import { aggregateMeasurements } from './routing-table.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
-import { readConfig, userHome } from './eval-harness.mjs';
+import { readConfig, userHome } from './lib/eval-config.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { COST_PER_MILLION } from './llm-fallback.mjs';
 

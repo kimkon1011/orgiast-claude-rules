@@ -12,6 +12,8 @@ import { addDecision, listDecisions } from './pending-decisions.mjs';
 import { loadOptin, redactSecrets, targetMatches, runPrompt, consentCommand } from './fleet-agent.mjs';
 import { resolveClaudeExecutableFromDisk } from './claude-exe.mjs';
 import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
+import { resolveFleetLabel } from './lib/fleet-label.mjs';
+export { resolveFleetLabel };
 
 const ownRepo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -58,7 +60,6 @@ export function looksLikeInstallRequest(body) {
   return installRequestPatterns.some(pattern => pattern.test(text));
 }
 // 宛先の最終 poll／ビーコンを stderr に出す。取得は fail-open（失敗・未設定なら「不明」を出して送信は続行）。
-// fleet-beacon.mjs は fleet-mail.mjs を import しているので、循環 import を避けるため動的 import() で読む。
 export async function describeTargetFreshness({ to, home, now = Date.now, fetchBeacons, pcMap } = {}) {
   const label = String(to ?? '');
   let result;
@@ -154,10 +155,6 @@ function writeJson(file, value) {
 }
 function envFile(file) {
   try { return parseEnvText(fs.readFileSync(file, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return {}; throw e; }
-}
-// Discord監視も fleet-mail と同じPCラベルで動作を判定する。
-export function resolveFleetLabel(home, identity = machineIdentity()) {
-  return envFile(path.join(home, '.claude', 'cost-reporter.env')).REPORTER_LABEL || identity.hostname;
 }
 export function readInbox(home, { unreadOnly = true } = {}) {
   const dir = path.join(home, '.claude', 'fleet-inbox');

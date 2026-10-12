@@ -337,6 +337,22 @@ test('/ サマリ / 行は失敗を含んでも除外する', () => {
   assert.equal(isFailureLine('2026-09-05 / サマリ / step1 NG: failed'), false);
 });
 
+test('robocopy の列挙行はファイル名に error を含んでも失敗扱いしない', () => {
+  // 2026-10-13 実測: Drive バックアップの robocopy /MIR 出力に含まれる *EXTRA File 行を
+  // ファイル名の "error" で誤検知し、正常終了したバックアップが夜間ジョブ異常として通知された。
+  const robocopyLines = [
+    '\t  *EXTRA File \t\t    1532\tC:\\Users\\uers\\AppData\\Local\\claude-backup-staging\\.claude\\repo-backups\\tools.bak-2026-10-09\\nightly-batch-error-detail.test.mjs',
+    '\t  *EXTRA File \t\t     790\tC:\\Users\\uers\\AppData\\Local\\claude-backup-staging\\.claude\\repo-backups\\lib\\redact.test.mjs',
+    '\t  *EXTRA Dir        -1\tC:\\Users\\uers\\AppData\\Local\\claude-backup-staging\\.claude\\repo-backups\\tools.bak-2026-10-09\\lib\\internal-audit\\',
+    '\t   New File  \t\t     257\tC:\\Users\\uers\\AppData\\Local\\claude-backup-staging\\.claude\\lib\\error-detail.mjs',
+    '\t   Newer     \t\t    4910\tC:\\Users\\uers\\AppData\\Local\\claude-backup-staging\\.claude\\lib\\leak-search.mjs',
+    '\t   Same      \t\t     189\tC:\\Users\\uers\\AppData\\Local\\claude-backup-staging\\.claude\\session-purpose\\error.json'
+  ];
+  for (const line of robocopyLines) assert.equal(isFailureLine(line), false, line);
+  // 実際の失敗行（バックアップ script の ERROR 行）は引き続き検知する。
+  assert.equal(isFailureLine('2026-10-13T03:40:00+09:00 ERROR failed reason=read-back 不合格'), true);
+});
+
 test('前回オフセット以降に追記された行だけを検知する', async () => {
   const home = createTempHome();
   const logPath = path.join(home, '.claude', 'logs', 'append.log');

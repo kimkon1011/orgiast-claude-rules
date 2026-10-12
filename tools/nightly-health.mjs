@@ -226,6 +226,12 @@ export function isFailureLine(line) {
 
   if (/^(?:HEAD is now at|From https:\/\/|From git@|\*\s+branch\b|Already up to date\b|Updating\s|Fast-forward\b)/i.test(cleanLine)) return false;
 
+  // robocopy /MIR のファイル列挙行（New File / Newer / *EXTRA File / *EXTRA Dir 等）は
+  // 「転送・削除する対象」の情報行であって失敗ではない。除外しないと、名前に error を
+  // 含むファイル（実測 2026-10-13: repo-backups\...\nightly-batch-error-detail.test.mjs）を
+  // 失敗と誤検知する（バックアップは complete で正常終了、robocopy exit=3＝コピー有+余剰有）。
+  if (/^(?:\*?EXTRA(?:\s+(?:File|Dir))?|New\s+(?:File|Dir)|Newer|Older|Changed|Same)\b/i.test(cleanLine)) return false;
+
   let remainder = line
     .replace(/\berror\s*[:= ]*\s*(?:[0-9]*[0]|-(?!\w))/gi, '')
     .replace(/失敗\s*[:：= ]*\s*0(?!\w)/g, '')

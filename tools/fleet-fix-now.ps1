@@ -15,6 +15,7 @@ $repo = Join-Path $claudeDir 'nightly-repo'
 $repoUrl = 'https://github.com/kimkon1011/orgiast-claude-rules.git'
 New-Item -ItemType Directory -Force -Path $claudeDir | Out-Null
 
+Say ("[fleet-fix-now] version=" + $(try { (git -C (Join-Path $env:USERPROFILE '.claude\nightly-repo') log -1 --format=%h 2>$null) } catch { '?' }) + " ")
 Say ("[fleet-fix-now] " + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + " hostname=" + $env:COMPUTERNAME + " user=" + $env:USERNAME + " home=" + $userHome)
 $curLabel = ''
 $fleetEnv = Join-Path $claudeDir 'fleet-sheet.env'
@@ -25,6 +26,61 @@ Say ("fleet-sheet.env=" + $(if (Test-Path $fleetEnv) { 'あり' } else { '無し
 $envFile = Join-Path $claudeDir 'cost-reporter.env'
 if (Test-Path $envFile) { $m = Select-String -Path $envFile -Pattern '^REPORTER_LABEL=(.*)$' | Select-Object -First 1; if ($m) { $curLabel = $m.Matches[0].Groups[1].Value.Trim() } }
 # 注意: PowerShell の変数名は大小を区別しないので、現在値は $curLabel、引数は $Label と別名にする
+# 1. nightly-repo を origin/main 最新にする（PR #698 / #700 を取り込む）
+$git = Get-Command git -ErrorAction SilentlyContinue
+if (-not $git) {
+  # cr-PC(作業用011) 2026-10-10 実測: git 無しで止まった。winget で入れて同じセッションの PATH に足す。
+  Say 'git が無いので winget でインストールします（1〜3分）'
+  $winget = Get-Command winget -ErrorAction SilentlyContinue
+  if ($winget) { & winget install --id Git.Git -e --silent --accept-package-agreements --accept-source-agreements 2>&1 | Out-Null }
+  foreach ($p in @('C:\Program Files\Git\cmd', (Join-Path $env:LOCALAPPDATA 'Programs\Git\cmd'))) { if (Test-Path $p) { $env:PATH = "$p;$env:PATH" } }
+  $git = Get-Command git -ErrorAction SilentlyContinue
+  Say ("git: " + $(if ($git) { 'インストール OK ' + $git.Source } else { 'インストール失敗（winget ' + $(if ($winget) { 'あり' } else { '無し' }) + '）→ zip 取得に切替' }))
+}
+if (-not $git) {
+  # git が無くても動けるように zip で main を展開する（.git 無し＝日次 self-sync は動かないが tools は動く）
+  $zip = Join-Path $env:TEMP 'orgiast-claude-rules-main.zip'
+  $tmpDir = Join-Path $env:TEMP 'orgiast-claude-rules-zip'
+  try {
+    Invoke-WebRequest -UseBasicParsing 'https://github.com/kimkon1011/orgiast-claude-rules/archive/refs/heads/main.zip' -OutFile $zip
+    if (Test-Path $tmpDir) { Remove-Item -Recurse -Force $tmpDir }
+    Expand-Archive -Path $zip -DestinationPath $tmpDir -Force
+    $src = Get-ChildItem $tmpDir | Select-Object -First 1
+    if (Test-Path $repo) { Remove-Item -Recurse -Force $repo }
+    Move-Item -Path $src.FullName -Destination $repo
+    Say 'repo: zip 展開 OK（git 無し）'
+  } catch { Say ('NG: zip 取得に失敗: ' + $_.Exception.Message) }
+} else {
+  if (-not (Test-Path (Join-Path $repo '.git'))) {
+    git clone --quiet $repoUrl $repo 2>&1 | Out-Null
+    Say ("repo: clone " + $(if (Test-Path (Join-Path $repo '.git')) { 'OK' } else { 'NG' }))
+  } else {
+    $dirty = git -C $repo status --porcelain 2>$null
+    git -C $repo fetch --quiet origin main 2>&1 | Out-Null
+    if ($dirty) { git -C $repo stash push -u -q -m 'fleet-fix-now' 2>&1 | Out-Null; Say 'repo: 未コミット変更を stash に退避' }
+    git -C $repo checkout -q main 2>&1 | Out-Null
+    git -C $repo reset -q --hard origin/main 2>&1 | Out-Null
+  }
+  Say ("repo: " + (git -C $repo log --oneline -1 2>$null))
+}
+# ラベル自動判定: fleet-pc-map.json でこの hostname に対応するラベルがあればそれを使う（2026-10-10 作業用018 の複製対策）
+if (-not $Label) {
+  $mapFile = Join-Path $repo 'fleet-pc-map.json'
+  if (Test-Path $mapFile) {
+    try {
+      $map0 = Get-Content $mapFile -Raw -Encoding UTF8 | ConvertFrom-Json
+      $cur0 = if ($curLabel) { $map0.PSObject.Properties | Where-Object { $_.Name -eq $curLabel } | Select-Object -First 1 } else { $null }
+      if ($cur0 -and $cur0.Value.hostname -and $cur0.Value.hostname -ne $env:COMPUTERNAME) { $Label = $env:COMPUTERNAME }
+    } catch { Say ('fleet-pc-map 読み込み失敗: ' + $_.Exception.Message) }
+  }
+}
+if ($Label -and $Label -ne $curLabel) {
+  $lines = @(); if (Test-Path $envFile) { $lines = @(Get-Content $envFile | Where-Object { $_ -notmatch '^REPORTER_LABEL=' }) }
+  $lines += "REPORTER_LABEL=$Label"
+  [IO.File]::WriteAllText($envFile, (($lines -join "`r`n") + "`r`n"), (New-Object Text.UTF8Encoding($false)))
+  Say ("label: " + $(if ($curLabel) { $curLabel } else { '(未設定)' }) + " → " + $Label + " に変更")
+  $curLabel = $Label
+}
 $fleetMail = Join-Path $repo 'tools\fleet-mail.mjs'
 if (-not (Test-Path $fleetMail)) { Say "NG: $fleetMail が無いので中断"; $report -join "`n" | Out-Host; exit 1 }
 

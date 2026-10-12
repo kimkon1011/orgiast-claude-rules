@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { randomInt, randomUUID } from 'node:crypto';
+import { createHash, randomInt, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { parseEnvText } from './env-kv.mjs';
@@ -130,6 +130,22 @@ export function dailySelfHeal({ dir, now = Date.now, platform = process.platform
   const r = spawnSyncImpl('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', ps], { encoding: 'utf8', windowsHide: true, timeout: 120_000, stdio: ['ignore', 'pipe', 'pipe'] });
   return { thermalGuard: String(r.stdout || '').trim() || `exit=${r.status}` };
 }
+// fleet-fix-now.ps1 が更新されたら（ハッシュ変化）、受信タスクがそのPCで -NoLogin 実行する。
+// 修正のたびに kim が全PCへ貼り直す往復をなくす（2026-10-12 kim 指摘: 011 で何度も貼り直し）。OAuth だけは人が要るので -NoLogin。
+export function autoRunFixNow({ dir, repo = ownRepo, platform = process.platform, launch = launchDetachedWin, hashOf = f => require_hash(f) }) {
+  if (platform !== 'win32' || process.env.FLEET_NO_SELF_HEAL === '1') return { skipped: 'disabled' };
+  const script = path.join(repo, 'tools', 'fleet-fix-now.ps1');
+  if (!fs.existsSync(script)) return { skipped: 'no-script' };
+  const hash = hashOf(script);
+  const marker = path.join(dir, '.fleet-fix-now-hash');
+  let last = ''; try { last = fs.readFileSync(marker, 'utf8').trim(); } catch {}
+  if (last === hash) return { skipped: 'same' };
+  fs.writeFileSync(marker, hash);
+  if (!last) return { skipped: 'first-seen' }; // 初回は記録だけ（導入直後に全PCで一斉実行しない）
+  launch('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, '-NoLogin']);
+  return { launched: hash };
+}
+function require_hash(file) { return createHash('sha256').update(fs.readFileSync(file)).digest('hex').slice(0, 16); }
 export const LOCK_MS = 10 * 60 * 1000;
 export function validId(id) {
   if (!/^mail-[A-Za-z0-9-]{1,180}$/.test(String(id ?? ''))) throw new Error('invalid mail id');
@@ -458,6 +474,7 @@ export async function pollOnce(deps = {}) {
       fs.appendFileSync(processedFile, `${mail.id}\n`, { mode: 0o600 }); processed.add(mail.id); handled.push(mail.id);
     }
     if (!dryRun) { try { (deps.dailySelfHeal ?? dailySelfHeal)({ dir, now }); } catch (e) { err(`fleet-mail: 自己修復に失敗（受信は成功）: ${e.message}`); } }
+    if (!dryRun) { try { (deps.autoRunFixNow ?? autoRunFixNow)({ dir }); } catch (e) { err(`fleet-mail: fleet-fix-now 自動実行に失敗（受信は成功）: ${e.message}`); } }
     out(json ? JSON.stringify({ received, processed: handled }) : `受信=${received.length} / 処理=${handled.length}`);
     return { received, handled };
   } finally { release(); }

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { evaluateHandoffRegret } from './handoff-regret-gate.mjs';
+import { evaluateHandoffRegret, isReadOnlyCommand } from './handoff-regret-gate.mjs';
 
 const target = '~/.claude/settings.json';
 const row = content => JSON.stringify({ message: { content } });
@@ -23,4 +23,29 @@ test('引用された空白入り絶対パスは完全一致で検出する', ()
   const spaced = 'C:\\Users\\kim\\My Project\\settings.json';
   const quotedHandoff = row([{ type: 'text', text: `[手渡し判定]\nuser が \`${spaced}\` を変更してください` }]);
   assert.equal(evaluateHandoffRegret([quotedHandoff, use(spaced), success].join('\n'), '完了').decision, 'block');
+});
+test('手渡し後の gh pr view（読み取りのみ）は block しない', () => {
+  const prUrl = 'https://github.com/kimkon1011/purchasing-management-app/pull/29';
+  const urlHandoff = row([{ type: 'text', text: `[手渡し判定]\nuser が ${prUrl} をマージしてください` }]);
+  const bashUse = command => row([{ type: 'tool_use', id: 'tool-1', name: 'Bash', input: { command } }]);
+  assert.equal(evaluateHandoffRegret([urlHandoff, bashUse(`gh pr view ${prUrl} --json state`), success].join('\n'), '完了しました').decision, 'pass');
+});
+test('手渡し後の gh pr merge は block のまま', () => {
+  const prUrl = 'https://github.com/kimkon1011/purchasing-management-app/pull/29';
+  const urlHandoff = row([{ type: 'text', text: `[手渡し判定]\nuser が ${prUrl} をマージしてください` }]);
+  const bashUse = command => row([{ type: 'tool_use', id: 'tool-1', name: 'Bash', input: { command } }]);
+  assert.equal(evaluateHandoffRegret([urlHandoff, bashUse(`gh pr merge ${prUrl} --merge`), success].join('\n'), '完了しました').decision, 'block');
+});
+test('gh pr view && gh pr merge の連鎖は block のまま', () => {
+  const prUrl = 'https://github.com/kimkon1011/purchasing-management-app/pull/29';
+  const urlHandoff = row([{ type: 'text', text: `[手渡し判定]\nuser が ${prUrl} をマージしてください` }]);
+  const bashUse = command => row([{ type: 'tool_use', id: 'tool-1', name: 'Bash', input: { command } }]);
+  assert.equal(evaluateHandoffRegret([urlHandoff, bashUse(`gh pr view ${prUrl} --json state && gh pr merge ${prUrl} --merge`), success].join('\n'), '完了しました').decision, 'block');
+});
+test('手渡し後の git branch -D / git remote add は読み取り扱いしない', () => {
+  assert.equal(isReadOnlyCommand('git branch -D x'), false);
+  assert.equal(isReadOnlyCommand('git remote add o https://x'), false);
+  assert.equal(isReadOnlyCommand('git branch -a -D x'), false);
+  assert.equal(isReadOnlyCommand('git branch -a'), true);
+  assert.equal(isReadOnlyCommand('git remote -v'), true);
 });

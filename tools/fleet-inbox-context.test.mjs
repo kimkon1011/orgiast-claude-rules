@@ -55,6 +55,41 @@ test('headless context excludes decision-request mails and says so', () => {
   // ヘッドレスで判断依頼のみのときは文脈を出さない
   assert.equal(buildContext([entries[1]], { headless: true }), '');
 });
+test('decision answers remain visible in both modes without a request notice', () => {
+  const answers = [
+    { id: 'mail-answer', replyTo: 'mail-original', from: 'kim-PC', kind: 'note', why: '[判断依頼] 承認', body: '回答A' },
+    { id: 'mail-reply-abc', from: 'kim-PC', kind: 'note', body: '[判断依頼] 回答B' },
+  ];
+  for (const headless of [true, false]) {
+    const result = buildContext(answers, { headless });
+    assert.match(result, /判断依頼への回答 2 件: 返信しない（返信すると PC 間で往復する）。内容を user に伝え、読んだら --ack <id>/);
+    assert.equal(result.match(/\[回答・返信不要\] from=/g)?.length, 2);
+    assert.match(result, /id=mail-answer\n回答A/);
+    assert.match(result, /id=mail-reply-abc\n\[判断依頼\] 回答B/);
+    assert.doesNotMatch(result, /⚠ 判断依頼|判断依頼 \d+ 件を除外/);
+    assert.ok(result.endsWith(FOOTER));
+  }
+  const result = buildContext([
+    ...answers,
+    { id: 'mail-request', from: 'PC', kind: 'note', why: '[判断依頼] 新規依頼', body: '依頼本文' },
+  ], { headless: true });
+  assert.match(result, /判断依頼への回答 2 件/);
+  assert.match(result, /ヘッドレスセッションのため判断依頼 1 件を除外/);
+  assert.doesNotMatch(result, /mail-request|新規依頼|依頼本文|⚠ 判断依頼/);
+  assert.equal(result.match(/\[回答・返信不要\] from=/g)?.length, 2);
+});
+test('answer notice and entry prefixes preserve the context budget', () => {
+  const entries = Array.from({ length: 100 }, (_, i) => ({
+    id: `mail-reply-${i}`, from: 'PC', kind: 'note', why: '[判断依頼] 承認', body: 'あ'.repeat(20000),
+  }));
+  for (const headless of [true, false]) {
+    const result = buildContext(entries, { headless });
+    assert.match(result, /判断依頼への回答 100 件/);
+    assert.match(result, /\[回答・返信不要\] from=/);
+    assert.ok(result.length <= 1500);
+    assert.ok(result.endsWith(FOOTER));
+  }
+});
 test('shouldReceivePoll: fresh markers suppress, stale or missing markers allow', t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-inbox-ctx-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));

@@ -12,7 +12,7 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export function buildPrompt(repo = REPO) {
   const skill = fs.readFileSync(path.join(repo, 'skills', 'autopilot', 'SKILL.md'), 'utf8').replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '');
   return `${skill}\n\n<実行コンテキスト>\nrepo: ${repo}\n/autopilot tick を1周だけ実行する。ヘッドレスモード。ScheduleWakeup と /loop は使用しない。Codex はフォアグラウンドで完了まで待ち、post と必要な handoff を書いて終了する。次の起床はタスクスケジューラが担う。pre が error なら実装せず終了する。
-fleet-mail の受信メールに [判断依頼] を含むものへは返信も判断も行わない。kim の判断待ちとして放置すること（ヘッドレスでは未読注入からも除外される）。\n</実行コンテキスト>\n`;
+fleet-mail の受信メールに [判断依頼] を含む依頼へは返信も判断も行わない。kim の判断待ちとして放置すること（ヘッドレスでは未読注入からも除外される）。自分が送った判断依頼への回答（[回答・返信不要] 付き）は読んで作業に使ってよいが、返信はしない。\n</実行コンテキスト>\n`;
 }
 export function buildWatchPrompt(watch, repo = REPO) {
   return `autopilot の「見張り」を1件だけ確かめる。実装・修正・外部への送信はしない（読む・数える・ログを見るだけ）。

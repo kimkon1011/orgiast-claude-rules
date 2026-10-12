@@ -31,11 +31,15 @@ function formatAge(ms) {
   return `${Math.round(ms / 86400000)}d`;
 }
 const decisionPrefix = /^\s*\[判断依頼\]/;
-export function hasDecisionRequest(mail) {
-  // 返信（mail-reply-* / replyTo あり）は原本の why を引き継ぐので判断依頼として扱わない。
+export function decisionRole(mail) {
+  // 返信（mail-reply-* / replyTo あり）は原本の why を引き継ぐので依頼(request)ではなく回答(answer)として扱う。
+  // 回答は捨てずに注入するが返信はしない（fleet-inbox-context が [回答・返信不要] を付ける）。
   // 扱うと受領返信に相手が受領返信を返し、2分ごとに PC 間で無限に往復する（2026-10-10 kim-PC⇔cr-PC 実測）。
-  if (mail?.replyTo || String(mail?.id ?? '').startsWith('mail-reply-')) return false;
-  return decisionPrefix.test(mail.body ?? '') || decisionPrefix.test(mail.why ?? '');
+  if (!decisionPrefix.test(mail?.body ?? '') && !decisionPrefix.test(mail?.why ?? '')) return null;
+  return mail?.replyTo || String(mail?.id ?? '').startsWith('mail-reply-') ? 'answer' : 'request';
+}
+export function hasDecisionRequest(mail) {
+  return decisionRole(mail) === 'request';
 }
 // 本文先頭の実行モードマーカー（送信側 --exec codex が挿入する）。GAS は messageKind を prompt のまま扱う。
 const execMarker = /^<!--\s*fleet-exec:\s*codex\s*-->\s*$/;

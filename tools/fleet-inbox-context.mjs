@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
-import { readInbox, hasDecisionRequest, pollOnce } from './fleet-mail.mjs';
+import { readInbox, hasDecisionRequest, decisionRole, pollOnce } from './fleet-mail.mjs';
 import { redactSecrets } from './fleet-agent.mjs';
 
 export const FOOTER = '返信: `node tools/fleet-mail.mjs --reply <id> --body-file <file>` 。既読: `--ack <id>`。user に転記を頼まず Claude が返信すること。';
@@ -24,14 +24,17 @@ export function buildContext(messages, { headless = isHeadless() } = {}) {
   const decisionCount = shown.filter(hasDecisionRequest).length;
   const notice = decisionCount ? `⚠ 判断依頼 ${decisionCount} 件: 他の作業より先に kim へその場で聞き、--reply で返すこと\n変更依頼を受けたら実行せず止まるのではなく、『converge 化が必要』と送信元へ --reply で返す\n` : '';
   const headlessNotice = excluded.length ? `ヘッドレスセッションのため判断依頼 ${excluded.length} 件を除外（返信も判断もしない。kim の判断待ち）\n` : '';
-  const budget = 1500 - header.length - notice.length - headlessNotice.length - FOOTER.length - 2;
+  const answerCount = shown.filter(mail => decisionRole(mail) === 'answer').length;
+  const answerNotice = answerCount ? `判断依頼への回答 ${answerCount} 件: 返信しない（返信すると PC 間で往復する）。内容を user に伝え、読んだら --ack <id>\n` : '';
+  const budget = 1500 - header.length - notice.length - headlessNotice.length - answerNotice.length - FOOTER.length - 2;
   let body = '';
   for (const mail of shown) {
-    const entry = redactSecrets(`from=${mail.from} / kind=${mail.kind} / why=${String(mail.why || '').slice(0, 120)} / id=${mail.id}\n${redactSecrets(mail.body).slice(0, 300)}\n`);
+    const prefix = decisionRole(mail) === 'answer' ? '[回答・返信不要] ' : '';
+    const entry = redactSecrets(`${prefix}from=${mail.from} / kind=${mail.kind} / why=${String(mail.why || '').slice(0, 120)} / id=${mail.id}\n${redactSecrets(mail.body).slice(0, 300)}\n`);
     if (body.length + entry.length > budget) break;
     body += entry;
   }
-  return `${header}${notice}${headlessNotice}${body}\n${FOOTER}`;
+  return `${header}${notice}${headlessNotice}${answerNotice}${body}\n${FOOTER}`;
 }
 // 最後の受信が2分以上前（または一度も受信していない）なら真。in-flight の poll ファイルも新しければ偽。
 export function shouldReceivePoll(home, { now = Date.now } = {}) {

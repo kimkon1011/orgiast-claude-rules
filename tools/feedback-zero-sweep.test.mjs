@@ -96,3 +96,16 @@ test('完了済み状態の原票は残数に数えない／種別不明は例�
   assert.throws(() => normalizeItem(entry, { message_id: 'q', kind: '???' }), /種別/);
   await assert.rejects(() => fetchPending(entry, {}, fetchDone), /参照キー未設定/);
 });
+
+test('FEEDBACK_KIM_DISCORD_ID 未設定でも ORGIAST_DISCORD_USER_ID があれば notify を呼び none 以外を返す', async () => {
+  const { home, opts, calls } = setup(pending);
+  const config = { ...opts.config }; delete config.FEEDBACK_KIM_DISCORD_ID;
+  const seen = [];
+  const notify = async (text, args) => { seen.push(args); return { delivered: 'dm' }; };
+  try {
+    const result = await sweep({ ...opts, config, notify });
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].userId, undefined);
+    assert.notEqual(result.notification.delivered, 'none');
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});

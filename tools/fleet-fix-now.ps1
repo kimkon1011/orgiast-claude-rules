@@ -63,7 +63,8 @@ if (-not (Get-ScheduledTask -TaskName 'OrgiastThermalGuard' -ErrorAction Silentl
 # ChatGPT アカウント（例: seisaku-team@）しか選べず切り替えられない（2026-10-10 nishi-PC 実測）。
 function Invoke-CodexLoginPrivate {
   $out = Join-Path $env:TEMP ('codex-login-' + [guid]::NewGuid().ToString('N') + '.txt')
-  $p = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/c', 'set BROWSER=none&& codex login > "' + $out + '" 2>&1') -WindowStyle Hidden -PassThru
+  # ArgumentList は1本の文字列で渡す。配列だと空白を含む要素が二重引用され、出力ファイルが作られず URL を取れない（2026-10-12 作業用018・kim-PC で再現）
+  $p = Start-Process -FilePath 'cmd.exe' -ArgumentList ('/c set "BROWSER=none" && codex login > "' + $out + '" 2>&1') -WindowStyle Hidden -PassThru
   $url = $null
   for ($i = 0; $i -lt 60 -and -not $url; $i++) {
     Start-Sleep -Milliseconds 500
@@ -114,7 +115,8 @@ if ($codex) {
   $expected = ''
   try {
     $map = Get-Content (Join-Path $repo 'fleet-pc-map.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-    $entry = $map.PSObject.Properties | Where-Object { $_.Name -eq $curLabel } | Select-Object -First 1
+    # label だけでなく aliases・hostname でも探す（cr-PC は label=作業用011 で報告しており名前で一致しなかった。2026-10-12）
+    $entry = $map.PSObject.Properties | Where-Object { $_.Name -notlike '_*' -and ($_.Name -eq $curLabel -or (@($_.Value.aliases) -contains $curLabel) -or $_.Value.hostname -eq $env:COMPUTERNAME) } | Select-Object -First 1
     # Codex の照合先: PC個別の codexAccount → 全PC共通の _codexAccountDefault。account は Claude の担当席なので使わない（2026-10-10 C案）。
     if ($entry -and $entry.Value.codexAccount) { $expected = [string]$entry.Value.codexAccount }
     elseif ($map._codexAccountDefault) { $expected = [string]$map._codexAccountDefault }
@@ -124,7 +126,7 @@ if ($codex) {
   $needRelogin = $codexOk -and $acct -and $expected -and (($acct.email -ne $expected) -or ($acct.plan -eq 'free'))
   if ($needRelogin -and -not $NoLogin) {
     Write-Host ''; Write-Host (">>> Codex のログイン(" + $acct.email + " / plan=" + $acct.plan + ")を取り直します。ブラウザが開いたら " + $expected + " でログインしてください <<<") -ForegroundColor Yellow
-    & codex logout 2>&1 | Out-Null
+    # logout はしない: codex login は成功時に auth.json を上書きする。失敗時に未ログインにならないよう既存は残す（2026-10-12 作業用018）
     Invoke-CodexLoginPrivate
     & codex login status 2>&1 | Out-Null; $codexOk = ($LASTEXITCODE -eq 0); $acct = Get-CodexEmail
   }
@@ -148,7 +150,9 @@ $reportFile = Join-Path $env:TEMP 'fleet-fix-now-report.txt'
 [IO.File]::WriteAllText($reportFile, ($report -join "`n"), (New-Object Text.UTF8Encoding($false)))
 $sendOut = ''
 if (Test-Path $fleetEnv) {
-  $sendOut = (& node $fleetMail --send --to $ReportTo --kind note --body-file $reportFile --why 'fleet-fix-now の実行結果' 2>&1 | Out-String)
+  $prevEap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+  $sendOut = (& node $fleetMail --send --to $ReportTo --kind note --body-file $reportFile --why 'fleet-fix-now の実行結果' 2>&1 | ForEach-Object { "$_" } | Out-String)
+  $ErrorActionPreference = $prevEap
   Write-Host ("report -> " + $ReportTo + ": " + $sendOut.Trim())
 } else { Write-Host 'report: fleet-sheet.env が無いので送信できません。上の出力を kim に見せてください' }
 Write-Host ''

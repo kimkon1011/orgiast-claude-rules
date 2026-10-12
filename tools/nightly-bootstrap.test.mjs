@@ -352,7 +352,8 @@ test('heartbeat is fail-open and runs before target extension dispatch', () => {
 
 test('missing target exits 1 and writes readable Japanese log', { skip: !hasPowerShell }, () => {
   const fix = fixture('missing');
-  const result = runBootstrap(fix, join(fix.dir, 'missing.ps1'));
+  // git 不在を再現する: 既定の設置先からの補完も止める（CI ランナーには C:\Program Files\Git がある）
+  const result = runBootstrap(fix, join(fix.dir, 'missing.ps1'), [], { ORGIAST_NIGHTLY_NO_GIT_FALLBACK: '1' });
   assert.equal(result.status, 1, result.stderr);
   const log = logText(fix);
   assert.match(log, /対象が見つからない/);

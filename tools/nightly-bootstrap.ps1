@@ -89,7 +89,7 @@ try {
     $git = Get-Command git -ErrorAction SilentlyContinue
     # スケジュールタスクの PATH に git が無いことがある（winget 導入直後など）。既定の設置先から探して補う
     # （2026-10-12 作業用011: 起動のたびに「gitが見つからない」で同期を飛ばし、名簿が古いままだった）。
-    if (-not $git) {
+    if (-not $git -and $env:ORGIAST_NIGHTLY_NO_GIT_FALLBACK -ne '1') {
         foreach ($cand in @("$env:ProgramFiles\Git\cmd\git.exe", "${env:ProgramFiles(x86)}\Git\cmd\git.exe", "$env:LOCALAPPDATA\Programs\Git\cmd\git.exe")) {
             if ($cand -and (Test-Path -LiteralPath $cand)) { $env:PATH = (Split-Path -Parent $cand) + ';' + $env:PATH; $git = Get-Command git -ErrorAction SilentlyContinue; break }
         }

@@ -325,6 +325,19 @@ async function execute(command, args, ctx) {
       save();
     }
     const today = summarize(log, todayKey);
+    // 7日たっても確かめられなかった見張りは、確認されていなくても1回だけ知らせて終える。
+    const expired = (state.watches || []).filter((w) => now.getTime() - Date.parse(w.since) >= WATCH_FAIL_DAYS * WATCH_DAY_MS);
+    if (expired.length) {
+      state.watches = state.watches.filter((w) => !expired.includes(w));
+      state.objectiveHistory ||= [];
+      for (const w of expired) state.objectiveHistory.push({ objective: w.objective, status: 'failed_check', iteration: state.totalIterations, endedAt: now.toISOString() });
+      state.objectiveHistory = state.objectiveHistory.slice(-20);
+      writeJson(paths.state, state);
+      for (const w of expired) {
+        const note = w.checks ? (w.note || 'うまくいった様子がありません') : `7日間、確かめられませんでした。まだ確かめられていないこと: ${w.unverified}`;
+        await sendNotice(formatWatchNotice({ hostname: ctx.hostname, objective: w.objective, result: 'ng', note }), ctx);
+      }
+    }
     const due = watchesDue(state, now);
     if (due.length) { for (const w of due) w.lastListedAt = now.toISOString(); writeJson(paths.state, state); }
     return { verdict: { running: 'run', paused: 'pause', stopped: 'stop', done: 'done' }[state.status], reason: state.pausedReason,
@@ -371,7 +384,7 @@ async function execute(command, args, ctx) {
       await sendNotice(formatWatchNotice({ hostname: ctx.hostname, objective: watch.objective, result: 'ok', note }), ctx);
       return { ok: true, status: 'ok', id };
     }
-    watch.ng = (watch.ng || 0) + 1; watch.checks = (watch.checks || 0) + 1; watch.lastCheckAt = now.toISOString();
+    watch.ng = (watch.ng || 0) + 1; watch.checks = (watch.checks || 0) + 1; watch.lastCheckAt = now.toISOString(); watch.note = note;
     const expired = now.getTime() - Date.parse(watch.since) >= WATCH_FAIL_DAYS * WATCH_DAY_MS;
     if (watch.ng >= 3 || expired) {
       state.watches = state.watches.filter((w) => w.id !== id);

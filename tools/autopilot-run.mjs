@@ -14,6 +14,19 @@ export function buildPrompt(repo = REPO) {
   return `${skill}\n\n<実行コンテキスト>\nrepo: ${repo}\n/autopilot tick を1周だけ実行する。ヘッドレスモード。ScheduleWakeup と /loop は使用しない。Codex はフォアグラウンドで完了まで待ち、post と必要な handoff を書いて終了する。次の起床はタスクスケジューラが担う。pre が error なら実装せず終了する。
 fleet-mail の受信メールに [判断依頼] を含むものへは返信も判断も行わない。kim の判断待ちとして放置すること（ヘッドレスでは未読注入からも除外される）。\n</実行コンテキスト>\n`;
 }
+export function buildWatchPrompt(watch, repo = REPO) {
+  return `autopilot の「見張り」を1件だけ確かめる。実装・修正・外部への送信はしない（読む・数える・ログを見るだけ）。
+
+見張り ID: ${watch.id}
+目的: ${watch.objective}
+まだ確かめられていないこと: ${watch.unverified}
+これまでの証拠: ${watch.evidence || 'なし'}
+
+1. 上の「まだ確かめられていないこと」が実際に起きたかを、ファイル・ログ・API などの実データで確かめる。推測で決めない。
+2. 起きていれば ok、起きていなければ ng として、次の1コマンドを実行して終える:
+   node "${repo}/tools/autopilot-tick.mjs" watch --id ${watch.id} --result ok|ng --note "<確かめたこと。システムを知らない高校生でもわかる短い日本語。コマンドやIDは書かない>"
+ヘッドレスモード。ScheduleWakeup と /loop は使用しない。`;
+}
 export function invokeClaude({ executable, args, prompt, cwd, timeoutMs, env = process.env }) {
   return new Promise((resolve) => {
     let stdout = '', stderr = '', timedOut = false, launchError = null;
@@ -45,6 +58,18 @@ export async function runOnce(options = {}) {
     const pre = await runAutopilot('pre', {}, options);
     if (pre.verdict !== 'run' || pre.error) {
       if (pre.verdict && pre.reason !== 'not_started') await runAutopilot('handoff', {}, options);
+      const watch = !pre.error && pre.watchesDue?.[0];
+      if (watch) {
+        // 完了・停止中でも見張りは確かめる。そうしないと「完了」のまま誰も結果を見ない。
+        const policy = options.policy || loadFablePolicy();
+        const model = fableAllowedForSupervisor(policy) ? 'claude-fable-5-1' : 'claude-opus-5';
+        const repo = options.repo || REPO;
+        const executable = options.executable || (await resolveClaudeExecutableFromDisk()).executable;
+        const checked = await (options.invokeImpl || invokeClaude)({ executable, args: ['-p', '--model', model, '--output-format', 'text'], prompt: buildWatchPrompt(watch, repo), cwd: repo,
+          timeoutMs: options.timeoutMs ?? 15 * 60_000, env: { ...process.env, AUTOPILOT_HOME: paths.dir, ORGIAST_HOME: paths.home } });
+        const result = { skipped: pre.reason || pre.verdict, watchChecked: watch.id, model, exitCode: checked.exitCode, timedOut: checked.timedOut, stdout: String(checked.stdout || '').slice(-2000) };
+        record(result); return result;
+      }
       const result = { skipped: pre.reason || pre.error || pre.verdict };
       record(result); return result;
     }

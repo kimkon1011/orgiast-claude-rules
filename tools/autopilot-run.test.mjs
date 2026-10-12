@@ -120,3 +120,24 @@ test('existing runner entry replenishes before launching Claude without explicit
 test('buildPrompt は fleet-mail の [判断依頼] へ返信も判断もしないよう指示する', () => {
   assert.match(buildPrompt(), /\[判断依頼\][^\n]*返信も判断も行わない/);
 });
+
+test('done state with a due watch invokes Claude once to check only that watch', async (t) => {
+  const opts = fixture(t);
+  await runAutopilot('start', { objective: '返信を送る' }, opts);
+  await runAutopilot('post', { summary: 'sent', progress: 100, unverified: '相手に届いたか' }, opts);
+  const prompts = [];
+  const result = await runOnce({ ...opts, executable: 'fake-claude', invokeImpl: async (invocation) => {
+    prompts.push(invocation.prompt);
+    await runAutopilot('watch', { id: 'w1', result: 'ok', note: '相手から返事が来た' }, opts);
+    return { exitCode: 0, stdout: 'checked' };
+  } });
+  assert.equal(result.watchChecked, 'w1');
+  assert.equal(prompts.length, 1);
+  assert.match(prompts[0], /見張り ID: w1/);
+  assert.match(prompts[0], /watch --id w1/);
+  assert.match(prompts[0], /相手に届いたか/);
+  assert.equal((await runAutopilot('status', {}, opts)).state.watches.length, 0);
+  // Listed once a day: a second run the same day does not invoke Claude again.
+  const again = await runOnce({ ...opts, invokeImpl: async () => { assert.fail('must not invoke twice a day'); } });
+  assert.equal(again.skipped, 'done');
+});

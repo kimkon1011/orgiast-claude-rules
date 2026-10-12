@@ -518,3 +518,22 @@ test('直して resumes like 続けて', () => {
   assert.equal(parseControl('直して！').command, 'run');
 });
 
+
+test('a watch never checked for seven days is closed by pre with one plain notice', async (t) => {
+  const f = discord(t);
+  await f.call('start', { objective: '[P1タスク] 返信を送る' });
+  await f.call('post', { summary: 'sent', progress: 100, unverified: '相手に届いたか' });
+  f.sent.length = 0;
+  const later = { now: new Date(NOW.getTime() + 8 * 24 * 3600 * 1000) };
+  const pre = await f.call('pre', {}, later);
+  assert.deepEqual(pre.watchesDue, []);
+  const state = (await f.call('status', {}, later)).state;
+  assert.equal(state.watches.length, 0);
+  assert.equal(state.objectiveHistory.at(-1).status, 'failed_check');
+  assert.equal(f.sent.length, 1);
+  assert.match(f.sent[0], /⚠️ うまくいっていません: 返信を送る/);
+  assert.match(f.sent[0], /7日間、確かめられませんでした/);
+  assert.doesNotMatch(f.sent[0], /P1|w1|watch/);
+  await f.call('pre', {}, later);
+  assert.equal(f.sent.length, 1);
+});

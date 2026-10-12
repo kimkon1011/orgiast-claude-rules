@@ -120,8 +120,10 @@ if ($codex) {
     elseif ($map._codexAccountDefault) { $expected = [string]$map._codexAccountDefault }
   } catch {}
   $acct = Get-CodexEmail
-  if ($codexOk -and $acct -and $expected -and $acct.email -ne $expected -and -not $NoLogin) {
-    Write-Host ''; Write-Host (">>> Codex が " + $acct.email + " でログインしています。このPCの担当は " + $expected + " です。ブラウザが開いたら " + $expected + " でログインしてください <<<") -ForegroundColor Yellow
+  # 担当一致でもトークンのプランが free のままなら取り直す（購入前に発行されたトークンは plan=free のまま。2026-10-12 nishi-PC 実測）
+  $needRelogin = $codexOk -and $acct -and $expected -and (($acct.email -ne $expected) -or ($acct.plan -eq 'free'))
+  if ($needRelogin -and -not $NoLogin) {
+    Write-Host ''; Write-Host (">>> Codex のログイン(" + $acct.email + " / plan=" + $acct.plan + ")を取り直します。ブラウザが開いたら " + $expected + " でログインしてください <<<") -ForegroundColor Yellow
     & codex logout 2>&1 | Out-Null
     Invoke-CodexLoginPrivate
     & codex login status 2>&1 | Out-Null; $codexOk = ($LASTEXITCODE -eq 0); $acct = Get-CodexEmail

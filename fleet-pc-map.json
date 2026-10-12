@@ -55,7 +55,8 @@
     "hostname": "作業用011",
     "deviceId": "B79CA602-6163-4252-B2A0-2A96C61F6767",
     "person": "金功勇",
-    "_evidence": "kim のスクリーンショット(2026-10-09): Chrome リモートデスクトップ『作業用011』の接続先で 設定→システム→バージョン情報 のデバイス名『作業用011』（HP EliteDesk 800 G3 SFF、i7-7700、デバイスID 上記、Windows 11 Pro 22H2、Windows のサインインは 金功勇 / kimkongyong@gmail.com）。Claude Code の導入と REPORTER_LABEL は未確認。ラベルが未設定なら hostname『作業用011』で受信するため、キー名＝hostname で照合できる"
+    "_evidence": "kim のスクリーンショット(2026-10-09): Chrome リモートデスクトップ『作業用011』の接続先で 設定→システム→バージョン情報 のデバイス名『作業用011』（HP EliteDesk 800 G3 SFF、i7-7700、デバイスID 上記、Windows 11 Pro 22H2、Windows のサインインは 金功勇 / kimkongyong@gmail.com）。Claude Code の導入と REPORTER_LABEL は未確認。ラベルが未設定なら hostname『作業用011』で受信するため、キー名＝hostname で照合できる",
+    "codexAccount": "cr@orgiast.jp"
   },
   "cr-PC": {
     "sheetName": "作業用011",

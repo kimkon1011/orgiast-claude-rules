@@ -40,6 +40,7 @@ function runBootstrap(fix, target, args = [], extraEnv = {}, shell, bootstrap = 
     `$env:ORGIAST_NIGHTLY_REPO = ${psQuote(toWindowsPath(fix.repo))}`,
     `$env:PATH = ${psQuote(windowsPowerShellDir)}`,
     "$env:ORGIAST_NIGHTLY_NO_SELF_UPDATE = '1'",
+    "$env:ORGIAST_NIGHTLY_NO_GIT_FALLBACK = '1'",
     ...extraEnvLines,
     `& ${psQuote(bootstrapPath)} -Target ${psQuote(targetPath)}${shellArgument} -TargetArguments $args`,
     'exit $LASTEXITCODE',
@@ -55,6 +56,7 @@ function runBootstrap(fix, target, args = [], extraEnv = {}, shell, bootstrap = 
       HOME: toWindowsPath(fix.home),
       USERPROFILE: toWindowsPath(fix.home),
       PATH: windowsPowerShellDir,
+      ORGIAST_NIGHTLY_NO_GIT_FALLBACK: '1',
       ...extraEnv,
     },
   });
@@ -71,6 +73,7 @@ function runBootstrapAsync(fix, target, args = [], extraEnv = {}) {
     `$env:ORGIAST_NIGHTLY_REPO = ${psQuote(toWindowsPath(fix.repo))}`,
     `$env:PATH = ${psQuote(windowsPowerShellDir)}`,
     "$env:ORGIAST_NIGHTLY_NO_SELF_UPDATE = '1'",
+    "$env:ORGIAST_NIGHTLY_NO_GIT_FALLBACK = '1'",
     ...extraEnvLines,
     `& ${psQuote(toWindowsPath(script))} -Target ${psQuote(target)} -TargetArguments $args`,
     'exit $LASTEXITCODE',
@@ -87,6 +90,7 @@ function runBootstrapAsync(fix, target, args = [], extraEnv = {}) {
         HOME: toWindowsPath(fix.home),
         USERPROFILE: toWindowsPath(fix.home),
         PATH: windowsPowerShellDir,
+        ORGIAST_NIGHTLY_NO_GIT_FALLBACK: '1',
         ...extraEnv,
       },
     });

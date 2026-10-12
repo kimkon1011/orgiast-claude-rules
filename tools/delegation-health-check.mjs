@@ -98,6 +98,15 @@ export function isQuotaLimitedRow(row = {}) {
   return /^http_?(402|429)$/.test(String(row?.status ?? '').toLowerCase());
 }
 
+// cooldown の行は「上限/レート制限中なのでリクエストを投げなかった」記録(cheap-code.mjs が
+// status:'cooldown' で残す)。失敗ではなく未試行なので、全滅判定の分母に入れてはならない。
+// 入れると (a) 実体が上限到達でも証拠が「N件すべて失敗」の high 未修理全滅になり、
+// (b) isQuotaLimitedRow の all 判定が cooldown 行で必ず false になる
+// (2026-10-13 診断: glm の11件 = cooldown 5件 + http_429 6件。実体は Coding Plan の上限到達)。
+export function isCooldownSkippedRow(row = {}) {
+  return String(row?.status ?? '').toLowerCase() === 'cooldown';
+}
+
 // フォールバック先の子プロセスが OS エラーで起動できなかった行(例: spawn ENAMETOOLONG / ENOENT)。
 // 1件で発火させる: 低成果(2件閾値)では単発の故障が翌朝 healthy と判定されてしまった (2026-09-21)。
 const SPAWN_FAILED = /syscall: 'spawn'|\bspawn E[A-Z]+\b|code: 'E[A-Z]{4,}'/;
@@ -141,6 +150,12 @@ export function emptyOutputReason(row) {
   if (CODEX_MODEL_AUTH_MISMATCH.test(String(row?.stderrTail || ''))) return 'model_auth_mismatch';
   if (CODEX_USAGE_LIMIT.test(String(row?.stderrTail || ''))) return 'usage_limit';
   if (INFRA_TRANSIENT.test(String(row?.stderrTail || ''))) return 'infra_transient';
+  // 台帳の status は数値(終了コード)だけではない。llm-fallback / cheap-code は失敗の種類を
+  // そのまま文字列で書く(http_429 / http_402 / cooldown)。これを知らずに catch-all の
+  // no_output へ落とすと、証拠が「no_output(11件)」になり、上限到達が原因不明のレーン故障に見える
+  // (2026-10-13 診断: glm の11件の実体は HTTP 429 と、その間の cooldown スキップだった)。
+  if (isQuotaLimitedRow(row)) return 'quota_limited';
+  if (isCooldownSkippedRow(row)) return 'cooldown_skipped';
   const status = Number(row?.status);
   if (Number.isFinite(status) && status !== 0) return `exit_${status}`;
   return 'no_output';
@@ -240,20 +255,39 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
   for (const [provider, rows] of providers) {
     // llm-ask は status:'ok'、cheap-code は ok、codex-do は終了状態と出力を記録する。
     const succeeded = rows.some(row => normalizeExecutorStatus(row) === 'ok' && Number(row.out) > 0);
-    if (rows.length < 3 || succeeded) continue;
+    if (succeeded) continue;
+    // 全滅の分母は「実際に投げた回(attempts)」。cooldown 行は上限中で投げなかった記録なので
+    // 分母から外す。外さないと上限到達の実体が「N件すべて失敗」の high 未修理全滅に見える
+    // (2026-10-13 診断: glm の11件 = cooldown 5件 + http_429 6件)。
+    const attempts = rows.filter((row) => !isCooldownSkippedRow(row));
+    // 24h 窓が cooldown だけで埋まる＝上限中で一度も試行していない。レーンは止まっているが
+    // 原因は上限側で、コードの欠陥ではない。low の可視化だけ残す(high にすると上限が明けるまで
+    // 毎晩同じ偽の修理タスクが積まれる。黙って消すと止まっている事実自体が見えなくなる)。
+    if (!attempts.length) {
+      if (rows.length >= 3) {
+        const state = cooldown[provider], until = Number(state?.until);
+        const skipped = rows.map(row => row.t).sort((a, b) => Date.parse(a) - Date.parse(b));
+        findings.push({ id: 'provider_cooldown_skipped', provider, severity: 'low', title: `${provider} は cooldown 中で試行されていない（欠陥ではない）`,
+          evidence: [`${rows.length}件すべて cooldown`, `最初 ${skipped[0]}`, `最後 ${skipped.at(-1)}`,
+            `cooldown ${state?.reason || '理由不明'}${Number.isFinite(until) ? ` / until ${new Date(until).toISOString()}` : ''}`] });
+      }
+      continue;
+    }
+    if (attempts.length < 3) continue;
     // 上限/レート制限だけで全滅した行は「レーンが壊れている」証拠ではない。high + fixTask で
     // 起票すると、上限が続く限り毎晩同じ偽の修理タスクが積まれる（2026-10-13 診断: glm の
     // 3件は 1 リクエストの再試行で、実体は Coding Plan の週次/月次上限到達）。
     // codex の usage_limit と同じく low・fixTask なしの可視化だけにする。
-    if (rows.every(isQuotaLimitedRow)) {
+    if (attempts.every(isQuotaLimitedRow)) {
       findings.push({ id: 'provider_usage_limit', provider, severity: 'low', title: `${provider} は上限/レート制限で停止（欠陥ではない）`,
-        evidence: [`${rows.length}件すべて失敗`, ...reasonTop(rows.map(row => ({ reason: row.stderrTail || row.reason || emptyOutputReason(row) })))] });
+        evidence: [`${attempts.length}件すべて失敗`, ...reasonTop(attempts.map(row => ({ reason: row.stderrTail || row.reason || emptyOutputReason(row) })))] });
       continue;
     }
-    const times = rows.map(row => row.t).sort((a, b) => Date.parse(a) - Date.parse(b));
+    const times = attempts.map(row => row.t).sort((a, b) => Date.parse(a) - Date.parse(b));
+    const skipped = rows.length - attempts.length;
     findings.push({ id: 'lane_outage_unrepaired', provider, severity: 'high', title: `${provider} レーンが全滅したまま（未修理）`,
-      evidence: [`${rows.length}件すべて失敗`, `最初 ${times[0]}`, `最後 ${times.at(-1)}`, ...reasonTop(rows.map(row => ({ reason: row.stderrTail || row.reason || emptyOutputReason(row) })))],
-      fixTask: `${provider} が直近 ${rows.length} 件すべて失敗している。代替レーンや Claude 本体へ逃げて放置せず、stderrTail から原因を特定して修復し、修復後に1回実行して成功を実測する。直せないときは試した手段と出力を記録する` });
+      evidence: [`${attempts.length}件すべて失敗`, `最初 ${times[0]}`, `最後 ${times.at(-1)}`, ...(skipped ? [`cooldown スキップ ${skipped}件`] : []), ...reasonTop(attempts.map(row => ({ reason: row.stderrTail || row.reason || emptyOutputReason(row) })))],
+      fixTask: `${provider} が直近 ${attempts.length} 件すべて失敗している。代替レーンや Claude 本体へ逃げて放置せず、stderrTail から原因を特定して修復し、修復後に1回実行して成功を実測する。直せないときは試した手段と出力を記録する` });
   }
   return findings.length ? findings : [{ id: 'healthy', severity: 'low', title: '委譲経路は正常', evidence: [] }];
 }

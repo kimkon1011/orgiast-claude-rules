@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { parseHandoff } from './auto-session.mjs';
-import { applyAutoHeal, collectFindings, emptyOutputReason, isQuotaLimitedRow, parseRateLimitsFromText, readCodexUsedPercent, upsertFixTasks, windowResetsAfterLimit } from './delegation-health-check.mjs';
+import { applyAutoHeal, collectFindings, emptyOutputReason, isCooldownSkippedRow, isQuotaLimitedRow, parseRateLimitsFromText, readCodexUsedPercent, upsertFixTasks, windowResetsAfterLimit } from './delegation-health-check.mjs';
 
 const NOW = new Date('2026-09-09T12:00:00.000Z');
 const homes = [];
@@ -615,7 +615,9 @@ test('上限/レート制限だけで全滅したレーンは lane_outage_unrepa
   // low には fixTask を付けない＝upsertFixTasks (high/medium のみ) が起票しない。
   assert.equal(limit.fixTask, undefined);
   assert.equal(limit.evidence[0], '3件すべて失敗');
-  assert.equal(limit.evidence[1], 'no_output(3件)');
+  // 証拠は catch-all の no_output ではなく、台帳に書かれた失敗の種類をそのまま出す
+  // (「no_output(3件)」では上限到達が原因不明の故障に見える。2026-10-13 診断)。
+  assert.equal(limit.evidence[1], 'quota_limited(3件)');
 });
 
 test('上限行に 1 件でも上限以外の失敗が混ざれば従来どおり high の未修理全滅にする', () => {
@@ -635,4 +637,79 @@ test('上限行が2件だけなら 3件閾値に届かずどの finding も出�
   const ids = collectFindings({ home: dir, now: NOW }).map((f) => f.id);
   assert.equal(ids.includes('lane_outage_unrepaired'), false);
   assert.equal(ids.includes('provider_usage_limit'), false);
+});
+
+// 2026-10-13 実測（~/.claude/executor-usage.jsonl の glm 11件）: cooldown 5件 + http_429 6件。
+// cooldown 行は cheap-code が「上限中なのでリクエストを投げなかった」記録で、失敗ではない。
+// これを分母に入れていたため、上限到達の実体が high の未修理全滅（＝毎晩の偽の修理起票）に見えていた。
+const COOLDOWN_ROW = (i) => ({ t: `2026-09-09T10:2${i}:10.987Z`, provider: 'glm', model: 'glm-5.3', in: 4529, out: 0, secs: 0, ok: false, status: 'cooldown' });
+const GLM_REAL_ROWS = [0, 1, 2, 3, 4].map(COOLDOWN_ROW).concat(
+  [0, 1, 2, 3, 4, 5].map((i) => ({ t: `2026-09-09T10:2${i}:30.083Z`, provider: 'glm', model: 'glm-5.3', in: 0, out: 0, secs: 1.7, status: 'http_429', attempt: i % 3, failover: false })));
+
+test('isCooldownSkippedRow は cooldown の行だけを true にする', () => {
+  for (const status of ['cooldown', 'Cooldown', 'COOLDOWN']) assert.equal(isCooldownSkippedRow({ status }), true, status);
+  for (const status of ['http_429', 'ok', 0, '0', 'error', '']) assert.equal(isCooldownSkippedRow({ status }), false, status);
+  assert.equal(isCooldownSkippedRow({}), false);
+  assert.equal(isCooldownSkippedRow(null), false);
+  assert.equal(isCooldownSkippedRow(), false);
+});
+
+test('emptyOutputReason は台帳の文字列 status を no_output に潰さない', () => {
+  assert.equal(emptyOutputReason({ status: 'http_429' }), 'quota_limited');
+  assert.equal(emptyOutputReason({ status: 'http_402' }), 'quota_limited');
+  assert.equal(emptyOutputReason({ status: 'cooldown' }), 'cooldown_skipped');
+  // 数値 status(終了コード)と既存の文字列 status の扱いは変えない。
+  assert.equal(emptyOutputReason({ status: 3 }), 'exit_3');
+  assert.equal(emptyOutputReason({ status: 'error' }), 'spawn_failed');
+});
+
+test('cooldown 行を分母から外し、上限到達の glm を high の未修理全滅にしない', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', GLM_REAL_ROWS.map(row).join(''));
+  const findings = collectFindings({ home: dir, now: NOW });
+  assert.equal(findings.some((f) => f.id === 'lane_outage_unrepaired'), false);
+  const limit = findings.find((f) => f.id === 'provider_usage_limit');
+  assert.equal(limit.provider, 'glm');
+  assert.equal(limit.severity, 'low');
+  assert.equal(limit.fixTask, undefined);
+  // 分母は実際に投げた6件(cooldown 2件は未試行なので数えない)。
+  assert.equal(limit.evidence[0], '6件すべて失敗');
+  assert.equal(limit.evidence[1], 'quota_limited(6件)');
+});
+
+test('cooldown だけで埋まった窓は可視化だけ残し high の起票にしない', () => {
+  const dir = home();
+  const until = NOW.getTime() + 3_600_000;
+  write(dir, 'provider-cooldown.json', { glm: { until, reason: 'lane_doctor_usage_limit', at: NOW.getTime() } });
+  write(dir, 'executor-usage.jsonl', [0, 1, 2].map(COOLDOWN_ROW).map(row).join(''));
+  const findings = collectFindings({ home: dir, now: NOW });
+  assert.equal(findings.some((f) => f.id === 'lane_outage_unrepaired'), false);
+  const skippedFinding = findings.find((f) => f.id === 'provider_cooldown_skipped');
+  assert.equal(skippedFinding.provider, 'glm');
+  assert.equal(skippedFinding.severity, 'low');
+  assert.equal(skippedFinding.fixTask, undefined);
+  assert.equal(skippedFinding.evidence[0], '3件すべて cooldown');
+  assert.equal(skippedFinding.evidence[3], 'cooldown lane_doctor_usage_limit / until 2026-09-09T13:00:00.000Z');
+});
+
+test('cooldown 行が混ざっても上限以外の失敗があれば high の未修理全滅のままにする', () => {
+  const dir = home();
+  const rows = [0, 1].map(COOLDOWN_ROW).concat(
+    [0, 1, 2].map((i) => ({ t: `2026-09-09T10:2${i}:40.000Z`, provider: 'glm', out: 0, status: 'error' })));
+  write(dir, 'executor-usage.jsonl', rows.map(row).join(''));
+  const findings = collectFindings({ home: dir, now: NOW });
+  assert.equal(findings.some((f) => f.id === 'provider_usage_limit'), false);
+  const outage = findings.find((f) => f.id === 'lane_outage_unrepaired');
+  assert.equal(outage.severity, 'high');
+  assert.equal(outage.evidence[0], '3件すべて失敗');
+  assert.ok(outage.evidence.includes('cooldown スキップ 2件'));
+  assert.ok(outage.fixTask);
+});
+
+test('cooldown 行しか無い窓で未試行が3件未満なら finding を出さない', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', [0, 1].map(COOLDOWN_ROW).map(row).join(''));
+  const ids = collectFindings({ home: dir, now: NOW }).map((f) => f.id);
+  assert.equal(ids.includes('provider_cooldown_skipped'), false);
+  assert.equal(ids.includes('lane_outage_unrepaired'), false);
 });

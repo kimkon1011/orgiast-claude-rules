@@ -85,6 +85,40 @@ export async function describeTargetFreshness({ to, home, now = Date.now, fetchB
   const stale = row.pollAgeMs === null || row.pollAgeMs > 24 * 60 * 60 * 1000;
   return { text: `宛先 ${label}: 最終poll ${poll} / ビーコン ${beacon}`, stale, unknown: row.pollAgeMs === null };
 }
+const nameKey = value => String(value ?? '').normalize('NFKC').trim().toLowerCase();
+// pc-map 上で宛先 X と「同じ実機」を指す別キー（hostname 一致 / aliases に相互に含まれる）を返す。
+export function sameMachineLabels(to, pcMap) {
+  if (!pcMap || typeof pcMap !== 'object' || Array.isArray(pcMap)) return [];
+  const entries = Object.entries(pcMap).filter(([label, entry]) => !label.startsWith('_') && entry && typeof entry === 'object' && !Array.isArray(entry));
+  const identity = ([label, entry]) => new Set([label, entry.hostname, ...(Array.isArray(entry.aliases) ? entry.aliases : [])].filter(Boolean).map(nameKey));
+  const x = nameKey(to);
+  const own = entries.filter(([label, entry]) => nameKey(label) === x || nameKey(entry.hostname) === x);
+  const ownIds = new Set([x, ...own.flatMap(item => [...identity(item)])]);
+  const ownKeys = new Set(own.map(([label]) => label));
+  return entries.filter(item => !ownKeys.has(item[0]) && [...identity(item)].some(name => ownIds.has(name))).map(([label]) => label);
+}
+// 送信前の宛先解決: poll 実績の無い宛先を同一実機の別ラベル（poll 実績あり）へ付け替え、どこにも poll 実績が無ければ拒否する。
+// ビーコン取得失敗は fail-open（status: 'unknown'）。
+export async function resolveDeliverableTarget({ to, home, now = Date.now, fetchBeacons, pcMap } = {}) {
+  const label = String(to ?? '');
+  if (!label || label === 'all') return { status: 'ok', to: label };
+  let result;
+  try {
+    const fetchImpl = fetchBeacons ?? (await import('./fleet-beacon.mjs')).fetchBeacons;
+    result = await fetchImpl({ home });
+  } catch { return { status: 'unknown', to: label }; }
+  if (!result?.ok) return { status: 'unknown', to: label };
+  const { buildFleetStatus } = await import('./fleet-status.mjs');
+  const rows = buildFleetStatus({ pcMap: pcMap ?? {}, beacons: result.beacons, serverPolls: result.serverPolls, now: now() });
+  const polled = rows.filter(row => row.pollAt);
+  if (polled.some(row => row.label === label)) return { status: 'ok', to: label };
+  const twins = new Set(sameMachineLabels(label, pcMap));
+  const alt = polled.filter(row => twins.has(row.label)).sort((a, b) => Date.parse(b.pollAt) - Date.parse(a.pollAt))[0];
+  if (alt) return { status: 'redirect', to: alt.label, text: `宛先 ${label} → ${alt.label} に解決（同一実機）` };
+  // 部分一致の宛先（GAS 側は label/hostname の部分一致で配達する）は poll 実績のあるラベルに含まれれば通す。
+  if (polled.some(row => row.label.includes(label))) return { status: 'ok', to: label };
+  return { status: 'none', to: label, labels: polled.map(row => row.label) };
+}
 export function parseExecMarkers(body) {
   const lines = String(body ?? '').split(/\r?\n/);
   if (!execMarker.test(lines[0] ?? '')) return { exec: null, cwd: null, body: String(body ?? '') };
@@ -524,6 +558,18 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     }
     const target = resolveRemoteName(options['--to'], pcMap);
     if (target.resolved) err(`${options['--to']} → ${target.to}`);
+    // ビーコン取得は1回だけ（解決と鮮度表示で共有）。
+    let beaconPromise;
+    const sharedBeacons = async args => {
+      beaconPromise ??= Promise.resolve().then(async () => (deps.fetchBeacons ?? (await import('./fleet-beacon.mjs')).fetchBeacons)(args));
+      return beaconPromise;
+    };
+    const deliverable = await resolveDeliverableTarget({ to: target.to, home, now, fetchBeacons: sharedBeacons, pcMap });
+    if (deliverable.status === 'redirect') { err(deliverable.text); target.to = deliverable.to; }
+    else if (deliverable.status === 'none' && !options['--force']) {
+      err(`fleet-mail: 宛先 ${target.to} には poll 実績が無く、同一実機のラベルにも無いため送信しません（未配達になる）。poll 実績のあるラベル: ${deliverable.labels.join(', ') || '(なし)'}。意図的に送るときだけ --force`);
+      return 6;
+    }
     const id = `mail-${new Date(now()).toISOString().replace(/[-:.TZ]/g, '')}-${(deps.randomInt ?? randomInt)(1000, 10000)}`;
     // --exec codex: 本文先頭にマーカー行を挿入して受信側に実行モードを伝える（本文ファイル自体は変更しない）。
     let body = redactSecrets(fs.readFileSync(options['--body-file'], 'utf8')).slice(0, 20000);
@@ -541,7 +587,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     // 宛先が受信できているかを送信前に見せる（2026-10-10 事故: 受信タスク停止で返事が永遠に届かない）。
     // 取得失敗・未設定でも送信は続行する（fail-open）。
     try {
-      const freshness = await (deps.describeTargetFreshness ?? describeTargetFreshness)({ to: target.to, home, now, fetchBeacons: deps.fetchBeacons, pcMap });
+      const freshness = await (deps.describeTargetFreshness ?? describeTargetFreshness)({ to: target.to, home, now, fetchBeacons: sharedBeacons, pcMap });
       err(freshness.text);
       if (freshness.stale) err('⚠ 宛先は24時間以上 poll していない可能性。返信が遅れます');
     } catch (error) {

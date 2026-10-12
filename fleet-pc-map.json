@@ -52,20 +52,17 @@
   },
   "作業用011": {
     "remoteName": "作業用011",
-    "hostname": "作業用011",
-    "deviceId": "B79CA602-6163-4252-B2A0-2A96C61F6767",
-    "person": "金功勇",
-    "_evidence": "kim のスクリーンショット(2026-10-09): Chrome リモートデスクトップ『作業用011』の接続先で 設定→システム→バージョン情報 のデバイス名『作業用011』（HP EliteDesk 800 G3 SFF、i7-7700、デバイスID 上記、Windows 11 Pro 22H2、Windows のサインインは 金功勇 / kimkongyong@gmail.com）。Claude Code の導入と REPORTER_LABEL は未確認。ラベルが未設定なら hostname『作業用011』で受信するため、キー名＝hostname で照合できる",
-    "codexAccount": "cr@orgiast.jp"
-  },
-  "cr-PC": {
     "sheetName": "作業用011",
     "hostname": "作業用011",
+    "deviceId": "B79CA602-6163-4252-B2A0-2A96C61F6767",
     "account": "cr@orgiast.jp",
+    "person": "金功勇",
     "aliases": [
-      "作業用011"
+      "cr-PC"
     ],
-    "_evidence": "cr-PC の Claude Code が Discord #claude-code（msg 1558060797459169290, 2026-10-09）で hostname『作業用011』を自己申告。kim 回答 2026-10-08: cr@orgiast.jp 担当。HANDOVER-cr-2026-10-09 の『作業用018』表記は誤りで実機は 011。enroll は PC名 cr-PC で 2026-10-09 発行",
+    "_mergedFrom": "cr-PC（2026-10-13 統合。同一実機が2キーに分かれ、cr-PC 宛メールが未配達だった）。cr-PC の旧エントリ: sheetName=作業用011, hostname=作業用011, aliases=[作業用011], account=cr@orgiast.jp",
+    "_evidenceCrPC": "cr-PC の Claude Code が Discord #claude-code（msg 1558060797459169290, 2026-10-09）で hostname『作業用011』を自己申告。kim 回答 2026-10-08: cr@orgiast.jp 担当。HANDOVER-cr-2026-10-09 の『作業用018』表記は誤りで実機は 011。enroll は PC名 cr-PC で 2026-10-09 発行",
+    "_evidence": "kim のスクリーンショット(2026-10-09): Chrome リモートデスクトップ『作業用011』の接続先で 設定→システム→バージョン情報 のデバイス名『作業用011』（HP EliteDesk 800 G3 SFF、i7-7700、デバイスID 上記、Windows 11 Pro 22H2、Windows のサインインは 金功勇 / kimkongyong@gmail.com）。Claude Code の導入と REPORTER_LABEL は未確認。ラベルが未設定なら hostname『作業用011』で受信するため、キー名＝hostname で照合できる",
     "codexAccount": "cr@orgiast.jp"
   },
   "_unverified": {

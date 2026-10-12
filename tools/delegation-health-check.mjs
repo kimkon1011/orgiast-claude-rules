@@ -90,6 +90,14 @@ const INFRA_TRANSIENT = /failed to lookup address information|failed to connect 
 // （2026-09-19 実測: この PC は `wsl -l -q` が空）。
 const WSL_LANE_ABSENT = /WSL ディストリが見つかりません/;
 
+// 上限・レート制限は欠陥ではない（後段の codex usage_limit と同じ扱い＝low・fixTask なし）。
+// 2026-10-13 診断: glm の「3件すべて失敗」は 1 リクエストの再試行(attempt 0/1/2)で、
+// 実体は z.ai Coding Plan の weekly/monthly 上限到達(HTTP 429 / error.code 1310,
+// "Weekly/Monthly Limit Exhausted")。レーンは壊れておらず、上限リセットで自動回復する。
+export function isQuotaLimitedRow(row = {}) {
+  return /^http_?(402|429)$/.test(String(row?.status ?? '').toLowerCase());
+}
+
 // フォールバック先の子プロセスが OS エラーで起動できなかった行(例: spawn ENAMETOOLONG / ENOENT)。
 // 1件で発火させる: 低成果(2件閾値)では単発の故障が翌朝 healthy と判定されてしまった (2026-09-21)。
 const SPAWN_FAILED = /syscall: 'spawn'|\bspawn E[A-Z]+\b|code: 'E[A-Z]{4,}'/;
@@ -233,6 +241,15 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
     // llm-ask は status:'ok'、cheap-code は ok、codex-do は終了状態と出力を記録する。
     const succeeded = rows.some(row => normalizeExecutorStatus(row) === 'ok' && Number(row.out) > 0);
     if (rows.length < 3 || succeeded) continue;
+    // 上限/レート制限だけで全滅した行は「レーンが壊れている」証拠ではない。high + fixTask で
+    // 起票すると、上限が続く限り毎晩同じ偽の修理タスクが積まれる（2026-10-13 診断: glm の
+    // 3件は 1 リクエストの再試行で、実体は Coding Plan の週次/月次上限到達）。
+    // codex の usage_limit と同じく low・fixTask なしの可視化だけにする。
+    if (rows.every(isQuotaLimitedRow)) {
+      findings.push({ id: 'provider_usage_limit', provider, severity: 'low', title: `${provider} は上限/レート制限で停止（欠陥ではない）`,
+        evidence: [`${rows.length}件すべて失敗`, ...reasonTop(rows.map(row => ({ reason: row.stderrTail || row.reason || emptyOutputReason(row) })))] });
+      continue;
+    }
     const times = rows.map(row => row.t).sort((a, b) => Date.parse(a) - Date.parse(b));
     findings.push({ id: 'lane_outage_unrepaired', provider, severity: 'high', title: `${provider} レーンが全滅したまま（未修理）`,
       evidence: [`${rows.length}件すべて失敗`, `最初 ${times[0]}`, `最後 ${times.at(-1)}`, ...reasonTop(rows.map(row => ({ reason: row.stderrTail || row.reason || emptyOutputReason(row) })))],

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { parseHandoff } from './auto-session.mjs';
-import { applyAutoHeal, collectFindings, emptyOutputReason, parseRateLimitsFromText, readCodexUsedPercent, upsertFixTasks, windowResetsAfterLimit } from './delegation-health-check.mjs';
+import { applyAutoHeal, collectFindings, emptyOutputReason, isQuotaLimitedRow, parseRateLimitsFromText, readCodexUsedPercent, upsertFixTasks, windowResetsAfterLimit } from './delegation-health-check.mjs';
 
 const NOW = new Date('2026-09-09T12:00:00.000Z');
 const homes = [];
@@ -586,4 +586,53 @@ test('環境故障は種類ごとの最後の失敗時刻で修復を判定す�
     { t: '2026-09-09T10:02:00Z', provider: 'codex', out: 0, ...ENVIRONMENT_FAILURES[2][1] },
   ].map(row).join(''));
   assert.deepEqual(collectFindings({ home: dir, now: NOW }).map(f => f.id), ['codex_auth_failed']);
+});
+
+// 2026-10-13 診断: glm の「3件すべて失敗」は 1 リクエストの再試行(attempt 0/1/2)で、
+// 実体は z.ai Coding Plan の週次/月次上限到達(HTTP 429 / error.code 1310)。
+// レーンの故障ではないので high の修理タスクとして起票してはならない。
+const GLM_LIMIT_ROWS = [0, 1, 2].map((i) => ({
+  t: `2026-09-09T10:25:1${i}.083Z`, provider: 'glm', model: 'glm-5.3',
+  in: 0, out: 0, secs: 1.7, status: 'http_429', attempt: i, failover: false,
+}));
+
+test('isQuotaLimitedRow は上限/レート制限の status だけを true にする', () => {
+  for (const status of ['http_429', 'http_402', 'HTTP_429', 'http429']) assert.equal(isQuotaLimitedRow({ status }), true, status);
+  for (const status of ['http_500', 'http_401', 'error', 'ok', '0', '']) assert.equal(isQuotaLimitedRow({ status }), false, status);
+  assert.equal(isQuotaLimitedRow({}), false);
+  assert.equal(isQuotaLimitedRow(null), false);
+  assert.equal(isQuotaLimitedRow(), false);
+});
+
+test('上限/レート制限だけで全滅したレーンは lane_outage_unrepaired ではなく low の可視化にする', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', GLM_LIMIT_ROWS.map(row).join(''));
+  const findings = collectFindings({ home: dir, now: NOW });
+  assert.equal(findings.some((f) => f.id === 'lane_outage_unrepaired'), false);
+  const limit = findings.find((f) => f.id === 'provider_usage_limit');
+  assert.equal(limit.provider, 'glm');
+  assert.equal(limit.severity, 'low');
+  // low には fixTask を付けない＝upsertFixTasks (high/medium のみ) が起票しない。
+  assert.equal(limit.fixTask, undefined);
+  assert.equal(limit.evidence[0], '3件すべて失敗');
+  assert.equal(limit.evidence[1], 'no_output(3件)');
+});
+
+test('上限行に 1 件でも上限以外の失敗が混ざれば従来どおり high の未修理全滅にする', () => {
+  const dir = home();
+  const mixed = [...GLM_LIMIT_ROWS.slice(0, 2), { t: '2026-09-09T10:25:13.050Z', provider: 'glm', out: 0, status: 'error' }];
+  write(dir, 'executor-usage.jsonl', mixed.map(row).join(''));
+  const findings = collectFindings({ home: dir, now: NOW });
+  assert.equal(findings.some((f) => f.id === 'provider_usage_limit'), false);
+  const outage = findings.find((f) => f.id === 'lane_outage_unrepaired');
+  assert.equal(outage.provider, 'glm');
+  assert.equal(outage.severity, 'high');
+});
+
+test('上限行が2件だけなら 3件閾値に届かずどの finding も出さない', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', GLM_LIMIT_ROWS.slice(0, 2).map(row).join(''));
+  const ids = collectFindings({ home: dir, now: NOW }).map((f) => f.id);
+  assert.equal(ids.includes('lane_outage_unrepaired'), false);
+  assert.equal(ids.includes('provider_usage_limit'), false);
 });

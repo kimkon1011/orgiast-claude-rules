@@ -6,6 +6,37 @@ import { rescueTree } from './rescue-policy.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 import { isEntry } from './is-entry.mjs';
 
+const LOCK_ERROR_CODES = new Set(['EBUSY', 'EPERM', 'EACCES']);
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+// run-hidden.vbs holds `cmd /c ... >> sync-orgiast-main.log 2>&1` open for the whole
+// run, so appending to that same file throws EBUSY. Retry briefly, then divert to a
+// sibling events log: a log write must never turn a completed sync into a failure.
+export async function appendLogLine(file, line, {
+  retries = 3,
+  delayMs = 100,
+  fallbackFile = path.join(path.dirname(file), 'sync-orgiast-main.events.log'),
+  appendImpl = fs.appendFileSync,
+  sleepImpl = sleep,
+} = {}) {
+  const text = `${line}\n`;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      appendImpl(file, text);
+      return { ok: true, file };
+    } catch (error) {
+      if (!LOCK_ERROR_CODES.has(error?.code)) return { ok: false, file, error };
+      if (attempt < retries) await sleepImpl(delayMs);
+    }
+  }
+  try {
+    appendImpl(fallbackFile, text);
+    return { ok: true, file: fallbackFile, fallback: true };
+  } catch (error) {
+    return { ok: false, file: fallbackFile, error };
+  }
+}
+
 export async function syncTree(tree, home, options = {}) {
   const result = await rescueTree(tree, home, { ...options, preserveTree: true });
   if (!result.clean) return result;
@@ -39,8 +70,9 @@ if (isEntry(import.meta.url)) {
   const result = await syncTree(tree, home);
   const lines = result.events.map(e => `${new Date().toISOString()} ${e.step} ${e.message}`);
   if (!result.clean) lines.push(`${new Date().toISOString()} skipped (dirty: ${result.dirtyCount ?? 'unknown'} paths)`);
+  const logFile = path.join(logs, 'sync-orgiast-main.log');
   for (const line of lines) {
-    fs.appendFileSync(path.join(logs, 'sync-orgiast-main.log'), `${line}\n`);
+    await appendLogLine(logFile, line);
     console.log(line);
   }
   if (result.failed) process.exitCode = 1;

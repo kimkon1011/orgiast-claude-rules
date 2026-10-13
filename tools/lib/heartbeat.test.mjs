@@ -54,3 +54,32 @@ test('--dry-run writes no file and performs no HTTP request', async () => {
   assert.equal(JSON.parse(result.stdout).dryRun, true);
   await assert.rejects(access(path.join(homeDir, '.claude', 'heartbeat', 'dry.json')));
 });
+
+test('cycleMinutes is carried into the payload when provided', async () => {
+  const homeDir = await tempHome();
+  await mkdir(path.join(homeDir, '.claude'), { recursive: true });
+  await writeFile(path.join(homeDir, '.claude', 'task-sheet.env'), 'TASK_SHEET_WEBAPP_URL=https://example.test/exec\nTASK_SHEET_TOKEN=secret\n');
+  let call;
+  const record = { job: 'x', startedAt: 'a', finishedAt: 'b', ok: true, summary: 'ok', cycleMinutes: 1440 };
+  const result = await reportHeartbeat(record, { homeDir, fetchImpl: async (...args) => {
+    call = args;
+    return { ok: true, json: async () => ({ ok: true }) };
+  } });
+  assert.equal(result.sent, true);
+  assert.deepEqual(JSON.parse(call[1].body), { token: 'secret', kind: 'upsertJob', ...record });
+  assert.equal(JSON.parse(call[1].body).cycleMinutes, 1440);
+});
+
+test('cycleMinutes key is absent from the payload when not provided', async () => {
+  const homeDir = await tempHome();
+  await mkdir(path.join(homeDir, '.claude'), { recursive: true });
+  await writeFile(path.join(homeDir, '.claude', 'task-sheet.env'), 'TASK_SHEET_WEBAPP_URL=https://example.test/exec\nTASK_SHEET_TOKEN=secret\n');
+  let call;
+  const record = { job: 'x', startedAt: 'a', finishedAt: 'b', ok: true, summary: 'ok' };
+  const result = await reportHeartbeat(record, { homeDir, fetchImpl: async (...args) => {
+    call = args;
+    return { ok: true, json: async () => ({ ok: true }) };
+  } });
+  assert.equal(result.sent, true);
+  assert.equal(Object.hasOwn(JSON.parse(call[1].body), 'cycleMinutes'), false);
+});

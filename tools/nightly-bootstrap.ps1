@@ -37,8 +37,19 @@ function Write-NightlyLog([string]$Step, [string]$Result) {
     }
 }
 
+function Send-NightlyHeartbeat([string]$StartedAt, [bool]$Ok, [string]$Summary) {
+    try {
+        $heartbeatScript = Join-Path $repo 'tools\lib\heartbeat.mjs'
+        if (-not (Test-Path -LiteralPath $heartbeatScript -PathType Leaf)) { $heartbeatScript = Join-Path $HOME '.claude\tools\lib\heartbeat.mjs' }
+        if (-not (Test-Path -LiteralPath $heartbeatScript -PathType Leaf)) { return }
+        $okText = if ($Ok) { 'true' } else { 'false' }
+        & node $heartbeatScript --job nightly-bootstrap --startedAt $StartedAt --finishedAt (Get-Date -Format 'o') --ok $okText --cycleMinutes 1440 --summary $Summary 2>$null | Out-Null
+    } catch { }
+}
+
 function Stop-Nightly([string]$Step, [string]$Result, [int]$Code) {
     Write-NightlyLog $Step $Result
+    Send-NightlyHeartbeat -StartedAt $nightlyStartedAt -Ok $false -Summary ("error:" + $Step + " " + $Result)
     exit $Code
 }
 
@@ -294,11 +305,12 @@ try {
         if ($forwardArgs.Count -eq 1) { $forwardArgs = @() } else { $forwardArgs = @($forwardArgs[1..($forwardArgs.Count - 1)]) }
     }
 
+    $nightlyStartedAt = (Get-Date -Format 'o')
     try {
         $heartbeatScript = Join-Path $repo 'tools\lib\heartbeat.mjs'
         if (-not (Test-Path -LiteralPath $heartbeatScript -PathType Leaf)) { $heartbeatScript = Join-Path $HOME '.claude\tools\lib\heartbeat.mjs' }
         if (Test-Path -LiteralPath $heartbeatScript -PathType Leaf) {
-            & node $heartbeatScript --job nightly-bootstrap --startedAt (Get-Date -Format 'o') 2>$null | Out-Null
+            & node $heartbeatScript --job nightly-bootstrap --startedAt $nightlyStartedAt 2>$null | Out-Null
         }
     } catch { }
 
@@ -330,8 +342,10 @@ try {
     }
 
     Write-NightlyLog '対象実行' ("ok:" + [IO.Path]::GetFileName($targetPath) + " 終了コード=" + $targetExitCode)
+    Send-NightlyHeartbeat -StartedAt $nightlyStartedAt -Ok $true -Summary ("対象=" + [IO.Path]::GetFileName($targetPath) + " 終了コード=" + $targetExitCode)
     exit $targetExitCode
 } catch {
     try { Write-NightlyLog 'nightly-bootstrap' ("error:" + $_.Exception.Message) } catch { }
+    Send-NightlyHeartbeat -StartedAt $nightlyStartedAt -Ok $false -Summary ("error:" + $_.Exception.Message)
     exit 1
 }

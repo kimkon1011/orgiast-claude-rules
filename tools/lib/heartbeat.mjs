@@ -16,11 +16,11 @@ function parseEnv(text) {
 }
 
 export async function reportHeartbeat(
-  { job, startedAt, finishedAt, ok, summary },
+  { job, startedAt, finishedAt, ok, summary, cycleMinutes },
   { homeDir = os.homedir(), fetchImpl = globalThis.fetch } = {},
 ) {
   if (!job) throw new Error('job is required');
-  const record = { job, startedAt, finishedAt, ok, summary };
+  const record = { job, startedAt, finishedAt, ok, summary, cycleMinutes };
   const heartbeatDir = path.join(homeDir, '.claude', 'heartbeat');
   const filePath = path.join(heartbeatDir, `${job}.json`);
   await mkdir(heartbeatDir, { recursive: true });
@@ -76,6 +76,7 @@ export async function heartbeatCli(argv = process.argv.slice(2)) {
     finishedAt: args.finishedAt,
     ok: args.ok === undefined ? undefined : args.ok === 'true',
     summary: args.summary,
+    cycleMinutes: args.cycleMinutes === undefined ? undefined : Number(args.cycleMinutes),
   };
   if (args.dryRun) {
     process.stdout.write(`${JSON.stringify({ dryRun: true, record })}\n`);

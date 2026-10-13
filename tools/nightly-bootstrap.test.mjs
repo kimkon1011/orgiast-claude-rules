@@ -354,6 +354,29 @@ test('heartbeat is fail-open and runs before target extension dispatch', () => {
   assert.match(source.slice(source.lastIndexOf('try {', heartbeat), dispatch), /catch \{ \}/);
 });
 
+test('finish heartbeat reports completion after target dispatch', () => {
+  const source = readFileSync(script, 'utf8');
+  const dispatch = source.indexOf("$extension = [IO.Path]::GetExtension($targetPath)");
+  const finish = source.indexOf('Send-NightlyHeartbeat -StartedAt $nightlyStartedAt -Ok $true', dispatch);
+  assert.ok(dispatch > 0, 'target dispatch was not found');
+  assert.ok(finish > dispatch, 'finish heartbeat call must run after target dispatch');
+  const fnStart = source.indexOf('function Send-NightlyHeartbeat');
+  const fnEnd = source.indexOf('function ', fnStart + 1);
+  assert.ok(fnStart > 0 && fnEnd > fnStart, 'Send-NightlyHeartbeat definition was not found');
+  const fn = source.slice(fnStart, fnEnd);
+  assert.match(fn, /--finishedAt/);
+  assert.match(fn, /--cycleMinutes 1440/);
+});
+
+test('Stop-Nightly reports a failed heartbeat', () => {
+  const source = readFileSync(script, 'utf8');
+  const stopStart = source.indexOf('function Stop-Nightly');
+  const stopEnd = source.indexOf('function ', stopStart + 1);
+  assert.ok(stopStart > 0 && stopEnd > stopStart, 'Stop-Nightly definition was not found');
+  const stop = source.slice(stopStart, stopEnd);
+  assert.match(stop, /Send-NightlyHeartbeat[^\r\n]*-Ok \$false/);
+});
+
 test('missing target exits 1 and writes readable Japanese log', { skip: !hasPowerShell }, () => {
   const fix = fixture('missing');
   // git 不在を再現する: 既定の設置先からの補完も止める（CI ランナーには C:\Program Files\Git がある）

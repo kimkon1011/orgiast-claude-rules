@@ -20,6 +20,7 @@ const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/
 // 取り込めることを実測で確認した(2026-08-19、21分の .ogg が正常に処理された)。
 const SUPPORTED_EXTENSIONS = new Set(['.mp3', '.mp4', '.wav', '.m4a', '.mkv', '.mov', '.avi', '.wma', '.flac', '.ogg', '.opus']);
 const FIVE_MINUTES = 5 * 60;
+const RENEW_AHEAD = 7 * 24 * 60 * 60;
 const THREE_HOURS = 3 * 60 * 60;
 
 export function selectPlaudCookies(setCookies, current = {}) {
@@ -383,6 +384,18 @@ function makePlaudClient(state, persist, log, fetchImpl = fetch) {
 
 function needsRefresh(exp) { return !Number(exp) || Number(exp) <= Math.floor(Date.now() / 1000) + FIVE_MINUTES; }
 
+/**
+ * UT をいつ更新するか。Plaud は UT と URT を同じ期限で発行するので、UT の残り
+ * 5分を待つと URT も同時に切れて自力更新できない(毎時実行では5分の窓にまず当たらない。
+ * 2026-10-12 実害)。残り7日を切ったら前倒しで更新し、失敗しても有効な UT で続行する。
+ */
+export function userTokenRefreshMode(utExp, nowSec = Math.floor(Date.now() / 1000)) {
+  const exp = Number(utExp);
+  if (!exp || exp <= nowSec + FIVE_MINUTES) return 'required';
+  if (exp <= nowSec + RENEW_AHEAD) return 'proactive';
+  return 'none';
+}
+
 function plainDateName(name) {
   return !name || /^\s*(?:\d{4}[-_.年]\d{1,2}[-_.月]\d{1,2}日?)[ T_-]*(?:\d{1,2}[:時]\d{2}(?::\d{2})?分?)?\s*(?:\.[^.]+)?$/i.test(name);
 }
@@ -530,6 +543,16 @@ export async function run(argv = process.argv.slice(2), dependencies = {}) {
     notifyCtx = { state, persist };
     const fetchImpl = dependencies.fetch || fetch;
     const client = makePlaudClient(state, persist, log, fetchImpl);
+    // 期限前の前倒し更新。成功すれば UT/URT とも延びて下の警告も出ない。
+    // 失敗しても UT はまだ有効なので本処理は続け、次回また試す。
+    if (state.session.urt && userTokenRefreshMode(state.session.utExp) === 'proactive') {
+      try {
+        await refreshTokens(state, client, persist, fetchImpl);
+        log.info(`Plaud トークンを前倒し更新しました(新しい期限 ${epochToIso(state.session.urtExp)})`);
+      } catch (error) {
+        log.warn(`Plaud トークンの前倒し更新に失敗しました(次回再試行): ${error?.message || error}`);
+      }
+    }
     // URT が切れると自力更新できず、ブラウザからの取り直しが必要になる。
     // 黙って止まらないよう、余裕のあるうちから警告を出す。
     const urtDaysLeft = state.session.urtExp ? (Number(state.session.urtExp) * 1000 - Date.now()) / 86400000 : 0;

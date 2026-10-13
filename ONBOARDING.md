@@ -1149,7 +1149,7 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
 
 社内Wiki（Growi）はWebFetch禁止（認証必須で確実に失敗）。一次ソース = Drive `社内マニュアル_NotebookLM連携`（13分割Docs）をDrive MCPで読み、鮮度チェック必須（3ヶ月超で古ければuserに確認）。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/growi-fetch-detail.md`
 
-**🔴 足りない情報は、user に聞く前に社内マニュアルを探す（kim 2026-10-13 厳命・全PC全アカウント・絶対）**
+**足りない情報は、user に聞く前に社内マニュアルを探す（kim 2026-10-13 厳命・全PC全アカウント・絶対。毎ターンの AUTOMATION-FIRST 通知にも載せている）**
 
 会社情報・連絡先・手順など、作業に必要な情報が手元（memory・Drive・会話）に無いときは、**user に聞く前・空欄で渡す前に必ず Growi 社内マニュアルを検索する**（`/growi-fetch` skill：`node tools/growi-manual.mjs search <語>` → `get <id>`。`--body` で本文検索）。マニュアルにも無かったと確かめてから初めて user に聞く。
 - **会社情報の正本** = マニュアル「申込書や契約書の記入に必要な会社情報・会社概要」（https://orgiast-manual.com/626d6c35a6214d036d879585 、索引 id `p1438`、内部パス `/30:業務マニュアル/契約書・秘密保持契約書・申込書の作成・記入・郵送マニュアル/`）。社名・英語表記・住所（契約用／郵送先）・代表者名の書き分け（契約書は法律上の氏名、責任者欄は通称可）・代表の携帯・電話・メール・法人番号／インボイス番号・資本金・設立日・決算月・従業員数・口座・請求条件・印鑑データ・ロゴの置き場がここにある。申込書・契約書・営業メールの署名・フォーム入力では**最初にこのページを読む**

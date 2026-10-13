@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // kim の個人 Facebook Messenger の未読を、ログイン済みの専用ブラウザプロファイルで
-// 「読むだけ」で取得し、新着を kim に Discord DM で通知する。
+// 「読むだけ」で取得する。取り込み自体は黙って続け、Discord へは「止まった時だけ」通知する。
+// (kim 2026-10-13「メッセンジャーの取り込みは、ここで報告しなくて良いです。止まっていなければ。」)
+// 新着ごとの通知に戻すには env MESSENGER_NOTIFY_EACH=1。
 // 公式 API は無いため、gpage-fetch.mjs と同じ playwright-core の persistent context を使う。
 // playwright-core は動的 import（未インストールでも node --test/--check がここで落ちないように）。
 // 事前準備: npm install playwright-core && npx playwright install chromium
@@ -16,6 +18,72 @@ import { resolveBrowserExecutable, runHumanLogin } from "./lib/human-login.mjs";
 export const MESSAGES_URL = "https://www.facebook.com/messages/";
 export const MAX_SEEN = 500;
 export const SNIPPET_LIMIT = 80;
+export const DEFAULT_STALL_HOURS = 6;
+const HOUR_MS = 60 * 60 * 1000;
+
+// 通知本文は「システムを知らない高校生でも読める日本語」にする。
+// 内部名・コマンド・エラーコードは本文に出さない(詳細は stderr にだけ出す)。
+export const STALL_BODY = (hours) => `⚠️ Messenger のメッセージ取り込みが${hours}時間止まっています。こちらで直します。`;
+export const FAILURE_BODY = "⚠️ Messenger のメッセージ取り込みで問題が起きています。こちらで直します。";
+export const RECOVERY_BODY = "✅ Messenger の取り込みが元に戻りました";
+
+// 新着ごとの通知を送るか。既定は送らない(止まった時だけ通知する)。
+export function notifyEachEnabled(env = process.env) {
+  const value = String(env?.MESSENGER_NOTIFY_EACH ?? "").trim().toLowerCase();
+  return value === "1" || value === "true" || value === "yes" || value === "on";
+}
+
+// 停止とみなす時間数。既定 6 時間、env MESSENGER_STALL_HOURS で変更可。
+export function stallHours(env = process.env) {
+  const raw = Number(String(env?.MESSENGER_STALL_HOURS ?? "").trim());
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_STALL_HOURS;
+}
+
+function utcDay(ms) {
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+// 状態ファイルの時刻フィールドを数値に正規化する。null/未設定/不正は null。
+// (Number(null) は 0 になり「1970年に成功した」と誤認するため、明示的に弾く)
+function toTime(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+// 「止まっている」時だけ通知する判定。純粋関数。
+// 同じ停止状態の通知は1日1回まで(UTC日付で重複抑止)。復旧したら1回だけ知らせる。
+// 戻り値: { notify, kind, body, state } / kind は 'stall' | 'failure' | 'recovery' | 'none'
+export function evaluateStall(input = {}) {
+  const now = Number(input.now ?? Date.now());
+  const hours = Number(input.stallHours ?? DEFAULT_STALL_HOURS);
+  const state = { ...(input.state ?? {}) };
+  const today = utcDay(now);
+  const lastSuccessAt = toTime(state.lastSuccessAt);
+  const stalled = lastSuccessAt === null || now - lastSuccessAt >= hours * HOUR_MS;
+
+  if (input.failure) {
+    if (state.lastFailureNotifiedAt === today) return { notify: false, kind: "none", body: null, state };
+    state.lastFailureNotifiedAt = today;
+    return { notify: true, kind: "failure", body: FAILURE_BODY, state };
+  }
+
+  if (stalled) {
+    if (state.lastStallNotifiedAt === today) return { notify: false, kind: "none", body: null, state };
+    state.lastStallNotifiedAt = today;
+    return { notify: true, kind: "stall", body: STALL_BODY(hours), state };
+  }
+
+  // 成功していて停止していない = 復旧。停止を知らせた後だけ、1回だけ知らせる。
+  const wasStalled = state.lastStallNotifiedAt != null || state.lastFailureNotifiedAt != null;
+  if (wasStalled && state.lastRecoveryNotifiedAt !== today) {
+    state.lastStallNotifiedAt = null;
+    state.lastFailureNotifiedAt = null;
+    state.lastRecoveryNotifiedAt = today;
+    return { notify: true, kind: "recovery", body: RECOVERY_BODY, state };
+  }
+  return { notify: false, kind: "none", body: null, state };
+}
 
 export function parseArgs(argv) {
   const args = { login: false, dryRun: false };
@@ -149,7 +217,7 @@ function readState(file) {
   } catch {
     // 無い/壊れている場合は初期状態から始める。
   }
-  return { seen: [], loginNotifiedAt: null };
+  return { seen: [], loginNotifiedAt: null, lastSuccessAt: null, lastStallNotifiedAt: null, lastFailureNotifiedAt: null, lastRecoveryNotifiedAt: null };
 }
 
 function writeJson(file, value) {
@@ -254,6 +322,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   const stderr = deps.stderr ?? console.error;
   const now = deps.now ?? Date.now;
   const notify = deps.notify ?? notifyKim;
+  const env = deps.env ?? process.env;
   const sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   const profileDir = deps.profileDir ?? path.join(home, ".claude", "messenger-profile");
   const stateFile = deps.stateFile ?? path.join(home, ".claude", "messenger-watch-state.json");
@@ -301,7 +370,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     const url = page.url();
     if (isLoginUrl(url, await hasPasswordField(page))) {
       const state = readState(stateFile);
-      const today = new Date(now()).toISOString().slice(0, 10);
+      const today = utcDay(now());
       if (!args.dryRun && state.loginNotifiedAt !== today) {
         await notify("Messenger監視: ログインが切れています。再ログインが必要", { home });
         state.loginNotifiedAt = today;
@@ -323,15 +392,34 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     const seen = new Set(state.seen);
     const fresh = selectNew(conversations, seen);
     if (fresh.length > 0) {
-      const body = formatNotification(fresh);
-      if (body) await notify(body, { home });
+      // 既定では新着ごとに通知しない。MESSENGER_NOTIFY_EACH=1 の時だけ従来どおり送る。
+      if (notifyEachEnabled(env)) {
+        const body = formatNotification(fresh);
+        if (body) await notify(body, { home });
+      }
       for (const c of fresh) seen.add(conversationKey(c));
       state.seen = trimSeen([...seen]);
-      writeJson(stateFile, state);
     }
+    // 取り込みに成功したので「最後に成功した時刻」を更新し、止まっていたなら復旧を知らせる。
+    // 停止判定は「今回の成功」より前の状態で行う(成功で上書きすると停止を検知できない)。
+    // 初回(状態ファイルが無い/成功実績が無い)は、止まっていないものとして静かに始める。
+    const firstRun = toTime(state.lastSuccessAt) === null;
+    const verdict = firstRun ? { notify: false, kind: "none", body: null, state } : evaluateStall({ now: now(), stallHours: stallHours(env), state });
+    if (verdict.notify) await notify(verdict.body, { home });
+    // verdict.state は判定時点のコピーなので、成功時刻はその後に上書きする。
+    writeJson(stateFile, { ...state, ...verdict.state, lastSuccessAt: now() });
     return 0;
   } catch (err) {
     stderr(`messenger-watch: 実行失敗 (${err?.message ?? err})`);
+    // 取得エラー・例外も「止まっている」として1日1回だけ知らせる。
+    try {
+      const state = readState(stateFile);
+      const verdict = evaluateStall({ now: now(), stallHours: stallHours(env), state, failure: true });
+      if (verdict.notify) await notify(verdict.body, { home });
+      writeJson(stateFile, { ...state, ...verdict.state });
+    } catch {
+      // 通知や状態保存に失敗しても、終了コードは失敗のまま返す。
+    }
     return 1;
   } finally {
     if (context) {

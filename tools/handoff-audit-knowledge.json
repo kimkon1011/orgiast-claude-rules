@@ -124,5 +124,17 @@
     "route": "node C:/Users/uers/orgiast-claude-rules/tools/gdoc-update.mjs --id <docId> --file <本文.md>（DWD SA で kim を代理、URL 不変・全置換・read-back 付き。--check で現状取得。表はヘッダが崩れるのでリストで書く）。新規 Doc 作成やコネクタ有効化の依頼に逃げない",
     "confidence": "high",
     "source": "2026-09-28 バドミントン指示書で「未接続」と誤って手渡し"
+  },
+  {
+    "pattern": "Drive上のGoogle Doc/Sheet/PDFをURL不変で更新",
+    "route": "node C:/Users/uers/orgiast-claude-rules/tools/gdoc-update.mjs --id <docId> --file <本文.md>（DWD SA で kim を代理、URL 不変・全置換・read-back 付き。--check で現状取得。表はヘッダが崩れるのでリストで書く）。新規 Doc 作成やコネクタ有効化の依頼に逃げない",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:d4e43af69b092e712149d7f8eb150053365c513d328b435675c713f6cd4c575f"
+  },
+  {
+    "pattern": "memory 保存の完了報告とルール追記",
+    "route": "node C:/Users/uers/orgiast-claude-rules/tools/gdoc-update.mjs --id <docId> --file <本文.md>（DWD SA で kim を代理、URL 不変・全置換・read-back 付き。--check で現状取得。表はヘッダが崩れるのでリストで書く）。新規 Doc 作成やコネクタ有効化の依頼に逃げない",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:609a817795b968c30866a216902e2a1593e3fa43cfb884ab864312214db2f55b"
   }
 ]

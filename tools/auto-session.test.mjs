@@ -6,7 +6,7 @@ import path from 'node:path';
 
 const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-session-test-'));
 process.env.ORGIAST_HOME = isolatedHome;
-const { BUILTIN_REPO_BY_KEYWORD, ROLE_NAMES, boundedCount, todoDoneDecision, DEFAULT_REPO, localDate, loadConfig, detectHistoryCwd, parseHandoff, sectionsForTodo, todoExclusionReason, todoExclusionReasons, dedupeKey, dedupeTodos, filterTodos, selectTodoLanes, logSlaOverflow, pickCwd, buildChildArgs, buildPrompt, buildFeedbackPrompt, buildRolePrompt, feedbackFailureBody, feedbackIssueExclusionReason, feedbackIssuesToUnmark, filterFeedbackIssues, feedbackNotifyUrl, normalizeGitHubRepo, feedbackRepoCwd, resolveClaudeExe, decideRun, markTodoDone, isTodoAlreadyDone, writeTodoDone, extractSessionId, transcriptPath, recoverSessionId, appendClosedSession, formatResultLine, parseArgs, deadlineDecision, runChild, main } = await import('./auto-session.mjs');
+const { BUILTIN_REPO_BY_KEYWORD, ROLE_NAMES, boundedCount, todoDoneDecision, DEFAULT_REPO, localDate, loadConfig, detectHistoryCwd, parseHandoff, sectionsForTodo, todoExclusionReason, todoExclusionReasons, dedupeKey, dedupeTodos, filterTodos, selectTodoLanes, logSlaOverflow, pickCwd, buildChildArgs, buildPrompt, buildFeedbackPrompt, buildRolePrompt, feedbackFailureBody, feedbackIssueExclusionReason, feedbackIssuesToUnmark, filterFeedbackIssues, feedbackNotifyUrl, normalizeGitHubRepo, feedbackRepoCwd, resolveClaudeExe, decideRun, markTodoDone, isTodoAlreadyDone, taskClosedBeforeLaunch, writeTodoDone, extractSessionId, transcriptPath, recoverSessionId, appendClosedSession, formatResultLine, parseArgs, deadlineDecision, runChild, main } = await import('./auto-session.mjs');
 const historyCwd = String.raw`c:\Users\example\Downloads\work`;
 const completedSummary = 'やったこと: 対象のコードを修正してコミットした。検証したこと: 回帰テストを実行し全件成功を確認した。残ったこと: なし';
 
@@ -698,7 +698,11 @@ test('task-ledger タスクを第3取得元として実行し claim と done を
   const ledgerCalls = [];
   const code = await main(['--count', '1', '--feedback-count', '0'], {
     listFeedbackIssues: () => [],
-    listTaskLedgerItems: async (filters) => { assert.deepEqual(filters, { 状態: '未着手' }); return [{ taskId: 'TASK-42', 件名: '台帳タスク' }]; },
+    listTaskLedgerItems: async (filters) => {
+      if (filters.taskId) return [{ taskId: filters.taskId, 件名: '台帳タスク', 状態: '未着手' }];
+      assert.deepEqual(filters, { 状態: '未着手' });
+      return [{ taskId: 'TASK-42', 件名: '台帳タスク' }];
+    },
     runTaskLedger: async (args) => ledgerCalls.push(args),
     resolveClaudeExe: () => '/fake/claude',
     runChild: async () => ({ status: 'success', exitCode: 0, stdout: '完了', stderr: '', startedAt: new Date().toISOString(), endedAt: new Date().toISOString() }),
@@ -708,6 +712,39 @@ test('task-ledger タスクを第3取得元として実行し claim と done を
   assert.deepEqual(ledgerCalls.map(({ command, taskId }) => ({ command, taskId })), [{ command: 'claim', taskId: 'TASK-42' }, { command: 'done', taskId: 'TASK-42' }]);
   const recordName = fs.readdirSync(path.join(claudeDir, 'auto-session', 'runs')).find((name) => name.endsWith('-task-TASK-42.json'));
   assert.equal(JSON.parse(fs.readFileSync(path.join(claudeDir, 'auto-session', 'runs', recordName))).taskId, 'TASK-42');
+});
+
+test('選定後に台帳側で完了になったタスクは起動も claim もしない', async () => {
+  const claudeDir = path.join(isolatedHome, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(path.join(claudeDir, 'next-session.md'), '<!-- NEXT-SESSION v1 -->\n## 残TODO\n');
+  const ledgerCalls = [];
+  const logs = [];
+  let ran = 0;
+  const originalLog = console.log;
+  console.log = (message) => logs.push(String(message));
+  try {
+    const code = await main(['--count', '1', '--feedback-count', '0'], {
+      listFeedbackIssues: () => [],
+      listTaskLedgerItems: async (filters) => filters.taskId
+        ? [{ taskId: filters.taskId, 件名: '納品済み', 状態: '完了' }]
+        : [{ taskId: 'TASK-99', 件名: '納品済み' }],
+      runTaskLedger: async (args) => ledgerCalls.push(args),
+      resolveClaudeExe: () => '/fake/claude',
+      runChild: async () => { ran += 1; return { status: 'success', exitCode: 0, stdout: '完了', stderr: '', startedAt: new Date().toISOString(), endedAt: new Date().toISOString() }; },
+      notify: async () => {},
+    });
+    assert.equal(code, 0);
+  } finally { console.log = originalLog; }
+  assert.equal(ran, 0);
+  assert.deepEqual(ledgerCalls, []);
+  assert.ok(logs.some((line) => line.includes('台帳側で完了済みのため起動しません')));
+});
+
+test('taskClosedBeforeLaunch は再確認の失敗で実行側に倒す', async () => {
+  assert.equal(await taskClosedBeforeLaunch(async () => [{ taskId: 'T', 状態: '完了' }], 'T'), true);
+  assert.equal(await taskClosedBeforeLaunch(async () => [{ taskId: 'T', 状態: '作業中' }], 'T'), false);
+  assert.equal(await taskClosedBeforeLaunch(async () => { throw new Error('ledger down'); }, 'T'), false);
 });
 
 test('task-ledger 取得失敗でも next-session TODO を実行する', async () => {

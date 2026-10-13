@@ -431,6 +431,21 @@ export function isTodoAlreadyDone(md, todoText) {
   return lineRe.test(String(md));
 }
 
+// 台帳タスクも同じ穴が空く。選定（0:30）〜起動の間に、シート側の完了や
+// booth-feedback-intake の完了同期が「完了」へ変えた行を起動してしまうと、
+// 続く claim が 状態 を 作業中 へ戻し、済んだタスクが毎晩セッション枠を1本食い続ける
+// （2026-10-14 実測: 9/22 に納品済みの FB タスクが 10/14 深夜に1本消費し、行も 作業中 に戻った）。
+// 確認そのものに失敗したときは止めない（再確認の失敗で夜の仕事を落とさない）。
+export async function taskClosedBeforeLaunch(listTaskLedgerItems, taskId) {
+  try {
+    const rows = await listTaskLedgerItems({ taskId });
+    const row = Array.isArray(rows) ? rows.find((entry) => String(entry?.taskId) === String(taskId)) : null;
+    return String(row?.状態 ?? '').trim() === '完了';
+  } catch {
+    return false;
+  }
+}
+
 export function writeTodoDone(nextFile, todoText, note, io = {}) {
   const read = io.read ?? fs.readFileSync;
   const write = io.write ?? fs.writeFileSync;
@@ -1209,6 +1224,13 @@ export async function main(argv = process.argv.slice(2), io = {}) {
       if (!timing.run) break;
       const taskId = item.taskId;
       const todo = `[${taskId}] ${item.件名 || '無題'}${item.次アクション ? ` — ${item.次アクション}` : ''}`;
+      if (await taskClosedBeforeLaunch(listTaskLedgerItems, taskId)) {
+        completedChildren += 1;
+        const now = new Date().toISOString();
+        taskLedgerResults.push({ source: 'task-ledger', taskId, todo, status: 'skipped-already-done', startedAt: now, endedAt: now });
+        console.log(`auto-session: 台帳側で完了済みのため起動しません（選定後に完了）: ${taskId}`);
+        continue;
+      }
       try {
         try { await updateTaskLedger({ command: 'claim', taskId, 状態: '作業中' }); }
         catch (error) { console.warn(`auto-session: task-ledger claim 失敗 (${taskId}、実行は継続します): ${error?.message ?? error}`); }

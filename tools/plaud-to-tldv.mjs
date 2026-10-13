@@ -5,6 +5,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { readEnvValue } from './env-kv.mjs';
 import { isEntry } from './is-entry.mjs';
+import { reauthInto } from './plaud-reauth-auto.mjs';
 
 export const REGION_BASES = Object.freeze({
   'aws:us-west-2': 'https://api.plaud.ai',
@@ -503,7 +504,32 @@ function bootstrapValues() {
   };
 }
 
+/**
+ * 認証失効・期限間近を検知したら plaud-reauth-auto の OTP 再ログインで無人復旧する。
+ * 復旧できなかった時だけ、従来の保守通知(F12手順)が出る。
+ * テストなど config を注入する呼び出しでは自動再ログインしない(dependencies.reauth で明示した時だけ)。
+ */
 export async function run(argv = process.argv.slice(2), dependencies = {}) {
+  const reauth = dependencies.reauth ?? (dependencies.config ? null : reauthInto);
+  const ctx = { reauthEnabled: Boolean(reauth), needReauth: false, reauthFailed: false };
+  let code = await runOnce(argv, dependencies, ctx);
+  if (ctx.needReauth && reauth) {
+    ctx.needReauth = false; ctx.reauthTried = true;
+    const holder = { ut: '', urt: '' };
+    const ok = await reauth(holder, dependencies.reauthDeps);
+    if (ok) {
+      const statePath = (dependencies.config || bootstrapValues()).statePath;
+      const { state } = readState(statePath, {});
+      Object.assign(state.session, { ut: holder.ut, urt: holder.urt, utExp: holder.utExp, urtExp: holder.urtExp, wt: '', wtExp: 0 });
+      writeStateAtomic(statePath, state);
+      console.error('[plaud-to-tldv] Plaud トークンを自動再ログインで更新しました');
+    } else ctx.reauthFailed = true;
+    code = await runOnce(argv, dependencies, ctx);
+  }
+  return code;
+}
+
+async function runOnce(argv, dependencies, ctx) {
   let options;
   try { options = parseArgs(argv); } catch (error) { console.error(error.message); return 2; }
   const log = logger(options);
@@ -533,6 +559,9 @@ export async function run(argv = process.argv.slice(2), dependencies = {}) {
     // URT が切れると自力更新できず、ブラウザからの取り直しが必要になる。
     // 黙って止まらないよう、余裕のあるうちから警告を出す。
     const urtDaysLeft = state.session.urtExp ? (Number(state.session.urtExp) * 1000 - Date.now()) / 86400000 : 0;
+    const canReauth = ctx.reauthEnabled && !ctx.reauthTried;
+    // 期限の3日前になったら予防的に自動再ログイン(成功すれば警告は出ない)。
+    if (canReauth && state.session.urt && urtDaysLeft > 0 && urtDaysLeft < 3) { ctx.needReauth = true; return 1; }
     if (state.session.urt && urtDaysLeft >= 7) clearRenewalNotice();
     if (state.session.urt && urtDaysLeft > 0 && urtDaysLeft < 7) {
       log.warn(`Plaud の更新トークンの残り ${Math.floor(urtDaysLeft)} 日。切れる前に web.plaud.ai から取り直しが必要です`);
@@ -544,6 +573,7 @@ export async function run(argv = process.argv.slice(2), dependencies = {}) {
     }
     if (needsRefresh(state.session.utExp)) {
       if (!state.session.urt) {
+        if (canReauth) { ctx.needReauth = true; return 1; }
         // URT が無いと UT を自力更新できない。無音で腐らせず、止まったことを Discord にも出す。
         console.error('Plaud の pld_ut が期限切れで、更新用の pld_urt もありません。web.plaud.ai で pld_ut を取り直してください。');
         writeRenewalNotice('expired');
@@ -619,8 +649,10 @@ export async function run(argv = process.argv.slice(2), dependencies = {}) {
     console.log(options.json ? JSON.stringify(summary) : `imported=${summary.imported} skipped=${summary.skipped} failed=${summary.failed}`);
     return summary.failed ? 1 : 0;
   } catch (error) {
-    if (error?.status === 401) {
-      console.error('Plaud 認証が失効しました。web.plaud.ai で取り直しが必要です。');
+    const authDead = error?.status === 401 || /^UT更新失敗/.test(String(error?.message || ''));
+    if (authDead && ctx.reauthEnabled && !ctx.reauthTried) { ctx.needReauth = true; return 1; }
+    if (authDead) {
+      console.error('Plaud 認証が失効しました。自動再ログインも失敗したため web.plaud.ai で取り直しが必要です。');
       // 15分ごとに無音で失敗し続けるのが最悪なので Discord に出す。
       writeRenewalNotice('expired');
       if (notifyCtx && shouldNotify(notifyCtx.state, 'expired')) {

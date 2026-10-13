@@ -24,7 +24,7 @@ export function absolutePaths(text) {
   const value = String(text);
   const matches = [];
   for (const match of value.matchAll(/[`"']((?:~\/\.claude\/|[A-Za-z]:\\|\/)[^`"'\r\n]+)[`"']/g)) matches.push(match[1]);
-  matches.push(...(value.match(/(?:~\/\.claude\/[^\s`"'<>）】]+|[A-Za-z]:\\[^\s`"'<>）】]+|\/(?!\/)[^\s`"'<>）】]+)/g) || []));
+  matches.push(...(value.match(/(?:~\/\.claude\/[^\s`"'<>）】]+|[A-Za-z]:\\[^\s`"'<>）】]+|(?<![\w.])\/(?!\/)[^\s`"'<>）】]+)/g) || []));
   return [...new Set(matches.map(path => path.replace(/[.,;:、。]+$/, '')))];
 }
 
@@ -44,9 +44,9 @@ function inputContainsTarget(input, target) {
 const READ_ONLY_SEGMENTS = [
   /^gh\s+pr\s+(?:view|checks|diff|list|status)\b/,
   /^gh\s+(?:issue\s+(?:view|list)|run\s+(?:list|view)|workflow\s+(?:list|view)|repo\s+view|release\s+(?:view|list)|auth\s+status)\b/,
-  /^git\s+(?:status|log|diff|show|rev-parse|ls-files)\b/,
-  /^git\s+branch(?!.*\s(?:-[dDmMcC]|--delete|--move|--copy|--force)\b)(?:\s+(?:-a|-r|-v|-vv|--list|--show-current|--contains|--merged)\b[^;|&]*)?$/,
-  /^git\s+remote(?:\s+(?:-v|show|get-url)\b[^;|&]*)?$/,
+  /^git\s+(?:-C\s+\S+\s+)?(?:status|log|diff|show|rev-parse|ls-files|grep|merge-base|blame|describe)\b/,
+  /^git\s+(?:-C\s+\S+\s+)?branch(?!.*\s(?:-[dDmMcC]|--delete|--move|--copy|--force)\b)(?:\s+(?:-a|-r|-v|-vv|--list|--show-current|--contains|--merged)\b[^;|&]*)?$/,
+  /^git\s+(?:-C\s+\S+\s+)?remote(?:\s+(?:-v|show|get-url)\b[^;|&]*)?$/,
   /^vercel\s+(?:inspect|ls|whoami|logs)\b/,
   /^(?:cat|head|tail|ls|wc|grep|rg|jq|file|stat|type|dir|Get-Content|Select-String)\b/,
   /^(?:gh\s+api|curl)\b/,

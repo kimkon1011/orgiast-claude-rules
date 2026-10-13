@@ -441,7 +441,7 @@ async function syncRepository(now) {
       if (fs.existsSync(registrar)) {
         const out = execFileSync(process.execPath, [registrar, '--converge', '--home', home], { windowsHide: true, encoding: 'utf8', timeout: 180000, env: { ...process.env, ORGIAST_HOME: home } }).trim();
         // skip がログに届かないと hook 未登録の無言 skip が復活するため、追加と同様に転送する。
-        if (out.includes('追加') || out.includes('[skip]')) { console.log(`[onboarding-sync] ${out.trim()}`); log(out.replace(/\s+/g, ' ')); }
+        if (out.includes('追加') || out.includes('[skip]') || /\bNG\b|失敗/.test(out)) { console.log(`[onboarding-sync] ${out.trim()}`); log(out.replace(/\s+/g, ' ')); }
       }
     } catch (e) { log(`hook registration failed: ${e.message}`); }
   } catch (e) { log(`repo sync failed: ${e.message}`); }

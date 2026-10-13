@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
 import { armToFile } from './session-relaunch.mjs';
 import { alternateCheapProvider, autoSessionExecutor, buildCheapCodeArgs, buildClaudeHeadlessArgs, claudeFallbackEnabled, recordFallbackToClaude, recordSkippedNoExecutor } from './auto-session-executor.mjs';
@@ -128,16 +128,69 @@ export function resolveWt(io) {
   }
 }
 
-export function resolveVscodeCli(io) {
-  const { env, exists } = io;
+// reg query <key> /s の出力から、DisplayName が VS Code のブロックの InstallLocation を取り出す。
+export function parseUninstallInstallLocations(text) {
+  const found = [];
+  let name = '';
+  let location = '';
+  const flush = () => {
+    if (/^Microsoft Visual Studio Code/i.test(name) && location) found.push(location);
+    name = ''; location = '';
+  };
+  for (const raw of String(text ?? '').split(/\r?\n/)) {
+    if (/^HKEY_/i.test(raw)) { flush(); continue; }
+    const m = raw.match(/^\s+(DisplayName|InstallLocation)\s+REG_(?:EXPAND_)?SZ\s+(.*?)\s*$/i);
+    if (!m) continue;
+    if (m[1].toLowerCase() === 'displayname') name = m[2]; else location = m[2];
+  }
+  flush();
+  return found;
+}
+
+const UNINSTALL_KEYS = [
+  'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall',
+  'HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall',
+  'HKLM\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall',
+];
+
+function defaultRegQuery(key) {
+  if (process.platform !== 'win32') return '';
+  try {
+    return execFileSync('reg.exe', ['query', key, '/s'], { encoding: 'utf8', timeout: 8000, windowsHide: true, maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] });
+  } catch { return ''; }
+}
+
+// code.cmd の探索候補（優先順・重複なし）。見つからなかった時に「何を探したか」を報告できるよう、列挙だけを分離。
+export function vscodeCliCandidates(io) {
+  const { env } = io;
   const homedir = typeof io.homedir === 'function' ? io.homedir() : io.homedir;
-  const candidates = [
+  const regQuery = io.regQuery ?? defaultRegQuery;
+  const list = [
     env.VSCODE_CLI_PATH,
     path.join(homedir, 'AppData', 'Local', 'Programs', 'Microsoft VS Code', 'bin', 'code.cmd'),
     'C:\\Program Files\\Microsoft VS Code\\bin\\code.cmd',
     'C:\\Program Files (x86)\\Microsoft VS Code\\bin\\code.cmd',
   ];
-  return candidates.find((candidate) => candidate && exists(candidate)) ?? '';
+  // PATH 上の code.cmd
+  for (const dir of String(env.PATH ?? env.Path ?? '').split(';')) if (dir.trim()) list.push(path.win32.join(dir.trim().replace(/^"|"$/g, ''), 'code.cmd'));
+  // 実行中(VS Code 内ターミナル等)/既知の Code.exe の隣の bin\code.cmd
+  for (const exe of [env.VSCODE_GIT_ASKPASS_NODE, env.VSCODE_EXE, env.VSCODE_CWD_EXE]) {
+    if (exe && /code(?: - insiders)?\.exe$/i.test(exe)) list.push(path.win32.join(path.win32.dirname(exe), 'bin', 'code.cmd'));
+  }
+  // アンインストール情報の InstallLocation
+  for (const key of UNINSTALL_KEYS) {
+    try { for (const loc of parseUninstallInstallLocations(regQuery(key))) list.push(path.win32.join(loc, 'bin', 'code.cmd')); } catch { /* 取れなければ次へ */ }
+  }
+  // 他ドライブの一般的な場所
+  for (const drive of 'DEFGHIJKLMNOPQRSTUVWXYZ') {
+    for (const dir of ['Microsoft VS Code', 'Program Files\\Microsoft VS Code', 'Programs\\Microsoft VS Code', 'Apps\\Microsoft VS Code']) list.push(`${drive}:\\${dir}\\bin\\code.cmd`);
+  }
+  return [...new Set(list.filter(Boolean))];
+}
+
+export function resolveVscodeCli(io) {
+  const { exists } = io;
+  return vscodeCliCandidates(io).find((candidate) => exists(candidate)) ?? '';
 }
 
 export function buildVscodeUri(prompt) {

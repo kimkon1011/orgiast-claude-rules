@@ -94,6 +94,54 @@ test('拡張: 古ければ更新、最新なら CLI を呼ばない', () => {
   assert.equal(cur.calls.length, 0);
 });
 
+test('拡張: VSCode の痕跡(.vscode/extensions)があるのに code.cmd が無ければ skip ではなく ng（探索候補を理由に含む）', () => {
+  const f = extFixture({ installed: '0.3.6' });
+  const r = convergeMobileExtension({ ...f, env: { PATH: 'D:\\tools' }, exists: (p) => p.includes(`${path.sep}.vscode${path.sep}extensions`) && !p.endsWith('code.cmd'), regQuery: () => '' });
+  assert.equal(r.status, 'ng');
+  assert.match(r.note, /痕跡あり/);
+  assert.match(r.note, /D:\\tools\\code\.cmd/);
+  assert.equal(f.calls.length, 0);
+});
+
+test('拡張: Code/User(APPDATA)だけでも痕跡扱い、痕跡も CLI も無ければ従来どおり skip', () => {
+  const f = extFixture();
+  const appdata = 'Z:\\AppData';
+  const withTrace = convergeMobileExtension({ ...f, env: { APPDATA: appdata }, exists: (p) => p === path.join(appdata, 'Code', 'User'), regQuery: () => '' });
+  assert.equal(withTrace.status, 'ng');
+  const none = convergeMobileExtension({ ...f, env: {}, exists: () => false, regQuery: () => '' });
+  assert.equal(none.status, 'skip');
+});
+
+test('拡張: レジストリ(Uninstall)の InstallLocation から code.cmd を見つけて導入', () => {
+  const f = extFixture();
+  const regText = [
+    'HKEY_LOCAL_MACHINE\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{ABC}',
+    '    DisplayName    REG_SZ    Microsoft Visual Studio Code',
+    '    InstallLocation    REG_SZ    E:\\Dev\\VSCode',
+    '',
+  ].join('\r\n');
+  const r = convergeMobileExtension({ ...f, env: {}, exists: (p) => p === 'E:\\Dev\\VSCode\\bin\\code.cmd', regQuery: (key) => (key.startsWith('HKLM\\Software\\Microsoft') ? regText : '') });
+  assert.equal(r.status, 'installed');
+});
+
+test('resolveVscodeCli: PATH 上 / 実行中 Code.exe の隣 / 他ドライブを探索', async () => {
+  const { resolveVscodeCli, parseUninstallInstallLocations } = await import('./next-session-launch.mjs');
+  const base = { homedir: 'C:\\Users\\u', regQuery: () => '' };
+  assert.equal(resolveVscodeCli({ ...base, env: { PATH: 'C:\\x;D:\\vs\\bin' }, exists: (p) => p === 'D:\\vs\\bin\\code.cmd' }), 'D:\\vs\\bin\\code.cmd');
+  assert.equal(resolveVscodeCli({ ...base, env: { VSCODE_GIT_ASKPASS_NODE: 'F:\\VS\\Code.exe' }, exists: (p) => p === 'F:\\VS\\bin\\code.cmd' }), 'F:\\VS\\bin\\code.cmd');
+  assert.equal(resolveVscodeCli({ ...base, env: {}, exists: (p) => p === 'D:\\Program Files\\Microsoft VS Code\\bin\\code.cmd' }), 'D:\\Program Files\\Microsoft VS Code\\bin\\code.cmd');
+  assert.equal(resolveVscodeCli({ ...base, env: {}, exists: () => false }), '');
+  assert.deepEqual(parseUninstallInstallLocations('HKEY_X\\a\r\n    DisplayName    REG_SZ    Other App\r\n    InstallLocation    REG_SZ    C:\\o\r\n'), []);
+});
+
+test('convergeMobileStandby: 痕跡ありで CLI 無し → result.ok=false かつ lines に NG が出る', () => {
+  const f = extFixture({ installed: '0.3.6' });
+  const settingsPath = path.join(f.home, 'settings.json');
+  const run = convergeMobileStandby({ ...f, env: {}, exists: (p) => p.includes('extensions'), regQuery: () => '', settingsPath, rcPrefix: { platform: 'win32', readUserEnv: () => RC_NAME_PREFIX, writeUserEnv: () => {} } });
+  assert.equal(run.ok, false);
+  assert.ok(run.lines.some((l) => /拡張: NG/.test(l)));
+});
+
 test('拡張: 同梱 VSIX が無ければ ng', () => {
   const f = extFixture();
   fs.rmSync(path.join(f.repoRoot, 'packages'), { recursive: true });

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
-  resolveVscodeCli, pickBundledVsix, vsixVersion, compareVersions, shouldInstallBundledVsix,
+  resolveVscodeCli, vscodeCliCandidates, pickBundledVsix, vsixVersion, compareVersions, shouldInstallBundledVsix,
 } from './next-session-launch.mjs';
 
 export const MOBILE_STANDBY_COUNT = 3;
@@ -122,9 +122,18 @@ function defaultRunCodeCli(codeCli, args) {
 }
 
 // 同梱最新 VSIX を導入／更新（未導入 or 古い時だけ）。VSCode が無い PC はスキップ。
-export function convergeMobileExtension({ home, repoRoot, env = process.env, exists = fs.existsSync, readdir = fs.readdirSync, runCodeCli }) {
-  const codeCli = resolveVscodeCli({ env, exists, homedir: home });
-  if (!codeCli) return { status: 'skip', note: 'VSCode(code.cmd) が無いためスキップ' };
+export function convergeMobileExtension({ home, repoRoot, env = process.env, exists = fs.existsSync, readdir = fs.readdirSync, runCodeCli, regQuery }) {
+  const io = { env, exists, homedir: home, regQuery };
+  const codeCli = resolveVscodeCli(io);
+  if (!codeCli) {
+    // VS Code の痕跡があるのに CLI が見つからない = 配ったのに効いていない。skip ではなく NG にして可視化する。
+    const traces = [path.join(home, '.vscode', 'extensions'), path.join(env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'Code', 'User')];
+    if (traces.some((p) => exists(p))) {
+      const tried = vscodeCliCandidates(io);
+      return { status: 'ng', note: `VSCode の痕跡あり but code.cmd 未検出(探索${tried.length}件)。探した候補: ${tried.join(' | ')}` };
+    }
+    return { status: 'skip', note: 'VSCode(code.cmd) が無いためスキップ' };
+  }
   const packageDir = path.join(repoRoot, 'packages', 'vscode-next-session');
   let vsixName = '';
   try { vsixName = pickBundledVsix(readdir(packageDir)); } catch { /* 下で報告 */ }
@@ -141,7 +150,7 @@ export function convergeMobileExtension({ home, repoRoot, env = process.env, exi
   return { status: 'installed', note: `${EXTENSION_ID}@${bundled} を導入（VSCode ウィンドウの再読み込みで有効化）` };
 }
 
-export function convergeMobileStandby({ home, repoRoot = path.dirname(toolsDir), env = process.env, runCodeCli, exists, readdir, settingsPath, rcPrefix = {} } = {}) {
+export function convergeMobileStandby({ home, repoRoot = path.dirname(toolsDir), env = process.env, runCodeCli, regQuery, exists, readdir, settingsPath, rcPrefix = {} } = {}) {
   const lines = [];
   const result = { ok: true, lines };
   const note = (label, outcome) => lines.push(`[mobile-standby] ${label}: ${outcome.note}`);
@@ -152,7 +161,7 @@ export function convergeMobileStandby({ home, repoRoot = path.dirname(toolsDir),
     const r = removeMobileTabsZero(target); note('VSCode settings', r); result.settings = r;
   } catch (error) { result.ok = false; lines.push(`[mobile-standby] VSCode settings: 失敗 ${error.message}`); }
   try {
-    const r = convergeMobileExtension({ home, repoRoot, env, runCodeCli, exists, readdir }); note('拡張', r); result.extension = r;
+    const r = convergeMobileExtension({ home, repoRoot, env, runCodeCli, exists, readdir, regQuery }); note('拡張', r.status === 'ng' ? { note: `NG ${r.note}` } : r); result.extension = r;
     if (r.status === 'ng') result.ok = false;
   } catch (error) { result.ok = false; lines.push(`[mobile-standby] 拡張: 失敗 ${error.message}`); }
   try {

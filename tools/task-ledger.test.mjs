@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { machineIdentity } from './machine-identity.mjs';
-import { parseLedgerArgs, runTaskLedger } from './task-ledger.mjs';
+import { ledgerRows, parseLedgerArgs, runTaskLedger } from './task-ledger.mjs';
 
 async function fixture() {
   const homeDir = await mkdtemp(path.join(os.tmpdir(), 'ledger-test-'));
@@ -75,4 +75,18 @@ test('empty token fails explicitly without fetching', async () => {
   await writeFile(path.join(f.homeDir, '.claude', 'task-sheet.env'), 'TASK_SHEET_WEBAPP_URL=https://example.test/exec\nTASK_SHEET_TOKEN=\n');
   await assert.rejects(runTaskLedger(parseLedgerArgs(['list']), f), /TASK_SHEET_TOKEN is empty/);
   assert.equal(f.calls.length, 0);
+});
+
+test('ledgerRows は実形 {ok, rows, count} を読む', () => {
+  const rows = [{ taskId: 'T1' }];
+  assert.deepEqual(ledgerRows({ ok: true, rows, count: 1 }), rows);
+});
+
+test('ledgerRows は items/tasks/配列も受け、未知の形は空配列にする', () => {
+  assert.deepEqual(ledgerRows({ items: [1] }), [1]);
+  assert.deepEqual(ledgerRows({ tasks: [2] }), [2]);
+  assert.deepEqual(ledgerRows([3]), [3]);
+  assert.deepEqual(ledgerRows({ ok: true, count: 0 }), []);
+  assert.deepEqual(ledgerRows(null), []);
+  assert.deepEqual(ledgerRows(undefined), []);
 });

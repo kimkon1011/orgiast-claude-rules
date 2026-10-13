@@ -8,7 +8,7 @@ import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
 import { parseEnvText } from './env-kv.mjs';
 import { isEntry } from './is-entry.mjs';
 import { decideRun, firstBlockBounds, sectionFrom } from './auto-session.mjs';
-import { runTaskLedger } from './task-ledger.mjs';
+import { ledgerRows, runTaskLedger } from './task-ledger.mjs';
 
 const MARKER = '<!-- NEXT-SESSION v1 -->';
 
@@ -18,6 +18,49 @@ export function readLedger(text) {
     if (parsed?.version === 1 && parsed.items && typeof parsed.items === 'object' && !Array.isArray(parsed.items)) return parsed;
   } catch {}
   return { version: 1, items: {} };
+}
+
+// ローカル台帳で done になった項目は、台帳シート側が「未着手」のまま残ると
+// 夜間実行役が毎晩拾い直し、kim の Discord にも「ずっと止まっている仕事」として出続ける。
+// 完了の書き戻し漏れをここで閉じる。既に完了の行は触らないので冪等。
+export function completedFeedbackKeys(ledger) {
+  const items = ledger?.items && typeof ledger.items === 'object' ? ledger.items : {};
+  return Object.entries(items)
+    .filter(([, value]) => value?.lastStatus === 'done' || value?.resolvedAt)
+    .map(([key]) => key);
+}
+
+export function planFeedbackLedgerSync(ledger, rows) {
+  const doneKeys = new Set(completedFeedbackKeys(ledger));
+  const plan = [];
+  const seen = new Set();
+  for (const row of ledgerRows(rows)) {
+    const taskId = oneLine(row?.taskId);
+    if (!taskId || seen.has(taskId)) continue;
+    seen.add(taskId);
+    if (row?.状態 === '完了') continue;
+    const key = taskId.startsWith('FB-') ? taskId.slice(3) : '';
+    if (!key || !doneKeys.has(key)) continue;
+    const item = ledger.items[key] ?? {};
+    plan.push({ taskId, key, 件名: oneLine(row.件名) || oneLine(item.title) || '無題', doneAt: oneLine(item.resolvedAt) });
+  }
+  return plan;
+}
+
+export async function syncCompletedFeedback({ ledger, taskLedger, home, dryRun = false, log = () => {} } = {}) {
+  const listed = await taskLedger({ command: 'list' }, { homeDir: home });
+  const plan = planFeedbackLedgerSync(ledger, listed);
+  if (dryRun) return { planned: plan, closed: [] };
+  const closed = [];
+  for (const entry of plan) {
+    try {
+      await taskLedger({ command: 'done', taskId: entry.taskId, 備考: `ローカル完了記録と同期（${entry.doneAt || '日付不明'}）` }, { homeDir: home });
+      closed.push(entry);
+    } catch (error) {
+      log(`booth-feedback: 台帳の完了同期に失敗 (${entry.taskId}): ${oneLine(error?.message || error, 160)}`);
+    }
+  }
+  return { planned: plan, closed };
 }
 
 function oneLine(value, limit) {
@@ -204,6 +247,16 @@ export async function runIntake({ args = [], home = process.env.ORGIAST_HOME || 
     let ledgerText = '';
     try { ledgerText = io.read(ledgerFile); } catch {}
     const ledger = readLedger(ledgerText);
+    if (args.includes('--sync-done')) {
+      const dryRun = args.includes('--dry-run');
+      const sync = await syncCompletedFeedback({ ledger, taskLedger, home, dryRun, log: (line) => io.stderr(line) });
+      const report = { ok: true, dryRun, planned: sync.planned, closed: sync.closed };
+      io.stdout(json ? JSON.stringify(report) : [
+        `booth-feedback: 台帳の完了同期${dryRun ? '（dry-run）' : ''} 対象${sync.planned.length}件`,
+        ...sync.planned.map((entry) => `- ${entry.taskId} | ${entry.件名} | ローカル完了 ${entry.doneAt || '日付不明'}`),
+      ].join('\n'));
+      return 0;
+    }
     const nextFile = path.join(claudeDir, 'next-session.md');
     let before = '';
     try { before = io.read(nextFile); } catch {}
@@ -237,6 +290,14 @@ export async function runIntake({ args = [], home = process.env.ORGIAST_HOME || 
       } catch (error) {
         io.stderr(`booth-feedback: task-ledger upsert 失敗 (key=${oneLine(item.key)}): ${oneLine(error?.message || error, 160)}`);
       }
+    }
+    // ローカルで done 済みなのに台帳が未完了のまま残った行を閉じる（完了の書き戻し漏れ対策）。
+    let syncNote = '';
+    try {
+      const sync = await syncCompletedFeedback({ ledger, taskLedger, home, log: (line) => io.stderr(line) });
+      if (sync.closed.length) syncNote = ` ledger-synced=${sync.closed.length}`;
+    } catch (error) {
+      io.stderr(`booth-feedback: 台帳の完了同期に失敗（取得は継続）: ${oneLine(error?.message || error, 160)}`);
     }
     const now = io.now().toISOString();
     for (const item of items) {
@@ -295,7 +356,7 @@ export async function runIntake({ args = [], home = process.env.ORGIAST_HOME || 
     }
     io.write(ledgerFile, `${JSON.stringify(ledger, null, 2)}\n`);
     const summary = { open: items.length, new: newlyInjected, reinjected, injected: result.injected.length, ...counts, skippedAlreadyInjected: already, skippedExistingText: duplicateInText };
-    const line = `${now} booth-feedback: open=${items.length} new=${newlyInjected} reinjected=${reinjected} injected=${result.injected.length} immediate=${counts.immediate} tonight=${counts.tonight} hold=${counts.hold} (skipped: already-injected ${already + duplicateInText}${immediateNote ? `; ${immediateNote}` : ''})`;
+    const line = `${now} booth-feedback: open=${items.length} new=${newlyInjected} reinjected=${reinjected} injected=${result.injected.length} immediate=${counts.immediate} tonight=${counts.tonight} hold=${counts.hold} (skipped: already-injected ${already + duplicateInText}${immediateNote ? `; ${immediateNote}` : ''})${syncNote}`;
     try { io.append?.(path.join(claudeDir, 'logs', 'booth-feedback-intake.log'), `${line}\n`); } catch {}
     io.stdout(json ? JSON.stringify(summary) : line.slice(now.length + 1));
     return 0;

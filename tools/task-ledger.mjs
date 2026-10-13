@@ -17,6 +17,17 @@ function parseEnv(text) {
   return env;
 }
 
+// 台帳 Web アプリの list 応答は `{ok, rows, count}`。過去に `items`/`tasks` を読んで
+// 常に空配列になり、夜間実行役が未着手タスクを0件と誤読していた。呼び出し元ごとに
+// 読み方がぶれないよう、受け付け可能な形をここへ集約する。
+export function ledgerRows(response) {
+  if (Array.isArray(response)) return response;
+  for (const key of ['rows', 'items', 'tasks']) {
+    if (Array.isArray(response?.[key])) return response[key];
+  }
+  return [];
+}
+
 export function parseLedgerArgs(argv) {
   const [command, ...rest] = argv;
   const args = { command };

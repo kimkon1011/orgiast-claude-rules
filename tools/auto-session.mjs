@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
 import { DEFAULT_REPO_MAP, parseRepoMap } from './feedback-to-issues.mjs';
-import { runTaskLedger } from './task-ledger.mjs';
+import { ledgerRows, runTaskLedger } from './task-ledger.mjs';
 import { alternateCheapProvider, autoSessionExecutor, buildClaudeHeadlessArgs, buildCheapCodeArgs, claudeFallbackEnabled, recordFallbackToClaude, recordSkippedNoExecutor } from './auto-session-executor.mjs';
 
 export { autoSessionExecutor } from './auto-session-executor.mjs';
@@ -959,7 +959,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   const home = homeDir();
   const listTaskLedgerItems = io.listTaskLedgerItems ?? (async (filters) => {
     const response = await runTaskLedger({ command: 'list', ...filters }, { homeDir: home });
-    return Array.isArray(response) ? response : response?.items ?? response?.tasks ?? [];
+    return ledgerRows(response);
   });
   const updateTaskLedger = io.runTaskLedger ?? ((args) => runTaskLedger(args, { homeDir: home }));
   const claudeDir = path.join(home, '.claude');

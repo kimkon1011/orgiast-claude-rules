@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { runLedgerNag } from './ledger-stale-nag.mjs';
+import path from 'node:path';
+import { NIGHTLY_BLIND_MESSAGE, nightlyLedgerBlind, readRecentManifests, runLedgerNag } from './ledger-stale-nag.mjs';
 
 const NOW = new Date('2026-10-01T09:00:00Z');
 const row = (age, fields = {}) => ({ taskId: 'assign-app-pr1', 件名: 'レビュー・Approve・Merge', 担当PC: 'cr568アカウント', 状態: '依頼中', 次アクション: 'レビューする', 成果物リンク: 'https://example.test/pr/1', 最終更新: new Date(NOW.getTime() - age * 3600000).toISOString(), ...fields });
-function harness(rows, state = {}) {
+function harness(rows, state = {}, manifests = {}) {
   const stdout = [], sends = [], writes = [];
   return {
     stdout, sends, writes,
@@ -12,7 +13,15 @@ function harness(rows, state = {}) {
       args: [], home: '/unused', env: { DISCORD_BOT_TOKEN: 'test-token' }, now: NOW,
       list: async (args) => { assert.deepEqual(args, { command: 'list' }); return { ok: true, rows }; },
       sendDm: async (message) => sends.push(message),
-      io: { read: () => JSON.stringify(state), write: (file, text) => writes.push(JSON.parse(text)), stdout: (text) => stdout.push(text) },
+      io: {
+        read: (file) => {
+          const name = path.basename(file);
+          if (Object.hasOwn(manifests, name)) return manifests[name];
+          if (name.endsWith('-manifest.json')) throw new Error('ENOENT');
+          return JSON.stringify(state);
+        },
+        write: (file, text) => writes.push(JSON.parse(text)), stdout: (text) => stdout.push(text),
+      },
     },
   };
 }
@@ -82,4 +91,50 @@ test('送信失敗時は履歴を更新しない', async () => {
   const h = harness([row(25)]);
   await assert.rejects(runLedgerNag({ ...h.options, sendDm: async () => { throw new Error('send failed'); } }), /send failed/);
   assert.equal(h.writes.length, 0);
+});
+
+const manifest = (taskLedgerCount) => JSON.stringify({ taskLedgerCount });
+
+test('nightlyLedgerBlind は未着手ありかつ直近2晩0件のときだけ true', () => {
+  assert.equal(nightlyLedgerBlind([manifest(0), manifest(0)], true), true);
+  assert.equal(nightlyLedgerBlind([manifest(0), manifest(3)], true), false);
+  assert.equal(nightlyLedgerBlind([manifest(0), manifest(0)], false), false);
+  assert.equal(nightlyLedgerBlind([manifest(0)], true), false);
+  assert.equal(nightlyLedgerBlind(['', ''], true), false);
+});
+
+test('readRecentManifests は直近2日分を読み、欠損は空文字にする', () => {
+  const read = (file) => { if (file.includes('2026-10-01')) return manifest(0); throw new Error('ENOENT'); };
+  const texts = readRecentManifests('/runs', read, NOW);
+  assert.equal(texts.length, 2);
+  assert.equal(texts[0], manifest(0));
+  assert.equal(texts[1], '');
+});
+
+test('台帳に未着手があり2晩0件なら一覧ではなく原因を通知する', async () => {
+  const h = harness([row(50, { 状態: '未着手' })], {}, { '2026-10-01-manifest.json': manifest(0), '2026-09-30-manifest.json': manifest(0) });
+  await runLedgerNag(h.options);
+  assert.equal(h.sends.length, 1);
+  assert.equal(h.sends[0].content, NIGHTLY_BLIND_MESSAGE);
+  assert.doesNotMatch(h.sends[0].content, /assign-app-pr1|ずっと止まっている仕事/);
+  assert.equal(h.writes.length, 0);
+});
+
+test('未着手が無ければ2晩0件でも通常の一覧を送る', async () => {
+  const h = harness([row(50, { 状態: '依頼中' })], {}, { '2026-10-01-manifest.json': manifest(0), '2026-09-30-manifest.json': manifest(0) });
+  await runLedgerNag(h.options);
+  assert.match(h.sends[0].content, /ずっと止まっている仕事/);
+});
+
+test('直近2晩のどちらかが拾えていれば通常の一覧を送る', async () => {
+  const h = harness([row(50, { 状態: '未着手' })], {}, { '2026-10-01-manifest.json': manifest(0), '2026-09-30-manifest.json': manifest(2) });
+  await runLedgerNag(h.options);
+  assert.match(h.sends[0].content, /ずっと止まっている仕事/);
+});
+
+test('番犬の dry-run は原因メッセージだけ出し送信しない', async () => {
+  const h = harness([row(50, { 状態: '未着手' })], {}, { '2026-10-01-manifest.json': manifest(0), '2026-09-30-manifest.json': manifest(0) });
+  await runLedgerNag({ ...h.options, args: ['--dry-run'] });
+  assert.equal(h.stdout[0], NIGHTLY_BLIND_MESSAGE);
+  assert.equal(h.sends.length, 0);
 });

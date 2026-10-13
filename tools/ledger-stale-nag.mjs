@@ -54,6 +54,28 @@ const defaultIo = {
   stdout: (text) => process.stdout.write(`${text}\n`),
 };
 
+// 夜間実行役が台帳の未着手を拾えていない状態を検知する。
+// 台帳に未着手があるのに、直近2晩の auto-session マニフェストがどちらも taskLedgerCount=0 なら、
+// 一覧を送る代わりに「こちらで直す」と伝える（同じ25件を毎朝見せ続けない）。
+export function nightlyLedgerBlind(manifestTexts, hasPending) {
+  if (!hasPending) return false;
+  const counts = manifestTexts.map((text) => {
+    try { return JSON.parse(text)?.taskLedgerCount; } catch { return undefined; }
+  });
+  return counts.length >= 2 && counts.slice(0, 2).every((count) => count === 0);
+}
+
+export function readRecentManifests(runsDir, read, now = new Date(), days = 2) {
+  const texts = [];
+  for (let offset = 0; offset < days; offset += 1) {
+    const day = new Date(now.getTime() - offset * 24 * HOUR).toLocaleDateString('sv-SE', { timeZone: 'Asia/Tokyo' });
+    try { texts.push(read(path.join(runsDir, `${day}-manifest.json`))); } catch { texts.push(''); }
+  }
+  return texts;
+}
+
+export const NIGHTLY_BLIND_MESSAGE = '⚠️ 夜の自動実行が台帳の仕事を拾えていません。こちらで直します。';
+
 export async function runLedgerNag({
   args = process.argv.slice(2),
   home = process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || os.homedir(),
@@ -77,6 +99,17 @@ export async function runLedgerNag({
     return elapsed > warnHours * HOUR && !(sinceNotified < cooldownHours * HOUR);
   }).sort((a, b) => Date.parse(a.最終更新) - Date.parse(b.最終更新));
   if (!items.length) { io.stdout(JSON.stringify({ ok: true, notified: 0 })); return 0; }
+  // 台帳に未着手があるのに夜間実行役が2晩続けて0件と読んでいるなら、一覧ではなく原因を伝える。
+  const hasPending = result.rows.some((row) => row?.taskId && row.状態 === '未着手');
+  const manifests = readRecentManifests(path.join(home, '.claude', 'auto-session', 'runs'), io.read, now);
+  if (nightlyLedgerBlind(manifests, hasPending)) {
+    if (args.includes('--dry-run')) { io.stdout(NIGHTLY_BLIND_MESSAGE); return 0; }
+    const blindToken = env.DISCORD_BOT_TOKEN?.trim() || io.read(path.join(home, '.claude', 'orgiast-discord-bot-token.txt')).trim();
+    if (!blindToken) throw new Error('Discord Bot トークンが見つかりません');
+    await sendDm({ token: blindToken, userId: '715210673642012733', content: NIGHTLY_BLIND_MESSAGE });
+    io.stdout(JSON.stringify({ ok: true, notified: 1, blind: true }));
+    return 0;
+  }
   const { content, shown } = formatLedgerNag(items, now, criticalHours);
   if (args.includes('--dry-run')) { io.stdout(content); return 0; }
   const token = env.DISCORD_BOT_TOKEN?.trim() || io.read(path.join(home, '.claude', 'orgiast-discord-bot-token.txt')).trim();

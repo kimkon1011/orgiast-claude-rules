@@ -365,7 +365,9 @@ test('finish heartbeat reports completion after target dispatch', () => {
   assert.ok(fnStart > 0 && fnEnd > fnStart, 'Send-NightlyHeartbeat definition was not found');
   const fn = source.slice(fnStart, fnEnd);
   assert.match(fn, /--finishedAt/);
-  assert.match(fn, /--cycleMinutes 1440/);
+  assert.match(fn, /'--cycleMinutes', '1440'/);
+  // 空の --startedAt を渡すと後続の --finishedAt を値として食う(実測)。空のときは組み立てないこと。
+  assert.match(fn, /IsNullOrEmpty\(\$StartedAt\)/);
 });
 
 test('Stop-Nightly reports a failed heartbeat', () => {

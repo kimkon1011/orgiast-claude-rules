@@ -47,7 +47,7 @@ test('toPlainJa: 内部用語が無ければ ask を呼ばずそのまま返す'
 
 test('toPlainJa: ask の書き換え結果を使う', async () => {
   const result = await toPlainJa('▶ 次はこれをやります: feedback-zero-sweep', { ask: async () => '次は、社員からの報告をまとめる作業をします。' });
-  assert.equal(result, '次は、社員からの報告をまとめる作業をします。');
+  assert.equal(result, '▶ 次は、社員からの報告をまとめる作業をします。');
 });
 
 test('toPlainJa: ask が内部用語を残したら検出語を除去した文にフォールバックする', async () => {
@@ -106,4 +106,69 @@ test('stripJargon: ホスト名は残し、内部用語だけを除く', () => {
   const result = stripJargon('✅ 終わりました: feedback-zero-sweep を直しました（DESKTOP-ABC123）');
   assert.equal(findJargon(result).length, 0);
   assert.match(result, /（DESKTOP-ABC123）$/);
+});
+
+// ---- 行単位処理・保護範囲 ----
+function mockAsk(seen = {}) {
+  return async (prompt) => {
+    seen.prompt = prompt;
+    return prompt.split('\n').filter((l) => /^\[\d+\] /.test(l)).map((l) => `${l.match(/^\[\d+\]/)[0]} 平易に言い換えた行`).join('\n');
+  };
+}
+
+test('toPlainJa: 25行の一覧は行数が変わらず、用語の無い行は完全一致', async () => {
+  const lines = ['⏳ ずっと止まっている仕事: 25件'];
+  for (let i = 1; i <= 24; i++) {
+    if (i === 3) lines.push('  • 週報の集計が止まっています（PR#1 待ち）');
+    else if (i === 10) lines.push('  - feedback-zero-sweep が3日動いていません');
+    else if (i === 17) lines.push('  • 見積の確認待ち  ');
+    else lines.push(`  • ${i}番目の仕事は担当者の返事待ちです`);
+  }
+  const input = lines.join('\n');
+  const seen = {};
+  const out = await toPlainJa(input, { ask: mockAsk(seen) });
+  const outLines = out.split('\n');
+  assert.equal(outLines.length, lines.length);
+  lines.forEach((line, i) => {
+    if (i === 3 || i === 10) {
+      assert.equal(findJargon(outLines[i]).length, 0);
+      assert.ok(outLines[i].startsWith(line.slice(0, 4)));
+    } else assert.equal(outLines[i], line);
+  });
+  assert.equal((seen.prompt.match(/^\[\d+\] /gm) || []).length, 2);
+});
+
+test('toPlainJa: 返答の番号が欠けた行だけ除去フォールバック', async () => {
+  const input = '⚠️ A: feedback-zero-sweep が止まった\n平易な行\n⚠️ B: nightly-batch も止まった';
+  const out = await toPlainJa(input, { ask: async () => '[2] Bの言い換え' });
+  const l = out.split('\n');
+  assert.equal(l.length, 3);
+  assert.equal(findJargon(out).length, 0);
+  assert.match(l[0], /^⚠️ A:/);
+  assert.equal(l[1], '平易な行');
+  assert.match(l[2], /^⚠️ Bの言い換え/);
+});
+
+test('toPlainJa: URL・コードブロック・インラインコード・メンション・リンクを保持', async () => {
+  const input = [
+    '復旧手順: nightly-batch が止まりました',
+    'https://web.plaud.ai を開いてください',
+    '```',
+    'fetch("https://x/feedback-zero-sweep", {method: "POST"})',
+    '```',
+    '`gh pr view 1` を実行 <@715210673642012733> <#123>',
+    '[名前](https://x) を見て',
+  ].join('\n');
+  const out = await toPlainJa(input, { ask: async () => '[1] 夜の処理が止まりました' });
+  for (const keep of ['https://web.plaud.ai', 'fetch("https://x/feedback-zero-sweep", {method: "POST"})', '`gh pr view 1`', '<@715210673642012733>', '<#123>', '[名前](https://x)']) assert.ok(out.includes(keep), keep);
+  assert.equal(out.split('\n').length, input.split('\n').length);
+  assert.equal(out.split('\n')[0], '夜の処理が止まりました');
+});
+
+test('findJargon: 保護範囲の中は検出しない', () => {
+  assert.deepEqual(findJargon('https://a.b/c-d_e `gh pr view 1` [x-y](https://z) <@1>'), []);
+});
+
+test('command パターンは ASCII トークンの連続だけを食う', () => {
+  assert.deepEqual(findJargon('gh pr view 747 の結果を見て'), ['gh pr view 747']);
 });

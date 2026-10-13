@@ -56,3 +56,19 @@ test('2000文字を超える本文を省略表示付きで切る', async () => {
   } });
   assert.equal(bodies[1].content.length, 2_000); assert.ok(bodies[1].content.endsWith('…(以下省略)'));
 });
+
+test('送信直前に平易化を通す（内部用語が書き換わる）', async () => {
+  const bodies = [];
+  await notifyKim('▶ 次はこれをやります: feedback-zero-sweep', { home: home(), token: 'token', userId: 'user', plainJaImpl: async () => '次は、社員からの報告をまとめる作業をします。', fetchImpl: async (_url, init) => {
+    bodies.push(JSON.parse(init.body)); return bodies.length === 1 ? response({ json: { id: 'dm' } }) : response();
+  } });
+  assert.equal(bodies[1].content, '次は、社員からの報告をまとめる作業をします。');
+});
+
+test('NOTIFY_PLAIN_JA=0 相当（plainJa:false）では本文をそのまま送る', async () => {
+  const bodies = [];
+  await notifyKim('▶ 次はこれをやります: feedback-zero-sweep', { home: home(), token: 'token', userId: 'user', plainJa: false, plainJaImpl: async () => '書き換え後', fetchImpl: async (_url, init) => {
+    bodies.push(JSON.parse(init.body)); return bodies.length === 1 ? response({ json: { id: 'dm' } }) : response();
+  } });
+  assert.equal(bodies[1].content, '▶ 次はこれをやります: feedback-zero-sweep');
+});

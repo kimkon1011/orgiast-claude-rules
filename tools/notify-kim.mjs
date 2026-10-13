@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { readEnvValue } from './env-kv.mjs';
 import { isEntry } from './is-entry.mjs';
+import { toPlainJa } from './lib/plain-ja.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 
 const API = 'https://discord.com/api/v10';
@@ -42,11 +43,16 @@ export async function notifyKim(text, {
   webhookFallback = true,
   fleetFallback = false,
   signal,
+  plainJa = process.env.NOTIFY_PLAIN_JA !== '0',
+  plainJaImpl = toPlainJa,
 } = {}) {
   const resolvedUserId = userId !== undefined ? userId : (process.env.ORGIAST_DISCORD_USER_ID?.trim()
     || readTrimmed(path.join(home, '.claude', 'orgiast-discord-user-id.txt')));
   const resolvedToken = token !== undefined ? token : resolveDiscordBotToken(home);
-  const content = clipDiscordContent(text);
+  // kim 宛の全通知を、システムを知らない人でも読める日本語にしてから送る。
+  // 失敗しても送信は止めない(plainJaImpl は例外を投げない契約)。
+  const body = plainJa ? await plainJaImpl(String(text ?? '')) : text;
+  const content = clipDiscordContent(body);
   let dmReason = '';
 
   if (resolvedUserId && resolvedToken) {

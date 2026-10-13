@@ -243,6 +243,21 @@ export async function runIntake({ args = [], home = process.env.ORGIAST_HOME || 
       io.stdout(json ? JSON.stringify(data) : items.map((item) => `[${item.kind || '不明'}] ${item.key} ${item.title || '無題'} (${item.ts || '日時不明'})`).join('\n') || 'booth-feedback: open=0');
       return 0;
     }
+    // シート側で（この道具を経由せず）完了にされた行は open 一覧に現れない。
+    // そのままだとローカル台帳の lastStatus が new で固定され、タスク台帳の行が永久に閉じられず
+    // 毎晩拾い直される（2026-09-10 の検証項目が 34 日間 作業中のまま残っていた実害）。
+    // 全件との差分で「閉じられた key」を検出し、台帳へ書き戻す。
+    let closedKeys = [];
+    try {
+      const allEndpoint = new URL(endpoint);
+      allEndpoint.searchParams.set('status', 'all');
+      const allData = await fetchJson(allEndpoint, {}, fetchImpl);
+      const allKeys = new Set((Array.isArray(allData?.items) ? allData.items : []).map((entry) => oneLine(entry?.key)).filter(Boolean));
+      const openKeys = new Set(items.map((entry) => oneLine(entry?.key)).filter(Boolean));
+      closedKeys = [...allKeys].filter((key) => !openKeys.has(key));
+    } catch (error) {
+      io.stderr(`booth-feedback: 全件取得に失敗（外部クローズの同期はスキップ）: ${oneLine(error?.message || error, 160)}`);
+    }
     const ledgerFile = path.join(claudeDir, 'booth-feedback-ledger.json');
     let ledgerText = '';
     try { ledgerText = io.read(ledgerFile); } catch {}
@@ -291,18 +306,26 @@ export async function runIntake({ args = [], home = process.env.ORGIAST_HOME || 
         io.stderr(`booth-feedback: task-ledger upsert 失敗 (key=${oneLine(item.key)}): ${oneLine(error?.message || error, 160)}`);
       }
     }
+    const now = io.now().toISOString();
+    for (const item of items) {
+      const previous = ledger.items[item.key] ?? {};
+      ledger.items[item.key] = { ...previous, firstSeen: previous.firstSeen || now, title: item.title || previous.title || '', lastStatus: item.status || previous.lastStatus || '' };
+    }
+    // open 一覧から消えた＝シート側で完了にされた行。この道具を経由せず閉じられた分も
+    // 台帳へ書き戻さないとタスク台帳の行が閉じない。
+    for (const key of closedKeys) {
+      const previous = ledger.items[key];
+      if (!previous || previous.lastStatus === 'done' || previous.resolvedAt) continue;
+      ledger.items[key] = { ...previous, lastStatus: 'done', resolvedAt: now, closedOnSheet: true };
+    }
     // ローカルで done 済みなのに台帳が未完了のまま残った行を閉じる（完了の書き戻し漏れ対策）。
+    // 上の書き戻しを反映させるため、台帳更新の後に置く。
     let syncNote = '';
     try {
       const sync = await syncCompletedFeedback({ ledger, taskLedger, home, log: (line) => io.stderr(line) });
       if (sync.closed.length) syncNote = ` ledger-synced=${sync.closed.length}`;
     } catch (error) {
       io.stderr(`booth-feedback: 台帳の完了同期に失敗（取得は継続）: ${oneLine(error?.message || error, 160)}`);
-    }
-    const now = io.now().toISOString();
-    for (const item of items) {
-      const previous = ledger.items[item.key] ?? {};
-      ledger.items[item.key] = { ...previous, firstSeen: previous.firstSeen || now, title: item.title || previous.title || '', lastStatus: item.status || previous.lastStatus || '' };
     }
     for (const item of result.injected) {
       if (reinjectedKeys.has(item.key)) {

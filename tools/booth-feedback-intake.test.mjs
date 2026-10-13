@@ -230,6 +230,36 @@ test('--resolve 成功時だけ台帳に resolvedAt を記録する', async () =
   assert.equal(saved.items['fb-123'].resolvedAt, '2026-08-28T03:00:00.000Z');
 });
 
+test('シート側で閉じられた行を台帳へ書き戻し、タスク台帳の行も閉じる', async () => {
+  const ledger = JSON.stringify({ version: 1, items: { 'fb-123': { lastStatus: 'new', title: '古い項目', injectedAt: '2026-08-27T03:00:00.000Z' } } });
+  const fetchImpl = async (url) => String(url).includes('status=all')
+    ? response({ ...api, items: [{ ...item, status: 'done' }] })
+    : response({ ...api, items: [] });
+  const h = harness({ next: original, ledger, fetchImpl });
+  const calls = [];
+  const taskLedger = async (args) => {
+    calls.push(args);
+    if (args.command === 'list') return { ok: true, rows: [{ taskId: 'FB-fb-123', 件名: '古い項目', 状態: '未着手' }] };
+    return { ok: true };
+  };
+  assert.equal(await runIntake({ home: HOME, io: h.io, fetchImpl: h.fetchImpl, taskLedger }), 0);
+  const saved = JSON.parse(h.files.get(HOME_FILE('booth-feedback-ledger.json')));
+  assert.equal(saved.items['fb-123'].lastStatus, 'done');
+  assert.equal(saved.items['fb-123'].resolvedAt, '2026-08-28T03:00:00.000Z');
+  assert.equal(saved.items['fb-123'].closedOnSheet, true);
+  assert.ok(calls.some((call) => call.command === 'done' && call.taskId === 'FB-fb-123'));
+});
+
+test('全件取得が失敗しても取得・注入は続行する', async () => {
+  const fetchImpl = async (url) => String(url).includes('status=all')
+    ? response('boom', { ok: false, status: 500 })
+    : response(api);
+  const h = harness({ next: original, fetchImpl });
+  assert.equal(await runIntake({ home: HOME, io: h.io, fetchImpl: h.fetchImpl, taskLedger: async () => {} }), 0);
+  assert.match(h.files.get(HOME_FILE('next-session.md')), /\[FB:fb-123\]/);
+  assert.match(h.stderr.join('\n'), /全件取得に失敗/);
+});
+
 test('不具合通知の webhook は明示キーだけを拾う（無関係 channel への誤爆防止）', () => {
   assert.equal(webhookFrom({ BOOTH_FEEDBACK_WEBHOOK: 'https://x/booth' }, {}), 'https://x/booth');
   assert.equal(webhookFrom({}, { DISCORD_FEEDBACK_WEBHOOK: 'https://x/fb' }), 'https://x/fb');

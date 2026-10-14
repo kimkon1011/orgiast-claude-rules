@@ -16,6 +16,7 @@ const mail = (overrides = {}) => ({ id: 'mail-original', from: sender, to: recei
 function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-v2-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(home, '.git'));
   const dir = path.join(home, '.claude'), inbox = path.join(dir, 'fleet-inbox'); fs.mkdirSync(inbox, { recursive: true });
   fs.writeFileSync(path.join(dir, 'fleet-sheet.env'), 'FLEET_SHEET_URL=https://example.invalid/mail\nFLEET_SHEET_TOKEN=fixture\n');
   fs.writeFileSync(path.join(dir, 'cost-reporter.env'), `REPORTER_LABEL=${receiver}\n`);
@@ -517,7 +518,8 @@ test('D6 final arrival receives only the remaining total budget', async t => {
 });
 
 import { readQuestion, updateQuestion, relayQuestions, RELAY_WAIT_MS, RESUME_LIMIT_MS } from './fleet-question-relay.mjs';
-import { runPrompt } from './fleet-agent.mjs';
+import { runPrompt, consentCommand, hubReport } from './fleet-agent.mjs';
+import { runClaudeTask } from './fleet-task-runner.mjs';
 function questionFixture(f, extra = {}) {
   const transcriptPath = path.join(f.home, 'session.jsonl'); fs.writeFileSync(transcriptPath, '');
   const question = { sessionId: 'session-hub', cwd: f.home, question: 'どちらにしますか？ token=private', options: [{ label: 'A' }], summary: '検証済み', askedAt: iso(-RELAY_WAIT_MS), questionHash: 'hash-question', drivenByHub: false, relayedAt: null, transcriptPath, transcriptOffset: 0, ...extra };
@@ -534,10 +536,19 @@ function promptSpawn(f, { code = 0, output = '完了 token=private', onSpawn } =
   };
 }
 function hubPrompt(f, extra = {}) {
-  fs.writeFileSync(path.join(f.dir, 'fleet-agent-optin.json'), JSON.stringify({ accept: ['prompt'] }));
+  fs.appendFileSync(path.join(f.dir, 'fleet-sheet.env'), `FLEET_HUB=${sender}\n`);
+  fs.writeFileSync(path.join(f.dir, 'fleet-agent-optin.json'), JSON.stringify({ accept: ['claude-resume'] }));
   f.deps.resolveClaudeExe = () => ({ executable: '/fixture/claude', candidates: ['/fixture/claude'] });
   f.deps.spawnImpl = promptSpawn(f);
   const m = mail({ kind: 'prompt', exec: 'claude', execCwd: f.home, resumeSessionId: 'session-hub', body: 'Aで進めて', ...extra }); f.save(m); return m;
+}
+async function runHubPoll(f) {
+  const launched = [];
+  await pollOnce({ ...f.deps, spawnImpl: (...args) => { launched.push(args); return { on() {}, unref() {} }; } });
+  for (const [, args] of launched) {
+    assert.match(args[0], /fleet-task-runner\.mjs$/);
+    await runClaudeTask({ ...f.deps, id: args[args.indexOf('--id') + 1] });
+  }
 }
 test('E poll relays after ten minutes exactly once with metadata and a redacted summary', async t => {
   const f = fixture(t), q = questionFixture(f);
@@ -592,9 +603,9 @@ test('E send claude resume carries body markers, structured execution fields and
 test('E received claude resume uses exact argv/cwd, marks hub state, clears running state and reports stdout only', async t => {
   const f = fixture(t); const m = hubPrompt(f); let during;
   f.deps.spawnImpl = promptSpawn(f, { onSpawn: () => { during = readQuestion(f.home, m.resumeSessionId); } });
-  await pollOnce(f.deps);
+  await runHubPoll(f);
   assert.equal(f.spawns.length, 1);
-  const [exe, args, opts] = f.spawns[0]; assert.equal(exe, '/fixture/claude'); assert.deepEqual(args, ['-p', '--resume', m.resumeSessionId, m.body]); assert.equal(opts.cwd, f.home); assert.equal(opts.env.CLAUDE_HEADLESS, '1'); assert.equal(opts.env.FLEET_DRIVEN_BY_HUB, '1');
+  const [exe, args, opts] = f.spawns[0]; assert.equal(exe, '/fixture/claude'); assert.deepEqual(args, ['-p', '--resume', m.resumeSessionId, '--', m.body]); assert.equal(opts.cwd, f.home); assert.equal(opts.env.CLAUDE_HEADLESS, '1'); assert.equal(opts.env.FLEET_DRIVEN_BY_HUB, '1');
   assert.equal(during.drivenByHub, true); assert.ok(during.resumingAt); assert.equal(readQuestion(f.home, m.resumeSessionId).resumingAt, undefined);
   const reply = f.calls.find(c => c.kind === 'mail-reply').payload.resultBody;
   assert.match(reply, /^\[報告・返信不要\]/); assert.doesNotMatch(reply, /private|stderr/); assert.equal(f.read(m.id).status, 'done');
@@ -602,15 +613,15 @@ test('E received claude resume uses exact argv/cwd, marks hub state, clears runn
 test('E active session skips without consuming mail; thirty minute stale session may resume', async t => {
   const f = fixture(t), m = hubPrompt(f);
   updateQuestion(f.home, m.resumeSessionId, () => ({ sessionId: m.resumeSessionId, resumingAt: iso(-RESUME_LIMIT_MS + 1), drivenByHub: true }));
-  await pollOnce(f.deps); assert.equal(f.spawns.length, 0); assert.equal(f.read(m.id).executionStartedAt, undefined);
+  await runHubPoll(f); assert.equal(f.spawns.length, 0); assert.equal(f.read(m.id).executionStartedAt, undefined);
   updateQuestion(f.home, m.resumeSessionId, q => ({ ...q, resumingAt: iso(-RESUME_LIMIT_MS) }));
-  await pollOnce(f.deps); assert.equal(f.spawns.length, 1);
+  await runHubPoll(f); assert.equal(f.spawns.length, 1);
 });
 test('E new Claude session omits resume and unapproved prompt returns consent without launching', async t => {
   const f = fixture(t), m = hubPrompt(f, { resumeSessionId: undefined });
-  await pollOnce(f.deps); assert.deepEqual(f.spawns[0][1], ['-p', m.body]);
+  await runHubPoll(f); assert.deepEqual(f.spawns[0][1], ['-p', '--', m.body]);
   f.save(mail({ ...m, id: 'mail-unapproved' })); fs.unlinkSync(path.join(f.dir, 'fleet-agent-optin.json'));
-  await pollOnce(f.deps); assert.equal(f.spawns.length, 1); assert.match(f.calls.filter(c => c.kind === 'mail-reply').at(-1).payload.resultBody, /未オプトイン.*承諾コマンド/s);
+  await runHubPoll(f); assert.equal(f.spawns.length, 1); assert.match(f.calls.filter(c => c.kind === 'mail-reply').at(-1).payload.resultBody, /未オプトイン.*承諾コマンド/s);
 });
 test('E runPrompt enforces thirty minute timer, kills process and resolves failure', async () => {
   const child = new EventEmitter(); child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
@@ -632,14 +643,14 @@ test('E real poll execution applies thirty minute timeout and returns failure wi
     f.spawns.push(args); const child = new EventEmitter(); child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.kill = signal => { killed = signal; }; return child;
   };
   f.deps.promptSetTimer = (fn, ms) => { timeout = ms; queueMicrotask(fn); return 1; }; f.deps.promptClearTimer = () => {};
-  await pollOnce(f.deps);
+  await runHubPoll(f);
   assert.equal(timeout, RESUME_LIMIT_MS); assert.equal(killed, 'SIGKILL'); assert.equal(readQuestion(f.home, m.resumeSessionId).resumingAt, undefined);
   assert.match(f.calls.find(c => c.kind === 'mail-reply').payload.resultBody, /報告・返信不要.*実行失敗.*30分上限/s);
 });
 test('E missing Claude executable reports candidates and releases session ownership', async t => {
   const f = fixture(t), m = hubPrompt(f);
   f.deps.spawnImpl = () => { const child = new EventEmitter(); child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); queueMicrotask(() => child.emit('error', new Error('spawn ENOENT'))); return child; };
-  await pollOnce(f.deps);
+  await runHubPoll(f);
   const reply = f.calls.find(c => c.kind === 'mail-reply').payload.resultBody;
   assert.match(reply, /実行失敗.*claude CLI.*候補.*\/fixture\/claude/s); assert.equal(readQuestion(f.home, m.resumeSessionId).resumingAt, undefined);
 });
@@ -653,7 +664,7 @@ test('E report truncates redacted stdout to 4000 characters and retry does not r
   const f = fixture(t), m = hubPrompt(f); f.deps.spawnImpl = promptSpawn(f, { output: 'token=' + 's'.repeat(5000) });
   const request = f.deps.request; let fail = true;
   f.deps.request = async (kind, payload) => { const result = await request(kind, payload); if (kind === 'mail-reply' && fail) throw new Error('lost response'); return result; };
-  await pollOnce(f.deps); fail = false; await pollOnce(f.deps);
+  await runHubPoll(f); fail = false; await runHubPoll(f);
   assert.equal(f.spawns.length, 1); assert.equal(f.read(m.id).status, 'done');
   const replies = f.calls.filter(c => c.kind === 'mail-reply'); assert.equal(replies.length, 2); assert.equal(replies[0].payload.resultBody, replies[1].payload.resultBody); assert.doesNotMatch(replies[0].payload.resultBody, /ss/);
 });
@@ -796,4 +807,191 @@ test('F2 ack completion journal preserves an already terminal broadcast state', 
     assert.equal(await main(['--ack', id], f.deps), 0);
     assert.equal(f.read(id).status, status); assert.deepEqual(f.read(id).pendingServer, []);
   }
+});
+
+// §11.4 safety regressions. All executions/transports are local doubles.
+test('G1 prompt consent cannot authorize Claude resume; dedicated consent permits execution', async t => {
+  const f = fixture(t), m = hubPrompt(f);
+  fs.writeFileSync(path.join(f.dir, 'fleet-agent-optin.json'), JSON.stringify({ accept: ['prompt'] }));
+  await runHubPoll(f);
+  assert.equal(f.spawns.length, 0);
+  assert.ok(f.calls.find(c => c.kind === 'mail-reply').payload.resultBody.includes(consentCommand('claude-resume')));
+  const approved = hubPrompt(f, { id: 'mail-approved' });
+  await runHubPoll(f);
+  assert.equal(f.spawns.length, 1); assert.equal(f.read(approved.id).status, 'done');
+  assert.equal(f.read(m.id).executionStartedAt, undefined);
+});
+for (const mode of ['spoof', 'unset']) test(`G2 ${mode} hub sender fails without execution`, async t => {
+  const f = fixture(t), m = hubPrompt(f, mode === 'spoof' ? { from: receiver } : {});
+  if (mode === 'unset') fs.writeFileSync(path.join(f.dir, 'fleet-sheet.env'), 'FLEET_SHEET_URL=https://example.invalid/mail\nFLEET_SHEET_TOKEN=fixture\n');
+  await runHubPoll(f);
+  assert.equal(f.spawns.length, 0);
+  assert.equal(f.calls.find(c => c.kind === 'mail-send').payload.reason, 'not-hub');
+  assert.equal(f.calls.find(c => c.kind === 'mail-fail').payload.reason, 'not-hub');
+  assert.equal(f.read(m.id).status, 'failed');
+});
+for (const mode of ['missing', 'file', 'no-git']) test(`G3 ${mode} cwd fails on receipt and answer before send`, async t => {
+  const f = fixture(t);
+  const cwd = mode === 'file' ? f.body : path.join(f.home, 'invalid-cwd');
+  if (mode === 'no-git') fs.mkdirSync(cwd);
+  hubPrompt(f, { execCwd: cwd });
+  await runHubPoll(f);
+  assert.equal(f.spawns.length, 0); assert.equal(f.calls.find(c => c.kind === 'mail-send').payload.reason, 'bad-cwd');
+  const original = mail({ why: '[判断依頼]', meta: { relay: { sessionId: 'session-hub', cwd } } });
+  f.deps.request = async (kind, payload) => { f.calls.push({ kind, payload }); return { ok: true, mail: original }; };
+  f.calls.length = 0;
+  assert.equal(await main(['--answer', original.id, '--body-file', f.body], f.deps), 2);
+  assert.deepEqual(f.calls.map(c => c.kind), ['mail-get']); assert.match(f.errors.at(-1), /bad-cwd/);
+});
+test('G4 flag-like body is a positional argument after the terminator', async t => {
+  const f = fixture(t), m = hubPrompt(f, { body: '--dangerously-skip-permissions do something' });
+  await runHubPoll(f);
+  assert.deepEqual(f.spawns[0][1], ['-p', '--resume', m.resumeSessionId, '--', m.body]);
+});
+for (const outcome of ['success', 'failure', 'timeout']) test(`G5 ${outcome} clears hub ownership and next question waits ten minutes`, async t => {
+  const f = fixture(t), m = hubPrompt(f);
+  f.deps.spawnImpl = promptSpawn(f, { code: outcome === 'failure' ? 1 : 0 });
+  if (outcome === 'timeout') {
+    f.deps.spawnImpl = () => { const child = new EventEmitter(); child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.kill = () => {}; return child; };
+    f.deps.promptSetTimer = fn => { queueMicrotask(fn); return 1; }; f.deps.promptClearTimer = () => {};
+  }
+  await runHubPoll(f);
+  const state = readQuestion(f.home, m.resumeSessionId);
+  assert.equal(state.drivenByHub, false); assert.equal(state.resumingAt, undefined);
+  const q = questionFixture(f, { ...state, question: 'next?', questionHash: 'next', askedAt: iso(0), relayedAt: null });
+  assert.equal(await relayQuestions({ home: f.home, hub: sender, label: receiver, request: f.deps.request, now: () => now }), 0);
+  assert.equal(await relayQuestions({ home: f.home, hub: sender, label: receiver, request: f.deps.request, now: () => now + RELAY_WAIT_MS }), 1);
+  assert.ok(readQuestion(f.home, q.sessionId).relayedAt);
+});
+test('G6 poll detaches and releases lock without waiting for the runner timeout', async t => {
+  const f = fixture(t), m = hubPrompt(f); let unrefed = false;
+  f.deps.spawnImpl = (...args) => { f.spawns.push(args); return { on() {}, unref() { unrefed = true; } }; };
+  f.deps.promptSetTimer = () => assert.fail('poll must never start execution timer');
+  f.deps.resolveClaudeExe = () => assert.fail('poll must never resolve Claude');
+  const start = performance.now(); await pollOnce(f.deps);
+  assert.ok(performance.now() - start < 2000);
+  assert.equal(unrefed, true); assert.equal(f.spawns[0][2].stdio, 'ignore');
+  assert.equal(fs.existsSync(path.join(f.dir, 'fleet-mail.lock')), false);
+  assert.equal(f.calls.some(c => c.kind === 'mail-reply'), false);
+  assert.equal(readQuestion(f.home, m.resumeSessionId), null);
+  await pollOnce(f.deps); assert.equal(f.spawns.length, 1);
+});
+test('G6 runner serializes concurrent resumes and preserves the first owner', async t => {
+  const f = fixture(t), m = hubPrompt(f); let finish;
+  f.deps.spawnImpl = () => { const c = new EventEmitter(); c.stdin = new PassThrough(); c.stdout = new PassThrough(); c.stderr = new PassThrough(); c.kill = () => {}; finish = () => c.emit('close', 0); return c; };
+  const first = runClaudeTask({ ...f.deps, id: m.id });
+  await new Promise(resolve => setImmediate(resolve));
+  const secondMail = { ...m, id: 'mail-second', executionStartedAt: iso(0) }; f.save(secondMail);
+  const second = await runClaudeTask({ ...f.deps, id: secondMail.id });
+  assert.equal(second.skipped, 'session-busy'); assert.equal(f.read(secondMail.id).executionStartedAt, undefined);
+  assert.equal(readQuestion(f.home, m.resumeSessionId).resumeMailId, m.id);
+  finish(); await first;
+  assert.equal(readQuestion(f.home, m.resumeSessionId).drivenByHub, false);
+});
+test('G7 failed execution with empty stdout reports stderr tail', async t => {
+  const f = fixture(t); hubPrompt(f); f.deps.spawnImpl = promptSpawn(f, { code: 1, output: '' });
+  await runHubPoll(f);
+  assert.match(f.calls.find(c => c.kind === 'mail-reply').payload.resultBody, /実行失敗\nstderr must not replace stdout/);
+  assert.equal(hubReport({ exitCode: 1, stdoutTail: '', outputTail: '', error: 'failure detail' }).outputTail.endsWith('failure detail'), true);
+});
+test('G9 answer rejects other recipients and detects changed retries unless forced', async t => {
+  const f = fixture(t), q = questionFixture(f); let original = mail({ why: '[判断依頼]', to: sender, meta: { relay: q } });
+  const request = f.deps.request;
+  f.deps.request = async (kind, payload) => { const response = await request(kind, payload); return kind === 'mail-get' ? { ok: true, mail: original } : response; };
+  const args = ['--answer', original.id, '--body-file', f.body];
+  assert.equal(await main(args, f.deps), 2); assert.equal(f.calls.filter(c => c.kind === 'mail-send').length, 0);
+  original = { ...original, to: receiver };
+  assert.equal(await main(args, f.deps), 0);
+  original.status = 'done';
+  assert.equal(await main(args, f.deps), 0); assert.ok(f.output.includes('前回の回答を再送'));
+  fs.writeFileSync(f.body, 'different answer');
+  assert.equal(await main(args, f.deps), 3); assert.match(f.errors.at(-1), /本文が前回と異なる/);
+  assert.equal(f.calls.filter(c => c.kind === 'mail-send').length, 2);
+  assert.equal(await main([...args, '--force'], f.deps), 0);
+  const sends = f.calls.filter(c => c.kind === 'mail-send');
+  assert.equal(sends[0].payload.id, sends[1].payload.id); assert.notEqual(sends[1].payload.id, sends[2].payload.id);
+  assert.match(sends[2].payload.body, /different answer$/);
+});
+import { QUESTION_RETENTION_MS, questionPath } from './fleet-question-relay.mjs';
+test('G12 poll collects only expired question files and logs counts', async t => {
+  const f = fixture(t); const q = questionFixture(f, { relayedAt: iso(0) });
+  const old = questionPath(f.home, q.sessionId); const stale = new Date(now - QUESTION_RETENTION_MS - 1); fs.utimesSync(old, stale, stale);
+  updateQuestion(f.home, 'recent', () => ({ sessionId: 'recent' }));
+  const recent = questionPath(f.home, 'recent'); const boundary = new Date(now - QUESTION_RETENTION_MS); fs.utimesSync(recent, boundary, boundary);
+  updateQuestion(f.home, 'active', () => ({ sessionId: 'active', resumingAt: iso(0) }));
+  const active = questionPath(f.home, 'active'); fs.utimesSync(active, stale, stale);
+  await pollOnce(f.deps);
+  assert.equal(fs.existsSync(old), false); assert.equal(fs.existsSync(recent), true); assert.equal(fs.existsSync(active), true);
+  assert.ok(f.errors.includes('fleet-mail: 質問回収=1'));
+});
+
+test('G6 runner revalidates consent sender and cwd after detached launch', async t => {
+  for (const mode of ['consent', 'sender', 'cwd']) {
+    const f = fixture(t), m = hubPrompt(f);
+    await pollOnce({ ...f.deps, spawnImpl: () => ({ on() {}, unref() {} }) });
+    if (mode === 'consent') fs.unlinkSync(path.join(f.dir, 'fleet-agent-optin.json'));
+    if (mode === 'sender') fs.writeFileSync(path.join(f.dir, 'fleet-sheet.env'), 'FLEET_SHEET_URL=https://example.invalid/mail\nFLEET_SHEET_TOKEN=fixture\n');
+    if (mode === 'cwd') fs.rmdirSync(path.join(f.home, '.git'));
+    const result = await runClaudeTask({ ...f.deps, id: m.id });
+    assert.equal(f.spawns.length, 0);
+    if (mode === 'consent') assert.ok(result.outputTail.includes(consentCommand('claude-resume')));
+    else assert.equal(result.reason, mode === 'sender' ? 'not-hub' : 'bad-cwd');
+  }
+});
+test('G5 new session hook ownership is cleared when runner exits', async t => {
+  const f = fixture(t), m = hubPrompt(f, { resumeSessionId: undefined });
+  f.deps.spawnImpl = promptSpawn(f, { onSpawn: () => {
+    updateQuestion(f.home, 'new-session', () => ({ sessionId: 'new-session', drivenByHub: true, resumeMailId: m.id }));
+    updateQuestion(f.home, 'other-session', () => ({ sessionId: 'other-session', drivenByHub: true, resumeMailId: 'mail-unrelated' }));
+  } });
+  await runHubPoll(f);
+  assert.equal(f.spawns[0][2].env.FLEET_RESUME_MAIL_ID, m.id);
+  assert.equal(readQuestion(f.home, 'new-session').drivenByHub, false);
+  assert.equal(readQuestion(f.home, 'other-session').drivenByHub, true);
+});
+test('G6 detached spawn failure is reported once without retrying execution', async t => {
+  const f = fixture(t), m = hubPrompt(f); let spawns = 0;
+  f.deps.spawnImpl = () => { spawns++; throw new Error('fixture spawn failure'); };
+  await pollOnce(f.deps); await pollOnce(f.deps); await pollOnce(f.deps);
+  assert.equal(spawns, 1); assert.equal(f.read(m.id).status, 'done');
+  assert.match(f.calls.find(c => c.kind === 'mail-reply').payload.resultBody, /runner 起動失敗/);
+});
+
+test('G9 answer detects differences beyond the transmitted length', async t => {
+  const f = fixture(t), q = questionFixture(f), original = mail({ why: '[判断依頼]', meta: { relay: q } });
+  const request = f.deps.request;
+  f.deps.request = async (kind, payload) => { const result = await request(kind, payload); return kind === 'mail-get' ? { ok: true, mail: original } : result; };
+  const body = 'x'.repeat(20000);
+  fs.writeFileSync(f.body, body + 'A');
+  const args = ['--answer', original.id, '--body-file', f.body];
+  assert.equal(await main(args, f.deps), 0);
+  fs.writeFileSync(f.body, body + 'B');
+  assert.equal(await main(args, f.deps), 3); assert.equal(f.calls.filter(c => c.kind === 'mail-send').length, 1);
+});
+
+test('G5 poll clears interrupted or finished ownership before relaying another question', async t => {
+  for (const finished of [false, true]) {
+    const f = fixture(t), m = hubPrompt(f);
+    questionFixture(f, { askedAt: iso(0), drivenByHub: true, resumingAt: iso(finished ? 0 : -RESUME_LIMIT_MS), resumeMailId: m.id });
+    if (finished) { const dir = path.join(f.dir, 'fleet-agent-results'); fs.mkdirSync(dir); fs.writeFileSync(path.join(dir, `${m.id}.json`), JSON.stringify(hubReport({ exitCode: 0, stdoutTail: 'done' }))); }
+    f.save({ ...m, executionStartedAt: iso(-RESUME_LIMIT_MS) });
+    await pollOnce(f.deps);
+    assert.equal(readQuestion(f.home, m.resumeSessionId).drivenByHub, false);
+    assert.equal(f.calls.filter(c => c.kind === 'mail-send').length, 0);
+  }
+});
+
+test('G6 runner timeout includes launch delay and seen synchronization', async t => {
+  const f = fixture(t), m = hubPrompt(f, { executionStartedAt: iso(-1000) }); let clock = now, timeout;
+  const request = f.deps.request;
+  f.deps.request = async (kind, payload) => { if (kind === 'mail-seen') clock += 1000; return request(kind, payload); };
+  f.deps.now = () => clock;
+  f.deps.promptSetTimer = (_fn, ms) => { timeout = ms; return 1; }; f.deps.promptClearTimer = () => {};
+  await runClaudeTask({ ...f.deps, id: m.id });
+  assert.equal(timeout, RESUME_LIMIT_MS - 2000);
+  const late = hubPrompt(f, { id: 'mail-late', executionStartedAt: iso(-RESUME_LIMIT_MS) });
+  const count = f.spawns.length;
+  const result = await runClaudeTask({ ...f.deps, id: late.id });
+  assert.equal(f.spawns.length, count); assert.equal(result.timedOut, true);
+  assert.equal(readQuestion(f.home, late.resumeSessionId).drivenByHub, false);
 });

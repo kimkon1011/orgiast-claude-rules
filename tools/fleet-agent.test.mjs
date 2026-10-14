@@ -318,7 +318,7 @@ test('opt-in prompt は argv 配列・shell false・stdin EOF で起動する', 
   const posts = [];
   const result = await processDirective({ id: 'p-ok', kind: 'prompt', targets: 'all', why: 'test', body: '`literal`' }, { home, repo: process.cwd(), label: 'PC', hostname: 'host', dryRun: false, post: async (message) => posts.push(message), spawnImpl });
   assert.equal(result.action, 'prompt');
-  assert.deepEqual(invocation.args, ['-p', '`literal`']);
+  assert.deepEqual(invocation.args, ['-p', '--', '`literal`']);
   assert.equal(invocation.options.shell, false);
   assert.equal(invocation.ended, true);
   assert.match(posts[0], /exit=0/);

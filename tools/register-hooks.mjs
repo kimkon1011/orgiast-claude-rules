@@ -185,7 +185,7 @@ try {
   let policyRepaired = 0;
   let costLoopMigrated = 0;
   if (!settings.hooks || typeof settings.hooks !== 'object' || Array.isArray(settings.hooks)) settings.hooks = {};
-  for (const event of ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop']) if (!Array.isArray(settings.hooks[event])) settings.hooks[event] = [];
+  for (const event of ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop', 'Notification']) if (!Array.isArray(settings.hooks[event])) settings.hooks[event] = [];
   added += removeDailySessionHooks(settings);
   const command = (name, extra = '') => `node "${path.join(repo, 'tools', name)}"${extra}`;
   // 2026-09-06: 9本を別プロセスで動かすと304 Stop中198回が再Stopになったため、
@@ -286,6 +286,11 @@ try {
   if (add(settings.hooks.UserPromptSubmit, 'intake-two-axes-hook.mjs', { hooks: [{ type: 'command', command: command('intake-two-axes-hook.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.Stop, 'fleet-question-relay.mjs', { hooks: [{ type: 'command', command: command('fleet-question-relay.mjs'), timeout: 5 }] })) added += 1;
   added += setTimeoutFor(settings.hooks.Stop, 'fleet-question-relay.mjs', 5);
+  for (const event of ['PreToolUse', 'Notification']) {
+    if (add(settings.hooks[event], 'fleet-question-relay.mjs', { ...(event === 'PreToolUse' ? { matcher: 'AskUserQuestion' } : {}), hooks: [{ type: 'command', command: command('fleet-question-relay.mjs'), timeout: 5 }] })) added += 1;
+    added += setTimeoutFor(settings.hooks[event], 'fleet-question-relay.mjs', 5);
+  }
+  added += syncMatcherFor(settings.hooks.PreToolUse, 'fleet-question-relay.mjs', 'AskUserQuestion');
   // 過去に受領済みのクレデンシャルをuserへ再質問する前に復元経路を注入する。
   for (const event of ['SessionStart', 'UserPromptSubmit']) {
     if (add(settings.hooks[event], 'fleet-inbox-context.mjs', { hooks: [{ type: 'command', command: command('fleet-inbox-context.mjs'), timeout: 5 }] })) added += 1;

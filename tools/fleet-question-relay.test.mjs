@@ -83,3 +83,74 @@ test('long final text retains its actual question and leading work summary', () 
   const result = detectQuestion(assistant(text)); assert.ok(result.question.endsWith('次はどうしますか？')); assert.equal(result.question.length, QUESTION_LIMIT); assert.ok(result.summary.startsWith('検証済み。'));
   assert.equal(detectQuestion(assistant('return condition ?')), null);
 });
+
+import { hasNewUserMessage } from './fleet-question-relay.mjs';
+for (const event of ['PreToolUse', 'Notification', 'Stop']) test(`G8 ${event} records questions once with event-specific input`, async t => {
+  const f = fixture(t); const question = '続行しますか？';
+  f.input.hook_event_name = event;
+  f.input.tool_name = 'AskUserQuestion';
+  f.input.tool_input = { questions: [{ question, options: [{ label: 'A', description: '進める' }] }] };
+  f.input.message = question;
+  fs.writeFileSync(f.transcript, JSON.stringify(assistant(question)) + '\n');
+  await f.run({ now: () => 1000 });
+  const before = readQuestion(f.home, f.input.session_id);
+  assert.equal(before.question, question);
+  if (event === 'PreToolUse') assert.deepEqual(before.options[0].options, f.input.tool_input.questions[0].options);
+  updateQuestion(f.home, f.input.session_id, q => ({ ...q, relayedAt: 'sent' }));
+  await f.run({ now: () => 2000 });
+  const after = readQuestion(f.home, f.input.session_id);
+  assert.equal(after.askedAt, before.askedAt); assert.equal(after.relayedAt, 'sent');
+});
+test('G8 PreToolUse and Stop deduplicate the same AskUserQuestion', async t => {
+  const f = fixture(t), questions = [{ question: '続行？', options: [{ label: 'A' }] }];
+  f.input.hook_event_name = 'PreToolUse'; f.input.tool_name = 'AskUserQuestion'; f.input.tool_input = { questions };
+  fs.writeFileSync(f.transcript, ''); await f.run();
+  updateQuestion(f.home, f.input.session_id, q => ({ ...q, relayedAt: 'sent' }));
+  const before = readQuestion(f.home, f.input.session_id);
+  fs.writeFileSync(f.transcript, JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'AskUserQuestion', input: { questions } }] } }) + '\n');
+  f.input.hook_event_name = 'Stop'; await f.run();
+  assert.deepEqual(readQuestion(f.home, f.input.session_id), before);
+});
+test('G11 offsets end at complete JSONL lines and malformed fragments do not suppress relay', async t => {
+  const f = fixture(t), complete = JSON.stringify(assistant('続行？')) + '\n';
+  const partial = JSON.stringify({ type: 'user', message: { content: '進めて' } });
+  fs.writeFileSync(f.transcript, complete + partial.slice(0, 12));
+  await f.run(); const q = readQuestion(f.home, f.input.session_id);
+  assert.equal(q.transcriptOffset, Buffer.byteLength(complete));
+  assert.equal(await hasNewUserMessage(q), false);
+  fs.appendFileSync(f.transcript, partial.slice(12) + '\n');
+  assert.equal(await hasNewUserMessage(q), true);
+  fs.writeFileSync(f.transcript, complete + 'invalid json\n' + JSON.stringify(assistant('続行？')) + '\n');
+  assert.equal(await hasNewUserMessage(q), false);
+  fs.appendFileSync(f.transcript, 'invalid again\n' + partial + '\n');
+  assert.equal(await hasNewUserMessage(q), true);
+});
+
+test('G11 long incomplete line still saves the last complete byte offset', async t => {
+  const f = fixture(t), complete = JSON.stringify(assistant('続行？')) + '\n';
+  fs.writeFileSync(f.transcript, complete + '{"unfinished":"' + 'x'.repeat(TRANSCRIPT_TAIL_BYTES * 2));
+  await f.run();
+  const q = readQuestion(f.home, f.input.session_id);
+  assert.equal(q.transcriptOffset, Buffer.byteLength(complete));
+  assert.equal(await hasNewUserMessage(q), false);
+});
+
+test('G8 Notification AskUserQuestion and Stop share one relay identity for the same question', async t => {
+  const f = fixture(t), question = '続行？';
+  fs.writeFileSync(f.transcript, '');
+  f.input.hook_event_name = 'Notification'; f.input.message = question;
+  await f.run({ now: () => 1000 });
+  updateQuestion(f.home, f.input.session_id, q => ({ ...q, relayedAt: 'sent' }));
+  const first = readQuestion(f.home, f.input.session_id);
+  f.input.hook_event_name = 'PreToolUse'; f.input.tool_name = 'AskUserQuestion';
+  f.input.tool_input = { questions: [{ question, options: [{ label: 'A', description: '進める' }] }] };
+  await f.run({ now: () => 2000 });
+  const enriched = readQuestion(f.home, f.input.session_id);
+  assert.deepEqual(enriched.options[0].options, f.input.tool_input.questions[0].options);
+  assert.equal(enriched.questionHash, first.questionHash); assert.equal(enriched.relayedAt, first.relayedAt); assert.equal(enriched.askedAt, first.askedAt);
+  await f.run({ now: () => 2500 });
+  assert.deepEqual(readQuestion(f.home, f.input.session_id), enriched);
+  fs.writeFileSync(f.transcript, JSON.stringify(assistant(question)) + '\n');
+  f.input.hook_event_name = 'Stop'; await f.run({ now: () => 3000 });
+  assert.deepEqual(readQuestion(f.home, f.input.session_id), enriched);
+});

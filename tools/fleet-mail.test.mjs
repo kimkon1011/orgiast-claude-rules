@@ -110,7 +110,7 @@ test('opted-in prompt uses fixed header, local executable/cwd, bounded redacted 
   f.deps.request = async (kind, payload) => { f.calls.push({ kind, payload }); return kind === 'mail-poll' ? { messages: [mail({ kind: 'prompt', cwd: '/attacker', claudeExe: '/evil' })] } : { mail: {} }; };
   await main(['--poll'], f.deps);
   assert.equal(spawns.length, 1); assert.equal(spawns[0].options.cwd, f.home); assert.notEqual(spawns[0].program, '/evil');
-  assert.match(spawns[0].args[1], /^これは other-PC PC の Claude Code からのメッセージです。/);
+  assert.match(spawns[0].args.at(-1), /^これは other-PC PC の Claude Code からのメッセージです。/);
   assert.ok(spawns[0].args.includes('--strict-mcp-config')); assert.ok(spawns[0].args.includes('--tools'));
   assert.equal(spawns[0].options.shell, false);
   assert.equal(f.calls.find(c => c.kind === 'mail-reply').payload.resultBody.length, 8000); assert.doesNotMatch(f.calls.find(c => c.kind === 'mail-reply').payload.resultBody, /secret-value/);
@@ -433,7 +433,7 @@ const execMail = (overrides = {}) => mail({ kind: 'prompt', body: '<!-- fleet-ex
 function detachedDouble(calls) {
   return (program, args, options) => {
     calls.push({ program, args, options });
-    return { unref: () => { calls.at(-1).unrefed = true; } };
+    return { on() {}, unref: () => { calls.at(-1).unrefed = true; } };
   };
 }
 
@@ -496,7 +496,7 @@ test('exec codex first poll detaches runner, records executionStartedAt and does
   assert.equal(spawns[0].options.stdio, 'ignore');
   assert.equal(spawns[0].unrefed, true);
   assert.match(spawns[0].args[0], /fleet-task-runner\.mjs$/);
-  assert.deepEqual(spawns[0].args.slice(1), ['--id', execMail().id]);
+  assert.deepEqual(spawns[0].args.slice(1), ['--id', execMail().id, '--home', f.home]);
   assert.ok(!f.calls.some(c => c.kind === 'mail-reply'), '初回は返信しない');
   const inbox = JSON.parse(fs.readFileSync(path.join(f.dir, 'fleet-inbox', `${execMail().id}.json`), 'utf8'));
   assert.ok(inbox.executionStartedAt);

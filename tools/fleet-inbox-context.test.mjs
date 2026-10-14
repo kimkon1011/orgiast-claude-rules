@@ -198,3 +198,16 @@ test('E answered question no longer displays waiting after execution finishes', 
   updateQuestion(f.home, 't', () => ({ sessionId: 't', relayedAt: new Date(NOW).toISOString(), answeredAt: new Date(NOW).toISOString(), drivenByHub: true, sentId: 'mail-question-test' }));
   await f.run(); assert.equal(f.outputs.length, 0);
 });
+
+import { questionContext } from './fleet-inbox-context.mjs';
+import { RESUME_LIMIT_MS, FORWARDED_QUESTION_NOTICE } from './fleet-question-relay.mjs';
+test('G10 stale resume is hidden and forwarded questions explain the separate session', t => {
+  const f = fixture(t);
+  updateQuestion(f.home, 't', () => ({ sessionId: 't', resumingAt: new Date(NOW - RESUME_LIMIT_MS + 1).toISOString() }));
+  assert.match(questionContext(f.home, 't', NOW), /実行中/);
+  updateQuestion(f.home, 't', q => ({ ...q, resumingAt: new Date(NOW - RESUME_LIMIT_MS).toISOString() }));
+  assert.equal(questionContext(f.home, 't', NOW), '');
+  updateQuestion(f.home, 't', q => ({ ...q, resumingAt: 'invalid', relayedAt: new Date(NOW).toISOString(), sentId: 'mail-relayed' }));
+  const text = questionContext(f.home, 't', NOW);
+  assert.doesNotMatch(text, /実行中/); assert.ok(text.includes(FORWARDED_QUESTION_NOTICE));
+});

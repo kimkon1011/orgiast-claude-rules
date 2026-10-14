@@ -8,7 +8,7 @@ import { isEntry } from './is-entry.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
 import { readInbox, hasDecisionRequest, mailCategory, presentMail, acquireLock, TERMINAL_STATUSES } from './fleet-mail.mjs';
-import { readQuestion } from './fleet-question-relay.mjs';
+import { RESUME_LIMIT_MS, FORWARDED_QUESTION_NOTICE, readQuestion } from './fleet-question-relay.mjs';
 import { redactSecrets } from './fleet-agent.mjs';
 
 export const POLL_STALE_MS = 3 * 60 * 1000;
@@ -82,8 +82,8 @@ export function spawnDetached(script, args, { home, spawnImpl = spawn, platform 
 export function questionContext(home, sessionId, now = Date.now()) {
   if (!sessionId) return '';
   const question = readQuestion(home, sessionId);
-  if (question?.resumingAt) return `kim-PC の回答で実行中（${Math.max(0, Math.floor((now - Date.parse(question.resumingAt)) / 60000))} 分前開始）\n`;
-  if (question?.relayedAt && !question.answeredAt) return `この質問は kim-PC へ転送済み・回答待ち（送信 id: ${question.sentId}）\n`;
+  if (question?.resumingAt && now - Date.parse(question.resumingAt) < RESUME_LIMIT_MS) return `kim-PC の回答で実行中（${Math.max(0, Math.floor((now - Date.parse(question.resumingAt)) / 60000))} 分前開始）\n`;
+  if (question?.relayedAt && !question.answeredAt) return `この質問は kim-PC へ転送済み・回答待ち（送信 id: ${question.sentId}）\n${FORWARDED_QUESTION_NOTICE}\n`;
   return '';
 }
 export async function main({ home = process.env.ORGIAST_HOME || os.homedir(), readStdin = readStdinWithTimeout, stdout = console.log, stderr = console.error, spawnImpl = spawn, platform = process.platform, now = Date.now, headless = isHeadless() } = {}) {

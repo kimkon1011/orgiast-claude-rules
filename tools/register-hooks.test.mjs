@@ -369,3 +369,19 @@ test('E fleet-question-relay Stop hook is synchronous, bounded and idempotent', 
   const hooks = settings.hooks.Stop.flatMap(g => g.hooks || []).filter(h => h.command.includes('fleet-question-relay.mjs'));
   assert.equal(hooks.length, 1); assert.equal(hooks[0].timeout, 5); assert.equal(hooks[0].async, undefined);
 });
+
+test('G8 relay registers Stop PreToolUse AskUserQuestion and Notification idempotently', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-relay-events-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const repo = path.resolve('.'), env = { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo };
+  for (let i = 0; i < 2; i++) execFileSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { env, encoding: 'utf8' });
+  const { hooks } = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'));
+  const stop = hooks.Stop.flatMap(g => g.hooks || []).find(h => h.command.includes('fleet-question-relay.mjs'));
+  for (const event of ['Stop', 'PreToolUse', 'Notification']) {
+    const groups = hooks[event].filter(g => g.hooks?.some(h => h.command.includes('fleet-question-relay.mjs')));
+    assert.equal(groups.length, 1);
+    const relay = groups[0].hooks.filter(h => h.command.includes('fleet-question-relay.mjs'));
+    assert.equal(relay.length, 1); assert.equal(relay[0].timeout, stop.timeout); assert.equal(relay[0].async, undefined);
+    if (event === 'PreToolUse') assert.equal(groups[0].matcher, 'AskUserQuestion');
+  }
+});

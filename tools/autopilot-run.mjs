@@ -53,7 +53,11 @@ export async function runOnce(options = {}) {
   fs.mkdirSync(paths.dir, { recursive: true });
   const release = acquireLock(path.join(paths.dir, 'run.lock'));
   if (!release) return { skipped: 'already_running' };
-  const record = (entry) => fs.appendFileSync(path.join(paths.dir, 'run.log'), `${JSON.stringify({ ts: new Date().toISOString(), ...entry })}\n`, 'utf8');
+  const record = (entry) => fs.appendFileSync(path.join(paths.dir, 'run.log'), `${JSON.stringify({ ts: (options.now || new Date()).toISOString(), ...entry })}\n`, 'utf8');
+  const safeDigest = async () => {
+    try { await runAutopilot('digest', {}, options); }
+    catch (e) { record({ digestError: e.code || e.message }); }
+  };
   try {
     const pre = await runAutopilot('pre', {}, options);
     if (pre.verdict !== 'run' || pre.error) {
@@ -68,10 +72,16 @@ export async function runOnce(options = {}) {
         const checked = await (options.invokeImpl || invokeClaude)({ executable, args: ['-p', '--model', model, '--output-format', 'text'], prompt: buildWatchPrompt(watch, repo), cwd: repo,
           timeoutMs: options.timeoutMs ?? 15 * 60_000, env: { ...process.env, AUTOPILOT_HOME: paths.dir, ORGIAST_HOME: paths.home } });
         const result = { skipped: pre.reason || pre.verdict, watchChecked: watch.id, model, exitCode: checked.exitCode, timedOut: checked.timedOut, stdout: String(checked.stdout || '').slice(-2000) };
-        record(result); return result;
+        record(result);
+        await safeDigest();
+        return result;
       }
       const result = { skipped: pre.reason || pre.error || pre.verdict };
-      record(result); return result;
+      record(result);
+      if (pre.verdict && pre.reason !== 'not_started') {
+        await safeDigest();
+      }
+      return result;
     }
     const before = await runAutopilot('status', {}, options);
     const policy = options.policy || loadFablePolicy();
@@ -83,21 +93,31 @@ export async function runOnce(options = {}) {
       env: { ...process.env, AUTOPILOT_HOME: paths.dir, ORGIAST_HOME: paths.home } });
     record({ model, ...result, stdout: String(result.stdout || '').slice(-4000) });
     const after = await runAutopilot('status', {}, options);
+    const postRecorded = after.state?.totalIterations > before.state?.totalIterations;
     // Failed/empty Claude turns still consume an iteration and trip the watchdog.
-    if (after.state?.status === 'running' && after.state.totalIterations === before.state.totalIterations) {
+    if (after.state?.status === 'running' && !postRecorded) {
       await runAutopilot('post', { summary: `ヘッドレス周回で post 未記録 (exit=${result.exitCode}${result.timedOut ? ', timeout' : ''})`, progress: pre.recentLog.at(-1)?.progress ?? 0, noop: true, 'next-delay': 1800 }, options);
     }
     if (result.launchError || result.timedOut || result.exitCode !== 0) {
       const failed = await runAutopilot('status', {}, options);
-      if (failed.state?.status === 'running') await runAutopilot('pause', { reason: 'runner_error' }, options);
+      if (failed.state?.status === 'running') {
+        let detail = `終了コード ${result.exitCode}`;
+        if (result.timedOut) detail = 'タイムアウト';
+        else if (result.launchError) detail = '起動失敗';
+        await runAutopilot('pause', { reason: 'runner_error', detail }, options);
+      }
+    } else if (postRecorded) {
+      await runAutopilot('clear-runner-error', {}, options);
     }
     const final = await runAutopilot('status', {}, options);
     if (final.state?.status !== 'running') await runAutopilot('handoff', {}, options);
+    await safeDigest();
     return { ...result, model, status: final.state?.status };
   } catch (error) {
     record({ error: error.code || error.message });
-    await runAutopilot('pause', { reason: 'runner_error' }, options);
+    await runAutopilot('pause', { reason: 'runner_error', detail: '起動失敗' }, options);
     await runAutopilot('handoff', {}, options);
+    await safeDigest();
     return { error: error.code || error.message };
   } finally { release(); }
 }

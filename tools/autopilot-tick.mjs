@@ -128,14 +128,101 @@ const REASON_TEXT = {
 };
 const reasonText = (reason) => REASON_TEXT[reason] || '止まりました。';
 const autoResumes = (reason) => reason === 'daily_iter_cap' || reason === 'daily_hours_cap';
-export function formatDigest({ hostname, objective, reason, completed = false, evidence = '', unverified = '' }) {
+export function digestSlot(date) {
+  const d = new Date(date);
+  const hour = Number(new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Tokyo', hour: 'numeric', hourCycle: 'h23' }).format(d));
+  const key = dateKey(d);
+  if (hour >= 21) return `${key}-21`;
+  if (hour >= 12) return `${key}-12`;
+  return null;
+}
+function cleanNoticeText(str) {
+  return stripTags(str || '')
+    .replace(/runner_error/gi, '実行エラー')
+    .replace(/exitcode[=:\s]*\d+/gi, 'エラー終了')
+    .replace(/exitcode/gi, '終了コード')
+    .replace(/exit=\d+/gi, 'エラー終了')
+    .replace(/noop_streak/gi, '進捗なし連続')
+    .replace(/noop/gi, '進捗なし')
+    .replace(/daily_iter_cap/gi, '日次上限')
+    .replace(/daily_hours_cap/gi, '時間上限')
+    .replace(/total_cap/gi, '全体上限')
+    .replace(/\r?\n/g, ' ')
+    .trim();
+}
+function plainReasonText(reason) {
+  if (!reason) return '一時停止';
+  if (reason === 'runner_error') return 'エラー';
+  if (reason === 'daily_iter_cap') return '今日の作業回数上限';
+  if (reason === 'daily_hours_cap') return '今日の作業時間上限';
+  if (reason === 'noop_streak') return '連続して進捗なし';
+  if (reason === 'total_cap') return '全体の作業回数上限';
+  if (reason === 'needs_kim') return 'オーナーの判断待ち';
+  if (reason.startsWith('control_') || reason.startsWith('manual_')) return '手動による停止';
+  return '一時停止';
+}
+function plainActionToResume(state) {
+  if (state.status === 'stopped') {
+    return 'どうすれば動くか: 新しい目的を設定して再開してください。';
+  }
+  if (state.pendingQuestion) {
+    return 'どうすれば動くか: 「はい」または「いいえ」で返信してください。';
+  }
+  if (state.pausedReason === 'runner_error') {
+    if ((state.consecutiveRunnerErrors || 0) < 3) {
+      return 'どうすれば動くか: 時間をおいて自動で再開します。今すぐ動かす場合は「続けて」と返信してください。';
+    }
+    return 'どうすれば動くか: エラーの原因を確認し、「続けて」と返信してください。';
+  }
+  if (autoResumes(state.pausedReason)) {
+    return 'どうすれば動くか: 明日自動で再開します。今すぐ動かす場合は「続けて」と返信してください。';
+  }
+  return 'どうすれば動くか: 「続けて」と返信してください。';
+}
+export function formatPeriodicDigest({ hostname, objective, state, rowsSince = [] }) {
   const host = hostname ? `（${oneLine(hostname)}）` : '';
-  const goal = stripTags(objective.objective);
+  const goal = stripTags(objective?.objective || '');
+  const lines = [`📢 定時進捗報告: ${goal}${host}`];
+  if (state.status === 'running') {
+    lines.push('状態: 動いています');
+  } else if (state.status === 'done') {
+    lines.push('状態: 完了しました');
+  } else {
+    lines.push(`状態: 止まっています（${plainReasonText(state.pausedReason)}）`);
+  }
+  lines.push(`前回報告以降の周回: ${rowsSince.length}周`);
+  if (rowsSince.length > 0) {
+    for (const row of rowsSince.slice(-5)) {
+      lines.push(`- ${cleanNoticeText(row.summary).slice(0, 80)}`);
+    }
+  } else {
+    lines.push('- 新しい進捗はありません');
+  }
+  if (state.pendingQuestion) {
+    lines.push(`判断待ち: ${cleanNoticeText(state.pendingQuestion)}`);
+  }
+  if (state.status === 'paused' || state.status === 'stopped') {
+    lines.push(plainActionToResume(state));
+  }
+  return lines.slice(0, 15).join('\n');
+}
+export function formatDigest({ hostname, objective, reason, completed = false, evidence = '', unverified = '', detail = '' }) {
+  const host = hostname ? `（${oneLine(hostname)}）` : '';
+  const goal = stripTags(objective?.objective || objective || '');
   if (completed && unverified) {
     return `🟡 だいたい終わりました: ${goal}\nまだ確かめられていないこと: ${oneLine(unverified)}\n毎日たしかめて、結果をまた知らせます。${host}`;
   }
   if (completed) {
     return `✅ 終わりました: ${goal}\n確かめたこと: ${oneLine(evidence)}${host}`;
+  }
+  if (reason === 'runner_error') {
+    const detailPart = detail ? `最後の失敗: ${oneLine(detail)}。` : '';
+    const lines = [
+      `⚠️ エラーで止まりました: ${goal}`,
+      `自動実行が3回続けて失敗したため止めました。${detailPart ? `${detailPart}` : ''}`,
+      STOP_HINT,
+    ];
+    return lines.join('\n') + host;
   }
   const lines = [`⚠️ 止まりました: ${goal}`, reasonText(reason)];
   if (!autoResumes(reason)) lines.push(STOP_HINT);
@@ -211,6 +298,8 @@ function resumeState(state) {
   state.status = 'running'; state.pausedReason = null; state.pendingQuestion = null;
   // Explicit human continuation gives a stalled objective one fresh attempt.
   state.consecutiveNoop = 0;
+  state.consecutiveRunnerErrors = 0;
+  state.runnerErrorRetryAt = null;
 }
 const WATCH_DAY_MS = 24 * 3600 * 1000;
 const WATCH_FAIL_DAYS = 7;
@@ -233,6 +322,15 @@ export function renderHandoff(objective, state, log, target) {
 async function execute(command, args, ctx) {
   const { now, paths } = ctx;
   let state = readText(paths.state) ? JSON.parse(readText(paths.state)) : null;
+  if (state) {
+    state.consecutiveRunnerErrors = state.consecutiveRunnerErrors ?? 0;
+    state.runnerErrorRetryAt = state.runnerErrorRetryAt ?? null;
+    state.lastDigestSlot = state.lastDigestSlot ?? null;
+    state.lastDigestAt = state.lastDigestAt ?? null;
+    // 既存の state に初めてこのフィールドが入る時は「今」を起点にする。0 にすると初回の報告が
+    // 過去の全周（導入時点で 46 周）を「前回報告以降」と数えて誤った件数を出す。
+    state.lastDigestIteration = state.lastDigestIteration ?? state.totalIterations ?? 0;
+  }
   if (command === 'start') {
     if (state?.status === 'running') return { error: 'already_running' };
     const objective = { objective: args.objective?.trim(), done: args.done || '', context: args.context || '', ...DEFAULTS };
@@ -249,7 +347,7 @@ async function execute(command, args, ctx) {
     }
     writeObjective(paths.objective, objective);
     fs.writeFileSync(paths.log, '', 'utf8');
-    state = { objectiveHistory: state?.objectiveHistory || [], watches: state?.watches || [], startedAt: now.toISOString(), lastTickAt: null, iterationsToday: 0, dateKey: dateKey(now), consecutiveNoop: 0, totalIterations: 0, status: 'running', pausedReason: null, lastDigestDate: null, lastControlMessageId: null, controlCursors: {}, objectiveStartIteration: 0 };
+    state = { objectiveHistory: state?.objectiveHistory || [], watches: state?.watches || [], startedAt: now.toISOString(), lastTickAt: null, iterationsToday: 0, dateKey: dateKey(now), consecutiveNoop: 0, consecutiveRunnerErrors: 0, runnerErrorRetryAt: null, totalIterations: 0, status: 'running', pausedReason: null, lastDigestDate: null, lastDigestSlot: null, lastDigestAt: null, lastDigestIteration: 0, lastControlMessageId: null, controlCursors: {}, objectiveStartIteration: 0 };
     writeJson(paths.state, state);
     return { ok: true, status: state.status, objective };
   }
@@ -315,6 +413,14 @@ async function execute(command, args, ctx) {
         state.objectiveStartIteration = state.totalIterations; state.lastDecision = null;
         save();
         await sendNotice(formatNextObjective({ hostname: ctx.hostname, objective: candidate.objective }), ctx);
+      }
+    }
+    if (state.status === 'paused' && state.pausedReason === 'runner_error' && (state.consecutiveRunnerErrors || 0) < 3) {
+      if (state.runnerErrorRetryAt && new Date(state.runnerErrorRetryAt).getTime() <= now.getTime()) {
+        state.status = 'running';
+        state.pausedReason = null;
+        state.runnerErrorRetryAt = null;
+        state.consecutiveNoop = 0;
       }
     }
     // No candidate and no command: leave a completed run byte-for-byte intact.
@@ -405,16 +511,53 @@ async function execute(command, args, ctx) {
     fs.writeFileSync(paths.handoff, renderHandoff(objective, state, currentLog(), paths.objective), 'utf8');
     return { ok: true, path: paths.handoff };
   }
+  if (command === 'clear-runner-error') {
+    state.consecutiveRunnerErrors = 0;
+    state.runnerErrorRetryAt = null;
+    save();
+    return { ok: true };
+  }
+  if (command === 'digest') {
+    if (!state) return { ok: false, reason: 'not_started' };
+    const slot = digestSlot(now);
+    if (!slot || state.lastDigestSlot === slot) return { ok: false, skipped: 'not_due_or_already_sent' };
+    const rowsSince = (state.lastDigestIteration !== undefined)
+      ? log.filter((r) => r.iteration > state.lastDigestIteration)
+      : log.filter((r) => !state.lastDigestAt || Date.parse(r.ts) > Date.parse(state.lastDigestAt));
+    const text = formatPeriodicDigest({ hostname: ctx.hostname, objective, state, rowsSince });
+    state.lastDigestSlot = slot;
+    state.lastDigestAt = now.toISOString();
+    state.lastDigestIteration = state.totalIterations;
+    save();
+    await sendNotice(text, ctx);
+    return { ok: true, slot, text };
+  }
   if (['stop', 'pause', 'resume'].includes(command)) {
     if (command === 'resume') {
       if (state.status === 'done') return { error: 'already_done', status: 'done' };
       resumeState(state);
-    } else { state.status = command === 'stop' ? 'stopped' : 'paused'; state.pausedReason = args.reason || `manual_${command}`; if (command === 'stop') state.pendingQuestion = null; }
+    } else {
+      state.status = command === 'stop' ? 'stopped' : 'paused';
+      state.pausedReason = args.reason || `manual_${command}`;
+      if (command === 'stop') state.pendingQuestion = null;
+    }
     const previousQuestion = state.pendingQuestion;
     if (command === 'pause' && args.question) { state.pendingQuestion = oneLine(args.question); state.pausedReason = 'needs_kim'; }
+    if (command === 'pause' && args.reason === 'runner_error') {
+      state.consecutiveRunnerErrors = (state.consecutiveRunnerErrors || 0) + 1;
+      const n = state.consecutiveRunnerErrors;
+      if (n < 3) {
+        const backoffMin = 30 * Math.pow(2, n - 1);
+        state.runnerErrorRetryAt = new Date(now.getTime() + backoffMin * 60_000).toISOString();
+      } else {
+        state.runnerErrorRetryAt = null;
+        if (n === 3) {
+          await notify('runner_error', false, { detail: args.detail });
+        }
+      }
+    }
     const fired = await watchdog(); save();
-    if (command === 'pause' && args.reason === 'runner_error') await notify('runner_error');
-    else if (command === 'pause' && args.question && previousQuestion !== state.pendingQuestion) await sendNotice(formatQuestion({ hostname: ctx.hostname, question: state.pendingQuestion }), ctx);
+    if (command === 'pause' && args.question && previousQuestion !== state.pendingQuestion) await sendNotice(formatQuestion({ hostname: ctx.hostname, question: state.pendingQuestion }), ctx);
     return { ok: true, status: state.status, reason: state.pausedReason, watchdog: fired };
   }
   return { error: 'unknown_command' };
@@ -457,7 +600,7 @@ export async function runAutopilot(command, args = {}, options = {}) {
 
 export async function main(argv = process.argv.slice(2)) {
   try {
-    const options = Object.fromEntries(['objective', 'done', 'max-iter-per-day', 'max-hours-per-day', 'max-noop', 'max-total-iter', 'summary', 'progress', 'tokens-out', 'next-delay', 'reason', 'question', 'evidence', 'unverified', 'id', 'result', 'note'].map((key) => [key, { type: 'string' }]));
+    const options = Object.fromEntries(['objective', 'done', 'max-iter-per-day', 'max-hours-per-day', 'max-noop', 'max-total-iter', 'summary', 'progress', 'tokens-out', 'next-delay', 'reason', 'question', 'evidence', 'unverified', 'id', 'result', 'note', 'detail'].map((key) => [key, { type: 'string' }]));
     for (const key of ['noop', 'codex', 'pretty']) options[key] = { type: 'boolean' };
     const { values, positionals } = parseArgs({ args: argv, options, allowPositionals: true });
     const result = await runAutopilot(positionals[0], values);

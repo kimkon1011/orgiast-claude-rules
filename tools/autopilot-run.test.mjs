@@ -95,7 +95,11 @@ test('runner failures pause and send one short runner_error DM', async (t) => {
     const sent = [];
     const opts = { ...fixture(t), notifyImpl: async text => { sent.push(text); return { delivered: 'dm' }; }, invokeImpl };
     await runAutopilot('start', { objective: 'test' }, opts);
-    await runOnce(opts);
+    let now = opts.now;
+    for (let i = 0; i < 3; i++) {
+      if (i > 0) now = new Date(now.getTime() + (i === 1 ? 31 : 61) * 60_000);
+      await runOnce({ ...opts, now });
+    }
     assert.equal((await runAutopilot('status', {}, opts)).state.pausedReason, 'runner_error');
     assert.equal(sent.length, 1);
     assert.match(sent[0], /エラーで止まりました/);
@@ -140,4 +144,177 @@ test('done state with a due watch invokes Claude once to check only that watch',
   // Listed once a day: a second run the same day does not invoke Claude again.
   const again = await runOnce({ ...opts, invokeImpl: async () => { assert.fail('must not invoke twice a day'); } });
   assert.equal(again.skipped, 'done');
+});
+
+test('失敗 1 回目・2 回目: 通知 0 件、paused(runner_error)、retryAt が 30 分 / 60 分後', async (t) => {
+  const sent = [];
+  const opts = { ...fixture(t), notifyImpl: async text => { sent.push(text); return { delivered: 'dm' }; }, invokeImpl: async () => ({ exitCode: 1 }) };
+  await runAutopilot('start', { objective: 'test retry backoff' }, opts);
+
+  // 失敗 1 回目
+  await runOnce(opts);
+  const s1 = (await runAutopilot('status', {}, opts)).state;
+  assert.equal(sent.length, 0);
+  assert.equal(s1.status, 'paused');
+  assert.equal(s1.pausedReason, 'runner_error');
+  assert.equal(s1.consecutiveRunnerErrors, 1);
+  const expectedRetry1 = new Date(opts.now.getTime() + 30 * 60_000).toISOString();
+  assert.equal(s1.runnerErrorRetryAt, expectedRetry1);
+
+  // 失敗 2 回目（31分後）
+  const now2 = new Date(opts.now.getTime() + 31 * 60_000);
+  await runOnce({ ...opts, now: now2 });
+  const s2 = (await runAutopilot('status', {}, opts)).state;
+  assert.equal(sent.length, 0);
+  assert.equal(s2.status, 'paused');
+  assert.equal(s2.pausedReason, 'runner_error');
+  assert.equal(s2.consecutiveRunnerErrors, 2);
+  const expectedRetry2 = new Date(now2.getTime() + 60 * 60_000).toISOString();
+  assert.equal(s2.runnerErrorRetryAt, expectedRetry2);
+});
+
+test('retryAt 前の pre は skip、retryAt 後の pre は run に戻る', async (t) => {
+  const opts = { ...fixture(t), invokeImpl: async () => ({ exitCode: 1 }) };
+  await runAutopilot('start', { objective: 'test retry timing' }, opts);
+  await runOnce(opts);
+
+  // retryAt 前 (15分後)
+  const preBefore = await runAutopilot('pre', {}, { ...opts, now: new Date(opts.now.getTime() + 15 * 60_000) });
+  assert.equal(preBefore.verdict, 'pause');
+  assert.equal(preBefore.reason, 'runner_error');
+  const runBefore = await runOnce({ ...opts, now: new Date(opts.now.getTime() + 15 * 60_000) });
+  assert.equal(runBefore.skipped, 'runner_error');
+
+  // retryAt 後 (30分後)
+  const preAfter = await runAutopilot('pre', {}, { ...opts, now: new Date(opts.now.getTime() + 30 * 60_000) });
+  assert.equal(preAfter.verdict, 'run');
+  const sAfter = (await runAutopilot('status', {}, opts)).state;
+  assert.equal(sAfter.status, 'running');
+  assert.equal(sAfter.pausedReason, null);
+});
+
+test('失敗 3 回目: 通知がちょうど 1 件、自動再開しない', async (t) => {
+  const sent = [];
+  const opts = { ...fixture(t), notifyImpl: async text => { sent.push(text); return { delivered: 'dm' }; }, invokeImpl: async () => ({ exitCode: 1 }) };
+  await runAutopilot('start', { objective: 'test 3 failures stop' }, opts);
+
+  // 1回目
+  await runOnce(opts);
+  assert.equal(sent.length, 0);
+
+  // 2回目 (31分後)
+  await runOnce({ ...opts, now: new Date(opts.now.getTime() + 31 * 60_000) });
+  assert.equal(sent.length, 0);
+
+  // 3回目 (31 + 61分後)
+  await runOnce({ ...opts, now: new Date(opts.now.getTime() + 92 * 60_000) });
+  assert.equal(sent.length, 1);
+  const s3 = (await runAutopilot('status', {}, opts)).state;
+  assert.equal(s3.consecutiveRunnerErrors, 3);
+  assert.equal(s3.runnerErrorRetryAt, null);
+  assert.equal(s3.status, 'paused');
+  assert.equal(s3.pausedReason, 'runner_error');
+  assert.match(sent[0], /3回続けて失敗したため止めました/);
+  assert.doesNotMatch(sent[0], /runner_error/);
+  assert.doesNotMatch(sent[0], /exitCode/);
+
+  // 10時間経過後も自動再開しない
+  const preLater = await runAutopilot('pre', {}, { ...opts, now: new Date(opts.now.getTime() + 600 * 60_000) });
+  assert.equal(preLater.verdict, 'pause');
+  assert.equal(preLater.reason, 'runner_error');
+  assert.equal(sent.length, 1);
+});
+
+test('成功で counter が 0 に戻る', async (t) => {
+  const opts = { ...fixture(t), invokeImpl: async () => ({ exitCode: 1 }) };
+  await runAutopilot('start', { objective: 'test success reset' }, opts);
+
+  // 1回失敗
+  await runOnce(opts);
+  const s1 = (await runAutopilot('status', {}, opts)).state;
+  assert.equal(s1.consecutiveRunnerErrors, 1);
+  assert.ok(s1.runnerErrorRetryAt);
+
+  // 2回目は成功
+  const now2 = new Date(opts.now.getTime() + 31 * 60_000);
+  await runOnce({ ...opts, now: now2, invokeImpl: async () => {
+    await runAutopilot('post', { summary: '作業完了', progress: 50 }, { ...opts, now: now2 });
+    return { exitCode: 0 };
+  } });
+  const s2 = (await runAutopilot('status', {}, opts)).state;
+  assert.equal(s2.consecutiveRunnerErrors, 0);
+  assert.equal(s2.runnerErrorRetryAt, null);
+  assert.equal(s2.status, 'running');
+});
+
+test('needs_kim の pause は retryAt を過ぎても再開しない', async (t) => {
+  const opts = fixture(t);
+  await runAutopilot('start', { objective: 'test needs_kim pause' }, opts);
+  await runAutopilot('pause', { question: 'この変更を進めますか？' }, opts);
+  const s1 = (await runAutopilot('status', {}, opts)).state;
+  assert.equal(s1.status, 'paused');
+  assert.equal(s1.pausedReason, 'needs_kim');
+
+  // 24時間後でも再開しない
+  const preLater = await runAutopilot('pre', {}, { ...opts, now: new Date(opts.now.getTime() + 24 * 3600_000) });
+  assert.equal(preLater.verdict, 'pause');
+  assert.equal(preLater.reason, 'needs_kim');
+});
+
+test('人が resume した時も counter と retryAt をリセットする', async (t) => {
+  const opts = { ...fixture(t), invokeImpl: async () => ({ exitCode: 1 }) };
+  await runAutopilot('start', { objective: 'test manual resume' }, opts);
+  await runOnce(opts);
+  const s1 = (await runAutopilot('status', {}, opts)).state;
+  assert.equal(s1.consecutiveRunnerErrors, 1);
+  assert.ok(s1.runnerErrorRetryAt);
+
+  // 人が resume
+  await runAutopilot('resume', {}, opts);
+  const s2 = (await runAutopilot('status', {}, opts)).state;
+  assert.equal(s2.consecutiveRunnerErrors, 0);
+  assert.equal(s2.runnerErrorRetryAt, null);
+  assert.equal(s2.status, 'running');
+});
+
+test('進捗報告: 12:00 枠・21:00 枠でそれぞれ 1 回だけ送る。同じ枠の 2 回目の起床では送らない。内部語を含まない', async (t) => {
+  const sent = [];
+  const opts = { ...fixture(t), notifyImpl: async text => { sent.push(text); return { delivered: 'dm' }; } };
+  await runAutopilot('start', { objective: '定期進捗テスト', 'max-noop': 100, 'max-hours-per-day': 24, 'max-iter-per-day': 100 }, opts);
+  await runAutopilot('post', { summary: '最初の実装完了', progress: 30 }, opts);
+
+  // 起床 1: 10:00 JST (枠外)
+  await runOnce({ ...opts, now: new Date('2026-10-14T10:00:00+09:00'), invokeImpl: async () => ({ exitCode: 0 }) });
+  assert.equal(sent.length, 0);
+
+  // 起床 2: 12:00 JST (12:00 枠の最初の起床)
+  await runOnce({ ...opts, now: new Date('2026-10-14T12:00:00+09:00'), invokeImpl: async () => ({ exitCode: 0 }) });
+  assert.equal(sent.length, 1);
+  assert.match(sent[0], /定時進捗報告/);
+  assert.match(sent[0], /最初の実装完了/);
+  assert.doesNotMatch(sent[0], /runner_error/);
+  assert.doesNotMatch(sent[0], /exitCode/);
+  assert.doesNotMatch(sent[0], /noop/);
+  assert.ok(sent[0].split('\n').length <= 15);
+
+  // 起床 3: 12:30 JST (12:00 枠の2回目の起床 -> 二重送信しない)
+  await runOnce({ ...opts, now: new Date('2026-10-14T12:30:00+09:00'), invokeImpl: async () => ({ exitCode: 0 }) });
+  assert.equal(sent.length, 1);
+
+  // 起床 4: 15:00 JST (同じく12:00 枠内 -> 送らない)
+  await runOnce({ ...opts, now: new Date('2026-10-14T15:00:00+09:00'), invokeImpl: async () => ({ exitCode: 0 }) });
+  assert.equal(sent.length, 1);
+
+  // 起床 5: 21:00 JST (21:00 枠の最初の起床)
+  await runOnce({ ...opts, now: new Date('2026-10-14T21:00:00+09:00'), invokeImpl: async () => ({ exitCode: 0 }) });
+  assert.equal(sent.length, 2);
+  assert.match(sent[1], /定時進捗報告/);
+  assert.doesNotMatch(sent[1], /runner_error/);
+  assert.doesNotMatch(sent[1], /exitCode/);
+  assert.doesNotMatch(sent[1], /noop/);
+  assert.ok(sent[1].split('\n').length <= 15);
+
+  // 起床 6: 21:30 JST (21:00 枠の2回目の起床 -> 二重送信しない)
+  await runOnce({ ...opts, now: new Date('2026-10-14T21:30:00+09:00'), invokeImpl: async () => ({ exitCode: 0 }) });
+  assert.equal(sent.length, 2);
 });

@@ -1,0 +1,8 @@
+{
+  "completed": false,
+  "summary": "原文の確認待ちは残存し、現行コードで@here付与を確認。ただしWindows読み取りはWSLソケットエラー、Discord API読み取りはDNS解決失敗により実投稿を取得できず、完了条件を満たせない。外部送信やタスク変更は行っていない。",
+  "evidence": {
+    "file": "/mnt/c/Users/user/.claude/nightly-repo/.stall-sweeper/dea93f460873c2fff568-1792006023366.evidence.json",
+    "sha256": "b2d391ad3b63232671cecf5e834cf57492c6fef26cd8038f49e02224bfb0cd4f"
+  }
+}

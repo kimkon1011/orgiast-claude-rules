@@ -1,0 +1,26 @@
+{
+  "checked_at_utc": "2026-10-14T19:28:31.384169+00:00",
+  "scope": "スタッフによる既存チェック送信のDiscord実投稿先頭に@hereがあるか確認",
+  "source_file": "/mnt/c/Users/user/.claude/next-session.md",
+  "source_line": 20,
+  "source_text": "10. cafe-checklist-app: スタッフの次のチェック送信で Discord 投稿の先頭に @here が付いているか実物で確認する（コードとユニットテストでは確認済み、実投稿は未検証） （作業場所: C:/Users/user/dev/cafe-checklist-app） （更新: 2026-10-09） （作業場所: C:/Users/user/orgiast-claude-rules）",
+  "notify_file": "/mnt/c/Users/user/dev/cafe-checklist-app/lib/notify.js",
+  "notify_sha256": "7104cf185c6d969592b415ec24220f0b18f7958dc50b46ef6b3b1ae6525b14fc",
+  "code_observation": "send()がwithHereMention(payload)を呼び、content先頭に@here、allowed_mentions.parse=[everyone]を付与する。実投稿の証拠ではない。",
+  "direct_checks": [
+    {
+      "operation": "Windows UI AutomationによるDiscordウィンドウの読み取りのみ",
+      "exit_code": 1,
+      "error": "WSL ERROR: UtilBindVsockAnyPort:317: socket failed 1",
+      "result": "Windowsプロセス起動に失敗。投稿は取得できず。"
+    },
+    {
+      "operation": "Discord API GET /api/v10/channels/1384369556423704678/messages?limit=10（既存ローカルBot認証、秘密値は記録しない）",
+      "error": "URLError: <urlopen error [Errno -3] Temporary failure in name resolution>",
+      "result": "API応答未取得。Pythonは例外捕捉でexit=0だが検証成功ではない。"
+    }
+  ],
+  "conclusion": "実投稿未検証のため未完了。@here欠落があると判断したわけではない。",
+  "side_effects": "外部投稿・課金・権限変更・コード変更・git操作・タスク変更・削除なし。証拠と指定結果JSONの作成のみ。",
+  "next_required": "Discordの読み取りが利用できる環境で、2026-10-09以降のスタッフによる実チェック投稿を取得し本文先頭の@hereを確認する。"
+}

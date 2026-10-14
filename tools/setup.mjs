@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { fleetHubNeedsConfiguration } from './register-fleet-mail.mjs';
 import { convergeAllowRules } from './allow-rules.mjs';
 import { convergeMobileStandby } from './mobile-standby.mjs';
 
@@ -86,6 +87,7 @@ function check(item) {
     }
     if (item.type === 'scheduled-task') {
       if (typeof spec.ifPresent === 'string' && !fs.existsSync(resolveHome(spec.ifPresent))) return null;
+      if (spec.hubMode && fleetHubNeedsConfiguration({ home })) return false;
       if (spec.migrationMarker && !fs.existsSync(resolveHome(spec.migrationMarker))) return false;
       if (process.platform !== 'win32') return false;
       execFileSync('schtasks.exe', ['/Query', '/TN', spec.name], { stdio: 'ignore', timeout: 10000, windowsHide: true });

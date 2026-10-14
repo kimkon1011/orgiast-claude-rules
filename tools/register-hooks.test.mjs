@@ -359,3 +359,13 @@ test('fleet inbox is registered synchronously for both events, idempotently, wit
     assert.equal(hooks[0].command, `node "${path.join(repo, 'tools', item.spec.hookScript)}"${item.spec.hookArgs}`);
   }
 });
+
+test('E fleet-question-relay Stop hook is synchronous, bounded and idempotent', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-relay-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const repo = path.resolve('.'), env = { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo };
+  for (let i = 0; i < 2; i++) execFileSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { env, encoding: 'utf8' });
+  const settings = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'));
+  const hooks = settings.hooks.Stop.flatMap(g => g.hooks || []).filter(h => h.command.includes('fleet-question-relay.mjs'));
+  assert.equal(hooks.length, 1); assert.equal(hooks[0].timeout, 5); assert.equal(hooks[0].async, undefined);
+});

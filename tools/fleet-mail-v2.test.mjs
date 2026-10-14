@@ -515,3 +515,145 @@ test('D6 final arrival receives only the remaining total budget', async t => {
   assert.ok(f.read('mail-budget-a').arrivalNotifiedAt);
   assert.equal(f.read('mail-budget-b').arrivalNotifiedAt, undefined); assert.equal(f.read('mail-budget-c').arrivalNotifiedAt, undefined);
 });
+
+import { readQuestion, updateQuestion, relayQuestions, RELAY_WAIT_MS, RESUME_LIMIT_MS } from './fleet-question-relay.mjs';
+import { runPrompt } from './fleet-agent.mjs';
+function questionFixture(f, extra = {}) {
+  const transcriptPath = path.join(f.home, 'session.jsonl'); fs.writeFileSync(transcriptPath, '');
+  const question = { sessionId: 'session-hub', cwd: f.home, question: 'どちらにしますか？ token=private', options: [{ label: 'A' }], summary: '検証済み', askedAt: iso(-RELAY_WAIT_MS), questionHash: 'hash-question', drivenByHub: false, relayedAt: null, transcriptPath, transcriptOffset: 0, ...extra };
+  updateQuestion(f.home, question.sessionId, () => question);
+  fs.appendFileSync(path.join(f.dir, 'fleet-sheet.env'), `FLEET_HUB=${sender}\n`);
+  return question;
+}
+function promptSpawn(f, { code = 0, output = '完了 token=private', onSpawn } = {}) {
+  return (...args) => {
+    f.spawns.push(args); onSpawn?.();
+    const child = new EventEmitter(); child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.kill = () => true;
+    queueMicrotask(() => { child.stdout.emit('data', output); child.stderr.emit('data', 'stderr must not replace stdout'); child.emit('close', code); });
+    return child;
+  };
+}
+function hubPrompt(f, extra = {}) {
+  fs.writeFileSync(path.join(f.dir, 'fleet-agent-optin.json'), JSON.stringify({ accept: ['prompt'] }));
+  f.deps.resolveClaudeExe = () => ({ executable: '/fixture/claude', candidates: ['/fixture/claude'] });
+  f.deps.spawnImpl = promptSpawn(f);
+  const m = mail({ kind: 'prompt', exec: 'claude', execCwd: f.home, resumeSessionId: 'session-hub', body: 'Aで進めて', ...extra }); f.save(m); return m;
+}
+test('E poll relays after ten minutes exactly once with metadata and a redacted summary', async t => {
+  const f = fixture(t), q = questionFixture(f);
+  await pollOnce(f.deps); await pollOnce(f.deps);
+  const sends = f.calls.filter(c => c.kind === 'mail-send'); assert.equal(sends.length, 1);
+  const payload = sends[0].payload;
+  assert.equal(payload.to, sender); assert.equal(payload.priority, 'urgent'); assert.equal(payload.messageKind, 'note');
+  assert.deepEqual(payload.meta.relay, { sessionId: q.sessionId, cwd: q.cwd, questionHash: q.questionHash, pcLabel: receiver });
+  assert.doesNotMatch(payload.body, /private/); assert.ok(readQuestion(f.home, q.sessionId).relayedAt); assert.equal(readQuestion(f.home, q.sessionId).sentId, payload.id);
+});
+test('E no early relay, no relay after newer human input, hub-driven questions relay immediately', async t => {
+  const f = fixture(t), q = questionFixture(f, { askedAt: iso(-RELAY_WAIT_MS + 1) });
+  await pollOnce(f.deps); assert.equal(f.calls.filter(c => c.kind === 'mail-send').length, 0);
+  updateQuestion(f.home, q.sessionId, current => ({ ...current, askedAt: iso(-RELAY_WAIT_MS) }));
+  fs.appendFileSync(q.transcriptPath, JSON.stringify({ type: 'user', timestamp: iso(-1000), message: { content: 'A' } }) + '\n');
+  await pollOnce(f.deps); assert.equal(f.calls.filter(c => c.kind === 'mail-send').length, 0);
+  updateQuestion(f.home, q.sessionId, current => ({ ...current, askedAt: iso(0), drivenByHub: true }));
+  await pollOnce(f.deps); assert.equal(f.calls.filter(c => c.kind === 'mail-send').length, 1);
+});
+test('E failed relay response retries with the same id, dry-run never relays', async t => {
+  const f = fixture(t), q = questionFixture(f); let attempt = 0; const original = f.deps.request;
+  f.deps.request = async (kind, payload) => { const result = await original(kind, payload); if (kind === 'mail-send' && !attempt++) throw new Error('lost response'); return result; };
+  await pollOnce({ ...f.deps, dryRun: true }); assert.equal(f.calls.filter(c => c.kind === 'mail-send').length, 0);
+  await pollOnce(f.deps); assert.equal(readQuestion(f.home, q.sessionId).relayedAt, null);
+  await pollOnce(f.deps); const sends = f.calls.filter(c => c.kind === 'mail-send'); assert.equal(sends.length, 2); assert.equal(sends[0].payload.id, sends[1].payload.id);
+});
+test('E answer sends a Claude resume then acks the original, and retry keeps the same answer id', async t => {
+  const f = fixture(t), q = questionFixture(f); const original = mail({ why: '[判断依頼]', meta: JSON.stringify({ relay: q }) }); f.save(original);
+  const request = f.deps.request; let failAck = true;
+  f.deps.request = async (kind, payload) => { const result = await request(kind, payload); if (kind === 'mail-get') return { ok: true, mail: original }; if (kind === 'mail-ack' && failAck) throw new Error('offline'); return result; };
+  await assert.rejects(main(['--answer', original.id, '--body-file', f.body], f.deps), /offline/);
+  failAck = false; assert.equal(await main(['--answer', original.id, '--body-file', f.body], f.deps), 0);
+  const sends = f.calls.filter(c => c.kind === 'mail-send'); assert.equal(sends.length, 2); assert.deepEqual(sends[0].payload, sends[1].payload);
+  const sent = sends[0].payload; assert.equal(sent.to, original.from); assert.equal(sent.exec, 'claude'); assert.equal(sent.resumeSessionId, q.sessionId); assert.equal(sent.execCwd, q.cwd); assert.equal(sent.expiresAt, iso(6 * 3600000));
+  assert.equal(f.read(original.id).status, 'done'); assert.deepEqual(f.calls.slice(0, 3).map(c => c.kind), ['mail-get', 'mail-send', 'mail-ack']);
+});
+test('E manual decision cannot use answer and is given a note command without mutation', async t => {
+  const f = fixture(t); f.deps.request = async (kind, payload) => { f.calls.push({ kind, payload }); return { ok: true, mail: mail({ why: '[判断依頼]' }) }; };
+  assert.equal(await main(['--answer', 'mail-original', '--body-file', f.body], f.deps), 2);
+  assert.deepEqual(f.calls.map(c => c.kind), ['mail-get']); assert.ok(f.errors.some(s => s.includes('--kind note') && s.includes(sender)));
+});
+test('E send claude resume carries body markers, structured execution fields and six hour expiry', async t => {
+  const f = fixture(t);
+  const args = ['--send', '--to', sender, '--kind', 'prompt', '--exec', 'claude', '--resume', 'session-hub', '--exec-cwd', f.home, '--body-file', f.body, '--why', '再開'];
+  assert.equal(await main(args, f.deps), 0);
+  const sent = f.calls.find(c => c.kind === 'mail-send').payload;
+  assert.equal(sent.exec, 'claude'); assert.equal(sent.execCwd, f.home); assert.equal(sent.resumeSessionId, 'session-hub'); assert.match(sent.body, /fleet-resume: session-hub/); assert.equal(sent.expiresAt, iso(6 * 3600000));
+  assert.throws(() => parseArgs(args.map(x => x === 'prompt' ? 'note' : x)), /prompt/);
+  assert.throws(() => parseArgs(args.map(x => x === 'claude' ? 'codex' : x)), /resume/);
+  assert.throws(() => parseArgs(args.map(x => x === 'session-hub' ? '../unsafe' : x)), /session/);
+});
+test('E received claude resume uses exact argv/cwd, marks hub state, clears running state and reports stdout only', async t => {
+  const f = fixture(t); const m = hubPrompt(f); let during;
+  f.deps.spawnImpl = promptSpawn(f, { onSpawn: () => { during = readQuestion(f.home, m.resumeSessionId); } });
+  await pollOnce(f.deps);
+  assert.equal(f.spawns.length, 1);
+  const [exe, args, opts] = f.spawns[0]; assert.equal(exe, '/fixture/claude'); assert.deepEqual(args, ['-p', '--resume', m.resumeSessionId, m.body]); assert.equal(opts.cwd, f.home); assert.equal(opts.env.CLAUDE_HEADLESS, '1'); assert.equal(opts.env.FLEET_DRIVEN_BY_HUB, '1');
+  assert.equal(during.drivenByHub, true); assert.ok(during.resumingAt); assert.equal(readQuestion(f.home, m.resumeSessionId).resumingAt, undefined);
+  const reply = f.calls.find(c => c.kind === 'mail-reply').payload.resultBody;
+  assert.match(reply, /^\[報告・返信不要\]/); assert.doesNotMatch(reply, /private|stderr/); assert.equal(f.read(m.id).status, 'done');
+});
+test('E active session skips without consuming mail; thirty minute stale session may resume', async t => {
+  const f = fixture(t), m = hubPrompt(f);
+  updateQuestion(f.home, m.resumeSessionId, () => ({ sessionId: m.resumeSessionId, resumingAt: iso(-RESUME_LIMIT_MS + 1), drivenByHub: true }));
+  await pollOnce(f.deps); assert.equal(f.spawns.length, 0); assert.equal(f.read(m.id).executionStartedAt, undefined);
+  updateQuestion(f.home, m.resumeSessionId, q => ({ ...q, resumingAt: iso(-RESUME_LIMIT_MS) }));
+  await pollOnce(f.deps); assert.equal(f.spawns.length, 1);
+});
+test('E new Claude session omits resume and unapproved prompt returns consent without launching', async t => {
+  const f = fixture(t), m = hubPrompt(f, { resumeSessionId: undefined });
+  await pollOnce(f.deps); assert.deepEqual(f.spawns[0][1], ['-p', m.body]);
+  f.save(mail({ ...m, id: 'mail-unapproved' })); fs.unlinkSync(path.join(f.dir, 'fleet-agent-optin.json'));
+  await pollOnce(f.deps); assert.equal(f.spawns.length, 1); assert.match(f.calls.filter(c => c.kind === 'mail-reply').at(-1).payload.resultBody, /未オプトイン.*承諾コマンド/s);
+});
+test('E runPrompt enforces thirty minute timer, kills process and resolves failure', async () => {
+  const child = new EventEmitter(); child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+  let killed, timeout, callback;
+  child.kill = signal => { killed = signal; };
+  const promise = runPrompt({ claudeExe: 'mock', body: 'answer', cwd: '.', resumeSessionId: 'session', timeoutSeconds: RESUME_LIMIT_MS / 1000, spawnImpl: () => child,
+    setTimer: (fn, ms) => { callback = fn; timeout = ms; return 1; }, clearTimer: () => {} });
+  callback(); const result = await promise;
+  assert.equal(timeout, RESUME_LIMIT_MS); assert.equal(killed, 'SIGKILL'); assert.equal(result.timedOut, true); assert.equal(result.exitCode, null);
+});
+test('E interrupted Claude execution fails at thirty minutes and never reruns', async t => {
+  const f = fixture(t), m = hubPrompt(f, { executionStartedAt: iso(-RESUME_LIMIT_MS) });
+  await pollOnce(f.deps); assert.equal(f.spawns.length, 0); assert.match(f.calls.find(c => c.kind === 'mail-reply').payload.resultBody, /報告・返信不要.*30分上限/s);
+});
+
+test('E real poll execution applies thirty minute timeout and returns failure with resume cleanup', async t => {
+  const f = fixture(t), m = hubPrompt(f); let timeout, killed;
+  f.deps.spawnImpl = (...args) => {
+    f.spawns.push(args); const child = new EventEmitter(); child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.kill = signal => { killed = signal; }; return child;
+  };
+  f.deps.promptSetTimer = (fn, ms) => { timeout = ms; queueMicrotask(fn); return 1; }; f.deps.promptClearTimer = () => {};
+  await pollOnce(f.deps);
+  assert.equal(timeout, RESUME_LIMIT_MS); assert.equal(killed, 'SIGKILL'); assert.equal(readQuestion(f.home, m.resumeSessionId).resumingAt, undefined);
+  assert.match(f.calls.find(c => c.kind === 'mail-reply').payload.resultBody, /報告・返信不要.*実行失敗.*30分上限/s);
+});
+test('E missing Claude executable reports candidates and releases session ownership', async t => {
+  const f = fixture(t), m = hubPrompt(f);
+  f.deps.spawnImpl = () => { const child = new EventEmitter(); child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); queueMicrotask(() => child.emit('error', new Error('spawn ENOENT'))); return child; };
+  await pollOnce(f.deps);
+  const reply = f.calls.find(c => c.kind === 'mail-reply').payload.resultBody;
+  assert.match(reply, /実行失敗.*claude CLI.*候補.*\/fixture\/claude/s); assert.equal(readQuestion(f.home, m.resumeSessionId).resumingAt, undefined);
+});
+test('E tool_result human answers suppress forwarding and missing transcripts defer safely', async t => {
+  const f = fixture(t), q = questionFixture(f);
+  fs.appendFileSync(q.transcriptPath, JSON.stringify({ type: 'user', timestamp: iso(-1000), message: { content: [{ type: 'tool_result', content: 'A' }] } }) + '\n');
+  await pollOnce(f.deps); assert.equal(f.calls.filter(c => c.kind === 'mail-send').length, 0);
+  fs.unlinkSync(q.transcriptPath); await pollOnce(f.deps); assert.equal(f.calls.filter(c => c.kind === 'mail-send').length, 0);
+});
+test('E report truncates redacted stdout to 4000 characters and retry does not re-execute', async t => {
+  const f = fixture(t), m = hubPrompt(f); f.deps.spawnImpl = promptSpawn(f, { output: 'token=' + 's'.repeat(5000) });
+  const request = f.deps.request; let fail = true;
+  f.deps.request = async (kind, payload) => { const result = await request(kind, payload); if (kind === 'mail-reply' && fail) throw new Error('lost response'); return result; };
+  await pollOnce(f.deps); fail = false; await pollOnce(f.deps);
+  assert.equal(f.spawns.length, 1); assert.equal(f.read(m.id).status, 'done');
+  const replies = f.calls.filter(c => c.kind === 'mail-reply'); assert.equal(replies.length, 2); assert.equal(replies[0].payload.resultBody, replies[1].payload.resultBody); assert.doesNotMatch(replies[0].payload.resultBody, /ss/);
+});

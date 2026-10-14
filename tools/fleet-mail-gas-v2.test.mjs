@@ -11,8 +11,9 @@ function harness() {
   const triggers = [], webhooks = [], warnings = [], faults = {};
   const lock = { held: false, releases: 0, hasLock() { return this.held; }, tryLock() { this.held = true; return true; }, releaseLock() { this.held = false; this.releases++; } };
   const makeSheet = rows => ({
+    maxColumns: 26, getMaxColumns() { return this.maxColumns; }, insertColumnsAfter(_after, count) { this.maxColumns += count; },
     getLastRow: () => rows.length, setFrozenRows() {}, deleteRow: n => rows.splice(n - 1, 1),
-    getRange(row, col, count, width) { return {
+    getRange(row, col, count, width) { if (col + width - 1 > this.maxColumns) throw new Error('range exceeds grid'); return {
       getValues: () => {
         if (rows === alertRows && count === 1 && row === faults.readBackRow) return [Array(width).fill('mismatch')];
         return Array.from({ length: count }, (_, i) => Array.from({ length: width }, (_, j) => rows[row - 1 + i]?.[col - 1 + j] ?? '')); },
@@ -294,4 +295,16 @@ test('D9 CommandQueue exposes trigger inventory and sweep counts while preservin
   const result = commands.fleetMailSweep();
   assert.deepEqual({ expired: result.expired, alerted: result.alerted, notified: result.notified }, { expired: 0, alerted: 1, notified: 0 });
   assert.equal(h.lock.held, true); assert.equal(h.lock.releases, releases);
+});
+
+test('E GAS appends metadata and execution columns and preserves them through send get and poll', () => {
+  const h = harness();
+  const meta = { relay: { sessionId: 'session', cwd: 'C:\\作業', questionHash: 'hash', pcLabel: 'receiver' } };
+  const sent = send(h, { meta, exec: 'claude', execCwd: meta.relay.cwd, resumeSessionId: 'session', messageKind: 'prompt' });
+  assert.equal(sent.mail.meta, JSON.stringify(meta));
+  const got = get(h), delivered = poll(h).messages[0];
+  for (const m of [got, delivered]) {
+    assert.deepEqual(JSON.parse(m.meta), meta); assert.equal(m.exec, 'claude'); assert.equal(m.execCwd, meta.relay.cwd); assert.equal(m.resumeSessionId, 'session');
+  }
+  assert.ok(h.headers.indexOf('meta') > h.headers.indexOf('receipts'));
 });

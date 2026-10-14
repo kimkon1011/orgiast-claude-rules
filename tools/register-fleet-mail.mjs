@@ -4,6 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { resolveFleetLabel } from './lib/fleet-label.mjs';
+import { parseEnvText } from './env-kv.mjs';
+import { HUB_LABEL } from './fleet-question-relay.mjs';
 import { isEntry } from './is-entry.mjs';
 
 export const STALE_POLL_MS = 10 * 60 * 1000;
@@ -38,6 +41,7 @@ export function convergeFleetMail({ home, spawnImpl = spawnSync, now = Date.now 
     });
     if (result.error || result.status !== 0) throw new Error('fleet-mail: converge 失敗=1');
   };
+  configureFleetHub({ home });
   run('register-hooks.mjs', ['--hooks-only']);
   const marker = path.join(home, '.claude', MIGRATION_MARKER);
   if (!fs.existsSync(marker)) {
@@ -45,6 +49,18 @@ export function convergeFleetMail({ home, spawnImpl = spawnSync, now = Date.now 
     fs.mkdirSync(path.dirname(marker), { recursive: true });
     fs.writeFileSync(marker, new Date(now()).toISOString() + '\n', { mode: 0o600 });
   }
+}
+export function fleetHubNeedsConfiguration({ home, label = resolveFleetLabel(home) }) {
+  const file = path.join(home, '.claude', 'fleet-sheet.env');
+  return fs.existsSync(file) && label !== HUB_LABEL && !Object.hasOwn(parseEnvText(fs.readFileSync(file, 'utf8')), 'FLEET_HUB');
+}
+export function configureFleetHub({ home, label = resolveFleetLabel(home) }) {
+  const file = path.join(home, '.claude', 'fleet-sheet.env');
+  if (!fleetHubNeedsConfiguration({ home, label })) return false;
+  const text = fs.readFileSync(file, 'utf8');
+  if (Object.hasOwn(parseEnvText(text), 'FLEET_HUB')) return false;
+  fs.appendFileSync(file, `${text.endsWith('\n') ? '' : '\n'}FLEET_HUB=${HUB_LABEL}\n`, { mode: 0o600 });
+  return true;
 }
 export function pollIsFresh(home, now = Date.now) {
   try { return now() - fs.statSync(path.join(home, '.claude', '.fleet-mail-last-poll.json')).mtimeMs <= STALE_POLL_MS; }
@@ -68,7 +84,7 @@ export function main({ home = process.env.ORGIAST_HOME || os.homedir(), platform
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(result.stderr || `register-fleet-mail exit=${result.status}`);
   if (ensure) {
-    const poll = spawnImpl(process.execPath, [fileURLToPath(new URL('./fleet-mail.mjs', import.meta.url)), '--poll'], {
+    const poll = spawnImpl(process.execPath, [fileURLToPath(new URL('./fleet-mail.mjs', import.meta.url)), '--poll', '--no-exec'], {
       encoding: 'utf8', windowsHide: true, timeout: 120000, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ORGIAST_HOME: home },
     });
     if (poll.error || poll.status !== 0) throw new Error('fleet-mail: 修復後受信失敗=1');

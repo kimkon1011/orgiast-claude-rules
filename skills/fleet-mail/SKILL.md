@@ -31,3 +31,15 @@ note は SessionStart / UserPromptSubmit で優先順に提示する。同じセ
 4. fleet シートの `fleet-mail-alerts` タブを見る。GAS の10分 sweep が未配達30分超、未読 urgent 2時間超 / normal 6時間超を記録する。再通知は6時間毎。GAS webhook 未設定時は kim-PC watchdog が Discord と kim の DM へ通知する。
 
 CLI・hook・受信タスク・skill は `setup --converge` の配布経路に載せる。settings.json を直接変更しない。GAS 本番反映後は監督が `setupFleetMailTriggers()` を実行し、10分トリガー登録を確認する。
+
+## kim-PC ハブモード（設計 §11）
+
+相手 PC の Stop hook は最後の質問と選択肢・作業要約だけをローカルに記録する。transcript 全文は送らない。対話中の質問は相手 PC の人が優先で、10分後まで新しい user 発話が無い場合に poll が kim-PC へ `[判断依頼]` として転送する。hub 駆動のセッションで再び質問した場合は次の poll で即転送する。
+
+kim-PC で relay の判断依頼が提示されたら、必ず kim に判断を聞き、回答をファイルに保存して `node tools/fleet-mail.mjs --answer <判断依頼id> --body-file <回答ファイル>` を実行する。ヘッドレスは判断を代行しない。送信成功後に原本が done となる。手動作成の判断依頼（meta.relay 無し）には `--answer` は exit 2 で、`--send --to <送信元PC> --kind note --body-file <file> --why "回答"` を案内する。
+
+能動的な開始・再開は `node tools/fleet-mail.mjs --send --to <PC> --kind prompt --exec claude --exec-cwd <相手PCの作業ディレクトリ> --resume <sessionId> --body-file <file> --why "作業の再開"`。`--resume` 省略時は新規セッション。既定期限は6時間。通常 prompt の回答専用モードと異なり、この明示的な Claude 実行は指定したディレクトリで作業する。
+
+相手 PC の人が一度 `fleet-agent-optin.json` の accept に `prompt` を承諾している必要がある。AI は承諾を代行しない。未承諾なら返ってきた承諾コマンドを本人に渡す。再開は1セッション同時1本、上限30分。最終 stdout の末尾4000字を秘密マスクして `[報告・返信不要]` として返し、kim-PC は提示後に自動 ack する。
+
+相手 PC の UserPromptSubmit に「kim-PC へ転送済み・回答待ち（送信 id）」または「kim-PC の回答で実行中（N 分前開始）」が表示される。`setup --converge` の `task:fleet-mail` が Stop hook と `FLEET_HUB=kim-PC` を配布する。kim-PC 自身には追加せず、既存の値は上書きしない。

@@ -18,7 +18,7 @@ test('ensure keeps successful tasks with a recent poll and quiet emits nothing',
 });
 test('ensure repairs failed result even if poll is fresh then immediately polls once', t => {
   const f = fixture(t); const spawn = f.deps.spawnImpl; f.deps.spawnImpl = (...args) => { const result = spawn(...args); if (args[1].includes('-Command')) result.stdout = 'failed'; return result; };
-  main(f.deps); assert.equal(f.calls.length, 3); assert.match(f.calls[1].args.at(-1), /register-fleet-mail.ps1$/); assert.deepEqual(f.calls[2].args.slice(1), ['--poll']); assert.equal(f.calls[2].opts.env.ORGIAST_HOME, f.home);
+  main(f.deps); assert.equal(f.calls.length, 3); assert.match(f.calls[1].args.at(-1), /register-fleet-mail.ps1$/); assert.deepEqual(f.calls[2].args.slice(1), ['--poll', '--no-exec']); assert.equal(f.calls[2].opts.env.ORGIAST_HOME, f.home);
 });
 test('ensure repairs old or missing poll regardless of LastRunTime', t => {
   const f = fixture(t); main({ ...f.deps, now: () => f.now + STALE_POLL_MS + 1 }); assert.equal(f.calls.length, 3);
@@ -69,4 +69,16 @@ test('D10 probe PowerShell literals preserve Japanese spaces apostrophes and met
   const literals = [...script.matchAll(/-TaskName '((?:[^']|'')*)' -ErrorAction/g)].map(m => m[1].replaceAll("''", "'"));
   assert.deepEqual(literals, [value, value]);
   assert.equal(calls[0].args[calls[0].args.length - 2], '-Command');
+});
+
+import { configureFleetHub } from './register-fleet-mail.mjs';
+import { HUB_LABEL } from './fleet-question-relay.mjs';
+test('E converge defaults non-hub PCs only and never overwrites existing hub values', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-hub-config-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const file = path.join(home, '.claude', 'fleet-sheet.env'); fs.mkdirSync(path.dirname(file)); fs.writeFileSync(file, 'FLEET_SHEET_URL=fixture');
+  assert.equal(configureFleetHub({ home, label: HUB_LABEL }), false); assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /FLEET_HUB/);
+  assert.equal(configureFleetHub({ home, label: 'receiver-PC' }), true); assert.equal(configureFleetHub({ home, label: 'receiver-PC' }), false);
+  assert.equal(fs.readFileSync(file, 'utf8').split(`FLEET_HUB=${HUB_LABEL}`).length, 2);
+  fs.writeFileSync(file, 'FLEET_HUB=custom-PC\n'); assert.equal(configureFleetHub({ home, label: 'receiver-PC' }), false); assert.equal(fs.readFileSync(file, 'utf8'), 'FLEET_HUB=custom-PC\n');
 });

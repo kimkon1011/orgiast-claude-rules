@@ -1,4 +1,4 @@
-import { INTERRUPTED_PROMPT_BODY } from './fleet-mail.mjs';
+import { INTERRUPTED_PROMPT_BODY, EXEC_KINDS } from './fleet-mail.mjs';
 import test from 'node:test';
 process.env.FLEET_NO_SELF_HEAL = '1';
 import assert from 'node:assert/strict';
@@ -468,7 +468,7 @@ test('send --exec codex without cwd inserts only the exec marker', async t => {
 
 test('parseArgs rejects --exec with note and unknown exec values', () => {
   assert.throws(() => parseArgs(['--send', '--to', 'PC', '--kind', 'note', '--body-file', 'x', '--why', 'y', '--exec', 'codex']), /--exec は --kind prompt でのみ使えます/);
-  assert.throws(() => parseArgs(['--send', '--to', 'PC', '--kind', 'prompt', '--body-file', 'x', '--why', 'y', '--exec', 'gemini']), /--exec は codex のみ対応/);
+  assert.throws(() => parseArgs(['--send', '--to', 'PC', '--kind', 'prompt', '--body-file', 'x', '--why', 'y', '--exec', 'gemini']), { message: `--exec は ${EXEC_KINDS.join(' / ')} のみ対応` });
   assert.throws(() => parseArgs(['--send', '--to', 'PC', '--kind', 'prompt', '--body-file', 'x', '--why', 'y', '--exec-cwd', '/repo']), /--exec-cwd は --exec codex と併用/);
 });
 

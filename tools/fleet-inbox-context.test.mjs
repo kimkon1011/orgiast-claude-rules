@@ -171,3 +171,30 @@ test('D10 failed messages never inflate the expired footer count', () => {
   const result = selectContext(messages, { now: NOW });
   assert.match(result.context, /期限切れ 1 件は除外/); assert.doesNotMatch(result.context, /id=mail-failed/);
 });
+
+import { updateQuestion } from './fleet-question-relay.mjs';
+test('E relayed question and active hub resume appear even without inbox messages', async t => {
+  const f = fixture(t);
+  updateQuestion(f.home, 't', () => ({ sessionId: 't', relayedAt: new Date(NOW).toISOString(), sentId: 'mail-question-test' }));
+  await f.run(); assert.match(f.outputs.at(-1).hookSpecificOutput.additionalContext, /kim-PC へ転送済み・回答待ち.*mail-question-test/);
+  updateQuestion(f.home, 't', q => ({ ...q, resumingAt: new Date(NOW - 120000).toISOString() }));
+  await f.run(); assert.match(f.outputs.at(-1).hookSpecificOutput.additionalContext, /kim-PC の回答で実行中（2 分前開始）/);
+  const count = f.outputs.length; await f.run('UserPromptSubmit', 'other'); assert.equal(f.outputs.length, count);
+});
+test('E relay decisions retain answer command within entry budget, reports auto ack and consent guides the human', async t => {
+  const decision = mail('relay', { why: '[判断依頼]', body: 'x'.repeat(20000), meta: JSON.stringify({ relay: { sessionId: 't', cwd: '.' } }) });
+  const report = mail('report', { why: '報告', body: '[報告・返信不要] 完了' });
+  const consent = mail('consent', { why: '[回答・返信不要]', body: '未オプトイン。承諾コマンド: node ...' });
+  const f = fixture(t, [decision, report, consent]); await f.run();
+  const context = f.outputs[0].hookSpecificOutput.additionalContext;
+  assert.match(context, /回答: node tools\/fleet-mail.mjs --answer mail-relay --body-file <file>/);
+  assert.match(context, /PC は未承諾。承諾コマンドを本人に渡す/); assert.match(context, /\[報告・返信不要\]/);
+  assert.ok(context.length <= CONTEXT_LIMIT);
+  const inbox = readInbox(f.home, { unreadOnly: false }); assert.equal(inbox.find(m => m.id === report.id).status, 'done'); assert.equal(inbox.find(m => m.id === decision.id).status, 'seen');
+});
+
+test('E answered question no longer displays waiting after execution finishes', async t => {
+  const f = fixture(t);
+  updateQuestion(f.home, 't', () => ({ sessionId: 't', relayedAt: new Date(NOW).toISOString(), answeredAt: new Date(NOW).toISOString(), drivenByHub: true, sentId: 'mail-question-test' }));
+  await f.run(); assert.equal(f.outputs.length, 0);
+});

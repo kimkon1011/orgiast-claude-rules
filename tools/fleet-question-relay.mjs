@@ -1,0 +1,158 @@
+#!/usr/bin/env node
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
+import { createInterface } from 'node:readline';
+import { isEntry } from './is-entry.mjs';
+import { parseEnvText } from './env-kv.mjs';
+import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
+import { redactSecrets } from './fleet-agent.mjs';
+
+export const TRANSCRIPT_TAIL_BYTES = 64 * 1024;
+export const QUESTION_LIMIT = 2000;
+export const SUMMARY_LIMIT = 600;
+export const RELAY_WAIT_MS = 10 * 60 * 1000;
+export const RESUME_LIMIT_MS = 30 * 60 * 1000;
+export const QUESTION_LOCK_MS = 30 * 1000;
+export const HUB_LABEL = 'kim-PC';
+export function validSessionId(id) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,179}$/.test(String(id ?? ''))) throw new Error('invalid session id');
+  return id;
+}
+export function questionPath(home, id) { return path.join(home, '.claude', 'fleet-questions', `${validSessionId(id)}.json`); }
+export function readQuestion(home, id) {
+  try { return JSON.parse(fs.readFileSync(questionPath(home, id), 'utf8')); }
+  catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+}
+// This lock covers synchronous local changes only, never network or child execution.
+export function updateQuestion(home, id, update) {
+  const file = questionPath(home, id), lock = `${file}.lock`;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  let fd;
+  const nonce = randomUUID();
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try { fd = fs.openSync(lock, 'wx', 0o600); break; }
+    catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      const reclaim = `${lock}.reclaim`;
+      try { fs.mkdirSync(reclaim); } catch (error) { if (error.code === 'EEXIST') return null; throw error; }
+      try {
+        if (Date.now() - fs.statSync(lock).mtimeMs < QUESTION_LOCK_MS) return null;
+        fs.unlinkSync(lock);
+      } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      finally { fs.rmdirSync(reclaim); }
+    }
+  }
+  if (fd === undefined) return null;
+  const tmp = `${file}.${randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(fd, nonce);
+    const current = readQuestion(home, id), next = update(current);
+    if (!next || next === current) return next;
+    fs.writeFileSync(tmp, JSON.stringify(next) + '\n', { mode: 0o600 });
+    fs.renameSync(tmp, file);
+    return next;
+  } finally {
+    try { fs.unlinkSync(tmp); } catch { /* A leftover temp never owns the question. */ }
+    fs.closeSync(fd);
+    try { if (fs.readFileSync(lock, 'utf8') === nonce) fs.unlinkSync(lock); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
+}
+export function readTranscriptTail(file, io = fs) {
+  const fd = io.openSync(file, 'r');
+  try {
+    const stat = io.fstatSync(fd);
+    if (!stat.isFile()) throw new Error('not a transcript file');
+    const size = stat.size, start = Math.max(0, size - TRANSCRIPT_TAIL_BYTES);
+    const buffer = Buffer.alloc(size - start);
+    const bytes = io.readSync(fd, buffer, 0, buffer.length, start);
+    let text = buffer.subarray(0, bytes).toString('utf8');
+    if (start) text = text.includes('\n') ? text.slice(text.indexOf('\n') + 1) : '';
+    const records = text.split('\n').flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } });
+    return { records, size };
+  } finally { io.closeSync(fd); }
+}
+export function detectQuestion(record) {
+  const content = record?.message?.content ?? record?.content;
+  const blocks = Array.isArray(content) ? content : [{ type: 'text', text: typeof content === 'string' ? content : '' }];
+  const text = blocks.filter(b => b.type === 'text').map(b => b.text || '').join('\n').trim();
+  const asks = blocks.filter(b => b.type === 'tool_use' && b.name === 'AskUserQuestion');
+  const questions = asks.flatMap(b => Array.isArray(b.input?.questions) ? b.input.questions : []);
+  const last = text.split(/\r?\n/).at(-1) || '';
+  // An instruction list / quoted example / fenced or inline code is not a final question.
+  const codeOrSteps = /^(?:\s*(?:[-*+] |\d+[.)] |>|\$ |```|~~~))/.test(last)
+    || /^(?:const|let|var|return|if|function|import)\b/.test(last) || /[`}]\s*$/.test(last) || (text.match(/^\s*```/gm) || []).length % 2 === 1;
+  if (!asks.length && (codeOrSteps || !(/[?？]$/.test(last) || /どうしますか|どちらにしますか|選んでください|確認してください|教えてください/.test(last)))) return null;
+  const question = asks.length ? redactSecrets(questions.map(q => q.question || '').join('\n') || text).slice(0, QUESTION_LIMIT) : redactSecrets(text).slice(-QUESTION_LIMIT);
+  if (!question) return null;
+  const options = questions.map(q => ({ question: redactSecrets(q.question || '').slice(0, QUESTION_LIMIT),
+    options: (Array.isArray(q.options) ? q.options : []).slice(0, 20).map(o => ({ label: redactSecrets(o.label || '').slice(0, 200), description: redactSecrets(o.description || '').slice(0, 400) })), multiSelect: !!q.multiSelect })).slice(0, 10);
+  return { question, options, summary: redactSecrets(text || question).slice(0, SUMMARY_LIMIT),
+    questionHash: createHash('sha256').update(JSON.stringify({ question, options })).digest('hex') };
+}
+export async function main({ home = process.env.ORGIAST_HOME || os.homedir(), readStdin = readStdinWithTimeout, now = Date.now, env = process.env } = {}) {
+  try {
+    const config = parseEnvText(fs.readFileSync(path.join(home, '.claude', 'fleet-sheet.env'), 'utf8'));
+    if (!config.FLEET_HUB) return;
+    const input = JSON.parse(await readStdin(500));
+    if (input.stop_hook_active) return;
+    validSessionId(input.session_id);
+    const { records, size } = readTranscriptTail(input.transcript_path);
+    const last = records.findLastIndex(r => r.type === 'assistant' || r.message?.role === 'assistant');
+    if (last < 0 || records.slice(last + 1).some(isUserMessage)) return;
+    const detected = detectQuestion(records[last]);
+    if (!detected) return;
+    updateQuestion(home, input.session_id, current => {
+      if (current?.questionHash === detected.questionHash) return current;
+      return { sessionId: input.session_id, cwd: input.cwd, ...detected, askedAt: new Date(now()).toISOString(),
+        transcriptPath: input.transcript_path, transcriptOffset: size,
+        drivenByHub: current?.drivenByHub === true || env.FLEET_DRIVEN_BY_HUB === '1',
+        relayedAt: null, resumingAt: current?.resumingAt || null, ...(current?.resumeMailId ? { resumeMailId: current.resumeMailId } : {}) };
+    });
+  } catch { /* Stop must never block a user, including missing transcripts and malformed input. */ }
+}
+function isUserMessage(record) {
+  if (record.type !== 'user' && record.message?.role !== 'user') return false;
+  return true; // AskUserQuestion answers can themselves arrive as user tool_result blocks.
+}
+export async function hasNewUserMessage(question) {
+  // Scan appended JSONL as a stream; never load the transcript into memory.
+  if (!question.transcriptPath) return true;
+  const stat = fs.statSync(question.transcriptPath);
+  if (!stat.isFile() || stat.size < (question.transcriptOffset || 0)) return true;
+  const stream = fs.createReadStream(question.transcriptPath, { start: question.transcriptOffset || 0, encoding: 'utf8' });
+  const lines = createInterface({ input: stream, crlfDelay: Infinity });
+  try {
+    for await (const line of lines) {
+      let record; try { record = JSON.parse(line); } catch { return true; }
+      if (isUserMessage(record) && (question.transcriptOffset !== undefined || !record.timestamp || Date.parse(record.timestamp) > Date.parse(question.askedAt))) return true;
+    }
+    return false;
+  } finally { lines.close(); stream.destroy(); }
+}
+export async function relayQuestions({ home, hub, label, request, now = Date.now, stderr = console.error }) {
+  if (!hub || hub === label) return 0;
+  const dir = path.join(home, '.claude', 'fleet-questions');
+  let files; try { files = fs.readdirSync(dir); } catch (error) { if (error.code === 'ENOENT') return 0; throw error; }
+  let sent = 0;
+  for (const name of files.filter(n => /^[A-Za-z0-9][A-Za-z0-9_-]*\.json$/.test(n))) {
+    try {
+      const q = readQuestion(home, name.slice(0, -5));
+      if (!q?.question || q.relayedAt || !Number.isFinite(Date.parse(q.askedAt))) continue;
+      if (!q.drivenByHub && (now() - Date.parse(q.askedAt) < RELAY_WAIT_MS || await hasNewUserMessage(q))) continue;
+      // A stable transport id makes a lost response/local-write retry safe.
+      const id = `mail-question-${createHash('sha256').update(`${label}\n${q.sessionId}\n${q.questionHash}`).digest('hex').slice(0, 24)}`;
+      const result = await request('mail-send', { id, from: label, to: hub, messageKind: 'note', priority: 'urgent', auto: false, hop: 0,
+        why: `[判断依頼] ${label} のセッション質問`,
+        body: redactSecrets(`[判断依頼]\nPC: ${label}\n質問: ${q.question}\n選択肢: ${JSON.stringify(q.options)}\ncwd: ${q.cwd}\nsessionId: ${q.sessionId}\n直近の作業要約: ${q.summary}`).slice(0, 20000),
+        meta: { relay: { sessionId: q.sessionId, cwd: q.cwd, questionHash: q.questionHash, pcLabel: label } },
+        expiresAt: new Date(now() + 72 * 3600000).toISOString() });
+      if (!result?.ok) throw new Error('relay send failed');
+      updateQuestion(home, q.sessionId, current => current?.questionHash === q.questionHash ? { ...current, relayedAt: new Date(now()).toISOString(), sentId: id } : current);
+      sent++;
+    } catch { stderr('fleet-mail: 質問転送再試行待ち=1'); }
+  }
+  return sent;
+}
+if (isEntry(import.meta.url)) await main();

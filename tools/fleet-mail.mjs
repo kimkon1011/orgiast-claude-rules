@@ -12,6 +12,7 @@ import { addDecision, listDecisions } from './pending-decisions.mjs';
 import { loadOptin, redactSecrets, runPrompt, consentCommand } from './fleet-agent.mjs';
 import { resolveClaudeExecutableFromDisk } from './claude-exe.mjs';
 import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
+import { relayQuestions, updateQuestion, validSessionId, RESUME_LIMIT_MS } from './fleet-question-relay.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 export { resolveFleetLabel };
 
@@ -43,13 +44,14 @@ export function hasDecisionRequest(mail) {
 }
 // Shared arrival/presentation classification. Replies never become inherited requests.
 export function mailCategory(mail) {
-  if (mail?.replyTo || String(mail?.id || '').startsWith('mail-reply-') || /\[回答(?:・返信不要)?\]/.test(mail?.why || '') || /^\s*\[回答(?:・返信不要)?\]/.test(mail?.body || '')) return 2;
+  if (mail?.replyTo || String(mail?.id || '').startsWith('mail-reply-') || /\[(?:回答|報告)(?:・返信不要)?\]/.test(mail?.why || '') || /^\s*\[(?:回答|報告)(?:・返信不要)?\]/.test(mail?.body || '')) return 2;
   if (hasDecisionRequest(mail)) return 0;
   if (mail?.priority === 'urgent' || /\[作業依頼\]/.test(mail?.why || '') || /^\s*\[作業依頼\]/.test(mail?.body || '')) return 1;
   return 3;
 }
-// 本文先頭の実行モードマーカー（送信側 --exec codex が挿入する）。GAS は messageKind を prompt のまま扱う。
-const execMarker = /^<!--\s*fleet-exec:\s*codex\s*-->\s*$/;
+// 本文先頭の実行モードマーカー（送信側 --exec が挿入する）。GAS は messageKind を prompt のまま扱う。
+export const EXEC_KINDS = Object.freeze(['codex', 'claude']);
+const execMarker = /^<!--\s*fleet-exec:\s*(codex|claude)\s*-->\s*$/;
 const execCwdMarker = /^<!--\s*fleet-exec-cwd:\s*(.*?)\s*-->\s*$/;
 // 全PCの設定変更・インストール・ファイル書き込みを依頼する本文を検出する。
 // fleet-mail は相談・確認用で、設定変更は setup --converge 経由に一本化する（2026-10-11 事故: 手順を mail で配って
@@ -131,7 +133,9 @@ export function parseExecMarkers(body) {
   let cwd = null;
   const cwdMatch = (lines[index] ?? '').match(execCwdMarker);
   if (cwdMatch) { cwd = cwdMatch[1]; index += 1; }
-  return { exec: 'codex', cwd, body: lines.slice(index).join('\n') };
+  const resume = (lines[index] ?? '').match(/^<!--\s*fleet-resume:\s*([A-Za-z0-9_-]+)\s*-->\s*$/);
+  if (resume) index++;
+  return { exec: lines[0].match(execMarker)[1], cwd, ...(resume ? { resumeSessionId: resume[1] } : {}), body: lines.slice(index).join('\n') };
 }
 // 受信タスクが claude CLI を見つけられない事故（2026-10-10 nishi-PC: spawn claude ENOENT）を
 // 相手が追える形にする。Windows の npm グローバルは claude.cmd しか置かず shell:false では起動できない。
@@ -511,7 +515,7 @@ export function findPriorReply(dir, id) {
 export function parseArgs(argv) {
   const options = {};
   const flags = new Set(['--send', '--poll', '--no-exec', '--dry-run', '--json', '--inbox', '--force', '--sweep', '--unseen', '--all-seen', '--sync-pending']);
-  const values = new Set(['--to', '--kind', '--body-file', '--why', '--expires-hours', '--wait', '--reply', '--ack', '--sent-status', '--exec', '--exec-cwd', '--priority', '--wait-for']);
+  const values = new Set(['--to', '--kind', '--body-file', '--why', '--expires-hours', '--wait', '--reply', '--ack', '--sent-status', '--exec', '--exec-cwd', '--priority', '--wait-for', '--answer', '--resume']);
   for (let i = 0; i < argv.length; i++) {
     const key = argv[i];
     if (Object.hasOwn(options, key)) throw new Error(`duplicate option: ${key}`);
@@ -520,10 +524,11 @@ export function parseArgs(argv) {
     else if (values.has(key) && argv[i + 1] && !argv[i + 1].startsWith('--')) options[key] = argv[++i];
     else throw new Error(`unknown option or missing value: ${key}; 本文は --body-file を使ってください`);
   }
-  const actions = ['--send', '--poll', '--inbox', '--reply', '--ack', '--sent-status', '--sweep', '--sync-pending'].filter(k => options[k]);
+  const actions = ['--send', '--poll', '--inbox', '--reply', '--ack', '--sent-status', '--sweep', '--sync-pending', '--answer'].filter(k => options[k]);
   if (actions.length !== 1) throw new Error('指定は --send / --poll / --reply / --inbox / --ack / --sent-status のいずれか1つ');
   const allowed = {
-    '--send': ['--to', '--kind', '--body-file', '--why', '--expires-hours', '--wait', '--exec', '--exec-cwd', '--force', '--priority', '--wait-for', '--dry-run'],
+    '--send': ['--to', '--kind', '--body-file', '--why', '--expires-hours', '--wait', '--exec', '--exec-cwd', '--force', '--priority', '--wait-for', '--dry-run', '--resume'],
+    '--answer': ['--body-file'],
     '--poll': ['--dry-run', '--json', '--no-exec'], '--inbox': ['--json', '--unseen'], '--reply': ['--body-file', '--force'], '--ack': ['--all-seen'], '--sweep': [],
     '--sent-status': [], '--sync-pending': []
   };
@@ -533,13 +538,19 @@ export function parseArgs(argv) {
     if (!['prompt', 'note'].includes(options['--kind'])) throw new Error('--kind must be prompt or note');
     if (options['--to'].length > 128 || options['--why'].length > 1000) throw new Error('宛先または理由が長すぎます');
     if (options['--exec'] !== undefined) {
-      if (options['--exec'] !== 'codex') throw new Error('--exec は codex のみ対応');
+      if (!EXEC_KINDS.includes(options['--exec'])) throw new Error(`--exec は ${EXEC_KINDS.join(' / ')} のみ対応`);
       if (options['--kind'] !== 'prompt') throw new Error('--exec は --kind prompt でのみ使えます');
     }
     if (options['--exec-cwd'] !== undefined && options['--exec'] === undefined) throw new Error('--exec-cwd は --exec codex と併用してください');
   }
-  if (options['--reply'] && !options['--body-file']) throw new Error('--body-file 必須');
-  for (const key of ['--reply', '--ack', '--sent-status']) if (options[key] && options[key] !== true) validId(options[key]);
+  if (options['--resume'] !== undefined) {
+    if (options['--exec'] !== 'claude') throw new Error('--resume は --exec claude と併用してください');
+    validSessionId(options['--resume']);
+  }
+  if (options['--exec'] === 'claude' && !options['--exec-cwd']?.trim()) throw new Error('--exec claude は --exec-cwd 必須');
+  if (options['--exec-cwd'] && /[\r\n]|-->/.test(options['--exec-cwd'])) throw new Error('invalid --exec-cwd');
+  if ((options['--reply'] || options['--answer']) && !options['--body-file']) throw new Error('--body-file 必須');
+  for (const key of ['--reply', '--ack', '--sent-status', '--answer']) if (options[key] && options[key] !== true) validId(options[key]);
   for (const key of ['--expires-hours', '--wait']) if (options[key] !== undefined && (!Number.isFinite(Number(options[key])) || Number(options[key]) < (key === '--wait' ? 0 : 0.001))) throw new Error(`invalid ${key}`);
   if (options['--ack'] && options['--all-seen'] && options['--ack'] !== true) throw new Error('--ack id と --all-seen は併用不可');
   if (options['--priority'] && !['normal', 'urgent'].includes(options['--priority'])) throw new Error('invalid --priority');
@@ -648,6 +659,8 @@ export async function pollOnce(deps = {}) {
   };
   try {
     if (!dryRun) {
+      try { await relayQuestions({ home, hub: config.FLEET_HUB, label, request, now, stderr: err }); }
+      catch { err('fleet-mail: 質問転送再試行待ち=1'); }
       migrateProcessed(home);
       // Archive corrupt cache under a per-file lock, then recover via mail-get even after delivery.
       const inboxDir = path.join(dir, 'fleet-inbox');
@@ -751,12 +764,16 @@ export async function pollOnce(deps = {}) {
         }
         if (mail.kind !== 'prompt') { if (fresh.has(mail.id)) handled.push(mail.id); continue; }
         if (deps.executePrompts === false || automatic(mail) || nextHop(mail) >= 3) continue;
-        const exec = parseExecMarkers(mail.body);
+        const marked = parseExecMarkers(mail.body);
+        const exec = { ...marked, exec: mail.exec || marked.exec, cwd: mail.execCwd || marked.cwd, resumeSessionId: mail.resumeSessionId || marked.resumeSessionId };
+        const hubExecution = exec.exec === 'claude';
+        if (hubExecution && !exec.cwd) throw new Error('claude cwd missing');
+        if (exec.resumeSessionId) validSessionId(exec.resumeSessionId);
         const resultFile = path.join(dir, 'fleet-agent-results', `${validId(mail.id)}.json`);
         let result = readJson(resultFile);
         let claudeExeName;
         if (mail.executionStartedAt && !result) {
-          if (now() - Date.parse(mail.executionStartedAt) < INTERRUPTED_PROMPT_MS) continue;
+          if (now() - Date.parse(mail.executionStartedAt) < (hubExecution ? RESUME_LIMIT_MS : INTERRUPTED_PROMPT_MS)) continue;
           result = { exitCode: null, outputTail: INTERRUPTED_PROMPT_BODY, timedOut: true };
         }
         if (!result) {
@@ -765,9 +782,25 @@ export async function pollOnce(deps = {}) {
           if (!loadOptin(path.join(dir, 'fleet-agent-optin.json')).includes(kind)) result = { exitCode: null, outputTail: `未オプトイン。承諾コマンド: ${consentCommand(kind)}` };
           else {
             if (promptHandled) continue;
+            let resumeClaim = null;
+            if (hubExecution && exec.resumeSessionId) {
+              resumeClaim = updateQuestion(home, exec.resumeSessionId, current => {
+                if (current?.resumingAt && now() - Date.parse(current.resumingAt) < RESUME_LIMIT_MS) return null;
+                return { ...current, sessionId: exec.resumeSessionId, cwd: exec.cwd, resumingAt: new Date(now()).toISOString(), drivenByHub: true, answeredAt: new Date(now()).toISOString(), resumeMailId: mail.id };
+              });
+              if (!resumeClaim) continue;
+            }
+            const releaseResume = () => {
+              if (resumeClaim) updateQuestion(home, exec.resumeSessionId, current => {
+                if (!current || current.resumeMailId !== mail.id) return current;
+                const next = { ...current }; delete next.resumingAt; delete next.resumeMailId; return next;
+              });
+            };
             promptHandled = true;
-            const claimed = updateInbox(mail.id, current => current && !terminal(current) && !current.executionStartedAt ? { ...current, executionStartedAt: new Date(now()).toISOString() } : null, { home });
-            if (!claimed) continue;
+            let claimed;
+            try { claimed = updateInbox(mail.id, current => current && !terminal(current) && !current.executionStartedAt ? { ...current, executionStartedAt: new Date(now()).toISOString() } : null, { home }); }
+            catch (error) { releaseResume(); throw error; }
+            if (!claimed) { releaseResume(); continue; }
             if (kind === 'codex') {
               await state(mail.id, 'seen', { seenBy: 'headless' });
               const runnerArgs = [path.join(ownRepo, 'tools', 'fleet-task-runner.mjs'), '--id', mail.id];
@@ -777,20 +810,27 @@ export async function pollOnce(deps = {}) {
               log('exec-started', { id: mail.id, exec: 'codex' });
               continue;
             }
-            const resolved = await (deps.resolveClaudeExe ?? (() => resolveClaudeExecutableFromDisk({ platform: process.platform, env: deps.env ?? process.env })))();
-            const executable = (typeof resolved === 'string' ? resolved : resolved?.executable) || 'claude';
-            const candidates = resolved?.candidates || [];
-            claudeExeName = path.basename(executable);
-            const header = `これは ${mail.from} PC の Claude Code からのメッセージです。回答は標準出力に書けば自動で相手に返ります。ファイル変更や外部送信が要る内容は実行せず、必要な理由と手順を回答に書いてください。`;
+            let executable = 'claude', candidates = [];
             try {
-              result = await runPrompt({ claudeExe: executable, body: `${header}\n\n${mail.body}`, cwd: deps.repo ?? process.env.ORGIAST_REPO ?? ownRepo,
-                timeoutSeconds: 90, readOnly: true, spawnImpl: deps.spawnImpl, onStart: () => state(mail.id, 'seen', { seenBy: 'headless' }) });
-              if (isMissingClaudeError(result)) result = { ...result, outputTail: missingClaudeMessage(executable, candidates) };
+              const resolved = await (deps.resolveClaudeExe ?? (() => resolveClaudeExecutableFromDisk({ platform: process.platform, env: deps.env ?? process.env })))();
+              executable = (typeof resolved === 'string' ? resolved : resolved?.executable) || 'claude';
+              candidates = resolved?.candidates || [];
+              claudeExeName = path.basename(executable);
+              const header = `これは ${mail.from} PC の Claude Code からのメッセージです。回答は標準出力に書けば自動で相手に返ります。ファイル変更や外部送信が要る内容は実行せず、必要な理由と手順を回答に書いてください。`;
+              result = await runPrompt({ claudeExe: executable, body: hubExecution ? exec.body : `${header}\n\n${mail.body}`,
+                cwd: hubExecution ? exec.cwd : deps.repo ?? process.env.ORGIAST_REPO ?? ownRepo,
+                resumeSessionId: hubExecution ? exec.resumeSessionId : undefined, drivenByHub: hubExecution,
+                home, timeoutSeconds: hubExecution ? RESUME_LIMIT_MS / 1000 : 90, readOnly: !hubExecution,
+                spawnImpl: deps.spawnImpl, setTimer: deps.promptSetTimer, clearTimer: deps.promptClearTimer, onStart: () => state(mail.id, 'seen', { seenBy: 'headless' }) });
+              if (isMissingClaudeError(result)) result = { ...result, outputTail: missingClaudeMessage(executable, candidates), stdoutTail: undefined };
             } catch (error) { result = { exitCode: null, outputTail: isMissingClaudeError(error) ? missingClaudeMessage(executable, candidates) : `実行失敗: ${redactSecrets(error.message)}` }; }
+            finally { releaseResume(); }
           }
         }
+        if (hubExecution && !result.hubReport) result = { ...result, hubReport: true, outputTail: `[報告・返信不要]${result.timedOut ? ' 実行失敗: 30分上限でタイムアウト' : result.exitCode !== 0 ? ' 実行失敗' : ''}\n${redactSecrets(result.stdoutTail ?? result.outputTail ?? result.error ?? '(出力なし)').slice(-4000)}` };
         result = { ...result, outputTail: redactSecrets(result.outputTail || result.error || '(出力なし)').slice(-8000) };
         if (result.error) result.error = redactSecrets(result.error);
+        if (result.stdoutTail !== undefined) result.stdoutTail = redactSecrets(result.stdoutTail).slice(-4000);
         writeJson(resultFile, result);
         // A failed reply retains its result and retries transport without executing again.
         if (terminal(readJson(fileOf(mail.id)))) continue;
@@ -887,6 +927,46 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     out([`id: ${mail.id}`, ...['status', 'createdAt', 'expiresAt', 'deliveredAt', 'deliveredBy', 'seenAt', 'seenBy', 'resultAt', 'ackAt', 'failedAt', 'failReason'].map(key => `${key}: ${mail[key] || '(なし)'}`)].join('\n'));
     return 0;
   }
+  if (options['--answer']) {
+    if (process.env.CLAUDE_HEADLESS === '1' || process.env.ORGIAST_HEADLESS_JOB) { err('fleet-mail: 判断代行拒否=1'); return 2; }
+    const id = options['--answer'];
+    const original = checked(await request('mail-get', { id })).mail;
+    let meta = original?.meta;
+    if (typeof meta === 'string') { try { meta = JSON.parse(meta); } catch { meta = null; } }
+    const relay = meta?.relay;
+    if (!relay || !hasDecisionRequest(original)) {
+      err(`手動の判断依頼です。node tools/fleet-mail.mjs --send --to ${original?.from || '<from>'} --kind note --body-file <file> --why "回答" を使ってください`);
+      return 2;
+    }
+    validSessionId(relay.sessionId);
+    if (typeof relay.cwd !== 'string' || !relay.cwd.trim() || /[\r\n]|-->/.test(relay.cwd) || !original.from) throw new Error('invalid relay metadata');
+    if (terminal(original)) {
+      updateInbox(id, current => current && ({ ...current, status: original.status, ackAt: original.ackAt || current.ackAt }), { home });
+      out('回答対象終了=1'); return original.status === 'done' ? 0 : 2;
+    }
+    const answerFile = path.join(dir, 'fleet-answers', `${id}.json`);
+    const release = acquireLock(`${answerFile}.lock`, { now });
+    if (!release) { err('fleet-mail: 回答競合スキップ=1'); return 2; }
+    try {
+      let payload = readJson(answerFile);
+      if (!payload) {
+        payload = { id: `mail-answer-${createHash('sha256').update(`${id}\n${label}`).digest('hex').slice(0, 24)}`,
+          from: label, to: original.from, messageKind: 'prompt', exec: 'claude', resumeSessionId: relay.sessionId, execCwd: relay.cwd,
+          body: `<!-- fleet-exec: claude -->\n<!-- fleet-exec-cwd: ${relay.cwd} -->\n<!-- fleet-resume: ${relay.sessionId} -->\n${redactSecrets(fs.readFileSync(options['--body-file'], 'utf8')).slice(0, 18000)}`,
+          why: 'hub からの回答・セッション再開', auto: false, hop: 0, priority: 'urgent',
+          expiresAt: new Date(now() + 6 * 3600000).toISOString() };
+        writeJson(answerFile, payload);
+      }
+      log('sent', { action: 'send-attempt', id: payload.id, to: payload.to, exec: 'claude' });
+      const sent = checked(await request('mail-send', payload));
+      if (['failed', 'expired'].includes(sent.mail?.status)) throw new Error('回答の送信期限切れまたは実行失敗');
+      log('sent', { action: 'sent', id: payload.id, to: payload.to, exec: 'claude' });
+      checked(await request('mail-ack', { id, from: label }));
+      updateInbox(id, current => current && ({ ...current, status: 'done', ackAt: new Date(now()).toISOString() }), { home });
+      out(`回答送信済み: ${payload.id}`);
+      return 0;
+    } finally { release(); }
+  }
   if (options['--send']) {
     let pcMap = deps.pcMap;
     if (pcMap === undefined) {
@@ -914,11 +994,12 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       return 6;
     }
     let id = mailId(now, deps.randomBytes);
-    // --exec codex: 本文先頭にマーカー行を挿入して受信側に実行モードを伝える（本文ファイル自体は変更しない）。
+    // --exec: 本文先頭にマーカー行を挿入して受信側に実行モードを伝える（本文ファイル自体は変更しない）。
     let body = redactSecrets(fs.readFileSync(options['--body-file'], 'utf8')).slice(0, 20000);
-    if (options['--exec'] === 'codex') {
-      const markers = ['<!-- fleet-exec: codex -->'];
+    if (options['--exec']) {
+      const markers = [`<!-- fleet-exec: ${options['--exec']} -->`];
       if (options['--exec-cwd'] !== undefined) markers.push(`<!-- fleet-exec-cwd: ${options['--exec-cwd']} -->`);
+      if (options['--resume']) markers.push(`<!-- fleet-resume: ${options['--resume']} -->`);
       body = `${markers.join('\n')}\n${body}`;
     }
     // 全PCの設定変更・インストール・ファイル書き込みの依頼は fleet-mail で配らず setup --converge に載せる。
@@ -936,22 +1017,23 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     } catch (error) {
       err(`宛先 ${target.to}: 最終 poll 不明（ビーコン取得失敗: ${redactSecrets(error?.message || error)}）`);
     }
-    // --exec codex は相手PCの Codex が最長1800秒走るため、通常 prompt より長い既定期限(+6h)にする。
-    const defaultExpiresHours = options['--exec'] === 'codex' ? 6 : 24;
+    // Explicit executors share the six-hour delivery window.
+    const defaultExpiresHours = options['--exec'] ? 6 : 24;
     const payload = { id, from: label, to: target.to, messageKind: options['--kind'],
+      ...(options['--exec'] ? { exec: options['--exec'], execCwd: options['--exec-cwd'], resumeSessionId: options['--resume'] } : {}),
       body, why: redactSecrets(options['--why']), auto: false, hop: 0,
       priority: options['--priority'] === 'urgent' || /\[(判断依頼|作業依頼)\]/.test(options['--why']) || /^\s*\[(判断依頼|作業依頼)\]/.test(parseExecMarkers(body).body) ? 'urgent' : 'normal',
       expiresAt: new Date(now() + Number(options['--expires-hours'] ?? defaultExpiresHours) * 3600000).toISOString() };
     if (options['--dry-run']) { out(JSON.stringify(payload)); return 0; }
     for (let attempt = 0; attempt < 2; attempt++) {
       payload.id = id;
-      log('sent', { action: 'send-attempt', ...payload, ...(options['--exec'] === 'codex' ? { exec: 'codex' } : {}) });
+      log('sent', { action: 'send-attempt', ...payload, ...(options['--exec'] ? { exec: options['--exec'] } : {}) });
       const result = checked(await request('mail-send', payload));
       if (!result.duplicate) break;
       if (attempt === 1) { err('fleet-mail: ID 重複（再送上限）'); return 1; }
       id = mailId(now, deps.randomBytes);
     }
-    log('sent', { action: 'sent', id, to: payload.to, ...(options['--exec'] === 'codex' ? { exec: 'codex' } : {}) });
+    log('sent', { action: 'sent', id, to: payload.to, ...(options['--exec'] ? { exec: options['--exec'] } : {}) });
     err(`状態確認: node tools/fleet-mail.mjs --sent-status ${id}`);
     if (options['--wait'] !== undefined) {
       err(`送信済み: ${id}`);

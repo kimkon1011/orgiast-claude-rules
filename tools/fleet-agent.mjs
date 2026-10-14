@@ -174,7 +174,7 @@ export function collectStatus({ home, repo, label, hostname, run = runSync, plat
   return { text: redactSecrets(text), data: { label, hostname, platform, account, codex, git, syncLast, failures, todoCount, promptOptin: accepts.includes('prompt'), codexOptin: accepts.includes('codex'), sharedMemory, checkedAt: new Date().toISOString() } };
 }
 
-export async function runPrompt({ claudeExe, body, cwd, timeoutSeconds = 1800, spawnImpl = spawn, readOnly = false, onStart }) {
+export async function runPrompt({ claudeExe, body, cwd, timeoutSeconds = 1800, spawnImpl = spawn, readOnly = false, onStart, resumeSessionId, drivenByHub = false, home, setTimer = setTimeout, clearTimer = clearTimeout }) {
   // Fleet mail supplies a durable mail-seen callback; directives have no mail id.
   if (onStart) await onStart();
   return new Promise((resolve) => {
@@ -182,19 +182,19 @@ export async function runPrompt({ claudeExe, body, cwd, timeoutSeconds = 1800, s
     let stdout = '';
     let stderr = '';
     let settled = false;
-    const args = ['-p', String(body ?? '')];
+    const args = ['-p', ...(resumeSessionId ? ['--resume', resumeSessionId] : []), String(body ?? '')];
     // Fleet mail is answer-only; existing directives retain their original behavior.
     if (readOnly) args.push('--tools', 'Read,Glob,Grep', '--allowedTools', 'Read,Glob,Grep', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disable-slash-commands', '--settings', '{"disableAllHooks":true}', '--model', 'sonnet');
     const child = spawnImpl(claudeExe, args, {
-      cwd, env: { ...process.env, CLAUDE_HEADLESS: '1', CI: '1' }, stdio: ['pipe', 'pipe', 'pipe'], shell: false, windowsHide: true,
+      cwd, env: { ...process.env, CLAUDE_HEADLESS: '1', CI: '1', ...(home ? { ORGIAST_HOME: home } : {}), ...(drivenByHub ? { FLEET_DRIVEN_BY_HUB: '1' } : {}) }, stdio: ['pipe', 'pipe', 'pipe'], shell: false, windowsHide: true,
     });
     child.stdin.end();
     child.stdout.on('data', (chunk) => { stdout += chunk; if (stdout.length > 100_000) stdout = stdout.slice(-100_000); });
     child.stderr.on('data', (chunk) => { stderr += chunk; if (stderr.length > 100_000) stderr = stderr.slice(-100_000); });
-    const finish = (result) => { if (settled) return; settled = true; clearTimeout(timer); resolve({ ...result, durationSeconds: Math.round((Date.now() - started) / 100) / 10, outputTail: `${stdout}${stderr}`.slice(-10_000) }); };
+    const finish = (result) => { if (settled) return; settled = true; clearTimer(timer); resolve({ ...result, durationSeconds: Math.round((Date.now() - started) / 100) / 10, stdoutTail: redactSecrets(stdout).slice(-4000), outputTail: `${stdout}${stderr}`.slice(-10_000) }); };
     child.on('error', (error) => finish({ exitCode: null, error: String(error?.message ?? error), timedOut: false }));
     child.on('close', (code) => finish({ exitCode: code, timedOut: false }));
-    const timer = setTimeout(() => { child.kill('SIGKILL'); finish({ exitCode: null, timedOut: true, error: 'タイムアウトで停止' }); }, Math.max(1, Number(timeoutSeconds)) * 1000);
+    const timer = setTimer(() => { child.kill('SIGKILL'); finish({ exitCode: null, timedOut: true, error: 'タイムアウトで停止' }); }, Math.max(1, Number(timeoutSeconds)) * 1000);
   });
 }
 

@@ -284,6 +284,8 @@ try {
   // 外部知見の取り込み報告を A軸(安全/手順)・B軸(コスパ/価値創出)の2軸で出させる。
   added += migrate(settings.hooks.UserPromptSubmit, 'intake-two-axes-hook.mjs', 'intake-two-axes-hook.mjs', command('intake-two-axes-hook.mjs'));
   if (add(settings.hooks.UserPromptSubmit, 'intake-two-axes-hook.mjs', { hooks: [{ type: 'command', command: command('intake-two-axes-hook.mjs'), timeout: 5 }] })) added += 1;
+  if (add(settings.hooks.Stop, 'fleet-question-relay.mjs', { hooks: [{ type: 'command', command: command('fleet-question-relay.mjs'), timeout: 5 }] })) added += 1;
+  added += setTimeoutFor(settings.hooks.Stop, 'fleet-question-relay.mjs', 5);
   // 過去に受領済みのクレデンシャルをuserへ再質問する前に復元経路を注入する。
   for (const event of ['SessionStart', 'UserPromptSubmit']) {
     if (add(settings.hooks[event], 'fleet-inbox-context.mjs', { hooks: [{ type: 'command', command: command('fleet-inbox-context.mjs'), timeout: 5 }] })) added += 1;

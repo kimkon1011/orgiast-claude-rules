@@ -1,5 +1,5 @@
 // Fleet mail uses the existing authenticated WebApp transport and spreadsheet.
-const FLEET_MAIL_HEADERS_ = ['id', 'from', 'to', 'replyTo', 'kind', 'body', 'why', 'createdAt', 'expiresAt', 'status', 'deliveredAt', 'deliveredBy', 'resultBody', 'resultAt', 'seenAt', 'seenBy', 'ackAt', 'failedAt', 'failReason', 'auto', 'hop', 'priority', 'receipts'];
+const FLEET_MAIL_HEADERS_ = ['id', 'from', 'to', 'replyTo', 'kind', 'body', 'why', 'createdAt', 'expiresAt', 'status', 'deliveredAt', 'deliveredBy', 'resultBody', 'resultAt', 'seenAt', 'seenBy', 'ackAt', 'failedAt', 'failReason', 'auto', 'hop', 'priority', 'receipts', 'meta', 'exec', 'execCwd', 'resumeSessionId'];
 
 function fleetMailObject(row) {
   const mail = {};
@@ -27,6 +27,8 @@ function fleetMailNew(payload, now) {
     to: fleetMailRequired(payload.to, 'to', 128), replyTo: payload.replyTo ? fleetMailId(payload.replyTo) : '', kind: payload.messageKind,
     body: String(payload.body || '').slice(0, 20000), why: fleetMailRequired(payload.why, 'why', 1000),
     createdAt: createdAt, expiresAt: expiresAt, status: 'new',
+    meta: payload.meta ? (typeof payload.meta === 'string' ? payload.meta : JSON.stringify(payload.meta)) : '',
+    exec: payload.exec || '', execCwd: payload.execCwd || '', resumeSessionId: payload.resumeSessionId || '',
     auto: payload.auto === true || payload.auto === 'true', hop: fleetMailHop(payload.hop),
     priority: payload.priority === 'urgent' || /\[(判断依頼|作業依頼)\]/.test(payload.why) || /^\s*\[(判断依頼|作業依頼)\]/.test(payload.body) ? 'urgent' : 'normal'
   };
@@ -51,6 +53,10 @@ function _fleetMailSheet_() {
   if (!id) throw new Error('SHEET_ID is not configured');
   const book = SpreadsheetApp.openById(id);
   const sheet = book.getSheetByName('fleet-mail') || book.insertSheet('fleet-mail');
+  // Hub metadata extends beyond a new sheet's default 26 columns.
+  if (typeof sheet.getMaxColumns === 'function' && sheet.getMaxColumns() < FLEET_MAIL_HEADERS_.length) {
+    sheet.insertColumnsAfter(sheet.getMaxColumns(), FLEET_MAIL_HEADERS_.length - sheet.getMaxColumns());
+  }
   if (sheet.getLastRow() === 0) _fleetMailWrite_(sheet, 1, FLEET_MAIL_HEADERS_);
   const headers = sheet.getRange(1, 1, 1, FLEET_MAIL_HEADERS_.length).getValues()[0];
   // Append v2 columns without rewriting historical rows; reject shifted/unknown columns.

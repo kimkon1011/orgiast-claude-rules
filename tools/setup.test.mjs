@@ -262,3 +262,19 @@ test('beacon: server 500 or unreachable keeps exit code unchanged', (t) => {
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.match(result.stdout, /\[beacon\] failed/);
 });
+
+test('E task:fleet-mail converge adds hub configuration even with the v2 migration already complete', t => {
+  const home = temp('setup-fleet-hub-'); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  write(path.join(home, '.claude', 'fleet-sheet.env'), 'FLEET_SHEET_URL=fixture\nFLEET_SHEET_TOKEN=fixture\n');
+  write(path.join(home, '.claude', 'cost-reporter.env'), 'REPORTER_LABEL=receiver-PC\n');
+  write(path.join(home, '.claude', '.fleet-mail-v2-migrated'), 'already migrated');
+  const standard = JSON.parse(fs.readFileSync(path.join(toolsDir, 'setup-manifest.json'), 'utf8'));
+  const task = standard.items.find(i => i.id === 'task:fleet-mail');
+  assert.equal(task.spec.hubMode, true);
+  const mf = path.join(home, 'manifest.json'); write(mf, JSON.stringify(manifest([task])));
+  const result = run(['--converge', '--json', '--home', home, '--manifest', mf]);
+  assert.equal(result.status, 0);
+  assert.match(fs.readFileSync(path.join(home, '.claude', 'fleet-sheet.env'), 'utf8'), /FLEET_HUB=kim-PC/);
+  const settings = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'));
+  assert.ok(settings.hooks.Stop.some(g => g.hooks.some(h => h.command.includes('fleet-question-relay.mjs') && h.timeout === 5)));
+});

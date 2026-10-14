@@ -156,3 +156,14 @@ new ──poll──▶ delivered ──注入/閲覧/実行開始──▶ seen
 
 - 相手PC: Stop hook と UserPromptSubmit hook の登録、`fleet-sheet.env` に `FLEET_HUB=kim-PC`（converge `task:fleet-mail` に含める。kim-PC 自身は FLEET_HUB 無し＝転送しない）。
 - kim-PC: `--answer`、hook の提示文言。
+
+### 11.4 安全規約（2026-10-14 レビュー反映・§11.2 を上書き）
+
+- **承諾キーの分離**: `exec=claude`（フル権限の `claude -p --resume`）は `fleet-agent-optin.json` の accept に **`claude-resume`** が入っている PC だけが実行する。従来の `prompt`（読み取り専用の回答）承諾では実行しない。未承諾なら承諾コマンド（`claude-resume` 用）を kim-PC に返す。
+- **送信元の限定**: `exec=claude` は `from` が自 PC の `FLEET_HUB`（kim-PC）と完全一致するときだけ受理。それ以外は fail 返信（reason: not-hub）。
+- **cwd の検証**: `execCwd` は「存在し、`.git` を持つディレクトリ」のみ。不合格は fail 返信。
+- **引数の終端**: 本文は `--` の後ろに置く（本文が `--` で始まってもフラグとして読まれない）。
+- **実行は detached runner**: `exec=codex` と同じく poll の lock を 30 分占有しない。実行中は `fleet-questions/<session>.json` の `resumingAt` で同時 1 本を保証。
+- **drivenByHub の寿命**: resume の終了（成功・失敗・30 分超過）で解除する。以後その セッションで現地の人が出した質問は 10 分ルールに戻る。
+- **AskUserQuestion の捕捉**: 対話セッションの AskUserQuestion はターンが終わらず Stop hook が発火しないため、**PreToolUse（matcher: AskUserQuestion）hook** で質問と選択肢を `fleet-questions/` に記録する。Notification hook（permission 要求・idle）も同様に記録する。kim-PC の回答で再開されるのは `--resume` による分岐セッションであり、元の対話画面に残った質問は Esc で閉じてよい（表示に明記）。
+- **`--answer` の検証**: 原本の `to` が自ラベルでなければ exit 2。同じ id への再実行は「前回の回答を再送」と明示し、本文が違えば `--force` 無しでは送らない。

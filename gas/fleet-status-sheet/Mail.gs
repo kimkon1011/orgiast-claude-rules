@@ -92,6 +92,32 @@ function sendFleetMail(payload) {
     return { ok: true, mail: mail };
   });
 }
+const FLEET_MAIL_POLL_LIMIT_ = 20;
+function _fleetMailKnownRecipients_() {
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const book = SpreadsheetApp.openById(props.getProperty('SHEET_ID'));
+    const sheets = [book.getSheetByName('fleet-beacon'), book.getSheetByName('fleet-status')];
+    if (typeof _fleetReadSheet_ === 'function') sheets.push(_fleetReadSheet_());
+    const names = new Set();
+    let available = false;
+    sheets.filter(function(sheet, i) { return sheet && sheets.indexOf(sheet) === i; }).forEach(function(sheet) {
+      if (!sheet.getLastRow()) return;
+      const width = sheet.getLastColumn();
+      const headers = sheet.getRange(1, 1, 1, width).getValues()[0];
+      const keys = ['label', 'hostname'];
+      if (typeof FLEET_HEADERS_ !== 'undefined') keys.push(FLEET_HEADERS_.hostname, FLEET_HEADERS_.realHostname);
+      const columns = headers.map(function(key, i) { return keys.indexOf(key) >= 0 ? i : -1; }).filter(function(i) { return i >= 0; });
+      if (!columns.length) return;
+      available = true;
+      if (sheet.getLastRow() < 2) return;
+      sheet.getRange(2, 1, sheet.getLastRow() - 1, width).getValues().forEach(function(row) {
+        columns.forEach(function(i) { if (row[i]) names.add(String(row[i]).toLowerCase()); });
+      });
+    });
+    return available ? names : null;
+  } catch (error) { return null; } // No reliable roster: exact delivery only.
+}
 function pollFleetMail(payload) {
   fleetMailRequired(payload.to, 'to', 128);
   fleetMailRequired(payload.hostname, 'hostname', 128);
@@ -107,14 +133,18 @@ function pollFleetMail(payload) {
     const replay = receipt && receipt.requestId === payload.requestId;
     const eligible = rows.filter(function(mail) { return !excluded.has(mail.id); });
     const exact = eligible.filter(function(mail) { return fleetMailMatches(mail, payload.to, payload.hostname, now, false); });
-    // Rolling upgrade: only fall back to legacy matching if this poll has no exact matches.
-    const selected = replay ? rows.filter(function(mail) { return receipt.ids.indexOf(mail.id) >= 0; }) :
-      (exact.some(function(mail) { return mail.to !== 'all'; }) ? exact : eligible.filter(function(mail) { return fleetMailMatches(mail, payload.to, payload.hostname, now, true); })).slice(0, 20);
+    // Known canonical recipients must never be consumed by a different partial label.
+    const known = _fleetMailKnownRecipients_();
+    const candidates = exact.some(function(mail) { return mail.to !== 'all'; }) || !known ? exact : eligible.filter(function(mail) {
+      return fleetMailMatches(mail, payload.to, payload.hostname, now, !known.has(mail.to.toLowerCase()));
+    });
+    const selected = replay ? receipt.ids.map(function(id) { return rows.find(function(mail) { return mail.id === id; }); }).filter(Boolean) :
+      candidates.filter(function(mail) { return mail.to !== 'all'; }).concat(candidates.filter(function(mail) { return mail.to === 'all'; })).slice(0, FLEET_MAIL_POLL_LIMIT_);
     // Save only IDs (<4KB), before consuming rows. A lost HTTP response can be replayed.
     if (receiptKey && !replay) properties.setProperty(receiptKey, JSON.stringify({ requestId: payload.requestId, ids: selected.map(function(mail) { return mail.id; }) }));
     const messages = [];
-    rows.forEach(function(mail, i) {
-      if (selected.indexOf(mail) < 0) return;
+    selected.forEach(function(mail) {
+      const i = rows.indexOf(mail);
       if (!payload.dryRun && mail.to !== 'all' && mail.status === 'new') {
         mail.status = 'delivered'; mail.deliveredAt = new Date(now).toISOString(); mail.deliveredBy = payload.to;
         _fleetMailWrite_(sheet, i + 2, fleetMailRow(mail));
@@ -207,7 +237,7 @@ function _fleetMailApplyTransition_(sheet, rows, now, payload, action) {
   if (index < 0) return { ok: false, status: 404, error: 'mail_not_found' };
   const mail = rows[index];
   const label = String(payload.from || payload.label || '');
-  if (!label || (mail.to !== 'all' && mail.deliveredBy !== label)) return { ok: false, reason: 'not-recipient' };
+  if (!label || (mail.to !== 'all' && mail.deliveredBy && mail.deliveredBy !== label)) return { ok: false, reason: 'not-recipient' };
   const at = new Date(now).toISOString();
   if (mail.to === 'all') {
     const receipts = JSON.parse(mail.receipts || '{}');
@@ -217,6 +247,10 @@ function _fleetMailApplyTransition_(sheet, rows, now, payload, action) {
     Object.defineProperty(receipts, label, { value: receipt, enumerable: true, configurable: true });
     mail.receipts = JSON.stringify(receipts);
   } else {
+    if (!mail.deliveredBy) {
+      mail.deliveredBy = label;
+      _fleetMailWrite_(sheet, index + 2, fleetMailRow(mail));
+    }
     if (FLEET_MAIL_TERMINAL_STATUSES_.indexOf(mail.status) >= 0) return { ok: true, mail: mail };
     if (action === 'seen') {
       if (mail.status === 'seen') return { ok: true, mail: mail };

@@ -6,13 +6,13 @@ import path from 'node:path';
 import { Worker } from 'node:worker_threads';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { main, pollOnce, readInbox, syncMailState, resolveMailTarget, mailId, parseArgs, waitForReply, createClient, TERMINAL_STATUSES, hasDecisionRequest, updateInbox, presentMail, ACK_BATCH_LIMIT, SERVER_MAX_ATTEMPTS, CAPABILITY_BACKOFF_MS, INTERRUPTED_PROMPT_MS, INTERRUPTED_PROMPT_BODY, INBOX_LOCK_RETRIES, INBOX_LOCK_DELAY_MS } from './fleet-mail.mjs';
+import { main, pollOnce, readInbox, syncMailState, resolveMailTarget, mailId, parseArgs, waitForReply, createClient, TERMINAL_STATUSES, hasDecisionRequest, updateInbox, presentMail, ACK_BATCH_LIMIT, SERVER_MAX_ATTEMPTS, CAPABILITY_BACKOFF_MS, INTERRUPTED_PROMPT_MS, INTERRUPTED_PROMPT_BODY, INBOX_LOCK_RETRIES, INBOX_LOCK_DELAY_MS, INBOX_LOCK_STALE_MS, COMMAND_LOCK_RETRIES, COMMAND_LOCK_DELAY_MS, LOCK_BUSY_EXIT, notifyPendingArrivals } from './fleet-mail.mjs';
 const pcMap = JSON.parse(fs.readFileSync(new URL('../fleet-pc-map.json', import.meta.url), 'utf8'));
 const labels = Object.keys(pcMap).filter(key => !key.startsWith('_'));
 const receiver = labels[0], sender = labels.find(label => label !== receiver && pcMap[label].hostname);
 const now = Date.parse('2026-10-14T00:00:00Z');
 const iso = offset => new Date(now + offset).toISOString();
-const mail = (overrides = {}) => ({ id: 'mail-original', from: sender, to: receiver, kind: 'note', body: 'body', why: 'test', status: 'delivered', createdAt: iso(-1000), expiresAt: iso(86400000), ...overrides });
+const mail = (overrides = {}) => ({ id: 'mail-original', from: sender, to: receiver, kind: 'note', body: 'body', why: 'test', status: 'delivered', createdAt: iso(-1000), receivedAt: iso(0), expiresAt: iso(86400000), ...overrides });
 function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-v2-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
@@ -365,7 +365,7 @@ test('C11 busy inbox lock skips mutations and transport then permits retry', asy
   const mocked = t.mock.method(fs, 'openSync', (...args) => { if (args[0] === lock && args[1] === 'wx') calls++; return open(...args); });
   assert.equal(updateInbox(mail().id, current => ({ ...current, status: 'done' }), { home: f.home }), null);
   assert.equal(calls, INBOX_LOCK_RETRIES + 1); assert.ok(INBOX_LOCK_DELAY_MS > 0); mocked.mock.restore();
-  await main(['--ack', mail().id], f.deps); assert.equal(f.calls.length, 0); assert.equal(f.read(mail().id).status, 'delivered'); assert.equal(f.output.at(-1), '完了=0');
+  assert.equal(await main(['--ack', mail().id], f.deps), LOCK_BUSY_EXIT); assert.equal(f.calls.length, 0); assert.equal(f.read(mail().id).status, 'delivered'); assert.equal(f.output.length, 0);
   fs.unlinkSync(lock); await main(['--ack', mail().id], f.deps); assert.equal(f.read(mail().id).status, 'done'); assert.equal(f.calls.length, 1);
 });
 test('C11 callback errors release locks and delayed server responses preserve hook fields', async t => {
@@ -656,4 +656,144 @@ test('E report truncates redacted stdout to 4000 characters and retry does not r
   await pollOnce(f.deps); fail = false; await pollOnce(f.deps);
   assert.equal(f.spawns.length, 1); assert.equal(f.read(m.id).status, 'done');
   const replies = f.calls.filter(c => c.kind === 'mail-reply'); assert.equal(replies.length, 2); assert.equal(replies[0].payload.resultBody, replies[1].payload.resultBody); assert.doesNotMatch(replies[0].payload.resultBody, /ss/);
+});
+
+
+test('F1 stale inbox locks are reclaimed while fresh locks wait and skip', t => {
+  const f = fixture(t); f.save(mail());
+  const lock = path.join(f.inbox, `${mail().id}.json.lock`);
+  fs.writeFileSync(lock, 'owner');
+  const old = new Date(now - INBOX_LOCK_STALE_MS - 1); fs.utimesSync(lock, old, old);
+  assert.equal(updateInbox(mail().id, m => ({ ...m, presentedSession: 'recovered' }), { home: f.home, now: () => now }).presentedSession, 'recovered');
+  assert.equal(fs.existsSync(lock), false);
+  fs.writeFileSync(lock, 'owner'); fs.utimesSync(lock, new Date(now), new Date(now));
+  const delays = []; t.mock.method(Atomics, 'wait', (...args) => { delays.push(args[3]); return 'timed-out'; });
+  assert.equal(updateInbox(mail().id, m => ({ ...m, status: 'done' }), { home: f.home, now: () => now }), null);
+  assert.deepEqual(delays, Array(INBOX_LOCK_RETRIES).fill(INBOX_LOCK_DELAY_MS));
+  assert.equal(f.read(mail().id).status, 'delivered'); assert.equal(fs.existsSync(lock), true);
+});
+for (const action of ['reply', 'ack', 'answer']) test(`F2 ${action} lock contention retries then exits 6 without transport`, async t => {
+  const f = fixture(t); f.save(mail());
+  const lock = path.join(f.inbox, `${mail().id}.json.lock`); fs.writeFileSync(lock, 'owner');
+  const delays = []; t.mock.method(Atomics, 'wait', (...args) => { delays.push(args[3]); return 'timed-out'; });
+  const args = [`--${action}`, mail().id, ...(action === 'ack' ? [] : ['--body-file', f.body])];
+  assert.equal(await main(args, f.deps), LOCK_BUSY_EXIT);
+  assert.deepEqual(delays, Array(COMMAND_LOCK_RETRIES).fill(COMMAND_LOCK_DELAY_MS));
+  assert.equal(f.calls.length, 0); assert.equal(f.errors.length, 1); assert.equal(f.output.length, 0);
+});
+for (const action of ['reply', 'ack', 'answer']) for (const fault of ['lock', 'write']) test(`F2 ${action} successful send with ${fault} failure queues pendingLocal and poll never resends`, async t => {
+  const f = fixture(t), q = questionFixture(f, { relayedAt: iso(0) });
+  const original = mail({ why: '[判断依頼]', meta: { relay: q } }); f.save(original);
+  const lock = path.join(f.inbox, `${original.id}.json.lock`), target = path.join(f.inbox, `${original.id}.json`);
+  let failedWrite = false;
+  const rename = fs.renameSync;
+  t.mock.method(fs, 'renameSync', (...args) => {
+    if (failedWrite && args[1] === target) throw Object.assign(new Error('fixture write failure'), { code: 'EACCES' });
+    return rename(...args);
+  });
+  const request = f.deps.request;
+  f.deps.request = async (kind, payload) => {
+    const response = await request(kind, payload);
+    if (kind === 'mail-get') return { ok: true, mail: original };
+    if (kind === (action === 'reply' ? 'mail-reply' : 'mail-ack')) {
+      if (fault === 'lock') fs.writeFileSync(lock, 'owner'); else failedWrite = true;
+      return { ok: true, mail: { status: 'done', resultAt: iso(0), resultBody: 'answer' } };
+    }
+    return response;
+  };
+  const args = [`--${action}`, original.id, ...(action === 'ack' ? [] : ['--body-file', f.body])];
+  assert.equal(await main(args, f.deps), 0);
+  const pending = path.join(f.inbox, '.pending', `${original.id}.json`);
+  const record = JSON.parse(fs.readFileSync(pending, 'utf8'));
+  assert.equal(record.pendingLocal.status, 'done'); assert.equal(record.pendingServer, undefined);
+  assert.equal(readInbox(f.home, { unreadOnly: false })[0].status, 'done');
+  const sends = f.calls.filter(c => ['mail-reply', 'mail-send', 'mail-ack'].includes(c.kind)).length;
+  if (fault === 'lock') fs.unlinkSync(lock); else failedWrite = false;
+  await pollOnce(f.deps);
+  assert.equal(f.read(original.id).status, 'done'); assert.equal(fs.existsSync(pending), false);
+  assert.equal(f.calls.filter(c => ['mail-reply', 'mail-send', 'mail-ack'].includes(c.kind)).length, sends);
+  assert.deepEqual(f.read(original.id).pendingServer || [], []);
+});
+test('F2 transient command lock contention succeeds within the retry budget', async t => {
+  const f = fixture(t); f.save(mail()); const lock = path.join(f.inbox, `${mail().id}.json.lock`); fs.writeFileSync(lock, 'owner');
+  const delays = []; t.mock.method(Atomics, 'wait', (...args) => { delays.push(args[3]); fs.unlinkSync(lock); return 'timed-out'; });
+  assert.equal(await main(['--ack', mail().id], f.deps), 0);
+  assert.deepEqual(delays, [COMMAND_LOCK_DELAY_MS]); assert.equal(f.calls.length, 1);
+});
+test('F3 arrival notifications select only post-migration delivered and seen mail', async t => {
+  const f = fixture(t), notified = [];
+  const marker = path.join(f.dir, '.fleet-mail-v2-migrated'); fs.writeFileSync(marker, ''); fs.utimesSync(marker, new Date(now), new Date(now));
+  for (const status of ['delivered', 'seen', ...TERMINAL_STATUSES]) f.save(mail({ id: `mail-${status}`, status, priority: 'urgent' }));
+  f.save(mail({ id: 'mail-legacy', priority: 'urgent', receivedAt: iso(-1) }));
+  f.save(mail({ id: 'mail-no-date', priority: 'urgent', receivedAt: undefined }));
+  await notifyPendingArrivals({ ...f.deps, notifyArrival: async m => { notified.push(m.id); return true; } });
+  assert.deepEqual(notified.sort(), ['mail-delivered', 'mail-seen']);
+  assert.equal(fs.statSync(marker).mtimeMs, now);
+});
+test('F3 first poll creates migration marker before receiving new arrivals', async t => {
+  const f = fixture(t), notified = [];
+  f.save(mail({ id: 'mail-old', priority: 'urgent', receivedAt: iso(-1) }));
+  f.deps.request = async () => ({ ok: true, messages: [mail({ id: 'mail-new', priority: 'urgent' })] });
+  await pollOnce({ ...f.deps, notifyArrival: async m => { notified.push(m.id); return true; } });
+  assert.deepEqual(notified, ['mail-new']); assert.equal(fs.statSync(path.join(f.dir, '.fleet-mail-v2-migrated')).mtimeMs, now);
+});
+test('F3 busy arrival reservation defers notification and final write contention cannot duplicate it', async t => {
+  const f = fixture(t); f.save(mail({ priority: 'urgent' }));
+  const lock = path.join(f.inbox, `${mail().id}.json.lock`); fs.writeFileSync(lock, 'owner');
+  let notifications = 0, reserved;
+  const deps = { ...f.deps, notifyArrival: async m => {
+    notifications++; reserved = f.read(m.id).arrivalNotificationReservedAt;
+    fs.writeFileSync(lock, 'other owner'); return true;
+  } };
+  await notifyPendingArrivals(deps); assert.equal(notifications, 0);
+  fs.unlinkSync(lock);
+  await notifyPendingArrivals(deps); assert.equal(notifications, 1); assert.ok(reserved);
+  await notifyPendingArrivals(deps); assert.equal(notifications, 1);
+  fs.unlinkSync(lock); await pollOnce(deps);
+  assert.equal(notifications, 1); assert.equal(f.read(mail().id).arrivalNotifiedAt, iso(0));
+});
+test('F3 concurrent notification passes share one durable reservation', async t => {
+  const f = fixture(t); f.save(mail({ priority: 'urgent' })); let notifications = 0;
+  const deps = { ...f.deps, notifyArrival: async () => { notifications++; await notifyPendingArrivals(deps); return true; } };
+  await notifyPendingArrivals(deps); assert.equal(notifications, 1); assert.ok(f.read(mail().id).arrivalNotifiedAt);
+});
+
+test('F2 answer payload lock retries then exits 6 without sending or acknowledging', async t => {
+  const f = fixture(t), q = questionFixture(f, { relayedAt: iso(0) });
+  const original = mail({ why: '[判断依頼]', meta: { relay: q } }); f.save(original);
+  const answerDir = path.join(f.dir, 'fleet-answers'); fs.mkdirSync(answerDir);
+  const lock = path.join(answerDir, `${original.id}.json.lock`); fs.writeFileSync(lock, 'owner');
+  const request = f.deps.request;
+  f.deps.request = async (kind, payload) => { const result = await request(kind, payload); return kind === 'mail-get' ? { ok: true, mail: original } : result; };
+  const attempts = []; const open = fs.openSync;
+  t.mock.method(fs, 'openSync', (...args) => { if (args[0] === lock && args[1] === 'wx') attempts.push(args); return open(...args); });
+  assert.equal(await main(['--answer', original.id, '--body-file', f.body], f.deps), LOCK_BUSY_EXIT);
+  assert.equal(attempts.length, COMMAND_LOCK_RETRIES + 1); assert.equal(f.errors.length, 1);
+  assert.deepEqual(f.calls.map(c => c.kind), ['mail-get']); assert.equal(f.read(original.id).status, 'delivered');
+});
+test('F2 all-seen contention sends no partial batch and pendingLocal remains durable across a busy poll', async t => {
+  const f = fixture(t); f.save(mail({ seenAt: iso(0) })); f.save(mail({ id: 'mail-other', seenAt: iso(0) }));
+  const lock = path.join(f.inbox, 'mail-other.json.lock'); fs.writeFileSync(lock, 'owner');
+  t.mock.method(Atomics, 'wait', () => 'timed-out');
+  assert.equal(await main(['--ack', '--all-seen'], f.deps), LOCK_BUSY_EXIT); assert.equal(f.calls.length, 0);
+  fs.unlinkSync(lock);
+  const request = f.deps.request;
+  f.deps.request = async (kind, payload) => { const response = await request(kind, payload); if (kind === 'mail-ack') fs.writeFileSync(lock, 'owner'); return response; };
+  assert.equal(await main(['--ack', 'mail-other'], f.deps), 0);
+  await pollOnce(f.deps);
+  assert.equal(f.calls.filter(c => c.kind === 'mail-ack').length, 1);
+  assert.equal(fs.existsSync(path.join(f.inbox, '.pending', 'mail-other.json')), true);
+  fs.unlinkSync(lock); await pollOnce(f.deps);
+  assert.equal(fs.existsSync(path.join(f.inbox, '.pending', 'mail-other.json')), false);
+  assert.equal(f.calls.filter(c => c.kind === 'mail-ack').length, 1);
+});
+
+test('F2 ack completion journal preserves an already terminal broadcast state', async t => {
+  const f = fixture(t);
+  for (const status of TERMINAL_STATUSES) {
+    const id = `mail-terminal-${status}`; f.save(mail({ id, to: 'all', status }));
+    f.deps.request = async () => ({ ok: true, mail: { to: 'all', status: 'new' } });
+    assert.equal(await main(['--ack', id], f.deps), 0);
+    assert.equal(f.read(id).status, status); assert.deepEqual(f.read(id).pendingServer, []);
+  }
 });

@@ -17,7 +17,7 @@ function harness() {
   const properties = { SHEET_ID: 'sheet-id', FLEET_TOKEN: 'sheet-id' };
   const context = {
     PropertiesService: { getScriptProperties: () => ({ getProperty: key => properties[key] || null, setProperty: (key, value) => { properties[key] = value; } }) },
-    SpreadsheetApp: { openById: () => ({ getSheetByName: () => rows.length ? sheet : null, insertSheet: () => sheet }),
+    SpreadsheetApp: { openById: () => ({ getSheetByName: name => name === 'fleet-beacon' ? { getLastRow: () => 2, getLastColumn: () => 1, getRange: row => ({ getValues: () => [[row === 1 ? 'label' : 'kim-PC']] }) } : name === 'fleet-mail' && rows.length ? sheet : null, insertSheet: () => sheet }),
       newRichTextValue: () => ({ setText(text) { return { build: () => ({ text }) }; } }), flush: () => { flushes++; } },
     LockService: { getScriptLock: () => ({ tryLock: () => { if (!available) return false; assert.equal(locked, false); locked = true; return true; }, releaseLock: () => { locked = false; } }) },
     Utilities: { DigestAlgorithm: { SHA_256: 'sha256' }, computeDigest: (algorithm, value) => [...createHash(algorithm).update(value).digest()] }

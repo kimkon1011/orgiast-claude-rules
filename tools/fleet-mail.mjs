@@ -230,7 +230,8 @@ export function readInbox(home, { unreadOnly = true } = {}) {
   return files.filter(f => /^mail-[A-Za-z0-9-]+\.json$/.test(f)).flatMap(f => {
     try {
       const raw = readJson(path.join(dir, f));
-      const mail = raw && normalizeInbox(raw);
+      const pending = readJson(path.join(dir, '.pending', f));
+      const mail = raw && normalizeInbox(mergeLocalCompletion(raw, pending));
       return mail && (!unreadOnly || !terminal(mail)) ? [mail] : [];
     } catch { return []; } // One damaged file must not hide other unread messages.
   }).sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
@@ -266,6 +267,10 @@ function normalizeInbox(mail) {
 }
 export const INBOX_LOCK_RETRIES = 10;
 export const INBOX_LOCK_DELAY_MS = 50;
+export const INBOX_LOCK_STALE_MS = 2 * 60 * 1000;
+export const COMMAND_LOCK_RETRIES = 5;
+export const COMMAND_LOCK_DELAY_MS = 200;
+export const LOCK_BUSY_EXIT = 6;
 export const ACK_BATCH_LIMIT = 100;
 export const CAPABILITY_BACKOFF_MS = 3600000;
 export const SERVER_MAX_ATTEMPTS = 5;
@@ -273,16 +278,24 @@ export const INTERRUPTED_PROMPT_MS = 2 * 3600000;
 export const INTERRUPTED_PROMPT_BODY = '実行が中断・タイムアウト（結果ファイル未生成）';
 // The callback runs synchronously while this file's lock is held. Never hold it over I/O to GAS.
 // null means missing/busy/no change; callers must skip dependent work in that case.
-export function updateInbox(id, fn, { home = process.env.ORGIAST_HOME || os.homedir() } = {}) {
+export function updateInbox(id, fn, { home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now, retries = INBOX_LOCK_RETRIES, delayMs = INBOX_LOCK_DELAY_MS } = {}) {
   const file = inboxPath(home, id), lock = `${file}.lock`;
   fs.mkdirSync(path.dirname(file), { recursive: true });
   let fd;
-  for (let attempt = 0; attempt <= INBOX_LOCK_RETRIES; attempt++) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
     try { fd = fs.openSync(lock, 'wx', 0o600); break; }
     catch (error) {
       if (error.code !== 'EEXIST') throw error;
-      if (attempt === INBOX_LOCK_RETRIES) return null;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, INBOX_LOCK_DELAY_MS);
+      const reclaim = `${lock}.reclaim`;
+      let reclaimed = false, ownsReclaim = false;
+      try {
+        fs.mkdirSync(reclaim); ownsReclaim = true;
+        if (now() - fs.statSync(lock).mtimeMs > INBOX_LOCK_STALE_MS) { fs.unlinkSync(lock); reclaimed = true; }
+      } catch (error) { if (!['EEXIST', 'ENOENT'].includes(error.code)) throw error; }
+      finally { if (ownsReclaim) fs.rmdirSync(reclaim); }
+      if (reclaimed) { attempt--; continue; }
+      if (attempt === retries) return null;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
     }
   }
   try {
@@ -302,6 +315,39 @@ export function updateInbox(id, fn, { home = process.env.ORGIAST_HOME || os.home
     writeJson(file, next);
     return next;
   } finally { fs.closeSync(fd); fs.unlinkSync(lock); }
+}
+function commandInbox(id, fn, options) {
+  let visited = false;
+  const result = updateInbox(id, current => { visited = true; return fn(current); }, {
+    ...options, retries: COMMAND_LOCK_RETRIES, delayMs: COMMAND_LOCK_DELAY_MS,
+  });
+  if (!visited) throw Object.assign(new Error('fleet-mail: ロック競合=1'), { code: 'INBOX_BUSY' });
+  return result;
+}
+function pendingLocalPath(home, id) { return path.join(home, '.claude', 'fleet-inbox', '.pending', `${validId(id)}.json`); }
+function mergeLocalCompletion(mail, record) {
+  if (!record?.pendingLocal) return mail;
+  return { ...mail, ...record.pendingLocal,
+    pendingServer: (mail.pendingServer || []).filter(action => !record.completedActions?.includes(action)) };
+}
+function applyLocalCompletion(home, id) {
+  const file = pendingLocalPath(home, id);
+  return updateInbox(id, current => {
+    const record = readJson(file);
+    if (!record?.pendingLocal) return null;
+    const next = mergeLocalCompletion(current || { id }, record);
+    // Keep the sidecar until the inbox write is durable, under the same lock.
+    writeJson(inboxPath(home, id), next);
+    fs.unlinkSync(file);
+    return null;
+  }, { home });
+}
+function saveLocalCompletion(home, id, pendingLocal, completedActions = [], stderr = console.error) {
+  const prior = readJson(pendingLocalPath(home, id));
+  writeJson(pendingLocalPath(home, id), { id, pendingLocal: { ...prior?.pendingLocal, ...pendingLocal },
+    completedActions: [...new Set([...(prior?.completedActions || []), ...completedActions])] });
+  try { applyLocalCompletion(home, id); }
+  catch { stderr('fleet-mail: ローカル保存再試行待ち=1'); }
 }
 // Hook writes local intent synchronously; the detached CLI/poller owns transport.
 export function presentMail({ home, id, sessionId, now = Date.now, autoAck = true }) {
@@ -382,14 +428,12 @@ export function capabilityClient(request, { home, now = Date.now, stderr = conso
     }
   };
 }
-function finishSync(home, id, action, response, now) {
-  return updateInbox(id, latest => {
-    if (!latest) return null;
-    const server = response?.mail;
-    const authoritative = server && terminal(server) && server.to !== 'all' ? Object.fromEntries(['status', 'seenAt', 'seenBy', 'ackAt', 'failedAt', 'failReason', 'resultAt', 'resultBody'].filter(key => server[key] !== undefined).map(key => [key, typeof server[key] === 'string' ? redactSecrets(server[key]) : server[key]])) : {};
-    return { ...latest, ...authoritative, pendingServer: (latest.pendingServer || []).filter(a => a !== action),
-      ...(['ack', 'fail'].includes(action) ? { serverSyncedAt: new Date(now()).toISOString() } : {}) };
-  }, { home });
+function finishSync(home, id, action, response, now, localStatus) {
+  const server = response?.mail;
+  const authoritative = server && terminal(server) && server.to !== 'all' ? Object.fromEntries(['status', 'seenAt', 'seenBy', 'ackAt', 'failedAt', 'failReason', 'resultAt', 'resultBody'].filter(key => server[key] !== undefined).map(key => [key, typeof server[key] === 'string' ? redactSecrets(server[key]) : server[key]])) : {};
+  saveLocalCompletion(home, id, { ...(action === 'ack' ? { status: localStatus } : {}), ...authoritative,
+    ...(['ack', 'fail'].includes(action) ? { serverSyncedAt: new Date(now()).toISOString() } : {}) }, [action]);
+  return true;
 }
 function failSync(home, id, action, error, stderr) {
   if (error.code === 'CAPABILITY_BACKOFF') return;
@@ -406,9 +450,9 @@ function failSync(home, id, action, error, stderr) {
   else if (!unsupported(error)) stderr('fleet-mail: 同期再送待ち=1');
 }
 // Local intent is durable BEFORE transport. A failed action has a bounded retry queue.
-export async function syncMailState({ home, id, action, request, now = Date.now, seenBy, reason, from, stderr = console.error }) {
+export async function syncMailState({ home, id, action, request, now = Date.now, seenBy, reason, from, stderr = console.error, command = false }) {
   const at = new Date(now()).toISOString();
-  const mail = updateInbox(id, current => {
+  const mail = (command ? commandInbox : updateInbox)(id, current => {
     let mail = current || { id, status: 'delivered' };
     if (mail.abandonedServer?.includes(action)) return null;
     if (action === 'seen' && !terminal(mail)) mail = { ...mail, status: 'seen', seenAt: mail.seenAt || at, seenBy: mail.seenBy || seenBy };
@@ -418,12 +462,18 @@ export async function syncMailState({ home, id, action, request, now = Date.now,
   }, { home });
   if (!mail) return false;
   const client = capabilityClient(request, { home, now, stderr });
+  let response;
   try {
-    const response = await client(`mail-${action}`, { id, from: from || resolveFleetLabel(home, machineIdentity()), ...(action === 'seen' ? { seenBy: mail.seenBy || seenBy } : {}), ...(action === 'fail' ? { reason: mail.failReason } : {}) });
-    return !!finishSync(home, id, action, response, now);
+    response = await client(`mail-${action}`, { id, from: from || resolveFleetLabel(home, machineIdentity()), ...(action === 'seen' ? { seenBy: mail.seenBy || seenBy } : {}), ...(action === 'fail' ? { reason: mail.failReason } : {}) });
   } catch (error) { failSync(home, id, action, error, stderr); return false; }
+  return finishSync(home, id, action, response, now, mail.status);
 }
 export async function syncPending({ home, request, now = Date.now, from, stderr = console.error }) {
+  const pendingDir = path.join(home, '.claude', 'fleet-inbox', '.pending');
+  if (fs.existsSync(pendingDir)) for (const name of fs.readdirSync(pendingDir).filter(n => /^mail-[A-Za-z0-9-]+\.json$/.test(n))) {
+    try { applyLocalCompletion(home, name.slice(0, -5)); }
+    catch { stderr('fleet-mail: ローカル保存再試行待ち=1'); }
+  }
   const mails = readInbox(home, { unreadOnly: false });
   for (const mail of mails) for (const action of mail.pendingServer || []) {
     if (!['seen', 'fail'].includes(action)) continue;
@@ -443,7 +493,7 @@ export async function syncPending({ home, request, now = Date.now, from, stderr 
     for (const mail of ready) {
       try {
         const result = response?.results.find(r => r.id === mail.id);
-        if (result?.ok === true) finishSync(home, mail.id, 'ack', result, now);
+        if (result?.ok === true) finishSync(home, mail.id, 'ack', result, now, mail.status);
         else failSync(home, mail.id, 'ack', failure || new Error('batch item rejected'), stderr);
       } catch { stderr('fleet-mail: 保存再試行待ち=1'); }
     }
@@ -582,31 +632,53 @@ export async function waitForReply(id, seconds, { request, now = Date.now, sleep
   }
   return { exitCode: 2, text: `${waitFor === 'seen' ? '未読' : '未返信'}（id=${id}）` };
 }
+function arrivalMigrationTime(home, now) {
+  const file = path.join(home, '.claude', '.fleet-mail-v2-migrated');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  try {
+    const fd = fs.openSync(file, 'wx', 0o600);
+    try { const at = new Date(now()); fs.futimesSync(fd, at, at); }
+    finally { fs.closeSync(fd); }
+  } catch (error) { if (error.code !== 'EEXIST') throw error; }
+  return fs.statSync(file).mtimeMs;
+}
 export async function notifyPendingArrivals(deps) {
   const { notifyArrival, ARRIVAL_TIMEOUT_MS, ARRIVAL_BUDGET_MS } = await import('./lib/fleet-mail-discord.mjs');
   const { home, label, now = Date.now, stderr = console.error } = deps;
+  const migratedAt = arrivalMigrationTime(home, now);
+  const eligible = mail => mail && ['delivered', 'seen'].includes(mail.status) && !mail.arrivalNotifiedAt &&
+    !mail.arrivalNotificationReservedAt && Date.parse(mail.receivedAt) >= migratedAt && mailCategory(mail) <= 1;
   const clock = deps.notificationNow ?? (() => performance.now());
   const deadline = clock() + ARRIVAL_BUDGET_MS;
   for (const mail of readInbox(home, { unreadOnly: false })) {
-    if (mail.arrivalNotifiedAt || ['failed', 'expired'].includes(mail.status) || mailCategory(mail) > 1) continue;
-    const remaining = deadline - clock();
-    if (remaining <= 0) break;
+    if (!eligible(mail)) continue;
+    if (deadline - clock() <= 0) break;
     const controller = new AbortController();
-    let timer;
+    let timer, reserved, sent = false;
     try {
-      // A race bounds injected/non-cooperative transports too; abort stops real fetches.
+      reserved = updateInbox(mail.id, current => eligible(current) ? {
+        ...current, arrivalNotificationReservedAt: new Date(now()).toISOString(),
+      } : null, { home });
+      if (!reserved) continue;
+      const remaining = deadline - clock();
+      if (remaining <= 0) continue;
+      // Reserve durably before notifying; a competing poll cannot send the same arrival.
       const timeout = new Promise((_, reject) => {
         timer = setTimeout(() => { controller.abort(); reject(new Error('arrival timeout')); }, Math.min(ARRIVAL_TIMEOUT_MS, remaining));
       });
-      const sent = await Promise.race([
-        Promise.resolve().then(() => (deps.notifyArrival ?? notifyArrival)(mail, {
-          home, label, category: mailCategory(mail), fetchImpl: deps.fetch, stderr, signal: controller.signal,
+      sent = await Promise.race([
+        Promise.resolve().then(() => (deps.notifyArrival ?? notifyArrival)(reserved, {
+          home, label, category: mailCategory(reserved), fetchImpl: deps.fetch, stderr, signal: controller.signal,
         })),
         timeout,
       ]);
-      if (sent) updateInbox(mail.id, current => current && ({ ...current, arrivalNotifiedAt: new Date(now()).toISOString() }), { home });
     } catch { stderr('fleet-mail: 到着通知失敗=1'); }
-    finally { clearTimeout(timer); }
+    finally {
+      clearTimeout(timer);
+      if (reserved) saveLocalCompletion(home, mail.id, {
+        arrivalNotificationReservedAt: null, ...(sent ? { arrivalNotifiedAt: new Date(now()).toISOString() } : {}),
+      }, [], stderr);
+    }
   }
 }
 // 受信1回分。--poll のみが呼ぶ。提示 hook はこの処理を別プロセスで起動する。
@@ -659,6 +731,7 @@ export async function pollOnce(deps = {}) {
   };
   try {
     if (!dryRun) {
+      arrivalMigrationTime(home, now);
       try { await relayQuestions({ home, hub: config.FLEET_HUB, label, request, now, stderr: err }); }
       catch { err('fleet-mail: 質問転送再試行待ち=1'); }
       migrateProcessed(home);
@@ -858,6 +931,14 @@ export async function pollOnce(deps = {}) {
   } finally { release(); }
 }
 export async function main(argv = process.argv.slice(2), deps = {}) {
+  try { return await runMain(argv, deps); }
+  catch (error) {
+    if (error.code !== 'INBOX_BUSY') throw error;
+    (deps.stderr ?? console.error)('fleet-mail: ロック競合=1');
+    return LOCK_BUSY_EXIT;
+  }
+}
+async function runMain(argv, deps) {
   const options = parseArgs(argv);
   const home = deps.home ?? process.env.ORGIAST_HOME ?? os.homedir();
   const dir = path.join(home, '.claude');
@@ -899,9 +980,10 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   if (options['--ack']) {
     const mails = options['--all-seen'] ? readInbox(home).filter(m => !hasDecisionRequest(m) && (m.presentedAt || m.seenAt || m.status === 'seen')) : [readJson(inboxFile(options['--ack']))];
     if (mails.some(m => !m)) throw new Error('inbox に該当メッセージがありません');
+    for (const mail of mails) commandInbox(mail.id, current => current, { home });
     let done = 0;
     for (const mail of mails) {
-      await state(mail.id, 'ack');
+      await state(mail.id, 'ack', { command: true });
       if (readJson(inboxFile(mail.id))?.status === 'done') done++;
     }
     out(`完了=${done}`); return 0;
@@ -930,6 +1012,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   if (options['--answer']) {
     if (process.env.CLAUDE_HEADLESS === '1' || process.env.ORGIAST_HEADLESS_JOB) { err('fleet-mail: 判断代行拒否=1'); return 2; }
     const id = options['--answer'];
+    commandInbox(id, current => current, { home });
     const original = checked(await request('mail-get', { id })).mail;
     let meta = original?.meta;
     if (typeof meta === 'string') { try { meta = JSON.parse(meta); } catch { meta = null; } }
@@ -941,12 +1024,17 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     validSessionId(relay.sessionId);
     if (typeof relay.cwd !== 'string' || !relay.cwd.trim() || /[\r\n]|-->/.test(relay.cwd) || !original.from) throw new Error('invalid relay metadata');
     if (terminal(original)) {
-      updateInbox(id, current => current && ({ ...current, status: original.status, ackAt: original.ackAt || current.ackAt }), { home });
+      saveLocalCompletion(home, id, { status: original.status, ...(original.ackAt ? { ackAt: original.ackAt } : {}) }, ['ack'], err);
       out('回答対象終了=1'); return original.status === 'done' ? 0 : 2;
     }
     const answerFile = path.join(dir, 'fleet-answers', `${id}.json`);
-    const release = acquireLock(`${answerFile}.lock`, { now });
-    if (!release) { err('fleet-mail: 回答競合スキップ=1'); return 2; }
+    let release;
+    for (let attempt = 0; attempt <= COMMAND_LOCK_RETRIES; attempt++) {
+      release = acquireLock(`${answerFile}.lock`, { now });
+      if (release || attempt === COMMAND_LOCK_RETRIES) break;
+      await sleep(COMMAND_LOCK_DELAY_MS);
+    }
+    if (!release) throw Object.assign(new Error('lock busy'), { code: 'INBOX_BUSY' });
     try {
       let payload = readJson(answerFile);
       if (!payload) {
@@ -962,7 +1050,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       if (['failed', 'expired'].includes(sent.mail?.status)) throw new Error('回答の送信期限切れまたは実行失敗');
       log('sent', { action: 'sent', id: payload.id, to: payload.to, exec: 'claude' });
       checked(await request('mail-ack', { id, from: label }));
-      updateInbox(id, current => current && ({ ...current, status: 'done', ackAt: new Date(now()).toISOString() }), { home });
+      saveLocalCompletion(home, id, { status: 'done', ackAt: new Date(now()).toISOString() }, ['ack'], err);
       out(`回答送信済み: ${payload.id}`);
       return 0;
     } finally { release(); }
@@ -1052,23 +1140,16 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
         return 3;
       }
     }
-    let visited = false;
-    const parent = updateInbox(id, current => { visited = true; return current; }, { home });
-    if (!visited) { err('fleet-mail: ロック競合スキップ=1'); return 0; }
+    const parent = commandInbox(id, current => current, { home });
     const response = checked(await request('mail-reply', { id, from: label, resultBody: body, auto: false, hop: parent ? nextHop(parent) : 1, priority: 'normal' }));
     if (['failed', 'expired'].includes(response?.mail?.status)) {
       if (parent) updateInbox(id, current => current && ({ ...current, status: response.mail.status }), { home });
       err(`fleet-mail: 返信なし（${response.mail.status}）`); return 1;
     }
     log('sent', { action: 'reply', id, ...(options['--force'] ? { forced: true } : {}) });
-    // Merge with the latest hook/poller changes under the file lock.
-    try {
-      updateInbox(id, mail => {
-        if (!mail) return null;
-        const nowISO = new Date(now()).toISOString();
-        return { ...mail, status: 'done', resultAt: response?.mail?.resultAt || nowISO, resultBody: redactSecrets(response?.reply?.body ?? response?.mail?.resultBody ?? body), readAt: mail.readAt ?? nowISO };
-      }, { home });
-    } catch { err('fleet-mail: 返信記録再試行待ち=1'); }
+    const nowISO = new Date(now()).toISOString();
+    saveLocalCompletion(home, id, { status: 'done', resultAt: response?.mail?.resultAt || nowISO,
+      resultBody: redactSecrets(response?.reply?.body ?? response?.mail?.resultBody ?? body), readAt: parent?.readAt ?? nowISO }, [], err);
     out(`返信済み: ${id}`);
     out(`返信は相手の受信タスクが拾うまで届きません。届いたかは --sent-status ${id} で確認`);
     return 0;

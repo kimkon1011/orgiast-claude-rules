@@ -5,14 +5,14 @@ import { createHash } from 'node:crypto';
 import { TERMINAL_STATUSES } from './fleet-mail.mjs';
 const source = fs.readFileSync(new URL('../gas/fleet-status-sheet/Mail.gs', import.meta.url), 'utf8');
 const now = Date.parse('2026-10-14T00:00:00Z');
-function harness() {
+function harness({ beaconRows = [['label'], ['receiver'], ['cr-PC']], statusRows = [['label', 'hostname'], ['receiver', 'host']], statusHeaders, rosterFault = false } = {}) {
   const rows = [], alertRows = [], properties = { SHEET_ID: 'fixture' };
   let time = now;
   const triggers = [], webhooks = [], warnings = [], faults = {};
   const lock = { held: false, releases: 0, hasLock() { return this.held; }, tryLock() { this.held = true; return true; }, releaseLock() { this.held = false; this.releases++; } };
   const makeSheet = rows => ({
     maxColumns: 26, getMaxColumns() { return this.maxColumns; }, insertColumnsAfter(_after, count) { this.maxColumns += count; },
-    getLastRow: () => rows.length, setFrozenRows() {}, deleteRow: n => rows.splice(n - 1, 1),
+    getLastRow: () => rows.length, getLastColumn: () => Math.max(0, ...rows.map(row => row.length)), setFrozenRows() {}, deleteRow: n => rows.splice(n - 1, 1),
     getRange(row, col, count, width) { if (col + width - 1 > this.maxColumns) throw new Error('range exceeds grid'); return {
       getValues: () => {
         if (rows === alertRows && count === 1 && row === faults.readBackRow) return [Array(width).fill('mismatch')];
@@ -25,7 +25,8 @@ function harness() {
   });
   const sheet = makeSheet(rows), alertsSheet = makeSheet(alertRows);
   const deps = {
-    SpreadsheetApp: { openById: () => ({ getSheetByName: name => name === 'fleet-mail' ? sheet : alertsSheet }), flush() {}, newRichTextValue: () => ({ setText: text => ({ build: () => ({ text }) }) }) },
+    ...(statusHeaders ? { FLEET_HEADERS_: statusHeaders, _fleetReadSheet_: () => { if (rosterFault) throw new Error('fixture roster failure'); return makeSheet(statusRows); } } : {}),
+    SpreadsheetApp: { openById: () => ({ getSheetByName: name => name === 'fleet-mail' ? sheet : name === 'fleet-mail-alerts' ? alertsSheet : name === 'fleet-beacon' && beaconRows ? makeSheet(beaconRows) : name === 'fleet-status' && statusRows ? makeSheet(statusRows) : null }), flush() {}, newRichTextValue: () => ({ setText: text => ({ build: () => ({ text }) }) }) },
     PropertiesService: { getScriptProperties: () => ({ getProperty: key => properties[key], setProperty: (key, value) => { properties[key] = value; } }) },
     LockService: { getScriptLock: () => lock },
     console: { warn: text => warnings.push(text) },
@@ -38,7 +39,7 @@ function harness() {
     }
   };
   const names = [...source.matchAll(/^function (\w+)\(/gm)].map(m => m[1]);
-  const api = new Function(...Object.keys(deps), `${source}\nreturn { ${names.join(', ')}, headers: FLEET_MAIL_HEADERS_, alertHeaders: FLEET_MAIL_ALERT_HEADERS_, renotifyMs: FLEET_MAIL_RENOTIFY_MS_, sla: FLEET_MAIL_SLA_, ackLimit: FLEET_MAIL_ACK_LIMIT_, terminalStatuses: FLEET_MAIL_TERMINAL_STATUSES_ };`)(...Object.values(deps));
+  const api = new Function(...Object.keys(deps), `${source}\nreturn { ${names.join(', ')}, headers: FLEET_MAIL_HEADERS_, alertHeaders: FLEET_MAIL_ALERT_HEADERS_, renotifyMs: FLEET_MAIL_RENOTIFY_MS_, sla: FLEET_MAIL_SLA_, ackLimit: FLEET_MAIL_ACK_LIMIT_, terminalStatuses: FLEET_MAIL_TERMINAL_STATUSES_, pollLimit: FLEET_MAIL_POLL_LIMIT_ };`)(...Object.values(deps));
   return { ...api, rows, alertRows, properties, triggers, webhooks, faults, warnings, lock, advance: ms => { time += ms; } };
 }
 const send = (h, overrides = {}) => h.sendFleetMail({ id: 'mail-original', from: 'sender', to: 'receiver', messageKind: 'note', why: 'test', body: 'body', ...overrides });
@@ -225,7 +226,7 @@ test('C2 batch ack accepts at most the server limit and returns per-id recipient
 });
 test('C4 broadcasts do not suppress legacy fallback and hostname matching ignores case', () => {
   const h = harness(); send(h, { to: 'all' }); send(h, { id: 'mail-partial', to: 'rece' });
-  assert.deepEqual(poll(h).messages.map(m => m.id), ['mail-original', 'mail-partial']);
+  assert.deepEqual(poll(h).messages.map(m => m.id), ['mail-partial', 'mail-original']);
   send(h, { id: 'mail-host-case', to: 'HOST' });
   assert.ok(poll(h).messages.some(m => m.id === 'mail-host-case'));
 });
@@ -307,4 +308,69 @@ test('E GAS appends metadata and execution columns and preserves them through se
     assert.deepEqual(JSON.parse(m.meta), meta); assert.equal(m.exec, 'claude'); assert.equal(m.execCwd, meta.relay.cwd); assert.equal(m.resumeSessionId, 'session');
   }
   assert.ok(h.headers.indexOf('meta') > h.headers.indexOf('receipts'));
+});
+
+
+test('F4 known labels and hostnames never fall through to another PC partial match', () => {
+  for (const roster of [
+    { beaconRows: [['label'], ['cr-PC']], statusRows: null },
+    { beaconRows: null, statusRows: [['label', 'hostname'], ['cr-PC', 'cr-host']] },
+  ]) {
+    const h = harness(roster); send(h, { to: 'cr-PC' });
+    assert.deepEqual(poll(h, { to: '作業用011-cr-PC', hostname: 'another-host' }).messages, []);
+    assert.equal(get(h).status, 'new');
+    assert.equal(poll(h, { to: 'cr-PC', hostname: 'cr-host' }).messages.length, 1);
+  }
+  const h = harness(); send(h, { to: 'host' });
+  assert.deepEqual(poll(h, { to: 'other', hostname: 'prefix-HOST' }).messages, []);
+  assert.equal(poll(h, { hostname: 'HOST' }).messages.length, 1);
+});
+test('F4 unknown legacy 011 recipient delivers by partial match only with an available roster', () => {
+  const h = harness(); send(h, { to: '011' });
+  assert.equal(poll(h, { to: '作業用011-cr-PC', hostname: 'other' }).messages.length, 1);
+  for (const roster of [
+    { beaconRows: null, statusRows: null },
+    { beaconRows: [['unexpected']], statusRows: null },
+  ]) {
+    const closed = harness(roster); send(closed, { to: '011' });
+    assert.deepEqual(poll(closed, { to: '作業用011-cr-PC', hostname: 'other' }).messages, []);
+    assert.equal(get(closed).status, 'new');
+    assert.equal(poll(closed, { to: '011', hostname: 'other' }).messages.length, 1);
+  }
+});
+test('F5 direct recipients precede old broadcasts within the poll limit and receipt replay', () => {
+  const h = harness();
+  for (let i = 0; i < h.pollLimit; i++) send(h, { id: `mail-broadcast-${i}`, to: 'all' });
+  send(h, { id: 'mail-direct' }); send(h, { id: 'mail-host-direct', to: 'host' });
+  const batch = poll(h, { requestId: 'priority-batch' }).messages;
+  assert.equal(batch.length, h.pollLimit);
+  assert.deepEqual(batch.slice(0, 2).map(m => m.id), ['mail-direct', 'mail-host-direct']);
+  assert.equal(batch.filter(m => m.to === 'all').length, h.pollLimit - 2);
+  assert.deepEqual(poll(h, { requestId: 'priority-batch' }).messages.map(m => m.id), batch.map(m => m.id));
+});
+test('F6 legacy empty deliveredBy accepts and persists the first claimant across all transitions', () => {
+  for (const action of ['seenFleetMail', 'ackFleetMail', 'failFleetMail']) for (const status of ['delivered', 'seen', ...TERMINAL_STATUSES]) {
+    const h = harness(); send(h);
+    h.rows[1][h.headers.indexOf('status')] = status;
+    assert.equal(get(h).deliveredBy, '');
+    assert.equal(h[action]({ id: 'mail-original', from: 'legacy-receiver', reason: 'fixture' }).ok, true);
+    assert.equal(get(h).deliveredBy, 'legacy-receiver');
+    if (TERMINAL_STATUSES.includes(status)) assert.equal(get(h).status, status);
+    const before = get(h);
+    assert.equal(h[action]({ id: 'mail-original', from: 'other' }).reason, 'not-recipient');
+    assert.deepEqual(get(h), before);
+  }
+});
+
+test('F4 production status headers protect both reporter labels and hostnames and lookup failure closes fallback', () => {
+  const statusSource = fs.readFileSync(new URL('../gas/fleet-status-sheet/UpsertLogic.gs', import.meta.url), 'utf8');
+  const headers = new Function(`${statusSource}\nreturn FLEET_HEADERS_;`)();
+  const roster = { beaconRows: null, statusHeaders: headers,
+    statusRows: [[headers.hostname, headers.realHostname], ['cr-PC', 'cr-host']] };
+  for (const to of ['cr-PC', 'cr-host']) {
+    const h = harness(roster); send(h, { to });
+    assert.deepEqual(poll(h, { to: `other-${to}`, hostname: `host-${to}` }).messages, []);
+  }
+  const broken = harness({ ...roster, rosterFault: true }); send(broken, { to: '011' });
+  assert.deepEqual(poll(broken, { to: '作業用011-cr-PC', hostname: 'other' }).messages, []);
 });

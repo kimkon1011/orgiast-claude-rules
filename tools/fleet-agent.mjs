@@ -174,7 +174,9 @@ export function collectStatus({ home, repo, label, hostname, run = runSync, plat
   return { text: redactSecrets(text), data: { label, hostname, platform, account, codex, git, syncLast, failures, todoCount, promptOptin: accepts.includes('prompt'), codexOptin: accepts.includes('codex'), sharedMemory, checkedAt: new Date().toISOString() } };
 }
 
-export function runPrompt({ claudeExe, body, cwd, timeoutSeconds = 1800, spawnImpl = spawn, readOnly = false }) {
+export async function runPrompt({ claudeExe, body, cwd, timeoutSeconds = 1800, spawnImpl = spawn, readOnly = false, onStart }) {
+  // Fleet mail supplies a durable mail-seen callback; directives have no mail id.
+  if (onStart) await onStart();
   return new Promise((resolve) => {
     const started = Date.now();
     let stdout = '';

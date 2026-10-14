@@ -1,5 +1,5 @@
 // Fleet mail uses the existing authenticated WebApp transport and spreadsheet.
-const FLEET_MAIL_HEADERS_ = ['id', 'from', 'to', 'replyTo', 'kind', 'body', 'why', 'createdAt', 'expiresAt', 'status', 'deliveredAt', 'deliveredBy', 'resultBody', 'resultAt'];
+const FLEET_MAIL_HEADERS_ = ['id', 'from', 'to', 'replyTo', 'kind', 'body', 'why', 'createdAt', 'expiresAt', 'status', 'deliveredAt', 'deliveredBy', 'resultBody', 'resultAt', 'seenAt', 'seenBy', 'ackAt', 'failedAt', 'failReason', 'auto', 'hop', 'priority'];
 
 function fleetMailObject(row) {
   const mail = {};
@@ -7,7 +7,7 @@ function fleetMailObject(row) {
   return mail;
 }
 function fleetMailRow(mail) {
-  return FLEET_MAIL_HEADERS_.map(function(key) { return String(mail[key] || ''); });
+  return FLEET_MAIL_HEADERS_.map(function(key) { return String(mail[key] == null ? '' : mail[key]); });
 }
 function fleetMailRequired(value, name, max) {
   if (typeof value !== 'string' || !value.trim() || value.length > max) throw new Error('invalid_' + name);
@@ -24,16 +24,24 @@ function fleetMailNew(payload, now) {
   if (payload.messageKind !== 'prompt' && payload.messageKind !== 'note') throw new Error('invalid_messageKind');
   return {
     id: fleetMailId(payload.id), from: fleetMailRequired(payload.from, 'from', 128),
-    to: fleetMailRequired(payload.to, 'to', 128), replyTo: '', kind: payload.messageKind,
+    to: fleetMailRequired(payload.to, 'to', 128), replyTo: payload.replyTo ? fleetMailId(payload.replyTo) : '', kind: payload.messageKind,
     body: String(payload.body || '').slice(0, 20000), why: fleetMailRequired(payload.why, 'why', 1000),
-    createdAt: createdAt, expiresAt: expiresAt, status: 'new'
+    createdAt: createdAt, expiresAt: expiresAt, status: 'new',
+    auto: payload.auto === true || payload.auto === 'true', hop: fleetMailHop(payload.hop),
+    priority: payload.priority === 'urgent' || /\[(判断依頼|作業依頼)\]/.test(payload.why) || /^\s*\[(判断依頼|作業依頼)\]/.test(payload.body) ? 'urgent' : 'normal'
   };
 }
-function fleetMailMatches(mail, label, hostname, now) {
+function fleetMailHop(value) {
+  const hop = Number(value || 0);
+  if (!Number.isSafeInteger(hop) || hop < 0) throw new Error('invalid_hop');
+  return hop;
+}
+function fleetMailMatches(mail, label, hostname, now, legacy) {
   // Broadcast replies set done as usual, but must not consume delivery to other PCs.
-  return (mail.status === 'new' || (mail.to === 'all' && mail.status === 'done')) &&
+  return (mail.status === 'new' || (mail.to === 'all' && ['delivered', 'seen', 'done'].indexOf(mail.status) >= 0)) &&
     Date.parse(mail.expiresAt) > now && !!mail.to &&
-    (mail.to === 'all' || String(label || '').indexOf(mail.to) >= 0 || String(hostname || '').indexOf(mail.to) >= 0);
+    (mail.to === 'all' || label === mail.to || hostname === mail.to ||
+      (legacy && (String(label || '').indexOf(mail.to) >= 0 || String(hostname || '').indexOf(mail.to) >= 0)));
 }
 function fleetMailPrunable(mail, now) {
   return ['done', 'expired'].indexOf(mail.status) >= 0 && Date.parse(mail.createdAt) < now - 30 * 86400000;
@@ -45,7 +53,9 @@ function _fleetMailSheet_() {
   const sheet = book.getSheetByName('fleet-mail') || book.insertSheet('fleet-mail');
   if (sheet.getLastRow() === 0) _fleetMailWrite_(sheet, 1, FLEET_MAIL_HEADERS_);
   const headers = sheet.getRange(1, 1, 1, FLEET_MAIL_HEADERS_.length).getValues()[0];
-  if (JSON.stringify(headers) !== JSON.stringify(FLEET_MAIL_HEADERS_)) throw new Error('fleet-mail header mismatch');
+  // Append v2 columns without rewriting historical rows; reject shifted/unknown columns.
+  if (headers.some(function(key, i) { return key && key !== FLEET_MAIL_HEADERS_[i]; })) throw new Error('fleet-mail header mismatch');
+  if (JSON.stringify(headers) !== JSON.stringify(FLEET_MAIL_HEADERS_)) _fleetMailWrite_(sheet, 1, FLEET_MAIL_HEADERS_);
   sheet.setFrozenRows(1);
   return sheet;
 }
@@ -88,14 +98,17 @@ function pollFleetMail(payload) {
       try { receipt = JSON.parse(properties.getProperty(receiptKey) || 'null'); } catch (error) {}
     }
     const replay = receipt && receipt.requestId === payload.requestId;
+    const eligible = rows.filter(function(mail) { return !excluded.has(mail.id); });
+    const exact = eligible.filter(function(mail) { return fleetMailMatches(mail, payload.to, payload.hostname, now, false); });
+    // Rolling upgrade: only fall back to legacy matching if this poll has no exact matches.
     const selected = replay ? rows.filter(function(mail) { return receipt.ids.indexOf(mail.id) >= 0; }) :
-      rows.filter(function(mail) { return !excluded.has(mail.id) && fleetMailMatches(mail, payload.to, payload.hostname, now); }).slice(0, 20);
+      (exact.length ? exact : eligible.filter(function(mail) { return fleetMailMatches(mail, payload.to, payload.hostname, now, true); })).slice(0, 20);
     // Save only IDs (<4KB), before consuming rows. A lost HTTP response can be replayed.
     if (receiptKey && !replay) properties.setProperty(receiptKey, JSON.stringify({ requestId: payload.requestId, ids: selected.map(function(mail) { return mail.id; }) }));
     const messages = [];
     rows.forEach(function(mail, i) {
       if (selected.indexOf(mail) < 0) return;
-      if (!payload.dryRun && mail.to !== 'all') {
+      if (!payload.dryRun && mail.to !== 'all' && mail.status === 'new') {
         mail.status = 'delivered'; mail.deliveredAt = new Date(now).toISOString(); mail.deliveredBy = payload.to;
         _fleetMailWrite_(sheet, i + 2, fleetMailRow(mail));
       }
@@ -105,7 +118,7 @@ function pollFleetMail(payload) {
       let deleted = 0;
       for (let i = rows.length - 1; i >= 0; i--) {
         const mail = rows[i];
-        if (['new', 'delivered'].indexOf(mail.status) >= 0 && Date.parse(mail.expiresAt) <= now) {
+        if (['new', 'delivered', 'seen', 'failed'].indexOf(mail.status) >= 0 && Date.parse(mail.expiresAt) <= now) {
           mail.status = 'expired'; _fleetMailWrite_(sheet, i + 2, fleetMailRow(mail));
         }
         if (deleted < 100 && fleetMailPrunable(mail, now)) { sheet.deleteRow(i + 2); deleted++; }
@@ -147,25 +160,24 @@ function replyFleetMail(payload) {
     // A stable reply id makes retry after a lost HTTP response idempotent, per PC.
     const stableId = 'mail-reply-' + _fleetMailDigest_(original.id + '\n' + payload.from);
     let reply = rows.find(function(mail) { return mail.id === stableId; });
-    // A changed body must arrive as a NEW message: if an acknowledgement used the stable
-    // id first, overwriting it would silently drop the real answer (2026-10-10 incident).
-    // Reply lifetime is 72h so a receiver's dead poll task cannot expire it in one day.
-    let replyId = stableId;
-    if (reply && reply.body !== body) {
-      let stamp = now;
-      do {
-        replyId = 'mail-reply-' + _fleetMailDigest_(original.id + '\n' + payload.from + '\n' + String(stamp));
-        stamp++;
-      } while (rows.some(function(mail) { return mail.id === replyId; }));
+    if (reply) {
+      // Recover an append that succeeded before the original-row write/response failed.
+      if (['done', 'failed', 'expired'].indexOf(original.status) < 0) {
+        original.status = 'done'; original.resultBody = reply.body; original.resultAt = reply.createdAt;
+        _fleetMailWrite_(sheet, index + 2, fleetMailRow(original));
+      }
+      return { ok: true, duplicate: true, mail: original, reply: reply };
     }
-    if (!reply || reply.body !== body) {
-      reply = {
-        id: replyId, from: payload.from, to: original.from, replyTo: original.id, kind: 'note',
-        body: body, why: original.why,
-        createdAt: new Date(now).toISOString(), expiresAt: new Date(now + 3 * 86400000).toISOString(), status: 'new'
-      };
-      _fleetMailWrite_(sheet, rows.length + 2, fleetMailRow(reply));
-    }
+    const hop = fleetMailHop(original.hop) + 1;
+    const auto = payload.auto === true || payload.auto === 'true';
+    if ((auto && (original.auto === true || original.auto === 'true')) || hop >= 3) return { ok: false, reason: 'loop' };
+    if (['failed', 'expired'].indexOf(original.status) >= 0) return { ok: true, mail: original };
+    reply = {
+      id: stableId, from: payload.from, to: original.from, replyTo: original.id, kind: 'note',
+      body: body, why: original.why, auto: auto, hop: hop, priority: 'normal',
+      createdAt: new Date(now).toISOString(), expiresAt: new Date(now + 3 * 86400000).toISOString(), status: 'new'
+    };
+    _fleetMailWrite_(sheet, rows.length + 2, fleetMailRow(reply));
     original.status = 'done'; original.resultBody = body; original.resultAt = new Date(now).toISOString();
     _fleetMailWrite_(sheet, index + 2, fleetMailRow(original));
     return { ok: true, mail: original, reply: reply };
@@ -177,3 +189,28 @@ function getFleetMail(payload) {
     return { ok: true, mail: rows.find(function(mail) { return mail.id === payload.id; }) || null };
   });
 }
+
+function _fleetMailTransition_(payload, action) {
+  fleetMailId(payload.id);
+  return _fleetMailLocked_(function(sheet, rows, now) {
+    const index = rows.findIndex(function(mail) { return mail.id === payload.id; });
+    if (index < 0) return { ok: false, status: 404, error: 'mail_not_found' };
+    const mail = rows[index];
+    if (['done', 'failed', 'expired'].indexOf(mail.status) >= 0) return { ok: true, mail: mail };
+    const at = new Date(now).toISOString();
+    if (action === 'seen') {
+      if (mail.status === 'seen') return { ok: true, mail: mail };
+      mail.status = 'seen'; mail.seenAt = at; mail.seenBy = String(payload.seenBy || payload.from || '').slice(0, 256);
+    } else if (action === 'ack') {
+      mail.status = 'done'; mail.ackAt = at;
+    } else {
+      mail.status = payload.reason === 'expired' ? 'expired' : 'failed';
+      mail.failedAt = at; mail.failReason = String(payload.reason || 'processing_failed').slice(0, 1000);
+    }
+    _fleetMailWrite_(sheet, index + 2, fleetMailRow(mail));
+    return { ok: true, mail: mail };
+  });
+}
+function seenFleetMail(payload) { return _fleetMailTransition_(payload, 'seen'); }
+function ackFleetMail(payload) { return _fleetMailTransition_(payload, 'ack'); }
+function failFleetMail(payload) { return _fleetMailTransition_(payload, 'fail'); }

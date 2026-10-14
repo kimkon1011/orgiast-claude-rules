@@ -83,6 +83,8 @@ test('main --send: cr-PC 宛を 作業用011 に付け替えて送り stderr に
 
 test('main --send: poll 実績の無い宛先は拒否(6)し、--force なら送る', async t => {
   const f = fixture(t);
+  // v2 refusal(6) applies to known exact labels; unknown names are covered by exit 4 tests.
+  f.deps.pcMap = { ...splitMap, 'ghost-PC': { ...realMap['kimko-PC'], hostname: 'fixture-ghost-host', aliases: [] } };
   f.deps.fetchBeacons = async () => ok([polled('kim-PC')]);
   assert.equal(await main(sendArgs(f, 'ghost-PC'), f.deps), 6);
   assert.equal(f.calls.length, 0);

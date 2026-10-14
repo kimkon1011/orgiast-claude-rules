@@ -95,28 +95,30 @@ test('lost poll response replays same batch without offering it to a second reci
 
 test('repeated reply chains always have filesystem-safe bounded IDs', () => {
   const h = harness(); let id = h.c.sendFleetMail(send()).mail.id;
-  for (let i = 0; i < 20; i++) {
+  // v2 limits chains to two replies; the next prospective hop is rejected.
+  for (let i = 0; i < 2; i++) {
     const result = h.c.replyFleetMail({ id, from: i % 2 ? 'sender-PC' : 'kim-PC', resultBody: 'answer' });
     id = result.reply.id; assert.ok(id.length < 100); assert.match(id, /^mail-[A-Za-z0-9-]+$/);
   }
 });
 
 // --- 2026-10-10 事故: 返信の寿命72hと、本文が変わったら新しい返信メッセージを追加 ---
-test('reply lives 72h; a changed reply body appends a new message instead of overwriting', () => {
+test('reply lives 72h; changed bodies retain the fixed reply id', () => {
   const h = harness(); h.c.sendFleetMail(send());
   const first = h.c.replyFleetMail({ id: 'mail-1234', from: 'kim-PC', resultBody: '受領しました' }).reply;
   assert.equal(Date.parse(first.expiresAt) - Date.parse(first.createdAt), 72 * 3600 * 1000);
   h.c.replyFleetMail({ id: 'mail-1234', from: 'kim-PC', resultBody: '受領しました' });
   assert.equal(h.rows.length, 3); // 同じ本文の再送は冪等: 行を増やさない
   const second = h.c.replyFleetMail({ id: 'mail-1234', from: 'kim-PC', resultBody: '本回答です' }).reply;
-  assert.equal(h.rows.length, 4); // 本文が変わったら新しいメッセージを追加
-  assert.notEqual(second.id, first.id);
-  assert.equal(second.body, '本回答です');
+  // v2 handoff explicitly requires one fixed reply id per (original, from).
+  assert.equal(h.rows.length, 3);
+  assert.equal(second.id, first.id);
+  assert.equal(second.body, first.body);
   assert.equal(Date.parse(second.expiresAt) - Date.parse(second.createdAt), 72 * 3600 * 1000);
-  // 原本の resultBody は最新の本文で上書き
-  assert.equal(h.c.getFleetMail({ id: 'mail-1234' }).mail.resultBody, '本回答です');
-  // 送信元には両方の返信が届く（受領確認が先でも本回答が消えない）
+  // 固定返信の resultBody を保持
+  assert.equal(h.c.getFleetMail({ id: 'mail-1234' }).mail.resultBody, first.body);
+  // 本回答を別途送るには --send を使う（固定返信は増やさない）
   const toSender = h.c.pollFleetMail(poll({ to: 'sender-PC', hostname: 'sender', processedIds: ['mail-1234'] }));
-  assert.equal(toSender.messages.length, 2);
-  assert.equal(JSON.stringify(toSender.messages.map(m => m.body).sort()), JSON.stringify(['受領しました', '本回答です']));
+  assert.equal(toSender.messages.length, 1);
+  assert.equal(JSON.stringify(toSender.messages.map(m => m.body).sort()), JSON.stringify([first.body]));
 });

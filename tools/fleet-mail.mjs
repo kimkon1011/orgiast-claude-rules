@@ -3,13 +3,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { createHash, randomInt, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { parseEnvText } from './env-kv.mjs';
 import { machineIdentity } from './machine-identity.mjs';
 import { addDecision, listDecisions } from './pending-decisions.mjs';
-import { loadOptin, redactSecrets, targetMatches, runPrompt, consentCommand } from './fleet-agent.mjs';
+import { loadOptin, redactSecrets, runPrompt, consentCommand } from './fleet-agent.mjs';
 import { resolveClaudeExecutableFromDisk } from './claude-exe.mjs';
 import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
@@ -35,7 +35,7 @@ export function decisionRole(mail) {
   // 返信（mail-reply-* / replyTo あり）は原本の why を引き継ぐので依頼(request)ではなく回答(answer)として扱う。
   // 回答は捨てずに注入するが返信はしない（fleet-inbox-context が [回答・返信不要] を付ける）。
   // 扱うと受領返信に相手が受領返信を返し、2分ごとに PC 間で無限に往復する（2026-10-10 kim-PC⇔cr-PC 実測）。
-  if (!decisionPrefix.test(mail?.body ?? '') && !decisionPrefix.test(mail?.why ?? '')) return null;
+  if (!decisionPrefix.test(parseExecMarkers(mail?.body).body) && !/\[判断依頼\]/.test(mail?.why ?? '')) return null;
   return mail?.replyTo || String(mail?.id ?? '').startsWith('mail-reply-') ? 'answer' : 'request';
 }
 export function hasDecisionRequest(mail) {
@@ -115,8 +115,6 @@ export async function resolveDeliverableTarget({ to, home, now = Date.now, fetch
   const twins = new Set(sameMachineLabels(label, pcMap));
   const alt = polled.filter(row => twins.has(row.label)).sort((a, b) => Date.parse(b.pollAt) - Date.parse(a.pollAt))[0];
   if (alt) return { status: 'redirect', to: alt.label, text: `宛先 ${label} → ${alt.label} に解決（同一実機）` };
-  // 部分一致の宛先（GAS 側は label/hostname の部分一致で配達する）は poll 実績のあるラベルに含まれれば通す。
-  if (polled.some(row => row.label.includes(label))) return { status: 'ok', to: label };
   return { status: 'none', to: label, labels: polled.map(row => row.label) };
 }
 export function parseExecMarkers(body) {
@@ -216,11 +214,99 @@ export function readInbox(home, { unreadOnly = true } = {}) {
   try { files = fs.readdirSync(dir); } catch (e) { if (e.code === 'ENOENT') return []; throw e; }
   return files.filter(f => /^mail-[A-Za-z0-9-]+\.json$/.test(f)).flatMap(f => {
     try {
-      const mail = readJson(path.join(dir, f));
-      return mail && (!unreadOnly || !mail.readAt) ? [mail] : [];
+      const raw = readJson(path.join(dir, f));
+      const mail = raw && normalizeInbox(raw);
+      return mail && (!unreadOnly || !terminal(mail)) ? [mail] : [];
     } catch { return []; } // One damaged file must not hide other unread messages.
   }).sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
 }
+export const TERMINAL_STATUSES = Object.freeze(['done', 'failed', 'expired']);
+const terminal = mail => TERMINAL_STATUSES.includes(mail.status);
+const automatic = mail => mail.auto === true || mail.auto === 'true';
+const nextHop = mail => Number(mail.hop || 0) + 1;
+export function mailId(now = Date.now, random = randomBytes) {
+  return `mail-${now()}-${random(4).toString('hex')}`;
+}
+export function resolveMailTarget(to, pcMap = {}, beacons = []) {
+  const remote = resolveRemoteName(to, pcMap);
+  const entries = Object.entries(pcMap || {}).filter(([key, value]) => !key.startsWith('_') && value && typeof value === 'object' && !Array.isArray(value));
+  const known = [...entries.map(([label, entry]) => ({ ...entry, label })), ...(Array.isArray(beacons) ? beacons : []).filter(b => typeof b?.label === 'string')];
+  const exact = remote.resolved ? remote.to : known.find(b => b.label === to)?.label
+    ?? known.find(b => b.hostname === to)?.label;
+  if (exact || to === 'all') return { to: exact || 'all', resolved: true };
+  // Explicit aliases preserve PR #751's same-machine redirects; no substring matching.
+  const alias = entries.find(([, entry]) => entry.aliases?.includes(to));
+  if (alias) return { to: alias[0], resolved: true };
+  const candidates = [...new Set(known.filter(b => [b.label, b.hostname, b.remoteName].some(n => typeof n === 'string' && n.startsWith(to))).map(b => b.label))].sort().slice(0, 5);
+  return { to, resolved: false, candidates };
+}
+function inboxPath(home, id) { return path.join(home, '.claude', 'fleet-inbox', `${validId(id)}.json`); }
+function normalizeInbox(mail) {
+  // v1 ack and non-fleet inbox producers (decision-watch) only have readAt.
+  // Once v2 fields exist, status alone controls completion, including seen records.
+  const legacyRead = mail.readAt && !Object.hasOwn(mail, 'presentedAt') && !Object.hasOwn(mail, 'pendingServer') && !mail.seenAt && !mail.ackAt;
+  const status = terminal(mail) ? mail.status : legacyRead ? 'done' : !mail.status || mail.status === 'new' ? 'delivered' : mail.status;
+  return { ...mail, status,
+    presentedAt: mail.presentedAt ?? null, presentedSession: mail.presentedSession ?? null };
+}
+function expireInbox(home, now) {
+  for (const mail of readInbox(home, { unreadOnly: false })) {
+    if (mail.status !== 'done' && mail.status !== 'expired' && Date.parse(mail.expiresAt) <= now()) {
+      writeJson(inboxPath(home, mail.id), { ...mail, status: 'expired' });
+    }
+  }
+}
+function migrateProcessed(home) {
+  const file = path.join(home, '.claude', '.fleet-mail-processed');
+  if (!fs.existsSync(file)) return;
+  for (const id of fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean)) {
+    if (!/^mail-[A-Za-z0-9-]{1,180}$/.test(id)) continue;
+    let mail;
+    try { mail = readJson(inboxPath(home, id)); } catch { continue; } // A damaged legacy cache must not stop migration.
+    if (mail && !terminal(mail)) writeJson(inboxPath(home, id), { ...normalizeInbox(mail), status: 'done' });
+  }
+  fs.unlinkSync(file);
+}
+function checked(result) {
+  if (result?.ok === false) throw new Error(result.reason || result.error || 'server rejected mail');
+  return result;
+}
+// Local intent is durable BEFORE transport. A failed/old GAS action is retried on poll.
+export async function syncMailState({ home, id, action, request, now = Date.now, seenBy, reason, stderr = console.error }) {
+  const file = inboxPath(home, id);
+  let mail = normalizeInbox(readJson(file) || { id, status: 'delivered' });
+  const at = new Date(now()).toISOString();
+  if (action === 'seen' && !terminal(mail)) mail = { ...mail, status: 'seen', seenAt: mail.seenAt || at, seenBy: mail.seenBy || seenBy };
+  if (action === 'ack' && !terminal(mail)) mail = { ...mail, status: 'done', ackAt: at, readAt: at };
+  if (action === 'fail' && !terminal(mail)) mail = { ...mail, status: reason === 'expired' ? 'expired' : 'failed', failedAt: at, failReason: reason };
+  mail.pendingServer = [...new Set([...(mail.pendingServer || []), action])];
+  if (reason) mail.failReason = reason;
+  writeJson(file, mail);
+  try {
+    const response = checked(await request(`mail-${action}`, { id, ...(action === 'seen' ? { seenBy: mail.seenBy || seenBy } : {}), ...(action === 'fail' ? { reason: mail.failReason } : {}) }));
+    const latest = readJson(file);
+    // The server may already be terminal (e.g. another session replied before this seen retry).
+    const server = response?.mail;
+    const authoritative = server && terminal(server) ? Object.fromEntries(['status', 'seenAt', 'seenBy', 'ackAt', 'failedAt', 'failReason', 'resultAt', 'resultBody'].filter(key => server[key] !== undefined).map(key => [key, typeof server[key] === 'string' ? redactSecrets(server[key]) : server[key]])) : {};
+    writeJson(file, { ...latest, ...authoritative, pendingServer: (latest.pendingServer || []).filter(a => a !== action) });
+    return true;
+  } catch (error) {
+    stderr(`fleet-mail: mail-${action} 未同期（次回再送）: ${redactSecrets(error.message).replace(/[\r\n]+/g, ' ')}`);
+    return false;
+  }
+}
+function joinReply(home, mail) {
+  if (!mail.replyTo) return;
+  const dir = path.join(home, '.claude');
+  let sent;
+  try { sent = fs.readFileSync(path.join(dir, 'fleet-mail-sent.jsonl'), 'utf8'); } catch (error) { if (error.code === 'ENOENT') return; throw error; }
+  const parseLines = text => text.split('\n').flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } });
+  if (!parseLines(sent).some(row => row.id === mail.replyTo && ['sent', 'send-attempt'].includes(row.action))) return;
+  const repliesFile = path.join(dir, 'fleet-mail-replies.jsonl');
+  let replies = []; try { replies = parseLines(fs.readFileSync(repliesFile, 'utf8')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  if (!replies.some(row => row.replyId === mail.id)) fs.appendFileSync(repliesFile, `${JSON.stringify({ id: mail.replyTo, replyId: mail.id, from: mail.from, resultBody: mail.body, resultAt: mail.createdAt })}\n`, { mode: 0o600 });
+}
+
 export function acquireLock(file, { now = Date.now, pid = process.pid } = {}) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const owner = { pid, nonce: randomUUID(), createdAt: now() };
@@ -273,20 +359,21 @@ export function findPriorReply(dir, id) {
 }
 export function parseArgs(argv) {
   const options = {};
-  const flags = new Set(['--send', '--poll', '--dry-run', '--json', '--inbox', '--force']);
-  const values = new Set(['--to', '--kind', '--body-file', '--why', '--expires-hours', '--wait', '--reply', '--ack', '--sent-status', '--exec', '--exec-cwd']);
+  const flags = new Set(['--send', '--poll', '--dry-run', '--json', '--inbox', '--force', '--sweep', '--unseen', '--all-seen']);
+  const values = new Set(['--to', '--kind', '--body-file', '--why', '--expires-hours', '--wait', '--reply', '--ack', '--sent-status', '--exec', '--exec-cwd', '--priority', '--wait-for']);
   for (let i = 0; i < argv.length; i++) {
     const key = argv[i];
     if (Object.hasOwn(options, key)) throw new Error(`duplicate option: ${key}`);
-    if (flags.has(key)) options[key] = true;
+    if (key === '--ack' && argv[i + 1] === '--all-seen') options[key] = true;
+    else if (flags.has(key)) options[key] = true;
     else if (values.has(key) && argv[i + 1] && !argv[i + 1].startsWith('--')) options[key] = argv[++i];
     else throw new Error(`unknown option or missing value: ${key}; 本文は --body-file を使ってください`);
   }
-  const actions = ['--send', '--poll', '--inbox', '--reply', '--ack', '--sent-status'].filter(k => options[k]);
+  const actions = ['--send', '--poll', '--inbox', '--reply', '--ack', '--sent-status', '--sweep'].filter(k => options[k]);
   if (actions.length !== 1) throw new Error('指定は --send / --poll / --reply / --inbox / --ack / --sent-status のいずれか1つ');
   const allowed = {
-    '--send': ['--to', '--kind', '--body-file', '--why', '--expires-hours', '--wait', '--exec', '--exec-cwd', '--force'],
-    '--poll': ['--dry-run', '--json'], '--inbox': ['--json'], '--reply': ['--body-file', '--force'], '--ack': [],
+    '--send': ['--to', '--kind', '--body-file', '--why', '--expires-hours', '--wait', '--exec', '--exec-cwd', '--force', '--priority', '--wait-for', '--dry-run'],
+    '--poll': ['--dry-run', '--json'], '--inbox': ['--json', '--unseen'], '--reply': ['--body-file', '--force'], '--ack': ['--all-seen'], '--sweep': [],
     '--sent-status': []
   };
   for (const key of Object.keys(options)) if (key !== actions[0] && !allowed[actions[0]].includes(key)) throw new Error(`option not applicable: ${key}`);
@@ -301,8 +388,11 @@ export function parseArgs(argv) {
     if (options['--exec-cwd'] !== undefined && options['--exec'] === undefined) throw new Error('--exec-cwd は --exec codex と併用してください');
   }
   if (options['--reply'] && !options['--body-file']) throw new Error('--body-file 必須');
-  for (const key of ['--reply', '--ack', '--sent-status']) if (options[key]) validId(options[key]);
+  for (const key of ['--reply', '--ack', '--sent-status']) if (options[key] && options[key] !== true) validId(options[key]);
   for (const key of ['--expires-hours', '--wait']) if (options[key] !== undefined && (!Number.isFinite(Number(options[key])) || Number(options[key]) < (key === '--wait' ? 0 : 0.001))) throw new Error(`invalid ${key}`);
+  if (options['--ack'] && options['--all-seen'] && options['--ack'] !== true) throw new Error('--ack id と --all-seen は併用不可');
+  if (options['--priority'] && !['normal', 'urgent'].includes(options['--priority'])) throw new Error('invalid --priority');
+  if (options['--wait-for'] && (!['seen', 'done'].includes(options['--wait-for']) || options['--wait'] === undefined)) throw new Error('invalid --wait-for');
   return options;
 }
 export function createClient({ url, token, fetchImpl = fetch }) {
@@ -313,22 +403,24 @@ export function createClient({ url, token, fetchImpl = fetch }) {
     });
     if (!response.ok) throw new Error(`fleet-mail HTTP ${response.status}`);
     const result = await response.json();
-    if (result?.ok !== true) throw new Error(`fleet-mail: ${result?.error || 'invalid response'}`);
+    if (result?.ok !== true) throw new Error(`fleet-mail: ${result?.reason || result?.error || 'invalid response'}`);
     // Old GAS falls back to status writes for unknown kinds: never call that a success.
     if (kind === 'mail-poll' ? !Array.isArray(result.messages) : !Object.hasOwn(result, 'mail')) throw new Error('fleet-mail: GAS mail handlers are not deployed');
     return result;
   };
 }
-export async function waitForReply(id, seconds, { request, now = Date.now, sleepImpl = sleep }) {
+export async function waitForReply(id, seconds, { request, now = Date.now, sleepImpl = sleep, waitFor = 'done' }) {
   const deadline = now() + seconds * 1000;
   while (now() < deadline) {
     try {
       const result = await request('mail-get', { id }, Math.min(60_000, deadline - now()));
+      if (waitFor === 'seen' && (result.mail?.seenAt || ['seen', 'done'].includes(result.mail?.status))) return { exitCode: 0, text: `既読（id=${id}）` };
+      if (['failed', 'expired'].includes(result.mail?.status)) return { exitCode: 1, text: `${result.mail.status}（id=${id}）` };
       if (result.mail?.status === 'done') return { exitCode: 0, text: redactSecrets(result.mail.resultBody) };
     } catch (error) { if (now() < deadline) throw error; }
     if (now() < deadline) await sleepImpl(Math.min(15_000, deadline - now()));
   }
-  return { exitCode: 2, text: `未返信（id=${id}）` };
+  return { exitCode: 2, text: `${waitFor === 'seen' ? '未読' : '未返信'}（id=${id}）` };
 }
 // 受信1回分。main の --poll からも、対話セッションの hook（fleet-inbox-context.mjs）からも呼ばれる。
 // 受信タスク(OrgiastFleetMail)が死んでいても対話セッションが受信を代替するための exports（2026-10-10 事故）。
@@ -336,21 +428,10 @@ export async function waitForReply(id, seconds, { request, now = Date.now, sleep
 export async function pollOnce(deps = {}) {
   const home = deps.home ?? process.env.ORGIAST_HOME ?? os.homedir();
   const dir = path.join(home, '.claude');
-  const out = deps.stdout ?? (text => console.log(text));
-  const err = deps.stderr ?? (text => console.error(text));
+  const out = deps.stdout ?? console.log;
+  const err = deps.stderr ?? console.error;
   const now = deps.now ?? Date.now;
   const dryRun = !!deps.dryRun;
-  const json = !!deps.json;
-  const executePrompts = deps.executePrompts !== false;
-  // PATH 上の claude は Windows では claude.cmd で、shell 無しの spawn では ENOENT になる。
-  // 実行ファイルは受信側PCが決める（送信側の指示では変えられない）ので、ここで1回だけ解決する。
-  const resolveClaudeExe = deps.resolveClaudeExe
-    ?? (() => resolveClaudeExecutableFromDisk({ platform: process.platform, env: deps.env ?? process.env }));
-  const inboxFile = id => path.join(dir, 'fleet-inbox', `${validId(id)}.json`);
-  const log = (name, value) => {
-    fs.mkdirSync(dir, { recursive: true });
-    fs.appendFileSync(path.join(dir, `fleet-mail-${name}.jsonl`), `${JSON.stringify({ at: new Date(now()).toISOString(), ...value })}\n`, { mode: 0o600 });
-  };
   const config = envFile(path.join(dir, 'fleet-sheet.env'));
   if (!config.FLEET_SHEET_URL || !config.FLEET_SHEET_TOKEN) { err('fleet-mail: fleet-sheet.env 未設定のためスキップ'); return { skipped: 'unconfigured' }; }
   const identity = deps.identity ?? machineIdentity();
@@ -358,159 +439,191 @@ export async function pollOnce(deps = {}) {
   const request = deps.request ?? createClient({ url: config.FLEET_SHEET_URL, token: config.FLEET_SHEET_TOKEN, fetchImpl: deps.fetch });
   const release = dryRun ? () => {} : acquireLock(path.join(dir, 'fleet-mail.lock'), { now });
   if (!release) { err('fleet-mail: 別の受信処理が実行中'); return { skipped: 'locked' }; }
+  const fileOf = id => inboxPath(home, id);
+  const log = (name, value) => fs.appendFileSync(path.join(dir, `fleet-mail-${name}.jsonl`), `${JSON.stringify({ at: new Date(now()).toISOString(), ...value })}\n`, { mode: 0o600 });
+  const state = (id, action, extra = {}) => syncMailState({ home, id, action, request, now, stderr: err, ...extra });
+  const quarantineDir = path.join(dir, 'fleet-inbox', 'quarantine');
+  const failQuarantined = async (file, record) => {
+    if (!record.serverId || !record.pendingServer?.length) return;
+    try {
+      checked(await request('mail-fail', { id: record.serverId, reason: record.reason }));
+      writeJson(file, { ...record, pendingServer: [] });
+    } catch { /* Persisted in quarantine for next poll. */ }
+  };
+  const quarantine = async (raw, error) => {
+    let serverId = null;
+    try { serverId = validId(raw?.id); } catch { /* Never send an invalid id. */ }
+    const id = serverId || `mail-invalid-${createHash('sha256').update(JSON.stringify(raw) ?? 'null').digest('hex').slice(0, 16)}`;
+    const record = { raw: JSON.parse(JSON.stringify(raw ?? null, (_key, value) => typeof value === 'string' ? redactSecrets(value) : value)), serverId, reason: redactSecrets(error.message).slice(0, 1000), pendingServer: serverId ? ['fail'] : [] };
+    const file = path.join(quarantineDir, `${id}.json`);
+    writeJson(file, record);
+    if (serverId && fs.existsSync(fileOf(serverId))) {
+      let mail;
+      try { mail = readJson(fileOf(serverId)); } catch (error) { if (!(error instanceof SyntaxError)) throw error; mail = { id: serverId }; }
+      if (!terminal(mail)) writeJson(fileOf(serverId), { ...mail, status: 'failed', failReason: record.reason });
+    }
+    await failQuarantined(file, record);
+  };
   try {
-    const processedFile = path.join(dir, '.fleet-mail-processed');
-    let processed = new Set();
-    try { processed = new Set(fs.readFileSync(processedFile, 'utf8').split(/\r?\n/).filter(Boolean)); } catch (e) { if (e.code !== 'ENOENT') throw e; }
-    // Reuse a poll request id until the full response is durable on disk.
+    if (!dryRun) {
+      migrateProcessed(home);
+      // Isolate damaged local JSON too, including records already consumed by the server.
+      const inboxDir = path.join(dir, 'fleet-inbox');
+      if (fs.existsSync(inboxDir)) for (const name of fs.readdirSync(inboxDir).filter(n => /^mail-[A-Za-z0-9-]+\.json$/.test(n))) {
+        try { readJson(path.join(inboxDir, name)); } catch (error) {
+          if (error instanceof SyntaxError) await quarantine({ id: name.slice(0, -5), body: fs.readFileSync(path.join(inboxDir, name), 'utf8') }, error);
+        }
+      }
+      expireInbox(home, now);
+      for (const mail of readInbox(home, { unreadOnly: false })) {
+        for (const action of mail.pendingServer || []) {
+          if (['seen', 'ack', 'fail'].includes(action)) await state(mail.id, action, { seenBy: mail.seenBy || label, reason: mail.failReason });
+        }
+      }
+      if (fs.existsSync(quarantineDir)) for (const name of fs.readdirSync(quarantineDir).filter(n => /^mail-[A-Za-z0-9-]+\.json$/.test(n))) {
+        try { const file = path.join(quarantineDir, name); await failQuarantined(file, readJson(file)); } catch { err('fleet-mail: 隔離記録の再同期失敗=1'); }
+      }
+    }
     const pollFile = path.join(dir, '.fleet-mail-poll.json');
-    const batch = dryRun ? {} : readJson(pollFile) || { requestId: randomUUID() };
+    const batch = dryRun ? {} : readJson(pollFile) || { requestId: randomUUID(), successfulIds: [], quarantinedIds: [] };
     if (!dryRun) writeJson(pollFile, batch);
-    const response = await request('mail-poll', { to: label, hostname: identity.hostname, dryRun, requestId: batch.requestId,
-      processedIds: readInbox(home, { unreadOnly: false }).filter(m => m.to === 'all' && processed.has(m.id) && Date.parse(m.expiresAt) > now()).map(m => m.id) });
-    if (dryRun) { out(JSON.stringify(response.messages.map(m => ({ ...m, from: redactSecrets(m.from), why: redactSecrets(m.why), body: redactSecrets(m.body), resultBody: redactSecrets(m.resultBody) })))); return { messages: response.messages }; }
-    const received = [];
-    const decisionAcks = [];
-    // Persist the whole batch before any potentially slow prompt execution or network follow-ups.
+    const response = checked(await request('mail-poll', { to: label, hostname: identity.hostname, dryRun, requestId: batch.requestId,
+      // Broadcast remains pending for presentation; the inbox itself is the durable delivery receipt.
+      processedIds: readInbox(home, { unreadOnly: false }).filter(m => m.to === 'all' && Date.parse(m.expiresAt) > now()).map(m => m.id) }));
+    if (dryRun) {
+      const messages = response.messages.map(m => ({ ...m, from: redactSecrets(m.from), why: redactSecrets(m.why), body: redactSecrets(m.body), resultBody: redactSecrets(m.resultBody) }));
+      out(JSON.stringify(messages)); return { messages };
+    }
+    const received = [], handled = [];
+    let rejected = 0, undurable = 0;
     for (const raw of response.messages) {
-      validId(raw.id);
-      if (!targetMatches(raw.to, label, identity.hostname) || !['note', 'prompt'].includes(raw.kind)) throw new Error('invalid incoming mail');
-      if (processed.has(raw.id)) continue;
-      const file = inboxFile(raw.id);
-      if (!fs.existsSync(file)) {
-        const mail = { ...raw, from: redactSecrets(raw.from), why: redactSecrets(raw.why), body: redactSecrets(raw.body), readAt: null, receivedAt: new Date(now()).toISOString() };
-        writeJson(file, mail); log('received', { id: mail.id, from: mail.from, kind: mail.kind });
-        if (mail.kind === 'note' && hasDecisionRequest(mail)) {
-          try {
+      if (raw?.id && (batch.successfulIds?.includes(raw.id) || batch.quarantinedIds?.includes(raw.id))) continue;
+      try {
+        validId(raw?.id);
+        if (!['all', label, identity.hostname].includes(raw.to) || !['note', 'prompt'].includes(raw.kind)
+          || typeof raw.body !== 'string' || !raw.from || !Number.isFinite(Date.parse(raw.expiresAt))) throw new Error('invalid incoming mail');
+        const file = fileOf(raw.id);
+        const existing = readJson(file);
+        if (!existing) {
+          const mail = normalizeInbox({ ...raw, from: redactSecrets(raw.from), why: redactSecrets(raw.why), body: redactSecrets(raw.body), readAt: null, receivedAt: new Date(now()).toISOString() });
+          if (mail.status !== 'done' && Date.parse(mail.expiresAt) <= now()) mail.status = 'expired';
+          writeJson(file, mail);
+          log('received', { id: mail.id, from: mail.from, kind: mail.kind });
+        } else if (terminal(raw) && !terminal(existing)) {
+          // A replay can carry a reply made interactively on the server since the previous poll.
+          writeJson(file, { ...existing, ...raw, body: redactSecrets(raw.body), resultBody: redactSecrets(raw.resultBody) });
+        }
+        joinReply(home, readJson(file));
+        received.push(raw.id);
+        batch.successfulIds = [...new Set([...(batch.successfulIds || []), raw.id])];
+      } catch (error) {
+        rejected++;
+        try { await quarantine(raw, error); batch.quarantinedIds = [...new Set([...(batch.quarantinedIds || []), raw?.id ?? null])]; }
+        catch { undurable++; }
+      }
+      writeJson(pollFile, batch);
+    }
+    if (!undurable) fs.unlinkSync(pollFile);
+    writeJson(path.join(dir, '.fleet-mail-last-poll.json'), { at: new Date(now()).toISOString() });
+    let promptHandled = false;
+    for (const pending of readInbox(home, { unreadOnly: false })) {
+      let mail = pending;
+      try {
+        mail = readJson(fileOf(pending.id)); // Observe interactive replies after delivery.
+        if (!mail || !['delivered', 'seen'].includes(normalizeInbox(mail).status)) continue;
+        if (hasDecisionRequest(mail)) {
+          if (!mail.decisionRegisteredAt) {
             const source = `fleet-mail:${mail.from}:${mail.id}`;
-            let record = listDecisions({ home }).find(decision => decision.source === source);
+            let record = listDecisions({ home }).find(d => d.source === source);
             if (!record) {
               const subject = String(mail.why ?? '').replace(decisionPrefix, '').trim()
                 || String(mail.body ?? '').trimStart().split(/\r?\n/)[0].replace(decisionPrefix, '').trim();
               record = addDecision({ source, text: `[判断依頼] ${subject} / from=${mail.from} id=${mail.id}`.slice(0, 200) }, { home, now: new Date(now()) });
             }
-            decisionAcks.push({ mail, record });
-          } catch (error) {
-            log('decision-intake-failed', { id: mail.id, error: redactSecrets(error.message) });
+            writeJson(fileOf(mail.id), { ...readJson(fileOf(mail.id)), decisionRegisteredAt: new Date(now()).toISOString(), decisionId: record.id });
+            log('decision-request-skipped', { id: mail.id, from: mail.from });
+            if (mail.kind === 'prompt') writeJson(path.join(dir, 'fleet-agent-results', `${mail.id}.json`), { exitCode: null, outputTail: '判断依頼を含むためヘッドレス実行では回答しません（decision-request-skipped）。kim の判断待ちです。' });
           }
-        }
-      }
-      received.push(raw.id);
-    }
-    // 受領確認の自動返信: 送信側が「届いて待ち状態」だと分かるようにする（2026-10-10 事故）。
-    // 本回答は kim が決めた後に別メッセージ(--send)で送るので、受領確認が返信 id を先に使っても競合しない。
-    for (const { mail, record } of decisionAcks) {
-      try {
-        const ackBody = `受領しました。kim の判断待ちとして登録（決定ID ${record.id}）。回答は kim が決めた後に別の note で送ります。期限: ${mail.expiresAt}`;
-        await request('mail-reply', { id: mail.id, from: label, resultBody: ackBody });
-        log('sent', { action: 'decision-ack', id: mail.id, decisionId: record.id });
-      } catch (error) {
-        log('decision-ack-failed', { id: mail.id, error: redactSecrets(error.message) });
-      }
-    }
-    writeJson(path.join(dir, '.fleet-mail-last-poll.json'), { at: new Date(now()).toISOString() });
-    fs.unlinkSync(pollFile);
-    // Resume pending inbox records after failures, including a failed reply POST.
-    const pending = readInbox(home, { unreadOnly: false }).filter(m => !processed.has(m.id));
-    let promptHandled = false;
-    const handled = [];
-    for (const mail of pending) {
-      if (mail.kind === 'prompt') {
-        // [判断依頼] はヘッドレスが答えない: kim 本人の判断を代行しない（2026-10-10 事故: autopilot が「A で進めます」）。
-        if (hasDecisionRequest(mail)) {
-          log('decision-request-skipped', { id: mail.id, from: mail.from });
-          writeJson(path.join(dir, 'fleet-agent-results', `${validId(mail.id)}.json`),
-            { exitCode: null, outputTail: '判断依頼を含むためヘッドレス実行では回答しません（decision-request-skipped）。kim の判断待ちです。' });
-          fs.appendFileSync(processedFile, `${mail.id}\n`, { mode: 0o600 }); processed.add(mail.id); handled.push(mail.id);
+          const latest = readJson(fileOf(mail.id));
+          if (!latest.decisionAckAt && !automatic(mail) && nextHop(mail) < 3) {
+            try {
+              // A receipt must not complete the human's pending decision on the server.
+              const id = `mail-reply-ack-${createHash('sha256').update(`${mail.id}\n${label}`).digest('hex').slice(0, 16)}`;
+              checked(await request('mail-send', { id, from: label, to: mail.from, replyTo: mail.id, messageKind: 'note', auto: true, hop: nextHop(mail), priority: 'normal',
+                why: '[回答・返信不要] 判断依頼の受領', body: `受領しました。kim の判断待ちとして登録（決定ID ${latest.decisionId}）。回答は kim が決めた後に別の note で送ります。期限: ${mail.expiresAt}`,
+                expiresAt: new Date(now() + 72 * 3600000).toISOString() }));
+              writeJson(fileOf(mail.id), { ...readJson(fileOf(mail.id)), decisionAckAt: new Date(now()).toISOString() });
+              log('sent', { action: 'decision-ack', id: mail.id, decisionId: latest.decisionId });
+            } catch (error) { log('decision-ack-failed', { id: mail.id, error: redactSecrets(error.message) }); }
+          }
           continue;
         }
-        if (!executePrompts) continue; // hook からの受信: 実行は受信タスク/対話セッションに任せる
-        // --exec codex: 本文先頭のマーカーで相手PCの Codex に実装させる経路（デタッチ起動・結果ファイル待ち）。
+        if (mail.kind !== 'prompt') { handled.push(mail.id); continue; }
+        if (deps.executePrompts === false || automatic(mail) || nextHop(mail) >= 3) continue;
         const exec = parseExecMarkers(mail.body);
-        if (exec.exec === 'codex') {
-          const resultFile = path.join(dir, 'fleet-agent-results', `${validId(mail.id)}.json`);
-          const result = readJson(resultFile);
-          if (result) {
-            await request('mail-reply', { id: mail.id, from: label, resultBody: result.outputTail });
-            log('sent', { action: 'auto-reply', id: mail.id, exitCode: result.exitCode, exec: 'codex' });
-            try {
-              const inboxMail = readJson(inboxFile(mail.id), null);
-              if (inboxMail) writeJson(inboxFile(mail.id), { ...inboxMail, status: 'done', resultAt: new Date(now()).toISOString(), resultBody: result.outputTail });
-            } catch (e) { err(`fleet-mail: inbox への返信記録に失敗（送信は成功）: ${e.message}`); }
-          } else if (Date.parse(mail.expiresAt) <= now()) {
-            await request('mail-reply', { id: mail.id, from: label, resultBody: '有効期限切れのため実行しません。' });
-            log('sent', { action: 'auto-reply', id: mail.id, exitCode: null, exec: 'codex' });
-          } else if (!loadOptin(path.join(dir, 'fleet-agent-optin.json')).includes('codex')) {
-            await request('mail-reply', { id: mail.id, from: label, resultBody: `未オプトイン。承諾コマンド: ${consentCommand('codex')}` });
-            log('sent', { action: 'auto-reply', id: mail.id, exitCode: null, exec: 'codex' });
-          } else if (!mail.executionStartedAt) {
-            // 初回: 開始印を書いて runner をデタッチ起動する。この時点では返信しない（結果ファイル待ち）。
-            writeJson(inboxFile(mail.id), { ...readJson(inboxFile(mail.id)), executionStartedAt: new Date(now()).toISOString() });
-            const runnerArgs = [path.join(ownRepo, 'tools', 'fleet-task-runner.mjs'), '--id', mail.id];
-            if (deps.spawnImpl || process.platform !== 'win32') {
-              // Windows では detached が可視コンソールを出すので backgroundSpawnOptions（win32: windowsHide / それ以外: detached）に従う。
-              const child = (deps.spawnImpl ?? spawn)(process.execPath, runnerArgs, { ...backgroundSpawnOptions(), stdio: 'ignore', windowsHide: true });
-              child.unref();
-            } else {
-              // 受信タスク(スケジュールタスク)のジョブが終わると子プロセスも終了させられる（2026-10-10 nishi-PC: runner が
-              // prompt.md すら書かずに消えた。kim-PC の一時タスクで再現し、WMI 起動なら生き残ることを実測）。
-              (deps.launchDetachedWin ?? launchDetachedWin)(process.execPath, runnerArgs);
+        const resultFile = path.join(dir, 'fleet-agent-results', `${validId(mail.id)}.json`);
+        let result = readJson(resultFile);
+        let claudeExeName;
+        if (exec.exec === 'codex' && mail.executionStartedAt && !result) {
+          if (now() - Date.parse(mail.executionStartedAt) < 2 * 3600000) continue;
+          result = { exitCode: null, outputTail: 'codex 実行がタイムアウト（結果ファイル未生成）', timedOut: true };
+        }
+        if (!result) {
+          if (mail.executionStartedAt) continue; // Never start an interrupted execution a second time.
+          const kind = exec.exec === 'codex' ? 'codex' : 'prompt';
+          if (!loadOptin(path.join(dir, 'fleet-agent-optin.json')).includes(kind)) result = { exitCode: null, outputTail: `未オプトイン。承諾コマンド: ${consentCommand(kind)}` };
+          else {
+            if (promptHandled) continue;
+            promptHandled = true;
+            const current = readJson(fileOf(mail.id));
+            if (terminal(current) || current.executionStartedAt) continue;
+            writeJson(fileOf(mail.id), { ...current, executionStartedAt: new Date(now()).toISOString() });
+            if (kind === 'codex') {
+              await state(mail.id, 'seen', { seenBy: 'headless' });
+              const runnerArgs = [path.join(ownRepo, 'tools', 'fleet-task-runner.mjs'), '--id', mail.id];
+              if (deps.spawnImpl || process.platform !== 'win32') {
+                const child = (deps.spawnImpl ?? spawn)(process.execPath, runnerArgs, { ...backgroundSpawnOptions(), stdio: 'ignore', windowsHide: true }); child.unref();
+              } else (deps.launchDetachedWin ?? launchDetachedWin)(process.execPath, runnerArgs);
+              log('exec-started', { id: mail.id, exec: 'codex' });
+              continue;
             }
-            log('exec-started', { id: mail.id, exec: 'codex' });
-            continue; // 返信も processed 記録もしない: 結果ファイルができたら次回返信する
-          } else if (now() - Date.parse(mail.executionStartedAt) >= 2 * 3600000) {
-            await request('mail-reply', { id: mail.id, from: label, resultBody: 'codex 実行がタイムアウト（結果ファイル未生成）' });
-            log('sent', { action: 'auto-reply', id: mail.id, exitCode: null, exec: 'codex', timedOut: true });
-          } else {
-            continue; // 実行中: 結果ファイルができるまで待つ（返信も processed 記録もしない）
+            const resolved = await (deps.resolveClaudeExe ?? (() => resolveClaudeExecutableFromDisk({ platform: process.platform, env: deps.env ?? process.env })))();
+            const executable = (typeof resolved === 'string' ? resolved : resolved?.executable) || 'claude';
+            const candidates = resolved?.candidates || [];
+            claudeExeName = path.basename(executable);
+            const header = `これは ${mail.from} PC の Claude Code からのメッセージです。回答は標準出力に書けば自動で相手に返ります。ファイル変更や外部送信が要る内容は実行せず、必要な理由と手順を回答に書いてください。`;
+            try {
+              result = await runPrompt({ claudeExe: executable, body: `${header}\n\n${mail.body}`, cwd: deps.repo ?? process.env.ORGIAST_REPO ?? ownRepo,
+                timeoutSeconds: 90, readOnly: true, spawnImpl: deps.spawnImpl, onStart: () => state(mail.id, 'seen', { seenBy: 'headless' }) });
+              if (isMissingClaudeError(result)) result = { ...result, outputTail: missingClaudeMessage(executable, candidates) };
+            } catch (error) { result = { exitCode: null, outputTail: isMissingClaudeError(error) ? missingClaudeMessage(executable, candidates) : `実行失敗: ${redactSecrets(error.message)}` }; }
           }
-          fs.appendFileSync(processedFile, `${mail.id}\n`, { mode: 0o600 }); processed.add(mail.id); handled.push(mail.id);
+        }
+        result = { ...result, outputTail: redactSecrets(result.outputTail || result.error || '(出力なし)').slice(-8000) };
+        if (result.error) result.error = redactSecrets(result.error);
+        writeJson(resultFile, result);
+        // A failed reply retains its result and retries transport without executing again.
+        if (terminal(readJson(fileOf(mail.id)))) continue;
+        let replyResponse;
+        try { replyResponse = checked(await request('mail-reply', { id: mail.id, from: label, resultBody: result.outputTail, auto: true, hop: nextHop(mail), priority: 'normal' })); }
+        catch (error) { err(`fleet-mail: 返信再送待ち=1 (${redactSecrets(error.message)})`); continue; }
+        if (['failed', 'expired'].includes(replyResponse?.mail?.status)) {
+          writeJson(fileOf(mail.id), { ...readJson(fileOf(mail.id)), status: replyResponse.mail.status });
           continue;
         }
-        // Keep each poll short enough for the next two-minute delivery tick.
-        if (promptHandled) continue;
-        promptHandled = true;
-        const resultFile = path.join(dir, 'fleet-agent-results', `${validId(mail.id)}.json`);
-        let claudeExeName = null;
-        let result = readJson(resultFile);
-        if (!result) {
-          if (mail.executionStartedAt) result = { exitCode: null, outputTail: '前回の実行が中断されました。二重実行防止のため自動再実行しません。' };
-          else if (Date.parse(mail.expiresAt) <= now()) result = { exitCode: null, outputTail: '有効期限切れのため実行しません。' };
-          else if (!loadOptin(path.join(dir, 'fleet-agent-optin.json')).includes('prompt')) result = { exitCode: null, outputTail: `未オプトイン。承諾コマンド: ${consentCommand('prompt')}` };
-          else {
-            writeJson(inboxFile(mail.id), { ...readJson(inboxFile(mail.id)), executionStartedAt: new Date(now()).toISOString() });
-            const header = `これは ${mail.from} PC の Claude Code からのメッセージです。回答は標準出力に書けば自動で相手に返ります。ファイル変更や外部送信が要る内容は実行せず、必要な理由と手順を回答に書いてください。`;
-            const resolved = await resolveClaudeExe();
-            const executable = (typeof resolved === 'string' ? resolved : resolved?.executable) || 'claude';
-            const candidates = Array.isArray(resolved?.candidates) ? resolved.candidates : [];
-            claudeExeName = path.basename(executable);
-            try {
-              const runResult = await runPrompt({ claudeExe: executable, body: `${header}\n\n${mail.body}`,
-                cwd: deps.repo ?? process.env.ORGIAST_REPO ?? ownRepo, timeoutSeconds: 90, readOnly: true, spawnImpl: deps.spawnImpl });
-              result = isMissingClaudeError(runResult)
-                ? { ...runResult, outputTail: missingClaudeMessage(executable, candidates) }
-                : runResult;
-            } catch (e) {
-              result = { exitCode: null, outputTail: isMissingClaudeError(e) ? missingClaudeMessage(executable, candidates) : `実行失敗: ${redactSecrets(e.message)}` };
-            }
-          }
-          result = { ...result, outputTail: redactSecrets(result.outputTail || result.error || '(出力なし)').slice(-8000) };
-          if (result.error) result.error = redactSecrets(result.error);
-          writeJson(resultFile, result);
-        }
-        await request('mail-reply', { id: mail.id, from: label, resultBody: result.outputTail });
-        log('sent', { action: 'auto-reply', id: mail.id, exitCode: result.exitCode, timedOut: result.timedOut || false, ...(claudeExeName ? { claudeExe: claudeExeName } : {}) });
-        try {
-          const inboxMail = readJson(inboxFile(mail.id), null);
-          if (inboxMail) writeJson(inboxFile(mail.id), { ...inboxMail, status: 'done', resultAt: new Date(now()).toISOString(), resultBody: result.outputTail });
-        } catch (e) { err(`fleet-mail: inbox への返信記録に失敗（送信は成功）: ${e.message}`); }
+        log('sent', { action: 'auto-reply', id: mail.id, exitCode: result.exitCode, timedOut: !!result.timedOut, ...(claudeExeName ? { claudeExe: claudeExeName } : {}), ...(exec.exec ? { exec: exec.exec } : {}) });
+        writeJson(fileOf(mail.id), { ...readJson(fileOf(mail.id)), status: 'done', resultAt: replyResponse?.mail?.resultAt || new Date(now()).toISOString(), resultBody: redactSecrets(replyResponse?.reply?.body ?? replyResponse?.mail?.resultBody ?? result.outputTail) });
+        handled.push(mail.id);
+      } catch (error) {
+        if (hasDecisionRequest(mail)) { log('decision-intake-failed', { id: mail.id, error: redactSecrets(error.message) }); continue; }
+        rejected++;
+        try { await quarantine(mail, error); } catch { err('fleet-mail: 隔離保存失敗=1'); }
       }
-      fs.appendFileSync(processedFile, `${mail.id}\n`, { mode: 0o600 }); processed.add(mail.id); handled.push(mail.id);
     }
-    if (!dryRun) { try { (deps.dailySelfHeal ?? dailySelfHeal)({ dir, now }); } catch (e) { err(`fleet-mail: 自己修復に失敗（受信は成功）: ${e.message}`); } }
-    if (!dryRun) { try { (deps.autoRunFixNow ?? autoRunFixNow)({ dir }); } catch (e) { err(`fleet-mail: fleet-fix-now 自動実行に失敗（受信は成功）: ${e.message}`); } }
-    out(json ? JSON.stringify({ received, processed: handled }) : `受信=${received.length} / 処理=${handled.length}`);
-    return { received, handled };
+    try { (deps.dailySelfHeal ?? dailySelfHeal)({ dir, now }); } catch (error) { err(`fleet-mail: 自己修復失敗: ${redactSecrets(error.message)}`); }
+    try { (deps.autoRunFixNow ?? autoRunFixNow)({ dir }); } catch (error) { err(`fleet-mail: 自動修復失敗: ${redactSecrets(error.message)}`); }
+    out(deps.json ? JSON.stringify({ received, processed: handled }) : `受信=${received.length} / 処理=${handled.length} / 隔離=${rejected}`);
+    return { received, handled, rejected };
   } finally { release(); }
 }
 export async function main(argv = process.argv.slice(2), deps = {}) {
@@ -525,52 +638,74 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     fs.mkdirSync(dir, { recursive: true });
     fs.appendFileSync(path.join(dir, `fleet-mail-${name}.jsonl`), `${JSON.stringify({ at: new Date(now()).toISOString(), ...value })}\n`, { mode: 0o600 });
   };
+  const config = envFile(path.join(dir, 'fleet-sheet.env'));
+  const configured = !!(config.FLEET_SHEET_URL && config.FLEET_SHEET_TOKEN);
+  const identity = deps.identity ?? machineIdentity();
+  const label = resolveFleetLabel(home, identity);
+  const request = configured ? deps.request ?? createClient({ url: config.FLEET_SHEET_URL, token: config.FLEET_SHEET_TOKEN, fetchImpl: deps.fetch })
+    : async () => { throw new Error('fleet-sheet.env 未設定'); };
+  const state = (id, action, extra = {}) => syncMailState({ home, id, action, request, now, stderr: err, ...extra });
   if (options['--inbox']) {
-    const mails = readInbox(home);
+    expireInbox(home, now);
+    const mails = readInbox(home).filter(m => !options['--unseen'] || (['delivered', 'seen'].includes(m.status) && !m.presentedAt));
+    for (const mail of mails) await state(mail.id, 'seen', { seenBy: label });
     out(options['--json'] ? JSON.stringify(mails) : mails.map(m => `${m.id} / from=${m.from} / ${m.kind} / ${m.why}\n${m.body}`).join('\n'));
     return 0;
   }
   if (options['--ack']) {
-    const file = inboxFile(options['--ack']);
-    const mail = readJson(file);
-    if (!mail) throw new Error('inbox に該当メッセージがありません');
-    writeJson(file, { ...mail, readAt: new Date(now()).toISOString() }); out(`既読: ${mail.id}`); return 0;
+    const mails = options['--all-seen'] ? readInbox(home).filter(m => m.presentedAt || m.seenAt || m.status === 'seen') : [readJson(inboxFile(options['--ack']))];
+    if (mails.some(m => !m)) throw new Error('inbox に該当メッセージがありません');
+    for (const mail of mails) await state(mail.id, 'ack');
+    out(`完了=${mails.length}`); return 0;
   }
-  const config = envFile(path.join(dir, 'fleet-sheet.env'));
-  if (!config.FLEET_SHEET_URL || !config.FLEET_SHEET_TOKEN) { err('fleet-mail: fleet-sheet.env 未設定のためスキップ'); return 0; }
-  const identity = deps.identity ?? machineIdentity();
-  const label = resolveFleetLabel(home, identity);
-  const request = deps.request ?? createClient({ url: config.FLEET_SHEET_URL, token: config.FLEET_SHEET_TOKEN, fetchImpl: deps.fetch });
+  if (options['--sweep']) {
+    let done = 0, expired = 0;
+    for (const mail of readInbox(home, { unreadOnly: false })) {
+      if (mail.status === 'done' || mail.status === 'failed' || hasDecisionRequest(mail)) continue;
+      if (Date.parse(mail.expiresAt) <= now()) { await state(mail.id, 'fail', { reason: 'expired' }); expired++; }
+      else if ((mail.id.startsWith('mail-reply-') && Date.parse(mail.createdAt) < now() - 72 * 3600000)
+        || /^\s*\[回答・返信不要\]/.test(mail.why) || /^\s*\[回答・返信不要\]/.test(mail.body)) { await state(mail.id, 'ack'); done++; }
+    }
+    out(`完了=${done} / 期限切れ=${expired}`); return 0;
+  }
+  if (options['--reply']?.startsWith('mail-reply-') && !options['--force']) { err('fleet-mail: 返信メールへの返信は拒否（意図的な返信のみ --force）'); return 3; }
+  if (!configured && !options['--dry-run'] && !options['--send']) { err('fleet-mail: fleet-sheet.env 未設定のためスキップ'); return 0; }
   if (options['--sent-status']) {
     // 読み取りのみ: 返信が相手の受信タスクに拾われたか（deliveredAt）と返信済みか（resultAt）を確認する。
     const id = options['--sent-status'];
     const result = await request('mail-get', { id });
     const mail = result?.mail;
     if (!mail) { err(`fleet-mail: ${id} はサーバーに見つかりません`); return 4; }
-    out([`id: ${mail.id}`, `status: ${mail.status || '(不明)'}`, `deliveredAt: ${mail.deliveredAt || '(未配達)'}`, `resultAt: ${mail.resultAt || '(未返信)'}`].join('\n'));
+    out([`id: ${mail.id}`, ...['status', 'createdAt', 'expiresAt', 'deliveredAt', 'deliveredBy', 'seenAt', 'seenBy', 'resultAt', 'ackAt', 'failedAt', 'failReason'].map(key => `${key}: ${mail[key] || '(なし)'}`)].join('\n'));
     return 0;
   }
   if (options['--send']) {
     let pcMap = deps.pcMap;
     if (pcMap === undefined) {
       try { pcMap = readJson(new URL('../fleet-pc-map.json', import.meta.url)); }
-      catch { /* An unavailable or damaged roster must not prevent sending. */ }
+      catch { /* Beacon labels can still resolve exact targets when the roster is unavailable. */ }
     }
-    const target = resolveRemoteName(options['--to'], pcMap);
-    if (target.resolved) err(`${options['--to']} → ${target.to}`);
+
     // ビーコン取得は1回だけ（解決と鮮度表示で共有）。
     let beaconPromise;
     const sharedBeacons = async args => {
+      if (options['--dry-run'] && !deps.fetchBeacons) return { ok: false, beacons: [] };
       beaconPromise ??= Promise.resolve().then(async () => (deps.fetchBeacons ?? (await import('./fleet-beacon.mjs')).fetchBeacons)(args));
       return beaconPromise;
     };
+    let beacons = [];
+    try { beacons = (await sharedBeacons({ home })).beacons || []; } catch {}
+    const target = resolveMailTarget(options['--to'], pcMap, beacons);
+    if (!target.resolved) { err(`fleet-mail: 宛先 ${options['--to']} は完全一致しません。候補: ${target.candidates.join(', ') || '(なし)'}`); return 4; }
+    if (!configured && !options['--dry-run']) { err('fleet-mail: fleet-sheet.env 未設定のためスキップ'); return 0; }
+    if (target.to !== options['--to']) err(`${options['--to']} → ${target.to}`);
     const deliverable = await resolveDeliverableTarget({ to: target.to, home, now, fetchBeacons: sharedBeacons, pcMap });
     if (deliverable.status === 'redirect') { err(deliverable.text); target.to = deliverable.to; }
     else if (deliverable.status === 'none' && !options['--force']) {
       err(`fleet-mail: 宛先 ${target.to} には poll 実績が無く、同一実機のラベルにも無いため送信しません（未配達になる）。poll 実績のあるラベル: ${deliverable.labels.join(', ') || '(なし)'}。意図的に送るときだけ --force`);
       return 6;
     }
-    const id = `mail-${new Date(now()).toISOString().replace(/[-:.TZ]/g, '')}-${(deps.randomInt ?? randomInt)(1000, 10000)}`;
+    let id = mailId(now, deps.randomBytes);
     // --exec codex: 本文先頭にマーカー行を挿入して受信側に実行モードを伝える（本文ファイル自体は変更しない）。
     let body = redactSecrets(fs.readFileSync(options['--body-file'], 'utf8')).slice(0, 20000);
     if (options['--exec'] === 'codex') {
@@ -596,14 +731,23 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     // --exec codex は相手PCの Codex が最長1800秒走るため、通常 prompt より長い既定期限(+6h)にする。
     const defaultExpiresHours = options['--exec'] === 'codex' ? 6 : 24;
     const payload = { id, from: label, to: target.to, messageKind: options['--kind'],
-      body, why: redactSecrets(options['--why']),
+      body, why: redactSecrets(options['--why']), auto: false, hop: 0,
+      priority: options['--priority'] === 'urgent' || /\[(判断依頼|作業依頼)\]/.test(options['--why']) || /^\s*\[(判断依頼|作業依頼)\]/.test(parseExecMarkers(body).body) ? 'urgent' : 'normal',
       expiresAt: new Date(now() + Number(options['--expires-hours'] ?? defaultExpiresHours) * 3600000).toISOString() };
-    // Record the id BEFORE transport; uncertain delivery can be inspected without resending a new id.
-    log('sent', { action: 'send-attempt', ...payload, ...(options['--exec'] === 'codex' ? { exec: 'codex' } : {}) });
-    await request('mail-send', payload); log('sent', { action: 'sent', id, to: payload.to, ...(options['--exec'] === 'codex' ? { exec: 'codex' } : {}) });
+    if (options['--dry-run']) { out(JSON.stringify(payload)); return 0; }
+    for (let attempt = 0; attempt < 2; attempt++) {
+      payload.id = id;
+      log('sent', { action: 'send-attempt', ...payload, ...(options['--exec'] === 'codex' ? { exec: 'codex' } : {}) });
+      const result = checked(await request('mail-send', payload));
+      if (!result.duplicate) break;
+      if (attempt === 1) { err('fleet-mail: ID 重複（再送上限）'); return 1; }
+      id = mailId(now, deps.randomBytes);
+    }
+    log('sent', { action: 'sent', id, to: payload.to, ...(options['--exec'] === 'codex' ? { exec: 'codex' } : {}) });
+    err(`状態確認: node tools/fleet-mail.mjs --sent-status ${id}`);
     if (options['--wait'] !== undefined) {
       err(`送信済み: ${id}`);
-      const result = await waitForReply(id, Number(options['--wait']), { request, now, sleepImpl: deps.sleep });
+      const result = await waitForReply(id, Number(options['--wait']), { request, now, sleepImpl: deps.sleep, waitFor: options['--wait-for'] || 'done' });
       out(result.text); return result.exitCode;
     }
     out(`送信済み: ${id}`); return 0;
@@ -618,7 +762,12 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
         return 3;
       }
     }
-    await request('mail-reply', { id, from: label, resultBody: body });
+    const parent = readJson(inboxFile(id));
+    const response = checked(await request('mail-reply', { id, from: label, resultBody: body, auto: false, hop: parent ? nextHop(parent) : 1, priority: 'normal' }));
+    if (['failed', 'expired'].includes(response?.mail?.status)) {
+      if (parent) writeJson(inboxFile(id), { ...parent, status: response.mail.status });
+      err(`fleet-mail: 返信なし（${response.mail.status}）`); return 1;
+    }
     log('sent', { action: 'reply', id, ...(options['--force'] ? { forced: true } : {}) });
     const file = inboxFile(id);
     // Record the reply locally too: a resumed session reads the inbox and must not answer the same id again.
@@ -626,7 +775,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       const mail = readJson(file, null);
       if (mail) {
         const nowISO = new Date(now()).toISOString();
-        writeJson(file, { ...mail, status: 'done', resultAt: nowISO, resultBody: body, readAt: mail.readAt ?? nowISO });
+        writeJson(file, { ...mail, status: 'done', resultAt: response?.mail?.resultAt || nowISO, resultBody: redactSecrets(response?.reply?.body ?? response?.mail?.resultBody ?? body), readAt: mail.readAt ?? nowISO });
       }
     } catch (e) { err(`fleet-mail: inbox への返信記録に失敗（送信は成功）: ${e.message}`); }
     out(`返信済み: ${id}`);

@@ -6,11 +6,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { main, parseArgs, createClient, waitForReply, acquireLock, LOCK_MS, readInbox, findPriorReply, resolveRemoteName, parseExecMarkers, looksLikeInstallRequest, describeTargetFreshness } from './fleet-mail.mjs';
+import { main, parseArgs, createClient, waitForReply, acquireLock, LOCK_MS, readInbox, findPriorReply, resolveRemoteName, parseExecMarkers, looksLikeInstallRequest, describeTargetFreshness, mailId } from './fleet-mail.mjs';
 import { main as register } from './register-fleet-mail.mjs';
 import { consentCommand } from './fleet-agent.mjs';
 import { listDecisions, markDecisions, queuePath } from './pending-decisions.mjs';
 
+const pcMap = JSON.parse(fs.readFileSync(new URL('../fleet-pc-map.json', import.meta.url), 'utf8'));
+const recipient = Object.keys(pcMap).find(key => !key.startsWith('_') && pcMap[key].remoteName && pcMap[key].hostname);
+// v2 sends require an exact roster label; expected identities derive from the actual roster.
 function fixture(t, configured = true) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-mail-test-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
@@ -19,7 +22,7 @@ function fixture(t, configured = true) {
   fs.writeFileSync(path.join(dir, 'cost-reporter.env'), 'REPORTER_LABEL=kim-PC\n');
   const body = path.join(home, 'body.txt'); fs.writeFileSync(body, '質問 $() `literal`');
   const calls = [], output = [], errors = [];
-  const deps = { home, identity: { hostname: 'host-kim' }, stdout: t => output.push(t), stderr: t => errors.push(t),
+  const deps = { home, pcMap, identity: { hostname: 'host-kim' }, stdout: t => output.push(t), stderr: t => errors.push(t),
     // 送信前の宛先鮮度表示は既定で「不明」を返す（実ネットワークに出ない・stderr を決定的にする）。
     fetchBeacons: async () => ({ ok: false, beacons: [], serverPolls: {}, reason: 'unconfigured' }),
     request: async (kind, payload) => { calls.push({ kind, payload }); return kind === 'mail-poll' ? { messages: [] } : { mail: payload }; } };
@@ -38,11 +41,11 @@ function spawnDouble(calls, output = 'answer token=secret-value') {
 
 test('send uses file body, reporter identity, reason, expiry and mail-send envelope', async t => {
   const f = fixture(t); const transport = [];
-  f.deps.now = () => Date.parse('2026-09-21T00:00:00Z'); f.deps.randomInt = () => 1234;
+  f.deps.now = () => Date.parse('2026-09-21T00:00:00Z'); f.deps.randomBytes = () => Buffer.from([0, 0, 4, 210]);
   delete f.deps.request;
   f.deps.fetch = async (url, opts) => { transport.push({ url, payload: JSON.parse(opts.body) }); return { ok: true, json: async () => ({ ok: true, mail: {} }) }; };
-  assert.equal(await main(['--send', '--to', 'other-PC', '--kind', 'prompt', '--body-file', f.body, '--why', '調査'], f.deps), 0);
-  assert.deepEqual(transport[0].payload, { id: 'mail-20260921000000000-1234', from: 'kim-PC', to: 'other-PC', messageKind: 'prompt', body: '質問 $() `literal`', why: '調査', expiresAt: '2026-09-22T00:00:00.000Z', kind: 'mail-send', token: 'test-token' });
+  assert.equal(await main(['--send', '--to', recipient, '--kind', 'prompt', '--body-file', f.body, '--why', '調査'], f.deps), 0);
+  assert.deepEqual(transport[0].payload, { id: mailId(f.deps.now, f.deps.randomBytes), from: 'kim-PC', to: recipient, auto: false, hop: 0, priority: 'normal', messageKind: 'prompt', body: '質問 $() `literal`', why: '調査', expiresAt: '2026-09-22T00:00:00.000Z', kind: 'mail-send', token: 'test-token' });
   assert.match(fs.readFileSync(path.join(f.dir, 'fleet-mail-sent.jsonl'), 'utf8'), /send-attempt/);
 });
 for (const to of ['作業用011', '作業用０１１', '  作業用011　']) {
@@ -51,21 +54,19 @@ for (const to of ['作業用011', '作業用０１１', '  作業用011　']) {
     f.deps.pcMap = { 'kimko-PC': { remoteName: '作業用011', hostname: 'DESKTOP-PPD5V8I' } };
     assert.equal(await main(['--send', '--to', to, '--kind', 'note', '--body-file', f.body, '--why', 'test'], f.deps), 0);
     assert.equal(f.calls[0].payload.to, 'kimko-PC');
-    assert.deepEqual(f.errors, [`${to} → kimko-PC`, '宛先 kimko-PC: 最終 poll 不明（ビーコン取得失敗: unconfigured）']);
+    assert.deepEqual(f.errors.slice(0, 2), [`${to} → kimko-PC`, '宛先 kimko-PC: 最終 poll 不明（ビーコン取得失敗: unconfigured）']);
     const logs = fs.readFileSync(path.join(f.dir, 'fleet-mail-sent.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l));
     assert.ok(logs.every(entry => entry.to === 'kimko-PC'));
   });
 }
-test('send preserves unmatched targets without resolution stderr output', async t => {
+// v2 removes partial/unknown targets even when --force is supplied.
+test('send rejects unmatched targets with exit 4 and candidate output', async t => {
   const f = fixture(t);
-  f.deps.pcMap = { 'kimko-PC': { remoteName: '作業用011', hostname: 'DESKTOP-PPD5V8I' } };
-  for (const to of ['other-PC', '  other-ＰＣ　', 'all', '作業用01']) {
-    assert.equal(await main(['--send', '--to', to, '--kind', 'note', '--body-file', f.body, '--why', 'test'], f.deps), 0);
-    assert.equal(f.calls.at(-1).payload.to, to);
+  for (const to of ['unknown-PC', '  other-ＰＣ　', '作業用01']) {
+    assert.equal(await main(['--send', '--to', to, '--kind', 'note', '--body-file', f.body, '--why', 'test', '--force'], f.deps), 4);
   }
-  // 宛先解決の stderr は出ない（送信ごとの鮮度表示1行のみ＝4件）
-  assert.equal(f.errors.length, 4);
-  assert.ok(f.errors.every(line => line.includes('最終 poll 不明（ビーコン取得失敗: unconfigured）')));
+  assert.equal(f.calls.length, 0);
+  assert.ok(f.errors.every(line => line.includes('候補:')));
 });
 test('resolveRemoteName normalizes roster names and falls back to the PC label', () => {
   assert.deepEqual(resolveRemoteName('作業用011', { 'kimko-PC': { remoteName: '　作業用０１１ ' } }), { to: 'kimko-PC', resolved: true });
@@ -98,7 +99,7 @@ test('prompt without opt-in never spawns and returns exact existing consent comm
   const f = fixture(t); f.deps.spawnImpl = () => assert.fail('must not spawn');
   f.deps.request = async (kind, payload) => { f.calls.push({ kind, payload }); return kind === 'mail-poll' ? { messages: [mail({ kind: 'prompt' })] } : { mail: {} }; };
   await main(['--poll'], f.deps);
-  assert.equal(f.calls[1].payload.resultBody, `未オプトイン。承諾コマンド: ${consentCommand('prompt')}`);
+  assert.equal(f.calls.find(c => c.kind === 'mail-reply').payload.resultBody, `未オプトイン。承諾コマンド: ${consentCommand('prompt')}`);
 });
 test('opted-in prompt uses fixed header, local executable/cwd, bounded redacted result, no side-effect tools', async t => {
   const f = fixture(t); const spawns = [];
@@ -111,7 +112,7 @@ test('opted-in prompt uses fixed header, local executable/cwd, bounded redacted 
   assert.match(spawns[0].args[1], /^これは other-PC PC の Claude Code からのメッセージです。/);
   assert.ok(spawns[0].args.includes('--strict-mcp-config')); assert.ok(spawns[0].args.includes('--tools'));
   assert.equal(spawns[0].options.shell, false);
-  assert.equal(f.calls[1].payload.resultBody.length, 8000); assert.doesNotMatch(f.calls[1].payload.resultBody, /secret-value/);
+  assert.equal(f.calls.find(c => c.kind === 'mail-reply').payload.resultBody.length, 8000); assert.doesNotMatch(f.calls.find(c => c.kind === 'mail-reply').payload.resultBody, /secret-value/);
   assert.doesNotMatch(fs.readFileSync(path.join(f.dir, 'fleet-agent-results', `${mail().id}.json`), 'utf8'), /secret-value/);
   await main(['--poll'], f.deps); assert.equal(spawns.length, 1);
 });
@@ -119,7 +120,8 @@ test('failed reply resumes saved result without running prompt again', async t =
   const f = fixture(t); const spawns = []; let fail = true;
   fs.writeFileSync(path.join(f.dir, 'fleet-agent-optin.json'), '{"accept":["prompt"]}'); f.deps.spawnImpl = spawnDouble(spawns);
   f.deps.request = async kind => { if (kind === 'mail-poll') return { messages: fail ? [mail({ kind: 'prompt' })] : [] }; if (fail) throw new Error('offline'); return { mail: {} }; };
-  await assert.rejects(main(['--poll'], f.deps), /offline/); fail = false;
+  // v2 isolates transport failures and retries the saved result on the next poll.
+  assert.equal(await main(['--poll'], f.deps), 0); fail = false;
   await main(['--poll'], f.deps); assert.equal(spawns.length, 1);
   assert.equal(fs.existsSync(path.join(f.dir, 'fleet-mail.lock')), false);
 });
@@ -145,7 +147,7 @@ test('wait returns done body, timeout exit 2 and bounds sleep to deadline', asyn
 test('send --wait returns reply on stdout, reply CLI sends redacted body', async t => {
   const f = fixture(t);
   f.deps.request = async (kind, p) => { f.calls.push({ kind, p }); return { mail: { status: 'done', resultBody: 'answer' } }; };
-  assert.equal(await main(['--send','--to','PC','--kind','note','--body-file', f.body,'--why','test','--wait','5'], f.deps), 0);
+  assert.equal(await main(['--send','--to',recipient,'--kind','note','--body-file', f.body,'--why','test','--wait','5'], f.deps), 0);
   assert.deepEqual(f.output, ['answer']);
   fs.writeFileSync(f.body, 'secret=do-not-log');
   await main(['--reply', 'mail-1', '--body-file', f.body], f.deps);
@@ -160,7 +162,7 @@ test('lock excludes concurrent poll and reclaims only after ten minutes', t => {
 test('missing transport config is exit 0 without side effects or network', async t => {
   const f = fixture(t, false); f.deps.request = () => assert.fail('network called');
   assert.equal(await main(['--poll'], f.deps), 0); assert.equal(f.errors.length, 1); assert.equal(f.output.length, 0);
-  assert.equal(await main(['--send','--to','PC','--kind','note','--body-file',f.body,'--why','test'], f.deps), 0);
+  assert.equal(await main(['--send','--to',recipient,'--kind','note','--body-file',f.body,'--why','test'], f.deps), 0);
 });
 test('transport rejects HTML, HTTP, API failures and old GAS fallback responses', async () => {
   for (const response of [{ ok: false, status: 403 }, { ok: true, json: async () => ({ ok: false, error: 'unauthorized' }) }, { ok: true, json: async () => ({ ok: true, action: 'updated' }) }]) {
@@ -188,7 +190,8 @@ test('prompt backlog is durable while each poll handles at most one prompt', asy
   fs.writeFileSync(path.join(f.dir, 'fleet-agent-optin.json'), '{"accept":["prompt"]}');
   f.deps.spawnImpl = spawnDouble(spawns); let first = true;
   f.deps.request = async kind => { if (kind !== 'mail-poll') return { mail: {} }; const messages = first ? [mail({ kind: 'prompt' }), mail({ id: 'mail-second', kind: 'prompt' }), mail({ id: 'mail-note' })] : []; first = false; return { messages }; };
-  await main(['--poll'], f.deps); assert.equal(spawns.length, 1); assert.equal(readInbox(f.home).length, 3);
+  // v2 terminal inbox status hides completed prompts.
+  await main(['--poll'], f.deps); assert.equal(spawns.length, 1); assert.equal(readInbox(f.home).length, 2);
   await main(['--poll'], f.deps); assert.equal(spawns.length, 2);
 });
 
@@ -292,11 +295,12 @@ for (const [why, body, subject] of [
     assert.equal(decisions[0].status, 'pending');
   });
 }
-test('ordinary notes and marked prompts do not create decisions', async t => {
+test('ordinary notes do not create decisions; marked prompts remain human decisions', async t => {
   const f = fixture(t);
   f.deps.request = async kind => kind === 'mail-poll' ? { messages: [mail(), mail({ id: 'mail-prompt', kind: 'prompt', why: '[判断依頼] 確認' })] } : { mail: {} };
   await main(['--poll'], f.deps);
-  assert.deepEqual(listDecisions({ home: f.home }), []);
+  // v2 protects both note and prompt decision requests from headless answers.
+  assert.equal(listDecisions({ home: f.home }).length, 1);
 });
 test('repeated decision note stays unique, including an already batched source', async t => {
   const f = fixture(t);
@@ -307,7 +311,7 @@ test('repeated decision note stays unique, including an already batched source',
   assert.equal(decisions.length, 1);
   markDecisions([decisions[0].id], { home: f.home, status: 'batched' });
   // Exercise source deduplication even when local mail receipt tracking was lost.
-  fs.unlinkSync(path.join(f.dir, '.fleet-mail-processed'));
+  // v2 has only inbox receipts; .fleet-mail-processed is no longer created.
   fs.unlinkSync(path.join(f.dir, 'fleet-inbox', `${mail().id}.json`));
   await main(['--poll'], f.deps);
   assert.deepEqual(listDecisions({ home: f.home }), [{ ...decisions[0], status: 'batched' }]);
@@ -356,11 +360,13 @@ test('decision note auto-acknowledges with decision id and original deadline', a
   const f = fixture(t);
   f.deps.request = async (kind, p) => { f.calls.push({ kind, p }); return kind === 'mail-poll' ? { messages: [mail({ why: '[判断依頼] 承認' })] } : { mail: {} }; };
   await main(['--poll'], f.deps);
-  const ack = f.calls.find(c => c.kind === 'mail-reply');
-  assert.ok(ack, '受領確認の mail-reply が送信されている');
-  assert.equal(ack.p.id, mail().id);
+  // v2 receipt is a separate auto message so the original stays pending.
+  const ack = f.calls.find(c => c.kind === 'mail-send');
+  assert.ok(ack, '受領確認の mail-send が送信されている');
+  assert.equal(ack.p.replyTo, mail().id);
+  assert.equal(ack.p.auto, true);
   assert.equal(ack.p.from, 'kim-PC');
-  assert.match(ack.p.resultBody, /^受領しました。kim の判断待ちとして登録（決定ID \d{8,}-\d{3}）。回答は kim が決めた後に別の note で送ります。期限: 2099-01-01T00:00:00Z$/);
+  assert.match(ack.p.body, /^受領しました。kim の判断待ちとして登録（決定ID \d{8,}-\d{3}）。回答は kim が決めた後に別の note で送ります。期限: 2099-01-01T00:00:00Z$/);
   const sentLog = fs.readFileSync(path.join(f.dir, 'fleet-mail-sent.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l));
   assert.ok(sentLog.some(entry => entry.action === 'decision-ack' && entry.id === mail().id));
   // 受領確認で inbox を既読化しない: 対話セッションが kim へ聞くまで残る
@@ -401,9 +407,9 @@ test('pollOnce with executePrompts:false receives notes and leaves prompts for t
   const result = await pollOnce({ home: f.home, identity: { hostname: 'host-kim' }, request: f.deps.request, executePrompts: false, spawnImpl: f.deps.spawnImpl, stdout: t2 => output.push(t2), stderr: t2 => errors.push(t2) });
   assert.equal(result.handled.length, 1); // note のみ処理済み
   assert.equal(readInbox(f.home).length, 2);
-  const processed = fs.readFileSync(path.join(f.dir, '.fleet-mail-processed'), 'utf8').trim().split('\n');
-  assert.ok(!processed.includes(mail().id), 'prompt は未処理のまま受信タスクに残す');
-  assert.ok(processed.includes('mail-note-2'));
+  // v2 keeps both notes and prompts pending in the single inbox state machine.
+  assert.ok(readInbox(f.home).every(m => m.status === 'delivered'));
+  assert.equal(fs.existsSync(path.join(f.dir, '.fleet-mail-processed')), false);
   const lastPoll = JSON.parse(fs.readFileSync(path.join(f.dir, '.fleet-mail-last-poll.json'), 'utf8'));
   assert.ok(lastPoll.at);
 });
@@ -437,10 +443,10 @@ test('parseExecMarkers strips the exec marker and optional cwd marker', () => {
 
 test('send --exec codex inserts markers, defaults expiry to +6h and logs exec', async t => {
   const f = fixture(t); const transport = [];
-  f.deps.now = () => Date.parse('2026-09-21T00:00:00Z'); f.deps.randomInt = () => 1234;
+  f.deps.now = () => Date.parse('2026-09-21T00:00:00Z'); f.deps.randomBytes = () => Buffer.from([0, 0, 4, 210]);
   delete f.deps.request;
   f.deps.fetch = async (url, opts) => { transport.push({ url, payload: JSON.parse(opts.body) }); return { ok: true, json: async () => ({ ok: true, mail: {} }) }; };
-  assert.equal(await main(['--send', '--to', 'other-PC', '--kind', 'prompt', '--body-file', f.body, '--why', '実装', '--exec', 'codex', '--exec-cwd', '/repo'], f.deps), 0);
+  assert.equal(await main(['--send', '--to', recipient, '--kind', 'prompt', '--body-file', f.body, '--why', '実装', '--exec', 'codex', '--exec-cwd', '/repo'], f.deps), 0);
   assert.equal(transport[0].payload.body, '<!-- fleet-exec: codex -->\n<!-- fleet-exec-cwd: /repo -->\n質問 $() `literal`');
   assert.equal(transport[0].payload.expiresAt, '2026-09-21T06:00:00.000Z');
   const logs = fs.readFileSync(path.join(f.dir, 'fleet-mail-sent.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l));
@@ -451,10 +457,10 @@ test('send --exec codex inserts markers, defaults expiry to +6h and logs exec', 
 
 test('send --exec codex without cwd inserts only the exec marker', async t => {
   const f = fixture(t); const transport = [];
-  f.deps.now = () => Date.parse('2026-09-21T00:00:00Z'); f.deps.randomInt = () => 1234;
+  f.deps.now = () => Date.parse('2026-09-21T00:00:00Z'); f.deps.randomBytes = () => Buffer.from([0, 0, 4, 210]);
   delete f.deps.request;
   f.deps.fetch = async (url, opts) => { transport.push({ payload: JSON.parse(opts.body) }); return { ok: true, json: async () => ({ ok: true, mail: {} }) }; };
-  await main(['--send', '--to', 'other-PC', '--kind', 'prompt', '--body-file', f.body, '--why', '実装', '--exec', 'codex'], f.deps);
+  await main(['--send', '--to', recipient, '--kind', 'prompt', '--body-file', f.body, '--why', '実装', '--exec', 'codex'], f.deps);
   assert.equal(transport[0].payload.body, '<!-- fleet-exec: codex -->\n質問 $() `literal`');
 });
 
@@ -471,7 +477,8 @@ test('exec codex without opt-in replies with consent command and never spawns', 
   await main(['--poll'], f.deps);
   const reply = f.calls.find(c => c.kind === 'mail-reply');
   assert.equal(reply.p.resultBody, `未オプトイン。承諾コマンド: ${consentCommand('codex')}`);
-  assert.equal(fs.existsSync(path.join(f.dir, 'fleet-agent-results', `${execMail().id}.json`)), false);
+  // v2 saves consent responses too, so transport retries cannot regenerate work.
+  assert.equal(fs.existsSync(path.join(f.dir, 'fleet-agent-results', `${execMail().id}.json`)), true);
 });
 
 test('exec codex first poll detaches runner, records executionStartedAt and does not reply', async t => {
@@ -505,7 +512,8 @@ test('exec codex replies and marks processed once the result file exists', async
   await main(['--poll'], f.deps);
   const reply = f.calls.find(c => c.kind === 'mail-reply');
   assert.match(reply.p.resultBody, /\[fleet-exec codex\] exit=0/);
-  assert.ok(fs.readFileSync(path.join(f.dir, '.fleet-mail-processed'), 'utf8').includes(execMail().id));
+  // v2 stores completion exclusively in inbox.status.
+  assert.equal(readInbox(f.home, { unreadOnly: false }).find(m => m.id === execMail().id).status, 'done');
 });
 
 test('exec codex times out after two hours without a result file', async t => {
@@ -518,7 +526,8 @@ test('exec codex times out after two hours without a result file', async t => {
   await main(['--poll'], f.deps);
   const reply = f.calls.find(c => c.kind === 'mail-reply');
   assert.equal(reply.p.resultBody, 'codex 実行がタイムアウト（結果ファイル未生成）');
-  assert.ok(fs.readFileSync(path.join(f.dir, '.fleet-mail-processed'), 'utf8').includes(execMail().id));
+  // v2 stores completion exclusively in inbox.status.
+  assert.equal(readInbox(f.home, { unreadOnly: false }).find(m => m.id === execMail().id).status, 'done');
 });
 
 test('exec codex still running within two hours neither replies nor spawns', async t => {
@@ -600,7 +609,8 @@ test('spawn ENOENT replies with the resolver candidates and still marks the mail
   assert.match(replies[0].payload.resultBody, /claude CLI が見つかりません/);
   assert.ok(replies[0].payload.resultBody.includes('C:/a/claude.exe'));
   assert.ok(replies[0].payload.resultBody.includes('C:/b/claude.exe'));
-  assert.ok(fs.readFileSync(path.join(f.dir, '.fleet-mail-processed'), 'utf8').includes(mail().id));
+  // v2 stores completion exclusively in inbox.status.
+  assert.equal(readInbox(f.home, { unreadOnly: false }).find(m => m.id === mail().id).status, 'done');
   // 二重実行しない: 次の poll でも再返信しない
   await main(['--poll'], f.deps);
   assert.equal(f.calls.filter(c => c.kind === 'mail-reply').length, 1);
@@ -629,7 +639,7 @@ test('send --kind prompt with an install request exits 5 without sending', async
   fs.writeFileSync(f.body, 'settings.json を書き換えて全PCに配って');
   delete f.deps.request;
   f.deps.fetch = async (url, opts) => { transport.push(JSON.parse(opts.body)); return { ok: true, json: async () => ({ ok: true, mail: {} }) }; };
-  assert.equal(await main(['--send', '--to', 'other-PC', '--kind', 'prompt', '--body-file', f.body, '--why', '配布'], f.deps), 5);
+  assert.equal(await main(['--send', '--to', recipient, '--kind', 'prompt', '--body-file', f.body, '--why', '配布'], f.deps), 5);
   assert.equal(transport.length, 0);
   assert.ok(f.errors.some(e => e.includes('setup --converge 経由')));
 });
@@ -638,7 +648,7 @@ test('send --kind prompt with --force bypasses the install-request guard', async
   fs.writeFileSync(f.body, 'settings.json を書き換えて');
   delete f.deps.request;
   f.deps.fetch = async (url, opts) => { transport.push(JSON.parse(opts.body)); return { ok: true, json: async () => ({ ok: true, mail: {} }) }; };
-  assert.equal(await main(['--send', '--to', 'other-PC', '--kind', 'prompt', '--body-file', f.body, '--why', '再送', '--force'], f.deps), 0);
+  assert.equal(await main(['--send', '--to', recipient, '--kind', 'prompt', '--body-file', f.body, '--why', '再送', '--force'], f.deps), 0);
   assert.equal(transport.length, 1);
 });
 test('send --kind note with an install request is allowed', async t => {
@@ -646,7 +656,7 @@ test('send --kind note with an install request is allowed', async t => {
   fs.writeFileSync(f.body, 'settings.json の件で相談したい');
   delete f.deps.request;
   f.deps.fetch = async (url, opts) => { transport.push(JSON.parse(opts.body)); return { ok: true, json: async () => ({ ok: true, mail: {} }) }; };
-  assert.equal(await main(['--send', '--to', 'other-PC', '--kind', 'note', '--body-file', f.body, '--why', '相談'], f.deps), 0);
+  assert.equal(await main(['--send', '--to', recipient, '--kind', 'note', '--body-file', f.body, '--why', '相談'], f.deps), 0);
   assert.equal(transport.length, 1);
 });
 
@@ -686,10 +696,10 @@ test('send prints the target freshness line and a stale warning before sending',
   f.deps.now = () => Date.parse('2026-10-11T00:00:00Z');
   delete f.deps.request;
   f.deps.fetch = async (url, opts) => { transport.push(JSON.parse(opts.body)); return { ok: true, json: async () => ({ ok: true, mail: {} }) }; };
-  f.deps.fetchBeacons = async () => beaconResult({ beacons: [{ label: 'other-PC', reportedAt: '2026-10-09T00:00:00Z', pollAt: '2026-10-09T00:00:00Z' }] });
-  assert.equal(await main(['--send', '--to', 'other-PC', '--kind', 'note', '--body-file', f.body, '--why', 'test'], f.deps), 0);
+  f.deps.fetchBeacons = async () => beaconResult({ beacons: [{ label: recipient, reportedAt: '2026-10-09T00:00:00Z', pollAt: '2026-10-09T00:00:00Z' }] });
+  assert.equal(await main(['--send', '--to', recipient, '--kind', 'note', '--body-file', f.body, '--why', 'test'], f.deps), 0);
   assert.equal(transport.length, 1);
-  assert.ok(f.errors.some(e => /^宛先 other-PC: 最終poll 10\/09 09:00 \(2d前\)/.test(e)));
+  assert.ok(f.errors.some(e => e.startsWith(`宛先 ${recipient}: 最終poll 10/09 09:00 (2d前)`)));
   assert.ok(f.errors.some(e => e.includes('⚠ 宛先は24時間以上 poll していない可能性。返信が遅れます')));
 });
 test('send continues when the freshness lookup fails', async t => {
@@ -697,7 +707,7 @@ test('send continues when the freshness lookup fails', async t => {
   delete f.deps.request;
   f.deps.fetch = async (url, opts) => { transport.push(JSON.parse(opts.body)); return { ok: true, json: async () => ({ ok: true, mail: {} }) }; };
   f.deps.fetchBeacons = async () => { throw new Error('offline'); };
-  assert.equal(await main(['--send', '--to', 'other-PC', '--kind', 'note', '--body-file', f.body, '--why', 'test'], f.deps), 0);
+  assert.equal(await main(['--send', '--to', recipient, '--kind', 'note', '--body-file', f.body, '--why', 'test'], f.deps), 0);
   assert.equal(transport.length, 1);
   assert.ok(f.errors.some(e => e.includes('最終 poll 不明')));
 });

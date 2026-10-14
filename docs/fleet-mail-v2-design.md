@@ -1,0 +1,121 @@
+# fleet-mail v2 設計（PC 間 Claude Code 連絡の根本見直し）
+
+作成: 2026-10-14 kim-PC（Claude Fable 監督）。実装は Codex。正本はこの文書と `tools/fleet-mail*.test.mjs`。
+
+## 0. なぜ作り直すか（2026-10-12 事故の真因）
+
+cr-PC → kim-PC の作業依頼 `mail-20261012125202282-6588` は 21:52 に配達されたが、kim-PC の Claude が読んだのは翌 10:42（13 時間後）。cr-PC には「配達済み」しか見えず「未着」と判断した。監査で分かった構造欠陥:
+
+1. **サーバー（fleet シート GAS）が既読を持たない。** `delivered` は「受信 PC の poll が取った」だけで、Claude が読んだか・返したかはどこにも無い。
+2. **宛先が部分一致。** `label.indexOf(to)` のため `kim` や `作業用01` が複数 PC に当たり、最初に poll した PC が消費する。返信も同じ経路で迷子になる。
+3. **受信側は対話セッションでプロンプトが打たれるまで誰も見ない。** hook は UserPromptSubmit のみ。夜間・不在は無限に待つ。
+4. **hook が古い順・1500 字で打ち切る。** 未読 108 通の状態では最古の数通で枠が埋まり、新着は永久に出ない。
+5. **処理済みの二重管理。** `.fleet-mail-processed`（poll）と inbox の `status/readAt`（reply/ack）が別。対話で返信済みでも poll が prompt を再実行して二重返信する。
+6. **ループ防止が `[判断依頼]` 限定。** 通常の返信への返信が PC 間で往復しうる。
+7. **hook が 5 秒 kill される設計で GAS 往復と lock を持つ。** lock が残ると定期受信が最大 10 分スキップ。
+8. **poison message で受信バッチ全体が止まり、同じバッチが再生され続ける。**
+9. **監視は kim-PC 単独・`new` のみ。** 「配達済みだが未読」は検知されない。
+10. **健全性判定が LastRunTime のみ。** 毎回失敗しているタスクも ok。
+
+## 1. 設計原則
+
+- **正本はサーバー 1 か所。** 状態遷移はすべて Sheet に書き、送信側が `--sent-status` で「どこまで進んだか」を必ず見られる。ローカルの inbox はキャッシュ。
+- **「最適なタイミング」= 到着時に分類して即時アクションを決め、人の注意が要るものだけ通知する。** 残りは次のセッション境界（SessionStart / UserPromptSubmit）で新しい順・優先順に提示する。
+- **配達・既読・完了を分ける。** 送信側は seen を待てる。読まれていない作業依頼は 2 時間で SLA 超過として通知される。
+- **自動生成メールは自動返信しない。** `auto`/`hop` で機械的にループを断つ。
+- **1 通の失敗で他を巻き込まない。** 隔離して先へ進む。
+- **後方互換。** 旧 CLI が新 GAS に、新 CLI が旧 GAS に当たっても壊れない（未知 action は警告のみ）。全 PC 同時配布でも受信が止まらない。
+
+## 2. 状態機械（Sheet「fleet-mail」正本）
+
+```
+new ──poll──▶ delivered ──注入/閲覧/実行開始──▶ seen ──reply|ack──▶ done
+                 │                                 │
+                 └──────────── fail ───────────────┴──▶ failed
+   いずれも expiresAt 超過で未 done ──GAS sweep──▶ expired
+```
+
+| 列 | 意味 | 書く主体 |
+|---|---|---|
+| status | new / delivered / seen / done / failed / expired | GAS |
+| deliveredAt, deliveredBy | 受信 PC の poll が取得 | poll |
+| seenAt, seenBy | Claude のコンテキストに注入された／`--inbox` で本文を読んだ／headless が実行開始（seenBy = ラベル + sessionId か `headless`） | 受信 CLI `mail-seen` |
+| resultAt, resultBody | 返信 | `mail-reply` |
+| ackAt | 返信不要の完了 | `mail-ack` |
+| failedAt, failReason | 受信側で処理不能 | `mail-fail` |
+| auto, hop | 自動生成フラグと世代 | 送信時 |
+| priority | normal / urgent | 送信時（`--priority urgent`、`[判断依頼]`/`[作業依頼]` は自動で urgent） |
+
+- 新 action: `mail-seen`, `mail-ack`, `mail-fail`。全て冪等。状態は前進のみ（done の後に seen を受けても done のまま、ok:true で返す）。
+- `mail-get` / `mail-sent-status` は全時刻と deliveredBy/seenBy を返す。
+- `mail-reply`: 相手が `auto=true` のメールへの `auto=true` 返信は `ok:false, reason:'loop'`。返信メールは `auto=false` でも `hop=parent.hop+1` を持ち、`hop>=3` の返信は拒否。
+
+## 3. 宛先解決（完全一致）
+
+- 正本: `tools/fleet-pc-map.json`（作業用番号⇔ラベル⇔hostname）＋ビーコンのラベル一覧。
+- CLI `--to` の解決順: ①作業用番号→ラベル ②ラベル完全一致 ③hostname 完全一致（map か beacon に存在するもの） ④`all`。**部分一致は廃止。** 解決できなければ送らず exit 4 で候補（前方一致上位 5 件）を表示。
+- CLI は解決後の **正規ラベル** を `to` に入れて送る。GAS の poll 側も `label === to || hostname === to` の完全一致のみ。
+- 返信先は原本 `from`（送信時に正規ラベルで記録）なので一致する。
+- 同一 hostname の複数ラベル（kimko-PC/作業用004）は従来 PR #751 の付替えを維持。
+
+## 4. 受信（2 分 poll、`fleet-mail.mjs --poll`）
+
+- `.fleet-mail-processed` を**廃止**し、処理済み判定は inbox の `status` に統一（`done/failed/expired` = 処理済み、`delivered/seen` = 未処理）。移行時は既存 processed の id を inbox に反映して削除。
+- prompt の自動実行条件: `status ∈ {delivered, seen}` かつ `executionStartedAt` 無し。対話で `--reply` 済み（done）は再実行しない。
+- 1 通ごとに try/catch。不正メールは `~/.claude/fleet-inbox/quarantine/<id>.json` に退避し `mail-fail(reason)` を送り、バッチの残りは処理する。pollFile（再送レシート）は成功した id だけ確定する。
+- 到着時の即時アクション（分類は `why`/本文先頭の `[判断依頼]`/`[作業依頼]`/`[回答・返信不要]`/`[回答]`/`priority`）:
+  - `prompt` → 既存どおり headless 実行（オプトイン済みのみ）。実行開始時に `mail-seen(seenBy='headless')`。
+  - `[判断依頼]` → pending-decisions 登録 ＋ 受領 ack（auto=true）＋ Discord 通知（§7）。ヘッドレスは答えない（既存）。
+  - `[作業依頼]` / `priority=urgent` → Discord 通知（§7）。本文は注入待ち。
+  - 返信メール（`mail-reply-*`） → 原本が `fleet-mail-sent.jsonl` にあれば `resultBody` を結合して保存。hook は `[回答・返信不要]` として 1 回注入し、注入後に自動 `mail-ack`。
+  - その他 note → 待機。
+- 期限切れ（expiresAt 超過・未 done）はローカルで `expired` にして提示から外す（サーバーは §7 の sweep が付ける）。
+- `mail-seen`/`mail-ack` の送信失敗は inbox に `pendingServer:['seen']` を残し、次の poll で再送（最終的整合）。
+
+## 5. 提示（hook `fleet-inbox-context.mjs`）
+
+- 発火: **SessionStart と UserPromptSubmit** の両方。
+- hook は **GAS と通信しない**（5 秒 kill 対策）。`.fleet-mail-last-poll.json` が 3 分より古ければ `fleet-mail.mjs --poll` を detached で spawn して今回はローカル分だけ出す。lock は poll 専用で hook は持たない。
+- 表示順と上限（1 通 240 字、全体 1800 字）:
+  1. 未回答 `[判断依頼]`（最大 3）
+  2. 未 seen の `[作業依頼]` / urgent（最大 3）
+  3. 未 seen の返信 `[回答・返信不要]`（最大 3、注入後に自動 ack）
+  4. その他 未 seen note を **新しい順**（最大 2）
+  5. 末尾 1 行: `他 N 件（期限切れ M 件は除外）: node tools/fleet-mail.mjs --inbox --unseen`
+- 注入したものは inbox に `presentedAt`, `presentedSession` を書き、`mail-seen` を detached spawn で送る（fire-and-forget、失敗は §4 の再送）。
+- 同じセッションで提示済みのものは全文を再注入せず件数行だけに含める。別セッションでは done まで再提示。
+- `--ack <id>`、`--ack --all-seen`（提示済み一括）、`--reply` で done。
+
+## 6. 送信側の見え方
+
+- `--send` 後に 1 行で状態確認の手順を出す（`--sent-status <id>`）。
+- `--sent-status` は new/delivered/seen/done/failed/expired と各時刻・deliveredBy・seenBy を表示。
+- `--wait` は `--wait-for seen|done`（既定 done）。seen を待てば「読まれた」時点で戻れる。
+- id は `mail-<ms>-<8 hex 乱数>`。GAS が `duplicate:true` を返したら id を再生成して 1 回だけ再送（それでも duplicate なら exit 1）。
+
+## 7. 監視（サーバー側に移す）
+
+- GAS 時間トリガー `fleetMailSweep`（10 分毎、`setupFleetMailTriggers()` で冪等登録）:
+  - (a) expiresAt 超過・未 done → `expired`。
+  - (b) delivered で seen なしが **2 時間**超（urgent）／**6 時間**超（normal）→ アラート「未読 SLA 超過」。
+  - (c) new で delivered なしが **30 分**超 → アラート「未配達（受信タスク停止の疑い）」。
+  - アラートは Sheet タブ `fleet-mail-alerts`（id, kind, to, from, why, firstAt, lastNotifiedAt）に 1 id 1 行で upsert。6 時間ごとに再通知可。ScriptProperties `FLEET_MAIL_DISCORD_WEBHOOK` があれば GAS から直接 Discord `#claude-code` へ投稿（UrlFetchApp）。無ければタブ記録のみ。
+- kim-PC の `fleet-mail-watchdog.mjs`（毎時、既存）は `fleet-mail-alerts` タブを読み、未通知分を Discord `#claude-code` と kim の DM に投稿（webhook 未設定時のフォールバック）。従来の `new` 監視は GAS 側へ移す。
+- 到着通知（§4）: 受信 PC の poll が `[判断依頼]`/`[作業依頼]`/urgent の到着時に `#claude-code` へ 1 行投稿（`<宛先ラベル> 宛 <種別> 到着: <why 60 字> / id`）。既存の Discord 投稿経路（`tools/notify-kim.mjs` か discord-inbox-intake が使う webhook）を流用し、無ければ黙ってスキップ（stderr に 1 行）。1 id 1 回。
+- `register-fleet-mail.mjs --ensure`: 判定を **LastTaskResult≠0 または last-poll が 10 分より古い** に変更し、該当なら再登録＋即 1 回 poll。SessionStart hook からも `--ensure --quiet` を detached で呼ぶ（日次 03:15 を待たない）。
+
+## 8. 一括掃除（移行）
+
+- `fleet-mail.mjs --sweep`: ローカル inbox の期限切れ・72 時間超の返信メール・`[回答・返信不要]` を `expired`/`done` にし、サーバーへ `mail-ack`/`mail-fail(expired)` を送る。`[判断依頼]` の未回答は残す。結果を件数で表示。
+- converge の `task:fleet-mail` ステップは、新版導入時に 1 回だけ `--sweep` を実行（`~/.claude/.fleet-mail-v2-migrated` マーカー）。
+
+## 9. 配布と互換
+
+- GAS `Mail.gs` は旧 CLI の poll/reply を壊さない（新列は任意、未知フィールドは無視）。新 CLI は旧 GAS に当たると `mail-seen` 等が unknown action でも警告 1 行で続行。
+- 本番反映: Mail.gs は `gas-overlay-push.mjs --project <一時dir> --files Mail.js --deploy-webapp`（kim-PC で Claude が実行）。CLI・hook・タスクは `setup --converge`（`tools/fleet-scope.json` の `task:fleet-mail`）で全 PC へ。
+- `docs/PC名簿.md` と `skills/fleet-mail/SKILL.md` を v2 の挙動（完全一致・seen・--wait-for・--sweep）に更新。
+
+## 10. 完了の定義
+
+- 単体: `node --test tools/fleet-mail*.test.mjs tools/fleet-inbox-context.test.mjs tools/fleet-poller*.test.mjs tools/fleet-mail-gas.test.mjs` 全 pass。GAS ロジックは既存流儀どおり `.gs` を読み込んで `new Function` で評価するテストで固定。
+- 実機（kim-PC）: 自分宛に `--send --to kim-PC --kind note --why "[作業依頼] v2 実測"` → 2 分以内に delivered → 新セッションで hook が提示 → `--sent-status` が seen → `--ack` で done。`--to kim`（部分一致）が exit 4 で候補表示になる。

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseUsageLimitUntil, isUsageLimitText, countUnattendedToday, loadBudget, providerLimitedUntil, decideCodexGate, parseDeferred, DAY_MS } from './executor-gate.mjs';
+import { parseUsageLimitUntil, isUsageLimitText, countUnattendedToday, loadBudget, providerLimitedUntil, decideCodexGate, parseDeferred, readCodexCooldownUntil, writeCodexCooldownFile, DAY_MS } from './executor-gate.mjs';
 
 const tmp = (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'executor-gate-'));
@@ -11,6 +11,34 @@ const tmp = (t) => {
   fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
   return dir;
 };
+
+const HOUR = 60 * 60 * 1000;
+
+// 2026-10-11 03:23 に実測した値(週次リセット 90.5 時間)。これが素通りすると
+// 枠が回復しても Codex が再試行されない(cooldown は自動では消えない)。
+test('writeCodexCooldownFile は5時間超の再開時刻を5時間へ丸め reason に :capped を残す', (t) => {
+  const dir = tmp(t);
+  const file = path.join(dir, '.claude', 'codex-cooldown.json');
+  const now = new Date(2026, 9, 11, 3, 23, 0).getTime();
+  writeCodexCooldownFile(file, now + 90.5 * HOUR, now);
+  const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(saved.until, now + 5 * HOUR);
+  assert.equal(saved.reason, 'usage_limit:capped');
+  assert.equal(saved.t, now);
+  assert.equal(readCodexCooldownUntil(file, now), now + 5 * HOUR);
+});
+
+test('writeCodexCooldownFile は5時間以内の再開時刻をそのまま書く', (t) => {
+  const dir = tmp(t);
+  const file = path.join(dir, '.claude', 'codex-cooldown.json');
+  const now = new Date(2026, 9, 11, 3, 23, 0).getTime();
+  const until = now + 3 * HOUR;
+  writeCodexCooldownFile(file, until, now);
+  const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(saved.until, until);
+  assert.equal(saved.reason, 'usage_limit');
+  assert.equal(readCodexCooldownUntil(file, now), until);
+});
 
 test('実例の上限メッセージ "try again at Oct 4th, 2026 3:12 AM" をローカル時刻で解析する', () => {
   const now = new Date(2026, 9, 3, 12, 0, 0).getTime();

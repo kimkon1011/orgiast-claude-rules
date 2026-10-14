@@ -931,7 +931,8 @@ while (true) {
 }
 if (quotaCheck.matched && selectedLane.slug !== ASTRA) {
   // Sol/既定モデルの上限: 次回以降の起動を保留にするため codex-cooldown.json を書く。
-  // 本文に上限メッセージ(You've hit your usage limit)がある時だけ。解析できなければ24時間後。
+  // 本文に上限メッセージ(You've hit your usage limit)がある時だけ。解析できなければ24時間後だが、
+  // writeCodexCooldownFile が 5 時間を上限に丸める(週次リセット等の遠い until でレーンが無音で死ぬのを防ぐ)。
   const limitText = normalizeQuotes(`${result?.output || ''}\n${result?.stderr || ''}`);
   if (isUsageLimitText(limitText)) {
     try { writeCodexCooldownFile(claudeFile(home, 'codex-cooldown.json'), parseUsageLimitUntil(limitText)); } catch {}

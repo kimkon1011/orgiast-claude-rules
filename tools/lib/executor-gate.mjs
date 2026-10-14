@@ -22,9 +22,19 @@ export function isUsageLimitText(text) {
   return /You(?:['’]ve| have) hit your usage limit/i.test(String(text || ''));
 }
 
+export const CODEX_GATE_MAX_COOLDOWN_MS = 5 * 60 * 60 * 1000;
+
+// codex-cooldown.json は decideCodexGate が「Codex を起動しない」判断にだけ使う。
+// 遠い until をそのまま書くと、枠が回復しても再試行されず、レーンが無音で死ぬ
+// (2026-10-11〜14: 週次リセットの 90.5 時間が入り、Codex 本体は健全なのに
+// 3 日間 fallback:gemini-cli を選び続けた)。上限を 5 時間に切り、
+// 少なくとも 5 時間ごとに 1 回は再probeできるようにする。
 export function writeCodexCooldownFile(file, until, now = Date.now()) {
+  const requested = Number(until);
+  const capped = !Number.isFinite(requested) || requested - now > CODEX_GATE_MAX_COOLDOWN_MS;
+  const savedUntil = capped ? now + CODEX_GATE_MAX_COOLDOWN_MS : requested;
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify({ until, reason: 'usage_limit', t: now })}\n`, 'utf8');
+  fs.writeFileSync(file, `${JSON.stringify({ until: savedUntil, reason: capped ? 'usage_limit:capped' : 'usage_limit', t: now })}\n`, 'utf8');
 }
 
 export function readCodexCooldownUntil(file, now = Date.now()) {

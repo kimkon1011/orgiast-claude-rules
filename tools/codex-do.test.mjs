@@ -1368,8 +1368,11 @@ test('A: 上限メッセージの stderr で codex-cooldown.json が書かれ、
   });
   assert.notEqual(first.status, 0);
   const cooldown = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'codex-cooldown.json'), 'utf8'));
-  assert.equal(cooldown.reason, 'usage_limit');
-  assert.ok(cooldown.until > Date.now() + 86400000, 'until は約2日後');
+  // 本文が示す再開時刻は約2日先だが、writer が 5 時間へ丸める。
+  // 2026-10-11〜14 は週次リセットの 90.5 時間がそのまま入り、Codex 本体は健全なのに
+  // 3 日間一度も再試行されなかった(丸めが無いと枠回復後も無音で死ぬ)。
+  assert.equal(cooldown.reason, 'usage_limit:capped');
+  assert.ok(Math.abs(cooldown.until - (Date.now() + 5 * 3600 * 1000)) < 60000, 'until は約5時間後');
   assert.ok(Math.abs(cooldown.t - Date.now()) < 60000);
   // 2回目はモックを渡さない。本物の Codex を起動しようとしたら deferred にならず失敗する。
   const second = run(['--force-native', '--cwd', home, '新機能を実装して'], { home });
@@ -1404,14 +1407,15 @@ test('A: cooldown 中でも代替バックエンドがあれば deferred にせ�
   assert.equal(lastJson(strict.stdout).reason, 'codex_cooldown');
 });
 
-test('A: 解析できない上限メッセージは24時間後を until にする', (t) => {
+test('A: 解析できない上限メッセージは24時間後を既定にしつつ writer が5時間へ丸める', (t) => {
   const home = tmpHome(t, 'codex-cooldown-24h');
   run(['--force-native', '--cwd', home, '--no-fallback', '--model', 'sol', '実装して'], {
     home,
     env: { CODEX_DO_MOCK_RESULTS: JSON.stringify([{ status: 1, output: 'partial', stderr: "ERROR: You've hit your usage limit. Please try again later." }]) },
   });
   const cooldown = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'codex-cooldown.json'), 'utf8'));
-  assert.ok(Math.abs(cooldown.until - (Date.now() + 86400000)) < 120000);
+  assert.equal(cooldown.reason, 'usage_limit:capped');
+  assert.ok(Math.abs(cooldown.until - (Date.now() + 5 * 3600 * 1000)) < 120000, '24時間既定も5時間へ丸める');
 });
 
 test('A: cooldown が過去なら通常どおり Codex を起動する', (t) => {

@@ -691,21 +691,48 @@ test('todo または feedback が failure/timeout なら main は 1 を返す', 
   assert.equal(await main(['--count', '0', '--feedback-count', '1'], mainIoWithFeedback('timeout')), 1);
 });
 
+for (const key of ['rows', 'items', 'tasks']) {
+  for (const empty of [false, true]) {
+    test(`task-ledger --list は ${key} の${empty ? '空台帳' : '未着手行'}を読む`, async () => {
+      const logs = [];
+      const originalLog = console.log;
+      console.log = (message) => logs.push(String(message));
+      try {
+        const code = await main(['--list'], {
+          listFeedbackIssues: () => [],
+          listTaskLedgerItems: async () => ({ ok: true, [key]: empty ? [] : [{ taskId: 'LIST-42', 件名: '表示確認' }] }),
+          runChild: async () => assert.fail('list は実行しない'),
+          runTaskLedger: async () => assert.fail('list は台帳を変更しない'),
+        });
+        assert.equal(code, 0);
+        const lines = logs.filter((line) => line.startsWith('[task-ledger]'));
+        assert.equal(lines.length, 1);
+        assert.match(lines[0], empty ? /0件/ : /LIST-42 表示確認/);
+      } finally { console.log = originalLog; }
+    });
+  }
+}
+
 test('task-ledger タスクを第3取得元として実行し claim と done を記録する', async () => {
   const claudeDir = path.join(isolatedHome, '.claude');
   fs.mkdirSync(claudeDir, { recursive: true });
   fs.writeFileSync(path.join(claudeDir, 'next-session.md'), '<!-- NEXT-SESSION v1 -->\n## 残TODO\n');
   const ledgerCalls = [];
-  const code = await main(['--count', '1', '--feedback-count', '0'], {
+  const code = await main(['--count', 'all', '--feedback-count', '0'], {
     listFeedbackIssues: () => [],
     listTaskLedgerItems: async (filters) => {
-      if (filters.taskId) return [{ taskId: filters.taskId, 件名: '台帳タスク', 状態: '未着手' }];
+      if (filters.taskId) return { rows: [{ taskId: filters.taskId, 件名: '台帳タスク', 状態: '未着手' }] };
       assert.deepEqual(filters, { 状態: '未着手' });
-      return [{ taskId: 'TASK-42', 件名: '台帳タスク' }];
+      return { rows: [{ taskId: 'TASK-42', 件名: '台帳タスク', 備考: '~/.claude/auto-session/handoffs/task-42.md', 成果物リンク: 'https://example.test/task-42' }] };
     },
     runTaskLedger: async (args) => ledgerCalls.push(args),
     resolveClaudeExe: () => '/fake/claude',
-    runChild: async () => ({ status: 'success', exitCode: 0, stdout: '完了', stderr: '', startedAt: new Date().toISOString(), endedAt: new Date().toISOString() }),
+    runChild: async (_executable, prompt) => {
+      assert.ok(prompt.includes('~/.claude/auto-session/handoffs/task-42.md'));
+      assert.ok(prompt.includes('https://example.test/task-42'));
+      assert.ok(prompt.includes('codex-do.mjs --prompt-file'));
+      return { status: 'success', exitCode: 0, stdout: '完了', stderr: '', startedAt: new Date().toISOString(), endedAt: new Date().toISOString() };
+    },
     notify: async () => {},
   });
   assert.equal(code, 0);
@@ -742,6 +769,9 @@ test('選定後に台帳側で完了になったタスクは起動も claim も�
 });
 
 test('taskClosedBeforeLaunch は再確認の失敗で実行側に倒す', async () => {
+  for (const key of ['rows', 'items', 'tasks']) {
+    assert.equal(await taskClosedBeforeLaunch(async () => ({ [key]: [{ taskId: 'T', 状態: '完了' }] }), 'T'), true);
+  }
   assert.equal(await taskClosedBeforeLaunch(async () => [{ taskId: 'T', 状態: '完了' }], 'T'), true);
   assert.equal(await taskClosedBeforeLaunch(async () => [{ taskId: 'T', 状態: '作業中' }], 'T'), false);
   assert.equal(await taskClosedBeforeLaunch(async () => { throw new Error('ledger down'); }, 'T'), false);

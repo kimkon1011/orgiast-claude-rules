@@ -439,7 +439,7 @@ export function isTodoAlreadyDone(md, todoText) {
 export async function taskClosedBeforeLaunch(listTaskLedgerItems, taskId) {
   try {
     const rows = await listTaskLedgerItems({ taskId });
-    const row = Array.isArray(rows) ? rows.find((entry) => String(entry?.taskId) === String(taskId)) : null;
+    const row = ledgerRows(rows).find((entry) => String(entry?.taskId) === String(taskId));
     return String(row?.状態 ?? '').trim() === '完了';
   } catch {
     return false;
@@ -460,6 +460,13 @@ export function writeTodoDone(nextFile, todoText, note, io = {}) {
     console.warn(`auto-session: 完了 TODO を書き戻せませんでした（実行は継続します）: ${error?.message ?? error}`);
     return false;
   }
+}
+
+function buildLedgerPrompt(item, todo, repoCwd, summaryFile, timeoutMin) {
+  const references = ['次アクション', '成果物リンク', '備考']
+    .filter((key) => item[key]).map((key) => `${key}: ${item[key]}`).join('\n');
+  const sections = { 対象: `## 台帳の指示・参照\n${references}\n台帳に HANDOFF 指示書（~/.claude/auto-session/handoffs/*.md 等）の参照がある場合は、そのファイルを読み、実装を codex-do.mjs --prompt-file "<指示書のパス>" --cwd "${repoCwd}" --origin unattended で委譲する。参照先を読めない場合は完了扱いにせず、理由をサマリへ記録する。` };
+  return buildPrompt(todo, sections, repoCwd, summaryFile, timeoutMin);
 }
 
 export function buildPrompt(todo, sections, repoCwd, summaryFile, timeoutMin = 60, date = new Date()) {
@@ -974,7 +981,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   const home = homeDir();
   const listTaskLedgerItems = io.listTaskLedgerItems ?? (async (filters) => {
     const response = await runTaskLedger({ command: 'list', ...filters }, { homeDir: home });
-    return ledgerRows(response);
+    return response;
   });
   const updateTaskLedger = io.runTaskLedger ?? ((args) => runTaskLedger(args, { homeDir: home }));
   const claudeDir = path.join(home, '.claude');
@@ -1026,7 +1033,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   let taskLedgerItems = [];
   try {
     const listed = await listTaskLedgerItems({ 状態: '未着手' });
-    taskLedgerItems = Array.isArray(listed) ? listed.filter((item) => item?.taskId) : [];
+    taskLedgerItems = ledgerRows(listed).filter((item) => item?.taskId);
   } catch (error) {
     console.warn(`auto-session: task-ledger の取得に失敗しました（既存処理は継続します）: ${error?.message ?? error}`);
   }
@@ -1070,7 +1077,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
       const repoCwd = pickCwd(todo, fs.existsSync, config.repoByKeyword);
       const historyCwd = fs.existsSync(detectedHistoryCwd) ? detectedHistoryCwd : repoCwd;
       const summaryFile = path.join(autoDir, 'runs', `dry-task-ledger-${index + 1}.summary.md`);
-      console.log(`[task-ledger]\nTASK: ${todo}\nREPO CWD: ${repoCwd}\nHISTORY CWD: ${historyCwd}\n\n${buildPrompt(todo, {}, repoCwd, summaryFile, options.timeoutMin)}`);
+      console.log(`[task-ledger]\nTASK: ${todo}\nREPO CWD: ${repoCwd}\nHISTORY CWD: ${historyCwd}\n\n${buildLedgerPrompt(item, todo, repoCwd, summaryFile, options.timeoutMin)}`);
     }
     if (!selectedTaskLedger.length) console.log('[task-ledger]\nDRY対象: 0件');
     return 0;
@@ -1240,7 +1247,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
         const runFile = path.join(autoDir, 'runs', `${stamp}.json`);
         const summaryFile = path.join(autoDir, 'runs', `${stamp}.summary.md`);
         fs.writeFileSync(summaryFile, '', { flag: 'a' });
-        const result = await runSession(executable, buildPrompt(todo, {}, repoCwd, summaryFile, timing.timeoutMin), repoCwd, historyCwd, timing.timeoutMin * 60_000);
+        const result = await runSession(executable, buildLedgerPrompt(item, todo, repoCwd, summaryFile, timing.timeoutMin), repoCwd, historyCwd, timing.timeoutMin * 60_000);
         let summary = '';
         try { summary = fs.readFileSync(summaryFile, 'utf8'); } catch {}
         completedChildren += 1;

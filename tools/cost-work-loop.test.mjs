@@ -17,7 +17,7 @@ test.after(() => fs.rmSync(isolatedHome, { recursive: true, force: true }));
 
 test('委譲ヘルスをプロバイダ健全性の直前へ挿入する', () => {
   fs.writeFileSync(path.join(isolatedHome, '.claude', 'executor-usage.jsonl'), JSON.stringify({ t: new Date().toISOString(), provider: 'skipped', status: 'no-cheap-executor' }) + '\n');
-  const run = spawnSync(process.execPath, [path.join(import.meta.dirname, 'cost-work-loop.mjs')], { env: { ...process.env, ORGIAST_HOME: isolatedHome }, encoding: 'utf8', timeout: 120_000 });
+  const run = spawnSync(process.execPath, [path.join(import.meta.dirname, 'cost-work-loop.mjs')], { cwd: isolatedHome, env: { ...process.env, ORGIAST_HOME: isolatedHome, COST_WORK_REPOS: isolatedHome }, encoding: 'utf8', timeout: 120_000 });
   assert.equal(run.status, 0, run.stderr);
   const directive = fs.readFileSync(path.join(isolatedHome, '.claude', 'cost-directive.md'), 'utf8');
   assert.match(directive, /未ルーティング: 1件/);

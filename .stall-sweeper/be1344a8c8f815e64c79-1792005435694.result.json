@@ -1,0 +1,8 @@
+{
+  "completed": false,
+  "summary": "ローカルの原文・送受信記録を照合し、対象2便の送信成功と対象返信が見当たらないことを確認。サーバー原本への読み取り照会は両便とも fetch failed となり、最新の返信有無を確定できないため返信待ちは未完了。再送・再返信・権限変更は実施していません。",
+  "evidence": {
+    "file": "/mnt/c/Users/user/.claude/nightly-repo/.stall-sweeper/be1344a8c8f815e64c79-1792005435694.evidence.json",
+    "sha256": "0223a845140ebbf6a0d05f2cc3b1188c11833d82f9a05df0c0ba3a1522559b24"
+  }
+}

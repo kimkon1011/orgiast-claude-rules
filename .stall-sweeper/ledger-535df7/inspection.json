@@ -1,0 +1,12 @@
+{
+  "checkedAt": "2026-10-14T19:16:27.476Z",
+  "operations": "read-only",
+  "checks": [
+    {
+      "name": "live ledger read",
+      "ok": false,
+      "error": "fetch failed",
+      "cause": "EAI_AGAIN"
+    }
+  ]
+}

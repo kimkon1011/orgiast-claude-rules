@@ -1,0 +1,8 @@
+{
+  "completed": false,
+  "summary": "現行コードで最新200件打切りによる後続メールの誤突合せを再現。既存44テストは成功。ただし本番照会はDNSエラー(EAI_AGAIN)、対象リポジトリは書き込み許可範囲外のため、現台帳の確認・コード反映・誤った1行の修復は未完了。",
+  "evidence": {
+    "file": "/mnt/c/Users/user/.claude/nightly-repo/.stall-sweeper/ledger-535df7/evidence.json",
+    "sha256": "8e38414230089a6ff11ba8df2df316d847357d20ba82aba2b84c2fc9f527b343"
+  }
+}

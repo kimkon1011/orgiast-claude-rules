@@ -1,0 +1,53 @@
+{
+  "checkedAt": "2026-10-14T19:17:08.782Z",
+  "originalTodo": "5. 添削台帳の突合せが、問合せ後の「最初の1通」ではなく後の送信メールを拾う。GAS の sent 走査が最新200件で切れ、2026-10-03 の実返信が窓から落ちて 10-09 の別メール(編集量96%/discard)が入った。走査の上限か期間指定を直し、誤った1行を入れ直す （作業場所: D:Claudeevent-shop） （更新: 2026-10-12）",
+  "sources": [
+    {
+      "file": "/mnt/d/Claude/event-shop/tools/reply-ledger/import.mjs",
+      "sha256": "8ebebf903fe9464cb3a611f164d23ab65148324a010d5d47dfa60e7ff44bd71d"
+    },
+    {
+      "file": "/mnt/d/Claude/event-shop/tools/reply-ledger/lib.mjs",
+      "sha256": "36854b84f494db8e9d99864c02d5d294bf9bd60f7bfc9c65aac950cf84d88980"
+    },
+    {
+      "file": "/mnt/d/Claude/event-shop/gas/mail-relay/Code.js",
+      "sha256": "05d675a100b97f79da41775e15a3814a449d3fd893c4890c0f74b15b93f97330"
+    }
+  ],
+  "verification": {
+    "existingTests": "44 passed, 0 failed",
+    "syntheticReproduction": {
+      "fullWindow": "first-reply (2026-10-03)",
+      "latest200": "later-unrelated (2026-10-09)",
+      "passed": true
+    },
+    "sourceChecks": {
+      "defaultLimit200": true,
+      "gasMaximum500": true,
+      "existingRowsSkipped": true
+    }
+  },
+  "liveInspection": {
+    "checkedAt": "2026-10-14T19:16:27.476Z",
+    "operations": "read-only",
+    "checks": [
+      {
+        "name": "live ledger read",
+        "ok": false,
+        "error": "fetch failed",
+        "cause": "EAI_AGAIN"
+      }
+    ]
+  },
+  "completed": false,
+  "limitations": [
+    "本番DB読み取りが fetch failed / EAI_AGAIN。現在の台帳行・実返信は未確認。",
+    "対象 /mnt/d/Claude/event-shop は許可された書き込みルート外。対象ファイルは変更していない。",
+    "GAS更新・本番台帳の1行修復は未実行。外部送信・課金・権限変更なし。"
+  ],
+  "nextSteps": [
+    "書き込み許可された対象リポジトリで、送信済み取得のページングまたは完全性を検証できる期間分割を実装する。",
+    "本番読み取りで対象問合せ・実返信・既存行を照合し、対象1行だけを更新して再読取検証する。"
+  ]
+}

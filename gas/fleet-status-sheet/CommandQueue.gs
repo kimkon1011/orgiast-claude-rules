@@ -2,6 +2,8 @@ const CMD_FOLDER_NAME_ = 'claude-fleet-status-cmds';
 
 function _COMMANDS_() {
   return {
+    setupFleetMailTriggers: setupFleetMailTriggers,
+    fleetMailSweep: fleetMailSweep,
     upsertFleetStatus: upsertFleetStatus,
     clearFleetMachineColumns: clearFleetMachineColumns,
     setFleetToken: setFleetToken,

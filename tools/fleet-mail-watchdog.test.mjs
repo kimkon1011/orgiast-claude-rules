@@ -82,3 +82,33 @@ test('C6 capability probes do not refresh Task B last-successful-poll health tim
   await main([], f.deps); assert.ok(Math.abs(fs.statSync(file).mtimeMs - mtime) < 1);
   assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).at, old.toISOString());
 });
+
+for (const mode of ['throw', 'negative']) test(`D7 watchdog isolates ${mode} acknowledgement failure and continues`, async t => {
+  const f = fixture(t, ['mail-one', 'mail-two'].map(id => ({ id, kind: 'unseen' })));
+  const errors = [], request = f.deps.request;
+  f.deps.stderr = text => errors.push(text);
+  f.deps.request = async (kind, payload) => {
+    const result = await request(kind, payload);
+    if (payload.notifiedIds?.[0] === 'mail-one') {
+      if (mode === 'throw') throw new Error('token=private');
+      return { ok: false };
+    }
+    return result;
+  };
+  await main(['--json'], f.deps);
+  assert.equal(f.posts.length, 2); assert.equal(f.dms.length, 2);
+  assert.deepEqual(f.calls.at(-1).payload.notifiedIds, ['mail-two']);
+  assert.deepEqual(JSON.parse(f.outputs[0]), { total: 2, pending: 2, notified: 1, failed: 1 });
+  assert.deepEqual(errors, ['fleet-mail-watchdog: 通知確認失敗=1']);
+});
+
+test('D6 arrival forwards the bounded abort signal to both Discord transports', async t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.home, '.claude', 'orgiast-discord-webhook.txt'), 'https://example.invalid/webhook');
+  for (const token of ['test', '']) {
+    const controller = new AbortController(), calls = [];
+    await notifyArrival({ id: 'mail-signal' }, { home: f.home, token, signal: controller.signal, fetchImpl: async (...args) => { calls.push(args); return { ok: true }; } });
+    assert.equal(calls[0][1].signal, controller.signal);
+    controller.abort(); assert.equal(calls[0][1].signal.aborted, true);
+  }
+});

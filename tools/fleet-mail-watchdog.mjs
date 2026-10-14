@@ -37,20 +37,22 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   if (!dryRun && pending.length) {
     const token = deps.token ?? resolveDiscordBotToken(home);
     for (const entry of pending) {
-      const message = formatAlert(entry);
-      let channel = false, dm = false;
-      try { if (token) { await (deps.postChannel ?? postToChannel)(token, CHANNEL, message, deps.fetch); channel = true; } }
-      catch { err('fleet-mail-watchdog: チャンネル通知失敗=1'); }
       try {
-        const result = await (deps.notifyKim ?? notifyKim)(message, { home, token, userId: KIM_USER_ID, fetchImpl: deps.fetch, webhookFallback: false });
-        dm = result?.delivered === 'dm';
-      } catch { err('fleet-mail-watchdog: DM通知失敗=1'); }
-      // Only actual Discord delivery counts; notifyKim's {delivered:'none'} is not success.
-      if (channel || dm) {
-        const ack = await request('mail-alerts', { notifiedIds: [entry.id] });
-        if (ack?.ok === false) throw new Error('fleet-mail-watchdog: 通知確認失敗=1');
-        notified++;
-      } else failed++;
+        const message = formatAlert(entry);
+        let channel = false, dm = false;
+        try { if (token) { await (deps.postChannel ?? postToChannel)(token, CHANNEL, message, deps.fetch); channel = true; } }
+        catch { err('fleet-mail-watchdog: チャンネル通知失敗=1'); }
+        try {
+          const result = await (deps.notifyKim ?? notifyKim)(message, { home, token, userId: KIM_USER_ID, fetchImpl: deps.fetch, webhookFallback: false });
+          dm = result?.delivered === 'dm';
+        } catch { err('fleet-mail-watchdog: DM通知失敗=1'); }
+        // Only actual Discord delivery counts; notifyKim's {delivered:'none'} is not success.
+        if (channel || dm) {
+          const ack = await request('mail-alerts', { notifiedIds: [entry.id] });
+          if (ack?.ok === false) throw new Error('fleet-mail-watchdog: 通知確認失敗=1');
+          notified++;
+        } else failed++;
+      } catch { failed++; err('fleet-mail-watchdog: 通知確認失敗=1'); }
     }
   }
   const summary = { total: response.alerts.length, pending: pending.length, notified, failed };

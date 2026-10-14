@@ -510,7 +510,7 @@ export function findPriorReply(dir, id) {
 }
 export function parseArgs(argv) {
   const options = {};
-  const flags = new Set(['--send', '--poll', '--dry-run', '--json', '--inbox', '--force', '--sweep', '--unseen', '--all-seen', '--sync-pending']);
+  const flags = new Set(['--send', '--poll', '--no-exec', '--dry-run', '--json', '--inbox', '--force', '--sweep', '--unseen', '--all-seen', '--sync-pending']);
   const values = new Set(['--to', '--kind', '--body-file', '--why', '--expires-hours', '--wait', '--reply', '--ack', '--sent-status', '--exec', '--exec-cwd', '--priority', '--wait-for']);
   for (let i = 0; i < argv.length; i++) {
     const key = argv[i];
@@ -524,7 +524,7 @@ export function parseArgs(argv) {
   if (actions.length !== 1) throw new Error('指定は --send / --poll / --reply / --inbox / --ack / --sent-status のいずれか1つ');
   const allowed = {
     '--send': ['--to', '--kind', '--body-file', '--why', '--expires-hours', '--wait', '--exec', '--exec-cwd', '--force', '--priority', '--wait-for', '--dry-run'],
-    '--poll': ['--dry-run', '--json'], '--inbox': ['--json', '--unseen'], '--reply': ['--body-file', '--force'], '--ack': ['--all-seen'], '--sweep': [],
+    '--poll': ['--dry-run', '--json', '--no-exec'], '--inbox': ['--json', '--unseen'], '--reply': ['--body-file', '--force'], '--ack': ['--all-seen'], '--sweep': [],
     '--sent-status': [], '--sync-pending': []
   };
   for (const key of Object.keys(options)) if (key !== actions[0] && !allowed[actions[0]].includes(key)) throw new Error(`option not applicable: ${key}`);
@@ -570,6 +570,33 @@ export async function waitForReply(id, seconds, { request, now = Date.now, sleep
     if (now() < deadline) await sleepImpl(Math.min(15_000, deadline - now()));
   }
   return { exitCode: 2, text: `${waitFor === 'seen' ? '未読' : '未返信'}（id=${id}）` };
+}
+export async function notifyPendingArrivals(deps) {
+  const { notifyArrival, ARRIVAL_TIMEOUT_MS, ARRIVAL_BUDGET_MS } = await import('./lib/fleet-mail-discord.mjs');
+  const { home, label, now = Date.now, stderr = console.error } = deps;
+  const clock = deps.notificationNow ?? (() => performance.now());
+  const deadline = clock() + ARRIVAL_BUDGET_MS;
+  for (const mail of readInbox(home, { unreadOnly: false })) {
+    if (mail.arrivalNotifiedAt || ['failed', 'expired'].includes(mail.status) || mailCategory(mail) > 1) continue;
+    const remaining = deadline - clock();
+    if (remaining <= 0) break;
+    const controller = new AbortController();
+    let timer;
+    try {
+      // A race bounds injected/non-cooperative transports too; abort stops real fetches.
+      const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => { controller.abort(); reject(new Error('arrival timeout')); }, Math.min(ARRIVAL_TIMEOUT_MS, remaining));
+      });
+      const sent = await Promise.race([
+        Promise.resolve().then(() => (deps.notifyArrival ?? notifyArrival)(mail, {
+          home, label, category: mailCategory(mail), fetchImpl: deps.fetch, stderr, signal: controller.signal,
+        })),
+        timeout,
+      ]);
+      if (sent) updateInbox(mail.id, current => current && ({ ...current, arrivalNotifiedAt: new Date(now()).toISOString() }), { home });
+    } catch { stderr('fleet-mail: 到着通知失敗=1'); }
+    finally { clearTimeout(timer); }
+  }
 }
 // 受信1回分。--poll のみが呼ぶ。提示 hook はこの処理を別プロセスで起動する。
 // 受信タスク(OrgiastFleetMail)が死んでいても対話セッションが受信を代替するための exports（2026-10-10 事故）。
@@ -689,15 +716,6 @@ export async function pollOnce(deps = {}) {
     if (legacy) err(`fleet-mail: 旧形式宛先受信=${legacy}`);
     const lastPollFile = path.join(dir, '.fleet-mail-last-poll.json');
     writeJson(lastPollFile, { ...readJson(lastPollFile, {}), at: new Date(now()).toISOString() });
-    for (const mail of readInbox(home)) {
-      if (mail.arrivalNotifiedAt || mailCategory(mail) > 1) continue;
-      try {
-        const notify = deps.notifyArrival ?? (await import('./lib/fleet-mail-discord.mjs')).notifyArrival;
-        if (await notify(mail, { home, label, category: mailCategory(mail), fetchImpl: deps.fetch, stderr: err })) {
-          updateInbox(mail.id, current => current && ({ ...current, arrivalNotifiedAt: new Date(now()).toISOString() }), { home });
-        }
-      } catch { err('fleet-mail: 到着通知失敗=1'); }
-    }
     let promptHandled = false;
     for (const pending of readInbox(home, { unreadOnly: false })) {
       let mail = pending;
@@ -793,6 +811,8 @@ export async function pollOnce(deps = {}) {
     }
     try { (deps.dailySelfHeal ?? dailySelfHeal)({ dir, now }); } catch (error) { err(`fleet-mail: 自己修復失敗: ${redactSecrets(error.message)}`); }
     try { (deps.autoRunFixNow ?? autoRunFixNow)({ dir }); } catch (error) { err(`fleet-mail: 自動修復失敗: ${redactSecrets(error.message)}`); }
+    // Transport latency must never prevent durable receipt or per-mail processing.
+    await notifyPendingArrivals({ ...deps, home, label, now, stderr: err });
     out(deps.json ? JSON.stringify({ received, processed: handled }) : `受信=${received.length} / 処理=${handled.length} / 隔離=${rejected}`);
     return { received, handled, rejected };
   } finally { release(); }
@@ -971,7 +991,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     out(`返信は相手の受信タスクが拾うまで届きません。届いたかは --sent-status ${id} で確認`);
     return 0;
   }
-  await pollOnce({ ...deps, dryRun: !!options['--dry-run'], json: !!options['--json'] });
+  await pollOnce({ ...deps, executePrompts: options['--no-exec'] ? false : deps.executePrompts, dryRun: !!options['--dry-run'], json: !!options['--json'] });
   return 0;
 }
 if (isEntry(import.meta.url)) {

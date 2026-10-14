@@ -73,7 +73,7 @@ test('hook starts poll and sync without GAS, locks, pipes or child waiting', asy
   t.after(() => { globalThis.fetch = previous; });
   await f.run();
   assert.equal(f.errors.length, 0);
-  assert.deepEqual(f.spawns.map(s => s.args.slice(1)), [['--poll'], ['--sync-pending']]);
+  assert.deepEqual(f.spawns.map(s => s.args.slice(1)), [['--poll', '--no-exec'], ['--sync-pending']]);
   for (const s of f.spawns) { assert.equal(s.cmd, process.execPath); assert.equal(s.options.stdio, 'ignore'); assert.equal(s.options.env.ORGIAST_HOME, f.home); assert.equal(s.unref, true); assert.equal(s.options.detached, backgroundSpawnOptions('linux').detached); }
   assert.equal(fs.existsSync(path.join(f.dir, 'fleet-mail.lock')), false);
 });
@@ -133,4 +133,41 @@ test('C11 hook skips seen and presented writes when the inbox file is locked', a
   await f.run(); assert.equal(fs.readFileSync(file, 'utf8'), before);
   fs.unlinkSync(`${file}.lock`); await f.run('UserPromptSubmit', 'retry');
   assert.equal(readInbox(f.home, { unreadOnly: false })[0].presentedSession, 'retry');
+});
+
+test('D4 poll freshness stat failure still presents and queues local inbox context', async t => {
+  const f = fixture(t, [mail('visible')]);
+  const stat = fs.statSync;
+  t.mock.method(fs, 'statSync', (file, ...args) => {
+    if (String(file).endsWith('.fleet-mail-last-poll.json')) throw Object.assign(new Error('private'), { code: 'EACCES' });
+    return stat(file, ...args);
+  });
+  await f.run();
+  assert.match(f.outputs[0].hookSpecificOutput.additionalContext, /id=mail-visible/);
+  assert.ok(readInbox(f.home)[0].presentedAt);
+  assert.deepEqual(f.errors, ['fleet-inbox-context: 受信判定失敗=1']);
+  assert.equal(f.spawns.filter(s => s.args.includes('--poll')).length, 0);
+});
+
+test('D5 hook poll attempts are throttled for three minutes even when spawning fails', async t => {
+  const f = fixture(t, [mail('visible')]); let time = NOW, attempts = 0;
+  f.deps.now = () => time;
+  f.deps.spawnImpl = (_cmd, args) => { if (args.includes('--poll')) { attempts++; throw new Error('offline'); } return { on() {}, unref() {} }; };
+  await f.run(); await f.run();
+  assert.equal(attempts, 1);
+  time += POLL_STALE_MS; await f.run(); assert.equal(attempts, 1);
+  time++; await f.run(); assert.equal(attempts, 2);
+  assert.equal(f.outputs.length, 4);
+});
+
+test('D5 hook launches receive-only polling with no-exec', async t => {
+  const f = fixture(t); await f.run();
+  const args = f.spawns.find(s => s.args.includes('--poll')).args;
+  assert.deepEqual(args.slice(1), ['--poll', '--no-exec']);
+});
+
+test('D10 failed messages never inflate the expired footer count', () => {
+  const messages = [mail('failed', { status: 'failed', expiresAt: new Date(NOW - 1).toISOString() }), mail('expired', { status: 'expired' }), mail('live')];
+  const result = selectContext(messages, { now: NOW });
+  assert.match(result.context, /期限切れ 1 件は除外/); assert.doesNotMatch(result.context, /id=mail-failed/);
 });

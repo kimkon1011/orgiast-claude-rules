@@ -7,10 +7,11 @@ import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
-import { readInbox, hasDecisionRequest, mailCategory, presentMail, TERMINAL_STATUSES } from './fleet-mail.mjs';
+import { readInbox, hasDecisionRequest, mailCategory, presentMail, acquireLock, TERMINAL_STATUSES } from './fleet-mail.mjs';
 import { redactSecrets } from './fleet-agent.mjs';
 
 export const POLL_STALE_MS = 3 * 60 * 1000;
+export const POLL_ATTEMPT_MARKER = '.fleet-mail-hook-poll-attempt';
 export const ENTRY_LIMIT = 240;
 export const CONTEXT_LIMIT = 1800;
 export const CATEGORY_LIMITS = Object.freeze([3, 3, 3, 2]);
@@ -19,7 +20,7 @@ export function isHeadless(env = process.env) {
   return env.CLAUDE_HEADLESS === '1' || !!String(env.ORGIAST_HEADLESS_JOB || '').trim();
 }
 export function selectContext(messages, { headless = isHeadless(), sessionId = '', now = Date.now() } = {}) {
-  const expired = messages.filter(m => m.status === 'expired' || (m.status !== 'done' && Date.parse(m.expiresAt) <= now));
+  const expired = messages.filter(m => m.status === 'expired' || (!TERMINAL_STATUSES.includes(m.status) && Date.parse(m.expiresAt) <= now));
   const active = messages.filter(m => !TERMINAL_STATUSES.includes(m.status) && !expired.includes(m));
   if (!active.length && !expired.length) return { context: '', shown: [] };
   const eligible = active.filter(m => !(headless && hasDecisionRequest(m)) && !(sessionId && m.presentedSession === sessionId))
@@ -45,8 +46,23 @@ export function selectContext(messages, { headless = isHeadless(), sessionId = '
 }
 export function buildContext(messages, options) { return selectContext(messages, options).context; }
 export function shouldReceivePoll(home, { now = Date.now } = {}) {
-  try { return now() - fs.statSync(path.join(home, '.claude', '.fleet-mail-last-poll.json')).mtimeMs > POLL_STALE_MS; }
-  catch (error) { if (error.code === 'ENOENT') return true; throw error; }
+  for (const name of ['.fleet-mail-last-poll.json', POLL_ATTEMPT_MARKER]) {
+    try { if (now() - fs.statSync(path.join(home, '.claude', name)).mtimeMs <= POLL_STALE_MS) return false; }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
+  return true;
+}
+// Exclusive creation makes simultaneous SessionStart/UserPromptSubmit hooks coalesce.
+export function claimReceivePoll(home, { now = Date.now } = {}) {
+  const marker = path.join(home, '.claude', POLL_ATTEMPT_MARKER);
+  const release = acquireLock(`${marker}.lock`, { now });
+  if (!release) return false;
+  try {
+    if (!shouldReceivePoll(home, { now })) return false;
+    fs.writeFileSync(marker, '', { mode: 0o600 });
+    const at = new Date(now()); fs.utimesSync(marker, at, at);
+    return true;
+  } finally { release(); }
 }
 export function spawnDetached(script, args, { home, spawnImpl = spawn, platform = process.platform, stderr = console.error } = {}) {
   try {
@@ -65,7 +81,9 @@ export async function main({ home = process.env.ORGIAST_HOME || os.homedir(), re
     const event = input.hook_event_name || (input.prompt ? 'UserPromptSubmit' : '');
     if (!['SessionStart', 'UserPromptSubmit'].includes(event)) return;
     const detach = (script, args) => spawnDetached(script, args, { home, spawnImpl, platform, stderr });
-    if (shouldReceivePoll(home, { now })) detach('./fleet-mail.mjs', ['--poll']);
+    try {
+      if (claimReceivePoll(home, { now })) detach('./fleet-mail.mjs', ['--poll', '--no-exec']);
+    } catch { stderr('fleet-inbox-context: 受信判定失敗=1'); }
     if (event === 'SessionStart') detach('./register-fleet-mail.mjs', ['--ensure', '--quiet']);
     const { context, shown } = selectContext(readInbox(home, { unreadOnly: false }), { sessionId: input.session_id, now: now(), headless });
     if (!context) return;

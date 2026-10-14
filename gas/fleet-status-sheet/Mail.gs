@@ -68,12 +68,13 @@ function _fleetMailWrite_(sheet, row, values) {
 }
 function _fleetMailLocked_(action) {
   const lock = LockService.getScriptLock();
-  if (!lock.tryLock(20000)) return { ok: false, status: 503, error: 'busy' };
+  const alreadyLocked = typeof lock.hasLock === 'function' && lock.hasLock();
+  if (!alreadyLocked && !lock.tryLock(20000)) return { ok: false, status: 503, error: 'busy' };
   try {
     const sheet = _fleetMailSheet_();
     const rows = sheet.getLastRow() > 1 ? sheet.getRange(2, 1, sheet.getLastRow() - 1, FLEET_MAIL_HEADERS_.length).getValues().map(fleetMailObject) : [];
     return action(sheet, rows, Date.now());
-  } finally { lock.releaseLock(); }
+  } finally { if (!alreadyLocked) lock.releaseLock(); }
 }
 function sendFleetMail(payload) {
   return _fleetMailLocked_(function(sheet, rows, now) {
@@ -193,6 +194,7 @@ function getFleetMail(payload) {
   });
 }
 
+const FLEET_MAIL_TERMINAL_STATUSES_ = Object.freeze(['done', 'failed', 'expired']);
 const FLEET_MAIL_ACK_LIMIT_ = 100;
 function _fleetMailApplyTransition_(sheet, rows, now, payload, action) {
   const index = rows.findIndex(function(mail) { return mail.id === payload.id; });
@@ -209,7 +211,7 @@ function _fleetMailApplyTransition_(sheet, rows, now, payload, action) {
     Object.defineProperty(receipts, label, { value: receipt, enumerable: true, configurable: true });
     mail.receipts = JSON.stringify(receipts);
   } else {
-    if (['done', 'failed', 'expired'].indexOf(mail.status) >= 0) return { ok: true, mail: mail };
+    if (FLEET_MAIL_TERMINAL_STATUSES_.indexOf(mail.status) >= 0) return { ok: true, mail: mail };
     if (action === 'seen') {
       if (mail.status === 'seen') return { ok: true, mail: mail };
       mail.status = 'seen'; mail.seenAt = at; mail.seenBy = String(payload.seenBy || label).slice(0, 256);
@@ -289,34 +291,37 @@ function _fleetMailAlertText_(value) {
 }
 function fleetMailSweep() {
   return _fleetMailLocked_(function(sheet, rows, now) {
+    let expired = 0, notified = 0, active = 0, alerted = 0;
+    // Complete expiry before touching the optional alert ledger or transport.
+    rows.forEach(function(mail, row) {
+      if (FLEET_MAIL_TERMINAL_STATUSES_.indexOf(mail.status) < 0 && Date.parse(mail.expiresAt) <= now) {
+        mail.status = 'expired'; _fleetMailWrite_(sheet, row + 2, fleetMailRow(mail)); expired++;
+      }
+    });
     const alertsSheet = _fleetMailAlertsSheet_();
     const alerts = _fleetMailAlertsRead_(alertsSheet);
     const webhook = PropertiesService.getScriptProperties().getProperty('FLEET_MAIL_DISCORD_WEBHOOK');
-    let expired = 0, notified = 0, active = 0;
-    rows.forEach(function(mail, row) {
-      if (mail.status !== 'done' && mail.status !== 'expired' && Date.parse(mail.expiresAt) <= now) {
-        mail.status = 'expired'; _fleetMailWrite_(sheet, row + 2, fleetMailRow(mail)); expired++;
-      }
-      const kind = _fleetMailAlertKind_(mail, now);
-      if (!kind) return;
-      active++;
-      let index = alerts.findIndex(function(alert) { return alert.id === mail.id; });
-      if (index < 0) { index = alerts.length; alerts.push({ id: mail.id, firstAt: new Date(now).toISOString(), lastNotifiedAt: '', notifiedCount: 0 }); }
-      const alert = alerts[index];
-      alert.kind = kind; alert.to = _fleetMailAlertText_(mail.to); alert.from = _fleetMailAlertText_(mail.from); alert.why = _fleetMailAlertText_(mail.why);
-      // Count is per six-hour notification cycle; the last successful time is retained.
-      if (_fleetMailAlertDue_(alert, now)) alert.notifiedCount = 0;
-      _fleetMailAlertSave_(alertsSheet, index, alert);
-      if (!webhook || alert.notifiedCount > 0) return;
+    rows.forEach(function(mail) {
       try {
+        const kind = _fleetMailAlertKind_(mail, now);
+        if (!kind) return;
+        active++;
+        let index = alerts.findIndex(function(alert) { return alert.id === mail.id; });
+        if (index < 0) { index = alerts.length; alerts.push({ id: mail.id, firstAt: new Date(now).toISOString(), lastNotifiedAt: '', notifiedCount: 0 }); }
+        const alert = alerts[index];
+        alert.kind = kind; alert.to = _fleetMailAlertText_(mail.to); alert.from = _fleetMailAlertText_(mail.from); alert.why = _fleetMailAlertText_(mail.why);
+        // Count is per six-hour notification cycle; the last successful time is retained.
+        if (_fleetMailAlertDue_(alert, now)) alert.notifiedCount = 0;
+        _fleetMailAlertSave_(alertsSheet, index, alert); alerted++;
+        if (!webhook || alert.notifiedCount > 0) return;
         const content = (kind === 'unseen' ? '未読 SLA 超過: ' : '未配達（受信タスク停止の疑い）: ') + alert.to + ' 宛 / ' + alert.why + ' / ' + alert.id;
         const response = UrlFetchApp.fetch(webhook, { method: 'post', contentType: 'application/json', payload: JSON.stringify({ content: content, allowed_mentions: { parse: [] } }), muteHttpExceptions: true });
         if (response.getResponseCode() < 200 || response.getResponseCode() >= 300) return;
         alert.lastNotifiedAt = new Date(now).toISOString(); alert.notifiedCount++;
         _fleetMailAlertSave_(alertsSheet, index, alert); notified++;
-      } catch (error) { console.warn('fleet-mail: alert notification failed=1'); }
+      } catch (error) { console.warn('fleet-mail: alert failed=1'); }
     });
-    return { ok: true, expired: expired, active: active, notified: notified };
+    return { ok: true, expired: expired, active: active, alerted: alerted, notified: notified };
   });
 }
 function getFleetMailAlerts(payload) {
@@ -341,4 +346,7 @@ function setupFleetMailTriggers() {
   ScriptApp.getProjectTriggers().filter(function(trigger) { return trigger.getHandlerFunction() === 'fleetMailSweep'; })
     .forEach(function(trigger) { ScriptApp.deleteTrigger(trigger); });
   ScriptApp.newTrigger('fleetMailSweep').timeBased().everyMinutes(FLEET_MAIL_SLA_.sweepMinutes).create();
+  return ScriptApp.getProjectTriggers().map(function(trigger) {
+    return { handler: trigger.getHandlerFunction(), eventType: String(trigger.getEventType()), source: String(trigger.getTriggerSource()) };
+  });
 }

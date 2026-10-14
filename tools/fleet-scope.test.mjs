@@ -126,3 +126,24 @@ test('(f) 指定されたスコープ: vscode-next-session は fleet/mobile-stan
   assert.equal(entry.step, 'mobile-standby');
   assert.ok(convergeStepIds().has('mobile-standby'), 'setup.mjs に mobile-standby ステップが無い');
 });
+
+for (const entrypoint of ['tools/lib/fleet-mail-discord.mjs', 'tools/fleet-inbox-context.mjs', 'tools/fleet-mail-watchdog.mjs']) {
+  test(`D8 fleet scope covers the complete import graph of ${entrypoint}`, () => {
+    const scope = new Map(readScope().entries.map(entry => [entry.path, entry]));
+    const visited = new Set();
+    function visit(file) {
+      if (visited.has(file)) return;
+      visited.add(file);
+      assert.equal(scope.get(file)?.scope, 'fleet', `runtime dependency: ${file}`);
+      const source = fs.readFileSync(path.join(repoRoot, file), 'utf8');
+      // Includes static imports/re-exports, side-effect imports and literal dynamic imports.
+      for (const match of source.matchAll(/(?:\bfrom\s*|\bimport\s*(?:\(\s*)?)["'](\.[^"']+)["']/g)) {
+        const dependency = path.posix.normalize(path.posix.join(path.posix.dirname(file), match[1]));
+        assert.ok(fs.existsSync(path.join(repoRoot, dependency)), `missing dependency: ${dependency}`);
+        visit(dependency);
+      }
+    }
+    visit(entrypoint);
+    assert.ok(visited.size > 1);
+  });
+}

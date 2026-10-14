@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { probeScript, HEALTHY_TASK_RESULTS } from './register-fleet-mail.mjs';
 
 // 回帰テスト: 夜間ジョブが --specs を渡さないと、どのPCもハードウェアスペックを
 // 一度も送らない。実際に PC管理表 が「手で叩いた1台」だけの状態で止まっていた
@@ -81,7 +82,8 @@ test('fleet-poller.ps1 は日次で register-fleet-mail.mjs --ensure を呼ぶ�
 test('register-fleet-mail.mjs --ensure は Disabled と LastTaskResult と poll 時刻を健康判定に含む', () => {
   const source = fs.readFileSync(path.join(dir, 'register-fleet-mail.mjs'), 'utf8');
   assert.match(source, /'Disabled'\) \{ 'disabled'/);
-  assert.match(source, /LastTaskResult -ne 0/);
+  const accepted = probeScript('OrgiastFleetMail').match(/LastTaskResult -notin @\(([^)]+)\)/)[1].split(',').map(Number);
+  assert.deepEqual(accepted, HEALTHY_TASK_RESULTS);
   assert.match(source, /pollIsFresh\(home, now\)/);
 });
 test('register-fleet-mail.ps1 は FLEET_MAIL_WATCHDOG=1 のときだけ OrgiastFleetMailWatchdog を登録し、Unregister でも削除する', () => {

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { main, pollIsFresh, STALE_POLL_MS, convergeFleetMail, MIGRATION_MARKER } from './register-fleet-mail.mjs';
+import { main, pollIsFresh, STALE_POLL_MS, convergeFleetMail, MIGRATION_MARKER, probeScript, probeTask, HEALTHY_TASK_RESULTS } from './register-fleet-mail.mjs';
 const repo = path.resolve(import.meta.dirname, '..');
 function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-register-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
@@ -14,7 +14,7 @@ function fixture(t) {
   return { home, dir, marker, now, calls, output, deps };
 }
 test('ensure keeps successful tasks with a recent poll and quiet emits nothing', t => {
-  const f = fixture(t); assert.equal(main(f.deps), 0); assert.equal(f.calls.length, 1); assert.match(f.calls[0].args.at(-1), /LastTaskResult -ne 0/); assert.deepEqual(f.output, []);
+  const f = fixture(t); assert.equal(main(f.deps), 0); assert.equal(f.calls.length, 1); assert.match(f.calls[0].args.at(-1), /LastTaskResult -notin/); assert.deepEqual(f.output, []);
 });
 test('ensure repairs failed result even if poll is fresh then immediately polls once', t => {
   const f = fixture(t); const spawn = f.deps.spawnImpl; f.deps.spawnImpl = (...args) => { const result = spawn(...args); if (args[1].includes('-Command')) result.stdout = 'failed'; return result; };
@@ -46,4 +46,27 @@ test('manifest enforces both synchronous hooks and migration on task step', () =
   assert.deepEqual(hooks.map(i => i.spec.hookEvent).sort(), ['SessionStart', 'UserPromptSubmit']);
   for (const h of hooks) { assert.equal(h.spec.async, false); assert.equal(h.spec.timeout, 5); assert.equal(h.spec.hookArgs, ''); }
   const step = items.find(i => i.id === 'task:fleet-mail'); assert.ok(step.repair.includes('--converge')); assert.equal(step.spec.migrationMarker, `.claude/${MIGRATION_MARKER}`);
+});
+
+test('D3 probe accepts success running and never-run results and rejects other nonzero codes', () => {
+  const script = probeScript('OrgiastFleetMail');
+  const allowed = script.match(/LastTaskResult -notin @\(([^)]+)\)/)[1].split(',').map(Number);
+  assert.deepEqual(allowed, HEALTHY_TASK_RESULTS);
+  for (const code of [...HEALTHY_TASK_RESULTS, 1, 267010, -1]) {
+    const state = probeTask((_cmd, args) => {
+      const accepted = args.at(-1).match(/-notin @\(([^)]+)\)/)[1].split(',').map(Number);
+      return { status: 0, stdout: accepted.includes(code) ? 'ok' : 'failed' };
+    }, 'OrgiastFleetMail');
+    assert.equal(state, HEALTHY_TASK_RESULTS.includes(code) ? 'ok' : 'failed');
+  }
+});
+
+test('D10 probe PowerShell literals preserve Japanese spaces apostrophes and metacharacters', () => {
+  const value = "C:\\日本語 フォルダ\\kim's $task`name";
+  const calls = [];
+  assert.equal(probeTask((cmd, args) => { calls.push({ cmd, args }); return { status: 0, stdout: 'ok' }; }, value), 'ok');
+  const script = calls[0].args.at(-1);
+  const literals = [...script.matchAll(/-TaskName '((?:[^']|'')*)' -ErrorAction/g)].map(m => m[1].replaceAll("''", "'"));
+  assert.deepEqual(literals, [value, value]);
+  assert.equal(calls[0].args[calls[0].args.length - 2], '-Command');
 });

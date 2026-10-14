@@ -439,3 +439,79 @@ test('C6 presenting a seen-abandoned message never revives its exhausted retry q
   presentMail({ home: f.home, id: mail().id, sessionId: 'later', now: () => now });
   assert.deepEqual(f.read(mail().id).pendingServer, []); assert.deepEqual(f.read(mail().id).abandonedServer, ['seen']);
 });
+
+test('D5 poll no-exec saves prompts for the scheduled task without claiming or executing them', async t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.dir, 'fleet-agent-optin.json'), JSON.stringify({ accept: ['prompt'] }));
+  const request = f.deps.request;
+  f.deps.request = async (kind, payload) => kind === 'mail-poll' ? { ok: true, messages: [mail({ kind: 'prompt' })] } : request(kind, payload);
+  assert.equal(parseArgs(['--poll', '--no-exec'])['--no-exec'], true);
+  await main(['--poll', '--no-exec'], f.deps);
+  assert.equal(f.spawns.length, 0); assert.equal(f.read('mail-original').executionStartedAt, undefined);
+  assert.equal(f.read('mail-original').status, 'delivered');
+  assert.equal(f.calls.filter(c => c.kind === 'mail-reply' || c.kind === 'mail-seen').length, 0);
+});
+
+test('D6 arrivals run after all receipt and processing writes and preserve concurrent inbox updates', async t => {
+  const f = fixture(t), snapshots = [];
+  const messages = [mail({ id: 'mail-decision', why: '[判断依頼] 確認' }), mail({ id: 'mail-work', why: '[作業依頼] 確認' }), mail({ id: 'mail-normal' })];
+  const request = f.deps.request;
+  f.deps.request = async (kind, payload) => kind === 'mail-poll' ? { ok: true, messages } : request(kind, payload);
+  f.deps.notifyArrival = async m => {
+    snapshots.push({ count: readInbox(f.home, { unreadOnly: false }).length, decision: f.read('mail-decision') });
+    updateInbox(m.id, current => ({ ...current, presentedSession: 'concurrent-hook' }), { home: f.home });
+    return true;
+  };
+  await pollOnce(f.deps);
+  assert.equal(snapshots.length, 2);
+  for (const s of snapshots) { assert.equal(s.count, messages.length); assert.ok(s.decision.decisionRegisteredAt); assert.ok(s.decision.decisionAckAt); }
+  for (const id of ['mail-decision', 'mail-work']) { assert.ok(f.read(id).arrivalNotifiedAt); assert.equal(f.read(id).presentedSession, 'concurrent-hook'); }
+});
+
+test('D6 arrival timeouts cap each call and total budget then retry unnotified mail next poll', async t => {
+  const { ARRIVAL_TIMEOUT_MS, ARRIVAL_BUDGET_MS } = await import('./lib/fleet-mail-discord.mjs');
+  const f = fixture(t); let elapsed = 0;
+  const count = ARRIVAL_BUDGET_MS / ARRIVAL_TIMEOUT_MS + 2;
+  for (let i = 0; i < count; i++) f.save(mail({ id: `mail-timeout-${i}`, priority: 'urgent' }));
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  f.deps.notificationNow = () => elapsed;
+  const signals = [], late = [];
+  f.deps.notifyArrival = async (_mail, { signal }) => { signals.push(signal); return new Promise(resolve => late.push(resolve)); };
+  const running = pollOnce(f.deps);
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  await flush();
+  for (let i = 0; i < ARRIVAL_BUDGET_MS / ARRIVAL_TIMEOUT_MS; i++) {
+    assert.equal(signals.length, i + 1);
+    elapsed += ARRIVAL_TIMEOUT_MS; t.mock.timers.tick(ARRIVAL_TIMEOUT_MS); await flush();
+    assert.equal(signals[i].aborted, true);
+  }
+  await running;
+  assert.equal(signals.length, ARRIVAL_BUDGET_MS / ARRIVAL_TIMEOUT_MS);
+  late.forEach(resolve => resolve(true)); await flush();
+  assert.ok(readInbox(f.home).every(m => !m.arrivalNotifiedAt));
+  const retried = [];
+  await pollOnce({ ...f.deps, notifyArrival: async m => { retried.push(m.id); return true; } });
+  assert.equal(retried.length, count); assert.ok(readInbox(f.home).every(m => m.arrivalNotifiedAt));
+});
+
+test('D6 final arrival receives only the remaining total budget', async t => {
+  const { ARRIVAL_TIMEOUT_MS, ARRIVAL_BUDGET_MS } = await import('./lib/fleet-mail-discord.mjs');
+  const f = fixture(t); let elapsed = 0; const calls = [];
+  for (const suffix of ['a', 'b', 'c']) f.save(mail({ id: `mail-budget-${suffix}`, priority: 'urgent' }));
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  f.deps.notificationNow = () => elapsed;
+  f.deps.notifyArrival = async (m, { signal }) => {
+    calls.push({ id: m.id, signal });
+    if (calls.length === 1) { elapsed = ARRIVAL_BUDGET_MS - ARRIVAL_TIMEOUT_MS / 2; return true; }
+    return new Promise(() => {});
+  };
+  const running = pollOnce(f.deps);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls.length, 2);
+  const remaining = ARRIVAL_BUDGET_MS - elapsed;
+  elapsed += remaining; t.mock.timers.tick(remaining);
+  await running;
+  assert.equal(calls.length, 2); assert.equal(calls[1].signal.aborted, true);
+  assert.ok(f.read('mail-budget-a').arrivalNotifiedAt);
+  assert.equal(f.read('mail-budget-b').arrivalNotifiedAt, undefined); assert.equal(f.read('mail-budget-c').arrivalNotifiedAt, undefined);
+});

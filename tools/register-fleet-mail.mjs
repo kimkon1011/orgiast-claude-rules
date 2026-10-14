@@ -7,12 +7,14 @@ import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 
 export const STALE_POLL_MS = 10 * 60 * 1000;
-const probeScript = taskName => [
-  `$t = Get-ScheduledTask -TaskName '${taskName}' -ErrorAction SilentlyContinue`,
+export const HEALTHY_TASK_RESULTS = Object.freeze([0, 267009, 267011]);
+const psLiteral = value => "'" + String(value).replaceAll("'", "''") + "'";
+export const probeScript = taskName => [
+  `$t = Get-ScheduledTask -TaskName ${psLiteral(taskName)} -ErrorAction SilentlyContinue`,
   "if (-not $t) { 'absent'; exit }",
   "if ($t.State -eq 'Disabled') { 'disabled'; exit }",
-  `$i = Get-ScheduledTaskInfo -TaskName '${taskName}' -ErrorAction SilentlyContinue`,
-  "if (-not $i -or $i.LastTaskResult -ne 0) { 'failed'; exit }",
+  `$i = Get-ScheduledTaskInfo -TaskName ${psLiteral(taskName)} -ErrorAction SilentlyContinue`,
+  `if (-not $i -or $i.LastTaskResult -notin @(${HEALTHY_TASK_RESULTS.join(', ')})) { 'failed'; exit }`,
   "'ok'"
 ].join('; ');
 

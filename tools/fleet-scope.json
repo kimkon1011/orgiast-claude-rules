@@ -51,9 +51,9 @@
     },
     {
       "path": "tools/auto-session-executor.mjs",
-      "scope": "kim-only",
-      "step": null,
-      "reason": "要確認"
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
     },
     {
       "path": "tools/auto-session-verify.mjs",
@@ -63,9 +63,9 @@
     },
     {
       "path": "tools/auto-session.mjs",
-      "scope": "kim-only",
-      "step": null,
-      "reason": "要確認"
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
     },
     {
       "path": "tools/backup-claude-to-drive.ps1",
@@ -117,9 +117,9 @@
     },
     {
       "path": "tools/fleet-agent.mjs",
-      "scope": "kim-only",
-      "step": null,
-      "reason": "要確認"
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
     },
     {
       "path": "tools/fleet-convergence.mjs",
@@ -225,9 +225,9 @@
     },
     {
       "path": "tools/memory-share.mjs",
-      "scope": "kim-only",
-      "step": null,
-      "reason": "要確認"
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
     },
     {
       "path": "tools/mobile-standby.mjs",
@@ -570,6 +570,150 @@
       "scope": "fleet",
       "step": "task:fleet-mail",
       "reason": "fleet-mail v2 の提示・通知・初回移行を全PCへ配布"
+    },
+    {
+      "path": "tools/batch-enqueue.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
+    },
+    {
+      "path": "tools/claude-exe.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
+    },
+    {
+      "path": "tools/codex-auth-status.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
+    },
+    {
+      "path": "tools/env-kv.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
+    },
+    {
+      "path": "tools/feedback-to-issues.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
+    },
+    {
+      "path": "tools/fleet-beacon.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
+    },
+    {
+      "path": "tools/fleet-mail-watchdog.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
+    },
+    {
+      "path": "tools/fleet-status.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
+    },
+    {
+      "path": "tools/is-entry.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
+    },
+    {
+      "path": "tools/keyserve-auth.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
+    },
+    {
+      "path": "tools/learning-ledger.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
+    },
+    {
+      "path": "tools/lib/background-spawn.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
+    },
+    {
+      "path": "tools/lib/fleet-label.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
+    },
+    {
+      "path": "tools/lib/hook-stdin.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
+    },
+    {
+      "path": "tools/lib/plain-ja.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
+    },
+    {
+      "path": "tools/lib/redact.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
+    },
+    {
+      "path": "tools/machine-identity.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
+    },
+    {
+      "path": "tools/next-session-rotate.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
+    },
+    {
+      "path": "tools/notify-kim.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
+    },
+    {
+      "path": "tools/pending-decisions.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
+    },
+    {
+      "path": "tools/redact-secrets.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
+    },
+    {
+      "path": "tools/reporter-label.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
+    },
+    {
+      "path": "tools/task-ledger.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
+    },
+    {
+      "path": "tools/webhook-health.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
     }
   ]
 }

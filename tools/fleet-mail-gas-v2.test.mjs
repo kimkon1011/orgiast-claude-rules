@@ -2,35 +2,43 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
+import { TERMINAL_STATUSES } from './fleet-mail.mjs';
 const source = fs.readFileSync(new URL('../gas/fleet-status-sheet/Mail.gs', import.meta.url), 'utf8');
 const now = Date.parse('2026-10-14T00:00:00Z');
 function harness() {
   const rows = [], alertRows = [], properties = { SHEET_ID: 'fixture' };
   let time = now;
-  const triggers = [], webhooks = [];
+  const triggers = [], webhooks = [], warnings = [], faults = {};
+  const lock = { held: false, releases: 0, hasLock() { return this.held; }, tryLock() { this.held = true; return true; }, releaseLock() { this.held = false; this.releases++; } };
   const makeSheet = rows => ({
     getLastRow: () => rows.length, setFrozenRows() {}, deleteRow: n => rows.splice(n - 1, 1),
     getRange(row, col, count, width) { return {
-      getValues: () => Array.from({ length: count }, (_, i) => Array.from({ length: width }, (_, j) => rows[row - 1 + i]?.[col - 1 + j] ?? '')),
-      setRichTextValues(values) { values.forEach((values, i) => { rows[row - 1 + i] ??= []; values.forEach((v, j) => { rows[row - 1 + i][col - 1 + j] = v.text; }); }); }
+      getValues: () => {
+        if (rows === alertRows && count === 1 && row === faults.readBackRow) return [Array(width).fill('mismatch')];
+        return Array.from({ length: count }, (_, i) => Array.from({ length: width }, (_, j) => rows[row - 1 + i]?.[col - 1 + j] ?? '')); },
+      setRichTextValues(values) {
+        if (rows === alertRows && faults.onAlertWrite) faults.onAlertWrite(row);
+        if (rows === alertRows && row === faults.writeRow) throw new Error('private failure');
+        values.forEach((values, i) => { rows[row - 1 + i] ??= []; values.forEach((v, j) => { rows[row - 1 + i][col - 1 + j] = v.text; }); }); }
     }; }
   });
   const sheet = makeSheet(rows), alertsSheet = makeSheet(alertRows);
   const deps = {
     SpreadsheetApp: { openById: () => ({ getSheetByName: name => name === 'fleet-mail' ? sheet : alertsSheet }), flush() {}, newRichTextValue: () => ({ setText: text => ({ build: () => ({ text }) }) }) },
     PropertiesService: { getScriptProperties: () => ({ getProperty: key => properties[key], setProperty: (key, value) => { properties[key] = value; } }) },
-    LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock() {} }) },
+    LockService: { getScriptLock: () => lock },
+    console: { warn: text => warnings.push(text) },
     Utilities: { DigestAlgorithm: { SHA_256: 'sha256' }, computeDigest: (algorithm, value) => [...createHash(algorithm).update(value).digest()] },
     Date: class extends Date { static now() { return time; } },
     UrlFetchApp: { fetch: (...args) => { webhooks.push(args); return { getResponseCode: () => properties.WEBHOOK_STATUS || 204 }; } },
     ScriptApp: {
       getProjectTriggers: () => [...triggers], deleteTrigger: trigger => triggers.splice(triggers.indexOf(trigger), 1),
-      newTrigger: name => ({ timeBased: () => ({ everyMinutes: minutes => ({ create: () => triggers.push({ getHandlerFunction: () => name, minutes }) }) }) }),
+      newTrigger: name => ({ timeBased: () => ({ everyMinutes: minutes => ({ create: () => triggers.push({ getHandlerFunction: () => name, getEventType: () => 'CLOCK', getTriggerSource: () => 'CLOCK', minutes }) }) }) }),
     }
   };
   const names = [...source.matchAll(/^function (\w+)\(/gm)].map(m => m[1]);
-  const api = new Function(...Object.keys(deps), `${source}\nreturn { ${names.join(', ')}, headers: FLEET_MAIL_HEADERS_, alertHeaders: FLEET_MAIL_ALERT_HEADERS_, renotifyMs: FLEET_MAIL_RENOTIFY_MS_, sla: FLEET_MAIL_SLA_, ackLimit: FLEET_MAIL_ACK_LIMIT_ };`)(...Object.values(deps));
-  return { ...api, rows, alertRows, properties, triggers, webhooks, advance: ms => { time += ms; } };
+  const api = new Function(...Object.keys(deps), `${source}\nreturn { ${names.join(', ')}, headers: FLEET_MAIL_HEADERS_, alertHeaders: FLEET_MAIL_ALERT_HEADERS_, renotifyMs: FLEET_MAIL_RENOTIFY_MS_, sla: FLEET_MAIL_SLA_, ackLimit: FLEET_MAIL_ACK_LIMIT_, terminalStatuses: FLEET_MAIL_TERMINAL_STATUSES_ };`)(...Object.values(deps));
+  return { ...api, rows, alertRows, properties, triggers, webhooks, faults, warnings, lock, advance: ms => { time += ms; } };
 }
 const send = (h, overrides = {}) => h.sendFleetMail({ id: 'mail-original', from: 'sender', to: 'receiver', messageKind: 'note', why: 'test', body: 'body', ...overrides });
 const poll = (h, overrides = {}) => h.pollFleetMail({ to: 'receiver', hostname: 'host', ...overrides });
@@ -132,14 +140,18 @@ test('retry after an appended reply but uncommitted original repairs completion 
   assert.equal(result.duplicate, true); assert.equal(h.rows.length, 3); assert.equal(get(h).status, 'done'); assert.equal(get(h).resultBody, reply.body);
 });
 
-test('sweep expires all overdue non-done states and preserves completed rows', () => {
-  const h = harness();
-  for (const status of ['new', 'delivered', 'seen', 'failed', 'done']) {
+test('D1 sweep expires overdue active states and preserves every terminal state', () => {
+  const h = harness(); assert.deepEqual(h.terminalStatuses, TERMINAL_STATUSES);
+  const active = ['new', 'delivered', 'seen'];
+  for (const status of [...active, ...TERMINAL_STATUSES]) {
     send(h, { id: `mail-${status}` }); h.rows.at(-1)[h.headers.indexOf('status')] = status;
   }
   h.advance(86400000 + 1);
-  assert.equal(h.fleetMailSweep().expired, 4);
-  for (const row of h.rows.slice(1)) assert.equal(row[h.headers.indexOf('status')], row[0] === 'mail-done' ? 'done' : 'expired');
+  assert.equal(h.fleetMailSweep().expired, active.length);
+  for (const status of [...active, ...TERMINAL_STATUSES]) {
+    const stored = h.getFleetMail({ id: `mail-${status}` }).mail.status;
+    assert.equal(stored, TERMINAL_STATUSES.includes(status) ? status : 'expired');
+  }
   assert.deepEqual(h.getFleetMailAlerts({}).alerts, []);
 });
 test('sweep observes strict undelivered and urgent/normal unseen SLA thresholds', () => {
@@ -181,7 +193,7 @@ test('failed webhook leaves pending and alert values are literal/redacted', () =
   assert.deepEqual(JSON.parse(h.webhooks[0][1].payload).allowed_mentions, { parse: [] });
 });
 test('trigger setup is idempotent and preserves other handlers', () => {
-  const h = harness(); const other = { getHandlerFunction: () => 'processCommandQueue' }; h.triggers.push(other);
+  const h = harness(); const other = { getHandlerFunction: () => 'processCommandQueue', getEventType: () => 'CLOCK', getTriggerSource: () => 'CLOCK' }; h.triggers.push(other);
   h.setupFleetMailTriggers(); h.setupFleetMailTriggers();
   assert.equal(h.triggers.length, 2); assert.equal(h.triggers[0], other); assert.equal(h.triggers[1].getHandlerFunction(), 'fleetMailSweep'); assert.equal(h.triggers[1].minutes, h.sla.sweepMinutes);
 });
@@ -250,4 +262,36 @@ test('C1 retry repairs changed reply append without regressing to an older recei
   assert.equal(retry.duplicate, true); assert.equal(retry.reply.id, answer.reply.id); assert.equal(get(h).resultBody, 'answer');
   h.replyFleetMail({ id: 'mail-original', from: 'receiver', resultBody: 'receipt' });
   assert.equal(get(h).resultBody, 'answer'); assert.equal(h.rows.length, 4);
+});
+
+for (const fault of ['writeRow', 'readBackRow']) test(`D2 sweep isolates alert ${fault} failure after completing expiry`, () => {
+  const h = harness();
+  send(h, { id: 'mail-first' }); send(h, { id: 'mail-later' });
+  send(h, { id: 'mail-overdue', expiresAt: new Date(now + 1).toISOString() });
+  h.advance(h.sla.undelivered + 1);
+  const expiryBeforeAlert = [];
+  h.faults.onAlertWrite = () => expiryBeforeAlert.push(h.rows[3][h.headers.indexOf('status')]);
+  h.faults[fault] = 2;
+  const result = h.fleetMailSweep();
+  assert.equal(result.expired, 1); assert.equal(result.alerted, 1);
+  assert.ok(expiryBeforeAlert.length); assert.ok(expiryBeforeAlert.every(status => status === 'expired'));
+  assert.equal(h.alertRows[2][0], 'mail-later'); assert.equal(h.warnings.length, 1);
+  assert.doesNotMatch(h.warnings.join(''), /private|mail-first/);
+  delete h.faults[fault]; assert.equal(h.fleetMailSweep().alerted, 2);
+});
+
+test('D9 CommandQueue exposes trigger inventory and sweep counts while preserving its parent lock', () => {
+  const h = harness();
+  const queue = fs.readFileSync(new URL('../gas/fleet-status-sheet/CommandQueue.gs', import.meta.url), 'utf8');
+  const names = [...queue.slice(0, queue.indexOf('// PC')).matchAll(/\w+: (\w+)/g)].map(m => m[1]);
+  const deps = Object.fromEntries(names.map(name => [name, h[name] || (() => {})]));
+  const commands = new Function(...Object.keys(deps), `${queue}\nreturn _COMMANDS_();`)(...Object.values(deps));
+  const triggers = commands.setupFleetMailTriggers();
+  assert.deepEqual(triggers, [{ handler: 'fleetMailSweep', eventType: 'CLOCK', source: 'CLOCK' }]);
+  assert.deepEqual(commands.setupFleetMailTriggers(), triggers);
+  send(h); h.advance(h.sla.undelivered + 1);
+  h.lock.held = true; const releases = h.lock.releases;
+  const result = commands.fleetMailSweep();
+  assert.deepEqual({ expired: result.expired, alerted: result.alerted, notified: result.notified }, { expired: 0, alerted: 1, notified: 0 });
+  assert.equal(h.lock.held, true); assert.equal(h.lock.releases, releases);
 });

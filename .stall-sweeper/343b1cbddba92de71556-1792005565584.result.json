@@ -1,0 +1,8 @@
+{
+  "completed": false,
+  "summary": "原文と対象パッケージを確認。Windowsのnpm認証設定でwhoamiを再検証したが、DNSエラーEAI_AGAINでレジストリに到達できず、認証成功・アカウント作成・2FA保管を確認できないため未完了。公開や認証変更は実施していない。",
+  "evidence": {
+    "file": "/mnt/c/Users/user/.claude/nightly-repo/.stall-sweeper/343b1cbddba92de71556-1792005565584.evidence.json",
+    "sha256": "d2ae2bd5036ec372da3fe620653762fe6e9bc241068d480824f25f49e20379ec"
+  }
+}

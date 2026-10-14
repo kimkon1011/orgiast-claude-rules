@@ -41,6 +41,13 @@ export function decisionRole(mail) {
 export function hasDecisionRequest(mail) {
   return decisionRole(mail) === 'request';
 }
+// Shared arrival/presentation classification. Replies never become inherited requests.
+export function mailCategory(mail) {
+  if (mail?.replyTo || String(mail?.id || '').startsWith('mail-reply-') || /\[回答(?:・返信不要)?\]/.test(mail?.why || '') || /^\s*\[回答(?:・返信不要)?\]/.test(mail?.body || '')) return 2;
+  if (hasDecisionRequest(mail)) return 0;
+  if (mail?.priority === 'urgent' || /\[作業依頼\]/.test(mail?.why || '') || /^\s*\[作業依頼\]/.test(mail?.body || '')) return 1;
+  return 3;
+}
 // 本文先頭の実行モードマーカー（送信側 --exec codex が挿入する）。GAS は messageKind を prompt のまま扱う。
 const execMarker = /^<!--\s*fleet-exec:\s*codex\s*-->\s*$/;
 const execCwdMarker = /^<!--\s*fleet-exec-cwd:\s*(.*?)\s*-->\s*$/;
@@ -249,6 +256,19 @@ function normalizeInbox(mail) {
   return { ...mail, status,
     presentedAt: mail.presentedAt ?? null, presentedSession: mail.presentedSession ?? null };
 }
+// Hook writes local intent synchronously; the detached CLI/poller owns transport.
+export function presentMail({ home, id, sessionId, now = Date.now }) {
+  const file = inboxPath(home, id);
+  const mail = normalizeInbox(readJson(file));
+  if (terminal(mail)) return;
+  const at = new Date(now()).toISOString();
+  const autoAck = mailCategory(mail) === 2;
+  const seenBy = `${resolveFleetLabel(home, { hostname: os.hostname() })}:${sessionId}`;
+  writeJson(file, { ...mail, presentedAt: at, presentedSession: sessionId,
+    status: autoAck ? 'done' : 'seen', seenAt: mail.seenAt || at, seenBy: mail.seenBy || seenBy,
+    ...(autoAck ? { ackAt: at, readAt: at } : {}),
+    pendingServer: [...new Set([...(mail.pendingServer || []), 'seen', ...(autoAck ? ['ack'] : [])])] });
+}
 function expireInbox(home, now) {
   for (const mail of readInbox(home, { unreadOnly: false })) {
     if (mail.status !== 'done' && mail.status !== 'expired' && Date.parse(mail.expiresAt) <= now()) {
@@ -359,7 +379,7 @@ export function findPriorReply(dir, id) {
 }
 export function parseArgs(argv) {
   const options = {};
-  const flags = new Set(['--send', '--poll', '--dry-run', '--json', '--inbox', '--force', '--sweep', '--unseen', '--all-seen']);
+  const flags = new Set(['--send', '--poll', '--dry-run', '--json', '--inbox', '--force', '--sweep', '--unseen', '--all-seen', '--sync-pending']);
   const values = new Set(['--to', '--kind', '--body-file', '--why', '--expires-hours', '--wait', '--reply', '--ack', '--sent-status', '--exec', '--exec-cwd', '--priority', '--wait-for']);
   for (let i = 0; i < argv.length; i++) {
     const key = argv[i];
@@ -369,12 +389,12 @@ export function parseArgs(argv) {
     else if (values.has(key) && argv[i + 1] && !argv[i + 1].startsWith('--')) options[key] = argv[++i];
     else throw new Error(`unknown option or missing value: ${key}; 本文は --body-file を使ってください`);
   }
-  const actions = ['--send', '--poll', '--inbox', '--reply', '--ack', '--sent-status', '--sweep'].filter(k => options[k]);
+  const actions = ['--send', '--poll', '--inbox', '--reply', '--ack', '--sent-status', '--sweep', '--sync-pending'].filter(k => options[k]);
   if (actions.length !== 1) throw new Error('指定は --send / --poll / --reply / --inbox / --ack / --sent-status のいずれか1つ');
   const allowed = {
     '--send': ['--to', '--kind', '--body-file', '--why', '--expires-hours', '--wait', '--exec', '--exec-cwd', '--force', '--priority', '--wait-for', '--dry-run'],
     '--poll': ['--dry-run', '--json'], '--inbox': ['--json', '--unseen'], '--reply': ['--body-file', '--force'], '--ack': ['--all-seen'], '--sweep': [],
-    '--sent-status': []
+    '--sent-status': [], '--sync-pending': []
   };
   for (const key of Object.keys(options)) if (key !== actions[0] && !allowed[actions[0]].includes(key)) throw new Error(`option not applicable: ${key}`);
   if (options['--send']) {
@@ -405,7 +425,7 @@ export function createClient({ url, token, fetchImpl = fetch }) {
     const result = await response.json();
     if (result?.ok !== true) throw new Error(`fleet-mail: ${result?.reason || result?.error || 'invalid response'}`);
     // Old GAS falls back to status writes for unknown kinds: never call that a success.
-    if (kind === 'mail-poll' ? !Array.isArray(result.messages) : !Object.hasOwn(result, 'mail')) throw new Error('fleet-mail: GAS mail handlers are not deployed');
+    if (kind === 'mail-poll' ? !Array.isArray(result.messages) : kind === 'mail-alerts' ? !Array.isArray(result.alerts) : !Object.hasOwn(result, 'mail')) throw new Error('fleet-mail: GAS mail handlers are not deployed');
     return result;
   };
 }
@@ -422,7 +442,7 @@ export async function waitForReply(id, seconds, { request, now = Date.now, sleep
   }
   return { exitCode: 2, text: `${waitFor === 'seen' ? '未読' : '未返信'}（id=${id}）` };
 }
-// 受信1回分。main の --poll からも、対話セッションの hook（fleet-inbox-context.mjs）からも呼ばれる。
+// 受信1回分。--poll のみが呼ぶ。提示 hook はこの処理を別プロセスで起動する。
 // 受信タスク(OrgiastFleetMail)が死んでいても対話セッションが受信を代替するための exports（2026-10-10 事故）。
 // executePrompts: false なら prompt のヘッドレス実行は行わず受信だけする（hook が 90秒の実行で固まるのを防ぐ）。
 export async function pollOnce(deps = {}) {
@@ -525,6 +545,15 @@ export async function pollOnce(deps = {}) {
     }
     if (!undurable) fs.unlinkSync(pollFile);
     writeJson(path.join(dir, '.fleet-mail-last-poll.json'), { at: new Date(now()).toISOString() });
+    for (const mail of readInbox(home)) {
+      if (mail.arrivalNotifiedAt || mailCategory(mail) > 1) continue;
+      try {
+        const notify = deps.notifyArrival ?? (await import('./lib/fleet-mail-discord.mjs')).notifyArrival;
+        if (await notify(mail, { home, label, category: mailCategory(mail), fetchImpl: deps.fetch, stderr: err })) {
+          writeJson(fileOf(mail.id), { ...readJson(fileOf(mail.id)), arrivalNotifiedAt: new Date(now()).toISOString() });
+        }
+      } catch { err('fleet-mail: 到着通知失敗=1'); }
+    }
     let promptHandled = false;
     for (const pending of readInbox(home, { unreadOnly: false })) {
       let mail = pending;
@@ -645,6 +674,14 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   const request = configured ? deps.request ?? createClient({ url: config.FLEET_SHEET_URL, token: config.FLEET_SHEET_TOKEN, fetchImpl: deps.fetch })
     : async () => { throw new Error('fleet-sheet.env 未設定'); };
   const state = (id, action, extra = {}) => syncMailState({ home, id, action, request, now, stderr: err, ...extra });
+  if (options['--sync-pending']) {
+    for (const mail of readInbox(home, { unreadOnly: false })) {
+      for (const action of mail.pendingServer || []) if (['seen', 'ack', 'fail'].includes(action)) {
+        await state(mail.id, action, { seenBy: mail.seenBy || label, reason: mail.failReason });
+      }
+    }
+    return 0;
+  }
   if (options['--inbox']) {
     expireInbox(home, now);
     const mails = readInbox(home).filter(m => !options['--unseen'] || (['delivered', 'seen'].includes(m.status) && !m.presentedAt));

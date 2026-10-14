@@ -247,3 +247,19 @@ test('legacy readAt-only inbox producers stay read; v2 delivered/seen are govern
 test('execution markers do not hide a body-prefix human decision request', () => {
   assert.equal(hasDecisionRequest(mail({ body: '<!-- fleet-exec: codex -->\n<!-- fleet-exec-cwd: /fixture -->\n[判断依頼] 方針' })), true);
 });
+
+test('arrival notification fires once per urgent id and retries a failed channel without quarantining mail', async t => {
+  const f = fixture(t), arrivals = [];
+  const urgent = mail({ priority: 'urgent' });
+  f.deps.request = async kind => kind === 'mail-poll' ? { ok: true, messages: [urgent] } : { ok: true };
+  f.deps.notifyArrival = async message => { arrivals.push(message.id); return arrivals.length > 1; };
+  await pollOnce(f.deps); assert.equal(f.read(urgent.id).arrivalNotifiedAt, undefined); assert.equal(f.read(urgent.id).status, 'delivered');
+  await pollOnce(f.deps); assert.equal(f.read(urgent.id).arrivalNotifiedAt, iso(0));
+  await pollOnce(f.deps); assert.equal(arrivals.length, 2);
+});
+test('normal notes and replies inheriting request reasons do not trigger arrival notifications', async t => {
+  const f = fixture(t), arrivals = [];
+  f.deps.request = async kind => kind === 'mail-poll' ? { ok: true, messages: [mail(), mail({ id: 'mail-reply-one', why: '[判断依頼] 元件名' })] } : { ok: true };
+  f.deps.notifyArrival = async message => { arrivals.push(message.id); return true; };
+  await pollOnce(f.deps); assert.equal(arrivals.length, 0);
+});

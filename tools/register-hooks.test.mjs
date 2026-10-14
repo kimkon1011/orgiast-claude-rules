@@ -342,3 +342,20 @@ test('detached anchor accepts recent main ancestors and old exact tips, rejects 
   assert.equal(run('--hooks-only').status, 1, 'recent divergent detached commit rejected');
   assert.equal(fs.readFileSync(file, 'utf8'), settings, 'rejection preserves settings');
 });
+
+test('fleet inbox is registered synchronously for both events, idempotently, with a five-second timeout', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-fleet-hooks-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const repo = path.resolve('.');
+  fs.mkdirSync(path.join(home, '.claude'));
+  fs.writeFileSync(path.join(home, '.claude/settings.json'), JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command: 'node /old/tools/fleet-inbox-context.mjs', timeout: 30, async: true }] }] } }));
+  const env = { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo };
+  for (let i = 0; i < 2; i++) execFileSync(process.execPath, [path.join(repo, 'tools/register-hooks.mjs'), '--hooks-only'], { env, stdio: 'pipe' });
+  const settings = JSON.parse(fs.readFileSync(path.join(home, '.claude/settings.json'), 'utf8'));
+  const manifest = JSON.parse(fs.readFileSync(path.join(repo, 'tools/setup-manifest.json'), 'utf8'));
+  for (const item of manifest.items.filter(i => i.spec.hookScript === 'fleet-inbox-context.mjs')) {
+    const hooks = settings.hooks[item.spec.hookEvent].flatMap(group => group.hooks || []).filter(h => h.command.includes(item.spec.hookScript));
+    assert.equal(hooks.length, 1); assert.equal(hooks[0].timeout, item.spec.timeout); assert.equal(hooks[0].async, undefined);
+    assert.equal(hooks[0].command, `node "${path.join(repo, 'tools', item.spec.hookScript)}"${item.spec.hookArgs}`);
+  }
+});

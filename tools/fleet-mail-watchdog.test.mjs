@@ -3,112 +3,61 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fleetLabels, collectUndelivered, formatUndelivered, notifiable, main, CHANNEL, STALE_MS, RENOTIFY_MS } from './fleet-mail-watchdog.mjs';
-
-const NOW = Date.parse('2026-10-10T06:00:00.000Z');
-const iso = ms => new Date(NOW - ms).toISOString();
-const message = (overrides = {}) => ({ id: 'mail-1', status: 'new', createdAt: iso(31 * 60 * 1000), from: 'cr-PC', to: 'kim-PC', why: '返信', ...overrides });
-
-function fixture(t, { configured = true } = {}) {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-mail-watchdog-'));
-  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  const dir = path.join(home, '.claude'); fs.mkdirSync(dir);
-  if (configured) fs.writeFileSync(path.join(dir, 'fleet-sheet.env'), 'FLEET_SHEET_URL="https://example.invalid/mail"\nFLEET_SHEET_TOKEN=test-token\n');
-  return { home, dir };
+import { main, formatAlert, CHANNEL } from './fleet-mail-watchdog.mjs';
+import { KIM_USER_ID, notifyArrival, postToChannel } from './lib/fleet-mail-discord.mjs';
+import { createClient } from './fleet-mail.mjs';
+function fixture(t, alerts = [{ id: 'mail-one', to: 'kim-PC', from: 'PC', kind: 'unseen', why: '確認', notifiedCount: 0 }]) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-watch-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(home, '.claude')); fs.writeFileSync(path.join(home, '.claude', 'fleet-sheet.env'), 'FLEET_SHEET_URL=https://example.invalid\nFLEET_SHEET_TOKEN=test\n');
+  const calls = [], posts = [], dms = [], outputs = [];
+  const deps = { home, token: 'test', stdout: x => outputs.push(x), stderr() {}, request: async (kind, payload) => { calls.push({ kind, payload }); return { ok: true, alerts: payload.notifiedIds ? [] : alerts }; }, postChannel: async (...args) => posts.push(args), notifyKim: async (...args) => { dms.push(args); return { delivered: 'dm' }; } };
+  return { home, calls, posts, dms, outputs, deps };
 }
-const deps = (home, poll, { post, notify, out, errors, token = 'watchdog-token', request } = {}) => ({
-  home, now: () => NOW, poll, postChannel: post, notifyKim: notify, token, request,
-  stdout: out ?? (() => {}), stderr: errors ? (t => errors.push(t)) : (() => {}),
+test('watchdog reads alerts and confirms only after channel/DM delivery', async t => {
+  const f = fixture(t); await main([], f.deps);
+  assert.deepEqual(f.calls, [{ kind: 'mail-alerts', payload: {} }, { kind: 'mail-alerts', payload: { notifiedIds: ['mail-one'] } }]);
+  assert.equal(f.posts[0][1], CHANNEL); assert.equal(f.dms[0][1].userId, KIM_USER_ID); assert.equal(f.dms[0][1].webhookFallback, false);
 });
-
-test('fleetLabels excludes reserved keys and falls back to the label as hostname', () => {
-  const labels = fleetLabels({ _note: { remoteName: 'x' }, 'kim-PC': { remoteName: '表示名' }, 'cr-PC': {}, broken: null });
-  assert.equal(JSON.stringify(labels), JSON.stringify([{ label: 'kim-PC', hostname: '表示名' }, { label: 'cr-PC', hostname: 'cr-PC' }]));
+test('server webhook delivered alerts are not duplicated', async t => {
+  const f = fixture(t, [{ id: 'mail-one', notifiedCount: 1 }]); await main([], f.deps);
+  assert.equal(f.posts.length, 0); assert.equal(f.dms.length, 0); assert.equal(f.calls.length, 1);
 });
-
-test('collectUndelivered aggregates status=new older than 30 minutes and dedupes broadcast ids', async () => {
-  const polls = [];
-  const entries = await collectUndelivered(
-    [{ label: 'kim-PC', hostname: 'h1' }, { label: 'cr-PC', hostname: 'h2' }],
-    async ({ label }) => {
-      polls.push(label);
-      return label === 'kim-PC'
-        ? [message(), message({ id: 'mail-fresh', createdAt: iso(STALE_MS - 60_000) }), message({ id: 'mail-done', status: 'delivered' }), message({ id: 'mail-bad', createdAt: 'not-a-date' })]
-        : [message(), message({ id: 'mail-own', to: 'cr-PC' })];
-    },
-    { now: () => NOW });
-  assert.equal(JSON.stringify(polls), JSON.stringify(['kim-PC', 'cr-PC']));
-  assert.equal(JSON.stringify(entries.map(e => e.id).sort()), JSON.stringify(['mail-1', 'mail-own']));
-  assert.equal(entries.find(e => e.id === 'mail-1').to, 'kim-PC', 'all 宛の重複は最初のラベルに一意化');
+test('failed routes including delivered:none leave alerts pending', async t => {
+  const f = fixture(t); await main([], { ...f.deps, postChannel: async () => { throw new Error('offline'); }, notifyKim: async () => ({ delivered: 'none' }) });
+  assert.equal(f.calls.length, 1);
 });
-
-test('formatUndelivered truncates why to 30 chars and shows elapsed minutes', () => {
-  const text = formatUndelivered([{ id: 'mail-9', to: 'kim-PC', from: 'cr-PC', why: 'あ'.repeat(40), createdAt: iso(90 * 60 * 1000) }], NOW);
-  assert.match(text, /未配達 1件/);
-  assert.match(text, /kim-PC 宛 cr-PC から「あ{30}」\(90分経過\) id=mail-9/);
+test('successful DM alone confirms delivery', async t => {
+  const f = fixture(t); await main([], { ...f.deps, token: '' }); assert.equal(f.posts.length, 0); assert.equal(f.calls.length, 2);
 });
-
-test('notifiable suppresses the same id within 6 hours only', () => {
-  const entries = [{ id: 'mail-a' }, { id: 'mail-b' }];
-  const state = { notified: { 'mail-a': iso(6 * 60 * 60 * 1000) } }; // ちょうど6時間前 = 抑止対象外
-  assert.equal(JSON.stringify(notifiable(entries, state, NOW).map(e => e.id)), JSON.stringify(['mail-a', 'mail-b']));
-  const within = { notified: { 'mail-a': new Date(NOW - RENOTIFY_MS + 60_000).toISOString() } };
-  assert.equal(JSON.stringify(notifiable(entries, within, NOW).map(e => e.id)), JSON.stringify(['mail-b']));
+test('successful channel alone confirms delivery', async t => {
+  const f = fixture(t); await main([], { ...f.deps, notifyKim: async () => { throw new Error('offline'); } }); assert.equal(f.calls.length, 2);
 });
-
-test('main skips silently when transport is unconfigured', async t => {
-  const f = fixture(t, { configured: false });
-  const errors = [];
-  assert.equal(await main([], deps(f.home, async () => assert.fail('poll called'), { errors })), 0);
-  assert.equal(errors.length, 1);
+test('dry run reads only and logs counts without contents', async t => {
+  const f = fixture(t); await main(['--dry-run', '--json'], f.deps); assert.equal(f.calls.length, 1); assert.equal(f.posts.length, 0); assert.equal(f.dms.length, 0); assert.equal(JSON.parse(f.outputs[0]).pending, 1); assert.doesNotMatch(f.outputs[0], /mail-one|確認/);
 });
-
-test('main notifies Discord channel and kim DM, records state, and suppresses repeats', async t => {
-  const f = fixture(t);
-  const posted = [], dms = [], out = [];
-  const run = () => main([], deps(f.home, 
-    async () => [message({ why: '[判断依頼] 進行方針' })],
-    {
-      post: async (token, channelId, content) => { posted.push({ token, channelId, content }); },
-      notify: async text => { dms.push(text); return { delivered: 'dm' }; },
-      out: t2 => out.push(t2),
-    }));
-  assert.equal(await run(), 0);
-  assert.equal(posted.length, 1);
-  assert.equal(posted[0].channelId, CHANNEL);
-  assert.equal(posted[0].token, 'watchdog-token');
-  assert.match(posted[0].content, /未配達 1件/);
-  assert.match(posted[0].content, /「\[判断依頼\] 進行方針」/);
-  assert.equal(dms.length, 1);
-  const state = JSON.parse(fs.readFileSync(path.join(f.dir, 'fleet-mail-watchdog.json'), 'utf8'));
-  assert.ok(state.notified['mail-1']);
-  // 同じ id は再通知しない（6時間抑止）
-  assert.equal(await run(), 0);
-  assert.equal(posted.length, 1);
-  assert.equal(dms.length, 1);
-  assert.match(out.at(-1), /未配達なし/);
+test('unconfigured watchdog does no requests', async t => {
+  const f = fixture(t); fs.unlinkSync(path.join(f.home, '.claude', 'fleet-sheet.env')); await main([], f.deps); assert.equal(f.calls.length, 0);
 });
-
-test('main does not record state when every delivery path fails', async t => {
-  const f = fixture(t);
-  const run = () => main([], deps(f.home, async () => [message()],
-    { post: async () => { throw new Error('discord down'); }, notify: async () => { throw new Error('dm down'); } }));
-  assert.equal(await run(), 0);
-  assert.equal(fs.existsSync(path.join(f.dir, 'fleet-mail-watchdog.json')), false, '全経路失敗時は次の毎時実行で再通知する');
+test('alert formatting masks secrets and distinguishes undelivered from unseen', () => {
+  assert.match(formatAlert({ kind: 'unseen' }), /未読 SLA/); assert.match(formatAlert({ kind: 'undelivered' }), /未配達/);
+  assert.doesNotMatch(formatAlert({ why: 'token=private' }), /private/);
 });
-
-test('main --dry-run prints without sending or writing state', async t => {
-  const f = fixture(t);
-  const out = [];
-  assert.equal(await main(['--dry-run'], deps(f.home, async () => [message()], { out: t2 => out.push(t2) })), 0);
-  assert.match(out[0], /^\[DRY\] /);
-  assert.match(out[0], /未配達 1件/);
-  assert.equal(fs.existsSync(path.join(f.dir, 'fleet-mail-watchdog.json')), false);
+test('client accepts alerts shape and rejects old GAS fallback', async () => {
+  const client = result => createClient({ url: 'https://example.invalid', token: 'test', fetchImpl: async () => ({ ok: true, json: async () => result }) });
+  assert.deepEqual(await client({ ok: true, alerts: [] })('mail-alerts', {}), { ok: true, alerts: [] });
+  await assert.rejects(client({ ok: true, mail: null })('mail-alerts', {}), /not deployed/);
 });
-
-test('main passes dryRun:true polls so nothing is marked delivered', async t => {
-  const f = fixture(t);
-  const payloads = [];
-  await main([], deps(f.home, async () => []), { request: async (kind, payload) => { payloads.push({ kind, payload }); return { messages: [] }; } });
-  assert.ok(payloads.every(p => p.kind === undefined || p.payload.dryRun === true));
+test('shared Discord transport disables mentions and masks content', async () => {
+  const calls = []; await postToChannel('test', CHANNEL, 'token=private @everyone', async (...args) => { calls.push(args); return { ok: true }; });
+  const body = JSON.parse(calls[0][1].body); assert.deepEqual(body.allowed_mentions, { parse: [] }); assert.doesNotMatch(body.content, /private/);
+});
+test('arrival uses one line, recipient, category, clipped reason and id', async t => {
+  const f = fixture(t); const calls = [];
+  assert.equal(await notifyArrival({ id: 'mail-one', why: '[作業依頼] '+ 'あ'.repeat(100) }, { home: f.home, label: 'receiver', token: 'test', fetchImpl: async (...args) => { calls.push(args); return { ok: true }; } }), true);
+  const content = JSON.parse(calls[0][1].body).content;
+  assert.match(content, /^receiver 宛 \[作業依頼\] 到着:/); assert.ok(content.endsWith(' / mail-one')); assert.ok(content.split('到着: ')[1].split(' / ')[0].length <= 60); assert.doesNotMatch(content, /\n/);
+});
+test('missing arrival route skips without a network request', async t => {
+  const f = fixture(t); const errors = [];
+  assert.equal(await notifyArrival({ id: 'mail-one', priority: 'urgent' }, { home: f.home, token: '', stderr: x => errors.push(x), fetchImpl: async () => assert.fail('network') }), false); assert.equal(errors.length, 1);
 });

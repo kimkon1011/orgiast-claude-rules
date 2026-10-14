@@ -5,24 +5,32 @@ import { createHash } from 'node:crypto';
 const source = fs.readFileSync(new URL('../gas/fleet-status-sheet/Mail.gs', import.meta.url), 'utf8');
 const now = Date.parse('2026-10-14T00:00:00Z');
 function harness() {
-  const rows = [], properties = { SHEET_ID: 'fixture' };
-  const sheet = {
+  const rows = [], alertRows = [], properties = { SHEET_ID: 'fixture' };
+  let time = now;
+  const triggers = [], webhooks = [];
+  const makeSheet = rows => ({
     getLastRow: () => rows.length, setFrozenRows() {}, deleteRow: n => rows.splice(n - 1, 1),
     getRange(row, col, count, width) { return {
       getValues: () => Array.from({ length: count }, (_, i) => Array.from({ length: width }, (_, j) => rows[row - 1 + i]?.[col - 1 + j] ?? '')),
       setRichTextValues(values) { values.forEach((values, i) => { rows[row - 1 + i] ??= []; values.forEach((v, j) => { rows[row - 1 + i][col - 1 + j] = v.text; }); }); }
     }; }
-  };
+  });
+  const sheet = makeSheet(rows), alertsSheet = makeSheet(alertRows);
   const deps = {
-    SpreadsheetApp: { openById: () => ({ getSheetByName: () => sheet }), flush() {}, newRichTextValue: () => ({ setText: text => ({ build: () => ({ text }) }) }) },
+    SpreadsheetApp: { openById: () => ({ getSheetByName: name => name === 'fleet-mail' ? sheet : alertsSheet }), flush() {}, newRichTextValue: () => ({ setText: text => ({ build: () => ({ text }) }) }) },
     PropertiesService: { getScriptProperties: () => ({ getProperty: key => properties[key], setProperty: (key, value) => { properties[key] = value; } }) },
     LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock() {} }) },
     Utilities: { DigestAlgorithm: { SHA_256: 'sha256' }, computeDigest: (algorithm, value) => [...createHash(algorithm).update(value).digest()] },
-    Date: class extends Date { static now() { return now; } }
+    Date: class extends Date { static now() { return time; } },
+    UrlFetchApp: { fetch: (...args) => { webhooks.push(args); return { getResponseCode: () => properties.WEBHOOK_STATUS || 204 }; } },
+    ScriptApp: {
+      getProjectTriggers: () => [...triggers], deleteTrigger: trigger => triggers.splice(triggers.indexOf(trigger), 1),
+      newTrigger: name => ({ timeBased: () => ({ everyMinutes: minutes => ({ create: () => triggers.push({ getHandlerFunction: () => name, minutes }) }) }) }),
+    }
   };
   const names = [...source.matchAll(/^function (\w+)\(/gm)].map(m => m[1]);
-  const api = new Function(...Object.keys(deps), `${source}\nreturn { ${names.join(', ')}, headers: FLEET_MAIL_HEADERS_ };`)(...Object.values(deps));
-  return { ...api, rows, properties };
+  const api = new Function(...Object.keys(deps), `${source}\nreturn { ${names.join(', ')}, headers: FLEET_MAIL_HEADERS_, alertHeaders: FLEET_MAIL_ALERT_HEADERS_, renotifyMs: FLEET_MAIL_RENOTIFY_MS_, sla: FLEET_MAIL_SLA_ };`)(...Object.values(deps));
+  return { ...api, rows, alertRows, properties, triggers, webhooks, advance: ms => { time += ms; } };
 }
 const send = (h, overrides = {}) => h.sendFleetMail({ id: 'mail-original', from: 'sender', to: 'receiver', messageKind: 'note', why: 'test', body: 'body', ...overrides });
 const poll = (h, overrides = {}) => h.pollFleetMail({ to: 'receiver', hostname: 'host', ...overrides });
@@ -122,4 +130,62 @@ test('retry after an appended reply but uncommitted original repairs completion 
   h.rows[1] = before; // Simulate original-row write failure after the reply append.
   const result = h.replyFleetMail({ id: 'mail-original', from: 'receiver', resultBody: 'different retry body' });
   assert.equal(result.duplicate, true); assert.equal(h.rows.length, 3); assert.equal(get(h).status, 'done'); assert.equal(get(h).resultBody, reply.body);
+});
+
+test('sweep expires all overdue non-done states and preserves completed rows', () => {
+  const h = harness();
+  for (const status of ['new', 'delivered', 'seen', 'failed', 'done']) {
+    send(h, { id: `mail-${status}` }); h.rows.at(-1)[h.headers.indexOf('status')] = status;
+  }
+  h.advance(86400000 + 1);
+  assert.equal(h.fleetMailSweep().expired, 4);
+  for (const row of h.rows.slice(1)) assert.equal(row[h.headers.indexOf('status')], row[0] === 'mail-done' ? 'done' : 'expired');
+  assert.deepEqual(h.getFleetMailAlerts({}).alerts, []);
+});
+test('sweep observes strict undelivered and urgent/normal unseen SLA thresholds', () => {
+  for (const [status, priority] of [['new', 'normal'], ['delivered', 'urgent'], ['delivered', 'normal']]) {
+    const h = harness(); send(h, { priority }); if (status === 'delivered') poll(h);
+    h.advance(h.sla[status === 'new' ? 'undelivered' : priority]); assert.equal(h.fleetMailSweep().active, 0);
+    h.advance(1); assert.equal(h.fleetMailSweep().active, 1);
+    const alerts = h.getFleetMailAlerts({}).alerts;
+    assert.equal(alerts.length, 1); assert.equal(alerts[0].kind, status === 'new' ? 'undelivered' : 'unseen'); assert.equal(alerts[0].notifiedCount, 0);
+  }
+});
+test('alert upsert is one row per id; read is not acknowledgement and resolved mail is excluded', () => {
+  const h = harness(); send(h); h.advance(h.sla.undelivered + 1); h.fleetMailSweep();
+  const first = h.getFleetMailAlerts({}).alerts[0];
+  h.advance(600000); h.fleetMailSweep();
+  assert.equal(h.alertRows.length, 2); assert.equal(h.getFleetMailAlerts({}).alerts[0].firstAt, first.firstAt);
+  assert.equal(h.getFleetMailAlerts({}).alerts.length, 1);
+  h.ackFleetMail({ id: 'mail-original' }); assert.equal(h.getFleetMailAlerts({}).alerts.length, 0);
+});
+test('fallback acknowledgement is idempotent and enables six-hour renotification', () => {
+  const h = harness(); send(h); h.advance(h.sla.undelivered + 1); h.fleetMailSweep();
+  assert.deepEqual(h.getFleetMailAlerts({ notifiedIds: ['mail-original'] }).alerts, []);
+  const before = [...h.alertRows[1]]; h.advance(60000);
+  h.getFleetMailAlerts({ notifiedIds: ['mail-original'] }); assert.deepEqual(h.alertRows[1], before);
+  h.advance(h.renotifyMs - 60001); assert.equal(h.getFleetMailAlerts({}).alerts.length, 0);
+  h.advance(1); h.fleetMailSweep(); assert.equal(h.getFleetMailAlerts({}).alerts[0].notifiedCount, 0);
+});
+test('server webhook success suppresses watchdog, retries only after six hours', () => {
+  const h = harness(); h.properties.FLEET_MAIL_DISCORD_WEBHOOK = 'https://example.invalid/webhook'; send(h); h.advance(h.sla.undelivered + 1);
+  assert.equal(h.fleetMailSweep().notified, 1); assert.equal(h.webhooks.length, 1); assert.deepEqual(h.getFleetMailAlerts({}).alerts, []);
+  h.fleetMailSweep(); assert.equal(h.webhooks.length, 1);
+  h.advance(h.renotifyMs); h.fleetMailSweep(); assert.equal(h.webhooks.length, 2); assert.equal(h.alertRows.length, 2);
+});
+test('failed webhook leaves pending and alert values are literal/redacted', () => {
+  const h = harness(); h.properties.FLEET_MAIL_DISCORD_WEBHOOK = 'https://example.invalid/webhook'; h.properties.WEBHOOK_STATUS = 500;
+  send(h, { why: '=formula token=private' }); h.advance(h.sla.undelivered + 1);
+  assert.equal(h.fleetMailSweep().notified, 0);
+  const alert = h.getFleetMailAlerts({}).alerts[0]; assert.equal(alert.notifiedCount, 0); assert.match(alert.why, /^=formula/); assert.doesNotMatch(alert.why, /private/);
+  assert.deepEqual(JSON.parse(h.webhooks[0][1].payload).allowed_mentions, { parse: [] });
+});
+test('trigger setup is idempotent and preserves other handlers', () => {
+  const h = harness(); const other = { getHandlerFunction: () => 'processCommandQueue' }; h.triggers.push(other);
+  h.setupFleetMailTriggers(); h.setupFleetMailTriggers();
+  assert.equal(h.triggers.length, 2); assert.equal(h.triggers[0], other); assert.equal(h.triggers[1].getHandlerFunction(), 'fleetMailSweep'); assert.equal(h.triggers[1].minutes, h.sla.sweepMinutes);
+});
+test('WebApp exposes authenticated mail-alerts with explicit notification acknowledgement', () => {
+  const web = fs.readFileSync(new URL('../gas/fleet-status-sheet/WebApp.gs', import.meta.url), 'utf8');
+  assert.match(web, /'mail-alerts': getFleetMailAlerts/);
 });

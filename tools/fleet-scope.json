@@ -540,6 +540,36 @@
       "scope": "kim-only",
       "step": null,
       "reason": "要確認"
+    },
+    {
+      "path": "tools/lib/fleet-mail-discord.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail v2 の提示・通知・初回移行を全PCへ配布"
+    },
+    {
+      "path": "tools/fleet-inbox-context.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail v2 の提示・通知・初回移行を全PCへ配布"
+    },
+    {
+      "path": "tools/register-fleet-mail.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail v2 の提示・通知・初回移行を全PCへ配布"
+    },
+    {
+      "path": "tools/fleet-mail.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail v2 の提示・通知・初回移行を全PCへ配布"
+    },
+    {
+      "path": "skills/fleet-mail/SKILL.md",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail v2 の提示・通知・初回移行を全PCへ配布"
     }
   ]
 }

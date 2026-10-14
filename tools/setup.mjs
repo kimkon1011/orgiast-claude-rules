@@ -77,7 +77,7 @@ function check(item) {
       const parsed = JSON.parse(raw);
       if (spec.hookEvent) {
         const hooks = parsed.hooks?.[spec.hookEvent]?.flatMap(group => group.hooks || []) || [];
-        const expected = `node "${path.join(scriptDir, spec.hookScript)}" --hook`;
+        const expected = `node "${path.join(scriptDir, spec.hookScript)}"${spec.hookArgs ?? ' --hook'}`;
         return hooks.some(hook => hook.type === 'command' && hook.command === expected
           && (spec.async !== false ? hook.async === true : hook.async === undefined || hook.async === false)
           && hook.timeout === (spec.timeout ?? 5));
@@ -86,6 +86,7 @@ function check(item) {
     }
     if (item.type === 'scheduled-task') {
       if (typeof spec.ifPresent === 'string' && !fs.existsSync(resolveHome(spec.ifPresent))) return null;
+      if (spec.migrationMarker && !fs.existsSync(resolveHome(spec.migrationMarker))) return false;
       if (process.platform !== 'win32') return false;
       execFileSync('schtasks.exe', ['/Query', '/TN', spec.name], { stdio: 'ignore', timeout: 10000, windowsHide: true });
       return true;

@@ -413,8 +413,9 @@ test('pollOnce with executePrompts:false receives notes and leaves prompts for t
   const lastPoll = JSON.parse(fs.readFileSync(path.join(f.dir, '.fleet-mail-last-poll.json'), 'utf8'));
   assert.ok(lastPoll.at);
 });
-test('register --ensure skips PowerShell when both tasks probe healthy', t => {
+test('register --ensure skips registration when task results and last poll are healthy', t => {
   const f = fixture(t);
+  fs.writeFileSync(path.join(f.dir, '.fleet-mail-last-poll.json'), '{}');
   const calls = [];
   const spawnImpl = (program, args) => {
     calls.push({ program, args });

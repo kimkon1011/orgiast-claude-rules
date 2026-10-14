@@ -214,3 +214,104 @@ function _fleetMailTransition_(payload, action) {
 function seenFleetMail(payload) { return _fleetMailTransition_(payload, 'seen'); }
 function ackFleetMail(payload) { return _fleetMailTransition_(payload, 'ack'); }
 function failFleetMail(payload) { return _fleetMailTransition_(payload, 'fail'); }
+
+const FLEET_MAIL_ALERT_HEADERS_ = ['id', 'kind', 'to', 'from', 'why', 'firstAt', 'lastNotifiedAt', 'notifiedCount'];
+const FLEET_MAIL_RENOTIFY_MS_ = 6 * 60 * 60 * 1000;
+const FLEET_MAIL_SLA_ = { undelivered: 30 * 60 * 1000, urgent: 2 * 60 * 60 * 1000, normal: 6 * 60 * 60 * 1000, sweepMinutes: 10 };
+function _fleetMailAlertKind_(mail, now) {
+  if (Date.parse(mail.expiresAt) <= now) return '';
+  if (mail.status === 'new' && !mail.deliveredAt && now - Date.parse(mail.createdAt) > FLEET_MAIL_SLA_.undelivered) return 'undelivered';
+  if (mail.status === 'delivered' && !mail.seenAt && now - Date.parse(mail.deliveredAt) > FLEET_MAIL_SLA_[mail.priority === 'urgent' ? 'urgent' : 'normal']) return 'unseen';
+  return '';
+}
+function _fleetMailAlertsSheet_() {
+  const book = SpreadsheetApp.openById(PropertiesService.getScriptProperties().getProperty('SHEET_ID'));
+  const sheet = book.getSheetByName('fleet-mail-alerts') || book.insertSheet('fleet-mail-alerts');
+  if (!sheet.getLastRow()) _fleetMailAlertWrite_(sheet, 1, FLEET_MAIL_ALERT_HEADERS_);
+  sheet.setFrozenRows(1);
+  return sheet;
+}
+function _fleetMailAlertWrite_(sheet, row, values) {
+  const range = sheet.getRange(row, 1, 1, FLEET_MAIL_ALERT_HEADERS_.length);
+  const strings = values.map(function(v) { return String(v == null ? '' : v); });
+  range.setRichTextValues([strings.map(function(v) { return SpreadsheetApp.newRichTextValue().setText(v).build(); })]);
+  SpreadsheetApp.flush();
+  if (JSON.stringify(range.getValues()[0]) !== JSON.stringify(strings)) throw new Error('fleet-mail alert read-back mismatch');
+}
+function _fleetMailAlertsRead_(sheet) {
+  if (sheet.getLastRow() < 2) return [];
+  return sheet.getRange(2, 1, sheet.getLastRow() - 1, FLEET_MAIL_ALERT_HEADERS_.length).getValues().map(function(row) {
+    const alert = {};
+    FLEET_MAIL_ALERT_HEADERS_.forEach(function(key, i) { alert[key] = String(row[i] || ''); });
+    alert.notifiedCount = Number(alert.notifiedCount || 0);
+    return alert;
+  });
+}
+function _fleetMailAlertSave_(sheet, index, alert) {
+  _fleetMailAlertWrite_(sheet, index + 2, FLEET_MAIL_ALERT_HEADERS_.map(function(key) { return alert[key]; }));
+}
+function _fleetMailAlertDue_(alert, now) {
+  return !alert.lastNotifiedAt || now - Date.parse(alert.lastNotifiedAt) >= FLEET_MAIL_RENOTIFY_MS_;
+}
+// Never include raw secret-bearing reasons in external notifications or the alert ledger.
+function _fleetMailAlertText_(value) {
+  return String(value || '')
+    .replace(/https:\/\/(?:canary\.|ptb\.)?discord(?:app)?\.com\/api\/webhooks\/[^\s]+/gi, '[REDACTED]')
+    .replace(/\b(?:token|api[_-]?key|password|secret|authorization)\s*[:=]\s*\S+/gi, '[REDACTED]')
+    .replace(/\s+/g, ' ').slice(0, 60);
+}
+function fleetMailSweep() {
+  return _fleetMailLocked_(function(sheet, rows, now) {
+    const alertsSheet = _fleetMailAlertsSheet_();
+    const alerts = _fleetMailAlertsRead_(alertsSheet);
+    const webhook = PropertiesService.getScriptProperties().getProperty('FLEET_MAIL_DISCORD_WEBHOOK');
+    let expired = 0, notified = 0, active = 0;
+    rows.forEach(function(mail, row) {
+      if (mail.status !== 'done' && mail.status !== 'expired' && Date.parse(mail.expiresAt) <= now) {
+        mail.status = 'expired'; _fleetMailWrite_(sheet, row + 2, fleetMailRow(mail)); expired++;
+      }
+      const kind = _fleetMailAlertKind_(mail, now);
+      if (!kind) return;
+      active++;
+      let index = alerts.findIndex(function(alert) { return alert.id === mail.id; });
+      if (index < 0) { index = alerts.length; alerts.push({ id: mail.id, firstAt: new Date(now).toISOString(), lastNotifiedAt: '', notifiedCount: 0 }); }
+      const alert = alerts[index];
+      alert.kind = kind; alert.to = _fleetMailAlertText_(mail.to); alert.from = _fleetMailAlertText_(mail.from); alert.why = _fleetMailAlertText_(mail.why);
+      // Count is per six-hour notification cycle; the last successful time is retained.
+      if (_fleetMailAlertDue_(alert, now)) alert.notifiedCount = 0;
+      _fleetMailAlertSave_(alertsSheet, index, alert);
+      if (!webhook || alert.notifiedCount > 0) return;
+      try {
+        const content = (kind === 'unseen' ? '未読 SLA 超過: ' : '未配達（受信タスク停止の疑い）: ') + alert.to + ' 宛 / ' + alert.why + ' / ' + alert.id;
+        const response = UrlFetchApp.fetch(webhook, { method: 'post', contentType: 'application/json', payload: JSON.stringify({ content: content, allowed_mentions: { parse: [] } }), muteHttpExceptions: true });
+        if (response.getResponseCode() < 200 || response.getResponseCode() >= 300) return;
+        alert.lastNotifiedAt = new Date(now).toISOString(); alert.notifiedCount++;
+        _fleetMailAlertSave_(alertsSheet, index, alert); notified++;
+      } catch (error) { console.warn('fleet-mail: alert notification failed=1'); }
+    });
+    return { ok: true, expired: expired, active: active, notified: notified };
+  });
+}
+function getFleetMailAlerts(payload) {
+  return _fleetMailLocked_(function(sheet, rows, now) {
+    const alertsSheet = _fleetMailAlertsSheet_();
+    const alerts = _fleetMailAlertsRead_(alertsSheet);
+    const ids = Array.isArray(payload.notifiedIds) ? payload.notifiedIds : [];
+    const pending = [];
+    alerts.forEach(function(alert, index) {
+      const mail = rows.find(function(mail) { return mail.id === alert.id; });
+      if (!mail || !_fleetMailAlertKind_(mail, now)) return;
+      if (ids.indexOf(alert.id) >= 0 && _fleetMailAlertDue_(alert, now)) {
+        alert.lastNotifiedAt = new Date(now).toISOString(); alert.notifiedCount = 1;
+        _fleetMailAlertSave_(alertsSheet, index, alert);
+      }
+      if (_fleetMailAlertDue_(alert, now)) pending.push(Object.assign({}, alert, { notifiedCount: 0 }));
+    });
+    return { ok: true, alerts: pending };
+  });
+}
+function setupFleetMailTriggers() {
+  ScriptApp.getProjectTriggers().filter(function(trigger) { return trigger.getHandlerFunction() === 'fleetMailSweep'; })
+    .forEach(function(trigger) { ScriptApp.deleteTrigger(trigger); });
+  ScriptApp.newTrigger('fleetMailSweep').timeBased().everyMinutes(FLEET_MAIL_SLA_.sweepMinutes).create();
+}

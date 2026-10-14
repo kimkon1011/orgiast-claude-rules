@@ -93,6 +93,7 @@ function doPost(e) {
     'mail-reply': replyFleetMail,
     'mail-get': getFleetMail,
     'mail-sent-status': getFleetMail,
+    'mail-alerts': getFleetMailAlerts,
     'mail-seen': seenFleetMail,
     'mail-ack': ackFleetMail,
     'mail-fail': failFleetMail,

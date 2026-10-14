@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -9,15 +9,24 @@ import { spawnSync } from 'node:child_process';
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
 const { needsWorktreeRepair, detectQuotaLimit, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, isBackendExhausted, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS } = await import('./codex-do.mjs');
 
+const runDirs = [];
+function workDir() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-run-'));
+  runDirs.push(dir);
+  return dir;
+}
+after(() => { for (const dir of runDirs) fs.rmSync(dir, { recursive: true, force: true }); });
+
 function run(args, options = {}) {
+  const home = options.home ?? workDir();
   return spawnSync(process.execPath, [tool, ...args], {
     encoding: 'utf8',
-    // /mnt/c の大きい worktree では終了時の git read-back が30秒境界に触れる。
-    // 子プロセス自体のタイムアウト検証とは独立なので、test harness側には余裕を持たせる。
+    // CLI tests own their working tree; do not scan the checkout or other tests' fixtures.
+    cwd: home,
     timeout: 45000,
     env: {
       ...process.env,
-      ORGIAST_HOME: options.home ?? fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-home-')),
+      ORGIAST_HOME: home,
       // 既存のテストは全て sol/astra 前提。probeChatGptAuth が実機の WSL/auth.json を
       // 読みに行くと、テストを回すマシンの実際の認証状態に依存して非決定的に壊れる
       // (2026-09-21 実測: 開発機で ChatGPT 認証が実在し auto テストが軒並み落ちた)。
@@ -96,7 +105,7 @@ test('--timeout が数値でなければ実行しない', () => {
 });
 
 test('--timeout と --cwd を付けても指示文が引数として食われない', () => {
-  const result = run(['--dry-run', '--timeout', '60', '--cwd', os.tmpdir(), 'これは指示文です']);
+  const result = run(['--dry-run', '--timeout', '60', '--cwd', workDir(), 'これは指示文です']);
   assert.equal(result.status, 0);
   assert.match(result.stdout, /これは指示文です/);
   assert.doesNotMatch(result.stdout, /--timeout|--cwd|60/);
@@ -303,7 +312,7 @@ test('枠切れ発生時に --no-fallback を指定した場合はフォール�
   // --force-native: このテストは「枠切れ→フォールバック」の経路だけを見る。WSL の有無で
   // 分岐が変わると Windows 実機で必ず落ちるため、codex 実行経路を固定する。
   // Mock-only quota test: avoid scanning the developer's large real worktree.
-  const result = run(['--force-native', '--cwd', os.tmpdir(), '--no-fallback', '指示内容'], {
+  const result = run(['--force-native', '--cwd', workDir(), '--no-fallback', '指示内容'], {
     env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults) }
   });
   // フォールバックしないため非ゼロ終了
@@ -319,7 +328,7 @@ test('枠切れ発生時にフォールバックが成功した場合は 0 で�
     { status: 0, output: "Qwen Code CLI has successfully edited files.", stderr: "" }
   ];
   // Mock-only quota test: avoid scanning the developer's large real worktree.
-  const result = run(['--force-native', '--cwd', os.tmpdir(), '指示内容'], {
+  const result = run(['--force-native', '--cwd', workDir(), '指示内容'], {
     env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults), GEMINI_API_KEY: '', DEEPSEEK_API_KEY: 'sk-test' }
   });
   assert.equal(result.status, 0);
@@ -334,7 +343,7 @@ test('第1フォールバックがタイムアウトしたら第2バックエン
     { status: 0, output: 'Qwen Code CLI has successfully completed.', stderr: '' }
   ];
   // Mock-only quota test: avoid scanning the developer's large real worktree.
-  const result = run(['--force-native', '--cwd', os.tmpdir(), '指示内容'], {
+  const result = run(['--force-native', '--cwd', workDir(), '指示内容'], {
     env: {
       CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults),
       GEMINI_API_KEY: 'gemini-test',
@@ -446,7 +455,7 @@ test('Codex もフォールバック(Qwen Code) も失敗した場合は非ゼ�
     { status: 12, output: "", stderr: "Qwen Code execution error" }
   ];
   // Mock-only quota test: avoid scanning the developer's large real worktree.
-  const result = run(['--force-native', '--cwd', os.tmpdir(), '指示内容'], {
+  const result = run(['--force-native', '--cwd', workDir(), '指示内容'], {
     env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults), GEMINI_API_KEY: '', DEEPSEEK_API_KEY: 'sk-test' }
   });
   assert.equal(result.status, 12);
@@ -461,7 +470,7 @@ test('枠切れ発生時に DEEPSEEK_API_KEY が無ければフォールバッ�
   delete process.env.DEEPSEEK_API_KEY;
   try {
     // Mock-only quota test: avoid scanning the developer's large real worktree.
-    const result = run(['--force-native', '--cwd', os.tmpdir(), '指示内容'], {
+    const result = run(['--force-native', '--cwd', workDir(), '指示内容'], {
       env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults), GEMINI_API_KEY: '', OPENROUTER_API_KEY: '' }
     });
     assert.equal(result.status, 1);
@@ -1107,6 +1116,14 @@ test('buildCodexExecArgs: model, effort, sandbox and stdin without spaces', () =
   assert.deepEqual(buildCodexExecArgs({ slug: SOL, review: true }), ['exec', '-m', SOL, '-s', 'read-only', '-']);
 });
 
+// Fixtures may live below the checkout (custom TMPDIR); their parent repo is not part of this test.
+function fixtureGitIo(root) {
+  return { stat(file) {
+    if (!file.startsWith(root + path.sep)) throw new Error('outside fixture');
+    return fs.statSync(file);
+  } };
+}
+
 test('isInsideGitRepo: cwd または祖先の実在する .git を検出する', (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-gitdir-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -1117,15 +1134,15 @@ test('isInsideGitRepo: cwd または祖先の実在する .git を検出する',
   // ここを repo と誤判定すると codex に --skip-git-repo-check が渡らず、exit 1 / 出力ゼロで死ぬ。
   fs.mkdirSync(path.join(root, '.git', 'info'), { recursive: true });
   assert.equal(fs.existsSync(path.join(root, '.git')), true);
-  assert.equal(isInsideGitRepo(root), false);
-  assert.equal(isInsideGitRepo(nested), false);
+  assert.equal(isInsideGitRepo(root, fixtureGitIo(root)), false);
+  assert.equal(isInsideGitRepo(nested, fixtureGitIo(root)), false);
   // 誤判定しないので WSL 経路には skip フラグが入る(出力ゼロ即死の回避)
   const codexArgs = buildCodexExecArgs({ slug: SOL });
-  assert.ok(wslCodexArgs({ distro: 'Ubuntu', cwd: root, codexArgs, inGitRepo: isInsideGitRepo(root) }).includes('--skip-git-repo-check'));
+  assert.ok(wslCodexArgs({ distro: 'Ubuntu', cwd: root, codexArgs, inGitRepo: isInsideGitRepo(root, fixtureGitIo(root)) }).includes('--skip-git-repo-check'));
   // HEAD が生えた時点で初めてリポジトリとして扱う
   fs.writeFileSync(path.join(root, '.git', 'HEAD'), 'ref: refs/heads/main\n');
-  assert.equal(isInsideGitRepo(root), true);
-  assert.equal(isInsideGitRepo(nested), true);
+  assert.equal(isInsideGitRepo(root, fixtureGitIo(root)), true);
+  assert.equal(isInsideGitRepo(nested, fixtureGitIo(root)), true);
 });
 
 test('isInsideGitRepo: worktree の gitfile は指す先が実在するときだけリポジトリ', (t) => {
@@ -1134,11 +1151,11 @@ test('isInsideGitRepo: worktree の gitfile は指す先が実在するときだ
   const worktree = path.join(root, 'wt');
   fs.mkdirSync(worktree, { recursive: true });
   fs.writeFileSync(path.join(worktree, '.git'), `gitdir: ${path.join(root, 'missing')}\n`);
-  assert.equal(isInsideGitRepo(worktree), false);
+  assert.equal(isInsideGitRepo(worktree, fixtureGitIo(root)), false);
   fs.mkdirSync(path.join(root, 'real'));
   fs.writeFileSync(path.join(root, 'real', 'HEAD'), 'ref: refs/heads/main\n');
   fs.writeFileSync(path.join(worktree, '.git'), `gitdir: ${path.join(root, 'real')}\n`);
-  assert.equal(isInsideGitRepo(worktree), true);
+  assert.equal(isInsideGitRepo(worktree, fixtureGitIo(root)), true);
 });
 
 test('isInsideGitRepo: 祖先方向に .git が無ければ false', () => {

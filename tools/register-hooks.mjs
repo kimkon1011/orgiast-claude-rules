@@ -327,6 +327,8 @@ try {
   if (add(settings.hooks.PreToolUse, 'askuser-selfcheck-gate.mjs', { matcher: 'AskUserQuestion', hooks: [{ type: 'command', command: command('askuser-selfcheck-gate.mjs'), timeout: 10 }] })) added += 1;
   // 上記4本(handoff-info/quality/investigation/negative-claim)は stop-gate-runner に合流済みなので個別登録しない。
   // コマンドの手渡しに非エンジニア向けの開き方・入力場所・完了確認を必須化する。
+  // 「この後の自動進行」宣言を台帳へ記録(fail-open・出力なし)。巡回は OrgiastAutoProgressWatch が担当。
+  if (add(settings.hooks.Stop, 'auto-progress-ledger.mjs', { hooks: [{ type: 'command', command: command('auto-progress-ledger.mjs'), timeout: 8 }] })) added += 1;
   if (add(settings.hooks.Stop, 'handoff-detail-guard.mjs', { hooks: [{ type: 'command', command: command('handoff-detail-guard.mjs'), timeout: 10 }] })) added += 1;
   // 生URLと日本語・全角文字の直接隣接によるリンク破損を差し戻す。
   if (add(settings.hooks.Stop, 'url-format-guard.mjs', { hooks: [{ type: 'command', command: command('url-format-guard.mjs'), timeout: 8 }] })) added += 1;

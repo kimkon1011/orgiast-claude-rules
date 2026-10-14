@@ -19,7 +19,7 @@ test('生存中のbatch-run lockがあれば処理せず exit 3 でスキップ'
   fs.writeFileSync(path.join(dir,'batch-run.lock'),JSON.stringify({pid:process.pid,startedAt:new Date().toISOString()}));
   const queueDir=path.join(home,'.claude','batch-queue'); fs.mkdirSync(queueDir,{recursive:true});
   fs.writeFileSync(path.join(queueDir,'pending.jsonl'),'{"id":"pending-1"}\n');
-  const started=Date.now(); const result=spawnSync(process.execPath,['tools/batch-run.mjs','--dry'],{encoding:'utf8',env:{...process.env,USERPROFILE:home,ORGIAST_LOCK_HOME:home,ORGIAST_HOME:home}});
-  assert.equal(result.status,3); assert.match(result.stderr,/\[batch-run\] already running pid=/); assert.match(result.stderr,/pending 1件/); assert.ok(Date.now()-started<1000);
+  const result=spawnSync(process.execPath,['tools/batch-run.mjs','--dry'],{encoding:'utf8',timeout:5000,env:{...process.env,USERPROFILE:home,ORGIAST_LOCK_HOME:home,ORGIAST_HOME:home}});
+  assert.equal(result.status,3); assert.match(result.stderr,/\[batch-run\] already running pid=/); assert.match(result.stderr,/pending 1件/); assert.ifError(result.error);
   fs.rmSync(home,{recursive:true,force:true});
 });

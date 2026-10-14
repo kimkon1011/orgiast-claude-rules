@@ -441,9 +441,15 @@
     },
     {
       "path": "tools/register-stall-sweeper.ps1",
-      "scope": "kim-only",
-      "step": null,
-      "reason": "要確認"
+      "scope": "fleet",
+      "step": "task:stall-sweeper",
+      "reason": "task:stall-sweeper ステップの登録スクリプト"
+    },
+    {
+      "path": "tools/register-auto-progress-task.ps1",
+      "scope": "fleet",
+      "step": "task:auto-progress-watch",
+      "reason": "task:auto-progress-watch ステップの登録スクリプト（巡回09:00/18:00＋朝DM。DMはkim-PCのみ）"
     },
     {
       "path": "tools/register-stalled-session-nightly.ps1",

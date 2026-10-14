@@ -610,6 +610,52 @@ try {
         }
     } else { Write-NightlyLog 'line-digest' 'skip:ファイルなし' }
 
+    $cafeDigest = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\line-digest.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $cafeDigest = $candidate; break }
+    }
+    if ($cafeDigest) {
+        try {
+            $cafeDigestOutput = @(& $node.Source $cafeDigest '--profile' 'cafe' 2>&1)
+            $cafeDigestExitCode = $LASTEXITCODE
+            if ($cafeDigestExitCode -ne 0) {
+                $cafeDigestResult = 'error:終了コード' + $cafeDigestExitCode + ': ' + (Format-NightlyDetail $cafeDigestOutput)
+            } else {
+                $cafeDigestResult = @($cafeDigestOutput | Where-Object { $_ -match '^(skip:入力ディレクトリなし|skip:新規メッセージなし|ok:\d+件処理)$' } | Select-Object -Last 1)
+                if ($cafeDigestResult.Count -eq 0) { $cafeDigestResult = 'error:状態不明' } else { $cafeDigestResult = [string]$cafeDigestResult[0] }
+            }
+            $summary['line-digest-cafe'] = $cafeDigestResult
+            Write-NightlyLog 'line-digest-cafe' $cafeDigestResult
+        } catch {
+            $summary['line-digest-cafe'] = ("error:" + $_.Exception.Message); Write-NightlyLog 'line-digest-cafe' $summary['line-digest-cafe']
+            Write-Warning ("nightly-batch: line-digest-cafe: " + $_.Exception.Message)
+        }
+    } else { $summary['line-digest-cafe'] = 'skip:ファイルなし'; Write-NightlyLog 'line-digest-cafe' 'skip:ファイルなし' }
+
+    $cafeDeliver = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\cafe-digest-deliver.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $cafeDeliver = $candidate; break }
+    }
+    if ($cafeDeliver) {
+        try {
+            $cafeDeliverOutput = @(& $node.Source $cafeDeliver 2>&1)
+            $cafeDeliverExitCode = $LASTEXITCODE
+            if ($cafeDeliverExitCode -ne 0) {
+                $cafeDeliverResult = 'error:終了コード' + $cafeDeliverExitCode + ': ' + (Format-NightlyDetail $cafeDeliverOutput)
+            } else {
+                $cafeDeliverResult = @($cafeDeliverOutput | Where-Object { $_ -match '^(ok:送信 .+|skip:.+|error:.+)$' } | Select-Object -Last 1)
+                if ($cafeDeliverResult.Count -eq 0) { $cafeDeliverResult = 'error:状態不明' } else { $cafeDeliverResult = [string]$cafeDeliverResult[0] }
+            }
+            $summary['cafe-digest-deliver'] = $cafeDeliverResult
+            Write-NightlyLog 'cafe-digest-deliver' $cafeDeliverResult
+        } catch {
+            $summary['cafe-digest-deliver'] = ("error:" + $_.Exception.Message); Write-NightlyLog 'cafe-digest-deliver' $summary['cafe-digest-deliver']
+            Write-Warning ("nightly-batch: cafe-digest-deliver: " + $_.Exception.Message)
+        }
+    } else { $summary['cafe-digest-deliver'] = 'skip:ファイルなし'; Write-NightlyLog 'cafe-digest-deliver' 'skip:ファイルなし' }
+
     $triage = $null
     foreach ($repo in $repos) {
         $candidate = Join-Path $repo 'tools\ai-news-triage.mjs'

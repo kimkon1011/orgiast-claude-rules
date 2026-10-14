@@ -74,7 +74,10 @@ test('hook starts poll and sync without GAS, locks, pipes or child waiting', asy
   await f.run();
   assert.equal(f.errors.length, 0);
   assert.deepEqual(f.spawns.map(s => s.args.slice(1)), [['--poll', '--no-exec'], ['--sync-pending']]);
-  for (const s of f.spawns) { assert.equal(s.cmd, process.execPath); assert.equal(s.options.stdio, 'ignore'); assert.equal(s.options.env.ORGIAST_HOME, f.home); assert.equal(s.unref, true); assert.equal(s.options.detached, backgroundSpawnOptions('linux').detached); }
+  for (const s of f.spawns) {
+    assert.equal(s.cmd, process.execPath); assert.equal(s.options.stdio, 'ignore'); assert.equal(s.options.env.ORGIAST_HOME, f.home); assert.equal(s.unref, true);
+    for (const [key, value] of Object.entries(backgroundSpawnOptions(f.deps.platform))) assert.equal(s.options[key], value);
+  }
   assert.equal(fs.existsSync(path.join(f.dir, 'fleet-mail.lock')), false);
 });
 test('presentation queues durable seen/ack, and sync CLI sends both in order', async t => {
@@ -104,7 +107,10 @@ test('malformed input and spawn errors fail open without leaking error details',
 });
 test('Windows launch uses the shared hidden-background policy', async t => {
   const f = fixture(t); await main({ ...f.deps, platform: 'win32', readStdin: async () => '{"hook_event_name":"SessionStart"}' });
-  for (const s of f.spawns) { assert.equal(s.options.windowsHide, backgroundSpawnOptions('win32').windowsHide); assert.equal(s.options.detached, undefined); }
+  assert.ok(f.spawns.length > 0);
+  for (const s of f.spawns) {
+    for (const [key, value] of Object.entries(backgroundSpawnOptions('win32'))) assert.equal(s.options[key], value);
+  }
 });
 
 test('presenting local messages never launches synchronous identity or network commands', async t => {
@@ -211,3 +217,15 @@ test('G10 stale resume is hidden and forwarded questions explain the separate se
   const text = questionContext(f.home, 't', NOW);
   assert.doesNotMatch(text, /実行中/); assert.ok(text.includes(FORWARDED_QUESTION_NOTICE));
 });
+
+
+for (const [category, why] of ['[判断依頼]', '[作業依頼]', '[回答・返信不要]', '通常'].entries()) {
+  test(`J category ${category + 1} shows newest entries up to its cap and counts older overflow`, () => {
+    const messages = [2, 0, 4, 1, 3].map(i => mail(`order-${i}`, { why, createdAt: new Date(NOW + i * 1000).toISOString() }));
+    const { shown, context } = selectContext(messages, { headless: false, now: NOW });
+    const expected = [...messages].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, CATEGORY_LIMITS[category]);
+    assert.deepEqual(shown.map(m => m.id), expected.map(m => m.id));
+    assert.match(context, new RegExp(`他 ${messages.length - expected.length} 件`));
+    assert.doesNotMatch(context, /id=mail-order-0/);
+  });
+}

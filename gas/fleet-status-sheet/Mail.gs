@@ -3,11 +3,11 @@ const FLEET_MAIL_HEADERS_ = ['id', 'from', 'to', 'replyTo', 'kind', 'body', 'why
 
 function fleetMailObject(row) {
   const mail = {};
-  FLEET_MAIL_HEADERS_.forEach(function(key, i) { mail[key] = String(row[i] || ''); });
+  FLEET_MAIL_HEADERS_.forEach(function(key, i) { mail[key] = _fleetMailCellText_(row[i]); });
   return mail;
 }
 function fleetMailRow(mail) {
-  return FLEET_MAIL_HEADERS_.map(function(key) { return String(mail[key] == null ? '' : mail[key]); });
+  return FLEET_MAIL_HEADERS_.map(function(key) { return _fleetMailCellText_(mail[key]); });
 }
 function fleetMailRequired(value, name, max) {
   if (typeof value !== 'string' || !value.trim() || value.length > max) throw new Error('invalid_' + name);
@@ -65,12 +65,19 @@ function _fleetMailSheet_() {
   sheet.setFrozenRows(1);
   return sheet;
 }
+function _fleetMailCellText_(value) {
+  if (value == null) return '';
+  if (Object.prototype.toString.call(value) === '[object Date]') return value.toISOString();
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
 function _fleetMailWrite_(sheet, row, values) {
   const range = sheet.getRange(row, 1, 1, FLEET_MAIL_HEADERS_.length);
   // Literal rich text prevents messages beginning with '=' becoming formulas.
-  range.setRichTextValues([values.map(function(value) { return SpreadsheetApp.newRichTextValue().setText(String(value)).build(); })]);
+  const expected = values.map(_fleetMailCellText_);
+  range.setRichTextValues([expected.map(function(value) { return SpreadsheetApp.newRichTextValue().setText(value).build(); })]);
   SpreadsheetApp.flush();
-  if (JSON.stringify(range.getValues()[0]) !== JSON.stringify(values)) throw new Error('fleet-mail read-back mismatch');
+  if (JSON.stringify(range.getValues()[0].map(_fleetMailCellText_)) !== JSON.stringify(expected)) throw new Error('fleet-mail read-back mismatch');
 }
 function _fleetMailLocked_(action) {
   const lock = LockService.getScriptLock();

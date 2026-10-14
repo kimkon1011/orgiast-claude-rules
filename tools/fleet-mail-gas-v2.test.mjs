@@ -5,11 +5,17 @@ import { createHash } from 'node:crypto';
 import { TERMINAL_STATUSES } from './fleet-mail.mjs';
 const source = fs.readFileSync(new URL('../gas/fleet-status-sheet/Mail.gs', import.meta.url), 'utf8');
 const now = Date.parse('2026-10-14T00:00:00Z');
-function harness({ beaconRows = [['label'], ['receiver'], ['cr-PC']], statusRows = [['label', 'hostname'], ['receiver', 'host']], statusHeaders, rosterFault = false } = {}) {
+function harness({ beaconRows = [['label'], ['receiver'], ['cr-PC']], statusRows = [['label', 'hostname'], ['receiver', 'host']], statusHeaders, rosterFault = false, sheetsTypes = false } = {}) {
   const rows = [], alertRows = [], properties = { SHEET_ID: 'fixture' };
   let time = now;
   const triggers = [], webhooks = [], warnings = [], faults = {};
   const lock = { held: false, releases: 0, hasLock() { return this.held; }, tryLock() { this.held = true; return true; }, releaseLock() { this.held = false; this.releases++; } };
+  const cellValue = value => {
+    if (!sheetsTypes || typeof value !== 'string') return value;
+    if (/^(true|false)$/i.test(value)) return value.toLowerCase() === 'true';
+    if (/^-?\d+(?:\.\d+)?$/.test(value)) return Number(value);
+    return value;
+  };
   const makeSheet = rows => ({
     maxColumns: 26, getMaxColumns() { return this.maxColumns; }, insertColumnsAfter(_after, count) { this.maxColumns += count; },
     getLastRow: () => rows.length, getLastColumn: () => Math.max(0, ...rows.map(row => row.length)), setFrozenRows() {}, deleteRow: n => rows.splice(n - 1, 1),
@@ -17,10 +23,13 @@ function harness({ beaconRows = [['label'], ['receiver'], ['cr-PC']], statusRows
       getValues: () => {
         if (rows === alertRows && count === 1 && row === faults.readBackRow) return [Array(width).fill('mismatch')];
         return Array.from({ length: count }, (_, i) => Array.from({ length: width }, (_, j) => rows[row - 1 + i]?.[col - 1 + j] ?? '')); },
+      setValues(values) {
+        values.forEach((values, i) => { rows[row - 1 + i] ??= []; values.forEach((v, j) => { rows[row - 1 + i][col - 1 + j] = cellValue(v); }); });
+      },
       setRichTextValues(values) {
         if (rows === alertRows && faults.onAlertWrite) faults.onAlertWrite(row);
         if (rows === alertRows && row === faults.writeRow) throw new Error('private failure');
-        values.forEach((values, i) => { rows[row - 1 + i] ??= []; values.forEach((v, j) => { rows[row - 1 + i][col - 1 + j] = v.text; }); }); }
+        this.setValues(values.map(values => values.map(v => v.text))); }
     }; }
   });
   const sheet = makeSheet(rows), alertsSheet = makeSheet(alertRows);
@@ -373,4 +382,38 @@ test('F4 production status headers protect both reporter labels and hostnames an
   }
   const broken = harness({ ...roster, rosterFault: true }); send(broken, { to: '011' });
   assert.deepEqual(poll(broken, { to: '作業用011-cr-PC', hostname: 'other' }).messages, []);
+});
+
+
+test('J mail-send succeeds with Sheets boolean and numeric coercion and preserves false/zero on read', () => {
+  const h = harness({ sheetsTypes: true });
+  for (const auto of [false, true]) {
+    const id = `mail-coercion-${auto}`;
+    assert.equal(send(h, { id, auto, hop: 0, meta: { relay: true } }).ok, true);
+    const row = h.rows.at(-1);
+    assert.equal(row[h.headers.indexOf('auto')], auto);
+    assert.equal(row[h.headers.indexOf('hop')], 0);
+    assert.equal(row[h.headers.indexOf('receipts')], '');
+    const mail = h.getFleetMail({ id }).mail;
+    assert.equal(mail.auto, String(auto)); assert.equal(mail.hop, '0');
+    assert.equal(mail.meta, JSON.stringify({ relay: true }));
+    assert.equal(send(h, { id, auto }).duplicate, true);
+  }
+});
+test('J read-back normalizes all cell types without trimming strings or hiding mismatches', () => {
+  const h = harness({ sheetsTypes: true });
+  const date = new Date(now);
+  const values = [true, false, 0, 12, null, undefined, date, { a: 1 }, ' padded ', 'true', 'false', ''];
+  const expected = ['true', 'false', '0', '12', '', '', date.toISOString(), JSON.stringify({ a: 1 }), ' padded ', 'true', 'false', ''];
+  assert.deepEqual(values.map(h._fleetMailCellText_), expected);
+  const row = h.headers.map((_, i) => values[i]);
+  let stored;
+  const sheet = { getRange: () => ({
+    setRichTextValues: cells => { stored = cells[0].map(cell => cell.text); },
+    getValues: () => [stored.map((value, i) => i < values.length ? values[i] : value)]
+  }) };
+  h._fleetMailWrite_(sheet, 1, row);
+  assert.deepEqual(stored.slice(0, expected.length), expected);
+  sheet.getRange = () => ({ setRichTextValues() {}, getValues: () => [stored.map(value => value === ' padded ' ? value.trim() : value)] });
+  assert.throws(() => h._fleetMailWrite_(sheet, 1, row), /read-back mismatch/);
 });

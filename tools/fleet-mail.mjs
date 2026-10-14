@@ -1139,7 +1139,19 @@ async function runMain(argv, deps) {
     for (let attempt = 0; attempt < 2; attempt++) {
       payload.id = id;
       log('sent', { action: 'send-attempt', ...payload, ...(options['--exec'] ? { exec: options['--exec'] } : {}) });
-      const result = checked(await request('mail-send', payload));
+      let result;
+      try { result = checked(await request('mail-send', payload)); }
+      catch (error) {
+        if (/^(?:fleet-mail: )?busy$/.test(error.message)) {
+          err('fleet-mail: busy（ロック取得失敗）。送信されていない。');
+          return 1;
+        }
+        if (/read-back mismatch/.test(error.message)) {
+          err(`fleet-mail: read-back mismatch。行は作成済みの可能性。--sent-status ${id} で確認`);
+          return 1;
+        }
+        throw error;
+      }
       if (!result.duplicate) break;
       if (attempt === 1) { err('fleet-mail: ID 重複（再送上限）'); return 1; }
       id = mailId(now, deps.randomBytes);

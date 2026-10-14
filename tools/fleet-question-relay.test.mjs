@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { main, detectQuestion, readTranscriptTail, readQuestion, updateQuestion, TRANSCRIPT_TAIL_BYTES, QUESTION_LIMIT, SUMMARY_LIMIT } from './fleet-question-relay.mjs';
+import { main, detectQuestion, readTranscriptTail, readQuestion, updateQuestion, TRANSCRIPT_TAIL_BYTES, QUESTION_LIMIT, SUMMARY_LIMIT, HOOK_DEADLINE_MS } from './fleet-question-relay.mjs';
 const assistant = text => ({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] } });
 function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-question-'));
@@ -65,10 +66,12 @@ test('headless new session records hub-driven state; secrets never enter questio
   assert.equal(readQuestion(f.home, 'session-1').drivenByHub, true);
   assert.doesNotMatch(JSON.stringify(readQuestion(f.home, 'session-1')), /private/);
 });
-test('real Stop CLI exits zero within two seconds for a missing transcript', t => {
+test('real Stop CLI exits zero within the hook deadline for a missing transcript', t => {
   const f = fixture(t), start = performance.now();
-  const result = spawnSync(process.execPath, ['tools/fleet-question-relay.mjs'], { input: JSON.stringify(f.input), encoding: 'utf8', timeout: 2000, env: { ...process.env, ORGIAST_HOME: f.home } });
-  assert.equal(result.status, 0); assert.equal(result.stdout, ''); assert.equal(result.stderr, ''); assert.ok(performance.now() - start < 2000);
+  // fileURLToPath で Windows と URL エンコードを扱い、repo 外の cwd から起動する。
+  const cli = fileURLToPath(new URL('./fleet-question-relay.mjs', import.meta.url));
+  const result = spawnSync(process.execPath, [cli], { cwd: f.home, input: JSON.stringify(f.input), encoding: 'utf8', timeout: HOOK_DEADLINE_MS, env: { ...process.env, ORGIAST_HOME: f.home } });
+  assert.equal(result.status, 0); assert.equal(result.stdout, ''); assert.equal(result.stderr, ''); assert.ok(performance.now() - start < HOOK_DEADLINE_MS);
 });
 
 import { questionPath, QUESTION_LOCK_MS } from './fleet-question-relay.mjs';

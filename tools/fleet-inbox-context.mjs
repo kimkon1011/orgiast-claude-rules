@@ -24,6 +24,7 @@ export function selectContext(messages, { headless = isHeadless(), sessionId = '
   const expired = messages.filter(m => m.status === 'expired' || (!TERMINAL_STATUSES.includes(m.status) && Date.parse(m.expiresAt) <= now));
   const active = messages.filter(m => !TERMINAL_STATUSES.includes(m.status) && !expired.includes(m));
   if (!active.length && !expired.length) return { context: '', shown: [] };
+  // 全カテゴリで上限を適用する前に新着順に並べ、古い依頼に新着が埋もれるのを防ぐ。
   const eligible = active.filter(m => !(headless && hasDecisionRequest(m)) && !(sessionId && m.presentedSession === sessionId))
     .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')) || String(a.id).localeCompare(String(b.id)));
   // §5: 別セッションでは done まで再提示（seen/presentedAt だけでは隠さない）。

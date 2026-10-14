@@ -6,6 +6,7 @@ import path from 'node:path';
 import { Worker } from 'node:worker_threads';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
+import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
 import { main, pollOnce, readInbox, syncMailState, resolveMailTarget, mailId, parseArgs, waitForReply, createClient, TERMINAL_STATUSES, hasDecisionRequest, updateInbox, presentMail, ACK_BATCH_LIMIT, SERVER_MAX_ATTEMPTS, CAPABILITY_BACKOFF_MS, INTERRUPTED_PROMPT_MS, INTERRUPTED_PROMPT_BODY, INBOX_LOCK_RETRIES, INBOX_LOCK_DELAY_MS, INBOX_LOCK_STALE_MS, COMMAND_LOCK_RETRIES, COMMAND_LOCK_DELAY_MS, LOCK_BUSY_EXIT, notifyPendingArrivals } from './fleet-mail.mjs';
 const pcMap = JSON.parse(fs.readFileSync(new URL('../fleet-pc-map.json', import.meta.url), 'utf8'));
 const labels = Object.keys(pcMap).filter(key => !key.startsWith('_'));
@@ -379,14 +380,27 @@ test('C11 callback errors release locks and delayed server responses preserve ho
   } });
   assert.equal(f.read(mail().id).presentedSession, 'concurrent-hook'); assert.deepEqual(f.read(mail().id).pendingServer, ['seen']);
 });
-test('inbox displays only selected messages and uses detached seen synchronization', async t => {
+for (const platform of [process.platform, ...(process.platform === 'win32' ? [] : ['win32'])]) {
+test(`inbox displays only selected messages and uses detached seen synchronization (${platform})`, async t => {
   const f = fixture(t); f.save(mail()); f.save(mail({ id: 'mail-hidden', presentedAt: iso(-1) }));
   let requests = 0; f.deps.request = async () => { requests++; return {}; };
-  await main(['--inbox', '--unseen', '--json'], f.deps);
+  const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+  let expectedOptions, exitCode;
+  try {
+    Object.defineProperty(process, 'platform', { value: platform });
+    expectedOptions = backgroundSpawnOptions();
+    exitCode = await main(['--inbox', '--unseen', '--json'], f.deps);
+  } finally {
+    Object.defineProperty(process, 'platform', originalPlatform);
+  }
+  assert.equal(exitCode, 0);
   assert.equal(requests, 0); assert.equal(f.spawns.length, 1); assert.deepEqual(f.spawns[0][1].slice(1), ['--sync-pending']);
-  assert.equal(f.spawns[0][2].detached, true); assert.deepEqual(f.read(mail().id).pendingServer, ['seen']);
+  for (const [key, value] of Object.entries(expectedOptions)) assert.equal(f.spawns[0][2][key], value);
+  assert.deepEqual(JSON.parse(f.output[0]).map(m => m.id), [mail().id]);
+  assert.deepEqual(f.read(mail().id).pendingServer, ['seen']);
   assert.equal(f.read('mail-hidden').pendingServer, undefined);
 });
+}
 test('ack-only wait exits successfully with an explicit empty-body label', async () => {
   const result = await waitForReply('mail-ack-only', 1, { now: () => now, request: async () => ({ mail: { status: 'done', resultBody: '' } }) });
   assert.equal(result.exitCode, 0); assert.equal(result.text, '[ack のみ・本文なし]');
@@ -517,7 +531,7 @@ test('D6 final arrival receives only the remaining total budget', async t => {
   assert.equal(f.read('mail-budget-b').arrivalNotifiedAt, undefined); assert.equal(f.read('mail-budget-c').arrivalNotifiedAt, undefined);
 });
 
-import { readQuestion, updateQuestion, relayQuestions, RELAY_WAIT_MS, RESUME_LIMIT_MS } from './fleet-question-relay.mjs';
+import { readQuestion, updateQuestion, relayQuestions, RELAY_WAIT_MS, RESUME_LIMIT_MS, HOOK_DEADLINE_MS } from './fleet-question-relay.mjs';
 import { runPrompt, consentCommand, hubReport } from './fleet-agent.mjs';
 import { runClaudeTask } from './fleet-task-runner.mjs';
 function questionFixture(f, extra = {}) {
@@ -863,13 +877,13 @@ for (const outcome of ['success', 'failure', 'timeout']) test(`G5 ${outcome} cle
   assert.equal(await relayQuestions({ home: f.home, hub: sender, label: receiver, request: f.deps.request, now: () => now + RELAY_WAIT_MS }), 1);
   assert.ok(readQuestion(f.home, q.sessionId).relayedAt);
 });
-test('G6 poll detaches and releases lock without waiting for the runner timeout', async t => {
+test('G6 poll detaches and releases lock within the hook deadline without waiting for the runner timeout', async t => {
   const f = fixture(t), m = hubPrompt(f); let unrefed = false;
   f.deps.spawnImpl = (...args) => { f.spawns.push(args); return { on() {}, unref() { unrefed = true; } }; };
   f.deps.promptSetTimer = () => assert.fail('poll must never start execution timer');
   f.deps.resolveClaudeExe = () => assert.fail('poll must never resolve Claude');
   const start = performance.now(); await pollOnce(f.deps);
-  assert.ok(performance.now() - start < 2000);
+  assert.ok(performance.now() - start < HOOK_DEADLINE_MS);
   assert.equal(unrefed, true); assert.equal(f.spawns[0][2].stdio, 'ignore');
   assert.equal(fs.existsSync(path.join(f.dir, 'fleet-mail.lock')), false);
   assert.equal(f.calls.some(c => c.kind === 'mail-reply'), false);
@@ -995,3 +1009,42 @@ test('G6 runner timeout includes launch delay and seen synchronization', async t
   assert.equal(f.spawns.length, count); assert.equal(result.timedOut, true);
   assert.equal(readQuestion(f.home, late.resumeSessionId).drivenByHub, false);
 });
+
+
+for (const thrown of [false, true]) {
+  for (const error of ['busy', 'fleet-mail read-back mismatch']) {
+    test(`J send ${error} (${thrown ? 'transport exception' : 'server rejection'}) explains outcome without resending`, async t => {
+      const f = fixture(t);
+      f.deps.request = async (kind, payload) => {
+        f.calls.push({ kind, payload: structuredClone(payload) });
+        if (thrown) throw new Error(error);
+        return { ok: false, error };
+      };
+      assert.equal(await main(sendArgs(f), f.deps), 1);
+      assert.equal(f.calls.length, 1); assert.equal(f.output.length, 0);
+      if (error === 'busy') assert.match(f.errors.at(-1), /送信されていない/);
+      else {
+        assert.match(f.errors.at(-1), /行は作成済みの可能性/);
+        assert.ok(f.errors.at(-1).includes(`--sent-status ${f.calls[0].payload.id}`));
+      }
+      const log = fs.readFileSync(path.join(f.dir, 'fleet-mail-sent.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+      assert.equal(log.filter(entry => entry.action === 'sent').length, 0);
+    });
+  }
+}
+
+
+for (const error of ['busy', 'fleet-mail read-back mismatch']) {
+  test(`J real client ${error} retains send diagnostics and id`, async t => {
+    const f = fixture(t);
+    delete f.deps.request;
+    f.deps.fetch = async (_url, options) => {
+      f.calls.push(JSON.parse(options.body));
+      return { ok: true, json: async () => ({ ok: false, error }) };
+    };
+    assert.equal(await main(sendArgs(f), f.deps), 1);
+    assert.equal(f.calls.length, 1);
+    if (error === 'busy') assert.match(f.errors.at(-1), /送信されていない/);
+    else assert.ok(f.errors.at(-1).includes(`--sent-status ${f.calls[0].id}`));
+  });
+}

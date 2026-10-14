@@ -9,6 +9,8 @@ import { parseEnvText } from './env-kv.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { redactSecrets } from './fleet-agent.mjs';
 
+// Hook budget: docs/fleet-mail-v2-design.md §5 and registered hook timeout (5s).
+export const HOOK_DEADLINE_MS = 5000;
 export const TRANSCRIPT_TAIL_BYTES = 64 * 1024;
 export const QUESTION_LIMIT = 2000;
 export const SUMMARY_LIMIT = 600;

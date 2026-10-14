@@ -1,0 +1,36 @@
+{
+  "checkedAt": "2026-10-14T19:26:57.888325+00:00",
+  "task": "cafe-checklist-app 月次!A2 #VALUE! 修正",
+  "spreadsheetId": "1v8zUOe7uPVRk6knt3jcClwnBrTQ_89WeZhxdzuZQE_w",
+  "source": {
+    "file": "/mnt/c/Users/user/.claude/next-session.md",
+    "line": 19,
+    "openTodoPresent": true
+  },
+  "localSource": {
+    "file": "/mnt/c/Users/user/dev/cafe-checklist-app/gas/Code.gs",
+    "monthlyFormulaLine": 259,
+    "observations": [
+      "year(B), month(B) を使う QUERY 集計式",
+      "ensureMonthlySheet は月次タブ新規作成時だけ式を設定する"
+    ],
+    "rootCauseConfirmed": false
+  },
+  "targetReadAttempts": [
+    {
+      "method": "既存 GAS Web App の読み取り専用 dump アクション",
+      "result": "fetch failed",
+      "cause": "EAI_AGAIN",
+      "responseReceived": false
+    },
+    {
+      "method": "Windows Node 経由の読み取り",
+      "result": "WSL UtilBindVsockAnyPort: socket failed 1",
+      "processStarted": false
+    }
+  ],
+  "liveMonthlyA2Verified": false,
+  "productionModified": false,
+  "unrelatedChangesModified": false,
+  "reason": "ネットワークの名前解決失敗と Windows 実行経路のソケットエラーにより、対象シートの現状確認・修正・実行結果の直接検証を実施できない。ローカル実装のみから現在の未修正状態や原因を断定しない。"
+}

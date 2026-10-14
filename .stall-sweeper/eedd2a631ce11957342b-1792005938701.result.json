@@ -1,0 +1,8 @@
+{
+  "completed": false,
+  "summary": "原文の未完了項目と対象シートIDを照合。GAS の集計式実装を確認したが、実シート読み取りは EAI_AGAIN、Windows 代替経路は WSL socket failed 1 で失敗。月次!A2 の現在値と修正結果を直接検証できず未完了。本番および他セッションの差分は変更していない。",
+  "evidence": {
+    "file": "/mnt/c/Users/user/.claude/nightly-repo/.stall-sweeper/eedd2a631ce11957342b-1792005938701.evidence.json",
+    "sha256": "ed3b4f6f1bebe9e263ea6bf2cfeed8358f71eb13f3ab4b519d83262cf81245af"
+  }
+}

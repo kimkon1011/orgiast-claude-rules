@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 import { parseEnvText } from './env-kv.mjs';
-import { createClient } from './fleet-mail.mjs';
+import { createClient, capabilityClient } from './fleet-mail.mjs';
 import { redactSecrets } from './fleet-agent.mjs';
 import { notifyKim, resolveDiscordBotToken } from './notify-kim.mjs';
 import { CHANNEL, KIM_USER_ID, postToChannel } from './lib/fleet-mail-discord.mjs';
@@ -23,8 +23,14 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   try { config = parseEnvText(fs.readFileSync(path.join(home, '.claude', 'fleet-sheet.env'), 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
   if (!config.FLEET_SHEET_URL || !config.FLEET_SHEET_TOKEN) { err('fleet-mail-watchdog: 未設定=1'); return 0; }
-  const request = deps.request ?? createClient({ url: config.FLEET_SHEET_URL, token: config.FLEET_SHEET_TOKEN, fetchImpl: deps.fetch });
-  const response = await request('mail-alerts', {});
+  const transport = deps.request ?? createClient({ url: config.FLEET_SHEET_URL, token: config.FLEET_SHEET_TOKEN, fetchImpl: deps.fetch });
+  const request = capabilityClient(transport, { home, now: deps.now ?? Date.now, stderr: err, readOnly: dryRun });
+  let response;
+  try { response = await request('mail-alerts', {}); }
+  catch (error) {
+    if (['CAPABILITY_BACKOFF', 'UNSUPPORTED_ACTION'].includes(error.code) || /unknown[_ -](?:action|kind)/i.test(error.message)) return 0;
+    throw error;
+  }
   if (response?.ok === false || !Array.isArray(response?.alerts)) throw new Error('fleet-mail-watchdog: alerts 取得失敗=1');
   const pending = response.alerts.filter(entry => !(Number(entry.notifiedCount) > 0));
   let notified = 0, failed = 0;

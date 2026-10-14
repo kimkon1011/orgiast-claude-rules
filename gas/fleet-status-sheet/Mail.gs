@@ -1,5 +1,5 @@
 // Fleet mail uses the existing authenticated WebApp transport and spreadsheet.
-const FLEET_MAIL_HEADERS_ = ['id', 'from', 'to', 'replyTo', 'kind', 'body', 'why', 'createdAt', 'expiresAt', 'status', 'deliveredAt', 'deliveredBy', 'resultBody', 'resultAt', 'seenAt', 'seenBy', 'ackAt', 'failedAt', 'failReason', 'auto', 'hop', 'priority'];
+const FLEET_MAIL_HEADERS_ = ['id', 'from', 'to', 'replyTo', 'kind', 'body', 'why', 'createdAt', 'expiresAt', 'status', 'deliveredAt', 'deliveredBy', 'resultBody', 'resultAt', 'seenAt', 'seenBy', 'ackAt', 'failedAt', 'failReason', 'auto', 'hop', 'priority', 'receipts'];
 
 function fleetMailObject(row) {
   const mail = {};
@@ -40,8 +40,8 @@ function fleetMailMatches(mail, label, hostname, now, legacy) {
   // Broadcast replies set done as usual, but must not consume delivery to other PCs.
   return (mail.status === 'new' || (mail.to === 'all' && ['delivered', 'seen', 'done'].indexOf(mail.status) >= 0)) &&
     Date.parse(mail.expiresAt) > now && !!mail.to &&
-    (mail.to === 'all' || label === mail.to || hostname === mail.to ||
-      (legacy && (String(label || '').indexOf(mail.to) >= 0 || String(hostname || '').indexOf(mail.to) >= 0)));
+    (mail.to === 'all' || label === mail.to || String(hostname || '').toLowerCase() === mail.to.toLowerCase() ||
+      (legacy && (String(label || '').indexOf(mail.to) >= 0 || String(hostname || '').toLowerCase().indexOf(mail.to.toLowerCase()) >= 0)));
 }
 function fleetMailPrunable(mail, now) {
   return ['done', 'expired'].indexOf(mail.status) >= 0 && Date.parse(mail.createdAt) < now - 30 * 86400000;
@@ -102,7 +102,7 @@ function pollFleetMail(payload) {
     const exact = eligible.filter(function(mail) { return fleetMailMatches(mail, payload.to, payload.hostname, now, false); });
     // Rolling upgrade: only fall back to legacy matching if this poll has no exact matches.
     const selected = replay ? rows.filter(function(mail) { return receipt.ids.indexOf(mail.id) >= 0; }) :
-      (exact.length ? exact : eligible.filter(function(mail) { return fleetMailMatches(mail, payload.to, payload.hostname, now, true); })).slice(0, 20);
+      (exact.some(function(mail) { return mail.to !== 'all'; }) ? exact : eligible.filter(function(mail) { return fleetMailMatches(mail, payload.to, payload.hostname, now, true); })).slice(0, 20);
     // Save only IDs (<4KB), before consuming rows. A lost HTTP response can be replayed.
     if (receiptKey && !replay) properties.setProperty(receiptKey, JSON.stringify({ requestId: payload.requestId, ids: selected.map(function(mail) { return mail.id; }) }));
     const messages = [];
@@ -159,10 +159,13 @@ function replyFleetMail(payload) {
     const body = String(payload.resultBody || '').slice(0, 20000);
     // A stable reply id makes retry after a lost HTTP response idempotent, per PC.
     const stableId = 'mail-reply-' + _fleetMailDigest_(original.id + '\n' + payload.from);
-    let reply = rows.find(function(mail) { return mail.id === stableId; });
+    const first = rows.find(function(mail) { return mail.id === stableId; });
+    const replyId = !first || first.body === body ? stableId : stableId + '-' + _fleetMailDigest_(body);
+    let reply = rows.find(function(mail) { return mail.id === replyId; });
     if (reply) {
       // Recover an append that succeeded before the original-row write/response failed.
-      if (['done', 'failed', 'expired'].indexOf(original.status) < 0) {
+      const latestReply = rows.filter(function(mail) { return mail.replyTo === original.id; }).pop();
+      if (['failed', 'expired'].indexOf(original.status) < 0 && (!latestReply || latestReply.id === reply.id)) {
         original.status = 'done'; original.resultBody = reply.body; original.resultAt = reply.createdAt;
         _fleetMailWrite_(sheet, index + 2, fleetMailRow(original));
       }
@@ -173,7 +176,7 @@ function replyFleetMail(payload) {
     if ((auto && (original.auto === true || original.auto === 'true')) || hop >= 3) return { ok: false, reason: 'loop' };
     if (['failed', 'expired'].indexOf(original.status) >= 0) return { ok: true, mail: original };
     reply = {
-      id: stableId, from: payload.from, to: original.from, replyTo: original.id, kind: 'note',
+      id: replyId, from: payload.from, to: original.from, replyTo: original.id, kind: 'note',
       body: body, why: original.why, auto: auto, hop: hop, priority: 'normal',
       createdAt: new Date(now).toISOString(), expiresAt: new Date(now + 3 * 86400000).toISOString(), status: 'new'
     };
@@ -190,29 +193,53 @@ function getFleetMail(payload) {
   });
 }
 
-function _fleetMailTransition_(payload, action) {
-  fleetMailId(payload.id);
-  return _fleetMailLocked_(function(sheet, rows, now) {
-    const index = rows.findIndex(function(mail) { return mail.id === payload.id; });
-    if (index < 0) return { ok: false, status: 404, error: 'mail_not_found' };
-    const mail = rows[index];
+const FLEET_MAIL_ACK_LIMIT_ = 100;
+function _fleetMailApplyTransition_(sheet, rows, now, payload, action) {
+  const index = rows.findIndex(function(mail) { return mail.id === payload.id; });
+  if (index < 0) return { ok: false, status: 404, error: 'mail_not_found' };
+  const mail = rows[index];
+  const label = String(payload.from || payload.label || '');
+  if (!label || (mail.to !== 'all' && mail.deliveredBy !== label)) return { ok: false, reason: 'not-recipient' };
+  const at = new Date(now).toISOString();
+  if (mail.to === 'all') {
+    const receipts = JSON.parse(mail.receipts || '{}');
+    const receipt = Object.prototype.hasOwnProperty.call(receipts, label) ? receipts[label] : {};
+    const field = action === 'seen' ? 'seenAt' : action === 'ack' ? 'ackAt' : 'failedAt';
+    if (!receipt[field]) receipt[field] = at;
+    Object.defineProperty(receipts, label, { value: receipt, enumerable: true, configurable: true });
+    mail.receipts = JSON.stringify(receipts);
+  } else {
     if (['done', 'failed', 'expired'].indexOf(mail.status) >= 0) return { ok: true, mail: mail };
-    const at = new Date(now).toISOString();
     if (action === 'seen') {
       if (mail.status === 'seen') return { ok: true, mail: mail };
-      mail.status = 'seen'; mail.seenAt = at; mail.seenBy = String(payload.seenBy || payload.from || '').slice(0, 256);
+      mail.status = 'seen'; mail.seenAt = at; mail.seenBy = String(payload.seenBy || label).slice(0, 256);
     } else if (action === 'ack') {
       mail.status = 'done'; mail.ackAt = at;
     } else {
       mail.status = payload.reason === 'expired' ? 'expired' : 'failed';
       mail.failedAt = at; mail.failReason = String(payload.reason || 'processing_failed').slice(0, 1000);
     }
-    _fleetMailWrite_(sheet, index + 2, fleetMailRow(mail));
-    return { ok: true, mail: mail };
+  }
+  _fleetMailWrite_(sheet, index + 2, fleetMailRow(mail));
+  return { ok: true, mail: mail };
+}
+function _fleetMailTransition_(payload, action) {
+  fleetMailId(payload.id);
+  return _fleetMailLocked_(function(sheet, rows, now) {
+    return _fleetMailApplyTransition_(sheet, rows, now, payload, action);
   });
 }
 function seenFleetMail(payload) { return _fleetMailTransition_(payload, 'seen'); }
-function ackFleetMail(payload) { return _fleetMailTransition_(payload, 'ack'); }
+function ackFleetMail(payload) {
+  if (!Object.prototype.hasOwnProperty.call(payload, 'ids')) return _fleetMailTransition_(payload, 'ack');
+  if (!Array.isArray(payload.ids) || !payload.ids.length || payload.ids.length > FLEET_MAIL_ACK_LIMIT_) throw new Error('invalid_ids');
+  payload.ids.forEach(fleetMailId);
+  return _fleetMailLocked_(function(sheet, rows, now) {
+    return { ok: true, results: payload.ids.map(function(id) {
+      return Object.assign({ id: id }, _fleetMailApplyTransition_(sheet, rows, now, Object.assign({}, payload, { id: id }), 'ack'));
+    }) };
+  });
+}
 function failFleetMail(payload) { return _fleetMailTransition_(payload, 'fail'); }
 
 const FLEET_MAIL_ALERT_HEADERS_ = ['id', 'kind', 'to', 'from', 'why', 'firstAt', 'lastNotifiedAt', 'notifiedCount'];

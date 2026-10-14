@@ -29,7 +29,7 @@ function harness() {
     }
   };
   const names = [...source.matchAll(/^function (\w+)\(/gm)].map(m => m[1]);
-  const api = new Function(...Object.keys(deps), `${source}\nreturn { ${names.join(', ')}, headers: FLEET_MAIL_HEADERS_, alertHeaders: FLEET_MAIL_ALERT_HEADERS_, renotifyMs: FLEET_MAIL_RENOTIFY_MS_, sla: FLEET_MAIL_SLA_ };`)(...Object.values(deps));
+  const api = new Function(...Object.keys(deps), `${source}\nreturn { ${names.join(', ')}, headers: FLEET_MAIL_HEADERS_, alertHeaders: FLEET_MAIL_ALERT_HEADERS_, renotifyMs: FLEET_MAIL_RENOTIFY_MS_, sla: FLEET_MAIL_SLA_, ackLimit: FLEET_MAIL_ACK_LIMIT_ };`)(...Object.values(deps));
   return { ...api, rows, alertRows, properties, triggers, webhooks, advance: ms => { time += ms; } };
 }
 const send = (h, overrides = {}) => h.sendFleetMail({ id: 'mail-original', from: 'sender', to: 'receiver', messageKind: 'note', why: 'test', body: 'body', ...overrides });
@@ -50,14 +50,14 @@ test('v2 migrates a legacy header and preserves historical cells and empty new f
 test('seen/ack/fail are idempotent, preserve timestamps and never regress terminal status', () => {
   for (const action of ['ackFleetMail', 'failFleetMail']) {
     const h = harness(); send(h); poll(h);
-    h.seenFleetMail({ id: 'mail-original', seenBy: 'headless' });
+    h.seenFleetMail({ from: 'receiver', id: 'mail-original', seenBy: 'headless' });
     const seen = get(h);
     assert.equal(seen.status, 'seen'); assert.equal(seen.seenBy, 'headless'); assert.ok(seen.deliveredAt); assert.ok(seen.seenAt);
-    h.seenFleetMail({ id: 'mail-original', seenBy: 'other-session' }); assert.deepEqual(get(h), seen);
-    h[action]({ id: 'mail-original', reason: 'invalid incoming mail' });
+    h.seenFleetMail({ from: 'receiver', id: 'mail-original', seenBy: 'other-session' }); assert.deepEqual(get(h), seen);
+    h[action]({ from: 'receiver', id: 'mail-original', reason: 'invalid incoming mail' });
     const terminal = get(h);
     for (const next of ['seenFleetMail', 'ackFleetMail', 'failFleetMail']) {
-      assert.equal(h[next]({ id: 'mail-original', seenBy: 'late', reason: 'late' }).ok, true);
+      assert.equal(h[next]({ from: 'receiver', id: 'mail-original', seenBy: 'late', reason: 'late' }).ok, true);
       assert.deepEqual(get(h), terminal);
     }
     assert.ok(action === 'ackFleetMail' ? terminal.ackAt : terminal.failedAt);
@@ -66,7 +66,7 @@ test('seen/ack/fail are idempotent, preserve timestamps and never regress termin
 test('expiration failure records reason and old replay cannot regress seen/done/failed/expired', () => {
   for (const action of ['seenFleetMail', 'ackFleetMail', 'failFleetMail']) {
     const h = harness(); send(h); poll(h, { requestId: 'retry' });
-    h[action]({ id: 'mail-original', seenBy: 'headless', reason: 'expired' });
+    h[action]({ from: 'receiver', id: 'mail-original', seenBy: 'headless', reason: 'expired' });
     const before = get(h); poll(h, { requestId: 'retry' }); assert.deepEqual(get(h), before);
     if (action === 'failFleetMail') { assert.equal(before.status, 'expired'); assert.equal(before.failReason, 'expired'); }
   }
@@ -95,8 +95,8 @@ test('auto reply loops and prospective hop >=3 are refused without writes; human
   assert.equal(first.reply.hop, 2);
   assert.deepEqual(h.replyFleetMail({ id: first.reply.id, from: 'sender', auto: false, resultBody: 'human' }), { ok: false, reason: 'loop' });
   const again = h.replyFleetMail({ id: 'mail-original', from: 'receiver', auto: false, resultBody: 'changed' });
-  assert.equal(again.duplicate, true); assert.equal(again.reply.id, first.reply.id); assert.equal(again.reply.body, first.reply.body);
-  assert.equal(h.rows.length, 3);
+  assert.notEqual(again.reply.id, first.reply.id); assert.equal(again.reply.body, 'changed');
+  assert.equal(h.rows.length, 4);
 });
 test('decision receipt via mail-send preserves the original pending state and reply linkage', () => {
   const h = harness(); send(h, { why: '[判断依頼] 方針' }); poll(h);
@@ -105,7 +105,7 @@ test('decision receipt via mail-send preserves the original pending state and re
   assert.equal(h.getFleetMail({ id: 'mail-reply-ack-test' }).mail.replyTo, 'mail-original');
 });
 test('WebApp exposes authenticated status and transition routes', () => {
-  const h = harness(); send(h);
+  const h = harness(); send(h); poll(h);
   const web = fs.readFileSync(new URL('../gas/fleet-status-sheet/WebApp.gs', import.meta.url), 'utf8');
   const handlerNames = [...new Set([...web.matchAll(/(?:'[^']+'|\w+): (\w+),?\r?\n/g)].map(m => m[1]))];
   const deps = Object.fromEntries(handlerNames.map(name => [name, h[name] || (() => ({ ok: true }))]));
@@ -113,13 +113,13 @@ test('WebApp exposes authenticated status and transition routes', () => {
   deps.ContentService = { MimeType: { JSON: 'json' }, createTextOutput: value => ({ setMimeType: () => JSON.parse(value) }) };
   const post = new Function(...Object.keys(deps), `${web}\nreturn doPost;`)(...Object.values(deps));
   for (const kind of ['mail-seen', 'mail-ack', 'mail-fail', 'mail-sent-status']) {
-    const call = token => post({ postData: { contents: JSON.stringify({ token, kind, id: 'mail-original' }) } });
+    const call = token => post({ postData: { contents: JSON.stringify({ token, kind, from: 'receiver', id: 'mail-original' }) } });
     assert.equal(call('bad').status, 401); assert.equal(call('test').ok, true); assert.ok(call('test').mail);
   }
 });
 test('one receiver marking a broadcast seen does not consume other receivers delivery', () => {
   const h = harness(); send(h, { to: 'all' }); poll(h);
-  h.seenFleetMail({ id: 'mail-original', seenBy: 'headless' });
+  h.seenFleetMail({ from: 'receiver', id: 'mail-original', seenBy: 'headless' });
   assert.equal(poll(h, { to: 'another-receiver', hostname: 'another-host' }).messages.length, 1);
   assert.equal(poll(h, { processedIds: ['mail-original'] }).messages.length, 0);
 });
@@ -128,7 +128,7 @@ test('retry after an appended reply but uncommitted original repairs completion 
   const before = [...h.rows[1]];
   const reply = h.replyFleetMail({ id: 'mail-original', from: 'receiver', resultBody: 'persisted answer' }).reply;
   h.rows[1] = before; // Simulate original-row write failure after the reply append.
-  const result = h.replyFleetMail({ id: 'mail-original', from: 'receiver', resultBody: 'different retry body' });
+  const result = h.replyFleetMail({ id: 'mail-original', from: 'receiver', resultBody: 'persisted answer' });
   assert.equal(result.duplicate, true); assert.equal(h.rows.length, 3); assert.equal(get(h).status, 'done'); assert.equal(get(h).resultBody, reply.body);
 });
 
@@ -157,7 +157,7 @@ test('alert upsert is one row per id; read is not acknowledgement and resolved m
   h.advance(600000); h.fleetMailSweep();
   assert.equal(h.alertRows.length, 2); assert.equal(h.getFleetMailAlerts({}).alerts[0].firstAt, first.firstAt);
   assert.equal(h.getFleetMailAlerts({}).alerts.length, 1);
-  h.ackFleetMail({ id: 'mail-original' }); assert.equal(h.getFleetMailAlerts({}).alerts.length, 0);
+  poll(h); h.ackFleetMail({ from: 'receiver', id: 'mail-original' }); assert.equal(h.getFleetMailAlerts({}).alerts.length, 0);
 });
 test('fallback acknowledgement is idempotent and enables six-hour renotification', () => {
   const h = harness(); send(h); h.advance(h.sla.undelivered + 1); h.fleetMailSweep();
@@ -188,4 +188,66 @@ test('trigger setup is idempotent and preserves other handlers', () => {
 test('WebApp exposes authenticated mail-alerts with explicit notification acknowledgement', () => {
   const web = fs.readFileSync(new URL('../gas/fleet-status-sheet/WebApp.gs', import.meta.url), 'utf8');
   assert.match(web, /'mail-alerts': getFleetMailAlerts/);
+});
+
+test('C1 changed replies after automatic receipt get distinct ids and retry idempotently', () => {
+  const h = harness(); send(h); poll(h);
+  const receipt = h.replyFleetMail({ id: 'mail-original', from: 'receiver', auto: true, resultBody: '受領しました' });
+  const answer = h.replyFleetMail({ id: 'mail-original', from: 'receiver', resultBody: '本回答' });
+  const retry = h.replyFleetMail({ id: 'mail-original', from: 'receiver', resultBody: '本回答' });
+  assert.notEqual(receipt.reply.id, answer.reply.id); assert.equal(retry.duplicate, true);
+  assert.equal(retry.reply.id, answer.reply.id); assert.equal(get(h).resultBody, '本回答'); assert.equal(h.rows.length, 4);
+});
+test('C2 batch ack accepts at most the server limit and returns per-id recipient outcomes', () => {
+  const h = harness();
+  for (let i = 0; i < h.ackLimit; i++) {
+    send(h, { id: `mail-batch-${i}` }); h.rows.at(-1)[h.headers.indexOf('deliveredBy')] = 'receiver';
+  }
+  const ids = h.rows.slice(1).map(row => row[0]);
+  const response = h.ackFleetMail({ ids, from: 'receiver' });
+  assert.equal(response.results.length, h.ackLimit); assert.ok(response.results.every(r => r.ok && r.mail.status === 'done'));
+  assert.throws(() => h.ackFleetMail({ ids: [...ids, 'mail-overflow'], from: 'receiver' }), /invalid_ids/);
+  assert.throws(() => h.ackFleetMail({ ids: [ids[0], '../invalid'], from: 'receiver' }), /invalid_id/);
+  assert.equal(h.ackFleetMail({ ids: [ids[0]], from: 'other' }).results[0].reason, 'not-recipient');
+});
+test('C4 broadcasts do not suppress legacy fallback and hostname matching ignores case', () => {
+  const h = harness(); send(h, { to: 'all' }); send(h, { id: 'mail-partial', to: 'rece' });
+  assert.deepEqual(poll(h).messages.map(m => m.id), ['mail-original', 'mail-partial']);
+  send(h, { id: 'mail-host-case', to: 'HOST' });
+  assert.ok(poll(h).messages.some(m => m.id === 'mail-host-case'));
+});
+test('C7 broadcast transitions retain main status and record independent per-PC receipts', () => {
+  const h = harness(); send(h, { to: 'all' });
+  for (const from of ['receiver', 'other']) {
+    h.seenFleetMail({ id: 'mail-original', from });
+    h.ackFleetMail({ id: 'mail-original', from });
+    h.failFleetMail({ id: 'mail-original', from, reason: 'expired' });
+  }
+  const before = get(h); assert.equal(before.status, 'new');
+  const receipts = JSON.parse(before.receipts); assert.deepEqual(Object.keys(receipts), ['receiver', 'other']);
+  for (const receipt of Object.values(receipts)) for (const field of ['seenAt', 'ackAt', 'failedAt']) assert.ok(receipt[field]);
+  h.advance(1000); h.seenFleetMail({ id: 'mail-original', from: 'receiver' }); assert.deepEqual(get(h), before);
+  assert.equal(poll(h, { to: 'third', hostname: 'third-host' }).messages.length, 1);
+});
+test('C7 direct transitions reject missing or mismatched recipients even after completion', () => {
+  const h = harness(); send(h); poll(h);
+  for (const action of ['seenFleetMail', 'ackFleetMail', 'failFleetMail']) {
+    const before = get(h);
+    for (const from of [undefined, 'other']) assert.deepEqual(h[action]({ id: 'mail-original', from, seenBy: 'receiver' }), { ok: false, reason: 'not-recipient' });
+    assert.deepEqual(get(h), before);
+  }
+  assert.equal(h.ackFleetMail({ id: 'mail-original', from: 'receiver' }).ok, true);
+  assert.equal(h.seenFleetMail({ id: 'mail-original', from: 'other' }).reason, 'not-recipient');
+});
+
+test('C1 retry repairs changed reply append without regressing to an older receipt', () => {
+  const h = harness(); send(h); poll(h);
+  h.replyFleetMail({ id: 'mail-original', from: 'receiver', resultBody: 'receipt' });
+  const before = [...h.rows[1]];
+  const answer = h.replyFleetMail({ id: 'mail-original', from: 'receiver', resultBody: 'answer' });
+  h.rows[1] = before;
+  const retry = h.replyFleetMail({ id: 'mail-original', from: 'receiver', resultBody: 'answer' });
+  assert.equal(retry.duplicate, true); assert.equal(retry.reply.id, answer.reply.id); assert.equal(get(h).resultBody, 'answer');
+  h.replyFleetMail({ id: 'mail-original', from: 'receiver', resultBody: 'receipt' });
+  assert.equal(get(h).resultBody, 'answer'); assert.equal(h.rows.length, 4);
 });

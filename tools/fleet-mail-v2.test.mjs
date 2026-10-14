@@ -3,9 +3,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { Worker } from 'node:worker_threads';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { main, pollOnce, readInbox, syncMailState, resolveMailTarget, mailId, parseArgs, waitForReply, createClient, TERMINAL_STATUSES, hasDecisionRequest } from './fleet-mail.mjs';
+import { main, pollOnce, readInbox, syncMailState, resolveMailTarget, mailId, parseArgs, waitForReply, createClient, TERMINAL_STATUSES, hasDecisionRequest, updateInbox, presentMail, ACK_BATCH_LIMIT, SERVER_MAX_ATTEMPTS, CAPABILITY_BACKOFF_MS, INTERRUPTED_PROMPT_MS, INTERRUPTED_PROMPT_BODY, INBOX_LOCK_RETRIES, INBOX_LOCK_DELAY_MS } from './fleet-mail.mjs';
 const pcMap = JSON.parse(fs.readFileSync(new URL('../fleet-pc-map.json', import.meta.url), 'utf8'));
 const labels = Object.keys(pcMap).filter(key => !key.startsWith('_'));
 const receiver = labels[0], sender = labels.find(label => label !== receiver && pcMap[label].hostname);
@@ -19,13 +20,13 @@ function fixture(t) {
   fs.writeFileSync(path.join(dir, 'fleet-sheet.env'), 'FLEET_SHEET_URL=https://example.invalid/mail\nFLEET_SHEET_TOKEN=fixture\n');
   fs.writeFileSync(path.join(dir, 'cost-reporter.env'), `REPORTER_LABEL=${receiver}\n`);
   const body = path.join(home, 'body.txt'); fs.writeFileSync(body, 'nonempty test body');
-  const calls = [], output = [], errors = [];
-  const deps = { home, pcMap, identity: { hostname: pcMap[receiver].hostname }, now: () => now, stdout: s => output.push(s), stderr: s => errors.push(s),
+  const calls = [], output = [], errors = [], spawns = [];
+  const deps = { home, pcMap, spawnImpl: (...args) => { spawns.push(args); return { on() {}, unref() {} }; }, identity: { hostname: pcMap[receiver].hostname }, now: () => now, stdout: s => output.push(s), stderr: s => errors.push(s),
     fetchBeacons: async () => ({ ok: false, beacons: [] }), dailySelfHeal: () => {}, autoRunFixNow: () => {},
-    request: async (kind, payload) => { calls.push({ kind, payload: structuredClone(payload) }); return kind === 'mail-poll' ? { ok: true, messages: [] } : { ok: true, mail: payload }; } };
+    request: async (kind, payload) => { calls.push({ kind, payload: structuredClone(payload) }); return kind === 'mail-poll' ? { ok: true, messages: [] } : kind === 'mail-ack' && payload.ids ? { ok: true, results: payload.ids.map(id => ({ id, ok: true, mail: { id } })) } : { ok: true, mail: payload }; } };
   const save = m => fs.writeFileSync(path.join(inbox, `${m.id}.json`), JSON.stringify(m));
   const read = id => JSON.parse(fs.readFileSync(path.join(inbox, `${id}.json`), 'utf8'));
-  return { home, dir, inbox, body, deps, calls, output, errors, save, read };
+  return { home, dir, inbox, body, deps, calls, output, errors, spawns, save, read };
 }
 const sendArgs = (f, to = sender, extra = []) => ['--send', '--to', to, '--kind', 'note', '--body-file', f.body, '--why', 'test', ...extra];
 
@@ -138,18 +139,18 @@ test('inbox --unseen selects unpresented pending mail and records seen with a re
   f.deps.request = async () => { throw new Error('unknown action'); };
   assert.equal(await main(['--inbox', '--unseen', '--json'], f.deps), 0);
   assert.deepEqual(JSON.parse(f.output[0]).map(m => m.id), [mail().id]);
-  assert.equal(f.read(mail().id).status, 'seen'); assert.deepEqual(f.read(mail().id).pendingServer, ['seen']); assert.equal(f.errors.length, 1);
-  f.deps.request = async (kind, payload) => { f.calls.push({ kind, payload }); return kind === 'mail-poll' ? { messages: [] } : { ok: true, mail: {} }; };
+  assert.equal(f.read(mail().id).status, 'seen'); assert.deepEqual(f.read(mail().id).pendingServer, ['seen']); assert.equal(f.errors.length, 0); assert.equal(f.spawns.length, 1);
+  f.deps.request = async (kind, payload) => { f.calls.push({ kind, payload }); return kind === 'mail-poll' ? { messages: [] } : kind === 'mail-ack' && payload.ids ? { ok: true, results: payload.ids.map(id => ({ id, ok: true })) } : { ok: true, mail: {} }; };
   await pollOnce(f.deps); assert.deepEqual(f.read(mail().id).pendingServer, []); assert.equal(f.calls[0].kind, 'mail-seen');
 });
 test('ack and ack --all-seen complete only selected mail and retry the server intent', async t => {
   const f = fixture(t); f.save(mail()); f.save(mail({ id: 'mail-presented', presentedAt: iso(-1) }));
-  f.deps.request = async () => ({ ok: false, error: 'unknown action' });
+  f.deps.request = async () => ({ ok: false, error: 'offline' });
   assert.equal(await main(['--ack', '--all-seen'], f.deps), 0);
   assert.equal(f.read('mail-presented').status, 'done'); assert.deepEqual(f.read('mail-presented').pendingServer, ['ack']); assert.equal(f.read(mail().id).status, 'delivered');
   assert.equal(await main(['--ack', mail().id], f.deps), 0); assert.equal(f.read(mail().id).status, 'done');
-  f.deps.request = async (kind, payload) => { f.calls.push({ kind, payload }); return kind === 'mail-poll' ? { messages: [] } : { ok: true, mail: {} }; };
-  await pollOnce(f.deps); assert.equal(f.calls.filter(c => c.kind === 'mail-ack').length, 2);
+  f.deps.request = async (kind, payload) => { f.calls.push({ kind, payload }); return kind === 'mail-poll' ? { messages: [] } : kind === 'mail-ack' && payload.ids ? { ok: true, results: payload.ids.map(id => ({ id, ok: true })) } : { ok: true, mail: {} }; };
+  await pollOnce(f.deps); assert.equal(f.calls.filter(c => c.kind === 'mail-ack').length, 1);
 });
 test('old GAS fallback responses warn once without exiting; durable action remains pending', async t => {
   const f = fixture(t); f.save(mail());
@@ -212,13 +213,14 @@ test('server terminal state wins over a delayed seen response', async t => {
     request: async () => ({ ok: true, mail: { status: 'done', resultBody: 'interactive answer', resultAt: iso(0) } }) });
   assert.equal(f.read(mail().id).status, 'done'); assert.equal(f.read(mail().id).resultBody, 'interactive answer');
 });
-test('corrupt local JSON is isolated and cannot block new mail or migration', async t => {
+test('C3 corrupt local JSON is archived and recovered without mail-fail', async t => {
   const f = fixture(t); fs.writeFileSync(path.join(f.inbox, 'mail-corrupt.json'), '{bad');
   fs.writeFileSync(path.join(f.dir, '.fleet-mail-processed'), 'mail-corrupt\n');
-  const request = f.deps.request; f.deps.request = async (kind, payload) => kind === 'mail-poll' ? { messages: [mail()] } : request(kind, payload);
+  const request = f.deps.request; f.deps.request = async (kind, payload) => kind === 'mail-poll' ? { messages: [mail()] } : kind === 'mail-get' ? { mail: mail({ id: payload.id }) } : request(kind, payload);
   await pollOnce(f.deps);
-  assert.equal(f.read('mail-corrupt').status, 'failed'); assert.equal(f.read(mail().id).status, 'delivered');
-  assert.ok(fs.existsSync(path.join(f.inbox, 'quarantine', 'mail-corrupt.json')));
+  assert.equal(f.read('mail-corrupt').status, 'delivered');
+  assert.equal(f.calls.filter(c => c.kind === 'mail-fail').length, 0); assert.equal(f.read(mail().id).status, 'delivered');
+  assert.ok(fs.existsSync(path.join(f.inbox, 'corrupt', 'mail-corrupt.json')));
   assert.equal(fs.existsSync(path.join(f.dir, '.fleet-mail-processed')), false);
 });
 test('interactive reply made while a prompt runs prevents automatic duplicate reply', async t => {
@@ -262,4 +264,178 @@ test('normal notes and replies inheriting request reasons do not trigger arrival
   f.deps.request = async kind => kind === 'mail-poll' ? { ok: true, messages: [mail(), mail({ id: 'mail-reply-one', why: '[判断依頼] 元件名' })] } : { ok: true };
   f.deps.notifyArrival = async message => { arrivals.push(message.id); return true; };
   await pollOnce(f.deps); assert.equal(arrivals.length, 0);
+});
+
+test('C2 migration queues durable ack and drains one bounded batch per poll', async t => {
+  const f = fixture(t), ids = Array.from({ length: ACK_BATCH_LIMIT + 1 }, (_, i) => `mail-migrate-${i}`);
+  for (const id of ids) f.save(mail({ id }));
+  fs.writeFileSync(path.join(f.dir, '.fleet-mail-processed'), ids.join('\n'));
+  await pollOnce(f.deps);
+  const batches = () => f.calls.filter(c => c.kind === 'mail-ack');
+  assert.equal(batches().length, 1); assert.equal(batches()[0].payload.ids.length, ACK_BATCH_LIMIT);
+  assert.equal(batches()[0].payload.from, receiver);
+  const pending = readInbox(f.home, { unreadOnly: false }).filter(m => m.pendingServer?.includes('ack'));
+  assert.equal(pending.length, 1); assert.equal(pending[0].status, 'done');
+  await pollOnce(f.deps); assert.equal(batches().length, 2); assert.equal(batches()[1].payload.ids.length, 1);
+  assert.ok(readInbox(f.home, { unreadOnly: false }).every(m => m.pendingServer.length === 0 && m.serverSyncedAt));
+});
+for (const code of ['EBUSY', 'EPERM', 'EACCES', 'ENOENT']) test(`C3 ${code} write failure retains poll receipt without quarantine or mail-fail`, async t => {
+  const f = fixture(t), request = f.deps.request;
+  f.deps.request = async (kind, payload) => kind === 'mail-poll' ? { messages: [mail(), mail({ id: 'mail-other' })] } : request(kind, payload);
+  const rename = fs.renameSync;
+  const mock = t.mock.method(fs, 'renameSync', (src, dst) => {
+    if (dst === path.join(f.inbox, `${mail().id}.json`)) throw Object.assign(new Error('private error detail'), { code });
+    return rename(src, dst);
+  });
+  const first = await pollOnce(f.deps); mock.mock.restore();
+  assert.equal(first.rejected, 0); assert.equal(f.read('mail-other').status, 'delivered');
+  const batch = JSON.parse(fs.readFileSync(path.join(f.dir, '.fleet-mail-poll.json'), 'utf8'));
+  assert.deepEqual(batch.successfulIds, ['mail-other']); assert.equal(fs.existsSync(path.join(f.inbox, 'quarantine')), false);
+  assert.equal(f.calls.filter(c => c.kind === 'mail-fail').length, 0); assert.deepEqual(f.errors, ['fleet-mail: 保存再試行待ち=1']);
+  await pollOnce(f.deps); assert.equal(f.read(mail().id).status, 'delivered');
+  assert.equal(fs.existsSync(path.join(f.dir, '.fleet-mail-poll.json')), false);
+});
+test('C5 legacy label and hostname deliveries are accepted with a marker and count-only warning', async t => {
+  const f = fixture(t);
+  const hostname = pcMap[receiver].hostname;
+  const incoming = [mail({ to: receiver.slice(0, -1) }), mail({ id: 'mail-host-legacy', to: hostname.slice(0, -1).toLowerCase() }), mail({ id: 'mail-host-exact', to: hostname.toLowerCase() })];
+  f.deps.request = async () => ({ messages: incoming });
+  const result = await pollOnce(f.deps); assert.equal(result.rejected, 0);
+  assert.equal(f.read(mail().id).legacyTo, true); assert.equal(f.read('mail-host-legacy').legacyTo, true);
+  assert.equal(f.read('mail-host-exact').legacyTo, undefined); assert.deepEqual(f.errors, ['fleet-mail: 旧形式宛先受信=2']);
+  assert.equal(resolveMailTarget(hostname.toLowerCase(), pcMap).to, receiver);
+});
+test('C6 old GAS response backs off for an hour and abandons pending actions after bounded attempts', async t => {
+  const f = fixture(t); f.save(mail()); let time = now;
+  f.deps.now = () => time;
+  f.deps.request = async (kind, payload) => {
+    f.calls.push({ kind, payload }); return kind === 'mail-poll' ? { messages: [] } : { ok: true, action: 'updated', row: 2 };
+  };
+  await main(['--ack', mail().id], f.deps);
+  for (let i = 1; i < SERVER_MAX_ATTEMPTS; i++) {
+    await pollOnce(f.deps); assert.equal(f.read(mail().id).attempts.ack, i);
+    time += CAPABILITY_BACKOFF_MS; await pollOnce(f.deps);
+  }
+  const saved = f.read(mail().id);
+  assert.equal(saved.attempts.ack, SERVER_MAX_ATTEMPTS); assert.deepEqual(saved.pendingServer, []); assert.deepEqual(saved.abandonedServer, ['ack']);
+  const count = f.calls.filter(c => c.kind === 'mail-ack').length;
+  time += CAPABILITY_BACKOFF_MS; await pollOnce(f.deps); assert.equal(f.calls.filter(c => c.kind === 'mail-ack').length, count);
+  const state = JSON.parse(fs.readFileSync(path.join(f.dir, '.fleet-mail-last-poll.json'), 'utf8'));
+  assert.equal(state.serverCapabilities.seen, false); assert.ok(state.serverCapabilities.checkedAt); assert.ok(state.at);
+  assert.equal(f.errors.filter(e => e === 'fleet-mail: 同期打切り=1').length, 1);
+});
+test('C6 transient errors increment attempts without losing local completion', async t => {
+  const f = fixture(t); f.save(mail());
+  f.deps.request = async kind => { if (kind === 'mail-poll') return { messages: [] }; throw new Error('offline'); };
+  await main(['--ack', mail().id], f.deps);
+  for (let i = 1; i < SERVER_MAX_ATTEMPTS; i++) await pollOnce(f.deps);
+  assert.equal(f.read(mail().id).status, 'done'); assert.equal(f.read(mail().id).attempts.ack, SERVER_MAX_ATTEMPTS);
+  assert.deepEqual(f.read(mail().id).pendingServer, []);
+});
+test('C8 all-seen ack leaves unanswered decisions pending while explicit ack remains available', async t => {
+  const f = fixture(t); f.save(mail({ why: '[判断依頼] choose', seenAt: iso(-1) })); f.save(mail({ id: 'mail-note', seenAt: iso(-1) }));
+  await main(['--ack', '--all-seen'], f.deps);
+  assert.equal(f.read(mail().id).status, 'delivered'); assert.equal(f.read('mail-note').status, 'done');
+  assert.deepEqual(f.calls.map(c => c.payload.id), ['mail-note']);
+  await main(['--ack', mail().id], f.deps); assert.equal(f.read(mail().id).status, 'done');
+});
+test('C9 sweep records serverSyncedAt and never resends completed expiry or ack', async t => {
+  const f = fixture(t); f.save(mail({ expiresAt: iso(-1) })); f.save(mail({ id: 'mail-no-reply', body: '[回答・返信不要] finished' }));
+  await main(['--sweep'], f.deps); const count = f.calls.length;
+  assert.ok(f.read(mail().id).serverSyncedAt); assert.ok(f.read('mail-no-reply').serverSyncedAt);
+  await main(['--sweep'], f.deps); await pollOnce(f.deps);
+  assert.equal(f.calls.filter(c => c.kind !== 'mail-poll').length, count);
+});
+test('C10 interrupted ordinary prompts reply once after two hours without spawning again', async t => {
+  const f = fixture(t); let time = now;
+  f.deps.now = () => time;
+  f.save(mail({ kind: 'prompt', executionStartedAt: iso(0) }));
+  time += INTERRUPTED_PROMPT_MS - 1; await pollOnce(f.deps);
+  assert.equal(f.calls.filter(c => c.kind === 'mail-reply').length, 0);
+  time++; await pollOnce(f.deps);
+  assert.equal(f.calls.filter(c => c.kind === 'mail-reply').length, 1);
+  assert.equal(f.calls.find(c => c.kind === 'mail-reply').payload.resultBody, INTERRUPTED_PROMPT_BODY);
+  assert.equal(f.read(mail().id).status, 'done'); assert.equal(f.spawns.length, 0);
+  await pollOnce(f.deps); assert.equal(f.calls.filter(c => c.kind === 'mail-reply').length, 1);
+});
+test('C11 busy inbox lock skips mutations and transport then permits retry', async t => {
+  const f = fixture(t); f.save(mail()); const lock = path.join(f.inbox, `${mail().id}.json.lock`);
+  fs.writeFileSync(lock, 'other owner');
+  let calls = 0; const open = fs.openSync;
+  const mocked = t.mock.method(fs, 'openSync', (...args) => { if (args[0] === lock && args[1] === 'wx') calls++; return open(...args); });
+  assert.equal(updateInbox(mail().id, current => ({ ...current, status: 'done' }), { home: f.home }), null);
+  assert.equal(calls, INBOX_LOCK_RETRIES + 1); assert.ok(INBOX_LOCK_DELAY_MS > 0); mocked.mock.restore();
+  await main(['--ack', mail().id], f.deps); assert.equal(f.calls.length, 0); assert.equal(f.read(mail().id).status, 'delivered'); assert.equal(f.output.at(-1), '完了=0');
+  fs.unlinkSync(lock); await main(['--ack', mail().id], f.deps); assert.equal(f.read(mail().id).status, 'done'); assert.equal(f.calls.length, 1);
+});
+test('C11 callback errors release locks and delayed server responses preserve hook fields', async t => {
+  const f = fixture(t); f.save(mail());
+  assert.throws(() => updateInbox(mail().id, () => { throw new Error('callback'); }, { home: f.home }), /callback/);
+  assert.equal(fs.existsSync(path.join(f.inbox, `${mail().id}.json.lock`)), false);
+  await syncMailState({ home: f.home, id: mail().id, action: 'ack', from: receiver, now: () => now, request: async () => {
+    updateInbox(mail().id, m => ({ ...m, presentedAt: iso(0), presentedSession: 'concurrent-hook', pendingServer: [...m.pendingServer, 'seen'] }), { home: f.home });
+    return { ok: true, mail: { status: 'done' } };
+  } });
+  assert.equal(f.read(mail().id).presentedSession, 'concurrent-hook'); assert.deepEqual(f.read(mail().id).pendingServer, ['seen']);
+});
+test('inbox displays only selected messages and uses detached seen synchronization', async t => {
+  const f = fixture(t); f.save(mail()); f.save(mail({ id: 'mail-hidden', presentedAt: iso(-1) }));
+  let requests = 0; f.deps.request = async () => { requests++; return {}; };
+  await main(['--inbox', '--unseen', '--json'], f.deps);
+  assert.equal(requests, 0); assert.equal(f.spawns.length, 1); assert.deepEqual(f.spawns[0][1].slice(1), ['--sync-pending']);
+  assert.equal(f.spawns[0][2].detached, true); assert.deepEqual(f.read(mail().id).pendingServer, ['seen']);
+  assert.equal(f.read('mail-hidden').pendingServer, undefined);
+});
+test('ack-only wait exits successfully with an explicit empty-body label', async () => {
+  const result = await waitForReply('mail-ack-only', 1, { now: () => now, request: async () => ({ mail: { status: 'done', resultBody: '' } }) });
+  assert.equal(result.exitCode, 0); assert.equal(result.text, '[ack のみ・本文なし]');
+});
+test('notes count as handled only when newly received', async t => {
+  const f = fixture(t); f.deps.request = async () => ({ messages: [mail()] });
+  assert.deepEqual((await pollOnce(f.deps)).handled, [mail().id]);
+  assert.deepEqual((await pollOnce(f.deps)).handled, []);
+});
+
+test('C11 concurrent workers preserve every inbox read-modify-write update', async t => {
+  const f = fixture(t); f.save(mail({ increments: 0 }));
+  const iterations = 20, workers = 3;
+  const source = `const { parentPort, workerData } = require('node:worker_threads');
+    import(workerData.module).then(({ updateInbox }) => {
+      let completed = 0;
+      for (let i = 0; i < workerData.iterations; i++) {
+        const result = updateInbox(workerData.id, mail => {
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1);
+          return { ...mail, increments: mail.increments + 1 };
+        }, { home: workerData.home });
+        if (result) completed++;
+      }
+      parentPort.postMessage(completed);
+    });`;
+  const counts = await Promise.all(Array.from({ length: workers }, () => new Promise((resolve, reject) => {
+    const worker = new Worker(source, { eval: true, workerData: { module: new URL('./fleet-mail.mjs', import.meta.url).href, home: f.home, id: mail().id, iterations } });
+    let completed;
+    worker.on('message', value => { completed = value; }); worker.on('error', reject);
+    worker.on('exit', code => code ? reject(new Error('worker failed')) : resolve(completed));
+  })));
+  assert.equal(counts.reduce((a, b) => a + b, 0), workers * iterations);
+  assert.equal(f.read(mail().id).increments, workers * iterations);
+});
+test('C6 quarantine failures are bounded even when the same invalid broadcast is polled again', async t => {
+  const f = fixture(t); let failures = 0;
+  f.deps.request = async kind => {
+    if (kind === 'mail-poll') return { messages: [mail({ to: 'all', kind: 'invalid' })] };
+    failures++; throw new Error('offline');
+  };
+  for (let i = 0; i < SERVER_MAX_ATTEMPTS + 2; i++) await pollOnce(f.deps);
+  assert.equal(failures, SERVER_MAX_ATTEMPTS);
+  const record = JSON.parse(fs.readFileSync(path.join(f.inbox, 'quarantine', `${mail().id}.json`), 'utf8'));
+  assert.deepEqual(record.pendingServer, []); assert.equal(record.attempts, SERVER_MAX_ATTEMPTS);
+});
+
+test('C6 presenting a seen-abandoned message never revives its exhausted retry queue', async t => {
+  const f = fixture(t); f.save(mail());
+  const request = async () => { throw new Error('offline'); };
+  for (let i = 0; i < SERVER_MAX_ATTEMPTS; i++) await syncMailState({ home: f.home, id: mail().id, action: 'seen', request, from: receiver, now: () => now, stderr: () => {} });
+  presentMail({ home: f.home, id: mail().id, sessionId: 'later', now: () => now });
+  assert.deepEqual(f.read(mail().id).pendingServer, []); assert.deepEqual(f.read(mail().id).abandonedServer, ['seen']);
 });

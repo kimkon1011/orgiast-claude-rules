@@ -72,6 +72,6 @@ export async function main({ home = process.env.ORGIAST_HOME || os.homedir(), re
     stdout(JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: context } }));
     for (const mail of shown) presentMail({ home, id: mail.id, sessionId: input.session_id || '', now });
     if (shown.length) detach('./fleet-mail.mjs', ['--sync-pending']);
-  } catch { stderr('fleet-inbox-context: 提示処理失敗=1'); } // fail open, no process.exit / network / lock
+  } catch { stderr('fleet-inbox-context: 提示処理失敗=1'); } // fail open, no process.exit / network / poll lock; presentMail uses the per-inbox updateInbox lock
 }
 if (isEntry(import.meta.url)) await main();

@@ -119,3 +119,40 @@ new ──poll──▶ delivered ──注入/閲覧/実行開始──▶ seen
 
 - 単体: `node --test tools/fleet-mail*.test.mjs tools/fleet-inbox-context.test.mjs tools/fleet-poller*.test.mjs tools/fleet-mail-gas.test.mjs` 全 pass。GAS ロジックは既存流儀どおり `.gs` を読み込んで `new Function` で評価するテストで固定。
 - 実機（kim-PC）: 自分宛に `--send --to kim-PC --kind note --why "[作業依頼] v2 実測"` → 2 分以内に delivered → 新セッションで hook が提示 → `--sent-status` が seen → `--ack` で done。`--to kim`（部分一致）が exit 4 で候補表示になる。
+
+## 11. kim-PC ハブ（司令塔）モード — 各 PC の質問を kim-PC で回収し、kim-PC から答えて相手セッションを進める
+
+目的: kim は kim-PC の Claude Code とだけ話していれば、cr-PC / nishi-PC など各 PC の Claude Code セッションが止まらずに進む。
+
+### 11.1 流れ
+
+```
+[相手PC] セッションが user に質問して停止（AskUserQuestion か、最終応答が質問で終わる）
+   └ Stop hook fleet-question-relay.mjs が質問を ~/.claude/fleet-questions/<session>.json に記録（即時送信はしない）
+   └ 2分 poll が「質問が記録されてから 10 分、同セッションに新しい user 発話が無い」ものを
+     [判断依頼] として kim-PC へ送る（本文: PC ラベル・質問全文≤2000字・選択肢・cwd・sessionId・直近の作業要約≤600字）
+     相手PC の UserPromptSubmit hook はその質問に「kim-PC へ転送済み・回答待ち」と表示する
+[kim-PC] hook が [判断依頼] を最優先で提示（到着時に Discord #claude-code にも 1 行）
+   └ kim が kim-PC の Claude に答える（「A で進めて」など）
+   └ Claude が `fleet-mail.mjs --answer <判断依頼id> --body-file <回答>` を実行
+      = 原本を done にし、相手PC へ kind=prompt・exec=resume（resumeSessionId, cwd）の mail を送る
+[相手PC] poll が prompt(exec=resume) を受信 → オプトイン済みなら
+     `claude -p --resume <sessionId> "<回答>"`（cwd=元の作業ディレクトリ、相手PC 自身の Claude アカウント）を headless 実行
+   └ 完了出力（最終応答）を返信として kim-PC へ（[報告・返信不要]）
+   └ 再び質問で止まれば Stop hook → 10 分ルールを待たず即 [判断依頼]（hub 駆動セッションは待たない）
+```
+
+### 11.2 ルール
+
+- **相手PC の人を飛び越えない**: 対話セッションで出た質問は 10 分間は相手PC の人のもの。10 分経っても新しい user 発話が無いときだけ kim-PC へ転送する。hub から resume で再開されたセッション（`~/.claude/fleet-questions/<session>.json` に `drivenByHub:true`）は即転送。
+- **オプトイン**: 相手PC の人が `fleet-agent-optin.json` の accept に `prompt` を一度入れている必要がある（既存ルール。AI が代行しない）。未承諾なら承諾コマンドが kim-PC に返り、kim-PC の hook は「<PC> は未承諾。承諾コマンドを本人に渡す」と表示する。
+- **同時編集の衝突回避**: resume 実行中は `~/.claude/fleet-questions/<session>.json` に `resumingAt` を書き、相手PC の UserPromptSubmit hook が同じセッションで「kim-PC の回答で実行中（N 分前開始）」と表示する。resume は 1 セッション同時 1 本。実行上限 30 分。超過は fail 返信。
+- **kim-PC 側の見え方**: 判断依頼の提示に `回答: node tools/fleet-mail.mjs --answer <id> --body-file <file>` を付ける。回答後、相手PC からの報告は `[報告・返信不要]` として提示され、自動 ack。
+- **kim から能動的に進める**: `--send --to <PC> --kind prompt --exec claude --exec-cwd <path> --resume <sessionId>`（sessionId 省略時は新規セッション）で、kim-PC から相手PC のセッションを開始・再開できる。`--exec codex` は従来どおり。
+- **質問の検出**: Stop hook は (a) 最後のアシスタント発話に AskUserQuestion の tool_use が含まれる、(b) 最終行が「?／？」で終わる、または「どうしますか／どちらにしますか／選んでください／確認してください／教えてください」を含み、かつ手順・コード断片で終わらない、のいずれか。誤検出は 10 分ルールと「同セッション同質問は 1 回」で吸収する。
+- **秘密情報**: 転送本文は redactSecrets を通す。transcript 本体は送らない。
+
+### 11.3 配布
+
+- 相手PC: Stop hook と UserPromptSubmit hook の登録、`fleet-sheet.env` に `FLEET_HUB=kim-PC`（converge `task:fleet-mail` に含める。kim-PC 自身は FLEET_HUB 無し＝転送しない）。
+- kim-PC: `--answer`、hook の提示文言。

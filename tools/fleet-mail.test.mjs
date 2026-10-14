@@ -1,3 +1,4 @@
+import { INTERRUPTED_PROMPT_BODY } from './fleet-mail.mjs';
 import test from 'node:test';
 process.env.FLEET_NO_SELF_HEAL = '1';
 import assert from 'node:assert/strict';
@@ -526,7 +527,7 @@ test('exec codex times out after two hours without a result file', async t => {
   f.deps.request = async (kind, p) => { f.calls.push({ kind, p }); return kind === 'mail-poll' ? { messages: [execMail({ executionStartedAt: started })] } : { mail: {} }; };
   await main(['--poll'], f.deps);
   const reply = f.calls.find(c => c.kind === 'mail-reply');
-  assert.equal(reply.p.resultBody, 'codex 実行がタイムアウト（結果ファイル未生成）');
+  assert.equal(reply.p.resultBody, INTERRUPTED_PROMPT_BODY);
   // v2 stores completion exclusively in inbox.status.
   assert.equal(readInbox(f.home, { unreadOnly: false }).find(m => m.id === execMail().id).status, 'done');
 });

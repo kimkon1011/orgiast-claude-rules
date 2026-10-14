@@ -103,22 +103,23 @@ test('repeated reply chains always have filesystem-safe bounded IDs', () => {
 });
 
 // --- 2026-10-10 事故: 返信の寿命72hと、本文が変わったら新しい返信メッセージを追加 ---
-test('reply lives 72h; changed bodies retain the fixed reply id', () => {
+test('C1 legacy receipt followed by a changed reply preserves both messages and deduplicates each body', () => {
   const h = harness(); h.c.sendFleetMail(send());
   const first = h.c.replyFleetMail({ id: 'mail-1234', from: 'kim-PC', resultBody: '受領しました' }).reply;
   assert.equal(Date.parse(first.expiresAt) - Date.parse(first.createdAt), 72 * 3600 * 1000);
   h.c.replyFleetMail({ id: 'mail-1234', from: 'kim-PC', resultBody: '受領しました' });
   assert.equal(h.rows.length, 3); // 同じ本文の再送は冪等: 行を増やさない
   const second = h.c.replyFleetMail({ id: 'mail-1234', from: 'kim-PC', resultBody: '本回答です' }).reply;
-  // v2 handoff explicitly requires one fixed reply id per (original, from).
-  assert.equal(h.rows.length, 3);
-  assert.equal(second.id, first.id);
-  assert.equal(second.body, first.body);
+  assert.equal(h.rows.length, 4);
+  assert.notEqual(second.id, first.id);
+  assert.equal(second.body, '本回答です');
+  assert.equal(h.c.replyFleetMail({ id: 'mail-1234', from: 'kim-PC', resultBody: second.body }).duplicate, true);
+  assert.equal(h.rows.length, 4);
   assert.equal(Date.parse(second.expiresAt) - Date.parse(second.createdAt), 72 * 3600 * 1000);
-  // 固定返信の resultBody を保持
-  assert.equal(h.c.getFleetMail({ id: 'mail-1234' }).mail.resultBody, first.body);
-  // 本回答を別途送るには --send を使う（固定返信は増やさない）
+  // 本回答を原本にも反映
+  assert.equal(h.c.getFleetMail({ id: 'mail-1234' }).mail.resultBody, second.body);
+  // 受領確認も本回答も送信元が受け取れる
   const toSender = h.c.pollFleetMail(poll({ to: 'sender-PC', hostname: 'sender', processedIds: ['mail-1234'] }));
-  assert.equal(toSender.messages.length, 1);
-  assert.equal(JSON.stringify(toSender.messages.map(m => m.body).sort()), JSON.stringify([first.body]));
+  assert.equal(toSender.messages.length, 2);
+  assert.equal(JSON.stringify(toSender.messages.map(m => m.body).sort()), JSON.stringify([first.body, second.body].sort()));
 });

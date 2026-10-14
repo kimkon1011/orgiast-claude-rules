@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { main, formatAlert, CHANNEL } from './fleet-mail-watchdog.mjs';
 import { KIM_USER_ID, notifyArrival, postToChannel } from './lib/fleet-mail-discord.mjs';
-import { createClient } from './fleet-mail.mjs';
+import { createClient, CAPABILITY_BACKOFF_MS } from './fleet-mail.mjs';
 function fixture(t, alerts = [{ id: 'mail-one', to: 'kim-PC', from: 'PC', kind: 'unseen', why: '確認', notifiedCount: 0 }]) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-watch-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   fs.mkdirSync(path.join(home, '.claude')); fs.writeFileSync(path.join(home, '.claude', 'fleet-sheet.env'), 'FLEET_SHEET_URL=https://example.invalid\nFLEET_SHEET_TOKEN=test\n');
@@ -60,4 +60,25 @@ test('arrival uses one line, recipient, category, clipped reason and id', async 
 test('missing arrival route skips without a network request', async t => {
   const f = fixture(t); const errors = [];
   assert.equal(await notifyArrival({ id: 'mail-one', priority: 'urgent' }, { home: f.home, token: '', stderr: x => errors.push(x), fetchImpl: async () => assert.fail('network') }), false); assert.equal(errors.length, 1);
+});
+
+test('C6 old GAS mail-alerts response is cached and suppressed during the capability backoff', async t => {
+  const f = fixture(t); let now = Date.now(), requests = 0;
+  f.deps.now = () => now;
+  f.deps.request = async () => { requests++; return { ok: true, action: 'updated', row: 2 }; };
+  assert.equal(await main([], f.deps), 0); assert.equal(await main([], f.deps), 0); assert.equal(requests, 1);
+  const state = JSON.parse(fs.readFileSync(path.join(f.home, '.claude', '.fleet-mail-last-poll.json'), 'utf8'));
+  assert.equal(state.serverCapabilities.seen, false); assert.equal(state.serverCapabilities.alerts, false);
+  now += CAPABILITY_BACKOFF_MS; assert.equal(await main([], f.deps), 0); assert.equal(requests, 2);
+  assert.equal(f.posts.length, 0); assert.equal(f.dms.length, 0);
+});
+
+test('C6 capability probes do not refresh Task B last-successful-poll health timestamps', async t => {
+  const f = fixture(t), file = path.join(f.home, '.claude', '.fleet-mail-last-poll.json');
+  const old = new Date(Date.now() - 2 * CAPABILITY_BACKOFF_MS);
+  fs.writeFileSync(file, JSON.stringify({ at: old.toISOString() })); fs.utimesSync(file, old, old);
+  const mtime = fs.statSync(file).mtimeMs;
+  f.deps.request = async () => ({ ok: true, action: 'updated', row: 2 });
+  await main([], f.deps); assert.ok(Math.abs(fs.statSync(file).mtimeMs - mtime) < 1);
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).at, old.toISOString());
 });

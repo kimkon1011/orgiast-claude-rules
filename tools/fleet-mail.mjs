@@ -209,8 +209,12 @@ function readJson(file, fallback = null) {
 function writeJson(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
-  fs.writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-  fs.renameSync(tmp, file);
+  try {
+    fs.writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+    fs.renameSync(tmp, file);
+  } finally {
+    try { fs.unlinkSync(tmp); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
 }
 function envFile(file) {
   try { return parseEnvText(fs.readFileSync(file, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return {}; throw e; }
@@ -239,7 +243,7 @@ export function resolveMailTarget(to, pcMap = {}, beacons = []) {
   const entries = Object.entries(pcMap || {}).filter(([key, value]) => !key.startsWith('_') && value && typeof value === 'object' && !Array.isArray(value));
   const known = [...entries.map(([label, entry]) => ({ ...entry, label })), ...(Array.isArray(beacons) ? beacons : []).filter(b => typeof b?.label === 'string')];
   const exact = remote.resolved ? remote.to : known.find(b => b.label === to)?.label
-    ?? known.find(b => b.hostname === to)?.label;
+    ?? known.find(b => b.hostname?.toLowerCase() === to?.toLowerCase())?.label;
   if (exact || to === 'all') return { to: exact || 'all', resolved: true };
   // Explicit aliases preserve PR #751's same-machine redirects; no substring matching.
   const alias = entries.find(([, entry]) => entry.aliases?.includes(to));
@@ -256,65 +260,192 @@ function normalizeInbox(mail) {
   return { ...mail, status,
     presentedAt: mail.presentedAt ?? null, presentedSession: mail.presentedSession ?? null };
 }
+export const INBOX_LOCK_RETRIES = 10;
+export const INBOX_LOCK_DELAY_MS = 50;
+export const ACK_BATCH_LIMIT = 100;
+export const CAPABILITY_BACKOFF_MS = 3600000;
+export const SERVER_MAX_ATTEMPTS = 5;
+export const INTERRUPTED_PROMPT_MS = 2 * 3600000;
+export const INTERRUPTED_PROMPT_BODY = '実行が中断・タイムアウト（結果ファイル未生成）';
+// The callback runs synchronously while this file's lock is held. Never hold it over I/O to GAS.
+// null means missing/busy/no change; callers must skip dependent work in that case.
+export function updateInbox(id, fn, { home = process.env.ORGIAST_HOME || os.homedir() } = {}) {
+  const file = inboxPath(home, id), lock = `${file}.lock`;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  let fd;
+  for (let attempt = 0; attempt <= INBOX_LOCK_RETRIES; attempt++) {
+    try { fd = fs.openSync(lock, 'wx', 0o600); break; }
+    catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      if (attempt === INBOX_LOCK_RETRIES) return null;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, INBOX_LOCK_DELAY_MS);
+    }
+  }
+  try {
+    let mail;
+    try { mail = readJson(file); }
+    catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+      const backup = path.join(path.dirname(file), 'corrupt', `${id}.json`);
+      fs.mkdirSync(path.dirname(backup), { recursive: true });
+      fs.renameSync(file, backup);
+      mail = null;
+    }
+    const current = mail ? normalizeInbox(mail) : null;
+    const next = fn(current);
+    if (!next) return null;
+    if (next === current) return current;
+    writeJson(file, next);
+    return next;
+  } finally { fs.closeSync(fd); fs.unlinkSync(lock); }
+}
 // Hook writes local intent synchronously; the detached CLI/poller owns transport.
-export function presentMail({ home, id, sessionId, now = Date.now }) {
-  const file = inboxPath(home, id);
-  const mail = normalizeInbox(readJson(file));
-  if (terminal(mail)) return;
-  const at = new Date(now()).toISOString();
-  const autoAck = mailCategory(mail) === 2;
-  const seenBy = `${resolveFleetLabel(home, { hostname: os.hostname() })}:${sessionId}`;
-  writeJson(file, { ...mail, presentedAt: at, presentedSession: sessionId,
-    status: autoAck ? 'done' : 'seen', seenAt: mail.seenAt || at, seenBy: mail.seenBy || seenBy,
-    ...(autoAck ? { ackAt: at, readAt: at } : {}),
-    pendingServer: [...new Set([...(mail.pendingServer || []), 'seen', ...(autoAck ? ['ack'] : [])])] });
+export function presentMail({ home, id, sessionId, now = Date.now, autoAck = true }) {
+  return updateInbox(id, mail => {
+    if (!mail || terminal(mail)) return null;
+    const at = new Date(now()).toISOString();
+    const ack = autoAck && mailCategory(mail) === 2;
+    const seenBy = `${resolveFleetLabel(home, { hostname: os.hostname() })}:${sessionId}`;
+    return { ...mail, presentedAt: at, presentedSession: sessionId,
+      status: ack ? 'done' : 'seen', seenAt: mail.seenAt || at, seenBy: mail.seenBy || seenBy,
+      ...(ack ? { ackAt: at, readAt: at } : {}),
+      pendingServer: [...new Set([...(mail.pendingServer || []), 'seen', ...(ack ? ['ack'] : [])])].filter(action => !mail.abandonedServer?.includes(action)) };
+  }, { home });
 }
 function expireInbox(home, now) {
   for (const mail of readInbox(home, { unreadOnly: false })) {
     if (mail.status !== 'done' && mail.status !== 'expired' && Date.parse(mail.expiresAt) <= now()) {
-      writeJson(inboxPath(home, mail.id), { ...mail, status: 'expired' });
+      updateInbox(mail.id, current => current && current.status !== 'done' && Date.parse(current.expiresAt) <= now() ? { ...current, status: 'expired' } : null, { home });
     }
   }
 }
 function migrateProcessed(home) {
   const file = path.join(home, '.claude', '.fleet-mail-processed');
   if (!fs.existsSync(file)) return;
+  let busy = false;
   for (const id of fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean)) {
     if (!/^mail-[A-Za-z0-9-]{1,180}$/.test(id)) continue;
-    let mail;
-    try { mail = readJson(inboxPath(home, id)); } catch { continue; } // A damaged legacy cache must not stop migration.
-    if (mail && !terminal(mail)) writeJson(inboxPath(home, id), { ...normalizeInbox(mail), status: 'done' });
+    let visited = false;
+    updateInbox(id, mail => {
+      visited = true;
+      return mail && !terminal(mail) ? { ...mail, status: 'done', pendingServer: [...new Set([...(mail.pendingServer || []), 'ack'])] } : null;
+    }, { home });
+    if (!visited) busy = true;
   }
-  fs.unlinkSync(file);
+  if (!busy) fs.unlinkSync(file);
 }
 function checked(result) {
   if (result?.ok === false) throw new Error(result.reason || result.error || 'server rejected mail');
   return result;
 }
-// Local intent is durable BEFORE transport. A failed/old GAS action is retried on poll.
-export async function syncMailState({ home, id, action, request, now = Date.now, seenBy, reason, stderr = console.error }) {
-  const file = inboxPath(home, id);
-  let mail = normalizeInbox(readJson(file) || { id, status: 'delivered' });
-  const at = new Date(now()).toISOString();
-  if (action === 'seen' && !terminal(mail)) mail = { ...mail, status: 'seen', seenAt: mail.seenAt || at, seenBy: mail.seenBy || seenBy };
-  if (action === 'ack' && !terminal(mail)) mail = { ...mail, status: 'done', ackAt: at, readAt: at };
-  if (action === 'fail' && !terminal(mail)) mail = { ...mail, status: reason === 'expired' ? 'expired' : 'failed', failedAt: at, failReason: reason };
-  mail.pendingServer = [...new Set([...(mail.pendingServer || []), action])];
-  if (reason) mail.failReason = reason;
-  writeJson(file, mail);
-  try {
-    const response = checked(await request(`mail-${action}`, { id, ...(action === 'seen' ? { seenBy: mail.seenBy || seenBy } : {}), ...(action === 'fail' ? { reason: mail.failReason } : {}) }));
-    const latest = readJson(file);
-    // The server may already be terminal (e.g. another session replied before this seen retry).
+function unsupported(error) {
+  return error?.code === 'UNSUPPORTED_ACTION' || /unknown[_ -](?:action|kind)|handlers are not deployed/i.test(error?.message || '');
+}
+function validateMailResponse(kind, payload, result) {
+  checked(result);
+  const valid = kind === 'mail-poll' ? Array.isArray(result?.messages)
+    : kind === 'mail-alerts' ? Array.isArray(result?.alerts)
+    : kind === 'mail-ack' && payload.ids ? Array.isArray(result?.results)
+    : result && Object.hasOwn(result, 'mail');
+  if (!valid) throw Object.assign(new Error('fleet-mail: GAS mail handlers are not deployed'), { code: 'UNSUPPORTED_ACTION' });
+  return result;
+}
+// Unknown actions in old WebApp.gs return the status-upsert shape {ok, action, row}.
+export function capabilityClient(request, { home, now = Date.now, stderr = console.error, readOnly = false }) {
+  const file = path.join(home, '.claude', '.fleet-mail-last-poll.json');
+  return async (kind, payload, ...rest) => {
+    const action = kind.replace('mail-', '');
+    if (!['seen', 'ack', 'fail', 'alerts'].includes(action)) return request(kind, payload, ...rest);
+    const cache = readJson(file, {});
+    if (cache.serverCapabilities?.[action] === false && now() - Date.parse(cache.serverCapabilities.checkedAt) < CAPABILITY_BACKOFF_MS) {
+      throw Object.assign(new Error('server capability backoff'), { code: 'CAPABILITY_BACKOFF' });
+    }
+    try {
+      const result = validateMailResponse(kind, payload, await request(kind, payload, ...rest));
+      return result;
+    } catch (error) {
+      if (unsupported(error)) {
+        if (!readOnly) {
+          // Capability probes are not successful polls; keep Task B's mtime health signal intact.
+          let mtime = new Date(0);
+          try { mtime = fs.statSync(file).mtime; } catch (statError) { if (statError.code !== 'ENOENT') throw statError; }
+          writeJson(file, { ...readJson(file, {}), serverCapabilities: { seen: false, ack: false, fail: false, alerts: false, checkedAt: new Date(now()).toISOString() } });
+          fs.utimesSync(file, mtime, mtime);
+        }
+        stderr('fleet-mail: 未対応サーバー=1');
+      }
+      throw error;
+    }
+  };
+}
+function finishSync(home, id, action, response, now) {
+  return updateInbox(id, latest => {
+    if (!latest) return null;
     const server = response?.mail;
-    const authoritative = server && terminal(server) ? Object.fromEntries(['status', 'seenAt', 'seenBy', 'ackAt', 'failedAt', 'failReason', 'resultAt', 'resultBody'].filter(key => server[key] !== undefined).map(key => [key, typeof server[key] === 'string' ? redactSecrets(server[key]) : server[key]])) : {};
-    writeJson(file, { ...latest, ...authoritative, pendingServer: (latest.pendingServer || []).filter(a => a !== action) });
-    return true;
-  } catch (error) {
-    stderr(`fleet-mail: mail-${action} 未同期（次回再送）: ${redactSecrets(error.message).replace(/[\r\n]+/g, ' ')}`);
-    return false;
+    const authoritative = server && terminal(server) && server.to !== 'all' ? Object.fromEntries(['status', 'seenAt', 'seenBy', 'ackAt', 'failedAt', 'failReason', 'resultAt', 'resultBody'].filter(key => server[key] !== undefined).map(key => [key, typeof server[key] === 'string' ? redactSecrets(server[key]) : server[key]])) : {};
+    return { ...latest, ...authoritative, pendingServer: (latest.pendingServer || []).filter(a => a !== action),
+      ...(['ack', 'fail'].includes(action) ? { serverSyncedAt: new Date(now()).toISOString() } : {}) };
+  }, { home });
+}
+function failSync(home, id, action, error, stderr) {
+  if (error.code === 'CAPABILITY_BACKOFF') return;
+  const saved = updateInbox(id, mail => {
+    if (!mail) return null;
+    const attempts = { ...mail.attempts, [action]: (mail.attempts?.[action] || 0) + 1 };
+    const abandoned = attempts[action] >= SERVER_MAX_ATTEMPTS;
+    return { ...mail, attempts, ...(abandoned ? {
+      pendingServer: (mail.pendingServer || []).filter(a => a !== action),
+      abandonedServer: [...new Set([...(mail.abandonedServer || []), action])]
+    } : {}) };
+  }, { home });
+  if (saved?.attempts?.[action] >= SERVER_MAX_ATTEMPTS) stderr('fleet-mail: 同期打切り=1');
+  else if (!unsupported(error)) stderr('fleet-mail: 同期再送待ち=1');
+}
+// Local intent is durable BEFORE transport. A failed action has a bounded retry queue.
+export async function syncMailState({ home, id, action, request, now = Date.now, seenBy, reason, from, stderr = console.error }) {
+  const at = new Date(now()).toISOString();
+  const mail = updateInbox(id, current => {
+    let mail = current || { id, status: 'delivered' };
+    if (mail.abandonedServer?.includes(action)) return null;
+    if (action === 'seen' && !terminal(mail)) mail = { ...mail, status: 'seen', seenAt: mail.seenAt || at, seenBy: mail.seenBy || seenBy };
+    if (action === 'ack' && !terminal(mail)) mail = { ...mail, status: 'done', ackAt: at, readAt: at };
+    if (action === 'fail' && !terminal(mail)) mail = { ...mail, status: reason === 'expired' ? 'expired' : 'failed', failedAt: at, failReason: reason };
+    return { ...mail, ...(reason ? { failReason: reason } : {}), pendingServer: [...new Set([...(mail.pendingServer || []), action])] };
+  }, { home });
+  if (!mail) return false;
+  const client = capabilityClient(request, { home, now, stderr });
+  try {
+    const response = await client(`mail-${action}`, { id, from: from || resolveFleetLabel(home, machineIdentity()), ...(action === 'seen' ? { seenBy: mail.seenBy || seenBy } : {}), ...(action === 'fail' ? { reason: mail.failReason } : {}) });
+    return !!finishSync(home, id, action, response, now);
+  } catch (error) { failSync(home, id, action, error, stderr); return false; }
+}
+export async function syncPending({ home, request, now = Date.now, from, stderr = console.error }) {
+  const mails = readInbox(home, { unreadOnly: false });
+  for (const mail of mails) for (const action of mail.pendingServer || []) {
+    if (!['seen', 'fail'].includes(action)) continue;
+    try { await syncMailState({ home, id: mail.id, action, request, now, from, stderr, seenBy: mail.seenBy || from, reason: mail.failReason }); }
+    catch { stderr('fleet-mail: 保存再試行待ち=1'); }
+  }
+  const ack = mails.filter(m => m.pendingServer?.includes('ack') && !m.abandonedServer?.includes('ack')).slice(0, ACK_BATCH_LIMIT);
+  // Check file locks before making a transport call; a busy file remains pending.
+  const ready = ack.filter(m => {
+    try { return updateInbox(m.id, current => current?.pendingServer?.includes('ack') ? current : null, { home }); }
+    catch { stderr('fleet-mail: 保存再試行待ち=1'); return false; }
+  });
+  if (ready.length) {
+    let response, failure;
+    try { response = await capabilityClient(request, { home, now, stderr })('mail-ack', { ids: ready.map(m => m.id), from }); }
+    catch (error) { failure = error; }
+    for (const mail of ready) {
+      try {
+        const result = response?.results.find(r => r.id === mail.id);
+        if (result?.ok === true) finishSync(home, mail.id, 'ack', result, now);
+        else failSync(home, mail.id, 'ack', failure || new Error('batch item rejected'), stderr);
+      } catch { stderr('fleet-mail: 保存再試行待ち=1'); }
+    }
   }
 }
+
 function joinReply(home, mail) {
   if (!mail.replyTo) return;
   const dir = path.join(home, '.claude');
@@ -424,9 +555,7 @@ export function createClient({ url, token, fetchImpl = fetch }) {
     if (!response.ok) throw new Error(`fleet-mail HTTP ${response.status}`);
     const result = await response.json();
     if (result?.ok !== true) throw new Error(`fleet-mail: ${result?.reason || result?.error || 'invalid response'}`);
-    // Old GAS falls back to status writes for unknown kinds: never call that a success.
-    if (kind === 'mail-poll' ? !Array.isArray(result.messages) : kind === 'mail-alerts' ? !Array.isArray(result.alerts) : !Object.hasOwn(result, 'mail')) throw new Error('fleet-mail: GAS mail handlers are not deployed');
-    return result;
+    return validateMailResponse(kind, payload, result);
   };
 }
 export async function waitForReply(id, seconds, { request, now = Date.now, sleepImpl = sleep, waitFor = 'done' }) {
@@ -436,7 +565,7 @@ export async function waitForReply(id, seconds, { request, now = Date.now, sleep
       const result = await request('mail-get', { id }, Math.min(60_000, deadline - now()));
       if (waitFor === 'seen' && (result.mail?.seenAt || ['seen', 'done'].includes(result.mail?.status))) return { exitCode: 0, text: `既読（id=${id}）` };
       if (['failed', 'expired'].includes(result.mail?.status)) return { exitCode: 1, text: `${result.mail.status}（id=${id}）` };
-      if (result.mail?.status === 'done') return { exitCode: 0, text: redactSecrets(result.mail.resultBody) };
+      if (result.mail?.status === 'done') return { exitCode: 0, text: redactSecrets(result.mail.resultBody || '[ack のみ・本文なし]') };
     } catch (error) { if (now() < deadline) throw error; }
     if (now() < deadline) await sleepImpl(Math.min(15_000, deadline - now()));
   }
@@ -461,14 +590,22 @@ export async function pollOnce(deps = {}) {
   if (!release) { err('fleet-mail: 別の受信処理が実行中'); return { skipped: 'locked' }; }
   const fileOf = id => inboxPath(home, id);
   const log = (name, value) => fs.appendFileSync(path.join(dir, `fleet-mail-${name}.jsonl`), `${JSON.stringify({ at: new Date(now()).toISOString(), ...value })}\n`, { mode: 0o600 });
-  const state = (id, action, extra = {}) => syncMailState({ home, id, action, request, now, stderr: err, ...extra });
+  const state = (id, action, extra = {}) => syncMailState({ home, id, action, request, now, from: label, stderr: err, ...extra });
+  const client = capabilityClient(request, { home, now, stderr: err });
   const quarantineDir = path.join(dir, 'fleet-inbox', 'quarantine');
+  const quarantineAttempts = new Set();
   const failQuarantined = async (file, record) => {
-    if (!record.serverId || !record.pendingServer?.length) return;
+    if (!record.serverId || !record.pendingServer?.length || quarantineAttempts.has(record.serverId)) return;
+    quarantineAttempts.add(record.serverId);
     try {
-      checked(await request('mail-fail', { id: record.serverId, reason: record.reason }));
+      await client('mail-fail', { id: record.serverId, from: label, reason: record.reason });
       writeJson(file, { ...record, pendingServer: [] });
-    } catch { /* Persisted in quarantine for next poll. */ }
+    } catch (error) {
+      if (error.code === 'CAPABILITY_BACKOFF') return;
+      record.attempts = (record.attempts || 0) + 1;
+      if (record.attempts >= SERVER_MAX_ATTEMPTS) { record.pendingServer = []; err('fleet-mail: 同期打切り=1'); }
+      writeJson(file, record);
+    }
   };
   const quarantine = async (raw, error) => {
     let serverId = null;
@@ -476,30 +613,23 @@ export async function pollOnce(deps = {}) {
     const id = serverId || `mail-invalid-${createHash('sha256').update(JSON.stringify(raw) ?? 'null').digest('hex').slice(0, 16)}`;
     const record = { raw: JSON.parse(JSON.stringify(raw ?? null, (_key, value) => typeof value === 'string' ? redactSecrets(value) : value)), serverId, reason: redactSecrets(error.message).slice(0, 1000), pendingServer: serverId ? ['fail'] : [] };
     const file = path.join(quarantineDir, `${id}.json`);
+    const prior = readJson(file);
+    if (prior) { record.attempts = prior.attempts || 0; record.pendingServer = prior.pendingServer || []; }
     writeJson(file, record);
-    if (serverId && fs.existsSync(fileOf(serverId))) {
-      let mail;
-      try { mail = readJson(fileOf(serverId)); } catch (error) { if (!(error instanceof SyntaxError)) throw error; mail = { id: serverId }; }
-      if (!terminal(mail)) writeJson(fileOf(serverId), { ...mail, status: 'failed', failReason: record.reason });
-    }
+    if (serverId) updateInbox(serverId, mail => mail && !terminal(mail) ? { ...mail, status: 'failed', failReason: record.reason } : null, { home });
     await failQuarantined(file, record);
   };
   try {
     if (!dryRun) {
       migrateProcessed(home);
-      // Isolate damaged local JSON too, including records already consumed by the server.
+      // Archive corrupt cache under a per-file lock, then recover via mail-get even after delivery.
       const inboxDir = path.join(dir, 'fleet-inbox');
       if (fs.existsSync(inboxDir)) for (const name of fs.readdirSync(inboxDir).filter(n => /^mail-[A-Za-z0-9-]+\.json$/.test(n))) {
-        try { readJson(path.join(inboxDir, name)); } catch (error) {
-          if (error instanceof SyntaxError) await quarantine({ id: name.slice(0, -5), body: fs.readFileSync(path.join(inboxDir, name), 'utf8') }, error);
-        }
+        try { updateInbox(name.slice(0, -5), () => null, { home }); }
+        catch { err('fleet-mail: 保存再試行待ち=1'); }
       }
       expireInbox(home, now);
-      for (const mail of readInbox(home, { unreadOnly: false })) {
-        for (const action of mail.pendingServer || []) {
-          if (['seen', 'ack', 'fail'].includes(action)) await state(mail.id, action, { seenBy: mail.seenBy || label, reason: mail.failReason });
-        }
-      }
+      await syncPending({ home, request, now, from: label, stderr: err });
       if (fs.existsSync(quarantineDir)) for (const name of fs.readdirSync(quarantineDir).filter(n => /^mail-[A-Za-z0-9-]+\.json$/.test(n))) {
         try { const file = path.join(quarantineDir, name); await failQuarantined(file, readJson(file)); } catch { err('fleet-mail: 隔離記録の再同期失敗=1'); }
       }
@@ -514,43 +644,57 @@ export async function pollOnce(deps = {}) {
       const messages = response.messages.map(m => ({ ...m, from: redactSecrets(m.from), why: redactSecrets(m.why), body: redactSecrets(m.body), resultBody: redactSecrets(m.resultBody) }));
       out(JSON.stringify(messages)); return { messages };
     }
-    const received = [], handled = [];
-    let rejected = 0, undurable = 0;
-    for (const raw of response.messages) {
-      if (raw?.id && (batch.successfulIds?.includes(raw.id) || batch.quarantinedIds?.includes(raw.id))) continue;
+    const received = [], handled = [], fresh = new Set();
+    let rejected = 0, undurable = 0, legacy = 0;
+    const recover = [], corruptDir = path.join(dir, 'fleet-inbox', 'corrupt');
+    if (fs.existsSync(corruptDir)) for (const name of fs.readdirSync(corruptDir).filter(n => /^mail-[A-Za-z0-9-]+\.json$/.test(n))) {
+      const id = name.slice(0, -5);
+      if (fs.existsSync(fileOf(id))) continue;
+      try { const restored = checked(await request('mail-get', { id })); if (restored.mail) recover.push(restored.mail); }
+      catch { err('fleet-mail: 復旧再試行待ち=1'); }
+    }
+    for (const raw of [...response.messages, ...recover]) {
+      if (raw?.id && ((batch.successfulIds?.includes(raw.id) && fs.existsSync(fileOf(raw.id))) || batch.quarantinedIds?.includes(raw.id))) continue;
       try {
-        validId(raw?.id);
-        if (!['all', label, identity.hostname].includes(raw.to) || !['note', 'prompt'].includes(raw.kind)
-          || typeof raw.body !== 'string' || !raw.from || !Number.isFinite(Date.parse(raw.expiresAt))) throw new Error('invalid incoming mail');
-        const file = fileOf(raw.id);
-        const existing = readJson(file);
-        if (!existing) {
-          const mail = normalizeInbox({ ...raw, from: redactSecrets(raw.from), why: redactSecrets(raw.why), body: redactSecrets(raw.body), readAt: null, receivedAt: new Date(now()).toISOString() });
-          if (mail.status !== 'done' && Date.parse(mail.expiresAt) <= now()) mail.status = 'expired';
-          writeJson(file, mail);
-          log('received', { id: mail.id, from: mail.from, kind: mail.kind });
-        } else if (terminal(raw) && !terminal(existing)) {
-          // A replay can carry a reply made interactively on the server since the previous poll.
-          writeJson(file, { ...existing, ...raw, body: redactSecrets(raw.body), resultBody: redactSecrets(raw.resultBody) });
-        }
-        joinReply(home, readJson(file));
+        const exact = raw && (raw.to === 'all' || raw.to === label || (typeof raw.to === 'string' && raw.to.toLowerCase() === identity.hostname?.toLowerCase()));
+        const legacyTo = !exact && typeof raw?.to === 'string' && !!raw.to && (label.includes(raw.to) || identity.hostname?.toLowerCase().includes(raw.to.toLowerCase()));
+        if (!/^mail-[A-Za-z0-9-]{1,180}$/.test(raw?.id || '') || (!exact && !legacyTo) || !['note', 'prompt'].includes(raw.kind)
+          || typeof raw.body !== 'string' || !raw.from || !Number.isFinite(Date.parse(raw.expiresAt))) throw Object.assign(new Error('invalid incoming mail'), { code: 'INVALID_INCOMING_MAIL' });
+        let created = false;
+        const saved = updateInbox(raw.id, existing => {
+          if (!existing) {
+            created = true;
+            const mail = normalizeInbox({ ...raw, ...(legacyTo ? { legacyTo: true } : {}), from: redactSecrets(raw.from), why: redactSecrets(raw.why), body: redactSecrets(raw.body), readAt: null, receivedAt: new Date(now()).toISOString() });
+            if (mail.status !== 'done' && Date.parse(mail.expiresAt) <= now()) mail.status = 'expired';
+            return mail;
+          }
+          return terminal(raw) && !terminal(existing) ? { ...existing, ...raw, body: redactSecrets(raw.body), resultBody: redactSecrets(raw.resultBody) } : existing;
+        }, { home });
+        if (!saved) { undurable++; continue; }
+        if (created) { fresh.add(raw.id); log('received', { count: 1 }); if (legacyTo) legacy++; }
+        joinReply(home, saved);
         received.push(raw.id);
         batch.successfulIds = [...new Set([...(batch.successfulIds || []), raw.id])];
       } catch (error) {
-        rejected++;
-        try { await quarantine(raw, error); batch.quarantinedIds = [...new Set([...(batch.quarantinedIds || []), raw?.id ?? null])]; }
-        catch { undurable++; }
+        if (error.code === 'INVALID_INCOMING_MAIL') {
+          rejected++;
+          try { await quarantine(raw, error); batch.quarantinedIds = [...new Set([...(batch.quarantinedIds || []), raw?.id ?? null])]; }
+          catch { undurable++; }
+        } else undurable++;
       }
       writeJson(pollFile, batch);
     }
     if (!undurable) fs.unlinkSync(pollFile);
-    writeJson(path.join(dir, '.fleet-mail-last-poll.json'), { at: new Date(now()).toISOString() });
+    else err(`fleet-mail: 保存再試行待ち=${undurable}`);
+    if (legacy) err(`fleet-mail: 旧形式宛先受信=${legacy}`);
+    const lastPollFile = path.join(dir, '.fleet-mail-last-poll.json');
+    writeJson(lastPollFile, { ...readJson(lastPollFile, {}), at: new Date(now()).toISOString() });
     for (const mail of readInbox(home)) {
       if (mail.arrivalNotifiedAt || mailCategory(mail) > 1) continue;
       try {
         const notify = deps.notifyArrival ?? (await import('./lib/fleet-mail-discord.mjs')).notifyArrival;
         if (await notify(mail, { home, label, category: mailCategory(mail), fetchImpl: deps.fetch, stderr: err })) {
-          writeJson(fileOf(mail.id), { ...readJson(fileOf(mail.id)), arrivalNotifiedAt: new Date(now()).toISOString() });
+          updateInbox(mail.id, current => current && ({ ...current, arrivalNotifiedAt: new Date(now()).toISOString() }), { home });
         }
       } catch { err('fleet-mail: 到着通知失敗=1'); }
     }
@@ -558,7 +702,7 @@ export async function pollOnce(deps = {}) {
     for (const pending of readInbox(home, { unreadOnly: false })) {
       let mail = pending;
       try {
-        mail = readJson(fileOf(pending.id)); // Observe interactive replies after delivery.
+        mail = updateInbox(pending.id, current => current, { home }); // Observe replies and skip a busy file.
         if (!mail || !['delivered', 'seen'].includes(normalizeInbox(mail).status)) continue;
         if (hasDecisionRequest(mail)) {
           if (!mail.decisionRegisteredAt) {
@@ -569,7 +713,7 @@ export async function pollOnce(deps = {}) {
                 || String(mail.body ?? '').trimStart().split(/\r?\n/)[0].replace(decisionPrefix, '').trim();
               record = addDecision({ source, text: `[判断依頼] ${subject} / from=${mail.from} id=${mail.id}`.slice(0, 200) }, { home, now: new Date(now()) });
             }
-            writeJson(fileOf(mail.id), { ...readJson(fileOf(mail.id)), decisionRegisteredAt: new Date(now()).toISOString(), decisionId: record.id });
+            updateInbox(mail.id, current => current && ({ ...current, decisionRegisteredAt: new Date(now()).toISOString(), decisionId: record.id }), { home });
             log('decision-request-skipped', { id: mail.id, from: mail.from });
             if (mail.kind === 'prompt') writeJson(path.join(dir, 'fleet-agent-results', `${mail.id}.json`), { exitCode: null, outputTail: '判断依頼を含むためヘッドレス実行では回答しません（decision-request-skipped）。kim の判断待ちです。' });
           }
@@ -581,21 +725,21 @@ export async function pollOnce(deps = {}) {
               checked(await request('mail-send', { id, from: label, to: mail.from, replyTo: mail.id, messageKind: 'note', auto: true, hop: nextHop(mail), priority: 'normal',
                 why: '[回答・返信不要] 判断依頼の受領', body: `受領しました。kim の判断待ちとして登録（決定ID ${latest.decisionId}）。回答は kim が決めた後に別の note で送ります。期限: ${mail.expiresAt}`,
                 expiresAt: new Date(now() + 72 * 3600000).toISOString() }));
-              writeJson(fileOf(mail.id), { ...readJson(fileOf(mail.id)), decisionAckAt: new Date(now()).toISOString() });
+              updateInbox(mail.id, current => current && ({ ...current, decisionAckAt: new Date(now()).toISOString() }), { home });
               log('sent', { action: 'decision-ack', id: mail.id, decisionId: latest.decisionId });
             } catch (error) { log('decision-ack-failed', { id: mail.id, error: redactSecrets(error.message) }); }
           }
           continue;
         }
-        if (mail.kind !== 'prompt') { handled.push(mail.id); continue; }
+        if (mail.kind !== 'prompt') { if (fresh.has(mail.id)) handled.push(mail.id); continue; }
         if (deps.executePrompts === false || automatic(mail) || nextHop(mail) >= 3) continue;
         const exec = parseExecMarkers(mail.body);
         const resultFile = path.join(dir, 'fleet-agent-results', `${validId(mail.id)}.json`);
         let result = readJson(resultFile);
         let claudeExeName;
-        if (exec.exec === 'codex' && mail.executionStartedAt && !result) {
-          if (now() - Date.parse(mail.executionStartedAt) < 2 * 3600000) continue;
-          result = { exitCode: null, outputTail: 'codex 実行がタイムアウト（結果ファイル未生成）', timedOut: true };
+        if (mail.executionStartedAt && !result) {
+          if (now() - Date.parse(mail.executionStartedAt) < INTERRUPTED_PROMPT_MS) continue;
+          result = { exitCode: null, outputTail: INTERRUPTED_PROMPT_BODY, timedOut: true };
         }
         if (!result) {
           if (mail.executionStartedAt) continue; // Never start an interrupted execution a second time.
@@ -604,9 +748,8 @@ export async function pollOnce(deps = {}) {
           else {
             if (promptHandled) continue;
             promptHandled = true;
-            const current = readJson(fileOf(mail.id));
-            if (terminal(current) || current.executionStartedAt) continue;
-            writeJson(fileOf(mail.id), { ...current, executionStartedAt: new Date(now()).toISOString() });
+            const claimed = updateInbox(mail.id, current => current && !terminal(current) && !current.executionStartedAt ? { ...current, executionStartedAt: new Date(now()).toISOString() } : null, { home });
+            if (!claimed) continue;
             if (kind === 'codex') {
               await state(mail.id, 'seen', { seenBy: 'headless' });
               const runnerArgs = [path.join(ownRepo, 'tools', 'fleet-task-runner.mjs'), '--id', mail.id];
@@ -635,18 +778,17 @@ export async function pollOnce(deps = {}) {
         if (terminal(readJson(fileOf(mail.id)))) continue;
         let replyResponse;
         try { replyResponse = checked(await request('mail-reply', { id: mail.id, from: label, resultBody: result.outputTail, auto: true, hop: nextHop(mail), priority: 'normal' })); }
-        catch (error) { err(`fleet-mail: 返信再送待ち=1 (${redactSecrets(error.message)})`); continue; }
+        catch (error) { err('fleet-mail: 返信再送待ち=1'); continue; }
         if (['failed', 'expired'].includes(replyResponse?.mail?.status)) {
-          writeJson(fileOf(mail.id), { ...readJson(fileOf(mail.id)), status: replyResponse.mail.status });
+          updateInbox(mail.id, current => current && ({ ...current, status: replyResponse.mail.status }), { home });
           continue;
         }
         log('sent', { action: 'auto-reply', id: mail.id, exitCode: result.exitCode, timedOut: !!result.timedOut, ...(claudeExeName ? { claudeExe: claudeExeName } : {}), ...(exec.exec ? { exec: exec.exec } : {}) });
-        writeJson(fileOf(mail.id), { ...readJson(fileOf(mail.id)), status: 'done', resultAt: replyResponse?.mail?.resultAt || new Date(now()).toISOString(), resultBody: redactSecrets(replyResponse?.reply?.body ?? replyResponse?.mail?.resultBody ?? result.outputTail) });
+        updateInbox(mail.id, current => current && ({ ...current, status: 'done', resultAt: replyResponse?.mail?.resultAt || new Date(now()).toISOString(), resultBody: redactSecrets(replyResponse?.reply?.body ?? replyResponse?.mail?.resultBody ?? result.outputTail) }), { home });
         handled.push(mail.id);
       } catch (error) {
         if (hasDecisionRequest(mail)) { log('decision-intake-failed', { id: mail.id, error: redactSecrets(error.message) }); continue; }
-        rejected++;
-        try { await quarantine(mail, error); } catch { err('fleet-mail: 隔離保存失敗=1'); }
+        err('fleet-mail: 処理再試行待ち=1');
       }
     }
     try { (deps.dailySelfHeal ?? dailySelfHeal)({ dir, now }); } catch (error) { err(`fleet-mail: 自己修復失敗: ${redactSecrets(error.message)}`); }
@@ -673,32 +815,41 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   const label = resolveFleetLabel(home, identity);
   const request = configured ? deps.request ?? createClient({ url: config.FLEET_SHEET_URL, token: config.FLEET_SHEET_TOKEN, fetchImpl: deps.fetch })
     : async () => { throw new Error('fleet-sheet.env 未設定'); };
-  const state = (id, action, extra = {}) => syncMailState({ home, id, action, request, now, stderr: err, ...extra });
+  const state = (id, action, extra = {}) => syncMailState({ home, id, action, request, now, from: label, stderr: err, ...extra });
   if (options['--sync-pending']) {
-    for (const mail of readInbox(home, { unreadOnly: false })) {
-      for (const action of mail.pendingServer || []) if (['seen', 'ack', 'fail'].includes(action)) {
-        await state(mail.id, action, { seenBy: mail.seenBy || label, reason: mail.failReason });
-      }
-    }
+    await syncPending({ home, request, now, from: label, stderr: err });
     return 0;
   }
   if (options['--inbox']) {
     expireInbox(home, now);
     const mails = readInbox(home).filter(m => !options['--unseen'] || (['delivered', 'seen'].includes(m.status) && !m.presentedAt));
-    for (const mail of mails) await state(mail.id, 'seen', { seenBy: label });
     out(options['--json'] ? JSON.stringify(mails) : mails.map(m => `${m.id} / from=${m.from} / ${m.kind} / ${m.why}\n${m.body}`).join('\n'));
+    let shown = 0;
+    for (const mail of mails) if (presentMail({ home, id: mail.id, sessionId: 'inbox', now, autoAck: false })) shown++;
+    if (shown) {
+      try {
+        const child = (deps.spawnImpl ?? spawn)(process.execPath, [fileURLToPath(import.meta.url), '--sync-pending'], {
+          ...backgroundSpawnOptions(deps.platform), stdio: 'ignore', env: { ...process.env, ORGIAST_HOME: home },
+        });
+        child.on('error', () => err('fleet-mail: 同期起動失敗=1')); child.unref();
+      } catch { err('fleet-mail: 同期起動失敗=1'); }
+    }
     return 0;
   }
   if (options['--ack']) {
-    const mails = options['--all-seen'] ? readInbox(home).filter(m => m.presentedAt || m.seenAt || m.status === 'seen') : [readJson(inboxFile(options['--ack']))];
+    const mails = options['--all-seen'] ? readInbox(home).filter(m => !hasDecisionRequest(m) && (m.presentedAt || m.seenAt || m.status === 'seen')) : [readJson(inboxFile(options['--ack']))];
     if (mails.some(m => !m)) throw new Error('inbox に該当メッセージがありません');
-    for (const mail of mails) await state(mail.id, 'ack');
-    out(`完了=${mails.length}`); return 0;
+    let done = 0;
+    for (const mail of mails) {
+      await state(mail.id, 'ack');
+      if (readJson(inboxFile(mail.id))?.status === 'done') done++;
+    }
+    out(`完了=${done}`); return 0;
   }
   if (options['--sweep']) {
     let done = 0, expired = 0;
     for (const mail of readInbox(home, { unreadOnly: false })) {
-      if (mail.status === 'done' || mail.status === 'failed' || hasDecisionRequest(mail)) continue;
+      if (mail.status === 'done' || mail.status === 'failed' || mail.serverSyncedAt || hasDecisionRequest(mail)) continue;
       if (Date.parse(mail.expiresAt) <= now()) { await state(mail.id, 'fail', { reason: 'expired' }); expired++; }
       else if ((mail.id.startsWith('mail-reply-') && Date.parse(mail.createdAt) < now() - 72 * 3600000)
         || /^\s*\[回答・返信不要\]/.test(mail.why) || /^\s*\[回答・返信不要\]/.test(mail.body)) { await state(mail.id, 'ack'); done++; }
@@ -799,22 +950,23 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
         return 3;
       }
     }
-    const parent = readJson(inboxFile(id));
+    let visited = false;
+    const parent = updateInbox(id, current => { visited = true; return current; }, { home });
+    if (!visited) { err('fleet-mail: ロック競合スキップ=1'); return 0; }
     const response = checked(await request('mail-reply', { id, from: label, resultBody: body, auto: false, hop: parent ? nextHop(parent) : 1, priority: 'normal' }));
     if (['failed', 'expired'].includes(response?.mail?.status)) {
-      if (parent) writeJson(inboxFile(id), { ...parent, status: response.mail.status });
+      if (parent) updateInbox(id, current => current && ({ ...current, status: response.mail.status }), { home });
       err(`fleet-mail: 返信なし（${response.mail.status}）`); return 1;
     }
     log('sent', { action: 'reply', id, ...(options['--force'] ? { forced: true } : {}) });
-    const file = inboxFile(id);
-    // Record the reply locally too: a resumed session reads the inbox and must not answer the same id again.
+    // Merge with the latest hook/poller changes under the file lock.
     try {
-      const mail = readJson(file, null);
-      if (mail) {
+      updateInbox(id, mail => {
+        if (!mail) return null;
         const nowISO = new Date(now()).toISOString();
-        writeJson(file, { ...mail, status: 'done', resultAt: response?.mail?.resultAt || nowISO, resultBody: redactSecrets(response?.reply?.body ?? response?.mail?.resultBody ?? body), readAt: mail.readAt ?? nowISO });
-      }
-    } catch (e) { err(`fleet-mail: inbox への返信記録に失敗（送信は成功）: ${e.message}`); }
+        return { ...mail, status: 'done', resultAt: response?.mail?.resultAt || nowISO, resultBody: redactSecrets(response?.reply?.body ?? response?.mail?.resultBody ?? body), readAt: mail.readAt ?? nowISO };
+      }, { home });
+    } catch { err('fleet-mail: 返信記録再試行待ち=1'); }
     out(`返信済み: ${id}`);
     out(`返信は相手の受信タスクが拾うまで届きません。届いたかは --sent-status ${id} で確認`);
     return 0;

@@ -83,7 +83,7 @@ test('presentation queues durable seen/ack, and sync CLI sends both in order', a
   assert.equal(saved.presentedSession, 't'); assert.equal(saved.presentedAt, new Date(NOW).toISOString()); assert.equal(saved.status, 'done'); assert.deepEqual(saved.pendingServer, ['seen', 'ack']);
   fs.writeFileSync(path.join(f.dir, 'fleet-sheet.env'), 'FLEET_SHEET_URL=https://example.invalid\nFLEET_SHEET_TOKEN=test\n');
   const calls = [];
-  await mailMain(['--sync-pending'], { home: f.home, stdout() {}, stderr() {}, request: async (kind, payload) => { calls.push({ kind, payload }); return { ok: true }; } });
+  await mailMain(['--sync-pending'], { home: f.home, stdout() {}, stderr() {}, request: async (kind, payload) => { calls.push({ kind, payload }); return payload.ids ? { ok: true, results: payload.ids.map(id => ({ id, ok: true })) } : { ok: true, mail: {} }; } });
   assert.deepEqual(calls.map(c => c.kind), ['mail-seen', 'mail-ack']); assert.match(calls[0].payload.seenBy, /:t$/);
   assert.deepEqual(readInbox(f.home, { unreadOnly: false })[0].pendingServer, []);
   await f.run('UserPromptSubmit', 'another'); assert.equal(f.outputs.length, 1);
@@ -123,4 +123,14 @@ test('ordinary prompt execution is not injected as an ordinary note', () => {
   const { shown, context } = selectContext([mail('prompt', { kind: 'prompt' }), mail('note')]);
   assert.deepEqual(shown.map(m => m.id), ['mail-note']);
   assert.doesNotMatch(context, /id=mail-prompt/); assert.match(context, /他 1 件/);
+});
+
+test('C11 hook skips seen and presented writes when the inbox file is locked', async t => {
+  const f = fixture(t, [mail('locked')]);
+  const stored = readInbox(f.home, { unreadOnly: false })[0];
+  const file = path.join(f.dir, 'fleet-inbox', `${stored.id}.json`), before = fs.readFileSync(file, 'utf8');
+  fs.writeFileSync(`${file}.lock`, 'other process');
+  await f.run(); assert.equal(fs.readFileSync(file, 'utf8'), before);
+  fs.unlinkSync(`${file}.lock`); await f.run('UserPromptSubmit', 'retry');
+  assert.equal(readInbox(f.home, { unreadOnly: false })[0].presentedSession, 'retry');
 });

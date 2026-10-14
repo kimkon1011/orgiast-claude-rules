@@ -35,7 +35,7 @@ test('初回送信の前置き・区間・既定宛先・mail idを保持し一�
   assert.ok(call.body.startsWith('# ☕ カフェ改善ダイジェスト（kim-PC → cafe015-PC 自動配達）\n'));
   assert.match(call.body, /他店オーナーの伝聞で未検証/);
   assert.match(call.body, /next-session.md の残TODO/);
-  assert.match(call.body, /Discord DM/);
+  assert.match(call.body, /`node tools\/notify-kim\.mjs` で DM を送る/);
   assert.ok(call.body.endsWith(section + '\n'));
   assert.doesNotMatch(call.body, /外側|末尾/);
   const state = JSON.parse(fs.readFileSync(f.stateFile, 'utf8'));

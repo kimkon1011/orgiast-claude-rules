@@ -8,7 +8,7 @@ import { isEntry } from './is-entry.mjs';
 
 const INTRO = `# ☕ カフェ改善ダイジェスト（kim-PC → cafe015-PC 自動配達）
 出典: LINE オープンチャット「レンスペ民の集い」。他店オーナーの伝聞で未検証。
-使い方: 下の「未処理の提案」を 212coffee の業務・アプリ・掲示物の改善候補として扱い、採用するものは next-session.md の残TODOに起票し、kim に確認が要るものは Discord DM で聞く。採用しないものは理由を1行残す。`;
+使い方: 下の「未処理の提案」を 212coffee の業務・アプリ・掲示物の改善候補として扱い、採用するものは next-session.md の残TODOに起票する。kim の判断が要るものは \`node tools/notify-kim.mjs\` で DM を送る。採用しないものは理由を1行残す。`;
 
 export async function runDeliver({ home = os.homedir(), args = [], spawn = spawnSync, log = console.log } = {}) {
   const finish = (status, exitCode = 0) => { log(status); return { status, exitCode }; };
@@ -41,7 +41,7 @@ export async function runDeliver({ home = os.homedir(), args = [], spawn = spawn
       fileURLToPath(new URL('./fleet-mail.mjs', import.meta.url)),
       '--send', '--to', to, '--kind', 'note', '--body-file', bodyFile,
       '--why', 'LINE レンスペ民の集いのカフェ改善ダイジェスト（自動）',
-    ], { shell: false, encoding: 'utf8' });
+    ], { shell: false, encoding: 'utf8', windowsHide: true });
     if (result.error || result.status !== 0) {
       throw new Error(result.error?.message || String(result.stderr || result.stdout || `終了コード ${result.status}`));
     }

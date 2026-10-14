@@ -1,0 +1,15 @@
+{
+  "ps1Total": 60,
+  "registerPs1Total": 31,
+  "hooksTotal": 1,
+  "pwshHooksTotal": 0,
+  "hardcodedPathFiles": 80,
+  "hardcodedPathLines": 193,
+  "windowsOnlyCalls": {
+    "taskkill": 10,
+    "schtasks": 27,
+    "reg query": 3,
+    "Get-ItemProperty": 5,
+    "Start-Process": 22
+  }
+}

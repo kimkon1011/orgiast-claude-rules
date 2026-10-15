@@ -40,3 +40,10 @@ node tools/purge-sessions.mjs --restore '<sessionId>'
 
 設計参考: [マキモノ「Claude Code のセッション一覧を『閉じたら自動で消える』ようにする」](https://makimono-md.vercel.app/md/claude-code-2)。
 常駐ウォッチャーの部分は今回の実装指示に従い単発 hook 起動へ置き換えた。
+
+## スマホ／claude.ai の「Code」一覧（サーバー側）
+
+`--hook` は `tools/purge-remote-sessions.mjs` も detached で起動する（6時間に1回）。
+未アーカイブ・切断済み・最終イベントから24時間以上のリモートセッションを
+`POST /v1/code/sessions/{id}/archive` でアーカイブする。会話は消えず一覧から隠れるだけ。
+記録は `~/.claude/archived-remote-sessions.jsonl`。確認は `node tools/purge-remote-sessions.mjs --dry-run`。

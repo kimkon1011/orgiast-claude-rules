@@ -22,7 +22,7 @@ export function deadLanes(health) {
   for (const [lane, state] of Object.entries(health?.lanes ?? {})) {
     if (lane === 'gemini-cli' || state?.alive !== false) continue;
     if (lane !== 'codex' && SKIP_REASONS.test(String(state.reason ?? ''))) continue;
-    out.push({ lane, reason: String(state.reason || 'unknown') });
+    out.push({ lane, reason: String(state.reason || 'unknown'), ...(state.error ? { error: String(state.error).slice(-300) } : {}) });
   }
   return out;
 }

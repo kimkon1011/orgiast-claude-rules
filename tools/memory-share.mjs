@@ -181,6 +181,7 @@ export function exportMemories(options = {}) {
   }
   return {
     exported: files.length, written, unchanged, removed, excluded: exclusions.length,
+    ...(options.includeContents ? { contents: Object.fromEntries([...selected].map(([name, item]) => [name, item.bytes.toString('utf8')])) } : {}),
     excludedSecrets: exclusions.filter((item) => item.category === 'secret').length,
     excludedCustomerInfo: exclusions.filter((item) => item.category === 'customer').length,
   };

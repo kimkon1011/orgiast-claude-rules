@@ -985,9 +985,9 @@ Codex／Gemini／DeepSeek／Groq／Kimi／Mistral／OpenRouter／GLM などの�
 - 他AIの障害は Claude で代替せず、別の他AIで吸収し、復旧したら戻す。Claude（監督）へ逆流させるのが最も高くつく。
 - 作業の割り振りは他AIレーン名を**先に・具体的に**書く（例: 要約=Gemini、下書き=Kimi、実装=Codex、Claude=verify のみ）。「必要なら他AIも使う」のような弱い表現は禁止。
 
-### 1.18.5 使えないAIレーンを放置しない／user に手間を渡す前の代替検証（最上位・全PC・全アカウント・全セッション）
+#### 1.18.5 AIレーン放置禁止と手渡し前の代替検証
 
-1. レーン（codex/gemini/deepseek/groq/openrouter/xai/genspark/kimi/glm…）が落ちていたら、**同じセッション内で修復を試みる**。既知の修復: WSL ディストリ不在 → Windows ネイティブ codex（danger-full-access）に自動切替／残高切れ → オートチャージ設定の確認と通知／OAuth 失効 → ログイン URL の提示。「既知」「自動で振り替わる」「別の AI で代用」と書いて済ませるのは **違反**。
+1. 落ちたレーンは**同じセッション内で修復**。対象: codex/gemini/deepseek/groq/openrouter/xai/genspark/kimi/glm。既知の修復: WSL ディストリ不在 → Windows ネイティブ codex（danger-full-access）に自動切替／残高切れ → オートチャージ設定の確認と通知／OAuth 失効 → ログイン URL の提示。「既知」「自動で振り替わる」「別の AI で代用」と書いて済ませるのは **違反**。
 2. lane-doctor の表示で、最後の probe が失敗したレーンを ✅ と出さない（stale ✅ 禁止）。
 3. 修復できなかった場合は、原因・試した手段・**残る user 操作 1 件**を kim に fleet-mail または Discord で送る（放置しない）。
 4. **手渡し前の代替検証**: user に支払い・ログイン・設定を頼む前に、同じ能力を持つ生存レーンで実行して結果を示す。生存レーンがあるのに頼んだら違反（substitute-capability-gate が block）。user がそのプロバイダを名指しで要求した場合だけ `[SUBSTITUTE-OK]` で例外。

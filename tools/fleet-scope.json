@@ -284,6 +284,12 @@
       "reason": "データで実行体なし（~/.claude 設定名の記載による誤検出を許容）"
     },
     {
+      "path": "tools/purge-remote-sessions.mjs",
+      "scope": "fleet",
+      "step": "settings:purge-sessions-SessionStart",
+      "reason": "purge-sessions.mjs --hook（SessionStart/Stop）が起動する。ユーザー設定は組織 UUID の読み取りのみ"
+    },
+    {
       "path": "tools/prompt-memory-guideline.mjs",
       "scope": "kim-only",
       "step": null,

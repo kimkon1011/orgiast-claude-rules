@@ -66,6 +66,17 @@
         "repo": "FEEDBACK_BBB271DAAB67_REPO",
         "appDir": "FEEDBACK_BBB271DAAB67_APP_DIR"
       }
+    },
+    {
+      "appName": "event-shop",
+      "kind": "next",
+      "intake": "relay",
+      "refs": {
+        "url": "FEEDBACK_RELAY_URL",
+        "secret": "FEEDBACK_RELAY_SECRET",
+        "repo": "FEEDBACK_0AA306D26292_REPO",
+        "appDir": "FEEDBACK_0AA306D26292_APP_DIR"
+      }
     }
   ]
 }

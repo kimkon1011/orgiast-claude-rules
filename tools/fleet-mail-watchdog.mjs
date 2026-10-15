@@ -9,6 +9,7 @@ import { createClient, capabilityClient } from './fleet-mail.mjs';
 import { redactSecrets } from './fleet-agent.mjs';
 import { notifyKim, resolveDiscordBotToken } from './notify-kim.mjs';
 import { CHANNEL, KIM_USER_ID, postToChannel } from './lib/fleet-mail-discord.mjs';
+import { runLaneHealthWatch } from './fleet-lane-health-report.mjs';
 export { CHANNEL, postToChannel };
 export function formatAlert(entry) {
   const clean = value => redactSecrets(String(value || '')).replace(/\s+/g, ' ');
@@ -19,6 +20,12 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   const out = deps.stdout ?? console.log, err = deps.stderr ?? console.error;
   const dryRun = argv.includes('--dry-run');
   for (const arg of argv) if (!['--dry-run', '--json'].includes(arg)) throw new Error('unknown option');
+  // 各PCの AI レーン健全性（[lane-health] note）の集計と新規 dead の DM。fleet-sheet 設定の有無とは独立（受信済み note を読むだけ）。
+  try {
+    const lane = await (deps.laneHealthWatch ?? runLaneHealthWatch)({ home, now: deps.now, dryRun, notify: (text, opts) => (deps.notifyKim ?? notifyKim)(text, { ...opts, token: deps.token ?? resolveDiscordBotToken(home), userId: KIM_USER_ID, fetchImpl: deps.fetch }), stderr: err });
+    if (lane.rows.length) out(`レーン健全性: dead=${lane.rows.length} / 新規DM=${lane.notified.length}
+${lane.table}`);
+  } catch { err('fleet-mail-watchdog: レーン健全性集計失敗=1'); }
   let config = {};
   try { config = parseEnvText(fs.readFileSync(path.join(home, '.claude', 'fleet-sheet.env'), 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw error; }

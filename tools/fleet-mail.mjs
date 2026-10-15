@@ -14,6 +14,7 @@ import { resolveClaudeExecutableFromDisk } from './claude-exe.mjs';
 import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
 import { relayQuestions, readQuestion, clearResume, reconcileResumes, collectQuestions, validSessionId, RESUME_LIMIT_MS } from './fleet-question-relay.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
+import { LANE_HEALTH_KIM_PC, parseLaneDoctorOutput, deadLanes, repairAdvice, laneHealthSignature, buildLaneHealthMail } from './lib/lane-health.mjs';
 export { resolveFleetLabel };
 
 const ownRepo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -189,6 +190,42 @@ export function autoRunFixNow({ dir, repo = ownRepo, platform = process.platform
   return { launched: hash };
 }
 function require_hash(file) { return createHash('sha256').update(fs.readFileSync(file)).digest('hex').slice(0, 16); }
+// 1日1回、そのPCの AI レーンを実測し、dead があれば kim-PC へ note で報告する（2026-10-15 事故: codex 不在PCが無言で退避し続けた）。
+// 既知の原因は fleet-fix-now.ps1 -NoLogin を同PCで起動して自動修復を試みる。全部生きていれば送らない。
+// 復旧したら一度だけ recovered を送り、集計表から消す。同内容は24時間に1回まで。
+export async function dailyLaneHealth({ dir, label, request, now = Date.now, platform = process.platform, spawnSyncImpl = spawnSync, launch = launchDetachedWin, repo = ownRepo }) {
+  if (process.env.FLEET_NO_SELF_HEAL === '1') return { skipped: 'disabled' };
+  const marker = path.join(dir, '.fleet-lane-health-day');
+  const day = new Date(now()).toISOString().slice(0, 10);
+  let last = ''; try { last = fs.readFileSync(marker, 'utf8').trim(); } catch {}
+  if (last === day) return { skipped: 'today' };
+  fs.writeFileSync(marker, day);
+  const doctor = path.join(repo, 'tools', 'lane-doctor.mjs');
+  if (!fs.existsSync(doctor)) return { skipped: 'no-script' };
+  const r = spawnSyncImpl(process.execPath, [doctor, '--probe', '--json'], { encoding: 'utf8', windowsHide: true, timeout: 120_000, stdio: ['ignore', 'pipe', 'pipe'] });
+  const health = parseLaneDoctorOutput(r?.stdout);
+  if (!health) return { skipped: 'probe-failed' };
+  const dead = deadLanes(health);
+  const stateFile = path.join(dir, '.fleet-lane-health-sent.json');
+  const state = readJson(stateFile, {}) || {};
+  const sig = dead.length ? laneHealthSignature(label, dead) : 'ok';
+  if (!dead.length && !state.sig?.startsWith?.('dead:')) return { healthy: true };
+  const stamp = dead.length ? `dead:${sig}` : 'ok';
+  if (state.sig === stamp && now() - Date.parse(state.at) < 24 * 3600_000) return { skipped: 'dedupe' };
+  let autoFix = 'none';
+  const fixScript = path.join(repo, 'tools', 'fleet-fix-now.ps1');
+  if (dead.some(d => repairAdvice(d.lane, d.reason).fixNow) && platform === 'win32' && fs.existsSync(fixScript)) {
+    try { launch('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', fixScript, '-NoLogin']); autoFix = 'launched'; }
+    catch { autoFix = 'failed'; }
+  }
+  const at = new Date(now()).toISOString();
+  if (label !== LANE_HEALTH_KIM_PC) { // kim-PC 自身は lane-health.json を集計側が直接読む
+    const { why, body } = buildLaneHealthMail({ pc: label, dead, autoFix, recovered: !dead.length, at });
+    checked(await request('mail-send', { id: mailId(now), from: label, to: LANE_HEALTH_KIM_PC, messageKind: 'note', auto: true, hop: 1, priority: 'normal', why, body, expiresAt: new Date(now() + 72 * 3600_000).toISOString() }));
+  }
+  writeJson(stateFile, { sig: stamp, at });
+  return { reported: dead.length ? dead : 'recovered', autoFix };
+}
 export const LOCK_MS = 10 * 60 * 1000;
 export function validId(id) {
   if (!/^mail-[A-Za-z0-9-]{1,180}$/.test(String(id ?? ''))) throw new Error('invalid mail id');
@@ -939,6 +976,7 @@ export async function pollOnce(deps = {}) {
     }
     try { (deps.dailySelfHeal ?? dailySelfHeal)({ dir, now }); } catch (error) { err(`fleet-mail: 自己修復失敗: ${redactSecrets(error.message)}`); }
     try { (deps.autoRunFixNow ?? autoRunFixNow)({ dir }); } catch (error) { err(`fleet-mail: 自動修復失敗: ${redactSecrets(error.message)}`); }
+    try { await (deps.dailyLaneHealth ?? dailyLaneHealth)({ dir, label, request, now }); } catch (error) { err(`fleet-mail: レーン健全性報告失敗: ${redactSecrets(error.message)}`); }
     // Transport latency must never prevent durable receipt or per-mail processing.
     await notifyPendingArrivals({ ...deps, home, label, now, stderr: err });
     out(deps.json ? JSON.stringify({ received, processed: handled }) : `受信=${received.length} / 処理=${handled.length} / 隔離=${rejected}`);

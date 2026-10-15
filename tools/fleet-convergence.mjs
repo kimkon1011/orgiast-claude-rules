@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { parseEnvText } from './env-kv.mjs';
+import { getClaudeAccountEmail } from './machine-identity.mjs';
 
 export const DAY = 86400000;
 export function readJson(file, fallback = {}) {
@@ -42,8 +43,7 @@ export function collectConvergence({ home, repo, hostname = os.hostname(), usern
   const row = { convergenceId: identityId(hostname, username), hostname, username, platform,
     claudeAccount: '', syncRepo: path.resolve(repo), syncHead: '', mainHead: '', behindMain: null,
     missingSince: '', hookMissing: null, keyMissing: null, convergenceReportedAt: now.toISOString() };
-  const account = readJson(path.join(home, '.claude.json')).oauthAccount?.emailAddress;
-  if (typeof account === 'string' && /^[^\s@]+@[^\s@]+$/.test(account)) row.claudeAccount = account;
+  row.claudeAccount = getClaudeAccountEmail(home) || row.claudeAccount;
   try {
     row.syncHead = git(['rev-parse', 'HEAD']); row.mainHead = git(['rev-parse', 'origin/main']);
     const count = git(['rev-list', '--count', 'HEAD..origin/main']);

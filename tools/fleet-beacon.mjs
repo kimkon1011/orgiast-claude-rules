@@ -7,11 +7,31 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { parseEnvText } from './env-kv.mjs';
-import { machineIdentity } from './machine-identity.mjs';
+import { machineIdentity, reportExtras } from './machine-identity.mjs';
 import { redactSecrets } from './fleet-agent.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 
 const ownRepo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+export const INSTALL_BEACON_URL = 'https://script.google.com/macros/s/AKfycbwyZXLJsVngZQy17i8ZqsQUCRx66AIs9p3wQbW55vMq6GObJes5R5WyJrSBhyknN3ibPg/exec';
+
+export function buildInstallBeacon({ home = process.env.ORGIAST_HOME || os.homedir(), installer } = {}) {
+  const extras = reportExtras(home);
+  return { kind: 'install-beacon', hostname: extras.hostname, os: extras.os,
+    claudeAccount: extras.claudeAccount, ...(extras.serial ? { serial: extras.serial } : {}), installer };
+}
+
+export async function sendInstallBeacon(beacon, { fetchImpl = fetch, timeoutMs = 15000, url } = {}) {
+  try {
+    const response = await fetchImpl(url || process.env.FLEET_INSTALL_BEACON_URL || INSTALL_BEACON_URL, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, redirect: 'follow',
+      body: JSON.stringify(beacon), signal: AbortSignal.timeout(Math.max(1, Math.ceil(timeoutMs)))
+    });
+    if (!response.ok) return { ok: false, reason: `HTTP ${response.status}` };
+    const result = await response.json();
+    if (result?.ok !== true || !['created', 'updated'].includes(result.action)) return { ok: false, reason: String(result?.error || 'invalid response') };
+    return { ok: true, action: result.action };
+  } catch (error) { return { ok: false, reason: sanitizeReason(error?.message || error) }; }
+}
 const STATUS_MAP = { OK: 'ok', NOTICE: 'skip', NG: 'fail' };
 const REASON_LIMIT = 120;
 const ABSOLUTE_PATH = /(?:[A-Za-z]:\\[^\s"']+|\/(?:Users|home|mnt)\/[^\s"']+)/g;
@@ -131,6 +151,18 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   const home = deps.home ?? process.env.ORGIAST_HOME ?? os.homedir();
   const out = deps.stdout ?? console.log;
   const err = deps.stderr ?? console.error;
+  if (argv.includes('--install-beacon')) {
+    let result;
+    try {
+      const index = argv.indexOf('--installer');
+      const installer = index >= 0 ? argv[index + 1] : '';
+      result = /^(sh|ps1)-[A-Za-z0-9._-]{1,32}$/.test(installer || '')
+        ? await sendInstallBeacon(buildInstallBeacon({ home, installer }), { fetchImpl: deps.fetch })
+        : { ok: false, reason: 'invalid_installer' };
+    } catch (error) { result = { ok: false, reason: sanitizeReason(error?.message || error) }; }
+    out(JSON.stringify(result));
+    return result.ok ? 0 : 1;
+  }
   const mode = argv.includes('--send') ? 'send' : argv.includes('--print') ? 'print' : null;
   if (!mode) { err('fleet-beacon: --send または --print を指定してください'); return 1; }
   const pcMap = deps.pcMap ?? readJson(path.join(ownRepo, 'fleet-pc-map.json'), {});

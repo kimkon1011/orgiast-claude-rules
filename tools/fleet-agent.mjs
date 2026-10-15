@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { machineIdentity } from './machine-identity.mjs';
+import { machineIdentity, getClaudeAccountEmail } from './machine-identity.mjs';
 import { parseHandoff } from './auto-session.mjs';
 import { isEntry } from './is-entry.mjs';
 import { resolveClaudeExecutableFromDisk } from './claude-exe.mjs';
@@ -140,7 +140,7 @@ function fitStatusLines({ header, hostLine, codexLine, repoLine, memoryLine, job
 }
 
 export function collectStatus({ home, repo, label, hostname, run = runSync, platform = process.platform }) {
-  const account = readJson(path.join(home, '.claude.json'))?.oauthAccount?.emailAddress || '未設定';
+  const account = getClaudeAccountEmail(home) || '未設定';
   const codex = codexAuthStatus(home);
   const git = repoInfo(repo, run);
   let syncLast = 'なし';

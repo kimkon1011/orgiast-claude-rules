@@ -23,7 +23,7 @@ import os from 'node:os';
 import { spawn, spawnSync } from 'node:child_process';
 import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
 import { fileURLToPath } from 'node:url';
-import { machineIdentity } from './machine-identity.mjs';
+import { machineIdentity, reportExtras } from './machine-identity.mjs';
 import { resolveReporterLabel } from './reporter-label.mjs';
 import { missingRequiredHooks } from './hook-selfcheck.mjs';
 import { isEntry } from './is-entry.mjs';
@@ -335,6 +335,10 @@ async function runCostReporter() {
   let msg = `**💻 Claude Code ローカル利用トークン** — ${label}\n`;
   // 識別行はヘッダ直後に置く。本文は 1950 文字で切って送るため、末尾だとモデル一覧が長いPCで欠落する。
   msg += `🖥 hostname=${identity.hostname} / user=${identity.username} / git=${identity.gitEmail}\n`;
+  {
+    const extras = reportExtras(process.env.ORGIAST_HOME || os.homedir());
+    msg += `🔑 Claude=${extras.claudeAccount || '未取得'} / host=${extras.hostname} / os=${extras.os}${extras.serial ? ` / serial=${extras.serial}` : ''}\n`;
+  }
   if (labelResolution.reason === 'copied-from-other-host') msg += `⚠️ 設定ファイルが他PCからコピーされていたため、このPCの名前(${hostname})に自動修正しました\n`;
   msg += `対象: ${monthStart} 〜 現在\n`;
   msg += `MTD 出力トークン: **${(totalOut / 1e6).toFixed(1)}M** / 入力(cache込) **${(totalIn / 1e6).toFixed(1)}M**\n`;

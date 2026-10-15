@@ -71,6 +71,14 @@
       "remoteName": "作業用018",
       "account": "cr@orgiast.jp",
       "_evidence": "kim 明示回答『018 は cr@orgiast.jp』(2026-10-08)＝アカウントは確定。hostname・Claude Code 導入状況・報告実績は未確認"
+    },
+    "増田MacBookAir": {
+      "account": "cr@orgiast.jp",
+      "person": "増田裕子",
+      "model": "MacBook Air 13\"",
+      "os": "macOS 14.8.9",
+      "serial": "C02YK73PJK77",
+      "_evidence": "kim 申告 2026-10-13: このMacは cr@orgiast.jp の Claude Code を使用、使用者は増田裕子さん。機種・OS・シリアルは kim のスクリーンショット（デバイス情報画面、Macを探す=オフ）。hostname・REPORTER_LABEL は未報告のため宛先解決には使わない。フリートシートの『MacBook-Air』『macBook』行のどちらかの可能性があるが未照合"
     }
   },
   "w018-PC": {

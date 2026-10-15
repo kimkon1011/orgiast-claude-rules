@@ -8,7 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseEnvText } from './env-kv.mjs';
 import { scanBrowserExtensions } from './browser-extension-audit.mjs';
-import { machineIdentity } from './machine-identity.mjs';
+import { machineIdentity, reportExtras } from './machine-identity.mjs';
 import { resolveReporterLabel } from './reporter-label.mjs';
 import { buildSpecPayload, collectHardwareSpec } from './hardware-spec.mjs';
 import { collectProjectInventory, formatArtifactsCell, formatLastCommitCell, formatProjectsCell } from './project-inventory.mjs';
@@ -148,6 +148,8 @@ async function main() {
     gitEmail: identity.gitEmail,
     reportedAt: toJst(),
     ...collectConvergence({ home, repo: process.env.ORGIAST_REPO || repo, hostname: identity.hostname, username: identity.username }),
+    // 追加識別(Claude ログインアカウント・OS・Macシリアル)。受け側GASが未知フィールドを無視しても壊れない加算のみ。
+    ...reportExtras(home),
     claudeUsd: claudeUsd === null ? '' : Math.round(claudeUsd * 100) / 100,
     mainModel: topModel,
     // 既存行が "0%" 表記なので、人が読む列で表記が混ざらないようパーセント文字列にする。

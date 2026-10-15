@@ -79,6 +79,7 @@ function doPost(e) {
   } catch (error) {
     return _fleetJson_({ ok: false, status: 400, error: 'invalid_json' });
   }
+  if (payload && payload.kind === 'install-beacon') return _fleetJson_(receiveInstallBeacon(e, payload));
   const expected = PropertiesService.getScriptProperties().getProperty('FLEET_TOKEN');
   if (!expected || payload.token !== expected) return _fleetJson_({ ok: false, status: 401, error: 'unauthorized' });
   const labelRequiredKinds = { extensions: true, 'cloud-login': true, 'cost-improve-heartbeat': true };
@@ -99,6 +100,7 @@ function doPost(e) {
     'mail-fail': failFleetMail,
     'fleet-beacon': upsertFleetBeacon,
     'fleet-beacon-list': listFleetBeacons,
+    'install-beacon-list': listInstallBeacons,
     'pc-spec': upsertPcInventory,
     'extensions-describe': describeExtensionAudit,
     extensions: replaceExtensionAudit,

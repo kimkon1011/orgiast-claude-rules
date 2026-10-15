@@ -669,6 +669,16 @@ try {
 $bomFix = @((Join-Path $HOMEDIR '.claude\settings.json'), (Join-Path $HOMEDIR '.claude.json'), (Join-Path $HOMEDIR '.gemini\.env'), $envPath, $manusEnv, $dsEnv, $xaiEnv, $orEnv, $grqEnv, $cbEnv, $zaiEnv, $msEnv, $kimiEnv, (Join-Path $HOMEDIR '.claude\ollama.env'))
 foreach ($bf in $bomFix) { try { if ($bf -and (Test-Path $bf)) { $bc = [System.IO.File]::ReadAllText($bf); if ($bc.Length -gt 0 -and $bc[0] -eq [char]0xFEFF) { [System.IO.File]::WriteAllText($bf, $bc.TrimStart([char]0xFEFF), (New-Object System.Text.UTF8Encoding($false))) } } } catch {} }
 
+# 再起動やログイン待ちに入る前に、認証不要の初報告を一度だけ送る。
+try {
+  if (Have node) {
+    $env:ORGIAST_HOME = $HOMEDIR
+    node (Join-Path $REPO 'tools\fleet-beacon.mjs') --install-beacon --installer ps1-1 *> $null
+    if ($LASTEXITCODE -eq 0) { OK 'インストール結果を送信しました' }
+    else { Warn 'ビーコン送信に失敗しました(インストールは完了しています)' }
+  } else { Warn 'node が見つからないためビーコン送信をスキップしました' }
+} catch { Warn 'ビーコン送信に失敗しました(インストールは完了しています)' }
+
 # --- Codex ログイン(Codex導入済みの時だけ・未導入なら待たずにスキップ) ---
 Say "`n============================================================" 'Green'
 $codexCmd = (Get-Command codex -ErrorAction SilentlyContinue)

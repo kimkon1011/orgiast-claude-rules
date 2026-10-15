@@ -105,6 +105,7 @@ test('emptyOutputReason は spawn 自体の失敗を spawn_failed に分類す�
 });
 
 test('emptyOutputReason は Codex の認証失敗と ChatGPT モデル認証不整合を分類する', () => {
+  assert.equal(emptyOutputReason({ status: 'error', exitCode: 1, launched: true, timedOut: false, secs: 38.4, stderrTail: 'ting... 2/5 ERROR: Reconnecting... 3/5 ERROR: Reconnecting... 4/5 ERROR: Reconnecting... 5/5 ERROR: workspace routing discovery unauthorized (401) ERROR: workspace routing discovery unauthorized (401)' }), 'auth_failed');
   assert.equal(emptyOutputReason({ status: 1, stderrTail: 'cted status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses' }), 'auth_failed');
   assert.equal(emptyOutputReason({ status: 1, stderrTail: '..."message":"The \'gpt-5.6-sol\' model is not supported when using Codex with a ChatGPT account."}}' }), 'model_auth_mismatch');
   assert.equal(emptyOutputReason({ status: 1 }), 'exit_1');
@@ -171,6 +172,30 @@ test('認証失敗とモデル認証不整合は codex_empty_output でなく名
   assert.equal(findings.find((item) => item.id === 'codex_model_auth_mismatch').severity, 'medium');
   assert.equal(findings.find((item) => item.id === 'codex_auth_failed').severity, 'high');
   assert.ok(!findings.some((item) => item.id === 'codex_empty_output'));
+});
+
+// 2026-10-12〜10-14 実測: token_revoked の 401 は "workspace routing discovery unauthorized (401)"
+// の語順で出る。旧パターンに一致せず no_output に埋もれ、codex_empty_output が毎晩起票された。
+const TOKEN_REVOKED_STDERR = 'ting... 2/5 ERROR: Reconnecting... 3/5 ERROR: Reconnecting... 4/5 ERROR: Reconnecting... 5/5 ERROR: workspace routing discovery unauthorized (401) ERROR: workspace routing discovery unauthorized (401)';
+
+test('token_revoked 401 の出力ゼロは auth_failed に分類し codex_empty_output に出さない', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', [0, 1, 2].map((i) => row({
+    t: `2026-09-09T10:0${i}:00Z`, provider: 'codex', out: 0, status: 'error', exitCode: 1, launched: true, timedOut: false, secs: 38 + i,
+    stderrTail: TOKEN_REVOKED_STDERR,
+  })).join(''));
+  const ids = collectFindings({ home: dir, now: NOW, codexUsedPercent: null }).map((item) => item.id);
+  assert.ok(ids.includes('codex_auth_failed'), JSON.stringify(ids));
+  assert.ok(!ids.includes('codex_empty_output'), JSON.stringify(ids));
+});
+
+test('token_revoked 401 の失敗後に成功1件があれば何も起票しない', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', [
+    { t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, status: 'error', exitCode: 1, launched: true, timedOut: false, secs: 38.4, stderrTail: TOKEN_REVOKED_STDERR },
+    { t: '2026-09-09T10:01:00Z', provider: 'codex', status: '0', out: 10 },
+  ].map(row).join(''));
+  assert.deepEqual(collectFindings({ home: dir, now: NOW, codexUsedPercent: null }).map((item) => item.id), ['healthy']);
 });
 
 test('codex_auth_failed は high で next-session.md へ起票する', () => {

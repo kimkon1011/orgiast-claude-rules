@@ -62,3 +62,10 @@ test('ラベル形式が日付でない既存マーカーでも置換され、�
   assert.ok(output.startsWith('個人ルール'), 'マーカー外の個人ルールが失われた');
   assert.ok(output.includes('末尾'), 'マーカー外の末尾が失われた');
 });
+
+test('管理ブロックが固定共有memoryを @ 参照する', async () => {
+  const { build } = await import('./onboarding-sync.mjs');
+  const { updated } = build(null, '# index', '2026-10-15');
+  assert.match(updated, /BEGIN: オージャスト共通ルール[\s\S]*@~\/\.claude\/shared-memory\/MEMORY\.md[\s\S]*END: オージャスト共通ルール/);
+  assert.match(updated, /index\/\*\.md/);
+});

@@ -433,7 +433,7 @@ async function syncRepository(now) {
     if (skills.length) log(`skills updated: ${skills.join(', ')}`);
     try {
       const memory = await installSharedMemories({ home, emit: (line) => log(line) });
-      log(`memory-share install: installed=${memory.installed} skipped=${memory.skipped} unchanged=${memory.unchanged} indexed=${memory.indexed}`);
+      log(`memory-share install: generatedAt=${memory.generatedAt} installed=${memory.installed} updated=${memory.updated} removed=${memory.removed} unchanged=${memory.unchanged} (dir=${memory.dir})`);
     } catch (e) { log(`memory-share install failed(continue): ${e.message}`); }
     // 新しく配布された hook を全PCへ自動登録する(add-only・差分が無ければ何も書かない)。
     try {
@@ -651,7 +651,7 @@ export function makeIndex(body) {
   return kept.join('\n');
 }
 export function build(current, body, label) {
-  const block = `${beginPrefix} (自動同期 ${label}) -->\n${body}\n${endMarker}`;
+  const block = `${beginPrefix} (自動同期 ${label}) -->\n${body}\n- 全社共有の知見（kim-PC の memory を毎日自動配布・読み取り専用）: @~/.claude/shared-memory/MEMORY.md ／ 詳細は同ディレクトリの index/*.md と各ファイルを Read で辿る\n${endMarker}`;
   if (current === null) return { updated: block, action: '新規作成' };
   // 行全体が開始マーカー形式そのものである場合だけ対象にする(部分一致は自己言及文書に誤爆する)。
   // ラベル部分の形式は縛らない: 日付形式を固定すると、別形式で導入されたPCで置換に失敗し

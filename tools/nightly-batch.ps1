@@ -257,6 +257,25 @@ try {
         } finally { $ErrorActionPreference = $oldPreference }
     }
 
+    $memoryPublish = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\memory-publish.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $memoryPublish = $candidate; break }
+    }
+    if ($memoryPublish) {
+        $oldPreference = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $publishOutput = @(& $node.Source $memoryPublish --deploy --verify 2>&1)
+            if ($LASTEXITCODE -eq 0) {
+                $summary = [regex]::Match(($publishOutput -join "`n"), 'memory-publish: files=(\d+) deploy=(yes|skip)')
+                if ($summary.Success) { Write-NightlyLog 'memory-publish' ('ok:files=' + $summary.Groups[1].Value + ' deploy=' + $summary.Groups[2].Value) }
+                else { Write-NightlyLog 'memory-publish' 'error:結果サマリーなし' }
+            } else { Write-NightlyLog 'memory-publish' ('error:' + (Format-NightlyDetail $publishOutput)) }
+        } catch { Write-NightlyLog 'memory-publish' ('error:' + $_.Exception.Message) }
+        finally { $ErrorActionPreference = $oldPreference }
+    } else { Write-NightlyLog 'memory-publish' 'error:ファイルなし' }
+
     # LINEトーク履歴エクスポート(inbox の .txt)を先に取り込む。claude-mobile が無いPCでは静かにスキップする。
     $lineImport = Join-Path $HOME 'Downloads\claude-mobile\scripts\import-line-export.mjs'
     if (Test-Path -LiteralPath $lineImport -PathType Leaf) {

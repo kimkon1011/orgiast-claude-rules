@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { needsWorktreeRepair, detectQuotaLimit, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, isBackendExhausted, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS } = await import('./codex-do.mjs');
+const { needsWorktreeRepair, detectQuotaLimit, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, isBackendExhausted, wslCodexLaunchPlan, nativeCodexWriteCapable, nativeCodexInvocation, WSL_PROBE_TIMEOUT_MS } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -32,6 +32,10 @@ function run(args, options = {}) {
       // (2026-09-21 実測: 開発機で ChatGPT 認証が実在し auto テストが軒並み落ちた)。
       // ChatGPT 認証時の挙動そのものを見るテストだけ options.env で明示的に上書きする。
       CODEX_DO_AUTH_MODE: 'apikey',
+      // native codex の自動許可は実機の ~/.codex/config.toml を読む。開発機に
+      // [windows] sandbox = "unelevated" があると WSL 不在のテストが native 経路へ流れ、
+      // 「起動失敗を台帳に残す」系の回帰がマシン依存で消える(2026-10-14 実測)。
+      CODEX_DO_NATIVE_WRITE: '0',
       ...options.env
     },
   });
@@ -915,6 +919,26 @@ test('WSL codex のプローブはコールドスタートを待てる', () => {
   assert.ok(WSL_PROBE_TIMEOUT_MS >= 60000);
 });
 
+test('nativeCodexWriteCapable: [windows] sandbox = "unelevated" がある機械だけ native を自動許可する', () => {
+  // 2026-10-14 作業用011: WSL ディストリ 0 件（BIOS の VT-x 無効で WSL2 自体が入らない）でも、
+  // config.toml にこの設定があれば native codex は実際に書き込める。設定の無い機械で
+  // 自動許可すると read-only のまま「書けたつもり」の空 diff を成功扱いにするため false を返す。
+  const withConfig = (body, platform = 'win32') => nativeCodexWriteCapable({ platform, readFileImpl: () => body });
+  assert.equal(withConfig('[windows]\nsandbox = "unelevated"\n'), true);
+  assert.equal(withConfig('model = "x"\n\n[windows]\nsandbox = "unelevated"\n\n[other]\na = 1\n'), true);
+  // 別セクションの同名キーを [windows] と読み違えない
+  assert.equal(withConfig('[projects."x"]\nsandbox = "unelevated"\n'), false);
+  assert.equal(withConfig('[other]\nsandbox = "unelevated"\n'), false);
+  // [windows] はあるが値が違う／未設定なら自動許可しない
+  assert.equal(withConfig('[windows]\nsandbox = "read-only"\n'), false);
+  assert.equal(withConfig('[windows]\n'), false);
+  assert.equal(withConfig(''), false);
+  // win32 以外に native 経路は無い
+  assert.equal(withConfig('[windows]\nsandbox = "unelevated"\n', 'linux'), false);
+  // config が無い／読めない機械は従来どおり abort 側に倒す
+  assert.equal(nativeCodexWriteCapable({ platform: 'win32', readFileImpl: () => { throw new Error('ENOENT'); } }), false);
+});
+
 // WSL 経路の中断は win32 でしか通らないため、他OSでは明示的に skip する
 // （CI は Linux。ここを skip しても Windows 実機での回帰は検出できる）。
 test('WSL が使えず中断するときも台帳に launched:false の1行を残す', { skip: process.platform !== 'win32' }, (t) => {
@@ -960,6 +984,45 @@ test('WSL ディストリが無くても代替バックエンドがあるなら�
   assert.match(codexRow.stderrTail, /WSL ディストリが見つかりませんでした/);
   // WSL 不在は一過性でないので再試行しない（再試行の記録 attempts が 1 のまま）
   assert.equal(codexRow.attempts, 1);
+});
+
+// 2026-10-14 作業用011: WSL ディストリ 0 件（BIOS の VT-x 無効で WSL2 自体が入らない）でも、
+// native codex が書き込める設定の機械では codex レーンを生かす。WSL 不在で毎回あきらめて
+// launched:false の行を残すと delegation-health の codex_lane_unavailable が起票され続ける。
+test('nativeCodexInvocation: Windows は .cmd を避け、node + JS エントリで起動する', () => {
+  // 2026-10-14 実測: spawn('codex') は PATHEXT 未解決で ENOENT、.cmd を渡すと Node 24 が EINVAL。
+  assert.deepEqual(nativeCodexInvocation({ platform: 'linux' }), { command: 'codex', prefixArgs: [] });
+  const appData = 'C:\\Users\\x\\AppData\\Roaming';
+  const entry = path.join(appData, 'npm', 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
+  assert.deepEqual(
+    nativeCodexInvocation({ platform: 'win32', env: { APPDATA: appData }, execPath: 'node.exe', existsImpl: () => true }),
+    { command: 'node.exe', prefixArgs: [entry] },
+  );
+  // 実体が無い／APPDATA が無い機械は従来どおり 'codex' に倒す
+  assert.deepEqual(nativeCodexInvocation({ platform: 'win32', env: { APPDATA: appData }, existsImpl: () => false }), { command: 'codex', prefixArgs: [] });
+  assert.deepEqual(nativeCodexInvocation({ platform: 'win32', env: {}, existsImpl: () => true }), { command: 'codex', prefixArgs: [] });
+});
+
+test('WSL が無くても native codex に書き込める設定なら codex で実行する', { skip: process.platform !== 'win32' }, (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-nativeauto-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const result = run(['--cwd', home, '--model', 'sol', '説明して'], {
+    home,
+    env: {
+      CODEX_DO_WSL_PROBE: 'absent',
+      CODEX_DO_NATIVE_WRITE: '1',
+      CODEX_DO_MOCK_RESULTS: JSON.stringify([{ status: 0, output: 'done', stderr: '' }]),
+      DEEPSEEK_API_KEY: 'sk-test',
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /executor=codex/);
+  assert.doesNotMatch(result.stdout, /executor=fallback/);
+  const rows = fs.readFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  const codexRow = rows.find((item) => item.provider === 'codex');
+  assert.ok(codexRow, 'codex で実行した行が台帳に残ること');
+  // WSL 不在を「起動失敗」として記録しない（= codex_lane_unavailable を起票させない）
+  assert.equal(codexRow.launched, true);
 });
 
 test('起動に成功した行は launched:true で記録される', (t) => {

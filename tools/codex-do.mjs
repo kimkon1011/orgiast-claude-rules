@@ -470,12 +470,65 @@ export function wslCodexLaunchPlan({ distroFound, codexPresent, versionOk, insta
   return allowNative ? 'native' : 'abort';
 }
 
+// Windows ネイティブ codex は -s workspace-write を渡しても read-only に固定され、編集が保存されない
+// 既知の不具合がある(openai/codex#35428)。~/.codex/config.toml の [windows] セクションに
+// sandbox = "unelevated" を書くと回避でき、実際に書き込めるようになる
+// (2026-10-14 作業用011 実測: codex-cli 0.162.0 で probe.txt を作成できることを確認)。
+//
+// WSL ディストリが無い PC（BIOS の VT-x が無効で WSL2 自体が入らない機械を含む）では、
+// この設定がある限りネイティブで codex レーンを生かせる。逆に設定が無い機械では native は
+// read-only のままなので、--allow-native を人の記憶に頼らず自動で有効化してはいけない
+// （「書けたつもり」で空 diff を成功扱いにする事故になる）。判定は config の設定だけを見る。
+export function nativeCodexWriteCapable({ platform = process.platform, configPath, readFileImpl = fs.readFileSync, homeDir } = {}) {
+  if (platform !== 'win32') return false;
+  let toml;
+  try {
+    toml = readFileImpl(configPath ?? path.join(homeDir || os.homedir(), '.codex', 'config.toml'), 'utf8');
+  } catch { return false; }
+  let inWindowsSection = false;
+  for (const line of String(toml).split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('[')) { inWindowsSection = trimmed === '[windows]'; continue; }
+    if (inWindowsSection && /^sandbox\s*=\s*["']unelevated["']$/.test(trimmed)) return true;
+  }
+  return false;
+}
+
+// 自動許可の最終判定。実機の ~/.codex/config.toml を読むため、テストと CI は
+// CODEX_DO_NATIVE_WRITE=0 で固定する（CODEX_DO_WSL_PROBE / CODEX_DO_AUTH_MODE と同じ流儀で
+// マシン依存を断つ）。'1' は「設定を確認済みの機械で native を使う」の再現用。
+export function nativeWriteAutoAllowed({ env = process.env } = {}) {
+  if (env.CODEX_DO_NATIVE_WRITE === '1') return true;
+  if (env.CODEX_DO_NATIVE_WRITE === '0') return false;
+  return nativeCodexWriteCapable();
+}
+
+// Windows の codex は npm が置く .cmd シムで、shell を介さない spawn からは起動できない。
+// ENOENT（Node が PATHEXT を解決しない）に加え、Node 24 は .cmd/.bat を shell 無しで spawn すると
+// EINVAL で拒否する（CVE-2024-27980 の対策）。shell:true は指示やパスがシェル解釈されるため使わず、
+// シムが最終的に呼ぶ JS エントリを node で直接起動する
+// （2026-10-14 実測: 作業用011 で launched:true / out:0 / "spawn codex ENOENT" → .cmd で EINVAL。
+// native 経路のテストは CODEX_DO_MOCK_RESULTS で spawn 自体を差し替えていたため実機で露見していなかった）。
+export function nativeCodexInvocation({ platform = process.platform, env = process.env, execPath = process.execPath, existsImpl = fs.existsSync } = {}) {
+  if (platform !== 'win32') return { command: 'codex', prefixArgs: [] };
+  const base = env.APPDATA;
+  if (base) {
+    const entry = path.join(base, 'npm', 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
+    if (existsImpl(entry)) return { command: execPath, prefixArgs: [entry] };
+  }
+  return { command: 'codex', prefixArgs: [] };
+}
+
 if (isEntry(import.meta.url)) {
 
 const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
 const forceNative = args.includes('--force-native');
-const allowNative = args.includes('--allow-native');
+const allowNativeFlag = args.includes('--allow-native');
+// WSL が無い PC でも codex レーンを死なせない（2026-10-14: 作業用011 は WSL ディストリ 0 件のまま
+// delegation-health に codex_lane_unavailable を毎日起票していた）。native codex が書き込めると
+// 確認できた機械では自動で native へ落とし、それ以外は従来どおり abort させる。
+const allowNative = allowNativeFlag || nativeWriteAutoAllowed();
 const noFallback = args.includes('--no-fallback');
 // WSL 経路が使えず codex を起動できなかったか。true のときは再試行/昇格をせず、
 // 既存のフォールバック連鎖へそのまま渡す（2026-09-19）。
@@ -841,16 +894,20 @@ async function launchCodex(codexArgs) {
         launchUnavailable = true;
         return { status: 3, outputChars: 0, output: '', stderr: failureReason, timedOut: false, launched: false };
       }
-      console.error('⚠️ WSL 経路が使えないため、--allow-native の指定によりネイティブ Windows codex で実行します。\nWindows 版は read-only サンドボックス固定でファイルを書けない既知の不具合(openai/codex#35428)があり、編集が保存されない可能性が高い。');
+      console.error(allowNativeFlag
+        ? '⚠️ WSL 経路が使えないため、--allow-native の指定によりネイティブ Windows codex で実行します。\nWindows 版は read-only サンドボックス固定でファイルを書けない既知の不具合(openai/codex#35428)があり、編集が保存されない可能性が高い。'
+        : '⚠️ WSL 経路が使えないため、ネイティブ Windows codex で実行します（~/.codex/config.toml の [windows] sandbox = "unelevated" を確認済み。openai/codex#35428 の回避設定）。');
       const nativeArgs = [...codexArgs];
       if (!isInsideGitRepo(cwd)) nativeArgs.splice(-1, 0, '--skip-git-repo-check');
-      result = await execute('codex', nativeArgs, { cwd });
+      const nativeInvocation = nativeCodexInvocation();
+      result = await execute(nativeInvocation.command, [...nativeInvocation.prefixArgs, ...nativeArgs], { cwd });
     }
   } else {
     if (process.platform === 'win32') console.error('⚠️ --force-native によりネイティブ Windows codex で実行します。編集が保存されない可能性があります');
     const nativeArgs = [...codexArgs];
     if (!isInsideGitRepo(cwd)) nativeArgs.splice(-1, 0, '--skip-git-repo-check');
-    result = await execute('codex', nativeArgs, { cwd });
+    const nativeInvocation = nativeCodexInvocation();
+    result = await execute(nativeInvocation.command, [...nativeInvocation.prefixArgs, ...nativeArgs], { cwd });
   }
 
   return result;

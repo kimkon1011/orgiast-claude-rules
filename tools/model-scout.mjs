@@ -12,7 +12,9 @@ import { notifyKim } from './notify-kim.mjs';
 import { COST_PER_MILLION } from './llm-fallback.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-export const FRONTIER_VENDORS = ['anthropic', 'openai', 'google', 'meta', 'meta-llama', 'x-ai', 'deepseek', 'moonshotai', 'qwen', 'mistralai', 'z-ai'];
+export const FRONTIER_VENDORS = ['anthropic', 'openai', 'google', 'meta', 'meta-llama', 'x-ai', 'deepseek', 'moonshotai', 'qwen', 'mistralai', 'z-ai',
+  // 中国系の安価モデル。安価軸は「現行より安い」比較に依存し初回14日より古いモデルを拾えないため、ここで毎日見る。
+  'xiaomi', 'minimax', 'stepfun', 'bytedance-seed', 'tencent', 'inclusionai', 'meituan'];
 export function frontierLimit({ env = process.env } = {}) {
   const n = Number(env.MODEL_SCOUT_MAX_FRONTIER ?? 5);
   return Number.isInteger(n) && n >= 0 ? n : 5;

@@ -207,7 +207,7 @@ test('既知のoverlay候補はeval完了後に提案し、skip上書きとdry-r
 });
 
 test('フロンティアは価格に依存せず新規textモデルを新しい順に上限まで選ぶ', () => {
-  assert.deepEqual(FRONTIER_VENDORS, ['anthropic','openai','google','meta','meta-llama','x-ai','deepseek','moonshotai','qwen','mistralai','z-ai']);
+  assert.deepEqual(FRONTIER_VENDORS, ['anthropic','openai','google','meta','meta-llama','x-ai','deepseek','moonshotai','qwen','mistralai','z-ai','xiaomi','minimax','stepfun','bytedance-seed','tencent','inclusionai','meituan']);
   const wonder = { ...model('meta/muse-wonder', 1, 4e-6, 20e-6), reason: '新規モデル' };
   const excluded = ['meta/muse-wonder:batch', 'meta/muse-wonder:free', '~meta/muse-wonder', 'other/new']
     .map(id => ({ ...wonder, id }));

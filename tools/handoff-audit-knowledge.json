@@ -124,5 +124,6 @@
     "route": "node C:/Users/uers/orgiast-claude-rules/tools/gdoc-update.mjs --id <docId> --file <本文.md>（DWD SA で kim を代理、URL 不変・全置換・read-back 付き。--check で現状取得。表はヘッダが崩れるのでリストで書く）。新規 Doc 作成やコネクタ有効化の依頼に逃げない",
     "confidence": "high",
     "source": "2026-09-28 バドミントン指示書で「未接続」と誤って手渡し"
-  }
+  },
+  {"pattern":"実装タスクの完了報告（コミットだけ指示範囲外で保留）","route":"完了報告で「コミットだけ未実施」のまま handoff しない（原典 2026-10-12T23:51Z / session 98282861）。実装したら当ターン内に commit まで終える。やむを得ずタスク指示が commit を伏せる場合は、handoff に『誰が・いつ commit するか』を1行で残し、『次に kim がすること: なし』と書かない。再発監査は `node tools/handoff-audit-commit-deferral-scan.mjs --since <日付>`（読み取り専用・--selftest 陽性5/陰性5）で数える。既存の permanent-fix-deferral-scan P3 は『次に kim がすること: なし』変種と commit 語（FIX語に無い）を取り逃すため、この型は本ツールで補完する。詳細 tools/handoff-audit-findings-commit-deferral-recheck.md","confidence":"high","source":"2026-10-13 handoff-audit-nightly 学習（observation 787ed23b…）+ 2026-10-15 再検証（窓 2026-10-12〜10-15 で真の未実施 2 件・指示 deferral 12 件・FP 11 件。監査ツール追加）"}
 ]

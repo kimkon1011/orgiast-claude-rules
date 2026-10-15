@@ -3,7 +3,7 @@ function _installBeaconWrite_(sheet, row, values) {
   const range = sheet.getRange(row, 1, 1, INSTALL_BEACON_HEADERS_.length);
   range.setRichTextValues([strings.map(function(value) { return SpreadsheetApp.newRichTextValue().setText(value).build(); })]);
   SpreadsheetApp.flush();
-  if (JSON.stringify(range.getValues()[0]) !== JSON.stringify(strings)) throw new Error('install-beacon read-back mismatch');
+  if (JSON.stringify(range.getDisplayValues()[0]) !== JSON.stringify(strings)) throw new Error('install-beacon read-back mismatch');
 }
 
 function _installBeaconLocked_(action) {
@@ -15,8 +15,8 @@ function _installBeaconLocked_(action) {
     const book = SpreadsheetApp.openById(id);
     const sheet = book.getSheetByName('install-beacon') || book.insertSheet('install-beacon');
     if (!sheet.getLastRow()) _installBeaconWrite_(sheet, 1, INSTALL_BEACON_HEADERS_);
-    if (JSON.stringify(sheet.getRange(1, 1, 1, 8).getValues()[0]) !== JSON.stringify(INSTALL_BEACON_HEADERS_)) throw new Error('header mismatch');
-    const rows = sheet.getLastRow() > 1 ? sheet.getRange(2, 1, sheet.getLastRow() - 1, 8).getValues().map(function(values) {
+    if (JSON.stringify(sheet.getRange(1, 1, 1, 8).getDisplayValues()[0]) !== JSON.stringify(INSTALL_BEACON_HEADERS_)) throw new Error('header mismatch');
+    const rows = sheet.getLastRow() > 1 ? sheet.getRange(2, 1, sheet.getLastRow() - 1, 8).getDisplayValues().map(function(values) {
       const row = {};
       INSTALL_BEACON_HEADERS_.forEach(function(key, i) { row[key] = key === 'count' ? Number(values[i]) : String(values[i]); });
       return row;

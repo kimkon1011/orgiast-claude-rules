@@ -1,0 +1,8 @@
+{
+  "completed": true,
+  "summary": "既存修復済みと確認。当時4件の原因はCodex認証401。10月15日の実セッションで最終応答PONGを確認し、10月16日03:29 JST生成の診断JSONと同時刻再集計で対象IDなし。既存の認証401・修復後抑止回帰テストを含むnode --testは失敗0。外部再実行・タスク変更なし。",
+  "evidence": {
+    "file": "/mnt/c/Users/user/.claude/nightly-repo/.stall-sweeper/b6b9ac28dae701a17060-1792091407875.evidence.json",
+    "sha256": "b22d98b8e37acde4464d52038ce9f69434e797951abe63da6cfd8ae4e9a17fb6"
+  }
+}

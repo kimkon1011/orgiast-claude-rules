@@ -35,7 +35,7 @@ function excludedIndex(items) {
   const lines = [
     '# Export exclusions',
     '',
-    '公開リポジトリへ書き出さなかった feedback memory の一覧です。本文や一致内容は記録しません。',
+    '書き出さなかった memory の一覧です。本文や一致内容は記録しません。',
     '',
     ...items.sort((a, b) => a.name.localeCompare(b.name)).map(({ name, category }) =>
       `- \`${name}\` — ${category === 'customer' ? '顧客情報（法人名/案件ID）を含む' : '資格情報を含む'}`),
@@ -129,7 +129,7 @@ export function exportMemories(options = {}) {
         emit(`除外(顧客情報): ${name} — ${customer[0]}`);
         continue;
       }
-      if (selected.has(name)) { emit(`スキップ: ${name} — 同名のfeedbackを既に採用`); continue; }
+      if (selected.has(name)) { emit(`スキップ: ${name} — 同名のmemoryを既に採用`); continue; }
       const bytes = Buffer.from(redacted, 'utf8');
       selected.set(name, { name, description: frontmatter.description || name, bytes });
     } catch (error) { emit(`失敗: ${name} — ${oneLine(error)}`); }
@@ -191,7 +191,7 @@ export function findLatestMemoryDir(home, emit = console.log) {
   } catch (error) { if (error?.code !== 'ENOENT') emit(`失敗: ${projects} — ${oneLine(error)}`); }
   candidates.sort((a, b) => b.mtime - a.mtime);
   if (candidates[0]) return path.dirname(candidates[0].file);
-  // MEMORY.md がまだ無い新規PCでも memory ディレクトリ自体があれば install 先として使う
+  // 索引未作成の auto-memory も export と発信元判定の対象にする
   directories.sort((a, b) => b.mtime - a.mtime);
   return directories[0] ? directories[0].dir : '';
 }

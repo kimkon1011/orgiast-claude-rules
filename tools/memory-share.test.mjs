@@ -1,13 +1,9 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
 import { exportMemories, installSharedMemories } from './memory-share.mjs';
-
-const script = fileURLToPath(new URL('./memory-share.mjs', import.meta.url));
 
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-share-'));
@@ -26,7 +22,7 @@ function memory(description, type = 'feedback', body = '本文') {
 }
 
 function exportOptions(f, extra = {}) { return { home: f.home, outDir: path.join(f.repoRoot, 'memory-shared'), emit: () => {}, ...extra }; }
-function installOptions(f, extra = {}) { return { home: f.home, fromDir: path.join(f.repoRoot, 'memory-shared'), fetchImpl: async () => { throw new Error('offline fixture'); }, emit: () => {}, ...extra }; }
+
 
 test('feedbackだけをexportし project/reference/user を除外する', () => {
   const f = fixture();

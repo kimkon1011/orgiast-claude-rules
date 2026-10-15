@@ -51,7 +51,7 @@ export function aggregateMeasurements(rows, category) {
       pass: Number(cat.pass) || 0,
       graded,
       n,
-      costUsd: Number(cat.costUsd) || 0,
+      costUsd: cat.costUsd === null ? null : Number(cat.costUsd) || 0,
       msAvg: Number(record.msAvg) || 0,
     });
   }
@@ -70,7 +70,7 @@ export function aggregateMeasurements(rows, category) {
       model,
       samples,
       rate,
-      usdPerTask: totalN ? latest.reduce((s, x) => s + x.costUsd, 0) / totalN : null,
+      usdPerTask: totalN && latest.every(x => x.costUsd !== null) ? latest.reduce((s, x) => s + x.costUsd, 0) / totalN : null,
       msAvg: totalN ? latest.reduce((s, x) => s + x.msAvg * x.n, 0) / totalN : null,
       measuredAt: latest[samples - 1].t,
     });

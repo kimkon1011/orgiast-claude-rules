@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import fs from 'node:fs';
 import { runConvergenceWatch } from './fleet-convergence-watch.mjs';
 import path from 'node:path';
@@ -348,6 +349,7 @@ export async function runNightlyHealth({
   }
 
   for (const exp of expectations) {
+    if (exp.fleetLabel && resolveFleetLabel(home) !== exp.fleetLabel) continue;
     let matches = [];
     if (exp.pattern) {
       const regex = new RegExp(exp.pattern);

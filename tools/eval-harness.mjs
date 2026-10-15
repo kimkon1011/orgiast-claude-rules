@@ -10,12 +10,35 @@ export { userHome, readConfig };
 const HOME = userHome(); const EVAL_DIR = path.join(HOME, '.claude', 'eval'); const TASKS = path.join(EVAL_DIR, 'tasks.jsonl'); const SEED = path.join(HERE, 'eval-tasks.seed.jsonl'); const SEED_SYNCED = path.join(EVAL_DIR, '.seed-synced.jsonl'); const RESULTS = path.join(HOME, '.claude', 'eval-results.jsonl');
 import { COST_PER_MILLION } from './llm-fallback.mjs';
 const PRICE = { ...COST_PER_MILLION, anthropic: [1, 5] };
-// model-scout が追加したモデルは、プロバイダ既定ではなく実際のモデル単価で採点する。
-export function evaluationCost(name, model, usage, cfg = {}) {
+const validRates = rates => Array.isArray(rates) && rates.length === 2 && rates.every(n => typeof n === 'number' && Number.isFinite(n) && n >= 0);
+// 同期APIは保持。OpenRouter の不明単価に他モデルの価格を流用しない。
+export function evaluationCost(name, model, usage, cfg = {}, { catalogRates } = {}) {
   const override = cfg.model === model && cfg.costPerMillion;
-  const rates = Array.isArray(override) && override.length === 2 && override.every((n) => typeof n === 'number' && Number.isFinite(n) && n >= 0) ? override : PRICE[name];
-  return (usage.inTok * rates[0] + usage.outTok * rates[1]) / 1e6;
+  const rates = validRates(override) ? override : name === 'openrouter' ? catalogRates?.get(model) : PRICE[name];
+  return validRates(rates) ? (usage.inTok * rates[0] + usage.outTok * rates[1]) / 1e6 : null;
 }
+// main ごとに生成し、並行タスクでも取得失敗も含めて1回だけ取得する。
+export function createEvaluationCostResolver({ fetchImpl = globalThis.fetch } = {}) {
+  let catalog;
+  return async (name, model, usage, cfg = {}) => {
+    if (name !== 'openrouter' || (cfg.model === model && validRates(cfg.costPerMillion))) return evaluationCost(name, model, usage, cfg);
+    catalog ||= (async () => {
+      try {
+        const response = await fetchImpl('https://openrouter.ai/api/v1/models', { signal: AbortSignal.timeout(30000) });
+        if (!response.ok) return new Map();
+        const payload = await response.json();
+        return new Map((payload.data || []).flatMap(m => {
+          const raw = [m.pricing?.prompt, m.pricing?.completion];
+          if (!raw.every(n => n !== null && n !== undefined && n !== '' && Number.isFinite(Number(n)) && Number(n) >= 0)) return [];
+          return [[m.id, raw.map(n => Number(n) * 1e6)]];
+        }));
+      } catch { return new Map(); }
+    })();
+    return evaluationCost(name, model, usage, cfg, { catalogRates: await catalog });
+  };
+}
+export const formatEvaluationCost = cost => cost === null ? '単価不明' : `$${cost.toFixed(6)}`;
+const addCost = (a, b) => a === null || b === null ? null : a + (Number(b) || 0);
 const PROVIDERS = {
   groq: { base: 'https://api.groq.com/openai/v1/chat/completions', keyEnv: 'GROQ_API_KEY', keyFile: 'groq.env', model: 'openai/gpt-oss-120b' },
   openrouter: { base: 'https://openrouter.ai/api/v1/chat/completions', keyEnv: 'OPENROUTER_API_KEY', keyFile: 'openrouter.env', model: 'meta-llama/llama-3.3-70b-instruct', headers: { 'HTTP-Referer': 'https://orgiast.jp', 'X-Title': 'orgiast-eval' } },
@@ -62,7 +85,7 @@ function categoryUsable(r, x) { return !excluded(r) && !isUnstable(r) && !isUnme
 function configuredProviders() { return new Map(readConfig().map((x) => [x.provider, x])); }
 function latestRows() { const latest = new Map(); for (const r of readJsonl(RESULTS)) latest.set(`${r.provider}\0${r.model}`, r); const config = configuredProviders(); return [...latest.values()].filter((r) => !config.get(r.provider)?.skip); }
 function modelName(v) { return `${v.r.provider}/${v.r.model}`; }
-function unitCost(v) { return Number(v.x.costUsd) / Math.max(Number(v.x.n) || 0, 1); }
+function unitCost(v) { if (v.x.costUsd == null) return Infinity; return Number(v.x.costUsd) / Math.max(Number(v.x.n) || 0, 1); }
 export function suspiciousTasks(rows) {
   const byId = new Map();
   for (const r of rows) for (const task of r.tasks || []) { const x = byId.get(task.id) || { id: task.id, participants: 0, failed: 0 }; x.participants++; if (task.status === 'fail' || task.status === 'error') x.failed++; byId.set(task.id, x); }
@@ -74,7 +97,7 @@ function categoryWithoutTasks(r, category, ignored) {
   if (!tasks.length) return null;
   const pass = tasks.filter((x) => x.status === 'pass').length, fail = tasks.filter((x) => x.status === 'fail').length, errors = tasks.filter((x) => x.status === 'error').length, truncated = tasks.filter((x) => x.status === 'truncated').length, graded = pass + fail;
   const original = r.byCategory?.[category], originalN = Number(original?.n) || 0;
-  return { n: tasks.length, graded, pass, fail, errors, truncated, rate: graded ? pass / graded : null, costUsd: originalN ? (Number(original.costUsd) || 0) * tasks.length / originalN : 0 };
+  return { n: tasks.length, graded, pass, fail, errors, truncated, rate: graded ? pass / graded : null, costUsd: original?.costUsd === null ? null : originalN ? (Number(original.costUsd) || 0) * tasks.length / originalN : 0 };
 }
 export function recommendations(rows = latestRows()) {
   const categories = new Set(rows.flatMap((r) => Object.keys(r.byCategory || {}))); const out = [], suspicious = suspiciousTasks(rows), ignored = new Set(suspicious.map((x) => x.id));
@@ -84,7 +107,9 @@ export function recommendations(rows = latestRows()) {
     if (!candidates.length) continue;
     const bestRate = Math.max(...candidates.map((v) => v.x.rate));
     const safe = candidates.filter((v) => v.x.rate >= bestRate - 0.05);
-    const cheapest = [...safe].sort((a, b) => unitCost(a) - unitCost(b) || a.r.msAvg - b.r.msAvg)[0];
+    const priced = safe.filter(v => Number.isFinite(unitCost(v)));
+    if (!priced.length) { out.push(`カテゴリ ${category}: 単価不明のため費用比較を保留`); continue; }
+    const cheapest = [...priced].sort((a, b) => unitCost(a) - unitCost(b) || a.r.msAvg - b.r.msAvg)[0];
     const fastest = [...safe].sort((a, b) => a.r.msAvg - b.r.msAvg || unitCost(a) - unitCost(b))[0];
     if (modelName(cheapest) === modelName(fastest)) out.push(`カテゴリ ${category}: ${modelName(cheapest)} へ落として安全 (成功率 ${(cheapest.x.rate * 100).toFixed(0)}%)`);
     else out.push(`カテゴリ ${category}: 最安=${modelName(cheapest)} / 最速=${modelName(fastest)}（どちらも成功率${(bestRate * 100).toFixed(0)}%で同等）`);
@@ -97,17 +122,17 @@ function printPareto() {
   const usable = rows.filter((r) => !excluded(r) && !isUnstable(r) && !isUnmeasurable(r)); const newest = Math.max(...rows.map((r) => Date.parse(r.t) || 0));
   console.log('採点成功率(pass/graded) | 試行成功率(pass/n) | 1タスクあたり$ | 平均ms | provider/model | 判定');
   for (const r of rows) {
-    const unit = r.costUsd / Math.max(r.n, 1), isExcluded = excluded(r), unstable = isUnstable(r), unmeasurable = isUnmeasurable(r);
-    const dominated = !isExcluded && !unstable && !unmeasurable && usable.some((o) => o !== r && o.rate >= r.rate && o.costUsd / Math.max(o.n, 1) <= unit && o.msAvg <= r.msAvg && (o.rate > r.rate || o.costUsd / Math.max(o.n, 1) < unit || o.msAvg < r.msAvg));
+    const unit = r.costUsd === null ? null : r.costUsd / Math.max(r.n, 1), isExcluded = excluded(r), unstable = isUnstable(r), unmeasurable = isUnmeasurable(r);
+    const dominated = unit !== null && !isExcluded && !unstable && !unmeasurable && usable.some((o) => o !== r && o.costUsd !== null && o.rate >= r.rate && o.costUsd / Math.max(o.n, 1) <= unit && o.msAvg <= r.msAvg && (o.rate > r.rate || o.costUsd / Math.max(o.n, 1) < unit || o.msAvg < r.msAvg));
     const rate = r.rate === null ? '計測不能' : `${(r.rate * 100).toFixed(1)}%`, attemptedRate = Number.isFinite(r.attemptedRate) ? `${(r.attemptedRate * 100).toFixed(1)}%` : `${((Number(r.pass) || 0) / Math.max(Number(r.n) || 0, 1) * 100).toFixed(1)}%`; const old = newest - (Date.parse(r.t) || 0) >= 7 * 864e5 ? ' (古い計測)' : '';
     const verdict = paretoClassification(r, dominated);
-    console.log(`${rate} | ${attemptedRate} | $${unit.toFixed(6)} | ${Math.round(r.msAvg)} | ${r.provider}/${r.model} | ${verdict}${old}`);
+    console.log(`${rate} | ${attemptedRate} | ${formatEvaluationCost(unit)} | ${Math.round(r.msAvg)} | ${r.provider}/${r.model} | ${verdict}${old}`);
   }
   console.log('\n推奨:'); const recs = recommendations(rows); if (recs.length) for (const s of recs) console.log(`- ${s}`); else console.log('- 有効な計測なし（再計測が必要）');
 }
 export function resultRecord(provider, model, rows, t = new Date().toISOString()) {
-  const sum = rows.reduce((a, x) => ({ pass: a.pass + (x.status === 'pass' ? 1 : 0), fail: a.fail + (x.status === 'fail' ? 1 : 0), errors: a.errors + (x.status === 'error' ? 1 : 0), truncated: a.truncated + (x.status === 'truncated' ? 1 : 0), inTok: a.inTok + (Number(x.inTok) || 0), outTok: a.outTok + (Number(x.outTok) || 0), costUsd: a.costUsd + (Number(x.costUsd) || 0), ms: a.ms + (Number(x.ms) || 0) }), { pass: 0, fail: 0, errors: 0, truncated: 0, inTok: 0, outTok: 0, costUsd: 0, ms: 0 });
-  const byCategory = {}; for (const x of rows) { const c = byCategory[x.category] ||= { n: 0, graded: 0, pass: 0, fail: 0, errors: 0, truncated: 0, costUsd: 0 }; c.n++; c[x.status === 'error' ? 'errors' : x.status]++; if (x.status === 'pass' || x.status === 'fail') c.graded++; c.costUsd += Number(x.costUsd) || 0; } for (const c of Object.values(byCategory)) c.rate = c.graded ? c.pass / c.graded : null;
+  const sum = rows.reduce((a, x) => ({ pass: a.pass + (x.status === 'pass' ? 1 : 0), fail: a.fail + (x.status === 'fail' ? 1 : 0), errors: a.errors + (x.status === 'error' ? 1 : 0), truncated: a.truncated + (x.status === 'truncated' ? 1 : 0), inTok: a.inTok + (Number(x.inTok) || 0), outTok: a.outTok + (Number(x.outTok) || 0), costUsd: addCost(a.costUsd, x.costUsd), ms: a.ms + (Number(x.ms) || 0) }), { pass: 0, fail: 0, errors: 0, truncated: 0, inTok: 0, outTok: 0, costUsd: 0, ms: 0 });
+  const byCategory = {}; for (const x of rows) { const c = byCategory[x.category] ||= { n: 0, graded: 0, pass: 0, fail: 0, errors: 0, truncated: 0, costUsd: 0 }; c.n++; c[x.status === 'error' ? 'errors' : x.status]++; if (x.status === 'pass' || x.status === 'fail') c.graded++; c.costUsd = addCost(c.costUsd, x.costUsd); } for (const c of Object.values(byCategory)) c.rate = c.graded ? c.pass / c.graded : null;
   const n = rows.length, graded = sum.pass + sum.fail;
   return { t, provider, model, n, graded, pass: sum.pass, fail: sum.fail, errors: sum.errors, truncated: sum.truncated, rate: graded ? sum.pass / graded : null, attemptedRate: n ? sum.pass / n : null, inTok: sum.inTok, outTok: sum.outTok, costUsd: sum.costUsd, msAvg: n ? sum.ms / n : 0, byCategory, tasks: rows.map((x) => ({ id: x.id, category: x.category, pass: x.status === 'pass', status: x.status })) };
 }
@@ -126,6 +151,7 @@ function rawRetryAfterMs(response, retryIndex) { const h = response.headers.get(
 export const JUDGE_CHAIN = ['groq', 'deepseek', 'openrouter', 'gemini', 'anthropic'];
 export function resolveJudgeChain(preferred, chain = JUDGE_CHAIN) { const p = (preferred || '').toLowerCase(); const rest = chain.filter((x) => x !== p); return p ? [p, ...rest] : [...chain]; }
 async function main() {
+const resolveCost = createEvaluationCostResolver();
 if (has('--pareto')) { printPareto(); return; }
 fs.mkdirSync(path.join(EVAL_DIR, 'runs'), { recursive: true }); syncTasks();
 const schedulers = new Map(); function scheduler(name, minIntervalMs) { if (!schedulers.has(name)) schedulers.set(name, { next: 0, chain: Promise.resolve() }); const s = schedulers.get(name); return async () => { let release; const prior = s.chain; s.chain = new Promise((resolve) => { release = resolve; }); await prior; const wait = Math.max(0, s.next - Date.now()); if (wait) await sleep(wait); s.next = Date.now() + minIntervalMs; release(); }; }
@@ -160,8 +186,8 @@ async function judge(task, answer) {
   }
 }
 async function ollamaHasModel(model) { const P = PROVIDERS.ollama; const url = new URL('/api/tags', P.base); let r; try { r = await fetch(url, { signal: AbortSignal.timeout(5000) }); } catch { return false; } if (!r.ok) return false; const j = await r.json().catch(() => ({})); return (j.models || []).some((x) => x.name === model || x.model === model); }
-async function runOne(name, model, cfg = {}) { let tasks = readJsonl(TASKS); const cat = opt('--category'); if (cat) tasks = tasks.filter((t) => t.category === cat || t.category.startsWith(cat)); const limit = Number(opt('--limit', '0')); if (limit > 0) tasks = tasks.slice(0, limit); if (!tasks.length) throw new Error('対象タスクがありません'); const cliConcurrency = opt('--concurrency', ''), concurrency = Math.max(1, Number(cliConcurrency || cfg.concurrency || 1) || 1), rows = new Array(tasks.length); let cursor = 0, aborted = false; async function worker() { for (;;) { const i = cursor++; if (i >= tasks.length) return; if (aborted) return; const task = tasks[i], started = new Date().toISOString(); let out = null, judgeVerdict = null; try { out = await call(name, model, task.prompt, task.system || '', task.max || 512, cfg); const costUsd = evaluationCost(name, model, out, cfg); if (out.truncated) { rows[i] = { t: started, id: task.id, category: task.category, status: 'truncated', pass: false, output: out.text.slice(0, 2000), expect: task.expect, judgeVerdict, execDetail: null, error: null, finishReason: out.finishReason, inTok: out.inTok, outTok: out.outTok, costUsd, ms: out.ms, judgeUsage: null }; console.log(`切断 ${task.id} in=${out.inTok} out=${out.outTok} $${costUsd.toFixed(6)} ${out.ms}ms`); continue; } let pass, judgeUsage = null, execDetail = null; if (task.expect.type === 'judge') { const judged = await judge(task, out.text); pass = judged.pass; judgeVerdict = judged.verdict.slice(0, 2000); judgeUsage = { provider: judged.provider, inTok: judged.usage.inTok, outTok: judged.usage.outTok, ms: judged.usage.ms }; } else if (task.expect.type === 'exec_js') { const res = await runCheck(task.expect.check, out.text); pass = res.pass; execDetail = res.detail; } else pass = machine(task.expect, out.text); const status = pass ? 'pass' : 'fail'; rows[i] = { t: started, id: task.id, category: task.category, status, pass, output: out.text.slice(0, 2000), expect: task.expect, judgeVerdict, execDetail, error: null, finishReason: out.finishReason, inTok: out.inTok, outTok: out.outTok, costUsd, ms: out.ms, judgeUsage }; console.log(`${status.toUpperCase()} ${task.id}${execDetail && !pass ? ` (${execDetail})` : ''} in=${out.inTok} out=${out.outTok} $${rows[i].costUsd.toFixed(6)} ${out.ms}ms`); } catch (e) { const costUsd = out ? evaluationCost(name, model, out, cfg) : 0; rows[i] = { t: started, id: task.id, category: task.category, status: 'error', pass: false, output: out?.text.slice(0, 2000) || '', expect: task.expect, judgeVerdict, execDetail: null, error: String(e.message || e).slice(0, 400), finishReason: out?.finishReason ?? null, inTok: out?.inTok || 0, outTok: out?.outTok || 0, costUsd, ms: out?.ms || 0, judgeUsage: null }; console.error(`ERROR ${task.id}: ${e.message}`); if (!aborted && e.judgesExhausted) { aborted = true; console.error(`中断 ${name}: 採点provider全滅のため残りタスクをスキップ`); } } } }
-  await Promise.all(Array.from({ length: Math.min(concurrency, tasks.length) }, worker)); const liveRows = rows.filter(Boolean); const rec = resultRecord(name, model, liveRows); fs.appendFileSync(RESULTS, JSON.stringify(rec) + '\n'); const stamp = rec.t.replace(/[:.]/g, '-'); fs.writeFileSync(path.join(EVAL_DIR, 'runs', `${stamp}-${name}.jsonl`), liveRows.map(JSON.stringify).join('\n') + '\n'); const rate = rec.rate === null ? '計測不能' : `${(rec.rate * 100).toFixed(1)}%`; console.log(`結果 ${name}/${model}: ${rec.pass}/${rec.graded} graded (${rate}) / ${rec.pass}/${rec.n} attempted (${(rec.attemptedRate * 100).toFixed(1)}%) エラー${rec.errors}件 切断${rec.truncated}件 $${rec.costUsd.toFixed(6)} 平均${Math.round(rec.msAvg)}ms`); }
+async function runOne(name, model, cfg = {}) { let tasks = readJsonl(TASKS); const cat = opt('--category'); if (cat) tasks = tasks.filter((t) => t.category === cat || t.category.startsWith(cat)); const limit = Number(opt('--limit', '0')); if (limit > 0) tasks = tasks.slice(0, limit); if (!tasks.length) throw new Error('対象タスクがありません'); const cliConcurrency = opt('--concurrency', ''), concurrency = Math.max(1, Number(cliConcurrency || cfg.concurrency || 1) || 1), rows = new Array(tasks.length); let cursor = 0, aborted = false; async function worker() { for (;;) { const i = cursor++; if (i >= tasks.length) return; if (aborted) return; const task = tasks[i], started = new Date().toISOString(); let out = null, judgeVerdict = null; try { out = await call(name, model, task.prompt, task.system || '', task.max || 512, cfg); const costUsd = await resolveCost(name, model, out, cfg); if (out.truncated) { rows[i] = { t: started, id: task.id, category: task.category, status: 'truncated', pass: false, output: out.text.slice(0, 2000), expect: task.expect, judgeVerdict, execDetail: null, error: null, finishReason: out.finishReason, inTok: out.inTok, outTok: out.outTok, costUsd, ms: out.ms, judgeUsage: null }; console.log(`切断 ${task.id} in=${out.inTok} out=${out.outTok} ${formatEvaluationCost(costUsd)} ${out.ms}ms`); continue; } let pass, judgeUsage = null, execDetail = null; if (task.expect.type === 'judge') { const judged = await judge(task, out.text); pass = judged.pass; judgeVerdict = judged.verdict.slice(0, 2000); judgeUsage = { provider: judged.provider, inTok: judged.usage.inTok, outTok: judged.usage.outTok, ms: judged.usage.ms }; } else if (task.expect.type === 'exec_js') { const res = await runCheck(task.expect.check, out.text); pass = res.pass; execDetail = res.detail; } else pass = machine(task.expect, out.text); const status = pass ? 'pass' : 'fail'; rows[i] = { t: started, id: task.id, category: task.category, status, pass, output: out.text.slice(0, 2000), expect: task.expect, judgeVerdict, execDetail, error: null, finishReason: out.finishReason, inTok: out.inTok, outTok: out.outTok, costUsd, ms: out.ms, judgeUsage }; console.log(`${status.toUpperCase()} ${task.id}${execDetail && !pass ? ` (${execDetail})` : ''} in=${out.inTok} out=${out.outTok} ${formatEvaluationCost(rows[i].costUsd)} ${out.ms}ms`); } catch (e) { const costUsd = out ? await resolveCost(name, model, out, cfg) : 0; rows[i] = { t: started, id: task.id, category: task.category, status: 'error', pass: false, output: out?.text.slice(0, 2000) || '', expect: task.expect, judgeVerdict, execDetail: null, error: String(e.message || e).slice(0, 400), finishReason: out?.finishReason ?? null, inTok: out?.inTok || 0, outTok: out?.outTok || 0, costUsd, ms: out?.ms || 0, judgeUsage: null }; console.error(`ERROR ${task.id}: ${e.message}`); if (!aborted && e.judgesExhausted) { aborted = true; console.error(`中断 ${name}: 採点provider全滅のため残りタスクをスキップ`); } } } }
+  await Promise.all(Array.from({ length: Math.min(concurrency, tasks.length) }, worker)); const liveRows = rows.filter(Boolean); const rec = resultRecord(name, model, liveRows); fs.appendFileSync(RESULTS, JSON.stringify(rec) + '\n'); const stamp = rec.t.replace(/[:.]/g, '-'); fs.writeFileSync(path.join(EVAL_DIR, 'runs', `${stamp}-${name}.jsonl`), liveRows.map(JSON.stringify).join('\n') + '\n'); const rate = rec.rate === null ? '計測不能' : `${(rec.rate * 100).toFixed(1)}%`; console.log(`結果 ${name}/${model}: ${rec.pass}/${rec.graded} graded (${rate}) / ${rec.pass}/${rec.n} attempted (${(rec.attemptedRate * 100).toFixed(1)}%) エラー${rec.errors}件 切断${rec.truncated}件 ${formatEvaluationCost(rec.costUsd)} 平均${Math.round(rec.msAvg)}ms`); }
 const requested = (opt('--provider', '') || '').toLowerCase(); let targets; if (has('--all')) targets = readConfig(); else { if (!PROVIDERS[requested]) { console.error('使い方: node tools/eval-harness.mjs --provider <groq|openrouter|gemini|deepseek|kimi|mistral|ollama|anthropic> [--model X] [--limit N] [--category X] [--concurrency N] [--refresh-tasks|--no-sync] / --all / --pareto'); process.exit(2); } targets = [{ ...providerConfig(requested, opt('--model', '')), provider: requested, model: opt('--model', providerConfig(requested).model || PROVIDERS[requested].model) }]; }
 for (const x of targets) { if (!PROVIDERS[x.provider]) { console.log(`SKIP ${x.provider}: 未対応provider`); continue; } if (x.skip) { console.log(`SKIP ${x.provider}: モデル未導入のためスキップ`); continue; } const skip = dailyCooldownSkip(x.provider); if (skip) { console.log(skip); continue; } if (!loadKey(x.provider)) { const P = PROVIDERS[x.provider]; console.log(`SKIP ${x.provider}: ${P.keyEnv} 未設定（env または ~/.claude/${P.keyFile}）`); continue; } const model = x.model || PROVIDERS[x.provider].model; if (x.provider === 'ollama' && (!model || !(await ollamaHasModel(model)))) { console.log('SKIP ollama: モデル未導入のためスキップ'); continue; } try { await runOne(x.provider, model, x); } catch (e) { console.error(`${x.provider} 実行失敗: ${e.message}`); if (!has('--all')) process.exitCode = 1; } }
 if (has('--all')) {

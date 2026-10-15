@@ -5,11 +5,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { readConfig, isDailyLimit, isUnmeasurable, JUDGE_CHAIN, paretoClassification, recommendations, resolveJudgeChain, resultRecord, retryDelay, suspiciousTasks } from './eval-harness.mjs';
+import { createEvaluationCostResolver, formatEvaluationCost, readConfig, isDailyLimit, isUnmeasurable, JUDGE_CHAIN, paretoClassification, recommendations, resolveJudgeChain, resultRecord, retryDelay, suspiciousTasks } from './eval-harness.mjs';
 
 // Run the real CLI with isolated home/config/results and a fetch stub; --all also
 // writes a routing table, so copy its modules rather than touching the checkout.
-function runHarness(t, { cooldown = {}, tasks, config, overlay, responses = [], args = ['--provider', 'openrouter'] } = {}) {
+function runHarness(t, { cooldown = {}, tasks, config, overlay, responses = [], args = ['--provider', 'openrouter'], catalog = null } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'eval-cooldown-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const tools = path.join(home, 'tools'), evalDir = path.join(home, '.claude', 'eval');
@@ -28,6 +28,7 @@ function runHarness(t, { cooldown = {}, tasks, config, overlay, responses = [], 
     import fs from 'node:fs';
     const responses = ${JSON.stringify(responses)};
     globalThis.fetch = async (url) => {
+      if (String(url).endsWith('/api/v1/models')) return new Response(JSON.stringify(${JSON.stringify(catalog)}), { status: 200 });
       fs.appendFileSync(${JSON.stringify(path.join(home, 'fetch.jsonl'))}, JSON.stringify(String(url)) + '\\n');
       const response = responses.shift();
       if (!response) throw new Error('unexpected fetch');
@@ -202,7 +203,7 @@ test('scout candidates run through --all with model-specific prices', (t) => {
   const selected = runHarness(t, { config: config.slice(0, 1), overlay: config.slice(1), responses: [response], args: ['--provider', 'openrouter', '--model', 'scouted'] });
   assert.equal(selected.results[0].costUsd, 0.0003);
   const unknown = runHarness(t, { config, responses: [response], args: ['--provider', 'openrouter', '--model', 'unconfigured'] });
-  assert.equal(unknown.results[0].costUsd, 0.00138);
+  assert.equal(unknown.results[0].costUsd, null);
 });
 
 test('readConfig merges by provider+model with overlay precedence, including skip', (t) => {
@@ -241,4 +242,38 @@ test('--all honors overlay skip and replacement price without duplicate executio
   assert.match(result.stdout, /SKIP groq/);
   assert.equal(result.calls.length, 2);
   assert.deepEqual(result.results.map((r) => [r.model, r.costUsd]), [['same', 0], ['new', 0]]);
+});
+
+test('OpenRouter カタログ単価をモデル別に計算し、並行呼出も1回取得', async () => {
+  let calls = 0;
+  const resolve = createEvaluationCostResolver({ fetchImpl: async url => {
+    calls++; assert.equal(url, 'https://openrouter.ai/api/v1/models');
+    return { ok: true, json: async () => ({ data: [{ id: 'meta/muse-wonder', pricing: { prompt: '0.000004', completion: '0.000020' } }] }) };
+  } });
+  const usage = { inTok: 10000, outTok: 4500 };
+  assert.deepEqual(await Promise.all(Array.from({ length: 3 }, () => resolve('openrouter', 'meta/muse-wonder', usage))), [0.13, 0.13, 0.13]);
+  assert.equal(await resolve('openrouter', 'missing', usage), null);
+  assert.equal(calls, 1);
+});
+
+test('カタログ失敗は再取得せず null を集計・表示まで保持し、無料推薦にしない', async () => {
+  let calls = 0;
+  const resolve = createEvaluationCostResolver({ fetchImpl: async () => { calls++; throw new Error('SECRET'); } });
+  for (const id of ['one', 'two']) assert.equal(await resolve('openrouter', id, { inTok: 100, outTok: 200 }), null);
+  assert.equal(calls, 1);
+  const record = resultRecord('openrouter', 'unknown', [task('a', 'code', 'pass', { costUsd: null }), task('b', 'code', 'pass')]);
+  assert.equal(record.costUsd, null);
+  assert.equal(record.byCategory.code.costUsd, null);
+  assert.equal(formatEvaluationCost(record.costUsd), '単価不明');
+  assert.match(recommendations([record]).join(), /単価不明/);
+});
+
+test('CLI でも未設定モデルの単価をカタログから補い、取得不能なら単価不明', t => {
+  const response = { body: JSON.stringify({ choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }], usage: { prompt_tokens: 10000, completion_tokens: 4500 } }) };
+  const opts = { config: [{ provider: 'openrouter', model: 'meta/muse-wonder' }], args: ['--provider', 'openrouter', '--model', 'meta/muse-wonder'], responses: [response] };
+  const known = runHarness(t, { ...opts, catalog: { data: [{ id: 'meta/muse-wonder', pricing: { prompt: '0.000004', completion: '0.000020' } }] } });
+  assert.equal(known.results[0].costUsd, 0.13);
+  const unknown = runHarness(t, opts);
+  assert.equal(unknown.results[0].costUsd, null);
+  assert.match(unknown.stdout, /単価不明/);
 });

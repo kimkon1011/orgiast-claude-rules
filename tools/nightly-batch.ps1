@@ -88,6 +88,12 @@ try {
     $node = Get-Command node -ErrorAction SilentlyContinue
     if (-not $node) { $summary['node'] = 'error:nodeが見つからない'; Write-NightlyLog 'node確認' 'error:nodeが見つからない'; Finish-Nightly 1 }
     $script:staleWorkReady = $true
+    # Run from the synced nightly repo; the runner restricts execution to kim-PC.
+    try {
+        $scoutOutput = @(& $node.Source (Join-Path $PSScriptRoot 'model-scout-daily.mjs') --once 2>&1)
+        $scoutExit = $LASTEXITCODE
+        Write-NightlyStepResult 'model-scout' $scoutExit $scoutOutput
+    } catch { Write-NightlyLog 'model-scout' 'error:daily runner failed' }
     # Runtime wiring: the existing nightly task picks this up without re-registration.
     $expenseLeak = Join-Path $PSScriptRoot 'expense-leak-check.mjs'
     if (Test-Path -LiteralPath $expenseLeak -PathType Leaf) {

@@ -12,6 +12,26 @@
       "createdAt": "2026-10-15T10:31:45.686Z",
       "expiresAt": "2026-10-17T10:31:45.686Z",
       "timeoutSeconds": 900
+    },
+    {
+      "id": "run-20261015-222117-0036",
+      "kind": "run",
+      "targets": "古川龍慶のノートブックコンピュータ",
+      "why": "stale_report 自動復旧",
+      "task": "fleet-sheet-report",
+      "createdBy": "uers",
+      "createdAt": "2026-10-15T22:21:17.817Z",
+      "expiresAt": "2026-10-17T22:21:17.817Z"
+    },
+    {
+      "id": "run-20261015-222118-7148",
+      "kind": "run",
+      "targets": "DESKTOP-BDOAK99",
+      "why": "stale_report 自動復旧",
+      "task": "fleet-sheet-report",
+      "createdBy": "uers",
+      "createdAt": "2026-10-15T22:21:18.407Z",
+      "expiresAt": "2026-10-17T22:21:18.407Z"
     }
   ]
 }

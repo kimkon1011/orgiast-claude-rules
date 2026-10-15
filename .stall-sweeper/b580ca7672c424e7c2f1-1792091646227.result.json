@@ -1,0 +1,8 @@
+{
+  "completed": true,
+  "summary": "引継ぎ原文の未完了項目を確認し、実ファイル2件を直接検証。両方に codex_false_usage_limit は出ていない。生成日時は2026-10-15T18:29:54.561Z（日本時間10月16日03:29）。Codex使用率1%、枯渇false。検出はkimiのprovider_usage_limitのみ。実装・ジョブ再実行・タスク削除は行っていない。",
+  "evidence": {
+    "file": "/mnt/c/Users/user/.claude/nightly-repo/.stall-sweeper/b580ca7672c424e7c2f1-1792091646227.evidence.json",
+    "sha256": "7f41b9da272995521d6887f8b6649351640347f720aa62b55928a814b1006a02"
+  }
+}

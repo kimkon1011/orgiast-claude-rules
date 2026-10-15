@@ -1,0 +1,48 @@
+{
+  "checkedAtUtc": "2026-10-15T19:14:34.847865+00:00",
+  "source": {
+    "path": "/mnt/c/Users/user/.claude/next-session.md",
+    "sha256": "e28c40e95b277707059012c35f06ea88bf7c75daffd64bcf3a43606291c59dde",
+    "matchingLines": [
+      {
+        "line": 12,
+        "text": "6. 検証のみ: ~/.claude/delegation-health.json / delegation-health.md に codex_false_usage_limit が出ていないことを確認する（PR #733 の翌日確認。機構は実データで検証済み・実装は不要） （更新: 2026-10-12）"
+      }
+    ]
+  },
+  "files": [
+    {
+      "path": "/mnt/c/Users/user/.claude/delegation-health.json",
+      "sha256": "88d22b68946caa51aff3b1a1f0167bdf483658b5140eb4226651e32cb4cf4887",
+      "mtimeUtc": "2026-10-15T18:29:54.843024+00:00",
+      "targetOccurrences": 0,
+      "content": "{\n  \"generatedAt\": \"2026-10-15T18:29:54.561Z\",\n  \"codexUsedPercent\": 1,\n  \"codexExhausted\": false,\n  \"findings\": [\n    {\n      \"id\": \"provider_usage_limit\",\n      \"provider\": \"kimi\",\n      \"severity\": \"low\",\n      \"title\": \"kimi は上限/レート制限で停止（欠陥ではない）\",\n      \"evidence\": [\n        \"96件すべて失敗\",\n        \"quota_limited(96件)\"\n      ]\n    }\n  ]\n}\n"
+    },
+    {
+      "path": "/mnt/c/Users/user/.claude/delegation-health.md",
+      "sha256": "88529195ce42cd1bd36af477f6871ce15dbf4435fda5c52e6c8364f719c8588f",
+      "mtimeUtc": "2026-10-15T18:29:54.844577+00:00",
+      "targetOccurrences": 0,
+      "content": "## 🩺 委譲ヘルス（直近24h）\n- low / kimi は上限/レート制限で停止（欠陥ではない） / 自動修復:なし / 起票先:なし\n- Codex実測: 1%\n- 生成日時: 2026-10-15T18:29:54.561Z\n- high があっても夜間処理は継続\n"
+    }
+  ],
+  "parsedHealth": {
+    "generatedAt": "2026-10-15T18:29:54.561Z",
+    "codexUsedPercent": 1,
+    "codexExhausted": false,
+    "findings": [
+      {
+        "id": "provider_usage_limit",
+        "provider": "kimi",
+        "severity": "low",
+        "title": "kimi は上限/レート制限で停止（欠陥ではない）",
+        "evidence": [
+          "96件すべて失敗",
+          "quota_limited(96件)"
+        ]
+      }
+    ]
+  },
+  "completed": true,
+  "summary": "引継ぎ原文の未完了項目を確認し、実ファイル2件を直接検証。両方に codex_false_usage_limit は出ていない。生成日時は2026-10-15T18:29:54.561Z（日本時間10月16日03:29）。Codex使用率1%、枯渇false。検出はkimiのprovider_usage_limitのみ。実装・ジョブ再実行・タスク削除は行っていない。"
+}

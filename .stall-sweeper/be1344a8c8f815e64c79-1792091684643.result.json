@@ -1,0 +1,8 @@
+{
+  "completed": false,
+  "summary": "対象原文は残存。対象2便の送信記録とローカル受信記録を照合し、対応する返信は0件。サーバーへの読み取り照会は2便ともDNS名前解決失敗のため、最新の返信有無は確定できず未完了。ローカルorigin/main bd66e04の全12ファイルはCR=0を再検証し、改行正規化PR不要を確認。外部送信・権限変更・タスク削除は未実行。",
+  "evidence": {
+    "file": "/mnt/c/Users/user/.claude/nightly-repo/.stall-sweeper/be1344a8c8f815e64c79-1792091684643.evidence.json",
+    "sha256": "982f0cd912ba56a4d80a64f317d907904e66a6b08d7e6c66d874c85a1a4a9e1f"
+  }
+}

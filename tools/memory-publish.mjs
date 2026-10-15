@@ -84,8 +84,13 @@ export async function publishMemories(options = {}) {
 }
 
 export function run(argv = process.argv.slice(2), options = {}) {
+  const home = options.home || process.env.ORGIAST_HOME || os.homedir();
+  if (argv.includes('--deploy') && requireKeyservePcId(home, options.env || process.env) !== 'kim-PC') {
+    (options.emit || console.log)('memory-publish: files=0 deploy=skip (発信元 kim-PC 以外)');
+    return { files: 0, deploy: 'skip', skipped: 'not-kim-pc' };
+  }
   return publishMemories({ ...options, keyserveRepo: argValue(argv, '--keyserve-repo'), dryRun: argv.includes('--dry-run'), deploy: argv.includes('--deploy'), verify: argv.includes('--verify') });
 }
 if (isEntry(import.meta.url)) {
-  await run().catch(error => { console.error(`memory-publish 失敗: ${String(error.message || error).split(/\r?\n/)[0]}`); process.exitCode = 1; });
+  await Promise.resolve().then(() => run()).catch(error => { console.error(`memory-publish 失敗: ${String(error.message || error).split(/\r?\n/)[0]}`); process.exitCode = 1; });
 }

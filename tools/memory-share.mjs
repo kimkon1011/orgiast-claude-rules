@@ -265,6 +265,9 @@ export async function installSharedMemories(options = {}) {
     if ((pc && pc === manifest.source.pc) || (!pc && local && rootNames.length && rootNames.filter(name => fs.existsSync(path.join(local, name))).length / rootNames.length >= 0.5)) {
       result.skipped = manifest.files.length; emit('発信元のため install スキップ'); return result;
     }
+    for (const target of [dir, path.join(dir, 'index'), path.join(dir, '.state.json')]) {
+      try { if (fs.lstatSync(target).isSymbolicLink()) throw new Error('shared-memory symlink rejected'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
     const statePath = path.join(dir, '.state.json');
     const previous = safeReadJson(statePath);
     const changed = manifest.files.filter(file => previous?.files?.[file.name] !== file.sha256 || !fs.existsSync(path.join(dir, file.name)) || (file.name === 'MEMORY.md' && (previous.generatedAt !== manifest.generatedAt || JSON.stringify(previous.source) !== JSON.stringify(manifest.source))));
@@ -283,7 +286,7 @@ export async function installSharedMemories(options = {}) {
       const destination = path.join(dir, name);
       // Never follow a local symlink outside the managed directory.
       for (const target of [dir, path.dirname(destination), destination]) {
-        if (fs.existsSync(target) && fs.lstatSync(target).isSymbolicLink()) throw new Error('shared-memory symlink rejected');
+        try { if (fs.lstatSync(target).isSymbolicLink()) throw new Error('shared-memory symlink rejected'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
       }
       if (fs.existsSync(destination)) result.updated++; else result.installed++;
       if (!options.dryRun) { fs.mkdirSync(path.dirname(destination), { recursive: true }); fs.writeFileSync(destination, content); }

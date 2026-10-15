@@ -151,3 +151,22 @@ test('failed deployment or verification does not save successful state', async (
     assert.equal(fs.existsSync(path.join(f.home, '.claude/memory-publish-state.json')), false);
   }
 });
+
+test('nightly CLI deploy skips PCs other than kim-PC without any writes', async () => {
+  const { run } = await import('./memory-publish.mjs');
+  const f = fixture();
+  const result = await run(['--deploy', '--verify'], { home: f.home, env: { ORGIAST_KEYSERVE_PC: 'receiver' }, emit: () => {}, spawnSyncImpl: () => assert.fail('spawn') });
+  assert.equal(result.skipped, 'not-kim-pc');
+  assert.equal(fs.existsSync(path.join(f.home, '.claude/memory-publish-state.json')), false);
+});
+test('Windows resolves vercel.cmd then runs its Node entry without a shell', async () => {
+  const { vercelCommand } = await import('./memory-publish.mjs');
+  const f = fixture();
+  const cli = path.join(f.root, 'node_modules/vercel/dist/vc.js');
+  fs.mkdirSync(path.dirname(cli), { recursive: true }); fs.writeFileSync(cli, '// fixture');
+  const command = vercelCommand({ platform: 'win32', spawnSyncImpl: (file, args, options) => {
+    assert.equal(file, 'where.exe'); assert.deepEqual(args, ['vercel.cmd']); assert.equal(options.shell, false);
+    return { status: 0, stdout: path.join(f.root, 'vercel.cmd') + '\r\n' };
+  } });
+  assert.equal(command.file, process.execPath); assert.deepEqual(command.args, [cli]);
+});

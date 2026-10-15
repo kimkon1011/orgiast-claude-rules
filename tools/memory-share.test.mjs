@@ -1,13 +1,10 @@
+import crypto from 'node:crypto';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
 import { exportMemories, installSharedMemories } from './memory-share.mjs';
-
-const script = fileURLToPath(new URL('./memory-share.mjs', import.meta.url));
 
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-share-'));
@@ -25,8 +22,8 @@ function memory(description, type = 'feedback', body = '本文') {
   return `---\nname: sample\ndescription: ${description}\nmetadata:\n  type: ${type}\n---\n\n${body}\n`;
 }
 
-function exportOptions(f, extra = {}) { return { home: f.home, outDir: path.join(f.repoRoot, 'memory-shared'), emit: () => {}, ...extra }; }
-function installOptions(f, extra = {}) { return { home: f.home, fromDir: path.join(f.repoRoot, 'memory-shared'), fetchImpl: async () => { throw new Error('offline fixture'); }, emit: () => {}, ...extra }; }
+function exportOptions(f, extra = {}) { return { home: f.home, outDir: path.join(f.repoRoot, 'memory-shared'), channel: 'public', emit: () => {}, ...extra }; }
+
 
 test('feedbackだけをexportし project/reference/user を除外する', () => {
   const f = fixture();
@@ -89,8 +86,8 @@ test('privateは法人名と案件IDを除外せずpublicだけ除外する', ()
   const f = fixture(); const output = [];
   fs.writeFileSync(path.join(f.memoryDir, 'feedback_company.md'), memory('法人', 'feedback', '取引先は株式会社極秘テストです'));
   fs.writeFileSync(path.join(f.memoryDir, 'feedback_case.md'), memory('案件', 'feedback', '対象案件は C0123 です'));
-  const privateResult = exportMemories(exportOptions(f));
-  assert.equal(privateResult.exported, 2);
+  const privateResult = exportMemories(exportOptions(f, { channel: 'private' }));
+  assert.equal(privateResult.exported, 4);
   const result = exportMemories(exportOptions(f, { channel: 'public', emit: (line) => output.push(line) }));
   assert.equal(result.exported, 0);
   assert.equal(result.excludedCustomerInfo, 2);
@@ -115,161 +112,118 @@ test('同じ内容で2回exportしてもmemoryとmanifestのmtimeを変えない
   assert.deepEqual([fs.statSync(shared).mtimeMs, fs.statSync(manifest).mtimeMs], first);
 });
 
-test('発信元PCではローカル直下と同名のmemoryをスキップする', async () => {
-  const f = fixture();
-  fs.mkdirSync(path.join(f.repoRoot, 'memory-shared'));
-  fs.writeFileSync(path.join(f.repoRoot, 'memory-shared', 'feedback_same.md'), memory('同じ'));
-  fs.writeFileSync(path.join(f.memoryDir, 'feedback_same.md'), memory('同じ'));
-  const output = [];
-  const result = await installSharedMemories(installOptions(f, { emit: (line) => output.push(line) }));
-  assert.equal(result.skipped, 1); assert.equal(fs.existsSync(path.join(f.memoryDir, 'shared', 'feedback_same.md')), false);
-  assert.match(output.join('\n'), /ローカル直下に同名memoryあり/);
-});
 
-test('installを2回実行してもMEMORY.mdの索引行は1本だけ', async () => {
+test('private exports all allowed types and indexes, excludes user, opt-outs, backups and secrets', () => {
   const f = fixture();
-  fs.mkdirSync(path.join(f.repoRoot, 'memory-shared'));
-  fs.writeFileSync(path.join(f.repoRoot, 'memory-shared', 'feedback_remote.md'), memory('遠隔の知見'));
-  await installSharedMemories(installOptions(f));
-  await installSharedMemories(installOptions(f));
-  const contents = fs.readFileSync(path.join(f.memoryDir, 'MEMORY.md'), 'utf8');
-  assert.equal((contents.match(/他PCからの共有知見/g) || []).length, 1);
-  assert.match(contents, /\[index\/shared\.md\]\(index\/shared\.md\) \(1件\)/);
-});
-
-test('index/shared.mdを既存indexと同じ見出し・説明リンク書式で生成する', async () => {
-  const f = fixture();
-  fs.mkdirSync(path.join(f.repoRoot, 'memory-shared'));
-  fs.writeFileSync(path.join(f.repoRoot, 'memory-shared', 'feedback_remote.md'), memory('遠隔の知見'));
-  const result = await installSharedMemories(installOptions(f));
-  const contents = fs.readFileSync(path.join(f.memoryDir, 'index', 'shared.md'), 'utf8');
-  assert.equal(result.indexed, 1);
-  assert.match(contents, /^# 他PCからの共有知見\n\n（MEMORY\.md から辿られるサブ索引。[^\n]+）\n\n- \[遠隔の知見\]\(\.\.\/shared\/feedback_remote\.md\)\n$/);
-});
-
-test('memoryが1件も無いhomeのCLIはexit 0', () => {
-  const f = fixture();
-  const empty = path.join(f.root, 'empty-home'); fs.mkdirSync(empty);
-  const child = spawnSync(process.execPath, [script, '--install', '--json'], { encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: empty } });
-  assert.equal(child.status, 0, child.stderr);
-  assert.deepEqual(JSON.parse(child.stdout), { installed: 0, skipped: 0, unchanged: 0, indexed: 0 });
-});
-
-test('資格情報はprivate/publicのどちらでも除外する', () => {
-  for (const channel of ['private', 'public']) {
-    const f = fixture();
-    fs.writeFileSync(path.join(f.memoryDir, 'feedback_secret.md'), memory('危険', 'feedback', 'token: ghp_123456789012345678901234567890'));
-    const result = exportMemories(exportOptions(f, { channel }));
-    assert.equal(result.exported, 0);
-    assert.equal(result.excludedSecrets, 1);
+  for (const type of ['feedback', 'project', 'reference', 'user']) fs.writeFileSync(path.join(f.memoryDir, `${type}.md`), memory(type, type));
+  fs.writeFileSync(path.join(f.memoryDir, 'opt.md'), '---\ntype: project\nshare: false\n---\nprivate');
+  fs.writeFileSync(path.join(f.memoryDir, 'nested.md'), '---\nmetadata:\n  type: reference\n  share: false # opt out\n---\nprivate');
+  fs.writeFileSync(path.join(f.memoryDir, 'secret.md'), memory('secret', 'project', '-----BEGIN PRIVATE KEY-----'));
+  for (const dir of ['index.bak-1', '.memory-body-backup-1', 'shared']) {
+    fs.mkdirSync(path.join(f.memoryDir, dir)); fs.writeFileSync(path.join(f.memoryDir, dir, 'bad.md'), memory('bad'));
   }
+  fs.writeFileSync(path.join(f.memoryDir, 'EXCLUDED.md'), memory('excluded'));
+  const logs = [];
+  const options = exportOptions(f, { channel: 'private', emit: line => logs.push(line) });
+  const result = exportMemories(options);
+  assert.equal(result.exported, 5);
+  assert.equal(result.excluded, 3);
+  const manifest = JSON.parse(fs.readFileSync(path.join(options.outDir, 'manifest.json')));
+  assert.deepEqual(manifest.files.map(f => f.name).sort(), ['MEMORY.md', 'feedback.md', 'index/old.md', 'project.md', 'reference.md']);
+  assert.equal(logs.filter(line => line.startsWith('除外(共有拒否)')).length, 2);
+  fs.unlinkSync(path.join(f.memoryDir, 'index', 'old.md'));
+  exportMemories(options);
+  assert.equal(fs.existsSync(path.join(options.outDir, 'index', 'old.md')), false);
 });
 
-test('既定export先はリポ外の ~/.claude/memory-bundle', () => {
-  const f = fixture();
-  fs.writeFileSync(path.join(f.memoryDir, 'feedback_ok.md'), memory('共有'));
-  exportMemories({ home: f.home, emit: () => {} });
-  assert.equal(fs.existsSync(path.join(f.home, '.claude', 'memory-bundle', 'feedback_ok.md')), true);
-  assert.equal(fs.existsSync(path.join(f.repoRoot, 'memory-shared')), false);
+const digest = text => crypto.createHash('sha256').update(text).digest('hex');
+function remote(files, generatedAt = '2026-10-15T00:00:00Z') {
+  const entries = Object.entries(files);
+  const source = { pc: 'publisher', account: 'sender@example.invalid' };
+  const manifest = { version: 2, generatedAt, source, parts: entries.length, files: entries.map(([name, content], part) => ({ name, sha256: digest(content), bytes: Buffer.byteLength(content), part })) };
+  const calls = [];
+  return { manifest, calls, fetchImpl: async (url, options) => {
+    const query = new URL(url).searchParams; calls.push(new URL(url).search);
+    assert.ok(options.headers['x-orgiast-auth']);
+    const part = Number(query.get('part'));
+    return new Response(JSON.stringify(query.has('manifest') ? manifest : { version: 2, generatedAt, source, part, parts: entries.length, files: Object.fromEntries([entries[part]]) }));
+  } };
+}
+function receiver(t) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-receiver-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const dir = path.join(home, '.claude', 'shared-memory');
+  return { home, dir, options: { home, env: { ORGIAST_KEYSERVE_PC: 'receiver' }, emit: () => {} } };
+}
+test('new PC installs manifest/parts, annotates index, fetches only changed parts and prunes files', async t => {
+  const f = receiver(t);
+  const a = remote({ 'MEMORY.md': '# index', 'index/a.md': '# domain', 'old.md': 'old' });
+  const first = await installSharedMemories({ ...f.options, fetchImpl: a.fetchImpl });
+  assert.equal(first.installed, 3);
+  const index = fs.readFileSync(path.join(f.dir, 'MEMORY.md'), 'utf8');
+  assert.match(index, /<!-- orgiast-shared-memory -->/);
+  assert.match(index, /sender@example.invalid（publisher）/);
+  assert.ok(index.endsWith('# index'));
+  a.calls.length = 0;
+  const same = await installSharedMemories({ ...f.options, fetchImpl: a.fetchImpl });
+  assert.equal(same.unchanged, 3); assert.deepEqual(a.calls, ['?manifest=1']);
+  fs.writeFileSync(path.join(f.dir, 'README.md'), 'keep');
+  const b = remote({ 'MEMORY.md': '# index', 'index/a.md': '# changed' });
+  const next = await installSharedMemories({ ...f.options, fetchImpl: b.fetchImpl });
+  assert.deepEqual(b.calls, ['?manifest=1', '?part=1']);
+  assert.equal(next.updated, 1); assert.equal(next.removed, 1);
+  assert.equal(fs.existsSync(path.join(f.dir, 'old.md')), false);
+  assert.equal(fs.readFileSync(path.join(f.dir, 'README.md'), 'utf8'), 'keep');
+  const state = JSON.parse(fs.readFileSync(path.join(f.dir, '.state.json')));
+  assert.equal(state.files['index/a.md'], digest('# changed'));
+  assert.deepEqual(state.source, b.manifest.source);
+  const c = remote({ 'MEMORY.md': '# index', 'index/a.md': '# changed' }, '2026-10-16T00:00:00Z');
+  await installSharedMemories({ ...f.options, fetchImpl: c.fetchImpl });
+  assert.deepEqual(c.calls, ['?manifest=1', '?part=0']);
+  assert.match(fs.readFileSync(path.join(f.dir, 'MEMORY.md'), 'utf8'), /2026-10-16/);
 });
-
-test('installの401は1行ログで例外にせず認証ヒントを出す', async () => {
-  const f = fixture(); const output = [];
-  const result = await installSharedMemories({ home: f.home, fetchImpl: async () => new Response('', { status: 401 }), emit: (line) => output.push(line) });
-  assert.deepEqual(result, { installed: 0, skipped: 0, unchanged: 0, indexed: 0 });
-  assert.equal(output.length, 1);
-  assert.match(output[0], /HTTP 401.*keyserve\.env.*ローテーション/);
+test('source PC skips by explicit identity or 50% root name overlap only without configured identity', async t => {
+  const f = receiver(t);
+  const a = remote({ 'a.md': 'a', 'b.md': 'b' });
+  const explicit = await installSharedMemories({ ...f.options, env: { ORGIAST_KEYSERVE_PC: 'publisher' }, fetchImpl: a.fetchImpl });
+  assert.equal(explicit.skipped, 2); assert.equal(fs.existsSync(f.dir), false);
+  const local = path.join(f.home, '.claude/projects/p/memory'); fs.mkdirSync(local, { recursive: true });
+  fs.writeFileSync(path.join(local, 'a.md'), 'local');
+  const fallback = await installSharedMemories({ ...f.options, env: {}, fetchImpl: a.fetchImpl });
+  assert.equal(fallback.skipped, 2);
+  const received = await installSharedMemories({ ...f.options, fetchImpl: a.fetchImpl });
+  assert.equal(received.installed, 2);
+  assert.equal(fs.readFileSync(path.join(local, 'a.md'), 'utf8'), 'local');
 });
-
-test('installの壊れたJSONは1行ログで例外にしない', async () => {
-  const f = fixture(); const output = [];
-  const result = await installSharedMemories({ home: f.home, fetchImpl: async () => new Response('{broken', { status: 200 }), emit: (line) => output.push(line) });
-  assert.equal(result.installed, 0);
-  assert.equal(output.length, 1);
+test('offline v2 layout and dry-run need no network or local auto-memory', async t => {
+  const f = receiver(t); const fromDir = path.join(f.home, 'bundle');
+  fs.mkdirSync(path.join(fromDir, 'index'), { recursive: true });
+  fs.writeFileSync(path.join(fromDir, 'MEMORY.md'), '# memory'); fs.writeFileSync(path.join(fromDir, 'index/a.md'), '# a');
+  const options = { ...f.options, fromDir, fetchImpl: () => assert.fail('network') };
+  assert.equal((await installSharedMemories({ ...options, dryRun: true })).installed, 2);
+  assert.equal(fs.existsSync(f.dir), false);
+  assert.equal((await installSharedMemories(options)).installed, 2);
+  assert.equal(fs.readFileSync(path.join(f.dir, 'index/a.md'), 'utf8'), '# a');
 });
-
-test('アンカーが無いMEMORY.mdでも末尾に索引行が追記される', async () => {
-  const f = fixture();
-  fs.writeFileSync(path.join(f.memoryDir, 'MEMORY.md'), '# MEMORY\n\n見出しなしの本文だけ\n');
-  fs.mkdirSync(path.join(f.repoRoot, 'memory-shared'));
-  fs.writeFileSync(path.join(f.repoRoot, 'memory-shared', 'feedback_remote.md'), memory('遠隔の知見'));
-
-  const result = await installSharedMemories(installOptions(f));
-  const contents = fs.readFileSync(path.join(f.memoryDir, 'MEMORY.md'), 'utf8');
-
-  assert.equal(result.indexed, 1);
-  assert.match(contents, /見出しなしの本文だけ/);
-  assert.match(contents, /## ドメイン索引\n- \*\*他PCからの共有知見\*\*.*\(1件\)\n$/);
-});
-
-test('既存の他PCからの共有知見行だけがある場合は重複せず置換される', async () => {
-  const f = fixture();
-  fs.writeFileSync(path.join(f.memoryDir, 'MEMORY.md'), '# MEMORY\n\n- **他PCからの共有知見** 別アカウントPCで確立した実測ノウハウ → [index/shared.md](index/shared.md) (9件)\n');
-  fs.mkdirSync(path.join(f.repoRoot, 'memory-shared'));
-  fs.writeFileSync(path.join(f.repoRoot, 'memory-shared', 'feedback_remote.md'), memory('遠隔の知見'));
-
-  const result = await installSharedMemories(installOptions(f));
-  const contents = fs.readFileSync(path.join(f.memoryDir, 'MEMORY.md'), 'utf8');
-
-  assert.equal(result.indexed, 1);
-  assert.equal((contents.match(/他PCからの共有知見/g) || []).length, 1);
-  assert.match(contents, /\(1件\)/);
-  assert.doesNotMatch(contents, /\(9件\)/);
-});
-
-test('## ドメイン索引 がある場合はその直後に挿入される(既存挙動の保護)', async () => {
-  const f = fixture();
-  fs.mkdirSync(path.join(f.repoRoot, 'memory-shared'));
-  fs.writeFileSync(path.join(f.repoRoot, 'memory-shared', 'feedback_remote.md'), memory('遠隔の知見'));
-
-  await installSharedMemories(installOptions(f));
-  const lines = fs.readFileSync(path.join(f.memoryDir, 'MEMORY.md'), 'utf8').split(/\r?\n/);
-  const headingIndex = lines.findIndex((line) => line === '## ドメイン索引');
-
-  assert.notEqual(headingIndex, -1);
-  assert.match(lines[headingIndex + 1], /他PCからの共有知見/);
-});
-
-test('MEMORY.mdが無いHOMEでもinstallSharedMemoriesが新規作成しindexedを返す', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-share-'));
-  const home = path.join(root, 'home');
-  const repoRoot = path.join(root, 'repo');
-  const memoryDir = path.join(home, '.claude', 'projects', 'project-a', 'memory');
-  fs.mkdirSync(memoryDir, { recursive: true });
-  fs.mkdirSync(path.join(repoRoot, 'memory-shared'), { recursive: true });
-  fs.writeFileSync(path.join(repoRoot, 'memory-shared', 'feedback_remote.md'), memory('遠隔の知見'));
-
-  const result = await installSharedMemories({
-    home, fromDir: path.join(repoRoot, 'memory-shared'),
-    fetchImpl: async () => { throw new Error('offline fixture'); }, emit: () => {},
-  });
-  const contents = fs.readFileSync(path.join(memoryDir, 'MEMORY.md'), 'utf8');
-
-  assert.ok(result.indexed > 0);
-  assert.match(contents, /## ドメイン索引/);
-  assert.match(contents, /他PCからの共有知見/);
-});
-
-test('CRLFのMEMORY.mdでも改行コードがCRLFのまま保たれる', async () => {
-  const f = fixture();
-  fs.writeFileSync(path.join(f.memoryDir, 'MEMORY.md'), '# MEMORY\r\n\r\n見出しなし\r\n');
-  fs.mkdirSync(path.join(f.repoRoot, 'memory-shared'));
-  fs.writeFileSync(path.join(f.repoRoot, 'memory-shared', 'feedback_remote.md'), memory('遠隔の知見'));
-
-  await installSharedMemories(installOptions(f));
-  const contents = fs.readFileSync(path.join(f.memoryDir, 'MEMORY.md'), 'utf8');
-
-  assert.equal(/[^\r]\n/.test(contents), false, 'すべての改行がCRLFであるべき');
-  assert.match(contents, /## ドメイン索引\r\n- \*\*他PCからの共有知見\*\*/);
-});
-
-test('installの正常応答でsharedとindexを作りMEMORY索引を1本に保つ', async () => {
-  const f = fixture();
-  const body = memory('キーサーブ共有');
-  const fetchImpl = async () => Response.json({ files: { 'feedback_remote.md': body } });
-  await installSharedMemories({ home: f.home, fetchImpl, emit: () => {} });
-  await installSharedMemories({ home: f.home, fetchImpl, emit: () => {} });
-  assert.equal(fs.readFileSync(path.join(f.memoryDir, 'shared', 'feedback_remote.md'), 'utf8'), body);
-  assert.match(fs.readFileSync(path.join(f.memoryDir, 'index', 'shared.md'), 'utf8'), /キーサーブ共有/);
-  assert.equal((fs.readFileSync(path.join(f.memoryDir, 'MEMORY.md'), 'utf8').match(/他PCからの共有知見/g) || []).length, 1);
+test('invalid paths, hashes and mixed generations leave installed files and state intact', async t => {
+  const f = receiver(t); const initial = remote({ 'a.md': 'a' });
+  await installSharedMemories({ ...f.options, fetchImpl: initial.fetchImpl });
+  const before = fs.readFileSync(path.join(f.dir, '.state.json'), 'utf8');
+  for (const failure of ['path', 'hash', 'generation', '401', 'json']) {
+    const a = remote({ 'b.md': 'b' });
+    if (failure === 'path') a.manifest.files[0].name = '../escape.md';
+    if (failure === 'hash') a.manifest.files[0].sha256 = digest('wrong');
+    const fetchImpl = async (url, options) => {
+      if (failure === '401') return new Response('', { status: 401 });
+      if (failure === 'json') return new Response('{broken');
+      const response = await a.fetchImpl(url, options);
+      const body = await response.json();
+      if (failure === 'generation' && new URL(url).searchParams.has('part')) body.generatedAt = 'other';
+      return new Response(JSON.stringify(body));
+    };
+    const result = await installSharedMemories({ ...f.options, fetchImpl });
+    assert.ok(result.error, failure);
+    assert.equal(fs.readFileSync(path.join(f.dir, '.state.json'), 'utf8'), before);
+    assert.equal(fs.readFileSync(path.join(f.dir, 'a.md'), 'utf8'), 'a');
+  }
 });

@@ -3,14 +3,14 @@
   "_note": "kim/監督Claude が指示を1件書き、各PCの fleet-agent が15分以内に拾って結果を Discord へ返す。kind は status / prompt / enable-auto-session の3つだけ。prompt と enable-auto-session はそのPCの人がオプトイン済みの場合のみ実行される。空配列にすると全PCで何も起きない。 PC間メッセージは fleet-mail.mjs（双方向）を使う。",
   "directives": [
     {
-      "id": "prompt-20260929-094839-5817",
+      "id": "prompt-20261015-103145-8901",
       "kind": "prompt",
       "targets": "all",
-      "why": "kim 2026-09-17 決定(案A) bypassPermissions+deny+allow を全PCへ即時反映(PR #442)",
-      "body": "【フリート指令 / kim 2026-09-17 決定・案A の即時反映】\nこのPCで次を実行し、結果を報告してください。user の操作は不要です。\n\n1. `node ~/orgiast-main/tools/setup.mjs --converge`（無ければ `node ~/orgiast-claude-rules/tools/setup.mjs --converge`）を実行する。\n2. `~/.claude/settings.json` を Grep で確認し、次の3点を報告する:\n   - `\"defaultMode\"` の値（期待: `bypassPermissions`。`ORGIAST_KEEP_PERMISSION_MODE=1` を設定しているPCは `auto` のままで可）\n   - `permissions.allow` に `Edit(~/.claude/settings.json)` があるか\n   - `permissions.deny` に `Bash(rm -rf *)` と `Read(**/.env)` があるか\n3. `\"effortLevel\"` が `medium` であること（違えば `medium` に Edit）。\n4. 上の結果を1行ずつ、PC名付きでフリートシートに報告する（`node tools/fleet-sheet-report.mjs` が使えるならそれで）。\n\n背景: auto mode classifier が Claude 自身の設定・許可・ガードの修正を必ず止め、user の手作業に直結したため、permission mode を bypassPermissions にし、安全を deny リスト（allow-rules.json）と社内 hook の2層で担保する（ONBOARDING §1.14、PR #442）。\n",
+      "why": "kim-PC の memory 全件配布の初回受信を今日中に確認する（docs/memory-share.md）",
+      "body": "【フリート指令 / kim-PC の memory 全件配布の初回受信（2026-10-15）】\nこのPCで次を実行し、結果を報告してください。user の操作は不要です。\n\n1. `node ~/orgiast-main/tools/onboarding-sync.mjs --force`（無ければ `node ~/orgiast-claude-rules/tools/onboarding-sync.mjs --force`）を実行する。\n2. `~/.claude/hooks/onboarding-sync.log` の末尾から `memory-share install:` の行を1行そのまま報告する（generatedAt / installed / dir が入っているはず）。\n3. `~/.claude/shared-memory/MEMORY.md` が存在するか、`~/.claude/shared-memory/` 直下の .md ファイル数、`~/.claude/CLAUDE.md` に `@~/.claude/shared-memory/MEMORY.md` の行があるか、の3点を PC名付きで1行ずつ報告する。\n4. 失敗（401 / 502 / 503 / 404）なら、その HTTP コードをそのまま報告する。言い換え再試行はしない。\n\n背景: kim-PC に蓄積した Claude Code の運用ノウハウ（memory 約870件）が cr@ / nishi@ のPCに届いておらず、同じ試行錯誤が再発していた。配信口 orgiast-memoryserve を新設し、各PCの onboarding-sync が毎日自動で受信する（docs/memory-share.md）。\n",
       "createdBy": "uers",
-      "createdAt": "2026-09-29T09:48:39.219Z",
-      "expiresAt": "2026-10-06T09:48:39.219Z",
+      "createdAt": "2026-10-15T10:31:45.686Z",
+      "expiresAt": "2026-10-17T10:31:45.686Z",
       "timeoutSeconds": 900
     }
   ]

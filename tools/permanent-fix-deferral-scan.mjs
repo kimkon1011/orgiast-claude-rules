@@ -31,7 +31,18 @@ const P1 = {
 };
 const P2 = /(次セッション|次回セッション|次回に|後日)[^」"'\n]{0,60}(実装|対応|修正|改修|恒久)/;
 const W  = /(数分|しばらく|少し|少々)[^」"'\n]{0,20}(お?待ち|待って)|完了を?待って|完了待ちで/;
-const FIX = '実装|修正|改修|恒久|恒久化|修復|作り直';
+// 「実装指示」「修正点」「修正内容」のように、FIX 語の直後が名詞の用法は **指示・指摘の引用**で
+// あって先送りの行為ではない。2026-10-14 の実測で P3 の過去ヒット 7/7 がこの型
+// （実装→指示 / 修正→指示・点・内容）で、真の先送りは 1 件も無かった。行為形
+// （自動修復の恒久化を次回に回す／修正した／実装する）は引き続き検出する。
+const FIX_NOUN_AFTER = /^(指示|点|内容|事項|案|方針|予定|項目|対象|箇所)/;
+const FIX_WORDS = /実装|修正|改修|恒久|恒久化|修復|作り直/g;
+function handoffHasFixAction(line) {
+  for (const match of line.matchAll(FIX_WORDS)) {
+    if (!FIX_NOUN_AFTER.test(line.slice(match.index + match[0].length))) return true;
+  }
+  return false;
+}
 const HANDOFF_LINE = /次に\s*kim\s*がすること[:：][ \t]*([^\r\n]*)/;
 const HANDOFF_EMPTY = /^(なし|ありません|ありません。|特になし|無し)/;
 const ASK_PERMISSION = /(やりますか|進めますか|進めてよいか|よろしいですか|可否|判断してください|決めてください|選んでください)/;
@@ -39,7 +50,7 @@ const ASK_CONTEXT = /(恒久|配布|自動修復|実装|修正|改修|恒久化)
 const P3 = {
   find(text) {
     for (const match of text.matchAll(new RegExp(HANDOFF_LINE, 'g'))) {
-      if (!HANDOFF_EMPTY.test(match[1]) && new RegExp(FIX).test(match[1])) return match;
+      if (!HANDOFF_EMPTY.test(match[1]) && handoffHasFixAction(match[1])) return match;
     }
     return null;
   }
@@ -62,6 +73,17 @@ export function detect(text) {
   }).filter(Boolean).sort((a, b) => a.match.index - b.match.index);
 }
 
+// Stop hook の再入ガードで「評価せず記録」された行か。stop-gate-runner は stop_hook_active の
+// ときは判定せず verdict:'skipped' で台帳に書くだけ（tools/stop-gate-runner.mjs:119）。これは
+// セッションの手渡し判断ではなく、同じターンの直前に block として評価済みの行が二重に並んだもの。
+// 数えると実体のない先送りヒットが生まれる（2026-10-12T04:40:38Z / f5fc66f7 の W と
+// 04:50:42Z / 349e7edb の P3 がこれに当たり、どちらも同一セッションが数十秒〜17分後に
+// 作業を着地させていた）。
+export function unevaluated(entry) {
+  return entry?.verdict === 'skipped'
+    && Array.isArray(entry.reasonCodes) && entry.reasonCodes.includes('stop_hook_active');
+}
+
 const DEFAULT_SINCE = '1970-01-01T00:00:00Z';
 const NAMES = ['stop-gate-runner-ledger.jsonl', 'handoff-audit-ledger.jsonl', 'handoff-audit-nightly-ledger.jsonl'];
 
@@ -79,6 +101,8 @@ export function scan({ home = os.homedir(), since = DEFAULT_SINCE, until = null 
       if (!entry) continue;
       const at = Date.parse(entry.ts);
       if (!(at >= Date.parse(since)) || (until !== null && !(at < Date.parse(until)))) continue;
+      // ゲートが判定していない行は「手渡し」ではないので対象にしない（上記 unevaluated の説明）。
+      if (unevaluated(entry)) continue;
       const quotes = index === 0 ? [String(entry.excerpt ?? '')]
         : (Array.isArray(entry.violations) ? entry.violations : []).map(v => String(v?.quote ?? ''));
       let text = '';

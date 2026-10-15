@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { scan, detect } from './permanent-fix-deferral-scan.mjs';
+import { scan, detect, unevaluated } from './permanent-fix-deferral-scan.mjs';
 
 function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'deferral-scan-'));
@@ -178,4 +178,50 @@ test('handoff行自体に修正語がある場合は引き続き検出する', t
     assert.equal(source.hits, 1);
     assert.equal(source.byPattern.P3, 1);
   }
+});
+
+test('評価されていない行（stop_hook_active の再入ガード）は先送りとして数えない', t => {
+  const home = fixture(t);
+  const text = '恒久修正は次セッションで行う';
+  // 実台帳と同じ並び: 同ターンが block として評価され、直後に再入ガードで skipped 記録される。
+  const entries = [
+    { ts: '2026-10-12T04:40:33Z', verdict: 'block', reasonCodes: [], sessionId: 'evaluated', excerpt: text },
+    { ts: '2026-10-12T04:40:38Z', verdict: 'skipped', reasonCodes: ['stop_hook_active'], sessionId: 'reentry', excerpt: text }
+  ];
+  for (const source of scan({ home }).sources) fs.writeFileSync(source.file, entries.map(JSON.stringify).join('\n') + '\n');
+  for (const source of scan({ home }).sources) assert.equal(source.total, 2);   // 読み込み行数は減らさない
+  const runner = scan({ home }).sources[0];   // excerpt を見るのは stop-gate 台帳だけ
+  assert.equal(runner.hits, 1);               // 評価済みの block 行だけ数える
+  assert.equal(runner.rows[0].sessionId, 'evaluated');
+  assert.equal(unevaluated({ verdict: 'skipped', reasonCodes: ['stop_hook_active'] }), true);
+  assert.equal(unevaluated({ verdict: 'skipped', reasonCodes: ['no-assistant-text'] }), false);
+  assert.equal(unevaluated({ verdict: 'pass', reasonCodes: [] }), false);
+  assert.equal(unevaluated({}), false);
+});
+
+test('実インシデントの逐語（W）は verdict=skipped の再入行なので検出されない', t => {
+  const home = fixture(t);
+  const reentry = { ts: '2026-10-12T04:40:38.847Z', verdict: 'skipped', reasonCodes: ['stop_hook_active'], sessionId: 'f5fc66f7-3cbf-44ab-aeb9-84b3a7e2a21f',
+    excerpt: 'TJP-09 はまだ実装中です。Codex（DeepSeek 経由）の完了を待っています。 次に kim がすること: なし（待つだけで大丈夫です）' };
+  const source = scan({ home }).sources[0];
+  fs.writeFileSync(source.file, `${JSON.stringify(reentry)}\n`);
+  assert.equal(scan({ home }).sources[0].hits, 0);
+  // 同じ文面が評価済み（pass）で出た場合は従来どおり検出する＝再入行だけを外している。
+  const evaluated = { ...reentry, verdict: 'pass', reasonCodes: [] };
+  fs.writeFileSync(source.file, `${JSON.stringify(evaluated)}\n`);
+  assert.equal(scan({ home }).sources[0].hits, 1);
+  assert.equal(scan({ home }).sources[0].byPattern.W, 1);
+});
+
+test('指示・指摘の引用（実装指示／修正点／修正内容）はP3と誤検出しない', () => {
+  // 2026-10-14 の実測で P3 の過去ヒット 7/7 がこの型だった（真の先送りは 0 件）。
+  // いずれも「次に kim がすること」が承認・レビュー・コミットの依頼で、FIX 語は
+  // 指示や指摘を名詞で引用しただけ（実装指示 / 修正点 / 修正内容 / 修正指示）。
+  for (const quote of [
+    '次に kim がすること: 変更8ファイルをレビューし、問題なければ commit（実装指示により commit は監督側で実施）',
+    '次に kim がすること: 内容をご確認のうえ、問題なければコミット／次のタスクへ。修正点があれば指示を。',
+    '次に kim がすること: requirements.html を確認し、「承認」または修正指示を返信する。',
+    '次に kim がすること: issue にコメント1行（問題なければ `承認`／直したい箇所があれば修正内容）。',
+    '次に kim がすること: PR #21 を見て、ここで「OK」か、修正点を返してください。'
+  ]) assert.deepEqual(detect(quote).map(found => found.pattern), [], quote);
 });

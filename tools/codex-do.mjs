@@ -99,6 +99,31 @@ export function buildCodexExecArgs({ slug, effort, review = false } = {}) {
   return ['exec', ...(slug ? ['-m', slug] : []), ...(effort ? ['-c', `model_reasoning_effort="${effort}"`] : []), '-s', review ? 'read-only' : 'workspace-write', '-'];
 }
 
+// ネイティブ Windows codex は workspace-write が read-only に固定される既知の不具合(openai/codex#35428)で
+// 編集が保存されない。cr-PC で実測(2026-10-12): workspace-write → 「読み取り専用のため作成できません」、
+// danger-full-access → 作成成功。review(read-only) はそのまま。
+// Windows ではシェル無しの codex 起動だと codex.cmd を解決できず ENOENT(status null)になる。
+// .cmd シムが指す node エントリ(node_modules/@openai/codex/bin/codex.js)を process.execPath で直接起動する。
+export function resolveNativeCodexCommand(platform = process.platform, env = process.env) {
+  if (platform !== 'win32') return { command: 'codex', prefixArgs: [] };
+  const dirs = String(env.PATH || env.Path || '').split(';').filter(Boolean);
+  for (const dir of dirs) {
+    const shim = path.join(dir, 'codex.cmd');
+    if (!fs.existsSync(shim)) continue;
+    const entry = path.join(dir, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
+    if (fs.existsSync(entry)) return { command: process.execPath, prefixArgs: [entry] };
+  }
+  return { command: 'codex', prefixArgs: [] };
+}
+
+export function nativeWindowsCodexArgs(codexArgs, platform = process.platform) {
+  if (platform !== 'win32') return [...codexArgs];
+  const out = [...codexArgs];
+  const i = out.indexOf('-s');
+  if (i >= 0 && out[i + 1] === 'workspace-write') out[i + 1] = 'danger-full-access';
+  return out;
+}
+
 // `.git` の「存在」ではなく「git がリポジトリとして認識できる実体か」を見る。
 // 空の .git ディレクトリ(HEAD が無い)は existsSync では true になるが、git 側は
 // "not a git repository" を返す。この食い違いがあると codex-do は --skip-git-repo-check を
@@ -842,15 +867,17 @@ async function launchCodex(codexArgs) {
         return { status: 3, outputChars: 0, output: '', stderr: failureReason, timedOut: false, launched: false };
       }
       console.error('⚠️ WSL 経路が使えないため、--allow-native の指定によりネイティブ Windows codex で実行します。\nWindows 版は read-only サンドボックス固定でファイルを書けない既知の不具合(openai/codex#35428)があり、編集が保存されない可能性が高い。');
-      const nativeArgs = [...codexArgs];
+      const nativeArgs = nativeWindowsCodexArgs(codexArgs);
       if (!isInsideGitRepo(cwd)) nativeArgs.splice(-1, 0, '--skip-git-repo-check');
-      result = await execute('codex', nativeArgs, { cwd });
+      const nativeCmd = resolveNativeCodexCommand();
+      result = await execute(nativeCmd.command, [...nativeCmd.prefixArgs, ...nativeArgs], { cwd });
     }
   } else {
     if (process.platform === 'win32') console.error('⚠️ --force-native によりネイティブ Windows codex で実行します。編集が保存されない可能性があります');
-    const nativeArgs = [...codexArgs];
+    const nativeArgs = nativeWindowsCodexArgs(codexArgs);
     if (!isInsideGitRepo(cwd)) nativeArgs.splice(-1, 0, '--skip-git-repo-check');
-    result = await execute('codex', nativeArgs, { cwd });
+    const nativeCmd = resolveNativeCodexCommand();
+    result = await execute(nativeCmd.command, [...nativeCmd.prefixArgs, ...nativeArgs], { cwd });
   }
 
   return result;

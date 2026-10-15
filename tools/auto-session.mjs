@@ -484,7 +484,7 @@ export function buildPrompt(todo, sections, repoCwd, summaryFile, timeoutMin = 6
 - 他セッションと作業ツリーを共有している。\`git add -A\` / \`git commit -a\` / \`git stash\` / \`git checkout -- .\` は禁止。自分が作成・変更したファイルだけをパス指定で \`git add\` する。着手前とコミット直前に \`git status --porcelain\` を撮り、差分が自分の変更だけであることを確認する。
 - ブランチは必ず main から切る。ブランチ名は \`auto/${day}-<短いスラグ>\`。
 - \`node --test tools/*.test.mjs\` が緑になるまで直す。
-- PR を作り、CI green を確認してから \`gh pr merge --squash\` でマージする。CI が赤なら直し、3回直して赤のままならマージせず PR を残して理由を書いて終了する。
+- PR を作ったら \`automerge\` ラベルを付ける（\`gh pr edit <PR番号> --add-label automerge\`）。このラベルが付いた PR は CI が緑になった時点で GitHub が自動で squash マージするので、緑を待ってポーリングしなくてよい。CI が赤なら直し、3回直して赤のままならマージせず PR を残して理由を書いて終了する。ラベルを付けられない場合に限り \`gh pr merge --squash\` で自分でマージする。\`gh\` が未認証でも \`git credential fill\` の password を \`GH_TOKEN\` に入れれば通る（手順は tools/gh-handoff-gate.mjs）ので、未認証を理由に PR を放置しない。
 - マージ後、変更が実際に効いているかを実物で検証する。検証できていないものを「完了」と書かない。
 - 進捗は節目ごと（ブランチ作成 / PR 作成 / CI green / マージ / 検証結果 / 残ったこと）に ${summaryFile} へ追記する。このファイルだけは強制終了されても残るので、「やったことは必ずここに書く」。追記は \`>>\` 相当とし、全文を上書きしない。
 - 外部の定期実行（GitHub Actions の schedule など）の結果を待つ場合、5分を超えるポーリングをしてはいけない。待ちが必要なら ${summaryFile} に「検証は次回の自動セッションで行う」と追記し、~/.claude/next-session.md の残TODO先頭に検証だけの1行を追加して終了する。

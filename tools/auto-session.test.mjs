@@ -992,6 +992,14 @@ test('buildPrompt は実リポジトリで git -C を使うよう指示する', 
   assert.ok(prompt.indexOf('セッションの作業ディレクトリは履歴を揃えるため') < prompt.indexOf('実装本体は'));
 });
 
+test('buildPrompt は PR に automerge ラベルを付け、CI 緑を待たずに自動マージさせる', () => {
+  const prompt = buildPrompt('実装する', {}, '/repo', '/tmp/run.summary.md', 60);
+  assert.ok(prompt.includes('--add-label automerge'));
+  assert.ok(prompt.includes('GitHub が自動で squash マージ'));
+  // ラベルが付けられない環境向けのフォールバックも残す
+  assert.ok(prompt.includes('gh pr merge --squash'));
+});
+
 test('localDate は Date のローカル日付を YYYY-MM-DD で返す', () => {
   const date = new Date('2026-08-26T18:20:00Z');
   const expected = [

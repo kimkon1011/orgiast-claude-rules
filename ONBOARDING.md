@@ -765,28 +765,18 @@ kim「**ほかのアカウントでまた同じ試行錯誤が発生している
 - `status` だけはオプトイン不要（読み取り専用の自己申告。既に fleet-poller が毎日 verify-setup の結果を
   投げているのと同じ扱い）。ただし本文は `redactSecrets` を通し、**webhook URL やキーは絶対に載せない**。
 
-##### memory（試行錯誤の実測）は自動で配られる — ただし全部ではない
+##### memory（試行錯誤の実測）は毎日自動で配られる（2026-10-15）
 
-**これが「同じ試行錯誤が別アカウントで再発する」真因だった。**
-`tools/onboarding-sync.mjs` が配っていたのは `tools/` `rules-extracted/` `skills/` **だけ**で、
-`~/.claude/projects/<proj>/memory/` は1件も配っていなかった（2026-09-02 に grep で確認）。
+kim-PC の memory は全件（feedback / project / reference、人物像の user は除く）を private な専用プロジェクト orgiast-memoryserve の `/api/memory`（認証は keyserve `/api/keys` へ委譲。鍵配布の認証面を夜間デプロイで触らないため分離） から毎日配る。`MEMORY.md` と `index/*.md` も配信対象。
 
-- `tools/memory-share.mjs --export` が **`metadata.type: feedback` の memory だけ**を `memory-shared/` へ出す。
-  `project_*`（案件固有）と `reference_*` は配らない。
-- 各PCは `onboarding-sync` の中で `--install` 相当が走り、`<memoryDir>/shared/` と `index/shared.md` に入る。
-  **`MEMORY.md` には1行だけ足す**（このファイルは約 24,985 バイトで切り捨てられるため）。
-- 発信元PC（同名の memory をローカル直下に持っているPC）ではスキップされ、二重に持たない。
-- 🔴 **配布先リポ `orgiast-claude-rules` は PUBLIC**（実測: `gh repo view` が `"visibility":"PUBLIC"`）。
-  そのため export には2種類の除外門がある。**外すな**:
-  1. **資格情報**（webhook URL / `sk-` `gsk_` `ghp_` `AIza` / 秘密鍵 / 長い hex）
-  2. **顧客情報**（法人名 `株式会社|有限会社|合同会社` / 案件ID `C0\d{3,}`）
-     — 2026-09-02 実測で 254 件中 **12 件**が該当した（例: `C0038（株式会社◯◯ / ◯◯EXPO）` を
-     そのまま引用している feedback）。社員名・Docs ID・keyserve の秘密名は0件だった。
-  除外は**理由つきで1行出す**（黙って落とすと「なぜ件数が減ったのか」が誰にも分からなくなる）。
-  除外された分の**ファイル名と一般化した理由だけ**が `memory-shared/EXCLUDED.md` に残る。
-- **公開できない13件（および全257件）を他PCへ届ける経路は private keyserve で作る**（kim 判断・2026-09-02）。
-  クライアント側（`memory-share.mjs --install` が HMAC で `/api/memory` から取る形）は実装済み。
-  **ただし配信口のデプロイは下の理由で止めてある。**
+- kim-PC の夜間処理がバンドル v2 を生成し、内容が変わったときだけ Vercel にデプロイする。
+- 各PCの `onboarding-sync` が差分を `~/.claude/shared-memory/` に受信する。CLAUDE.md の管理ブロックから `@~/.claude/shared-memory/MEMORY.md` を参照する。
+- 発信元PCは受信をスキップする。本文中の「ユーザー」「kim」は発信元の人物なので、個人の既定を受け手へそのまま適用しない。
+- 秘密値は資格情報の除外門で除外する。frontmatter の `share: false` または `metadata.share: false` で個別に除外できる。
+- 受け手で編集禁止（毎日上書き）。このPCの知見は通常の auto-memory に書き、全社への戻しは `/share-knowledge` で投稿する。
+- public export は従来どおり feedback のみで、資格情報と顧客情報の両方を除外する。
+
+検証方法と構成は [docs/memory-share.md](docs/memory-share.md) を参照。
 
 ##### 🔴 keyserve に手を入れる前に必ず読む: git は本番より古い（2026-09-02 実測）
 

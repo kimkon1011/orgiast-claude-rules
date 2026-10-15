@@ -63,7 +63,7 @@ test('CLI と runner は ORGIAST_HOME と transcript を使って block', t => {
   for (const script of ['substitute-capability-gate.mjs', 'stop-gate-runner.mjs']) {
     const result = spawnSync(process.execPath, [fileURLToPath(new URL(script, import.meta.url))], {
       input: JSON.stringify({ transcript_path: transcript }), encoding: 'utf8', timeout: 20000,
-      env: { ...process.env, ORGIAST_HOME: home, ORGIAST_HANDOFF_AUDIT: 'off' },
+      env: { ...process.env, ORGIAST_HOME: home, ORGIAST_HANDOFF_AUDIT: 'off', ORGIAST_HOSTNAME: 'kim-PC' },
     });
     assert.ifError(result.error);
     assert.equal(result.status, 0, result.stderr);

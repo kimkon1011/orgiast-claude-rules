@@ -203,11 +203,11 @@ test('headless records mail-seen before spawn and keeps failed seen synchronizat
   let seenBeforeSpawn = false;
   f.deps.spawnImpl = () => {
     seenBeforeSpawn = f.calls.some(c => c.kind === 'mail-seen' && c.payload.seenBy === 'headless');
-    const child = new EventEmitter(); child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.kill = () => {};
+    const child = new EventEmitter(); child.unref = () => {}; child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.kill = () => {};
     queueMicrotask(() => { child.stdout.write('answer'); child.emit('close', 0); }); return child;
   };
-  await pollOnce(f.deps); assert.equal(seenBeforeSpawn, true); assert.equal(f.read(mail().id).status, 'done'); assert.deepEqual(f.read(mail().id).pendingServer, ['seen']);
-  const reply = f.calls.find(c => c.kind === 'mail-reply'); assert.equal(reply.payload.auto, true); assert.equal(reply.payload.hop, 1);
+  await pollOnce(f.deps); assert.equal(seenBeforeSpawn, true); assert.equal(f.read(mail().id).status, 'seen'); assert.deepEqual(f.read(mail().id).pendingServer, ['seen']);
+  assert.equal(f.calls.some(c => c.kind === 'mail-reply'), false);
 });
 test('server terminal state wins over a delayed seen response', async t => {
   const f = fixture(t); f.save(mail());
@@ -348,17 +348,17 @@ test('C9 sweep records serverSyncedAt and never resends completed expiry or ack'
   await main(['--sweep'], f.deps); await pollOnce(f.deps);
   assert.equal(f.calls.filter(c => c.kind !== 'mail-poll').length, count);
 });
-test('C10 interrupted ordinary prompts reply once after two hours without spawning again', async t => {
+test('C10 interrupted ordinary prompts reply once after the runner grace period without spawning again', async t => {
   const f = fixture(t); let time = now;
   f.deps.now = () => time;
   f.save(mail({ kind: 'prompt', executionStartedAt: iso(0) }));
   time += INTERRUPTED_PROMPT_MS - 1; await pollOnce(f.deps);
-  assert.equal(f.calls.filter(c => c.kind === 'mail-reply').length, 0);
+  assert.equal(f.calls.filter(c => c.kind === 'mail-fail').length, 0);
   time++; await pollOnce(f.deps);
-  assert.equal(f.calls.filter(c => c.kind === 'mail-reply').length, 1);
-  assert.equal(f.calls.find(c => c.kind === 'mail-reply').payload.resultBody, INTERRUPTED_PROMPT_BODY);
-  assert.equal(f.read(mail().id).status, 'done'); assert.equal(f.spawns.length, 0);
-  await pollOnce(f.deps); assert.equal(f.calls.filter(c => c.kind === 'mail-reply').length, 1);
+  assert.equal(f.calls.filter(c => c.kind === 'mail-fail').length, 1);
+  assert.equal(f.calls.find(c => c.kind === 'mail-fail').payload.reason, 'timeout');
+  assert.equal(f.read(mail().id).status, 'failed'); assert.equal(f.spawns.length, 0);
+  await pollOnce(f.deps); assert.equal(f.calls.filter(c => c.kind === 'mail-fail').length, 1);
 });
 test('C11 busy inbox lock skips mutations and transport then permits retry', async t => {
   const f = fixture(t); f.save(mail()); const lock = path.join(f.inbox, `${mail().id}.json.lock`);
@@ -533,7 +533,7 @@ test('D6 final arrival receives only the remaining total budget', async t => {
 
 import { readQuestion, updateQuestion, relayQuestions, RELAY_WAIT_MS, RESUME_LIMIT_MS, HOOK_DEADLINE_MS } from './fleet-question-relay.mjs';
 import { runPrompt, consentCommand, hubReport } from './fleet-agent.mjs';
-import { runClaudeTask } from './fleet-task-runner.mjs';
+import { runReadOnlyTask, runClaudeTask } from './fleet-task-runner.mjs';
 function questionFixture(f, extra = {}) {
   const transcriptPath = path.join(f.home, 'session.jsonl'); fs.writeFileSync(transcriptPath, '');
   const question = { sessionId: 'session-hub', cwd: f.home, question: 'どちらにしますか？ token=private', options: [{ label: 'A' }], summary: '検証済み', askedAt: iso(-RELAY_WAIT_MS), questionHash: 'hash-question', drivenByHub: false, relayedAt: null, transcriptPath, transcriptOffset: 0, ...extra };
@@ -622,7 +622,7 @@ test('E received claude resume uses exact argv/cwd, marks hub state, clears runn
   const [exe, args, opts] = f.spawns[0]; assert.equal(exe, '/fixture/claude'); assert.deepEqual(args, ['-p', '--resume', m.resumeSessionId, '--', m.body]); assert.equal(opts.cwd, f.home); assert.equal(opts.env.CLAUDE_HEADLESS, '1'); assert.equal(opts.env.FLEET_DRIVEN_BY_HUB, '1');
   assert.equal(during.drivenByHub, true); assert.ok(during.resumingAt); assert.equal(readQuestion(f.home, m.resumeSessionId).resumingAt, undefined);
   const reply = f.calls.find(c => c.kind === 'mail-reply').payload.resultBody;
-  assert.match(reply, /^\[報告・返信不要\]/); assert.doesNotMatch(reply, /private|stderr/); assert.equal(f.read(m.id).status, 'done');
+  assert.match(reply, /^完了 /); assert.doesNotMatch(reply, /private|stderr/); assert.equal(f.read(m.id).status, 'done');
 });
 test('E active session skips without consuming mail; thirty minute stale session may resume', async t => {
   const f = fixture(t), m = hubPrompt(f);
@@ -635,7 +635,7 @@ test('E new Claude session omits resume and unapproved prompt returns consent wi
   const f = fixture(t), m = hubPrompt(f, { resumeSessionId: undefined });
   await runHubPoll(f); assert.deepEqual(f.spawns[0][1], ['-p', '--', m.body]);
   f.save(mail({ ...m, id: 'mail-unapproved' })); fs.unlinkSync(path.join(f.dir, 'fleet-agent-optin.json'));
-  await runHubPoll(f); assert.equal(f.spawns.length, 1); assert.match(f.calls.filter(c => c.kind === 'mail-reply').at(-1).payload.resultBody, /未オプトイン.*承諾コマンド/s);
+  await runHubPoll(f); assert.equal(f.spawns.length, 1); assert.match(f.calls.filter(c => c.kind === 'mail-send').at(-1).payload.body, /未オプトイン.*承諾コマンド/s);
 });
 test('E runPrompt enforces thirty minute timer, kills process and resolves failure', async () => {
   const child = new EventEmitter(); child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
@@ -648,7 +648,7 @@ test('E runPrompt enforces thirty minute timer, kills process and resolves failu
 });
 test('E interrupted Claude execution fails at thirty minutes and never reruns', async t => {
   const f = fixture(t), m = hubPrompt(f, { executionStartedAt: iso(-RESUME_LIMIT_MS) });
-  await pollOnce(f.deps); assert.equal(f.spawns.length, 0); assert.match(f.calls.find(c => c.kind === 'mail-reply').payload.resultBody, /報告・返信不要.*30分上限/s);
+  await pollOnce(f.deps); assert.equal(f.spawns.length, 0); assert.match(f.calls.find(c => c.kind === 'mail-send').payload.body, /自動回答.*timeout/s);
 });
 
 test('E real poll execution applies thirty minute timeout and returns failure with resume cleanup', async t => {
@@ -659,13 +659,13 @@ test('E real poll execution applies thirty minute timeout and returns failure wi
   f.deps.promptSetTimer = (fn, ms) => { timeout = ms; queueMicrotask(fn); return 1; }; f.deps.promptClearTimer = () => {};
   await runHubPoll(f);
   assert.equal(timeout, RESUME_LIMIT_MS); assert.equal(killed, 'SIGKILL'); assert.equal(readQuestion(f.home, m.resumeSessionId).resumingAt, undefined);
-  assert.match(f.calls.find(c => c.kind === 'mail-reply').payload.resultBody, /報告・返信不要.*実行失敗.*30分上限/s);
+  assert.match(f.calls.find(c => c.kind === 'mail-send').payload.body, /自動回答.*timeout/s);
 });
 test('E missing Claude executable reports candidates and releases session ownership', async t => {
   const f = fixture(t), m = hubPrompt(f);
   f.deps.spawnImpl = () => { const child = new EventEmitter(); child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); queueMicrotask(() => child.emit('error', new Error('spawn ENOENT'))); return child; };
   await runHubPoll(f);
-  const reply = f.calls.find(c => c.kind === 'mail-reply').payload.resultBody;
+  const reply = f.calls.find(c => c.kind === 'mail-send').payload.body;
   assert.match(reply, /実行失敗.*claude CLI.*候補.*\/fixture\/claude/s); assert.equal(readQuestion(f.home, m.resumeSessionId).resumingAt, undefined);
 });
 test('E tool_result human answers suppress forwarding and missing transcripts defer safely', async t => {
@@ -829,7 +829,7 @@ test('G1 prompt consent cannot authorize Claude resume; dedicated consent permit
   fs.writeFileSync(path.join(f.dir, 'fleet-agent-optin.json'), JSON.stringify({ accept: ['prompt'] }));
   await runHubPoll(f);
   assert.equal(f.spawns.length, 0);
-  assert.ok(f.calls.find(c => c.kind === 'mail-reply').payload.resultBody.includes(consentCommand('claude-resume')));
+  assert.ok(f.calls.find(c => c.kind === 'mail-send').payload.body.includes(consentCommand('claude-resume')));
   const approved = hubPrompt(f, { id: 'mail-approved' });
   await runHubPoll(f);
   assert.equal(f.spawns.length, 1); assert.equal(f.read(approved.id).status, 'done');
@@ -905,7 +905,7 @@ test('G6 runner serializes concurrent resumes and preserves the first owner', as
 test('G7 failed execution with empty stdout reports stderr tail', async t => {
   const f = fixture(t); hubPrompt(f); f.deps.spawnImpl = promptSpawn(f, { code: 1, output: '' });
   await runHubPoll(f);
-  assert.match(f.calls.find(c => c.kind === 'mail-reply').payload.resultBody, /実行失敗\nstderr must not replace stdout/);
+  assert.match(f.calls.find(c => c.kind === 'mail-send').payload.body, /自動回答.*exit-1.*stderr must not replace stdout/s);
   assert.equal(hubReport({ exitCode: 1, stdoutTail: '', outputTail: '', error: 'failure detail' }).outputTail.endsWith('failure detail'), true);
 });
 test('G9 answer rejects other recipients and detects changed retries unless forced', async t => {
@@ -948,7 +948,7 @@ test('G6 runner revalidates consent sender and cwd after detached launch', async
     if (mode === 'cwd') fs.rmdirSync(path.join(f.home, '.git'));
     const result = await runClaudeTask({ ...f.deps, id: m.id });
     assert.equal(f.spawns.length, 0);
-    if (mode === 'consent') assert.ok(result.outputTail.includes(consentCommand('claude-resume')));
+    if (mode === 'consent') assert.ok(result.stderrTail.includes(consentCommand('claude-resume')));
     else assert.equal(result.reason, mode === 'sender' ? 'not-hub' : 'bad-cwd');
   }
 });
@@ -967,8 +967,8 @@ test('G6 detached spawn failure is reported once without retrying execution', as
   const f = fixture(t), m = hubPrompt(f); let spawns = 0;
   f.deps.spawnImpl = () => { spawns++; throw new Error('fixture spawn failure'); };
   await pollOnce(f.deps); await pollOnce(f.deps); await pollOnce(f.deps);
-  assert.equal(spawns, 1); assert.equal(f.read(m.id).status, 'done');
-  assert.match(f.calls.find(c => c.kind === 'mail-reply').payload.resultBody, /runner 起動失敗/);
+  assert.equal(spawns, 1); assert.equal(f.read(m.id).status, 'failed');
+  assert.match(f.calls.find(c => c.kind === 'mail-send').payload.body, /runner 起動失敗/);
 });
 
 test('G9 answer detects differences beyond the transmitted length', async t => {
@@ -991,7 +991,7 @@ test('G5 poll clears interrupted or finished ownership before relaying another q
     f.save({ ...m, executionStartedAt: iso(-RESUME_LIMIT_MS) });
     await pollOnce(f.deps);
     assert.equal(readQuestion(f.home, m.resumeSessionId).drivenByHub, false);
-    assert.equal(f.calls.filter(c => c.kind === 'mail-send').length, 0);
+    assert.equal(f.calls.filter(c => c.kind === 'mail-send' && !c.payload.id?.startsWith('mail-reply-fail-')).length, 0);
   }
 });
 
@@ -1048,3 +1048,67 @@ for (const error of ['busy', 'fleet-mail read-back mismatch']) {
     else assert.ok(f.errors.at(-1).includes(`--sent-status ${f.calls[0].id}`));
   });
 }
+
+for (const [result, reason] of [
+  [{ exitCode: null, timedOut: true, stdoutTail: '', stderrTail: 'Permission allow rule (settings.json): warning' }, 'timeout'],
+  [{ exitCode: 0, stdoutTail: 'Permission allow rule (settings.json): warning', stderrTail: '' }, 'empty'],
+  [{ exitCode: 7, stdoutTail: 'partial', stderrTail: 'failure token=private' }, 'exit-7'],
+  [{ exitCode: 0, stdoutTail: 'Permission allow rule (settings.json): warning\nanswer', stderrTail: 'warning must not appear' }, null],
+]) test(`802 persisted runner result is collected as ${reason || 'stdout-only answer'}`, async t => {
+  const f = fixture(t); f.save(mail({ kind: 'prompt', executionStartedAt: iso(-1000) }));
+  fs.mkdirSync(path.join(f.dir, 'fleet-agent-results'));
+  fs.writeFileSync(path.join(f.dir, 'fleet-agent-results', `${mail().id}.json`), JSON.stringify(result));
+  await pollOnce(f.deps);
+  assert.equal(f.spawns.length, 0);
+  const replies = f.calls.filter(c => c.kind === 'mail-reply');
+  if (reason) {
+    assert.equal(replies.length, 0);
+    assert.equal(f.calls.find(c => c.kind === 'mail-fail').payload.reason, reason);
+    assert.equal(f.read(mail().id).status, 'failed');
+    assert.equal(f.read(mail().id).failReason, reason);
+    assert.doesNotMatch(f.calls.find(c => c.kind === 'mail-send').payload.body, /private/);
+  } else assert.equal(replies[0].payload.resultBody, 'answer');
+  await pollOnce(f.deps);
+  assert.equal(f.spawns.length, 0);
+  assert.equal(f.calls.filter(c => c.kind === 'mail-reply').length, reason ? 0 : 1);
+});
+
+test('802 failed mail accepts interactive reply as idempotent note and closes local task', async t => {
+  const f = fixture(t); f.save(mail({ kind: 'prompt', status: 'failed', failReason: 'timeout' }));
+  assert.equal(await main(['--reply', mail().id, '--body-file', f.body], f.deps), 0);
+  const sent = f.calls.find(c => c.kind === 'mail-send').payload;
+  assert.equal(sent.replyTo, mail().id); assert.equal(sent.to, sender);
+  assert.equal(sent.body, 'nonempty test body'); assert.equal(sent.messageKind, 'note');
+  assert.equal(f.calls.some(c => c.kind === 'mail-reply'), false);
+  assert.equal(f.read(mail().id).status, 'done');
+});
+
+import { refreshSentStatus, stripClaudeWarnings } from './fleet-mail.mjs';
+test('802 sender poll caches failure reason for the offline hook', async t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.dir, 'fleet-mail-sent.jsonl'), JSON.stringify({ action: 'sent', id: 'mail-outbound' }) + '\n');
+  await refreshSentStatus({ home: f.home, request: async (kind, payload) => {
+    assert.equal(kind, 'mail-get'); assert.equal(payload.id, 'mail-outbound');
+    return { ok: true, mail: { id: payload.id, to: sender, status: 'failed', failReason: 'timeout' } };
+  } });
+  const cached = JSON.parse(fs.readFileSync(path.join(f.dir, 'fleet-mail-sent-status.json')));
+  assert.equal(cached['mail-outbound'].failReason, 'timeout');
+});
+test('802 warning stripping keeps real answers and removes known configuration lines', () => {
+  assert.equal(stripClaudeWarnings('Permission allow rule (settings.json): warning\r\nWarning: Invalid configuration entry\nanswer\nUnknown permission rule'), 'answer');
+  assert.equal(stripClaudeWarnings('Permission is needed for the next step.'), 'Permission is needed for the next step.');
+});
+
+test('802 result transport retries preserve a long stdout answer without another execution', async t => {
+  const f = fixture(t), answer = 'a'.repeat(6000);
+  f.save(mail({ kind: 'prompt', executionStartedAt: iso(-1000) }));
+  fs.mkdirSync(path.join(f.dir, 'fleet-agent-results'));
+  fs.writeFileSync(path.join(f.dir, 'fleet-agent-results', `${mail().id}.json`), JSON.stringify({ exitCode: 0, stdoutTail: answer, stderrTail: 'warning' }));
+  let fail = true; const request = f.deps.request;
+  f.deps.request = async (kind, payload) => { const response = await request(kind, payload); if (kind === 'mail-reply' && fail) throw new Error('lost response'); return response; };
+  await pollOnce(f.deps); fail = false; await pollOnce(f.deps);
+  const replies = f.calls.filter(c => c.kind === 'mail-reply');
+  assert.equal(replies.length, 2);
+  assert.equal(replies[0].payload.resultBody, answer); assert.equal(replies[1].payload.resultBody, answer);
+  assert.equal(f.spawns.length, 0);
+});

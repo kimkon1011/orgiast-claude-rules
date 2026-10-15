@@ -103,15 +103,15 @@ test('runTask rejects a cwd without .git and records the reason', async t => {
   const result = await runTask({ id: 'mail-2', home: f.home, ownRepo: '/own', spawnImpl: spawnDouble(spawns), run: gitRun() });
   assert.equal(result.cwd, process.env.ORGIAST_REPO ?? '/own');
   assert.match(result.cwdRejected, /cwd 指定を拒否/);
-  assert.match(result.outputTail, /cwd 指定を拒否/);
+  assert.match(result.stderrTail, /cwd 指定を拒否/);
 });
 
 test('runTask writes a result JSON even when the inbox file is missing', async t => {
   const f = fixture(t);
   const result = await runTask({ id: 'mail-3', home: f.home, ownRepo: '/own', spawnImpl: () => assert.fail('inbox が無いときは起動しない'), run: gitRun() });
-  assert.match(result.outputTail, /実行失敗/);
+  assert.match(result.stderrTail, /実行失敗/);
   const written = JSON.parse(fs.readFileSync(path.join(f.dir, 'fleet-agent-results', 'mail-3.json'), 'utf8'));
-  assert.match(written.outputTail, /実行失敗/);
+  assert.match(written.stderrTail, /実行失敗/);
 });
 
 test('runTask records a non-zero exit code from codex-do', async t => {
@@ -120,4 +120,80 @@ test('runTask records a non-zero exit code from codex-do', async t => {
   const result = await runTask({ id: 'mail-4', home: f.home, ownRepo: '/own', spawnImpl: spawnDouble([], { exitCode: 1, output: 'boom' }), run: gitRun() });
   assert.equal(result.exitCode, 1);
   assert.match(result.outputTail, /exit=1/);
+});
+
+import { runReadOnlyTask, promptTimeoutSeconds } from './fleet-task-runner.mjs';
+import { PassThrough } from 'node:stream';
+test('802 prompt timeout defaults to 600 seconds and is capped at 1800', () => {
+  assert.equal(promptTimeoutSeconds(), 600);
+  assert.equal(promptTimeoutSeconds({ FLEET_PROMPT_TIMEOUT_SEC: '1200' }), 1200);
+  assert.equal(promptTimeoutSeconds({ FLEET_PROMPT_TIMEOUT_SEC: '9999' }), 1800);
+  for (const value of ['oops', '-1', '0']) assert.equal(promptTimeoutSeconds({ FLEET_PROMPT_TIMEOUT_SEC: value }), 600);
+});
+test('802 detached read-only runner persists timeout with separate warning stderr and runs once', async t => {
+  const f = fixture(t); writeInbox(f.dir, 'mail-timeout', 'question');
+  fs.writeFileSync(path.join(f.dir, 'fleet-sheet.env'), 'FLEET_PROMPT_TIMEOUT_SEC=700');
+  fs.writeFileSync(path.join(f.dir, 'fleet-agent-optin.json'), '{"accept":["prompt"]}');
+  let calls = 0, timeout, killed;
+  const deps = { home: f.home, id: 'mail-timeout', repo: f.home, resolveClaudeExe: () => 'mock',
+    promptSetTimer: (callback, ms) => { timeout = ms; queueMicrotask(callback); return 1; }, promptClearTimer: () => {},
+    spawnImpl: (_exe, args) => {
+      calls++; assert.ok(args.includes('--strict-mcp-config')); assert.ok(args.includes('Read,Glob,Grep'));
+      const child = new EventEmitter(); child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+      child.kill = signal => { killed = signal; child.emit('close', 0); };
+      queueMicrotask(() => child.stderr.write('Permission allow rule (settings.json): warning'));
+      return child;
+    } };
+  const result = await runReadOnlyTask(deps);
+  assert.equal(timeout, 700000); assert.equal(killed, 'SIGKILL');
+  assert.equal(result.reason, 'timeout'); assert.equal(result.stdoutTail, ''); assert.match(result.stderrTail, /^Permission/);
+  await runReadOnlyTask(deps); assert.equal(calls, 1);
+});
+
+test('802 codex separates stderr and redacts before tail truncation', async t => {
+  const f = fixture(t); writeInbox(f.dir, 'mail-streams', '<!-- fleet-exec: codex -->\nquestion');
+  const result = await runTask({ home: f.home, id: 'mail-streams', ownRepo: f.home, run: gitRun(), spawnImpl: (_exe, _args, options) => {
+    assert.notEqual(options.stdio[1], options.stdio[2]);
+    const child = new EventEmitter();
+    queueMicrotask(() => {
+      fs.writeSync(options.stdio[1], 'answer');
+      fs.writeSync(options.stdio[2], 'token=' + 's'.repeat(9000));
+      child.emit('close', 0);
+    }); return child;
+  } });
+  assert.equal(result.stdoutTail, 'answer');
+  assert.equal(result.stderrTail, '[REDACTED]');
+});
+
+import { runPrompt } from './fleet-agent.mjs';
+import { classifyExecutionResult } from './fleet-mail.mjs';
+for (const length of [8000, 8001, 120000]) {
+  test(`answer truncation preserves beginning and end in both runners (${length})`, async t => {
+    const f = fixture(t);
+    const output = '始'.repeat(6000) + '中'.repeat(length - 7500) + '終'.repeat(1500);
+    const expected = length <= 8000 ? output : '始'.repeat(6000) + `…(中略 ${length - 7500} 字)…` + '終'.repeat(1500);
+    writeInbox(f.dir, 'mail-long', '<!-- fleet-exec: codex -->\nquestion');
+    const codex = await runTask({ home: f.home, id: 'mail-long', ownRepo: f.home, spawnImpl: spawnDouble([], { output }), run: gitRun() });
+    const prompt = await runPrompt({ claudeExe: 'mock', body: 'question', cwd: f.home, spawnImpl: () => {
+      const child = new EventEmitter();
+      child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+      queueMicrotask(() => { child.stdout.write(output); child.emit('close', 0); });
+      return child;
+    } });
+    assert.equal(codex.stdoutTail, expected);
+    assert.equal(prompt.stdoutTail, expected);
+    assert.equal(classifyExecutionResult(prompt).outputTail, expected);
+  });
+}
+test('codex classification preserves metadata and removes warnings only from stdout', () => {
+  const stdoutTail = 'Permission allow rule (settings.json): warning\nanswer\nUnknown permission rule';
+  const prefix = { exitCode: 0, cwd: '/repo', minutes: 3, gitStatus: ' M x', gitLog: 'Unknown permission rule' };
+  const result = { ...prefix, stdoutTail, outputTail: formatReply({ ...prefix, outputTail: stdoutTail }) };
+  const classified = classifyExecutionResult(result, { exec: 'codex' });
+  assert.equal(classified.reason, null);
+  assert.equal(classified.outputTail, formatReply({ ...prefix, outputTail: 'answer' }));
+  assert.deepEqual(classifyExecutionResult(classified, { exec: 'codex' }), classified);
+  for (const exec of [undefined, 'claude']) assert.equal(classifyExecutionResult(result, { exec }).outputTail, 'answer');
+  assert.equal(classifyExecutionResult({ ...result, stdoutTail: 'Unknown permission rule' }, { exec: 'codex' }).reason, 'empty');
+  assert.equal(classifyExecutionResult({ ...result, exitCode: 1 }, { exec: 'codex' }).reason, 'exit-1');
 });

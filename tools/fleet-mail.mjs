@@ -9,8 +9,7 @@ import { isEntry } from './is-entry.mjs';
 import { parseEnvText } from './env-kv.mjs';
 import { machineIdentity } from './machine-identity.mjs';
 import { addDecision, listDecisions } from './pending-decisions.mjs';
-import { loadOptin, redactSecrets, runPrompt, consentCommand, validExecCwd, hubReport } from './fleet-agent.mjs';
-import { resolveClaudeExecutableFromDisk } from './claude-exe.mjs';
+import { loadOptin, redactSecrets, consentCommand, validExecCwd, truncateAnswer } from './fleet-agent.mjs';
 import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
 import { relayQuestions, readQuestion, clearResume, reconcileResumes, collectQuestions, validSessionId, RESUME_LIMIT_MS } from './fleet-question-relay.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
@@ -274,7 +273,7 @@ export const LOCK_BUSY_EXIT = 6;
 export const ACK_BATCH_LIMIT = 100;
 export const CAPABILITY_BACKOFF_MS = 3600000;
 export const SERVER_MAX_ATTEMPTS = 5;
-export const INTERRUPTED_PROMPT_MS = 2 * 3600000;
+export const INTERRUPTED_PROMPT_MS = 35 * 60000;
 export const INTERRUPTED_PROMPT_BODY = '実行が中断・タイムアウト（結果ファイル未生成）';
 // The callback runs synchronously while this file's lock is held. Never hold it over I/O to GAS.
 // null means missing/busy/no change; callers must skip dependent work in that case.
@@ -352,6 +351,7 @@ function saveLocalCompletion(home, id, pendingLocal, completedActions = [], stde
 // Hook writes local intent synchronously; the detached CLI/poller owns transport.
 export function presentMail({ home, id, sessionId, now = Date.now, autoAck = true }) {
   return updateInbox(id, mail => {
+    if (mail?.status === 'failed' && mail.kind === 'prompt') return { ...mail, presentedAt: new Date(now()).toISOString(), presentedSession: sessionId };
     if (!mail || terminal(mail)) return null;
     const at = new Date(now()).toISOString();
     const ack = autoAck && mailCategory(mail) === 2;
@@ -500,6 +500,22 @@ export async function syncPending({ home, request, now = Date.now, from, stderr 
   }
 }
 
+export async function refreshSentStatus({ home, request, stderr = console.error }) {
+  const dir = path.join(home, '.claude');
+  let lines;
+  try { lines = fs.readFileSync(path.join(dir, 'fleet-mail-sent.jsonl'), 'utf8').trim().split('\n'); } catch { return; }
+  const file = path.join(dir, 'fleet-mail-sent-status.json');
+  const cache = readJson(file, {});
+  const ids = [...new Set(lines.flatMap(line => { try { const r = JSON.parse(line); return ['sent', 'send-attempt'].includes(r.action) && r.id ? [r.id] : []; } catch { return []; } }))];
+  const deadline = Date.now() + 10000;
+  for (const id of ids.reverse().filter(id => !['done', 'expired'].includes(cache[id]?.status)).sort((a, b) => (cache[a]?.checkedAt || 0) - (cache[b]?.checkedAt || 0)).slice(0, 5)) {
+    if (Date.now() >= deadline) break;
+    cache[id] = { ...cache[id], checkedAt: Date.now() };
+    try { const response = checked(await request('mail-get', { id }, Math.min(3000, deadline - Date.now()))); if (response.mail) cache[id] = { ...response.mail, checkedAt: Date.now() }; }
+    catch { stderr('fleet-mail: 送信状態取得再試行待ち=1'); }
+  }
+  writeJson(file, cache);
+}
 function joinReply(home, mail) {
   if (!mail.replyTo) return;
   const dir = path.join(home, '.claude');
@@ -507,6 +523,12 @@ function joinReply(home, mail) {
   try { sent = fs.readFileSync(path.join(dir, 'fleet-mail-sent.jsonl'), 'utf8'); } catch (error) { if (error.code === 'ENOENT') return; throw error; }
   const parseLines = text => text.split('\n').flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } });
   if (!parseLines(sent).some(row => row.id === mail.replyTo && ['sent', 'send-attempt'].includes(row.action))) return;
+  if (!mail.id.startsWith('mail-reply-fail-')) {
+    const statusFile = path.join(dir, 'fleet-mail-sent-status.json');
+    const cache = readJson(statusFile, {});
+    cache[mail.replyTo] = { ...cache[mail.replyTo], id: mail.replyTo, status: 'done', resultBody: mail.body };
+    writeJson(statusFile, cache);
+  }
   const repliesFile = path.join(dir, 'fleet-mail-replies.jsonl');
   let replies = []; try { replies = parseLines(fs.readFileSync(repliesFile, 'utf8')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   if (!replies.some(row => row.replyId === mail.id)) fs.appendFileSync(repliesFile, `${JSON.stringify({ id: mail.replyTo, replyId: mail.id, from: mail.from, resultBody: mail.body, resultAt: mail.createdAt })}\n`, { mode: 0o600 });
@@ -681,6 +703,26 @@ export async function notifyPendingArrivals(deps) {
     }
   }
 }
+// Only stdout is an answer. Legacy combined output must never be trusted.
+export function stripClaudeWarnings(text) {
+  return String(text || '').split(/\r?\n/).filter(line => !/^\s*(?:Permission allow rule \(|(?:Warning: )?(?:Invalid|Unknown|Unrecognized) (?:permission|settings?|configuration)\b)/i.test(line)).join('\n').trim();
+}
+export function classifyExecutionResult(result, { exec } = {}) {
+  const body = truncateAnswer(redactSecrets(stripClaudeWarnings(result.stdoutTail)));
+  const reason = result.timedOut ? 'timeout' : result.reason || (result.exitCode !== 0 ? `exit-${result.exitCode ?? 'unknown'}` : !body ? 'empty' : null);
+  const marker = '\n--- codex-do 出力末尾 ---\n';
+  const formatted = String(result.outputTail || '');
+  const boundary = formatted.indexOf(marker);
+  const outputTail = exec === 'codex' && formatted.startsWith('[fleet-exec codex] ') && boundary >= 0
+    ? redactSecrets(formatted.slice(0, boundary + marker.length)) + body : body;
+  return { ...result, reason, stdoutTail: body, outputTail };
+}
+export async function sendExecutionFailure(args) {
+  const { result, label } = args;
+  const diagnostic = redactSecrets(result.stderrTail || result.error || '').slice(-600);
+  return sendHubFailure({ ...args, result: { ...result,
+    outputTail: `${label} の自動回答が完了しなかった（${result.reason}）。${label} の対話セッションで回答する` + (diagnostic ? `\n${diagnostic}` : '') } });
+}
 // Rejection is a reply note plus a fail transition. mail-reply would mark the
 // original done, after which the server correctly refuses a done -> failed change.
 export async function sendHubFailure({ home, mail, result, request, label, now = Date.now, stderr = console.error }) {
@@ -694,7 +736,7 @@ export async function sendHubFailure({ home, mail, result, request, label, now =
 }
 // 受信1回分。--poll のみが呼ぶ。提示 hook はこの処理を別プロセスで起動する。
 // 受信タスク(OrgiastFleetMail)が死んでいても対話セッションが受信を代替するための exports（2026-10-10 事故）。
-// executePrompts: false なら prompt のヘッドレス実行は行わず受信だけする（hook が 90秒の実行で固まるのを防ぐ）。
+// executePrompts: false なら runner を起動せず受信だけする。
 export async function pollOnce(deps = {}) {
   const home = deps.home ?? process.env.ORGIAST_HOME ?? os.homedir();
   const dir = path.join(home, '.claude');
@@ -857,7 +899,6 @@ export async function pollOnce(deps = {}) {
         if (exec.resumeSessionId) validSessionId(exec.resumeSessionId);
         const resultFile = path.join(dir, 'fleet-agent-results', `${validId(mail.id)}.json`);
         let result = readJson(resultFile);
-        let claudeExeName;
         if (hubExecution && !result && !mail.executionStartedAt) {
           const reason = !config.FLEET_HUB || mail.from !== config.FLEET_HUB ? 'not-hub' : !validExecCwd(exec.cwd) ? 'bad-cwd' : null;
           if (reason) result = { exitCode: null, reason, outputTail: `reason: ${reason}` };
@@ -880,46 +921,31 @@ export async function pollOnce(deps = {}) {
             promptHandled = true;
             const claimed = updateInbox(mail.id, current => current && !terminal(current) && !current.executionStartedAt ? { ...current, executionStartedAt: new Date(now()).toISOString() } : null, { home });
             if (!claimed) continue;
-            if (kind === 'codex' || hubExecution) {
-              if (!hubExecution) await state(mail.id, 'seen', { seenBy: 'headless' });
-              const runnerArgs = [path.join(ownRepo, 'tools', 'fleet-task-runner.mjs'), '--id', mail.id, '--home', home];
-              const failedStart = () => {
-                writeJson(resultFile, { exitCode: null, outputTail: '実行失敗: runner 起動失敗' });
-                err('fleet-mail: runner 起動失敗=1');
-              };
-              try {
-                if (deps.spawnImpl || process.platform !== 'win32') {
-                  const child = (deps.spawnImpl ?? spawn)(process.execPath, runnerArgs, { ...backgroundSpawnOptions(), stdio: 'ignore', windowsHide: true });
-                  child.on('error', failedStart); child.unref();
-                } else (deps.launchDetachedWin ?? launchDetachedWin)(process.execPath, runnerArgs);
-              } catch { failedStart(); }
-              log('exec-started', { count: 1 });
-              continue;
-            }
-            let executable = 'claude', candidates = [];
+            if (!hubExecution) await state(mail.id, 'seen', { seenBy: 'headless' });
+            const runnerArgs = [path.join(ownRepo, 'tools', 'fleet-task-runner.mjs'), '--id', mail.id, '--home', home];
+            const failedStart = () => {
+              writeJson(resultFile, { exitCode: null, outputTail: '実行失敗: runner 起動失敗' });
+              err('fleet-mail: runner 起動失敗=1');
+            };
             try {
-              const resolved = await (deps.resolveClaudeExe ?? (() => resolveClaudeExecutableFromDisk({ platform: process.platform, env: deps.env ?? process.env })))();
-              executable = (typeof resolved === 'string' ? resolved : resolved?.executable) || 'claude';
-              candidates = resolved?.candidates || [];
-              claudeExeName = path.basename(executable);
-              const header = `これは ${mail.from} PC の Claude Code からのメッセージです。回答は標準出力に書けば自動で相手に返ります。ファイル変更や外部送信が要る内容は実行せず、必要な理由と手順を回答に書いてください。`;
-              result = await runPrompt({ claudeExe: executable, body: `${header}\n\n${mail.body}`,
-                cwd: deps.repo ?? process.env.ORGIAST_REPO ?? ownRepo,
-                home, timeoutSeconds: 90, readOnly: true,
-                spawnImpl: deps.spawnImpl, setTimer: deps.promptSetTimer, clearTimer: deps.promptClearTimer, onStart: () => state(mail.id, 'seen', { seenBy: 'headless' }) });
-              if (isMissingClaudeError(result)) result = { ...result, outputTail: missingClaudeMessage(executable, candidates), stdoutTail: undefined };
-            } catch (error) { result = { exitCode: null, outputTail: isMissingClaudeError(error) ? missingClaudeMessage(executable, candidates) : `実行失敗: ${redactSecrets(error.message)}` }; }
+              if (deps.spawnImpl || process.platform !== 'win32') {
+                const child = (deps.spawnImpl ?? spawn)(process.execPath, runnerArgs, { ...backgroundSpawnOptions(), stdio: 'ignore', windowsHide: true });
+                child.on('error', failedStart); child.unref();
+              } else (deps.launchDetachedWin ?? launchDetachedWin)(process.execPath, runnerArgs);
+            } catch { failedStart(); }
+            log('exec-started', { count: 1 });
+            continue;
           }
         }
-        if (hubExecution) result = hubReport(result);
-        result = { ...result, outputTail: redactSecrets(result.outputTail || result.error || '(出力なし)').slice(-8000) };
+        result = classifyExecutionResult({ ...result, stderrTail: result.stderrTail ?? (result.exitCode == null ? result.outputTail : '') }, { exec: exec.exec });
+        if (result.stderrTail) result.stderrTail = redactSecrets(result.stderrTail);
         if (result.error) result.error = redactSecrets(result.error);
-        if (result.stdoutTail !== undefined) result.stdoutTail = redactSecrets(result.stdoutTail).slice(-4000);
+        if (result.stdoutTail !== undefined) result.stdoutTail = redactSecrets(result.stdoutTail);
         writeJson(resultFile, result);
         // A failed reply retains its result and retries transport without executing again.
         if (terminal(readJson(fileOf(mail.id)))) continue;
         if (result.reason) {
-          await sendHubFailure({ home, mail, result, request, label, now, stderr: err });
+          await sendExecutionFailure({ home, mail, result, request, label, now, stderr: err });
           handled.push(mail.id); continue;
         }
         let replyResponse;
@@ -929,7 +955,7 @@ export async function pollOnce(deps = {}) {
           updateInbox(mail.id, current => current && ({ ...current, status: replyResponse.mail.status }), { home });
           continue;
         }
-        log('sent', { action: 'auto-reply', id: mail.id, exitCode: result.exitCode, timedOut: !!result.timedOut, ...(claudeExeName ? { claudeExe: claudeExeName } : {}), ...(exec.exec ? { exec: exec.exec } : {}) });
+        log('sent', { action: 'auto-reply', id: mail.id, exitCode: result.exitCode, timedOut: !!result.timedOut, ...(exec.exec ? { exec: exec.exec } : {}) });
         updateInbox(mail.id, current => current && ({ ...current, status: 'done', resultAt: replyResponse?.mail?.resultAt || new Date(now()).toISOString(), resultBody: redactSecrets(replyResponse?.reply?.body ?? replyResponse?.mail?.resultBody ?? result.outputTail) }), { home });
         handled.push(mail.id);
       } catch (error) {
@@ -937,6 +963,7 @@ export async function pollOnce(deps = {}) {
         err('fleet-mail: 処理再試行待ち=1');
       }
     }
+    await refreshSentStatus({ home, request, stderr: err });
     try { (deps.dailySelfHeal ?? dailySelfHeal)({ dir, now }); } catch (error) { err(`fleet-mail: 自己修復失敗: ${redactSecrets(error.message)}`); }
     try { (deps.autoRunFixNow ?? autoRunFixNow)({ dir }); } catch (error) { err(`fleet-mail: 自動修復失敗: ${redactSecrets(error.message)}`); }
     // Transport latency must never prevent durable receipt or per-mail processing.
@@ -1176,7 +1203,10 @@ async function runMain(argv, deps) {
       }
     }
     const parent = commandInbox(id, current => current, { home });
-    const response = checked(await request('mail-reply', { id, from: label, resultBody: body, auto: false, hop: parent ? nextHop(parent) : 1, priority: 'normal' }));
+    const original = parent || checked(await request('mail-get', { id })).mail;
+    const response = original?.status === 'failed'
+      ? checked(await request('mail-send', { id: `mail-reply-manual-${createHash('sha256').update(`${id}\n${label}\n${body}`).digest('hex').slice(0, 24)}`, from: label, to: original.from, replyTo: id, messageKind: 'note', body, why: '[回答・返信不要] 対話回答', auto: false, hop: nextHop(original), priority: 'normal', expiresAt: new Date(now() + 72 * 3600000).toISOString() }))
+      : checked(await request('mail-reply', { id, from: label, resultBody: body, auto: false, hop: parent ? nextHop(parent) : 1, priority: 'normal' }));
     if (['failed', 'expired'].includes(response?.mail?.status)) {
       if (parent) updateInbox(id, current => current && ({ ...current, status: response.mail.status }), { home });
       err(`fleet-mail: 返信なし（${response.mail.status}）`); return 1;
@@ -1184,7 +1214,7 @@ async function runMain(argv, deps) {
     log('sent', { action: 'reply', id, ...(options['--force'] ? { forced: true } : {}) });
     const nowISO = new Date(now()).toISOString();
     saveLocalCompletion(home, id, { status: 'done', resultAt: response?.mail?.resultAt || nowISO,
-      resultBody: redactSecrets(response?.reply?.body ?? response?.mail?.resultBody ?? body), readAt: parent?.readAt ?? nowISO }, [], err);
+      resultBody: redactSecrets(response?.reply?.body ?? response?.mail?.resultBody ?? body), readAt: parent?.readAt ?? nowISO }, original?.status === 'failed' ? ['fail'] : [], err);
     out(`返信済み: ${id}`);
     out(`返信は相手の受信タスクが拾うまで届きません。届いたかは --sent-status ${id} で確認`);
     return 0;

@@ -8,8 +8,8 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
-import { validId, sendHubFailure, parseExecMarkers, createClient, resolveFleetLabel, updateInbox, syncMailState, acquireLock, TERMINAL_STATUSES, isMissingClaudeError, missingClaudeMessage } from './fleet-mail.mjs';
-import { loadOptin, consentCommand, runPrompt, validExecCwd, hubReport, redactSecrets } from './fleet-agent.mjs';
+import { validId, classifyExecutionResult, sendExecutionFailure, parseExecMarkers, createClient, resolveFleetLabel, updateInbox, syncMailState, acquireLock, TERMINAL_STATUSES, isMissingClaudeError, missingClaudeMessage } from './fleet-mail.mjs';
+import { loadOptin, consentCommand, runPrompt, validExecCwd, redactSecrets, truncateAnswer } from './fleet-agent.mjs';
 import { parseEnvText } from './env-kv.mjs';
 import { resolveClaudeExecutableFromDisk } from './claude-exe.mjs';
 import { updateQuestion, clearResume, RESUME_LIMIT_MS, validSessionId } from './fleet-question-relay.mjs';
@@ -143,21 +143,52 @@ export async function runClaudeTask({ id, home, spawnImpl = spawn, now = Date.no
         }
       } catch (error) { result = { exitCode: null, outputTail: isMissingClaudeError(error) ? missingClaudeMessage(executable, candidates) : `実行失敗: ${redactSecrets(error.message)}` }; }
       finally { await cleanup(); }
-      result = hubReport(result);
+      result = classifyExecutionResult({ ...result, stderrTail: result.stderrTail || (result.exitCode == null ? result.outputTail : '') });
       if (result.error) result.error = redactSecrets(result.error);
       writeJsonAtomic(resultFile, result);
     }
+    result = classifyExecutionResult(result);
     const current = readJson(path.join(dir, 'fleet-inbox', `${id}.json`));
     if (TERMINAL_STATUSES.includes(current?.status)) return result;
     try {
       if (result.reason) {
-        await sendHubFailure({ home, mail, result, request, label, now, stderr });
+        await sendExecutionFailure({ home, mail, result, request, label, now, stderr });
         return result;
       }
       const reply = await request('mail-reply', { id, from: label, resultBody: result.outputTail, auto: true, hop: Number(mail.hop || 0) + 1, priority: 'normal' });
       if (!reply?.ok) throw new Error('reply failed');
       updateInbox(id, current => current && ({ ...current, status: reply.mail?.status === 'failed' || reply.mail?.status === 'expired' ? reply.mail.status : 'done', resultBody: result.outputTail, resultAt: new Date(now()).toISOString() }), { home });
     } catch { stderr('fleet-mail: 返信再送待ち=1'); }
+    return result;
+  } finally { release(); }
+}
+
+export function promptTimeoutSeconds(config = {}) {
+  const value = Number(config.FLEET_PROMPT_TIMEOUT_SEC);
+  return Number.isFinite(value) && value > 0 ? Math.min(value, 1800) : 600;
+}
+export async function runReadOnlyTask({ id, home, repo = ownRepo, spawnImpl = spawn, resolveClaudeExe = resolveClaudeExecutableFromDisk, promptSetTimer, promptClearTimer, env = process.env } = {}) {
+  const dir = path.join(home, '.claude');
+  const file = path.join(dir, 'fleet-agent-results', `${validId(id)}.json`);
+  const release = acquireLock(`${file}.runner.lock`);
+  if (!release) return { skipped: 'locked' };
+  try {
+    if (fs.existsSync(file)) return readJson(file);
+    const mail = readJson(path.join(dir, 'fleet-inbox', `${id}.json`));
+    if (!mail || TERMINAL_STATUSES.includes(mail.status)) return { skipped: 'terminal' };
+    let result;
+    try {
+      const config = parseEnvText(fs.readFileSync(path.join(dir, 'fleet-sheet.env'), 'utf8'));
+      if (!loadOptin(path.join(dir, 'fleet-agent-optin.json')).includes('prompt')) throw new Error(`未オプトイン。承諾コマンド: ${consentCommand('prompt')}`);
+      const resolved = await resolveClaudeExe({ platform: process.platform, env });
+      const executable = (typeof resolved === 'string' ? resolved : resolved?.executable) || 'claude';
+      const header = `これは ${mail.from} PC の Claude Code からのメッセージです。回答は標準出力に書けば自動で相手に返ります。ファイル変更や外部送信が要る内容は実行せず、必要な理由と手順を回答に書いてください。`;
+      result = await runPrompt({ claudeExe: executable, body: `${header}\n\n${mail.body}`, cwd: process.env.ORGIAST_REPO ?? repo,
+        home, readOnly: true, timeoutSeconds: promptTimeoutSeconds(config), spawnImpl, setTimer: promptSetTimer, clearTimer: promptClearTimer });
+      if (isMissingClaudeError(result)) result.stderrTail = missingClaudeMessage(executable, resolved?.candidates || []);
+    } catch (error) { result = { exitCode: null, stderrTail: redactSecrets(error.message) }; }
+    result = classifyExecutionResult(result);
+    writeJsonAtomic(file, result);
     return result;
   } finally { release(); }
 }
@@ -171,6 +202,7 @@ export async function runTask({ id, home, ownRepo: repo = ownRepo, spawnImpl = s
   let rejected = null;
   let exitCode = null;
   let outputTail = '';
+  let stderrTail = '';
   try {
     const mail = readJson(path.join(dir, 'fleet-inbox', `${validId(id)}.json`));
     if (!mail) throw new Error('inbox に該当メッセージがありません');
@@ -183,28 +215,31 @@ export async function runTask({ id, home, ownRepo: repo = ownRepo, spawnImpl = s
     fs.writeFileSync(promptFile, stripped.body, { mode: 0o600 });
     const logFile = path.join(resultsDir, `${validId(id)}.log`);
     const logFd = fs.openSync(logFile, 'a', 0o600);
+    const errFile = path.join(resultsDir, `${id}.stderr.log`);
+    const errFd = fs.openSync(errFile, 'a', 0o600);
     try {
       exitCode = await new Promise((resolve) => {
         const child = spawnImpl(process.execPath, [path.join(repo, 'tools', 'codex-do.mjs'),
           '--prompt-file', promptFile, '--cwd', cwd, '--timeout', '1800', '--kind', 'implement', '--origin', 'unattended'],
-          { cwd, stdio: ['ignore', logFd, logFd], windowsHide: true });
+          { cwd, stdio: ['ignore', logFd, errFd], windowsHide: true });
         child.on('error', () => resolve(null));
         child.on('close', (code) => resolve(code));
       });
-    } finally { fs.closeSync(logFd); }
-    try { outputTail = fs.readFileSync(logFile, 'utf8').slice(-6000); } catch { outputTail = ''; }
-    // cwd 指定を拒否したときは、その理由を結果本文の先頭に残す（黙って別ディレクトリで走らせない）。
-    if (rejected) outputTail = `${rejected}\n${outputTail}`;
+    } finally { fs.closeSync(logFd); fs.closeSync(errFd); }
+    stderrTail = redactSecrets(fs.readFileSync(errFile, 'utf8')).slice(-6000);
+    try { outputTail = truncateAnswer(redactSecrets(fs.readFileSync(logFile, 'utf8'))); } catch { outputTail = ''; }
+    // cwd 拒否は診断に保持し、stdout の回答本文へ混ぜない。
+    if (rejected) stderrTail = `${rejected}\n${stderrTail}`;
   } catch (error) {
-    outputTail = `実行失敗: ${String(error?.message ?? error)}`;
+    stderrTail = `実行失敗: ${String(error?.message ?? error)}`;
   }
   const gitStatus = gitLines(cwd, ['status', '--short'], run);
   const gitLog = gitLines(cwd, ['log', '--oneline', '-3'], run);
   const finishedAt = new Date(now()).toISOString();
   const minutes = Math.max(0, Math.round((Date.parse(finishedAt) - Date.parse(startedAt)) / 60000));
   const reply = formatReply({ exitCode, cwd, minutes, gitStatus, gitLog, outputTail });
-  const result = { exitCode, cwd, outputTail: reply, gitStatus, gitLog, startedAt, finishedAt, ...(rejected ? { cwdRejected: rejected } : {}) };
-  // どんな例外でも結果 JSON を書いて終わる（書けないと相手が2時間タイムアウトまで待つ）。
+  const result = { exitCode, cwd, stdoutTail: redactSecrets(outputTail), stderrTail: redactSecrets(stderrTail), outputTail: redactSecrets(reply), gitStatus, gitLog, startedAt, finishedAt, ...(rejected ? { cwdRejected: rejected } : {}) };
+  // どんな例外でも結果 JSON を書いて終わる（書けないと相手が結果未生成タイムアウトまで待つ）。
   try { writeJsonAtomic(resultFile, result); } catch { /* 書けないときは諦める */ }
   return result;
 }
@@ -221,7 +256,8 @@ if (isEntry(import.meta.url)) {
       const mail = readJson(path.join(home, '.claude', 'fleet-inbox', `${validId(id)}.json`));
       const exec = mail?.exec || parseExecMarkers(mail?.body).exec;
       if (exec === 'claude') await runClaudeTask({ id, home });
-      else await runTask({ id, home });
+      else if (exec === 'codex') await runTask({ id, home });
+      else await runReadOnlyTask({ id, home });
     }
     catch { console.error('fleet-task-runner: 実行失敗=1'); process.exitCode = 1; }
   }

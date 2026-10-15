@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Windows は WSL 不在ならネイティブ(danger-full-access)を既定とする。--require-wsl で WSL を強制。
 // 通常実装は Sol、長時間・高難度・auto の失敗時は Astra（既定 effort high）。
 // --lane sol|astra|auto / --model astra|sol|<slug> / --effort で指定する。
 // 先頭40行の <!-- lane: astra --> でも指定可。Astra 上限時は Sol へ退避する。
@@ -98,6 +99,52 @@ export function decideCodexLane({ lane = 'auto', model, promptText = '', timeout
 
 export function buildCodexExecArgs({ slug, effort, review = false } = {}) {
   return ['exec', ...(slug ? ['-m', slug] : []), ...(effort ? ['-c', `model_reasoning_effort="${effort}"`] : []), '-s', review ? 'read-only' : 'workspace-write', '-'];
+}
+
+// Windows ネイティブの codex は `-s workspace-write` を渡しても必ず read-only に倒れ、
+// 実ファイルが1行も書かれない（openai/codex#35428）。2026-10-12 に codex-cli 0.162.1 で実測:
+// workspace-write→ `sandbox: read-only` で exec_command が "blocked by policy"、
+// danger-full-access→ 同一プロンプトで編集が保存された。よってネイティブ経路では
+// review(読み取り専用)以外を danger-full-access に置き換える。
+export function nativeSandboxMode({ review = false } = {}) {
+  return review ? 'read-only' : 'danger-full-access';
+}
+
+export function applyNativeSandbox(args, { review = false } = {}) {
+  const index = args.indexOf('-s');
+  if (index < 0 || index + 1 >= args.length) return [...args];
+  const next = [...args];
+  next[index + 1] = nativeSandboxMode({ review });
+  return next;
+}
+
+// Windows ネイティブの `codex` は npm が置く .cmd/.ps1 のシムで、shell を挟まない子プロセス
+// 起動では解決できず ENOENT になる(2026-10-12 実測: シム名をそのまま渡すと起動に失敗し、
+// WSL 不在時は常にフォールバックへ落ちていた)。シムが最終的に呼ぶ JS 実体を直接 node で
+// 起動すれば shell を1層も挟まずに済む(§1.17 の「シェルを通さない」方針とも一致)。
+export function resolveNativeCodex({ platform = process.platform, env = process.env, existsImpl = fs.existsSync } = {}) {
+  if (platform !== 'win32') return { command: 'codex', prefixArgs: [] };
+  const candidates = [
+    env.APPDATA ? path.join(env.APPDATA, 'npm', 'node_modules', '@openai', 'codex', 'bin', 'codex.js') : '',
+    env.ProgramFiles ? path.join(env.ProgramFiles, 'nodejs', 'node_modules', '@openai', 'codex', 'bin', 'codex.js') : '',
+  ];
+  for (const candidate of candidates) {
+    try { if (candidate && existsImpl(candidate)) return { command: process.execPath, prefixArgs: [candidate] }; } catch { /* 次候補へ */ }
+  }
+  // 実体が見つからないときはシム名で起動を試す(非 win32 と同じ形)。失敗すれば available=false で弾かれる。
+  return { command: 'codex', prefixArgs: [] };
+}
+
+// ネイティブ Windows codex が解決できるか(JS 実体の存在、または --version 成功)。
+// これが true なら WSL ディストリが無くても codex レーンを成立させられる。
+export function nativeCodexAvailable({ spawnImpl = spawnSync, timeoutMs = WSL_PROBE_TIMEOUT_MS, platform = process.platform } = {}) {
+  if (platform !== 'win32') return false;
+  const { command, prefixArgs } = resolveNativeCodex({ platform });
+  if (prefixArgs.length) return true;
+  try {
+    const probe = spawnImpl(command, [...prefixArgs, '--version'], { windowsHide: true, encoding: 'utf8', timeout: timeoutMs });
+    return probe?.status === 0;
+  } catch { return false; }
 }
 
 // `.git` の「存在」ではなく「git がリポジトリとして認識できる実体か」を見る。
@@ -476,22 +523,33 @@ export function isBackendExhausted(output, stderr) {
 // WSL では EACCES で必ず失敗し、時間を消費した末にネイティブ(信頼できないディレクトリ
 // では空出力で即終了)へ落ちる。codex-do の out=0 空出力行の根本原因(2026-09-08 実測)。
 // 戻り値: 'wsl'=そのまま WSL codex で実行 / 'retry'=在るのに起動確認失敗→再試行(再インストールしない)
-//         'install'=本当に無いときだけ1回インストール / 'native'=明示許可時のみネイティブへ / 'abort'=中断。
+//         'install'=本当に無いときだけ1回インストール / 'native'=解決できるネイティブへ（require-wsl 時は中断） / 'abort'=中断。
 export const WSL_PROBE_TIMEOUT_MS = 60000;
 
-export function wslCodexLaunchPlan({ distroFound, codexPresent, versionOk, installAttempted, retried, allowNative = false }) {
+export function recordLaneMode(mode, sandbox, { home = process.env.ORGIAST_HOME || os.homedir(), now = new Date() } = {}) {
+  const file = path.join(home, '.claude', 'lane-mode.json');
+  let state = {};
+  try { state = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = file + '.' + process.pid + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify({ ...state, codex: { mode, sandbox, verifiedAt: now.toISOString() } }, null, 2) + '\n');
+  fs.renameSync(tmp, file);
+}
+
+export function wslCodexLaunchPlan({ distroFound, codexPresent, versionOk, installAttempted, retried, nativeAvailable = false, requireWsl = false, allowNative = false }) {
   if (versionOk) return 'wsl';
   if (distroFound && codexPresent && !retried) return 'retry';
   if (distroFound && !codexPresent && !installAttempted) return 'install';
-  return allowNative ? 'native' : 'abort';
+  return !requireWsl && nativeAvailable ? 'native' : 'abort';
 }
 
 if (isEntry(import.meta.url)) {
 
 const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
-const forceNative = args.includes('--force-native');
-const allowNative = args.includes('--allow-native');
+const forceNative = args.includes('--force-native') && !args.includes('--require-wsl') && process.env.ORGIAST_CODEX_REQUIRE_WSL !== '1';
+const allowNative = args.includes('--allow-native'); // 互換用の no-op。
+const requireWsl = args.includes('--require-wsl') || process.env.ORGIAST_CODEX_REQUIRE_WSL === '1';
 const noFallback = args.includes('--no-fallback');
 // WSL 経路が使えず codex を起動できなかったか。true のときは再試行/昇格をせず、
 // 既存のフォールバック連鎖へそのまま渡す（2026-09-19）。
@@ -520,8 +578,9 @@ const cwd = path.resolve(cwdIndex >= 0 && args[cwdIndex + 1] ? args[cwdIndex + 1
 // cwdIndex が -1 のとき cwdIndex+1 が 0 になり、指示文(第1引数)を捨ててしまうので条件付きで除外する。
 const omitted = new Set();
 if (dryRun) omitted.add(args.indexOf('--dry-run'));
-if (forceNative) omitted.add(args.indexOf('--force-native'));
+if (args.includes('--force-native')) omitted.add(args.indexOf('--force-native'));
 if (allowNative) omitted.add(args.indexOf('--allow-native'));
+if (args.includes('--require-wsl')) omitted.add(args.indexOf('--require-wsl'));
 if (noFallback) omitted.add(args.indexOf('--no-fallback'));
 if (review) omitted.add(args.indexOf('--review'));
 if (noEscalate) omitted.add(args.indexOf('--no-escalate'));
@@ -532,7 +591,7 @@ for (const index of [modelIndex, effortIndex, laneIndex, originIndex, kindIndex]
 if (cwdIndex >= 0) { omitted.add(cwdIndex); omitted.add(cwdIndex + 1); }
 if (promptFileIndex >= 0) { omitted.add(promptFileIndex); omitted.add(promptFileIndex + 1); }
 if (timeoutIndex >= 0) { omitted.add(timeoutIndex); omitted.add(timeoutIndex + 1); }
-const usage = '使い方: node tools/codex-do.mjs "<指示>" [--cwd <path>] [--prompt-file <file>] [--review] [--timeout <秒>] [--model <slug|astra|sol>] [--effort <low|medium|high|xhigh|max>] [--lane <sol|astra|auto>] [--no-escalate] [--dry-run] [--no-fallback] [--force-native] [--allow-native] [--origin <unattended|interactive>] [--kind <implement|verify|investigate|classify|summarize>] [--budget]';
+const usage = '使い方: node tools/codex-do.mjs "<指示>" [--cwd <path>] [--prompt-file <file>] [--review] [--timeout <秒>] [--model <slug|astra|sol>] [--effort <low|medium|high|xhigh|max>] [--lane <sol|astra|auto>] [--no-escalate] [--dry-run] [--no-fallback] [--force-native] [--allow-native] [--require-wsl] [--origin <unattended|interactive>] [--kind <implement|verify|investigate|classify|summarize>] [--budget]';
 
 if ((modelIndex >= 0 && (!model || !/^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(model))) ||
     (effortIndex >= 0 && !['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) ||
@@ -805,8 +864,15 @@ async function launchCodex(codexArgs) {
     const distros = listed.status === 0 ? listed.stdout.split(/\r?\n/).map((x) => x.replace(/\0/g, '').trim()).filter(Boolean) : [];
     const distro = distros.find((x) => x.toLowerCase() === 'ubuntu') || distros[0];
     let usable = false;
+    // WSL が無くてもネイティブ Windows codex が起動できるなら、codex レーンをそこで成立させる。
+    // 2026-10-12 実測(codex-cli 0.162.1): `-s danger-full-access` なら実ファイルが保存される。
+    // 既定で有効化し、「WSL 不在 → launch_failed → 毎日 codex_lane_unavailable 再起票」を止める。
+    // テストで実機の native codex 有無に依存しないよう、CODEX_DO_WSL_PROBE と同じ流儀で注入できる。
+    const nativeProbe = process.env.CODEX_DO_NATIVE_PROBE;
+    const nativeOk = nativeProbe === 'absent' ? false : nativeProbe === 'present' ? true : nativeCodexAvailable();
+    const nativeUsable = nativeOk;
     let failureReason = 'WSL ディストリが見つかりませんでした';
-    let finalStep = wslCodexLaunchPlan({ distroFound: Boolean(distro), codexPresent: false, versionOk: false, installAttempted: false, retried: false, allowNative });
+    let finalStep = wslCodexLaunchPlan({ distroFound: Boolean(distro), codexPresent: false, versionOk: false, installAttempted: false, retried: false, nativeAvailable: nativeUsable, requireWsl });
     if (distro) {
       const versionProbe = () => {
         const probe = spawnSync('wsl', ['-d', distro, '--', 'codex', '--version'], { windowsHide: true, encoding: 'utf8', timeout: WSL_PROBE_TIMEOUT_MS });
@@ -816,19 +882,19 @@ async function launchCodex(codexArgs) {
       const first = versionProbe();
       usable = first.ok;
       failureReason = present ? `WSL ${distro} の codex 起動確認に失敗しました` : `WSL ${distro} に codex が見つかりませんでした`;
-      const step = wslCodexLaunchPlan({ distroFound: true, codexPresent: present, versionOk: first.ok, installAttempted: false, retried: false, allowNative });
+      const step = wslCodexLaunchPlan({ distroFound: true, codexPresent: present, versionOk: first.ok, installAttempted: false, retried: false, nativeAvailable: nativeUsable, requireWsl });
       finalStep = step;
       if (step === 'retry') {
         console.error(`WSL ${distro} には codex が在りますが起動確認が失敗しました。一過性の可能性があるため再試行します${first.stderr ? ` (${first.stderr})` : ''}`);
         usable = versionProbe().ok;
-        if (!usable) finalStep = wslCodexLaunchPlan({ distroFound: true, codexPresent: true, versionOk: false, installAttempted: false, retried: true, allowNative });
+        if (!usable) finalStep = wslCodexLaunchPlan({ distroFound: true, codexPresent: true, versionOk: false, installAttempted: false, retried: true, nativeAvailable: nativeUsable, requireWsl });
         if (!usable) console.error(`WSL ${distro} の codex は再試行でも起動確認できませんでした。在るのに失敗しているため npm 再インストールはしません`);
       } else if (step === 'install') {
         console.error(`WSL ${distro} に codex が見つからないため自動インストールを試します`);
         const installed = spawnSync('wsl', ['-d', distro, '--', 'npm', 'i', '-g', '@openai/codex'], { windowsHide: true, stdio: 'inherit', timeout: 120000 });
         if (installed.status === 0) usable = versionProbe().ok;
         else console.error(`WSL ${distro} への codex 自動インストールが失敗しました(exit ${installed.status})。WSL 内に手動で導入してください`);
-        if (!usable) finalStep = wslCodexLaunchPlan({ distroFound: true, codexPresent: false, versionOk: false, installAttempted: true, retried: false, allowNative });
+        if (!usable) finalStep = wslCodexLaunchPlan({ distroFound: true, codexPresent: false, versionOk: false, installAttempted: true, retried: false, nativeAvailable: nativeUsable, requireWsl });
       }
     }
     if (usable) {
@@ -842,33 +908,38 @@ async function launchCodex(codexArgs) {
       } catch (error) {
         if (error?.code !== 'ENOENT') console.error(`⚠️ worktree の gitdir 確認に失敗しました（処理は続行します）: ${error?.message ?? error}`);
       }
+      recordLaneMode('wsl', review ? 'read-only' : 'workspace-write');
       result = await execute('wsl', wslCodexArgs({ distro, cwd, codexArgs, inGitRepo: isInsideGitRepo(cwd) }));
     }
     else {
-      console.error(`🚨 ${failureReason}`);
+      if (finalStep !== 'native') console.error(`🚨 ${failureReason}`);
       if (finalStep !== 'native') {
         // 台帳には必ず1行残す。ここで記録せずに exit すると無音故障になる（2026-09-16 診断）。
         // ただし process.exit すると codex-do 本来のフォールバック連鎖に到達せず、WSL の無い PC では
         // 委譲が必ず死ぬ（2026-09-19 実測: この PC は `wsl -l -q` が空）。--no-fallback の明示がある
         // ときだけ従来どおり中断し、それ以外は起動失敗を結果として返してフォールバックへ渡す。
         if (noFallback) {
-          console.error('🚨 WSL の codex 経路が使えないため中断しました（native Windows codex は read-only で編集が保存されない既知の不具合があるため、既定では使いません）。WSL を確認するか、承知の上で native を使うなら --allow-native を付けて再実行してください。');
+          console.error('🚨 WSL の codex 経路が使えず、ネイティブ Windows codex も起動できないため中断しました（--no-fallback 指定）。WSL を整備するか、`npm i -g @openai/codex` でネイティブ版を入れてください。');
           recordUsage({ outputChars: 0, status: 3, stderr: failureReason, timedOut: false, launched: false }, `codex-cli/${selectedLane.slug || 'default'}`, 0, 'codex', 0);
           process.exit(3);
         }
         launchUnavailable = true;
         return { status: 3, outputChars: 0, output: '', stderr: failureReason, timedOut: false, launched: false };
       }
-      console.error('⚠️ WSL 経路が使えないため、--allow-native の指定によりネイティブ Windows codex で実行します。\nWindows 版は read-only サンドボックス固定でファイルを書けない既知の不具合(openai/codex#35428)があり、編集が保存されない可能性が高い。');
-      const nativeArgs = [...codexArgs];
+      console.error('codex: WSL ディストリ不在のため Windows ネイティブ(danger-full-access)で実行します');
+      recordLaneMode('native', nativeSandboxMode({ review }));
+      const native = resolveNativeCodex();
+      const nativeArgs = applyNativeSandbox(codexArgs, { review });
       if (!isInsideGitRepo(cwd)) nativeArgs.splice(-1, 0, '--skip-git-repo-check');
-      result = await execute('codex', nativeArgs, { cwd });
+      result = await execute(native.command, [...native.prefixArgs, ...nativeArgs], { cwd });
     }
   } else {
-    if (process.platform === 'win32') console.error('⚠️ --force-native によりネイティブ Windows codex で実行します。編集が保存されない可能性があります');
-    const nativeArgs = [...codexArgs];
+    if (process.platform === 'win32') console.error('⚠️ --force-native によりネイティブ Windows codex で実行します');
+    recordLaneMode('native', process.platform === 'win32' ? nativeSandboxMode({ review }) : (review ? 'read-only' : 'workspace-write'));
+    const native = resolveNativeCodex();
+    const nativeArgs = process.platform === 'win32' ? applyNativeSandbox(codexArgs, { review }) : [...codexArgs];
     if (!isInsideGitRepo(cwd)) nativeArgs.splice(-1, 0, '--skip-git-repo-check');
-    result = await execute('codex', nativeArgs, { cwd });
+    result = await execute(native.command, [...native.prefixArgs, ...nativeArgs], { cwd });
   }
 
   return result;

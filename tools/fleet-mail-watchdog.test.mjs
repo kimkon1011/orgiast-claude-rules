@@ -55,7 +55,7 @@ test('arrival uses one line, recipient, category, clipped reason and id', async 
   const f = fixture(t); const calls = [];
   assert.equal(await notifyArrival({ id: 'mail-one', why: '[作業依頼] '+ 'あ'.repeat(100) }, { home: f.home, label: 'receiver', token: 'test', fetchImpl: async (...args) => { calls.push(args); return { ok: true }; } }), true);
   const content = JSON.parse(calls[0][1].body).content;
-  assert.match(content, /^receiver 宛 \[作業依頼\] 到着:/); assert.ok(content.endsWith(' / mail-one')); assert.ok(content.split('到着: ')[1].split(' / ')[0].length <= 60); assert.doesNotMatch(content, /\n/);
+  assert.match(content, /^receiver 宛 \[作業依頼\] 到着:/); assert.ok(content.endsWith(' / mail-one [fleet-arrival]')); assert.ok(content.split('到着: ')[1].split(' / ')[0].length <= 60); assert.doesNotMatch(content, /\n/);
 });
 test('missing arrival route skips without a network request', async t => {
   const f = fixture(t); const errors = [];

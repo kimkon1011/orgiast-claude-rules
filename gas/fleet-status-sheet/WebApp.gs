@@ -87,7 +87,11 @@ function doPost(e) {
   }
 
   // 未知 kind は従来どおり通常点検として扱い、既存クライアントの挙動を変えない。
+  // auto-progress / auto-progress-list は tools/auto-progress-watch.mjs（停滞判定・自動再開）と
+  // tools/auto-progress-digest.mjs（朝 08:40 の DM）が使う。実体は AutoProgress.gs。
   const handlers = {
+    'auto-progress': upsertAutoProgress,
+    'auto-progress-list': listAutoProgress,
     'mail-send': sendFleetMail,
     'mail-poll': pollFleetMail,
     'mail-reply': replyFleetMail,

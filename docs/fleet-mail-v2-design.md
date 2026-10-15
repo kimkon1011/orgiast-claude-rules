@@ -167,3 +167,28 @@ new ──poll──▶ delivered ──注入/閲覧/実行開始──▶ seen
 - **drivenByHub の寿命**: resume の終了（成功・失敗・30 分超過）で解除する。以後その セッションで現地の人が出した質問は 10 分ルールに戻る。
 - **AskUserQuestion の捕捉**: 対話セッションの AskUserQuestion はターンが終わらず Stop hook が発火しないため、**PreToolUse（matcher: AskUserQuestion）hook** で質問と選択肢を `fleet-questions/` に記録する。Notification hook（permission 要求・idle）も同様に記録する。kim-PC の回答で再開されるのは `--resume` による分岐セッションであり、元の対話画面に残った質問は Esc で閉じてよい（表示に明記）。
 - **`--answer` の検証**: 原本の `to` が自ラベルでなければ exit 2。同じ id への再実行は「前回の回答を再送」と明示し、本文が違えば `--force` 無しでは送らない。
+
+## 12. #802/#799/#800/#801 自動回答の回収（2026-10-15）
+
+- 通常promptも `fleet-task-runner.mjs` をdetached起動し、pollは待たない。読み取り専用の引数・headerは維持。`fleet-sheet.env` の `FLEET_PROMPT_TIMEOUT_SEC` は既定600秒、上限1800秒。不正値は既定値。結果は `fleet-agent-results/<id>.json` に保存し、次回pollが回収する。通常prompt/codexの結果未生成は35分（最大実行30分＋5分余裕）でtimeout。`executionStartedAt` のあるメールは再実行しない。
+- prompt/codex/claude-resumeの結果判定は `classifyExecutionResult` に統一。stdoutから既知のPermission allow rule等の設定警告行を除いたものだけが回答。timedOut、非zero/null exit、本文空はそれぞれtimeout / exit-<code> / empty。旧結果の混合outputTailは回答として信用しない。
+- 失敗時はmail-replyを呼ばず、失敗理由・受信PCの対話回答への案内・秘密除去後のstderr末尾600字を冪等なnoteで送り、mail-failで原本をfailedにする。送信に失敗した結果は保存して次回pollで再送する。受信hookはfailed promptを最優先の「[作業依頼] 自動回答できなかった質問」として原文・理由・`--reply <id> --body-file <file>` とともに提示する。
+- GASはfailed→doneを許可しないため、failedへの対話 `--reply` は安定IDの新規note（replyTo付き）を送り、受信側ローカルをdoneにする。サーバー原本はfailedのまま。送信側はnoteの回答本文を回収してローカル表示を完了にする。
+- 送信側pollは送信履歴からmail-getを巡回し `fleet-mail-sent-status.json` に保存。hookはネットワーク通信せず、failedの宛先・id・理由と対話回答待ち／再送案内を表示。`--sent-status` は従来どおりサーバーのstatus/failReasonを表示する。
+- allow-rulesの無効なWrite(memory/next-session)2件は廃止一覧で既存settingsからも削除。Edit版と他のローカルルールを維持。
+- Discord到着通知に `[fleet-arrival]` を付加。decision-watchはBot/webhook投稿、マーカー、従来の「宛 … 到着:」形式を除外。
+- Notificationの権限確認文（needs your permission / permission to use / Claude needs your）は質問relayに記録しない。通常質問は維持。
+- 本番pullのWebApp.jsからauto-progress/auto-progress-listのハンドラとコメントを復元し、AutoProgress.jsを正本AutoProgress.gsへ追加。本番デプロイはこの変更に含めない。
+
+### 12.1 変更ファイル
+
+- 実装: `tools/fleet-mail.mjs`, `tools/fleet-task-runner.mjs`, `tools/fleet-agent.mjs`, `tools/fleet-inbox-context.mjs`, `tools/allow-rules.mjs`, `tools/allow-rules.json`, `tools/decision-watch.mjs`, `tools/lib/fleet-mail-discord.mjs`, `tools/fleet-question-relay.mjs`
+- テスト: `tools/fleet-mail.test.mjs`, `tools/fleet-mail-v2.test.mjs`, `tools/fleet-mail-watchdog.test.mjs`, `tools/fleet-task-runner.test.mjs`, `tools/fleet-inbox-context.test.mjs`, `tools/allow-rules.test.mjs`, `tools/decision-watch.test.mjs`, `tools/fleet-question-relay.test.mjs`
+- GAS: `gas/fleet-status-sheet/WebApp.gs`, `gas/fleet-status-sheet/AutoProgress.gs`（本番pullと同一内容）
+- 設計: `docs/fleet-mail-v2-design.md`
+
+### 12.2 検証
+
+指定の `node --test tools/fleet-mail*.test.mjs tools/fleet-inbox-context.test.mjs tools/fleet-poller*.test.mjs tools/fleet-task-runner.test.mjs tools/allow-rules.test.mjs tools/decision-watch.test.mjs tools/fleet-question-relay*.test.mjs` は385件pass / 0件fail。timeout時の警告stderr、警告だけのstdout、stdoutのみの返信、再送時の長文保持、failedへの対話返信、送受信hook表示、廃止ルール削除、通知・権限確認の除外を含む。
+
+全体 `node --test tools/*.test.mjs` は出力進行が止まり中断。最終版で `node --test --test-timeout=30000 tools/*.test.mjs` も実行したが同じ位置で45秒以上出力が止まり、2178件pass / 1件failを観測した時点で中断（exit 130、全体完走ではない）。failは `distribution-coverage.test.mjs` の既存作業環境項目 `.agents`, `.codex`, `.codex-task-fleet-mail-collect.md` 未分類。単独再実行でも同じ1件fail（6件pass）。指定テストは全完走。コミット・本番配布・実PC送受信は実施していない。

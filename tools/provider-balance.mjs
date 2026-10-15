@@ -72,6 +72,7 @@ function readRows(file) {
   try { return fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean).flatMap((line) => { try { return [JSON.parse(line)]; } catch { return []; } }); } catch { return []; }
 }
 export function classifyBalance(row) {
+  if (Number.isFinite(row.balanceUsd) && row.balanceUsd < 1 && row.autoTopUp === true) return 'autotopup_broken';
   if (row.todaySpendUsd >= 1 && row.todaySpendUsd > 2 * row.avg7dSpendUsd) return 'anomaly';
   if (Number.isFinite(row.credits)) return row.credits < CREDIT_LOW_THRESHOLD ? 'low' : 'ok';
   if (Number.isFinite(row.balanceUsd) && row.balanceUsd < BALANCE_LOW_THRESHOLD_USD && row.autoTopUp !== true) return 'low';
@@ -79,7 +80,9 @@ export function classifyBalance(row) {
   return 'ok';
 }
 export function formatBalanceLine(rows) {
-  const item = (r) => r.provider === 'groq' && r.billing === 'free'
+  const item = (r) => r.status === 'autotopup_broken'
+    ? `${r.provider} $${r.balanceUsd.toFixed(2)}(オートチャージ故障・${r.account || '契約アカウント'} で確認)`
+    : r.provider === 'groq' && r.billing === 'free'
     ? `${r.provider} 無料枠(有料化不可)`
     : Number.isFinite(r.credits)
     ? `${r.provider} ${r.credits}cr(前払い)`
@@ -108,6 +111,8 @@ export async function collectProviderBalances({ home = process.env.ORGIAST_HOME 
   const geminiMonth = summarizeGeminiMonth(geminiRows, { now });
   const gemini = { provider: 'gemini', balanceUsd: null, autoTopUp: billing.gemini?.autoTopUp ?? 'unknown', ...summarizeLedger(ledger, 'gemini', now), reason: `quota monitor: ${geminiMonth.searches ?? 0} searches this month; no balance API` };
   gemini.status = classifyBalance(gemini); results.push(gemini);
+  const catalog = JSON.parse(fs.readFileSync(path.join(repoDir, 'ai-subscription-catalog.json'), 'utf8'));
+  for (const row of results) row.account = catalog.services.find(s => s.id === (row.provider === 'xai' ? 'grok' : row.provider))?.account ?? null;
   if (appendHistory) {
     try {
       const file = path.join(claudeDir, 'provider-balances.jsonl');
@@ -136,6 +141,7 @@ export async function alertProviderBalances(rows, {
   notify = notifyKim, log = console.log, warn = console.error,
 } = {}) {
   const file = path.join(home, '.claude', 'provider-balance-alert-state.json');
+  const notifiedFile = path.join(home, '.claude', 'provider-balance-notified.json');
   const lock = `${file}.lock`;
   let locked = false;
   let temporary;
@@ -151,9 +157,19 @@ export async function alertProviderBalances(rows, {
     try { state = JSON.parse(fs.readFileSync(file, 'utf8')); }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
     if (state.version !== 1 || !state.providers || typeof state.providers !== 'object') throw new Error('invalid state');
+    let notified = {};
+    try { notified = JSON.parse(fs.readFileSync(notifiedFile, 'utf8')); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+    let notifiedChanged = false;
     const today = alertDay(now);
     const lines = [];
     for (const row of rows) {
+      if (row.status === 'autotopup_broken') {
+        if (!(now.getTime() - Date.parse(notified[row.provider]) < DAY)) {
+          lines.push(`オートチャージ故障: ${row.provider} ${balanceLabel(row)}。${row.account || '契約アカウント'} で ${CHARGE_URLS[row.provider] || '請求画面'} を開き、自動補充の支払い方法・上限・失敗履歴を確認してください。`);
+          notified[row.provider] = now.toISOString(); notifiedChanged = true;
+        }
+        continue;
+      }
       const prior = state.providers[row.provider] || {};
       const next = { ...prior };
       const low = row.status === 'low' || (Number.isFinite(row.balanceUsd)
@@ -188,6 +204,11 @@ export async function alertProviderBalances(rows, {
       const result = await notify(text, { home, webhookFallback: false });
       if (result?.delivered !== 'dm') throw new Error('DM not delivered');
     }
+    if (notifiedChanged) {
+      temporary = `${notifiedFile}.${process.pid}.tmp`;
+      fs.writeFileSync(temporary, JSON.stringify(notified, null, 2) + '\n');
+      fs.renameSync(temporary, notifiedFile);
+    }
     // DM成功後だけ確定。失敗時は次回同じ通知を再試行する。
     temporary = `${file}.${process.pid}.tmp`;
     fs.writeFileSync(temporary, JSON.stringify(state, null, 2) + '\n');
@@ -213,7 +234,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   const dryRun = argv.includes('--dry-run');
   const rows = await (io.collect ?? collectProviderBalances)({ ...io, appendHistory: !dryRun });
   let alerts;
-  if (argv.includes('--alert')) alerts = await alertProviderBalances(rows, {
+  if (argv.includes('--alert') || rows.some(r => r.status === 'autotopup_broken')) alerts = await alertProviderBalances(rows, {
     ...io, dryRun, log: argv.includes('--json') ? () => {} : (io.log ?? console.log),
   });
   if (argv.includes('--json')) console.log(JSON.stringify(alerts ? { providers: rows, alerts } : rows, null, 2));

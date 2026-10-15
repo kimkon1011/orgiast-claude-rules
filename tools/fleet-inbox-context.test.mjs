@@ -229,3 +229,28 @@ for (const [category, why] of ['[判断依頼]', '[作業依頼]', '[回答・�
     assert.doesNotMatch(context, /id=mail-order-0/);
   });
 }
+
+test('802 failed prompts precede decisions and include interactive reply command', () => {
+  const failed = mail('failed', { kind: 'prompt', status: 'failed', failReason: 'timeout', body: 'original question' });
+  const result = selectContext([mail('decision', { why: '[判断依頼]' }), failed], { now: NOW, sessionId: 'new' });
+  assert.equal(result.shown[0].id, failed.id);
+  assert.match(result.context, /\[作業依頼\] 自動回答できなかった質問/);
+  assert.match(result.context, /--reply mail-failed --body-file <file>/);
+  assert.match(result.context, /timeout/);
+});
+test('802 sender hook displays cached failed status without network', async t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.dir, 'fleet-mail-sent-status.json'), JSON.stringify({ 'mail-sent': { id: 'mail-sent', to: 'other-PC', status: 'failed', failReason: 'timeout' } }));
+  const output = [];
+  await main({ home: f.home, readStdin: async () => JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 'test' }), stdout: x => output.push(x), spawnImpl: () => ({ on() {}, unref() {} }) });
+  assert.match(output.join(''), /other-PC への質問 mail-sent は相手の自動回答が失敗（timeout）/);
+});
+
+test('failed prompts are hidden only after 72 hours from failedAt', () => {
+  for (const [age, visible] of [[72 * 3600000 - 1, true], [72 * 3600000, true], [72 * 3600000 + 1, false]]) {
+    const failed = mail('aged', { kind: 'prompt', status: 'failed', failedAt: new Date(NOW - age).toISOString(), createdAt: new Date(NOW - 100 * 3600000).toISOString() });
+    const result = selectContext([failed], { now: NOW });
+    assert.equal(result.shown.length, visible ? 1 : 0);
+    if (!visible) assert.equal(result.context, '');
+  }
+});

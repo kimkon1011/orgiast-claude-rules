@@ -36,6 +36,12 @@ export function redactSecrets(value) {
   return String(value ?? '').replace(SECRET_PATTERN, '[REDACTED]').replace(/https:\/\/discord(?:app)?\.com\/api\/webhooks\/\S+/gi, '[REDACTED]');
 }
 
+// Keep both the opening answer and the conclusion when stdout exceeds the budget.
+export function truncateAnswer(value) {
+  const text = String(value ?? '');
+  return text.length <= 8000 ? text : `${text.slice(0, 6000)}…(中略 ${text.length - 7500} 字)…${text.slice(-1500)}`;
+}
+
 export function targetMatches(targets, label, hostname) {
   const target = String(targets ?? '');
   return target === '' || target === 'all' || String(label).includes(target) || String(hostname).includes(target);
@@ -190,13 +196,13 @@ export async function runPrompt({ claudeExe, body, cwd, timeoutSeconds = 1800, s
       cwd, env: { ...process.env, CLAUDE_HEADLESS: '1', CI: '1', ...(home ? { ORGIAST_HOME: home } : {}), FLEET_DRIVEN_BY_HUB: drivenByHub ? '1' : '0', FLEET_RESUME_MAIL_ID: resumeMailId || '' }, stdio: ['pipe', 'pipe', 'pipe'], shell: false, windowsHide: true,
     });
     child.stdin.end();
-    child.stdout.on('data', (chunk) => { stdout += chunk; if (stdout.length > 100_000) stdout = stdout.slice(-100_000); });
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
     child.stderr.on('data', (chunk) => { stderr += chunk; if (stderr.length > 100_000) stderr = stderr.slice(-100_000); });
     let timer;
-    const finish = (result) => { if (settled) return; settled = true; clearTimer(timer); resolve({ ...result, durationSeconds: Math.round((Date.now() - started) / 100) / 10, stdoutTail: redactSecrets(stdout).slice(-4000), stderrTail: redactSecrets(stderr).slice(-4000), outputTail: `${stdout}${stderr}`.slice(-10_000) }); };
+    const finish = (result) => { if (settled) return; settled = true; clearTimer(timer); resolve({ ...result, durationSeconds: Math.round((Date.now() - started) / 100) / 10, stdoutTail: truncateAnswer(redactSecrets(stdout)), stderrTail: redactSecrets(stderr).slice(-4000), outputTail: `${stdout}${stderr}`.slice(-10_000) }); };
     child.on('error', (error) => finish({ exitCode: null, error: String(error?.message ?? error), timedOut: false }));
     child.on('close', (code) => finish({ exitCode: code, timedOut: false }));
-    timer = setTimer(() => { child.kill('SIGKILL'); finish({ exitCode: null, timedOut: true, error: 'タイムアウトで停止' }); }, Math.max(1, Number(timeoutSeconds)) * 1000);
+    timer = setTimer(() => { finish({ exitCode: null, timedOut: true, error: 'タイムアウトで停止' }); child.kill('SIGKILL'); }, Math.max(1, Number(timeoutSeconds)) * 1000);
   });
 }
 

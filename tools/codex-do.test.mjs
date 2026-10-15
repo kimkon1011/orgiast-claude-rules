@@ -32,6 +32,8 @@ function run(args, options = {}) {
       // (2026-09-21 実測: 開発機で ChatGPT 認証が実在し auto テストが軒並み落ちた)。
       // ChatGPT 認証時の挙動そのものを見るテストだけ options.env で明示的に上書きする。
       CODEX_DO_AUTH_MODE: 'apikey',
+      CODEX_DO_WSL_PROBE: 'absent',
+      CODEX_DO_NATIVE_PROBE: 'present',
       ...options.env
     },
   });
@@ -905,10 +907,10 @@ test('wslCodexLaunchPlan: ディストリが見つからなければ中断する
   assert.equal(wslCodexLaunchPlan({ distroFound: false, codexPresent: true, versionOk: false, installAttempted: false, retried: false }), 'abort');
 });
 
-test('wslCodexLaunchPlan: allowNative を明示したときだけネイティブへ移行する', () => {
-  assert.equal(wslCodexLaunchPlan({ distroFound: false, codexPresent: false, versionOk: false, installAttempted: false, retried: false, allowNative: true }), 'native');
-  assert.equal(wslCodexLaunchPlan({ distroFound: true, codexPresent: true, versionOk: false, installAttempted: false, retried: true, allowNative: true }), 'native');
-  assert.equal(wslCodexLaunchPlan({ distroFound: true, codexPresent: false, versionOk: false, installAttempted: true, retried: false, allowNative: true }), 'native');
+test('wslCodexLaunchPlan: ネイティブが解決できるときネイティブへ移行する', () => {
+  assert.equal(wslCodexLaunchPlan({ distroFound: false, codexPresent: false, versionOk: false, installAttempted: false, retried: false, nativeAvailable: true }), 'native');
+  assert.equal(wslCodexLaunchPlan({ distroFound: true, codexPresent: true, versionOk: false, installAttempted: false, retried: true, nativeAvailable: true }), 'native');
+  assert.equal(wslCodexLaunchPlan({ distroFound: true, codexPresent: false, versionOk: false, installAttempted: true, retried: false, nativeAvailable: true }), 'native');
 });
 
 test('WSL codex のプローブはコールドスタートを待てる', () => {
@@ -922,7 +924,7 @@ test('WSL が使えず中断するときも台帳に launched:false の1行を�
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const result = run(['--no-fallback', '--cwd', home, '--model', 'sol', '説明して'], {
     home,
-    env: { CODEX_DO_WSL_PROBE: 'absent' },
+    env: { CODEX_DO_WSL_PROBE: 'absent', CODEX_DO_NATIVE_PROBE: 'absent' },
   });
   assert.equal(result.status, 3, result.stderr);
   const ledger = path.join(home, '.claude', 'executor-usage.jsonl');
@@ -945,6 +947,7 @@ test('WSL ディストリが無くても代替バックエンドがあるなら�
     home,
     env: {
       CODEX_DO_WSL_PROBE: 'absent',
+      CODEX_DO_NATIVE_PROBE: 'absent',
       CODEX_DO_MOCK_RESULTS: JSON.stringify([{ status: 0, output: 'done', stderr: '' }]),
       GEMINI_API_KEY: '',
       DEEPSEEK_API_KEY: 'sk-test'
@@ -1570,4 +1573,17 @@ test('killProcessTree は pid が無ければ何もしない', () => {
   killProcessTree({ kill: () => calls.push('kill') },
     { spawnImpl: () => calls.push('spawn'), platform: 'win32' });
   assert.deepEqual(calls, []);
+});
+
+test('WSL 不在はネイティブ既定、require-wsl は中断、allow-native は no-op', async () => {
+  assert.equal(wslCodexLaunchPlan({distroFound:false,nativeAvailable:true}), 'native');
+  assert.equal(wslCodexLaunchPlan({distroFound:false,nativeAvailable:true,requireWsl:true}), 'abort');
+  assert.equal(wslCodexLaunchPlan({distroFound:false,allowNative:true}), 'abort');
+  const {nativeSandboxMode, applyNativeSandbox, resolveNativeCodex, recordLaneMode} = await import('./codex-do.mjs');
+  assert.equal(nativeSandboxMode(), 'danger-full-access');
+  assert.equal(nativeSandboxMode({review:true}), 'read-only');
+  assert.deepEqual(applyNativeSandbox(['exec','-s','workspace-write','-']), ['exec','-s','danger-full-access','-']);
+  assert.equal(resolveNativeCodex({platform:'win32',env:{APPDATA:'C:/fixture'},existsImpl:()=>true}).prefixArgs.length,1);
+  const h=fs.mkdtempSync(path.join(os.tmpdir(),'lane-mode-'));
+  try {recordLaneMode('native','danger-full-access',{home:h});const m=JSON.parse(fs.readFileSync(path.join(h,'.claude/lane-mode.json'),'utf8'));assert.equal(m.codex.mode,'native');assert.ok(Date.parse(m.codex.verifiedAt));} finally {fs.rmSync(h,{recursive:true,force:true});}
 });

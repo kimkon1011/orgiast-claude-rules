@@ -6,10 +6,10 @@ import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 import { machineIdentity } from './machine-identity.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
+import { readEnvValue } from './env-kv.mjs';
 import { keyserveAuthHeaders, requireKeyservePcId, keyserveSecret } from './keyserve-auth.mjs';
 
-const DEFAULT_MEMORY_URL = 'https://orgiast-keyserve.vercel.app/api/memory';
-const SHARED_INDEX_LINE = '- **他PCからの共有知見** 別アカウントPCで確立した実測ノウハウ → [index/shared.md](index/shared.md)';
+const DEFAULT_MEMORY_URL = 'https://orgiast-memoryserve.vercel.app/api/memory';
 const SECRET_PATTERNS = [
   ['Discord webhook URL', /discord\.com\/api\/webhooks\//i],
   ['OpenAI API key', /sk-[A-Za-z0-9]{20,}/],
@@ -35,10 +35,10 @@ function excludedIndex(items) {
   const lines = [
     '# Export exclusions',
     '',
-    '公開リポジトリへ書き出さなかった feedback memory の一覧です。本文や一致内容は記録しません。',
+    '書き出さなかった memory の一覧です。本文や一致内容は記録しません。',
     '',
     ...items.sort((a, b) => a.name.localeCompare(b.name)).map(({ name, category }) =>
-      `- \`${name}\` — ${category === 'customer' ? '顧客情報（法人名/案件ID）を含む' : '資格情報を含む'}`),
+      `- \`${name}\` — ${category === 'opt-out' ? 'share: false' : category === 'customer' ? '顧客情報（法人名/案件ID）を含む' : '資格情報を含む'}`),
     '',
   ];
   return lines.join('\n');
@@ -67,7 +67,7 @@ export function parseMemoryFrontmatter(text) {
   return result;
 }
 
-function memoryFiles(home, emit) {
+function memoryFiles(home, emit, channel) {
   const root = path.join(home, '.claude', 'projects');
   const files = [];
   try {
@@ -80,12 +80,17 @@ function memoryFiles(home, emit) {
             emit(`除外(対象外ファイル): ${entry.name} — バックアップ/隠しファイル`);
             continue;
           }
-          if (entry.isFile() && entry.name.endsWith('.md') && entry.name !== 'MEMORY.md') files.push(path.join(memory, entry.name));
+          if (entry.isFile() && entry.name.endsWith('.md') && entry.name !== EXCLUDED_FILE && (channel === 'private' || entry.name !== 'MEMORY.md')) files.push({ file: path.join(memory, entry.name), name: entry.name });
+          if (channel === 'private' && entry.isDirectory() && entry.name === 'index') {
+            for (const child of fs.readdirSync(path.join(memory, 'index'), { withFileTypes: true })) {
+              if (child.isFile() && child.name.endsWith('.md') && child.name !== EXCLUDED_FILE && !isNonMemoryFile(child.name)) files.push({ file: path.join(memory, 'index', child.name), name: `index/${child.name}` });
+            }
+          }
         }
       } catch (error) { if (error?.code !== 'ENOENT') emit(`失敗: ${memory} — ${oneLine(error)}`); }
     }
   } catch (error) { if (error?.code !== 'ENOENT') emit(`失敗: ${root} — ${oneLine(error)}`); }
-  return files.sort();
+  return files.sort((a, b) => a.file.localeCompare(b.file));
 }
 
 function sourceIdentity(home) {
@@ -109,13 +114,17 @@ export function exportMemories(options = {}) {
   }
   const selected = new Map();
   const exclusions = [];
-  for (const file of memoryFiles(home, emit)) {
-    const name = path.basename(file);
+  for (const { file, name } of memoryFiles(home, emit, channel)) {
     try {
       const original = fs.readFileSync(file, 'utf8');
       const frontmatter = parseMemoryFrontmatter(original);
       const type = frontmatter['metadata.type'] || frontmatter.type;
-      if (type !== 'feedback') continue;
+      if (channel === 'public' ? type !== 'feedback' : (type === 'user' || (!['feedback', 'project', 'reference'].includes(type) && name !== 'MEMORY.md' && !name.startsWith('index/')))) continue;
+      if (channel === 'private' && [frontmatter.share, frontmatter['metadata.share']].some(value => /^false(?:\s+#.*)?$/i.test(value || ''))) {
+        exclusions.push({ name, category: 'opt-out' });
+        emit(`除外(共有拒否): ${name} — share: false`);
+        continue;
+      }
       const secret = SECRET_PATTERNS.find(([, pattern]) => pattern.test(original));
       if (secret) {
         exclusions.push({ name, category: 'secret' });
@@ -129,7 +138,7 @@ export function exportMemories(options = {}) {
         emit(`除外(顧客情報): ${name} — ${customer[0]}`);
         continue;
       }
-      if (selected.has(name)) { emit(`スキップ: ${name} — 同名のfeedbackを既に採用`); continue; }
+      if (selected.has(name)) { emit(`スキップ: ${name} — 同名のmemoryを既に採用`); continue; }
       const bytes = Buffer.from(redacted, 'utf8');
       selected.set(name, { name, description: frontmatter.description || name, bytes });
     } catch (error) { emit(`失敗: ${name} — ${oneLine(error)}`); }
@@ -139,12 +148,13 @@ export function exportMemories(options = {}) {
     const destination = path.join(outputDir, item.name);
     if (sameFile(destination, item.bytes)) { unchanged++; continue; }
     emit(`${dryRun ? '書き込み予定' : '書き込み'}: ${path.join(outputDir, item.name)}`);
-    if (!dryRun) { try { fs.mkdirSync(outputDir, { recursive: true }); fs.writeFileSync(destination, item.bytes); written++; } catch (error) { emit(`失敗: ${item.name} — ${oneLine(error)}`); } }
+    if (!dryRun) { try { fs.mkdirSync(path.dirname(destination), { recursive: true }); fs.writeFileSync(destination, item.bytes); written++; } catch (error) { emit(`失敗: ${item.name} — ${oneLine(error)}`); } }
     else written++;
   }
   try {
-    for (const entry of fs.readdirSync(outputDir, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.endsWith('.md') || entry.name === EXCLUDED_FILE || selected.has(entry.name)) continue;
+    for (const name of localFiles(outputDir)) {
+      const entry = { name };
+      if (!name.endsWith('.md') || name === EXCLUDED_FILE || selected.has(name)) continue;
       emit(`${dryRun ? '削除予定' : '削除'}: ${path.join(outputDir, entry.name)}`);
       if (!dryRun) fs.rmSync(path.join(outputDir, entry.name));
       removed++;
@@ -171,6 +181,7 @@ export function exportMemories(options = {}) {
   }
   return {
     exported: files.length, written, unchanged, removed, excluded: exclusions.length,
+    ...(options.includeContents ? { contents: Object.fromEntries([...selected].map(([name, item]) => [name, item.bytes.toString('utf8')])) } : {}),
     excludedSecrets: exclusions.filter((item) => item.category === 'secret').length,
     excludedCustomerInfo: exclusions.filter((item) => item.category === 'customer').length,
   };
@@ -191,111 +202,106 @@ export function findLatestMemoryDir(home, emit = console.log) {
   } catch (error) { if (error?.code !== 'ENOENT') emit(`失敗: ${projects} — ${oneLine(error)}`); }
   candidates.sort((a, b) => b.mtime - a.mtime);
   if (candidates[0]) return path.dirname(candidates[0].file);
-  // MEMORY.md がまだ無い新規PCでも memory ディレクトリ自体があれば install 先として使う
+  // 索引未作成の auto-memory も export と発信元判定の対象にする
   directories.sort((a, b) => b.mtime - a.mtime);
   return directories[0] ? directories[0].dir : '';
 }
 
-function updateMemoryIndex(text, count) {
-  const newline = text.includes('\r\n') ? '\r\n' : '\n';
-  const line = `${SHARED_INDEX_LINE} (${count}件)`;
-  const pattern = /^- \*\*他PCからの共有知見\*\*.*$/gm;
-  if (pattern.test(text)) return text.replace(pattern, line);
-  const heading = /^## ドメイン索引\s*$/m;
-  if (heading.test(text)) return text.replace(heading, (value) => `${value}${newline}${line}`);
-  // どちらのアンカーも無い場合: 既存本文を保持したまま末尾に見出しと索引行を追記する
-  const trimmed = text.replace(/\s+$/, '');
-  const prefix = trimmed.length > 0 ? `${trimmed}${newline}${newline}` : '';
-  return `${prefix}## ドメイン索引${newline}${line}${newline}`;
+// Only the documented two-level layout is accepted, on both Windows and Unix.
+export function validMemoryName(name) {
+  return typeof name === 'string' && /^(?:index\/)?[^/\\:<>"|?*\x00-\x1f]+\.md$/.test(name)
+    && !name.split('/').some(isNonMemoryFile) && path.posix.basename(name) !== EXCLUDED_FILE;
 }
-
-function bundleFiles(payload) {
-  const raw = payload?.files ?? payload?.bundle?.files;
-  if (Array.isArray(raw)) return raw.map((item) => [item.name, item.content ?? item.body ?? item.data]);
-  if (raw && typeof raw === 'object') return Object.entries(raw).map(([name, value]) => [name, value?.content ?? value?.body ?? value?.data ?? value]);
-  throw new Error('壊れた JSON (files がありません)');
+function localFiles(dir, prefix = '') {
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+    const name = prefix + entry.name;
+    return entry.isDirectory() ? localFiles(path.join(dir, entry.name), name + '/') : [name];
+  });
 }
+function annotation(manifest) {
+  return `<!-- orgiast-shared-memory -->
+この索引は ${manifest.source.account}（${manifest.source.pc}）の Claude Code memory の自動コピー（${manifest.generatedAt}）。本文中の『ユーザー』『kim』は発信元の人物を指す。このPCの user は別人なので、人物固有の既定（既定ブラウザ・個人アカウント等）はそのまま適用せず、運用ノウハウ・手順・失敗の型として使う。このディレクトリは毎日上書きされるので編集しない。このPCで得た知見は通常の auto-memory に書き、全社化したいものは /share-knowledge で投稿する。
+<!-- orgiast-shared-memory -->
 
-function readBundleDirectory(sourceDir) {
-  return fs.readdirSync(sourceDir, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.endsWith('.md') && entry.name !== EXCLUDED_FILE)
-    .map((entry) => [entry.name, fs.readFileSync(path.join(sourceDir, entry.name))]);
+`;
 }
-
 export async function installSharedMemories(options = {}) {
   const home = options.home || process.env.ORGIAST_HOME || os.homedir();
-  const dryRun = Boolean(options.dryRun);
+  const env = options.env || process.env;
+  const dir = options.sharedDir || env.ORGIAST_SHARED_MEMORY_DIR || path.join(home, '.claude', 'shared-memory');
   const emit = options.emit || console.log;
-  const memoryDir = findLatestMemoryDir(home, emit);
-  const result = { installed: 0, skipped: 0, unchanged: 0, indexed: 0 };
-  if (!memoryDir) { emit('memory が1件も無いため install をスキップ'); return result; }
-  let incoming;
+  const result = { generatedAt: '', installed: 0, updated: 0, removed: 0, unchanged: 0, skipped: 0, dir };
   try {
-    const secret = keyserveSecret(home, options.env || process.env);
-    const response = await (options.fetchImpl || fetch)(options.memoryUrl || process.env.ORGIAST_MEMORY_URL || DEFAULT_MEMORY_URL, {
-      headers: keyserveAuthHeaders(secret, options.nowMs || Date.now(), requireKeyservePcId(home, options.env || process.env)), signal: AbortSignal.timeout(options.timeoutMs || 10000),
-    });
-    if (!response.ok) throw Object.assign(new Error(`HTTP ${response.status}`), { status: response.status });
-    incoming = bundleFiles(await response.json()).map(([name, value]) => [name, Buffer.from(String(value), 'utf8')]);
-  } catch (error) {
-    if (options.fromDir && fs.existsSync(options.fromDir)) incoming = readBundleDirectory(options.fromDir);
-    else {
-      const authHint = error?.status === 401 ? ' (~/.claude/keyserve.env 未受領またはローテーションの可能性)' : '';
-      emit(`memory-share install 取得失敗: ${oneLine(error)}${authHint}`);
-      return result;
+    const request = async (query) => {
+      const url = new URL(options.memoryUrl || env.ORGIAST_MEMORY_URL || DEFAULT_MEMORY_URL);
+      url.search = query;
+      const response = await (options.fetchImpl || fetch)(url.toString(), {
+        headers: keyserveAuthHeaders(keyserveSecret(home, env), options.nowMs ?? Date.now(), requireKeyservePcId(home, env)),
+        signal: AbortSignal.timeout(options.timeoutMs || 10000),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}${response.status === 401 ? ' (~/.claude/keyserve.env 未受領またはローテーションの可能性)' : ''}`);
+      return response.json();
+    };
+    let offline;
+    let manifest;
+    if (options.fromDir) {
+      offline = Object.fromEntries(localFiles(options.fromDir).filter(validMemoryName).map(name => [name, fs.readFileSync(path.join(options.fromDir, name), 'utf8')]));
+      const metadata = safeReadJson(path.join(options.fromDir, 'manifest.json'));
+      manifest = { version: 2, generatedAt: metadata?.generatedAt || 'offline', source: { pc: metadata?.source?.pc || metadata?.source?.hostname || '', account: metadata?.source?.account || '' }, parts: 1,
+        files: Object.entries(offline).map(([name, content]) => ({ name, sha256: sha256(content), bytes: Buffer.byteLength(content), part: 0 })) };
+    } else manifest = await request('manifest=1');
+    if (manifest?.version !== 2 || typeof manifest.generatedAt !== 'string' || !manifest.source || !Array.isArray(manifest.files) || !Number.isInteger(manifest.parts) || manifest.parts < 0) throw new Error('invalid v2 manifest');
+    const names = new Set();
+    for (const file of manifest.files) {
+      if (!validMemoryName(file.name) || names.has(file.name) || !/^[a-f0-9]{64}$/.test(file.sha256) || !Number.isInteger(file.bytes) || file.bytes < 0 || !Number.isInteger(file.part) || file.part < 0 || file.part >= manifest.parts) throw new Error('invalid manifest file');
+      names.add(file.name);
     }
-  }
-  const sharedDir = path.join(memoryDir, 'shared');
-  const planned = new Map();
-  try {
-    for (const [name, source] of incoming.sort(([a], [b]) => a.localeCompare(b))) {
-      if (!name.endsWith('.md') || name === EXCLUDED_FILE || path.basename(name) !== name || isNonMemoryFile(name)) continue;
-      try {
-        const local = path.join(memoryDir, name);
-        if (fs.existsSync(local)) { result.skipped++; emit(`スキップ: ${name} — ローカル直下に同名memoryあり`); continue; }
-        const destination = path.join(sharedDir, name);
-        if (fs.existsSync(destination)) {
-          const current = fs.readFileSync(destination);
-          if (current.equals(source)) { result.unchanged++; planned.set(name, current); continue; }
-          if (parseMemoryFrontmatter(current.toString('utf8'))['metadata.localOverride'] === 'true') {
-            result.skipped++; planned.set(name, current); emit(`スキップ: ${name} — metadata.localOverride: true`); continue;
-          }
-        }
-        planned.set(name, source); result.installed++;
-        emit(`${dryRun ? '配置予定' : '配置'}: shared/${name}`);
-        if (!dryRun) { fs.mkdirSync(sharedDir, { recursive: true }); fs.writeFileSync(destination, source); }
-      } catch (error) { emit(`失敗: ${name} — ${oneLine(error)}`); }
+    result.generatedAt = manifest.generatedAt;
+    // Hostname fallback used for authentication is not proof of the configured publishing identity.
+    const pc = env.ORGIAST_KEYSERVE_PC || readEnvValue(path.join(home, '.claude', 'keyserve.env'), 'ORGIAST_KEYSERVE_PC');
+    const rootNames = manifest.files.filter(file => !file.name.includes('/')).map(file => file.name);
+    const local = findLatestMemoryDir(home, () => {});
+    if ((pc && pc === manifest.source.pc) || (!pc && local && rootNames.length && rootNames.filter(name => fs.existsSync(path.join(local, name))).length / rootNames.length >= 0.5)) {
+      result.skipped = manifest.files.length; emit('発信元のため install スキップ'); return result;
     }
-  } catch (error) { emit(`失敗: bundle — ${oneLine(error)}`); }
-  if (!dryRun) {
-    try {
-      for (const entry of fs.readdirSync(sharedDir, { withFileTypes: true })) {
-        if (entry.isFile() && entry.name.endsWith('.md') && !planned.has(entry.name)) fs.rmSync(path.join(sharedDir, entry.name));
+    for (const target of [dir, path.join(dir, 'index'), path.join(dir, '.state.json')]) {
+      try { if (fs.lstatSync(target).isSymbolicLink()) throw new Error('shared-memory symlink rejected'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
+    const statePath = path.join(dir, '.state.json');
+    const previous = safeReadJson(statePath);
+    const changed = manifest.files.filter(file => previous?.files?.[file.name] !== file.sha256 || !fs.existsSync(path.join(dir, file.name)) || (file.name === 'MEMORY.md' && (previous.generatedAt !== manifest.generatedAt || JSON.stringify(previous.source) !== JSON.stringify(manifest.source))));
+    const incoming = new Map();
+    // Validate every downloaded part before changing any installed file or pruning.
+    for (const part of new Set(changed.map(file => file.part))) {
+      const payload = offline ? { version: 2, generatedAt: manifest.generatedAt, part, parts: manifest.parts, files: offline } : await request(`part=${part}`);
+      if (payload?.version !== 2 || payload.generatedAt !== manifest.generatedAt || payload.part !== part || payload.parts !== manifest.parts || !payload.files) throw new Error('part generation mismatch');
+      for (const file of changed.filter(file => file.part === part)) {
+        const content = payload.files[file.name];
+        if (typeof content !== 'string' || sha256(content) !== file.sha256 || Buffer.byteLength(content) !== file.bytes) throw new Error('part integrity mismatch');
+        incoming.set(file.name, file.name === 'MEMORY.md' ? annotation(manifest) + content : content);
       }
-    } catch (error) { if (error?.code !== 'ENOENT') emit(`失敗: ${sharedDir} — ${oneLine(error)}`); }
-  }
-  const entries = [...planned.entries()].sort(([a], [b]) => a.localeCompare(b));
-  const index = ['# 他PCからの共有知見', '', '（MEMORY.md から辿られるサブ索引。新規は共有元PCで管理）', '', ...entries.map(([name, bytes]) => {
-    const description = parseMemoryFrontmatter(bytes.toString('utf8')).description || name;
-    return `- [${description}](../shared/${name})`;
-  }), ''].join('\n');
-  const indexPath = path.join(memoryDir, 'index', 'shared.md');
-  const memoryPath = path.join(memoryDir, 'MEMORY.md');
-  try {
-    const indexBytes = Buffer.from(index);
-    if (!sameFile(indexPath, indexBytes)) {
-      emit(`${dryRun ? '生成予定' : '生成'}: index/shared.md`);
-      if (!dryRun) { fs.mkdirSync(path.dirname(indexPath), { recursive: true }); fs.writeFileSync(indexPath, indexBytes); }
     }
-    let current;
-    try { current = fs.readFileSync(memoryPath, 'utf8'); } catch (error) { if (error?.code !== 'ENOENT') throw error; current = ''; }
-    const updated = updateMemoryIndex(current, entries.length);
-    if (updated !== current) {
-      emit(`${dryRun ? '更新予定' : '更新'}: MEMORY.md 共有索引 (${entries.length}件)`);
-      if (!dryRun) fs.writeFileSync(memoryPath, updated, 'utf8');
+    for (const [name, content] of incoming) {
+      const destination = path.join(dir, name);
+      // Never follow a local symlink outside the managed directory.
+      for (const target of [dir, path.dirname(destination), destination]) {
+        try { if (fs.lstatSync(target).isSymbolicLink()) throw new Error('shared-memory symlink rejected'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      }
+      if (fs.existsSync(destination)) result.updated++; else result.installed++;
+      if (!options.dryRun) { fs.mkdirSync(path.dirname(destination), { recursive: true }); fs.writeFileSync(destination, content); }
     }
-    result.indexed = entries.length;
-  } catch (error) { emit(`失敗: shared index — ${oneLine(error)}`); }
+    result.unchanged = manifest.files.length - changed.length;
+    for (const name of localFiles(dir)) {
+      if (names.has(name) || ['.state.json', 'README.md'].includes(name)) continue;
+      if (!options.dryRun) fs.rmSync(path.join(dir, name));
+      result.removed++;
+    }
+    if (!options.dryRun) {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(statePath, JSON.stringify({ generatedAt: manifest.generatedAt, source: manifest.source, files: Object.fromEntries(manifest.files.map(file => [file.name, file.sha256])) }, null, 2) + '\n');
+    }
+  } catch (error) { emit(`memory-share install 取得失敗: ${oneLine(error)}`); result.error = oneLine(error); }
   return result;
 }
 

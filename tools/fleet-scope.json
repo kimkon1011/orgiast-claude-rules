@@ -284,6 +284,12 @@
       "reason": "データで実行体なし（~/.claude 設定名の記載による誤検出を許容）"
     },
     {
+      "path": "tools/purge-remote-sessions.mjs",
+      "scope": "fleet",
+      "step": "settings:purge-sessions-SessionStart",
+      "reason": "purge-sessions.mjs --hook（SessionStart/Stop）が起動する。ユーザー設定は組織 UUID の読み取りのみ"
+    },
+    {
       "path": "tools/prompt-memory-guideline.mjs",
       "scope": "kim-only",
       "step": null,
@@ -656,6 +662,18 @@
       "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
     },
     {
+      "path": "tools/fleet-lane-health-report.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
+    },
+    {
+      "path": "tools/lib/lane-health.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
+    },
+    {
       "path": "tools/lib/fleet-label.mjs",
       "scope": "fleet",
       "step": "task:fleet-mail",
@@ -732,6 +750,11 @@
       "scope": "fleet",
       "step": "task:fleet-mail",
       "reason": "Stop hook の質問記録、poll の hub 転送・再開状態を共有する"
+    },
+    {
+      "path": "tools/memory-publish.mjs",
+      "scope": "kim-only",
+      "reason": "kim-PC の memory を private keyserve へ夜間発信する。CLI の deploy は発信元PCだけで実行する。"
     }
   ]
 }

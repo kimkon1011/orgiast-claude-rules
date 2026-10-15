@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFile } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { codexAuthStatus } from './codex-auth-status.mjs';
@@ -55,7 +55,7 @@ function orders(health) {
   health.implementOrder = ['codex', 'deepseek', 'glm', 'gemini-cli'].filter(p => health.lanes[p]?.alive);
   health.askOrder = ['gemini', 'deepseek', 'groq', 'openrouter'].filter(p => health.lanes[p]?.alive);
   health.deadNeedsUser = Object.entries(health.lanes).filter(([p, s]) => PROVIDERS.includes(p) && /^(?:dead:)?(?:payment_required|oauth_consent|account_creation|physical_operation)$/.test(s.reason))
-    .map(([provider, s]) => ({ provider, reason: s.reason, fix: s.reason.includes('payment') ? '請求設定でオートチャージ ON。手動チャージは禁止ルール。' : '本人アカウントで認証画面を開き OAuth 同意を完了する。' }));
+    .map(([provider, s]) => ({ provider, reason: s.reason, tried: s.tried, fix: s.userFix || (s.reason.includes('payment') ? '請求設定でオートチャージ ON。手動チャージは禁止ルール。' : '本人アカウントで認証画面を開き OAuth 同意を完了する。') }));
   return health;
 }
 function persist(file, value, health) {
@@ -64,7 +64,7 @@ function persist(file, value, health) {
 export function laneDoctorQuick({ home = laneHome(), now = Date.now(), save = true } = {}) {
   const dir = path.join(home, '.claude');
   const old = readJson(path.join(dir, 'lane-health.json'));
-  const health = { ts: new Date(now).toISOString(), probedAt: old.probedAt || null, lanes: {}, implementOrder: [], askOrder: [], repairs: [], deadNeedsUser: [], errors: [], ignored: [] };
+  const health = { ts: new Date(now).toISOString(), probedAt: old.probedAt || null, lanes: {}, implementOrder: [], askOrder: [], repairs: (old.repairs || []).filter(r => typeof r === 'string' && old.lanes?.codex?.alive), deadNeedsUser: [], errors: [], ignored: [] };
   const cooldown = readJson(path.join(dir, 'provider-cooldown.json')), routing = readJson(path.join(dir, 'routing-overrides.json'));
   const limits = [...history(home, 'provider-limit-history.jsonl'), ...history(home, 'codex-limit-history.jsonl').map(x => ({ ...x, provider: 'codex' }))].filter(x => {
     if (time(x.until) > now + MAX_HISTORY_RESET_MS) {
@@ -91,10 +91,11 @@ export function laneDoctorQuick({ home = laneHome(), now = Date.now(), save = tr
     const recent = limits.filter(x => x.provider === p && time(x.until) > now && !(time(evidence.lastProbeOkAt) >= time(x.t ?? x.ts ?? x.at))).at(-1);
     const blocked = cooldown[p] || recent;
     let state = { alive: configured, reason: configured ? 'configured:unprobed' : p === 'codex' ? 'dead:oauth_consent' : 'missing_key' };
-    if (old.lanes?.[p]?.reason === 'dead:payment_required') state = { ...old.lanes[p] };
+    if (['dead:payment_required', 'dead:physical_operation'].includes(old.lanes?.[p]?.reason)) state = { ...old.lanes[p] };
     else if (blocked && time(blocked.until) > now) state = { alive: false, reason: blocked.reason || 'cooldown', until: blocked.until };
     else if (routing.demote?.[p]) state = { alive: false, reason: 'demoted', until: routing.demote[p]?.until ?? routing.demote[p] };
     else if (configured && freshProbe(old.lanes?.[p]?.probedAt, now) && !(old.lanes[p].until && time(old.lanes[p].until) <= now)) state = { ...old.lanes[p] };
+    else if (configured && evidence.lastProbeOkAt && !/^(?:auth_ok:)?probe_ok(?::stale)?$|^native_ok$/.test(evidence.probeReason || '')) state = { alive: false, reason: 'probe_failed:stale' };
     else if (configured && evidence.lastProbeOkAt) state = { alive: true, reason: 'probe_ok:stale' };
     else if (configured && evidence.probedAt) state = previous.until && time(previous.until) <= now
       ? { alive: true, reason: 'probe_expired' } : { ...previous };
@@ -106,6 +107,23 @@ export function laneDoctorQuick({ home = laneHome(), now = Date.now(), save = tr
   if (save) persist(path.join(dir, 'lane-health.json'), health, health);
   return health;
 }
+// WSL の列挙失敗はディストリ無しと決めつけない。
+export function listWslDistros() {
+  const r = spawnSync('wsl', ['-l', '-q'], { encoding: 'utf16le', windowsHide: true, timeout: 15000 });
+  return r.status === 0 ? String(r.stdout || '').replace(/\0/g, '').trim() : null;
+}
+export async function runNativeWriteProbe({ home, timeoutMs }) {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-codex-write-'));
+  const run = (cmd, args) => new Promise(resolve => execFile(cmd, args, { cwd, env: { ...process.env, ORGIAST_HOME: home }, timeout: timeoutMs, windowsHide: true, maxBuffer: 256 * 1024 }, (e) => resolve({ code: e ? 1 : 0 })));
+  try {
+    const init = await run('git', ['init', '--quiet']);
+    if (init.code) return init;
+    const result = await run(process.execPath, [path.join(repo, 'tools/codex-do.mjs'), 'WRITE_OK.txt を作成し、内容を WRITE_OK にしてください。その後ファイルを読み返して確認してください。', '--cwd', cwd, '--force-native', '--no-fallback', '--no-escalate', '--timeout', String(Math.max(1, Math.floor(timeoutMs / 1000)))]);
+    let ok = false;
+    try { ok = fs.readFileSync(path.join(cwd, 'WRITE_OK.txt'), 'utf8').trim() === 'WRITE_OK'; } catch {}
+    return { code: result.code === 0 && ok ? 0 : 1, text: ok ? 'WRITE_OK' : '書き込み確認失敗' };
+  } finally { fs.rmSync(cwd, { recursive: true, force: true }); }
+}
 export function runProbe(provider, { home, timeoutMs, dryRun = false } = {}) {
   const args = provider === 'codex'
     ? [path.join(repo, 'tools/codex-do.mjs'), 'Reply with exactly: PONG. Do not modify any files.', '--cwd', repo, '--no-fallback', '--no-escalate', ...(dryRun ? ['--dry-run'] : ['--timeout', String(Math.max(1, Math.floor(timeoutMs / 1000)))])]
@@ -113,6 +131,7 @@ export function runProbe(provider, { home, timeoutMs, dryRun = false } = {}) {
   return new Promise(resolve => execFile(process.execPath, args, { cwd: repo, env: { ...process.env, ORGIAST_HOME: home }, timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: 256 * 1024, windowsHide: true }, (e, stdout, stderr) => resolve({ code: e ? e.code || 1 : 0, text: redactAll(`${stdout}\n${stderr}`) })));
 }
 export function notificationText(item, home) {
+  if (item.tried) return `${item.provider} が停止しています（原因: WSL ディストリ不在・ネイティブ書き込み probe 失敗）。試した修復: ${item.tried}。残る操作: ${item.fix}`;
   if (item.provider === 'gemini') {
     let owner = '未確認';
     for (const f of [path.join(home, '.claude/gemini.env'), path.join(home, '.gemini/.env')]) {
@@ -131,7 +150,7 @@ export function notificationText(item, home) {
   const account = item.provider === 'codex' ? codexAuthStatus(home).email || 'kim@orgiast.jp（保存認証のアカウントは未確認）' : '契約したアカウント（キー所有者は未確認）';
   return `${item.provider} が停止しています（${item.reason}）。1. ${urls[item.provider]} を ${account} で開く。2. アカウント表示を確認する。3. ${item.reason.includes('payment') ? '請求設定を開き支払い方法を確認し、オートチャージ ON を設定して保存する（手動チャージは禁止ルール）。' : 'Codex を開きログインを選択する。ブラウザーで同じアカウントを選び、OAuth の同意内容を確認して許可する。'}4. 完了後は Claude が lane-doctor --probe で復旧を確認します。`;
 }
-export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), probe = runProbe, notify = notifyKim, budgetMs = 90_000 } = {}) {
+export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), probe = runProbe, notify = notifyKim, budgetMs = 90_000, platform = process.platform, listWsl = listWslDistros, nativeWriteProbe = runNativeWriteProbe } = {}) {
   const started = Date.now(), dir = path.join(home, '.claude');
   const health = laneDoctorQuick({ home, now, save: false });
   const previous = readJson(path.join(dir, 'lane-health.json'));
@@ -140,6 +159,12 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
   const results = await Promise.all(PROVIDERS.map(async p => {
     if (health.lanes[p].reason === 'missing_key' || (p === 'codex' && !codexAuthStatus(home).login)) return [p, null];
     if (p === 'codex') {
+      if (platform === 'win32' && await listWsl() === '') {
+        let result;
+        try { result = await nativeWriteProbe({ home, timeoutMs: Math.max(1, probeBudget - (Date.now() - started)) }); }
+        catch { result = { code: 1, text: 'ネイティブ書き込み probe 起動失敗' }; }
+        return [p, { ...result, nativeRepair: true }];
+      }
       const dry = await probe(p, { home, timeoutMs: Math.min(15000, probeBudget), dryRun: true });
       if (dry.code !== 0) return [p, dry];
       if (freshProbe(previous.lanes?.codex?.probedAt, now)) return [p, { cached: previous.lanes.codex }];
@@ -153,16 +178,19 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
     if (!result) continue;
     if (result.cached && !result.cached.alive) { health.lanes[p] = { ...result.cached, ...probeHistory(result.cached) }; continue; }
     const text = result.text || '', stamp = new Date(now).toISOString();
+    const nativeRepair = 'codex: WSL 不在のため Windows ネイティブ(danger-full-access)に切替';
+    if (result.nativeRepair && result.code === 0 && !health.repairs.includes(nativeRepair)) health.repairs.push(nativeRepair);
     if (result.code === 0 || result.cached?.alive) {
       health.lanes[p] = result.cached
         ? { ...result.cached, ...probeHistory(result.cached) }
-        : { alive: true, reason: p === 'codex' ? 'auth_ok:probe_ok' : 'probe_ok', probedAt: stamp, lastProbeOkAt: stamp, probeReason: p === 'codex' ? 'auth_ok:probe_ok' : 'probe_ok' };
+        : { alive: true, reason: result.nativeRepair ? 'native_ok' : p === 'codex' ? 'auth_ok:probe_ok' : 'probe_ok', probedAt: stamp, lastProbeOkAt: stamp, probeReason: result.nativeRepair ? 'native_ok' : p === 'codex' ? 'auth_ok:probe_ok' : 'probe_ok' };
       if (routing.demote?.[p] !== undefined) { delete routing.demote[p]; routingChanged = true; health.repairs.push({ provider: p, action: 'demote_removed', detail: '実測成功' }); }
       if (cooldown[p]) { delete cooldown[p]; cooldownChanged = true; health.repairs.push({ provider: p, action: 'cooldown_removed', detail: '実測成功' }); }
     } else {
       const payment = /HTTP\s*402\b|credits are depleted|insufficient/i.test(text);
       const limited = /HTTP\s*429\b|usage limit|RESOURCE_EXHAUSTED|rate.limit/i.test(text);
       health.lanes[p] = { ...probeHistory(previous.lanes?.[p]), alive: false, reason: payment ? 'dead:payment_required' : limited ? 'cooldown' : /HTTP\s*401|unauthorized|login required|token.*expired/i.test(text) ? (p === 'codex' ? 'dead:oauth_consent' : 'auth_invalid') : /Read-only file system|EROFS/i.test(text) ? 'execution_unavailable:read_only' : 'probe_failed', probedAt: stamp, ...(result.authOk ? { authOk: true } : {}) };
+      if (result.nativeRepair) Object.assign(health.lanes[p], { reason: 'dead:physical_operation', tried: 'Windows ネイティブ(danger-full-access)でファイル作成・read-back', userFix: '管理者 PowerShell で wsl.exe --install --no-distribution を実行して Windows を再起動する。' });
       health.lanes[p].probeReason = health.lanes[p].reason;
       if (limited && !payment) { const until = providerResetUntil(text, now); cooldown[p] = { until, at: now, reason: 'lane_doctor_usage_limit' }; cooldownChanged = true; health.lanes[p].until = until; }
     }
@@ -190,8 +218,8 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
 }
 export function summarize(health) {
   const alive = Object.entries(health.lanes).filter(([,s]) => s.alive).map(([p,s]) => `${p} ✅${s.reason === 'probe_ok:stale' ? `(stale ${Math.floor((time(health.ts) - time(s.lastProbeOkAt)) / 60000)}m)` : ''}`).join(' ') || 'なし';
-  const dead = Object.entries(health.lanes).filter(([,s]) => !s.alive).map(([p,s]) => `${p} ❌(${s.reason})`).join(' ') || 'なし';
-  return `生存: ${alive} ／ 停止: ${dead} ／ 修復: ${health.repairs.map(r => `${r.provider} ${r.action}`).join(', ') || 'なし'}${health.errors.length ? ` ／ 保存エラー: ${health.errors.join(', ')}` : ''}`;
+  const dead = Object.entries(health.lanes).filter(([,s]) => !s.alive).map(([p,s]) => `${p} ❌(${s.reason === 'probe_failed:stale' ? `probe_failed, 前回OK ${s.lastProbeOkAt.slice(0, 10)}` : s.reason})`).join(' ') || 'なし';
+  return `生存: ${alive} ／ 停止: ${dead} ／ 修復: ${health.repairs.map(r => typeof r === 'string' ? r : `${r.provider} ${r.action}`).join(', ') || 'なし'}${health.errors.length ? ` ／ 保存エラー: ${health.errors.join(', ')}` : ''}`;
 }
 export async function main(args = process.argv.slice(2)) {
   const h = args.indexOf('--home'), home = h >= 0 ? args[h + 1] : laneHome();

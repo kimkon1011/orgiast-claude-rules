@@ -157,3 +157,9 @@ test('G8 Notification AskUserQuestion and Stop share one relay identity for the 
   f.input.hook_event_name = 'Stop'; await f.run({ now: () => 3000 });
   assert.deepEqual(readQuestion(f.home, f.input.session_id), enriched);
 });
+
+for (const message of ['Claude needs your permission to use Bash', 'permission to use Edit', 'Claude needs your approval']) test(`800 permission notification is not queued: ${message}`, async t => {
+  const f = fixture(t); f.input.hook_event_name = 'Notification'; f.input.message = message;
+  await f.run();
+  assert.equal(readQuestion(f.home, f.input.session_id), null);
+});

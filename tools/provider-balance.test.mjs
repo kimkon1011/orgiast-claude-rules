@@ -157,3 +157,16 @@ test('APIのnull残高は$0として誤通知しない', async () => {
   const row = await fetchProviderBalance({ provider: 'kimi', key: 'mock', url: 'x', fetchImpl: async () => new Response('{"data":{"available_balance":null}}') });
   assert.equal(row.balanceUsd, null);
 });
+
+test('自動補充ONの1ドル未満は故障、account と画像能力を保持',async t=>{
+  const row={provider:'openrouter',balanceUsd:0.03,autoTopUp:true,account:'seisaku-team@orgiast.jp'};
+  assert.equal(classifyBalance(row),'autotopup_broken');assert.equal(classifyBalance({...row,balanceUsd:1}),'ok');assert.equal(classifyBalance({...row,balanceUsd:null}),'unmeasurable');
+  row.status=classifyBalance(row);assert.match(formatBalanceLine([row]),/openrouter \$0.03\(オートチャージ故障・seisaku-team@orgiast.jp で確認\)/);
+  const io=alertFixture(t);await alertProviderBalances([row],io);await alertProviderBalances([row],{...io,now:new Date(NOW.getTime()+DAY_MS-1)});assert.equal(io.messages.length,1);
+  await alertProviderBalances([row],{...io,now:new Date(NOW.getTime()+DAY_MS)});assert.equal(io.messages.length,2);assert.match(io.messages[0],/seisaku-team@orgiast.jp/);assert.ok(existsSync(join(io.home,'.claude/provider-balance-notified.json')));
+  const c=JSON.parse(readFileSync(new URL('./ai-subscription-catalog.json',import.meta.url),'utf8'));
+  for(const r of c.services)assert.ok(Object.hasOwn(r,'account'));
+  for(const id of ['grok','openrouter','genspark'])assert.ok(c.services.find(r=>r.id===id).capabilities.includes('image'));
+  assert.deepEqual(c.services.find(r=>r.id==='codex').capabilities,['code']);
+});
+const DAY_MS=86400000;

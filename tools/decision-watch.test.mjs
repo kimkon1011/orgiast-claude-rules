@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { main, CHANNEL, notificationBody } from './decision-watch.mjs';
+import { main, CHANNEL, notificationBody, isDecision } from './decision-watch.mjs';
 import { acquireLock, readInbox, resolveFleetLabel } from './fleet-mail.mjs';
 import { main as register } from './register-decision-watch.mjs';
 const now = Date.parse('2026-10-09T12:00:00Z');
@@ -124,4 +124,14 @@ test('登録定義は10分間隔・同期repo・重複起動抑止を指定す�
   assert.match(source, /-MultipleInstances IgnoreNew/);
   assert.match(source, /nightly-bootstrap\.ps1/);
   assert.match(source, /'-Target', \$target, '--once'/);
+});
+
+test('799 arrival notices and bot messages never become decisions', () => {
+  for (const message of [
+    { content: '[判断依頼] approve?', author: { bot: true } },
+    { content: 'kim-PC 宛 [判断依頼] 到着: approve / mail-1' },
+    { content: '[判断依頼] arrival [fleet-arrival]' },
+    { content: '[判断依頼] webhook', webhook_id: '123' },
+  ]) assert.equal(isDecision(message), false);
+  assert.equal(isDecision({ content: '[判断依頼] approve?', author: { bot: false } }), true);
 });

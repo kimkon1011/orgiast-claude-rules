@@ -12,7 +12,9 @@ const API = 'https://discord.com/api/v10';
 const HOURS_48 = 48 * 60 * 60 * 1000;
 const isId = id => /^\d+$/.test(String(id ?? ''));
 const compare = (a, b) => BigInt(a.id) < BigInt(b.id) ? -1 : BigInt(a.id) > BigInt(b.id) ? 1 : 0;
-export const isDecision = message => /\[判断依頼\]|【判断依頼】|\[要返信\]/u.test(message.content || '')
+export const isDecision = message => !message.author?.bot && !message.webhook_id
+  && !/\[fleet-arrival\]|\S+ 宛 .+ 到着[:：]/u.test(message.content || '')
+  && /\[判断依頼\]|【判断依頼】|\[要返信\]/u.test(message.content || '')
   && !String(message.content).includes('[kim-PC]');
 
 function writeJson(file, value) {

@@ -1,4 +1,5 @@
 {
+  "retiredAllow": ["Write(~/.claude/projects/**/memory/**)", "Write(~/.claude/next-session.md)"],
   "allow": [
     "Bash(gh pr:*)", "Bash(gh run:*)", "Bash(gh api:*)", "Bash(gh issue:*)", "Bash(gh repo view:*)",
     "Bash(git -C:*)", "Bash(git status:*)", "Bash(git log:*)", "Bash(git diff:*)", "Bash(git show:*)",
@@ -12,7 +13,7 @@
     "Bash(clasp push:*)", "Bash(clasp run:*)", "Bash(clasp pull:*)",
     "PowerShell(git -C *)", "PowerShell(gh pr *)", "PowerShell(node tools/*)", "PowerShell(Get-Content *)", "PowerShell(Get-ChildItem *)",
     "Edit(~/.claude/settings.json)", "Edit(~/.claude/CLAUDE.md)", "Edit(~/.claude/next-session.md)",
-    "Edit(~/.claude/projects/**/memory/**)", "Write(~/.claude/projects/**/memory/**)", "Write(~/.claude/next-session.md)"
+    "Edit(~/.claude/projects/**/memory/**)"
   ],
   "deny": [
     "Bash(rm -rf *)", "Bash(rm -fr *)", "Bash(git reset --hard*)", "Bash(git clean -f*)", "Bash(git clean -x*)",

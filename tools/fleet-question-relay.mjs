@@ -125,6 +125,7 @@ export async function main({ home = process.env.ORGIAST_HOME || os.homedir(), re
       const questions = input.tool_input?.questions || [input.tool_input || {}];
       detected = detectQuestion({ content: [{ type: 'tool_use', name: 'AskUserQuestion', input: { questions } }] });
     } else if (event === 'Notification') {
+      if (/needs your permission|permission to use|Claude needs your/i.test(input.message || '')) return;
       detected = detectQuestion({ content: [{ type: 'tool_use', name: 'AskUserQuestion', input: { questions: [{ question: input.message || '' }] } }] });
     } else if (event === 'Stop') {
       const last = records.findLastIndex(r => r.type === 'assistant' || r.message?.role === 'assistant');

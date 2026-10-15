@@ -1,0 +1,57 @@
+{
+  "checked_at": "2026-10-15T19:12:41.947623+00:00",
+  "scope": "対象1件のみ。ローカル原文と対象コードを直接確認。外部通信・送信・コード変更・タスク削除なし。",
+  "findings": [
+    "原文はnishiの使用感待ち・言われるまで着手しないと明記。",
+    "fetchGuildMembersはbotを除外するが役職によるフィルタは未実装。",
+    "ローカルFeedbackWidgetは名前が自由入力で、プルダウンという記録と相違。本番の現在状態・676人という現在件数は未検証。",
+    "対象memory、fleet-inbox、10月中旬のローカルsummaryを検索した範囲で着手を求める使用感連絡は確認できない。全会話・外部受信記録を網羅した判定ではない。"
+  ],
+  "decision": "明示された待機条件を解除する根拠がないため実装しない。未完了として保留。",
+  "sources": [
+    {
+      "path": "/mnt/c/Users/user/.claude/next-session.md",
+      "sha256": "ae6f18fb1ead8851c14952db764bbc70dca92982e45d263853ad57e0d1484c09",
+      "matches": [
+        {
+          "line": 10,
+          "text": "4. event-shop の不具合・要望フォーム: 名前のプルダウンが 676 人と多い。使って選びにくければサーバーの役職で社員だけに絞る（`fetchGuildMembers` に roles フィルタを足す）。nishi の使用感待ちで、言われるまで着手しない （作業場所: D:\\Claude\\event-shop） （更新: 2026-10-12）"
+        }
+      ]
+    },
+    {
+      "path": "/mnt/d/Claude/event-shop/src/lib/discord-dm.ts",
+      "sha256": "810ca0c7132f41241ec5c5c58717bbb956a396fa1d6fdd2e4cfc7fff69f360b5",
+      "matches": [
+        {
+          "line": 72,
+          "text": "export async function fetchGuildMembers(): Promise<{ id: string; name: string }[]> {"
+        },
+        {
+          "line": 111,
+          "text": "          if (m.user && !m.user.bot) {"
+        }
+      ]
+    },
+    {
+      "path": "/mnt/d/Claude/event-shop/src/app/api/feedback/members/route.ts",
+      "sha256": "2d2580e1526a8a9010bcfe96674239a10b367e7fafc69fd31d8585c02a56c801",
+      "matches": [
+        {
+          "line": 9,
+          "text": "    const members = await fetchGuildMembers();"
+        }
+      ]
+    },
+    {
+      "path": "/mnt/d/Claude/event-shop/src/components/FeedbackWidget.tsx",
+      "sha256": "30fcad257d7f8b4b46c8c09a5bf0474089a217213c64745090b454f804f7fd0b",
+      "matches": [
+        {
+          "line": 86,
+          "text": "          <label style={label}>お名前（Discord の表示名）<input name=\"submitter\" defaultValue={submitter} autoComplete=\"name\" style={field} /></label>"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "completed": false,
+  "summary": "原文の「nishiの使用感待ちで、言われるまで着手しない」が継続。確認範囲で着手依頼がなく役職フィルタは未実装のため保留。ローカル画面は自由入力で記録と相違し、本番状態は未検証。コード・タスクは変更していない。",
+  "evidence": {
+    "file": "/mnt/c/Users/user/.claude/nightly-repo/.stall-sweeper/4b61b533f8d10a6ce698-1792091520339.evidence.json",
+    "sha256": "56fda865422d63cc3a6381a5e3deb64f3a7febe4eec00ea08fe8b981297a647f"
+  }
+}

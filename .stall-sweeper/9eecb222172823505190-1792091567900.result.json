@@ -1,0 +1,8 @@
+{
+  "completed": false,
+  "summary": "原文と現行コードを直接照合。取り込み200件制限、GAS最大500件と末尾切捨て、既存行を更新しない設定が残存。本番台帳の読取照会はDNS名前解決エラーで失敗し、誤行の残存と実返信を未検証。対象D:\\Claude\\event-shopは書込許可範囲外のため修正・デプロイ・台帳訂正は未実施。",
+  "evidence": {
+    "file": "/mnt/c/Users/user/.claude/nightly-repo/.stall-sweeper/9eecb222172823505190-1792091567900.evidence.json",
+    "sha256": "ee6cf292e22f1c6ba4c6660a5ef89d652b194120813b242f5c34f7dce4a928d4"
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "checked_at": "2026-10-15T19:13:40.431861+00:00",
+  "source_todo_present": true,
+  "static_findings": {
+    "import_default_max": 200,
+    "relay_max_cap": 500,
+    "relay_final_slice": true,
+    "existing_rows_ignored": true
+  },
+  "write_scope": "対象 /mnt/d/Claude/event-shop は許可された書込ルート外",
+  "live_check": {
+    "ok": false,
+    "error_type": "URLError",
+    "reason": "[Errno -3] Temporary failure in name resolution"
+  },
+  "source_verification": [
+    {
+      "file": "/mnt/d/Claude/event-shop/tools/reply-ledger/import.mjs",
+      "sha256": "8ebebf903fe9464cb3a611f164d23ab65148324a010d5d47dfa60e7ff44bd71d",
+      "findings": [
+        {
+          "line": 81,
+          "text": "max: maxArg || 200,"
+        },
+        {
+          "line": 184,
+          "text": ".upsert(row, { onConflict: \"lead_id\", ignoreDuplicates: true });"
+        }
+      ]
+    },
+    {
+      "file": "/mnt/d/Claude/event-shop/gas/mail-relay/Code.js",
+      "sha256": "05d675a100b97f79da41775e15a3814a449d3fd893c4890c0f74b15b93f97330",
+      "findings": [
+        {
+          "line": 128,
+          "text": "max = Math.min(max, 500);"
+        },
+        {
+          "line": 168,
+          "text": "return json_({ ok: true, mode: 'sent', messages: messages.slice(0, max) });"
+        }
+      ]
+    }
+  ],
+  "completed": false,
+  "remaining": [
+    "本番台帳に誤行が残っているかと、2026-10-03の送信履歴を現在値で照合する",
+    "対象リポジトリの許可された環境で、走査の欠落を防ぎ、不完全な結果を取り込まない修正を実装・検証する",
+    "送信者と最初の実返信を確認して該当1行だけ更新し、再取得で内容を検証する"
+  ],
+  "side_effects": "本番への書込み・メール送信・ジョブ再実行・他セッション差分の取込みは行っていない。ローカル証拠と結果JSONのみ作成。"
+}

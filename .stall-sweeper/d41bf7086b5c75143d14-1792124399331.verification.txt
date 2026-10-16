@@ -1,0 +1,26 @@
+対象: delegation-health:codex_lane_unavailable
+検証日時: 2026-10-16T04:22:00.000Z
+結論: 完了
+
+1. 原文確認
+- C:\Users\asmo0\.claude\next-session.md に対象 TODO が残存していた。
+- 2026-10-15T00:30:09.605Z の delegation-health.json には同 id が残っていた。
+
+2. 実装と回帰テスト
+- 既存 commit 09eae00 により、WSL 不在時は Windows ネイティブ Codex danger-full-access へ移行する実装と回帰テストが追加済みだった。
+- node --test tools/codex-do.test.mjs tools/delegation-health-check.test.mjs
+- 結果: tests 231 / pass 230 / fail 0 / skipped 1。
+
+3. 実機でのファイル作成
+- node tools/codex-do.mjs --prompt-file .stall-sweeper\d41bf7086b5c75143d14-1792124399331.prompt.md --cwd C:\Users\asmo0\.claude\nightly-repo --timeout 300 --origin interactive --kind implement --no-fallback
+- 結果: exit 0。WSL 不在を検出後、Windows ネイティブ Codex v0.150.1 / sandbox danger-full-access で起動。
+- 作成物: C:\Users\asmo0\.claude\nightly-repo\.stall-sweeper\d41bf7086b5c75143d14-1792124399331.codex-probe.txt
+- 内容完全一致: true（codex native lane verified + LF、27 bytes）
+- probe SHA256: dd07ee2e3f1890e480a3f9a5da3e199c40e9c2f989cc1b8f0d6cbc28999eb896
+- executor-usage.jsonl に provider=codex, launched=true, status=ok, exitCode=0 の成功行を確認。
+
+4. ヘルス再判定
+- node tools/delegation-health-check.mjs --dry-run --now 2026-10-16T04:22:00.000Z
+- 結果: healthy（codex_lane_unavailable は出現しない）。
+
+WSL ディストリ自体は未導入だが、対象障害「Codex レーン利用不能」はネイティブ自動移行で解消され、実ファイル作成と翌日相当のヘルス判定で直接確認した。

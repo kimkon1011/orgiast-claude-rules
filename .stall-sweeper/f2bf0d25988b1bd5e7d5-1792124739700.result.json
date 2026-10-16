@@ -1,0 +1,8 @@
+{
+  "completed": false,
+  "summary": "本番read-backで発注は2026-10-09に赤650・青350、合計1000として登録済みと確認しました。一方、Discord通知頻度は原文どおりkim様との相談待ちで、決定記録も実装もないため、この複合TODOは未完了です。外部送信や本番変更は行っていません。",
+  "evidence": {
+    "file": "C:\\Users\\asmo0\\.claude\\nightly-repo\\.stall-sweeper\\f2bf0d25988b1bd5e7d5-1792124739700.evidence.json",
+    "sha256": "6FEB7B4FD1083F0031CA3C9A72B164912BD7327BFBD6B4245BE4858542E9A7F7"
+  }
+}

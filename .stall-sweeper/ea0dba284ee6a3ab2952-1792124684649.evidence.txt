@@ -1,0 +1,25 @@
+検証日時: 2026-10-16 13:25 JST
+対象: 共通フォーム（不具合・要望）の exec URL を kim から受け取る
+
+原文確認:
+- C:\Users\asmo0\.claude\next-session.md の12行目に対象TODOが残存。
+- 同10行目には keyserve 登録後に feedback-relay.env を取得する手順が記載されている。
+
+対象システム確認:
+- リポジトリ: C:\Users\asmo0\Desktop\CLAUDE.md配布_カプセル傘\capsule-umbrella-gas
+- git status: ## main...origin/main（作業ツリー差分なし）
+- FeedbackRelay / FEEDBACK_SHARED_FORM_URL / form=feedback の検索結果: 0件
+- C:\Users\asmo0\.claude\feedback-relay.env: 存在しない
+- C:\Users\asmo0\.claude\keyserve.env: 存在しない
+- C:\Users\asmo0\.claude\enroll.env: 存在しない
+
+直接検証:
+- 実行: node tools/keyserve-status.mjs --json
+- 結果: {"auth":"legacy","success":false,"status":401,"files":[],"hostname":"DESKTOP-8NKVJ12","checkedAt":"2026-10-16T04:25:02.406Z"}
+- コマンドの exit code は0だが、success=false / HTTP 401 のため鍵取得成功とは扱わない。
+
+結論:
+- 未完了。対象PCは現在も keyserve 未登録で、共通フォームURLを取得できない。
+- 登録トークンもURLも存在しないため、外部送信・権限変更を禁じた今回の範囲では先へ進めない。
+- 必要な次の入力は、primaryを持つkim-PCで発行したDESKTOP-8NKVJ12向け登録コマンド、または共通フォームのexec URL。
+- onboarding-sync は401が確定しており、安全な再実行条件を満たさないため実行していない。

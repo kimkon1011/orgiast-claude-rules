@@ -1,0 +1,24 @@
+{
+  "checkedAt": "2026-10-16T13:24:00+09:00",
+  "todo": "カプセル傘アプリの方式Bリンク追加、版@63/@64本番反映、重複カウント削除確認、render-check追加",
+  "repository": "C:\\Users\\asmo0\\Desktop\\CLAUDE.md配布_カプセル傘\\capsule-umbrella-gas",
+  "head": "b7b7baa",
+  "worktree": "clean; main equals origin/main",
+  "completedParts": {
+    "renderCheckItems": "commit 1b867a2で追加済み。npm run render-checkは28/28 PASS",
+    "localTests": "npm testは22/22 PASS",
+    "sourceFeatures": "版@63は5d5d433、版@64はd54fe49としてmainに存在"
+  },
+  "incompleteParts": {
+    "feedbackLink": "~/.claude/feedback-relay.envが存在せず、ソースにFeedbackRelay/共通フォームURLも未実装",
+    "keyserve": "keyserve-statusはauth=legacy, success=false, status=401, hostname=DESKTOP-8NKVJ12",
+    "productionDeploy": "clasp deploymentsで本番デプロイは@62。@63/@64は未反映",
+    "duplicateCount": "prod-read成功後のtools/last-prod-data.jsonでS20261009162240がstocktakes[1]に1件残存"
+  },
+  "productionReadback": {
+    "file": "C:\\Users\\asmo0\\Desktop\\CLAUDE.md配布_カプセル傘\\capsule-umbrella-gas\\tools\\last-prod-data.json",
+    "sha256": "1E639AC67A1C20DAE20D2785A690DE964D4871A7805A5FEAE0ED4193A48A730F",
+    "targetCount": 1
+  },
+  "decision": "未完了。方式Bの実URLを取得できず、一時除外しないという決定に従うとpush/deploy不能。また重複カウントの削除はkim本人の操作指定で、現時点でも残存。外部送信、権限変更、push、deploy、削除は実行していない。"
+}

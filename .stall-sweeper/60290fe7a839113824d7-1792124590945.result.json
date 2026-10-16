@@ -1,0 +1,8 @@
+{
+  "completed": false,
+  "summary": "未完了です。render-checkの削除ボタン・前回カウント項目は既に追加済みで、単体テスト22件とrender-check 28件は全件PASSしました。しかし方式Bの共通フォームURLはこのPCに未配布で、keyserveも401のままです。本番は@62で、@63/@64は未反映です。prod-readでは重複カウントS20261009162240が1件残存しています。一時除外を使わない決定とkim本人が削除する指定を守り、push/deploy・本番削除・権限変更・外部送信は行っていません。",
+  "evidence": {
+    "file": "C:\\Users\\asmo0\\.claude\\nightly-repo\\.stall-sweeper\\60290fe7a839113824d7-1792124590945.evidence.json",
+    "sha256": "F84714F639EB7042EAD9E20920E8C22FF715AE38C075248DC398AAAF9A495719"
+  }
+}

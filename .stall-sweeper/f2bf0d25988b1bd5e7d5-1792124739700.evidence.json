@@ -1,0 +1,27 @@
+{
+  "checkedAt": "2026-10-16T00:00:00+09:00",
+  "target": "発注日と数量／Discord通知の頻度",
+  "source": "C:\\Users\\asmo0\\.claude\\next-session.md",
+  "productionReadback": {
+    "file": "C:\\Users\\asmo0\\Desktop\\CLAUDE.md配布_カプセル傘\\capsule-umbrella-gas\\tools\\last-prod-data.json",
+    "sha256": "1E639AC67A1C20DAE20D2785A690DE964D4871A7805A5FEAE0ED4193A48A730F",
+    "today": "2026-10-16",
+    "verifiedPendingOrder": {
+      "id": "O1791547550252001",
+      "status": "未入荷",
+      "orderDate": "2026-10-09",
+      "expectedDate": "2026-11-13",
+      "warehouse": "千葉倉庫",
+      "total": 1000,
+      "quantities": {
+        "赤": 650,
+        "青": 350
+      }
+    }
+  },
+  "conclusion": {
+    "orderDateAndQuantity": "完了済み。10/8時点の未発注という記述は古い。",
+    "discordFrequency": "未完了。next-session.mdの原文では月1回か週1回かをkimと相談してから着手すると明記され、決定記録も実装も確認できない。",
+    "safeAction": "外部送信をせず、本番データの読み取り確認のみ実施。"
+  }
+}

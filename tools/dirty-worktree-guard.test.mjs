@@ -151,6 +151,54 @@ test('gitignored generated files do not trigger rescue', t => {
   assert.equal(git(repo, ['branch', '--list', 'rescue/*']).trim(), '');
 });
 
+// 2026-10-13〜16 の実事故: git 強制終了の置き土産 .git/index.lock があると `git add -A` が
+// `File exists.` で失敗し、救済ブランチだけ作られ commit ゼロ・worktree は dirty のまま固定。
+// register-hooks の selectAnchor が anchor を見つけられず setup --converge が exit 1 になった。
+test('残骸 index.lock を回収して救済を完遂する（worktree が clean に戻る）', t => {
+  const { root, repo, git } = fixture(t);
+  fs.writeFileSync(path.join(repo, 'tracked'), 'changed');
+  fs.writeFileSync(path.join(repo, 'untracked'), 'precious');
+  const lock = path.join(repo, '.git', 'index.lock');
+  fs.writeFileSync(lock, '');
+  const stale = new Date(Date.now() - 4 * 24 * 3600 * 1000);
+  fs.utimesSync(lock, stale, stale);
+  const logs = [];
+  const guard = createDirtyWorktreeGuard({ home: root, log: s => logs.push(s) });
+  assert.equal(guard(repo), false);
+  assert.equal(fs.existsSync(lock), false, '残骸 lock は削除される');
+  assert.ok(logs.some(s => s.includes('STALE_INDEX_LOCK_REMOVED')), '削除はログに残る');
+  const branch = git(repo, ['branch', '--show-current']).trim();
+  assert.match(branch, /^rescue\/auto-session-\d{8}-\d{6}/);
+  assert.equal(git(repo, ['show', `${branch}:tracked`]), 'changed');
+  assert.equal(git(repo, ['show', `${branch}:untracked`]), 'precious');
+  assert.equal(git(repo, ['status', '--porcelain', '--untracked-files=all']).trim(), '',
+    '救済後は clean（selectAnchor が anchor として採用できる状態）');
+});
+
+test('閾値内の index.lock は稼働中とみなし削除しない（fail closed）', t => {
+  const { root, repo, git } = fixture(t);
+  fs.writeFileSync(path.join(repo, 'untracked'), 'precious');
+  const lock = path.join(repo, '.git', 'index.lock');
+  fs.writeFileSync(lock, '');
+  const logs = [];
+  const guard = createDirtyWorktreeGuard({ home: root, log: s => logs.push(s) });
+  assert.equal(guard(repo), false);
+  assert.equal(fs.existsSync(lock), true, '新しい lock は残す');
+  assert.ok(logs.some(s => s.includes('INDEX_LOCK_ACTIVE')));
+  assert.ok(logs.some(s => s.includes('RESCUE_FAILED')), '救済は従来どおり失敗を記録する');
+  assert.equal(fs.readFileSync(path.join(repo, 'untracked'), 'utf8'), 'precious');
+  assert.equal(git(repo, ['log', '--oneline', '-1', '--all', '--grep=auto-session-rescue']).trim(), '');
+});
+
+test('stall-sweeper の実行時成果物は追跡されず gitignore される', t => {
+  const { repo, git } = fixture(t);
+  fs.writeFileSync(path.join(repo, '.gitignore'), fs.readFileSync(new URL('../.gitignore', import.meta.url), 'utf8'));
+  fs.mkdirSync(path.join(repo, '.stall-sweeper'));
+  fs.writeFileSync(path.join(repo, '.stall-sweeper', 'state.json'), '{}');
+  assert.equal(git(repo, ['status', '--porcelain', '--untracked-files=all']).includes('.stall-sweeper'), false,
+    '.stall-sweeper/ は worktree を dirty にしない（救済ブランチを作らせない）');
+});
+
 test('routing-table.json は追跡されず gitignore される', () => {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const git = (...args) => execFileSync('git', ['-C', repoRoot, ...args], { encoding: 'utf8' }).trim();

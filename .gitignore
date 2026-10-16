@@ -35,6 +35,10 @@ tools/routing-table.json
 # Disposable eval clones must never trigger nightly rescue.
 scratch/
 
+# stall-sweeper が 04:10 の実行ごとに repo 直下へ置く実行時成果物。追跡・救済の対象外。
+# 未登録だったため毎日 worktree を dirty にし、dirty-worktree-guard が救済ブランチを作り続けていた。
+.stall-sweeper/
+
 # Codex のサブクローン作業ツリーと internal-audit の検証証跡（機械ローカル）
 .wt/
 /evidence/internal-audit-v11/

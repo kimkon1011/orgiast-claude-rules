@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runDailyScout, unevaluatedScoutModels } from './model-scout-daily.mjs';
+import { runDailyScout, unevaluatedScoutModels, unmeasuredGiveUpIds } from './model-scout-daily.mjs';
 import { runNightlyHealth } from './nightly-health.mjs';
 
 const now = new Date('2026-10-15T18:00:00Z');
@@ -25,6 +25,51 @@ test('未評価キューはprovider・skip・評価完了を区別し、上限�
   const rows = [row(f.pending[0].id), { ...row(f.pending[2].id), provider: 'other' }, { ...row(f.pending[3].id), errors: 10, graded: 0 }];
   assert.deepEqual(unevaluatedScoutModels([...f.pending, f.pending[2]], f.config, rows, { max: 1 }).map(x => x.id), [f.pending[2].id]);
   assert.equal(unevaluatedScoutModels(f.pending, f.config, rows, { max: 5 }).length, 2);
+});
+
+test('切捨て多発でも計測が取れていれば評価済みとし、毎晩の再評価で日次を恒久失敗させない', t => {
+  const f = fixture(t);
+  f.config[2].skip = true;
+  const rows = [row(f.pending[0].id), { ...row(f.pending[1].id), graded: 4, truncated: 6 }, { ...row(f.pending[3].id), graded: 0, errors: 10 }];
+  // pending[0]=合格行 / pending[1]=truncated 6割だが計測あり→評価済み / pending[2]=skip / pending[3]=全滅→未評価
+  assert.deepEqual(unevaluatedScoutModels(f.pending, f.config, rows, { max: 5 }).map(x => x.id), [f.pending[3].id]);
+});
+
+test('全滅は近期間2回で再試行打ち切り、1回・陳旧な全滅・非openrouterは続行', () => {
+  const now = new Date('2026-10-16T18:00:00Z');
+  const dead = (model, t) => ({ provider: 'openrouter', model, n: 15, graded: 0, errors: 15, truncated: 0, t });
+  const rows = [
+    dead('twice-recent', '2026-10-15T18:00:00Z'), dead('twice-recent', '2026-10-16T18:00:00Z'),
+    dead('once-recent', '2026-10-16T18:00:00Z'),
+    dead('stale', '2026-09-01T00:00:00Z'), dead('stale', '2026-09-02T00:00:00Z'),
+    { provider: 'gemini', model: 'other-provider', n: 15, graded: 0, errors: 15, t: '2026-10-16T18:00:00Z' },
+  ];
+  assert.deepEqual([...unmeasuredGiveUpIds(rows, { now })], ['twice-recent']);
+});
+
+test('全滅候補は2回で打ち切り、3度目のevalと恒久的な日次失敗を起こさない', async t => {
+  const f = fixture(t);
+  const pending = [f.pending[0]];
+  fs.writeFileSync(path.join(f.dir, 'eval', 'providers.local.json'), JSON.stringify(pending.map(x => ({ provider: 'openrouter', model: x.id }))));
+  const badRow = model => ({ provider: 'openrouter', model, n: 10, graded: 0, errors: 10, truncated: 0 });
+  let tick = 0, evalRuns = 0;
+  const opts = date => ({ home: f.home, now: new Date(date), log: () => {}, propose: async () => {}, spawnImpl: (_exe, args) => {
+    if (args[0].endsWith('model-scout.mjs')) {
+      fs.writeFileSync(path.join(f.dir, 'model-scout-state.json'), JSON.stringify({ updatedAt: `2026-10-${String(10 + tick++).padStart(2, '0')}T00:00:00Z`, pendingCandidates: pending }));
+    } else {
+      evalRuns += 1;
+      fs.appendFileSync(path.join(f.dir, 'eval-results.jsonl'), JSON.stringify(badRow(args[4])) + '\n');
+    }
+    return { status: 0 };
+  } });
+  const logFile = () => fs.readFileSync(path.join(f.dir, 'logs', 'model-scout.log'), 'utf8');
+  assert.equal((await runDailyScout(opts('2026-10-15T18:00:00Z'))).ok, false); // 1回目の全滅は翌日へ繰越
+  assert.match(logFile(), /未評価候補を次回へ繰越/);
+  assert.equal((await runDailyScout(opts('2026-10-16T18:00:00Z'))).ok, true); // 2回目の全滅で打ち切り、当日で完了
+  assert.match(logFile(), /評価打ち切り（計測不能2回）/);
+  assert.equal((await runDailyScout(opts('2026-10-17T18:00:00Z'))).evaluated, 0); // 3日目は再試行しない
+  assert.equal(evalRuns, 2);
+  assert.equal(logFile().match(/日次処理失敗/g)?.length, 1); // 打ち切り後は恒久的に失敗し続けない
 });
 
 test('kim-PC以外・未知PCは副作用なし、既存ラベル設定で主PCだけ許可', async t => {

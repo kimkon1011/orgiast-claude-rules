@@ -20,13 +20,30 @@ function evaluations(file) {
   }); } catch (e) { if (e.code === 'ENOENT') return []; throw e; }
 }
 export function unevaluatedScoutModels(pending, config, rows, { max = frontierLimit() } = {}) {
-  const evaluated = new Set(rows.filter(r => r.provider === 'openrouter' && r.graded > 0 &&
-    ((r.errors || 0) + (r.truncated || 0)) / r.n <= 0.1).map(r => r.model));
+  // 「評価済み」は計測が1件でも取れたか（graded>0）だけで判定する。切捨て（truncated）多発は
+  // モデルの品質であって未評価ではなく、計測の安定性は提案側（aggregateMeasurements）が独自に弾く。
+  // 従来の「error+truncated が1割超は未評価」では、切捨てしがちな候補を毎晩再評価して
+  // 日次処理を恒久的に失敗させていた（2026-10-16 実測: qwen/qwen3.7-flash は8月から5回、
+  // inclusionai/ling-3.0-flash は4回、いずれも基準を永遠に満たさない）。
+  const evaluated = new Set(rows.filter(r => r.provider === 'openrouter' && (r.graded || 0) > 0).map(r => r.model));
   const enabled = new Set(config.filter(x => x.provider === 'openrouter' && !x.skip).map(x => x.model));
   return [...new Map(pending.map(x => [x.id, x])).values()]
     .filter(x => enabled.has(x.id) && !evaluated.has(x.id))
     .sort((a, b) => Number(b.tier === 'frontier') - Number(a.tier === 'frontier') || (b.created || 0) - (a.created || 0))
     .slice(0, max);
+}
+// 全滅（graded=0）1回だけでは一時障害と区別できないため、近期間内に2回全滅した候補は再試行を
+// 打ち切る（1回目は翌日もう一度だけ試す）。打ち切りは状態を持たず eval-results の実績だけで決める。
+export function unmeasuredGiveUpIds(rows, { now = new Date(), days = 14, limit = 2 } = {}) {
+  const cutoff = now.getTime() - days * 86400000;
+  const counts = new Map();
+  for (const row of rows) {
+    if (row.provider !== 'openrouter' || (row.graded || 0) > 0) continue;
+    const at = Date.parse(row.t);
+    if (Number.isFinite(at) && at < cutoff) continue;
+    counts.set(row.model, (counts.get(row.model) || 0) + 1);
+  }
+  return new Set([...counts.entries()].filter(([, count]) => count >= limit).map(([id]) => id));
 }
 export async function runDailyScout({ home = process.env.ORGIAST_HOME || userHome(), now = new Date(),
   label, spawnImpl = spawnSync, propose = proposeSavedEvaluations, max = frontierLimit(), log = console.log } = {}) {
@@ -63,13 +80,24 @@ export async function runDailyScout({ home = process.env.ORGIAST_HOME || userHom
     const resultsFile = path.join(dir, 'eval-results.jsonl');
     const configFile = path.join(dir, 'eval', 'providers.local.json');
     const pending = state.pendingCandidates || [];
-    const targets = unevaluatedScoutModels(pending, readConfig({ overlayFile: configFile }), evaluations(resultsFile), { max });
+    const rows = evaluations(resultsFile);
+    const giveUps = unmeasuredGiveUpIds(rows, { now });
+    const live = pending.filter(x => !giveUps.has(x.id));
+    if (live.length < pending.length) {
+      record(`model-scout 再試行打ち切り（近期間に計測不能2回）: ${pending.filter(x => giveUps.has(x.id)).map(x => x.id.replace(/[\r\n\t]/g, ' ')).join(', ')}`);
+    }
+    const targets = unevaluatedScoutModels(live, readConfig({ overlayFile: configFile }), rows, { max });
     let failed = false;
     for (const candidate of targets) {
       const result = run([path.join(HERE, 'eval-harness.mjs'), '--provider', 'openrouter', '--model', candidate.id]);
-      const remaining = unevaluatedScoutModels([candidate], readConfig({ overlayFile: configFile }), evaluations(resultsFile), { max: 1 });
-      if (result.error || result.status !== 0 || remaining.length) { failed = true; record('model-scout error: 未評価候補を次回へ繰越'); }
-      else record(`model-scout eval 完了: ${candidate.id.replace(/[\r\n\t]/g, ' ')}`);
+      const rowsAfter = evaluations(resultsFile);
+      const remaining = unevaluatedScoutModels([candidate], readConfig({ overlayFile: configFile }), rowsAfter, { max: 1 });
+      const candidateClean = candidate.id.replace(/[\r\n\t]/g, ' ');
+      if (result.error || result.status !== 0 || (remaining.length && !unmeasuredGiveUpIds(rowsAfter, { now }).has(candidate.id))) {
+        failed = true;
+        record(`model-scout error: 未評価候補を次回へ繰越 (${candidateClean})`);
+      } else if (remaining.length) record(`model-scout 評価打ち切り（計測不能2回）: ${candidateClean}`);
+      else record(`model-scout eval 完了: ${candidateClean}`);
     }
     await propose({ home, resultsFile, configFile, log: record });
     if (failed) throw new Error('evaluation incomplete');

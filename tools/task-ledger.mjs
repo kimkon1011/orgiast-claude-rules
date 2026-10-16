@@ -69,7 +69,8 @@ export function buildRequest(args, identity = machineIdentity()) {
 
 export async function runTaskLedger(
   args,
-  { homeDir = os.homedir(), fetchImpl = globalThis.fetch, identity = machineIdentity() } = {},
+  { homeDir = os.homedir(), fetchImpl = globalThis.fetch, identity = machineIdentity(),
+    sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {},
 ) {
   const request = buildRequest(args, identity);
   if (args.dryRun) return { dryRun: true, ...request };
@@ -85,18 +86,33 @@ export async function runTaskLedger(
   if (!url) throw new Error('TASK_SHEET_WEBAPP_URL is empty');
   if (!token) throw new Error('TASK_SHEET_TOKEN is empty');
 
-  let response;
-  if (request.method === 'POST') {
-    response = await fetchImpl(url, {
+  // GAS Web アプリは再デプロイ直後などに一時的な 404/5xx を返すことがある（実測 2026-10-16:
+  // booth-feedback の完了同期が1回だけ HTTP 404 で失敗し朝バッチが起票された。直後の再実行は 200）。
+  // upsert/done は taskId で冪等、claim は already_claimed を正常扱いするため、再送しても安全。
+  const target = new URL(url);
+  if (request.method !== 'POST') {
+    target.searchParams.set('token', token);
+    for (const [key, value] of Object.entries(request.query)) target.searchParams.set(key, value);
+  }
+  const send = () => request.method === 'POST'
+    ? fetchImpl(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ token, ...request.payload }),
-    });
-  } else {
-    const target = new URL(url);
-    target.searchParams.set('token', token);
-    for (const [key, value] of Object.entries(request.query)) target.searchParams.set(key, value);
-    response = await fetchImpl(target, { method: 'GET' });
+    })
+    : fetchImpl(target, { method: 'GET' });
+  const transientStatus = (status) => status === 404 || status === 408 || status === 429 || status >= 500;
+  let response;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      response = await send();
+    } catch (error) {
+      if (attempt >= 1 || !/fetch failed|ECONNRESET|ETIMEDOUT|abort/i.test(String(error?.message || error))) throw error;
+      await sleep(5000);
+      continue;
+    }
+    if (response.ok || attempt >= 1 || !transientStatus(response.status)) break;
+    await sleep(5000);
   }
   if (!response.ok) throw new Error(`request failed with HTTP ${response.status}`);
   const body = await response.json();

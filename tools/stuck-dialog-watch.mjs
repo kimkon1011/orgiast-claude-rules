@@ -10,6 +10,7 @@ import { reportHeartbeat } from './lib/heartbeat.mjs';
 import { acquireLock, releaseLock } from './lib/single-instance.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { notifyKim } from './notify-kim.mjs';
+import { localDate } from './auto-session.mjs';
 import { DAY_MS, readJson, writeJson, dialogMetrics } from './lib/stuck-dialog-state.mjs';
 
 const user32 = `Add-Type @'
@@ -25,8 +26,8 @@ public class DialogWindows {
   [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
 }
 '@`;
-function powershell(command, spawnImpl = spawnSync) {
-  const result = spawnImpl('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(`$ErrorActionPreference='Stop';[Console]::OutputEncoding=[Text.Encoding]::UTF8\n${command}`, 'utf16le').toString('base64')], { windowsHide: true, shell: false, encoding: 'utf8', timeout: 15000, maxBuffer: 16 * 1024 * 1024 });
+function powershell(command, spawnImpl = spawnSync, timeout = 15000) {
+  const result = spawnImpl('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(`$ErrorActionPreference='Stop';[Console]::OutputEncoding=[Text.Encoding]::UTF8\n${command}`, 'utf16le').toString('base64')], { windowsHide: true, shell: false, encoding: 'utf8', timeout, maxBuffer: 16 * 1024 * 1024 });
   if (result.error || result.status !== 0) throw result.error || new Error(result.stderr || `PowerShell exit ${result.status}`);
   return String(result.stdout || '').replace(/^\uFEFF/, '').trim();
 }
@@ -47,7 +48,9 @@ $windows=[Collections.Generic.List[object]]::new()
   return { processes: parsed.processes.map(p => ({ pid: p.ProcessId, ppid: p.ParentProcessId, name: p.Name, commandLine: p.CommandLine, creationDate: p.CreationDate })), windows: raw.windows || [] };
 }
 export function runningTasks(spawnImpl) {
-  return JSON.parse(powershell("ConvertTo-Json -InputObject @(Get-ScheduledTask -TaskName 'Orgiast*' | Where-Object State -eq Running | Select-Object TaskName,TaskPath,State) -Compress", spawnImpl));
+  // Query only matching task states, without per-task history calls. Allow a cold
+  // ScheduledTasks module 30s; tick records failure and still closes the dialog.
+  return JSON.parse(powershell("ConvertTo-Json -InputObject @(Get-ScheduledTask -TaskName 'Orgiast*' | Where-Object State -eq Running | Select-Object TaskName,TaskPath,State) -Compress", spawnImpl, 30000));
 }
 export function findDialogs({ processes, windows }, titles) {
   const result = [];
@@ -113,7 +116,7 @@ export async function tick(context, io = {}) {
   const fresh = dialogs.filter(d => !state.seen.includes(`${identity(d)}:${d.handle || ''}`));
   let tasks = [], taskError;
   if (fresh.length) { try { tasks = await (io.runningTasks || runningTasks)(); } catch(e) { taskError = e.message; } }
-  const file = path.join(home, '.claude', 'logs', 'stuck-dialog', `${new Date(now).toISOString().slice(0,10)}.jsonl`);
+  const file = path.join(home, '.claude', 'logs', 'stuck-dialog', `${localDate(new Date(now))}.jsonl`);
   for (const dialog of fresh) {
     const record = { at: new Date(now).toISOString(), kind: dialog.kind, dialogPid: dialog.pid, title: dialog.title, creationDate: dialog.creationDate, candidates: history.candidates(dialog), runningScheduledTasks: tasks, ...(taskError ? { taskQueryError: taskError } : {}) };
     fs.mkdirSync(path.dirname(file), { recursive: true });

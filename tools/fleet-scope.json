@@ -2,6 +2,12 @@
   "version": 1,
   "entries": [
     {
+      "path": "tools/lib/stuck-dialog-state.mjs",
+      "scope": "fleet",
+      "step": "task:stuck-dialog-watch",
+      "reason": "監視の状態・24時間集計を fleet report と共有する実行時依存。既存PCにも監視タスクとともに配布する"
+    },
+    {
       "path": "packages/feedback-kit",
       "scope": "kim-only",
       "step": null,

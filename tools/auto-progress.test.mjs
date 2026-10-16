@@ -95,7 +95,9 @@ test('watch: 猶予6時間未満は判定しない', async () => {
 });
 
 test('watch: done は閉じ、stalled は再開1回＋Sheet報告、同日2回目は再開しない', async () => {
-  const home = tmp(); const now = Date.now();
+  // 実時刻の23時台では now + H が翌日になり、再開が正しく許可される。
+  // localDay と同じローカル時刻の正午に固定して、どのTZでも同日を検証する。
+  const home = tmp(); const now = new Date(2026, 9, 15, 12).getTime();
   const mk = (id) => ({ sessionId: id, ts: new Date(now - 10 * H).toISOString(), status: 'open', promise: `p-${id}`, cwd: home, pc: 'PC', user: 'u', transcriptPath: '' });
   seed(home, [mk('a'), mk('b')]);
   const posts = []; const resumed = [];

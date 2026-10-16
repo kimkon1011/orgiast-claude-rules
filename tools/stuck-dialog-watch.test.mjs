@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { ProcessHistory, findDialogs, tick, snapshot, closeDialog, main } from './stuck-dialog-watch.mjs';
-import { dialogMetrics, readJson } from './lib/stuck-dialog-state.mjs';
+import { ProcessHistory, findDialogs, tick, snapshot, closeDialog, runningTasks, main } from './stuck-dialog-watch.mjs';
+import { DAY_MS, dialogMetrics, readJson } from './lib/stuck-dialog-state.mjs';
+import { localDate } from './auto-session.mjs';
 import { main as register } from './register-stuck-dialog-task.mjs';
 const now=Date.parse('2026-10-17T01:00:00Z');
 const proc=(pid,ppid,seconds,name='node.exe')=>({pid,ppid,creationDate:new Date(now+seconds*1000).toISOString(),name,commandLine:`${name} task-${pid}.mjs`});
@@ -23,7 +24,7 @@ test('detect process dialogs and every matching top-level window without unrelat
 });
 test('evidence precedes close, duplicate ticks/restarts count once, close failures retry, alerts survive restart',async t=>{
   const home=fixture(t),history=new ProcessHistory(),context={home,history,patterns:[]};let alerts=0,closes=0;
-  const io={now:()=>now,snapshot:()=>({processes:[proc(20,1,-5),dialog],windows:[]}),runningTasks:()=>[{TaskName:'OrgiastCostImproveLoop'}],label:()=> 'PC-test',notify:async text=>{alerts++;assert.match(text,/PC-test/);return {delivered:'mock'};},close:()=>{closes++;const file=path.join(home,'.claude/logs/stuck-dialog/2026-10-17.jsonl');assert.equal(JSON.parse(fs.readFileSync(file,'utf8').split('\n')[0]).candidates[0].pid,20);throw new Error('blocked');}};
+  const io={now:()=>now,snapshot:()=>({processes:[proc(20,1,-5),dialog],windows:[]}),runningTasks:()=>[{TaskName:'OrgiastCostImproveLoop'}],label:()=> 'PC-test',notify:async text=>{alerts++;assert.match(text,/PC-test/);return {delivered:'mock'};},close:()=>{closes++;const file=path.join(home,'.claude/logs/stuck-dialog', `${localDate(new Date(now))}.jsonl`);assert.equal(JSON.parse(fs.readFileSync(file,'utf8').split('\n')[0]).candidates[0].pid,20);throw new Error('blocked');}};
   assert.equal((await tick(context,io)).errors.length,1);
   await tick({...context,history:new ProcessHistory()},io);assert.equal(alerts,1);assert.equal(closes,2);assert.equal(dialogMetrics(home,now).stuckDialogs24h,1);
   const io2={...io,now:()=>now+7*3600000,snapshot:()=>({processes:[{...dialog,pid:31,creationDate:new Date(now+7*3600000).toISOString()}],windows:[]}),close:()=>{}};
@@ -67,4 +68,84 @@ test('existing-PC ensure skips healthy watcher and repairs failed heartbeat; man
  assert.deepEqual(setup.items.find(i=>i.id==='task:stuck-dialog-watch').repair,['register-stuck-dialog-task.mjs']);
  const dist=JSON.parse(fs.readFileSync(path.join(repo,'tools/distribution-manifest.json'),'utf8'));assert.ok(dist.dirs.includes('tools')&&dist.dirs.includes('docs'));
  assert.match(fs.readFileSync(path.join(repo,'tools/fleet-poller.ps1'),'utf8'),/if \(\$Dry\).*register-stuck-dialog-task\.mjs --ensure/);
+});
+
+// Explicit TZ and wall-clock instants reproduce the live JST report even on UTC CI.
+for (const tz of ['Asia/Tokyo', 'America/Los_Angeles']) {
+  test(`evidence uses the local day across midnight; 24h counters remain rolling (${tz})`, async t => {
+    const previous = process.env.TZ;
+    process.env.TZ = tz;
+    t.after(() => { if (previous === undefined) delete process.env.TZ; else process.env.TZ = previous; });
+    const home = fixture(t), context = { home, history: new ProcessHistory(), patterns: [] };
+    const morning = Date.parse(tz === 'Asia/Tokyo' ? '2026-10-17T08:47:00+09:00' : '2026-10-17T23:47:00-07:00');
+    const before = new Date(2026, 9, 16, 23, 59).getTime();
+    const after = new Date(2026, 9, 17, 0, 1).getTime();
+    for (const [at, date] of [[before, '2026-10-16'], [after, '2026-10-17'], [morning, '2026-10-17']]) {
+      await tick(context, { now: () => at,
+        snapshot: () => ({ processes: [{ ...dialog, creationDate: new Date(at).toISOString() }], windows: [] }),
+        runningTasks: () => [], close: () => {}, notify: () => {}, label: () => 'PC-test',
+      });
+      const lines = fs.readFileSync(path.join(home, '.claude/logs/stuck-dialog', `${date}.jsonl`), 'utf8').trim().split('\n');
+      assert.equal(JSON.parse(lines.at(-1)).at, new Date(at).toISOString());
+    }
+    assert.equal(dialogMetrics(home, morning).stuckDialogs24h, 3);
+    assert.equal(dialogMetrics(home, before + DAY_MS).stuckDialogs24h, 2);
+    assert.equal(dialogMetrics(home, after + DAY_MS).stuckDialogs24h, 1);
+    assert.equal(dialogMetrics(home, morning + DAY_MS).stuckDialogs24h, 0);
+  });
+}
+
+test('running tasks uses one filtered query with a bounded cold-start allowance', () => {
+  let calls = 0;
+  const tasks = [{ TaskName: 'OrgiastCostImproveLoop', TaskPath: '\\', State: 4 }];
+  assert.deepEqual(runningTasks((exe, args, options) => {
+    calls++;
+    assert.equal(exe, 'powershell.exe');
+    assert.equal(options.timeout, 30000);
+    assert.equal(options.windowsHide, true);
+    assert.equal(options.shell, false);
+    const script = Buffer.from(args.at(-1), 'base64').toString('utf16le');
+    assert.equal((script.match(/Get-ScheduledTask\b/g) || []).length, 1);
+    assert.match(script, /Get-ScheduledTask -TaskName 'Orgiast\*'/);
+    assert.doesNotMatch(script, /Get-ScheduledTaskInfo/);
+    return { status: 0, stdout: JSON.stringify(tasks) };
+  }), tasks);
+  assert.equal(calls, 1);
+  assert.deepEqual(runningTasks(() => ({ status: 0, stdout: '[]' })), []);
+});
+
+test('task query timeout preserves evidence and closes dialogs; next fresh dialog retries', async t => {
+  const home = fixture(t), context = { home, history: new ProcessHistory(), patterns: [] };
+  let calls = 0, closes = 0, at = now;
+  const io = { now: () => at,
+    snapshot: () => ({ processes: [{ ...dialog, creationDate: new Date(at).toISOString() }], windows: [] }),
+    runningTasks: () => runningTasks(() => {
+      calls++;
+      if (calls === 1) return { status: null, error: new Error('spawnSync powershell.exe ETIMEDOUT') };
+      return { status: 0, stdout: '[{"TaskName":"OrgiastCostImproveLoop"}]' };
+    }),
+    close: () => { closes++; }, notify: () => {}, label: () => 'PC-test',
+  };
+  const first = await tick(context, io);
+  assert.equal(first.detected, 1);
+  assert.deepEqual(first.errors, []);
+  at += 1000;
+  await tick(context, io);
+  const records = fs.readFileSync(path.join(home, '.claude/logs/stuck-dialog', `${localDate(new Date(now))}.jsonl`), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.deepEqual(records[0].runningScheduledTasks, []);
+  assert.match(records[0].taskQueryError, /ETIMEDOUT/);
+  assert.deepEqual(records[1].runningScheduledTasks, [{ TaskName: 'OrgiastCostImproveLoop' }]);
+  assert.equal(records[1].taskQueryError, undefined);
+  assert.equal(closes, 2);
+});
+
+test('registration resolves the automatically synced tree before its own checkout', async t => {
+  const home = fixture(t), synced = path.join(home, 'synced-repo');
+  fs.mkdirSync(path.join(synced, 'tools'), { recursive: true });
+  for (const leaf of ['stuck-dialog-watch.mjs', 'run-hidden.vbs']) fs.writeFileSync(path.join(synced, 'tools', leaf), '');
+  const previous = process.env.ORGIAST_NIGHTLY_REPO;
+  process.env.ORGIAST_NIGHTLY_REPO = synced;
+  t.after(() => { if (previous === undefined) delete process.env.ORGIAST_NIGHTLY_REPO; else process.env.ORGIAST_NIGHTLY_REPO = previous; });
+  const plan = await register(['--dry-run'], { home });
+  assert.ok(plan.arguments.includes(path.join(synced, 'tools', 'stuck-dialog-watch.mjs')));
 });

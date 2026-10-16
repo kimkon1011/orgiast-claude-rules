@@ -36,5 +36,7 @@ test('both onboarding entrypoints delegate settings changes to setup --converge'
   assert.match(js, /const registrar = path.join\(repoPath, 'tools', 'setup.mjs'\)/);
   assert.match(js, /\[registrar, '--converge', '--home', home\]/);
   assert.match(ps, /tools\\setup.mjs/);
-  assert.match(ps, /node \$registrar --converge --home \$homeRoot/);
+  assert.match(ps, /& \$\(if \(\(\$orgiastNodeExe = \(Get-Command node -CommandType Application/);
+  assert.match(ps, /\$orgiastNodeExe.*\$registrar --converge --home \$homeRoot/);
+  assert.doesNotMatch(ps, /& node \$registrar/);
 });

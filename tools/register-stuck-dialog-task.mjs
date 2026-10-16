@@ -9,7 +9,8 @@ import { resolveRegisterRepoRoot } from './resolve-synced-repo.mjs';
 import { registerHourlyTask, getScheduledTaskInfo, startScheduledTask } from './lib/scheduled-task.mjs';
 export async function main(argv = process.argv.slice(2), deps = {}) {
   const home = deps.home || process.env.USERPROFILE || os.homedir();
-  const repo = deps.repo || resolveRegisterRepoRoot({ fallback: path.dirname(path.dirname(fileURLToPath(import.meta.url))), requiredPaths: ['tools/stuck-dialog-watch.mjs', 'tools/run-hidden.vbs'] });
+  const ownTree = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+  const repo = deps.repo || resolveRegisterRepoRoot({ fallback: ownTree, requiredPaths: ['tools/stuck-dialog-watch.mjs', 'tools/run-hidden.vbs'] });
   const dryRun = argv.includes('--dry-run');
   if (!dryRun && (deps.platform || process.platform) !== 'win32') return null;
   if (argv.includes('--ensure') && !dryRun) {

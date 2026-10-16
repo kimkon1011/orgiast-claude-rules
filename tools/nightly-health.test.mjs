@@ -3,7 +3,9 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { runNightlyHealth, defaultRunTests, formatDate, extractFailCount, isFailureLine, extractHookToolPaths, nativePath, getPlatform, evaluateScheduledTaskHealth } from './nightly-health.mjs';
+import { runNightlyHealth as realRunNightlyHealth, defaultRunTests, formatDate, extractFailCount, isFailureLine, extractHookToolPaths, nativePath, getPlatform, evaluateScheduledTaskHealth } from './nightly-health.mjs';
+
+const runNightlyHealth = options => realRunNightlyHealth({ stallScan: async () => ({ rows: [] }), ...options });
 
 function createTempHome() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'nightly-health-test-'));
@@ -840,4 +842,23 @@ test('GAS 監査エラーを異常として残し、他の夜間チェックは�
     streakWatch: async () => ({ detected: [] }), gasDrift: async () => { throw new Error('pull failed'); },
   });
   assert.equal(tested, true); assert.equal(result.anomalies[0].type, 'gas_master_drift_error');
+});
+
+test('daily stall scan findings reach remediation input and suppress normal cooldowns', async () => {
+  const home = createTempHome();
+  try {
+    let scanned = false;
+    const result = await runNightlyHealth({ home, expectations: [], prime: true,
+      runTests: async () => ({ status: 0, stdout: '# fail 0' }), gasDrift: async () => {}, convergenceWatch: async () => {}, streakWatch: async () => ({ detected: [] }),
+      stallScan: async options => { scanned = options.save; return { rows: [
+        { kind: 'watcher_dead', symptom: '監視停止', evidence: 'heartbeat=未作成', cause: '未登録', nextAction: '再登録' },
+        { kind: 'cooldown', symptom: '利用待ち', remediate: false }
+      ] }; }
+    });
+    assert.equal(scanned, true);
+    assert.ok(result.anomalies.some(a => a.type === 'watcher_dead'));
+    const input = JSON.parse(fs.readFileSync(path.join(home, '.claude', '.nightly-health-last.json'), 'utf8'));
+    assert.ok(input.anomalies.some(a => a.type === 'watcher_dead'));
+    assert.ok(!input.anomalies.some(a => a.type === 'cooldown'));
+  } finally { removeDir(home); }
 });

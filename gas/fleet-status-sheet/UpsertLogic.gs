@@ -2,6 +2,7 @@ const FLEET_HEADERS_ = {
   staff: 'スタッフ名(記入)', done: '実行済み(記入:済/未)', executed: '実行日(記入)', selfPc: '自己申告PC名(記入)', memo: 'メモ(記入)',
   hostname: '【自動検知】PC名/ホスト名', reportedAt: '最終報告(JST)', claudeUsd: 'Claude概算$', mainModel: '主なモデル', delegRatio: '委譲率(Claude以外へ)', delegRatioLegacy: '旧委譲率',
   planSevenDayPct: '週間上限消化率', planFiveHourPct: '5h上限消化率', budgetPacePct: '月次予算ペース', settingsModel: '既定モデル',
+  stuckDialogs24h: '操作停止画面(24h)',
   cheapAiUse: '安いAI使用', codexLogin: 'Codexログイン', fable5: 'Fable5検出', disciplineAlert: '委譲規律アラート', consistency: '整合性(自己申告↔検知)',
   osUser: 'OSユーザー名', realHostname: '実ホスト名', gitEmail: 'Gitメール',
   activeProjects: '開発プロジェクト(直近7日)', artifacts: '成果物(リポジトリ/ブランチ)', lastCommit: '直近コミット',
@@ -25,7 +26,7 @@ const FLEET_HEADERS_ = {
 
 const FLEET_CONVERGENCE_KEYS_ = ['convergenceId', 'platform', 'claudeAccount', 'syncRepo', 'syncHead', 'mainHead', 'behindMain', 'missingSince', 'hookMissing', 'keyMissing', 'convergenceReportedAt'];
 
-const FLEET_OPTIONAL_HEADERS_ = ['convergenceId','platform','claudeAccount','syncRepo','syncHead','mainHead','behindMain','missingSince','hookMissing','keyMissing','convergenceReportedAt', 'delegRatioLegacy', 'planSevenDayPct', 'planFiveHourPct', 'budgetPacePct', 'settingsModel', 'osUser', 'realHostname', 'gitEmail', 'activeProjects', 'artifacts', 'lastCommit', 'livenessState', 'livenessReason', 'livenessCheckedAt', 'interactionLoop', 'interactionSelftest', 'costLoopRanAt', 'costLoopStatus', 'costWeeklyRanAt', 'costWeeklyStatus', 'keyserveAuth', 'keyserveStatus', 'keyserveCheckedAt'];
+const FLEET_OPTIONAL_HEADERS_ = ['stuckDialogs24h','convergenceId','platform','claudeAccount','syncRepo','syncHead','mainHead','behindMain','missingSince','hookMissing','keyMissing','convergenceReportedAt', 'delegRatioLegacy', 'planSevenDayPct', 'planFiveHourPct', 'budgetPacePct', 'settingsModel', 'osUser', 'realHostname', 'gitEmail', 'activeProjects', 'artifacts', 'lastCommit', 'livenessState', 'livenessReason', 'livenessCheckedAt', 'interactionLoop', 'interactionSelftest', 'costLoopRanAt', 'costLoopStatus', 'costWeeklyRanAt', 'costWeeklyStatus', 'keyserveAuth', 'keyserveStatus', 'keyserveCheckedAt'];
 
 // ヘッダ照合は正規化してから行う。全角/半角の括弧・英数、前後の空白、改行の違いで
 // 「タブが見つからない」と誤判定するのを防ぐ(実セルの表記は目視できないため厳密一致に賭けない)。
@@ -105,6 +106,7 @@ function fleetPlanUpsert(headers, rows, payload) {
   values[columns.cheapAiUse] = payload.cheapAiUse || '';
   values[columns.codexLogin] = payload.codexLogin || '';
   values[columns.fable5] = payload.fable5 || '';
+  if (columns.stuckDialogs24h >= 0) values[columns.stuckDialogs24h] = payload.stuckDialogs24h == null ? '' : payload.stuckDialogs24h;
   values[columns.disciplineAlert] = payload.disciplineAlert || '';
   if (columns.osUser >= 0) values[columns.osUser] = payload.username || '';
   if (columns.realHostname >= 0) values[columns.realHostname] = payload.hostname || '';

@@ -15,7 +15,7 @@ $watch = Join-Path $repo 'tools\auto-progress-watch.mjs'
 $digest = Join-Path $repo 'tools\auto-progress-digest.mjs'
 foreach ($f in @($watch, $digest)) { if (-not (Test-Path -LiteralPath $f)) { throw "missing: $f" } }
 if ($ValidateOnly) {
-  foreach ($f in @($watch, $digest)) { & node --check $f; if ($LASTEXITCODE -ne 0) { throw "node --check failed: $f" } }
+  foreach ($f in @($watch, $digest)) { & $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) --check $f; if ($LASTEXITCODE -ne 0) { throw "node --check failed: $f" } }
   Write-Host 'validate only: OK (no registration)'
   return
 }

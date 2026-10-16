@@ -11,7 +11,7 @@ test('optional 項目(mobile-standby)の NG もビーコンの failing に載る
     { item: { id: 'a', severity: 'required' }, status: 'OK' },
     { item: { id: 'mobile-standby', severity: 'optional' }, status: 'NG', reason: 'VSCode の痕跡あり but code.cmd 未検出' },
   ] });
-  assert.deepEqual(beacon.failing, ['mobile-standby']);
+  assert.deepEqual(beacon.failing.filter(id => id !== 'stuck-dialog-watch'), ['mobile-standby']);
   assert.equal(beacon.steps.find((s) => s.id === 'mobile-standby').status, 'fail');
   assert.match(beacon.steps.find((s) => s.id === 'mobile-standby').reason, /code\.cmd 未検出/);
 });

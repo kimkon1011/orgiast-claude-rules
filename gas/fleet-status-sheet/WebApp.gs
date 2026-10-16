@@ -166,6 +166,7 @@ function doGet(e) {
         interactionLoop: value('interactionLoop'), interactionSelftest: value('interactionSelftest'),
         claudeUsd: value('claudeUsd'), mainModel: value('mainModel'), delegRatio: value('delegRatio'), delegRatioLegacy: value('delegRatioLegacy'), cheapAiUse: value('cheapAiUse'),
         planSevenDayPct: value('planSevenDayPct'), planFiveHourPct: value('planFiveHourPct'), budgetPacePct: value('budgetPacePct'), settingsModel: value('settingsModel'),
+        stuckDialogs24h: value('stuckDialogs24h'),
         codexLogin: value('codexLogin'), fable5: value('fable5'), disciplineAlert: value('disciplineAlert'), livenessState: value('livenessState'),
         costLoopRanAt: value('costLoopRanAt'), costLoopStatus: value('costLoopStatus'),
         costWeeklyRanAt: value('costWeeklyRanAt'), costWeeklyStatus: value('costWeeklyStatus'),

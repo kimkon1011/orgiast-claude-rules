@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import fs from 'node:fs';
+import { scan as scanStalls, asAnomalies } from './stall-scan.mjs';
+import { expectationLog, logIsStale } from './lib/health-signals.mjs';
 import { runConvergenceWatch } from './fleet-convergence-watch.mjs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -311,7 +313,8 @@ export async function runNightlyHealth({
   streakWatch = runAutoSessionStreakWatch,
   streakNotifyImpl,
   gasDrift = checkGasMasterDrift,
-  convergenceWatch = runConvergenceWatch
+  convergenceWatch = runConvergenceWatch,
+  stallScan = scanStalls
 } = {}) {
   const dirname = path.dirname(fileURLToPath(import.meta.url));
   expectations ??= readJson(path.join(dirname, 'nightly-health-expectations.json'), []);
@@ -321,6 +324,8 @@ export async function runNightlyHealth({
   const newOffsets = { ...oldOffsets };
   const anomalies = [];
   const dedicatedStreakAnomalies = new Set();
+  try { anomalies.push(...asAnomalies(await stallScan({ home, now: now.getTime(), platform, expectations, save: !dryRun }))); }
+  catch (error) { anomalies.push({ type: 'stall_scan_error', label: '停滞診断', message: error.message }); }
   try {
     await gasDrift({ home, now, dryRun: dryRun || prime, notify });
   } catch (error) {
@@ -349,6 +354,7 @@ export async function runNightlyHealth({
   }
 
   for (const exp of expectations) {
+    if (exp.platform && exp.platform !== platform) continue;
     if (exp.fleetLabel && resolveFleetLabel(home) !== exp.fleetLabel) continue;
     let matches = [];
     if (exp.pattern) {
@@ -360,7 +366,7 @@ export async function runNightlyHealth({
       registeredLogs.add(exp.log);
       if (logFiles.includes(exp.log)) matches = [exp.log];
     }
-    const logFile = matches[0];
+    const logFile = expectationLog(home, exp)?.file;
     if (!logFile) {
       const log = exp.log || exp.pattern;
       if (exp.ignore) continue;
@@ -375,7 +381,7 @@ export async function runNightlyHealth({
     }
     const logPath = path.join(logsDir, logFile);
     const stat = fs.statSync(logPath);
-    if ((now - stat.mtime) / 3_600_000 > exp.maxAgeHours) {
+    if (logIsStale(stat.mtimeMs, exp.maxAgeHours, now.getTime())) {
       anomalies.push({ type: 'stale', label: exp.label, log: logFile, message: `ログ更新が滞っています（最終更新: ${formatDate(stat.mtime)}、期待: ${exp.maxAgeHours}時間以内）`, expectation: exp });
     }
     if (exp.task) {

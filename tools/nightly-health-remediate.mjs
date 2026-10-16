@@ -63,6 +63,18 @@ export async function runRemediation({
   const fileDecision = (text) => { try { decision({ source: 'nightly-health-remediate', text }, { home, now }); } catch (error) { console.error(`WARN decision記録失敗: ${redactAll(error?.message ?? error)}`); } };
   const context = {
     now, tasks, reranToday: false,
+    repairDialogWatcher: () => {
+      const result = run(process.execPath, [path.join(repo, 'tools', 'register-stuck-dialog-task.mjs')], { cwd: repo });
+      if (result.status !== 0) throw new Error(result.stderr || 'watcher registration failed');
+    },
+    async verifyDialogWatcher() {
+      for (let i = 0; i < 12; i++) {
+        const heartbeat = readJson(path.join(home, '.claude', 'heartbeat', 'stuck-dialog-watch.json'), {});
+        if (heartbeat.ok && Date.parse(heartbeat.finishedAt) >= now.getTime()) return true;
+        await new Promise(resolve => setTimeout(resolve, 2500));
+      }
+      return false;
+    },
     readRepoFile: (file) => fs.readFileSync(path.resolve(repo, file), 'utf8'),
     async waitForLogAdvance(log, minutes) {
       const file = path.join(home, '.claude', 'logs', log); const before = fs.existsSync(file) ? fs.statSync(file).mtimeMs : 0;

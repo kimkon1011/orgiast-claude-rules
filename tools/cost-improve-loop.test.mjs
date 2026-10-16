@@ -649,7 +649,7 @@ test('30. executeLocalAction は許可リスト外を実行せず、許可内は
     });
     assert.equal(allowed.result, 'pending');
     assert.equal(calls.length, 1);
-    assert.equal(calls[0].program, 'node');
+    assert.equal(calls[0].program, process.execPath);
     assert.deepEqual(calls[0].args, ['tools/batch-enqueue.mjs', '--provider', 'groq', '--kind', 'eval-harness', 'eval-harness --all']);
     assert.equal(calls[0].opts.shell, false, 'シート由来文字列をシェルで解釈しない');
   } finally { cleanTempDir(tempDir); }
@@ -744,6 +744,10 @@ test('32. auto-codex 実行は共有ツリーへ reset/clean/checkout -b を投�
     const worktreeOnShared = calls.filter((c) => c.program === 'git' && c.args.includes('-C') && c.args[c.args.indexOf('-C') + 1] === repoRoot);
     for (const call of worktreeOnShared) assert.equal(call.args.includes('worktree'), true, '共有ツリーへの git は worktree のみ');
     assert.ok(calls.some((c) => c.program === 'gh' && c.args[0] === 'pr'), 'PR 作成が試みられる');
+    const nodeCalls = calls.filter(c => c.args.includes('--test') || c.args.some(a => String(a).endsWith('codex-do.mjs')));
+    assert.equal(nodeCalls.length, 2);
+    for (const call of nodeCalls) { assert.equal(call.program, process.execPath); assert.notEqual(call.options.shell, true); }
+
   } finally { delete process.env.ORGIAST_HOME; cleanTempDir(tempDir); }
 });
 

@@ -173,3 +173,20 @@ test('codex-do が保留(75)なら escalated にせず quota_deferred を台帳�
   assert.equal(second.deferred.length, 1);
   assert.match(second.deferred[0].reason, /Codex保留中/);
 });
+
+test('dead GUI watcher follows registration playbook and verifies heartbeat, no real tasks/notifications', async t => {
+  const now = new Date();
+  const home = makeHome(t, { anomalies: [{ type: 'watcher_dead', label: '監視停止', message: 'heartbeat 未作成' }] });
+  const calls = [];
+  const result = await runRemediation({ home, now,
+    run: (exe,args) => {
+      calls.push([exe,args]);
+      assert.equal(exe, process.execPath); assert.match(args[0], /register-stuck-dialog-task\.mjs$/);
+      fs.mkdirSync(path.join(home,'.claude/heartbeat'),{recursive:true});
+      fs.writeFileSync(path.join(home,'.claude/heartbeat/stuck-dialog-watch.json'),JSON.stringify({ok:true,finishedAt:now.toISOString()}));
+      return {status:0,stdout:'',stderr:''};
+    }, notify: async () => ({delivered:'mock'}), decision: () => assert.fail('human escalation'),
+    taskApi: {get:()=>assert.fail('task get'),start:()=>assert.fail('task start'),stop:()=>assert.fail('task stop')}
+  });
+  assert.equal(calls.length,1);assert.equal(result.fixed.length,1);assert.equal(result.fixed[0].playbook,'stuck-dialog-watcher');
+});

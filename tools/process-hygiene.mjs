@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { WINDOWS_PROCESS_SCRIPT } from './lib/windows-process.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -294,14 +295,7 @@ export function parseProcessLines(text) {
 }
 
 function powershellProcesses(spawnImpl = spawnSync) {
-  const command = `[Console]::OutputEncoding=[Text.Encoding]::UTF8
-$separator=[char]31
-Get-CimInstance Win32_Process | ForEach-Object {
-  $commandLine=[string]$_.CommandLine
-  $commandLine=$commandLine.Replace([char]13,' ').Replace([char]10,' ')
-  $fields=@([string]$_.ProcessId,[string]$_.ParentProcessId,$_.CreationDate.ToUniversalTime().ToString('o'),[string]$_.WorkingSetSize,[string]$_.Name,$commandLine)
-  [Console]::Out.WriteLine(($fields -join $separator))
-}`;
+  const command = WINDOWS_PROCESS_SCRIPT;
   const result = spawnImpl('powershell', ['-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8', windowsHide: true, timeout: 20_000 });
   if (result.error || result.status !== 0) throw result.error || new Error(String(result.stderr || `PowerShell exit ${result.status}`).trim());
   return parseProcessLines(result.stdout);

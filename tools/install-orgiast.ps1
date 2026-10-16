@@ -405,7 +405,7 @@ OK "settings.json 更新(バックアップ済)"
 try {
   $env:ORGIAST_HOME = $HOMEDIR
   $env:ORGIAST_REPO = $REPO
-  & node (Join-Path $REPO 'tools\register-hooks.mjs') --hooks-only
+  & $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) (Join-Path $REPO 'tools\register-hooks.mjs') --hooks-only
   if ($LASTEXITCODE -eq 0) { OK "必須コスト規律hookを登録/自己修復" } else { Warn "必須hook登録に失敗(既存hookは維持)" }
 } catch { Warn ("必須hook登録に失敗(既存hookは維持): " + $_.Exception.Message) }
 
@@ -591,7 +591,7 @@ Step "共通ルールの初回取込(動作確認)"
 try {
   if ((Have node) -and (Test-Path (Join-Path $REPO 'tools\onboarding-sync.mjs'))) {
     $env:ORGIAST_HOME = $HOMEDIR
-    & node (Join-Path $REPO 'tools\onboarding-sync.mjs') --force | Out-Null
+    & $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) (Join-Path $REPO 'tools\onboarding-sync.mjs') --force | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "onboarding-sync.mjs exit $LASTEXITCODE" }
     OK "共通ルールを取り込みました"
     OK "会社共通AIキーを設定"

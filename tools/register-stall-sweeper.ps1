@@ -7,7 +7,7 @@ $repo = Resolve-RegisterRepoRoot -Fallback (Split-Path -Parent $PSScriptRoot) -R
 $script = Join-Path $repo 'tools\stall-sweeper.mjs'
 if (-not (Test-Path -LiteralPath $script)) { throw "実行ファイルがありません: $script" }
 if ($ValidateOnly) {
-  & node --check $script
+  & $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) --check $script
   if ($LASTEXITCODE -ne 0) { throw 'Node構文検証に失敗しました' }
   Write-Host ('検証のみ完了（登録なし）: ' + $script + ' / 毎日04:10')
   return

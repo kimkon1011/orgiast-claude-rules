@@ -952,7 +952,7 @@ export function executeLocalAction({ act, dryRun = false, claudeDir, home, now =
   }
   console.log(`Executing auto-local command: ${act.command}`);
   const parts = splitWhitelistedCommand(act.command);
-  const res = spawnSync(parts[0], parts.slice(1), { windowsHide: true, shell: false, cwd: repoRoot, encoding: 'utf8' });
+  const res = spawnSync(parts[0] === 'node' ? process.execPath : parts[0], parts.slice(1), { windowsHide: true, shell: false, cwd: repoRoot, encoding: 'utf8' });
   if (res.status === 0) {
     return { ...act, result: 'pending', note: 'Command executed successfully. Awaiting verification.' };
   }
@@ -985,7 +985,7 @@ export function runAutoCodexIsolated({ acts, specFile, dryRun = false, repoPath,
     // 差分が要るレーンなので Codex 系(implement / verify)に限る。文面が調査系でも implement に倒す。
     const guessedKind = classifyTaskKind(String(first.specContent || ''));
     const kind = CODEX_KINDS.has(guessedKind) ? guessedKind : 'implement';
-    res = spawnSync('node', [path.join(tempTree, 'tools/codex-do.mjs'), '--prompt-file', specFile, '--cwd', tempTree, '--timeout', '1800', '--origin', 'unattended', '--kind', kind], { windowsHide: true, cwd: tempTree, encoding: 'utf8' });
+    res = spawnSync(process.execPath, [path.join(tempTree, 'tools/codex-do.mjs'), '--prompt-file', specFile, '--cwd', tempTree, '--timeout', '1800', '--origin', 'unattended', '--kind', kind], { windowsHide: true, cwd: tempTree, encoding: 'utf8' });
     const deferred = parseDeferred(res.status, res.stdout);
     if (deferred) {
       // 終了コード75: 上限中/無人割当超過。失敗に数えず、retryAt まで再試行しない。
@@ -995,7 +995,7 @@ export function runAutoCodexIsolated({ acts, specFile, dryRun = false, repoPath,
     if (res.status !== 0) { fail('Codex execution failed', res); return; }
     const diff = spawnSync('git', ['-C', tempTree, 'diff', '--stat'], { windowsHide: true, encoding: 'utf8' });
     if (diff.status !== 0 || !String(diff.stdout || '').trim()) { fail('変更なし', diff); return; }
-    const tests = spawnSync('node', ['--test', 'tools/*.test.mjs'], { windowsHide: true, cwd: tempTree, shell: true, encoding: 'utf8' });
+    const tests = spawnSync(process.execPath, ['--test', 'tools/*.test.mjs'], { windowsHide: true, cwd: tempTree, shell: false, encoding: 'utf8' });
     if (tests.status !== 0) { fail('verification tests failed', tests); return; }
     const dateStr = now.toISOString().slice(0, 10).replaceAll('-', '');
     const branchName = `auto/cost-improve-${dateStr}-${label}`;

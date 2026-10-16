@@ -134,7 +134,7 @@ test('PowerShell hook retains self-update and invokes keys-only sync', () => {
   const text = ps1.toString('utf8');
   assert.match(text, /Get-FileHash -LiteralPath \$selfUpdateSource -Algorithm SHA256/);
   assert.match(text, /Copy-Item -LiteralPath \$selfUpdateSource -Destination \$selfUpdateTarget -Force/);
-  assert.match(text, /& node \$keysSync --keys-only/);
+  assert.match(text, /& \$\(if .*Get-Command node -CommandType Application.*\) \$keysSync --keys-only/);
 });
 
 test('preserves bytes outside existing markers', () => {

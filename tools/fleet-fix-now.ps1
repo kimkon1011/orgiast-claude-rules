@@ -92,7 +92,7 @@ if (-not $NoOptin) {
 Say ("optin(" + $optin + ")=" + $(if (Test-Path $optin) { (Get-Content $optin -Raw) -replace '\s+', ' ' } else { '無し' }))
 
 # 3. hook・タスクの収束と受信タスクの再登録（現在のユーザーで -Force）
-$setupOut = (& node (Join-Path $repo 'tools\setup.mjs') --converge 2>&1 | Out-String)
+$setupOut = (& $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) (Join-Path $repo 'tools\setup.mjs') --converge 2>&1 | Out-String)
 Say ("setup --converge: exit=" + $LASTEXITCODE + "`n" + (Tail $setupOut 6))
 $regOut = (& powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $repo 'tools\register-fleet-mail.ps1') 2>&1 | Out-String)
 Say ("register-fleet-mail: exit=" + $LASTEXITCODE + " " + (Tail $regOut 3))
@@ -105,7 +105,7 @@ if ($t) {
 } else { Say 'task OrgiastFleetMail: 未登録（register が失敗）' }
 
 # 5. claude CLI の解決（PR #700 と同じ関数）
-$exeJson = (& node --input-type=module -e "import('file:///' + process.argv[1].replace(/\\/g,'/')).then(m=>m.resolveClaudeExecutableFromDisk()).then(r=>console.log(JSON.stringify(r))).catch(e=>console.log('ERR '+e.message))" (Join-Path $repo 'tools\claude-exe.mjs') 2>&1 | Out-String)
+$exeJson = (& $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) --input-type=module -e "import('file:///' + process.argv[1].replace(/\\/g,'/')).then(m=>m.resolveClaudeExecutableFromDisk()).then(r=>console.log(JSON.stringify(r))).catch(e=>console.log('ERR '+e.message))" (Join-Path $repo 'tools\claude-exe.mjs') 2>&1 | Out-String)
 Say ("claude exe: " + $exeJson.Trim())
 
 # 5b. 熱監視タスクが無ければ登録
@@ -197,7 +197,7 @@ if ($claudeExe -and (Test-Path $claudeExe)) {
 }
 
 # 6. 受信を1回実行（溜まっている note/prompt を取り込み、prompt は実行して返信）
-$pollOut = (& node $fleetMail --poll 2>&1 | Out-String)
+$pollOut = (& $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) $fleetMail --poll 2>&1 | Out-String)
 Say ("poll: exit=" + $LASTEXITCODE + " " + (Tail $pollOut 4))
 Start-ScheduledTask -TaskName 'OrgiastFleetMail' -ErrorAction SilentlyContinue
 
@@ -207,7 +207,7 @@ $reportFile = Join-Path $env:TEMP 'fleet-fix-now-report.txt'
 $sendOut = ''
 if (Test-Path $fleetEnv) {
   $prevEap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-  $sendOut = (& node $fleetMail --send --to $ReportTo --kind note --body-file $reportFile --why 'fleet-fix-now の実行結果' 2>&1 | ForEach-Object { "$_" } | Out-String)
+  $sendOut = (& $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) $fleetMail --send --to $ReportTo --kind note --body-file $reportFile --why 'fleet-fix-now の実行結果' 2>&1 | ForEach-Object { "$_" } | Out-String)
   $ErrorActionPreference = $prevEap
   Write-Host ("report -> " + $ReportTo + ": " + $sendOut.Trim())
 } else { Write-Host 'report: fleet-sheet.env が無いので送信できません。上の出力を kim に見せてください' }

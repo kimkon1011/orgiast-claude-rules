@@ -1,4 +1,5 @@
 [
+  { "log": "stuck-dialog-watch.log", "maxAgeHours": 0.17, "label": "操作を止める画面の監視", "scan": "stale-only", "task": "OrgiastStuckDialogWatch", "tool": "tools/stuck-dialog-watch.mjs", "maxRunHours": 0.17, "platform": "win32" },
   { "log": "model-scout.log", "maxAgeHours": 30, "label": "新AIモデル日次偵察", "scan": "keywords", "tool": "tools/model-scout-daily.mjs", "successPattern": "model-scout 完了", "fleetLabel": "kim-PC" },
   { "log": "nightly-batch.log", "maxAgeHours": 26, "label": "夜間バッチ", "scan": "keywords", "task": "OrgiastNightlyBatch", "tool": "tools/nightly-batch.ps1", "maxRunHours": 5 },
   { "pattern": "^nightly-batch-\\d{4}-\\d{2}-\\d{2}\\.log$", "maxAgeHours": 26, "label": "夜間バッチ(日次)", "scan": "keywords", "task": "OrgiastNightlyBatch", "tool": "tools/batch-run.mjs", "maxRunHours": 5, "successPattern": "nightly-batch 完了" },

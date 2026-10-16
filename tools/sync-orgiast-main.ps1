@@ -4,7 +4,7 @@ $repo = if ($env:ORGIAST_NIGHTLY_REPO) { $env:ORGIAST_NIGHTLY_REPO } else { Join
 $helper = Join-Path $repo 'tools\sync-orgiast-main.mjs'
 try {
     if (-not (Test-Path -LiteralPath $helper -PathType Leaf)) { throw 'sync helper missing; tree preserved' }
-    & node $helper
+    & $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) $helper
     if ($LASTEXITCODE -ne 0) { throw "sync helper exit=$LASTEXITCODE" }
 } catch {
     # run-hidden.vbs holds sync-orgiast-main.log open via `cmd /c ... >>`, so Add-Content

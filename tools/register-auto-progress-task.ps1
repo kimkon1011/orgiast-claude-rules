@@ -1,5 +1,5 @@
 # Registers the auto-progress tasks (idempotent, Windows PowerShell 5.1 safe: ASCII only).
-#   OrgiastAutoProgressWatch  daily 09:00 + 18:00  (all PCs)  -> tools\auto-progress-watch.mjs
+#   OrgiastAutoProgressWatch  daily 09:00 + 13:00 + 18:00 + 22:00  (all PCs)  -> tools\auto-progress-watch.mjs
 #   OrgiastAutoProgressDigest daily 08:40          (all PCs)
 param([switch]$ValidateOnly, [switch]$Unregister)
 $ErrorActionPreference = 'Stop'
@@ -20,20 +20,20 @@ if ($ValidateOnly) {
   return
 }
 $node = (Get-Command node -ErrorAction Stop).Source
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 60)
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 120)
 
 $watchAction = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($watch) -WorkingDirectory $repo
-$watchTriggers = @((New-ScheduledTaskTrigger -Daily -At '09:00'), (New-ScheduledTaskTrigger -Daily -At '18:00'))
-Register-ScheduledTask -TaskName $names[0] -Action $watchAction -Trigger $watchTriggers -Settings $settings -Description 'Check declared auto-progress promises twice a day (09:00/18:00); resume stalled ones once a day and report to the fleet sheet.' -Force | Out-Null
+$watchTriggers = @((New-ScheduledTaskTrigger -Daily -At '09:00'), (New-ScheduledTaskTrigger -Daily -At '13:00'), (New-ScheduledTaskTrigger -Daily -At '18:00'), (New-ScheduledTaskTrigger -Daily -At '22:00'))
+Register-ScheduledTask -TaskName $names[0] -Action $watchAction -Trigger $watchTriggers -Settings $settings -Description 'Check declared auto-progress promises four times a day (09:00/13:00/18:00/22:00); resume stalled ones once a day and report to the fleet sheet.' -Force | Out-Null
 
 $digestAction = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($digest) -WorkingDirectory $repo
 $digestTrigger = New-ScheduledTaskTrigger -Daily -At '08:40'
-Register-ScheduledTask -TaskName $names[1] -Action $digestAction -Trigger $digestTrigger -Settings $settings -Description 'Morning DM digest of local auto-progress items on every PC; watch also sends after its 09:00/18:00 checks.' -Force | Out-Null
+Register-ScheduledTask -TaskName $names[1] -Action $digestAction -Trigger $digestTrigger -Settings $settings -Description 'Morning DM digest of local auto-progress items on every PC; watch also sends after its 09:00/13:00/18:00/22:00 checks.' -Force | Out-Null
 
 foreach ($n in $names) {
   $t = Get-ScheduledTask -TaskName $n -ErrorAction Stop
   $expectedScript = if ($n -eq $names[0]) { $watch } else { $digest }
-  $expectedTimes = if ($n -eq $names[0]) { @('09:00', '18:00') } else { @('08:40') }
+  $expectedTimes = if ($n -eq $names[0]) { @('09:00', '13:00', '18:00', '22:00') } else { @('08:40') }
   $actualTimes = @($t.Triggers | ForEach-Object { $_.StartBoundary.Substring(11, 5) } | Sort-Object)
   if (-not $t.Actions.Arguments.Contains($expectedScript) -or ($actualTimes -join ',') -ne ($expectedTimes -join ',')) { throw "read-back failed: $n" }
   Write-Host ("OK: {0} state={1} triggers={2}" -f $n, $t.State, (($t.Triggers | ForEach-Object { $_.StartBoundary.Substring(11, 5) }) -join ','))

@@ -55,9 +55,23 @@ export function writeLedger(file, rows) {
   fs.renameSync(temp, file);
 }
 
+export const OPEN_STATUSES = new Set(['open', 'stalled', 'resumed']);
+
+// Timestamp order is authoritative; equal timestamps prefer the later ledger line.
+export function latestOpenPromises(rows) {
+  const latest = new Map();
+  const active = rows.filter(row => OPEN_STATUSES.has(row.status));
+  for (const row of active) {
+    if (!row.sessionId) continue;
+    const previous = latest.get(row.sessionId);
+    if (!previous || (Date.parse(row.ts) || 0) >= (Date.parse(previous.ts) || 0)) latest.set(row.sessionId, row);
+  }
+  return active.filter(row => !row.sessionId || latest.get(row.sessionId) === row);
+}
+
 // 同一 sessionId の open 行は最新で置換する（旧行は superseded）。resumed も「進行中の宣言」なので置換対象。
 export function applyPromise(rows, record) {
-  const next = rows.map((row) => (row.sessionId === record.sessionId && ['open', 'resumed'].includes(row.status) ? { ...row, status: 'superseded' } : row));
+  const next = rows.map((row) => (row.sessionId === record.sessionId && OPEN_STATUSES.has(row.status) ? { ...row, status: 'superseded' } : row));
   next.push(record);
   return next;
 }

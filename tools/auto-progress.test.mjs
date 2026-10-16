@@ -82,7 +82,7 @@ function seed(home, rows) {
   fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
   fs.writeFileSync(ledgerFile(home), rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
 }
-const baseIo = (extra = {}) => ({ sheetConfig: () => ({ url: 'u', token: 't' }), cwdExists: () => true, digest: async () => ({ sent: false, count: 0 }), ...extra });
+const baseIo = (extra = {}) => ({ digest: async () => ({ sent: false }), sheetConfig: () => ({ url: 'u', token: 't' }), cwdExists: () => true, digest: async () => ({ sent: false, count: 0 }), ...extra });
 const evAny = (now) => ({ transcript: { count: 1, lastAt: now - 8 * H, snippets: [] }, files: { names: [], lastAt: 0 }, runs: { names: [] }, lastEvidenceAt: now - 8 * H, any: true });
 
 test('watch: 猶予6時間未満は判定しない', async () => {
@@ -137,7 +137,7 @@ test('digest: 非kim-PCも自PC台帳の進捗を送り、0件なら送らない
   ];
   assert.equal(selectRows(rows, now).length, 1);
   const text = formatDigest(selectRows(rows, now), now, 'other-PC');
-  assert.match(text, /^other-PC 自動進行の定期進捗 1件/);
+  assert.match(text, /^未処理の約束 1件・最古 1日前\nother-PC 自動進行の定期進捗 1件/);
   assert.match(text, /約束: 夜間デプロイ／判定: in_progress/);
   const sent = [];
   const io = { label: 'other-PC', readLedger: () => rows, readState: () => ({}), writeState: () => {}, appendFileSync: () => {}, mkdirSync: () => {}, notify: async (t) => { sent.push(t); return { delivered: 'dm' }; } };
@@ -275,4 +275,52 @@ test('readLedger: 壊れたJSONとnull/配列を無視して有効行を処理�
   fs.mkdirSync(path.dirname(file));
   fs.writeFileSync(file, 'null\n[]\nbroken\n{"sessionId":"s","status":"open"}\n');
   assert.deepEqual(readLedger(file), [{ sessionId: 's', status: 'open' }]);
+});
+
+test('watch: 同一sessionの最新だけを選び、旧open/stalled/resumedを保存時にsupersededにする', async () => {
+  const home = tmp(), now = Date.parse('2026-10-17T12:00:00Z');
+  const mk = (hours, status) => ({ sessionId: 'same', ts: new Date(now - hours * H).toISOString(), status, cwd: home });
+  const rows = [mk(12, 'open'), mk(40, 'stalled'), mk(20, 'resumed'), { ...mk(60, 'done'), sessionId: 'done' }];
+  seed(home, rows);
+  const resumed = [];
+  const io = noEvidenceIo({ resume: async row => { resumed.push(row.ts); return { outcome: 'progressed', reason: 'ok' }; } });
+  const preview = await watch({ home, now, dryRun: true, io });
+  assert.equal(preview.superseded, 2);
+  assert.deepEqual(readLedger(ledgerFile(home)), rows);
+  const result = await watch({ home, now, io });
+  assert.equal(result.superseded, 2);
+  assert.deepEqual(resumed, [rows[0].ts]);
+  assert.deepEqual(readLedger(ledgerFile(home)).map(r => r.status), ['resumed', 'superseded', 'superseded', 'done']);
+  assert.equal(applyPromise([mk(40, 'stalled')], mk(1, 'open'))[0].status, 'superseded');
+});
+
+test('watch: 最新宣言が猶予中なら同sessionの古い約束を再開しない', async () => {
+  const home = tmp(), now = Date.parse('2026-10-17T12:00:00Z');
+  seed(home, [10, 1].map(hours => ({ sessionId: 's', ts: new Date(now - hours * H).toISOString(), status: 'open', cwd: home })));
+  const result = await watch({ home, now, io: noEvidenceIo({ resume: async () => assert.fail('must not resume') }) });
+  assert.equal(result.checked, 0);
+  assert.equal(result.graced, 1);
+  assert.deepEqual(readLedger(ledgerFile(home)).map(r => r.status), ['superseded', 'open']);
+});
+
+test('watch: nextKimが空/なしを優先して古い順に最大4件を再開', async () => {
+  const home = tmp(), now = Date.parse('2026-10-17T12:00:00Z');
+  const specs = [['waiting-old', 60, '確認'], ['direct-new', 10, 'なし'], ['direct-old', 30, ''], ['waiting-new', 50, '返信'], ['direct-mid', 20, undefined]];
+  seed(home, specs.map(([sessionId, age, nextKim]) => ({ sessionId, ts: new Date(now - age * H).toISOString(), nextKim, status: 'stalled', cwd: home })));
+  const resumed = [];
+  const result = await watch({ home, now, io: noEvidenceIo({ resume: async row => { resumed.push(row.sessionId); return { outcome: 'progressed', reason: 'ok' }; } }) });
+  assert.equal(result.resumed, 4);
+  assert.deepEqual(resumed, ['direct-old', 'direct-mid', 'direct-new', 'waiting-old']);
+});
+
+test('digest: 未巡回も数え、重複/完了/期限切れを除外し、11件から詰まり警告', async () => {
+  const now = Date.parse('2026-10-17T12:00:00Z');
+  const rows = Array.from({ length: 11 }, (_, i) => ({ sessionId: `s${i}`, status: ['open', 'stalled', 'resumed'][i % 3], ts: new Date(now - (i + 1) * 24 * H).toISOString() }));
+  const selected = selectRows([...rows, { ...rows[0], ts: new Date(now - 20 * 24 * H).toISOString() }, { status: 'superseded', verdict: 'in_progress' }, { status: 'expired', verdict: 'in_progress' }, { status: 'done', doneAt: new Date(now - H).toISOString() }], now);
+  assert.equal(selected.length, 12);
+  assert.match(formatDigest(selected, now), /^未処理の約束 11件・最古 11日前（詰まり警告）\n/);
+  assert.match(formatDigest(rows.slice(0, 10), now), /^未処理の約束 10件・最古 10日前\n/);
+  assert.match(formatDigest([{ status: 'done' }], now), /^未処理の約束 0件・最古 0日前\n/);
+  const preview = await digest({ home: tmp(), now, dryRun: true, io: { label: 'test-PC', readLedger: () => rows, readState: () => ({}) } });
+  assert.match(preview.text, /^未処理の約束 11件・最古 11日前（詰まり警告）/);
 });

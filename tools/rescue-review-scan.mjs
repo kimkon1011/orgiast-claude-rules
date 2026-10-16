@@ -58,10 +58,65 @@ function listBranches(git, repo, includeRemote) {
   return names.sort();
 }
 
-export function scanRescueBranches({ repo, main = 'origin/main', includeRemote = false, git = defaultGit } = {}) {
+// rescue 枝かどうか(ローカル名 rescue/x と origin/rescue/x の両方を拾う)。
+function isRescueName(name) {
+  return /(^|\/)rescue\//.test(name);
+}
+
+// 照合先(非 rescue)の ref 名を昇順で列挙する。main 自身は差分が空になるので実質除外される。
+function listCompareRefs(git, repo, patterns) {
+  const seen = new Set();
+  const names = [];
+  for (const pattern of patterns) {
+    const out = git(repo, ['for-each-ref', '--format=%(refname:short)', pattern]);
+    for (const line of String(out).split('\n')) {
+      const name = line.trim();
+      if (!name || seen.has(name) || isRescueName(name)) continue;
+      seen.add(name);
+      names.push(name);
+    }
+  }
+  return names.sort();
+}
+
+// 照合先 ref の three-dot 差分を指紋化し「指紋 → 先頭 ref」の対応を作る。
+// 空差分(main の祖先など)は載せない。1 本の diff 失敗はその ref を飛ばすだけに留める。
+function fingerprintMapForRefs({ git, dir, main, refs }) {
+  const map = new Map();
+  for (const ref of refs) {
+    let patch;
+    try {
+      patch = git(dir, ['diff', `${main}...${ref}`]);
+    } catch {
+      continue;
+    }
+    if (patch === '') continue;
+    const fingerprint = fingerprintOf(patch);
+    if (!map.has(fingerprint)) map.set(fingerprint, ref);
+  }
+  return map;
+}
+
+export function scanRescueBranches({
+  repo,
+  main = 'origin/main',
+  includeRemote = false,
+  compareRefs = ['refs/heads/', 'refs/remotes/origin/'],
+  git = defaultGit,
+} = {}) {
   const dir = repo || '.';
   // 重複判定はブランチ名昇順で「先に出現した方」を正とする。
   const branches = listBranches(git, dir, includeRemote);
+  // 別名の枝(feat/*, fix/* 等)に同一の変更が保全されている rescue 枝は、人間が独立に
+  // レビューすべき対象ではないので covered-by-branch に落とす。
+  let coveredByFingerprint = new Map();
+  if (compareRefs && compareRefs.length > 0) {
+    try {
+      coveredByFingerprint = fingerprintMapForRefs({ git, dir, main, refs: listCompareRefs(git, dir, compareRefs) });
+    } catch {
+      coveredByFingerprint = new Map();
+    }
+  }
   const firstByFingerprint = new Map();
   const results = [];
   for (const branch of branches) {
@@ -87,27 +142,41 @@ export function scanRescueBranches({ repo, main = 'origin/main', includeRemote =
       continue;
     }
     firstByFingerprint.set(fingerprint, branch);
-    results.push({ branch, files, added, deleted, fingerprint, status: 'unique' });
+    const coveredBy = coveredByFingerprint.get(fingerprint);
+    if (coveredBy) {
+      results.push({ branch, files, added, deleted, fingerprint, status: 'covered-by-branch', coveredBy });
+    } else {
+      results.push({ branch, files, added, deleted, fingerprint, status: 'unique' });
+    }
   }
   results.sort((a, b) => (a.branch < b.branch ? -1 : a.branch > b.branch ? 1 : 0));
   return results;
 }
 
 function summarize(branches) {
-  const summary = { unique: 0, duplicate: 0, covered: 0, error: 0, total: branches.length };
+  const summary = { unique: 0, duplicate: 0, covered: 0, coveredByBranch: 0, error: 0, total: branches.length };
   for (const b of branches) {
-    if (Object.prototype.hasOwnProperty.call(summary, b.status)) summary[b.status] += 1;
+    if (b.status === 'covered-by-branch') summary.coveredByBranch += 1;
+    else if (Object.prototype.hasOwnProperty.call(summary, b.status)) summary[b.status] += 1;
   }
   return summary;
 }
 
 function parseArgs(argv) {
-  const opts = { repo: '.', main: 'origin/main', includeRemote: false, json: false };
+  const opts = {
+    repo: '.',
+    main: 'origin/main',
+    includeRemote: false,
+    json: false,
+    compareRefs: ['refs/heads/', 'refs/remotes/origin/'],
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '--repo') opts.repo = argv[i + 1];
     else if (a === '--main') opts.main = argv[i + 1];
     else if (a === '--include-remote') opts.includeRemote = true;
+    else if (a === '--compare-refs') opts.compareRefs.push(argv[i + 1]);
+    else if (a === '--no-compare-refs') opts.compareRefs = [];
     else if (a === '--json') opts.json = true;
   }
   return opts;
@@ -116,6 +185,7 @@ function parseArgs(argv) {
 function formatLine(b) {
   const base = `${b.status}\t${b.branch}\t${b.files}\t${b.added}+/${b.deleted}-`;
   if (b.status === 'duplicate' && b.duplicateOf) return `${base}\t(duplicate of ${b.duplicateOf})`;
+  if (b.status === 'covered-by-branch' && b.coveredBy) return `${base}\t(covered by ${b.coveredBy})`;
   if (b.status === 'error' && b.error) return `${base}\t(${b.error})`;
   return base;
 }
@@ -124,7 +194,12 @@ function run(argv) {
   const opts = parseArgs(argv);
   let branches;
   try {
-    branches = scanRescueBranches({ repo: opts.repo, main: opts.main, includeRemote: opts.includeRemote });
+    branches = scanRescueBranches({
+      repo: opts.repo,
+      main: opts.main,
+      includeRemote: opts.includeRemote,
+      compareRefs: opts.compareRefs,
+    });
   } catch (err) {
     process.stderr.write(`rescue-review-scan: ${err && err.message ? err.message : err}\n`);
     return;
@@ -134,7 +209,9 @@ function run(argv) {
     process.stdout.write(`${JSON.stringify({ repo: opts.repo, main: opts.main, summary, branches }, null, 2)}\n`);
     return;
   }
-  const lines = [`unique: ${summary.unique} / duplicate: ${summary.duplicate} / covered: ${summary.covered} / error: ${summary.error}`];
+  const lines = [
+    `unique: ${summary.unique} / duplicate: ${summary.duplicate} / covered: ${summary.covered} / covered-by-branch: ${summary.coveredByBranch} / error: ${summary.error}`,
+  ];
   for (const b of branches) lines.push(formatLine(b));
   process.stdout.write(`${lines.join('\n')}\n`);
 }

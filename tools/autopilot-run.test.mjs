@@ -247,18 +247,18 @@ test('成功で counter が 0 に戻る', async (t) => {
   assert.equal(s2.status, 'running');
 });
 
-test('needs_kim の pause は retryAt を過ぎても再開しない', async (t) => {
+test('質問待ちは全体を止めず、24時間後も他の作業を進められる', async (t) => {
   const opts = fixture(t);
   await runAutopilot('start', { objective: 'test needs_kim pause' }, opts);
   await runAutopilot('pause', { question: 'この変更を進めますか？' }, opts);
   const s1 = (await runAutopilot('status', {}, opts)).state;
-  assert.equal(s1.status, 'paused');
-  assert.equal(s1.pausedReason, 'needs_kim');
+  assert.equal(s1.status, 'running');
+  assert.equal(s1.pausedReason, null);
 
-  // 24時間後でも再開しない
+  // 質問は保留し、無関係の巡回は継続する。
   const preLater = await runAutopilot('pre', {}, { ...opts, now: new Date(opts.now.getTime() + 24 * 3600_000) });
-  assert.equal(preLater.verdict, 'pause');
-  assert.equal(preLater.reason, 'needs_kim');
+  assert.equal(preLater.verdict, 'run');
+  assert.equal(preLater.pendingQuestion, 'この変更を進めますか？');
 });
 
 test('人が resume した時も counter と retryAt をリセットする', async (t) => {

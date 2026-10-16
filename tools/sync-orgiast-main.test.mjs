@@ -57,6 +57,21 @@ test('same dirty status creates one remote branch, preserving HEAD, index and wo
   assert.equal(branches(f).length, 2);
 });
 
+test('rescue still works when hundreds of rescue refs have accumulated (no ENAMETOOLONG)', async t => {
+  const f = fixture(t);
+  // 2026-10-16 real incident: 700 rescue/* refs (104 local + 596 remote) made the
+  // rev-parse `<sha>^{tree}` fan-out exceed the Windows command-line length limit,
+  // so every rescue failed with `RESCUE_FAILED rev-parse: spawnSync git ENAMETOOLONG`.
+  const head = f.git('rev-parse', 'HEAD').trim();
+  const script = Array.from({ length: 700 }, (_, i) => `update refs/heads/rescue/bulk-${i} ${head}\n`).join('');
+  execFileSync('git', ['-C', f.repo, 'update-ref', '--stdin'], { input: script, encoding: 'utf8' });
+  f.git('push', 'origin', 'refs/heads/rescue/*:refs/heads/rescue/*');
+  fs.writeFileSync(path.join(f.repo, 'tracked'), 'changed');
+  const result = await syncTree(f.repo, f.home, f);
+  assert.ok(result.events.some(e => e.step === 'RESCUE_LOCAL_OK'), JSON.stringify(result));
+  assert.ok(!result.events.some(e => e.step === 'RESCUE_FAILED'), JSON.stringify(result));
+});
+
 test('shared exclusions alone are clean, retained during sync and absent from rescue', async t => {
   const f = fixture(t);
   for (const name of ['scratch', '.work-eval', '.fleet-mail-work']) {

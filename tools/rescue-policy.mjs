@@ -55,12 +55,14 @@ export function dirtyStatus(tree) {
 // timestamp. The tree SHA — not the commit SHA — identifies the snapshot, so an
 // existing rescue branch with the same tree already preserves these changes.
 function rescuedTrees(tree) {
-  const refs = git(tree, ['for-each-ref', '--format=%(objectname) %(refname:short)',
+  // %(tree) resolves each ref's tree in one process. A rev-parse fan-out with one
+  // `<sha>^{tree}` argument per ref exceeds the Windows command-line length limit
+  // once hundreds of rescue/* refs accumulate, and RESCUE_FAILED ENAMETOOLONG
+  // blocks every rescue after that (observed with 700 refs on 2026-10-16).
+  const refs = git(tree, ['for-each-ref', '--format=%(tree) %(refname:short)',
     'refs/heads/rescue/', 'refs/remotes/origin/rescue/']).split(/\r?\n/).filter(Boolean);
-  const byCommit = refs.map(line => { const i = line.indexOf(' '); return [line.slice(0, i), line.slice(i + 1).trim()]; });
-  if (!byCommit.length) return new Map();
-  const trees = git(tree, ['rev-parse', ...byCommit.map(([sha]) => `${sha}^{tree}`)]).trim().split(/\r?\n/);
-  return new Map(byCommit.map(([sha, name], i) => [trees[i], name]).filter(([t]) => t));
+  const byTree = refs.map(line => { const i = line.indexOf(' '); return [line.slice(0, i), line.slice(i + 1).trim()]; });
+  return new Map(byTree.filter(([t]) => t));
 }
 
 export async function rescueTree(tree, home, { now = Date.now(), notify = notifyKim, preserveTree = false, pc = os.hostname() } = {}) {

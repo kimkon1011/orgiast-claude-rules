@@ -3,11 +3,12 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parseArgs, promisify } from 'node:util';
 import { isEntry } from './is-entry.mjs';
-import { notifyKim } from './notify-kim.mjs';
+import { toPlainJa } from './lib/plain-ja.mjs';
+import { notifyKim, clipDiscordContent } from './notify-kim.mjs';
 
 const API = 'https://discord.com/api/v10';
 const DEFAULTS = { maxIterPerDay: 20, maxHoursPerDay: 6, maxNoop: 3, maxTotalIter: 200 };
@@ -282,10 +283,59 @@ async function nextObjective(state, objective, ctx) {
   }
   return null;
 }
-async function sendNotice(text, ctx) {
-  try { return await ctx.notifyImpl(text, { home: ctx.home, token: ctx.token, userId: ctx.userId, fetchImpl: ctx.fetchImpl, webhookFallback: false }); }
-  catch { return { delivered: 'none' }; }
+function mirrorNotice(command, text, ctx) {
+  return new Promise((resolve, reject) => {
+    let child, timer, settled = false;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) { try { child?.kill('SIGKILL'); } catch {} reject(error); }
+      else resolve();
+    };
+    try {
+      child = (ctx.spawnImpl || spawn)(command[0], command.slice(1), {
+        stdio: ['pipe', 'ignore', 'ignore'], windowsHide: true, shell: false,
+      });
+      timer = setTimeout(() => finish(new Error('mirror_timeout')), ctx.mirrorTimeoutMs ?? 60_000);
+      child.once('error', finish);
+      child.once('close', (code, signal) => finish(code === 0 ? null : new Error(`mirror_exit:${code ?? signal}`)));
+      child.stdin.on('error', finish);
+      child.stdin.end(`${JSON.stringify({ kind: 'notify', message: text })}\n`);
+    } catch (error) { finish(error); }
+  });
 }
+export async function sendNotice(text, ctx) {
+  let command, mirrorError;
+  try {
+    const config = readText(path.join(ctx.home, '.claude', 'autopilot-notify-mirror.json'));
+    if (config) {
+      command = JSON.parse(config).command;
+      if (!Array.isArray(command) || !command.length || command.some(v => typeof v !== 'string') || !command[0].trim()) {
+        command = null;
+        throw new Error('invalid_mirror_command');
+      }
+    }
+  } catch (error) { mirrorError = error.message; }
+  // Normalize once so both destinations receive the exact same final DM body.
+  if (command) text = clipDiscordContent(process.env.NOTIFY_PLAIN_JA === '0' ? text : await toPlainJa(String(text)));
+  let result;
+  try { result = await ctx.notifyImpl(text, { home: ctx.home, token: ctx.token, userId: ctx.userId, fetchImpl: ctx.fetchImpl, webhookFallback: false, ...(command ? { plainJa: false } : {}) }); }
+  catch { result = { delivered: 'none' }; }
+  if (command) {
+    try { await mirrorNotice(command, text, ctx); }
+    catch (error) { mirrorError = error.message; }
+  }
+  if (mirrorError) {
+    try {
+      const paths = ctx.paths || autopilotPaths(ctx);
+      fs.mkdirSync(paths.dir, { recursive: true });
+      fs.appendFileSync(path.join(paths.dir, 'run.log'), `${JSON.stringify({ ts: (ctx.now || new Date()).toISOString(), mirrorError })}\n`, 'utf8');
+    } catch { /* Logging failure must not stop a round either. */ }
+  }
+  return result;
+}
+
 function rememberObjective(state, objective, now) {
   if (!['done', 'stopped'].includes(state.status)) return;
   state.objectiveHistory ||= [];
@@ -447,7 +497,7 @@ async function execute(command, args, ctx) {
     const due = watchesDue(state, now);
     if (due.length) { for (const w of due) w.lastListedAt = now.toISOString(); writeJson(paths.state, state); }
     return { verdict: { running: 'run', paused: 'pause', stopped: 'stop', done: 'done' }[state.status], reason: state.pausedReason,
-      objective, decision: state.lastDecision || null, budget: { iterationsLeftToday: Math.max(0, objective.maxIterPerDay - state.iterationsToday), hoursLeftToday: Math.max(0, objective.maxHoursPerDay - today.hours), consecutiveNoop: state.consecutiveNoop }, control, recentLog: currentLog().slice(-5), controlErrors: result.errors, watchesDue: due };
+      objective, pendingQuestion: state.pendingQuestion || null, decision: state.lastDecision || null, budget: { iterationsLeftToday: Math.max(0, objective.maxIterPerDay - state.iterationsToday), hoursLeftToday: Math.max(0, objective.maxHoursPerDay - today.hours), consecutiveNoop: state.consecutiveNoop }, control, recentLog: currentLog().slice(-5), controlErrors: result.errors, watchesDue: due };
   }
   if (command === 'post') {
     if (state.status !== 'running') return { error: 'not_running', status: state.status };
@@ -536,13 +586,17 @@ async function execute(command, args, ctx) {
     if (command === 'resume') {
       if (state.status === 'done') return { error: 'already_done', status: 'done' };
       resumeState(state);
-    } else {
+    } else if (!(command === 'pause' && args.question && !args.reason)) {
       state.status = command === 'stop' ? 'stopped' : 'paused';
       state.pausedReason = args.reason || `manual_${command}`;
       if (command === 'stop') state.pendingQuestion = null;
     }
     const previousQuestion = state.pendingQuestion;
-    if (command === 'pause' && args.question) { state.pendingQuestion = oneLine(args.question); state.pausedReason = 'needs_kim'; }
+    if (command === 'pause' && args.question) {
+      state.pendingQuestion = oneLine(args.question);
+      // Asking never overrides a manual/control stop, a cap, or runner errors.
+      if (state.status === 'paused' && state.pausedReason === 'needs_kim') { state.status = 'running'; state.pausedReason = null; }
+    }
     if (command === 'pause' && args.reason === 'runner_error') {
       state.consecutiveRunnerErrors = (state.consecutiveRunnerErrors || 0) + 1;
       const n = state.consecutiveRunnerErrors;
@@ -593,7 +647,7 @@ export async function runAutopilot(command, args = {}, options = {}) {
     const home = paths.home;
     const token = options.token ?? (process.env.DISCORD_BOT_TOKEN?.trim() || readText(path.join(home, '.claude', 'orgiast-discord-bot-token.txt')));
     const userId = options.userId ?? (process.env.ORGIAST_DISCORD_USER_ID?.trim() || readText(path.join(home, '.claude', 'orgiast-discord-user-id.txt')));
-    return await execute(command, args, { paths, home, token, userId, now: options.now || new Date(), hostname: options.hostname || os.hostname(), fetchImpl: options.fetchImpl || globalThis.fetch, askImpl: options.askImpl || askCandidate, notifyImpl: options.notifyImpl || notifyKim });
+    return await execute(command, args, { paths, home, token, userId, now: options.now || new Date(), hostname: options.hostname || os.hostname(), fetchImpl: options.fetchImpl || globalThis.fetch, askImpl: options.askImpl || askCandidate, notifyImpl: options.notifyImpl || notifyKim, spawnImpl: options.spawnImpl, mirrorTimeoutMs: options.mirrorTimeoutMs });
   } catch (error) { return { error: error.code || error.message || 'autopilot_error' }; }
   finally { release?.(); }
 }

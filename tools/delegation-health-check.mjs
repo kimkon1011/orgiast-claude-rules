@@ -347,12 +347,29 @@ export function upsertFixTasks({ home, findings, now = new Date(), todayStr }) {
   for (const finding of tasks.reverse()) {
     const marker = `[delegation-health:${finding.id}]`, escaped = marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const existing = new RegExp(`^\\s*\\d+[.)、]\\s+.*${escaped}.*$`, 'm').exec(block);
-    if (existing) { const date = existing[0].match(/\(起票 (\d{4}-\d{2}-\d{2})\)/)?.[1]; if (date && dateAgeDays(date, today) < 3) continue; block = block.slice(0, existing.index) + block.slice(existing.index + existing[0].length).replace(/^\r?\n/, ''); }
+    if (existing) { const date = existing[0].match(/\(起票 (\d{4}-\d{2}-\d{2})\)/)?.[1]; if (!/~~/.test(existing[0]) && date && dateAgeDays(date, today) < 3) continue; block = block.slice(0, existing.index) + block.slice(existing.index + existing[0].length).replace(/^\r?\n/, ''); }
     const heading = /^##[ \t]+残TODO.*$/m.exec(block); if (!heading) continue;
     const evidence = finding.evidence.join('/').slice(0, 200);
     const line = `0. ${marker} ${finding.fixTask} — 証拠: ${evidence} — 完了条件: 該当テストを追加して node --test が緑、翌日の delegation-health.json に同 id が出ないこと (起票 ${today})`;
     const insertAt = heading.index + heading[0].length;
     block = `${block.slice(0, insertAt)}\n${line}${block.slice(insertAt)}`; changed = true;
+  }
+  const firedIds = new Set(findings.map((item) => item.id));
+  const nowMs = (now instanceof Date ? now : new Date(now)).getTime();
+  // 解消した全滅障害の起票が4日残り、自動セッションを空費したため未検出の行を閉じる。
+  // 直近24hの台帳が無い日は未検証とみなし、読み失敗でも既存の起票を閉じない。
+  const hasRecentUsage = readJsonl(path.join(home, '.claude', 'executor-usage.jsonl')).some((row) => { const time = Date.parse(row.t); return time >= nowMs - DAY && time <= nowMs; });
+  if (hasRecentUsage) {
+    let inTodos = false;
+    block = block.split(/\r?\n/).map((line) => {
+      if (/^##[ \t]+残TODO/.test(line)) { inTodos = true; return line; }
+      if (inTodos && /^##[ \t]+/.test(line)) inTodos = false;
+      const item = inTodos && line.match(/^\s*(\d+)[.)、]\s+(.+)$/);
+      const id = item && item[2].match(/\[delegation-health:([a-z_]+)\]/)?.[1];
+      if (!id || /~~/.test(line) || firedIds.has(id)) return line;
+      changed = true;
+      return `${item[1]}. ~~${item[2]}~~ → ✅ ${today} 完了（delegation-health 自動閉鎖: 当日の findings に id なし）`;
+    }).join('\n');
   }
   if (!changed) return false;
   let inTodos = false;

@@ -43,6 +43,59 @@ test('同じマーカーは3日未満なら二重起票せず、3日後は再起
   assert.match(parseHandoff(md).todos[0], /起票 2026-09-11/);
 });
 
+test('修理済み id の起票行は当日の findings に無ければ自動閉鎖する', () => {
+  const dir = home();
+  write(dir, 'next-session.md', handoff().replace('1. 既存TODO', '1. [delegation-health:lane_outage_unrepaired] codex が全滅 — 証拠: 4件 (起票 2026-09-08)\n2. 既存TODO'));
+  write(dir, 'executor-usage.jsonl', row({ t: '2026-09-09T10:00:00Z', provider: 'codex', status: 'ok', out: 10 }));
+  const findings = [{ id: 'provider_usage_limit', provider: 'kimi', severity: 'low', title: 'x', evidence: ['e'] }];
+  assert.equal(upsertFixTasks({ home: dir, findings, now: NOW }), true);
+  const parsed = parseHandoff(fs.readFileSync(path.join(dir, '.claude', 'next-session.md'), 'utf8'));
+  assert.match(parsed.todos[0], /^~~/);
+  assert.match(parsed.todos[0], /→ ✅ 2026-09-09 完了（delegation-health 自動閉鎖/);
+  assert.match(parsed.todos[0], /\[delegation-health:lane_outage_unrepaired\]/);
+  assert.equal(parsed.todos[1], '既存TODO');
+});
+
+test('当日も検出されている id は自動閉鎖しない', () => {
+  const dir = home(), md = handoff().replace('1. 既存TODO', '1. [delegation-health:codex_empty_output] 古い — (起票 2026-09-09)');
+  write(dir, 'next-session.md', md);
+  write(dir, 'executor-usage.jsonl', row({ t: '2026-09-09T10:00:00Z', provider: 'codex', status: 'ok', out: 10 }));
+  const findings = [{ id: 'codex_empty_output', severity: 'medium', title: 'zero', evidence: ['1件'], fixTask: '修正する' }];
+  assert.equal(upsertFixTasks({ home: dir, findings, now: NOW }), false);
+  assert.equal(fs.readFileSync(path.join(dir, '.claude', 'next-session.md'), 'utf8'), md);
+});
+
+test('自動閉鎖済みの id が再検出されたら新しい起票で復活させる', () => {
+  const dir = home();
+  write(dir, 'next-session.md', handoff().replace('1. 既存TODO', '1. ~~[delegation-health:codex_empty_output] 古い — (起票 2026-09-08)~~ → ✅ 2026-09-09 完了（delegation-health 自動閉鎖: 当日の findings に id なし）\n2. 既存TODO'));
+  write(dir, 'executor-usage.jsonl', row({ t: '2026-09-09T10:00:00Z', provider: 'codex', status: 'ok', out: 10 }));
+  const findings = [{ id: 'codex_empty_output', severity: 'medium', title: 'zero', evidence: ['1件'], fixTask: '修正する' }];
+  assert.equal(upsertFixTasks({ home: dir, findings, now: NOW }), true);
+  const md = fs.readFileSync(path.join(dir, '.claude', 'next-session.md'), 'utf8'), parsed = parseHandoff(md);
+  assert.equal((md.match(/\[delegation-health:codex_empty_output\]/g) || []).length, 1);
+  assert.doesNotMatch(parsed.todos[0], /~~/);
+  assert.match(parsed.todos[0], /起票 2026-09-09/);
+  assert.equal(parsed.todos[1], '既存TODO');
+});
+
+test('台帳に直近24hの行が無い日は自動閉鎖しない', () => {
+  const dir = home(), md = handoff().replace('1. 既存TODO', '1. [delegation-health:lane_outage_unrepaired] codex が全滅 — 証拠: 4件 (起票 2026-09-08)\n2. 既存TODO');
+  write(dir, 'next-session.md', md);
+  write(dir, 'executor-usage.jsonl', row({ t: '2020-01-01T00:00:00Z', provider: 'codex', status: 'ok', out: 10 }));
+  const findings = [{ id: 'provider_usage_limit', provider: 'kimi', severity: 'low', title: 'x', evidence: ['e'] }];
+  assert.equal(upsertFixTasks({ home: dir, findings, now: NOW }), false);
+  assert.equal(fs.readFileSync(path.join(dir, '.claude', 'next-session.md'), 'utf8'), md);
+});
+
+test('delegation-health マーカーを持たない行は閉じない', () => {
+  const dir = home(), md = handoff();
+  write(dir, 'next-session.md', md);
+  write(dir, 'executor-usage.jsonl', row({ t: '2026-09-09T10:00:00Z', provider: 'codex', status: 'ok', out: 10 }));
+  const findings = [{ id: 'provider_usage_limit', provider: 'kimi', severity: 'low', title: 'x', evidence: ['e'] }];
+  assert.equal(upsertFixTasks({ home: dir, findings, now: NOW }), false);
+  assert.equal(fs.readFileSync(path.join(dir, '.claude', 'next-session.md'), 'utf8'), md);
+});
+
 test('140日先の cooldown を検出して削除する', () => {
   const dir = home(), until = NOW.getTime() + 140 * 86_400_000;
   write(dir, 'provider-cooldown.json', { glm: { until, reason: 'bad parse' } });

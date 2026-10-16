@@ -1,3 +1,4 @@
+export const GATE_CONTRACT = {"name": "external-state-claim-gate", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "external-state-claim-gate"}]};
 import { symptomDenials, unknown, corrections, meta, sentences, currentTurnEntries, blocks, queriedVendorsFromRaw, claimVendor, claimVendors, needsEvidenceRequest, evidenceRequest } from './state-claim-evidence.mjs';
 export { queriedVendorsFromRaw, claimVendor } from './state-claim-evidence.mjs';
 const subjects = /残高|クレジット|請求|支払い|カード|課金|Billing|自動チャージ|オートチャージ|Anthropic|OpenAI|Console|API キー|レート制限|Usage Limits|プロパティ|アカウント|権限|オーナー|所有|設定|環境変数|env|シークレット|Secret|レコード|シート|ドキュメント|フォルダ|ファイル|ドメイン|DNS|プロジェクト|リポジトリ|デプロイ|コンテナ|測定ID|GA4|Search Console|GTM|タグマネージャー|Vercel|Supabase|GitHub|Drive|Gmail|Calendar|Workspace|Cloudflare|freee|Stripe|Discord|Notion|Slack/i;

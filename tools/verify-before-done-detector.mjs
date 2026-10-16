@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+export const GATE_CONTRACT = {"name": "verify-before-done-detector", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "verify-before-done-detector"}]};
 import fs from 'node:fs';
 import path from 'node:path';
 import { latestAssistantText } from './lib/assistant-text.mjs';

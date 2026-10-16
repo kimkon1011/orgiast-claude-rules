@@ -1,0 +1,134 @@
+{
+  "checkedAt": "2026-10-15T19:12:43.421646+00:00",
+  "target": {
+    "name": "実行失敗: kimi:不明",
+    "eventTime": "2026-10-15T19:05:25.647Z"
+  },
+  "ledger": {
+    "file": "/mnt/c/Users/uers/.claude/executor-usage.jsonl",
+    "sha256": "adbf146058f4bb6f01c8eb57b8fc0f90206893a8f7379b7827b7f4ef560d5715",
+    "targetLine": 14339,
+    "nearbyRecords": [
+      {
+        "line": 14337,
+        "record": {
+          "t": "2026-10-15T19:05:22.415Z",
+          "provider": "kimi",
+          "model": "kimi-k3",
+          "in": 0,
+          "out": 0,
+          "secs": 2.46,
+          "status": "http_429",
+          "attempt": 0,
+          "failover": false
+        }
+      },
+      {
+        "line": 14338,
+        "record": {
+          "t": "2026-10-15T19:05:23.534Z",
+          "provider": "kimi",
+          "model": "kimi-k3",
+          "in": 0,
+          "out": 0,
+          "secs": 0.103,
+          "status": "http_429",
+          "attempt": 1,
+          "failover": false
+        }
+      },
+      {
+        "line": 14339,
+        "record": {
+          "t": "2026-10-15T19:05:25.647Z",
+          "provider": "kimi",
+          "model": "kimi-k3",
+          "in": 0,
+          "out": 0,
+          "secs": 0.102,
+          "status": "http_429",
+          "attempt": 2,
+          "failover": false
+        }
+      },
+      {
+        "line": 14340,
+        "record": {
+          "status": "ok",
+          "attempt": 0,
+          "failover": false,
+          "secs": 6.73,
+          "t": "2026-10-15T19:05:32.907Z",
+          "provider": "gemini",
+          "model": "gemini-3.7-flash",
+          "in": 167,
+          "out": 23,
+          "usd": 0.0002115,
+          "source": "llm-ask",
+          "searches": 0
+        }
+      }
+    ],
+    "laterKimiRecords": []
+  },
+  "sources": [
+    {
+      "file": "/mnt/c/Users/uers/orgiast-main/tools/stall-sweeper.mjs",
+      "sha256": "c067ff362ff056f7b076267bd8ccc21b74b535a215d2036c51912a2356f2c3c0",
+      "bytes": 38749,
+      "firstLine": 78,
+      "lastLine": 89,
+      "excerpt": "export function detectFailedJob(rows, now = Date.now()) {\n  const latest = new Map();\n  for (const r of rows) {\n    const key = r.taskName || r.job || `${r.provider || 'executor'}:${r.cwd || '不明'}`;\n    if (!latest.has(key) || new Date(r.t) >= new Date(latest.get(key).t)) latest.set(key, r);\n  }\n  return [...latest].flatMap(([id, r]) => {\n    if (!Number.isFinite(new Date(r.t).getTime()) || r.running || r.status == null || Number(r.status) === 0 || ['ok', 'success', 'fallback', 'cooldown', 'deferred'].includes(String(r.status).toLowerCase()) || [267009, 267011].includes(Number(r.status))) return [];\n    if (!Number.isFinite(Number(r.status)) && !/^(?:error|failed|failure|unusable|no-cheap-executor|http_[45]\\d\\d)$/.test(String(r.status))) return [];\n    return [item('failed_job', id, `実行失敗: ${id}`, r.location || r.cwd || id, age(r.t, now), 'Codexで原因を調査して安全に再実行',\n      `直近の終了コード ${r.status}`, { cwd: localPath(r.cwd), taskName: r.taskName, eventTime: r.t })];\n  });"
+    },
+    {
+      "file": "/mnt/c/Users/uers/orgiast-main/tools/llm-ask.mjs",
+      "sha256": "560536f7c7abe7278488fb83e89f2ea3f287ac39929746ff74dab4aaf40973c6",
+      "bytes": 7894,
+      "firstLine": 68,
+      "lastLine": 106,
+      "excerpt": "const ledger = path.join(home, '.claude', 'executor-usage.jsonl');\nfunction appendAttempt(info, usage = {}) {\n  if (info.candidate.provider === 'gemini') {\n    const measured = geminiUsage({ usage });\n    try {\n      recordGeminiUsage({\n        model: info.candidate.model,\n        ...measured,\n        source: 'llm-ask',\n        status: info.status,\n        attempt: info.attempt,\n        failover: info.failover,\n        secs: Number(info.secs.toFixed(3)),\n      }, { home, usageFile: ledger });\n    } catch {}\n    return;\n  }\n  const rec = { t: new Date().toISOString(), provider: info.candidate.provider, model: info.candidate.model, in: usage.prompt_tokens || 0, out: usage.completion_tokens || 0, secs: Number(info.secs.toFixed(3)), status: info.status, attempt: info.attempt, failover: info.failover };\n  try { fs.mkdirSync(path.dirname(ledger), { recursive: true }); fs.appendFileSync(ledger, JSON.stringify(rec) + '\\n'); } catch {}\n}\n\ntry {\n  const result = await callWithFallback({\n    start,\n    chain: args.includes('--no-fallback') ? [] : FALLBACK_CHAIN,\n    allowGatewayFallback: !args.includes('--no-fallback'),\n    payloadFor(candidate) {\n      const P = PROVIDERS[candidate.provider]; const key = loadKey(candidate.provider);\n      if (!P || !key) return null;\n      const payload = { model: candidate.model || P.model, messages, max_tokens: maxTok, stream: false };\n      if (P.special === 'kimi') Object.assign(payload, { reasoning_effort: 'none', temperature: 0.6 });\n      return { url: P.base, init: { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', ...(P.extraHeaders || {}) }, body: JSON.stringify(payload) } };\n    },\n    async onAttempt(info) {\n      let usage = {};\n      if (info.status === 'ok') usage = (await info.response.clone().json().catch(() => ({}))).usage || {};\n      appendAttempt(info, usage);\n    },\n    onFailover({ from, to, reason }) { console.error(`[failover] ${from.provider}:${from.model} ${reason} → ${to.provider}:${to.model}`); },"
+    },
+    {
+      "file": "/mnt/c/Users/uers/orgiast-main/tools/llm-fallback.mjs",
+      "sha256": "176fc5eca1ba095886b9c42b79404034003f08bd77e977df683c8900f0f71137",
+      "bytes": 15593,
+      "firstLine": 232,
+      "lastLine": 275,
+      "excerpt": "    for (let attempt = 0; attempt < 3; attempt++) {\n      lastAttempt = attempt;\n      const began = Date.now();\n      let response;\n      let status;\n      let detail = '';\n      try {\n        response = await fetchImpl(request.url, request.init);\n        status = response.status;\n        // 残量ヘッダを下限として記録する。次に同じ provider を選ぶ時、この値で事前に絞れる。\n        if (useBudget && response?.headers && noteResponse(budgetStore, candidate.provider, response.headers, now())) writeBudget(budgetPath, budgetStore);\n        if (response.ok) {\n          if (validateResponse) {\n            const json = await response.clone().json().catch(() => null);\n            const validation = await validateResponse(json, candidate);\n            if (validation !== true) {\n              const validationReason = typeof validation === 'string' ? validation : 'unusable response';\n              lastReason = `unusable: ${validationReason}`;\n              attempted++;\n              await onAttempt?.({ candidate, attempt, status: 'unusable', response, reason: lastReason, secs: (Date.now() - began) / 1000, failover: candidate.provider !== start.provider });\n              break;\n            }\n          }\n          await onAttempt?.({ candidate, attempt, status: 'ok', response, secs: (Date.now() - began) / 1000, failover: candidate.provider !== start.provider });\n          clearCooldown(candidate.provider);\n          saveCooldowns();\n          return { response, candidate, failover: candidate.provider !== start.provider, attempt };\n        }\n        detail = (await response.clone().text().catch(() => '')).slice(0, 400);\n        lastReason = `HTTP${status}${detail ? `: ${detail}` : ''}`;\n      } catch (error) {\n        lastReason = `network: ${error?.message || String(error)}`;\n      }\n      attempted++;\n      await onAttempt?.({ candidate, attempt, status: statusName(status), response, reason: lastReason, secs: (Date.now() - began) / 1000, failover: candidate.provider !== start.provider });\n      // groq の通常429の本文には `https://console.groq.com/settings/billing` が含まれるため、\n      // 素の `billing` で判定すると日次上限(TPD)を恒久障害と誤判定する。恒久障害の文面だけを拾う。\n      const permanentBilling = status === 429 && /prepayment credits are depleted|insufficient_quota|exceeded your current quota/i.test(detail);\n      setCooldown(candidate.provider, status, response, permanentBilling);\n\n      const kind = classifyFailure(status);\n      if (permanentBilling || kind !== 'retry' || attempt === 2) break;\n      const specified = retryAfterMs(response);\n      if (specified != null && specified > 60000) break;"
+    }
+  ],
+  "queue": {
+    "file": "/mnt/c/Users/uers/.claude/batch-queue/pending.jsonl",
+    "sha256": "114d3b4b1106339b47c2086cf3d6ab1824785d26fa78b1d2db359c5a3580fa2b",
+    "bytes": 3880,
+    "rowCount": 20,
+    "kimiMentionCount": 0
+  },
+  "cooldown": {
+    "file": "/mnt/c/Users/uers/.claude/provider-cooldown.json",
+    "kimi": {
+      "until": 1790526038160,
+      "reason": "http_429",
+      "at": 1790525138160
+    }
+  },
+  "findings": [
+    "対象原文はattempt=2のhttp_429。直前にattempt=0,1の同種記録あり。",
+    "検出名はproviderとcwd欠落時の「不明」の合成。対象行にジョブ名・依頼本文・成果物・相関IDがない。",
+    "直後のGemini成功はfailover=false。時刻の近さだけで同じジョブの復旧とは判定しない。",
+    "llm-askの台帳記録処理は失敗時のusageを空から0にするため、in/out=0は課金・副作用ゼロの証明ではない。",
+    "HTTP応答本文が当該台帳にないため、一時的レート制限か利用枠・残高等の制約かは特定不能。",
+    "現在のpending.jsonlにkimiを含む行はないが、他の場所に対象作業がないとは断定しない。"
+  ],
+  "decision": {
+    "completed": false,
+    "rerunPerformed": false,
+    "reason": "元の依頼と成果物を特定できず、未完了性・再実行の副作用を検証できない。API再実行は外部送信を伴い今回の禁止条件に抵触するため実施しない。"
+  },
+  "actions": {
+    "externalRequests": 0,
+    "claudeCliCalls": 0,
+    "gitMutations": 0,
+    "scope": "対象1件の読み取り調査とclaim/evidence/resultの新規作成のみ"
+  }
+}

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+export const GATE_CONTRACT = {"name": "handoff-info-guard", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "handoff-info-guard"}]};
 // user に作業を頼むのに、その場で実行できる情報（URL・貼るコマンド全文・パス）を
 // 同じメッセージに書いていない応答を止める。ONBOARDING §1.5.3。
 //

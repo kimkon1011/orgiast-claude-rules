@@ -1,0 +1,77 @@
+{
+  "queriedAt": "2026-10-14T19:21:52.562Z",
+  "system": "Google Sheets",
+  "meta": {
+    "properties": {
+      "title": "Discord日次タスク台帳"
+    },
+    "sheets": [
+      {
+        "properties": {
+          "sheetId": 0,
+          "title": "タスク",
+          "index": 0,
+          "sheetType": "GRID",
+          "gridProperties": {
+            "rowCount": 5621,
+            "columnCount": 15,
+            "frozenRowCount": 1
+          }
+        }
+      },
+      {
+        "properties": {
+          "sheetId": 1,
+          "title": "実行ログ",
+          "index": 1,
+          "sheetType": "GRID",
+          "gridProperties": {
+            "rowCount": 1011,
+            "columnCount": 26,
+            "frozenRowCount": 1
+          }
+        }
+      }
+    ],
+    "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/1WtsSiDlId8EgyzA15pJbeCGfvMHUgBqrUMmucax4A24/edit?ouid=108943467368537426847"
+  },
+  "headers": [
+    "ID",
+    "起票日",
+    "優先ランク",
+    "優先度スコア",
+    "種別",
+    "タイトル",
+    "具体アクション",
+    "担当",
+    "期限",
+    "チャンネル",
+    "根拠(発言抜粋)",
+    "Discordリンク",
+    "状態",
+    "実行メモ",
+    "最終更新"
+  ],
+  "rows": [
+    {
+      "row": 10,
+      "values": [
+        "T-5137",
+        "2026-10-10 6:33",
+        "P1",
+        "96",
+        "締切",
+        "申請書のご確認依頼",
+        "小林優紀が関係者に申請書の確認を依頼する",
+        "",
+        "2026-10-09",
+        "学会リーダー相談窓口",
+        "申請書のご確認をお願いいたします🙏 事前作業届と臨時搬出入申請書のみ期限が本日の午前中までとなっております。",
+        "https://discord.com/channels/715211007307284530/1382651184141303819/1557890039852044394",
+        "未着手",
+        "",
+        "2026-10-14 6:35"
+      ]
+    }
+  ]
+}

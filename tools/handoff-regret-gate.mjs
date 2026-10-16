@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+export const GATE_CONTRACT = {"name": "handoff-regret-gate", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "handoff-regret-gate"}]};
 
 const TOOL_NAMES = new Set(['Edit', 'Write', 'Bash', 'PowerShell']);
 const FAILURE = /(?:permission[^\n]*denied|denied|拒否|self-modification|\berror\b|失敗)/i;

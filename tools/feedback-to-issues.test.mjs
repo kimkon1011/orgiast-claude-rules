@@ -154,7 +154,13 @@ test('booth-feedback-intake を 10分タスクから相乗り起動する', asyn
   assert.equal(await chainBoothFeedbackIntake({ argv: [], spawnImpl: fakeSpawn }), 'spawned');
   assert.equal(calls.length, 1);
   assert.match(calls[0][1][0], /booth-feedback-intake\.mjs$/);
-  assert.equal(calls[0][2].detached, true);
+  // #422: win32 は detached が CREATE_NO_WINDOW を無効化するため windowsHide のみ。
+  if (process.platform === 'win32') {
+    assert.equal(calls[0][2].windowsHide, true);
+    assert.notEqual(calls[0][2].detached, true);
+  } else {
+    assert.equal(calls[0][2].detached, true);
+  }
 });
 
 test('--dry-run と --no-chain では相乗り起動しない', async () => {

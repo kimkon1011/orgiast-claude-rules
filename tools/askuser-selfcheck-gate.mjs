@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+export const GATE_CONTRACT = {"name": "askuser-selfcheck-gate", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "askuser-selfcheck-gate"}]};
 // AskUserQuestion で「自分で調べれば分かること」を user に聞くのを *事前に* 止める。
 //
 // なぜ Stop hook だけでは足りないか: self-check-before-asking-guard.mjs は応答を書き終えた

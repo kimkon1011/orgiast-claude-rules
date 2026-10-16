@@ -4,7 +4,9 @@ import path from 'node:path';
 import { userHome } from './batch-enqueue.mjs';
 import { isEntry } from './is-entry.mjs';
 
-export function queuePath({ home = userHome() } = {}) {
+const decisionHome = () => process.env.ORGIAST_HOME ?? userHome();
+
+export function queuePath({ home = decisionHome() } = {}) {
   return path.join(home, '.claude', 'pending-decisions.jsonl');
 }
 
@@ -19,7 +21,7 @@ function readRecords(home) {
   }
 }
 
-export function addDecision({ source, text, author, capturedAt, batchDate, attachments }, { home = userHome(), now = new Date() } = {}) {
+export function addDecision({ source, text, author, capturedAt, batchDate, attachments }, { home = decisionHome(), now = new Date() } = {}) {
   const normalized = String(text ?? '').trim();
   if (!normalized) throw new Error('判断テキストがありません');
   const file = queuePath({ home });
@@ -40,7 +42,7 @@ export function addDecision({ source, text, author, capturedAt, batchDate, attac
   return record;
 }
 
-export function setDecisionAttachments(id, attachments, { home = userHome() } = {}) {
+export function setDecisionAttachments(id, attachments, { home = decisionHome() } = {}) {
   if (!Array.isArray(attachments) || !attachments.length) return null;
   const file = queuePath({ home });
   const records = readRecords(home);
@@ -53,12 +55,12 @@ export function setDecisionAttachments(id, attachments, { home = userHome() } = 
   return record;
 }
 
-export function listDecisions({ home = userHome(), status } = {}) {
+export function listDecisions({ home = decisionHome(), status } = {}) {
   const records = readRecords(home);
   return status == null ? records : records.filter((record) => record.status === status);
 }
 
-export function markDecisions(ids, { home = userHome(), status, batchDate } = {}) {
+export function markDecisions(ids, { home = decisionHome(), status, batchDate } = {}) {
   const wanted = new Set(ids || []);
   if (!wanted.size) return [];
   const file = queuePath({ home });

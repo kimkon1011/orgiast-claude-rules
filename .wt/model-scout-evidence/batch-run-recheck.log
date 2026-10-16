@@ -1,0 +1,10 @@
+✔ batch deadline defaults to local 06:30 and accepts override (3.4865ms)
+✔ 生存中のbatch-run lockがあれば処理せず exit 3 でスキップ (158.483999ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 393.797797

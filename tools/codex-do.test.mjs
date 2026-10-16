@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { needsWorktreeRepair, detectQuotaLimit, shouldFlagEmptyFallbackDiff, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, isBackendExhausted, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS } = await import('./codex-do.mjs');
+const { needsWorktreeRepair, detectQuotaLimit, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, isBackendExhausted, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS } = await import('./codex-do.mjs');
 
 function run(args, options = {}) {
   return spawnSync(process.execPath, [tool, ...args], {
@@ -230,6 +230,50 @@ test('fallback の読み取り専用指示なら空 diff でも失敗扱いに�
     timedOut: false,
     diffText: '',
   }), false);
+});
+
+test('shouldFlagEmptyFallbackDiff returns false when treeChanged is true', () => {
+  assert.equal(shouldFlagEmptyFallbackDiff({
+    executorName: 'fallback',
+    wantedEdit: true,
+    timedOut: false,
+    diffText: '',
+    treeChanged: true,
+  }), false);
+});
+
+test('snapshotWorkingTree non-git directory: snapshot changes when file is added', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-nongit-'));
+  try {
+    const snap1 = snapshotWorkingTree(tempDir);
+    
+    // Add a file
+    const testFile = path.join(tempDir, 'test_file.txt');
+    fs.writeFileSync(testFile, 'hello', 'utf8');
+    
+    const snap2 = snapshotWorkingTree(tempDir);
+    assert.notEqual(snap1, snap2);
+  } finally {
+    try {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    } catch {}
+  }
+});
+
+test('snapshotWorkingTree non-git directory: snapshot is identical when nothing changes', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-nongit-same-'));
+  try {
+    const testFile = path.join(tempDir, 'test_file.txt');
+    fs.writeFileSync(testFile, 'hello', 'utf8');
+
+    const snap1 = snapshotWorkingTree(tempDir);
+    const snap2 = snapshotWorkingTree(tempDir);
+    assert.equal(snap1, snap2);
+  } finally {
+    try {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    } catch {}
+  }
 });
 
 test('--no-fallback が指定されても指示文が引数として食われず、正しく除外される', () => {

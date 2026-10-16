@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+export const GATE_CONTRACT = {"name": "model-agent-guard", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "model-agent-guard"}, {"kind": "keyserve-key", "ref": "deepseek.env#DEEPSEEK_API_KEY"}]};
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

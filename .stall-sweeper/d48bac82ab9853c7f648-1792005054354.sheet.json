@@ -1,0 +1,80 @@
+{
+  "metadata": {
+    "content": [
+      {
+        "type": "text",
+        "text": "Action completed."
+      }
+    ],
+    "structuredContent": {
+      "spreadsheetId": "1WtsSiDlId8EgyzA15pJbeCGfvMHUgBqrUMmucax4A24",
+      "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/1WtsSiDlId8EgyzA15pJbeCGfvMHUgBqrUMmucax4A24/edit?ouid=108943467368537426847",
+      "properties": {
+        "title": "Discord日次タスク台帳",
+        "locale": "ja_JP",
+        "timeZone": "Asia/Tokyo"
+      },
+      "sheets": [
+        {
+          "properties": {
+            "sheetId": 0,
+            "title": "タスク",
+            "index": 0,
+            "sheetType": "GRID",
+            "gridProperties": {
+              "rowCount": 5621,
+              "columnCount": 15,
+              "frozenRowCount": 1
+            }
+          }
+        },
+        {
+          "properties": {
+            "sheetId": 1,
+            "title": "実行ログ",
+            "index": 1,
+            "sheetType": "GRID",
+            "gridProperties": {
+              "rowCount": 1011,
+              "columnCount": 26,
+              "frozenRowCount": 1
+            }
+          }
+        }
+      ]
+    },
+    "isError": false
+  },
+  "task": {
+    "content": [
+      {
+        "type": "text",
+        "text": "Action completed."
+      }
+    ],
+    "structuredContent": {
+      "range": "'タスク'!A3:O3",
+      "majorDimension": "ROWS",
+      "values": [
+        [
+          "T-4619",
+          "2026-10-08 6:33",
+          "P1",
+          "97",
+          "タスク",
+          "第30回日本外科病理学会の発送手配",
+          "担当者が第30回日本外科病理学会学術集会の荷物を10月8日までに発送手配する。",
+          null,
+          "2026-10-08",
+          "千葉倉庫連絡用（（株）あらた様）",
+          "第30回日本外科病理学会学術集会の発送手配をお願いいたします。発送日：10月8日",
+          "https://discord.com/channels/715211007307284530/1476476737264291931/1557505650169348127",
+          "未着手",
+          null,
+          "2026-10-14 6:35"
+        ]
+      ]
+    },
+    "isError": false
+  }
+}

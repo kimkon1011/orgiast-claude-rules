@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, realpathSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -49,7 +49,7 @@ test('resolves the synced repo when it carries the script the task runs', { skip
     "Resolve-RegisterRepoRoot -Fallback 'C:\\stale\\repo' -RequiredPaths @('tools\\evening-digest.mjs')",
     { ORGIAST_NIGHTLY_REPO: synced },
   );
-  assert.equal(out.toLowerCase(), synced.toLowerCase());
+  assert.equal(realpathSync.native(out).toLowerCase(), realpathSync.native(synced).toLowerCase());
   assert.doesNotMatch(text, /is missing|not found/);
 });
 
@@ -84,7 +84,7 @@ test('the tools-directory form points inside the synced repo', { skip: !hasPower
     "Resolve-RegisterToolsDir -Fallback 'C:\\stale\\repo\\tools' -RequiredLeaves @('backup-claude-to-drive.ps1')",
     { ORGIAST_NIGHTLY_REPO: synced },
   );
-  assert.equal(out.toLowerCase(), join(synced, 'tools').toLowerCase());
+  assert.equal(realpathSync.native(out).toLowerCase(), realpathSync.native(join(synced, 'tools')).toLowerCase());
 });
 
 test('the tools-directory form keeps the caller path when it falls back', { skip: !hasPowerShell }, () => {

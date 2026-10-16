@@ -1,0 +1,21 @@
+{
+  "initialAttempt": {
+    "method": "GET CDN",
+    "status": 403,
+    "sideEffects": "なし。読み取りの拒否。画像の不存在を意味しない"
+  },
+  "fallback": [
+    {
+      "filename": "S__12574728.jpg",
+      "status": 200,
+      "method": "GET Discord media proxy",
+      "time": "2026-10-14T19:14:03.574Z"
+    },
+    {
+      "filename": "S__12574727.jpg",
+      "status": 200,
+      "method": "GET Discord media proxy",
+      "time": "2026-10-14T19:14:04.497Z"
+    }
+  ]
+}

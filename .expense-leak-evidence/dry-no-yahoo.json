@@ -1,0 +1,167 @@
+{
+  "today": "2026-10-09",
+  "from": "2026-07-11",
+  "to": "2026-10-09",
+  "dryRun": true,
+  "wallets": [
+    {
+      "id": 2406370,
+      "name": "金立替／三井住友VISAカード",
+      "bank_id": 1431,
+      "type": "credit_card",
+      "update_date": "2026-04-17"
+    },
+    {
+      "id": 2406373,
+      "name": "金立替／JACCSカード",
+      "bank_id": 1889,
+      "type": "credit_card",
+      "update_date": "2026-10-06"
+    },
+    {
+      "id": 2406374,
+      "name": "金立替／オリコカード",
+      "bank_id": 1435,
+      "type": "credit_card",
+      "update_date": "2026-04-17"
+    },
+    {
+      "id": 2406376,
+      "name": "金立替／アメリカン・エキスプレス",
+      "bank_id": 1416,
+      "type": "credit_card",
+      "update_date": "2026-07-22"
+    },
+    {
+      "id": 2406379,
+      "name": "金立替／出光カード",
+      "bank_id": 6036,
+      "type": "credit_card",
+      "update_date": "2026-06-12"
+    },
+    {
+      "id": 2406380,
+      "name": "金立替／タカシマヤカード",
+      "bank_id": 1425,
+      "type": "credit_card",
+      "update_date": "2025-11-14"
+    },
+    {
+      "id": 2406389,
+      "name": "金立替／セゾンカード",
+      "bank_id": 1411,
+      "type": "credit_card",
+      "update_date": "2026-09-30"
+    },
+    {
+      "id": 2419140,
+      "name": "金立替／楽天カード",
+      "bank_id": 1432,
+      "type": "credit_card",
+      "update_date": "2026-04-17"
+    }
+  ],
+  "statusCounts": {
+    "1": 230,
+    "2": 166,
+    "3": 120
+  },
+  "candidateTotal": 230,
+  "results": [
+    {
+      "id": 2359642107,
+      "date": "2026-07-11",
+      "amount": 5001,
+      "description": "ル・クロワッサン　ド　バカンス／ＳＢ",
+      "status": 1,
+      "entry_side": "expense",
+      "walletable_id": 2406376,
+      "walletable_type": "credit_card",
+      "account": "金立替／アメリカン・エキスプレス",
+      "verdict": "未検索(無効化)",
+      "evidence": [],
+      "checkedAt": "2026-10-09T12:53:51.437Z",
+      "deferred": true,
+      "searchStatus": "未検索(無効化)"
+    },
+    {
+      "id": 2359642108,
+      "date": "2026-07-11",
+      "amount": 3618,
+      "description": "ＦＡＲＭ　ＴＯ　ＢＡＫＥＲＹ　バカ／Ｓ",
+      "status": 1,
+      "entry_side": "expense",
+      "walletable_id": 2406376,
+      "walletable_type": "credit_card",
+      "account": "金立替／アメリカン・エキスプレス",
+      "verdict": "未検索(無効化)",
+      "evidence": [],
+      "checkedAt": "2026-10-09T12:53:53.531Z",
+      "deferred": true,
+      "searchStatus": "未検索(無効化)"
+    },
+    {
+      "id": 2363394986,
+      "date": "2026-07-11",
+      "amount": 11548,
+      "description": "いかり王子店　大阪府　吹田市",
+      "status": 1,
+      "entry_side": "expense",
+      "walletable_id": 2406376,
+      "walletable_type": "credit_card",
+      "account": "金立替／アメリカン・エキスプレス",
+      "verdict": "未検索(無効化)",
+      "evidence": [],
+      "checkedAt": "2026-10-09T12:53:55.347Z",
+      "deferred": true,
+      "searchStatus": "未検索(無効化)"
+    },
+    {
+      "id": 2363394982,
+      "date": "2026-07-12",
+      "amount": 2915,
+      "description": "ニンテンドーミュージアムショップ　京都",
+      "status": 1,
+      "entry_side": "expense",
+      "walletable_id": 2406376,
+      "walletable_type": "credit_card",
+      "account": "金立替／アメリカン・エキスプレス",
+      "verdict": "未検索(無効化)",
+      "evidence": [],
+      "checkedAt": "2026-10-09T12:53:57.430Z",
+      "deferred": true,
+      "searchStatus": "未検索(無効化)"
+    },
+    {
+      "id": 2363394983,
+      "date": "2026-07-12",
+      "amount": 11000,
+      "description": "ニンテンドーミュージアムショップ　京都",
+      "status": 1,
+      "entry_side": "expense",
+      "walletable_id": 2406376,
+      "walletable_type": "credit_card",
+      "account": "金立替／アメリカン・エキスプレス",
+      "verdict": "未検索(無効化)",
+      "evidence": [],
+      "checkedAt": "2026-10-09T12:53:59.152Z",
+      "deferred": true,
+      "searchStatus": "未検索(無効化)"
+    }
+  ],
+  "cacheHits": 0,
+  "yahooUnavailable": false,
+  "issues": [],
+  "appended": 0,
+  "complete": false,
+  "searches": {
+    "gmail": {
+      "kim@orgiast.jp": 5,
+      "seisaku-team@orgiast.jp": 5
+    },
+    "yahoo": 0,
+    "yahooUnavailable": false,
+    "yahooFailed": false,
+    "yahooUnverified": 0
+  }
+}

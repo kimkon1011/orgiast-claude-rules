@@ -1,0 +1,58 @@
+{
+  "checkedAt": "2026-10-08T19:15:57.225Z",
+  "httpStatus": 200,
+  "data": {
+    "type": 0,
+    "content": "<@1382626504386543708> \n送信前に提出書類のメールを入れていますのでご確認お願いいたします。\nまた提出期限が今日なのですが、私がこのあと17時ごろまで対応できないため修正等がありましたら宮地さんにご連絡お願いいたします。\n宮地さんには了承を得ております。",
+    "mentions": [
+      {
+        "id": "1382626504386543708",
+        "username": "meropp.16",
+        "avatar": "10c8b627f08eeb8dbbb2a3a0e5f784cb",
+        "discriminator": "0",
+        "public_flags": 0,
+        "flags": 0,
+        "banner": null,
+        "accent_color": null,
+        "global_name": "大平 沙織",
+        "avatar_decoration_data": null,
+        "collectibles": null,
+        "display_name_styles": null,
+        "vad_colors": null,
+        "banner_color": null,
+        "clan": null,
+        "primary_guild": null
+      }
+    ],
+    "mention_roles": [],
+    "attachments": [],
+    "embeds": [],
+    "timestamp": "2026-10-02T04:18:51.006000+00:00",
+    "edited_timestamp": null,
+    "flags": 0,
+    "components": [],
+    "id": "1555433860915789905",
+    "channel_id": "1387960696570118144",
+    "author": {
+      "id": "1085170051046457404",
+      "username": "momoka6032",
+      "avatar": "35bb67a15c53c36d0bf88d19b59fa42c",
+      "discriminator": "0",
+      "public_flags": 0,
+      "flags": 0,
+      "banner": null,
+      "accent_color": null,
+      "global_name": "井上桃佳",
+      "avatar_decoration_data": null,
+      "collectibles": null,
+      "display_name_styles": null,
+      "vad_colors": null,
+      "banner_color": null,
+      "clan": null,
+      "primary_guild": null
+    },
+    "pinned": false,
+    "mention_everyone": false,
+    "tts": false
+  }
+}

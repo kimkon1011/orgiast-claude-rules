@@ -105,14 +105,15 @@ export function run(argv = process.argv.slice(2)) {
   const fallback = optionValue(argv, '--fallback');
   if (fallback && !Object.hasOwn(DOMAINS, fallback)) throw new Error(`未知のドメインキー: ${fallback}`);
   if (duplicates.length) {
-    console.error(`複数ドメインにある memory ファイル (${duplicates.length}件):`);
+    // exit 1 にすると nightly-batch は split をスキップするが、重複を掲載から
+    // 消せるのは split の再生成だけなので永久に検証 NG になる（2026-10-09 実績:
+    // 取りこぼしが夜ごと増え続けた）。最初の割当（索引名順）で解消して警告する。
+    console.error(`複数ドメインにある memory ファイル (${duplicates.length}件) は最初の割当で解消:`);
     for (const duplicate of duplicates) console.error(`* ${duplicate}`);
   }
   if (unclassified.length && !fallback) {
     console.error(`未分類の memory ファイル (${unclassified.length}件):`);
     for (const file of unclassified) console.error(`- ${file}`);
-  }
-  if (duplicates.length || (unclassified.length && !fallback)) {
     return { exitCode: 1, assignments, pins: [], unclassified, duplicates };
   }
   if (fallback) for (const file of unclassified) assignments[file] = fallback;

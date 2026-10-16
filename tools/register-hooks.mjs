@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+let wrapRegisteredGates = () => 0;
+let gateRuntimeReady = false;
+try { ({ wrapRegisteredGates } = await import('./gate-hook-runner.mjs')); gateRuntimeReady = true; } catch { /* 同期途中でも既存登録を維持 */ }
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -71,6 +74,15 @@ function add(groups, scriptName, group) {
     console.log(`  [skip] ${scriptName} — repo/tools に実ファイルが無いため未登録`);
     return false;
   }
+  if (!gateRuntimeReady && scriptName.endsWith('.mjs')) {
+    // Do not introduce a new hard denial during a partially downloaded update.
+    const source = fs.readFileSync(path.join(repo, 'tools', scriptName), 'utf8');
+    if (/GATE_CONTRACT/.test(source)) {
+      let legacy = false;
+      try { legacy = JSON.parse(fs.readFileSync(path.join(repo, 'tools/gate-rollout-manifest.json'), 'utf8')).gates?.[scriptName.slice(0, -4)]?.legacy === true; } catch {}
+      if (!legacy) { skippedNames.push(scriptName); console.log(`  [skip] ${scriptName} — gate runtime 同期待ち`); return false; }
+    }
+  }
   // 既存PCは .ps1 版が登録済みのことがある(Windows install)。拡張子を無視して重複判定しないと
   // .mjs と .ps1 の二重登録になり、同じ context が2回注入される。
   const base = scriptName.replace(/\.(mjs|ps1)$/, '');
@@ -98,7 +110,8 @@ function migrate(groups, oldName, newName, newCommand) {
 function setTimeoutFor(groups, scriptName, timeout) {
   let changed = 0;
   for (const group of groups) for (const hook of (Array.isArray(group?.hooks) ? group.hooks : [])) {
-    if (String(hook.command || '').includes(scriptName) && hook.timeout !== timeout) { hook.timeout = timeout; changed += 1; }
+    const expected = String(hook.command || '').includes('gate-hook-runner.mjs') ? Math.max(timeout, 10) + 5 : timeout;
+    if (String(hook.command || '').includes(scriptName) && hook.timeout !== expected) { hook.timeout = expected; changed += 1; }
   }
   return changed;
 }
@@ -178,7 +191,12 @@ try {
     if (add(settings.hooks.SessionStart, name, { hooks: [hook] })) added += 1;
   }
   added += setTimeoutFor(settings.hooks.SessionStart, 'tool-adoption-check', 60);
+  added += migrate(settings.hooks.SessionStart, 'sessionstart-lane-health.mjs', 'sessionstart-lane-health.mjs', command('sessionstart-lane-health.mjs', ' --hook'));
   if (add(settings.hooks.SessionStart, 'sessionstart-lane-health.mjs', { hooks: [{ type: 'command', command: command('sessionstart-lane-health.mjs', ' --hook'), timeout: 5 }] })) added += 1;
+  added += setTimeoutFor(settings.hooks.SessionStart, 'sessionstart-lane-health.mjs', 5);
+  for (const group of settings.hooks.SessionStart) for (const hook of group.hooks || []) {
+    if (String(hook.command || '').includes('sessionstart-lane-health.mjs') && hook.async === true) { delete hook.async; added++; }
+  }
   if (add(settings.hooks.SessionStart, 'hook-selfcheck.mjs', { hooks: [{ type: 'command', command: command('hook-selfcheck.mjs'), timeout: 10 }] })) added += 1;
   if (add(settings.hooks.SessionStart, 'hook-budget-check.mjs', { hooks: [{ type: 'command', command: command('hook-budget-check.mjs'), timeout: 10 }] })) added += 1;
   if (add(settings.hooks.SessionStart, 'makimono-host-detect.mjs', { hooks: [{ type: 'command', command: command('makimono-host-detect.mjs'), timeout: 10 }] })) added += 1;
@@ -237,6 +255,7 @@ try {
   if (add(settings.hooks.PreToolUse, 'pretooluse-delegation-warn.mjs', { matcher: 'Write|Edit|MultiEdit', hooks: [{ type: 'command', command: command('pretooluse-delegation-warn.mjs') }] })) added += 1;
   if (add(settings.hooks.PreToolUse, 'pretooluse-bash-delegation.mjs', { matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command: command('pretooluse-bash-delegation.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.PreToolUse, 'pretooluse-lane-guard.mjs', { matcher: 'Bash|PowerShell|Edit|Write|MultiEdit', hooks: [{ type: 'command', command: command('pretooluse-lane-guard.mjs'), timeout: 5 }] })) added += 1;
+  if (add(settings.hooks.PreToolUse, 'pretooluse-claude-docs-guard.mjs', { matcher: 'mcp__claude_ai_Claude_Docs__.*', hooks: [{ type: 'command', command: command('pretooluse-claude-docs-guard.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.PreToolUse, 'pretooluse-codex-invocation.mjs', { matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command: command('pretooluse-codex-invocation.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.PreToolUse, 'model-agent-guard.mjs', { matcher: 'Agent|Task', hooks: [{ type: 'command', command: command('model-agent-guard.mjs') }] })) added += 1;
   if (add(settings.hooks.PreToolUse, 'internal-recipient-gmail-guard.mjs', { matcher: HOOK_MATCHER, hooks: [{ type: 'command', command: command('internal-recipient-gmail-guard.mjs'), timeout: 5 }] })) added += 1;
@@ -262,6 +281,7 @@ try {
   if (add(settings.hooks.PreToolUse, 'pipe-stage-permissions.mjs', { matcher: 'Bash', hooks: [{ type: 'command', command: command('pipe-stage-permissions.mjs'), timeout: 5 }] })) added += 1;
   // 社内アプリを不具合・要望フォーム未搭載のまま本番反映させない(§2.11・2026-10-08 カフェアプリ事故の再発防止)。
   if (add(settings.hooks.PreToolUse, 'feedback-form-gate.mjs', { matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command: command('feedback-form-gate.mjs'), timeout: 10 }] })) added += 1;
+  added += migrate(settings.hooks.Stop, 'verify-before-done-detector.ps1', 'verify-before-done-detector.mjs', command('verify-before-done-detector.mjs'));
   // 人に手作業を頼むとき、初見の人でも実行できる手順になっているかを検査する(§1.5.1)。
   if (add(settings.hooks.Stop, 'verify-before-done-detector.mjs', { hooks: [{ type: 'command', command: command('verify-before-done-detector.mjs') }] })) added += 1;
   // kim が読む文書をローカルパスのリンクで渡す違反を止める(モバイルで1クリックで開けない・2026-08-07 kim確定ルール)
@@ -288,9 +308,12 @@ try {
     if (!Array.isArray(groups)) continue;
     for (const [name, timeout] of permanentTimeouts) added += setTimeoutFor(groups, name, timeout);
   }
+  // 全PC・全アカウントの全セッションで Remote Control を自動開始する(kim 2026-10-09)。CLI と VS Code 拡張の両方がこのキーを読む。
+  if (settings.remoteControlAtStartup !== true) { settings.remoteControlAtStartup = true; added += 1; }
   // 旧PCは hook が `powershell -NoProfile -File ...ps1` で登録され、実行ポリシーで無音死している。
   policyRepaired = repairPowerShellExecutionPolicy(settings.hooks);
   added += policyRepaired;
+  added += wrapRegisteredGates(settings, repo);
   // 差分が無い時は書かない(日次実行で .bak が積み上がるのを防ぐ)
   if (added || settingsHadBom) { backup(settingsFile); write(settingsFile, settings); }
   if (settingsHadBom) console.log('[register-hooks] settings.json の BOM を除去しました');

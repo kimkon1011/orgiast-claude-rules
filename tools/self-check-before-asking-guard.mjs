@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+export const GATE_CONTRACT = {"name": "self-check-before-asking-guard", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "self-check-before-asking-guard"}]};
 // 自分で調べられることを user に「確認して教えてください」と投げる応答を止める。
 // ONBOARDING §1.1(手作業ゼロ) / §1.2(頼む前に根本診断する)。
 //

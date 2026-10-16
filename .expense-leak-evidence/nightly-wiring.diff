@@ -1,0 +1,35 @@
+diff --git a/tools/nightly-batch.ps1 b/tools/nightly-batch.ps1
+index 32e98d9..7a212d6 100644
+--- a/tools/nightly-batch.ps1
++++ b/tools/nightly-batch.ps1
+@@ -88,6 +88,16 @@ try {
+     $node = Get-Command node -ErrorAction SilentlyContinue
+     if (-not $node) { $summary['node'] = 'error:nodeが見つからない'; Write-NightlyLog 'node確認' 'error:nodeが見つからない'; Finish-Nightly 1 }
+     $script:staleWorkReady = $true
++    # Runtime wiring: the existing nightly task picks this up without re-registration.
++    $expenseLeak = Join-Path $PSScriptRoot 'expense-leak-check.mjs'
++    if (Test-Path -LiteralPath $expenseLeak -PathType Leaf) {
++        try {
++            $expenseOutput = @(& $node.Source $expenseLeak --weekly 2>&1)
++            $expenseExit = $LASTEXITCODE
++            Write-NightlyStepResult 'expense-leak-check' $expenseExit $expenseOutput
++        } catch { Write-NightlyLog 'expense-leak-check' ('error:' + $_.Exception.Message) }
++    } else { Write-NightlyLog 'expense-leak-check' 'skip:script missing' }
++
+     Write-NightlyLog 'node確認' 'ok'
+     try {
+         $rotationOutput = @(& $node.Source (Join-Path $PSScriptRoot 'next-session-rotate.mjs') 2>&1)
+diff --git a/tools/register-nightly-tools.ps1 b/tools/register-nightly-tools.ps1
+index 4d7d26d..bf0d2d0 100644
+--- a/tools/register-nightly-tools.ps1
++++ b/tools/register-nightly-tools.ps1
+@@ -26,7 +26,8 @@ $specs = @(
+   [pscustomobject]@{ TaskName = 'OrgiastMorningBatch'; ScriptName = 'nightly-health-remediate.mjs'; ScriptArgs = @() },
+   [pscustomobject]@{ TaskName = 'OrgiastNightlyBatch'; ScriptName = 'ai-news-triage.mjs'; ScriptArgs = @('--confidence', 'high,medium', '--limit', '8') },
+   [pscustomobject]@{ TaskName = 'OrgiastNightlyBatch'; ScriptName = 'pricing-brief.mjs'; ScriptArgs = @('--limit', '8') },
+-  [pscustomobject]@{ TaskName = 'OrgiastNightlyBatch'; ScriptName = 'drive-hub-mirror.mjs'; ScriptArgs = @() }
++  [pscustomobject]@{ TaskName = 'OrgiastNightlyBatch'; ScriptName = 'drive-hub-mirror.mjs'; ScriptArgs = @() },
++  [pscustomobject]@{ TaskName = 'OrgiastNightlyBatch'; ScriptName = 'expense-leak-check.mjs'; ScriptArgs = @('--weekly') }
+ )
+ 
+ . (Join-Path $PSScriptRoot 'resolve-synced-repo.ps1')

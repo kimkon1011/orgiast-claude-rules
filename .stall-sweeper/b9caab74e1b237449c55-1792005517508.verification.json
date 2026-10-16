@@ -1,0 +1,89 @@
+{
+  "task": "T-5136 申請書提出期限の確認",
+  "verifiedAt": "2026-10-14T19:20:34.759Z",
+  "completed": true,
+  "summary": "T-5136「申請書提出期限の確認」は実務上対応済みと確認。第30回日本外科病理学会の期限は2026年10月9日（一部午前中）。同日11:11 JSTの提出メールに申請書3点が添付され、11:58 JSTの展示施工事務局返信に提出書類への言及あり。Discordでも11:20 JSTに望月果乃さんの送信完了報告を確認。台帳は未着手表示のままだが、外部送信・更新をせず調査結果を保存した。",
+  "classification": "実務対応済み・台帳未反映",
+  "directSystems": [
+    "Google Sheets",
+    "Discord",
+    "Gmail"
+  ],
+  "originalSource": {
+    "file": "/mnt/c/Users/uers/.claude/open-work.md",
+    "text": "P1 T-5136 申請書提出期限の確認（状態: 未着手）"
+  },
+  "deadline": {
+    "date": "2026-10-09",
+    "morningDocuments": [
+      "事前作業届",
+      "臨時搬出入申請書"
+    ],
+    "source": "Discord 学会リーダー相談窓口 2026-10-09 07:58 JSTの小林優紀さんの投稿",
+    "url": "https://discord.com/channels/715211007307284530/1382651184141303819/1557890039852044394"
+  },
+  "sent": {
+    "date": "Fri, 9 Oct 2026 11:11:45 +0900",
+    "subject": "第30回日本外科病理学会学術集会　出展につきましてご質問",
+    "from": "\"株式会社オージャスト　医学会併設企業展示コーディネート事業部\" <coordinate@orgiast.jp>",
+    "to": "ex-01@s-vision3.com",
+    "attachments": [
+      {
+        "filename": "事前作業申請書.xlsx",
+        "size": 285826
+      },
+      {
+        "filename": "臨時搬出入申請書（申請期限：搬出入日3日前）.xlsx",
+        "size": 403463
+      },
+      {
+        "filename": "【出展確認書・オプション申込書】第30回日本外科病理学会学術集会 (1).xlsx",
+        "size": 27277
+      }
+    ]
+  },
+  "receipt": {
+    "date": "Fri, 9 Oct 2026 11:58:41 +0900",
+    "from": "<ex-01@s-vision3.com>",
+    "subject": "RE: 第30回日本外科病理学会学術集会　出展につきましてご質問",
+    "excerpt": "提出いただきました書類は確認させていただき、何かございましたら改めてご連絡申し上げます。"
+  },
+  "discordCompletion": {
+    "author": "望月果乃",
+    "dateJst": "2026-10-09 11:20:37",
+    "content": "<@1382656441759957032> <@1382955208413417474> 送信完了しました！",
+    "url": "https://discord.com/channels/715211007307284530/1384435848610709534/1557940822257832127"
+  },
+  "limits": [
+    "事務局の書類内容の最終承認までは断定しない。",
+    "外部送信禁止のため台帳の状態更新は行っていない。"
+  ],
+  "actions": {
+    "externalMessagesSent": 0,
+    "externalDataMutations": 0,
+    "jobsRerun": 0,
+    "gitMutations": 0
+  },
+  "sources": [
+    {
+      "file": "/mnt/c/Users/uers/orgiast-main/.stall-sweeper/b9caab74e1b237449c55-1792005517508.sheet.json",
+      "sha256": "1f92f7fed7813dd70d15fb2edb4de728a4a17d297dab5d773e3bc184c4ed9f9e"
+    },
+    {
+      "file": "/mnt/c/Users/uers/orgiast-main/.stall-sweeper/b9caab74e1b237449c55-1792005517508.discord.json",
+      "sha256": "b37541f7b6f2b284ab82c6988007ea414a74d10d276d6878d635d51cf2215d5b"
+    },
+    {
+      "file": "/mnt/c/Users/uers/orgiast-main/.stall-sweeper/b9caab74e1b237449c55-1792005517508.production.json",
+      "sha256": "ff2a9411c6d7592ce34b11e9865afe6fee5a64baba09dd377a023838a9c5d383"
+    },
+    {
+      "file": "/mnt/c/Users/uers/orgiast-main/.stall-sweeper/b9caab74e1b237449c55-1792005517508.gmail.json",
+      "sha256": "46d7cb9809590006b4c3072d2606f88fb19645f5683daa089f46180e54c57f70"
+    },
+    {
+      "file": "/mnt/c/Users/uers/orgiast-main/.stall-sweeper/b9caab74e1b237449c55-1792005517508.attachments.json",
+      "sha256": "91f70ab4a0d6a5237e89a0a58b26fc742b0dc6c8512756688790660f96d55712"
+    }
+  ]
+}

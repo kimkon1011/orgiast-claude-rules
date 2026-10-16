@@ -1,0 +1,101 @@
+{
+  "task": "T-5061 臨時搬出入申請書の受付",
+  "verifiedAt": "2026-10-14T19:18:14.323942+00:00",
+  "completed": true,
+  "summary": "T-5061（臨時搬出入申請書の受付）は提出・受領確認済み。Gmailで2026年10月9日11:11:45の送信済みメールと申請書添付、同日11:58:41の展示施工事務局からの提出書類への返信を直接確認。台帳は未着手のままで更新していない。再提出・外部送信なし。正式な申請承認までは確認していない。",
+  "source": {
+    "file": "/mnt/c/Users/uers/.claude/open-work.md",
+    "sha256": "8f275b740c3769bfe6f5654d45615a78b41ad3be4ad0813dfa86ab3cab3caedd",
+    "matchedLines": [
+      "- P1 T-5061 臨時搬出入申請書の受付（状態: 未着手）"
+    ]
+  },
+  "directQueries": [
+    "Google Sheets: Discord日次タスク台帳 タスク8行目",
+    "Discord: 1016東京nxa日本外科病理学会 原文・前30件・後続65件",
+    "Google Sheets: 案件確認シート No.7",
+    "Gmail: seisaku-team@orgiast.jp 送信済みメールと展示施工事務局の返信"
+  ],
+  "verifiedMail": [
+    {
+      "date": "Fri, 9 Oct 2026 11:58:41 +0900",
+      "from": "<ex-01@s-vision3.com>",
+      "to": "\"'株式会社オージャスト　医学会併設企業展示コーディネート事業部'\" <coordinate@orgiast.jp>",
+      "subject": "RE: 第30回日本外科病理学会学術集会　出展につきましてご質問",
+      "labels": [
+        "Label_8987916178456560424",
+        "IMPORTANT",
+        "CATEGORY_FORUMS",
+        "INBOX"
+      ],
+      "attachments": []
+    },
+    {
+      "date": "Fri, 9 Oct 2026 11:11:45 +0900",
+      "from": "\"株式会社オージャスト　医学会併設企業展示コーディネート事業部\" <coordinate@orgiast.jp>",
+      "to": "ex-01@s-vision3.com",
+      "subject": "第30回日本外科病理学会学術集会　出展につきましてご質問",
+      "labels": [
+        "Label_8987916178456560424",
+        "SENT"
+      ],
+      "attachments": [
+        {
+          "filename": "事前作業申請書.xlsx",
+          "size": 285826,
+          "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        },
+        {
+          "filename": "臨時搬出入申請書（申請期限：搬出入日3日前）.xlsx",
+          "size": 403463,
+          "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        },
+        {
+          "filename": "【出展確認書・オプション申込書】第30回日本外科病理学会学術集会 (1).xlsx",
+          "size": 27277,
+          "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        }
+      ]
+    }
+  ],
+  "deadlineDiscrepancy": "台帳期限は10月8日だが、Discord原文は日本時間10月9日朝の「本日午前中」。送信・返信とも10月9日午前。",
+  "limitations": [
+    "提出と受領返信を確認。正式承認を確認したものではない。",
+    "台帳の状態は未着手のまま。外部の更新はしていない。",
+    "Gmailコネクタの検索は該当なし。共有メールボックスを直接照会して該当メールを確認。"
+  ],
+  "sideEffects": {
+    "externalWrites": 0,
+    "messagesSent": 0,
+    "paidActions": 0,
+    "permissionChanges": 0,
+    "jobsRetried": 0,
+    "gitChanges": 0
+  },
+  "artifacts": [
+    {
+      "file": "/mnt/c/Users/uers/orgiast-main/.stall-sweeper/263cfc4a1eb72c69c777-1792005358977.claim.json",
+      "sha256": "95d93fd0dfe20e0a740ff4b2827bc470f172b63135ee4134e3b88270066abf5f"
+    },
+    {
+      "file": "/mnt/c/Users/uers/orgiast-main/.stall-sweeper/263cfc4a1eb72c69c777-1792005358977.confirmation-sheet.json",
+      "sha256": "7d146e4e5be70eb32f843bfc36f45610c52c86c997f5056b8880471fb69c34c2"
+    },
+    {
+      "file": "/mnt/c/Users/uers/orgiast-main/.stall-sweeper/263cfc4a1eb72c69c777-1792005358977.discord.json",
+      "sha256": "7d0d56f3e8b08c09ebeb5c6da1318ba9ee72946e3d5f637c8d2680a9f369bce6"
+    },
+    {
+      "file": "/mnt/c/Users/uers/orgiast-main/.stall-sweeper/263cfc4a1eb72c69c777-1792005358977.gmail.json",
+      "sha256": "93631ee34dfd339f3897aea60f337933841a96ecae84db59e69df56997524eff"
+    },
+    {
+      "file": "/mnt/c/Users/uers/orgiast-main/.stall-sweeper/263cfc4a1eb72c69c777-1792005358977.mail-verification.json",
+      "sha256": "5a1f6cc3ea6321132c3fe093cec2def92fd572bb2319bde88c8b442f5781482e"
+    },
+    {
+      "file": "/mnt/c/Users/uers/orgiast-main/.stall-sweeper/263cfc4a1eb72c69c777-1792005358977.sheet.json",
+      "sha256": "8ea74f59fda1b84791ba3d19a03cf9c0dd7d472c335d83b12400aceae9f23127"
+    }
+  ]
+}

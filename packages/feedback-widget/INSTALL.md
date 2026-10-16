@@ -10,6 +10,8 @@ node -e "fetch('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rule
 
 既定の通知先は中継エンドポイント経由の kim への個別 DM です。Bot と webhook によるチャンネル通知は、既存アプリのための後方互換経路です。
 
+導入後は正本の `tools/feedback-apps.json` に `"<アプリ名>": "<owner>/<repo>"` を追加するPRを作成します。既存の登録名は再利用できます。マージ前にゲートを検証する場合は環境変数 `FEEDBACK_REPO_MAP=<アプリ名>=<owner>/<repo>` を指定してください。これが無いと投稿のIssue化・完了通知に到達しません。
+
 ## 環境変数
 
 | 名前 | 用途 | 必須条件 |

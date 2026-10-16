@@ -1,0 +1,8 @@
+{
+  "completed": false,
+  "summary": "未完了。専用定期タスク「フィードバック課題化（OrgiastFeedbackIntakeFast）」の無効化と10月2日からのログ停止を直接確認。10月15日の夜間実行記録はあるが処理成功を保証しない。再有効化・再実行は外部送信やブートストラップの破壊的Git処理を伴い得るため、指定の制約に従って実施していない。",
+  "evidence": {
+    "file": "/mnt/c/Users/uers/orgiast-main/.stall-sweeper/418f59b1f992045c7484-1792005775859.evidence.json",
+    "sha256": "2aeda655a1ef2215045a48bd46d9d9a0b8486d082d35d9e0551211ac51fddc40"
+  }
+}

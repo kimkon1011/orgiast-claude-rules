@@ -1,0 +1,4 @@
+{"t":"2026-10-09T13:09:52.854Z","provider":"gemini","model":"gemini-3.6-flash","in":214,"out":1433,"secs":20.741,"grounded":true}
+{"status":"ok","attempt":0,"failover":false,"secs":19.596,"t":"2026-10-09T13:10:12.671Z","provider":"gemini","model":"gemini-3.7-flash","in":35,"out":1,"usd":0.00003,"source":"llm-ask","searches":0}
+{"status":"ok","attempt":0,"failover":false,"secs":11.773,"t":"2026-10-09T13:11:43.191Z","provider":"gemini","model":"gemini-3.7-flash","in":35,"out":1,"usd":0.00003,"source":"llm-ask","searches":0}
+{"t":"2026-10-09T13:12:34.260Z","provider":"deepseek","model":"deepseek-chat","in":48,"out":11,"secs":0.338,"status":"ok","attempt":0,"failover":false}

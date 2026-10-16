@@ -14,7 +14,7 @@ export function install({home=os.homedir(),apply=false,failReadBack=false,log=co
   let raw;try{raw=fs.readFileSync(settingsFile,'utf8');}catch(e){throw new Error(`settings.json を読めません: ${e.message}`);}let settings;try{settings=JSON.parse(raw);}catch(e){throw new Error(`settings.json が不正JSONです: ${e.message}`);}
   const beforeCount=hookCount(settings),next=structuredClone(settings);
   let removed=0;for(const group of next.hooks?.Stop||[]){const hooks=group.hooks||[];group.hooks=hooks.filter(h=>{const old=String(h.command||'').includes('manual-handoff-detector.ps1');if(old)removed++;return !old;});}
-  const gate=`node "${path.join(repo,'tools','handoff-quality-gate.mjs')}"`,report=`node "${path.join(repo,'tools','rule-compliance-report.mjs')}"`;
+  const gate=`node "${path.join(repo,'tools','gate-hook-runner.mjs')}" "${path.join(repo,'tools','handoff-quality-gate.mjs')}"`,report=`node "${path.join(repo,'tools','rule-compliance-report.mjs')}"`;
   const added=addHook(next,'Stop',gate)+addHook(next,'SessionStart',report),expected=beforeCount-removed+added;
   const oldHook=path.join(claude,'hooks','manual-handoff-detector.ps1'),renamed=`${oldHook}.bak-20260828-superseded`,renamePlanned=fs.existsSync(oldHook)&&!fs.existsSync(renamed);
   const settingsChanged=removed>0||added>0;

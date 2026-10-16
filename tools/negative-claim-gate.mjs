@@ -1,3 +1,4 @@
+export const GATE_CONTRACT = {"name": "negative-claim-gate", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "negative-claim-gate"}]};
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';

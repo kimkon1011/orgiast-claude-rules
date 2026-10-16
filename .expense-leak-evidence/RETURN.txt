@@ -1,0 +1,126 @@
+TASK_ID
+expense-leak-check-weekly-20261009
+
+STATUS
+PARTIAL
+
+RESULT
+1. freee GETのみで金立替8口座を取得し、直近90日の登録待ち230件を抽出できた。
+2. Gmail 2受信箱の検索、判定辞書、検索上限、途中保存、state、Sheet重複除外、週次skip、夜間配線を実装。
+3. 本番検証は1回のみ。AI経費漏れチェックのヘッダーを作成し、kimへのDiscord DMは1通送信成功。確定データ追記は0行。
+4. YahooはWSLのPlaywrightブラウザ未配置でexit 1。検索未完了5件は再試行対象に残し、未完了を確定扱いにしていない。
+5. feat/expense-leak-check に9ファイルをコミット（8b253b2）。書込制約により独立クローン内。push・タスク登録変更は未実施。
+
+ARTIFACTS
+C:\Users\uers\orgiast-main\tools\expense-leak-check.mjs
+C:\Users\uers\orgiast-main\tools\lib\freee-auth.mjs
+C:\Users\uers\orgiast-main\tools\lib\sheets-dwd.mjs
+C:\Users\uers\orgiast-main\tools\freee-query.mjs
+C:\Users\uers\orgiast-main\tools\nightly-batch.ps1
+C:\Users\uers\orgiast-main\tools\register-nightly-tools.ps1
+C:\Users\uers\orgiast-main\tools\expense-leak-check.test.mjs
+C:\Users\uers\orgiast-main\tools\expense-leak-check.README.md
+C:\Users\uers\orgiast-main\README.md
+独立クローン: C:\Users\uers\orgiast-main\.expense-leak-work
+検証JSON: C:\Users\uers\orgiast-main\.expense-leak-evidence\runtime\.claude\logs\expense-leak\2026-10-09.json
+state: C:\Users\uers\orgiast-main\.expense-leak-evidence\runtime\.claude\state\expense-leak-check.json
+その他証跡: 同 .expense-leak-evidence 内の dry-no-yahoo.json / dry-yahoo.json / after-live-dry.json / sheet-readback.json / tests.log / nightly-wiring.diff / nightly-task-readback.json / freee-before.txt / freee-after.txt / freee-direct-after.txt
+移送用: 同 .expense-leak-evidence 内の expense-leak-check.bundle / expense-leak-check.patch
+Sheet: https://docs.google.com/a/orgiast.jp/spreadsheets/d/1n4KyUN6iEGwj0Tg0boZjhZUDhCCiJovvgEaRBCT26gE/edit#gid=2094920936 （kim@orgiast.jpで開く）
+
+VERIFICATION
+実行cwd: /mnt/c/Users/uers/orgiast-main
+実行環境: WSL Node。PowerShellは構文解析とタスクの読み取りのみ実行。
+run-live.mjsは既存購買部アプリのDB設定を子プロセス環境へ渡し、Google鍵のパス、Yahoo既存CLIのパス、Discord設定のホームをWindows側の実在位置へ解決する検証用ラッパー。値は出力・コードへの埋込をしていない。
+state/logはサンドボックスの書込範囲内の EXPENSE_LEAK_HOME に保存。通常のWindowsホームには書いていない。
+
+1. PASS（初回は設定欠落、補完後に比較）
+  切出し前: node .expense-leak-evidence/run-live.mjs tools/freee-query.mjs --partners 'クラフトフィックス' > .expense-leak-evidence/freee-before.txt
+  切出し後: node .expense-leak-evidence/run-live.mjs tools/freee-query.mjs --partners 'クラフトフィックス' > .expense-leak-evidence/freee-after.txt
+  比較: diff -u .expense-leak-evidence/freee-before.txt .expense-leak-evidence/freee-after.txt
+  ローカル.env.local補完後の直接実行: node tools/freee-query.mjs --partners 'クラフトフィックス' > .expense-leak-evidence/freee-direct-after.txt
+  比較: diff -u .expense-leak-evidence/freee-before.txt .expense-leak-evidence/freee-direct-after.txt
+  件数1、id=110252788、株式会社クラフトフィックス。出力は完全一致、各成功実行exit 0。
+
+2. PASS
+  node .expense-leak-evidence/run-live.mjs tools/expense-leak-check.mjs --dry-run --limit 5 --no-yahoo --out /mnt/c/Users/uers/orgiast-main/.expense-leak-evidence/dry-no-yahoo.json
+  exit 0。8口座、516明細、status=1:230件。結果5件すべてstatus=1、walletables由来の「金立替／アメリカン・エキスプレス」を含む。
+  Gmail検索はkim=5、seisaku-team=5、Yahoo=0。0件ではないため180日/対照群の再実行は不要。
+
+3. PARTIAL
+  node .expense-leak-evidence/run-live.mjs tools/expense-leak-check.mjs --dry-run --limit 3 --out /mnt/c/Users/uers/orgiast-main/.expense-leak-evidence/dry-yahoo.json
+  exit 0で継続。Yahoo起動1回、exit 1（ブラウザ未配置）。yahooUnavailable=false、searches.yahooFailed=true。未ログインのexit 2とは区別。
+  実ブラウザの連続検索・実アカウントのexit 2は未検証。
+  単体テストではYahoo同時起動最大1、exit 2後は追加起動0、yahooUnavailable=true、Gmail継続を確認。
+
+4. PARTIAL
+  本番唯一の実行: node .expense-leak-evidence/run-live.mjs tools/expense-leak-check.mjs --limit 5 --verification
+  exit 0、候補230、処理5、確定追記0、DM1通（notifyKim delivered=dm）。
+  専用タブsheetId=2094920936。13列ヘッダー一致、L列id件数0をGETでread-back。既存8タブの更新なし。
+  Yahoo失敗により5件は未検索(障害)で、stateにはcheckedAt/searchStatusを保存し確定verdictを付けていない。
+  その後のdry-run: node .expense-leak-evidence/run-live.mjs tools/expense-leak-check.mjs --dry-run --limit 5 --out /mnt/c/Users/uers/orgiast-main/.expense-leak-evidence/after-live-dry.json
+  exit 0、cacheHits=0、Gmail各5、Yahoo1（再試行）。したがって実データでの追記・同じid再検索抑止の成功は未達。
+  模擬正常系では5行追記、全5行の対応状況=検証(削除可)、2回目dry-runのcacheHits=5、追加検索0、追加DM0を確認。
+  再送・追加の本番追記はしていない。
+
+5. PASS
+  node --test tools/expense-leak-check.test.mjs 内で実CLIを子プロセス実行。
+  環境 EXPENSE_LEAK_TODAY=2026-10-13、隔離ホームのstate.lastRunAt=2026-10-13T03:00:00+09:00。
+  node /mnt/c/Users/uers/orgiast-main/tools/expense-leak-check.mjs --weekly
+  stdout=skip: weekly expense-leak-check、exit 0。実行前後のstateはバイト一致。隔離ホームを削除し、本番stateは変更していない。
+
+6. PASS
+  node --check tools/lib/freee-auth.mjs
+  node --check tools/lib/sheets-dwd.mjs
+  node --check tools/expense-leak-check.mjs
+  node --check tools/expense-leak-check.test.mjs
+  全4ファイルexit 0。
+  node --test tools/expense-leak-check.test.mjs tools/gmail-search.test.mjs tools/register-nightly-tools.test.mjs tools/nightly-batch-error-detail.test.mjs
+  tests=31、pass=31、fail=0、skip=0。
+  PowerShell Parser.ParseFile: nightly-batch.ps1 / register-nightly-tools.ps1 ともparseErrors=0。バッチ本体や登録処理は実行していない。
+
+7. PASS（配線特定と差分作成。自動実行への反映は未実施）
+  git diff -- tools/register-nightly-tools.ps1 tools/nightly-batch.ps1 を nightly-wiring.diff に保存。
+  register-nightly-tools.ps1追加行:
+  [pscustomobject]@{ TaskName = 'OrgiastNightlyBatch'; ScriptName = 'expense-leak-check.mjs'; ScriptArgs = @('--weekly') }
+  nightly-batch.ps1にも直接 --weekly を呼ぶ固定ブロックを追加。
+  Get-ScheduledTask -TaskName OrgiastNightlyBatch の読み取りで、実タスクはnightly-bootstrap.ps1 -Target tools\nightly-batch.ps1経由と確認。
+  bootstrapはORGIAST_NIGHTLY_REPO、未設定時は~/.claude/nightly-repoをorigin/mainと同期して実行する。
+  register-nightly-tools.ps1のspecsは実行時に読み込まれず、登録時の追加Action用。
+  既存タスク再登録は不要。ただし未pushなので同期元には本変更がなく、現時点では自動実行されない。
+
+DECISIONS
+- 会計APIはGETのみ。共有認証の既存OAuth refresh POSTとトークンDB更新は、明示された「既存取得ロジックをそのまま再利用」に従い維持した。別のrefreshロジックは追加していない。
+- Sheet辞書が存在しない場合のみ内蔵辞書へfallback。認証・読み取り障害を「タブなし」と偽装しない。
+- 証跡が確実に見つかった場合は他受信箱が障害でも要申請にできる。証跡なしで検索障害・上限に達したものは未完了として保持し、確定cache/Sheet追記を保留する。
+- Yahoo exit 2は仕様通り以後スキップし、Gmailで判定、DMに再ログイン案内を付ける。exit 1は再ログインと断定しない。
+- Yahooは一覧のみ。構造化されていない送信者を推測しない。日時/金額/利用先が確認できない行は証跡として断定しない。Yahooリンクは受信箱トップ。
+- 検証マーキングを通常ジョブに残さないため --verification を追加した。
+- 同日の再起動は月曜でもskipし、複数Scheduler Actionの二重実行を防ぐ。
+- 既存freee-queryの挙動維持のため、トークン更新ロジックは変更せず切り出しだけに限定。
+
+ISSUES
+- WSL側Playwrightブラウザなし。Yahoo実検索の成功・実ログイン状態は未確認。ブラウザプロファイルは複製・変更していない。
+- 本番追記0行。DMは既に許可済み1回を使用済み。追加本番テストには新たな許可が必要。
+- 指定.env.localのDBキーが欠けていた。既存購買部アプリのDATABASE_URLを同ファイルのPURCHASING_APP_DATABASE_URLへコピーして補完（gitignored、値は非出力、未コミット）。夜間同期先の環境設定は別途確認が必要。
+- 元の.gitはworkspace外 /mnt/c/Users/uers/Downloads/orgiast-claude-rules/.git/worktrees/orgiast-main を参照し書込不可。そのため元作業ツリーのブランチは変更せず、内部の独立クローンにコミットした。既存のユーザー変更はコミットしていない。
+- ホーム直下は書込許可範囲外なので、検証結果とstateはworkspace内の代替ホームに保存した。
+- Google SheetsはAPI read-backで構造確認。ネイティブUIの描画確認は未実施。
+- Phase E PDF回収は未実装。
+
+LEARNING
+- walletablesは {walletables:[{id,name,bank_id,type,update_date}]}。
+- wallet_txnsは {wallet_txns:[...]}。実データでid/amount/statusは数値、dateはYYYY-MM-DD、description/walletable_type/entry_sideとwalletable_idを確認。
+- 直近90日(2026-07-11〜2026-10-09): 対象8口座、明細516件、status=1は230件、2は166件、3は120件、4は0件。クライアント側status===1で抽出。
+- limit=100とoffset=0,100,...、口座id/typeの組で全ページ取得。公式参照: https://github.com/freee/freee-accounting-sdk-javascript/blob/master/docs/WalletTxnsApi.md
+- 夜間実登録はbootstrap→同期用repo→nightly-batchの固定呼出し。register-nightly-toolsのspecsとは別経路。
+
+NEXT
+1. Windowsの既存Yahoo環境でdry-runを実行し、検索成功またはexit 2の実挙動を確認する（送信なし）。
+   node "C:\Users\uers\orgiast-main\tools\expense-leak-check.mjs" --dry-run --limit 3
+2. 本番追記・実state cacheの未達検証は、追加送信/追記の許可を得てから実施する。今回の許可1回は消費済み。
+3. 独立クローンのコミットを主作業ツリーに取り込む場合の例（この環境では.gitが書込禁止のため未実行）:
+   git -C "C:\Users\uers\orgiast-main" fetch "C:\Users\uers\orgiast-main\.expense-leak-evidence\expense-leak-check.bundle" feat/expense-leak-check:feat/expense-leak-check
+   ローカル変更があるため、自動checkout/cherry-pickはしていない。ブランチ反映・pushは別途指示後。
+4. 夜間稼働には同期元へ変更を反映し、実行先のPURCHASING_APP_DATABASE_URLと既存Google/Yahoo/Discord環境を確認する。タスク再登録コマンドは不要。
+5. Phase E: Gmail領収書PDF化とDriveのAI自動回収_未確認フォルダへの保存を別途実装する。既存Driveファイルには触れていない。

@@ -20,3 +20,23 @@ test('ignores broken lines and rejects empty text', () => {
   assert.deepEqual(listDecisions({ home: dir }), []);
   assert.throws(() => addDecision({ text: '   ' }, { home: dir }), /テキスト/);
 });
+
+test('ORGIAST_HOME selects decision storage while explicit home takes precedence', t => {
+  const dir = home();
+  const explicit = home();
+  const previous = process.env.ORGIAST_HOME;
+  t.after(() => {
+    if (previous === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previous;
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(explicit, { recursive: true, force: true });
+  });
+  process.env.ORGIAST_HOME = dir;
+  assert.equal(queuePath(), path.join(dir, '.claude', 'pending-decisions.jsonl'));
+  const record = addDecision({ text: '環境変数の保存先' });
+  markDecisions([record.id], { status: 'batched' });
+  assert.equal(listDecisions()[0].status, 'batched');
+  addDecision({ text: '明示した保存先' }, { home: explicit });
+  assert.equal(listDecisions({ home: explicit })[0].text, '明示した保存先');
+  assert.equal(listDecisions().length, 1);
+});

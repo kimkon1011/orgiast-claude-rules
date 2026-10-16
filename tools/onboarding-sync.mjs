@@ -461,10 +461,10 @@ async function alertKeyserveFailure(previous, now, status) {
     saveKeysAlertState(previous, now);
   } catch {}
 }
-async function provisionKeys(now, options = {}) {
+export async function provisionKeys(now, options = {}) {
   if (dryRun) return;
   const previous = keysState();
-  if (!shouldRunKeys(previous, now, force)) {
+  if (!shouldRunKeys(previous, now, options.force || force)) {
     if (keySyncIsStale(previous, now)) await alertKeyserveFailure(previous, now);
     return;
   }
@@ -485,7 +485,7 @@ async function provisionKeys(now, options = {}) {
     if (secret) log('legacy secret を使用中（keyserve.env 未受領）');
   }
   if (!secret) {
-    await alertKeyserveFailure(previous, now);
+    if (!options.quiet) await alertKeyserveFailure(previous, now);
     return;
   }
   try {
@@ -493,11 +493,11 @@ async function provisionKeys(now, options = {}) {
     const requestKeys = (requestSecret) => fetch(keyserveUrl, {
       method: 'POST',
       headers: { ...keyserveAuthHeaders(requestSecret, Date.now(), pcId), ...(enrollToken ? { 'x-orgiast-enroll': enrollToken } : {}) },
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(options.timeoutMs || 15000),
     });
     let response = await requestKeys(secret);
     enrollHttpStatus = response.status;
-    if (response.status === 401 && fs.existsSync(previousSecretPath)) {
+    if (!options.singleAttempt && response.status === 401 && fs.existsSync(previousSecretPath)) {
       const previousSecret = readEnvValue(previousSecretPath, 'ORGIAST_KEYSERVE_SECRET');
       if (previousSecret) {
         response = await requestKeys(previousSecret);

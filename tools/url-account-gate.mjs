@@ -71,9 +71,9 @@ export function judge(text, { services = catalog } = {}) {
     }
     if (/user_[A-Za-z0-9]+|ユーザーID|(?:^|[\s*（(])[A-Za-z0-9]{16,}(?=$|[\s*）)])/i.test(nearby)) return true;
     if (globalAccount) return false;
-    const nearby = lines.slice(Math.max(0, line - 2), line + 3);
-    const hasUnresolved = nearby.some(value => unresolvedFact.test(value));
-    return !nearby.some(value =>
+    const context = lines.slice(Math.max(0, line - 2), line + 3);
+    const hasUnresolved = context.some(value => unresolvedFact.test(value));
+    return !context.some(value =>
       email.test(value)
       || (!hasUnresolved && /(?:で開く|アカウント)/.test(value) && /\*\*[^*\n]+\*\*/.test(value))
       || (value.includes('open-url-as.ps1') && value.includes('-Account'))

@@ -82,7 +82,7 @@ function seed(home, rows) {
   fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
   fs.writeFileSync(ledgerFile(home), rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
 }
-const baseIo = (extra = {}) => ({ digest: async () => ({ sent: false }), sheetConfig: () => ({ url: 'u', token: 't' }), cwdExists: () => true, digest: async () => ({ sent: false, count: 0 }), ...extra });
+const baseIo = (extra = {}) => ({ sheetConfig: () => ({ url: 'u', token: 't' }), cwdExists: () => true, digest: async () => ({ sent: false, count: 0 }), ...extra });
 const evAny = (now) => ({ transcript: { count: 1, lastAt: now - 8 * H, snippets: [] }, files: { names: [], lastAt: 0 }, runs: { names: [] }, lastEvidenceAt: now - 8 * H, any: true });
 
 test('watch: 猶予6時間未満は判定しない', async () => {
@@ -323,4 +323,26 @@ test('digest: 未巡回も数え、重複/完了/期限切れを除外し、11�
   assert.match(formatDigest([{ status: 'done' }], now), /^未処理の約束 0件・最古 0日前\n/);
   const preview = await digest({ home: tmp(), now, dryRun: true, io: { label: 'test-PC', readLedger: () => rows, readState: () => ({}) } });
   assert.match(preview.text, /^未処理の約束 11件・最古 11日前（詰まり警告）/);
+});
+
+test('schedule: watchは4回・4件分の時間枠を確保し既存PCも日次更新する', () => {
+  const script = fs.readFileSync(new URL('./register-auto-progress-task.ps1', import.meta.url), 'utf8');
+  const triggers = script.match(/\$watchTriggers = (.*)/)[1];
+  assert.deepEqual([...triggers.matchAll(/-At '([^']+)'/g)].map(m => m[1]), ['09:00', '13:00', '18:00', '22:00']);
+  assert.match(script, /-ExecutionTimeLimit \(New-TimeSpan -Minutes 120\)/);
+  const poller = fs.readFileSync(new URL('./fleet-poller.ps1', import.meta.url), 'utf8');
+  assert.match(poller, /if \(\$Dry\) \{ DrySkip 'register-auto-progress-task.ps1/);
+  assert.match(poller, /-File \$autoProgressInstaller/);
+});
+
+
+test('watch: 同一session・同一時刻の重複でも最後の行だけ再開対象として残す', async () => {
+  const home = tmp(), now = Date.parse('2026-10-17T12:00:00Z');
+  const row = { sessionId: 's', ts: new Date(now - 10 * H).toISOString(), status: 'open', cwd: home };
+  seed(home, [{ ...row, promise: 'old' }, { ...row, promise: 'latest' }]);
+  const resumed = [];
+  const result = await watch({ home, now, io: noEvidenceIo({ resume: async r => { resumed.push(r.promise); return { outcome: 'progressed', reason: 'ok' }; } }) });
+  assert.equal(result.superseded, 1);
+  assert.deepEqual(resumed, ['latest']);
+  assert.deepEqual(readLedger(ledgerFile(home)).map(r => r.status), ['superseded', 'resumed']);
 });

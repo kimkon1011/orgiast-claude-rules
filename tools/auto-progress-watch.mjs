@@ -178,12 +178,14 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   const rows = readLedger(file);
   const candidates = latestOpenPromises(rows);
   const selected = new Set(candidates);
-  for (const row of rows) {
-    if (WATCHED.has(row.status) && !selected.has(row)) {
-      patch(rowKey(row), { status: 'superseded' });
-      summary.superseded += 1;
-    }
-  }
+  const normalized = rows.map((row) => {
+    if (!WATCHED.has(row.status) || selected.has(row)) return row;
+    summary.superseded += 1;
+    return { ...row, status: 'superseded' };
+  });
+  // Update by row identity: equal timestamps share rowKey, so patch(key) would
+  // also supersede the selected latest row. No await occurs between read/write.
+  if (!dryRun && summary.superseded) writeLedger(file, normalized);
   const needsKim = row => !['', 'なし'].includes(String(row.nextKim ?? '').trim());
   candidates.sort((a, b) => Number(needsKim(a)) - Number(needsKim(b)) || Date.parse(a.ts) - Date.parse(b.ts));
   for (const row of candidates) {

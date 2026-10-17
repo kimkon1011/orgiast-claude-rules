@@ -52,6 +52,20 @@ try {
   } catch {}
 }
 
+# Refresh auto-progress tasks daily so existing PCs receive schedule changes too.
+try {
+  $autoProgressInstaller = Join-Path $repo 'tools\register-auto-progress-task.ps1'
+  if ($repo -and (Test-Path -LiteralPath $autoProgressInstaller -PathType Leaf)) {
+    if ($Dry) { DrySkip 'register-auto-progress-task.ps1 (refresh watch/digest schedules)' }
+    else {
+      & powershell -NoProfile -ExecutionPolicy Bypass -File $autoProgressInstaller *> $null
+      if ($LASTEXITCODE -ne 0) { throw "register-auto-progress-task.ps1 exit $LASTEXITCODE" }
+    }
+  }
+} catch {
+  Write-Warning ("auto-progress-self-repair-failed: {0}" -f $_.Exception.Message)
+}
+
 # 自己修復: 全PCで Claude 環境の Google Drive 日次バックアップを登録する
 try {
   if ($repo -and -not (Get-ScheduledTask -TaskName 'ClaudeDailyDriveBackup' -ErrorAction SilentlyContinue)) {

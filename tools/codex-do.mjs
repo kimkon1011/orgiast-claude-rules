@@ -332,6 +332,26 @@ export function shouldFlagEmptyFallbackDiff({ executorName, wantedEdit, timedOut
 // 併用すると run_shell_command ごと消え、代替実行者が「編集はできるがテストも git も一切
 // 実行できない」状態になる(未検証の編集だけ残して 80 呼び出しで停止。2026-10-10 実害)。
 // Codex クールダウン中の代替は実装レーンなので、シェルは塞がない。
+// `qwen` 実行ファイルは全PCに導入されているわけではない。無い機体では kind:'qwen' のバックエンドが
+// 毎回 0.07 秒で死ぬ（2026-10-15 実測: openrouter-free が 8/8 即失敗・secs 0.062〜0.077）。
+// しかも Windows 日本語版の stderr は cp932 で記録され文字化けするため executor-usage.jsonl から
+// 原因が読めず、health-check の正規表現にも掛からない＝死んだ2本目が誰にも見えない。
+// 実行前に実体を確認し、無い場合は連鎖に「死んだ枠」を数えず、ASCII で読める理由を残す。
+export function qwenExecutableAvailable({ spawnImpl = spawnSync, env = process.env, platform = process.platform } = {}) {
+  const probe = platform === 'win32'
+    ? spawnImpl('where', ['qwen'], { encoding: 'utf8', windowsHide: true, timeout: WSL_PROBE_TIMEOUT_MS, env })
+    : spawnImpl('sh', ['-lc', 'command -v qwen'], { encoding: 'utf8', windowsHide: true, timeout: WSL_PROBE_TIMEOUT_MS, env });
+  return probe?.status === 0;
+}
+
+// kind:'qwen' のバックエンドを起動してよいか。使えないときの理由文もここで確定させる
+// （ログの文字化けに依存しない英語1行＝後から grep できる形にする）。
+export function qwenBackendSkipReason(backend, { available = qwenExecutableAvailable() } = {}) {
+  if (!backend || backend.kind !== 'qwen') return null;
+  if (available) return null;
+  return `'qwen' executable not found (preflight skip): install the qwen CLI or drop ${backend.name} from codex-fallback-order.json`;
+}
+
 export function buildQwenArgs({ model = 'deepseek-chat', timeoutSecs = 1800, maxToolCalls = 80, marker = 'Follow-the-instructions-provided-on-stdin.' } = {}) {
   return [
     '--auth-type', 'openai',
@@ -1105,12 +1125,26 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
     } else {
       const chainStarted = Date.now();
       fallbackChain = [];
+      // qwen CLI の有無は1回だけ調べる（kind:'qwen' が複数あっても結果は同じ）。
+      const qwenProbe = { available: qwenExecutableAvailable() };
+      let attemptedAny = false;
       for (const backend of backends) {
         const backendTimeout = chainBackendBudgetSecs(timeoutSeconds, (Date.now() - chainStarted) / 1000);
         if (backendTimeout <= 0) {
           console.error(`[codex-do] フォールバック全体の時間枠(${timeoutSeconds}秒)を使い切ったため、残りのバックエンドは実行しません`);
           break;
         }
+        const skipReason = qwenBackendSkipReason(backend, qwenProbe);
+        if (skipReason) {
+          // 実行しても 0.07 秒で死ぬだけ。連鎖に死んだ枠を数えず、読める理由だけ残す。
+          console.error(`[codex-do] backend=${backend.name} をスキップ: ${skipReason}`);
+          fallbackChain.push({
+            backend: backend.name, model: backend.model, status: null, timedOut: false,
+            spawnFailed: false, out: 0, secs: 0, stderrTail: skipReason, outcome: 'lane_absent'
+          });
+          continue;
+        }
+        attemptedAny = true;
         const attemptStarted = Date.now();
         lastBackend = backend;
         console.log(`[codex-do] fallback backend=${backend.name} model=${backend.model}`);
@@ -1174,6 +1208,9 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
         // 上限/エラー以外の失敗(実装エラー等)は次のバックエンドへ落とさず、この結果で止める。
         break;
       }
+      // 全バックエンドが preflight でスキップされた場合、result は直前の codex 失敗のまま。
+      // 成功扱いにならないよう status を確定させる（0/null は失敗へ倒す）。
+      if (!attemptedAny && result != null && (result.status === 0 || result.status == null)) result.status = 1;
     }
   }
 }

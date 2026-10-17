@@ -4,6 +4,7 @@ export const GATE_CONTRACT = {"name": "stop-gate-runner", "remedies": [{"kind": 
 // 9プロセスの逐次差し戻しを1回の評価・1つのblockへまとめ、userの再読を最大1回にする。
 import { evaluatePastLogSearch, listPlaybookNames, classifyHandoff } from './past-log-search-gate.mjs';
 import fs from 'node:fs';
+import { evaluateInvitePermissions } from './hooks/discord-invite-permission-gate.mjs';
 import { applyNamedGatePolicy } from './gate-runtime.mjs';
 import crypto from 'node:crypto';
 import os from 'node:os';
@@ -119,7 +120,10 @@ function ledger(record) {
 
 export async function run(input, context, auditOptions = {}) {
   const sessionId = input?.session_id || input?.sessionId || path.basename(input?.transcript_path || '', '.jsonl');
-  const assistantText = input?.assistant_text || context.assistantText;
+  const assistantText = input?.last_assistant_message ?? input?.assistant_text ?? context.assistantText;
+  // Deterministic permission guard: enforce before retry/close bypasses and rollout demotion.
+  const invite = evaluateInvitePermissions(assistantText);
+  if (invite.decision === 'block') return invite;
   const base = { sessionId, blockedBy: [], reasonCodes: [], excerpt: String(assistantText || '').slice(0, 200) };
   if (input?.stop_hook_active) { const record = { ...base, verdict: 'skipped', reasonCodes: ['stop_hook_active'] }; ledger(record); return { record }; }
   if (!assistantText) { const record = { ...base, verdict: 'skipped', reasonCodes: [context.reason || 'no-assistant-text'] }; ledger(record); return { record }; }

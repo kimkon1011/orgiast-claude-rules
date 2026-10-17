@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { parseHandoff } from './auto-session.mjs';
-import { applyAutoHeal, collectFindings, emptyOutputReason, isCooldownSkippedRow, isQuotaLimitedRow, lowYieldBackends, parseRateLimitsFromText, readCodexUsedPercent, upsertFixTasks, windowResetsAfterLimit } from './delegation-health-check.mjs';
+import { applyAutoHeal, collectFindings, emptyOutputReason, isCooldownSkippedRow, isQuotaLimitedRow, isTransientFailureRow, lowYieldBackends, parseRateLimitsFromText, readCodexUsedPercent, upsertFixTasks, windowResetsAfterLimit } from './delegation-health-check.mjs';
 
 const NOW = new Date('2026-09-09T12:00:00.000Z');
 const homes = [];
@@ -13,6 +13,40 @@ function write(dir, name, value) { fs.writeFileSync(path.join(dir, '.claude', na
 function row(value) { return `${JSON.stringify(value)}\n`; }
 function handoff() { return '<!-- NEXT-SESSION v1 -->\n## 対象\nテスト\n## 残TODO\n\n1. 既存TODO\n\n## 完了条件\n完了\n'; }
 test.after(() => homes.forEach((dir) => fs.rmSync(dir, { recursive: true, force: true })));
+
+test('isTransientFailureRow は network と 5xx だけを true にする', () => {
+  for (const status of ['network', 'timeout', 'http_500', 'HTTP_503', 500, 599]) assert.equal(isTransientFailureRow({ status }), true, String(status));
+  for (const status of ['http_429', 'http_402', 'http_401', 'error', 'ok', 0, 404]) assert.equal(isTransientFailureRow({ status }), false, String(status));
+});
+
+test('429全滅に一時的なnetwork失敗が混ざっても残高切れのkimiをhighの未修理全滅にしない', () => {
+  const dir = home();
+  const rows = [];
+  for (let i = 0; i < 421; i++) rows.push({ t: new Date(NOW.getTime() - (i % 1200) * 60_000).toISOString(), provider: 'kimi', model: 'kimi-k3', in: 0, out: 0, secs: 0.2, status: 'http_429', attempt: i % 3, failover: false,
+    reason: 'HTTP429: {"error":{"message":"is suspended due to insufficient balance, please recharge","type":"exceeded_current_quota_error"}}' });
+  rows.push({ t: '2026-09-09T10:00:00.000Z', provider: 'kimi', model: 'kimi-k3', in: 0, out: 0, secs: 10.6, status: 'network', attempt: 0, failover: false });
+  rows.push({ t: '2026-09-09T10:01:00.000Z', provider: 'kimi', model: 'kimi-k3', in: 0, out: 0, secs: 10.6, status: 'network', attempt: 0, failover: false });
+  write(dir, 'executor-usage.jsonl', rows.map(row).join(''));
+  const findings = collectFindings({ home: dir, now: NOW });
+  assert.equal(findings.some((f) => f.id === 'lane_outage_unrepaired'), false);
+  const limit = findings.find((f) => f.id === 'provider_usage_limit');
+  assert.equal(limit.provider, 'kimi');
+  assert.equal(limit.severity, 'low');
+  assert.equal(limit.fixTask, undefined);
+  assert.match(limit.title, /残高切れ/);
+  assert.equal(limit.evidence[0], '423件すべて失敗');
+  assert.ok(limit.evidence.includes('残高切れ 421件'));
+  assert.ok(limit.evidence.includes('一時的な通信失敗 2件'));
+});
+
+test('通信失敗だけで全滅したレーンは従来どおり high の未修理全滅にする', () => {
+  const dir = home();
+  const rows = [0, 1, 2].map((i) => ({ t: `2026-09-09T10:0${i}:00.000Z`, provider: 'kimi', model: 'kimi-k3', in: 0, out: 0, secs: 10, status: 'network', attempt: 0, failover: false }));
+  write(dir, 'executor-usage.jsonl', rows.map(row).join(''));
+  const findings = collectFindings({ home: dir, now: NOW });
+  assert.equal(findings.some((f) => f.id === 'provider_usage_limit'), false);
+  assert.equal(findings.find((f) => f.id === 'lane_outage_unrepaired').severity, 'high');
+});
 
 test('偽陽性を検出し cooldown を解除して残TODO先頭へ起票する', () => {
   const dir = home();

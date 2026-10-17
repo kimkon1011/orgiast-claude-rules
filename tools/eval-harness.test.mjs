@@ -15,7 +15,7 @@ function runHarness(t, { cooldown = {}, tasks, config, overlay, responses = [], 
   const tools = path.join(home, 'tools'), evalDir = path.join(home, '.claude', 'eval');
   fs.mkdirSync(path.join(tools, 'lib'), { recursive: true });
   fs.mkdirSync(evalDir, { recursive: true });
-  for (const file of ['eval-harness.mjs', 'eval-exec-checks.mjs', 'is-entry.mjs', 'routing-table.mjs', 'llm-fallback.mjs', 'rate-budget.mjs', 'lib/provider-daily-cooldown.mjs', 'lib/eval-config.mjs']) {
+  for (const file of ['eval-harness.mjs', 'eval-exec-checks.mjs', 'is-entry.mjs', 'routing-table.mjs', 'llm-fallback.mjs', 'rate-budget.mjs', 'redact-secrets.mjs', 'lib/provider-daily-cooldown.mjs', 'lib/eval-config.mjs']) {
     fs.copyFileSync(new URL(file, import.meta.url), path.join(tools, file));
   }
   const seed = tasks || [{ id: 'one', category: 'classification', prompt: 'test', expect: { type: 'contains', value: 'ok' } }];

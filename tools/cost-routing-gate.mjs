@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isUserFacingPrompt, RESEARCH_FIRST_CONTEXT } from './lib/user-facing.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -102,15 +103,16 @@ try {
   if (prompt.length < 2) process.exit(0);
   const repo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
   const route = classifyRequest(prompt, { repoDir: repo });
+  const userFacing = route.lane === 'consult' || isUserFacingPrompt(prompt);
   if (input.session_id) try {
     const home = process.env.ORGIAST_HOME || os.homedir(), dir = path.join(home, '.claude', 'session-lane');
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, `${input.session_id}.json`), `${JSON.stringify({ lane: route.lane, category: route.category, at: new Date().toISOString(), prompt: prompt.slice(0, 120), toolCalls: 0, laneOk: prompt.includes('[LANE-OK]'), primary: route.primary }, null, 2)}\n`);
+    fs.writeFileSync(path.join(dir, `${input.session_id}.json`), `${JSON.stringify({ userFacing, lane: route.lane, category: route.category, at: new Date().toISOString(), prompt: prompt.slice(0, 120), toolCalls: 0, laneOk: prompt.includes('[LANE-OK]'), primary: route.primary }, null, 2)}\n`);
   } catch {}
   const codex = `node "${path.join(repo, 'tools', 'codex-do.mjs')}" "指示"`;
   const ask = `node "${path.join(repo, 'tools', 'llm-ask.mjs')}"`;
   const enqueue = `node "${path.join(repo, 'tools', 'batch-enqueue.mjs')}"`;
-  const parts = [`[実行レーン] ${route.lane}（理由: ${route.reason}）→ 主: ${route.primary} ／ 失敗時: ${route.fallback} ／ Fable/Opus 本体は「判定・委譲・結果確認」の 3 ターン以内。Sonnet は非Claude が全部落ちた時だけ、Opus は設計判断だけ。${route.lane === 'consult' ? ' ツールを使わず、または Read/Grep 数回で答える。実装・調査に踏み込むなら委譲。' : ''}`];
+  const parts = userFacing ? [RESEARCH_FIRST_CONTEXT, `[実行レーン] ${route.lane}（理由: ${route.reason}）→ 主: ${route.lane === 'consult' ? 'Fable 本体' : route.primary} ／ 失敗時: ${route.lane === 'consult' ? '必要に応じて該当レーンへ委譲' : route.fallback}`] : [`[実行レーン] ${route.lane}（理由: ${route.reason}）→ 主: ${route.primary} ／ 失敗時: ${route.fallback} ／ Fable/Opus 本体は「判定・委譲・結果確認」の 3 ターン以内。Sonnet は非Claude が全部落ちた時だけ、Opus は設計判断だけ。${route.lane === 'consult' ? ' ツールを使わず、または Read/Grep 数回で答える。実装・調査に踏み込むなら委譲。' : ''}`];
   const fableExplicit = /fable\s*-?\s*5|fable5|claude-fable-5|fable\s*(?:で|を使)/i;
   const fableNegative = /(?:fable\s*-?\s*5|fable5|claude-fable-5|fable)\s*(?:は|を)?\s*(?:使うな|使わない|使わず|使わなく|使わん|使用しない|利用しない|禁止|使用中止|不可)/i;
   if (fableExplicit.test(prompt) && !fableNegative.test(prompt)) {

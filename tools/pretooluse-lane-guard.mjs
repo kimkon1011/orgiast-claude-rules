@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 export const GATE_CONTRACT = {"name": "pretooluse-lane-guard", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "pretooluse-lane-guard"}, {"kind": "command", "ref": "node tools/lane-doctor.mjs --probe"}, {"kind": "repo-file", "ref": "tools/codex-do.mjs"}, {"kind": "keyserve-key", "ref": "deepseek.env#DEEPSEEK_API_KEY"}]};
+import { isPastLogSearchToolUse } from './lib/user-facing.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -29,12 +30,14 @@ export async function main() {
     let model = ''; try { model = inspectTranscript(input.transcript_path).currentModel; } catch { return; }
     if (!/(?:fable|opus)/i.test(model)) return;
     const name = String(input.tool_name || ''), tool = input.tool_input || {}, command = String(tool.command || tool.script || '');
+    if (isPastLogSearchToolUse(name, tool)) return;
     if (/^(?:Bash|PowerShell)$/.test(name) && (delegated.test(command) || (command.length < 300 && ['read-only', 'git'].includes(classifyBashCommand(command))))) return;
     if (isDocEdit(name, tool, home)) return;
     const dir = path.join(home, '.claude', 'session-lane'), file = path.join(dir, `${input.session_id || 'unknown'}.json`);
     let state = { lane: 'unknown', toolCalls: 0 }; try { state = { ...state, ...JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')) }; } catch {}
     state.toolCalls = Number(state.toolCalls || 0) + 1;
     try { fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(file, `${JSON.stringify(state, null, 2)}\n`); } catch {}
+    if (state.userFacing === true && ['consult', 'unknown'].includes(state.lane)) return;
     let config = { warnAt: 4, blockAt: 8, mode: 'block' }; try { config = { ...config, ...JSON.parse(fs.readFileSync(path.join(home, '.claude', 'lane-guard.json'), 'utf8').replace(/^\uFEFF/, '')) }; } catch {}
     if (state.toolCalls < Number(config.warnAt)) return;
     const advice = state.primary || laneAdvice(state.lane, repo, { category: state.category, home }).primary;

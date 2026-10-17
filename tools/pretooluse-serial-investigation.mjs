@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isPastLogSearchToolUse } from './lib/user-facing.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -11,11 +12,14 @@ try {
   const home = process.env.ORGIAST_HOME || os.homedir(), file = path.join(home, '.claude', '.serial-investigation.json'), now = Date.now(); let state = {};
   try { state = JSON.parse(fs.readFileSync(file, 'utf8')); if (!state || Array.isArray(state) || typeof state !== 'object') state = {}; } catch {}
   for (const [key, value] of Object.entries(state)) if (!value || now - Number(value.ts || 0) >= 864e5) delete state[key];
-  const count = isReadOnlyToolUse(name, input.tool_input) ? Number(state[sessionId]?.count || 0) + 1 : 0, warn = count >= 4;
+  if (isPastLogSearchToolUse(name, input.tool_input)) process.exit(0);
+  let userFacing = false;
+  try { userFacing = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'session-lane', `${sessionId}.json`), 'utf8')).userFacing === true; } catch {}
+  const count = isReadOnlyToolUse(name, input.tool_input) ? Number(state[sessionId]?.count || 0) + 1 : 0, warn = !userFacing && count >= 4;
   state[sessionId] = { count: warn ? 0 : count, ts: now };
   try { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(state)); } catch {}
   if (warn) {
-    const context = `⚠️ 直近 ${count} 回、read-only の調査コマンドを1回ずつ別々に実行しています。thinking は出力の70%を占め、1レスポンスにつき1回課金されます。\n対策1: 依存関係のない調査コマンドは1レスポンスにまとめて同時に投げてください（現状まとめられているのは 6.1% だけです）。\n対策2: まとまった探索は Agent(Explore) に「結果は200字以内・コード本体は含めない」と指定して委譲し、監督は1レスポンスで受け取ってください。\neffort を下げて深さを削るのではなく、思考パスの回数を削ることが目的です。\nただし user への聞き直し・やり直しを1回でも増やす形での削減は禁止。調査のツール呼び出し10回は、user への聞き直し1回より安い。削減は委譲・キャッシュ・出力長で行い、調査の深さと判断の質では行わない。`;
+    const context = `⚠️ 直近 ${count} 回、read-only の調査コマンドを1回ずつ別々に実行しています。\n対策1: 依存関係のない調査コマンドは1レスポンスにまとめて同時に投げてください（現状まとめられているのは 6.1% だけです）。\n対策2: まとまった探索は Agent(Explore) に「結果は200字以内・コード本体は含めない」と指定して委譲し、監督は1レスポンスで受け取ってください。\neffort を下げて深さを削るのではなく、思考パスの回数を削ることが目的です。\nただし user への聞き直し・やり直しを1回でも増やす形での削減は禁止。調査のツール呼び出し10回は、user への聞き直し1回より安い。削減は委譲・キャッシュ・出力長で行い、調査の深さと判断の質では行わない。`;
     console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: context } }));
   }
 } catch {}

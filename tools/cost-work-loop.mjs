@@ -1,7 +1,7 @@
 // cost-work-loop.mjs — 「作業量に対する出力トークン」を継続監視し、委譲(安いAIへ逃がす)が実際に効いているかを判定して
 // 自己修正の"指示書"を出す閉ループ。放置するとClaude主体に戻るのを防ぐ(kim 2026-08-16)。
 //
-// 何を測るか(このPCのみ・会話内容は読まない):
+// 何を測るか(このPCのみ・手間指標には人間の発言を参照):
 //   1) Claude Code のトークン/概算$(直近7日) … ~/.claude/projects/**/*.jsonl の usage だけ
 //   2) 安いAI実行者の使用実績 … ~/.claude/executor-usage.jsonl (llm-ask等が追記)
 //   3) 作業量プロキシ … 直近7日のgitコミット数(作業ディレクトリ)。無ければ稼働日数。
@@ -10,6 +10,7 @@
 //   B) Claude出力が前回比↑ なのに 作業量↑でない → 「逃がしたのに利用量増(誤ルーティング/やり直し/呼びすぎ)」🚨
 // 出力: ~/.claude/cost-directive.md (SessionStartで毎回私が読む=修正が行動に反映) + 任意でDiscord。
 //   実行: node cost-work-loop.mjs [--post] [--days 7]
+import { collectUserBurdenMetrics, formatUserBurdenLines } from './lib/user-burden-metrics.mjs';
 import fs from 'node:fs'; import path from 'node:path'; import os from 'node:os'; import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { summarizeGeminiBudget, formatGeminiBudgetStatus } from './gemini-budget-guard.mjs';
@@ -210,7 +211,7 @@ const laneHealthLines = (() => {
 function runJsonTool(name) { try { const result = spawnSync(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta.url)), name), '--json'], { windowsHide: true, env: { ...process.env, ORGIAST_HOME: HOME }, encoding: 'utf8', timeout: 30000 }); return result.status === 0 ? JSON.parse(result.stdout) : null; } catch { return null; } }
 const planUsage = runJsonTool('claude-plan-usage.mjs');
 const budgetStatus = runJsonTool('budget-status.mjs');
-const planLine = planUsage?.available ? `Claudeプラン上限: 5h ${planUsage.fiveHour.utilization.toFixed(1)}% / 7日 ${planUsage.sevenDay.utilization.toFixed(1)}%${planUsage.sevenDay.utilization >= 80 ? ' ⚠️ 上限超過→従量課金の手前。監督の応答回数を減らし、実装/調査を Codex・OpenRouter へ' : ''}` : `Claudeプラン上限: 計測不能(${planUsage?.reason || '実行失敗'})`;
+const planLine = planUsage?.available ? `Claudeプラン上限: 5h ${planUsage.fiveHour.utilization.toFixed(1)}% / 7日 ${planUsage.sevenDay.utilization.toFixed(1)}%${planUsage.sevenDay.utilization >= 80 ? ' ⚠️ 上限超過→従量課金の手前。実装/量産は Codex・OpenRouter へ（user への確認・調査は削らない）' : ''}` : `Claudeプラン上限: 計測不能(${planUsage?.reason || '実行失敗'})`;
 const budgetLines = budgetStatus ? [`月次予算: 固定 ¥${Math.round(budgetStatus.fixedJpy).toLocaleString('ja-JP')} / 変動MTD ¥${Math.round(budgetStatus.variableKnownJpy).toLocaleString('ja-JP')} / 合計 ¥${Math.round(budgetStatus.totalKnownJpy).toLocaleString('ja-JP')} / ¥${budgetStatus.monthlyBudgetJpy.toLocaleString('ja-JP')} の ${budgetStatus.budgetUsedPct.toFixed(1)}%`, `日割りペース: 月末 ¥${Math.round(budgetStatus.projectedJpy).toLocaleString('ja-JP')} (${budgetStatus.budgetPacePct.toFixed(1)}%)${budgetStatus.unfilled.length ? ` / 未記入: ${budgetStatus.unfilled.join(', ')}` : ''}`] : ['月次予算: 計測不能(budget-status 実行失敗)'];
 const linesDelegationLine = linesRatio === null
   ? '計測不能(Codex/Claudeともに実装行なし)'
@@ -230,9 +231,14 @@ const delegationHealthSummary = (() => {
   try { return fs.readFileSync(path.join(HOME, '.claude', 'delegation-health.md'), 'utf8').trim(); } catch { return ''; }
 })();
 const userReworkStats = collectUserReworkStats({ home: HOME, days: DAYS });
+let burdenLines;
+try { burdenLines = formatUserBurdenLines(collectUserBurdenMetrics({ home: HOME, days: DAYS }), DAYS).join('\n'); }
+catch { burdenLines = '- user の手間: 計測不能'; }
 const md = `<!-- COST-DIRECTIVE-START -->
-## 📊 Claude Code out ${(claudeOut / 1000).toFixed(0)}k tok / 委譲率(Claude以外へ) ${(nonClaudeDelegRatio * 100).toFixed(1)}% (直近${DAYS}日 / このPC)
+## 👤 user の手間（最優先の指標・直近${DAYS}日 / このPC）
+${burdenLines}
 - 👤 user 手戻り: **今セッション ${userReworkStats.currentSessionCount}回 / 直近${DAYS}日 ${userReworkStats.sevenDayCount}回** ← トークンより優先して下げる指標
+## 📊 Claude Code out ${(claudeOut / 1000).toFixed(0)}k tok / 委譲率(Claude以外へ) ${(nonClaudeDelegRatio * 100).toFixed(1)}% (直近${DAYS}日 / このPC)
 - Claude Code利用: **out ${(claudeOut / 1000).toFixed(0)}k tok** ${arrow} (${claudeModelLine}) ※定額シート課金＝請求$は発生しない
 - (参考: list価格換算 $${claudeUSD.toFixed(1)} — 実請求ではない)
 - 安いAI実行者: **台帳計測分 $${execUSD.toFixed(2)}**（従量課金）— ${execLine}

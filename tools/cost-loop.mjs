@@ -71,7 +71,7 @@ try {
   const directive = path.join(home, '.claude', 'cost-directive.md');
   if (fs.existsSync(directive)) {
     const txt = fs.readFileSync(directive, 'utf8');
-    const ctx = `【コスト×作業量ループ｜監督への自己指示】前回計測の結果は下記。Claude以外への委譲率が低い/コスト効率が悪化している時は、作業前に必ず: 実装→Codex(定額) / 量産・分類→Groq / 汎用の安い推論→OpenRouter / 長文脈→Gemini / 別課金へ逃がす→Kimi、へ回す。監督(Opus)は最小限にとどめ大きな実装を抱えない(§1.18)。\n\n${txt}`;
+    const ctx = `【監督への自己指示】最優先は user の手間（往復回数・同じ指摘の繰り返し・差し戻しで長くなった応答）を減らすこと。トークン・委譲率はその次。user に手作業や手順を渡す前の調査（過去ログ・memory・playbook）は回数無制限。実装→Codex(定額) / 量産・分類→Groq / 長文脈→Gemini への委譲は、調査の深さを削らない範囲で行う。\n\n${txt}`;
     process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: ctx } })}\n`);
   }
 } catch {}

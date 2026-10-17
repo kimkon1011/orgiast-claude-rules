@@ -8,6 +8,8 @@ import { evaluateHandoffDetail } from './handoff-detail-guard.mjs';
 
 const repo = path.resolve('.');
 const hooks = [
+  'playbook-inject.mjs',
+  'past-log-search-gate.mjs',
   'handoff-quality-gate.mjs',
   'handoff-investigation-gate.mjs',
   'negative-claim-gate.mjs',

@@ -26,3 +26,11 @@ test('Codex alive deny points directly to codex-do without unavailable wording',
   assert.match(r.permissionDecisionReason,/Codex は生きている。node tools\/codex-do\.mjs --prompt-file <指示> --cwd <対象> へ渡せ/);
   assert.doesNotMatch(r.permissionDecisionReason,/使えない時/);
 });
+
+test('userFacing consultは5回呼んでも警告しない、過去ログは数えない', t => {
+  const h = setup('consult'); t.after(() => fs.rmSync(h, { recursive: true, force: true }));
+  const file = path.join(h, '.claude', 'session-lane', 's.json'); fs.writeFileSync(file, JSON.stringify({ lane: 'consult', userFacing: true, toolCalls: 0 }));
+  for (let i = 0; i < 5; i++) assert.equal(run(h), null);
+  assert.equal(run(h, { tool_name: 'Grep', tool_input: { path: '~/.claude/projects', pattern: 'MacroDroid' } }), null);
+  assert.equal(JSON.parse(fs.readFileSync(file)).toolCalls, 5);
+});

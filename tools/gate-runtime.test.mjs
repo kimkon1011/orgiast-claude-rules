@@ -115,3 +115,13 @@ test('member report reaches central webhook rather than the member Discord ID',a
  const targets=[];const result=await reportGate(contract,'warn',[],{home,notify:(line,options)=>notifyKim(line,{...options,fetchImpl:async url=>{targets.push(url);return {ok:true};}})});
  assert.equal(result.delivered,'webhook');assert.deepEqual(targets,['https://example.invalid/central']);
 });
+
+test('pilotDenyはpilotだけ即denyとし他PCは観測期間を守る', t => {
+  const home = temp(t), manifest = { pilotHosts: ['kim-PC'], gates: { 'past-log-search-gate': { rollout: 'deny', pilotDeny: true, distributedAt: '2026-10-17T00:00:00Z', denyAfter: '2026-10-24T00:00:00Z' } } };
+  const opts = { home, manifest, now: Date.parse('2026-10-17T00:00:00Z') };
+  assert.equal(rolloutMode('past-log-search-gate', { ...opts, hostname: 'KIM-PC' }), 'deny');
+  assert.equal(rolloutMode('past-log-search-gate', { ...opts, hostname: 'other' }), 'warn');
+  assert.equal(rolloutMode('past-log-search-gate', { ...opts, hostname: 'other', now: opts.now + 7 * DAY }), 'deny');
+  manifest.gates['past-log-search-gate'].rollout = 'warn';
+  assert.equal(rolloutMode('past-log-search-gate', { ...opts, hostname: 'kim-PC' }), 'deny');
+});

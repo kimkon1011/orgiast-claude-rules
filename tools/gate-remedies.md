@@ -167,3 +167,11 @@ URLをMarkdownリンクまたは空白で囲み、日本語/全角文字との�
 ## substitute-capability-gate
 
 同能力の生存レーンで実行して結果を示す（ONBOARDING §1.18.5）。user が対象プロバイダを名指しした場合のみ、本文に `[SUBSTITUTE-OK] <user の文言の引用>` を書く。
+
+## past-log-search-gate
+
+- user に渡す手作業手順について、今ターンの過去ログ検索を検査する。
+- 対象アプリ名で find-session または ~/.claude/projects の Grep を実行する。
+- memory と ~/.claude/playbooks も参照し、成功した実測手順を優先する。
+- 該当なしの場合は検索語を明記し、検索しても意味が無い場合のみ `[PASTLOG-OK] <理由>` を書く。
+- 返信だけの依頼と完了報告は対象外。

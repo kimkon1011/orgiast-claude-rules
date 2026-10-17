@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { distributePlaybooks } from './lib/playbook-distribution.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -16,7 +17,7 @@ const valueAfter = (flag) => { const i = argv.indexOf(flag); return i >= 0 ? arg
 const converge = argv.includes('--converge');
 const strict = argv.includes('--strict');
 const jsonOutput = argv.includes('--json');
-const home = path.resolve(valueAfter('--home') || process.env.USERPROFILE || os.homedir());
+const home = path.resolve(valueAfter('--home') || process.env.ORGIAST_HOME || process.env.USERPROFILE || os.homedir());
 const manifestPath = path.resolve(valueAfter('--manifest') || path.join(scriptDir, 'setup-manifest.json'));
 
 function invalid(message) {
@@ -151,6 +152,11 @@ if (manifest) {
       results = inspect(manifest.items);
       for (const result of results) result.repaired = attemptedItems.has(result.item.id);
     }
+  }
+  if (converge) {
+    const item = { id: 'playbooks', severity: 'optional', description: '成功した手作業手順の配布（既存の実測は保持）' };
+    try { const copied = distributePlaybooks(path.dirname(scriptDir), home); results.push({ item, status: 'OK', checked: true, repaired: copied > 0 }); }
+    catch { results.push({ item, status: 'NG', checked: true, repaired: false }); }
   }
   if (settingsMigration) results.push(settingsMigration);
   // スマホ用待機タブ: 拡張導入・count=3・mobileTabs=0 除去。--manifest 指定時(テスト/臨時検査)は実機を触らない。

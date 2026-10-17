@@ -155,6 +155,18 @@ jobs:
           $output | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'clean-install-logs\verify-setup.log')
           if ($LASTEXITCODE -ne 0) { throw "setup.mjs failed with exit code $LASTEXITCODE" }
 
+      - name: Collect onboarding-sync diagnostics
+        if: ${{ always() }}
+        shell: powershell
+        run: |
+          $logDir = Join-Path $env:RUNNER_TEMP 'clean-install-logs'
+          New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+          foreach ($name in @('hooks\onboarding-sync.log', '.onboarding-sync-state.json', 'CLAUDE.md')) {
+            $src = Join-Path $env:USERPROFILE ".claude\$name"
+            if (Test-Path -LiteralPath $src) { Copy-Item -LiteralPath $src -Destination (Join-Path $logDir ('diag-' + (Split-Path $name -Leaf))) -Force }
+            else { Write-Host "missing: $src" }
+          }
+
       - name: Upload installer logs
         if: ${{ always() }}
         uses: actions/upload-artifact@v4

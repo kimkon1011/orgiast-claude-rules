@@ -47,7 +47,8 @@ export async function handleBilling(input, { home = process.env.ORGIAST_HOME || 
   const messages = [];
   const locked = status.mode === 'api' && !billingApproved(home, input.session_id, now);
   if (status.mode === 'api' && event !== 'PreToolUse') messages.push(billingMessage(status.reason));
-  if (status.extraUsage) messages.push('⚠️ このアカウントは上限超過後の従量課金(extra usage)が ON です。kim の方針(2026-09-08 OFF)と不一致。');
+  // extra usage の注意は SessionStart だけ(毎プロンプト・毎ツールで出すと本文の指示を埋める)。通知は下の1日1回ガード。
+  if (status.extraUsage && event === 'SessionStart') messages.push('⚠️ このアカウントは上限超過後の従量課金(extra usage)が ON です。kim の方針(2026-09-08 OFF)と不一致。');
   if (event !== 'PreToolUse' && messages.length) {
     try {
       const dir = path.join(home, '.claude');

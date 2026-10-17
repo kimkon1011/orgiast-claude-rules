@@ -48,15 +48,18 @@ test('all tools denied only for api; approval is session bound', async t => {
 test('warnings persisted and notified only once daily; extra usage never denies', async t => {
   const h = home(t); let notifications = 0;
   const options = { home: h, now: Date.parse('2026-10-17T00:00:00Z'), detection: { mode: 'api', reason: 'prepaid', account: 'a', extraUsage: true }, notify: async () => { notifications++; } };
-  for (const hook_event_name of ['SessionStart', 'UserPromptSubmit']) {
-    const out = await handleBilling({ hook_event_name }, options);
-    assert.match(out.hookSpecificOutput.additionalContext, /🔒.*\n⚠️/);
-  }
+  const first = await handleBilling({ hook_event_name: 'SessionStart' }, options);
+  assert.match(first.hookSpecificOutput.additionalContext, /🔒.*\n⚠️/);
+  // extra usage の注意は SessionStart だけ。UserPromptSubmit では 🔒 のみ
+  const second = await handleBilling({ hook_event_name: 'UserPromptSubmit' }, options);
+  assert.match(second.hookSpecificOutput.additionalContext, /🔒/); assert.doesNotMatch(second.hookSpecificOutput.additionalContext, /extra usage/);
   assert.equal(notifications, 1);
   assert.equal(JSON.parse(fs.readFileSync(path.join(h, '.claude/api-billing-detected.json'))).account, 'a');
   await handleBilling({ hook_event_name: 'SessionStart' }, { ...options, now: options.now + 86400000 }); assert.equal(notifications, 2);
   const out = await handleBilling({ hook_event_name: 'PreToolUse' }, { ...options, detection: { mode: 'subscription', extraUsage: true } });
-  assert.equal(out.hookSpecificOutput.permissionDecision, undefined); assert.match(out.hookSpecificOutput.additionalContext, /extra usage/);
+  assert.equal(out, null);
+  const start = await handleBilling({ hook_event_name: 'SessionStart' }, { ...options, home: home(t), detection: { mode: 'subscription', extraUsage: true } });
+  assert.equal(start.hookSpecificOutput.permissionDecision, undefined); assert.match(start.hookSpecificOutput.additionalContext, /extra usage/);
 });
 test('notification fallback uses background fleet-mail; successful DM skips it', async t => {
   const h = home(t); let count = 0;

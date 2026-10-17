@@ -43,6 +43,10 @@ scratch/
 .wt/
 /evidence/internal-audit-v11/
 
+# IG 投稿用の機械ローカル作業ディレクトリ。未登録だったため rescue が
+# part1.b64 / part2.b64 を拾い、重複 PR (#819) の遠因になっていた。
+.fleet-ig-post/
+
 # Local feedback-kit state and supervisor report
 tools/.feedback-zero-local.json
 FEEDBACK_KIT_REPORT.md

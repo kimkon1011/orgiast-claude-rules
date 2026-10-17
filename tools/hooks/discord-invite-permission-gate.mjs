@@ -1,3 +1,4 @@
+export const GATE_CONTRACT = {"name":"hooks/discord-invite-permission-gate","remedies":[{"kind":"repo-file","ref":"tools/discord-bot-permissions.json","reason":"permissions=<required> の招待リンクに直す（対象 Bot の required は参照ファイルで確認）"}]};
 import fs from 'node:fs';
 import { isEntry } from '../is-entry.mjs';
 import { readTranscriptContext } from '../lib/assistant-text.mjs';

@@ -71,6 +71,11 @@
       "rollout": "deny",
       "legacy": true
     },
+    "hooks/discord-invite-permission-gate": {
+      "rollout": "deny",
+      "distributedAt": "2026-10-17T00:00:00Z",
+      "denyAfter": "2026-10-24T00:00:00Z"
+    },
     "internal-recipient-gmail-guard": {
       "rollout": "deny",
       "legacy": true

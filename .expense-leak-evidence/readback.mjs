@@ -1,0 +1,10 @@
+import { sheetsMetadata, sheetsGet, quoteTab } from '../tools/lib/sheets-dwd.mjs';
+import { SPREADSHEET_ID, TAB, HEADER } from '../tools/expense-leak-check.mjs';
+import { writeFile } from 'node:fs/promises';
+const m=await sheetsMetadata(SPREADSHEET_ID);
+const tab=m.sheets.find(s=>s.properties.title===TAB)?.properties;
+const rows=await sheetsGet(SPREADSHEET_ID,`${quoteTab(TAB)}!A1:M6`);
+const ids=await sheetsGet(SPREADSHEET_ID,`${quoteTab(TAB)}!L2:L${tab.gridProperties.rowCount}`);
+const result={spreadsheetId:m.spreadsheetId,spreadsheetUrl:m.spreadsheetUrl,tab,headerMatches:JSON.stringify(rows[0])===JSON.stringify(HEADER),dataRows:rows.length-1,idCount:ids.length,privateDictionaryPresent:m.sheets.some(s=>s.properties.title==='毎回私的利用')};
+await writeFile(new URL('./sheet-readback.json',import.meta.url),JSON.stringify(result,null,2));
+console.log(JSON.stringify(result,null,2));

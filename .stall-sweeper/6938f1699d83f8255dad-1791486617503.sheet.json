@@ -1,0 +1,78 @@
+{
+  "search": {
+    "content": [
+      {
+        "type": "text",
+        "text": "Action completed."
+      }
+    ],
+    "structuredContent": {
+      "markdown": "| Row | ID |\n| --- | --- |\n|  | ID |\n| 4 | T-4071 |",
+      "scanned_range": "A1:A10000",
+      "scanned_row_count": 10000,
+      "scanned_column_count": 1,
+      "matched_row_count": 1,
+      "returned_matching_row_count": 1,
+      "truncated": false,
+      "truncated_rows": false,
+      "truncated_columns": false,
+      "truncated_row_count": 0,
+      "truncated_column_count": 0
+    },
+    "isError": false
+  },
+  "row": {
+    "content": [
+      {
+        "type": "text",
+        "text": "Action completed."
+      }
+    ],
+    "structuredContent": {
+      "range": "'タスク'!A4:O4",
+      "majorDimension": "ROWS",
+      "values": [
+        [
+          "T-4071",
+          "2026-10-03 6:30",
+          "P1",
+          "100",
+          "締切",
+          "デュトロドライバー兼設営スタッフ勤務確定返信",
+          "後藤大輔が氏名・勤務日・時間・会場名を記載し、10月3日までに返信する",
+          "後藤大輔",
+          "2026-10-03",
+          "✉ 株式会社オージャスト アサイングループ",
+          "確定連絡へのご返信は氏名・勤務日・勤務時間・会場名を入れて返信期限までにご返信ください。*【返信期限】10月3日（土）中*",
+          "https://mail.google.com/mail/u/seisaku-team@orgiast.jp/#all/1a0fcd9a61dd6219",
+          "未着手",
+          null,
+          "2026-10-08 6:33"
+        ]
+      ]
+    },
+    "isError": false
+  },
+  "connectorFailure": {
+    "content": [
+      {
+        "type": "text",
+        "text": "ActionError: Gmail `get_thread` failed: Gmail API request failed. HTTP status: 403. Retryable: yes. Next steps: Retry the request."
+      }
+    ],
+    "structuredContent": {
+      "error": "ActionError: Gmail `get_thread` failed: Gmail API request failed. HTTP status: 403. Retryable: yes. Next steps: Retry the request.",
+      "error_code": "FORBIDDEN",
+      "error_data": {
+        "type": "http_error",
+        "message": "Gmail `get_thread` failed: Gmail API request failed. HTTP status: 403. Retryable: yes. Next steps: Retry the request.",
+        "code": 403,
+        "response": {
+          "status": 403,
+          "payload": "{\n  \"error\": {\n    \"code\": 403,\n    \"message\": \"Quota exceeded for quota metric 'Queries' and limit 'Previous quota: Units per minute' of service 'gmail.googleapis.com' for consumer 'project_number:77377267392'.\",\n    \"errors\": [\n      {\n        \"message\": \"Quota exceeded for quota metric 'Queries' and limit 'Previous quota: Units per minute' of service 'gmail.googleapis.com' for consumer 'project_number:77377267392'.\",\n        \"domain\": \"usageLimits\",\n        \"reason\": \"rateLimitExceeded\"\n      }\n    ],\n    \"status\": \"PERMISSION_DENIED\",\n    \"details\": [\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.ErrorInfo\",\n        \"reason\": \"RATE_LIMIT_EXCEEDED\",\n        \"domain\": \"googleapis.com\",\n        \"metadata\": {\n          \"quota_location\": \"global\",\n          \"service\": \"gmail.googleapis.com\",\n          \"consumer\": \"projects/77377267392\",\n          \"quota_metric\": \"gmail.googleapis.com/default\",\n          \"quota_unit\": \"1/min/{project}\",\n          \"quota_limit_value\": \"12000000\",\n          \"quota_limit\": \"defaultPerMinutePerProject\"\n        }\n      },\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.Help\",\n        \"links\": [\n          {\n            \"description\": \"Request a higher quota limit.\",\n            \"url\": \"https://cloud.google.com/docs/quotas/help/request_increase\"\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+        }
+      }
+    },
+    "isError": true
+  }
+}

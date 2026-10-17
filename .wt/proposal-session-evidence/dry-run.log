@@ -1,0 +1,37 @@
+[dry-run] 実装提案セッション: 要約モデルの採用提案（動作確認）
+保存予定: /mnt/c/Users/uers/.claude/proposals/proposal-session-sample.{json,md}
+導線: next-session.md の先頭（既存本文を保持）
+提示順: 要約モデルの採用提案（動作確認）
+起動: launchNextSession --target vscode（Enter 1回が必要）
+
+# 要約モデルの採用提案（動作確認）
+提案ID: proposal-session-sample / 生成元: model-scout
+
+## 提案
+評価後の採用案をセッションで判断する
+
+## 根拠
+- サンプル: 候補97%、現行100%（実測採用案ではありません）
+
+## 変更内容
+- tools/routing-table.json
+  変更前: 現行モデル
+  変更後: 評価済み候補
+
+## 費用効果
+月額効果: 未算定
+月間トークン数未集計のため未算定
+
+## リスク
+- 評価対象外の品質差
+
+## 承認するとどうなる
+onApprove: codex-task / 指示書: ~/.claude/proposals/proposal-session-sample.codex.md
+Codex が実装・関連テスト・PR作成を行い、監督が検証して tools/pr-merge.mjs でマージします。
+
+## 却下するとどうなる
+現行モデルを維持する
+
+承認なら「承認」、却下なら「却下 <理由>」と答えてください。承認で Codex が onApprove の指示書を実行し PR→pr-merge まで進めます
+
+DM予定: 実装提案セッションを用意しました: 要約モデルの採用提案（動作確認）（次に Claude Code を開くと先頭に出ます）

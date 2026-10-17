@@ -1,0 +1,14 @@
+{
+  "files": [
+    {
+      "file": "snapshot-first.json",
+      "secretMatches": 0,
+      "forbidden": false,
+      "sevenDigitRuns": 17371,
+      "mode": "777"
+    }
+  ],
+  "bankFields": 403,
+  "unmaskedBankFields": 323,
+  "pass": false
+}

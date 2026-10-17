@@ -1,0 +1,166 @@
+{
+  "checkedAt": "2026-10-14T19:24:36.518155+00:00",
+  "target": "フィードバック課題化のログ停滞",
+  "completed": false,
+  "findings": [
+    "専用定期タスクはDisabled、Enabled=false。最終実行2026-10-02T16:01:01+09:00と専用ログ更新停止2026-10-02T16:01:11+09:00が一致。無効化した主体・理由は未確定。",
+    "夜間バッチは2026-10-15 03:26:57にfeedback-to-issues / okを記録。ただし設定不足等でもexit=0を返す実装のため、処理成功や未処理ゼロの証明にはならない。",
+    "復旧のためのタスク再有効化・再実行は外部Issue作成、ack送信、別処理起動を伴う可能性があり、外部送信禁止に抵触。ブートストラップにもgit reset --hardとgit cleanが含まれるため実行しなかった。",
+    "対象ログの停滞は継続。ログ時刻の書換えや監視閾値緩和で完了扱いにはしない。"
+  ],
+  "task": {
+    "TaskName": "OrgiastFeedbackIntakeFast",
+    "State": "Disabled",
+    "Enabled": false,
+    "Actions": [
+      {
+        "Execute": "C:\\Windows\\System32\\wscript.exe",
+        "Arguments": "//nologo \"C:\\Users\\uers\\.claude\\tools\\run-hidden.vbs\" \"powershell.exe\" \"-NoProfile\" \"-NonInteractive\" \"-ExecutionPolicy\" \"Bypass\" \"-File\" \"C:\\Users\\uers\\.claude\\tools\\nightly-bootstrap.ps1\" \"-Target\" \"tools\\feedback-to-issues.mjs\"",
+        "WorkingDirectory": "C:\\Users\\uers\\.claude\\nightly-repo"
+      }
+    ],
+    "LastRunTime": "2026-10-02T16:01:01.0000000+09:00",
+    "LastTaskResult": 0,
+    "NextRunTime": "2026-10-15T04:31:00.0000000+09:00"
+  },
+  "sources": [
+    {
+      "file": "/mnt/c/Users/uers/.claude/open-work.md",
+      "sha256": "8f275b740c3769bfe6f5654d45615a78b41ad3be4ad0813dfa86ab3cab3caedd",
+      "mtime": "2026-10-13T22:03:40.702746+00:00",
+      "excerpts": [
+        {
+          "line": 50,
+          "text": "- 何が起きた: フィードバック課題化 — ログ更新が滞っています（最終更新: 2026-10-02 16:01:11、期待: 3時間以内） 何を試した: 過去7日に自動修理または持ち越しを2回以上…"
+        }
+      ]
+    },
+    {
+      "file": "/mnt/c/Users/uers/.claude/archive/next-session-202610.md",
+      "sha256": "a88c83255ab35377f5f829fc3a86adffdc31a00cf22a095c05f92cc99c254ec3",
+      "mtime": "2026-10-14T18:01:52.017822+00:00",
+      "excerpts": [
+        {
+          "line": 1839,
+          "text": "- [ ] 何が起きた: フィードバック課題化 — ログ更新が滞っています（最終更新: 2026-10-02 16:01:11、期待: 3時間以内） 何を試した: Playbookと自動修理レーン（回帰テスト失敗: ） 判断してほしい1点: 自動修理を待たず手動対応を優先するか。（by 不明, nightly-health-remediate, 20261002220113852-002）"
+        }
+      ]
+    },
+    {
+      "file": "/mnt/c/Users/uers/.claude/logs/feedback-to-issues.log",
+      "sha256": "5d19f8f5d25b570eabef79d74672762427f324136f9c02cd853bb0272fc58991",
+      "mtime": "2026-10-02T07:01:11.383123+00:00",
+      "excerpts": [
+        {
+          "line": 9263,
+          "text": "HEAD is now at fb9d843 fix(session-claims): 壊れた行を黙って捨てず parse エラーとして報告する (#608)"
+        },
+        {
+          "line": 9264,
+          "text": "feedback-to-issues: 専用経路なのでスキップ(ブースintake) app=ブース制作アプリ message_id=1547506570764619776"
+        },
+        {
+          "line": 9265,
+          "text": "feedback-to-issues: 専用経路なのでスキップ(ブースintake) app=ブース制作アプリ message_id=1547514073178968077"
+        },
+        {
+          "line": 9266,
+          "text": "feedback-to-issues: 専用経路なのでスキップ(ブースintake) app=ブース制作アプリ message_id=1550899741737492501"
+        },
+        {
+          "line": 9267,
+          "text": "作成: 0件 / スキップ: 3件（専用経路:3）/ 残り: 3件"
+        }
+      ]
+    },
+    {
+      "file": "/mnt/c/Users/uers/.claude/logs/nightly-batch-2026-10-15.log",
+      "sha256": "23544d1639e46de70836b6b6805425d304b3bc2c3d699fb2c4a8942cd9667cb8",
+      "mtime": "2026-10-14T18:59:58.276433+00:00",
+      "excerpts": [
+        {
+          "line": 19,
+          "text": "2026-10-15 03:26:57 / feedback-to-issues / ok"
+        }
+      ]
+    },
+    {
+      "file": "/mnt/c/Users/uers/.claude/nightly-repo/tools/feedback-to-issues.mjs",
+      "sha256": "dde0aa1d1260245cfb8845561a5a62f2fc0c7aba291b02982d1cf2acdffc896a",
+      "mtime": "2026-10-10T07:54:55.153486+00:00",
+      "excerpts": [
+        {
+          "line": 258,
+          "text": "    console.log('feedback-to-issues: 中継が未設定なのでスキップ');"
+        },
+        {
+          "line": 259,
+          "text": "    return 0;"
+        },
+        {
+          "line": 268,
+          "text": "      return 0;"
+        },
+        {
+          "line": 273,
+          "text": "        method: 'POST',"
+        },
+        {
+          "line": 283,
+          "text": "    return 0;"
+        },
+        {
+          "line": 287,
+          "text": "    console.log('feedback-to-issues: gh が無いのでスキップ');"
+        },
+        {
+          "line": 288,
+          "text": "    return 0;"
+        },
+        {
+          "line": 356,
+          "text": "          method: 'POST',"
+        },
+        {
+          "line": 378,
+          "text": "  return 0;"
+        },
+        {
+          "line": 388,
+          "text": "  if (argv.includes('--dry') || argv.includes('--dry-run') || argv.includes('--no-chain')) return 'skipped';"
+        },
+        {
+          "line": 392,
+          "text": "    const child = spawn(process.execPath, [target], { ...backgroundSpawnOptions(), stdio: 'ignore' });"
+        }
+      ]
+    },
+    {
+      "file": "/mnt/c/Users/uers/.claude/tools/nightly-bootstrap.ps1",
+      "sha256": "9bce40e2cf7b83e479a56f23335ce434eebd9c605c9ecf2e9e35ed40db5486ff",
+      "mtime": "2026-10-13T16:02:04.935952+00:00",
+      "excerpts": [
+        {
+          "line": 176,
+          "text": "                        & $git.Source -C $repo reset --hard origin/main"
+        },
+        {
+          "line": 277,
+          "text": "        # Update only an already-installed hourly task script, from a verified clean main."
+        }
+      ]
+    },
+    {
+      "file": "/mnt/c/Users/uers/orgiast-main/tools/nightly-health-expectations.json",
+      "sha256": "0c5b5ebdd1f64351e1e74c5d84572131eeefc05dd96b648e0348d3d21f787630",
+      "mtime": "2026-09-22T07:05:08.663582+00:00",
+      "excerpts": [
+        {
+          "line": 20,
+          "text": "  { \"log\": \"feedback-to-issues.log\", \"maxAgeHours\": 3, \"label\": \"フィードバック課題化\", \"scan\": \"keywords\" },"
+        }
+      ]
+    }
+  ],
+  "mutations": "この対象の着手記録・タスク照会結果・検証結果・result.jsonのみ作成。業務コード、他セッション差分、定期タスク、外部システムは変更していない。"
+}

@@ -1,0 +1,21 @@
+{
+  "queriedAt": "2026-10-14T19:20:16.881Z",
+  "system": "Gmail",
+  "url": "https://gmail.googleapis.com/gmail/v1/users/me/messages/1a11e6e4abe71318?format=full",
+  "status": 200,
+  "subject": "第30回日本外科病理学会学術集会　出展につきましてご質問",
+  "attachments": [
+    {
+      "filename": "事前作業申請書.xlsx",
+      "size": 285826
+    },
+    {
+      "filename": "臨時搬出入申請書（申請期限：搬出入日3日前）.xlsx",
+      "size": 403463
+    },
+    {
+      "filename": "【出展確認書・オプション申込書】第30回日本外科病理学会学術集会 (1).xlsx",
+      "size": 27277
+    }
+  ]
+}

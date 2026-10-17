@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { readEnvValue } from './env-kv.mjs';
 import { isEntry } from './is-entry.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 
@@ -12,17 +13,23 @@ const USER_AGENT = 'orgiast-notify-kim/1.0';
 
 function readTrimmed(file) { try { return fs.readFileSync(file, 'utf8').trim(); } catch { return ''; } }
 
+// 監視側も同じ秘密の取得経路を使う。
+export function resolveDiscordBotToken(home = process.env.ORGIAST_HOME || os.homedir()) {
+  return process.env.DISCORD_BOT_TOKEN?.trim()
+    || readTrimmed(path.join(home, '.claude', 'orgiast-discord-bot-token.txt'));
+}
+
 export function clipDiscordContent(text) {
   const content = String(text ?? '');
   return content.length <= MAX_CONTENT ? content : `${content.slice(0, MAX_CONTENT - OMITTED.length)}${OMITTED}`;
 }
 
-async function postWebhook(url, content, fetchImpl) {
+async function postWebhook(url, content, fetchImpl, signal) {
   const response = await fetchImpl(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'User-Agent': USER_AGENT },
     body: JSON.stringify({ content }),
-    signal: AbortSignal.timeout(20_000),
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20_000)]) : AbortSignal.timeout(20_000),
   });
   if (!response.ok) throw new Error(`Webhook送信が HTTP ${response.status}`);
 }
@@ -33,12 +40,12 @@ export async function notifyKim(text, {
   token,
   fetchImpl = globalThis.fetch,
   webhookFallback = true,
+  fleetFallback = false,
   signal,
 } = {}) {
   const resolvedUserId = userId !== undefined ? userId : (process.env.ORGIAST_DISCORD_USER_ID?.trim()
     || readTrimmed(path.join(home, '.claude', 'orgiast-discord-user-id.txt')));
-  const resolvedToken = token !== undefined ? token : (process.env.DISCORD_BOT_TOKEN?.trim()
-    || readTrimmed(path.join(home, '.claude', 'orgiast-discord-bot-token.txt')));
+  const resolvedToken = token !== undefined ? token : resolveDiscordBotToken(home);
   const content = clipDiscordContent(text);
   let dmReason = '';
 
@@ -68,10 +75,11 @@ export async function notifyKim(text, {
   }
 
   if (webhookFallback) {
-    const webhook = readTrimmed(path.join(home, '.claude', 'orgiast-discord-webhook.txt'));
+    const webhook = (fleetFallback ? readEnvValue(path.join(home, '.claude', 'cost-reporter.env'), 'DISCORD_COST_WEBHOOK') : '')
+      || readTrimmed(path.join(home, '.claude', 'orgiast-discord-webhook.txt'));
     if (webhook) {
       try {
-        await postWebhook(webhook, content, fetchImpl);
+        await postWebhook(webhook, content, fetchImpl, signal);
         console.error(`notify-kim: DMで送れないため webhook へフォールバックしました (${dmReason})`);
         return { delivered: 'webhook', reason: dmReason };
       } catch (error) {

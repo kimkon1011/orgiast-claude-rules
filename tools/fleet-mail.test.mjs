@@ -5,9 +5,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { main, parseArgs, createClient, waitForReply, acquireLock, LOCK_MS, readInbox, findPriorReply } from './fleet-mail.mjs';
+import { main, parseArgs, createClient, waitForReply, acquireLock, LOCK_MS, readInbox, findPriorReply, resolveRemoteName } from './fleet-mail.mjs';
 import { main as register } from './register-fleet-mail.mjs';
 import { consentCommand } from './fleet-agent.mjs';
+import { listDecisions, markDecisions, queuePath } from './pending-decisions.mjs';
 
 function fixture(t, configured = true) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-mail-test-'));
@@ -40,6 +41,41 @@ test('send uses file body, reporter identity, reason, expiry and mail-send envel
   assert.equal(await main(['--send', '--to', 'other-PC', '--kind', 'prompt', '--body-file', f.body, '--why', '調査'], f.deps), 0);
   assert.deepEqual(transport[0].payload, { id: 'mail-20260921000000000-1234', from: 'kim-PC', to: 'other-PC', messageKind: 'prompt', body: '質問 $() `literal`', why: '調査', expiresAt: '2026-09-22T00:00:00.000Z', kind: 'mail-send', token: 'test-token' });
   assert.match(fs.readFileSync(path.join(f.dir, 'fleet-mail-sent.jsonl'), 'utf8'), /send-attempt/);
+});
+for (const to of ['作業用011', '作業用０１１', '  作業用011　']) {
+  test(`send resolves remoteName ${JSON.stringify(to)} to the PC label (not a possibly shared hostname)`, async t => {
+    const f = fixture(t);
+    f.deps.pcMap = { 'kimko-PC': { remoteName: '作業用011', hostname: 'DESKTOP-PPD5V8I' } };
+    assert.equal(await main(['--send', '--to', to, '--kind', 'note', '--body-file', f.body, '--why', 'test'], f.deps), 0);
+    assert.equal(f.calls[0].payload.to, 'kimko-PC');
+    assert.deepEqual(f.errors, [`${to} → kimko-PC`]);
+    const logs = fs.readFileSync(path.join(f.dir, 'fleet-mail-sent.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l));
+    assert.ok(logs.every(entry => entry.to === 'kimko-PC'));
+  });
+}
+test('send preserves unmatched targets without stderr output', async t => {
+  const f = fixture(t);
+  f.deps.pcMap = { 'kimko-PC': { remoteName: '作業用011', hostname: 'DESKTOP-PPD5V8I' } };
+  for (const to of ['other-PC', '  other-ＰＣ　', 'all', '作業用01']) {
+    assert.equal(await main(['--send', '--to', to, '--kind', 'note', '--body-file', f.body, '--why', 'test'], f.deps), 0);
+    assert.equal(f.calls.at(-1).payload.to, to);
+  }
+  assert.deepEqual(f.errors, []);
+});
+test('resolveRemoteName normalizes roster names and falls back to the PC label', () => {
+  assert.deepEqual(resolveRemoteName('作業用011', { 'kimko-PC': { remoteName: '　作業用０１１ ' } }), { to: 'kimko-PC', resolved: true });
+});
+test('resolveRemoteName excludes reserved keys and unverified entries', () => {
+  const pcMap = {
+    _note: { remoteName: '作業用011', hostname: 'wrong-note' },
+    _unverified: { remoteName: '作業用011', hostname: 'wrong-unverified', 'other-PC': { remoteName: '作業用012', hostname: 'wrong-nested' } }
+  };
+  for (const to of ['作業用011', '作業用012']) assert.deepEqual(resolveRemoteName(to, pcMap), { to, resolved: false });
+});
+test('resolveRemoteName passes through missing or invalid roster data', () => {
+  for (const pcMap of [undefined, null, 'broken', [], { bad: null, other: { remoteName: 11 } }]) {
+    assert.deepEqual(resolveRemoteName(' 作業用０１１ ', pcMap), { to: ' 作業用０１１ ', resolved: false });
+  }
 });
 test('invalid CLI never accepts inline body, missing why, unsafe ids, invalid wait or mixed modes', () => {
   for (const args of [['--send','--body','oops'], ['--send'], ['--poll','--inbox'], ['--ack','../../escape'], ['--poll','--wait','-1'], ['--reply','mail-1']]) assert.throws(() => parseArgs(args));
@@ -232,4 +268,59 @@ test('findPriorReply treats a damaged inbox file as no record', t => {
   assert.equal(findPriorReply(f.dir, 'mail-9'), null);
   fs.writeFileSync(path.join(f.dir, 'fleet-inbox', 'mail-9.json'), JSON.stringify({ id: 'mail-9', status: 'done', resultAt: '2026-10-01T00:00:00Z' }));
   assert.deepEqual(findPriorReply(f.dir, 'mail-9'), { at: '2026-10-01T00:00:00Z', action: 'inbox-done' });
+});
+
+for (const [why, body, subject] of [
+  ['  [判断依頼] 見積承認', '詳細', '見積承認'],
+  ['', '  [判断依頼] 本文の件名\n詳細', '本文の件名'],
+  ['優先する件名', '[判断依頼] 本文', '優先する件名'],
+  ['[判断依頼] ', '[判断依頼] 本文の件名\n詳細', '本文の件名'],
+]) {
+  test(`decision note uses subject ${JSON.stringify(why)} / ${JSON.stringify(body)}`, async t => {
+    const f = fixture(t);
+    f.deps.request = async () => ({ messages: [mail({ why, body })] });
+    assert.equal(await main(['--poll'], f.deps), 0);
+    const decisions = listDecisions({ home: f.home });
+    assert.equal(decisions.length, 1);
+    assert.equal(decisions[0].source, `fleet-mail:other-PC:${mail().id}`);
+    assert.equal(decisions[0].text, `[判断依頼] ${subject} / from=other-PC id=${mail().id}`);
+    assert.equal(decisions[0].status, 'pending');
+  });
+}
+test('ordinary notes and marked prompts do not create decisions', async t => {
+  const f = fixture(t);
+  f.deps.request = async kind => kind === 'mail-poll' ? { messages: [mail(), mail({ id: 'mail-prompt', kind: 'prompt', why: '[判断依頼] 確認' })] } : { mail: {} };
+  await main(['--poll'], f.deps);
+  assert.deepEqual(listDecisions({ home: f.home }), []);
+});
+test('repeated decision note stays unique, including an already batched source', async t => {
+  const f = fixture(t);
+  f.deps.request = async () => ({ messages: [mail({ why: '[判断依頼] 承認' })] });
+  await main(['--poll'], f.deps);
+  await main(['--poll'], f.deps);
+  const decisions = listDecisions({ home: f.home });
+  assert.equal(decisions.length, 1);
+  markDecisions([decisions[0].id], { home: f.home, status: 'batched' });
+  // Exercise source deduplication even when local mail receipt tracking was lost.
+  fs.unlinkSync(path.join(f.dir, '.fleet-mail-processed'));
+  fs.unlinkSync(path.join(f.dir, 'fleet-inbox', `${mail().id}.json`));
+  await main(['--poll'], f.deps);
+  assert.deepEqual(listDecisions({ home: f.home }), [{ ...decisions[0], status: 'batched' }]);
+});
+test('decision text is limited to 200 characters', async t => {
+  const f = fixture(t);
+  const why = '[判断依頼] ' + '件'.repeat(300);
+  f.deps.request = async () => ({ messages: [mail({ why })] });
+  await main(['--poll'], f.deps);
+  assert.equal(listDecisions({ home: f.home })[0].text, `${why} / from=other-PC id=${mail().id}`.slice(0, 200));
+});
+test('decision storage failure is logged without stopping receipt of the batch', async t => {
+  const f = fixture(t);
+  fs.mkdirSync(queuePath({ home: f.home }));
+  f.deps.request = async () => ({ messages: [mail({ why: '[判断依頼] 承認' }), mail({ id: 'mail-next' })] });
+  assert.equal(await main(['--poll'], f.deps), 0);
+  assert.equal(readInbox(f.home).length, 2);
+  const failure = JSON.parse(fs.readFileSync(path.join(f.dir, 'fleet-mail-decision-intake-failed.jsonl'), 'utf8'));
+  assert.equal(failure.id, mail().id);
+  assert.ok(failure.error);
 });

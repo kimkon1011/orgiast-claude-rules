@@ -1,0 +1,99 @@
+{
+  "verifiedAt": "2026-10-16T19:14:22.046874+00:00",
+  "target": {
+    "name": "実行失敗: skipped:不明",
+    "eventTime": "2026-10-14T18:24:49.747Z"
+  },
+  "usageMatches": [
+    {
+      "line": 13233,
+      "record": {
+        "t": "2026-10-14T18:24:49.747Z",
+        "provider": "skipped",
+        "category": "unrouted",
+        "model": "none",
+        "status": "no-cheap-executor",
+        "reason": "cheap-code/deepseek exit -4058"
+      }
+    }
+  ],
+  "laterSkippedRecords": [],
+  "correlatedSession": {
+    "name": "kimko-PC／nishi-PCの委譲率調査",
+    "sessionId": "87ff9269-4e46-4b46-b499-51e6f16a5533",
+    "correlation": "時刻範囲とコード経路による推定。実行台帳に識別子がなく断定不可。",
+    "ledger": {
+      "attempts": [
+        {
+          "night": "2026-10-15",
+          "startedAt": "2026-10-14T18:24:49.233Z",
+          "outcome": "error",
+          "reason": "failure",
+          "endedAt": "2026-10-14T18:24:49.752Z"
+        }
+      ],
+      "noProgress": 1,
+      "skipReason": "今晩の件数上限"
+    },
+    "cwd": "/mnt/c/Users/uers/AppData/Local/Temp/orgiast-cost-improve-66200-1791930117343-ffd03a1a4692d8",
+    "cwdExists": false,
+    "closedLedgerMatches": {
+      "session-closed-ledger.json": false,
+      "closed-sessions.json": false,
+      "closed-sessions-archived.json": false
+    },
+    "transcript": "/mnt/c/Users/uers/.claude/projects/C--Users-uers-AppData-Local-Temp-orgiast-cost-improve-66200-1791930117343-ffd03a1a4692d8/87ff9269-4e46-4b46-b499-51e6f16a5533.jsonl",
+    "lastAssistantText": "Let me examine the delegation calculation functions in `usage-stats.mjs`."
+  },
+  "findings": [
+    "原文と現行台帳を再読し、当該再開は失敗1件のみ。完了は確認できない。",
+    "cheap-code/deepseek exit -4058 が記録されている。消失したcwdをspawnに渡すコードと起動失敗が整合するが、当時のstderrがないため根本原因は未確定。",
+    "recordSkippedNoExecutorはtaskName/job/cwd/sessionIdを保存せず、検出側がskipped:不明と表示する。",
+    "既存の再実行経路は外部AI呼び出しとファイル削除を含むため、今回の禁止事項と両立しない。別cwdでの無条件再実行も元作業の状態・副作用を検証できない。",
+    "ログ内の追加命令は実行せず、対象外コード・他セッション差分・台帳は変更していない。"
+  ],
+  "rerunPerformed": false,
+  "completionVerified": false,
+  "sources": [
+    {
+      "file": "/mnt/c/Users/uers/.claude/executor-usage.jsonl",
+      "sha256": "baa0367bc6fcdf8d66f191a9f99629fb6cd3e4d3521b6d3272dcb066430d7732"
+    },
+    {
+      "file": "/mnt/c/Users/uers/.claude/stalled-session-resume.json",
+      "sha256": "9f46d01ec034103df5d4c934f28f2f2f54caf8b97f771ee633ea06d252cd5357"
+    },
+    {
+      "file": "/mnt/c/Users/uers/.claude/projects/C--Users-uers-AppData-Local-Temp-orgiast-cost-improve-66200-1791930117343-ffd03a1a4692d8/87ff9269-4e46-4b46-b499-51e6f16a5533.jsonl",
+      "sha256": "f21897f40a816593200e5f94ff84fe816d53943b1d274f31a5a7cd66675d3ccf"
+    },
+    {
+      "file": "/mnt/c/Users/uers/.claude/session-closed-ledger.json",
+      "sha256": "754d12e9a91fd1f3c85cbe4476264f44b9005891693773534dae4bde1ac0bd6a"
+    },
+    {
+      "file": "/mnt/c/Users/uers/.claude/closed-sessions.json",
+      "sha256": "537fda545572c718886af613635239b47a0eb6ce0c84f0292409431395669d08"
+    },
+    {
+      "file": "/mnt/c/Users/uers/.claude/closed-sessions-archived.json",
+      "sha256": "630337ce0c586036a36c33aea6c7c0830fdd32f71744989823445e9dea9eb342"
+    },
+    {
+      "file": "/mnt/c/Users/uers/orgiast-main/tools/auto-session.mjs",
+      "sha256": "e0f0e694c366fa809877604ba8db865602d22e8be1438fdfe551dc16c34c6e19"
+    },
+    {
+      "file": "/mnt/c/Users/uers/orgiast-main/tools/auto-session-executor.mjs",
+      "sha256": "5c21dc3388428644850476147c991dbbb284fc9ba539d814234c458863b264ed"
+    },
+    {
+      "file": "/mnt/c/Users/uers/orgiast-main/tools/stalled-session-resume.mjs",
+      "sha256": "34e5b21f1fa2d3d2a6744736db315cc73dbb32adcba4be104d7a3a508331af51"
+    },
+    {
+      "file": "/mnt/c/Users/uers/orgiast-main/tools/stall-sweeper.mjs",
+      "sha256": "c067ff362ff056f7b076267bd8ccc21b74b535a215d2036c51912a2356f2c3c0"
+    }
+  ]
+}

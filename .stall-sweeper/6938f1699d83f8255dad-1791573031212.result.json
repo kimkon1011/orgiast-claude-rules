@@ -1,0 +1,8 @@
+{
+  "completed": false,
+  "summary": "T-4071（デュトロドライバー兼設営スタッフ勤務確定返信）はライブ台帳で未着手。共有Gmailで原文と返信検索を再確認。後藤大輔本人への10/5勤務・10/3期限の確定返信依頼で、共有メールの返信検索は0件。ただし送信元assing@orgiast.jpは読み取り認証がunauthorized_clientで失敗し、返信済みか断定できない。外部送信禁止のため返信・督促はせず、完了根拠不足としてcompleted:false。",
+  "evidence": {
+    "file": "/mnt/c/Users/uers/orgiast-main/.stall-sweeper/6938f1699d83f8255dad-1791573031212.verification.json",
+    "sha256": "d0bbe0aaa70cc55d70a484aeb7696df7dfe00041f652377792133d82469bc9a6"
+  }
+}

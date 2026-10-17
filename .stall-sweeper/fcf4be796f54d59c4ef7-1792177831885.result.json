@@ -1,0 +1,8 @@
+{
+  "completed": false,
+  "summary": "T-5398（トライアル初案件を業務開始日までに割当）はGoogle Sheetsのタスク台帳を直接照会し、未着手・担当空欄を確認。元のDiscord投稿は直接取得時に403 Missing Accessとなり、割当対象・案件および実際の完了状況を確認できず停止。外部送信・権限変更・台帳更新は未実施。",
+  "evidence": {
+    "file": "/mnt/c/Users/uers/orgiast-main/.stall-sweeper/fcf4be796f54d59c4ef7-1792177831885.evidence.json",
+    "sha256": "73557c476ddcb578433a3e3911927866f352aa0a9c90f911498ce93ee9c3d3d4"
+  }
+}

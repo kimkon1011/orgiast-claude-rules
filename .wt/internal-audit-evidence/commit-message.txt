@@ -1,0 +1,6 @@
+feat: add read-only internal risk audit and weekly task script
+
+Audit freee payments, vendor footprints, external sharing, public leaks and
+new fraud patterns. Preserve incomplete-source reporting and private snapshots.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>

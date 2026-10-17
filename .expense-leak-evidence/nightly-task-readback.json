@@ -1,0 +1,14 @@
+[
+    {
+        "Execute":  "C:\\Windows\\System32\\wscript.exe",
+        "Arguments":  "//nologo \"C:\\Users\\uers\\.claude\\tools\\run-hidden.vbs\" \"powershell.exe\" \"-NoProfile\" \"-NonInteractive\" \"-ExecutionPolicy\" \"Bypass\" \"-File\" \"C:\\Users\\uers\\.claude\\tools\\nightly-bootstrap.ps1\" \"-Target\" \"tools\\nightly-batch.ps1\""
+    },
+    {
+        "Execute":  "C:\\WINDOWS\\System32\\wscript.exe",
+        "Arguments":  "//nologo \"C:\\Users\\uers\\.claude\\tools\\run-hidden.vbs\" \"C:\\Program Files\\nodejs\\node.exe\" \"C:\\Users\\uers\\orgiast-main\\tools\\ai-news-triage.mjs\" \"--confidence\" \"high,medium\" \"--limit\" \"8\""
+    },
+    {
+        "Execute":  "C:\\WINDOWS\\System32\\wscript.exe",
+        "Arguments":  "//nologo \"C:\\Users\\uers\\.claude\\tools\\run-hidden.vbs\" \"C:\\Program Files\\nodejs\\node.exe\" \"C:\\Users\\uers\\orgiast-main\\tools\\pricing-brief.mjs\" \"--limit\" \"8\""
+    }
+]

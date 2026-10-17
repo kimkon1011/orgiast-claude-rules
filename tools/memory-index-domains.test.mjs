@@ -7,6 +7,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { run as derive } from './memory-index-domains.mjs';
 import { build } from './memory-index-split.mjs';
+import { verify } from './memory-index-split-verify.mjs';
 
 const script = fileURLToPath(new URL('./memory-index-domains.mjs', import.meta.url));
 
@@ -55,12 +56,27 @@ test('v2 マーカーが無ければ対象外 exit 2', () => {
   assert.match(child.stderr, /対象外/);
 });
 
-test('複数ドメイン掲載は勝手に解消せず exit 1 にする', () => {
+test('複数ドメイン掲載は最初の割当で解消し警告のみ出す（exit 1 にすると nightly が split をスキップして永久 NG になるため）', () => {
   const directory = fixture();
   fs.appendFileSync(path.join(directory, 'index', 'workstyle.md'), '- [重複](../feedback_one.md)\n');
   const child = invoke(directory);
-  assert.equal(child.status, 1);
-  assert.match(child.stderr, /複数ドメインにある memory ファイル \(1件\):[\s\S]*feedback_one\.md/);
+  assert.equal(child.status, 0, child.stderr);
+  assert.match(child.stderr, /複数ドメインにある memory ファイル \(1件\)[\s\S]*feedback_one\.md/);
+  const result = JSON.parse(child.stdout.slice(child.stdout.indexOf('{')));
+  assert.equal(result['feedback_one.md'], 'verify');
+});
+
+test('重複+未分類があっても fallback 導出→split 生成→独立検証まで自己修復する（2026-10-09 夜間バッチ恒久停滞の回帰）', () => {
+  const directory = fixture({ orphan: true });
+  fs.appendFileSync(path.join(directory, 'index', 'workstyle.md'), '- [重複](../feedback_one.md)\n');
+  const domainsFile = path.join(directory, 'domains.json');
+  const pinsFile = path.join(directory, 'pins.txt');
+  const result = derive(['--dir', directory, '--fallback', 'reference', '--out-domains', domainsFile, '--out-pins', pinsFile]);
+  assert.equal(result.exitCode, 0);
+  const plan = build({ directory, domainsFile, pinsFile });
+  fs.writeFileSync(path.join(directory, 'MEMORY.md'), plan.memory);
+  for (const [name, content] of plan.indexes) fs.writeFileSync(path.join(directory, 'index', name), content);
+  assert.deepEqual(verify(directory).problems, []);
 });
 
 test('導出結果は split build の全網羅検証を通る', () => {

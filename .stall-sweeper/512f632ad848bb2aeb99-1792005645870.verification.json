@@ -1,0 +1,813 @@
+{
+  "task": "T-5137 申請書のご確認依頼",
+  "verifiedAt": "2026-10-14T19:22:43.813310+00:00",
+  "completed": true,
+  "finding": "台帳の具体アクション「小林優紀が関係者に申請書の確認を依頼する」は2026-10-09 07:58 JSTのDiscord原文で実施済み。制作チャンネルでは同日11:20 JSTに申請書追記メールへの返信として望月果乃が「送信完了しました！」と報告。重複依頼は不要。",
+  "ledger": {
+    "queriedAt": "2026-10-14T19:21:52.562Z",
+    "system": "Google Sheets",
+    "meta": {
+      "properties": {
+        "title": "Discord日次タスク台帳"
+      },
+      "sheets": [
+        {
+          "properties": {
+            "sheetId": 0,
+            "title": "タスク",
+            "index": 0,
+            "sheetType": "GRID",
+            "gridProperties": {
+              "rowCount": 5621,
+              "columnCount": 15,
+              "frozenRowCount": 1
+            }
+          }
+        },
+        {
+          "properties": {
+            "sheetId": 1,
+            "title": "実行ログ",
+            "index": 1,
+            "sheetType": "GRID",
+            "gridProperties": {
+              "rowCount": 1011,
+              "columnCount": 26,
+              "frozenRowCount": 1
+            }
+          }
+        }
+      ],
+      "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/1WtsSiDlId8EgyzA15pJbeCGfvMHUgBqrUMmucax4A24/edit?ouid=108943467368537426847"
+    },
+    "headers": [
+      "ID",
+      "起票日",
+      "優先ランク",
+      "優先度スコア",
+      "種別",
+      "タイトル",
+      "具体アクション",
+      "担当",
+      "期限",
+      "チャンネル",
+      "根拠(発言抜粋)",
+      "Discordリンク",
+      "状態",
+      "実行メモ",
+      "最終更新"
+    ],
+    "rows": [
+      {
+        "row": 10,
+        "values": [
+          "T-5137",
+          "2026-10-10 6:33",
+          "P1",
+          "96",
+          "締切",
+          "申請書のご確認依頼",
+          "小林優紀が関係者に申請書の確認を依頼する",
+          "",
+          "2026-10-09",
+          "学会リーダー相談窓口",
+          "申請書のご確認をお願いいたします🙏 事前作業届と臨時搬出入申請書のみ期限が本日の午前中までとなっております。",
+          "https://discord.com/channels/715211007307284530/1382651184141303819/1557890039852044394",
+          "未着手",
+          "",
+          "2026-10-14 6:35"
+        ]
+      }
+    ]
+  },
+  "sourceRequest": {
+    "type": 0,
+    "content": "<@1237340022190112781> \nおつかれさまです。\n第30回日本外科病理学会学術集会の申請書のご確認をお願いいたします🙏 \n事前作業届と臨時搬出入申請書のみ期限が本日の午前中までとなっております。",
+    "mentions": [
+      {
+        "id": "1237340022190112781",
+        "username": "km00037",
+        "avatar": "40c08836ecbe9cd4053b9f4c7d5c78be",
+        "discriminator": "0",
+        "public_flags": 0,
+        "flags": 0,
+        "banner": null,
+        "accent_color": null,
+        "global_name": "望月果乃",
+        "avatar_decoration_data": null,
+        "collectibles": null,
+        "display_name_styles": null,
+        "vad_colors": null,
+        "banner_color": null,
+        "clan": null,
+        "primary_guild": null
+      }
+    ],
+    "mention_roles": [],
+    "attachments": [],
+    "embeds": [],
+    "timestamp": "2026-10-08T22:58:49.698000+00:00",
+    "edited_timestamp": "2026-10-08T22:59:35.217000+00:00",
+    "flags": 0,
+    "components": [],
+    "id": "1557890039852044394",
+    "channel_id": "1382651184141303819",
+    "author": {
+      "id": "1382656441759957032",
+      "username": "yuukiki8",
+      "avatar": "f2a45f1a2022b4dda82f2a4e8e32ee83",
+      "discriminator": "0",
+      "public_flags": 0,
+      "flags": 0,
+      "banner": null,
+      "accent_color": null,
+      "global_name": "小林優紀 本日対応不可",
+      "avatar_decoration_data": null,
+      "collectibles": null,
+      "display_name_styles": null,
+      "vad_colors": null,
+      "banner_color": null,
+      "clan": null,
+      "primary_guild": null
+    },
+    "pinned": false,
+    "mention_everyone": false,
+    "tts": false
+  },
+  "followUpMessages": [
+    {
+      "type": 19,
+      "content": "<@1382955208413417474> 前回のメールに返信する形で送信しました",
+      "mentions": [
+        {
+          "id": "1382955208413417474",
+          "username": "gxiaoziyo_42967",
+          "avatar": null,
+          "discriminator": "0",
+          "public_flags": 0,
+          "flags": 0,
+          "banner": null,
+          "accent_color": null,
+          "global_name": "永井孝子　15日夕方まで対応不可",
+          "avatar_decoration_data": null,
+          "collectibles": null,
+          "display_name_styles": null,
+          "vad_colors": null,
+          "banner_color": null,
+          "clan": null,
+          "primary_guild": null
+        }
+      ],
+      "mention_roles": [],
+      "attachments": [],
+      "embeds": [],
+      "timestamp": "2026-10-09T02:27:12.584000+00:00",
+      "edited_timestamp": null,
+      "flags": 0,
+      "components": [],
+      "id": "1557942480756936756",
+      "channel_id": "1384435848610709534",
+      "author": {
+        "id": "1237340022190112781",
+        "username": "km00037",
+        "avatar": "40c08836ecbe9cd4053b9f4c7d5c78be",
+        "discriminator": "0",
+        "public_flags": 0,
+        "flags": 0,
+        "banner": null,
+        "accent_color": null,
+        "global_name": "望月果乃",
+        "avatar_decoration_data": null,
+        "collectibles": null,
+        "display_name_styles": null,
+        "vad_colors": null,
+        "banner_color": null,
+        "clan": null,
+        "primary_guild": null
+      },
+      "pinned": false,
+      "mention_everyone": false,
+      "tts": false,
+      "message_reference": {
+        "type": 0,
+        "channel_id": "1384435848610709534",
+        "message_id": "1557941714767978619",
+        "guild_id": "715211007307284530"
+      },
+      "reactions": [
+        {
+          "emoji": {
+            "id": null,
+            "name": "🙇‍♀️"
+          },
+          "count": 1,
+          "count_details": {
+            "burst": 0,
+            "normal": 1
+          },
+          "burst_colors": [],
+          "me_burst": false,
+          "burst_me": false,
+          "me": false,
+          "burst_count": 0
+        }
+      ],
+      "referenced_message": {
+        "type": 19,
+        "content": "<@1237340022190112781> \nお忙しいところ送信頂きありがとうございます。\n\n申し訳ございませんが、運営事務局宛のメールも送信前確認をお願い出来ますでしょうか？",
+        "mentions": [
+          {
+            "id": "1237340022190112781",
+            "username": "km00037",
+            "avatar": "40c08836ecbe9cd4053b9f4c7d5c78be",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "望月果乃",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          }
+        ],
+        "mention_roles": [],
+        "attachments": [],
+        "embeds": [],
+        "timestamp": "2026-10-09T02:24:09.958000+00:00",
+        "edited_timestamp": null,
+        "flags": 0,
+        "components": [],
+        "id": "1557941714767978619",
+        "channel_id": "1384435848610709534",
+        "author": {
+          "id": "1382955208413417474",
+          "username": "gxiaoziyo_42967",
+          "avatar": null,
+          "discriminator": "0",
+          "public_flags": 0,
+          "flags": 0,
+          "banner": null,
+          "accent_color": null,
+          "global_name": "永井孝子　15日夕方まで対応不可",
+          "avatar_decoration_data": null,
+          "collectibles": null,
+          "display_name_styles": null,
+          "vad_colors": null,
+          "banner_color": null,
+          "clan": null,
+          "primary_guild": null
+        },
+        "pinned": false,
+        "mention_everyone": false,
+        "tts": false,
+        "message_reference": {
+          "type": 0,
+          "channel_id": "1384435848610709534",
+          "message_id": "1557940822257832127",
+          "guild_id": "715211007307284530"
+        }
+      }
+    },
+    {
+      "type": 19,
+      "content": "<@1382656441759957032> <@1382955208413417474> 送信完了しました！",
+      "mentions": [
+        {
+          "id": "1382656441759957032",
+          "username": "yuukiki8",
+          "avatar": "f2a45f1a2022b4dda82f2a4e8e32ee83",
+          "discriminator": "0",
+          "public_flags": 0,
+          "flags": 0,
+          "banner": null,
+          "accent_color": null,
+          "global_name": "小林優紀 本日対応不可",
+          "avatar_decoration_data": null,
+          "collectibles": null,
+          "display_name_styles": null,
+          "vad_colors": null,
+          "banner_color": null,
+          "clan": null,
+          "primary_guild": null
+        },
+        {
+          "id": "1382955208413417474",
+          "username": "gxiaoziyo_42967",
+          "avatar": null,
+          "discriminator": "0",
+          "public_flags": 0,
+          "flags": 0,
+          "banner": null,
+          "accent_color": null,
+          "global_name": "永井孝子　15日夕方まで対応不可",
+          "avatar_decoration_data": null,
+          "collectibles": null,
+          "display_name_styles": null,
+          "vad_colors": null,
+          "banner_color": null,
+          "clan": null,
+          "primary_guild": null
+        }
+      ],
+      "mention_roles": [],
+      "attachments": [],
+      "embeds": [],
+      "timestamp": "2026-10-09T02:20:37.167000+00:00",
+      "edited_timestamp": null,
+      "flags": 0,
+      "components": [],
+      "id": "1557940822257832127",
+      "channel_id": "1384435848610709534",
+      "author": {
+        "id": "1237340022190112781",
+        "username": "km00037",
+        "avatar": "40c08836ecbe9cd4053b9f4c7d5c78be",
+        "discriminator": "0",
+        "public_flags": 0,
+        "flags": 0,
+        "banner": null,
+        "accent_color": null,
+        "global_name": "望月果乃",
+        "avatar_decoration_data": null,
+        "collectibles": null,
+        "display_name_styles": null,
+        "vad_colors": null,
+        "banner_color": null,
+        "clan": null,
+        "primary_guild": null
+      },
+      "pinned": false,
+      "mention_everyone": false,
+      "tts": false,
+      "message_reference": {
+        "type": 0,
+        "channel_id": "1384435848610709534",
+        "message_id": "1557889391031091322",
+        "guild_id": "715211007307284530"
+      },
+      "reactions": [
+        {
+          "emoji": {
+            "id": null,
+            "name": "🙇‍♀️"
+          },
+          "count": 2,
+          "count_details": {
+            "burst": 0,
+            "normal": 2
+          },
+          "burst_colors": [],
+          "me_burst": false,
+          "burst_me": false,
+          "me": false,
+          "burst_count": 0
+        }
+      ],
+      "referenced_message": {
+        "type": 19,
+        "content": "<@1237340022190112781> <@1382955208413417474> \n永井さんが作成された展示施工事務局のメールに申請書の件も追記しました🙏 \n申請書を添付次第すぐに送れる状態にしております。",
+        "mentions": [
+          {
+            "id": "1382955208413417474",
+            "username": "gxiaoziyo_42967",
+            "avatar": null,
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "永井孝子　15日夕方まで対応不可",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          {
+            "id": "1237340022190112781",
+            "username": "km00037",
+            "avatar": "40c08836ecbe9cd4053b9f4c7d5c78be",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "望月果乃",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          }
+        ],
+        "mention_roles": [],
+        "attachments": [],
+        "embeds": [],
+        "timestamp": "2026-10-08T22:56:15.007000+00:00",
+        "edited_timestamp": null,
+        "flags": 0,
+        "components": [],
+        "id": "1557889391031091322",
+        "channel_id": "1384435848610709534",
+        "author": {
+          "id": "1382656441759957032",
+          "username": "yuukiki8",
+          "avatar": "f2a45f1a2022b4dda82f2a4e8e32ee83",
+          "discriminator": "0",
+          "public_flags": 0,
+          "flags": 0,
+          "banner": null,
+          "accent_color": null,
+          "global_name": "小林優紀 本日対応不可",
+          "avatar_decoration_data": null,
+          "collectibles": null,
+          "display_name_styles": null,
+          "vad_colors": null,
+          "banner_color": null,
+          "clan": null,
+          "primary_guild": null
+        },
+        "pinned": false,
+        "mention_everyone": false,
+        "tts": false,
+        "message_reference": {
+          "type": 0,
+          "channel_id": "1384435848610709534",
+          "message_id": "1557885548008308756",
+          "guild_id": "715211007307284530"
+        }
+      }
+    },
+    {
+      "type": 19,
+      "content": "<@1382656441759957032> 送信まで対応しておきます！",
+      "mentions": [
+        {
+          "id": "1382656441759957032",
+          "username": "yuukiki8",
+          "avatar": "f2a45f1a2022b4dda82f2a4e8e32ee83",
+          "discriminator": "0",
+          "public_flags": 0,
+          "flags": 0,
+          "banner": null,
+          "accent_color": null,
+          "global_name": "小林優紀 本日対応不可",
+          "avatar_decoration_data": null,
+          "collectibles": null,
+          "display_name_styles": null,
+          "vad_colors": null,
+          "banner_color": null,
+          "clan": null,
+          "primary_guild": null
+        }
+      ],
+      "mention_roles": [],
+      "attachments": [],
+      "embeds": [],
+      "timestamp": "2026-10-09T00:18:49.150000+00:00",
+      "edited_timestamp": null,
+      "flags": 0,
+      "components": [],
+      "id": "1557910170212896821",
+      "channel_id": "1384435848610709534",
+      "author": {
+        "id": "1237340022190112781",
+        "username": "km00037",
+        "avatar": "40c08836ecbe9cd4053b9f4c7d5c78be",
+        "discriminator": "0",
+        "public_flags": 0,
+        "flags": 0,
+        "banner": null,
+        "accent_color": null,
+        "global_name": "望月果乃",
+        "avatar_decoration_data": null,
+        "collectibles": null,
+        "display_name_styles": null,
+        "vad_colors": null,
+        "banner_color": null,
+        "clan": null,
+        "primary_guild": null
+      },
+      "pinned": false,
+      "mention_everyone": false,
+      "tts": false,
+      "message_reference": {
+        "type": 0,
+        "channel_id": "1384435848610709534",
+        "message_id": "1557909982333243484",
+        "guild_id": "715211007307284530"
+      },
+      "reactions": [
+        {
+          "emoji": {
+            "id": null,
+            "name": "🙇‍♀️"
+          },
+          "count": 1,
+          "count_details": {
+            "burst": 0,
+            "normal": 1
+          },
+          "burst_colors": [],
+          "me_burst": false,
+          "burst_me": false,
+          "me": false,
+          "burst_count": 0
+        }
+      ],
+      "referenced_message": {
+        "type": 0,
+        "content": "<@1237340022190112781> \nすみませんが10時から11時頃まで対応できません🙏",
+        "mentions": [
+          {
+            "id": "1237340022190112781",
+            "username": "km00037",
+            "avatar": "40c08836ecbe9cd4053b9f4c7d5c78be",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "望月果乃",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          }
+        ],
+        "mention_roles": [],
+        "attachments": [],
+        "embeds": [],
+        "timestamp": "2026-10-09T00:18:04.356000+00:00",
+        "edited_timestamp": null,
+        "flags": 0,
+        "components": [],
+        "id": "1557909982333243484",
+        "channel_id": "1384435848610709534",
+        "author": {
+          "id": "1382656441759957032",
+          "username": "yuukiki8",
+          "avatar": "f2a45f1a2022b4dda82f2a4e8e32ee83",
+          "discriminator": "0",
+          "public_flags": 0,
+          "flags": 0,
+          "banner": null,
+          "accent_color": null,
+          "global_name": "小林優紀 本日対応不可",
+          "avatar_decoration_data": null,
+          "collectibles": null,
+          "display_name_styles": null,
+          "vad_colors": null,
+          "banner_color": null,
+          "clan": null,
+          "primary_guild": null
+        },
+        "pinned": false,
+        "mention_everyone": false,
+        "tts": false
+      }
+    },
+    {
+      "type": 19,
+      "content": "<@1237340022190112781> <@1382955208413417474> \n永井さんが作成された展示施工事務局のメールに申請書の件も追記しました🙏 \n申請書を添付次第すぐに送れる状態にしております。",
+      "mentions": [
+        {
+          "id": "1382955208413417474",
+          "username": "gxiaoziyo_42967",
+          "avatar": null,
+          "discriminator": "0",
+          "public_flags": 0,
+          "flags": 0,
+          "banner": null,
+          "accent_color": null,
+          "global_name": "永井孝子　15日夕方まで対応不可",
+          "avatar_decoration_data": null,
+          "collectibles": null,
+          "display_name_styles": null,
+          "vad_colors": null,
+          "banner_color": null,
+          "clan": null,
+          "primary_guild": null
+        },
+        {
+          "id": "1237340022190112781",
+          "username": "km00037",
+          "avatar": "40c08836ecbe9cd4053b9f4c7d5c78be",
+          "discriminator": "0",
+          "public_flags": 0,
+          "flags": 0,
+          "banner": null,
+          "accent_color": null,
+          "global_name": "望月果乃",
+          "avatar_decoration_data": null,
+          "collectibles": null,
+          "display_name_styles": null,
+          "vad_colors": null,
+          "banner_color": null,
+          "clan": null,
+          "primary_guild": null
+        }
+      ],
+      "mention_roles": [],
+      "attachments": [],
+      "embeds": [],
+      "timestamp": "2026-10-08T22:56:15.007000+00:00",
+      "edited_timestamp": null,
+      "flags": 0,
+      "components": [],
+      "id": "1557889391031091322",
+      "channel_id": "1384435848610709534",
+      "author": {
+        "id": "1382656441759957032",
+        "username": "yuukiki8",
+        "avatar": "f2a45f1a2022b4dda82f2a4e8e32ee83",
+        "discriminator": "0",
+        "public_flags": 0,
+        "flags": 0,
+        "banner": null,
+        "accent_color": null,
+        "global_name": "小林優紀 本日対応不可",
+        "avatar_decoration_data": null,
+        "collectibles": null,
+        "display_name_styles": null,
+        "vad_colors": null,
+        "banner_color": null,
+        "clan": null,
+        "primary_guild": null
+      },
+      "pinned": false,
+      "mention_everyone": false,
+      "tts": false,
+      "message_reference": {
+        "type": 0,
+        "channel_id": "1384435848610709534",
+        "message_id": "1557885548008308756",
+        "guild_id": "715211007307284530"
+      },
+      "reactions": [
+        {
+          "emoji": {
+            "id": null,
+            "name": "🙇‍♀️"
+          },
+          "count": 1,
+          "count_details": {
+            "burst": 0,
+            "normal": 1
+          },
+          "burst_colors": [],
+          "me_burst": false,
+          "burst_me": false,
+          "me": false,
+          "burst_count": 0
+        }
+      ],
+      "referenced_message": {
+        "type": 19,
+        "content": "<@1237340022190112781> \nお疲れ様です。\n朝早くのご連絡失礼いたします。\n\nご連絡が失念しておりまして申し訳ございません。\n臨時搬出入申請書は、本日の午前中まで受付ことです。\nお忙しいところ申し訳ありませんがお手すきの際に、よろしくお願いいたします。\n\nまた、下書きにありますメールの送信前確認もしていただければ幸いです。",
+        "mentions": [
+          {
+            "id": "1382656441759957032",
+            "username": "yuukiki8",
+            "avatar": "f2a45f1a2022b4dda82f2a4e8e32ee83",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "小林優紀 本日対応不可",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          {
+            "id": "1237340022190112781",
+            "username": "km00037",
+            "avatar": "40c08836ecbe9cd4053b9f4c7d5c78be",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "望月果乃",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          }
+        ],
+        "mention_roles": [],
+        "attachments": [
+          {
+            "id": "1557885547018461184",
+            "filename": "2026-10-09_073810.png",
+            "size": 65578,
+            "url": "https://cdn.discordapp.com/attachments/1384435848610709534/1557885547018461184/2026-10-09_073810.png?ex=6ad0adba&is=6acf5c3a&hm=6def81227316c0eb8dcd5ccafdbfdc747435cac8b96f43c3cf8b6f3745bbf7e5&",
+            "proxy_url": "https://media.discordapp.net/attachments/1384435848610709534/1557885547018461184/2026-10-09_073810.png?ex=6ad0adba&is=6acf5c3a&hm=6def81227316c0eb8dcd5ccafdbfdc747435cac8b96f43c3cf8b6f3745bbf7e5&",
+            "width": 862,
+            "height": 338,
+            "content_type": "image/webp",
+            "original_content_type": "image/png",
+            "content_scan_version": 4,
+            "placeholder": "/AcCA4BwxsxXhyeYbG/H9Hg=",
+            "placeholder_version": 1,
+            "title": "スクリーンショット 2026-10-09 073810"
+          },
+          {
+            "id": "1557885547421241424",
+            "filename": "2026-10-09_073755.png",
+            "size": 44376,
+            "url": "https://cdn.discordapp.com/attachments/1384435848610709534/1557885547421241424/2026-10-09_073755.png?ex=6ad0adba&is=6acf5c3a&hm=e1406bd5912186296d0e2c1fb455c0bf097041a9f5aaf7d3dd9c97d98bcb1ef5&",
+            "proxy_url": "https://media.discordapp.net/attachments/1384435848610709534/1557885547421241424/2026-10-09_073755.png?ex=6ad0adba&is=6acf5c3a&hm=e1406bd5912186296d0e2c1fb455c0bf097041a9f5aaf7d3dd9c97d98bcb1ef5&",
+            "width": 903,
+            "height": 387,
+            "content_type": "image/webp",
+            "original_content_type": "image/png",
+            "content_scan_version": 4,
+            "placeholder": "OggGA4KHuJmAd0d4WHCPBfc=",
+            "placeholder_version": 1,
+            "title": "スクリーンショット 2026-10-09 073755"
+          }
+        ],
+        "embeds": [],
+        "timestamp": "2026-10-08T22:40:58.759000+00:00",
+        "edited_timestamp": null,
+        "flags": 0,
+        "components": [],
+        "id": "1557885548008308756",
+        "channel_id": "1384435848610709534",
+        "author": {
+          "id": "1382955208413417474",
+          "username": "gxiaoziyo_42967",
+          "avatar": null,
+          "discriminator": "0",
+          "public_flags": 0,
+          "flags": 0,
+          "banner": null,
+          "accent_color": null,
+          "global_name": "永井孝子　15日夕方まで対応不可",
+          "avatar_decoration_data": null,
+          "collectibles": null,
+          "display_name_styles": null,
+          "vad_colors": null,
+          "banner_color": null,
+          "clan": null,
+          "primary_guild": null
+        },
+        "pinned": false,
+        "mention_everyone": false,
+        "tts": false,
+        "message_reference": {
+          "type": 0,
+          "channel_id": "1384435848610709534",
+          "message_id": "1557533912664645753",
+          "guild_id": "715211007307284530"
+        }
+      }
+    }
+  ],
+  "limits": [
+    "Google Sheets台帳は直接照会時点で未着手。外部更新を行っていない。",
+    "メール送信そのものはGmailで未検証。Discord上の送信完了報告と区別する。",
+    "申請書の受理や内容の正確性は本件の確認依頼とは別のため完了断定しない。"
+  ],
+  "actions": {
+    "externalMessagesSent": false,
+    "externalDataChanged": false,
+    "jobsRerun": false,
+    "gitChanged": false
+  },
+  "rawEvidence": [
+    {
+      "file": "/mnt/c/Users/uers/orgiast-main/.stall-sweeper/512f632ad848bb2aeb99-1792005645870.sheet.json",
+      "sha256": "9ab1d418b26ca1690ca560d72900990fad8c7fa6a9f04405b2c3f7ed42081e0a"
+    },
+    {
+      "file": "/mnt/c/Users/uers/orgiast-main/.stall-sweeper/512f632ad848bb2aeb99-1792005645870.discord.json",
+      "sha256": "86bb57b349441a8edb2c886296cd6403e8f2935f6a32001a67540a9313a0bb19"
+    },
+    {
+      "file": "/mnt/c/Users/uers/orgiast-main/.stall-sweeper/512f632ad848bb2aeb99-1792005645870.channel-1384435848610709534.json",
+      "sha256": "d30521ca6000ccc8373244a627abe57b6d1c8afe892e2afd89e2c516a04b1a54"
+    }
+  ]
+}

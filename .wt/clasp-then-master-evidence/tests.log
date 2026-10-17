@@ -1,0 +1,155 @@
+✔ weekly audit ignores whitespace, CRLF, server extension and tests (17.735701ms)
+✔ production/master difference sends one-line DM and is suppressed for seven days (7.8385ms)
+✔ dry-run does not pull, spawn, notify or update weekly state (3.0206ms)
+✔ pullFail does not consume weekly check (1.9016ms)
+✔ notifyFail does not consume weekly check (7.7498ms)
+✔ clasp success → isolated snapshot commit and two Git pushes; production-only files preserved (11.4472ms)
+✔ clasp failure → no git calls (1.8943ms)
+✔ non-fast-forward → PR URL and stderr; no master push (5.1346ms)
+✔ dry-run → no git mutation or spawning (1.3415ms)
+✔ GitHub failure preserves clasp success and reports failed sync (3.0124ms)
+✔ unselected production file changed during read-back → no git calls (3.2191ms)
+✔ no staged difference skips commit but still pushes twice (7.4504ms)
+✔ only selected files overlay the pulled production snapshot; separate read-back workspace (8.9794ms)
+✔ unchanged content skips push and deployment, including CRLF differences (3.114201ms)
+✔ dry-run shows differences without push or deployment (5.1265ms)
+✔ mixed selection reports unchanged files and pushes a new empty file (4.6756ms)
+✔ read-back also verifies selected files that were initially unchanged (5.5338ms)
+✔ read-back mismatch returns exit code 1 and prevents deployment (5.0686ms)
+✔ missing read-back file fails even for empty local content (2.8691ms)
+✔ read-back accepts CRLF and explicit deployment preserves argument boundaries (2.0235ms)
+✔ deploy-webapp ignores HEAD and updates sole versioned deployment after verification (4.1556ms)
+✔ deploy-webapp reports every candidate and rejects multiple deployments (3.622701ms)
+✔ deploy-webapp fails when there is no versioned deployment (3.2116ms)
+✔ pull failure returns 1 and cleans temporary directories (1.3385ms)
+✔ push failure returns 1 and cleans temporary directories (1.4151ms)
+✔ deploy failure returns 1 and cleans temporary directories (2.215ms)
+✔ missing selected file fails before any clasp call (1.1876ms)
+✔ unsafe file path is rejected: "../outside.gs" (1.0858ms)
+✔ unsafe file path is rejected: "/absolute.gs" (0.6046ms)
+✔ unsafe file path is rejected: "C:\\outside.gs" (0.7433ms)
+✔ unsafe file path is rejected: ".clasp.json" (0.6018ms)
+✔ unsafe file path is rejected: "" (0.9155ms)
+✔ rootDir outside temporary workspace is rejected before pull (0.7414ms)
+✔ argument parsing requires values, rejects conflicts and splits file list (0.9204ms)
+✔ LCS counts additions/deletions, preserves newline changes and caps diff output at 80 lines (1.1762ms)
+✔ Windows npm clasp.cmd resolves to a Node script without shell execution (1.2783ms)
+⚠️ 夜間ジョブ異常 1件
+- ローカルテスト: テスト実行が15分でタイムアウト
+確認コマンド: node tools/nightly-health.mjs
+⚠️ 夜間ジョブ異常 1件
+- feedback:kimkon1011/app#13: 2 日連続失敗。判断してください
+確認コマンド: node tools/nightly-health.mjs
+ok:異常なし
+sent:通知送信完了
+sent:通知送信完了
+sent:通知送信完了
+sent:通知送信完了
+sent:通知送信完了
+sent:通知送信完了
+ok:異常なし
+sent:通知送信完了
+sent:通知送信完了
+sent:通知送信完了
+ok:異常なし
+ok:異常なし
+sent:通知送信完了
+ok:異常なし
+sent:通知送信完了
+sent:通知送信完了
+sent:通知送信完了
+ok:異常なし
+sent:通知送信完了
+prime:通知せず基準を記録（検知 1件）
+prime:通知せず基準を記録（検知 1件）
+ok:異常なし
+sent:通知送信完了
+ok:異常なし
+⚠️ 夜間ジョブ異常 2件
+- フック版ずれ: nightly-health-test-oQZdXg/checkout-a が origin/main より 3 コミット遅れ / フック実行ファイル 1件が main と不一致: hook-0.mjs
+- フック版ずれ: nightly-health-test-oQZdXg/checkout-b が origin/main より 3 コミット遅れ / フック実行ファイル 1件が main と不一致: hook-1.mjs
+確認コマンド: node tools/nightly-health.mjs
+⚠️ 夜間ジョブ異常 1件
+- フック版ずれ: nightly-health-test-eqMDUz/checkout-a が origin/main より 68 コミット遅れ / フック実行ファイル 7件が main と不一致: hook-0.mjs, hook-1.mjs, hook-2.mjs, hook-3.mjs, hook-4.mjs
+確認コマンド: node tools/nightly-health.mjs
+ok:異常なし
+ok:異常なし
+ok:異常なし
+ok:異常なし
+sent:通知送信完了
+skip:前回と同一
+auto-session:専用 DM 経路で通知・重複抑制済み
+⚠️ 夜間ジョブ異常 1件
+- feedback:kimkon1011/app#13: 【auto-session 異常】feedback:kimkon1011/app#13 が 2 日連続失敗しています。
+最新エラー: integration failure
+最初の失敗日: 2026-09-17
+最後の成功日: 成功記録なし
+
+kim に選んでほしい対応:
+1. 原因調査を自動で始める（セッションを起票する）
+2. このジョブを一時停止する
+3. 無視する（既知・対応中）
+
+run JSON: /tmp/nightly-health-test-9fkoNk/.claude/auto-session/runs/2026-09-18-feedback-app-13.json
+summary: /tmp/nightly-health-test-9fkoNk/.claude/auto-session/runs/2026-09-18-feedback-app-13.summary.md
+確認コマンド: node tools/nightly-health.mjs
+prime:通知せず基準を記録（検知 1件）
+sent:通知送信完了
+ok:異常なし
+⚠️ 夜間ジョブ異常 1件
+- GAS/master 週次監査: pull failed
+確認コマンド: node tools/nightly-health.mjs
+✔ defaultRunTests enforces the 15 minute hard timeout (2.6411ms)
+✔ test timeout becomes one anomaly and still writes the nightly cache (8.6731ms)
+✔ auto-session の streak 検出を既存 anomaly 型へ追加する (5.6424ms)
+✔ scheduled task の起動拒否・時間超過・ログ未生成を判定する (1.1251ms)
+✔ 異常ゼロなら notify が1度も呼ばれず ok:異常なし になる (4.4839ms)
+✔ scan: keywords のログに error 行があれば検知され、通知本文にそのラベルが含まれる (7.1392ms)
+✔ 24時間より古い失敗行は拾わない（新しい行だけ拾う） (6.069101ms)
+✔ 期待リストのログが存在しなければ異常として報告される (4.579ms)
+✔ maxAgeHours を超えて更新されていないログが stale として報告される (4.2085ms)
+✔ テストランナーが fail>0 を返したら異常として報告される (4.9242ms)
+✔ 走査済みログはオフセットにより再通知しない (7.8646ms)
+✔ 実ログのゼロ件カウンタと error=- は失敗扱いしない (1.4741ms)
+✔ git の同期出力は失敗扱いせず、通常の error 行は検知する (0.3444ms)
+✔ Windows 形式パスは win32 では維持し linux で WSL パスへ変換する (0.2877ms)
+✔ / サマリ / 行は失敗を含んでも除外する (0.1212ms)
+✔ 前回オフセット以降に追記された行だけを検知する (4.232001ms)
+✔ ファイル縮小時は末尾から読み直す (4.3388ms)
+✔ 初回は末尾200行だけを走査する (7.7385ms)
+✔ --dry-run ではオフセットを更新しない (4.0499ms)
+✔ scan 省略時は stale-only になり散文の失敗語を検知しない (3.8682ms)
+✔ 期待リストにないログは本文を読まず未登録のログを1行だけ付ける (4.977ms)
+✔ 未登録ログが0件なら未登録のログ行を付けない (3.8267ms)
+✔ pattern は最新の日付付きログ1件だけを人間向けラベルで走査する (4.906801ms)
+✔ pattern に一致するログがなければ存在しないと報告する (4.2429ms)
+✔ baseline の既知失敗を本文から除き抑制件数を示し、未知失敗だけ通知する (1.7368ms)
+✔ --update-baseline のときだけ現状の失敗名で baseline を上書きする (1.0672ms)
+✔ 異常13件では本文を12件に制限し残数を示す (1.4362ms)
+✔ ℹ fail 10 形式から失敗件数を抽出する (0.1517ms)
+✔ 通知が例外を投げたら exit code 相当が 1 になる (4.1252ms)
+✔ --prime は通知せずオフセットと state を記録する (4.3472ms)
+✔ --prime の直後は追記が無いので異常ゼロになり通知しない (12.6187ms)
+✔ 未登録ログや baseline 抑制だけでは通知しない（平穏な夜は無音） (4.205301ms)
+✔ 全フックから node の mjs と PowerShell -File の ps1 絶対パスを抽出する (0.6521ms)
+✔ 複数チェックアウトのフックをルートごとにまとめて判定する (5.5113ms)
+✔ 不一致ファイルをチェックアウトごとに1 anomalyへまとめ名前は最大5件にする (5.8276ms)
+✔ 内容が一致すれば100コミット遅れでも報告しない (4.4055ms)
+✔ origin/main に存在しないフックファイルは不一致に数えない (5.1988ms)
+✔ git fetch 失敗は理由を1行出してチェックアウト判定を異常なしでスキップする (4.303ms)
+✔ settings.json が読めないかフックが無ければ git を呼ばず何も報告しない (7.0834ms)
+✔ booth feedback uses the registered Intake task name (3.776301ms)
+✔ streak 専用 DM は1回だけ送り、通常通知は他の anomaly のみ送る (23.6794ms)
+✔ streak のみなら通常通知を呼ばず anomaly は返す (4.1363ms)
+✔ dry-run と prime は実 watcher でも DM を送らず streak state を更新しない (8.735501ms)
+✔ DM 失敗でも検出したジョブと他の監視結果を失わず通常経路で通知障害を報告する (4.777ms)
+✔ GAS 週次監査は夜間経路から呼ばれ、prime/dry-run と notifier を引き継ぐ (3.9052ms)
+✔ GAS 監査エラーを異常として残し、他の夜間チェックは継続する (3.9547ms)
+ℹ tests 82
+ℹ suites 0
+ℹ pass 82
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 497.347514

@@ -82,7 +82,7 @@ export function extractHookTreeRoots(settings, { realpath = false } = {}) {
     for (const match of command.matchAll(pattern)) {
       let root = nativePath(match[1].trim().replace(/^node\s+/i, ''));
       if (realpath) {
-        try { root = fs.realpathSync(root); } catch { continue; }
+        try { root = fs.realpathSync.native(root); } catch { continue; }
       }
       roots.add(root);
     }
@@ -92,12 +92,12 @@ export function extractHookTreeRoots(settings, { realpath = false } = {}) {
 
 export function discoverHookFiles(settings, repo) {
   const files = new Set();
-  const root = fs.realpathSync(repo);
+  const root = fs.realpathSync.native(repo);
   const pattern = /((?:[A-Za-z]:[\\/]|\/)[^"'`\r\n]*?)[\\/]tools[\\/]([A-Za-z0-9._-]+)/g;
   for (const command of hookCommands(settings)) {
     for (const match of command.matchAll(pattern)) {
       try {
-        if (fs.realpathSync(nativePath(match[1].trim().replace(/^node\s+/i, ''))) === root) files.add(`tools/${match[2]}`);
+        if (fs.realpathSync.native(nativePath(match[1].trim().replace(/^node\s+/i, ''))) === root) files.add(`tools/${match[2]}`);
       } catch {}
     }
   }
@@ -195,7 +195,7 @@ export function runSelfheal({ repo, home, dryRun = false, list = false, fetch = 
   catch (error) { if (dryRun || list) console.error(`[hook-tree-selfheal] settings 読み込み失敗: ${error.message}`); return []; }
   let trees = extractHookTreeRoots(settings, { realpath: true });
   if (repo) {
-    const forced = fs.realpathSync(path.resolve(repo));
+    const forced = fs.realpathSync.native(path.resolve(repo));
     trees = trees.includes(forced) ? [forced] : [];
   }
   const lastWritten = readLedger(ledgerFile);
@@ -203,7 +203,7 @@ export function runSelfheal({ repo, home, dryRun = false, list = false, fetch = 
   const allowUpdate = createDirtyWorktreeGuard({ home: resolvedHome });
   for (const candidate of trees) {
     let tree;
-    try { tree = fs.realpathSync(git(candidate, ['rev-parse', '--show-toplevel']).trim()); } catch { continue; }
+    try { tree = fs.realpathSync.native(git(candidate, ['rev-parse', '--show-toplevel']).trim()); } catch { continue; }
     if (fetch) try { git(tree, ['fetch', 'origin', '--quiet']); } catch (error) { console.error(`[hook-tree-selfheal] ${tree}: git fetch 失敗（続行）: ${error.message}`); }
     const files = discoverHookFiles(settings, tree);
     if (!dryRun && !list && !allowUpdate(tree)) {

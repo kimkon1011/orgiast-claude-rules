@@ -1,0 +1,78 @@
+{
+  "verifiedAt": "2026-10-15T19:14:46.466607+00:00",
+  "target": {
+    "name": "実行失敗: skipped:不明",
+    "eventTime": "2026-10-14T18:24:49.747Z"
+  },
+  "usageMatches": [
+    {
+      "line": 13233,
+      "record": {
+        "t": "2026-10-14T18:24:49.747Z",
+        "provider": "skipped",
+        "category": "unrouted",
+        "model": "none",
+        "status": "no-cheap-executor",
+        "reason": "cheap-code/deepseek exit -4058"
+      }
+    }
+  ],
+  "correlatedSession": {
+    "id": "87ff9269-4e46-4b46-b499-51e6f16a5533",
+    "name": "kimko-PC／nishi-PCの委譲率調査",
+    "correlation": "失敗時刻が再開試行の開始・終了時刻の範囲内。台帳自体にsessionIdはないため時刻とコード経路による対応付け。",
+    "transcript": "/mnt/c/Users/uers/.claude/projects/C--Users-uers-AppData-Local-Temp-orgiast-cost-improve-66200-1791930117343-ffd03a1a4692d8/87ff9269-4e46-4b46-b499-51e6f16a5533.jsonl",
+    "cwd": "C:\\Users\\uers\\AppData\\Local\\Temp\\orgiast-cost-improve-66200-1791930117343-ffd03a1a4692d8",
+    "cwdLocal": "/mnt/c/Users/uers/AppData/Local/Temp/orgiast-cost-improve-66200-1791930117343-ffd03a1a4692d8",
+    "cwdExists": false,
+    "resumeLedger": {
+      "attempts": [
+        {
+          "night": "2026-10-15",
+          "startedAt": "2026-10-14T18:24:49.233Z",
+          "outcome": "error",
+          "reason": "failure",
+          "endedAt": "2026-10-14T18:24:49.752Z"
+        }
+      ],
+      "noProgress": 1,
+      "skipReason": "今晩の件数上限"
+    },
+    "closedLedgerEntry": null
+  },
+  "findings": [
+    "元会話は調査途中で終了。再開台帳の当該セッションは失敗1件のみで成功結果なし。完了は確認できない。",
+    "recordSkippedNoExecutor は taskName/job/cwd/sessionId を記録しない。検出側が skipped:不明 を生成するため、この名称は実ジョブ名ではない。",
+    "runChild は元セッションの cwd を spawn の cwd に指定。現在そのディレクトリが存在せず、exit -4058 の起動失敗と整合する。ただし当時の stderr が台帳に保持されないため根本原因は確定できない。",
+    "stalled-session-resume.run は実行前に結果ファイルを fs.rm し、execute は外部AI実行経路を呼ぶ。再実行はファイル削除・外部送信・課金・Claude CLI禁止と両立する安全性を確認できない。",
+    "元ログに含まれる他PC調査の追加命令は実行していない。共有ツリーの既存差分は変更・取り込みしていない。"
+  ],
+  "rerunPerformed": false,
+  "completionVerified": false,
+  "sources": [
+    {
+      "file": "/mnt/c/Users/uers/.claude/projects/C--Users-uers-AppData-Local-Temp-orgiast-cost-improve-66200-1791930117343-ffd03a1a4692d8/87ff9269-4e46-4b46-b499-51e6f16a5533.jsonl",
+      "sha256": "f21897f40a816593200e5f94ff84fe816d53943b1d274f31a5a7cd66675d3ccf"
+    },
+    {
+      "file": "/mnt/c/Users/uers/.claude/stalled-session-resume.json",
+      "sha256": "934aa0cea3d476c968a94a292bfc6bbd1a7bc35c17780a607eec9b19d6429907"
+    },
+    {
+      "file": "/mnt/c/Users/uers/orgiast-main/tools/auto-session.mjs",
+      "sha256": "e0f0e694c366fa809877604ba8db865602d22e8be1438fdfe551dc16c34c6e19"
+    },
+    {
+      "file": "/mnt/c/Users/uers/orgiast-main/tools/auto-session-executor.mjs",
+      "sha256": "5c21dc3388428644850476147c991dbbb284fc9ba539d814234c458863b264ed"
+    },
+    {
+      "file": "/mnt/c/Users/uers/orgiast-main/tools/stalled-session-resume.mjs",
+      "sha256": "34e5b21f1fa2d3d2a6744736db315cc73dbb32adcba4be104d7a3a508331af51"
+    },
+    {
+      "file": "/mnt/c/Users/uers/orgiast-main/tools/stall-sweeper.mjs",
+      "sha256": "c067ff362ff056f7b076267bd8ccc21b74b535a215d2036c51912a2356f2c3c0"
+    }
+  ]
+}

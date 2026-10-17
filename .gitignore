@@ -43,6 +43,11 @@ scratch/
 .wt/
 /evidence/internal-audit-v11/
 
+# stall-sweeper.mjs が停滯調査の受け取り票を書くワークツリー直下の作業ディレクトリ。
+# 追跡対象にすると nightly rescue が毎晩使い捨ての票をコミットし、
+# 「rescue 枝のレビュー」TODO が中身の無いまま積み上がる。
+/.stall-sweeper/
+
 # Local feedback-kit state and supervisor report
 tools/.feedback-zero-local.json
 FEEDBACK_KIT_REPORT.md

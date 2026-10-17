@@ -69,7 +69,9 @@ test('Windows cmd executes Japanese paths, verification, and preserves failure e
   for (const [body, verifyCmd, expected] of [['Write-Output "日本語"', 'Write-Output "VERIFIED"', 0], ['exit 7', 'exit 0', 7], ['exit 0', 'exit 9', 9]]) {
     fs.writeFileSync(source, body);
     const result = makeLauncher({ name: '登録 作業', commandFile: source, verifyCmd }, deps);
-    const run = spawnSync('cmd.exe', ['/d', '/c', result.cmdPath], { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', timeout: 30000 });
+    // Windows CI ランナーは cmd.exe 起動が遅く 30s では 3 ケース目で SIGTERM される（実測: 2026-10-15
+    // PR #815 の windows-latest で 30011ms）。ローカル実測は 16.6s なので余裕を持たせる。
+    const run = spawnSync('cmd.exe', ['/d', '/c', result.cmdPath], { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', timeout: 90000 });
     assert.equal(run.status, expected, run.stdout + run.stderr);
     assert.match(run.stdout, expected === 0 ? /OK/ : /ERROR/);
     if (!expected) { assert.match(run.stdout, /日本語/); assert.match(run.stdout, /VERIFIED/); }

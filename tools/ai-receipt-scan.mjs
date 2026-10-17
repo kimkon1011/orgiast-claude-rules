@@ -55,14 +55,17 @@ export function parseReceiptMail(message, config) {
     || (kind === 'autoreload_other_card' ? new RegExp(money, 'i').exec(body) : null);
   const currency = amount ? (/JPY|[¥￥]/i.test(amount[1]) ? 'JPY' : 'USD') : null;
   const value = amount ? Number(amount[2].replace(/,/g, '')) : null;
-  const org = /\bfor (.+?) went through/i.exec(body)?.[1]
-    || /organization '(.+?)' (?:is out of usage credits|has|is)/i.exec(body)?.[1] || null;
+  const orgBody = body.replace(/[’‘]/g, "'");
+  const org = /\bfor (.+?) went through/i.exec(orgBody)?.[1]
+    || /organization '(.+?)' (?:is out of usage credits|has|is)/i.exec(orgBody)?.[1] || null;
   const cardMatch = /\b(JCB|Visa|Mastercard|American Express|Amex) ending in (\d{4})/i.exec(body);
   const last4 = cardMatch?.[2] || /\bwith\s*-\s*(\d{4})/.exec(body)?.[1];
   const date = Date.parse(message.date);
   return {
     messageId: String(message.id || message.messageId || ''), threadId: String(message.threadId || ''),
-    account: message.to || '', vendor: classifyVendor(message.from, subject, config), kind,
+    account: message.account ?? message.to ?? '',
+    recipient: String(message.to || '').match(/[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9.-]+/i)?.[0].toLowerCase() || null,
+    vendor: classifyVendor(message.from, subject, config), kind,
     date: Number.isFinite(date) ? new Date(date).toISOString() : null,
     amountUsd: currency === 'USD' ? value : null, amountJpy: currency === 'JPY' ? value : null, currency, org,
     card: last4 ? `${cardMatch?.[1] || '-'} ${last4}` : null,
@@ -70,13 +73,42 @@ export function parseReceiptMail(message, config) {
   };
 }
 
-export function summarizeReceipts(rows, { now = new Date() } = {}) {
+export function summarizeReceipts(rows, { now = new Date(), config = defaultConfig() } = {}) {
   const sources = {}, totals = { mtdUsd: 0, byVendor: {} }, through = new Date(now).getTime(), month = dayJst(now).slice(0, 7);
+  const accounts = new Map(config.accounts.map(account => [account.toLowerCase(), account]));
+  const groups = new Map();
   for (const row of rows) {
     const time = Date.parse(row.date);
     if (!Number.isFinite(time) || time > through) continue;
+    const identity = JSON.stringify(row.receiptNo
+      ? [row.vendor, row.receiptNo]
+      : [row.vendor, row.kind, row.subject, dayJst(row.date)]);
+    const group = groups.get(identity) || [];
+    group.push(row);
+    groups.set(identity, group);
+  }
+  const attributed = [...groups.values()].map(group => {
+    const recipient = group.map(row => accounts.get(row.recipient?.toLowerCase())).find(Boolean);
+    return { group, account: recipient || group[0].account };
+  });
+  const knownOrgs = new Map();
+  for (const { group, account } of attributed) {
+    for (const row of group) {
+      if (!row.org) continue;
+      const key = JSON.stringify([account, row.vendor]);
+      const orgs = knownOrgs.get(key) || new Set();
+      orgs.add(row.org.replace(/[’‘]/g, "'"));
+      knownOrgs.set(key, orgs);
+    }
+  }
+  for (const { group, account } of attributed) {
+    const row = { ...group[0], account };
+    const orgs = knownOrgs.get(JSON.stringify([account, row.vendor]));
+    if (row.org) row.org = row.org.replace(/[’‘]/g, "'");
+    else if (row.kind === 'receipt' && orgs?.size === 1) row.org = [...orgs][0];
+    const time = Date.parse(row.date);
     const key = `${row.account}|${row.vendor}|${row.org || '-'}`;
-    const source = sources[key] ||= { account: row.account, vendor: row.vendor, org: row.org, mtdUsd: 0, last48hUsd: 0, last24hUsd: 0, reloads48h: 0, byDay: {}, events48h: [], lastDate: null, lastKind: null };
+    const source = sources[key] ||= { account: row.account, vendor: row.vendor, org: row.org, mtdReceiptCount: 0, mtdUsd: 0, last48hUsd: 0, last24hUsd: 0, reloads48h: 0, byDay: {}, events48h: [], lastDate: null, lastKind: null };
     if (!source.lastDate || time >= Date.parse(source.lastDate)) { source.lastDate = row.date; source.lastKind = row.kind; }
     const age = through - time;
     if (age <= 48 * 3600e3) source.events48h.push(row.kind);
@@ -84,7 +116,7 @@ export function summarizeReceipts(rows, { now = new Date() } = {}) {
     if (row.kind !== 'receipt') continue;
     const usd = Number(row.amountUsd) || 0, day = dayJst(row.date);
     source.byDay[day] = (source.byDay[day] || 0) + usd;
-    if (day.startsWith(month)) { source.mtdUsd += usd; totals.mtdUsd += usd; totals.byVendor[row.vendor] = (totals.byVendor[row.vendor] || 0) + usd; }
+    if (day.startsWith(month)) { source.mtdReceiptCount++; source.mtdUsd += usd; totals.mtdUsd += usd; totals.byVendor[row.vendor] = (totals.byVendor[row.vendor] || 0) + usd; }
     if (age <= 48 * 3600e3) { source.last48hUsd += usd; source.reloads48h++; }
     if (age <= 24 * 3600e3) source.last24hUsd += usd;
   }
@@ -115,7 +147,8 @@ export function evaluateReceiptAlerts(summary, state = {}, thresholds = {}, { no
 export function formatReceiptReport(summary, alerts = []) {
   return ['領収書(全アカウント Gmail・直近48h)',
     ...alerts.map(a => `🚨 ${a.sourceKey}: ${a.text}`),
-    ...Object.values(summary.sources).map(s => `${s.account} / ${s.vendor} / ${s.org || '-'}: 48h $${s.last48hUsd.toFixed(2)} (${s.reloads48h}回) / MTD $${s.mtdUsd.toFixed(2)} / 最終 ${s.lastKind || s.events48h.at(-1) || '-'}`),
+    ...Object.values(summary.sources).filter(s => s.mtdReceiptCount > 0 || s.events48h.some(kind =>
+      ['failed_payment', 'autoreload_paused', 'autoreload_other_card', 'api_off', 'limit_increased', 'usage_request'].includes(kind) || kind.startsWith('spend_limit_'))).map(s => `${s.account} / ${s.vendor} / ${s.org || '-'}: 48h $${s.last48hUsd.toFixed(2)} (${s.reloads48h}回) / MTD $${s.mtdUsd.toFixed(2)} / 最終 ${s.lastKind || s.events48h.at(-1) || '-'}`),
     '※取得できた領収書のみ。0件・$0は課金なしを意味しません。円建てはUSD合計に含みません。',
   ].join('\n');
 }
@@ -141,7 +174,7 @@ export async function scanAiReceipts({ home = defaultHome(), days = 3, config = 
     try {
       const result = await searchImpl({ user: account, query, max: 100, withBody: true, bodyLimit: 6000 });
       for (const message of result.messages) {
-        const row = parseReceiptMail({ ...message, to: account }, config);
+        const row = parseReceiptMail({ ...message, account }, config);
         if (!row.messageId || !row.date) { errors.push({ account, reason: 'IDまたは日時不明のメールあり' }); continue; }
         if (!seen.has(row.messageId)) { seen.add(row.messageId); rows.push(row); }
       }
@@ -149,7 +182,7 @@ export async function scanAiReceipts({ home = defaultHome(), days = 3, config = 
       if (result.skipped) errors.push({ account, reason: `${result.skipped}件取得不可` });
     } catch (error) { errors.push({ account, reason: safeReason(error) }); }
   }
-  const summary = summarizeReceipts([...existing, ...rows], { now });
+  const summary = summarizeReceipts([...existing, ...rows], { now, config });
   const evaluated = evaluateReceiptAlerts(summary, readJson(stateFile, {}), config.thresholds, { now });
   if (appendLedger) {
     fs.mkdirSync(dir, { recursive: true });

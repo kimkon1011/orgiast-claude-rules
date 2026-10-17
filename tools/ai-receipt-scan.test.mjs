@@ -13,7 +13,7 @@ test('query has exact vendor and billing term OR groups', () => {
   assert.throws(() => buildReceiptQuery(config, NaN));
 });
 test('receipt fixture yields structured fields only, with paid total and card', () => {
-  assert.deepEqual(row(), { messageId: 'one', threadId: 'thread', account: mail.to, vendor: 'anthropic', kind: 'receipt', date: mail.date.replace('Z', '.000Z'), amountUsd: 22, amountJpy: null, currency: 'USD', org: null, card: '- 1109', receiptNo: '2666-1376-2870', subject: mail.subject });
+  assert.deepEqual(row(), { messageId: 'one', threadId: 'thread', account: mail.to, recipient: mail.to, vendor: 'anthropic', kind: 'receipt', date: mail.date.replace('Z', '.000Z'), amountUsd: 22, amountJpy: null, currency: 'USD', org: null, card: '- 1109', receiptNo: '2666-1376-2870', subject: mail.subject });
 });
 const fixtures = [
   { subject: '$17.36 payment to Anthropic, PBC was unsuccessful', from: 'failed-payments@mail.anthropic.com', kind: 'failed_payment', amountUsd: 17.36 },
@@ -47,14 +47,14 @@ test('summaries use JST month, rolling windows, and receipts only', () => {
     row({ date: '2026-10-15T03:00:00Z', amountUsd: 10 }), row(),
     row({ kind: 'failed_payment', amountUsd: 999 }), row({ kind: 'autoreload_other_card', amountUsd: 999 }),
     row({ date: '2026-10-18T00:00:00Z', amountUsd: 999 }), row({ date: null }),
-  ], { now });
+  ].map((entry, index) => ({ ...entry, receiptNo: `test-${index}` })), { now });
   const source = Object.values(summary.sources)[0];
   assert.equal(source.mtdUsd, 132); assert.equal(source.last48hUsd, 32); assert.equal(source.last24hUsd, 22); assert.equal(source.reloads48h, 2);
   assert.equal(source.byDay['2026-10-01'], 100); assert.equal(summary.totals.byVendor.anthropic, 132);
   assert.ok(source.events48h.includes('failed_payment'));
 });
 test('alerts bootstrap, new source, daily and monthly deduplication are pure', () => {
-  const summary = summarizeReceipts([row({ amountUsd: 110 }), row({ kind: 'api_off' })], { now });
+  const summary = summarizeReceipts([row({ amountUsd: 110 }), row({ kind: 'api_off', receiptNo: null })], { now });
   const state = {}, thresholds = config.thresholds;
   const first = evaluateReceiptAlerts(summary, state, thresholds, { now });
   assert.deepEqual(state, {});
@@ -67,7 +67,7 @@ test('alerts bootstrap, new source, daily and monthly deduplication are pure', (
   assert.match(formatReceiptReport(summary, first.alerts), /🚨/);
 });
 test('receipt count alone reaches burst threshold', () => {
-  const summary = summarizeReceipts([row({ amountUsd: 1 }), row({ amountUsd: 1 }), row({ amountUsd: 1 })], { now });
+  const summary = summarizeReceipts([1, 2, 3].map(index => row({ amountUsd: 1, receiptNo: `receipt-${index}` })), { now });
   assert.ok(evaluateReceiptAlerts(summary, {}, config.thresholds, { now }).alerts.some(a => a.kind === 'reload_burst'));
 });
 test('scan persists structured ledger, deduplicates, includes old MTD, reports failures; dry-run writes nothing', async (t) => {
@@ -98,4 +98,87 @@ test('scan reports truncation, and notification is a single guarded DM', async (
   const notify = async (text, options) => { calls++; assert.equal(text, result.report); assert.equal(options.webhookFallback, false); return { delivered: 'dm' }; };
   await alertAiReceipts(null, { notify }); await alertAiReceipts(result, { notify }); assert.equal(calls, 0);
   await alertAiReceipts({ ...result, alerts: [{ kind: 'billing_event' }] }, { home, now, notify }); assert.equal(calls, 1);
+});
+
+test('scan retains inbox and first To recipient, counting forwarded copies once', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-receipts-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const settings = { ...config, accounts: ['cr@orgiast.jp', mail.to] };
+  const result = await scanAiReceipts({ home, config: settings, now, searchImpl: async ({ user }) => ({
+    messages: [{ ...mail, id: user, to: '制作 <SEISAKU-TEAM@ORGIAST.JP>, cr@orgiast.jp' }],
+  }) });
+  assert.equal(result.rows.length, 2);
+  assert.equal(result.rows[0].account, 'cr@orgiast.jp');
+  assert.equal(result.rows[0].recipient, mail.to);
+  assert.deepEqual(Object.keys(result.summary.sources), [`${mail.to}|anthropic|-`]);
+  assert.equal(result.summary.totals.mtdUsd, 22);
+  assert.equal(result.summary.sources[`${mail.to}|anthropic|-`].reloads48h, 1);
+  assert.equal(fs.readFileSync(path.join(home, '.claude', 'ai-receipts.jsonl'), 'utf8').trim().split('\n').length, 2);
+});
+
+test('deduplication falls back to first inbox and uses vendor, kind, subject and JST day without receipt number', () => {
+  const first = row({ account: 'cr@orgiast.jp', recipient: 'external@example.com', receiptNo: null, date: '2026-10-15T16:00:00Z' });
+  const copy = { ...first, account: mail.to, date: '2026-10-16T10:00:00Z' };
+  const summary = summarizeReceipts([first, copy,
+    { ...copy, date: '2026-10-16T16:00:00Z' },
+    { ...copy, subject: 'Different receipt' },
+    { ...copy, kind: 'api_off' },
+    { ...copy, vendor: 'openai' },
+  ], { now, config });
+  assert.equal(summary.totals.mtdUsd, 88);
+  assert.equal(summary.sources['cr@orgiast.jp|anthropic|-'].mtdUsd, 22);
+  assert.equal(summary.sources[`${mail.to}|anthropic|-`].mtdUsd, 44);
+  assert.deepEqual(summary.sources[`${mail.to}|anthropic|-`].events48h, ['receipt', 'receipt', 'api_off']);
+  const legacy = summarizeReceipts([row({ recipient: null }), row({ account: 'cr@orgiast.jp', recipient: null })], { now });
+  assert.equal(legacy.totals.mtdUsd, 22);
+  assert.deepEqual(Object.keys(legacy.sources), [`${mail.to}|anthropic|-`]);
+});
+
+test('unique organization supplements receipts after attribution without mutating ledger rows', () => {
+  const receipt = row({ account: 'cr@orgiast.jp' });
+  const event = row({ kind: 'autoreload_other_card', receiptNo: null, org: "Team's Individual Org" });
+  const summary = summarizeReceipts([receipt, event], { now });
+  assert.deepEqual(Object.keys(summary.sources), [`${mail.to}|anthropic|${event.org}`]);
+  assert.equal(Object.values(summary.sources)[0].mtdUsd, 22);
+  assert.equal(receipt.org, null);
+  const ambiguous = summarizeReceipts([receipt, event, { ...event, kind: 'api_off', org: 'Another Org' }], { now });
+  assert.equal(ambiguous.sources[`${mail.to}|anthropic|-`].mtdUsd, 22);
+  for (const unrelated of [
+    { ...event, vendor: 'openai' },
+    { ...event, account: 'kim@orgiast.jp', recipient: 'kim@orgiast.jp' },
+  ]) {
+    assert.equal(summarizeReceipts([receipt, unrelated], { now }).sources[`${mail.to}|anthropic|-`].mtdUsd, 22);
+  }
+});
+
+test('report hides sources with neither MTD receipts nor recent billing events without changing alerts', () => {
+  const entries = [
+    row({ vendor: 'google', kind: 'other', receiptNo: null }),
+    row({ vendor: 'oldreceipt', date: '2026-09-01T00:00:00Z' }),
+    row({ vendor: 'oldevent', kind: 'api_off', date: '2026-10-01T00:00:00Z' }),
+    row({ vendor: 'yen', amountUsd: null, amountJpy: 1234 }),
+    row({ vendor: 'zero', amountUsd: 0 }),
+    ...['failed_payment', 'autoreload_paused', 'autoreload_other_card', 'api_off', 'spend_limit_reached', 'spend_limit_warning', 'limit_increased', 'usage_request'].map(kind => row({ vendor: kind, kind, receiptNo: null })),
+  ];
+  const summary = summarizeReceipts(entries, { now });
+  const before = structuredClone(summary);
+  const alerts = evaluateReceiptAlerts(summary, { initialized: true }, config.thresholds, { now }).alerts;
+  const report = formatReceiptReport(summary, alerts);
+  for (const vendor of ['google', 'oldreceipt', 'oldevent']) assert.ok(!report.includes(` / ${vendor} / `));
+  for (const entry of entries.slice(3)) assert.ok(report.includes(` / ${entry.vendor} / `));
+  assert.ok(alerts.some(alert => alert.sourceKey.includes('|google|')));
+  assert.match(report, /🚨 .*\|google\|/);
+  assert.deepEqual(summary, before);
+});
+
+test('organization extraction normalizes ASCII and both Unicode apostrophes', () => {
+  for (const quote of ["'", '’', '‘']) {
+    const org = `よろしくお願いします。${quote}s Individual Org`;
+    for (const body of [
+      `The latest $10.93 auto-reload for ${org} went through on JCB ending in 7945.`,
+      `Your organization ${quote}${org}${quote} is out of usage credits.`,
+    ]) {
+      assert.equal(parseReceiptMail({ ...mail, body }, config).org, "よろしくお願いします。's Individual Org");
+    }
+  }
 });

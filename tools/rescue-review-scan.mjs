@@ -7,12 +7,18 @@ import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
+// spawnSync の既定 maxBuffer(1MB)を超える差分でも ENOBUFS で分類を落とさないための上限。
+// 実測: origin の sync-orgiast-main-* は origin/main との three-dot 差分が約 90MB。
+// 枝は順次処理するのでピークは1枝分に収まる。
+const MAX_GIT_STDOUT_BYTES = 256 * 1024 * 1024;
+
 // git の既定実装。dir で git を実行し stdout を返す。失敗時は例外を投げる。
 function defaultGit(dir, args) {
   const result = spawnSync('git', ['-C', dir, ...args], {
     encoding: 'utf8',
     windowsHide: true,
     timeout: 120000,
+    maxBuffer: MAX_GIT_STDOUT_BYTES,
   });
   if (result.error) throw result.error;
   if (result.status !== 0) {

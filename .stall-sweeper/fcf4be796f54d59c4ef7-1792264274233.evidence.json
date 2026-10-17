@@ -1,0 +1,369 @@
+{
+  "checkedAt": "2026-10-17T19:12:25.905Z",
+  "task": "T-5398 トライアル初案件を業務開始日までに割当",
+  "original": {
+    "file": "/mnt/c/Users/uers/.claude/open-work.md",
+    "matchedLines": [
+      "- P1 T-5398 トライアル初案件を業務開始日までに割当（状態: 未着手）"
+    ]
+  },
+  "requests": [
+    {
+      "url": "https://sheets.googleapis.com/v4/spreadsheets/1WtsSiDlId8EgyzA15pJbeCGfvMHUgBqrUMmucax4A24?fields=spreadsheetUrl,properties.title,sheets.properties",
+      "status": 200
+    },
+    {
+      "url": "https://sheets.googleapis.com/v4/spreadsheets/1WtsSiDlId8EgyzA15pJbeCGfvMHUgBqrUMmucax4A24/values/'%E3%82%BF%E3%82%B9%E3%82%AF'!A1%3AO1",
+      "status": 200
+    },
+    {
+      "url": "https://sheets.googleapis.com/v4/spreadsheets/1WtsSiDlId8EgyzA15pJbeCGfvMHUgBqrUMmucax4A24/values/'%E3%82%BF%E3%82%B9%E3%82%AF'!A2%3AA5826",
+      "status": 200
+    },
+    {
+      "url": "https://sheets.googleapis.com/v4/spreadsheets/1WtsSiDlId8EgyzA15pJbeCGfvMHUgBqrUMmucax4A24/values/'%E3%82%BF%E3%82%B9%E3%82%AF'!A3%3AO3",
+      "status": 200
+    }
+  ],
+  "metadata": {
+    "properties": {
+      "title": "Discord日次タスク台帳"
+    },
+    "sheets": [
+      {
+        "properties": {
+          "sheetId": 0,
+          "title": "タスク",
+          "index": 0,
+          "sheetType": "GRID",
+          "gridProperties": {
+            "rowCount": 5826,
+            "columnCount": 15,
+            "frozenRowCount": 1
+          }
+        }
+      },
+      {
+        "properties": {
+          "sheetId": 1,
+          "title": "実行ログ",
+          "index": 1,
+          "sheetType": "GRID",
+          "gridProperties": {
+            "rowCount": 1011,
+            "columnCount": 26,
+            "frozenRowCount": 1
+          }
+        }
+      }
+    ],
+    "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/1WtsSiDlId8EgyzA15pJbeCGfvMHUgBqrUMmucax4A24/edit?ouid=108943467368537426847"
+  },
+  "header": {
+    "range": "'タスク'!A1:O1",
+    "majorDimension": "ROWS",
+    "values": [
+      [
+        "ID",
+        "起票日",
+        "優先ランク",
+        "優先度スコア",
+        "種別",
+        "タイトル",
+        "具体アクション",
+        "担当",
+        "期限",
+        "チャンネル",
+        "根拠(発言抜粋)",
+        "Discordリンク",
+        "状態",
+        "実行メモ",
+        "最終更新"
+      ]
+    ]
+  },
+  "matches": [
+    {
+      "row": 3,
+      "data": {
+        "range": "'タスク'!A3:O3",
+        "majorDimension": "ROWS",
+        "values": [
+          [
+            "T-5398",
+            "2026-10-13 6:35",
+            "P1",
+            "97",
+            "タスク",
+            "トライアル初案件を業務開始日までに割当",
+            "社員が業務開始日（10月13日）までにトライアル初案件を割り当てる。",
+            "",
+            "2026-10-13",
+            "オージャスト「社員＋tr＆int」",
+            "社員の方は、業務開始日までにトライアルの最初の案件の割当をお願いします。",
+            "https://discord.com/channels/715211007307284530/1382597125757735023/1559193269509038286",
+            "未着手",
+            "",
+            "2026-10-17 6:33"
+          ]
+        ]
+      }
+    }
+  ],
+  "discord": {
+    "checkedAt": "2026-10-17T19:12:41.756Z",
+    "credentialSource": "discord-admin.env",
+    "requests": [
+      {
+        "url": "https://discord.com/api/v10/channels/1382597125757735023/messages/1559193269509038286",
+        "status": 200,
+        "data": {
+          "type": 19,
+          "content": "すいません。\n業務開始日の列が丸々抜けておりました。\n下記に記載しなおしております。\nよろしくお願いいたします。\n\n社員の方は、業務開始日までにトライアルの最初の案件の割当をお願いします。\n業務開始日：10月13日（火）\nまた、誓約書・秘密保持契約書をアップロードしました。\nURL：https://drive.google.com/drive/u/0/folders/1aVdrsDQAI_L7jF4zHnT8e_X-8srLaj_-",
+          "mentions": [
+            {
+              "id": "715210673642012733",
+              "username": "kimkon.",
+              "avatar": "6f3013e59b4ecf5515ccc67cec599404",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "金功勇",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            }
+          ],
+          "mention_roles": [],
+          "attachments": [],
+          "embeds": [
+            {
+              "type": "link",
+              "url": "https://drive.google.com/drive/u/0/folders/1aVdrsDQAI_L7jF4zHnT8e_X-8srLaj_-",
+              "title": "Google Drive: Sign-in",
+              "description": "Access Google Drive with a Google account (for personal use) or Google Workspace account (for business use).",
+              "reference_id": "1559193269509038286",
+              "content_scan_version": 4
+            }
+          ],
+          "timestamp": "2026-10-12T13:17:23.861000+00:00",
+          "edited_timestamp": null,
+          "flags": 0,
+          "components": [],
+          "id": "1559193269509038286",
+          "channel_id": "1382597125757735023",
+          "author": {
+            "id": "1557637459708350476",
+            "username": "shiori.2024_06909",
+            "avatar": null,
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "神詩織",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          "pinned": false,
+          "mention_everyone": false,
+          "tts": false,
+          "message_reference": {
+            "type": 0,
+            "channel_id": "1382597125757735023",
+            "message_id": "1559185199517143047",
+            "guild_id": "715211007307284530"
+          },
+          "reactions": [
+            {
+              "emoji": {
+                "id": null,
+                "name": "👍"
+              },
+              "count": 1,
+              "count_details": {
+                "burst": 0,
+                "normal": 1
+              },
+              "burst_colors": [],
+              "me_burst": false,
+              "burst_me": false,
+              "me": false,
+              "burst_count": 0
+            }
+          ],
+          "referenced_message": {
+            "type": 19,
+            "content": "業務開始日はどこかでご連絡いただいておりましたでしょうか？(^o^)",
+            "mentions": [
+              {
+                "id": "1557637459708350476",
+                "username": "shiori.2024_06909",
+                "avatar": null,
+                "discriminator": "0",
+                "public_flags": 0,
+                "flags": 0,
+                "banner": null,
+                "accent_color": null,
+                "global_name": "神詩織",
+                "avatar_decoration_data": null,
+                "collectibles": null,
+                "display_name_styles": null,
+                "vad_colors": null,
+                "banner_color": null,
+                "clan": null,
+                "primary_guild": null
+              }
+            ],
+            "mention_roles": [],
+            "attachments": [],
+            "embeds": [],
+            "timestamp": "2026-10-12T12:45:19.825000+00:00",
+            "edited_timestamp": null,
+            "flags": 0,
+            "components": [],
+            "id": "1559185199517143047",
+            "channel_id": "1382597125757735023",
+            "author": {
+              "id": "715210673642012733",
+              "username": "kimkon.",
+              "avatar": "6f3013e59b4ecf5515ccc67cec599404",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "金功勇",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            },
+            "pinned": false,
+            "mention_everyone": false,
+            "tts": false,
+            "message_reference": {
+              "type": 0,
+              "channel_id": "1382597125757735023",
+              "message_id": "1558764112119599185",
+              "guild_id": "715211007307284530"
+            }
+          }
+        }
+      },
+      {
+        "url": "https://discord.com/api/v10/channels/1382597125757735023/messages/1558764112119599185",
+        "status": 200,
+        "data": {
+          "id": "1558764112119599185",
+          "content": "社員の方は、業務開始日までにトライアルの最初の案件の割当をお願いします。\nまた、誓約書・秘密保持契約書をアップロードしました。\nURL：https://drive.google.com/drive/u/0/folders/1aVdrsDQAI_L7jF4zHnT8e_X-8srLaj_-",
+          "timestamp": "2026-10-11T08:52:04.766000+00:00",
+          "author": "神詩織"
+        }
+      },
+      {
+        "url": "https://discord.com/api/v10/channels/1382597125757735023/messages?after=1559193269509038286&limit=100",
+        "status": 200,
+        "data": [
+          {
+            "id": "1559199035678531605",
+            "content": "入社手続を進めております神詩織です。すべての入社手続きを終えて、10月13日（火）の業務から参加させていただく予定です。居住地は京都府亀岡市です。よろしくお願いします。",
+            "timestamp": "2026-10-12T13:40:18.623000+00:00",
+            "author": "神詩織"
+          },
+          {
+            "id": "1559196495033409689",
+            "content": "はい！(^o^)",
+            "timestamp": "2026-10-12T13:30:12.886000+00:00",
+            "author": "金功勇",
+            "message_reference": {
+              "type": 0,
+              "channel_id": "1382597125757735023",
+              "message_id": "1559194552915468299",
+              "guild_id": "715211007307284530"
+            },
+            "referenced_message": {
+              "content": "承知いたしました。\nこの案件開始時からトライアルの80時間のカウントを始めても良いのでしょうか？",
+              "author": "神詩織"
+            }
+          },
+          {
+            "id": "1559194552915468299",
+            "content": "承知いたしました。\nこの案件開始時からトライアルの80時間のカウントを始めても良いのでしょうか？",
+            "timestamp": "2026-10-12T13:22:29.849000+00:00",
+            "author": "神詩織"
+          },
+          {
+            "id": "1559194046402920449",
+            "content": "不明点は私まで個人DMでバンバン連絡ください",
+            "timestamp": "2026-10-12T13:20:29.087000+00:00",
+            "author": "金功勇"
+          },
+          {
+            "id": "1559193989716906135",
+            "content": "<@1557637459708350476> \n早速ですが案件です。\n下記、Reブースというブース制作案件です。「task」というシートで済になっていないものを埋めてください。\n名前が入っていても済になっていなければ自分の名前に変更してもらってオッケーです！(^o^)\n\nhttps://docs.google.com/spreadsheets/d/1t6eMvbPIu17m7hbv6foJcvd-fXrJkZqrePb8P6njxGI/edit?usp=drivesdk",
+            "timestamp": "2026-10-12T13:20:15.572000+00:00",
+            "author": "金功勇",
+            "message_reference": {
+              "type": 0,
+              "channel_id": "1382597125757735023",
+              "message_id": "1559193269509038286",
+              "guild_id": "715211007307284530"
+            },
+            "referenced_message": {
+              "content": "すいません。\n業務開始日の列が丸々抜けておりました。\n下記に記載しなおしております。\nよろしくお願いいたします。\n\n社員の方は、業務開始日までにトライアルの最初の案件の割当をお願いします。\n業務開始日：10月13日（火）\nまた、誓約書・秘密保持契約書をアップロードしました。\nURL：https://drive.google.com/drive/u/0/folders/1aVdrsDQAI_L7jF4zHnT8e_X-8srLaj_-",
+              "author": "神詩織"
+            }
+          },
+          {
+            "id": "1559193395358990417",
+            "content": "いえ、業務開始日の列は先ほど追加しました。ありがとうございます！(^O^)／",
+            "timestamp": "2026-10-12T13:17:53.866000+00:00",
+            "author": "金功勇",
+            "message_reference": {
+              "type": 0,
+              "channel_id": "1382597125757735023",
+              "message_id": "1559193269509038286",
+              "guild_id": "715211007307284530"
+            },
+            "referenced_message": {
+              "content": "すいません。\n業務開始日の列が丸々抜けておりました。\n下記に記載しなおしております。\nよろしくお願いいたします。\n\n社員の方は、業務開始日までにトライアルの最初の案件の割当をお願いします。\n業務開始日：10月13日（火）\nまた、誓約書・秘密保持契約書をアップロードしました。\nURL：https://drive.google.com/drive/u/0/folders/1aVdrsDQAI_L7jF4zHnT8e_X-8srLaj_-",
+              "author": "神詩織"
+            }
+          }
+        ],
+        "returnedCount": 18,
+        "retention": "対象者・対象依頼に直接関係する投稿のみ保存"
+      }
+    ]
+  },
+  "assessment": {
+    "completed": true,
+    "disposition": "実務は既に完了。重複割当不要。",
+    "subject": "神詩織",
+    "project": "Reブース（ブース制作案件）",
+    "assignmentAtJst": "2026-10-12T22:20:15+09:00",
+    "acceptanceAtJst": "2026-10-12T22:22:29+09:00",
+    "startDate": "2026-10-13",
+    "ledgerStatus": "未着手",
+    "ledgerMismatch": true,
+    "ledgerUpdated": false,
+    "reason": "元依頼への金功勇の返信で神詩織に案件を割当済み。本人了承と80時間カウントの確認への承諾を直接取得。外部送信禁止のため台帳への書き戻しは行わない。",
+    "externalMutations": false,
+    "jobsRerun": false
+  }
+}

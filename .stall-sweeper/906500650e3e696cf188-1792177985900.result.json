@@ -1,0 +1,8 @@
+{
+  "completed": false,
+  "summary": "原文・実行台帳・再開台帳を直接確認。cheap-code/deepseek exit -4058で失敗し、元cwdは消失。成功・完了記録は確認できない。再実行経路は外部AI呼び出しとファイル削除を含み、今回の禁止事項に抵触するため未実行。根本原因は当時のstderr欠落により確定できない。",
+  "evidence": {
+    "file": "/mnt/c/Users/uers/orgiast-main/.stall-sweeper/906500650e3e696cf188-1792177985900.evidence.json",
+    "sha256": "c3c08fc8e24f48487df6f1a21adcd2cc1574cd9090d50194d6c8bfddad9c078d"
+  }
+}

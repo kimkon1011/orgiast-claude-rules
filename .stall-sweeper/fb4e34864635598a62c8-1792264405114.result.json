@@ -1,0 +1,8 @@
+{
+  "completed": true,
+  "summary": "Groq HTTP 429はLINE要約処理の途中のAPI失敗。OpenRouterへの自動切替後、2026-10-18 04:05 JSTに161件処理済み。要約・提案・トピック・入力と処理済み状態を直接照合し、対象処理の完了を確認。検出器がprovider別に集約するため別providerの成功で失敗が解消されない残存検出。再実行・外部送信・課金操作は実施していない。",
+  "evidence": {
+    "file": "/mnt/c/Users/uers/orgiast-main/.stall-sweeper/fb4e34864635598a62c8-1792264405114.evidence.json",
+    "sha256": "db3cdb074eb462726b13ba1e417c4bddc379563f096a1ba705a629c12e00f512"
+  }
+}

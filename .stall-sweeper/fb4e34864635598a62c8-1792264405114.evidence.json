@@ -1,0 +1,242 @@
+{
+  "verifiedAt": "2026-10-17T19:14:53.826778+00:00",
+  "target": {
+    "id": "groq:不明",
+    "resolvedTool": "line-digest（LINE要約）",
+    "eventTime": "2026-10-17T19:02:29.278Z"
+  },
+  "summary": "Groq HTTP 429はLINE要約処理の途中のAPI失敗。OpenRouterへの自動切替後、2026-10-18 04:05 JSTに161件処理済み。要約・提案・トピック・入力と処理済み状態を直接照合し、対象処理の完了を確認。検出器がprovider別に集約するため別providerの成功で失敗が解消されない残存検出。再実行・外部送信・課金操作は実施していない。",
+  "causeLimit": "HTTP 429の応答本文・Retry-Afterは台帳に保存されておらず、瞬間レート制限と日次枠・クォータ不足の区別は確定できない。",
+  "ledgerRows": [
+    {
+      "line": 16092,
+      "record": {
+        "t": "2026-10-17T19:02:27.099Z",
+        "tool": "line-digest",
+        "provider": "groq",
+        "model": "openai/gpt-oss-120b",
+        "in": 2567,
+        "out": 1892,
+        "secs": 6.838,
+        "status": "ok",
+        "attempt": 0,
+        "failover": false,
+        "ok": true
+      }
+    },
+    {
+      "line": 16093,
+      "record": {
+        "t": "2026-10-17T19:02:29.278Z",
+        "tool": "line-digest",
+        "provider": "groq",
+        "model": "openai/gpt-oss-120b",
+        "in": 0,
+        "out": 0,
+        "secs": 0.526,
+        "status": "http_429",
+        "attempt": 0,
+        "failover": false,
+        "ok": false
+      }
+    },
+    {
+      "line": 16094,
+      "record": {
+        "t": "2026-10-17T19:04:17.320Z",
+        "tool": "line-digest",
+        "provider": "openrouter",
+        "model": "openai/gpt-oss-120b",
+        "in": 2459,
+        "out": 2616,
+        "secs": 107.065,
+        "status": "ok",
+        "attempt": 0,
+        "failover": true,
+        "ok": true
+      }
+    },
+    {
+      "line": 16095,
+      "record": {
+        "t": "2026-10-17T19:04:20.475Z",
+        "tool": "line-digest",
+        "provider": "openrouter",
+        "model": "openai/gpt-oss-120b",
+        "in": 2796,
+        "out": 2,
+        "secs": 1.062,
+        "status": "ok",
+        "attempt": 0,
+        "failover": true,
+        "ok": true
+      }
+    },
+    {
+      "line": 16096,
+      "record": {
+        "t": "2026-10-17T19:04:23.334Z",
+        "tool": "line-digest",
+        "provider": "openrouter",
+        "model": "openai/gpt-oss-120b",
+        "in": 2821,
+        "out": 88,
+        "secs": 1.181,
+        "status": "ok",
+        "attempt": 0,
+        "failover": true,
+        "ok": true
+      }
+    },
+    {
+      "line": 16097,
+      "record": {
+        "t": "2026-10-17T19:04:47.061Z",
+        "tool": "line-digest",
+        "provider": "openrouter",
+        "model": "openai/gpt-oss-120b",
+        "in": 1465,
+        "out": 1957,
+        "secs": 22.76,
+        "status": "ok",
+        "attempt": 0,
+        "failover": true,
+        "ok": true
+      }
+    },
+    {
+      "line": 16098,
+      "record": {
+        "t": "2026-10-17T19:04:58.112Z",
+        "tool": "line-digest",
+        "provider": "openrouter",
+        "model": "openai/gpt-oss-120b",
+        "in": 4972,
+        "out": 2956,
+        "secs": 10.469,
+        "status": "ok",
+        "attempt": 0,
+        "failover": true,
+        "ok": true
+      }
+    }
+  ],
+  "completionLog": [
+    {
+      "line": 32,
+      "text": "2026-10-18 04:05:00 / line-digest / ok:161件処理"
+    }
+  ],
+  "artifactChecks": {
+    "exactFailurePresent": true,
+    "fallbackSuccessPresent": true,
+    "jobCompletion161": true,
+    "digestTimestampMatches": true,
+    "digestHasContent": true,
+    "topicsNonempty": true,
+    "proposalsWrittenAtCompletion": true,
+    "stateMatchesOriginalInput": true,
+    "lastIdMarkedProcessed": true
+  },
+  "state": {
+    "processedIdsCount": 5000,
+    "lastId": "7c50d52b8b9f405a",
+    "lastTs": 1791793380000,
+    "matchingInputs": [
+      {
+        "file": "/mnt/c/Users/uers/.claude/line-openchat/2026-10.jsonl",
+        "id": "7c50d52b8b9f405a",
+        "ts": 1791793380000
+      }
+    ]
+  },
+  "newProposals": [
+    {
+      "id": "P-0251",
+      "createdAt": "2026-10-17T19:04:58.113Z",
+      "status": "done"
+    },
+    {
+      "id": "P-0252",
+      "createdAt": "2026-10-17T19:04:58.113Z",
+      "status": "done"
+    },
+    {
+      "id": "P-0253",
+      "createdAt": "2026-10-17T19:04:58.113Z",
+      "status": "done"
+    },
+    {
+      "id": "P-0254",
+      "createdAt": "2026-10-17T19:04:58.113Z",
+      "status": "pending"
+    }
+  ],
+  "topicsCount": 107,
+  "sources": [
+    {
+      "file": "/mnt/c/Users/uers/.claude/executor-usage.jsonl",
+      "sha256": "7e1cc0f28acca677694f7c864c64c866d40a3e418c328634ce8ff5672f5fab19",
+      "bytes": 3010040,
+      "mtimeUtc": "2026-10-17T19:13:23.094850+00:00"
+    },
+    {
+      "file": "/mnt/c/Users/uers/.claude/logs/nightly-batch-2026-10-18.log",
+      "sha256": "872d122bb5c9359a24a8154cb6a5f522279b7dca6c5e6fa7b823b99a236cfa3b",
+      "bytes": 2877,
+      "mtimeUtc": "2026-10-17T19:08:29.473442+00:00"
+    },
+    {
+      "file": "/mnt/c/Users/uers/.claude/line-openchat/state.json",
+      "sha256": "e67ede0d191d2b44866f7c93d0c7b20eb1fbf0e40e7c8c390b82eef2fed5612d",
+      "bytes": 120086,
+      "mtimeUtc": "2026-10-17T19:04:59.194247+00:00"
+    },
+    {
+      "file": "/mnt/c/Users/uers/.claude/ai-news-digest.md",
+      "sha256": "54b67f90d4ef1e23ca3dde607cc651c3813b6be5ad05d4f9b06059be7e43fa01",
+      "bytes": 4172,
+      "mtimeUtc": "2026-10-17T19:07:21.256324+00:00"
+    },
+    {
+      "file": "/mnt/c/Users/uers/.claude/ai-news-topics.jsonl",
+      "sha256": "dd5efdb167d065efc67d45321e5452d3e819b8806651f6a9c569b44a83add23e",
+      "bytes": 20662,
+      "mtimeUtc": "2026-10-17T19:04:59.192175+00:00"
+    },
+    {
+      "file": "/mnt/c/Users/uers/.claude/ai-news-proposals.jsonl",
+      "sha256": "ab3773c502a6d126bc1d1bac4ad5588836fe35e34482545c63ae374baee1f550",
+      "bytes": 182559,
+      "mtimeUtc": "2026-10-17T19:07:21.254324+00:00"
+    },
+    {
+      "file": "/mnt/c/Users/uers/orgiast-main/tools/line-digest.mjs",
+      "sha256": "badf0a8a263863c8a35cf354b7a2be31f4d533f796533dfb17b6e1de8e7d687c",
+      "bytes": 22045,
+      "mtimeUtc": "2026-09-17T06:59:54.855068+00:00"
+    },
+    {
+      "file": "/mnt/c/Users/uers/orgiast-main/tools/llm-fallback.mjs",
+      "sha256": "176fc5eca1ba095886b9c42b79404034003f08bd77e977df683c8900f0f71137",
+      "bytes": 15593,
+      "mtimeUtc": "2026-10-08T07:13:29.077950+00:00"
+    },
+    {
+      "file": "/mnt/c/Users/uers/orgiast-main/tools/stall-sweeper.mjs",
+      "sha256": "c067ff362ff056f7b076267bd8ccc21b74b535a215d2036c51912a2356f2c3c0",
+      "bytes": 38749,
+      "mtimeUtc": "2026-10-03T00:05:03.869121+00:00"
+    }
+  ],
+  "codeEvidence": {
+    "tools/line-digest.mjs": "158-195: 外部API POSTとfallback、試行別ログ。290-300: 成果と状態の保存後に完了ログ。dry-runでもAPIを呼ぶため再実行しない。",
+    "tools/stall-sweeper.mjs": "78-89: toolを使わずprovider:cwd単位で最新を選ぶため、groq:不明に429が残る。"
+  },
+  "actions": {
+    "rerun": false,
+    "networkRequests": 0,
+    "sourceCodeChanged": false,
+    "otherSessionChangesIncluded": false
+  }
+}

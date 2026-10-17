@@ -1,0 +1,25 @@
+週次コスト改善が既存プロバイダの最適化だけに閉じていたため、OpenRouter のカタログから新モデル・20%以上の値下げを検出し、現在のルーティングより安く文脈長が同等以上の候補を eval に追加します。品質の採用判断は既存の eval に委ねます。
+
+- `tools/model-scout.mjs`: 初回14日窓、前回価格との差分、Markdown保存、1800字以内の kim DM。候補ゼロでも通知し、通知失敗では状態を進めません。`--dry-run` は書込・DMなし、`--once` 対応、CLIはexit 0。
+- `tools/cost-weekly-improve.mjs`: `OrgiastCostWeeklyImprove` の実行先の先頭に独立した `model-scout.mjs --once` を追加。失敗を隔離し、dry-run / no-notify を伝播。承認の再実行は偵察をスキップ。
+- eval 自動投入は可能: `tools/eval-providers.json` の `{provider:"openrouter", model:"...", costPerMillion:[入力,出力]}` を追加し、`tools/eval-harness.mjs --all` が読み込みます。既存設定を保持し、重複追加・skip解除は行いません。書込不可なら設定ファイル名付きで手動投入を案内します。
+- eval のプロバイダ固定単価をモデル別設定で上書きできるようにし、`--model` 指定時も対象モデルの設定を使います。
+- 情報源 B はスキップ: `tools/llm-ask.mjs` の Gemini 呼出しに Web 検索機能がないため、参考情報にその旨を明記します。
+
+検証:
+- 関連テスト: `node --test tools/model-scout.test.mjs tools/cost-weekly-improve.test.mjs tools/eval-harness.test.mjs tools/eval-providers.test.mjs` → pass 43 / fail 0。
+- 全体: `node --test --test-concurrency=4` → tests 4154 / pass 4141 / fail 0 / skipped 13 / exit 0。
+- 通常の `node --test` は初回 pass 4140 / fail 0。その後の追加テストを含む実行では既存の batch-run の1秒制限と配布処理テストが計2件失敗。両方とも単独再実行で成功し、最終コードの全体を並列数4で再実行して上記の成功を確認しました。
+- `git diff --check` 成功。
+- このPCの既存 `eval-results.jsonl` からworktree内だけにルーティング表を再生成し、`node tools/model-scout.mjs --dry-run` を実行。監視462モデル、差分15件、評価候補4件。実DM・実eval投入は行っていません。
+
+実測した dry-run 候補一覧:
+
+- Anthropic: Claude Haiku 5.5 (anthropic/claude-haiku-5.5)／$0.1 入力・$0.5 出力 per MTok／classification: deepseek/deepseek-chat, extraction: deepseek/deepseek-chat, summarize: groq/openai/gpt-oss-120b, jp_reply: openrouter/meta-llama/llama-3.3-70b-instruct, code: groq/openai/gpt-oss-120b を置換候補／次アクション＝eval 投入: eval 投入予定（dry-run）
+- Anthropic: Claude Haiku 5.5 (batch) (anthropic/claude-haiku-5.5:batch)／$0.05 入力・$0.25 出力 per MTok／classification: deepseek/deepseek-chat, extraction: deepseek/deepseek-chat, summarize: groq/openai/gpt-oss-120b, jp_reply: openrouter/meta-llama/llama-3.3-70b-instruct, code: groq/openai/gpt-oss-120b を置換候補／次アクション＝eval 投入: eval 投入予定（dry-run）
+- Apodex: Apodex 1.1 Mini (free) (apodex/apodex-1.1-mini:free)／$0 入力・$0 出力 per MTok／classification: deepseek/deepseek-chat, extraction: deepseek/deepseek-chat, summarize: groq/openai/gpt-oss-120b, jp_reply: openrouter/meta-llama/llama-3.3-70b-instruct, code: groq/openai/gpt-oss-120b を置換候補／次アクション＝eval 投入: eval 投入予定（dry-run）
+- inclusionAI: Ling 3.1 Flash (inclusionai/ling-3.1-flash)／$0 入力・$0 出力 per MTok／classification: deepseek/deepseek-chat, extraction: deepseek/deepseek-chat, summarize: groq/openai/gpt-oss-120b, jp_reply: openrouter/meta-llama/llama-3.3-70b-instruct, code: groq/openai/gpt-oss-120b を置換候補／次アクション＝eval 投入: eval 投入予定（dry-run）
+
+作業場所: `.wt/model-scout`。元ツリーのGit管理領域がsandbox書込範囲外だったため、`.wt/model-scout-source` に取得した origin/main から指定ブランチの worktree を作成しました。既存のdirtyファイルは変更していません。マージ・稼働環境への適用はこのPRの対象外です。
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)

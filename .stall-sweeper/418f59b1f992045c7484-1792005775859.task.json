@@ -1,0 +1,15 @@
+{
+    "TaskName":  "OrgiastFeedbackIntakeFast",
+    "State":  "Disabled",
+    "Enabled":  false,
+    "Actions":  [
+                    {
+                        "Execute":  "C:\\Windows\\System32\\wscript.exe",
+                        "Arguments":  "//nologo \"C:\\Users\\uers\\.claude\\tools\\run-hidden.vbs\" \"powershell.exe\" \"-NoProfile\" \"-NonInteractive\" \"-ExecutionPolicy\" \"Bypass\" \"-File\" \"C:\\Users\\uers\\.claude\\tools\\nightly-bootstrap.ps1\" \"-Target\" \"tools\\feedback-to-issues.mjs\"",
+                        "WorkingDirectory":  "C:\\Users\\uers\\.claude\\nightly-repo"
+                    }
+                ],
+    "LastRunTime":  "2026-10-02T16:01:01.0000000+09:00",
+    "LastTaskResult":  0,
+    "NextRunTime":  "2026-10-15T04:31:00.0000000+09:00"
+}

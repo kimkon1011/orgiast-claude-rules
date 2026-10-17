@@ -1,0 +1,3415 @@
+{
+  "queriedAt": "2026-10-14T19:19:38.407Z",
+  "system": "Discord",
+  "results": [
+    {
+      "url": "https://discord.com/api/v10/channels/1382651184141303819/messages/1557907454979743778",
+      "status": 200,
+      "body": {
+        "type": 0,
+        "content": "<@1382626504386543708> <@1382627787759943781> \n第30回日本外科病理学会学術集会です。\n申請書の提出期限が本日で、一部本日の午前中期限なのですが望月さんとご連絡が取れません💦 \nお忙しいところ大変恐れ入りますがご確認いただくことは可能でしょうか💦",
+        "mentions": [
+          {
+            "id": "1382626504386543708",
+            "username": "meropp.16",
+            "avatar": "10c8b627f08eeb8dbbb2a3a0e5f784cb",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "大平 沙織",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          {
+            "id": "1382627787759943781",
+            "username": "koooomuuuuro",
+            "avatar": "f50c8f6be02164d2ea73281ac43f76e9",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "小室加奈",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          }
+        ],
+        "mention_roles": [],
+        "attachments": [],
+        "embeds": [],
+        "timestamp": "2026-10-09T00:08:01.788000+00:00",
+        "edited_timestamp": null,
+        "flags": 0,
+        "components": [],
+        "id": "1557907454979743778",
+        "channel_id": "1382651184141303819",
+        "author": {
+          "id": "1382656441759957032",
+          "username": "yuukiki8",
+          "avatar": "f2a45f1a2022b4dda82f2a4e8e32ee83",
+          "discriminator": "0",
+          "public_flags": 0,
+          "flags": 0,
+          "banner": null,
+          "accent_color": null,
+          "global_name": "小林優紀 本日対応不可",
+          "avatar_decoration_data": null,
+          "collectibles": null,
+          "display_name_styles": null,
+          "vad_colors": null,
+          "banner_color": null,
+          "clan": null,
+          "primary_guild": null
+        },
+        "pinned": false,
+        "mention_everyone": false,
+        "tts": false
+      }
+    },
+    {
+      "url": "https://discord.com/api/v10/channels/1382651184141303819/messages?after=1557907454979743778&limit=100",
+      "status": 200,
+      "body": [
+        {
+          "type": 0,
+          "content": "<@1237340022190112781> \nこちらもご対応お願いいたします。",
+          "mentions": [
+            {
+              "id": "1237340022190112781",
+              "username": "km00037",
+              "avatar": "40c08836ecbe9cd4053b9f4c7d5c78be",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "望月果乃",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            }
+          ],
+          "mention_roles": [],
+          "attachments": [],
+          "embeds": [],
+          "timestamp": "2026-10-13T05:09:38.642000+00:00",
+          "edited_timestamp": null,
+          "flags": 0,
+          "components": [],
+          "id": "1559432910149525525",
+          "channel_id": "1382651184141303819",
+          "author": {
+            "id": "1399380688897183825",
+            "username": "katori_mone",
+            "avatar": "d6228c32faf738668d7e2a9be148d978",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "河原木智恵 16～18日、23日午後、、27日午前対応不可",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          "pinned": false,
+          "mention_everyone": false,
+          "tts": false
+        },
+        {
+          "type": 0,
+          "content": "",
+          "mentions": [],
+          "mention_roles": [],
+          "attachments": [],
+          "embeds": [],
+          "timestamp": "2026-10-13T05:09:38.239000+00:00",
+          "edited_timestamp": null,
+          "flags": 16384,
+          "components": [],
+          "id": "1559432908458958911",
+          "channel_id": "1382651184141303819",
+          "author": {
+            "id": "1399380688897183825",
+            "username": "katori_mone",
+            "avatar": "d6228c32faf738668d7e2a9be148d978",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "河原木智恵 16～18日、23日午後、、27日午前対応不可",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          "pinned": false,
+          "mention_everyone": false,
+          "tts": false,
+          "message_reference": {
+            "type": 1,
+            "channel_id": "1382727228525117544",
+            "message_id": "1559022582517207053",
+            "guild_id": "715211007307284530"
+          },
+          "message_snapshots": [
+            {
+              "message": {
+                "type": 0,
+                "content": "<@1237340022190112781> \nお疲れ様です。\n下書きに下記送信前のメッセージを保存しておりますので、確認・送信をお願いいたします\n件名：第128回日本消化器病学会九州支部例会/第122回日本消化器内視鏡学会九州支部例会 御見積書に関して\n送信前に趣意書・出展マニュアル・送信元の確認を行いました。\n送信元アドレスは coordinate@orgiast.jp です。\nよろしくお願いします。",
+                "mentions": [
+                  {
+                    "id": "1237340022190112781",
+                    "username": "km00037",
+                    "avatar": "40c08836ecbe9cd4053b9f4c7d5c78be",
+                    "discriminator": "0",
+                    "public_flags": 0,
+                    "flags": 0,
+                    "banner": null,
+                    "accent_color": null,
+                    "global_name": "望月果乃",
+                    "avatar_decoration_data": null,
+                    "collectibles": null,
+                    "display_name_styles": null,
+                    "vad_colors": null,
+                    "banner_color": null,
+                    "clan": null,
+                    "primary_guild": null
+                  }
+                ],
+                "mention_roles": [],
+                "attachments": [],
+                "embeds": [],
+                "timestamp": "2026-10-12T01:59:08.911000+00:00",
+                "edited_timestamp": null,
+                "flags": 0,
+                "components": []
+              }
+            }
+          ]
+        },
+        {
+          "type": 19,
+          "content": "<@1399380688897183825> 承知しました🙇‍♂️",
+          "mentions": [
+            {
+              "id": "1399380688897183825",
+              "username": "katori_mone",
+              "avatar": "d6228c32faf738668d7e2a9be148d978",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "河原木智恵 16～18日、23日午後、、27日午前対応不可",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            }
+          ],
+          "mention_roles": [],
+          "attachments": [],
+          "embeds": [],
+          "timestamp": "2026-10-13T03:57:43.849000+00:00",
+          "edited_timestamp": null,
+          "flags": 0,
+          "components": [],
+          "id": "1559414812595724303",
+          "channel_id": "1382651184141303819",
+          "author": {
+            "id": "1237340022190112781",
+            "username": "km00037",
+            "avatar": "40c08836ecbe9cd4053b9f4c7d5c78be",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "望月果乃",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          "pinned": false,
+          "mention_everyone": false,
+          "tts": false,
+          "message_reference": {
+            "type": 0,
+            "channel_id": "1382651184141303819",
+            "message_id": "1559413949928177665",
+            "guild_id": "715211007307284530"
+          },
+          "reactions": [
+            {
+              "emoji": {
+                "id": null,
+                "name": "🙇‍♀️"
+              },
+              "count": 1,
+              "count_details": {
+                "burst": 0,
+                "normal": 1
+              },
+              "burst_colors": [],
+              "me_burst": false,
+              "burst_me": false,
+              "me": false,
+              "burst_count": 0
+            }
+          ],
+          "referenced_message": {
+            "type": 0,
+            "content": "<@1237340022190112781> \nお疲れ様です。\n第128回日本消化器病学会九州支部例会/第122回日本消化器内視鏡学会九州支部例会チャンネル内、確認いただきたいメッセージにピン留めをいたしました、\nご確認をお願いいたします。",
+            "mentions": [
+              {
+                "id": "1237340022190112781",
+                "username": "km00037",
+                "avatar": "40c08836ecbe9cd4053b9f4c7d5c78be",
+                "discriminator": "0",
+                "public_flags": 0,
+                "flags": 0,
+                "banner": null,
+                "accent_color": null,
+                "global_name": "望月果乃",
+                "avatar_decoration_data": null,
+                "collectibles": null,
+                "display_name_styles": null,
+                "vad_colors": null,
+                "banner_color": null,
+                "clan": null,
+                "primary_guild": null
+              }
+            ],
+            "mention_roles": [],
+            "attachments": [],
+            "embeds": [],
+            "timestamp": "2026-10-13T03:54:18.173000+00:00",
+            "edited_timestamp": null,
+            "flags": 0,
+            "components": [],
+            "id": "1559413949928177665",
+            "channel_id": "1382651184141303819",
+            "author": {
+              "id": "1399380688897183825",
+              "username": "katori_mone",
+              "avatar": "d6228c32faf738668d7e2a9be148d978",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "河原木智恵 16～18日、23日午後、、27日午前対応不可",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            },
+            "pinned": false,
+            "mention_everyone": false,
+            "tts": false
+          }
+        },
+        {
+          "type": 0,
+          "content": "<@1237340022190112781> \nお疲れ様です。\n第128回日本消化器病学会九州支部例会/第122回日本消化器内視鏡学会九州支部例会チャンネル内、確認いただきたいメッセージにピン留めをいたしました、\nご確認をお願いいたします。",
+          "mentions": [
+            {
+              "id": "1237340022190112781",
+              "username": "km00037",
+              "avatar": "40c08836ecbe9cd4053b9f4c7d5c78be",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "望月果乃",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            }
+          ],
+          "mention_roles": [],
+          "attachments": [],
+          "embeds": [],
+          "timestamp": "2026-10-13T03:54:18.173000+00:00",
+          "edited_timestamp": null,
+          "flags": 0,
+          "components": [],
+          "id": "1559413949928177665",
+          "channel_id": "1382651184141303819",
+          "author": {
+            "id": "1399380688897183825",
+            "username": "katori_mone",
+            "avatar": "d6228c32faf738668d7e2a9be148d978",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "河原木智恵 16～18日、23日午後、、27日午前対応不可",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          "pinned": false,
+          "mention_everyone": false,
+          "tts": false
+        },
+        {
+          "type": 19,
+          "content": "<@1382626504386543708> <@1382656441759957032> すみません、確認します！",
+          "mentions": [
+            {
+              "id": "1382656441759957032",
+              "username": "yuukiki8",
+              "avatar": "f2a45f1a2022b4dda82f2a4e8e32ee83",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "小林優紀 本日対応不可",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            },
+            {
+              "id": "1382626504386543708",
+              "username": "meropp.16",
+              "avatar": "10c8b627f08eeb8dbbb2a3a0e5f784cb",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "大平 沙織",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            }
+          ],
+          "mention_roles": [],
+          "attachments": [],
+          "embeds": [],
+          "timestamp": "2026-10-09T00:16:55.053000+00:00",
+          "edited_timestamp": null,
+          "flags": 0,
+          "components": [],
+          "id": "1557909691655262311",
+          "channel_id": "1382651184141303819",
+          "author": {
+            "id": "1237340022190112781",
+            "username": "km00037",
+            "avatar": "40c08836ecbe9cd4053b9f4c7d5c78be",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "望月果乃",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          "pinned": false,
+          "mention_everyone": false,
+          "tts": false,
+          "message_reference": {
+            "type": 0,
+            "channel_id": "1382651184141303819",
+            "message_id": "1557909297164329083",
+            "guild_id": "715211007307284530"
+          },
+          "reactions": [
+            {
+              "emoji": {
+                "id": null,
+                "name": "🙆‍♀️"
+              },
+              "count": 2,
+              "count_details": {
+                "burst": 0,
+                "normal": 2
+              },
+              "burst_colors": [],
+              "me_burst": false,
+              "burst_me": false,
+              "me": false,
+              "burst_count": 0
+            },
+            {
+              "emoji": {
+                "id": null,
+                "name": "🙏"
+              },
+              "count": 1,
+              "count_details": {
+                "burst": 0,
+                "normal": 1
+              },
+              "burst_colors": [],
+              "me_burst": false,
+              "burst_me": false,
+              "me": false,
+              "burst_count": 0
+            }
+          ],
+          "referenced_message": {
+            "type": 19,
+            "content": "<@1382626504386543708> \nありがとうございます🙇‍♀️ \n制作チャンネル内でご連絡してもよろしいでしょうか？\nこちらでお送りした方がよろしいでしょうか？",
+            "mentions": [
+              {
+                "id": "1382626504386543708",
+                "username": "meropp.16",
+                "avatar": "10c8b627f08eeb8dbbb2a3a0e5f784cb",
+                "discriminator": "0",
+                "public_flags": 0,
+                "flags": 0,
+                "banner": null,
+                "accent_color": null,
+                "global_name": "大平 沙織",
+                "avatar_decoration_data": null,
+                "collectibles": null,
+                "display_name_styles": null,
+                "vad_colors": null,
+                "banner_color": null,
+                "clan": null,
+                "primary_guild": null
+              }
+            ],
+            "mention_roles": [],
+            "attachments": [],
+            "embeds": [],
+            "timestamp": "2026-10-09T00:15:20.999000+00:00",
+            "edited_timestamp": null,
+            "flags": 0,
+            "components": [],
+            "id": "1557909297164329083",
+            "channel_id": "1382651184141303819",
+            "author": {
+              "id": "1382656441759957032",
+              "username": "yuukiki8",
+              "avatar": "f2a45f1a2022b4dda82f2a4e8e32ee83",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "小林優紀 本日対応不可",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            },
+            "pinned": false,
+            "mention_everyone": false,
+            "tts": false,
+            "message_reference": {
+              "type": 0,
+              "channel_id": "1382651184141303819",
+              "message_id": "1557908692127580161",
+              "guild_id": "715211007307284530"
+            }
+          }
+        },
+        {
+          "type": 19,
+          "content": "<@1382626504386543708> \nありがとうございます🙇‍♀️ \n制作チャンネル内でご連絡してもよろしいでしょうか？\nこちらでお送りした方がよろしいでしょうか？",
+          "mentions": [
+            {
+              "id": "1382626504386543708",
+              "username": "meropp.16",
+              "avatar": "10c8b627f08eeb8dbbb2a3a0e5f784cb",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "大平 沙織",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            }
+          ],
+          "mention_roles": [],
+          "attachments": [],
+          "embeds": [],
+          "timestamp": "2026-10-09T00:15:20.999000+00:00",
+          "edited_timestamp": null,
+          "flags": 0,
+          "components": [],
+          "id": "1557909297164329083",
+          "channel_id": "1382651184141303819",
+          "author": {
+            "id": "1382656441759957032",
+            "username": "yuukiki8",
+            "avatar": "f2a45f1a2022b4dda82f2a4e8e32ee83",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "小林優紀 本日対応不可",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          "pinned": false,
+          "mention_everyone": false,
+          "tts": false,
+          "message_reference": {
+            "type": 0,
+            "channel_id": "1382651184141303819",
+            "message_id": "1557908692127580161",
+            "guild_id": "715211007307284530"
+          },
+          "referenced_message": {
+            "type": 19,
+            "content": "<@1382656441759957032> 確認します！",
+            "mentions": [
+              {
+                "id": "1382656441759957032",
+                "username": "yuukiki8",
+                "avatar": "f2a45f1a2022b4dda82f2a4e8e32ee83",
+                "discriminator": "0",
+                "public_flags": 0,
+                "flags": 0,
+                "banner": null,
+                "accent_color": null,
+                "global_name": "小林優紀 本日対応不可",
+                "avatar_decoration_data": null,
+                "collectibles": null,
+                "display_name_styles": null,
+                "vad_colors": null,
+                "banner_color": null,
+                "clan": null,
+                "primary_guild": null
+              }
+            ],
+            "mention_roles": [],
+            "attachments": [],
+            "embeds": [],
+            "timestamp": "2026-10-09T00:12:56.747000+00:00",
+            "edited_timestamp": null,
+            "flags": 0,
+            "components": [],
+            "id": "1557908692127580161",
+            "channel_id": "1382651184141303819",
+            "author": {
+              "id": "1382626504386543708",
+              "username": "meropp.16",
+              "avatar": "10c8b627f08eeb8dbbb2a3a0e5f784cb",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "大平 沙織",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            },
+            "pinned": false,
+            "mention_everyone": false,
+            "tts": false,
+            "message_reference": {
+              "type": 0,
+              "channel_id": "1382651184141303819",
+              "message_id": "1557907454979743778",
+              "guild_id": "715211007307284530"
+            }
+          }
+        },
+        {
+          "type": 19,
+          "content": "<@1382656441759957032> 確認します！",
+          "mentions": [
+            {
+              "id": "1382656441759957032",
+              "username": "yuukiki8",
+              "avatar": "f2a45f1a2022b4dda82f2a4e8e32ee83",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "小林優紀 本日対応不可",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            }
+          ],
+          "mention_roles": [],
+          "attachments": [],
+          "embeds": [],
+          "timestamp": "2026-10-09T00:12:56.747000+00:00",
+          "edited_timestamp": null,
+          "flags": 0,
+          "components": [],
+          "id": "1557908692127580161",
+          "channel_id": "1382651184141303819",
+          "author": {
+            "id": "1382626504386543708",
+            "username": "meropp.16",
+            "avatar": "10c8b627f08eeb8dbbb2a3a0e5f784cb",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "大平 沙織",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          "pinned": false,
+          "mention_everyone": false,
+          "tts": false,
+          "message_reference": {
+            "type": 0,
+            "channel_id": "1382651184141303819",
+            "message_id": "1557907454979743778",
+            "guild_id": "715211007307284530"
+          },
+          "reactions": [
+            {
+              "emoji": {
+                "id": null,
+                "name": "🙏"
+              },
+              "count": 2,
+              "count_details": {
+                "burst": 0,
+                "normal": 2
+              },
+              "burst_colors": [],
+              "me_burst": false,
+              "burst_me": false,
+              "me": false,
+              "burst_count": 0
+            },
+            {
+              "emoji": {
+                "id": null,
+                "name": "🙇‍♀️"
+              },
+              "count": 1,
+              "count_details": {
+                "burst": 0,
+                "normal": 1
+              },
+              "burst_colors": [],
+              "me_burst": false,
+              "burst_me": false,
+              "me": false,
+              "burst_count": 0
+            }
+          ],
+          "referenced_message": {
+            "type": 0,
+            "content": "<@1382626504386543708> <@1382627787759943781> \n第30回日本外科病理学会学術集会です。\n申請書の提出期限が本日で、一部本日の午前中期限なのですが望月さんとご連絡が取れません💦 \nお忙しいところ大変恐れ入りますがご確認いただくことは可能でしょうか💦",
+            "mentions": [
+              {
+                "id": "1382626504386543708",
+                "username": "meropp.16",
+                "avatar": "10c8b627f08eeb8dbbb2a3a0e5f784cb",
+                "discriminator": "0",
+                "public_flags": 0,
+                "flags": 0,
+                "banner": null,
+                "accent_color": null,
+                "global_name": "大平 沙織",
+                "avatar_decoration_data": null,
+                "collectibles": null,
+                "display_name_styles": null,
+                "vad_colors": null,
+                "banner_color": null,
+                "clan": null,
+                "primary_guild": null
+              },
+              {
+                "id": "1382627787759943781",
+                "username": "koooomuuuuro",
+                "avatar": "f50c8f6be02164d2ea73281ac43f76e9",
+                "discriminator": "0",
+                "public_flags": 0,
+                "flags": 0,
+                "banner": null,
+                "accent_color": null,
+                "global_name": "小室加奈",
+                "avatar_decoration_data": null,
+                "collectibles": null,
+                "display_name_styles": null,
+                "vad_colors": null,
+                "banner_color": null,
+                "clan": null,
+                "primary_guild": null
+              }
+            ],
+            "mention_roles": [],
+            "attachments": [],
+            "embeds": [],
+            "timestamp": "2026-10-09T00:08:01.788000+00:00",
+            "edited_timestamp": null,
+            "flags": 0,
+            "components": [],
+            "id": "1557907454979743778",
+            "channel_id": "1382651184141303819",
+            "author": {
+              "id": "1382656441759957032",
+              "username": "yuukiki8",
+              "avatar": "f2a45f1a2022b4dda82f2a4e8e32ee83",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "小林優紀 本日対応不可",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            },
+            "pinned": false,
+            "mention_everyone": false,
+            "tts": false
+          }
+        }
+      ]
+    },
+    {
+      "url": "https://discord.com/api/v10/channels/1382651184141303819/messages?before=1557907454979743778&limit=30",
+      "status": 200,
+      "body": [
+        {
+          "type": 0,
+          "content": "<@1237340022190112781> \nおつかれさまです。\n第30回日本外科病理学会学術集会の申請書のご確認をお願いいたします🙏 \n事前作業届と臨時搬出入申請書のみ期限が本日の午前中までとなっております。",
+          "mentions": [
+            {
+              "id": "1237340022190112781",
+              "username": "km00037",
+              "avatar": "40c08836ecbe9cd4053b9f4c7d5c78be",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "望月果乃",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            }
+          ],
+          "mention_roles": [],
+          "attachments": [],
+          "embeds": [],
+          "timestamp": "2026-10-08T22:58:49.698000+00:00",
+          "edited_timestamp": "2026-10-08T22:59:35.217000+00:00",
+          "flags": 0,
+          "components": [],
+          "id": "1557890039852044394",
+          "channel_id": "1382651184141303819",
+          "author": {
+            "id": "1382656441759957032",
+            "username": "yuukiki8",
+            "avatar": "f2a45f1a2022b4dda82f2a4e8e32ee83",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "小林優紀 本日対応不可",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          "pinned": false,
+          "mention_everyone": false,
+          "tts": false
+        },
+        {
+          "type": 19,
+          "content": "<@1237340022190112781> \n申し訳ありません、追加で、荷物はネクサス様の本社に置かせていただけるということで大丈夫でしょうか？",
+          "mentions": [
+            {
+              "id": "1237340022190112781",
+              "username": "km00037",
+              "avatar": "40c08836ecbe9cd4053b9f4c7d5c78be",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "望月果乃",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            }
+          ],
+          "mention_roles": [],
+          "attachments": [],
+          "embeds": [],
+          "timestamp": "2026-10-06T03:19:08.946000+00:00",
+          "edited_timestamp": null,
+          "flags": 0,
+          "components": [],
+          "id": "1556868388129611869",
+          "channel_id": "1382651184141303819",
+          "author": {
+            "id": "1399380688897183825",
+            "username": "katori_mone",
+            "avatar": "d6228c32faf738668d7e2a9be148d978",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "河原木智恵 16～18日、23日午後、、27日午前対応不可",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          "pinned": false,
+          "mention_everyone": false,
+          "tts": false,
+          "message_reference": {
+            "type": 0,
+            "channel_id": "1382651184141303819",
+            "message_id": "1556842836597674005",
+            "guild_id": "715211007307284530"
+          },
+          "referenced_message": {
+            "type": 0,
+            "content": "<@1237340022190112781> \nお忙しいところ申し訳ありません。\n搬入搬出時の運送ドライバーの情報ありましたら共有をお願いいたします。",
+            "mentions": [
+              {
+                "id": "1237340022190112781",
+                "username": "km00037",
+                "avatar": "40c08836ecbe9cd4053b9f4c7d5c78be",
+                "discriminator": "0",
+                "public_flags": 0,
+                "flags": 0,
+                "banner": null,
+                "accent_color": null,
+                "global_name": "望月果乃",
+                "avatar_decoration_data": null,
+                "collectibles": null,
+                "display_name_styles": null,
+                "vad_colors": null,
+                "banner_color": null,
+                "clan": null,
+                "primary_guild": null
+              }
+            ],
+            "mention_roles": [],
+            "attachments": [],
+            "embeds": [],
+            "timestamp": "2026-10-06T01:37:36.986000+00:00",
+            "edited_timestamp": null,
+            "flags": 0,
+            "components": [],
+            "id": "1556842836597674005",
+            "channel_id": "1382651184141303819",
+            "author": {
+              "id": "1399380688897183825",
+              "username": "katori_mone",
+              "avatar": "d6228c32faf738668d7e2a9be148d978",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "河原木智恵 16～18日、23日午後、、27日午前対応不可",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            },
+            "pinned": false,
+            "mention_everyone": false,
+            "tts": false
+          }
+        },
+        {
+          "type": 19,
+          "content": "<@1382621027078504489> 確認します！",
+          "mentions": [
+            {
+              "id": "1382621027078504489",
+              "username": "kwmtym",
+              "avatar": "83a42c9c90e152101f02812a113ce56f",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "川本優美",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            }
+          ],
+          "mention_roles": [],
+          "attachments": [],
+          "embeds": [],
+          "timestamp": "2026-10-06T02:17:23.577000+00:00",
+          "edited_timestamp": null,
+          "flags": 0,
+          "components": [],
+          "id": "1556852846685720668",
+          "channel_id": "1382651184141303819",
+          "author": {
+            "id": "1237340022190112781",
+            "username": "km00037",
+            "avatar": "40c08836ecbe9cd4053b9f4c7d5c78be",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "望月果乃",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          "pinned": false,
+          "mention_everyone": false,
+          "tts": false,
+          "message_reference": {
+            "type": 0,
+            "channel_id": "1382651184141303819",
+            "message_id": "1556841334097186816",
+            "guild_id": "715211007307284530"
+          },
+          "reactions": [
+            {
+              "emoji": {
+                "id": null,
+                "name": "🙏"
+              },
+              "count": 1,
+              "count_details": {
+                "burst": 0,
+                "normal": 1
+              },
+              "burst_colors": [],
+              "me_burst": false,
+              "burst_me": false,
+              "me": false,
+              "burst_count": 0
+            }
+          ],
+          "referenced_message": {
+            "type": 0,
+            "content": "<@&1399700604577906818> \nおつかれさまです。\n第33回小児集中治療ワークショップ\n以下ご確認お願いいたします。\n-----\n運営マニュアルとその他マニュアルのPDF化と保存終了しました。\n通常セットでブース運営マニュアルを作成しております。\nhttps://drive.google.com/drive/folders/1YrOK1mKOpPaUOax7nxQaSO7XyyvFqHeH?usp=drive_link\nご確認をお願いいたします。",
+            "mentions": [],
+            "mention_roles": [
+              "1399700604577906818"
+            ],
+            "attachments": [],
+            "embeds": [
+              {
+                "type": "link",
+                "url": "https://drive.google.com/drive/folders/1YrOK1mKOpPaUOax7nxQaSO7XyyvFqHeH?usp=drive_link",
+                "title": "Google Drive: Sign-in",
+                "description": "Access Google Drive with a Google account (for personal use) or Google Workspace account (for business use).",
+                "content_scan_version": 4
+              }
+            ],
+            "timestamp": "2026-10-06T01:31:38.762000+00:00",
+            "edited_timestamp": null,
+            "flags": 0,
+            "components": [],
+            "id": "1556841334097186816",
+            "channel_id": "1382651184141303819",
+            "author": {
+              "id": "1382621027078504489",
+              "username": "kwmtym",
+              "avatar": "83a42c9c90e152101f02812a113ce56f",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "川本優美",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            },
+            "pinned": false,
+            "mention_everyone": false,
+            "tts": false
+          }
+        },
+        {
+          "type": 0,
+          "content": "<@1237340022190112781> \nお忙しいところ申し訳ありません。\n搬入搬出時の運送ドライバーの情報ありましたら共有をお願いいたします。",
+          "mentions": [
+            {
+              "id": "1237340022190112781",
+              "username": "km00037",
+              "avatar": "40c08836ecbe9cd4053b9f4c7d5c78be",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "望月果乃",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            }
+          ],
+          "mention_roles": [],
+          "attachments": [],
+          "embeds": [],
+          "timestamp": "2026-10-06T01:37:36.986000+00:00",
+          "edited_timestamp": null,
+          "flags": 0,
+          "components": [],
+          "id": "1556842836597674005",
+          "channel_id": "1382651184141303819",
+          "author": {
+            "id": "1399380688897183825",
+            "username": "katori_mone",
+            "avatar": "d6228c32faf738668d7e2a9be148d978",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "河原木智恵 16～18日、23日午後、、27日午前対応不可",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          "pinned": false,
+          "mention_everyone": false,
+          "tts": false,
+          "reactions": [
+            {
+              "emoji": {
+                "id": null,
+                "name": "🫡"
+              },
+              "count": 1,
+              "count_details": {
+                "burst": 0,
+                "normal": 1
+              },
+              "burst_colors": [],
+              "me_burst": false,
+              "burst_me": false,
+              "me": false,
+              "burst_count": 0
+            }
+          ]
+        },
+        {
+          "type": 0,
+          "content": "",
+          "mentions": [],
+          "mention_roles": [],
+          "attachments": [],
+          "embeds": [],
+          "timestamp": "2026-10-06T01:37:36.524000+00:00",
+          "edited_timestamp": null,
+          "flags": 16384,
+          "components": [],
+          "id": "1556842834659774485",
+          "channel_id": "1382651184141303819",
+          "author": {
+            "id": "1399380688897183825",
+            "username": "katori_mone",
+            "avatar": "d6228c32faf738668d7e2a9be148d978",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "河原木智恵 16～18日、23日午後、、27日午前対応不可",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          "pinned": false,
+          "mention_everyone": false,
+          "tts": false,
+          "message_reference": {
+            "type": 1,
+            "channel_id": "1384435105572982834",
+            "message_id": "1555751783975100467",
+            "guild_id": "715211007307284530"
+          },
+          "message_snapshots": [
+            {
+              "message": {
+                "type": 0,
+                "content": "<@1237340022190112781> \nお休みのところ申し訳ありません。\n搬入時のハコベルのドライバー情報は第14回乳房と同じでしょうか？\nまた、搬出時は大阪運送で確定でよろしいでしょうか？",
+                "mentions": [
+                  {
+                    "id": "1237340022190112781",
+                    "username": "km00037",
+                    "avatar": "40c08836ecbe9cd4053b9f4c7d5c78be",
+                    "discriminator": "0",
+                    "public_flags": 0,
+                    "flags": 0,
+                    "banner": null,
+                    "accent_color": null,
+                    "global_name": "望月果乃",
+                    "avatar_decoration_data": null,
+                    "collectibles": null,
+                    "display_name_styles": null,
+                    "vad_colors": null,
+                    "banner_color": null,
+                    "clan": null,
+                    "primary_guild": null
+                  }
+                ],
+                "mention_roles": [],
+                "attachments": [],
+                "embeds": [],
+                "timestamp": "2026-10-03T01:22:09.770000+00:00",
+                "edited_timestamp": null,
+                "flags": 0,
+                "components": []
+              }
+            }
+          ]
+        },
+        {
+          "type": 0,
+          "content": "<@&1399700604577906818> \nおつかれさまです。\n第33回小児集中治療ワークショップ\n以下ご確認お願いいたします。\n-----\n運営マニュアルとその他マニュアルのPDF化と保存終了しました。\n通常セットでブース運営マニュアルを作成しております。\nhttps://drive.google.com/drive/folders/1YrOK1mKOpPaUOax7nxQaSO7XyyvFqHeH?usp=drive_link\nご確認をお願いいたします。",
+          "mentions": [],
+          "mention_roles": [
+            "1399700604577906818"
+          ],
+          "attachments": [],
+          "embeds": [
+            {
+              "type": "link",
+              "url": "https://drive.google.com/drive/folders/1YrOK1mKOpPaUOax7nxQaSO7XyyvFqHeH?usp=drive_link",
+              "title": "Google Drive: Sign-in",
+              "description": "Access Google Drive with a Google account (for personal use) or Google Workspace account (for business use).",
+              "content_scan_version": 4
+            }
+          ],
+          "timestamp": "2026-10-06T01:31:38.762000+00:00",
+          "edited_timestamp": null,
+          "flags": 0,
+          "components": [],
+          "id": "1556841334097186816",
+          "channel_id": "1382651184141303819",
+          "author": {
+            "id": "1382621027078504489",
+            "username": "kwmtym",
+            "avatar": "83a42c9c90e152101f02812a113ce56f",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "川本優美",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          "pinned": false,
+          "mention_everyone": false,
+          "tts": false
+        },
+        {
+          "type": 0,
+          "content": "<@1237340022190112781> <@1288790954186375168> \nおつかれさまです。\n11月開催の第72回肝癌症例研究会よりご連絡がありましたが、チャンネルがまだでしたのでこちらにご連絡いたしました。\n確認シートNo.3へ事務局からのメールを転記しております。\nご確認をお願いいたします。\n※労務提供依頼が届きました。お断りのお返事をいたします。\nhttps://docs.google.com/spreadsheets/d/1Xvnq7MniyHFLrytfsLtbdzJZFz2xiZmUfiyQ-sGT6X0/edit?gid=2021926051#gid=2021926051",
+          "mentions": [
+            {
+              "id": "1288790954186375168",
+              "username": "mari0902__09172",
+              "avatar": "8699b5dde092ce7af1c3644a921c788f",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "宮地麻里（水木返信遅れます）",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            },
+            {
+              "id": "1237340022190112781",
+              "username": "km00037",
+              "avatar": "40c08836ecbe9cd4053b9f4c7d5c78be",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "望月果乃",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            }
+          ],
+          "mention_roles": [],
+          "attachments": [],
+          "embeds": [],
+          "timestamp": "2026-09-30T09:15:51.586000+00:00",
+          "edited_timestamp": null,
+          "flags": 0,
+          "components": [],
+          "id": "1554783830114828319",
+          "channel_id": "1382651184141303819",
+          "author": {
+            "id": "1399380688897183825",
+            "username": "katori_mone",
+            "avatar": "d6228c32faf738668d7e2a9be148d978",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "河原木智恵 16～18日、23日午後、、27日午前対応不可",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          "pinned": false,
+          "mention_everyone": false,
+          "tts": false,
+          "reactions": [
+            {
+              "emoji": {
+                "id": null,
+                "name": "🆗"
+              },
+              "count": 1,
+              "count_details": {
+                "burst": 0,
+                "normal": 1
+              },
+              "burst_colors": [],
+              "me_burst": false,
+              "burst_me": false,
+              "me": false,
+              "burst_count": 0
+            }
+          ]
+        },
+        {
+          "type": 0,
+          "content": "<@1237340022190112781> <@1382599729346646138> \nおつかれさまです。\n11月26日～28日開催予定の第88回日本臨床外科学会学術集会です。\nチャンネル作成前なので、こちらでご連絡いたします。\n\n確認シート1行目へ事務局からのメールを転記しております。\nご確認をお願いいたします。\n※1小間から2小間へ変更になりました。\nhttps://docs.google.com/spreadsheets/d/1Z4zkjEodOIdj7jSFCppZR3Ym_kNj8q4fPIG9uj0Ws4o/edit?pli=1&gid=2021926051#gid=2021926051",
+          "mentions": [
+            {
+              "id": "1382599729346646138",
+              "username": "shari_scop",
+              "avatar": "5445ffd7ffb201a98393cbdf684ea4b1",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "乘定 智恵　しばらくの間、日中対応不可です。",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            },
+            {
+              "id": "1237340022190112781",
+              "username": "km00037",
+              "avatar": "40c08836ecbe9cd4053b9f4c7d5c78be",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "望月果乃",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            }
+          ],
+          "mention_roles": [],
+          "attachments": [],
+          "embeds": [],
+          "timestamp": "2026-09-30T07:58:30.756000+00:00",
+          "edited_timestamp": null,
+          "flags": 0,
+          "components": [],
+          "id": "1554764365062864997",
+          "channel_id": "1382651184141303819",
+          "author": {
+            "id": "1382656441759957032",
+            "username": "yuukiki8",
+            "avatar": "f2a45f1a2022b4dda82f2a4e8e32ee83",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "小林優紀 本日対応不可",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          "pinned": false,
+          "mention_everyone": false,
+          "tts": false
+        },
+        {
+          "type": 0,
+          "content": "<@1382626504386543708> <@1382621027078504489> \nおつかれさまです。\n3月開催予定の第20回日本骨盤臓器脱手術学会学術集会よりご連絡がありましたが、チャンネルがまだでしたので、こちらにご連絡いたしました。\n\n確認シートNo.1へ事務局からのメールを転記しております。\nご確認をお願いいたします。\n※電力削減に関しての連絡で、削減後の使用電力量を10/30までにお知らせとなっております。\nhttps://docs.google.com/spreadsheets/d/1gamPa9J6xnDpnDs4m8OW4AHe4pljJ_U4LG9FzvYjkzc/edit?pli=1&gid=2021926051#gid=2021926051",
+          "mentions": [
+            {
+              "id": "1382621027078504489",
+              "username": "kwmtym",
+              "avatar": "83a42c9c90e152101f02812a113ce56f",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "川本優美",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            },
+            {
+              "id": "1382626504386543708",
+              "username": "meropp.16",
+              "avatar": "10c8b627f08eeb8dbbb2a3a0e5f784cb",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "大平 沙織",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            }
+          ],
+          "mention_roles": [],
+          "attachments": [],
+          "embeds": [],
+          "timestamp": "2026-09-29T06:53:30.771000+00:00",
+          "edited_timestamp": null,
+          "flags": 0,
+          "components": [],
+          "id": "1554385619474587738",
+          "channel_id": "1382651184141303819",
+          "author": {
+            "id": "1399380688897183825",
+            "username": "katori_mone",
+            "avatar": "d6228c32faf738668d7e2a9be148d978",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "河原木智恵 16～18日、23日午後、、27日午前対応不可",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          "pinned": false,
+          "mention_everyone": false,
+          "tts": false,
+          "reactions": [
+            {
+              "emoji": {
+                "id": null,
+                "name": "🙆‍♀️"
+              },
+              "count": 1,
+              "count_details": {
+                "burst": 0,
+                "normal": 1
+              },
+              "burst_colors": [],
+              "me_burst": false,
+              "burst_me": false,
+              "me": false,
+              "burst_count": 0
+            },
+            {
+              "emoji": {
+                "id": null,
+                "name": "🫡"
+              },
+              "count": 1,
+              "count_details": {
+                "burst": 0,
+                "normal": 1
+              },
+              "burst_colors": [],
+              "me_burst": false,
+              "burst_me": false,
+              "me": false,
+              "burst_count": 0
+            }
+          ]
+        },
+        {
+          "type": 19,
+          "content": "<@1382955208413417474> こちらご対応ありがとうございます！確認しましたので送信お願いします。",
+          "mentions": [
+            {
+              "id": "1382955208413417474",
+              "username": "gxiaoziyo_42967",
+              "avatar": null,
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "永井孝子　15日夕方まで対応不可",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            }
+          ],
+          "mention_roles": [],
+          "attachments": [],
+          "embeds": [],
+          "timestamp": "2026-09-28T06:43:17.578000+00:00",
+          "edited_timestamp": null,
+          "flags": 0,
+          "components": [],
+          "id": "1554020659691135050",
+          "channel_id": "1382651184141303819",
+          "author": {
+            "id": "1382626504386543708",
+            "username": "meropp.16",
+            "avatar": "10c8b627f08eeb8dbbb2a3a0e5f784cb",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "大平 沙織",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          "pinned": false,
+          "mention_everyone": false,
+          "tts": false,
+          "message_reference": {
+            "type": 0,
+            "channel_id": "1382651184141303819",
+            "message_id": "1554009585453375570",
+            "guild_id": "715211007307284530"
+          },
+          "reactions": [
+            {
+              "emoji": {
+                "id": null,
+                "name": "🫡"
+              },
+              "count": 1,
+              "count_details": {
+                "burst": 0,
+                "normal": 1
+              },
+              "burst_colors": [],
+              "me_burst": false,
+              "burst_me": false,
+              "me": false,
+              "burst_count": 0
+            }
+          ],
+          "referenced_message": {
+            "type": 0,
+            "content": "<@1382626504386543708> \nお疲れ様です。\n8月開催の第33回日本小児整形外科学会研修会です。\nお忙しいところ申し訳ありませんが、お手すきの際に下記の送信前確認をお願い出来ますでしょうか？\n-------------------------------------------\n@木村太一 様　\n@八島美奈 様　\n@大元康平 様\n\nいつもお世話になっております。永井でございます。\nこの度の学会大変お疲れ様でございました。\n運営事務局に確認した来場者数の報告をさせていただきます。\n日程：8月21日～22日\n学会名：第33回日本小児整形外科学会研修会\n場所：横浜シンポジア\n総数：116名\n来場者数：合計116名（日別の内訳については事務局から回答が得られませんでした。）\n医師人数・割合等：114名・98.27％\n重要度：重要度が【0.0→1.0】に変更になりました。\n\n以上でございます。\n引き続きよろしくお願いいたします。",
+            "mentions": [
+              {
+                "id": "1382626504386543708",
+                "username": "meropp.16",
+                "avatar": "10c8b627f08eeb8dbbb2a3a0e5f784cb",
+                "discriminator": "0",
+                "public_flags": 0,
+                "flags": 0,
+                "banner": null,
+                "accent_color": null,
+                "global_name": "大平 沙織",
+                "avatar_decoration_data": null,
+                "collectibles": null,
+                "display_name_styles": null,
+                "vad_colors": null,
+                "banner_color": null,
+                "clan": null,
+                "primary_guild": null
+              }
+            ],
+            "mention_roles": [],
+            "attachments": [],
+            "embeds": [],
+            "timestamp": "2026-09-28T05:59:17.274000+00:00",
+            "edited_timestamp": null,
+            "flags": 0,
+            "components": [],
+            "id": "1554009585453375570",
+            "channel_id": "1382651184141303819",
+            "author": {
+              "id": "1382955208413417474",
+              "username": "gxiaoziyo_42967",
+              "avatar": null,
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "永井孝子　15日夕方まで対応不可",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            },
+            "pinned": false,
+            "mention_everyone": false,
+            "tts": false
+          }
+        },
+        {
+          "type": 0,
+          "content": "<@1382626504386543708> \nお疲れ様です。\n8月開催の第33回日本小児整形外科学会研修会です。\nお忙しいところ申し訳ありませんが、お手すきの際に下記の送信前確認をお願い出来ますでしょうか？\n-------------------------------------------\n@木村太一 様　\n@八島美奈 様　\n@大元康平 様\n\nいつもお世話になっております。永井でございます。\nこの度の学会大変お疲れ様でございました。\n運営事務局に確認した来場者数の報告をさせていただきます。\n日程：8月21日～22日\n学会名：第33回日本小児整形外科学会研修会\n場所：横浜シンポジア\n総数：116名\n来場者数：合計116名（日別の内訳については事務局から回答が得られませんでした。）\n医師人数・割合等：114名・98.27％\n重要度：重要度が【0.0→1.0】に変更になりました。\n\n以上でございます。\n引き続きよろしくお願いいたします。",
+          "mentions": [
+            {
+              "id": "1382626504386543708",
+              "username": "meropp.16",
+              "avatar": "10c8b627f08eeb8dbbb2a3a0e5f784cb",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "大平 沙織",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            }
+          ],
+          "mention_roles": [],
+          "attachments": [],
+          "embeds": [],
+          "timestamp": "2026-09-28T05:59:17.274000+00:00",
+          "edited_timestamp": null,
+          "flags": 0,
+          "components": [],
+          "id": "1554009585453375570",
+          "channel_id": "1382651184141303819",
+          "author": {
+            "id": "1382955208413417474",
+            "username": "gxiaoziyo_42967",
+            "avatar": null,
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "永井孝子　15日夕方まで対応不可",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          "pinned": false,
+          "mention_everyone": false,
+          "tts": false
+        },
+        {
+          "type": 19,
+          "content": "<@1382656441759957032> 送信お願いします！",
+          "mentions": [
+            {
+              "id": "1382656441759957032",
+              "username": "yuukiki8",
+              "avatar": "f2a45f1a2022b4dda82f2a4e8e32ee83",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "小林優紀 本日対応不可",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            }
+          ],
+          "mention_roles": [],
+          "attachments": [],
+          "embeds": [],
+          "timestamp": "2026-09-28T05:41:26.548000+00:00",
+          "edited_timestamp": null,
+          "flags": 0,
+          "components": [],
+          "id": "1554005094503030846",
+          "channel_id": "1382651184141303819",
+          "author": {
+            "id": "1237340022190112781",
+            "username": "km00037",
+            "avatar": "40c08836ecbe9cd4053b9f4c7d5c78be",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "望月果乃",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          "pinned": false,
+          "mention_everyone": false,
+          "tts": false,
+          "message_reference": {
+            "type": 0,
+            "channel_id": "1382651184141303819",
+            "message_id": "1554004963376496713",
+            "guild_id": "715211007307284530"
+          },
+          "reactions": [
+            {
+              "emoji": {
+                "id": null,
+                "name": "🫡"
+              },
+              "count": 1,
+              "count_details": {
+                "burst": 0,
+                "normal": 1
+              },
+              "burst_colors": [],
+              "me_burst": false,
+              "burst_me": false,
+              "me": false,
+              "burst_count": 0
+            }
+          ],
+          "referenced_message": {
+            "type": 0,
+            "content": "<@&1399700604577906818> \nおつかれさまです。\n第44回福岡救急医学会です。\nご確認いただけないので、送信前確認をお願いいたします。\n-------------------------------------------\nいつもお世話になっております。小林でございます。\nこの度の学会大変お疲れ様でございました。\n運営事務局に確認した来場者数の報告をさせていただきます。\n日程：2026年9月12日\n学会名：第44回福岡救急医学会\n場所：九州大学病院キャンパス\n総数：550名\n来場者数：合計550名（１日目550名）\n医師人数・割合等：医師の人数については回答が得られませんでした。\n重要度：1.0\n\n以上でございます。\n引き続きよろしくお願いいたします。\n-------------------------------------------",
+            "mentions": [],
+            "mention_roles": [
+              "1399700604577906818"
+            ],
+            "attachments": [],
+            "embeds": [],
+            "timestamp": "2026-09-28T05:40:55.285000+00:00",
+            "edited_timestamp": null,
+            "flags": 0,
+            "components": [],
+            "id": "1554004963376496713",
+            "channel_id": "1382651184141303819",
+            "author": {
+              "id": "1382656441759957032",
+              "username": "yuukiki8",
+              "avatar": "f2a45f1a2022b4dda82f2a4e8e32ee83",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "小林優紀 本日対応不可",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            },
+            "pinned": false,
+            "mention_everyone": false,
+            "tts": false
+          }
+        },
+        {
+          "type": 0,
+          "content": "<@&1399700604577906818> \nおつかれさまです。\n第44回福岡救急医学会です。\nご確認いただけないので、送信前確認をお願いいたします。\n-------------------------------------------\nいつもお世話になっております。小林でございます。\nこの度の学会大変お疲れ様でございました。\n運営事務局に確認した来場者数の報告をさせていただきます。\n日程：2026年9月12日\n学会名：第44回福岡救急医学会\n場所：九州大学病院キャンパス\n総数：550名\n来場者数：合計550名（１日目550名）\n医師人数・割合等：医師の人数については回答が得られませんでした。\n重要度：1.0\n\n以上でございます。\n引き続きよろしくお願いいたします。\n-------------------------------------------",
+          "mentions": [],
+          "mention_roles": [
+            "1399700604577906818"
+          ],
+          "attachments": [],
+          "embeds": [],
+          "timestamp": "2026-09-28T05:40:55.285000+00:00",
+          "edited_timestamp": null,
+          "flags": 0,
+          "components": [],
+          "id": "1554004963376496713",
+          "channel_id": "1382651184141303819",
+          "author": {
+            "id": "1382656441759957032",
+            "username": "yuukiki8",
+            "avatar": "f2a45f1a2022b4dda82f2a4e8e32ee83",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "小林優紀 本日対応不可",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          "pinned": false,
+          "mention_everyone": false,
+          "tts": false
+        },
+        {
+          "type": 0,
+          "content": "<@1382626504386543708> <@1288790954186375168> \nお疲れ様です。\n8月開催の第33回日本小児整形外科学会研修会よりご連絡いただきましたが、チャンネルがございませんのでこちらでご連絡いたしました。\n---------------------------------\nおつかれさまです。\n確認シートNo.11へ事務局からのメールを転記しております。\nご確認をお願いいたします。\nhttps://docs.google.com/spreadsheets/d/1jztqCHBAy5fwjF9xtfhf4gqOsg5cvr2LfTl6-GmaO-M/edit?gid=2021926051#gid=2021926051",
+          "mentions": [
+            {
+              "id": "1288790954186375168",
+              "username": "mari0902__09172",
+              "avatar": "8699b5dde092ce7af1c3644a921c788f",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "宮地麻里（水木返信遅れます）",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            },
+            {
+              "id": "1382626504386543708",
+              "username": "meropp.16",
+              "avatar": "10c8b627f08eeb8dbbb2a3a0e5f784cb",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "大平 沙織",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            }
+          ],
+          "mention_roles": [],
+          "attachments": [],
+          "embeds": [],
+          "timestamp": "2026-09-28T03:25:06.181000+00:00",
+          "edited_timestamp": "2026-09-28T04:45:32.378000+00:00",
+          "flags": 0,
+          "components": [],
+          "id": "1553970783557132300",
+          "channel_id": "1382651184141303819",
+          "author": {
+            "id": "1382955208413417474",
+            "username": "gxiaoziyo_42967",
+            "avatar": null,
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "永井孝子　15日夕方まで対応不可",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          "pinned": false,
+          "mention_everyone": false,
+          "tts": false,
+          "reactions": [
+            {
+              "emoji": {
+                "id": null,
+                "name": "🙆‍♀️"
+              },
+              "count": 1,
+              "count_details": {
+                "burst": 0,
+                "normal": 1
+              },
+              "burst_colors": [],
+              "me_burst": false,
+              "burst_me": false,
+              "me": false,
+              "burst_count": 0
+            }
+          ]
+        },
+        {
+          "type": 0,
+          "content": "<@1382626504386543708> 小児整形学会の来場者数プッシュ",
+          "mentions": [
+            {
+              "id": "1382626504386543708",
+              "username": "meropp.16",
+              "avatar": "10c8b627f08eeb8dbbb2a3a0e5f784cb",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "大平 沙織",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            }
+          ],
+          "mention_roles": [],
+          "attachments": [],
+          "embeds": [],
+          "timestamp": "2026-09-28T00:01:48.215000+00:00",
+          "edited_timestamp": null,
+          "flags": 0,
+          "components": [],
+          "id": "1553919621579542602",
+          "channel_id": "1382651184141303819",
+          "author": {
+            "id": "1545295566932807700",
+            "username": "Reminder",
+            "avatar": "a54effefa7baac40d4410edacd1dc651",
+            "discriminator": "0000",
+            "public_flags": 0,
+            "flags": 0,
+            "bot": true,
+            "global_name": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          "pinned": false,
+          "mention_everyone": false,
+          "tts": false,
+          "application_id": "349920059549941761",
+          "webhook_id": "1545295566932807700",
+          "reactions": [
+            {
+              "emoji": {
+                "id": null,
+                "name": "✅"
+              },
+              "count": 1,
+              "count_details": {
+                "burst": 0,
+                "normal": 1
+              },
+              "burst_colors": [],
+              "me_burst": false,
+              "burst_me": false,
+              "me": false,
+              "burst_count": 0
+            }
+          ]
+        },
+        {
+          "type": 19,
+          "content": "<@1382627787759943781> \nおつかれさまです。\n小間配置図に一部不備があったとご連絡をいただきました。\n確認シート2行目へ事務局からのメールを転記しております。\nご確認をお願いいたします。\nhttps://docs.google.com/spreadsheets/d/1KutxVeHYmDO5IMz3eBw4XeutLrGK-kANrVPNQrtPn8U/edit?pli=1&gid=2021926051#gid=2021926051\n\n小間配置図：https://drive.google.com/file/d/1lS6hOB9cRgdTpqvSubalmIvbDrsedPi0/view?usp=drive_link",
+          "mentions": [
+            {
+              "id": "1382627787759943781",
+              "username": "koooomuuuuro",
+              "avatar": "f50c8f6be02164d2ea73281ac43f76e9",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "小室加奈",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            }
+          ],
+          "mention_roles": [],
+          "attachments": [],
+          "embeds": [],
+          "timestamp": "2026-09-09T21:02:42.491000+00:00",
+          "edited_timestamp": null,
+          "flags": 0,
+          "components": [],
+          "id": "1547351569165590528",
+          "channel_id": "1382651184141303819",
+          "author": {
+            "id": "1382656441759957032",
+            "username": "yuukiki8",
+            "avatar": "f2a45f1a2022b4dda82f2a4e8e32ee83",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "小林優紀 本日対応不可",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          "pinned": false,
+          "mention_everyone": false,
+          "tts": false,
+          "message_reference": {
+            "type": 0,
+            "channel_id": "1382651184141303819",
+            "message_id": "1546672153980575796",
+            "guild_id": "715211007307284530"
+          },
+          "reactions": [
+            {
+              "emoji": {
+                "id": null,
+                "name": "👍"
+              },
+              "count": 1,
+              "count_details": {
+                "burst": 0,
+                "normal": 1
+              },
+              "burst_colors": [],
+              "me_burst": false,
+              "burst_me": false,
+              "me": false,
+              "burst_count": 0
+            }
+          ],
+          "referenced_message": {
+            "type": 0,
+            "content": "<@1382627787759943781> \nおつかれさまです。\n第40回日本泌尿器内視鏡・ロボティクス学会総会です。\nまだチャンネルを作成できないので、こちらでご連絡いたします。\n---\n確認シートへ事務局からのメールを転記しております。\nご確認をお願いいたします。\n※10月29日が提出期限となっております。\nhttps://docs.google.com/spreadsheets/d/1KutxVeHYmDO5IMz3eBw4XeutLrGK-kANrVPNQrtPn8U/edit?pli=1&gid=2021926051#gid=2021926051",
+            "mentions": [
+              {
+                "id": "1382627787759943781",
+                "username": "koooomuuuuro",
+                "avatar": "f50c8f6be02164d2ea73281ac43f76e9",
+                "discriminator": "0",
+                "public_flags": 0,
+                "flags": 0,
+                "banner": null,
+                "accent_color": null,
+                "global_name": "小室加奈",
+                "avatar_decoration_data": null,
+                "collectibles": null,
+                "display_name_styles": null,
+                "vad_colors": null,
+                "banner_color": null,
+                "clan": null,
+                "primary_guild": null
+              }
+            ],
+            "mention_roles": [],
+            "attachments": [],
+            "embeds": [],
+            "timestamp": "2026-09-08T00:02:57.288000+00:00",
+            "edited_timestamp": "2026-09-08T00:32:05.738000+00:00",
+            "flags": 0,
+            "components": [],
+            "id": "1546672153980575796",
+            "channel_id": "1382651184141303819",
+            "author": {
+              "id": "1382656441759957032",
+              "username": "yuukiki8",
+              "avatar": "f2a45f1a2022b4dda82f2a4e8e32ee83",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "小林優紀 本日対応不可",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            },
+            "pinned": false,
+            "mention_everyone": false,
+            "tts": false
+          }
+        },
+        {
+          "type": 0,
+          "content": "<@1382627787759943781> <@1288790954186375168> \nおつかれさまです。\n10月開催の第69回日本甲状腺学会学術集会よりご連絡がありましたが、チャンネルがまだのためこちらにご連絡いたしました。\n確認シートへNo.1事務局からのメールを転記しております。\nご確認をお願いいたします。\n※9/18が提出期限となっております。\nhttps://docs.google.com/spreadsheets/d/1RMW8jjzGCwn8fvqfJJrarxDtTbt2v56b960X8JipCBU/edit?pli=1&gid=2021926051#gid=2021926051",
+          "mentions": [
+            {
+              "id": "1288790954186375168",
+              "username": "mari0902__09172",
+              "avatar": "8699b5dde092ce7af1c3644a921c788f",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "宮地麻里（水木返信遅れます）",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            },
+            {
+              "id": "1382627787759943781",
+              "username": "koooomuuuuro",
+              "avatar": "f50c8f6be02164d2ea73281ac43f76e9",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "小室加奈",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            }
+          ],
+          "mention_roles": [],
+          "attachments": [],
+          "embeds": [],
+          "timestamp": "2026-09-09T06:06:41.903000+00:00",
+          "edited_timestamp": null,
+          "flags": 0,
+          "components": [],
+          "id": "1547126080916426762",
+          "channel_id": "1382651184141303819",
+          "author": {
+            "id": "1399380688897183825",
+            "username": "katori_mone",
+            "avatar": "d6228c32faf738668d7e2a9be148d978",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "河原木智恵 16～18日、23日午後、、27日午前対応不可",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          "pinned": false,
+          "mention_everyone": false,
+          "tts": false,
+          "reactions": [
+            {
+              "emoji": {
+                "id": null,
+                "name": "🫡"
+              },
+              "count": 1,
+              "count_details": {
+                "burst": 0,
+                "normal": 1
+              },
+              "burst_colors": [],
+              "me_burst": false,
+              "burst_me": false,
+              "me": false,
+              "burst_count": 0
+            }
+          ]
+        },
+        {
+          "type": 0,
+          "content": "<@1382627787759943781> \nおつかれさまです。\n第40回日本泌尿器内視鏡・ロボティクス学会総会です。\nまだチャンネルを作成できないので、こちらでご連絡いたします。\n---\n確認シートへ事務局からのメールを転記しております。\nご確認をお願いいたします。\n※10月29日が提出期限となっております。\nhttps://docs.google.com/spreadsheets/d/1KutxVeHYmDO5IMz3eBw4XeutLrGK-kANrVPNQrtPn8U/edit?pli=1&gid=2021926051#gid=2021926051",
+          "mentions": [
+            {
+              "id": "1382627787759943781",
+              "username": "koooomuuuuro",
+              "avatar": "f50c8f6be02164d2ea73281ac43f76e9",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "小室加奈",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            }
+          ],
+          "mention_roles": [],
+          "attachments": [],
+          "embeds": [],
+          "timestamp": "2026-09-08T00:02:57.288000+00:00",
+          "edited_timestamp": "2026-09-08T00:32:05.738000+00:00",
+          "flags": 0,
+          "components": [],
+          "id": "1546672153980575796",
+          "channel_id": "1382651184141303819",
+          "author": {
+            "id": "1382656441759957032",
+            "username": "yuukiki8",
+            "avatar": "f2a45f1a2022b4dda82f2a4e8e32ee83",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "小林優紀 本日対応不可",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          "pinned": false,
+          "mention_everyone": false,
+          "tts": false,
+          "reactions": [
+            {
+              "emoji": {
+                "id": null,
+                "name": "🫡"
+              },
+              "count": 1,
+              "count_details": {
+                "burst": 0,
+                "normal": 1
+              },
+              "burst_colors": [],
+              "me_burst": false,
+              "burst_me": false,
+              "me": false,
+              "burst_count": 0
+            }
+          ]
+        },
+        {
+          "type": 19,
+          "content": "<@1382656441759957032> すみません、今日中に確認します！",
+          "mentions": [
+            {
+              "id": "1382656441759957032",
+              "username": "yuukiki8",
+              "avatar": "f2a45f1a2022b4dda82f2a4e8e32ee83",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "小林優紀 本日対応不可",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            }
+          ],
+          "mention_roles": [],
+          "attachments": [],
+          "embeds": [],
+          "timestamp": "2026-09-06T06:54:46.864000+00:00",
+          "edited_timestamp": null,
+          "flags": 0,
+          "components": [],
+          "id": "1546051017722953809",
+          "channel_id": "1382651184141303819",
+          "author": {
+            "id": "1237340022190112781",
+            "username": "km00037",
+            "avatar": "40c08836ecbe9cd4053b9f4c7d5c78be",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "望月果乃",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          "pinned": false,
+          "mention_everyone": false,
+          "tts": false,
+          "message_reference": {
+            "type": 0,
+            "channel_id": "1382651184141303819",
+            "message_id": "1546050850714034196",
+            "guild_id": "715211007307284530"
+          },
+          "reactions": [
+            {
+              "emoji": {
+                "id": null,
+                "name": "👍"
+              },
+              "count": 1,
+              "count_details": {
+                "burst": 0,
+                "normal": 1
+              },
+              "burst_colors": [],
+              "me_burst": false,
+              "burst_me": false,
+              "me": false,
+              "burst_count": 0
+            }
+          ],
+          "referenced_message": {
+            "type": 0,
+            "content": "<@&1399700604577906818> \n第44回福岡救急医学会です。\n11日設営日で明日中には大阪事務所に印刷を依頼したいのですが、PDF化前のチェックを行っていただけないため、どなたかご対応お願いできないでしょうか。\nよろしくお願いいたします。\n\nPDF化前の実施計画書チェックをお願いいたします。\n対応マニュアル：https://orgiast-manual.com/64be68f3bca30903a3f4a582",
+            "mentions": [],
+            "mention_roles": [
+              "1399700604577906818"
+            ],
+            "attachments": [],
+            "embeds": [
+              {
+                "type": "link",
+                "url": "https://orgiast-manual.com/64be68f3bca30903a3f4a582",
+                "title": "Sign in - オージャストWiki",
+                "color": 5198951,
+                "content_scan_version": 4
+              }
+            ],
+            "timestamp": "2026-09-06T06:54:07.046000+00:00",
+            "edited_timestamp": null,
+            "flags": 0,
+            "components": [],
+            "id": "1546050850714034196",
+            "channel_id": "1382651184141303819",
+            "author": {
+              "id": "1382656441759957032",
+              "username": "yuukiki8",
+              "avatar": "f2a45f1a2022b4dda82f2a4e8e32ee83",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "小林優紀 本日対応不可",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            },
+            "pinned": false,
+            "mention_everyone": false,
+            "tts": false
+          }
+        },
+        {
+          "type": 0,
+          "content": "<@&1399700604577906818> \n第44回福岡救急医学会です。\n11日設営日で明日中には大阪事務所に印刷を依頼したいのですが、PDF化前のチェックを行っていただけないため、どなたかご対応お願いできないでしょうか。\nよろしくお願いいたします。\n\nPDF化前の実施計画書チェックをお願いいたします。\n対応マニュアル：https://orgiast-manual.com/64be68f3bca30903a3f4a582",
+          "mentions": [],
+          "mention_roles": [
+            "1399700604577906818"
+          ],
+          "attachments": [],
+          "embeds": [
+            {
+              "type": "link",
+              "url": "https://orgiast-manual.com/64be68f3bca30903a3f4a582",
+              "title": "Sign in - オージャストWiki",
+              "color": 5198951,
+              "content_scan_version": 4
+            }
+          ],
+          "timestamp": "2026-09-06T06:54:07.046000+00:00",
+          "edited_timestamp": null,
+          "flags": 0,
+          "components": [],
+          "id": "1546050850714034196",
+          "channel_id": "1382651184141303819",
+          "author": {
+            "id": "1382656441759957032",
+            "username": "yuukiki8",
+            "avatar": "f2a45f1a2022b4dda82f2a4e8e32ee83",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "小林優紀 本日対応不可",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          "pinned": false,
+          "mention_everyone": false,
+          "tts": false
+        },
+        {
+          "type": 19,
+          "content": "<@1382955208413417474> 確認します！",
+          "mentions": [
+            {
+              "id": "1382955208413417474",
+              "username": "gxiaoziyo_42967",
+              "avatar": null,
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "永井孝子　15日夕方まで対応不可",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            }
+          ],
+          "mention_roles": [],
+          "attachments": [],
+          "embeds": [],
+          "timestamp": "2026-09-04T08:02:39.251000+00:00",
+          "edited_timestamp": null,
+          "flags": 0,
+          "components": [],
+          "id": "1545343322820706324",
+          "channel_id": "1382651184141303819",
+          "author": {
+            "id": "1237340022190112781",
+            "username": "km00037",
+            "avatar": "40c08836ecbe9cd4053b9f4c7d5c78be",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "望月果乃",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          "pinned": false,
+          "mention_everyone": false,
+          "tts": false,
+          "message_reference": {
+            "type": 0,
+            "channel_id": "1382651184141303819",
+            "message_id": "1545343237852635147",
+            "guild_id": "715211007307284530"
+          },
+          "reactions": [
+            {
+              "emoji": {
+                "id": null,
+                "name": "🙇‍♀️"
+              },
+              "count": 1,
+              "count_details": {
+                "burst": 0,
+                "normal": 1
+              },
+              "burst_colors": [],
+              "me_burst": false,
+              "burst_me": false,
+              "me": false,
+              "burst_count": 0
+            }
+          ],
+          "referenced_message": {
+            "type": 0,
+            "content": "<@&1399700604577906818> \nお疲れ様です。\n第30回日本外科病理学会学術集会です。\nお忙しいところ申し訳ありませんがお手すきの際に上記のご確認をお願い出来ますでしょうか？",
+            "mentions": [],
+            "mention_roles": [
+              "1399700604577906818"
+            ],
+            "attachments": [],
+            "embeds": [],
+            "timestamp": "2026-09-04T08:02:18.993000+00:00",
+            "edited_timestamp": null,
+            "flags": 0,
+            "components": [],
+            "id": "1545343237852635147",
+            "channel_id": "1382651184141303819",
+            "author": {
+              "id": "1382955208413417474",
+              "username": "gxiaoziyo_42967",
+              "avatar": null,
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "永井孝子　15日夕方まで対応不可",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            },
+            "pinned": false,
+            "mention_everyone": false,
+            "tts": false
+          }
+        },
+        {
+          "type": 0,
+          "content": "<@&1399700604577906818> \nお疲れ様です。\n第30回日本外科病理学会学術集会です。\nお忙しいところ申し訳ありませんがお手すきの際に上記のご確認をお願い出来ますでしょうか？",
+          "mentions": [],
+          "mention_roles": [
+            "1399700604577906818"
+          ],
+          "attachments": [],
+          "embeds": [],
+          "timestamp": "2026-09-04T08:02:18.993000+00:00",
+          "edited_timestamp": null,
+          "flags": 0,
+          "components": [],
+          "id": "1545343237852635147",
+          "channel_id": "1382651184141303819",
+          "author": {
+            "id": "1382955208413417474",
+            "username": "gxiaoziyo_42967",
+            "avatar": null,
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "永井孝子　15日夕方まで対応不可",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          "pinned": false,
+          "mention_everyone": false,
+          "tts": false
+        },
+        {
+          "type": 0,
+          "content": "",
+          "mentions": [],
+          "mention_roles": [],
+          "attachments": [],
+          "embeds": [],
+          "timestamp": "2026-09-04T08:02:18.402000+00:00",
+          "edited_timestamp": null,
+          "flags": 16384,
+          "components": [],
+          "id": "1545343235373666354",
+          "channel_id": "1382651184141303819",
+          "author": {
+            "id": "1382955208413417474",
+            "username": "gxiaoziyo_42967",
+            "avatar": null,
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "永井孝子　15日夕方まで対応不可",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          "pinned": false,
+          "mention_everyone": false,
+          "tts": false,
+          "message_reference": {
+            "type": 1,
+            "channel_id": "1384435848610709534",
+            "message_id": "1544202502717841428",
+            "guild_id": "715211007307284530"
+          },
+          "message_snapshots": [
+            {
+              "message": {
+                "type": 0,
+                "content": "<@1237340022190112781> \nおつかれさまです。\nブース種類について概要シートを更新しました。\n運搬手配カレンダーから、どのセットを持って行くかのご確認をお願いいたします。\nhttps://orgiast-manual.com/64fafb36bca30903a36be0bb",
+                "mentions": [
+                  {
+                    "id": "1237340022190112781",
+                    "username": "km00037",
+                    "avatar": "40c08836ecbe9cd4053b9f4c7d5c78be",
+                    "discriminator": "0",
+                    "public_flags": 0,
+                    "flags": 0,
+                    "banner": null,
+                    "accent_color": null,
+                    "global_name": "望月果乃",
+                    "avatar_decoration_data": null,
+                    "collectibles": null,
+                    "display_name_styles": null,
+                    "vad_colors": null,
+                    "banner_color": null,
+                    "clan": null,
+                    "primary_guild": null
+                  }
+                ],
+                "mention_roles": [],
+                "attachments": [],
+                "embeds": [
+                  {
+                    "type": "link",
+                    "url": "https://orgiast-manual.com/64fafb36bca30903a36be0bb",
+                    "title": "Sign in - オージャストWiki",
+                    "color": 5198951,
+                    "content_scan_version": 4
+                  }
+                ],
+                "timestamp": "2026-09-01T04:29:26.543000+00:00",
+                "edited_timestamp": null,
+                "flags": 0,
+                "components": []
+              }
+            }
+          ]
+        },
+        {
+          "type": 0,
+          "content": "10月開催の第53回/第23回日本肩関節学会学術集会/日本肩の運動機能研究会よりご連絡がありましたが、チャンネルがまだのためこちらにご連絡いたしました。\n確認シートNo.3へ事務局からのメールを転記しております。\nご確認をお願いいたします。\n※一部の小間位置の変更があったようです\nhttps://docs.google.com/spreadsheets/d/1m4oVn5AkJcdaYXF7tdpmznG0u7ecX5Ru331AyM-IMKk/edit?pli=1&gid=2021926051#gid=2021926051",
+          "mentions": [],
+          "mention_roles": [],
+          "attachments": [],
+          "embeds": [],
+          "timestamp": "2026-09-02T06:50:19.772000+00:00",
+          "edited_timestamp": null,
+          "flags": 0,
+          "components": [],
+          "id": "1544600345995378719",
+          "channel_id": "1382651184141303819",
+          "author": {
+            "id": "1399380688897183825",
+            "username": "katori_mone",
+            "avatar": "d6228c32faf738668d7e2a9be148d978",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "河原木智恵 16～18日、23日午後、、27日午前対応不可",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          "pinned": false,
+          "mention_everyone": false,
+          "tts": false
+        },
+        {
+          "type": 19,
+          "content": "<@1399380688897183825> 参加しました！ありがとうございます！",
+          "mentions": [
+            {
+              "id": "1399380688897183825",
+              "username": "katori_mone",
+              "avatar": "d6228c32faf738668d7e2a9be148d978",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "河原木智恵 16～18日、23日午後、、27日午前対応不可",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            }
+          ],
+          "mention_roles": [],
+          "attachments": [],
+          "embeds": [],
+          "timestamp": "2026-09-01T08:56:45.735000+00:00",
+          "edited_timestamp": null,
+          "flags": 0,
+          "components": [],
+          "id": "1544269775964864642",
+          "channel_id": "1382651184141303819",
+          "author": {
+            "id": "1237340022190112781",
+            "username": "km00037",
+            "avatar": "40c08836ecbe9cd4053b9f4c7d5c78be",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "望月果乃",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          "pinned": false,
+          "mention_everyone": false,
+          "tts": false,
+          "message_reference": {
+            "type": 0,
+            "channel_id": "1382651184141303819",
+            "message_id": "1544266126605951076",
+            "guild_id": "715211007307284530"
+          },
+          "reactions": [
+            {
+              "emoji": {
+                "id": null,
+                "name": "🙇‍♀️"
+              },
+              "count": 1,
+              "count_details": {
+                "burst": 0,
+                "normal": 1
+              },
+              "burst_colors": [],
+              "me_burst": false,
+              "burst_me": false,
+              "me": false,
+              "burst_count": 0
+            }
+          ],
+          "referenced_message": {
+            "type": 0,
+            "content": "<@1237340022190112781> \nお忙しい中申し訳ありません。\nこちらのロールに参加をお願いいたします。",
+            "mentions": [
+              {
+                "id": "1237340022190112781",
+                "username": "km00037",
+                "avatar": "40c08836ecbe9cd4053b9f4c7d5c78be",
+                "discriminator": "0",
+                "public_flags": 0,
+                "flags": 0,
+                "banner": null,
+                "accent_color": null,
+                "global_name": "望月果乃",
+                "avatar_decoration_data": null,
+                "collectibles": null,
+                "display_name_styles": null,
+                "vad_colors": null,
+                "banner_color": null,
+                "clan": null,
+                "primary_guild": null
+              }
+            ],
+            "mention_roles": [],
+            "attachments": [],
+            "embeds": [],
+            "timestamp": "2026-09-01T08:42:15.660000+00:00",
+            "edited_timestamp": null,
+            "flags": 0,
+            "components": [],
+            "id": "1544266126605951076",
+            "channel_id": "1382651184141303819",
+            "author": {
+              "id": "1399380688897183825",
+              "username": "katori_mone",
+              "avatar": "d6228c32faf738668d7e2a9be148d978",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "河原木智恵 16～18日、23日午後、、27日午前対応不可",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            },
+            "pinned": false,
+            "mention_everyone": false,
+            "tts": false
+          }
+        },
+        {
+          "type": 0,
+          "content": "<@1237340022190112781> \nお忙しい中申し訳ありません。\nこちらのロールに参加をお願いいたします。",
+          "mentions": [
+            {
+              "id": "1237340022190112781",
+              "username": "km00037",
+              "avatar": "40c08836ecbe9cd4053b9f4c7d5c78be",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "望月果乃",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            }
+          ],
+          "mention_roles": [],
+          "attachments": [],
+          "embeds": [],
+          "timestamp": "2026-09-01T08:42:15.660000+00:00",
+          "edited_timestamp": null,
+          "flags": 0,
+          "components": [],
+          "id": "1544266126605951076",
+          "channel_id": "1382651184141303819",
+          "author": {
+            "id": "1399380688897183825",
+            "username": "katori_mone",
+            "avatar": "d6228c32faf738668d7e2a9be148d978",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "河原木智恵 16～18日、23日午後、、27日午前対応不可",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          "pinned": false,
+          "mention_everyone": false,
+          "tts": false,
+          "reactions": [
+            {
+              "emoji": {
+                "id": null,
+                "name": "🫡"
+              },
+              "count": 1,
+              "count_details": {
+                "burst": 0,
+                "normal": 1
+              },
+              "burst_colors": [],
+              "me_burst": false,
+              "burst_me": false,
+              "me": false,
+              "burst_count": 0
+            },
+            {
+              "emoji": {
+                "id": null,
+                "name": "🙏"
+              },
+              "count": 1,
+              "count_details": {
+                "burst": 0,
+                "normal": 1
+              },
+              "burst_colors": [],
+              "me_burst": false,
+              "burst_me": false,
+              "me": false,
+              "burst_count": 0
+            }
+          ]
+        },
+        {
+          "type": 0,
+          "content": "",
+          "mentions": [],
+          "mention_roles": [],
+          "attachments": [],
+          "embeds": [],
+          "timestamp": "2026-09-01T08:42:14.998000+00:00",
+          "edited_timestamp": null,
+          "flags": 16384,
+          "components": [],
+          "id": "1544266123829313567",
+          "channel_id": "1382651184141303819",
+          "author": {
+            "id": "1399380688897183825",
+            "username": "katori_mone",
+            "avatar": "d6228c32faf738668d7e2a9be148d978",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "河原木智恵 16～18日、23日午後、、27日午前対応不可",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          "pinned": false,
+          "mention_everyone": false,
+          "tts": false,
+          "message_reference": {
+            "type": 1,
+            "channel_id": "1382873973964144660",
+            "message_id": "1543821179981271041",
+            "guild_id": "715211007307284530"
+          },
+          "message_snapshots": [
+            {
+              "message": {
+                "type": 0,
+                "content": "<@1237340022190112781>  <@1399380688897183825> \n第14回日本乳房オンコプラスティックサージャリー学会総会    のチャンネル作成が完了しました。\n<#1385053090054668358>のチャンネルから「学会制作25」のロールをつけて参加をお願いします。",
+                "mentions": [
+                  {
+                    "id": "1399380688897183825",
+                    "username": "katori_mone",
+                    "avatar": "d6228c32faf738668d7e2a9be148d978",
+                    "discriminator": "0",
+                    "public_flags": 0,
+                    "flags": 0,
+                    "banner": null,
+                    "accent_color": null,
+                    "global_name": "河原木智恵 16～18日、23日午後、、27日午前対応不可",
+                    "avatar_decoration_data": null,
+                    "collectibles": null,
+                    "display_name_styles": null,
+                    "vad_colors": null,
+                    "banner_color": null,
+                    "clan": null,
+                    "primary_guild": null
+                  },
+                  {
+                    "id": "1237340022190112781",
+                    "username": "km00037",
+                    "avatar": "40c08836ecbe9cd4053b9f4c7d5c78be",
+                    "discriminator": "0",
+                    "public_flags": 0,
+                    "flags": 0,
+                    "banner": null,
+                    "accent_color": null,
+                    "global_name": "望月果乃",
+                    "avatar_decoration_data": null,
+                    "collectibles": null,
+                    "display_name_styles": null,
+                    "vad_colors": null,
+                    "banner_color": null,
+                    "clan": null,
+                    "primary_guild": null
+                  }
+                ],
+                "mention_roles": [],
+                "attachments": [],
+                "embeds": [],
+                "timestamp": "2026-08-31T03:14:12.118000+00:00",
+                "edited_timestamp": null,
+                "flags": 0,
+                "components": []
+              }
+            }
+          ]
+        },
+        {
+          "type": 0,
+          "content": "<@1382627787759943781> <@1382656441759957032> \n11月開催の第42回日本臨床皮膚科医会近畿ブロック総会学術大会よりご連絡がありましたが、チャンネルがまだのためこちらにご連絡いたしました。\n確認シートNo.1へ事務局からのメールを転記しております。\nご確認をお願いいたします。\n※申し込みのお礼と小間の請求書が添付されていました。経理には共有済でした。\n営業&制作確認連絡シートの448と449は同じ内容でした。\nhttps://docs.google.com/spreadsheets/d/19Ft0yGpDtHbgHOzLcU6J_USi3ioDmHIorXqZWwpH2iw/edit?pli=1&gid=2021926051#gid=2021926051\nhttps://docs.google.com/spreadsheets/d/1_E2WGolcWeMKvf57hOe1lQPsEsoXmHZHfG7cTVmBoO0/edit?pli=1&gid=1259327092#gid=1259327092",
+          "mentions": [
+            {
+              "id": "1382656441759957032",
+              "username": "yuukiki8",
+              "avatar": "f2a45f1a2022b4dda82f2a4e8e32ee83",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "小林優紀 本日対応不可",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            },
+            {
+              "id": "1382627787759943781",
+              "username": "koooomuuuuro",
+              "avatar": "f50c8f6be02164d2ea73281ac43f76e9",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "小室加奈",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            }
+          ],
+          "mention_roles": [],
+          "attachments": [],
+          "embeds": [],
+          "timestamp": "2026-09-01T06:39:20.929000+00:00",
+          "edited_timestamp": null,
+          "flags": 0,
+          "components": [],
+          "id": "1544235194741956629",
+          "channel_id": "1382651184141303819",
+          "author": {
+            "id": "1399380688897183825",
+            "username": "katori_mone",
+            "avatar": "d6228c32faf738668d7e2a9be148d978",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "河原木智恵 16～18日、23日午後、、27日午前対応不可",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          "pinned": false,
+          "mention_everyone": false,
+          "tts": false,
+          "reactions": [
+            {
+              "emoji": {
+                "id": null,
+                "name": "🙆‍♀️"
+              },
+              "count": 2,
+              "count_details": {
+                "burst": 0,
+                "normal": 2
+              },
+              "burst_colors": [],
+              "me_burst": false,
+              "burst_me": false,
+              "me": false,
+              "burst_count": 0
+            }
+          ]
+        },
+        {
+          "type": 0,
+          "content": "<@1237340022190112781> \n11月開催の第72回肝癌症例研究会よりロゴマーク掲載についても返信がありました。\nチャンネルがまだのためこちらにご連絡いたしました。\n確認シートNo.2へ事務局からのメールを転記しております。\nご確認をお願いいたします。\nhttps://docs.google.com/spreadsheets/d/1Xvnq7MniyHFLrytfsLtbdzJZFz2xiZmUfiyQ-sGT6X0/edit?pli=1&gid=2021926051#gid=2021926051",
+          "mentions": [
+            {
+              "id": "1237340022190112781",
+              "username": "km00037",
+              "avatar": "40c08836ecbe9cd4053b9f4c7d5c78be",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "望月果乃",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            }
+          ],
+          "mention_roles": [],
+          "attachments": [],
+          "embeds": [],
+          "timestamp": "2026-09-01T06:31:17.198000+00:00",
+          "edited_timestamp": null,
+          "flags": 0,
+          "components": [],
+          "id": "1544233165827215400",
+          "channel_id": "1382651184141303819",
+          "author": {
+            "id": "1399380688897183825",
+            "username": "katori_mone",
+            "avatar": "d6228c32faf738668d7e2a9be148d978",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "河原木智恵 16～18日、23日午後、、27日午前対応不可",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          "pinned": false,
+          "mention_everyone": false,
+          "tts": false,
+          "reactions": [
+            {
+              "emoji": {
+                "id": null,
+                "name": "🫡"
+              },
+              "count": 1,
+              "count_details": {
+                "burst": 0,
+                "normal": 1
+              },
+              "burst_colors": [],
+              "me_burst": false,
+              "burst_me": false,
+              "me": false,
+              "burst_count": 0
+            }
+          ]
+        },
+        {
+          "type": 0,
+          "content": "<@1382626504386543708> <@1382656441759957032> \n10月開催の第53回/第23回    日本肩関節学会学術集会/日本肩の運動機能研究会よりご連絡がありましたが、チャンネルがまだのためこちらにご連絡いたしました。\n今後の事務局の対応スケジュールに関しての内容でした。\n\n確認シートNo.2へ事務局からのメールを転記しております。\nご確認をお願いいたします。\nhttps://docs.google.com/spreadsheets/d/1m4oVn5AkJcdaYXF7tdpmznG0u7ecX5Ru331AyM-IMKk/edit?pli=1&gid=2021926051#gid=2021926051",
+          "mentions": [
+            {
+              "id": "1382656441759957032",
+              "username": "yuukiki8",
+              "avatar": "f2a45f1a2022b4dda82f2a4e8e32ee83",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "小林優紀 本日対応不可",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            },
+            {
+              "id": "1382626504386543708",
+              "username": "meropp.16",
+              "avatar": "10c8b627f08eeb8dbbb2a3a0e5f784cb",
+              "discriminator": "0",
+              "public_flags": 0,
+              "flags": 0,
+              "banner": null,
+              "accent_color": null,
+              "global_name": "大平 沙織",
+              "avatar_decoration_data": null,
+              "collectibles": null,
+              "display_name_styles": null,
+              "vad_colors": null,
+              "banner_color": null,
+              "clan": null,
+              "primary_guild": null
+            }
+          ],
+          "mention_roles": [],
+          "attachments": [],
+          "embeds": [],
+          "timestamp": "2026-08-28T06:20:27.796000+00:00",
+          "edited_timestamp": null,
+          "flags": 0,
+          "components": [],
+          "id": "1542780890575544410",
+          "channel_id": "1382651184141303819",
+          "author": {
+            "id": "1399380688897183825",
+            "username": "katori_mone",
+            "avatar": "d6228c32faf738668d7e2a9be148d978",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "河原木智恵 16～18日、23日午後、、27日午前対応不可",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+          },
+          "pinned": false,
+          "mention_everyone": false,
+          "tts": false,
+          "reactions": [
+            {
+              "emoji": {
+                "id": null,
+                "name": "🙆‍♀️"
+              },
+              "count": 2,
+              "count_details": {
+                "burst": 0,
+                "normal": 2
+              },
+              "burst_colors": [],
+              "me_burst": false,
+              "burst_me": false,
+              "me": false,
+              "burst_count": 0
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

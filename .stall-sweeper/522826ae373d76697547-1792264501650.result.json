@@ -1,0 +1,8 @@
+{
+  "completed": false,
+  "summary": "対象のHTTP 429失敗を原文で確認。元の依頼・ジョブID・成果物が記録されず、後続のGemini成功との対応も証明できないため完了状態は未確認。再実行は外部送信・課金の可能性があり今回の禁止事項に抵触するため実施せず、未完了として記録。",
+  "evidence": {
+    "file": "/mnt/c/Users/uers/orgiast-main/.stall-sweeper/522826ae373d76697547-1792264501650.evidence.json",
+    "sha256": "70eb7402f27ae25b57242091ed3733e85d552b352ac36372202b8bb60050c727"
+  }
+}

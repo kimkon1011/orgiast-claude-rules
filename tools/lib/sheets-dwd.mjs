@@ -34,6 +34,11 @@ export function createSheetsClient({ fetchImpl = fetch, getToken = getDriveToken
         { updateCells: { start: { sheetId, rowIndex: 0, columnIndex: 0 }, rows: [{ values: header.map((value) => ({ userEnteredValue: { stringValue: value } })) }], fields: 'userEnteredValue' } },
       ] });
       tab = result.replies[0].addSheet.properties;
+    } else if (tab.gridProperties?.frozenRowCount !== 1) {
+      // Self-heal: a dragged freeze line (seen at 67 rows, 2026-10-15) makes the tab unscrollable.
+      await request(id, ':batchUpdate', 'POST', { requests: [
+        { updateSheetProperties: { properties: { sheetId: tab.sheetId, gridProperties: { frozenRowCount: 1 } }, fields: 'gridProperties.frozenRowCount' } },
+      ] });
     }
     const range = `${quoteTab(title)}!A1:M1`;
     const existing = await get(id, range);

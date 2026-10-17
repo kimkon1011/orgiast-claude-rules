@@ -182,7 +182,64 @@ export function detectQuotaLimit(stdout, stderr, exitStatus = null, promptText =
   return { matched: false };
 }
 
-export function shouldFlagEmptyFallbackDiff({ executorName, wantedEdit, timedOut, diffText }) {
+export function snapshotWorkingTree(cwd, spawnImpl = spawnSync) {
+  try {
+    const gitCheck = spawnImpl('git', ['-C', cwd, 'rev-parse', '--is-inside-work-tree'], { windowsHide: true, encoding: 'utf8' });
+    if (gitCheck && gitCheck.status === 0) {
+      const diff = spawnImpl('git', ['-C', cwd, 'diff', '--stat'], { windowsHide: true, encoding: 'utf8' }).stdout || '';
+      const status = spawnImpl('git', ['-C', cwd, 'status', '--porcelain'], { windowsHide: true, encoding: 'utf8' }).stdout || '';
+      return `${diff}\n${status}`;
+    }
+  } catch (err) {
+    // Fall through
+  }
+
+  try {
+    const lines = [];
+    // .claude/.codex は codex-do 自身が台帳やクールダウンを書く場所なので作業の変更とみなさない
+    const exclude = new Set(['.git', 'node_modules', '.next', 'dist', '.claude', '.codex']);
+    let count = 0;
+
+    function walk(dir) {
+      if (count >= 5000) return;
+      let entries;
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        if (exclude.has(entry.name)) continue;
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          walk(fullPath);
+          if (count >= 5000) return;
+        } else if (entry.isFile()) {
+          count++;
+          if (count > 5000) return;
+          let rel = path.relative(cwd, fullPath).replace(/\\/g, '/');
+          try {
+            const stat = fs.statSync(fullPath);
+            lines.push(`${rel}:${stat.size}:${stat.mtimeMs}`);
+          } catch {
+            lines.push(`${rel}:unknown:unknown`);
+          }
+        }
+      }
+    }
+
+    walk(cwd);
+    lines.sort();
+    return lines.join('\n');
+  } catch (err) {
+    return '';
+  }
+}
+
+export function shouldFlagEmptyFallbackDiff({ executorName, wantedEdit, timedOut, diffText, treeChanged }) {
+  if (treeChanged === true) {
+    return false;
+  }
   // diffText は spawnSync の stdout。spawn に失敗すると null が来るので String() で畳む
   // (ここで例外を投げると「無音の故障」を検知する側が落ちて本末転倒になる)
   return executorName === 'fallback' && wantedEdit && !timedOut && !String(diffText || '').trim();
@@ -560,7 +617,7 @@ if (useCodex) {
 
 // 実行前の作業ツリーを控える。未コミット差分が常時あるリポでは diff が空にならず、
 // 下の「空diffなら書き込めていない」判定が一度も発火しないため（2026-09-03 実害）。
-const treeSnapshot = () => `${spawnSync('git', ['-C', cwd, 'diff', '--stat'], { windowsHide: true, encoding: 'utf8' }).stdout || ''}\n${spawnSync('git', ['-C', cwd, 'status', '--porcelain'], { windowsHide: true, encoding: 'utf8' }).stdout || ''}`;
+const treeSnapshot = () => snapshotWorkingTree(cwd);
 const treeBefore = treeSnapshot();
 const wantedEdit = !review && /実装|作って|修正|直して|追加して|リファクタ|refactor|fix|implement/i.test(instruction);
 const started = Date.now();
@@ -946,7 +1003,7 @@ if (executorName === 'codex') {
 }
 // Gemini は引数を1つ取り違えるだけで使い方(ヘルプ)を出して exit 0 で終わる。
 // DeepSeek / OpenRouter も含め、出力の中身を見ないと「1行も書かずに成功」を見逃す（2026-09-03 実測）。
-if (shouldFlagEmptyFallbackDiff({ executorName, wantedEdit, timedOut: result.timedOut, diffText: diff.stdout })) {
+if (shouldFlagEmptyFallbackDiff({ executorName, wantedEdit, timedOut: result.timedOut, diffText: diff.stdout, treeChanged: !treeUnchanged })) {
   const printedUsage = /^\s*(Usage|使い方)[:：]|--approval-mode\s+Set the approval mode/m.test(result.output || result.stderr || '');
   const fallbackName = reportedFallbackBackend?.name ?? 'unknown';
   console.error(reportedFallbackBackend?.kind === 'gemini' && printedUsage

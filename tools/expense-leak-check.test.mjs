@@ -13,7 +13,7 @@ const wallet = { id: 7, type: 'credit_card', name: '金立替／テスト' };
 const txn = (id, extra = {}) => ({ id, walletable_id: wallet.id, walletable_type: wallet.type, status: 1, date: '2026-10-01', description: 'テスト商店', amount: 1599, account: wallet.name, ...extra });
 const budget = () => ({ gmail: { 'kim@orgiast.jp': 0, 'seisaku-team@orgiast.jp': 0 }, yahoo: 0, yahooUnavailable: false, yahooFailed: false, yahooUnverified: 0 });
 const emptySearch = async (script) => ({ code: 0, stdout: script.includes('gmail-search') ? '{"messages":[]}' : '（該当なし）' });
-const metadata = { sheets: [{ properties: { title: TAB, gridProperties: { rowCount: 1000 } } }] };
+const metadata = { sheets: [{ properties: { title: TAB, gridProperties: { rowCount: 1000, frozenRowCount: 1 } } }] };
 function harness(transactions, overrides = {}) {
   const calls = { searches: 0, notify: 0, append: [], save: [] };
   let written = [];
@@ -198,6 +198,19 @@ test('Sheets helper appends RAW and checks existing headers without rewriting', 
   assert.ok(requests.every((r) => r.init.method === 'GET'));
   await client.append('test', `'${TAB}'!A:M`, [sheetRows([{ ...txn(1), verdict: '不明(要確認)', evidence: [] }], opts().today)[0]]);
   assert.match(requests.at(-1).url, /valueInputOption=RAW/);
+});
+test('Sheets helper resets a dragged freeze line back to one header row', async () => {
+  const requests = [];
+  const dragged = { sheets: [{ properties: { sheetId: 7, title: TAB, gridProperties: { rowCount: 1000, frozenRowCount: 67 } } }] };
+  const client = createSheetsClient({ getToken: async () => 'fake-token', fetchImpl: async (url, init) => {
+    requests.push({ url, init });
+    return { ok: true, json: async () => url.includes('fields=') ? dragged : url.includes(':batchUpdate') ? {} : { values: [HEADER] } };
+  } });
+  await client.ensure('test', TAB, HEADER);
+  const fixes = requests.filter((r) => r.url.includes(':batchUpdate'));
+  assert.equal(fixes.length, 1);
+  const body = JSON.parse(fixes[0].init.body);
+  assert.deepEqual(body.requests[0].updateSheetProperties.properties, { sheetId: 7, gridProperties: { frozenRowCount: 1 } });
 });
 test('real CLI weekly skip exits 0 without credentials and leaves state unchanged', async () => {
   const home = await mkdtemp(join(tmpdir(), 'expense-weekly-'));

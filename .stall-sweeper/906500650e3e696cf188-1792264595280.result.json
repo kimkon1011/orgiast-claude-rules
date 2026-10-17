@@ -1,0 +1,8 @@
+{
+  "completed": false,
+  "summary": "原文・現行台帳・実行コードを直接確認。失敗はcheap-code/deepseek exit -4058。時刻が一致する候補セッションの作業フォルダーは消失し、完了記録なし。ただし実行台帳に識別子がなく対象対応と根本原因は未確定。既存再実行経路はClaude CLI呼出し・外部送信・ファイル削除を伴い禁止事項に抵触するため、再実行せず未完了として記録。",
+  "evidence": {
+    "file": "/mnt/c/Users/uers/orgiast-main/.stall-sweeper/906500650e3e696cf188-1792264595280.evidence.json",
+    "sha256": "20876bd804325a199b8f883462c45e5f8fa4cce9e0427fd8d769be4ee155cf73"
+  }
+}

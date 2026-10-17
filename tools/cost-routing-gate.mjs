@@ -9,7 +9,7 @@ import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 
 
 const LANE_NAMES = new Set(['consult', 'implement', 'edit-small', 'verify', 'bulk', 'mcp', 'design']);
-const IMPLEMENT = /作って|実装|修正|直して|追加して|書いて|リファクタ|バグ|\bfix\b|\bimplement\b|hook作|ツール作|スクリプト/i;
+export const IMPLEMENT = /作って|実装|修正|直して|追加して|書いて|リファクタ|バグ|\bfix\b|\bimplement\b|hook作|ツール作|スクリプト/i;
 const SMALL = /1行|一行|typo|誤字|名前を変えて|値を変えて|設定を変えて/i;
 const VERIFY = /テストして|確認して|動作確認|レビュー|チェック|検証|通るか見て/i;
 const BULK = /分類|抽出|要約|返信文|一括|全件|各社|各件|消費者向け.{0,8}(?:文章|文面)|\d+\s*(?:件|社|行|本|通|人|個|ファイル)/i;

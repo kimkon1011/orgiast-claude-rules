@@ -23,6 +23,11 @@ test('new rollout entries must declare the seven day window; legacy inventory is
     const row = manifest.gates[name];
     assert.ok(row, `${name}: missing rollout entry`);
     assert.ok(['warn','deny'].includes(row.rollout));
+    if (name === 'api-billing-guard') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-10-17 kim 厳命: 従量課金停止');
+      continue; // Direct synchronous policy hook, outside staged rollout.
+    }
     if (!row.legacy) {
       assert.ok(Number.isFinite(Date.parse(row.distributedAt)));
       if (row.rollout === 'deny') assert.ok(Date.parse(row.denyAfter) >= Date.parse(row.distributedAt) + 7*86400000);

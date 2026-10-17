@@ -385,3 +385,15 @@ test('G8 relay registers Stop PreToolUse AskUserQuestion and Notification idempo
     if (event === 'PreToolUse') assert.equal(groups[0].matcher, 'AskUserQuestion');
   }
 });
+
+test('billing and implementation approval register synchronously, globally and idempotently', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-billing-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const env = { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: path.resolve('.') };
+  for (let i = 0; i < 2; i++) execFileSync(process.execPath, ['tools/register-hooks.mjs', '--hooks-only'], { encoding: 'utf8', env });
+  const settings = JSON.parse(fs.readFileSync(path.join(home, '.claude/settings.json')));
+  for (const [event, name] of [['SessionStart', 'api-billing-guard'], ['UserPromptSubmit', 'api-billing-guard'], ['PreToolUse', 'api-billing-guard'], ['UserPromptSubmit', 'claude-impl-approval']]) {
+    const groups = settings.hooks[event].filter(g => g.hooks.some(h => h.command.includes(name)));
+    assert.equal(groups.length, 1); assert.equal(groups[0].matcher, undefined);
+    const hook = groups[0].hooks.find(h => h.command.includes(name)); assert.equal(hook.timeout, 5); assert.ok(!hook.async);
+  }
+});

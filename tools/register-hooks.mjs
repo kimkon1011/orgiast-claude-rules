@@ -246,6 +246,10 @@ try {
   if (add(settings.hooks.UserPromptSubmit, 'session-claim-collision.mjs', { hooks: [{ type: 'command', command: command('session-claim-collision.mjs'), timeout: 10 }] })) added += 1;
   // 目的宣言直後のターンは上記2イベントでは拾えないためPreToolUseにも置き、latchで1セッション1回に抑える
   if (add(settings.hooks.PreToolUse, 'session-claim-collision.mjs', { matcher: 'Bash|PowerShell|Edit|Write|MultiEdit', hooks: [{ type: 'command', command: command('session-claim-collision.mjs'), timeout: 10 }] })) added += 1;
+  for (const event of ['SessionStart', 'UserPromptSubmit', 'PreToolUse']) {
+    if (add(settings.hooks[event], 'api-billing-guard.mjs', { hooks: [{ type: 'command', command: command('api-billing-guard.mjs'), timeout: 5 }] })) added += 1;
+  }
+  if (add(settings.hooks.UserPromptSubmit, 'claude-impl-approval.mjs', { hooks: [{ type: 'command', command: command('claude-impl-approval.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.SessionStart, 'fable-session-guard.mjs', { hooks: [{ type: 'command', command: command('fable-session-guard.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.UserPromptSubmit, 'fable-session-guard.mjs', { hooks: [{ type: 'command', command: command('fable-session-guard.mjs'), timeout: 5 }] })) added += 1;
   // Replace frozen Python/watcher hooks on existing PCs, including obsolete prompt hooks.

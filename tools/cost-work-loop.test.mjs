@@ -31,15 +31,15 @@ test('委譲ヘルスをプロバイダ健全性の直前へ挿入する', () =>
 test('non-pilot blocks when enforcement conditions are met', () => {
   const result = decideEnforcement({ ...base, delegRatio: 0, daysObserved: 10, pilot: false });
   assert.equal(result.mode, 'block');
-  assert.match(result.reason, /cost-enforce-override を作成/);
+  assert.match(result.reason, /恒久ブロック/);
 });
 
-test('override keeps enforcement at warn and explains how to resume it', () => {
+test('override cannot relax policy', () => {
   const result = decideEnforcement({ ...base, delegRatio: 0, daysObserved: 10, pilot: false, previousMode: 'block', override: true });
-  assert.equal(result.mode, 'warn');
-  assert.match(result.reason, /降格/);
-  assert.match(result.reason, /cost-enforce-override/);
-  assert.match(result.reason, /削除すれば自動判定を再開/);
+  assert.equal(result.mode, 'block');
+  assert.match(result.reason, /恒久ブロック/);
+  assert.doesNotMatch(result.reason, /cost-enforce-override/);
+  assert.match(result.reason, /Claude 単独実装禁止/);
 });
 
 test('pilot blocks at 15% delegation after 3 days', () => {
@@ -47,26 +47,26 @@ test('pilot blocks at 15% delegation after 3 days', () => {
   assert.equal(result.mode, 'block');
 });
 
-test('pilot remains warn at 60% delegation', () => {
+test('pilot remains blocked at 60% delegation', () => {
   const result = decideEnforcement({ ...base, delegRatio: 0.6, daysObserved: 10, pilot: true });
-  assert.equal(result.mode, 'warn');
+  assert.equal(result.mode, 'block');
 });
 
 test('enforcement uses delegation ratio including preparation', () => {
   const result = decideEnforcement({ ...base, delegRatio: 0.1, delegRatioWithPrep: 0.6, daysObserved: 10, pilot: true });
-  assert.equal(result.mode, 'warn');
+  assert.equal(result.mode, 'block');
 });
 
 test('enforcement trend supports adjusted and legacy history entries', () => {
   const history = [{ delegRatio: 0.1 }, { delegRatio: 0.1, delegRatioWithPrep: 0.3 }, { delegRatio: 0.1, delegRatioWithPrep: 0.4 }];
   const result = decideEnforcement({ ...base, delegRatioWithPrep: 0.4, history, daysObserved: 10, pilot: true });
-  assert.equal(result.mode, 'warn');
+  assert.equal(result.mode, 'block');
 });
 
-test('lines delegation above target stays warn despite low token delegation', () => {
+test('lines delegation above target stays blocked despite low token delegation', () => {
   const result = decideEnforcement({ ...base, linesRatio: 0.635, delegRatio: 0.19, delegRatioWithPrep: 0.22, daysObserved: 10, pilot: true });
-  assert.equal(result.mode, 'warn');
-  assert.equal(result.decidedBy, 'linesRatio');
+  assert.equal(result.mode, 'block');
+  assert.equal(result.decidedBy, 'policy');
 });
 
 test('lines delegation blocks below half target after 3 days', () => {
@@ -77,14 +77,14 @@ test('lines delegation blocks below half target after 3 days', () => {
 test('invalid lines delegation falls back to token delegation', () => {
   const result = decideEnforcement({ ...base, linesRatio: null, delegRatioWithPrep: 0.1, daysObserved: 3, pilot: true });
   assert.equal(result.mode, 'block');
-  assert.equal(result.decidedBy, 'delegRatioWithPrep');
+  assert.equal(result.decidedBy, 'policy');
 });
 
 test('7-day enforcement trend reads lines delegation history', () => {
   const flat = decideEnforcement({ ...base, linesRatio: 0.3, history: [{ linesRatio: 0.28 }, { linesRatio: 0.29 }], daysObserved: 7, pilot: true });
   const improving = decideEnforcement({ ...base, linesRatio: 0.3, history: [{ linesRatio: 0.10 }, { linesRatio: 0.29 }], daysObserved: 7, pilot: true });
   assert.equal(flat.mode, 'block');
-  assert.equal(improving.mode, 'warn');
+  assert.equal(improving.mode, 'block');
 });
 
 function geminiRows(count, overrides = {}) {

@@ -86,3 +86,8 @@ test('Stopはrunner 1本だけを必須とし旧9本を要求しない', () => {
   assert.deepEqual(missingRequiredHooks(settings, required), []);
   assert.equal(missingRequiredHooks({ hooks: { Stop: [] } }, required).length, 1);
 });
+
+test('billing and implementation guards are required on existing installations', async () => {
+  const { REQUIRED_HOOKS } = await import('./hook-selfcheck.mjs');
+  for (const pair of [['SessionStart','api-billing-guard.mjs'], ['UserPromptSubmit','api-billing-guard.mjs'], ['PreToolUse','api-billing-guard.mjs'], ['UserPromptSubmit','claude-impl-approval.mjs'], ['PreToolUse','pretooluse-lane-guard.mjs'], ['PreToolUse','pretooluse-delegation-warn.mjs'], ['PreToolUse','pretooluse-bash-delegation.mjs']]) assert.ok(REQUIRED_HOOKS.some(p => p[0] === pair[0] && p[1] === pair[1]));
+});

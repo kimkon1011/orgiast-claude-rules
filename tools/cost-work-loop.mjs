@@ -36,18 +36,9 @@ export function decideEnforcement({ delegRatioWithPrep, delegRatio, linesRatio, 
   const useLinesRatio = typeof linesRatio === 'number' && Number.isFinite(linesRatio);
   const enforcementRatio = useLinesRatio ? linesRatio : (delegRatioWithPrep ?? delegRatio ?? 0);
   const enforcementTarget = useLinesRatio ? targetLines : target;
-  const decidedBy = useLinesRatio ? 'linesRatio' : 'delegRatioWithPrep';
+
   const metric = useLinesRatio ? '行ベース委譲率' : '委譲率';
   const fallback = useLinesRatio ? '' : '(行ベース算出不能のためフォールバック)';
-  // 2026-09-06 kim 承認: パイロット機限定を解除し、全PCで block 昇格を有効にする。
-  // nishi-PC 15.9% / kimko-PC 13% が長期間 warn のまま改善しなかったため。
-  // 逃げ道は override ファイルのみ(pilot は互換のため受け取るが判定には使わない)。
-  const overrideGuidance = '強制を止めるには ~/.claude/cost-enforce-override を作成してください';
-  if (override) {
-    const demotion = previousMode === 'block' ? '既存blockをwarnへ降格。' : '';
-    return { mode: 'warn', reason: `${demotion}~/.claude/cost-enforce-override があるため強制を停止。override ファイルを削除すれば自動判定を再開します${fallback}`, decidedBy };
-  }
-
   let mode = 'warn', reason = '観察中';
   if (enforcementRatio < enforcementTarget / 3 && daysObserved >= 2 && claudeOut >= 1e6) {
     mode = 'block'; reason = `${metric}${(enforcementRatio * 100).toFixed(1)}%=目標の1/3未満。2日で昇格${fallback}`;
@@ -63,7 +54,7 @@ export function decideEnforcement({ delegRatioWithPrep, delegRatio, linesRatio, 
       reason = `${metric}に改善傾向あり(${(avg(early) * 100).toFixed(0)}%→${(avg(recent) * 100).toFixed(0)}%)=警告継続${fallback}`;
     }
   }
-  return { mode, reason: `${reason}。${overrideGuidance}`, decidedBy };
+  return { mode: 'block', reason: `恒久ブロック(2026-10-17 kim 厳命: Claude 単独実装禁止)。${metric}${(enforcementRatio * 100).toFixed(1)}%。${reason}`, decidedBy: 'policy' };
 }
 const HOME = defaultHome();
 const DAYS = parseInt((process.argv.find(a => a.startsWith('--days=')) || '').split('=')[1] || '7', 10) || 7;

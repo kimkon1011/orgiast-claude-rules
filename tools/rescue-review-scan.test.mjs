@@ -233,6 +233,21 @@ test('compareRefs を空にすると照合せず unique に戻る', t => {
   assert.equal(m['rescue/u3'].status, 'unique');
 });
 
+// 実測: origin の sync-orgiast-main-* は origin/main との差分が約 90MB あり、
+// spawnSync の既定 maxBuffer(1MB)だと ENOBUFS で error に落ちていた。
+test('1MB を超える差分でも ENOBUFS で error にならず分類できる', t => {
+  const f = fixture(t);
+  f.git('checkout', '-b', 'rescue/large', 'main');
+  fs.writeFileSync(path.join(f.repo, 'large.txt'), 'x'.repeat(2 * 1024 * 1024));
+  f.git('add', '.');
+  f.git('commit', '-m', 'large change');
+  f.git('checkout', 'main');
+
+  const m = byBranch(scanRescueBranches({ repo: f.repo, main: 'main' }));
+  assert.equal(m['rescue/large'].status, 'unique');
+  assert.equal(m['rescue/large'].files, 1);
+});
+
 test('照合先の git 失敗は握りつぶし、rescue 側の分類を壊さない', t => {
   const f = fixture(t, { featureBranch: true });
   const stub = (dir, args) => {

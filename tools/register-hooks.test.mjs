@@ -68,6 +68,11 @@ test('既存PowerShell hookへExecutionPolicy Bypassを補いcost-loopをmjsへ�
   } }));
   const stdout = execFileSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo } });
   const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  const costGroups = settings.hooks.PreToolUse.filter(group => group.hooks.some(hook => hook.command.includes('app-llm-cost-gate.mjs')));
+  assert.equal(costGroups.length, 1);
+  assert.equal(costGroups[0].matcher, 'Write|Edit|MultiEdit|Bash');
+  // Shared gate wrapper reserves 15 seconds around the hook's 5-second budget.
+  assert.equal(costGroups[0].hooks[0].timeout, 15);
   const commands = Object.values(settings.hooks).flatMap((groups) => groups.flatMap((group) => group.hooks || [])).map((hook) => hook.command);
   assert.ok(commands.some((command) => command.includes('cost-loop.mjs')));
   assert.ok(!commands.some((command) => command.includes('cost-loop.ps1')));

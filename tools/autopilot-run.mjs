@@ -109,13 +109,13 @@ export async function runOnce(options = {}) {
     }
     const before = await runAutopilot('status', {}, options);
     const policy = options.policy || loadFablePolicy();
-    const model = fableAllowedForSupervisor(policy) ? 'claude-fable-5-1' : 'claude-opus-5';
+    const model = auth.model || (fableAllowedForSupervisor(policy) ? 'claude-fable-5-1' : 'claude-opus-5');
     const repo = options.repo || REPO;
     const executable = options.executable || (await resolveClaudeExecutableFromDisk()).executable;
     const timeoutMs = options.timeoutMs ?? 25 * 60_000;
     const result = await (options.invokeImpl || invokeClaude)({ executable, args: ['-p', '--model', model, '--output-format', 'text'], prompt: buildPrompt(repo), cwd: repo, timeoutMs,
-      env: { ...process.env, AUTOPILOT_HOME: paths.dir, ORGIAST_HOME: paths.home } });
-    record({ model, ...result, stdout: String(result.stdout || '').slice(-4000) });
+      env: { ...auth.env, AUTOPILOT_HOME: paths.dir, ORGIAST_HOME: paths.home } });
+    record({ model, authLane: auth.lane, ...result, stdout: String(result.stdout || '').slice(-4000) });
     const after = await runAutopilot('status', {}, options);
     const postRecorded = after.state?.totalIterations > before.state?.totalIterations;
     // Failed/empty Claude turns still consume an iteration and trip the watchdog.

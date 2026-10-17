@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import os from 'node:os';
+import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -53,6 +54,7 @@ function readNonempty(target, kind) {
 function nested(value, dotted) { return dotted.split('.').reduce((v, key) => v?.[key], value); }
 function check(item) {
   try {
+    if (item.scope === 'kim-only' && resolveFleetLabel(home) !== 'kim-PC') return null;
     const spec = item.spec;
     if (item.type === 'command') {
       // npm製CLIはWindowsでは .cmd シム(codex 等)で、execFileSync の直接指定では解決できない

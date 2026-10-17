@@ -1,6 +1,7 @@
 {
   "version": 1,
   "items": [
+    {"id": "settings:discord-drafts-context", "type": "json-valid", "severity": "optional", "scope": "kim-only", "spec": {"path": ".claude/settings.json", "hookEvent": "UserPromptSubmit", "hookScript": "hooks/discord-drafts-context.mjs", "hookArgs": "", "async": false, "timeout": 5}, "description": "kim-PC: Discord DM返信案をチャットに表示", "repair": ["register-hooks.mjs", "--hooks-only"]},
     {"id":"settings:lane-health-SessionStart","type":"json-valid","severity":"required","spec":{"path":".claude/settings.json","hookEvent":"SessionStart","hookScript":"sessionstart-lane-health.mjs","async":false},"description":"SessionStart: 非Claudeレーン診断と期限切れ修復","repair":["register-hooks.mjs","--hooks-only"]},
     {"id":"settings:purge-sessions-SessionStart","type":"json-valid","severity":"required","spec":{"path":".claude/settings.json","hookEvent":"SessionStart","hookScript":"purge-sessions.mjs"},"description":"SessionStart: 単発セッション退避 (repo直参照)","repair":["register-hooks.mjs","--hooks-only"]},
     {"id":"settings:purge-sessions-Stop","type":"json-valid","severity":"required","spec":{"path":".claude/settings.json","hookEvent":"Stop","hookScript":"purge-sessions.mjs"},"description":"Stop: 単発セッション退避 (repo直参照)","repair":["register-hooks.mjs","--hooks-only"]},

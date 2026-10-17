@@ -755,6 +755,42 @@
       "path": "tools/memory-publish.mjs",
       "scope": "kim-only",
       "reason": "kim-PC の memory を private keyserve へ夜間発信する。CLI の deploy は発信元PCだけで実行する。"
+    },
+    {
+      "path": "tools/discord-dm-drafts.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "kimの個人DM UI操作・返信案。ほかのPCでは登録・実行しない"
+    },
+    {
+      "path": "tools/discord-dm-state.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "kimの個人DM UI操作・返信案。ほかのPCでは登録・実行しない"
+    },
+    {
+      "path": "tools/discord-post.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "kimの個人DM UI操作・返信案。ほかのPCでは登録・実行しない"
+    },
+    {
+      "path": "tools/discord-read-window.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "kimの個人DM UI操作・返信案。ほかのPCでは登録・実行しない"
+    },
+    {
+      "path": "tools/hooks/discord-drafts-context.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "kimの個人DM UI操作・返信案。ほかのPCでは登録・実行しない"
+    },
+    {
+      "path": "tools/register-discord-dm-drafts.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "kimの個人DM UI操作・返信案。ほかのPCでは登録・実行しない"
     }
   ]
 }

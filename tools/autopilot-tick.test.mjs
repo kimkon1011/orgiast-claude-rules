@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { EventEmitter } from 'node:events';
 import { spawnSync } from 'node:child_process';
-import { runAutopilot, autopilotPaths, parseControl, capReason, dateKey, acquireLock } from './autopilot-tick.mjs';
+import { runAutopilot, sendNotice, autopilotPaths, parseControl, capReason, dateKey, acquireLock } from './autopilot-tick.mjs';
 
 const NOW = new Date('2026-09-21T01:00:00Z');
 const snow = (offset) => String((BigInt(NOW.getTime() - 1420070400000 + offset) << 22n));
@@ -381,13 +382,17 @@ test('one decision DM accepts yes/no only while pending and does not repeat', as
     await f.call('start', { objective: 'first' });
     await f.call('pause', { question: 'この変更を適用しますか？' });
     await f.call('pause', { question: 'この変更を適用しますか？' });
-    await f.call('pre');
+    const pending = await f.call('pre');
+    assert.equal(pending.verdict, 'run');
+    assert.equal(pending.pendingQuestion, 'この変更を適用しますか？');
+    assert.equal((await f.call('status')).state.status, 'running');
     assert.equal(f.sent.length, 1);
     assert.equal(f.sent[0].split('\n').length, 2);
     assert.match(f.sent[0], /^❓ 決めてほしいこと: この変更を適用しますか？/);
     f.channels.dm.push(f.message(answer, 1));
     const pre = await f.call('pre');
     assert.equal(pre.verdict, verdict);
+    assert.equal(pre.pendingQuestion, null);
     assert.equal(pre.decision.question, 'この変更を適用しますか？');
     assert.equal((await f.call('pre')).decision.answer, answer);
   }
@@ -536,4 +541,76 @@ test('a watch never checked for seven days is closed by pre with one plain notic
   assert.doesNotMatch(f.sent[0], /P1|w1|watch/);
   await f.call('pre', {}, later);
   assert.equal(f.sent.length, 1);
+});
+
+function mirrorConfig(f, command = ['node', 'mirror.mjs']) {
+  fs.mkdirSync(path.join(f.opts.home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(f.opts.home, '.claude', 'autopilot-notify-mirror.json'), JSON.stringify({ command }));
+}
+function mirrorSpawn(calls, outcome = 0) {
+  return (executable, args, options) => {
+    const child = new EventEmitter();
+    const call = { executable, args, options, input: null, killed: false };
+    calls.push(call);
+    child.kill = () => { call.killed = true; };
+    child.stdin = new EventEmitter();
+    child.stdin.end = input => {
+      call.input = input;
+      if (outcome !== 'timeout') queueMicrotask(() => {
+        if (outcome === 'error') child.emit('error', new Error('spawn_failed'));
+        else if (outcome === 'stdin') child.stdin.emit('error', new Error('broken_pipe'));
+        else child.emit('close', outcome);
+      });
+    };
+    return child;
+  };
+}
+test('no mirror config never spawns a child', async t => {
+  const f = fixture(t), calls = [], sent = [];
+  const result = await sendNotice('本文', { ...f.opts, spawnImpl: mirrorSpawn(calls), notifyImpl: async text => { sent.push(text); return { delivered: 'dm' }; } });
+  assert.deepEqual(result, { delivered: 'dm' });
+  assert.deepEqual(calls, []);
+  assert.deepEqual(sent, ['本文']);
+});
+test('configured mirror follows one DM and gets identical final body as one JSON line', async t => {
+  const calls = [], f = discord(t, { spawnImpl: mirrorSpawn(calls) });
+  mirrorConfig(f);
+  await f.call('start', { objective: 'テスト' });
+  await f.call('pause', { question: 'この変更を進めますか？' });
+  assert.equal(f.sent.length, 1);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].executable, 'node');
+  assert.deepEqual(calls[0].args, ['mirror.mjs']);
+  assert.equal(calls[0].options.shell, false);
+  assert.equal(calls[0].input, JSON.stringify({ kind: 'notify', message: f.sent[0] }) + '\n');
+});
+for (const outcome of [2, 'timeout', 'error', 'stdin']) {
+  test(`mirror ${outcome} logs failure and preserves DM result without throwing`, async t => {
+    const f = fixture(t), calls = [], dmResult = { delivered: 'dm' };
+    mirrorConfig(f);
+    const result = await sendNotice('本文', { ...f.opts, mirrorTimeoutMs: 10, spawnImpl: mirrorSpawn(calls, outcome), notifyImpl: async () => dmResult });
+    assert.strictEqual(result, dmResult);
+    assert.equal(calls.length, 1);
+    const log = JSON.parse(fs.readFileSync(path.join(f.paths.dir, 'run.log'), 'utf8'));
+    assert.match(log.mirrorError, /mirror_exit:2|mirror_timeout|spawn_failed|broken_pipe/);
+    if (outcome === 'timeout') assert.equal(calls[0].killed, true);
+  });
+}
+test('DM exception still attempts mirror and returns none', async t => {
+  const f = fixture(t), calls = [];
+  mirrorConfig(f);
+  const result = await sendNotice('本文', { ...f.opts, spawnImpl: mirrorSpawn(calls), notifyImpl: async () => { throw new Error('offline'); } });
+  assert.deepEqual(result, { delivered: 'none' });
+  assert.equal(calls.length, 1);
+});
+test('asking a question does not override manual, control, cap or runner-error pauses', async t => {
+  for (const reason of ['manual_pause', 'control_pause', 'daily_iter_cap', 'runner_error']) {
+    const f = fixture(t);
+    await f.call('start', { objective: 'test' });
+    await f.call('pause', { reason });
+    await f.call('pause', { question: '進めますか？' });
+    const state = (await f.call('status')).state;
+    assert.equal(state.status, 'paused');
+    assert.equal(state.pausedReason, reason);
+  }
 });

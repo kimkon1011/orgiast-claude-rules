@@ -478,6 +478,15 @@ try {
   } else { Warn "register-claude-backup-task.ps1 未取得=スキップ(他機能は動作)" }
 } catch { Warn ("Claude 環境バックアップの登録に失敗(他機能は動作): " + $_.Exception.Message) }
 
+# Schedule sync is personal to the LINE receiver host; -Ensure skips other PCs.
+try {
+  $scheduleInstaller = Join-Path $REPO 'tools\register-schedule-sync-task.ps1'
+  if (Test-Path -LiteralPath $scheduleInstaller) {
+    & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $scheduleInstaller -Ensure
+    if ($LASTEXITCODE -ne 0) { throw "register-schedule-sync-task.ps1 exit $LASTEXITCODE" }
+  }
+} catch { Warn ("schedule-sync registration failed: " + $_.Exception.Message) }
+
 # --- フリート管制エージェントの定時起動(15分ごと) ---
 Step "フリート管制エージェントを登録 (15分ごと)"
 try {

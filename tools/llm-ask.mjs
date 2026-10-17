@@ -67,6 +67,7 @@ if (system) messages.push({ role: 'system', content: system });
 messages.push({ role: 'user', content: prompt });
 const ledger = path.join(home, '.claude', 'executor-usage.jsonl');
 function appendAttempt(info, usage = {}) {
+  if (args.includes('--no-persist')) return;
   if (info.candidate.provider === 'gemini') {
     const measured = geminiUsage({ usage });
     try {
@@ -88,6 +89,7 @@ function appendAttempt(info, usage = {}) {
 
 try {
   const result = await callWithFallback({
+    persistState: !args.includes('--no-persist'),
     start,
     chain: args.includes('--no-fallback') ? [] : FALLBACK_CHAIN,
     allowGatewayFallback: !args.includes('--no-fallback'),

@@ -99,7 +99,7 @@ function reasonForLog(reason, maxLength = 140) {
   return singleLine.length <= maxLength ? singleLine : `${singleLine.slice(0, maxLength - 1)}…`;
 }
 
-export async function callWithFallback({ start, chain = FALLBACK_CHAIN, allowGatewayFallback = true, payloadFor, fetchImpl = fetch, onAttempt, onFailover, validateResponse, sleepImpl = defaultSleep, cooldownFile, ledgerFile, budgetFile, now = () => Date.now() }) {
+export async function callWithFallback({ start, chain = FALLBACK_CHAIN, allowGatewayFallback = true, payloadFor, fetchImpl = fetch, onAttempt, onFailover, validateResponse, sleepImpl = defaultSleep, cooldownFile, ledgerFile, budgetFile, persistState = true, now = () => Date.now() }) {
   const home = process.env.ORGIAST_HOME || os.homedir();
   const timestamp = now();
   const cost = dailyCost(ledgerFile || path.join(home, '.claude', 'executor-usage.jsonl'), timestamp);
@@ -187,7 +187,7 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, allowGat
     if (useCooldown && cooldowns?.[provider]) { delete cooldowns[provider]; cooldownDirty = true; }
   }
   function saveCooldowns() {
-    if (!cooldownDirty) return;
+    if (!cooldownDirty || !persistState) return;
     try { fs.mkdirSync(path.dirname(cooldownPath), { recursive: true }); fs.writeFileSync(cooldownPath, `${JSON.stringify(cooldowns, null, 2)}\n`); } catch {}
   }
 
@@ -239,7 +239,7 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, allowGat
         response = await fetchImpl(request.url, request.init);
         status = response.status;
         // 残量ヘッダを下限として記録する。次に同じ provider を選ぶ時、この値で事前に絞れる。
-        if (useBudget && response?.headers && noteResponse(budgetStore, candidate.provider, response.headers, now())) writeBudget(budgetPath, budgetStore);
+        if (useBudget && response?.headers && noteResponse(budgetStore, candidate.provider, response.headers, now()) && persistState) writeBudget(budgetPath, budgetStore);
         if (response.ok) {
           if (validateResponse) {
             const json = await response.clone().json().catch(() => null);

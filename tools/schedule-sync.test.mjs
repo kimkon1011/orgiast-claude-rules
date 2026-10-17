@@ -111,7 +111,7 @@ test('crash after insertion recovers deterministic event ID and original extract
   const x = setup(t); let inserted;
   x.deps.calendar.create = async body => { inserted = body; throw new Error('response lost'); };
   await assert.rejects(x.run(), /response lost/);
-  assert.equal(fs.existsSync(path.join(x.options.stateDir, 'state.json')), false);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(x.options.stateDir, 'state.json'))).cursors.line, new Date(now - 48 * 3600000).toISOString());
   x.deps.collect = async () => ({ messages: [], stats: {} });
   x.deps.llm = () => { throw new Error('must use saved plan'); };
   x.deps.calendar.get = async id => { assert.equal(id, inserted.id); return inserted; };
@@ -122,7 +122,7 @@ test('DM failure retries reporting from ledger without recreating or losing the 
   const x = setup(t);
   x.deps.dm = async () => { throw new Error('DM denied'); };
   await assert.rejects(x.run(), /DM denied/);
-  assert.equal(fs.existsSync(path.join(x.options.stateDir, 'state.json')), false);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(x.options.stateDir, 'state.json'))).cursors.line, new Date(now - 48 * 3600000).toISOString());
   x.deps.dm = async text => x.dms.push(text);
   await x.run();
   assert.equal(x.creates.length, 1); assert.equal(x.dms.length, 1);
@@ -139,7 +139,7 @@ test('collection / LLM failures retain cursor; empty run sends no DM', async t =
   const x = setup(t);
   x.deps.collect = async () => { throw new Error('Gmail failed'); };
   await assert.rejects(x.run(), /Gmail failed/);
-  assert.equal(fs.existsSync(path.join(x.options.stateDir, 'state.json')), false);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(x.options.stateDir, 'state.json'))).cursors.line, new Date(now - 48 * 3600000).toISOString());
   x.deps.collect = async () => ({ messages: [], stats: {} });
   await x.run(); assert.equal(x.dms.length, 0);
   const before = fs.readFileSync(path.join(x.options.stateDir, 'state.json'), 'utf8');
@@ -253,4 +253,14 @@ test('task scripts use BOM/CRLF, synced main, 30 minutes, and both deployment pa
   const text = fs.readFileSync(new URL('./register-schedule-sync-task.ps1', import.meta.url), 'utf8');
   assert.match(text, /\.claude\\nightly-repo/); assert.match(text, /-RepetitionInterval \(New-TimeSpan -Minutes 30\)/); assert.match(text, /-MultipleInstances IgnoreNew/);
   assert.match(text, /Downloads\\claude-mobile\\app\\api\\line-ingest/);
+});
+
+test('interrupted initial backfill pins its lower bound across later runs', async t => {
+  const x = setup(t);
+  const cutoffs = [];
+  x.deps.collect = async ({ since }) => { cutoffs.push(since.line); throw new Error('temporary source failure'); };
+  await assert.rejects(x.run(), /temporary source failure/);
+  x.options.now += 6 * 3600000;
+  await assert.rejects(x.run(), /temporary source failure/);
+  assert.deepEqual(cutoffs, [now - 48 * 3600000, now - 48 * 3600000]);
 });

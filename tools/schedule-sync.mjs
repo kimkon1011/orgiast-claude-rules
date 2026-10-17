@@ -39,6 +39,10 @@ function append(file, record) {
   const fd = fs.openSync(file, 'a', 0o600);
   try { fs.writeSync(fd, JSON.stringify(record) + '\n'); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
 }
+function writeState(file, cursors) {
+  fs.writeFileSync(file + '.tmp', JSON.stringify({ cursors }, null, 2) + '\n', { mode: 0o600 });
+  fs.renameSync(file + '.tmp', file);
+}
 function acquireLock(dir) {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const file = path.join(dir, 'run.lock');
@@ -292,6 +296,13 @@ export async function runScheduleSync(options = {}, dependencies = {}) {
       try { calendar = createCalendarClient(await (dependencies.getCalendarToken || calendarToken)()); }
       catch (error) { if (!dryRun) throw error; calendarError = error.message; log(calendarError); }
     }
+    if (!dryRun && sources.some(source => !state.cursors[source])) {
+      // Pin the initial lower bound before collecting. A long first backfill may
+      // be interrupted by Task Scheduler; a moving now-48h window would lose
+      // its oldest unprocessed messages on the next invocation.
+      for (const source of sources) if (!state.cursors[source]) state.cursors[source] = iso(since[source]);
+      writeState(stateFile, state.cursors);
+    }
     const { messages, stats } = await (dependencies.collect || collectMessages)({ sources, since, until: now, home, log });
     // Saved extraction plans survive interrupted creates, independently of input retention.
     const pendingMessages = [...plans.values()].filter(p => !done.has(p.messageKey) && sources.includes(p.message.source)).map(p => p.message);
@@ -366,8 +377,7 @@ export async function runScheduleSync(options = {}, dependencies = {}) {
       await flush();
       const cursors = { ...state.cursors };
       for (const source of sources) cursors[source] = iso(Math.max(Date.parse(cursors[source]) || 0, now));
-      fs.writeFileSync(stateFile + '.tmp', JSON.stringify({ cursors }, null, 2) + '\n', { mode: 0o600 });
-      fs.renameSync(stateFile + '.tmp', stateFile);
+      writeState(stateFile, cursors);
     }
     return { ok: !calendarError, dryRun, calendarError, collected: stats, filtered, invalid, alreadyProcessed, extracted: rows.length, counts: Object.fromEntries(['created', 'would-create', 'review', 'duplicate', 'ignored', 'calendar-unverified'].map(status => [status, rows.filter(r => r.status === status).length])), candidates: rows.map(({ title, start, source, status, htmlLink }) => ({ title, start, source, status, htmlLink })) };
   } finally { release(); }

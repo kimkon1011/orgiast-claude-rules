@@ -10,7 +10,8 @@ node tools/schedule-sync.mjs
 ```
 
 `--source` は line,discord,gmail（省略時は全て）。初回は直近48時間、以降は
-ソースごとのカーソル以降を処理する。Gmail は既存 searchGmail のページングを
+ソースごとのカーソル以降を処理する。初回の開始境界も保存し、中断後の再実行で
+未処理の古いメッセージが移動する48時間窓から脱落するのを防ぐ。Gmail は既存 searchGmail のページングを
 使い、受信日時で絞る。Discord は既存のチャンネル列挙・active 判定・履歴取得を
 使い、Bot が読めるテキスト/announcement チャンネルを対象とする。
 403/404 の件数を stderr に出す。Bot/webhook の投稿は再取り込みを避けるため除外。

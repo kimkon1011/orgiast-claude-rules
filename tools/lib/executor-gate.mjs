@@ -37,9 +37,17 @@ export function writeCodexCooldownFile(file, until, now = Date.now()) {
   fs.writeFileSync(file, `${JSON.stringify({ until: savedUntil, reason: capped ? 'usage_limit:capped' : 'usage_limit', t: now })}\n`, 'utf8');
 }
 
+// codex-cooldown.json には2つの形がある。
+//   { codex: { until, reason, at } } … writeCodexCooldown()(tools/codex-cooldown.mjs)が書く形
+//   { until, reason, t }             … writeCodexCooldownFile() が書く旧形式
+// トップレベルの until しか読まないと、codex-do が自分で書いたクールダウンを一度も尊重しない
+// (2026-10-17 実測)。両方を読み、未来のうち最も遅い until を返す。
 export function readCodexCooldownUntil(file, now = Date.now()) {
-  const until = Number(readJson(file, null)?.until);
-  return Number.isFinite(until) && until > now ? until : 0;
+  const state = readJson(file, null);
+  const candidates = [Number(state?.codex?.until), Number(state?.until)].filter((value) => Number.isFinite(value));
+  if (candidates.length === 0) return 0;
+  const until = Math.max(...candidates);
+  return until > now ? until : 0;
 }
 
 // provider-limit-history.jsonl(provider, until, reason)の最新行で、until が未来の provider は候補から外す。

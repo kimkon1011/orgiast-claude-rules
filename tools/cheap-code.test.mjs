@@ -6,6 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { appendUsageLedger, autoProvider, buildChildEnv, cooldownUntilFromText, detectBillingFailure, detectUsageLimitText, readInstruction, resolveClaudeBin, resolveProvider, writeProviderCooldown } from './cheap-code.mjs';
+import { prepareWorkerConfigDir } from './claude-exe.mjs';
 
 const tool = fileURLToPath(new URL('./cheap-code.mjs', import.meta.url));
 
@@ -86,6 +87,75 @@ test('子 env だけに Anthropic 接続設定を追加し process.env を汚染
   assert.equal(childEnv.SAFE_PARENT, 'yes');
   assert.equal(process.env.ANTHROPIC_BASE_URL, beforeBase);
   assert.equal(process.env.ANTHROPIC_AUTH_TOKEN, beforeToken);
+});
+
+// デスクトップ版 Claude から呼ばれると CLAUDECODE / CLAUDE_CODE_* / MCP_* / ANTHROPIC_* が
+// 子へ漏れ、DeepSeek が `400 Invalid schema for function 'Artifact'` を返す(2026-10-17 実測)。
+// 浄化 → provider 値注入の順であること、CLAUDE_CODE_GIT_BASH_PATH は残ることを固定する。
+test('buildChildEnv は親 env を浄化してから provider 値を入れ、worker config dir を渡す', () => {
+  const config = resolveProvider('deepseek');
+  const childEnv = buildChildEnv(config, 'provider-key', {
+    PATH: 'C:\\bin',
+    SAFE_PARENT: 'yes',
+    CLAUDECODE: '1',
+    CLAUDE_CODE_ENTRYPOINT: 'cli',
+    CLAUDE_CODE_MAX_CONTEXT_TOKENS: '200000',
+    MCP_SERVER: 'x',
+    ANTHROPIC_BASE_URL: 'https://parent.example',
+    ANTHROPIC_API_KEY: 'parent-key',
+    CLAUDE_CONFIG_DIR: 'C:\\parent-config',
+    CLAUDE_CODE_GIT_BASH_PATH: 'C:\\Program Files\\Git\\bin\\bash.exe',
+  }, { configDir: 'C:\\worker\\dir' });
+
+  assert.equal(childEnv.ANTHROPIC_BASE_URL, 'https://api.deepseek.com/anthropic');
+  assert.equal(childEnv.ANTHROPIC_AUTH_TOKEN, 'provider-key');
+  assert.equal(childEnv.ANTHROPIC_API_KEY, undefined);
+  assert.equal(childEnv.CLAUDECODE, undefined);
+  assert.equal(childEnv.MCP_SERVER, undefined);
+  assert.equal(childEnv.SAFE_PARENT, 'yes');
+  assert.equal(childEnv.CLAUDE_CODE_GIT_BASH_PATH, 'C:\\Program Files\\Git\\bin\\bash.exe');
+  assert.equal(childEnv.CLAUDE_CONFIG_DIR, 'C:\\worker\\dir');
+  // 親の 200000 は浄化で消え、provider の実窓に置き換わる。
+  assert.equal(childEnv.CLAUDE_CODE_MAX_CONTEXT_TOKENS, '1000000');
+});
+
+test('prepareWorkerConfigDir は hooks を書かず deny を引き継ぎ disableAllHooks を立てる', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cheap-code-worker-'));
+  try {
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.claude', 'settings.json'), JSON.stringify({
+      hooks: { PreToolUse: [{ matcher: '*', hooks: [] }] },
+      permissions: { defaultMode: 'auto', deny: ['Bash(rm -rf:*)'] },
+    }), 'utf8');
+    const dir = prepareWorkerConfigDir({ home });
+    assert.equal(dir, path.join(home, '.claude', 'cheap-code-worker'));
+    const settings = JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'));
+    assert.deepEqual(settings.permissions.deny, ['Bash(rm -rf:*)']);
+    assert.equal(settings.permissions.defaultMode, 'bypassPermissions');
+    assert.equal(settings.disableAllHooks, true);
+    assert.equal(settings.hooks, undefined);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('prepareWorkerConfigDir はユーザー設定が無くても deny: [] で動く', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cheap-code-worker-empty-'));
+  try {
+    const dir = prepareWorkerConfigDir({ home });
+    const settings = JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'));
+    assert.deepEqual(settings.permissions.deny, []);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('--dry-run は configDir と strippedEnv を出す', () => {
+  const result = run(['--provider', 'deepseek', '--dry-run', 'x']);
+  assert.equal(result.status, 0);
+  const dryRun = JSON.parse(result.stdout);
+  assert.match(dryRun.configDir, /cheap-code-worker$/);
+  assert.ok(Array.isArray(dryRun.strippedEnv));
 });
 
 test('usage-limit 本文(429 [1308])から provider 再開時刻をパースする', () => {

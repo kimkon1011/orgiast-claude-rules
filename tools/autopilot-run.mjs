@@ -4,7 +4,7 @@ import path from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadFablePolicy, fableAllowedForSupervisor } from './fable-policy.mjs';
-import { resolveClaudeExecutableFromDisk } from './claude-exe.mjs';
+import { resolveClaudeExecutableFromDisk, sanitizeClaudeSupervisorEnv } from './claude-exe.mjs';
 import { autopilotPaths, runAutopilot, acquireLock } from './autopilot-tick.mjs';
 import { isEntry } from './is-entry.mjs';
 
@@ -30,7 +30,8 @@ export function buildWatchPrompt(watch, repo = REPO) {
 export function invokeClaude({ executable, args, prompt, cwd, timeoutMs, env = process.env }) {
   return new Promise((resolve) => {
     let stdout = '', stderr = '', timedOut = false, launchError = null;
-    const child = spawn(executable, args, { cwd, env: { ...env, CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: 'autopilot' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' });
+    // 監督セッションなので全社 hook は効かせたまま、デスクトップ由来の env 漏れだけ外す。
+    const child = spawn(executable, args, { cwd, env: { ...sanitizeClaudeSupervisorEnv(env), CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: 'autopilot' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' });
     const killTree = () => {
       timedOut = true;
       if (!child.pid) return;

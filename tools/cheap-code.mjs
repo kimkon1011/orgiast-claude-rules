@@ -7,7 +7,13 @@ import { spawn } from 'node:child_process';
 import { readEnvValue } from './env-kv.mjs';
 import { isEntry } from './is-entry.mjs';
 import { providerResetUntil, providerInCooldown } from './codex-cooldown.mjs';
-import { isUnspawnable, resolveClaudeExecutableFromDisk } from './claude-exe.mjs';
+import {
+  isUnspawnable,
+  listStrippedClaudeChildEnvKeys,
+  prepareWorkerConfigDir,
+  resolveClaudeExecutableFromDisk,
+  sanitizeClaudeChildEnv,
+} from './claude-exe.mjs';
 
 const FIVE_HOURS = 5 * 60 * 60 * 1000;
 
@@ -60,12 +66,20 @@ export function resolveProvider(name = 'deepseek') {
   return config;
 }
 
-export function buildChildEnv(config, key, parentEnv = process.env) {
-  const env = { ...parentEnv, ANTHROPIC_BASE_URL: config.base, ANTHROPIC_AUTH_TOKEN: key };
+export function buildChildEnv(config, key, parentEnv = process.env, { configDir } = {}) {
+  // 先に親 env を浄化する。デスクトップ版 Claude から呼ばれると CLAUDECODE / CLAUDE_CODE_* /
+  // CLAUDE_AGENT_SDK_* / MCP_* / ANTHROPIC_* が子へ漏れ、DeepSeek の Anthropic 互換 API が
+  // `400 Invalid schema for function 'Artifact'` で落ちる(2026-10-17 実測)。
+  const env = sanitizeClaudeChildEnv(parentEnv);
+  // 浄化した後に provider の接続値を入れる(順序を逆にすると親の ANTHROPIC_* が残る)。
+  env.ANTHROPIC_BASE_URL = config.base;
+  env.ANTHROPIC_AUTH_TOKEN = key;
   // 親から継承した Anthropic の鍵は安いレーンの子に渡さない(認証が二重に立ち、
   // 子が「connectors を無効化した」と警告する。2026-09-10 実測)。
   delete env.ANTHROPIC_API_KEY;
   if (config.maxContextTokens) env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(config.maxContextTokens);
+  // 委譲先は監督ではなく実行役なので、全社 hook を読まない専用の設定ディレクトリを渡す。
+  if (configDir) env.CLAUDE_CONFIG_DIR = configDir;
   return env;
 }
 
@@ -233,10 +247,22 @@ async function main(args) {
   const model = parsed.model || config.defaultModel;
   const key = readEnvValue(path.join(home, '.claude', config.envFile), config.keyName);
   const prompt = `[headless:cheap-code]\n${buildPrompt(instruction, cwd, home)}`;
+  // 実行役の子に渡す専用設定ディレクトリ。settings.json は毎回作り直す(古い deny を残さない)。
+  const configDir = prepareWorkerConfigDir({ home });
   // プロンプトは stdin で渡す。CLI 引数だと Windows のコマンドライン長上限で spawn ENAMETOOLONG になる (2026-09-21 実測)。
   const childArgs = ['-p', '--model', model];
   if (parsed.dryRun) {
-    console.log(JSON.stringify({ provider: config.provider, base: config.base, model, keyPresent: Boolean(key), argv: ['claude', ...childArgs], promptVia: 'stdin', promptChars: prompt.length }, null, 2));
+    console.log(JSON.stringify({
+      provider: config.provider,
+      base: config.base,
+      model,
+      keyPresent: Boolean(key),
+      argv: ['claude', ...childArgs],
+      promptVia: 'stdin',
+      promptChars: prompt.length,
+      configDir,
+      strippedEnv: listStrippedClaudeChildEnvKeys(process.env),
+    }, null, 2));
     return 0;
   }
   if (!key) {
@@ -272,7 +298,7 @@ async function main(args) {
     const child = spawn(executable, childArgs, { windowsHide: true,
       cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...buildChildEnv(config, key), ORGIAST_HEADLESS_JOB: `cheap-code:${config.provider}` },
+      env: { ...buildChildEnv(config, key, process.env, { configDir }), ORGIAST_HEADLESS_JOB: `cheap-code:${config.provider}` },
     });
     child.stdin.on('error', () => {});   // 子が先に死んだときの EPIPE で親を落とさない
     child.stdin.end(prompt);

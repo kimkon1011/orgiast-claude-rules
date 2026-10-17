@@ -238,6 +238,28 @@ export function detectQuotaLimit(stdout, stderr, exitStatus = null, promptText =
   return { matched: false };
 }
 
+// Codex の認証失敗。再試行しても直らないので、出力ゼロ再試行を飛ばして代替バックエンドへ回す。
+// 2026-10-17 実測: codex CLI 更新後に未ログインのまま `401 Unauthorized` /
+// `Missing bearer or basic authentication` で exit 1 になり、フォールバック条件
+// (usage limit / launch 不可 / Astra 昇格失敗)のどれにも当たらず委譲が死んでいた。
+export function detectCodexAuthFailure(output, stderr, promptText = '') {
+  const text = normalizeQuotes(`${output || ''}\n${stderr || ''}`);
+  const prompt = normalizeQuotes(promptText);
+  const patterns = [
+    /401\s+Unauthorized/i,
+    /Missing bearer or basic authentication/i,
+    /Not logged in/i,
+    /Please run\s+`?codex login`?/i,
+    /invalid_api_key/i,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    // 指示文に同じ文言が含まれる場合は、それをエコーしただけの可能性があるので除外する。
+    if (match && !prompt.includes(match[0])) return true;
+  }
+  return false;
+}
+
 export function snapshotWorkingTree(cwd, spawnImpl = spawnSync) {
   try {
     const gitCheck = spawnImpl('git', ['-C', cwd, 'rev-parse', '--is-inside-work-tree'], { windowsHide: true, encoding: 'utf8' });
@@ -575,6 +597,8 @@ let launchUnavailable = false;
 // 保留(exit 75)で終わらせず、codex 起動を飛ばしてフォールバック連鎖へ渡す（2026-10-10 実害: autopilot が
 // 4日先の cooldown で deferred を返され、監督が自分で実装する羽目になった）。
 let cooldownSkipCodex = false;
+// Codex が認証失敗(401 / 未ログイン)で死んだか。再試行では直らないので即フォールバックへ回す。
+let authFailed = false;
 const review = args.includes('--review');
 const noEscalate = args.includes('--no-escalate');
 const showBudget = args.includes('--budget');
@@ -986,6 +1010,13 @@ async function executeCodex() {
     attempts = attempt;
     // そもそも起動できていない(launched:false)なら再試行しても結果は変わらない。
     if (result?.launched === false) break;
+    // 認証失敗は再試行しても直らない。出力ゼロの再試行を省いてフォールバックへ回す。
+    if (detectCodexAuthFailure(result?.output, result?.stderr, prompt)) {
+      authFailed = true;
+      const tail = String(result?.stderr || result?.output || '').replace(/\s+/g, ' ').trim().slice(-200);
+      console.error(`[codex-do] Codex の認証に失敗しました（未ログイン）。再試行せず代替バックエンドへ回します${tail ? `: ${tail}` : ''}`);
+      break;
+    }
     if (!isFastFail(result, elapsed)) break;
     const tail = String(result?.stderr || '').replace(/\s+/g, ' ').trim().slice(-200);
     if (attempt === 1) console.error(`[codex-do] codex が ${elapsed.toFixed(1)} 秒で出力ゼロ(exit ${result.status})のため 1 回だけ再試行します${tail ? `: ${tail}` : ''}`);
@@ -1025,7 +1056,7 @@ while (true) {
     continue;
   }
   const failure = failureReason(result);
-  if (!quotaCheck.matched && failure && !launchUnavailable && selectedLane.slug === SOL && lane === 'auto' && !model && !noEscalate && !escalated && !astraRetreated && providerCooldownMs('codex-astra') === 0) {
+  if (!quotaCheck.matched && failure && !launchUnavailable && !authFailed && selectedLane.slug === SOL && lane === 'auto' && !model && !noEscalate && !escalated && !astraRetreated && providerCooldownMs('codex-astra') === 0) {
     console.log(`[codex-do] sol 失敗 → astra へ昇格 (理由: ${failure})`);
     escalated = true;
     selectedLane = { slug: ASTRA, effort: 'high', reason: `escalated:${failure}` };
@@ -1045,9 +1076,10 @@ if (quotaCheck.matched && selectedLane.slug !== ASTRA) {
   }
 }
 const fallbackReason = cooldownSkipCodex ? 'Codex usage limit クールダウン中'
+  : authFailed ? 'Codex 未ログイン(認証失敗)'
   : launchUnavailable ? 'WSL 経路が無く codex を起動できない'
   : quotaCheck.matched ? 'Codex usage limit を検出' : 'Astra 昇格後も失敗';
-if (quotaCheck.matched || escalationFailed || launchUnavailable) {
+if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
   if (quotaCheck.matched) {
     quotaResetUntil = parseCodexResetUntil(`${result?.output || ''}\n${result?.stderr || ''}`);
     try { writeCodexCooldown(quotaResetUntil); } catch {}

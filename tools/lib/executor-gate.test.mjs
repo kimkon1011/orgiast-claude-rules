@@ -98,6 +98,22 @@ test('decideCodexGate: cooldown が優先、次に無人割当', (t) => {
   assert.equal(decideCodexGate({ home, origin: 'unattended', now }).reason, 'codex_cooldown');
 });
 
+// writeCodexCooldown()(codex-cooldown.mjs)は { codex: { until, reason, at } } 形式で書く。
+// トップレベルの until しか読まないと、codex-do が書いたクールダウンを尊重せず毎回起動してしまう
+// (2026-10-17 実測)。
+test('readCodexCooldownUntil は { codex: { until } } 形式と旧トップレベル形式の両方を読む', (t) => {
+  const dir = tmp(t);
+  const file = path.join(dir, '.claude', 'codex-cooldown.json');
+  const now = 1_000_000;
+  fs.writeFileSync(file, JSON.stringify({ codex: { until: now + 5000, reason: 'usage_limit', at: now } }));
+  assert.equal(readCodexCooldownUntil(file, now), now + 5000);
+  fs.writeFileSync(file, JSON.stringify({ until: now + 7000, reason: 'usage_limit', t: now }));
+  assert.equal(readCodexCooldownUntil(file, now), now + 7000);
+  fs.writeFileSync(file, JSON.stringify({ codex: { until: now - 1 }, until: now - 2 }));
+  assert.equal(readCodexCooldownUntil(file, now), 0);
+  assert.equal(readCodexCooldownUntil(path.join(dir, 'missing.json'), now), 0);
+});
+
 test('parseDeferred: 75 以外は null、75 は stdout の JSON から retryAt を読む', () => {
   assert.equal(parseDeferred(1, '{"status":"deferred"}'), null);
   assert.deepEqual(parseDeferred(75, 'log\n{"status":"deferred","reason":"codex_cooldown","retryAt":123}\n'), { reason: 'codex_cooldown', retryAt: 123 });

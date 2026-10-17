@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { needsWorktreeRepair, detectQuotaLimit, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, isBackendExhausted, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS } = await import('./codex-do.mjs');
+const { needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, isBackendExhausted, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -356,6 +356,30 @@ test('枠切れ発生時に --no-fallback を指定した場合はフォール�
   assert.match(result.stderr, /Codex usage limit detected/);
   assert.match(result.stderr, /--no-fallback is specified/);
   assert.match(result.stdout, /executor=codex/);
+});
+
+test('detectCodexAuthFailure は 401 / 未ログインを検知し、指示文に含まれる文言は無視する', () => {
+  assert.equal(detectCodexAuthFailure('', 'error: 401 Unauthorized'), true);
+  assert.equal(detectCodexAuthFailure('', 'Error: Missing bearer or basic authentication in header'), true);
+  assert.equal(detectCodexAuthFailure('Not logged in. Run `codex login` to authenticate.', ''), true);
+  assert.equal(detectCodexAuthFailure('', 'invalid_api_key'), true);
+  assert.equal(detectCodexAuthFailure('all good', ''), false);
+  // 指示文に同じ文言が入っているだけのときは認証失敗とみなさない。
+  assert.equal(detectCodexAuthFailure('error: 401 Unauthorized', '', '401 Unauthorized の扱いを直して'), false);
+});
+
+test('Codex が認証失敗(401)したら再試行せず代替バックエンドへ回す', () => {
+  const mockResults = [
+    { status: 1, output: '', stderr: '401 Unauthorized: Missing bearer or basic authentication' },
+    { status: 0, output: 'Qwen Code CLI has successfully edited files.', stderr: '' },
+  ];
+  const result = run(['--force-native', '--cwd', workDir(), '指示内容'], {
+    env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults), GEMINI_API_KEY: '', DEEPSEEK_API_KEY: 'sk-test' },
+  });
+  assert.equal(result.status, 0);
+  assert.match(result.stderr, /Codex の認証に失敗しました/);
+  assert.match(result.stdout, /executor=fallback:cheap-code:deepseek/);
+  assert.match(result.stdout, /Codex 未ログイン\(認証失敗\)/);
 });
 
 test('枠切れ発生時にフォールバックが成功した場合は 0 で終了しヘッダ・フッタを出力する', () => {

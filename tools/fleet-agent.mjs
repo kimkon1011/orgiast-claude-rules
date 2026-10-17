@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { machineIdentity, getClaudeAccountEmail } from './machine-identity.mjs';
 import { parseHandoff } from './auto-session.mjs';
 import { isEntry } from './is-entry.mjs';
-import { resolveClaudeExecutableFromDisk } from './claude-exe.mjs';
+import { resolveClaudeExecutableFromDisk, sanitizeClaudeSupervisorEnv } from './claude-exe.mjs';
 import { findLatestMemoryDir } from './memory-share.mjs';
 
 const ALLOWED_KINDS = new Set(['status', 'prompt', 'enable-auto-session', 'run']);
@@ -193,7 +193,7 @@ export async function runPrompt({ claudeExe, body, cwd, timeoutSeconds = 1800, s
     if (readOnly) args.push('--tools', 'Read,Glob,Grep', '--allowedTools', 'Read,Glob,Grep', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disable-slash-commands', '--settings', '{"disableAllHooks":true}', '--model', 'sonnet');
     args.push('--', String(body ?? ''));
     const child = spawnImpl(claudeExe, args, {
-      cwd, env: { ...process.env, CLAUDE_HEADLESS: '1', CI: '1', ...(home ? { ORGIAST_HOME: home } : {}), FLEET_DRIVEN_BY_HUB: drivenByHub ? '1' : '0', FLEET_RESUME_MAIL_ID: resumeMailId || '' }, stdio: ['pipe', 'pipe', 'pipe'], shell: false, windowsHide: true,
+      cwd, env: { ...sanitizeClaudeSupervisorEnv(process.env), CLAUDE_HEADLESS: '1', CI: '1', ...(home ? { ORGIAST_HOME: home } : {}), FLEET_DRIVEN_BY_HUB: drivenByHub ? '1' : '0', FLEET_RESUME_MAIL_ID: resumeMailId || '' }, stdio: ['pipe', 'pipe', 'pipe'], shell: false, windowsHide: true,
     });
     child.stdin.end();
     child.stdout.on('data', (chunk) => { stdout += chunk; });

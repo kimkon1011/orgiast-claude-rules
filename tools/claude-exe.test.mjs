@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { versionTuple, compareVersionTuples, pickHighestVersion, isUnspawnable, candidateClaudeExecutables, resolveClaudeExecutable, defaultResolveArgs } from './claude-exe.mjs';
+import { versionTuple, compareVersionTuples, pickHighestVersion, isUnspawnable, candidateClaudeExecutables, resolveClaudeExecutable, defaultResolveArgs, findClaudeInVersionedDir, sanitizeClaudeChildEnv, sanitizeClaudeSupervisorEnv, listStrippedClaudeChildEnvKeys } from './claude-exe.mjs';
 import path from 'node:path';
 
 test('versionTuple basic', () => {
@@ -136,4 +136,118 @@ test('home が未設定でも Windowsアプリ版を見つける', () => {
     exists: () => true,
   });
   assert.equal(candidates[0], path.join(codeDir, '1.0.0', 'claude.exe'));
+});
+
+// デスクトップ版の通常インストール先。claude.exe は <版>\<ハッシュ>\ の下にあり、
+// 版直下だけを見ると候補0件で exit 4 になる(2026-10-17 実測)。
+test('APPDATA\\Claude\\claude-code のハッシュ階層から最新版の claude.exe を選ぶ', () => {
+  const appData = 'C:\\Users\\test\\AppData\\Roaming';
+  const codeDir = path.join(appData, 'Claude', 'claude-code');
+  const candidates = candidateClaudeExecutables({
+    platform: 'win32',
+    home: 'C:\\Users\\test',
+    localAppData: null,
+    appData,
+    pathEntries: [],
+    listDir: (dir) => {
+      if (dir === codeDir) return ['2.1.295', '2.1.299'];
+      if (dir === path.join(codeDir, '2.1.295')) return ['d2e29494ec83'];
+      if (dir === path.join(codeDir, '2.1.299')) return ['f0584be0fbaf'];
+      return [];
+    },
+    exists: (p) => p === path.join(codeDir, '2.1.299', 'f0584be0fbaf', 'claude.exe'),
+  });
+  assert.deepEqual(candidates, [path.join(codeDir, '2.1.299', 'f0584be0fbaf', 'claude.exe')]);
+});
+
+test('APPDATA 版比較は数値セグメントで行う(2.1.10 > 2.1.9) — 版直下の exe も可', () => {
+  const appData = 'C:\\Users\\user\\AppData\\Roaming';
+  const codeDir = path.join(appData, 'Claude', 'claude-code');
+  const candidates = candidateClaudeExecutables({
+    platform: 'win32', home: undefined, localAppData: null, appData, pathEntries: [],
+    listDir: (dir) => (dir === codeDir ? ['2.1.9', '2.1.10'] : []),
+    exists: () => true,
+  });
+  assert.deepEqual(candidates, [path.join(codeDir, '2.1.10', 'claude.exe')]);
+});
+
+test('最新版に claude.exe が無ければ次に新しい版へフォールバックする', () => {
+  const appData = 'C:\\Users\\user\\AppData\\Roaming';
+  const codeDir = path.join(appData, 'Claude', 'claude-code');
+  const expected = path.join(codeDir, '2.1.295', 'claude.exe');
+  const found = findClaudeInVersionedDir(codeDir, {
+    listDir: (dir) => {
+      if (dir === codeDir) return ['2.1.295', '2.1.299'];
+      if (dir === path.join(codeDir, '2.1.299')) return ['broken'];
+      return [];
+    },
+    exists: (p) => p === expected,
+  });
+  assert.equal(found, expected);
+});
+
+test('Packages 側もハッシュ階層の claude.exe を見つける', () => {
+  const localAppData = 'C:\\Users\\test\\AppData\\Local';
+  const packagesDir = path.join(localAppData, 'Packages');
+  const codeDir = path.join(packagesDir, 'Claude_xyz', 'LocalCache', 'Roaming', 'Claude', 'claude-code');
+  const expected = path.join(codeDir, '1.2.0', 'abc123', 'claude.exe');
+  const candidates = candidateClaudeExecutables({
+    platform: 'win32', home: 'C:\\Users\\test', localAppData, appData: null, pathEntries: [],
+    listDir: (dir) => {
+      if (dir === packagesDir) return ['Claude_xyz'];
+      if (dir === codeDir) return ['1.0.0', '1.2.0'];
+      if (dir === path.join(codeDir, '1.2.0')) return ['abc123'];
+      return [];
+    },
+    exists: (p) => p === expected,
+  });
+  assert.deepEqual(candidates, [expected]);
+});
+
+test('sanitizeClaudeChildEnv は漏洩キーを外し、許可したキーだけ残す', () => {
+  const clean = sanitizeClaudeChildEnv({
+    PATH: 'C:\\bin',
+    CLAUDECODE: '1',
+    CLAUDE_CODE_ENTRYPOINT: 'cli',
+    CLAUDE_CODE_MAX_CONTEXT_TOKENS: '200000',
+    CLAUDE_AGENT_SDK_VERSION: '1',
+    CLAUDE_PID: '123',
+    CLAUDE_PREVIEW_MODE: '1',
+    MCP_SERVER: 'x',
+    mcp_lower: 'x',
+    ANTHROPIC_BASE_URL: 'https://parent.example',
+    ANTHROPIC_API_KEY: 'parent-key',
+    CLAUDE_CONFIG_DIR: 'C:\\parent-config',
+    SAFE_PARENT: 'yes',
+    CLAUDE_CODE_GIT_BASH_PATH: 'C:\\Program Files\\Git\\bin\\bash.exe',
+    CLAUDE_CLI: 'C:\\tools\\claude.exe',
+    claude_cli_path: 'C:\\tools\\claude2.exe',
+  });
+  assert.deepEqual(Object.keys(clean).sort(), [
+    'CLAUDE_CLI',
+    'CLAUDE_CODE_GIT_BASH_PATH',
+    'PATH',
+    'SAFE_PARENT',
+    'claude_cli_path',
+  ].sort());
+  assert.equal(clean.CLAUDE_CODE_GIT_BASH_PATH, 'C:\\Program Files\\Git\\bin\\bash.exe');
+  assert.deepEqual(listStrippedClaudeChildEnvKeys({ CLAUDECODE: '1', PATH: 'x' }), ['CLAUDECODE']);
+});
+
+test('sanitizeClaudeSupervisorEnv は漏洩キーだけ外し ANTHROPIC_* と CLAUDE_CONFIG_DIR は残す', () => {
+  const clean = sanitizeClaudeSupervisorEnv({
+    PATH: 'C:\\bin',
+    CLAUDECODE: '1',
+    CLAUDE_CODE_ENTRYPOINT: 'cli',
+    MCP_SERVER: 'x',
+    CLAUDE_CONFIG_DIR: 'C:\\parent-config',
+    ANTHROPIC_BASE_URL: 'https://parent.example',
+    ANTHROPIC_AUTH_TOKEN: 'token',
+  });
+  assert.deepEqual(clean, {
+    PATH: 'C:\\bin',
+    CLAUDE_CONFIG_DIR: 'C:\\parent-config',
+    ANTHROPIC_BASE_URL: 'https://parent.example',
+    ANTHROPIC_AUTH_TOKEN: 'token',
+  });
 });

@@ -14,7 +14,11 @@ function fixture(t, body) {
   const dir = path.join(home, '.claude'); fs.mkdirSync(dir);
   fs.writeFileSync(path.join(dir, 'gemini-pricing.json'), JSON.stringify({ models: { 'gemini-3.7-flash': { inputUsdPerMillion: 0.75, outputUsdPerMillion: 3.75, batchMultiplier: 0.5 } } }));
   const preload = path.join(home, 'fetch.mjs');
-  fs.writeFileSync(preload, `globalThis.fetch = async () => new Response(JSON.stringify(${JSON.stringify(body)}), { status: 200 });\n`);
+  // Freeze the child's local clock before its batch deadline. A real 23:59 clock
+  // skips the job even with --force, leaving no usage ledger for rows() to read.
+  fs.writeFileSync(preload, `import { mock } from 'node:test';
+mock.timers.enable({ apis: ['Date'], now: new Date(2026, 8, 19, 12, 0, 0) });
+globalThis.fetch = async () => new Response(JSON.stringify(${JSON.stringify(body)}), { status: 200 });\n`);
   const env = { ...process.env, ORGIAST_HOME: home, USERPROFILE: home, ORGIAST_LOCK_HOME: home, GEMINI_API_KEY: 'test-only', ORGIAST_BATCH_DEADLINE: '23:59' };
   const run = (tool, args) => spawnSync(process.execPath, ['--import', pathToFileURL(preload).href, path.join(import.meta.dirname, tool), ...args], { env, encoding: 'utf8', timeout: 15000 });
   const rows = () => fs.readFileSync(path.join(dir, 'executor-usage.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
@@ -40,6 +44,7 @@ test('native Gemini batch records usageMetadata once with batch rate and thinkin
   fs.writeFileSync(path.join(queue, 'pending.jsonl'), JSON.stringify({ id: 'test', provider: 'gemini', model: 'gemini-3.7-flash', prompt: 'question' }) + '\n');
   const result = f.run('batch-run.mjs', ['--force']);
   assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /OK test gemini-batch/, result.stderr);
   const rows = f.rows(); assert.equal(rows.length, 1);
   assert.equal(rows[0].in, 12); assert.equal(rows[0].out, 34); assert.equal(rows[0].mode, 'batch');
   assert.equal(rows[0].usd, (12 * 0.75 + 34 * 3.75) / 1e6 * 0.5);

@@ -44,7 +44,7 @@ for (const [label, text] of [
   ['over budget', '1件 $1(3件実測)×1000件=$1000 / 上限$20'],
   ['wrong count', '1件 $1(3件実測)×100件=$100 / 上限$200'],
   ['wrong arithmetic', '1件 $1(3件実測)×1000件=$10 / 上限$20'],
-  ['sample too large', '1件 $0.01(4件実測)×1000件=$10 / 上限$20'],
+  ['sample too large', '1件 $0.01(11件実測)×1000件=$10 / 上限$20'],
 ]) test(label, t => { const f = fixture(t); f.say(`[COST-ESTIMATE: ${text}]`); assert.equal(f.run('Bash', { command: 'gh workflow run batch.yml -f count=1000' }), 'deny'); });
 test('small batch passes', t => assert.equal(fixture(t).run('Bash', { command: 'gh workflow run batch.yml -f limit=5' }), undefined));
 test('workflow without paid key passes', t => { const f = fixture(t); fs.writeFileSync(path.join(f.cwd, '.github/workflows/batch.yml'), 'echo hello'); assert.equal(f.run('Bash', { command: 'gh workflow run batch.yml -f limit=1000' }), undefined); });
@@ -53,3 +53,4 @@ test('old estimate does not authorize latest message', t => { const f = fixture(
 test('off bypasses', t => assert.equal(fixture(t).run('Edit', edit, { APP_LLM_COST_GATE: 'off' }), undefined));
 test('malformed input fails open', () => { const r = spawnSync(process.execPath, [hook], { input: '{oops', encoding: 'utf8' }); assert.equal(r.status, 0); assert.equal(r.stdout, ''); });
 test('unreadable workflow fails open', t => assert.equal(fixture(t).run('Bash', { command: 'gh workflow run absent.yml -f count=1000' }), undefined));
+test('5-sample estimate passes', t => { const f = fixture(t); f.say('[COST-ESTIMATE: 1件 $0.017(5件実測)×246件=$4.182 / 上限$5]'); assert.equal(f.run('Bash', { command: 'gh workflow run batch.yml -f limit=246' }), undefined); });

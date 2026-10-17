@@ -1323,7 +1323,7 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
 1. **呼び先の既定**: Web検索付きの情報収集＝Gemini Flash の Google 検索グラウンディング（Gemini 3.x は月5,000件まで無料）。分類・抽出・要約・整形＝Groq / DeepSeek / Gemini Flash（`tools/routing-table.json` の実測表に従う）。Claude API は、他AIで品質が出ないことを実測した時だけ使い、コードに `// LLM-PROVIDER-REASON: <理由と実測>` を書く。
 1-2. **1社だけ試して Claude に戻すのは禁止（kim 2026-10-17 厳命）**: 他AIで品質が足りなかった時は、Claude に戻す前に、その用途で使える他AIを**3社以上**、同じ評価セット・同じ物差し（取れた項目数・一致率・1件あたり実費）で比較し、表で示す。候補の例: Web検索付き＝Gemini（Flash/Pro）・Perplexity Sonar（OpenRouter）・xAI Grok（web_search）・Kimi（$web_search）・OpenRouter `:online`／生成・抽出＝DeepSeek・Groq・Kimi・Mistral・GLM・Gemini Flash。プロンプトや2段構成（検索→整形）の改善も他AIの側で先に試す。`LLM-PROVIDER-REASON:` には、比較した他AI 3社以上の名前と実測値を書く（社名が3つ未満なら app-llm-cost-gate が block）。Claude に戻した後も、他AIの改善を続ける TODO を残す。
 2. **既存アプリを触る時**: その機能の呼び先を最初に確認する。Claude API なら、作業を始める前に他AIへの置き換え案（同じ入力での品質比較と費用比較つき）を出す。古いアプリだからと既存経路を流用しない。
-3. **有料 LLM の一括実行（20件超・無人）の前に**: ①3件以内で1件あたりの実費を実測する（response の usage から計算。推測の単価を伝えない）。②`[COST-ESTIMATE: 1件 $X(n件実測)×N件=$Y / 上限$Z]` を提示し、承認を得る。③コード側に予算上限（例 `BULK_BUDGET_USD`、累計が超えたら自動停止）を入れる。**オートチャージは予算上限ではない**（暴走をそのまま課金し続ける）。
+3. **有料 LLM の一括実行（20件超・無人）の前に**: ①1〜10件で1件あたりの実費を実測する（response の usage から計算。推測の単価を伝えない）。②`[COST-ESTIMATE: 1件 $X(n件実測)×N件=$Y / 上限$Z]` を提示し、承認を得る。③コード側に予算上限（例 `BULK_BUDGET_USD`、累計が超えたら自動停止）を入れる。**オートチャージは予算上限ではない**（暴走をそのまま課金し続ける）。
 4. **監視**: 残高の監視（credit-watch）だけでなく、日次の消費額が急増したら止めて通知する。
 
 **強制**: `tools/app-llm-cost-gate.mjs`（PreToolUse）が、①アプリコードへの Claude API 呼び出しの新規追加（`LLM-PROVIDER-REASON:` なし）と、②有料 LLM キーを使う workflow/script の20件超起動（`[COST-ESTIMATE:` なし、または上限超過）を block する。

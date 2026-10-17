@@ -7,7 +7,7 @@ import { readAssistantText } from './lib/assistant-text.mjs';
 
 const markers = ['@anthropic-ai/sdk', 'new Anthropic(', 'api.anthropic.com', 'anthropic.messages.create', 'client.messages.create', 'web_search_20'];
 const providerMessage = 'アプリの LLM/検索は他AIが既定（ONBOARDING §2.8.0）。Web検索付き収集=Gemini Flash グラウンディング、分類・抽出・要約=Groq/DeepSeek/Gemini Flash。Claude API を使うなら `// LLM-PROVIDER-REASON: <比較した他AI 3社以上の名前と実測値>` を書く（1社だけ試して Claude に戻すのは禁止）';
-const bulkMessage = '一括実行の前に、3件以内で1件あたり実費を実測し、[COST-ESTIMATE: 1件 $X(n件実測)×N件=$Y / 上限$Z] を書く。自動リロードは予算上限ではない。予算上限はコード側で env (例 BULK_BUDGET_USD) により自動停止させる（§2.8.0）';
+const bulkMessage = '一括実行の前に、1〜10件で1件あたり実費を実測し、[COST-ESTIMATE: 1件 $X(n件実測)×N件=$Y / 上限$Z] を書く。自動リロードは予算上限ではない。予算上限はコード側で env (例 BULK_BUDGET_USD) により自動停止させる（§2.8.0）';
 
 function estimateMatches(text, count) {
   const amount = '(\\d+(?:\\.\\d+)?)';
@@ -15,7 +15,7 @@ function estimateMatches(text, count) {
   const m = text.match(pattern);
   if (!m) return false;
   const [unit, sample, n, total, budget] = m.slice(1).map(Number);
-  return sample >= 1 && sample <= 3 && n === count && total <= budget && Math.abs(unit * n - total) <= 0.005;
+  return sample >= 1 && sample <= 10 && n === count && total <= budget && Math.abs(unit * n - total) <= 0.005;
 }
 
 export function evaluate(input) {

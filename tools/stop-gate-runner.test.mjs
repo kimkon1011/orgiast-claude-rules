@@ -401,3 +401,17 @@ test('MacroDroidの検索不足を先に示し形式は1セクションにまと
   const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8'));
   assert.ok(record.blockedBy.includes('past-log-search-gate')); assert.deepEqual(record.demoted, []);
 });
+
+test('副作用の告知だけならStopで差し戻し、直後に対処を書けば通る', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-side-effect-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const text = '営業アプリは GitHub 通知を取り込まなくなる。';
+  const result = invoke(home, 'side-effect', text);
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.decision, 'block');
+  assert.match(output.reason, /side-effect-left-gate[\s\S]*\[SIDE-EFFECT\]/);
+  const repaired = invoke(home, 'side-effect', `${text}\n取り込み条件を修正済み、回帰テスト成功。`);
+  assert.equal(repaired.status, 0, repaired.stderr);
+  assert.equal(repaired.stdout, '');
+});

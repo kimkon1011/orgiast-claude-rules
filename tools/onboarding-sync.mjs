@@ -635,7 +635,8 @@ export function makeIndex(body) {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (/^#{1,3}(?:\s|$)/.test(line)) {
-      kept.push(line);
+      // 索引は規約の見出しを残し、日付・由来は全文へ委ねて配布上限内に収める。
+      kept.push(line.replace(/（(?:kim\s+)?\d{4}-\d{2}-\d{2}[^）]*）/g, ''));
       for (let j = i + 1; j < lines.length && !/^#{1,3}(?:\s|$)/.test(lines[j]); j++) {
         const candidate = lines[j].trim();
         if (!candidate) continue;

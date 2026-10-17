@@ -178,6 +178,12 @@
       "rollout": "deny",
       "legacy": true
     },
+    "side-effect-left-gate": {
+      "rollout": "deny",
+      "distributedAt": "2026-10-17T00:00:00Z",
+      "denyAfter": "2026-10-24T00:00:00Z",
+      "pilotDeny": true
+    },
     "past-log-search-gate": {
       "rollout": "deny",
       "distributedAt": "2026-10-17T00:00:00Z",

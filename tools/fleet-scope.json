@@ -2,6 +2,12 @@
   "version": 1,
   "entries": [
     {
+      "path": "tools/api-billing-guard.mjs",
+      "scope": "fleet",
+      "step": "settings:api-billing-guard",
+      "reason": "settings:api-billing-guard ステップの対象（SessionStart/UserPromptSubmit/PreToolUse の従量課金ガード）。ログイン情報の課金種別だけを読む"
+    },
+    {
       "path": "tools/lib/stuck-dialog-state.mjs",
       "scope": "fleet",
       "step": "task:stuck-dialog-watch",

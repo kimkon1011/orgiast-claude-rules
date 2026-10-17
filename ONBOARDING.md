@@ -98,8 +98,6 @@ Stop の `user-burden-gate` が依頼のある最終応答を監査する。本�
 - できていない・未検証の行には「原因（事実と推測を分ける）→ 次の一手（実行者・手順）」を併記し、Claude が実行できる分は報告前に着手する。
 - 事例: 複合機スキャン→Drive 自動アップで FAX フォルダを「対象に含めた」と報告し、テストは別フォルダだけで合格とした。初期調査で FAX の「直近30日 0件・最終 2024/3」を取得していたのに報告せず、複合機入替で FAX 保存設定が消えていたことを user の問い合わせで初めて発見した。
 
-**🔴 ファイルのリンクを人に渡す前に、その相手への共有設定を済ませる。作成時に `--share <相手のメール>`、既存は `node tools/drive-share.mjs --id <URL> --to <メール>`。「アクセス権をリクエスト」を相手に踏ませたら事故（kim 2026-10-17 厳命・全PC全アカウント・絶対）。詳細 §1.5.0.1。**
-
 **🔴 社内メンバーへの連絡は Discord DM で送る（tools/discord-dm.mjs）。Gmail下書きは内部宛に禁止・外部宛のみ。送れない時はチャットに完成形を表示。**
 
 内部判定: 社内・グループ会社（東邦鋼業 genbateam.toho@gmail.com、Reブース、NEXTForward）・スタッフ。orgiast.jp / toho-kogyo.com と `~/.claude/internal-recipients.json`（既定 `tools/internal-recipients.default.json`）を使い、`internal-recipient-gmail-guard` が宛先を照合する。
@@ -246,7 +244,7 @@ bound scriptのscriptId不明時はDrive MCPで`mimeType='application/vnd.google
 
 ### 1.5 URL・名前・自己完結した手順（§1.5〜1.5.3）
 
-URL規約を守り、内部IDに名前を併記し、初心者向けの完全な手順を毎回示す。
+URL規約を守り、リンクは渡す前に相手へ共有し、内部IDに名前を併記し、初心者向けの完全な手順を毎回示す。
 
 **1.5.0 URL を出すときは「どのアカウントで開くか」を必ず併記する（kim 2026-10-04 厳命・全PC全アカウント・絶対）**
 

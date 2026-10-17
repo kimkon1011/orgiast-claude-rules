@@ -1,6 +1,6 @@
 # Registers the auto-progress tasks (idempotent, Windows PowerShell 5.1 safe: ASCII only).
 #   OrgiastAutoProgressWatch  daily 09:00 + 18:00  (all PCs)  -> tools\auto-progress-watch.mjs
-#   OrgiastAutoProgressDigest daily 08:40          (all PCs; the tool itself exits unless label is kim-PC)
+#   OrgiastAutoProgressDigest daily 08:40          (all PCs)
 param([switch]$ValidateOnly, [switch]$Unregister)
 $ErrorActionPreference = 'Stop'
 $names = @('OrgiastAutoProgressWatch', 'OrgiastAutoProgressDigest')
@@ -28,7 +28,7 @@ Register-ScheduledTask -TaskName $names[0] -Action $watchAction -Trigger $watchT
 
 $digestAction = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($digest) -WorkingDirectory $repo
 $digestTrigger = New-ScheduledTaskTrigger -Daily -At '08:40'
-Register-ScheduledTask -TaskName $names[1] -Action $digestAction -Trigger $digestTrigger -Settings $settings -Description 'Morning DM digest of stalled auto-progress items (runs on kim-PC only, no-op elsewhere).' -Force | Out-Null
+Register-ScheduledTask -TaskName $names[1] -Action $digestAction -Trigger $digestTrigger -Settings $settings -Description 'Morning DM digest of local auto-progress items on every PC; watch also sends after its 09:00/18:00 checks.' -Force | Out-Null
 
 foreach ($n in $names) {
   $t = Get-ScheduledTask -TaskName $n -ErrorAction Stop

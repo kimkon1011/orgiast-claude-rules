@@ -584,7 +584,7 @@ deny/warnはPC・ゲート・復旧手段の到達状況だけを既存通知経
 
 「すすめて」と打たせない。完了報告の後は自動で次のTODO（git commit/vercel prod deploy/Layer2 e2e/memory反映等）に着手する。設計判断・破壊的操作・未承認prod送信・大型リファクタのみAskUserQuestionで待つ。報告末尾に「残TODO」セクションを付ける。詳細・自動着手チェックリスト: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/autonomy-and-reporting.md`
 
-**「この後の自動進行: <内容>」の宣言は台帳に記録され、止まれば自動で拾われる（2026-10-14 追加）**。Stop hook `tools/auto-progress-ledger.mjs` が宣言（「なし」以外）を `~/.claude/auto-progress-ledger.jsonl` に記録する（同一セッションは最新で置換）。各PCの定期タスク `OrgiastAutoProgressWatch` が毎日 09:00 と 18:00 に台帳を巡回し、宣言から6時間以降のものを安いLLMで done / in_progress / stalled に判定する。stalled は 1件1日1回まで自動再開し、共有 Sheet（タブ「自動進行」）へ行を足す。kim-PC は朝 08:40 に直近24hの停滞を1通の Discord DM にまとめる（0件なら送らない）。だから宣言は「実際に自動で進む内容」だけ書く。Sheet 側の追加手順は `docs/auto-progress-gas-patch.gs.txt`。
+**「この後の自動進行: <内容>」の宣言は台帳に記録され、止まれば自動で拾われる（2026-10-14 追加）**。Stop hook `tools/auto-progress-ledger.mjs` が宣言（「なし」以外）を `~/.claude/auto-progress-ledger.jsonl` に記録する（同一セッションは最新で置換）。各PCの定期タスク `OrgiastAutoProgressWatch` が毎日 09:00 と 18:00 に台帳を巡回し、宣言から6時間以降のものを安いLLMで done / in_progress / stalled に判定する。stalled は 1件1日1回まで自動再開し、共有 Sheet（タブ「自動進行」）へ行を足す。全PCが朝08:40と巡回後に自PC分をDiscord DMする（0件は送らない）。だから宣言は「実際に自動で進む内容」だけ書く。Sheet 側の追加手順は `docs/auto-progress-gas-patch.gs.txt`。
 
 PR は原則 `gh pr create ... --label automerge` で作り、CI が赤なら Claude が直す。「マージしてください」と user に頼まない。
 workflow・keyserve・secrets・env・fleet 指令ファイルに触る時だけ label を付けず、PR 冒頭に kim の手動マージが必要な理由を書く。

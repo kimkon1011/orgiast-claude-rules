@@ -82,7 +82,7 @@ function seed(home, rows) {
   fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
   fs.writeFileSync(ledgerFile(home), rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
 }
-const baseIo = (extra = {}) => ({ sheetConfig: () => ({ url: 'u', token: 't' }), cwdExists: () => true, ...extra });
+const baseIo = (extra = {}) => ({ sheetConfig: () => ({ url: 'u', token: 't' }), cwdExists: () => true, digest: async () => ({ sent: false, count: 0 }), ...extra });
 const evAny = (now) => ({ transcript: { count: 1, lastAt: now - 8 * H, snippets: [] }, files: { names: [], lastAt: 0 }, runs: { names: [] }, lastEvidenceAt: now - 8 * H, any: true });
 
 test('watch: 猶予6時間未満は判定しない', async () => {
@@ -132,24 +132,38 @@ test('watch: Sheet 失敗は errors に残り、次回再送できる', async ()
   assert.equal(s2.reported, 1);
 });
 
-test('digest: 24h以内の stalled/resumed のみ・0件なら送らない・kim-PC以外は何もしない', async () => {
+test('digest: 非kim-PCも自PC台帳の進捗を送り、0件なら送らない', async () => {
   const now = Date.parse('2026-10-15T00:00:00Z');
   const rows = [
-    { key: 'k1', pc: 'PC-A', promise: '夜間デプロイ', recordedAt: new Date(now - 30 * H).toISOString(), lastEvidenceAt: new Date(now - 20 * H).toISOString(), verdict: 'stalled', reason: '動きなし', resumeAttempted: true, resumeOutcome: 'progressed: 一部完了', reportedAt: new Date(now - 2 * H).toISOString() },
-    { key: 'k2', pc: 'PC-B', promise: '古い件', recordedAt: new Date(now - 90 * H).toISOString(), verdict: 'stalled', reportedAt: new Date(now - 48 * H).toISOString() },
-    { key: 'k3', pc: 'PC-C', promise: '健全', verdict: 'in_progress', resumeAttempted: false, reportedAt: new Date(now - H).toISOString() },
+    { sessionId: 'k1', pc: 'other-PC', promise: '夜間デプロイ', ts: new Date(now - 30 * H).toISOString(), lastCheckedAt: new Date(now - H).toISOString(), status: 'open' },
   ];
   assert.equal(selectRows(rows, now).length, 1);
-  const text = formatDigest(selectRows(rows, now), now);
-  assert.match(text, /^止まっている自動進行 1 件/);
-  assert.match(text, /PC-A／約束: 夜間デプロイ／経過 30 時間／最後の動き: 20 時間前.*自動再開: progressed: 一部完了/);
+  const text = formatDigest(selectRows(rows, now), now, 'other-PC');
+  assert.match(text, /^other-PC 自動進行の定期進捗 1件/);
+  assert.match(text, /約束: 夜間デプロイ／判定: in_progress/);
   const sent = [];
-  const io = { label: 'kim-PC', sheetConfig: () => ({}), postSheet: async () => ({ rows }), notify: async (t) => { sent.push(t); return { delivered: 'dm' }; } };
-  assert.deepEqual(await digest({ home: tmp(), now, io }), { sent: true, count: 1 });
+  const io = { label: 'other-PC', readLedger: () => rows, readState: () => ({}), writeState: () => {}, appendFileSync: () => {}, mkdirSync: () => {}, notify: async (t) => { sent.push(t); return { delivered: 'dm' }; } };
+  assert.deepEqual(await digest({ home: tmp(), now, io }), { sent: true, count: 1, parts: 1 });
   assert.equal(sent.length, 1);
-  assert.deepEqual(await digest({ home: tmp(), now, io: { ...io, postSheet: async () => ({ rows: [rows[2]] }) } }), { sent: false, count: 0 });
+  assert.deepEqual(await digest({ home: tmp(), now, io: { ...io, readLedger: () => [] } }), { sent: false, count: 0 });
   assert.equal(sent.length, 1);
-  assert.equal((await digest({ home: tmp(), now, io: { ...io, label: 'other-PC' } })).skipped, 'not-kim-pc');
+});
+
+test('digest: 同一スロット・同一内容を二重送信せず、doneは前回成功以降だけ含む', async () => {
+  const now = Date.parse('2026-10-15T09:05:00+09:00');
+  const recent = { status: 'done', promise: 'recent', ts: new Date(now - 10 * H).toISOString(), doneAt: new Date(now - H).toISOString() };
+  const old = { status: 'done', promise: 'old', ts: new Date(now - 20 * H).toISOString(), doneAt: new Date(now - 5 * H).toISOString() };
+  let saved;
+  const io = { label: 'cr-PC', readLedger: () => [old, recent], readState: () => saved || { lastSuccessAt: new Date(now - 2 * H).toISOString() }, writeState: (_h, value) => { saved = value; }, appendFileSync: () => {}, mkdirSync: () => {}, notify: async () => ({ delivered: 'dm' }) };
+  assert.deepEqual(await digest({ home: tmp(), now, slot: '朝', io }), { sent: true, count: 1, parts: 1 });
+  assert.deepEqual(await digest({ home: tmp(), now, slot: '朝', io }), { sent: false, count: 0 });
+});
+
+test('watch: summaryログがEBUSYでも巡回結果を返す', async () => {
+  const home = tmp(); const errors = [];
+  const result = await watch({ home, now: Date.now(), io: { ...baseIo(), appendFileSync: () => { throw Object.assign(new Error('locked'), { code: 'EBUSY' }); }, stderr: (line) => errors.push(line) } });
+  assert.equal(result.checked, 0);
+  assert.match(errors.join('\n'), /summary log failed: locked/);
 });
 
 test('runRegisterPs1: win32 以外は何もせず、win32 では powershell -File で .ps1 を呼ぶ', () => {
@@ -199,8 +213,8 @@ test('postSheet: token/kind 経路と未適用GAS・非JSON・HTTP失敗を検�
 test('digest: DM未達を成功にせず、公開webhookへ送らない', async () => {
   const now = Date.now();
   const result = await digest({ home: tmp(), now, io: {
-    label: 'kim-PC', sheetConfig: () => ({}),
-    postSheet: async () => ({ rows: [{ key: 'k', verdict: 'stalled', reportedAt: new Date(now).toISOString() }] }),
+    label: 'kim-PC', readState: () => ({}), appendFileSync: () => {}, mkdirSync: () => {},
+    readLedger: () => [{ status: 'resumed', promise: 'p', ts: new Date(now - H).toISOString(), resumedAt: new Date(now).toISOString() }],
     notify: async (_text, options) => { assert.equal(options.webhookFallback, false); return { delivered: 'none', reason: 'failed' }; },
   } });
   assert.equal(result.sent, false);

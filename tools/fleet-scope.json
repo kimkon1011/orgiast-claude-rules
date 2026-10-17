@@ -467,7 +467,7 @@
       "path": "tools/register-auto-progress-task.ps1",
       "scope": "fleet",
       "step": "task:auto-progress-watch",
-      "reason": "task:auto-progress-watch ステップの登録スクリプト（巡回09:00/18:00＋朝DM。DMはkim-PCのみ）"
+      "reason": "task:auto-progress-watch ステップの登録スクリプト（全PCで巡回09:00/18:00＋朝/巡回後DM）"
     },
     {
       "path": "tools/register-stalled-session-nightly.ps1",

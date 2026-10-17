@@ -183,9 +183,10 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     summary.checked += 1;
     const evidence = gatherEvidence(row, home, io);
     const verdict = judge(row, evidence, now, io);
-    if (verdict.verdict === 'done') { patch(rowKey(row), { status: 'done', doneAt: new Date(now).toISOString(), reason: verdict.reason }); summary.done += 1; continue; }
-    if (verdict.verdict === 'in_progress') { patch(rowKey(row), { lastCheckedAt: new Date(now).toISOString(), reason: verdict.reason }); summary.inProgress += 1; continue; }
+    if (verdict.verdict === 'done') { patch(rowKey(row), { status: 'done', verdict: 'done', doneAt: new Date(now).toISOString(), reason: verdict.reason }); summary.done += 1; continue; }
+    if (verdict.verdict === 'in_progress') { patch(rowKey(row), { verdict: 'in_progress', lastCheckedAt: new Date(now).toISOString(), reason: verdict.reason }); summary.inProgress += 1; continue; }
     summary.stalled += 1;
+    patch(rowKey(row), { verdict: 'stalled', lastCheckedAt: new Date(now).toISOString(), reason: verdict.reason });
     let current = { ...row };
     const canResume = !dryRun && summary.resumed < MAX_RESUMES_PER_RUN &&(row.resumeCount ?? 0) < MAX_RESUMES && localDay(Date.parse(row.resumedAt || 0)) !== localDay(now)
       && row.cwd && (io.cwdExists ?? fs.existsSync)(row.cwd);
@@ -196,7 +197,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       let outcome;
       try { outcome = await (io.resume ?? resumeSession)(row, { home }); } catch (error) { outcome = { outcome: 'error', reason: String(error?.message ?? error).slice(0, 200) }; }
       current = { ...row, status: 'resumed', resumedAt: new Date(now).toISOString(), resumeCount: (row.resumeCount ?? 0) + 1, resumeOutcome: `${outcome.outcome}: ${outcome.reason}` };
-      patch(rowKey(row), { status: 'resumed', resumedAt: current.resumedAt, resumeCount: current.resumeCount, resumeOutcome: current.resumeOutcome, lastCheckedAt: new Date(now).toISOString(), reason: verdict.reason });
+      patch(rowKey(row), { status: 'resumed', verdict: 'stalled', resumedAt: current.resumedAt, resumeCount: current.resumeCount, resumeOutcome: current.resumeOutcome, lastCheckedAt: new Date(now).toISOString(), reason: verdict.reason });
       summary.resumed += 1;
     }
     const reportKey = `${verdict.verdict}:${Boolean(current.resumedAt)}:${current.resumeCount ?? 0}`;
@@ -206,9 +207,15 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     }
   }
   if (!dryRun) {
-    const log = path.join(home, '.claude', 'logs', 'auto-progress-watch.log');
-    fs.mkdirSync(path.dirname(log), { recursive: true });
-    fs.appendFileSync(log, `${new Date(now).toISOString()} ${JSON.stringify(summary)}\n`);
+    const log = path.join(home, '.claude', 'logs', 'auto-progress-watch.summary.log');
+    try {
+      (io.mkdirSync ?? fs.mkdirSync)(path.dirname(log), { recursive: true });
+      (io.appendFileSync ?? fs.appendFileSync)(log, `${new Date(now).toISOString()} ${JSON.stringify(summary)}\n`);
+    } catch (error) { (io.stderr ?? console.error)(`auto-progress-watch: summary log failed: ${error?.message ?? error}`); }
+    try {
+      const digest = io.digest ?? (await import('./auto-progress-digest.mjs')).run;
+      summary.digest = await digest({ home, now, slot: new Date(now).getHours() < 12 ? '朝' : '夕', io: io.digestIo ?? {} });
+    } catch (error) { summary.errors.push(`digest: ${String(error?.message ?? error).slice(0, 120)}`); }
   }
   return summary;
 }

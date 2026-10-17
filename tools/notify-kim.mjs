@@ -11,6 +11,8 @@ const API = 'https://discord.com/api/v10';
 const MAX_CONTENT = 2_000;
 const OMITTED = '…(以下省略)';
 const USER_AGENT = 'orgiast-notify-kim/1.0';
+// kim の Discord ユーザーID（秘密ではない）。設定ファイルの無い PC でも DM が届くよう既定値にする。
+export const KIM_DISCORD_USER_ID = '715210673642012733';
 
 function readTrimmed(file) { try { return fs.readFileSync(file, 'utf8').trim(); } catch { return ''; } }
 
@@ -47,7 +49,8 @@ export async function notifyKim(text, {
   plainJaImpl = toPlainJa,
 } = {}) {
   const resolvedUserId = userId !== undefined ? userId : (process.env.ORGIAST_DISCORD_USER_ID?.trim()
-    || readTrimmed(path.join(home, '.claude', 'orgiast-discord-user-id.txt')));
+    || readTrimmed(path.join(home, '.claude', 'orgiast-discord-user-id.txt'))
+    || KIM_DISCORD_USER_ID);
   const resolvedToken = token !== undefined ? token : resolveDiscordBotToken(home);
   // kim 宛の全通知を、システムを知らない人でも読める日本語にしてから送る。
   // 失敗しても送信は止めない(plainJaImpl は例外を投げない契約)。

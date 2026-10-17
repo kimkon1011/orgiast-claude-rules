@@ -38,7 +38,9 @@ kim への DM は「完了」「見張り開始」「見張りの結果」「判
 
 **Discord への文言は、システムを知らない高校生でもわかる簡単な日本語**にする。専門用語・英語の内部コード（daily_iter_cap, runner_error, noop, P1, PR, iter など）・コマンド・ID を本文に出さない。1文は短く、最大3〜4行。PC名は末尾に「（<hostname>）」で小さく付ける程度は可。目的文の中の `[P1タスク]` のような角括弧タグは通知時に除去する。
 
-判断が必要なら、はい／いいえで答えられる1問を `pause --question "<質問>"` に渡す。はいで実行してよい具体的な操作を質問に含め、保留した操作を handoff に記録する。DM の「はい」で再開、「いいえ」で停止する。
+判断が必要なら、はい／いいえで答えられる1問を `pause --question "<質問>"` に渡す。はいで実行してよい具体的な操作を質問に含め、保留した操作を handoff に記録する。DM の「はい」で保留した施策を実行でき、「いいえ」で停止する。
+
+pendingQuestion がある間は、その質問の答えが必要な施策には触らず、巡回順の他の項目を進める。答え（Discord の返信）を受け取ったら pendingQuestion を消してその施策を進める（「いいえ」なら実行しない）。質問付きの pause は全体を停止しない。
 
 ## モデル規約
 
@@ -46,7 +48,7 @@ kim への DM は「完了」「見張り開始」「見張りの結果」「判
 
 ## status / stop / pause / resume
 
-対応する `node "<repo>/tools/autopilot-tick.mjs" <サブコマンド>` を実行し、JSON の結果を1〜3行で報告する。status には `--pretty` を使える。stop / pause は handoff を書き、対話ループの ScheduleWakeup も stop にする。resume 成功時、対話セッションなら start と同じ `/loop` を再開する。日次・累計上限は resume でリセットされない。noop 連続数は kim の明示的な再開時に0に戻る。done は次回 pre で次の目的を自動補充する。
+対応する `node "<repo>/tools/autopilot-tick.mjs" <サブコマンド>` を実行し、JSON の結果を1〜3行で報告する。status には `--pretty` を使える。stop / 質問なしの pause は handoff を書き、対話ループの ScheduleWakeup も stop にする。resume 成功時、対話セッションなら start と同じ `/loop` を再開する。日次・累計上限は resume でリセットされない。noop 連続数は kim の明示的な再開時に0に戻る。done は次回 pre で次の目的を自動補充する。
 
 ## 実行経路と復帰
 

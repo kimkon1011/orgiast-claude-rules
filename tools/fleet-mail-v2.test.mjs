@@ -370,6 +370,76 @@ test('C11 busy inbox lock skips mutations and transport then permits retry', asy
   assert.equal(await main(['--ack', mail().id], f.deps), LOCK_BUSY_EXIT); assert.equal(f.calls.length, 0); assert.equal(f.read(mail().id).status, 'delivered'); assert.equal(f.output.length, 0);
   fs.unlinkSync(lock); await main(['--ack', mail().id], f.deps); assert.equal(f.read(mail().id).status, 'done'); assert.equal(f.calls.length, 1);
 });
+for (const code of ['EPERM', 'EBUSY']) for (const operation of ['openSync', 'mkdirSync', 'statSync']) {
+  test(`C11 Windows ${operation} ${code} contention waits without stealing ownership`, t => {
+    const f = fixture(t); f.save(mail());
+    const lock = path.join(f.inbox, `${mail().id}.json.lock`);
+    const descriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    t.after(() => Object.defineProperty(process, 'platform', descriptor));
+    fs.writeFileSync(lock, 'other owner');
+    const original = fs[operation]; let faults = 0, callbacks = 0;
+    t.mock.method(fs, operation, (...args) => {
+      if (args[0] === (operation === 'mkdirSync' ? `${lock}.reclaim` : lock) && faults++ === 0) {
+        throw Object.assign(new Error('sharing conflict'), { code });
+      }
+      return original(...args);
+    });
+    const delays = [];
+    t.mock.method(Atomics, 'wait', (...args) => {
+      delays.push(args[3]);
+      assert.equal(callbacks, 0);
+      assert.equal(fs.readFileSync(lock, 'utf8'), 'other owner');
+      assert.equal(fs.existsSync(`${lock}.reclaim`), false);
+      fs.unlinkSync(lock); // The owner releases while this caller waits.
+      return 'timed-out';
+    });
+    const result = updateInbox(mail().id, current => {
+      callbacks++; return { ...current, status: 'done' };
+    }, { home: f.home });
+    assert.equal(result.status, 'done'); assert.equal(callbacks, 1);
+    assert.equal(f.read(mail().id).status, 'done');
+    assert.deepEqual(delays, [INBOX_LOCK_DELAY_MS]);
+    assert.equal(fs.existsSync(lock), false);
+  });
+  test(`C11 persistent Windows ${operation} ${code} contention stays bounded`, t => {
+    const f = fixture(t); f.save(mail());
+    const lock = path.join(f.inbox, `${mail().id}.json.lock`);
+    const descriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    t.after(() => Object.defineProperty(process, 'platform', descriptor));
+    fs.writeFileSync(lock, 'other owner');
+    const original = fs[operation]; let faults = 0;
+    t.mock.method(fs, operation, (...args) => {
+      if (args[0] === (operation === 'mkdirSync' ? `${lock}.reclaim` : lock)) {
+        faults++; throw Object.assign(new Error('sharing conflict'), { code });
+      }
+      return original(...args);
+    });
+    const delays = [];
+    t.mock.method(Atomics, 'wait', (...args) => { delays.push(args[3]); return 'timed-out'; });
+    assert.equal(updateInbox(mail().id, () => assert.fail('no ownership'), { home: f.home }), null);
+    assert.equal(faults, INBOX_LOCK_RETRIES + 1);
+    assert.deepEqual(delays, Array(INBOX_LOCK_RETRIES).fill(INBOX_LOCK_DELAY_MS));
+    assert.equal(fs.readFileSync(lock, 'utf8'), 'other owner');
+    assert.equal(f.read(mail().id).status, 'delivered');
+    assert.equal(fs.existsSync(`${lock}.reclaim`), false);
+  });
+}
+for (const [platform, code] of [['linux', 'EPERM'], ['linux', 'EBUSY'], ['win32', 'EACCES'], ['win32', 'EIO']]) {
+  test(`C11 unrelated ${platform} ${code} lock errors propagate`, t => {
+    const f = fixture(t); f.save(mail());
+    const lock = path.join(f.inbox, `${mail().id}.json.lock`);
+    const descriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: platform });
+    t.after(() => Object.defineProperty(process, 'platform', descriptor));
+    const original = fs.openSync, error = Object.assign(new Error('lock failure'), { code });
+    t.mock.method(fs, 'openSync', (...args) => { if (args[0] === lock) throw error; return original(...args); });
+    t.mock.method(Atomics, 'wait', () => assert.fail('must not wait'));
+    assert.throws(() => updateInbox(mail().id, () => assert.fail('no ownership'), { home: f.home }), e => e === error);
+    assert.equal(f.read(mail().id).status, 'delivered');
+  });
+}
 test('C11 callback errors release locks and delayed server responses preserve hook fields', async t => {
   const f = fixture(t); f.save(mail());
   assert.throws(() => updateInbox(mail().id, () => { throw new Error('callback'); }, { home: f.home }), /callback/);
@@ -432,8 +502,11 @@ test('C11 concurrent workers preserve every inbox read-modify-write update', asy
     worker.on('message', value => { completed = value; }); worker.on('error', reject);
     worker.on('exit', code => code ? reject(new Error('worker failed')) : resolve(completed));
   })));
-  assert.equal(counts.reduce((a, b) => a + b, 0), workers * iterations);
-  assert.equal(f.read(mail().id).increments, workers * iterations);
+  // updateInbox deliberately returns null when its bounded lock wait expires.
+  // Every successful update must survive, even when some attempts were busy.
+  const completed = counts.reduce((a, b) => a + b, 0);
+  assert.ok(completed > 0 && completed <= workers * iterations);
+  assert.equal(f.read(mail().id).increments, completed);
 });
 test('C6 quarantine failures are bounded even when the same invalid broadcast is polled again', async t => {
   const f = fixture(t); let failures = 0;

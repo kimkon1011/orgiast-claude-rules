@@ -312,6 +312,11 @@ export const CAPABILITY_BACKOFF_MS = 3600000;
 export const SERVER_MAX_ATTEMPTS = 5;
 export const INTERRUPTED_PROMPT_MS = 35 * 60000;
 export const INTERRUPTED_PROMPT_BODY = '実行が中断・タイムアウト（結果ファイル未生成）';
+// Windows can report a sharing/delete-pending conflict while a lock is released.
+// These errors do not establish ownership or prove that the lock is stale.
+function windowsLockBusy(error) {
+  return process.platform === 'win32' && ['EPERM', 'EBUSY'].includes(error.code);
+}
 // The callback runs synchronously while this file's lock is held. Never hold it over I/O to GAS.
 // null means missing/busy/no change; callers must skip dependent work in that case.
 export function updateInbox(id, fn, { home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now, retries = INBOX_LOCK_RETRIES, delayMs = INBOX_LOCK_DELAY_MS } = {}) {
@@ -321,13 +326,15 @@ export function updateInbox(id, fn, { home = process.env.ORGIAST_HOME || os.home
   for (let attempt = 0; attempt <= retries; attempt++) {
     try { fd = fs.openSync(lock, 'wx', 0o600); break; }
     catch (error) {
-      if (error.code !== 'EEXIST') throw error;
+      if (error.code !== 'EEXIST' && !windowsLockBusy(error)) throw error;
       const reclaim = `${lock}.reclaim`;
       let reclaimed = false, ownsReclaim = false;
-      try {
+      // Only EEXIST permits stale inspection; sharing conflicts use the same
+      // bounded wait without touching another worker's lock.
+      if (error.code === 'EEXIST') try {
         fs.mkdirSync(reclaim); ownsReclaim = true;
         if (now() - fs.statSync(lock).mtimeMs > INBOX_LOCK_STALE_MS) { fs.unlinkSync(lock); reclaimed = true; }
-      } catch (error) { if (!['EEXIST', 'ENOENT'].includes(error.code)) throw error; }
+      } catch (error) { if (!['EEXIST', 'ENOENT'].includes(error.code) && !windowsLockBusy(error)) throw error; }
       finally { if (ownsReclaim) fs.rmdirSync(reclaim); }
       if (reclaimed) { attempt--; continue; }
       if (attempt === retries) return null;

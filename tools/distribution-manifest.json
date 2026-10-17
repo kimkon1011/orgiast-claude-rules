@@ -1,7 +1,7 @@
 {
   "version": 1,
   "_note": "配布対象の単一定義。stuck-dialog-watch / stall-scan と設定は tools、手順書は docs として既存PCへ配布する。onboarding-sync の zip フォールバックはここを読む。リポのトップレベル全項目は dirs / files / notDistributed のどれかに入れること（tools/distribution-coverage.test.mjs が検査）。",
-  "dirs": ["tools", "rules-extracted", "skills", "packages", "protocols", "rules", "docs", "decisions", "config", "scripts"],
+  "dirs": ["tools", "rules-extracted", "skills", "packages", "protocols", "rules", "docs", "decisions", "config", "scripts", "playbooks"],
   "files": ["fleet-pc-map.json", "fleet-command.json", "fleet-directives.json", "manifest.json", "ONBOARDING.md", "CLAUDE.md.template"],
   "notDistributed": {
     ".agents": { "reason": "ローカルエージェント環境の管理領域。PC配布対象外" },

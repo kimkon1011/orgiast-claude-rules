@@ -2,6 +2,7 @@
 export const GATE_CONTRACT = {"name": "stop-gate-runner", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "stop-gate-runner"}]};
 // 2026-09-06: Stop 304回中198回が再Stop、handoff-quality 78件中71件が誤爆だった。
 // 9プロセスの逐次差し戻しを1回の評価・1つのblockへまとめ、userの再読を最大1回にする。
+import { evaluatePastLogSearch, listPlaybookNames, classifyHandoff } from './past-log-search-gate.mjs';
 import fs from 'node:fs';
 import { applyNamedGatePolicy } from './gate-runtime.mjs';
 import crypto from 'node:crypto';
@@ -39,6 +40,7 @@ import { evaluateShallowAnswer } from './shallow-answer-gate.mjs';
 
 
 const home = () => process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || os.homedir();
+export const FORM_GATES = ['handoff-quality-gate', 'manual-request-fullsteps-gate', 'handoff-info-guard', 'handoff-branch-coverage-gate', 'user-burden-gate', 'handoff-investigation-gate'];
 const HANDOFF_HINT = "末尾に『次に kim がすること』『この後の自動進行』『このセッション: /session-close は終わっているので、このセッションを閉じてよい / /session-close は不要なので、このセッションを閉じてよい / /session-close をして（まだ閉じない） / まだ閉じない（作業中）』の定型文を3行で入れること(user が『この先はどうしたらいいの？』と聞き返した回数: 7日で9回)";
 
 function fullStepsReason(missing) {
@@ -47,6 +49,7 @@ function fullStepsReason(missing) {
 
 export async function evaluateGates(ctx, auditOptions = {}) {
   const gates = [
+    ['past-log-search-gate', () => evaluatePastLogSearch({ text: ctx.assistantText, humanText: ctx.humanText, transcriptRaw: ctx.transcriptRaw, playbookNames: listPlaybookNames(home()) })],
     ['handoff-quality-gate', () => evaluateQuality({ ...ctx.input, assistant_text: ctx.assistantText, transcript_raw: ctx.transcriptRaw })],
     ['handoff-action-gate', () => evaluateHandoffActionFromRaw({ text: ctx.assistantText, transcriptRaw: ctx.transcriptRaw })],
     ['manual-request-fullsteps-gate', () => { if (desktopLauncherPattern.test(ctx.assistantText) && judgeUserBurden(ctx.assistantText, ctx.humanText).decision === 'pass') return { decision: 'pass' }; const result = judgeFullSteps(ctx.assistantText); return result.triggered && result.missing.length ? { decision: 'block', reason: fullStepsReason(result.missing), code: 'FULL-STEPS' } : { decision: 'pass' }; }],
@@ -138,15 +141,25 @@ export async function run(input, context, auditOptions = {}) {
     if (value.decision === 'block') effective.push(value);
     else if (value.decision === 'warn') warnings.push(`${value.name}: ${value.reason}`);
   }
-  evaluated.results = effective;
+  const handoffKind = classifyHandoff(assistantText);
+  const demoted = handoffKind === 'manual-steps' ? [] : effective.filter(({ name }) => FORM_GATES.includes(name)).map(({ name }) => name);
+  evaluated.results = effective.filter(({ name }) => !demoted.includes(name));
   const systemMessage = warnings.length ? warnings.join('\n') : undefined;
   const blockedBy = evaluated.results.map(({ name }) => name);
   const reasonCodes = [...evaluated.results.map(({ code, name }) => code || name), ...evaluated.errors];
   const cap = stateResult(sessionId, blockedBy.length > 0, assistantText);
   const verdict = cap.retryCap ? 'retry-cap' : blockedBy.length ? 'block' : 'pass';
-  const record = { ...base, verdict, blockedBy, reasonCodes, retryCap: cap.retryCap, sameTextRetries: cap.sameTextRetries ?? 0, auditEvidence: audit.record.evidence }; ledger(record);
+  const record = { ...base, verdict, blockedBy, reasonCodes, demoted, handoffKind, retryCap: cap.retryCap, sameTextRetries: cap.sameTextRetries ?? 0, auditEvidence: audit.record.evidence }; ledger(record);
   if (verdict !== 'block') return { record, ...(systemMessage ? { systemMessage } : {}) };
-  const sections = evaluated.results.map(({ name, reason }) => `### ${name}\n- ${reason}`);
+  const sections = [];
+  let formAdded = false;
+  for (const { name, reason } of evaluated.results) {
+    if (!FORM_GATES.includes(name)) { sections.push(`### ${name}\n- ${reason}`); continue; }
+    if (formAdded) continue;
+    formAdded = true;
+    const summaries = evaluated.results.filter(r => FORM_GATES.includes(r.name)).map(r => `- ${r.name}: ${String(r.reason || '').split(/\r?\n/).slice(0, 2).map(line => line.slice(0, 200)).join(' ')}`);
+    sections.push(`### 手渡しの形式（1回の書き直しでまとめて直す）\n${summaries.join('\n')}`);
+  }
   if (!blockedBy.includes('next-action-gate') && !hasRequiredFooter(assistantText)) sections.push(`### ピギーバック・ヒント\n- ${HANDOFF_HINT}`);
   return { decision: 'block', reason: sections.join('\n\n'), record, ...(systemMessage ? { systemMessage } : {}) };
 }

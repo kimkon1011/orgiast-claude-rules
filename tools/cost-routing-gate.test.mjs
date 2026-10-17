@@ -11,3 +11,14 @@ const cases = [
 ];
 for (const [prompt, lane] of cases) test(`${prompt} => ${lane}`, () => assert.equal(classifyRequest(prompt).lane, lane));
 test('hook先頭行と状態保存', () => { const input = JSON.stringify({ prompt:'実装して', session_id:'s1' }); const run=spawnSync(process.execPath,['tools/cost-routing-gate.mjs'],{input,encoding:'utf8',env:{...process.env,ORGIAST_HOME:'/tmp/cost-routing-gate-test'}}); const out=JSON.parse(run.stdout); assert.match(out.hookSpecificOutput.additionalContext,/^\[実行レーン\]/); });
+
+test('userへの操作案内では節約圧を除き調査優先を保存する', async t => {
+  const fs = await import('node:fs'), os = await import('node:os'), path = await import('node:path');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'routing-burden-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  for (const [prompt, userFacing] of [['この画面で次どこ押せばいい？ [Image #1]', true], ['hook を実装して', false]]) {
+    const result = spawnSync(process.execPath, ['tools/cost-routing-gate.mjs'], { input: JSON.stringify({ prompt, session_id: 's' }), encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home } });
+    assert.equal(result.status, 0, result.stderr); const ctx = JSON.parse(result.stdout).hookSpecificOutput.additionalContext;
+    if (userFacing) { assert.match(ctx, /^\[調査優先\]/); assert.doesNotMatch(ctx, /3 ターン以内|Read\/Grep 数回/); } else assert.match(ctx, /3 ターン以内/);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(home, '.claude', 'session-lane', 's.json'))).userFacing, userFacing);
+  }
+});

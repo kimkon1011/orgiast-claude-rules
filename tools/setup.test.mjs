@@ -278,3 +278,15 @@ test('E task:fleet-mail converge adds hub configuration even with the v2 migrati
   const settings = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'));
   assert.ok(settings.hooks.Stop.some(g => g.hooks.some(h => h.command.includes('fleet-question-relay.mjs') && h.timeout === 5)));
 });
+
+test('playbook配布は未導入だけコピーしPCの追記を保持する', async t => {
+  const { distributePlaybooks } = await import('./lib/playbook-distribution.mjs');
+  const repo = temp('playbook-repo-'), home = temp('playbook-home-'); t.after(() => { fs.rmSync(repo, { recursive: true, force: true }); fs.rmSync(home, { recursive: true, force: true }); });
+  write(path.join(repo, 'playbooks', 'Example.md'), '実測');
+  assert.equal(distributePlaybooks(repo, home), 1);
+  const target = path.join(home, '.claude', 'playbooks', 'Example.md'); assert.equal(fs.readFileSync(target, 'utf8'), '実測');
+  write(target, 'PCで追記した実測'); assert.equal(distributePlaybooks(repo, home), 0); assert.equal(fs.readFileSync(target, 'utf8'), 'PCで追記した実測');
+  const mf = path.join(home, 'manifest.json'); write(mf, JSON.stringify(manifest([])));
+  const result = run(['--converge', '--home', home, '--manifest', mf, '--json']); assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).items.find(i => i.id === 'playbooks').status, 'OK');
+});

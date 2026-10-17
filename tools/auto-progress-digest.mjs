@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { isEntry } from './is-entry.mjs';
 import { notifyKim } from './notify-kim.mjs';
-import { ledgerFile, readLedger } from './auto-progress-ledger.mjs';
+import { ledgerFile, readLedger, latestOpenPromises } from './auto-progress-ledger.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 
 export const WINDOW_MS = 24 * 3600 * 1000;
@@ -32,22 +32,27 @@ function deadlinePassed(row, now) {
 }
 
 export function selectRows(rows, now = Date.now(), since = now - WINDOW_MS) {
-  return (Array.isArray(rows) ? rows : []).filter((row) => {
+  const ledger = Array.isArray(rows) ? rows : [];
+  const active = new Set(latestOpenPromises(ledger));
+  return ledger.filter((row) => {
     if (row.status === 'done') return Number.isFinite(Date.parse(row.doneAt)) && Date.parse(row.doneAt) > since;
-    if (row.status === 'open' && deadlinePassed(row, now)) return true;
-    return row.status === 'resumed' || row.verdict === 'in_progress' || (row.status === 'open' && Number.isFinite(Date.parse(row.lastCheckedAt)));
+    return active.has(row);
   }).sort((a, b) => rowTime(a) - rowTime(b));
 }
 
-const verdictOf = (row) => row.status === 'done' ? 'done' : row.status === 'resumed' ? `resumed${row.resumeOutcome ? ` (${row.resumeOutcome})` : ''}` : row.verdict || (row.lastCheckedAt ? 'in_progress' : 'open/期限超過');
+const verdictOf = (row, now) => row.status === 'done' ? 'done' : row.status === 'resumed' ? `resumed${row.resumeOutcome ? ` (${row.resumeOutcome})` : ''}` : row.verdict || (row.status === 'stalled' ? 'stalled' : deadlinePassed(row, now) ? 'open/期限超過' : row.lastCheckedAt ? 'in_progress' : 'open');
 export function formatDigest(rows, now = Date.now(), label = '') {
   if (!rows.length) return '';
   const lines = rows.map((row) => {
     const purpose = row.purpose || row.sessionPurpose || row.objective;
     const judgedAt = row.doneAt || row.lastCheckedAt || row.resumedAt || row.ts;
-    return `・${row.pc || label}／${purpose ? `目的: ${String(purpose).slice(0, 80)}／` : ''}約束: ${String(row.promise || '').slice(0, 120)}／判定: ${verdictOf(row)}／${judgedAt || new Date(now).toISOString()}`;
+    return `・${row.pc || label}／${purpose ? `目的: ${String(purpose).slice(0, 80)}／` : ''}約束: ${String(row.promise || '').slice(0, 120)}／判定: ${verdictOf(row, now)}／${judgedAt || new Date(now).toISOString()}`;
   });
-  return `${label} 自動進行の定期進捗 ${rows.length}件\n${lines.join('\n')}`;
+  const pending = latestOpenPromises(rows);
+  const ages = pending.map(row => Date.parse(row.ts)).filter(Number.isFinite);
+  const oldest = ages.length ? Math.max(0, Math.floor((now - Math.min(...ages)) / WINDOW_MS)) : pending.length ? '?' : 0;
+  const backlog = `未処理の約束 ${pending.length}件・最古 ${oldest}日前${pending.length > 10 ? '（詰まり警告）' : ''}`;
+  return `${backlog}\n${label} 自動進行の定期進捗 ${rows.length}件\n${lines.join('\n')}`;
 }
 
 export function splitMessages(text, limit = MAX_MESSAGE) {

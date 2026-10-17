@@ -9,14 +9,14 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { parseEnvText } from './env-kv.mjs';
-import { ledgerFile, readLedger, writeLedger } from './auto-progress-ledger.mjs';
+import { ledgerFile, readLedger, writeLedger, OPEN_STATUSES, latestOpenPromises } from './auto-progress-ledger.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 
 export const GRACE_MS = 6 * 3600 * 1000;
 export const EXPIRE_MS = 7 * 86400000;
 export const MAX_RESUMES = 3; // 1件あたりの累計
-export const MAX_RESUMES_PER_RUN = 2; // 1回の巡回あたり（定期タスクの60分枠に判定・送信の余裕を残す）
-const WATCHED = new Set(['open', 'resumed']);
+export const MAX_RESUMES_PER_RUN = 4; // 1回の巡回あたり（4件 × 最大20分）
+const WATCHED = OPEN_STATUSES;
 const rowKey = (row) => `${row.pc}|${row.user}|${row.sessionId}|${row.ts}`;
 const localDay = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`; };
 
@@ -173,9 +173,22 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     const rows = readLedger(file);
     writeLedger(file, rows.map((r) => rowKey(r) === key ? { ...r, ...changes, status: WATCHED.has(r.status) ? (changes.status ?? r.status) : r.status } : r));
   };
-  const summary = { checked: 0, done: 0, inProgress: 0, stalled: 0, resumed: 0, reported: 0, expired: 0, graced: 0, errors: [] };
+  const summary = { checked: 0, done: 0, inProgress: 0, stalled: 0, resumed: 0, reported: 0, expired: 0, graced: 0, superseded: 0, errors: [] };
   const config = (io.sheetConfig ?? sheetConfig)(home);
-  for (const row of readLedger(file).filter((r) => WATCHED.has(r.status))) {
+  const rows = readLedger(file);
+  const candidates = latestOpenPromises(rows);
+  const selected = new Set(candidates);
+  const normalized = rows.map((row) => {
+    if (!WATCHED.has(row.status) || selected.has(row)) return row;
+    summary.superseded += 1;
+    return { ...row, status: 'superseded' };
+  });
+  // Update by row identity: equal timestamps share rowKey, so patch(key) would
+  // also supersede the selected latest row. No await occurs between read/write.
+  if (!dryRun && summary.superseded) writeLedger(file, normalized);
+  const needsKim = row => !['', 'なし'].includes(String(row.nextKim ?? '').trim());
+  candidates.sort((a, b) => Number(needsKim(a)) - Number(needsKim(b)) || Date.parse(a.ts) - Date.parse(b.ts));
+  for (const row of candidates) {
     const recorded = Date.parse(row.ts);
     if (!Number.isFinite(recorded)) continue;
     if (now - recorded < GRACE_MS) { summary.graced += 1; continue; }

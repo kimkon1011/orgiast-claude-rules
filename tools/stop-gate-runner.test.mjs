@@ -23,8 +23,9 @@ test('複数gateの理由を1つのblockへ合流する', () => {
   assert.equal(result.status, 0, result.stderr);
   const output = JSON.parse(result.stdout);
   assert.equal(output.decision, 'block');
-  assert.match(output.reason, /### manual-request-fullsteps-gate[\s\S]*FULL-STEPS/);
-  assert.match(output.reason, /### handoff-info-guard[\s\S]*HANDOFF-INFO-GUARD/);
+  // 形式ゲートは仕様変更により単一セクションの箇条書きへまとめる。
+  assert.match(output.reason, /- manual-request-fullsteps-gate[\s\S]*FULL-STEPS/);
+  assert.match(output.reason, /- handoff-info-guard[\s\S]*HANDOFF-INFO-GUARD/);
   assert.match(output.reason, /ピギーバック・ヒント/);
   const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8'));
   assert.ok(record.blockedBy.includes('manual-request-fullsteps-gate'));
@@ -210,7 +211,7 @@ test('handoff-branch-coverage-gate: 初回決め打ちで既存分岐が無い�
   assert.equal(result.status, 0, result.stderr);
   const output = JSON.parse(result.stdout);
   assert.equal(output.decision, 'block');
-  assert.match(output.reason, /### handoff-branch-coverage-gate[\s\S]*\[BRANCH-COVERAGE\][\s\S]*分岐:既存の場合/);
+  assert.match(output.reason, /- handoff-branch-coverage-gate[\s\S]*\[BRANCH-COVERAGE\][\s\S]*分岐:既存の場合/);
   const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8'));
   assert.ok(record.blockedBy.includes('handoff-branch-coverage-gate'));
   // 必要性(fullsteps) → 分岐網羅(branch) の順で並ぶ。
@@ -255,31 +256,32 @@ const burdenAudit = '手間監査: CLI を試したが OAuth の本人同意が�
 const burdenCommand = '```powershell\nStart-Process https://example.com/consent\n```';
 const desktopPath = 'C:\\Users\\日本語 user\\OneDrive\\Desktop\\登録（ダブルクリック）.cmd';
 const desktopAudit = '手間監査: ①Claude の実行は classifier に拒否。②MCP を試したが権限不足で失敗。user は1操作。';
+// 形式検査の既存ケースは明示的な操作依頼に揃える（報告・返信は新仕様で降格するため）。
 const burdenCases = [
   ['pwsh 単独は block', `実行してください。\n\`\`\`pwsh\npwsh -File task.ps1\n\`\`\`\n${burdenAudit}`, true, /make-desktop-launcher/],
   ['Desktop cmd と二経路の監査', `次に kim がすること: ダブルクリックする\n${desktopPath}\n${desktopAudit}`, false],
   ['Desktop cmd だけは監査不足', `次に kim がすること: ダブルクリックする\n${desktopPath}\n${burdenAudit}`, true, /①Claude/],
   ['Claude 自身の実行説明', 'Claude 自身が実行しました。\n```pwsh\npwsh -File task.ps1\n```', false],
-  ['遡り参照の実例', '次に kim がすること: 前に送った PowerShell の1行を実行する', true, /遡り参照/],
-  ['コマンドと監査だけでは不可', `次に kim がすること: PowerShell で実行する\n${burdenCommand}\n${burdenAudit}`, true, /make-desktop-launcher/],
+  ['遡り参照の実例', '次に kim がすること: 前に送った PowerShell の1行を実行してください', true, /遡り参照/],
+  ['コマンドと監査だけでは不可', `次に kim がすること: PowerShell で実行してください\n${burdenCommand}\n${burdenAudit}`, true, /make-desktop-launcher/],
   ['完成品なし', `次に kim がすること: 同意ボタンを押す\n${burdenAudit}`, true, /完成品/],
-  ['監査なし', `次に kim がすること: PowerShell で実行する\n${burdenCommand}`, true, /手間監査/],
+  ['監査なし', `次に kim がすること: PowerShell で実行してください\n${burdenCommand}`, true, /手間監査/],
   ['依頼なし', '次に kim がすること: なし', false],
   ['理由付き例外', '次に kim がすること: ケーブルを挿す\n[BURDEN-OK] 物理作業で渡すファイルがないため。', false],
   ['本文だけの依頼', 'リンクを開いてください。', true, /完成品/],
   ['なしでも本文に依頼', 'ボタンを押してください。\n次に kim がすること: なし', true, /完成品/],
-  ['監査に根拠なし', '次に kim がすること: 同意する\nhttps://example.com\n手間監査: こちらでは無理。1クリック。', true, /手間監査/],
-  ['監査に操作回数なし', '次に kim がすること: 同意する\nhttps://example.com\n手間監査: OAuth 本人同意のため。', true, /手間監査/],
-  ['根拠は同じ監査行に必要', '次に kim がすること: 同意する\nhttps://example.com\n手間監査: 1クリック\nOAuth 本人同意のため。', true, /手間監査/],
-  ['理由なしの例外は無効', '次に kim がすること: 実行する\n[BURDEN-OK]', true],
-  ['URL同梱', `次に kim がすること: 本人同意する\nhttps://example.com/consent\n${burdenAudit}`, false],
+  ['監査に根拠なし', '次に kim がすること: 同意ボタンを押す\nhttps://example.com\n手間監査: こちらでは無理。1クリック。', true, /手間監査/],
+  ['監査に操作回数なし', '次に kim がすること: 同意ボタンを押す\nhttps://example.com\n手間監査: OAuth 本人同意のため。', true, /手間監査/],
+  ['根拠は同じ監査行に必要', '次に kim がすること: 同意ボタンを押す\nhttps://example.com\n手間監査: 1クリック\nOAuth 本人同意のため。', true, /手間監査/],
+  ['理由なしの例外は無効', '次に kim がすること: 実行してください\n[BURDEN-OK]', true],
+  ['URL同梱', `次に kim がすること: 本人同意ボタンを押す\nhttps://example.com/consent\n${burdenAudit}`, false],
   ['Desktopファイルパスは完成品でない', `次に kim がすること: ショートカットを開く\nC:\\Users\\kim\\Desktop\\consent.lnk\n${burdenAudit}`, true, /Google Drive/],
-  ['コード中の依頼では発火しない', '```text\n次に kim がすること: 実行する\n```\n修正済みです。', false],
-  ['コード中の監査は無効', `次に kim がすること: 同意する\n\`\`\`text\n${burdenAudit}\n\`\`\``, true, /手間監査/],
+  ['コード中の依頼では発火しない', '```text\n次に kim がすること: 実行してください\n```\n修正済みです。', false],
+  ['コード中の監査は無効', `次に kim がすること: 同意ボタンを押す\n\`\`\`text\n${burdenAudit}\n\`\`\``, true, /手間監査/],
   ['通常報告の参照は対象外', '以前のファイルを修正しました。\n次に kim がすること: なし（完了）', false],
 ];
 for (const prefix of ['前に送った', '先ほどの', 'さっきの', '上の', '前述の', '以前の', '前回の']) {
-  burdenCases.push([`${prefix}の参照`, `次に kim がすること: ${prefix}コマンドを実行する\n${burdenCommand}\n${burdenAudit}`, true, /遡り参照/]);
+  burdenCases.push([`${prefix}の参照`, `次に kim がすること: ${prefix}コマンドを実行してください\n${burdenCommand}\n${burdenAudit}`, true, /遡り参照/]);
 }
 for (const [name, text, blocked, reason] of burdenCases) {
   test(`user-burden-gate: ${name}`, t => {
@@ -293,7 +295,7 @@ for (const [name, text, blocked, reason] of burdenCases) {
     const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8'));
     assert.equal(record.blockedBy.includes('user-burden-gate'), blocked);
     assert.ok(!record.reasonCodes.includes('error:user-burden-gate'));
-    if (blocked) assert.match(JSON.parse(result.stdout).reason, /### user-burden-gate[\s\S]*USER-BURDEN/);
+    if (blocked) assert.match(JSON.parse(result.stdout).reason, /- user-burden-gate[\s\S]*USER-BURDEN/);
   });
 }
 
@@ -301,7 +303,7 @@ test('user-burden-gate: transcript の最後の assistant だけを監査する'
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-burden-transcript-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const transcript = path.join(home, 'transcript.jsonl');
-  const bad = '次に kim がすること: 前に送った PowerShell の1行を実行する';
+  const bad = '次に kim がすること: 前に送った PowerShell の1行を実行してください';
   const good = '次に kim がすること: なし';
   for (const [index, texts] of [[bad, good], [good, bad]].entries()) {
     fs.writeFileSync(transcript, texts.map(text => JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] } })).join('\n'));
@@ -372,4 +374,30 @@ test('handoff-action-gate が stop-gate-runner 配線で動くことを確認', 
   assert.equal(JSON.parse(result.stdout).decision, 'block');
   const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8').trim().split('\n').at(-1));
   assert.ok(record.blockedBy.includes('handoff-action-gate'));
+});
+
+test('完了報告の引用に反応した形式gateは台帳だけに降格する', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-demoted-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const result = invoke(home, 'done', '修正が完了しました。\n> 次に kim がすること: 実行してください\n次に kim がすること: 完了報告のみ');
+  const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8'));
+  assert.equal(record.handoffKind, 'none'); assert.ok(record.demoted.includes('manual-request-fullsteps-gate')); assert.ok(record.demoted.includes('user-burden-gate'));
+  assert.ok(!record.blockedBy.includes('manual-request-fullsteps-gate')); assert.doesNotMatch(result.stdout, /FULL-STEPS/);
+});
+test('返信1回の依頼ではFULL-STEPSとUSER-BURDENを出さない', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-reply-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const result = invoke(home, 'reply', '一言返信してください。\n次に kim がすること: 返信してください');
+  const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8'));
+  assert.equal(record.handoffKind, 'reply-only'); assert.ok(record.demoted.includes('manual-request-fullsteps-gate')); assert.ok(record.demoted.includes('user-burden-gate'));
+  assert.doesNotMatch(result.stdout, /FULL-STEPS|USER-BURDEN/);
+});
+test('MacroDroidの検索不足を先に示し形式は1セクションにまとめる', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-past-log-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const transcript_path = path.join(home, 't.jsonl'); fs.writeFileSync(transcript_path, JSON.stringify({ type: 'user', message: { content: 'MacroDroid を使いたい' } }));
+  const result = invoke(home, 'manual', 'MacroDroid を開いてください。', { transcript_path });
+  const output = JSON.parse(result.stdout);
+  assert.match(output.reason, /^### past-log-search-gate/);
+  assert.equal((output.reason.match(/### 手渡しの形式/g) || []).length, 1);
+  assert.match(output.reason, /- manual-request-fullsteps-gate:/); assert.match(output.reason, /- user-burden-gate:/);
+  const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8'));
+  assert.ok(record.blockedBy.includes('past-log-search-gate')); assert.deepEqual(record.demoted, []);
 });

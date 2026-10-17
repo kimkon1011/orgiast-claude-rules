@@ -5,6 +5,8 @@ let wrapRegisteredGates = () => 0;
 let gateRuntimeReady = false;
 try { ({ wrapRegisteredGates } = await import('./gate-hook-runner.mjs')); gateRuntimeReady = true; } catch { /* 同期途中でも既存登録を維持 */ }
 import os from 'node:os';
+let resolveFleetLabel = () => '';
+try { ({ resolveFleetLabel } = await import('./lib/fleet-label.mjs')); } catch { /* 同期途中はkim専用hookを登録しない */ }
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -274,6 +276,7 @@ try {
   added += migrate(settings.hooks.UserPromptSubmit, 'current-session.mjs', 'current-session.mjs', command('current-session.mjs'));
   if (add(settings.hooks.UserPromptSubmit, 'current-session.mjs', { hooks: [{ type: 'command', command: command('current-session.mjs'), timeout: 5 }] })) added += 1;
   added += migrate(settings.hooks.UserPromptSubmit, 'delegation-gate', 'cost-routing-gate.mjs', command('cost-routing-gate.mjs'));
+  if (add(settings.hooks.UserPromptSubmit, 'playbook-inject.mjs', { hooks: [{ type: 'command', command: command('playbook-inject.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.UserPromptSubmit, 'cost-routing-gate.mjs', { hooks: [{ type: 'command', command: command('cost-routing-gate.mjs') }] })) added += 1;
   // additionalContext を返すため同期実行。高額モデル・肥大セッションを純ローカルで検知する。
   if (add(settings.hooks.UserPromptSubmit, 'expensive-session-guard.mjs', { hooks: [{ type: 'command', command: command('expensive-session-guard.mjs'), timeout: 5 }] })) added += 1;
@@ -328,6 +331,9 @@ try {
   added += migrate(settings.hooks.Stop, 'verify-before-done-detector.ps1', 'verify-before-done-detector.mjs', command('verify-before-done-detector.mjs'));
   // 人に手作業を頼むとき、初見の人でも実行できる手順になっているかを検査する(§1.5.1)。
   if (add(settings.hooks.Stop, 'verify-before-done-detector.mjs', { hooks: [{ type: 'command', command: command('verify-before-done-detector.mjs') }] })) added += 1;
+  if (resolveFleetLabel(home) === 'kim-PC' && !commands(settings.hooks.UserPromptSubmit).some(cmd => cmd.includes('discord-drafts-context.mjs'))) {
+    if (add(settings.hooks.UserPromptSubmit, 'hooks/discord-drafts-context.mjs', { hooks: [{ type: 'command', command: command('hooks/discord-drafts-context.mjs'), timeout: 5 }] })) added += 1;
+  }
   // kim が読む文書をローカルパスのリンクで渡す違反を止める(モバイルで1クリックで開けない・2026-08-07 kim確定ルール)
   // 作業依頼だけを残して必要なURL・コマンドを省くと、kimが過去ログを探すため同期Stopで差し戻す。
   // 自分で調べられることを user に「確認して教えてください」と外注する応答を止める(§1.1/§1.2)。
@@ -365,6 +371,7 @@ try {
       encoding: 'utf8', env: { ...process.env, ORGIAST_REPO: repo }, windowsHide: true,
     }));
     const known = new Set(fs.readdirSync(path.join(repo, 'tools')).map(name => name.replace(/\.(mjs|ps1)$/, '')));
+    known.add('discord-drafts-context'); // nested tools/hooks entry is also managed
     const managed = command => {
       const text = String(command || '').replace(/\\/g, '/');
       return [...text.matchAll(/(?:"([^"\r\n]+)"|'([^'\r\n]+)'|([^\s"']+))/g)].some(match => {

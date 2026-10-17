@@ -109,7 +109,7 @@ test('手間削減hook 8本を正しいイベントへ登録しstop-gateは登�
   execFileSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { encoding: 'utf8', env });
   const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
   const names = (event) => settings.hooks[event].flatMap((group) => group.hooks || []).map((hook) => path.basename([...String(hook.command).matchAll(/"([^"]+\.mjs)"/g)].at(-1)?.[1] || ''));
-  assert.deepEqual(['automation-first-reminder.mjs', 'credentials-reminder.mjs'].every((name) => names('UserPromptSubmit').includes(name)), true);
+  assert.deepEqual(['automation-first-reminder.mjs', 'credentials-reminder.mjs', 'playbook-inject.mjs'].every((name) => names('UserPromptSubmit').includes(name)), true);
   assert.deepEqual(['pretooluse-headless-background.mjs', 'pretooluse-serial-investigation.mjs', 'pipe-stage-permissions.mjs'].every((name) => names('PreToolUse').includes(name)), true);
   assert.deepEqual(['auto-progress-ledger.mjs', 'stop-gate-runner.mjs', 'handoff-detail-guard.mjs', 'url-format-guard.mjs', 'check-e2e-before-stop.mjs'].every((name) => names('Stop').includes(name)), true);
   assert.equal(Object.values(settings.hooks).flatMap((groups) => groups).flatMap((group) => group.hooks || []).some((hook) => /(?:^|[\\/])stop-gate\.mjs/.test(String(hook.command))), false);

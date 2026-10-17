@@ -473,6 +473,15 @@ async function execute(command, args, ctx) {
         state.consecutiveNoop = 0;
       }
     }
+    // Daily caps are resumable by design (autoResumes). Nothing else clears them:
+    // watchdog() returns early unless the status is 'running', so a capped run
+    // stayed paused forever and every later tick was skipped. Recompute the cap
+    // and lift the pause once it no longer applies (next JST day, or a quiet gap).
+    // A pending question must survive: resumeState() clears it, so wait for the answer.
+    if (state.status === 'paused' && autoResumes(state.pausedReason) && !state.pendingQuestion
+      && !capReason(state, objective, summarize(log, todayKey))) {
+      resumeState(state);
+    }
     // No candidate and no command: leave a completed run byte-for-byte intact.
     if (state.status !== 'done' || control) {
       state.controlCursors = { ...state.controlCursors, ...result.cursors };

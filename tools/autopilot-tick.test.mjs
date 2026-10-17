@@ -56,19 +56,33 @@ test('cap boundaries: iter/hours/noop/total and lifetime stop precedence', () =>
   assert.equal(capReason({ ...state, totalIterations: 200, iterationsToday: 20 }, objective, { hours: 6 }), 'total_cap');
 });
 
-test('JST rollover clears daily count but requires explicit resume from pause', async (t) => {
+test('JST rollover clears a daily cap and resumes it automatically', async (t) => {
   const f = fixture(t);
   await f.call('start', { objective: 'test', 'max-iter-per-day': 1 });
   assert.equal((await f.call('post', { summary: 'work', progress: 10 })).watchdog.reason, 'daily_iter_cap');
-  assert.equal((await f.call('resume')).status, 'paused');
+  assert.equal((await f.call('resume')).status, 'paused'); // the same-day cap cannot be bypassed
   const tomorrow = { now: new Date('2026-09-21T15:00:00Z') };
   const pre = await f.call('pre', {}, tomorrow);
-  assert.equal(pre.verdict, 'pause');
+  assert.equal(pre.verdict, 'run');
   assert.equal(pre.budget.iterationsLeftToday, 1);
-  assert.equal((await f.call('resume', {}, tomorrow)).status, 'running');
+  assert.equal((await f.call('status', {}, tomorrow)).state.status, 'running');
   assert.equal((await f.call('status', {}, tomorrow)).state.totalIterations, 1);
   assert.equal(dateKey('2026-09-21T14:59:59Z'), '2026-09-21');
   assert.equal(dateKey('2026-09-21T15:00:00Z'), '2026-09-22');
+});
+
+test('a pending question keeps a daily-cap pause until the human answers', async (t) => {
+  const f = fixture(t);
+  await f.call('start', { objective: 'test', 'max-iter-per-day': 1 });
+  assert.equal((await f.call('post', { summary: 'work', progress: 10 })).watchdog.reason, 'daily_iter_cap');
+  await f.call('pause', { question: 'このまま進めてよいですか？' });
+  const tomorrow = { now: new Date('2026-09-21T15:00:00Z') };
+  const pre = await f.call('pre', {}, tomorrow);
+  assert.equal(pre.verdict, 'pause');
+  assert.equal(pre.pendingQuestion, 'このまま進めてよいですか？');
+  assert.equal((await f.call('status', {}, tomorrow)).state.pausedReason, 'daily_iter_cap');
+  assert.equal((await f.call('resume', {}, tomorrow)).status, 'running');
+  assert.equal((await f.call('status', {}, tomorrow)).state.pendingQuestion, null);
 });
 
 test('hours cap uses the range of today log timestamps and fires immediately on post', async (t) => {

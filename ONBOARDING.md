@@ -922,7 +922,9 @@ Astra クールダウン中は Sol を使う。明示の `--model astra`（ま�
 - **委譲規律の"仕組み化"**: 監督が実装を抱えていないか(Opus高消費×Codex未使用)を per-PC の tool-adoption-check が日次で🚨検知（§3.0.4）。🚨が出たら即、実装をCodexへ移す。監視だけで是正しないのは違反。
 - 効果は per-PC コストレポーターのモデル別内訳で実測して調整（憶測で決めない）。
 - ※各PCの既定モデルは settings.json `"model"` と claude.ai 組織設定の両方が効く。組織設定側の「既定モデル/カスタム指示」も管理者kimが Opus 監督方針に合わせて更新すること（配布ルールだけでは system-prompt 側の旧記述は変わらない）。
-- **この規律は hook で機械的に強制される**: UserPromptSubmit の cost-routing-gate が実装依頼を検知し、応答冒頭での `[委譲判定]` 宣言を要求する（宣言せず実装を書き始めるのは違反）。PreToolUse の pretooluse-delegation-warn は60行/2500文字を超える実装コードの直接書き込みを検知して警告する。どちらも警告のみでブロックはしない。
+- **この規律は hook で機械的に強制される**: UserPromptSubmit の cost-routing-gate が実装依頼を検知し、応答冒頭での `[委譲判定]` 宣言を要求する（宣言せず実装を書き始めるのは違反）。PreToolUse の pretooluse-delegation-warn / pretooluse-bash-delegation / pretooluse-lane-guard は、まとまった実装コードの直接書き込み・6000字超の使い捨てインラインプログラム・1ターン8回超の直接ツール実行を **モデルを問わず（Fable/Opus/Sonnet/Haiku 全部）常に deny する**（2026-10-17 kim 厳命「Claude だけで絶対に行わない」）。
+- **解除できるのは user のプロンプトだけ**: user が同じ指示に `[CLAUDE-IMPL-OK]`（または `[LANE-OK]`）と書いたとき、UserPromptSubmit の `claude-impl-approval` が **そのセッション・60分限り**の許可を発行する。`~/.claude/cost-enforce-override` ファイル・委譲率の観測・Codex クールダウン中の自動解除は **廃止**（Claude 自身が作れる抜け道は全部塞ぐ）。Codex が上限中でも `codex-do` は deepseek/glm/gemini へ内蔵フォールバックするので、そのまま委譲する。全滅なら実装を止めて費用見込みを kim に提示し、承認マーカーを待つ。
+- **実装サブエージェントも禁止**: `model-agent-guard` は Fable 指定に加え、実装依頼を Explore/Plan 以外のサブエージェントへ渡す Agent 呼び出しを deny する（例外は同じ `[CLAUDE-IMPL-OK]`）。
 - **1セッション=1目的は hook で機械的に担保する**: SessionStart の `session-purpose-gate` が「このセッションの目的を1行宣言せよ」と要求し、最初の依頼をそのセッションの目的として記録する。以後 UserPromptSubmit で**目的ドリフト**（別目的の依頼＝キーワードの重なりが薄い／「別件」「ところで」「次は」等）を検知したら、**着手前に**『ここで /session-close して新セッションで』と1行提案することを強制する（ブロックはしない。userが「続けて」と言えばそのまま継続）。16ターンを超えたセッションには区切り提案のナッジも出る。判定は純ローカル（API課金ゼロ・状態は `~/.claude/session-purpose/<session_id>.json`）。
 - セッションを閉じる時は `/session-close` skill で 成果要約→commit/PR→memory永続化→残TODO→次セッション用テンプレ→`/clear`促し まで完結させる。1セッション=1目的を守り、長い会話に複数タスクを積まない（文脈肥大は精度低下とコスト増を招く）。
 
@@ -1219,6 +1221,17 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
 
 リスクは手動チャージという反復作業ではなく、Claude側の異常検知・自動降格・DM通知で止める。
 
+**2.8.5 AI の従量課金は「払った額」を全アカウント横断で毎日見る。Claude Code を従量課金で動かさない（2026-10-17 kim 厳命・全PC全アカウント・絶対）**
+
+事故: seisaku-team@orgiast.jp 名義の Anthropic Console 組織「よろしくお願いします。's Individual Org」（監視していた組織「オージャスト」とは別）で、2026-07-10 から毎日 $10〜60 の自動チャージが続き、直近100通の領収書だけで $4,240 が流出していた（7/11〜15 に $2,945、10/16 $78、10/17 $55）。Admin API の監視キーは1組織しか見えず、領収書は seisaku-team@ の Gmail に全部届いていたのに誰も読んでいなかった。付録「AI従量課金の見逃し」参照。
+
+1. **払った額の一次情報は Gmail の領収書**。`tools/ai-receipt-scan.mjs` が DWD で `tools/ai-receipt-accounts.json` の全アカウント（kim@ / seisaku-team@ / nishi@ / cr@ / m.kanau@）を毎日読み、ベンダー×組織ごとに台帳 `~/.claude/ai-receipts.jsonl` へ記録する。`cost-improve-loop` が日次で実行し、**未知の課金源・48h で $30 超または3回以上のチャージ・決済失敗/自動チャージ停止/API 停止/上限到達・月 $100 超**を kim に DM する。読めないアカウント（Google Group 等）は「未計測」と明示し、0件を「課金なし」と書かない。
+2. **Anthropic Console 組織を新設・発見したら、その組織の Admin キーを `cost-monitor.env` の `ANTHROPIC_ADMIN_KEY_<LABEL>` として keyserve に登録する**。`cost-report.mjs` / `budget-status.mjs` は複数組織を合算し、組織別に表示する。1組織だけ見て「月 $50 で問題なし」と言わない。
+3. **Claude Code は Team シート（定額）でしか動かさない**。APIキー（`ANTHROPIC_API_KEY` / `apiKeyHelper`）や Console アカウントでのログインは従量課金＝最も高い経路。`api-billing-guard`（SessionStart / UserPromptSubmit / PreToolUse）が検知したら全ツールを deny し、kim へ通知する。例外は kim が同じ指示に `[API-BILLING-OK]` と書いた60分だけ。`claude /login` で「Claude account with subscription」を選び直すのが正しい復旧。
+4. **Team の「上限超過後も従量で使う（extra usage）」は OFF が方針**（2026-09-08 kim）。ON のアカウントを検知したら ⚠️ を出して kim に通知する。
+5. **共有アカウント（seisaku-team@ 等）の Console にカードを登録しない**。アプリの API キーは原則 kim@ の監視済み組織で発行し、キー名にアプリ名を付ける（§1.12 の所有権宣言に「Anthropic 組織名」を含める）。
+6. **自動チャージ（auto-reload）は「上限付き」でだけ ON にする**。Anthropic Console は Settings → Limits の月間上限を必ず設定し、上限の無い自動チャージを放置しない（§2.8.4 の「オートチャージ ON」はこの上限とセット）。
+
 ### 2.9 Drive・共通知識・社内アプリ（§2.9〜2.11）
 
 Driveの移動・知識の正本管理を守り、社内アプリには投稿窓口と通知・完了報告を標準搭載する（`tools/feedback-kit/` の必須6機能を1コマンド導入）。
@@ -1350,6 +1363,13 @@ macOS/Linux は `install-orgiast.sh` を同様に取得して `bash` で実行�
 ## 付録: 事故履歴と根拠
 
 本文の結論を支える経緯・具体例・診断手順を保持する。
+
+**AI従量課金の見逃し: seisaku-team@ の別 Console 組織で3か月 $4,240 超（2026-10-17 発覚・§2.8.5 / §1.18 の根拠）**
+
+- **何が起きたか**: kim が seisaku-team@orgiast.jp で `platform.claude.com/settings/billing` を開くと、10/16〜17 だけで「クレジット付与」$22/$16.92/$22/$17.15/$12.02/$11.12… が並んでいた。seisaku-team@ の Gmail（DWD で読める）には 2026-07-10 から Anthropic の領収書が 201 通、直近 100 通の合計 $4,240.66（7/11〜15 で $2,945、以後ほぼ毎日 $10〜60）、10/16 以降は「$22.00 payment … was unsuccessful」「Auto-reload was paused」「Your Claude API access is turned off（out of usage credits）」が連続していた。組織名は「よろしくお願いします。's Individual Org」（Console 初回アクセス時に自動生成された個人組織に、名前欄へ挨拶文を入れたもの）。月別（領収書の摘要で分解）: 7月 $3,424（うち「Auto recharge extra usage, Team plan」＝Team プランの超過分 $3,224 が 7/7〜7/15 に集中）／8月 $534／9月 $322／10月(17日まで) $384。10/16〜17 の「One-time credit purchase」$29・$44 は API 停止後に人が手で買い足したもの。
+- **なぜ検知できなかったか（4つの穴）**: ①Admin API の監視キーが見ていた組織は「オージャスト」（メンバー kim@ と m.kanau@ だけ、10月は日額 $1〜9）で、seisaku-team@ の組織は**監視対象に存在しなかった**。`budget-status` は Team シートの超過分も「計測不能」と表示するだけだった。②領収書・決済失敗・API停止の通知は全部 seisaku-team@ の Gmail に届いていたが、**誰も（人も Claude も）読む仕組みが無かった**。freee のカード明細は月次で遅く、`ai-cost-unify` の freee 取得は人が立ち会うセッションでしか動かない。③Claude Code を Console/API キーで動かしても、それを検知する hook が無かった。④委譲ガードは `cost-enforce.json` が block の時だけ・Fable/Opus セッションだけ・override ファイルで無効化可、と抜け道だらけで、Sonnet 100% の古川PC（2026-10-07 時点 委譲率 5.9%）は素通りだった。
+- **使っていた経路（判明分）**: 学会協賛ナビ（`gakkai-sponsor.vercel.app`、seisaku-team@ 所有）の SEO 記事生成 `/api/internal/generate-article` と日次ルーチンがサーバー側 `ANTHROPIC_API_KEY` で Claude API を呼ぶ＝毎日の定常 $10〜20 の候補。10/16〜17 の急増分は古川さん（10/09 に Team から削除）の Claude Code 利用と推定（本人PCの transcript は未取得＝未確認）。
+- **直したこと**: §2.8.5（Gmail 領収書の日次スキャン `ai-receipt-scan.mjs`、複数組織 Admin キー、`api-billing-guard`）、§1.18（委譲ガードを全モデル常時 deny・解除は user マーカーのみ）、組織指示（claude.ai Team 設定）への追記。残る手作業は「別組織の Admin キー発行と月間上限設定」（Console の UI でしかできない）。
 
 **設計時点から"手間ゼロ"を織り込む（2026-08-12 kim指示）**
 

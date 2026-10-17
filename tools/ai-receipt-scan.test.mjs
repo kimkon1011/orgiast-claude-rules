@@ -1,0 +1,101 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { buildReceiptQuery, classifyVendor, parseReceiptMail, summarizeReceipts, evaluateReceiptAlerts, formatReceiptReport, scanAiReceipts, alertAiReceipts } from './ai-receipt-scan.mjs';
+const config = JSON.parse(fs.readFileSync(new URL('./ai-receipt-accounts.json', import.meta.url), 'utf8'));
+const now = new Date('2026-10-17T03:00:00Z');
+const mail = { id: 'one', threadId: 'thread', date: '2026-10-16T10:00:00Z', from: '"Anthropic, PBC" <invoice+statements@mail.anthropic.com>', to: 'seisaku-team@orgiast.jp', subject: 'Your receipt from Anthropic, PBC #2666-1376-2870', body: 'Receipt from Anthropic, PBC $22.00 Paid on October 16, 2026 with - 1109 (invoice illustration [...]) Receipt #2666-1376-2870 One-time credit purchase Qty 1 $20.00 Subtotal $20.00 Total excluding tax $20.00 JCT - Japan (10%) $2.00 Total $22.00 Amount paid $22.00 Download receipt (...)' };
+const row = (overrides = {}) => ({ ...parseReceiptMail(mail, config), ...overrides });
+test('query has exact vendor and billing term OR groups', () => {
+  assert.equal(buildReceiptQuery(config, 3), '(from:mail.anthropic.com OR from:anthropic.com OR from:openai.com OR from:payments-noreply@google.com OR from:cloud-billing OR from:google.com OR from:openrouter.ai OR from:x.ai OR from:deepseek.com OR from:moonshot.cn OR from:moonshot.ai OR from:z.ai OR from:zhipuai.cn OR from:bigmodel.cn OR from:cursor.com OR from:cursor.sh OR from:genspark.ai OR from:groq.com OR from:mistral.ai) newer_than:3d (receipt OR invoice OR payment OR "auto-reload" OR "usage credits" OR "spend limit" OR "API access" OR 領収 OR 請求 OR お支払い)');
+  assert.throws(() => buildReceiptQuery(config, NaN));
+});
+test('receipt fixture yields structured fields only, with paid total and card', () => {
+  assert.deepEqual(row(), { messageId: 'one', threadId: 'thread', account: mail.to, vendor: 'anthropic', kind: 'receipt', date: mail.date.replace('Z', '.000Z'), amountUsd: 22, amountJpy: null, currency: 'USD', org: null, card: '- 1109', receiptNo: '2666-1376-2870', subject: mail.subject });
+});
+const fixtures = [
+  { subject: '$17.36 payment to Anthropic, PBC was unsuccessful', from: 'failed-payments@mail.anthropic.com', kind: 'failed_payment', amountUsd: 17.36 },
+  { subject: 'Auto-reload was paused on your Anthropic account', body: "Auto-reload has been turned off for your organization because the most recent auto-reload payment didn't go through.", kind: 'autoreload_paused' },
+  { subject: 'Auto-reload went through on another saved card', body: "The latest $10.93 auto-reload for よろしくお願いします。's Individual Org went through on JCB ending in 7945 because your default card, Visa ending in 5406, was declined.", kind: 'autoreload_other_card', amountUsd: 10.93, org: "よろしくお願いします。's Individual Org", card: 'JCB 7945' },
+  { subject: '[Action needed] Your Claude API access is turned off', snippet: 'Your access to the Claude API has been disabled because your organization &#39;よろしくお願いします。&#39;s Individual Org&#39; is out of usage credits.', kind: 'api_off', org: "よろしくお願いします。's Individual Org" },
+  { subject: 'Your organization has reached its usage credits spend limit', to: 'kim@orgiast.jp', kind: 'spend_limit_reached', org: null },
+  { subject: 'Your organization is approaching its usage credits spend limit', kind: 'spend_limit_warning' },
+  { subject: 'You used 75% of your limit', kind: 'spend_limit_warning' },
+  { subject: 'Your usage limit has been increased', kind: 'limit_increased' },
+  { subject: 'Someone requested more usage', kind: 'usage_request' },
+];
+for (const fixture of fixtures) test(`event fixture: ${fixture.kind} / ${fixture.subject}`, () => {
+  const parsed = parseReceiptMail({ ...mail, body: '', ...fixture }, config);
+  for (const field of ['kind', 'amountUsd', 'org', 'card']) if (field in fixture) assert.equal(parsed[field], fixture[field]);
+  assert.equal(parsed.vendor, 'anthropic');
+});
+test('amount priority, JPY, total fallback and Stripe classification', () => {
+  assert.equal(parseReceiptMail({ ...mail, body: 'Total $30.00 Amount paid $22.00' }, config).amountUsd, 22);
+  assert.equal(parseReceiptMail({ ...mail, body: 'Total $30.00' }, config).amountUsd, 30);
+  const yen = parseReceiptMail({ ...mail, body: 'Amount paid ¥12,345' }, config);
+  assert.equal(yen.amountUsd, null); assert.equal(yen.amountJpy, 12345); assert.equal(yen.currency, 'JPY');
+  assert.equal(classifyVendor('receipts@stripe.com', 'Your receipt from OpenAI', config), 'openai');
+  assert.equal(classifyVendor('x@notanthropic.com', '', config), 'unknown');
+  assert.equal(classifyVendor('Anthropic <x@example.com>', '', config), 'unknown');
+});
+test('summaries use JST month, rolling windows, and receipts only', () => {
+  const summary = summarizeReceipts([
+    row({ date: '2026-09-30T15:00:00Z', amountUsd: 100 }),
+    row({ date: '2026-09-30T14:59:59Z', amountUsd: 900 }),
+    row({ date: '2026-10-15T03:00:00Z', amountUsd: 10 }), row(),
+    row({ kind: 'failed_payment', amountUsd: 999 }), row({ kind: 'autoreload_other_card', amountUsd: 999 }),
+    row({ date: '2026-10-18T00:00:00Z', amountUsd: 999 }), row({ date: null }),
+  ], { now });
+  const source = Object.values(summary.sources)[0];
+  assert.equal(source.mtdUsd, 132); assert.equal(source.last48hUsd, 32); assert.equal(source.last24hUsd, 22); assert.equal(source.reloads48h, 2);
+  assert.equal(source.byDay['2026-10-01'], 100); assert.equal(summary.totals.byVendor.anthropic, 132);
+  assert.ok(source.events48h.includes('failed_payment'));
+});
+test('alerts bootstrap, new source, daily and monthly deduplication are pure', () => {
+  const summary = summarizeReceipts([row({ amountUsd: 110 }), row({ kind: 'api_off' })], { now });
+  const state = {}, thresholds = config.thresholds;
+  const first = evaluateReceiptAlerts(summary, state, thresholds, { now });
+  assert.deepEqual(state, {});
+  assert.deepEqual(first.alerts.map(a => a.kind), ['reload_burst', 'billing_event', 'mtd_high']);
+  assert.equal(evaluateReceiptAlerts(summary, first.state, thresholds, { now }).alerts.length, 0);
+  const tomorrow = evaluateReceiptAlerts(summary, first.state, thresholds, { now: new Date('2026-10-18T03:00:00Z') });
+  assert.deepEqual(tomorrow.alerts.map(a => a.kind), ['reload_burst', 'billing_event']);
+  assert.ok(evaluateReceiptAlerts(summary, { initialized: true }, thresholds, { now }).alerts.some(a => a.kind === 'new_billing_source'));
+  assert.ok(evaluateReceiptAlerts(summary, first.state, thresholds, { now: new Date('2026-11-01') }).alerts.some(a => a.kind === 'mtd_high'));
+  assert.match(formatReceiptReport(summary, first.alerts), /🚨/);
+});
+test('receipt count alone reaches burst threshold', () => {
+  const summary = summarizeReceipts([row({ amountUsd: 1 }), row({ amountUsd: 1 }), row({ amountUsd: 1 })], { now });
+  assert.ok(evaluateReceiptAlerts(summary, {}, config.thresholds, { now }).alerts.some(a => a.kind === 'reload_burst'));
+});
+test('scan persists structured ledger, deduplicates, includes old MTD, reports failures; dry-run writes nothing', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-receipts-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const settings = { ...config, accounts: [mail.to, 'group@orgiast.jp'] };
+  const searchImpl = async options => {
+    assert.equal(options.max, 100); assert.equal(options.withBody, true); assert.equal(options.bodyLimit, 6000);
+    if (options.user.startsWith('group')) throw new Error('unauthorized_client SECRET_MAIL_BODY');
+    return { messages: [mail], estimate: 1 };
+  };
+  const dry = await scanAiReceipts({ home, config: settings, now, appendLedger: false, searchImpl });
+  assert.equal(fs.existsSync(path.join(home, '.claude')), false);
+  assert.equal(dry.rows.length, 1); assert.match(dry.report, /未計測: group@orgiast.jp（unauthorized_client）/); assert.doesNotMatch(JSON.stringify(dry), /SECRET_MAIL_BODY|invoice illustration/);
+  await scanAiReceipts({ home, config: settings, now, searchImpl });
+  const repeat = await scanAiReceipts({ home, config: settings, now, searchImpl });
+  assert.equal(repeat.rows.length, 0); assert.equal(repeat.summary.totals.mtdUsd, 22);
+  const older = await scanAiReceipts({ home, config: settings, now: new Date('2026-10-25'), searchImpl: async () => ({ messages: [] }) });
+  assert.equal(older.summary.totals.mtdUsd, 22);
+  assert.equal(fs.readFileSync(path.join(home, '.claude', 'ai-receipts.jsonl'), 'utf8').trim().split('\n').length, 1);
+});
+test('scan reports truncation, and notification is a single guarded DM', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-receipts-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const result = await scanAiReceipts({ home, config: { ...config, accounts: [mail.to] }, now, appendLedger: false, searchImpl: async () => ({ messages: [mail], estimate: 101 }) });
+  assert.match(result.report, /取得上限100件/);
+  let calls = 0;
+  const notify = async (text, options) => { calls++; assert.equal(text, result.report); assert.equal(options.webhookFallback, false); return { delivered: 'dm' }; };
+  await alertAiReceipts(null, { notify }); await alertAiReceipts(result, { notify }); assert.equal(calls, 0);
+  await alertAiReceipts({ ...result, alerts: [{ kind: 'billing_event' }] }, { home, now, notify }); assert.equal(calls, 1);
+});

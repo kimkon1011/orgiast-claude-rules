@@ -8,6 +8,7 @@ import path from 'node:path';
 import { spawnSync as defaultSpawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { fetchFleetKPIs, getClaudeDir } from './fleet-kpi-fetch.mjs';
+import { scanAiReceipts, alertAiReceipts } from './ai-receipt-scan.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { submitProposal } from './proposal-session.mjs';
 import { appendImprovementTodos } from './nightly-kpi.mjs';
@@ -1315,6 +1316,10 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   // 各収集器は io で差し替え可能(テスト・dry-run で実データに触れないように)。
   const collectSignals = async () => {
     if (io.signals !== undefined) return io.signals;
+    let aiReceipts = null;
+    try {
+      aiReceipts = await (io.scanAiReceipts ?? scanAiReceipts)({ home, now, days: 3, appendLedger: !dryRun });
+    } catch { console.error('ai-receipt-scan: 領収書取得失敗(信号から除外)'); }
     let budgetPacePct = null;
     try {
       const budget = await (io.collectBudgetStatus ?? collectBudgetStatus)({ home, now });
@@ -1334,6 +1339,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
       headlessClaudeOut,
       budgetPacePct,
       evalAgeDays: (io.evalLatestAgeDays ?? evalLatestAgeDays)(claudeDir, now),
+      aiReceipts,
       providerBalances: await (io.collectProviderBalances ?? collectProviderBalances)({ home, now, appendHistory: !dryRun })
     };
   };
@@ -1351,6 +1357,9 @@ export async function main(argv = process.argv.slice(2), io = {}) {
         home, now, notify: io.notifyKim ?? notifyKim,
       });
     } catch { console.error('provider-balance: 日次残高DMに失敗。次回再試行します'); }
+    try {
+      await (io.alertAiReceipts ?? alertAiReceipts)(signals?.aiReceipts, { home, now, notify: io.notifyKim ?? notifyKim });
+    } catch { console.error('ai-receipt-scan: 領収書DMに失敗'); }
   }
   // heartbeat metrics(headlessOut / budgetPace)は常に実測を載せる。
   if (localState && typeof localState === 'object' && signals) {
@@ -1531,6 +1540,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   let reportText = ineffectiveWarning ? `${ineffectiveWarning}\n\n` : '';
   reportText += state.lastNotifyError ? `※ 前回の通知は送信に失敗しています(${state.lastNotifyError})\n\n` : '';
   reportText += `${formatBalanceLine(signals?.providerBalances || [])}\n`;
+  if (signals?.aiReceipts?.report) reportText += `${signals.aiReceipts.report}\n`;
   reportText += `**📊 AIコスト自動改善ループ報告 (${now.toISOString().slice(0, 10)})**\n\n`;
   
   const unmeasurableRows = [];

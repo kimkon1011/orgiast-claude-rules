@@ -31,7 +31,7 @@ function realGit(dir, args) {
   return execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 }
 
-function fixture(t, { featureBranch = false, squashedMerge = false, cherryPickedFirst = false } = {}) {
+function fixture(t, { featureBranch = false, squashedMerge = false, cherryPickedFirst = false, ignoredArtifact = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rescue-review-scan-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const repo = path.join(root, 'repo');
@@ -43,6 +43,18 @@ function fixture(t, { featureBranch = false, squashedMerge = false, cherryPicked
   fs.writeFileSync(path.join(repo, 'a.txt'), 'base');
   git('add', '.');
   git('commit', '-m', 'base');
+
+  if (ignoredArtifact) {
+    fs.writeFileSync(path.join(repo, '.gitignore'), '.stall-sweeper/\n');
+    git('add', '.gitignore');
+    git('commit', '-m', 'ignore runtime artifacts');
+    git('checkout', '-b', 'rescue/ignored', 'main');
+    fs.mkdirSync(path.join(repo, '.stall-sweeper'));
+    fs.writeFileSync(path.join(repo, '.stall-sweeper', 'probe.evidence.md'), 'runtime evidence\n');
+    git('add', '-f', '.stall-sweeper/probe.evidence.md');
+    git('commit', '-m', 'rescue ignored artifact');
+    git('checkout', 'main');
+  }
 
   // rescue/u1: a.txt を x に変更
   git('checkout', '-b', 'rescue/u1', 'main');
@@ -211,7 +223,7 @@ test('CLI 既定出力はサマリ行を先頭に出す', t => {
   const script = path.join(dirOf(import.meta.url), 'rescue-review-scan.mjs');
   const out = execFileSync(process.execPath, [script, '--repo', f.repo, '--main', 'main'], { encoding: 'utf8' });
   const lines = out.trim().split('\n');
-  assert.equal(lines[0], 'unique: 2 / duplicate: 1 / covered: 1 / covered-by-branch: 0 / covered-in-main: 0 / error: 0');
+  assert.equal(lines[0], 'unique: 2 / duplicate: 1 / covered: 1 / covered-by-branch: 0 / covered-in-main: 0 / error: 0 / ignored-only: 0');
   assert.equal(lines.length, 5);
 });
 
@@ -256,7 +268,44 @@ test('CLI --no-compare-refs は照合を切り、サマリに covered-by-branch 
   assert.equal(withRefs.summary.coveredByBranch, 1);
   assert.equal(withRefs.summary.unique, 1);
   const without = execFileSync(process.execPath, [script, '--repo', f.repo, '--main', 'main', '--no-compare-refs'], { encoding: 'utf8' });
-  assert.equal(without.trim().split('\n')[0], 'unique: 2 / duplicate: 1 / covered: 1 / covered-by-branch: 0 / covered-in-main: 0 / error: 0');
+  assert.equal(without.trim().split('\n')[0], 'unique: 2 / duplicate: 1 / covered: 1 / covered-by-branch: 0 / covered-in-main: 0 / error: 0 / ignored-only: 0');
+});
+
+test('gitignore 済みの実行時成果物だけの枝は ignored-only になる', t => {
+  const f = fixture(t, { ignoredArtifact: true });
+  const b = byBranch(scanRescueBranches({ repo: f.repo, main: 'main' }))['rescue/ignored'];
+  assert.equal(b.status, 'ignored-only');
+  assert.deepEqual(b.ignoredFiles, ['.stall-sweeper/probe.evidence.md']);
+});
+
+test('ignoreCheck=false なら ignored-only 判定を切って unique に戻る', t => {
+  const f = fixture(t, { ignoredArtifact: true });
+  const b = byBranch(scanRescueBranches({ repo: f.repo, main: 'main', ignoreCheck: false }))['rescue/ignored'];
+  assert.equal(b.status, 'unique');
+});
+
+test('実行時成果物と通常ファイルが混在する枝は unique のまま', t => {
+  const f = fixture(t, { ignoredArtifact: true });
+  f.git('checkout', '-b', 'rescue/mixed', 'main');
+  fs.mkdirSync(path.join(f.repo, '.stall-sweeper'));
+  fs.writeFileSync(path.join(f.repo, '.stall-sweeper', 'x.md'), 'runtime\n');
+  fs.writeFileSync(path.join(f.repo, 'b.txt'), 'normal\n');
+  f.git('add', 'b.txt');
+  f.git('add', '-f', '.stall-sweeper/x.md');
+  f.git('commit', '-m', 'mixed rescue');
+  f.git('checkout', 'main');
+  const b = byBranch(scanRescueBranches({ repo: f.repo, main: 'main' }))['rescue/mixed'];
+  assert.equal(b.status, 'unique');
+});
+
+test('CLI は ignored-only を JSON と既定サマリに出す', t => {
+  const f = fixture(t, { ignoredArtifact: true });
+  const script = path.join(dirOf(import.meta.url), 'rescue-review-scan.mjs');
+  const args = [script, '--repo', f.repo, '--main', 'main'];
+  const json = JSON.parse(execFileSync(process.execPath, [...args, '--json'], { encoding: 'utf8' }));
+  assert.equal(json.summary.ignoredOnly, 1);
+  const out = execFileSync(process.execPath, args, { encoding: 'utf8' });
+  assert.match(out.trim().split('\n')[0], /ignored-only: 1/);
 });
 
 // 同じ共通祖先から rescue のドラフトと main の改訂版を別々に作る。

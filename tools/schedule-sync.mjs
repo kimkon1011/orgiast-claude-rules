@@ -342,6 +342,9 @@ export async function runScheduleSync(options = {}, dependencies = {}) {
                 const existing = await calendar.list(candidate.start);
                 const duplicate = existing.find(event => isDuplicate(candidate, event));
                 if (duplicate) { row.status = 'duplicate'; row.eventId = duplicate.id; row.htmlLink = eventLink(duplicate); }
+                // Extraction / API reads can outlast a near-term appointment.
+                // Recheck at insertion time, not only against the run's cursor time.
+                else if (Date.parse(candidate.start) <= (dependencies.now?.() ?? options.now ?? Date.now())) row.status = 'ignored';
                 else if (dryRun) row.status = 'would-create';
                 else {
                   const event = await calendar.create(body);

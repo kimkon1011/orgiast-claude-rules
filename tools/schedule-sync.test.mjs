@@ -264,3 +264,11 @@ test('interrupted initial backfill pins its lower bound across later runs', asyn
   await assert.rejects(x.run(), /temporary source failure/);
   assert.deepEqual(cutoffs, [now - 48 * 3600000, now - 48 * 3600000]);
 });
+
+test('a start time that passes during API reads is not inserted', async t => {
+  const x = setup(t); let current = now;
+  x.deps.now = () => current;
+  x.deps.calendar.list = async () => { current = Date.parse(candidate.start) + 1; return []; };
+  assert.equal((await x.run()).counts.ignored, 1);
+  assert.equal(x.creates.length, 0); assert.equal(x.dms.length, 0);
+});

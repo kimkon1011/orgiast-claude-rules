@@ -58,6 +58,13 @@ function global:node {
     if ($global:enrollTest_scenario -eq 'notify-failure') { throw 'simulated notification failure' }
   } else { throw 'unexpected node invocation' }
 }
+# Production deliberately resolves an Application and invokes its absolute .exe path.
+# A function named only "node" no longer intercepts that call. Register the same
+# mock at the resolved path; keep Application discovery real and never run Node
+# (or contact keyserve / Discord) in these installer integration scenarios.
+$nodeExe = (Get-Command node -CommandType Application -ErrorAction Stop | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source
+Assert ([IO.Path]::IsPathRooted($nodeExe)) 'Node executable must resolve to an absolute path'
+Set-Item -LiteralPath "Function:global:$nodeExe" -Value ${function:node}
 $previousHome = $env:ORGIAST_HOME
 $previousSecret = $env:ORGIAST_KEYSERVE_SECRET
 $previousPc = $env:ORGIAST_KEYSERVE_PC
@@ -79,6 +86,7 @@ try {
       $expectSuccess = $scenarioName -in @('success', 'success-with-pc', 'existing-primary', 'stale-primary', 'notify-failure')
       Assert ($code -eq $(if ($expectSuccess) { 0 } else { 1 })) "unexpected exit: $code / $output"
       Assert $global:enrollTest_syncChecked 'sync not reached or ACL assertions failed'
+      Assert ($global:enrollTest_statusCalls -eq 2) 'both primary checks must use the mock'
       Assert $global:enrollTest_reported 'result not reported'
       Assert ($env:ORGIAST_HOME -eq $global:enrollTest_testHome) 'home env not restored'
       Assert ($env:ORGIAST_KEYSERVE_SECRET -eq 'must-be-restored') 'primary env not restored'
@@ -99,6 +107,7 @@ try {
   $env:ORGIAST_HOME = $previousHome
   $env:ORGIAST_KEYSERVE_SECRET = $previousSecret
   $env:ORGIAST_KEYSERVE_PC = $previousPc
+  Remove-Item -LiteralPath "Function:\$nodeExe"
   Remove-Item Function:\node
 }
 Write-Host "$global:enrollTest_passed passed / $global:enrollTest_failed failed"

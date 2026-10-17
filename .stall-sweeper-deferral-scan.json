@@ -1,0 +1,50 @@
+{
+  "since": "2026-10-14T00:23:03.899Z",
+  "sources": [
+    {
+      "name": "stop-gate-runner-ledger.jsonl",
+      "file": "C:\\Users\\asmo0\\.claude\\stop-gate-runner-ledger.jsonl",
+      "total": 253,
+      "hits": 0,
+      "byPattern": {
+        "P1": 0,
+        "P2": 0,
+        "P3": 0,
+        "P4": 0,
+        "W": 0
+      },
+      "byDay": {},
+      "rows": []
+    },
+    {
+      "name": "handoff-audit-ledger.jsonl",
+      "file": "C:\\Users\\asmo0\\.claude\\handoff-audit-ledger.jsonl",
+      "total": 139,
+      "hits": 0,
+      "byPattern": {
+        "P1": 0,
+        "P2": 0,
+        "P3": 0,
+        "P4": 0,
+        "W": 0
+      },
+      "byDay": {},
+      "rows": []
+    },
+    {
+      "name": "handoff-audit-nightly-ledger.jsonl",
+      "file": "C:\\Users\\asmo0\\.claude\\handoff-audit-nightly-ledger.jsonl",
+      "total": 3,
+      "hits": 0,
+      "byPattern": {
+        "P1": 0,
+        "P2": 0,
+        "P3": 0,
+        "P4": 0,
+        "W": 0
+      },
+      "byDay": {},
+      "rows": []
+    }
+  ]
+}

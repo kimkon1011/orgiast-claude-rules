@@ -51,6 +51,13 @@ test('恒久策として gh auth login を求める実文はblock', () => {
   assert.equal(result.code, 'NEXT-ACTION-DEFERRAL');
 });
 
+test('2026-10-15 e738f943 の原文（GCM 登録依頼＋着地の先送り）はblock', () => {
+  const text = `${body} 本PCの修正は main に着地する必要があります。\n次に kim がすること: この PC で \`gh auth login\`（または GCM に GitHub 資格情報を登録）を1回実行する — これが無い限り本PCの修正は main に着地しません。\nこの後の自動進行: 次回の自動セッションが next-session.md の 4b を先頭から拾う\nこのセッション: ${SESSION_PHRASES.pending}`;
+  const result = judgeNextAction(text);
+  assert.equal(result.decision, 'block');
+  assert.equal(result.code, 'NEXT-ACTION-DEFERRAL');
+});
+
 test('本文の着地語と nextAction の修正語が揃う実文はblock', () => {
   const text = `${body} この PC で認証しない限り本PCの修正は main に着地しません。\n次に kim がすること: 本PCの修正を完了させる\nこの後の自動進行: なし（完了）\nこのセッション: ${SESSION_PHRASES.delete}`;
   const result = judgeNextAction(text);

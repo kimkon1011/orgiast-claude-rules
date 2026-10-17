@@ -206,7 +206,7 @@ test('collectors paginate Gmail and Discord, ignore bots, and include delayed LI
   const tokenDir = path.join(x.dir, '.claude'); fs.writeFileSync(path.join(tokenDir, 'orgiast-discord-bot-token.txt'), 'test');
   let gmailPages = 0, discordPages = 0;
   const result = await collectMessages({ sources: ['line', 'gmail', 'discord'], home: x.dir, since: { line: now - 86400000, gmail: now - 86400000, discord: now - 86400000 }, until: now, log: () => {},
-    gmailSearch: async opts => { gmailPages++; assert.equal(opts.withBody, true); return { messages: [{ id: String(gmailPages), internalDate: now - 500, subject: '明日', body: '12時', from: 'sender' }], nextPageToken: opts.pageToken ? null : 'p2' }; },
+    gmailSearch: async opts => { gmailPages++; assert.equal(opts.withBody, true); assert.doesNotMatch(opts.query, /to:/); return { messages: [{ id: String(gmailPages), internalDate: now - 500, subject: '明日', body: '12時', from: 'sender' }], nextPageToken: opts.pageToken ? null : 'p2' }; },
     listChannels: async () => [{ id: 'a', type: 0, name: 'team' }, { id: 'b', type: 0 }, { id: 'v', type: 2 }],
     discordFetch: async opts => {
       if (opts.channelId === 'b') throw Object.assign(new Error('Forbidden'), { status: 403 });

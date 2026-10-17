@@ -118,7 +118,9 @@ export async function collectMessages({ sources, since, until, home, fetchImpl =
     } else if (source === 'gmail') {
       let pageToken;
       do {
-        const query = `to:${USER} -in:sent -in:drafts -category:promotions -category:social -category:forums after:${Math.floor(cutoff / 1000) - 1} before:${Math.ceil(until / 1000) + 1}`;
+        // The impersonated mailbox also receives CC, aliases and group mail.
+        // A to:kim restriction would silently discard those received messages.
+        const query = `-in:sent -in:drafts -category:promotions -category:social -category:forums after:${Math.floor(cutoff / 1000) - 1} before:${Math.ceil(until / 1000) + 1}`;
         const page = await gmailSearch({ user: USER, query, max: 100, withBody: true, pageToken, fetchImpl });
         for (const row of page.messages) {
           const time = Number(row.internalDate) || Date.parse(row.date);

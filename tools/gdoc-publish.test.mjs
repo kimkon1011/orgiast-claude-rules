@@ -159,3 +159,30 @@ test('必須・未知・重複・値なし引数を検証する', () => {
   assert.deepEqual(parseArgs(['--title', '題名', '--file', '本文.md']), { title: '題名', file: '本文.md' });
   for (const args of [[], ['--title'], ['--title', '題名'], ['--bad', 'x'], ['--title', 'x', '--title', 'y'], ['--file', '--update']]) assert.throws(() => parseArgs(args));
 });
+
+test('--share shares the created document and records recipients using the same token', async t => {
+  const { readFileSync } = await import('node:fs');
+  const home = mkdtempSync(join(tmpdir(), 'publish-share-'));
+  const previousHome = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  t.after(() => {
+    if (previousHome === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previousHome;
+    rmSync(home, { recursive: true, force: true });
+  });
+  const writes = [], output = [];
+  t.mock.method(console, 'log', line => output.push(line));
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    assert.match(url, /\/files\/doc-id\/permissions\?/);
+    assert.equal(options.headers.Authorization, 'Bearer mock-token');
+    if (options.method === 'POST') writes.push(JSON.parse(options.body));
+    return Response.json(options.method === 'POST' ? { id: 'permission' } : { permissions: [] });
+  });
+  const source = '本文';
+  const result = await publishDocument({ title: '共有文書', source, authuser: 'a@orgiast.jp', share: 'a@orgiast.jp,b@example.com' }, mockApi(renderDocument(source)));
+  assert.equal(result.id, 'doc-id');
+  assert.deepEqual(writes.map(p => p.role), ['writer', 'commenter']);
+  const rows = readFileSync(join(home, '.claude/share-ledger.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.deepEqual(rows.map(r => r.fileId), ['doc-id', 'doc-id']);
+  assert.equal(output.length, 2);
+});

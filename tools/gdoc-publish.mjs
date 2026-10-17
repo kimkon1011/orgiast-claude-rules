@@ -2,11 +2,12 @@
 /**
  * kim 向け Doc を作成/同一 ID で置換し、リンクを Docs API から読み戻して検証する。
  * node tools/gdoc-publish.mjs --title "題名" --file 本文.md [--folder ID] [--update ID]
- * --authuser <開く人のメール> は必須。他人宛は事前にその相手へ共有する。
+ * --authuser <開く人のメール> は必須。他人宛は --share <相手のメール> を付ける（--share-role で権限指定）。
  * 認証は lib/drive-auth.mjs の既存 DWD 鍵 (GOOGLE_SA_KEY) と drive scope を再利用。
  * 本文は ■ / 1. 等の通常テキスト。Markdown の見出し・リンク・太字・コードは表示文字に変換。
  * --update は単一タブの本文を置換。folder 省略時は既存の配置を保持する。
  */
+import { shareAndRecord, shareRecipients } from './lib/drive-share.mjs';
 import { workspaceUrl } from './lib/workspace-url.mjs';
 import { readFileSync } from 'node:fs';
 import { getDriveToken, driveApi } from './lib/drive-auth.mjs';
@@ -20,7 +21,7 @@ export function parseArgs(argv) {
   const args = {};
   for (let i = 0; i < argv.length; i += 2) {
     const flag = argv[i];
-    if (!['--title', '--file', '--folder', '--update', '--authuser'].includes(flag) ||
+    if (!['--title', '--file', '--folder', '--update', '--authuser', '--share', '--share-role'].includes(flag) ||
         !argv[i + 1]?.trim() || argv[i + 1].startsWith('--') || flag.slice(2) in args) {
       throw new Error(`不正な引数: ${flag}`);
     }
@@ -124,10 +125,11 @@ export function verifyReadBack(rendered, doc) {
   return { linkCount: rendered.links.length };
 }
 
-export async function publishDocument({ title, source, folder, update, authuser }, {
+export async function publishDocument({ title, source, folder, update, authuser, share, 'share-role': shareRole }, {
   getToken = getDriveToken, api = driveApi,
 } = {}) {
   workspaceUrl('https://docs.google.com/', authuser);
+  if (share) shareRecipients(share, shareRole);
   const rendered = renderDocument(source);
   const token = await getToken({ impersonate: 'kim@orgiast.jp' });
   const request = async (url, method = 'GET', body) => (await api(token, url, {
@@ -144,6 +146,7 @@ export async function publishDocument({ title, source, folder, update, authuser 
   let id = update;
   if (!id) id = (await request(DOCS, 'POST', { title })).documentId;
   if (!id) throw new Error('作成レスポンスに documentId がありません');
+  if (share) await shareAndRecord({ fileId: id, emails: share, role: shareRole, auth: token, name: title });
   const docEndpoint = `${DOCS}/${encodeURIComponent(id)}`;
   const doc = await request(`${docEndpoint}?includeTabsContent=true`);
   const requests = buildRequests(rendered, doc);

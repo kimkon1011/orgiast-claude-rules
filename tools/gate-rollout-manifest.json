@@ -5,6 +5,7 @@
     "DESKTOP-2D0R4LI"
   ],
   "gates": {
+    "share-before-send-gate": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-10-17T00:00:00Z", "denyAfter": "2026-10-24T00:00:00Z" },
     "api-billing-guard": { "rollout": "deny", "immediatePolicy": "2026-10-17 kim 厳命: 従量課金停止", "distributedAt": "2026-10-17T00:00:00Z" },
     "askuser-selfcheck-gate": {
       "rollout": "deny",

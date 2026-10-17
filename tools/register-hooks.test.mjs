@@ -23,6 +23,11 @@ test('既存PowerShell hookへExecutionPolicy Bypassを補いcost-loopをmjsへ�
   assert.ok(commands.find((command) => command.includes('custom.ps1')).includes('-NoProfile -ExecutionPolicy Bypass'));
   assert.equal((commands.find((command) => command.includes('done.ps1')).match(/-ExecutionPolicy Bypass/gi) || []).length, 1);
   assert.match(stdout, /hook修復: 実行ポリシー1件 \/ cost-loop移行1件/);
+  const shareGroups = settings.hooks.PreToolUse.filter(group => group.hooks.some(hook => hook.command.includes('share-before-send-gate.mjs')));
+  assert.equal(shareGroups.length, 1);
+  assert.match('mcp__claude_ai_Discord__send_dm', new RegExp(shareGroups[0].matcher));
+  assert.match('mcp__claude_ai_Gmail__create_draft', new RegExp(shareGroups[0].matcher));
+  assert.equal(fs.readFileSync(path.join(home, '.claude/share-ledger.jsonl'), 'utf8'), '');
   fs.rmSync(home, { recursive: true, force: true });
 });
 

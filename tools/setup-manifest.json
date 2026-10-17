@@ -1,6 +1,7 @@
 {
   "version": 1,
   "items": [
+    {"id": "settings:share-before-send-gate", "type": "file-contains", "severity": "required", "spec": {"path": ".claude/settings.json", "contains": "share-before-send-gate"}, "description": "share-before-send-gate", "repair": ["register-hooks.mjs", "--hooks-only"]},
     {"id": "settings:api-billing-guard", "type": "file-contains", "severity": "required", "spec": {"path": ".claude/settings.json", "contains": "api-billing-guard"}, "description": "api-billing-guard", "repair": ["register-hooks.mjs", "--hooks-only"]},
     {"id": "settings:claude-impl-approval", "type": "file-contains", "severity": "required", "spec": {"path": ".claude/settings.json", "contains": "claude-impl-approval"}, "description": "claude-impl-approval", "repair": ["register-hooks.mjs", "--hooks-only"]},
     {"id": "settings:lane-guard", "type": "file-contains", "severity": "required", "spec": {"path": ".claude/settings.json", "contains": "pretooluse-lane-guard"}, "description": "pretooluse-lane-guard", "repair": ["register-hooks.mjs", "--hooks-only"]},

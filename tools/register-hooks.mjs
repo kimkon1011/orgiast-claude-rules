@@ -26,6 +26,11 @@ try {
   ({ HOOK_MATCHER: LIVE_ARTIFACT_MATCHER } = await import('./live-artifact-read-gate.mjs'));
 } catch { /* guard が未同期でも登録処理は続行する */ }
 
+let SHARE_BEFORE_SEND_MATCHER = HOOK_MATCHER + '|mcp__claude_ai_Discord.*__(send_dm|send_message|reply_message)';
+try {
+  ({ HOOK_MATCHER: SHARE_BEFORE_SEND_MATCHER } = await import('./share-before-send-gate.mjs'));
+} catch { /* 同期途中でも既存登録を維持 */ }
+
 const hooksOnly = process.argv.includes('--hooks-only');
 const expectedJson = process.argv.includes('--expected-json');
 const home = process.env.ORGIAST_HOME || os.homedir();
@@ -311,6 +316,8 @@ try {
   if (add(settings.hooks.PreToolUse, 'model-agent-guard.mjs', { matcher: 'Agent|Task', hooks: [{ type: 'command', command: command('model-agent-guard.mjs') }] })) added += 1;
   if (add(settings.hooks.PreToolUse, 'internal-recipient-gmail-guard.mjs', { matcher: HOOK_MATCHER, hooks: [{ type: 'command', command: command('internal-recipient-gmail-guard.mjs'), timeout: 5 }] })) added += 1;
   added += syncMatcherFor(settings.hooks.PreToolUse, 'internal-recipient-gmail-guard.mjs', HOOK_MATCHER);
+  if (add(settings.hooks.PreToolUse, 'share-before-send-gate.mjs', { matcher: SHARE_BEFORE_SEND_MATCHER, hooks: [{ type: 'command', command: command('share-before-send-gate.mjs'), timeout: 5 }] })) added += 1;
+  added += syncMatcherFor(settings.hooks.PreToolUse, 'share-before-send-gate.mjs', SHARE_BEFORE_SEND_MATCHER);
   // 社外宛メールで説明している Google ファイルを、直近に中身として読んだかを確かめる。
   // 3.4MB の transcript で初回 18 秒かかった実測があるため 30 秒にする（5 秒だと時間切れで素通りする）。
   if (add(settings.hooks.PreToolUse, 'live-artifact-read-gate.mjs', { matcher: LIVE_ARTIFACT_MATCHER, hooks: [{ type: 'command', command: command('live-artifact-read-gate.mjs'), timeout: 30 }] })) added += 1;
@@ -409,6 +416,11 @@ try {
   }
   // Reporting uses exactly the registrar's expected set without touching user files.
   if (expectedJson) { console.log(JSON.stringify({ hooks: settings.hooks, skippedNames })); process.exit(0); }
+  // 初回配布で空の共有台帳を用意する。不在時 fail-open のまま恒常的に素通りさせない。
+  if (settings.hooks.PreToolUse.some(group => (group.hooks || []).some(hook => String(hook.command).includes('share-before-send-gate.mjs')))) {
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+    fs.closeSync(fs.openSync(path.join(home, '.claude', 'share-ledger.jsonl'), 'a'));
+  }
   // 差分が無い時は書かない(日次実行で .bak が積み上がるのを防ぐ)
   if (added || settingsHadBom) { backup(settingsFile); write(settingsFile, settings); }
   if (settingsHadBom) console.log('[register-hooks] settings.json の BOM を除去しました');

@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // 任意のローカルファイルを Drive フォルダへ DWD でアップロードする。
 // 使い方: node tools/drive-upload.mjs --file <path> --folder <folderId> [--name <name>] [--as <email>] [--authuser <開く人のメール>]
+// 他人宛は --share <相手のメール> を付ける（--share-role で権限指定）。
+import { shareAndRecord, shareRecipients } from './lib/drive-share.mjs';
 import { workspaceUrl } from './lib/workspace-url.mjs';
 import { readFileSync } from 'node:fs';
 import { basename, extname } from 'node:path';
@@ -22,7 +24,7 @@ export function parseArgs(argv) {
     const arg = argv[i];
     if (!arg.startsWith('--')) throw new Error(`unexpected argument: ${arg}`);
     const key = arg.slice(2);
-    if (!['file', 'folder', 'name', 'as', 'authuser'].includes(key)) throw new Error(`unknown option: ${arg}`);
+    if (!['file', 'folder', 'name', 'as', 'authuser', 'share', 'share-role'].includes(key)) throw new Error(`unknown option: ${arg}`);
     const value = argv[i + 1];
     if (value === undefined || value.startsWith('--')) throw new Error(`missing value for ${arg}`);
     out[key] = value;
@@ -52,8 +54,9 @@ export function resolveAs(args, env = process.env, gitEmail = () => execFileSync
   return email;
 }
 
-export async function upload({ file, folder, name, as, authuser = as, keyPath }) {
+export async function upload({ file, folder, name, as, authuser = as, keyPath, share, 'share-role': shareRole }) {
   workspaceUrl('https://drive.google.com/', authuser);
+  if (share) shareRecipients(share, shareRole);
   const content = readFileSync(file);
   const token = await getDriveToken({ impersonate: as, keyPath });
   const boundary = `drive-upload-${Date.now().toString(36)}`;
@@ -69,6 +72,7 @@ export async function upload({ file, folder, name, as, authuser = as, keyPath })
     body,
   });
   const json = await res.json();
+  if (share) await shareAndRecord({ fileId: json.id, emails: share, role: shareRole, auth: token, name: json.name });
   return { id: json.id, name: json.name, url: driveViewUrl(json.id, authuser), accountInstruction: `${authuser} で開いてください` };
 }
 

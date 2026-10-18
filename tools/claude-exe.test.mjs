@@ -80,10 +80,43 @@ test('candidateClaudeExecutables excludes .bat from PATH on win32', () => {
   assert.ok(!candidates.some((c) => c.endsWith('.bat') || c.endsWith('.cmd') || c.endsWith('.ps1')));
 });
 
+// npm -g は Windows で %APPDATA%\npm\node_modules 配下に実体を置く。PATH には .cmd しか
+// 無いので、ここを候補に持たないと npm 導入機だけ「claude.exe が見つかりません」で止まる。
+test('candidateClaudeExecutables includes npm global claude.exe on win32', () => {
+  const appData = 'C:\\Users\\test\\AppData\\Roaming';
+  const expected = path.join(appData, 'npm', 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe');
+  const candidates = candidateClaudeExecutables({
+    platform: 'win32',
+    home: 'C:\\Users\\test',
+    localAppData: null,
+    appData,
+    pathEntries: [],
+    listDir: () => [],
+    exists: (p) => p === expected,
+  });
+  assert.deepEqual(candidates, [expected]);
+});
+
+test('candidateClaudeExecutables includes per-user Programs/claude on win32', () => {
+  const localAppData = 'C:\\Users\\test\\AppData\\Local';
+  const expected = path.join(localAppData, 'Programs', 'claude', 'claude.exe');
+  const candidates = candidateClaudeExecutables({
+    platform: 'win32',
+    home: 'C:\\Users\\test',
+    localAppData,
+    appData: null,
+    pathEntries: [],
+    listDir: () => [],
+    exists: (p) => p === expected,
+  });
+  assert.deepEqual(candidates, [expected]);
+});
+
 test('resolveClaudeExecutable env priority and fallback', () => {
   const opts = { platform: 'linux', home: '/home', localAppData: null, pathEntries: [], listDir: () => [], exists: () => false };
   assert.equal(resolveClaudeExecutable({ ...opts, env: { CLAUDE_CLI: 'custom-claude' } }), 'custom-claude');
   assert.equal(resolveClaudeExecutable({ ...opts, env: { CLAUDE_CLI_PATH: 'custom-path' } }), 'custom-path');
+  assert.equal(resolveClaudeExecutable({ ...opts, env: { CLAUDE_BIN: 'custom-bin' } }), 'custom-bin');
   assert.equal(resolveClaudeExecutable({ ...opts, env: {} }), 'claude');
 });
 
@@ -166,7 +199,7 @@ test('APPDATA 版比較は数値セグメントで行う(2.1.10 > 2.1.9) — 版
   const candidates = candidateClaudeExecutables({
     platform: 'win32', home: undefined, localAppData: null, appData, pathEntries: [],
     listDir: (dir) => (dir === codeDir ? ['2.1.9', '2.1.10'] : []),
-    exists: () => true,
+    exists: (p) => p === path.join(codeDir, '2.1.10', 'claude.exe'),
   });
   assert.deepEqual(candidates, [path.join(codeDir, '2.1.10', 'claude.exe')]);
 });

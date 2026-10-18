@@ -116,10 +116,20 @@ export function candidateClaudeExecutables({ platform, home, localAppData, appDa
     }
   }
 
-  // 4. ~/.local/bin
+  // 4. npm グローバルの @anthropic-ai/claude-code（Windows の npm -g はここに実体を置く）
+  if (platform === 'win32' && appData) {
+    addUnique(path.join(appData, 'npm', 'node_modules', '@anthropic-ai', 'claude-code', 'bin', bin));
+  }
+
+  // 5. per-user インストーラ（%LOCALAPPDATA%\Programs\claude）
+  if (platform === 'win32' && localAppData) {
+    addUnique(path.join(localAppData, 'Programs', 'claude', bin));
+  }
+
+  // 6. ~/.local/bin
   if (home) addUnique(path.join(home, '.local', 'bin', bin));
 
-  // 5. PATH
+  // 7. PATH
   for (const entry of pathEntries) {
     const fullPath = path.join(entry, bin);
     if (!isUnspawnable(fullPath, platform)) {
@@ -134,6 +144,8 @@ export function resolveClaudeExecutable(options = {}) {
   const { env = {} } = options;
   if (env.CLAUDE_CLI) return env.CLAUDE_CLI;
   if (env.CLAUDE_CLI_PATH) return env.CLAUDE_CLI_PATH;
+  // 旧 cheap-code の resolveClaudeBin が受け付けていた CLAUDE_BIN も同じ優先度で扱う。
+  if (env.CLAUDE_BIN) return env.CLAUDE_BIN;
   const candidates = candidateClaudeExecutables(options);
   return candidates.length > 0 ? candidates[0] : 'claude';
 }

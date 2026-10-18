@@ -324,7 +324,9 @@ function launchMobileStandbyStatus() {
   child.unref();
 }
 export function launchPurge() {
-  launchRemotePurge();
+  // 時間だけで判定するとクローズしていないスマホのセッションまで消える（2026-10-18 未クローズ28件を誤アーカイブ）。
+  // サーバ側セッションとローカルのクローズ記録を結ぶ ID が無いため、自動実行はしない。手動の --dry-run 確認用に関数は残す。
+  void launchRemotePurge;
   launchMobileStandbyStatus();
   if (Date.now() - json(path.join(root(), 'purge-sessions-state.json')).at < 5 * MINUTE) return;
   const child = spawn(process.execPath, [fileURLToPath(import.meta.url)], { detached: true, windowsHide: true, stdio: 'ignore' });

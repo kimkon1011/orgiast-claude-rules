@@ -1526,6 +1526,29 @@ test('B: 当日の unattended Codex が8件あれば9件目は unattended_budget
   assert.equal(interactive.status, 0, interactive.stderr);
 });
 
+test('B: 無人枠到達でも代替バックエンドがあれば deferred にせずフォールバックへ回る', (t) => {
+  const home = tmpHome(t, 'codex-budget-fallback');
+  fs.writeFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), `${Array.from({ length: 8 }, () => unattendedRow()).join('\n')}\n`);
+  // モックは1件だけ。Codex を起動せず代替バックエンドに渡すことを確認する。
+  const mock = JSON.stringify([{ status: 0, output: 'Qwen Code CLI has successfully completed.', stderr: '' }]);
+  const args = ['--force-native', '--cwd', home, '--kind', 'implement', '--origin', 'unattended'];
+  const env = { CODEX_DO_MOCK_RESULTS: mock, GEMINI_API_KEY: '', DEEPSEEK_API_KEY: 'sk-test' };
+  const result = run([...args, '指示内容'], { home, env });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /executor=fallback:cheap-code:deepseek \(理由: Codex 無人枠の日次上限に到達\)/);
+  assert.match(result.stderr, /unattended_budget.*無人枠 8\/8 件.*代替バックエンドへ回します/);
+  assert.doesNotMatch(result.stdout, /"status":"deferred"/);
+  const rows = readLedger(home);
+  assert.equal(rows.length, 9);
+  assert.equal(rows.some((row) => row.status === 'deferred'), false);
+  assert.equal(rows.at(-1).provider, 'fallback');
+  // --no-fallback の明示があれば従来どおり保留(75)。
+  const strict = run([...args, '--no-fallback', '指示内容'], { home, env });
+  assert.equal(strict.status, 75, strict.stderr);
+  assert.equal(lastJson(strict.stdout).status, 'deferred');
+  assert.equal(lastJson(strict.stdout).reason, 'unattended_budget');
+});
+
 test('B: 8件に満たなければ unattended でも通り、台帳に origin=unattended が残る', (t) => {
   const home = tmpHome(t, 'codex-budget-under');
   fs.writeFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), `${Array.from({ length: 7 }, () => unattendedRow()).join('\n')}\n`);

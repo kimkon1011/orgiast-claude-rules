@@ -1,6 +1,7 @@
 {
   "version": 1,
   "entries": [
+    {"path":"tools/register-fleet-chase.ps1","scope":"kim-only","step":"task:fleet-chase","reason":"管制役kim-PCだけで債務追跡を実行する"},
     {
       "path": "tools/api-billing-guard.mjs",
       "scope": "fleet",

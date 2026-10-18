@@ -34,7 +34,7 @@ export function selectContext(messages, { headless = isHeadless(), sessionId = '
   const notice = headless && active.some(hasDecisionRequest) ? 'ヘッドレスの判断依頼は除外。kim の判断を代行せず返信しない。\n'
     : groups[0].length ? '判断依頼は kim に確認して回答する。設定変更は converge 化が必要と送信元へ返す。\n' : '';
   const instructions = '回答・返信不要は返信しない。返信: --reply <id> --body-file <file> / 完了: --ack <id>\n';
-  const footer = count => `他 ${count} 件（期限切れ ${expired.length} 件は除外）: ${FOOTER}`;
+  const footer = count => `他 ${count} 件（期限切れ ${expired.length} 件は fleet-chase が追跡中（node tools/fleet-chase.mjs --status））: ${FOOTER}`;
   let context = header + notice + instructions;
   const shown = [];
   for (const mail of [...failed, ...groups.flat()]) {

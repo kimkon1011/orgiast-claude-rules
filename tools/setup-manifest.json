@@ -1,6 +1,10 @@
 {
   "version": 1,
   "items": [
+    { "id": "task:fleet-chase", "type": "scheduled-task", "severity": "optional", "scope": "kim-only", "spec": { "name": "OrgiastFleetChase", "ifPresent": ".claude/fleet-sheet.env" }, "description": "kim-PC: fleet未完了依頼を30分ごとに追跡", "repair": ["register-fleet-chase.mjs"] },
+    { "id": "tool:fleet-chase", "type": "file-nonempty", "severity": "optional", "scope": "kim-only", "spec": { "paths": ["orgiast-claude-rules/tools/fleet-chase.mjs", "Downloads/orgiast-claude-rules/tools/fleet-chase.mjs"] }, "description": "kim-PC: fleet債務台帳(repo直参照)", "repair": ["onboarding-sync.mjs", "--force"] },
+    { "id": "settings:fleet-chase-context-SessionStart", "type": "json-valid", "severity": "optional", "scope": "kim-only", "spec": { "path": ".claude/settings.json", "hookEvent": "SessionStart", "hookScript": "fleet-chase-context.mjs", "hookArgs": "", "async": false, "timeout": 5 }, "description": "kim-PC: 未完了債務を最古順に表示", "repair": ["register-hooks.mjs", "--hooks-only"] },
+    { "id": "settings:fleet-chase-context-UserPromptSubmit", "type": "json-valid", "severity": "optional", "scope": "kim-only", "spec": { "path": ".claude/settings.json", "hookEvent": "UserPromptSubmit", "hookScript": "fleet-chase-context.mjs", "hookArgs": "", "async": false, "timeout": 5 }, "description": "kim-PC: 未完了債務を最古順に表示", "repair": ["register-hooks.mjs", "--hooks-only"] },
     {"id": "settings:share-before-send-gate", "type": "file-contains", "severity": "required", "spec": {"path": ".claude/settings.json", "contains": "share-before-send-gate"}, "description": "share-before-send-gate", "repair": ["register-hooks.mjs", "--hooks-only"]},
     {"id": "settings:api-billing-guard", "type": "file-contains", "severity": "required", "spec": {"path": ".claude/settings.json", "contains": "api-billing-guard"}, "description": "api-billing-guard", "repair": ["register-hooks.mjs", "--hooks-only"]},
     {"id": "settings:claude-impl-approval", "type": "file-contains", "severity": "required", "spec": {"path": ".claude/settings.json", "contains": "claude-impl-approval"}, "description": "claude-impl-approval", "repair": ["register-hooks.mjs", "--hooks-only"]},

@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { buildReceiptQuery, classifyVendor, parseReceiptMail, summarizeReceipts, evaluateReceiptAlerts, formatReceiptReport, scanAiReceipts, alertAiReceipts } from './ai-receipt-scan.mjs';
+import { fileURLToPath } from 'node:url';
+import { receiptLedgerAgeHours, runReceiptScanCli, buildReceiptQuery, classifyVendor, parseReceiptMail, summarizeReceipts, evaluateReceiptAlerts, formatReceiptReport, scanAiReceipts, alertAiReceipts } from './ai-receipt-scan.mjs';
 const config = JSON.parse(fs.readFileSync(new URL('./ai-receipt-accounts.json', import.meta.url), 'utf8'));
 const now = new Date('2026-10-17T03:00:00Z');
 const mail = { id: 'one', threadId: 'thread', date: '2026-10-16T10:00:00Z', from: '"Anthropic, PBC" <invoice+statements@mail.anthropic.com>', to: 'seisaku-team@orgiast.jp', subject: 'Your receipt from Anthropic, PBC #2666-1376-2870', body: 'Receipt from Anthropic, PBC $22.00 Paid on October 16, 2026 with - 1109 (invoice illustration [...]) Receipt #2666-1376-2870 One-time credit purchase Qty 1 $20.00 Subtotal $20.00 Total excluding tax $20.00 JCT - Japan (10%) $2.00 Total $22.00 Amount paid $22.00 Download receipt (...)' };
@@ -181,4 +182,59 @@ test('organization extraction normalizes ASCII and both Unicode apostrophes', ()
       assert.equal(parseReceiptMail({ ...mail, body }, config).org, "よろしくお願いします。's Individual Org");
     }
   }
+});
+
+
+test('receipt ledger age uses newest mtime, either file alone, and Infinity when absent', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'receipt-age-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  assert.equal(receiptLedgerAgeHours(home, now), Infinity);
+  fs.mkdirSync(path.join(home, '.claude'));
+  const ledger = path.join(home, '.claude', 'ai-receipts.jsonl');
+  const state = path.join(home, '.claude', 'ai-receipts-alert-state.json');
+  const writeAge = (file, hours) => { fs.writeFileSync(file, ''); const date = new Date(+now - hours * 3600e3); fs.utimesSync(file, date, date); };
+  writeAge(ledger, 40);
+  assert.equal(receiptLedgerAgeHours(home, now), 40);
+  writeAge(state, 2);
+  assert.equal(receiptLedgerAgeHours(home, now), 2);
+  writeAge(ledger, 1);
+  assert.equal(receiptLedgerAgeHours(home, now), 1);
+  fs.unlinkSync(ledger);
+  assert.equal(receiptLedgerAgeHours(home, now), 2);
+});
+
+test('CLI skips fresh data including boundary, scans stale/missing data, and honors notify', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'receipt-cli-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(home, '.claude'));
+  const state = path.join(home, '.claude', 'ai-receipts-alert-state.json');
+  const keyPath = path.join(home, 'key.json'); fs.writeFileSync(keyPath, '{}');
+  const logs = [], scans = [], alerts = [];
+  const result = { report: 'scanned' };
+  const options = { home, now, keyPath, log: line => logs.push(line), scan: async opts => { scans.push(opts); return result; }, alert: async res => alerts.push(res) };
+  for (const hours of [2, 30]) {
+    fs.writeFileSync(state, '{}'); const date = new Date(+now - hours * 3600e3); fs.utimesSync(state, date, date);
+    await runReceiptScanCli(['--if-stale', '30', '--notify'], options);
+    assert.equal(logs.at(-1), `skip: fresh (${hours.toFixed(1)}h)`);
+  }
+  assert.equal(scans.length, 0); assert.equal(alerts.length, 0);
+  const stale = new Date(+now - 31 * 3600e3); fs.utimesSync(state, stale, stale);
+  await runReceiptScanCli(['--if-stale', '30', '--notify'], options);
+  fs.unlinkSync(state);
+  await runReceiptScanCli(['--if-stale', '30', '--notify', '--dry-run'], options);
+  assert.equal(scans.length, 2); assert.equal(alerts.length, 1); assert.equal(alerts[0], result);
+  assert.equal(scans[0].appendLedger, true); assert.equal(scans[1].appendLedger, false);
+  assert.equal(logs.at(-1), 'scanned');
+  for (const value of [undefined, 'bad', '0', '-1', 'Infinity']) await assert.rejects(runReceiptScanCli(['--if-stale', value], options));
+});
+
+test('CLI without SA key exits successfully with one line and no scan or notification', async (t) => {
+  const { spawnSync } = await import('node:child_process');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'receipt-no-key-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL('./ai-receipt-scan.mjs', import.meta.url)), '--if-stale', '30', '--notify'], {
+    env: { ...process.env, ORGIAST_HOME: home, GOOGLE_SA_KEY: path.join(home, 'missing.json') }, encoding: 'utf8', timeout: 10000,
+  });
+  assert.equal(result.status, 0); assert.equal(result.stdout, 'skip: no-sa-key\n'); assert.equal(result.stderr, '');
+  assert.deepEqual(fs.readdirSync(home), []);
 });

@@ -8,7 +8,7 @@ import path from 'node:path';
 import { spawnSync as defaultSpawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { fetchFleetKPIs, getClaudeDir } from './fleet-kpi-fetch.mjs';
-import { scanAiReceipts, alertAiReceipts } from './ai-receipt-scan.mjs';
+import { scanAiReceipts, alertAiReceipts, receiptLedgerAgeHours } from './ai-receipt-scan.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { submitProposal } from './proposal-session.mjs';
 import { appendImprovementTodos } from './nightly-kpi.mjs';
@@ -49,6 +49,20 @@ export const SIGNAL_METRICS = Object.freeze({
   eval_stale: 'evalAgeDays',
   spend_anomaly: 'todaySpendUsd'
 });
+
+export function evaluateReceiptSignals(aiReceipts, { ageHours = 0 } = {}) {
+  const violations = [];
+  const add = evidence => violations.push({
+    kind: 'measurement_untrusted', pc: 'self', severity: 'error',
+    provider: 'receipts', evidence, trusted: true,
+  });
+  if (aiReceipts == null) add('領収書スキャン: 取得失敗（設定・台帳・認証・接続を確認）');
+  else if (aiReceipts.errors?.length) {
+    add(`領収書スキャン: ${aiReceipts.errors.map(e => `${e.account}（${e.reason}）`).join('、')}`);
+  }
+  if (ageHours > 36) add(`領収書台帳が ${Number.isFinite(ageHours) ? ageHours.toFixed(1) : 'Infinity'}h 更新されていない`);
+  return violations;
+}
 
 export function evaluateBalanceSignals(rows, { directProviders = ['deepseek', 'kimi'] } = {}) {
   const violations = [];
@@ -409,6 +423,7 @@ export function evaluateFleet({ rows, ledgerCounts, localState, now, lastKpis = 
 
   if (signals) {
     violations.push(...evaluateBalanceSignals(signals.providerBalances));
+    if ('aiReceipts' in signals) violations.push(...evaluateReceiptSignals(signals.aiReceipts, { ageHours: signals.receiptAgeHours }));
     // provider_unhealthy: 直近7日で failRate>=0.2 か http429>=50 の provider(codex=定額なので除外)。
     for (const [name, stats] of Object.entries(signals.providerHealth?.providers || {})) {
       if (String(name).toLowerCase() === 'codex') continue;
@@ -518,6 +533,7 @@ function humanTodoMessage(violation, now, retryCount = 0, retryMode = 'directive
     return `【${pc}】の Claude 概算が $${previous} → $${actual} に増えています（${increase === null ? '増加率不明' : `+${increase.toFixed(1)}%`}）。作業量は増えていません。誤ルーティング、やり直し、Claude の呼びすぎがないか直近の作業を確認してください。`;
   }
   if (violation.kind === 'measurement_untrusted') {
+    if (violation.provider === 'receipts') return `【このPC】${violation.evidence}。領収書スキャンの設定・台帳・認証・接続を確認してください。`;
     const reportedAt = /Reported at\s*([^,]+)/.exec(violation.evidence)?.[1];
     const situation = reportedAt
       ? `${reportedAt} に報告は来ていますが、委譲率またはコストの値が空です`
@@ -1319,7 +1335,10 @@ export async function main(argv = process.argv.slice(2), io = {}) {
     let aiReceipts = null;
     try {
       aiReceipts = await (io.scanAiReceipts ?? scanAiReceipts)({ home, now, days: 3, appendLedger: !dryRun });
-    } catch { console.error('ai-receipt-scan: 領収書取得失敗(信号から除外)'); }
+    } catch { console.error('ai-receipt-scan: 領収書取得失敗（未計測として報告）'); }
+    let receiptAgeHours = Infinity;
+    try { receiptAgeHours = (io.receiptLedgerAgeHours ?? receiptLedgerAgeHours)(home, now); }
+    catch { console.error('ai-receipt-scan: 台帳の更新日時を取得できません'); }
     let budgetPacePct = null;
     try {
       const budget = await (io.collectBudgetStatus ?? collectBudgetStatus)({ home, now });
@@ -1340,6 +1359,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
       budgetPacePct,
       evalAgeDays: (io.evalLatestAgeDays ?? evalLatestAgeDays)(claudeDir, now),
       aiReceipts,
+      receiptAgeHours,
       providerBalances: await (io.collectProviderBalances ?? collectProviderBalances)({ home, now, appendHistory: !dryRun })
     };
   };
@@ -1539,7 +1559,9 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   const stalePcs = new Set(evaluation.violations.filter(v => v.kind === 'stale_report').map(v => v.pc));
   let reportText = ineffectiveWarning ? `${ineffectiveWarning}\n\n` : '';
   reportText += state.lastNotifyError ? `※ 前回の通知は送信に失敗しています(${state.lastNotifyError})\n\n` : '';
+  for (const violation of evaluation.violations.filter(v => v.provider === 'receipts')) reportText += `⚠️ ${violation.evidence}\n`;
   reportText += `${formatBalanceLine(signals?.providerBalances || [])}\n`;
+  if (signals?.aiReceipts == null) reportText += '領収書(全アカウント Gmail): スキャン失敗（未計測）\n';
   if (signals?.aiReceipts?.report) reportText += `${signals.aiReceipts.report}\n`;
   reportText += `**📊 AIコスト自動改善ループ報告 (${now.toISOString().slice(0, 10)})**\n\n`;
   

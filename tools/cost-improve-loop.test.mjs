@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  evaluateReceiptSignals,
   evaluateFleet,
   decideActions,
   sortViolationsBySeverity,
@@ -26,7 +27,7 @@ import {
   splitWhitelistedCommand
 } from './cost-improve-loop.mjs';
 
-const main = (args, io = {}) => mainImpl(args, { scanAiReceipts: async () => null, alertAiReceipts: async () => {}, ...io });
+const main = (args, io = {}) => mainImpl(args, { scanAiReceipts: async () => ({ errors: [] }), receiptLedgerAgeHours: () => 0, alertAiReceipts: async () => {}, ...io });
 
 test('残高シグナル3種の境界とauto-local効果は固定許可リストだけ', () => {
   const rows = [
@@ -967,7 +968,10 @@ test('receipt collection and notification are isolated and honor dry-run/no-noti
     assert.equal((await main(['--dry-run'], inputs)).ok, true);
     assert.equal((await main(['--no-notify'], inputs)).ok, true);
     failScan = true;
-    assert.equal((await main([], inputs)).ok, true);
+    const failed = await main([], inputs);
+    assert.equal(failed.ok, true);
+    assert.match(failed.reportText, /領収書\(全アカウント Gmail\): スキャン失敗（未計測）/);
+    assert.ok(failed.evaluation.violations.some(v => v.provider === 'receipts'));
     assert.equal((await main([], { ...inputs, noNotify: true })).ok, true);
     assert.deepEqual(scanCalls.map(o => o.appendLedger), [true, false, true, true, true]);
     for (const options of scanCalls) {
@@ -981,5 +985,26 @@ test('receipt collection and notification are isolated and honor dry-run/no-noti
   } finally {
     if (previousHome === undefined) delete process.env.ORGIAST_HOME; else process.env.ORGIAST_HOME = previousHome;
     cleanTempDir(home);
+  }
+});
+
+
+test('receipt signals: null is one trusted measurement violation', () => {
+  const violations = evaluateReceiptSignals(null);
+  assert.equal(violations.length, 1);
+  assert.deepEqual(violations[0], { kind: 'measurement_untrusted', pc: 'self', severity: 'error', provider: 'receipts', evidence: '領収書スキャン: 取得失敗（設定・台帳・認証・接続を確認）', trusted: true });
+});
+test('receipt signals: two account errors produce one violation naming both', () => {
+  const violations = evaluateReceiptSignals({ errors: [{ account: 'a@example.com', reason: '取得失敗' }, { account: 'b@example.com', reason: '取得上限100件' }] });
+  assert.equal(violations.length, 1);
+  assert.match(violations[0].evidence, /a@example.com.*b@example.com/);
+});
+test('receipt signals: success is clean; stale boundary and missing ledger are detected', () => {
+  assert.deepEqual(evaluateReceiptSignals({ errors: [] }), []);
+  assert.deepEqual(evaluateReceiptSignals({ errors: [] }, { ageHours: 36 }), []);
+  for (const ageHours of [36.1, Infinity]) {
+    const violations = evaluateReceiptSignals({ errors: [] }, { ageHours });
+    assert.equal(violations.length, 1);
+    assert.match(violations[0].evidence, /領収書台帳が .*h 更新されていない/);
   }
 });

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { sweep, fetchPending, normalizeItem } from './feedback-zero-sweep.mjs';
+import { sweep, fetchPending, normalizeItem, appConfig, resolveRef } from './feedback-zero-sweep.mjs';
 
 const entry = { appName: 'テストアプリ', kind: 'next', intake: 'relay', refs: { url: 'T_URL', secret: 'T_SECRET', repo: 'T_REPO', appDir: 'T_DIR' } };
 
@@ -108,4 +108,53 @@ test('FEEDBACK_KIM_DISCORD_ID 未設定でも ORGIAST_DISCORD_USER_ID があれ�
     assert.equal(seen[0].userId, undefined);
     assert.notEqual(result.notification.delivered, 'none');
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test('refs は文字列と配列に対応し、最初の設定済み候補を採用する', () => {
+  assert.equal(resolveRef(entry, { T_URL: 'legacy' }, 'url'), 'legacy');
+  const e = { refs: { url: ['FIRST', 'SECOND', 'THIRD'] } };
+  assert.equal(resolveRef(e, { FIRST: 'first', SECOND: 'second' }, 'url'), 'first');
+  assert.equal(resolveRef(e, { FIRST: '', SECOND: 'second', THIRD: 'third' }, 'url'), 'second');
+  assert.equal(resolveRef(e, {}, 'url'), undefined);
+  assert.equal(resolveRef({ refs: { url: ['bad-key', 'SECOND'] } }, { 'bad-key': 'bad', SECOND: 'ok' }, 'url'), 'ok');
+});
+
+test('appDir の候補と汎用キーの衝突はアプリの fallback 値を優先する', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zero-refs-'));
+  try {
+    fs.writeFileSync(path.join(dir, '.env'), 'NEXT_PUBLIC_SUPABASE_URL=https://old.invalid\n');
+    fs.writeFileSync(path.join(dir, '.env.local'), 'NEXT_PUBLIC_SUPABASE_URL=https://app.invalid\nSUPABASE_SERVICE_ROLE_KEY=app-dummy\n');
+    const e = { intake: 'supabase', refs: { appDir: ['FIRST_DIR', 'APP_DIR'], url: ['AUJUST_SUPABASE_URL', 'NEXT_PUBLIC_SUPABASE_URL'], secret: ['AUJUST_SUPABASE_SERVICE_ROLE_KEY', 'SUPABASE_SERVICE_ROLE_KEY'] } };
+    const config = { APP_DIR: dir, NEXT_PUBLIC_SUPABASE_URL: 'https://other.invalid', SUPABASE_SERVICE_ROLE_KEY: 'other-dummy' };
+    const merged = appConfig(e, config);
+    await fetchPending(e, merged, async (url, opts) => {
+      assert.equal(url.hostname, 'app.invalid');
+      assert.equal(opts.headers.apikey, 'app-dummy');
+      return { ok: true, json: async () => [] };
+    });
+    assert.equal(resolveRef(e, appConfig(e, { ...config, AUJUST_SUPABASE_URL: 'explicit' }), 'url'), 'explicit');
+    assert.equal(appConfig({ refs: { appDir: 'APP_DIR', url: 'NEXT_PUBLIC_SUPABASE_URL' } }, config).NEXT_PUBLIC_SUPABASE_URL, 'https://other.invalid');
+    assert.equal(resolveRef(e, appConfig(e, { NEXT_PUBLIC_SUPABASE_URL: 'shared' }), 'url'), 'shared');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('supabase page_path の包含・除外とフィルタ未指定、ページングを保つ', async () => {
+  const registry = JSON.parse(fs.readFileSync(new URL('./feedback-zero-registry.json', import.meta.url), 'utf8'));
+  const sales = registry.apps.find(e => e.appName === 'aujust／営業自動化');
+  const paths = ['/dashboard', '/customers/1', '/deals/1', '/admin/inquiries/1', '/cases/1', '/help/【購買部】備品', '/requests/self-purchase', null];
+  const rows = paths.map((page_path, i) => ({ id: String(i), page_path, status: 'open' }));
+  rows.push({ id: 'done', page_path: '/dashboard', status: 'done' });
+  const config = { AUJUST_SUPABASE_URL: 'https://app.invalid', AUJUST_SUPABASE_SERVICE_ROLE_KEY: 'dummy' };
+  const fetchImpl = async () => ({ ok: true, json: async () => rows });
+  assert.deepEqual((await fetchPending(sales, config, fetchImpl)).items.map(r => r.id), ['0', '1', '2', '7']);
+  assert.equal((await fetchPending({ ...sales, filter: undefined }, config, fetchImpl)).items.length, 8);
+  const included = { ...sales, filter: { pagePathInclude: ['/customers', '/deals'], pagePathExclude: ['/deals'] } };
+  assert.deepEqual((await fetchPending(included, config, fetchImpl)).items.map(r => r.id), ['1']);
+  let calls = 0;
+  const paged = await fetchPending(sales, config, async () => {
+    calls++;
+    return { ok: true, json: async () => calls === 1 ? Array.from({ length: 500 }, (_, i) => ({ id: `excluded-${i}`, page_path: '/cases/1' })) : [rows[0]] };
+  });
+  assert.equal(calls, 2);
+  assert.deepEqual(paged.items, [rows[0]]);
 });

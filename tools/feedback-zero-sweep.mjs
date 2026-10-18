@@ -22,14 +22,33 @@ export function loadConfig(home, env = process.env, localFile = path.join(here,'
   return {...config,...readJson(localFile,{}),...env};
 }
 export function appConfig(entry, config) {
-  const local={};const dir=config[entry.refs.appDir];
+  const local={};const dir=resolveRef(entry,config,'appDir');
   if(dir) for(const name of ['.env','.env.local']) {try{Object.assign(local,parseEnvText(fs.readFileSync(path.join(dir,name),'utf8')));}catch(e){if(e.code!=='ENOENT')throw e;}}
-  return {...local,...config};
+  const merged={...local,...config};
+  // Array fallbacks are app-local aliases; shared generic config must not
+  // override the app's own values. Primary refs and legacy strings keep config priority.
+  for(const refs of Object.values(entry.refs || {})) {
+    if(Array.isArray(refs)) for(const name of refs.slice(1)) if(local[name]) merged[name]=local[name];
+  }
+  return merged;
+}
+export function resolveRef(entry, config, key) {
+  const refs=entry.refs?.[key];
+  const names=Array.isArray(refs)?refs:[refs];
+  return names.filter(name=>typeof name==='string' && /^[A-Z][A-Z0-9_]*$/.test(name)).map(name=>config[name]).find(Boolean);
 }
 function requireRef(entry, config, key) {
-  const name=entry.refs?.[key];
-  if(!/^[A-Z][A-Z0-9_]*$/.test(name || '') || !config[name]) throw new Error(`${key} 参照キー未設定`);
-  return config[name];
+  const value=resolveRef(entry,config,key);
+  if(!value) throw new Error(`${key} 参照キー未設定`);
+  return value;
+}
+export function matchesPagePath(row, filter) {
+  if(!filter)return true;
+  const pagePath=typeof row.page_path==='string'?row.page_path:'';
+  // Prefixes also cover help titles such as /help/【購買部】備品管理表.
+  const matches=prefix=>pagePath.startsWith(prefix);
+  return (!filter.pagePathInclude || filter.pagePathInclude.some(matches)) &&
+    !filter.pagePathExclude?.some(matches);
 }
 async function request(url, options, fetchImpl) {
   let response;
@@ -64,6 +83,7 @@ export async function fetchPending(entry, config, fetchImpl=fetch) {
     if(entry.intake==='relay') items=items.filter(row=>row.app_name===entry.appName);
   } else throw new Error('未対応 intake');
   if(items.some(row=>!row || typeof row!=='object' || !(row.message_id || row.id || row.key)))throw new Error('原票の識別子なし');
+  if(entry.intake==='supabase') items=items.filter(row=>matchesPagePath(row,entry.filter));
   return {items:items.filter(row=>!DONE.has(String(row.status || '').trim().toLowerCase())),partial};
 }
 export function normalizeItem(entry, row) {
@@ -115,7 +135,7 @@ export async function sweep({registryFile=path.join(here,'feedback-zero-registry
         for(const item of raw.values()) {
           const key=item.message_id;
           let job=state.jobs[key];
-          const repo=env[entry.refs.repo] || repoMap[entry.appName];
+          const repo=resolveRef(entry,env,'repo') || repoMap[entry.appName];
           const known=job?.issue || tracked.find(i=>String(i.message_id)===key);
           let issue=known;
           if(issue) {
@@ -139,7 +159,7 @@ export async function sweep({registryFile=path.join(here,'feedback-zero-registry
           state.jobs[key]=job;persist();
           if(['awaiting-review','running'].includes(job.status))continue;
           if(job.retryAt>now){row.deferred++;continue;}
-          const dir=env[entry.refs.appDir];
+          const dir=resolveRef(entry,env,'appDir');
           if(!dir || !fs.existsSync(dir)){job.status='deferred';job.reason='作業ディレクトリ参照キー未設定';job.retryAt=nextLocalMidnight(now);row.deferred++;persist();continue;}
           const decision=gate({home,origin:'unattended',now});
           if(decision.deferred || launched>=maxJobs) {

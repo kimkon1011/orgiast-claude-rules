@@ -9,6 +9,7 @@ import { POLICY, CATEGORY, DAY, HOUR, active, oldest, iso, millis, attempt, safe
 import { rolloutSummary, rolloutTop } from './fleet-chase-rollout.mjs';
 
 export const DIGEST_LIMIT = 1900;
+export const SEND_CAP_PER_TARGET = 3;
 
 export function resendBody(item, n) {
   const source = redactSecrets(item.sourceMail.body || '');
@@ -64,6 +65,7 @@ async function sendChase(item, action, ctx) {
 export async function chase(ledger, ctx) {
   const { now, freshness, pcMap = {}, sendDm, dryRun = false, persist = () => {} } = ctx;
   const plans = [];
+  const sendsByTarget = new Map();
   for (const item of Object.values(ledger.items).filter(i => outboundTracking(i) && i.status === 'open').sort(oldest)) {
     if (millis(item.deferredUntil) > now) {
       item.nextActionAt = item.deferredUntil;
@@ -122,6 +124,19 @@ export async function chase(ledger, ctx) {
         item.level = 0;
         next = Math.max(due, lastTime(item, 'resend') + POLICY.resend);
         action = 'resend';
+      }
+      next = Math.max(next, millis(item.rateLimitedUntil));
+      if (now >= next) {
+        const count = sendsByTarget.get(item.target) || 0;
+        if (count >= SEND_CAP_PER_TARGET) {
+          item.rateLimitedUntil = item.nextActionAt = iso(now + HOUR / 2);
+          plans.push({ id: item.id, target: item.target, action: `${action}(rate-limited)`, at: item.nextActionAt });
+          if (!dryRun) persist();
+          continue;
+        }
+        // Count attempts too: a lost response may still mean the mail was delivered.
+        sendsByTarget.set(item.target, count + 1);
+        delete item.rateLimitedUntil;
       }
       item.nextActionAt = iso(Math.max(now, next));
       plans.push({ id: item.id, target: item.target, action, at: item.nextActionAt });

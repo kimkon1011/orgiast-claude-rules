@@ -133,7 +133,8 @@ export function reconcileRollout(ledger, snapshot, { home, now, dryRun = false }
   // Missing/corrupt watch state is not evidence that convergence succeeded.
   if (convergence?.targets && typeof convergence.targets === 'object' && !Array.isArray(convergence.targets)) {
     for (const [key, target] of Object.entries(convergence.targets)) {
-      const pc = target.pc || target.label || target.hostname || `配布対象(${key})`;
+      const label = target.label || target.pc || target.hostname;
+      const pc = label ? `${label}（OSユーザー ${target.username || '未確認'}）` : `配布対象(${key.slice(0, 8)})`;
       const id = rolloutId(key, 'convergence');
       let item = ledger.items[id];
       if (!item || item.status === 'done') {
@@ -141,6 +142,7 @@ export function reconcileRollout(ledger, snapshot, { home, now, dryRun = false }
           title: `[配布未収束] ${pc}`, body: 'convergence-watch が収束を追跡中' }, now);
         Object.assign(item, { pc, target: pc, convergenceKey: key, direction: 'mirror' });
       }
+      Object.assign(item, { pc, target: pc, title: `[配布未収束] ${pc}` });
       item.convergenceState = target;
     }
     for (const item of Object.values(ledger.items).filter(i => i.kind === 'rollout' && i.subkind === 'convergence' && active(i))) {

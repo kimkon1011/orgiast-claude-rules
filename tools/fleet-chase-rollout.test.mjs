@@ -172,3 +172,16 @@ test('no-report waits for fleet warm-up: with no report history at all, polling 
   f.reconcile([report(NOW, 'test-PC')], NOW + P.reportAge, { rows: [{ label: 'fresh-PC', pollAt: iso(NOW + P.reportAge - HOUR), pollAgeMs: HOUR }] });
   assert.deepEqual(f.items('no-report').map(i => i.pc), ['fresh-PC']);
 });
+
+test('convergence display upgrades existing hash mirrors without changing IDs', t => {
+  const f = fixture(t), key = '0123456789abcdef0123456789abcdef';
+  f.reconcile([], NOW, { convergence: { targets: { [key]: { firstSeen: NOW } } } });
+  const item = f.items('convergence')[0], id = item.id;
+  assert.equal(item.title, '[配布未収束] 配布対象(01234567)');
+  f.reconcile([], NOW + HOUR, { convergence: { targets: { [key]: { firstSeen: NOW, label: 'test-PC', username: 'alice', hostname: 'host' } } } });
+  assert.equal(f.items('convergence').length, 1);
+  assert.equal(item.id, id);
+  assert.equal(item.pc, 'test-PC（OSユーザー alice）');
+  assert.equal(item.target, item.pc);
+  assert.equal(item.title, `[配布未収束] ${item.pc}`);
+});

@@ -2,6 +2,7 @@
 
 TASK_ID: fleet-chase-A-ledger-and-escalation (2026-10-18)、担当: Codex。
 TASK_ID: fleet-chase-B-rule-compliance-rollout (2026-10-18)、担当: Codex。
+<!-- TASK_ID: fleet-chase-C-send-cap-and-readable-convergence (2026-10-18)、担当: Codex、実装・検証済み -->
 送って終わりにせず、完了の証拠を回収するまでkim-PCで追跡する。
 **期限切れは完了ではない。** GASやinboxのstatusを台帳から書き換えない。
 
@@ -35,6 +36,7 @@ resultBodyが権限不足/判断待ち/実行失敗などのブロッカーで�
 | L2 | seen後24h未完了なら状況・証拠・理由を催促 | 24h |
 | L3 | seen後48h未完了をkimの日次通知に掲載し、催促を継続 | 72h |
 
+再送・催促は古い順に最大3通/宛先/回（担当者DMは対象外）。超過分は rate-limited として30分後に再試行し、dry-runにも同じ上限を適用する。
 execのマーカーは解析互換のため本文最先頭を保ち、その直後に追跡見出しを置く。
 本文上限20000字を超える再送は原文を切らず、chase-errorとして記録する。
 全関連IDの初回状態照会が済むまでは催促を待つ（取込直後の完了済み依頼への誤再送を防止）。
@@ -80,6 +82,7 @@ validatedかつ非delegatedルールで、該当5件以上・違反率50%以上�
 no-reportは新しい報告の到着で完了。遠隔PCは既存L0〜L3の催促を使用する。
 kim-PC自身はinbound扱いで送信せず、ローカル作業結果と次の報告で検証する。
 convergence-watchのtargetsは読み取り専用でミラーし、存在が確認できたtargetsから消えたら完了。催促はwatch側のみ。
+convergenceの表示名は「PCラベル（OSユーザー username）」とし、既存項目もIDを変えず更新する。識別情報がなければ「配布対象(hash先頭8桁)」を表示する。
 `--compliance` はPC×ルールの違反率・報告日時・未報告PCの最終pollを表示する（読み取り専用）。
 `--dry-run --compliance` はHOMEに何も書かない。未到着のself報告も「—」で表示する。
 digest/statusに遵守の件数、digestに上位3件、contextに最大1件（kim-PC自身優先）を追加する。

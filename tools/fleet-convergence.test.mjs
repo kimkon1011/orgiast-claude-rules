@@ -56,6 +56,8 @@ test('send once daily, notify only after 24h, reset on recovery, no writes in dr
   const rows = [{...healthy(), hookMissing: 2}], sends = [], notices = []; let writes = 0;
   const deps = { rows, send: async p => sends.push(p), notify: async s => { notices.push(s); return {delivered:'dm'}; }, persist: () => writes++ };
   let r = await reconcileConvergence({...deps, now}); assert.equal(sends.length,1); assert.equal(notices.length,0);
+  const entry = Object.values(r.state.targets)[0];
+  for (const field of ['label', 'hostname', 'username']) assert.equal(entry[field], rows[0][field]);
   r = await reconcileConvergence({...deps, state:r.state, now:now+1000}); assert.equal(sends.length,1);
   r = await reconcileConvergence({...deps, state:r.state, now:now+DAY}); assert.equal(sends.length,2); assert.equal(notices.length,1);
   await reconcileConvergence({...deps, state:r.state, now:now+DAY+1000}); assert.equal(notices.length,1);

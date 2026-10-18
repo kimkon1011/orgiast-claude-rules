@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { POLICY, CATEGORY, DAY, HOUR, iso, makeItem, ingest, checkLedger, chase, digest, digestText,
   control, work, runChase, loadLedger, saveJson, ledgerPath, parseArgs, resendBody } from './fleet-chase.mjs';
+import { SEND_CAP_PER_TARGET } from './lib/fleet-chase-actions.mjs';
 import { TERMINAL_STATUSES, parseExecMarkers, acquireLock } from './fleet-mail.mjs';
 import { main as register, TASK_NAME } from './register-fleet-chase.mjs';
 const NOW = Date.parse('2026-10-18T03:00:00Z');
@@ -271,3 +272,40 @@ test('resend tracking header cannot hide a body-only human decision tag from rec
 
 // Include rollout integration in the established task-A test entrypoint.
 import './fleet-chase-rollout.test.mjs';
+
+for (const seen of [false, true]) test(`send cap covers ${seen ? 'reminders' : 'resends'}, oldest first and resumes after 30 minutes`, async t => {
+  const f = fixture(t);
+  const items = Array.from({ length: SEND_CAP_PER_TARGET + 2 }, (_, n) => {
+    const item = f.add(mail(`mail-cap-${n}`, { createdAt: iso(NOW - 4 * DAY + n * HOUR) }));
+    if (seen) item.seenAt = iso(NOW - POLICY.reminder);
+    return item;
+  });
+  // Reverse insertion order to verify chronological priority.
+  f.ledger.items = Object.fromEntries([...items].reverse().map(i => [i.id, i]));
+  const preview = structuredClone(f.ledger);
+  const dryPlans = await chase(preview, { ...f.ctx, dryRun: true, persist: () => assert.fail('dry-run write') });
+  assert.equal(f.requests.length, 0);
+  const plans = await chase(f.ledger, f.ctx);
+  assert.deepEqual(plans, dryPlans);
+  assert.equal(f.requests.length, SEND_CAP_PER_TARGET);
+  assert.deepEqual(plans.filter(p => !p.action.includes('rate-limited')).map(p => p.id), items.slice(0, SEND_CAP_PER_TARGET).map(i => i.id));
+  assert.equal(plans.filter(p => p.action.endsWith('(rate-limited)')).length, 2);
+  for (const item of items.slice(SEND_CAP_PER_TARGET)) assert.equal(item.nextActionAt, iso(NOW + HOUR / 2));
+  const loaded = loadLedger(f.home);
+  await chase(loaded, { ...f.ctx, now: NOW + HOUR / 2 - 1, persist() {} });
+  assert.equal(f.requests.length, SEND_CAP_PER_TARGET);
+  await chase(loaded, { ...f.ctx, now: NOW + HOUR / 2, persist() {} });
+  assert.equal(f.requests.length, items.length);
+});
+test('send caps are per target and include ambiguous failed attempts; owner DMs are excluded', async t => {
+  const f = fixture(t);
+  for (const to of ['nishi-PC', 'cr-PC', 'stopped-PC']) {
+    for (let n = 0; n < SEND_CAP_PER_TARGET + 2; n++) f.add(mail(`mail-${to}-${n}`, { to }));
+  }
+  const calls = [];
+  await chase(f.ledger, { ...f.ctx, pcMap: { 'stopped-PC': { person: '担当者' } },
+    freshness: async to => ({ stale: to === 'stopped-PC' }),
+    request: async (_kind, payload) => { calls.push(payload.to); throw Error('response lost'); } });
+  for (const to of ['nishi-PC', 'cr-PC']) assert.equal(calls.filter(t => t === to).length, SEND_CAP_PER_TARGET);
+  assert.equal(f.dms.length, SEND_CAP_PER_TARGET + 2);
+});

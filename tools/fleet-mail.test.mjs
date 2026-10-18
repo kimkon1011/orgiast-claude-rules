@@ -724,7 +724,7 @@ test('send continues when the freshness lookup fails', async t => {
 
 
 // Daily compliance runs synchronously only inside its separately launched worker.
-import { dailyRuleCompliance, pollOnce } from './fleet-mail.mjs';
+import { dailyRuleCompliance, pollOnce } from './fleet-mail.mjs'; // acquireLock はファイル先頭で import 済み
 import { COMPLIANCE_TIMEOUT } from './fleet-rule-compliance-daily.mjs';
 import { measuredRules, COMPLIANCE_DAYS, RULE_COMPLIANCE_TAG } from './lib/rule-compliance-mail.mjs';
 function complianceFixture(t, label = recipient) {
@@ -732,7 +732,7 @@ function complianceFixture(t, label = recipient) {
   const rule = measuredRules[0];
   const audit = { results: { [rule.id]: { applicable: 10, violation: 8, examples: ['PRIVATE'] } },
     enforcement: { [rule.id]: { mode: 'block' } } };
-  const options = { home: f.home, dir: f.dir, label, repo: path.resolve('.'), env: {},
+  const options = { home: f.home, dir: f.dir, label, repo: path.resolve('.'), env: {}, acquireLock,
     now: () => Date.parse('2026-10-18T03:00:00Z'), stderr: error => f.errors.push(error),
     request: async (kind, payload) => { f.calls.push({ kind, payload }); return { ok: true }; },
     spawnSyncImpl: (exe, args, opts) => {

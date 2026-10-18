@@ -1,7 +1,12 @@
 {
   "version": 1,
   "entries": [
-    {"path":"tools/register-fleet-chase.ps1","scope":"kim-only","step":"task:fleet-chase","reason":"管制役kim-PCだけで債務追跡を実行する"},
+    {
+      "path": "tools/register-fleet-chase.ps1",
+      "scope": "kim-only",
+      "step": "task:fleet-chase",
+      "reason": "管制役kim-PCだけで債務追跡を実行する"
+    },
     {
       "path": "tools/api-billing-guard.mjs",
       "scope": "fleet",
@@ -816,6 +821,36 @@
       "scope": "kim-only",
       "step": null,
       "reason": "kimの個人DM UI操作・返信案。ほかのPCでは登録・実行しない"
+    },
+    {
+      "path": "tools/fleet-rule-compliance-daily.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail poll の日次ルール遵守報告（実行時 import 依存・再帰検査対象）"
+    },
+    {
+      "path": "tools/lib/rule-compliance-mail.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "ルール遵守報告の本文生成/解析（fleet-mail 実行時 import 依存）"
+    },
+    {
+      "path": "tools/fleet-rule-compliance-worker.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "日次ルール遵守報告のワーカー（poll からデタッチ起動）"
+    },
+    {
+      "path": "tools/rule-compliance-loop.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "ルール遵守監査（ワーカーが子プロセスで実行）"
+    },
+    {
+      "path": "tools/rules-registry.json",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "ルール定義（rule-compliance-mail が読む）"
     }
   ]
 }

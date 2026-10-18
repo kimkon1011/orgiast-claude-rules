@@ -14,6 +14,9 @@ export const COMPLIANCE_TIMEOUT = 120_000;
 export async function dailyRuleCompliance({ home = process.env.ORGIAST_HOME || os.homedir(),
   dir = path.join(home, '.claude'), label = resolveFleetLabel(home), request, now = Date.now,
   repo = ownRepo, spawnSyncImpl = spawnSync, spawnImpl = spawn, background = false,
+  // fleet-mail.mjs からは import しない（fleet-mail → ここ → fleet-mail の循環 import は exit 13 の恐れ、import-cycle.test）。
+  // ロックは呼び出し側（worker）が fleet-mail の acquireLock を渡す。
+  acquireLock = null,
   env = process.env, stderr = console.error } = {}) {
   if (env.FLEET_NO_SELF_HEAL === '1') return { skipped: 'disabled' };
   const marker = path.join(dir, '.fleet-rule-compliance-day');
@@ -33,7 +36,7 @@ export async function dailyRuleCompliance({ home = process.env.ORGIAST_HOME || o
       child.unref();
       return { launched: true };
     }
-    const { acquireLock } = await import('./fleet-mail.mjs');
+    if (typeof acquireLock !== 'function') throw new Error('acquireLock is required in foreground mode');
     const release = acquireLock(path.join(dir, '.fleet-rule-compliance.lock'), { now });
     if (!release) return { skipped: 'locked' };
     try {

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dailyRuleCompliance } from './fleet-rule-compliance-daily.mjs';
-import { createClient } from './fleet-mail.mjs';
+import { createClient, acquireLock } from './fleet-mail.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { parseEnvText } from './env-kv.mjs';
 import { COMPLIANCE_CONTROLLER } from './lib/rule-compliance-mail.mjs';
@@ -21,6 +21,6 @@ export async function main() {
     };
   }
   const repo = process.env.ORGIAST_REPO || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-  return dailyRuleCompliance({ home, request, repo });
+  return dailyRuleCompliance({ home, request, repo, acquireLock });
 }
 if (isEntry(import.meta.url)) await main();

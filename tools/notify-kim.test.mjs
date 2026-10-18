@@ -3,7 +3,30 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { notifyKim } from './notify-kim.mjs';
+import { main, notifyKim } from './notify-kim.mjs';
+
+test('ヘルプは本文と混在しても通知せず終了する', async () => {
+  for (const args of [['--help'], ['-h'], ['hello', '--help'], ['-h', 'hello']]) {
+    const lines = [];
+    const status = await main(args, {
+      send: async () => assert.fail('ヘルプ表示で通知してはいけない'),
+      log: (line) => lines.push(line),
+    });
+    assert.equal(status, 0);
+    assert.equal(lines.length, 1);
+    assert.match(lines[0], /Usage:/);
+    assert.match(lines[0], /通知は送信しません/);
+  }
+});
+
+test('通常の CLI 引数は結合して通知する', async () => {
+  const messages = [];
+  assert.equal(await main(['hello', 'world'], {
+    send: async (message) => messages.push(message),
+    log: () => assert.fail('通常の送信でヘルプを表示してはいけない'),
+  }), 0);
+  assert.deepEqual(messages, ['hello world']);
+});
 
 function home() { return fs.mkdtempSync(path.join(os.tmpdir(), 'notify-kim-')); }
 function response({ ok = true, status = 200, json = {} } = {}) { return { ok, status, json: async () => json }; }

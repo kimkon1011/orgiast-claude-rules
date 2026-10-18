@@ -102,8 +102,12 @@ export async function notifyKim(text, {
   return { delivered: 'none', reason: dmReason };
 }
 
-async function main() {
-  await notifyKim(process.argv.slice(2).join(' '));
+export async function main(args = process.argv.slice(2), { send = notifyKim, log = console.log } = {}) {
+  if (args.includes('--help') || args.includes('-h')) {
+    log('Usage: node tools/notify-kim.mjs <message...>\n\nkim に Discord DM を送信します。\n  --help, -h  このヘルプを表示して終了します（通知は送信しません）。');
+    return 0;
+  }
+  await send(args.join(' '));
   return 0;
 }
 

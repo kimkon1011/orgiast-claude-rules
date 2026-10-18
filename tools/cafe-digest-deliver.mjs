@@ -40,7 +40,8 @@ export async function runDeliver({ home = os.homedir(), args = [], spawn = spawn
     const result = spawn(process.execPath, [
       fileURLToPath(new URL('./fleet-mail.mjs', import.meta.url)),
       '--send', '--to', to, '--kind', 'note', '--body-file', bodyFile,
-      '--why', 'LINE レンスペ民の集いのカフェ改善ダイジェスト（自動）',
+      // 自動配達で返信を求めない。タグが無いと fleet-chase が「完了未回収の依頼」として再送し続ける（2026-10-18 実測）。
+      '--why', '[報告・返信不要] LINE レンスペ民の集いのカフェ改善ダイジェスト（自動）',
     ], { shell: false, encoding: 'utf8', windowsHide: true });
     if (result.error || result.status !== 0) {
       throw new Error(result.error?.message || String(result.stderr || result.stdout || `終了コード ${result.status}`));

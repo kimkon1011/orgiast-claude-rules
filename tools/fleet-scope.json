@@ -851,6 +851,12 @@
       "scope": "fleet",
       "step": "task:fleet-mail",
       "reason": "ルール定義（rule-compliance-mail が読む）"
+    },
+    {
+      "path": "tools/handoff-audit-findings-internal-staff-discord-mcp.md",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "ドキュメントで実行体なし（~/.claude 設定名の記載による誤検出を許容）"
     }
   ]
 }

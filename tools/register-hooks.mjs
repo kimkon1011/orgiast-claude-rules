@@ -252,7 +252,7 @@ try {
   added += removeDailySessionHooks(settings);
   added += removeKimDiscordReportHooks(settings);
   const command = (name, extra = '') => `node "${path.join(repo, 'tools', name)}"${extra}`;
-  // 2026-09-06: 9本を別プロセスで動かすと304 Stop中198回が再Stopになったため、
+  // Stop ゲートは別プロセスで増やさず runner 1本へ収束させる。
   // ファイル名で旧登録を拾い、PCごとに異なるrepoパスのrunner 1本へ収束させる。
   for (const event of ['SessionStart', 'UserPromptSubmit', 'Stop', 'SessionEnd']) {
     if (add(settings.hooks[event], 'case-handoff.mjs', { hooks: [{ type: 'command', command: command('case-handoff.mjs', ' hook'), timeout: 60 }] })) added += 1;
@@ -261,6 +261,7 @@ try {
     'handoff-quality-gate.mjs', 'stop-gate.mjs', 'manual-request-fullsteps-gate.mjs',
     'handoff-investigation-gate.mjs', 'handoff-info-guard.mjs', 'negative-claim-gate.mjs',
     'report-length-gate.mjs', 'self-check-before-asking-guard.mjs', 'doc-link-drive-guard.mjs',
+    'claude-fallback-report-gate.mjs',
   ];
   if (fs.existsSync(path.join(repo, 'tools', 'stop-gate-runner.mjs'))) {
     for (const oldName of oldStopGates) added += migrate(settings.hooks.Stop, oldName, 'stop-gate-runner.mjs', command('stop-gate-runner.mjs'));

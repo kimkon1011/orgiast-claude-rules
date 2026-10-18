@@ -36,6 +36,13 @@ for (const file_path of ['orgiast-claude-rules/tools/a.mjs', '.claude/a.js', 'ap
   test(`excluded ${file_path}`, t => assert.equal(fixture(t).run('Edit', { ...edit, file_path }), undefined));
 }
 test('existing marker passes', t => assert.equal(fixture(t).run('Edit', { ...edit, old_string: 'new Anthropic(' }), undefined));
+test('anthropic ternary fallback is blocked', t => assert.equal(fixture(t).run('Edit', { ...edit, new_string: 'const provider = failed ? "anthropic" : "gemini"' }), 'deny'));
+test('claude model nullish default is blocked', t => assert.equal(fixture(t).run('Edit', { ...edit, new_string: 'const model = configured ?? "claude-haiku-5-5"' }), 'deny'));
+test('new literal passes with reason naming 3 other AIs', t => assert.equal(fixture(t).run('Edit', { ...edit, new_string: '// LLM-PROVIDER-REASON: Kimi 失敗, DeepSeek 失敗, Groq 失敗\nreturn "anthropic"' }), undefined));
+test('existing claude model literal passes', t => assert.equal(fixture(t).run('Edit', { ...edit, old_string: 'model ?? "claude-sonnet-5"', new_string: 'fallback ?? "claude-sonnet-5"' }), undefined));
+test('existing anthropic literal passes when moved into a fallback', t => assert.equal(fixture(t).run('Edit', { ...edit, old_string: 'providers.push("anthropic")', new_string: 'return "anthropic"' }), undefined));
+test('claude model literal in markdown passes', t => assert.equal(fixture(t).run('Edit', { ...edit, file_path: 'providers.md', new_string: 'default: "claude-opus-5"' }), undefined));
+test('anthropic default in test file passes', t => assert.equal(fixture(t).run('Edit', { ...edit, file_path: 'provider.test.ts', new_string: 'return "anthropic"' }), undefined));
 test('different newly added marker blocked', t => assert.equal(fixture(t).run('Edit', { ...edit, old_string: '@anthropic-ai/sdk' }), 'deny'));
 test('Write and MultiEdit checked', t => { const f = fixture(t); assert.equal(f.run('Write', { file_path: 'app.ts', content: edit.new_string }), 'deny'); assert.equal(f.run('MultiEdit', { file_path: 'app.ts', edits: [{ old_string: '', new_string: edit.new_string }] }), 'deny'); });
 test('workflow limit 1000 blocked', t => assert.equal(fixture(t).run('Bash', { command: 'gh workflow run batch.yml -f limit=1000' }), 'deny'));

@@ -6,7 +6,7 @@ import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { readAssistantText } from './lib/assistant-text.mjs';
 
 const markers = ['@anthropic-ai/sdk', 'new Anthropic(', 'api.anthropic.com', 'anthropic.messages.create', 'client.messages.create', 'web_search_20'];
-const providerMessage = 'アプリの LLM/検索は他AIが既定（ONBOARDING §2.8.0）。Web検索付き収集=Gemini Flash グラウンディング、分類・抽出・要約=Groq/DeepSeek/Gemini Flash。Claude API を使うなら `// LLM-PROVIDER-REASON: <比較した他AI 3社以上の名前と実測値>` を書く（1社だけ試して Claude に戻すのは禁止）';
+const providerMessage = 'アプリの LLM/検索は他AIが既定（ONBOARDING §2.8.0）。Web検索付き収集=Gemini Flash グラウンディング、分類・抽出・要約=Groq/DeepSeek/Gemini Flash。Claude API を使うなら `// LLM-PROVIDER-REASON: <比較した他AI 3社以上の名前と実測値>` を書く（1社だけ試して Claude に戻すのは禁止）。Claude への自動フォールバックは禁止。落とす先は別の他AI、全滅なら止めて通知（§2.8.0 5）';
 const bulkMessage = '一括実行の前に、1〜10件で1件あたり実費を実測し、[COST-ESTIMATE: 1件 $X(n件実測)×N件=$Y / 上限$Z] を書く。自動リロードは予算上限ではない。予算上限はコード側で env (例 BULK_BUDGET_USD) により自動停止させる（§2.8.0）';
 
 function estimateMatches(text, count) {
@@ -37,7 +37,17 @@ export function evaluate(input) {
     const otherAis = /gemini|perplexity|sonar|grok|xai|kimi|moonshot|deepseek|groq|mistral|glm|openrouter|qwen|cerebras/gi;
     const enough = (line) => new Set((line.match(otherAis) || []).map(s => s.toLowerCase().replace(/^sonar$/, 'perplexity').replace(/^xai$/, 'grok').replace(/^moonshot$/, 'kimi'))).size >= 3;
     if ([existing, ...edits.map(e => e.new_string)].some(t => reasonLines(t).some(enough))) return;
-    if (edits.some(e => markers.some(word => String(e.new_string || '').includes(word) && !String(e.old_string || '').includes(word)))) return providerMessage;
+    const claudeModel = /["'`]claude-(?:haiku|sonnet|opus|fable)[\w.-]*["'`]/gi;
+    const anthropicDefault = /(?:\?\?|\|\||\?|:|\breturn\b|\bdefault\b|=)\s*["'`]anthropic["'`]|["'`]anthropic["'`]\s*(?:\?\?|\|\||\?|:|\breturn\b|\bdefault\b|=)/i;
+    const newlyAddsClaudeModel = (edit) => {
+      const added = String(edit.new_string || '').match(claudeModel) || [];
+      const old = new Set((String(edit.old_string || '').match(claudeModel) || []).map(value => value.toLowerCase()));
+      return added.some(value => !old.has(value.toLowerCase()));
+    };
+    const newlyAddsAnthropicDefault = (edit) => anthropicDefault.test(String(edit.new_string || ''))
+      && !/["'`]anthropic["'`]/i.test(String(edit.old_string || ''));
+    if (edits.some(e => markers.some(word => String(e.new_string || '').includes(word) && !String(e.old_string || '').includes(word))
+      || newlyAddsClaudeModel(e) || newlyAddsAnthropicDefault(e))) return providerMessage;
   }
   if (tool !== 'Bash' || typeof args.command !== 'string') return;
   // Inspect each shell segment without executing the command.

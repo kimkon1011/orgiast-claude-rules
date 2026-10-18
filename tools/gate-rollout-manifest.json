@@ -39,6 +39,7 @@
       "rollout": "deny",
       "legacy": true
     },
+    "claude-fallback-report-gate": { "rollout": "deny", "distributedAt": "2026-10-18T00:00:00Z", "denyAfter": "2026-10-25T00:00:00Z" },
     "external-state-claim-gate": {
       "rollout": "deny",
       "legacy": true

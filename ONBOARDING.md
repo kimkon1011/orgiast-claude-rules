@@ -1325,6 +1325,13 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
 2. **既存アプリを触る時**: その機能の呼び先を最初に確認する。Claude API なら、作業を始める前に他AIへの置き換え案（同じ入力での品質比較と費用比較つき）を出す。古いアプリだからと既存経路を流用しない。
 3. **有料 LLM の一括実行（20件超・無人）の前に**: ①1〜10件で1件あたりの実費を実測する（response の usage から計算。推測の単価を伝えない）。②`[COST-ESTIMATE: 1件 $X(n件実測)×N件=$Y / 上限$Z]` を提示し、承認を得る。③コード側に予算上限（例 `BULK_BUDGET_USD`、累計が超えたら自動停止）を入れる。**オートチャージは予算上限ではない**（暴走をそのまま課金し続ける）。
 4. **監視**: 残高の監視（credit-watch）だけでなく、日次の消費額が急増したら止めて通知する。
+5. **🔴 Claude への自動フォールバック禁止（kim 2026-10-18 厳命）**: 他AIのキーが無い・残高切れ・障害の時に、Claude へ自動で落とす分岐をコードに書かない（例: `KEY ? "openrouter" : "anthropic"`、`catch → researchConferenceAnthropic`、既定モデルに `claude-*` を置く）。落とす先は**別の他AI**（例: Perplexity → DeepSeek :online → Grok → Gemini）。他AIが全部使えない時は、処理を止めて通知する（Claude で黙って続けない）。
+6. **🔴 「当面は Claude で動きます」で終えない**: デプロイ先の環境変数に他AIのキーが無い・デプロイが止まっている・他AIの残高切れ、を見つけたら、その場で直す（キー登録 → デプロイ → 実際に他AIで動いたことの確認まで）。直せない理由があれば、それを解消する作業（例: デプロイを止めているゲートの必須条件を満たす）を同じセッションで行う。報告で「当面は Claude」「Claude で代替」「入金は必須ではない」と書いて残すのは違反。
+7. **🔴 他AIの残高切れ・停止は「不要」と扱わない**: §1.18.5 と同じく、入金（オートチャージ ON）が既定。所有アカウントを Gmail の領収書等で特定し、入金先 URL・アカウント付きで kim に1回だけ依頼する。比較で他のAIが勝っていても、停止中のレーンは放置しない。
+
+**強制（追加）**: app-llm-cost-gate はアプリコードに `claude-(haiku|sonnet|opus|fable)` のモデル名や `"anthropic"` を既定・フォールバックとして書き込む変更も block する（`LLM-PROVIDER-REASON:` に他AI 3社以上が無い限り）。claude-fallback-report-gate（Stop）は、報告文の「当面は Claude」「Claude にフォールバック」「Claude で代替」「（他AIの）入金は必須ではない」等を block する。
+
+**由来（2026-10-18）**: 学会獲得アプリで、他AI（Perplexity）に切り替えた後も ①コードに「OpenRouter のキーが無ければ Claude」の分岐を書き、②Vercel にキーが無いのを「当面は Claude Haiku で動きます」と報告で済ませ、③Kimi の残高切れを「入金は必須ではない」と書いた。どれも、いつの間にか Claude に戻してコストを犠牲にする誘導だった（kim「勝手に Claude を使うように誘導してユーザーのコストパフォーマンスを犠牲にしている」）。
 
 **強制**: `tools/app-llm-cost-gate.mjs`（PreToolUse）が、①アプリコードへの Claude API 呼び出しの新規追加（`LLM-PROVIDER-REASON:` なし）と、②有料 LLM キーを使う workflow/script の20件超起動（`[COST-ESTIMATE:` なし、または上限超過）を block する。
 

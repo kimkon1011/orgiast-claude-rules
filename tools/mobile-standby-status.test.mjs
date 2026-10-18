@@ -115,9 +115,10 @@ test('notifies when the count does not recover after opening', async () => {
   assert.match(message, /目標 2 本 \/ 現在 0 本/);
 });
 
-test('replenish does nothing when the goal is already met', async () => {
+test('replenish does nothing when the goal is already met, but records the cooldown', async () => {
   const home = tempHome();
   let opened = 0;
+  const stateFile = path.join(home, '.claude', 'mobile-standby-status-state.json');
   const result = await replenishStandby({
     home,
     fetchImpl: async () => response([standby('remote-control-a-b'), standby('remote-control-c-d')]),
@@ -125,8 +126,12 @@ test('replenish does nothing when the goal is already met', async () => {
     open: async () => { opened += 1; return 1; },
     sleep: async () => {},
     notify: async () => ({ delivered: 'dm' }),
+    now: () => Date.parse('2026-10-18T00:00:00Z'),
+    stateFile,
   });
+  const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
   fs.rmSync(home, { recursive: true, force: true });
   assert.equal(result.action, 'none');
   assert.equal(opened, 0);
+  assert.deepEqual(state, { at: Date.parse('2026-10-18T00:00:00Z'), standby: 2, goal: 2 });
 });

@@ -115,10 +115,11 @@ export async function replenishStandby({
 } = {}) {
   const before = await checkStandby({ home, fetchImpl, goal });
   if (before.error) return { action: 'skipped', reason: before.error, before };
+  // 健全でも記録する。記録しないと purge-sessions --hook が SessionStart/Stop のたびに起動してしまう。
+  if (stateFile) fs.writeFileSync(stateFile, JSON.stringify({ at: now(), standby: before.standby, goal }));
   if (!before.shortfall) return { action: 'none', before };
   const cli = codeCli ?? resolveVscodeCli({ env: process.env, exists: fs.existsSync, homedir: home ?? os.homedir() });
   if (!cli) return { action: 'skipped', reason: 'no-vscode-cli', before };
-  if (stateFile) fs.writeFileSync(stateFile, JSON.stringify({ at: now() }));
   let opened;
   try { opened = await open({ count: before.shortfall, codeCli: cli, spawnProcess }); }
   catch (error) { return { action: 'failed', reason: `open failed: ${error.message}`, before }; }

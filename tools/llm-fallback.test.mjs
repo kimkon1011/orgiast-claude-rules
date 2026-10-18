@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { callWithFallback, FALLBACK_CHAIN } from './llm-fallback.mjs';
+import { callWithFallback, FALLBACK_CHAIN, isPermanentBillingFailure, sanitizeFailureReason } from './llm-fallback.mjs';
 
 const start = { provider: 'groq', model: 'model-a' };
 const second = { provider: 'openrouter', model: 'model-b' };
@@ -225,14 +225,52 @@ test('恒久的な課金切れの429はリトライせず次候補へ進む', as
   assert.equal(result.candidate.provider, 'openrouter');
 });
 
-test('恒久的な課金切れの429にも上限を適用する', async (t) => {
+test('恒久的な課金切れの429は24時間クールダウンにする', async (t) => {
   const files = temporaryFiles(t), timestamp = 1_700_000_000_000; let calls = 0;
   await callWithFallback({ start, chain: [second], payloadFor: requestFor, ...files, now: () => timestamp,
     fetchImpl: async () => ++calls === 1
       ? new Response('{"error":{"message":"insufficient_quota"}}', { status: 429 })
       : new Response('{}', { status: 200 }) });
   const state = JSON.parse(fs.readFileSync(files.cooldownFile, 'utf8'));
-  assert.deepEqual(state.groq, { until: timestamp + 60_000, reason: 'http_429', at: timestamp });
+  assert.deepEqual(state.groq, { until: timestamp + 24 * 60 * 60 * 1000, reason: 'insufficient_balance', at: timestamp });
+});
+
+test('isPermanentBillingFailure は Moonshot の残高不足429を恒久扱いし、groqの通常429は除外する', () => {
+  const moonshot = '{"error":{"message":"Your account org-x <ak-abc123> is suspended due to insufficient balance, please recharge your account or check your plan and billing details","type":"exceeded_current_quota_error"}}';
+  assert.equal(isPermanentBillingFailure(429, moonshot), true);
+  assert.equal(isPermanentBillingFailure(429, 'Rate limit reached for model on tokens per day (TPD). Upgrade at https://console.groq.com/settings/billing'), false);
+  assert.equal(isPermanentBillingFailure(402, ''), true);
+  assert.equal(isPermanentBillingFailure(500, 'insufficient balance'), false);
+});
+
+test('Moonshotの残高不足429はリトライせず次候補へ進む', async (t) => {
+  const files = temporaryFiles(t), timestamp = 1_700_000_000_000; let calls = 0; const waits = [];
+  const result = await callWithFallback({ start: { provider: 'kimi', model: 'kimi-k3' }, chain: [second], payloadFor: requestFor, ...files, now: () => timestamp,
+    sleepImpl: async (ms) => waits.push(ms),
+    fetchImpl: async () => ++calls === 1
+      ? new Response('{"error":{"message":"is suspended due to insufficient balance","type":"exceeded_current_quota_error"}}', { status: 429 })
+      : new Response('{}', { status: 200 }) });
+  assert.equal(calls, 2);
+  assert.deepEqual(waits, []);
+  assert.equal(result.candidate.provider, 'openrouter');
+  assert.equal(JSON.parse(fs.readFileSync(files.cooldownFile, 'utf8')).kimi.reason, 'insufficient_balance');
+});
+
+test('sanitizeFailureReason は秘密値とアカウント識別子を伏せて1行に丸める', () => {
+  const text = sanitizeFailureReason('HTTP429: {"error":{"message":"suspended <ak-abc123> sk-abcdefghijklmnop org-8f2dfd3d9719491f940fa06215ad5f8a\nnext"}}');
+  assert.ok(!text.includes('sk-abcdefghijklmnop'));
+  assert.ok(!text.includes('ak-abc123'));
+  assert.ok(!text.includes('org-8f2dfd3d9719491f940fa06215ad5f8a'));
+  assert.ok(!text.includes('\n'));
+  assert.ok(text.length <= 140);
+  assert.match(text, /insufficient|suspended|HTTP429/);
+});
+
+test('sanitizeFailureReason は JSON エスケープされたアカウント識別子も伏せる', () => {
+  // Moonshot は本文中で <ak-...> を <ak-...> とエスケープして返す（2026-10-18 実測）。
+  const text = sanitizeFailureReason('HTTP429: {"message":"\\u003cak-fbmh37xby5t111cx8zc1\\u003e is suspended due to insufficient balance"}');
+  assert.ok(!text.includes('fbmh37xby5t111cx8zc1'));
+  assert.match(text, /insufficient balance/);
 });
 
 test('成功したプロバイダのクールダウンを削除する', async (t) => {

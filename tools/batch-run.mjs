@@ -8,7 +8,7 @@ import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { readEnvValue } from './env-kv.mjs';
-import { callWithFallback, classifyFailure, FALLBACK_CHAIN } from './llm-fallback.mjs';
+import { callWithFallback, classifyFailure, FALLBACK_CHAIN, sanitizeFailureReason } from './llm-fallback.mjs';
 import { batchDeadline } from './lib/batch-deadline.mjs';
 import { runEvalHarnessJobs } from './lib/eval-harness-coalesce.mjs';
 import { acquireLock } from './lib/single-instance.mjs';
@@ -109,7 +109,7 @@ async function runStandard(job) {
     async onAttempt(info) {
       let usage = {};
       if (info.status === 'ok') usage = (await info.response.clone().json().catch(() => ({}))).usage || {};
-      usageRecord(info.candidate.provider, info.candidate.model, usage, { status: info.status, attempt: info.attempt, failover: info.failover, secs: Number(info.secs.toFixed(3)) });
+      usageRecord(info.candidate.provider, info.candidate.model, usage, { status: info.status, attempt: info.attempt, failover: info.failover, secs: Number(info.secs.toFixed(3)), ...(info.reason ? { reason: sanitizeFailureReason(info.reason) } : {}) });
     },
     onFailover({ from, to, reason }) { console.error(`[failover] ${from.provider}:${from.model} ${reason} → ${to.provider}:${to.model}`); },
   });

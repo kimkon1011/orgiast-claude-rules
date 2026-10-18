@@ -7,6 +7,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { normalizeExecutorStatus } from './executor-status.mjs';
 import { isEntry } from './is-entry.mjs';
+import { PERMANENT_BILLING_PATTERN, sanitizeFailureReason } from './llm-fallback.mjs';
 
 const DAY = 86_400_000;
 const HOUR = 3_600_000;
@@ -119,6 +120,15 @@ const WSL_LANE_ABSENT = /WSL ディストリが見つかりません/;
 // "Weekly/Monthly Limit Exhausted")。レーンは壊れておらず、上限リセットで自動回復する。
 export function isQuotaLimitedRow(row = {}) {
   return /^http_?(402|429)$/.test(String(row?.status ?? '').toLowerCase());
+}
+
+// 429/402 と同じく、瞬時の通信失敗や 5xx はレーンの恒久故障の証拠ではない。
+export function isTransientFailureRow(row = {}) {
+  const status = String(row?.status ?? '').toLowerCase();
+  if (status === 'network' || status === 'timeout') return true;
+  const match = status.match(/^(?:http_?)?(\d{3})$/);
+  const code = match ? Number(match[1]) : NaN;
+  return Number.isFinite(code) && code >= 500 && code <= 599;
 }
 
 // cooldown の行は「上限/レート制限中なのでリクエストを投げなかった」記録(cheap-code.mjs が
@@ -277,7 +287,7 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
   if (modelAuthMismatch.length) findings.push({ id: 'codex_model_auth_mismatch', severity: 'medium', title: 'Codex が ChatGPT アカウントで sol/astra を選んで失敗', evidence: [`${modelAuthMismatch.length}件`, ...reasonTop(modelAuthMismatch)], fixTask: 'codex-do のレーン選択が ChatGPT アカウント認証を検出できず sol/astra を選んでいる。detectChatGptAuth と decideCodexLane の判定を照合し、再現テストを追加して修正' });
   if (authFailed.length && !repairedAfter(authFailed)) findings.push({ id: 'codex_auth_failed', severity: 'high', title: 'Codex CLI が未認証（WSL 側の再ログインが必要）', evidence: [`${authFailed.length}件`, 'WSL の ~/.codex/auth.json を確認し codex login を実行'], fixTask: 'Windows の %USERPROFILE%\\.codex\\auth.json を WSL の ~/.codex/ にコピーし codex login status。Windows 側も未ログインのときだけ人の codex login が要る' });
   if (realEmpty.length) findings.push({ id: 'codex_empty_output', severity: 'medium', title: 'Codex の出力ゼロ', evidence: [`${realEmpty.length}件`, ...reasonTop(realEmpty), ...(empty.length > realEmpty.length ? [`インフラ/起動失敗で除外 ${empty.length - realEmpty.length}件`] : [])], fixTask: 'codex が出力ゼロで終了した原因（認証切れ/上限/起動失敗）を codex-do のログから特定' });
-  for (const [provider, state] of Object.entries(cooldown)) if (state?.reason === 'http_402' && Number(state.until) > nowMs) findings.push({ id: 'provider_balance_exhausted', severity: 'low', title: `${provider} の残高切れ`, evidence: [`provider ${provider}`, CLAUDE_FALLBACK_RULE] });
+  for (const [provider, state] of Object.entries(cooldown)) if (['http_402', 'insufficient_balance'].includes(state?.reason) && Number(state.until) > nowMs) findings.push({ id: 'provider_balance_exhausted', severity: 'low', title: `${provider} の残高切れ`, evidence: [`provider ${provider}`, CLAUDE_FALLBACK_RULE] });
   const providers = new Map();
   for (const row of usageRows) {
     if (!row.provider) continue;
@@ -310,15 +320,23 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
     // 起票すると、上限が続く限り毎晩同じ偽の修理タスクが積まれる（2026-10-13 診断: glm の
     // 3件は 1 リクエストの再試行で、実体は Coding Plan の週次/月次上限到達）。
     // codex の usage_limit と同じく low・fixTask なしの可視化だけにする。
-    if (attempts.every(isQuotaLimitedRow)) {
-      findings.push({ id: 'provider_usage_limit', provider, severity: 'low', title: `${provider} は上限/レート制限で停止（欠陥ではない）`,
-        evidence: [`${attempts.length}件すべて失敗`, ...reasonTop(attempts.map(row => ({ reason: row.stderrTail || row.reason || emptyOutputReason(row) })))] });
+    const quotaRows = attempts.filter(isQuotaLimitedRow);
+    const transientRows = attempts.filter((row) => !isQuotaLimitedRow(row) && isTransientFailureRow(row));
+    if (quotaRows.length && quotaRows.length + transientRows.length === attempts.length) {
+      const billingRows = attempts.filter((row) => PERMANENT_BILLING_PATTERN.test(String(row.reason || row.stderrTail || '')));
+      findings.push({ id: 'provider_usage_limit', provider, severity: 'low',
+        title: billingRows.length
+          ? `${provider} は残高切れで停止（チャージで回復・欠陥ではない）`
+          : `${provider} は上限/レート制限で停止（欠陥ではない）`,
+        evidence: [`${attempts.length}件すべて失敗`, ...reasonTop(attempts.map(row => ({ reason: sanitizeFailureReason(row.stderrTail || row.reason || emptyOutputReason(row)) }))),
+          ...(billingRows.length ? [`残高切れ ${billingRows.length}件`, '対処: 課金をチャージすると自動回復（Claudeからは実行不可）'] : []),
+          ...(transientRows.length ? [`一時的な通信失敗 ${transientRows.length}件`] : [])] });
       continue;
     }
     const times = attempts.map(row => row.t).sort((a, b) => Date.parse(a) - Date.parse(b));
     const skipped = rows.length - attempts.length;
     findings.push({ id: 'lane_outage_unrepaired', provider, severity: 'high', title: `${provider} レーンが全滅したまま（未修理）`,
-      evidence: [`${attempts.length}件すべて失敗`, `最初 ${times[0]}`, `最後 ${times.at(-1)}`, ...(skipped ? [`cooldown スキップ ${skipped}件`] : []), ...reasonTop(attempts.map(row => ({ reason: row.stderrTail || row.reason || emptyOutputReason(row) })))],
+      evidence: [`${attempts.length}件すべて失敗`, `最初 ${times[0]}`, `最後 ${times.at(-1)}`, ...(skipped ? [`cooldown スキップ ${skipped}件`] : []), ...reasonTop(attempts.map(row => ({ reason: sanitizeFailureReason(row.stderrTail || row.reason || emptyOutputReason(row)) })))],
       fixTask: `${provider} が直近 ${attempts.length} 件すべて失敗している。代替レーンや Claude 本体へ逃げて放置せず、stderrTail から原因を特定して修復し、修復後に1回実行して成功を実測する。直せないときは試した手段と出力を記録する` });
   }
   return findings.length ? findings : [{ id: 'healthy', severity: 'low', title: '委譲経路は正常', evidence: [] }];

@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { budgetVerdict, estimateTokens, noteResponse, readBudget, writeBudget } from './rate-budget.mjs';
+import { redactSecrets } from './redact-secrets.mjs';
 
 export const FALLBACK_CHAIN = Object.freeze([
   { provider: 'groq', model: 'openai/gpt-oss-120b' },
@@ -99,6 +100,27 @@ function reasonForLog(reason, maxLength = 140) {
   return singleLine.length <= maxLength ? singleLine : `${singleLine.slice(0, maxLength - 1)}…`;
 }
 
+// 恒久的な課金切れ・アカウント停止。再試行しても回復しないので即座に次候補へ回す。
+// Moonshot(Kimi) は残高不足を 429 + exceeded_current_quota_error / "suspended due to
+// insufficient balance" で返す（2026-10-18 実測: available_balance 0 / cash_balance -0.73）。
+// groq の通常429は本文に console.groq.com/settings/billing を含むだけなので一致しない。
+export const PERMANENT_BILLING_PATTERN = /prepayment credits are depleted|insufficient_quota|exceeded your current quota|insufficient balance|exceeded_current_quota_error|suspended due to/i;
+
+export function isPermanentBillingFailure(status, detail) {
+  if (status === 402) return true;
+  return status === 429 && PERMANENT_BILLING_PATTERN.test(String(detail || ''));
+}
+
+// 台帳に残す失敗理由。秘密値を伏せ、改行を潰し、長さを抑える。
+export function sanitizeFailureReason(reason, maxLength = 140) {
+  const masked = String(reason ?? '')
+    // 本文は JSON 文字列なので `<ak-...>` が <ak-...> で来ることがある（Moonshot 実測）。
+    .replace(/\\?u003cak-[A-Za-z0-9._-]+\\?u003e/gi, '<ak-***>')
+    .replace(/<ak-[A-Za-z0-9._-]+>/gi, '<ak-***>')
+    .replace(/\borg-[0-9a-f]{16,}\b/gi, 'org-***');
+  return reasonForLog(redactSecrets(masked), maxLength);
+}
+
 export async function callWithFallback({ start, chain = FALLBACK_CHAIN, allowGatewayFallback = true, payloadFor, fetchImpl = fetch, onAttempt, onFailover, validateResponse, sleepImpl = defaultSleep, cooldownFile, ledgerFile, budgetFile, now = () => Date.now() }) {
   const home = process.env.ORGIAST_HOME || os.homedir();
   const timestamp = now();
@@ -174,12 +196,16 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, allowGat
   function setCooldown(provider, status, response, permanentBilling = false) {
     if (!useCooldown) return;
     let duration = 0;
-    if (status === 429) duration = Math.min(cooldownMax, Math.max(cooldownMin, retryAfterMs(response, now()) ?? cooldownMin));
-    else if (status === 402 || permanentBilling) duration = 24 * 60 * 60 * 1000;
+    let reason = `http_${status}`;
+    if (status === 402) duration = 24 * 60 * 60 * 1000;
+    // 課金切れの 429 は 402 と同じ「金が無い」状態。60秒ごとに叩き直さず24時間あける。
+    // reason を http_429 にすると起動時の legacy clamp（900秒上限）に潰されるため別名にする。
+    else if (permanentBilling && status === 429) { duration = 24 * 60 * 60 * 1000; reason = 'insufficient_balance'; }
+    else if (status === 429) duration = Math.min(cooldownMax, Math.max(cooldownMin, retryAfterMs(response, now()) ?? cooldownMin));
     else if ([401, 403].includes(status)) duration = 6 * 60 * 60 * 1000;
     if (!duration) return;
     const at = now();
-    cooldowns[provider] = { until: at + duration, reason: `http_${status}`, at };
+    cooldowns[provider] = { until: at + duration, reason, at };
     cooldownDirty = true;
     saveCooldowns();
   }
@@ -266,7 +292,7 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, allowGat
       await onAttempt?.({ candidate, attempt, status: statusName(status), response, reason: lastReason, secs: (Date.now() - began) / 1000, failover: candidate.provider !== start.provider });
       // groq の通常429の本文には `https://console.groq.com/settings/billing` が含まれるため、
       // 素の `billing` で判定すると日次上限(TPD)を恒久障害と誤判定する。恒久障害の文面だけを拾う。
-      const permanentBilling = status === 429 && /prepayment credits are depleted|insufficient_quota|exceeded your current quota/i.test(detail);
+      const permanentBilling = isPermanentBillingFailure(status, detail);
       setCooldown(candidate.provider, status, response, permanentBilling);
 
       const kind = classifyFailure(status);

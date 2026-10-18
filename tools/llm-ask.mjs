@@ -1,7 +1,7 @@
 // 複数プロバイダのLLMを1本で叩く統合CLIヘルパー。
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
 import { readEnvValue } from './env-kv.mjs';
-import { callWithFallback, FALLBACK_CHAIN, preferredForCategory } from './llm-fallback.mjs';
+import { callWithFallback, FALLBACK_CHAIN, preferredForCategory, sanitizeFailureReason } from './llm-fallback.mjs';
 import { geminiUsage, recordGeminiUsage } from './gemini-usage-ledger.mjs';
 
 const PROVIDERS = {
@@ -82,7 +82,7 @@ function appendAttempt(info, usage = {}) {
     } catch {}
     return;
   }
-  const rec = { t: new Date().toISOString(), provider: info.candidate.provider, model: info.candidate.model, in: usage.prompt_tokens || 0, out: usage.completion_tokens || 0, secs: Number(info.secs.toFixed(3)), status: info.status, attempt: info.attempt, failover: info.failover };
+  const rec = { t: new Date().toISOString(), provider: info.candidate.provider, model: info.candidate.model, in: usage.prompt_tokens || 0, out: usage.completion_tokens || 0, secs: Number(info.secs.toFixed(3)), status: info.status, attempt: info.attempt, failover: info.failover, ...(info.reason ? { reason: sanitizeFailureReason(info.reason) } : {}) };
   try { fs.mkdirSync(path.dirname(ledger), { recursive: true }); fs.appendFileSync(ledger, JSON.stringify(rec) + '\n'); } catch {}
 }
 

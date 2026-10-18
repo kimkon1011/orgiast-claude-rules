@@ -130,5 +130,11 @@
     "route": "codex-do.mjs を前景・単発（--timeout 付き）で回し、実装を委譲したら『実行中』のまま handoff せず当ターン内に完了まで見届ける（バックグラウンド起動・『実行中で終える』は禁止。WSL 不在で codex 経路が起動しない PC は内蔵フォールバック→不可なら Claude 直で実装）",
     "confidence": "high",
     "source": "handoff-audit-nightly:cd0e44f6287a30bd9eb06925705ff6833711b4c62af5246898c21dcfd0229578 / 2026-10-15 rescue/auto-session-20261014-030203 のレビューで landing（同 rescue の他2件は既存 entry と route が重複のため除外。当該型の再発監査ツールは PR #781）"
+  },
+  {
+    "pattern": "社内スタッフ宛の依頼文・連絡文",
+    "route": "Discord MCP",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:24160c93aa5920f6c41ee5ad29a06b80323908701603060103bf4091be08cab0"
   }
 ]

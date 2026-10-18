@@ -72,7 +72,17 @@ function topLevelEntries() {
 }
 
 function listFiles(dir, predicate) {
-  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch (error) {
+    // テストファイルは別プロセスで並行実行される。drive-hub-mirror.test.mjs は
+    // tools/drive_mirror_test_repo_* を作って消すため、走査中に消えたディレクトリは
+    // 無かったものとして扱う（CI で ENOENT になる flake の防止）。
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return [];
+    throw error;
+  }
+  return entries.flatMap((entry) => {
     const target = path.join(dir, entry.name);
     if (entry.isDirectory()) return listFiles(target, predicate);
     return entry.isFile() && predicate(entry.name) ? [target] : [];

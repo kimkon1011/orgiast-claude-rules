@@ -588,8 +588,14 @@ async function execute(command, args, ctx) {
     state.lastDigestAt = now.toISOString();
     state.lastDigestIteration = state.totalIterations;
     save();
-    await sendNotice(text, ctx);
-    return { ok: true, slot, text };
+    // Record what actually happened, not just that no error was logged:
+    // sendNotice swallows delivery failures, so "no error in run.log" is not
+    // evidence that the DM arrived (2026-10-17 実測)。呼び出し側が run.log に
+    // delivered を残せるよう、結果を戻り値と state の両方に載せる。
+    const delivery = await sendNotice(text, ctx);
+    state.lastDigestDelivered = delivery?.delivered ?? 'unknown';
+    save();
+    return { ok: true, slot, text, delivered: state.lastDigestDelivered };
   }
   if (['stop', 'pause', 'resume'].includes(command)) {
     if (command === 'resume') {

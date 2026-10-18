@@ -56,8 +56,12 @@ export async function runOnce(options = {}) {
   if (!release) return { skipped: 'already_running' };
   const record = (entry) => fs.appendFileSync(path.join(paths.dir, 'run.log'), `${JSON.stringify({ ts: (options.now || new Date()).toISOString(), ...entry })}\n`, 'utf8');
   const safeDigest = async () => {
-    try { await runAutopilot('digest', {}, options); }
-    catch (e) { record({ digestError: e.code || e.message }); }
+    try {
+      const digest = await runAutopilot('digest', {}, options);
+      // 「送信エラーが無い」ではなく「実際に届いたか」を残す。sendNotice は
+      // 送信失敗を握り潰すので、以前の run.log では未達を検出できなかった。
+      if (digest && !digest.skipped && digest.slot) record({ digest: digest.slot, delivered: digest.delivered });
+    } catch (e) { record({ digestError: e.code || e.message }); }
   };
   try {
     const pre = await runAutopilot('pre', {}, options);

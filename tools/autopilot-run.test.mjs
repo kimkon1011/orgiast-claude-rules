@@ -26,6 +26,17 @@ test('runner does not invoke Claude when unstarted, paused, stopped, or done', a
   assert.equal((await runOnce(opts)).skipped, 'done');
 });
 
+test('run.log records whether the digest was actually delivered, even on a paused tick', async (t) => {
+  const opts = fixture(t);
+  await runAutopilot('start', { objective: 'test' }, opts);
+  await runAutopilot('pause', {}, opts);
+  const result = await runOnce({ ...opts, now: new Date('2026-09-21T03:00:00Z') });
+  assert.equal(result.skipped, 'manual_pause');
+  const log = fs.readFileSync(path.join(opts.dir, 'run.log'), 'utf8');
+  assert.match(log, /"digest":"2026-09-21-12"/);
+  assert.match(log, /"delivered":"none"/);
+});
+
 test('models follow planIncluded; prompt comes from skill and headless uses one foreground iteration', async (t) => {
   for (const [policy, model] of [[{ planIncluded: true }, 'claude-fable-5-1'], [{ planIncluded: false }, 'claude-opus-5'], [{}, 'claude-opus-5']]) {
     const opts = fixture(t);

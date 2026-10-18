@@ -190,6 +190,24 @@ test('running pre/post and day rollover never send progress DMs; logs retain wor
   assert.match(fs.readFileSync(f.paths.log, 'utf8'), /work1[\s\S]*work4/);
 });
 
+test('digest records the real delivery result and never re-sends the same slot', async (t) => {
+  const f = discord(t);
+  await f.call('start', { objective: 'digest goal' });
+  const noon = { now: new Date('2026-09-21T03:00:00Z') };
+  const sent = await f.call('digest', {}, noon);
+  assert.equal(sent.ok, true);
+  assert.equal(sent.slot, '2026-09-21-12');
+  assert.equal(sent.delivered, 'dm');
+  assert.equal((await f.call('status', {}, noon)).state.lastDigestDelivered, 'dm');
+  assert.equal((await f.call('digest', {}, noon)).skipped, 'not_due_or_already_sent');
+  f.unavailable.add('dm');
+  const evening = { now: new Date('2026-09-21T12:00:00Z') };
+  const failed = await f.call('digest', {}, evening);
+  assert.equal(failed.delivered, 'none');
+  assert.equal((await f.call('status', {}, evening)).state.lastDigestDelivered, 'none');
+  assert.equal(f.sent.length, 1); // 未達の分は送れた扱いにしない
+});
+
 test('done is durable, notifies once, and handoff contains the seven session-close headings', async (t) => {
   const f = discord(t);
   await f.call('start', { objective: 'test', done: 'pass tests' });

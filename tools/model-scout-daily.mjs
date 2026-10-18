@@ -100,14 +100,15 @@ export async function runDailyScout({ home = process.env.ORGIAST_HOME || userHom
       else record(`model-scout eval 完了: ${candidateClean}`);
     }
     await propose({ home, resultsFile, configFile, log: record });
-    if (failed) throw new Error('evaluation incomplete');
+    if (failed) throw new Error('未評価候補が残ったため未完了（次回1回だけ再試行）');
     const temp = `${dailyFile}.${process.pid}.tmp`;
     fs.writeFileSync(temp, JSON.stringify({ completedAt: now.toISOString(), evaluated: targets.length }) + '\n');
     fs.renameSync(temp, dailyFile);
     record(`model-scout 完了: 評価 ${targets.length} 件`);
     return { ok: true, evaluated: targets.length };
-  } catch {
-    record('model-scout error: 日次処理失敗。次回再試行');
+  } catch (e) {
+    const reason = String(e?.message ?? e).replace(/[\r\n\t]/g, ' ').slice(0, 200);
+    record(`model-scout error: 日次処理失敗（${reason}）。次回再試行`);
     return { ok: false };
   } finally { if (owned) fs.rmSync(lock, { force: true }); }
 }

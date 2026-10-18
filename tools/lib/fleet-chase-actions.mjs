@@ -4,7 +4,9 @@ import { createHash } from 'node:crypto';
 import { parseExecMarkers } from '../fleet-mail.mjs';
 import { redactSecrets } from '../fleet-agent.mjs';
 import { listDecisions } from '../pending-decisions.mjs';
-import { POLICY, CATEGORY, DAY, HOUR, active, oldest, iso, millis, attempt, safe } from './fleet-chase-ledger.mjs';
+import { POLICY, CATEGORY, DAY, HOUR, active, oldest, iso, millis, attempt, safe, outboundTracking, trackedMailIds } from './fleet-chase-ledger.mjs';
+
+import { rolloutSummary, rolloutTop } from './fleet-chase-rollout.mjs';
 
 export const DIGEST_LIMIT = 1900;
 
@@ -62,13 +64,13 @@ async function sendChase(item, action, ctx) {
 export async function chase(ledger, ctx) {
   const { now, freshness, pcMap = {}, sendDm, dryRun = false, persist = () => {} } = ctx;
   const plans = [];
-  for (const item of Object.values(ledger.items).filter(i => i.kind === 'outbound' && i.status === 'open').sort(oldest)) {
+  for (const item of Object.values(ledger.items).filter(i => outboundTracking(i) && i.status === 'open').sort(oldest)) {
     if (millis(item.deferredUntil) > now) {
       item.nextActionAt = item.deferredUntil;
       plans.push({ id: item.id, target: item.target, action: 'deferred', at: item.nextActionAt });
       continue;
     }
-    const unchecked = [item.mailId, ...item.chaseMailIds].some(id => !ledger.checks?.[id]?.verified || ledger.checks[id].error);
+    const unchecked = trackedMailIds(item).some(id => !ledger.checks?.[id]?.verified || ledger.checks[id].error);
     if (unchecked) {
       item.nextActionAt = iso(now + HOUR / 2);
       plans.push({ id: item.id, target: item.target, action: '状態確認待ち', at: item.nextActionAt });
@@ -147,6 +149,8 @@ export function digestText(ledger, { home, now }) {
   const stale = items.filter(i => i.status === 'stale').length;
   const decisions = listDecisions({ home, status: 'pending' }).length;
   const lines = [`📌 fleet 追跡: 未完了 ${pending.length} 件（送信 ${pending.length - inbound} / 受信 ${inbound} / ブロッカー ${blocked} / 宛先停止 ${stopped.length}）／24h で完了 ${done} 件`];
+  lines.push(rolloutSummary(ledger));
+  for (const item of rolloutTop(ledger)) lines.push(`遵守追跡: ${item.title.slice(0, 160)}`);
   const footer = [`要 kim 判断: ${decisions} 件 → Discord の判断依頼チャンネルで回答`];
   const workExhausted = pending.filter(i => i.attempts.filter(a => a.action === 'work').length >= POLICY.workAttempts).length;
   const finalLevel = pending.filter(i => i.level >= 3).length;

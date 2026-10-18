@@ -13,4 +13,20 @@ export function enforcementDocument(registry,enforcement){return Object.fromEntr
 export function validateEnforcement(document,registry){const ids=new Set(registry.rules.map(x=>x.id)),modes=new Set(['off','warn','block']);for(const[id,value]of Object.entries(document)){if(!ids.has(id))throw new Error(`未登録の rule id: ${id}`);if(!modes.has(value?.mode))throw new Error(`不正な mode: ${id}=${value?.mode}`);}for(const id of ids)if(!(id in document))throw new Error(`rule id が欠落: ${id}`);return true;}
 export function writeEnforcement(file,document,registry){validateEnforcement(document,registry);fs.mkdirSync(path.dirname(file),{recursive:true});let backup=null;if(fs.existsSync(file)){backup=`${file}.bak.${new Date().toISOString().replace(/[:.]/g,'-')}`;fs.copyFileSync(file,backup);}fs.writeFileSync(file,JSON.stringify(document,null,2)+'\n');validateEnforcement(JSON.parse(fs.readFileSync(file,'utf8')),registry);return backup;}
 export function runAudit({home=defaultHome(),days=7,apply=false,dryRun=true}={}){const registry=readJson(path.join(here,'rules-registry.json'),{rules:[]}),catalog=readJson(path.join(here,'automation-routes.json'),{}),since=Date.now()-days*864e5;const files=projectTranscripts(path.join(home,'.claude','projects')).filter(f=>{try{return fs.statSync(f).mtimeMs>=since;}catch{return false;}});const sessions=files.map(file=>({sessionId:path.basename(file,'.jsonl'),events:readEvents(file,since)}));const ledgerFile=path.join(home,'.claude','handoff-ledger.jsonl'),runnerFile=path.join(home,'.claude','stop-gate-runner-ledger.jsonl'),oldLedger=fs.existsSync(ledgerFile)?readJsonl(ledgerFile):[],runnerLedger=fs.existsSync(runnerFile)?readJsonl(runnerFile):[],runnerHandoff=runnerLedger.filter(x=>x.blockedBy?.includes('handoff-quality-gate')).map(x=>({...x,verdict:x.verdict==='retry-cap'?'passed':x.verdict==='block'?'blocked':x.verdict})),ledger=[...oldLedger,...runnerHandoff],ledgerAvailable=ledger.length>0,bypassedCount=oldLedger.filter(x=>x.verdict==='bypassed'&&Date.parse(x.ts)>=since).length+runnerLedger.filter(x=>x.verdict==='retry-cap'&&Date.parse(x.ts)>=since).length;const skipFile=path.join(home,'.claude','handoff-gate-skips.jsonl'),skipAvailable=fs.existsSync(skipFile),skips=skipAvailable?readJsonl(skipFile).filter(x=>Date.parse(x.ts)>=since):[];const results=auditSessions(sessions,registry,catalog,ledger),old=readJson(path.join(home,'.claude','rule-enforcement.json'),{}),enforcement={};for(const rule of registry.rules)enforcement[rule.id]=decideRuleEnforcement(rule,results[rule.id],old[rule.id]);const document=enforcementDocument(registry,enforcement),report=makeReport(registry,results,enforcement,days,{ledgerAvailable,skipInfo:{available:skipAvailable,records:skips},bypassedCount});let backup=null;if(apply&&!dryRun)backup=writeEnforcement(path.join(home,'.claude','rule-enforcement.json'),document,registry);return{rows:sessions.reduce((n,s)=>n+s.events.length,0),results,enforcement,document,backup,report};}
-if(isEntry(import.meta.url)){const i=process.argv.indexOf('--days'),eq=process.argv.find(x=>x.startsWith('--days=')),days=Number(eq?.split('=')[1]||(i>=0?process.argv[i+1]:7))||7,apply=process.argv.includes('--apply'),dryRun=!apply||process.argv.includes('--dry-run'),result=runAudit({days,apply,dryRun});process.stdout.write(result.report);if(apply)process.stdout.write(`\n${dryRun?'[dry-run] 書く予定':'書き込み済み'} rule-enforcement.json:\n${JSON.stringify(result.document,null,2)}\n`);}
+if (isEntry(import.meta.url)) {
+  const args = process.argv.slice(2);
+  const index = args.indexOf('--days');
+  const value = args.find(arg => arg.startsWith('--days='))?.split('=')[1];
+  const days = Number(value ?? (index >= 0 ? args[index + 1] : 7));
+  if (!Number.isFinite(days) || days <= 0) throw new Error('--days must be positive');
+  // JSON is a read-only audit interface, including when --apply is also supplied.
+  const json = args.includes('--json');
+  const apply = !json && args.includes('--apply');
+  const dryRun = !apply || args.includes('--dry-run');
+  const result = runAudit({ days, apply, dryRun });
+  if (json) process.stdout.write(JSON.stringify(result) + '\n');
+  else {
+    process.stdout.write(result.report);
+    if (apply) process.stdout.write(`\n${dryRun ? '[dry-run] 書く予定' : '書き込み済み'} rule-enforcement.json:\n${JSON.stringify(result.document, null, 2)}\n`);
+  }
+}

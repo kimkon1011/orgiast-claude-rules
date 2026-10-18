@@ -14,7 +14,8 @@ import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
 import { relayQuestions, readQuestion, clearResume, reconcileResumes, collectQuestions, validSessionId, RESUME_LIMIT_MS } from './fleet-question-relay.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { LANE_HEALTH_KIM_PC, parseLaneDoctorOutput, deadLanes, repairAdvice, laneHealthSignature, buildLaneHealthMail } from './lib/lane-health.mjs';
-export { resolveFleetLabel };
+import { dailyRuleCompliance } from './fleet-rule-compliance-daily.mjs';
+export { resolveFleetLabel, dailyRuleCompliance };
 
 const ownRepo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -1011,6 +1012,10 @@ export async function pollOnce(deps = {}) {
     try { (deps.dailySelfHeal ?? dailySelfHeal)({ dir, now }); } catch (error) { err(`fleet-mail: 自己修復失敗: ${redactSecrets(error.message)}`); }
     try { (deps.autoRunFixNow ?? autoRunFixNow)({ dir }); } catch (error) { err(`fleet-mail: 自動修復失敗: ${redactSecrets(error.message)}`); }
     try { await (deps.dailyLaneHealth ?? dailyLaneHealth)({ dir, label, request, now }); } catch (error) { err(`fleet-mail: レーン健全性報告失敗: ${redactSecrets(error.message)}`); }
+    try {
+      await (deps.dailyRuleCompliance ?? dailyRuleCompliance)({ dir, home, label, request, now,
+        repo: deps.repo ?? ownRepo, background: true, stderr: err });
+    } catch { err('fleet-mail: ルール遵守報告失敗（pollは継続）'); }
     // Transport latency must never prevent durable receipt or per-mail processing.
     await notifyPendingArrivals({ ...deps, home, label, now, stderr: err });
     out(deps.json ? JSON.stringify({ received, processed: handled }) : `受信=${received.length} / 処理=${handled.length} / 隔離=${rejected}`);

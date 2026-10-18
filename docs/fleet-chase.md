@@ -1,6 +1,7 @@
 # fleet 依頼の追跡
 
 TASK_ID: fleet-chase-A-ledger-and-escalation (2026-10-18)、担当: Codex。
+TASK_ID: fleet-chase-B-rule-compliance-rollout (2026-10-18)、担当: Codex。
 送って終わりにせず、完了の証拠を回収するまでkim-PCで追跡する。
 **期限切れは完了ではない。** GASやinboxのstatusを台帳から書き換えない。
 
@@ -64,3 +65,21 @@ convergeのtask:fleet-chaseが `register-fleet-chase.mjs` を呼ぶ。
 OrgiastFleetChaseは30分周期、50分上限、重複起動禁止。kim-PC以外では登録しない。
 既存watchdogは未配達SLA、convergence-watchはルール配布収束、chaseは依頼の完了回収を担う。
 本実装ではpush/merge/GAS変更/実タスク登録を行わない。
+
+## ルール遵守の回収
+
+各PCのpollは日次ワーカーを起動し、7日間の監査を子プロセスで実行（120秒上限）。pollは監査を待たない。
+`.fleet-rule-compliance-day` で試行を1日1回に制限し、失敗はstderrへ1行、翌日再試行する。
+`FLEET_NO_SELF_HEAL=1` は報告も停止。kim-PC以外は `[報告・返信不要][rule-compliance]` note（72h有効）を送る。
+JSONは件数・率・現在の保存済みenforcement modeのみ。違反抜粋・session本文は送らない。
+kim-PCは `rule-compliance-fleet-self.json` を保存。`--ingest` は受信済みnoteとselfを回収する。
+`fleet-chase/compliance-history.json` はPC×UTC日付の最新1件を30日保持する。
+validatedかつ非delegatedルールで、該当5件以上・違反率50%以上が連続3日ならrollout/violationをopen。
+次の新鮮な報告で違反率50%未満（該当件数あり）、またはdone返信後の報告がblockなら完了する。
+報告が止まっても違反は閉じない。48h以内にpollしているPCから72h報告が無ければrollout/no-reportを起票。
+no-reportは新しい報告の到着で完了。遠隔PCは既存L0〜L3の催促を使用する。
+kim-PC自身はinbound扱いで送信せず、ローカル作業結果と次の報告で検証する。
+convergence-watchのtargetsは読み取り専用でミラーし、存在が確認できたtargetsから消えたら完了。催促はwatch側のみ。
+`--compliance` はPC×ルールの違反率・報告日時・未報告PCの最終pollを表示する（読み取り専用）。
+`--dry-run --compliance` はHOMEに何も書かない。未到着のself報告も「—」で表示する。
+digest/statusに遵守の件数、digestに上位3件、contextに最大1件（kim-PC自身優先）を追加する。

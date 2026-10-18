@@ -17,6 +17,7 @@ export const ENTRY_LIMIT = 240;
 export const CONTEXT_LIMIT = 1800;
 export const CATEGORY_LIMITS = Object.freeze([3, 3, 3, 2]);
 export const FOOTER = 'node tools/fleet-mail.mjs --inbox --unseen';
+export const MACHINE_REPORT = /\[(?:lane-health|rule-compliance)\]/;
 export function isHeadless(env = process.env) {
   return env.CLAUDE_HEADLESS === '1' || !!String(env.ORGIAST_HEADLESS_JOB || '').trim();
 }
@@ -25,7 +26,8 @@ export function selectContext(messages, { headless = isHeadless(), sessionId = '
   const active = messages.filter(m => (m.status === 'failed' && m.kind === 'prompt' && !(now - Date.parse(m.failedAt) > 72 * 60 * 60 * 1000) || !TERMINAL_STATUSES.includes(m.status)) && !expired.includes(m));
   if (!active.length && !expired.length) return { context: '', shown: [] };
   // 全カテゴリで上限を適用する前に新着順に並べ、古い依頼に新着が埋もれるのを防ぐ。
-  const eligible = active.filter(m => !(headless && hasDecisionRequest(m)) && !(sessionId && m.presentedSession === sessionId))
+  // 機械レポート（レーン健全性・ルール遵守率）は集計側(fleet-mail-watchdog / fleet-chase)が読む。セッションには出さない。
+  const eligible = active.filter(m => !(headless && hasDecisionRequest(m)) && !(sessionId && m.presentedSession === sessionId) && !MACHINE_REPORT.test(m.why || ''))
     .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')) || String(a.id).localeCompare(String(b.id)));
   // §5: 別セッションでは done まで再提示（seen/presentedAt だけでは隠さない）。
   const failed = eligible.filter(m => m.status === 'failed' && m.kind === 'prompt').slice(0, 3);

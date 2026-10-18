@@ -29,6 +29,14 @@ export function selectContext(ledger, { home, sessionId = '', now = Date.now() }
   const header = `[fleet-chase 未完了債務 ${pending.length} 件（受信 ${incoming.length} / 送信 ${pending.length - incoming.length}）] 完了の証拠が出るまで毎セッション表示されます。期限切れでも消えません。\n`;
   const footer = '一覧: node tools/fleet-chase.mjs --status';
   let result = header;
+  const rollout = pending.filter(item => item.kind === 'rollout').sort((a, b) =>
+    Number(b.pc === 'kim-PC' && b.subkind === 'violation') - Number(a.pc === 'kim-PC' && a.subkind === 'violation') || oldest(a, b))[0];
+  if (rollout) {
+    const line = rollout.pc === 'kim-PC' && rollout.subkind === 'violation'
+      ? `kim-PC 自身 ${rollout.ruleId} 違反率 ${Math.round((rollout.latestRule?.rate || 0) * 100)}%: このセッションでも該当操作の前に ${rollout.summary}`
+      : `rollout: ${rollout.title}`;
+    result += redactSecrets(line).slice(0, 350) + '\n';
+  }
   for (const item of [...inbound, ...outbound]) {
     const age = Math.floor((now - millis(item.createdAt)) / DAY);
     const deferred = millis(item.deferredUntil) > now ? ` 保留中:${item.deferredUntil} ${item.deferReason.slice(0, 35)}` : '';

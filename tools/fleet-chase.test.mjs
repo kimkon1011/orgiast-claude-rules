@@ -268,3 +268,6 @@ test('resend tracking header cannot hide a body-only human decision tag from rec
   assert.equal(hasDecisionRequest(f.requests[0].payload), true);
   assert.equal(mailCategory(f.requests[0].payload), CATEGORY.decision);
 });
+
+// Include rollout integration in the established task-A test entrypoint.
+import './fleet-chase-rollout.test.mjs';

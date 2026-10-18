@@ -14,3 +14,7 @@
 6. レビュー後に dry-run なしで初回実行します。
 
 自動化経路を増やしたときは `tools/automation-routes.json` の適切なカテゴリへ追加します。秘密情報は登録せず、経路名だけを書きます。
+
+各PCは日次で `[rule-compliance]` の件数・違反率・現在の強制modeを kim-PC に報告する（自身はself.json）。
+kim-PC は fleet-chase が違反継続・報告欠落・配布未収束を追跡し、次の報告で完了の証拠を確認する。
+`node tools/rule-compliance-loop.mjs --days 7 --json` は書き込みなしのJSON監査。`fleet-chase.mjs --compliance` で集計表示。

@@ -12,13 +12,15 @@ import { isEntry } from './is-entry.mjs';
 import { DAY, active, oldest, millis, readJson, loadLedger, ledgerPath, saveJson, ingest, checkLedger, control, safe } from './lib/fleet-chase-ledger.mjs';
 import { chase, digest } from './lib/fleet-chase-actions.mjs';
 import { work } from './lib/fleet-chase-work.mjs';
+import { collectRollout, reconcileRollout, complianceTable, rolloutSummary } from './lib/fleet-chase-rollout.mjs';
+export * from './lib/fleet-chase-rollout.mjs';
 export * from './lib/fleet-chase-ledger.mjs';
 export { chase, digest, digestText, resendBody } from './lib/fleet-chase-actions.mjs';
 export { work, workHeader } from './lib/fleet-chase-work.mjs';
 
 export const ownRepo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export function parseArgs(argv) {
-  const flags = new Set(['--ingest', '--check', '--chase', '--digest', '--work', '--status', '--json', '--dry-run']);
+  const flags = new Set(['--ingest', '--check', '--chase', '--digest', '--work', '--status', '--compliance', '--json', '--dry-run']);
   const values = new Set(['--cancel', '--defer', '--until', '--reason', '--revive']);
   const options = {};
   for (let i = 0; i < argv.length; i++) {
@@ -37,11 +39,13 @@ export function parseArgs(argv) {
 export function counts(ledger) {
   const items = Object.values(ledger.items);
   return { outbound: items.filter(i => i.kind === 'outbound').length, inbound: items.filter(i => i.kind === 'inbound').length,
+    rollout: items.filter(i => i.kind === 'rollout').length,
     stale: items.filter(i => i.status === 'stale').length, pending: items.filter(active).length };
 }
 export function statusTable(ledger, now, plans = []) {
   const summary = counts(ledger);
-  const lines = [`取り込み: outbound=${summary.outbound} inbound=${summary.inbound} stale=${summary.stale} 未完了=${summary.pending}`,
+  const lines = [`取り込み: outbound=${summary.outbound} inbound=${summary.inbound} rollout=${summary.rollout} stale=${summary.stale} 未完了=${summary.pending}`,
+    rolloutSummary(ledger),
     'kind / level / 経過日数 / 相手 / why / 次アクション時刻 / 状態 (itemId)'];
   for (const item of Object.values(ledger.items).sort(oldest)) {
     lines.push(`${item.kind} / L${item.level} / ${Math.floor((now - millis(item.createdAt)) / DAY)}日 / ${item.target} / ${item.title.slice(0, 60)} / ${item.nextActionAt || '-'} / ${item.status} (${item.id})`);
@@ -58,7 +62,7 @@ export async function runChase(options = {}, deps = {}) {
   const now = (deps.now ?? Date.now)();
   const dryRun = !!options['--dry-run'];
   const repo = deps.repo ?? ownRepo;
-  const release = dryRun || options['--status'] && !Object.keys(options).some(k => ['--cancel', '--defer', '--revive', '--ingest', '--check', '--chase', '--work', '--digest'].includes(k))
+  const release = dryRun || (options['--status'] || options['--compliance']) && !Object.keys(options).some(k => ['--cancel', '--defer', '--revive', '--ingest', '--check', '--chase', '--work', '--digest'].includes(k))
     ? () => {} : acquireLock(path.join(home, '.claude', 'fleet-chase', '.lock'));
   if (!release) return { skipped: 'locked' };
   try {
@@ -76,7 +80,7 @@ export async function runChase(options = {}, deps = {}) {
     }
     const phases = ['ingest', 'check', 'chase', 'work', 'digest'].filter(k => options[`--${k}`]);
     const preview = dryRun && options['--status'];
-    const all = !phases.length && (!options['--status'] || preview);
+    const all = !phases.length && (!options['--status'] && !options['--compliance'] || preview);
     const should = phase => all || phases.includes(phase);
     const stderr = deps.stderr ?? console.error;
     let client;
@@ -90,18 +94,28 @@ export async function runChase(options = {}, deps = {}) {
     });
     const pcMap = deps.pcMap ?? readJson(path.join(repo, 'fleet-pc-map.json'), {});
     let beacons;
-    const fetchBeacons = () => beacons ||= import('./fleet-beacon.mjs').then(m => m.fetchBeacons({ home }));
+    const fetchBeacons = () => beacons ||= Promise.resolve().then(() => deps.fetchBeacons
+      ? deps.fetchBeacons() : import('./fleet-beacon.mjs').then(m => m.fetchBeacons({ home, fetchImpl: deps.fetchImpl })));
     const freshnessCache = new Map();
     const freshness = deps.freshness ?? (to => {
       if (!freshnessCache.has(to)) freshnessCache.set(to, describeTargetFreshness({ to, home, now: () => now, pcMap, fetchBeacons }));
       return freshnessCache.get(to);
     });
-    const ctx = { ...deps, home, repo, now, dryRun, persist, request, freshness, pcMap, stderr,
+    const ctx = { ...deps, home, repo, now, dryRun, persist, request, freshness, pcMap, stderr, fetchBeacons,
       // notifyKim's default plain-Japanese rewrite uses an LLM; this loop must not.
       notify: deps.notify ?? (text => notifyKim(text, { home, webhookFallback: false, plainJa: false })),
       sendDm: deps.sendDm ?? ((person, text) => sendDiscordDm(person, text, { home })) };
-    if (should('ingest')) { ingest(ledger, ctx); persist(); }
-    if (should('check')) { await checkLedger(ledger, ctx); persist(); }
+    const rollout = should('ingest') || should('check') || options['--compliance'] ? await collectRollout(ctx) : null;
+    if (should('ingest')) {
+      ingest(ledger, ctx);
+      reconcileRollout(ledger, rollout, ctx);
+      persist();
+    }
+    if (should('check')) {
+      await checkLedger(ledger, ctx);
+      reconcileRollout(ledger, rollout, ctx);
+      persist();
+    }
     const plans = should('chase') ? await chase(ledger, ctx) : [];
     const workResult = should('work') ? await work(ledger, ctx) : null;
     let digestResult;
@@ -110,7 +124,7 @@ export async function runChase(options = {}, deps = {}) {
       catch { stderr('fleet-chase: ダイジェスト送信失敗（次回再試行）'); }
     }
     if (all || phases.length) persist();
-    return { ledger, counts: counts(ledger), plans, work: workResult, digest: digestResult, now };
+    return { ledger, counts: counts(ledger), plans, work: workResult, digest: digestResult, now, compliance: rollout ? complianceTable(rollout) : undefined };
   } finally { release(); }
 }
 export async function main(argv = process.argv.slice(2), deps = {}) {
@@ -119,6 +133,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   if (result.skipped === 'not-controller') return 0;
   const stdout = deps.stdout ?? console.log;
   if (options['--json'] || result.skipped) stdout(JSON.stringify(safe(result)));
+  else if (options['--compliance']) stdout(result.compliance);
   else stdout(statusTable(result.ledger, result.now, result.plans));
   return 0;
 }

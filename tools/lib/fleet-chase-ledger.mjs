@@ -15,6 +15,11 @@ export const POLICY = Object.freeze({ stale: 7 * DAY, resend: 3 * DAY, ownerDm: 
 export const CATEGORY = Object.freeze({ decision: mailCategory({ why: '[判断依頼]' }),
   task: mailCategory({ why: '[作業依頼]' }) });
 export const BLOCKER = /権限がない|権限なし|できません|未オプトイン|承諾コマンド|判断待ち|BLOCKED|FAILED|exit=[1-9]|マージ権限|push.*権限/i;
+export const outboundTracking = item => item.kind === 'outbound'
+  || item.kind === 'rollout' && item.direction === 'outbound' && item.subkind !== 'convergence';
+export const trackedMailIds = item => item.kind === 'rollout'
+  ? [...new Set([...item.chaseMailIds, ...(item.pendingSend ? [item.pendingSend.payload.id] : [])])]
+  : [item.mailId, ...item.chaseMailIds];
 export const active = item => ['open', 'waiting', 'blocked'].includes(item.status);
 export const iso = time => new Date(time).toISOString();
 export const millis = value => typeof value === 'number' ? value : Date.parse(value) || 0;
@@ -134,8 +139,8 @@ export function checkInbound(ledger, { home, now }) {
 export async function checkLedger(ledger, { home, now, request, stderr = console.error }) {
   const cache = readJson(path.join(home, '.claude', 'fleet-mail-sent-status.json'), {});
   ledger.checks ||= {};
-  const candidates = [...new Set(Object.values(ledger.items).filter(i => i.kind === 'outbound' && active(i))
-    .flatMap(i => [i.mailId, ...i.chaseMailIds]))];
+  const candidates = [...new Set(Object.values(ledger.items).filter(i => outboundTracking(i) && active(i))
+    .flatMap(trackedMailIds))];
   candidates.sort((a, b) => millis(ledger.checks[a]?.checkedAt) - millis(ledger.checks[b]?.checkedAt) || a.localeCompare(b));
   for (const id of candidates.slice(0, POLICY.checkLimit)) {
     const previous = ledger.checks[id] || {};
@@ -150,18 +155,24 @@ export async function checkLedger(ledger, { home, now, request, stderr = console
       stderr(`fleet-chase: 状態取得失敗 ${id}（次回再試行）`);
     }
   }
-  for (const item of Object.values(ledger.items).filter(i => i.kind === 'outbound' && active(i))) {
-    const ids = [item.mailId, ...item.chaseMailIds];
+  for (const item of Object.values(ledger.items).filter(i => outboundTracking(i) && active(i))) {
+    const ids = trackedMailIds(item);
     const replies = ids.map(id => ledger.checks[id]).filter(c => c?.verified && c.mail?.status === 'done').map(c => c.mail);
     const done = replies.find(m => !BLOCKER.test(m.resultBody || ''));
-    if (done) {
+    if (done && item.kind === 'rollout') {
+      const observedAt = item.replyEvidence?.mailId === done.id ? item.replyEvidence.at : iso(now);
+      item.replyEvidence = { type: 'reply', mailId: done.id, at: done.resultAt || observedAt };
+    } else if (done) {
       complete(item, { type: 'reply', mailId: done.id || item.mailId, at: done.resultAt || iso(now) }, now);
       for (const derived of Object.values(ledger.items).filter(i => i.derivedFrom === item.id && active(i))) {
         complete(derived, item.evidence, now);
       }
       continue;
     }
-    if (replies.length) handBack(ledger, item, replies[0], now);
+    if (replies.length && !done) {
+      if (item.kind === 'rollout') item.blockerSummary = redactSecrets(replies[0].resultBody || '').slice(0, 200);
+      else handBack(ledger, item, replies[0], now);
+    }
     // Cache is a hint for timing only. It cannot establish completion.
     const states = ids.map(id => ledger.checks[id]?.mail || cache[id]).filter(Boolean);
     const seen = states.map(m => m.seenAt).filter(Boolean).sort();

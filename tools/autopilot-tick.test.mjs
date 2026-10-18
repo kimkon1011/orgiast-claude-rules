@@ -85,6 +85,35 @@ test('a pending question keeps a daily-cap pause until the human answers', async
   assert.equal((await f.call('status', {}, tomorrow)).state.pendingQuestion, null);
 });
 
+test('an unanswered timed question expires and stops blocking the pause', async (t) => {
+  const f = fixture(t);
+  await f.call('start', { objective: 'test', 'max-iter-per-day': 1 });
+  assert.equal((await f.call('post', { summary: 'work', progress: 10 })).watchdog.reason, 'daily_iter_cap');
+  await f.call('pause', { question: 'このまま進めてよいですか？', 'question-deadline': '2026-09-21T02:00:00Z' });
+  // Before the deadline (same day, so the cap still applies): the question survives.
+  const early = await f.call('pre', {}, { now: new Date('2026-09-21T01:30:00Z') });
+  assert.equal(early.verdict, 'pause');
+  assert.equal(early.pendingQuestion, 'このまま進めてよいですか？');
+  // After the deadline the question clears itself (nothing is executed) and the cap reset resumes.
+  const later = { now: new Date('2026-09-22T01:00:00Z') };
+  const pre = await f.call('pre', {}, later);
+  assert.equal(pre.verdict, 'run');
+  assert.equal(pre.pendingQuestion, null);
+  const state = (await f.call('status', {}, later)).state;
+  assert.equal(state.status, 'running');
+  assert.equal(state.pendingQuestionExpiresAt, null);
+  assert.equal(state.lastExpiredQuestion.question, 'このまま進めてよいですか？');
+  assert.equal(state.lastExpiredQuestion.expiredAt, '2026-09-21T02:00:00.000Z');
+});
+
+test('an invalid question deadline is ignored', async (t) => {
+  const f = fixture(t);
+  await f.call('start', { objective: 'test' });
+  await f.call('pause', { question: '進めますか？', 'question-deadline': 'not-a-date' });
+  assert.equal((await f.call('status')).state.pendingQuestionExpiresAt, null);
+  assert.equal((await f.call('pre')).pendingQuestion, '進めますか？');
+});
+
 test('hours cap uses the range of today log timestamps and fires immediately on post', async (t) => {
   const f = discord(t);
   await f.call('start', { objective: 'test', 'max-hours-per-day': 1 });

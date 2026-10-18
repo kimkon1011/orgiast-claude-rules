@@ -21,15 +21,29 @@ export function loadConfig(home, env = process.env, localFile = path.join(here,'
   if(fs.existsSync(dir)) for(const name of fs.readdirSync(dir).filter(n=>n.endsWith('.env')).sort()) Object.assign(config,parseEnvText(fs.readFileSync(path.join(dir,name),'utf8')));
   return {...config,...readJson(localFile,{}),...env};
 }
+function refNames(ref) { return Array.isArray(ref) ? ref : [ref]; }
+function resolveRef(ref, config) {
+  const name=refNames(ref).find(name=>typeof name==='string' && /^[A-Z][A-Z0-9_]*$/.test(name) && config[name]);
+  return name ? config[name] : undefined;
+}
+export function appDirectory(dir, platform=process.platform) {
+  return typeof dir==='string' && platform!=='win32' && /^[A-Za-z]:[\\/]/.test(dir)
+    ? '/mnt/'+dir[0].toLowerCase()+'/'+dir.slice(3).replace(/\\/g,'/') : dir;
+}
 export function appConfig(entry, config) {
-  const local={};const dir=config[entry.refs.appDir];
+  const local={};const dir=appDirectory(resolveRef(entry.refs?.appDir,config));
   if(dir) for(const name of ['.env','.env.local']) {try{Object.assign(local,parseEnvText(fs.readFileSync(path.join(dir,name),'utf8')));}catch(e){if(e.code!=='ENOENT')throw e;}}
-  return {...local,...config};
+  const merged={...local,...config};
+  // Array tails are app-local fallback names; explicit primary overrides keep priority.
+  for(const ref of Object.values(entry.refs || {})) if(Array.isArray(ref)) {
+    for(const name of ref.slice(1)) if(local[name]) merged[name]=local[name];
+  }
+  return merged;
 }
 function requireRef(entry, config, key) {
-  const name=entry.refs?.[key];
-  if(!/^[A-Z][A-Z0-9_]*$/.test(name || '') || !config[name]) throw new Error(`${key} 参照キー未設定`);
-  return config[name];
+  const value=resolveRef(entry.refs?.[key],config);
+  if(!value) throw new Error(`${key} 参照キー未設定`);
+  return value;
 }
 async function request(url, options, fetchImpl) {
   let response;
@@ -64,6 +78,11 @@ export async function fetchPending(entry, config, fetchImpl=fetch) {
     if(entry.intake==='relay') items=items.filter(row=>row.app_name===entry.appName);
   } else throw new Error('未対応 intake');
   if(items.some(row=>!row || typeof row!=='object' || !(row.message_id || row.id || row.key)))throw new Error('原票の識別子なし');
+  if(entry.intake==='supabase') items=items.filter(row=> {
+    const page=typeof row.page_path==='string'?row.page_path:'';
+    return (!entry.pagePathInclude?.length || entry.pagePathInclude.some(prefix=>page.startsWith(prefix)))
+      && !entry.pagePathExclude?.some(prefix=>page.startsWith(prefix));
+  });
   return {items:items.filter(row=>!DONE.has(String(row.status || '').trim().toLowerCase())),partial};
 }
 export function normalizeItem(entry, row) {
@@ -115,7 +134,7 @@ export async function sweep({registryFile=path.join(here,'feedback-zero-registry
         for(const item of raw.values()) {
           const key=item.message_id;
           let job=state.jobs[key];
-          const repo=env[entry.refs.repo] || repoMap[entry.appName];
+          const repo=resolveRef(entry.refs.repo,env) || repoMap[entry.appName];
           const known=job?.issue || tracked.find(i=>String(i.message_id)===key);
           let issue=known;
           if(issue) {
@@ -139,7 +158,7 @@ export async function sweep({registryFile=path.join(here,'feedback-zero-registry
           state.jobs[key]=job;persist();
           if(['awaiting-review','running'].includes(job.status))continue;
           if(job.retryAt>now){row.deferred++;continue;}
-          const dir=env[entry.refs.appDir];
+          const dir=appDirectory(resolveRef(entry.refs.appDir,env));
           if(!dir || !fs.existsSync(dir)){job.status='deferred';job.reason='作業ディレクトリ参照キー未設定';job.retryAt=nextLocalMidnight(now);row.deferred++;persist();continue;}
           const decision=gate({home,origin:'unattended',now});
           if(decision.deferred || launched>=maxJobs) {

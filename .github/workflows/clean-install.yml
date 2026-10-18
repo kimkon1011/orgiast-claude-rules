@@ -78,6 +78,9 @@ jobs:
           Remove-Item Env:ORGIAST_REPO -ErrorAction SilentlyContinue
           Remove-Item Env:ORGIAST_HOME -ErrorAction SilentlyContinue
           $nightly = Join-Path $env:USERPROFILE '.claude\nightly-repo'
+          # onboarding-sync の hook 登録(setup --converge)が CLAUDE.md 更新後に完走するようになり、
+          # 先行ステップで nightly-repo が作られることがある。フィクスチャは必ず作り直す（冪等）。
+          if (Test-Path -LiteralPath $nightly) { Remove-Item -LiteralPath $nightly -Recurse -Force }
           git clone --no-hardlinks --no-checkout . $nightly
           if ($LASTEXITCODE -ne 0) { throw 'nightly fixture clone failed' }
           # Model the PR commit as the fetched main tip, then use bootstrap's checkout command.

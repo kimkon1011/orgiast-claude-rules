@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, isBackendExhausted, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS } = await import('./codex-do.mjs');
+const { needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, isBackendExhausted, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -366,6 +366,15 @@ test('detectCodexAuthFailure は 401 / 未ログインを検知し、指示文�
   assert.equal(detectCodexAuthFailure('all good', ''), false);
   // 指示文に同じ文言が入っているだけのときは認証失敗とみなさない。
   assert.equal(detectCodexAuthFailure('error: 401 Unauthorized', '', '401 Unauthorized の扱いを直して'), false);
+});
+
+test('isCodexAuthFailure は失敗終了した Codex の認証エラーだけを検知する', () => {
+  assert.equal(isCodexAuthFailure({ status: 0, output: 'error: 401 Unauthorized' }), false);
+  assert.equal(isCodexAuthFailure({ status: 1, output: 'error: 401 Unauthorized' }), true);
+  assert.equal(isCodexAuthFailure({ status: 'error', stderr: 'error: 401 Unauthorized' }), true);
+  assert.equal(isCodexAuthFailure({ status: 1, timedOut: true, stderr: 'error: 401 Unauthorized' }), false);
+  assert.equal(isCodexAuthFailure({ status: 1, output: 'error: 401 Unauthorized' }, '401 Unauthorized の扱いを直して'), false);
+  assert.equal(isCodexAuthFailure(undefined), false);
 });
 
 test('Codex が認証失敗(401)したら再試行せず代替バックエンドへ回す', () => {

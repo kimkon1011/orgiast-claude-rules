@@ -129,6 +129,16 @@ const REASON_TEXT = {
 };
 const reasonText = (reason) => REASON_TEXT[reason] || '止まりました。';
 const autoResumes = (reason) => reason === 'daily_iter_cap' || reason === 'daily_hours_cap';
+// A runner error is usually "the CLI could not authenticate" (an expired OAuth login).
+// The owner fixes that by logging in once, which rewrites ~/.claude/.credentials.json.
+// Nothing used to look at the file, so a run that paused after 3 errors stayed dead even
+// after the cause was gone: the resume task is one-shot and watchdog() skips paused runs.
+// The probe stays cheap and local — no child launch.
+function credentialsRefreshedSince(state, paths) {
+  const since = Date.parse(state.lastRunnerErrorAt || '');
+  if (!Number.isFinite(since)) return false;
+  try { return fs.statSync(path.join(paths.home, '.claude', '.credentials.json')).mtimeMs > since; } catch { return false; }
+}
 export function digestSlot(date) {
   const d = new Date(date);
   const hour = Number(new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Tokyo', hour: 'numeric', hourCycle: 'h23' }).format(d));
@@ -495,6 +505,15 @@ async function execute(command, args, ctx) {
       && !capReason(state, objective, summarize(log, todayKey))) {
       resumeState(state);
     }
+    // The 3-strike runner-error pause is a dead end for the owner: re-login fixes the
+    // cause, but no timer lifts the pause. Lift it once the credentials were rewritten
+    // after the failure; the counter resets, so a still-broken login pauses again after
+    // 3 fresh errors instead of relaunching the child every tick.
+    if (state.status === 'paused' && state.pausedReason === 'runner_error'
+      && (state.consecutiveRunnerErrors || 0) >= 3 && !state.pendingQuestion
+      && credentialsRefreshedSince(state, paths)) {
+      resumeState(state);
+    }
     // No candidate and no command: leave a completed run byte-for-byte intact.
     if (state.status !== 'done' || control) {
       state.controlCursors = { ...state.controlCursors, ...result.cursors };
@@ -631,6 +650,7 @@ async function execute(command, args, ctx) {
     }
     if (command === 'pause' && args.reason === 'runner_error') {
       state.consecutiveRunnerErrors = (state.consecutiveRunnerErrors || 0) + 1;
+      state.lastRunnerErrorAt = now.toISOString();
       const n = state.consecutiveRunnerErrors;
       if (n < 3) {
         const backoffMin = 30 * Math.pow(2, n - 1);

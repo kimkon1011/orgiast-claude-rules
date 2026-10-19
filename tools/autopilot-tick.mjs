@@ -139,6 +139,24 @@ function credentialsRefreshedSince(state, paths) {
   if (!Number.isFinite(since)) return false;
   try { return fs.statSync(path.join(paths.home, '.claude', '.credentials.json')).mtimeMs > since; } catch { return false; }
 }
+// A dead OAuth login no longer has to stop the run: autopilot-run.mjs passes the
+// ~/.claude/deepseek.env key to the child when the Claude credentials are empty.
+// Nothing lifted the 3-strike pause for that lane, so a PC whose login is never renewed
+// stayed paused forever although the child would now start (2026-10-20 実測: 全tickが
+// skipped:runner_error のまま、credentials は 2026-10-17T04:27Z で不変).
+// Keep a quiet gap so a broken fallback key retries at a human pace, not every tick.
+const FALLBACK_RESUME_COOLDOWN_MS = 30 * 60_000;
+function fallbackKeyAvailable(paths) {
+  try {
+    const env = fs.readFileSync(path.join(paths.home, '.claude', 'deepseek.env'), 'utf8');
+    return /^\s*DEEPSEEK_API_KEY\s*=\s*["']?[^\s"']+/m.test(env);
+  } catch { return false; }
+}
+function fallbackResumeReady(state, paths, now) {
+  if (!fallbackKeyAvailable(paths)) return false;
+  const since = Date.parse(state.lastRunnerErrorAt || '');
+  return !Number.isFinite(since) || now.getTime() - since >= FALLBACK_RESUME_COOLDOWN_MS;
+}
 export function digestSlot(date) {
   const d = new Date(date);
   const hour = Number(new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Tokyo', hour: 'numeric', hourCycle: 'h23' }).format(d));
@@ -507,11 +525,12 @@ async function execute(command, args, ctx) {
     }
     // The 3-strike runner-error pause is a dead end for the owner: re-login fixes the
     // cause, but no timer lifts the pause. Lift it once the credentials were rewritten
-    // after the failure; the counter resets, so a still-broken login pauses again after
+    // after the failure, or once the deepseek fallback lane can carry the child while the
+    // login stays dead. The counter resets, so a still-broken lane pauses again after
     // 3 fresh errors instead of relaunching the child every tick.
     if (state.status === 'paused' && state.pausedReason === 'runner_error'
       && (state.consecutiveRunnerErrors || 0) >= 3 && !state.pendingQuestion
-      && credentialsRefreshedSince(state, paths)) {
+      && (credentialsRefreshedSince(state, paths) || fallbackResumeReady(state, paths, now))) {
       resumeState(state);
     }
     // No candidate and no command: leave a completed run byte-for-byte intact.

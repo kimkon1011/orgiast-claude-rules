@@ -143,6 +143,44 @@ test('a renewed login does not wipe an unanswered question', async (t) => {
   assert.equal(pre.pendingQuestion, 'このまま進めますか？');
 });
 
+test('a dead login still resumes when the deepseek key can carry the child', async (t) => {
+  const f = fixture(t);
+  const creds = path.join(f.opts.home, '.claude', '.credentials.json');
+  fs.mkdirSync(path.dirname(creds), { recursive: true });
+  fs.writeFileSync(creds, JSON.stringify({ claudeAiOauth: { accessToken: '', refreshToken: '' } }));
+  fs.utimesSync(creds, new Date('2026-09-21T00:00:00Z'), new Date('2026-09-21T00:00:00Z'));
+  fs.writeFileSync(path.join(f.opts.home, '.claude', 'deepseek.env'), 'DEEPSEEK_API_KEY="sk-test"\n');
+  await f.call('start', { objective: 'test' });
+  for (let i = 0; i < 3; i += 1) await f.call('pause', { reason: 'runner_error', detail: 'OAuth session expired' });
+  // Right after the pause nothing relaunches: a broken key must not spawn the child every tick.
+  assert.equal((await f.call('pre', {}, { now: new Date(NOW.getTime() + 5 * 60_000) })).verdict, 'pause');
+  const later = { now: new Date(NOW.getTime() + 31 * 60_000) };
+  assert.equal((await f.call('pre', {}, later)).verdict, 'run');
+  const state = (await f.call('status', {}, later)).state;
+  assert.equal(state.status, 'running');
+  assert.equal(state.consecutiveRunnerErrors, 0);
+});
+
+test('without a deepseek key a dead login keeps the 3-strike pause', async (t) => {
+  const f = fixture(t);
+  fs.mkdirSync(path.join(f.opts.home, '.claude'), { recursive: true });
+  await f.call('start', { objective: 'test' });
+  for (let i = 0; i < 3; i += 1) await f.call('pause', { reason: 'runner_error', detail: 'OAuth session expired' });
+  assert.equal((await f.call('pre', {}, { now: new Date(NOW.getTime() + 60 * 60_000) })).verdict, 'pause');
+});
+
+test('the deepseek fallback does not wipe an unanswered question', async (t) => {
+  const f = fixture(t);
+  fs.mkdirSync(path.join(f.opts.home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(f.opts.home, '.claude', 'deepseek.env'), 'DEEPSEEK_API_KEY=sk-test\n');
+  await f.call('start', { objective: 'test' });
+  for (let i = 0; i < 3; i += 1) await f.call('pause', { reason: 'runner_error', detail: 'OAuth session expired' });
+  await f.call('pause', { reason: 'runner_error', question: 'このまま進めますか？' });
+  const pre = await f.call('pre', {}, { now: new Date(NOW.getTime() + 60 * 60_000) });
+  assert.equal(pre.verdict, 'pause');
+  assert.equal(pre.pendingQuestion, 'このまま進めますか？');
+});
+
 test('an invalid question deadline is ignored', async (t) => {
   const f = fixture(t);
   await f.call('start', { objective: 'test' });

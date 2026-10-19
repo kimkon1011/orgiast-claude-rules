@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runOnce, invokeClaude, buildPrompt } from './autopilot-run.mjs';
+import { runOnce, invokeClaude, buildPrompt, resolveSupervisorAuth } from './autopilot-run.mjs';
 import { runAutopilot, acquireLock } from './autopilot-tick.mjs';
 
 function fixture(t) {
@@ -328,4 +328,36 @@ test('進捗報告: 12:00 枠・21:00 枠でそれぞれ 1 回だけ送る。同
   // 起床 6: 21:30 JST (21:00 枠の2回目の起床 -> 二重送信しない)
   await runOnce({ ...opts, now: new Date('2026-10-14T21:30:00+09:00'), invokeImpl: async () => ({ exitCode: 0 }) });
   assert.equal(sent.length, 2);
+});
+
+test('resolveSupervisorAuth: OAuth が死んでいる時だけ deepseek.env の鍵へ切り替える', () => {
+  const files = (map) => (file) => {
+    const name = path.basename(String(file));
+    if (!(name in map)) throw new Error('ENOENT');
+    return map[name];
+  };
+  const creds = (token) => JSON.stringify({ claudeAiOauth: { accessToken: token } });
+
+  const envLane = resolveSupervisorAuth({ home: 'H', env: { ANTHROPIC_AUTH_TOKEN: 'x' }, readFile: files({}) });
+  assert.equal(envLane.lane, 'env');
+  assert.equal(envLane.model, null);
+
+  const oauthEnv = { PATH: 'q' };
+  const oauthLane = resolveSupervisorAuth({ home: 'H', env: oauthEnv, readFile: files({ '.credentials.json': creds('tok') }) });
+  assert.equal(oauthLane.lane, 'oauth');
+  assert.equal(oauthLane.model, null);
+  assert.equal(oauthLane.env, oauthEnv);
+
+  const dead = files({ '.credentials.json': creds(''), 'deepseek.env': 'DEEPSEEK_API_KEY="sk-test"\n' });
+  const fallback = resolveSupervisorAuth({ home: 'H', env: { PATH: 'p' }, readFile: dead });
+  assert.equal(fallback.lane, 'deepseek');
+  assert.equal(fallback.model, 'deepseek-v4-flash');
+  assert.equal(fallback.env.ANTHROPIC_AUTH_TOKEN, 'sk-test');
+  assert.equal(fallback.env.ANTHROPIC_BASE_URL, 'https://api.deepseek.com/anthropic');
+  assert.equal(fallback.env.PATH, 'p');
+
+  const noKey = resolveSupervisorAuth({ home: 'H', env: {}, readFile: files({ '.credentials.json': creds('') }) });
+  assert.equal(noKey.lane, 'none');
+  assert.equal(noKey.model, null);
+  assert.equal(resolveSupervisorAuth({ home: 'H', env: {}, readFile: files({}) }).lane, 'none');
 });

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -27,6 +28,27 @@ export function buildWatchPrompt(watch, repo = REPO) {
    node "${repo}/tools/autopilot-tick.mjs" watch --id ${watch.id} --result ok|ng --note "<確かめたこと。システムを知らない高校生でもわかる短い日本語。コマンドやIDは書かない>"
 ヘッドレスモード。ScheduleWakeup と /loop は使用しない。`;
 }
+// OAuth ログインが切れると、スケジューラ起動の autopilot は毎周
+// "OAuth session expired and could not be refreshed" で exit 1 し、runner_error のまま paused で固まる
+// (2026-10-17 実測: accessToken/refreshToken が長さ0、run.log が 04:32Z 以降 skipped だけ)。
+// 同じ PC のデスクトップ側セッションは ~/.claude/deepseek.env の鍵で動いているので、
+// 資格情報が空のときだけその鍵を子へ渡し、監督モデルもそのレーンのモデルへ切り替える。
+// 鍵が無ければ従来どおり（何も変えずに OAuth 経路へ渡す）＝挙動を悪化させない。
+export function resolveSupervisorAuth({ home = process.env.ORGIAST_HOME || os.homedir(), env = process.env, readFile = fs.readFileSync } = {}) {
+  if (String(env.ANTHROPIC_AUTH_TOKEN || '').trim()) return { lane: 'env', model: null, env };
+  let oauthToken = '';
+  try { oauthToken = JSON.parse(readFile(path.join(home, '.claude', '.credentials.json'), 'utf8'))?.claudeAiOauth?.accessToken || ''; } catch {}
+  if (String(oauthToken).trim()) return { lane: 'oauth', model: null, env };
+  let key = '';
+  try {
+    for (const line of String(readFile(path.join(home, '.claude', 'deepseek.env'), 'utf8')).split(/\r?\n/)) {
+      const match = line.match(/^\s*DEEPSEEK_API_KEY\s*=\s*(.+?)\s*$/);
+      if (match) { key = match[1].replace(/^["']|["']$/g, ''); break; }
+    }
+  } catch {}
+  if (!key) return { lane: 'none', model: null, env };
+  return { lane: 'deepseek', model: 'deepseek-v4-flash', env: { ...env, ANTHROPIC_BASE_URL: 'https://api.deepseek.com/anthropic', ANTHROPIC_AUTH_TOKEN: key, CLAUDE_CODE_MAX_CONTEXT_TOKENS: '1000000' } };
+}
 export function invokeClaude({ executable, args, prompt, cwd, timeoutMs, env = process.env }) {
   return new Promise((resolve) => {
     let stdout = '', stderr = '', timedOut = false, launchError = null;
@@ -52,6 +74,7 @@ export function invokeClaude({ executable, args, prompt, cwd, timeoutMs, env = p
 export async function runOnce(options = {}) {
   const paths = autopilotPaths(options);
   fs.mkdirSync(paths.dir, { recursive: true });
+  const auth = resolveSupervisorAuth({ home: paths.home });
   const release = acquireLock(path.join(paths.dir, 'run.lock'));
   if (!release) return { skipped: 'already_running' };
   const record = (entry) => fs.appendFileSync(path.join(paths.dir, 'run.log'), `${JSON.stringify({ ts: (options.now || new Date()).toISOString(), ...entry })}\n`, 'utf8');
@@ -71,12 +94,12 @@ export async function runOnce(options = {}) {
       if (watch) {
         // 完了・停止中でも見張りは確かめる。そうしないと「完了」のまま誰も結果を見ない。
         const policy = options.policy || loadFablePolicy();
-        const model = fableAllowedForSupervisor(policy) ? 'claude-fable-5-1' : 'claude-opus-5';
+        const model = auth.model || (fableAllowedForSupervisor(policy) ? 'claude-fable-5-1' : 'claude-opus-5');
         const repo = options.repo || REPO;
         const executable = options.executable || (await resolveClaudeExecutableFromDisk()).executable;
         const checked = await (options.invokeImpl || invokeClaude)({ executable, args: ['-p', '--model', model, '--output-format', 'text'], prompt: buildWatchPrompt(watch, repo), cwd: repo,
-          timeoutMs: options.timeoutMs ?? 15 * 60_000, env: { ...process.env, AUTOPILOT_HOME: paths.dir, ORGIAST_HOME: paths.home } });
-        const result = { skipped: pre.reason || pre.verdict, watchChecked: watch.id, model, exitCode: checked.exitCode, timedOut: checked.timedOut, stdout: String(checked.stdout || '').slice(-2000) };
+          timeoutMs: options.timeoutMs ?? 15 * 60_000, env: { ...auth.env, AUTOPILOT_HOME: paths.dir, ORGIAST_HOME: paths.home } });
+        const result = { skipped: pre.reason || pre.verdict, watchChecked: watch.id, model, authLane: auth.lane, exitCode: checked.exitCode, timedOut: checked.timedOut, stdout: String(checked.stdout || '').slice(-2000) };
         record(result);
         await safeDigest();
         return result;
@@ -90,13 +113,13 @@ export async function runOnce(options = {}) {
     }
     const before = await runAutopilot('status', {}, options);
     const policy = options.policy || loadFablePolicy();
-    const model = fableAllowedForSupervisor(policy) ? 'claude-fable-5-1' : 'claude-opus-5';
+    const model = auth.model || (fableAllowedForSupervisor(policy) ? 'claude-fable-5-1' : 'claude-opus-5');
     const repo = options.repo || REPO;
     const executable = options.executable || (await resolveClaudeExecutableFromDisk()).executable;
     const timeoutMs = options.timeoutMs ?? 25 * 60_000;
     const result = await (options.invokeImpl || invokeClaude)({ executable, args: ['-p', '--model', model, '--output-format', 'text'], prompt: buildPrompt(repo), cwd: repo, timeoutMs,
-      env: { ...process.env, AUTOPILOT_HOME: paths.dir, ORGIAST_HOME: paths.home } });
-    record({ model, ...result, stdout: String(result.stdout || '').slice(-4000) });
+      env: { ...auth.env, AUTOPILOT_HOME: paths.dir, ORGIAST_HOME: paths.home } });
+    record({ model, authLane: auth.lane, ...result, stdout: String(result.stdout || '').slice(-4000) });
     const after = await runAutopilot('status', {}, options);
     const postRecorded = after.state?.totalIterations > before.state?.totalIterations;
     // Failed/empty Claude turns still consume an iteration and trip the watchdog.

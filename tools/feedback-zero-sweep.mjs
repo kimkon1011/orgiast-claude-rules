@@ -192,10 +192,21 @@ export async function sweep({registryFile=path.join(here,'feedback-zero-registry
     return {dryRun,remaining,unknown,launched,rows,notification};
   } finally {if(locked)fs.rmSync(lock,{force:true});}
 }
+export function sweepExitCode(result) {
+  // Empty queues do not prove success: intake/configuration failures count as unknown.
+  if(result.unknown > 0) return 1;
+  if(!result.dryRun) {
+    const {delivered,reason}=result.notification;
+    // A clean empty sweep intentionally skips notification (none without a reason).
+    if(delivered!=='dm' && (result.remaining>0 || delivered!=='none' || reason)) return 1;
+  }
+  return 0;
+}
+
 if(isEntry(import.meta.url)) {
   try {
     const args=process.argv.slice(2);if(args.some(a=>a!=='--dry-run'))throw new Error('引数は --dry-run のみ');
     const result=await sweep({dryRun:args.includes('--dry-run')});console.log(JSON.stringify(result,null,2));
-    if(result.unknown || (!result.dryRun && result.remaining>0 && result.notification.delivered!=='dm'))process.exitCode=1;
+    process.exitCode=sweepExitCode(result);
   }catch(e){console.error('feedback-zero-sweep: '+e.message);process.exitCode=1;}
 }

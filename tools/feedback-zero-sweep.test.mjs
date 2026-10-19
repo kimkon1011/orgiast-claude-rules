@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { sweep, fetchPending, normalizeItem, appConfig, appDirectory } from './feedback-zero-sweep.mjs';
+import { sweep, sweepExitCode, fetchPending, normalizeItem, appConfig, appDirectory } from './feedback-zero-sweep.mjs';
 
 const entry = { appName: 'テストアプリ', kind: 'next', intake: 'relay', refs: { url: 'T_URL', secret: 'T_SECRET', repo: 'T_REPO', appDir: 'T_DIR' } };
 
@@ -30,6 +30,40 @@ function setup(items, { fail = false } = {}) {
   return { home, opts, calls };
 }
 const pending = [{ message_id: 'a1', app_name: 'テストアプリ', kind: 'bug', title: '壊れた', body: 'x' }];
+
+test('終了コードは正常な0件を成功とし、実際の失敗を維持する', () => {
+  const empty = { dryRun: false, remaining: 0, unknown: 0, notification: { delivered: 'dm' } };
+  const cases = [
+    ['0件・DM成功', {}, 0],
+    ['0件・通知不要', { notification: { delivered: 'none' } }, 0],
+    ['残件あり・DM成功', { remaining: 2 }, 0],
+    ['0件・取得失敗・DM成功', { unknown: 1 }, 1],
+    ['残件あり・通知未達', { remaining: 2, notification: { delivered: 'none' } }, 1],
+    ['0件・通知失敗', { notification: { delivered: 'none', reason: '送信失敗' } }, 1],
+    ['0件・宛先未設定', { notification: { delivered: 'none', reason: '宛先未設定' } }, 1],
+    ['0件・DM以外', { notification: { delivered: 'webhook' } }, 1],
+    ['dry-run・残件あり・通知なし', { dryRun: true, remaining: 2, notification: { delivered: 'none' } }, 0],
+    ['dry-run・取得失敗', { dryRun: true, unknown: 1 }, 1],
+  ];
+  for(const [name, overrides, expected] of cases) {
+    assert.equal(sweepExitCode({ ...empty, ...overrides }), expected, name);
+  }
+});
+
+test('0件でも必須設定欠落・完了通知の例外は失敗になる', async () => {
+  for(const failure of ['config', 'done']) {
+    const { home, opts } = setup([]);
+    try {
+      if(failure === 'config') delete opts.config.T_SECRET;
+      else opts.done = async () => { throw new Error('送信失敗'); };
+      const result = await sweep(opts);
+      assert.equal(result.remaining, 0);
+      assert.equal(result.unknown, 1);
+      assert.equal(result.notification.delivered, 'dm');
+      assert.equal(sweepExitCode(result), 1);
+    } finally { fs.rmSync(home, { recursive: true, force: true }); }
+  }
+});
 
 test('--dry-run は残数を返すが Issue 化・実装・通知・状態保存をしない', async () => {
   const { home, opts, calls } = setup(pending);
@@ -61,6 +95,7 @@ test('残0かつ取得成功なら kim へ通知しない', async () => {
     assert.equal(result.remaining, 0);
     assert.equal(result.unknown, 0);
     assert.equal(calls.notify.length, 0);
+    assert.equal(sweepExitCode(result), 0);
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
 
@@ -73,6 +108,7 @@ test('取得できない intake は 0 扱いにせず「未取得」として通
     assert.equal(result.unknown, 1);
     assert.equal(calls.notify.length, 1);
     assert.match(calls.notify[0], /未取得/);
+    assert.equal(sweepExitCode(result), 1);
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
 

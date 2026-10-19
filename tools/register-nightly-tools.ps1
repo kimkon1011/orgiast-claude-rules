@@ -23,12 +23,16 @@ $specs = @(
   [pscustomobject]@{ TaskName = 'OrgiastMorningBatch'; ScriptName = 'open-work.mjs'; ScriptArgs = @() },
   [pscustomobject]@{ TaskName = 'OrgiastMorningBatch'; ScriptName = 'next-actions.mjs'; ScriptArgs = @() },
   [pscustomobject]@{ TaskName = 'OrgiastMorningBatch'; ScriptName = 'nightly-health.mjs'; ScriptArgs = @() },
-  [pscustomobject]@{ TaskName = 'OrgiastMorningBatch'; ScriptName = 'nightly-health-remediate.mjs'; ScriptArgs = @() },
   [pscustomobject]@{ TaskName = 'OrgiastNightlyBatch'; ScriptName = 'ai-news-triage.mjs'; ScriptArgs = @('--confidence', 'high,medium', '--limit', '8') },
   [pscustomobject]@{ TaskName = 'OrgiastNightlyBatch'; ScriptName = 'pricing-brief.mjs'; ScriptArgs = @('--limit', '8') },
   [pscustomobject]@{ TaskName = 'OrgiastNightlyBatch'; ScriptName = 'drive-hub-mirror.mjs'; ScriptArgs = @() },
   [pscustomobject]@{ TaskName = 'OrgiastNightlyBatch'; ScriptName = 'expense-leak-check.mjs'; ScriptArgs = @('--weekly') }
 )
+# nightly-health-remediate moved to its own OrgiastNightlyRemediate task (PT90M).
+# Older PCs still carry it as an Action of OrgiastMorningBatch (PT15M), which caused
+# LastTaskResult 267014; the convergence below removes that leftover Action.
+$remediateScriptName = 'nightly-health-remediate.mjs'
+$remediatePattern = '(?i)(^|[\\/" ])' + [regex]::Escape($remediateScriptName) + '(?=[" ]|$)'
 
 . (Join-Path $PSScriptRoot 'resolve-synced-repo.ps1')
 # The tasks must run from the synced repo, not from the tree this script sits in.
@@ -148,6 +152,28 @@ foreach ($spec in $specs) {
   }
 }
 
+# Converge the old placement away: no-op when the Action is already absent.
+$morningTask = $tasks['OrgiastMorningBatch']
+if ($null -ne $morningTask) {
+  $remediateIndexes = @()
+  for ($index = 0; $index -lt @($morningTask.Actions).Count; $index++) {
+    if ([string]$morningTask.Actions[$index].Arguments -match $remediatePattern) { $remediateIndexes += $index }
+  }
+  if ($remediateIndexes.Count -gt 0) {
+    Write-Host ('remove:{0} / {1}' -f 'OrgiastMorningBatch', $remediateScriptName)
+    if (-not $DryRun) {
+      $keptActions = @()
+      for ($index = 0; $index -lt @($morningTask.Actions).Count; $index++) {
+        if ($remediateIndexes -notcontains $index) { $keptActions += $morningTask.Actions[$index] }
+      }
+      if ($keptActions.Count -eq 0) { throw 'refusing to remove the last action from OrgiastMorningBatch' }
+      Set-ScheduledTask -TaskName 'OrgiastMorningBatch' -Action $keptActions -ErrorAction Stop | Out-Null
+      $tasks['OrgiastMorningBatch'] = Get-ScheduledTask -TaskName 'OrgiastMorningBatch' -ErrorAction Stop
+    }
+    $removeCount += $remediateIndexes.Count
+  }
+}
+
 if (-not $DryRun) {
   # Read back from Task Scheduler, not from the objects used for mutation.
   foreach ($taskName in $taskNames) {
@@ -164,6 +190,11 @@ if (-not $DryRun) {
     if (($Remove -and $found.Count -ne 0) -or (-not $Remove -and $found.Count -ne 1)) {
       throw ((J '\u8aad\u307f\u623b\u3057\u691c\u8a3c\u306b\u5931\u6557') + ": $($spec.TaskName) / $($spec.ScriptName)")
     }
+  }
+  $morningReadBack = Get-ScheduledTask -TaskName 'OrgiastMorningBatch' -ErrorAction Stop
+  $leftoverRemediate = @($morningReadBack.Actions | Where-Object { [string]$_.Arguments -match $remediatePattern })
+  if ($leftoverRemediate.Count -ne 0) {
+    throw ((J '\u8aad\u307f\u623b\u3057\u691c\u8a3c\u306b\u5931\u6557') + ": OrgiastMorningBatch / $remediateScriptName")
   }
   Write-Host (J '\u8aad\u307f\u623b\u3057\u691c\u8a3c:ok')
 }

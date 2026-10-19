@@ -464,6 +464,12 @@
       "reason": "要確認"
     },
     {
+      "path": "tools/register-nightly-remediate-task.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
       "path": "tools/register-plaud-task.ps1",
       "scope": "kim-only",
       "step": null,

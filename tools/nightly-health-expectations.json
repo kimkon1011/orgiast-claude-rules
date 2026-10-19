@@ -30,6 +30,7 @@
   { "log": "sync-orgiast-main.log", "maxAgeHours": 2, "label": "main同期", "scan": "keywords" },
   { "log": "top3-catchup.log", "maxAgeHours": 26, "label": "Top3追跡", "scan": "keywords" },
   { "log": "nightly-health.log", "maxAgeHours": 26, "label": "夜間ヘルス", "scan": "keywords", "task": "OrgiastMorningBatch" },
+  { "log": "nightly-health-remediate.log", "maxAgeHours": 26, "label": "夜間ヘルス自動修復", "scan": "keywords", "task": "OrgiastNightlyRemediate", "tool": "tools/nightly-health-remediate.mjs" },
   { "log": "pricing-brief.log", "maxAgeHours": 26, "label": "価格ブリーフ", "scan": "keywords" },
   { "log": "-NoProfile.log", "label": "一時ログ", "ignore": true },
   { "log": "delete-soulsync-task.log", "label": "削除作業ログ", "ignore": true },

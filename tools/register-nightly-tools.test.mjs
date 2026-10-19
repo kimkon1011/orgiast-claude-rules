@@ -15,6 +15,12 @@ test('dry-run and removal switches are part of the contract', () => {
   assert.match(source, /\[switch\]\$Remove\b/);
 });
 
+test('remediate is converged out of the 15-minute morning batch', () => {
+  assert.doesNotMatch(source, /ScriptName\s*=\s*'nightly-health-remediate\.mjs'/);
+  assert.match(source, /\$remediateScriptName\s*=\s*'nightly-health-remediate\.mjs'/);
+  assert.match(source, /Set-ScheduledTask -TaskName 'OrgiastMorningBatch' -Action \$keptActions/);
+});
+
 test('all three nightly scripts are wired', () => {
   for (const script of ['next-actions.mjs', 'nightly-health.mjs', 'pricing-brief.mjs', 'drive-hub-mirror.mjs']) {
     assert.ok(source.includes(script), `${script} is missing`);

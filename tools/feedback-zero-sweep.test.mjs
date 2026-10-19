@@ -31,6 +31,18 @@ function setup(items, { fail = false } = {}) {
 }
 const pending = [{ message_id: 'a1', app_name: 'テストアプリ', kind: 'bug', title: '壊れた', body: 'x' }];
 
+test('repo 参照キー未設定のアプリは dry-run でも errors に出て unknown にカウントされる', async () => {
+  const { home, opts } = setup(pending);
+  const broken = { ...entry, refs: { ...entry.refs, repo: 'MISSING_REPO' } };
+  fs.writeFileSync(opts.registryFile, JSON.stringify({ version: 1, apps: [broken] }));
+  try {
+    const result = await sweep({ ...opts, dryRun: true });
+    assert.equal(result.remaining, 1);
+    assert.equal(result.unknown, 1);
+    assert.ok(result.rows[0].errors.includes('反映先 repo 参照キー未設定'));
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
 test('--dry-run は残数を返すが Issue 化・実装・通知・状態保存をしない', async () => {
   const { home, opts, calls } = setup(pending);
   try {

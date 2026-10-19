@@ -16,7 +16,7 @@ test('dry-run and removal switches are part of the contract', () => {
 });
 
 test('remediate is converged out of the 15-minute morning batch', () => {
-  assert.doesNotMatch(source, /ScriptName\s*=\s*'nightly-health-remediate\.mjs'/);
+  assert.doesNotMatch(source, /;\s*ScriptName\s*=\s*'nightly-health-remediate\.mjs'/);
   assert.match(source, /\$remediateScriptName\s*=\s*'nightly-health-remediate\.mjs'/);
   assert.match(source, /Set-ScheduledTask -TaskName 'OrgiastMorningBatch' -Action \$keptActions/);
 });

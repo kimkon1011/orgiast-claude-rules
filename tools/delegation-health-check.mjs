@@ -34,6 +34,25 @@ function readJsonl(file) {
   try { return fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean).flatMap((line) => { try { return [JSON.parse(line)]; } catch { return []; } }); } catch { return []; }
 }
 
+export function authRestoredAfter(home, failures, options = {}) {
+  const failureTimes = (Array.isArray(failures) ? failures : [])
+    .map((row) => Date.parse(row?.t))
+    .filter((time) => Number.isFinite(time));
+  if (!failureTimes.length) return false;
+  const lastFailureTime = Math.max(...failureTimes);
+  const statImpl = options.statImpl || fs.statSync;
+  const readFile = options.readFile || fs.readFileSync;
+  try {
+    const authFile = path.join(home, '.codex', 'auth.json');
+    if (!(statImpl(authFile).mtimeMs > lastFailureTime)) return false;
+    const auth = JSON.parse(String(readFile(authFile, 'utf8')).replace(/^\uFEFF/, ''));
+    return [auth?.tokens?.id_token, auth?.tokens?.access_token]
+      .some((token) => typeof token === 'string' && token.length > 0);
+  } catch {
+    return false;
+  }
+}
+
 function measured(value) {
   if (typeof value === 'number') return { usedPercent: value, windowMinutes: null, resetsAt: null };
   if (!value || !Number.isFinite(Number(value.usedPercent))) return null;
@@ -275,7 +294,9 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
   if (spawnFailedRows.length && !repairedAfter(spawnFailedRows)) findings.push({ id: 'codex_spawn_failed', severity: 'high', title: 'Codex の子プロセスが spawn に失敗（起動できていない）', evidence: [`${spawnFailedRows.length}件`, ...reasonTop(spawnFailedRows)], fixTask: 'where codex／WSL 内 command -v codex で実体を確認し、無ければ npm i -g @openai/codex で入れ直す' });
   // 直せる欠陥なので fixTask を付ける（medium）。
   if (modelAuthMismatch.length) findings.push({ id: 'codex_model_auth_mismatch', severity: 'medium', title: 'Codex が ChatGPT アカウントで sol/astra を選んで失敗', evidence: [`${modelAuthMismatch.length}件`, ...reasonTop(modelAuthMismatch)], fixTask: 'codex-do のレーン選択が ChatGPT アカウント認証を検出できず sol/astra を選んでいる。detectChatGptAuth と decideCodexLane の判定を照合し、再現テストを追加して修正' });
-  if (authFailed.length && !repairedAfter(authFailed)) findings.push({ id: 'codex_auth_failed', severity: 'high', title: 'Codex CLI が未認証（WSL 側の再ログインが必要）', evidence: [`${authFailed.length}件`, 'WSL の ~/.codex/auth.json を確認し codex login を実行'], fixTask: 'Windows の %USERPROFILE%\\.codex\\auth.json を WSL の ~/.codex/ にコピーし codex login status。Windows 側も未ログインのときだけ人の codex login が要る' });
+  // 2026-10-19 実測: Windows はログイン済みなのに、WSL 側 401 の履歴だけで毎晩 high 起票されていた。
+  // codex-do は起動時に Windows の auth.json を WSL へ同期するため、失敗後の再ログインも修復として扱う。
+  if (authFailed.length && !repairedAfter(authFailed) && !authRestoredAfter(home, authFailed)) findings.push({ id: 'codex_auth_failed', severity: 'high', title: 'Codex CLI が未認証（WSL 側の再ログインが必要）', evidence: [`${authFailed.length}件`, 'WSL の ~/.codex/auth.json を確認し codex login を実行'], fixTask: 'Windows の %USERPROFILE%\\.codex\\auth.json を WSL の ~/.codex/ にコピーし codex login status。Windows 側も未ログインのときだけ人の codex login が要る' });
   if (realEmpty.length) findings.push({ id: 'codex_empty_output', severity: 'medium', title: 'Codex の出力ゼロ', evidence: [`${realEmpty.length}件`, ...reasonTop(realEmpty), ...(empty.length > realEmpty.length ? [`インフラ/起動失敗で除外 ${empty.length - realEmpty.length}件`] : [])], fixTask: 'codex が出力ゼロで終了した原因（認証切れ/上限/起動失敗）を codex-do のログから特定' });
   for (const [provider, state] of Object.entries(cooldown)) if (state?.reason === 'http_402' && Number(state.until) > nowMs) findings.push({ id: 'provider_balance_exhausted', severity: 'low', title: `${provider} の残高切れ`, evidence: [`provider ${provider}`, CLAUDE_FALLBACK_RULE] });
   const providers = new Map();

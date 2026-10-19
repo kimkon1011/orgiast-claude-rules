@@ -1,0 +1,66 @@
+---
+name: case-consult-sources
+description: 案件についての質問・相談・経緯確認・「お客様とのやり取りを確認」「外部連絡を見て」「この案件どうなってる」「前に何を話したか」などの依頼では必ず使う。案件の情報は seisaku-team@ の Gmail・Drive 案件フォルダ・Discord・LINE にある。Claude 既定の Gmail/Drive 検索だけで「情報がありません」と返す誤り（2026-10-15 実害）を防ぐ。
+---
+
+# 案件相談の参照先（外部連絡の正本）
+
+## 厳守: 「無い」と結論する前に、下の 1〜4 を確認する
+
+案件の答えは **seisaku-team@ 側** にある。Claude の既定アカウントの Gmail/Drive だけ見て
+「情報が見つかりません」と返すのは誤り（2026-10-15 に発生：案件の経緯を Gmail/Drive だけで判断しかけた）。
+
+- 確認した経路と、**確認できなかった経路を「未確認」と明記**する。推測・確率で「たぶん無い」と書かない。
+- 「無い」と断定してよいのは、少なくとも **1（外部連絡 Doc）と 2（seisaku-team@ Gmail）を実際に開いて確認した** 場合だけ。
+
+## 参照順
+
+### 1. 案件フォルダの「📨外部連絡（メール・Discord・LINE）」Google Doc（最優先）
+
+- 制作アプリが案件フォルダに作成する Doc。メール・Discord・LINE のやり取りが
+  `[YYYY-MM-DD HH:MM][source][author] 本文` 形式で時系列に追記される（ExternalNotes.js）。
+- 探し方: Drive で **案件名（顧客名・案件名）＋ `📨外部連絡`** を検索し、案件フォルダ内を一覧する。
+- 正本の docId は制作アプリ GAS の Script property `EXTNOTES_DOC_<caseId>`。
+  Drive 検索で見つからない時は、案件の `folderId` を特定してフォルダ内を一覧する。
+- **この Doc が存在しない＝外部連絡がまだ1件も取り込まれていない**。その旨を書いたうえで 2〜4 も確認する。
+
+### 2. seisaku-team@orgiast.jp の Gmail
+
+- 顧客・業者とのやり取りの正本。**Claude 既定アカウント（kim@ 等）ではなく seisaku-team@ で検索する**。
+- 検索はキーワードのスニペットで判断せず、**送信元ドメインで列挙して本文を開く**（過去に取りこぼしあり）。
+- 対話セッション: Gmail コネクタで seisaku-team@ を選択して検索する。
+- ヘッドレス（`claude -p`）やローカル鍵が無い PC: aujust-sales-automation リポジトリの
+  GitHub Actions で DWD impersonate する（GitHub シークレット `GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON` の SA を使い、
+  `subject=seisaku-team@orgiast.jp`・scope `gmail.readonly`。push トリガーの使い捨てブランチ＋artifact で取得）。
+  ローカル DWD 鍵・Vercel・Supabase ミラーには seisaku-team@ のメールは無い（2026-10-17 実測）。
+
+### 3. 制作アプリの Discord / LINE
+
+- 案件スプレッドシートの `Discord連携` / `LINE連携` / `📨LINE未振分け` シート、
+  および 1 の外部連絡 Doc に取り込まれた分。
+- 読めない環境（ヘッドレス等）では **「未確認」** と明記する。空だったことにしない。
+
+### 4. Drive の案件フォルダ
+
+- 見積・仕様書・入稿データ・議事録など。フォルダ名は顧客名＋案件名で、`入稿`・`見積` 等の兄弟フォルダがある。
+- 入稿データは **サイズ名ではなく兄弟フォルダと入稿メールのファイル名** で探す。
+
+## 報告の型
+
+```
+参照した: 外部連絡Doc（あり・2026-xx-xx まで）/ seisaku-team@ Gmail（検索語: ...）/ Discord・LINE（未確認）/ Drive（...）
+分かったこと: ...
+未確認: ...
+```
+
+## 禁止
+
+- Drive または Gmail の片方だけ見て「情報がありません」と返す。
+- seisaku-team@ を見ずに kim@ のメールだけで案件を判断する。
+- 読めなかった経路を「無かった」と書く。
+
+## 関連
+
+- 送信・返信は別ルール（社内連絡は Discord DM、外部への返信は承認後）。このスキルは**読む側**だけを扱う。
+- 外部連絡 Doc への追記コマンドは制作アプリの `ExternalNotes_append`。読む側の専用コマンドは
+  2026-10-18 時点で未実装のため、Drive の Doc を直接開く。

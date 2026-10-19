@@ -17,22 +17,9 @@ import {
 
 const FIVE_HOURS = 5 * 60 * 60 * 1000;
 
-// Windows の npm グローバルは claude.cmd / claude.ps1 しか置かず、Node の spawn は
-// shell 無しで .cmd を実行できない(CVE-2024-27980 以降)。結果 ENOENT で「claude CLI を
-// 起動できません」になり、cheap-code が全く動かない(実測 2026-09-10)。
-// PATH 依存をやめ、実体の claude.exe を明示的に解決する。
-export function resolveClaudeBin(env = process.env, exists = fs.existsSync) {
-  if (env.CLAUDE_BIN && exists(env.CLAUDE_BIN)) return env.CLAUDE_BIN;
-  const appData = env.APPDATA || (env.USERPROFILE ? path.join(env.USERPROFILE, 'AppData', 'Roaming') : '');
-  const candidates = [
-    appData && path.join(appData, 'npm', 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe'),
-    env.LOCALAPPDATA && path.join(env.LOCALAPPDATA, 'Programs', 'claude', 'claude.exe')
-  ].filter(Boolean);
-  for (const candidate of candidates) {
-    if (exists(candidate)) return candidate;
-  }
-  return 'claude';
-}
+// claude.exe の解決は claude-exe.mjs に一本化する。以前はここに探索の重複実装
+// (resolveClaudeBin) があり、%APPDATA%\Claude\claude-code を見落として
+// 「claude.exe が見つかりません」で止まっていた(2026-10-17 実測)。
 const COOLDOWN_FILE = () => path.join(process.env.ORGIAST_HOME || os.homedir(), '.claude', 'provider-cooldown.json');
 
 const PROVIDERS = Object.freeze({

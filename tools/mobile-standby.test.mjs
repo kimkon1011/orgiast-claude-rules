@@ -6,7 +6,7 @@ import test from 'node:test';
 import pool from './lib/mobile-state.cjs';
 import {
   convergeMobileConfig, removeMobileTabsZero, convergeMobileExtension, convergeMobileStandby,
-  convergeRcNamePrefix, RC_NAME_PREFIX,
+  convergeRcNamePrefix, RC_NAME_PREFIX, readMobileRefreshConfig,
 } from './mobile-standby.mjs';
 
 const temp = (name) => fs.mkdtempSync(path.join(os.tmpdir(), name));
@@ -36,6 +36,46 @@ test('壊れた mobile-sessions.json は上書きしない', () => {
   fs.writeFileSync(cfg(home), '{broken');
   assert.equal(convergeMobileConfig(home).changed, false);
   assert.equal(fs.readFileSync(cfg(home), 'utf8'), '{broken');
+});
+
+// 回答待ちの値を「全PCへ配る」経路。リポジトリの tools/mobile-refresh.json が唯一の配布元。
+test('mobile-refresh.json: 値があるときだけ refreshMinutes/refreshHours を配り、他キーを保持・冪等', () => {
+  const repo = temp('ms-repo-');
+  fs.mkdirSync(path.join(repo, 'tools'), { recursive: true });
+  const home = temp('ms-refresh-');
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(cfg(home), JSON.stringify({ count: 3, note: 'keep' }));
+
+  // ファイルが無ければ何も変えない（従来挙動）
+  assert.equal(readMobileRefreshConfig(repo), null);
+  assert.equal(convergeMobileConfig(home, 3, readMobileRefreshConfig(repo)).changed, false);
+
+  fs.writeFileSync(path.join(repo, 'tools', 'mobile-refresh.json'), JSON.stringify({ minutes: 10, hours: '00-24' }));
+  const desired = readMobileRefreshConfig(repo);
+  assert.deepEqual(desired, { minutes: 10, hours: '00-24' });
+  assert.equal(convergeMobileConfig(home, 3, desired).changed, true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(cfg(home), 'utf8')), { count: 3, note: 'keep', refreshMinutes: 10, refreshHours: '00-24' });
+  // 2回目は書かない（冪等）
+  assert.equal(convergeMobileConfig(home, 3, readMobileRefreshConfig(repo)).changed, false);
+  // 値の変更だけでも反映される
+  fs.writeFileSync(path.join(repo, 'tools', 'mobile-refresh.json'), JSON.stringify({ minutes: 30, hours: '06-24' }));
+  assert.equal(convergeMobileConfig(home, 3, readMobileRefreshConfig(repo)).changed, true);
+  const after = JSON.parse(fs.readFileSync(cfg(home), 'utf8'));
+  assert.equal(after.refreshMinutes, 30);
+  assert.equal(after.refreshHours, '06-24');
+  assert.equal(after.note, 'keep');
+});
+
+test('mobile-refresh.json の不正値は配らない（壊れた値で全PCを書き換えない）', () => {
+  const repo = temp('ms-repo-bad-');
+  fs.mkdirSync(path.join(repo, 'tools'), { recursive: true });
+  const file = path.join(repo, 'tools', 'mobile-refresh.json');
+  fs.writeFileSync(file, JSON.stringify({ minutes: -1 }));
+  assert.match(readMobileRefreshConfig(repo).error, /minutes/);
+  fs.writeFileSync(file, JSON.stringify({ hours: '25-30' }));
+  assert.match(readMobileRefreshConfig(repo).error, /hours/);
+  fs.writeFileSync(file, '{broken');
+  assert.match(readMobileRefreshConfig(repo).error, /解釈/);
 });
 
 test('VSCode settings の mobileTabs=0 を除去（JSON / JSONC 末尾カンマ）', () => {

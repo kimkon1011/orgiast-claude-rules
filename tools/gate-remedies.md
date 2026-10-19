@@ -71,6 +71,14 @@ tools/automation-routes.json の既存経路を実行してから証拠を示す
 
 node tools/lane-doctor.mjs --probe で代替レーンを検査して実行する。
 
+## gmail-connector-url-gate
+
+claude.ai の Gmail コネクタは、本文や件名の `http://` / `https://` URL を保存時に Google 転送 URL へ書き換えるため使わない。
+
+- URL を含むメールは `node tools/gmail-draft.mjs --to … --subject … --body-file …` で Gmail API へ直接保存する。
+- SA 鍵がない PC では、aujust リポジトリの GitHub Actions と DWD を使う（memory: `project-cr-pc-gmail-read-via-gha-secret`）。
+- override は、転送 URL への書き換えが起きないことを生 MIME の読み戻しまで含めて確認でき、利用者がそのリスクを明示的に受け入れた場合だけ使う。`~/.claude/gmail-connector-url-gate-override` の1行目に短い有効期限の ISO 8601 時刻を書く。
+
 ## live-artifact-read-gate
 
 Gmail送信前に説明対象のGoogleファイルを接続済みMCPで読む。Sheetsはタブ名/見出し/凡例。権限不足は未確認と報告。

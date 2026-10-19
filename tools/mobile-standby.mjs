@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import {
   resolveVscodeCli, vscodeCliCandidates, pickBundledVsix, vsixVersion, compareVersions, shouldInstallBundledVsix,
 } from './next-session-launch.mjs';
+import pool from './lib/mobile-state.cjs';
 
 export const MOBILE_STANDBY_COUNT = 3;
 // Remote Control のセッション名接頭辞。短くしてスマホの一覧で切れないようにする。
@@ -16,20 +17,56 @@ const RC_PREFIX_ENV = 'CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX';
 const EXTENSION_ID = 'orgiast.next-session';
 const toolsDir = path.dirname(fileURLToPath(import.meta.url));
 
+// 全PC共通のリフレッシュ設定（リポジトリ同期で配られる）。値が未設定なら従来どおり変更しない。
+export const MOBILE_REFRESH_FILE = 'mobile-refresh.json';
+export function readMobileRefreshConfig(repoRoot) {
+  const file = path.join(repoRoot, 'tools', MOBILE_REFRESH_FILE);
+  let raw;
+  try { raw = JSON.parse(fs.readFileSync(file, 'utf8')); }
+  catch (error) { if (error.code === 'ENOENT') return null; return { error: `mobile-refresh.json を解釈できません: ${error.message}` }; }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { error: 'mobile-refresh.json がオブジェクトではありません' };
+  const next = {};
+  if (raw.minutes != null) {
+    const minutes = Number(raw.minutes);
+    if (!Number.isFinite(minutes) || minutes < 0) return { error: `mobile-refresh.json の minutes が不正: ${raw.minutes}` };
+    next.minutes = minutes;
+  }
+  if (raw.hours != null) {
+    const hours = String(raw.hours).trim();
+    if (!pool.parseRefreshHours(hours)) return { error: `mobile-refresh.json の hours が不正: ${raw.hours}` };
+    next.hours = hours;
+  }
+  return Object.keys(next).length ? next : null;
+}
+
 // ~/.claude/mobile-sessions.json: 無ければ作成、count が 3 未満なら count だけ引き上げ（他キーは保持）。
-export function convergeMobileConfig(home, count = MOBILE_STANDBY_COUNT) {
+// refresh={minutes,hours} が渡されたときだけ refreshMinutes/refreshHours も書く（他キーは保持）。
+export function convergeMobileConfig(home, count = MOBILE_STANDBY_COUNT, refresh = null) {
   const file = path.join(home, '.claude', 'mobile-sessions.json');
   let config = {};
   let exists = false;
   try { config = JSON.parse(fs.readFileSync(file, 'utf8')); exists = true; }
   catch (error) { if (error.code !== 'ENOENT') return { changed: false, note: `mobile-sessions.json を解釈できないため変更しません: ${error.message}` }; }
   if (!config || typeof config !== 'object' || Array.isArray(config)) return { changed: false, note: 'mobile-sessions.json がオブジェクトではないため変更しません' };
+  const next = { ...config };
+  const notes = [];
   const current = Number(config.count);
-  if (exists && Number.isInteger(current) && current >= count) return { changed: false, note: `count=${current}（変更なし）` };
-  const next = { ...config, count };
+  if (!(exists && Number.isInteger(current) && current >= count)) {
+    notes.push(exists ? `count ${config.count ?? '未設定'} -> ${count}` : `作成 count=${count}`);
+    next.count = count;
+  }
+  if (refresh?.minutes != null && next.refreshMinutes !== refresh.minutes) {
+    notes.push(`refreshMinutes ${config.refreshMinutes ?? '未設定'} -> ${refresh.minutes}`);
+    next.refreshMinutes = refresh.minutes;
+  }
+  if (refresh?.hours != null && next.refreshHours !== refresh.hours) {
+    notes.push(`refreshHours ${config.refreshHours ?? '未設定'} -> ${refresh.hours}`);
+    next.refreshHours = refresh.hours;
+  }
+  if (notes.length === 0) return { changed: false, note: `count=${current}（変更なし）` };
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
-  return { changed: true, note: exists ? `count ${config.count ?? '未設定'} -> ${count}` : `作成 count=${count}` };
+  return { changed: true, note: notes.join(' / ') };
 }
 
 // VS Code user settings の orgiast.nextSession.mobileTabs=0（補充無効化）を外す。
@@ -154,7 +191,11 @@ export function convergeMobileStandby({ home, repoRoot = path.dirname(toolsDir),
   const lines = [];
   const result = { ok: true, lines };
   const note = (label, outcome) => lines.push(`[mobile-standby] ${label}: ${outcome.note}`);
-  try { const r = convergeMobileConfig(home); note('mobile-sessions.json', r); result.config = r; }
+  try {
+    const desired = readMobileRefreshConfig(repoRoot);
+    if (desired?.error) { result.ok = false; lines.push(`[mobile-standby] mobile-refresh.json: NG ${desired.error}`); }
+    else { const r = convergeMobileConfig(home, MOBILE_STANDBY_COUNT, desired); note('mobile-sessions.json', r); result.config = r; }
+  }
   catch (error) { result.ok = false; lines.push(`[mobile-standby] mobile-sessions.json: 失敗 ${error.message}`); }
   try {
     const target = settingsPath ?? path.join(home, 'AppData', 'Roaming', 'Code', 'User', 'settings.json');

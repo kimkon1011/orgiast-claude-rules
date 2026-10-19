@@ -260,6 +260,13 @@ export function detectCodexAuthFailure(output, stderr, promptText = '') {
   return false;
 }
 
+// exit 0 は Codex が正常完了した証拠なので、出力内に読んだテストや指示由来の認証文言が
+// 含まれていても認証失敗として代替バックエンドへ回さない。タイムアウトも認証失敗とは分ける。
+export function isCodexAuthFailure(result, promptText = '') {
+  if (!result || result.timedOut === true || Number(result.status) === 0) return false;
+  return detectCodexAuthFailure(result.output, result.stderr, promptText);
+}
+
 export function snapshotWorkingTree(cwd, spawnImpl = spawnSync) {
   try {
     const gitCheck = spawnImpl('git', ['-C', cwd, 'rev-parse', '--is-inside-work-tree'], { windowsHide: true, encoding: 'utf8' });
@@ -1011,7 +1018,7 @@ async function executeCodex() {
     // そもそも起動できていない(launched:false)なら再試行しても結果は変わらない。
     if (result?.launched === false) break;
     // 認証失敗は再試行しても直らない。出力ゼロの再試行を省いてフォールバックへ回す。
-    if (detectCodexAuthFailure(result?.output, result?.stderr, prompt)) {
+    if (isCodexAuthFailure(result, prompt)) {
       authFailed = true;
       const tail = String(result?.stderr || result?.output || '').replace(/\s+/g, ' ').trim().slice(-200);
       console.error(`[codex-do] Codex の認証に失敗しました（未ログイン）。再試行せず代替バックエンドへ回します${tail ? `: ${tail}` : ''}`);

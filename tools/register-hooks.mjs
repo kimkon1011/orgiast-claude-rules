@@ -26,6 +26,11 @@ try {
   ({ HOOK_MATCHER: LIVE_ARTIFACT_MATCHER } = await import('./live-artifact-read-gate.mjs'));
 } catch { /* guard が未同期でも登録処理は続行する */ }
 
+let GMAIL_CONNECTOR_URL_MATCHER = HOOK_MATCHER;
+try {
+  ({ HOOK_MATCHER: GMAIL_CONNECTOR_URL_MATCHER } = await import('./gmail-connector-url-gate.mjs'));
+} catch { /* 同期途中でも既存登録を維持 */ }
+
 let SHARE_BEFORE_SEND_MATCHER = HOOK_MATCHER + '|mcp__claude_ai_Discord.*__(send_dm|send_message|reply_message)';
 try {
   ({ HOOK_MATCHER: SHARE_BEFORE_SEND_MATCHER } = await import('./share-before-send-gate.mjs'));
@@ -325,6 +330,8 @@ try {
   // 3.4MB の transcript で初回 18 秒かかった実測があるため 30 秒にする（5 秒だと時間切れで素通りする）。
   if (add(settings.hooks.PreToolUse, 'live-artifact-read-gate.mjs', { matcher: LIVE_ARTIFACT_MATCHER, hooks: [{ type: 'command', command: command('live-artifact-read-gate.mjs'), timeout: 30 }] })) added += 1;
   added += syncMatcherFor(settings.hooks.PreToolUse, 'live-artifact-read-gate.mjs', LIVE_ARTIFACT_MATCHER);
+  if (add(settings.hooks.PreToolUse, 'gmail-connector-url-gate.mjs', { matcher: GMAIL_CONNECTOR_URL_MATCHER, hooks: [{ type: 'command', command: command('gmail-connector-url-gate.mjs'), timeout: 5 }] })) added += 1;
+  added += syncMatcherFor(settings.hooks.PreToolUse, 'gmail-connector-url-gate.mjs', GMAIL_CONNECTOR_URL_MATCHER);
   // ヘッドレス実行で消失するバックグラウンド処理を実行前に拒否する。
   if (add(settings.hooks.PreToolUse, 'pretooluse-headless-background.mjs', { matcher: 'Bash|PowerShell|ScheduleWakeup', hooks: [{ type: 'command', command: command('pretooluse-headless-background.mjs'), timeout: 5 }] })) added += 1;
   // read-only調査の逐次実行を検知し、まとめて調査するよう同期注入する。

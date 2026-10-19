@@ -10,8 +10,17 @@ rescue 退避は「dirty な作業ツリーを保全する」仕組みなので�
 | `covered` | main に取り込み済み（枝自身の差分が空） |
 | `duplicate` | 他の rescue 枝と同じ変更 |
 | `covered-by-branch` | 別名の枝（`feat/*` `fix/*` `auto/*` 等）に同一変更が保全済み |
+| `ignored-only` | 差分がすべて `.gitignore` 済みの実行時成果物（例: `.stall-sweeper/`）。レビュー不要 |
 | `covered-in-main` | 追加行の 80% 以上が main にあり、削除行の main 残存が 20% 以下＝実質取り込み済み |
 | `unique` | どれにも当てはまらない＝人間がレビューすべき枝 |
+
+## 2026-10-18 rescue/auto-session-20261015-042503 のレビュー結果
+
+- 枝の差分は `.stall-sweeper/71f277df19da2eb45c0b-1792005522744.evidence.md` 1ファイル30行のみで、コード変更なし。
+- `executor-usage.jsonl` の `2026-10-14T18:13:50.071Z` は codex が `exitCode 3` / `launched:false` / `stderrTail:"WSL ディストリが見つかりませんでした"`。ファイル変更は発生していない。
+- `.stall-sweeper/` は #831（2026-10-16T18:16Z）で gitignore 済み。本枝はそれ以前の救済なので混入した。
+- 結論: main へ取り込む変更は無く、マージ不要。同型の枝は 20261015-042601 / 043201 / 20261016-041401 / 041502 / 041601。
+- 新しい `ignored-only` 判定でこれらはレビュー対象から外れる。
 
 ## 2026-10-18 時点の結果
 
@@ -50,6 +59,7 @@ covered-in-main（main に 80% 以上取り込み済み。独立レビュー不�
 - **同名列の local/origin は別 ref として数える**ため、上の local のみの件数とは単純比較できない。
 - ローカル枝を持たない origin-only の unique は **28 本**（`rescue/auto-session-20261013-072202` 〜 `20261018-072203`）。古い auto-session の退避がローカルに降りてこないまま origin に残っているもの。
 - `error: 6` はすべて `origin/rescue/sync-orgiast-main-*` の `spawnSync git ENOBUFS`（1MB 超の差分）。**変更なしの証拠ではない**。修正は `auto/20261018-rescue-scan-enobufs`（`a8fff3f`、main 未取り込み）で進行中。
+
 
 ## 2026-10-16 時点の結果（`covered-by-branch` 実装後）
 

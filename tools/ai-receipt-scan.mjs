@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { searchGmail } from './gmail-search.mjs';
 import { notifyKim } from './notify-kim.mjs';
+import { defaultDriveKeyPath } from './lib/drive-auth.mjs';
 import { isEntry } from './is-entry.mjs';
 
 const defaultHome = () => process.env.ORGIAST_HOME || os.homedir();
@@ -156,6 +157,15 @@ export function formatReceiptReport(summary, alerts = []) {
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (error) { if (error.code === 'ENOENT') return fallback; throw error; }
 }
+export function receiptLedgerAgeHours(home = defaultHome(), now = new Date()) {
+  let newest = -Infinity;
+  for (const name of ['ai-receipts.jsonl', 'ai-receipts-alert-state.json']) {
+    try { newest = Math.max(newest, fs.statSync(path.join(home, '.claude', name)).mtimeMs); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
+  return (new Date(now).getTime() - newest) / 3600e3;
+}
+
 export function readReceiptLedger(home) {
   let text;
   try { text = fs.readFileSync(path.join(home, '.claude', 'ai-receipts.jsonl'), 'utf8'); } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
@@ -198,11 +208,24 @@ export async function alertAiReceipts(result, { home = defaultHome(), now = new 
   return notify(result.report, { home, webhookFallback: false });
 }
 
+export async function runReceiptScanCli(args = process.argv.slice(2), {
+  home = defaultHome(), now = new Date(), keyPath = process.env.GOOGLE_SA_KEY ?? defaultDriveKeyPath(),
+  scan = scanAiReceipts, alert = alertAiReceipts, log = console.log,
+} = {}) {
+  const index = args.indexOf('--days'), staleIndex = args.indexOf('--if-stale'), dryRun = args.includes('--dry-run');
+  if (staleIndex >= 0) {
+    const hours = Number(args[staleIndex + 1]);
+    if (!Number.isFinite(hours) || hours <= 0) throw new Error('if-stale must be positive hours');
+    const age = receiptLedgerAgeHours(home, now);
+    if (age <= hours) { log(`skip: fresh (${age.toFixed(1)}h)`); return; }
+  }
+  if (!fs.existsSync(keyPath)) { log('skip: no-sa-key'); return; }
+  const result = await scan({ home, now, days: index < 0 ? 3 : Number(args[index + 1]), appendLedger: !dryRun });
+  if (!dryRun && args.includes('--notify')) await alert(result, { home, now });
+  log(args.includes('--json') ? JSON.stringify(result, null, 2) : result.report);
+}
+
 if (isEntry(import.meta.url)) {
-  const args = process.argv.slice(2), index = args.indexOf('--days'), dryRun = args.includes('--dry-run');
-  try {
-    const result = await scanAiReceipts({ days: index < 0 ? 3 : Number(args[index + 1]), appendLedger: !dryRun });
-    if (!dryRun && args.includes('--notify')) await alertAiReceipts(result);
-    console.log(args.includes('--json') ? JSON.stringify(result, null, 2) : result.report);
-  } catch { console.error('ai-receipt-scan: 集計失敗（設定・台帳・接続を確認）'); process.exitCode = 1; }
+  try { await runReceiptScanCli(); }
+  catch { console.error('ai-receipt-scan: 集計失敗（設定・台帳・接続を確認）'); process.exitCode = 1; }
 }

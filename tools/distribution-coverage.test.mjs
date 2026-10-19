@@ -75,11 +75,12 @@ function listFiles(dir, predicate) {
   let entries;
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch (err) {
-    // 並行実行中の他テストが一時フィクスチャを消した直後は ENOENT になる。
-    // 走査対象が消えただけなので、その枝は無視して続行する（テスト汚染対策）。
-    if (err.code === 'ENOENT') return [];
-    throw err;
+  } catch (error) {
+    // テストファイルは別プロセスで並行実行される。drive-hub-mirror.test.mjs は
+    // tools/drive_mirror_test_repo_* を作って消すため、走査中に消えたディレクトリは
+    // 無かったものとして扱う（CI で ENOENT になる flake の防止）。
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return [];
+    throw error;
   }
   return entries.flatMap((entry) => {
     const target = path.join(dir, entry.name);

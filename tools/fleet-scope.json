@@ -56,6 +56,12 @@
       "reason": "classifier-settings ステップが allow ルール同期に実行する"
     },
     {
+      "path": "tools/assign-app-gate-fire.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "D:/ 固定の worktree と .env.local 候補に依存。kim-PC だけで日次実行"
+    },
+    {
       "path": "tools/audit.ps1",
       "scope": "kim-only",
       "step": null,

@@ -53,6 +53,18 @@ try {
   }
 } catch {}
 
+// 夜間タスクが止まった場合も、次回 SessionStart で領収書の空白を埋める。
+try {
+  const guard = path.join(home, '.claude', '.receipt-scan-guard');
+  const scan = firstFile('ai-receipt-scan.mjs');
+  const due = !fs.existsSync(guard) || Date.now() - fs.statSync(guard).mtimeMs >= 20 * 60 * 60 * 1000;
+  if (due && scan) {
+    fs.mkdirSync(path.dirname(guard), { recursive: true });
+    fs.writeFileSync(guard, new Date().toISOString(), 'utf8');
+    background(scan, ['--if-stale', '30', '--notify']);
+  }
+} catch {}
+
 // Discord webhook の死活監視。webhook は Discord 側で消されると 404 になり、
 // .env が古いURLを指したまま通知が無言で止まる(実測: 2026-08-19 に死んで 6日間気付かず
 // 日次コスト自己申告が停止)。1日1回チェックし、同一チャンネルの生存webhookがあれば自動修復する。

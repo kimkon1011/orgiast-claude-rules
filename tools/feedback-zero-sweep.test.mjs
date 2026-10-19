@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { sweep, fetchPending, normalizeItem } from './feedback-zero-sweep.mjs';
+import { sweep, fetchPending, normalizeItem, appConfig, appDirectory } from './feedback-zero-sweep.mjs';
 
 const entry = { appName: 'テストアプリ', kind: 'next', intake: 'relay', refs: { url: 'T_URL', secret: 'T_SECRET', repo: 'T_REPO', appDir: 'T_DIR' } };
 
@@ -107,5 +107,64 @@ test('FEEDBACK_KIM_DISCORD_ID 未設定でも ORGIAST_DISCORD_USER_ID があれ�
     assert.equal(seen.length, 1);
     assert.equal(seen[0].userId, undefined);
     assert.notEqual(result.notification.delivered, 'none');
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+
+test('refs 配列は最初の設定値を採用し、文字列指定と appDir も互換', async () => {
+  const { home, opts } = setup([]);
+  try {
+    const multi = { ...entry, refs: { ...entry.refs, url: ['PRIMARY_URL', 'T_URL'], secret: ['PRIMARY_SECRET', 'T_SECRET'], appDir: ['MISSING_DIR', 'T_DIR'] } };
+    fs.writeFileSync(path.join(opts.config.T_DIR, '.env.local'), 'LOCAL_MARKER=loaded\n');
+    assert.equal(appConfig(multi, opts.config).LOCAL_MARKER, 'loaded');
+    const seen = [];
+    const fetchImpl = async (url, options) => {
+      seen.push([url.hostname, options.headers.Authorization]);
+      return { ok: true, json: async () => ({ ok: true, items: [] }) };
+    };
+    await fetchPending(multi, { ...opts.config, PRIMARY_URL: 'https://primary.invalid', PRIMARY_SECRET: 'primary' }, fetchImpl);
+    await fetchPending(multi, { ...opts.config, PRIMARY_URL: '', PRIMARY_SECRET: '' }, fetchImpl);
+    await fetchPending(entry, opts.config, fetchImpl);
+    assert.deepEqual(seen, [['primary.invalid', 'Bearer primary'], ['relay.invalid', 'Bearer dummy'], ['relay.invalid', 'Bearer dummy']]);
+    await assert.rejects(fetchPending(multi, {}, fetchImpl), /url 参照キー未設定/);
+    assert.equal(appDirectory('C:\\Users\\app', 'linux'), '/mnt/c/Users/app');
+    assert.equal(appDirectory('D:/app', 'linux'), '/mnt/d/app');
+    assert.equal(appDirectory('C:\\Users\\app', 'win32'), 'C:\\Users\\app');
+    assert.equal(appDirectory('/native/app', 'linux'), '/native/app');
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test('supabase page_path は前方一致で include 後に exclude、未指定なら全件', async () => {
+  const registry = JSON.parse(fs.readFileSync(new URL('./feedback-zero-registry.json', import.meta.url), 'utf8'));
+  const sales = registry.apps.find(e => e.appName === 'aujust／営業自動化');
+  const rows = ['/dashboard', '/customers/1', '/deals/2', '/cases/1', '/help/【購買部】備品', '/requests/self-purchase', '/admin/inquiries/1', null, '/unknown'].map((page_path, id) => ({ id: String(id), page_path, status: 'open' }));
+  rows.push({ id: 'done', page_path: '/dashboard', status: 'done' });
+  const fetchImpl = async () => ({ ok: true, json: async () => rows });
+  const config = { AUJUST_SUPABASE_URL: 'https://db.invalid', AUJUST_SUPABASE_SERVICE_ROLE_KEY: 'dummy' };
+  assert.deepEqual((await fetchPending(sales, config, fetchImpl)).items.map(r => r.id), ['0', '1', '2']);
+  assert.equal((await fetchPending({ ...sales, pagePathInclude: undefined, pagePathExclude: undefined }, config, fetchImpl)).items.length, 9);
+  assert.deepEqual((await fetchPending({ ...sales, pagePathInclude: ['/'], pagePathExclude: ['/customers/', '/deals/', '/cases/', '/help/', '/requests/', '/admin/', '/unknown'] }, config, fetchImpl)).items.map(r => r.id), ['0']);
+  assert.equal((await fetchPending({ ...sales, pagePathInclude: undefined }, config, fetchImpl)).items.length, 5);
+});
+
+test('汎用名の衝突はアプリ内 .env.local を優先し専用キーの明示指定を維持', async () => {
+  const { home, opts } = setup([]);
+  try {
+    const multi = { ...entry, refs: { ...entry.refs, url: ['AUJUST_SUPABASE_URL', 'NEXT_PUBLIC_SUPABASE_URL'], secret: ['AUJUST_SUPABASE_SERVICE_ROLE_KEY', 'SUPABASE_SERVICE_ROLE_KEY'] } };
+    fs.writeFileSync(path.join(opts.config.T_DIR, '.env'), 'NEXT_PUBLIC_SUPABASE_URL=https://env.invalid\nSUPABASE_SERVICE_ROLE_KEY=env-dummy\n');
+    fs.writeFileSync(path.join(opts.config.T_DIR, '.env.local'), 'NEXT_PUBLIC_SUPABASE_URL=https://local.invalid\nSUPABASE_SERVICE_ROLE_KEY=local-dummy\n');
+    const config = { ...opts.config, NEXT_PUBLIC_SUPABASE_URL: 'https://global.invalid', SUPABASE_SERVICE_ROLE_KEY: 'global-dummy' };
+    const seen = [];
+    const fetchImpl = async (url, options) => {
+      seen.push([url.hostname, options.headers.Authorization]);
+      return { ok: true, json: async () => ({ ok: true, items: [] }) };
+    };
+    await fetchPending(multi, appConfig(multi, config), fetchImpl);
+    await fetchPending(multi, appConfig(multi, { ...config, AUJUST_SUPABASE_URL: 'https://explicit.invalid', AUJUST_SUPABASE_SERVICE_ROLE_KEY: 'explicit-dummy' }), fetchImpl);
+    assert.deepEqual(seen, [['local.invalid', 'Bearer local-dummy'], ['explicit.invalid', 'Bearer explicit-dummy']]);
+    assert.equal(config.SUPABASE_SERVICE_ROLE_KEY, 'global-dummy');
+    fs.rmSync(path.join(opts.config.T_DIR, '.env.local'));
+    fs.rmSync(path.join(opts.config.T_DIR, '.env'));
+    assert.equal(appConfig(multi, config).SUPABASE_SERVICE_ROLE_KEY, 'global-dummy');
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });

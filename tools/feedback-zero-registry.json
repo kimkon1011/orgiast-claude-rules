@@ -49,9 +49,11 @@
       "appName": "aujust／営業自動化",
       "kind": "next",
       "intake": "supabase",
+      "pagePathInclude": ["/dashboard", "/customers/", "/deals/"],
+      "pagePathExclude": ["/cases/", "/help/【購買部】", "/requests/self-purchase", "/admin/inquiries"],
       "refs": {
-        "url": "AUJUST_SUPABASE_URL",
-        "secret": "AUJUST_SUPABASE_SERVICE_ROLE_KEY",
+        "url": ["AUJUST_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_URL"],
+        "secret": ["AUJUST_SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_SERVICE_ROLE_KEY"],
         "repo": "AUJUST_REPO",
         "appDir": "AUJUST_APP_DIR"
       }

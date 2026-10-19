@@ -8,6 +8,7 @@ import { evaluateHandoffDetail } from './handoff-detail-guard.mjs';
 
 const repo = path.resolve('.');
 const hooks = [
+  'gmail-connector-url-gate.mjs',
   'share-before-send-gate.mjs',
   'playbook-inject.mjs',
   'past-log-search-gate.mjs',

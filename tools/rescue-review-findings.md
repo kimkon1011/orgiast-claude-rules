@@ -22,6 +22,36 @@ rescue 退避は「dirty な作業ツリーを保全する」仕組みなので�
 - 結論: main へ取り込む変更は無く、マージ不要。同型の枝は 20261015-042601 / 043201 / 20261016-041401 / 041502 / 041601。
 - 新しい `ignored-only` 判定でこれらはレビュー対象から外れる。
 
+## 2026-10-19 時点の結果
+
+- 対象: `refs/heads/rescue/*` 22 本（`--include-remote` なし）
+- `unique: 5 / duplicate: 0 / covered: 12 / covered-by-branch: 2 / covered-in-main: 3 / error: 0 / ignored-only: 0`
+
+前回（10-18）との差分は 1 本のみ:
+
+| branch | status | 内容 |
+|---|---|---|
+| `rescue/auto-session-20261019-032606` | `covered`（already-upstream） | `tools/autopilot-tick.mjs`(+test) 57+/0-。`git cherry` が全行 `-` で、同内容は main 取り込み済み |
+
+- `unique` 5 本・`covered-by-branch` 2 本・`covered-in-main` 3 本の顔ぶれは 10-18 から不変（詳細は下の 10-18 節）。新しいレビュー対象は発生していない。
+
+### 定期実行レールの実測（2026-10-19）
+
+| 経路 | 実測 |
+|---|---|
+| nightly-bootstrap（2分間隔） | `2026-10-19 18:02:39 / リポ同期 / ok:origin/main 7ce8e45`、`18:03:25 / 対象実行 / ok:fleet-mail.mjs 終了コード=0` |
+| anchor の状態 | detached HEAD = `origin/main` = `7ce8e45`、`git status` clean。bootstrap は `checkout --detach origin/main` で同期する設計（`tools/nightly-bootstrap.ps1:173`） |
+| setup --converge | `node tools/setup.mjs --converge` → **EXIT=0**、`classifier-settings [OK]`（hook 登録・allow ルール同期）。`SessionStart` に `setup.mjs --converge` 登録済み（`~/.claude/settings.json`） |
+| 残 NG | `cmd:claude` / `env:cerebras` / `task:fleet-mail-watchdog` の 3 件。10-16 時点と同じ既存項目で、EXIT=0 のため収束判定に影響しない（本棚卸しとは無関係） |
+
+### リモート含む棚卸し（`--include-remote`、2026-10-19）
+
+- 対象: local + `refs/remotes/origin/rescue/*` の 72 refs
+- `unique: 30 / duplicate: 4 / covered: 16 / covered-by-branch: 2 / covered-in-main: 11 / error: 0 / ignored-only: 9`
+- 前回（10-18）の `error: 6` はすべて `origin/rescue/sync-orgiast-main-*` の `spawnSync git ENOBUFS` だったが、#860（256MB 上限）が main に取り込まれたため **error は 0**。当該 6 本は大きな差分を持つ `unique` として分類された（例: `20261010-110502` は 298 files 865,757+/317-）。
+- `ignored-only` 9 本は差分が `.stall-sweeper/`（gitignore 済み）のみの枝。新判定でレビュー対象から外れた。
+- 内訳: `unique` 30 本 = `sync-orgiast-main-*` 6 本 + その他 24 本。origin-only の unique は 28 本（`rescue/auto-session-20261013-072202` 〜 `20261018-072203`、ローカルに降ろしていない古い退避）。
+
 ## 2026-10-18 時点の結果
 
 - 対象: `refs/heads/rescue/*` 21 本（`--include-remote` なし）

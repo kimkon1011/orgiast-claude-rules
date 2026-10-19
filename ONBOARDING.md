@@ -1008,6 +1008,7 @@ Codex／Gemini／DeepSeek／Groq／Kimi／Mistral／OpenRouter／GLM などの�
 - 残高切れ → 「入金する（オートチャージ ON）」が既定。キー失効・403 → 「再発行する」が既定。429 → 別の他AIへ自動切替。**「外す／やめる／縮小」を kim への選択肢に並べない。**
 - 他AIの障害は Claude で代替せず、別の他AIで吸収し、復旧したら戻す。Claude（監督）へ逆流させるのが最も高くつく。
 - 作業の割り振りは他AIレーン名を**先に・具体的に**書く（例: 要約=Gemini、下書き=Kimi、実装=Codex、Claude=verify のみ）。「必要なら他AIも使う」のような弱い表現は禁止。
+- **🔴 この原則はアプリが実行時に呼ぶ LLM/検索 API にも適用する（§2.8.0・2026-10-17 追加）。** Claude Code の作業レーンだけの話ではない。
 
 #### 1.18.5 AIレーン放置禁止と手渡し前の代替検証
 
@@ -1185,6 +1186,27 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
 ### 2.8 AI費用・夜間処理・無人運転
 
 用途別に費用を最適化し、遅延可能な処理は夜間化し、無人処理には試行上限と監視を設ける。
+
+**2.8.0 🔴 最優先: アプリが呼ぶ LLM/検索 API も他AIが既定・一括実行は実測と予算上限が先（kim 2026-10-17 厳命・全PC全アカウント）**
+
+「他AIを使うのが既定」（§1.18 直後の節）は、Claude Code の作業だけでなく、**デプロイ済みアプリ・GitHub Actions・cron・GAS が実行時に呼ぶ LLM/検索 API** にも適用する。下の 2.8 の「Haiku/Sonnet/Opus の階層化」は、Claude API を使うと決まった後の話で、他AIより先には来ない。
+
+1. **呼び先の既定**: Web検索付きの情報収集＝Gemini Flash の Google 検索グラウンディング（Gemini 3.x は月5,000件まで無料）。分類・抽出・要約・整形＝Groq / DeepSeek / Gemini Flash（`tools/routing-table.json` の実測表に従う）。Claude API は、他AIで品質が出ないことを実測した時だけ使い、コードに `// LLM-PROVIDER-REASON: <理由と実測>` を書く。
+1-2. **1社だけ試して Claude に戻すのは禁止（kim 2026-10-17 厳命）**: 他AIで品質が足りなかった時は、Claude に戻す前に、その用途で使える他AIを**3社以上**、同じ評価セット・同じ物差し（取れた項目数・一致率・1件あたり実費）で比較し、表で示す。候補の例: Web検索付き＝Gemini（Flash/Pro）・Perplexity Sonar（OpenRouter）・xAI Grok（web_search）・Kimi（$web_search）・OpenRouter `:online`／生成・抽出＝DeepSeek・Groq・Kimi・Mistral・GLM・Gemini Flash。プロンプトや2段構成（検索→整形）の改善も他AIの側で先に試す。`LLM-PROVIDER-REASON:` には、比較した他AI 3社以上の名前と実測値を書く（社名が3つ未満なら app-llm-cost-gate が block）。Claude に戻した後も、他AIの改善を続ける TODO を残す。
+2. **既存アプリを触る時**: その機能の呼び先を最初に確認する。Claude API なら、作業を始める前に他AIへの置き換え案（同じ入力での品質比較と費用比較つき）を出す。古いアプリだからと既存経路を流用しない。
+3. **有料 LLM の一括実行（20件超・無人）の前に**: ①1〜10件で1件あたりの実費を実測する（response の usage から計算。推測の単価を伝えない）。②`[COST-ESTIMATE: 1件 $X(n件実測)×N件=$Y / 上限$Z]` を提示し、承認を得る。③コード側に予算上限（例 `BULK_BUDGET_USD`、累計が超えたら自動停止）を入れる。**オートチャージは予算上限ではない**（暴走をそのまま課金し続ける）。
+4. **監視**: 残高の監視（credit-watch）だけでなく、日次の消費額が急増したら止めて通知する。
+5. **🔴 Claude への自動フォールバック禁止（kim 2026-10-18 厳命）**: 他AIのキーが無い・残高切れ・障害の時に、Claude へ自動で落とす分岐をコードに書かない（例: `KEY ? "openrouter" : "anthropic"`、`catch → researchConferenceAnthropic`、既定モデルに `claude-*` を置く）。落とす先は**別の他AI**（例: Perplexity → DeepSeek :online → Grok → Gemini）。他AIが全部使えない時は、処理を止めて通知する（Claude で黙って続けない）。
+6. **🔴 「当面は Claude で動きます」で終えない**: デプロイ先の環境変数に他AIのキーが無い・デプロイが止まっている・他AIの残高切れ、を見つけたら、その場で直す（キー登録 → デプロイ → 実際に他AIで動いたことの確認まで）。直せない理由があれば、それを解消する作業（例: デプロイを止めているゲートの必須条件を満たす）を同じセッションで行う。報告で「当面は Claude」「Claude で代替」「入金は必須ではない」と書いて残すのは違反。
+7. **🔴 他AIの残高切れ・停止は「不要」と扱わない**: §1.18.5 と同じく、入金（オートチャージ ON）が既定。所有アカウントを Gmail の領収書等で特定し、入金先 URL・アカウント付きで kim に1回だけ依頼する。比較で他のAIが勝っていても、停止中のレーンは放置しない。
+
+**強制（追加）**: app-llm-cost-gate はアプリコードに `claude-(haiku|sonnet|opus|fable)` のモデル名や `"anthropic"` を既定・フォールバックとして書き込む変更も block する（`LLM-PROVIDER-REASON:` に他AI 3社以上が無い限り）。claude-fallback-report-gate（Stop）は、報告文の「当面は Claude」「Claude にフォールバック」「Claude で代替」「（他AIの）入金は必須ではない」等を block する。
+
+**由来（2026-10-18）**: 学会獲得アプリで、他AI（Perplexity）に切り替えた後も ①コードに「OpenRouter のキーが無ければ Claude」の分岐を書き、②Vercel にキーが無いのを「当面は Claude Haiku で動きます」と報告で済ませ、③Kimi の残高切れを「入金は必須ではない」と書いた。どれも、いつの間にか Claude に戻してコストを犠牲にする誘導だった（kim「勝手に Claude を使うように誘導してユーザーのコストパフォーマンスを犠牲にしている」）。
+
+**強制**: `tools/app-llm-cost-gate.mjs`（PreToolUse）が、①アプリコードへの Claude API 呼び出しの新規追加（`LLM-PROVIDER-REASON:` なし）と、②有料 LLM キーを使う workflow/script の20件超起動（`[COST-ESTIMATE:` なし、または上限超過）を block する。
+
+**由来（実害）**: 2026-10-16〜17、学会獲得アプリの情報収集バッチを Claude（sonnet + web_search/web_fetch）のまま253件一括で流し、1件あたり数ドル・オートチャージで2日約 $100 を課金した。実費を測らず「1件数十円」と推測で伝え、予算上限なしで無人実行していた。原因は、①「他AI既定」が Claude Code の作業レーンにしか書かれておらず、アプリ実行時の呼び先は §2.8（Claude モデル階層化）が既定になっていたこと、②費用 hook がすべて Claude Code セッションのトークンしか見ておらず、アプリ側の課金が見えていなかったこと、③2026-07 に Claude 前提で作ったアプリを、2026-10-09 の他AI規則後も棚卸ししていなかったこと。同じ収集は Gemini Flash グラウンディングで、1件あたりの費用が1/10以下になる。
 
 **2.8 API（LLM）コスト最適化**
 

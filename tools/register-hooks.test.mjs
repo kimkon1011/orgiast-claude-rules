@@ -17,6 +17,11 @@ test('既存PowerShell hookへExecutionPolicy Bypassを補いcost-loopをmjsへ�
   } }));
   const stdout = execFileSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo } });
   const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  const costGroups = settings.hooks.PreToolUse.filter(group => group.hooks.some(hook => hook.command.includes('app-llm-cost-gate.mjs')));
+  assert.equal(costGroups.length, 1);
+  assert.equal(costGroups[0].matcher, 'Write|Edit|MultiEdit|Bash');
+  // Shared gate wrapper reserves 15 seconds around the hook's 5-second budget.
+  assert.equal(costGroups[0].hooks[0].timeout, 15);
   const commands = Object.values(settings.hooks).flatMap((groups) => groups.flatMap((group) => group.hooks || [])).map((hook) => hook.command);
   assert.ok(commands.some((command) => command.includes('cost-loop.mjs')));
   assert.ok(!commands.some((command) => command.includes('cost-loop.ps1')));
@@ -66,12 +71,12 @@ test('stop-gate-runner hook は timeout 30 で Stop に登録される', () => {
   fs.rmSync(home, { recursive: true, force: true });
 });
 
-test('旧Stop gate 9本をrunner 1本へ移行し無関係なStop hookを残す', () => {
+test('個別Stop gateをrunner 1本へ移行し無関係なStop hookを残す', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-runner-'));
   const repo = path.resolve('.');
   const settingsFile = path.join(home, '.claude', 'settings.json');
   fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
-  const old = ['handoff-quality-gate.mjs','stop-gate.mjs','manual-request-fullsteps-gate.mjs','handoff-investigation-gate.mjs','handoff-info-guard.mjs','negative-claim-gate.mjs','report-length-gate.mjs','self-check-before-asking-guard.mjs','doc-link-drive-guard.mjs'];
+  const old = ['handoff-quality-gate.mjs','stop-gate.mjs','manual-request-fullsteps-gate.mjs','handoff-investigation-gate.mjs','handoff-info-guard.mjs','negative-claim-gate.mjs','report-length-gate.mjs','self-check-before-asking-guard.mjs','doc-link-drive-guard.mjs','claude-fallback-report-gate.mjs'];
   const hooks = old.map((name) => ({ hooks: [{ type: 'command', command: `node "C:\\old\\tools\\${name}"` }] }));
   hooks.push({ hooks: [{ type: 'command', command: 'powershell -NoProfile -File "C:\\keep.ps1"' }, { type: 'command', command: 'node "C:\\keep-tool.mjs"' }] });
   fs.writeFileSync(settingsFile, JSON.stringify({ hooks: { Stop: hooks } }));
@@ -117,6 +122,7 @@ test('手間削減hook 8本を正しいイベントへ登録しstop-gateは登�
   assert.deepEqual(['automation-first-reminder.mjs', 'credentials-reminder.mjs', 'playbook-inject.mjs'].every((name) => names('UserPromptSubmit').includes(name)), true);
   assert.deepEqual(['pretooluse-headless-background.mjs', 'pretooluse-serial-investigation.mjs', 'pipe-stage-permissions.mjs'].every((name) => names('PreToolUse').includes(name)), true);
   assert.deepEqual(['auto-progress-ledger.mjs', 'stop-gate-runner.mjs', 'handoff-detail-guard.mjs', 'url-format-guard.mjs', 'check-e2e-before-stop.mjs'].every((name) => names('Stop').includes(name)), true);
+  assert.ok(fs.readFileSync(path.join(repo, 'tools', 'stop-gate-runner.mjs'), 'utf8').includes("'claude-fallback-report-gate'"));
   assert.equal(Object.values(settings.hooks).flatMap((groups) => groups).flatMap((group) => group.hooks || []).some((hook) => /(?:^|[\\/])stop-gate\.mjs/.test(String(hook.command))), false);
   fs.rmSync(home, { recursive: true, force: true });
 });

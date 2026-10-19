@@ -41,6 +41,7 @@ import { currentTurnEntries, blocks } from './state-claim-evidence.mjs';
 import { judgeSideEffectLeft } from './side-effect-left-gate.mjs';
 import { judge as judgeDeferralWait } from './deferral-wait-gate.mjs';
 import { evaluateShallowAnswer } from './shallow-answer-gate.mjs';
+import { evaluateClaudeFallbackReport } from './claude-fallback-report-gate.mjs';
 
 
 const home = () => process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || os.homedir();
@@ -67,6 +68,7 @@ export async function evaluateGates(ctx, auditOptions = {}) {
     ['decision-research-gate', () => { const result = judgeDecisionResearch(ctx.assistantText); return result.triggered ? { decision: 'block', reason: decisionResearchReason(result.missing), code: 'RESEARCH-FIRST' } : { decision: 'pass' }; }],
     ['negative-claim-gate', () => { const result = evaluateNegativeClaimFromRaw({ text: ctx.assistantText, transcriptRaw: ctx.transcriptRaw }); return result.decision === 'block' && configuredMode() !== 'block' ? { ...result, decision: 'warn' } : result; }],
     ['external-state-claim-gate', () => { const result = evaluateExternalStateClaimFromRaw({ text: ctx.assistantText, transcriptRaw: ctx.transcriptRaw }); return result.decision === 'block' && externalStateMode() !== 'block' ? { ...result, decision: 'warn' } : result; }],
+    ['claude-fallback-report-gate', () => evaluateClaudeFallbackReport(ctx.assistantText)],
     ['control-group-gate', () => runControlGroup({ cwd: ctx.input?.cwd })],
     ['pr-handoff-gate', () => evaluatePrHandoff(ctx.assistantText)],
     ['reported-symptom-gate', () => evaluateReportedSymptomFromRaw({ text: ctx.assistantText, transcriptRaw: ctx.transcriptRaw })],

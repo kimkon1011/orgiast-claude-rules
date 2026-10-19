@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
-import { parseEnvText, ensureFeedbackIssue, loadFeedbackApps, runGh } from './feedback-to-issues.mjs';
+import { parseEnvText, ensureFeedbackIssue, loadFeedbackApps, runGh, DEDICATED_PIPELINE_APPS } from './feedback-to-issues.mjs';
 import { decideCodexGate, parseDeferred, nextLocalMidnight } from './lib/executor-gate.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { main as doneNotify } from './feedback-done-notify.mjs';
@@ -149,6 +149,8 @@ export async function sweep({registryFile=path.join(here,'feedback-zero-registry
             } catch(e) {row.errors.push(e.message);row.status='未取得（Issue照合失敗）';row.remaining++;continue;}
           }
           row.remaining++;
+          // Dedicated intake owns implementation; keep backlog and existing Issue checks above.
+          if(DEDICATED_PIPELINE_APPS.has(entry.appName))continue;
           if(dryRun){if(!repo && !issue)row.errors.push('反映先 repo 参照キー未設定');else row.queued++;continue;}
           if(!issue) {
             if(!repo){row.errors.push('反映先 repo 参照キー未設定');continue;}

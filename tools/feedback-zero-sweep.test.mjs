@@ -217,3 +217,29 @@ test('汎用名の衝突はアプリ内 .env.local を優先し専用キーの�
     assert.equal(fs.existsSync(path.join(home, '.claude', 'feedback-zero-state.json')), false);
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
+
+
+test('専用経路は repo 未設定でも残数を報告し dry-run・実行とも Issue 化や実装投入をしない', async () => {
+  for (const dryRun of [true, false]) {
+    const appName = 'ブース制作アプリ';
+    const items = ['booth1', 'booth2'].map(key => ({ key, kind: 'bug', status: 'open', title: '不具合' }));
+    const { home, opts, calls } = setup(items);
+    delete opts.config.T_REPO;
+    fs.writeFileSync(opts.registryFile, JSON.stringify({ version: 1, apps: [{ ...entry, appName, intake: 'booth-sheet' }] }));
+    let ghCalls = 0;
+    try {
+      const result = await sweep({ ...opts, dryRun, gh: () => { ghCalls++; throw new Error('unexpected gh call'); } });
+      assert.equal(result.remaining, 2);
+      assert.equal(result.rows[0].remaining, 2);
+      assert.equal(result.rows[0].status, '取得済');
+      assert.deepEqual(result.rows[0].errors, []);
+      assert.equal(result.rows[0].queued, 0);
+      assert.equal(result.unknown, 0);
+      assert.equal(result.launched, 0);
+      assert.equal(calls.issue + calls.exec + ghCalls, 0);
+      assert.equal(fs.existsSync(path.join(home, '.claude', 'feedback-zero-state.json')), false);
+      assert.equal(calls.notify.length, dryRun ? 0 : 1);
+      if (!dryRun) assert.ok(calls.notify[0].includes('ブース制作アプリ: 2件 / 取得済'));
+    } finally { fs.rmSync(home, { recursive: true, force: true }); }
+  }
+});

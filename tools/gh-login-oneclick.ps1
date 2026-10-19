@@ -97,10 +97,43 @@ foreach ($line in $lines) {
   if ($LASTEXITCODE -ne 0 -or -not $url) { Write-Host "FAIL: origin を取得できません ($repo)"; $failed++; continue }
   $slug = ($url -replace '^.*github\.com[:/]', '') -replace '\.git$', ''
 
+  $headers = @{ Authorization = "Bearer $token"; 'User-Agent' = 'orgiast-oneclick' }
+
+  # 同じ枝名の open PR が既にあるなら push も PR 作成もしない。fork 由来の PR は
+  # 「A pull request already exists」にならず、同じ内容の重複PRが増えてしまうため。
+  # 内容が同一（tree 一致）のときだけ skip し、差分があるときは通常どおり進める。
+  $existingPr = $null
+  try {
+    $openPrs = Invoke-RestMethod -Method Get -Uri "https://api.github.com/repos/$slug/pulls?state=open&per_page=100" -Headers $headers
+    $existingPr = $openPrs | Where-Object { $_.head.ref -eq $branch } | Select-Object -First 1
+  } catch {
+    Write-Host "WARN: 既存PRの照会に失敗しました（重複判定なしで続行）: $($_.ErrorDetails.Message)"
+  }
+  if ($existingPr) {
+    $sameTree = $false
+    & git -C $repo fetch --quiet origin "refs/pull/$($existingPr.number)/head" 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+      $localTree = (& git -C $repo rev-parse "$branch^{tree}").Trim()
+      $remoteTree = (& git -C $repo rev-parse 'FETCH_HEAD^{tree}').Trim()
+      if ($localTree -eq $remoteTree) { $sameTree = $true }
+    }
+    if ($sameTree) {
+      Write-Host "SKIP: 同内容の open PR #$($existingPr.number) が既にあります（重複PRを作らないため push しません）: $($existingPr.html_url)"
+      try {
+        Invoke-RestMethod -Method Post -Uri "https://api.github.com/repos/$slug/issues/$($existingPr.number)/labels" -Headers $headers -ContentType 'application/json' -Body (@{ labels = @('automerge') } | ConvertTo-Json -Compress) | Out-Null
+        Write-Host 'OK: 既存PRへ automerge ラベルを付与しました。'
+      } catch {
+        Write-Host "WARN: 既存PRに automerge ラベルを付けられませんでした（権限不足の可能性）: $($_.ErrorDetails.Message)"
+      }
+      $done++
+      continue
+    }
+    Write-Host "WARN: 同じ枝名の open PR #$($existingPr.number) がありますが内容が異なるため、通常どおり push します。"
+  }
+
   & git @gitNoPrompt -C $repo push -u origin $branch 2>&1 | ForEach-Object { Write-Host $_ }
   if ($LASTEXITCODE -ne 0) { Write-Host "FAIL: push できません ($branch)"; $failed++; continue }
 
-  $headers = @{ Authorization = "Bearer $token"; 'User-Agent' = 'orgiast-oneclick' }
   $body = @{ title = $branch; head = $branch; base = 'main'; body = '自動セッションの成果物。CI が緑になれば automerge でマージされます。' } | ConvertTo-Json -Compress
   $pr = $null
   try {

@@ -33,11 +33,27 @@ export async function runRemediation({
   home = process.env.ORGIAST_HOME || os.homedir(), now = new Date(), dryRun = false, json = false,
   repo = path.resolve(import.meta.dirname, '..'), playbooks = defaultPlaybooks, run = command,
   notify = notifyKim, decision = addDecision, maxCodex = 3, maxMinutes = 45,
+  clock = Date.now, budgetMinutes = process.env.NIGHTLY_REMEDIATE_BUDGET_MIN,
   taskApi = { get: getScheduledTaskInfo, start: startScheduledTask, stop: stopScheduledTask }
 } = {}) {
+  const configuredBudget = Number(budgetMinutes);
+  maxMinutes = Math.min(maxMinutes, Number.isFinite(configuredBudget) && configuredBudget > 0 ? configuredBudget : 80);
+  const started = clock();
+  const remainingMs = () => maxMinutes * 60000 - (clock() - started);
+  const laneTimeout = () => {
+    if (remainingMs() < 5 * 60000) throw new Error('remediation-budget-deferred');
+    return Math.floor((remainingMs() - 3 * 60000) / 1000) * 1000;
+  };
+  const logFile = path.join(home, '.claude', 'logs', 'nightly-health-remediate.log');
   const input = readJson(path.join(home, '.claude', '.nightly-health-last.json'), { anomalies: [] });
   const anomalies = Array.isArray(input.anomalies) ? input.anomalies : [];
   if (!anomalies.length) {
+    // A healthy/no-op run must also advance the monitored heartbeat.
+    if (!dryRun) {
+      try { await appendLineWithRetry(logFile, `${now.toISOString()} remediation started`); }
+      catch (error) { console.error(`WARN ログ追記失敗: ${redactAll(error?.message ?? error)}`); }
+    }
+
     const result = { exitCode: 0, fixed: [], prs: [], escalated: [], deferred: [], suppressed: [], skipped: [], plan: [] };
     const cacheTime = input.ranAt || 'キャッシュなし';
     if (json) console.log(JSON.stringify({ ...result, message: `ok:異常なし（${cacheTime}）` }, null, 2));
@@ -45,8 +61,7 @@ export async function runRemediation({
     return result;
   }
   const ledgerFile = path.join(home, '.claude', 'nightly-health-remediate-ledger.jsonl');
-  const logFile = path.join(home, '.claude', 'logs', 'nightly-health-remediate.log');
-  const prior = readLedger(ledgerFile), started = Date.now();
+  const prior = readLedger(ledgerFile);
   const result = { exitCode: 0, fixed: [], prs: [], escalated: [], deferred: [], suppressed: [], skipped: [], plan: [] };
   const tasks = { get: (name) => taskApi.get(name), start: (name) => taskApi.start(name), stop: (name) => taskApi.stop(name) };
   const record = async (anomaly, outcome, extra = {}) => {
@@ -159,9 +174,9 @@ export async function runRemediation({
       continue;
     }
     const overCount = codexCount >= maxCodex;
-    const overTime = Date.now() - started >= maxMinutes * 60000;
+    const overTime = remainingMs() < 5 * 60000;
     if (overCount || overTime) {
-      const reason = overCount ? '1回3件の修理上限に到達' : '45分の全体上限に到達';
+      const reason = overCount ? '1回3件の修理上限に到達' : `${maxMinutes}分の全体予算: 残り5分未満`;
       if (dryRun) plan(anomaly, 'deferred', reason); else await defer(anomaly, reason);
       continue;
     }
@@ -179,14 +194,16 @@ export async function runRemediation({
       try {
         const added = run('git', ['worktree', 'add', worktree, '-b', branch, 'origin/main'], { cwd: repo });
         if (added.status !== 0) throw new Error(added.stderr || 'worktree add failed');
-        const codex = run(process.execPath, [path.join(repo, 'tools', 'codex-do.mjs'), '--prompt-file', promptFile, '--cwd', worktree, '--timeout', '1800', '--origin', 'unattended', '--kind', 'implement'], { cwd: repo, timeout: 31 * 60000 });
+        const timeout = laneTimeout();
+        const codex = run(process.execPath, [path.join(repo, 'tools', 'codex-do.mjs'), '--prompt-file', promptFile, '--cwd', worktree, '--timeout', String(timeout / 1000), '--origin', 'unattended', '--kind', 'implement'], { cwd: repo, timeout });
         let coded = codex;
         // 終了コード75は保留(上限中/無人割当超過)。失敗ではないので、retryAt を控えて cheap-code へ回す。
         const deferred = parseDeferred(codex.status, codex.stdout);
         if (deferred) { deferredInfo = deferred; console.error(`[nightly-health-remediate] codex 保留(${deferred.reason}): ${new Date(deferred.retryAt).toISOString()} 以降`); }
-        if (codex.status !== 0) coded = run(process.execPath, [path.join(repo, 'tools', 'cheap-code.mjs'), '--provider', 'auto', '--prompt-file', promptFile, '--cwd', worktree], { cwd: repo, timeout: 31 * 60000 });
+        if (codex.status !== 0) coded = run(process.execPath, [path.join(repo, 'tools', 'cheap-code.mjs'), '--provider', 'auto', '--prompt-file', promptFile, '--cwd', worktree], { cwd: repo, timeout: laneTimeout() });
         if (coded.status !== 0) throw new Error(`修理レーン失敗 codex exit ${codex.status}: ${redactAll(codex.stderr).slice(-200)} / cheap-code exit ${coded.status}: ${redactAll(coded.stderr).slice(-200)}`);
-        const tested = run(process.execPath, ['--test', 'tools/*.test.mjs', 'tools/lib/*.test.mjs'], { cwd: worktree, timeout: 20 * 60000 });
+        const testTimeout = laneTimeout();
+        const tested = run(process.execPath, ['--test', 'tools/*.test.mjs', 'tools/lib/*.test.mjs'], { cwd: worktree, timeout: Math.min(20 * 60000, testTimeout) });
         if (tested.status !== 0) throw new Error(`回帰テスト失敗: ${tested.stderr.slice(0, 300)}`);
         const pushed = run('git', ['push', '-u', 'origin', branch], { cwd: worktree, timeout: 120000 }); if (pushed.status !== 0) throw new Error(pushed.stderr);
         const bodyFile = path.join(os.tmpdir(), `nightly-remediate-pr-${process.pid}.txt`);
@@ -197,6 +214,10 @@ export async function runRemediation({
       } catch (error) { laneReason = redactAll(error.message || error); }
       finally { run('git', ['worktree', 'remove', '--force', worktree], { cwd: repo }); try { fs.unlinkSync(promptFile); } catch {} }
       if (handled) continue;
+      if (laneReason === 'remediation-budget-deferred') {
+        await defer(anomaly, '残り予算不足のため次回へ持ち越し');
+        continue;
+      }
       if (deferredInfo) {
         result.deferred.push(await record(anomaly, 'quota_deferred', { reason: deferredInfo.reason, retryAt: deferredInfo.retryAt }));
         continue;

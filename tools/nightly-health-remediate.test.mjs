@@ -190,3 +190,62 @@ test('dead GUI watcher follows registration playbook and verifies heartbeat, no 
   });
   assert.equal(calls.length,1);assert.equal(result.fixed.length,1);assert.equal(result.fixed[0].playbook,'stuck-dialog-watcher');
 });
+
+test('budget caps the existing limit and recalculates fallback timeouts', async (t) => {
+  const home = makeHome(t, { anomalies: [{ label: 'budget', message: 'bad' }] });
+  let elapsed = 0;
+  const calls = [];
+  const result = await runRemediation({ home, playbooks: [], budgetMinutes: 10, clock: () => elapsed,
+    notify: async () => {}, decision: () => {},
+    run: (exe, args, options) => {
+      calls.push({ args, options });
+      if (args[0]?.endsWith('codex-do.mjs')) {
+        elapsed = 2 * 60000;
+        return { status: 1, stdout: '', stderr: 'failed' };
+      }
+      if (args[0]?.endsWith('cheap-code.mjs')) elapsed = 7 * 60000;
+      return { status: 0, stdout: '', stderr: '' };
+    }
+  });
+  const codex = calls.find(c => c.args[0]?.endsWith('codex-do.mjs'));
+  assert.equal(codex.args[codex.args.indexOf('--timeout') + 1], '420');
+  assert.equal(codex.options.timeout, 420000);
+  assert.equal(calls.find(c => c.args[0]?.endsWith('cheap-code.mjs')).options.timeout, 300000);
+  assert.equal(calls.some(c => c.args.includes('--test')), false);
+  assert.equal(result.deferred.length, 1);
+  assert.equal(result.escalated.length, 0);
+});
+
+test('under five minutes defers without launching and dry-run remains read-only', async (t) => {
+  for (const dryRun of [false, true]) {
+    const home = makeHome(t, { anomalies: [{ label: 'short', message: 'bad' }] });
+    const result = await runRemediation({ home, playbooks: [], budgetMinutes: 4, dryRun,
+      run: () => { throw new Error('must not launch'); } });
+    assert.equal(dryRun ? result.plan[0].action : result.deferred[0].outcome, 'deferred');
+    if (dryRun) assert.equal(fs.existsSync(path.join(home, '.claude', 'logs')), false);
+  }
+});
+
+test('default and invalid budget values preserve the 45 minute cap', async (t) => {
+  for (const budgetMinutes of [undefined, '', 'bad', -1, 80]) {
+    const home = makeHome(t, { anomalies: [{ label: 'cap', message: 'bad' }] });
+    let elapsed = 0;
+    await runRemediation({ home, playbooks: [], budgetMinutes, clock: () => elapsed,
+      run: (exe, args, options) => {
+        if (args[0]?.endsWith('codex-do.mjs')) {
+          assert.equal(options.timeout, 42 * 60000);
+          elapsed = 42 * 60000;
+          return { status: 1, stdout: '', stderr: '' };
+        }
+        assert.ok(!args[0]?.endsWith('cheap-code.mjs'));
+        return { status: 0, stdout: '', stderr: '' };
+      }
+    });
+  }
+});
+
+test('no anomalies still advances the monitored log', async (t) => {
+  const home = makeHome(t, { anomalies: [] });
+  await runRemediation({ home });
+  assert.match(fs.readFileSync(path.join(home, '.claude', 'logs', 'nightly-health-remediate.log'), 'utf8'), /remediation started/);
+});

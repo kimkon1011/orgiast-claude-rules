@@ -458,6 +458,12 @@
       "reason": "要確認"
     },
     {
+      "path": "tools/register-nightly-remediate-task.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "朝バッチと同じ手動登録対象。converge 経路なし。"
+    },
+    {
       "path": "tools/register-nightly-kpi-task.ps1",
       "scope": "kim-only",
       "step": null,

@@ -1,0 +1,254 @@
+{
+  "formId": "1rTaqIMkw3mFv5S04E-e_Gi5JTaAeGrZ4v95-1eh2fbM",
+  "info": {
+    "title": "カフェ オープン前 チェックリスト",
+    "description": "店舗を円滑にオープンするための必須タスクを確認してください。全ての項目にチェックを入れてから開店してください。",
+    "documentTitle": "カフェ オープン前 チェックリスト"
+  },
+  "settings": {
+    "emailCollectionType": "DO_NOT_COLLECT"
+  },
+  "revisionId": "00000013",
+  "responderUri": "https://docs.google.com/forms/d/e/1FAIpQLSdXo7ojsPSU76Xosx1LGXvqR5gHo1RWbIWy-aykWB9pkoE5Vg/viewform",
+  "items": [
+    {
+      "itemId": "425ac254",
+      "questionGroupItem": {
+        "questions": [
+          {
+            "questionId": "6eb446b0",
+            "rowQuestion": {
+              "title": "看板出す"
+            }
+          },
+          {
+            "questionId": "24a12ca9",
+            "rowQuestion": {
+              "title": "アストの水"
+            }
+          },
+          {
+            "questionId": "1e6c7666",
+            "rowQuestion": {
+              "title": "トイレ掃除、紙予備3つに補充"
+            }
+          },
+          {
+            "questionId": "4d996e5a",
+            "rowQuestion": {
+              "title": "扉open表記"
+            }
+          },
+          {
+            "questionId": "6a441cda",
+            "rowQuestion": {
+              "title": "5 行目"
+            }
+          }
+        ],
+        "grid": {
+          "columns": {
+            "type": "CHECKBOX",
+            "options": [
+              {
+                "value": "完了"
+              },
+              {
+                "value": "未完了"
+              }
+            ]
+          }
+        }
+      },
+      "title": "I. 店内環境の準備"
+    },
+    {
+      "itemId": "0dbdf5a4",
+      "questionGroupItem": {
+        "questions": [
+          {
+            "questionId": "1bdb63c9",
+            "rowQuestion": {
+              "title": "レジの立ち上げと動作確認（お釣りの準備含む）"
+            }
+          },
+          {
+            "questionId": "0a1cda0f",
+            "rowQuestion": {
+              "title": "ショーケース内の商品（ケーキなど）の陳列と温度確認"
+            }
+          },
+          {
+            "questionId": "5ca824bc",
+            "rowQuestion": {
+              "title": "メニュー表の準備と配置"
+            }
+          },
+          {
+            "questionId": "32af4ab8",
+            "rowQuestion": {
+              "title": "カトラリー、ナプキン、シュガー等の備品補充"
+            }
+          },
+          {
+            "questionId": "02b34aa4",
+            "rowQuestion": {
+              "title": "テイクアウト用資材（袋、カップ蓋など）の確認と準備"
+            }
+          }
+        ],
+        "grid": {
+          "columns": {
+            "type": "CHECKBOX",
+            "options": [
+              {
+                "value": "完了"
+              },
+              {
+                "value": "未完了"
+              }
+            ]
+          }
+        }
+      },
+      "title": "II. サービスエリアの準備"
+    },
+    {
+      "itemId": "0df875dc",
+      "questionGroupItem": {
+        "questions": [
+          {
+            "questionId": "660da617",
+            "rowQuestion": {
+              "title": "エスプレッソマシンの立ち上げと抽出テスト（洗浄含む）"
+            }
+          },
+          {
+            "questionId": "6a6a2a74",
+            "rowQuestion": {
+              "title": "ドリップコーヒーの準備（豆の挽き、お湯の温度確認）"
+            }
+          },
+          {
+            "questionId": "1cd8f4c7",
+            "rowQuestion": {
+              "title": "製氷機の氷の補充"
+            }
+          },
+          {
+            "questionId": "1b335b2c",
+            "rowQuestion": {
+              "title": "牛乳、シロップ、ジュースなどの原材料の残量確認と補充"
+            }
+          },
+          {
+            "questionId": "7b5c6b7e",
+            "rowQuestion": {
+              "title": "フード類（パン、軽食など）の解凍・準備"
+            }
+          }
+        ],
+        "grid": {
+          "columns": {
+            "type": "CHECKBOX",
+            "options": [
+              {
+                "value": "完了"
+              },
+              {
+                "value": "未完了"
+              }
+            ]
+          }
+        }
+      },
+      "title": "III. ドリンク・フード準備"
+    },
+    {
+      "itemId": "1951317c",
+      "questionGroupItem": {
+        "questions": [
+          {
+            "questionId": "2676d653",
+            "rowQuestion": {
+              "title": "ゴミ箱の交換・空にする"
+            }
+          },
+          {
+            "questionId": "0e9b5ebd",
+            "rowQuestion": {
+              "title": "手洗い場での手指消毒液の補充"
+            }
+          },
+          {
+            "questionId": "141cd43b",
+            "rowQuestion": {
+              "title": "従業員の手洗い・ユニフォーム着用の確認"
+            }
+          },
+          {
+            "questionId": "4347cb6e",
+            "rowQuestion": {
+              "title": "冷蔵庫・冷凍庫の温度チェックと記録"
+            }
+          },
+          {
+            "questionId": "414b6167",
+            "rowQuestion": {
+              "title": "食材の賞味期限確認"
+            }
+          }
+        ],
+        "grid": {
+          "columns": {
+            "type": "CHECKBOX",
+            "options": [
+              {
+                "value": "完了"
+              },
+              {
+                "value": "未完了"
+              }
+            ]
+          }
+        }
+      },
+      "title": "IV. バックヤード/衛生管理"
+    },
+    {
+      "itemId": "3f661f56",
+      "title": "V. 連絡事項・特記事項",
+      "questionItem": {
+        "question": {
+          "questionId": "73687b5a",
+          "textQuestion": {
+            "paragraph": true
+          }
+        }
+      }
+    },
+    {
+      "itemId": "34dc74ef",
+      "title": "開店時刻",
+      "questionItem": {
+        "question": {
+          "questionId": "04d3bce7",
+          "timeQuestion": {}
+        }
+      }
+    },
+    {
+      "itemId": "36ce76f7",
+      "title": "担当スタッフ名",
+      "questionItem": {
+        "question": {
+          "questionId": "2073384a",
+          "textQuestion": {}
+        }
+      }
+    }
+  ],
+  "publishSettings": {
+    "publishState": {}
+  }
+}

@@ -857,6 +857,11 @@
       "scope": "fleet",
       "step": "task:fleet-mail",
       "reason": "ルール定義（rule-compliance-mail が読む）"
+    },
+    {
+      "path": "tools/rescue-review-findings.md",
+      "scope": "kim-only",
+      "reason": "ドキュメントで実行体なし（~/.claude 設定名の記載による誤検出を許容）"
     }
   ]
 }

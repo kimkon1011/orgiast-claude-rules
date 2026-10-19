@@ -149,7 +149,7 @@ export async function sweep({registryFile=path.join(here,'feedback-zero-registry
             } catch(e) {row.errors.push(e.message);row.status='未取得（Issue照合失敗）';row.remaining++;continue;}
           }
           row.remaining++;
-          if(dryRun){row.queued++;continue;}
+          if(dryRun){if(!repo && !issue)row.errors.push('反映先 repo 参照キー未設定');else row.queued++;continue;}
           if(!issue) {
             if(!repo){row.errors.push('反映先 repo 参照キー未設定');continue;}
             try {issue=ensureIssue(item,repo,{home,gh});}catch(e){row.errors.push('Issue化失敗: '+e.message);continue;}

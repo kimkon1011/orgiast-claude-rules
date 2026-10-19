@@ -168,3 +168,16 @@ test('汎用名の衝突はアプリ内 .env.local を優先し専用キーの�
     assert.equal(appConfig(multi, config).SUPABASE_SERVICE_ROLE_KEY, 'global-dummy');
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
+
+ test('repo 参照キー未設定は dry-run でも errors と unknown に含め副作用を起こさない', async () => {
+  const { home, opts, calls } = setup(pending);
+  delete opts.config.T_REPO;
+  try {
+    const result = await sweep({ ...opts, dryRun: true });
+    assert.deepEqual(result.rows[0].errors, ['反映先 repo 参照キー未設定']);
+    assert.equal(result.unknown, 1);
+    assert.equal(result.rows[0].queued, 0);
+    assert.equal(calls.issue + calls.exec + calls.notify.length, 0);
+    assert.equal(fs.existsSync(path.join(home, '.claude', 'feedback-zero-state.json')), false);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});

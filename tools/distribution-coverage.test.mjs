@@ -72,7 +72,16 @@ function topLevelEntries() {
 }
 
 function listFiles(dir, predicate) {
-  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch (err) {
+    // 並行実行中の他テストが一時フィクスチャを消した直後は ENOENT になる。
+    // 走査対象が消えただけなので、その枝は無視して続行する（テスト汚染対策）。
+    if (err.code === 'ENOENT') return [];
+    throw err;
+  }
+  return entries.flatMap((entry) => {
     const target = path.join(dir, entry.name);
     if (entry.isDirectory()) return listFiles(target, predicate);
     return entry.isFile() && predicate(entry.name) ? [target] : [];

@@ -1,5 +1,7 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const defaultRoot = fileURLToPath(new URL('../../', import.meta.url));
@@ -55,6 +57,29 @@ export function collectInventory(root = defaultRoot) {
     }
   }
   walk(path.resolve(root));
+  // hooks の正本は register-hooks.mjs が生成する配布集合（repo 内の JSON だけでは数えられない）。
+  const registerHooks = path.join(root, 'tools', 'register-hooks.mjs');
+  if (fs.existsSync(registerHooks)) {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'inventory-hooks-'));
+    try {
+      const settings = JSON.parse(execFileSync(process.execPath, [registerHooks, '--expected-json'], {
+        encoding: 'utf8',
+        env: { ...process.env, ORGIAST_REPO: path.resolve(root), ORGIAST_HOME: home, ORGIAST_PLATFORM: 'linux' },
+        windowsHide: true,
+      }));
+      result.distributionHooksTotal = 0;
+      result.distributionPwshHooksTotal = 0;
+      for (const groups of Object.values(settings.hooks || {})) {
+        if (!Array.isArray(groups)) continue;
+        for (const group of groups) for (const hook of (Array.isArray(group?.hooks) ? group.hooks : [])) {
+          result.distributionHooksTotal++;
+          if (/\b(?:pwsh|powershell)(?:\.exe)?\b|\.ps1\b/i.test(String(hook?.command || ''))) result.distributionPwshHooksTotal++;
+        }
+      }
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  }
   return result;
 }
 export function increases(current, baseline) {
@@ -75,6 +100,10 @@ export function increases(current, baseline) {
 export function markdown(result) {
   const reference = { ps1Total: 78, hooksTotal: 71, pwshHooksTotal: 19, hardcodedPathFiles: 55, hardcodedPathLines: 336 };
   const rows = Object.entries(reference).map(([key, old]) => `| ${key} | ${result[key]} | ${old} | ${result[key] - old >= 0 ? '+' : ''}${result[key] - old} |`);
+  if (Number.isFinite(result.distributionHooksTotal)) {
+    rows.push(`| distributionHooksTotal | ${result.distributionHooksTotal} | - | - |`);
+    rows.push(`| distributionPwshHooksTotal | ${result.distributionPwshHooksTotal} | 19 (実PC) | - |`);
+  }
   return `# Linux 移植 棚卸し\n\n| 項目 | 今回 | 事前調査 | 差分 |\n| --- | ---: | ---: | ---: |\n${rows.join('\n')}\n\n事前調査は ~/.claude 配布ツリーも含む範囲、本ツールはリポジトリ root（または --root）を走査するため一致しません。\n直書きは C:\\Users\\・C:/Users/・H:\\ のいずれかを含む行を数え、文書・テストも含めます（事前調査は C:\\Users が対象）。\n\nregister-*.ps1: ${result.registerPs1Total}\n\n| Windows 固有呼出し | 出現数 |\n| --- | ---: |\n${Object.entries(result.windowsOnlyCalls).map(([key, count]) => `| ${key} | ${count} |`).join('\n')}\n\n集計方法: hooks 配下の実行定義を JSON 構造で数えます。呼出しはコメント・文書内も含む文字列出現数です。\n.git、node_modules、.cache、シンボリックリンク、バイナリ、本ツールの生成レポートとベースラインは除外します。日時・絶対ルートは記録しません。\n`;
 }
 function cli(argv) {

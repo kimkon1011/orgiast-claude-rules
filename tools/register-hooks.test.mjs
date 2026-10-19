@@ -385,3 +385,21 @@ test('G8 relay registers Stop PreToolUse AskUserQuestion and Notification idempo
     if (event === 'PreToolUse') assert.equal(groups[0].matcher, 'AskUserQuestion');
   }
 });
+
+test('C③ linux 生成物はユーザー定義の ps1 hook も残さない', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-linux-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const repo = path.resolve('.');
+  const settingsFile = path.join(home, '.claude', 'settings.json');
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  fs.writeFileSync(settingsFile, JSON.stringify({ hooks: {
+    SessionStart: [{ hooks: [{ command: 'pwsh -NoProfile -File "C:\\x\\custom.ps1"' }, { command: 'node "C:\\x\\keep.mjs"' }] }],
+  } }));
+  execFileSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], {
+    encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo, ORGIAST_PLATFORM: 'linux' },
+  });
+  const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  const commands = Object.values(settings.hooks).flatMap((groups) => groups.flatMap((group) => group.hooks || [])).map((hook) => hook.command);
+  assert.equal(commands.some((command) => /pwsh|powershell|\.ps1\b/i.test(command)), false);
+  assert.ok(commands.some((command) => command.includes('keep.mjs')));
+});

@@ -10,6 +10,8 @@
     "schtasks": 27,
     "reg query": 3,
     "Get-ItemProperty": 5,
-    "Start-Process": 22
-  }
+    "Start-Process": 21
+  },
+  "distributionHooksTotal": 52,
+  "distributionPwshHooksTotal": 0
 }

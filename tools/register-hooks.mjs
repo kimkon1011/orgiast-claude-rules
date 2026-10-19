@@ -116,9 +116,19 @@ function add(groups, scriptName, group) {
       if (!legacy) { skippedNames.push(scriptName); if (!expectedJson) console.log(`  [skip] ${scriptName} — gate runtime 同期待ち`); return false; }
     }
   }
-  // 既存PCは .ps1 版が登録済みのことがある(Windows install)。拡張子を無視して重複判定しないと
-  // .mjs と .ps1 の二重登録になり、同じ context が2回注入される。
+  // 既存PCは .ps1 版が登録済みのことがある(Windows install / 旧 ~/.claude/hooks コピー)。
+  // C③: node 実装がある hook は ps1 登録をその場で .mjs コマンドへ置換する（総数は減らさない）。
   const base = scriptName.replace(/\.(mjs|ps1)$/, '');
+  const replacement = group?.hooks?.[0];
+  if (scriptName.endsWith('.mjs') && replacement?.command) {
+    for (const existing of groups) for (const hook of (Array.isArray(existing?.hooks) ? existing.hooks : [])) {
+      if (String(hook.command || '').includes(`${base}.ps1`)) {
+        hook.command = replacement.command;
+        if (replacement.timeout !== undefined) hook.timeout = replacement.timeout;
+      }
+    }
+  }
+  // 拡張子を無視して重複判定しないと、.mjs と .ps1 の二重登録になり同じ context が2回注入される。
   if (commands(groups).some((cmd) => cmd.includes(base))) return false;
   groups.push(group); return true;
 }
@@ -173,6 +183,27 @@ export function repairPowerShellExecutionPolicy(hooks) {
     }
   }
   return changed;
+}
+
+// Linux/macOS の生成物は ps1 を含めない（C③）。Windows の既存挙動は変えない。
+// 同期途中のツリー（lib/platform.mjs がまだ無い）でも register-hooks を落とさないため静的 import はしない。
+const currentPlatform = () => process.env.ORGIAST_PLATFORM || process.platform;
+export function stripPowerShellHooks(hooks, platform = currentPlatform()) {
+  if (platform === 'win32') return 0;
+  let removed = 0;
+  for (const [event, groups] of Object.entries(hooks || {})) {
+    if (!Array.isArray(groups)) continue;
+    for (let i = groups.length - 1; i >= 0; i--) {
+      const items = groups[i]?.hooks;
+      if (!Array.isArray(items)) continue;
+      for (let j = items.length - 1; j >= 0; j--) {
+        if (/\b(?:pwsh|powershell)(?:\.exe)?\b|\.ps1\b/i.test(String(items[j]?.command || ''))) { items.splice(j, 1); removed++; }
+      }
+      if (!items.length) groups.splice(i, 1);
+    }
+    if (!groups.length) delete hooks[event];
+  }
+  return removed;
 }
 
 try {
@@ -236,6 +267,9 @@ try {
   if (add(settings.hooks.SessionStart, 'hook-selfcheck.mjs', { hooks: [{ type: 'command', command: command('hook-selfcheck.mjs'), timeout: 10 }] })) added += 1;
   if (add(settings.hooks.SessionStart, 'hook-budget-check.mjs', { hooks: [{ type: 'command', command: command('hook-budget-check.mjs'), timeout: 10 }] })) added += 1;
   if (add(settings.hooks.SessionStart, 'makimono-host-detect.mjs', { hooks: [{ type: 'command', command: command('makimono-host-detect.mjs'), timeout: 10 }] })) added += 1;
+  // C③: 旧 session-triage-hook.ps1（~/.claude/hooks のコピー）を repo の .mjs 実装へ移行する。
+  added += migrate(settings.hooks.SessionStart, 'session-triage-hook.ps1', 'session-triage-hook.mjs', command('session-triage-hook.mjs'));
+  if (add(settings.hooks.SessionStart, 'session-triage-hook.mjs', { hooks: [{ type: 'command', command: command('session-triage-hook.mjs'), timeout: 10 }] })) added += 1;
   // 1セッション=1目的ゲート: SessionStart で目的宣言を要求し、UserPromptSubmit で目的ドリフト/肥大をナッジする(context注入のため async 禁止)
   if (add(settings.hooks.SessionStart, 'session-purpose-gate.mjs', { hooks: [{ type: 'command', command: command('session-purpose-gate.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.UserPromptSubmit, 'session-purpose-gate.mjs', { hooks: [{ type: 'command', command: command('session-purpose-gate.mjs'), timeout: 5 }] })) added += 1;
@@ -359,6 +393,7 @@ try {
   // 旧PCは hook が `powershell -NoProfile -File ...ps1` で登録され、実行ポリシーで無音死している。
   policyRepaired = repairPowerShellExecutionPolicy(settings.hooks);
   added += policyRepaired;
+  added += stripPowerShellHooks(settings.hooks);
   added += wrapRegisteredGates(settings, repo);
   if (!expectedJson) {
     const expected = JSON.parse(execFileSync(process.execPath, [fileURLToPath(import.meta.url), '--expected-json'], {
@@ -390,6 +425,7 @@ try {
       retained[event] = groups.filter(group => group.hooks.length);
     }
     repairPowerShellExecutionPolicy(retained);
+    stripPowerShellHooks(retained);
     // Retain historical timeout repair for copied hooks, without changing paths.
     for (const groups of Object.values(retained)) for (const [name, timeout] of permanentTimeouts) setTimeoutFor(groups, name, timeout);
     settings.hooks = retained;

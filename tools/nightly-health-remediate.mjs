@@ -14,6 +14,12 @@ import { playbooks as defaultPlaybooks } from './lib/remediate-playbooks/index.m
 import { parseDeferred } from './lib/executor-gate.mjs';
 
 const DAY = 86400000;
+// OrgiastNightlyRemediate has a 90-minute ExecutionTimeLimit. Keep a safety margin so
+// the parent task does not kill us (267014) while Codex/cheap-code is still running.
+export function budgetMinutes(value = process.env.NIGHTLY_REMEDIATE_BUDGET_MIN) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 80;
+}
 export function normalizeMessage(value) { return String(value || '').replace(/\d{4}-\d\d-\d\d[T ]\d\d:\d\d(?::\d\d)?/g, '<time>').replace(/\b\d+\b/g, '<n>').replace(/\s+/g, ' ').trim(); }
 export function anomalyFingerprint(anomaly) { return crypto.createHash('sha256').update(`${anomaly.label}|${normalizeMessage(anomaly.message)}`).digest('hex').slice(0, 16); }
 export function slugify(value) { return String(value).normalize('NFKD').replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase().slice(0, 40) || 'nightly-health'; }
@@ -32,7 +38,7 @@ function ymd(now) { return now.toISOString().slice(0, 10).replaceAll('-', ''); }
 export async function runRemediation({
   home = process.env.ORGIAST_HOME || os.homedir(), now = new Date(), dryRun = false, json = false,
   repo = path.resolve(import.meta.dirname, '..'), playbooks = defaultPlaybooks, run = command,
-  notify = notifyKim, decision = addDecision, maxCodex = 3, maxMinutes = 45,
+  notify = notifyKim, decision = addDecision, maxCodex = 3, maxMinutes = 45, budgetMin = budgetMinutes(),
   taskApi = { get: getScheduledTaskInfo, start: startScheduledTask, stop: stopScheduledTask }
 } = {}) {
   const input = readJson(path.join(home, '.claude', '.nightly-health-last.json'), { anomalies: [] });
@@ -47,6 +53,7 @@ export async function runRemediation({
   const ledgerFile = path.join(home, '.claude', 'nightly-health-remediate-ledger.jsonl');
   const logFile = path.join(home, '.claude', 'logs', 'nightly-health-remediate.log');
   const prior = readLedger(ledgerFile), started = Date.now();
+  const effectiveMaxMinutes = Math.min(maxMinutes, budgetMin);
   const result = { exitCode: 0, fixed: [], prs: [], escalated: [], deferred: [], suppressed: [], skipped: [], plan: [] };
   const tasks = { get: (name) => taskApi.get(name), start: (name) => taskApi.start(name), stop: (name) => taskApi.stop(name) };
   const record = async (anomaly, outcome, extra = {}) => {
@@ -159,13 +166,21 @@ export async function runRemediation({
       continue;
     }
     const overCount = codexCount >= maxCodex;
-    const overTime = Date.now() - started >= maxMinutes * 60000;
+    const overTime = Date.now() - started >= effectiveMaxMinutes * 60000;
     if (overCount || overTime) {
-      const reason = overCount ? '1回3件の修理上限に到達' : '45分の全体上限に到達';
+      const reason = overCount ? '1回3件の修理上限に到達' : `${effectiveMaxMinutes}分の全体上限に到達`;
       if (dryRun) plan(anomaly, 'deferred', reason); else await defer(anomaly, reason);
       continue;
     }
     if (dryRun) { codexCount += 1; plan(anomaly, 'codex'); continue; }
+    const remainingMin = budgetMin - (Date.now() - started) / 60000;
+    if (remainingMin < 5) {
+      const reason = `予算残り${Math.max(0, Math.floor(remainingMin))}分のため新規Codexを起動しない`;
+      await defer(anomaly, reason);
+      continue;
+    }
+    // Leave 3 minutes for tests, push and PR creation inside the same budget.
+    const laneTimeoutSec = Math.max(60, Math.floor((remainingMin - 3) * 60));
     {
       codexCount += 1;
       const slug = `${slugify(anomaly.expectation?.tool || anomaly.label)}-${fingerprint.slice(0, 6)}`;
@@ -179,12 +194,12 @@ export async function runRemediation({
       try {
         const added = run('git', ['worktree', 'add', worktree, '-b', branch, 'origin/main'], { cwd: repo });
         if (added.status !== 0) throw new Error(added.stderr || 'worktree add failed');
-        const codex = run(process.execPath, [path.join(repo, 'tools', 'codex-do.mjs'), '--prompt-file', promptFile, '--cwd', worktree, '--timeout', '1800', '--origin', 'unattended', '--kind', 'implement'], { cwd: repo, timeout: 31 * 60000 });
+        const codex = run(process.execPath, [path.join(repo, 'tools', 'codex-do.mjs'), '--prompt-file', promptFile, '--cwd', worktree, '--timeout', String(laneTimeoutSec), '--origin', 'unattended', '--kind', 'implement'], { cwd: repo, timeout: laneTimeoutSec * 1000 });
         let coded = codex;
         // 終了コード75は保留(上限中/無人割当超過)。失敗ではないので、retryAt を控えて cheap-code へ回す。
         const deferred = parseDeferred(codex.status, codex.stdout);
         if (deferred) { deferredInfo = deferred; console.error(`[nightly-health-remediate] codex 保留(${deferred.reason}): ${new Date(deferred.retryAt).toISOString()} 以降`); }
-        if (codex.status !== 0) coded = run(process.execPath, [path.join(repo, 'tools', 'cheap-code.mjs'), '--provider', 'auto', '--prompt-file', promptFile, '--cwd', worktree], { cwd: repo, timeout: 31 * 60000 });
+        if (codex.status !== 0) coded = run(process.execPath, [path.join(repo, 'tools', 'cheap-code.mjs'), '--provider', 'auto', '--prompt-file', promptFile, '--cwd', worktree], { cwd: repo, timeout: laneTimeoutSec * 1000 });
         if (coded.status !== 0) throw new Error(`修理レーン失敗 codex exit ${codex.status}: ${redactAll(codex.stderr).slice(-200)} / cheap-code exit ${coded.status}: ${redactAll(coded.stderr).slice(-200)}`);
         const tested = run(process.execPath, ['--test', 'tools/*.test.mjs', 'tools/lib/*.test.mjs'], { cwd: worktree, timeout: 20 * 60000 });
         if (tested.status !== 0) throw new Error(`回帰テスト失敗: ${tested.stderr.slice(0, 300)}`);

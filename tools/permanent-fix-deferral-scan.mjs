@@ -69,7 +69,8 @@ function auditAwareFind(regex, text) {
 }
 const P2 = { find: text => auditAwareFind(/(次セッション|次回セッション|次回に|後日)[^」"'\n]{0,60}(実装|対応|修正|改修|恒久)/, text) };
 const W  = { find: text => auditAwareFind(/(数分|しばらく|少し|少々)[^」"'\n]{0,20}(お?待ち|待って)|完了を?待って|完了待ちで/, text) };
-const FIX = '実装|修正|改修|恒久|恒久化|修復|作り直';
+const FIX = '恒久化|作り直|実装|修正|改修|恒久|修復';
+const FIX_NOUN_PREFIX = /^(?:指示|点|内容|事項|案|方針|予定|項目|対象|箇所|など|等|方法|手順)/;
 const HANDOFF_LINE = /次に\s*kim\s*がすること[:：][ \t*_`]*([^\r\n]*)/;
 // 2026-10-17T06:40:46.164Z / session 3694d684: 太字ラベル直後の「特になし」を P3 と誤検出した。
 const HANDOFF_EMPTY = /^[\s*_`]*(?:なし|ありません|ありません。|特になし|無し)/;
@@ -80,7 +81,11 @@ const ASK_CONTEXT = /(恒久|配布|自動修復|実装|修正|改修|恒久化)
 const P3 = {
   find(text) {
     for (const match of text.matchAll(new RegExp(HANDOFF_LINE, 'g'))) {
-      if (!isAuditCitation(text, match.index) && !HANDOFF_EMPTY.test(match[1]) && new RegExp(FIX).test(match[1])) return match;
+      if (isAuditCitation(text, match.index) || HANDOFF_EMPTY.test(match[1])) continue;
+      // 実測7件はすべて「実装指示により」「修正点を返す」「数式修正など」のように、FIX 語が
+      // 後続名詞を修飾する用法で、真の先送りは0件だった。行内に行為形が1つでもあれば従来どおり検出する。
+      const fixes = [...match[1].matchAll(new RegExp(FIX, 'g'))];
+      if (fixes.some(fix => !FIX_NOUN_PREFIX.test(match[1].slice(fix.index + fix[0].length)))) return match;
     }
     return null;
   }
@@ -114,10 +119,24 @@ export function scan({ home = os.homedir(), since = DEFAULT_SINCE, until = null 
     catch (error) { if (error.code !== 'ENOENT') throw error; }
     const rows = [], counts = {};
     const byPattern = Object.fromEntries(Object.keys(PATTERNS).map(pattern => [pattern, 0]));
-    for (const line of lines) {
+    let entries = lines.map(line => {
       let entry;
-      try { entry = JSON.parse(line); } catch { continue; }
-      if (!entry) continue;
+      try { entry = JSON.parse(line); } catch { return null; }
+      return entry;
+    }).filter(Boolean);
+    if (index === 0) {
+      // Stop フックはターンごとに同じ sessionId を追記する。実測例 8edc4e46 では
+      // 2026-10-19T06:41:59.527Z の「Codex の完了を待っています」の後に実装・デプロイ・検証完了が
+      // 記録されたため、経過行や blocked 行ではなく、ファイル全体で ts 最大の最終状態だけを検出する。
+      const latestBySession = new Map();
+      for (const entry of entries) {
+        const sessionId = String(entry.sessionId ?? '');
+        const previous = latestBySession.get(sessionId);
+        if (!previous || Date.parse(entry.ts) > Date.parse(previous.ts)) latestBySession.set(sessionId, entry);
+      }
+      entries = [...latestBySession.values()];
+    }
+    for (const entry of entries) {
       const at = Date.parse(entry.ts);
       if (!(at >= Date.parse(since)) || (until !== null && !(at < Date.parse(until)))) continue;
       const quotes = index === 0 ? [String(entry.excerpt ?? '')]

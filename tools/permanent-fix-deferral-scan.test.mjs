@@ -16,7 +16,7 @@ test('3台帳で先送り・待機を検出し、無関係な行を除外、sinc
   const home = fixture(t);
   const quotes = ['恒久修正は次セッションで行う', '後日に実装する', '少々お待ちください', '修正が完了しました'];
   for (const source of scan({ home }).sources) {
-    const entries = quotes.map((quote, i) => ({ ts: `2026-09-${i === 0 ? '24' : '26'}T00:00:00Z`, verdict: 'pass', sessionId: 'abcdefgh1234', excerpt: quote, violations: [{ quote }] }));
+    const entries = quotes.map((quote, i) => ({ ts: `2026-09-${i === 0 ? '24' : '26'}T00:00:00Z`, verdict: 'pass', sessionId: `abcdefgh123${i}`, excerpt: quote, violations: [{ quote }] }));
     fs.writeFileSync(source.file, entries.map(JSON.stringify).join('\n') + '\nmalformed\nnull\n');
   }
   for (const source of scan({ home }).sources) {
@@ -24,7 +24,7 @@ test('3台帳で先送り・待機を検出し、無関係な行を除外、sinc
     assert.equal(source.hits, 3);
     assert.deepEqual(source.byDay, { '2026-09-24': 1, '2026-09-26': 2 });
     assert.equal(source.rows[0].match, quotes[0]);
-    assert.equal(source.rows[0].sessionId, 'abcdefgh1234');
+    assert.equal(source.rows[0].sessionId, 'abcdefgh1230');
   }
   for (const source of scan({ home, since: '2026-09-26T00:00:00Z' }).sources) {
     assert.equal(source.hits, 2);
@@ -60,6 +60,26 @@ test('台帳がなくても空のレポートを返す', t => {
     assert.equal(source.total, 0);
     assert.deepEqual(source.rows, []);
   }
+});
+test('stop-gate は同一 sessionId の最終状態だけを検出し、total は全行を数える', t => {
+  const home = fixture(t);
+  const source = scan({ home }).sources[0];
+  const entries = [
+    { ts: '2026-10-19T06:41:59.527Z', sessionId: '8edc4e46', excerpt: 'Codex の完了を待っています' },
+    { ts: '2026-10-19T07:00:00.000Z', sessionId: '8edc4e46', excerpt: '実装・デプロイ・検証まで完了しました' }
+  ];
+  fs.writeFileSync(source.file, entries.map(JSON.stringify).join('\n'));
+  const result = scan({ home }).sources[0];
+  assert.equal(result.total, 2);
+  assert.equal(result.hits, 0);
+});
+test('stop-gate は1行だけの sessionId の待機文を検出する', t => {
+  const home = fixture(t);
+  const source = scan({ home }).sources[0];
+  fs.writeFileSync(source.file, `${JSON.stringify({ ts: '2026-10-19T06:41:59.527Z', sessionId: '8edc4e46', excerpt: 'Codex の完了を待っています' })}\n`);
+  const result = scan({ home }).sources[0];
+  assert.equal(result.total, 1);
+  assert.equal(result.hits, 1);
 });
 test('CLIはJSON・人間向け表示・不正ISOの終了コードを守る', t => {
   const home = fixture(t);
@@ -111,6 +131,19 @@ test('太字ラベル直後の恒久修正の先送りは引き続きP3で検出
   const excerpt = '**次に kim がすること:** 自動修復の恒久化を次回に回す';
   assert.equal(detect(excerpt)[0].pattern, 'P3');
 });
+test('handoff の FIX 語が名詞接頭辞だけならP3と誤検出しない', () => {
+  for (const excerpt of [
+    '次に kim がすること: 変更8ファイルをレビューし、問題なければ commit（実装指示により commit は監督側で実施）',
+    '次に kim がすること: 直したい箇所があれば修正内容',
+    '次に kim がすること: 「承認」または修正点',
+    '次に kim がすること: 要求定義書を見て「進めて」か修正点を返信する',
+    '次に kim がすること: このシートで何をしたいか（確認・集計・突き合わせ・数式修正など）を一言ください'
+  ]) assert.ok(!detect(excerpt).some(found => found.pattern === 'P3'), excerpt);
+});
+test('handoff に行為形の FIX 語があれば引き続きP3で検出する', () => {
+  const excerpt = '次に kim がすること: 修正は次セッションで行います';
+  assert.ok(detect(excerpt).some(found => found.pattern === 'P3'));
+});
 test('先送りを名詞句で説明した自己言及はP1と誤検出しない', () => {
   for (const quote of [
     '**[本セッションの目的]** handoff-audit が検出した「恒久修正の先送り文」が再発していないかを実物で検証し、結果を記録する。',
@@ -158,8 +191,8 @@ test('全台帳で最初の一致だけをパターン別に集計する', t => 
     '次に kim がすること: 自動修復の可否', 'やりますか。配布を変えます。', '少々お待ちください'];
   for (const source of scan({ home }).sources) {
     assert.deepEqual(source.byPattern, { P1: 0, P2: 0, P3: 0, P4: 0, W: 0 });
-    fs.writeFileSync(source.file, quotes.map(quote => JSON.stringify({
-      ts: '2026-09-26T00:00:00Z', excerpt: quote, violations: [{ quote }]
+    fs.writeFileSync(source.file, quotes.map((quote, i) => JSON.stringify({
+      ts: '2026-09-26T00:00:00Z', sessionId: `pattern-${i}`, excerpt: quote, violations: [{ quote }]
     })).join('\n'));
   }
   for (const source of scan({ home }).sources) {

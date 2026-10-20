@@ -80,7 +80,9 @@ test('three failures in an hour send one loop notification, not a rescue notific
     await rescueTree(f.repo, f.home, { ...f, now: f.now + i * 120000 });
   }
   assert.equal(f.messages.length, 1);
-  assert.match(f.messages[0], /RESCUE_FAILED/);
+  assert.match(f.messages[0], /夜間の自動復旧が 1 時間に 3 回失敗/);
+  assert.match(f.messages[0], /次に自動でやること: 明日の夜間バッチ/);
+  assert.match(f.messages[0], /kim がすること: なし/);
 });
 
 test('legacy bootstrap failure log also triggers a single loop notification', async t => {

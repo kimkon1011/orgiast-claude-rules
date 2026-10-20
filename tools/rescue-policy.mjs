@@ -7,6 +7,8 @@ import { spawnSync } from 'node:child_process';
 import { notifyKim } from './notify-kim.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 
+import { formatKimNotice } from './lib/kim-notice.mjs';
+
 const RETRY_MS = 6 * 60 * 60 * 1000;
 export const WORK_DIRECTORY_EXCLUDES = ['scratch/', '.work-*/', '.fleet-mail-work/'];
 const excluded = name => WORK_DIRECTORY_EXCLUDES.some(pattern => {
@@ -109,7 +111,7 @@ export async function rescueTree(tree, home, { now = Date.now(), notify = notify
         oldFailures = fs.readFileSync(logFile, 'utf8').split(/\r?\n/).filter(line => line.startsWith(prefix) && / \/ RESCUE_FAILED \/ /.test(line)).length;
       }
       const recent = state.failures.filter(t => t > now - 3600000 && t <= now).length;
-      if (Math.max(oldFailures, recent) >= 3) await sendOnce(`loop:${hour}`, 'nightly-bootstrap: 1時間内に RESCUE_FAILED が3回以上発生。状態を保持し再試行を抑制しています。');
+      if (Math.max(oldFailures, recent) >= 3) await sendOnce(`loop:${hour}`, formatKimNotice({ what: '夜間の自動復旧が 1 時間に 3 回失敗したので、今夜の再試行を止めました', next: '明日の夜間バッチで自動的にやり直します', kim: 'なし' }));
     };
     if (!preserveTree) await checkLoop();
     const status = dirtyStatus(tree);

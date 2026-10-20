@@ -111,3 +111,14 @@ async function main() {
 }
 
 if (isEntry(import.meta.url)) { await main(); process.exitCode = 0; }
+
+export const rowKey = (row) => `${row.pc}|${row.user}|${row.sessionId}|${row.ts}`;
+
+export function isUnattendedRow(row, home) {
+  const normalize = value => String(value || '').replace(/\\/g, '/').replace(/^\/mnt\/([a-z])\//i, '$1:/').replace(/\/+$/, '').toLowerCase();
+  const cwd = normalize(row.cwd), root = normalize(home);
+  return /(?:^|\/)\.stall-sweeper(?:\/|$)/.test(cwd) || ['nightly-repo', 'auto-session', 'scratch'].some(name => {
+    const base = `${root}/.claude/${name}`;
+    return cwd === base || cwd.startsWith(`${base}/`);
+  });
+}

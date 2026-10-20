@@ -1,6 +1,6 @@
 // kim 宛の通知本文から「システムを知らない人には読めない内部用語」を検出し、
 // 安い LLM で平易な日本語に書き換える。通知の送信を止めないことが最優先で、
-// 例外は投げず、LLM が全滅しても検出語を除去した文にフォールバックする。
+// 例外は投げず、LLM が全滅しても原文を保持する。
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -43,7 +43,7 @@ function stripHostTail(text) {
 }
 
 // 検出・書き換え・除去の対象外にする範囲(コードブロック / インラインコード / Markdown リンク / URL / メンション)。
-const PROTECT_RE = /```[\s\S]*?```|`[^`\n]+`|\[[^\]\n]*\]\([^)\s]*\)|https?:\/\/[^\s<>「」『』（）、。，]+|<[@#][!&]?\d+>/g;
+const PROTECT_RE = /（[^（）\n]*）|```[\s\S]*?```|`[^`\n]+`|\[[^\]\n]*\]\([^)\s]*\)|https?:\/\/[^\s<>「」『』（）、。，]+|<[@#][!&]?\d+>/g;
 const SPAN_TOKEN = (i) => `〔保護${i}〕`;
 const SPAN_TOKEN_RE = /〔保護(\d+)〕/g;
 
@@ -170,14 +170,14 @@ export async function toPlainJa(text, { ask = defaultAsk, timeoutMs = 30_000 } =
       const plain = raw.split('\n').map((l) => l.trim()).filter((l) => l && !/^〔そのまま\d+〕$/.test(l)).join(' ');
       if (plain) replies.set(1, plain);
     }
-  } catch { /* 行ごとに除去フォールバック */ }
+  } catch { /* 行ごとに原文を保持 */ }
 
   targets.forEach((t, n) => {
     let result = replies.get(n + 1);
     if (result && findJargonMasked(result).length === 0) {
       for (const token of t.rest.match(SPAN_TOKEN_RE) ?? []) if (!result.includes(token)) result += ` ${token}`;
     } else {
-      result = stripMasked(t.rest) || '内部の作業';
+      result = t.rest;
     }
     lines[t.idx] = `${t.prefix}${result}`;
   });

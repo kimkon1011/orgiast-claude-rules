@@ -50,26 +50,24 @@ test('toPlainJa: ask の書き換え結果を使う', async () => {
   assert.equal(result, '▶ 次は、社員からの報告をまとめる作業をします。');
 });
 
-test('toPlainJa: ask が内部用語を残したら検出語を除去した文にフォールバックする', async () => {
+test('toPlainJa: ask が内部用語を残したら原文にフォールバックする', async () => {
   const result = await toPlainJa('確かめたこと: gh pr view 747 の read-back: state=MERGED', { ask: async () => 'gh pr view 747 は MERGED でした' });
-  assert.equal(findJargon(result).length, 0);
-  assert.match(result, /確かめたこと/);
+  assert.equal(result, '確かめたこと: gh pr view 747 の read-back: state=MERGED');
 });
 
-test('toPlainJa: ask が失敗しても例外を投げず、検出語を除去した文を返す', async () => {
+test('toPlainJa: ask が失敗しても例外を投げず、原文を返す', async () => {
   const result = await toPlainJa('まだ確かめられていないこと: nightly-batch が exit 1 にならず…', { ask: async () => { throw new Error('全候補が失敗'); } });
-  assert.equal(findJargon(result).length, 0);
-  assert.match(result, /まだ確かめられていないこと/);
+  assert.equal(result, 'まだ確かめられていないこと: nightly-batch が exit 1 にならず…');
 });
 
-test('toPlainJa: ask が空文字を返しても検出語を除去した文を返す', async () => {
+test('toPlainJa: ask が空文字を返しても原文を返す', async () => {
   const result = await toPlainJa('CI が SUCCESS でした', { ask: async () => '' });
-  assert.equal(findJargon(result).length, 0);
+  assert.equal(result, 'CI が SUCCESS でした');
 });
 
-test('toPlainJa: 検出語を全部除いて空になったら「内部の作業」を返す', async () => {
+test('toPlainJa: 識別子だけでも原文を返す', async () => {
   const result = await toPlainJa('feedback-zero-sweep', { ask: async () => { throw new Error('x'); } });
-  assert.equal(result, '内部の作業');
+  assert.equal(result, 'feedback-zero-sweep');
 });
 
 const REPLY_NOTICE = '▶ 次はこれをやります: feedback-zero-sweep\nやめてほしいときは「止めて」と返信してください。（DESKTOP-ABC123）';
@@ -130,21 +128,20 @@ test('toPlainJa: 25行の一覧は行数が変わらず、用語の無い行は�
   const outLines = out.split('\n');
   assert.equal(outLines.length, lines.length);
   lines.forEach((line, i) => {
-    if (i === 3 || i === 10) {
+    if (i === 10) {
       assert.equal(findJargon(outLines[i]).length, 0);
       assert.ok(outLines[i].startsWith(line.slice(0, 4)));
     } else assert.equal(outLines[i], line);
   });
-  assert.equal((seen.prompt.match(/^\[\d+\] /gm) || []).length, 2);
+  assert.equal((seen.prompt.match(/^\[\d+\] /gm) || []).length, 1);
 });
 
-test('toPlainJa: 返答の番号が欠けた行だけ除去フォールバック', async () => {
+test('toPlainJa: 返答の番号が欠けた行だけ原文保持', async () => {
   const input = '⚠️ A: feedback-zero-sweep が止まった\n平易な行\n⚠️ B: nightly-batch も止まった';
   const out = await toPlainJa(input, { ask: async () => '[2] Bの言い換え' });
   const l = out.split('\n');
   assert.equal(l.length, 3);
-  assert.equal(findJargon(out).length, 0);
-  assert.match(l[0], /^⚠️ A:/);
+  assert.equal(l[0], input.split('\n')[0]);
   assert.equal(l[1], '平易な行');
   assert.match(l[2], /^⚠️ Bの言い換え/);
 });
@@ -171,4 +168,13 @@ test('findJargon: 保護範囲の中は検出しない', () => {
 
 test('command パターンは ASCII トークンの連続だけを食う', () => {
   assert.deepEqual(findJargon('gh pr view 747 の結果を見て'), ['gh pr view 747']);
+});
+
+test('文中の全角括弧・バッククォート内は保護する', async () => {
+  const source = '別のパソコン（DESKTOP-2D0R4LI）と `mail-abcdef12` が応答しました（2026-10-20 CI abcdef12）。';
+  assert.deepEqual(findJargon(source), []);
+  assert.equal(await toPlainJa(source, { ask: () => assert.fail('protected') }), source);
+  const mixed = source + ' nightly-batch';
+  const output = await toPlainJa(mixed, { ask: async () => '[1] 夜間の処理です' });
+  for (const token of ['（DESKTOP-2D0R4LI）', '`mail-abcdef12`', '（2026-10-20 CI abcdef12）']) assert.ok(output.includes(token));
 });

@@ -39,7 +39,7 @@ test('unconfigured watchdog does no requests', async t => {
   const f = fixture(t); fs.unlinkSync(path.join(f.home, '.claude', 'fleet-sheet.env')); await main([], f.deps); assert.equal(f.calls.length, 0);
 });
 test('alert formatting masks secrets and distinguishes undelivered from unseen', () => {
-  assert.match(formatAlert({ kind: 'unseen' }), /未読 SLA/); assert.match(formatAlert({ kind: 'undelivered' }), /未配達/);
+  assert.match(formatAlert({ kind: 'unseen' }), /読まれていません/); assert.match(formatAlert({ kind: 'undelivered' }), /届いていません/);
   assert.doesNotMatch(formatAlert({ why: 'token=private' }), /private/);
 });
 test('client accepts alerts shape and rejects old GAS fallback', async () => {

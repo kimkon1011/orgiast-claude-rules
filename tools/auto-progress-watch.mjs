@@ -9,7 +9,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { parseEnvText } from './env-kv.mjs';
-import { ledgerFile, readLedger, writeLedger, OPEN_STATUSES, latestOpenPromises } from './auto-progress-ledger.mjs';
+import { ledgerFile, readLedger, writeLedger, OPEN_STATUSES, latestOpenPromises, rowKey, isUnattendedRow } from './auto-progress-ledger.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { notifyOwner } from './notify-owner.mjs';
 import { appendInbox } from './auto-progress-inbox-hook.mjs';
@@ -20,7 +20,8 @@ export const EXPIRE_MS = 7 * 86400000;
 export const MAX_RESUMES = 8; // 1件あたりの累計
 export const MAX_RESUMES_PER_RUN = 4; // 1回の巡回あたり（4件 × 最大20分）
 const WATCHED = OPEN_STATUSES;
-const rowKey = (row) => `${row.pc}|${row.user}|${row.sessionId}|${row.ts}`;
+export const EXPIRE_UNATTENDED_MS = 48 * 3600 * 1000;
+export const FALLBACK_STALL_MS = 24 * 3600 * 1000;
 
 // ---- 証拠収集 -------------------------------------------------------------
 // transcript の promise 記録時刻以降の assistant/tool メッセージを要約する。
@@ -111,8 +112,8 @@ export function parseVerdict(output) {
 
 export function deterministicVerdict(evidence, now) {
   if (!evidence.any) return { verdict: 'stalled', reason: '証拠なし（約束後の会話・ファイル更新・実行ログが無い）', source: 'deterministic' };
-  if (now - evidence.lastEvidenceAt < GRACE_MS) return { verdict: 'in_progress', reason: '直近1時間以内に動きあり', source: 'deterministic' };
-  return { verdict: 'stalled', reason: '最後の動きから1時間以上経過', source: 'deterministic' };
+  if (now - evidence.lastEvidenceAt < FALLBACK_STALL_MS) return { verdict: 'in_progress', reason: '判定AIが使えず様子見', source: 'deterministic' };
+  return { verdict: 'stalled', reason: '最後の動きから24時間以上経過', source: 'deterministic' };
 }
 
 export function askLlm(prompt, { spawnImpl = spawnSync } = {}) {
@@ -195,8 +196,10 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   for (const row of candidates) {
     const recorded = Date.parse(row.ts);
     if (!Number.isFinite(recorded)) continue;
+    const unattended = isUnattendedRow(row, home);
+    if (unattended && now - recorded >= EXPIRE_UNATTENDED_MS) { patch(rowKey(row), { status: 'expired' }); summary.expired += 1; continue; }
     if (row.status === 'waiting_user') {
-      if (!dryRun && now - (Date.parse(row.ownerNotifiedAt || 0) || 0) >= 24 * 3600 * 1000) {
+      if (!unattended && !dryRun && now - (Date.parse(row.ownerNotifiedAt || 0) || 0) >= 24 * 3600 * 1000) {
         try {
           const delivery = await (io.notifyOwner ?? notifyOwner)(row.owner, `自動進行が判断待ちです: ${row.promise}\n${row.reason || ''}`, { home });
           if (delivery?.delivered !== 'dm') throw new Error(delivery?.reason || 'DM not delivered');
@@ -216,7 +219,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     summary.stalled += 1;
     patch(rowKey(row), { verdict: 'stalled', lastCheckedAt: new Date(now).toISOString(), reason: verdict.reason });
     let current = { ...row };
-    const canResume = !dryRun && summary.resumed < MAX_RESUMES_PER_RUN &&(row.resumeCount ?? 0) < MAX_RESUMES && now - (Date.parse(row.resumedAt || 0) || 0) >= RESUME_INTERVAL_MS
+    const canResume = !unattended && !dryRun && summary.resumed < MAX_RESUMES_PER_RUN &&(row.resumeCount ?? 0) < MAX_RESUMES && now - (Date.parse(row.resumedAt || 0) || 0) >= RESUME_INTERVAL_MS
       && row.cwd && (io.cwdExists ?? fs.existsSync)(row.cwd);
     if (canResume) {
       // Persist the attempt before launching: crashes must not allow another same-day resume.

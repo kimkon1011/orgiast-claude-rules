@@ -10,10 +10,15 @@ import { redactSecrets } from './fleet-agent.mjs';
 import { notifyKim, resolveDiscordBotToken } from './notify-kim.mjs';
 import { CHANNEL, KIM_USER_ID, postToChannel } from './lib/fleet-mail-discord.mjs';
 import { runLaneHealthWatch } from './fleet-lane-health-report.mjs';
+import { formatKimNotice } from './lib/kim-notice.mjs';
 export { CHANNEL, postToChannel };
 export function formatAlert(entry) {
   const clean = value => redactSecrets(String(value || '')).replace(/\s+/g, ' ');
-  return `⚠ fleet-mail ${entry.kind === 'unseen' ? '未読 SLA 超過' : '未配達（受信タスク停止の疑い）'}: ${clean(entry.to)} 宛 / ${clean(entry.from)} / ${clean(entry.why).slice(0, 60)} / ${clean(entry.id)}`;
+  return formatKimNotice({
+    what: `別のパソコン（${clean(entry.to)}）へ送った連絡が${entry.kind === 'unseen' ? '読まれていません' : '届いていません'}。内容: ${clean(entry.why).slice(0, 40)}`,
+    next: '受け取り役の再起動を自動で依頼し、48 時間届かなければもう一度お知らせします',
+    kim: 'なし', detail: clean(entry.id),
+  });
 }
 export async function main(argv = process.argv.slice(2), deps = {}) {
   const home = deps.home ?? process.env.ORGIAST_HOME ?? os.homedir();

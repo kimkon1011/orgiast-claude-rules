@@ -76,7 +76,9 @@ function cli(argv) {
     console.log(`baseline updated: ${path.relative(repoRoot, baselineFile)}`);
     return;
   }
-  if (platform === 'win32' && fs.existsSync(baselineFile)) {
+  // ベースラインは配布正本の総数に対するラチェット。--settings で実PCの一部を
+  // 監査するときは総数が少ないのが正常なので比較しない。
+  if (platform === 'win32' && !settingsFile && fs.existsSync(baselineFile)) {
     const baseline = JSON.parse(fs.readFileSync(baselineFile, 'utf8'))[platform];
     if (baseline && Number.isFinite(baseline.total) && result.total < baseline.total) {
       console.error(`NG: win32 の hook 総数が ${baseline.total} -> ${result.total} に減少しました`);

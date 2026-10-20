@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const defaultRoot = fileURLToPath(new URL('../../', import.meta.url));
 const excludedDirectories = new Set(['.git', 'node_modules', '.cache']);
-const generated = /^linux-port-inventory\.(?:json|md|baseline\.json)$/;
+const generated = /^linux-port-(?:inventory\.(?:json|md|baseline\.json)|tasks\.(?:json|md))$/;
 const callPatterns = {
   taskkill: /\btaskkill\b/gi,
   schtasks: /\bschtasks\b/gi,
@@ -37,6 +37,8 @@ export function collectInventory(root = defaultRoot) {
         continue;
       }
       if (!entry.isFile() || entry.name === '.git' || (path.relative(root, directory) === 'reports' && generated.test(entry.name))) continue;
+      // 移植ツール自身は Windows 依存の語を計測用に含むため対象外（自己計測を避ける）。
+      if (path.relative(root, filename).split(path.sep).join('/').startsWith('tools/linux-port/')) continue;
       if (/\.ps1$/i.test(entry.name)) {
         result.ps1Total++;
         if (/^register-.*\.ps1$/i.test(entry.name)) result.registerPs1Total++;

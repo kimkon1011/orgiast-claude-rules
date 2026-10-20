@@ -1,0 +1,645 @@
+{
+  "ps1Total": 31,
+  "parsedTaskTotal": 37,
+  "filesWithMjs": 5,
+  "filesWithoutTaskName": [],
+  "windowsOnlyTotals": {
+    "schtasks": 2,
+    "taskkill": 0,
+    "registry": 0
+  },
+  "items": [
+    {
+      "ps1": "register-auto-progress-task.ps1",
+      "mjs": true,
+      "taskNames": [
+        "OrgiastAutoProgressDigest",
+        "OrgiastAutoProgressWatch"
+      ],
+      "times": [
+        "08:40",
+        "09:00",
+        "18:00"
+      ],
+      "everyMinutes": [],
+      "targets": [
+        "tools/auto-progress-digest.mjs",
+        "tools/auto-progress-watch.mjs",
+        "tools/notify-kim.mjs"
+      ],
+      "windowsOnly": {
+        "schtasks": 0,
+        "taskkill": 0,
+        "registry": 0
+      }
+    },
+    {
+      "ps1": "register-auto-session-verify.ps1",
+      "mjs": false,
+      "taskNames": [
+        "OrgiastAutoSessionVerify"
+      ],
+      "times": [
+        "07:45"
+      ],
+      "everyMinutes": [],
+      "targets": [
+        "tools/auto-session-verify.mjs"
+      ],
+      "windowsOnly": {
+        "schtasks": 0,
+        "taskkill": 0,
+        "registry": 0
+      }
+    },
+    {
+      "ps1": "register-auto-session.ps1",
+      "mjs": false,
+      "taskNames": [
+        "OrgiastAutoSession"
+      ],
+      "times": [
+        "00:30"
+      ],
+      "everyMinutes": [],
+      "targets": [
+        "tools/auto-session-launcher.mjs"
+      ],
+      "windowsOnly": {
+        "schtasks": 0,
+        "taskkill": 0,
+        "registry": 0
+      }
+    },
+    {
+      "ps1": "register-autopilot-task.ps1",
+      "mjs": false,
+      "taskNames": [
+        "OrgiastAutopilot"
+      ],
+      "times": [],
+      "everyMinutes": [
+        30
+      ],
+      "targets": [
+        "tools/autopilot-run.mjs"
+      ],
+      "windowsOnly": {
+        "schtasks": 0,
+        "taskkill": 0,
+        "registry": 0
+      }
+    },
+    {
+      "ps1": "register-booth-feedback-task.ps1",
+      "mjs": false,
+      "taskNames": [
+        "OrgiastBoothFeedbackIntake"
+      ],
+      "times": [
+        "00:05"
+      ],
+      "everyMinutes": [
+        10
+      ],
+      "targets": [
+        "tools/booth-feedback-intake.mjs",
+        "tools/nightly-bootstrap.ps1"
+      ],
+      "windowsOnly": {
+        "schtasks": 0,
+        "taskkill": 0,
+        "registry": 0
+      }
+    },
+    {
+      "ps1": "register-claude-backup-task.ps1",
+      "mjs": false,
+      "taskNames": [
+        "ClaudeDailyDriveBackup"
+      ],
+      "times": [
+        "03:40"
+      ],
+      "everyMinutes": [],
+      "targets": [],
+      "windowsOnly": {
+        "schtasks": 0,
+        "taskkill": 0,
+        "registry": 0
+      }
+    },
+    {
+      "ps1": "register-cost-improve-task.ps1",
+      "mjs": false,
+      "taskNames": [
+        "OrgiastCostImproveLoop",
+        "OrgiastCostWeeklyImprove"
+      ],
+      "times": [
+        "07:20",
+        "07:40"
+      ],
+      "everyMinutes": [],
+      "targets": [
+        "tools/cost-improve-loop.mjs",
+        "tools/cost-weekly-improve.mjs",
+        "tools/nightly-bootstrap.ps1"
+      ],
+      "windowsOnly": {
+        "schtasks": 0,
+        "taskkill": 0,
+        "registry": 0
+      }
+    },
+    {
+      "ps1": "register-decision-watch.ps1",
+      "mjs": true,
+      "taskNames": [
+        "OrgiastDecisionWatch"
+      ],
+      "times": [
+        "00:00"
+      ],
+      "everyMinutes": [
+        10
+      ],
+      "targets": [
+        "tools/decision-watch.mjs",
+        "tools/nightly-bootstrap.ps1"
+      ],
+      "windowsOnly": {
+        "schtasks": 0,
+        "taskkill": 0,
+        "registry": 0
+      }
+    },
+    {
+      "ps1": "register-discord-autoreply.ps1",
+      "mjs": false,
+      "taskNames": [
+        "OrgiastDiscordAutoReply"
+      ],
+      "times": [],
+      "everyMinutes": [
+        5
+      ],
+      "targets": [
+        "tools/discord-autoreply.mjs"
+      ],
+      "windowsOnly": {
+        "schtasks": 0,
+        "taskkill": 0,
+        "registry": 0
+      }
+    },
+    {
+      "ps1": "register-discord-task-digest.ps1",
+      "mjs": false,
+      "taskNames": [
+        "OrgiastDiscordTaskDigest"
+      ],
+      "times": [
+        "06:30"
+      ],
+      "everyMinutes": [],
+      "targets": [
+        "tools/discord-task-digest.mjs",
+        "tools/mail-task-digest.mjs"
+      ],
+      "windowsOnly": {
+        "schtasks": 0,
+        "taskkill": 0,
+        "registry": 0
+      }
+    },
+    {
+      "ps1": "register-evening-digest-task.ps1",
+      "mjs": false,
+      "taskNames": [
+        "OrgiastEveningDigest"
+      ],
+      "times": [
+        "18:00"
+      ],
+      "everyMinutes": [],
+      "targets": [
+        "tools/evening-digest.mjs"
+      ],
+      "windowsOnly": {
+        "schtasks": 0,
+        "taskkill": 0,
+        "registry": 0
+      }
+    },
+    {
+      "ps1": "register-feedback-nag-task.ps1",
+      "mjs": false,
+      "taskNames": [
+        "OrgiastFeedbackNag"
+      ],
+      "times": [
+        "09:00"
+      ],
+      "everyMinutes": [],
+      "targets": [
+        "tools/feedback-nag.mjs",
+        "tools/nightly-bootstrap.ps1"
+      ],
+      "windowsOnly": {
+        "schtasks": 0,
+        "taskkill": 0,
+        "registry": 0
+      }
+    },
+    {
+      "ps1": "register-fleet-agent.ps1",
+      "mjs": false,
+      "taskNames": [
+        "OrgiastFleetAgent"
+      ],
+      "times": [
+        "00:00"
+      ],
+      "everyMinutes": [
+        15
+      ],
+      "targets": [
+        "tools/fleet-agent.mjs",
+        "tools/nightly-bootstrap.ps1"
+      ],
+      "windowsOnly": {
+        "schtasks": 0,
+        "taskkill": 0,
+        "registry": 0
+      }
+    },
+    {
+      "ps1": "register-fleet-mail.ps1",
+      "mjs": true,
+      "taskNames": [
+        "OrgiastFleetMail",
+        "OrgiastFleetMailWatchdog"
+      ],
+      "times": [
+        "00:00",
+        "00:05"
+      ],
+      "everyMinutes": [
+        2
+      ],
+      "targets": [
+        "tools/fleet-mail-watchdog.mjs",
+        "tools/fleet-mail.mjs",
+        "tools/nightly-bootstrap.ps1"
+      ],
+      "windowsOnly": {
+        "schtasks": 0,
+        "taskkill": 0,
+        "registry": 0
+      }
+    },
+    {
+      "ps1": "register-fleet-poller.ps1",
+      "mjs": false,
+      "taskNames": [
+        "OrgiastFleetPoller"
+      ],
+      "times": [
+        "03:15"
+      ],
+      "everyMinutes": [],
+      "targets": [
+        "tools/fleet-poller.ps1",
+        "tools/nightly-bootstrap.ps1"
+      ],
+      "windowsOnly": {
+        "schtasks": 0,
+        "taskkill": 0,
+        "registry": 0
+      }
+    },
+    {
+      "ps1": "register-funnel-probe-task.ps1",
+      "mjs": false,
+      "taskNames": [
+        "OrgiastFunnelProbe"
+      ],
+      "times": [
+        "00:05"
+      ],
+      "everyMinutes": [],
+      "targets": [
+        "tools/funnel-probe.mjs",
+        "tools/nightly-bootstrap.ps1"
+      ],
+      "windowsOnly": {
+        "schtasks": 0,
+        "taskkill": 0,
+        "registry": 0
+      }
+    },
+    {
+      "ps1": "register-gtasks-plan-task.ps1",
+      "mjs": false,
+      "taskNames": [
+        "OrgiastGoogleTasksPlan"
+      ],
+      "times": [
+        "00:20"
+      ],
+      "everyMinutes": [],
+      "targets": [
+        "tools/gtasks-loop.mjs",
+        "tools/nightly-bootstrap.ps1"
+      ],
+      "windowsOnly": {
+        "schtasks": 0,
+        "taskkill": 0,
+        "registry": 0
+      }
+    },
+    {
+      "ps1": "register-hub-push-task.ps1",
+      "mjs": false,
+      "taskNames": [
+        "OrgiastHubPush"
+      ],
+      "times": [
+        "02:40"
+      ],
+      "everyMinutes": [],
+      "targets": [
+        "tools/hub-push.mjs"
+      ],
+      "windowsOnly": {
+        "schtasks": 0,
+        "taskkill": 0,
+        "registry": 0
+      }
+    },
+    {
+      "ps1": "register-internal-audit-task.ps1",
+      "mjs": false,
+      "taskNames": [
+        "OrgiastInternalAudit"
+      ],
+      "times": [
+        "07:00"
+      ],
+      "everyMinutes": [],
+      "targets": [
+        "tools/internal-audit.mjs"
+      ],
+      "windowsOnly": {
+        "schtasks": 0,
+        "taskkill": 0,
+        "registry": 0
+      }
+    },
+    {
+      "ps1": "register-ledger-nag-task.ps1",
+      "mjs": false,
+      "taskNames": [
+        "OrgiastLedgerStaleNag"
+      ],
+      "times": [
+        "09:13"
+      ],
+      "everyMinutes": [],
+      "targets": [
+        "tools/ledger-stale-nag.mjs",
+        "tools/nightly-bootstrap.ps1"
+      ],
+      "windowsOnly": {
+        "schtasks": 0,
+        "taskkill": 0,
+        "registry": 0
+      }
+    },
+    {
+      "ps1": "register-messenger-watch.ps1",
+      "mjs": false,
+      "taskNames": [
+        "OrgiastMessengerWatch"
+      ],
+      "times": [
+        "07:00"
+      ],
+      "everyMinutes": [
+        30
+      ],
+      "targets": [
+        "tools/messenger-watch.mjs",
+        "tools/nightly-bootstrap.ps1"
+      ],
+      "windowsOnly": {
+        "schtasks": 0,
+        "taskkill": 0,
+        "registry": 0
+      }
+    },
+    {
+      "ps1": "register-morning-batch-task.ps1",
+      "mjs": false,
+      "taskNames": [
+        "OrgiastMorningBatch"
+      ],
+      "times": [
+        "07:00"
+      ],
+      "everyMinutes": [],
+      "targets": [
+        "tools/morning-batch.mjs"
+      ],
+      "windowsOnly": {
+        "schtasks": 0,
+        "taskkill": 0,
+        "registry": 0
+      }
+    },
+    {
+      "ps1": "register-nightly-kpi-task.ps1",
+      "mjs": false,
+      "taskNames": [
+        "OrgiastNightlyKpi"
+      ],
+      "times": [
+        "07:05"
+      ],
+      "everyMinutes": [],
+      "targets": [
+        "tools/nightly-bootstrap.ps1",
+        "tools/nightly-kpi.mjs"
+      ],
+      "windowsOnly": {
+        "schtasks": 0,
+        "taskkill": 0,
+        "registry": 0
+      }
+    },
+    {
+      "ps1": "register-nightly-tools.ps1",
+      "mjs": false,
+      "taskNames": [
+        "OrgiastMorningBatch",
+        "OrgiastNightlyBatch"
+      ],
+      "times": [],
+      "everyMinutes": [],
+      "targets": [
+        "tools/ai-news-triage.mjs",
+        "tools/drive-hub-mirror.mjs",
+        "tools/expense-leak-check.mjs",
+        "tools/next-actions.mjs",
+        "tools/nightly-health-remediate.mjs",
+        "tools/nightly-health.mjs",
+        "tools/open-work.mjs",
+        "tools/pricing-brief.mjs"
+      ],
+      "windowsOnly": {
+        "schtasks": 0,
+        "taskkill": 0,
+        "registry": 0
+      }
+    },
+    {
+      "ps1": "register-plaud-task.ps1",
+      "mjs": false,
+      "taskNames": [
+        "OrgiastPlaudToTldv"
+      ],
+      "times": [],
+      "everyMinutes": [],
+      "targets": [
+        "tools/plaud-to-tldv.mjs"
+      ],
+      "windowsOnly": {
+        "schtasks": 0,
+        "taskkill": 0,
+        "registry": 0
+      }
+    },
+    {
+      "ps1": "register-role-sessions.ps1",
+      "mjs": false,
+      "taskNames": [
+        "OrgiastRoleCost",
+        "OrgiastRoleReview",
+        "OrgiastRoleTester"
+      ],
+      "times": [
+        "04:10",
+        "04:30"
+      ],
+      "everyMinutes": [],
+      "targets": [
+        "tools/auto-session.mjs"
+      ],
+      "windowsOnly": {
+        "schtasks": 0,
+        "taskkill": 0,
+        "registry": 0
+      }
+    },
+    {
+      "ps1": "register-rule-compliance-task.ps1",
+      "mjs": false,
+      "taskNames": [
+        "ClaudeRuleComplianceAudit"
+      ],
+      "times": [
+        "03:50"
+      ],
+      "everyMinutes": [],
+      "targets": [],
+      "windowsOnly": {
+        "schtasks": 0,
+        "taskkill": 0,
+        "registry": 0
+      }
+    },
+    {
+      "ps1": "register-stall-sweeper.ps1",
+      "mjs": true,
+      "taskNames": [
+        "OrgiastStallSweeper"
+      ],
+      "times": [
+        "04:10"
+      ],
+      "everyMinutes": [],
+      "targets": [
+        "tools/codex-do.mjs",
+        "tools/notify-kim.mjs",
+        "tools/stall-sweeper.mjs"
+      ],
+      "windowsOnly": {
+        "schtasks": 2,
+        "taskkill": 0,
+        "registry": 0
+      }
+    },
+    {
+      "ps1": "register-stalled-session-nightly.ps1",
+      "mjs": true,
+      "taskNames": [
+        "OrgiastNightlyBatch"
+      ],
+      "times": [
+        "03:00"
+      ],
+      "everyMinutes": [],
+      "targets": [
+        "tools/nightly-batch.ps1",
+        "tools/nightly-bootstrap.ps1",
+        "tools/stalled-session-resume.mjs"
+      ],
+      "windowsOnly": {
+        "schtasks": 0,
+        "taskkill": 0,
+        "registry": 0
+      }
+    },
+    {
+      "ps1": "register-tetsuko-growth-task.ps1",
+      "mjs": false,
+      "taskNames": [
+        "OrgiastTetsukoGrowth"
+      ],
+      "times": [
+        "06:30"
+      ],
+      "everyMinutes": [],
+      "targets": [
+        "tools/nightly-bootstrap.ps1",
+        "tools/tetsuko-growth-loop.mjs"
+      ],
+      "windowsOnly": {
+        "schtasks": 0,
+        "taskkill": 0,
+        "registry": 0
+      }
+    },
+    {
+      "ps1": "register-top3-catchup-task.ps1",
+      "mjs": false,
+      "taskNames": [
+        "OrgiastTop3Catchup"
+      ],
+      "times": [
+        "08:30"
+      ],
+      "everyMinutes": [],
+      "targets": [
+        "tools/nightly-bootstrap.ps1",
+        "tools/top3-catchup.mjs"
+      ],
+      "windowsOnly": {
+        "schtasks": 0,
+        "taskkill": 0,
+        "registry": 0
+      }
+    }
+  ]
+}

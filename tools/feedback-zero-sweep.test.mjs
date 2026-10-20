@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { sweep, sweepExitCode, fetchPending, normalizeItem, appConfig, appDirectory } from './feedback-zero-sweep.mjs';
+import { sweep, sweepExitCode, main, fetchPending, normalizeItem, appConfig, appDirectory } from './feedback-zero-sweep.mjs';
 
 const entry = { appName: 'テストアプリ', kind: 'next', intake: 'relay', refs: { url: 'T_URL', secret: 'T_SECRET', repo: 'T_REPO', appDir: 'T_DIR' } };
 
@@ -241,5 +241,76 @@ test('専用経路は repo 未設定でも残数を報告し dry-run・実行と
       assert.equal(calls.notify.length, dryRun ? 0 : 1);
       if (!dryRun) assert.ok(calls.notify[0].includes('ブース制作アプリ: 2件 / 取得済'));
     } finally { fs.rmSync(home, { recursive: true, force: true }); }
+  }
+});
+
+
+test('CLI は正常な残件を exit 0 とし、取得失敗は JSON の後の末尾8行へ原因を残す', async () => {
+  for (const fail of [false, true]) {
+    const { home, opts, calls } = setup(pending);
+    const output = [];
+    try {
+      if (fail) opts.fetchImpl = async () => ({ ok: false, status: 401 });
+      const code = await main(['--dry-run'], {
+        runSweep: args => sweep({ ...opts, ...args }),
+        log: text => output.push(text), error: text => output.push(text),
+      });
+      const result = JSON.parse(output[0]);
+      assert.equal(code, fail ? 1 : 0);
+      assert.equal(result.unknown, fail ? 1 : 0);
+      assert.equal(result.notification.delivered, 'none');
+      assert.equal(calls.issue + calls.exec + calls.notify.length, 0);
+      if (fail) {
+        const tail = output.join('\n').split('\n').slice(-8).join(' / ');
+        assert.match(tail, /error: feedback-zero-sweep: unknown=1/);
+        assert.match(tail, /テストアプリ: 未取得 \/ HTTP 401/);
+        assert.equal(output[1].split('\n').length, 1);
+      } else {
+        assert.equal(result.remaining, 1);
+        assert.equal(output.length, 1);
+      }
+    } finally { fs.rmSync(home, { recursive: true, force: true }); }
+  }
+});
+
+test('CLI は通知失敗・部分取得・完了通知未達を末尾に残す', async () => {
+  const results = [
+    { dryRun: false, remaining: 2, unknown: 0, rows: [], notification: { delivered: 'none', reason: 'DM送信が HTTP 403' } },
+    { dryRun: true, remaining: 50, unknown: 1, rows: [{ appName: 'relay', status: '未取得（取得上限・一部のみ）', errors: [] }], notification: { delivered: 'none' } },
+    { dryRun: false, remaining: 1, unknown: 1, rows: [{ appName: '完了報告', status: '未取得', errors: ['投稿者へのDM未達'] }], notification: { delivered: 'dm' } },
+  ];
+  for (const [index, result] of results.entries()) {
+    const output = [];
+    assert.equal(await main([], { runSweep: async () => result, log: t => output.push(t), error: t => output.push(t) }), 1);
+    assert.deepEqual(JSON.parse(output[0]), result);
+    assert.match(output.at(-1), [/notification: none \/ DM送信が HTTP 403/, /relay: 未取得（取得上限・一部のみ）/, /完了報告: 未取得 \/ 投稿者へのDM未達/][index]);
+  }
+});
+
+test('CLI は例外と不正引数も1行の error と exit 1 にする', async () => {
+  for (const args of [[], ['--invalid']]) {
+    const output = [];
+    const code = await main(args, { runSweep: async () => { throw new Error('巡回台帳不正\n詳細'); }, log: t => output.push(t), error: t => output.push(t) });
+    assert.equal(code, 1);
+    assert.equal(output.length, 1);
+    assert.match(output[0], /^error: feedback-zero-sweep:/);
+    assert.doesNotMatch(output[0], /[\r\n]/);
+  }
+});
+
+test('取得失敗は endpoint と timeout を示し、認証情報をログへ出さない', async () => {
+  const config = { T_URL: 'https://user:password@relay.invalid/api/feedback?token=secret', T_SECRET: 'header-secret' };
+  for (const [fetchImpl, expected] of [
+    [async () => { throw new DOMException('secret details', 'TimeoutError'); }, /タイムアウト（20秒）/],
+    [async () => { throw new Error('secret details'); }, /接続失敗/],
+    [async () => ({ ok: false, status: 401 }), /HTTP 401/],
+    [async () => ({ ok: true, json: async () => { throw new Error('secret details'); } }), /JSONでない応答/],
+  ]) {
+    await assert.rejects(fetchPending(entry, config, fetchImpl), error => {
+      assert.match(error.message, expected);
+      assert.match(error.message, /https:\/\/relay.invalid\/api\/feedback/);
+      assert.doesNotMatch(error.message, /password|secret|user:|token=/);
+      return true;
+    });
   }
 });

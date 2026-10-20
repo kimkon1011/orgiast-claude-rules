@@ -46,10 +46,15 @@ function requireRef(entry, config, key) {
   return value;
 }
 async function request(url, options, fetchImpl) {
+  // Never log query strings: sheet endpoints carry their token there.
+  const endpoint=url.origin+url.pathname;
   let response;
-  try {response=await fetchImpl(url,{...options,signal:AbortSignal.timeout(20000)});}catch{throw new Error('接続失敗');}
-  if(!response.ok) throw new Error(`HTTP ${response.status}`);
-  try{return await response.json();}catch{throw new Error('JSONでない応答');}
+  try {response=await fetchImpl(url,{...options,signal:AbortSignal.timeout(20000)});}catch(e){
+    const reason=e?.name==='TimeoutError'?'タイムアウト（20秒）':'接続失敗';
+    throw new Error(`${reason} (${endpoint})`);
+  }
+  if(!response.ok) throw new Error(`HTTP ${response.status} (${endpoint})`);
+  try{return await response.json();}catch{throw new Error(`JSONでない応答 (${endpoint})`);}
 }
 export async function fetchPending(entry, config, fetchImpl=fetch) {
   const base=requireRef(entry,config,'url'), secret=requireRef(entry,config,'secret');

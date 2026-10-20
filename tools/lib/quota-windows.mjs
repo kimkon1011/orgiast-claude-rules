@@ -1,0 +1,74 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { fetchClaudePlanUsage } from '../claude-plan-usage.mjs';
+
+const MINUTE = 60_000;
+// API reset timestamps can jitter within a second; identity must remain stable.
+export const resetKey = value => Math.floor(value / 1000) * 1000;
+export function parseCodexRateLimits(text) {
+  let latest = null;
+  // Read structured telemetry only. Quoted examples inside a user/tool message
+  // are not observations (and can otherwise overwrite real usage data).
+  for (const line of String(text ?? '').split(/\r?\n/)) {
+    let row;
+    try { row = JSON.parse(line); } catch { continue; }
+    if (typeof row === 'string') { try { row = JSON.parse(row); } catch { continue; } }
+    if (row && Object.hasOwn(row, 'rate_limits')) latest = row.rate_limits;
+    else if (row?.payload && Object.hasOwn(row.payload, 'rate_limits')) latest = row.payload.rate_limits;
+  }
+  const window = (w) => w && [w.used_percent, w.window_minutes, w.resets_at].every(v => typeof v === 'number' && Number.isFinite(v))
+    && w.used_percent >= 0 && w.window_minutes > 0 && w.resets_at > 0
+    ? { usedPercent: w.used_percent, windowMinutes: w.window_minutes, resetsAt: w.resets_at * 1000 } : null;
+  return { primary: window(latest?.primary), secondary: window(latest?.secondary), exhausted: latest != null && latest.primary === null };
+}
+
+export function jsonlFiles(root) {
+  let entries;
+  try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { return []; }
+  return entries.flatMap(e => e.isDirectory() ? jsonlFiles(path.join(root, e.name)) : e.isFile() && e.name.endsWith('.jsonl') ? [path.join(root, e.name)] : []);
+}
+
+export function readCodexWindows({ home, wslHome, now = Date.now() } = {}) {
+  const roots = [home, ...(Array.isArray(wslHome) ? wslHome : [wslHome])].filter(Boolean);
+  const files = roots.flatMap(root => jsonlFiles(path.join(root, '.codex', 'sessions'))).flatMap(file => {
+    try { return [{ file, mtime: fs.statSync(file).mtimeMs }]; } catch { return []; }
+  }).sort((a, b) => b.mtime - a.mtime || a.file.localeCompare(b.file));
+  if (!files.length) return Object.assign([], { reason: 'Codex session logs unavailable' });
+  const { file, mtime: observedAt } = files[0];
+  let parsed;
+  try { parsed = parseCodexRateLimits(fs.readFileSync(file, 'utf8')); } catch { return Object.assign([], { reason: 'Codex latest log unreadable' }); }
+  const metadata = { provider: 'codex', observedAt, stale: Number(now) - observedAt > 6 * 60 * MINUTE, exhausted: parsed.exhausted };
+  const windows = ['primary', 'secondary'].filter(k => parsed[k]).map(k => ({ ...metadata, window: k, ...parsed[k] }));
+  if (parsed.exhausted && !windows.length) windows.push({ ...metadata, window: 'primary', usedPercent: 100, resetsAt: null });
+  return Object.assign(windows, { reason: windows.length ? null : 'No rate_limits in latest Codex log', observedAt, stale: metadata.stale });
+}
+
+export async function readClaudeWindows({ home, fetchImpl } = {}) {
+  const result = await fetchClaudePlanUsage({ home, fetchImpl: fetchImpl ?? ((url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(15_000) })) });
+  if (!result.available) return Object.assign([], { reason: result.reason });
+  return [['5h', result.fiveHour], ['7d', result.sevenDay]].map(([window, value]) => ({ provider: 'claude', window, usedPercent: value.utilization, resetsAt: Date.parse(value.resetsAt) }));
+}
+
+export function shouldStopTick({ windows, provider, hardCeilingPercent = 97 }) {
+  const own = windows.filter(w => w.provider === provider);
+  return !own.length || own.some(w => w.exhausted || !Number.isFinite(w.usedPercent) || w.usedPercent >= hardCeilingPercent);
+}
+
+export function decideSweep({ windows, now = Date.now(), leadMinutes = 90, minRemainingPercent = 15, marginMinutes = 3, hardCeilingPercent = 97, minRunMinutes = 10 }) {
+  const decisions = [];
+  for (const provider of ['claude', 'codex']) {
+    const own = windows.filter(w => w.provider === provider);
+    if (shouldStopTick({ windows, provider, hardCeilingPercent })) continue;
+    if (provider === 'claude' && !['5h', '7d'].every(k => own.some(w => w.window === k && 100 - w.usedPercent >= minRemainingPercent))) continue;
+    // Every concurrent limit must allow work; resetting any active window ends this run.
+    if (own.some(w => !Number.isFinite(w.resetsAt) || w.resetsAt <= now || 100 - w.usedPercent < minRemainingPercent)) continue;
+    const candidates = own.filter(w => w.resetsAt - now <= leadMinutes * MINUTE);
+    if (!candidates.length) continue;
+    const first = candidates.sort((a, b) => a.resetsAt - b.resetsAt)[0];
+    const deadline = Math.min(...own.map(w => w.resetsAt)) - marginMinutes * MINUTE;
+    if (deadline - now < minRunMinutes * MINUTE) continue;
+    decisions.push({ provider, window: first.window, resetsAt: resetKey(first.resetsAt), deadline, usedPercent: first.usedPercent,
+      remainingPercent: 100 - first.usedPercent, reason: `reset approaching${own.some(w => w.stale) ? '; stale: refresh before tick' : ''}` });
+  }
+  return decisions;
+}

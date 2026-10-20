@@ -1,0 +1,134 @@
+From bffdf9500f8dfee980197f6e0cda94b63026f2be Mon Sep 17 00:00:00 2001
+From: kimkon1011 <59928643+kimkon1011@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 01:09:50 +0900
+Subject: [PATCH 1/2] =?UTF-8?q?fix(gh-login):=20=E5=90=8C=E3=81=98?=
+ =?UTF-8?q?=E6=9E=9D=E5=90=8D=E3=81=AE=20open=20PR=20=E3=81=8C=E3=81=82?=
+ =?UTF-8?q?=E3=82=8B=E3=81=A8=E3=81=8D=E9=87=8D=E8=A4=87PR=E3=82=92?=
+ =?UTF-8?q?=E4=BD=9C=E3=82=89=E3=81=AA=E3=81=84?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+fork 由来の PR は「A pull request already exists」(422) にならず、キューに残った
+同じ枝を push すると同内容の PR がもう1本増える（実例: #881/#895 は open なのに
+着地キューに行が残っていた）。push 前に open PR を照会し、head.ref が一致し
+tree も一致するときは push せず既存PRへ automerge を付けに行く。内容が違うときは
+従来どおり push する（黙って成果物を落とさない）。
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>
+---
+ tools/gh-login-oneclick.ps1 | 35 ++++++++++++++++++++++++++++++++++-
+ 1 file changed, 34 insertions(+), 1 deletion(-)
+
+diff --git a/tools/gh-login-oneclick.ps1 b/tools/gh-login-oneclick.ps1
+index aa8fc3d..bce1d98 100644
+--- a/tools/gh-login-oneclick.ps1
++++ b/tools/gh-login-oneclick.ps1
+@@ -97,10 +97,43 @@ foreach ($line in $lines) {
+   if ($LASTEXITCODE -ne 0 -or -not $url) { Write-Host "FAIL: origin を取得できません ($repo)"; $failed++; continue }
+   $slug = ($url -replace '^.*github\.com[:/]', '') -replace '\.git$', ''
+ 
++  $headers = @{ Authorization = "Bearer $token"; 'User-Agent' = 'orgiast-oneclick' }
++
++  # 同じ枝名の open PR が既にあるなら push も PR 作成もしない。fork 由来の PR は
++  # 「A pull request already exists」にならず、同じ内容の重複PRが増えてしまうため。
++  # 内容が同一（tree 一致）のときだけ skip し、差分があるときは通常どおり進める。
++  $existingPr = $null
++  try {
++    $openPrs = Invoke-RestMethod -Method Get -Uri "https://api.github.com/repos/$slug/pulls?state=open&per_page=100" -Headers $headers
++    $existingPr = $openPrs | Where-Object { $_.head.ref -eq $branch } | Select-Object -First 1
++  } catch {
++    Write-Host "WARN: 既存PRの照会に失敗しました（重複判定なしで続行）: $($_.ErrorDetails.Message)"
++  }
++  if ($existingPr) {
++    $sameTree = $false
++    & git -C $repo fetch --quiet origin "refs/pull/$($existingPr.number)/head" 2>&1 | Out-Null
++    if ($LASTEXITCODE -eq 0) {
++      $localTree = (& git -C $repo rev-parse "$branch^{tree}").Trim()
++      $remoteTree = (& git -C $repo rev-parse 'FETCH_HEAD^{tree}').Trim()
++      if ($localTree -eq $remoteTree) { $sameTree = $true }
++    }
++    if ($sameTree) {
++      Write-Host "SKIP: 同内容の open PR #$($existingPr.number) が既にあります（重複PRを作らないため push しません）: $($existingPr.html_url)"
++      try {
++        Invoke-RestMethod -Method Post -Uri "https://api.github.com/repos/$slug/issues/$($existingPr.number)/labels" -Headers $headers -ContentType 'application/json' -Body (@{ labels = @('automerge') } | ConvertTo-Json -Compress) | Out-Null
++        Write-Host 'OK: 既存PRへ automerge ラベルを付与しました。'
++      } catch {
++        Write-Host "WARN: 既存PRに automerge ラベルを付けられませんでした（権限不足の可能性）: $($_.ErrorDetails.Message)"
++      }
++      $done++
++      continue
++    }
++    Write-Host "WARN: 同じ枝名の open PR #$($existingPr.number) がありますが内容が異なるため、通常どおり push します。"
++  }
++
+   & git @gitNoPrompt -C $repo push -u origin $branch 2>&1 | ForEach-Object { Write-Host $_ }
+   if ($LASTEXITCODE -ne 0) { Write-Host "FAIL: push できません ($branch)"; $failed++; continue }
+ 
+-  $headers = @{ Authorization = "Bearer $token"; 'User-Agent' = 'orgiast-oneclick' }
+   $body = @{ title = $branch; head = $branch; base = 'main'; body = '自動セッションの成果物。CI が緑になれば automerge でマージされます。' } | ConvertTo-Json -Compress
+   $pr = $null
+   try {
+-- 
+2.55.0.windows.3
+
+
+From 4d2f80c0f46980e42ae22f153861fe4be61ec593 Mon Sep 17 00:00:00 2001
+From: Claude Code <noreply@anthropic.com>
+Date: Wed, 21 Oct 2026 00:47:04 +0900
+Subject: [PATCH 2/2] =?UTF-8?q?fix(gh-login):=20fork=20=E7=94=B1=E6=9D=A5?=
+ =?UTF-8?q?=E3=81=AE=E5=90=8C=E5=90=8D=20PR=20=E3=82=92=E6=A4=9C=E5=87=BA?=
+ =?UTF-8?q?=E3=81=97=20same-repo=20PR=20=E3=81=A7=E7=9D=80=E5=9C=B0?=
+ =?UTF-8?q?=E3=81=95=E3=81=9B=E3=82=8B?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+fork(cr568 等)からの PR は auto-merge.yml の eligible=false で自動着地しないため、
+同内容を origin 枝として push し直す必要がある。一方で同名 PR が fork 側にだけ
+ある場合、従来の「同一 tree なら skip」は fork PR を拾って push を止めてしまい、
+永久に着地しない。判定を same-repo PR に限定し、fork PR は INFO として URL を出す。
+あわせて配布 ps1 の二重 BOM を単一 BOM に直した（PS5.1 の構文検査は通るが不正な文字列）。
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>
+---
+ tools/gh-login-oneclick.ps1 | 17 +++++++++++++----
+ 1 file changed, 13 insertions(+), 4 deletions(-)
+
+diff --git a/tools/gh-login-oneclick.ps1 b/tools/gh-login-oneclick.ps1
+index bce1d98..8e8646e 100644
+--- a/tools/gh-login-oneclick.ps1
++++ b/tools/gh-login-oneclick.ps1
+@@ -99,16 +99,25 @@ foreach ($line in $lines) {
+ 
+   $headers = @{ Authorization = "Bearer $token"; 'User-Agent' = 'orgiast-oneclick' }
+ 
+-  # 同じ枝名の open PR が既にあるなら push も PR 作成もしない。fork 由来の PR は
+-  # 「A pull request already exists」にならず、同じ内容の重複PRが増えてしまうため。
+-  # 内容が同一（tree 一致）のときだけ skip し、差分があるときは通常どおり進める。
++  # 同じ枝名の open PR が既にあるなら push も PR 作成もしない（内容が同一 tree のときだけ skip）。
++  # ただし fork 由来の PR（head.repo が base と別）は auto-merge.yml の eligible=false で永久に着地しない。
++  # その場合は同じ内容を origin 枝として push し直し、same-repo PR として自動着地させる。
+   $existingPr = $null
++  $forkPr = $null
+   try {
+     $openPrs = Invoke-RestMethod -Method Get -Uri "https://api.github.com/repos/$slug/pulls?state=open&per_page=100" -Headers $headers
+-    $existingPr = $openPrs | Where-Object { $_.head.ref -eq $branch } | Select-Object -First 1
++    $existingPr = $openPrs | Where-Object { $_.head.ref -eq $branch -and $_.head.repo.full_name -eq $slug } | Select-Object -First 1
++    # fork 由来の同名 PR（head が base と別リポジトリ）。auto-merge.yml の eligible=false で
++    # 自動着地しないため、同内容を origin 枝として push し直して same-repo PR を作る。
++    # fork 側は閉じない（別セッションの作業状態を壊さない）。URL を出して人が判断できるようにする。
++    $forkPr = $openPrs | Where-Object { $_.head.ref -eq $branch -and $_.head.repo -and $_.head.repo.full_name -ne $slug } | Select-Object -First 1
+   } catch {
+     Write-Host "WARN: 既存PRの照会に失敗しました（重複判定なしで続行）: $($_.ErrorDetails.Message)"
+   }
++  if ($forkPr) {
++    Write-Host "INFO: 同名の fork PR #$($forkPr.number) が open です（自動着地の対象外）: $($forkPr.html_url)"
++    Write-Host '      → 同じ内容を origin 枝として push し、same-repo PR を作ります。fork 側は閉じません。'
++  }
+   if ($existingPr) {
+     $sameTree = $false
+     & git -C $repo fetch --quiet origin "refs/pull/$($existingPr.number)/head" 2>&1 | Out-Null
+-- 
+2.55.0.windows.3
+

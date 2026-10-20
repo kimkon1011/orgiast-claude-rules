@@ -61,18 +61,36 @@ function stableHealthKey(url) {
   return `health:${crypto.createHash('sha1').update(identity).digest('hex').slice(0, 8)}`;
 }
 
-export async function checkHealthUrls(urls, { fetchImpl = fetch, now = () => new Date(), disabled = false } = {}) {
+export async function checkHealthUrls(urls, {
+  fetchImpl = fetch, now = () => new Date(), disabled = false,
+  timeoutMs = 30_000, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+} = {}) {
   if (disabled) return { results: [], items: [] };
   const results = [];
   const items = [];
   for (const url of [...new Set(urls.filter(Boolean))]) {
     let status = 0;
     let error = '';
-    try {
-      const response = await fetchImpl(url, { redirect: 'follow', signal: AbortSignal.timeout(20_000) });
-      status = Number(response.status) || 0;
-      if (!response.ok) error = `HTTP ${status}`;
-    } catch (caught) { error = oneLine(caught?.message || caught, 200) || '接続失敗'; }
+    // Nightly logs show GAS requests exceeding 20s. Retry transient failures at most twice
+    // (30s per attempt + 1s/2s backoff), then continue with the next URL.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      let retryable = false;
+      status = 0;
+      error = '';
+      try {
+        const response = await fetchImpl(url, { redirect: 'follow', signal: AbortSignal.timeout(timeoutMs) });
+        status = Number(response.status) || 0;
+        if (!response.ok) error = `HTTP ${status}`;
+        retryable = status === 429 || status >= 500;
+        // Only the status is needed; release the response body/connection.
+        await response.body?.cancel().catch(() => {});
+      } catch (caught) {
+        error = oneLine(caught?.message || caught, 200) || '接続失敗';
+        retryable = ['TimeoutError', 'AbortError', 'TypeError'].includes(caught?.name);
+      }
+      if (!error || !retryable || attempt === 2) break;
+      await sleep(1000 * 2 ** attempt);
+    }
     const ok = !error;
     const result = { url, ok, status, error };
     results.push(result);
@@ -127,15 +145,22 @@ function parseArgs(args) {
   return options;
 }
 
-export function runLlm(prompt, { spawnImpl = spawn, toolDir = import.meta.dirname } = {}) {
+export function runLlm(prompt, { spawnImpl = spawn, toolDir = import.meta.dirname, timeoutMs = 90_000 } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawnImpl(process.execPath, [path.join(toolDir, 'llm-ask.mjs'), '--provider', 'groq', '--category', 'classification', '--no-fallback', prompt], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
     child.stdout?.on('data', (chunk) => { stdout += chunk; });
     child.stderr?.on('data', (chunk) => { stderr += chunk; });
-    child.on('error', reject);
-    child.on('close', (code) => code === 0 ? resolve(stdout) : reject(new Error(`llm-ask exit ${code}: ${oneLine(stderr, 200)}`)));
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      reject(new Error(`llm-ask timeout after ${timeoutMs}ms`));
+    }, timeoutMs);
+    child.on('error', (error) => { clearTimeout(timer); reject(error); });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      code === 0 ? resolve(stdout) : reject(new Error(`llm-ask exit ${code}: ${oneLine(stderr, 200)}`));
+    });
   });
 }
 
@@ -144,10 +169,10 @@ function validLedger(text) {
   return { version: 1, items: {} };
 }
 
-export async function evaluatePending(items, ledger, { spawnImpl = spawn, now = () => new Date(), toolDir = import.meta.dirname } = {}) {
+export async function evaluatePending(items, ledger, { spawnImpl = spawn, now = () => new Date(), toolDir = import.meta.dirname, timeoutMs } = {}) {
   const pending = items.filter((item) => item?.key && !ledger.items[item.key]);
   if (!pending.length) return { attempted: 0, added: 0 };
-  const parsed = parseEvalJson(await runLlm(buildEvalPrompt(pending), { spawnImpl, toolDir }));
+  const parsed = parseEvalJson(await runLlm(buildEvalPrompt(pending), { spawnImpl, toolDir, timeoutMs }));
   if (!parsed) return { attempted: pending.length, added: 0 };
   let added = 0;
   for (const item of pending) {

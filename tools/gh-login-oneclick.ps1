@@ -99,15 +99,24 @@ foreach ($line in $lines) {
 
   $headers = @{ Authorization = "Bearer $token"; 'User-Agent' = 'orgiast-oneclick' }
 
-  # 同じ枝名の open PR が既にあるなら push も PR 作成もしない。fork 由来の PR は
-  # 「A pull request already exists」にならず、同じ内容の重複PRが増えてしまうため。
-  # 内容が同一（tree 一致）のときだけ skip し、差分があるときは通常どおり進める。
+  # 同じ枝名の open PR が既にあるなら push も PR 作成もしない（内容が同一 tree のときだけ skip）。
+  # ただし fork 由来の PR（head.repo が base と別）は auto-merge.yml の eligible=false で永久に着地しない。
+  # その場合は同じ内容を origin 枝として push し直し、same-repo PR として自動着地させる。
   $existingPr = $null
+  $forkPr = $null
   try {
     $openPrs = Invoke-RestMethod -Method Get -Uri "https://api.github.com/repos/$slug/pulls?state=open&per_page=100" -Headers $headers
-    $existingPr = $openPrs | Where-Object { $_.head.ref -eq $branch } | Select-Object -First 1
+    $existingPr = $openPrs | Where-Object { $_.head.ref -eq $branch -and $_.head.repo.full_name -eq $slug } | Select-Object -First 1
+    # fork 由来の同名 PR（head が base と別リポジトリ）。auto-merge.yml の eligible=false で
+    # 自動着地しないため、同内容を origin 枝として push し直して same-repo PR を作る。
+    # fork 側は閉じない（別セッションの作業状態を壊さない）。URL を出して人が判断できるようにする。
+    $forkPr = $openPrs | Where-Object { $_.head.ref -eq $branch -and $_.head.repo -and $_.head.repo.full_name -ne $slug } | Select-Object -First 1
   } catch {
     Write-Host "WARN: 既存PRの照会に失敗しました（重複判定なしで続行）: $($_.ErrorDetails.Message)"
+  }
+  if ($forkPr) {
+    Write-Host "INFO: 同名の fork PR #$($forkPr.number) が open です（自動着地の対象外）: $($forkPr.html_url)"
+    Write-Host '      → 同じ内容を origin 枝として push し、same-repo PR を作ります。fork 側は閉じません。'
   }
   if ($existingPr) {
     $sameTree = $false

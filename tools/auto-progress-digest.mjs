@@ -6,8 +6,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { isEntry } from './is-entry.mjs';
 import { notifyOwner } from './notify-owner.mjs';
-import { ledgerFile, readLedger, latestOpenPromises, rowKey, isUnattendedRow, isNoopPromise } from './auto-progress-ledger.mjs';
-import { MAX_RESUMES } from './auto-progress-watch.mjs';
+import { ledgerFile, readLedger, latestOpenPromises, rowKey, isUnattendedRow, isNoopPromise, MAX_RESUMES } from './auto-progress-ledger.mjs';
 export { isUnattendedRow } from './auto-progress-ledger.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 

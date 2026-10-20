@@ -686,6 +686,12 @@
       "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
     },
     {
+      "path": "tools/lib/kim-notice.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail-watchdog / rescue-policy / auto-progress の kim 宛通知 3 行形式（実行時 import 依存）"
+    },
+    {
       "path": "tools/fleet-status.mjs",
       "scope": "fleet",
       "step": "task:fleet-mail",

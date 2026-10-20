@@ -64,6 +64,8 @@ export function writeLedger(file, rows) {
   fs.renameSync(temp, file);
 }
 
+export const MAX_RESUMES = 8; // 1件あたりの自動再開の累計上限（watch/digest 共用。循環 import 回避のためここに置く）
+
 export const OPEN_STATUSES = new Set(['open', 'stalled', 'resumed', 'waiting_user']);
 
 // Timestamp order is authoritative; equal timestamps prefer the later ledger line.

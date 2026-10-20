@@ -22,6 +22,41 @@ rescue 退避は「dirty な作業ツリーを保全する」仕組みなので�
 - 結論: main へ取り込む変更は無く、マージ不要。同型の枝は 20261015-042601 / 043201 / 20261016-041401 / 041502 / 041601。
 - 新しい `ignored-only` 判定でこれらはレビュー対象から外れる。
 
+## 2026-10-20 時点の結果
+
+- 対象: local + `refs/remotes/origin/rescue/*` の **106 refs**（`--include-remote`）
+- `unique: 55 / duplicate: 7 / covered: 20 / covered-by-branch: 2 / covered-in-main: 13 / error: 0 / ignored-only: 9`
+- 10-19（72 refs / unique 30）から **refs +34・unique +25**。増分はほぼ 10-19〜10-20 に作られた `rescue/auto-session-*`。
+
+### `unique` 55 本の内訳（枝名の日付別）
+
+| 日付 | 本数 | 備考 |
+|---|---|---|
+| 2026-10-10 | 1 | `sync-orgiast-main-*`（298 files / 865,757+/317-） |
+| 2026-10-11 | 2 | `sync-orgiast-main-*` 1本 + `rescue/auto-session-20261011-160002`（local のみ・2+/1-） |
+| 2026-10-13 | 3 | 8〜189 行 |
+| 2026-10-14 | 4 | 7〜99 行 |
+| 2026-10-15 | 5 | 最大 1,071+/0-（`20261015-031403`） |
+| 2026-10-16 | 4 | 最大 638+/14-（`20261016-041803`・local のみ） |
+| 2026-10-17 | 7 | 最大 4,398+/0-（`20261017-153221`）＋ `sync-orgiast-main-*` 3本 |
+| 2026-10-18 | 4 | 17〜82 行 |
+| 2026-10-19 | 10 | 最大 1,338+/7-（`20261019-220958`・12 files） |
+| 2026-10-20 | 15 | 最大 56,381+/32-（`20261020-133812`・189 files） |
+
+- **`sync-orgiast-main-*` 6 本は例外的に巨大**（298〜366 files / 86.5万〜92.5万行）。全量スナップショットを退避した枝なので、merge 候補ではなく**削除候補**として扱うのが妥当。ただし削除は不可逆なので人間の承認待ち。
+- **`origin/rescue/auto-session-20261020-133812` だけ突出**（189 files / 56,381+/32-）。10-20 13:38 の 1 セッションが大量の生成物を抱えたまま救済された可能性が高い。中身の確認が要る。
+- それ以外の `unique` は 1〜12 files / 〜1,338 行の小粒で、大半は `tools/*.mjs` 1ファイルの差分。枝ごとに PR 化するか捨てるかの二択。
+
+### 定期実行レールの実測（2026-10-20）
+
+| 経路 | 実測 |
+|---|---|
+| nightly-bootstrap（fleet-mail 2分間隔） | `2026-10-20 18:00:07 / リポ同期 / ok:origin/main fbb3abb`、`18:00:52 / 対象実行 / ok:fleet-mail.mjs 終了コード=0`。`18:00:27 / decision-watch.mjs 終了コード=0` も同枠 |
+| anchor の状態 | detached HEAD = `origin/main` = `fbb3abb`、`git status` clean。local `main` も同 SHA へ fast-forward 済み |
+| setup --converge | `node tools/setup.mjs --converge` → **EXIT=0**、`classifier-settings [OK]`、`[beacon] sent: kimko-PC` |
+| 残 NG | `cmd:claude` / `env:cerebras` / `task:fleet-mail-watchdog` の 3 件（10-16 から不変・EXIT=0 に影響せず） |
+| タスク設定 | `OrgiastNightlyBatch` / `OrgiastDecisionWatch` / `OrgiastFleetMail` いずれも `DisallowStartIfOnBatteries=False`、次回実行時刻が入っている（実走済み） |
+
 ## 2026-10-19 時点の結果
 
 - 対象: `refs/heads/rescue/*` 22 本（`--include-remote` なし）

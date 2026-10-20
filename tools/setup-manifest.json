@@ -1,6 +1,9 @@
 {
   "version": 1,
   "items": [
+    {"id": "task:quota-sweep", "type": "scheduled-task", "severity": "optional", "spec": {"name": "OrgiastQuotaSweep"}, "description": "Claude/Codex の枠リセット直前に残枠を makeloop で消化(15分ごと判定)", "repair": ["register-quota-sweep.mjs"]},
+    {"id": "plugin:makeloop", "type": "file-contains", "severity": "optional", "spec": {"path": ".claude/.makeloop-installed.json", "regex": "\"claude\"\\s*:\\s*true"}, "description": "makeloop プラグイン(Claude Code/Codex)導入", "repair": ["install-makeloop.mjs"]},
+    {"id": "tool:quota-sweep", "type": "file-nonempty", "severity": "optional", "spec": {"paths": [".claude/nightly-repo/tools/quota-sweep.mjs", "orgiast-claude-rules/tools/quota-sweep.mjs", "Downloads/orgiast-claude-rules/tools/quota-sweep.mjs"]}, "description": "残枠掃除ジョブ(repo直参照)", "repair": ["onboarding-sync.mjs", "--force"]},
     { "id": "task:fleet-chase", "type": "scheduled-task", "severity": "optional", "scope": "kim-only", "spec": { "name": "OrgiastFleetChase", "ifPresent": ".claude/fleet-sheet.env" }, "description": "kim-PC: fleet未完了依頼を30分ごとに追跡", "repair": ["register-fleet-chase.mjs"] },
     { "id": "tool:fleet-chase", "type": "file-nonempty", "severity": "optional", "scope": "kim-only", "spec": { "paths": ["orgiast-claude-rules/tools/fleet-chase.mjs", "Downloads/orgiast-claude-rules/tools/fleet-chase.mjs"] }, "description": "kim-PC: fleet債務台帳(repo直参照)", "repair": ["onboarding-sync.mjs", "--force"] },
     { "id": "settings:fleet-chase-context-SessionStart", "type": "json-valid", "severity": "optional", "scope": "kim-only", "spec": { "path": ".claude/settings.json", "hookEvent": "SessionStart", "hookScript": "fleet-chase-context.mjs", "hookArgs": "", "async": false, "timeout": 5 }, "description": "kim-PC: 未完了債務を最古順に表示", "repair": ["register-hooks.mjs", "--hooks-only"] },

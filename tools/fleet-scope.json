@@ -500,6 +500,12 @@
       "reason": "task:stall-sweeper ステップの登録スクリプト"
     },
     {
+      "path": "tools/register-quota-sweep.ps1",
+      "scope": "fleet",
+      "step": "task:quota-sweep",
+      "reason": "task:quota-sweep ステップの登録スクリプト（枠リセット直前の残枠消化・15分ごと判定）"
+    },
+    {
       "path": "tools/register-auto-progress-task.ps1",
       "scope": "fleet",
       "step": "task:auto-progress-watch",

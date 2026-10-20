@@ -1,0 +1,3 @@
+$ git add -- tools/lib/quota-windows.mjs tools/lib/quota-windows.test.mjs tools/lib/scheduled-task.mjs tools/lib/scheduled-task.test.mjs
+fatal: Unable to create '/mnt/c/Users/uers/.claude/nightly-repo/.git/worktrees/wt-quota-sweep/index.lock': Read-only file system
+exit=128; git commit -F was not reached

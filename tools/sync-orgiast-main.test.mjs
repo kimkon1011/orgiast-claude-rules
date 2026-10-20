@@ -74,7 +74,7 @@ test('rescue still works when hundreds of rescue refs have accumulated (no ENAME
 
 test('shared exclusions alone are clean, retained during sync and absent from rescue', async t => {
   const f = fixture(t);
-  for (const name of ['scratch', '.work-eval', '.fleet-mail-work']) {
+  for (const name of ['scratch', '.work', '.work-eval', '.fleet-mail-work']) {
     fs.mkdirSync(path.join(f.repo, name)); fs.writeFileSync(path.join(f.repo, name, 'keep'), 'precious');
   }
   f.git('init', path.join(f.repo, 'nested clone'));
@@ -83,7 +83,7 @@ test('shared exclusions alone are clean, retained during sync and absent from re
   assert.equal((await rescueTree(f.repo, f.home, f)).clean, true);
   assert.equal((await syncTree(f.repo, f.home, f)).clean, true);
   assert.equal(branches(f).length, 0);
-  for (const name of ['scratch', '.work-eval', '.fleet-mail-work', 'nested clone']) {
+  for (const name of ['scratch', '.work', '.work-eval', '.fleet-mail-work', 'nested clone']) {
     assert.equal(fs.readFileSync(path.join(f.repo, name, 'keep'), 'utf8'), 'precious');
   }
   fs.writeFileSync(path.join(f.repo, 'tracked'), 'changed');

@@ -10,7 +10,7 @@ import { redactSecrets } from './webhook-health.mjs';
 import { formatKimNotice } from './lib/kim-notice.mjs';
 
 const RETRY_MS = 6 * 60 * 60 * 1000;
-export const WORK_DIRECTORY_EXCLUDES = ['scratch/', '.work-*/', '.fleet-mail-work/'];
+export const WORK_DIRECTORY_EXCLUDES = ['scratch/', '.work/', '.work-*/', '.fleet-mail-work/'];
 const excluded = name => WORK_DIRECTORY_EXCLUDES.some(pattern => {
   const root = name.split('/')[0];
   const directory = pattern.slice(0, -1);

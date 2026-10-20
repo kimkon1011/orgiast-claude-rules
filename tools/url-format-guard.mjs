@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import { isEntry } from './is-entry.mjs';
 import { latestAssistantText } from './lib/assistant-text.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
+import { appendStopLedger, registerStopViolation, stopGateOutput } from './lib/stop-recheck.mjs';
 
 
 const RAW_URL = /(?<!\]\()https?:\/\/[A-Za-z0-9._~:/?#@!$&'*+,;=%\-]+/g;
@@ -33,15 +34,24 @@ ERR_NAME_NOT_RESOLVED / 404 になります。該当箇所を [text](url) に直
   return { decision: 'block', reason };
 }
 
+export const REMEDY_EXAMPLES = [
+  '[example.com](https://example.com)',
+  '[サイトはこちら](https://example.com)',
+];
+
 async function main() {
   try {
     const raw = await readStdinWithTimeout();
     if (!raw.trim()) return;
     const input = JSON.parse(raw);
-    if (input?.stop_hook_active || !input?.transcript_path || !fs.existsSync(input.transcript_path)) return;
-    const text = latestAssistantText(input.transcript_path); if (!text) return;
+    if (!input?.transcript_path || !fs.existsSync(input.transcript_path)) return;
+    const text = input.last_assistant_message ?? input.assistant_text ?? latestAssistantText(input.transcript_path); if (!text) return;
     const result = findBrokenRawUrl(text);
-    if (result.decision === 'block') console.log(JSON.stringify(result));
+    if (result.decision === 'block') {
+      const recheck = registerStopViolation({ input, assistantText: text, blockedBy: ['url-format-guard'], reasonCodes: ['URL-FORMAT'] });
+      appendStopLedger({ sessionId: recheck.sessionId, verdict: recheck.verdict, blockedBy: recheck.blockedBy, reasonCodes: recheck.reasonCodes, retryCap: recheck.retryCap, excerpt: text.slice(0, 200) });
+      console.log(JSON.stringify(stopGateOutput(recheck, result.reason)));
+    }
   } catch {}
 }
 

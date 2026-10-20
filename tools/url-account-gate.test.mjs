@@ -114,14 +114,20 @@ test('CLI: 未指定なら stderr と exit 2', t => {
   assert.ok(result.stderr.includes(studio));
 });
 
-test('CLI: 明示・ループ防止・空本文は通過', t => {
-  for (const [text, input] of [[`${studio}${account}`, {}], [studio, { stop_hook_active: true }], ['', {}]]) {
+test('CLI: 明示・空本文は通過', t => {
+  for (const [text, input] of [[`${studio}${account}`, {}], ['', {}]]) {
     const result = invoke(t, text, { input });
     assert.ifError(result.error);
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stderr, '');
     assert.equal(result.stdout, '');
   }
+});
+
+test('新しい推奨形式と前行アカウント＋単独Markdownリンクを許可', () => {
+  assert.deepEqual(judge(`**kim の Google アカウント** で開く: [AI Studio](${studio})`).missing, []);
+  assert.deepEqual(judge(`**kim の Google アカウント** で開く\n[AI Studio](${studio})`).missing, []);
+  assert.match(formatReason([studio]), /\*\*<アカウント>\*\* で開く: \[表示名\]\(URL\)/);
 });
 
 test('runner に登録され、アカウント追記で当該理由が消える', t => {

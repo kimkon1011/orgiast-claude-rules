@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { parseEnvText } from './env-kv.mjs';
 import { isEntry } from './is-entry.mjs';
 import { notifyKim } from './notify-kim.mjs';
@@ -61,20 +62,29 @@ function stableHealthKey(url) {
   return `health:${crypto.createHash('sha1').update(identity).digest('hex').slice(0, 8)}`;
 }
 
-export async function checkHealthUrls(urls, { fetchImpl = fetch, now = () => new Date(), disabled = false } = {}) {
+export async function checkHealthUrls(urls, { fetchImpl = fetch, now = () => new Date(), disabled = false, sleepImpl = sleep } = {}) {
   if (disabled) return { results: [], items: [] };
   const results = [];
   const items = [];
   for (const url of [...new Set(urls.filter(Boolean))]) {
     let status = 0;
     let error = '';
-    try {
-      const response = await fetchImpl(url, { redirect: 'follow', signal: AbortSignal.timeout(20_000) });
-      status = Number(response.status) || 0;
-      if (!response.ok) error = `HTTP ${status}`;
-    } catch (caught) { error = oneLine(caught?.message || caught, 200) || '接続失敗'; }
+    let retries = 0;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      retries = attempt;
+      try {
+        // GAS の正常な302は追従し、遷移先のHTTPエラーは隠さない。
+        const response = await fetchImpl(url, { redirect: 'follow', signal: AbortSignal.timeout(30_000) });
+        status = Number(response.status) || 0;
+        error = response.ok ? '' : `HTTP ${status}`;
+        break;
+      } catch (caught) {
+        error = oneLine(caught?.message || caught, 200) || '接続失敗';
+        if (attempt < 2) await sleepImpl(1_000 * 2 ** attempt);
+      }
+    }
     const ok = !error;
-    const result = { url, ok, status, error };
+    const result = { url, ok, status, error, retries };
     results.push(result);
     if (!ok) items.push({
       key: stableHealthKey(url), kind: '不具合',
@@ -180,7 +190,7 @@ function discordCredentialsAvailable(home, io) {
   return Boolean(token && userId);
 }
 
-export async function runMain({ args = process.argv.slice(2), home = process.env.ORGIAST_HOME || os.homedir(), io = defaultIo(), fetchImpl = fetch, spawnImpl = spawn, notifyImpl = notifyKim } = {}) {
+export async function runMain({ args = process.argv.slice(2), home = process.env.ORGIAST_HOME || os.homedir(), io = defaultIo(), fetchImpl = fetch, spawnImpl = spawn, notifyImpl = notifyKim, sleepImpl = sleep } = {}) {
   const options = parseArgs(args);
   const envFile = path.join(home, '.claude', 'booth-feedback.env');
   const env = parseEnvText(readOptional(envFile, io));
@@ -193,7 +203,7 @@ export async function runMain({ args = process.argv.slice(2), home = process.env
   items = items.filter((item) => item?.key && !DONE_STATES.has(String(item.status ?? '').trim().toLowerCase()));
 
   const configuredUrls = options.healthUrls.length ? options.healthUrls : String(env.FEEDBACK_HEALTH_URLS || env.HEALTH_URLS || '').split(',').map((value) => value.trim()).filter(Boolean);
-  const health = await checkHealthUrls(configuredUrls, { fetchImpl, now: io.now, disabled: options.noHealth });
+  const health = await checkHealthUrls(configuredUrls, { fetchImpl, now: io.now, disabled: options.noHealth, sleepImpl });
   const byKey = new Map(items.map((item) => [item.key, item]));
   for (const item of health.items) byKey.set(item.key, item);
   items = [...byKey.values()];

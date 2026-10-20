@@ -54,6 +54,71 @@ function spawnResult(text, onCall) {
   };
 }
 
+for (const scenario of [
+  { name: '初回タイムアウト後に成功', failures: 1, code: 0, waits: [1000] },
+  { name: 'ネットワークエラー2回後に成功', failures: 2, code: 0, waits: [1000, 2000] },
+  { name: '3回ともタイムアウト', failures: 3, code: 3, waits: [1000, 2000] },
+]) {
+  test(`runMain のヘルスチェック: ${scenario.name}`, async () => {
+    const output = [];
+    const waits = [];
+    const signals = [];
+    let calls = 0;
+    const code = await runMain({
+      args: ['--items-file', '/items.json', '--dry-run', '--no-llm', '--json', '--health-url', 'https://gas.test/exec'],
+      home: '/test-home',
+      io: {
+        read: (file) => { if (file === '/items.json') return '{"items":[]}'; throw new Error('ENOENT'); },
+        write: () => assert.fail('unexpected write'),
+        now: () => new Date('2026-10-21T00:00:00Z'),
+        stdout: (text) => output.push(JSON.parse(text)), stderr: () => {},
+      },
+      fetchImpl: async (url, options) => {
+        calls += 1;
+        assert.equal(url, 'https://gas.test/exec');
+        assert.equal(options.redirect, 'follow');
+        assert.ok(options.signal instanceof AbortSignal);
+        signals.push(options.signal);
+        if (calls <= scenario.failures) {
+          if (scenario.failures === 2) throw new TypeError('fetch failed');
+          throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+        }
+        // fetch が GAS の302を追従した後の応答。
+        return { ok: true, status: 200, redirected: true };
+      },
+      sleepImpl: async (ms) => { waits.push(ms); },
+      spawnImpl: () => assert.fail('unexpected LLM call'),
+      notifyImpl: () => assert.fail('unexpected notification'),
+    });
+    assert.equal(code, scenario.code);
+    assert.equal(calls, Math.min(scenario.failures + 1, 3));
+    assert.equal(new Set(signals).size, calls, '各試行に新しいタイムアウトを設定する');
+    assert.deepEqual(waits, scenario.waits);
+    assert.equal(output.length, 1);
+    assert.deepEqual(output[0].health, [{
+      url: 'https://gas.test/exec', ok: code === 0, status: code === 0 ? 200 : 0,
+      error: code === 0 ? '' : 'The operation was aborted due to timeout',
+      retries: calls - 1,
+    }]);
+    if (code === 3) assert.match(output[0].report, /【自動検知の異常】/);
+    else assert.doesNotMatch(output[0].report, /【自動検知の異常】/);
+  });
+}
+
+test('リダイレクト先のHTTP障害は再試行で隠さず報告する', async () => {
+  const health = await checkHealthUrls(['https://gas.test/exec'], {
+    fetchImpl: async (_url, options) => {
+      assert.equal(options.redirect, 'follow');
+      return { ok: false, status: 503, redirected: true };
+    },
+    sleepImpl: () => assert.fail('HTTPエラーでは再試行しない'),
+  });
+  assert.equal(health.results[0].ok, false);
+  assert.equal(health.results[0].error, 'HTTP 503');
+  assert.equal(health.results[0].retries, 0);
+  assert.equal(health.items.length, 1);
+});
+
 test('台帳は既評価をスキップし未評価だけ1回のLLMで追加する', async () => {
   const ledger = { version: 1, items: { old: { rank: 'B' } } };
   let calls = 0; let commandArgs;

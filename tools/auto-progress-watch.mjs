@@ -9,7 +9,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { parseEnvText } from './env-kv.mjs';
-import { ledgerFile, readLedger, writeLedger, OPEN_STATUSES, latestOpenPromises, rowKey, isUnattendedRow } from './auto-progress-ledger.mjs';
+import { ledgerFile, readLedger, writeLedger, OPEN_STATUSES, latestOpenPromises, rowKey, isUnattendedRow, isNoopPromise } from './auto-progress-ledger.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { notifyOwner } from './notify-owner.mjs';
 import { appendInbox } from './auto-progress-inbox-hook.mjs';
@@ -178,7 +178,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     const rows = readLedger(file);
     writeLedger(file, rows.map((r) => rowKey(r) === key ? { ...r, ...changes, status: WATCHED.has(r.status) ? (changes.status ?? r.status) : r.status } : r));
   };
-  const summary = { checked: 0, done: 0, inProgress: 0, stalled: 0, resumed: 0, reported: 0, expired: 0, graced: 0, superseded: 0, errors: [] };
+  const summary = { checked: 0, done: 0, noop: 0, inProgress: 0, stalled: 0, resumed: 0, reported: 0, expired: 0, graced: 0, superseded: 0, errors: [] };
   const config = (io.sheetConfig ?? sheetConfig)(home);
   const rows = readLedger(file);
   const candidates = latestOpenPromises(rows);
@@ -194,6 +194,11 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   const needsKim = row => !['', 'なし'].includes(String(row.nextKim ?? '').trim());
   candidates.sort((a, b) => Number(needsKim(a)) - Number(needsKim(b)) || Date.parse(a.ts) - Date.parse(b.ts));
   for (const row of candidates) {
+    if (isNoopPromise(row.promise)) {
+      patch(rowKey(row), { status: 'done', verdict: 'done', doneAt: new Date(now).toISOString(), reason: '自動進行の宣言なし' });
+      summary.noop += 1;
+      continue;
+    }
     const recorded = Date.parse(row.ts);
     if (!Number.isFinite(recorded)) continue;
     const unattended = isUnattendedRow(row, home);
@@ -217,7 +222,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     if (verdict.verdict === 'done') { patch(rowKey(row), { status: 'done', verdict: 'done', doneAt: new Date(now).toISOString(), reason: verdict.reason }); summary.done += 1; continue; }
     if (verdict.verdict === 'in_progress') { patch(rowKey(row), { verdict: 'in_progress', lastCheckedAt: new Date(now).toISOString(), reason: verdict.reason }); summary.inProgress += 1; continue; }
     summary.stalled += 1;
-    patch(rowKey(row), { verdict: 'stalled', lastCheckedAt: new Date(now).toISOString(), reason: verdict.reason });
+    patch(rowKey(row), { ...((row.resumeCount ?? 0) >= MAX_RESUMES ? { status: 'stalled' } : {}), verdict: 'stalled', lastCheckedAt: new Date(now).toISOString(), reason: verdict.reason });
     let current = { ...row };
     const canResume = !unattended && !dryRun && summary.resumed < MAX_RESUMES_PER_RUN &&(row.resumeCount ?? 0) < MAX_RESUMES && now - (Date.parse(row.resumedAt || 0) || 0) >= RESUME_INTERVAL_MS
       && row.cwd && (io.cwdExists ?? fs.existsSync)(row.cwd);

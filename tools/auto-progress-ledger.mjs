@@ -24,12 +24,20 @@ function lastMatch(re, text) {
   return found ? cleanValue(found[1]) : null;
 }
 
+// 完了宣言に続く説明を、新しい自動進行の約束として扱わない。
+export function isNoopPromise(text) {
+  const value = cleanValue(text);
+  const first = value.split('。', 1)[0].replace(/[.．\s]+$/g, '').replace(/\s*[（(].*[）)]$/, '').trim();
+  return NONE.test(first) || first === '特にありません' ||
+    /^完了済み。\s*追加の自動進行なし(?:[。\s]|$)/.test(value) ||
+    /(?:作業|自動進行|自動処理|進行|対応)(?:は|が)?(?:ありません|無い|ない|なし)$/.test(first);
+}
+
 // 「なし」系（空・None 相当）は null。それ以外は宣言本文を返す。
 export function extractPromise(text) {
   const value = lastMatch(PROMISE_RE, text);
   if (!value) return null;
-  const bare = value.replace(/[。.．\s]+$/g, '').replace(/\s*[（(].*[）)]$/, '').trim();
-  return !bare || NONE.test(bare) ? null : value;
+  return isNoopPromise(value) ? null : value;
 }
 
 export function extractNextKim(text) {

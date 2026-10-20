@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { isEntry } from './is-entry.mjs';
 import { notifyOwner } from './notify-owner.mjs';
-import { ledgerFile, readLedger, latestOpenPromises, rowKey, isUnattendedRow } from './auto-progress-ledger.mjs';
+import { ledgerFile, readLedger, latestOpenPromises, rowKey, isUnattendedRow, isNoopPromise } from './auto-progress-ledger.mjs';
 import { MAX_RESUMES } from './auto-progress-watch.mjs';
 export { isUnattendedRow } from './auto-progress-ledger.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
@@ -37,43 +37,50 @@ export function selectRows(rows, now = Date.now(), since = now - WINDOW_MS) {
   const ledger = Array.isArray(rows) ? rows : [];
   const active = new Set(latestOpenPromises(ledger));
   return ledger.filter((row) => {
+    if (isNoopPromise(row.promise)) return false;
     if (row.status === 'done') return Number.isFinite(Date.parse(row.doneAt)) && Date.parse(row.doneAt) > since;
     return active.has(row);
   }).sort((a, b) => rowTime(a) - rowTime(b));
 }
 
-export const verdictOf = (row, now) => row.status === 'done' ? 'done' : row.status === 'waiting_user' ? 'waiting_user' : row.status === 'resumed' ? 'resumed' : row.verdict || (row.status === 'stalled' ? 'stalled' : deadlinePassed(row, now) ? 'open/期限超過' : row.lastCheckedAt ? 'in_progress' : 'open');
+export const verdictOf = (row, now = Date.now()) => row.status === 'done' ? 'done' : row.status === 'waiting_user' ? 'waiting_user' : row.status === 'resumed' ? 'resumed' : row.verdict || (row.status === 'stalled' ? 'stalled' : deadlinePassed(row, now) ? 'open/期限超過' : row.lastCheckedAt ? 'in_progress' : 'open');
 export const MAX_ITEMS = 10;
 const kimAction = row => {
   const value = String(row.nextKim || '').trim();
-  return /^(?:(?:特に)?なし|無し|ナシ|(?:対応(?:は)?)?不要(?:です)?|(?:特に)?ありません|none|n\/a|[-—–－ー―])(?:[（(].*[）)])?[。．]?$/i.test(value) || !value ? 'なし' : value;
+  const action = /^(?:(?:特に)?なし|無し|ナシ|(?:対応(?:は)?)?不要(?:です)?|(?:特に)?ありません|none|n\/a|[-—–－ー―])(?:[（(].*[）)])?[。．]?$/i.test(value) || !value ? 'なし' : value;
+  return action === 'なし' && verdictOf(row) === 'waiting_user'
+    ? String(row.reason || row.resumeOutcome || '判断内容を確認してください').replace(/^needs_user:\s*/, '').slice(0, 80) : action;
 };
-// 台帳の自由文に埋め込まれた機械用の値は、主語を消さず役割の名前に置き換える。
+export function needsDm(row, now = Date.now()) {
+  if (isNoopPromise(row.promise)) return false;
+  const verdict = verdictOf(row, now);
+  return kimAction(row) !== 'なし' || ['waiting_user', 'done', 'open/期限超過'].includes(verdict) ||
+    (verdict === 'stalled' && Number(row.resumeCount) >= MAX_RESUMES);
+}
 function readable(value, row, limit) {
-  let text = String(value || '').replace(/\s+/g, ' ');
+  let text = String(value || '');
   for (const [key, replacement] of [['pc', 'このパソコン'], ['sessionId', 'この作業']]) {
     if (row[key]) text = text.split(String(row[key])).join(replacement);
   }
-  text = text.replace(/`[^`]*`/g, '作業記録').replace(/(?:~\/|[A-Za-z]:[\\/]|(?<![A-Za-z0-9])\/(?=[A-Za-z_.]))[A-Za-z0-9_.\\/-]+/g, '作業記録');
-  return text.replace(/\b(?:gh|git|node|npm|npx|pwsh|powershell|bash|curl)(?:[ \t]+[\x21-\x7E]+)+/g, '必要な操作')
-    .replace(/\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?/g, '予定の日時')
-    .replace(/\b[0-9a-f]{7,40}\b/gi, '記録番号')
-    .replace(/\bDESKTOP-[a-z0-9]+\b|\b[a-z0-9]+-PC\b/gi, '別のパソコン')
-    .replace(/\b[A-Za-z][A-Za-z0-9]*(?:[_-][A-Za-z0-9]+)+\b/g, '対象の処理')
-    .replace(/[A-Za-z][A-Za-z0-9_.=/-]*/g, word => ({
-      Claude: '自動処理', Discord: '連絡先', Drive: '共有資料', GAS: '連携処理', TODO: '未完了の作業',
-      DM: 'メッセージ', PR: '変更案', CI: '自動検証', SLA: '配達期限', SUCCESS: '成功', FAILED: '失敗', MERGED: '反映済み',
-      automerge: '自動で反映', resolve: '解決', push: '送信', kim: 'kim', OK: '了承', A: 'A', B: 'B',
-    }[word] || word)).slice(0, limit);
+  return text.replace(/\s+/g, ' ').slice(0, limit);
 }
+const shortReasons = {
+  '証拠なし（約束後の会話・ファイル更新・実行ログが無い）': 'その後の動きがありません',
+  '最後の動きから1時間以上経過': 'しばらく動きがありません',
+  '最後の動きから24時間以上経過': 'しばらく動きがありません',
+  '直近1時間以内に動きあり': '動いています',
+};
+
 function itemText(row, now) {
   const verdict = verdictOf(row, now), attempts = Number(row.resumeCount) || 0;
   const states = { done: '終わりました', in_progress: '進んでいます', open: 'まだ始まっていません', stalled: '止まっています', resumed: `自動で再開しました（${attempts} 回目）`, waiting_user: 'kim の判断待ち', 'open/期限超過': '期限を過ぎています' };
-  const next = verdict === 'done' ? 'なし（これで終わりです）' : verdict === 'waiting_user' ? 'kim の返事を待っています' : attempts >= MAX_RESUMES ? '自動再開の上限なので、7 日で自動的に閉じます' : verdict === 'stalled' ? `2 時間後の巡回で自動で再開します（${attempts + 1} 回目）` : '次の巡回で確認します';
-  const reason = readable(row.reason || row.resumeOutcome, row, 40);
-  return `・${readable(row.purpose || row.sessionPurpose || row.objective || row.promise || '約束した作業', row, 60)}\n  今: ${states[verdict] || states.open}${reason ? `（${reason}）` : ''}\n  次に自動でやること: ${next} ／ kim がすること: ${readable(kimAction(row), row, 60)}`;
+  const next = verdict === 'done' ? 'なし（これで終わりです）' : verdict === 'waiting_user' ? 'kim の返事を待っています' : verdict === 'stalled' && attempts >= MAX_RESUMES ? '自動再開を使い切りました。このまま 7 日で閉じます。続けるなら kim が指示してください' : verdict === 'stalled' ? `2 時間後の巡回で自動で再開します（${attempts + 1} 回目）` : '次の巡回で確認します';
+  const reason = readable(shortReasons[row.reason] || row.reason || row.resumeOutcome, row, 40);
+  return `・${readable(row.purpose || row.sessionPurpose || row.objective || row.promise || '約束した作業', row, 60)}\n  今: ${states[verdict] || states.open}${reason ? `（${reason}）` : ''}\n  次に自動でやること: ${next} ／ kim がすること: ${readable(kimAction(row), row, 80)}`;
 }
 export function formatDigest(rows, now = Date.now(), label = '', { allRows = rows, unattended = 0, remaining = 0 } = {}) {
+  rows = rows.filter(row => !isNoopPromise(row.promise));
+  allRows = allRows.filter(row => !isNoopPromise(row.promise));
   if (!rows.length) return '';
   const count = state => allRows.filter(row => verdictOf(row, now) === state).length;
   const pending = latestOpenPromises(allRows);
@@ -100,9 +107,21 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   const since = state.doneSince ?? (Number.isFinite(Date.parse(state.lastSuccessAt)) ? Date.parse(state.lastSuccessAt) : now - WINDOW_MS);
   const all = selectRows((io.readLedger ?? readLedger)(ledgerFile(home)), now, since);
   const lastVerdicts = { ...(state.lastVerdicts || {}) }, lastKim = { ...(state.lastKim || {}) };
-  const changed = all.filter(row => !isUnattendedRow(row, home) &&
-    (lastVerdicts[rowKey(row)] !== verdictOf(row, now) || (kimAction(row) !== 'なし' && lastKim[rowKey(row)] !== kimAction(row))));
-  if (!changed.length) return { sent: false, count: 0 };
+  const lastNeedsDm = { ...(state.lastNeedsDm || {}) };
+  const changed = [];
+  let observed = false;
+  for (const row of all) {
+    if (isUnattendedRow(row, home)) continue;
+    const key = rowKey(row), eligible = needsDm(row, now);
+    if (!eligible) {
+      observed ||= lastVerdicts[key] !== verdictOf(row, now) || lastKim[key] !== kimAction(row) || lastNeedsDm[key] !== false;
+      lastVerdicts[key] = verdictOf(row, now); lastKim[key] = kimAction(row); lastNeedsDm[key] = false;
+    } else if (lastVerdicts[key] !== verdictOf(row, now) || lastKim[key] !== kimAction(row) || lastNeedsDm[key] === false) changed.push(row);
+  }
+  if (!changed.length) {
+    if (observed && !dryRun) (io.writeState ?? writeState)(home, { ...state, doneSince: since, lastVerdicts, lastKim, lastNeedsDm });
+    return { sent: false, count: 0 };
+  }
   const groups = new Map();
   for (const row of changed.slice(0, MAX_ITEMS)) {
     const owner = row.owner || '';
@@ -135,16 +154,16 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       result = io.notify ? await io.notify(message, { home, webhookFallback: false, owner }) : await (io.notifyOwner ?? notifyOwner)(owner, message, { home });
     } catch (cause) { result = { reason: cause?.message || String(cause) }; }
     if (result?.delivered !== 'dm') { error = result?.reason || 'DM not delivered'; break; }
-    for (const row of rows) { lastVerdicts[rowKey(row)] = verdictOf(row, now); lastKim[rowKey(row)] = kimAction(row); }
+    for (const row of rows) { lastVerdicts[rowKey(row)] = verdictOf(row, now); lastKim[rowKey(row)] = kimAction(row); lastNeedsDm[rowKey(row)] = true; }
     // Persist each successful owner delivery so another owner's failure cannot duplicate it.
-    (io.writeState ?? writeState)(home, { ...state, doneSince: since, lastVerdicts, lastKim });
+    (io.writeState ?? writeState)(home, { ...state, doneSince: since, lastVerdicts, lastKim, lastNeedsDm });
   }
   if (error) {
-    (io.writeState ?? writeState)(home, { ...state, doneSince: since, lastVerdicts, lastKim, lastFailure: { at: new Date(now).toISOString(), slot: slotKey, error } });
+    (io.writeState ?? writeState)(home, { ...state, doneSince: since, lastVerdicts, lastKim, lastNeedsDm, lastFailure: { at: new Date(now).toISOString(), slot: slotKey, error } });
     appendLog(home, { at: now, label, slot: slotKey, sent: false, count, error }, io);
     return { sent: false, count, error };
   }
-  const next = { ...state, doneSince: since, lastVerdicts, lastKim, lastSuccessAt: new Date(now).toISOString(), sentKeys: [...(state.sentKeys || []), slotKey].slice(-60) };
+  const next = { ...state, doneSince: since, lastVerdicts, lastKim, lastNeedsDm, lastSuccessAt: new Date(now).toISOString(), sentKeys: [...(state.sentKeys || []), slotKey].slice(-60) };
   (io.writeState ?? writeState)(home, next);
   appendLog(home, { at: now, label, slot: slotKey, sent: true, count, parts: messages.length }, io);
   return { sent: true, count, parts: messages.length };

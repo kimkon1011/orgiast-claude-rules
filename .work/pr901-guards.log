@@ -1,0 +1,70 @@
+PASS fleet-poller: rules-resync はリポの .mjs を優先する
+PASS onboarding-sync.ps1: hooks配下の自分自身を更新する
+PASS onboarding-sync.ps1: PowerShell 5.1 でも ONBOARDING を取得できる
+PASS install-orgiast.ps1: 未コミットの作業ツリーを削除しない
+PASS parseEnvText: BOM・表記ゆれ・重複・CRLF
+PASS env-repair: checkは非破壊、通常実行はbackup付き修復
+PASS llm-ask: BOM付きenvのキー状態を値なしで診断
+PASS hook-selfcheck: BOMを修復し、正常時はBOM報告なし
+PASS register-hooks: BOM付き settings.json でも登録でき、BOM が除去される
+PASS register-hooks: 旧PCを .mjs へ移行し、独自設定を保ったまま冪等
+PASS hook-selfcheck: BOM付き settings.json でクラッシュしない
+PASS model-agent-guard: Fable5 deny
+PASS Fable5明示指定: allow作成後は同一セッションで許可
+PASS Fable5例外: 期限切れallowはdeny
+PASS Fable5否定指定: allowを作成しない
+PASS fable-session-guard: 定額内と未確認なら最新応答がFable5で切替警告を注入
+PASS fable-session-guard: 定額内(planIncluded)なら最新応答がFable5でも無出力
+PASS fable-session-guard: 最新応答がOpusなら無出力
+PASS fable-session-guard: 同一sessionの未失効allowなら無出力
+PASS fable-session-guard: 別sessionまたは失効allowでは警告
+PASS fable-session-guard: transcript欠損と壊れたstdinは無言exit 0
+PASS fable-session-guard: 巨大transcriptも末尾の最新モデルだけで判定
+PASS fable-session-guard: process.exitを使わずisEntryで起動
+PASS model-agent-guard: warn設定でも実装はdeny
+PASS model-agent-guard: block昇格時は実装委譲を deny
+PASS model-agent-guard: Explore+model未指定は安経路への案内を warn で通す
+PASS model-agent-guard: Explore+haiku と専門agent は無出力
+PASS model-agent-guard: block モードでは探索の既定経路も deny
+PASS model-agent-guard: Fable 指定は探索でも deny のまま
+PASS model-agent-guard: Write は無出力
+PASS cost-routing-gate: 実装宣言
+PASS cost-routing-gate: 300件は夜間バッチ
+PASS cost-routing-gate: 夜間トリガーは夜間判定宣言を要求
+PASS cost-routing-gate: 夜間判定済みなら再注入しない
+PASS cost-routing-gate: 急ぎ明示は即時実行
+PASS cost-routing-gate: 小規模は夜間判定を注入しない
+PASS cost-routing-gate: budgetPressure 中は20件超の夜間バッチ文言を強める
+PASS cost-routing-gate: codex語で全体を無効化しない
+PASS hook-selfcheck: 偽HOMEで欠落を自動修復
+PASS codex-do: --cwd 省略でも指示文が消えない
+PASS tool-adoption-check: timeoutは未導入や手動installにしない
+PASS tool-adoption-check: --dry-run は exit 0 (top-level await後のprocess.exitを禁止)
+PASS tool-adoption-check: FORCE_MISSINGは未導入と導入導線を維持
+PASS tool-adoption-check: timeoutでも存在フォールバックで導入済み
+PASS tool-adoption-check: 全体デッドライン超過でもレポートを完走
+PASS tool-adoption-check: 新しい同一target stateなら導入をスキップ
+PASS tool-adoption-check: detached導入は同期的にブロックしない
+PASS codex-do: dry-run に MEMORY.md を同梱
+PASS makimono-gate: process.exit を使わない(Windowsでhookが落ちて注入が捨てられる)
+PASS makimono-gate: キャッシュ済み候補を注入して exit 0
+PASS makimono-gate: 無関係なプロンプトには何も注入しない
+PASS makimono-gate: 同一セッションで同じ指示書を再提案しない
+PASS makimono-publish: 秘匿値・社内固有名は送信せず下書きへ退避し、値を伏せる
+PASS makimono-publish: 一般化済み本文は送信禁止パターン0件
+PASS hook-selfcheck: makimono-gate の欠落を自動登録する
+PASS fleet-sheet-report: URL/TOKEN未設定ならstderr 1行でexit 0
+PASS install/verify: 配布する ~/.claude/*.env を両方の総合チェックが網羅
+PASS 外部送受信ツール: 設定不足をstderr 1行以上で観測可能にしてexit 0
+PASS fleet-sheet-report: stateから必要フィールドを組み立てる
+PASS fleet-sheet-report: 未登録ラベルを推測せずmappedName null
+PASS fleet-sheet-report: state欠損・破損でも既定値で継続
+PASS fleet upsert純関数: 保護列・連投・未マッピング・ヘッダ並替え
+PASS fleet upsert純関数: 自己申告3列を書き、A〜E列とO列を保護してヘッダ並替えに追従
+PASS fleet WebApp: 不足する自己申告ヘッダだけを右端に冪等追加
+PASS fleet upsert純関数: 紐付いた既存行のO列(kim手書き)は map 未登録でも保持し、空labelで行を奪わない
+PASS fleet upsert純関数: ヘッダの全角半角・空白差でも列を解決できる
+PASS fleet upsert純関数: D列重複でもF列labelで別行に入り他PCの行を奪わない
+PASS fleet WebApp: ヘッダタブ解決キャッシュとScriptLockを使う
+
+ALL PASS

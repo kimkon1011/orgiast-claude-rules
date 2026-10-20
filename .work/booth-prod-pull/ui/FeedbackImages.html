@@ -1,0 +1,74 @@
+<script>
+function createFeedbackImages(input, preview, report, busy) {
+  var images = [], pending = 0, totalBytes = 0, generation = 0;
+  var maxBytes = 8 * 1024 * 1024, maxTotal = 25 * 1024 * 1024;
+  function render() {
+    preview.innerHTML = '';
+    images.forEach(function (item) {
+      var img = document.createElement('img');
+      img.src = 'data:' + item.mimeType + ';base64,' + item.base64;
+      img.alt = item.name;
+      img.style.cssText = 'width:64px;height:64px;object-fit:cover';
+      preview.appendChild(img);
+      var remove = document.createElement('button');
+      remove.type = 'button';
+      remove.textContent = item.name + ' を削除';
+      remove.onclick = function () {
+        totalBytes -= item.bytes;
+        images.splice(images.indexOf(item), 1);
+        render();
+      };
+      preview.appendChild(remove);
+    });
+  }
+  function add(file) {
+    if (!file) return;
+    var type = String(file.type || '').toLowerCase();
+    if (!type) {
+      var extension = String(file.name || '').split('.').pop().toLowerCase();
+      type = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp' }[extension] || '';
+    }
+    if (!/^image\/(jpeg|png|gif|webp)$/.test(type)) {
+      report('この画像形式は添付できません。HEIC/HEIF は JPEG に変換するか、スクリーンショットを選択してください。', 'err');
+      return;
+    }
+    if (!file.size || file.size > maxBytes || totalBytes + file.size > maxTotal || images.length + pending >= 5) {
+      report('画像は1枚8MB・合計25MB・5枚までです。サイズを小さくするか、選択済み画像を削除してください。', 'err');
+      return;
+    }
+    var version = generation, settled = false, reader = new FileReader();
+    pending++;
+    totalBytes += file.size;
+    busy(true);
+    function finish(error, base64) {
+      if (settled || version !== generation) return;
+      settled = true;
+      pending--;
+      if (error) {
+        totalBytes -= file.size;
+        report(error, 'err');
+      } else {
+        images.push({ name: file.name || 'photo.jpg', mimeType: type, base64: base64, bytes: file.size });
+        render();
+      }
+      busy(pending > 0);
+    }
+    reader.onload = function () {
+      var match = /^data:[^;]*;base64,([A-Za-z0-9+/=]+)$/.exec(String(reader.result || ''));
+      finish(match ? '' : '画像データを読み込めません。写真を選び直してください。', match && match[1]);
+    };
+    reader.onerror = reader.onabort = function () { finish('画像を読み込めません。端末に写真を保存してから選び直してください。'); };
+    try { reader.readAsDataURL(file); } catch (error) { reader.onerror(); }
+  }
+  input.addEventListener('change', function () {
+    Array.prototype.forEach.call(input.files || [], add);
+    input.value = '';
+  });
+  return {
+    add: add,
+    pending: function () { return pending > 0; },
+    payload: function () { return images.map(function (item) { return { name: item.name, mimeType: item.mimeType, base64: item.base64 }; }); },
+    clear: function () { generation++; images = []; pending = 0; totalBytes = 0; input.value = ''; render(); busy(false); }
+  };
+}
+</script>

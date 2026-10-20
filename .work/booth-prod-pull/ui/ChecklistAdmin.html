@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <base target="_top" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        font-family: -apple-system, "Noto Sans JP", sans-serif;
+        background: #f5f6f8;
+        margin: 0;
+        color: #263238;
+      }
+      main {
+        max-width: 1000px;
+        margin: auto;
+        padding: 20px;
+      }
+      button,
+      input,
+      select,
+      textarea {
+        font: inherit;
+        padding: 9px;
+        border: 1px solid #bbb;
+        border-radius: 7px;
+        margin: 3px;
+      }
+      button {
+        background: #455a64;
+        color: #fff;
+      }
+      .tabs button.on {
+        background: #1565c0;
+      }
+      .card {
+        background: #fff;
+        padding: 12px;
+        border-radius: 10px;
+        margin: 8px 0;
+        display: grid;
+        grid-template-columns: 70px 1fr;
+        gap: 7px;
+      }
+      .card textarea,
+      .card input,
+      .card select {
+        width: 100%;
+      }
+      .actions {
+        grid-column: 1/3;
+      }
+      .hidden {
+        display: none;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        background: #fff;
+      }
+      th,
+      td {
+        padding: 8px;
+        border: 1px solid #ddd;
+        text-align: left;
+      }
+      a {
+        color: #1565c0;
+      }
+      .editBadge {
+        color: #e65100;
+        font-size: 12px;
+      }
+      .editLog {
+        white-space: pre-wrap;
+        font-size: 12px;
+      }
+      #caseSettings { overflow-wrap: anywhere; }
+      #caseSettings select, #caseSettings input:not([type="checkbox"]), #caseSettings textarea {
+        width: 100%; min-width: 0; margin: 3px 0 12px;
+      }
+      #caseSettings fieldset { border: 1px solid #ddd; border-radius: 8px; margin: 12px 0; min-width: 0; }
+      #caseSettings fieldset > label { display: block; }
+      #configVehicles label { display: inline-flex; align-items: center; min-height: 44px; margin-right: 12px; }
+      #configEstimate { color: #68747a; font-size: 14px; }
+      #caseSettings .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      #configStatus { white-space: pre-wrap; }
+      button:disabled { opacity: .55; }
+      @media (max-width: 520px) {
+        main { padding: 12px; }
+        h1 { font-size: 23px; }
+        #caseSettings .pair { grid-template-columns: 1fr; gap: 0; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>⚙ チェックリスト管理</h1>
+      <div>
+        <button onclick="showTemplates()">テンプレート</button>
+        <button onclick="showProgress()">進捗</button>
+        <button onclick="showRush()">緊急依頼</button>
+        <button onclick="showCaseSettings()">案件設定</button>
+      </div>
+      <section id="templates">
+        <p>
+          役割追加: <input id="newRole" /><button onclick="addRole()">
+            追加
+          </button>
+        </p>
+        <div id="roles" class="tabs"></div>
+        <div id="days" class="tabs"></div>
+        <button onclick="addItem()">＋ 項目追加</button>
+        <div id="items"></div>
+      </section>
+      <section id="progress" class="hidden">
+        <select id="case">
+          <option value="">全案件</option>
+        </select>
+        <button onclick="loadProgress()">表示</button>
+        <div id="summary"></div>
+      </section>
+      <section id="rush" class="hidden">
+        <select id="rushCase"><option value="">全案件</option></select>
+        <button onclick="loadRush()">表示</button>
+        <div id="rushRows"></div>
+      </section>
+      <section id="caseSettings" class="hidden">
+        <label for="configCase">案件</label>
+        <select id="configCase" onchange="loadCaseSettings()"><option value="">案件を選択してください</option></select>
+        <p id="configStatus" role="status" aria-live="polite"></p>
+        <form id="configForm" class="hidden" onsubmit="saveCaseSettings(event)">
+          <fieldset><legend>使用車両</legend><div id="configVehicles"></div><p id="configEstimate"></p></fieldset>
+          <fieldset><legend>駐車場</legend>
+            <button id="parkingCandidate" type="button" onclick="useParkingCandidate()" disabled>候補から入れる</button>
+            <label for="cfg_parkingName">駐車場名</label><input id="cfg_parkingName" />
+            <label for="cfg_parkingNote">駐車場メモ</label><textarea id="cfg_parkingNote" rows="2"></textarea>
+            <label for="cfg_parkingUrl">地図URL</label><input id="cfg_parkingUrl" type="url" inputmode="url" />
+          </fieldset>
+          <div class="pair">
+            <label>ディレクター名<input id="cfg_directorName" /></label>
+            <label>ディレクター TEL<input id="cfg_directorTel" type="tel" /></label>
+            <label>現場監督名<input id="cfg_supervisorName" /></label>
+            <label>現場監督 TEL<input id="cfg_supervisorTel" type="tel" /></label>
+          </div>
+          <label for="cfg_meetingPoint">集合場所</label><input id="cfg_meetingPoint" />
+          <label for="cfg_notes">当日メモ（1行1件）</label><textarea id="cfg_notes" rows="5"></textarea>
+          <label for="cfg_qrImageUrl">QRコード画像URL（当日スタッフ用・未入力なら表示なし）</label><input id="cfg_qrImageUrl" type="url" inputmode="url" placeholder="https://..." />
+          <button id="configSave" type="submit">確定情報を保存</button>
+        </form>
+        <div id="configPreview"></div>
+      </section>
+    </main>
+    <script>
+      const TOKEN = "<?= adminToken ?>";
+      let all = [],
+        role = "",
+        day = "",
+        boot = {};
+      const $ = (x) => document.getElementById(x);
+
+      function call(n, a, cb) {
+        google.script.run
+          .withSuccessHandler((r) => (r.ok ? cb(r) : alert(r.error)))
+          .withFailureHandler((e) => alert(e.message || e))
+          [n](...a);
+      }
+
+      function tabs(id, vals, key) {
+        $(id).innerHTML = "";
+        vals.forEach((v) => {
+          let b = document.createElement("button");
+          b.textContent = v;
+          b.className = v === (key === "role" ? role : day) ? "on" : "";
+          b.onclick = () => {
+            if (key === "role") role = v;
+            else day = v;
+            renderTabs();
+          };
+          $(id).appendChild(b);
+        });
+      }
+
+      function renderTabs() {
+        let roles = [...new Set(all.map((i) => i.role))];
+        if (!role) role = roles[0] || "";
+        if (!day) day = boot.days[0];
+        tabs("roles", roles, "role");
+        tabs("days", boot.days, "day");
+        renderItems();
+      }
+
+      function renderItems() {
+        $("items").innerHTML = "";
+        all
+          .filter((i) => i.role === role && i.day === day)
+          .sort((a, b) => a.order - b.order)
+          .forEach((i, idx, arr) => {
+            let d = document.createElement("div");
+            d.className = "card";
+            d.innerHTML = `<b>項目</b><input data-k="title" value="${esc(i.title)}"><b>補足</b><textarea data-k="detail">${esc(i.detail)}</textarea><b>種類</b><select data-k="type">${["check", "photo", "link", "vehicle_doc"].map((x) => `<option ${x === i.type ? "selected" : ""}>${x}</option>`)}</select><b>URL</b><textarea data-k="url">${esc(i.url)}</textarea><b>設定</b><label><input data-k="required" type="checkbox" ${i.required ? "checked" : ""}>必須　<input data-k="active" type="checkbox" ${i.active ? "checked" : ""}>表示</label><div class="actions"><button>保存</button><button>↑</button><button>↓</button><button>非表示</button></div>`;
+            let bs = d.querySelectorAll("button");
+            bs[0].onclick = () => save(i, d);
+            bs[1].onclick = () => move(arr, idx, -1);
+            bs[2].onclick = () => move(arr, idx, 1);
+            bs[3].onclick = () => {
+              if (!confirm("この項目を非表示にしますか？")) return;
+              i.active = false;
+              save(i, d);
+            };
+            $("items").appendChild(d);
+          });
+      }
+
+      function save(i, d) {
+        d.querySelectorAll("[data-k]").forEach(
+          (x) => (i[x.dataset.k] = x.type === "checkbox" ? x.checked : x.value),
+        );
+        call("Checklist_adminUpsert", [TOKEN, i], load);
+      }
+
+      function move(arr, idx, delta) {
+        let j = idx + delta;
+        if (j < 0 || j >= arr.length) return;
+        [arr[idx], arr[j]] = [arr[j], arr[idx]];
+        call("Checklist_adminReorder", [TOKEN, arr.map((x) => x.id)], load);
+      }
+
+      function addItem() {
+        call(
+          "Checklist_adminUpsert",
+          [
+            TOKEN,
+            {
+              role,
+              day,
+              order: 999,
+              title: "新しい項目",
+              detail: "",
+              type: "check",
+              url: "",
+              required: false,
+              active: true,
+            },
+          ],
+          load,
+        );
+      }
+
+      function addRole() {
+        let r = $("newRole").value.trim();
+        if (!r) return;
+        role = r;
+        day = boot.days[0];
+        call(
+          "Checklist_adminUpsert",
+          [
+            TOKEN,
+            {
+              role: r,
+              day: day,
+              order: 1,
+              title: "新しい項目",
+              detail: "",
+              type: "check",
+              url: "",
+              required: false,
+              active: true,
+            },
+          ],
+          load,
+        );
+      }
+
+      function load() {
+        call("Checklist_adminList", [TOKEN], (r) => {
+          all = r.items;
+          boot.days = r.days;
+          renderTabs();
+        });
+      }
+
+      function showTemplates() {
+        $("caseSettings").classList.add("hidden");
+        $("templates").classList.remove("hidden");
+        $("progress").classList.add("hidden");
+        $("rush").classList.add("hidden");
+      }
+
+      function showProgress() {
+        $("caseSettings").classList.add("hidden");
+        $("templates").classList.add("hidden");
+        $("progress").classList.remove("hidden");
+        $("rush").classList.add("hidden");
+        loadProgress();
+      }
+
+      function showRush() {
+        $("caseSettings").classList.add("hidden");
+        $("templates").classList.add("hidden");
+        $("progress").classList.add("hidden");
+        $("rush").classList.remove("hidden");
+        loadRush();
+      }
+
+      const configFields = ["parkingName", "parkingNote", "parkingUrl", "directorName", "directorTel", "supervisorName", "supervisorTel", "meetingPoint", "notes", "qrImageUrl"];
+      let configRequest = 0, configContext = null;
+
+      function rpc(name, args) {
+        return new Promise((resolve, reject) => {
+          google.script.run.withSuccessHandler((r) => {
+            if (r && r.ok === false) reject(new Error(r.error));
+            else resolve(r);
+          }).withFailureHandler(reject)[name](...args);
+        });
+      }
+
+      function showCaseSettings() {
+        ["templates", "progress", "rush"].forEach((id) => $(id).classList.add("hidden"));
+        $("caseSettings").classList.remove("hidden");
+        loadCaseSettings();
+      }
+
+      async function loadCaseSettings() {
+        const request = ++configRequest, caseId = $("configCase").value;
+        configContext = null;
+        $("configForm").classList.add("hidden");
+        $("configPreview").innerHTML = "";
+        $("configStatus").textContent = caseId ? "案件設定を読み込み中…" : "";
+        if (!caseId) return;
+        try {
+          const [ctx, cfg] = await Promise.all([
+            rpc("Checklist_getCaseContext", [caseId, true]), rpc("Checklist_getCaseConfig", [caseId]),
+          ]);
+          if (request !== configRequest) return;
+          configContext = ctx;
+          configFields.forEach((key) => $("cfg_" + key).value = cfg[key] || "");
+          $("configVehicles").innerHTML = "";
+          const vehicles = [...new Set([...(boot.vehicles || []), ...(ctx.vehicles || []).map((v) => v.key), ...(cfg.vehicles || [])])];
+          vehicles.forEach((key) => {
+            const label = document.createElement("label"), input = document.createElement("input"), text = document.createElement("span");
+            input.type = "checkbox"; input.value = key; input.checked = (cfg.vehicles || []).includes(key);
+            text.textContent = key;
+            label.appendChild(input); label.appendChild(text); $("configVehicles").appendChild(label);
+          });
+          $("configEstimate").textContent = ctx.vehiclesSource === "推定" ? "推定: " + (ctx.vehicles || []).map((v) => v.label).join("・")
+            : ctx.vehiclesSource === "搬入出計画" ? "搬入出計画: " + (ctx.vehicles || []).map((v) => v.label).join("・") : "";
+          $("parkingCandidate").disabled = !ctx.parking?.primary || ctx.parking.source === "確定";
+          $("configSave").disabled = false;
+          $("configForm").classList.remove("hidden");
+          $("configStatus").textContent = "空欄の項目と未選択の車両は、自動取得した情報を使います。";
+        } catch (e) {
+          if (request === configRequest) $("configStatus").textContent = "読み込みに失敗しました: " + (e.message || e);
+        }
+      }
+
+      function useParkingCandidate() {
+        const candidate = configContext?.parking?.primary;
+        if (!candidate) return;
+        $("cfg_parkingName").value = candidate.name || "";
+        $("cfg_parkingNote").value = candidate.note || "";
+        $("cfg_parkingUrl").value = candidate.url || "";
+      }
+
+      async function saveCaseSettings(event) {
+        event.preventDefault();
+        const caseId = $("configCase").value, request = configRequest;
+        if (!caseId || !configContext || $("configSave").disabled) return;
+        const cfg = { vehicles: [...$("configVehicles").querySelectorAll("input:checked")].map((input) => input.value) };
+        configFields.forEach((key) => cfg[key] = $("cfg_" + key).value.trim());
+        $("configSave").disabled = true;
+        $("configStatus").textContent = "保存中…";
+        $("configPreview").innerHTML = "";
+        let saved = false;
+        try {
+          await rpc("Checklist_adminSetCaseConfig", [TOKEN, caseId, cfg]);
+          saved = true;
+          if (request !== configRequest) return;
+          const ctx = await rpc("Checklist_getCaseContext", [caseId, true]);
+          if (request !== configRequest) return;
+          configContext = ctx;
+          const preview = await rpc("Checklist_getItems", ["ドライバー", "設営初日", caseId, ctx.vehicles?.[0]?.key || ""]);
+          if (request !== configRequest) return;
+          $("configEstimate").textContent = ctx.vehiclesSource === "推定" ? "推定: " + ctx.vehicles.map((v) => v.label).join("・") : "";
+          $("parkingCandidate").disabled = !ctx.parking?.primary || ctx.parking.source === "確定";
+          const heading = document.createElement("h2"), list = document.createElement("ol");
+          heading.textContent = "スタッフにはこう見えます";
+          preview.items.forEach((item) => { const li = document.createElement("li"); li.textContent = item.title; list.appendChild(li); });
+          $("configPreview").appendChild(heading); $("configPreview").appendChild(list);
+          $("configStatus").textContent = "保存しました（ドライバー・設営初日" + (ctx.vehicles?.[0] ? "・" + ctx.vehicles[0].label : "") + "のプレビュー）";
+        } catch (e) {
+          if (request === configRequest) $("configStatus").textContent = (saved ? "保存済みですがプレビューを取得できませんでした: " : "保存に失敗しました: ") + (e.message || e);
+        } finally { if (request === configRequest) $("configSave").disabled = false; }
+      }
+
+      function loadRush() {
+        call("Checklist_listRush", [$("rushCase").value], (r) => {
+          let options = ["new", "対応中", "出荷済", "到着", "取消"];
+          $("rushRows").innerHTML = "<table><tr><th>案件</th><th>氏名</th><th>アイテム</th><th>数量</th><th>必要時刻</th><th>届け先</th><th>備考</th><th>状態</th><th>送信時刻</th><th>写真</th></tr>" + r.rows.map((x) => `<tr><td>${esc(x.caseName)}${x.editLog ? `<details><summary class="editBadge">✏️編集あり</summary><div class="editLog">${esc(x.editLog)}</div></details>` : ""}</td><td>${esc(x.staffName)} (${esc(x.role)})</td><td>${esc(x.itemName)}</td><td>${esc(x.quantity)}</td><td>${esc(x.neededTime)}</td><td>${esc(x.destination)}</td><td>${esc(x.notes)}</td><td><select data-rush-id="${esc(x.id)}">${options.map((s) => `<option ${s === x.status ? "selected" : ""}>${s}</option>`).join("")}</select></td><td>${esc(x.timestamp)}</td><td>${isWebUrl(x.photoUrl) ? `<a href="${esc(x.photoUrl)}" target="_blank">写真</a>` : ""}</td></tr>`).join("") + "</table>";
+          $("rushRows").querySelectorAll("[data-rush-id]").forEach((select) => { select.onchange = () => call("Checklist_updateRushStatus", [select.dataset.rushId, select.value, "管理画面"], () => loadRush()); });
+        });
+      }
+
+      function isWebUrl(url) {
+        return (function (u) { u = String(u || "").toLowerCase(); return u.indexOf("http:") === 0 || u.indexOf("https:") === 0; })(url);
+      }
+
+      function loadProgress() {
+        call(
+          "Checklist_adminProgressSummary",
+          [TOKEN, $("case").value],
+          (r) => {
+            $("summary").innerHTML =
+              "<table><tr><th>案件</th><th>氏名</th><th>役割/日程</th><th>項目</th><th>状態</th><th>写真</th></tr>" +
+              r.rows
+                .map(
+                  (x) =>
+                    `<tr><td>${esc(x.caseLabel)}</td><td>${esc(x.staffName)}</td><td>${esc(x.role)} / ${esc(x.day)}</td><td>${esc(x.title)}</td><td>${esc(x.status)}</td><td>${x.photoUrls
+                      .filter(isWebUrl)
+                      .map(
+                        (u, i) =>
+                          `<a href="${esc(u)}" target="_blank">写真${i + 1}</a>`,
+                      )
+                      .join(" ")}</td></tr>`,
+                )
+                .join("") +
+              "</table>";
+          },
+        );
+      }
+
+      function esc(s) {
+        let d = document.createElement("div");
+        d.textContent = s || "";
+        return d.innerHTML;
+      }
+      call("Checklist_bootstrap", [], (r) => {
+        boot = r;
+        r.cases.forEach((c) => $("case").add(new Option(c.label, c.caseId)));
+        r.cases.forEach((c) => $("rushCase").add(new Option(c.label, c.caseId)));
+        r.cases.forEach((c) => $("configCase").add(new Option(c.label, c.caseId)));
+        load();
+      });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,10 @@
+✔ 可視ブラウザを起動するツールは必ず runHumanLogin を使う (4259.957297ms)
+✔ 違反検出: 直接起動は違反、runHumanLogin 経由・無関係な headless は違反でない (3.3758ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4442.140997

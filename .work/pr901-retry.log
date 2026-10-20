@@ -1,0 +1,65 @@
+[INTERNAL-RECIPIENT] 台帳を読めないため default 台帳を使用します。
+[INTERNAL-RECIPIENT] 台帳を読めないため default 台帳を使用します。
+[INTERNAL-RECIPIENT] 台帳を読めないため default 台帳を使用します。
+[INTERNAL-RECIPIENT] 台帳を読めないため default 台帳を使用します。
+✔ 社内スタッフへの下書きを拒否し、理由にアドレスを示す (4.6744ms)
+✔ 表示名付きの社内ドメインへの送信を拒否 (0.9261ms)
+✔ 外部顧客への下書きは通す (2.2291ms)
+✔ to が外部でも cc に内部宛があれば拒否 (4.4009ms)
+✔ Drive など対象外は即 pass (0.5958ms)
+✔ 配列、bcc、ネストした宛先オブジェクトを正規化し重複排除する (0.6457ms)
+✔ ドメインは完全一致で照合する (0.4803ms)
+✔ 全対象操作と番号付きアカウントを判定する (3.5014ms)
+✔ guard の対象 tool 名と hook matcher が一致する (1.2684ms)
+✔ ローカル台帳が無ければ default、あればその台帳を使用する (14.3097ms)
+✔ 壊れたJSON・不正な台帳形式は default に戻り実プロセスも落ちない (1298.425701ms)
+✔ stdin→stdout は既存 PreToolUse の deny 契約、pass は無出力 (997.523803ms)
+✔ 既存配布処理は指定 matcher・timeout で登録し、再実行で重複しない (4902.781213ms)
+✔ 既存の古い matcher を重複なしで昇格し、再実行しても変わらない (3794.569309ms)
+✔ gh pr comment の内部ハンドル @メンションを拒否する (2.2892ms)
+✔ 大小無視で、issue/PR本文・レビュー・REST コメントも拒否する (1.5738ms)
+✔ 複数ハンドルのうち内部のものだけを理由に出す (0.7732ms)
+✔ 外部ハンドル・メンション無しは通す (0.4199ms)
+✔ メールアドレス内の @ はメンションとして拾わない (0.4331ms)
+✔ より長い別ハンドルを前方一致で誤検知しない (0.4071ms)
+✔ GitHub の書き込み系以外は判定しない (0.6283ms)
+✔ PowerShell 経由でも同じ判定、対象外ツールと空入力は即 pass (0.3769ms)
+✔ githubHandles を持たない台帳でも落ちずに pass する (0.2588ms)
+✔ default 台帳が githubHandles を持ち、matcher が Bash/PowerShell を含む (0.474ms)
+✔ githubHandles が配列でない台帳は default に戻る (24.042301ms)
+✔ stdin→stdout で gh メンションを deny し、メンション無しは無出力 (1243.776702ms)
+✔ 誤検知防止（executableText・引用符・Heredoc除去）の検証 (0.9108ms)
+✔ getScheduledTaskInfo maps a missing task to null (2.2567ms)
+✔ getScheduledTaskInfo still throws other PowerShell failures (8.6656ms)
+✔ registerHourlyTask uses run-hidden and an idempotent hourly task definition (2.8863ms)
+✖ task enumeration handles unset run dates and daily cycles using mocked PowerShell task APIs (20024.001247ms)
+ℹ tests 31
+ℹ suites 0
+ℹ pass 30
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 33195.222177
+
+✖ failing tests:
+
+test at tools/lib/scheduled-task.test.mjs:31:1
+✖ task enumeration handles unset run dates and daily cycles using mocked PowerShell task APIs (20024.001247ms)
+  Error: spawnSync /mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe ETIMEDOUT
+      at Object.spawnSync (node:internal/child_process:1160:20)
+      at spawnSync (node:child_process:928:24)
+      at spawnImpl (file:///mnt/c/Users/uers/.claude/nightly-repo/.work/wt-pr901/tools/lib/scheduled-task.test.mjs:35:70)
+      at run (file:///mnt/c/Users/uers/.claude/nightly-repo/.work/wt-pr901/tools/lib/scheduled-task.mjs:4:18)
+      at listScheduledTasks (file:///mnt/c/Users/uers/.claude/nightly-repo/.work/wt-pr901/tools/lib/scheduled-task.mjs:49:18)
+      at TestContext.<anonymous> (file:///mnt/c/Users/uers/.claude/nightly-repo/.work/wt-pr901/tools/lib/scheduled-task.test.mjs:35:16)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19) {
+    errno: -110,
+    code: 'ETIMEDOUT',
+    syscall: 'spawnSync /mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe',
+    path: '/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe',
+    spawnargs: [ '-NoProfile', '-NonInteractive', '-EncodedCommand', 'ZgB1AG4AYwB0AGkAbwBuACAARwBlAHQALQBTAGMAaABlAGQAdQBsAGUAZABUAGEAcwBrACAAewAgAFsAcABzAGMAdQBzAHQAbwBtAG8AYgBqAGUAYwB0AF0AQAB7AFQAYQBzAGsATgBhAG0AZQA9ACcATwByAGcAaQBhAHMAdABOAGUAdgBlAHIAJwA7AFQAYQBzAGsAUABhAHQAaAA9ACcAXAAnADsAUwB0AGEAdABlAD0AJwBSAGUAYQBkAHkAJwA7AFQAcgBpAGcAZwBlAHIAcwA9AEAAKABbAHAAcwBjAHUAcwB0AG8AbQBvAGIAagBlAGMAdABdAEAAewBEAGEAeQBzAEkAbgB0AGUAcgB2AGEAbAA9ADEAfQApAH0AIAB9AAoAZgB1AG4AYwB0AGkAbwBuACAARwBlAHQALQBTAGMAaABlAGQAdQBsAGUAZABUAGEAcwBrAEkAbgBmAG8AIAB7ACAAcABhAHIAYQBtACgAWwBQAGEAcgBhAG0AZQB0AGUAcgAoAFYAYQBsAHUAZQBGAHIAbwBtAFAAaQBwAGUAbABpAG4AZQA9ACQAdAByAHUAZQApAF0AJAB0AGEAcwBrACkAIABwAHIAbwBjAGUAcwBzACAAewAgAFsAcABzAGMAdQBzAHQAbwBtAG8AYgBqAGUAYwB0AF0AQAB7AEwAYQBzAHQAVABhAHMAawBSAGUAcwB1AGwAdAA9ADIANgA3ADAAMQAxADsATABhAHMAdABSAHUAbgBUAGkAbQBlAD0AJABuAHUAbABsADsATgBlAHgAdABSAHUAbgBUAGkAbQBlAD0AJABuAHUAbABsAH0AIAB9ACAAfQAKAFsAQwBvAG4AcwBvAGwAZQBdADoAOgBPAHUAdABwAHUAdABFAG4AYwBvAGQAaQBuAGcAPQBbAFQAZQB4AHQALgBFAG4AYwBvAGQAaQBuAGcAXQA6ADoAVQBUAEYAOAA7ACQARQByAHIAbwByAEEAYwB0AGkAbwBuAFAAcgBlAGYAZQByAGUAbgBjAGUAPQAnAFMAdABvAHAAJwA7AEAAKABHAGUAdAAtAFMAYwBoAGUAZAB1AGwAZQBkAFQAYQBzAGsAIAB8ACAAVwBoAGUAcgBlAC0ATwBiAGoAZQBjAHQAIAB7ACAAJABfAC4AVABhAHMAawBOAGEAbQBlACAALQBsAGkAawBlACAAJwBPAHIAZwBpAGEAcwB0ACoAJwAgAC0AbwByACAAJABfAC4AVABhAHMAawBOAGEAbQBlACAALQBsAGkAawBlACAAJwBDAGwAYQB1AGQAZQAqACcAIAB9ACAAfAAgAEYAbwByAEUAYQBjAGgALQBPAGIAagBlAGMAdAAgAHsACgAgACAAIAAgACQAdAA9ACQAXwA7ACQAaQA9ACQAdAB8AEcAZQB0AC0AUwBjAGgAZQBkAHUAbABlAGQAVABhAHMAawBJAG4AZgBvAAoAIAAgACAAIAAkAGwAYQBzAHQAPQBpAGYAKAAkAGkALgBMAGEAcwB0AFIAdQBuAFQAaQBtAGUAKQB7ACQAaQAuAEwAYQBzAHQAUgB1AG4AVABpAG0AZQAuAFQAbwBVAG4AaQB2AGUAcgBzAGEAbABUAGkAbQBlACgAKQAuAFQAbwBTAHQAcgBpAG4AZwAoACcAbwAnACkAfQBlAGwAcwBlAHsAJABuAHUAbABsAH0ACgAgACAAIAAgACQAbgBlAHgAdAA9AGkAZgAoACQAaQAuAE4AZQB4AHQAUgB1AG4AVABpAG0AZQApAHsAJABpAC4ATgBlAHgAdABSAHUAbgBUAGkAbQBlAC4AVABvAFUAbgBpAHYAZQByAHMAYQBsAFQAaQBtAGUAKAApAC4AVABvAFMAdAByAGkAbgBnACgAJwBvACcAKQB9AGUAbABzAGUAewAkAG4AdQBsAGwAfQAKACAAIAAgACAAJABjAHkAYwBsAGUAcwA9AEAAKAAkAHQALgBUAHIAaQBnAGcAZQByAHMAIAB8ACAARgBvAHIARQBhAGMAaAAtAE8AYgBqAGUAYwB0ACAAewAgAGkAZgAgACgAJABfAC4AUgBlAHAAZQB0AGkAdABpAG8AbgAuAEkAbgB0AGUAcgB2AGEAbAApACAAewAgAFsAWABtAGwALgBYAG0AbABDAG8AbgB2AGUAcgB0AF0AOgA6AFQAbwBUAGkAbQBlAFMAcABhAG4AKAAkAF8ALgBSAGUAcABlAHQAaQB0AGkAbwBuAC4ASQBuAHQAZQByAHYAYQBsACkALgBUAG8AdABhAGwATQBpAG4AdQB0AGUAcwAgAH0AIABlAGwAcwBlAGkAZgAgACgAJABfAC4ARABhAHkAcwBJAG4AdABlAHIAdgBhAGwAKQAgAHsAIAAkAF8ALgBEAGEAeQBzAEkAbgB0AGUAcgB2AGEAbAAgACoAIAAxADQANAAwACAAfQAgAGUAbABzAGUAaQBmACAAKAAkAF8ALgBXAGUAZQBrAHMASQBuAHQAZQByAHYAYQBsACkAIAB7ACAAJABfAC4AVwBlAGUAawBzAEkAbgB0AGUAcgB2AGEAbAAgACoAIAAxADAAMAA4ADAAIAB9ACAAfQApAAoAIAAgACAAIABbAHAAcwBjAHUAcwB0AG8AbQBvAGIAagBlAGMAdABdAEAAewB0AGEAcwBrAE4AYQBtAGUAPQAoACQAdAAuAFQAYQBzAGsAUABhAHQAaAArACQAdAAuAFQAYQBzAGsATgBhAG0AZQApADsAcwB0AGEAdAB1AHMAPQAkAGkALgBMAGEAcwB0AFQAYQBzAGsAUgBlAHMAdQBsAHQAOwB0AD0AJABsAGEAcwB0ADsAbgBlAHgAdABSAHUAbgBUAGkAbQBlAD0AJABuAGUAeAB0ADsAbgBlAHYAZQByAFIAdQBuAD0AKAAhACQAaQAuAEwAYQBzAHQAUgB1AG4AVABpAG0AZQAgAC0AbwByACAAJABpAC4ATABhAHMAdABSAHUAbgBUAGkAbQBlAC4AWQBlAGEAcgAgAC0AbABlACAAMQA5ADkAOQApADsAcgB1AG4AbgBpAG4AZwA9ACgAJAB0AC4AUwB0AGEAdABlACAALQBlAHEAIAAnAFIAdQBuAG4AaQBuAGcAJwApADsAcwB0AGEAdABlAD0AWwBzAHQAcgBpAG4AZwBdACQAdAAuAFMAdABhAHQAZQA7AGMAeQBjAGwAZQBNAGkAbgB1AHQAZQBzAD0AKAAkAGMAeQBjAGwAZQBzAHwATQBlAGEAcwB1AHIAZQAtAE8AYgBqAGUAYwB0ACAALQBNAGkAbgBpAG0AdQBtACkALgBNAGkAbgBpAG0AdQBtADsAbABvAGMAYQB0AGkAbwBuAD0AKAAnAHQAYQBzAGsAcwBjAGgAZAAuAG0AcwBjADoAIAAnACsAJAB0AC4AVABhAHMAawBOAGEAbQBlACkAfQAKACAAIAB9ACkAfABDAG8AbgB2AGUAcgB0AFQAbwAtAEoAcwBvAG4AIAAtAEMAbwBtAHAAcgBlAHMAcwA=' ]
+  }

@@ -1,0 +1,94 @@
+Refreshing checks status every 30 seconds. Press Ctrl+C to quit.
+
+clean-install	pending	0	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186983/job/118349491167	
+test	pending	0	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186995/job/118349491176	
+enable-auto-merge	pass	5s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337187409/job/118349492388	
+test	pending	0	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186981/job/118349491070	
+test-posix	pending	0	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186995/job/118349491587	
+Refreshing checks status every 30 seconds. Press Ctrl+C to quit.
+
+clean-install	pending	0	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186983/job/118349491167	
+test	pending	0	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186995/job/118349491176	
+enable-auto-merge	pass	5s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337187409/job/118349492388	
+test	pending	0	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186981/job/118349491070	
+test-posix	pending	0	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186995/job/118349491587	
+Refreshing checks status every 30 seconds. Press Ctrl+C to quit.
+
+clean-install	pending	0	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186983/job/118349491167	
+test	pending	0	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186995/job/118349491176	
+enable-auto-merge	pass	5s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337187409/job/118349492388	
+test-posix	pass	1m15s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186995/job/118349491587	
+test	pending	0	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186981/job/118349491070	
+Refreshing checks status every 30 seconds. Press Ctrl+C to quit.
+
+clean-install	pending	0	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186983/job/118349491167	
+test	pending	0	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186995/job/118349491176	
+enable-auto-merge	pass	5s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337187409/job/118349492388	
+test-posix	pass	1m15s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186995/job/118349491587	
+test	pending	0	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186981/job/118349491070	
+Refreshing checks status every 30 seconds. Press Ctrl+C to quit.
+
+clean-install	pending	0	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186983/job/118349491167	
+test	pending	0	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186995/job/118349491176	
+enable-auto-merge	pass	5s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337187409/job/118349492388	
+test	pass	2m6s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186981/job/118349491070	
+test-posix	pass	1m15s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186995/job/118349491587	
+Refreshing checks status every 30 seconds. Press Ctrl+C to quit.
+
+test	pending	0	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186995/job/118349491176	
+clean-install	pass	2m34s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186983/job/118349491167	
+enable-auto-merge	pass	5s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337187409/job/118349492388	
+test	pass	2m6s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186981/job/118349491070	
+test-posix	pass	1m15s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186995/job/118349491587	
+Refreshing checks status every 30 seconds. Press Ctrl+C to quit.
+
+test	pending	0	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186995/job/118349491176	
+clean-install	pass	2m34s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186983/job/118349491167	
+enable-auto-merge	pass	5s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337187409/job/118349492388	
+test	pass	2m6s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186981/job/118349491070	
+test-posix	pass	1m15s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186995/job/118349491587	
+Refreshing checks status every 30 seconds. Press Ctrl+C to quit.
+
+test	pending	0	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186995/job/118349491176	
+clean-install	pass	2m34s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186983/job/118349491167	
+enable-auto-merge	pass	5s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337187409/job/118349492388	
+test	pass	2m6s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186981/job/118349491070	
+test-posix	pass	1m15s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186995/job/118349491587	
+Refreshing checks status every 30 seconds. Press Ctrl+C to quit.
+
+test	pending	0	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186995/job/118349491176	
+clean-install	pass	2m34s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186983/job/118349491167	
+enable-auto-merge	pass	5s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337187409/job/118349492388	
+test	pass	2m6s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186981/job/118349491070	
+test-posix	pass	1m15s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186995/job/118349491587	
+Refreshing checks status every 30 seconds. Press Ctrl+C to quit.
+
+test	pending	0	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186995/job/118349491176	
+clean-install	pass	2m34s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186983/job/118349491167	
+enable-auto-merge	pass	5s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337187409/job/118349492388	
+test	pass	2m6s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186981/job/118349491070	
+test-posix	pass	1m15s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186995/job/118349491587	
+Refreshing checks status every 30 seconds. Press Ctrl+C to quit.
+
+test	pending	0	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186995/job/118349491176	
+clean-install	pass	2m34s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186983/job/118349491167	
+enable-auto-merge	pass	5s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337187409/job/118349492388	
+test	pass	2m6s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186981/job/118349491070	
+test-posix	pass	1m15s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186995/job/118349491587	
+Refreshing checks status every 30 seconds. Press Ctrl+C to quit.
+
+test	pending	0	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186995/job/118349491176	
+clean-install	pass	2m34s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186983/job/118349491167	
+enable-auto-merge	pass	5s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337187409/job/118349492388	
+test	pass	2m6s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186981/job/118349491070	
+test-posix	pass	1m15s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186995/job/118349491587	
+clean-install	pass	2m34s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186983/job/118349491167	
+enable-auto-merge	pass	5s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337187409/job/118349492388	
+test	pass	2m6s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186981/job/118349491070	
+test	pass	6m18s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186995/job/118349491176	
+test-posix	pass	1m15s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186995/job/118349491587	
+clean-install	pass	2m34s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186983/job/118349491167	
+enable-auto-merge	pass	5s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337187409/job/118349492388	
+test	pass	2m6s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186981/job/118349491070	
+test	pass	6m18s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186995/job/118349491176	
+test-posix	pass	1m15s	https://github.com/kimkon1011/orgiast-claude-rules/actions/runs/39337186995/job/118349491587	

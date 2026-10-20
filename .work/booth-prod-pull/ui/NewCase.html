@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    body { font-family: -apple-system, "Segoe UI", "Noto Sans JP", sans-serif; margin: 0; padding: 16px; font-size: 13px; color: #202124; }
+    h2 { font-size: 15px; margin: 0 0 12px; }
+    label { display: block; font-size: 12px; color: #5f6368; margin-top: 10px; }
+    input, select { width: 100%; padding: 6px 8px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; }
+    .row { display: flex; gap: 8px; }
+    .row > div { flex: 1; }
+    button { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; margin-top: 16px; }
+    button.primary { background: #1a73e8; color: #fff; }
+    button.secondary { background: #fff; color: #5f6368; border: 1px solid #dadce0; }
+    .status { margin-top: 12px; padding: 8px; border-radius: 4px; font-size: 12px; white-space: pre-wrap; }
+    .status.ok { background: #e6f4ea; color: #1e8e3e; }
+    .status.err { background: #fce8e6; color: #c5221f; }
+    .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid #1a73e8; border-top: 2px solid transparent; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 6px; vertical-align: middle; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <h2>新規案件を作成</h2>
+  <label>クライアント名 <span style="color:#c5221f">*</span></label>
+  <input id="clientName" placeholder="例: ◯◯製薬株式会社">
+  <label>案件名 <span style="color:#c5221f">*</span></label>
+  <input id="caseName" placeholder="例: 第◯回学会 ブース出展">
+  <div class="row">
+    <div>
+      <label>出展開始日</label>
+      <input id="startDate" type="date">
+    </div>
+    <div>
+      <label>出展終了日</label>
+      <input id="endDate" type="date">
+    </div>
+  </div>
+  <label>次回打合せ日時（日本時間）</label>
+  <input id="nextMeetingAt" type="datetime-local">
+  <label>顧客メール</label>
+  <input id="clientEmail" type="email" placeholder="空欄の場合は顧客情報から取得">
+  <label>ブースサイズ</label>
+  <input id="boothSize" placeholder="例: 3m × 3m / 2小間">
+
+
+  <label>本番日付は仮か？確定か？</label><select id="dateStatus"><option>仮</option><option>確定</option></select>
+  <label>イベント種類</label><select id="eventType"><option value="">選択してください</option><option>学会</option><option>上場の鐘</option><option>イベント</option><option>reブース</option></select>
+  <label>制作Pのメールアドレス（確定MTGの日程メール送付先）</label><input id="producerEmail" type="email" placeholder="producer@orgiast.jp">
+  <label>実施計画書URL（あれば）</label><input id="zissiUrl" type="url">
+  <details><summary>自動取得できない項目・上書き（任意）</summary>
+  <label>搬入日（到着指定日は1日前）</label><input id="moveInDate" type="date">
+  <label>アイテムリストURL（自動取得できない場合）</label><input id="itemListUrl" type="url">
+  <label>撤去日</label><input id="removalDate" type="date">
+  <label>地域（都道府県）</label><input id="area">
+  <label>会場・住所・小間番号</label><input id="venue">
+  <label>制作P（フルネーム）</label><input id="producer">
+  <label>制作D（フルネーム）</label><input id="designer">
+  <label>会場住所（上書き）</label><input id="venueAddress">
+  <label>撤去時刻（上書き）</label><input id="removalTime" type="time">
+  </details>
+
+  <div style="display:flex; justify-content:flex-end; gap:8px;">
+    <button class="secondary" onclick="google.script.host.close()">キャンセル</button>
+    <button class="primary" id="submit" onclick="submit()">作成</button>
+  </div>
+
+  <div id="status"></div>
+
+  <script>
+    function submit() {
+      const payload = {
+        clientName: document.getElementById('clientName').value.trim(),
+        caseName: document.getElementById('caseName').value.trim(),
+        startDate: document.getElementById('startDate').value,
+        endDate: document.getElementById('endDate').value,
+        boothSize: document.getElementById('boothSize').value.trim()
+      };
+      ['nextMeetingAt', 'clientEmail', 'dateStatus', 'eventType', 'moveInDate', 'producerEmail', 'itemListUrl', 'removalDate', 'area', 'venue', 'producer', 'designer', 'zissiUrl', 'venueAddress', 'removalTime'].forEach(function (key) { payload[key] = document.getElementById(key).value.trim(); });
+      payload.eventName = payload.caseName;
+      payload.period = payload.startDate + (payload.endDate ? '~' + payload.endDate : '');
+      payload.setupDate = payload.moveInDate;
+      if (!payload.clientName || !payload.caseName) {
+        setStatus('クライアント名と案件名は必須です。', 'err');
+        return;
+      }
+      document.getElementById('submit').disabled = true;
+      setStatus('<span class="spinner"></span>作成中…', 'ok');
+      google.script.run
+        .withSuccessHandler(function(res) {
+          if (res.meeting && !res.meeting.ok) {
+            setStatus('案件 ' + res.caseId + ' は作成済みです。打合せ処理に失敗しました。案件サイドバーで確認してください。\n' + escapeText(JSON.stringify(res.meeting.errors)), 'err');
+            return;
+          }
+          setStatus('案件 ' + res.caseId + ' を作成しました。\n2秒後に閉じます。', 'ok');
+          setTimeout(() => google.script.host.close(), 2000);
+        })
+        .withFailureHandler(function(e) {
+          document.getElementById('submit').disabled = false;
+          setStatus('エラー: ' + (e.message || e), 'err');
+        })
+        .NewCase_register(payload);
+    }
+    function escapeText(value) {
+      return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+    function setStatus(html, kind) {
+      const s = document.getElementById('status');
+      s.innerHTML = html;
+      s.className = 'status ' + (kind || '');
+    }
+  </script>
+</body>
+</html>

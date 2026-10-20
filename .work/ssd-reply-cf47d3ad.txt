@@ -1,0 +1,11 @@
+【SSD 調査結果（kim-PC で実行・読み取りコマンドのみ）】
+PC名: DESKTOP-2D0R4LI
+
+型番 | 種類 | 接続 | 形状 | 容量 | 健康状態 | 使用時間 | 摩耗% | OSが入っているか
+CT500P2SSD8（Crucial P2、シリアル末尾 0007） | SSD | NVMe | M.2 | 500GB（500,107,862,016 B） | Healthy | 未取得 | 未取得 | はい（Disk 1 = C:）
+SAMSUNG HD204UI（シリアル末尾 5701） | HDD | SATA | 3.5インチ（型番から判断: SpinPoint F4EG 2TB） | 2TB（2,000,398,934,016 B） | Healthy | 未取得 | 未取得 | いいえ（Disk 0）
+
+補足:
+- 使用時間と摩耗%: Get-StorageReliabilityCounter が「クライアントが CIM リソースへのアクセスを取得できませんでした」で失敗したため未取得です（管理者権限が必要）。
+- (Get-Partition -DriveLetter C).DiskNumber の結果は 1 です。
+- 結論: このPCには R640 の 2.5インチ SATA ベイに流用できる SSD がありません。SSD は M.2 NVMe の OS ディスクだけで、もう1台は 3.5インチ HDD です。

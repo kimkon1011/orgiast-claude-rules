@@ -1,0 +1,3 @@
+DESKTOP-2D0R4LI: LINE=YES TOOL=YES
+
+証拠: ~/.claude/CLAUDE.md に「社内メンバーへの連絡は Discord DM で送る」行 1件一致 / ~/orgiast-claude-rules/tools/discord-dm.mjs 存在。両方揃っていたため onboarding-sync は未実行（不要）。

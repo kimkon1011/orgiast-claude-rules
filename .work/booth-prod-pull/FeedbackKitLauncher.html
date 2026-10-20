@@ -1,0 +1,6 @@
+<button id="feedbackKitOpen" type="button" style="position:fixed;right:12px;bottom:12px;z-index:2147483000;padding:12px;border-radius:24px">🐛 不具合・要望</button>
+<dialog id="feedbackKitDialog" style="box-sizing:border-box;width:calc(100% - 24px);max-width:500px;padding:8px;border:0;border-radius:12px">
+<button type="button" onclick="document.getElementById('feedbackKitDialog').close()">閉じる</button>
+<iframe title="不具合・要望フォーム" data-feedback-kit-frame style="width:100%;height:75vh;border:0"></iframe></dialog>
+<input type="hidden" id="feedbackKitHtml" value="<?= feedbackHtml ?>">
+<script>(function(){var html=document.getElementById('feedbackKitHtml').value;document.querySelectorAll('[data-feedback-kit-frame]').forEach(function(f){f.srcdoc='<script>var google=parent.google;<'+ '/script>'+html;});document.getElementById('feedbackKitOpen').onclick=function(){document.getElementById('feedbackKitDialog').showModal();};})();</script>

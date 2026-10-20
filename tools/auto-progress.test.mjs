@@ -385,6 +385,22 @@ test('digest routes each promise only to its owner', async () => {
   assert.match(calls[1].text, /見積の確認/); assert.doesNotMatch(calls[1].text, /資料の確認/);
 });
 
+test('digest: owner 未記録の行は自PCの持ち主へ送り、owner 空で notifyOwner を呼ばない', async () => {
+  const now = Date.now(), calls = [];
+  const rows = [
+    { sessionId: 'legacy-1', status: 'waiting_user', promise: '旧台帳の約束', ts: new Date(now - H).toISOString() },
+    { owner: 'b@example.com', sessionId: 'session-b', status: 'waiting_user', promise: '見積の確認', ts: new Date(now - H).toISOString() },
+  ];
+  const result = await digest({ home: tmp(), now, io: {
+    label: 'PC', readLedger: () => rows, readState: () => ({}), writeState() {}, localOwner: 'kim@example.com',
+    notifyOwner: async (owner, text) => { calls.push({ owner, text }); return { delivered: 'dm' }; },
+  } });
+  assert.equal(result.sent, true);
+  assert.deepEqual(calls.map(c => c.owner).sort(), ['b@example.com', 'kim@example.com']);
+  assert.ok(calls.every(c => c.owner), 'owner 空で notifyOwner を呼んではいけない（本文に「宛先: 不明（DM 未解決）」が付く）');
+  assert.match(calls.find(c => c.owner === 'kim@example.com').text, /旧台帳の約束/);
+});
+
 test('watch retries undelivered needs_user notification without waiting 24 hours', async () => {
   const home = tmp(), now = Date.now(); let attempts = 0;
   seed(home, [{ sessionId: 'waiting', owner: 'a', status: 'open', promise: 'p', cwd: home, ts: new Date(now - 3 * H).toISOString() }]);

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { isEntry } from './is-entry.mjs';
-import { notifyOwner } from './notify-owner.mjs';
+import { notifyOwner, resolveOwner } from './notify-owner.mjs';
 import { ledgerFile, readLedger, latestOpenPromises, rowKey, isUnattendedRow, isNoopPromise, MAX_RESUMES } from './auto-progress-ledger.mjs';
 export { isUnattendedRow } from './auto-progress-ledger.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
@@ -107,6 +107,9 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   const all = selectRows((io.readLedger ?? readLedger)(ledgerFile(home)), now, since);
   const lastVerdicts = { ...(state.lastVerdicts || {}) }, lastKim = { ...(state.lastKim || {}) };
   const lastNeedsDm = { ...(state.lastNeedsDm || {}) };
+  // owner 未記録の旧行は自PCの持ち主へ。空のまま notifyOwner に渡すと本文に「宛先: 不明（DM 未解決）」が付く（2026-10-20 実測）。
+  const localOwner = io.localOwner ?? (() => { try { return resolveOwner({ home }); } catch { return ''; } })();
+  const ownerOf = row => row.owner || localOwner || '';
   const changed = [];
   let observed = false;
   for (const row of all) {
@@ -123,14 +126,14 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   }
   const groups = new Map();
   for (const row of changed.slice(0, MAX_ITEMS)) {
-    const owner = row.owner || '';
+    const owner = ownerOf(row);
     if (!groups.has(owner)) groups.set(owner, []);
     groups.get(owner).push(row);
   }
   const deliveries = [...groups].map(([owner, candidates]) => {
-    const owned = all.filter(row => (row.owner || '') === owner);
+    const owned = all.filter(row => ownerOf(row) === owner);
     const options = { allRows: owned.filter(row => !isUnattendedRow(row, home)), unattended: owned.filter(row => isUnattendedRow(row, home)).length };
-    const total = changed.filter(row => (row.owner || '') === owner).length;
+    const total = changed.filter(row => ownerOf(row) === owner).length;
     let rows = candidates;
     let message;
     do {

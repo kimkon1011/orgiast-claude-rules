@@ -310,6 +310,7 @@ export const COMMAND_LOCK_RETRIES = 5;
 export const COMMAND_LOCK_DELAY_MS = 200;
 export const LOCK_BUSY_EXIT = 6;
 export const ACK_BATCH_LIMIT = 100;
+export const SENT_STATUS_MAX_LOOKUP_FAILURES = 5;
 export const CAPABILITY_BACKOFF_MS = 3600000;
 export const SERVER_MAX_ATTEMPTS = 5;
 export const INTERRUPTED_PROMPT_MS = 35 * 60000;
@@ -554,11 +555,25 @@ export async function refreshSentStatus({ home, request, stderr = console.error 
   const cache = readJson(file, {});
   const ids = [...new Set(lines.flatMap(line => { try { const r = JSON.parse(line); return ['sent', 'send-attempt'].includes(r.action) && r.id ? [r.id] : []; } catch { return []; } }))];
   const deadline = Date.now() + 10000;
-  for (const id of ids.reverse().filter(id => !['done', 'expired'].includes(cache[id]?.status)).sort((a, b) => (cache[a]?.checkedAt || 0) - (cache[b]?.checkedAt || 0)).slice(0, 5)) {
+  // 送信前に失敗した send-attempt のように、サーバーに一度も現れない id は
+  // 毎回 mail-get が失敗して「再試行待ち」が永久に出続ける。連続失敗が上限に達したら
+  // 自動取得を打ち切る（--sent-status <id> の明示照会は今までどおり動く）。
+  const abandoned = id => (cache[id]?.lookupFailures || 0) >= SENT_STATUS_MAX_LOOKUP_FAILURES;
+  for (const id of ids.reverse().filter(id => !['done', 'expired'].includes(cache[id]?.status) && !abandoned(id)).sort((a, b) => (cache[a]?.checkedAt || 0) - (cache[b]?.checkedAt || 0)).slice(0, 5)) {
     if (Date.now() >= deadline) break;
-    cache[id] = { ...cache[id], checkedAt: Date.now() };
-    try { const response = checked(await request('mail-get', { id }, Math.min(3000, deadline - Date.now()))); if (response.mail) cache[id] = { ...response.mail, checkedAt: Date.now() }; }
-    catch { stderr('fleet-mail: 送信状態取得再試行待ち=1'); }
+    const previous = cache[id] || {};
+    cache[id] = { ...previous, checkedAt: Date.now() };
+    const failed = () => {
+      const lookupFailures = (previous.lookupFailures || 0) + 1;
+      cache[id] = { ...cache[id], lookupFailures };
+      if (lookupFailures >= SENT_STATUS_MAX_LOOKUP_FAILURES) stderr(`fleet-mail: 送信状態を取得できないため自動取得を打ち切り=1 (${id})`);
+      else stderr('fleet-mail: 送信状態取得再試行待ち=1');
+    };
+    try {
+      const response = checked(await request('mail-get', { id }, Math.min(3000, deadline - Date.now())));
+      if (response.mail) cache[id] = { ...response.mail, checkedAt: Date.now() };
+      else failed();
+    } catch { failed(); }
   }
   writeJson(file, cache);
 }

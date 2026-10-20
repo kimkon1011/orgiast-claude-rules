@@ -1185,7 +1185,7 @@ test('802 failed mail accepts interactive reply as idempotent note and closes lo
   assert.equal(f.read(mail().id).status, 'done');
 });
 
-import { refreshSentStatus, stripClaudeWarnings } from './fleet-mail.mjs';
+import { SENT_STATUS_MAX_LOOKUP_FAILURES, refreshSentStatus, stripClaudeWarnings } from './fleet-mail.mjs';
 test('802 sender poll caches failure reason for the offline hook', async t => {
   const f = fixture(t);
   fs.writeFileSync(path.join(f.dir, 'fleet-mail-sent.jsonl'), JSON.stringify({ action: 'sent', id: 'mail-outbound' }) + '\n');
@@ -1195,6 +1195,32 @@ test('802 sender poll caches failure reason for the offline hook', async t => {
   } });
   const cached = JSON.parse(fs.readFileSync(path.join(f.dir, 'fleet-mail-sent-status.json')));
   assert.equal(cached['mail-outbound'].failReason, 'timeout');
+});
+test('821 sent status stops auto-polling an id the server never returns', async t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.dir, 'fleet-mail-sent.jsonl'), JSON.stringify({ action: 'send-attempt', id: 'mail-never-sent' }) + '\n');
+  let calls = 0; const messages = [];
+  const request = async () => { calls++; throw new Error('timeout'); };
+  for (let i = 0; i < SENT_STATUS_MAX_LOOKUP_FAILURES; i++) await refreshSentStatus({ home: f.home, request, stderr: m => messages.push(m) });
+  assert.equal(calls, SENT_STATUS_MAX_LOOKUP_FAILURES);
+  assert.equal(messages.filter(m => /再試行待ち/.test(m)).length, SENT_STATUS_MAX_LOOKUP_FAILURES - 1);
+  assert.equal(messages.filter(m => /自動取得を打ち切り/.test(m)).length, 1);
+  await refreshSentStatus({ home: f.home, request, stderr: m => messages.push(m) });
+  assert.equal(calls, SENT_STATUS_MAX_LOOKUP_FAILURES, '打ち切り後は mail-get を呼ばない');
+});
+test('821 sent status counts an empty mail response as a lookup failure and resets after success', async t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.dir, 'fleet-mail-sent.jsonl'), JSON.stringify({ action: 'send-attempt', id: 'mail-late' }) + '\n');
+  let mail = null;
+  const request = async (kind, payload) => ({ ok: true, mail });
+  await refreshSentStatus({ home: f.home, request, stderr: () => {} });
+  let cached = JSON.parse(fs.readFileSync(path.join(f.dir, 'fleet-mail-sent-status.json')));
+  assert.equal(cached['mail-late'].lookupFailures, 1);
+  mail = { id: 'mail-late', status: 'delivered' };
+  await refreshSentStatus({ home: f.home, request, stderr: () => {} });
+  cached = JSON.parse(fs.readFileSync(path.join(f.dir, 'fleet-mail-sent-status.json')));
+  assert.equal(cached['mail-late'].status, 'delivered');
+  assert.equal(cached['mail-late'].lookupFailures, undefined);
 });
 test('802 warning stripping keeps real answers and removes known configuration lines', () => {
   assert.equal(stripClaudeWarnings('Permission allow rule (settings.json): warning\r\nWarning: Invalid configuration entry\nanswer\nUnknown permission rule'), 'answer');

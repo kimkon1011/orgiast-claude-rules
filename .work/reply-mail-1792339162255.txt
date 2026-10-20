@@ -1,0 +1,21 @@
+```
+HOST=DESKTOP-2D0R4LI
+SYNC_EXIT=0
+SYNC_TAIL<<EOF
+[onboarding-sync] git pull は通ったが main へ未到達(329コミット遅れ)。zip で更新します
+fatal: path 'tools/routing-table.json' exists on disk, but not in '7468606bdadcad0ccd6a91f442a99040a9807c6c'
+[onboarding-sync] zip で更新しました (理由: git pull は通ったが main へ未到達(329コミット遅れ)) / 人の変更を保護: 20件 / 前回の自分の出力なので更新: 728件
+[onboarding-sync] 旧配布版と一致したため更新 2件
+[onboarding-sync] 保護のため未更新 20件（decisions/README.md / fleet-pc-map.json / scripts/drive-hub-sync.mjs / 他17件）→ 該当セッションが commit するまで配布が届きません
+[onboarding-sync] updated repository tools/rules/skills
+EOF
+USERPROFILE=C:\Users\uers
+PATH_CHECK orgiast-claude-rules=True tools=True claude-md=True
+NODE=v24.14.1
+WHERE_NODE=C:\Program Files\nodejs\node.exe
+```
+
+補足（kim-PC 側の実測・比較用）:
+- 上記は kim-PC（DESKTOP-2D0R4LI）での結果。kim-PC では tools/discord-dm.mjs=True、~/.claude/CLAUDE.md に discord-dm 行あり（1件）。
+- CLAUDE.md 先頭5行: "# User-global preferences (kim@orgiast.jp)" / 空行 / "ユーザーグローバルの恒久ルール集。…" / 空行 / "---"
+- 注目点: kim-PC でも ~/orgiast-claude-rules の git は main から 329 コミット遅れで、git pull 後に zip フォールバックで更新している（routing-table.json の checkout 衝突あり）。作業用011 側で同じ出力が出ない場合、zip フォールバック自体が失敗/未発動の可能性が高い。作業用011 側でも同じ 1〜4 を取って本文を比較してください（このメールは作業用011 宛ての手順が kim-PC に届いた形）。

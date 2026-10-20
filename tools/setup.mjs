@@ -90,6 +90,16 @@ function check(item) {
     }
     if (item.type === 'scheduled-task') {
       if (typeof spec.ifPresent === 'string' && !fs.existsSync(resolveHome(spec.ifPresent))) return null;
+      // 登録側(.ps1)が env のフラグでしか作らないタスクは、そのフラグが無い PC で永久に NG になる。
+      // ifEnv を書いた項目はフラグ未設定を NOTICE として扱い、設定済みの PC だけで登録を検査する。
+      if (spec.ifEnv) {
+        let raw = '';
+        try { raw = fs.readFileSync(resolveHome(spec.ifEnv.path), 'utf8'); } catch (error) {
+          if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null;
+          throw error;
+        }
+        if (!new RegExp(spec.ifEnv.regex).test(raw)) return null;
+      }
       if (spec.hubMode && fleetHubNeedsConfiguration({ home })) return false;
       if (spec.migrationMarker && !fs.existsSync(resolveHome(spec.migrationMarker))) return false;
       if (process.platform !== 'win32') return false;

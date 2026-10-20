@@ -191,3 +191,14 @@ test('内部 ID をアカウントと認めず、人が分かるメール/ラベ
   }
   assert.match(formatReason([url]), /アカウントは人が分かるメール\/ラベルで書く/);
 });
+
+test('差し戻し文の書式は URL の直後に文字を続けない（2026-10-18 実害）', async () => {
+  const { findBrokenRawUrl } = await import('./url-format-guard.mjs');
+  const pr = 'https://github.com/kimkon1011/orgiast-claude-rules/pull/864';
+  const reason = formatReason([pr]);
+  assert.doesNotMatch(reason, /<URL>（/);
+  assert.match(reason, /次の行に URL だけを置く/);
+  const answer = `**kimkon1011** で開いてください。\n${pr}`;
+  assert.deepEqual(judge(answer).missing, []);
+  assert.equal(findBrokenRawUrl(answer).decision, 'pass');
+});

@@ -155,7 +155,7 @@ effortLevel を medium/high、model を既定監督モデルに戻す。
 
 ## url-account-gate
 
-Workspace の URL は authuser=開く人のメール を付け、本文の同じ行か直前に「<同じメール> で開いてください」と書く。自分宛は userEmail、他人宛は共有済みの相手メール。script.google.com/home/ 系は例外。他サービスはアカウント名を添え、既定と違う場合はシークレットウィンドウも指定。
+Workspace の URL は authuser=開く人のメール を付け、本文の同じ行か直前に「<同じメール> で開いてください」と書く。自分宛は userEmail、他人宛は共有済みの相手メール。script.google.com/home/ 系は例外。他サービスはアカウント名を直前の行に書いて URL を単独行に置き、既定と違う場合はシークレットウィンドウも指定。
 
 ## decision-research-gate
 
@@ -166,7 +166,7 @@ Workspace の URL は authuser=開く人のメール を付け、本文の同じ
 
 ## url-format-guard
 
-URLをMarkdownリンクまたは空白で囲み、日本語/全角文字との直接隣接を除く。
+URLを単独行に置くかMarkdownリンクにし、直後に括弧・句読点・全角文字（（）「」、。 ) ] など）を続けない。
 
 ## user-burden-gate
 

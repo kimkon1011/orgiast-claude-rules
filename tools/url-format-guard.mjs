@@ -6,21 +6,28 @@ import { latestAssistantText } from './lib/assistant-text.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 
 
-const BAD_RAW_URL = /(?<!\]\()https?:\/\/[A-Za-z0-9._~:/?#@!$&'*+,;=%\-]+[　-〿぀-ヿ一-鿿＀-￯]/;
+const RAW_URL = /(?<!\]\()https?:\/\/[A-Za-z0-9._~:/?#@!$&'*+,;=%\-]+/g;
+// 全角文字・全角括弧・句読点に加え、半角の ) ] もリンク範囲に巻き込まれる（2026-10-18 実害: …/pull/864（ が 404）。
+const BAD_NEXT = /^[　-〿぀-ヿ一-鿿＀-￯)\]]/;
 
 export function findBrokenRawUrl(text) {
   const value = String(text || '');
   if (/\[RAW-URL-OK\]/.test(value)) return { decision: 'pass' };
-  const match = value.match(BAD_RAW_URL);
-  if (!match) return { decision: 'pass' };
-  const sample = match[0].slice(0, 60);
+  // コードはリンク化されないので対象外。
+  const prose = value.replace(/```[\s\S]*?```/g, '').replace(/`[^`\n]*`/g, '');
+  const hit = [...prose.matchAll(RAW_URL)].find(m => {
+    const rest = prose.slice(m.index + m[0].length, m.index + m[0].length + 2);
+    return BAD_NEXT.test(rest) && !rest.startsWith('](');
+  });
+  if (!hit) return { decision: 'pass' };
+  const sample = prose.slice(hit.index, hit.index + hit[0].length + 1).slice(-60);
   const reason = `[URL-FORMAT VIOLATION] 生URLが日本語/全角文字に直接隣接しています(リンク破損): "${sample}"
 
 URLは必ず Markdown リンク形式にすること(絶対ルール):
   NG:  （https://example.com）。   /  https://example.com を確認
-  OK:  [example.com](https://example.com)  /  [サイトはこちら](https://example.com)
+  OK:  [example.com](https://example.com)  /  URL を単独行に置き、説明・アカウントは直前の行に書く
 
-生URLの直後に句読点・全角カッコ・日本語を隙間なく続けるとクリック時に巻き込まれ
+生URLの直後に句読点・全角カッコ・日本語・半角の ) ] を隙間なく続けるとクリック時に巻き込まれ
 ERR_NAME_NOT_RESOLVED / 404 になります。該当箇所を [text](url) に直して再送してください。
 (本当に生URLが必要な稀な場合のみ [RAW-URL-OK] タグを付ける)`;
   return { decision: 'block', reason };

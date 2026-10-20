@@ -38,8 +38,10 @@ export function runBounded(command, args, { cwd, input = '', env = process.env, 
       child = spawnImpl(command, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, detached: platform !== 'win32' });
       timer = setTimer(() => stop('deadline'), Math.max(0, stopAt - now()));
       // Independent watchdog survives a parent crash. WSL also has its own SIGKILL timeout.
+      // Windows では detached にしない（新しいコンソールが可視化される。no-visible-console-window.test が禁止）。
+      // Windows は親が死んでも子は生き残るので、attached のままでも watchdog は親クラッシュ後に動く。
       if (watchdog) {
-        guard = spawnImpl(process.execPath, [fileURLToPath(new URL('./quota-sweep-watchdog.mjs', import.meta.url)), String(child.pid), String(process.pid), String(stopAt)], { stdio: 'ignore', windowsHide: true, detached: true });
+        guard = spawnImpl(process.execPath, [fileURLToPath(new URL('./quota-sweep-watchdog.mjs', import.meta.url)), String(child.pid), String(process.pid), String(stopAt)], { stdio: 'ignore', windowsHide: true, detached: platform !== 'win32' });
         guard.on('error', error => { stderr += `watchdog: ${error.message}`; stop('failed'); });
         guard.unref();
       }

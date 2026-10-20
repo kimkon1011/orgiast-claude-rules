@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit } = await import('./codex-do.mjs');
+const { needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, qwenExecutableAvailable, qwenBackendSkipReason, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -121,6 +121,31 @@ test('--timeout と --cwd を付けても指示文が引数として食われな
   assert.equal(result.status, 0);
   assert.match(result.stdout, /これは指示文です/);
   assert.doesNotMatch(result.stdout, /--timeout|--cwd|60/);
+});
+
+test('qwenExecutableAvailable は where/command -v の終了コードで実体の有無を返す', () => {
+  const calls = [];
+  const spy = (cmd, args) => { calls.push([cmd, ...args]); return { status: 0 }; };
+  assert.equal(qwenExecutableAvailable({ spawnImpl: spy, platform: 'win32' }), true);
+  assert.deepEqual(calls.at(-1), ['where', 'qwen']);
+  assert.equal(qwenExecutableAvailable({ spawnImpl: spy, platform: 'linux' }), true);
+  assert.deepEqual(calls.at(-1), ['sh', '-lc', 'command -v qwen']);
+  assert.equal(qwenExecutableAvailable({ spawnImpl: () => ({ status: 1 }), platform: 'win32' }), false);
+  // spawn 自体が失敗した場合(status 無し)も「無い」と判定する
+  assert.equal(qwenExecutableAvailable({ spawnImpl: () => undefined, platform: 'win32' }), false);
+});
+
+test('qwenBackendSkipReason は qwen CLI が無いときだけ kind:qwen を弾く（他kindは素通し）', () => {
+  const qwenBackend = { kind: 'qwen', name: 'openrouter-free', model: 'cohere/north-mini-code:free' };
+  const available = qwenBackendSkipReason(qwenBackend, { available: true });
+  assert.equal(available, null);
+  const skipped = qwenBackendSkipReason(qwenBackend, { available: false });
+  assert.match(skipped, /qwen' executable not found/);
+  assert.match(skipped, /openrouter-free/, 'どのバックエンドを外すかまで書く');
+  // cheap-code / gemini は qwen CLI に依存しないので、無くてもスキップしない
+  assert.equal(qwenBackendSkipReason({ kind: 'cheap-code', name: 'cheap-code:deepseek' }, { available: false }), null);
+  assert.equal(qwenBackendSkipReason({ kind: 'gemini', name: 'gemini-cli' }, { available: false }), null);
+  assert.equal(qwenBackendSkipReason(null, { available: false }), null);
 });
 
 test('fallbackBackendTimeoutSecs は全体枠・既定値・環境変数・下限を反映する', () => {

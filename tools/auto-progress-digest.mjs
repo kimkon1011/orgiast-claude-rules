@@ -67,31 +67,41 @@ export function splitMessages(text, limit = MAX_MESSAGE) {
 
 function defaultSlot(now) { return new Date(now).getHours() < 12 ? '朝' : '夕'; }
 export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now(), dryRun = false, slot, io = {} } = {}) {
-  const label = io.label ?? resolveFleetLabel(home);
-  const state = (io.readState ?? readState)(home);
-  const since = Number.isFinite(Date.parse(state.lastSuccessAt)) ? Date.parse(state.lastSuccessAt) : now - WINDOW_MS;
-  const rows = selectRows((io.readLedger ?? readLedger)(ledgerFile(home)), now, since);
-  if (!rows.length) return { sent: false, count: 0 };
-  const text = formatDigest(rows, now, label);
-  const digest = createHash('sha256').update(text).digest('hex').slice(0, 16);
-  const slotKey = `${new Date(now).toLocaleDateString('sv-SE')}|${slot || defaultSlot(now)}|${digest}`;
-  if ((state.sentKeys || []).includes(slotKey)) return { skipped: 'already-sent', sent: false, count: rows.length };
-  const messages = splitMessages(text);
-  if (dryRun) return { sent: false, count: rows.length, text, messages };
-  let error = '';
-  for (const message of messages) {
-    const result = await (io.notify ?? notifyKim)(message, { home, webhookFallback: false });
-    if (result?.delivered !== 'dm') { error = result?.reason || 'DM not delivered'; break; }
+  let label = '';
+  try {
+    label = io.label ?? resolveFleetLabel(home);
+    const state = (io.readState ?? readState)(home);
+    const since = Number.isFinite(Date.parse(state.lastSuccessAt)) ? Date.parse(state.lastSuccessAt) : now - WINDOW_MS;
+    const rows = selectRows((io.readLedger ?? readLedger)(ledgerFile(home)), now, since);
+    if (!rows.length) return { sent: false, count: 0 };
+    const text = formatDigest(rows, now, label);
+    const digest = createHash('sha256').update(text).digest('hex').slice(0, 16);
+    const slotKey = `${new Date(now).toLocaleDateString('sv-SE')}|${slot || defaultSlot(now)}|${digest}`;
+    if ((state.sentKeys || []).includes(slotKey)) return { skipped: 'already-sent', sent: false, count: rows.length };
+    const messages = splitMessages(text);
+    if (dryRun) return { sent: false, count: rows.length, text, messages };
+    let error = '';
+    for (const message of messages) {
+      const result = await (io.notify ?? notifyKim)(message, { home, webhookFallback: false });
+      if (result?.delivered !== 'dm') { error = result?.reason || 'DM not delivered'; break; }
+    }
+    if (error) {
+      (io.writeState ?? writeState)(home, { ...state, lastFailure: { at: new Date(now).toISOString(), slot: slotKey, error } });
+      appendLog(home, { at: now, label, slot: slotKey, sent: false, count: rows.length, error }, io);
+      return { sent: false, count: rows.length, error };
+    }
+    const next = { lastSuccessAt: new Date(now).toISOString(), sentKeys: [...(state.sentKeys || []), slotKey].slice(-60) };
+    (io.writeState ?? writeState)(home, next);
+    appendLog(home, { at: now, label, slot: slotKey, sent: true, count: rows.length, parts: messages.length }, io);
+    return { sent: true, count: rows.length, parts: messages.length };
+  } catch (error) {
+    // 二重防御: 台帳/共有シート/DM の想定外例外で digest 全体を黙って落とさず、失敗として記録する。
+    const message = String(error?.message ?? error).slice(0, 300);
+    const slotKey = slot || defaultSlot(now);
+    appendLog(home, { at: now, label, slot: slotKey, sent: false, count: 0, error: message }, io);
+    try { (io.writeState ?? writeState)(home, { ...(io.readState ?? readState)(home), lastFailure: { at: new Date(now).toISOString(), slot: slotKey, error: message } }); } catch { /* 失敗記録自体の失敗は握る */ }
+    return { sent: false, count: 0, error: message };
   }
-  if (error) {
-    (io.writeState ?? writeState)(home, { ...state, lastFailure: { at: new Date(now).toISOString(), slot: slotKey, error } });
-    appendLog(home, { at: now, label, slot: slotKey, sent: false, count: rows.length, error }, io);
-    return { sent: false, count: rows.length, error };
-  }
-  const next = { lastSuccessAt: new Date(now).toISOString(), sentKeys: [...(state.sentKeys || []), slotKey].slice(-60) };
-  (io.writeState ?? writeState)(home, next);
-  appendLog(home, { at: now, label, slot: slotKey, sent: true, count: rows.length, parts: messages.length }, io);
-  return { sent: true, count: rows.length, parts: messages.length };
 }
 
 if (isEntry(import.meta.url)) {

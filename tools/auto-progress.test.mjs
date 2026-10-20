@@ -159,6 +159,15 @@ test('digest: 同一スロット・同一内容を二重送信せず、doneは�
   assert.deepEqual(await digest({ home: tmp(), now, slot: '朝', io }), { sent: false, count: 0 });
 });
 
+test('digest: 台帳読み込みの想定外例外でも落ちず、失敗を summary ログに残す', async () => {
+  const now = Date.parse('2026-10-15T09:05:00+09:00');
+  const logged = [];
+  const io = { label: 'test-PC', readLedger: () => { throw new Error('HTTP 200'); }, readState: () => ({}), writeState: () => {}, appendFileSync: (_f, line) => logged.push(line), mkdirSync: () => {} };
+  assert.deepEqual(await digest({ home: tmp(), now, io }), { sent: false, count: 0, error: 'HTTP 200' });
+  assert.match(logged.join(''), /"sent":false/);
+  assert.match(logged.join(''), /"error":"HTTP 200"/);
+});
+
 test('watch: summaryログがEBUSYでも巡回結果を返す', async () => {
   const home = tmp(); const errors = [];
   const result = await watch({ home, now: Date.now(), io: { ...baseIo(), appendFileSync: () => { throw Object.assign(new Error('locked'), { code: 'EBUSY' }); }, stderr: (line) => errors.push(line) } });

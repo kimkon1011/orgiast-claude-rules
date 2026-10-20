@@ -7,6 +7,7 @@ import { anomalyFingerprint, normalizeMessage, runRemediation } from './nightly-
 import * as selfHealed from './lib/remediate-playbooks/self-healed.mjs';
 import * as failover from './lib/remediate-playbooks/failover-succeeded.mjs';
 import * as contention from './lib/remediate-playbooks/log-write-contention.mjs';
+import * as hung from './lib/remediate-playbooks/hung-task-stop.mjs';
 
 test('fingerprint ignores changing timestamps and counts', () => {
   const a = anomalyFingerprint({ label: 'job', message: '2026-09-10 07:00 error 12' });
@@ -17,6 +18,14 @@ test('fingerprint ignores changing timestamps and counts', () => {
 test('self-healed and failover playbooks require a later success', async () => {
   assert.equal(await selfHealed.match({ expectation: { successPattern: 'open=0' }, logTail: 'ERROR aborted\nopen=0' }), true);
   assert.equal(await failover.match({ logTail: 'ERROR 429\n[failover] groq -> deepseek\nOK done' }), true);
+});
+
+test('hung-task-stop does not stop the dialog watcher for a detected-dialog anomaly', async () => {
+  const stale = { state: 'Running', lastRunTime: new Date(Date.now() - 60 * 60000).toISOString() };
+  const context = { now: Date.now(), tasks: { get: async () => stale } };
+  const base = { label: '操作を止める画面', expectation: { task: 'OrgiastStuckDialogWatch', maxRunHours: 0.17 } };
+  assert.equal(await hung.match({ ...base, type: 'stuck_dialog' }, context), false);
+  assert.equal(await hung.match({ ...base, type: 'task_missed' }, context), true);
 });
 
 test('log contention recognizes appendLineWithRetry migration', async () => {

@@ -30,16 +30,28 @@ $chatName = ''
 foreach ($l in $win.FindAll($Scope::Descendants, $lc)) { if ($l.Current.Name -match 'のメッセージ$') { $chatName = $l.Current.Name -replace 'のメッセージ$', '' } }
 "CHAT: $chatName"
 if ($chatName -ne $Chat) { "ERROR: open chat '$chatName' != '$Chat'"; exit 6 }
+# 入力欄は「<相手>へメッセージを送信」という Name の Edit/Document。
+# 画面全体を覆う Document（ページコンテナ）も Name に「メッセージ」を含むため、名前だけで選ぶと誤認する。
+# → 名前（'へメッセージ' 優先）＋ 大きさ（画面の半分を超えるものは除外）で絞る。
+$winRect = $win.Current.BoundingRectangle
 $box = $null
+$candidates = New-Object System.Collections.Generic.List[object]
 foreach ($e in $win.FindAll($Scope::Descendants, [System.Windows.Automation.Condition]::TrueCondition)) {
   $t = $e.Current.ControlType.ProgrammaticName
-  if (($t -match 'Edit|Document') -and ($e.Current.Name -match 'メッセージ' -or $e.Current.Name -match [regex]::Escape($chatName))) { $box = $e; break }
+  if ($t -notmatch 'Edit|Document') { continue }
+  if ($e.Current.IsOffscreen) { continue }
+  $r = $e.Current.BoundingRectangle
+  if ($r.Width -le 0 -or $r.Height -le 0) { continue }
+  if ($r.Height -gt ($winRect.Height * 0.5) -or $r.Width -gt ($winRect.Width * 0.9)) { continue }
+  if ($e.Current.Name -match 'へメッセージ') { $box = $e; break }
+  $candidates.Add($e)
 }
+if (-not $box -and $candidates.Count -eq 1 -and $candidates[0].Current.Name -match 'メッセージ') { $box = $candidates[0] }
 if (-not $box) { 'ERROR: input box not found'; exit 5 }
 "BOX: " + $box.Current.ControlType.ProgrammaticName + " | " + $box.Current.Name
 $cur = ''
 try { $cur = $box.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern).DocumentRange.GetText(200) } catch { 'ERROR: cannot verify empty input'; exit 9 }
-$cur = ($cur -replace '[﻿\s]', '')
+$cur = ($cur -replace '[\uFEFF\u200B\s]', '')
 if ($cur) { "ERROR: input box not empty [$cur]（kim の下書きを壊さないため中止）"; exit 9 }
 $box.SetFocus()
 Start-Sleep -Milliseconds 500
@@ -53,7 +65,25 @@ $finalChat = ''
 foreach ($l in $win.FindAll($Scope::Descendants, $lc)) { if ($l.Current.Name -match 'のメッセージ$') { $finalChat = $l.Current.Name -replace 'のメッセージ$', '' } }
 if ($finalChat -ne $Chat) { throw 'Chat changed before send' }
 $pasted = $box.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern).DocumentRange.GetText(-1)
-if (($pasted -replace '\s+', ' ').Trim() -ne ($body -replace '\s+', ' ').Trim()) { throw 'Pasted body mismatch; not sent' }
+# Discord は貼り付けた本文に U+FEFF（BOM）や U+200B を混ぜるため、比較前に取り除く。
+if ((($pasted -replace '[\uFEFF\u200B\s]+', ' ').Trim()) -ne (($body -replace '[\uFEFF\u200B\s]+', ' ').Trim())) { throw 'Pasted body mismatch; not sent' }
 [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
 Start-Sleep -Seconds 2
+# 送信後 Discord が直前投稿の編集モードに入ることがある。編集モードのまま終えると、次の読み取りで
+# 矢印キーが直前投稿に効いて意図しない編集になるため、検出したら Esc で解除して確認する。
+try {
+  $editBanner = $null
+  foreach ($e in $win.FindAll($Scope::Descendants, [System.Windows.Automation.Condition]::TrueCondition)) {
+    if ($e.Current.Name -match 'Escキーでキャンセル') { $editBanner = $e; break }
+  }
+  if ($editBanner -and [Win32.Native]::GetForegroundWindow() -eq $hwnd) {
+    [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+    Start-Sleep -Milliseconds 500
+    $still = $false
+    foreach ($e in $win.FindAll($Scope::Descendants, [System.Windows.Automation.Condition]::TrueCondition)) {
+      if ($e.Current.Name -match 'Escキーでキャンセル') { $still = $true; break }
+    }
+    if ($still) { 'WARN: edit mode remains after Esc' } else { 'EDITMODE: cleared' }
+  }
+} catch { 'WARN: edit-mode check failed' }
 'SENT'

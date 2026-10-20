@@ -60,7 +60,7 @@ test('initial age > policy threshold is stale, never re-stales revived entries',
   assert.equal(item.status, 'open'); assert.match(digestText(f.ledger, f.ctx), /蘇生: --revive/);
 });
 test('GAS done closes outbound, cache done alone cannot; blockers derive a single inbound item', async t => {
-  const f = fixture(t), done = f.add(), blocked = f.add(mail('mail-blocked')), cached = f.add(mail('mail-cached'));
+  const f = fixture(t), done = f.add(), blocked = f.add(mail('mail-blocked', { from: 'other-PC' })), cached = f.add(mail('mail-cached'));
   saveJson(path.join(f.dir, 'fleet-mail-sent-status.json'), { [cached.mailId]: { status: 'done', resultBody: '完了' } });
   const request = async (_kind, { id }) => ({ ok: true, mail: { id, status: id === cached.mailId ? 'expired' : 'done',
     resultBody: id === blocked.mailId ? 'BLOCKED: push の権限がない' : 'commit abc123', resultAt: iso(NOW) } });
@@ -240,13 +240,60 @@ test('unverified originals or failed checks cannot trigger a blind resend after 
   plans = await chase(f.ledger, f.ctx); assert.equal(plans[0].action, '状態確認待ち'); assert.equal(f.requests.length, 0);
 });
 test('recovering blocker closes derived debt on fresh authoritative evidence', async t => {
-  const f = fixture(t), item = f.add();
+  const f = fixture(t), item = f.add(mail('mail-original', { from: 'other-PC' }));
   const request = body => async (_kind, { id }) => ({ ok: true, mail: { id, status: 'done', resultBody: body, resultAt: iso(NOW) } });
   await checkLedger(f.ledger, { ...f.ctx, request: request('BLOCKED') });
   assert.equal(item.status, 'blocked');
   await checkLedger(f.ledger, { ...f.ctx, request: request('commit abc123') });
   assert.equal(item.status, 'done');
   assert.ok(Object.values(f.ledger.items).filter(i => i.derivedFrom === item.id).every(i => i.status === 'done'));
+});
+for (const reason of ['self-originated', 'reply', 'auto-reply', 'inbox-done']) {
+  test(`blocker guard excludes ${reason} at creation and from persisted work`, async t => {
+    const f = fixture(t);
+    // Resolve the configured label, rather than hard-coding kim-PC.
+    fs.writeFileSync(path.join(f.dir, 'cost-reporter.env'), 'REPORTER_LABEL=local-PC\n');
+    const original = mail('mail-loop', { from: reason === 'self-originated' ? 'local-PC' : 'other-PC' });
+    const parent = f.add(original);
+    if (reason === 'inbox-done') f.put({ ...original, status: 'done', resultBody: 'BLOCKED' });
+    else if (reason !== 'self-originated') f.sent([{ id: original.id, action: reason, at: iso(NOW) }]);
+    const ctx = { ...f.ctx, request: async () => ({ ok: true, mail: { id: original.id, status: 'done', resultBody: 'exit=1' } }) };
+    await checkLedger(f.ledger, ctx);
+    assert.equal(parent.status, 'blocked'); // The original request is still unresolved.
+    const id = `inbound-blocker-${original.id}`;
+    assert.equal(f.ledger.items[id], undefined);
+    assert.ok(f.errors.includes(`fleet-chase: skip ${original.id} (${reason})`));
+
+    // A previous version may already have stored the blocker with a rewritten sender.
+    f.ledger.items[id] = { ...makeItem({ ...original, from: original.to, to: 'local-PC' }, 'inbound', NOW),
+      id, derivedFrom: parent.id };
+    saveJson(path.join(f.dir, 'fleet-agent-optin.json'), { accept: ['prompt'] });
+    f.errors.length = 0;
+    const result = await work(f.ledger, { ...f.ctx,
+      resolveExe: () => assert.fail('must not resolve worker'), run: () => assert.fail('must not dispatch') });
+    assert.deepEqual(result.ids, []);
+    assert.deepEqual(f.errors, [`fleet-chase: skip ${original.id} (${reason})`]);
+    assert.equal(f.ledger.items[id].attempts.length, 0);
+    const preview = await work(f.ledger, { ...f.ctx, dryRun: true });
+    assert.deepEqual(preview.ids, []);
+    // Recover the sender from the inbox if the parent entry is absent.
+    delete f.ledger.items[parent.id];
+    if (reason === 'self-originated') f.put(original);
+    assert.deepEqual((await work(f.ledger, { ...f.ctx, dryRun: true })).ids, []);
+  });
+}
+test('unanswered blocker from another PC can still be dispatched', async t => {
+  const f = fixture(t);
+  f.add(mail('mail-unanswered', { from: 'other-PC' }));
+  await checkLedger(f.ledger, { ...f.ctx, request: async () => ({
+    ok: true, mail: { id: 'mail-unanswered', status: 'done', resultBody: 'BLOCKED' },
+  }) });
+  saveJson(path.join(f.dir, 'fleet-agent-optin.json'), { accept: ['prompt'] });
+  let calls = 0;
+  const result = await work(f.ledger, { ...f.ctx, resolveExe: async () => 'claude',
+    run: async () => { calls++; return { exitCode: 0, stdoutTail: 'CHASE_RESULT: blocked' }; } });
+  assert.deepEqual(result.ids, ['inbound-blocker-mail-unanswered']);
+  assert.equal(calls, 1);
 });
 test('headless cannot cancel debts and cannot bypass kim-only guard', async t => {
   const f = fixture(t), item = f.add(); f.ctx.persist();

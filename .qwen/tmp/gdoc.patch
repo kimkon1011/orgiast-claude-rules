@@ -1,0 +1,117 @@
+From 7bc1280ecdf01c9b3efee43dbc864ec5396d0340 Mon Sep 17 00:00:00 2001
+From: kimkon1011 <59928643+kimkon1011@users.noreply.github.com>
+Date: Sat, 17 Oct 2026 01:59:34 +0900
+Subject: [PATCH] =?UTF-8?q?fix(gdoc-update):=20Markdown=20=E8=A6=8B?=
+ =?UTF-8?q?=E5=87=BA=E3=81=97=E3=81=A7=20read-back=20=E3=81=8C=E5=81=BD=20?=
+ =?UTF-8?q?NG=20=E3=81=AB=E3=81=AA=E3=82=8B=E3=81=AE=E3=82=92=E7=9B=B4?=
+ =?UTF-8?q?=E3=81=99?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+本文 md の1行目が見出し＋強調（例 `# **見出し**`）だと、Google Docs から
+素のテキストで取り出した本文に `#` も `**` も無いため after.includes() が
+false になり、書き込み成功でも `read-back: NG` で exit 1 していた。
+
+- normalizeMarkdownText(): md 記号（見出し/強調/引用/表/リスト/エスケープ）を
+  落として比較用のプレーンテキストにする
+- verifyReadback(): 正規化後の先頭40字で一致判定。真の不一致は従来どおり false
+- isEntry ガードで main() を切り出し、テストから import 可能にする
+- tools/gdoc-update.test.mjs を追加（ネットワーク非依存）
+
+実測: 2026-10-17 ラハイナPayPay準備書の更新で誤 NG → 修正後 OK/exit 0。
+`node --test tools/*.test.mjs` = 4339 pass / 0 fail。
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>
+---
+ tools/gdoc-update.mjs      | 29 +++++++++++++++++++++++++++--
+ tools/gdoc-update.test.mjs | 21 +++++++++++++++++++++
+ 2 files changed, 48 insertions(+), 2 deletions(-)
+ create mode 100644 tools/gdoc-update.test.mjs
+
+diff --git a/tools/gdoc-update.mjs b/tools/gdoc-update.mjs
+index 71f0842..9838b42 100644
+--- a/tools/gdoc-update.mjs
++++ b/tools/gdoc-update.mjs
+@@ -28,6 +28,7 @@ import { workspaceUrl } from './lib/workspace-url.mjs';
+ import fs from 'node:fs';
+ import crypto from 'node:crypto';
+ import path from 'node:path';
++import { isEntry } from './is-entry.mjs';
+ 
+ const DEFAULT_KEY =
+   'C:/Users/uers/Downloads/CLAUDE.md配布/aujust-sales-automation/.gcp/sheets-sa.json';
+@@ -95,6 +96,28 @@ async function api(token, url, init = {}) {
+   return res;
+ }
+ 
++export function normalizeMarkdownText(text) {
++  return String(text)
++    .replace(/ {2}$/gm, '')
++    .replace(/\\(.)/g, '$1')
++    .split(/\r?\n/)
++    .map((line) => line
++      .replace(/^\s*(?:>\s*)+/, '')
++      .replace(/^\s*#{1,6}\s*/, '')
++      .replace(/^\s*[-+*]\s+/, '')
++      .replace(/[|*_`]/g, ' '))
++    .join('\n')
++    .replace(/\s+/g, ' ')
++    .trim();
++}
++
++export function verifyReadback(markdownBody, exportedText) {
++  const expected = normalizeMarkdownText(markdownBody).slice(0, 40);
++  const actual = normalizeMarkdownText(exportedText);
++  return expected ? actual.includes(expected) : actual.length > 0;
++}
++
++async function main() {
+ const args = parseArgs(process.argv.slice(2));
+ const docId = args.id;
+ if (!docId) {
+@@ -162,10 +185,12 @@ await api(
+ const after = await (
+   await api(token, `https://www.googleapis.com/drive/v3/files/${docId}/export?mimeType=text/plain`)
+ ).text();
+-const firstLine = md.split('\n').find((l) => l.trim())?.replace(/^#+\s*/, '').trim() || '';
+-const ok = firstLine ? after.includes(firstLine.slice(0, 30)) : after.length > 0;
++const ok = verifyReadback(md, after);
+ 
+ console.log(`updated: ${meta.name}`);
+ console.log(`read-back: ${after.length} 字 / 先頭行の一致 = ${ok ? 'OK' : 'NG'}`);
+ console.log(`${authuser} で開いてください: ${outputUrl}`);
+ if (!ok) process.exit(1);
++}
++
++if (isEntry(import.meta.url)) await main();
+diff --git a/tools/gdoc-update.test.mjs b/tools/gdoc-update.test.mjs
+new file mode 100644
+index 0000000..e06b0b7
+--- /dev/null
++++ b/tools/gdoc-update.test.mjs
+@@ -0,0 +1,21 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import { normalizeMarkdownText, verifyReadback } from './gdoc-update.mjs';
++
++test('Markdown 記号を読み戻し比較用のプレーンテキストに正規化する', () => {
++  assert.equal(normalizeMarkdownText('# **見出しテキスト**'), '見出しテキスト');
++  assert.equal(normalizeMarkdownText('> * 箇条書きの文'), '箇条書きの文');
++  assert.equal(normalizeMarkdownText('| a | b |'), 'a b');
++});
++
++test('Markdown 見出しと強調を除いて read-back の一致を検証する', () => {
++  const markdown = '# **ラハイナ PayPay銀行 法人口座開設 準備書**';
++  const exported = 'ラハイナ PayPay銀行 法人口座開設 準備書\n本文…';
++  assert.equal(verifyReadback(markdown, exported), true);
++});
++
++test('無関係または空の read-back は失敗と判定する', () => {
++  const markdown = '# **ラハイナ PayPay銀行 法人口座開設 準備書**';
++  assert.equal(verifyReadback(markdown, '無関係なテキスト'), false);
++  assert.equal(verifyReadback(markdown, ''), false);
++});
+-- 
+2.55.0.windows.3
+

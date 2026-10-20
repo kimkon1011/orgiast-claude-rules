@@ -205,10 +205,27 @@ export function sweepExitCode(result) {
   return 0;
 }
 
-if(isEntry(import.meta.url)) {
-  try {
-    const args=process.argv.slice(2);if(args.some(a=>a!=='--dry-run'))throw new Error('引数は --dry-run のみ');
-    const result=await sweep({dryRun:args.includes('--dry-run')});console.log(JSON.stringify(result,null,2));
-    process.exitCode=sweepExitCode(result);
-  }catch(e){console.error('feedback-zero-sweep: '+e.message);process.exitCode=1;}
+export function sweepErrorSummary(result) {
+  if(sweepExitCode(result)===0)return '';
+  const details=result.rows.filter(row=>row.status!=='取得済' || row.errors.length)
+    .map(row=>`${row.appName}: ${row.status}${row.errors.length?' / '+[...new Set(row.errors)].join('、'):''}`);
+  const {delivered,reason}=result.notification;
+  if(!result.dryRun && delivered!=='dm' && (result.remaining>0 || delivered!=='none' || reason)) {
+    details.push(`notification: ${delivered} / ${reason || 'DM未達'}`);
+  }
+  return `error: feedback-zero-sweep: unknown=${result.unknown}, remaining=${result.remaining}; ${details.join('; ')}`.replace(/[\r\n]+/g,' ');
 }
+
+export async function main(args=process.argv.slice(2), {runSweep=sweep,log=console.log,error=console.error}={}) {
+  try {
+    if(args.some(a=>a!=='--dry-run'))throw new Error('引数は --dry-run のみ');
+    const result=await runSweep({dryRun:args.includes('--dry-run')});
+    log(JSON.stringify(result,null,2));
+    // nightly-batch retains only the final eight lines; keep the cause after JSON.
+    const summary=sweepErrorSummary(result);
+    if(summary)error(summary);
+    return sweepExitCode(result);
+  }catch(e){error(('error: feedback-zero-sweep: '+e.message).replace(/[\r\n]+/g,' '));return 1;}
+}
+
+if(isEntry(import.meta.url)) process.exitCode=await main();

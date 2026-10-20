@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { readInbox, mailCategory, hasDecisionRequest } from '../fleet-mail.mjs';
+import { readInbox, mailCategory, hasDecisionRequest, resolveFleetLabel, findPriorReply } from '../fleet-mail.mjs';
 import { redactSecrets } from '../fleet-agent.mjs';
 import { listDecisions } from '../pending-decisions.mjs';
 
@@ -98,11 +98,20 @@ export function complete(item, evidence, now) {
   item.evidence = evidence;
   item.nextActionAt = null;
 }
-function handBack(ledger, item, mail, now) {
+export function skipInboundBlocker(mail, { home, stderr = console.error }) {
+  const prior = findPriorReply(path.join(home, '.claude'), mail.id);
+  const reason = mail.from === resolveFleetLabel(home) ? 'self-originated' : prior?.action;
+  if (!reason) return false;
+  stderr(`fleet-chase: skip ${mail.id} (${reason})`);
+  return true;
+}
+function handBack(ledger, item, mail, now, context) {
   item.status = 'blocked';
   item.blockerSummary = redactSecrets(mail.resultBody).slice(0, 200);
   item.lastEvidenceAt = iso(now);
   item.evidence = { type: 'blocker', mailId: mail.id || item.mailId, at: mail.resultAt || iso(now), detail: item.blockerSummary };
+  // Check the original sender before the derived item rewrites it to the target.
+  if (skipInboundBlocker({ ...item.sourceMail, id: item.mailId }, context)) return;
   const id = `inbound-blocker-${item.mailId}`;
   if (ledger.items[id]) return;
   const derived = makeItem({ ...item.sourceMail, id: item.mailId, from: item.target, to: 'kim-PC',
@@ -171,7 +180,7 @@ export async function checkLedger(ledger, { home, now, request, stderr = console
     }
     if (replies.length && !done) {
       if (item.kind === 'rollout') item.blockerSummary = redactSecrets(replies[0].resultBody || '').slice(0, 200);
-      else handBack(ledger, item, replies[0], now);
+      else handBack(ledger, item, replies[0], now, { home, stderr });
     }
     // Cache is a hint for timing only. It cannot establish completion.
     const states = ids.map(id => ledger.checks[id]?.mail || cache[id]).filter(Boolean);

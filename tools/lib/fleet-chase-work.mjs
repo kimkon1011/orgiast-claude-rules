@@ -2,7 +2,7 @@ import path from 'node:path';
 import { loadOptin, consentCommand, runPrompt, redactSecrets } from '../fleet-agent.mjs';
 import { resolveClaudeExecutableFromDisk } from '../claude-exe.mjs';
 import { readInbox, hasDecisionRequest } from '../fleet-mail.mjs';
-import { POLICY, CATEGORY, BLOCKER, oldest, millis, iso, attempt, complete } from './fleet-chase-ledger.mjs';
+import { POLICY, CATEGORY, BLOCKER, oldest, millis, iso, attempt, complete, skipInboundBlocker } from './fleet-chase-ledger.mjs';
 
 export function workHeader(item) {
   if (item.kind === 'rollout') {
@@ -19,6 +19,13 @@ export async function work(ledger, { home, repo, now, dryRun = false, persist = 
     return { skipped: 'no-optin', ids: [] };
   }
   const selected = Object.values(ledger.items).filter(item => {
+    if (item.kind === 'inbound' && (item.derivedFrom || item.id.startsWith('inbound-blocker-'))) {
+      // Existing ledgers contain a rewritten sender; recover the original mail.
+      const original = ledger.items[item.derivedFrom]?.sourceMail
+        ?? readInbox(home, { unreadOnly: false }).find(mail => mail.id === item.mailId)
+        ?? item.sourceMail;
+      if (skipInboundBlocker({ ...original, id: item.mailId }, { home, stderr })) return false;
+    }
     const attempts = item.attempts.filter(a => a.action === 'work');
     return (item.kind === 'inbound' || item.kind === 'rollout' && item.direction === 'inbound' && item.subkind !== 'convergence') && item.status === 'open' && item.category !== CATEGORY.decision &&
       !hasDecisionRequest(item.sourceMail) && millis(item.deferredUntil) <= now &&

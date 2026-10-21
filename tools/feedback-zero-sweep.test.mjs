@@ -3,7 +3,49 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { sweep, sweepExitCode, unknownRowsLine, fetchPending, normalizeItem, appConfig, appDirectory } from './feedback-zero-sweep.mjs';
+import { sweep, sweepExitCode, unknownRowsLine, fetchPending, normalizeItem, appConfig, appDirectory, issueState } from './feedback-zero-sweep.mjs';
+
+test('Issue状態は一時失敗後に再試行して成功する', () => {
+  const calls = [], sleeps = [];
+  const issue = { state: 'OPEN', url: 'u', title: 't' };
+  const gh = args => {
+    calls.push(args);
+    return calls.length === 1 ? { status: 1 } : { status: 0, stdout: JSON.stringify(issue) };
+  };
+  assert.deepEqual(issueState({ number: 42, repo: 'o/r' }, gh, { sleep: ms => sleeps.push(ms) }), issue);
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[0], ['issue', 'view', '42', '--repo', 'o/r', '--json', 'state,url,title']);
+  assert.deepEqual(calls[1], calls[0]);
+  assert.deepEqual(sleeps, [2000]);
+});
+
+test('Issue状態は3回失敗すると理由を含む例外を返す', () => {
+  for(const [result, detail] of [
+    [{ status: 1 }, 'status=1'],
+    [{ status: 1, error: new Error('network down') }, 'status=1 / network down'],
+    [{ error: new Error('spawn failed') }, 'spawn failed'],
+  ]) {
+    let calls = 0;
+    const sleeps = [];
+    assert.throws(() => issueState({ number: 42, repo: 'o/r' }, () => { calls++; return result; }, {
+      sleep: ms => sleeps.push(ms),
+    }), { message: `Issue状態 未取得 (${detail})` });
+    assert.equal(calls, 3);
+    assert.deepEqual(sleeps, [2000, 4000]);
+  }
+});
+
+test('Issue状態は不正なJSONやstateを再試行しない', () => {
+  for(const [stdout, message] of [['invalid JSON', /JSON/], ['{"state":"UNKNOWN"}', /Issue状態 不正/]]) {
+    let calls = 0;
+    const sleeps = [];
+    assert.throws(() => issueState({ number: 42, repo: 'o/r' }, () => { calls++; return { status: 0, stdout }; }, {
+      sleep: ms => sleeps.push(ms),
+    }), message);
+    assert.equal(calls, 1);
+    assert.deepEqual(sleeps, []);
+  }
+});
 
 const entry = { appName: 'テストアプリ', kind: 'next', intake: 'relay', refs: { url: 'T_URL', secret: 'T_SECRET', repo: 'T_REPO', appDir: 'T_DIR' } };
 

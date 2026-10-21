@@ -24,7 +24,13 @@ test('counts only active, connected, unused remote-control sessions', () => {
   assert.equal(isStandby(standby('remote-control-rosy-cookie', { status: 'archived' })), false);
   assert.equal(isStandby(standby('remote-control-rosy-cookie', { connection_status: 'disconnected' })), false);
   assert.equal(isStandby(standby('ソウルシンク停止')), false);
-  assert.equal(isStandby(standby('desktop-2d0r4li-happy-otter')), false);
+  // 2.1.28x の未使用タブは <ホスト名>-<形容詞>-<名詞>。使用済みでもタイトルが残るので used_tokens で弾く。
+  const usage = (used) => ({ external_metadata: { context_usage: { used_tokens: used } } });
+  assert.equal(isStandby(standby('desktop-ppd5v8i-foamy-lamport', usage(0))), true);
+  assert.equal(isStandby(standby('desktop-04u31rg-cozy-map', usage(117899))), false);
+  assert.equal(isStandby(standby('desktop-ppd5v8i-foamy-lamport', { connection_status: 'disconnected', ...usage(0) })), false);
+  assert.equal(isStandby(standby('Session help request')), false);
+  assert.equal(isStandby(standby('remote-control-rosy-cookie', usage(5))), false);
   assert.equal(isStandby(null), false);
 });
 

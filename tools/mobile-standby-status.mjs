@@ -17,7 +17,8 @@ const BASE = 'https://api.anthropic.com';
 const HOUR = 3_600_000;
 export const GOAL = 2;
 export const COOLDOWN = 6 * HOUR;
-export const STANDBY_TITLE = /^remote-control-/;
+// 2.1.28x 以降、未発言の Remote Control セッションは「<ホスト名>-<形容詞>-<名詞>」(例: desktop-ppd5v8i-foamy-lamport) と付く。
+export const STANDBY_TITLE = /^(?:remote-control-|[a-z0-9]+(?:-[a-z0-9]+)*-[a-z]+-[a-z]+$)/;
 
 function json(file, fallback = {}) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; } }
 function titleOf(session) { return String(session?.title ?? '').split('\n')[0]; }
@@ -26,7 +27,9 @@ function titleOf(session) { return String(session?.title ?? '').split('\n')[0]; 
 export function isStandby(session) {
   return session?.status === 'active'
     && session?.connection_status === 'connected'
-    && STANDBY_TITLE.test(titleOf(session));
+    && STANDBY_TITLE.test(titleOf(session))
+    // desktop-* は使われてもタイトルが変わらないことがあるので、消費トークンでも未使用を確かめる。
+    && !(Number(session?.external_metadata?.context_usage?.used_tokens) > 0);
 }
 
 export function summarize(sessions, goal = GOAL) {

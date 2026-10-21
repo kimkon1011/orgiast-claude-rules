@@ -9,6 +9,7 @@ import { notifyOwner, resolveOwner } from './notify-owner.mjs';
 import { ledgerFile, readLedger, latestOpenPromises, rowKey, isUnattendedRow, isNoopPromise, MAX_RESUMES } from './auto-progress-ledger.mjs';
 export { isUnattendedRow } from './auto-progress-ledger.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
+import { readDeferred, drainDeferred, appendDeferred, formatDeferredSection } from './discord-notify-deferred.mjs';
 
 export const WINDOW_MS = 24 * 3600 * 1000;
 const MAX_MESSAGE = 2000;
@@ -105,6 +106,9 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   // Keep the initial done cutoff: advancing it would lose unsent completions beyond the cap.
   const since = state.doneSince ?? (Number.isFinite(Date.parse(state.lastSuccessAt)) ? Date.parse(state.lastSuccessAt) : now - WINDOW_MS);
   const all = selectRows((io.readLedger ?? readLedger)(ledgerFile(home)), now, since);
+  const entries = dryRun ? readDeferred(home, { now }) : drainDeferred(home, { now }).entries;
+  const deferredSection = formatDeferredSection(entries, { now });
+  const deferredResult = entries.length ? { deferred: entries.length } : {};
   const lastVerdicts = { ...(state.lastVerdicts || {}) }, lastKim = { ...(state.lastKim || {}) };
   const lastNeedsDm = { ...(state.lastNeedsDm || {}) };
   // owner 未記録の旧行は自PCの持ち主へ。空のまま notifyOwner に渡すと本文に「宛先: 不明（DM 未解決）」が付く（2026-10-20 実測）。
@@ -120,9 +124,9 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       lastVerdicts[key] = verdictOf(row, now); lastKim[key] = kimAction(row); lastNeedsDm[key] = false;
     } else if (lastVerdicts[key] !== verdictOf(row, now) || lastKim[key] !== kimAction(row) || lastNeedsDm[key] === false) changed.push(row);
   }
-  if (!changed.length) {
+  if (!changed.length && !deferredSection) {
     if (observed && !dryRun) (io.writeState ?? writeState)(home, { ...state, doneSince: since, lastVerdicts, lastKim, lastNeedsDm });
-    return { sent: false, count: 0 };
+    return { sent: false, count: 0, ...deferredResult };
   }
   const groups = new Map();
   for (const row of changed.slice(0, MAX_ITEMS)) {
@@ -130,7 +134,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     if (!groups.has(owner)) groups.set(owner, []);
     groups.get(owner).push(row);
   }
-  const deliveries = [...groups].map(([owner, candidates]) => {
+  let deliveries = [...groups].map(([owner, candidates]) => {
     const owned = all.filter(row => ownerOf(row) === owner);
     const options = { allRows: owned.filter(row => !isUnattendedRow(row, home)), unattended: owned.filter(row => isUnattendedRow(row, home)).length };
     const total = changed.filter(row => ownerOf(row) === owner).length;
@@ -143,12 +147,16 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     } while (rows.length);
     return { owner, rows, message };
   });
+  if (deferredSection) {
+    if (!deliveries.length) deliveries = [{ owner: localOwner, rows: [], message: deferredSection }];
+    else deliveries[0].message = [deferredSection, deliveries[0].message].filter(Boolean).join('\n\n');
+  }
   const messages = deliveries.map(({ message }) => message), text = messages.join('\n');
   const count = deliveries.reduce((n, delivery) => n + delivery.rows.length, 0);
   const digest = createHash('sha256').update(JSON.stringify(deliveries.map(({ owner, message }) => [owner, message]))).digest('hex').slice(0, 16);
   const slotKey = `${new Date(now).toLocaleDateString('sv-SE')}|${slot || defaultSlot(now)}|${digest}`;
-  if ((state.sentKeys || []).includes(slotKey)) return { skipped: 'already-sent', sent: false, count };
-  if (dryRun) return { sent: false, count, text, messages };
+  if ((state.sentKeys || []).includes(slotKey)) return { skipped: 'already-sent', sent: false, count, ...deferredResult };
+  if (dryRun) return { sent: false, count, ...deferredResult, text, messages };
   let error = '';
   for (const { owner, rows, message } of deliveries) {
     let result;
@@ -161,14 +169,16 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     (io.writeState ?? writeState)(home, { ...state, doneSince: since, lastVerdicts, lastKim, lastNeedsDm });
   }
   if (error) {
+    // 送れなかった回の保留通知は戻す（drain したままだと永久に消える）。
+    if (entries.length && !dryRun) (io.appendDeferred ?? appendDeferred)(home, entries);
     (io.writeState ?? writeState)(home, { ...state, doneSince: since, lastVerdicts, lastKim, lastNeedsDm, lastFailure: { at: new Date(now).toISOString(), slot: slotKey, error } });
     appendLog(home, { at: now, label, slot: slotKey, sent: false, count, error }, io);
-    return { sent: false, count, error };
+    return { sent: false, count, ...deferredResult, error };
   }
   const next = { ...state, doneSince: since, lastVerdicts, lastKim, lastNeedsDm, lastSuccessAt: new Date(now).toISOString(), sentKeys: [...(state.sentKeys || []), slotKey].slice(-60) };
   (io.writeState ?? writeState)(home, next);
   appendLog(home, { at: now, label, slot: slotKey, sent: true, count, parts: messages.length }, io);
-  return { sent: true, count, parts: messages.length };
+  return { sent: true, count, ...deferredResult, parts: messages.length };
 }
 
 if (isEntry(import.meta.url)) {

@@ -43,6 +43,15 @@ test('gate denies old version and real UI regressions despite stamped metadata',
   installApp({...f,upgrade:true});const meta=path.join(f.app,'.feedback-kit.json'),value=JSON.parse(fs.readFileSync(meta));value.kitVersion='0.9.9';fs.writeFileSync(meta,JSON.stringify(value));assert.ok(verifyApp(f.app,f).missing.includes('kit-version'));
 });
 test('registry missing is not zero-backlog registered',t=>{const f=fixture(t);installApp(f);fs.unlinkSync(f.registryFile);assert.ok(verifyApp(f.app,f).missing.includes('zero-backlog-registered'));});
+test('registry refs may be candidate arrays',t=>{
+  const f=fixture(t);installApp(f);
+  const registry=JSON.parse(fs.readFileSync(f.registryFile,'utf8')),entry=registry.apps[0];
+  entry.refs.url=[entry.refs.url,'NEXT_PUBLIC_FEEDBACK_URL'];entry.refs.secret=[entry.refs.secret,'FEEDBACK_RELAY_SECRET_ALT'];
+  fs.writeFileSync(f.registryFile,JSON.stringify(registry));
+  assert.deepEqual(verifyApp(f.app,f).missing,[]);
+  entry.refs.secret=['FEEDBACK_RELAY_SECRET','not-an-env'];fs.writeFileSync(f.registryFile,JSON.stringify(registry));
+  assert.ok(verifyApp(f.app,f).missing.includes('zero-backlog-registered'));
+});
 test('scan finds clasp root only and skips backups and node_modules',t=>{const f=fixture(t);installApp(f);fs.writeFileSync(path.join(f.app,'src/appsscript.json'),'{}');assert.deepEqual(scanApps([f.root,f.app]),[f.app]);});
 test('semver numeric comparison and malformed versions fail closed',()=>{assert.equal(atLeast('1.10.0','1.2.0'),true);for(const v of ['1.0','garbage','1.0.0-beta','01.0.0'])assert.equal(atLeast(v,'1.0.0'),false);});
 test('GAS backend rejects title-only and too many images before saving',()=>{

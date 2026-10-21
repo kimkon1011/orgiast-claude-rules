@@ -31,7 +31,11 @@ export function verifyApp(app, {registryFile = registryPath} = {}) {
   const title = inputs.find(s => /(?:name|id)=["']title["']/.test(s)) || '';
   const body = (markup.match(/<textarea\b[^>]*>/g) || []).find(s => /(?:name|id)=["']body["']/.test(s)) || '';
   const entry = registry.apps?.find(e => e.appName === meta.appName);
-  const registered = Boolean(entry && ['gas-sheet','supabase','booth-sheet','relay'].includes(entry.intake) && ['url','secret','repo','appDir'].every(k => /^[A-Z][A-Z0-9_]*$/.test(entry.refs?.[k] || '')));
+  // refs は単一の env 名でも、候補キーの配列（feedback-zero-registry の refs 候補配列）でもよい。
+  // 配列は空でなく、全要素が env 名の形式であること。
+  const isEnvName = (value) => /^[A-Z][A-Z0-9_]*$/.test(value || '');
+  const refRegistered = (value) => Array.isArray(value) ? value.length > 0 && value.every(isEnvName) : isEnvName(value);
+  const registered = Boolean(entry && ['gas-sheet','supabase','booth-sheet','relay'].includes(entry.intake) && ['url','secret','repo','appDir'].every(k => refRegistered(entry.refs?.[k])));
   const checks = {
     'image-attach': Object.values(imageChecks).every(Boolean),
     'kind-toggle': /不具合/.test(markup) && /要望/.test(markup) && /(?:name|id)=["']kind["']/.test(markup),

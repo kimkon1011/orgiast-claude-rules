@@ -148,5 +148,11 @@
     "route": "vercel env",
     "confidence": "high",
     "source": "handoff-audit-nightly:5088cc02c86ec878e5d78ad866b46a06b7f016253e6c2180a91df31dabac38ea"
+  },
+  {
+    "pattern": "Drive の共有設定（SA への権限付与）",
+    "route": "SA 直では quota 0 で失敗。DWD で kim を impersonate（subject）して作成",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:671fadaef7cf2d3cce74da8b5168e306582605b789ce054a3abf7a5ead7a0b72"
   }
 ]

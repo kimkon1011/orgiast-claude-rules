@@ -1,0 +1,29 @@
+✔ Issue状態は一時失敗後に再試行して成功する (5.3271ms)
+✔ Issue状態は3回失敗すると理由を含む例外を返す (1.5767ms)
+✔ Issue状態は不正なJSONやstateを再試行しない (0.7875ms)
+✔ 終了コードは正常な0件を成功とし、実際の失敗を維持する (0.5348ms)
+✔ 0件でも必須設定欠落・完了通知の例外は失敗になる (22.556299ms)
+✔ --dry-run は残数を返すが Issue 化・実装・通知・状態保存をしない (8.4095ms)
+✔ 実行時は未対応を Issue 化→実装へ投入し、残数>0 なので kim へ通知する (9.5185ms)
+✔ 残0かつ取得成功なら kim へ通知しない (6.9882ms)
+✔ 取得できない intake は 0 扱いにせず「未取得」として通知する (7.5547ms)
+✔ 予算ゲートが deferred なら実装せず翌日へ繰り越す (8.2285ms)
+✔ 完了済み状態の原票は残数に数えない／種別不明は例外／参照キー未設定は取得失敗 (7.164099ms)
+✔ FEEDBACK_KIM_DISCORD_ID 未設定でも ORGIAST_DISCORD_USER_ID があれば notify を呼び none 以外を返す (9.292ms)
+✔ refs 配列は最初の設定値を採用し、文字列指定と appDir も互換 (7.3243ms)
+✔ supabase page_path は前方一致で include 後に exclude、未指定なら全件 (6.9333ms)
+✔ 汎用名の衝突はアプリ内 .env.local を優先し専用キーの明示指定を維持 (2.9288ms)
+✔ repo 参照キー未設定は dry-run でも errors と unknown に含め副作用を起こさない (6.0247ms)
+✔ 専用経路は repo 未設定でも残数を報告し dry-run・実行とも Issue 化や実装投入をしない (15.654299ms)
+✔ unknownRowsLine は失敗したアプリと理由を1行にまとめ、成功時は空 (0.546ms)
+✔ 空の原票でも台帳のIssue照合が一時失敗する：回復後はunknownを残さずexit 0 (4016.468514ms)
+✔ queued/deferredが0でもIssue照合の再試行枯渇はexit 1 (6008.309384ms)
+✔ queued/deferredが0でもAPI恒久失敗はdry-run・通常ともexit 1 (10.2048ms)
+ℹ tests 21
+ℹ suites 0
+ℹ pass 21
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 10665.897983

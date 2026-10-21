@@ -1,0 +1,67 @@
+{
+  "dryRun": true,
+  "remaining": 12,
+  "unknown": 0,
+  "launched": 0,
+  "rows": [
+    {
+      "appName": "購買部管理アプリ",
+      "remaining": 6,
+      "status": "取得済",
+      "errors": [],
+      "queued": 6,
+      "deferred": 0
+    },
+    {
+      "appName": "カフェ業務チェック",
+      "remaining": 0,
+      "status": "取得済",
+      "errors": [],
+      "queued": 0,
+      "deferred": 0
+    },
+    {
+      "appName": "イベントショップ",
+      "remaining": 0,
+      "status": "取得済",
+      "errors": [],
+      "queued": 0,
+      "deferred": 0
+    },
+    {
+      "appName": "ブース制作アプリ",
+      "remaining": 2,
+      "status": "取得済",
+      "errors": [],
+      "queued": 0,
+      "deferred": 0
+    },
+    {
+      "appName": "aujust／営業自動化",
+      "remaining": 3,
+      "status": "取得済",
+      "errors": [],
+      "queued": 3,
+      "deferred": 0
+    },
+    {
+      "appName": "倉庫アプリ",
+      "remaining": 1,
+      "status": "取得済",
+      "errors": [],
+      "queued": 1,
+      "deferred": 0
+    },
+    {
+      "appName": "学会制作最終チェック",
+      "remaining": 0,
+      "status": "取得済",
+      "errors": [],
+      "queued": 0,
+      "deferred": 0
+    }
+  ],
+  "notification": {
+    "delivered": "none"
+  }
+}

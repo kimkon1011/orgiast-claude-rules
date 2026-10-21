@@ -1,0 +1,19 @@
+{
+  "dryRun": true,
+  "remaining": 0,
+  "unknown": 0,
+  "launched": 0,
+  "rows": [
+    {
+      "appName": "fixture",
+      "remaining": 0,
+      "status": "取得済",
+      "errors": [],
+      "queued": 0,
+      "deferred": 0
+    }
+  ],
+  "notification": {
+    "delivered": "none"
+  }
+}

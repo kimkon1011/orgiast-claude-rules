@@ -1,0 +1,21 @@
+{
+  "dryRun": true,
+  "remaining": 1,
+  "unknown": 1,
+  "launched": 0,
+  "rows": [
+    {
+      "appName": "fixture",
+      "remaining": 1,
+      "status": "未取得（Issue照合失敗）",
+      "errors": [
+        "Issue状態 未取得"
+      ],
+      "queued": 0,
+      "deferred": 0
+    }
+  ],
+  "notification": {
+    "delivered": "none"
+  }
+}

@@ -170,6 +170,12 @@
       "reason": "要確認"
     },
     {
+      "path": "tools/handoff-audit-findings-deferral-3423fc16.md",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "ドキュメントで実行体なし（~/.claude 設定名の記載による誤検出を許容）"
+    },
+    {
       "path": "tools/handoff-audit-findings-deferral-362119db.md",
       "scope": "kim-only",
       "step": null,

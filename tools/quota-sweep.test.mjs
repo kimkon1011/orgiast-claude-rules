@@ -8,6 +8,7 @@ import { PassThrough } from 'node:stream';
 import { DEFAULT_GOAL, MAX_TICKS, selectGoal, tickPrompt, contractPrompt, canRunWindow, interactiveClaude, main, makeLedger, runSweep, parseOutput, acquireLock } from './quota-sweep.mjs';
 import { runBounded, killTree } from './lib/quota-sweep-process.mjs';
 import { interactiveCodex, wslPath } from './lib/quota-sweep-host.mjs';
+import { decideSweep, resetKey, sameReset } from './lib/quota-windows.mjs';
 const now = Date.UTC(2026, 9, 21), minute = 60_000;
 const decision = { provider: 'claude', window: '5h', usedPercent: 40, resetsAt: now + 60 * minute, deadline: now + 57 * minute };
 const windows = [{ provider: 'claude', window: '5h', usedPercent: 40, resetsAt: decision.resetsAt }, { provider: 'claude', window: '7d', usedPercent: 20, resetsAt: now + 500 * minute }];
@@ -189,4 +190,32 @@ test('external rescue branch switch stops ticks and never pushes the wrong ref',
   await runSweep(decision, ctx);
   assert.equal(ctx.state.lastRun.claude[decision.resetsAt].outcome, 'failed');
   assert.equal(commands.some(c => c[1] === 'push'), false);
+});
+
+test('reset jitter across a minute boundary keeps one identity', () => {
+  const base = Date.UTC(2026, 9, 21, 2, 0, 0);
+  assert.equal(resetKey(base - 400), base);           // 01:59:59.6 → 02:00:00
+  assert.equal(resetKey(base + 192), base);           // 実測の 15:00:00.192Z
+  assert.equal(sameReset(base - 1500, base), true);   // floor-to-second では別キーになっていた差分
+  assert.equal(sameReset(base + 5 * minute, base), false);
+});
+
+test('minute-boundary jitter during a run does not abort an eligible tick', async t => {
+  let calls = 0; const ctx = context(t, async () => { calls++; return { code: 0, stdout: JSON.stringify({ result: 'FINAL' }) }; });
+  // 2026-10-21 10:29 JST の実測: decision=02:00:00.000Z, 再読で 01:59:59.x に揺れた
+  ctx.windows = async () => windows.map(w => w.window === '5h' ? { ...w, resetsAt: w.resetsAt - 1500 } : w);
+  await runSweep(decision, ctx);
+  assert.equal(calls, 2); assert.equal(ctx.state.lastRun.claude[decision.resetsAt].outcome, 'final');
+});
+
+test('unused window without resets_at does not block the resetting window', () => {
+  const at = now;
+  const idle5h = { provider: 'claude', window: '5h', usedPercent: 0, resetsAt: null };
+  const weekly = { provider: 'claude', window: '7d', usedPercent: 40, resetsAt: at + 60 * minute };
+  const decisions = decideSweep({ windows: [idle5h, weekly], now: at });
+  assert.equal(decisions.length, 1);
+  assert.equal(decisions[0].window, '7d');
+  assert.equal(decisions[0].resetsAt, resetKey(weekly.resetsAt));
+  // Unknown usage (non-finite reset with consumption) stays conservative.
+  assert.equal(decideSweep({ windows: [{ ...idle5h, usedPercent: 30 }, weekly], now: at }).length, 0);
 });

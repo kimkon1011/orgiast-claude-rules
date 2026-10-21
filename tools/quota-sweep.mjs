@@ -8,7 +8,7 @@ import { parseHandoff, selectTodoLanes } from './auto-session.mjs';
 import { buildClaudeHeadlessArgs, parseAutoSessionEnvText } from './auto-session-executor.mjs';
 import { resolveClaudeExecutableFromDisk, sanitizeClaudeSupervisorEnv } from './claude-exe.mjs';
 import { notifyKim } from './notify-kim.mjs';
-import { decideSweep, readClaudeWindows, readCodexWindows, shouldStopTick, jsonlFiles, resetKey } from './lib/quota-windows.mjs';
+import { decideSweep, readClaudeWindows, readCodexWindows, shouldStopTick, jsonlFiles, sameReset } from './lib/quota-windows.mjs';
 import { discoverWsl, passiveWslHomes, wslPath, interactiveCodex, nativeCommand } from './lib/quota-sweep-host.mjs';
 import { syncWslCodexAuth } from './lib/codex-wsl-auth-sync.mjs';
 import { runBounded } from './lib/quota-sweep-process.mjs';
@@ -156,10 +156,10 @@ export async function runSweep(decision, context) {
     }
     const all = await refresh(), own = all.filter(w => w.provider === provider);
     usedAfter = own.find(w => w.window === decision.window)?.usedPercent ?? null;
-    if ((provider === 'claude' && !['5h', '7d'].every(k => own.some(w => w.window === k))) || !own.length || own.some(w => !Number.isFinite(w.resetsAt) && !w.exhausted)) return 'failed';
+    if ((provider === 'claude' && !['5h', '7d'].every(k => own.some(w => w.window === k))) || !own.length || own.some(w => !Number.isFinite(w.resetsAt) && w.usedPercent !== 0 && !w.exhausted)) return 'failed';
     if (own.some(w => w.exhausted)) return 'exhausted';
     if (shouldStopTick({ windows: all, provider })) return 'ceiling';
-    if (own.some(w => w.resetsAt - 3 * 60_000 <= now()) || !own.some(w => resetKey(w.resetsAt) === decision.resetsAt)) return 'deadline';
+    if (own.some(w => Number.isFinite(w.resetsAt) && w.resetsAt - 3 * 60_000 <= now()) || !own.some(w => sameReset(w.resetsAt, decision.resetsAt))) return 'deadline';
     if (await active(provider)) return 'failed';
     return null;
   };
@@ -167,7 +167,7 @@ export async function runSweep(decision, context) {
     let stop = await check();
     if (!stop) {
       const initial = await refresh();
-      const eligible = decideSweep({ windows: initial, now: now(), leadMinutes: context.leadMinutes ?? 90, minRemainingPercent: context.minRemainingPercent ?? 15 }).find(d => d.provider === provider && d.resetsAt === decision.resetsAt);
+      const eligible = decideSweep({ windows: initial, now: now(), leadMinutes: context.leadMinutes ?? 90, minRemainingPercent: context.minRemainingPercent ?? 15 }).find(d => d.provider === provider && sameReset(d.resetsAt, decision.resetsAt));
       if (!eligible) stop = 'exhausted'; else usedBefore = eligible.usedPercent;
     }
     if (stop) { outcome = stop; return; }

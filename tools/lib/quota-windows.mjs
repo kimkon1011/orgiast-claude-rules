@@ -3,8 +3,12 @@ import path from 'node:path';
 import { fetchClaudePlanUsage } from '../claude-plan-usage.mjs';
 
 const MINUTE = 60_000;
-// API reset timestamps can jitter within a second; identity must remain stable.
-export const resetKey = value => Math.floor(value / 1000) * 1000;
+// The usage API returns resets_at with sub-second jitter that can land on either
+// side of a minute boundary (実測: 01:59:59.x / 02:00:00.x, 15:00:00.192Z).
+// Identity must survive that flip, so bucket to the nearest minute and compare
+// with a tolerance instead of an exact key.
+export const resetKey = value => Math.round(value / MINUTE) * MINUTE;
+export const sameReset = (a, b) => Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= 2 * MINUTE;
 export function parseCodexRateLimits(text) {
   let latest = null;
   // Read structured telemetry only. Quoted examples inside a user/tool message
@@ -60,12 +64,16 @@ export function decideSweep({ windows, now = Date.now(), leadMinutes = 90, minRe
     const own = windows.filter(w => w.provider === provider);
     if (shouldStopTick({ windows, provider, hardCeilingPercent })) continue;
     if (provider === 'claude' && !['5h', '7d'].every(k => own.some(w => w.window === k && 100 - w.usedPercent >= minRemainingPercent))) continue;
+    // An unused window (0% used) has no resets_at yet: it is not an active limit.
+    // Any other non-finite reset is unknown state, so stay conservative.
+    if (own.some(w => !Number.isFinite(w.resetsAt) && w.usedPercent !== 0)) continue;
+    const active = own.filter(w => Number.isFinite(w.resetsAt));
     // Every concurrent limit must allow work; resetting any active window ends this run.
-    if (own.some(w => !Number.isFinite(w.resetsAt) || w.resetsAt <= now || 100 - w.usedPercent < minRemainingPercent)) continue;
-    const candidates = own.filter(w => w.resetsAt - now <= leadMinutes * MINUTE);
+    if (active.some(w => w.resetsAt <= now || 100 - w.usedPercent < minRemainingPercent)) continue;
+    const candidates = active.filter(w => w.resetsAt - now <= leadMinutes * MINUTE);
     if (!candidates.length) continue;
     const first = candidates.sort((a, b) => a.resetsAt - b.resetsAt)[0];
-    const deadline = Math.min(...own.map(w => w.resetsAt)) - marginMinutes * MINUTE;
+    const deadline = Math.min(...active.map(w => w.resetsAt)) - marginMinutes * MINUTE;
     if (deadline - now < minRunMinutes * MINUTE) continue;
     decisions.push({ provider, window: first.window, resetsAt: resetKey(first.resetsAt), deadline, usedPercent: first.usedPercent,
       remainingPercent: 100 - first.usedPercent, reason: `reset approaching${own.some(w => w.stale) ? '; stale: refresh before tick' : ''}` });

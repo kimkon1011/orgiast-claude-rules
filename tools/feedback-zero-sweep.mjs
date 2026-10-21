@@ -205,10 +205,18 @@ export function sweepExitCode(result) {
   return 0;
 }
 
+// 夜間ログは末尾8行しか残らないため、失敗理由を1行で最後に出す（JSON の直後）。
+export function unknownRowsLine(result) {
+  const rows=(result?.rows || []).filter(r=>r.status!=='取得済' || (r.errors && r.errors.length));
+  if(!rows.length)return '';
+  return 'unknown_rows='+rows.map(r=>`${r.appName}:${(r.errors?.length?[...new Set(r.errors)].join('、'):r.status)}`).join('; ');
+}
+
 if(isEntry(import.meta.url)) {
   try {
     const args=process.argv.slice(2);if(args.some(a=>a!=='--dry-run'))throw new Error('引数は --dry-run のみ');
     const result=await sweep({dryRun:args.includes('--dry-run')});console.log(JSON.stringify(result,null,2));
+    const unknownLine=unknownRowsLine(result);if(unknownLine)console.error(unknownLine);
     process.exitCode=sweepExitCode(result);
   }catch(e){console.error('feedback-zero-sweep: '+e.message);process.exitCode=1;}
 }

@@ -181,8 +181,24 @@ export function runGh(args, options = {}) {
   return spawnSync(command, { ...options, shell: true, encoding: 'utf8', windowsHide: true });
 }
 
+// 夜間巡回の一時的な 5xx / rate limit / ネットワーク断を吸収する。読み取り専用なので再試行してよい。
+function defaultSleep(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
+
+export function lookupFeedbackIssue(messageId, repo, gh, { attempts = 3, delayMs = 2000, sleep = defaultSleep } = {}) {
+  let detail = 'no attempt';
+  for (let i = 0; i < attempts; i++) {
+    if (i > 0) sleep(delayMs * 2 ** (i - 1));
+    let lookup;
+    try { lookup = gh(['issue','list','--repo',repo,'--state','all','--search',`"feedback-dm:${messageId}" in:body`,'--json','number,url,body','--limit','100']); }
+    catch (error) { detail = error.message; continue; }
+    if (lookup?.error || lookup?.status !== 0) { detail = lookup?.error?.message || `status=${lookup?.status}`; continue; }
+    try { return JSON.parse(lookup.stdout); } catch (error) { detail = `invalid JSON: ${error.message}`; }
+  }
+  throw new Error(`Issue lookup failed (${detail})`);
+}
+
 // Both the fast intake and daily sweep use this idempotent Issue/ledger operation.
-export function ensureFeedbackIssue(item, repo, { home = os.homedir(), gh = runGh } = {}) {
+export function ensureFeedbackIssue(item, repo, { home = os.homedir(), gh = runGh, lookupAttempts = 3, lookupDelayMs = 2000, sleep = defaultSleep } = {}) {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo) || !/^[^"\\\r\n]+$/.test(String(item.message_id || ''))) throw new Error('Invalid feedback identity');
   const ledgerFile = path.join(home, '.claude', 'feedback-issue-ledger.json');
   const lock = path.join(home, '.claude', 'feedback-issue-locks', createHash('sha256').update(String(item.message_id)).digest('hex'));
@@ -200,9 +216,7 @@ export function ensureFeedbackIssue(item, repo, { home = os.homedir(), gh = runG
     const recorded = ledger.items.find(row => String(row.message_id) === String(item.message_id));
     if(recorded) return recorded;
     const marker = `<!-- feedback-dm:${item.message_id} -->`;
-    const lookup = gh(['issue','list','--repo',repo,'--state','all','--search',`"feedback-dm:${item.message_id}" in:body`,'--json','number,url,body','--limit','100']);
-    if(lookup.error || lookup.status !== 0) throw new Error('Issue lookup failed');
-    const results = JSON.parse(lookup.stdout);
+    const results = lookupFeedbackIssue(item.message_id, repo, gh, { attempts: lookupAttempts, delayMs: lookupDelayMs, sleep });
     let issue = results.find(row => row.body?.includes(marker));
     if(!issue) {
       temp = fs.mkdtempSync(path.join(os.tmpdir(), 'feedback-issue-'));

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { sweep, sweepExitCode, fetchPending, normalizeItem, appConfig, appDirectory } from './feedback-zero-sweep.mjs';
+import { sweep, sweepExitCode, unknownRowsLine, fetchPending, normalizeItem, appConfig, appDirectory } from './feedback-zero-sweep.mjs';
 
 const entry = { appName: 'テストアプリ', kind: 'next', intake: 'relay', refs: { url: 'T_URL', secret: 'T_SECRET', repo: 'T_REPO', appDir: 'T_DIR' } };
 
@@ -242,4 +242,15 @@ test('専用経路は repo 未設定でも残数を報告し dry-run・実行と
       if (!dryRun) assert.ok(calls.notify[0].includes('ブース制作アプリ: 2件 / 取得済'));
     } finally { fs.rmSync(home, { recursive: true, force: true }); }
   }
+});
+
+test('unknownRowsLine は失敗したアプリと理由を1行にまとめ、成功時は空', () => {
+  assert.equal(unknownRowsLine({ rows: [{ appName: 'A', status: '取得済', errors: [] }] }), '');
+  assert.equal(
+    unknownRowsLine({ rows: [
+      { appName: 'A', status: '取得済', errors: ['Issue化失敗: Issue lookup failed (status=1)'] },
+      { appName: 'B', status: '未取得', errors: [] },
+    ] }),
+    'unknown_rows=A:Issue化失敗: Issue lookup failed (status=1); B:未取得',
+  );
 });

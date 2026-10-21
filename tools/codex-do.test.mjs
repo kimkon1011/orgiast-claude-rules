@@ -1817,3 +1817,9 @@ test('buildUsageRow は timeoutSecs が無ければ行に生やさない（旧�
   assert.equal('timeoutSecs' in row, false);
   assert.equal(row.status, 'ok');
 });
+
+
+test('detectQuotaLimit: 2026-10-20 実測の切り詰め行(先頭欠け)を本物の上限として検出する', () => {
+  const tail = 't your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits or try again at 8:20 AM.';
+  assert.equal(detectQuotaLimit('', tail, 1, 'do something').matched, true);
+});

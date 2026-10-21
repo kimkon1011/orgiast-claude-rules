@@ -149,3 +149,17 @@ test('codex-astra cooldown is independent and legacy path calls still work', asy
   assert.equal(JSON.parse(fs.readFileSync(file)).codex.reason, 'usage_limit');
   assert.equal(JSON.parse(fs.readFileSync(file))['codex-astra'].reason, 'usage_limit');
 });
+
+
+test('parseCodexResetUntil は日付なしの try again at H:MM AM/PM を次のローカル時刻にする', () => {
+  const now = new Date(2026, 9, 21, 4, 15, 0).getTime();
+  const until = parseCodexResetUntil("ERROR: You've hit your usage limit. or try again at 8:20 AM.", now);
+  assert.equal(until, new Date(2026, 9, 21, 8, 20, 0).getTime());
+});
+
+test('parseCodexResetUntil は出力中の無関係な ISO イベント時刻を再開時刻にしない', () => {
+  const now = Date.parse('2026-10-20T19:15:41.000Z');
+  const until = parseCodexResetUntil("ERROR: You've hit your usage limit. try again at 8:20 AM.\n{\"timestamp\":\"2026-10-21T09:05:00.000Z\"}", now);
+  assert.equal(until, new Date(2026, 9, 21, 8, 20, 0).getTime());
+  assert.notEqual(until, Date.parse('2026-10-21T09:05:00.000Z'));
+});

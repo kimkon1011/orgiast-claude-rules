@@ -20,6 +20,14 @@ function upsertPlanUsage(payload) {
         SpreadsheetApp.newConditionalFormatRule().whenNumberLessThan(0.5).setBackground('#fff2cc').setRanges(ranges).build()
       ]);
     }
+    // タブ作成直後に失敗すると見出しが空のまま残る（2026-10-21 実測）。毎回自己修復する。
+    if (sheet.getRange(1, 1).getDisplayValue() !== PLAN_USAGE_HEADERS_[0]) {
+      sheet.getRange(1, 1, 1, PLAN_USAGE_HEADERS_.length).setValues([PLAN_USAGE_HEADERS_]);
+      sheet.setFrozenRows(1);
+    }
+    // §2.11 方式B: 見る人が使う画面（このタブ）に共通の不具合・要望フォームを置く。
+    const feedbackCell = sheet.getRange(1, PLAN_USAGE_HEADERS_.length + 1);
+    if (!feedbackCell.getFormula()) feedbackCell.setFormula('=HYPERLINK("' + PLAN_USAGE_FEEDBACK_URL_ + '","不具合・要望")');
     const count = Math.max(0, sheet.getLastRow() - 1);
     const rows = count ? sheet.getRange(2, 1, count, PLAN_USAGE_HEADERS_.length).getValues() : [];
     const plan = planUsageUpsert(rows, payload);

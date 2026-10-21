@@ -1,3 +1,4 @@
+const PLAN_USAGE_FEEDBACK_URL_ = 'https://script.google.com/macros/s/AKfycbzzOD2hA2hNKK8SccyRGf0tFivf_WS_VjWzOS5RgVnM3VD63jpu0xcprAOxUcDmuxlC/exec?form=feedback&app=' + encodeURIComponent('Claude上限ダッシュボード');
 const PLAN_USAGE_HEADERS_ = ['アカウント', '5h残り', '5hリセット', '週残り', '週リセット', 'モデル別週枠', '状態', '最終報告(JST)', '報告PC', '5h消化率(生)', '週消化率(生)', '5hリセット日時', '週リセット日時'];
 
 function planUsageKey(payload) {

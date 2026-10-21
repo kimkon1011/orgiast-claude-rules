@@ -86,12 +86,15 @@ test('ゼロ消化率を維持、未計測・不正日時は空欄、labelとrep
 
 function gasFixture({ busy = false, fail = false } = {}) {
   const calls = [], rows = [];
+  const cellFormulas = new Map();
   let exists = false;
   const range = (...coords) => ({
     setValues(values) { calls.push(['values', coords]); if (coords[0] > 1) rows[coords[0] - 2] = [...values[0]]; return this; },
     getValues() { return rows; },
     setNumberFormat(format) { calls.push(['format', coords, format]); return this; },
     setFormulas(formulas) { calls.push(['formulas', coords, formulas]); return this; },
+    getFormula() { return cellFormulas.get(JSON.stringify(coords)) ?? ''; },
+    setFormula(formula) { calls.push(['formula', coords, formula]); cellFormulas.set(JSON.stringify(coords), formula); return this; },
     sort(spec) { calls.push(['sort', spec]); return this; },
   });
   const sheet = {
@@ -126,6 +129,19 @@ test('GASはSHEET_ID・JST・毎時再計算で作成、週残り昇順ソート
   assert.ok(calls.some(c => c[0] === 'sort' && c[1].column === 4 && c[1].ascending));
   assert.ok(calls.findIndex(c => c[0] === 'sort') < calls.findIndex(c => c[0] === 'formulas'));
   assert.equal(calls.filter(c => c[0] === 'release').length, 2);
+});
+
+test('GASはタブ作成時にN1へ不具合・要望フォームを設定し、既存の数式は再設定しない', () => {
+  const { ctx, calls } = gasFixture();
+  const url = 'https://script.google.com/macros/s/AKfycbzzOD2hA2hNKK8SccyRGf0tFivf_WS_VjWzOS5RgVnM3VD63jpu0xcprAOxUcDmuxlC/exec?form=feedback&app=' + encodeURIComponent('Claude上限ダッシュボード');
+  const expected = [['formula', [1, 14], `=HYPERLINK("${url}","不具合・要望")`]];
+
+  assert.equal(ctx.upsertPlanUsage(payload).ok, true);
+  assert.deepEqual(calls.filter(c => c[0] === 'create'), [['create', 'Claude上限']]);
+  assert.deepEqual(calls.filter(c => c[0] === 'formula'), expected);
+
+  assert.equal(ctx.upsertPlanUsage({ ...payload, reportedAt: '2026-10-21 09:16' }).ok, true);
+  assert.deepEqual(calls.filter(c => c[0] === 'formula'), expected);
 });
 
 test('GASはロック取得失敗でbusy、例外でもロック解放', () => {

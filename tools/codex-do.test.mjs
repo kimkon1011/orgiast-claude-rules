@@ -250,6 +250,15 @@ test('detectQuotaLimit: 実機の usage limit 行(U+2019/URL/AM PM)を検出す�
   assert.equal(detectQuotaLimit('', `M. ${real}`, 1, '').matched, false);
 });
 
+// 2026-10-20 19:15Z の実測メッセージ全文。この検出自体は正しく（同セッションの rate_limits は
+// "primary":null / credits 0）、偽陽性だったのは再開時刻のパースと delegation-health の突き合わせ。
+test('detectQuotaLimit: 2026-10-20 実測の日付なし再開時刻を含む全文を検出する', () => {
+  const message = "ERROR: You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits or try again at 8:20 AM.";
+  const check = detectQuotaLimit('', message, 1, 'do something');
+  assert.equal(check.matched, true);
+  assert.equal(check.pattern, "You've hit your usage limit");
+});
+
 test('detectQuotaLimit: テストランナー、コード、行番号の疑似一致を除外する', () => {
   assert.equal(detectQuotaLimit("✔ detectQuotaLimit: 枠切れメッセージ (You've hit your usage limit) を検出する (1.2ms)", '', 0).matched, false);
   assert.equal(detectQuotaLimit('return json({ ok:false, error:"rate limit exceeded" }, 429)', '', 0).matched, false);

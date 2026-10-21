@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { parseHandoff } from './auto-session.mjs';
-import { applyAutoHeal, authRestoredAfter, collectFindings, emptyOutputReason, isCooldownSkippedRow, isEmptyDiffEscalationRow, isQuotaLimitedRow, lowYieldBackends, parseRateLimitsFromText, readCodexUsedPercent, timeoutWasteSummary, upsertFixTasks, windowResetsAfterLimit } from './delegation-health-check.mjs';
+import { applyAutoHeal, authRestoredAfter, collectFindings, dedupeLimitEvents, emptyOutputReason, isCooldownSkippedRow, isEmptyDiffEscalationRow, isQuotaLimitedRow, lowYieldBackends, metricFromLaterWindow, parseRateLimitsFromText, readCodexUsedPercent, timeoutWasteSummary, upsertFixTasks, windowResetsAfterLimit } from './delegation-health-check.mjs';
 
 const NOW = new Date('2026-09-09T12:00:00.000Z');
 const homes = [];
@@ -541,6 +541,35 @@ test('同じ窓のまま低い使用率なら従来どおり偽陽性として�
   const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: { usedPercent: 67, windowMinutes: 10080, resetsAt: 1791982428 } });
   assert.equal(findings[0].id, 'codex_false_usage_limit');
   assert.match(findings[0].evidence.join('/'), /used_percent 67/);
+});
+
+// 2026-10-20T19:15Z の実測データ。本物の上限(primary:null / credits 0)だが until のパースが
+// 壊れて 2026-10-21T09:05Z になり、翌夜は 02:52Z 開始の 300 分窓の used_percent 8 を読んだ。
+test('2026-10-20 の実測: 後から始まった窓の低使用率を偽陽性の根拠にしない', () => {
+  const dir = home();
+  const now = new Date('2026-10-21T18:09:49.000Z');
+  write(dir, 'codex-limit-history.jsonl', [
+    { t: '2026-10-20T19:15:41.089Z', until: 1792573500000, reason: 'usage_limit' },
+    { t: '2026-10-20T19:24:44.528Z', until: 1792573500000, reason: 'usage_limit_no_fallback' },
+  ].map(row).join(''));
+  const findings = collectFindings({ home: dir, now, codexUsedPercent: { usedPercent: 8, windowMinutes: 300, resetsAt: 1792569159 } });
+  assert.equal(findings.some((item) => item.id === 'codex_false_usage_limit'), false);
+});
+
+test('metricFromLaterWindow: 短い窓が検出より後に始まった時だけ true', () => {
+  const rows = [{ t: '2026-10-20T19:15:41.000Z', until: 1792573500000 }];
+  assert.equal(metricFromLaterWindow(rows, { usedPercent: 8, windowMinutes: 300, resetsAt: 1792569159 }), true);
+  assert.equal(metricFromLaterWindow(rows, { usedPercent: 67, windowMinutes: 10080, resetsAt: 1791982428 }), false);
+  assert.equal(metricFromLaterWindow(rows, { usedPercent: 8, windowMinutes: 300, resetsAt: 1792530000 }), false);
+  assert.equal(metricFromLaterWindow(rows, { usedPercent: 8, windowMinutes: null, resetsAt: 1792569159 }), false);
+});
+
+test('dedupeLimitEvents: until が同じ usage_limit と usage_limit_no_fallback を1件に数える', () => {
+  assert.equal(dedupeLimitEvents([
+    { until: 1792573500000, reason: 'usage_limit' },
+    { until: 1792573500000, reason: 'usage_limit_no_fallback' },
+    { reason: 'usage_limit' },
+  ]).length, 2);
 });
 
 test('windowResetsAfterLimit: 窓が進んだ時だけ true、until 不明なら判定しない', () => {

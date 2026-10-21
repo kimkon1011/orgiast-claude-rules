@@ -87,9 +87,10 @@ test('ゼロ消化率を維持、未計測・不正日時は空欄、labelとrep
 function gasFixture({ busy = false, fail = false } = {}) {
   const calls = [], rows = [];
   const cellFormulas = new Map();
-  let exists = false;
+  let exists = false, header = [];
   const range = (...coords) => ({
-    setValues(values) { calls.push(['values', coords]); if (coords[0] > 1) rows[coords[0] - 2] = [...values[0]]; return this; },
+    setValues(values) { calls.push(['values', coords]); if (coords[0] > 1) rows[coords[0] - 2] = [...values[0]]; else header = [...values[0]]; return this; },
+    getDisplayValue() { return coords[0] === 1 ? (header[coords[1] - 1] ?? '') : ''; },
     getValues() { return rows; },
     setNumberFormat(format) { calls.push(['format', coords, format]); return this; },
     setFormulas(formulas) { calls.push(['formulas', coords, formulas]); return this; },

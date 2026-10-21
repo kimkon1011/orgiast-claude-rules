@@ -59,13 +59,15 @@ export async function runPlanUsageReport({
   // 間引き判定を先に済ませ、毎プロンプトで子プロセスを起動しない。
   if (args.includes('--hook') && !args.includes('--from-hook')) {
     try {
+      // Windows で detached を外すと libuv のジョブオブジェクトごと親と一緒に殺され送信されない（2026-10-21 実測）。
+      // purge-sessions と同じく windowsHide + stdio:'ignore' を必ず併記して窓を出さない。
       const child = spawnImpl(process.execPath, [fileURLToPath(import.meta.url), ...args.filter(arg => arg !== '--hook'), '--from-hook'], {
         detached: true, windowsHide: true, stdio: 'ignore', env: { ...process.env, ORGIAST_HOME: home },
       });
       child.on('error', () => {});
       child.unref();
     } catch { /* Hook always exits successfully, without reading stdin. */ }
-    return { detached: true };
+    return { backgrounded: true };
   }
   const { hostname } = identity();
   const { label } = resolveReporterLabel({ envText: readText(path.join(dir, 'cost-reporter.env')), hostname });

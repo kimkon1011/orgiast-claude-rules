@@ -200,6 +200,12 @@
       "reason": "ドキュメントで実行体なし（~/.claude 設定名の記載による誤検出を許容）"
     },
     {
+      "path": "tools/handoff-audit-findings-deferral-e524c1f7.md",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "ドキュメントで実行体なし（~/.claude 設定名の記載による誤検出を許容）"
+    },
+    {
       "path": "tools/handoff-audit-findings-deferral-ec4f1e5f.md",
       "scope": "kim-only",
       "step": null,

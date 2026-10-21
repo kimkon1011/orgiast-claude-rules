@@ -79,6 +79,10 @@ export function classifyFailure(status) {
   return 'next';
 }
 
+export function isPermanentBillingDetail(detail) {
+  return /prepayment credits are depleted|insufficient_quota|exceeded your current quota|insufficient balance|insufficient_balance|exceeded_current_quota|is suspended due to|please recharge your account/i.test(String(detail || ''));
+}
+
 function retryAfterMs(response, now = Date.now()) {
   const value = response?.headers?.get?.('retry-after');
   if (!value) return null;
@@ -152,7 +156,7 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, allowGat
   let cooldownDirty = false;
   // Bound legacy 429 entries from their original start, not from every read.
   for (const state of Object.values(cooldowns)) {
-    if (state?.reason !== 'http_429') continue;
+    if (state?.reason !== 'http_429' || state?.permanentBilling === true) continue;
     const began = Number.isFinite(state.at) ? state.at : timestamp;
     const until = Math.min(Number(state.until), began + cooldownMax);
     if (until < Number(state.until)) { state.until = until; cooldownDirty = true; }
@@ -174,12 +178,12 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, allowGat
   function setCooldown(provider, status, response, permanentBilling = false) {
     if (!useCooldown) return;
     let duration = 0;
-    if (status === 429) duration = Math.min(cooldownMax, Math.max(cooldownMin, retryAfterMs(response, now()) ?? cooldownMin));
-    else if (status === 402 || permanentBilling) duration = 24 * 60 * 60 * 1000;
+    if (status === 402 || permanentBilling) duration = 24 * 60 * 60 * 1000;
+    else if (status === 429) duration = Math.min(cooldownMax, Math.max(cooldownMin, retryAfterMs(response, now()) ?? cooldownMin));
     else if ([401, 403].includes(status)) duration = 6 * 60 * 60 * 1000;
     if (!duration) return;
     const at = now();
-    cooldowns[provider] = { until: at + duration, reason: `http_${status}`, at };
+    cooldowns[provider] = { until: at + duration, reason: `http_${status}`, at, ...(permanentBilling ? { permanentBilling: true } : {}) };
     cooldownDirty = true;
     saveCooldowns();
   }
@@ -266,7 +270,7 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, allowGat
       await onAttempt?.({ candidate, attempt, status: statusName(status), response, reason: lastReason, secs: (Date.now() - began) / 1000, failover: candidate.provider !== start.provider });
       // groq の通常429の本文には `https://console.groq.com/settings/billing` が含まれるため、
       // 素の `billing` で判定すると日次上限(TPD)を恒久障害と誤判定する。恒久障害の文面だけを拾う。
-      const permanentBilling = status === 429 && /prepayment credits are depleted|insufficient_quota|exceeded your current quota/i.test(detail);
+      const permanentBilling = status === 429 && isPermanentBillingDetail(detail);
       setCooldown(candidate.provider, status, response, permanentBilling);
 
       const kind = classifyFailure(status);

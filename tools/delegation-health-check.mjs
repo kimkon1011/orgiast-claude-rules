@@ -8,6 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { normalizeExecutorStatus } from './executor-status.mjs';
 import { isEntry } from './is-entry.mjs';
 import { judgeTimeoutRows } from './timeout-waste-judge.mjs';
+import { isPermanentBillingDetail } from './llm-fallback.mjs';
 
 const DAY = 86_400_000;
 const HOUR = 3_600_000;
@@ -141,6 +142,11 @@ export function isQuotaLimitedRow(row = {}) {
   return /^http_?(402|429)$/.test(String(row?.status ?? '').toLowerCase());
 }
 
+export function isBillingSuspendedRow(row = {}) {
+  return /^http_?(402|429)$/.test(String(row?.status ?? '').toLowerCase())
+    && isPermanentBillingDetail(row?.reason);
+}
+
 // cooldown の行は「上限/レート制限中なのでリクエストを投げなかった」記録(cheap-code.mjs が
 // status:'cooldown' で残す)。失敗ではなく未試行なので、全滅判定の分母に入れてはならない。
 // 入れると (a) 実体が上限到達でも証拠が「N件すべて失敗」の high 未修理全滅になり、
@@ -185,6 +191,7 @@ export function emptyOutputReason(row) {
   // 旧行(timedOut 未記録)は経過秒数から推定する。codex の正常終了は実測で中央値~100秒、
   // 打ち切りは --timeout 到達時にのみ現れ、実測値は 300 秒以上だった。
   if (row?.timedOut == null && Number(row?.secs) >= 300) return 'timeout';
+  if (String(row?.status ?? '').toLowerCase() === 'network') return 'infra_transient';
   if (WSL_LANE_ABSENT.test(String(row?.stderrTail || ''))) return 'launch_failed';
   // 起動前のゲートが「意図的に止めた」行。launched:false だが codex は一度も起動されておらず、
   // 起動失敗ではない。codex-do が書く行の status は必ず数値で、起動前ゲートは文字列の番兵を書く
@@ -363,7 +370,20 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
     // 起票すると、上限が続く限り毎晩同じ偽の修理タスクが積まれる（2026-10-13 診断: glm の
     // 3件は 1 リクエストの再試行で、実体は Coding Plan の週次/月次上限到達）。
     // codex の usage_limit と同じく low・fixTask なしの可視化だけにする。
-    if (attempts.every(isQuotaLimitedRow)) {
+    // 上限・課金切れ・一過性ネットワークだけで全滅した行は「レーンが壊れている」証拠ではない。
+    // 実測 2026-10-22: kimi の 24h 449 行 = http_429 440 + status:'network' 9(10.7秒で
+    // タイムアウト) で、network を no_output 扱いしていたため毎日 high になっていた。
+    const benign = attempts.filter((row) => isQuotaLimitedRow(row) || emptyOutputReason(row) === 'infra_transient');
+    const billingSuspended = attempts.filter(isBillingSuspendedRow);
+    // 行に reason が無い旧記録でも、llm-fallback が残した 24h の恒久課金切れ cooldown で判別できる。
+    const billingCooldown = cooldown[provider]?.permanentBilling === true && Number(cooldown[provider]?.until) > nowMs;
+    if ((billingSuspended.length || billingCooldown) && benign.length === attempts.length) {
+      findings.push({ id: 'provider_billing_suspended', provider, severity: 'low', title: `${provider} は残高切れで停止（チャージ待ち・コードでは直せない）`,
+        evidence: [`${billingSuspended.length}件が恒久課金切れ`, ...(billingCooldown ? [`cooldown ${cooldown[provider].reason} until ${new Date(Number(cooldown[provider].until)).toISOString()}`] : []),
+          ...reasonTop(billingSuspended.map(row => ({ reason: row.reason || row.stderrTail || emptyOutputReason(row) })))] });
+      continue;
+    }
+    if (benign.length === attempts.length) {
       findings.push({ id: 'provider_usage_limit', provider, severity: 'low', title: `${provider} は上限/レート制限で停止（欠陥ではない）`,
         evidence: [`${attempts.length}件すべて失敗`, ...reasonTop(attempts.map(row => ({ reason: row.stderrTail || row.reason || emptyOutputReason(row) })))] });
       continue;

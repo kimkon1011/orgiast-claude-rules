@@ -107,3 +107,47 @@ test('ambiguous Gmail failure blocks duplicate creation on retry', async t => {
   await assert.rejects(runMonthly({ home: h.home, now }, h.deps), /下書き作成結果が不明/);
   assert.equal(attempts, 1);
 });
+
+test('G deposit date excludes only approaches at 90 JST calendar days, including serial dates', () => {
+  const rows = [['状況']];
+  const add = (customer, date, status = 'アプローチリスト') => rows.push([status, customer, '案件', customer, 100, date, '2000/01/01']);
+  add('89日前社', '2026/7/24');
+  add('90日前社', '2026-07-23');
+  add('91日前社', '2026/07/22');
+  const serial = (Date.UTC(2026, 6, 23) - Date.UTC(1899, 11, 30)) / 86400000;
+  add('90日前シリアル社', serial + 0.75);
+  add('89日前シリアル社', serial + 1);
+  add('空欄社', '');
+  add('不正日付社', '2026/02/30');
+  add('不明社', '未定');
+  add('未来社', '2027/01/01');
+  add('古い確定社', '2000/01/01', '確定');
+  add('古い納品完了社', '2000/01/01', '納品完了');
+  const parsed = parseProjects(rows);
+  assert.equal(parsed[0].depositDate, '2026/7/24');
+  const { body } = buildEmail(parsed, [header], now);
+  for (const name of ['89日前社', '89日前シリアル社', '空欄社', '不正日付社', '不明社', '未来社', '古い確定社', '古い納品完了社']) assert.ok(body.includes(name), name);
+  for (const name of ['90日前社', '91日前社', '90日前シリアル社']) assert.ok(!body.includes(name), name);
+  assert.match(body, /アプローチリスト：6件/);
+  // One second before JST midnight, the 90-day row is still only 89 days old.
+  assert.ok(buildEmail(parsed, [header], new Date(now.getTime() - 1000)).body.includes('90日前社'));
+});
+
+test('monthly dry run lists excluded count and companies at end of DM', async t => {
+  const h = harness(t);
+  const get = h.deps.sheets.get;
+  h.deps.sheets.get = async (id, range) => range.includes('B2:R') ? [...projectRows,
+    ['アプローチリスト', '残す社', '最近', 'recent', 1, '2026/07/24'],
+    ['アプローチリスト', '除外A社', '古いA', 'old-a', 1, '2026/07/23'],
+    ['アプローチリスト', '除外B社', '古いB', 'old-b', 1, '2026/07/22'],
+  ] : get(id, range);
+  const result = await runMonthly({ home: h.home, dryRun: true, now }, h.deps);
+  assert.match(result.email.body, /残す社/);
+  assert.doesNotMatch(result.email.body, /除外A社|除外B社/);
+  assert.match(result.dm, /メールから外した古いアプローチ案件：2件\n・除外A社／古いA\n・除外B社／古いB$/);
+  assert.deepEqual(h.calls, []);
+});
+
+test('DM reports zero excluded approaches', () => {
+  assert.match(buildDm(planUpdates(projects, records, [], now)), /メールから外した古いアプローチ案件：0件\nなし$/);
+});

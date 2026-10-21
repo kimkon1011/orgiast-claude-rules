@@ -33,7 +33,7 @@ const yen = value => Number.isFinite(amount(value)) ? `${Math.round(amount(value
 export function parseProjects(rows) {
   return rows.slice(1).filter(r => r[1] || r[2]).map(r => ({
     status: String(r[0] ?? '').trim(), customer: r[1] || '', name: r[2] || '', url: r[3] || '',
-    sales: r[4], fee: r[7], invoice: r[8], invoiceAmount: r[9], paid: r[10], total: r[16],
+    sales: r[4], depositDate: r[5], fee: r[7], invoice: r[8], invoiceAmount: r[9], paid: r[10], total: r[16],
   }));
 }
 export function uninvoicedProjects(projects, records) {
@@ -72,19 +72,36 @@ export function planUpdates(projects, records, deals, now = new Date()) {
   }
   return { updates, additions, review, projected };
 }
+// Sheets returns date cells as serial days; text dates are also used in G.
+function depositDay(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Date.UTC(1899, 11, 30) + Math.floor(value) * 86400000;
+  }
+  const match = /^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$/.exec(String(value ?? '').trim());
+  if (!match) return NaN;
+  const [, year, month, day] = match.map(Number);
+  const timestamp = Date.UTC(year, month - 1, day);
+  const date = new Date(timestamp);
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day ? timestamp : NaN;
+}
+export function oldApproachProjects(projects, now = new Date()) {
+  const cutoff = depositDay(dateLabel(now)) - 90 * 86400000;
+  return projects.filter(p => p.status === 'アプローチリスト' && depositDay(p.depositDate) <= cutoff);
+}
 export function buildEmail(projects, records, now = new Date()) {
   const [year, month] = monthKey(now).split('-');
   const missing = uninvoicedProjects(projects, records);
   const completed = projects.filter(p => p.status === '納品完了');
   const lines = completed.map(p => `・${p.customer}／${p.name}\n  売上：${yen(p.sales)}　ご紹介料：${yen(p.fee)}\n  ご請求書：${missing.includes(p) ? '未受領' : '受領済み'}`);
+  const excluded = new Set(oldApproachProjects(projects, now));
   const progressing = ['確定', 'アプローチリスト'].map(status => {
-    const list = projects.filter(p => p.status === status);
+    const list = projects.filter(p => p.status === status && !excluded.has(p));
     return `${status}：${list.length}件\n${list.map(p => `・${p.customer}／${p.name}（売上合計：${yen(p.total)}）`).join('\n')}`;
   });
   return { subject: `【株式会社オージャスト】折口様ご紹介案件のご報告（${year}年${Number(month)}月）`, body: `ブロードキャピタル・パートナーズ\n岩岡様\n\nいつも大変お世話になっております。\n株式会社オージャストの金 功勇です。\n折口様よりご紹介いただいた案件につきまして、今月の状況をご報告いたします。\n\n【納品完了の案件】\n${lines.join('\n\n') || '今月の該当案件はございません。'}\n\n${missing.length ? `【ご請求書送付のお願い】\n以下の案件のご紹介料につきまして、ご請求書をお送りいただけますと幸いです。\n${missing.map(p => `・${p.customer}／${p.name}：${yen(p.fee)}`).join('\n')}\n送付先：弊社経理 keiri2@orgiast.jp\n\n` : ''}【進行中の案件】\n${progressing.join('\n\n')}\n\n引き続き、どうぞよろしくお願い申し上げます。\n\n株式会社オージャスト 金 功勇` };
 }
-export function buildDm(plan, { dryRun = false } = {}) {
-  return `${dryRun ? '【dry-run／更新・下書き作成・DM送信は未実施】\n' : ''}折口様紹介案件の月次チェックが終わり、岩岡様宛メールを Gmail の下書きに入れました。確認して送ってください。\nhttps://mail.google.com/mail/?authuser=kim@orgiast.jp#drafts （kim@orgiast.jp で開く）\n\n今回シートで更新${dryRun ? '予定' : 'した'}行（紹介料支払記録）：\n${[...plan.updates.map(u => `・${u.label}: B列 証憑URL、D列 ${u.paid}`), ...plan.additions.map(r => `・追加 ${r[4]}: ${r[0]}／${r[1]}`)].join('\n') || 'なし'}\n\n要確認：\n${plan.review.map(r => `・${r}`).join('\n') || 'なし'}`;
+export function buildDm(plan, { dryRun = false, excludedApproaches = [] } = {}) {
+  return `${dryRun ? '【dry-run／更新・下書き作成・DM送信は未実施】\n' : ''}折口様紹介案件の月次チェックが終わり、岩岡様宛メールを Gmail の下書きに入れました。確認して送ってください。\nhttps://mail.google.com/mail/?authuser=kim@orgiast.jp#drafts （kim@orgiast.jp で開く）\n\n今回シートで更新${dryRun ? '予定' : 'した'}行（紹介料支払記録）：\n${[...plan.updates.map(u => `・${u.label}: B列 証憑URL、D列 ${u.paid}`), ...plan.additions.map(r => `・追加 ${r[4]}: ${r[0]}／${r[1]}`)].join('\n') || 'なし'}\n\n要確認：\n${plan.review.map(r => `・${r}`).join('\n') || 'なし'}\n\nメールから外した古いアプローチ案件：${excludedApproaches.length}件\n${excludedApproaches.map(p => `・${p.customer}／${p.name}`).join('\n') || 'なし'}`;
 }
 export async function fetchDeals({ fetchImpl = fetch, getToken = getAccessToken } = {}) {
   const token = await getToken(), deals = [];
@@ -131,7 +148,7 @@ export async function runMonthly({ dryRun = false, force = false, now = new Date
     stage = 'freee 読み取り';
     const deals = await (deps.fetchDeals || fetchDeals)();
     const plan = planUpdates(projects, records, deals, now);
-    const email = buildEmail(projects, plan.projected, now), dm = buildDm(plan, { dryRun });
+    const email = buildEmail(projects, plan.projected, now), dm = buildDm(plan, { dryRun, excludedApproaches: oldApproachProjects(projects, now) });
     if (dryRun) return { dryRun, email, dm, plan };
     stage = '紹介料支払記録の更新';
     for (const u of plan.updates) {

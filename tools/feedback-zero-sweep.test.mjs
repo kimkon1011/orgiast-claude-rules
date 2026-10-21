@@ -296,3 +296,63 @@ test('unknownRowsLine は失敗したアプリと理由を1行にまとめ、成
     'unknown_rows=A:Issue化失敗: Issue lookup failed (status=1); B:未取得',
   );
 });
+
+test('空の原票でも台帳のIssue照合が一時失敗する：回復後はunknownを残さずexit 0', async () => {
+  for (const dryRun of [true, false]) {
+    const { home, opts, calls } = setup([]);
+    fs.mkdirSync(path.join(home, '.claude'));
+    fs.writeFileSync(path.join(home, '.claude', 'feedback-issue-ledger.json'), JSON.stringify({
+      items: [{ app_name: entry.appName, message_id: 'resolved', repo: 'o/r', number: 42 }],
+    }));
+    let attempts = 0;
+    try {
+      const result = await sweep({ ...opts, dryRun, gh: () => ++attempts === 1
+        ? { status: 1 }
+        : { status: 0, stdout: JSON.stringify({ state: 'CLOSED' }) } });
+      assert.equal(sweepExitCode(result), 0);
+      assert.equal(attempts, 2);
+      assert.equal(result.remaining, 0);
+      assert.equal(result.unknown, 0);
+      assert.deepEqual(result.rows[0].errors, []);
+      assert.equal(result.rows[0].queued, 0);
+      assert.equal(result.rows[0].deferred, 0);
+      assert.deepEqual(result.notification, { delivered: 'none' });
+      assert.equal(sweepExitCode(result), 0);
+      assert.equal(unknownRowsLine(result), '');
+      assert.equal(calls.issue + calls.exec + calls.notify.length, 0);
+    } finally { fs.rmSync(home, { recursive: true, force: true }); }
+  }
+});
+
+test('queued/deferredが0でもIssue照合の再試行枯渇はexit 1', async () => {
+  const { home, opts } = setup([]);
+  fs.mkdirSync(path.join(home, '.claude'));
+  fs.writeFileSync(path.join(home, '.claude', 'feedback-issue-ledger.json'), JSON.stringify({
+    items: [{ app_name: entry.appName, message_id: 'unresolved', repo: 'o/r', number: 42 }],
+  }));
+  let attempts = 0;
+  try {
+    const result = await sweep({ ...opts, dryRun: true, gh: () => { attempts++; return { status: 1 }; } });
+    assert.equal(attempts, 3);
+    assert.equal(result.unknown, 1);
+    assert.equal(result.rows[0].queued, 0);
+    assert.equal(result.rows[0].deferred, 0);
+    assert.equal(sweepExitCode(result), 1);
+    assert.match(unknownRowsLine(result), /Issue状態 未取得 \(status=1\)/);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test('queued/deferredが0でもAPI恒久失敗はdry-run・通常ともexit 1', async () => {
+  for (const dryRun of [true, false]) {
+    const { home, opts, calls } = setup([]);
+    try {
+      const result = await sweep({ ...opts, dryRun, fetchImpl: async () => ({ ok: false, status: 403 }) });
+      assert.equal(result.unknown, 1);
+      assert.equal(result.rows[0].queued, 0);
+      assert.equal(result.rows[0].deferred, 0);
+      assert.deepEqual(result.rows[0].errors, ['HTTP 403']);
+      assert.equal(sweepExitCode(result), 1);
+      assert.equal(calls.issue + calls.exec, 0);
+    } finally { fs.rmSync(home, { recursive: true, force: true }); }
+  }
+});

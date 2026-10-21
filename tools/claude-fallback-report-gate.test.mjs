@@ -17,7 +17,14 @@ for (const text of [
   'Claude Code の設定を更新しました。',
   'Gemini の残高が不足しているため、チャージしてください。',
   '過去発言「Claude のままです」は撤回します。',
+  'Claude にフォールバックする分岐を削除しました',
+  '他AIが全滅した時に Claude で代替しないよう修正しました',
+  '当面は Claude ではなく Gemini で動かします',
 ]) test(`passes: ${text}`, () => assert.equal(evaluate(text).decision, 'pass'));
+
+test('versioned Claude model is blocked', () => assert.equal(evaluate('Claude Sonnet 5 で動きます').decision, 'block'));
+test('unclosed fence remains inspectable', () => assert.equal(evaluate('```text\n当面は Claude で動きます').decision, 'block'));
+test('OK tag quoted inside the block reason is not a bypass', () => assert.equal(evaluate(`対応できません: ${evaluate('当面は Claude で動きます').reason}`).decision, 'block'));
 
 test('OK tag requires a reason of at least 10 characters', () => assert.equal(evaluate('[CLAUDE-FALLBACK-OK] 短い\nClaude に戻す').decision, 'block'));
 

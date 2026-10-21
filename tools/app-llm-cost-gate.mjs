@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-export const GATE_CONTRACT = {"name":"app-llm-cost-gate","remedies":[{"kind":"command","ref":"Add // LLM-PROVIDER-REASON: <reason>, or measure at most 3 items and provide a matching COST-ESTIMATE within budget. Emergency bypass: APP_LLM_COST_GATE=off."}]};
+export const GATE_CONTRACT = {"name":"app-llm-cost-gate","remedies":[{"kind":"command","ref":"Add // LLM-PROVIDER-REASON: <reason>, or measure 1 to 10 items and provide a matching COST-ESTIMATE within budget. Emergency bypass: APP_LLM_COST_GATE=off."}]};
 import fs from 'node:fs';
 import path from 'node:path';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
@@ -45,40 +45,64 @@ export function evaluate(input) {
       return added.some(value => !old.has(value.toLowerCase()));
     };
     const newlyAddsAnthropicDefault = (edit) => anthropicDefault.test(String(edit.new_string || ''))
-      && !/["'`]anthropic["'`]/i.test(String(edit.old_string || ''));
+      && !anthropicDefault.test(String(edit.old_string || ''));
     if (edits.some(e => markers.some(word => String(e.new_string || '').includes(word) && !String(e.old_string || '').includes(word))
       || newlyAddsClaudeModel(e) || newlyAddsAnthropicDefault(e))) return providerMessage;
   }
   if (tool !== 'Bash' || typeof args.command !== 'string') return;
   // Inspect each shell segment without executing the command.
+  let blockedSegment = false;
   for (const segment of args.command.split(/&&|\|\||[;\n|]/)) {
     const tokens = segment.match(/"[^"\n]*"|'[^'\n]*'|[^\s]+/g)?.map(s => s.replace(/^(['"])(.*)\1$/, '$2')) || [];
-    let file, counts = [];
+    let file, counts = [], source;
     const gh = tokens.findIndex((t, i) => t === 'gh' && tokens[i + 1] === 'workflow' && tokens[i + 2] === 'run');
     if (gh >= 0) {
       file = path.resolve(cwd, '.github/workflows', tokens[gh + 3] || '');
       for (let i = gh + 4; i < tokens.length; i++) {
         const field = /^(?:-f|-F|--field|--raw-field)$/.test(tokens[i]) ? tokens[++i] : tokens[i].replace(/^(?:-[fF]|--(?:raw-)?field=)/, '');
-        const m = field?.match(/^[\w-]+=(\d+)$/);
+        const unquoted = field?.replace(/^(['"])(.*)\1$/, '$2');
+        const m = unquoted?.match(/^(?:limit|count|total|items|rows|batch)=(\d+)$/i);
         if (m) counts.push(Number(m[1]));
       }
+      try { source = fs.readFileSync(file, 'utf8'); } catch { source = null; }
+      if (source === null) { blockedSegment = true; continue; }
+      if (!counts.length) {
+        counts = [...source.matchAll(/\b(?:limit|count|total|items|rows|batch)\s*:\s*(?:\r?\n\s+[^\r\n]+)*?\r?\n\s+default\s*:\s*["']?(\d+)/gi)].map(match => Number(match[1]));
+      }
     } else {
-      const start = tokens.findIndex((t, i) => t === 'node' || t === 'npx' && tokens[i + 1] === 'tsx');
+      const start = tokens.findIndex((t, i) => t === 'node' || t === 'npx' && (tokens[i + 1] === 'tsx' || tokens[i + 1] === '--yes' && tokens[i + 2] === 'tsx') || t === 'pnpm' && tokens[i + 1] === 'exec' && tokens[i + 2] === 'tsx' || t === 'npm' && tokens[i + 1] === 'run');
       if (start < 0) continue;
-      const index = start + (tokens[start] === 'npx' ? 2 : 1);
-      if (!/^(?:\.\/)?scripts\//.test(tokens[index] || '')) continue;
-      file = path.resolve(cwd, tokens[index]);
-      const numeric = tokens.slice(index + 1).find(t => /^\d+$/.test(t));
+      let index;
+      if (tokens[start] === 'node') index = start + 1;
+      else if (tokens[start] === 'npx') index = start + (tokens[start + 1] === '--yes' ? 3 : 2);
+      else if (tokens[start] === 'pnpm') index = start + 3;
+      else {
+        try {
+          const pkg = JSON.parse(fs.readFileSync(path.resolve(cwd, 'package.json'), 'utf8'));
+          const script = pkg.scripts?.[tokens[start + 2]] || '';
+          const scriptFile = script.match(/(?:^|\s)(?:node|(?:npx\s+(?:--yes\s+)?|pnpm\s+exec\s+)?tsx)\s+(\S+)/)?.[1];
+          if (!scriptFile) continue;
+          file = path.resolve(cwd, scriptFile);
+        } catch { continue; }
+        index = start + 3;
+      }
+      if (!file) {
+        if (!/^(?:\.\/)?scripts\//.test(tokens[index] || '')) continue;
+        file = path.resolve(cwd, tokens[index]);
+        index++;
+      }
+      const numeric = tokens.slice(index).find(t => /^\d+$/.test(t));
       if (numeric) counts = [Number(numeric)];
+      try { source = fs.readFileSync(file, 'utf8'); } catch { continue; }
     }
     const large = counts.filter(n => n > 20);
     if (!large.length) continue;
-    const source = fs.readFileSync(file, 'utf8');
-    if (!/\b(?:ANTHROPIC|OPENAI|GEMINI|XAI)_API_KEY\b/.test(source)) continue;
+    if (!/\b(?:ANTHROPIC|OPENAI|GEMINI|XAI|OPENROUTER|GROQ|DEEPSEEK|MOONSHOT|KIMI|MISTRAL|GLM|ZAI|CEREBRAS|PERPLEXITY)_API_KEY\b/.test(source)) continue;
     const latest = readAssistantText(input.transcript_path);
     if (latest.reason === 'unreadable') return;
-    if (!large.every(n => estimateMatches(latest.text, n))) return bulkMessage;
+    if (!large.every(n => estimateMatches(latest.text, n))) blockedSegment = true;
   }
+  if (blockedSegment) return bulkMessage;
 }
 
 try {

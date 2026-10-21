@@ -40,7 +40,7 @@ test('anthropic ternary fallback is blocked', t => assert.equal(fixture(t).run('
 test('claude model nullish default is blocked', t => assert.equal(fixture(t).run('Edit', { ...edit, new_string: 'const model = configured ?? "claude-haiku-5-5"' }), 'deny'));
 test('new literal passes with reason naming 3 other AIs', t => assert.equal(fixture(t).run('Edit', { ...edit, new_string: '// LLM-PROVIDER-REASON: Kimi 失敗, DeepSeek 失敗, Groq 失敗\nreturn "anthropic"' }), undefined));
 test('existing claude model literal passes', t => assert.equal(fixture(t).run('Edit', { ...edit, old_string: 'model ?? "claude-sonnet-5"', new_string: 'fallback ?? "claude-sonnet-5"' }), undefined));
-test('existing anthropic literal passes when moved into a fallback', t => assert.equal(fixture(t).run('Edit', { ...edit, old_string: 'providers.push("anthropic")', new_string: 'return "anthropic"' }), undefined));
+test('existing anthropic literal is blocked when moved into a default return', t => assert.equal(fixture(t).run('Edit', { ...edit, old_string: 'providers.push("anthropic")', new_string: 'return "anthropic"' }), 'deny'));
 test('claude model literal in markdown passes', t => assert.equal(fixture(t).run('Edit', { ...edit, file_path: 'providers.md', new_string: 'default: "claude-opus-5"' }), undefined));
 test('anthropic default in test file passes', t => assert.equal(fixture(t).run('Edit', { ...edit, file_path: 'provider.test.ts', new_string: 'return "anthropic"' }), undefined));
 test('different newly added marker blocked', t => assert.equal(fixture(t).run('Edit', { ...edit, old_string: '@anthropic-ai/sdk' }), 'deny'));
@@ -56,8 +56,16 @@ for (const [label, text] of [
 test('small batch passes', t => assert.equal(fixture(t).run('Bash', { command: 'gh workflow run batch.yml -f limit=5' }), undefined));
 test('workflow without paid key passes', t => { const f = fixture(t); fs.writeFileSync(path.join(f.cwd, '.github/workflows/batch.yml'), 'echo hello'); assert.equal(f.run('Bash', { command: 'gh workflow run batch.yml -f limit=1000' }), undefined); });
 for (const command of ['npx tsx scripts/batch.ts 1000', 'node scripts/batch.ts --mode collect 1000', 'gh workflow run batch.yml --field=count=1000']) test(command, t => assert.equal(fixture(t).run('Bash', { command }), 'deny'));
+test('OPENROUTER key is treated as paid', t => { const f = fixture(t); fs.writeFileSync(path.join(f.cwd, '.github/workflows/batch.yml'), 'OPENROUTER_API_KEY'); assert.equal(f.run('Bash', { command: 'gh workflow run batch.yml -f count=1000' }), 'deny'); });
+test('missing workflow and real batch compound command is denied', t => assert.equal(fixture(t).run('Bash', { command: 'gh workflow run absent.yml -f count=1000; node scripts/batch.ts 1000' }), 'deny'));
+test('only count-like workflow fields are quantities', t => assert.equal(fixture(t).run('Bash', { command: 'gh workflow run batch.yml -f limit=1000 -f concurrency=50' }), 'deny'));
+test('quoted workflow field is denied', t => assert.equal(fixture(t).run('Bash', { command: 'gh workflow run batch.yml --field="count=1000"' }), 'deny'));
+test('npx --yes tsx batch is denied', t => assert.equal(fixture(t).run('Bash', { command: 'npx --yes tsx scripts/batch.ts 1000' }), 'deny'));
+test('workflow numeric default is used when field is omitted', t => { const f = fixture(t); fs.writeFileSync(path.join(f.cwd, '.github/workflows/batch.yml'), 'on:\n  workflow_dispatch:\n    inputs:\n      count:\n        default: 1000\nenv:\n  OPENAI_API_KEY: x'); assert.equal(f.run('Bash', { command: 'gh workflow run batch.yml' }), 'deny'); });
+test('explicit count overrides workflow default', t => { const f = fixture(t); fs.writeFileSync(path.join(f.cwd, '.github/workflows/batch.yml'), 'on:\n  workflow_dispatch:\n    inputs:\n      count:\n        default: 1000\nenv:\n  OPENAI_API_KEY: x'); assert.equal(f.run('Bash', { command: 'gh workflow run batch.yml -f count=5' }), undefined); });
+test('concurrency alone is not a quantity', t => assert.equal(fixture(t).run('Bash', { command: 'gh workflow run batch.yml -f concurrency=50' }), undefined));
 test('old estimate does not authorize latest message', t => { const f = fixture(t); f.say('[COST-ESTIMATE: 1件 $0.01(3件実測)×1000件=$10 / 上限$20]'); fs.appendFileSync(path.join(f.cwd, 'transcript.jsonl'), JSON.stringify({ type: 'assistant', message: { content: 'New plan' } })); assert.equal(f.run('Bash', { command: 'node scripts/batch.ts 1000' }), 'deny'); });
 test('off bypasses', t => assert.equal(fixture(t).run('Edit', edit, { APP_LLM_COST_GATE: 'off' }), undefined));
 test('malformed input fails open', () => { const r = spawnSync(process.execPath, [hook], { input: '{oops', encoding: 'utf8' }); assert.equal(r.status, 0); assert.equal(r.stdout, ''); });
-test('unreadable workflow fails open', t => assert.equal(fixture(t).run('Bash', { command: 'gh workflow run absent.yml -f count=1000' }), undefined));
+test('unreadable workflow segment is blocked', t => assert.equal(fixture(t).run('Bash', { command: 'gh workflow run absent.yml -f count=1000' }), 'deny'));
 test('5-sample estimate passes', t => { const f = fixture(t); f.say('[COST-ESTIMATE: 1件 $0.017(5件実測)×246件=$4.182 / 上限$5]'); assert.equal(f.run('Bash', { command: 'gh workflow run batch.yml -f limit=246' }), undefined); });

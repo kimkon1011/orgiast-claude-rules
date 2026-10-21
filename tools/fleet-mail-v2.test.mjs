@@ -1222,6 +1222,25 @@ test('821 sent status counts an empty mail response as a lookup failure and rese
   assert.equal(cached['mail-late'].status, 'delivered');
   assert.equal(cached['mail-late'].lookupFailures, undefined);
 });
+test('821 sent status never abandons a freshly sent id on transient timeouts', async t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.dir, 'fleet-mail-sent.jsonl'), JSON.stringify({ action: 'sent', id: `mail-${Date.now()}-deadbeef` }) + '\n');
+  let calls = 0;
+  const request = async () => { calls++; throw new Error('timeout'); };
+  for (let i = 0; i < SENT_STATUS_MAX_LOOKUP_FAILURES + 1; i++) await refreshSentStatus({ home: f.home, request, stderr: () => {} });
+  assert.equal(calls, SENT_STATUS_MAX_LOOKUP_FAILURES + 1, 'sent 行がある id は一時的な失敗で打ち切らない');
+});
+test('821 sent status abandons an expired sent id so the retry noise stops', async t => {
+  const f = fixture(t);
+  const id = `mail-${Date.now() - 9 * 24 * 3600000}-abcd1234`;
+  fs.writeFileSync(path.join(f.dir, 'fleet-mail-sent.jsonl'), JSON.stringify({ action: 'sent', id }) + '\n');
+  let calls = 0;
+  const request = async () => { calls++; throw new Error('timeout'); };
+  for (let i = 0; i < SENT_STATUS_MAX_LOOKUP_FAILURES; i++) await refreshSentStatus({ home: f.home, request, stderr: () => {} });
+  assert.equal(calls, SENT_STATUS_MAX_LOOKUP_FAILURES);
+  await refreshSentStatus({ home: f.home, request, stderr: () => {} });
+  assert.equal(calls, SENT_STATUS_MAX_LOOKUP_FAILURES, '期限切れ相当の id は打ち切り後 mail-get を呼ばない');
+});
 test('802 warning stripping keeps real answers and removes known configuration lines', () => {
   assert.equal(stripClaudeWarnings('Permission allow rule (settings.json): warning\r\nWarning: Invalid configuration entry\nanswer\nUnknown permission rule'), 'answer');
   assert.equal(stripClaudeWarnings('Permission is needed for the next step.'), 'Permission is needed for the next step.');

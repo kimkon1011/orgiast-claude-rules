@@ -553,12 +553,20 @@ export async function refreshSentStatus({ home, request, stderr = console.error 
   try { lines = fs.readFileSync(path.join(dir, 'fleet-mail-sent.jsonl'), 'utf8').trim().split('\n'); } catch { return; }
   const file = path.join(dir, 'fleet-mail-sent-status.json');
   const cache = readJson(file, {});
-  const ids = [...new Set(lines.flatMap(line => { try { const r = JSON.parse(line); return ['sent', 'send-attempt'].includes(r.action) && r.id ? [r.id] : []; } catch { return []; } }))];
+  const rows = lines.flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } });
+  const entries = rows.filter(r => ['sent', 'send-attempt'].includes(r.action) && r.id);
+  const ids = [...new Set(entries.map(r => r.id))];
+  const sentIds = new Set(entries.filter(r => r.action === 'sent').map(r => r.id));
   const deadline = Date.now() + 10000;
   // 送信前に失敗した send-attempt のように、サーバーに一度も現れない id は
   // 毎回 mail-get が失敗して「再試行待ち」が永久に出続ける。連続失敗が上限に達したら
   // 自動取得を打ち切る（--sent-status <id> の明示照会は今までどおり動く）。
-  const abandoned = id => (cache[id]?.lookupFailures || 0) >= SENT_STATUS_MAX_LOOKUP_FAILURES;
+  // ただし sent 行がある id は実際に送信できているため、一時的なタイムアウトで打ち切ると
+  // 生きているメールの状態を永久に取れなくなる。期限切れ相当（8日）を過ぎるまでは打ち切らない。
+  const SENT_STATUS_ABANDON_AFTER_MS = 8 * 24 * 3600000;
+  const idAgeMs = id => { const m = /^mail-(\d{10,})-/.exec(id); return m ? Date.now() - Number(m[1]) : 0; };
+  const abandonable = id => !sentIds.has(id) || idAgeMs(id) > SENT_STATUS_ABANDON_AFTER_MS;
+  const abandoned = id => abandonable(id) && (cache[id]?.lookupFailures || 0) >= SENT_STATUS_MAX_LOOKUP_FAILURES;
   for (const id of ids.reverse().filter(id => !['done', 'expired'].includes(cache[id]?.status) && !abandoned(id)).sort((a, b) => (cache[a]?.checkedAt || 0) - (cache[b]?.checkedAt || 0)).slice(0, 5)) {
     if (Date.now() >= deadline) break;
     const previous = cache[id] || {};
@@ -566,7 +574,7 @@ export async function refreshSentStatus({ home, request, stderr = console.error 
     const failed = () => {
       const lookupFailures = (previous.lookupFailures || 0) + 1;
       cache[id] = { ...cache[id], lookupFailures };
-      if (lookupFailures >= SENT_STATUS_MAX_LOOKUP_FAILURES) stderr(`fleet-mail: 送信状態を取得できないため自動取得を打ち切り=1 (${id})`);
+      if (lookupFailures >= SENT_STATUS_MAX_LOOKUP_FAILURES && abandonable(id)) stderr(`fleet-mail: 送信状態を取得できないため自動取得を打ち切り=1 (${id})`);
       else stderr('fleet-mail: 送信状態取得再試行待ち=1');
     };
     try {

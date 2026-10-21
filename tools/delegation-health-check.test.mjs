@@ -974,7 +974,8 @@ test('metricFromLaterWindow: 短い窓が検出より後に始まった時だけ
   const rows = [{ t: '2026-10-20T19:15:41.000Z', until: 1792573500000 }];
   assert.equal(metricFromLaterWindow(rows, { usedPercent: 8, windowMinutes: 300, resetsAt: 1792569159 }), true);
   assert.equal(metricFromLaterWindow(rows, { usedPercent: 67, windowMinutes: 10080, resetsAt: 1791982428 }), false);
-  assert.equal(metricFromLaterWindow(rows, { usedPercent: 8, windowMinutes: 300, resetsAt: 1792550000 }), false);
+  // 2026-10-20T23:46:40Z にリセットする窓は18:46:40Z開始で、上限検出より前。
+  assert.equal(metricFromLaterWindow(rows, { usedPercent: 8, windowMinutes: 300, resetsAt: 1792540000 }), false);
   assert.equal(metricFromLaterWindow(rows, { usedPercent: 8, windowMinutes: null, resetsAt: 1792569159 }), false);
 });
 

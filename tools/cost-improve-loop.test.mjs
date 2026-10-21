@@ -438,7 +438,7 @@ test('16. failed DM notification is saved and prepended to the next report', asy
   };
   let notifyOptions;
   try {
-    const first = await main([], { ...inputs, notifyKim: async (_text, options) => {
+    const first = await main([], { ...inputs, runOriguchiReferralMonthly: async () => {}, notifyKim: async (_text, options) => {
       notifyOptions = options;
       return { delivered: 'none', reason: 'DM API timeout' };
     } });
@@ -910,7 +910,7 @@ test('日次ループは残高専用DMへ取得済みデータを渡し、通知
   const previousHome = process.env.ORGIAST_HOME;
   process.env.ORGIAST_HOME = home;
   const balances = [{ provider: 'kimi', balanceUsd: 0, autoTopUp: false, status: 'low', todaySpendUsd: 0, avg7dSpendUsd: 0 }];
-  let calls = 0;
+  let calls = 0, referralCalls = 0;
   const inputs = {
     now: NOW, localState: {}, readLedger: () => ({ codex: 1 }),
     fetchFleetSheetRows: async () => [{ pcName: 'PC-ok', reportedAt: '2026-09-06 11:00:00', delegRatio: '60%', claudeUsd: '1' }],
@@ -922,7 +922,7 @@ test('日次ループは残高専用DMへ取得済みデータを渡し、通知
       assert.equal(options.now, NOW);
       throw new Error('mock notification failure');
     },
-    notifyKim: async () => ({ delivered: 'dm' }),
+    runOriguchiReferralMonthly: async () => { referralCalls++; throw new Error('mock referral failure'); }, notifyKim: async () => ({ delivered: 'dm' }),
     sendHeartbeat: async () => {}, shouldSendMonthlyReport: async () => false,
   };
   try {
@@ -931,6 +931,7 @@ test('日次ループは残高専用DMへ取得済みデータを渡し、通知
     await main(['--dry-run'], inputs);
     await main(['--no-notify'], inputs);
     assert.equal(calls, 1);
+    assert.equal(referralCalls, 1);
   } finally {
     if (previousHome === undefined) delete process.env.ORGIAST_HOME;
     else process.env.ORGIAST_HOME = previousHome;
@@ -958,7 +959,7 @@ test('receipt collection and notification are isolated and honor dry-run/no-noti
       alertCalls.push({ result, options });
       throw new Error('notification unavailable');
     },
-    notifyKim: async () => ({ delivered: 'dm' }),
+    runOriguchiReferralMonthly: async () => {}, notifyKim: async () => ({ delivered: 'dm' }),
     sendHeartbeat: async () => {}, shouldSendMonthlyReport: async () => false,
   };
   try {

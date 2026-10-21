@@ -17,6 +17,7 @@ import { classifyTaskKind, CODEX_KINDS } from './lib/task-kind.mjs';
 import { parseDeferred } from './lib/executor-gate.mjs';
 import { collectProviderHealth, collectClaudeStats } from './usage-stats.mjs';
 import { collectBudgetStatus } from './budget-status.mjs';
+import { runMonthly as runOriguchiReferralMonthly } from './origuchi-referral-monthly.mjs';
 import { shouldSendMonthlyReport, buildMonthlyReport, markMonthlyReportSent } from './cost-monthly-report.mjs';
 import { collectProviderBalances, formatBalanceLine, alertProviderBalances, BALANCE_LOW_THRESHOLD_USD, CREDIT_LOW_THRESHOLD } from './provider-balance.mjs';
 import { resolveReporterLabel } from './reporter-label.mjs';
@@ -1665,6 +1666,15 @@ export async function main(argv = process.argv.slice(2), io = {}) {
     catch (error) {
       stateWriteFailed = true;
       console.error(`cost-improve 状態書き込み失敗: ${String(error?.message ?? error)}`);
+    }
+  }
+
+  // Existing PCs receive this through the same daily loop as the cost report.
+  if (!dryRun && !noNotify && !io.noNotify) {
+    try {
+      await (io.runOriguchiReferralMonthly || runOriguchiReferralMonthly)({ home, now, claudeDir });
+    } catch (error) {
+      console.error(`折口様紹介案件の月次チェック失敗: ${error.message}`);
     }
   }
 

@@ -932,7 +932,7 @@ test('#773 以降の timeout が上限を超えたら夜間に high で検出す
   const findings = collectFindings({ home: dir, now: new Date('2026-10-19T12:00:00Z'), codexUsedPercent: null });
   const finding = findings.find((f) => f.id === 'timeout_waste_exceeds_cap');
   assert.equal(finding?.severity, 'high');
-  assert.deepEqual(finding.evidence, ['1件', '最大試行 1500秒', '上限 900秒']);
+  assert.deepEqual(finding.evidence, ['1件', '最大試行 1500秒', '上限 900秒', '超過: gemini-cli フォールバック 1500秒/予算900秒']);
 });
 
 test('#773 以降の timeout が上限内なら timeout_waste_exceeds_cap を出さない', () => {

@@ -14,19 +14,46 @@ import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 
 export const TIMEOUT_FIX_MERGED_AT = '2026-10-16T18:50:03Z'; // #773（600→900秒＋連鎖予算）
+// フォールバック試行に与える既定予算。--cap で上書きできる。
+// 主経路（chain 無し）はこれではなく、その実行に与えた --timeout（既定 1800 秒）で判定する。
 export const DEFAULT_CAP_SECS = 900;
+export const DEFAULT_PRIMARY_TIMEOUT_SECS = 1800; // codex-do の --timeout 既定
 export const DEFAULT_TOLERANCE_SECS = 5;
 
 export function isTimeoutRow(row) {
   return row?.status === 'timeout' || row?.timedOut === true;
 }
 
-// timeout した試行ごとの秒数。chain があれば timeout した試行だけを返し、
-// 無い旧形式・単一バックエンドの行は行そのもの（secs）を 1 試行として扱う。
-export function timeoutAttempts(row) {
+function attemptBudgetSecs(value, fallback) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+// timeout した試行ごとの秒数と、その試行に実際に与えた予算。
+// chain があれば timeout した試行だけを返し、無い旧形式・単一バックエンドの行は
+// 行そのもの（secs / timeoutSecs）を 1 試行として扱う。
+// 予算は chain 試行なら budgetSecs（#773 以降の codex-do が記録）、無い旧行は --cap（900）。
+// chain の無い主経路は timeoutSecs（--timeout 実値）、無い旧行は 1800 秒。
+// 900 秒固定で主経路を見ると、既定 1800 秒を予定どおり使い切った行を上限破りと誤検出する
+// （2026-10-20 実測: provider=codex / secs=1800.28 / chain 無し）。
+export function timeoutAttempts(row, { fallbackBudgetSecs = DEFAULT_CAP_SECS } = {}) {
   const chain = Array.isArray(row?.chain) ? row.chain.filter((a) => a && a.outcome === 'timeout') : [];
-  if (chain.length > 0) return chain.map((a) => ({ backend: a.backend ?? a.model ?? null, secs: Number(a.secs) }));
-  return [{ backend: row?.provider ?? row?.model ?? null, secs: Number(row?.secs) }];
+  if (chain.length > 0) {
+    return chain.map((a) => ({
+      backend: a.backend ?? a.model ?? null,
+      model: a.model ?? row?.model ?? null,
+      secs: Number(a.secs),
+      budgetSecs: attemptBudgetSecs(a.budgetSecs, fallbackBudgetSecs),
+      path: 'fallback',
+    }));
+  }
+  return [{
+    backend: row?.provider ?? row?.model ?? null,
+    model: row?.model ?? null,
+    secs: Number(row?.secs),
+    budgetSecs: attemptBudgetSecs(row?.timeoutSecs, DEFAULT_PRIMARY_TIMEOUT_SECS),
+    path: 'primary',
+  }];
 }
 
 export function judgeTimeoutRows(rows = [], {
@@ -43,11 +70,13 @@ export function judgeTimeoutRows(rows = [], {
     .filter(isTimeoutRow)
     .map((row) => {
       const at = Date.parse(row.t || row.timestamp || '');
-      const attempts = timeoutAttempts(row);
+      const attempts = timeoutAttempts(row, { fallbackBudgetSecs: capSecs });
       const known = attempts.filter((a) => Number.isFinite(a.secs));
       const wasteSecs = known.reduce((sum, a) => sum + a.secs, 0);
       const maxAttemptSecs = known.length ? Math.max(...known.map((a) => a.secs)) : null;
-      const overCap = known.some((a) => a.secs > capSecs + toleranceSecs);
+      const overCapAttempts = known
+        .filter((a) => a.secs > a.budgetSecs + toleranceSecs)
+        .map(({ backend, model, secs, budgetSecs, path }) => ({ backend, model, secs, budgetSecs, path }));
       return {
         t: Number.isFinite(at) ? new Date(at).toISOString() : null,
         provider: row.provider ?? null,
@@ -57,7 +86,8 @@ export function judgeTimeoutRows(rows = [], {
         attempts,
         wasteSecs,
         maxAttemptSecs,
-        overCap,
+        overCap: overCapAttempts.length > 0,
+        overCapAttempts,
       };
     })
     .sort((a, b) => String(a.t).localeCompare(String(b.t)));
@@ -78,6 +108,10 @@ export function judgeTimeoutRows(rows = [], {
     overCapRows: overCapEvents.length,
     maxAttemptSecs: postDeploy.length ? Math.max(...postDeploy.map((e) => e.maxAttemptSecs ?? 0)) : null,
     wasteSecs: postDeploy.reduce((sum, e) => sum + e.wasteSecs, 0),
+    // 上限超過した試行のバックエンドと起動経路。翌晩の再発時に「どの経路が予算を守らなかったか」を
+    // 証拠だけから特定できるようにする。
+    overCapAttempts: overCapEvents.flatMap((e) => e.overCapAttempts.map((a) => ({ ...a, t: e.t, provider: e.provider }))),
+    overCapBackends: [...new Set(overCapEvents.flatMap((e) => e.overCapAttempts.map((a) => a.backend)).filter(Boolean))],
     events,
   };
 }
@@ -112,7 +146,7 @@ function renderText(report) {
     lines.push(`- 捨てた秒数 合計: ${Math.round(report.wasteSecs)} 秒 / 最大試行: ${report.maxAttemptSecs === null ? '不明' : Math.round(report.maxAttemptSecs)} 秒`);
   }
   for (const e of report.events) {
-    const attempts = e.attempts.map((a) => `${a.backend ?? '不明'}=${Number.isFinite(a.secs) ? Math.round(a.secs) : '?'}秒`).join(', ');
+    const attempts = e.attempts.map((a) => `${a.backend ?? '不明'}=${Number.isFinite(a.secs) ? Math.round(a.secs) : '?'}秒${Number.isFinite(a.budgetSecs) ? `/予算${Math.round(a.budgetSecs)}秒` : ''}`).join(', ');
     lines.push(`- ${e.t ?? '日時不明'} / ${e.provider ?? '不明'} / ${e.postDeploy ? '配備後' : '配備前'} / ${attempts}${e.overCap ? ' / ⚠️ 上限超過' : ''}`);
   }
   return `${lines.join('\n')}\n`;

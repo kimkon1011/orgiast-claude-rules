@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit } = await import('./codex-do.mjs');
+const { needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -1763,4 +1763,31 @@ test('WSL 不在はネイティブ既定、require-wsl は中断、allow-native 
   assert.equal(resolveNativeCodex({platform:'win32',env:{APPDATA:'C:/fixture'},existsImpl:()=>true}).prefixArgs.length,1);
   const h=fs.mkdtempSync(path.join(os.tmpdir(),'lane-mode-'));
   try {recordLaneMode('native','danger-full-access',{home:h});const m=JSON.parse(fs.readFileSync(path.join(h,'.claude/lane-mode.json'),'utf8'));assert.equal(m.codex.mode,'native');assert.ok(Date.parse(m.codex.verifiedAt));} finally {fs.rmSync(h,{recursive:true,force:true});}
+});
+
+test('buildUsageRow は timeoutSecs と chain[].budgetSecs を台帳へ残す', () => {
+  const now = new Date('2026-10-22T00:00:00Z');
+  const row = buildUsageRow({
+    result: { status: 124, timedOut: true, outputChars: 0, stderr: '' },
+    model: 'codex-cli/gpt-5.6-sol', seconds: 1800.28, provider: 'codex',
+    timeoutSecs: 1800, lane: 'default_sol', promptChars: 400, origin: 'interactive', kind: 'implement', cwd: 'C:/repo', now,
+  });
+  assert.equal(row.timeoutSecs, 1800);
+  assert.equal(row.secs, 1800.28);
+  assert.equal(row.lane, 'default_sol');
+  assert.equal(row.in, 100);
+
+  const chained = buildUsageRow({
+    result: { status: 124, timedOut: true, outputChars: 0, stderr: '' }, model: 'x',
+    seconds: 950, timeoutSecs: 1800, now,
+    chain: [{ backend: 'gemini-cli', outcome: 'timeout', secs: 950, budgetSecs: 900 }],
+  });
+  assert.deepEqual(chained.chain.map((a) => a.budgetSecs), [900]);
+  assert.equal(chained.timeoutSecs, 1800);
+});
+
+test('buildUsageRow は timeoutSecs が無ければ行に生やさない（旧形式との互換）', () => {
+  const row = buildUsageRow({ result: { status: 0, outputChars: 4 }, model: 'm', seconds: 1, now: new Date('2026-10-22T00:00:00Z') });
+  assert.equal('timeoutSecs' in row, false);
+  assert.equal(row.status, 'ok');
 });

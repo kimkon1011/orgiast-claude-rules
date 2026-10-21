@@ -640,6 +640,42 @@ export function wslCodexLaunchPlan({ distroFound, codexPresent, versionOk, insta
   return !requireWsl && nativeAvailable ? 'native' : 'abort';
 }
 
+// 台帳 1 行分を組み立てる純粋関数。recordUsage から切り出してテスト可能にしている。
+// timeoutSecs は「この実行に与えた全体の --timeout」。これが無い旧行を 900 秒固定で
+// 判定すると、主経路の既定 1800 秒を「上限破り」と誤検出する（2026-10-20 実測:
+// provider=codex / secs=1800.28 / chain 無し = 既定 --timeout 1800 秒を予定どおり使い切った行）。
+export function buildUsageRow({
+  result, model, seconds, provider = 'codex', attempts = 1, chain = null,
+  timeoutSecs = null, lane = null, escalated = false, promptChars = 0,
+  origin = null, kind = null, cwd = null, reason = '', now = new Date()
+} = {}) {
+  // child.on('error') で spawn 自体に失敗した行は status が数値で残らず、原因は result.error にしか無い。
+  // stderr は空のままなので、放っておくと台帳からは「codex が走って何も出さなかった」と区別できない
+  // （2026-10-04 診断: 直近24hの codex out=0 のうち3件がこの形）。spawnError として必ず残す。
+  const spawnError = result?.error ? String(result.error.message ?? result.error).replace(/\s+/g, ' ').trim().slice(-200) : '';
+  const backendTail = String(result?.stderr || spawnError || '').replace(/\s+/g, ' ').trim().slice(-160);
+  const stderrTail = [reason, backendTail].filter(Boolean).join(' | ').slice(-200);
+  return {
+    t: now.toISOString(), provider, model,
+    lane, escalated,
+    in: Math.ceil(promptChars / 4), out: Math.ceil((result?.outputChars || 0) / 4),
+    launched: result?.launched !== false,
+    timedOut: result?.timedOut === true,
+    status: executorExitStatus(result),
+    origin, kind,
+    exitCode: result?.status ?? null,
+    cwd,
+    stderrTail,
+    ...(reason ? { reason } : {}),
+    ...(spawnError ? { spawnError } : {}),
+    fastFail: result?.timedOut !== true && Number(result?.status) !== 0 && (result?.outputChars || 0) === 0,
+    attempts,
+    ...(Array.isArray(chain) && chain.length ? { chain } : {}),
+    ...(Number.isFinite(timeoutSecs) && timeoutSecs > 0 ? { timeoutSecs } : {}),
+    secs: Number(seconds.toFixed(3))
+  };
+}
+
 if (isEntry(import.meta.url)) {
 
 const args = process.argv.slice(2);
@@ -916,30 +952,13 @@ function recordUsage(result, modelName, seconds, provider = 'codex', attempts = 
   try {
     const ledger = path.join(home, '.claude', 'executor-usage.jsonl');
     fs.mkdirSync(path.dirname(ledger), { recursive: true });
-    // child.on('error') で spawn 自体に失敗した行は status が数値で残らず、原因は result.error にしか無い。
-    // stderr は空のままなので、放っておくと台帳からは「codex が走って何も出さなかった」と区別できない
-    // （2026-10-04 診断: 直近24hの codex out=0 のうち3件がこの形）。spawnError として必ず残す。
-    const spawnError = result?.error ? String(result.error.message ?? result.error).replace(/\s+/g, ' ').trim().slice(-200) : '';
-    const backendTail = String(result?.stderr || spawnError || '').replace(/\s+/g, ' ').trim().slice(-160);
-    const stderrTail = [ledgerReason, backendTail].filter(Boolean).join(' | ').slice(-200);
-    fs.appendFileSync(ledger, `${JSON.stringify({
-      t: new Date().toISOString(), provider, model: modelName,
-      lane: selectedLane.reason, escalated,
-      in: Math.ceil(prompt.length / 4), out: Math.ceil((result.outputChars || 0) / 4),
-      launched: result?.launched !== false,
-      timedOut: result?.timedOut === true,
-      status: executorExitStatus(result),
-      origin, kind: taskKind,
-      exitCode: result?.status ?? null,
-      cwd,
-      stderrTail,
-      ...(ledgerReason ? { reason: ledgerReason } : {}),
-      ...(spawnError ? { spawnError } : {}),
-      fastFail: result?.timedOut !== true && Number(result?.status) !== 0 && (result?.outputChars || 0) === 0,
-      attempts,
-      ...(Array.isArray(chain) && chain.length ? { chain } : {}),
-      secs: Number(seconds.toFixed(3))
-    })}\n`, 'utf8');
+    const row = buildUsageRow({
+      result, model: modelName, seconds, provider, attempts, chain,
+      timeoutSecs: timeoutSeconds, lane: selectedLane.reason, escalated,
+      promptChars: prompt.length, origin, kind: taskKind, cwd,
+      reason: ledgerReason
+    });
+    fs.appendFileSync(ledger, `${JSON.stringify(row)}\n`, 'utf8');
   } catch {}
 }
 // investigate / classify / summarize は Codex を使わず llm-ask(gemini → deepseek → groq)へ回す。
@@ -1225,6 +1244,9 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
           spawnFailed,
           out: Math.ceil((result.outputChars || 0) / 4),
           secs: Number(((Date.now() - attemptStarted) / 1000).toFixed(3)),
+          // この試行に実際に与えた予算。delegation-health の timeout 判定が
+          // 「900 秒固定」ではなく与えた予算で判定できるようにする（2026-10-22）。
+          budgetSecs: backendTimeout,
           stderrTail: String(result.stderr || '').replace(/\s+/g, ' ').trim().slice(-200),
           outcome
         });

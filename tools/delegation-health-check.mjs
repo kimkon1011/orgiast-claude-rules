@@ -238,14 +238,24 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
   // Claude セッションを待たず夜間で判定する。判定器は台帳全体（配備前を含む）を見る必要が
   // あるため、24時間窓の usageRows ではなく executor-usage.jsonl を全件読む。
   // (2026-10-20: 判定器が CLI 専用で、台帳が伸びても人手で実行するまで判定が止まっていた)
+  // 予算は試行ごとに判定する: フォールバック試行は与えた budgetSecs（無い旧行は 900 秒）、
+  // 主経路は与えた --timeout の timeoutSecs（無い旧行は 1800 秒）。900 秒固定で主経路を見ると
+  // 既定 1800 秒を使い切っただけの行を回帰と誤検出する（2026-10-20 実測 / 2026-10-22 修正）。
   const timeoutWaste = judgeTimeoutRows(readJsonl(path.join(claudeDir, 'executor-usage.jsonl')));
-  if (timeoutWaste.verdict === 'waste-exceeds-cap') findings.push({
-    id: 'timeout_waste_exceeds_cap',
-    severity: 'high',
-    title: 'タイムアウトで捨てた秒数が上限超過（#773 の回帰）',
-    evidence: [`${timeoutWaste.overCapRows}件`, `最大試行 ${timeoutWaste.maxAttemptSecs}秒`, `上限 ${timeoutWaste.capSecs}秒`],
-    fixTask: 'killProcessTree と fallbackBackendTimeoutSecs(#773)が効いていない。timeout 行の chain[].secs を実測し、上限を超えた試行のバックエンドと起動経路を特定して修正・テスト追加',
-  });
+  if (timeoutWaste.verdict === 'waste-exceeds-cap') {
+    const overCap = (timeoutWaste.overCapAttempts || []).map((a) => {
+      const label = a.path === 'primary' ? '主経路' : 'フォールバック';
+      const name = a.model ? `${a.backend ?? '不明'}(${a.model})` : (a.backend ?? '不明');
+      return `超過: ${name} ${label} ${Math.round(a.secs)}秒/予算${Math.round(a.budgetSecs)}秒`;
+    });
+    findings.push({
+      id: 'timeout_waste_exceeds_cap',
+      severity: 'high',
+      title: 'タイムアウトで捨てた秒数が上限超過（#773 の回帰）',
+      evidence: [`${timeoutWaste.overCapRows}件`, `最大試行 ${timeoutWaste.maxAttemptSecs}秒`, `上限 ${timeoutWaste.capSecs}秒`, ...overCap],
+      fixTask: 'killProcessTree と fallbackBackendTimeoutSecs(#773)が効いていない。timeout 行の chain[].secs を実測し、上限を超えた試行のバックエンドと起動経路を特定して修正・テスト追加',
+    });
+  }
   if (limitRows.length && metric && !supersededWindow && metric.usedPercent < 90) findings.push({
     id: 'codex_false_usage_limit', severity: 'high', title: 'Codex 上限検出の偽陽性',
     evidence: [`usage_limit記録 ${limitRows.length}件`, `実測 used_percent ${metric.usedPercent}`, `window ${metric.windowMinutes ?? '不明'}分`, `resets_at ${metric.resetsAt ?? '不明'}`],

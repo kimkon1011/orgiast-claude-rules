@@ -13,6 +13,12 @@ const FUTURE_WORK = /終わり次第|終わったら|終わると|終了後|完�
 // 離れた位置の言及（ツールの説明文など）を拾わないための距離。
 const FUTURE_WINDOW = 160;
 
+const REPLY_WAIT = /(?:返信|返事)(?:を|が)?お?(?:待って|待ち|待っています)|(?:返信|返事)が来たら|「?続けて」?と返|続けてと返|返信待ち|返事待ち/g;
+const PROD = /本番反映|本番デプロイ|本番配備|本番公開|vercel|deploy|デプロイ/i;
+const REPLY_WAIT_DONE = /不要|ありません|なし|完了|済み/;
+const REPLY_WAIT_WINDOW = 160;
+const REPLY_WAIT_DONE_WINDOW = 40;
+
 export function enabled() {
   return process.env.ORGIAST_DEFERRAL_WAIT_GATE !== '0';
 }
@@ -35,6 +41,25 @@ function proseLines(text) {
 export function judge(text) {
   if (!enabled()) return { decision: 'pass' };
   const prose = proseLines(text);
+  for (const replyWait of prose.matchAll(REPLY_WAIT)) {
+    const from = replyWait.index;
+    const doneNearby = prose.slice(
+      Math.max(0, from - REPLY_WAIT_DONE_WINDOW),
+      from + replyWait[0].length + REPLY_WAIT_DONE_WINDOW,
+    );
+    if (REPLY_WAIT_DONE.test(doneNearby)) continue;
+    const prodNearby = prose.slice(
+      Math.max(0, from - REPLY_WAIT_WINDOW),
+      from + replyWait[0].length + REPLY_WAIT_WINDOW,
+    );
+    if (PROD.test(prodNearby)) {
+      return {
+        decision: 'block',
+        code: 'DEFERRAL-WAIT',
+        reason: '本番反映を user の返信待ちにせず、Claude 側の経路（vercel deploy 等）で当ターン内に完了まで進めてください。',
+      };
+    }
+  }
   const wait = detect(prose).find(result => result.pattern === 'W');
   if (!wait) return { decision: 'pass' };
   const from = wait.match.index;

@@ -1,0 +1,12 @@
+HOST=DESKTOP-2D0R4LI
+SYNC_EXIT=0
+SYNC_TAIL<<EOF
+fatal: path 'tools/routing-table.json' exists on disk, but not in '7468606bdadcad0ccd6a91f442a99040a9807c6c'
+[onboarding-sync] zip で更新しました (理由: spawnSync git ETIMEDOUT) / 人の変更を保護: 20件 / 前回の自分の出力なので更新: 757件
+[onboarding-sync] 旧配布版と一致したため更新 2件
+[onboarding-sync] 保護のため未更新 20件（decisions/README.md / fleet-pc-map.json / scripts/drive-hub-sync.mjs / 他17件）→ 該当セッションが commit するまで配布が届きません
+[onboarding-sync] updated repository tools/rules/skills
+[onboarding-sync] skills updated: case-consult-sources, design-deck
+EOF
+LINE=YES
+TOOL=YES

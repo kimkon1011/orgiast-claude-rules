@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 import { createSheetsClient } from './lib/sheets-dwd.mjs';
 import { getAccessToken } from './lib/freee-auth.mjs';
 import { buildRawMessage, createDraft, deleteDraft } from './gmail-draft.mjs';
@@ -190,4 +190,4 @@ export async function main(argv = process.argv.slice(2)) {
   console.log(argv.includes('--json') ? JSON.stringify(result, null, 2) : result.skipped ? '今月は実行済み、または実行中です。' : result.email ? `${result.email.subject}\n\n${result.email.body}\n\n--- Discord DM ---\n${result.dm}` : 'Discord DM を再送しました。');
   return result;
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) main().catch(e => { console.error(e.message); process.exitCode = 1; });
+if (isEntry(import.meta.url)) main().catch(e => { console.error(e.message); process.exitCode = 1; });

@@ -91,3 +91,9 @@ test('billing and implementation guards are required on existing installations',
   const { REQUIRED_HOOKS } = await import('./hook-selfcheck.mjs');
   for (const pair of [['SessionStart','api-billing-guard.mjs'], ['UserPromptSubmit','api-billing-guard.mjs'], ['PreToolUse','api-billing-guard.mjs'], ['UserPromptSubmit','claude-impl-approval.mjs'], ['PreToolUse','pretooluse-lane-guard.mjs'], ['PreToolUse','pretooluse-delegation-warn.mjs'], ['PreToolUse','pretooluse-bash-delegation.mjs']]) assert.ok(REQUIRED_HOOKS.some(p => p[0] === pair[0] && p[1] === pair[1]));
 });
+
+
+test('Claude上限のUserPromptSubmitフックは必須', () => {
+  const missing = missingRequiredHooks({});
+  assert.ok(missing.some(([event, script]) => event === 'UserPromptSubmit' && script === 'plan-usage-report.mjs'));
+});

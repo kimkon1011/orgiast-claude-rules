@@ -104,7 +104,11 @@ if (dueDaily && repo) {
     const ngItems = ngLines.map(line => line.replace(/^.*\[NG\s*\]\s*/, '').trim()).filter(Boolean).join(' / ');
     const tail = ngLines.length ? ` … NG: ${ngItems}` : '';
     await post(`${ngLines.length ? '⚠' : '✅'} **[${label}]** 日次設定チェック: OK ${ok} / NG ${ngLines.length}${tail}`);
+  }
+  // Report even when verifySetup returns no output; --dry must not send either report.
+  if (!dry) {
     runFleetSheetReport();
+    run(process.execPath, [path.join(repo, 'tools', 'plan-usage-report.mjs'), '--force']);
   }
   // 熱の日次サマリ。thermal-guard が未導入(=サンプルが無い)なら何も送らないので、
   // 導入済みのPCだけが1日1回 直近24hの要約を返す。

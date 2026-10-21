@@ -9,6 +9,7 @@ import { isEntry } from './is-entry.mjs';
 import { deploySkills } from './onboarding-sync.mjs';
 
 export const REQUIRED_HOOKS = [
+  ['UserPromptSubmit', 'plan-usage-report.mjs'],
   ['SessionStart', 'api-billing-guard.mjs'],
   ['UserPromptSubmit', 'api-billing-guard.mjs'],
   ['PreToolUse', 'api-billing-guard.mjs'],

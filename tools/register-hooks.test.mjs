@@ -45,6 +45,9 @@ test('session-relaunch hook は同期で1本だけ登録され、再実行で重
   assert.match(hooks[0].command, /session-relaunch\.mjs" --hook$/);
   assert.equal(hooks[0].timeout, 10);
   assert.equal('async' in hooks[0], false);
+  const planHooks = settings.hooks.UserPromptSubmit.flatMap(group => group.hooks || []).filter(hook => hook.command.includes('plan-usage-report.mjs'));
+  assert.equal(planHooks.length, 1);
+  assert.match(planHooks[0].command, /plan-usage-report\.mjs" --hook$/);
   assert.match(second, /hook は既に登録済み\(変更なし\)/);
   fs.rmSync(home, { recursive: true, force: true });
 });

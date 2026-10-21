@@ -166,19 +166,25 @@ if ($dueDaily -and $repo) {
     $emoji = if ($ng -eq 0) { [char]0x2705 } else { [char]0x26A0 }
     $tail = ''; if ($ng -gt 0) { $tail = " … NG: $ngItems" }
     Post "$emoji **[$label]** 日次設定チェック: OK $ok / NG $ng$tail"
-    # --specs を必ず付ける。付けないとハードウェアスペックを一度も送らず、
-    # PC管理表 が「手で叩いた1台」だけの状態から永久に増えない(2026-08-28 実測)。
-    try {
-      $fleetLogDir = Join-Path $H '.claude\logs'; New-Item -ItemType Directory -Path $fleetLogDir -Force | Out-Null
-      $fleetLog = Join-Path $fleetLogDir 'fleet-poller.log'
-      $stamp = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ssK')
-      if ($Dry) { DrySkip 'fleet-sheet-report.mjs --specs --cloud (PC管理表へ書き込む)' }
-      else {
-        & $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) (Join-Path $repo 'tools\fleet-sheet-report.mjs') '--specs' '--cloud' 2>&1 | ForEach-Object { Add-Content -LiteralPath $fleetLog -Value "$stamp $_" -Encoding UTF8 }
-        if ($LASTEXITCODE -ne 0) { Add-Content -LiteralPath $fleetLog -Value "$stamp WARN fleet-sheet-report exit=$LASTEXITCODE" -Encoding UTF8 }
-      }
-    } catch {}
   }
+  # --specs を必ず付ける。付けないとハードウェアスペックを一度も送らず、
+  # PC管理表 が「手で叩いた1台」だけの状態から永久に増えない(2026-08-28 実測)。
+  try {
+    $fleetLogDir = Join-Path $H '.claude\logs'; New-Item -ItemType Directory -Path $fleetLogDir -Force | Out-Null
+    $fleetLog = Join-Path $fleetLogDir 'fleet-poller.log'
+    $stamp = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ssK')
+    if ($Dry) { DrySkip 'fleet-sheet-report.mjs --specs --cloud (PC管理表へ書き込む)' }
+    else {
+      & $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) (Join-Path $repo 'tools\fleet-sheet-report.mjs') '--specs' '--cloud' 2>&1 | ForEach-Object { Add-Content -LiteralPath $fleetLog -Value "$stamp $_" -Encoding UTF8 }
+      if ($LASTEXITCODE -ne 0) { Add-Content -LiteralPath $fleetLog -Value "$stamp WARN fleet-sheet-report exit=$LASTEXITCODE" -Encoding UTF8 }
+    }
+  } catch {}
+  try {
+    if ($Dry) { DrySkip 'plan-usage-report.mjs --force (Claude上限へ書き込む)' }
+    else {
+      & $(if ($orgiastNodeExe) { $orgiastNodeExe } else { (Get-Command node -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source }) (Join-Path $repo 'tools\plan-usage-report.mjs') '--force' *> $null
+    }
+  } catch {}
   # 熱の日次サマリ。thermal-guard が未導入(=サンプルが無い)なら何も送らないので、
   # 導入済みのPCだけが1日1回 直近24hの要約を返す。
   try { RunPs (Join-Path $repo 'tools\thermal-guard.ps1') @('-Report') | Out-Null } catch {}

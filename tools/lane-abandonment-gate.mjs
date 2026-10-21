@@ -110,7 +110,7 @@ export function evaluateLaneAbandonment(ctx, { home = laneHome() } = {}) {
   const result = { decision: block ? 'block' : 'pass', code: unrepaired && !abandon ? 'LANE-UNREPAIRED' : 'LANE-ABANDON', signals, exemption };
   if (abandon) result.reason = `[LANE-ABANDON] 他AIレーンの失敗(${signals[0]})を放置して Claude 本体で作業した。先に node tools/lane-doctor.mjs --probe を実行し、生存レーン(${(health.implementOrder || []).join(', ') || '未確認'})へ委譲し直せ。全滅なら有効な [LANE-REPAIR] 行とともに本文に [LANE-FALLBACK] <理由> を書け（§1.18 / kim 2026-10-08）`;
   if (expiry && !abandon) result.reason = `[LANE-ABANDON] 他AIレーンの待機が期限切れになったことを理由に Claude 本体で実装を続けている（${expiry}）。待機の期限切れはレーン失敗ではないが、本体へ戻る理由にもならない。node tools/codex-do.mjs を前景・--timeout 付きで当ターン内に実行し直し、完了まで見届けてください（§1.18 / rule 13）`;
-  if (unrepaired) result.reason = abandon ? `${result.reason} ${repairReason}` : repairReason;
+  if (unrepaired) result.reason = abandon || expiry ? `${result.reason} ${repairReason}` : repairReason;
   try { appendCorrection(home, { sessionId: ctx.sessionId || '', gate: 'lane-abandonment', verdict: result.decision, signals, excerpt: ctx.assistantText }); } catch { result.ledgerError = true; }
   return result;
 }

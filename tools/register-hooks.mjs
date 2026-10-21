@@ -381,7 +381,7 @@ try {
   if (add(settings.hooks.UserPromptSubmit, 'credentials-reminder.mjs', { hooks: [{ type: 'command', command: command('credentials-reminder.mjs'), timeout: 5 }] })) added += 1;
   added += migrate(settings.hooks.PreToolUse, 'pretooluse-delegation-warn.ps1', 'pretooluse-delegation-warn.mjs', command('pretooluse-delegation-warn.mjs'));
   if (add(settings.hooks.PreToolUse, 'pretooluse-delegation-warn.mjs', { matcher: 'Write|Edit|MultiEdit', hooks: [{ type: 'command', command: command('pretooluse-delegation-warn.mjs') }] })) added += 1;
-  if (add(settings.hooks.PreToolUse, 'app-llm-cost-gate.mjs', { matcher: 'Write|Edit|MultiEdit|Bash', hooks: [{ type: 'command', command: command('app-llm-cost-gate.mjs'), timeout: 5 }] })) added += 1;
+  if (add(settings.hooks.PreToolUse, 'app-llm-cost-gate.mjs', { matcher: 'Write|Edit|MultiEdit|Bash|PowerShell', hooks: [{ type: 'command', command: command('app-llm-cost-gate.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.PreToolUse, 'pretooluse-bash-delegation.mjs', { matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command: command('pretooluse-bash-delegation.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.PreToolUse, 'pretooluse-lane-guard.mjs', { matcher: 'Bash|PowerShell|Edit|Write|MultiEdit', hooks: [{ type: 'command', command: command('pretooluse-lane-guard.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.PreToolUse, 'lane-repair-first-gate.mjs', { matcher: 'Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit', hooks: [{ type: 'command', command: command('lane-repair-first-gate.mjs'), timeout: 5 }] })) added += 1;

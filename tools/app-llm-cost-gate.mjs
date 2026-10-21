@@ -5,7 +5,7 @@ import path from 'node:path';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { readAssistantText } from './lib/assistant-text.mjs';
 
-const markers = ['@anthropic-ai/sdk', 'new Anthropic(', 'api.anthropic.com', 'anthropic.messages.create', 'client.messages.create', 'web_search_20'];
+const markers = ['@anthropic-ai/sdk', 'new Anthropic(', 'api.anthropic.com', 'anthropic.messages.create', 'web_search_20'];
 const providerMessage = 'アプリの LLM/検索は他AIが既定（ONBOARDING §2.8.0）。Web検索付き収集=Gemini Flash グラウンディング、分類・抽出・要約=Groq/DeepSeek/Gemini Flash。Claude API を使うなら `// LLM-PROVIDER-REASON: <比較した他AI 3社以上の名前と実測値>` を書く（1社だけ試して Claude に戻すのは禁止）。Claude への自動フォールバックは禁止。落とす先は別の他AI、全滅なら止めて通知（§2.8.0 5）';
 const bulkMessage = '一括実行の前に、1〜10件で1件あたり実費を実測し、[COST-ESTIMATE: 1件 $X(n件実測)×N件=$Y / 上限$Z] を書く。自動リロードは予算上限ではない。予算上限はコード側で env (例 BULK_BUDGET_USD) により自動停止させる（§2.8.0）';
 
@@ -38,18 +38,33 @@ export function evaluate(input) {
     const enough = (line) => new Set((line.match(otherAis) || []).map(s => s.toLowerCase().replace(/^sonar$/, 'perplexity').replace(/^xai$/, 'grok').replace(/^moonshot$/, 'kimi'))).size >= 3;
     if ([existing, ...edits.map(e => e.new_string)].some(t => reasonLines(t).some(enough))) return;
     const claudeModel = /["'`]claude-(?:haiku|sonnet|opus|fable)[\w.-]*["'`]/gi;
-    const anthropicDefault = /(?:\?\?|\|\||\?|:|\breturn\b|\bdefault\b|=)\s*["'`]anthropic["'`]|["'`]anthropic["'`]\s*(?:\?\?|\|\||\?|:|\breturn\b|\bdefault\b|=)/i;
-    const newlyAddsClaudeModel = (edit) => {
-      const added = String(edit.new_string || '').match(claudeModel) || [];
-      const old = new Set((String(edit.old_string || '').match(claudeModel) || []).map(value => value.toLowerCase()));
-      return added.some(value => !old.has(value.toLowerCase()));
+    const defaultContextBefore = (text, index, allowTernary = false) => {
+      const line = text.slice(0, index).split(/\r?\n/).at(-1) || '';
+      return !/\|\s*$/.test(line) && !/\bcase\s*$/.test(line)
+        && (allowTernary ? /(?:=|:|\?\??|\|\||\breturn|\bdefault)\s*$/ : /(?:=|:|\?\?|\|\||\breturn|\bdefault)\s*$/).test(line);
     };
-    const newlyAddsAnthropicDefault = (edit) => anthropicDefault.test(String(edit.new_string || ''))
-      && !anthropicDefault.test(String(edit.old_string || ''));
+    const contextualLiterals = (text, pattern, allowTernary = false) => {
+      const matches = [];
+      for (const match of String(text || '').matchAll(pattern)) {
+        if (defaultContextBefore(String(text || ''), match.index, allowTernary)) matches.push(match[0].toLowerCase());
+      }
+      return matches;
+    };
+    const newlyAddsClaudeModel = (edit) => {
+      const added = contextualLiterals(edit.new_string, claudeModel);
+      const old = new Set(contextualLiterals(edit.old_string, claudeModel));
+      return added.some(value => !old.has(value));
+    };
+    const anthropicLiteral = /["'`]anthropic["'`]/gi;
+    const newlyAddsAnthropicDefault = (edit) => {
+      const added = contextualLiterals(edit.new_string, anthropicLiteral, true);
+      const old = new Set(contextualLiterals(edit.old_string, anthropicLiteral, true));
+      return added.some(value => !old.has(value));
+    };
     if (edits.some(e => markers.some(word => String(e.new_string || '').includes(word) && !String(e.old_string || '').includes(word))
       || newlyAddsClaudeModel(e) || newlyAddsAnthropicDefault(e))) return providerMessage;
   }
-  if (tool !== 'Bash' || typeof args.command !== 'string') return;
+  if (!['Bash', 'PowerShell'].includes(tool) || typeof args.command !== 'string') return;
   // Inspect each shell segment without executing the command.
   let blockedSegment = false;
   for (const segment of args.command.split(/&&|\|\||[;\n|]/)) {
@@ -65,7 +80,7 @@ export function evaluate(input) {
         if (m) counts.push(Number(m[1]));
       }
       try { source = fs.readFileSync(file, 'utf8'); } catch { source = null; }
-      if (source === null) { blockedSegment = true; continue; }
+      if (source === null) continue;
       if (!counts.length) {
         counts = [...source.matchAll(/\b(?:limit|count|total|items|rows|batch)\s*:\s*(?:\r?\n\s+[^\r\n]+)*?\r?\n\s+default\s*:\s*["']?(\d+)/gi)].map(match => Number(match[1]));
       }
@@ -91,13 +106,13 @@ export function evaluate(input) {
         file = path.resolve(cwd, tokens[index]);
         index++;
       }
-      const numeric = tokens.slice(index).find(t => /^\d+$/.test(t));
-      if (numeric) counts = [Number(numeric)];
+      const quantity = tokens.slice(index).find(t => /^\d+$/.test(t) || /^--?(?:limit|count|total|items|rows|batch)=\d+$/i.test(t));
+      if (quantity) counts = [Number(quantity.match(/\d+$/)[0])];
       try { source = fs.readFileSync(file, 'utf8'); } catch { continue; }
     }
     const large = counts.filter(n => n > 20);
     if (!large.length) continue;
-    if (!/\b(?:ANTHROPIC|OPENAI|GEMINI|XAI|OPENROUTER|GROQ|DEEPSEEK|MOONSHOT|KIMI|MISTRAL|GLM|ZAI|CEREBRAS|PERPLEXITY)_API_KEY\b/.test(source)) continue;
+    if (!/\b(?:ANTHROPIC|OPENAI|GEMINI|GOOGLE|GOOGLE_GENERATIVE_AI|AZURE_OPENAI|XAI|OPENROUTER|GROQ|DEEPSEEK|MOONSHOT|KIMI|MISTRAL|GLM|ZAI|CEREBRAS|PERPLEXITY)_API_KEY\b/.test(source)) continue;
     const latest = readAssistantText(input.transcript_path);
     if (latest.reason === 'unreadable') return;
     if (!large.every(n => estimateMatches(latest.text, n))) blockedSegment = true;

@@ -20,7 +20,12 @@ for (const text of [
   'Claude にフォールバックする分岐を削除しました',
   '他AIが全滅した時に Claude で代替しないよう修正しました',
   '当面は Claude ではなく Gemini で動かします',
+  'Claude のままだと高くつくので Gemini に切り替えました',
 ]) test(`passes: ${text}`, () => assert.equal(evaluate(text).decision, 'pass'));
+
+test('他AIの残高不足を理由にした Claude 継続は block', () => {
+  assert.equal(evaluate('Kimi の残高が足りないため、当面は Claude で動きます').decision, 'block');
+});
 
 test('versioned Claude model is blocked', () => assert.equal(evaluate('Claude Sonnet 5 で動きます').decision, 'block'));
 test('unclosed fence remains inspectable', () => assert.equal(evaluate('```text\n当面は Claude で動きます').decision, 'block'));

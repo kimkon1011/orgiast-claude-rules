@@ -70,7 +70,7 @@ test('既存PowerShell hookへExecutionPolicy Bypassを補いcost-loopをmjsへ�
   const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
   const costGroups = settings.hooks.PreToolUse.filter(group => group.hooks.some(hook => hook.command.includes('app-llm-cost-gate.mjs')));
   assert.equal(costGroups.length, 1);
-  assert.equal(costGroups[0].matcher, 'Write|Edit|MultiEdit|Bash');
+  assert.equal(costGroups[0].matcher, 'Write|Edit|MultiEdit|Bash|PowerShell');
   // Shared gate wrapper reserves 15 seconds around the hook's 5-second budget.
   assert.equal(costGroups[0].hooks[0].timeout, 15);
   const commands = Object.values(settings.hooks).flatMap((groups) => groups.flatMap((group) => group.hooks || [])).map((hook) => hook.command);

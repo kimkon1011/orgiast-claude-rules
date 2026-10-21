@@ -24,9 +24,10 @@ function fixture(t) {
   return { cwd, say, run };
 }
 const edit = { file_path: 'app.ts', new_string: 'new Anthropic(', old_string: '' };
-for (const marker of ['@anthropic-ai/sdk', 'new Anthropic(', 'api.anthropic.com', 'anthropic.messages.create', 'client.messages.create', 'web_search_20']) {
+for (const marker of ['@anthropic-ai/sdk', 'new Anthropic(', 'api.anthropic.com', 'anthropic.messages.create', 'web_search_20']) {
   test(`new provider marker blocked: ${marker}`, t => assert.equal(fixture(t).run('Edit', { ...edit, new_string: marker }), 'deny'));
 }
+test('Twilio client.messages.create is not treated as Anthropic', t => assert.equal(fixture(t).run('Edit', { ...edit, new_string: 'client.messages.create({ to, body })' }), undefined));
 test('reason naming 3 other AIs passes', t => assert.equal(fixture(t).run('Edit', { ...edit, new_string: '// LLM-PROVIDER-REASON: Gemini 一致1/3, Perplexity 一致2/5, Grok 一致1/5 で品質不足\nnew Anthropic(' }), undefined));
 test('reason naming only 1 other AI is blocked', t => assert.equal(fixture(t).run('Edit', { ...edit, new_string: '// LLM-PROVIDER-REASON: Gemini で品質不足\nnew Anthropic(' }), 'deny'));
 test('reason without other AI names is blocked', t => assert.equal(fixture(t).run('Edit', { ...edit, new_string: '// LLM-PROVIDER-REASON: required feature\nnew Anthropic(' }), 'deny'));
@@ -43,9 +44,12 @@ test('existing claude model literal passes', t => assert.equal(fixture(t).run('E
 test('existing anthropic literal is blocked when moved into a default return', t => assert.equal(fixture(t).run('Edit', { ...edit, old_string: 'providers.push("anthropic")', new_string: 'return "anthropic"' }), 'deny'));
 test('claude model literal in markdown passes', t => assert.equal(fixture(t).run('Edit', { ...edit, file_path: 'providers.md', new_string: 'default: "claude-opus-5"' }), undefined));
 test('anthropic default in test file passes', t => assert.equal(fixture(t).run('Edit', { ...edit, file_path: 'provider.test.ts', new_string: 'return "anthropic"' }), undefined));
+test('Claude model type union passes', t => assert.equal(fixture(t).run('Edit', { ...edit, new_string: 'type Model = "gemini" | "claude-sonnet-5"' }), undefined));
+test('Anthropic case label passes', t => assert.equal(fixture(t).run('Edit', { ...edit, new_string: 'case "anthropic": return handleAnthropic()' }), undefined));
 test('different newly added marker blocked', t => assert.equal(fixture(t).run('Edit', { ...edit, old_string: '@anthropic-ai/sdk' }), 'deny'));
 test('Write and MultiEdit checked', t => { const f = fixture(t); assert.equal(f.run('Write', { file_path: 'app.ts', content: edit.new_string }), 'deny'); assert.equal(f.run('MultiEdit', { file_path: 'app.ts', edits: [{ old_string: '', new_string: edit.new_string }] }), 'deny'); });
 test('workflow limit 1000 blocked', t => assert.equal(fixture(t).run('Bash', { command: 'gh workflow run batch.yml -f limit=1000' }), 'deny'));
+test('PowerShell tool checks large counts', t => assert.equal(fixture(t).run('PowerShell', { command: 'node scripts/batch.ts --count=1000' }), 'deny'));
 test('valid measured estimate passes', t => { const f = fixture(t); f.say('[COST-ESTIMATE: 1件 $0.01(3件実測)×1000件=$10 / 上限$20]'); assert.equal(f.run('Bash', { command: 'gh workflow run batch.yml -f limit=1000' }), undefined); });
 for (const [label, text] of [
   ['over budget', '1件 $1(3件実測)×1000件=$1000 / 上限$20'],
@@ -57,6 +61,9 @@ test('small batch passes', t => assert.equal(fixture(t).run('Bash', { command: '
 test('workflow without paid key passes', t => { const f = fixture(t); fs.writeFileSync(path.join(f.cwd, '.github/workflows/batch.yml'), 'echo hello'); assert.equal(f.run('Bash', { command: 'gh workflow run batch.yml -f limit=1000' }), undefined); });
 for (const command of ['npx tsx scripts/batch.ts 1000', 'node scripts/batch.ts --mode collect 1000', 'gh workflow run batch.yml --field=count=1000']) test(command, t => assert.equal(fixture(t).run('Bash', { command }), 'deny'));
 test('OPENROUTER key is treated as paid', t => { const f = fixture(t); fs.writeFileSync(path.join(f.cwd, '.github/workflows/batch.yml'), 'OPENROUTER_API_KEY'); assert.equal(f.run('Bash', { command: 'gh workflow run batch.yml -f count=1000' }), 'deny'); });
+for (const key of ['GOOGLE_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY', 'AZURE_OPENAI_API_KEY']) {
+  test(`${key} is treated as paid`, t => { const f = fixture(t); fs.writeFileSync(path.join(f.cwd, '.github/workflows/batch.yml'), key); assert.equal(f.run('Bash', { command: 'gh workflow run batch.yml -f count=1000' }), 'deny'); });
+}
 test('missing workflow and real batch compound command is denied', t => assert.equal(fixture(t).run('Bash', { command: 'gh workflow run absent.yml -f count=1000; node scripts/batch.ts 1000' }), 'deny'));
 test('only count-like workflow fields are quantities', t => assert.equal(fixture(t).run('Bash', { command: 'gh workflow run batch.yml -f limit=1000 -f concurrency=50' }), 'deny'));
 test('quoted workflow field is denied', t => assert.equal(fixture(t).run('Bash', { command: 'gh workflow run batch.yml --field="count=1000"' }), 'deny'));
@@ -67,5 +74,5 @@ test('concurrency alone is not a quantity', t => assert.equal(fixture(t).run('Ba
 test('old estimate does not authorize latest message', t => { const f = fixture(t); f.say('[COST-ESTIMATE: 1件 $0.01(3件実測)×1000件=$10 / 上限$20]'); fs.appendFileSync(path.join(f.cwd, 'transcript.jsonl'), JSON.stringify({ type: 'assistant', message: { content: 'New plan' } })); assert.equal(f.run('Bash', { command: 'node scripts/batch.ts 1000' }), 'deny'); });
 test('off bypasses', t => assert.equal(fixture(t).run('Edit', edit, { APP_LLM_COST_GATE: 'off' }), undefined));
 test('malformed input fails open', () => { const r = spawnSync(process.execPath, [hook], { input: '{oops', encoding: 'utf8' }); assert.equal(r.status, 0); assert.equal(r.stdout, ''); });
-test('unreadable workflow segment is blocked', t => assert.equal(fixture(t).run('Bash', { command: 'gh workflow run absent.yml -f count=1000' }), 'deny'));
+test('unreadable workflow segment is skipped', t => assert.equal(fixture(t).run('Bash', { command: 'gh workflow run absent.yml -f count=1000' }), undefined));
 test('5-sample estimate passes', t => { const f = fixture(t); f.say('[COST-ESTIMATE: 1件 $0.017(5件実測)×246件=$4.182 / 上限$5]'); assert.equal(f.run('Bash', { command: 'gh workflow run batch.yml -f limit=246' }), undefined); });

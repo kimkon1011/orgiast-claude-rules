@@ -19,6 +19,14 @@ const item = { pattern: 'API 確認', route: 'gh api', confidence: 'high' };
 test('promotionFileはhome配下のgit管理外台帳を返す', () => {
   assert.equal(promotionFile('/example/home'), path.join('/example/home', '.claude', 'handoff-audit-promotions.jsonl'));
 });
+test('同一route・別patternは昇格しない（rescue枝の量産源を断つ）', () => {
+  const known = [{ pattern: '既存の確認', route: 'gh api', confidence: 'high', source: 'manual' }];
+  const merged = mergeKnowledge(known, [{ pattern: '別ラベルの確認', route: 'ｇｈ　 api ', confidence: 'high' }], [], 'obs');
+  assert.equal(merged.knowledge.length, 1);
+  assert.equal(merged.promoted.length, 0);
+  const medium = mergeKnowledge(known, [{ pattern: '別ラベルの確認', route: 'gh api', confidence: 'medium' }], [], 'obs');
+  assert.equal(medium.candidates.length, 0);
+});
 test('patternキーで重複排除、mediumは候補、別観測でhighへ', () => {
   const first = mergeKnowledge([], [item, item], [], 'one');
   assert.equal(first.knowledge.length, 1);

@@ -39,6 +39,10 @@ export function mergeKnowledge(knowledge, learned, candidates, observation) {
   const promoted = [];
   for (const item of learned) {
     if (next.some(k => key(k.pattern) === key(item.pattern))) continue;
+    // 同じ経路を別ラベルで再学習すると route 重複エントリが毎晩増え、knowledge.json が dirty になって
+    // rescue 枝が量産される（2026-10-22 実測: 3d8c172 は route が既存 entry と完全一致）。
+    // enqueueTodos も route 正規化キーで重複を落としているので、昇格側も同じ規則に揃える。
+    if (next.some(k => key(k.route) === key(item.route))) continue;
     const prior = pending.find(c => key(c.pattern) === key(item.pattern) && key(c.route) === key(item.route) && c.observation !== observation);
     if (item.confidence === 'high' || prior) {
       const entry = { ...item, confidence: 'high', source: `handoff-audit-nightly:${observation}` };

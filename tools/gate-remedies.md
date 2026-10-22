@@ -132,6 +132,8 @@ run_in_background を外し前景実行、ScheduleWakeup を使わず timeout �
 
 ## pretooluse-lane-guard
 
+GUI operator・承認済み送信スクリプトは回数制限の対象外（Codex に委譲できない PC 操作を送信途中で止めないため）。
+
 node tools/lane-doctor.mjs --probe で状態更新し、node tools/codex-do.mjs --prompt-file <指示> --cwd <対象>。
 
 ## report-length-gate

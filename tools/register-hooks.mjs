@@ -351,6 +351,8 @@ try {
   if (add(settings.hooks.PreToolUse, 'pipe-stage-permissions.mjs', { matcher: 'Bash', hooks: [{ type: 'command', command: command('pipe-stage-permissions.mjs'), timeout: 5 }] })) added += 1;
   // 社内アプリを不具合・要望フォーム未搭載のまま本番反映させない(§2.11・2026-10-08 カフェアプリ事故の再発防止)。
   if (add(settings.hooks.PreToolUse, 'feedback-form-gate.mjs', { matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command: command('feedback-form-gate.mjs'), timeout: 10 }] })) added += 1;
+  // 全プロジェクトを「別アカウントへ移管できる前提」で作らせる。HANDOVER.md 無しの本番反映を止める(§1.12.1・2026-10-22 kim 厳命)。
+  if (add(settings.hooks.PreToolUse, 'handover-doc-gate.mjs', { matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command: command('handover-doc-gate.mjs'), timeout: 10 }] })) added += 1;
   added += migrate(settings.hooks.Stop, 'verify-before-done-detector.ps1', 'verify-before-done-detector.mjs', command('verify-before-done-detector.mjs'));
   // 人に手作業を頼むとき、初見の人でも実行できる手順になっているかを検査する(§1.5.1)。
   if (add(settings.hooks.Stop, 'verify-before-done-detector.mjs', { hooks: [{ type: 'command', command: command('verify-before-done-detector.mjs') }] })) added += 1;

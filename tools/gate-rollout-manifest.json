@@ -37,6 +37,12 @@
       "rollout": "deny",
       "legacy": true
     },
+    "handover-doc-gate": {
+      "rollout": "deny",
+      "distributedAt": "2026-10-22T00:00:00Z",
+      "denyAfter": "2026-10-29T00:00:00Z",
+      "pilotDeny": true
+    },
     "gh-handoff-gate": {
       "rollout": "deny",
       "legacy": true

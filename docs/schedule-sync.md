@@ -83,7 +83,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\register-schedule-sync
 ```
 
 `OrgiastScheduleSync` は30分間隔、同時実行禁止、25分タイムアウト。
-実行元は必ず `%USERPROFILE%\.claude\nightly-repo`。main の同期前は登録を失敗させ、
+実行元は共通ヘルパーが解決する同期先（既定 `$HOME\.claude\nightly-repo`、
+`ORGIAST_NIGHTLY_REPO` で変更可能）。main の同期前は登録を失敗させ、
 古い開発コピーへフォールバックしない。PowerShell ファイルは BOM付きUTF-8/CRLF。
 
 新規 install-orgiast.ps1 と既存 fleet-poller.ps1 の日次自己修復から `-Ensure` を呼ぶ。

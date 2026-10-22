@@ -251,7 +251,7 @@ test('task scripts use BOM/CRLF, synced main, 30 minutes, and both deployment pa
     if (name !== 'register-schedule-sync-task.ps1') assert.match(buffer.toString(), /register-schedule-sync-task\.ps1/);
   }
   const text = fs.readFileSync(new URL('./register-schedule-sync-task.ps1', import.meta.url), 'utf8');
-  assert.match(text, /\.claude\\nightly-repo/); assert.match(text, /-RepetitionInterval \(New-TimeSpan -Minutes 30\)/); assert.match(text, /-MultipleInstances IgnoreNew/);
+  assert.match(text, /Resolve-RegisterRepoRoot -Fallback \(Get-SyncedRepoRoot\)/); assert.match(text, /-RepetitionInterval \(New-TimeSpan -Minutes 30\)/); assert.match(text, /-MultipleInstances IgnoreNew/);
   assert.match(text, /Downloads\\claude-mobile\\app\\api\\line-ingest/);
 });
 

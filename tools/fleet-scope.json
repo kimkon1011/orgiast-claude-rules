@@ -2,6 +2,12 @@
   "version": 1,
   "entries": [
     {
+      "path": "tools/register-schedule-sync-task.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "kim の個人カレンダー同期。LINE 受信機だけで登録し、他の fleet PC では収集しない"
+    },
+    {
       "path": "tools/register-fleet-chase.ps1",
       "scope": "kim-only",
       "step": "task:fleet-chase",

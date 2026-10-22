@@ -7,7 +7,10 @@ if ($Ensure -and -not (Test-Path -LiteralPath (Join-Path $env:USERPROFILE 'Downl
   exit 0
 }
 $specs = @([pscustomobject]@{ TaskName = 'OrgiastScheduleSync'; ScriptName = 'schedule-sync.mjs'; ScriptArgs = @() })
-$repo = Join-Path $env:USERPROFILE '.claude\nightly-repo'
+. (Join-Path $PSScriptRoot 'resolve-synced-repo.ps1')
+# Keep the synced repo as the fallback too: never run a development copy.
+# The script existence check below fails closed until main has been synced.
+$repo = Resolve-RegisterRepoRoot -Fallback (Get-SyncedRepoRoot) -RequiredPaths @('tools\schedule-sync.mjs')
 . (Join-Path $PSScriptRoot 'ensure-run-hidden.ps1')
 foreach ($spec in $specs) {
   $current = Get-ScheduledTask -TaskName $spec.TaskName -ErrorAction SilentlyContinue

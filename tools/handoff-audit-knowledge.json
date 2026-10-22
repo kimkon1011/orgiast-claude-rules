@@ -154,5 +154,29 @@
     "route": "SA 直では quota 0 で失敗。DWD で kim を impersonate（subject）して作成",
     "confidence": "high",
     "source": "handoff-audit-nightly:671fadaef7cf2d3cce74da8b5168e306582605b789ce054a3abf7a5ead7a0b72"
+  },
+  {
+    "pattern": "Drive ファイル/フォルダを SA に共有",
+    "route": "SA 直では quota 0 で失敗。DWD で kim を impersonate（subject）して作成",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:a3ba93d328a2f82cbed847fbd90be4d9b58b51ce3850d934b545c230243d89a7"
+  },
+  {
+    "pattern": "Vercel 環境変数の登録",
+    "route": "vercel env",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:a3ba93d328a2f82cbed847fbd90be4d9b58b51ce3850d934b545c230243d89a7"
+  },
+  {
+    "pattern": "社内スタッフ宛の連絡",
+    "route": "Discord MCP",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:a3ba93d328a2f82cbed847fbd90be4d9b58b51ce3850d934b545c230243d89a7"
+  },
+  {
+    "pattern": "Drive のファイル移動を Web 画面/Chrome 前面化で user に依頼",
+    "route": "SA 直では quota 0 で失敗。DWD で kim を impersonate（subject）して作成",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:c01218287d9e9baa22e44f523c7cfcb27a4638d9a808d28f69d8a285f7c4ee4c"
   }
 ]

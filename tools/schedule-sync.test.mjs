@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runScheduleSync, isScheduleCandidate, isDuplicate, eventBody, extractEvents, parseArgs, parseExtraction, calendarToken, CALENDAR_SCOPE, createCalendarClient, collectMessages, makeLlm, parseBatchExtraction, extractBatch, isAutomatedGmail } from './schedule-sync.mjs';
+import { runScheduleSync, isScheduleCandidate, isDuplicate, eventBody, extractEvents, parseArgs, parseExtraction, calendarToken, CALENDAR_SCOPE, createCalendarClient, collectMessages, makeLlm, parseBatchExtraction, extractBatch, isAutomatedGmail, excerptScheduleText, main } from './schedule-sync.mjs';
 import { searchGmail } from './gmail-search.mjs';
 import { fetchMessages } from './discord-digest.mjs';
 import { callWithFallback } from './llm-fallback.mjs';
@@ -146,7 +146,7 @@ test('collection / LLM failures retain cursor; empty run sends no DM', async t =
   x.deps.collect = async () => ({ messages: [message], stats: {} });
   x.deps.llm = async () => { throw new Error('LLM failed'); };
   x.options.now += 1000;
-  await assert.rejects(x.run(), /LLM failed/);
+  assert.equal((await x.run()).ok, false);
   assert.equal(fs.readFileSync(path.join(x.options.stateDir, 'state.json'), 'utf8'), before);
 });
 test('source-specific cursors retain other sources; --since overrides reads without moving cursor backward', async t => {
@@ -215,7 +215,7 @@ test('collectors paginate Gmail and Discord, ignore bots, and include delayed LI
     },
   });
   assert.equal(gmailPages, 2); assert.equal(discordPages, 2);
-  assert.deepEqual(result.stats, { line: 1, gmail: 2, discordChannels: { readable: 1, denied: 1 }, discord: 1 });
+  assert.deepEqual(result.stats, { line: 1, gmail: 2, discordChannels: { readable: 1, denied: 1, cached: 0 }, discord: 1 });
   assert.equal(result.messages.length, 4);
 });
 test('Discord fetch supports continuing before an ID and surfaces forbidden status', async () => {
@@ -225,6 +225,7 @@ test('Discord fetch supports continuing before an ID and surfaces forbidden stat
 test('LLM CLI uses extraction routing, reference timestamp, and no-persist for dry run', async () => {
   const llm = makeLlm({ home: '/tmp', dryRun: true, execute: async (file, args) => {
     assert.equal(file, process.execPath); assert.ok(args.includes('--no-persist'));
+    assert.ok(!args.includes('--no-fallback'));
     assert.equal(args[args.indexOf('--category') + 1], 'extraction');
     assert.equal(JSON.parse(fs.readFileSync(args[args.indexOf('--prompt-file') + 1], 'utf8')).sentAt, message.ts); return { stdout: '[]' };
   } });
@@ -399,14 +400,16 @@ test('timeout includes collection and dry-run overlaps are locked without persis
   assert.equal(fs.existsSync(x.options.stateDir), false);
 });
 
-test('invalid batch retains its cursor and successful parallel plans survive failure', async t => {
+test('invalid batch retains retry boundary while successful parallel plans are registered', async t => {
   const x = setup(t); delete x.deps.llm; x.options.batchSize = 1;
   x.deps.collect = async () => ({ messages: [message, { ...message, id: 'bad' }], stats: {} });
   x.deps.batchLlm = async batch => batch[0].id === 'bad' ? [] : batchReply(batch);
-  await assert.rejects(x.run(), /invalid batch/);
+  const result = await x.run();
+  assert.equal(result.ok, true); assert.equal(result.counts.failed, 1);
+  assert.equal(result.counts.created, 1); assert.equal(x.creates.length, 1);
   const ledger = fs.readFileSync(path.join(x.options.stateDir, 'ledger.jsonl'), 'utf8');
-  assert.match(ledger, /"type":"plan"/); assert.doesNotMatch(ledger, /"type":"done"/);
-  assert.equal(JSON.parse(fs.readFileSync(path.join(x.options.stateDir, 'state.json'))).cursors.line, new Date(now - 48 * 3600000).toISOString());
+  assert.match(ledger, /"type":"plan"/); assert.match(ledger, /"type":"done"/); assert.match(ledger, /"type":"failed"/);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(x.options.stateDir, 'state.json'))).cursors.line, new Date(message.ts).toISOString());
 });
 
 test('batch and runtime CLI limits reject invalid values', () => {
@@ -420,7 +423,7 @@ test('long batch prompts bypass command-line limits and temporary files are clea
     const llm = makeLlm({ home: '/tmp', dryRun: true, execute: async (file, args) => {
       assert.ok(args.join(' ').length < 4000);
       promptFile = args[args.indexOf('--prompt-file') + 1];
-      assert.equal(JSON.parse(fs.readFileSync(promptFile, 'utf8')).messages[0].text.length, 50000);
+      assert.equal(JSON.parse(fs.readFileSync(promptFile, 'utf8')).messages[0].text.length, 4000);
       if (fail) throw new Error('test failure');
       return { stdout: '[]' };
     } });
@@ -428,4 +431,155 @@ test('long batch prompts bypass command-line limits and temporary files are clea
     if (fail) await assert.rejects(call, /LLM call failed/); else assert.equal(await call, '[]');
     assert.equal(fs.existsSync(path.dirname(promptFile)), false);
   }
+});
+
+test('failed batches split recursively to singletons without exceeding worker concurrency', async t => {
+  const x = setup(t); delete x.deps.llm;
+  const messages = Array.from({ length: 8 }, (_, i) => ({ ...message, id: `split-${i}` }));
+  x.deps.collect = async () => ({ messages, stats: {} });
+  const sizes = []; let active = 0, peak = 0;
+  x.deps.batchLlm = async batch => {
+    sizes.push(batch.length); active++; peak = Math.max(peak, active);
+    await new Promise(resolve => setTimeout(resolve, 1)); active--;
+    if (batch.length > 1) throw new Error('groq HTTP413: payload too large');
+    return batchReply(batch);
+  };
+  const result = await x.run();
+  assert.equal(result.ok, true); assert.equal(result.counts.created, 8);
+  assert.equal(result.counts.failed, 0); assert.equal(result.successful, 8);
+  assert.deepEqual(sizes, [8, 4, 2, 1, 1, 2, 1, 1, 4, 2, 1, 1, 2, 1, 1]);
+  assert.equal(peak, 1);
+});
+
+test('one failed message is retried from ledger, skipped on run three, and never blocks successful messages', async t => {
+  const x = setup(t); delete x.deps.llm;
+  const bad = { ...message, id: 'bad', receivedAt: new Date(now - 2000).toISOString() };
+  const good = { ...message, id: 'good', receivedAt: new Date(now - 1000).toISOString() };
+  x.deps.collect = async () => ({ messages: [good, bad], stats: {} });
+  x.deps.batchLlm = async batch => {
+    if (batch.some(m => m.id === 'bad')) throw new Error('provider HTTP500');
+    return batchReply(batch);
+  };
+  const state = () => JSON.parse(fs.readFileSync(path.join(x.options.stateDir, 'state.json')));
+  const first = await x.run();
+  assert.equal(first.ok, true); assert.equal(first.counts.created, 1);
+  assert.equal(first.failures[0].attempts, 1); assert.equal(state().cursors.line, bad.receivedAt);
+  // Source retention/deletion must not erase a pending retry.
+  x.deps.collect = async () => ({ messages: [], stats: {} });
+  const second = await x.run();
+  assert.equal(second.ok, false); assert.equal(second.failures[0].attempts, 2);
+  assert.equal(state().cursors.line, bad.receivedAt);
+  const third = await x.run();
+  assert.equal(third.ok, false); assert.equal(third.counts.skipped, 1);
+  assert.equal(third.counts.failed, 0); assert.equal(state().cursors.line, new Date(now).toISOString());
+  assert.equal((await x.run()).failures.length, 0); assert.equal(x.creates.length, 1);
+  const ledger = fs.readFileSync(path.join(x.options.stateDir, 'ledger.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.deepEqual(ledger.filter(r => r.type === 'failed').map(r => r.attempts), [1, 2, 3]);
+  assert.equal(ledger.find(r => r.status === 'skipped').attempts, 3);
+});
+
+test('dry-run failures never increment attempts or advance a retry cursor', async t => {
+  const x = setup(t);
+  x.deps.llm = async () => { throw new Error('HTTP401'); };
+  await x.run();
+  const files = ['state.json', 'ledger.jsonl'];
+  const before = files.map(f => fs.readFileSync(path.join(x.options.stateDir, f), 'utf8'));
+  x.options.dryRun = true;
+  for (let i = 0; i < 3; i++) assert.equal((await x.run()).failures[0].attempts, 2);
+  assert.deepEqual(files.map(f => fs.readFileSync(path.join(x.options.stateDir, f), 'utf8')), before);
+});
+
+test('partial failures exit zero at CLI; all failed exits nonzero, including invalid JSON', async t => {
+  const x = setup(t); delete x.deps.llm;
+  t.mock.method(console, 'log', () => {});
+  const bad = { ...message, id: 'bad' };
+  x.deps.collect = async () => ({ messages: [message, bad], stats: {} });
+  x.deps.batchLlm = async batch => batch.some(m => m.id === 'bad') ? '{}' : batchReply(batch);
+  // --dry-run and a test home isolate the real CLI without touching production.
+  const oldHome = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = x.dir;
+  t.after(() => { if (oldHome === undefined) delete process.env.ORGIAST_HOME; else process.env.ORGIAST_HOME = oldHome; });
+  assert.equal(await main(['--dry-run', '--source', 'line'], x.deps), 0);
+  x.deps.collect = async () => ({ messages: [bad], stats: {} });
+  assert.equal(await main(['--dry-run', '--source', 'line'], x.deps), 1);
+});
+
+test('retry boundary is per source and includes tied timestamps, while later successes stay deduplicated', async t => {
+  const x = setup(t); delete x.deps.llm;
+  x.options.sources = ['gmail', 'discord'];
+  const messages = [
+    { ...message, source: 'gmail', id: 'bad' },
+    { ...message, source: 'gmail', id: 'tie' },
+    { ...message, source: 'discord', id: 'ok' },
+  ];
+  x.deps.collect = async () => ({ messages, stats: {} });
+  x.deps.batchLlm = async batch => {
+    if (batch.some(m => m.id === 'bad')) throw new Error('timeout');
+    return batch.map(m => ({ id: batchId(m), events: [] }));
+  };
+  await x.run();
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(x.options.stateDir, 'state.json'))).cursors, {
+    gmail: new Date(message.ts).toISOString(), discord: new Date(now).toISOString(),
+  });
+  const calls = [];
+  x.deps.batchLlm = async batch => { calls.push(...batch.map(m => m.id)); return batch.map(m => ({ id: batchId(m), events: [] })); };
+  assert.equal((await x.run()).ok, true);
+  assert.deepEqual(calls, ['bad']);
+});
+
+test('long mail uses original date context, handles fullwidth dates and bounds dense inputs', () => {
+  const text = '広告'.repeat(5000) + '\n重要な打合せは１０月２６日１２：００です。確定しました。\n' + '署名'.repeat(5000);
+  const excerpt = excerptScheduleText(text);
+  assert.ok(excerpt.length <= 4000); assert.match(excerpt, /重要な打合せは１０月２６日１２：００です。確定しました。/);
+  assert.ok(text.includes(excerpt));
+  assert.equal(excerptScheduleText(message.text), message.text);
+  assert.ok(excerptScheduleText('明日12時\n'.repeat(4000)).length <= 4000);
+  const separated = 'あ'.repeat(5000) + '明日の打合せ' + 'い'.repeat(5000) + '来週の会議' + 'う'.repeat(5000);
+  assert.match(excerptScheduleText(separated), /明日の打合せ.*\n\[…\]\n.*来週の会議/s);
+});
+
+test('LLM diagnostics retain provider, HTTP status, message prefix and timeout information', async () => {
+  const logs = [];
+  const llm = makeLlm({ home: '/tmp', dryRun: true, log: s => logs.push(s), execute: async () => ({ stdout: '[]', stderr: '[failover] groq HTTP413: too large → openrouter\n[openrouter:model] in=1 out=2tok' }) });
+  assert.equal(await llm(message), '[]'); assert.match(logs[0], /groq HTTP413/);
+  const fail = makeLlm({ home: '/tmp', dryRun: true, execute: async () => { throw Object.assign(new Error('command failed'), { stderr: '[failover] groq:model HTTP413: payload too large', code: 1, killed: true }); } });
+  await assert.rejects(fail(message), /code=1, killed=true.*groq:model HTTP413: payload too large/);
+});
+
+test('Discord denies are cached across runs for 24 hours, then rechecked and cleared on recovery', async t => {
+  const x = setup(t); const discordDenied = {};
+  fs.mkdirSync(path.join(x.dir, '.claude')); fs.writeFileSync(path.join(x.dir, '.claude', 'orgiast-discord-bot-token.txt'), 'test');
+  let recover = false; const calls = [];
+  const opts = { sources: ['discord'], home: x.dir, since: { discord: now - 1000 }, until: now, discordDenied, log: () => {},
+    listChannels: async () => ['good', 'forbidden', 'missing'].map(id => ({ id, type: 0 })),
+    discordFetch: async ({ channelId }) => {
+      calls.push(channelId);
+      if (channelId !== 'good' && !recover) throw Object.assign(new Error('denied'), { status: channelId === 'missing' ? 404 : 403 });
+      return { messages: [] };
+    },
+  };
+  assert.equal((await collectMessages(opts)).stats.discordChannels.denied, 2);
+  assert.equal((await collectMessages({ ...opts, until: now + 23 * 3600000 })).stats.discordChannels.cached, 2);
+  assert.deepEqual(calls, ['good', 'forbidden', 'missing', 'good']);
+  recover = true;
+  assert.equal((await collectMessages({ ...opts, until: now + 24 * 3600000 })).stats.discordChannels.readable, 3);
+  assert.deepEqual(discordDenied, {});
+});
+
+test('denied-channel state persists despite collection failure and survives cursor writes; dry-run leaves it unchanged', async t => {
+  const x = setup(t);
+  x.deps.collect = async ({ discordDenied }) => {
+    discordDenied.blocked = { status: 403, retryAt: now + 24 * 3600000 };
+    throw new Error('source unavailable');
+  };
+  await assert.rejects(x.run(), /source unavailable/);
+  const stateFile = path.join(x.options.stateDir, 'state.json');
+  const before = fs.readFileSync(stateFile, 'utf8');
+  assert.equal(JSON.parse(before).discordDenied.blocked.status, 403);
+  x.options.dryRun = true;
+  x.deps.collect = async ({ discordDenied }) => { delete discordDenied.blocked; return { messages: [], stats: {} }; };
+  await x.run(); assert.equal(fs.readFileSync(stateFile, 'utf8'), before);
+  x.options.dryRun = false;
+  x.deps.collect = async () => ({ messages: [], stats: {} });
+  await x.run(); assert.equal(JSON.parse(fs.readFileSync(stateFile)).discordDenied.blocked.status, 403);
 });

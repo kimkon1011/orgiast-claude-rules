@@ -39,8 +39,8 @@ function append(file, record) {
   const fd = fs.openSync(file, 'a', 0o600);
   try { fs.writeSync(fd, JSON.stringify(record) + '\n'); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
 }
-function writeState(file, cursors) {
-  fs.writeFileSync(file + '.tmp', JSON.stringify({ cursors }, null, 2) + '\n', { mode: 0o600 });
+function writeState(file, state) {
+  fs.writeFileSync(file + '.tmp', JSON.stringify(state, null, 2) + '\n', { mode: 0o600 });
   fs.renameSync(file + '.tmp', file);
 }
 function acquireLock(dir) {
@@ -109,7 +109,7 @@ export function isAutomatedGmail(row) {
   return /^(?:no[._-]?reply|do[._-]?not[._-]?reply|notifications?)(?:[+._-][^@]*)?@/i.test(address);
 }
 
-export async function collectMessages({ sources, since, until, home, fetchImpl = globalThis.fetch, gmailSearch = searchGmail, listChannels = discordChannels, discordFetch = fetchMessages, log = console.error }) {
+export async function collectMessages({ sources, since, until, home, discordDenied = {}, fetchImpl = globalThis.fetch, gmailSearch = searchGmail, listChannels = discordChannels, discordFetch = fetchMessages, log = console.error }) {
   const messages = [];
   const stats = {};
   for (const source of sources) {
@@ -145,10 +145,13 @@ export async function collectMessages({ sources, since, until, home, fetchImpl =
       const token = resolveDiscordBotToken(home);
       if (!token) throw new Error('Discord Bot トークンが見つかりません');
       const channels = await listChannels(DEFAULT_GUILD_ID, token, fetchImpl);
-      let denied = 0, readable = 0;
+      let denied = 0, readable = 0, cached = 0;
+      const channelIds = new Set(channels.map(c => c.id));
+      for (const id of Object.keys(discordDenied)) if (!channelIds.has(id)) delete discordDenied[id];
       const textChannels = channels.filter(c => c.type === 0 || c.type === 5);
       const active = [...selectActiveChannels(channels, cutoff, channels.length), ...textChannels.filter(c => !c.last_message_id)];
       for (const channel of active) {
+        if (Number(discordDenied[channel.id]?.retryAt) > until) { cached++; continue; }
         let before;
         try {
           for (;;) {
@@ -166,14 +169,17 @@ export async function collectMessages({ sources, since, until, home, fetchImpl =
             before = next;
           }
           readable++;
+          delete discordDenied[channel.id];
         } catch (error) {
           if (![403, 404].includes(error.status)) throw error;
           denied++;
+          discordDenied[channel.id] = { status: error.status, retryAt: until + 24 * HOUR };
         }
       }
       if (active.length && !readable) throw new Error('Discord: 読み取り可能なテキストチャンネルがありません');
-      stats.discordChannels = { readable, denied };
+      stats.discordChannels = { readable, denied, cached };
       if (denied) log(`schedule-sync: Discord 読み取り不可 ${denied} チャンネル（403/404）`);
+      if (cached) log(`schedule-sync: Discord 読み取り不可キャッシュ ${cached} チャンネルを省略`);
     }
     stats[source] = found.length;
     log(`schedule-sync: ${source} collected ${found.length} messages`);
@@ -191,10 +197,27 @@ JSON配列だけを返す: [{"title":"全社mtg","start":"2026-10-26T12:00:00+09
 endは明記された場合だけ設定。終日は明示された場合だけallDay=true、startは当日00:00:00+09:00、endは排他的な翌日00:00。
 quoteには予定と日時の根拠を含める。タイトルに【自動】などの接頭辞は不要。`;
 
-export function makeLlm({ home, dryRun, signal, execute = execFileAsync } = {}) {
+// Keep contiguous original snippets so evidence validation can still use the full
+// message. Bound prompt size even for newsletters with hundreds of date mentions.
+export function excerptScheduleText(value, limit = 4000) {
+  const text = String(value ?? '');
+  if (text.length <= limit) return text;
+  const dates = /[0-9０-９]{1,2}[\/／月][0-9０-９]{1,2}|[0-9０-９]{1,2}[時:：][0-9０-９]{0,2}|[0-9０-９]{4}[-－][0-9０-９]{2}[-－][0-9０-９]{2}|明日|明後日|あさって|再来週|来週|今週|[月火水木金土日]曜/gu;
+  const ranges = [];
+  for (const match of text.matchAll(dates)) {
+    const start = Math.max(0, match.index - 240), end = Math.min(text.length, match.index + match[0].length + 360);
+    const last = ranges.at(-1);
+    if (last && start <= last[1]) last[1] = Math.max(last[1], end);
+    else ranges.push([start, end]);
+  }
+  if (!ranges.length) return text.slice(0, limit);
+  return ranges.map(([start, end]) => text.slice(start, end)).join('\n[…]\n').slice(0, limit);
+}
+
+export function makeLlm({ home, dryRun, signal, execute = execFileAsync, log = console.error } = {}) {
   return async (message, retry) => {
     const batch = Array.isArray(message);
-    const input = m => ({ id: messageKey(m), sentAt: m.ts, channel: m.chat, sender: m.sender, recipient: USER, text: m.text });
+    const input = m => ({ id: messageKey(m), sentAt: m.ts, channel: m.chat, sender: m.sender, recipient: USER, text: excerptScheduleText(m.text) });
     const prompt = JSON.stringify({ ...(batch ? { messages: message.map(input) } : input(message)), retry: retry ? '前回はJSON形式またはスキーマが不正でした。全件のidと厳密なJSON形式で返してください。' : undefined });
     const system = batch ? SYSTEM + '\n今回は複数メッセージを独立に処理する。別メッセージの予定や引用を混ぜない。出力は [{"id":"入力のidをそのまま","events":[上記形式の予定]}]。入力の全idを重複なく1回ずつ返す。予定なしもevents:[]で返す。順番は任意。' : SYSTEM;
     const args = [fileURLToPath(new URL('./llm-ask.mjs', import.meta.url)), '--provider', 'groq', '--category', 'extraction', '--max', batch ? '12000' : '3000', '--system', system];
@@ -205,8 +228,12 @@ export function makeLlm({ home, dryRun, signal, execute = execFileAsync } = {}) 
       fs.writeFileSync(promptFile, prompt, { mode: 0o600 });
       args.push('--prompt-file', promptFile);
       const result = await execute(process.execPath, args, { signal, encoding: 'utf8', timeout: 180000, maxBuffer: 1024 * 1024, windowsHide: true, env: { ...process.env, ORGIAST_HOME: home } });
+      if (result.stderr?.trim()) log(result.stderr.trim());
       return result.stdout;
-    } catch { throw new Error('schedule-sync LLM call failed (credentials/provider/timeout); cursor retained'); }
+    } catch (error) {
+      const detail = String(error.stderr || error.message).split(/\r?\n/).map(line => line.slice(0, 500)).join('\n').slice(-4000);
+      throw new Error(`schedule-sync LLM call failed (code=${error.code ?? 'unknown'}, killed=${Boolean(error.killed)}): ${detail}`, { cause: error });
+    }
     finally { fs.rmSync(promptDir, { recursive: true, force: true }); }
   };
 }
@@ -232,11 +259,12 @@ export function parseExtraction(raw, message) {
   return items;
 }
 export async function extractEvents(message, llm, log = console.error) {
+  let failure;
   for (let attempt = 0; attempt < 2; attempt++) {
     const raw = await llm(message, attempt > 0); // Transport failures must retain the cursor.
-    try { return parseExtraction(raw, message); } catch {}
+    try { return parseExtraction(raw, message); } catch (error) { failure = error; }
   }
-  log(`schedule-sync: invalid extraction after retry: ${messageKey(message)}`);
+  log(`schedule-sync: invalid extraction after retry: ${messageKey(message)}: ${String(failure.message).slice(0, 500)}`);
   return null;
 }
 
@@ -253,12 +281,13 @@ export function parseBatchExtraction(raw, messages) {
 }
 
 export async function extractBatch(messages, llm) {
+  let failure;
   for (let attempt = 0; attempt < 2; attempt++) {
     const raw = await llm(messages, attempt > 0);
-    try { return parseBatchExtraction(raw, messages); } catch {}
+    try { return parseBatchExtraction(raw, messages); } catch (error) { failure = error; }
   }
   // A missing/misassigned ID must never mark an unprocessed message as done.
-  throw new Error('invalid batch extraction after retry; cursor retained');
+  throw new Error(`invalid batch extraction after retry; cursor retained: ${String(failure.message).slice(0, 500)}`, { cause: failure });
 }
 
 const arrivalTime = m => m.source === 'line' ? Date.parse(m.receivedAt) || Date.parse(m.ts) : Date.parse(m.ts);
@@ -350,6 +379,7 @@ export async function runScheduleSync(options = {}, dependencies = {}) {
     const ledger = readLines(ledgerFile);
     const done = new Set(ledger.filter(r => r.type === 'done').map(r => r.messageKey));
     const plans = new Map(ledger.filter(r => r.type === 'plan').map(r => [r.messageKey, r]));
+    const failures = new Map(ledger.filter(r => r.type === 'failed').map(r => [r.messageKey, r]));
     const results = new Map(ledger.filter(r => r.type === 'result').map(r => [r.key, r]));
     const notified = new Set(ledger.filter(r => r.type === 'notified').map(r => r.key));
     const save = row => { if (!dryRun) append(ledgerFile, row); };
@@ -368,25 +398,35 @@ export async function runScheduleSync(options = {}, dependencies = {}) {
       // be interrupted by Task Scheduler; a moving now-48h window would lose
       // its oldest unprocessed messages on the next invocation.
       for (const source of sources) if (!state.cursors[source]) state.cursors[source] = iso(since[source]);
-      writeState(stateFile, state.cursors);
+      writeState(stateFile, state);
     }
     const fetchImpl = (url, init = {}) => {
       signal.throwIfAborted();
       return globalThis.fetch(url, { ...init, signal: init.signal ? AbortSignal.any([signal, init.signal]) : signal });
     };
-    const { messages, stats } = await wait((dependencies.collect || collectMessages)({ sources, since, until: now, home, log, fetchImpl, signal }));
+    state.discordDenied ||= {};
+    let collected;
+    try {
+      collected = await wait((dependencies.collect || collectMessages)({ sources, since, until: now, home, discordDenied: state.discordDenied, log, fetchImpl, signal }));
+    } finally {
+      // Cache access failures even if collection/LLM work fails later. An aborted
+      // collector may still unwind, so never persist its state after timeout.
+      if (!dryRun && !signal.aborted) writeState(stateFile, state);
+    }
+    const { messages, stats } = collected;
     // Saved extraction plans survive interrupted creates, independently of input retention.
-    const pendingMessages = [...plans.values()].filter(p => !done.has(p.messageKey) && sources.includes(p.message.source)).map(p => p.message);
+    const pendingMessages = [...failures.values(), ...plans.values()].filter(p => !done.has(p.messageKey) && sources.includes(p.message.source)).map(p => p.message);
     const work = [...new Map([...pendingMessages, ...messages].map(m => [messageKey(m), m])).values()];
     work.sort((a, b) => arrivalTime(a) - arrivalTime(b) || messageKey(a).localeCompare(messageKey(b)));
     if (work.some(m => !Number.isFinite(arrivalTime(m)))) throw new Error('invalid message arrival timestamp');
     const rows = [];
+    const extractionFailures = [];
     let filtered = 0, invalid = 0, alreadyProcessed = 0;
     const eligible = [];
     for (const message of work) {
       const key = messageKey(message);
       if (done.has(key)) { alreadyProcessed++; continue; }
-      if (!plans.has(key) && !isScheduleCandidate(message.text)) { filtered++; done.add(key); continue; }
+      if (!plans.has(key) && !failures.has(key) && !isScheduleCandidate(message.text)) { filtered++; done.add(key); continue; }
       eligible.push(message);
     }
     const selected = eligible.slice(0, maxMessages);
@@ -394,27 +434,62 @@ export async function runScheduleSync(options = {}, dependencies = {}) {
     const fresh = selected.filter(m => !plans.has(messageKey(m)));
     const batches = [];
     for (let i = 0; i < fresh.length; i += batchSize) batches.push(fresh.slice(i, i + batchSize));
-    const batchLlm = dependencies.batchLlm || makeLlm({ home, dryRun, signal });
+    const batchLlm = dependencies.batchLlm || makeLlm({ home, dryRun, signal, log });
+    const savePlan = (message, candidates) => {
+      const key = messageKey(message);
+      const plan = { type: 'plan', messageKey: key, message, candidates };
+      save(plan); plans.set(key, plan);
+    };
+    const failMessage = (message, error) => {
+      const key = messageKey(message), attempts = (failures.get(key)?.attempts || 0) + 1;
+      const failure = { type: 'failed', status: 'failed', messageKey: key, message, attempts, at: iso(now), error: String(error.message).slice(0, 4000) };
+      save(failure); failures.set(key, failure);
+      const status = attempts >= 3 ? 'skipped' : 'failed';
+      extractionFailures.push({ messageKey: key, attempts, status });
+      log(`schedule-sync: ${status} ${key} (${attempts}/3): ${failure.error}`);
+      if (status === 'skipped') {
+        save({ type: 'done', status: 'skipped', messageKey: key, reason: 'extraction-failed-3-times', attempts });
+        done.add(key);
+      }
+    };
+    const extractResilient = async batch => {
+      signal.throwIfAborted();
+      // Keep the single-message injection API, with the same failure policy.
+      if (dependencies.llm) {
+        for (const message of batch) {
+          let candidates;
+          try {
+            candidates = await wait(extractEvents(message, dependencies.llm, log));
+            if (candidates === null) { invalid++; throw new Error('invalid extraction after retry'); }
+          } catch (error) {
+            signal.throwIfAborted(); failMessage(message, error); continue;
+          }
+          signal.throwIfAborted(); savePlan(message, candidates);
+        }
+        return;
+      }
+      let extracted;
+      try { extracted = await wait(extractBatch(batch, batchLlm)); }
+      catch (error) {
+        signal.throwIfAborted();
+        if (batch.length === 1) { failMessage(batch[0], error); return; }
+        log(`schedule-sync: batch failed (${batch.length} messages), splitting: ${error.message}`);
+        const middle = Math.ceil(batch.length / 2);
+        // Sequential halves keep the configured concurrency bound.
+        await extractResilient(batch.slice(0, middle));
+        await extractResilient(batch.slice(middle));
+        return;
+      }
+      signal.throwIfAborted();
+      for (const message of batch) savePlan(message, extracted.get(messageKey(message)));
+    };
     let nextBatch = 0;
     const worker = async () => {
       while (nextBatch < batches.length) {
         signal.throwIfAborted();
         const batch = batches[nextBatch++];
         log(`schedule-sync: extracting batch ${nextBatch}/${batches.length} (${batch.length} messages)`);
-        // Keep the single-message injection API for existing callers/tests.
-        const extracted = dependencies.llm
-          ? new Map(await Promise.all(batch.map(async m => [messageKey(m), await wait(extractEvents(m, dependencies.llm, log))])))
-          : await wait(extractBatch(batch, batchLlm));
-        signal.throwIfAborted();
-        for (const message of batch) {
-          const key = messageKey(message), candidates = extracted.get(key);
-          if (candidates === null) {
-            invalid++; save({ type: 'done', messageKey: key, reason: 'invalid-extraction' }); done.add(key);
-          } else {
-            const plan = { type: 'plan', messageKey: key, message, candidates };
-            save(plan); plans.set(key, plan);
-          }
-        }
+        await extractResilient(batch);
       }
     };
     const workers = Array.from({ length: Math.min(concurrency, batches.length) }, worker);
@@ -429,6 +504,7 @@ export async function runScheduleSync(options = {}, dependencies = {}) {
       const key = messageKey(message);
       if (done.has(key)) continue;
       const plan = plans.get(key);
+      if (!plan) continue; // A retryable failure must not block successful plans.
       for (const [index, candidate] of plan.candidates.entries()) {
         const itemKey = `${key}:${index}`;
         if (results.has(itemKey)) continue;
@@ -491,9 +567,20 @@ export async function runScheduleSync(options = {}, dependencies = {}) {
         const boundary = remaining.length ? Math.min(now, ...remaining.map(arrivalTime)) : now;
         cursors[source] = iso(Math.max(Date.parse(cursors[source]) || 0, boundary));
       }
-      writeState(stateFile, cursors);
+      writeState(stateFile, { ...state, cursors });
     }
-    return { ok: !calendarError, dryRun, calendarError, collected: stats, processed: selected.length, deferred, durationMs: Date.now() - startedAt, batchSize, concurrency, filtered, invalid, alreadyProcessed, extracted: rows.length, counts: Object.fromEntries(['created', 'would-create', 'review', 'duplicate', 'ignored', 'calendar-unverified'].map(status => [status, rows.filter(r => r.status === status).length])), candidates: rows.map(({ title, start, source, status, htmlLink }) => ({ title, start, source, status, htmlLink })) };
+    const successful = selected.filter(m => plans.has(messageKey(m))).length;
+    if (extractionFailures.length) log(`schedule-sync: warning: ${extractionFailures.length} extraction failures, ${successful} messages succeeded`);
+    const counts = Object.fromEntries(['created', 'would-create', 'review', 'duplicate', 'ignored', 'calendar-unverified']
+      .map(status => [status, rows.filter(r => r.status === status).length]));
+    for (const status of ['failed', 'skipped']) counts[status] = extractionFailures.filter(r => r.status === status).length;
+    return {
+      ok: !calendarError && (!extractionFailures.length || successful > 0), dryRun, calendarError,
+      collected: stats, processed: selected.length, successful, failures: extractionFailures, deferred,
+      durationMs: Date.now() - startedAt, batchSize, concurrency, filtered, invalid, alreadyProcessed,
+      extracted: rows.length, counts,
+      candidates: rows.map(({ title, start, source, status, htmlLink }) => ({ title, start, source, status, htmlLink })),
+    };
   } finally { clearTimeout(timer); controller.abort(); try { release(); } finally { releaseTransient(); } }
 }
 
@@ -516,10 +603,10 @@ export function parseArgs(args) {
   }
   return options;
 }
-export async function main(args = process.argv.slice(2)) {
+export async function main(args = process.argv.slice(2), dependencies = {}) {
   try {
     const options = parseArgs(args);
-    const result = await runScheduleSync(options);
+    const result = await runScheduleSync(options, dependencies);
     console.log(JSON.stringify(result, null, options.json ? 2 : 0));
     return result.ok ? 0 : 1;
   } catch (error) { console.error(`schedule-sync: ${error.message}`); return 1; }

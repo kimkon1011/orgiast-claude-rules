@@ -306,7 +306,10 @@ export function purge({ dryRun = false, restore, after = '' } = {}) {
 }
 function launchRemotePurge() {
   // purge-remote-sessions.mjs has its own 6h cooldown; this check only avoids spawning a process.
-  if (Date.now() - (json(path.join(root(), 'purge-remote-sessions-state.json')).at ?? 0) < 6 * 60 * MINUTE) return;
+  // A future timestamp is the manual stop from 2026-10-18 and must not suppress the resumed run.
+  const now = Date.now();
+  const lastAt = json(path.join(root(), 'purge-remote-sessions-state.json')).at ?? 0;
+  if (lastAt <= now && now - lastAt < 6 * 60 * MINUTE) return;
   const script = path.join(path.dirname(fileURLToPath(import.meta.url)), 'purge-remote-sessions.mjs');
   if (!fs.existsSync(script)) return;
   const child = spawn(process.execPath, [script], { detached: true, windowsHide: true, stdio: 'ignore' });

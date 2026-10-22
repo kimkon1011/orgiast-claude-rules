@@ -53,6 +53,8 @@ node tools/purge-sessions.mjs --restore '<sessionId>'
 
 2026-10-18 に時間だけで判定して未クローズ28件を誤アーカイブした反省から、2 の一致を必須にした。
 ローカルに会話が無い（スマホだけで作った）セッションや、まだ `projects/` にある会話は触らない。
+2026-10-18 の停止時に書いた未来日時の状態ファイル（`purge-remote-sessions-state.json` の `at`）は
+停止マーカーとして扱わず、再開後の初回実行で通常の時刻に上書きされる。
 結果は `archived` / `targets` / `unlinked`（時間条件は満たすがローカル退避記録が無く見送った件数）で返る。
 会話は消えず一覧から隠れるだけ。記録は `~/.claude/archived-remote-sessions.jsonl`。
 

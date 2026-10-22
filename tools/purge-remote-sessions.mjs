@@ -89,7 +89,10 @@ export function selectTargets(sessions, closed, now = Date.now()) {
 
 export async function purgeRemote({ dryRun = false, fetchImpl = fetch, now = Date.now(), base = root(), headersImpl = headers } = {}) {
   const stateFile = path.join(base, 'purge-remote-sessions-state.json');
-  if (!dryRun && now - (json(stateFile).at ?? 0) < COOLDOWN) return { skipped: 'cooldown' };
+  const lastAt = json(stateFile).at ?? 0;
+  // A timestamp in the future is the manual stop written on 2026-10-18. Now that the archive
+  // decision is evidence-based (closedRemoteIds), that marker must not block every later run.
+  if (!dryRun && lastAt <= now && now - lastAt < COOLDOWN) return { skipped: 'cooldown' };
   const h = headersImpl(base);
   if (!h) return { skipped: 'no-credentials' };
   const sessions = [];

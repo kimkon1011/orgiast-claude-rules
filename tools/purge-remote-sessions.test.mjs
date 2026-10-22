@@ -112,6 +112,17 @@ test('dry-run reports what would happen without writing the cooldown state or lo
   assert.equal(fs.existsSync(path.join(base, 'archived-remote-sessions.jsonl')), false);
 });
 
+test('a future stop marker (manual pause) no longer blocks the resumed run', async () => {
+  const { purgeRemote } = await import('./purge-remote-sessions.mjs');
+  const base = fixture({});
+  fs.writeFileSync(path.join(base, 'purge-remote-sessions-state.json'), JSON.stringify({ at: now + 100 * 3_600_000, note: 'paused' }));
+  let called = false;
+  const r = await purgeRemote({ base, now, headersImpl: () => ({}), fetchImpl: async () => { called = true; return { ok: true, status: 200, json: async () => ({ data: [] }) }; } });
+  assert.equal(called, true);
+  assert.equal(r.listed, 0);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(base, 'purge-remote-sessions-state.json'), 'utf8')).at, now);
+});
+
 test('cooldown blocks a second run within six hours', async () => {
   const { purgeRemote } = await import('./purge-remote-sessions.mjs');
   const base = fixture({});

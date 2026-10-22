@@ -1,0 +1,7 @@
+（元メール mail-1792415629477-f1b65cbd が expired のため note で再送）
+PR #900 はマージ済みでした（新たな操作は不要でした）。
+- 状態: MERGED（2026-10-21T16:16:58Z、kimkon1011 がマージ）
+- マージコミット: 91ed6cf903462ab5287ae20e3a4973121f93c68c
+- 変更: tools/setup-manifest.json +2/-0
+- CI: 5件すべて SUCCESS（CI test / test / test-posix / clean-install / enable-auto-merge）
+- URL: https://github.com/kimkon1011/orgiast-claude-rules/pull/900（GitHub は kimkon1011 で開く）

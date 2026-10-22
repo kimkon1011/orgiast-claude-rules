@@ -5,7 +5,7 @@ import path from 'node:path';
 import test, { after } from 'node:test';
 import { addCheck } from './auto-progress.mjs';
 import { executeCheck, CHECK_TIMEOUT_MS } from './auto-progress-check.mjs';
-import { readLedger, writeLedger, ledgerFile } from './auto-progress-ledger.mjs';
+import { readLedger, writeLedger, ledgerFile, record, latestOpenPromises } from './auto-progress-ledger.mjs';
 import { run as watch } from './auto-progress-watch.mjs';
 import { run as digest } from './auto-progress-digest.mjs';
 import { checkArrivals } from './checks/wechat-ingest-arrived.mjs';
@@ -106,4 +106,31 @@ test('digest: hundreds of rows across three categories stay within one DM and te
   assert.equal(result.parts, 1); assert.equal(result.count, 200);
   assert.ok(messages[0].split('\n').length <= 10); assert.ok(messages[0].length < 2000);
   assert.equal((await digest({ home, now: now + 3600000, io })).sent, false);
+});
+
+
+test('watch: a later session declaration does not remove its executable check', async () => {
+  const home = tmp();
+  const checked = register(home);
+  record({ session_id: 'session', last_assistant_message: 'この後の自動進行: 別の約束を確認する' }, { home, now: now + 1000, owner: 'owner' });
+  assert.equal(latestOpenPromises(readLedger(ledgerFile(home))).length, 2);
+  let executions = 0;
+  const result = await watch({ home, now: now + 2000, io: { ...baseIo,
+    executeCheck: row => { executions++; assert.equal(row.check, checked.check); return { code: 0, text: '確認できた' }; },
+    notifyOwner: async () => ({ delivered: 'dm' }),
+  } });
+  assert.equal(executions, 1); assert.equal(result.done, 1); assert.equal(result.superseded, 0);
+  const rows = readLedger(ledgerFile(home));
+  assert.equal(rows.find(row => row.check).status, 'done');
+  assert.equal(rows.find(row => !row.check).status, 'open');
+});
+
+test('CLI: re-registering a check replaces the old revision and uses the latest promise', () => {
+  const home = tmp(); register(home);
+  record({ session_id: 'session', last_assistant_message: 'この後の自動進行: 新しい着信の約束' }, { home, now: now + 1000, owner: 'owner' });
+  const revised = addCheck({ home, now: now + 2000, session: 'session', check: 'node new-check.mjs', label: '再登録', deadline: '+24h' });
+  assert.equal(revised.promise, '新しい着信の約束');
+  const rows = readLedger(ledgerFile(home));
+  assert.deepEqual(rows.map(row => row.status), ['superseded', 'superseded', 'open']);
+  assert.equal(latestOpenPromises(rows).length, 1);
 });

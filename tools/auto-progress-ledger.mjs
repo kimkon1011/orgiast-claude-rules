@@ -68,21 +68,23 @@ export const MAX_RESUMES = 8; // 1件あたりの自動再開の累計上限（w
 
 export const OPEN_STATUSES = new Set(['open', 'stalled', 'resumed', 'waiting_user']);
 
+// Executable checks and text promises have separate lifetimes per session.
 // Timestamp order is authoritative; equal timestamps prefer the later ledger line.
 export function latestOpenPromises(rows) {
   const latest = new Map();
   const active = rows.filter(row => OPEN_STATUSES.has(row.status));
+  const identity = row => JSON.stringify([row.sessionId, Boolean(row.check)]);
   for (const row of active) {
     if (!row.sessionId) continue;
-    const previous = latest.get(row.sessionId);
-    if (!previous || (Date.parse(row.ts) || 0) >= (Date.parse(previous.ts) || 0)) latest.set(row.sessionId, row);
+    const previous = latest.get(identity(row));
+    if (!previous || (Date.parse(row.ts) || 0) >= (Date.parse(previous.ts) || 0)) latest.set(identity(row), row);
   }
-  return active.filter(row => !row.sessionId || latest.get(row.sessionId) === row);
+  return active.filter(row => !row.sessionId || latest.get(identity(row)) === row);
 }
 
-// 同一 sessionId の open 行は最新で置換する（旧行は superseded）。resumed も「進行中の宣言」なので置換対象。
+// 通常の応答は明示登録した check を消さない。check の再登録時は旧 check も置換する。
 export function applyPromise(rows, record) {
-  const next = rows.map((row) => (row.sessionId === record.sessionId && OPEN_STATUSES.has(row.status) ? { ...row, status: 'superseded' } : row));
+  const next = rows.map((row) => (row.sessionId === record.sessionId && (!row.check || record.check) && OPEN_STATUSES.has(row.status) ? { ...row, status: 'superseded' } : row));
   next.push(record);
   return next;
 }

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { buildIndex, createGrowiPage, currentRevisionOf, extractBodyCsrf, extractGrowiCsrf, fetchGrowiBodies, generateGrowiParts, ingestFiles, installIndexFiles, listGrowiPages, loginGrowi, parsePart, publishIndex, syncGrowi } from './growi-manual.mjs';
+import { appendAfterGrowi, buildIndex, createGrowiPage, currentRevisionOf, extractBodyCsrf, extractGrowiCsrf, fetchGrowiBodies, generateGrowiParts, ingestFiles, insertLinesAfterAnchor, installIndexFiles, listGrowiPages, loginGrowi, parsePart, publishIndex, syncGrowi } from './growi-manual.mjs';
 
 const tool = fileURLToPath(new URL('./growi-manual.mjs', import.meta.url));
 const delimiter = '================================================== 次のページ ==================================================';
@@ -450,6 +450,32 @@ test('currentRevisionOf は文字列とオブジェクト両方の revision ポ�
   assert.equal(currentRevisionOf({ revision: { _id: 'r2' } }), 'r2');
   assert.throws(() => currentRevisionOf({ revision: null }), /現行リビジョン/);
   assert.throws(() => currentRevisionOf({}), /現行リビジョン/);
+});
+
+test('insertLinesAfterAnchor は唯一のアンカー直後だけへ挿入し冪等', () => {
+  const first = insertLinesAfterAnchor('前\nアンカーです\n後', 'アンカー', '追加1\n追加2\n');
+  assert.equal(first.body, '前\nアンカーです\n追加1\n追加2\n後');
+  assert.equal(first.unchanged, false);
+  assert.equal(insertLinesAfterAnchor(first.body, 'アンカー', '追加1\n追加2').unchanged, true);
+});
+
+test('insertLinesAfterAnchor はアンカー0件・複数件を exit 3 相当で拒否する', () => {
+  for (const body of ['前\n後', 'アンカー1\n中\nアンカー2']) {
+    assert.throws(() => insertLinesAfterAnchor(body, 'アンカー', '追加'), error => error.exitCode === 3 && Array.isArray(error.details.nearby));
+  }
+});
+
+test('appendAfterGrowi は revision 付き更新後に本文を再取得検証する', async () => {
+  let current = { _id: 'p1', revision: { _id: 'r1', body: '前\n目印\n後' } };
+  const http = async (url, options = {}) => {
+    if (url.includes('pages.get')) return { ok: true, headers: { get: () => 'application/json' }, json: async () => ({ page: current }) };
+    assert.match(url, /pages\.update$/); const params = options.body;
+    assert.equal(params.get('revision_id'), 'r1'); assert.equal(params.get('body'), '前\n目印\n追記\n後');
+    current = { _id: 'p1', revision: { _id: 'r2', body: params.get('body') } };
+    return { ok: true };
+  };
+  const result = await appendAfterGrowi({ baseUrl: 'https://growi.example', http, csrf: 'csrf', pagePath: '/手順', anchor: '目印', lines: '追記' });
+  assert.deepEqual({ before: result.revisionBefore, after: result.revisionAfter, inserted: result.insertedLines, other: result.diffLinesOtherThanInsert }, { before: 'r1', after: 'r2', inserted: 1, other: 0 });
 });
 
 test('createGrowiPage は新規パスを v3 API で作成する', async () => {

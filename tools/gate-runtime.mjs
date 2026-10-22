@@ -15,6 +15,7 @@ const hostName = () => process.env.ORGIAST_HOSTNAME || os.hostname();
 export function rolloutMode(name, { manifest = readRollout(), home = homeDir(), hostname = hostName(), now = Date.now() } = {}) {
   const entry = manifest?.gates?.[name];
   if (entry?.legacy === true && entry.rollout === 'deny') return 'deny';
+  if (entry?.pilotDeny === true && (manifest?.pilotHosts || []).some(h => h.toLowerCase() === hostname.toLowerCase())) return 'deny';
   if (entry?.rollout === 'warn') return 'warn';
   if ((Array.isArray(manifest?.pilotHosts) ? manifest.pilotHosts : []).some(h => h.toLowerCase() === hostname.toLowerCase())) return entry?.rollout === 'deny' ? 'deny' : 'warn';
   // First receipt is per PC, so an offline PC never skips its observation week.

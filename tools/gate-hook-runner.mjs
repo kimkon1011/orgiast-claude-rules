@@ -53,7 +53,8 @@ export function wrapRegisteredGates(settings, repo) {
     const match = String(hook.command || '').match(/^node\s+"([^"]+\.mjs)"(.*)$/);
     if (!match) continue;
     const script = path.basename(match[1].replace(/\\/g, '/'));
-    if (['stop-gate-runner.mjs', 'fleet-question-relay.mjs'].includes(script) || !fs.existsSync(path.join(repo, 'tools', script))) continue;
+    // Billing policy is immediate (2026-10-17), never downgraded by rollout.
+    if (['stop-gate-runner.mjs', 'fleet-question-relay.mjs', 'api-billing-guard.mjs'].includes(script) || !fs.existsSync(path.join(repo, 'tools', script))) continue;
     // Migrate stale paths as well as new installations. Leave unrelated hooks alone.
     if (path.resolve(match[1]) !== path.resolve(repo, 'tools', script) && !readContract(path.join(repo, 'tools', script))) continue;
     hook.command = `node "${path.join(repo, 'tools', 'gate-hook-runner.mjs')}" "${path.join(repo, 'tools', script)}"${match[2]}`;

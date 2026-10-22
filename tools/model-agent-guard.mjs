@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 export const GATE_CONTRACT = {"name": "model-agent-guard", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "model-agent-guard"}, {"kind": "keyserve-key", "ref": "deepseek.env#DEEPSEEK_API_KEY"}]};
+import { IMPLEMENT } from './cost-routing-gate.mjs';
+import { implApproved } from './lib/claude-approval.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { loadFablePolicy, fableAllowedForSubagent } from './fable-policy.mjs';
 import { inspectTranscript } from './fable-session-guard.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
@@ -14,6 +15,12 @@ try {
   const input = JSON.parse(raw);
   if (!/^(Agent|Task)$/.test(String(input.tool_name || ''))) process.exit(0);
   const toolInput = input.tool_input || {};
+  if (IMPLEMENT.test(String(toolInput.prompt || '')) &&
+      !/^(Explore|Plan|claude-code-guide|biz-reader|statusline-setup)$/i.test(String(toolInput.subagent_type || '')) &&
+      !implApproved(process.env.ORGIAST_HOME || os.homedir(), input.session_id)) {
+    console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: '実装サブエージェントは禁止(§1.17)。node tools/codex-do.mjs --prompt-file <指示> --cwd <対象> へ。例外は user の [CLAUDE-IMPL-OK]' } }));
+    process.exit(0);
+  }
   // model 省略は親を継承するため、Fable メインでは意図せず単価2倍の実働になる。
   if (!toolInput.model) {
     let currentModel = '';
@@ -70,24 +77,5 @@ try {
     process.exit(0);
   }
 
-  const prompt = String(toolInput.prompt || '');
-  const readOnlyType = /^(Explore|biz-reader)$/i.test(String(toolInput.subagent_type || ''));
-  const readOnlyPrompt = /調査|探索|検索|読んで|一覧/.test(prompt) && !/実装|コードを書|新規作成|リファクタ|refactor|バグ|fix|implement|関数を追加|ファイルを作成|コンポーネント|エンドポイント|マイグレーション|migration/i.test(prompt);
-  const implementation = /実装|コードを書|新規作成|リファクタ|refactor|バグ|fix|implement|関数を追加|ファイルを作成|コンポーネント|エンドポイント|マイグレーション|migration/i.test(prompt);
-  if (!implementation || /codex/i.test(prompt) || readOnlyType || readOnlyPrompt) process.exit(0);
-
-  const home = process.env.ORGIAST_HOME || os.homedir();
-  let mode = 'warn';
-  try { mode = String(JSON.parse(fs.readFileSync(path.join(home, '.claude', 'cost-enforce.json'), 'utf8')).mode || 'warn'); } catch {}
-  if (fs.existsSync(path.join(home, '.claude', 'cost-enforce-override'))) mode = 'warn';
-  const repo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-  const command = `node "${path.join(repo, 'tools', 'codex-do.mjs')}" "指示"`;
-  if (mode === 'block') {
-    const reason = `実装をサブエージェント(従量課金)に投げるのは §1.18 違反。\`${command}\` (定額枠)へ。どうしても必要なら ~/.claude/cost-enforce-override を作成。`;
-    console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason } }));
-  } else {
-    const context = `⚠️ §1.18: 実装を従量課金のサブエージェントへ投げようとしています。定額枠の Codex に \`${command}\` で委譲し、監督は設計・レビュー・verifyを担当してください。`;
-    console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: context } }));
-  }
 } catch {}
 process.exit(0);

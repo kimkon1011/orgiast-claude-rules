@@ -21,7 +21,7 @@ $success = $false
 $reason = '鍵の導入を開始できませんでした。'
 $stage = 'prepare'
 function Get-PrimaryStatus {
-  $raw = & node (Join-Path $Repo 'tools\keyserve-status.mjs') --json
+  $raw = & $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) (Join-Path $Repo 'tools\keyserve-status.mjs') --json
   if ($LASTEXITCODE -ne 0) { throw 'status-command-failed' }
   return ($raw -join "`n" | ConvertFrom-Json)
 }
@@ -59,7 +59,7 @@ try {
     Write-Host '既存の primary は HTTP 401 のため退避しました。enroll で再取得します。'
   }
   Remove-Item -LiteralPath $resultFile -Force -ErrorAction SilentlyContinue
-  & node (Join-Path $Repo 'tools\onboarding-sync.mjs') --keys-only --force | Out-Null
+  & $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) (Join-Path $Repo 'tools\onboarding-sync.mjs') --keys-only --force | Out-Null
   $syncExit = $LASTEXITCODE
   $attempt = $null
   if (Test-Path -LiteralPath $resultFile) { $attempt = Get-Content -LiteralPath $resultFile -Raw -Encoding UTF8 | ConvertFrom-Json }
@@ -107,7 +107,7 @@ try {
   $outcome = if ($success) { '成功' } else { '失敗' }
   try {
     $message = "keyserve 導入結果: PC=$env:COMPUTERNAME / authVia=$authVia / HTTP=$httpText / $outcome"
-    & node (Join-Path $Repo 'tools\notify-kim.mjs') $message | Out-Null
+    & $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) (Join-Path $Repo 'tools\notify-kim.mjs') $message | Out-Null
     if ($LASTEXITCODE -ne 0) { Write-Host 'Discord 自己報告に失敗しました。導入結果は変わりません。' -ForegroundColor Yellow }
   } catch { Write-Host 'Discord 自己報告に失敗しました。導入結果は変わりません。' -ForegroundColor Yellow }
   $env:ORGIAST_HOME = $previousHome

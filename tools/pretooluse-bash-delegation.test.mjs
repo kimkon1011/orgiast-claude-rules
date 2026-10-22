@@ -16,7 +16,7 @@ test('6000文字境界と標準出力のみの調査を区別する', (t) => {
       const command = prefix + 'x'.repeat(size - prefix.length - 1) + '"';
       const output = run({ tool_name: 'Bash', tool_input: { command } }, home).stdout;
       if (size === 5999) assert.equal(output, '');
-      else assert.match(output, /additionalContext/, writer);
+      else assert.match(output, /permissionDecision/, writer);
     }
   }
   for (const tool_name of ['Bash', 'PowerShell']) {
@@ -24,9 +24,9 @@ test('6000文字境界と標準出力のみの調査を区別する', (t) => {
   }
 });
 function run(input, home) { return spawnSync(process.execPath, [script], { input: typeof input === 'string' ? input : JSON.stringify(input), encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home } }); }
-test('long node eval warns', () => { const r = run({ tool_name: 'Bash', tool_input: { command: `node -e "fs.writeFileSync('out', 'data');${'x'.repeat(6100)}"` } }); assert.equal(r.status, 0); assert.match(r.stdout, /additionalContext/); });
+test('long node eval denies', () => { const r = run({ tool_name: 'Bash', tool_input: { command: `node -e "fs.writeFileSync('out', 'data');${'x'.repeat(6100)}"` } }); assert.equal(r.status, 0); assert.match(r.stdout, /permissionDecision/); });
 test('plain, short and delegated commands do not warn', () => { for (const command of ['git log --oneline', 'node -e "1+1"', `node tools/llm-ask.mjs "${'x'.repeat(6100)}"`]) assert.equal(run({ tool_name: 'Bash', tool_input: { command } }).stdout, ''); });
-test('block denies over 6000 chars, override disables deny', () => { const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bash-deleg-')); fs.mkdirSync(path.join(home, '.claude')); fs.writeFileSync(path.join(home, '.claude', 'cost-enforce.json'), '{"mode":"block"}'); const input = { tool_name: 'Bash', tool_input: { command: `node -e "fs.writeFileSync('out', 'data');${'x'.repeat(6100)}"` } }; assert.match(run(input, home).stdout, /permissionDecision.*deny/); fs.writeFileSync(path.join(home, '.claude', 'cost-enforce-override'), '1'); const output = run(input, home).stdout; assert.doesNotMatch(output, /permissionDecision.*deny/); assert.match(output, /additionalContext/); });
+test('block denies over 6000 chars, override cannot disable deny', () => { const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bash-deleg-')); fs.mkdirSync(path.join(home, '.claude')); fs.writeFileSync(path.join(home, '.claude', 'cost-enforce.json'), '{"mode":"block"}'); const input = { tool_name: 'Bash', tool_input: { command: `node -e "fs.writeFileSync('out', 'data');${'x'.repeat(6100)}"` } }; assert.match(run(input, home).stdout, /permissionDecision.*deny/); fs.writeFileSync(path.join(home, '.claude', 'cost-enforce-override'), '1'); const output = run(input, home).stdout; assert.match(output, /permissionDecision.*deny/); assert.match(output, /permissionDecision/); });
 test('mode=block で Codex クールダウン中でも Gemini があれば deny を維持する', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bash-deleg-cooldown-'));
   fs.mkdirSync(path.join(home, '.claude'));
@@ -38,17 +38,17 @@ test('mode=block で Codex クールダウン中でも Gemini があれば deny 
   const input = { tool_name: 'Bash', tool_input: { command: `node -e "fs.writeFileSync('out', 'data');${'x'.repeat(6100)}"` } };
   const output = spawnSync(process.execPath, [script], { input: JSON.stringify(input), encoding: 'utf8', env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, ORGIAST_HOME: home } }).stdout;
   assert.match(output, /permissionDecision.*deny/);
-  assert.match(output, /自動フォールバック/);
+  assert.match(output, /内蔵フォールバック/);
 });
-test('mode=block で Codex とフォールバックが使えなければ deny しない', () => {
+test('mode=block で Codex とフォールバックが使えなくても deny する', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bash-deleg-no-fallback-'));
   fs.mkdirSync(path.join(home, '.claude'));
   fs.writeFileSync(path.join(home, '.claude', 'cost-enforce.json'), '{"mode":"block"}');
   fs.writeFileSync(path.join(home, '.claude', 'provider-cooldown.json'), JSON.stringify({ codex: { until: Date.now() + 60 * 60_000, reason: 'usage_limit_no_fallback', at: Date.now() } }));
   const input = { tool_name: 'Bash', tool_input: { command: `node -e "fs.writeFileSync('out', 'data');${'x'.repeat(6100)}"` } };
   const output = run(input, home).stdout;
-  assert.doesNotMatch(output, /permissionDecision.*deny/);
-  assert.match(output, /フォールバック\(Gemini 無料枠\)も利用できない/);
+  assert.match(output, /permissionDecision.*deny/);
+  assert.match(output, /全滅なら実装を止め/);
 });
 test('large spec authoring passes but large interpreter heredoc is denied in block mode', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bash-deleg-kinds-')); fs.mkdirSync(path.join(home, '.claude')); fs.writeFileSync(path.join(home, '.claude', 'cost-enforce.json'), '{"mode":"block"}');
@@ -56,3 +56,11 @@ test('large spec authoring passes but large interpreter heredoc is denied in blo
   assert.match(run({ tool_name: 'Bash', tool_input: { command: `python - > out <<'PY'\n${'x'.repeat(6100)}\nPY` } }, home).stdout, /permissionDecision.*deny/);
 });
 test('broken stdin exits zero', () => { const r = run('{nope'); assert.equal(r.status, 0); assert.equal(r.stdout, ''); });
+test('session approval allows inline implementation only until expiry', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bash-approval-')); t.after(() => fs.rmSync(home, { recursive: true, force: true })); fs.mkdirSync(path.join(home, '.claude'));
+  const input = { session_id: 's', tool_name: 'Bash', tool_input: { command: `node -e "fs.writeFileSync('x','${'x'.repeat(6100)}')"` } };
+  for (const delta of [3500000, -1]) {
+    fs.writeFileSync(path.join(home, '.claude/claude-impl-allow.json'), JSON.stringify({ sessionId: 's', marker: '[LANE-OK]', until: new Date(Date.now() + delta).toISOString() }));
+    assert.match(run(input, home).stdout, delta > 0 ? /additionalContext/ : /permissionDecision.*deny/);
+  }
+});

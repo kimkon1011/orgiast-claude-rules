@@ -28,6 +28,10 @@ export function evaluateInvestigation(text, options = {}) {
   if (marker < 0) missing.push('[手渡し判定] ブロック');
 
   const block = marker < 0 ? '' : value.slice(marker);
+  const waitStall = /返事が(?:来ない|ない|返ってこない)|応答(?:が)?ない|反応(?:が)?ない|未返信|読まれたまま|結果が(?:返って|来)ない|タイムアウト|not-hub|待ち続け|止まっている/i;
+  if (waitStall.test(block) && !/^恒久経路:.*(?:→|⇒).+$/m.test(block)) {
+    return { decision: 'block', missing: [], reason: '[WAIT-STALL] 他PC・他人・他レーンの返事待ちや停滞は、user に手作業を回す理由になりません（§1.1）。待っている間は Claude が催促し、別経路（§1.18.2 Grok Bot・ハブ中継・資格の正規配布）を試し、詰まった経路そのものを直す実装か PR を進めてください。user には状況の報告だけをし、手作業は頼まないこと。どうしても残る場合は「恒久経路: <進めた実装/PR> → <結果>」を書いてください。（2026-10-19 cr 指摘）', code: 'WAIT-STALL', exempt: false };
+  }
   if (/(?:classifier|拒否|denied|Self-Modification)/i.test(block) && !/^最小単位で再試行:/m.test(block)) {
     return { decision: 'block', missing: [], reason: '[MINIMAL-RETRY] classifier 拒否を理由に手渡しています。手渡し前に、目的の変更だけを最小単位で1回試した結果を `最小単位で再試行: <試した操作> → <結果>` で書いてください。一括操作や緩める方向の操作の拒否から、未試行の個別操作を不可と推定するのは禁止（2026-09-17 実害）。' };
   }

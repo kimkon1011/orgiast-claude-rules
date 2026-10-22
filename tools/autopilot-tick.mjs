@@ -3,11 +3,12 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parseArgs, promisify } from 'node:util';
 import { isEntry } from './is-entry.mjs';
-import { notifyKim } from './notify-kim.mjs';
+import { toPlainJa } from './lib/plain-ja.mjs';
+import { notifyKim, clipDiscordContent } from './notify-kim.mjs';
 
 const API = 'https://discord.com/api/v10';
 const DEFAULTS = { maxIterPerDay: 20, maxHoursPerDay: 6, maxNoop: 3, maxTotalIter: 200 };
@@ -128,6 +129,34 @@ const REASON_TEXT = {
 };
 const reasonText = (reason) => REASON_TEXT[reason] || '止まりました。';
 const autoResumes = (reason) => reason === 'daily_iter_cap' || reason === 'daily_hours_cap';
+// A runner error is usually "the CLI could not authenticate" (an expired OAuth login).
+// The owner fixes that by logging in once, which rewrites ~/.claude/.credentials.json.
+// Nothing used to look at the file, so a run that paused after 3 errors stayed dead even
+// after the cause was gone: the resume task is one-shot and watchdog() skips paused runs.
+// The probe stays cheap and local — no child launch.
+function credentialsRefreshedSince(state, paths) {
+  const since = Date.parse(state.lastRunnerErrorAt || '');
+  if (!Number.isFinite(since)) return false;
+  try { return fs.statSync(path.join(paths.home, '.claude', '.credentials.json')).mtimeMs > since; } catch { return false; }
+}
+// A dead OAuth login no longer has to stop the run: autopilot-run.mjs passes the
+// ~/.claude/deepseek.env key to the child when the Claude credentials are empty.
+// Nothing lifted the 3-strike pause for that lane, so a PC whose login is never renewed
+// stayed paused forever although the child would now start (2026-10-20 実測: 全tickが
+// skipped:runner_error のまま、credentials は 2026-10-17T04:27Z で不変).
+// Keep a quiet gap so a broken fallback key retries at a human pace, not every tick.
+const FALLBACK_RESUME_COOLDOWN_MS = 30 * 60_000;
+function fallbackKeyAvailable(paths) {
+  try {
+    const env = fs.readFileSync(path.join(paths.home, '.claude', 'deepseek.env'), 'utf8');
+    return /^\s*DEEPSEEK_API_KEY\s*=\s*["']?[^\s"']+/m.test(env);
+  } catch { return false; }
+}
+function fallbackResumeReady(state, paths, now) {
+  if (!fallbackKeyAvailable(paths)) return false;
+  const since = Date.parse(state.lastRunnerErrorAt || '');
+  return !Number.isFinite(since) || now.getTime() - since >= FALLBACK_RESUME_COOLDOWN_MS;
+}
 export function digestSlot(date) {
   const d = new Date(date);
   const hour = Number(new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Tokyo', hour: 'numeric', hourCycle: 'h23' }).format(d));
@@ -282,10 +311,59 @@ async function nextObjective(state, objective, ctx) {
   }
   return null;
 }
-async function sendNotice(text, ctx) {
-  try { return await ctx.notifyImpl(text, { home: ctx.home, token: ctx.token, userId: ctx.userId, fetchImpl: ctx.fetchImpl, webhookFallback: false }); }
-  catch { return { delivered: 'none' }; }
+function mirrorNotice(command, text, ctx) {
+  return new Promise((resolve, reject) => {
+    let child, timer, settled = false;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) { try { child?.kill('SIGKILL'); } catch {} reject(error); }
+      else resolve();
+    };
+    try {
+      child = (ctx.spawnImpl || spawn)(command[0], command.slice(1), {
+        stdio: ['pipe', 'ignore', 'ignore'], windowsHide: true, shell: false,
+      });
+      timer = setTimeout(() => finish(new Error('mirror_timeout')), ctx.mirrorTimeoutMs ?? 60_000);
+      child.once('error', finish);
+      child.once('close', (code, signal) => finish(code === 0 ? null : new Error(`mirror_exit:${code ?? signal}`)));
+      child.stdin.on('error', finish);
+      child.stdin.end(`${JSON.stringify({ kind: 'notify', message: text })}\n`);
+    } catch (error) { finish(error); }
+  });
 }
+export async function sendNotice(text, ctx) {
+  let command, mirrorError;
+  try {
+    const config = readText(path.join(ctx.home, '.claude', 'autopilot-notify-mirror.json'));
+    if (config) {
+      command = JSON.parse(config).command;
+      if (!Array.isArray(command) || !command.length || command.some(v => typeof v !== 'string') || !command[0].trim()) {
+        command = null;
+        throw new Error('invalid_mirror_command');
+      }
+    }
+  } catch (error) { mirrorError = error.message; }
+  // Normalize once so both destinations receive the exact same final DM body.
+  if (command) text = clipDiscordContent(process.env.NOTIFY_PLAIN_JA === '0' ? text : await toPlainJa(String(text)));
+  let result;
+  try { result = await ctx.notifyImpl(text, { home: ctx.home, token: ctx.token, userId: ctx.userId, fetchImpl: ctx.fetchImpl, webhookFallback: false, ...(command ? { plainJa: false } : {}) }); }
+  catch { result = { delivered: 'none' }; }
+  if (command) {
+    try { await mirrorNotice(command, text, ctx); }
+    catch (error) { mirrorError = error.message; }
+  }
+  if (mirrorError) {
+    try {
+      const paths = ctx.paths || autopilotPaths(ctx);
+      fs.mkdirSync(paths.dir, { recursive: true });
+      fs.appendFileSync(path.join(paths.dir, 'run.log'), `${JSON.stringify({ ts: (ctx.now || new Date()).toISOString(), mirrorError })}\n`, 'utf8');
+    } catch { /* Logging failure must not stop a round either. */ }
+  }
+  return result;
+}
+
 function rememberObjective(state, objective, now) {
   if (!['done', 'stopped'].includes(state.status)) return;
   state.objectiveHistory ||= [];
@@ -295,7 +373,7 @@ function rememberObjective(state, objective, now) {
   state.objectiveHistory = state.objectiveHistory.slice(-20);
 }
 function resumeState(state) {
-  state.status = 'running'; state.pausedReason = null; state.pendingQuestion = null;
+  state.status = 'running'; state.pausedReason = null; state.pendingQuestion = null; state.pendingQuestionExpiresAt = null;
   // Explicit human continuation gives a stalled objective one fresh attempt.
   state.consecutiveNoop = 0;
   state.consecutiveRunnerErrors = 0;
@@ -400,7 +478,7 @@ async function execute(command, args, ctx) {
       }
       else if (parsed.command === 'run') {
         if (state.status !== 'done') resumeState(state);
-      } else { state.status = parsed.command === 'stop' ? 'stopped' : 'paused'; state.pausedReason = `control_${parsed.command}`; state.pendingQuestion = null; }
+      } else { state.status = parsed.command === 'stop' ? 'stopped' : 'paused'; state.pausedReason = `control_${parsed.command}`; state.pendingQuestion = null; state.pendingQuestionExpiresAt = null; }
       rememberObjective(state, objective, now);
       if (!state.lastControlMessageId || compareId(message.id, state.lastControlMessageId) > 0) state.lastControlMessageId = message.id;
     }
@@ -422,6 +500,38 @@ async function execute(command, args, ctx) {
         state.runnerErrorRetryAt = null;
         state.consecutiveNoop = 0;
       }
+    }
+    // A question that carries its own reply deadline must not freeze the run forever
+    // when nobody answers by that deadline. The standing instruction attached to a
+    // timed question is "do nothing if no reply arrives by then", so drop the question
+    // (nothing is executed) and let the normal resume rules take over. Questions
+    // without a deadline keep waiting for the human, as before.
+    if (state.pendingQuestion && state.pendingQuestionExpiresAt) {
+      const expiresAt = Date.parse(state.pendingQuestionExpiresAt);
+      if (Number.isFinite(expiresAt) && now.getTime() >= expiresAt) {
+        state.lastExpiredQuestion = { question: state.pendingQuestion, expiredAt: state.pendingQuestionExpiresAt };
+        state.pendingQuestion = null;
+        state.pendingQuestionExpiresAt = null;
+      }
+    }
+    // Daily caps are resumable by design (autoResumes). Nothing else clears them:
+    // watchdog() returns early unless the status is 'running', so a capped run
+    // stayed paused forever and every later tick was skipped. Recompute the cap
+    // and lift the pause once it no longer applies (next JST day, or a quiet gap).
+    // A pending question must survive: resumeState() clears it, so wait for the answer.
+    if (state.status === 'paused' && autoResumes(state.pausedReason) && !state.pendingQuestion
+      && !capReason(state, objective, summarize(log, todayKey))) {
+      resumeState(state);
+    }
+    // The 3-strike runner-error pause is a dead end for the owner: re-login fixes the
+    // cause, but no timer lifts the pause. Lift it once the credentials were rewritten
+    // after the failure, or once the deepseek fallback lane can carry the child while the
+    // login stays dead. The counter resets, so a still-broken lane pauses again after
+    // 3 fresh errors instead of relaunching the child every tick.
+    if (state.status === 'paused' && state.pausedReason === 'runner_error'
+      && (state.consecutiveRunnerErrors || 0) >= 3 && !state.pendingQuestion
+      && (credentialsRefreshedSince(state, paths) || fallbackResumeReady(state, paths, now))) {
+      resumeState(state);
     }
     // No candidate and no command: leave a completed run byte-for-byte intact.
     if (state.status !== 'done' || control) {
@@ -447,7 +557,7 @@ async function execute(command, args, ctx) {
     const due = watchesDue(state, now);
     if (due.length) { for (const w of due) w.lastListedAt = now.toISOString(); writeJson(paths.state, state); }
     return { verdict: { running: 'run', paused: 'pause', stopped: 'stop', done: 'done' }[state.status], reason: state.pausedReason,
-      objective, decision: state.lastDecision || null, budget: { iterationsLeftToday: Math.max(0, objective.maxIterPerDay - state.iterationsToday), hoursLeftToday: Math.max(0, objective.maxHoursPerDay - today.hours), consecutiveNoop: state.consecutiveNoop }, control, recentLog: currentLog().slice(-5), controlErrors: result.errors, watchesDue: due };
+      objective, pendingQuestion: state.pendingQuestion || null, decision: state.lastDecision || null, budget: { iterationsLeftToday: Math.max(0, objective.maxIterPerDay - state.iterationsToday), hoursLeftToday: Math.max(0, objective.maxHoursPerDay - today.hours), consecutiveNoop: state.consecutiveNoop }, control, recentLog: currentLog().slice(-5), controlErrors: result.errors, watchesDue: due };
   }
   if (command === 'post') {
     if (state.status !== 'running') return { error: 'not_running', status: state.status };
@@ -529,22 +639,37 @@ async function execute(command, args, ctx) {
     state.lastDigestAt = now.toISOString();
     state.lastDigestIteration = state.totalIterations;
     save();
-    await sendNotice(text, ctx);
-    return { ok: true, slot, text };
+    // Record what actually happened, not just that no error was logged:
+    // sendNotice swallows delivery failures, so "no error in run.log" is not
+    // evidence that the DM arrived (2026-10-17 実測)。呼び出し側が run.log に
+    // delivered を残せるよう、結果を戻り値と state の両方に載せる。
+    const delivery = await sendNotice(text, ctx);
+    state.lastDigestDelivered = delivery?.delivered ?? 'unknown';
+    save();
+    return { ok: true, slot, text, delivered: state.lastDigestDelivered };
   }
   if (['stop', 'pause', 'resume'].includes(command)) {
     if (command === 'resume') {
       if (state.status === 'done') return { error: 'already_done', status: 'done' };
       resumeState(state);
-    } else {
+    } else if (!(command === 'pause' && args.question && !args.reason)) {
       state.status = command === 'stop' ? 'stopped' : 'paused';
       state.pausedReason = args.reason || `manual_${command}`;
-      if (command === 'stop') state.pendingQuestion = null;
+      if (command === 'stop') { state.pendingQuestion = null; state.pendingQuestionExpiresAt = null; }
     }
     const previousQuestion = state.pendingQuestion;
-    if (command === 'pause' && args.question) { state.pendingQuestion = oneLine(args.question); state.pausedReason = 'needs_kim'; }
+    if (command === 'pause' && args.question) {
+      state.pendingQuestion = oneLine(args.question);
+      // An unanswered timed question expires by itself; an untimed one waits indefinitely.
+      const rawDeadline = args['question-deadline'] ?? args.questionDeadline;
+      const deadline = rawDeadline ? Date.parse(rawDeadline) : NaN;
+      state.pendingQuestionExpiresAt = Number.isFinite(deadline) ? new Date(deadline).toISOString() : null;
+      // Asking never overrides a manual/control stop, a cap, or runner errors.
+      if (state.status === 'paused' && state.pausedReason === 'needs_kim') { state.status = 'running'; state.pausedReason = null; }
+    }
     if (command === 'pause' && args.reason === 'runner_error') {
       state.consecutiveRunnerErrors = (state.consecutiveRunnerErrors || 0) + 1;
+      state.lastRunnerErrorAt = now.toISOString();
       const n = state.consecutiveRunnerErrors;
       if (n < 3) {
         const backoffMin = 30 * Math.pow(2, n - 1);
@@ -593,14 +718,14 @@ export async function runAutopilot(command, args = {}, options = {}) {
     const home = paths.home;
     const token = options.token ?? (process.env.DISCORD_BOT_TOKEN?.trim() || readText(path.join(home, '.claude', 'orgiast-discord-bot-token.txt')));
     const userId = options.userId ?? (process.env.ORGIAST_DISCORD_USER_ID?.trim() || readText(path.join(home, '.claude', 'orgiast-discord-user-id.txt')));
-    return await execute(command, args, { paths, home, token, userId, now: options.now || new Date(), hostname: options.hostname || os.hostname(), fetchImpl: options.fetchImpl || globalThis.fetch, askImpl: options.askImpl || askCandidate, notifyImpl: options.notifyImpl || notifyKim });
+    return await execute(command, args, { paths, home, token, userId, now: options.now || new Date(), hostname: options.hostname || os.hostname(), fetchImpl: options.fetchImpl || globalThis.fetch, askImpl: options.askImpl || askCandidate, notifyImpl: options.notifyImpl || notifyKim, spawnImpl: options.spawnImpl, mirrorTimeoutMs: options.mirrorTimeoutMs });
   } catch (error) { return { error: error.code || error.message || 'autopilot_error' }; }
   finally { release?.(); }
 }
 
 export async function main(argv = process.argv.slice(2)) {
   try {
-    const options = Object.fromEntries(['objective', 'done', 'max-iter-per-day', 'max-hours-per-day', 'max-noop', 'max-total-iter', 'summary', 'progress', 'tokens-out', 'next-delay', 'reason', 'question', 'evidence', 'unverified', 'id', 'result', 'note', 'detail'].map((key) => [key, { type: 'string' }]));
+    const options = Object.fromEntries(['objective', 'done', 'max-iter-per-day', 'max-hours-per-day', 'max-noop', 'max-total-iter', 'summary', 'progress', 'tokens-out', 'next-delay', 'reason', 'question', 'question-deadline', 'evidence', 'unverified', 'id', 'result', 'note', 'detail'].map((key) => [key, { type: 'string' }]));
     for (const key of ['noop', 'codex', 'pretty']) options[key] = { type: 'boolean' };
     const { values, positionals } = parseArgs({ args: argv, options, allowPositionals: true });
     const result = await runAutopilot(positionals[0], values);

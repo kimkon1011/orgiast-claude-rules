@@ -34,6 +34,35 @@ export function parseCodexResetUntil(output, now = Date.now()) {
     if (duration > 0) return valid(now + duration) ? now + duration : fallback();
   }
 
+  // 日付・月名の無い時刻だけの案内（例: "try again at 8:20 AM"）。2026-10-20 実測で
+  // これを解釈できず、同じ出力中の無関係な ISO イベント時刻(セッションの timestamp)を
+  // 再開時刻に採用し、cooldown が実際の約4時間後ではなく13.8時間後になっていた。
+  const clockOnly = text.match(/\b(?:try\s+again|retry|resets?|available)(?:\s+at)?\s+(\d{1,2}):(\d{2})\s*(AM|PM)?\b(?:\s*\((UTC|GMT)\)|\s+(Z|[+-]\d{2}:?\d{2}))?/i);
+  if (clockOnly) {
+    const zone = clockOnly[4] || clockOnly[5];
+    let hour = Number(clockOnly[1]);
+    const minute = Number(clockOnly[2]);
+    const meridiem = clockOnly[3]?.toUpperCase();
+    if (meridiem) hour = (hour % 12) + (meridiem === 'PM' ? 12 : 0);
+    const atClock = () => {
+      if (zone) {
+        if (/^(?:UTC|GMT|Z)$/i.test(zone)) {
+          const base = new Date(now);
+          return Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate(), hour, minute, 0, 0);
+        }
+        const normalizedZone = zone.includes(':') ? zone : `${zone.slice(0, 3)}:${zone.slice(3)}`;
+        const base = new Date(now);
+        const ymd = `${base.getUTCFullYear()}-${String(base.getUTCMonth() + 1).padStart(2, '0')}-${String(base.getUTCDate()).padStart(2, '0')}`;
+        return Date.parse(`${ymd}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00${normalizedZone}`);
+      }
+      const base = new Date(now);
+      return new Date(base.getFullYear(), base.getMonth(), base.getDate(), hour, minute, 0, 0).getTime();
+    };
+    let parsedClock = atClock();
+    if (parsedClock <= now) parsedClock += 24 * HOUR_MS;
+    if (Number.isFinite(parsedClock)) return valid(parsedClock) ? parsedClock : fallback();
+  }
+
   const monthDateTime = text.match(/\b(?:try\s+again\s+at|resets?(?:\s+at)?)\s+(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(\d{4}))?\s+(\d{1,2}):(\d{2})(?:\s*(AM|PM))?(?:\s*\((UTC|GMT)\)|\s+(Z|[+-]\d{2}:?\d{2}))?/i);
   if (monthDateTime) {
     const month = MONTHS.get(monthDateTime[1].toLowerCase());
@@ -63,7 +92,9 @@ export function parseCodexResetUntil(output, now = Date.now()) {
   }
 
   const resetDateTime = text.match(/\bresets?(?:\s+at)?\s+(\d{4}-\d{2}-\d{2})[ T](\d{1,2}:\d{2}(?::\d{2})?)(?:\s*(Z|[+-]\d{2}:?\d{2}))?/i);
-  const iso = text.match(/\b(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)/i);
+  // codex の出力にはイベント時刻の ISO が大量に含まれる。無関係な時刻を再開時刻にしないよう、
+  // 再開を示す語の直後にある ISO だけを採用する（"resets_at":"2026-..." も拾える）。
+  const iso = text.match(/\b(?:try\s+again|retry|resets?(?:[_\s]+(?:at|on))?|available(?:[_\s]+at)?|wait\s+until)\b[^\d]{0,40}(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)/i);
   const timeOnly = text.match(/\bresets?(?:\s+at)?\s+(\d{1,2}):(\d{2})\b/i);
   let parsed = NaN;
   if (resetDateTime) {

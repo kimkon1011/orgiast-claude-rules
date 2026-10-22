@@ -113,3 +113,62 @@ Windows なら winget(or scoop/choco/npm)で自動インストールする。
 - Supabase: https://supabase.com/dashboard/org/<slug>/team → Invite member
 - Vercel(Hobby): メンバー追加に Pro plan 必要 → 個人 owner のまま運用
 - GitHub: Settings → Collaborators で追加
+
+### 1.12.1 移管前提の設計ルール（詳細版・kim 2026-10-22 厳命・全PC全アカウント全 Claude Code）
+
+すべての新規プロジェクトは「後で cr@orgiast.jp など別アカウントへ管理を移す」前提で作る。ONBOARDING.md §1.12.1 の要約の詳細版。
+
+背景: 2026-10 に古川さん退職に伴うアプリ5本の cr@orgiast.jp への移管、ブース制作アプリの cr-PC 移管で、個人アカウント依存（Vercel Hobby のメンバー不可・個人 Discord ID のハードコード・env の所在不明・引き継ぎ文書なし）が移管コストの大半だった。
+
+#### 設計ルール
+1. 着手時の所有権宣言（§1.12 の標準応答テンプレ）に「移管先候補」と「移管手順の所要（分）」を1行添える。未定なら「cr@orgiast.jp 等の社内アカウント」。
+2. 外部リソースは最小。原則 GitHub + Cloudflare（DB は D1）。Vercel / Supabase / GCP / 有料 SaaS を足すときは理由を1行書き、HANDOVER.md のリソース一覧に移管手順まで書く。
+3. 個人アカウントに紐づく値（Discord ID・メールアドレス・トークン・Webhook URL・スプレッドシート ID）は env / Binding / Script Properties に置く。`.env.example` に全項目を説明付きで列挙する。
+4. リポジトリ直下に `HANDOVER.md`（下のひな形）。README に「引き継ぎは HANDOVER.md」と1行書く。非エンジニアの後任が読んで移管を完了できる粒度にする。
+5. 移管が「招待してオーナー変更」で終わる構成にする。GitHub = Transfer ownership（または Org 配下で Owner 追加）、Cloudflare = Members → Super Administrator、Google = 同一ドメイン内の所有権移転、GAS = clasp + GitHub 管理。個人の有料プランでしか成立しない構成や、個人 PC のローカルにしか無い秘密・定期ジョブは作らない（定期処理は GitHub Actions / Cloudflare Cron Triggers / GAS トリガー）。
+6. デプロイ前ゲート: `tools/handover-doc-gate.mjs` が `wrangler deploy` / `wrangler pages deploy` / `vercel deploy` / `vercel --prod` / `clasp push` / `npm run deploy` の直前に HANDOVER.md の有無を確認し、無ければ deny する。緊急時のみ `HANDOVER_GATE_SKIP=1`。
+7. 既存アプリは大きな改修のついでに同じ形へ寄せる。HANDOVER.md の追加だけなら改修を待たずその場で行う。
+8. 完了報告の検証表に「HANDOVER.md あり／移管手順の所要（分）」の行を入れる。
+
+#### HANDOVER.md ひな形
+
+```markdown
+# HANDOVER.md（引き継ぎ書）
+
+## このアプリは何か
+<1〜3行。URL・用途・利用者>
+
+## リソース一覧
+| 種別 | 名前 | 現オーナー（アカウント） | URL | 移管手順 | 移管後に書き換える箇所 |
+|---|---|---|---|---|---|
+| GitHub repo | owner/name | kimkon1011 | https://github.com/... | Settings → Danger Zone → Transfer ownership → 新オーナーが承諾 | README のリンク、Actions の secrets |
+| Cloudflare Workers | name | kim@orgiast.jp | https://dash.cloudflare.com/... | Manage Account → Members → 招待 → Super Administrator → 旧オーナー削除 | なし（アカウント共有のため） |
+| Google スプレッドシート | 名前 | seisaku-team@orgiast.jp | https://docs.google.com/a/orgiast.jp/... | 共有 → 所有者を変更 | env の SHEET_ID は不変 |
+
+## env / secrets（値は書かない）
+| 名前 | 用途 | 所在（どこで発行・どこに保存） |
+|---|---|---|
+
+## 定期ジョブ・外部連携
+| 種別 | 場所 | 何をする | 止め方 |
+|---|---|---|---|
+
+## 再デプロイ手順
+~~~
+npm ci
+npm run build
+npm run deploy
+~~~
+
+## ローカル起動
+~~~
+cp .env.example .env.local   # 値は上の表の所在から取得
+npm run dev
+~~~
+
+## 移管チェックリスト
+- [ ] 上の全リソースで新オーナーが Owner/Super Admin になった
+- [ ] 新オーナーの PC で `npm run deploy` が通った
+- [ ] 旧オーナーの権限を外した（またはメンバーとして残す判断を記録）
+- [ ] この文書の「現オーナー」列を更新した
+```

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // 既定は検出のみ。外部照会失敗は「未確認」として独立して報告する。
 import fs from 'node:fs';
+import { listScheduledTasks } from './lib/scheduled-task.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -144,15 +145,8 @@ export function inspectRepo(repo) {
   }
   return { repo, changes, snapshot: hash(JSON.stringify(changes)) };
 }
-function powershell(script) {
-  return command(process.platform === 'win32' ? 'powershell.exe' : '/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(`[Console]::OutputEncoding = [Text.UTF8Encoding]::new(); $ErrorActionPreference='Stop'; ${script}`, 'utf16le').toString('base64')]);
-}
 function taskRows() {
-  // Task Scheduler API は schtasks と同じ台帳。ローカライズされた CSV の列名には依存しない。
-  const result = powershell("@(Get-ScheduledTask | Where-Object { $_.TaskName -like 'Orgiast*' -or $_.TaskName -like 'Claude*' } | ForEach-Object { $i = $_ | Get-ScheduledTaskInfo; [pscustomobject]@{taskName=($_.TaskPath + $_.TaskName); status=$i.LastTaskResult; t=$i.LastRunTime.ToUniversalTime().ToString('o'); running=($_.State -eq 'Running'); location=('taskschd.msc: ' + $_.TaskName)} }) | ConvertTo-Json -Compress");
-  const parsed = JSON.parse(result || '[]');
-  return Array.isArray(parsed) ? parsed : [parsed];
+  return listScheduledTasks({ spawnImpl: (exe, args, options) => spawnSync(process.platform === 'win32' ? exe : '/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe', args, { ...options, windowsHide: true }) });
 }
 function walkLogs(dir, warnings, depth = 0) {
   if (!fs.existsSync(dir) || depth > 7) return [];

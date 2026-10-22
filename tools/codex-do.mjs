@@ -238,6 +238,35 @@ export function detectQuotaLimit(stdout, stderr, exitStatus = null, promptText =
   return { matched: false };
 }
 
+// Codex の認証失敗。再試行しても直らないので、出力ゼロ再試行を飛ばして代替バックエンドへ回す。
+// 2026-10-17 実測: codex CLI 更新後に未ログインのまま `401 Unauthorized` /
+// `Missing bearer or basic authentication` で exit 1 になり、フォールバック条件
+// (usage limit / launch 不可 / Astra 昇格失敗)のどれにも当たらず委譲が死んでいた。
+export function detectCodexAuthFailure(output, stderr, promptText = '') {
+  const text = normalizeQuotes(`${output || ''}\n${stderr || ''}`);
+  const prompt = normalizeQuotes(promptText);
+  const patterns = [
+    /401\s+Unauthorized/i,
+    /Missing bearer or basic authentication/i,
+    /Not logged in/i,
+    /Please run\s+`?codex login`?/i,
+    /invalid_api_key/i,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    // 指示文に同じ文言が含まれる場合は、それをエコーしただけの可能性があるので除外する。
+    if (match && !prompt.includes(match[0])) return true;
+  }
+  return false;
+}
+
+// exit 0 は Codex が正常完了した証拠なので、出力内に読んだテストや指示由来の認証文言が
+// 含まれていても認証失敗として代替バックエンドへ回さない。タイムアウトも認証失敗とは分ける。
+export function isCodexAuthFailure(result, promptText = '') {
+  if (!result || result.timedOut === true || Number(result.status) === 0) return false;
+  return detectCodexAuthFailure(result.output, result.stderr, promptText);
+}
+
 export function snapshotWorkingTree(cwd, spawnImpl = spawnSync) {
   try {
     const gitCheck = spawnImpl('git', ['-C', cwd, 'rev-parse', '--is-inside-work-tree'], { windowsHide: true, encoding: 'utf8' });
@@ -291,6 +320,16 @@ export function snapshotWorkingTree(cwd, spawnImpl = spawnSync) {
   } catch (err) {
     return '';
   }
+}
+
+// 指示文が編集を求めているかを kind と文面の両方で判定する。
+// kind=verify/investigate/classify/summarize は読み取り専用の依頼なので、文面に「修正」等が
+// 入っていても編集を要求していない。文面だけで判定すると「〜を修正したか検証して」が wantedEdit に
+// なり、空diff→codex の不要な astra 昇格→gemini fallback まで走って failure として台帳に残る
+// (2026-10-19 実測: fallback の直近3件中2件が kind:verify の空diff)。kind を優先する。
+const EDIT_HINT = /実装|作って|修正|直して|追加して|リファクタ|refactor|fix|implement/i;
+export function wantsEdit(kind, instruction, review = false) {
+  return kind === 'implement' && !review && EDIT_HINT.test(String(instruction || ''));
 }
 
 export function shouldFlagEmptyFallbackDiff({ executorName, wantedEdit, timedOut, diffText, treeChanged }) {
@@ -350,6 +389,14 @@ export function fallbackBackendTimeoutSecs(timeoutSeconds, env = process.env) {
   const raw = Number(env.CODEX_DO_FALLBACK_BACKEND_TIMEOUT_SECS);
   const wanted = Number.isFinite(raw) && raw > 0 ? raw : 900;
   return Math.max(60, Math.min(timeoutSeconds, wanted));
+}
+
+// gemini-cli だけ既定 600 秒。実測: 成功 37 件の max 559 秒 / timeout 13 件の min 638 秒。
+// 900 秒まで待っても成功した例は無く、待つほど捨てる秒数だけ増える。
+export function backendSpecificTimeoutSecs(backendName, env = process.env) {
+  if (backendName !== 'gemini-cli') return null;
+  const raw = Number(env.CODEX_DO_GEMINI_TIMEOUT_SECS);
+  return Number.isFinite(raw) && raw > 0 ? raw : 600;
 }
 
 // タイムアウト時にプロセス木ごと殺す。Windows で shell:true のとき直接の子は cmd.exe なので、
@@ -481,14 +528,38 @@ function cheapCodeBackend(name, homeDir) {
   return { kind: 'cheap-code', name, provider, model: provider === 'glm' ? 'glm-5.3' : 'deepseek-v4-flash' };
 }
 
-export function resolveFallbackBackends(homeDir) {
+export function findExecutable(name, { env = process.env, platform = process.platform, existsImpl = fs.existsSync } = {}) {
+  try {
+    const searchPath = env.PATH || env.Path || '';
+    const delimiter = platform === 'win32' ? ';' : path.delimiter;
+    const pathImpl = platform === 'win32' ? path.win32 : path;
+    const extensions = platform === 'win32'
+      ? String(env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)
+      : [''];
+    for (const dir of searchPath.split(delimiter).filter(Boolean)) {
+      for (const extension of extensions) {
+        const candidate = pathImpl.resolve(dir, `${name}${extension}`);
+        if (existsImpl(candidate)) return candidate;
+      }
+    }
+  } catch {}
+  return null;
+}
+
+export function resolveFallbackBackends(homeDir, options = {}) {
+  const executableAvailable = options.executableAvailable || ((cmd) => Boolean(findExecutable(cmd, options)));
   const geminiKey = loadGeminiKey(homeDir);
   const openrouterKey = loadEnvKey(homeDir, 'openrouter.env', 'OPENROUTER_API_KEY');
   const deepseekKey = loadDeepseekKey(homeDir);
   const preferFree = process.env.CODEX_DO_PREFER_FREE === '1';
-  const gemini = geminiKey && { kind: 'gemini', name: 'gemini-cli', model: process.env.CODEX_DO_GEMINI_MODEL || 'gemini-3.7-flash', apiKey: geminiKey };
-  const deepseek = deepseekKey && { kind: 'qwen', name: 'deepseek', model: 'deepseek-chat', baseUrl: 'https://api.deepseek.com/v1', apiKey: deepseekKey };
-  const openrouter = openrouterKey && { kind: 'qwen', name: 'openrouter-free', model: process.env.CODEX_DO_FREE_MODEL || 'cohere/north-mini-code:free', baseUrl: 'https://openrouter.ai/api/v1', apiKey: openrouterKey };
+  const geminiAvailable = !geminiKey || executableAvailable('gemini');
+  const qwenAvailable = !(deepseekKey || openrouterKey) || executableAvailable('qwen');
+  if (geminiKey && !geminiAvailable) console.error('[codex-do] gemini-cli の CLI(gemini) が見つからないため候補から外します');
+  if (deepseekKey && !qwenAvailable) console.error('[codex-do] deepseek の CLI(qwen) が見つからないため候補から外します');
+  if (openrouterKey && !qwenAvailable) console.error('[codex-do] openrouter-free の CLI(qwen) が見つからないため候補から外します');
+  const gemini = geminiKey && geminiAvailable && { kind: 'gemini', name: 'gemini-cli', model: process.env.CODEX_DO_GEMINI_MODEL || 'gemini-3.7-flash', apiKey: geminiKey };
+  const deepseek = deepseekKey && qwenAvailable && { kind: 'qwen', name: 'deepseek', model: 'deepseek-chat', baseUrl: 'https://api.deepseek.com/v1', apiKey: deepseekKey };
+  const openrouter = openrouterKey && qwenAvailable && { kind: 'qwen', name: 'openrouter-free', model: process.env.CODEX_DO_FREE_MODEL || 'cohere/north-mini-code:free', baseUrl: 'https://openrouter.ai/api/v1', apiKey: openrouterKey };
   const byName = {
     'gemini-cli': () => gemini,
     'qwen': () => deepseek,
@@ -511,8 +582,8 @@ export function resolveFallbackBackends(homeDir) {
   return ordered.filter(Boolean);
 }
 
-export function resolveQwenBackends(homeDir) {
-  return resolveFallbackBackends(homeDir);
+export function resolveQwenBackends(homeDir, options = {}) {
+  return resolveFallbackBackends(homeDir, options);
 }
 
 // 429/413 はコード上の行番号(例: "foo.ts:429:12")と衝突するため、コロンで数字に
@@ -533,6 +604,47 @@ export function isBackendExhausted(output, stderr) {
   const patterns = ['rate limit', 'rate-limited', 'quota', 'insufficient', 'request too large'];
   if (patterns.some((p) => lower.includes(p))) return true;
   return merged.split(/\r?\n/).some((line) => isHttpStatusCodeLine(line, '429') || isHttpStatusCodeLine(line, '413'));
+}
+
+export function isBackendCliMissing(output, stderr) {
+  const merged = `${output || ''}\n${stderr || ''}`;
+  if (/not recognized as an internal or external command|内部コマンドまたは外部コマンド|command not found|\/bin\/sh: .*: not found/i.test(merged)) return true;
+  if (/^\s*['"]?[^\s:'"]+['"]?\s*:\s*not found\s*$/im.test(merged)) return true;
+  // 素の ENOENT はアプリのビルドエラーにも現れる。spawn 失敗の文言と同時に出た時だけ拾う。
+  if (/\bspawn\b[^\n]*\bENOENT\b|\bENOENT\b[^\n]*\bspawn\b/i.test(merged)) return true;
+  return false;
+}
+
+export const POLICY_STALL_MIN_ELAPSED_SECS = 300;
+export const POLICY_STALL_MIN_OUTPUT_CHARS = 400;
+export const POLICY_STALL_MIN_DENIALS = 3;
+export const POLICY_DENIAL_PATTERN = /tool execution denied by policy/gi;
+
+export function countPolicyDenials(text) {
+  return typeof text === 'string' ? (text.match(POLICY_DENIAL_PATTERN) || []).length : 0;
+}
+
+export function shouldAbortPolicyStall({
+  elapsedSecs,
+  outputChars,
+  stderr,
+  minElapsedSecs = POLICY_STALL_MIN_ELAPSED_SECS,
+  minOutputChars = POLICY_STALL_MIN_OUTPUT_CHARS,
+  minDenials = POLICY_STALL_MIN_DENIALS
+} = {}) {
+  if (![elapsedSecs, outputChars, minElapsedSecs, minOutputChars, minDenials].every(Number.isFinite)) return false;
+  return elapsedSecs >= minElapsedSecs
+    && outputChars < minOutputChars
+    && countPolicyDenials(stderr) >= minDenials;
+}
+
+export function shouldAdvanceToNextBackend({ timedOut, status, exhausted, cliMissing, aborted } = {}) {
+  if (aborted) return { advance: true, outcome: 'blocked' };
+  if (timedOut) return { advance: true, outcome: 'timeout' };
+  if (cliMissing) return { advance: true, outcome: 'cli_missing' };
+  if (exhausted) return { advance: true, outcome: 'exhausted' };
+  if (status === 0) return { advance: false, outcome: 'ok' };
+  return { advance: false, outcome: 'failed' };
 }
 
 // WSL codex の起動確認は「codex が無い」と「一過性で起動できない」を分けて扱う。
@@ -560,6 +672,42 @@ export function wslCodexLaunchPlan({ distroFound, codexPresent, versionOk, insta
   return !requireWsl && nativeAvailable ? 'native' : 'abort';
 }
 
+// 台帳 1 行分を組み立てる純粋関数。recordUsage から切り出してテスト可能にしている。
+// timeoutSecs は「この実行に与えた全体の --timeout」。これが無い旧行を 900 秒固定で
+// 判定すると、主経路の既定 1800 秒を「上限破り」と誤検出する（2026-10-20 実測:
+// provider=codex / secs=1800.28 / chain 無し = 既定 --timeout 1800 秒を予定どおり使い切った行）。
+export function buildUsageRow({
+  result, model, seconds, provider = 'codex', attempts = 1, chain = null,
+  timeoutSecs = null, lane = null, escalated = false, promptChars = 0,
+  origin = null, kind = null, cwd = null, reason = '', now = new Date()
+} = {}) {
+  // child.on('error') で spawn 自体に失敗した行は status が数値で残らず、原因は result.error にしか無い。
+  // stderr は空のままなので、放っておくと台帳からは「codex が走って何も出さなかった」と区別できない
+  // （2026-10-04 診断: 直近24hの codex out=0 のうち3件がこの形）。spawnError として必ず残す。
+  const spawnError = result?.error ? String(result.error.message ?? result.error).replace(/\s+/g, ' ').trim().slice(-200) : '';
+  const backendTail = String(result?.stderr || spawnError || '').replace(/\s+/g, ' ').trim().slice(-160);
+  const stderrTail = [reason, backendTail].filter(Boolean).join(' | ').slice(-200);
+  return {
+    t: now.toISOString(), provider, model,
+    lane, escalated,
+    in: Math.ceil(promptChars / 4), out: Math.ceil((result?.outputChars || 0) / 4),
+    launched: result?.launched !== false,
+    timedOut: result?.timedOut === true,
+    status: executorExitStatus(result),
+    origin, kind,
+    exitCode: result?.status ?? null,
+    cwd,
+    stderrTail,
+    ...(reason ? { reason } : {}),
+    ...(spawnError ? { spawnError } : {}),
+    fastFail: result?.timedOut !== true && Number(result?.status) !== 0 && (result?.outputChars || 0) === 0,
+    attempts,
+    ...(Array.isArray(chain) && chain.length ? { chain } : {}),
+    ...(Number.isFinite(timeoutSecs) && timeoutSecs > 0 ? { timeoutSecs } : {}),
+    secs: Number(seconds.toFixed(3))
+  };
+}
+
 if (isEntry(import.meta.url)) {
 
 const args = process.argv.slice(2);
@@ -571,10 +719,13 @@ const noFallback = args.includes('--no-fallback');
 // WSL 経路が使えず codex を起動できなかったか。true のときは再試行/昇格をせず、
 // 既存のフォールバック連鎖へそのまま渡す（2026-09-19）。
 let launchUnavailable = false;
-// codex が usage_limit クールダウン中で、代替バックエンド(deepseek/glm/gemini-cli)が使えるとき true。
+// codex が usage_limit クールダウン中か無人枠上限で、代替バックエンド(deepseek/glm/gemini-cli)が使えるとき true。
 // 保留(exit 75)で終わらせず、codex 起動を飛ばしてフォールバック連鎖へ渡す（2026-10-10 実害: autopilot が
 // 4日先の cooldown で deferred を返され、監督が自分で実装する羽目になった）。
 let cooldownSkipCodex = false;
+let skipCodexReason = '';
+// Codex が認証失敗(401 / 未ログイン)で死んだか。再試行では直らないので即フォールバックへ回す。
+let authFailed = false;
 const review = args.includes('--review');
 const noEscalate = args.includes('--no-escalate');
 const showBudget = args.includes('--budget');
@@ -727,10 +878,16 @@ if (useCodex && !forceNative && !process.env.NODE_TEST_CONTEXT && process.env.CO
 }
 if (useCodex) {
   const gate = decideCodexGate({ home, origin });
-  if (gate.deferred && gate.reason === 'codex_cooldown' && !noFallback && resolveFallbackBackends(home).length > 0) {
+  if (gate.deferred && ['codex_cooldown', 'unattended_budget'].includes(gate.reason) && !noFallback && resolveFallbackBackends(home).length > 0) {
     cooldownSkipCodex = true;
+    skipCodexReason = gate.reason;
     launchUnavailable = true;
-    console.error(`[codex-do] codex_cooldown（${new Date(gate.retryAt).toLocaleString()} まで）のため codex を起動せず代替バックエンドへ回します`);
+    const retryAt = new Date(gate.retryAt).toLocaleString();
+    if (skipCodexReason === 'unattended_budget') {
+      console.error(`[codex-do] unattended_budget（無人枠 ${gate.used}/${gate.limit} 件、${retryAt} 以降に回復）のため codex を起動せず代替バックエンドへ回します`);
+    } else {
+      console.error(`[codex-do] codex_cooldown（${retryAt} まで）のため codex を起動せず代替バックエンドへ回します`);
+    }
   } else if (gate.deferred) {
     recordDeferred(gate);
     console.error(`[codex-do] 保留: ${gate.reason}（${new Date(gate.retryAt).toLocaleString()} 以降に再試行）`);
@@ -743,7 +900,11 @@ if (useCodex) {
 // 下の「空diffなら書き込めていない」判定が一度も発火しないため（2026-09-03 実害）。
 const treeSnapshot = () => snapshotWorkingTree(cwd);
 const treeBefore = treeSnapshot();
-const wantedEdit = !review && /実装|作って|修正|直して|追加して|リファクタ|refactor|fix|implement/i.test(instruction);
+// kind=verify/investigate/classify/summarize は読み取り専用の依頼なので、文面に「修正」等が
+// 入っていても編集を要求していない。文面だけで判定すると「〜を修正したか検証して」が wantedEdit に
+// なり、空diff→codex の不要な astra 昇格→gemini fallback まで走って failure として台帳に残る
+// (2026-10-19 実測: fallback の直近3件中2件が kind:verify の空diff)。kind を優先する。
+const wantedEdit = wantsEdit(taskKind, instruction, review);
 const started = Date.now();
 let mockIndex = 0;
 
@@ -763,6 +924,7 @@ function execute(command, commandArgs, options = {}) {
           stderr: mock.stderr || '',
           outputChars: (mock.output || '').length,
           timedOut: mock.timedOut || false,
+          aborted: null,
           error: mock.error || null
         });
       }
@@ -771,12 +933,14 @@ function execute(command, commandArgs, options = {}) {
     }
   }
   return new Promise((resolve) => {
-    let outputChars = 0, output = '', stderr = '', timedOut = false;
+    let outputChars = 0, output = '', stderr = '', timedOut = false, abortedPolicyStall = false;
+    const callStarted = Date.now();
     const callTimeoutSeconds = Number.isFinite(options.timeoutSecs) && options.timeoutSecs > 0
       ? options.timeoutSecs
       : timeoutSeconds;
     const spawnOptions = { ...options };
     delete spawnOptions.timeoutSecs;
+    delete spawnOptions.abortPolicyStall;
     // stdio を全て pipe にして TTY を渡さない。TTY 付きで起動すると codex が端末入力を
     // 待ったまま眠り続ける(2026-08-26 に 1日00:57 hang した実害)。
     const child = spawn(command, commandArgs, { ...spawnOptions, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
@@ -787,9 +951,20 @@ function execute(command, commandArgs, options = {}) {
     }, callTimeoutSeconds * 1000);
     timer.unref?.();
     child.stdout.on('data', (chunk) => { outputChars += chunk.length; output += chunk.toString(); process.stdout.write(chunk); });
-    child.stderr.on('data', (chunk) => { stderr += chunk.toString(); process.stderr.write(chunk); });
-    child.on('error', (error) => { clearTimeout(timer); resolve({ status: null, error, outputChars, output, stderr }); });
-    child.on('close', (status) => { clearTimeout(timer); resolve({ status: timedOut ? 124 : status, outputChars, output, stderr, timedOut }); });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+      process.stderr.write(chunk);
+      if (!abortedPolicyStall
+        && options.abortPolicyStall === true
+        && process.env.CODEX_DO_POLICY_STALL_ABORT !== '0'
+        && shouldAbortPolicyStall({ elapsedSecs: (Date.now() - callStarted) / 1000, outputChars, stderr })) {
+        abortedPolicyStall = true;
+        console.error(`\n[codex-do] ${command} はポリシー拒否が続き、出力 ${outputChars} 文字のまま停滞したため停止します`);
+        killProcessTree(child);
+      }
+    });
+    child.on('error', (error) => { clearTimeout(timer); resolve({ status: null, error, outputChars, output, stderr, timedOut, aborted: abortedPolicyStall ? 'policy_stall' : null }); });
+    child.on('close', (status) => { clearTimeout(timer); resolve({ status: timedOut ? 124 : status, outputChars, output, stderr, timedOut, aborted: abortedPolicyStall ? 'policy_stall' : null }); });
     // 指示は stdin で渡し、必ず閉じる。閉じないと codex が
     // "Reading additional input from stdin..." のまま永久に待つ。
     child.stdin.end(prompt);
@@ -815,31 +990,21 @@ let lastBackend = null;
 let fallbackChain = [];
 
 let escalated = false;
+// 失敗の理由を台帳へ残す。これが無いと、fallback 行はバックエンドの stderr(YOLO mode is enabled…
+// などの情報行)だけが stderrTail に残り、delegation-health は「全滅」の原因を stderrTail から
+// 特定できない(2026-10-19 実測: fallback 3件の stderrTail は全て無害な情報行だった)。
+let ledgerReason = '';
 function recordUsage(result, modelName, seconds, provider = 'codex', attempts = 1, chain = null) {
   try {
     const ledger = path.join(home, '.claude', 'executor-usage.jsonl');
     fs.mkdirSync(path.dirname(ledger), { recursive: true });
-    // child.on('error') で spawn 自体に失敗した行は status が数値で残らず、原因は result.error にしか無い。
-    // stderr は空のままなので、放っておくと台帳からは「codex が走って何も出さなかった」と区別できない
-    // （2026-10-04 診断: 直近24hの codex out=0 のうち3件がこの形）。spawnError として必ず残す。
-    const spawnError = result?.error ? String(result.error.message ?? result.error).replace(/\s+/g, ' ').trim().slice(-200) : '';
-    fs.appendFileSync(ledger, `${JSON.stringify({
-      t: new Date().toISOString(), provider, model: modelName,
-      lane: selectedLane.reason, escalated,
-      in: Math.ceil(prompt.length / 4), out: Math.ceil((result.outputChars || 0) / 4),
-      launched: result?.launched !== false,
-      timedOut: result?.timedOut === true,
-      status: executorExitStatus(result),
-      origin, kind: taskKind,
-      exitCode: result?.status ?? null,
-      cwd,
-      stderrTail: String(result?.stderr || spawnError || '').replace(/\s+/g, ' ').trim().slice(-200),
-      ...(spawnError ? { spawnError } : {}),
-      fastFail: result?.timedOut !== true && Number(result?.status) !== 0 && (result?.outputChars || 0) === 0,
-      attempts,
-      ...(Array.isArray(chain) && chain.length ? { chain } : {}),
-      secs: Number(seconds.toFixed(3))
-    })}\n`, 'utf8');
+    const row = buildUsageRow({
+      result, model: modelName, seconds, provider, attempts, chain,
+      timeoutSecs: timeoutSeconds, lane: selectedLane.reason, escalated,
+      promptChars: prompt.length, origin, kind: taskKind, cwd,
+      reason: ledgerReason
+    });
+    fs.appendFileSync(ledger, `${JSON.stringify(row)}\n`, 'utf8');
   } catch {}
 }
 // investigate / classify / summarize は Codex を使わず llm-ask(gemini → deepseek → groq)へ回す。
@@ -973,7 +1138,7 @@ function isFastFail(result, elapsedSecs) {
 
 async function executeCodex() {
   if (cooldownSkipCodex) {
-    return { status: 3, outputChars: 0, output: '', stderr: 'codex_cooldown', timedOut: false, launched: false };
+    return { status: 3, outputChars: 0, output: '', stderr: skipCodexReason || 'codex_cooldown', timedOut: false, launched: false };
   }
   const codexArgs = buildCodexExecArgs({ ...selectedLane, review });
   let result = null, attempts = 0, seconds = 0;
@@ -986,6 +1151,13 @@ async function executeCodex() {
     attempts = attempt;
     // そもそも起動できていない(launched:false)なら再試行しても結果は変わらない。
     if (result?.launched === false) break;
+    // 認証失敗は再試行しても直らない。出力ゼロの再試行を省いてフォールバックへ回す。
+    if (isCodexAuthFailure(result, prompt)) {
+      authFailed = true;
+      const tail = String(result?.stderr || result?.output || '').replace(/\s+/g, ' ').trim().slice(-200);
+      console.error(`[codex-do] Codex の認証に失敗しました（未ログイン）。再試行せず代替バックエンドへ回します${tail ? `: ${tail}` : ''}`);
+      break;
+    }
     if (!isFastFail(result, elapsed)) break;
     const tail = String(result?.stderr || '').replace(/\s+/g, ' ').trim().slice(-200);
     if (attempt === 1) console.error(`[codex-do] codex が ${elapsed.toFixed(1)} 秒で出力ゼロ(exit ${result.status})のため 1 回だけ再試行します${tail ? `: ${tail}` : ''}`);
@@ -1025,7 +1197,7 @@ while (true) {
     continue;
   }
   const failure = failureReason(result);
-  if (!quotaCheck.matched && failure && !launchUnavailable && selectedLane.slug === SOL && lane === 'auto' && !model && !noEscalate && !escalated && !astraRetreated && providerCooldownMs('codex-astra') === 0) {
+  if (!quotaCheck.matched && failure && !launchUnavailable && !authFailed && selectedLane.slug === SOL && lane === 'auto' && !model && !noEscalate && !escalated && !astraRetreated && providerCooldownMs('codex-astra') === 0) {
     console.log(`[codex-do] sol 失敗 → astra へ昇格 (理由: ${failure})`);
     escalated = true;
     selectedLane = { slug: ASTRA, effort: 'high', reason: `escalated:${failure}` };
@@ -1044,10 +1216,12 @@ if (quotaCheck.matched && selectedLane.slug !== ASTRA) {
     try { writeCodexCooldownFile(claudeFile(home, 'codex-cooldown.json'), parseUsageLimitUntil(limitText)); } catch {}
   }
 }
-const fallbackReason = cooldownSkipCodex ? 'Codex usage limit クールダウン中'
+const fallbackReason = skipCodexReason === 'unattended_budget' ? 'Codex 無人枠の日次上限に到達'
+  : cooldownSkipCodex ? 'Codex usage limit クールダウン中'
+  : authFailed ? 'Codex 未ログイン(認証失敗)'
   : launchUnavailable ? 'WSL 経路が無く codex を起動できない'
   : quotaCheck.matched ? 'Codex usage limit を検出' : 'Astra 昇格後も失敗';
-if (quotaCheck.matched || escalationFailed || launchUnavailable) {
+if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
   if (quotaCheck.matched) {
     quotaResetUntil = parseCodexResetUntil(`${result?.output || ''}\n${result?.stderr || ''}`);
     try { writeCodexCooldown(quotaResetUntil); } catch {}
@@ -1074,7 +1248,10 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable) {
       const chainStarted = Date.now();
       fallbackChain = [];
       for (const backend of backends) {
-        const backendTimeout = chainBackendBudgetSecs(timeoutSeconds, (Date.now() - chainStarted) / 1000);
+        const backendTimeout = Math.min(
+          chainBackendBudgetSecs(timeoutSeconds, (Date.now() - chainStarted) / 1000),
+          backendSpecificTimeoutSecs(backend.name) ?? Infinity
+        );
         if (backendTimeout <= 0) {
           console.error(`[codex-do] フォールバック全体の時間枠(${timeoutSeconds}秒)を使い切ったため、残りのバックエンドは実行しません`);
           break;
@@ -1087,7 +1264,8 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable) {
               cwd,
               env: buildGeminiEnv(process.env, backend.apiKey),
               shell: process.platform === 'win32',
-              timeoutSecs: backendTimeout
+              timeoutSecs: backendTimeout,
+              abortPolicyStall: true
             })
           : backend.kind === 'cheap-code'
             ? await executeCheapCode(backend, backendTimeout)
@@ -1103,16 +1281,10 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable) {
           result.status = 1;
         }
         const spawnFailed = originalStatus === null;
-        let outcome = 'failed';
-        if (spawnFailed) {
-          outcome = 'spawn_failed';
-        } else if (result.timedOut === true) {
-          outcome = 'timeout';
-        } else if (result.status === 0) {
-          outcome = 'ok';
-        } else if (isBackendExhausted(result.output, result.stderr)) {
-          outcome = 'exhausted';
-        }
+        const cliMissing = isBackendCliMissing(result.output, `${result.stderr || ''}\n${result.error?.message || ''}`);
+        const exhausted = isBackendExhausted(result.output, result.stderr);
+        const decision = shouldAdvanceToNextBackend({ timedOut: result.timedOut === true, status: result.status, exhausted, cliMissing, aborted: result.aborted === 'policy_stall' });
+        const outcome = decision.outcome;
 
         fallbackChain.push({
           backend: backend.name,
@@ -1122,22 +1294,26 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable) {
           spawnFailed,
           out: Math.ceil((result.outputChars || 0) / 4),
           secs: Number(((Date.now() - attemptStarted) / 1000).toFixed(3)),
+          // この試行に実際に与えた予算。delegation-health の timeout 判定が
+          // 「900 秒固定」ではなく与えた予算で判定できるようにする（2026-10-22）。
+          budgetSecs: backendTimeout,
           stderrTail: String(result.stderr || '').replace(/\s+/g, ' ').trim().slice(-200),
           outcome
         });
 
-        if (outcome === 'timeout') recordFallbackBackendOutcome(home, { backend: backend.name, outcome });
-        if (result.timedOut) {
+        if (outcome === 'timeout' || outcome === 'cli_missing' || outcome === 'blocked') recordFallbackBackendOutcome(home, { backend: backend.name, outcome });
+        if (outcome === 'blocked') {
+          console.error(`[codex-do] backend=${backend.name} がポリシー拒否で停滞しているため ${fallbackChain.at(-1).secs} 秒で打ち切って次へ`);
+        } else if (outcome === 'timeout') {
           console.error(`[codex-do] backend=${backend.name} が ${backendTimeout} 秒でタイムアウトしたため次のバックエンドへ移ります`);
-          continue;
-        }
-        if (result.status === 0) {
-          fallbackBackend = backend;
-          break;
-        }
-        if (isBackendExhausted(result.output, result.stderr)) {
+        } else if (outcome === 'cli_missing') {
+          console.error(`[codex-do] backend=${backend.name} の CLI が見つからないため次のバックエンドへ移ります`);
+        } else if (outcome === 'exhausted') {
           console.error(`[codex-do] backend=${backend.name} が上限/エラーで使えないため次へ`);
-          continue;
+        }
+        if (decision.advance) continue;
+        if (outcome === 'ok') {
+          fallbackBackend = backend;
         }
         // 上限/エラー以外の失敗(実装エラー等)は次のバックエンドへ落とさず、この結果で止める。
         break;
@@ -1164,6 +1340,7 @@ if (executorName === 'codex') {
 if (shouldFlagEmptyFallbackDiff({ executorName, wantedEdit, timedOut: result.timedOut, diffText: diff.stdout, treeChanged: !treeUnchanged })) {
   const printedUsage = /^\s*(Usage|使い方)[:：]|--approval-mode\s+Set the approval mode/m.test(result.output || result.stderr || '');
   const fallbackName = reportedFallbackBackend?.name ?? 'unknown';
+  ledgerReason = printedUsage && reportedFallbackBackend?.kind === 'gemini' ? 'fallback_usage_help' : 'empty_diff';
   console.error(reportedFallbackBackend?.kind === 'gemini' && printedUsage
     ? '🚨 Gemini が使い方(ヘルプ)を表示して終了しました＝指示が届いていません。引数の渡し方を確認してください'
     : `🚨 フォールバック(${fallbackName})は作業ツリーを1行も変更していません。指示が届いたか確認してください`);

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { safeDialogMetrics as dialogMetrics } from './lib/stuck-dialog-state.mjs';
 // fleet ビーコン: converge の結果（ステップの ok/skip/fail）と最終 poll を GAS の fleet-beacon シートへ送る。
 // 送信は fail-open（例外を投げない）。fleet-status.mjs と fleet-mail.mjs が fetchBeacons を import する。
 import fs from 'node:fs';
@@ -85,6 +86,8 @@ export function buildBeacon({ home, label, results = [], now = Date.now(), pcMap
     }
     return { id, status, reason };
   });
+  const metrics = dialogMetrics(home, now);
+  if (process.platform === 'win32' || metrics.stuckDialogWatcherAt) steps.push({ id: 'stuck-dialog-watch', status: metrics.stuckDialogWatcherOk && !metrics.stuckDialogs24h ? 'ok' : 'fail', reason: `stuckDialogs24h=${metrics.stuckDialogs24h}; heartbeat=${metrics.stuckDialogWatcherAt || 'missing'}` });
   const failing = steps.filter((step) => step.status === 'fail').map((step) => step.id);
   const pollAt = String(readJson(path.join(home, '.claude', '.fleet-mail-last-poll.json'), {})?.at || '');
   return {
@@ -93,7 +96,8 @@ export function buildBeacon({ home, label, results = [], now = Date.now(), pcMap
     reportedAt: new Date(now).toISOString(),
     steps,
     failing,
-    pollAt
+    pollAt,
+    ...metrics
   };
 }
 // 送信は絶対に例外を投げない。env 未設定は skip、応答に beacon が無ければ「GAS 未デプロイ」。
@@ -136,8 +140,10 @@ export async function fetchBeacons({ home, fetchImpl = fetch, timeoutMs = 15000 
       if (!Array.isArray(steps)) steps = [];
       const failing = Array.isArray(beacon?.failing) ? beacon.failing
         : String(beacon?.failing ?? '').split(',').map((id) => id.trim()).filter(Boolean);
+      const dialogCount = steps.find(s => s.id === 'stuck-dialog-watch')?.reason?.match(/stuckDialogs24h=(\d+)/)?.[1];
       return {
         label: String(beacon?.label ?? ''), account: String(beacon?.account ?? ''), reportedAt: String(beacon?.reportedAt ?? ''),
+        stuckDialogs24h: dialogCount === undefined ? null : Number(dialogCount),
         steps, failing, pollAt: String(beacon?.pollAt ?? ''), serverPollAt: String(beacon?.serverPollAt ?? '')
       };
     });

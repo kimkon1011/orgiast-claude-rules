@@ -2,6 +2,24 @@
   "version": 1,
   "entries": [
     {
+      "path": "tools/register-fleet-chase.ps1",
+      "scope": "kim-only",
+      "step": "task:fleet-chase",
+      "reason": "管制役kim-PCだけで債務追跡を実行する"
+    },
+    {
+      "path": "tools/api-billing-guard.mjs",
+      "scope": "fleet",
+      "step": "settings:api-billing-guard",
+      "reason": "settings:api-billing-guard ステップの対象（SessionStart/UserPromptSubmit/PreToolUse の従量課金ガード）。ログイン情報の課金種別だけを読む"
+    },
+    {
+      "path": "tools/lib/stuck-dialog-state.mjs",
+      "scope": "fleet",
+      "step": "task:stuck-dialog-watch",
+      "reason": "監視の状態・24時間集計を fleet report と共有する実行時依存。既存PCにも監視タスクとともに配布する"
+    },
+    {
       "path": "packages/feedback-kit",
       "scope": "kim-only",
       "step": null,
@@ -38,6 +56,12 @@
       "reason": "classifier-settings ステップが allow ルール同期に実行する"
     },
     {
+      "path": "tools/assign-app-gate-fire.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "D:/ 固定の worktree と .env.local 候補に依存。kim-PC だけで日次実行"
+    },
+    {
       "path": "tools/audit.ps1",
       "scope": "kim-only",
       "step": null,
@@ -66,6 +90,18 @@
       "scope": "fleet",
       "step": "task:fleet-mail",
       "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
+    },
+    {
+      "path": "tools/rescue-todo-sweep.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "auto-session.mjs が import する実行時依存（rescue TODO の自動掃除）。D8 再帰検査の対象"
+    },
+    {
+      "path": "tools/rescue-review-scan.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "rescue-todo-sweep.mjs が import する実行時依存（rescue 枝の分類）。D8 再帰検査の対象"
     },
     {
       "path": "tools/backup-claude-to-drive.ps1",
@@ -144,6 +180,30 @@
       "scope": "kim-only",
       "step": null,
       "reason": "要確認"
+    },
+    {
+      "path": "tools/handoff-audit-findings-deferral-3423fc16.md",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "ドキュメントで実行体なし（~/.claude 設定名の記載による誤検出を許容）"
+    },
+    {
+      "path": "tools/handoff-audit-findings-deferral-362119db.md",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "ドキュメントで実行体なし（~/.claude 設定名の記載による誤検出を許容）"
+    },
+    {
+      "path": "tools/handoff-audit-findings-deferral-52be4096.md",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "ドキュメントで実行体なし（~/.claude 設定名の記載による誤検出を許容）"
+    },
+    {
+      "path": "tools/handoff-audit-findings-deferral-e524c1f7.md",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "ドキュメントで実行体なし（~/.claude 設定名の記載による誤検出を許容）"
     },
     {
       "path": "tools/handoff-audit-findings-deferral-ec4f1e5f.md",
@@ -290,6 +350,12 @@
       "reason": "purge-sessions.mjs --hook（SessionStart/Stop）が起動する。ユーザー設定は組織 UUID の読み取りのみ"
     },
     {
+      "path": "tools/mobile-standby-status.mjs",
+      "scope": "fleet",
+      "step": "settings:purge-sessions-SessionStart",
+      "reason": "purge-sessions.mjs --hook が6時間ごとに起動する待機セッション監視。ユーザー設定は組織 UUID の読み取りのみ"
+    },
+    {
       "path": "tools/prompt-memory-guideline.mjs",
       "scope": "kim-only",
       "step": null,
@@ -416,6 +482,12 @@
       "reason": "要確認"
     },
     {
+      "path": "tools/register-sga-autopilot.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "販管費オートパイロット。DWD 鍵と kim の Discord DM が前提のため kim-PC 専用"
+    },
+    {
       "path": "tools/register-messenger-watch.ps1",
       "scope": "kim-only",
       "step": null,
@@ -426,6 +498,12 @@
       "scope": "kim-only",
       "step": null,
       "reason": "要確認"
+    },
+    {
+      "path": "tools/register-nightly-remediate-task.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "朝バッチと同じ手動登録対象。converge 経路なし。"
     },
     {
       "path": "tools/register-nightly-kpi-task.ps1",
@@ -458,10 +536,16 @@
       "reason": "task:stall-sweeper ステップの登録スクリプト"
     },
     {
+      "path": "tools/register-quota-sweep.ps1",
+      "scope": "fleet",
+      "step": "task:quota-sweep",
+      "reason": "task:quota-sweep ステップの登録スクリプト（枠リセット直前の残枠消化・15分ごと判定）"
+    },
+    {
       "path": "tools/register-auto-progress-task.ps1",
       "scope": "fleet",
       "step": "task:auto-progress-watch",
-      "reason": "task:auto-progress-watch ステップの登録スクリプト（巡回09:00/18:00＋朝DM。DMはkim-PCのみ）"
+      "reason": "task:auto-progress-watch ステップの登録スクリプト（全PCで巡回09:00/18:00＋朝/巡回後DM）"
     },
     {
       "path": "tools/register-stalled-session-nightly.ps1",
@@ -510,6 +594,12 @@
       "scope": "kim-only",
       "step": null,
       "reason": "要確認"
+    },
+    {
+      "path": "tools/session-bootstrap.mjs",
+      "scope": "fleet",
+      "step": "classifier-settings",
+      "reason": "repo の project SessionStart から register-hooks（classifier-settings と同じ hook 登録）を呼ぶ入口。全PCで動く"
     },
     {
       "path": "tools/settings-quality-guard.mjs",
@@ -584,6 +674,18 @@
       "reason": "fleet-mail v2 の提示・通知・初回移行を全PCへ配布"
     },
     {
+      "path": "tools/growi-manual.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail の Growi 追記処理が使う実行時 import 依存。top-level 依存は Node 組み込みと配布済み is-entry.mjs のみ"
+    },
+    {
+      "path": "tools/lib/drive-auth.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "growi-manual の同期・索引発行機能が遅延読込する依存。npm パッケージ不要で、認証ファイルは import 時には読まない"
+    },
+    {
       "path": "skills/fleet-mail/SKILL.md",
       "scope": "fleet",
       "step": "task:fleet-mail",
@@ -630,6 +732,12 @@
       "scope": "fleet",
       "step": "task:fleet-mail",
       "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
+    },
+    {
+      "path": "tools/lib/kim-notice.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail-watchdog / rescue-policy / auto-progress の kim 宛通知 3 行形式（実行時 import 依存）"
     },
     {
       "path": "tools/fleet-status.mjs",
@@ -755,6 +863,77 @@
       "path": "tools/memory-publish.mjs",
       "scope": "kim-only",
       "reason": "kim-PC の memory を private keyserve へ夜間発信する。CLI の deploy は発信元PCだけで実行する。"
+    },
+    {
+      "path": "tools/discord-dm-drafts.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "kimの個人DM UI操作・返信案。ほかのPCでは登録・実行しない"
+    },
+    {
+      "path": "tools/discord-dm-state.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "kimの個人DM UI操作・返信案。ほかのPCでは登録・実行しない"
+    },
+    {
+      "path": "tools/discord-post.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "kimの個人DM UI操作・返信案。ほかのPCでは登録・実行しない"
+    },
+    {
+      "path": "tools/discord-read-window.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "kimの個人DM UI操作・返信案。ほかのPCでは登録・実行しない"
+    },
+    {
+      "path": "tools/hooks/discord-drafts-context.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "kimの個人DM UI操作・返信案。ほかのPCでは登録・実行しない"
+    },
+    {
+      "path": "tools/register-discord-dm-drafts.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "kimの個人DM UI操作・返信案。ほかのPCでは登録・実行しない"
+    },
+    {
+      "path": "tools/fleet-rule-compliance-daily.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail poll の日次ルール遵守報告（実行時 import 依存・再帰検査対象）"
+    },
+    {
+      "path": "tools/lib/rule-compliance-mail.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "ルール遵守報告の本文生成/解析（fleet-mail 実行時 import 依存）"
+    },
+    {
+      "path": "tools/fleet-rule-compliance-worker.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "日次ルール遵守報告のワーカー（poll からデタッチ起動）"
+    },
+    {
+      "path": "tools/rule-compliance-loop.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "ルール遵守監査（ワーカーが子プロセスで実行）"
+    },
+    {
+      "path": "tools/rules-registry.json",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "ルール定義（rule-compliance-mail が読む）"
+    },
+    {
+      "path": "tools/rescue-review-findings.md",
+      "scope": "kim-only",
+      "reason": "ドキュメントで実行体なし（~/.claude 設定名の記載による誤検出を許容）"
     }
   ]
 }

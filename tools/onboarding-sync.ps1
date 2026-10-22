@@ -307,7 +307,7 @@ try {
 try {
     $keysSync = Join-Path $repoRoot 'tools\onboarding-sync.mjs'
     if ((Get-Command node -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath $keysSync)) {
-        & node $keysSync --keys-only | Out-Null
+        & $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) $keysSync --keys-only | Out-Null
     }
 } catch {}
 
@@ -321,7 +321,7 @@ try {
     # Leave automatic hook anchor selection to register-hooks.
     $registrar = Join-Path $repoRoot 'tools\setup.mjs'
     if ((Get-Command node -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath $registrar)) {
-        & node $registrar --converge --home $homeRoot 2>$null | Out-Null
+        & $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) $registrar --converge --home $homeRoot 2>$null | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "setup --converge failed: $LASTEXITCODE" }
     }
 } catch {

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { safeDialogMetrics as dialogMetrics } from './lib/stuck-dialog-state.mjs';
 import { collectConvergence } from './fleet-convergence.mjs';
 import { isEntry } from './is-entry.mjs';
 import fs from 'node:fs';
@@ -141,6 +142,7 @@ async function main() {
   const claudeUsd = firstFiniteNumber(cost.claudeUSD, reporter.mtdUsd);
   const payload = {
     token: fleetEnv.FLEET_SHEET_TOKEN,
+    ...dialogMetrics(home),
     label,
     mappedName,
     hostname: identity.hostname,

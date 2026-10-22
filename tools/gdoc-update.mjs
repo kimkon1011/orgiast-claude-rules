@@ -28,6 +28,7 @@ import { workspaceUrl } from './lib/workspace-url.mjs';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import path from 'node:path';
+import { isEntry } from './is-entry.mjs';
 
 const DEFAULT_KEY =
   'C:/Users/uers/Downloads/CLAUDE.md配布/aujust-sales-automation/.gcp/sheets-sa.json';
@@ -95,6 +96,28 @@ async function api(token, url, init = {}) {
   return res;
 }
 
+export function normalizeMarkdownText(text) {
+  return String(text)
+    .replace(/ {2}$/gm, '')
+    .replace(/\\(.)/g, '$1')
+    .split(/\r?\n/)
+    .map((line) => line
+      .replace(/^\s*(?:>\s*)+/, '')
+      .replace(/^\s*#{1,6}\s*/, '')
+      .replace(/^\s*[-+*]\s+/, '')
+      .replace(/[|*_`]/g, ' '))
+    .join('\n')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function verifyReadback(markdownBody, exportedText) {
+  const expected = normalizeMarkdownText(markdownBody).slice(0, 40);
+  const actual = normalizeMarkdownText(exportedText);
+  return expected ? actual.includes(expected) : actual.length > 0;
+}
+
+async function main() {
 const args = parseArgs(process.argv.slice(2));
 const docId = args.id;
 if (!docId) {
@@ -162,10 +185,12 @@ await api(
 const after = await (
   await api(token, `https://www.googleapis.com/drive/v3/files/${docId}/export?mimeType=text/plain`)
 ).text();
-const firstLine = md.split('\n').find((l) => l.trim())?.replace(/^#+\s*/, '').trim() || '';
-const ok = firstLine ? after.includes(firstLine.slice(0, 30)) : after.length > 0;
+const ok = verifyReadback(md, after);
 
 console.log(`updated: ${meta.name}`);
 console.log(`read-back: ${after.length} 字 / 先頭行の一致 = ${ok ? 'OK' : 'NG'}`);
 console.log(`${authuser} で開いてください: ${outputUrl}`);
 if (!ok) process.exit(1);
+}
+
+if (isEntry(import.meta.url)) await main();

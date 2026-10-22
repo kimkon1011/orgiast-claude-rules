@@ -45,7 +45,7 @@ function run(program, args) {
   return `${result.stdout || ''}${result.stderr || ''}`;
 }
 function runFleetSheetReport() {
-  const result = spawnSync('node', [path.join(repo, 'tools', 'fleet-sheet-report.mjs'), '--specs', '--cloud'], { windowsHide: true, encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home } });
+  const result = spawnSync(process.execPath, [path.join(repo, 'tools', 'fleet-sheet-report.mjs'), '--specs', '--cloud'], { windowsHide: true, encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home } });
   const log = path.join(claudeDir, 'logs', 'fleet-poller.log'); fs.mkdirSync(path.dirname(log), { recursive: true });
   const stamp = new Date().toISOString();
   for (const line of `${result.stdout || ''}${result.stderr || ''}`.split(/\r?\n/).filter(Boolean)) fs.appendFileSync(log, `${stamp} ${line}\n`);
@@ -104,7 +104,11 @@ if (dueDaily && repo) {
     const ngItems = ngLines.map(line => line.replace(/^.*\[NG\s*\]\s*/, '').trim()).filter(Boolean).join(' / ');
     const tail = ngLines.length ? ` … NG: ${ngItems}` : '';
     await post(`${ngLines.length ? '⚠' : '✅'} **[${label}]** 日次設定チェック: OK ${ok} / NG ${ngLines.length}${tail}`);
+  }
+  // Report even when verifySetup returns no output; --dry must not send either report.
+  if (!dry) {
     runFleetSheetReport();
+    run(process.execPath, [path.join(repo, 'tools', 'plan-usage-report.mjs'), '--force']);
   }
   // 熱の日次サマリ。thermal-guard が未導入(=サンプルが無い)なら何も送らないので、
   // 導入済みのPCだけが1日1回 直近24hの要約を返す。

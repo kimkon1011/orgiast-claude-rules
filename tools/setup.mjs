@@ -1,6 +1,8 @@
 #!/usr/bin/env node
+import { distributePlaybooks } from './lib/playbook-distribution.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
+import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -16,7 +18,7 @@ const valueAfter = (flag) => { const i = argv.indexOf(flag); return i >= 0 ? arg
 const converge = argv.includes('--converge');
 const strict = argv.includes('--strict');
 const jsonOutput = argv.includes('--json');
-const home = path.resolve(valueAfter('--home') || process.env.USERPROFILE || os.homedir());
+const home = path.resolve(valueAfter('--home') || process.env.ORGIAST_HOME || process.env.USERPROFILE || os.homedir());
 const manifestPath = path.resolve(valueAfter('--manifest') || path.join(scriptDir, 'setup-manifest.json'));
 
 function invalid(message) {
@@ -53,6 +55,7 @@ function readNonempty(target, kind) {
 function nested(value, dotted) { return dotted.split('.').reduce((v, key) => v?.[key], value); }
 function check(item) {
   try {
+    if (item.scope === 'kim-only' && resolveFleetLabel(home) !== 'kim-PC') return null;
     const spec = item.spec;
     if (item.type === 'command') {
       // npm製CLIはWindowsでは .cmd シム(codex 等)で、execFileSync の直接指定では解決できない
@@ -87,6 +90,16 @@ function check(item) {
     }
     if (item.type === 'scheduled-task') {
       if (typeof spec.ifPresent === 'string' && !fs.existsSync(resolveHome(spec.ifPresent))) return null;
+      // 登録側(.ps1)が env のフラグでしか作らないタスクは、そのフラグが無い PC で永久に NG になる。
+      // ifEnv を書いた項目はフラグ未設定を NOTICE として扱い、設定済みの PC だけで登録を検査する。
+      if (spec.ifEnv) {
+        let raw = '';
+        try { raw = fs.readFileSync(resolveHome(spec.ifEnv.path), 'utf8'); } catch (error) {
+          if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null;
+          throw error;
+        }
+        if (!new RegExp(spec.ifEnv.regex).test(raw)) return null;
+      }
       if (spec.hubMode && fleetHubNeedsConfiguration({ home })) return false;
       if (spec.migrationMarker && !fs.existsSync(resolveHome(spec.migrationMarker))) return false;
       if (process.platform !== 'win32') return false;
@@ -151,6 +164,11 @@ if (manifest) {
       results = inspect(manifest.items);
       for (const result of results) result.repaired = attemptedItems.has(result.item.id);
     }
+  }
+  if (converge) {
+    const item = { id: 'playbooks', severity: 'optional', description: '成功した手作業手順の配布（既存の実測は保持）' };
+    try { const copied = distributePlaybooks(path.dirname(scriptDir), home); results.push({ item, status: 'OK', checked: true, repaired: copied > 0 }); }
+    catch { results.push({ item, status: 'NG', checked: true, repaired: false }); }
   }
   if (settingsMigration) results.push(settingsMigration);
   // スマホ用待機タブ: 拡張導入・count=3・mobileTabs=0 除去。--manifest 指定時(テスト/臨時検査)は実機を触らない。

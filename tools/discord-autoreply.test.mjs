@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { runOnce, main, createDiscord, createLlm, contentFor, parseJson } from './discord-autoreply.mjs';
+import { runOnce, main, createDiscord, createLlm, contentFor, parseJson, combinePermissions } from './discord-autoreply.mjs';
 
 const NOW = Date.parse('2026-10-09T03:00:00Z');
 const KIM = '715210673642012733';
@@ -30,6 +30,8 @@ function fixture(t, { initial = true, messages = [message()], reply = [], after 
       const u = new URL(url); calls.push({ path: u.pathname, query: u.searchParams, ...init, body: init.body && JSON.parse(init.body) });
       assert.equal(init.headers['User-Agent'], 'DiscordBot (orgiast-autoreply, 1.0)');
       assert.equal(init.headers.Authorization, 'Bot test-token');
+      if (u.pathname.endsWith('/members/self')) return json({ roles: ['bot-role'] });
+      if (u.pathname.endsWith('/roles')) return json([{ id: '715211007307284530', permissions: '0' }, { id: 'bot-role', permissions: '8' }]);
       if (u.pathname.endsWith('/users/@me')) return json({ id: 'self' });
       if (u.pathname.endsWith('/messages/search')) return json({ total: messages.length, messages: messages.map(m => [m]) });
       if (init.method === 'POST') return json({ id: '200' });
@@ -417,4 +419,78 @@ test('メンション検索は人間の投稿だけを対象にし、25件ちょ
   assert.equal(searches[0].query.get('author_type'), 'user');
   assert.equal(searches[0].query.get('offset'), null);
   assert.equal(searches[1].query.get('offset'), '25');
+});
+
+test('権限はeveryoneと所属roleのみをBigIntでORする', () => {
+  const roles = [{ id: 'guild', permissions: '1024' }, { id: 'bot', permissions: String((1n << 60n) | 8n) }, { id: 'other', permissions: '16' }];
+  assert.equal(combinePermissions('guild', { roles: ['bot'] }, roles), (1n << 60n) | 1032n);
+  assert.equal(combinePermissions('guild', { roles: [] }, roles), 1024n);
+  assert.throws(() => combinePermissions('guild', {}, roles), /invalid/);
+});
+function withoutAdmin(f) {
+  const fetchImpl = f.options.fetchImpl;
+  f.options.fetchImpl = (url, init) => new URL(url).pathname.endsWith('/roles')
+    ? Promise.resolve(json([{ id: '715211007307284530', permissions: '0' }, { id: 'bot-role', permissions: '1024' }]))
+    : fetchImpl(url, init);
+}
+test('権限確認は1時間ごと、喪失DMは24時間ごと（境界を含む）', async t => {
+  const f = fixture(t, { messages: [] }); withoutAdmin(f);
+  for (const delta of [0, 3600000 - 1, 3600000, 23 * 3600000, 24 * 3600000 - 1, 24 * 3600000]) {
+    await runOnce({ ...f.options, now: () => NOW + delta });
+    assert.equal(f.notifications.length, delta < 24 * 3600000 ? 1 : 2);
+    if (delta < 3600000) assert.equal(f.calls.filter(c => c.path.endsWith('/members/self')).length, 1);
+  }
+  assert.match(f.notifications[0], /orgiast を選んで認証/);
+  assert.match(f.notifications[0], /client_id=1511684767546871818&scope=bot&permissions=8/);
+});
+test('通知失敗は成功時刻を保存せず、次の権限確認で再試行', async t => {
+  const f = fixture(t, { messages: [] }); withoutAdmin(f);
+  f.options.notifyKimImpl = async () => ({ delivered: 'none' });
+  assert.equal((await runOnce(f.options)).ok, false);
+  assert.equal(f.readState().lastPermNotifyTs, undefined);
+  f.options.notifyKimImpl = async text => { f.notifications.push(text); return { delivered: 'dm' }; };
+  await runOnce({ ...f.options, now: () => NOW + 3600000 });
+  assert.equal(f.notifications.length, 1);
+});
+test('部分エラーでもok=falseを両ログに記録、3連続で通知し24h間引く', async t => {
+  const f = fixture(t, { messages: [], reply: [prior()] });
+  const fetchImpl = f.options.fetchImpl;
+  f.options.fetchImpl = (url, init) => new URL(url).searchParams.has('after')
+    ? Promise.resolve(new Response('', { status: 403 })) : fetchImpl(url, init);
+  for (let i = 0; i < 4; i++) {
+    const result = await runOnce({ ...f.options, now: () => NOW + i * 20000 });
+    assert.equal(result.ok, false);
+    assert.equal(result.errors.length, 1);
+    assert.equal(f.notifications.length, i < 2 ? 0 : 1);
+  }
+  assert.match(f.notifications[0], /3 サイクル連続/);
+  assert.equal(JSON.parse(logLines(f, 'log.jsonl')[0]).ok, false);
+  assert.match(logLines(f, 'run.log')[0], /ok=false/);
+  await runOnce({ ...f.options, now: () => NOW + 40000 + 24 * 3600000 });
+  assert.equal(f.notifications.length, 2);
+  f.options.fetchImpl = fetchImpl;
+  await runOnce(f.options);
+  assert.equal(f.readState().consecutiveErrorCycles, 0);
+});
+test('致命的ネットワークエラーも連続サイクル通知の対象', async t => {
+  const f = fixture(t, { messages: [] });
+  f.options.fetchImpl = async () => { throw new Error('offline'); };
+  for (let i = 0; i < 3; i++) await runOnce(f.options);
+  assert.equal(f.readState().consecutiveErrorCycles, 3);
+  assert.equal(f.notifications.length, 1);
+});
+test('権限API失敗はエラーとして記録し、1時間未満は再確認しない', async t => {
+  const f = fixture(t, { messages: [] });
+  const fetchImpl = f.options.fetchImpl;
+  f.options.fetchImpl = (url, init) => new URL(url).pathname.endsWith('/members/self')
+    ? Promise.resolve(new Response('', { status: 403 })) : fetchImpl(url, init);
+  assert.equal((await runOnce(f.options)).ok, false);
+  assert.equal((await runOnce({ ...f.options, now: () => NOW + 1000 })).ok, true);
+});
+test('権限喪失でもdry-runは通知・state更新をしない', async t => {
+  const f = fixture(t, { messages: [] }); withoutAdmin(f);
+  const before = fs.readFileSync(f.file('state.json'), 'utf8');
+  await runOnce({ ...f.options, dryRun: true });
+  assert.equal(f.notifications.length, 0);
+  assert.equal(fs.readFileSync(f.file('state.json'), 'utf8'), before);
 });

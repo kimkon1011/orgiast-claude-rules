@@ -342,7 +342,7 @@ try {
       $npmPackages | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $stagingHomeDir 'npm-global-packages.json') -Encoding UTF8
     } catch { Write-Event ('WARN npm-global-list=skipped reason={0}' -f $_.Exception.Message) }
   } else { Write-Event 'WARN npm-global-list=skipped reason=npm-not-found' }
-  $nodeVersion = if (Get-Command node -ErrorAction SilentlyContinue) { [string](& node --version 2>$null) } else { $null }
+  $nodeVersion = if (Get-Command node -ErrorAction SilentlyContinue) { [string](& $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) --version 2>$null) } else { $null }
   $claudeVersion = if (Get-Command claude -ErrorAction SilentlyContinue) { try { [string](& claude --version 2>$null) } catch { $null } } else { $null }
   [ordered]@{ hostname=$hostname; userName=$env:USERNAME; userProfile=$env:USERPROFILE; createdAt=(Get-Date).ToString('o'); nodeVersion=$nodeVersion; claudeVersion=$claudeVersion; pwshVersion=$PSVersionTable.PSVersion.ToString(); taskCount=$taskCount; npmGlobalCount=$npmPackages.Count; scriptVersion='2' } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $stagingHomeDir 'backup-manifest.json') -Encoding UTF8
   $stagedCount = @(Get-ChildItem -LiteralPath $stagingDir -File -Recurse -Force).Count

@@ -38,6 +38,7 @@ export async function reconcileConvergence({ rows, state = {}, now = Date.now(),
     if (!problems.length) { delete next.targets[id]; continue; }
     issues.push({ label: row.label || row.pcName, username: row.username || '未確認', problems });
     const entry = next.targets[id] ||= { firstSeen: now };
+    Object.assign(entry, { label: row.label || row.pcName, username: row.username, hostname: row.hostname });
     // Exact per-user addresses are intentionally separate from ordinary PC mail.
     if (row.hostname && row.username && (!entry.sentAt || now - entry.sentAt >= DAY)) {
       // Keep a stable pending ID across ambiguous HTTP failures and process restarts.

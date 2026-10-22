@@ -1,0 +1,323 @@
+#!/usr/bin/env node
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { isEntry } from './is-entry.mjs';
+import { parseHandoff, selectTodoLanes } from './auto-session.mjs';
+import { buildClaudeHeadlessArgs, parseAutoSessionEnvText } from './auto-session-executor.mjs';
+import { resolveClaudeExecutableFromDisk, sanitizeClaudeSupervisorEnv } from './claude-exe.mjs';
+import { notifyKim } from './notify-kim.mjs';
+import { decideSweep, readClaudeWindows, readCodexWindows, shouldStopTick, jsonlFiles, sameReset } from './lib/quota-windows.mjs';
+import { discoverWsl, passiveWslHomes, wslPath, interactiveCodex, nativeCommand } from './lib/quota-sweep-host.mjs';
+import { syncWslCodexAuth } from './lib/codex-wsl-auth-sync.mjs';
+import { runBounded } from './lib/quota-sweep-process.mjs';
+
+export const DEFAULT_GOAL = 'このリポで node --test tools/ を実行し、失敗しているテスト・壊れた import・node --check で落ちるファイルを直す。全部緑なら docs/ 内のリンク切れ（相対パスの実在）を直す。受け入れ基準: node --test tools/ が緑、変更は git commit -F msg -- <paths> で小さくコミット';
+export const MAX_TICKS = 8;
+const terminal = new Set(['exhausted', 'final', 'ceiling', 'deadline', 'no-goal']);
+const read = file => { try { return fs.readFileSync(file, 'utf8'); } catch (e) { if (e.code === 'ENOENT') return ''; throw e; } };
+const json = (file, fallback = {}) => { const text = read(file); return text ? JSON.parse(text) : fallback; };
+const atomic = (file, value) => { const tmp = `${file}.${process.pid}.tmp`; fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n'); fs.renameSync(tmp, file); };
+
+export function selectGoal({ goals = '', handoff = '' } = {}) {
+  const explicit = goals.match(/^\s*- \[ \]\s+(.+)$/m)?.[1]?.trim();
+  if (explicit) return { goal: explicit, goalSource: 'quota-sweep-goals.md' };
+  const todos = parseHandoff(handoff).todos.filter(t => !/^(?:なし|無し|none)\s*[。.]?$/i.test(t.trim()) && !/^\s*(?:\[x\]|~~)/i.test(t));
+  const first = selectTodoLanes(todos, { count: 1, slaCount: 0 }).selected[0];
+  return first ? { goal: first, goalSource: 'next-session.md' } : { goal: DEFAULT_GOAL, goalSource: 'builtin' };
+}
+
+export function tickPrompt(slug) {
+  return `[headless:quota-sweep]\nFollow .loop/${slug}.md for exactly one iteration; update .loop/${slug}-state.md; commit with \`git commit -F <msg> -- <paths>\`; report FINAL only when every criterion is proved, otherwise ITERATING.\n日本語で証跡と残件を記録。FINAL は独立した行で返す。別ループやバックグラウンド子プロセスは禁止。push/PR/merge は行わない。.loop/ はローカル状態なのでコミット対象から除外する。`;
+}
+export function contractPrompt(provider, slug, goal) {
+  return `[headless:quota-sweep]\n${provider === 'claude' ? '/makeloop' : '$makeloop:makeloop'} ${goal}\n質問せず保守的な前提を明記して進める。runtime=manual（1メッセージ1イテレーション）、kind=closed、累積上限 ${MAX_TICKS} イテレーション、検証ゲート node --test tools/、slug=${slug}、ループを開始しない、日本語。.loop/${slug}.md と状態・INDEX を保存する。`;
+}
+export function canRunWindow(state, decision) {
+  const prior = state.lastRun?.[decision.provider]?.[decision.resetsAt];
+  return !prior || (!terminal.has(prior.outcome) && (prior.attempts || 1) < 2);
+}
+export function interactiveClaude({ home, now = Date.now() }) {
+  return jsonlFiles(path.join(home, '.claude', 'projects')).some(file => {
+    try {
+      if (now - fs.statSync(file).mtimeMs > 10 * 60_000) return false;
+      for (const line of read(file).split(/\r?\n/)) {
+        let row; try { row = JSON.parse(line); } catch { continue; }
+        if (row.type !== 'user' || row.isMeta) continue;
+        const c = row.message?.content;
+        const text = typeof c === 'string' ? c : Array.isArray(c) ? c.filter(b => b.type === 'text').map(b => b.text).join('\n') : '';
+        if (!text) continue;
+        return !text.startsWith('[headless:');
+      }
+      return true; // A recent unreadable/incomplete transcript is not evidence of idle use.
+    } catch { return true; }
+  });
+}
+export function makeLedger({ decision, startedAt, endedAt, usedAfter = null, ticks = 0, outcome, goal, goalSource, branch = null, prUrl = null }) {
+  return { ts: new Date(endedAt).toISOString(), provider: decision.provider, window: decision.window, resetsAt: decision.resetsAt,
+    usedBefore: decision.usedPercent, usedAfter, ticks, outcome, goal, goalSource, branch, prUrl, durationSec: Math.max(0, (endedAt - startedAt) / 1000) };
+}
+export function parseOutput(stdout) {
+  let message = '', input = 0, output = 0;
+  try {
+    const row = JSON.parse(stdout);
+    if (typeof row.result === 'string') {
+      message = row.result; input += row.usage?.input_tokens || 0; output += row.usage?.output_tokens || 0;
+    }
+  } catch { /* Codex JSONL */ }
+  for (const line of stdout.split(/\r?\n/)) {
+    try {
+      const row = JSON.parse(line);
+      if (row.type === 'item.completed' && row.item?.type === 'agent_message') message = row.item.text;
+      if (row.type === 'turn.completed') { input += row.usage?.input_tokens || 0; output += row.usage?.output_tokens || 0; }
+    } catch { /* Only final structured messages are completion signals. */ }
+  }
+  return { final: /^FINAL\s*$/m.test(message), input, output, message };
+}
+
+export function acquireLock(file, { alive = pid => { try { process.kill(pid, 0); return true; } catch (e) { return e.code !== 'ESRCH'; } } } = {}) {
+  const token = { pid: process.pid, startedAt: new Date().toISOString() };
+  const create = () => fs.writeFileSync(file, JSON.stringify(token), { flag: 'wx' });
+  try { create(); } catch (e) {
+    if (e.code !== 'EEXIST') throw e;
+    let old; try { old = json(file); } catch { return null; }
+    if (!Number.isInteger(old.pid) || old.pid <= 0 || alive(old.pid)) return null;
+    // Serialize stale reclamation; never steal an unknown owner.
+    const claim = `${file}.reclaim`;
+    try { fs.writeFileSync(claim, '', { flag: 'wx' }); } catch { return null; }
+    try {
+      if (read(file) !== JSON.stringify(old)) return null;
+      fs.unlinkSync(file); create();
+    } finally { fs.unlinkSync(claim); }
+  }
+  return () => { try { if (read(file) === JSON.stringify(token)) fs.unlinkSync(file); } catch {} };
+}
+
+export function parseArgs(argv) {
+  const o = { provider: 'all', leadMinutes: 90, minRemainingPercent: 15, home: process.env.ORGIAST_HOME || os.homedir() };
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (['--dry-run', '--json', '--status'].includes(arg)) o[arg.slice(2)] = true;
+    else if (['--provider', '--lead-min', '--min-remaining', '--home'].includes(arg)) {
+      const value = argv[++i]; if (!value || value.startsWith('--')) throw new Error(`Missing ${arg}`);
+      if (arg === '--provider') o.provider = value;
+      if (arg === '--home') o.home = path.resolve(value);
+      if (arg === '--lead-min') o.leadMinutes = Number(value);
+      if (arg === '--min-remaining') o.minRemainingPercent = Number(value);
+    } else throw new Error(`Unknown argument: ${arg}`);
+  }
+  if (!['claude', 'codex', 'all'].includes(o.provider) || !Number.isFinite(o.leadMinutes) || o.leadMinutes <= 0 || !Number.isFinite(o.minRemainingPercent) || o.minRemainingPercent < 0 || o.minRemainingPercent > 100) throw new Error('Invalid sweep options');
+  return o;
+}
+
+function commandRunner(spawnImpl = spawnSync) {
+  return (exe, args, cwd) => {
+    const r = spawnImpl(exe, args, { cwd, encoding: 'utf8', windowsHide: true, timeout: 60_000 });
+    if (r.error || r.status !== 0) throw r.error || new Error(`${exe}: ${String(r.stderr || '').slice(-1000)} (exit ${r.status})`);
+    return String(r.stdout || '').trim();
+  };
+}
+function prepareTree({ home, provider, run, previous }) {
+  const shared = path.join(home, '.claude', 'nightly-repo'), tree = path.join(home, '.claude', 'quota-sweep-repo');
+  run('git', ['fetch', 'origin', 'main', '--quiet'], shared);
+  if (!fs.existsSync(tree)) run('git', ['worktree', 'add', '--detach', tree, 'origin/main'], shared);
+  // Relative worktree pointer is usable by both Windows git and WSL git.
+  const pointer = read(path.join(tree, '.git')).match(/^gitdir: (.+)\s*$/);
+  if (!pointer) throw new Error('Dedicated worktree has no gitdir pointer');
+  if (path.isAbsolute(pointer[1])) fs.writeFileSync(path.join(tree, '.git'), `gitdir: ${path.relative(tree, pointer[1]).replaceAll('\\', '/')}\n`);
+  if (previous?.branch && previous.outcome !== 'final') {
+    if (run('git', ['branch', '--show-current'], tree) !== previous.branch) throw new Error('Interrupted branch changed; preserve worktree for recovery');
+    return { tree, branch: previous.branch, base: previous.base };
+  }
+  const dirty = run('git', ['status', '--porcelain', '--', '.', ':!.loop'], tree);
+  if (dirty) throw new Error('Uncommitted prior work preserved in quota-sweep-repo; reconcile before starting a new branch');
+  run('git', ['checkout', '--detach', 'origin/main'], tree);
+  const branch = `quota-sweep/${new Date().toISOString().replace(/[-:]/g, '').slice(0, 13).replace('T', '-')}-${provider}-${Date.now().toString(36)}`;
+  run('git', ['switch', '-c', branch], tree);
+  return { tree, branch, base: run('git', ['rev-parse', 'HEAD'], tree) };
+}
+
+export async function runSweep(decision, context) {
+  const { home, state, save, windows: refresh, active, log, env, now = Date.now, spawnImpl = spawnSync, runChild = runBounded, notify = notifyKim } = context;
+  const run = context.command ?? commandRunner(spawnImpl), provider = decision.provider;
+  const startedAt = now(), slug = `quota-sweep-${provider}`;
+  const selection = selectGoal({ goals: read(path.join(home, '.claude', 'quota-sweep-goals.md')), handoff: read(path.join(home, '.claude', 'next-session.md')) });
+  state.lastRun ??= {}; state.lastRun[provider] ??= {};
+  const previous = state.lastRun[provider][decision.resetsAt];
+  const record = { ...previous, ...selection, attempts: (previous?.attempts || 0) + 1, outcome: 'running', startedAt, ticks: previous?.ticks || 0 };
+  state.lastRun[provider][decision.resetsAt] = record; save();
+  let outcome = 'failed', usedBefore = decision.usedPercent, usedAfter = null, inputTokens = 0, outputTokens = 0, tree, branch = record.branch, prUrl = record.prUrl;
+  log(`${provider} goal (${selection.goalSource}): ${selection.goal}`);
+  const check = async () => {
+    if (now() >= decision.deadline) return 'deadline';
+    if (tree && run('git', ['branch', '--show-current'], tree) !== branch) {
+      record.branchChanged = true; log('Worktree branch changed externally; stop and preserve it'); return 'failed';
+    }
+    const all = await refresh(), own = all.filter(w => w.provider === provider);
+    usedAfter = own.find(w => w.window === decision.window)?.usedPercent ?? null;
+    if ((provider === 'claude' && !['5h', '7d'].every(k => own.some(w => w.window === k))) || !own.length || own.some(w => !Number.isFinite(w.resetsAt) && w.usedPercent !== 0 && !w.exhausted)) return 'failed';
+    if (own.some(w => w.exhausted)) return 'exhausted';
+    if (shouldStopTick({ windows: all, provider })) return 'ceiling';
+    if (own.some(w => Number.isFinite(w.resetsAt) && w.resetsAt - 3 * 60_000 <= now()) || !own.some(w => sameReset(w.resetsAt, decision.resetsAt))) return 'deadline';
+    if (await active(provider)) return 'failed';
+    return null;
+  };
+  try {
+    let stop = await check();
+    if (!stop) {
+      const initial = await refresh();
+      const eligible = decideSweep({ windows: initial, now: now(), leadMinutes: context.leadMinutes ?? 90, minRemainingPercent: context.minRemainingPercent ?? 15 }).find(d => d.provider === provider && sameReset(d.resetsAt, decision.resetsAt));
+      if (!eligible) stop = 'exhausted'; else usedBefore = eligible.usedPercent;
+    }
+    if (stop) { outcome = stop; return; }
+    const prepared = (context.prepareTree ?? prepareTree)({ home, provider, run, previous });
+    ({ tree, branch } = prepared); Object.assign(record, prepared); save();
+    const model = env.ORGIAST_QUOTA_SWEEP_MODEL || 'sonnet';
+    if (/opus|fable/i.test(model)) throw new Error('Supervisor model is not permitted for quota sweep');
+    let executable, baseArgs, wsl;
+    if (provider === 'claude') {
+      executable = context.claudeExe ?? (await resolveClaudeExecutableFromDisk({ ...process, env: { ...process.env, HOME: home, USERPROFILE: home, ORGIAST_HOME: home } })).executable;
+      if (!executable) throw new Error('Claude executable unavailable');
+      baseArgs = buildClaudeHeadlessArgs({ repoCwd: tree, historyCwd: tree, model });
+    } else {
+      wsl = context.wsl ?? discoverWsl({ spawnImpl });
+
+      executable = wsl ? 'wsl' : 'codex';
+      baseArgs = ['exec', '-s', 'workspace-write', '-c', 'model_provider=openai', '-c', 'forced_login_method=chatgpt', '--json', '-C', wsl ? wslPath(tree) : tree, '-'];
+    }
+    const childEnv = { ...sanitizeClaudeSupervisorEnv(env), ORGIAST_HOME: home, CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: `quota-sweep:${provider}` };
+    // No API-key billing fallback. Both hosts must use their existing plan authentication.
+    for (const k of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'OPENAI_API_KEY', 'CODEX_API_KEY']) delete childEnv[k];
+    const launch = async (prompt, timeoutMs) => {
+      const stopAt = Math.min(decision.deadline, now() + timeoutMs);
+      if (stopAt <= now()) return { timedOut: true, code: null, stdout: '' };
+      const seconds = Math.floor((stopAt - now()) / 1000);
+      if (seconds <= 0) return { timedOut: true, code: null, stdout: '' };
+      const args = wsl ? ['-d', wsl.distro, '--cd', wslPath(tree), '--', 'timeout', '--signal=KILL', `${seconds}s`, 'env', '-u', 'OPENAI_API_KEY', '-u', 'CODEX_API_KEY', 'codex', ...baseArgs] : baseArgs;
+      const invocation = provider === 'codex' && !wsl && process.platform === 'win32'
+        ? nativeCommand(executable, args) : { executable, args };
+      const result = await runChild(invocation.executable, invocation.args, { cwd: tree, input: prompt, env: childEnv, deadline: stopAt, timeoutMs, monitor: check });
+      const parsed = parseOutput(result.stdout || ''); inputTokens += parsed.input; outputTokens += parsed.output;
+      log(`${provider} child exit=${result.code} stop=${result.stopReason || ''}`);
+      return { ...result, final: parsed.final };
+    };
+    const loopDir = path.join(tree, '.loop'); fs.mkdirSync(loopDir, { recursive: true });
+    const contract = path.join(loopDir, `${slug}.md`), budgetFile = path.join(loopDir, `${slug}-budget.json`);
+    let budget = json(budgetFile, { goal: selection.goal, ticks: 0 });
+    if (budget.goal !== selection.goal || (budget.resetsAt && budget.resetsAt !== decision.resetsAt)) {
+      const archive = path.join(loopDir, `archive-${slug}-${now()}`); fs.mkdirSync(archive);
+      for (const name of [...(budget.goal !== selection.goal ? [`${slug}.md`] : []), `${slug}-state.md`, `${slug}-budget.json`]) if (fs.existsSync(path.join(loopDir, name))) fs.renameSync(path.join(loopDir, name), path.join(archive, name));
+      budget = { goal: selection.goal, ticks: 0 };
+    }
+    budget.ticks = Math.max(budget.ticks, record.ticks); record.ticks = budget.ticks; save();
+    budget.resetsAt = decision.resetsAt; atomic(budgetFile, budget);
+    if (budget.ticks >= MAX_TICKS || budget.final) { outcome = 'no-goal'; return; }
+    if (!fs.existsSync(contract)) {
+      stop = await check(); if (stop) { outcome = stop; return; }
+      const generated = await launch(contractPrompt(provider, slug, selection.goal), 15 * 60_000);
+      if ((generated.stopReason && generated.stopReason !== 'deadline') || now() >= decision.deadline) { outcome = generated.stopReason || 'deadline'; return; }
+      if (!fs.existsSync(contract)) {
+        const template = read(new URL('./quota-sweep-contract.tmpl.md', import.meta.url));
+        const values = { GOAL: selection.goal, SLUG: slug, GATE: 'node --test tools/', MAX_ITERATIONS: String(MAX_TICKS), DATE: new Date(now()).toISOString() };
+        fs.writeFileSync(contract, template.replace(/{{(GOAL|SLUG|GATE|MAX_ITERATIONS|DATE)}}/g, (_, k) => values[k]));
+        log(`${provider}: built-in contract fallback`);
+      }
+    }
+    const stateFile = path.join(loopDir, `${slug}-state.md`);
+    if (!fs.existsSync(stateFile)) fs.writeFileSync(stateFile, `# ${slug}\n未検証 / 累積試行: 0\n次: VERIFY\n`);
+    const index = path.join(loopDir, 'INDEX.md');
+    if (!read(index).includes(`(${slug}.md)`)) fs.appendFileSync(index, `- [${slug}](${slug}.md) — closed / manual\n`);
+    let errors = 0;
+    while (budget.ticks < MAX_TICKS) {
+      stop = await check(); if (stop) { outcome = stop; break; }
+      // Reserve before spawn, so interrupted attempts cannot be replayed for free.
+      budget.ticks++; atomic(budgetFile, budget); record.ticks++; save();
+      const result = await launch(tickPrompt(slug), 45 * 60_000);
+      if (result.stopReason || result.timedOut || now() >= decision.deadline) {
+        outcome = result.stopReason === 'deadline' ? (now() >= decision.deadline ? 'deadline' : 'failed') : result.stopReason || (now() >= decision.deadline ? 'deadline' : 'failed'); break;
+      }
+      if (result.code === 0 && result.final) { budget.final = true; atomic(budgetFile, budget); outcome = 'final'; break; }
+      errors = result.code === 0 ? 0 : errors + 1;
+      if (errors >= 2) { outcome = 'failed'; break; }
+      outcome = 'exhausted'; // cumulative iteration budget exhausted, not verified success
+    }
+  } catch (error) { log(`${provider} failed: ${error.message}`); outcome = 'failed'; }
+  finally {
+    if (tree && branch) {
+      try {
+        if (run('git', ['branch', '--show-current'], tree) !== branch) throw new Error('Worktree branch changed externally; no push attempted');
+        if (Number(run('git', ['rev-list', '--count', `${record.base}..HEAD`], tree)) > 0) {
+          run('git', ['push', '-u', 'origin', branch], tree);
+          prUrl = run('gh', ['pr', 'list', '--head', branch, '--state', 'all', '--json', 'url', '--jq', '.[0].url // empty'], tree);
+          if (!prUrl) prUrl = run('gh', ['pr', 'create', '--base', 'main', '--head', branch, '--fill'], tree);
+        }
+      } catch (error) { log(`PR delivery failed: ${error.message}`); record.deliveryError = error.message; outcome = 'failed'; }
+    }
+    try { const after = await refresh(); usedAfter = after.find(w => w.provider === provider && w.window === decision.window)?.usedPercent ?? usedAfter; } catch { /* unknown */ }
+    const row = makeLedger({ decision: { ...decision, usedPercent: usedBefore }, startedAt, endedAt: now(), usedAfter, ticks: record.ticks, outcome, ...selection, branch, prUrl });
+    Object.assign(record, row); save();
+    fs.appendFileSync(path.join(home, '.claude', 'quota-sweep.jsonl'), JSON.stringify(row) + '\n');
+    fs.appendFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), JSON.stringify({ t: row.ts, provider: `quota-sweep:${provider}`, model: provider === 'claude' ? env.ORGIAST_QUOTA_SWEEP_MODEL || 'sonnet' : 'codex', in: inputTokens, out: outputTokens, tokens: inputTokens + outputTokens, secs: row.durationSec, status: outcome, attempt: record.attempts, failover: false }) + '\n');
+    log(`${provider}: ${outcome}, ticks=${record.ticks}`);
+    const oneLine = value => String(value).replace(/[\r\n]+/g, ' ').slice(0, 250);
+    try { await notify([`${provider}/${decision.window}`, `${usedBefore}% → ${usedAfter ?? '?'}%`, `tick: ${record.ticks}`, oneLine(selection.goal), prUrl || '変更なし', outcome].join('\n'), { home }); }
+    catch (error) { log(`DM failed: ${error.message}`); }
+  }
+}
+
+export async function main(argv = process.argv.slice(2), io = {}) {
+  const options = parseArgs(argv), { home } = options, dir = path.join(home, '.claude');
+  const now = io.now ?? Date.now, spawnImpl = io.spawnImpl ?? spawnSync;
+  const print = io.print ?? console.log;
+  const emit = report => { print(options.json ? JSON.stringify(report, null, 2) : report.reason || JSON.stringify(report)); return report; };
+  const stateFile = path.join(dir, 'quota-sweep-state.json');
+  if (options.status) return emit({ state: json(stateFile), ledger: read(path.join(dir, 'quota-sweep.jsonl')).trim().split('\n').filter(Boolean).slice(-10).map(line => JSON.parse(line)) });
+  const env = { ...process.env, ...parseAutoSessionEnvText(read(path.join(dir, 'auto-session.env'))) };
+  if (env.ORGIAST_QUOTA_SWEEP === '0') return emit({ skipped: true, reason: 'ORGIAST_QUOTA_SWEEP=0' });
+  const requestedHomes = io.wslHome ?? (argv.includes('--home') ? [] : passiveWslHomes());
+  const wslHomes = Array.isArray(requestedHomes) ? [...requestedHomes] : [requestedHomes];
+  const windows = io.readWindows ?? (async () => {
+    const claude = await readClaudeWindows({ home, fetchImpl: io.fetchImpl });
+    const codex = readCodexWindows({ home, wslHome: wslHomes, now: now() });
+    const all = [...claude, ...codex]; all.reasons = { claude: claude.reason, codex: codex.reason }; return all;
+  });
+  // A dry-run only reads files/API; no locks, processes, notifications or state mutations.
+  if (options['dry-run']) {
+    const observed = await windows();
+    return emit({ windows: observed, reasons: observed.reasons, decision: decideSweep({ windows: observed, now: now(), ...options }).filter(d => options.provider === 'all' || d.provider === options.provider) });
+  }
+  if ((io.platform ?? process.platform) !== 'win32') return emit({ skipped: true, reason: 'Scheduled sweep requires Windows; use --dry-run for observations' });
+  fs.mkdirSync(dir, { recursive: true });
+  const log = text => { fs.appendFileSync(path.join(dir, 'quota-sweep.log'), `${new Date(now()).toISOString()} ${text}\n`); if (!options.json) print(text); };
+  const release = acquireLock(path.join(dir, 'quota-sweep.lock'));
+  if (!release) { log('skip: lock held'); return emit({ skipped: true, reason: 'lock held' }); }
+  try {
+    const state = json(stateFile, { lastRun: {} });
+    const wsl = Object.hasOwn(io, 'wsl') ? io.wsl : argv.includes('--home') ? null : discoverWsl({ spawnImpl });
+    if (wsl?.home && !wslHomes.includes(wsl.home)) wslHomes.push(wsl.home);
+    const active = io.active ?? (async provider => {
+      if (provider === 'claude') return interactiveClaude({ home, now: now() });
+      const r = wsl ? spawnImpl('wsl', ['-d', wsl.distro, '--', 'ps', '-eo', 'args='], { encoding: 'utf8', windowsHide: true, timeout: 10_000 })
+        : spawnImpl('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', "Get-CimInstance Win32_Process | Where-Object {$_.Name -match '^codex(?:\\.exe)?$'} | ForEach-Object {$_.CommandLine}"], { encoding: 'utf8', windowsHide: true, timeout: 10_000 });
+      return r.status !== 0 || interactiveCodex(r.stdout);
+    });
+    if (wsl && options.provider !== 'claude') {
+      const auth = syncWslCodexAuth({ homeDir: home, spawnImpl, log });
+      if (auth.action === 'synced') {
+        state.codexAuthChangedAt = now(); atomic(stateFile, state);
+        log('Codex account changed; new authenticated session log required');
+      }
+    }
+    const currentWindows = async () => (await windows()).filter(w => w.provider !== 'codex' || !state.codexAuthChangedAt || w.observedAt > state.codexAuthChangedAt);
+    const observed = await currentWindows();
+    const decisions = decideSweep({ windows: observed, now: now(), ...options }).filter(d => (options.provider === 'all' || options.provider === d.provider) && canRunWindow(state, d));
+    if (!decisions.length) log('skip: no eligible reset window');
+    for (const decision of decisions) {
+      if (await active(decision.provider)) { log(`skip: interactive ${decision.provider}`); continue; }
+      await runSweep(decision, { ...io, leadMinutes: options.leadMinutes, minRemainingPercent: options.minRemainingPercent, home, state, save: () => atomic(stateFile, state), windows: currentWindows, active, log, env, now, spawnImpl, wsl });
+    }
+    return emit({ decision: decisions, state });
+  } finally { release(); }
+}
+if (isEntry(import.meta.url)) main().catch(error => { console.error(error.message); process.exitCode = 1; });

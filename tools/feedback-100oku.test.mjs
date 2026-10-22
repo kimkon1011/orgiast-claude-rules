@@ -34,7 +34,7 @@ test('buildReport は集計・A最大10件・異常列挙・1900字制限に対�
 
 test('ヘルスチェックはokを除外しngをstable keyで生成、disabledなら呼ばない', async () => {
   let calls = 0;
-  const fetchImpl = async (url) => { calls += 1; return { ok: url.includes('ok'), status: url.includes('ok') ? 200 : 503 }; };
+  const fetchImpl = async (url) => { calls += 1; return { ok: url.includes('ok'), status: url.includes('ok') ? 200 : 404 }; };
   const first = await checkHealthUrls(['https://ok.test/a', 'https://bad.test/health'], { fetchImpl, now: () => new Date('2026-09-19T00:00:00Z') });
   const second = await checkHealthUrls(['https://bad.test/health'], { fetchImpl });
   assert.equal(first.items.length, 1);
@@ -42,6 +42,94 @@ test('ヘルスチェックはokを除外しngをstable keyで生成、disabled�
   assert.equal(first.items[0].source, 'auto-health');
   await checkHealthUrls(['https://never.test'], { fetchImpl, disabled: true });
   assert.equal(calls, 3);
+});
+
+test('ヘルスチェックの一時タイムアウトは再試行で回復し異常を作らない', async () => {
+  let calls = 0; let cancelled = 0;
+  const delays = [];
+  const result = await checkHealthUrls(['https://gas.test/exec'], {
+    fetchImpl: async (_url, { signal }) => {
+      assert.ok(signal instanceof AbortSignal);
+      if (++calls < 3) throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+      return { ok: true, status: 200, body: { cancel: async () => { cancelled += 1; } } };
+    },
+    sleep: async (ms) => delays.push(ms),
+  });
+  assert.equal(calls, 3);
+  assert.deepEqual(delays, [1000, 2000]);
+  assert.equal(cancelled, 1);
+  assert.equal(result.items.length, 0);
+  assert.deepEqual(result.results[0], { url: 'https://gas.test/exec', ok: true, status: 200, error: '' });
+});
+
+test('実際のabort signalで3回打ち切り、失敗URLを1件記録して後続へ進む', async () => {
+  let calls = 0;
+  // AbortSignal.timeout is unref'ed; keep the isolated test process alive.
+  const keepAlive = setInterval(() => {}, 1000);
+  try {
+    const result = await checkHealthUrls(['https://slow.test', 'https://ok.test'], {
+      timeoutMs: 5, sleep: async () => {},
+      fetchImpl: async (url, { signal }) => {
+        calls += 1;
+        if (url.includes('ok')) return { ok: true, status: 200 };
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+        });
+      },
+    });
+    assert.equal(calls, 4);
+    assert.equal(result.items.length, 1);
+    assert.equal(result.results[0].status, 0);
+    assert.match(result.results[0].error, /timeout/);
+    assert.equal(result.results[1].ok, true);
+  } finally { clearInterval(keepAlive); }
+});
+
+test('HTTP 503/429 は再試行し、404 は即座に異常として記録する', async () => {
+  const statuses = [503, 429, 200, 404];
+  const result = await checkHealthUrls(['https://busy.test', 'https://missing.test'], {
+    fetchImpl: async () => { const status = statuses.shift(); return { ok: status === 200, status }; },
+    sleep: async () => {},
+  });
+  assert.equal(statuses.length, 0);
+  assert.equal(result.results[0].ok, true);
+  assert.equal(result.items.length, 1);
+  assert.equal(result.results[1].error, 'HTTP 404');
+});
+
+test('LLMが終了しなくても上限時間で停止し未評価を台帳に書かない', async () => {
+  const child = new EventEmitter();
+  let killed;
+  child.kill = (signal) => { killed = signal; };
+  const ledger = { version: 1, items: {} };
+  await assert.rejects(evaluatePending(items, ledger, {
+    spawnImpl: () => child, timeoutMs: 5,
+  }), /llm-ask timeout after 5ms/);
+  assert.equal(killed, 'SIGKILL');
+  assert.deepEqual(ledger.items, {});
+});
+
+test('LLM失敗時も未評価の部分レポートを出し正常終了し、dry-runでは通知しない', async () => {
+  const output = []; const errors = [];
+  const code = await runMain({
+    args: ['--items-file', '/items.json', '--dry-run', '--json', '--no-health'],
+    io: {
+      read: (file) => file === '/items.json' ? JSON.stringify({ items }) : '',
+      write: () => {}, now: () => new Date(), stdout: (text) => output.push(text),
+      stderr: (text) => errors.push(text),
+    },
+    spawnImpl: () => {
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit('error', new Error('llm-ask timeout')));
+      return child;
+    },
+    notifyImpl: () => assert.fail('dry-run must not notify'),
+  });
+  assert.equal(code, 0);
+  assert.match(errors.join('\n'), /LLM評価失敗/);
+  const result = JSON.parse(output[0]);
+  assert.equal(result.sent, false);
+  assert.match(result.report, /未評価: 1件/);
 });
 
 function spawnResult(text, onCall) {

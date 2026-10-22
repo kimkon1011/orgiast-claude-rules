@@ -103,6 +103,14 @@ test('手渡しなし・進捗報告・修正完了は検出しない', () => {
     '修正が完了しました'
   ]) assert.deepEqual(detect(quote), [], quote);
 });
+test('太字ラベル直後の「特になし」はP3と誤検出しない', () => {
+  const excerpt = '**次に kim がすること:** 特になし（実装・テスト・check.py 実行まで完了）。';
+  assert.deepEqual(detect(excerpt), []);
+});
+test('太字ラベル直後の恒久修正の先送りは引き続きP3で検出する', () => {
+  const excerpt = '**次に kim がすること:** 自動修復の恒久化を次回に回す';
+  assert.equal(detect(excerpt)[0].pattern, 'P3');
+});
 test('先送りを名詞句で説明した自己言及はP1と誤検出しない', () => {
   for (const quote of [
     '**[本セッションの目的]** handoff-audit が検出した「恒久修正の先送り文」が再発していないかを実物で検証し、結果を記録する。',
@@ -130,6 +138,20 @@ test('括弧で閉じていても直後が検証・記録でなければP1で検
 test('委譲の完了待ちはW(待機)であって先送り(P1-P4)ではない', () => {
   const quote = 'Codex の2本の完了を待っています。';
   assert.deepEqual(detect(quote).map(found => found.pattern), ['W']);
+});
+test('実測の名詞化した待機・完了通知待ちをWとして検出する', () => {
+  for (const quote of [
+    '事故の記録を memory に残しました。修復の書き込みが終わるのを待っています（終わると知らせが届きます）。',
+    '今動いているのは2つで、どちらも終わると知らせが届きます。',
+    'memory への記録は済みました。Codex の実装（ゲート3本・ルール本文・テスト・PR 作成）が終わるのを待っています。終わったら差分…',
+    '書き込みを投入しました（42マス、終わったら5か所を読み戻します）。完了すると知らせが届くので、その時点で読み戻し結果を確認して報告します。'
+  ]) assert.deepEqual(detect(quote).map(found => found.pattern), ['W'], quote);
+});
+test('返信待ち・結果待ちはWと誤検出しない', () => {
+  for (const quote of [
+    'ご返信をお待ちしています。',
+    'サブエージェントの結果を待っています。'
+  ]) assert.deepEqual(detect(quote), [], quote);
 });
 test('handoff-audit TODO の引用内にある待機・修正語を再検出しない', () => {
   const todos = [

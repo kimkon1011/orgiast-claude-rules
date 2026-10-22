@@ -40,7 +40,7 @@ test('[完了 …] 形の印も完了として回転で落とす(2026-09-28実�
 });
 test('oversized pending queue remains reachable, cap is bytes not characters', () => {
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'rotate-')); const file=path.join(dir,'next-session.md');
- const source=block('2026-09-22',Array.from({length:150},(_,i)=>`${i+1}. TODO ${i} ${'日本語'.repeat(80)}`).join('\n'));
+ const source=block(new Date().toISOString().slice(0,10),Array.from({length:150},(_,i)=>`${i+1}. TODO ${i} ${'日本語'.repeat(80)}`).join('\n'));
  writeHandoff(file,source); const text=fs.readFileSync(file,'utf8'); assert.ok(Buffer.byteLength(text)<=MAX_BYTES);
  const ref=text.match(/\[継続キュー[^\]]*\]\(([^)]+)\)/)[1]; const pending=fs.readFileSync(path.join(dir,ref),'utf8');
  for(let i=0;i<150;i++)assert.ok(text.includes(`TODO ${i} `)||pending.includes(`TODO ${i} `));

@@ -23,7 +23,6 @@ $specs = @(
   [pscustomobject]@{ TaskName = 'OrgiastMorningBatch'; ScriptName = 'open-work.mjs'; ScriptArgs = @() },
   [pscustomobject]@{ TaskName = 'OrgiastMorningBatch'; ScriptName = 'next-actions.mjs'; ScriptArgs = @() },
   [pscustomobject]@{ TaskName = 'OrgiastMorningBatch'; ScriptName = 'nightly-health.mjs'; ScriptArgs = @() },
-  [pscustomobject]@{ TaskName = 'OrgiastMorningBatch'; ScriptName = 'nightly-health-remediate.mjs'; ScriptArgs = @() },
   [pscustomobject]@{ TaskName = 'OrgiastNightlyBatch'; ScriptName = 'ai-news-triage.mjs'; ScriptArgs = @('--confidence', 'high,medium', '--limit', '8') },
   [pscustomobject]@{ TaskName = 'OrgiastNightlyBatch'; ScriptName = 'pricing-brief.mjs'; ScriptArgs = @('--limit', '8') },
   [pscustomobject]@{ TaskName = 'OrgiastNightlyBatch'; ScriptName = 'drive-hub-mirror.mjs'; ScriptArgs = @() },
@@ -79,6 +78,22 @@ $addCount = 0
 $updateCount = 0
 $skipCount = 0
 $removeCount = 0
+
+# Converge old installations: remediation now has its own 90-minute task.
+$legacyPattern = '(?i)(^|[\\/" ])nightly-health-remediate\.mjs(?=[" ]|$)'
+$morning = $tasks['OrgiastMorningBatch']
+$kept = @($morning.Actions | Where-Object { [string]$_.Arguments -notmatch $legacyPattern })
+if ($kept.Count -ne @($morning.Actions).Count) {
+  if ($kept.Count -eq 0) { throw 'refusing to remove the last morning action' }
+  if (-not $DryRun) {
+    Set-ScheduledTask -TaskName 'OrgiastMorningBatch' -Action $kept -ErrorAction Stop | Out-Null
+    $tasks['OrgiastMorningBatch'] = Get-ScheduledTask -TaskName 'OrgiastMorningBatch' -ErrorAction Stop
+    if (@($tasks['OrgiastMorningBatch'].Actions | Where-Object { [string]$_.Arguments -match $legacyPattern }).Count) {
+      throw 'legacy remediation action remains after removal'
+    }
+  }
+  $updateCount++
+}
 
 foreach ($spec in $specs) {
   $task = $tasks[$spec.TaskName]

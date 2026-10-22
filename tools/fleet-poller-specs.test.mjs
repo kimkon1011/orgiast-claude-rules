@@ -95,3 +95,10 @@ test('register-fleet-mail.ps1 は FLEET_MAIL_WATCHDOG=1 のときだけ OrgiastF
   const unregisterBlock = source.slice(source.indexOf('$Unregister'), source.indexOf('exit 0'));
   assert.match(unregisterBlock, /OrgiastFleetMailWatchdog/);
 });
+
+test('両pollerは日次でClaude上限を--force送信する', () => {
+  assert.match(pollerSource, /plan-usage-report\.mjs'\), '--force'/);
+  assert.match(pollerPs1Source, /tools\\plan-usage-report\.mjs'\) '--force'/);
+  const daily = pollerSource.slice(pollerSource.indexOf('if (dueDaily && repo)'), pollerSource.indexOf('// B)'));
+  assert.match(daily, /if \(!dry\) \{\s+runFleetSheetReport\(\);\s+run\(process.execPath, \[path.join\(repo, 'tools', 'plan-usage-report\.mjs'\), '--force'\]\);\s+\}/);
+});

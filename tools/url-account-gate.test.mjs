@@ -114,14 +114,20 @@ test('CLI: 未指定なら stderr と exit 2', t => {
   assert.ok(result.stderr.includes(studio));
 });
 
-test('CLI: 明示・ループ防止・空本文は通過', t => {
-  for (const [text, input] of [[`${studio}${account}`, {}], [studio, { stop_hook_active: true }], ['', {}]]) {
+test('CLI: 明示・空本文は通過', t => {
+  for (const [text, input] of [[`${studio}${account}`, {}], ['', {}]]) {
     const result = invoke(t, text, { input });
     assert.ifError(result.error);
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stderr, '');
     assert.equal(result.stdout, '');
   }
+});
+
+test('新しい推奨形式と前行アカウント＋単独Markdownリンクを許可', () => {
+  assert.deepEqual(judge(`**kim の Google アカウント** で開く: [AI Studio](${studio})`).missing, []);
+  assert.deepEqual(judge(`**kim の Google アカウント** で開く\n[AI Studio](${studio})`).missing, []);
+  assert.match(formatReason([studio]), /\*\*<アカウント>\*\* で開く: \[表示名\]\(URL\)/);
 });
 
 test('runner に登録され、アカウント追記で当該理由が消える', t => {
@@ -190,4 +196,15 @@ test('内部 ID をアカウントと認めず、人が分かるメール/ラベ
     assert.deepEqual(judge(`${url}（**${label}** で開く）`).missing, [url]);
   }
   assert.match(formatReason([url]), /アカウントは人が分かるメール\/ラベルで書く/);
+});
+
+test('差し戻し文の書式は URL の直後に文字を続けない（2026-10-18 実害）', async () => {
+  const { findBrokenRawUrl } = await import('./url-format-guard.mjs');
+  const pr = 'https://github.com/kimkon1011/orgiast-claude-rules/pull/864';
+  const reason = formatReason([pr]);
+  assert.doesNotMatch(reason, /<URL>（/);
+  assert.match(reason, /次の行に URL だけを置く/);
+  const answer = `**kimkon1011** で開いてください。\n${pr}`;
+  assert.deepEqual(judge(answer).missing, []);
+  assert.equal(findBrokenRawUrl(answer).decision, 'pass');
 });

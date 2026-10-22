@@ -8,6 +8,10 @@ import { evaluateHandoffDetail } from './handoff-detail-guard.mjs';
 
 const repo = path.resolve('.');
 const hooks = [
+  'gmail-connector-url-gate.mjs',
+  'share-before-send-gate.mjs',
+  'playbook-inject.mjs',
+  'past-log-search-gate.mjs',
   'handoff-quality-gate.mjs',
   'handoff-investigation-gate.mjs',
   'negative-claim-gate.mjs',
@@ -20,6 +24,7 @@ const hooks = [
   'check-e2e-before-stop.mjs',
   'pipe-stage-permissions.mjs',
   'feedback-form-gate.mjs',
+  'handover-doc-gate.mjs',
 ];
 
 function run(name, input, home) {

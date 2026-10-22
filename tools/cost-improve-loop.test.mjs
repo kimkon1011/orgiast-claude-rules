@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  evaluateReceiptSignals,
   evaluateFleet,
   decideActions,
   sortViolationsBySeverity,
@@ -12,7 +13,7 @@ import {
   readLedgerCounts,
   atomicWrite,
   buildCombinedCodexSpec,
-  main,
+  main as mainImpl,
   ALLOWED_LOCAL_COMMANDS,
   parsePercent,
   parseJstOrIsoDate,
@@ -25,6 +26,8 @@ import {
   writeBudgetPressure,
   splitWhitelistedCommand
 } from './cost-improve-loop.mjs';
+
+const main = (args, io = {}) => mainImpl(args, { scanAiReceipts: async () => ({ errors: [] }), receiptLedgerAgeHours: () => 0, alertAiReceipts: async () => {}, ...io });
 
 test('残高シグナル3種の境界とauto-local効果は固定許可リストだけ', () => {
   const rows = [
@@ -435,7 +438,7 @@ test('16. failed DM notification is saved and prepended to the next report', asy
   };
   let notifyOptions;
   try {
-    const first = await main([], { ...inputs, notifyKim: async (_text, options) => {
+    const first = await main([], { ...inputs, runOriguchiReferralMonthly: async () => {}, notifyKim: async (_text, options) => {
       notifyOptions = options;
       return { delivered: 'none', reason: 'DM API timeout' };
     } });
@@ -649,7 +652,7 @@ test('30. executeLocalAction は許可リスト外を実行せず、許可内は
     });
     assert.equal(allowed.result, 'pending');
     assert.equal(calls.length, 1);
-    assert.equal(calls[0].program, 'node');
+    assert.equal(calls[0].program, process.execPath);
     assert.deepEqual(calls[0].args, ['tools/batch-enqueue.mjs', '--provider', 'groq', '--kind', 'eval-harness', 'eval-harness --all']);
     assert.equal(calls[0].opts.shell, false, 'シート由来文字列をシェルで解釈しない');
   } finally { cleanTempDir(tempDir); }
@@ -744,6 +747,10 @@ test('32. auto-codex 実行は共有ツリーへ reset/clean/checkout -b を投�
     const worktreeOnShared = calls.filter((c) => c.program === 'git' && c.args.includes('-C') && c.args[c.args.indexOf('-C') + 1] === repoRoot);
     for (const call of worktreeOnShared) assert.equal(call.args.includes('worktree'), true, '共有ツリーへの git は worktree のみ');
     assert.ok(calls.some((c) => c.program === 'gh' && c.args[0] === 'pr'), 'PR 作成が試みられる');
+    const nodeCalls = calls.filter(c => c.args.includes('--test') || c.args.some(a => String(a).endsWith('codex-do.mjs')));
+    assert.equal(nodeCalls.length, 2);
+    for (const call of nodeCalls) { assert.equal(call.program, process.execPath); assert.notEqual(call.options.shell, true); }
+
   } finally { delete process.env.ORGIAST_HOME; cleanTempDir(tempDir); }
 });
 
@@ -903,7 +910,7 @@ test('日次ループは残高専用DMへ取得済みデータを渡し、通知
   const previousHome = process.env.ORGIAST_HOME;
   process.env.ORGIAST_HOME = home;
   const balances = [{ provider: 'kimi', balanceUsd: 0, autoTopUp: false, status: 'low', todaySpendUsd: 0, avg7dSpendUsd: 0 }];
-  let calls = 0;
+  let calls = 0, referralCalls = 0;
   const inputs = {
     now: NOW, localState: {}, readLedger: () => ({ codex: 1 }),
     fetchFleetSheetRows: async () => [{ pcName: 'PC-ok', reportedAt: '2026-09-06 11:00:00', delegRatio: '60%', claudeUsd: '1' }],
@@ -915,7 +922,7 @@ test('日次ループは残高専用DMへ取得済みデータを渡し、通知
       assert.equal(options.now, NOW);
       throw new Error('mock notification failure');
     },
-    notifyKim: async () => ({ delivered: 'dm' }),
+    runOriguchiReferralMonthly: async () => { referralCalls++; throw new Error('mock referral failure'); }, notifyKim: async () => ({ delivered: 'dm' }),
     sendHeartbeat: async () => {}, shouldSendMonthlyReport: async () => false,
   };
   try {
@@ -924,9 +931,81 @@ test('日次ループは残高専用DMへ取得済みデータを渡し、通知
     await main(['--dry-run'], inputs);
     await main(['--no-notify'], inputs);
     assert.equal(calls, 1);
+    assert.equal(referralCalls, 1);
   } finally {
     if (previousHome === undefined) delete process.env.ORGIAST_HOME;
     else process.env.ORGIAST_HOME = previousHome;
     cleanTempDir(home);
+  }
+});
+
+test('receipt collection and notification are isolated and honor dry-run/no-notify', async () => {
+  const home = createTempDir(), previousHome = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  const scanCalls = [], alertCalls = [];
+  let failScan = false;
+  const receipt = { report: '領収書テストレポート', alerts: [] };
+  const inputs = {
+    now: NOW, localState: {}, readLedger: () => ({ codex: 1 }),
+    fetchFleetSheetRows: async () => [{ pcName: 'PC-ok', reportedAt: '2026-09-06 11:00:00', delegRatio: '60%', claudeUsd: '1' }],
+    collectBudgetStatus: async () => ({ budgetPacePct: 0 }), collectClaudeStats: () => ({ headlessClaudeOut: 0 }),
+    collectProviderHealth: () => [], countCodexLimitDetections: () => 0, evalLatestAgeDays: () => 0,
+    collectProviderBalances: async () => [], alertProviderBalances: async () => {},
+    scanAiReceipts: async options => {
+      scanCalls.push(options);
+      if (failScan) throw new Error('scan unavailable'); return receipt;
+    },
+    alertAiReceipts: async (result, options) => {
+      alertCalls.push({ result, options });
+      throw new Error('notification unavailable');
+    },
+    runOriguchiReferralMonthly: async () => {}, notifyKim: async () => ({ delivered: 'dm' }),
+    sendHeartbeat: async () => {}, shouldSendMonthlyReport: async () => false,
+  };
+  try {
+    const first = await main([], inputs);
+    assert.equal(first.ok, true);
+    assert.match(first.reportText, /領収書テストレポート/);
+    assert.equal((await main(['--dry-run'], inputs)).ok, true);
+    assert.equal((await main(['--no-notify'], inputs)).ok, true);
+    failScan = true;
+    const failed = await main([], inputs);
+    assert.equal(failed.ok, true);
+    assert.match(failed.reportText, /領収書\(全アカウント Gmail\): スキャン失敗（未計測）/);
+    assert.ok(failed.evaluation.violations.some(v => v.provider === 'receipts'));
+    assert.equal((await main([], { ...inputs, noNotify: true })).ok, true);
+    assert.deepEqual(scanCalls.map(o => o.appendLedger), [true, false, true, true, true]);
+    for (const options of scanCalls) {
+      assert.equal(options.home, home); assert.equal(options.days, 3); assert.equal(options.now, NOW);
+    }
+    assert.equal(alertCalls.length, 2);
+    assert.equal(alertCalls[0].result, receipt); assert.equal(alertCalls[1].result, null);
+    for (const { options } of alertCalls) {
+      assert.equal(options.notify, inputs.notifyKim); assert.equal(options.home, home); assert.equal(options.now, NOW);
+    }
+  } finally {
+    if (previousHome === undefined) delete process.env.ORGIAST_HOME; else process.env.ORGIAST_HOME = previousHome;
+    cleanTempDir(home);
+  }
+});
+
+
+test('receipt signals: null is one trusted measurement violation', () => {
+  const violations = evaluateReceiptSignals(null);
+  assert.equal(violations.length, 1);
+  assert.deepEqual(violations[0], { kind: 'measurement_untrusted', pc: 'self', severity: 'error', provider: 'receipts', evidence: '領収書スキャン: 取得失敗（設定・台帳・認証・接続を確認）', trusted: true });
+});
+test('receipt signals: two account errors produce one violation naming both', () => {
+  const violations = evaluateReceiptSignals({ errors: [{ account: 'a@example.com', reason: '取得失敗' }, { account: 'b@example.com', reason: '取得上限100件' }] });
+  assert.equal(violations.length, 1);
+  assert.match(violations[0].evidence, /a@example.com.*b@example.com/);
+});
+test('receipt signals: success is clean; stale boundary and missing ledger are detected', () => {
+  assert.deepEqual(evaluateReceiptSignals({ errors: [] }), []);
+  assert.deepEqual(evaluateReceiptSignals({ errors: [] }, { ageHours: 36 }), []);
+  for (const ageHours of [36.1, Infinity]) {
+    const violations = evaluateReceiptSignals({ errors: [] }, { ageHours });
+    assert.equal(violations.length, 1);
+    assert.match(violations[0].evidence, /領収書台帳が .*h 更新されていない/);
   }
 });

@@ -5,12 +5,13 @@ import path from 'node:path';
 import { latestAssistantText } from './lib/assistant-text.mjs';
 import { readLastLines } from './transcript-tail.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
+import { appendStopLedger, registerStopViolation, stopGateOutput } from './lib/stop-recheck.mjs';
 
 const stdin = await readStdinWithTimeout();
 try {
   if (!stdin.trim()) process.exit(0);
   const data = JSON.parse(stdin);
-  if (data.stop_hook_active || !data.transcript_path || !fs.existsSync(data.transcript_path)) process.exit(0);
+  if (!data.transcript_path || !fs.existsSync(data.transcript_path)) process.exit(0);
   const lines = readLastLines(data.transcript_path, 4000, 8 * 1024 * 1024);
   const assistantText = latestAssistantText(data.transcript_path);
   let codeEdited = false, editedName = '', testRun = false;
@@ -33,6 +34,8 @@ try {
   if (!/(完了|できました|直しました|修正しました|実装しました|反映しました|デプロイ|deployed|push(しました|済)|fixに|バグ.*修正|動くように)/.test(assistantText)) process.exit(0);
   if (codeEdited && !testRun) {
     const reason = `[VERIFY-BEFORE-DONE] コード(${editedName} 等)を変更して「完了」と報告していますが、この直近ターンに"実際に実行してテストした痕跡"が見当たりません(§1.18/§1.4)。\n\n出す前に必ず実行して確認してください:\n  - スクリプト: 実際に走らせて出力を目視(文字化け・構文エラー・二重実行/重複送信・空出力が無いか)\n  - 型/ビルド: tsc --noEmit / ParseFile 等\n  - 送信・DB系: read-back で結果確認\n  - Codexに実装させた場合も、Claude側で実行テストして結果を見て直すまでが1タスク\n\nテスト済みなら応答に [TESTED] を、テスト不要な軽微変更(typo/コメント等)なら [NO-TEST-OK] を(理由付きで)含めれば通ります。`;
-    console.log(JSON.stringify({ decision: 'block', reason }));
+    const recheck = registerStopViolation({ input: data, assistantText, blockedBy: ['verify-before-done-detector'], reasonCodes: ['VERIFY-BEFORE-DONE'] });
+    appendStopLedger({ sessionId: recheck.sessionId, verdict: recheck.verdict, blockedBy: recheck.blockedBy, reasonCodes: recheck.reasonCodes, retryCap: recheck.retryCap, excerpt: assistantText.slice(0, 200) });
+    console.log(JSON.stringify(stopGateOutput(recheck, reason)));
   }
 } catch {}

@@ -1,4 +1,4 @@
-// フォールバック backend の健康状態を記録し、直近でタイムアウトした backend を
+// フォールバック backend の健康状態を記録し、直近でタイムアウトまたはポリシー拒否で停滞した backend を
 // 一定時間だけチェーンから外す。600 秒を毎回捨ててから死んでいる2番手に落ちる
 // 浪費（delegation-health-check の fallback_chain_timeout の元）を止めるのが目的。
 // 状態は homeDir/.claude/fallback-backend-history.jsonl に1行 JSON で追記する。
@@ -45,8 +45,8 @@ export function readFallbackBackendHistory(homeDir) {
 }
 
 // backend ごとに「最後に記録された outcome」だけを見る。
-// それが 'timeout' で、かつ now - t < cooldownMs なら冷却中とみなして Set に入れる。
-// timeout 以外（ok 等）が最後なら冷却しない＝復帰させる。
+// それが 'timeout' または 'blocked' で、かつ now - t < cooldownMs なら冷却中とみなして Set に入れる。
+// timeout/blocked 以外（ok 等）が最後なら冷却しない＝復帰させる。
 export function coolingBackendNames(homeDir, { now = Date.now(), cooldownMs = FALLBACK_BACKEND_COOLDOWN_MS } = {}) {
   const last = new Map();
   for (const row of readFallbackBackendHistory(homeDir)) {
@@ -59,7 +59,7 @@ export function coolingBackendNames(homeDir, { now = Date.now(), cooldownMs = FA
   }
   const cooling = new Set();
   for (const [name, entry] of last) {
-    if (entry.outcome === 'timeout' && now - entry.t < cooldownMs) cooling.add(name);
+    if ((entry.outcome === 'timeout' || entry.outcome === 'blocked') && now - entry.t < cooldownMs) cooling.add(name);
   }
   return cooling;
 }

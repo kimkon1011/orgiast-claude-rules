@@ -44,15 +44,32 @@ test('mode=block で Codex クールダウン中でも Gemini があれば deny 
   }));
   const output = spawnSync(process.execPath, [script], { input: JSON.stringify(edit), encoding: 'utf8', env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, ORGIAST_HOME: home } }).stdout;
   assert.match(output, /permissionDecision.*deny/);
-  assert.match(output, /自動フォールバック/);
+  assert.match(output, /内蔵フォールバック/);
 });
 
-test('mode=block で Codex とフォールバックが使えなければ deny しない', () => {
+test('mode=block で Codex とフォールバックが使えなくても deny する', () => {
   const home = homeWithMode();
   fs.writeFileSync(path.join(home, '.claude', 'provider-cooldown.json'), JSON.stringify({
     codex: { until: Date.now() + 60 * 60_000, reason: 'usage_limit_no_fallback', at: Date.now() },
   }));
   const output = run(edit, home).stdout;
-  assert.doesNotMatch(output, /permissionDecision.*deny/);
-  assert.match(output, /フォールバック\(Gemini 無料枠\)も利用できない/);
+  assert.match(output, /permissionDecision.*deny/);
+  assert.match(output, /全滅なら実装を止め/);
+});
+
+test('warn/override cannot bypass; only current session approval can', () => {
+  const home = homeWithMode('warn');
+  fs.writeFileSync(path.join(home, '.claude/cost-enforce-override'), '1');
+  assert.match(run(edit, home).stdout, /permissionDecision.*deny/);
+  fs.writeFileSync(path.join(home, '.claude/claude-impl-allow.json'), JSON.stringify({ sessionId: 's', until: new Date(Date.now() + 3500000).toISOString(), marker: '[CLAUDE-IMPL-OK]' }));
+  assert.match(run({ ...edit, session_id: 's' }, home).stdout, /additionalContext/);
+  assert.match(run({ ...edit, session_id: 'other' }, home).stdout, /permissionDecision.*deny/);
+});
+test('small edits and excluded paths still pass', () => {
+  const home = homeWithMode();
+  for (const file_path of ['/project/tools/x.js', '/project/docs/x.js', '/project/tests/x.js', 'C:\\project\\.claude\\x.js', '/project/x.md']) assert.equal(run({ ...edit, tool_input: { file_path } }, home).stdout, '');
+  for (const size of [400, 401]) {
+    const r = run({ tool_name: 'Edit', tool_input: { file_path: '/project/src/x.js', new_string: 'x'.repeat(size) } }, home);
+    if (size === 400) assert.equal(r.stdout, ''); else assert.match(r.stdout, /permissionDecision.*deny/);
+  }
 });

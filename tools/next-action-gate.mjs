@@ -3,6 +3,7 @@ export const GATE_CONTRACT = {"name": "next-action-gate", "remedies": [{"kind": 
 import { isEntry } from './is-entry.mjs';
 import { readTranscriptContext } from './lib/assistant-text.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
+import { currentTurnEntries, blocks } from './state-claim-evidence.mjs';
 
 export const MIN_ENFORCED_LENGTH = 200;
 const FOOTER_PATTERN = /(?:^|\n)次に kim がすること:[ \t]*([^\r\n]*)\r?\n(?:[ \t]*\r?\n)?この後の自動進行:[ \t]*([^\r\n]*)\r?\n(?:[ \t]*\r?\n)?このセッション:[ \t]*([^\r\n]*)$/;
@@ -13,6 +14,9 @@ const COMPLETE_PATTERN = /^なし\s*[（(]\s*完了\s*[）)]$/;
 const DEFERRAL_PATTERN = /(恒久策|恒久化|恒久的|次セッション|次回セッション|後日|先送り)/;
 const IMPLEMENTATION_PATTERN = /(実装|修正|改修|修復|作り直)/;
 const DELIVERY_PATTERN = /着地|マージ|\bPR\b|push|ブランチ|main に/;
+const NO_ACTION_PATTERN = /^(?:なし|無し|ありません|不要|返信不要)(?:[。．.]?[ \t]*$|[ \t]*[（(][^\r\n]*[）)][。．.]?[ \t]*$)/;
+const WAREHOUSE_PATTERN = /倉庫|棚|箱に入れ|セットに入れ|同梱|運ぶ|積む|持ち出し|格納|移動/;
+const PERMANENT_FIX_REASON = '人に作業を残すなら、今後その作業が人に来ないようにする策（自動化／担当者への依頼経路／ルール・ゲート・memory 化）をこのターンで実装し、`恒久策:` 行に実装物を書く。初回だけの作業なら `恒久策: 一回限り: <理由>`。';
 const DEFERRAL_REASON = '[NEXT-ACTION-DEFERRAL] 「次に kim がすること」に恒久修正の先送り（実装・修正・恒久化・次セッション対応）が書かれています。同じ文面は夜間監査 permanent-fix-deferral-scan が P3 として検出します（2026-10-14〜10-15 に 6 件）。kim に渡してよいのは「人が一度だけ実行できる具体的手順」だけです。自分で潰せるものはこのターン内に実装して着地させ、実行不能なら実行したコマンドと終了コードを本文に記録したうえで、移せる経路（例: Codex が生きている受信PCへの fleet-mail --exec codex 便）へ流してください。どうしても人にしかできない物理操作のときだけ、先送り語（恒久策・次セッション等）を使わず具体的な1手順だけを書いてください。';
 // kim が毎回同じ文で判断できるよう、表記ゆれを許さない完全一致の定型文にする（2026-09-25 kim 指示）。
 // 「閉じてよい」だけでは /session-close をこれからするのか、済んだので消してよいのかが分からない
@@ -40,6 +44,36 @@ export function footerValues(text) {
 
 export function hasRequiredFooter(text) {
   return footerValues(text) !== null;
+}
+
+function hasWarehouseDispatch(transcriptRaw) {
+  return blocks(currentTurnEntries(transcriptRaw), 'tool_use').some(tool => {
+    if (/^mcp__claude_ai_Discord__(?:send_dm|send_message)$/.test(tool.name || '')) return true;
+    if (tool.name !== 'Bash') return false;
+    const command = String(tool.input?.command || '');
+    // ファイル名への言及・dry-run は依頼送信の実行に数えない。
+    return /(?:^|[;\n&|])\s*node\s+["']?(?:[^\s"']*[\\/])?discord-dm\.mjs["']?\s+\S/.test(command)
+      && !/--(?:dry-run|help)\b/.test(command);
+  });
+}
+
+function permanentFixViolation(text, transcriptRaw) {
+  const prose = text.replace(/```[^\n]*\n[\s\S]*?```|~~~[^\n]*\n[\s\S]*?~~~/g, '').replace(/^[ \t]*>.*$/gm, '');
+  const actions = [...prose.matchAll(/^[ \t]*(?:[-*][ \t]+)?(?:\*\*)?次に\s*kim\s*がすること(?:\*\*)?[ \t]*[:：][ \t]*(.*)$/gm)]
+    .map(([, value]) => value.replace(/\*\*/g, '').trim()).filter(value => value && !NO_ACTION_PATTERN.test(value));
+  if (!actions.length) return null;
+  const override = [...prose.matchAll(/\[PERMANENT-FIX-OK:[ \t]*([^\]\r\n]*)\]/g)].some(([, reason]) => [...reason.trim()].length >= 10);
+  const fixes = [...prose.matchAll(/^[ \t]*恒久策[:：][ \t]*([^\r\n]*)/gm)].map(([, value]) => value.trim());
+  const concrete = /[\p{L}\p{N}_./-]+\.(?:mjs|cjs|js|ts|py|ps1|sh|md|json|ya?ml)\b|\bPR\s*#?\d+\b|\/pull\/\d+|\bmcp__\w+|\b(?:node|gh|npm|git)\s+\S+|[^\s。、]+(?:さん|担当|チーム)(?:へ|に)|(?:送信先|ツール名)[:：]\s*\S+/u;
+  const implemented = /(?:実装|設定|追加|登録|作成|送信|依頼|導入|修正)(?:済み?|した(?!い)|しました)|(?:自動実行|自動化)(?:に)?(?:した(?!い)|しました)/;
+  const pending = /検討|予定|未実装|未設定|未送信|未追加|してい(?:ない|ません)|でき(?:ない|ません)|済み?では(?:ない|ありません)/;
+  if (!override && !fixes.some(fix => /^一回限り[:：][ \t]*\S/.test(fix) || (concrete.test(fix) && implemented.test(fix) && !pending.test(fix)))) {
+    return { decision: 'block', code: 'PERMANENT-FIX-REQUIRED', reason: PERMANENT_FIX_REASON };
+  }
+  if (actions.some(action => WAREHOUSE_PATTERN.test(action)) && !hasWarehouseDispatch(transcriptRaw)) {
+    return { decision: 'block', code: 'WAREHOUSE-DISPATCH-REQUIRED', reason: '倉庫の物理作業は倉庫担当へ Claude が依頼する（`node tools/discord-dm.mjs <倉庫担当> --body-file <本文>`）。依頼済みなら「倉庫担当へ依頼済み」と書き、次に kim がすることから外す。' };
+  }
+  return null;
 }
 
 function reportsSessionClose(text) {
@@ -89,12 +123,13 @@ export function reportsCloseSteps(text) {
 export function judgeNextAction(text, transcriptRaw = '') {
   const source = String(text || '').trimEnd();
   if (!enabled()) return { decision: 'pass', reason: 'disabled' };
-  if (/[?？]$/.test(source)) return { decision: 'pass', reason: 'question' };
-  if (reportsCloseSteps(source)) return { decision: 'pass', reason: 'close-steps' };
+  const permanentFix = permanentFixViolation(source, transcriptRaw);
+  if (/[?？]$/.test(source)) return permanentFix || { decision: 'pass', reason: 'question' };
+  if (reportsCloseSteps(source)) return permanentFix || { decision: 'pass', reason: 'close-steps' };
 
   const footer = footerValues(source);
   // フッターを書いた短文も定型文を検査する（短文素通しで『閉じてOKです』が通った 2026-10-09 実害）。
-  if (!footer && source.length < MIN_ENFORCED_LENGTH) return { decision: 'pass', reason: 'short-response' };
+  if (!footer && source.length < MIN_ENFORCED_LENGTH) return permanentFix || { decision: 'pass', reason: 'short-response' };
   if (!footer) {
     return {
       decision: 'block',
@@ -135,7 +170,7 @@ export function judgeNextAction(text, transcriptRaw = '') {
   if (footer.nextAction !== 'なし' && (DEFERRAL_PATTERN.test(footer.nextAction) || (IMPLEMENTATION_PATTERN.test(footer.nextAction) && DELIVERY_PATTERN.test(body)))) {
     return { decision: 'block', code: 'NEXT-ACTION-DEFERRAL', reason: DEFERRAL_REASON };
   }
-  return { decision: 'pass', reason: 'valid-footer' };
+  return permanentFix || { decision: 'pass', reason: 'valid-footer' };
 }
 
 async function main() {

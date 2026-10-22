@@ -5,6 +5,9 @@
     "DESKTOP-2D0R4LI"
   ],
   "gates": {
+    "share-before-send-gate": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-10-17T00:00:00Z", "denyAfter": "2026-10-24T00:00:00Z" },
+    "gmail-connector-url-gate": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-10-18T00:00:00Z", "denyAfter": "2026-10-25T00:00:00Z" },
+    "api-billing-guard": { "rollout": "deny", "immediatePolicy": "2026-10-17 kim 厳命: 従量課金停止", "distributedAt": "2026-10-17T00:00:00Z" },
     "askuser-selfcheck-gate": {
       "rollout": "deny",
       "legacy": true
@@ -33,6 +36,12 @@
     "feedback-form-gate": {
       "rollout": "deny",
       "legacy": true
+    },
+    "handover-doc-gate": {
+      "rollout": "deny",
+      "distributedAt": "2026-10-22T00:00:00Z",
+      "denyAfter": "2026-10-29T00:00:00Z",
+      "pilotDeny": true
     },
     "gh-handoff-gate": {
       "rollout": "deny",
@@ -70,6 +79,11 @@
     "handoff-regret-gate": {
       "rollout": "deny",
       "legacy": true
+    },
+    "hooks/discord-invite-permission-gate": {
+      "rollout": "deny",
+      "distributedAt": "2026-10-17T00:00:00Z",
+      "denyAfter": "2026-10-24T00:00:00Z"
     },
     "internal-recipient-gmail-guard": {
       "rollout": "deny",
@@ -172,6 +186,24 @@
     "verify-before-done-detector": {
       "rollout": "deny",
       "legacy": true
+    },
+    "side-effect-left-gate": {
+      "rollout": "deny",
+      "distributedAt": "2026-10-17T00:00:00Z",
+      "denyAfter": "2026-10-24T00:00:00Z",
+      "pilotDeny": true
+    },
+    "deferral-wait-gate": {
+      "rollout": "deny",
+      "distributedAt": "2026-10-20T00:00:00Z",
+      "denyAfter": "2026-10-27T00:00:00Z",
+      "pilotDeny": true
+    },
+    "past-log-search-gate": {
+      "rollout": "deny",
+      "distributedAt": "2026-10-17T00:00:00Z",
+      "denyAfter": "2026-10-24T00:00:00Z",
+      "pilotDeny": true
     }
   },
   "pilotHostsEvidence": "fleet-pc-map.json: kim-PC.hostname (2026-08-27 recorded observation)"

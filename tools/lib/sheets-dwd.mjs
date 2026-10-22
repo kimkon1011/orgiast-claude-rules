@@ -24,6 +24,7 @@ export function createSheetsClient({ fetchImpl = fetch, getToken = getDriveToken
   const metadata = (id) => request(id, '?fields=spreadsheetId,spreadsheetUrl,sheets(properties)');
   const get = async (id, range) => (await request(id, `/values/${encodeURIComponent(range)}?valueRenderOption=UNFORMATTED_VALUE`)).values ?? [];
   const append = (id, range, rows) => request(id, `/values/${encodeURIComponent(range)}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, 'POST', { range, majorDimension: 'ROWS', values: rows });
+  const update = (id, range, rows) => request(id, `/values/${encodeURIComponent(range)}?valueInputOption=RAW`, 'PUT', { range, majorDimension: 'ROWS', values: rows });
   async function ensure(id, title, header) {
     const meta = await metadata(id);
     let tab = meta.sheets?.find((s) => s.properties.title === title)?.properties;
@@ -46,7 +47,7 @@ export function createSheetsClient({ fetchImpl = fetch, getToken = getDriveToken
     else if (JSON.stringify(existing[0]) !== JSON.stringify(header)) throw new Error('Output tab header mismatch; no rows changed');
     return tab;
   }
-  return { metadata, get, append, ensure };
+  return { metadata, get, append, update, ensure };
 }
 const client = createSheetsClient();
 export const sheetsMetadata = client.metadata;

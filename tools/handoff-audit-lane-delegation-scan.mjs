@@ -128,16 +128,45 @@ export function selftest() {
   return { total: CONTROLS.length, passed: CONTROLS.length - failures.length, failures };
 }
 
+/** tool_result ではない、本物の user プロンプトか。 */
+function isRealUserPrompt(rec) {
+  if (rec?.type !== 'user') return false;
+  const c = rec?.message?.content;
+  if (typeof c === 'string') return true;
+  return Array.isArray(c)
+    && c.some((b) => b?.type === 'text')
+    && !c.some((b) => b?.type === 'tool_result');
+}
+
+/** hit 後、同じ user-turn 内で codex-do の前景実行が完了したか。 */
+function completedCodexDoInTurn(records, hitIndex) {
+  const end = records.findIndex((rec, i) => i > hitIndex && isRealUserPrompt(rec));
+  const limit = end < 0 ? records.length : end;
+  let toolUseSeen = false;
+  for (let i = hitIndex; i < limit; i++) {
+    const rec = records[i];
+    const c = rec?.message?.content;
+    if (rec?.type === 'assistant' && Array.isArray(c)) {
+      if (c.some((b) => b?.type === 'tool_use'
+        && b?.name === 'Bash'
+        && /codex-do\.mjs/.test(String(b?.input?.command || '')))) toolUseSeen = true;
+    }
+    if (toolUseSeen && rec?.type === 'user' && Array.isArray(c)
+      && c.some((b) => b?.type === 'tool_result')) return true;
+  }
+  return false;
+}
+
 /** 台帳(`handoff-audit-ledger.jsonl`)と transcript(`projects/**`)を走査する。 */
 export function scan({ home = os.homedir(), since = Date.now(), readFile = fs.readFileSync, stat = fs.statSync, readdir = fs.readdirSync, roots = ['projects'] } = {}) {
   const rows = [];
-  const push = (src, ts, id, text) => {
+  const push = (src, ts, id, text, inTurn = false) => {
     if (!(Date.parse(ts) >= since)) return; // turn の時刻で窓を判定（ファイル mtime の混入を防ぐ）
     const raw = String(text || '');
     // 改行を潰す前に判定する（バナー除去が行単位のため。潰した後では行末が拾えない）。
     if (!detect(raw)) return;
     const t = stripBanners(raw).replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
-    rows.push({ src, ts, id, match: firstMatch(raw).replace(/\s+/g, ' ').slice(0, 200), text: t.slice(0, 320) });
+    rows.push({ src, ts, id, match: firstMatch(raw).replace(/\s+/g, ' ').slice(0, 200), text: t.slice(0, 320), inTurn });
   };
 
   const ledgerFile = path.join(home, '.claude', 'handoff-audit-ledger.jsonl');
@@ -164,10 +193,15 @@ export function scan({ home = os.homedir(), since = Date.now(), readFile = fs.re
       let st; try { st = stat(p); } catch { continue; }
       if (st.mtimeMs < since) continue;
       filesScanned++;
+      const records = [];
       for (const line of String(readFile(p, 'utf8')).split(/\r?\n/)) {
         if (!line.trim()) continue;
         let rec; try { rec = JSON.parse(line); } catch { continue; }
         if (rec.isSidechain) continue;
+        records.push(rec);
+      }
+      for (let recordIndex = 0; recordIndex < records.length; recordIndex++) {
+        const rec = records[recordIndex];
         const role = rec?.message?.role || rec?.type;
         if (role && role !== 'assistant') continue; // 報告する側＝assistant のみ
         turnsScanned++;
@@ -175,12 +209,21 @@ export function scan({ home = os.homedir(), since = Date.now(), readFile = fs.re
         const text = typeof c === 'string' ? c : Array.isArray(c)
           ? c.filter((b) => b?.type === 'text').map((b) => b.text).join('\n') : '';
         if (!text) continue;
-        push('transcript', rec.timestamp || new Date(st.mtimeMs).toISOString(), path.basename(p, '.jsonl').slice(0, 8), text);
+        push('transcript', rec.timestamp || new Date(st.mtimeMs).toISOString(), path.basename(p, '.jsonl').slice(0, 8), text,
+          completedCodexDoInTurn(records, recordIndex));
       }
     }
   };
   for (const r of roots) walk(path.join(home, '.claude', r));
-  return { since: new Date(since).toISOString(), ledger: { total: ledgerTotal, scanned: ledgerScanned }, transcript: { files, filesScanned, turnsScanned }, hits: rows.length, rows };
+  return {
+    since: new Date(since).toISOString(),
+    ledger: { total: ledgerTotal, scanned: ledgerScanned },
+    transcript: { files, filesScanned, turnsScanned },
+    hits: rows.length,
+    recurrences: rows.filter((r) => !r.inTurn).length,
+    inTurnHits: rows.filter((r) => r.inTurn).length,
+    rows,
+  };
 }
 
 function main() {

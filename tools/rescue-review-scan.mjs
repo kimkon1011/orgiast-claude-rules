@@ -7,12 +7,18 @@ import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
+// spawnSync の既定 maxBuffer(1MB)を超える差分でも ENOBUFS で分類を落とさないための上限。
+// 実測: origin の sync-orgiast-main-* は origin/main との three-dot 差分が約 90MB。
+// 枝は順次処理するのでピークは1枝分に収まる。
+const MAX_GIT_STDOUT_BYTES = 256 * 1024 * 1024;
+
 // git の既定実装。dir で git を実行し stdout を返す。失敗時は例外を投げる。
 function defaultGit(dir, args) {
   const result = spawnSync('git', ['-C', dir, ...args], {
     encoding: 'utf8',
     windowsHide: true,
     timeout: 120000,
+    maxBuffer: MAX_GIT_STDOUT_BYTES,
   });
   if (result.error) throw result.error;
   if (result.status !== 0) {
@@ -39,6 +45,27 @@ function sumNumstat(text) {
     if (/^\d+$/.test(d)) deleted += Number(d);
   }
   return { files, added, deleted };
+}
+
+// 差分の全ファイルが main 側の .gitignore 対象なら、その一覧を返す。
+// check-ignore は一致なしを exit 1 で返すため、失敗時は判定不能として null にする。
+function ignoredOnlyFiles({ git, dir, main, branch }) {
+  let names;
+  let ignored;
+  try {
+    names = git(dir, ['diff', '--name-only', `${main}...${branch}`])
+      .split(/\r?\n/)
+      .map(name => name.trim())
+      .filter(Boolean);
+    if (names.length === 0) return null;
+    ignored = new Set(git(dir, ['check-ignore', '--', ...names])
+      .split(/\r?\n/)
+      .map(name => name.trim())
+      .filter(Boolean));
+  } catch {
+    return null;
+  }
+  return names.every(name => ignored.has(name)) ? { names } : null;
 }
 
 // rescue ブランチ名を昇順で列挙する。
@@ -148,6 +175,7 @@ export function scanRescueBranches({
   main = 'origin/main',
   includeRemote = false,
   compareRefs = ['refs/heads/', 'refs/remotes/origin/'],
+  ignoreCheck = true,
   git = defaultGit,
 } = {}) {
   const dir = repo || '.';
@@ -194,6 +222,13 @@ export function scanRescueBranches({
       results.push({ branch, files, added, deleted, fingerprint, status: 'covered', reason: 'already-upstream' });
       continue;
     }
+    if (ignoreCheck) {
+      const ignored = ignoredOnlyFiles({ git, dir, main, branch });
+      if (ignored) {
+        results.push({ branch, files, added, deleted, fingerprint, status: 'ignored-only', ignoredFiles: ignored.names });
+        continue;
+      }
+    }
     if (firstByFingerprint.has(fingerprint)) {
       results.push({ branch, files, added, deleted, fingerprint, status: 'duplicate', duplicateOf: firstByFingerprint.get(fingerprint) });
       continue;
@@ -212,10 +247,11 @@ export function scanRescueBranches({
 }
 
 function summarize(branches) {
-  const summary = { unique: 0, duplicate: 0, covered: 0, coveredByBranch: 0, coveredInMain: 0, error: 0, total: branches.length };
+  const summary = { unique: 0, duplicate: 0, covered: 0, coveredByBranch: 0, coveredInMain: 0, error: 0, ignoredOnly: 0, total: branches.length };
   for (const b of branches) {
     if (b.status === 'covered-in-main') summary.coveredInMain += 1;
     else if (b.status === 'covered-by-branch') summary.coveredByBranch += 1;
+    else if (b.status === 'ignored-only') summary.ignoredOnly += 1;
     else if (Object.prototype.hasOwnProperty.call(summary, b.status)) summary[b.status] += 1;
   }
   return summary;
@@ -228,6 +264,7 @@ function parseArgs(argv) {
     includeRemote: false,
     json: false,
     compareRefs: ['refs/heads/', 'refs/remotes/origin/'],
+    ignoreCheck: true,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
@@ -236,6 +273,7 @@ function parseArgs(argv) {
     else if (a === '--include-remote') opts.includeRemote = true;
     else if (a === '--compare-refs') opts.compareRefs.push(argv[i + 1]);
     else if (a === '--no-compare-refs') opts.compareRefs = [];
+    else if (a === '--no-ignore-check') opts.ignoreCheck = false;
     else if (a === '--json') opts.json = true;
   }
   return opts;
@@ -245,6 +283,7 @@ function formatLine(b) {
   const base = `${b.status}\t${b.branch}\t${b.files}\t${b.added}+/${b.deleted}-`;
   if (b.status === 'duplicate' && b.duplicateOf) return `${base}\t(duplicate of ${b.duplicateOf})`;
   if (b.status === 'covered-by-branch' && b.coveredBy) return `${base}\t(covered by ${b.coveredBy})`;
+  if (b.status === 'ignored-only') return `${base}\t(all ${b.ignoredFiles.length} file(s) gitignored)`;
   if (b.status === 'covered-in-main') {
     const c = b.coveredInMain;
     return `${base}\t(added ${c.addedInMain}/${c.addedLines} in main, deleted ${c.deletedStillInMain}/${c.deletedLines} still in main)`;
@@ -262,6 +301,7 @@ function run(argv) {
       main: opts.main,
       includeRemote: opts.includeRemote,
       compareRefs: opts.compareRefs,
+      ignoreCheck: opts.ignoreCheck,
     });
   } catch (err) {
     process.stderr.write(`rescue-review-scan: ${err && err.message ? err.message : err}\n`);
@@ -273,7 +313,7 @@ function run(argv) {
     return;
   }
   const lines = [
-    `unique: ${summary.unique} / duplicate: ${summary.duplicate} / covered: ${summary.covered} / covered-by-branch: ${summary.coveredByBranch} / covered-in-main: ${summary.coveredInMain} / error: ${summary.error}`,
+    `unique: ${summary.unique} / duplicate: ${summary.duplicate} / covered: ${summary.covered} / covered-by-branch: ${summary.coveredByBranch} / covered-in-main: ${summary.coveredInMain} / error: ${summary.error} / ignored-only: ${summary.ignoredOnly}`,
   ];
   for (const b of branches) lines.push(formatLine(b));
   process.stdout.write(`${lines.join('\n')}\n`);

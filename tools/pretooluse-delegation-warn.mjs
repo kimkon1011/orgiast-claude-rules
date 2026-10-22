@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 export const GATE_CONTRACT = {"name": "pretooluse-delegation-warn", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "pretooluse-delegation-warn"}, {"kind": "keyserve-key", "ref": "deepseek.env#DEEPSEEK_API_KEY"}]};
-import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { codexHardBlockBypass } from './codex-cooldown.mjs';
+import { implApproved, IMPLEMENTATION_DENIAL } from './lib/claude-approval.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 
 const raw = await readStdinWithTimeout();
@@ -19,27 +18,12 @@ try {
   if (exclude.some((x) => lower.includes(x))) process.exit(0);
   const codeExt = ['.ts','.tsx','.js','.jsx','.mjs','.cjs','.py','.go','.rs','.java','.gs','.vue','.svelte','.php','.rb','.cs','.kt','.swift','.ps1'];
   if (!codeExt.includes(path.extname(lower))) process.exit(0);
-  const name = path.basename(fp);
   const home = process.env.ORGIAST_HOME || os.homedir();
-  let mode = 'warn';
-  try { mode = String(JSON.parse(fs.readFileSync(path.join(home, '.claude', 'cost-enforce.json'), 'utf8')).mode); } catch {}
-  const override = fs.existsSync(path.join(home, '.claude', 'cost-enforce-override'));
   const substantial = tool === 'Write' || tool === 'MultiEdit' || (tool === 'Edit' && String(j.tool_input?.new_string || '').length > 400);
-  if (mode === 'block' && substantial && !override) {
-    const cooldown = codexHardBlockBypass();
-    if (cooldown.bypass) {
-      const resetAt = new Date(cooldown.until);
-      const reset = `${String(resetAt.getHours()).padStart(2, '0')}:${String(resetAt.getMinutes()).padStart(2, '0')}`;
-      const msg = `⚠️ Codex が使用上限中（復帰見込み ${reset}）で、フォールバック(Gemini 無料枠)も利用できないため、委譲ハードブロック(§1.18)を一時解除しました。直接編集を許可します。`;
-      console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: msg } }));
-    } else {
-      const reset = cooldown.until > Date.now() ? new Date(cooldown.until).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', hour12: false }) : '';
-      const fallback = reset ? ` Codex は使用上限中（復帰見込み ${reset}）ですが、\`tools/codex-do.mjs\` は Gemini 無料枠へ自動フォールバックするので、そのまま委譲してください（Claude で直接実装しないこと）。` : '';
-      const deny = `🔒 委譲ハードブロック(§1.18): 直近1週間、安いAIへの委譲率が改善しなかったため、アプリ実装コード(${name})のまとまった直接編集を停止します。この実装は Codex(定額枠 \`codex exec\`)へ委譲し、結果を verify してください。${fallback}どうしても直接編集が必要なら ~/.claude/cost-enforce-override ファイルを作成(または委譲率を上げれば自動解除)。`;
-      console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: deny } }));
-    }
-  } else {
-    const msg = `⚠️ 委譲規律(§1.18): これはアプリ実装コード(${name})の直接編集です。監督(main loop)は大きな実装を手打ちせず、原則 Codex(定額枠)へ委譲してください。ごく短い修正(数行/typo/import)なら続行可。まとまった実装なら、この編集を止めて \`codex exec\` に投げ、結果を verify する方が安く速く正確です。`;
-    console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: msg } }));
-  }
+  if (!substantial) process.exit(0);
+  const approval = implApproved(home, j.session_id);
+  const result = approval
+    ? { additionalContext: `user 承認 [CLAUDE-IMPL-OK] により許可（期限 ${approval.until}）` }
+    : { permissionDecision: 'deny', permissionDecisionReason: `🔒 委譲ハードブロック(§1.18): Claude 単独実装は禁止。${IMPLEMENTATION_DENIAL}` };
+  console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', ...result } }));
 } catch {}

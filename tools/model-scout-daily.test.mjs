@@ -65,6 +65,7 @@ test('全滅候補は2回で打ち切り、3度目のevalと恒久的な日次�
   const logFile = () => fs.readFileSync(path.join(f.dir, 'logs', 'model-scout.log'), 'utf8');
   assert.equal((await runDailyScout(opts('2026-10-15T18:00:00Z'))).ok, false); // 1回目の全滅は翌日へ繰越
   assert.match(logFile(), /未評価候補を次回へ繰越/);
+  assert.match(logFile(), /未評価候補が残ったため未完了/);
   assert.equal((await runDailyScout(opts('2026-10-16T18:00:00Z'))).ok, true); // 2回目の全滅で打ち切り、当日で完了
   assert.match(logFile(), /評価打ち切り（計測不能2回）/);
   assert.equal((await runDailyScout(opts('2026-10-17T18:00:00Z'))).evaluated, 0); // 3日目は再試行しない

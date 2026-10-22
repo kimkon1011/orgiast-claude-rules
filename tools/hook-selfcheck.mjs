@@ -9,9 +9,17 @@ import { isEntry } from './is-entry.mjs';
 import { deploySkills } from './onboarding-sync.mjs';
 
 export const REQUIRED_HOOKS = [
+  ['UserPromptSubmit', 'plan-usage-report.mjs'],
+  ['SessionStart', 'api-billing-guard.mjs'],
+  ['UserPromptSubmit', 'api-billing-guard.mjs'],
+  ['PreToolUse', 'api-billing-guard.mjs'],
+  ['UserPromptSubmit', 'claude-impl-approval.mjs'],
+  ['PreToolUse', 'pretooluse-lane-guard.mjs'],
+  ['PreToolUse', 'pretooluse-delegation-warn.mjs'],
   ['PreToolUse', 'pretooluse-bash-delegation.mjs'],
   ['PreToolUse', 'pretooluse-codex-invocation.mjs'],
   ['PreToolUse', 'model-agent-guard.mjs'],
+  ['PreToolUse', 'handover-doc-gate.mjs'],
   ['UserPromptSubmit', 'cost-routing-gate.mjs'],
   ['UserPromptSubmit', 'expensive-session-guard.mjs'],
   ['UserPromptSubmit', 'session-purpose-gate.mjs'],

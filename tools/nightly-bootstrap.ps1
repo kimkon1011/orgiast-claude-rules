@@ -49,7 +49,7 @@ function Send-NightlyHeartbeat([string]$StartedAt, [bool]$Ok, [string]$Summary) 
         if (-not [string]::IsNullOrEmpty($StartedAt)) { $heartbeatArgs += @('--startedAt', $StartedAt) }
         $heartbeatArgs += @('--finishedAt', (Get-Date -Format 'o'), '--ok', $okText, '--cycleMinutes', '1440')
         if (-not [string]::IsNullOrEmpty($Summary)) { $heartbeatArgs += @('--summary', $Summary) }
-        & node $heartbeatScript @heartbeatArgs 2>$null | Out-Null
+        & $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) $heartbeatScript @heartbeatArgs 2>$null | Out-Null
     } catch { }
 }
 
@@ -74,7 +74,7 @@ function Test-NightlyTreeClean([string]$Tree) {
     try {
         $helper = Join-Path $PSScriptRoot 'nightly-rescue.mjs'
         if (-not (Test-Path -LiteralPath $helper)) { $helper = Join-Path $Tree 'tools\nightly-rescue.mjs' }
-        $resultText = & node $helper $Tree $HOME
+        $resultText = & $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) $helper $Tree $HOME
         if ($LASTEXITCODE -ne 0) { throw 'rescue helper failed; tree preserved' }
         $result = $resultText | ConvertFrom-Json
         foreach ($entry in $result.events) { Write-NightlyLog $entry.step $entry.message }
@@ -178,7 +178,7 @@ try {
                         if (Test-NightlyTreeClean $repo) {
                             $excludesHelper = Join-Path $PSScriptRoot 'nightly-rescue.mjs'
                             if (-not (Test-Path -LiteralPath $excludesHelper)) { $excludesHelper = Join-Path $repo 'tools\nightly-rescue.mjs' }
-                            $excludesJson = & node $excludesHelper --clean-excludes
+                            $excludesJson = & $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) $excludesHelper --clean-excludes
                             if ($LASTEXITCODE -ne 0) { throw 'clean exclusions unavailable; tree preserved' }
                             $cleanArgs = @('clean', '-qfd')
                             foreach ($excluded in ($excludesJson | ConvertFrom-Json)) { $cleanArgs += @('-e', $excluded) }
@@ -318,7 +318,7 @@ try {
         $heartbeatScript = Join-Path $repo 'tools\lib\heartbeat.mjs'
         if (-not (Test-Path -LiteralPath $heartbeatScript -PathType Leaf)) { $heartbeatScript = Join-Path $HOME '.claude\tools\lib\heartbeat.mjs' }
         if (Test-Path -LiteralPath $heartbeatScript -PathType Leaf) {
-            & node $heartbeatScript --job nightly-bootstrap --startedAt $nightlyStartedAt 2>$null | Out-Null
+            & $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) $heartbeatScript --job nightly-bootstrap --startedAt $nightlyStartedAt 2>$null | Out-Null
         }
     } catch { }
 

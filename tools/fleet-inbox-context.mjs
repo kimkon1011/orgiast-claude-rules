@@ -17,6 +17,7 @@ export const ENTRY_LIMIT = 240;
 export const CONTEXT_LIMIT = 1800;
 export const CATEGORY_LIMITS = Object.freeze([3, 3, 3, 2]);
 export const FOOTER = 'node tools/fleet-mail.mjs --inbox --unseen';
+export const MACHINE_REPORT = /\[(?:lane-health|rule-compliance)\]/;
 export function isHeadless(env = process.env) {
   return env.CLAUDE_HEADLESS === '1' || !!String(env.ORGIAST_HEADLESS_JOB || '').trim();
 }
@@ -25,7 +26,8 @@ export function selectContext(messages, { headless = isHeadless(), sessionId = '
   const active = messages.filter(m => (m.status === 'failed' && m.kind === 'prompt' && !(now - Date.parse(m.failedAt) > 72 * 60 * 60 * 1000) || !TERMINAL_STATUSES.includes(m.status)) && !expired.includes(m));
   if (!active.length && !expired.length) return { context: '', shown: [] };
   // 全カテゴリで上限を適用する前に新着順に並べ、古い依頼に新着が埋もれるのを防ぐ。
-  const eligible = active.filter(m => !(headless && hasDecisionRequest(m)) && !(sessionId && m.presentedSession === sessionId))
+  // 機械レポート（レーン健全性・ルール遵守率）は集計側(fleet-mail-watchdog / fleet-chase)が読む。セッションには出さない。
+  const eligible = active.filter(m => !(headless && hasDecisionRequest(m)) && !(sessionId && m.presentedSession === sessionId) && !MACHINE_REPORT.test(m.why || ''))
     .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')) || String(a.id).localeCompare(String(b.id)));
   // §5: 別セッションでは done まで再提示（seen/presentedAt だけでは隠さない）。
   const failed = eligible.filter(m => m.status === 'failed' && m.kind === 'prompt').slice(0, 3);
@@ -34,7 +36,7 @@ export function selectContext(messages, { headless = isHeadless(), sessionId = '
   const notice = headless && active.some(hasDecisionRequest) ? 'ヘッドレスの判断依頼は除外。kim の判断を代行せず返信しない。\n'
     : groups[0].length ? '判断依頼は kim に確認して回答する。設定変更は converge 化が必要と送信元へ返す。\n' : '';
   const instructions = '回答・返信不要は返信しない。返信: --reply <id> --body-file <file> / 完了: --ack <id>\n';
-  const footer = count => `他 ${count} 件（期限切れ ${expired.length} 件は除外）: ${FOOTER}`;
+  const footer = count => `他 ${count} 件（期限切れ ${expired.length} 件は fleet-chase が追跡中（node tools/fleet-chase.mjs --status））: ${FOOTER}`;
   let context = header + notice + instructions;
   const shown = [];
   for (const mail of [...failed, ...groups.flat()]) {

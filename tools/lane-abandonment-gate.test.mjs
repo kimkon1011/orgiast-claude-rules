@@ -76,6 +76,17 @@ test('修復不可は空でない試行が必須',t=>{
 });
 test('LANE-FALLBACK だけでは免除しない',t=>assert.equal(evaluate(t,failure,{text:'[LANE-FALLBACK] 全滅'}).decision,'block'));
 test('失敗シグナルなしは従来どおり pass',t=>assert.equal(evaluate(t,[use('Edit',{file_path:'a.js'})]).decision,'pass'));
+// handoff-audit:e524c1f72f058577（2026-10-20T00:37:39Z / bdbf73fd）の型。
+// レーンの待機が期限切れになったことを理由に本体で実装を続ける文は、失敗シグナルが無くても block する。
+test('レーン待機の期限切れを理由に本体で実装を続ける文は block',t=>{
+  const r=evaluate(t,[use('Read',{file_path:'a.md'})],{text:'Codex の終了を待つ見張りが期限切れになったので、ここからは本体で実装を続けます。'});
+  assert.equal(r.decision,'block');assert.equal(r.code,'LANE-ABANDON');assert.match(r.reason,/codex-do\.mjs/);
+});
+test('期限切れの通知だけで本体作業が無い文は pass（原文の再発にしない）',t=>assert.equal(evaluate(t,[use('Read',{file_path:'a.md'})],{text:'今届いたのは、Codex の終了を待つために仕掛けていた見張りが期限切れになったという自動通知で、kim さんからの返信ではありません。Codex はその前に終わっていて、結果も確認済みなので、この通知では何もしません。'}).decision,'pass'));
+test('期限切れ後に再委譲する文は pass',t=>assert.equal(evaluate(t,[use('Read',{file_path:'a.md'})],{text:'Codex の待機がタイムアウトしたので、node tools/codex-do.mjs を前景で実行し直して完了まで見届けます。'}).decision,'pass'));
+test('期限切れ後の監督作業（テスト実行）は pass',t=>assert.equal(evaluate(t,[use('Read',{file_path:'a.md'})],{text:'Codex の待機がタイムアウトしたので、自分でテストを実行します。'}).decision,'pass'));
+test('Sonnet セッションは対象外',t=>assert.equal(evaluate(t,[use('Read',{file_path:'a.md'})],{model:'claude-sonnet-5',text:'Codex の待機がタイムアウトしたので、本体で実装を続けます。'}).decision,'pass'));
+test('全レーン停止の [LANE-FALLBACK] 明記は免除する',t=>assert.equal(evaluate(t,[use('Read',{file_path:'a.md'})],{text:'[LANE-FALLBACK] codex の待機がタイムアウトし全レーン停止。本体で実装を続けます。'}).decision,'pass'));
 test('LANE-ABANDON を優先し修理報告の要求を追記する',t=>{
   const r=evaluate(t,[...failure,use('Edit',{file_path:'a.js'})]);assert.equal(r.code,'LANE-ABANDON');assert.match(r.reason,/LANE-REPAIR/);
 });

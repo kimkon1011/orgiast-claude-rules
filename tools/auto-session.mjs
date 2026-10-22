@@ -8,6 +8,8 @@ import { isEntry } from './is-entry.mjs';
 import { DEFAULT_REPO_MAP, parseRepoMap } from './feedback-to-issues.mjs';
 import { ledgerRows, runTaskLedger } from './task-ledger.mjs';
 import { alternateCheapProvider, autoSessionExecutor, buildClaudeHeadlessArgs, buildCheapCodeArgs, claudeFallbackEnabled, recordFallbackToClaude, recordSkippedNoExecutor } from './auto-session-executor.mjs';
+import { findClaudeInVersionedDir, sanitizeClaudeSupervisorEnv } from './claude-exe.mjs';
+import { sweepFile as sweepRescueTodoFile } from './rescue-todo-sweep.mjs';
 
 export { autoSessionExecutor } from './auto-session-executor.mjs';
 
@@ -382,9 +384,27 @@ function compareVersion(a, b) {
   return 0;
 }
 
-export function resolveClaudeExe(entries = extensionExecutables(), claudeCli = process.env.CLAUDE_CLI) {
+// デスクトップ版の通常インストール先(%APPDATA%\Claude\claude-code\<版>\<ハッシュ>\claude.exe)。
+// VSCode 拡張しか見ていなかったため、デスクトップ版しか無い機体では 'claude' に落ちて
+// PATH の claude.cmd を掴み、shell 無し spawn で ENOENT になっていた(2026-10-17 実測)。
+function installedClaudeExe(env = process.env) {
+  const appData = env.APPDATA || (env.USERPROFILE ? path.join(env.USERPROFILE, 'AppData', 'Roaming') : '');
+  if (!appData) return '';
+  return findClaudeInVersionedDir(path.join(appData, 'Claude', 'claude-code'), {
+    listDir: (dir) => { try { return fs.readdirSync(dir); } catch { return []; } },
+    exists: (file) => { try { return fs.statSync(file).isFile(); } catch { return false; } },
+  }) || '';
+}
+
+export function resolveClaudeExe(entries, claudeCli = process.env.CLAUDE_CLI) {
   if (claudeCli) return claudeCli;
-  const candidates = entries
+  // 明示的に entries を渡されたときは既存の並び替えだけを行う(テスト・呼び出し元の指定を尊重)。
+  if (entries === undefined) {
+    const installed = installedClaudeExe();
+    if (installed) return installed;
+    entries = extensionExecutables();
+  }
+  const candidates = (entries || [])
     .map((entry) => ({ entry, version: numericVersion(entry) }))
     .filter(({ version }) => version);
   candidates.sort((a, b) => compareVersion(b.version, a.version));
@@ -703,7 +723,10 @@ export function runChild(executable, prompt, repoCwd, historyCwd, timeoutMs, run
       let child;
       try { child = spawn(cheap ? process.execPath : executable, cheap
         ? buildCheapCodeArgs({ repoRoot: REPO_ROOT, provider: cheapProvider, promptFile, cwd: historyCwd })
-        : buildClaudeHeadlessArgs({ repoCwd, historyCwd, resumeSessionId: runOptions.resumeSessionId }), { detached: process.platform !== 'win32', cwd: historyCwd, env: { ...process.env, CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: cheap ? `auto-session:cheap-code:${cheapProvider}` : 'auto-session:fallback-claude' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }); }
+        : buildClaudeHeadlessArgs({ repoCwd, historyCwd, resumeSessionId: runOptions.resumeSessionId }), { detached: process.platform !== 'win32', cwd: historyCwd,
+        // cheap-code 側でも浄化するが、claude フォールバック(監督セッション)はここで
+        // デスクトップ由来の CLAUDECODE / CLAUDE_CODE_* / MCP_* を外しておく。
+        env: { ...sanitizeClaudeSupervisorEnv(process.env), CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: cheap ? `auto-session:cheap-code:${cheapProvider}` : 'auto-session:fallback-claude' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }); }
       catch (error) { finish(null, '', String(error?.message ?? error), true, fallback); return; }
     let stdout = '';
     let stderr = '';
@@ -1027,6 +1050,10 @@ export async function main(argv = process.argv.slice(2), io = {}) {
 
   const nextFile = path.join(claudeDir, 'next-session.md');
   if (!readOnly && fs.existsSync(nextFile) && fs.statSync(nextFile).size > MAX_BYTES) rotate(nextFile);
+  if (fs.existsSync(nextFile)) {
+    try { sweepRescueTodoFile(nextFile, { dryRun: readOnly }); }
+    catch (error) { console.error(`[rescue-todo-sweep] ${error?.message ?? error}`); }
+  }
   // フォーム報告は next-session.md と独立した入力源なので、片方が無くてももう片方を止めない。
   const parsed = fs.existsSync(nextFile) ? parseHandoff(fs.readFileSync(nextFile, 'utf8')) : { block: '', todos: [], todoBlocks: [], sections: {} };
   const feedbackIssues = await listIssues();

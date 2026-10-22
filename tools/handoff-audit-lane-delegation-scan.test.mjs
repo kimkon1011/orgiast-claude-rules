@@ -62,6 +62,9 @@ test('監査TODO文そのもの（自セッションのプロンプト）は再�
   assert.equal(r.ledger.scanned, 2);
   assert.equal(r.hits, 1, 'TODO文を除外し、本物の1件だけを数える');
   assert.equal(r.rows[0].id, 'bbbbbbbb');
+  assert.equal(r.rows[0].inTurn, false, 'ledger 由来は transcript の実行記録を持たない');
+  assert.equal(r.recurrences, 1);
+  assert.equal(r.inTurnHits, 0);
 });
 
 test('窓の外は数えない（窓の境界を実測値で固定する）', () => {
@@ -131,4 +134,59 @@ test('scan はバナー付き turn を FP 計上しない（改行を潰す前�
   const r = scan({ home, since: Date.now() - 86400_000 });
   assert.equal(r.transcript.turnsScanned, 1);
   assert.equal(r.hits, 0, 'バナーだけの turn は 0 件');
+});
+
+function scanInTurnCase(records) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-delegation-scan-'));
+  const proj = path.join(home, '.claude', 'projects', 'p');
+  fs.mkdirSync(proj, { recursive: true });
+  fs.writeFileSync(path.join(proj, 's.jsonl'), records.map((r) => JSON.stringify(r)).join('\n') + '\n');
+  return scan({ home, since: Date.now() - 86400_000 });
+}
+
+const hitAssistant = {
+  type: 'assistant',
+  message: { role: 'assistant', content: [{ type: 'text', text: 'CI の完了を待って作業を Codex に任せます。' }] },
+  timestamp: new Date().toISOString(),
+};
+const realUserPrompt = { type: 'user', message: { role: 'user', content: '次の依頼です。' } };
+
+test('同一 user-turn 内で codex-do の tool_use と tool_result があれば完了扱いにする', () => {
+  const r = scanInTurnCase([
+    hitAssistant,
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash', input: { command: 'node tools/codex-do.mjs task.md' } }] } },
+    { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', content: '完了' }] } },
+    realUserPrompt,
+  ]);
+  assert.equal(r.rows[0].inTurn, true);
+  assert.equal(r.recurrences, 0);
+  assert.equal(r.inTurnHits, 1);
+  assert.equal(r.hits, 1);
+});
+
+test('次の本物の user プロンプトまでに実行が無ければ再発扱いにする', () => {
+  const r = scanInTurnCase([hitAssistant, realUserPrompt]);
+  assert.equal(r.rows[0].inTurn, false);
+  assert.equal(r.recurrences, 1);
+});
+
+test('別 tool の tool_use と tool_result だけなら完了扱いにしない', () => {
+  const r = scanInTurnCase([
+    hitAssistant,
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash', input: { command: 'ls' } }] } },
+    { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', content: 'files' }] } },
+    realUserPrompt,
+  ]);
+  assert.equal(r.rows[0].inTurn, false);
+  assert.equal(r.recurrences, 1);
+});
+
+test('codex-do の tool_use 後に tool_result が無ければ完了扱いにしない', () => {
+  const r = scanInTurnCase([
+    hitAssistant,
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash', input: { command: 'node tools/codex-do.mjs task.md' } }] } },
+    realUserPrompt,
+  ]);
+  assert.equal(r.rows[0].inTurn, false);
+  assert.equal(r.recurrences, 1);
 });

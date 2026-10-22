@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { parseHandoff } from './auto-session.mjs';
-import { applyAutoHeal, collectFindings, emptyOutputReason, isCooldownSkippedRow, isQuotaLimitedRow, lowYieldBackends, parseRateLimitsFromText, readCodexUsedPercent, upsertFixTasks, windowResetsAfterLimit } from './delegation-health-check.mjs';
+import { applyAutoHeal, authRestoredAfter, collectFindings, dedupeLimitEvents, emptyOutputReason, isCooldownSkippedRow, isEmptyDiffEscalationRow, isQuotaLimitedRow, lowYieldBackends, metricFromLaterWindow, parseRateLimitsFromText, readCodexUsedPercent, timeoutWasteSummary, upsertFixTasks, windowResetsAfterLimit } from './delegation-health-check.mjs';
 
 const NOW = new Date('2026-09-09T12:00:00.000Z');
 const homes = [];
@@ -260,6 +260,62 @@ test('codex_auth_failed は high で next-session.md へ起票する', () => {
   assert.match(fs.readFileSync(path.join(dir, '.claude', 'next-session.md'), 'utf8'), /codex_auth_failed/);
 });
 
+test('Windows 側 auth.json が最後の auth 失敗より後に更新されていれば codex_auth_failed を出さない', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, status: 1, stderrTail: '401 Unauthorized: Missing bearer or basic authentication in header' }));
+  fs.mkdirSync(path.join(dir, '.codex'));
+  const authFile = path.join(dir, '.codex', 'auth.json');
+  fs.writeFileSync(authFile, '{"tokens":{"id_token":"x"}}');
+  fs.utimesSync(authFile, new Date('2026-09-09T11:00:00Z'), new Date('2026-09-09T11:00:00Z'));
+  assert.equal(collectFindings({ home: dir, now: NOW }).some((item) => item.id === 'codex_auth_failed'), false);
+});
+
+test('失敗より古い / トークン無し / 壊れた JSON / ファイル無し は従来どおり high で出る', () => {
+  const failure = { t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, status: 1, stderrTail: '401 Unauthorized: Missing bearer or basic authentication in header' };
+  for (const [name, contents, mtime] of [
+    ['古い', '{"tokens":{"id_token":"x"}}', '2026-09-09T09:00:00Z'],
+    ['トークン無し', '{"tokens":{}}', '2026-09-09T11:00:00Z'],
+    ['壊れた JSON', '{', '2026-09-09T11:00:00Z'],
+    ['ファイル無し', null, null],
+  ]) {
+    const dir = home();
+    write(dir, 'executor-usage.jsonl', row(failure));
+    if (contents !== null) {
+      fs.mkdirSync(path.join(dir, '.codex'));
+      const authFile = path.join(dir, '.codex', 'auth.json');
+      fs.writeFileSync(authFile, contents);
+      fs.utimesSync(authFile, new Date(mtime), new Date(mtime));
+    }
+    const finding = collectFindings({ home: dir, now: NOW }).find((item) => item.id === 'codex_auth_failed');
+    assert.equal(finding?.severity, 'high', name);
+  }
+});
+
+test('BOM 付き・access_token のみでも復旧扱い', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, status: 1, stderrTail: '401 Unauthorized: Missing bearer or basic authentication in header' }));
+  fs.mkdirSync(path.join(dir, '.codex'));
+  const authFile = path.join(dir, '.codex', 'auth.json');
+  fs.writeFileSync(authFile, '\uFEFF{"tokens":{"access_token":"x"}}');
+  fs.utimesSync(authFile, new Date('2026-09-09T11:00:00Z'), new Date('2026-09-09T11:00:00Z'));
+  assert.equal(collectFindings({ home: dir, now: NOW }).some((item) => item.id === 'codex_auth_failed'), false);
+});
+
+test('authRestoredAfter は有効な t が無ければ false、statImpl 注入で mtime を制御できる', () => {
+  assert.equal(authRestoredAfter('unused', [{ t: 'invalid' }], {
+    statImpl: () => ({ mtimeMs: Infinity }),
+    readFile: () => '{"tokens":{"id_token":"x"}}',
+  }), false);
+  assert.equal(authRestoredAfter('unused', [{ t: '2026-09-09T10:00:00Z' }], {
+    statImpl: () => ({ mtimeMs: Date.parse('2026-09-09T11:00:00Z') }),
+    readFile: () => '{"tokens":{"id_token":"x"}}',
+  }), true);
+  assert.equal(authRestoredAfter('unused', [{ t: '2026-09-09T10:00:00Z' }], {
+    statImpl: () => ({ mtimeMs: Date.parse('2026-09-09T09:00:00Z') }),
+    readFile: () => '{"tokens":{"id_token":"x"}}',
+  }), false);
+});
+
 test('認証失敗と本物の出力ゼロが混在しても codex_empty_output は本物だけを数える', () => {
   const dir = home();
   write(dir, 'executor-usage.jsonl',
@@ -487,6 +543,35 @@ test('同じ窓のまま低い使用率なら従来どおり偽陽性として�
   assert.match(findings[0].evidence.join('/'), /used_percent 67/);
 });
 
+// 2026-10-20T19:15Z の実測データ。本物の上限(primary:null / credits 0)だが until のパースが
+// 壊れて 2026-10-21T09:05Z になり、翌夜は 02:52Z 開始の 300 分窓の used_percent 8 を読んだ。
+test('2026-10-20 の実測: 後から始まった窓の低使用率を偽陽性の根拠にしない', () => {
+  const dir = home();
+  const now = new Date('2026-10-21T18:09:49.000Z');
+  write(dir, 'codex-limit-history.jsonl', [
+    { t: '2026-10-20T19:15:41.089Z', until: 1792573500000, reason: 'usage_limit' },
+    { t: '2026-10-20T19:24:44.528Z', until: 1792573500000, reason: 'usage_limit_no_fallback' },
+  ].map(row).join(''));
+  const findings = collectFindings({ home: dir, now, codexUsedPercent: { usedPercent: 8, windowMinutes: 300, resetsAt: 1792569159 } });
+  assert.equal(findings.some((item) => item.id === 'codex_false_usage_limit'), false);
+});
+
+test('metricFromLaterWindow: 短い窓が検出より後に始まった時だけ true', () => {
+  const rows = [{ t: '2026-10-20T19:15:41.000Z', until: 1792573500000 }];
+  assert.equal(metricFromLaterWindow(rows, { usedPercent: 8, windowMinutes: 300, resetsAt: 1792569159 }), true);
+  assert.equal(metricFromLaterWindow(rows, { usedPercent: 67, windowMinutes: 10080, resetsAt: 1791982428 }), false);
+  assert.equal(metricFromLaterWindow(rows, { usedPercent: 8, windowMinutes: 300, resetsAt: 1792530000 }), false);
+  assert.equal(metricFromLaterWindow(rows, { usedPercent: 8, windowMinutes: null, resetsAt: 1792569159 }), false);
+});
+
+test('dedupeLimitEvents: until が同じ usage_limit と usage_limit_no_fallback を1件に数える', () => {
+  assert.equal(dedupeLimitEvents([
+    { until: 1792573500000, reason: 'usage_limit' },
+    { until: 1792573500000, reason: 'usage_limit_no_fallback' },
+    { reason: 'usage_limit' },
+  ]).length, 2);
+});
+
 test('windowResetsAfterLimit: 窓が進んだ時だけ true、until 不明なら判定しない', () => {
   assert.equal(windowResetsAfterLimit([{ reason: 'usage_limit' }], { usedPercent: 1, resetsAt: 1794249388 }), false);
   assert.equal(windowResetsAfterLimit([{ reason: 'usage_limit' }], null), false);
@@ -698,6 +783,40 @@ test('上限/レート制限だけで全滅したレーンは lane_outage_unrepa
   assert.equal(limit.evidence[1], 'quota_limited(3件)');
 });
 
+// 2026-10-19 実測: fallback の「直近3件すべて失敗」は、gemini が応答を返した(chain outcome=ok)が
+// 作業ツリーを1行も変えなかった行だった。バックエンドは動いており、レーン障害ではない。
+// codex-do が付ける reason:'empty_diff' で識別し、high の未修理全滅として起票しない。
+test('fallback の空diff昇格行はレーン全滅ではなく low の可視化にする', () => {
+  const dir = home();
+  const emptyDiffRows = [
+    { t: '2026-09-09T09:00:00Z', provider: 'fallback', model: 'gemini-cli/gemini-3.7-flash', status: 'error', out: 623, reason: 'empty_diff', stderrTail: 'YOLO mode is enabled.', chain: [{ backend: 'gemini-cli', status: 0, out: 623, outcome: 'ok' }] },
+    { t: '2026-09-09T10:00:00Z', provider: 'fallback', model: 'gemini-cli/gemini-3.7-flash', status: 'error', out: 258, reason: 'empty_diff', stderrTail: 'Ripgrep is not available.', chain: [{ backend: 'gemini-cli', status: 0, out: 258, outcome: 'ok' }] },
+    { t: '2026-09-09T11:00:00Z', provider: 'fallback', model: 'gemini-cli/gemini-3.7-flash', status: 'error', out: 81, reason: 'empty_diff', chain: [{ backend: 'gemini-cli', status: 0, out: 81, outcome: 'ok' }] },
+  ];
+  write(dir, 'executor-usage.jsonl', emptyDiffRows.map(row).join(''));
+  const findings = collectFindings({ home: dir, now: NOW });
+  assert.equal(findings.some((f) => f.id === 'lane_outage_unrepaired'), false);
+  const visible = findings.find((f) => f.id === 'fallback_empty_diff_escalation');
+  assert.equal(visible.provider, 'fallback');
+  assert.equal(visible.severity, 'low');
+  assert.equal(visible.fixTask, undefined);
+  assert.equal(visible.evidence[0], '3件すべて空diff');
+});
+
+test('chain が ok でない fallback 失敗行は従来どおりレーン全滅として起票する', () => {
+  const dir = home();
+  const failed = [
+    { t: '2026-09-09T09:00:00Z', provider: 'fallback', status: 'error', out: 0, reason: 'empty_diff', chain: [{ backend: 'gemini-cli', status: 1, outcome: 'failed' }] },
+    { t: '2026-09-09T10:00:00Z', provider: 'fallback', status: 'error', out: 0, chain: [{ backend: 'gemini-cli', status: 1, outcome: 'failed' }] },
+    { t: '2026-09-09T11:00:00Z', provider: 'fallback', status: 'error', out: 0, chain: [{ backend: 'gemini-cli', status: 1, outcome: 'failed' }] },
+  ];
+  write(dir, 'executor-usage.jsonl', failed.map(row).join(''));
+  assert.equal(isEmptyDiffEscalationRow(failed[0]), false);
+  const outage = collectFindings({ home: dir, now: NOW }).find((f) => f.id === 'lane_outage_unrepaired');
+  assert.equal(outage.provider, 'fallback');
+  assert.equal(outage.severity, 'high');
+});
+
 test('上限行に 1 件でも上限以外の失敗が混ざれば従来どおり high の未修理全滅にする', () => {
   const dir = home();
   const mixed = [...GLM_LIMIT_ROWS.slice(0, 2), { t: '2026-09-09T10:25:13.050Z', provider: 'glm', out: 0, status: 'error' }];
@@ -831,4 +950,37 @@ test('低成果の chain 行だけでは fallback_low_yield を起票しない',
   ].map(row).join(''));
   const findings = collectFindings({ home: dir, now: NOW });
   assert.equal(findings.filter((f) => f.id === 'fallback_low_yield').length, 0);
+});
+
+test('#773 以降の timeout が上限を超えたら夜間に high で検出する', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', row({
+    t: '2026-10-18T10:08:59Z', provider: 'fallback', status: 'timeout', secs: 1800,
+    chain: [{ backend: 'gemini-cli', outcome: 'timeout', secs: 1500 }, { backend: 'cheap-code:deepseek', outcome: 'ok', secs: 300 }],
+  }));
+  const findings = collectFindings({ home: dir, now: new Date('2026-10-19T12:00:00Z'), codexUsedPercent: null });
+  const finding = findings.find((f) => f.id === 'timeout_waste_exceeds_cap');
+  assert.equal(finding?.severity, 'high');
+  assert.deepEqual(finding.evidence, ['1件', '最大試行 1500秒', '上限 900秒', '超過: gemini-cli フォールバック 1500秒/予算900秒']);
+});
+
+test('#773 以降の timeout が上限内なら timeout_waste_exceeds_cap を出さない', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', row({
+    t: '2026-10-19T17:34:53Z', provider: 'codex', status: 'timeout', secs: 600.502, exitCode: 124,
+  }));
+  const findings = collectFindings({ home: dir, now: new Date('2026-10-19T20:00:00Z'), codexUsedPercent: null });
+  assert.equal(findings.find((f) => f.id === 'timeout_waste_exceeds_cap'), undefined);
+});
+
+test('timeoutWasteSummary は上限内でも配備後の timeout を report に残す（再発時の効果判定用）', () => {
+  const summary = timeoutWasteSummary([
+    { t: '2026-10-18T10:08:59Z', provider: 'fallback', status: 'timeout', secs: 1800, chain: [{ backend: 'gemini-cli', outcome: 'timeout', secs: 900 }, { backend: 'cheap-code:deepseek', outcome: 'timeout', secs: 899 }] },
+    { t: '2026-10-19T17:34:53Z', provider: 'codex', status: 'timeout', secs: 600.502, exitCode: 124 },
+  ]);
+  assert.equal(summary.verdict, 'waste-within-cap');
+  assert.equal(summary.postDeployTimeoutRows, 2);
+  assert.equal(summary.overCapRows, 0);
+  assert.equal(summary.maxAttemptSecs, 900);
+  assert.equal(summary.lastPostDeployTimeoutAt, '2026-10-19T17:34:53.000Z');
 });

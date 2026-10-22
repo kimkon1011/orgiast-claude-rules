@@ -42,6 +42,15 @@ test('timeout の後に ok が記録されると冷却は解除される（最�
   assert.equal(cooling.has('x'), false);
 });
 
+test('blocked を記録した backend は冷却に入り、その後の ok で解除される', () => {
+  const home = tmpHome();
+  const now = 3_000_000;
+  recordFallbackBackendOutcome(home, { backend: 'gemini-cli', outcome: 'blocked', now });
+  assert.ok(coolingBackendNames(home, { now: now + 10 }).has('gemini-cli'));
+  recordFallbackBackendOutcome(home, { backend: 'gemini-cli', outcome: 'ok', now: now + 20 });
+  assert.equal(coolingBackendNames(home, { now: now + 30 }).has('gemini-cli'), false);
+});
+
 test('cooldownMs を過ぎた古い timeout は冷却しない', () => {
   const home = tmpHome();
   const now = 5_000_000;

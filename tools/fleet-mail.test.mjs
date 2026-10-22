@@ -722,3 +722,82 @@ test('send continues when the freshness lookup fails', async t => {
   assert.ok(f.errors.some(e => e.includes('最終 poll 不明')));
 });
 
+
+// Daily compliance runs synchronously only inside its separately launched worker.
+import { dailyRuleCompliance, pollOnce } from './fleet-mail.mjs'; // acquireLock はファイル先頭で import 済み
+import { COMPLIANCE_TIMEOUT } from './fleet-rule-compliance-daily.mjs';
+import { measuredRules, COMPLIANCE_DAYS, RULE_COMPLIANCE_TAG } from './lib/rule-compliance-mail.mjs';
+function complianceFixture(t, label = recipient) {
+  const f = fixture(t), probes = [];
+  const rule = measuredRules[0];
+  const audit = { results: { [rule.id]: { applicable: 10, violation: 8, examples: ['PRIVATE'] } },
+    enforcement: { [rule.id]: { mode: 'block' } } };
+  const options = { home: f.home, dir: f.dir, label, repo: path.resolve('.'), env: {}, acquireLock,
+    now: () => Date.parse('2026-10-18T03:00:00Z'), stderr: error => f.errors.push(error),
+    request: async (kind, payload) => { f.calls.push({ kind, payload }); return { ok: true }; },
+    spawnSyncImpl: (exe, args, opts) => {
+      probes.push({ exe, args, opts });
+      return { status: 0, stdout: exe === 'git' ? 'a'.repeat(40) : JSON.stringify(audit) };
+    } };
+  return { ...f, options, probes, rule };
+}
+test('dailyRuleCompliance sends once per day, expires in 72h, exposes persisted enforcement only', async t => {
+  const f = complianceFixture(t);
+  fs.writeFileSync(path.join(f.dir, 'rule-enforcement.json'), JSON.stringify({ [f.rule.id]: { mode: 'warn' } }));
+  assert.equal((await dailyRuleCompliance(f.options)).reported, true);
+  assert.equal((await dailyRuleCompliance(f.options)).skipped, 'today');
+  assert.equal(f.calls.length, 1);
+  const { kind, payload } = f.calls[0];
+  assert.equal(kind, 'mail-send'); assert.equal(payload.to, 'kim-PC'); assert.equal(payload.auto, true);
+  assert.ok(payload.why.includes(RULE_COMPLIANCE_TAG));
+  assert.equal(Date.parse(payload.expiresAt) - f.options.now(), 72 * 3600_000);
+  assert.equal(JSON.parse(payload.body).rules[f.rule.id].mode, 'warn');
+  assert.doesNotMatch(payload.body, /PRIVATE|examples/);
+  assert.deepEqual(f.probes[0].args.slice(-3), ['--days', String(COMPLIANCE_DAYS), '--json']);
+  assert.equal(f.probes[0].opts.timeout, COMPLIANCE_TIMEOUT);
+  assert.equal(f.probes[0].opts.env.ORGIAST_HOME, f.home);
+  await dailyRuleCompliance({ ...f.options, now: () => f.options.now() + 86400_000 });
+  assert.equal(f.calls.length, 2);
+});
+test('dailyRuleCompliance self writes JSON without mail and missing enforcement is off', async t => {
+  const f = complianceFixture(t, 'kim-PC');
+  await dailyRuleCompliance(f.options);
+  const saved = JSON.parse(fs.readFileSync(path.join(f.dir, 'rule-compliance-fleet-self.json'), 'utf8'));
+  assert.equal(saved.pc, 'kim-PC'); assert.equal(saved.rules[f.rule.id].mode, 'off');
+  assert.equal(f.calls.length, 0);
+});
+test('dailyRuleCompliance child failure and timeout are one-line errors; poll still completes', async t => {
+  const f = complianceFixture(t);
+  const result = await pollOnce({ ...f.deps, now: f.options.now,
+    dailyRuleCompliance: options => dailyRuleCompliance({ ...f.options, ...options, background: false,
+      spawnSyncImpl: () => ({ status: null, error: new Error('PRIVATE timeout') }) }) });
+  assert.deepEqual(result.received, []);
+  assert.equal(f.errors.length, 1); assert.doesNotMatch(f.errors[0], /PRIVATE|\n/);
+  assert.equal((await dailyRuleCompliance(f.options)).skipped, 'today');
+  assert.equal(fs.existsSync(path.join(f.dir, 'rule-compliance-fleet-self.json')), false);
+});
+test('dailyRuleCompliance disabled and background path never scans transcripts on poll', async t => {
+  const f = complianceFixture(t);
+  assert.equal((await dailyRuleCompliance({ ...f.options, env: { FLEET_NO_SELF_HEAL: '1' } })).skipped, 'disabled');
+  const launched = [];
+  await dailyRuleCompliance({ ...f.options, background: true,
+    spawnSyncImpl: () => assert.fail('poll must not audit'),
+    spawnImpl: (exe, args, opts) => { launched.push({ exe, args, opts }); return { on() {}, unref() {} }; } });
+  assert.equal(launched.length, 1);
+  assert.ok(launched[0].args[0].endsWith('fleet-rule-compliance-worker.mjs'));
+  assert.equal(launched[0].opts.env.ORGIAST_HOME, f.home);
+});
+test('real compliance worker entrypoint completes without circular-import deadlock and self-heal disabled does not write', async t => {
+  const { execFileSync } = await import('node:child_process');
+  const f = complianceFixture(t, 'kim-PC');
+  const worker = path.resolve('tools/fleet-rule-compliance-worker.mjs');
+  const env = { ...process.env, ORGIAST_HOME: f.home, ORGIAST_REPO: path.resolve('.'), FLEET_NO_SELF_HEAL: '1' };
+  execFileSync(process.execPath, [worker], { env, encoding: 'utf8', timeout: 10000 });
+  assert.equal(fs.existsSync(path.join(f.dir, '.fleet-rule-compliance-day')), false);
+  env.FLEET_NO_SELF_HEAL = '0';
+  execFileSync(process.execPath, [worker], { env, encoding: 'utf8', timeout: 15000 });
+  const saved = JSON.parse(fs.readFileSync(path.join(f.dir, 'rule-compliance-fleet-self.json'), 'utf8'));
+  assert.equal(saved.pc, 'kim-PC');
+  assert.ok(saved.rulesHead.length >= 40);
+  assert.equal(saved.rules[f.rule.id].applicable, 0);
+});

@@ -75,7 +75,7 @@ export function judge(text, { services = catalog } = {}) {
     const hasUnresolved = context.some(value => unresolvedFact.test(value));
     return !context.some(value =>
       email.test(value)
-      || (!hasUnresolved && /(?:で開く|アカウント)/.test(value) && /\*\*[^*\n]+\*\*/.test(value))
+      || (!hasUnresolved && /(?:で開く|で開いて|アカウント)/.test(value) && /\*\*[^*\n]+\*\*/.test(value))
       || (value.includes('open-url-as.ps1') && value.includes('-Account'))
     );
   }).map(({ url }) => url);
@@ -87,8 +87,13 @@ export function formatReason(urls, { services = catalog } = {}) {
     const provider = providerForHost(new URL(raw).hostname, services);
     return provider ? [provider.account ? 'カタログ上のアカウント: ' + provider.account : 'カタログ上のアカウント: 未確認。[ACCOUNT-UNKNOWN] <調べた場所> を URL と同じ行に書く'] : [];
   }))];
-  return accounts.join('\n') + '\nアカウントは人が分かるメール/ラベルで書く。\n' + '[URL-ACCOUNT] 次の URL に「どのアカウントで開くか」が書かれていません（ONBOARDING §1.5.0・kim 2026-10-04 厳命）。形式: <URL>（**<アカウント名>** で開く）。既定アカウントと違うなら「シークレットウィンドウで開く」も併記。本文の URL が全部同じアカウントなら「以下の URL はすべて **x@y** で開く」の1行でよい。Workspace は authuser=<開く人のメール> が必須（既存クエリには &authuser= を追加）。URL の同じ行か直前に「<同じメール> で開いてください」を書く。/a/orgiast.jp/ は不可。自分宛は環境の userEmail、他人宛は共有済みの相手メール。script.google.com/home/ 系は従来どおり除外。Workspace には離れた全体宣言は使えない。例外は [URL-ACCOUNT-OK]。\n' + urls.join('\n');
+  return accounts.join('\n') + '\nアカウントは人が分かるメール/ラベルで書く。\n' + '[URL-ACCOUNT] 次の URL に「どのアカウントで開くか」が書かれていません（ONBOARDING §1.5.0・kim 2026-10-04 厳命）。推奨形式: **<アカウント>** で開く: [表示名](URL)。生 URL を書くなら直前の行に「**<アカウント名>** で開いてください。」、次の行に URL だけを置く（URL の直後に括弧・句読点・全角文字を続けない。スマホでリンク範囲がずれて 404 になる・2026-10-18 実害）。既定アカウントと違うなら「シークレットウィンドウで開く」も併記。本文の URL が全部同じアカウントなら「以下の URL はすべて **x@y** で開く」の1行でよい。Workspace は authuser=<開く人のメール> が必須（既存クエリには &authuser= を追加）。URL の同じ行か直前に「<同じメール> で開いてください」を書く。前の行にアカウントを書き、次の行を Markdown リンク単独にする形も可。/a/orgiast.jp/ は不可。自分宛は環境の userEmail、他人宛は共有済みの相手メール。script.google.com/home/ 系は従来どおり除外。Workspace には離れた全体宣言は使えない。例外は [URL-ACCOUNT-OK]。\n' + urls.join('\n');
 }
+
+export const REMEDY_EXAMPLES = [
+  '**kim@orgiast.jp** で開く: [Google Drive](https://drive.google.com/drive/u/0/?authuser=kim%40orgiast.jp)',
+  '**kim の GitHub アカウント** で開く: [GitHub](https://github.com/org/repo)',
+];
 
 function main() {
   let input = '';

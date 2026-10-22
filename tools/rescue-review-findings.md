@@ -10,7 +10,121 @@ rescue 退避は「dirty な作業ツリーを保全する」仕組みなので�
 | `covered` | main に取り込み済み（枝自身の差分が空） |
 | `duplicate` | 他の rescue 枝と同じ変更 |
 | `covered-by-branch` | 別名の枝（`feat/*` `fix/*` `auto/*` 等）に同一変更が保全済み |
+| `ignored-only` | 差分がすべて `.gitignore` 済みの実行時成果物（例: `.stall-sweeper/`）。レビュー不要 |
+| `covered-in-main` | 追加行の 80% 以上が main にあり、削除行の main 残存が 20% 以下＝実質取り込み済み |
 | `unique` | どれにも当てはまらない＝人間がレビューすべき枝 |
+
+## 2026-10-18 rescue/auto-session-20261015-042503 のレビュー結果
+
+- 枝の差分は `.stall-sweeper/71f277df19da2eb45c0b-1792005522744.evidence.md` 1ファイル30行のみで、コード変更なし。
+- `executor-usage.jsonl` の `2026-10-14T18:13:50.071Z` は codex が `exitCode 3` / `launched:false` / `stderrTail:"WSL ディストリが見つかりませんでした"`。ファイル変更は発生していない。
+- `.stall-sweeper/` は #831（2026-10-16T18:16Z）で gitignore 済み。本枝はそれ以前の救済なので混入した。
+- 結論: main へ取り込む変更は無く、マージ不要。同型の枝は 20261015-042601 / 043201 / 20261016-041401 / 041502 / 041601。
+- 新しい `ignored-only` 判定でこれらはレビュー対象から外れる。
+
+## 2026-10-20 時点の結果
+
+- 対象: local + `refs/remotes/origin/rescue/*` の **106 refs**（`--include-remote`）
+- `unique: 55 / duplicate: 7 / covered: 20 / covered-by-branch: 2 / covered-in-main: 13 / error: 0 / ignored-only: 9`
+- 10-19（72 refs / unique 30）から **refs +34・unique +25**。増分はほぼ 10-19〜10-20 に作られた `rescue/auto-session-*`。
+
+### `unique` 55 本の内訳（枝名の日付別）
+
+| 日付 | 本数 | 備考 |
+|---|---|---|
+| 2026-10-10 | 1 | `sync-orgiast-main-*`（298 files / 865,757+/317-） |
+| 2026-10-11 | 2 | `sync-orgiast-main-*` 1本 + `rescue/auto-session-20261011-160002`（local のみ・2+/1-） |
+| 2026-10-13 | 3 | 8〜189 行 |
+| 2026-10-14 | 4 | 7〜99 行 |
+| 2026-10-15 | 5 | 最大 1,071+/0-（`20261015-031403`） |
+| 2026-10-16 | 4 | 最大 638+/14-（`20261016-041803`・local のみ） |
+| 2026-10-17 | 7 | 最大 4,398+/0-（`20261017-153221`）＋ `sync-orgiast-main-*` 3本 |
+| 2026-10-18 | 4 | 17〜82 行 |
+| 2026-10-19 | 10 | 最大 1,338+/7-（`20261019-220958`・12 files） |
+| 2026-10-20 | 15 | 最大 56,381+/32-（`20261020-133812`・189 files） |
+
+- **`sync-orgiast-main-*` 6 本は例外的に巨大**（298〜366 files / 86.5万〜92.5万行）。全量スナップショットを退避した枝なので、merge 候補ではなく**削除候補**として扱うのが妥当。ただし削除は不可逆なので人間の承認待ち。
+- **`origin/rescue/auto-session-20261020-133812` だけ突出**（189 files / 56,381+/32-）。10-20 13:38 の 1 セッションが大量の生成物を抱えたまま救済された可能性が高い。中身の確認が要る。
+- それ以外の `unique` は 1〜12 files / 〜1,338 行の小粒で、大半は `tools/*.mjs` 1ファイルの差分。枝ごとに PR 化するか捨てるかの二択。
+
+### 定期実行レールの実測（2026-10-20）
+
+| 経路 | 実測 |
+|---|---|
+| nightly-bootstrap（fleet-mail 2分間隔） | `2026-10-20 18:00:07 / リポ同期 / ok:origin/main fbb3abb`、`18:00:52 / 対象実行 / ok:fleet-mail.mjs 終了コード=0`。`18:00:27 / decision-watch.mjs 終了コード=0` も同枠 |
+| anchor の状態 | detached HEAD = `origin/main` = `fbb3abb`、`git status` clean。local `main` も同 SHA へ fast-forward 済み |
+| setup --converge | `node tools/setup.mjs --converge` → **EXIT=0**、`classifier-settings [OK]`、`[beacon] sent: kimko-PC` |
+| 残 NG | `cmd:claude` / `env:cerebras` / `task:fleet-mail-watchdog` の 3 件（10-16 から不変・EXIT=0 に影響せず） |
+| タスク設定 | `OrgiastNightlyBatch` / `OrgiastDecisionWatch` / `OrgiastFleetMail` いずれも `DisallowStartIfOnBatteries=False`、次回実行時刻が入っている（実走済み） |
+
+## 2026-10-19 時点の結果
+
+- 対象: `refs/heads/rescue/*` 22 本（`--include-remote` なし）
+- `unique: 5 / duplicate: 0 / covered: 12 / covered-by-branch: 2 / covered-in-main: 3 / error: 0 / ignored-only: 0`
+
+前回（10-18）との差分は 1 本のみ:
+
+| branch | status | 内容 |
+|---|---|---|
+| `rescue/auto-session-20261019-032606` | `covered`（already-upstream） | `tools/autopilot-tick.mjs`(+test) 57+/0-。`git cherry` が全行 `-` で、同内容は main 取り込み済み |
+
+- `unique` 5 本・`covered-by-branch` 2 本・`covered-in-main` 3 本の顔ぶれは 10-18 から不変（詳細は下の 10-18 節）。新しいレビュー対象は発生していない。
+
+### 定期実行レールの実測（2026-10-19）
+
+| 経路 | 実測 |
+|---|---|
+| nightly-bootstrap（2分間隔） | `2026-10-19 18:02:39 / リポ同期 / ok:origin/main 7ce8e45`、`18:03:25 / 対象実行 / ok:fleet-mail.mjs 終了コード=0` |
+| anchor の状態 | detached HEAD = `origin/main` = `7ce8e45`、`git status` clean。bootstrap は `checkout --detach origin/main` で同期する設計（`tools/nightly-bootstrap.ps1:173`） |
+| setup --converge | `node tools/setup.mjs --converge` → **EXIT=0**、`classifier-settings [OK]`（hook 登録・allow ルール同期）。`SessionStart` に `setup.mjs --converge` 登録済み（`~/.claude/settings.json`） |
+| 残 NG | `cmd:claude` / `env:cerebras` / `task:fleet-mail-watchdog` の 3 件。10-16 時点と同じ既存項目で、EXIT=0 のため収束判定に影響しない（本棚卸しとは無関係） |
+
+### リモート含む棚卸し（`--include-remote`、2026-10-19）
+
+- 対象: local + `refs/remotes/origin/rescue/*` の 72 refs
+- `unique: 30 / duplicate: 4 / covered: 16 / covered-by-branch: 2 / covered-in-main: 11 / error: 0 / ignored-only: 9`
+- 前回（10-18）の `error: 6` はすべて `origin/rescue/sync-orgiast-main-*` の `spawnSync git ENOBUFS` だったが、#860（256MB 上限）が main に取り込まれたため **error は 0**。当該 6 本は大きな差分を持つ `unique` として分類された（例: `20261010-110502` は 298 files 865,757+/317-）。
+- `ignored-only` 9 本は差分が `.stall-sweeper/`（gitignore 済み）のみの枝。新判定でレビュー対象から外れた。
+- 内訳: `unique` 30 本 = `sync-orgiast-main-*` 6 本 + その他 24 本。origin-only の unique は 28 本（`rescue/auto-session-20261013-072202` 〜 `20261018-072203`、ローカルに降ろしていない古い退避）。
+
+## 2026-10-18 時点の結果
+
+- 対象: `refs/heads/rescue/*` 21 本（`--include-remote` なし）
+- `unique: 5 / duplicate: 0 / covered: 11 / covered-by-branch: 2 / covered-in-main: 3 / error: 0`
+
+covered-by-branch（2026-10-16 から変化なし）:
+
+| branch | coveredBy | 内容 |
+|---|---|---|
+| `rescue/auto-session-20261010-073803` | `fix/lane-guard-autopilot-tick` | `tools/pretooluse-lane-guard.mjs` 1+/1- |
+| `rescue/auto-session-20261010-203202` | `fix/codex-do-curly-apostrophe-usage-limit` | `tools/codex-do.mjs` 18+/4- |
+
+covered-in-main（main に 80% 以上取り込み済み。独立レビュー不要）:
+
+| branch | 変更 | 取り込み状況 |
+|---|---|---|
+| `rescue/auto-session-20261010-221204` | `tools/feedback-apps.json` `tools/feedback-zero-registry.json` 68+/6- | added 64/68・deleted は main に残存なし |
+| `rescue/auto-session-20261011-220002` | `tools/feedback-zero-registry.json` 67+/6- | added 64/67・deleted 1/6 が main に残る |
+| `rescue/auto-session-20261017-082104` | 3 files 73+/17- | added 71/71・deleted 3/17 が main に残る |
+
+残った unique 5 本:
+
+| branch | 変更 | 備考 |
+|---|---|---|
+| `rescue/auto-session-20261011-160002` | `tools/feedback-zero-registry.json`（2+/1-） | `20261010-221204`（covered-in-main）の部分集合。単独では取り込む価値なし |
+| `rescue/auto-session-20261016-041803` | `.stall-sweeper/*.json` 7 files + `tools/autopilot-run.mjs`(+test) `tools/autopilot-tick.mjs`（638+/14-） | **`.stall-sweeper/` の実行時成果物が混入**。PR 化時は除外する |
+| `rescue/auto-session-20261017-082212` | `skills/autopilot/SKILL.md` `tools/autopilot-run.test.mjs` `tools/autopilot-tick.mjs`(+test)（152+/19-） | autopilot-tick の見張り強化。main 未取り込み |
+| `rescue/auto-session-20261017-182603` | `tools/autopilot-run.mjs`（26+/3-） | `resolveSupervisorAuth`（OAuth が空なら `~/.claude/deepseek.env` の鍵へ切替） |
+| `rescue/auto-session-20261017-182805` | `tools/autopilot-run.mjs`(+test)（62+/7-） | `182603` の上に積み増し（同一ファイル）。**`182603` と併せて1本でレビュー** |
+
+### リモート含む棚卸し（`--include-remote`、2026-10-18）
+
+- 対象: `refs/remotes/origin/rescue/*` を含む 70 refs
+- `unique: 33 / duplicate: 4 / covered: 14 / covered-by-branch: 2 / covered-in-main: 11 / error: 6`
+- **同名列の local/origin は別 ref として数える**ため、上の local のみの件数とは単純比較できない。
+- ローカル枝を持たない origin-only の unique は **28 本**（`rescue/auto-session-20261013-072202` 〜 `20261018-072203`）。古い auto-session の退避がローカルに降りてこないまま origin に残っているもの。
+- `error: 6` はすべて `origin/rescue/sync-orgiast-main-*` の `spawnSync git ENOBUFS`（1MB 超の差分）。**変更なしの証拠ではない**。修正は `auto/20261018-rescue-scan-enobufs`（`a8fff3f`、main 未取り込み）で進行中。
+
 
 ## 2026-10-16 時点の結果（`covered-by-branch` 実装後）
 
@@ -66,4 +180,5 @@ three-dot 差分指紋**と突き合わせ、一致した rescue 枝を `covered
 node tools/rescue-review-scan.mjs --repo <repo> --main origin/main                  # 人間向け
 node tools/rescue-review-scan.mjs --repo <repo> --main origin/main --json           # 機械向け
 node tools/rescue-review-scan.mjs --repo <repo> --main origin/main --no-compare-refs  # 別名枝との照合を切る
+node tools/rescue-review-scan.mjs --repo <repo> --main origin/main --include-remote # origin 側だけの rescue 枝も含める
 ```

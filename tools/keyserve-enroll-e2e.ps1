@@ -16,7 +16,7 @@ try {
   $env:ORGIAST_KEYSERVE_SECRET = $null
   & (Join-Path $PSScriptRoot 'install-orgiast.ps1') -Enroll $Enroll -EnrollOnly -Yes -NonInteractive -NoReboot
   if ($LASTEXITCODE -ne 0) { throw '隔離ホームへの enroll 導入に失敗しました。直前の日本語メッセージを確認してください。' }
-  $raw = & node (Join-Path $PSScriptRoot 'keyserve-status.mjs') --json
+  $raw = & $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) (Join-Path $PSScriptRoot 'keyserve-status.mjs') --json
   if ($LASTEXITCODE -ne 0) { throw '隔離ホームの keyserve-status を実行できません。' }
   $status = ($raw -join "`n") | ConvertFrom-Json
   if ($status.auth -ne 'primary' -or $status.status -ne 200 -or -not $status.success) { throw '隔離ホームで primary / HTTP 200 を確認できません。' }

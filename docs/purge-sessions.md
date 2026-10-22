@@ -43,7 +43,10 @@ node tools/purge-sessions.mjs --restore '<sessionId>'
 
 ## スマホ／claude.ai の「Code」一覧（サーバー側）
 
-`--hook` は `tools/purge-remote-sessions.mjs` も detached で起動する（6時間に1回）。
-未アーカイブ・切断済み・最終イベントから24時間以上のリモートセッションを
-`POST /v1/code/sessions/{id}/archive` でアーカイブする。会話は消えず一覧から隠れるだけ。
-記録は `~/.claude/archived-remote-sessions.jsonl`。確認は `node tools/purge-remote-sessions.mjs --dry-run`。
+**自動実行は停止中（2026-10-18）。** 以前は `--hook` が `tools/purge-remote-sessions.mjs` を6時間ごとに起動し、
+切断済み・最終イベントから24時間以上のリモートセッションを時間だけで判定してアーカイブしていた。
+この判定ではクローズしていないセッションまで消える（10/16〜17 に未クローズ28件を誤アーカイブ。全件 `/unarchive` で復元済み）。
+サーバ側セッション ID（`cse_…`）とローカルのクローズ記録を結ぶ手段ができるまで、自動では動かさない。
+
+手動確認は `node tools/purge-remote-sessions.mjs --dry-run`。誤ってアーカイブしたものは
+`POST /v1/code/sessions/{id}/unarchive` で戻せる（記録は `~/.claude/archived-remote-sessions.jsonl`）。

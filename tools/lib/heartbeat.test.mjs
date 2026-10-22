@@ -83,3 +83,11 @@ test('cycleMinutes key is absent from the payload when not provided', async () =
   assert.equal(result.sent, true);
   assert.equal(Object.hasOwn(JSON.parse(call[1].body), 'cycleMinutes'), false);
 });
+
+test('watcher localOnly heartbeat never sends even when configured', async () => {
+  const homeDir = await tempHome();
+  await mkdir(path.join(homeDir, '.claude'), { recursive: true });
+  await writeFile(path.join(homeDir, '.claude', 'task-sheet.env'), 'TASK_SHEET_WEBAPP_URL=https://example.test/exec\nTASK_SHEET_TOKEN=test\n');
+  const result = await reportHeartbeat({ job: 'watch', ok: true, cycleMinutes: 5 }, { homeDir, localOnly: true, fetchImpl: () => assert.fail('network') });
+  assert.deepEqual(result, { written: true, sent: false });
+});

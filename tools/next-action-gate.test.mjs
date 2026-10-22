@@ -59,7 +59,7 @@ test('本文の着地語と nextAction の修正語が揃う実文はblock', () 
 });
 
 test('印刷所への電話は正当な人専用タスクとしてpass', () => {
-  const text = `${body}\n次に kim がすること: 印刷所へ電話して納期を確認する\nこの後の自動進行: なし（完了）\nこのセッション: ${SESSION_PHRASES.delete}`;
+  const text = `${body}\n恒久策: 一回限り: 今回の納期は本人から印刷所への電話確認が必要\n次に kim がすること: 印刷所へ電話して納期を確認する\nこの後の自動進行: なし（完了）\nこのセッション: ${SESSION_PHRASES.delete}`;
   assert.equal(judgeNextAction(text).decision, 'pass');
 });
 
@@ -68,7 +68,7 @@ test('次に kim がすることが「なし」なら先送り判定せずpass',
 });
 
 test('本文に着地語がない修正版PDFの物理操作はpass', () => {
-  const text = `${body}\n次に kim がすること: 修正版のPDFを印刷して同封する\nこの後の自動進行: なし（完了）\nこのセッション: ${SESSION_PHRASES.delete}`;
+  const text = `${body}\n恒久策: 一回限り: 本人手元の原本への初回同封が必要\n次に kim がすること: 修正版のPDFを印刷して同封する\nこの後の自動進行: なし（完了）\nこのセッション: ${SESSION_PHRASES.delete}`;
   assert.equal(judgeNextAction(text).decision, 'pass');
 });
 
@@ -260,4 +260,85 @@ test('フッター欠落の block 理由に定型4文を載せる', () => {
   const r = judgeNextAction('あ'.repeat(250));
   assert.equal(r.code, 'NEXT-ACTION-FOOTER');
   for (const phrase of Object.values(SESSION_PHRASES)) assert.ok(r.reason.includes(phrase));
+});
+
+const warehouseAction = '3448 ハンマーをアンカーセットに入れる';
+const permanentReport = (action, fix = '') => `${fix}\n次に kim がすること: ${action}\nこの後の自動進行: なし（完了）\nこのセッション: ${SESSION_PHRASES.delete}`;
+const dispatch = row('assistant', [{ type: 'tool_use', name: 'Bash', input: { command: 'node tools/discord-dm.mjs 澤田武 --body-file request.txt' } }]);
+const implementedFix = '恒久策: tools/foo.mjs を追加し毎朝自動実行にした';
+
+test('ハンマー同梱の手渡しに恒久策行がなければblock', () => {
+  const result = judgeNextAction(permanentReport(warehouseAction));
+  assert.equal(result.decision, 'block');
+  assert.equal(result.code, 'PERMANENT-FIX-REQUIRED');
+  assert.match(result.reason, /このターンで実装/);
+});
+
+test('恒久策は具体物と完了した対応が必要', () => {
+  for (const fix of ['', '恒久策: 今後検討します', '恒久策: tools/foo.mjs を今後追加します', '恒久策: tools/foo.mjs を追加したい', '恒久策: tools/foo.mjs', '恒久策: 自動化を実装した', '恒久策: tools/foo.mjs を追加していません', '恒久策: 一回限り:   ']) {
+    assert.equal(judgeNextAction(permanentReport('本人同意ボタンを押す', fix)).code, 'PERMANENT-FIX-REQUIRED', fix);
+  }
+});
+
+test('恒久策があっても倉庫依頼の実行痕跡がなければblock', () => {
+  const result = judgeNextAction(permanentReport(warehouseAction, implementedFix));
+  assert.equal(result.decision, 'block');
+  assert.equal(result.code, 'WAREHOUSE-DISPATCH-REQUIRED');
+  assert.match(result.reason, /倉庫担当へ Claude が依頼する/);
+});
+
+test('倉庫作業を依頼してkimの次の作業から外せばpass', () => {
+  assert.equal(judgeNextAction(permanentReport('なし', '倉庫担当へ依頼済み。'), dispatch).decision, 'pass');
+});
+
+test('具体物の実装と初回だけの理由をそれぞれ認める', () => {
+  for (const fix of [implementedFix, '恒久策: 一回限り: OAuth 初回同意は本人のブラウザ操作が必須', '恒久策: PR #895 で自動化を実装した', '恒久策: 澤田さんへ定期回収を依頼送信した', '恒久策: memory.md に運用ルールを追加済み', '恒久策: 倉庫運用.md にルールを追加したので今後は自動で担当へ依頼する', '恒久策: ツール名: Scheduler を設定した']) {
+    assert.equal(judgeNextAction(permanentReport('本人同意ボタンを押す', fix)).decision, 'pass', fix);
+  }
+});
+
+test('なし系と括弧付きの報告待ちは恒久策不要', () => {
+  for (const action of ['なし', '無し', 'ありません', '不要', '返信不要', 'なし（結果の報告を待つだけ）']) {
+    assert.equal(judgeNextAction(permanentReport(action)).decision, 'pass', action);
+  }
+  assert.equal(judgeNextAction(permanentReport('なし（完了）本人同意ボタンを押す')).code, 'PERMANENT-FIX-REQUIRED');
+});
+
+test('例外には空白を除く10文字以上の理由が必要で倉庫検査は免除しない', () => {
+  for (const reason of ['', '短い理由', '         理由']) {
+    assert.equal(judgeNextAction(permanentReport('本人同意ボタンを押す', `[PERMANENT-FIX-OK: ${reason}]`)).code, 'PERMANENT-FIX-REQUIRED');
+  }
+  const override = '[PERMANENT-FIX-OK: 本人の明示的な同意操作だけは代行できないため]';
+  assert.equal(judgeNextAction(permanentReport('本人同意ボタンを押す', override)).decision, 'pass');
+  assert.equal(judgeNextAction(permanentReport(warehouseAction, override)).code, 'WAREHOUSE-DISPATCH-REQUIRED');
+});
+
+test('本文の例示や引用は恒久策・例外・手渡しと解釈しない', () => {
+  for (const fix of [`> ${implementedFix}`, `\`\`\`text\n${implementedFix}\n\`\`\``, '> [PERMANENT-FIX-OK: 本人の明示的な同意操作だけは代行できないため]']) {
+    assert.equal(judgeNextAction(permanentReport('本人同意ボタンを押す', fix)).code, 'PERMANENT-FIX-REQUIRED');
+  }
+  assert.equal(judgeNextAction(`> 次に kim がすること: ${warehouseAction}\n${footer}`).decision, 'pass');
+});
+
+test('今ターンのBash・Discord送信tool_useを認める', () => {
+  const text = permanentReport(warehouseAction, implementedFix);
+  for (const transcript of [dispatch, ...['send_dm', 'send_message'].map(name => row('assistant', [{ type: 'tool_use', name: `mcp__claude_ai_Discord__${name}`, input: { recipient: '澤田武', content: '同梱をお願いします' } }]))]) {
+    assert.equal(judgeNextAction(text, `${row('user', '倉庫作業を手配して')}\n${transcript}\n${row('user', [{ type: 'tool_result', tool_use_id: 'dm', content: 'delivered' }])}`).decision, 'pass');
+  }
+});
+
+test('過去ターン・別会話・本文や検索での言及・dry-runは依頼送信でない', () => {
+  const text = permanentReport(warehouseAction, implementedFix);
+  for (const transcript of [
+    `${dispatch}\n${row('user', '次の倉庫作業を手配して')}`,
+    row('assistant', JSON.parse(dispatch).message.content, { isSidechain: true }),
+    row('user', JSON.parse(dispatch).message.content),
+    row('assistant', 'node tools/discord-dm.mjs 澤田武 --body-file request.txt を実行した'),
+    ...['rg discord-dm.mjs tools', 'echo node tools/discord-dm.mjs 澤田武', 'node tools/discord-dm.mjs 澤田武 --dry-run', 'node tools/discord-dm.mjs --help'].map(command => row('assistant', [{ type: 'tool_use', name: 'Bash', input: { command } }])),
+  ]) assert.equal(judgeNextAction(text, transcript).code, 'WAREHOUSE-DISPATCH-REQUIRED', transcript);
+});
+
+test('短文・質問でも明示した次の作業には恒久策が必要', () => {
+  assert.equal(judgeNextAction(`次に kim がすること: ${warehouseAction}`).code, 'PERMANENT-FIX-REQUIRED');
+  assert.equal(judgeNextAction('次に kim がすること: 本人同意ボタンを押せますか？').code, 'PERMANENT-FIX-REQUIRED');
 });

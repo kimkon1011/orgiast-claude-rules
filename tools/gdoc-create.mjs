@@ -9,7 +9,7 @@
  *       Drive v3 files.create に Markdown を multipart アップロードして Google Doc に変換。
  *       依存パッケージなし（Node 18+ の fetch と標準 crypto で JWT を自己署名）。
  *
- * --authuser <開く人のメール> を指定。他人宛は事前にその相手へ共有する。
+ * --authuser <開く人のメール> を指定。他人宛は --share <相手のメール> を付ける（--share-role で権限指定）。
  * 使い方:
  *   node tools/gdoc-create.mjs --file <本文.md> [--title <タイトル>] [--parent <フォルダID>]
  *   node tools/gdoc-create.mjs --file <本文.md> --dry       # 認証と権限だけ確認して作成しない
@@ -20,6 +20,8 @@
  *   --subject <mail>  代理するユーザー（既定: kim@orgiast.jp）
  */
 
+import { getDriveToken } from './lib/drive-auth.mjs';
+import { shareAndRecord, shareRecipients } from './lib/drive-share.mjs';
 import { workspaceUrl } from './lib/workspace-url.mjs';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
@@ -29,7 +31,6 @@ import { isEntry } from './is-entry.mjs';
 const DEFAULT_KEY =
   'C:/Users/uers/Downloads/CLAUDE.md配布/aujust-sales-automation/.gcp/sheets-sa.json';
 const DEFAULT_SUBJECT = 'kim@orgiast.jp';
-const SCOPE = 'https://www.googleapis.com/auth/drive';
 
 export function parseArgs(argv) {
   const out = { flags: new Set() };
@@ -74,45 +75,6 @@ export function checkReadBack(markdown, exportedText) {
   return firstLine ? exportedText.includes(firstLine.slice(0, 30)) : exportedText.length > 0;
 }
 
-function b64url(buf) {
-  return Buffer.from(buf).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
-/** サービスアカウント鍵で JWT を自己署名し、アクセストークンに交換する（DWD: sub でユーザーを代理）。 */
-async function getAccessToken(key, subject) {
-  const now = Math.floor(Date.now() / 1000);
-  const claims = {
-    iss: key.client_email,
-    sub: subject,
-    scope: SCOPE,
-    aud: 'https://oauth2.googleapis.com/token',
-    iat: now,
-    exp: now + 3600,
-  };
-  const unsigned = `${b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }))}.${b64url(JSON.stringify(claims))}`;
-  const sig = crypto.createSign('RSA-SHA256').update(unsigned).sign(key.private_key);
-  const assertion = `${unsigned}.${b64url(sig)}`;
-  const res = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
-      assertion,
-    }),
-  });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const hint =
-      body.error === 'unauthorized_client'
-        ? '\n→ このサービスアカウントの client_id が Google Admin の「ドメイン全体の委任」に未登録か、' +
-          ' スコープ https://www.googleapis.com/auth/drive が許可されていません。' +
-          `\n   登録する client_id: ${key.client_id}`
-        : '';
-    throw new Error(`token exchange failed: ${res.status} ${JSON.stringify(body)}${hint}`);
-  }
-  return body.access_token;
-}
-
 async function api(token, url, init = {}) {
   const res = await fetch(url, {
     ...init,
@@ -130,6 +92,7 @@ async function main() {
     console.error('--file <本文.md> は必須です。使い方はファイル先頭のコメントを参照。');
     return 2;
   }
+  if (args.share) shareRecipients(args.share, args['share-role']);
   const filePath = path.resolve(args.file);
   if (!fs.existsSync(filePath)) {
     console.error(`本文ファイルが見つかりません: ${filePath}`);
@@ -145,7 +108,7 @@ async function main() {
   const key = JSON.parse(fs.readFileSync(keyPath, 'utf8'));
   const subject = args.subject || DEFAULT_SUBJECT;
   const authuser = args.authuser || args.subject || process.env.GOOGLE_IMPERSONATE;
-  const token = await getAccessToken(key, subject);
+  const token = await getDriveToken({ keyPath, impersonate: subject });
   console.log(`auth OK (sa=${key.client_email} → ${subject})`);
 
   // 認証成功だけでは作成可能とは限らないため、dry でも作成先の追加権限まで確認する。
@@ -185,6 +148,8 @@ async function main() {
       },
     )).json();
   }
+
+  if (args.share) await shareAndRecord({ fileId: doc.id, emails: args.share, role: args['share-role'], auth: token, name: doc.name });
 
   // 作成レスポンスだけで成功とせず、再利用時も実際の本文を取り直して確認する。
   const after = await (await api(token,

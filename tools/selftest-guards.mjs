@@ -221,12 +221,12 @@ test('fable-session-guard: process.exitを使わずisEntryで起動', () => {
   const source = fs.readFileSync(path.join(toolsDir, 'fable-session-guard.mjs'), 'utf8');
   assert(!/process\.exit\s*\(/.test(source) && /isEntry\(import\.meta\.url\)/.test(source), '安全なhookエントリ要件を満たしていない');
 });
-test('model-agent-guard: 実装は warn', () => {
+test('model-agent-guard: warn設定でも実装はdeny', () => {
   const temp = makeTempHome('orgiast-model-agent-warn-test-');
   writeCostEnforce(temp, 'warn');
   const r = run('model-agent-guard.mjs', { tool_name: 'Agent', tool_input: { model: 'sonnet', prompt: 'ログイン機能を実装して' } }, [], { ORGIAST_HOME: temp });
   const output = JSON.parse(r.stdout);
-  assert(output.hookSpecificOutput.additionalContext && !output.hookSpecificOutput.permissionDecision, r.stdout || r.stderr);
+  assert(output.hookSpecificOutput.permissionDecision === 'deny', r.stdout || r.stderr);
 });
 test('model-agent-guard: block昇格時は実装委譲を deny', () => {
   const temp = makeTempHome('orgiast-model-agent-block-test-');

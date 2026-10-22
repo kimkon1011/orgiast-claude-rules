@@ -2,9 +2,9 @@
 export const GATE_CONTRACT = {"name": "stop-gate-runner", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "stop-gate-runner"}]};
 // 2026-09-06: Stop 304回中198回が再Stop、handoff-quality 78件中71件が誤爆だった。
 // 9プロセスの逐次差し戻しを1回の評価・1つのblockへまとめ、userの再読を最大1回にする。
-import fs from 'node:fs';
+import { evaluatePastLogSearch, listPlaybookNames, classifyHandoff } from './past-log-search-gate.mjs';
+import { evaluateInvitePermissions } from './hooks/discord-invite-permission-gate.mjs';
 import { applyNamedGatePolicy } from './gate-runtime.mjs';
-import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
@@ -35,10 +35,15 @@ import { findLocalDocLinks, findBareLocalDocPaths, formatBarePathMessage, format
 import { enabled as stopGateEnabled, progressQuestionReason, reasonFor, remainingItems, shouldBlock, shouldBlockProgressQuestion } from './stop-gate.mjs';
 import { runControlGroup } from './control-group-stop-gate.mjs';
 import { evaluatePrHandoff } from './pr-handoff-gate.mjs';
+import { currentTurnEntries, blocks } from './state-claim-evidence.mjs';
+import { judgeSideEffectLeft } from './side-effect-left-gate.mjs';
+import { judge as judgeDeferralWait } from './deferral-wait-gate.mjs';
 import { evaluateShallowAnswer } from './shallow-answer-gate.mjs';
+import { appendStopLedger, registerStopViolation, CAP_CONTEXT } from './lib/stop-recheck.mjs';
 
 
 const home = () => process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || os.homedir();
+export const FORM_GATES = ['handoff-quality-gate', 'manual-request-fullsteps-gate', 'handoff-info-guard', 'handoff-branch-coverage-gate', 'user-burden-gate', 'handoff-investigation-gate'];
 const HANDOFF_HINT = "末尾に『次に kim がすること』『この後の自動進行』『このセッション: /session-close は終わっているので、このセッションを閉じてよい / /session-close は不要なので、このセッションを閉じてよい / /session-close をして（まだ閉じない） / まだ閉じない（作業中）』の定型文を3行で入れること(user が『この先はどうしたらいいの？』と聞き返した回数: 7日で9回)";
 
 function fullStepsReason(missing) {
@@ -47,6 +52,7 @@ function fullStepsReason(missing) {
 
 export async function evaluateGates(ctx, auditOptions = {}) {
   const gates = [
+    ['past-log-search-gate', () => evaluatePastLogSearch({ text: ctx.assistantText, humanText: ctx.humanText, transcriptRaw: ctx.transcriptRaw, playbookNames: listPlaybookNames(home()) })],
     ['handoff-quality-gate', () => evaluateQuality({ ...ctx.input, assistant_text: ctx.assistantText, transcript_raw: ctx.transcriptRaw })],
     ['handoff-action-gate', () => evaluateHandoffActionFromRaw({ text: ctx.assistantText, transcriptRaw: ctx.transcriptRaw })],
     ['manual-request-fullsteps-gate', () => { if (desktopLauncherPattern.test(ctx.assistantText) && judgeUserBurden(ctx.assistantText, ctx.humanText).decision === 'pass') return { decision: 'pass' }; const result = judgeFullSteps(ctx.assistantText); return result.triggered && result.missing.length ? { decision: 'block', reason: fullStepsReason(result.missing), code: 'FULL-STEPS' } : { decision: 'pass' }; }],
@@ -70,6 +76,8 @@ export async function evaluateGates(ctx, auditOptions = {}) {
     ['self-check-before-asking-guard', () => { const found = findOutsourcedInvestigation(ctx.assistantText, scanToolUsesFromRaw(ctx.transcriptRaw)); return found ? { decision: 'block', reason: formatSelfCheck(found), code: 'SELF-CHECK' } : { decision: 'pass' }; }],
     ['stop-gate', () => { if (!stopGateEnabled()) return { decision: 'pass' }; const todo = shouldBlock(ctx.assistantText); const question = !todo && shouldBlockProgressQuestion(ctx.assistantText); return todo ? { decision: 'block', reason: reasonFor(remainingItems(ctx.assistantText)), code: 'remaining-todo' } : question ? { decision: 'block', reason: progressQuestionReason(), code: 'progress-question' } : { decision: 'pass' }; }],
     ['report-length-gate', () => reportLengthEnabled() ? judgeReportLengthWithLlm(ctx.assistantText, ctx.humanText) : { decision: 'pass' }],
+    ['side-effect-left-gate', () => judgeSideEffectLeft(ctx.assistantText, blocks(currentTurnEntries(ctx.transcriptRaw), 'tool_use'))],
+    ['deferral-wait-gate', () => judgeDeferralWait(ctx.assistantText)],
     ['next-action-gate', () => judgeNextAction(ctx.assistantText, ctx.transcriptRaw)],
     ['user-burden-gate', () => judgeUserBurden(ctx.assistantText, ctx.humanText)],
     ['substitute-capability-gate', () => judgeSubstituteCapability(ctx.assistantText)],
@@ -88,37 +96,17 @@ export async function evaluateGates(ctx, auditOptions = {}) {
   return { results, errors, audit, retry: async name => ({ name, ...await gates.find(([gate]) => gate === name)[1]() }) };
 }
 
-function stateResult(sessionId, requestedBlock, assistantText) {
-  if (!requestedBlock || !sessionId) return { retryCap: false };
-  const stateFile = path.join(home(), '.claude', 'stop-gate-runner-state.json');
-  let state = {}; try { state = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch {}
-  const lastHash = crypto.createHash('sha256').update(String(assistantText ?? '')).digest('hex').slice(0, 16);
-  const blocks = state?.[sessionId]?.lastHash === lastHash
-    ? Math.max(0, Number(state?.[sessionId]?.blocks) || 0) : 0;
-  const sameTextRetries = blocks + 1;
-  const now = Date.now();
-  state = Object.fromEntries(Object.entries(state || {}).filter(([, entry]) => {
-    const lastTs = Date.parse(entry?.lastTs);
-    return Number.isFinite(lastTs) && lastTs >= now - 7 * 24 * 60 * 60 * 1000;
-  }));
-  state[sessionId] = { blocks: sameTextRetries, lastTs: new Date(now).toISOString(), lastHash };
-  try { fs.mkdirSync(path.dirname(stateFile), { recursive: true }); fs.writeFileSync(stateFile, JSON.stringify(state, null, 2) + '\n'); } catch {}
-  return { retryCap: blocks >= 2, sameTextRetries };
-}
-
 function ledger(record) {
-  try {
-    const file = path.join(home(), '.claude', 'stop-gate-runner-ledger.jsonl');
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.appendFileSync(file, JSON.stringify({ ts: new Date().toISOString(), ...record }) + '\n');
-  } catch {}
+  appendStopLedger(record, home());
 }
 
 export async function run(input, context, auditOptions = {}) {
   const sessionId = input?.session_id || input?.sessionId || path.basename(input?.transcript_path || '', '.jsonl');
-  const assistantText = input?.assistant_text || context.assistantText;
+  const assistantText = input?.last_assistant_message ?? input?.assistant_text ?? context.assistantText;
+  // Deterministic permission guard: enforce before retry/close bypasses and rollout demotion.
+  const invite = evaluateInvitePermissions(assistantText);
+  if (invite.decision === 'block') return invite;
   const base = { sessionId, blockedBy: [], reasonCodes: [], excerpt: String(assistantText || '').slice(0, 200) };
-  if (input?.stop_hook_active) { const record = { ...base, verdict: 'skipped', reasonCodes: ['stop_hook_active'] }; ledger(record); return { record }; }
   if (!assistantText) { const record = { ...base, verdict: 'skipped', reasonCodes: [context.reason || 'no-assistant-text'] }; ledger(record); return { record }; }
   // session-close SKILL.md §7.1 の閉じ際3行は、それ自体が user への次の一手の指示なので手渡し系ゲートを適用しない。
   // 適用すると「ルール通りに閉じる」だけで FULL-STEPS／INVESTIGATION／USER-BURDEN が発火して余分な1ターンを強制し、
@@ -138,15 +126,29 @@ export async function run(input, context, auditOptions = {}) {
     if (value.decision === 'block') effective.push(value);
     else if (value.decision === 'warn') warnings.push(`${value.name}: ${value.reason}`);
   }
-  evaluated.results = effective;
+  const handoffKind = classifyHandoff(assistantText);
+  const demoted = handoffKind === 'manual-steps' ? [] : effective.filter(({ name }) => FORM_GATES.includes(name)).map(({ name }) => name);
+  evaluated.results = effective.filter(({ name }) => !demoted.includes(name));
   const systemMessage = warnings.length ? warnings.join('\n') : undefined;
   const blockedBy = evaluated.results.map(({ name }) => name);
   const reasonCodes = [...evaluated.results.map(({ code, name }) => code || name), ...evaluated.errors];
-  const cap = stateResult(sessionId, blockedBy.length > 0, assistantText);
+  const cap = blockedBy.length ? registerStopViolation({ input, assistantText, blockedBy, reasonCodes, home: home() }) : { retryCap: false, sameTextRetries: 0 };
+  // Keep the caller-facing verdict compatible; the ledger records the new
+  // operational outcome separately so nightly metrics can count it.
   const verdict = cap.retryCap ? 'retry-cap' : blockedBy.length ? 'block' : 'pass';
-  const record = { ...base, verdict, blockedBy, reasonCodes, retryCap: cap.retryCap, sameTextRetries: cap.sameTextRetries ?? 0, auditEvidence: audit.record.evidence }; ledger(record);
-  if (verdict !== 'block') return { record, ...(systemMessage ? { systemMessage } : {}) };
-  const sections = evaluated.results.map(({ name, reason }) => `### ${name}\n- ${reason}`);
+  const capMessage = cap.retryCap ? `${CAP_CONTEXT} 残存コード: ${reasonCodes.join(', ')}` : undefined;
+  const record = { ...base, verdict, blockedBy, reasonCodes, demoted, handoffKind, retryCap: cap.retryCap, sameTextRetries: cap.sameTextRetries ?? 0, auditEvidence: audit.record.evidence };
+  ledger(cap.retryCap ? { ...record, verdict: 'pass_after_cap', runnerVerdict: verdict } : record);
+  if (verdict !== 'block') return { record, ...((capMessage || systemMessage) ? { systemMessage: [capMessage, systemMessage].filter(Boolean).join('\n') } : {}) };
+  const sections = [];
+  let formAdded = false;
+  for (const { name, reason } of evaluated.results) {
+    if (!FORM_GATES.includes(name)) { sections.push(`### ${name}\n- ${reason}`); continue; }
+    if (formAdded) continue;
+    formAdded = true;
+    const summaries = evaluated.results.filter(r => FORM_GATES.includes(r.name)).map(r => `- ${r.name}: ${String(r.reason || '').split(/\r?\n/).slice(0, 2).map(line => line.slice(0, 200)).join(' ')}`);
+    sections.push(`### 手渡しの形式（1回の書き直しでまとめて直す）\n${summaries.join('\n')}`);
+  }
   if (!blockedBy.includes('next-action-gate') && !hasRequiredFooter(assistantText)) sections.push(`### ピギーバック・ヒント\n- ${HANDOFF_HINT}`);
   return { decision: 'block', reason: sections.join('\n\n'), record, ...(systemMessage ? { systemMessage } : {}) };
 }

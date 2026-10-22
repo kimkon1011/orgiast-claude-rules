@@ -398,6 +398,8 @@ export function deploySkills(sourceRepo, targetHome, options = {}) {
     return [...updated];
   } catch (e) { if (options.onError) options.onError(e); return []; }
 }
+// syncRepository が用意し、main の finally（CLAUDE.md 更新後）で実行する hook 登録。
+let deferredHookRegistration = null;
 async function syncRepository(now) {
   try {
     if (!fs.existsSync(repoPath)) return;
@@ -436,14 +438,17 @@ async function syncRepository(now) {
       log(`memory-share install: generatedAt=${memory.generatedAt} installed=${memory.installed} updated=${memory.updated} removed=${memory.removed} unchanged=${memory.unchanged} (dir=${memory.dir})`);
     } catch (e) { log(`memory-share install failed(continue): ${e.message}`); }
     // 新しく配布された hook を全PCへ自動登録する(add-only・差分が無ければ何も書かない)。
-    try {
-      const registrar = path.join(repoPath, 'tools', 'setup.mjs');
-      if (fs.existsSync(registrar)) {
+    // ただし実行は CLAUDE.md 更新の後（main 末尾の finally）。converge は 2〜3 分かかるため、ここで同期実行すると
+    // CLAUDE.md が書かれる前に検証（clean-install の setup --verify / 次セッション）が走り rules:claude-md が NG になる
+    // （2026-10-18 CI 実測。main では converge が即失敗していたため偶然通っていた）。
+    const registrar = path.join(repoPath, 'tools', 'setup.mjs');
+    if (fs.existsSync(registrar)) {
+      deferredHookRegistration = () => {
         const out = execFileSync(process.execPath, [registrar, '--converge', '--home', home], { windowsHide: true, encoding: 'utf8', timeout: 180000, env: { ...process.env, ORGIAST_HOME: home } }).trim();
         // skip がログに届かないと hook 未登録の無言 skip が復活するため、追加と同様に転送する。
         if (out.includes('追加') || out.includes('[skip]') || /\bNG\b|失敗/.test(out)) { console.log(`[onboarding-sync] ${out.trim()}`); log(out.replace(/\s+/g, ' ')); }
-      }
-    } catch (e) { log(`hook registration failed: ${e.message}`); }
+      };
+    }
   } catch (e) { log(`repo sync failed: ${e.message}`); }
 }
 function saveKeysState(now) {
@@ -632,11 +637,20 @@ function save(hash, now) {
 export function makeIndex(body) {
   const lines = body.replace(/\r\n/g, '\n').split('\n');
   const kept = [indexLead];
+  let previousNonempty = '';
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    // 絶対ルール直後の太字小見出しは参照先として残す。通常の詳細見出しは展開しない。
+    if (/^\*\*\d+(?:\.\d+)+\s+.+\*\*$/.test(line)
+      && /^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u.test(previousNonempty)) {
+      kept.push(line.replace(/（(?:kim\s+)?\d{4}-\d{2}-\d{2}[^）]*）/g, ''));
+    }
+    if (line.trim()) previousNonempty = line;
     if (/^#{1,3}(?:\s|$)/.test(line)) {
-      kept.push(line);
-      for (let j = i + 1; j < lines.length && !/^#{1,3}(?:\s|$)/.test(lines[j]); j++) {
+      // 索引は規約の見出しを残し、日付・由来は全文へ委ねて配布上限内に収める。
+      kept.push(line.replace(/（(?:kim\s+)?\d{4}-\d{2}-\d{2}[^）]*）/g, ''));
+      // 大見出しは案内だけにし、個別規約（###）の結論と絶対ルールを優先する。
+      for (let j = i + 1; /^###\s/.test(line) && j < lines.length && !/^#{1,3}(?:\s|$)/.test(lines[j]); j++) {
         const candidate = lines[j].trim();
         if (!candidate) continue;
         const end = candidate.indexOf('。');
@@ -728,6 +742,11 @@ async function main() { try {
   }
 } catch (e) { log(`unexpected error: ${e.message}`); }
 finally {
+  // hook 登録（setup --converge）は CLAUDE.md を書き終えてから。早期 return した場合も必ず実行する。
+  if (deferredHookRegistration) {
+    try { deferredHookRegistration(); } catch (e) { log(`hook registration failed: ${e.message}`); }
+    deferredHookRegistration = null;
+  }
   if (!dryRun && !keysOnly) {
     try {
       const report = path.join(repoPath, 'tools/fleet-convergence-report.mjs');

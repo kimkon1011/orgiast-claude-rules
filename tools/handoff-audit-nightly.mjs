@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { auditHome, loadResources, buildPrompt, requestAudit, appendJsonl, fired } from './handoff-audit-gate.mjs';
 import { scan } from './permanent-fix-deferral-scan.mjs';
+import { summarizeStopRechecks } from './lib/stop-recheck.mjs';
 
 export function readJsonl(file) {
   try { return fs.readFileSync(file, 'utf8').split(/\r?\n/).flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } }); }
@@ -120,7 +121,11 @@ export async function runNightly(options = {}) {
     const processedFile = path.join(dir, 'handoff-audit-nightly-ledger.jsonl');
     let candidates = readJsonl(candidateFile);
     const done = new Set(readJsonl(processedFile).filter(r => r.verdict !== 'audit-unavailable').map(r => r.observation));
-    const targets = selectTargets(readJsonl(path.join(dir, 'handoff-audit-ledger.jsonl')), readJsonl(path.join(dir, 'stop-gate-runner-ledger.jsonl')), +since, +until);
+    const stopRows = readJsonl(path.join(dir, 'stop-gate-runner-ledger.jsonl'));
+    const targets = selectTargets(readJsonl(path.join(dir, 'handoff-audit-ledger.jsonl')), stopRows, +since, +until);
+    const stopRechecks = summarizeStopRechecks(stopRows, { since: +since });
+    const stopRecheckWarnings = stopRechecks.skippedStopHookActive > 0
+      ? [`stop_hook_active の素通りが ${stopRechecks.skippedStopHookActive} 件残っています`] : [];
     const knownRoutes = new Set([...knowledge.map(k => k.route), ...Object.values(resources.routes).flat()]);
     let reviewed = 0, added = 0, promoted = 0;
     for (const target of targets) {
@@ -186,7 +191,7 @@ export async function runNightly(options = {}) {
       }
       deferral = { total, hits: rows.length, byPattern, enqueued, detector: usedDetector, detectorDiffers: detector.differs };
     } catch (error) { deferral = { ...deferral, error: error.message }; }
-    return { targets: targets.length, reviewed, added, promoted, deferral };
+    return { targets: targets.length, reviewed, added, promoted, deferral, stopRechecks, stopRecheckWarnings };
   } finally { fs.closeSync(fd); fs.unlinkSync(lock); }
 }
 if (isEntry(import.meta.url)) {

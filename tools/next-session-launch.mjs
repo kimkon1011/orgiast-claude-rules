@@ -6,6 +6,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
 import { armToFile } from './session-relaunch.mjs';
 import { alternateCheapProvider, autoSessionExecutor, buildCheapCodeArgs, buildClaudeHeadlessArgs, claudeFallbackEnabled, recordFallbackToClaude, recordSkippedNoExecutor } from './auto-session-executor.mjs';
+import { findClaudeInVersionedDir, sanitizeClaudeSupervisorEnv } from './claude-exe.mjs';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..');
 
@@ -92,13 +93,15 @@ export function resolveClaudeBinary(io) {
     if (exists(candidate)) return candidate;
   }
 
+  // デスクトップ版は <版>\<ハッシュ>\claude.exe に置かれる。版直下だけ見ていると
+  // 実体を取り逃がし、PATH の claude.cmd を掴んで shell 無し spawn が ENOENT になる。
   const installedDir = path.join(homedir, 'AppData', 'Roaming', 'Claude', 'claude-code');
   try {
-    const version = pickNewestVersionDir(readdir(installedDir));
-    if (version) {
-      const binary = path.join(installedDir, version, 'claude.exe');
-      if (exists(binary)) return binary;
-    }
+    const found = findClaudeInVersionedDir(installedDir, {
+      listDir: (dir) => { try { return readdir(dir); } catch { return []; } },
+      exists,
+    });
+    if (found) return found;
   } catch { /* インストール版が無い機体では黙って次へ */ }
 
   const extensionsDir = path.join(homedir, '.vscode', 'extensions');
@@ -320,6 +323,9 @@ export function buildHeadlessPrompt(prompt) {
 
 export async function runHeadlessNextSession({ env, hostname, home, cwd, prompt, executable, spawnImpl = spawn, timeoutMs = HEADLESS_TIMEOUT_MS, appendLog = null, now = () => new Date() }) {
   const choice = autoSessionExecutor(env, hostname, home);
+  // 監督セッションの env は hook を効かせたまま、デスクトップ由来の漏れだけ外す。
+  // CLAUDE_CONFIG_DIR はアカウント切替のため childEnv() が意図的に設定しており、浄化でも残る。
+  const childBaseEnv = sanitizeClaudeSupervisorEnv(env);
   const fullPrompt = buildHeadlessPrompt(prompt);
   const promptFile = path.join(os.tmpdir(), `orgiast-next-session-${process.pid}-${Date.now()}.txt`);
   let cheapProvider = choice.provider;
@@ -335,7 +341,7 @@ export async function runHeadlessNextSession({ env, hostname, home, cwd, prompt,
         ? buildCheapCodeArgs({ repoRoot: REPO_ROOT, provider: cheapProvider, promptFile, cwd })
         : buildClaudeHeadlessArgs({ repoCwd: cwd, historyCwd: cwd }), {
         cwd,
-        env: { ...env, CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: cheap ? `next-session-launch:cheap-code:${cheapProvider}` : 'next-session-launch:fallback-claude' },
+        env: { ...childBaseEnv, CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: cheap ? `next-session-launch:cheap-code:${cheapProvider}` : 'next-session-launch:fallback-claude' },
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true,
       });

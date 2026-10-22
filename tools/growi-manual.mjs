@@ -609,6 +609,59 @@ export function currentRevisionOf(page) {
   return String(revisionId);
 }
 
+function pageBodyOf(page) {
+  const body = page?.revision?.body ?? page?.body;
+  if (typeof body !== 'string') throw new Error('ページの現行本文を取得できません');
+  return body;
+}
+
+export function insertLinesAfterAnchor(body, anchor, insertedText) {
+  const lines = String(body).split('\n');
+  const insertLines = normalizeText(String(insertedText)).replace(/\n+$/, '').split('\n');
+  const matches = lines.flatMap((line, index) => line.includes(anchor) ? [index] : []);
+  if (matches.length !== 1) {
+    const candidateIndexes = matches.length ? matches.flatMap(index => Array.from({ length: 10 }, (_, offset) => index - 4 + offset)) : Array.from({ length: 10 }, (_, index) => index);
+    const nearby = [...new Set(candidateIndexes)]
+      .filter(index => index >= 0 && index < lines.length).slice(0, 10)
+      .map(index => ({ line: index + 1, text: lines[index] }));
+    const error = new Error(`アンカーを含む行は1行である必要があります（該当 ${matches.length} 行）`);
+    error.exitCode = 3;
+    error.details = { matches: matches.map(index => index + 1), nearby };
+    throw error;
+  }
+  const position = matches[0] + 1;
+  const unchanged = insertLines.every((line, offset) => lines[position + offset] === line);
+  if (unchanged) return { body: String(body), unchanged: true, insertedLines: insertLines.length, anchorLine: position };
+  return { body: [...lines.slice(0, position), ...insertLines, ...lines.slice(position)].join('\n'), unchanged: false, insertedLines: insertLines.length, anchorLine: position };
+}
+
+export async function appendAfterGrowi({ baseUrl, http, csrf, pagePath, anchor, lines, dryRun = false }) {
+  const base = String(baseUrl).replace(/\/$/, '');
+  const before = await resolveGrowiPage(base, http, pagePath);
+  if (!before) throw Object.assign(new Error(`Growi ページが見つかりません: ${pagePath}`), { exitCode: 3 });
+  const revisionBefore = currentRevisionOf(before);
+  const insertion = insertLinesAfterAnchor(pageBodyOf(before), anchor, lines);
+  const common = { ok: true, path: pagePath, pageId: before._id ?? '', url: `${base}${pagePath}`, revisionBefore,
+    revisionAfter: revisionBefore, insertedLines: insertion.unchanged ? 0 : insertion.insertedLines, diffLinesOtherThanInsert: 0 };
+  if (insertion.unchanged) return { ...common, unchanged: true };
+  if (dryRun) return { ...common, dryRun: true };
+  await createGrowiPage({ baseUrl: base, http, csrf, pagePath, body: insertion.body, overwrite: true });
+  const after = await resolveGrowiPage(base, http, pagePath);
+  const actual = pageBodyOf(after);
+  if (actual !== insertion.body) throw new Error('保存後の Growi 本文が期待本文と一致しません');
+  return { ...common, revisionAfter: currentRevisionOf(after) };
+}
+
+export async function appendAfterFromEnv({ pagePath, anchor, lines, dryRun = false, envFile = path.join(os.homedir(), '.claude', 'growi.env'), timeoutMs }) {
+  const env = readEnvFile(envFile);
+  if (!env?.GROWI_BASE_URL || !env.GROWI_USER || !env.GROWI_PASS) throw new Error('Growi 認証情報が不足しています');
+  const signal = timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined;
+  const timedFetch = signal ? (url, options = {}) => fetch(url, { ...options, signal }) : fetch;
+  const http = await loginGrowi({ baseUrl: env.GROWI_BASE_URL, user: env.GROWI_USER, password: env.GROWI_PASS, http: timedFetch });
+  const csrf = await growiApiCsrf(env.GROWI_BASE_URL, http);
+  return appendAfterGrowi({ baseUrl: env.GROWI_BASE_URL, http, csrf, pagePath, anchor, lines, dryRun });
+}
+
 // 戻り値: { status: 'created' | 'updated' | 'exists', url, pageId, chars }
 export async function createGrowiPage({ baseUrl, http, csrf, pagePath, body, overwrite = false }) {
   const base = String(baseUrl).replace(/\/$/, '');
@@ -640,7 +693,7 @@ export async function createGrowiPage({ baseUrl, http, csrf, pagePath, body, ove
 }
 
 function usage() {
-  console.error('usage: growi-manual.mjs sync-growi [--full] | sync | publish-index | install-index <file>... | ingest <file>... | index | search <query> [--limit N] [--path <prefix>] [--body] | get <id|title|path> | create-page --path <パス> --file <ファイル> [--overwrite] | status');
+  console.error('usage: growi-manual.mjs sync-growi [--full] | sync | publish-index | install-index <file>... | ingest <file>... | index | search <query> [--limit N] [--path <prefix>] [--body] | get <id|title|path> | create-page --path <パス> --file <ファイル> [--overwrite] | append-after --path <パス> --anchor <文字列> --file <ファイル> [--dry-run] | status');
 }
 
 export async function main(args = process.argv.slice(2)) {
@@ -705,6 +758,27 @@ export async function main(args = process.argv.slice(2)) {
     console.log(result.url);
     console.error(`文字数: ${result.chars}（${result.status === 'updated' ? '更新' : '作成'}）`);
     return 0;
+  }
+  if (command === 'append-after') {
+    const options = { dryRun: false };
+    while (rest.length) {
+      const option = rest.shift();
+      if (option === '--dry-run') options.dryRun = true;
+      else if (option === '--path') options.path = rest.shift();
+      else if (option === '--anchor') options.anchor = rest.shift();
+      else if (option === '--file') options.file = rest.shift();
+      else { usage(); return 2; }
+    }
+    if (!options.path?.startsWith('/') || !options.anchor || !options.file) { usage(); return 2; }
+    try {
+      const lines = fs.readFileSync(options.file, 'utf8').replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n').replace(/\n+$/, '');
+      const result = await appendAfterFromEnv({ pagePath: options.path, anchor: options.anchor, lines, dryRun: options.dryRun });
+      console.log(JSON.stringify(result));
+      return 0;
+    } catch (error) {
+      console.error(JSON.stringify({ ok: false, error: error.message, ...(error.details ?? {}) }));
+      return error.exitCode ?? 1;
+    }
   }
   if (command === 'get') {
     if (rest.length !== 1) { usage(); return 2; }

@@ -134,7 +134,7 @@ test('cost-improve本体は登録失敗を保存し、次回は新規human項目
   const f = fixture(t), claude = path.join(f.home, '.claude');
   fs.mkdirSync(claude);
   const action = { id: 'retry-human', pc: 'kim-PC', kind: 'cost_spike', todoMessage: '前回の提案を再試行' };
-  fs.writeFileSync(path.join(claude, 'cost-improve-state.json'), JSON.stringify({ version: 1, actions: [], lastKpis: {}, proposalRetry: [action] }));
+  fs.writeFileSync(path.join(claude, 'cost-improve-state.json'), JSON.stringify({ version: 1, actions: [], lastKpis: {}, proposalRetry: [{ ...action, id: 'older', todoMessage: '古い観測' }, action] }));
   const { main: costMain } = await import('./cost-improve-loop.mjs');
   const calls = [];
   const io = { now: new Date('2026-10-09T10:00:00Z'), noNotify: true, signals: {}, localState: {},
@@ -145,4 +145,29 @@ test('cost-improve本体は登録失敗を保存し、次回は新規human項目
   await costMain(['--home', f.home, '--no-notify', '--max-codex', '0'], io);
   assert.equal(calls.length, 2); assert.match(calls[1].evidence[0], /前回の提案を再試行/);
   assert.deepEqual(data(path.join(claude, 'cost-improve-state.json')).proposalRetry, []);
+});
+
+
+test('cost-improve は蓄積済みの日数違いも最新観測へ集約し別PC・別問題を保持する', async t => {
+  const f = fixture(t);
+  const options = { ...f.options, now: new Date('2026-10-10T10:00:00Z'),
+    submit: (p, opts) => submitProposal(p, { ...opts, ...f.options }) };
+  const stale = { pc: 'PC-A', kind: 'stale_report', todoMessage: '停止2日' };
+  await proposeHumanActions([stale, { ...stale, todoMessage: '停止3日' },
+    { ...stale, pc: 'PC-B' }, { ...stale, kind: 'low_delegation' }], options);
+  const first = data(path.join(f.dir, 'cost-improve-2026-10-10.json'));
+  const result = await proposeHumanActions([{ ...stale, todoMessage: '停止14日' }],
+    { ...options, now: new Date('2026-10-22T10:00:00Z') });
+  assert.equal(result.ok, true);
+  const p = result.proposal;
+  assert.equal(p.id, first.id);
+  assert.equal(p.proposal.changes.length, 3);
+  assert.equal(p.evidence.length, 3);
+  assert.match(p.evidence[0], /停止14日/);
+  assert.equal(p.revision, first.revision + 1);
+  assert.doesNotMatch(read(p.onApprove.promptFile), /PC-A: stale_report \/ 停止[23]日/);
+  assert.equal(p.proposal.changes[0].after, '停止14日');
+  const repeat = await proposeHumanActions([{ ...stale, todoMessage: '停止14日' }], options);
+  assert.equal(repeat.changed, false);
+  assert.equal(f.launches.length, 1);
 });

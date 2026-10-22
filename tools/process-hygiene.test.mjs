@@ -28,6 +28,11 @@ test('vscode-idle: sessions 読めない・壊れ・entrypoint違いは止めな
   assert.equal(idleRun([vscProc(1, t0)], { 1: idleSession(1, t0, 500, { entrypoint: 'cli' }) }).length, 0);
 });
 
+test('vscode-idle: Remote Control 接続中(bridgeSessionId あり)は止めない', () => {
+  assert.equal(idleRun([vscProc(1, t0)], { 1: idleSession(1, t0, 800, { bridgeSessionId: 'session_01abc' }) }).length, 0);
+  assert.equal(idleRun([vscProc(1, t0)], { 1: idleSession(1, t0, 800, { bridgeSessionId: '' }) }).length, 1);
+});
+
 test('vscode-idle: デスクトップアプリは止めない', () => {
   assert.equal(idleRun([vscProc(1, t0, APP_CMD)], { 1: idleSession(1, t0, 800) }).length, 0);
 });

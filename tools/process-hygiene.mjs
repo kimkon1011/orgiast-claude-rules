@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { WINDOWS_PROCESS_SCRIPT } from './lib/windows-process.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -124,6 +125,8 @@ export function classifyVscodeIdle(processes, now = Date.now(), opts = {}) {
     try { session = opts.readSession?.(pid) ?? null; } catch { session = null; }
     if (!session || typeof session !== 'object') continue;
     if (session.entrypoint !== 'claude-vscode' || session.status === 'busy') continue;
+    // Remote Control 接続中（スマホ待機タブ・スマホ利用中）は無操作が正常。止めるとスマホ側が exit code 1 で切れる。
+    if (session.bridgeSessionId) continue;
     const activity = Math.max(Number(session.statusUpdatedAt) || 0, Number(session.updatedAt) || 0);
     if (!activity) continue;
     let lastMs = activity;
@@ -294,14 +297,7 @@ export function parseProcessLines(text) {
 }
 
 function powershellProcesses(spawnImpl = spawnSync) {
-  const command = `[Console]::OutputEncoding=[Text.Encoding]::UTF8
-$separator=[char]31
-Get-CimInstance Win32_Process | ForEach-Object {
-  $commandLine=[string]$_.CommandLine
-  $commandLine=$commandLine.Replace([char]13,' ').Replace([char]10,' ')
-  $fields=@([string]$_.ProcessId,[string]$_.ParentProcessId,$_.CreationDate.ToUniversalTime().ToString('o'),[string]$_.WorkingSetSize,[string]$_.Name,$commandLine)
-  [Console]::Out.WriteLine(($fields -join $separator))
-}`;
+  const command = WINDOWS_PROCESS_SCRIPT;
   const result = spawnImpl('powershell', ['-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8', windowsHide: true, timeout: 20_000 });
   if (result.error || result.status !== 0) throw result.error || new Error(String(result.stderr || `PowerShell exit ${result.status}`).trim());
   return parseProcessLines(result.stdout);

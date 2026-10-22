@@ -24,7 +24,7 @@ function fixture(t) {
   const body = path.join(home, 'body.txt'); fs.writeFileSync(body, 'nonempty test body');
   const calls = [], output = [], errors = [], spawns = [];
   const deps = { home, pcMap, spawnImpl: (...args) => { spawns.push(args); return { on() {}, unref() {} }; }, identity: { hostname: pcMap[receiver].hostname }, now: () => now, stdout: s => output.push(s), stderr: s => errors.push(s),
-    fetchBeacons: async () => ({ ok: false, beacons: [] }), dailySelfHeal: () => {}, dailyLaneHealth: () => {}, autoRunFixNow: () => {},
+    fetchBeacons: async () => ({ ok: false, beacons: [] }), dailySelfHeal: () => {}, dailyLaneHealth: () => {}, autoRunFixNow: () => {}, dailyRuleCompliance: () => {},
     request: async (kind, payload) => { calls.push({ kind, payload: structuredClone(payload) }); return kind === 'mail-poll' ? { ok: true, messages: [] } : kind === 'mail-ack' && payload.ids ? { ok: true, results: payload.ids.map(id => ({ id, ok: true, mail: { id } })) } : { ok: true, mail: payload }; } };
   const save = m => fs.writeFileSync(path.join(inbox, `${m.id}.json`), JSON.stringify(m));
   const read = id => JSON.parse(fs.readFileSync(path.join(inbox, `${id}.json`), 'utf8'));
@@ -85,6 +85,35 @@ test('processed migration marks only existing inbox ids done and removes the leg
   await pollOnce(f.deps);
   assert.equal(fs.existsSync(file), false); assert.equal(f.read('mail-original').status, 'done'); assert.equal(f.read('mail-failed').status, 'failed');
   assert.equal(f.read('mail-unprocessed').status, 'delivered'); assert.equal(fs.existsSync(path.join(f.inbox, 'mail-missing.json')), false);
+});
+
+function growiFixture(t, { hub = true, body = JSON.stringify({ growiAppend: [{ path: '/手順', anchor: '目印', lines: '追記' }] }) } = {}) {
+  const f = fixture(t);
+  fs.appendFileSync(path.join(f.dir, 'fleet-sheet.env'), `FLEET_HUB=${hub ? receiver : sender}\n`);
+  fs.writeFileSync(path.join(f.dir, 'growi.env'), '存在確認専用');
+  f.save(mail({ why: '[growi-append] 手順更新', body }));
+  f.deps.growiAppend = async item => ({ ok: true, path: item.pagePath, insertedLines: 1 });
+  return f;
+}
+
+test('Growi 中継はハブかつ growi.env ありなら処理して返信する', async t => {
+  const f = growiFixture(t); await pollOnce(f.deps);
+  const sent = f.calls.find(call => call.kind === 'mail-send');
+  assert.equal(sent.payload.replyTo, 'mail-original'); assert.match(sent.payload.body, /"ok":true/);
+  assert.match(sent.payload.id, /^mail-reply-growi-[0-9a-f]{24}$/); // サーバーの mail-send は id 必須
+  assert.ok(f.read('mail-original').growiAppendDoneAt);
+});
+test('Growi 中継はハブでなければ処理しない', async t => {
+  const f = growiFixture(t, { hub: false }); await pollOnce(f.deps);
+  assert.equal(f.calls.some(call => call.kind === 'mail-send'), false); assert.equal(f.read('mail-original').growiAppendDoneAt, undefined);
+});
+test('Growi 中継は処理済みメールを二重処理しない', async t => {
+  const f = growiFixture(t); await pollOnce(f.deps); await pollOnce(f.deps);
+  assert.equal(f.calls.filter(call => call.kind === 'mail-send').length, 1);
+});
+test('Growi 中継は不正 JSON でも失敗理由を返信する', async t => {
+  const f = growiFixture(t, { body: '{不正' }); await pollOnce(f.deps);
+  const sent = f.calls.find(call => call.kind === 'mail-send'); assert.match(sent.payload.body, /"ok":false/); assert.ok(f.read('mail-original').growiAppendDoneAt);
 });
 test('interactive done/failed/expired prompts and already-started prompts are never re-executed', async t => {
   const f = fixture(t);
@@ -370,6 +399,76 @@ test('C11 busy inbox lock skips mutations and transport then permits retry', asy
   assert.equal(await main(['--ack', mail().id], f.deps), LOCK_BUSY_EXIT); assert.equal(f.calls.length, 0); assert.equal(f.read(mail().id).status, 'delivered'); assert.equal(f.output.length, 0);
   fs.unlinkSync(lock); await main(['--ack', mail().id], f.deps); assert.equal(f.read(mail().id).status, 'done'); assert.equal(f.calls.length, 1);
 });
+for (const code of ['EPERM', 'EBUSY']) for (const operation of ['openSync', 'mkdirSync', 'statSync']) {
+  test(`C11 Windows ${operation} ${code} contention waits without stealing ownership`, t => {
+    const f = fixture(t); f.save(mail());
+    const lock = path.join(f.inbox, `${mail().id}.json.lock`);
+    const descriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    t.after(() => Object.defineProperty(process, 'platform', descriptor));
+    fs.writeFileSync(lock, 'other owner');
+    const original = fs[operation]; let faults = 0, callbacks = 0;
+    t.mock.method(fs, operation, (...args) => {
+      if (args[0] === (operation === 'mkdirSync' ? `${lock}.reclaim` : lock) && faults++ === 0) {
+        throw Object.assign(new Error('sharing conflict'), { code });
+      }
+      return original(...args);
+    });
+    const delays = [];
+    t.mock.method(Atomics, 'wait', (...args) => {
+      delays.push(args[3]);
+      assert.equal(callbacks, 0);
+      assert.equal(fs.readFileSync(lock, 'utf8'), 'other owner');
+      assert.equal(fs.existsSync(`${lock}.reclaim`), false);
+      fs.unlinkSync(lock); // The owner releases while this caller waits.
+      return 'timed-out';
+    });
+    const result = updateInbox(mail().id, current => {
+      callbacks++; return { ...current, status: 'done' };
+    }, { home: f.home });
+    assert.equal(result.status, 'done'); assert.equal(callbacks, 1);
+    assert.equal(f.read(mail().id).status, 'done');
+    assert.deepEqual(delays, [INBOX_LOCK_DELAY_MS]);
+    assert.equal(fs.existsSync(lock), false);
+  });
+  test(`C11 persistent Windows ${operation} ${code} contention stays bounded`, t => {
+    const f = fixture(t); f.save(mail());
+    const lock = path.join(f.inbox, `${mail().id}.json.lock`);
+    const descriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    t.after(() => Object.defineProperty(process, 'platform', descriptor));
+    fs.writeFileSync(lock, 'other owner');
+    const original = fs[operation]; let faults = 0;
+    t.mock.method(fs, operation, (...args) => {
+      if (args[0] === (operation === 'mkdirSync' ? `${lock}.reclaim` : lock)) {
+        faults++; throw Object.assign(new Error('sharing conflict'), { code });
+      }
+      return original(...args);
+    });
+    const delays = [];
+    t.mock.method(Atomics, 'wait', (...args) => { delays.push(args[3]); return 'timed-out'; });
+    assert.equal(updateInbox(mail().id, () => assert.fail('no ownership'), { home: f.home }), null);
+    assert.equal(faults, INBOX_LOCK_RETRIES + 1);
+    assert.deepEqual(delays, Array(INBOX_LOCK_RETRIES).fill(INBOX_LOCK_DELAY_MS));
+    assert.equal(fs.readFileSync(lock, 'utf8'), 'other owner');
+    assert.equal(f.read(mail().id).status, 'delivered');
+    assert.equal(fs.existsSync(`${lock}.reclaim`), false);
+  });
+}
+for (const [platform, code] of [['linux', 'EPERM'], ['linux', 'EBUSY'], ['win32', 'EACCES'], ['win32', 'EIO']]) {
+  test(`C11 unrelated ${platform} ${code} lock errors propagate`, t => {
+    const f = fixture(t); f.save(mail());
+    const lock = path.join(f.inbox, `${mail().id}.json.lock`);
+    const descriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: platform });
+    t.after(() => Object.defineProperty(process, 'platform', descriptor));
+    const original = fs.openSync, error = Object.assign(new Error('lock failure'), { code });
+    t.mock.method(fs, 'openSync', (...args) => { if (args[0] === lock) throw error; return original(...args); });
+    t.mock.method(Atomics, 'wait', () => assert.fail('must not wait'));
+    assert.throws(() => updateInbox(mail().id, () => assert.fail('no ownership'), { home: f.home }), e => e === error);
+    assert.equal(f.read(mail().id).status, 'delivered');
+  });
+}
 test('C11 callback errors release locks and delayed server responses preserve hook fields', async t => {
   const f = fixture(t); f.save(mail());
   assert.throws(() => updateInbox(mail().id, () => { throw new Error('callback'); }, { home: f.home }), /callback/);
@@ -432,8 +531,11 @@ test('C11 concurrent workers preserve every inbox read-modify-write update', asy
     worker.on('message', value => { completed = value; }); worker.on('error', reject);
     worker.on('exit', code => code ? reject(new Error('worker failed')) : resolve(completed));
   })));
-  assert.equal(counts.reduce((a, b) => a + b, 0), workers * iterations);
-  assert.equal(f.read(mail().id).increments, workers * iterations);
+  // updateInbox deliberately returns null when its bounded lock wait expires.
+  // Every successful update must survive, even when some attempts were busy.
+  const completed = counts.reduce((a, b) => a + b, 0);
+  assert.ok(completed > 0 && completed <= workers * iterations);
+  assert.equal(f.read(mail().id).increments, completed);
 });
 test('C6 quarantine failures are bounded even when the same invalid broadcast is polled again', async t => {
   const f = fixture(t); let failures = 0;
@@ -1083,7 +1185,7 @@ test('802 failed mail accepts interactive reply as idempotent note and closes lo
   assert.equal(f.read(mail().id).status, 'done');
 });
 
-import { refreshSentStatus, stripClaudeWarnings } from './fleet-mail.mjs';
+import { SENT_STATUS_MAX_LOOKUP_FAILURES, refreshSentStatus, stripClaudeWarnings } from './fleet-mail.mjs';
 test('802 sender poll caches failure reason for the offline hook', async t => {
   const f = fixture(t);
   fs.writeFileSync(path.join(f.dir, 'fleet-mail-sent.jsonl'), JSON.stringify({ action: 'sent', id: 'mail-outbound' }) + '\n');
@@ -1093,6 +1195,51 @@ test('802 sender poll caches failure reason for the offline hook', async t => {
   } });
   const cached = JSON.parse(fs.readFileSync(path.join(f.dir, 'fleet-mail-sent-status.json')));
   assert.equal(cached['mail-outbound'].failReason, 'timeout');
+});
+test('821 sent status stops auto-polling an id the server never returns', async t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.dir, 'fleet-mail-sent.jsonl'), JSON.stringify({ action: 'send-attempt', id: 'mail-never-sent' }) + '\n');
+  let calls = 0; const messages = [];
+  const request = async () => { calls++; throw new Error('timeout'); };
+  for (let i = 0; i < SENT_STATUS_MAX_LOOKUP_FAILURES; i++) await refreshSentStatus({ home: f.home, request, stderr: m => messages.push(m) });
+  assert.equal(calls, SENT_STATUS_MAX_LOOKUP_FAILURES);
+  assert.equal(messages.filter(m => /再試行待ち/.test(m)).length, SENT_STATUS_MAX_LOOKUP_FAILURES - 1);
+  assert.equal(messages.filter(m => /自動取得を打ち切り/.test(m)).length, 1);
+  await refreshSentStatus({ home: f.home, request, stderr: m => messages.push(m) });
+  assert.equal(calls, SENT_STATUS_MAX_LOOKUP_FAILURES, '打ち切り後は mail-get を呼ばない');
+});
+test('821 sent status counts an empty mail response as a lookup failure and resets after success', async t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.dir, 'fleet-mail-sent.jsonl'), JSON.stringify({ action: 'send-attempt', id: 'mail-late' }) + '\n');
+  let mail = null;
+  const request = async (kind, payload) => ({ ok: true, mail });
+  await refreshSentStatus({ home: f.home, request, stderr: () => {} });
+  let cached = JSON.parse(fs.readFileSync(path.join(f.dir, 'fleet-mail-sent-status.json')));
+  assert.equal(cached['mail-late'].lookupFailures, 1);
+  mail = { id: 'mail-late', status: 'delivered' };
+  await refreshSentStatus({ home: f.home, request, stderr: () => {} });
+  cached = JSON.parse(fs.readFileSync(path.join(f.dir, 'fleet-mail-sent-status.json')));
+  assert.equal(cached['mail-late'].status, 'delivered');
+  assert.equal(cached['mail-late'].lookupFailures, undefined);
+});
+test('821 sent status never abandons a freshly sent id on transient timeouts', async t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.dir, 'fleet-mail-sent.jsonl'), JSON.stringify({ action: 'sent', id: `mail-${Date.now()}-deadbeef` }) + '\n');
+  let calls = 0;
+  const request = async () => { calls++; throw new Error('timeout'); };
+  for (let i = 0; i < SENT_STATUS_MAX_LOOKUP_FAILURES + 1; i++) await refreshSentStatus({ home: f.home, request, stderr: () => {} });
+  assert.equal(calls, SENT_STATUS_MAX_LOOKUP_FAILURES + 1, 'sent 行がある id は一時的な失敗で打ち切らない');
+});
+test('821 sent status abandons an expired sent id so the retry noise stops', async t => {
+  const f = fixture(t);
+  const id = `mail-${Date.now() - 9 * 24 * 3600000}-abcd1234`;
+  fs.writeFileSync(path.join(f.dir, 'fleet-mail-sent.jsonl'), JSON.stringify({ action: 'sent', id }) + '\n');
+  let calls = 0;
+  const request = async () => { calls++; throw new Error('timeout'); };
+  for (let i = 0; i < SENT_STATUS_MAX_LOOKUP_FAILURES; i++) await refreshSentStatus({ home: f.home, request, stderr: () => {} });
+  assert.equal(calls, SENT_STATUS_MAX_LOOKUP_FAILURES);
+  await refreshSentStatus({ home: f.home, request, stderr: () => {} });
+  assert.equal(calls, SENT_STATUS_MAX_LOOKUP_FAILURES, '期限切れ相当の id は打ち切り後 mail-get を呼ばない');
 });
 test('802 warning stripping keeps real answers and removes known configuration lines', () => {
   assert.equal(stripClaudeWarnings('Permission allow rule (settings.json): warning\r\nWarning: Invalid configuration entry\nanswer\nUnknown permission rule'), 'answer');

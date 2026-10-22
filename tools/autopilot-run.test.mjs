@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runOnce, invokeClaude, buildPrompt } from './autopilot-run.mjs';
+import { runOnce, invokeClaude, buildPrompt, resolveSupervisorAuth } from './autopilot-run.mjs';
 import { runAutopilot, acquireLock } from './autopilot-tick.mjs';
 
 function fixture(t) {
@@ -24,6 +24,17 @@ test('runner does not invoke Claude when unstarted, paused, stopped, or done', a
   await runAutopilot('resume', {}, opts);
   await runAutopilot('post', { summary: 'complete', progress: 100, evidence: '結果を確認' }, opts);
   assert.equal((await runOnce(opts)).skipped, 'done');
+});
+
+test('run.log records whether the digest was actually delivered, even on a paused tick', async (t) => {
+  const opts = fixture(t);
+  await runAutopilot('start', { objective: 'test' }, opts);
+  await runAutopilot('pause', {}, opts);
+  const result = await runOnce({ ...opts, now: new Date('2026-09-21T03:00:00Z') });
+  assert.equal(result.skipped, 'manual_pause');
+  const log = fs.readFileSync(path.join(opts.dir, 'run.log'), 'utf8');
+  assert.match(log, /"digest":"2026-09-21-12"/);
+  assert.match(log, /"delivered":"none"/);
 });
 
 test('models follow planIncluded; prompt comes from skill and headless uses one foreground iteration', async (t) => {
@@ -247,18 +258,18 @@ test('成功で counter が 0 に戻る', async (t) => {
   assert.equal(s2.status, 'running');
 });
 
-test('needs_kim の pause は retryAt を過ぎても再開しない', async (t) => {
+test('質問待ちは全体を止めず、24時間後も他の作業を進められる', async (t) => {
   const opts = fixture(t);
   await runAutopilot('start', { objective: 'test needs_kim pause' }, opts);
   await runAutopilot('pause', { question: 'この変更を進めますか？' }, opts);
   const s1 = (await runAutopilot('status', {}, opts)).state;
-  assert.equal(s1.status, 'paused');
-  assert.equal(s1.pausedReason, 'needs_kim');
+  assert.equal(s1.status, 'running');
+  assert.equal(s1.pausedReason, null);
 
-  // 24時間後でも再開しない
+  // 質問は保留し、無関係の巡回は継続する。
   const preLater = await runAutopilot('pre', {}, { ...opts, now: new Date(opts.now.getTime() + 24 * 3600_000) });
-  assert.equal(preLater.verdict, 'pause');
-  assert.equal(preLater.reason, 'needs_kim');
+  assert.equal(preLater.verdict, 'run');
+  assert.equal(preLater.pendingQuestion, 'この変更を進めますか？');
 });
 
 test('人が resume した時も counter と retryAt をリセットする', async (t) => {
@@ -317,4 +328,36 @@ test('進捗報告: 12:00 枠・21:00 枠でそれぞれ 1 回だけ送る。同
   // 起床 6: 21:30 JST (21:00 枠の2回目の起床 -> 二重送信しない)
   await runOnce({ ...opts, now: new Date('2026-10-14T21:30:00+09:00'), invokeImpl: async () => ({ exitCode: 0 }) });
   assert.equal(sent.length, 2);
+});
+
+test('resolveSupervisorAuth: OAuth が死んでいる時だけ deepseek.env の鍵へ切り替える', () => {
+  const files = (map) => (file) => {
+    const name = path.basename(String(file));
+    if (!(name in map)) throw new Error('ENOENT');
+    return map[name];
+  };
+  const creds = (token) => JSON.stringify({ claudeAiOauth: { accessToken: token } });
+
+  const envLane = resolveSupervisorAuth({ home: 'H', env: { ANTHROPIC_AUTH_TOKEN: 'x' }, readFile: files({}) });
+  assert.equal(envLane.lane, 'env');
+  assert.equal(envLane.model, null);
+
+  const oauthEnv = { PATH: 'q' };
+  const oauthLane = resolveSupervisorAuth({ home: 'H', env: oauthEnv, readFile: files({ '.credentials.json': creds('tok') }) });
+  assert.equal(oauthLane.lane, 'oauth');
+  assert.equal(oauthLane.model, null);
+  assert.equal(oauthLane.env, oauthEnv);
+
+  const dead = files({ '.credentials.json': creds(''), 'deepseek.env': 'DEEPSEEK_API_KEY="sk-test"\n' });
+  const fallback = resolveSupervisorAuth({ home: 'H', env: { PATH: 'p' }, readFile: dead });
+  assert.equal(fallback.lane, 'deepseek');
+  assert.equal(fallback.model, 'deepseek-v4-flash');
+  assert.equal(fallback.env.ANTHROPIC_AUTH_TOKEN, 'sk-test');
+  assert.equal(fallback.env.ANTHROPIC_BASE_URL, 'https://api.deepseek.com/anthropic');
+  assert.equal(fallback.env.PATH, 'p');
+
+  const noKey = resolveSupervisorAuth({ home: 'H', env: {}, readFile: files({ '.credentials.json': creds('') }) });
+  assert.equal(noKey.lane, 'none');
+  assert.equal(noKey.model, null);
+  assert.equal(resolveSupervisorAuth({ home: 'H', env: {}, readFile: files({}) }).lane, 'none');
 });

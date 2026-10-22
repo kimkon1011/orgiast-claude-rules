@@ -8,6 +8,7 @@ import path from 'node:path';
 import { spawnSync as defaultSpawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { fetchFleetKPIs, getClaudeDir } from './fleet-kpi-fetch.mjs';
+import { scanAiReceipts, alertAiReceipts, receiptLedgerAgeHours } from './ai-receipt-scan.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { submitProposal } from './proposal-session.mjs';
 import { appendImprovementTodos } from './nightly-kpi.mjs';
@@ -16,6 +17,7 @@ import { classifyTaskKind, CODEX_KINDS } from './lib/task-kind.mjs';
 import { parseDeferred } from './lib/executor-gate.mjs';
 import { collectProviderHealth, collectClaudeStats } from './usage-stats.mjs';
 import { collectBudgetStatus } from './budget-status.mjs';
+import { runMonthly as runOriguchiReferralMonthly } from './origuchi-referral-monthly.mjs';
 import { shouldSendMonthlyReport, buildMonthlyReport, markMonthlyReportSent } from './cost-monthly-report.mjs';
 import { collectProviderBalances, formatBalanceLine, alertProviderBalances, BALANCE_LOW_THRESHOLD_USD, CREDIT_LOW_THRESHOLD } from './provider-balance.mjs';
 import { resolveReporterLabel } from './reporter-label.mjs';
@@ -48,6 +50,20 @@ export const SIGNAL_METRICS = Object.freeze({
   eval_stale: 'evalAgeDays',
   spend_anomaly: 'todaySpendUsd'
 });
+
+export function evaluateReceiptSignals(aiReceipts, { ageHours = 0 } = {}) {
+  const violations = [];
+  const add = evidence => violations.push({
+    kind: 'measurement_untrusted', pc: 'self', severity: 'error',
+    provider: 'receipts', evidence, trusted: true,
+  });
+  if (aiReceipts == null) add('領収書スキャン: 取得失敗（設定・台帳・認証・接続を確認）');
+  else if (aiReceipts.errors?.length) {
+    add(`領収書スキャン: ${aiReceipts.errors.map(e => `${e.account}（${e.reason}）`).join('、')}`);
+  }
+  if (ageHours > 36) add(`領収書台帳が ${Number.isFinite(ageHours) ? ageHours.toFixed(1) : 'Infinity'}h 更新されていない`);
+  return violations;
+}
 
 export function evaluateBalanceSignals(rows, { directProviders = ['deepseek', 'kimi'] } = {}) {
   const violations = [];
@@ -408,6 +424,7 @@ export function evaluateFleet({ rows, ledgerCounts, localState, now, lastKpis = 
 
   if (signals) {
     violations.push(...evaluateBalanceSignals(signals.providerBalances));
+    if ('aiReceipts' in signals) violations.push(...evaluateReceiptSignals(signals.aiReceipts, { ageHours: signals.receiptAgeHours }));
     // provider_unhealthy: 直近7日で failRate>=0.2 か http429>=50 の provider(codex=定額なので除外)。
     for (const [name, stats] of Object.entries(signals.providerHealth?.providers || {})) {
       if (String(name).toLowerCase() === 'codex') continue;
@@ -517,6 +534,7 @@ function humanTodoMessage(violation, now, retryCount = 0, retryMode = 'directive
     return `【${pc}】の Claude 概算が $${previous} → $${actual} に増えています（${increase === null ? '増加率不明' : `+${increase.toFixed(1)}%`}）。作業量は増えていません。誤ルーティング、やり直し、Claude の呼びすぎがないか直近の作業を確認してください。`;
   }
   if (violation.kind === 'measurement_untrusted') {
+    if (violation.provider === 'receipts') return `【このPC】${violation.evidence}。領収書スキャンの設定・台帳・認証・接続を確認してください。`;
     const reportedAt = /Reported at\s*([^,]+)/.exec(violation.evidence)?.[1];
     const situation = reportedAt
       ? `${reportedAt} に報告は来ていますが、委譲率またはコストの値が空です`
@@ -952,7 +970,7 @@ export function executeLocalAction({ act, dryRun = false, claudeDir, home, now =
   }
   console.log(`Executing auto-local command: ${act.command}`);
   const parts = splitWhitelistedCommand(act.command);
-  const res = spawnSync(parts[0], parts.slice(1), { windowsHide: true, shell: false, cwd: repoRoot, encoding: 'utf8' });
+  const res = spawnSync(parts[0] === 'node' ? process.execPath : parts[0], parts.slice(1), { windowsHide: true, shell: false, cwd: repoRoot, encoding: 'utf8' });
   if (res.status === 0) {
     return { ...act, result: 'pending', note: 'Command executed successfully. Awaiting verification.' };
   }
@@ -985,7 +1003,7 @@ export function runAutoCodexIsolated({ acts, specFile, dryRun = false, repoPath,
     // 差分が要るレーンなので Codex 系(implement / verify)に限る。文面が調査系でも implement に倒す。
     const guessedKind = classifyTaskKind(String(first.specContent || ''));
     const kind = CODEX_KINDS.has(guessedKind) ? guessedKind : 'implement';
-    res = spawnSync('node', [path.join(tempTree, 'tools/codex-do.mjs'), '--prompt-file', specFile, '--cwd', tempTree, '--timeout', '1800', '--origin', 'unattended', '--kind', kind], { windowsHide: true, cwd: tempTree, encoding: 'utf8' });
+    res = spawnSync(process.execPath, [path.join(tempTree, 'tools/codex-do.mjs'), '--prompt-file', specFile, '--cwd', tempTree, '--timeout', '1800', '--origin', 'unattended', '--kind', kind], { windowsHide: true, cwd: tempTree, encoding: 'utf8' });
     const deferred = parseDeferred(res.status, res.stdout);
     if (deferred) {
       // 終了コード75: 上限中/無人割当超過。失敗に数えず、retryAt まで再試行しない。
@@ -995,7 +1013,7 @@ export function runAutoCodexIsolated({ acts, specFile, dryRun = false, repoPath,
     if (res.status !== 0) { fail('Codex execution failed', res); return; }
     const diff = spawnSync('git', ['-C', tempTree, 'diff', '--stat'], { windowsHide: true, encoding: 'utf8' });
     if (diff.status !== 0 || !String(diff.stdout || '').trim()) { fail('変更なし', diff); return; }
-    const tests = spawnSync('node', ['--test', 'tools/*.test.mjs'], { windowsHide: true, cwd: tempTree, shell: true, encoding: 'utf8' });
+    const tests = spawnSync(process.execPath, ['--test', 'tools/*.test.mjs'], { windowsHide: true, cwd: tempTree, shell: false, encoding: 'utf8' });
     if (tests.status !== 0) { fail('verification tests failed', tests); return; }
     const dateStr = now.toISOString().slice(0, 10).replaceAll('-', '');
     const branchName = `auto/cost-improve-${dateStr}-${label}`;
@@ -1315,6 +1333,13 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   // 各収集器は io で差し替え可能(テスト・dry-run で実データに触れないように)。
   const collectSignals = async () => {
     if (io.signals !== undefined) return io.signals;
+    let aiReceipts = null;
+    try {
+      aiReceipts = await (io.scanAiReceipts ?? scanAiReceipts)({ home, now, days: 3, appendLedger: !dryRun });
+    } catch { console.error('ai-receipt-scan: 領収書取得失敗（未計測として報告）'); }
+    let receiptAgeHours = Infinity;
+    try { receiptAgeHours = (io.receiptLedgerAgeHours ?? receiptLedgerAgeHours)(home, now); }
+    catch { console.error('ai-receipt-scan: 台帳の更新日時を取得できません'); }
     let budgetPacePct = null;
     try {
       const budget = await (io.collectBudgetStatus ?? collectBudgetStatus)({ home, now });
@@ -1334,6 +1359,8 @@ export async function main(argv = process.argv.slice(2), io = {}) {
       headlessClaudeOut,
       budgetPacePct,
       evalAgeDays: (io.evalLatestAgeDays ?? evalLatestAgeDays)(claudeDir, now),
+      aiReceipts,
+      receiptAgeHours,
       providerBalances: await (io.collectProviderBalances ?? collectProviderBalances)({ home, now, appendHistory: !dryRun })
     };
   };
@@ -1351,6 +1378,9 @@ export async function main(argv = process.argv.slice(2), io = {}) {
         home, now, notify: io.notifyKim ?? notifyKim,
       });
     } catch { console.error('provider-balance: 日次残高DMに失敗。次回再試行します'); }
+    try {
+      await (io.alertAiReceipts ?? alertAiReceipts)(signals?.aiReceipts, { home, now, notify: io.notifyKim ?? notifyKim });
+    } catch { console.error('ai-receipt-scan: 領収書DMに失敗'); }
   }
   // heartbeat metrics(headlessOut / budgetPace)は常に実測を載せる。
   if (localState && typeof localState === 'object' && signals) {
@@ -1530,7 +1560,10 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   const stalePcs = new Set(evaluation.violations.filter(v => v.kind === 'stale_report').map(v => v.pc));
   let reportText = ineffectiveWarning ? `${ineffectiveWarning}\n\n` : '';
   reportText += state.lastNotifyError ? `※ 前回の通知は送信に失敗しています(${state.lastNotifyError})\n\n` : '';
+  for (const violation of evaluation.violations.filter(v => v.provider === 'receipts')) reportText += `⚠️ ${violation.evidence}\n`;
   reportText += `${formatBalanceLine(signals?.providerBalances || [])}\n`;
+  if (signals?.aiReceipts == null) reportText += '領収書(全アカウント Gmail): スキャン失敗（未計測）\n';
+  if (signals?.aiReceipts?.report) reportText += `${signals.aiReceipts.report}\n`;
   reportText += `**📊 AIコスト自動改善ループ報告 (${now.toISOString().slice(0, 10)})**\n\n`;
   
   const unmeasurableRows = [];
@@ -1591,7 +1624,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   for (const row of unmeasurableRows) reportText += `- **${row.pcName || row.label || 'unknown'}**: 自動では復旧不可 — そのPCで Claude Code を1回起動してください\n`;
 
   // 人へ上げた内容と同じ情報をセッションへ登録。失敗は見える形で残す。
-  const proposalActions = [...new Map([...(state.proposalRetry || []), ...newlyHuman].map(a => [a.id || `${a.pc}:${a.kind}`, a])).values()];
+  const proposalActions = [...new Map([...(state.proposalRetry || []), ...newlyHuman].map(a => [JSON.stringify([a.pc, a.kind]), a])).values()];
   let proposalResult;
   try {
     proposalResult = await proposeHumanActions(proposalActions, {
@@ -1633,6 +1666,15 @@ export async function main(argv = process.argv.slice(2), io = {}) {
     catch (error) {
       stateWriteFailed = true;
       console.error(`cost-improve 状態書き込み失敗: ${String(error?.message ?? error)}`);
+    }
+  }
+
+  // Existing PCs receive this through the same daily loop as the cost report.
+  if (!dryRun && !noNotify && !io.noNotify) {
+    try {
+      await (io.runOriguchiReferralMonthly || runOriguchiReferralMonthly)({ home, now, claudeDir });
+    } catch (error) {
+      console.error(`折口様紹介案件の月次チェック失敗: ${error.message}`);
     }
   }
 

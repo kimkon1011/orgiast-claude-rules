@@ -23,6 +23,11 @@ test('既存PowerShell hookへExecutionPolicy Bypassを補いcost-loopをmjsへ�
   assert.ok(commands.find((command) => command.includes('custom.ps1')).includes('-NoProfile -ExecutionPolicy Bypass'));
   assert.equal((commands.find((command) => command.includes('done.ps1')).match(/-ExecutionPolicy Bypass/gi) || []).length, 1);
   assert.match(stdout, /hook修復: 実行ポリシー1件 \/ cost-loop移行1件/);
+  const shareGroups = settings.hooks.PreToolUse.filter(group => group.hooks.some(hook => hook.command.includes('share-before-send-gate.mjs')));
+  assert.equal(shareGroups.length, 1);
+  assert.match('mcp__claude_ai_Discord__send_dm', new RegExp(shareGroups[0].matcher));
+  assert.match('mcp__claude_ai_Gmail__create_draft', new RegExp(shareGroups[0].matcher));
+  assert.equal(fs.readFileSync(path.join(home, '.claude/share-ledger.jsonl'), 'utf8'), '');
   fs.rmSync(home, { recursive: true, force: true });
 });
 
@@ -40,6 +45,9 @@ test('session-relaunch hook は同期で1本だけ登録され、再実行で重
   assert.match(hooks[0].command, /session-relaunch\.mjs" --hook$/);
   assert.equal(hooks[0].timeout, 10);
   assert.equal('async' in hooks[0], false);
+  const planHooks = settings.hooks.UserPromptSubmit.flatMap(group => group.hooks || []).filter(hook => hook.command.includes('plan-usage-report.mjs'));
+  assert.equal(planHooks.length, 1);
+  assert.match(planHooks[0].command, /plan-usage-report\.mjs" --hook$/);
   assert.match(second, /hook は既に登録済み\(変更なし\)/);
   fs.rmSync(home, { recursive: true, force: true });
 });
@@ -109,7 +117,7 @@ test('手間削減hook 8本を正しいイベントへ登録しstop-gateは登�
   execFileSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { encoding: 'utf8', env });
   const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
   const names = (event) => settings.hooks[event].flatMap((group) => group.hooks || []).map((hook) => path.basename([...String(hook.command).matchAll(/"([^"]+\.mjs)"/g)].at(-1)?.[1] || ''));
-  assert.deepEqual(['automation-first-reminder.mjs', 'credentials-reminder.mjs'].every((name) => names('UserPromptSubmit').includes(name)), true);
+  assert.deepEqual(['automation-first-reminder.mjs', 'credentials-reminder.mjs', 'playbook-inject.mjs'].every((name) => names('UserPromptSubmit').includes(name)), true);
   assert.deepEqual(['pretooluse-headless-background.mjs', 'pretooluse-serial-investigation.mjs', 'pipe-stage-permissions.mjs'].every((name) => names('PreToolUse').includes(name)), true);
   assert.deepEqual(['auto-progress-ledger.mjs', 'stop-gate-runner.mjs', 'handoff-detail-guard.mjs', 'url-format-guard.mjs', 'check-e2e-before-stop.mjs'].every((name) => names('Stop').includes(name)), true);
   assert.equal(Object.values(settings.hooks).flatMap((groups) => groups).flatMap((group) => group.hooks || []).some((hook) => /(?:^|[\\/])stop-gate\.mjs/.test(String(hook.command))), false);
@@ -383,5 +391,17 @@ test('G8 relay registers Stop PreToolUse AskUserQuestion and Notification idempo
     const relay = groups[0].hooks.filter(h => h.command.includes('fleet-question-relay.mjs'));
     assert.equal(relay.length, 1); assert.equal(relay[0].timeout, stop.timeout); assert.equal(relay[0].async, undefined);
     if (event === 'PreToolUse') assert.equal(groups[0].matcher, 'AskUserQuestion');
+  }
+});
+
+test('billing and implementation approval register synchronously, globally and idempotently', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-billing-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const env = { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: path.resolve('.') };
+  for (let i = 0; i < 2; i++) execFileSync(process.execPath, ['tools/register-hooks.mjs', '--hooks-only'], { encoding: 'utf8', env });
+  const settings = JSON.parse(fs.readFileSync(path.join(home, '.claude/settings.json')));
+  for (const [event, name] of [['SessionStart', 'api-billing-guard'], ['UserPromptSubmit', 'api-billing-guard'], ['PreToolUse', 'api-billing-guard'], ['UserPromptSubmit', 'claude-impl-approval']]) {
+    const groups = settings.hooks[event].filter(g => g.hooks.some(h => h.command.includes(name)));
+    assert.equal(groups.length, 1); assert.equal(groups[0].matcher, undefined);
+    const hook = groups[0].hooks.find(h => h.command.includes(name)); assert.equal(hook.timeout, 5); assert.ok(!hook.async);
   }
 });

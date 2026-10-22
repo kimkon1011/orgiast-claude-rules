@@ -25,15 +25,18 @@ const args = process.argv.slice(2);
 function opt(name, def) { const i = args.indexOf(name); return (i >= 0 && args[i + 1]) ? args[i + 1] : def; }
 const provider = (opt('--provider', '') || '').toLowerCase();
 const selected = PROVIDERS[provider];
-if (!selected) { console.error('使い方: node llm-ask.mjs --provider <openrouter|groq|glm|cerebras|genspark|gemini|deepseek|grok|kimi|mistral> "指示" [--model X] [--system S] [--max N] [--category <classification|extraction|summarize|jp_reply|code>] [--prompt-file PATH] [--no-fallback]'); process.exit(2); }
+if (!selected) { console.error('使い方: node llm-ask.mjs --provider <openrouter|groq|glm|cerebras|genspark|gemini|deepseek|grok|kimi|mistral> "指示" [--model X] [--system S] [--max N] [--category <classification|extraction|summarize|jp_reply|code>] [--prompt-file PATH] [--no-fallback] [--prefer-provider] [--per-provider-timeout-ms N]'); process.exit(2); }
 const model = opt('--model', selected.model);
 // claude-fable-5 系は別課金枠のため組織ルールで全用途禁止。
 if (/fable/i.test(model)) { console.error('fable を含むモデルは組織ルールにより使用できません'); process.exit(2); }
 const category = (opt('--category', '') || '').toLowerCase();
 const system = opt('--system', '');
 const maxTok = parseInt(opt('--max', '4000'), 10) || 4000;
+const timeoutArg = opt('--per-provider-timeout-ms', '');
+const perProviderTimeoutMs = args.includes('--per-provider-timeout-ms') ? Number(timeoutArg) : undefined;
+if (perProviderTimeoutMs !== undefined && (!Number.isSafeInteger(perProviderTimeoutMs) || perProviderTimeoutMs <= 0 || perProviderTimeoutMs > 2147483647)) { console.error('--per-provider-timeout-ms requires a positive timer-safe integer'); process.exit(2); }
 const skip = new Set();
-['--provider', '--model', '--system', '--max', '--category', '--prompt-file'].forEach((flag) => { const i = args.indexOf(flag); if (i >= 0) { skip.add(i); skip.add(i + 1); } });
+['--provider', '--model', '--system', '--max', '--category', '--prompt-file', '--per-provider-timeout-ms'].forEach((flag) => { const i = args.indexOf(flag); if (i >= 0) { skip.add(i); skip.add(i + 1); } });
 const promptFile = opt('--prompt-file', '');
 if (args.includes('--prompt-file') && (!promptFile || promptFile.startsWith('--'))) { console.error('--prompt-file requires a path'); process.exit(2); }
 const prompt = promptFile ? fs.readFileSync(promptFile, 'utf8') : args.filter((arg, i) => !arg.startsWith('--') && !skip.has(i)).join(' ').trim();
@@ -41,11 +44,14 @@ const home = process.env.ORGIAST_HOME || os.homedir();
 
 // --category 指定時は eval 実測のルーティング表(routing-table.json)の最安候補を先頭にする。
 // 表に無い・暫定の場合は指定された provider をそのまま使い、フォールバック連鎖は維持する。
-const routedStart = category ? preferredForCategory(category) : null;
+const preferProvider = args.includes('--prefer-provider');
+const routedStart = category && !preferProvider ? preferredForCategory(category) : null;
 const start = routedStart && PROVIDERS[routedStart.provider]
   ? { provider: routedStart.provider, model: routedStart.model || selected.model }
   : { provider, model };
-if (category && routedStart) {
+if (preferProvider) {
+  console.error(`[routing] --prefer-provider: ${provider}/${model} を先頭にします`);
+} else if (category && routedStart) {
   console.error(`[routing] カテゴリ ${category} は実測表から ${routedStart.provider}/${routedStart.model} を先頭にします${routedStart.provisional ? ' (暫定)' : ''}`);
 } else if (category) {
   console.error(`[routing] カテゴリ ${category} の実測候補が無いため --provider ${provider} を使います`);
@@ -93,6 +99,7 @@ try {
   const result = await callWithFallback({
     persistState: !args.includes('--no-persist'),
     start,
+    perProviderTimeoutMs,
     chain: args.includes('--no-fallback') ? [] : FALLBACK_CHAIN,
     allowGatewayFallback: !args.includes('--no-fallback'),
     payloadFor(candidate) {

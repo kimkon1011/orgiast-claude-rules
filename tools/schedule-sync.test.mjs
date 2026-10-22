@@ -583,3 +583,29 @@ test('denied-channel state persists despite collection failure and survives curs
   x.deps.collect = async () => ({ messages: [], stats: {} });
   await x.run(); assert.equal(JSON.parse(fs.readFileSync(stateFile)).discordDenied.blocked.status, 403);
 });
+
+test('schedule LLM pins Gemini with fallback and budgets all provider deadlines before child kill', async () => {
+  const llm = makeLlm({ home: '/tmp', execute: async (_, args, options) => {
+    assert.equal(args[args.indexOf('--provider') + 1], 'gemini');
+    assert.ok(args.includes('--prefer-provider'));
+    assert.ok(!args.includes('--no-fallback'));
+    assert.equal(args[args.indexOf('--per-provider-timeout-ms') + 1], '45000');
+    assert.ok(options.timeout > 10 * 45000);
+    return { stdout: '[]' };
+  } });
+  assert.equal(await llm(message), '[]');
+});
+
+test('schedule CLI can restore automatic extraction routing and override provider budget', async () => {
+  const options = parseArgs(['--llm-provider', 'auto', '--per-provider-timeout-ms', '75']);
+  assert.deepEqual(options, { llmProvider: 'auto', perProviderTimeoutMs: 75 });
+  const llm = makeLlm({ ...options, home: '/tmp', execute: async (_, args, execOptions) => {
+    assert.ok(!args.includes('--prefer-provider'));
+    assert.equal(args[args.indexOf('--category') + 1], 'extraction');
+    assert.equal(args[args.indexOf('--per-provider-timeout-ms') + 1], '75');
+    assert.ok(execOptions.timeout > 10 * 75);
+    return { stdout: '[]' };
+  } });
+  await llm(message);
+  for (const args of [['--llm-provider'], ['--llm-provider', 'wrong'], ['--per-provider-timeout-ms', '0']]) assert.throws(() => parseArgs(args));
+});

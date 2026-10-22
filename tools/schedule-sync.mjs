@@ -13,6 +13,7 @@ import { resolveDiscordBotToken } from './notify-kim.mjs';
 import { sendDiscordDm } from './discord-dm.mjs';
 import { getDriveToken, defaultDriveKeyPath } from './lib/drive-auth.mjs';
 import { isScheduleCandidate } from './lib/schedule-candidate.mjs';
+import { FALLBACK_CHAIN } from './llm-fallback.mjs';
 import { isEntry } from './is-entry.mjs';
 export { isScheduleCandidate } from './lib/schedule-candidate.mjs';
 
@@ -214,20 +215,25 @@ export function excerptScheduleText(value, limit = 4000) {
   return ranges.map(([start, end]) => text.slice(start, end)).join('\n[…]\n').slice(0, limit);
 }
 
-export function makeLlm({ home, dryRun, signal, execute = execFileAsync, log = console.error } = {}) {
+export function makeLlm({ home, dryRun, signal, execute = execFileAsync, log = console.error, llmProvider = 'gemini', perProviderTimeoutMs = 45000 } = {}) {
+  if (!['gemini', 'auto'].includes(llmProvider)) throw new Error('llmProvider must be gemini or auto');
+  positiveInteger(perProviderTimeoutMs, 'perProviderTimeoutMs', Math.floor((2147483647 - 30000) / (FALLBACK_CHAIN.length + 1)));
+  // Include a possible routed provider outside the chain, plus process startup/logging.
+  const childTimeoutMs = (FALLBACK_CHAIN.length + 1) * perProviderTimeoutMs + 30000;
   return async (message, retry) => {
     const batch = Array.isArray(message);
     const input = m => ({ id: messageKey(m), sentAt: m.ts, channel: m.chat, sender: m.sender, recipient: USER, text: excerptScheduleText(m.text) });
     const prompt = JSON.stringify({ ...(batch ? { messages: message.map(input) } : input(message)), retry: retry ? '前回はJSON形式またはスキーマが不正でした。全件のidと厳密なJSON形式で返してください。' : undefined });
     const system = batch ? SYSTEM + '\n今回は複数メッセージを独立に処理する。別メッセージの予定や引用を混ぜない。出力は [{"id":"入力のidをそのまま","events":[上記形式の予定]}]。入力の全idを重複なく1回ずつ返す。予定なしもevents:[]で返す。順番は任意。' : SYSTEM;
-    const args = [fileURLToPath(new URL('./llm-ask.mjs', import.meta.url)), '--provider', 'groq', '--category', 'extraction', '--max', batch ? '12000' : '3000', '--system', system];
+    const args = [fileURLToPath(new URL('./llm-ask.mjs', import.meta.url)), '--provider', llmProvider === 'auto' ? 'groq' : llmProvider, '--category', 'extraction', '--per-provider-timeout-ms', String(perProviderTimeoutMs), '--max', batch ? '12000' : '3000', '--system', system];
+    if (llmProvider !== 'auto') args.push('--prefer-provider');
     if (dryRun) args.push('--no-persist');
     const promptDir = fs.mkdtempSync(path.join(os.tmpdir(), 'schedule-sync-prompt-'));
     try {
       const promptFile = path.join(promptDir, 'prompt.json');
       fs.writeFileSync(promptFile, prompt, { mode: 0o600 });
       args.push('--prompt-file', promptFile);
-      const result = await execute(process.execPath, args, { signal, encoding: 'utf8', timeout: 180000, maxBuffer: 1024 * 1024, windowsHide: true, env: { ...process.env, ORGIAST_HOME: home } });
+      const result = await execute(process.execPath, args, { signal, encoding: 'utf8', timeout: childTimeoutMs, maxBuffer: 1024 * 1024, windowsHide: true, env: { ...process.env, ORGIAST_HOME: home } });
       if (result.stderr?.trim()) log(result.stderr.trim());
       return result.stdout;
     } catch (error) {
@@ -434,7 +440,7 @@ export async function runScheduleSync(options = {}, dependencies = {}) {
     const fresh = selected.filter(m => !plans.has(messageKey(m)));
     const batches = [];
     for (let i = 0; i < fresh.length; i += batchSize) batches.push(fresh.slice(i, i + batchSize));
-    const batchLlm = dependencies.batchLlm || makeLlm({ home, dryRun, signal, log });
+    const batchLlm = dependencies.batchLlm || makeLlm({ home, dryRun, signal, log, llmProvider: options.llmProvider, perProviderTimeoutMs: options.perProviderTimeoutMs });
     const savePlan = (message, candidates) => {
       const key = messageKey(message);
       const plan = { type: 'plan', messageKey: key, message, candidates };
@@ -590,9 +596,12 @@ export function parseArgs(args) {
     const arg = args[i];
     if (arg === '--dry-run') options.dryRun = true;
     else if (arg === '--json') options.json = true;
-    else if (['--max-messages', '--batch-size', '--concurrency', '--timeout-ms'].includes(arg)) {
-      const name = { '--max-messages': 'maxMessages', '--batch-size': 'batchSize', '--concurrency': 'concurrency', '--timeout-ms': 'timeoutMs' }[arg];
+    else if (['--max-messages', '--batch-size', '--concurrency', '--timeout-ms', '--per-provider-timeout-ms'].includes(arg)) {
+      const name = { '--max-messages': 'maxMessages', '--batch-size': 'batchSize', '--concurrency': 'concurrency', '--timeout-ms': 'timeoutMs', '--per-provider-timeout-ms': 'perProviderTimeoutMs' }[arg];
       options[name] = positiveInteger(Number(args[++i]), arg, name === 'batchSize' ? 10 : name === 'concurrency' ? 4 : Number.MAX_SAFE_INTEGER);
+    } else if (arg === '--llm-provider') {
+      options.llmProvider = args[++i];
+      if (!['gemini', 'auto'].includes(options.llmProvider)) throw new Error('--llm-provider must be gemini or auto');
     } else if (arg === '--since') {
       options.since = args[++i];
       if (!/^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:\d{2})$/.test(options.since || '') || !Number.isFinite(Date.parse(options.since))) throw new Error('--since requires an ISO timestamp with timezone');

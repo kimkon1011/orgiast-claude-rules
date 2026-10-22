@@ -459,3 +459,48 @@ test('no-fallback probe cannot report a DeepSeek gateway success as direct provi
   await assert.rejects(callWithFallback({start:{provider:'deepseek',model:'deepseek-chat'},chain:[],allowGatewayFallback:false,...temporaryFiles(t),payloadFor(candidate){calls.push(candidate.provider);return requestFor();},fetchImpl:async()=>new Response('payment required',{status:402}),sleepImpl:async()=>{}}));
   assert.deepEqual(calls,['deepseek']);
 });
+
+for (const hang of ['headers', 'body']) {
+  test(`per-provider timeout advances once after hung ${hang}, including transports ignoring abort`, async () => {
+    const calls = [], records = [], signals = [];
+    const began = Date.now();
+    const result = await callWithFallback({
+      start, chain: [second], perProviderTimeoutMs: 40, persistState: false,
+      payloadFor: requestFor,
+      fetchImpl: async (_, init) => {
+        calls.push(true); signals.push(init.signal);
+        if (calls.length > 1) return new Response('{"ok":true}');
+        if (hang === 'headers') return new Promise(() => {});
+        return new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode('{')); } }));
+      },
+      onAttempt: info => records.push(info.status),
+    });
+    assert.equal(result.candidate.provider, second.provider);
+    assert.deepEqual(await result.response.json(), { ok: true });
+    assert.equal(calls.length, 2);
+    assert.equal(signals[0].aborted, true);
+    assert.deepEqual(records, ['timeout', 'ok']);
+    assert.ok(Date.now() - began < 2000, 'fallback completes inside the parent budget');
+  });
+}
+
+test('Retry-After waits share the provider deadline and cannot delay fallback', async () => {
+  let calls = 0;
+  const began = Date.now();
+  const result = await callWithFallback({
+    start, chain: [second], perProviderTimeoutMs: 40, persistState: false, payloadFor: requestFor,
+    fetchImpl: async () => ++calls === 1 ? new Response('busy', { status: 503, headers: { 'retry-after': '60' } }) : new Response('{}'),
+  });
+  assert.equal(result.candidate.provider, second.provider);
+  assert.equal(calls, 2);
+  assert.ok(Date.now() - began < 2000);
+});
+
+test('all hung providers fail within their combined budget with timeout diagnostics', async () => {
+  const began = Date.now();
+  await assert.rejects(callWithFallback({
+    start, chain: [second], perProviderTimeoutMs: 30, persistState: false,
+    payloadFor: requestFor, fetchImpl: () => new Promise(() => {}),
+  }), error => error.failures.length === 2 && error.failures.every(f => /timeout after 30ms/.test(f.reason)));
+  assert.ok(Date.now() - began < 2000);
+});

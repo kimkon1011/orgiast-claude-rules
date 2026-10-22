@@ -99,7 +99,37 @@ function reasonForLog(reason, maxLength = 140) {
   return singleLine.length <= maxLength ? singleLine : `${singleLine.slice(0, maxLength - 1)}…`;
 }
 
-export async function callWithFallback({ start, chain = FALLBACK_CHAIN, allowGatewayFallback = true, payloadFor, fetchImpl = fetch, onAttempt, onFailover, validateResponse, sleepImpl = defaultSleep, cooldownFile, ledgerFile, budgetFile, persistState = true, now = () => Date.now() }) {
+// Bound both headers and body consumption; abort the real HTTP request and also
+// settle when a custom transport ignores AbortSignal. Retried requests share the
+// candidate's deadline rather than receiving a fresh budget each time.
+async function fetchBeforeDeadline(fetchImpl, request, deadline) {
+  if (deadline == null) return fetchImpl(request.url, request.init);
+  const controller = new AbortController();
+  const timeout = new Error('per-provider timeout');
+  timeout.code = 'PROVIDER_TIMEOUT';
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw timeout;
+  const upstream = request.init?.signal;
+  const signal = upstream ? AbortSignal.any([upstream, controller.signal]) : controller.signal;
+  let timer;
+  try {
+    return await Promise.race([
+      new Promise((_, reject) => {
+        timer = setTimeout(() => { controller.abort(timeout); reject(timeout); }, remaining);
+      }),
+      (async () => {
+        const response = await fetchImpl(request.url, { ...request.init, signal });
+        const body = await response.arrayBuffer();
+        return new Response([101, 204, 205, 304].includes(response.status) ? null : body, {
+          status: response.status, statusText: response.statusText, headers: response.headers,
+        });
+      })(),
+    ]);
+  } finally { clearTimeout(timer); }
+}
+
+export async function callWithFallback({ start, chain = FALLBACK_CHAIN, allowGatewayFallback = true, payloadFor, fetchImpl = fetch, onAttempt, onFailover, validateResponse, sleepImpl = defaultSleep, cooldownFile, ledgerFile, budgetFile, persistState = true, perProviderTimeoutMs, now = () => Date.now() }) {
+  if (perProviderTimeoutMs != null && (!Number.isSafeInteger(perProviderTimeoutMs) || perProviderTimeoutMs <= 0 || perProviderTimeoutMs > 2147483647)) throw new Error('perProviderTimeoutMs must be a positive timer-safe integer');
   const home = process.env.ORGIAST_HOME || os.homedir();
   const timestamp = now();
   const cost = dailyCost(ledgerFile || path.join(home, '.claude', 'executor-usage.jsonl'), timestamp);
@@ -229,14 +259,16 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, allowGat
       continue;
     }
     let lastReason = '';
+    const deadline = perProviderTimeoutMs == null ? null : Date.now() + perProviderTimeoutMs;
     for (let attempt = 0; attempt < 3; attempt++) {
       lastAttempt = attempt;
       const began = Date.now();
       let response;
       let status;
       let detail = '';
+      let timedOut = false;
       try {
-        response = await fetchImpl(request.url, request.init);
+        response = await fetchBeforeDeadline(fetchImpl, request, deadline);
         status = response.status;
         // 残量ヘッダを下限として記録する。次に同じ provider を選ぶ時、この値で事前に絞れる。
         if (useBudget && response?.headers && noteResponse(budgetStore, candidate.provider, response.headers, now()) && persistState) writeBudget(budgetPath, budgetStore);
@@ -260,20 +292,24 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, allowGat
         detail = (await response.clone().text().catch(() => '')).slice(0, 400);
         lastReason = `HTTP${status}${detail ? `: ${detail}` : ''}`;
       } catch (error) {
-        lastReason = `network: ${error?.message || String(error)}`;
+        timedOut = error?.code === 'PROVIDER_TIMEOUT';
+        lastReason = timedOut ? `timeout after ${perProviderTimeoutMs}ms` : `network: ${error?.message || String(error)}`;
       }
       attempted++;
-      await onAttempt?.({ candidate, attempt, status: statusName(status), response, reason: lastReason, secs: (Date.now() - began) / 1000, failover: candidate.provider !== start.provider });
+      await onAttempt?.({ candidate, attempt, status: timedOut ? 'timeout' : statusName(status), response, reason: lastReason, secs: (Date.now() - began) / 1000, failover: candidate.provider !== start.provider });
       // groq の通常429の本文には `https://console.groq.com/settings/billing` が含まれるため、
       // 素の `billing` で判定すると日次上限(TPD)を恒久障害と誤判定する。恒久障害の文面だけを拾う。
       const permanentBilling = status === 429 && /prepayment credits are depleted|insufficient_quota|exceeded your current quota/i.test(detail);
       setCooldown(candidate.provider, status, response, permanentBilling);
 
+      if (timedOut) break; // A hung candidate must not consume three timeout windows.
       const kind = classifyFailure(status);
       if (permanentBilling || kind !== 'retry' || attempt === 2) break;
       const specified = retryAfterMs(response);
       if (specified != null && specified > 60000) break;
-      await sleepImpl(specified ?? 1000 * 2 ** attempt);
+      const delay = specified ?? 1000 * 2 ** attempt;
+      if (deadline != null && delay >= deadline - Date.now()) break;
+      await sleepImpl(delay);
     }
     const reason = lastReason || 'unknown failure';
     failures.push({ candidate, reason, attempt: lastAttempt });

@@ -1,0 +1,3 @@
+already merged
+
+実測(kim-PC 2026-10-22): gh pr view 899 --repo kimkon1011/orgiast-claude-rules → state=MERGED / mergeCommit=2fb83ac7d5004c69be5b5619f6c0a20a001f564f / head=c22bad9f6aa493b9a07203d52a6baca5788b5822

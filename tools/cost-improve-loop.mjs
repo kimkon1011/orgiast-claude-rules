@@ -1624,7 +1624,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   for (const row of unmeasurableRows) reportText += `- **${row.pcName || row.label || 'unknown'}**: 自動では復旧不可 — そのPCで Claude Code を1回起動してください\n`;
 
   // 人へ上げた内容と同じ情報をセッションへ登録。失敗は見える形で残す。
-  const proposalActions = [...new Map([...(state.proposalRetry || []), ...newlyHuman].map(a => [a.id || `${a.pc}:${a.kind}`, a])).values()];
+  const proposalActions = [...new Map([...(state.proposalRetry || []), ...newlyHuman].map(a => [JSON.stringify([a.pc, a.kind]), a])).values()];
   let proposalResult;
   try {
     proposalResult = await proposeHumanActions(proposalActions, {

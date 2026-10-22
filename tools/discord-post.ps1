@@ -8,6 +8,9 @@ Add-Type -AssemblyName System.Windows.Forms
 $AE = [System.Windows.Automation.AutomationElement]
 $Scope = [System.Windows.Automation.TreeScope]
 $body = [System.IO.File]::ReadAllText($BodyFile, [System.Text.Encoding]::UTF8).TrimEnd()
+# Discord の UIA テキストには見えない文字が混ざる（実測: 空行に U+FEFF、画面テキストに U+FFFC）。
+# 消してから空白を1つにまとめて比べる。tools/discord-post.test.mjs がこの関数を直接検証する。
+function Normalize-DiscordText([string]$s) { (($s -replace '[\uFEFF\u200B\u200C\u200D\u2060\uFFFC]', '') -replace '\s+', ' ').Trim() }
 $win = $null
 $cw = New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window)
 foreach ($w in $AE::RootElement.FindAll($Scope::Children, $cw)) { if ($w.Current.Name -match 'Discord') { $win = $w } }
@@ -51,7 +54,7 @@ if (-not $box) { 'ERROR: input box not found'; exit 5 }
 "BOX: " + $box.Current.ControlType.ProgrammaticName + " | " + $box.Current.Name
 $cur = ''
 try { $cur = $box.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern).DocumentRange.GetText(200) } catch { 'ERROR: cannot verify empty input'; exit 9 }
-$cur = ($cur -replace '[\uFEFF\u200B\s]', '')
+$cur = Normalize-DiscordText $cur
 if ($cur) { "ERROR: input box not empty [$cur]（kim の下書きを壊さないため中止）"; exit 9 }
 $box.SetFocus()
 Start-Sleep -Milliseconds 500
@@ -65,8 +68,7 @@ $finalChat = ''
 foreach ($l in $win.FindAll($Scope::Descendants, $lc)) { if ($l.Current.Name -match 'のメッセージ$') { $finalChat = $l.Current.Name -replace 'のメッセージ$', '' } }
 if ($finalChat -ne $Chat) { throw 'Chat changed before send' }
 $pasted = $box.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern).DocumentRange.GetText(-1)
-# Discord は貼り付けた本文に U+FEFF（BOM）や U+200B を混ぜるため、比較前に取り除く。
-if ((($pasted -replace '[\uFEFF\u200B\s]+', ' ').Trim()) -ne (($body -replace '[\uFEFF\u200B\s]+', ' ').Trim())) { throw 'Pasted body mismatch; not sent' }
+if ((Normalize-DiscordText $pasted) -ne (Normalize-DiscordText $body)) { throw 'Pasted body mismatch; not sent' }
 [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
 Start-Sleep -Seconds 2
 # 送信後 Discord が直前投稿の編集モードに入ることがある。編集モードのまま終えると、次の読み取りで

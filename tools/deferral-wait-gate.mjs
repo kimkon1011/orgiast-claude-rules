@@ -13,6 +13,27 @@ const FUTURE_WORK = /終わり次第|終わったら|終わると|終了後|完�
 // 離れた位置の言及（ツールの説明文など）を拾わないための距離。
 const FUTURE_WINDOW = 160;
 
+// 2026-10-22 実測: 「Codex が作業中です。終わったら本番まで出して確認します。」は
+// detect() の W（完了を待って／のを待っています）に一致せず、3 行とも素通りした。
+// 他AIレーンの実行中・待機を待機語として扱い、近接する後続作業があるときだけ block する。
+const AGENT = '(?:Codex|codex|他AI|エージェント|レーン)';
+const AGENT_RUNNING = new RegExp(`${AGENT}[^\\n」"']{0,40}?(?:作業中|実行中|進行中|稼働中|動いてい(?:ます|る)|走ってい(?:ます|る))`, 'g');
+// 「Codex の作業が終わったら、…します」「…のを待って、…します」は、条件節自体が待機で
+// 後続の動作が同一文に続くため、FUTURE_WORK を待たずに block する（動作が続くときだけ）。
+const AGENT_WAIT_THEN = new RegExp(`${AGENT}[^\\n」"']{0,40}?(?:終わったら|終わり次第|終わると|完了したら|待って[、,])`, 'g');
+const ACTION_AFTER = /します|する|進めます|実行します|確認します|出します|当てます|テストして|反映して|検証して|報告します|送ります|作ります|実装します|修正します|終えます/;
+const ACTION_WINDOW = 120;
+const AUDIT_QUOTE_MARKER = /handoff-audit:[0-9a-f]{16}/;
+
+// 監査記録・検証報告が実 excerpt を「…」で引用した行は、先送りの実行ではなく引用なので除外する。
+function inAuditQuote(prose, index) {
+  const open = prose.lastIndexOf('「', index);
+  if (open < 0) return false;
+  if (prose.indexOf('」', open + 1) < index) return false;
+  const lineStart = prose.lastIndexOf('\n', open - 1) + 1;
+  return AUDIT_QUOTE_MARKER.test(prose.slice(lineStart, open));
+}
+
 const REPLY_WAIT = /(?:返信|返事)(?:を|が)?お?(?:待って|待ち|待っています)|(?:返信|返事)が来たら|「?続けて」?と返|続けてと返|返信待ち|返事待ち/g;
 const PROD = /本番反映|本番デプロイ|本番配備|本番公開|vercel|deploy|デプロイ/i;
 const REPLY_WAIT_DONE = /不要|ありません|なし|完了|済み/;
@@ -60,14 +81,33 @@ export function judge(text) {
       };
     }
   }
-  const wait = detect(prose).find(result => result.pattern === 'W');
-  if (!wait) return { decision: 'pass' };
-  const from = wait.match.index;
-  const nearby = prose.slice(Math.max(0, from - FUTURE_WINDOW), from + wait.match[0].length + FUTURE_WINDOW);
-  if (!FUTURE_WORK.test(nearby)) return { decision: 'pass' };
-  return {
-    decision: 'block',
-    code: 'DEFERRAL-WAIT',
-    reason: '完了を待つのではなく、当ターン内に完了まで進めてください。待機が不要なら、待たずに次の作業へ進めて結果まで報告してください。',
-  };
+  const waits = [];
+  const literal = detect(prose).find(result => result.pattern === 'W');
+  if (literal) waits.push(literal.match);
+  for (const match of prose.matchAll(AGENT_RUNNING)) {
+    if (!inAuditQuote(prose, match.index)) waits.push(match);
+  }
+  for (const match of prose.matchAll(AGENT_WAIT_THEN)) {
+    if (inAuditQuote(prose, match.index)) continue;
+    const after = prose.slice(match.index + match[0].length, match.index + match[0].length + ACTION_WINDOW);
+    if (ACTION_AFTER.test(after)) {
+      return {
+        decision: 'block',
+        code: 'DEFERRAL-WAIT',
+        reason: '完了を待つのではなく、当ターン内に完了まで進めてください。待機が不要なら、待たずに次の作業へ進めて結果まで報告してください。',
+      };
+    }
+  }
+  for (const wait of waits) {
+    const from = wait.index;
+    const nearby = prose.slice(Math.max(0, from - FUTURE_WINDOW), from + wait.length + FUTURE_WINDOW);
+    if (FUTURE_WORK.test(nearby)) {
+      return {
+        decision: 'block',
+        code: 'DEFERRAL-WAIT',
+        reason: '完了を待つのではなく、当ターン内に完了まで進めてください。待機が不要なら、待たずに次の作業へ進めて結果まで報告してください。',
+      };
+    }
+  }
+  return { decision: 'pass' };
 }

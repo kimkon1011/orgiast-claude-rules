@@ -139,6 +139,12 @@ test('委譲の完了待ちはW(待機)であって先送り(P1-P4)ではない'
   const quote = 'Codex の2本の完了を待っています。';
   assert.deepEqual(detect(quote).map(found => found.pattern), ['W']);
 });
+test('裸の待機文は夜間監査のWとして残す（Stopゲートは後続作業が無ければpass＝二段構え）', () => {
+  // handoff-audit:6ac1c04694d4dc1c（2026-10-21T06:00:01.905Z / b822034d）の原文。
+  // nightly は候補として surface し、deferral-wait-gate は後続作業の近接を条件に block する。
+  const quote = 'Codex の修正完了を待っています。';
+  assert.deepEqual(detect(quote).map(found => found.pattern), ['W']);
+});
 test('実測の名詞化した待機・完了通知待ちをWとして検出する', () => {
   for (const quote of [
     '事故の記録を memory に残しました。修復の書き込みが終わるのを待っています（終わると知らせが届きます）。',

@@ -267,6 +267,21 @@ export function isCodexAuthFailure(result, promptText = '') {
   return detectCodexAuthFailure(result.output, result.stderr, promptText);
 }
 
+// Codex の制御プレーンに到達できない（再試行 5/5 の末に諦めた）失敗。
+// 2026-10-20 実測: 出力ゼロ4件の stderr は全て
+// "ERROR: Reconnecting... 5/5 ERROR: workspace routing discovery timed out" で、
+// sol 236秒 → astra 238秒と**同じ制御プレーン**を2回叩いて時間を倍に捨てた後、
+// 11分後の実行は成功していた（一過性のネットワーク断。認証でも上限でも起動失敗でもない）。
+// モデルを替えても直らないので astra 昇格に時間を使わず、別ベンダーのフォールバックへ直接回す。
+const INFRA_UNAVAILABLE = /workspace routing discovery timed out|Reconnecting\.\.\. 5\/5/i;
+
+export function isInfraUnavailable(result) {
+  if (!result || result.timedOut === true || Number(result.status) === 0) return false;
+  // 認証失敗の文言（"workspace routing discovery unauthorized (401)"）は同じ接頭辞を共有するので、
+  // ここでは auth 側の判定を先に済ませていること前提で、timed out / 再試行尽きだけを拾う。
+  return INFRA_UNAVAILABLE.test(`${result.output || ''}\n${result.stderr || ''}`);
+}
+
 export function snapshotWorkingTree(cwd, spawnImpl = spawnSync) {
   try {
     const gitCheck = spawnImpl('git', ['-C', cwd, 'rev-parse', '--is-inside-work-tree'], { windowsHide: true, encoding: 'utf8' });
@@ -1181,6 +1196,7 @@ let quotaCheck;
 let quotaResetUntil = 0;
 let escalationFailed = false;
 let astraRetreated = false;
+let infraUnavailable = false;
 while (true) {
   result = await executeCodex();
   quotaCheck = detectQuotaLimit(result?.output, result?.stderr, result?.status, prompt);
@@ -1197,7 +1213,9 @@ while (true) {
     continue;
   }
   const failure = failureReason(result);
-  if (!quotaCheck.matched && failure && !launchUnavailable && !authFailed && selectedLane.slug === SOL && lane === 'auto' && !model && !noEscalate && !escalated && !astraRetreated && providerCooldownMs('codex-astra') === 0) {
+  // 制御プレーン不達はモデルを替えても直らない（sol も astra も同じ経路を通る）ので昇格しない。
+  infraUnavailable = Boolean(failure) && !quotaCheck.matched && !launchUnavailable && !authFailed && isInfraUnavailable(result);
+  if (!quotaCheck.matched && !infraUnavailable && failure && !launchUnavailable && !authFailed && selectedLane.slug === SOL && lane === 'auto' && !model && !noEscalate && !escalated && !astraRetreated && providerCooldownMs('codex-astra') === 0) {
     console.log(`[codex-do] sol 失敗 → astra へ昇格 (理由: ${failure})`);
     escalated = true;
     selectedLane = { slug: ASTRA, effort: 'high', reason: `escalated:${failure}` };
@@ -1220,8 +1238,9 @@ const fallbackReason = skipCodexReason === 'unattended_budget' ? 'Codex 無人�
   : cooldownSkipCodex ? 'Codex usage limit クールダウン中'
   : authFailed ? 'Codex 未ログイン(認証失敗)'
   : launchUnavailable ? 'WSL 経路が無く codex を起動できない'
-  : quotaCheck.matched ? 'Codex usage limit を検出' : 'Astra 昇格後も失敗';
-if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
+  : quotaCheck.matched ? 'Codex usage limit を検出'
+  : infraUnavailable ? 'Codex の制御プレーンに到達できない（ネットワーク断・再試行尽き）' : 'Astra 昇格後も失敗';
+if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed || infraUnavailable) {
   if (quotaCheck.matched) {
     quotaResetUntil = parseCodexResetUntil(`${result?.output || ''}\n${result?.stderr || ''}`);
     try { writeCodexCooldown(quotaResetUntil); } catch {}

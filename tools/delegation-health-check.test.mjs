@@ -186,6 +186,37 @@ test('emptyOutputReason は U+2019 と U+0027 の両方の usage limit 行を us
   assert.equal(emptyOutputReason({ secs: 0 }), 'no_output');
 });
 
+// 2026-10-21 実測: 台帳の stderrTail は末尾200文字だけなので、上限メッセージが長いと
+// "You've hit your usage limit" が切り落とされ "… purchase more credits or try again at 1:22 PM." だけ残る。
+// この2件が usage_limit を取り逃して no_output に落ち、codex_empty_output が起票されていた。
+const TRUNCATED_USAGE_LIMIT_TAIL = 't.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits or try again at 1:22 PM.';
+
+test('末尾200文字に切り詰められた上限メッセージも usage_limit に分類する', () => {
+  assert.equal(emptyOutputReason({
+    status: 'error',
+    exitCode: 1,
+    launched: true,
+    timedOut: false,
+    secs: 7.765,
+    stderrTail: TRUNCATED_USAGE_LIMIT_TAIL,
+  }), 'usage_limit');
+  // 対照群: 切り詰められただけの 401 / 制御プレーン不達は usage_limit にしない。
+  assert.equal(emptyOutputReason({ status: 'error', exitCode: 1, launched: true, timedOut: false, secs: 38.4, stderrTail: 'ERROR: Reconnecting... 5/5 ERROR: workspace routing discovery unauthorized (401)' }), 'auth_failed');
+  assert.equal(emptyOutputReason({ status: 'error', exitCode: 1, launched: true, timedOut: false, secs: 236.3, stderrTail: 'ERROR: Reconnecting... 5/5 ERROR: workspace routing discovery timed out' }), 'infra_transient');
+});
+
+test('切り詰められた上限到達2件では codex_empty_output を起票しない', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', [
+    { t: '2026-10-21T01:52:04.369Z', provider: 'codex', out: 0, status: 'error', exitCode: 1, launched: true, timedOut: false, secs: 7.765, stderrTail: TRUNCATED_USAGE_LIMIT_TAIL },
+    { t: '2026-10-21T01:52:12.509Z', provider: 'codex', out: 0, status: 'error', exitCode: 1, launched: true, timedOut: false, secs: 8.093, stderrTail: TRUNCATED_USAGE_LIMIT_TAIL },
+  ].map(row).join(''));
+  const findings = collectFindings({ home: dir, now: new Date('2026-10-21T01:53:00.000Z'), codexUsedPercent: null });
+  const ids = findings.map((item) => item.id);
+  assert.ok(!ids.includes('codex_empty_output'), JSON.stringify(ids));
+  assert.ok(ids.includes('codex_usage_limit'), JSON.stringify(ids));
+});
+
 test('実台帳行の Codex 上限到達行で collectFindings が codex_empty_output を出さず codex_usage_limit を出す', () => {
   const dir = home();
   const realUsageRow = {
@@ -249,6 +280,31 @@ test('token_revoked 401 の失敗後に成功1件があれば何も起票しな�
     { t: '2026-09-09T10:01:00Z', provider: 'codex', status: '0', out: 10 },
   ].map(row).join(''));
   assert.deepEqual(collectFindings({ home: dir, now: NOW, codexUsedPercent: null }).map((item) => item.id), ['healthy']);
+});
+
+// 2026-10-20 実測: 出力ゼロ4件（19:14/19:17/19:32/19:36）の stderr は全て
+// "ERROR: Reconnecting... 5/5 ERROR: workspace routing discovery timed out" で、
+// 11分後の実行は成功している＝一過性のネットワーク断。認証(401)とは別物。
+const ROUTING_TIMEOUT_STDERR = 'onnecting... 3/5 ERROR: Reconnecting... 4/5 ERROR: Reconnecting... 5/5 ERROR: workspace routing discovery timed out ERROR: workspace routing discovery timed out';
+
+test('制御プレーン不達(workspace routing discovery timed out)の出力ゼロは infra_transient に分類する', () => {
+  assert.equal(emptyOutputReason({ status: 'error', exitCode: 1, launched: true, timedOut: false, secs: 236.3, stderrTail: ROUTING_TIMEOUT_STDERR }), 'infra_transient');
+  // 401 は同じ "Reconnecting... 5/5" の接頭辞を共有するが、auth_failed を先に判定する。
+  assert.equal(emptyOutputReason({ status: 'error', exitCode: 1, launched: true, timedOut: false, secs: 38.4, stderrTail: TOKEN_REVOKED_STDERR }), 'auth_failed');
+});
+
+test('制御プレーン不達の出力ゼロ4件では codex_empty_output を起票しない', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', [
+    { t: '2026-09-09T10:14:01Z', provider: 'codex', out: 0, status: 'error', exitCode: 1, launched: true, timedOut: false, secs: 236.3, stderrTail: ROUTING_TIMEOUT_STDERR },
+    { t: '2026-09-09T10:17:59Z', provider: 'codex', out: 0, status: 'error', exitCode: 1, launched: true, timedOut: false, secs: 238.0, stderrTail: ROUTING_TIMEOUT_STDERR },
+    { t: '2026-09-09T10:32:52Z', provider: 'codex', out: 0, status: 'error', exitCode: 1, launched: true, timedOut: false, secs: 236.0, stderrTail: ROUTING_TIMEOUT_STDERR },
+    { t: '2026-09-09T10:36:50Z', provider: 'codex', out: 0, status: 'error', exitCode: 1, launched: true, timedOut: false, secs: 238.5, stderrTail: ROUTING_TIMEOUT_STDERR },
+    { t: '2026-09-09T10:47:52Z', provider: 'codex', status: '0', out: 136 },
+  ].map(row).join(''));
+  const ids = collectFindings({ home: dir, now: NOW, codexUsedPercent: null }).map((item) => item.id);
+  assert.ok(!ids.includes('codex_empty_output'), JSON.stringify(ids));
+  assert.deepEqual(ids, ['healthy']);
 });
 
 test('codex_auth_failed は high で next-session.md へ起票する', () => {

@@ -1457,6 +1457,21 @@ test('failed escalation goes to existing fallback without quota cooldown', (t) =
   assert.deepEqual(result.cooldown, {});
 });
 
+// 2026-10-20 実測: 出力ゼロ4件は全て sol 236秒 → astra 238秒 と、同じ制御プレーンを2回叩いて
+// 時間を倍に捨てていた（stderr は "workspace routing discovery timed out" で完全一致）。
+// モデルを替えても直らないので昇格せず、別ベンダーのフォールバックへ直接回す。
+test('制御プレーン不達の失敗では astra へ昇格せず、フォールバックへ直接回す', (t) => {
+  const routingTimeout = { status: 1, output: '', stderr: 'ERROR: Reconnecting... 5/5 ERROR: workspace routing discovery timed out' };
+  const result = runRouting(t, ['説明して'], [routingTimeout, routingTimeout, { output: 'done' }]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stderr, /sol 失敗 → astra へ昇格/);
+  assert.match(`${result.stdout}${result.stderr}`, /制御プレーンに到達できない/);
+  assert.match(result.stdout, /executor=fallback:cheap-code:deepseek/);
+  // codex の行は sol の1件だけ（astra の行が無いこと＝昇格していないことの証拠）。
+  assert.deepEqual(result.ledger.filter((r) => r.provider === 'codex').map((r) => r.model), [`codex-cli/${SOL}`]);
+  assert.deepEqual(result.cooldown, {});
+});
+
 test('quota after escalation retreats without escalating again', (t) => {
   const result = runRouting(t, ['説明して'], [{ status: 9 }, { status: 9 }, quotaResult, quotaResult, { output: 'done' }]);
   assert.equal(result.status, 0, result.stderr);

@@ -155,7 +155,10 @@ function reasonTop(rows) {
 // 2026-09-11 実測: 404秒/487秒で打ち切られた実行は rollout ログ上は tsc 実行など実作業の途中だった。
 // codex は WSL の名前解決失敗などで、セッションを作る前に exit 1 / 出力ゼロで死ぬことがある。
 // これは codex 本体の故障ではなく一過性のインフラ障害で、codex-do 側の再試行で回復する。
-const INFRA_TRANSIENT = /failed to lookup address information|failed to connect to websocket|stream error|connection reset|i\/o timeout|dns/i;
+// "workspace routing discovery timed out" / "Reconnecting... 5/5" も同じ一過性のネットワーク断
+// （2026-10-20 実測: 出力ゼロ4件すべてがこの文言で、11分後の実行は成功。認証でも上限でも起動失敗でもない）。
+// 401 の "workspace routing discovery unauthorized (401)" は auth_failed 判定（この関数の上）が先に拾う。
+const INFRA_TRANSIENT = /failed to lookup address information|failed to connect to websocket|stream error|connection reset|i\/o timeout|dns|workspace routing discovery timed out|Reconnecting\.\.\. 5\/5/i;
 
 // WSL のディストリが1つも無い PC では codex レーンを環境修復する必要がある。
 // 「そもそも走っていない」の中でも、コードで直せる起動失敗(codex_launch_failed)と分けて扱う
@@ -207,7 +210,13 @@ const CODEX_MODEL_AUTH_MISMATCH = /is not supported when using codex with a chat
 
 // Codex の利用上限到達。コードの欠陥ではなく上限到達による停止。
 // アポストロフィは U+2019(’) と U+0027(') の両方に一致させる。
-const CODEX_USAGE_LIMIT = /You[’']ve hit your usage limit/i;
+// 台帳の stderrTail は末尾200文字だけ(codex-do.mjs の slice(-200))なので、上限メッセージが
+// 長いと先頭の "You've hit your usage limit" が切り落とされ、末尾の
+// "… to purchase more credits or try again at 1:22 PM." だけが残る。2026-10-21 実測:
+// 01:52 の2件がまさにこの形で、usage_limit を取り逃して no_output に落ち、
+// codex_empty_output が毎晩起票されていた（1:22 PM まで待てば回復する上限到達）。
+// 末尾に必ず残る "purchase more credits or try again at" でも一致させる。
+const CODEX_USAGE_LIMIT = /You[’']ve hit your usage limit|purchase more credits or try again at/i;
 
 export function emptyOutputReason(row) {
   if (row?.timedOut === true) return 'timeout';

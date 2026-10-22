@@ -306,7 +306,10 @@ export function purge({ dryRun = false, restore, after = '' } = {}) {
 }
 function launchRemotePurge() {
   // purge-remote-sessions.mjs has its own 6h cooldown; this check only avoids spawning a process.
-  if (Date.now() - (json(path.join(root(), 'purge-remote-sessions-state.json')).at ?? 0) < 6 * 60 * MINUTE) return;
+  // A future timestamp is the manual stop from 2026-10-18 and must not suppress the resumed run.
+  const now = Date.now();
+  const lastAt = json(path.join(root(), 'purge-remote-sessions-state.json')).at ?? 0;
+  if (lastAt <= now && now - lastAt < 6 * 60 * MINUTE) return;
   const script = path.join(path.dirname(fileURLToPath(import.meta.url)), 'purge-remote-sessions.mjs');
   if (!fs.existsSync(script)) return;
   const child = spawn(process.execPath, [script], { detached: true, windowsHide: true, stdio: 'ignore' });
@@ -324,9 +327,10 @@ function launchMobileStandbyStatus() {
   child.unref();
 }
 export function launchPurge() {
-  // 時間だけで判定するとクローズしていないスマホのセッションまで消える（2026-10-18 未クローズ28件を誤アーカイブ）。
-  // サーバ側セッションとローカルのクローズ記録を結ぶ ID が無いため、自動実行はしない。手動の --dry-run 確認用に関数は残す。
-  void launchRemotePurge;
+  // 2026-10-18 に時間だけで判定して未クローズ28件を誤アーカイブしたため停止していた。
+  // 現在は purge-remote-sessions.mjs 側が「ローカルで退避済み（projects-archive に移動済み）の
+  // bridgeSessionId と一致するセッション」だけを対象にするので、未クローズは消えない。
+  launchRemotePurge();
   launchMobileStandbyStatus();
   if (Date.now() - json(path.join(root(), 'purge-sessions-state.json')).at < 5 * MINUTE) return;
   const child = spawn(process.execPath, [fileURLToPath(import.meta.url)], { detached: true, windowsHide: true, stdio: 'ignore' });

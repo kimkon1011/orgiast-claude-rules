@@ -173,7 +173,8 @@ test('sync：週次 CSV の8日境界と日付入り警告・weekly は末尾に
 });
 
 test('登録スクリプト：ASCII の説明・完了表示と既存起動設定を維持', async () => {
-  const script = await readFile(new URL('./register-sga-autopilot.ps1', import.meta.url), 'utf8');
+  // .gitattributes が ps1 を CRLF でチェックアウトするため、改行を正規化してから検査する。
+  const script = (await readFile(new URL('./register-sga-autopilot.ps1', import.meta.url), 'utf8')).replaceAll('\r\n', '\n');
   assert.ok(script.startsWith('# Register the SGA (hanbai-kanrihi) autopilot tasks. ASCII only for Windows PowerShell 5.1.\n'));
   assert.doesNotMatch(script, /[^\x00-\x7f]/);
   assert.equal((script.match(/Description = 'SGA autopilot: [^']+'/g) ?? []).length, 4);

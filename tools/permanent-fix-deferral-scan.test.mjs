@@ -264,3 +264,8 @@ test('監査参照を知らない素の待機文・引用外の待機文は引�
     '今日の報告で「Codex の完了を待っています」と書いてしまった。'
   ]) assert.deepEqual(detect(quote).map(found => found.pattern), ['W'], quote);
 });
+// handoff-audit:c1e05b232e9e04c9（2026-10-21T05:13:52.790Z / b822034d）の原文。
+// Stop ゲートは後続作業が無ければ pass するが、nightly は候補として W で拾う（二段構え）。
+test('裸の待機文（c1e05b23 の原文）をWとして検出する', () => {
+  assert.deepEqual(detect('Codex の完了を待っています。').map(found => found.pattern), ['W']);
+});

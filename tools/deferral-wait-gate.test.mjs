@@ -93,3 +93,9 @@ test('環境変数で無効化できる', t => {
   assert.equal(enabled(), true);
   assert.equal(judge(positives[0]).decision, 'block');
 });
+
+// handoff-audit:c1e05b232e9e04c9（2026-10-21T05:13:52.790Z / b822034d）の原文。
+// 裸の待機文は後続作業を持たないため pass（6ac1c046 と同じ設計境界）。夜間検出器では W になる。
+test('裸の待機文（c1e05b23 の原文）は後続作業が無いので pass する', () => {
+  assert.deepEqual(judge('Codex の完了を待っています。'), { decision: 'pass' });
+});

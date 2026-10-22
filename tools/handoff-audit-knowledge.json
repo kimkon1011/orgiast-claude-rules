@@ -126,6 +126,12 @@
     "source": "2026-09-28 バドミントン指示書で「未接続」と誤って手渡し"
   },
   {
+    "pattern": "Vercel 環境変数の登録",
+    "route": "Claude 側で完結する（**2026-10-23 実測 / HP**）。`vercel` は PATH に無い → npx キャッシュ `node C:/Users/test/AppData/Local/npm-cache/_npx/69f9afb961c37556/node_modules/vercel/dist/index.js`（65.0.0）。未ログインでも `whoami` は `> Logged out.` を出して **exit 0** になるので終了コードで判定しない。認証は登録対象リポジトリの `.env.local` の `VERCEL_TOKEN` を env に渡す（`VERCEL_TOKEN=$(grep '^VERCEL_TOKEN' .env.local | cut -d= -f2-)`。値は出力しない）。確認は `vercel whoami` → `seisaku-team-5867`、`vercel env ls --environment production` → keiri-hub で 22 件（2026-10-23）。登録は `printf %s \"$VALUE\" | vercel env add <NAME> --environment production`（**書き込みは未実測**。承認範囲を確認してから）。対象プロジェクトは `<repo>/.vercel/project.json` の projectId/orgId で決まる。トークンが無い PC では `vercel login` を user に頼まず、`.env.local` / keyserve / 別PCの実績を先に探す。",
+    "confidence": "high",
+    "source": "2026-10-23 handoff-audit:d8f654e5431abcab の再発防止エントリ。原文は handoff-audit-ledger 2026-10-21T18:02:03.431Z / 4d7e4383（rule 3/12「所有者の kim さんの設定が必要」）。窓内 6 台帳 584 行で再発 0、経路は .env.local の VERCEL_TOKEN で読み取り成功（whoami=seisaku-team-5867 / env ls=22件）。詳細 docs/handoff-audit-2026-10-23-vercel-env.md"
+  },
+  {
     "pattern": "サブエージェント/他AIレーンへ実装を委譲して『実行中』で終わる",
     "route": "codex-do.mjs を前景・単発（--timeout 付き）で回し、実装を委譲したら『実行中』のまま handoff せず当ターン内に完了まで見届ける（バックグラウンド起動・『実行中で終える』は禁止。WSL 不在で codex 経路が起動しない PC は内蔵フォールバック→不可なら Claude 直で実装）",
     "confidence": "high",

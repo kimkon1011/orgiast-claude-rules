@@ -148,5 +148,11 @@
     "route": "vercel env",
     "confidence": "high",
     "source": "handoff-audit-nightly:5088cc02c86ec878e5d78ad866b46a06b7f016253e6c2180a91df31dabac38ea"
+  },
+  {
+    "pattern": "社内スタッフ宛の連絡",
+    "route": "**2026-10-23 実測（このPC=HP）**: 「Discord MCP で送る」は実行できない（`~/.claude.json` の mcpServers は gemini-cli のみ・`claude mcp list`=No MCP servers。settings.json の `mcp__claude_ai_Discord…` matcher はツールが無いため latent）。`node tools/discord-dm.mjs <名前> --body … --dry-run` は「Discord Bot トークンが見つかりません」→ SEND_FAILED（env DISCORD_BOT_TOKEN も `~/.claude/orgiast-discord-bot-token.txt` も無い）。`tools/discord-channel-id.mjs` は `~/.claude/fleet-sheet.env` 不在で ENOENT（ローカル台帳フォールバック無し）。実行可能なのは ①宛先/用件/本文の完成形をチャット表示（既定・送信なし） ②kim 宛なら fleet-mail（2026-10-22 実測成功） ③keiri-hub `/shoyo` の #経理チーム 投稿（2026-10-22 実送信・アプリ専用で汎用の送信口ではない）。汎用 DM の実送信はトークン設置後に未検証。送信・権限変更は既存の承認範囲のみ",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:a3ba93d328a2f82cbed847fbd90be4d9b58b51ce3850d934b545c230243d89a7 / 2026-10-23 再発検証（docs/handoff-audit-2026-10-23-internal-staff-discord.md）"
   }
 ]

@@ -14,7 +14,7 @@ const MINUTE = 60_000;
 const MAX_FILES = 500;
 const MAX_LINE_BYTES = 32 * 1024 * 1024;
 // 旧表記「このセッション: アーカイブしてよい」に加え、新定型の closed/delete（「…このセッションを閉じてよい」）を承認扱いにする。
-function sessionApproved(text) {
+export function sessionApproved(text) {
   if (text.includes('このセッション: アーカイブしてよい')) return true;
   const lines = text.split(/\r?\n/).filter(l => l.startsWith('このセッション:'));
   const last = lines.at(-1);
@@ -324,9 +324,8 @@ function launchMobileStandbyStatus() {
   child.unref();
 }
 export function launchPurge() {
-  // 時間だけで判定するとクローズしていないスマホのセッションまで消える（2026-10-18 未クローズ28件を誤アーカイブ）。
-  // サーバ側セッションとローカルのクローズ記録を結ぶ ID が無いため、自動実行はしない。手動の --dry-run 確認用に関数は残す。
-  void launchRemotePurge;
+  // 明示的に閉じたセッションだけをアーカイブする。
+  launchRemotePurge();
   launchMobileStandbyStatus();
   if (Date.now() - json(path.join(root(), 'purge-sessions-state.json')).at < 5 * MINUTE) return;
   const child = spawn(process.execPath, [fileURLToPath(import.meta.url)], { detached: true, windowsHide: true, stdio: 'ignore' });

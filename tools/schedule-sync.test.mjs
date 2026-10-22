@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runScheduleSync, isScheduleCandidate, isDuplicate, eventBody, extractEvents, parseArgs, parseExtraction, calendarToken, CALENDAR_SCOPE, createCalendarClient, collectMessages, makeLlm } from './schedule-sync.mjs';
+import { runScheduleSync, isScheduleCandidate, isDuplicate, eventBody, extractEvents, parseArgs, parseExtraction, calendarToken, CALENDAR_SCOPE, createCalendarClient, collectMessages, makeLlm, parseBatchExtraction, extractBatch, isAutomatedGmail } from './schedule-sync.mjs';
 import { searchGmail } from './gmail-search.mjs';
 import { fetchMessages } from './discord-digest.mjs';
 import { callWithFallback } from './llm-fallback.mjs';
@@ -66,7 +66,7 @@ test('ledger prevents extracting, creating or notifying a processed message twic
   const ledger = fs.readFileSync(path.join(x.options.stateDir, 'ledger.jsonl'), 'utf8');
   assert.match(ledger, /"messageKey":"line:ラハイナ PJ:m1:/); assert.match(ledger, /"eventId":"[a-f0-9]{64}"/);
 });
-test('dry-run has no Calendar, DM, cursor, ledger, lock or directory writes', async t => {
+test('dry-run has no Calendar, DM or persistent state writes', async t => {
   const x = setup(t); x.options.dryRun = true;
   assert.equal((await x.run()).counts['would-create'], 1);
   assert.equal(x.creates.length, 0); assert.equal(x.dms.length, 0);
@@ -226,7 +226,7 @@ test('LLM CLI uses extraction routing, reference timestamp, and no-persist for d
   const llm = makeLlm({ home: '/tmp', dryRun: true, execute: async (file, args) => {
     assert.equal(file, process.execPath); assert.ok(args.includes('--no-persist'));
     assert.equal(args[args.indexOf('--category') + 1], 'extraction');
-    assert.equal(JSON.parse(args.at(-1)).sentAt, message.ts); return { stdout: '[]' };
+    assert.equal(JSON.parse(fs.readFileSync(args[args.indexOf('--prompt-file') + 1], 'utf8')).sentAt, message.ts); return { stdout: '[]' };
   } });
   assert.equal(await llm(message, false), '[]');
 });
@@ -271,4 +271,161 @@ test('a start time that passes during API reads is not inserted', async t => {
   x.deps.calendar.list = async () => { current = Date.parse(candidate.start) + 1; return []; };
   assert.equal((await x.run()).counts.ignored, 1);
   assert.equal(x.creates.length, 0); assert.equal(x.dms.length, 0);
+});
+
+const batchId = m => `${m.source}:${m.channelId || m.chat || ''}:${m.id}${m.source === 'line' ? `:${m.ts}` : ''}`;
+const batchReply = messages => messages.map(m => ({ id: batchId(m), events: [{ ...candidate, title: m.id, quote: m.text }] }));
+
+test('batch IDs preserve attribution when reordered and reject missing, duplicate, unknown IDs or swapped evidence', async () => {
+  const messages = [message, { ...message, id: 'm2', text: '10/27 13時に打合せ' }];
+  const reply = batchReply(messages).reverse();
+  const result = parseBatchExtraction(JSON.stringify(reply), messages);
+  assert.equal(result.get(batchId(message))[0].title, 'm1');
+  assert.equal(result.get(batchId(messages[1]))[0].quote, messages[1].text);
+  for (const rows of [reply.slice(0, 1), [reply[0], reply[0]], [{ ...reply[0], id: 'unknown' }, reply[1]], reply.map((row, i) => ({ ...row, events: reply[1 - i].events }))]) {
+    assert.throws(() => parseBatchExtraction(rows, messages));
+  }
+  let calls = 0;
+  assert.equal((await extractBatch(messages, async () => ++calls === 1 ? [] : reply)).size, 2);
+  assert.equal(calls, 2);
+  await assert.rejects(extractBatch(messages, async () => []), /cursor retained/);
+});
+
+test('LLM batch prompt includes exact IDs and uses independent message envelopes', async () => {
+  const llm = makeLlm({ home: '/tmp', dryRun: true, execute: async (file, args) => {
+    const input = JSON.parse(fs.readFileSync(args[args.indexOf('--prompt-file') + 1], 'utf8'));
+    assert.deepEqual(input.messages.map(m => m.id), [batchId(message)]);
+    assert.equal(input.messages[0].sentAt, message.ts);
+    assert.match(args[args.indexOf('--system') + 1], /別メッセージの予定や引用を混ぜない/);
+    return { stdout: '[]' };
+  } });
+  assert.equal(await llm([message]), '[]');
+});
+
+test('bounded batches run concurrently and stop at the configured message limit', async t => {
+  const x = setup(t); delete x.deps.llm;
+  x.options.dryRun = true;
+  const messages = Array.from({ length: 65 }, (_, i) => ({ ...message, id: `m${i}` }));
+  x.deps.collect = async () => ({ messages, stats: {} });
+  let active = 0, peak = 0, calls = 0;
+  x.deps.batchLlm = async batch => {
+    assert.equal(batch.length, 10); calls++; active++; peak = Math.max(peak, active);
+    await new Promise(resolve => setTimeout(resolve, 10)); active--;
+    return batchReply(batch).reverse();
+  };
+  const result = await x.run();
+  assert.equal(result.processed, 60); assert.equal(result.deferred, 5);
+  assert.equal(calls, 6); assert.equal(peak, 3);
+  assert.equal(new Set(result.candidates.map(c => c.title)).size, 60);
+});
+
+test('cap preserves tied timestamps and delayed LINE arrivals for the next run', async t => {
+  const x = setup(t); delete x.deps.llm;
+  x.options.maxMessages = 1;
+  const receivedAt = new Date(now - 1000).toISOString();
+  const messages = [0, 1, 2].map(i => ({ ...message, id: `m${i}`, ts: '2026-10-01T00:00:00+09:00', receivedAt }));
+  const extracted = [];
+  x.deps.collect = async ({ since }) => ({ messages: messages.filter(m => Date.parse(m.receivedAt) >= since.line), stats: {} });
+  x.deps.batchLlm = async batch => { extracted.push(...batch.map(m => m.id)); return batchReply(batch); };
+  const cursor = () => JSON.parse(fs.readFileSync(path.join(x.options.stateDir, 'state.json'))).cursors.line;
+  assert.equal((await x.run()).deferred, 2); assert.equal(cursor(), receivedAt);
+  assert.equal((await x.run()).deferred, 1); assert.equal(cursor(), receivedAt);
+  assert.equal((await x.run()).deferred, 0); assert.equal(cursor(), new Date(now).toISOString());
+  assert.deepEqual(extracted, ['m0', 'm1', 'm2']);
+});
+
+test('each source cursor stops at its own unprocessed boundary in chronological order', async t => {
+  const x = setup(t); delete x.deps.llm;
+  x.options.sources = ['gmail', 'discord']; x.options.maxMessages = 1;
+  const messages = [
+    { ...message, source: 'gmail', id: 'later', ts: new Date(now - 1000).toISOString() },
+    { ...message, source: 'discord', id: 'earliest', ts: new Date(now - 3000).toISOString() },
+    { ...message, source: 'discord', id: 'next', ts: new Date(now - 2000).toISOString() },
+  ];
+  x.deps.collect = async ({ since }) => ({ messages: messages.filter(m => Date.parse(m.ts) >= since[m.source]), stats: {} });
+  x.deps.batchLlm = async batch => batch.map(m => ({ id: batchId(m), events: [] }));
+  await x.run();
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(x.options.stateDir, 'state.json'))).cursors, { gmail: messages[0].ts, discord: messages[2].ts });
+  assert.equal((await x.run()).processed, 1);
+  assert.equal((await x.run()).processed, 1);
+});
+
+test('automated Gmail exclusion uses headers, category labels and sender address, not display names', () => {
+  for (const row of [{ from: 'Gemini <gemini-notes@google.com>' }, { listUnsubscribe: '<https://example.com/unsubscribe>' }, { labels: ['CATEGORY_PROMOTIONS'] }, { labels: ['CATEGORY_SOCIAL'] }, { labels: ['CATEGORY_FORUMS'] }, ...['noreply', 'no-reply', 'no_reply', 'notifications', 'notification', 'do-not-reply', 'noreply+news'].map(local => ({ from: `Service <${local}@example.com>` }))]) assert.equal(isAutomatedGmail(row), true, JSON.stringify(row));
+  for (const from of ['Alice <alice@example.com>', 'noreply <human@example.com>', 'person+notifications@example.com', 'gemini-notes@example.com', 'gemini-notes@google.com.example.org']) {
+    assert.equal(isAutomatedGmail({ from }), false, from);
+  }
+});
+
+test('Gmail header is preserved and collectors exclude automated mail, bot and webhook posts before extraction', async t => {
+  const x = setup(t);
+  fs.mkdirSync(path.join(x.dir, '.claude')); fs.writeFileSync(path.join(x.dir, '.claude', 'orgiast-discord-bot-token.txt'), 'test');
+  const gmail = await searchGmail({ user: 'test', query: '', withBody: true, getToken: async () => 't', fetchImpl: async url => response(url.includes('/messages?') ? { messages: [{ id: '1' }] } : { id: '1', payload: { headers: [{ name: 'List-Unsubscribe', value: '<mailto:unsub@example.com>' }] } }) });
+  assert.equal(gmail.messages[0].listUnsubscribe, '<mailto:unsub@example.com>');
+  const result = await collectMessages({ sources: ['gmail', 'discord'], home: x.dir, since: { gmail: now - 1000, discord: now - 1000 }, until: now, log: () => {},
+    gmailSearch: async () => ({ messages: [{ id: 'human' }, { id: 'auto-notes', from: 'Gemini <gemini-notes@google.com>' }, { id: 'header', listUnsubscribe: '<url>' }, { id: 'sender', from: 'notifications@example.com' }, { id: 'category', labels: ['CATEGORY_PROMOTIONS'] }].map(row => ({ internalDate: now, subject: message.text, ...row })) }),
+    listChannels: async () => [{ id: 'channel', type: 0 }],
+    discordFetch: async () => ({ messages: [{ id: 'human', author: { bot: false } }, { id: 'own-bot', author: { bot: true } }, { id: 'webhook', webhook_id: 'webhook' }].map(row => ({ timestamp: new Date(now).toISOString(), content: message.text, ...row })) }),
+  });
+  assert.deepEqual(result.messages.map(m => `${m.source}:${m.id}`), ['gmail:human', 'discord:human']);
+});
+
+test('overall timeout cancels LLM work, retains cursors, releases lock and prevents late writes', async t => {
+  const x = setup(t); delete x.deps.llm;
+  x.options.timeoutMs = 25;
+  let finish;
+  x.deps.batchLlm = async () => new Promise(resolve => { finish = resolve; });
+  await assert.rejects(x.run(), /overall timeout/);
+  assert.equal(fs.existsSync(path.join(x.options.stateDir, 'run.lock')), false);
+  const state = fs.readFileSync(path.join(x.options.stateDir, 'state.json'), 'utf8');
+  finish(batchReply([message]));
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(fs.readFileSync(path.join(x.options.stateDir, 'state.json'), 'utf8'), state);
+  assert.equal(x.creates.length, 0); assert.equal(x.dms.length, 0);
+  assert.equal(fs.existsSync(path.join(x.options.stateDir, 'ledger.jsonl')), false);
+  x.options.timeoutMs = 1000; x.deps.batchLlm = async batch => batchReply(batch);
+  assert.equal((await x.run()).counts.created, 1);
+});
+
+test('timeout includes collection and dry-run overlaps are locked without persistent state writes', async t => {
+  const x = setup(t); x.options.dryRun = true; x.options.timeoutMs = 30;
+  let started;
+  const ready = new Promise(resolve => { started = resolve; });
+  x.deps.collect = async () => { started(); return new Promise(() => {}); };
+  const pending = assert.rejects(x.run(), /overall timeout/);
+  await ready;
+  await assert.rejects(x.run(), /already running/);
+  await pending;
+  assert.equal(fs.existsSync(x.options.stateDir), false);
+});
+
+test('invalid batch retains its cursor and successful parallel plans survive failure', async t => {
+  const x = setup(t); delete x.deps.llm; x.options.batchSize = 1;
+  x.deps.collect = async () => ({ messages: [message, { ...message, id: 'bad' }], stats: {} });
+  x.deps.batchLlm = async batch => batch[0].id === 'bad' ? [] : batchReply(batch);
+  await assert.rejects(x.run(), /invalid batch/);
+  const ledger = fs.readFileSync(path.join(x.options.stateDir, 'ledger.jsonl'), 'utf8');
+  assert.match(ledger, /"type":"plan"/); assert.doesNotMatch(ledger, /"type":"done"/);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(x.options.stateDir, 'state.json'))).cursors.line, new Date(now - 48 * 3600000).toISOString());
+});
+
+test('batch and runtime CLI limits reject invalid values', () => {
+  assert.deepEqual(parseArgs(['--max-messages', '60', '--batch-size', '10', '--concurrency', '4', '--timeout-ms', '1200000']), { maxMessages: 60, batchSize: 10, concurrency: 4, timeoutMs: 1200000 });
+  for (const args of [['--max-messages', '0'], ['--batch-size', '11'], ['--concurrency', '5'], ['--timeout-ms', '-1'], ['--max-messages', '1.2'], ['--max-messages']]) assert.throws(() => parseArgs(args));
+});
+
+test('long batch prompts bypass command-line limits and temporary files are cleaned on success and failure', async () => {
+  for (const fail of [false, true]) {
+    let promptFile;
+    const llm = makeLlm({ home: '/tmp', dryRun: true, execute: async (file, args) => {
+      assert.ok(args.join(' ').length < 4000);
+      promptFile = args[args.indexOf('--prompt-file') + 1];
+      assert.equal(JSON.parse(fs.readFileSync(promptFile, 'utf8')).messages[0].text.length, 50000);
+      if (fail) throw new Error('test failure');
+      return { stdout: '[]' };
+    } });
+    const call = llm([{ ...message, text: 'あ'.repeat(50000) }]);
+    if (fail) await assert.rejects(call, /LLM call failed/); else assert.equal(await call, '[]');
+    assert.equal(fs.existsSync(path.dirname(promptFile)), false);
+  }
 });

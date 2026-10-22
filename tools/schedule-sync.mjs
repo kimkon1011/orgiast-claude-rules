@@ -59,8 +59,8 @@ function acquireLock(dir) {
   return () => fs.unlinkSync(file);
 }
 
-export async function calendarToken({ getToken = getDriveToken, keyPath = process.env.GOOGLE_SA_KEY || defaultDriveKeyPath() } = {}) {
-  try { return await getToken({ scope: CALENDAR_SCOPE, impersonate: USER, keyPath, signal: AbortSignal.timeout(30000) }); }
+export async function calendarToken({ signal, getToken = getDriveToken, keyPath = process.env.GOOGLE_SA_KEY || defaultDriveKeyPath() } = {}) {
+  try { return await getToken({ scope: CALENDAR_SCOPE, impersonate: USER, keyPath, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000) }); }
   catch (error) {
     let clientId = '(SA key client_id unavailable)';
     try { clientId = readJson(keyPath, {}).client_id || clientId; } catch {}
@@ -68,10 +68,10 @@ export async function calendarToken({ getToken = getDriveToken, keyPath = proces
   }
 }
 
-export function createCalendarClient(token, fetchImpl = globalThis.fetch) {
+export function createCalendarClient(token, fetchImpl = globalThis.fetch, signal) {
   async function request(suffix, init = {}) {
     const response = await fetchImpl(API + suffix, {
-      ...init, signal: AbortSignal.timeout(30000),
+      ...init, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000),
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     });
     if (!response.ok) throw Object.assign(new Error(`Calendar API ${response.status}: ${(await response.text()).slice(0, 500)}`), { status: response.status });
@@ -99,6 +99,14 @@ export function createCalendarClient(token, fetchImpl = globalThis.fetch) {
       catch (error) { if (error.status !== 409) throw error; return request(`/${body.id}`); }
     },
   };
+}
+
+export function isAutomatedGmail(row) {
+  if (row.listUnsubscribe?.trim()) return true;
+  if ((row.labels || []).some(label => ['CATEGORY_PROMOTIONS', 'CATEGORY_SOCIAL', 'CATEGORY_FORUMS'].includes(label))) return true;
+  const address = String(row.from || row.sender || '').match(/[^\s<>@]+@[^\s<>@]+/)?.[0] || '';
+  if (/^gemini-notes@google\.com$/i.test(address)) return true;
+  return /^(?:no[._-]?reply|do[._-]?not[._-]?reply|notifications?)(?:[+._-][^@]*)?@/i.test(address);
 }
 
 export async function collectMessages({ sources, since, until, home, fetchImpl = globalThis.fetch, gmailSearch = searchGmail, listChannels = discordChannels, discordFetch = fetchMessages, log = console.error }) {
@@ -129,7 +137,7 @@ export async function collectMessages({ sources, since, until, home, fetchImpl =
         for (const row of page.messages) {
           const time = Number(row.internalDate) || Date.parse(row.date);
           if (!Number.isFinite(time)) throw new Error(`Gmail message ${row.id}: missing date`);
-          if (time >= cutoff && time <= until) found.push({ source, id: row.id, chat: '', sender: row.from, ts: iso(time), text: `${row.subject}\n${row.body || row.snippet}` });
+          if (time >= cutoff && time <= until && !isAutomatedGmail(row)) found.push({ source, id: row.id, chat: '', sender: row.from, ts: iso(time), text: `${row.subject}\n${row.body || row.snippet}` });
         }
         pageToken = page.nextPageToken;
       } while (pageToken);
@@ -183,16 +191,23 @@ JSON配列だけを返す: [{"title":"全社mtg","start":"2026-10-26T12:00:00+09
 endは明記された場合だけ設定。終日は明示された場合だけallDay=true、startは当日00:00:00+09:00、endは排他的な翌日00:00。
 quoteには予定と日時の根拠を含める。タイトルに【自動】などの接頭辞は不要。`;
 
-export function makeLlm({ home, dryRun, execute = execFileAsync } = {}) {
+export function makeLlm({ home, dryRun, signal, execute = execFileAsync } = {}) {
   return async (message, retry) => {
-    const prompt = JSON.stringify({ sentAt: message.ts, channel: message.chat, sender: message.sender, recipient: USER, text: message.text, retry: retry ? '前回はJSON形式またはスキーマが不正でした。厳密なJSON配列で返してください。' : undefined });
-    const args = [fileURLToPath(new URL('./llm-ask.mjs', import.meta.url)), '--provider', 'groq', '--category', 'extraction', '--max', '3000', '--system', SYSTEM];
+    const batch = Array.isArray(message);
+    const input = m => ({ id: messageKey(m), sentAt: m.ts, channel: m.chat, sender: m.sender, recipient: USER, text: m.text });
+    const prompt = JSON.stringify({ ...(batch ? { messages: message.map(input) } : input(message)), retry: retry ? '前回はJSON形式またはスキーマが不正でした。全件のidと厳密なJSON形式で返してください。' : undefined });
+    const system = batch ? SYSTEM + '\n今回は複数メッセージを独立に処理する。別メッセージの予定や引用を混ぜない。出力は [{"id":"入力のidをそのまま","events":[上記形式の予定]}]。入力の全idを重複なく1回ずつ返す。予定なしもevents:[]で返す。順番は任意。' : SYSTEM;
+    const args = [fileURLToPath(new URL('./llm-ask.mjs', import.meta.url)), '--provider', 'groq', '--category', 'extraction', '--max', batch ? '12000' : '3000', '--system', system];
     if (dryRun) args.push('--no-persist');
-    args.push(prompt);
+    const promptDir = fs.mkdtempSync(path.join(os.tmpdir(), 'schedule-sync-prompt-'));
     try {
-      const result = await execute(process.execPath, args, { encoding: 'utf8', timeout: 180000, maxBuffer: 1024 * 1024, windowsHide: true, env: { ...process.env, ORGIAST_HOME: home } });
+      const promptFile = path.join(promptDir, 'prompt.json');
+      fs.writeFileSync(promptFile, prompt, { mode: 0o600 });
+      args.push('--prompt-file', promptFile);
+      const result = await execute(process.execPath, args, { signal, encoding: 'utf8', timeout: 180000, maxBuffer: 1024 * 1024, windowsHide: true, env: { ...process.env, ORGIAST_HOME: home } });
       return result.stdout;
     } catch { throw new Error('schedule-sync LLM call failed (credentials/provider/timeout); cursor retained'); }
+    finally { fs.rmSync(promptDir, { recursive: true, force: true }); }
   };
 }
 
@@ -223,6 +238,45 @@ export async function extractEvents(message, llm, log = console.error) {
   }
   log(`schedule-sync: invalid extraction after retry: ${messageKey(message)}`);
   return null;
+}
+
+export function parseBatchExtraction(raw, messages) {
+  const rows = typeof raw === 'string' ? JSON.parse(raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')) : raw;
+  if (!Array.isArray(rows) || rows.length !== messages.length) throw new Error('batch must contain every input id');
+  const inputs = new Map(messages.map(m => [messageKey(m), m]));
+  const results = new Map();
+  for (const row of rows) {
+    if (!row || !inputs.has(row.id) || results.has(row.id)) throw new Error('unknown or duplicate batch id');
+    results.set(row.id, parseExtraction(row.events, inputs.get(row.id)));
+  }
+  return results;
+}
+
+export async function extractBatch(messages, llm) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const raw = await llm(messages, attempt > 0);
+    try { return parseBatchExtraction(raw, messages); } catch {}
+  }
+  // A missing/misassigned ID must never mark an unprocessed message as done.
+  throw new Error('invalid batch extraction after retry; cursor retained');
+}
+
+const arrivalTime = m => m.source === 'line' ? Date.parse(m.receivedAt) || Date.parse(m.ts) : Date.parse(m.ts);
+
+// Race even injected/legacy dependencies that do not implement AbortSignal.
+// The caller performs no further side effects after an aborted await.
+function abortable(promise, signal) {
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    signal.addEventListener('abort', abort, { once: true });
+    Promise.resolve(promise).then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
+    if (signal.aborted) abort();
+  });
+}
+
+function positiveInteger(value, name, max = Number.MAX_SAFE_INTEGER) {
+  if (!Number.isSafeInteger(value) || value < 1 || value > max) throw new Error(`${name} must be an integer between 1 and ${max}`);
+  return value;
 }
 
 export function normalizeTitle(title) {
@@ -269,13 +323,26 @@ export function reportLine(row) {
 }
 
 export async function runScheduleSync(options = {}, dependencies = {}) {
-  const now = options.now ?? Date.now();
+  const startedAt = Date.now();
+  const now = options.now ?? startedAt;
+  const maxMessages = positiveInteger(options.maxMessages ?? 60, 'maxMessages');
+  const batchSize = positiveInteger(options.batchSize ?? 10, 'batchSize', 10);
+  const concurrency = positiveInteger(options.concurrency ?? 3, 'concurrency', 4);
+  const timeoutMs = positiveInteger(options.timeoutMs ?? 20 * 60000, 'timeoutMs');
+  const controller = new AbortController();
+  const { signal } = controller;
+  const wait = promise => abortable(promise, signal);
   const home = options.home || process.env.ORGIAST_HOME || os.homedir();
   const dir = options.stateDir || path.join(home, '.claude', 'schedule-sync');
   const sources = options.sources || ['line', 'discord', 'gmail'];
   const dryRun = Boolean(options.dryRun);
   const log = dependencies.log || console.error;
-  const release = dryRun ? () => {} : acquireLock(dir);
+  // A transient lock also covers dry-runs without touching the persistent home.
+  const releaseTransient = acquireLock(path.join(os.tmpdir(), 'schedule-sync-locks', hash(path.resolve(dir))));
+  let release;
+  try { release = dryRun ? () => {} : acquireLock(dir); }
+  catch (error) { releaseTransient(); throw error; }
+  const timer = setTimeout(() => controller.abort(new Error('schedule-sync: overall timeout; cursor retained')), timeoutMs);
   try {
     const stateFile = path.join(dir, 'state.json'), ledgerFile = path.join(dir, 'ledger.jsonl');
     const state = readJson(stateFile, { cursors: {} });
@@ -293,8 +360,8 @@ export async function runScheduleSync(options = {}, dependencies = {}) {
     }));
     let calendar = dependencies.calendar, calendarError = null;
     if (!calendar) {
-      try { calendar = createCalendarClient(await (dependencies.getCalendarToken || calendarToken)()); }
-      catch (error) { if (!dryRun) throw error; calendarError = error.message; log(calendarError); }
+      try { calendar = createCalendarClient(await wait((dependencies.getCalendarToken || calendarToken)({ signal })), globalThis.fetch, signal); }
+      catch (error) { signal.throwIfAborted(); if (!dryRun) throw error; calendarError = error.message; log(calendarError); }
     }
     if (!dryRun && sources.some(source => !state.cursors[source])) {
       // Pin the initial lower bound before collecting. A long first backfill may
@@ -303,26 +370,65 @@ export async function runScheduleSync(options = {}, dependencies = {}) {
       for (const source of sources) if (!state.cursors[source]) state.cursors[source] = iso(since[source]);
       writeState(stateFile, state.cursors);
     }
-    const { messages, stats } = await (dependencies.collect || collectMessages)({ sources, since, until: now, home, log });
+    const fetchImpl = (url, init = {}) => {
+      signal.throwIfAborted();
+      return globalThis.fetch(url, { ...init, signal: init.signal ? AbortSignal.any([signal, init.signal]) : signal });
+    };
+    const { messages, stats } = await wait((dependencies.collect || collectMessages)({ sources, since, until: now, home, log, fetchImpl, signal }));
     // Saved extraction plans survive interrupted creates, independently of input retention.
     const pendingMessages = [...plans.values()].filter(p => !done.has(p.messageKey) && sources.includes(p.message.source)).map(p => p.message);
     const work = [...new Map([...pendingMessages, ...messages].map(m => [messageKey(m), m])).values()];
-    const llm = dependencies.llm || makeLlm({ home, dryRun });
+    work.sort((a, b) => arrivalTime(a) - arrivalTime(b) || messageKey(a).localeCompare(messageKey(b)));
+    if (work.some(m => !Number.isFinite(arrivalTime(m)))) throw new Error('invalid message arrival timestamp');
     const rows = [];
-    let filtered = 0, invalid = 0, alreadyProcessed = 0, processed = 0;
+    let filtered = 0, invalid = 0, alreadyProcessed = 0;
+    const eligible = [];
     for (const message of work) {
       const key = messageKey(message);
       if (done.has(key)) { alreadyProcessed++; continue; }
-      if (!isScheduleCandidate(message.text)) { filtered++; continue; }
-      processed++;
-      if (processed === 1 || processed % 20 === 0) log(`schedule-sync: extracting message ${processed} (of ${work.length} collected)`);
-      let plan = plans.get(key);
-      if (!plan) {
-        const candidates = await extractEvents(message, llm, log);
-        if (candidates === null) { invalid++; save({ type: 'done', messageKey: key, reason: 'invalid-extraction' }); continue; }
-        plan = { type: 'plan', messageKey: key, message, candidates };
-        save(plan);
+      if (!plans.has(key) && !isScheduleCandidate(message.text)) { filtered++; done.add(key); continue; }
+      eligible.push(message);
+    }
+    const selected = eligible.slice(0, maxMessages);
+    const deferred = eligible.length - selected.length;
+    const fresh = selected.filter(m => !plans.has(messageKey(m)));
+    const batches = [];
+    for (let i = 0; i < fresh.length; i += batchSize) batches.push(fresh.slice(i, i + batchSize));
+    const batchLlm = dependencies.batchLlm || makeLlm({ home, dryRun, signal });
+    let nextBatch = 0;
+    const worker = async () => {
+      while (nextBatch < batches.length) {
+        signal.throwIfAborted();
+        const batch = batches[nextBatch++];
+        log(`schedule-sync: extracting batch ${nextBatch}/${batches.length} (${batch.length} messages)`);
+        // Keep the single-message injection API for existing callers/tests.
+        const extracted = dependencies.llm
+          ? new Map(await Promise.all(batch.map(async m => [messageKey(m), await wait(extractEvents(m, dependencies.llm, log))])))
+          : await wait(extractBatch(batch, batchLlm));
+        signal.throwIfAborted();
+        for (const message of batch) {
+          const key = messageKey(message), candidates = extracted.get(key);
+          if (candidates === null) {
+            invalid++; save({ type: 'done', messageKey: key, reason: 'invalid-extraction' }); done.add(key);
+          } else {
+            const plan = { type: 'plan', messageKey: key, message, candidates };
+            save(plan); plans.set(key, plan);
+          }
+        }
       }
+    };
+    const workers = Array.from({ length: Math.min(concurrency, batches.length) }, worker);
+    try { await Promise.all(workers); }
+    catch (error) {
+      controller.abort(error);
+      await Promise.allSettled(workers);
+      throw error;
+    }
+    for (const message of selected) {
+      signal.throwIfAborted();
+      const key = messageKey(message);
+      if (done.has(key)) continue;
+      const plan = plans.get(key);
       for (const [index, candidate] of plan.candidates.entries()) {
         const itemKey = `${key}:${index}`;
         if (results.has(itemKey)) continue;
@@ -334,12 +440,12 @@ export async function runScheduleSync(options = {}, dependencies = {}) {
             else {
               const body = eventBody(candidate, message, index);
               // Lookup the deterministic ID first: recovers an insert whose response was lost.
-              const own = await calendar.get(body.id);
+              const own = await wait(calendar.get(body.id));
               if (own) {
                 row.status = own.status === 'cancelled' ? 'duplicate' : 'created';
                 row.eventId = own.id; row.htmlLink = eventLink(own);
               } else {
-                const existing = await calendar.list(candidate.start);
+                const existing = await wait(calendar.list(candidate.start));
                 const duplicate = existing.find(event => isDuplicate(candidate, event));
                 if (duplicate) { row.status = 'duplicate'; row.eventId = duplicate.id; row.htmlLink = eventLink(duplicate); }
                 // Extraction / API reads can outlast a near-term appointment.
@@ -347,7 +453,7 @@ export async function runScheduleSync(options = {}, dependencies = {}) {
                 else if (Date.parse(candidate.start) <= (dependencies.now?.() ?? options.now ?? Date.now())) row.status = 'ignored';
                 else if (dryRun) row.status = 'would-create';
                 else {
-                  const event = await calendar.create(body);
+                  const event = await wait(calendar.create(body));
                   if (!event?.id) throw new Error('Calendar insert returned no event ID');
                   row.status = event.status === 'cancelled' ? 'duplicate' : 'created';
                   row.eventId = event.id; row.htmlLink = eventLink(event);
@@ -363,12 +469,12 @@ export async function runScheduleSync(options = {}, dependencies = {}) {
       done.add(key);
     }
     if (!dryRun) {
-      const send = dependencies.dm || (body => sendDiscordDm(USER, body, { home }));
+      const send = dependencies.dm || (body => sendDiscordDm(USER, body, { home, fetchImpl }));
       const pending = [...results.values()].filter(row => ['created', 'review'].includes(row.status) && !notified.has(row.key));
       let batch = [], size = 0;
       const flush = async () => {
         if (!batch.length) return;
-        await send('予定の自動登録\n' + batch.map(reportLine).join('\n'));
+        await wait(send('予定の自動登録\n' + batch.map(reportLine).join('\n')));
         for (const row of batch) save({ type: 'notified', key: row.key });
         batch = []; size = 0;
       };
@@ -379,11 +485,16 @@ export async function runScheduleSync(options = {}, dependencies = {}) {
       }
       await flush();
       const cursors = { ...state.cursors };
-      for (const source of sources) cursors[source] = iso(Math.max(Date.parse(cursors[source]) || 0, now));
+      for (const source of sources) {
+        const remaining = work.filter(m => m.source === source && !done.has(messageKey(m)));
+        // Inclusive boundary plus ledger deduplication handles timestamp ties.
+        const boundary = remaining.length ? Math.min(now, ...remaining.map(arrivalTime)) : now;
+        cursors[source] = iso(Math.max(Date.parse(cursors[source]) || 0, boundary));
+      }
       writeState(stateFile, cursors);
     }
-    return { ok: !calendarError, dryRun, calendarError, collected: stats, filtered, invalid, alreadyProcessed, extracted: rows.length, counts: Object.fromEntries(['created', 'would-create', 'review', 'duplicate', 'ignored', 'calendar-unverified'].map(status => [status, rows.filter(r => r.status === status).length])), candidates: rows.map(({ title, start, source, status, htmlLink }) => ({ title, start, source, status, htmlLink })) };
-  } finally { release(); }
+    return { ok: !calendarError, dryRun, calendarError, collected: stats, processed: selected.length, deferred, durationMs: Date.now() - startedAt, batchSize, concurrency, filtered, invalid, alreadyProcessed, extracted: rows.length, counts: Object.fromEntries(['created', 'would-create', 'review', 'duplicate', 'ignored', 'calendar-unverified'].map(status => [status, rows.filter(r => r.status === status).length])), candidates: rows.map(({ title, start, source, status, htmlLink }) => ({ title, start, source, status, htmlLink })) };
+  } finally { clearTimeout(timer); controller.abort(); try { release(); } finally { releaseTransient(); } }
 }
 
 export function parseArgs(args) {
@@ -392,7 +503,10 @@ export function parseArgs(args) {
     const arg = args[i];
     if (arg === '--dry-run') options.dryRun = true;
     else if (arg === '--json') options.json = true;
-    else if (arg === '--since') {
+    else if (['--max-messages', '--batch-size', '--concurrency', '--timeout-ms'].includes(arg)) {
+      const name = { '--max-messages': 'maxMessages', '--batch-size': 'batchSize', '--concurrency': 'concurrency', '--timeout-ms': 'timeoutMs' }[arg];
+      options[name] = positiveInteger(Number(args[++i]), arg, name === 'batchSize' ? 10 : name === 'concurrency' ? 4 : Number.MAX_SAFE_INTEGER);
+    } else if (arg === '--since') {
       options.since = args[++i];
       if (!/^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:\d{2})$/.test(options.since || '') || !Number.isFinite(Date.parse(options.since))) throw new Error('--since requires an ISO timestamp with timezone');
     } else if (arg === '--source') {

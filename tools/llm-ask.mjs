@@ -25,7 +25,7 @@ const args = process.argv.slice(2);
 function opt(name, def) { const i = args.indexOf(name); return (i >= 0 && args[i + 1]) ? args[i + 1] : def; }
 const provider = (opt('--provider', '') || '').toLowerCase();
 const selected = PROVIDERS[provider];
-if (!selected) { console.error('使い方: node llm-ask.mjs --provider <openrouter|groq|glm|cerebras|genspark|gemini|deepseek|grok|kimi|mistral> "指示" [--model X] [--system S] [--max N] [--category <classification|extraction|summarize|jp_reply|code>] [--no-fallback]'); process.exit(2); }
+if (!selected) { console.error('使い方: node llm-ask.mjs --provider <openrouter|groq|glm|cerebras|genspark|gemini|deepseek|grok|kimi|mistral> "指示" [--model X] [--system S] [--max N] [--category <classification|extraction|summarize|jp_reply|code>] [--prompt-file PATH] [--no-fallback]'); process.exit(2); }
 const model = opt('--model', selected.model);
 // claude-fable-5 系は別課金枠のため組織ルールで全用途禁止。
 if (/fable/i.test(model)) { console.error('fable を含むモデルは組織ルールにより使用できません'); process.exit(2); }
@@ -33,8 +33,10 @@ const category = (opt('--category', '') || '').toLowerCase();
 const system = opt('--system', '');
 const maxTok = parseInt(opt('--max', '4000'), 10) || 4000;
 const skip = new Set();
-['--provider', '--model', '--system', '--max', '--category'].forEach((flag) => { const i = args.indexOf(flag); if (i >= 0) { skip.add(i); skip.add(i + 1); } });
-const prompt = args.filter((arg, i) => !arg.startsWith('--') && !skip.has(i)).join(' ').trim();
+['--provider', '--model', '--system', '--max', '--category', '--prompt-file'].forEach((flag) => { const i = args.indexOf(flag); if (i >= 0) { skip.add(i); skip.add(i + 1); } });
+const promptFile = opt('--prompt-file', '');
+if (args.includes('--prompt-file') && (!promptFile || promptFile.startsWith('--'))) { console.error('--prompt-file requires a path'); process.exit(2); }
+const prompt = promptFile ? fs.readFileSync(promptFile, 'utf8') : args.filter((arg, i) => !arg.startsWith('--') && !skip.has(i)).join(' ').trim();
 const home = process.env.ORGIAST_HOME || os.homedir();
 
 // --category 指定時は eval 実測のルーティング表(routing-table.json)の最安候補を先頭にする。

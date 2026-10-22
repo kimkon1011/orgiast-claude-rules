@@ -23,6 +23,7 @@ export function compactMessage(message) {
     from: headerValue(message?.payload, 'from'),
     to: headerValue(message?.payload, 'to'),
     subject: headerValue(message?.payload, 'subject'),
+    listUnsubscribe: headerValue(message?.payload, 'list-unsubscribe'),
     snippet: String(message?.snippet || '').replace(/\s+/g, ' ').trim(),
     labels: Array.isArray(message?.labelIds) ? message.labelIds : [],
   };
@@ -66,7 +67,7 @@ export async function searchGmail({ user, query, max = 10, withBody = false, bod
   let skipped = 0;
   for (const stub of (list.messages || []).slice(0, max)) {
     const format = withBody ? 'full' : 'metadata';
-    const suffix = withBody ? '' : '&metadataHeaders=Date&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject';
+    const suffix = withBody ? '' : '&metadataHeaders=Date&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=List-Unsubscribe';
     let message;
     try {
       message = await gmail(token, `/messages/${stub.id}?format=${format}${suffix}`, fetchImpl);

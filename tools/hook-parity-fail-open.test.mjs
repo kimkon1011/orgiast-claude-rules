@@ -24,6 +24,7 @@ const hooks = [
   'check-e2e-before-stop.mjs',
   'pipe-stage-permissions.mjs',
   'feedback-form-gate.mjs',
+  'handover-doc-gate.mjs',
 ];
 
 function run(name, input, home) {

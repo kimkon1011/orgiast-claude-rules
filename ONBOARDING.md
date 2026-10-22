@@ -545,6 +545,21 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
 
 新規プロジェクト着手の初手で、GCP/Supabase/Vercel/GitHub/Anthropic等をどのアカウントで作るか宣言してから着手する（デフォルトはチーム共有=seisaku-team@orgiast.jp、Workspace Admin操作のみkim@orgiast.jp）。詳細・標準応答テンプレ・recover手順: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/project-launch-playbook.md`
 
+**🔴 全プロジェクトは「後で別アカウント（例: cr@orgiast.jp）へ管理を移す」前提で作る（kim 2026-10-22 厳命・全PC全アカウント）。外部リソースは最小、個人依存値は env/Binding、リポ直下に HANDOVER.md 必須、移管は「招待＋オーナー変更」だけで終わる構成にする。**
+
+**1.12.1 移管前提の設計ルール（kim 2026-10-22・全PC全アカウント全 Claude Code）**
+
+背景: 2026-10 に古川さん退職に伴うアプリ5本の cr@orgiast.jp への移管、ブース制作アプリの cr-PC 移管で、個人アカウント依存（Vercel Hobby のメンバー不可・個人 Discord ID のハードコード・env の所在不明・引き継ぎ文書なし）が移管コストの大半だった。作る時点で移管を設計に入れれば、移管は数十分で終わる。
+
+- **着手時の所有権宣言（§1.12）に「移管先候補」と「移管手順の所要（分）」を1行添える**。移管先が未定でも「cr@orgiast.jp 等の社内アカウント」と書く。
+- **外部リソースは最小**: 原則 GitHub + Cloudflare（§1.10.1。DB は D1）。Vercel / Supabase / GCP / 有料 SaaS を足すときは理由を1行書き、HANDOVER.md のリソース一覧に移管手順まで書く。
+- **個人アカウントに紐づく値はコードに書かない**: Discord ID・メールアドレス・トークン・Webhook URL・スプレッドシート ID は env / Binding / Script Properties に置き、`.env.example` に全項目を説明付きで列挙する。
+- **リポジトリ直下に `HANDOVER.md`**（ひな形: project-launch-playbook.md §1.12.1）: リソース一覧（種別／現オーナー／URL／移管手順／移管後に書き換える箇所）、env 一覧（値は書かず所在のみ）、再デプロイ手順、ローカル起動手順、定期ジョブ・Webhook・外部連携の一覧。非エンジニアの後任が読んで移管を完了できる粒度。README に「引き継ぎは HANDOVER.md」と1行書く。
+- **移管操作が「招待してオーナー変更」で終わる構成にする**: GitHub = Settings → Transfer ownership（または Org 配下で Owner 追加）、Cloudflare = Members に追加 → Super Administrator、Google（Sheets/Drive/GAS）= 同一ドメイン内の所有権移転、GAS = §1.3 の clasp + GitHub 管理。**個人の有料プランでしか成立しない構成（Vercel Pro のメンバー招待等）や、個人 PC のローカルにしか無い秘密・定期ジョブは作らない**（定期処理は GitHub Actions / Cloudflare Cron Triggers / GAS トリガーへ）。
+- **デプロイ前ゲート**: `tools/handover-doc-gate.mjs` が `wrangler deploy` / `vercel deploy` / `clasp push` 直前に HANDOVER.md の有無を確認し、無ければ deny する（feedback-form-gate と同じ型）。
+- **既存アプリ**は大きな改修のついでに同じ形へ寄せる。HANDOVER.md の追加だけなら改修を待たずその場で行う。
+- 完了報告の検証表に「HANDOVER.md あり／移管手順の所要（分）」の行を入れる。
+
 ### 1.13 トークン効率
 
 出力を簡潔にし、入力キャッシュと用途別委譲でトークンを節約する。

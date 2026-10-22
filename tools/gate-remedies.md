@@ -26,6 +26,10 @@ tools/course-corrections.json の該当ルールに従い訂正後の手順を�
 
 `node tools/feedback-kit/install.mjs --app <root> --upgrade` を実行してから再デプロイ（kit 未導入・版が古い・必須6機能の欠落のいずれかで deny）。方式BのリンクをHTMLへ追加、または方式Aのテンプレート/Next FeedbackWidgetを導入。台帳へアプリ名を登録。
 
+## handover-doc-gate
+
+リポジトリ直下に HANDOVER.md を置いてから再デプロイ（ひな形: rules-extracted/project-launch-playbook.md §1.12.1。リソース一覧・env の所在・再デプロイ手順・移管チェックリスト）。全プロジェクトは別アカウントへ移管できる前提で作る決まり。緊急時のみ HANDOVER_GATE_SKIP=1。
+
 ## gh-handoff-gate
 
 PR URL と対象ブランチ、CI/マージ状態、次の操作を書く。

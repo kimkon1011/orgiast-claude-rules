@@ -482,6 +482,12 @@
       "reason": "要確認"
     },
     {
+      "path": "tools/register-sga-autopilot.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "販管費オートパイロット。DWD 鍵と kim の Discord DM が前提のため kim-PC 専用"
+    },
+    {
       "path": "tools/register-messenger-watch.ps1",
       "scope": "kim-only",
       "step": null,

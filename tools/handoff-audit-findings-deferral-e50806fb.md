@@ -101,12 +101,14 @@ excerpt:   Codex のリンク実装の完了を待ってから、このスクリ
 
 | 対象 | 原文 | 同型 3 件 |
 |---|---|---|
-| `tools/deferral-wait-gate.mjs`（repo, 本 PR） | **block** `DEFERRAL-WAIT` | **block** |
-| `~/.claude/nightly-repo/tools/deferral-wait-gate.mjs`（Stop hook の実体） | block（旧版・#959 の変更を含む） | **pass**（本 PR の反映待ち） |
+| `tools/deferral-wait-gate.mjs`（repo, #988） | **block** `DEFERRAL-WAIT` | **block** |
+| `~/.claude/nightly-repo/tools/deferral-wait-gate.mjs`（Stop hook の実体, 8d974eb） | **block** | **block** |
 
-`~/.claude/settings.json` の Stop hook は `nightly-repo/tools/stop-gate-runner.mjs` を指す。
-配備先は nightly の同期で更新されるため、マージ後に配備先の `judge(同型)` が block になることを
-実物で確認する（未確認の間は「反映待ち」と書く）。
+`~/.claude/settings.json` の Stop hook は `nightly-repo/tools/stop-gate-runner.mjs` を指し、
+`stop-gate-runner.mjs` の 40 行目で `deferral-wait-gate.mjs` の `judge` を呼んでいる。
+#988 のマージ（2026-10-22T15:56:10Z）後、配備先の checkout を定期更新ジョブと同じ
+`git fetch origin main && git checkout origin/main` で 8d974eb に進め、配備先の実体で
+原文・同型 3 件すべて **block** を実測した（2026-10-23）。
 
 ## 6. 実装の経路（Codex 委譲の結果）
 
@@ -119,7 +121,7 @@ excerpt:   Codex のリンク実装の完了を待ってから、このスクリ
 
 | # | 未確認事項 |
 |---|---|
-| U1 | マージ後、配備先 `~/.claude/nightly-repo` の同期で同型が block になること（同期タイミング依存） |
+| U1 | ~~マージ後、配備先 `~/.claude/nightly-repo` の同期で同型が block になること~~ → 2026-10-23 に 8d974eb へ更新して実測・確認済み（§5） |
 | U2 | 夜間スキャン（`permanent-fix-deferral-scan.mjs` の `W`）は本型を拾わないまま。Stop ゲートで塞ぐ設計とし、スキャナの語彙は変えていない（過去台帳の一括再判定で誤検出を作らないため） |
 | U3 | `b822034d` が待機中に子プロセスを保持していたかは transcript を走査していない |
 

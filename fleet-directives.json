@@ -3,15 +3,14 @@
   "_note": "kim/監督Claude が指示を1件書き、各PCの fleet-agent が15分以内に拾って結果を Discord へ返す。kind は status / prompt / enable-auto-session の3つだけ。prompt と enable-auto-session はそのPCの人がオプトイン済みの場合のみ実行される。空配列にすると全PCで何も起きない。 PC間メッセージは fleet-mail.mjs（双方向）を使う。",
   "directives": [
     {
-      "id": "prompt-20261015-103145-8901",
-      "kind": "prompt",
-      "targets": "all",
-      "why": "kim-PC の memory 全件配布の初回受信を今日中に確認する（docs/memory-share.md）",
-      "body": "【フリート指令 / kim-PC の memory 全件配布の初回受信（2026-10-15）】\nこのPCで次を実行し、結果を報告してください。user の操作は不要です。\n\n1. `node ~/orgiast-main/tools/onboarding-sync.mjs --force`（無ければ `node ~/orgiast-claude-rules/tools/onboarding-sync.mjs --force`）を実行する。\n2. `~/.claude/hooks/onboarding-sync.log` の末尾から `memory-share install:` の行を1行そのまま報告する（generatedAt / installed / dir が入っているはず）。\n3. `~/.claude/shared-memory/MEMORY.md` が存在するか、`~/.claude/shared-memory/` 直下の .md ファイル数、`~/.claude/CLAUDE.md` に `@~/.claude/shared-memory/MEMORY.md` の行があるか、の3点を PC名付きで1行ずつ報告する。\n4. 失敗（401 / 502 / 503 / 404）なら、その HTTP コードをそのまま報告する。言い換え再試行はしない。\n\n背景: kim-PC に蓄積した Claude Code の運用ノウハウ（memory 約870件）が cr@ / nishi@ のPCに届いておらず、同じ試行錯誤が再発していた。配信口 orgiast-memoryserve を新設し、各PCの onboarding-sync が毎日自動で受信する（docs/memory-share.md）。\n",
+      "id": "run-20261022-225701-7305",
+      "kind": "run",
+      "targets": "古川龍慶のノートブックコンピュータ",
+      "why": "stale_report 自動復旧",
+      "task": "fleet-sheet-report",
       "createdBy": "uers",
-      "createdAt": "2026-10-15T10:31:45.686Z",
-      "expiresAt": "2026-10-17T10:31:45.686Z",
-      "timeoutSeconds": 900
+      "createdAt": "2026-10-22T22:57:01.258Z",
+      "expiresAt": "2026-10-24T22:57:01.258Z"
     }
   ]
 }

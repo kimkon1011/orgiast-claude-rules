@@ -75,6 +75,9 @@ test('FLEET_NO_SELF_HEAL=1 で無効、kim-PC 自身は mail を送らない、�
 test('repairAdvice: 自動修復と人の操作の区別', () => {
   assert.equal(repairAdvice('codex', 'native_failed:wsl').auto, true);
   assert.equal(repairAdvice('codex', 'dead:oauth_consent').auto, false);
+  assert.equal(repairAdvice('gemini', 'probe_failed:stale').silent, true);
+  assert.equal(repairAdvice('gemini', 'probe_failed:stale').human, null);
+  assert.equal(repairAdvice('gemini', 'auth_invalid').auto, false);
   assert.equal(repairAdvice('codex', 'dead:oauth_consent').fixNow, true);
   assert.match(repairAdvice('codex', 'dead:physical_operation').human, /wsl/);
   assert.equal(repairAdvice('deepseek', 'dead:payment_required').fixNow, false);

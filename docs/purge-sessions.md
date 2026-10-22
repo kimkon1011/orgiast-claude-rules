@@ -43,10 +43,21 @@ node tools/purge-sessions.mjs --restore '<sessionId>'
 
 ## スマホ／claude.ai の「Code」一覧（サーバー側）
 
-**自動実行は停止中（2026-10-18）。** 以前は `--hook` が `tools/purge-remote-sessions.mjs` を6時間ごとに起動し、
-切断済み・最終イベントから24時間以上のリモートセッションを時間だけで判定してアーカイブしていた。
-この判定ではクローズしていないセッションまで消える（10/16〜17 に未クローズ28件を誤アーカイブ。全件 `/unarchive` で復元済み）。
-サーバ側セッション ID（`cse_…`）とローカルのクローズ記録を結ぶ手段ができるまで、自動では動かさない。
+`--hook` が `tools/purge-remote-sessions.mjs` を detached で起動する（6時間に1回）。
+アーカイブ対象は次の**すべて**を満たすセッションだけ。
 
-手動確認は `node tools/purge-remote-sessions.mjs --dry-run`。誤ってアーカイブしたものは
-`POST /v1/code/sessions/{id}/unarchive` で戻せる（記録は `~/.claude/archived-remote-sessions.jsonl`）。
+1. `status` が `archived` でない・`connection_status` が `disconnected`・最終イベントから24時間以上
+2. そのサーバ ID（`cse_…`）が、この PC の `~/.claude/projects-archive/` にある
+   JSONL の `bridgeSessionId` と一致する（＝ローカルの purge が既に退避した会話）
+3. 同じ `cse_…` が `~/.claude/projects/`（現役）や `~/.claude/current-sessions/` に無い
+
+2026-10-18 に時間だけで判定して未クローズ28件を誤アーカイブした反省から、2 の一致を必須にした。
+ローカルに会話が無い（スマホだけで作った）セッションや、まだ `projects/` にある会話は触らない。
+結果は `archived` / `targets` / `unlinked`（時間条件は満たすがローカル退避記録が無く見送った件数）で返る。
+会話は消えず一覧から隠れるだけ。記録は `~/.claude/archived-remote-sessions.jsonl`。
+
+```sh
+node tools/purge-remote-sessions.mjs --dry-run
+```
+
+誤ってアーカイブしたものは `POST /v1/code/sessions/{id}/unarchive` で戻せる。

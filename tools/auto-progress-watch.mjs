@@ -13,6 +13,7 @@ import { ledgerFile, readLedger, writeLedger, OPEN_STATUSES, latestOpenPromises,
 export { MAX_RESUMES } from './auto-progress-ledger.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { notifyOwner } from './notify-owner.mjs';
+import { checkPromise } from './auto-progress-check.mjs';
 import { appendInbox } from './auto-progress-inbox-hook.mjs';
 
 export const GRACE_MS = 1 * 3600 * 1000;
@@ -173,6 +174,8 @@ export function sheetRow(row, verdict, evidence, now = Date.now()) {
 // ---- 本体 ----------------------------------------------------------------
 export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now(), dryRun = false, io = {} } = {}) {
   const file = ledgerFile(home);
+  const clock = io.clock ?? Date.now;
+  const stopAt = clock() + 45 * 60000;
   const patch = (key, changes) => { // ledger hook と競合しないよう、書く直前に読み直して該当行だけ更新する。
     if (dryRun) return;
     const rows = readLedger(file);
@@ -183,6 +186,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   const rows = readLedger(file);
   const candidates = latestOpenPromises(rows);
   const selected = new Set(candidates);
+  const pendingChecks = rows.filter(row => row.check && row.status === 'done' && row.checkResult === 'done' && row.checkNotifiedResult !== 'done');
   const normalized = rows.map((row) => {
     if (!WATCHED.has(row.status) || selected.has(row)) return row;
     summary.superseded += 1;
@@ -193,7 +197,22 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   if (!dryRun && summary.superseded) writeLedger(file, normalized);
   const needsKim = row => !['', 'なし'].includes(String(row.nextKim ?? '').trim());
   candidates.sort((a, b) => Number(needsKim(a)) - Number(needsKim(b)) || Date.parse(a.ts) - Date.parse(b.ts));
-  for (const row of candidates) {
+  // Checks run first, before the potentially lengthy legacy resume lane.
+  const executable = [...candidates.filter(row => row.check), ...pendingChecks];
+  executable.sort((a, b) => (Date.parse(a.lastCheckedAt) || 0) - (Date.parse(b.lastCheckedAt) || 0));
+  for (const row of executable) {
+    if (clock() + 60000 >= stopAt) break;
+    if (dryRun) continue; // --dry-run must never execute arbitrary commands.
+    summary.checked++;
+    try {
+      const state = await checkPromise(row, { home, now, patch, io });
+      if (state === 'done') summary.done++;
+      else if (state === 'unmet') summary.inProgress++;
+    } catch (error) { summary.errors.push(`check: ${String(error?.message ?? error).slice(0, 120)}`); }
+  }
+  for (const row of candidates.filter(row => !row.check)) {
+    // Reserve time for a 20-minute resume plus classification and reporting.
+    if (clock() + 22 * 60000 >= stopAt) break;
     if (isNoopPromise(row.promise)) {
       patch(rowKey(row), { status: 'done', verdict: 'done', doneAt: new Date(now).toISOString(), reason: '自動進行の宣言なし' });
       summary.noop += 1;

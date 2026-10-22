@@ -158,9 +158,9 @@ test('digest: 非kim-PCも自PC台帳の進捗を送り、0件なら送らない
   ];
   assert.equal(selectRows(rows, now).length, 1);
   const text = formatDigest(selectRows(rows, now), now, 'other-PC');
-  assert.match(text, /^自動進行 まとめ: 進んでいる 1/);
-  assert.match(text, /未処理 1 件・最古 1 日前/);
-  assert.match(text, /・夜間デプロイ\n  今: 進んでいます/);
+  assert.match(text, /^自動進行: 完了 0/);
+  assert.match(text, /kim の操作待ち 1/);
+  assert.match(text, /・kim の操作待ち: 夜間デプロイ/);
   const sent = [];
   const io = { label: 'other-PC', readLedger: () => rows, readState: () => ({}), writeState: () => {}, appendFileSync: () => {}, mkdirSync: () => {}, notify: async (t) => { sent.push(t); return { delivered: 'dm' }; } };
   assert.deepEqual(await digest({ home: tmp(), now, io }), { sent: true, count: 1, parts: 1 });
@@ -335,28 +335,31 @@ test('watch: nextKimが空/なしを優先して古い順に最大4件を再開'
   assert.deepEqual(resumed, ['direct-old', 'direct-mid', 'direct-new', 'waiting-old']);
 });
 
-test('digest: 10件を超えた行と新規doneは次回へ繰り越す', async () => {
+test('digest: 大量の完了も一通に集約し上位以外を次回へ分割しない', async () => {
   const now = Date.now(), home = tmp();
   const rows = Array.from({ length: MAX_ITEMS + 2 }, (_, i) => ({ sessionId: `s${i}`, status: 'done', promise: `作業${i}`, ts: new Date(now - WINDOW_MS).toISOString(), doneAt: new Date(now - H).toISOString() }));
   const messages = [];
   const io = { readLedger: () => rows, notify: async text => { messages.push(text); return { delivered: 'dm' }; } };
   const first = await digest({ home, now, io });
-  assert.equal(first.count, MAX_ITEMS);
-  assert.match(messages[0], /…ほか 2 件（次回以降に）/);
-  assert.equal((await digest({ home, now: now + WINDOW_MS, io })).count, 2);
+  assert.equal(first.count, MAX_ITEMS + 2);
+  assert.match(messages[0], /完了 12/);
+  assert.ok(messages[0].split('\n').length <= 10);
+  assert.equal((await digest({ home, now: now + WINDOW_MS, io })).count, 0);
   assert.deepEqual(await digest({ home, now: now + WINDOW_MS * 2, io }), { sent: false, count: 0 });
   assert.ok(messages.every(message => message.length <= 2000));
 });
 
-test('schedule: watchは毎時・4件分の時間枠を確保し既存PCも更新する', () => {
+test('schedule: watchは毎時・実行上限55分とし既存PCも更新する', () => {
   const script = fs.readFileSync(new URL('./register-auto-progress-task.ps1', import.meta.url), 'utf8');
   const triggers = script.match(/\$watchTriggers = (.*)/)[1];
   assert.deepEqual([...triggers.matchAll(/-At '([^']+)'/g)].map(m => m[1]), ['00:00']);
   assert.match(triggers, /New-TimeSpan -Hours 1/);
-  assert.match(script, /-ExecutionTimeLimit \(New-TimeSpan -Minutes 120\)/);
+  assert.match(script, /-ExecutionTimeLimit \(New-TimeSpan -Minutes 55\)/);
   const poller = fs.readFileSync(new URL('./fleet-poller.ps1', import.meta.url), 'utf8');
   assert.match(poller, /if \(\$Dry\) \{ DrySkip 'register-auto-progress-task.ps1/);
   assert.match(poller, /-File \$autoProgressInstaller/);
+  const installer = fs.readFileSync(new URL('./install-orgiast.ps1', import.meta.url), 'utf8');
+  assert.match(installer, /-File \$autoProgressInstaller/);
 });
 
 
@@ -425,7 +428,7 @@ test('digest: 無人処理は数だけ、なし系を正規化し、埋め込ま
   const result = await digest({ home, now, dryRun: true, io: { readLedger: () => [row, unattended], readState: () => ({}) } });
   assert.equal(result.count, 1);
   assert.match(result.text, /無人処理の約束 1 件は数だけ/);
-  assert.match(result.text, /次に自動でやること:.*kim がすること: なし/);
+  assert.match(result.text, /完了 1/);
   assert.match(result.text, /このパソコン の この作業 を 2026-10-20T01:02:03Z に確認/);
   assert.doesNotMatch(result.text, /DESKTOP-|abcdef12|表示しない約束/);
   assert.doesNotMatch(result.text.split('\n').filter(line => !line.startsWith('・')).join('\n'), /2026-10-|DESKTOP-|abcdef12/);
@@ -464,14 +467,15 @@ test('digest: 同じ判定は再送せず、判断依頼の追加と判定変化
   const home = tmp(), now = Date.now();
   let row = { sessionId: 's', ts: new Date(now - H).toISOString(), status: 'open', promise: '資料確認' };
   const io = { readLedger: () => [row], notify: async () => ({ delivered: 'dm' }) };
-  assert.equal((await digest({ home, now, io })).sent, false);
+  assert.equal((await digest({ home, now, io })).sent, true);
   assert.equal(JSON.parse(fs.readFileSync(path.join(home, '.claude', 'state', 'auto-progress-digest.json'), 'utf8')).lastVerdicts[rowKey(row)], 'open');
   assert.equal((await digest({ home, now: now + H, io })).sent, false);
   row = { ...row, nextKim: '予算を選んでください' };
   assert.equal((await digest({ home, now: now + H, io })).sent, true);
   assert.equal((await digest({ home, now: now + H, io })).sent, false);
   row = { ...row, status: 'waiting_user' };
-  assert.equal((await digest({ home, now: now + H, io })).sent, true);
+  assert.equal((await digest({ home, now: now + H, io })).sent, false);
+  assert.equal((await digest({ home, now: now + 24 * H, io })).sent, false);
 });
 
 test('digest: 長文でも件の途中で切らず、成功した宛先を失敗後に再送しない', async () => {
@@ -485,24 +489,25 @@ test('digest: 長文でも件の途中で切らず、成功した宛先を失敗
   assert.deepEqual(calls, ['a', 'b', 'b']);
 });
 
-test('digest: 長文の上限超過分は次回に送り、件の3行を維持する', async () => {
+test('digest: 長文も一通10行以内に集約し再送しない', async () => {
   const home = tmp(), now = Date.now(), messages = [];
   const rows = Array.from({ length: MAX_ITEMS, needsDm, verdictOf }, (_, i) => ({ sessionId: `long-${i}`, status: 'stalled', ts: new Date(now - H).toISOString(), promise: '確認'.repeat(100), reason: '理由'.repeat(100), nextKim: '選択'.repeat(100) }));
   const io = { readLedger: () => rows, notify: async text => { messages.push(text); return { delivered: 'dm' }; } };
   const first = await digest({ home, now, io });
-  assert.ok(first.count < MAX_ITEMS);
+  assert.equal(first.count, MAX_ITEMS);
   const second = await digest({ home, now, io });
   assert.equal(first.count + second.count, MAX_ITEMS);
   for (const message of messages) {
     assert.ok(message.length <= 2000);
+    assert.ok(message.split('\n').length <= 10);
     assert.equal((message.match(/^・/gm) || []).length, (message.match(/kim がすること:/g) || []).length);
   }
 });
 
 test('digest: 予定の日付と固有名詞を壊さず、対応不要もなしにまとめる', () => {
-  const text = formatDigest([{ status: 'open', promise: '11/10 に Example 店を予約', nextKim: '対応は不要です（予約済み）' }]);
+  const text = formatDigest([{ status: 'done', promise: '11/10 に Example 店を予約', nextKim: '対応は不要です（予約済み）' }]);
   assert.match(text, /11\/10 に Example 店を予約/);
-  assert.match(text, /kim がすること: なし/);
+  assert.doesNotMatch(text, /対応は不要/);
 });
 
 const noopExamples = ['なし', '無し', 'ナシ', '—', 'n/a', 'none', 'なし（判断待ちは発生していません）',
@@ -542,31 +547,31 @@ test('digest: noop はDMにも件数にも含めない', async () => {
   assert.equal((await digest({ home, now, dryRun: true, io })).count, 0);
   rows.push({ sessionId: 'real', promise: '入札完了', status: 'done', doneAt: new Date(now).toISOString() });
   const result = await digest({ home, now, dryRun: true, io });
-  assert.equal(result.count, 1); assert.match(result.text, /終わった 1/);
+  assert.equal(result.count, 1); assert.match(result.text, /完了 1/);
   assert.doesNotMatch(result.text, /作業はありません|自動進行なし/);
   assert.equal(formatDigest(rows, now), formatDigest(rows.slice(-1), now));
 });
-test('digest: 原文の語彙・パス・日時・番号を保持し、理由は定型のみ短縮', () => {
+test('digest: 完了の原文を保持し、確認手段なしの理由を個別列挙しない', () => {
   for (const promise of ['Claude Discord Drive GAS TODO DM PR CI SLA', 'next-session.md yj-1248206188 abcdef123456', '`/tmp/file` C:\\work 2026-10-20T01:02:03Z']) {
     assert.ok(formatDigest([{ promise, status: 'done' }]).includes(promise));
   }
-  for (const [reason, expected] of [
+  for (const [reason] of [
     ['証拠なし（約束後の会話・ファイル更新・実行ログが無い）', 'その後の動きがありません'],
     ['最後の動きから1時間以上経過', 'しばらく動きがありません'],
     ['最後の動きから24時間以上経過', 'しばらく動きがありません'],
     ['直近1時間以内に動きあり', '動いています'], ['判定AIが使えず様子見', '判定AIが使えず様子見'], ['Discord の返事待ち', 'Discord の返事待ち'],
-  ]) assert.ok(formatDigest([{ promise: '確認', reason }]).includes(`（${expected}）`));
+  ]) assert.match(formatDigest([{ promise: '確認', reason }]), /確認手段なし: 1件/);
 });
-test('digest: stalledの初回は記録だけ、同じ判定で上限到達したら送りdoneは一度だけ', async () => {
+test('digest: checkなしは初回に件数通知、再開上限では再送せずdoneは一度だけ', async () => {
   const now = Date.now(), home = tmp(), messages = [];
   let row = { sessionId: 'work', status: 'stalled', resumeCount: 1, nextKim: 'なし', promise: '資料を作成', ts: new Date(now - H).toISOString() };
   const io = { readLedger: () => [row], notify: async text => { messages.push(text); return { delivered: 'dm' }; } };
   assert.equal(needsDm(row, now), false);
-  assert.equal((await digest({ home, now, io })).sent, false);
+  assert.equal((await digest({ home, now, io })).sent, true);
   row = { ...row, resumeCount: MAX_RESUMES };
   assert.equal(needsDm(row, now), true);
-  assert.equal((await digest({ home, now, io })).sent, true);
-  assert.match(messages[0], /自動再開を使い切りました。このまま 7 日で閉じます。続けるなら kim が指示してください/);
+  assert.equal((await digest({ home, now, io })).sent, false);
+  assert.match(messages[0], /確認手段なし: 1件/);
   assert.equal((await digest({ home, now, io })).sent, false);
   row = { ...row, status: 'done', doneAt: new Date(now).toISOString() };
   assert.equal((await digest({ home, now, io })).sent, true);
@@ -583,7 +588,7 @@ test('digest: 判断待ちのなしをreasonまたはresumeOutcomeで補い、�
   assert.match(messages[0], /kim がすること: A案かB案を選んでください/);
   row = { ...row, reason: '', resumeOutcome: `needs_user: ${'判断'.repeat(50)}` };
   assert.equal((await digest({ home, now, io })).sent, true);
-  assert.equal(messages[1].split('kim がすること: ')[1], '判断'.repeat(40));
+  assert.equal(messages[1].split('kim がすること: ')[1].split('\n')[0], '判断'.repeat(40));
   assert.equal((await digest({ home, now, io })).sent, false);
 });
 

@@ -344,7 +344,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     } catch (error) { (io.stderr ?? console.error)(`auto-progress-watch: summary log failed: ${error?.message ?? error}`); }
     try {
       const digest = io.digest ?? (await import('./auto-progress-digest.mjs')).run;
-      summary.digest = await digest({ home, now, slot: new Date(now).getHours() < 12 ? '朝' : '夕', io: io.digestIo ?? {} });
+      summary.digest = await digest({ home, now, io: io.digestIo ?? {} });
     } catch (error) { summary.errors.push(`digest: ${String(error?.message ?? error).slice(0, 120)}`); }
   }
   return summary;

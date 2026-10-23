@@ -10,7 +10,7 @@
 | `waiting-on-user.json` | `C:\Users\kimko\.claude\waiting-on-user.json`（既存台帳があれば id で追加し、上書きしない） |
 
 check-token の正本は `tools/instagram-check-token.mjs` です。tools/ 内の .mjs は tools 外へ相対 import できない（`no-undistributed-imports` テスト）ため、テストから直接参照する正本は配布対象の tools/ に置き、配置時だけファイル名を `check-token.mjs` に変えてコピーします。
-| `../../tools/instagram-check-token.mjs`（正本・配布対象） | `C:\Users\kimko\nf-minpaku-automation\tools\instagram\check-token.mjs`（配置名を変えてコピー） |
+| `../../tools/instagram-check-token.mjs`（正本・配布対象） | `C:\Users\kimko\nf-minpaku-automation\tools\instagram\check-token.mjs`（配置名を変えてコピー。同じフォルダに `tools/is-entry.mjs` もコピーする） |
 
 所有者は nishi@orgiast.jp、Discord ID は未特定のため null です。所有者設定がなければ不明扱いとし、git 設定から推定しません。kim の照合には既存の `KIM_DISCORD_USER_ID` と `kim@orgiast.jp` を使用します。所有者の Discord ID が確定したら `discordUserId` に文字列として記入します。DM と制御返信の宛先に優先適用します。所有者設定が壊れている場合（JSON 不正など）は autopilot を止めず、stderr に理由を出して従来の宛先に戻します。誤配送の検出はできなくなるため、`dm-not-owner` が出ないときは設定を確認してください。
 

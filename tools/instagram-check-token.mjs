@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 
 // Resolve from the installed script, never from the invoking shell's cwd.
 export async function checkToken({ envFile = fileURLToPath(new URL('../../.env', import.meta.url)), fetchImpl = globalThis.fetch } = {}) {
@@ -26,7 +27,7 @@ export async function checkToken({ envFile = fileURLToPath(new URL('../../.env',
       : { status: 'pending', message: 'account_mismatch' };
   } catch { return { status: 'unconfirmed', message: 'instagram_check_unavailable' }; }
 }
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isEntry(import.meta.url)) {
   const result = await checkToken();
   console.log(result.message);
   process.exitCode = result.status === 'unconfirmed' ? 1 : 0;

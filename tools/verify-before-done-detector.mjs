@@ -2,7 +2,7 @@
 export const GATE_CONTRACT = {"name": "verify-before-done-detector", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "verify-before-done-detector"}]};
 import fs from 'node:fs';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 import { latestAssistantText } from './lib/assistant-text.mjs';
 import { readLastLines } from './transcript-tail.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
@@ -99,7 +99,7 @@ export function evaluateVerification(entries, assistantText, { cwd = process.cwd
   return `[VERIFY-BEFORE-DONE] 完了報告の実行証拠が不足しています。\n未実行: ${missing.length ? missing.join(', ') : executed.size ? 'なし' : '変更対象不明（PR files / 委譲結果からパスを記録）'}\n実送信・外部反映の読み戻し: ${sensitive ? readback ? 'あり' : 'なし（本番送信後のAPI取得、または具体的な [TESTED-LIVE: 結果] が必要）' : '対象外'}\n変更対象を配置場所から実行し、結果を検証してから報告してください。単体テスト・mock・[TESTED]だけでは通りません。実行不要の場合のみ [NO-TEST-OK: 先送りでない具体的理由] を記載してください。`;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+if (isEntry(import.meta.url)) {
   const stdin = await readStdinWithTimeout();
   try {
     if (stdin.trim()) {

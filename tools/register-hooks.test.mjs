@@ -444,3 +444,23 @@ test('bihin K-column gate registers once with Sheets writes and both shells', as
   assert.equal(groups[0].hooks[0].timeout, 15); // runner adds its five-second budget
   assert.match(groups[0].hooks[0].command, /gate-hook-runner/);
 });
+
+test('全OSの旧e2e/verify ps1登録を同期Stop mjsへ収束し再実行で不変', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-migration-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const file = path.join(home, '.claude/settings.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const commands = ['C:\\Users\\uers\\.claude\\hooks\\', '/Users/test/.claude/hooks/', '/home/test/.claude/hooks/'].flatMap(root => ['check-e2e-before-stop', 'verify-before-done-detector'].map(name => `pwsh -File "${root}${name}.ps1"`));
+  fs.writeFileSync(file, JSON.stringify({ hooks: { Stop: [{ hooks: commands.map(command => ({ command, async: true })) }] } }));
+  const run = () => execFileSync(process.execPath, [path.resolve('tools/register-hooks.mjs'), '--hooks-only'], { env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: path.resolve('.') } });
+  run();
+  const settings = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const hooks = settings.hooks.Stop.flatMap(g => g.hooks);
+  for (const name of ['check-e2e-before-stop', 'verify-before-done-detector']) {
+    assert.equal(hooks.filter(h => h.command.includes(name + '.ps1')).length, 0);
+    const current = hooks.filter(h => h.command.includes(name + '.mjs'));
+    assert.equal(current.length, 1);
+    assert.notEqual(current[0].async, true);
+  }
+  run(); assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), settings);
+});

@@ -82,7 +82,9 @@ function check(item) {
       const parsed = JSON.parse(raw);
       if (spec.hookEvent) {
         const hooks = parsed.hooks?.[spec.hookEvent]?.flatMap(group => group.hooks || []) || [];
-        const expected = `node "${path.join(scriptDir, spec.hookScript)}"${spec.hookArgs ?? ' --hook'}`;
+        const expected = spec.hookRunner
+          ? `node "${path.join(scriptDir, spec.hookRunner)}" "${path.join(scriptDir, spec.hookScript)}"${spec.hookArgs ?? ''}`
+          : `node "${path.join(scriptDir, spec.hookScript)}"${spec.hookArgs ?? ' --hook'}`;
         return hooks.some(hook => hook.type === 'command' && hook.command === expected
           && (spec.async !== false ? hook.async === true : hook.async === undefined || hook.async === false)
           && hook.timeout === (spec.timeout ?? 5));

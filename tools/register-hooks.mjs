@@ -388,6 +388,7 @@ try {
   // 生URLと日本語・全角文字の直接隣接によるリンク破損を差し戻す。
   if (add(settings.hooks.Stop, 'url-format-guard.mjs', { hooks: [{ type: 'command', command: command('url-format-guard.mjs'), timeout: 8 }] })) added += 1;
   // 完了報告にLayer 1/2・e2e等の検証記載がなければ同期警告する。
+  added += migrate(settings.hooks.Stop, 'check-e2e-before-stop.ps1', 'check-e2e-before-stop.mjs', command('check-e2e-before-stop.mjs'));
   if (add(settings.hooks.Stop, 'check-e2e-before-stop.mjs', { hooks: [{ type: 'command', command: command('check-e2e-before-stop.mjs'), timeout: 8 }] })) added += 1;
   const permanentTimeouts = [
     ['pretooluse-delegation-warn.mjs', 5], ['model-agent-guard.mjs', 5],
@@ -433,7 +434,7 @@ try {
     // Preserve supported legacy migrations outside tools/ (old installer copies).
     for (const [event, groups] of Object.entries(retained)) {
       for (const group of groups) group.hooks = group.hooks.filter(hook =>
-        !/(?:ai-news-inject|gtasks-pending-notice|purge-hidden-sessions|purge-closed-sessions|session-list-tidy)\.(?:mjs|ps1|py)(?:["'\s]|$)/.test(hook.command || '') && !/(?:cost-loop|onboarding-sync|verify-before-done-detector)\.ps1(?:["'\s]|$)/.test(hook.command || ''));
+        !/(?:ai-news-inject|gtasks-pending-notice|purge-hidden-sessions|purge-closed-sessions|session-list-tidy)\.(?:mjs|ps1|py)(?:["'\s]|$)/.test(hook.command || '') && !/(?:cost-loop|onboarding-sync|verify-before-done-detector|check-e2e-before-stop)\.ps1(?:["'\s]|$)/.test(hook.command || ''));
       retained[event] = groups.filter(group => group.hooks.length);
     }
     repairPowerShellExecutionPolicy(retained);

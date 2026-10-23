@@ -231,6 +231,7 @@ bound scriptのscriptId不明時はDrive MCPで`mimeType='application/vnd.google
 **Driveコマンドキュー方式は全GASプロジェクト必須（絶対ルール）**: 専用Driveフォルダを1分ごとのトリガーで監視し `cmd_*.json`→`result_*.txt` で処理。ホワイトリスト方式（`eval`禁止）。**`setupOnce()` 1つに全初期化を集約**（分割禁止）。トリガー削除は必ず`handlerFunction`名でフィルタ（`processCommandQueue`を巻き添え削除しない）。全文テンプレ・appsscript.json scope・past cases: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/gas-clasp-workflow.md`
 
 **実行→検証→完了報告のサイクルもClaude側で完結**（GAS/Web/cron/デプロイ共通）: push後、コマンドキュー/Web App endpoint/clasp run のいずれかで強制発火→ログ/DB read-backで検証→OKと確認できてから「完了」と言う。「次回cron発火で確認できます」は禁止。詳細・検証導線一覧表: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/verify-before-done.md`
+委譲・マージした変更も、本番経路で実行し、送信・通知・外部反映はAPIで読み戻すまで完了報告しない。
 
 **すべての変更後、テストして実際に直っていることを確認してから報告する（絶対ルール）**: typecheckだけ・「ブラウザで確認してください」丸投げは違反。UI変更はLayer1(ロジックNode再現)+Layer2(Playwright実描画)の2段必須、GAS/Sheets書き込みは戻り値でなく**read-back verify**必須（merge cellのnon-top-left等はsilent ignoreされる）、Frontend変更も「browserでしか動かない」を言い訳にせず`test/*.test.js`をNodeで書く。報告テンプレ・頻発失敗パターン表・past cases: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/verify-before-done.md`
 

@@ -2,8 +2,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { rowKey } from './auto-progress-ledger.mjs';
+import { rowKey, originLine } from './auto-progress-ledger.mjs';
 import { notifyOwner, resolveOwner } from './notify-owner.mjs';
+import { resolveFleetLabel } from './lib/fleet-label.mjs';
 
 export const CHECK_TIMEOUT_MS = 30000;
 export const oneLine = (value, limit = 240) => String(value || '').split(/\r?\n/, 1)[0].trim().slice(0, limit);
@@ -39,7 +40,8 @@ export async function checkPromise(row, { home, now, patch, io = {} }) {
   const next = oneLine(row.nextClaude || 'check の実行ログと対象の受け口を調査し、原因を修正して再確認する');
   const message = `${state === 'done' ? '完了' : state === 'unmet' ? '未達（期限超過）' : '確認エラー'}: ${oneLine(row.label || row.promise, 80)}\n${changes.checkText}${state === 'done' ? '' : `\nClaude の次の手: ${next}（next-session.md に起票）`}`;
   const owner = row.owner || resolveOwner({ home });
-  const delivery = await (io.notifyOwner ?? notifyOwner)(owner, message, { home });
+  const origin = originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: owner, home });
+  const delivery = await (io.notifyOwner ?? notifyOwner)(owner, `${origin}\n${message}`, { home });
   if (delivery?.delivered !== 'dm') throw new Error(delivery?.reason || 'DM not delivered');
   patch(rowKey(row), { checkNotifiedResult: state });
   return state;

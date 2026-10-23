@@ -9,10 +9,10 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { parseEnvText } from './env-kv.mjs';
-import { ledgerFile, readLedger, writeLedger, OPEN_STATUSES, latestOpenPromises, rowKey, isUnattendedRow, isNoopPromise, MAX_RESUMES } from './auto-progress-ledger.mjs';
+import { ledgerFile, readLedger, writeLedger, OPEN_STATUSES, latestOpenPromises, rowKey, isUnattendedRow, isNoopPromise, MAX_RESUMES, originLine } from './auto-progress-ledger.mjs';
 export { MAX_RESUMES } from './auto-progress-ledger.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
-import { notifyOwner } from './notify-owner.mjs';
+import { notifyOwner, resolveOwner } from './notify-owner.mjs';
 import { checkPromise } from './auto-progress-check.mjs';
 import { appendInbox } from './auto-progress-inbox-hook.mjs';
 
@@ -183,6 +183,11 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   };
   const summary = { checked: 0, done: 0, noop: 0, inProgress: 0, stalled: 0, resumed: 0, reported: 0, expired: 0, graced: 0, superseded: 0, errors: [] };
   const config = (io.sheetConfig ?? sheetConfig)(home);
+  // owner 未記録の行は自PCの持ち主へ。空のまま渡すと「宛先: 不明（DM 未解決）」だけになり出どころが分からない（2026-10-23 実測）。
+  let localOwner;
+  const ownerOf = row => row.owner || (localOwner ??= io.localOwner ?? (() => { try { return resolveOwner({ home }); } catch { return ''; } })());
+  const askKim = (row, reason) => (io.notifyOwner ?? notifyOwner)(ownerOf(row),
+    `${originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: ownerOf(row), home })}\n自動進行が判断待ちです: ${row.promise}\n${reason || ''}`, { home });
   const rows = readLedger(file);
   const candidates = latestOpenPromises(rows);
   const selected = new Set(candidates);
@@ -225,7 +230,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     if (row.status === 'waiting_user') {
       if (!unattended && !dryRun && now - (Date.parse(row.ownerNotifiedAt || 0) || 0) >= 24 * 3600 * 1000) {
         try {
-          const delivery = await (io.notifyOwner ?? notifyOwner)(row.owner, `自動進行が判断待ちです: ${row.promise}\n${row.reason || ''}`, { home });
+          const delivery = await askKim(row, row.reason);
           if (delivery?.delivered !== 'dm') throw new Error(delivery?.reason || 'DM not delivered');
           patch(rowKey(row), { ownerNotifiedAt: new Date(now).toISOString() });
         } catch (error) { summary.errors.push(`notify-owner: ${String(error?.message ?? error).slice(0, 120)}`); }
@@ -258,7 +263,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       (io.appendInbox ?? appendInbox)(home, row.sessionId, { at: new Date(now).toISOString(), state, evidence: outcome.reason, artifact: outcome.artifact || '' });
       if (state === 'needs_user' && now - (Date.parse(row.ownerNotifiedAt || 0) || 0) >= 24 * 3600 * 1000) {
         try {
-          const delivery = await (io.notifyOwner ?? notifyOwner)(row.owner, `自動進行が判断待ちです: ${row.promise}\n${outcome.reason}`, { home });
+          const delivery = await askKim(row, outcome.reason);
           if (delivery?.delivered !== 'dm') throw new Error(delivery?.reason || 'DM not delivered');
           patch(rowKey(row), { ownerNotifiedAt: new Date(now).toISOString() });
         } catch (error) { summary.errors.push(`notify-owner: ${String(error?.message ?? error).slice(0, 120)}`); }

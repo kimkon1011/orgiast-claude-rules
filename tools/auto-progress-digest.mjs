@@ -62,18 +62,19 @@ function readable(value, row, limit) {
   }
   return text.replace(/\s+/g, ' ').slice(0, limit);
 }
-export function formatDigest(rows, now = Date.now(), label = '', { allRows = rows, unattended = 0 } = {}) {
+const projectOf = row => { const name = String(row.cwd || '').split(/[\\/]+/).filter(Boolean).pop(); return name ? `［${name}］` : ''; };
+export function formatDigest(rows, now = Date.now(), label = '', { allRows = rows, unattended = 0, owner = '' } = {}) {
   allRows = allRows.filter(row => !isNoopPromise(row.promise));
   if (!rows.filter(row => !isNoopPromise(row.promise)).length) return '';
   const done = allRows.filter(row => row.status === 'done');
   const waiting = allRows.filter(row => row.status !== 'done' && kimAction(row) !== 'なし');
   const unmet = allRows.filter(row => row.status !== 'done' && !waiting.includes(row) && row.check && ['unmet', 'check_error'].includes(verdictOf(row, now)));
   const unchecked = allRows.filter(row => !row.check && row.status !== 'done' && !waiting.includes(row));
-  const lines = [`自動進行: 完了 ${done.length} / 未達（次の手） ${unmet.length} / kim の操作待ち ${waiting.length}`];
+  const lines = [`【${[label, owner].filter(Boolean).join('・') || '不明なPC'} の Claude Code】自動進行: 完了 ${done.length} / 未達（次の手） ${unmet.length} / kim の操作待ち ${waiting.length}`];
   for (const [title, items] of [['完了', done], ['未達', unmet], ['kim の操作待ち', waiting]]) {
     for (const row of items.slice(0, 2)) {
       const detail = title === '未達' ? `Claude の次の手: ${row.nextClaude || '実行ログと受け口を調査・修正し再確認'}` : title === 'kim の操作待ち' ? `kim がすること: ${kimAction(row)}` : row.checkText || row.reason || '完了を記録';
-      lines.push(`・${title}: ${readable(row.label || row.promise || '約束した作業', row, 60)} — ${readable(detail, row, 100)}`);
+      lines.push(`・${title}: ${projectOf(row)}${readable(row.label || row.promise || '約束した作業', row, 60)} — ${readable(detail, row, 100)}`);
     }
   }
   lines.push(`確認手段なし: ${unchecked.length}件（check 未登録）`);
@@ -115,7 +116,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   }
   const deliveries = [...groups].map(([owner, candidates]) => {
     const owned = all.filter(row => ownerOf(row) === owner);
-    const options = { allRows: owned.filter(row => !isUnattendedRow(row, home)), unattended: owned.filter(row => isUnattendedRow(row, home)).length };
+    const options = { owner, allRows: owned.filter(row => !isUnattendedRow(row, home)), unattended: owned.filter(row => isUnattendedRow(row, home)).length };
     return { owner, rows: candidates, message: formatDigest(candidates, now, label, options) };
   });
   const messages = deliveries.map(({ message }) => message), text = messages.join('\n');

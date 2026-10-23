@@ -101,6 +101,22 @@ export function buildRecord(input, text, { now = Date.now(), hostname = os.hostn
 
 function safeUser() { try { return os.userInfo().username; } catch { return ''; } }
 
+// 通知の出どころ1行。DM 本文だけで「どの PC・アカウント・プロジェクトの Claude Code か」を判別できるようにする（2026-10-23 kim 指示）。
+export function originLine(row, { label = '', localOwner = '', home = '' } = {}) {
+  const pc = label && row.pc && label !== row.pc ? `${label}（${row.pc}）` : (label || row.pc || '不明なPC');
+  const account = row.owner || localOwner || row.user || '不明';
+  const project = String(row.cwd || '').split(/[\\/]+/).filter(Boolean).pop() || '不明';
+  let purpose = row.purpose || row.sessionPurpose || row.objective || '';
+  if (!purpose && home && row.sessionId) {
+    try { purpose = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'session-purpose', `${row.sessionId}.json`), 'utf8')).purpose || ''; } catch {}
+  }
+  purpose = String(purpose).replace(/\s+/g, ' ').trim();
+  const parts = [`プロジェクト: ${project}`];
+  if (purpose) parts.push(`セッションの目的: ${purpose.length > 50 ? `${purpose.slice(0, 50)}…` : purpose}`);
+  if (row.sessionId) parts.push(`作業ID: ${String(row.sessionId).slice(0, 8)}`);
+  return `【${pc}・${account} の Claude Code】${parts.join(' ／ ')}`;
+}
+
 export function record(input, { home, now, hostname, user, owner, readText = (p) => readAssistantText(p).text } = {}) {
   const text = typeof input?.last_assistant_message === 'string' && input.last_assistant_message.trim()
     ? input.last_assistant_message

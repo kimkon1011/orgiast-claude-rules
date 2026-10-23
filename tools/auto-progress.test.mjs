@@ -5,7 +5,7 @@ import path from 'node:path';
 import test, { after } from 'node:test';
 import vm from 'node:vm';
 import { main as registerTasks } from './register-auto-progress-task.mjs';
-import { isNoopPromise, extractPromise, extractNextKim, applyPromise, buildRecord, record, readLedger, ledgerFile, rowKey } from './auto-progress-ledger.mjs';
+import { isNoopPromise, extractPromise, extractNextKim, applyPromise, buildRecord, record, readLedger, ledgerFile, rowKey, originLine } from './auto-progress-ledger.mjs';
 import { run as watch, parseVerdict, deterministicVerdict, judge, GRACE_MS, RESUME_INTERVAL_MS, MAX_RESUMES, postSheet, resumeSession, recentFiles, EXPIRE_UNATTENDED_MS, FALLBACK_STALL_MS } from './auto-progress-watch.mjs';
 import { run as digest, selectRows, formatDigest, isUnattendedRow, WINDOW_MS, MAX_ITEMS, needsDm, verdictOf } from './auto-progress-digest.mjs';
 import { runRegisterPs1 } from './lib/run-register-ps1.mjs';
@@ -158,7 +158,7 @@ test('digest: 非kim-PCも自PC台帳の進捗を送り、0件なら送らない
   ];
   assert.equal(selectRows(rows, now).length, 1);
   const text = formatDigest(selectRows(rows, now), now, 'other-PC');
-  assert.match(text, /^自動進行: 完了 0/);
+  assert.match(text, /^【other-PC の Claude Code】自動進行: 完了 0/);
   assert.match(text, /kim の操作待ち 1/);
   assert.match(text, /・kim の操作待ち: 夜間デプロイ/);
   const sent = [];
@@ -425,8 +425,9 @@ test('digest: 無人処理は数だけ、なし系を正規化し、埋め込ま
   const home = tmp(), now = Date.now();
   const row = { pc: 'DESKTOP-2D0R4LI', sessionId: 'abcdef12', status: 'done', doneAt: new Date(now).toISOString(), ts: new Date(now - H).toISOString(), nextKim: 'なし（確認済み）', promise: 'DESKTOP-2D0R4LI の abcdef12 を 2026-10-20T01:02:03Z に確認', reason: '確認完了' };
   const unattended = { ...row, sessionId: 'batch', cwd: path.join(home, '.claude', 'scratch', 'test'), promise: '表示しない約束' };
-  const result = await digest({ home, now, dryRun: true, io: { readLedger: () => [row, unattended], readState: () => ({}) } });
+  const result = await digest({ home, now, dryRun: true, io: { label: 'kim-PC', readLedger: () => [row, unattended], readState: () => ({}) } });
   assert.equal(result.count, 1);
+  assert.match(result.text, /^【kim-PC・[^】]* の Claude Code】/);
   assert.match(result.text, /無人処理の約束 1 件は数だけ/);
   assert.match(result.text, /完了 1/);
   assert.match(result.text, /このパソコン の この作業 を 2026-10-20T01:02:03Z に確認/);
@@ -599,4 +600,25 @@ test('watch: resumed のまま上限に達した行も停滞確認後はDM対象
   assert.equal(result.resumed, 0);
   const row = readLedger(ledgerFile(home))[0];
   assert.equal(verdictOf(row, now), 'stalled'); assert.equal(needsDm(row, now), true);
+});
+
+test('originLine: PC ラベル・アカウント・プロジェクト・目的を1行に出す', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'origin-'));
+  fs.mkdirSync(path.join(home, '.claude', 'session-purpose'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', 'session-purpose', 'abcdef1234.json'), JSON.stringify({ purpose: '学会協賛 62社へ案内メール' }));
+  const row = { pc: 'DESKTOP-X', owner: '', user: 'cr', cwd: 'C:/Users/cr/Downloads/学会協賛ナビ/',sessionId: 'abcdef1234' };
+  assert.equal(originLine(row, { label: '作業用001', localOwner: 'cr@orgiast.jp', home }),
+    '【作業用001（DESKTOP-X）・cr@orgiast.jp の Claude Code】プロジェクト: 学会協賛ナビ ／ セッションの目的: 学会協賛 62社へ案内メール ／ 作業ID: abcdef12');
+  assert.match(originLine({ pc: 'H', user: 'u' }), /^【H・u の Claude Code】プロジェクト: 不明$/);
+});
+
+test('watch: 判断待ち通知に出どころ行が付き、owner 空なら自PCの持ち主へ送る', async () => {
+  const home = tmp(), now = Date.parse('2026-10-23T00:00:00Z');
+  seed(home, [{ sessionId: 's1', owner: '', pc: 'PC', status: 'waiting_user', promise: '62社へ送信', reason: 'OK 待ち', cwd: 'C:\\w\\案件A', ts: new Date(now - 3 * 3600000).toISOString() }]);
+  const sent = [];
+  await watch({ home, now, io: { label: '作業用001', localOwner: 'cr@orgiast.jp', sheetConfig: () => null, digest: async () => ({}), notifyOwner: async (owner, text) => { sent.push({ owner, text }); return { delivered: 'dm' }; } } });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].owner, 'cr@orgiast.jp');
+  assert.match(sent[0].text, /^【作業用001（PC）・cr@orgiast\.jp の Claude Code】プロジェクト: 案件A/);
+  assert.match(sent[0].text, /自動進行が判断待ちです: 62社へ送信\nOK 待ち/);
 });

@@ -58,7 +58,7 @@ export function wrapRegisteredGates(settings, repo) {
     // Migrate stale paths as well as new installations. Leave unrelated hooks alone.
     if (path.resolve(match[1]) !== path.resolve(repo, 'tools', script) && !readContract(path.join(repo, 'tools', script))) continue;
     hook.command = `node "${path.join(repo, 'tools', 'gate-hook-runner.mjs')}" "${path.join(repo, 'tools', script)}"${match[2]}`;
-    hook.timeout = Math.max(Number(hook.timeout) || 10, 10) + 5;
+    hook.timeout = script === 'recipient-domain-gate.mjs' ? 30 : Math.max(Number(hook.timeout) || 10, 10) + 5;
     changed++;
   }
   return changed;

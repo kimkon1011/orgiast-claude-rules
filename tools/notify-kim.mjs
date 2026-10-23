@@ -114,7 +114,7 @@ export async function notifyKim(text, options = {}) {
   }
 }
 
-async function deliverKim(text, {
+export async function deliverKim(text, {
   home = process.env.ORGIAST_HOME || os.homedir(),
   userId,
   token,

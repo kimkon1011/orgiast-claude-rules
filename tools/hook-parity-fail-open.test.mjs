@@ -16,6 +16,7 @@ const hooks = [
   'handoff-investigation-gate.mjs',
   'negative-claim-gate.mjs',
   'pretooluse-headless-background.mjs',
+  'pretooluse-line-broadcast-guard.mjs',
   'pretooluse-serial-investigation.mjs',
   'automation-first-reminder.mjs',
   'credentials-reminder.mjs',

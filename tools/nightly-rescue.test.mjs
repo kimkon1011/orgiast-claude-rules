@@ -153,3 +153,17 @@ test('共有index.lockがあっても専用indexで保全し既存ロックを�
   assert.match(f.messages[0], /原因:.*index.lock/);
   assert.match(f.messages[0], /対処:.*専用インデックス/);
 });
+
+test('5分より古い index.lock は残骸として消し、通常の退避コミットに進む', async t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.repo, 'tracked'), 'valuable change');
+  const lock = path.join(f.repo, '.git/index.lock'); fs.writeFileSync(lock, '');
+  const old = new Date(Date.now() - 2 * 24 * 3600000);
+  fs.utimesSync(lock, old, old);
+  const result = await rescueTree(f.repo, f.home, f);
+  assert.ok(result.events.some(e => e.step === 'STALE_INDEX_LOCK'), JSON.stringify(result.events));
+  assert.ok(result.events.some(e => e.step === 'RESCUE_LOCAL_OK'), JSON.stringify(result.events));
+  assert.equal(fs.existsSync(lock), false);
+  assert.ok(!branches(f).some(b => b.endsWith('-snapshot')), branches(f).join(','));
+  assert.equal(f.git('show', 'HEAD:tracked'), 'valuable change');
+});

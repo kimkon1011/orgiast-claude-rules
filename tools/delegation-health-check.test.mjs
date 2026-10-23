@@ -1,3 +1,4 @@
+// 旧モデル名は過去の executor-usage.jsonl の照合・集計を回帰検証するため保持する。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -642,7 +643,7 @@ test('chain のタイムアウトが2件あれば fallback_chain_timeout を出�
       out: 800, status: 0, secs: 640, stderrTail: '',
       chain: [
         { backend: 'gemini-cli', model: 'gemini-3.7-flash', status: 124, timedOut: true, spawnFailed: false, out: 0, secs: 600, stderrTail: '', outcome: 'timeout' },
-        { backend: 'cheap-code:deepseek', model: 'deepseek-v4-flash', status: 0, timedOut: false, spawnFailed: false, out: 800, secs: 40, stderrTail: '', outcome: 'ok' }
+        { backend: 'cheap-code:deepseek', model: 'deepseek-v4-flash', status: 0, timedOut: false, spawnFailed: false, out: 800, secs: 40, stderrTail: '', outcome: 'ok' } // 過去ログの旧名を保持して履歴集計を検証。
       ]
     }) +
     row({
@@ -650,7 +651,7 @@ test('chain のタイムアウトが2件あれば fallback_chain_timeout を出�
       out: 800, status: 0, secs: 640, stderrTail: '',
       chain: [
         { backend: 'gemini-cli', model: 'gemini-3.7-flash', status: 124, timedOut: true, spawnFailed: false, out: 0, secs: 600, stderrTail: '', outcome: 'timeout' },
-        { backend: 'cheap-code:deepseek', model: 'deepseek-v4-flash', status: 0, timedOut: false, spawnFailed: false, out: 800, secs: 40, stderrTail: '', outcome: 'ok' }
+        { backend: 'cheap-code:deepseek', model: 'deepseek-v4-flash', status: 0, timedOut: false, spawnFailed: false, out: 800, secs: 40, stderrTail: '', outcome: 'ok' } // 過去ログの旧名を保持して履歴集計を検証。
       ]
     })
   );
@@ -672,7 +673,7 @@ test('chain のタイムアウトが1件だけなら fallback_chain_timeout を�
       out: 800, status: 0, secs: 640, stderrTail: '',
       chain: [
         { backend: 'gemini-cli', model: 'gemini-3.7-flash', status: 124, timedOut: true, spawnFailed: false, out: 0, secs: 600, stderrTail: '', outcome: 'timeout' },
-        { backend: 'cheap-code:deepseek', model: 'deepseek-v4-flash', status: 0, timedOut: false, spawnFailed: false, out: 800, secs: 40, stderrTail: '', outcome: 'ok' }
+        { backend: 'cheap-code:deepseek', model: 'deepseek-v4-flash', status: 0, timedOut: false, spawnFailed: false, out: 800, secs: 40, stderrTail: '', outcome: 'ok' } // 過去ログの旧名を保持して履歴集計を検証。
       ]
     })
   );
@@ -961,20 +962,20 @@ test('低成果は実際に秒数を使ったバックエンドへ帰属する�
     { provider: 'fallback', model: 'cheap-code:deepseek/deepseek-v4-flash', secs: 6153, out: 0, status: 'timeout',
       chain: [
         { backend: 'gemini-cli', model: 'gemini-3.7-flash', secs: 4953, out: 0, outcome: 'timeout' },
-        { backend: 'cheap-code:deepseek', model: 'deepseek-v4-flash', secs: 600, out: 0, outcome: 'timeout' }] },
+        { backend: 'cheap-code:deepseek', model: 'deepseek-v4-flash', secs: 600, out: 0, outcome: 'timeout' }] }, // 過去ログの旧名を保持して履歴集計を検証。
     { provider: 'fallback', model: 'cheap-code:deepseek/deepseek-v4-flash', secs: 1425, out: 98, status: 'ok',
       chain: [
         { backend: 'gemini-cli', model: 'gemini-3.7-flash', secs: 637, out: 1149, outcome: 'timeout' },
-        { backend: 'cheap-code:deepseek', model: 'deepseek-v4-flash', secs: 187, out: 98, outcome: 'ok' }] },
+        { backend: 'cheap-code:deepseek', model: 'deepseek-v4-flash', secs: 187, out: 98, outcome: 'ok' }] }, // 過去ログの旧名を保持して履歴集計を検証。
   ];
   assert.equal(lowYieldBackends(rows).size, 0);
 });
 
 test('低成果の帰属先は実際に長時間だったバックエンドになる', () => {
   const slow = (secs) => ({ provider: 'fallback', model: 'cheap-code:deepseek/deepseek-v4-flash', secs, out: 5,
-    chain: [{ backend: 'cheap-code:deepseek', model: 'deepseek-v4-flash', secs, out: 5, outcome: 'ok' }] });
+    chain: [{ backend: 'cheap-code:deepseek', model: 'deepseek-v4-flash', secs, out: 5, outcome: 'ok' }] }); // 過去ログの旧名を保持して履歴集計を検証。
   const counts = lowYieldBackends([slow(1200), slow(1300), { provider: 'codex', model: 'gpt-5', secs: 5000, out: 0 }]);
-  assert.equal(counts.get('deepseek-v4-flash'), 2);
+  assert.equal(counts.get('deepseek-v4-flash'), 2); // 過去ログの旧名を保持して履歴集計を検証。
   assert.equal(counts.size, 1);
 });
 
@@ -988,10 +989,10 @@ test('低成果の chain 行だけでは fallback_low_yield を起票しない',
   write(dir, 'executor-usage.jsonl', [
     { t: '2026-09-09T10:00:00Z', provider: 'fallback', model: 'cheap-code:deepseek/deepseek-v4-flash', secs: 1425, out: 98,
       chain: [{ backend: 'gemini-cli', model: 'gemini-3.7-flash', secs: 637, out: 1149, outcome: 'timeout' },
-        { backend: 'cheap-code:deepseek', model: 'deepseek-v4-flash', secs: 187, out: 98, outcome: 'ok' }] },
+        { backend: 'cheap-code:deepseek', model: 'deepseek-v4-flash', secs: 187, out: 98, outcome: 'ok' }] }, // 過去ログの旧名を保持して履歴集計を検証。
     { t: '2026-09-09T10:30:00Z', provider: 'fallback', model: 'cheap-code:deepseek/deepseek-v4-flash', secs: 953, out: 102,
       chain: [{ backend: 'gemini-cli', model: 'gemini-3.7-flash', secs: 846, out: 2289, outcome: 'timeout' },
-        { backend: 'cheap-code:deepseek', model: 'deepseek-v4-flash', secs: 106, out: 102, outcome: 'ok' }] },
+        { backend: 'cheap-code:deepseek', model: 'deepseek-v4-flash', secs: 106, out: 102, outcome: 'ok' }] }, // 過去ログの旧名を保持して履歴集計を検証。
   ].map(row).join(''));
   const findings = collectFindings({ home: dir, now: NOW });
   assert.equal(findings.filter((f) => f.id === 'fallback_low_yield').length, 0);
@@ -1062,4 +1063,10 @@ test('#964 以降で打ち切られずに300秒以上消費した policy 停滞�
   const preDeploy = home();
   write(preDeploy, 'executor-usage.jsonl', stall('2026-10-21T02:27:07Z', 'timeout', 900));
   assert.equal(collectFindings({ home: preDeploy, now: new Date('2026-10-22T12:00:00Z'), codexUsedPercent: null }).some((item) => item.id === 'policy_stall_not_aborted'), false);
+});
+
+test('新名 Flash も過去ログと同様に低成果バックエンドとして集計する', () => {
+  const counts = lowYieldBackends([{ provider: 'fallback', model: 'cheap-code:deepseek/deepseek-flash',
+    chain: [{ backend: 'cheap-code:deepseek', model: 'deepseek-flash', secs: 1000, out: 5, outcome: 'ok' }] }]);
+  assert.equal(counts.get('deepseek-flash'), 1);
 });

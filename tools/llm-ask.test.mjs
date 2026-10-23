@@ -56,3 +56,33 @@ test('CLI rejects invalid per-provider timeout values before making requests', a
     });
   }
 });
+
+test('transcript は明示 DeepSeek と prefer-provider より優先して次候補へ回す', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'llm-transcript-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const mock = path.join(dir, 'mock.mjs');
+  fs.writeFileSync(mock, `globalThis.fetch = async (url, init) => {
+    if (url.includes('deepseek') || JSON.parse(init.body).model.startsWith('deepseek/')) throw new Error('forbidden DeepSeek');
+    console.error('FETCH ' + new URL(url).hostname);
+    return new Response(JSON.stringify({ choices: [{ message: { content: '議事録' } }] }));
+  };`);
+  for (const extra of [[], ['--prefer-provider']]) {
+    const { stdout, stderr } = await execute(process.execPath, ['--import', pathToFileURL(mock).href, fileURLToPath(new URL('./llm-ask.mjs', import.meta.url)), '--provider', 'deepseek', '--category', 'transcript', '--no-persist', ...extra, '要約'], { env: { ...process.env, ORGIAST_HOME: dir, DEEPSEEK_API_KEY: 'test-only', GROQ_API_KEY: 'test-only' } });
+    assert.equal(stdout.trim(), '議事録');
+    assert.match(stderr, /話者・発言.*DeepSeek.*除外/);
+    assert.deepEqual(stderr.split('\n').filter(x => x.startsWith('FETCH ')), ['FETCH api.groq.com']);
+  }
+});
+
+test('DeepSeek Flash は推論なしで送信し、Proの推論設定には触れない', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'llm-deepseek-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const mock = path.join(dir, 'mock.mjs');
+  fs.writeFileSync(mock, `globalThis.fetch = async (url, init) => new Response(JSON.stringify({ choices: [{ message: { content: init.body } }] }));`);
+  for (const model of ['deepseek-flash', 'deepseek-v4-pro']) {
+    const { stdout } = await execute(process.execPath, ['--import', pathToFileURL(mock).href, fileURLToPath(new URL('./llm-ask.mjs', import.meta.url)), '--provider', 'deepseek', '--model', model, '--no-fallback', '--no-persist', '確認'], { env: { ...process.env, ORGIAST_HOME: dir, DEEPSEEK_API_KEY: 'test-only' } });
+    const body = JSON.parse(stdout);
+    assert.equal(body.model, model);
+    assert.deepEqual(body.thinking, model === 'deepseek-flash' ? { type: 'disabled' } : undefined);
+  }
+});

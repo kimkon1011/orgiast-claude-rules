@@ -468,3 +468,23 @@ test('完了待ちと将来作業をStopで差し戻し、完了報告なら通�
   assert.equal(repaired.status, 0, repaired.stderr);
   assert.equal(repaired.stdout, '');
 });
+
+test('自動進行の起床手段をtranscript_pathから検査しsubagentsは免除する', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-wakeup-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const text = '確認を続けます。\n次に kim がすること: なし\nこの後の自動進行: 私が毎時進捗を確認して変化時に報告します\nこのセッション: まだ閉じない（作業中）';
+  for (const [name, raw, subagent, blocked] of [
+    ['missing', '', false, true],
+    ['cron', JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', name: 'CronCreate', input: { cron: '17 * * * *' } }] } }), false, false],
+    ['subagent', '', true, false],
+  ]) {
+    const dir = subagent ? path.join(home, 'subagents') : home;
+    fs.mkdirSync(dir, { recursive: true });
+    const transcript_path = path.join(dir, `${name}.jsonl`);
+    fs.writeFileSync(transcript_path, raw);
+    const result = invoke(home, name, text, { transcript_path });
+    assert.equal(result.status, 0, result.stderr);
+    const records = fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+    assert.equal(records.at(-1).reasonCodes.includes('AUTOPILOT-NO-SESSION-WAKEUP'), blocked, result.stdout);
+  }
+});

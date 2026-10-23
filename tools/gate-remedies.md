@@ -114,6 +114,7 @@ Agent/Task の model を sonnet/haiku に明示。実装は node tools/codex-do.
 ## next-action-gate
 
 次にすること・自動進行・セッション終了可否を末尾に明記する。
+「この後の自動進行」が空・「なし」で始まる値以外なら、CronCreate で毎時の進捗チェックを登録する（:00/:30 を避け、未完了項目を確認し、変化時だけ報告、完了で CronDelete）。現在ターンのバックグラウンド Agent/Bash/PowerShell も可。subagents と CLAUDE_HEADLESS=1 はこの検査の対象外。
 人に作業を残す時は、このターンで実装・設定・依頼送信・ルール追加した具体物を `恒久策:` 行に書く。初回だけなら `恒久策: 一回限り: <理由>`。
 例外は `[PERMANENT-FIX-OK: <10文字以上の理由>]`。倉庫作業の依頼送信の検査は免除しない。
 倉庫の物理作業は `node tools/discord-dm.mjs <倉庫担当> --body-file <本文>` で依頼し、「倉庫担当へ依頼済み」と報告して kim の次の作業から外す。
@@ -230,3 +231,11 @@ URLを単独行に置くかMarkdownリンクにし、直後に括弧・句読点
 
 ## claude-impl-approval
 実装は `node tools/codex-do.mjs` へ委譲する。user の `[CLAUDE-IMPL-OK]` または `[LANE-OK]` のみ同一セッション60分許可。
+
+## recipient-domain-gate
+
+名刺画像・元データで宛先ドメインの綴りを確認し、宛先引数または送信元データを修正してから送信する。意図的な送信でも修正前は送らない。DNS が一時的に確認できない場合は警告のみで通過する。
+
+## pretooluse-line-broadcast-guard
+
+LINE の全員配信が本当に必要なら、kim が同じセッションで全員配信を明示したことを確認し、assistant の応答に `[LINE-BROADCAST-OK]` と書いてから再実行する。個人宛ては broadcast/narrowcast を使わず、userId を指定する `claude-mobile/scripts/line-send.mjs` から push 送信する。友だち数を宛先の身元確認に使わない。

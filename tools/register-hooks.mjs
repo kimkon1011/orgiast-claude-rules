@@ -36,6 +36,11 @@ try {
   ({ HOOK_MATCHER: SHARE_BEFORE_SEND_MATCHER } = await import('./share-before-send-gate.mjs'));
 } catch { /* 同期途中でも既存登録を維持 */ }
 
+let RECIPIENT_DOMAIN_MATCHER = HOOK_MATCHER;
+try {
+  ({ HOOK_MATCHER: RECIPIENT_DOMAIN_MATCHER } = await import('./recipient-domain-gate.mjs'));
+} catch { /* 同期途中でも登録を継続する */ }
+
 let BIHIN_KCOL_MATCHER = 'mcp__.*Google_Sheets__(update_values|append_values|update_formulas|batch_clear_values|update_spreadsheet|batch_update)$|Bash|PowerShell';
 try {
   ({ HOOK_MATCHER: BIHIN_KCOL_MATCHER } = await import('./bihin-kcol-gate.mjs'));
@@ -341,6 +346,8 @@ try {
   added += syncMatcherFor(settings.hooks.PreToolUse, 'internal-recipient-gmail-guard.mjs', HOOK_MATCHER);
   if (add(settings.hooks.PreToolUse, 'share-before-send-gate.mjs', { matcher: SHARE_BEFORE_SEND_MATCHER, hooks: [{ type: 'command', command: command('share-before-send-gate.mjs'), timeout: 5 }] })) added += 1;
   added += syncMatcherFor(settings.hooks.PreToolUse, 'share-before-send-gate.mjs', SHARE_BEFORE_SEND_MATCHER);
+  if (add(settings.hooks.PreToolUse, 'recipient-domain-gate.mjs', { matcher: RECIPIENT_DOMAIN_MATCHER, hooks: [{ type: 'command', command: command('recipient-domain-gate.mjs'), timeout: 30 }] })) added += 1;
+  added += syncMatcherFor(settings.hooks.PreToolUse, 'recipient-domain-gate.mjs', RECIPIENT_DOMAIN_MATCHER);
   // 社外宛メールで説明している Google ファイルを、直近に中身として読んだかを確かめる。
   // 3.4MB の transcript で初回 18 秒かかった実測があるため 30 秒にする（5 秒だと時間切れで素通りする）。
   if (add(settings.hooks.PreToolUse, 'live-artifact-read-gate.mjs', { matcher: LIVE_ARTIFACT_MATCHER, hooks: [{ type: 'command', command: command('live-artifact-read-gate.mjs'), timeout: 30 }] })) added += 1;
@@ -349,6 +356,7 @@ try {
   added += syncMatcherFor(settings.hooks.PreToolUse, 'gmail-connector-url-gate.mjs', GMAIL_CONNECTOR_URL_MATCHER);
   // ヘッドレス実行で消失するバックグラウンド処理を実行前に拒否する。
   if (add(settings.hooks.PreToolUse, 'pretooluse-headless-background.mjs', { matcher: 'Bash|PowerShell|ScheduleWakeup', hooks: [{ type: 'command', command: command('pretooluse-headless-background.mjs'), timeout: 5 }] })) added += 1;
+  if (add(settings.hooks.PreToolUse, 'pretooluse-line-broadcast-guard.mjs', { matcher: 'Bash|PowerShell|Write|Edit|MultiEdit', hooks: [{ type: 'command', command: command('pretooluse-line-broadcast-guard.mjs'), timeout: 5 }] })) added += 1;
   // read-only調査の逐次実行を検知し、まとめて調査するよう同期注入する。
   if (add(settings.hooks.PreToolUse, 'pretooluse-serial-investigation.mjs', { hooks: [{ type: 'command', command: command('pretooluse-serial-investigation.mjs'), timeout: 5 }] })) added += 1;
   // Gemini MCP(gemini-cli) の応答から実トークンを台帳(executor-usage.jsonl)へ記録する。

@@ -47,6 +47,10 @@ test('既存PowerShell hookへExecutionPolicy Bypassを補いcost-loopをmjsへ�
   assert.match(stdout, /hook修復: 実行ポリシー1件 \/ cost-loop移行1件/);
   const shareGroups = settings.hooks.PreToolUse.filter(group => group.hooks.some(hook => hook.command.includes('share-before-send-gate.mjs')));
   assert.equal(shareGroups.length, 1);
+  const domainGroups = settings.hooks.PreToolUse.filter(group => group.hooks.some(hook => hook.command.includes('recipient-domain-gate.mjs')));
+  assert.equal(domainGroups.length, 1);
+  for (const name of ['Bash', 'PowerShell', 'mcp__claude_ai_Gmail_2__send_message']) assert.match(name, new RegExp(domainGroups[0].matcher));
+  assert.equal(domainGroups[0].hooks.find(hook => hook.command.includes('recipient-domain-gate.mjs')).timeout, 30);
   assert.match('mcp__claude_ai_Discord__send_dm', new RegExp(shareGroups[0].matcher));
   assert.match('mcp__claude_ai_Gmail__create_draft', new RegExp(shareGroups[0].matcher));
   assert.equal(fs.readFileSync(path.join(home, '.claude/share-ledger.jsonl'), 'utf8'), '');
@@ -140,7 +144,7 @@ test('手間削減hook 8本を正しいイベントへ登録しstop-gateは登�
   const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
   const names = (event) => settings.hooks[event].flatMap((group) => group.hooks || []).map((hook) => path.basename([...String(hook.command).matchAll(/"([^"]+\.mjs)"/g)].at(-1)?.[1] || ''));
   assert.deepEqual(['automation-first-reminder.mjs', 'credentials-reminder.mjs', 'playbook-inject.mjs'].every((name) => names('UserPromptSubmit').includes(name)), true);
-  assert.deepEqual(['pretooluse-headless-background.mjs', 'pretooluse-serial-investigation.mjs', 'pipe-stage-permissions.mjs'].every((name) => names('PreToolUse').includes(name)), true);
+  assert.deepEqual(['pretooluse-headless-background.mjs', 'pretooluse-line-broadcast-guard.mjs', 'pretooluse-serial-investigation.mjs', 'pipe-stage-permissions.mjs'].every((name) => names('PreToolUse').includes(name)), true);
   assert.deepEqual(['auto-progress-ledger.mjs', 'stop-gate-runner.mjs', 'handoff-detail-guard.mjs', 'url-format-guard.mjs', 'check-e2e-before-stop.mjs'].every((name) => names('Stop').includes(name)), true);
   assert.equal(Object.values(settings.hooks).flatMap((groups) => groups).flatMap((group) => group.hooks || []).some((hook) => /(?:^|[\\/])stop-gate\.mjs/.test(String(hook.command))), false);
   fs.rmSync(home, { recursive: true, force: true });
@@ -154,7 +158,7 @@ test('手間削減hook 8本は2回実行しても各1本のまま', () => {
   execFileSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { encoding: 'utf8', env });
   execFileSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { encoding: 'utf8', env });
   const commands = Object.values(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).hooks).flatMap((groups) => groups).flatMap((group) => group.hooks || []).map((hook) => String(hook.command));
-  for (const name of ['auto-progress-ledger', 'automation-first-reminder', 'credentials-reminder', 'pretooluse-headless-background', 'pretooluse-serial-investigation', 'stop-gate-runner', 'handoff-detail-guard', 'pipe-stage-permissions', 'url-format-guard', 'check-e2e-before-stop']) {
+  for (const name of ['auto-progress-ledger', 'automation-first-reminder', 'credentials-reminder', 'pretooluse-headless-background', 'pretooluse-line-broadcast-guard', 'pretooluse-serial-investigation', 'stop-gate-runner', 'handoff-detail-guard', 'pipe-stage-permissions', 'url-format-guard', 'check-e2e-before-stop']) {
     assert.equal(commands.filter((command) => command.includes(name)).length, 1, `${name} must be unique`);
   }
   fs.rmSync(home, { recursive: true, force: true });

@@ -9,7 +9,7 @@ import { runAutopilot, acquireLock } from './autopilot-tick.mjs';
 function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'autopilot-run-test-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  return { home, dir: path.join(home, 'state'), token: '', userId: '', now: new Date('2026-09-21T01:00:00Z'), fetchImpl: async () => { throw new Error('unexpected network'); } };
+  return { home, platform: 'linux', dir: path.join(home, 'state'), token: '', userId: '', now: new Date('2026-09-21T01:00:00Z'), fetchImpl: async () => { throw new Error('unexpected network'); } };
 }
 
 test('runner does not invoke Claude when unstarted, paused, stopped, or done', async (t) => {
@@ -351,7 +351,7 @@ test('resolveSupervisorAuth: OAuth が死んでいる時だけ deepseek.env の�
   const dead = files({ '.credentials.json': creds(''), 'deepseek.env': 'DEEPSEEK_API_KEY="sk-test"\n' });
   const fallback = resolveSupervisorAuth({ home: 'H', env: { PATH: 'p' }, readFile: dead });
   assert.equal(fallback.lane, 'deepseek');
-  assert.equal(fallback.model, 'deepseek-v4-flash');
+  assert.equal(fallback.model, 'deepseek-flash');
   assert.equal(fallback.env.ANTHROPIC_AUTH_TOKEN, 'sk-test');
   assert.equal(fallback.env.ANTHROPIC_BASE_URL, 'https://api.deepseek.com/anthropic');
   assert.equal(fallback.env.PATH, 'p');

@@ -157,6 +157,48 @@ export async function resumeSession(row, { timeoutMs = 20 * 60000, home = os.hom
   return { outcome: state, state, reason: String(report?.evidence ?? '成果記録なし').slice(0, 500), artifact: String(report?.artifact ?? ''), nextKim: String(report?.nextKim ?? '') };
 }
 
+// ---- 完了通知 -----------------------------------------------------------
+export function readableReason(value, row, limit = 1200) {
+  let text = String(value ?? '');
+  for (const [key, replacement] of [['pc', 'このパソコン'], ['sessionId', 'この作業']]) {
+    if (row && row[key]) text = text.split(String(row[key])).join(replacement);
+  }
+  text = text.replace(/\r\n/g, '\n').replace(/[^\S\n]+/g, ' ').trim();
+  return text.slice(0, limit);
+}
+
+export function formatDoneMessage(row, { reason = '', artifact = '', home = process.env.ORGIAST_HOME || os.homedir(), io = {}, ownerOf } = {}) {
+  const origin = originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: ownerOf ? ownerOf(row) : row.owner, home });
+  const promise = String(row.promise ?? '').slice(0, 200);
+  const formattedReason = readableReason(reason, row, 1200);
+  const formattedArtifact = artifact && String(artifact).trim() ? String(artifact).trim() : 'なし';
+  const lines = [
+    origin,
+    '✅ 自動進行が完了しました',
+    `約束: ${promise}`,
+    `結果: ${formattedReason}`,
+    `成果物: ${formattedArtifact}`,
+    'kim がすること: なし',
+  ];
+  return lines.join('\n').slice(0, 1900);
+}
+
+export function logDoneDm(home, row, delivery, message, now = Date.now(), io = {}) {
+  const file = path.join(home, '.claude', 'logs', 'auto-progress-done-dm.sent.jsonl');
+  try {
+    (io.mkdirSync ?? fs.mkdirSync)(path.dirname(file), { recursive: true });
+    const payload = JSON.stringify({
+      at: new Date(now).toISOString(),
+      sessionId: row.sessionId,
+      delivered: delivery?.delivered ?? null,
+      text: message.slice(0, 200),
+    });
+    (io.appendFileSync ?? fs.appendFileSync)(file, `${payload}\n`);
+  } catch (error) {
+    (io.stderr ?? console.error)(`auto-progress-watch: done-dm log failed: ${error?.message ?? error}`);
+  }
+}
+
 // ---- Sheet ---------------------------------------------------------------
 export function sheetConfig(home) {
   try { const env = parseEnvText(fs.readFileSync(path.join(home, '.claude', 'fleet-sheet.env'), 'utf8')); return env.FLEET_SHEET_URL && env.FLEET_SHEET_TOKEN ? { url: env.FLEET_SHEET_URL, token: env.FLEET_SHEET_TOKEN } : null; }
@@ -246,11 +288,29 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   const ownerOf = row => row.owner || (localOwner ??= io.localOwner ?? (() => { try { return resolveOwner({ home }); } catch { return ''; } })());
   const askKim = (row, reason) => (io.notifyOwner ?? notifyOwner)(ownerOf(row),
     `${originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: ownerOf(row), home })}\n自動進行が判断待ちです: ${row.promise}\n${reason || ''}`, { home });
+  const notifyDone = async (row, reason, artifact) => {
+    if (row.doneNotifiedAt) return false;
+    const message = formatDoneMessage(row, { reason, artifact, home, io, ownerOf });
+    let delivery = null;
+    try {
+      delivery = await (io.notifyOwner ?? notifyOwner)(ownerOf(row), message, { home });
+      if (delivery?.delivered !== 'dm') throw new Error(delivery?.reason || 'DM not delivered');
+      patch(rowKey(row), { doneNotifiedAt: new Date(now).toISOString(), doneNotifyPending: false });
+    } catch (error) {
+      // done は open の集合から外れるので、印を残さないと次回の巡回で拾えず結果が消える。
+      patch(rowKey(row), { doneNotifyPending: true, doneNotifyArtifact: artifact ? String(artifact) : '' });
+      summary.errors.push(`notify-done: ${String(error?.message ?? error).slice(0, 120)}`);
+    }
+    logDoneDm(home, row, delivery, message, now, io);
+    return delivery?.delivered === 'dm';
+  };
   const rows = readLedger(file);
   await registerUnanswered(home, now, rows, dryRun, summary, ownerOf, io);
   const candidates = latestOpenPromises(rows);
   const selected = new Set(candidates);
   const pendingChecks = rows.filter(row => row.check && row.status === 'done' && row.checkResult === 'done' && row.checkNotifiedResult !== 'done');
+  // 送信に失敗した完了DMは doneNotifiedAt が無いまま done で閉じるため、ここで拾い直して再送する。
+  const pendingDoneNotices = rows.filter(row => row.status === 'done' && row.doneNotifyPending && !row.doneNotifiedAt);
   const normalized = rows.map((row) => {
     if (!WATCHED.has(row.status) || selected.has(row)) return row;
     summary.superseded += 1;
@@ -273,6 +333,11 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       if (state === 'done') summary.done++;
       else if (state === 'unmet') summary.inProgress++;
     } catch (error) { summary.errors.push(`check: ${String(error?.message ?? error).slice(0, 120)}`); }
+  }
+  for (const row of pendingDoneNotices) {
+    if (dryRun || clock() + 60000 >= stopAt) break;
+    if (isUnattendedRow(row, home)) continue;
+    await notifyDone(row, row.reason || '', row.doneNotifyArtifact || '');
   }
   for (const row of candidates.filter(row => !row.check)) {
     // Reserve time for a 20-minute resume plus classification and reporting.
@@ -302,7 +367,14 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     summary.checked += 1;
     const evidence = gatherEvidence(row, home, io);
     const verdict = judge(row, evidence, now, io);
-    if (verdict.verdict === 'done') { patch(rowKey(row), { status: 'done', verdict: 'done', doneAt: new Date(now).toISOString(), reason: verdict.reason }); summary.done += 1; continue; }
+    if (verdict.verdict === 'done') {
+      patch(rowKey(row), { status: 'done', verdict: 'done', doneAt: new Date(now).toISOString(), reason: verdict.reason });
+      summary.done += 1;
+      if (!unattended && !dryRun && !row.doneNotifiedAt) {
+        await notifyDone(row, verdict.reason, '');
+      }
+      continue;
+    }
     if (verdict.verdict === 'in_progress') { patch(rowKey(row), { verdict: 'in_progress', lastCheckedAt: new Date(now).toISOString(), reason: verdict.reason }); summary.inProgress += 1; continue; }
     summary.stalled += 1;
     patch(rowKey(row), { ...((row.resumeCount ?? 0) >= MAX_RESUMES ? { status: 'stalled' } : {}), verdict: 'stalled', lastCheckedAt: new Date(now).toISOString(), reason: verdict.reason });
@@ -321,6 +393,9 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       current = { ...row, status, nextKim, resumedAt: new Date(now).toISOString(), resumeCount: (row.resumeCount ?? 0) + 1, resumeOutcome: `${state}: ${outcome.reason}` };
       patch(rowKey(row), { status, nextKim, verdict: state, ...(state === 'done' ? { doneAt: new Date(now).toISOString() } : {}), resumedAt: current.resumedAt, resumeCount: current.resumeCount, resumeOutcome: current.resumeOutcome, lastCheckedAt: new Date(now).toISOString(), reason: outcome.reason });
       (io.appendInbox ?? appendInbox)(home, row.sessionId, { at: new Date(now).toISOString(), state, evidence: outcome.reason, artifact: outcome.artifact || '' });
+      if (state === 'done' && !unattended && !dryRun && !row.doneNotifiedAt) {
+        await notifyDone(row, outcome.reason, outcome.artifact || '');
+      }
       if (state === 'needs_user' && kimAction(current) !== 'なし' && now - (Date.parse(row.ownerNotifiedAt || 0) || 0) >= 24 * 3600 * 1000) {
         try {
           const delivery = await askKim(row, outcome.reason);

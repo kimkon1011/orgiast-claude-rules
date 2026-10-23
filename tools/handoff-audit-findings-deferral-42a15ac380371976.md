@@ -6,7 +6,7 @@
 
 1. 原文を特定した。夜間台帳 2 行（セッション f8387b05 / 677e8433、どちらも 2026-10-22 の提案採否待ち停止）。
 2. 原文以降の窓では逐語再発 0 件・同型再発 0 件。ただし窓は約4時間・計 13 行で狭く、「再発なし」とは断定しない（C2 は時間依存）。
-3. 検出器に欠陥がある。原文の2セッションは Stop gate の最終判定が `pass` で、4検出器に 採否／「承認」か「却下」の語彙が無い。C4（最小修正＋回帰テスト）が必要。
+3. 検出器に欠陥があった。原文の2セッションは Stop gate の最終判定が `pass` で、4検出器に 採否／「承認」か「却下」の語彙が無かった。C4 として deferral-wait-gate に DECISION_DEFERRAL を追加し回帰テスト4件を入れた（2026-10-23、§4）。
 
 ## §1 原文（C1）
 
@@ -47,9 +47,19 @@ ID `42a15ac380371976` = sha256(JSON([key("提案の採否をuser返信で決め�
 
 ## §4 修正（C4）
 
-未実施（Iteration 1 は C1〜C3 まで）。次手: `tools/codex-do.mjs` へ最小修正＋回帰テスト1件を指示ファイル（`.loop/`）で委譲する。修正は検出語彙の追加であり、既存語彙は狭めない。
+codex-do へ3回委譲（指示ファイルは `.loop/quota-sweep-claude-c4*-instruction.md`、結果は同 `c4*-result.txt`）。最終 diff は `tools/deferral-wait-gate.mjs`（+31/−6）と `tools/deferral-wait-gate.test.mjs`（+9/−1）のみ。
+
+1. **c4（前セッション）**: Codex usage limit を検出し codex-do が deepseek へ自動フォールバック。`DECISION_DEFERRAL`（`「?承認」?(?:か|または|もしくは)「?却下`・`(?:返事|返信)が来るまで(?:は)?(?:何も|着手|実行)`・`採否を?(?:user|ユーザー|kim|あなた)?の?(?:返信|返事)`）と `DECISION_DEFERRAL_REASON`、テスト陽性2件（§1 原文）＋陰性2件（audit引用行・「承認済みなので実行しました」）を追加。ただし `inAuditQuote` の書き換えで **無限ループ**を混入（`open===0` かつ本文が「」で始まるとき `lastIndexOf('「',-1)` が 0 にクランプされ open が減らない。`node -e "console.log('「ab'.lastIndexOf('「',-1))"` → 0 で機構を確認）。`node --test` が 120 秒以上完了せず、`--test-timeout` も同期ブロックで発火しない。
+2. **c4b（2026-10-23、executor=codex）**: 当該 for 文を `open===0` で break する while に丸ごと置換（判定の意味は不変）。diff 範囲を監督が読み戻し、inAuditQuote 以外の差分がないことを確認。
+3. **c4c（同、executor=codex）**: positives の共通 reason アサーションが旧語彙のみ期待していた（指示側の潜在的衝突）ため、`/当ターン内に完了まで進め|推奨案を採用して当ターン内で実行/` に置換（1行）。
+
+検証（監督実測、委譲先報告に依らない）: `node --test tools/deferral-wait-gate.test.mjs` → **tests 52 / pass 52 / fail 0 / exit 0**（既存テストの削除・skip なし。52 = 旧48 + 新4）。
 
 ## §5 残件
 
-- C4 修正委譲、C6 `node --test tools/`、C5 の結論更新（修正後に §4 を実物で更新）
-- 窓が狭いため、時間が経った後の再走査で再発なしを確認する
+- ~~C4 修正委譲、C6、C5 の結論更新~~ → 2026-10-23 実施（§4）。C6 は `node --test tools/` が Node v24.18.0 で `Cannot find module …	ools`（ディレクトリ引数不可）のため、等価の `node --test "tools/**/*.test.mjs"` で実施。2回実測:
+  - **1回目（09:19）exit 1**（6235 tests / fail 12）。うち11件は fleet-mail の `--answer` 系テストで、実行セッションの環境変数（CLAUDE_HEADLESS=1 / ORGIAST_HEADLESS_JOB）が fleet-mail.mjs:1157 の判断代行拒否（return 2）を発火させたもの。**HEAD 977b59d のクリーン worktree でも同一失敗（F2×3・G3×3・G9×2 等）を再現** → 本修正と無関係の環境干渉。
+  - **2回目（環境変数を外した検証用再実行）**: 当該11件は全て解消（6235 tests / 6226 pass / fail 1）。残る1件は distribution-coverage「リポジトリ直下の全項目が dirs/files/notDistributed のどれかに分類されている」で、未追跡の `.loop/` が未分類だったため。`.loop/` はループシステム自身が「ローカル状態でコミット対象外」（tools/quota-sweep.mjs:32、docs/quota-sweep.md:39）と設計しているので `.gitignore` に `.loop/` を追記して修正。追記後の targeted 再実行（distribution-coverage + fleet-mail-v2）で **150/150 pass**。
+- `inAuditQuote` は開き括弧を本文先頭まで遡るため、audit 引用行より後の行にある本来の検出対象文を過剰除外し得る。現行テスト範囲では影響なし。将来の同型再発がこの経路で漏れたら bracket の閉じ判定を戻す。
+- 窓が狭いため、時間が経った後の再走査で再発なしを確認する。
+- upstream（origin/main）の .gitignore にも `.loop/` が無く、quota-sweep.mjs が worktree 作成時に .gitignore へ書き込まないため、ループ作業先では必ず distribution-coverage が落ちる。根本直し（worktree 作成時の自動追記）は別変更として残す。

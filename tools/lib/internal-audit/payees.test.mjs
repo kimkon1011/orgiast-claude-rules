@@ -6,6 +6,8 @@ import path from 'node:path';
 import { collectPayeeSheets, parseSheetRows, sheetDate, PAYEE_SHEETS } from './sheets-source.mjs';
 import { collectPurchasing, extractPayee, resolvePayees, runPayeeRules, closest } from './resolve-payees.mjs';
 import { summarizeFootprint, footprintExclusions, buildFootprint } from './footprint.mjs';
+import { payeeSearch, normalizeKana } from './payee-search.mjs';
+import { replayResolvedFootprint } from './footprint.mjs';
 import { renderReport } from '../../internal-audit.mjs';
 import { runPaymentRules } from './rules-payments.mjs';
 const patterns = JSON.parse(await fs.readFile(new URL('../../internal-audit-patterns.json', import.meta.url)));
@@ -58,8 +60,8 @@ test('cases match purchase or completion date and do not use cancelled requests'
  assert.equal(resolvePayees(s,{patterns,purchasing:{cases:[c]}}).payments[0].resolved_by,'c');
  assert.equal(resolvePayees(s,{patterns,purchasing:{cases:[{...c,status:'cancelled'}]}}).payments[0].status,'unresolved');
 });
-test('internal classification uses actual category or exact member identity, never generic partner alone', () => {
- for(const extra of [{category:'当月払い'},{category:'立替経費'},{category:'給与追加'},{name:'社員',category:'',staff:[{names:['社 員']}]},{name:'member@example.invalid',category:'',users:[{name:'社員',email:'member@example.invalid'}]}]){
+test('other payments are internal only for the authoritative reimbursement categories', () => {
+ for(const extra of [{category:'当月払い'},{category:'立替経費'},{category:'給与追加'}]){
  const r=resolvePayees(base(),{patterns,sheetRows:[transfer(extra)],staff:extra.staff,purchasing:{users:extra.users}});
  assert.equal(r.payees[0].internal,true);
  }
@@ -130,7 +132,7 @@ test('unique historical bank-name mapping resolves kana to roster identity; conf
  const s=base();const old=transfer({date:'2025-01-01',name:'検証担当',bankName:'ケンシヨウ タントウ',category:'給与'});
  const current=transfer({source:'paypay',name:'ケンショウタントウ',category:''});
  let r=resolvePayees(s,{patterns,sheetRows:[old,current],staff:[{names:['検証 担当']}]});
- assert.equal(r.payments[0].name,'検証担当');assert.equal(r.payees[0].internal,true);assert.equal(r.payments[0].evidence.nameReference.source,'old');
+ assert.equal(r.payments[0].name,'検証担当');assert.equal(r.payees[0].internal,false);assert.equal(r.payments[0].evidence.nameReference.source,'old');
  r=resolvePayees(s,{patterns,sheetRows:[old,{...old,name:'別人'},current],staff:[{names:['検証 担当']}]});
  assert.equal(r.payments[0].name,'ケンショウタントウ');assert.equal(r.payees[0].internal,false);
 });
@@ -162,4 +164,86 @@ test('resolved generic names are exclusions rather than the old unverified R02; 
  assert.ok(runPayeeRules(s,patterns).unverified.some(r=>r.rule==='R18'));
  s.payeeSheetRows=[transfer({doubleCheck:'○'})];assert.ok(!runPayeeRules(s,patterns).unverified.some(r=>r.rule==='R18'));
  delete s.payeeResolution;assert.ok(runPaymentRules(s,{},patterns).unverified.some(r=>r.rule==='R02'&&r.subject===generic));
+});
+
+
+test('wallet Rakuten extracts only recipient for masked/plain accounts and fullwidth metadata', () => {
+ for (const [raw, expected] of [
+  ['三菱UFJ銀行 横浜駅前支店 普通預金 ****8104 サトウ シユンスケ(依頼人名:自社 振込予定日:2026年09月30日)', 'サトウ シユンスケ'],
+  ['検証信用金庫 本店 当座 1234567 ｶ)ﾃｽﾄ（依頼人名：自社）', 'テスト'],
+  ['検証信用組合 横浜支店 貯蓄 ＊＊＊＊１２３４ タナカ ハナコ（依頼人名:自社）', 'タナカ ハナコ'],
+ ]) assert.equal(extractPayee(raw, patterns), expected);
+ for (const bank of ['ゆうちょ銀行','PayPay銀行','楽天銀行']) assert.equal(extractPayee(`${bank} 本店 普通 *1234 テスト(依頼人名:自社)`,patterns),'テスト');
+ for (const raw of ['WEB 総振','振込手数料','カード利用','ATM 出金','ＡＴＭ','1234567']) assert.equal(extractPayee(raw,patterns),'');
+ assert.equal(extractPayee('独自除外',{non_payee_tokens:['独自除外']}),'');
+ assert.equal(extractPayee('普通の商店',patterns),'普通の商店');
+});
+
+test('all three generic partners × sources a/b/c/d obey freee category, regardless of roster/corporate name', () => {
+ for (const [id,name,label] of [['104096614','アシスタント','社内（アシスタント）'],['104055245','当月払い','社内（当月払い・立替）'],['114448264','その他','業者']]) {
+  for (const method of ['a','b','c','d']) {
+   const s=base();s.partners=[{id,name}];s.payments[0].partner_id=id;
+   const opts={patterns,staff:[{names:['検証']}]};
+   if(method==='a') opts.sheetRows=[transfer()];
+   if(method==='b') s.wallet_txns=[{date:'2026-10-01',amount:limit,description:'振込 カ)検証'}];
+   if(method==='c') opts.purchasing={purchase_records:[{created_at:'2026-10-01',amount:limit,vendor_name:'株式会社検証'}]};
+   if(method==='d') opts.sheetRows=[transfer({source:'form'})];
+   const r=resolvePayees(s,opts);assert.equal(r.payments[0].resolved_by,method);assert.equal(r.payees[0].classification,label);
+   assert.equal(r.payees[0].internal,id!=='114448264');
+  }
+ }
+});
+
+test('same recipient internal and vendor amounts remain separate; no internal adapter calls', async t => {
+ const s=base();s.partners.push({id:'104096614',name:'アシスタント'});s.payments.push({...s.payments[0],id:'second',partner_id:'104096614'});
+ const r=resolvePayees(s,{patterns,sheetRows:[transfer()]});assert.equal(r.payees.length,2);assert.equal(r.payees.find(p=>!p.internal).amount,limit);
+ const stateDir=await fs.mkdtemp(path.join(os.tmpdir(),'ia-internal-'));t.after(()=>fs.rm(stateDir,{recursive:true,force:true}));
+ let calls=0;await buildFootprint(r.payees.filter(p=>p.internal),{stateDir,sources:{gmail:async()=>{calls++;return{status:'ok',count:0};}}});assert.equal(calls,0);
+});
+
+test('kana aliases precede freee name_kana reverse lookup; variants normalize small kana, dash, width, spacing', () => {
+ assert.equal(normalizeKana('ﾖｺﾊﾏ ｽﾃ−ｼﾞﾌﾟﾗﾝ(ｶ'),'ヨコハマステージプラン');
+ const partners=[{name:'横浜ステージプラン',name_kana:'ﾖｺﾊﾏｽﾃｰｼﾞﾌﾟﾗﾝ'}];
+ assert.deepEqual(payeeSearch('ヨコハマステ−ジプラン(カ',patterns,partners).searchTerms,['横浜ステージプラン']);
+ const aliases={...patterns,kana_vendor_aliases:{'ヨコハマステージプラン':['横浜舞台','株式会社横浜演出']}};
+ assert.deepEqual(payeeSearch('ヨコハマステ−ジプラン(カ',aliases,partners).searchTerms,['横浜舞台','横浜演出']);
+ assert.equal(payeeSearch('カナノミ',patterns,partners).kanaUnverified,true);
+ for(const name of ['ダイ30カイ.ガツカイ','テスト・カイシヤ']) assert.equal(payeeSearch(name,patterns).kanaUnverified,true);
+ assert.deepEqual(payeeSearch('アサヒロジステイクス',patterns,[{name:'アサヒロジスティクス',name_kana:'アサヒロジスティクス'}]).kanaUnverified,true);
+ assert.deepEqual(payeeSearch('アサヒロジステイクス',{kana_vendor_aliases:{'アサヒロジスティクス':['旭物流']}}).searchTerms,['旭物流']);
+});
+
+test('kana zero is unverified, positive hits suppress it; alias/reverse lookup controlled zeros can trigger R02', () => {
+ for (const mapped of ['none','alias','freee']) {
+  const s=base(),custom=mapped==='alias'?{...patterns,kana_vendor_aliases:{'テスト':['検証商店']}}:patterns;
+  if(mapped==='freee')s.partners.push({id:'vendor',name:'検証商店',name_kana:'ﾃｽﾄ'});
+  s.payeeResolution=resolvePayees(s,{patterns:custom,sheetRows:[transfer({name:'テスト',category:''})]});const p=s.payeeResolution.payees[0];
+  s.footprint={[p.id]:Object.fromEntries(['gmail','drive','discord'].map(k=>[k,{status:'ok',count:0,controlVerified:true,queriedTerms:p.searchTerms}]))};
+  const r=runPayeeRules(s,custom);assert.equal(r.findings.filter(f=>f.rule==='R02').length,mapped==='none'?0:1);
+  if(mapped==='none')assert.match(r.unverified.find(f=>f.rule==='R02').detail,/カナ名義のため照合精度低/);
+  s.footprint[p.id].gmail.count=1;assert.ok(!runPayeeRules(s,custom).unverified.some(f=>f.rule==='R02'));
+ }
+});
+
+test('multiple alias queries reach every adapter, cache invalidates changes, report lists actual terms only', async t => {
+ const stateDir=await fs.mkdtemp(path.join(os.tmpdir(),'ia-alias-'));t.after(()=>fs.rm(stateDir,{recursive:true,force:true}));
+ const p={id:'p',name:'テスト',...payeeSearch('テスト',{kana_vendor_aliases:{'テスト':['検証商店','検証工房']}})};
+ const calls=[],sources=Object.fromEntries(['gmail','drive','discord'].map(k=>[k,async term=>{calls.push([k,term]);return{status:'ok',count:2};}]));
+ const opts={stateDir,sources,now:new Date('2026-10-23')};
+ let fp=await buildFootprint([p],opts);assert.equal(calls.length,6);assert.equal(fp.p.gmail.count,2);assert.deepEqual(fp.p.discord.queriedTerms,p.searchTerms);
+ await buildFootprint([p],opts);assert.equal(calls.length,6);
+ p.searchTerms=['別商店'];fp=await buildFootprint([p],opts);assert.equal(calls.length,9);assert.deepEqual(fp.p.gmail.queriedTerms,['別商店']);
+ const s=base();s.footprint=fp;s.payeeResolution={summary:[],payments:[],payees:[{...p,classification:'業者',count:1,amount:limit,resolved_by:['b']}]};
+ const report=renderReport({snapshot:s,findings:[],sources:{},patterns});assert.match(report,/検索語（実際に使用）/);assert.match(report,/gmail: 別商店/);assert.ok(!report.includes('gmail: テスト'));
+});
+
+test('offline replay preserves matching query results, invalidates changed aliases and partial variants', () => {
+ const s=base();s.fetchedAt='2026-10-23T10:00:00Z';s.window.days=90;
+ const old={id:'p',name:'テスト'},zeros=Object.fromEntries(['gmail','drive','discord'].map(k=>[k,{status:'ok',count:0,controlVerified:true}]));
+ s.footprint={p:zeros};s.payeeResolution={payees:[{...old,...payeeSearch('テスト',patterns)}]};
+ replayResolvedFootprint(s,[old]);assert.equal(s.footprint.p.gmail.status,'ok');assert.deepEqual(s.footprint.p.gmail.queriedTerms,['テスト']);
+ s.payeeResolution.payees[0].searchTerms=['検証商店'];replayResolvedFootprint(s,[old]);assert.equal(s.footprint.p.gmail.status,'unverified');assert.deepEqual(s.footprint.p.gmail.queriedTerms,[]);
+ const cached={a:{term:'検証商店',window:90,at:s.fetchedAt,results:zeros}};
+ replayResolvedFootprint(s,[old],cached);assert.equal(s.footprint.p.gmail.status,'ok');assert.deepEqual(s.footprint.p.gmail.queriedTerms,['検証商店']);
+ s.payeeResolution.payees[0].searchTerms=['検証商店','検証工房'];replayResolvedFootprint(s,[old],cached);assert.equal(s.footprint.p.gmail.status,'unverified');assert.equal(s.footprint.p.gmail.controlVerified,false);
 });

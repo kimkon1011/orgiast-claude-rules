@@ -1,14 +1,19 @@
 import { createHash } from 'node:crypto';
 import { DAY, maskNumbers, auditError } from './common.mjs';
 import { genericPartner, normalizeAccount, corporateAccount, corporatePartner } from './rules-payments.mjs';
+import { payeeSearch } from './payee-search.mjs';
 import { sheetDate } from './sheets-source.mjs';
 const sum = rows => rows.reduce((s, r) => s + r.amount, 0);
 const text = v => maskNumbers(String(v ?? '').normalize('NFKC')).trim();
 const identity = v => normalizeAccount(String(v ?? '').replace(/\s+([\u3099\u309a])/g, '$1').normalize('NFC')).replace(/[ァィゥェォャュョッヮ]/g, c => ({ァ:'ア',ィ:'イ',ゥ:'ウ',ェ:'エ',ォ:'オ',ャ:'ヤ',ュ:'ユ',ョ:'ヨ',ッ:'ツ',ヮ:'ワ'})[c]);
 const corporateName = v => corporateAccount(String(v ?? '').normalize('NFKC').replace(/シヤ/g, 'シャ')) || corporatePartner(v);
-export function extractPayee(description) {
+export function extractPayee(description, patterns = {}) {
   let s = String(description ?? '').normalize('NFKC').trim();
-  if (/WEB\s*総振|総合振込|手数料|振込料金/i.test(s)) return '';
+  const rakuten = s.match(/^(?:\S+銀行|\S+信用金庫|\S+信用組合)\s+\S+\s+(?:普通預金|普通|当座預金|当座|貯蓄)\s+[\d*]+\s+(.+?)\s*\(依頼人名/u);
+  if (rakuten) s = rakuten[1].trim();
+  const tokens = patterns.non_payee_tokens || ['WEB総振', '総合振込', '手数料', '振込料金', 'カード', 'ATM'];
+  const compact = s.replace(/\s+/g, '').toUpperCase();
+  if (tokens.some(t => compact.includes(String(t).normalize('NFKC').replace(/\s+/g, '').toUpperCase()))) return '';
   s = s.replace(/^(?:振込|振り込み|振替|送金|振込出金)[\s:：-]*/u, '')
     .replace(/(?:\((?:カ|ユ|ド|シャ|シヤ|ザイ|トクヒ)\)?|(?:カ|ユ|ド|シャ|シヤ|ザイ|トクヒ)\))/g, '')
     .replace(/株式会社|有限会社|合同会社/g, '').trim();
@@ -47,16 +52,15 @@ export function closest(rows, payment, days) {
   const { distance, index, ...first } = candidates[0];
   return { ...first, ambiguous: candidates.length > 1, candidateCount: candidates.length, distanceDays: distance / DAY };
 }
-export function resolvePayees(snapshot, { patterns, sheetRows = [], purchasing = {}, staff = snapshot.staff || [], sources = {} } = {}) {
+export function resolvePayees(snapshot, { patterns, sheetRows = [], purchasing = {}, sources = {} } = {}) {
   const users = purchasing.users || [], byId = new Map(users.map(u => [String(u.id), u]));
-  const members = new Set([...staff.flatMap(m => [...m.names || [], ...m.emails || []]), ...users.flatMap(u => [u.name, u.email])].map(identity).filter(Boolean));
   const aliases = new Map();
   for (const r of sheetRows) if (r.source === 'old' && r.bankName && r.name) {
     const key = identity(r.bankName), names = aliases.get(key) || new Map();
     names.set(identity(r.name), { name: r.name, source: r.source, tab: r.tab, row: r.row }); aliases.set(key, names);
   }
   const transfers = sheetRows.filter(r => r.source !== 'form').map(r => ({ ...r, corporate: corporateName(r.name), resolved_by: 'a' }));
-  const wallets = (snapshot.wallet_txns || []).map(w => ({ date: w.date, amount: w.amount, name: extractPayee(w.description), corporate: corporateName(w.description), resolved_by: 'b', source: 'wallet_txns', row: w.id }));
+  const wallets = (snapshot.wallet_txns || []).map(w => ({ date: w.date, amount: w.amount, name: extractPayee(w.description, patterns), corporate: corporateName(w.description), resolved_by: 'b', source: 'wallet_txns', row: w.id }));
   const dbRows = [
     ...(purchasing.purchase_records || []).map(r => ({ date: sheetDate(r.created_at), amount: r.amount, name: text(r.vendor_name || r.item_name), handler: byId.get(String(r.created_by))?.name || '', category: r.vendor_name ? '支払請求書' : '品名のみ・支払先要確認', corporate: corporatePartner(r.vendor_name), source: 'purchase_records', row: r.id, resolved_by: 'c' })),
     ...(purchasing.cases || []).filter(c => c.status !== 'cancelled').map(c => ({ date: sheetDate(c.purchase_date || c.complete_at), alternateDate: sheetDate(c.complete_at), amount: c.budget, name: text(c.requester || c.item_summary), category: '購買申請・支払先要確認', source: 'cases', row: c.id, resolved_by: 'c' })),
@@ -70,11 +74,16 @@ export function resolvePayees(snapshot, { patterns, sheetRows = [], purchasing =
     const named = aliases.get(identity(c.name));
     const alias = named?.size === 1 ? [...named.values()][0] : null;
     if (alias) { c.originalName = c.name; c.name = alias.name; }
-    const internal = /当月払い|立替経費|給与|社員|アシスタント/.test(c.category || '') || !c.corporate && members.has(identity(c.name));
-    const classification = internal ? '社内の人への支払い' : c.corporate || /支払請求書/.test(c.category || '') ? '業者' : '区分未確認';
-    const name = text(c.name), payeeId = `payee:${createHash('sha256').update(`${c.corporate ? 'corporate:' : ''}${identity(name)}`).digest('hex').slice(0, 24)}`;
-    return { ...p, genericName: generic.get(String(p.partner_id)).name, name, payeeId, status: 'resolved', resolved_by: c.resolved_by,
-      category: c.category || classification, classification, classificationReason: internal ? (members.has(identity(c.name)) ? '購買DB users / Discord 名簿の名前・メール一致' : '業務内容の区分') : c.corporate ? '法人名・法人略号' : c.category || '所属・区分を確認できない',
+    const genericName = generic.get(String(p.partner_id)).name;
+    const assistant = String(p.partner_id) === '104096614';
+    const monthly = String(p.partner_id) === '104055245';
+    const reimbursement = (String(p.partner_id) === '114448264' || genericName === 'その他') && /当月払い|立替経費|給与/.test(c.category || '');
+    const internal = assistant || monthly || reimbursement;
+    const classification = assistant ? '社内（アシスタント）' : internal ? '社内（当月払い・立替）' : '業者';
+    // A person can also be a vendor: keep internal amounts out of vendor R02 totals.
+    const name = text(c.name), payeeId = `payee:${createHash('sha256').update(`${c.corporate ? 'corporate:' : ''}${identity(name)}`).digest('hex').slice(0, 24)}${internal ? assistant ? ':assistant' : ':internal' : ''}`;
+    return { ...p, genericName, name, payeeId, status: 'resolved', resolved_by: c.resolved_by,
+      category: c.category || classification, classification, classificationReason: assistant || monthly ? `freee取引先: ${genericName}` : reimbursement ? '振込予定一覧の業務内容' : '社内支払いの定義に該当しない支払先',
       ambiguous: c.ambiguous, candidateCount: c.candidateCount, distanceDays: c.distanceDays,
       evidence: { source: c.source, tab: c.tab, row: c.row, date: c.date, handler: c.handler || '', ...(alias ? { bankName: c.originalName, nameReference: alias } : {}) } };
   });
@@ -85,7 +94,7 @@ export function resolvePayees(snapshot, { patterns, sheetRows = [], purchasing =
     for (const [k, v] of [['categories', r.category], ['classifications', r.classification], ['resolved_by', r.resolved_by]]) if (!g[k].includes(v)) g[k].push(v);
     groups.set(r.payeeId, g);
   }
-  const payees = [...groups.values()].map(g => ({ ...g, internal: g.classifications.every(c => c === '社内の人への支払い') })).sort((a, b) => b.amount - a.amount);
+  const payees = [...groups.values()].map(g => { const internal = g.classifications.every(c => c.startsWith('社内（')); return { ...g, internal, classification: g.classifications[0], ...(internal ? { searchTerms: [], searchBasis: '社内のため対象外', kanaUnverified: false } : payeeSearch(g.name, patterns, snapshot.partners)) }; }).sort((a, b) => b.amount - a.amount);
   const summary = [...generic.values()].map(p => {
     const rows = resolved.filter(r => String(r.partner_id) === String(p.id)), missing = rows.filter(r => r.status === 'unresolved');
     return { name: p.name, count: rows.length, amount: sum(rows), resolvedCount: rows.length - missing.length, unresolvedCount: missing.length, unresolvedAmount: sum(missing),
@@ -108,9 +117,10 @@ export function runPayeeRules(snapshot, patterns) {
     const small = missing.filter(p => p.amount < patterns.thresholds.unregistered_min);
     if (small.length) add('R16', 'info', '汎用取引先・少額未解決', `${small.length}件 / 合計 ${sum(small)}円`, { kind: 'generic-unresolved' });
   }
-  for (const p of resolution.payees.filter(p => !p.internal)) {
+  for (const p of resolution.payees.filter(p => !p.internal && p.classification === '業者')) {
     const fp = ['gmail','drive','discord'].map(k => snapshot.footprint?.[p.id]?.[k]);
     if (fp.some(r => r?.count > 0)) continue;
+    if (p.kanaUnverified) { unverified.push({ rule: 'R02', subject: p.name, detail: 'カナ名義のため照合精度低（要確認）: 漢字名との対応未確認。形跡なしを確定しない' }); continue; }
     if (!p.ambiguous && fp.every(r => r?.status === 'ok' && r.controlVerified && r.count === 0)) add('R02', p.amount >= patterns.thresholds.no_footprint_high ? 'high' : 'medium', p.name, `解決済み業者: 3ソースの形跡なし（検証済みの検索範囲内）: ${p.amount}円`, { partnerId: p.id });
     else unverified.push({ rule: 'R02', subject: p.name, detail: p.ambiguous ? '同額候補が複数あり実名の確定前。形跡なしを確定しない' : '解決済み支払先の形跡未照合: skip/失敗/対照未確認' });
   }

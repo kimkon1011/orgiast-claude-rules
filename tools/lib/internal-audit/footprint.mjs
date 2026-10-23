@@ -9,6 +9,7 @@ export function searchTerm(name) {
   const clean = String(name ?? '').normalize('NFKC').replace(/株式会社|有限会社|合同会社|\(株\)|\(有\)|\(同\)/g, '').trim().replace(/\s+/g, ' ');
   return clean;
 }
+export const footprintTerms = p => [...new Set((p.searchTerms || [searchTerm(p.name)]).filter(t => t.length >= 2))];
 export const escapeDrive = value => value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 export const gmailTerm = value => value.replace(/["\\]/g, ' ');
 export function createGoogle({ keyPath, fetchImpl = fetch, signal } = {}) {
@@ -78,7 +79,7 @@ export function createDiscord({ token, fetchImpl = fetch, signal, stateDir, part
   async function fallback() {
     const file = path.join(stateDir, 'discord-cache.json');
     const cached = await readJson(file, {});
-    const terms = [...new Set(partners.map(p => searchTerm(p.name)).filter(Boolean))];
+    const terms = [...new Set(partners.flatMap(footprintTerms))];
     if (cached.fetchedAt && +now - Date.parse(cached.fetchedAt) < DAY && terms.every(t => cached.terms?.[t])) return cached.terms;
     const results = Object.fromEntries(terms.map(t => [t, { status: 'unverified', count: 0, latest: '', representative: '', reason: 'チャンネル走査は直近90日・閲覧可能テキストのみ（スレッド等は未照合）' }]));
     const since = +now - 90 * DAY;
@@ -130,22 +131,27 @@ export async function buildFootprint(partners, { window = 180, sources, patterns
   const month = now.toISOString().slice(0, 7);
   let saved = Promise.resolve(), completed = 0;
   const entries = await mapLimit(partners, 3, async p => {
-    const term = searchTerm(p.name), key = `${p.id}+${month}`, cached = cache[key];
+    const terms = footprintTerms(p), term = terms[0] || '', key = `${p.id}+${month}`, cached = cache[key];
     const fp = {};
     for (const name of ['gmail', 'drive', 'discord']) {
+      if (p.internal) { fp[name] = { status: 'unverified', excluded: true, count: null, queriedTerms: [], reason: '社内のため対象外' }; continue; }
       if (genericPartner(p.name, patterns)) { fp[name] = { status: 'unverified', excluded: true, count: null, reason: '汎用取引先名（実名解決の結果を別表に掲載）' }; continue; }
       if (!sources[name]) { fp[name] = { status: 'unverified', excluded: true, count: null, reason: 'skip 指定' }; continue; }
       if (term.length < 2) { fp[name] = { status: 'unverified', excluded: true, count: null, reason: '検索語が短すぎます' }; continue; }
-      if (cached?.term === term && cached.window === window && +now - Date.parse(cached.results?.[name]?.fetchedAt || cached.at) < 30 * DAY && (cached.results?.[name]?.status === 'ok' || cached.results?.[name]?.countKind?.includes('推定'))) { fp[name] = { ...cached.results[name] };
+      if (JSON.stringify(cached?.terms || [cached?.term]) === JSON.stringify(terms) && cached.window === window && +now - Date.parse(cached.results?.[name]?.fetchedAt || cached.at) < 30 * DAY && (cached.results?.[name]?.status === 'ok' || cached.results?.[name]?.countKind?.includes('推定'))) { fp[name] = { ...cached.results[name], queriedTerms: cached.results[name].queriedTerms || terms };
         if (name === 'gmail' && fp[name].countKind?.includes('推定')) {
           fp[name] = { ...fp[name], count: null, status: 'unverified', controlVerified: false, reason: '旧キャッシュは推定件数のため件数未確認（再取得を省略）' };
         }
         continue; }
-      try { fp[name] = term.length >= 2 ? await sources[name](term, window + 90) : { status: 'unverified', count: null, reason: '検索語が短すぎます' }; }
-      catch (e) { fp[name] = { status: 'failed', count: null, reason: reason(e) }; }
+      const results = [];
+      for (const query of terms) {
+        try { results.push({ ...await sources[name](query, window + 90), queriedTerms: [query] }); }
+        catch (e) { results.push({ status: 'failed', count: null, reason: reason(e), queriedTerms: [query] }); }
+      }
+      fp[name] = combineSearches(results, terms);
       fp[name].fetchedAt = now.toISOString();
     }
-    cache[key] = { at: cached?.at || now.toISOString(), term, window, results: fp };
+    cache[key] = { at: cached?.at || now.toISOString(), term, terms, window, results: fp };
     saved = saved.then(() => writePrivate(file, cache, state.secrets || []));
     await saved;
     onProgress(++completed, partners.length);
@@ -195,7 +201,7 @@ export function normalizeSavedFootprint(snapshot, patterns, sources) {
 export function summarizeFootprint(partners, footprint, patterns = {}) {
   const sources = {};
   for (const source of ['gmail','drive','discord']) {
-    const eligible = partners.filter(p => !genericPartner(p.name, patterns) && searchTerm(p.name).length >= 2)
+    const eligible = partners.filter(p => !p.internal && !genericPartner(p.name, patterns) && searchTerm(p.name).length >= 2)
       .map(p => footprint[String(p.id)]?.[source]).filter(r => r && !r.excluded && r.reason !== 'skip 指定');
     const good = eligible.filter(r => r.status === 'ok').length, failed = eligible.length - good;
     sources[source] = { status: !eligible.length ? 'unverified' : !failed ? 'ok' : good ? 'partial' : 'failed',
@@ -212,4 +218,48 @@ export function footprintExclusions(snapshot, patterns) {
       ['gmail','drive','discord'].filter(s => snapshot.footprint?.[p.id]?.[s]?.excluded).map(s => `${s}: ${snapshot.footprint[p.id][s].reason}`);
     return reasons.length ? [{ name: p.name, reason: reasons.join('; '), amount: rows.reduce((n, r) => n + r.amount, 0) }] : [];
   });
+}
+
+// Counts across aliases can overlap. Use the largest count, not a misleading sum.
+export function combineSearches(results, terms) {
+  const queriedTerms = [...new Set(results.flatMap(r => r.queriedTerms || []))];
+  const complete = terms.every(t => queriedTerms.includes(t));
+  const ok = results.length > 0 && complete && results.every(r => r.status === 'ok');
+  const counts = results.map(r => r.count).filter(Number.isFinite);
+  const best = [...results].sort((a, b) => (b.count || 0) - (a.count || 0))[0] || {};
+  return { ...best, status: ok ? 'ok' : results.length && results.every(r => r.status === 'failed') ? 'failed' : 'unverified', count: counts.length ? Math.max(...counts) : null,
+    queriedTerms, controlVerified: ok && results.every(r => r.controlVerified),
+    ...(results.length > 1 ? { countKind: '検索語ごとの最大件数（重複を含むため合算しない）' } : {}),
+    reason: [!complete ? '検索語変更・追加分は保存データにないため未照合' : '', ...results.filter(r => r.status !== 'ok').map(r => r.reason || '未確認')].filter(Boolean).join('; ') };
+}
+
+// Recompute names/categories offline, and reuse only results for the actual saved queries.
+export function replayResolvedFootprint(snapshot, previousPayees, cache = {}) {
+  snapshot.footprint ||= {};
+  const saved = new Map(previousPayees.map(p => [p.id, p]));
+  const oldFootprint = { ...snapshot.footprint };
+  const at = Date.parse(snapshot.fetchedAt), window = snapshot.window.days;
+  const entries = Object.values(cache).filter(c => c.window === window);
+  for (const p of snapshot.payeeResolution.payees) {
+    if (p.internal) { delete snapshot.footprint[p.id]; continue; }
+    const terms = footprintTerms(p), old = saved.get(p.id);
+    const fp = {};
+    for (const source of ['gmail','drive','discord']) {
+      const candidates = [];
+      const previous = oldFootprint[p.id]?.[source];
+      if (old && previous) candidates.push({ ...previous, queriedTerms: previous.queriedTerms || old.searchTerms || [searchTerm(old.name)] });
+      for (const c of entries) {
+        const r = c.results?.[source], age = at - Date.parse(r?.fetchedAt || c.at);
+        if (r && age >= 0 && age < 30 * DAY) candidates.push({ ...r, queriedTerms: r.queriedTerms || c.terms || [c.term] });
+      }
+      const selected = [];
+      for (const term of terms) {
+        // An aggregate cannot be reassigned to only a subset of its original queries.
+        const match = candidates.find(r => r.queriedTerms.includes(term) && r.queriedTerms.every(t => terms.includes(t)) && !r.countKind?.includes('推定'));
+        if (match && !selected.includes(match)) selected.push(match);
+      }
+      fp[source] = combineSearches(selected, terms);
+    }
+    snapshot.footprint[p.id] = fp;
+  }
 }

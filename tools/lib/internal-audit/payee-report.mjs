@@ -6,14 +6,15 @@ export function renderPayees(lines, snapshot, file) {
   const r = snapshot.payeeResolution;
   if (!r) { lines.push('| — | — | — | 未実施（旧snapshot） | — | — | — |'); return; }
   for (const s of r.summary) lines.push(`| ${cell(s.name)} | ${s.count} | ${money(s.amount)} | ${(100 * s.resolvedCount / s.count).toFixed(1)}% | ${['a','b','c','d'].map(k => s.methods[k]).join(' / ')} | ${s.unresolvedCount} | ${money(s.unresolvedAmount)} |`);
-  lines.push('', '| 実名（候補） | 区分 | 件数 | 合計 | 形跡の結果 | resolved_by |', '|---|---|---:|---:|---|---|');
+  lines.push('', '| 実名（候補） | 区分 | 検索語（実際に使用） | 件数 | 合計 | 形跡の結果 | resolved_by |', '|---|---|---|---:|---:|---|---|');
   const visible = r.payees.length > 200 ? r.payees.slice(0, 199) : r.payees;
   for (const p of visible) {
     const fp = snapshot.footprint?.[p.id];
     const result = p.internal ? '社内の人への支払いのため形跡照合対象外' : ['gmail','drive','discord'].map(k => `${k}: ${fp?.[k]?.count ?? '未照合'} / ${fp?.[k]?.status || 'unverified'}`).join('; ');
-    lines.push(`| ${cell(p.name)}${p.ambiguous ? '（候補複数）' : ''} | ${cell([...new Set([...p.classifications, ...p.categories])].join(' / '))} | ${p.count} | ${money(p.amount)} | ${cell(result)} | ${p.resolved_by.join(', ')} |`);
+    const queries = p.internal ? '対象外' : ['gmail','drive','discord'].map(k => `${k}: ${fp?.[k]?.queriedTerms?.join(' / ') || '未照合（検索語の記録なし）'}`).join('; ');
+    lines.push(`| ${cell(p.name)}${p.ambiguous ? '（候補複数）' : ''} | ${cell(p.classification || p.classifications.join(' / '))} | ${cell(queries)} | ${p.count} | ${money(p.amount)} | ${cell(result)} | ${p.resolved_by.join(', ')} |`);
   }
-  if (visible.length < r.payees.length) lines.push(`| 他 ${r.payees.length - visible.length}行 | ${cell(file)} 参照 | — | — | — | — |`);
+  if (visible.length < r.payees.length) lines.push(`| 他 ${r.payees.length - visible.length}行 | ${cell(file)} 参照 | — | — | — | — | — |`);
 }
 export function renderR10(lines, findings, file, minSeverity = 'info') {
   const levels = ['high','medium','info'];

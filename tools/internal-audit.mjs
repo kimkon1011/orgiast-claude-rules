@@ -8,7 +8,7 @@ import { notifyKim } from './notify-kim.mjs';
 import { ROOT, DAY, dateOnly, USERS, UNAVAILABLE_USERS, SEVERITIES, cell, parseEnv, envSecretValues, safeText, maskNumbers, readJson, writePrivate, scrub, reason, auditError, runProcess } from './lib/internal-audit/common.mjs';
 import { collectFreee, getReadOnlyToken } from './lib/internal-audit/collect-freee.mjs';
 import { runPaymentRules } from './lib/internal-audit/rules-payments.mjs';
-import { createGoogle, createGmailSource, createDriveSource, createDiscord, buildFootprint, cachedStaff, normalizeSavedFootprint, summarizeFootprint, footprintExclusions } from './lib/internal-audit/footprint.mjs';
+import { createGoogle, createGmailSource, createDriveSource, createDiscord, buildFootprint, cachedStaff, normalizeSavedFootprint, summarizeFootprint, footprintExclusions, replayResolvedFootprint } from './lib/internal-audit/footprint.mjs';
 import { collectPayeeSheets } from './lib/internal-audit/sheets-source.mjs';
 import { collectPurchasing, resolvePayees, runPayeeRules } from './lib/internal-audit/resolve-payees.mjs';
 import { renderPayees, renderR10 } from './lib/internal-audit/payee-report.mjs';
@@ -48,6 +48,8 @@ export function validatePatterns(p) {
   if (p?.version !== 1 || !p.thresholds || numeric.some(k => !Number.isFinite(p.thresholds[k]) || p.thresholds[k] <= 0) || p.thresholds.approval_lower_ratio >= 1 ||
       !Array.isArray(p.thresholds.approval) || !p.thresholds.approval.length || p.thresholds.approval.some((v,i,a) => !Number.isFinite(v) || v <= 0 || i > 0 && v <= a[i-1]) ||
       !Array.isArray(p.thresholds.free_mail_domains) || !Array.isArray(p.holidays_jp) || !Array.isArray(p.patterns) || !Array.isArray(p.allowlist_partners || []) || ['payment_agents', 'generic_partner_names'].some(k => !Array.isArray(p[k]) || p[k].some(v => typeof v !== 'string' || !v.trim()))) throw auditError('patterns.json のしきい値・構造が不正');
+  if (p.non_payee_tokens !== undefined && (!Array.isArray(p.non_payee_tokens) || p.non_payee_tokens.some(v => typeof v !== 'string' || !v.trim())) ||
+      p.kana_vendor_aliases !== undefined && (!p.kana_vendor_aliases || Array.isArray(p.kana_vendor_aliases) || typeof p.kana_vendor_aliases !== 'object' || Object.entries(p.kana_vendor_aliases).some(([k, v]) => !k.trim() || !Array.isArray(v) || !v.length || v.some(n => typeof n !== 'string' || !n.trim())))) throw auditError('patterns.json の支払先検索設定が不正');
   return p;
 }
 export function findingCounts(findings) { return Object.fromEntries(SEVERITIES.map(s => [s, findings.filter(f => f.severity === s).length])); }
@@ -171,6 +173,12 @@ export async function main(argv = process.argv.slice(2)) {
       sources.freee = { status: snapshot.sources?.freee?.status || 'ok', count: snapshot.deals.length, reason: `snapshot 再評価（freee API不使用）。${snapshot.sources?.freee?.reason || ''}` };
       const sharing = replaySharing(snapshot);
       snapshot.externalSharing = sharing.baseline;
+      if (Array.isArray(snapshot.payeeSheetRows)) {
+        const previous = snapshot.payeeResolution?.payees || [];
+        snapshot.payeeResolution = resolvePayees(snapshot, { patterns, sheetRows: snapshot.payeeSheetRows, purchasing: snapshot.purchasing || {},
+          sources: snapshot.payeeResolution?.sources || Object.fromEntries(Object.entries(sources).filter(([k]) => k.startsWith('payee-sheet:') || k === 'purchasing')) });
+        replayResolvedFootprint(snapshot, previous, await readJson(path.join(stateDir, 'footprint-cache.json'), {}));
+      }
       normalizeSavedFootprint(snapshot, patterns, sources);
       for (const finding of sharing.findings) findings.push(finding);
     } else {

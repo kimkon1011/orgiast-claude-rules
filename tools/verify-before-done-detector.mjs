@@ -64,7 +64,7 @@ export function evaluateVerification(entries, assistantText, { cwd = process.cwd
     if (b.type === 'tool_result') results.set(b.tool_use_id, { ...b, metadata: e.toolUseResult });
   }
   const files = new Map();
-  let changed = false, sensitive = false, lastChange = -1;
+  let changed = false, sensitive = false;
   const calls = [];
   const addFiles = (text, index) => { for (const file of paths(text)) if (file.replace(/^[ab]\//, '').includes('/') && !excluded(file)) files.set(file.replace(/^[ab]\//, ''), index); };
   turn.forEach((e, index) => {
@@ -84,7 +84,7 @@ export function evaluateVerification(entries, assistantText, { cwd = process.cwd
       if (b.name === 'Bash' && /pr-merge\.mjs\b|\bgh\s+pr\s+merge\b/.test(command) && ok) edit = true;
       if (/^(Agent|Task)$/.test(b.name) && /実装|修正|変更|implement|fix|edit|write|build/i.test(body(input)) && !/^(Explore|Plan)$/i.test(input.subagent_type || '')) edit = true;
       if (edit) {
-        changed = true; lastChange = index;
+        changed = true;
         const evidence = body(input) + output;
         if (!/^(Edit|Write|MultiEdit)$/.test(b.name)) addFiles(evidence.replace(/(?:[\w./\\:-]*\/)?(?:codex-do|pr-merge)\.mjs/g, ''), index);
         sensitive ||= external.test(evidence);
@@ -96,9 +96,11 @@ export function evaluateVerification(entries, assistantText, { cwd = process.cwd
   if (!changed) return null;
   const executed = new Map();
   for (const call of calls) {
-    if (call.name !== 'Bash' || !call.ok || call.index < lastChange || /--test\b|--dry[-_]?run\b/.test(call.command)) continue;
+    if (call.name !== 'Bash' || !call.ok || /--test\b|--dry[-_]?run\b/.test(call.command)) continue;
     const invoked = script(call.command);
-    if (!invoked || (call.index === lastChange && !/codex-do\.mjs$/.test(invoked))) continue;
+    if (!invoked) continue;
+    // Per file: a run counts only after that file's own last change (a later unrelated merge must not void it).
+    const after = file => call.index > files.get(file) || (call.index === files.get(file) && /codex-do\.mjs$/.test(invoked));
     let imports = [];
     if (/scratchpad/.test(invoked)) {
       try {
@@ -109,7 +111,7 @@ export function evaluateVerification(entries, assistantText, { cwd = process.cwd
         imports.push(...childScripts(source));
       } catch { continue; }
     }
-    for (const file of files.keys()) if ((!excluded(invoked) && sameFile(invoked, file)) || imports.some(p => sameFile(p, file))) executed.set(file, call.index);
+    for (const file of files.keys()) if (after(file) && ((!excluded(invoked) && sameFile(invoked, file)) || imports.some(p => sameFile(p, file)))) executed.set(file, call.index);
   }
   const missing = [...files.keys()].filter(f => !executed.has(f));
   const lastExecution = Math.max(...executed.values());

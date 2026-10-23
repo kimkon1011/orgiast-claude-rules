@@ -55,6 +55,19 @@ test('複数ファイルを個別照合、変更前実行では通らない', ()
   assert.equal(check([...rows, ...bash('node tools/b.mjs')], '完了'), null);
   assert.ok(check([...bash('node tools/a.mjs'), ...edit('tools/a.mjs')], '完了'));
 });
+test('Aの本番実行後に別ファイルBをmerge・実行してもAの証拠は有効', () => {
+  const rows = [human('修正して'), ...edit('tools/A.mjs'),
+    ...bash('node /production/tools/A.mjs'),
+    ...bash('gh pr merge 42', '{"files":[{"path":"tools/B.mjs"}]}')];
+  assert.match(check(rows, '完了'), /未実行: tools\/B.mjs\n/);
+  assert.equal(check([...rows, ...bash('node /production/tools/B.mjs')], '完了'), null);
+});
+test('Aの実行後にAを再変更すると古い実行証拠では通らない', () => {
+  const rows = [human('修正して'), ...edit('tools/A.mjs'),
+    ...bash('node /production/tools/A.mjs'), ...edit('tools/A.mjs')];
+  assert.match(check(rows, '完了'), /未実行: tools\/A.mjs\n/);
+  assert.equal(check([...rows, ...bash('node /production/tools/A.mjs')], '完了'), null);
+});
 test('scratchpad本文を読み、偽物なしの実importのみ数える', () => {
   const rows = [...edit('tools/notify-kim.mjs'), ...bash('node scratchpad/live.mjs')];
   assert.equal(check(rows, '完了 [TESTED-LIVE: 123 本文一致]', { readFile: () => 'import {send} from "../tools/notify-kim.mjs"; await send();' }), null);

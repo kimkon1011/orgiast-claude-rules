@@ -33,6 +33,11 @@ test('new rollout entries must declare the seven day window; legacy inventory is
       assert.equal(row.immediatePolicy, '2026-10-23 名刺OCR誤読による不存在ドメイン送信防止');
       continue;
     }
+    if (name === 'pretooluse-line-broadcast-guard') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-10-23 kim 指示: LINE broadcast による宛先違い誤送信の再発防止');
+      continue; // Misdelivery to the wrong person cannot be undone, immediate on all PCs.
+    }
     if (name === 'bihin-kcol-gate') {
       assert.equal(row.rollout, 'deny');
       assert.equal(row.immediatePolicy, '2026-10-23 古川さん依頼: 備品管理表K列のデータ破損防止');

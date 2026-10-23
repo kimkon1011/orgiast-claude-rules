@@ -99,3 +99,19 @@ C3 の判定材料（原文セッション 0395ca72、行数は台帳実測）:
 - 実行: `node --test tools/stop-gate-runner-audit-reeval.test.mjs tools/stop-gate-runner.test.mjs tools/handoff-audit-gate.test.mjs` → **88/88 pass**（既存86＋新規2）。
 
 **残件（変わらず）**: ライブ実測は次の夜間監査 2026-10-23T18:01Z 以降。台帳に手渡し文言の行が出たとき、`skipped=regex-blocked` の後に provider 付き verdict が付くかを確認する。夜間監査の再試行が `audit-unavailable` で落ちる事象（10-22 18:01Z の8行）も、判定材料が揃わない要因として残る。
+
+## §10 追記（2026-10-23 05:0xZ・「本番で効いたか」の確定判定）
+
+**結論: 本番では効いていない。** 理由は検出結果ではなく配備で、修正 f94ee7a が本番コードに入っていない（main 未マージ）。
+
+- 本番の実行体は `~/.claude/settings.json:519` の `node "C:\Users\kimko\.claude\nightly-repo\tools\stop-gate-runner.mjs"`。nightly-repo は origin/main を追従しており、本判定中にも HEAD が f78bfe4 → fd767b8（#1019）へ自動更新された。
+- その HEAD に対し `git merge-base --is-ancestor f94ee7a HEAD` は不一致、追加行「先行 gate が発火」は grep 0 件。origin/main にも存在しない（`git branch -r --contains f94ee7a` は origin/quota-sweep/20261023-0202-claude-mvkbrycs のみ）。
+- 台帳実測: 修正コミット（02:24:55Z）以降の handoff-audit-ledger 18 行のうち、`skipped=regex-blocked` かつ provider 付きの行は **0 件**（全期間でも 0 件）。iteration 7/8 が「再評価が動作」と見た 02:26:52Z（provider=null）→02:26:55Z（deepseek）は、session 6e4a9518 の**別々の Stop イベント**であり、1 回の run 内で第2段が再評価された記録ではない。→ 当該判断は誤りで、本節で訂正する。
+- 決定論的実測（実 provider は呼ばず `ask` を注入。入力は §9 の回帰テストと同じ「DBの値を確認してください。／次に kim がすること: なし」）:
+  - PRODUCTION（nightly-repo HEAD）: `decision=pass, blockedBy=[], demoted=[user-burden-gate], auditCalls=0` → 手渡しが無検査で通る（欠陥が現存）
+  - FIXED（本ブランチ 64320e7）: `decision=block, blockedBy=[handoff-audit-gate], auditCalls=1` → 修正どおり止まる
+- 夜間監査: 最終は 2026-10-22T18:01:30Z、次回は 2026-10-23T18:01Z で**未実行**。ただし本番コードが未修正のままでは、夜間監査が走ってもこの経路は検出されない。
+- マージ可否（実測）: 本ブランチは origin/main に対し ahead 4 / behind 7、`git merge-tree --write-tree` は衝突なし、main 側で `stop-gate-runner.mjs` / `handoff-audit-gate.mjs` はブランチ分岐後に変更なし。→ マージは技術的に安全。
+- 回帰テスト: `node --test tools/stop-gate-runner-audit-reeval.test.mjs` → 2/2 pass。
+
+**残件（1点・人の判断が要る）**: f94ee7a を main へ載せること。ループ brief の「push/PR/merge は行わない」制約があるため未実施。マージ後に nightly-repo が origin/main を取り込めば（数分〜次回同期）、本番の Stop gate は自動で修正版になる。

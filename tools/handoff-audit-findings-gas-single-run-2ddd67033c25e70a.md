@@ -231,3 +231,52 @@ stop-gate-runner-ledger 2026-10-23T05:20:59.374Z verdict=block blockedBy=["decis
 
 **残件（1点・人の判断が要る / §10・§11 と同じ）**: f94ee7a を main へ載せること。
 ループ brief の「push/PR/merge は行わない」制約があるため未実施。マージは技術的に安全（衝突なし・対象ファイルの main 側変更なし）。
+
+## §13 追記（2026-10-23・宣言「provider=null・latencyMs=0 の即 pass 経路の発生条件」の確定）
+
+宣言された調査（発生条件の特定と修正要否の判断）を、全 1,286 行の台帳で網羅的に確定した。
+
+### ① 経路の全数分類（`~/.claude/handoff-audit-ledger.jsonl`）
+
+`provider=null` は 1,269 行。`latencyMs` は全行 0（provider を呼ばないため）。内訳は 4 経路のみ:
+
+| 条件 | 行数 | 手渡し監査の状態 |
+|---|---|---|
+| `fired=true` + `skipped=regex-blocked` | **298** | **監査されずに pass**（115 セッション） |
+| `fired=false` + `skipped=regex-blocked` | 36 | 監査対象外（gate 自体が不発火） |
+| `fired=false` + `skipped=off` | 912 | 監査対象外（全行 `sessionId=readonly`・readonly レーンで gate 無効） |
+| `fired=false` + skip なし | 23 | 監査対象外、「OK」等の非手渡し |
+
+- `fired=true` かつ `provider=null` は **298 行で、全行 `skipped=regex-blocked`・`verdict=pass`・`latencyMs=0`**（例外 0）。
+- `fired=true` で provider が付いた行は 17 行のみ（deepseek: block 4 / pass 8 / audit-unavailable 5）で、`latencyMs=0` は 0 行。
+  → **「provider=null かつ latencyMs=0 で即 pass」になる手渡し行の経路は regex-blocked の 1 本だけ**で、他経路は存在しない。
+
+### ② 発生条件（コード上の 2 条件の同時成立）
+
+1. `tools/handoff-audit-gate.mjs:185` — 先行 gate が 1 件でも結果を返すと `regexBlocked=true` になり、第2段（LLM 監査）を実行しない。
+2. `tools/stop-gate-runner.mjs:130-131` — その後 policy/demote（例: `handoffKind=manual-steps` で FORM_GATES を降格）で先行 gate が全て無効化され `evaluated.results` が空になる。
+
+この 2 つが同時に成立すると、`blockedBy=[]`・`verdict=pass` で素通りする。先行 gate が 1 件でも残れば従来どおり block されるため、素通りは「全降格」のときだけ。
+
+### ③ 修正の妥当性（f94ee7a の述語が実測母集団と一致）
+
+- 修正条件 `audit.record.skipped === 'regex-blocked' && !evaluated.results.length`（`stop-gate-runner.mjs:133`）は、上表の 298 行の条件とそのまま一致する。
+- `fired=false` の行（36 行）でも条件は成立し得るが、再評価側は `record.fired` が false なら `requestAudit` を呼ばない（`handoff-audit-gate.mjs:186`）ため **provider 呼び出し 0 回・挙動不変**。過剰発火しない。
+- 回帰テスト再実行: `node --test tools/stop-gate-runner.test.mjs tools/stop-gate-runner-audit-reeval.test.mjs tools/handoff-audit-gate.test.mjs tools/handoff-audit-rescan.test.mjs` → **97/97 pass**。
+
+### ④ 本番での再現（§12 の測定後に新しい実例）
+
+05:21Z 以降の新規行 11 件のうち、**同一 Stop の実ペア**を確認:
+
+- `handoff-audit-ledger` 2026-10-23T05:40:55.958Z / session `2bb98fd7` — `fired=true, provider=null, skipped=regex-blocked, latencyMs=0, verdict=pass`
+- `stop-gate-runner-ledger` 2026-10-23T05:40:56.018Z（同 session・**60ms 差**）— `verdict=pass, blockedBy=[], handoffKind=manual-steps`
+
+excerpt は「発送キットは seisaku-team@orgiast.jp（kim本人）で開いてください：[コースター発送キット](…)」で、明示的な user 手渡し。**修正未マージの本番で、まさに当該経路の素通りが今も発生している**（§12 の 4 件に加え実例 5 件目）。
+
+なお本 excerpt を `.loop/counterfactual-latest.mjs` で再生すると PRODUCTION/FIXED とも `handoff-quality-gate` で block し、ライブ結果（pass）と一致しない。入力 `transcriptRaw` を空にした再生のため他 gate の状態が再現できず、**この行については反実仮想は使えない**（§11 の反実仮想は excerpt 988 字・実 raw で取ったもの）。判定は §13①の全数分類と §13④の実ペアで行う。
+
+### ⑤ 判定
+
+- 発生条件: **確定**（上記 2 条件の同時成立のみ）。
+- 修正要否: **要る。修正は f94ee7a に実装済み・テスト済み。追加のコード変更は不要**（述語は母集団と一致し、非発火行では無コスト）。
+- 残る作業は **f94ee7a の main マージ 1 点のみ**（未マージのため本番の 298 行と同型の素通りは継続中）。

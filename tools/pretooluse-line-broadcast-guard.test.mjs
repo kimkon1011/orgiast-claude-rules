@@ -4,9 +4,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { evaluateLineBroadcastGuard } from './pretooluse-line-broadcast-guard.mjs';
 
-const script = path.resolve('tools/pretooluse-line-broadcast-guard.mjs');
+const script = fileURLToPath(new URL('./pretooluse-line-broadcast-guard.mjs', import.meta.url));
 const input = (tool_name, tool_input, transcript_path) => ({ tool_name, tool_input, transcript_path });
 
 test('Bash の broadcast を deny する', () => {

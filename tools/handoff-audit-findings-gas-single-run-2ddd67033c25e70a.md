@@ -342,3 +342,57 @@ totals: rowsMatched=17 handoffWording=17 handoffWordingWithProviderVerdict=0
 - 環境メモ: `node --test tools/`（brief 記載のゲート表記・Node v24.19.0）は
   `Cannot find module '...\tools'` で失敗する。エラーはテストファイルに到達する前のモジュール解決段階で出るため、
   本節の変更内容には依存しない。実行するときは `node --test tools/*.test.mjs` か対象ファイルの明示が必要。
+
+## §14 追記（2026-10-23 07:0xZ・宣言の再走査＋C3 の確定判定＋配備可否の再測定）
+
+宣言「夜間監査で台帳が更新されたら、同じ語彙で再走査して C3 を判定し、結果を state ファイルに記録する」を実行した。
+**トリガー（夜間監査）は未成立**（最終 2026-10-22T18:01:30Z、次回 2026-10-23T18:01Z）。ただし C3 のうち
+夜間監査に依存しない部分は判定材料が揃ったため、ここで確定させる。
+
+### ① 再走査（窓 2026-10-22T18:01:30Z〜07:05Z）
+
+```
+node tools/handoff-audit-rescan.mjs --since 2026-10-22T18:01:30Z --until 2026-10-23T07:05:00Z
+verdict: handoff-wording-without-provider
+totals: rowsMatched=17 handoffWording=17 handoffWordingWithProviderVerdict=0
+        providerUnavailable=2 blockedByHandoffAuditGate=0 syntheticReplaysExcluded=6
+```
+
+- 台帳末尾: handoff-audit `06:21:18Z`（readonly/off）／stop-gate-runner `06:05:17Z`（`cf-` 合成行）／
+  nightly `2026-10-22T18:01:30Z`／deferral 同時刻。**前回 06:09Z 以降の実トラフィック増分は 0 件**。
+- `node --test tools/handoff-audit-rescan.test.mjs tools/stop-gate-runner-audit-reeval.test.mjs
+  tools/stop-gate-runner.test.mjs tools/handoff-audit-gate.test.mjs tools/handoff-audit-nightly.test.mjs`
+  → **117/117 pass**（24.6s）。
+
+### ② C3 の確定判定
+
+- **検出器の欠陥: あり（確定）**。根拠は §13（全 1,286 行の全数分類＝`fired=true` かつ `provider=null` の 298 行は
+  全件 `regex-blocked`/`pass`、他経路 0）、§11 の決定論的反実仮想（PRODUCTION=pass・`auditCalls=0`／
+  FIXED=block・`auditCalls=1`）、§12 の同一 Stop の 2 台帳ペア（05:20:59Z）。
+- **未取得は 1 点だけ**:「修正版が本番で手渡し文言に provider 付き verdict を付けること」のライブ実測。
+  これは夜間監査が走っても得られない（本番 hook が未修正版を実行しているため）。∴ C3 の残りは
+  **配備（main マージ）に依存**し、時間だけでは解決しない。
+- 夜間監査側の注意: 10-22 18:01Z の 8 行は全て `provider=deepseek` / `verdict=audit-unavailable` /
+  `timeout-or-provider-unavailable`。provider が復旧していなければ、マージ後も夜間監査は verdict を返さない
+  （現在の到達性は未確認。実 provider を叩く確認は brief の読み取り専用前提を外れるため行っていない）。
+
+### ③ 配備可否の再測定（main が前進したため）
+
+- origin/main = `5d4d3cf`。`git merge-base --is-ancestor f94ee7a origin/main` → **不一致＝未着地**。
+  本ブランチは **ahead 10 / behind 15**。
+- `git merge-tree --write-tree origin/main HEAD` → **exit 1。競合は `.gitignore` の 1 ファイルのみ**
+  （両側が同じ `.loop/` を別位置に追加。本ブランチ側の追加は main が既に持つため、main 側を採れば解消）。
+  `tools/fleet-scope.json` は自動マージ。`stop-gate-runner.mjs` は main 側に競合なし。
+- **新実測（従来記録の更新）: この PC から GitHub へ push できるようになった。**
+  `git credential-manager github list` → `seisaku-team-org`、`git push --dry-run` → **exit 0**
+  （`f94ee7a..6ff9ae5`）。リモート枝は f94ee7a のままで、直近 6 コミットは未 push。
+  → 以前の「この PC は push 不可（GCM 資格情報 0 件）」は 2026-10-23 時点で古い。
+- ループ brief の「push/PR/merge は行わない」に従い、実行はしていない。承認後の経路は既製ツールで足りる:
+  `git push` → `~/.claude/tools/gh-login-oneclick.ps1`（REST で PR 作成＋`automerge` ラベル）。
+
+### ④ 判定と残件
+
+- 宣言の条件（夜間監査後の再走査）は**未成立**。C3 の夜間監査非依存部分は**確定**（欠陥あり・修正は未配備）。
+- 最終成果に必要な残りは 1 つ: **f94ee7a〜6ff9ae5 を main へ入れる承認**。
+  承認後の 18:01Z 以降に `node tools/handoff-audit-rescan.mjs --since 2026-10-23T18:01:30Z` を再実行し、
+  verdict が `handoff-wording-judged-with-provider` に変わるかを確認すれば C3 完了＝FINAL。

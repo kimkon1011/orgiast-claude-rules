@@ -127,3 +127,18 @@ test('配信失敗(delivered:none)は未通知のまま残り次回再試行す�
   assert.equal((await runLaneHealthWatch({ home, now, notify, selfLabel: 'kim-PC', pcMap: {}, readInboxImpl })).notified.length, 0);
   assert.equal((await runLaneHealthWatch({ home, now, notify, selfLabel: 'kim-PC', pcMap: {}, readInboxImpl })).notified.length, 1);
 });
+
+test('probe起動失敗は当日済みにせず次回再試行する', async t => {
+  const r = run(t, { codex: alive });
+  assert.deepEqual(await r.call({ spawnSyncImpl: () => ({ status: null, error: new Error('timeout'), stdout: '' }) }), { skipped: 'probe-failed' });
+  assert.equal(fs.existsSync(path.join(r.dir, '.fleet-lane-health-day')), false);
+  assert.deepEqual(await r.call(), { healthy: true });
+});
+test('同日でもstaleがあればprobeを再実行する', async t => {
+  const r = run(t, { codex: alive });
+  await r.call();
+  fs.writeFileSync(path.join(r.dir, 'lane-health.json'), JSON.stringify({ lanes: { codex: { alive: false, reason: 'probe_failed:stale' } } }));
+  assert.deepEqual(await r.call(), { healthy: true });
+  assert.equal(r.spawns.length, 2);
+  assert.equal(r.spawns[1].opts.env.ORGIAST_HOME, path.dirname(r.dir));
+});

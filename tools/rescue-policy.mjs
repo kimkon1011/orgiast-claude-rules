@@ -67,6 +67,28 @@ function rescuedTrees(tree) {
   return new Map(byTree.filter(([t]) => t));
 }
 
+function snapshotRescue(tree, status, branch, stamp, log) {
+  // A private index snapshots changes without changing HEAD, the real index or files.
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'sync-rescue-index-'));
+  try {
+    const env = { ...process.env, GIT_INDEX_FILE: path.join(temp, 'index') };
+    const parent = git(tree, ['rev-parse', 'HEAD']).trim();
+    git(tree, ['read-tree', parent], undefined, env);
+    if (status.snapshotPaths.length) git(tree, ['add', '-A', '--pathspec-from-file=-', '--pathspec-file-nul'],
+      status.snapshotPaths.map(p => `:(top,literal)${p}\0`).join(''), env);
+    const snapshot = git(tree, ['write-tree'], undefined, env).trim();
+    const alreadyRescued = rescuedTrees(tree).get(snapshot);
+    if (alreadyRescued) {
+      log('RESCUE_DUPLICATE', `${tree} snapshot already rescued as ${alreadyRescued}`);
+      return { sha: null, branch: alreadyRescued };
+    }
+    const sha = git(tree, ['-c', 'user.name=Auto Session Rescue', '-c', 'user.email=auto-session-rescue@localhost',
+      'commit-tree', snapshot, '-p', parent, '-m', `sync-orgiast-main-rescue-${stamp}`]).trim();
+    git(tree, ['update-ref', `refs/heads/${branch}`, sha, '0000000000000000000000000000000000000000']);
+    return { sha, branch };
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+}
+
 export async function rescueTree(tree, home, { now = Date.now(), notify = notifyKim, preserveTree = false, pc = os.hostname() } = {}) {
   const events = [];
   let dirtyCount;
@@ -111,7 +133,7 @@ export async function rescueTree(tree, home, { now = Date.now(), notify = notify
         oldFailures = fs.readFileSync(logFile, 'utf8').split(/\r?\n/).filter(line => line.startsWith(prefix) && / \/ RESCUE_FAILED \/ /.test(line)).length;
       }
       const recent = state.failures.filter(t => t > now - 3600000 && t <= now).length;
-      if (Math.max(oldFailures, recent) >= 3) await sendOnce(`loop:${hour}`, formatKimNotice({ what: '夜間の自動復旧が 1 時間に 3 回失敗したので、今夜の再試行を止めました', next: '明日の夜間バッチで自動的にやり直します', kim: 'なし' }));
+      if (Math.max(oldFailures, recent) >= 3) await sendOnce(`loop:${hour}`, formatKimNotice({ what: `夜間の自動復旧が 1 時間に 3 回失敗しました。\n原因: ${state.lastFailure || '過去ログの RESCUE_FAILED（詳細調査を起票）'}`, next: '明日の夜間バッチで自動的にやり直します', kim: 'なし' }));
     };
     if (!preserveTree) await checkLoop();
     const status = dirtyStatus(tree);
@@ -148,24 +170,8 @@ export async function rescueTree(tree, home, { now = Date.now(), notify = notify
     try {
       let sha;
       if (preserveTree) {
-        // A private index snapshots changes without changing HEAD, the real index or files.
-        const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'sync-rescue-index-'));
-        try {
-          const env = { ...process.env, GIT_INDEX_FILE: path.join(temp, 'index') };
-          const parent = git(tree, ['rev-parse', 'HEAD']).trim();
-          git(tree, ['read-tree', parent], undefined, env);
-          if (status.snapshotPaths.length) git(tree, ['add', '-A', '--pathspec-from-file=-', '--pathspec-file-nul'],
-            status.snapshotPaths.map(p => `:(top,literal)${p}\0`).join(''), env);
-          const snapshot = git(tree, ['write-tree'], undefined, env).trim();
-          const alreadyRescued = rescuedTrees(tree).get(snapshot);
-          if (alreadyRescued) {
-            log('RESCUE_DUPLICATE', `${tree} snapshot already rescued as ${alreadyRescued}`);
-            return { clean: false, dirtyCount, events };
-          }
-          sha = git(tree, ['-c', 'user.name=Auto Session Rescue', '-c', 'user.email=auto-session-rescue@localhost',
-            'commit-tree', snapshot, '-p', parent, '-m', `sync-orgiast-main-rescue-${stamp}`]).trim();
-          git(tree, ['update-ref', `refs/heads/${branch}`, sha, '0000000000000000000000000000000000000000']);
-        } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+        ({ sha } = snapshotRescue(tree, status, branch, stamp, log));
+        if (!sha) return { clean: false, dirtyCount, events };
       } else {
         git(tree, ['switch', '-c', branch]);
         // Explicit, NUL-delimited literal paths avoid Git treating ignored exclude
@@ -182,7 +188,19 @@ export async function rescueTree(tree, home, { now = Date.now(), notify = notify
       catch { log('RESCUE_PUSH_FAILED_LOCAL_SAVED', branch); }
       if (!preserveTree) await sendOnce(`rescue:${day}`, `nightly-bootstrap: 変更を ${branch} に退避しました。レビューが必要です。`);
     } catch (e) {
+      // A shared index lock (or a timed-out commit hook) must not prevent a
+      // snapshot. Preserve the real index/HEAD and commit with a private index.
+      if (/index\.lock|ETIMEDOUT/.test(e.message)) {
+        try {
+          const snapshot = snapshotRescue(tree, status, `${branch}-snapshot`, stamp, log);
+          log('RESCUE_LOCAL_OK', `private index: ${snapshot.branch}`);
+          fs.appendFileSync(path.join(dir, 'next-session.md'), `\n- [ ] rescue 修復: ${tree}: ${redactSecrets(e.message)}。変更は ${snapshot.branch} に保全済み。共有Git操作を調査し再検証する。\n`);
+          await sendOnce(`index:${day}`, `夜間の自動復旧: 変更を保全しました。\n原因: ${redactSecrets(e.message)}\n対処: 専用インデックスで退避し、next-session.md に共有Git操作の調査を起票しました。`);
+          return { clean: false, dirtyCount, events };
+        } catch (repairError) { log('RESCUE_REPAIR_FAILED', redactSecrets(repairError.message)); }
+      }
       log('RESCUE_FAILED', e.message);
+      state.lastFailure = redactSecrets(e.message);
       state.failures = state.failures.filter(t => t > now - 3600000);
       state.failures.push(now);
       // git add can change XY status even though the underlying dirty content did not change.

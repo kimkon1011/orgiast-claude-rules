@@ -8,6 +8,7 @@ import { loadFablePolicy, fableAllowedForSupervisor } from './fable-policy.mjs';
 import { resolveClaudeExecutableFromDisk, sanitizeClaudeSupervisorEnv } from './claude-exe.mjs';
 import { autopilotPaths, runAutopilot, acquireLock } from './autopilot-tick.mjs';
 import { isEntry } from './is-entry.mjs';
+import { redactSecrets } from './webhook-health.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export function buildPrompt(repo = REPO) {
@@ -49,9 +50,10 @@ export function resolveSupervisorAuth({ home = process.env.ORGIAST_HOME || os.ho
   if (!key) return { lane: 'none', model: null, env };
   return { lane: 'deepseek', model: 'deepseek-v4-flash', env: { ...env, ANTHROPIC_BASE_URL: 'https://api.deepseek.com/anthropic', ANTHROPIC_AUTH_TOKEN: key, CLAUDE_CODE_MAX_CONTEXT_TOKENS: '1000000' } };
 }
-export function invokeClaude({ executable, args, prompt, cwd, timeoutMs, env = process.env }) {
+export function invokeClaude({ executable, args, prompt, cwd, timeoutMs, env = process.env, onProgress = () => {} }) {
   return new Promise((resolve) => {
-    let stdout = '', stderr = '', timedOut = false, launchError = null;
+    let stdout = '', stderr = '', timedOut = false, launchError = null, pending = '', lastStage = 'starting';
+    const streaming = args.includes('stream-json');
     // 監督セッションなので全社 hook は効かせたまま、デスクトップ由来の env 漏れだけ外す。
     const child = spawn(executable, args, { cwd, env: { ...sanitizeClaudeSupervisorEnv(env), CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: 'autopilot' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' });
     const killTree = () => {
@@ -63,11 +65,27 @@ export function invokeClaude({ executable, args, prompt, cwd, timeoutMs, env = p
       } catch { child.kill('SIGKILL'); }
     };
     const timer = setTimeout(killTree, timeoutMs);
-    child.stdout.on('data', (chunk) => { stdout = (stdout + chunk).slice(-16_000); });
+    child.stdout.on('data', (chunk) => {
+      if (!streaming) { stdout = (stdout + chunk).slice(-16_000); return; }
+      pending += chunk.toString();
+      let newline;
+      while ((newline = pending.indexOf('\n')) >= 0) {
+        const line = pending.slice(0, newline); pending = pending.slice(newline + 1);
+        try {
+          const event = JSON.parse(line);
+          // Do not persist tool inputs, credentials or thinking blocks.
+          const tool = event.message?.content?.find?.(part => part.type === 'tool_use');
+          const stage = tool ? `tool:${tool.name}` : event.type;
+          if (stage && stage !== lastStage) { lastStage = stage; onProgress({ stage }); }
+          if (event.type === 'result') stdout = redactSecrets(String(event.result || '')).slice(-16_000);
+        } catch { /* Ignore non-protocol output; stderr remains available. */ }
+      }
+      if (pending.length > 1_000_000) pending = '';
+    });
     child.stderr.on('data', (chunk) => { stderr = (stderr + chunk).slice(-4_000); });
     child.on('error', (error) => { launchError = error.code || error.message; });
     child.stdin.on('error', () => {});
-    child.on('close', (code, signal) => { clearTimeout(timer); resolve({ exitCode: code ?? 1, signal, stdout, stderr, timedOut, launchError }); });
+    child.on('close', (code, signal) => { clearTimeout(timer); resolve({ exitCode: code ?? 1, signal, stdout, stderr: redactSecrets(stderr), timedOut, launchError, ...(streaming ? { lastStage } : {}) }); });
     child.stdin.end(prompt);
   });
 }
@@ -97,8 +115,8 @@ export async function runOnce(options = {}) {
         const model = auth.model || (fableAllowedForSupervisor(policy) ? 'claude-fable-5-1' : 'claude-opus-5');
         const repo = options.repo || REPO;
         const executable = options.executable || (await resolveClaudeExecutableFromDisk()).executable;
-        const checked = await (options.invokeImpl || invokeClaude)({ executable, args: ['-p', '--model', model, '--output-format', 'text'], prompt: buildWatchPrompt(watch, repo), cwd: repo,
-          timeoutMs: options.timeoutMs ?? 15 * 60_000, env: { ...auth.env, AUTOPILOT_HOME: paths.dir, ORGIAST_HOME: paths.home } });
+        const checked = await (options.invokeImpl || invokeClaude)({ executable, args: ['-p', '--model', model, '--output-format', 'stream-json', '--verbose'], prompt: buildWatchPrompt(watch, repo), cwd: repo,
+          timeoutMs: options.timeoutMs ?? 15 * 60_000, onProgress: progress => record({ watch: watch.id, progress }), env: { ...auth.env, AUTOPILOT_HOME: paths.dir, ORGIAST_HOME: paths.home } });
         const result = { skipped: pre.reason || pre.verdict, watchChecked: watch.id, model, authLane: auth.lane, exitCode: checked.exitCode, timedOut: checked.timedOut, stdout: String(checked.stdout || '').slice(-2000) };
         record(result);
         await safeDigest();
@@ -117,14 +135,14 @@ export async function runOnce(options = {}) {
     const repo = options.repo || REPO;
     const executable = options.executable || (await resolveClaudeExecutableFromDisk()).executable;
     const timeoutMs = options.timeoutMs ?? 25 * 60_000;
-    const result = await (options.invokeImpl || invokeClaude)({ executable, args: ['-p', '--model', model, '--output-format', 'text'], prompt: buildPrompt(repo), cwd: repo, timeoutMs,
+    const result = await (options.invokeImpl || invokeClaude)({ executable, args: ['-p', '--model', model, '--output-format', 'stream-json', '--verbose'], prompt: buildPrompt(repo), cwd: repo, timeoutMs, onProgress: progress => record({ progress }),
       env: { ...auth.env, AUTOPILOT_HOME: paths.dir, ORGIAST_HOME: paths.home } });
     record({ model, authLane: auth.lane, ...result, stdout: String(result.stdout || '').slice(-4000) });
     const after = await runAutopilot('status', {}, options);
     const postRecorded = after.state?.totalIterations > before.state?.totalIterations;
     // Failed/empty Claude turns still consume an iteration and trip the watchdog.
     if (after.state?.status === 'running' && !postRecorded) {
-      await runAutopilot('post', { summary: `ヘッドレス周回で post 未記録 (exit=${result.exitCode}${result.timedOut ? ', timeout' : ''})`, progress: pre.recentLog.at(-1)?.progress ?? 0, noop: true, 'next-delay': 1800 }, options);
+      await runAutopilot('post', { summary: `ヘッドレス周回で post 未記録 (exit=${result.exitCode}${result.timedOut ? `, timeout, lastStage=${result.lastStage || 'unknown'}` : ''})`, progress: pre.recentLog.at(-1)?.progress ?? 0, noop: true, 'next-delay': 1800 }, options);
     }
     if (result.launchError || result.timedOut || result.exitCode !== 0) {
       const failed = await runAutopilot('status', {}, options);

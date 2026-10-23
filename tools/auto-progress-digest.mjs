@@ -43,16 +43,15 @@ export function selectRows(rows, now = Date.now(), since = now - WINDOW_MS) {
 
 export const verdictOf = (row, now = Date.now()) => row.status === 'done' ? 'done' : row.status === 'waiting_user' ? 'waiting_user' : row.status === 'resumed' ? 'resumed' : row.verdict || (row.status === 'stalled' ? 'stalled' : deadlinePassed(row, now) ? 'open/期限超過' : row.lastCheckedAt ? 'in_progress' : 'open');
 export const MAX_ITEMS = 10;
-const kimAction = row => {
+export const kimAction = row => {
   const value = String(row.nextKim || '').trim();
   const action = /^(?:(?:特に)?なし|無し|ナシ|(?:対応(?:は)?)?不要(?:です)?|(?:特に)?ありません|none|n\/a|[-—–－ー―])(?:[（(].*[）)])?[。．]?$/i.test(value) || !value ? 'なし' : value;
-  return action === 'なし' && verdictOf(row) === 'waiting_user'
-    ? String(row.reason || row.resumeOutcome || '判断内容を確認してください').replace(/^needs_user:\s*/, '').slice(0, 80) : action;
+  return /^(?:待機|待つ|返事待ち|返信待ち|確認待ち|判断待ち)/.test(action) ? 'なし' : action;
 };
 export function needsDm(row, now = Date.now()) {
   if (isNoopPromise(row.promise)) return false;
   const verdict = verdictOf(row, now);
-  return kimAction(row) !== 'なし' || ['waiting_user', 'done', 'open/期限超過'].includes(verdict) ||
+  return kimAction(row) !== 'なし' || ['done', 'open/期限超過'].includes(verdict) ||
     (verdict === 'stalled' && Number(row.resumeCount) >= MAX_RESUMES);
 }
 function readable(value, row, limit) {
@@ -98,7 +97,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   let observed = false;
   for (const row of all) {
     if (isUnattendedRow(row, home)) continue;
-    const key = rowKey(row), eligible = !row.check; // check の結果通知は watch が担当する
+    const key = rowKey(row), eligible = !row.check && !(row.status === 'waiting_user' && kimAction(row) === 'なし'); // check の結果通知は watch が担当する
     if (!eligible) {
       observed ||= lastVerdicts[key] !== verdictOf(row, now) || lastKim[key] !== kimAction(row) || lastNeedsDm[key] !== false;
       lastVerdicts[key] = verdictOf(row, now); lastKim[key] = kimAction(row); lastNeedsDm[key] = false;

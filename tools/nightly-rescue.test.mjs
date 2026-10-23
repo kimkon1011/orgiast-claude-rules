@@ -139,3 +139,17 @@ test('preserved-tree rescues skip a snapshot tree a rescue branch already holds'
   assert.equal(branches(f).length, 2);
 });
 
+
+test('共有index.lockがあっても専用indexで保全し既存ロックを削除しない', async t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.repo, 'tracked'), 'valuable change');
+  const lock = path.join(f.repo, '.git/index.lock'); fs.writeFileSync(lock, 'another process');
+  const head = f.git('rev-parse', 'HEAD');
+  const result = await rescueTree(f.repo, f.home, f);
+  assert.ok(result.events.some(e => e.step === 'RESCUE_LOCAL_OK'), JSON.stringify(result));
+  assert.equal(fs.readFileSync(lock, 'utf8'), 'another process');
+  assert.equal(f.git('rev-parse', 'HEAD'), head);
+  assert.equal(f.git('show', `${branches(f).find(b => b.endsWith('-snapshot'))}:tracked`), 'valuable change');
+  assert.match(f.messages[0], /原因:.*index.lock/);
+  assert.match(f.messages[0], /対処:.*専用インデックス/);
+});

@@ -13,6 +13,7 @@ import { ledgerFile, readLedger, writeLedger, OPEN_STATUSES, latestOpenPromises,
 export { MAX_RESUMES } from './auto-progress-ledger.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { notifyOwner, resolveOwner } from './notify-owner.mjs';
+import { kimAction } from './auto-progress-digest.mjs';
 import { checkPromise } from './auto-progress-check.mjs';
 import { appendInbox } from './auto-progress-inbox-hook.mjs';
 
@@ -140,12 +141,12 @@ export async function resumeSession(row, { timeoutMs = 20 * 60000, home = os.hom
   const { runChild, resolveClaudeExe } = await import('./auto-session.mjs');
   const resultFile = path.join(home, '.claude', `auto-progress-resume-${String(row.sessionId).slice(0, 8)}.json`);
   fs.rmSync(resultFile, { force: true }); // Never reuse a report from an earlier attempt.
-  const prompt = `以前このセッションで宣言した「この後の自動進行」が止まっています。宣言: 「${row.promise}」。\n元の会話は ${row.transcriptPath} にあります。宣言の最終成果まで進めてください。user の判断・承認が必要な地点では、判断材料を揃えて止まり needs_user を返してください。推測で目的を広げず、他セッションの変更を上書きせず、権限や確認待ちを迂回しないでください。期限は${timeoutMs / 60000}分です。\n結果を ${resultFile} に JSON で保存: {"state":"progressed|done|needs_user|blocked","evidence":"成果物パスと検証結果、または進めない理由","artifact":"成果物パス（任意）"}`;
+  const prompt = `以前このセッションで宣言した「この後の自動進行」が止まっています。宣言: 「${row.promise}」。\n元の会話は ${row.transcriptPath} にあります。宣言の最終成果まで進めてください。user の判断・承認が必要な地点では、判断材料を揃えて止まり needs_user を返してください。推測で目的を広げず、他セッションの変更を上書きせず、権限や確認待ちを迂回しないでください。期限は${timeoutMs / 60000}分です。\n結果を ${resultFile} に JSON で保存: {"state":"progressed|done|needs_user|blocked","evidence":"成果物パスと検証結果、または進めない理由","artifact":"成果物パス（任意）","nextKim":"本人だけができる具体的な判断・操作。返信待ちや自動調査なら空文字"}`;
   const result = await (io.runChild ?? runChild)(io.executable ?? resolveClaudeExe(), prompt, row.cwd, row.cwd, timeoutMs, { resumeSessionId: row.sessionId });
   if (result.status !== 'success') return { outcome: 'error', reason: String(result.status) };
   let report = null; try { report = JSON.parse(fs.readFileSync(resultFile, 'utf8')); } catch { /* 成果記録なし */ }
   const state = ['progressed', 'done', 'needs_user', 'blocked'].includes(report?.state) ? report.state : 'blocked';
-  return { outcome: state, state, reason: String(report?.evidence ?? '成果記録なし').slice(0, 500), artifact: String(report?.artifact ?? '') };
+  return { outcome: state, state, reason: String(report?.evidence ?? '成果記録なし').slice(0, 500), artifact: String(report?.artifact ?? ''), nextKim: String(report?.nextKim ?? '') };
 }
 
 // ---- Sheet ---------------------------------------------------------------
@@ -228,7 +229,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     const unattended = isUnattendedRow(row, home);
     if (unattended && now - recorded >= EXPIRE_UNATTENDED_MS) { patch(rowKey(row), { status: 'expired' }); summary.expired += 1; continue; }
     if (row.status === 'waiting_user') {
-      if (!unattended && !dryRun && now - (Date.parse(row.ownerNotifiedAt || 0) || 0) >= 24 * 3600 * 1000) {
+      if (kimAction(row) !== 'なし' && !unattended && !dryRun && now - (Date.parse(row.ownerNotifiedAt || 0) || 0) >= 24 * 3600 * 1000) {
         try {
           const delivery = await askKim(row, row.reason);
           if (delivery?.delivered !== 'dm') throw new Error(delivery?.reason || 'DM not delivered');
@@ -257,11 +258,12 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       let outcome;
       try { outcome = await (io.resume ?? resumeSession)(row, { home }); } catch (error) { outcome = { outcome: 'error', reason: String(error?.message ?? error).slice(0, 200) }; }
       const state = outcome.state || outcome.outcome;
+      const nextKim = outcome.nextKim ?? row.nextKim;
       const status = state === 'done' ? 'done' : state === 'needs_user' ? 'waiting_user' : 'resumed';
-      current = { ...row, status, resumedAt: new Date(now).toISOString(), resumeCount: (row.resumeCount ?? 0) + 1, resumeOutcome: `${state}: ${outcome.reason}` };
-      patch(rowKey(row), { status, verdict: state, ...(state === 'done' ? { doneAt: new Date(now).toISOString() } : {}), resumedAt: current.resumedAt, resumeCount: current.resumeCount, resumeOutcome: current.resumeOutcome, lastCheckedAt: new Date(now).toISOString(), reason: outcome.reason });
+      current = { ...row, status, nextKim, resumedAt: new Date(now).toISOString(), resumeCount: (row.resumeCount ?? 0) + 1, resumeOutcome: `${state}: ${outcome.reason}` };
+      patch(rowKey(row), { status, nextKim, verdict: state, ...(state === 'done' ? { doneAt: new Date(now).toISOString() } : {}), resumedAt: current.resumedAt, resumeCount: current.resumeCount, resumeOutcome: current.resumeOutcome, lastCheckedAt: new Date(now).toISOString(), reason: outcome.reason });
       (io.appendInbox ?? appendInbox)(home, row.sessionId, { at: new Date(now).toISOString(), state, evidence: outcome.reason, artifact: outcome.artifact || '' });
-      if (state === 'needs_user' && now - (Date.parse(row.ownerNotifiedAt || 0) || 0) >= 24 * 3600 * 1000) {
+      if (state === 'needs_user' && kimAction(current) !== 'なし' && now - (Date.parse(row.ownerNotifiedAt || 0) || 0) >= 24 * 3600 * 1000) {
         try {
           const delivery = await askKim(row, outcome.reason);
           if (delivery?.delivered !== 'dm') throw new Error(delivery?.reason || 'DM not delivered');

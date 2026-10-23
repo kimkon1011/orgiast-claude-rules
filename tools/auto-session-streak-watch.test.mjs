@@ -73,7 +73,7 @@ test('2026-09-14〜18 の実障害 fixture を streak=5 で検出する', async 
   const result = await runAutoSessionStreakWatch({ home: f.home, dryRun: true });
   assert.equal(result.detected[0].streak, 5);
   assert.match(result.detected[0].message, /成功記録なし/);
-  assert.match(result.detected[0].message, /1\. 原因調査/);
+  assert.match(result.detected[0].message, /原因調査と修復を自動起票/);
   assert.match(result.detected[0].message, /run JSON:/);
 });
 
@@ -180,13 +180,19 @@ test('DM 失敗は通知済みにせず、他ジョブを通知して後で再�
   assert.equal(calls, 3);
 });
 
-test('重大通知に stderr 先頭300文字、選択肢とフルパスを含める', async (t) => {
+test('重大通知に stderr 先頭300文字、自動調査とフルパスを含める', async (t) => {
   const f = fixture(); t.after(() => fs.rmSync(f.home, { recursive: true, force: true }));
   for (const day of ['16', '17', '18']) addRun(f, `2026-09-${day}`, { stderr: 'E'.repeat(300) + 'OMIT' });
   const { detected: [item] } = await runAutoSessionStreakWatch({ home: f.home, dryRun: true });
   assert.match(item.message, /【auto-session 重大】/);
   assert.ok(item.message.includes('E'.repeat(300))); assert.ok(!item.message.includes('OMIT'));
-  for (const n of [1, 2, 3]) assert.ok(item.message.includes(`\n${n}. `));
+  assert.match(item.message, /原因調査と修復を自動起票/);
   assert.ok(item.message.includes(`run JSON: ${item.latest.runFile}`));
   assert.ok(item.message.includes(`summary: ${item.latest.summaryPath}`));
+});
+
+test('実データのgtasks取得JSONを実行失敗として数えない', async (t) => {
+  const f = fixture(); t.after(() => fs.rmSync(f.home, { recursive: true, force: true }));
+  for (const day of ['29', '30']) fs.writeFileSync(path.join(f.runsDir, `2026-09-${day}-1-gtasks.json`), JSON.stringify({ updatedAt: `2026-09-${day}T00:00:00Z`, rows: [{ status: 'needsAction' }] }));
+  assert.equal((await runAutoSessionStreakWatch({ home: f.home, dryRun: true })).detected.length, 0);
 });

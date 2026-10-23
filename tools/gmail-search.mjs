@@ -51,7 +51,7 @@ export function extractBody(payload, limit = 4000) {
 }
 
 async function gmail(token, path, fetchImpl) {
-  const response = await fetchImpl(`${API}${path}`, { headers: { Authorization: `Bearer ${token}` } });
+  const response = await fetchImpl(`${API}${path}`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(20_000) });
   if (!response.ok) {
     const error = new Error(`Gmail API ${response.status}: ${(await response.text()).slice(0, 200)}`);
     error.status = response.status;
@@ -61,7 +61,7 @@ async function gmail(token, path, fetchImpl) {
 }
 
 export async function searchGmail({ user, query, max = 10, withBody = false, bodyLimit = 4000, pageToken, fetchImpl = globalThis.fetch, getToken = getDriveToken }) {
-  const token = await getToken({ scope: SCOPE, impersonate: user });
+  const token = await getToken({ scope: SCOPE, impersonate: user, signal: AbortSignal.timeout(20_000) });
   const list = await gmail(token, `/messages?q=${encodeURIComponent(query)}&maxResults=${Math.min(100, max)}${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`, fetchImpl);
   const results = [];
   let skipped = 0;

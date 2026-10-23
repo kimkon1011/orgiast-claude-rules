@@ -42,7 +42,7 @@ test('models follow planIncluded; prompt comes from skill and headless uses one 
     const opts = fixture(t);
     await runAutopilot('start', { objective: 'test' }, opts);
     const result = await runOnce({ ...opts, policy, executable: 'fake-claude', invokeImpl: async (invocation) => {
-      assert.deepEqual(invocation.args, ['-p', '--model', model, '--output-format', 'text']);
+      assert.deepEqual(invocation.args, ['-p', '--model', model, '--output-format', 'stream-json', '--verbose']);
       assert.match(invocation.prompt, /codex-do\.mjs/);
       assert.match(invocation.prompt, /ScheduleWakeup と \/loop は使用しない/);
       assert.equal(invocation.timeoutMs, 25 * 60_000);
@@ -360,4 +360,15 @@ test('resolveSupervisorAuth: OAuth が死んでいる時だけ deepseek.env の�
   assert.equal(noKey.lane, 'none');
   assert.equal(noKey.model, null);
   assert.equal(resolveSupervisorAuth({ home: 'H', env: {}, readFile: files({}) }).lane, 'none');
+});
+
+test('streaming records tool stage before timeout without persisting tool arguments', async t => {
+  const opts = fixture(t);
+  const events = [];
+  const program = `console.log(JSON.stringify({type:'assistant',message:{content:[{type:'tool_use',name:'Bash',input:{command:'SECRET'}}]}})); setInterval(()=>{},1000)`;
+  const result = await invokeClaude({ executable: process.execPath, args: ['-e', program, '--', 'stream-json'], prompt: '', cwd: opts.home, timeoutMs: 500, onProgress: e => events.push(e) });
+  assert.equal(result.timedOut, true);
+  assert.equal(result.lastStage, 'tool:Bash');
+  assert.deepEqual(events, [{ stage: 'tool:Bash' }]);
+  assert.doesNotMatch(JSON.stringify(result), /SECRET/);
 });

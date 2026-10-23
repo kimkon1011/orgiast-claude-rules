@@ -21,3 +21,10 @@ test('owner directory reads queries cache and refuses ambiguous email matches', 
   directory.queries.other = { members: [{ id: '43', emails: ['cr@orgiast.jp'] }] };
   assert.equal(resolveOwnerDiscordId('cr@orgiast.jp', { directory }), '');
 });
+
+test('owner空の旧行はローカル持ち主を解決して通知する', async () => {
+  let call;
+  await notifyOwner('', '自動進行', { label: 'kim-PC', pcMap: { 'kim-PC': { account: 'kim@orgiast.jp' } }, directory: [{ id: KIM_DISCORD_USER_ID, emails: ['kim@orgiast.jp'] }], notify: async (text, options) => { call = { text, options }; return { delivered: 'dm' }; } });
+  assert.equal(call.text, '自動進行');
+  assert.equal(call.options.userId, KIM_DISCORD_USER_ID);
+});

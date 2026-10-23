@@ -123,7 +123,7 @@ test('watch: needs_user/done 遷移、1h grace・2h resume・上限8', async () 
   assert.equal(GRACE_MS, H); assert.equal(RESUME_INTERVAL_MS, 2 * H); assert.equal(MAX_RESUMES, 8);
   const now = Date.parse('2026-10-19T12:00:00Z');
   for (const [state, expected] of [['needs_user', 'waiting_user'], ['done', 'done']]) {
-    const home = tmp(); seed(home, [{ sessionId: state, owner: 'cr@orgiast.jp', ts: new Date(now - 3 * H).toISOString(), status: 'open', promise: state, cwd: home, pc: 'PC' }]);
+    const home = tmp(); seed(home, [{ sessionId: state, owner: 'cr@orgiast.jp', nextKim: '送信承認', ts: new Date(now - 3 * H).toISOString(), status: 'open', promise: state, cwd: home, pc: 'PC' }]);
     const notices = [];
     await watch({ home, now, io: noEvidenceIo({ resume: async () => ({ outcome: state, state, reason: '成果', artifact: 'out.txt' }), notifyOwner: async (...args) => { notices.push(args); return { delivered: 'dm' }; } }) });
     assert.equal(readLedger(ledgerFile(home))[0].status, expected);
@@ -377,7 +377,7 @@ test('watch: 同一session・同一時刻の重複でも最後の行だけ再開
 
 test('digest routes each promise only to its owner', async () => {
   const now = Date.now(), calls = [];
-  const rows = ['a', 'b'].map(owner => ({ owner, sessionId: `session-${owner}`, status: 'waiting_user', promise: owner === 'a' ? '資料の確認' : '見積の確認', ts: new Date(now - H).toISOString() }));
+  const rows = ['a', 'b'].map(owner => ({ owner, sessionId: `session-${owner}`, status: 'waiting_user', nextKim: '送信承認', promise: owner === 'a' ? '資料の確認' : '見積の確認', ts: new Date(now - H).toISOString() }));
   const result = await digest({ home: tmp(), now, io: {
     label: 'PC', readLedger: () => rows, readState: () => ({}), writeState() {},
     notifyOwner: async (owner, text) => { calls.push({ owner, text }); return { delivered: 'dm' }; },
@@ -391,8 +391,8 @@ test('digest routes each promise only to its owner', async () => {
 test('digest: owner 未記録の行は自PCの持ち主へ送り、owner 空で notifyOwner を呼ばない', async () => {
   const now = Date.now(), calls = [];
   const rows = [
-    { sessionId: 'legacy-1', status: 'waiting_user', promise: '旧台帳の約束', ts: new Date(now - H).toISOString() },
-    { owner: 'b@example.com', sessionId: 'session-b', status: 'waiting_user', promise: '見積の確認', ts: new Date(now - H).toISOString() },
+    { sessionId: 'legacy-1', status: 'waiting_user', nextKim: '送信承認', promise: '旧台帳の約束', ts: new Date(now - H).toISOString() },
+    { owner: 'b@example.com', sessionId: 'session-b', status: 'waiting_user', nextKim: '送信承認', promise: '見積の確認', ts: new Date(now - H).toISOString() },
   ];
   const result = await digest({ home: tmp(), now, io: {
     label: 'PC', readLedger: () => rows, readState: () => ({}), writeState() {}, localOwner: 'kim@example.com',
@@ -406,7 +406,7 @@ test('digest: owner 未記録の行は自PCの持ち主へ送り、owner 空で 
 
 test('watch retries undelivered needs_user notification without waiting 24 hours', async () => {
   const home = tmp(), now = Date.now(); let attempts = 0;
-  seed(home, [{ sessionId: 'waiting', owner: 'a', status: 'open', promise: 'p', cwd: home, ts: new Date(now - 3 * H).toISOString() }]);
+  seed(home, [{ sessionId: 'waiting', owner: 'a', nextKim: '送信承認', status: 'open', promise: 'p', cwd: home, ts: new Date(now - 3 * H).toISOString() }]);
   const io = noEvidenceIo({
     resume: async () => ({ state: 'needs_user', reason: 'approval' }),
     notifyOwner: async () => { attempts++; return attempts === 1 ? { delivered: 'none' } : { delivered: 'dm' }; },
@@ -580,16 +580,15 @@ test('digest: checkなしは初回に件数通知、再開上限では再送せ�
   assert.equal(messages.length, 2);
   assert.equal(needsDm({ status: 'open', dueAt: new Date(now - H).toISOString() }, now), true);
 });
-test('digest: 判断待ちのなしをreasonまたはresumeOutcomeで補い、変更時に再送', async () => {
+test('digest: 待機理由だけでは依頼せず、具体的なkimの操作がある場合のみ通知', async () => {
   const now = Date.now(), home = tmp(), messages = [];
-  let row = { sessionId: 'waiting', status: 'waiting_user', promise: '予約', nextKim: 'なし（判断待ち）', reason: 'needs_user: A案かB案を選んでください', ts: new Date(now - H).toISOString() };
+  let row = { sessionId: 'waiting', status: 'waiting_user', promise: '予約', nextKim: 'なし（判断待ち）', reason: '取引先の返信待ち', ts: new Date(now - H).toISOString() };
   const io = { readLedger: () => [row], notify: async text => { messages.push(text); return { delivered: 'dm' }; } };
-  assert.equal(verdictOf(row, now), 'waiting_user'); assert.equal(needsDm(row, now), true);
+  assert.equal(needsDm(row, now), false);
+  assert.equal((await digest({ home, now, io })).sent, false);
+  row = { ...row, nextKim: '予約日を選んでください' };
   assert.equal((await digest({ home, now, io })).sent, true);
-  assert.match(messages[0], /kim がすること: A案かB案を選んでください/);
-  row = { ...row, reason: '', resumeOutcome: `needs_user: ${'判断'.repeat(50)}` };
-  assert.equal((await digest({ home, now, io })).sent, true);
-  assert.equal(messages[1].split('kim がすること: ')[1].split('\n')[0], '判断'.repeat(40));
+  assert.match(messages[0], /予約日を選んでください/);
   assert.equal((await digest({ home, now, io })).sent, false);
 });
 
@@ -614,7 +613,7 @@ test('originLine: PC ラベル・アカウント・プロジェクト・目的�
 
 test('watch: 判断待ち通知に出どころ行が付き、owner 空なら自PCの持ち主へ送る', async () => {
   const home = tmp(), now = Date.parse('2026-10-23T00:00:00Z');
-  seed(home, [{ sessionId: 's1', owner: '', pc: 'PC', status: 'waiting_user', promise: '62社へ送信', reason: 'OK 待ち', cwd: 'C:\\w\\案件A', ts: new Date(now - 3 * 3600000).toISOString() }]);
+  seed(home, [{ sessionId: 's1', owner: '', pc: 'PC', status: 'waiting_user', nextKim: '62社への送信を承認', promise: '62社へ送信', reason: 'OK 待ち', cwd: 'C:\\w\\案件A', ts: new Date(now - 3 * 3600000).toISOString() }]);
   const sent = [];
   await watch({ home, now, io: { label: '作業用001', localOwner: 'cr@orgiast.jp', sheetConfig: () => null, digest: async () => ({}), notifyOwner: async (owner, text) => { sent.push({ owner, text }); return { delivered: 'dm' }; } } });
   assert.equal(sent.length, 1);

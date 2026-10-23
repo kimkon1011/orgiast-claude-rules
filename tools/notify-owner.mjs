@@ -31,6 +31,12 @@ export function resolveOwnerDiscordId(owner, { home = os.homedir(), directory } 
 }
 
 export async function notifyOwner(owner, text, options = {}) {
+  owner = owner || resolveOwner(options);
+  // Legacy rows may omit owner; the configured local DM still identifies its owner.
+  if (!owner) {
+    const localId = readText(path.join(options.home || os.homedir(), '.claude', 'orgiast-discord-user-id.txt'));
+    if (localId) return (options.notify ?? notifyKim)(text, { ...options, userId: localId, webhookFallback: false });
+  }
   const userId = options.userId ?? resolveOwnerDiscordId(owner, options);
   if (userId) return (options.notify ?? notifyKim)(text, { ...options, userId, webhookFallback: false });
   return (options.notify ?? notifyKim)(`宛先: ${owner || '不明'}（DM 未解決）\n${text}`, { ...options, userId: KIM_DISCORD_USER_ID, webhookFallback: false });

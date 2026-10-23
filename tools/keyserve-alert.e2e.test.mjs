@@ -12,7 +12,7 @@ const execFileAsync = promisify(execFile);
 const repoPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const syncScript = path.join(repoPath, 'tools', 'onboarding-sync.mjs');
 
-test('keyserve 401 を実経路で Discord webhook へ通報し24時間抑止する', { timeout: 10_000 }, async () => {
+test('keyserve 401 を実経路で Discord webhook へ通報し24時間抑止する', { timeout: 60_000 }, async () => {
   const requests = { keys: [], hooks: [] };
   const server = http.createServer((request, response) => {
     const chunks = [];
@@ -66,7 +66,9 @@ test('keyserve 401 を実経路で Discord webhook へ通報し24時間抑止す
       ORGIAST_ONBOARDING_URL: `${baseUrl}/onboarding`,
       ORGIAST_KEYSERVE_SECRET: secret,
     };
-    const runSync = () => execFileAsync(process.execPath, args, { env, timeout: 4_000 });
+    // Windows CI ランナーでは子プロセス起動だけで数秒かかることがあり、4s では onboarding-sync が
+    // SIGTERM で落ちて「401 通報」の検証に到達しない（実測: 2026-10-15 PR #815 の windows-latest）。
+    const runSync = () => execFileAsync(process.execPath, args, { env, timeout: 20_000 });
 
     const firstRun = await runSync();
     assert.match(firstRun.stdout, /この PC は既存 keyserve\.env の秘密で認証を試みています/);

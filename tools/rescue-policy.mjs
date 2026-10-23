@@ -10,7 +10,10 @@ import { redactSecrets } from './webhook-health.mjs';
 import { formatKimNotice } from './lib/kim-notice.mjs';
 
 const RETRY_MS = 6 * 60 * 60 * 1000;
-export const WORK_DIRECTORY_EXCLUDES = ['scratch/', '.work/', '.work-*/', '.fleet-mail-work/'];
+// 機械ローカルの作業ディレクトリ。ここに載っていると rescue ブランチを作らない。
+// .stall-sweeper/ は stall-sweeper.mjs が停滯調査の受け取り票を書く場所（ワークツリー直下）。
+// 除外しないと毎晩「rescue 枝のレビュー」TODO が増え、中身は使い捨ての票だけになる。
+export const WORK_DIRECTORY_EXCLUDES = ['scratch/', '.work/', '.work-*/', '.fleet-mail-work/', '.stall-sweeper/'];
 const excluded = name => WORK_DIRECTORY_EXCLUDES.some(pattern => {
   const root = name.split('/')[0];
   const directory = pattern.slice(0, -1);

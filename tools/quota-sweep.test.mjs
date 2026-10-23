@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { filterWindowsForCurrentAuth, isTransientWindowReadError, commandRunner, queueRepeatedFailure, writeWorktreePointer, prepareTree, DEFAULT_GOAL, MAX_TICKS, selectGoal, tickPrompt, contractPrompt, canRunWindow, interactiveClaude, main, makeLedger, runSweep, parseOutput, acquireLock, readWorktreePointer } from './quota-sweep.mjs';
+import { filterWindowsForCurrentAuth, isTransientWindowReadError, commandRunner, queueRepeatedFailure, writeWorktreePointer, prepareTree, preserveDirtyTree, DEFAULT_GOAL, MAX_TICKS, selectGoal, tickPrompt, contractPrompt, canRunWindow, interactiveClaude, main, makeLedger, runSweep, parseOutput, acquireLock, readWorktreePointer } from './quota-sweep.mjs';
 import { runBounded, killTree } from './lib/quota-sweep-process.mjs';
 import { interactiveCodex, wslPath } from './lib/quota-sweep-host.mjs';
 import { decideSweep, resetKey, sameReset } from './lib/quota-windows.mjs';
@@ -90,6 +90,45 @@ function worktreeFixture(t) {
   const run = (_exe, args) => args[0] === 'rev-parse' ? 'base' : '';
   return { home, tree, sharedPointer, eperm, run };
 }
+test('prepareTree は dirty を commit・push してから新ブランチへ進む', t => {
+  const { home } = worktreeFixture(t); const calls = []; let statuses = 0;
+  const run = (_exe, args) => {
+    calls.push(args);
+    if (args[0] === 'status') return statuses++ === 0 ? ' M tools/work.mjs' : '';
+    if (args[0] === 'branch') return 'quota-sweep/prior';
+    if (args[0] === 'rev-parse') return 'base';
+    return '';
+  };
+  assert.doesNotThrow(() => prepareTree({ home, provider: 'codex', run, previous: null }));
+  const verbs = calls.map(args => args[0] === '-c' ? 'commit' : args[0]);
+  assert.ok(verbs.indexOf('commit') >= 0);
+  assert.ok(verbs.indexOf('commit') < verbs.indexOf('push'));
+  assert.ok(verbs.indexOf('push') < verbs.indexOf('checkout'));
+  assert.equal(statuses, 2);
+  assert.deepEqual(calls.find(args => args[0] === 'add'), ['add', '-A', '--', '.', ':!.loop']);
+});
+test('prepareTree は救済 commit 後も dirty なら従来メッセージで停止する', t => {
+  const { home } = worktreeFixture(t);
+  const run = (_exe, args) => args[0] === 'status' ? ' M tools/work.mjs' : args[0] === 'branch' ? 'quota-sweep/prior' : '';
+  assert.throws(() => prepareTree({ home, provider: 'codex', run, previous: null }), /Uncommitted prior work preserved in quota-sweep-repo; reconcile before starting a new branch/);
+});
+test('preserveDirtyTree は push 失敗を warning にしてローカル commit を保持する', t => {
+  const { tree } = worktreeFixture(t); const logs = [];
+  const result = preserveDirtyTree({ tree, now: () => Date.UTC(2026, 9, 24, 1, 2, 3), log: text => logs.push(text), run: (_exe, args) => {
+    if (args[0] === 'branch') return 'quota-sweep/prior';
+    if (args[0] === 'push') throw new Error('offline');
+    return '';
+  } });
+  assert.deepEqual(result, { branch: 'quota-sweep/prior', pushed: false, warning: 'preserved locally but push failed: offline' });
+  assert.match(logs[0], /push failed: offline/);
+});
+test('preserveDirtyTree は detached HEAD に rescue ブランチを作る', t => {
+  const { tree } = worktreeFixture(t); const calls = [];
+  const result = preserveDirtyTree({ tree, now: () => Date.UTC(2026, 9, 24, 1, 2, 3), run: (_exe, args) => { calls.push(args); return ''; } });
+  assert.equal(result.branch, 'quota-sweep/rescue-20261024-010203');
+  assert.deepEqual(calls[1], ['switch', '-c', result.branch]);
+  assert.equal(result.pushed, true);
+});
 test('readWorktreePointer/writeWorktreePointer は EPERM のあと chmod して再試行する', t => {
   const file = path.join(temp(t), '.git');
   let reads = 0, writes = 0, chmods = 0;
@@ -124,8 +163,47 @@ function context(t, child) {
   fs.writeFileSync(path.join(home, '.claude/quota-sweep-goals.md'), `- [ ] ${DEFAULT_GOAL}\n`);
   const state = {};
   return { home, tree, state, save: () => {}, windows: async () => windows, active: async () => false, log: () => {}, env: {}, now: () => now, claudeExe: 'fixture', sleep: async () => {},
-    prepareTree: () => ({ tree, branch: 'quota-sweep/test', base: 'base' }), command: (_exe, args) => args[0] === 'branch' ? 'quota-sweep/test' : '0', runChild: child, notify: async () => {} };
+    prepareTree: () => ({ tree, branch: 'quota-sweep/test', base: 'base' }), command: (_exe, args) => args[0] === 'branch' ? 'quota-sweep/test' : args[0] === 'rev-list' ? '0' : '', runChild: child, notify: async () => {} };
 }
+test('runSweep は FINAL の未コミット作業を救済して同じ実行で配信する', async t => {
+  const ctx = context(t, async () => ({ code: 0, stdout: JSON.stringify({ result: 'FINAL' }) }));
+  const calls = [], logs = []; let committed = false;
+  ctx.log = message => logs.push(message);
+  ctx.command = (_exe, args) => {
+    calls.push(args);
+    if (args[0] === 'branch') return 'quota-sweep/test';
+    if (args[0] === 'status') return committed ? '' : ' M tools/work.mjs';
+    if (args.includes('commit')) committed = true;
+    if (args[0] === 'rev-list') return committed ? '1' : '0';
+    if (args[0] === 'pr' && args[1] === 'create') return 'https://github.com/example/repo/pull/1';
+    return '';
+  };
+  await runSweep(decision, ctx);
+  const row = ctx.state.lastRun.claude[decision.resetsAt];
+  assert.equal(committed, true);
+  assert.equal(row.outcome, 'final');
+  assert.equal(row.prUrl, 'https://github.com/example/repo/pull/1');
+  assert.ok(calls.findIndex(args => args.includes('commit')) < calls.findIndex(args => args[0] === 'rev-list'));
+  assert.deepEqual(calls.find(args => args[0] === 'push'), ['push', '-u', 'origin', 'quota-sweep/test']);
+  assert.ok(logs.some(message => message.includes('preserved final uncommitted work')));
+});
+test('runSweep は終了時の救済失敗をログに残し outcome を変えない', async t => {
+  const ctx = context(t, async () => ({ code: 0, stdout: JSON.stringify({ result: 'FINAL' }) }));
+  const logs = [], calls = [];
+  ctx.log = message => logs.push(message);
+  ctx.command = (_exe, args) => {
+    calls.push(args);
+    if (args[0] === 'branch') return 'quota-sweep/test';
+    if (args[0] === 'status') return ' M tools/work.mjs';
+    if (args.includes('commit')) throw new Error('commit failed');
+    if (args[0] === 'rev-list') return '0';
+    return '';
+  };
+  await runSweep(decision, ctx);
+  assert.equal(ctx.state.lastRun.claude[decision.resetsAt].outcome, 'final');
+  assert.ok(logs.some(message => message.includes('final dirty-tree preservation failed: commit failed')));
+  assert.equal(calls.some(args => args[0] === 'push'), false);
+});
 test('fallback contract after generator failure, then final; ledger and usage persisted', async t => {
   let calls = 0;
   const ctx = context(t, async () => ++calls === 1 ? { code: 1, stdout: '' } : { code: 0, stdout: JSON.stringify({ result: 'FINAL', usage: { input_tokens: 10, output_tokens: 2 } }) });
@@ -267,6 +345,7 @@ test('external rescue branch switch stops ticks and never pushes the wrong ref',
   await runSweep(decision, ctx);
   assert.equal(ctx.state.lastRun.claude[decision.resetsAt].outcome, 'failed');
   assert.equal(commands.some(c => c[1] === 'push'), false);
+  assert.equal(commands.some(c => c.includes('commit') || c[1] === 'add'), false);
 });
 
 test('reset jitter across a minute boundary keeps one identity', () => {

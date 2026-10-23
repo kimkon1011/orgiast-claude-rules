@@ -178,6 +178,25 @@ export function writeWorktreePointer(file, value, { writeFile = fs.writeFileSync
   }
 }
 
+export function preserveDirtyTree({ tree, run, log = () => {}, now = Date.now }) {
+  const stamp = new Date(now()).toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+  let branch = run('git', ['branch', '--show-current'], tree);
+  if (!branch) {
+    branch = `quota-sweep/rescue-${stamp}`;
+    run('git', ['switch', '-c', branch], tree);
+  }
+  run('git', ['add', '-A', '--', '.', ':!.loop'], tree);
+  run('git', ['-c', 'user.name=quota-sweep', '-c', 'user.email=quota-sweep@localhost', 'commit', '--no-verify', '-m', `chore(quota-sweep): preserve uncommitted work ${stamp}`], tree);
+  let pushed = true, warning = null;
+  try { run('git', ['push', '-u', 'origin', branch], tree); }
+  catch (error) {
+    pushed = false;
+    warning = `preserved locally but push failed: ${error.message}`;
+    log(`quota-sweep: ${warning}`);
+  }
+  return { branch, pushed, warning };
+}
+
 export function prepareTree({ home, provider, run, previous, needRelativePointer = false, io = {}, log = () => {} }) {
   const shared = path.join(home, '.claude', 'nightly-repo'), tree = path.join(home, '.claude', 'quota-sweep-repo');
   run('git', ['fetch', 'origin', 'main', '--quiet'], shared);
@@ -201,8 +220,13 @@ export function prepareTree({ home, provider, run, previous, needRelativePointer
     if (run('git', ['branch', '--show-current'], tree) !== previous.branch) throw new Error('Interrupted branch changed; preserve worktree for recovery');
     return { tree, branch: previous.branch, base: previous.base, ...(pointerWarning ? { pointerWarning } : {}) };
   }
-  const dirty = run('git', ['status', '--porcelain', '--', '.', ':!.loop'], tree);
-  if (dirty) throw new Error('Uncommitted prior work preserved in quota-sweep-repo; reconcile before starting a new branch');
+  let dirty = run('git', ['status', '--porcelain', '--', '.', ':!.loop'], tree);
+  if (dirty) {
+    const preserved = preserveDirtyTree({ tree, run, log });
+    dirty = run('git', ['status', '--porcelain', '--', '.', ':!.loop'], tree);
+    if (dirty) throw new Error('Uncommitted prior work preserved in quota-sweep-repo; reconcile before starting a new branch');
+    log(`quota-sweep: preserved uncommitted work on ${preserved.branch}${preserved.pushed ? '' : ' (local only)'}`);
+  }
   run('git', ['checkout', '--detach', 'origin/main'], tree);
   const branch = `quota-sweep/${new Date().toISOString().replace(/[-:]/g, '').slice(0, 13).replace('T', '-')}-${provider}-${Date.now().toString(36)}`;
   run('git', ['switch', '-c', branch], tree);
@@ -347,6 +371,16 @@ export async function runSweep(decision, context) {
     }
   } catch (error) { reason = error.message; failureKey = error.failureKey || `${error.code || error.name}:${error.message.replaceAll(home, '~')}`; log(`${provider} failed: ${reason}`); outcome = 'failed'; }
   finally {
+    if (tree && branch) {
+      try {
+        // Another session may have switched branches; only preserve this run's work.
+        const currentBranch = run('git', ['branch', '--show-current'], tree);
+        if (currentBranch === branch && run('git', ['status', '--porcelain', '--', '.', ':!.loop'], tree)) {
+          const preserved = preserveDirtyTree({ tree, run, log, now });
+          log(`quota-sweep: preserved final uncommitted work on ${preserved.branch}${preserved.pushed ? '' : ' (local only)'}`);
+        }
+      } catch (error) { log(`quota-sweep: final dirty-tree preservation failed: ${error.message}`); }
+    }
     if (tree && branch) {
       try {
         if (run('git', ['branch', '--show-current'], tree) !== branch) throw new Error('Worktree branch changed externally; no push attempted');

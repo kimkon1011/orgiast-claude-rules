@@ -37,7 +37,9 @@ export function runPaymentRules(snapshot, footprint = {}, patterns) {
     }
     if (!allow.has(String(p.id))) {
       const sources = ['gmail', 'drive', 'discord'].map(k => fp[k]);
-      if (genericPartner(p.name, patterns)) unknown('R02', p, '汎用取引先名のため照合不能');
+      if (genericPartner(p.name, patterns)) {
+        if (!snapshot.payeeResolution) unknown('R02', p, '汎用取引先名のため照合不能（保存データに実名解決なし）');
+      }
       else if (!sources.some(s => s?.count > 0)) {
         if (sources.every(s => s?.status === 'ok' && s.controlVerified === true && s.count === 0)) add('R02', sum >= t.no_footprint_high ? 'high' : 'medium', p, `3ソースの形跡なし（検証済みの検索範囲内）: ${sum}円`);
         else unknown('R02', p, '形跡未照合: skip/失敗/対照未確認のソースあり');
@@ -84,8 +86,10 @@ export function runPaymentRules(snapshot, footprint = {}, patterns) {
   for (const ps of banks.values()) if (new Set(ps.map(p => p.id)).size > 1) add('R06', 'high', ps[0], `同一銀行・支店・口座: ${ps.map(p => p.name).join(' / ')} (${ps[0].bank.account_number})`);
   for (const w of snapshot.wallet_txns || []) if (w.entry_side === 'expense' && w.date >= start && w.date <= end) {
     const subject = { id: '', name: (snapshot.walletables || []).find(x => x.id === w.walletable_id && x.type === w.walletable_type)?.name || '口座明細' };
-    if (w.status === 1 && now - Date.parse(w.date) >= t.unregistered_days * DAY && w.amount >= t.unregistered_min) add('R10', 'medium', subject, `長期未消込: ${w.date} ${w.amount}円`);
+    const before = findings.length;
+    if (w.status === 1 && now - Date.parse(w.date) >= t.unregistered_days * DAY && w.amount >= t.unregistered_min) add('R10', 'medium', subject, `明細あり・取引未登録（freee 消込待ち）: ${w.date} ${w.amount}円`);
     if (w.status === 3 && w.amount >= t.ignored_min) add('R10', 'info', subject, `無視された出金: ${w.date} ${w.amount}円`);
+    for (const f of findings.slice(before)) Object.assign(f, { amount: w.amount, date: w.date, walletableId: w.walletable_id, walletableType: w.walletable_type, walletStatus: w.status });
   }
   if (payments.length >= t.benford_min_count) {
     const observed = Array(9).fill(0);

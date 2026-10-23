@@ -35,10 +35,11 @@ export function createGmailSource({ google, fetchImpl = fetch, signal } = {}) {
       const stubs = list.messages || [];
       count += stubs.length;
       lowerBound ||= stubs.length >= 100;
-      for (const stub of stubs) {
-        let msg;
-        try { msg = compactMessage(await request(`/messages/${encodeURIComponent(stub.id)}?format=metadata&metadataHeaders=Date&metadataHeaders=From&metadataHeaders=Subject`)); }
-        catch (e) { if ([404, 410].includes(e.status)) continue; throw e; }
+      const metadata = await mapLimit(stubs, 3, async stub => {
+        try { return compactMessage(await request(`/messages/${encodeURIComponent(stub.id)}?format=metadata&metadataHeaders=Date&metadataHeaders=From&metadataHeaders=Subject`)); }
+        catch (e) { if ([404, 410].includes(e.status)) return null; throw e; }
+      });
+      for (const msg of metadata.filter(Boolean)) {
         const match = [msg.subject, msg.from].some(text => text.normalize('NFKC').toLowerCase().includes(term.toLowerCase()));
         const date = Number.isFinite(Date.parse(msg.date)) ? new Date(msg.date).toISOString() : '';
         if (!representative || match && !preferred || match === preferred && date > latest) {
@@ -124,15 +125,17 @@ export function createDiscord({ token, fetchImpl = fetch, signal, stateDir, part
     return members;
   } };
 }
-export async function buildFootprint(partners, { window = 180, sources, patterns = {}, state = {}, stateDir = path.join(os.homedir(), '.claude/internal-audit'), now = new Date() } = {}) {
+export async function buildFootprint(partners, { window = 180, sources, patterns = {}, state = {}, stateDir = path.join(os.homedir(), '.claude/internal-audit'), now = new Date(), onProgress = () => {} } = {}) {
   const file = path.join(stateDir, 'footprint-cache.json'), cache = await readJson(file, {});
   const month = now.toISOString().slice(0, 7);
+  let saved = Promise.resolve(), completed = 0;
   const entries = await mapLimit(partners, 3, async p => {
     const term = searchTerm(p.name), key = `${p.id}+${month}`, cached = cache[key];
     const fp = {};
     for (const name of ['gmail', 'drive', 'discord']) {
-      if (genericPartner(p.name, patterns)) { fp[name] = { status: 'unverified', count: null, reason: '汎用取引先名のため照合不能' }; continue; }
-      if (!sources[name]) { fp[name] = { status: 'unverified', count: null, reason: 'skip 指定' }; continue; }
+      if (genericPartner(p.name, patterns)) { fp[name] = { status: 'unverified', excluded: true, count: null, reason: '汎用取引先名（実名解決の結果を別表に掲載）' }; continue; }
+      if (!sources[name]) { fp[name] = { status: 'unverified', excluded: true, count: null, reason: 'skip 指定' }; continue; }
+      if (term.length < 2) { fp[name] = { status: 'unverified', excluded: true, count: null, reason: '検索語が短すぎます' }; continue; }
       if (cached?.term === term && cached.window === window && +now - Date.parse(cached.results?.[name]?.fetchedAt || cached.at) < 30 * DAY && (cached.results?.[name]?.status === 'ok' || cached.results?.[name]?.countKind?.includes('推定'))) { fp[name] = { ...cached.results[name] };
         if (name === 'gmail' && fp[name].countKind?.includes('推定')) {
           fp[name] = { ...fp[name], count: null, status: 'unverified', controlVerified: false, reason: '旧キャッシュは推定件数のため件数未確認（再取得を省略）' };
@@ -143,6 +146,9 @@ export async function buildFootprint(partners, { window = 180, sources, patterns
       fp[name].fetchedAt = now.toISOString();
     }
     cache[key] = { at: cached?.at || now.toISOString(), term, window, results: fp };
+    saved = saved.then(() => writePrivate(file, cache, state.secrets || []));
+    await saved;
+    onProgress(++completed, partners.length);
     return [String(p.id), fp];
   });
   // Same queries against paid vendors constitute positive controls. Zero-only runs are never evidence of absence.
@@ -176,7 +182,7 @@ export function normalizeSavedFootprint(snapshot, patterns, sources) {
     if (!fp) continue;
     for (const name of ['gmail', 'drive', 'discord']) {
       if (genericPartner(partner.name, patterns)) {
-        fp[name] = { status: 'unverified', count: null, controlVerified: false, reason: '汎用取引先名のため照合不能' };
+        fp[name] = { status: 'unverified', excluded: true, count: null, controlVerified: false, reason: '汎用取引先名（実名解決の結果を別表に掲載）' };
         affected.add(name);
       } else if (name === 'gmail' && fp[name]?.countKind?.includes('推定')) {
         fp[name] = { ...fp[name], status: 'unverified', count: null, controlVerified: false, reason: '旧snapshotは推定件数のため件数未確認（再取得を省略）' };
@@ -184,9 +190,26 @@ export function normalizeSavedFootprint(snapshot, patterns, sources) {
       }
     }
   }
-  for (const name of affected) {
-    const results = Object.values(snapshot.footprint).map(fp => fp[name]).filter(Boolean);
-    sources[name] = { status: 'unverified', count: results.reduce((sum, r) => sum + (r.count || 0), 0),
-      reason: [...new Set(results.filter(r => r.status !== 'ok').map(r => r.reason))].join('; ') };
+  Object.assign(sources, summarizeFootprint([...snapshot.partners, ...(snapshot.payeeResolution?.payees || []).filter(p => !p.internal)], snapshot.footprint || {}, patterns));
+}
+export function summarizeFootprint(partners, footprint, patterns = {}) {
+  const sources = {};
+  for (const source of ['gmail','drive','discord']) {
+    const eligible = partners.filter(p => !genericPartner(p.name, patterns) && searchTerm(p.name).length >= 2)
+      .map(p => footprint[String(p.id)]?.[source]).filter(r => r && !r.excluded && r.reason !== 'skip 指定');
+    const good = eligible.filter(r => r.status === 'ok').length, failed = eligible.length - good;
+    sources[source] = { status: !eligible.length ? 'unverified' : !failed ? 'ok' : good ? 'partial' : 'failed',
+      count: eligible.reduce((n, r) => n + (r.count || 0), 0), eligible: eligible.length, ok: good, failed,
+      reason: !eligible.length ? '照合対象なし（skip・汎用名・短い語は対象外）' : `${good}/${eligible.length}社成功` + (failed ? `。${[...new Set(eligible.filter(r => r.status !== 'ok').map(r => r.reason || '未確認'))].join('; ')}` : '。取得範囲内・対照確認を含む') };
   }
+  return sources;
+}
+export function footprintExclusions(snapshot, patterns) {
+  return snapshot.partners.flatMap(p => {
+    const rows = snapshot.payments.filter(r => String(r.partner_id) === String(p.id) && r.date >= snapshot.window.start && r.date <= snapshot.window.end);
+    if (!rows.length) return [];
+    const reasons = genericPartner(p.name, patterns) ? ['汎用取引先名（実名解決の結果は別表）'] : searchTerm(p.name).length < 2 ? ['検索語が短すぎます'] :
+      ['gmail','drive','discord'].filter(s => snapshot.footprint?.[p.id]?.[s]?.excluded).map(s => `${s}: ${snapshot.footprint[p.id][s].reason}`);
+    return reasons.length ? [{ name: p.name, reason: reasons.join('; '), amount: rows.reduce((n, r) => n + r.amount, 0) }] : [];
+  });
 }

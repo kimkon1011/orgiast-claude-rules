@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { USERS } from './common.mjs';
 import { diffExternalShares, analyzeAdmin, scanAdmin, ADMIN_SCOPE, scanDrive } from './exfil.mjs';
 const {thresholds}=JSON.parse(fs.readFileSync(new URL('../../internal-audit-patterns.json',import.meta.url)));
 test('external sharing diff, anyone medium, exact internal domain and role change',()=>{
@@ -39,14 +40,14 @@ test('first complete scan builds baseline; later modified-only run reports only 
   const queries = [];
   const google = { request: async (url, user) => {
     queries.push(new URL(url).searchParams.get('q'));
-    return { files: [{ id: user, name: 'file', webViewLink: 'https://drive.google.com/file/d/test/view',
+    return { files: [{ id: user, modifiedTime: '2026-10-08T00:00:00Z', name: 'file', webViewLink: 'https://drive.google.com/file/d/test/view',
       permissions: [{ id: 'old', type: 'anyone', role: 'reader' }, ...(added ? [{ id: 'new', type: 'domain', domain: 'example.invalid', role: 'reader' }] : [])] }] };
   } };
   const first = await scanDrive({ google, state });
   assert.equal(first.findings.length, 1); assert.equal(first.findings[0].severity, 'info');
   assert.equal(first.baseline.summary.reduce((n, r) => n + r.count, 0), 3);
   assert.ok(queries[0].includes("visibility = 'anyoneWithLink'"));
-  assert.ok(Object.values(state.driveScan).every(c => c.completedAt && c.modifiedCursor && !c.pageToken));
+  assert.ok(Object.values(state.driveScan).every(c => c.completedAt && c.completedCursor && !c.pageToken));
   added = true; queries.length = 0;
   const next = await scanDrive({ google, state });
   assert.equal(next.findings.filter(f => f.severity === 'high').length, 3);
@@ -57,19 +58,20 @@ test('first complete scan builds baseline; later modified-only run reports only 
   for (const key of next.acknowledgedKeys) delete state.pendingExternalFindings[key];
   assert.equal((await scanDrive({ google, state })).findings.length, 1);
 });
-test('partial ownership baseline resumes exact page without modified cursor advancement', async () => {
+test('partial ownership baseline resumes by timestamp without a persisted page token', async () => {
   let clock = Date.parse('2026-10-09'), resume = false;
   const state = {}, calls = [];
   const google = { request: async (url, user) => {
     const u = new URL(url); calls.push([user, u.searchParams.get('pageToken')]);
     if (u.searchParams.get('q').includes('visibility')) return { files: [] };
-    if (!resume) { clock += 100; return { files: [{ id: user, permissions: [{ id: 'a', type: 'anyone', role: 'reader' }] }], nextPageToken: 'resume-here' }; }
-    assert.equal(u.searchParams.get('pageToken'), 'resume-here');
+    if (!resume) { clock += 100; return { files: [{ id: user, modifiedTime: '2026-10-08T00:00:00Z', permissions: [{ id: 'a', type: 'anyone', role: 'reader' }] }], nextPageToken: 'resume-here' }; }
+    assert.equal(u.searchParams.get('pageToken'), null);
+    assert.match(u.searchParams.get('q'), /modifiedTime <= '2026-10-08T00:00:00Z'/);
     return { files: [] };
   } };
   const first = await scanDrive({ google, state, userBudgetMs: 100, nowMillis: () => clock });
   assert.equal(first.findings.length, 1);
-  assert.ok(Object.values(state.driveScan).every(c => c.pageToken === 'resume-here' && !c.completedAt && !c.modifiedCursor));
+  assert.ok(Object.values(state.driveScan).every(c => !('pageToken' in c) && !c.completedAt && c.modifiedCursor === '2026-10-08T00:00:00Z'));
   assert.ok(Object.values(first.sources).every(s => s.reason.includes('再開位置あり・次回継続')));
   resume = true;
   const second = await scanDrive({ google, state, userBudgetMs: 1000, nowMillis: () => clock });
@@ -78,7 +80,7 @@ test('partial ownership baseline resumes exact page without modified cursor adva
 });
 test('missing knownExternalShares suppresses file findings even with completed legacy cursor', async () => {
   const state = { driveScan: { 'kim@orgiast.jp': { completedAt: '2026-10-08', modifiedCursor: '2026-10-08T00:00:00Z' } } };
-  const r = await scanDrive({ state, google: { request: async () => ({ files: [{ id: 'f', permissions: [{ type: 'anyone' }] }] }) } });
+  const r = await scanDrive({ state, google: { request: async () => ({ files: [{ id: 'f', modifiedTime: '2026-10-08T00:00:00Z', permissions: [{ type: 'anyone' }] }] }) } });
   assert.ok(r.findings.every(f => f.severity === 'info'));
 });
 
@@ -88,7 +90,7 @@ test('partial incremental discoveries wait until a later complete run and surviv
   const google = { request: async (url, user) => {
     const u = new URL(url);
     if (u.searchParams.get('q').includes('visibility')) return { files: [] };
-    if (partial && user === 'kim@orgiast.jp') { clock += 100; return { files: [{ id: 'new-file', name: 'new', permissions: [{ id: 'p', type: 'anyone', role: 'reader' }] }], nextPageToken: 'remaining' }; }
+    if (partial && user === 'kim@orgiast.jp') { clock += 100; return { files: [{ id: 'new-file', modifiedTime: '1970-01-01T00:00:00.001Z', name: 'new', permissions: [{ id: 'p', type: 'anyone', role: 'reader' }] }], nextPageToken: 'remaining' }; }
     return { files: [] };
   } };
   await scanDrive({ google, state, nowMillis: () => clock });
@@ -102,4 +104,58 @@ test('partial incremental discoveries wait until a later complete run and surviv
   const complete = await scanDrive({ google, state, nowMillis: () => clock });
   assert.equal(complete.findings.filter(f => f.severity === 'medium').length, 1);
   assert.equal(complete.acknowledgedKeys.length, 1);
+});
+
+test('expired in-run token recovers once from consumed timestamp; legacy tokens are never sent or saved', async () => {
+  const state = { drivePriorityScan: Object.fromEntries(USERS.map(u => [u, { pageToken: 'expired-last-week', startedAt: '2026-10-01' }])) };
+  const calls = [], saves = []; let failed = false;
+  const date = '2026-10-01T00:00:00Z';
+  const google = { request: async (url, user) => {
+    const u = new URL(url), token = u.searchParams.get('pageToken'), q = u.searchParams.get('q');
+    calls.push({ user, token, q });
+    assert.notEqual(token, 'expired-last-week');
+    if (user !== 'kim@orgiast.jp' || !q.includes('visibility')) return { files: [] };
+    if (token && !failed) { failed = true; throw Object.assign(new Error('expired'), { status: 400 }); }
+    if (q.includes(`<= '${date}'`)) return { files: [{ id: 'same', modifiedTime: date, permissions: [] }, { id: 'second', modifiedTime: date, permissions: [] }] };
+    return { files: [{ id: 'same', modifiedTime: date, permissions: [] }], nextPageToken: 'in-run-only' };
+  } };
+  const result = await scanDrive({ google, state, save: async s => saves.push(JSON.stringify(s)) });
+  assert.equal(result.sources['drive-sharing:kim@orgiast.jp'].status, 'ok');
+  assert.equal(state.drivePriorityScan['kim@orgiast.jp'].scannedCount, 2);
+  assert.ok(saves.every(s => !s.includes('pageToken'))); assert.ok(calls.some(c => c.token === 'in-run-only'));
+  assert.ok(state.drivePriorityScan['kim@orgiast.jp'].completedAt);
+});
+test('a second HTTP 400 is surfaced without infinite recovery or advancing completion', async () => {
+  const state = {}; let calls = 0;
+  const google = { request: async url => { calls++; if (new URL(url).searchParams.has('pageToken')) throw Object.assign(new Error('expired'), { status: 400 }); return { files: [{ id: 'same', modifiedTime: '2026-10-01T00:00:00Z', permissions: [] }], nextPageToken: 'again' }; } };
+  const r = await scanDrive({ google, state });
+  assert.equal(calls, 12); assert.ok(Object.values(r.sources).every(s => s.status === 'unverified' && s.reason.includes('HTTP 400')));
+  assert.ok(Object.values(state.drivePriorityScan).every(c => !c.completedAt && c.inProgress && !('pageToken' in c)));
+});
+test('timestamp continuation includes equal-time unseen IDs across runs; full completion starts delta above watermark', async () => {
+  const state = {}; let clock = Date.parse('2026-10-23'), round = 1; const queries = [];
+  const date = '2026-10-01T00:00:00Z', older = '2026-09-01T00:00:00Z';
+  const file = (id, modifiedTime) => ({ id, modifiedTime, permissions: [] });
+  const google = { request: async (url, user) => {
+    const u = new URL(url), q = u.searchParams.get('q'); queries.push({ q, token: u.searchParams.get('pageToken'), user });
+    if (q.includes('visibility')) return { files: [] };
+    if (round === 1) { clock += 100; return { files: [file('first', date)], nextPageToken: 'old-token' }; }
+    if (round === 2) return { files: [file('first', date), file('equal-new', date), file('older', older)] };
+    return { files: [] };
+  } };
+  await scanDrive({ google, state, userBudgetMs: 100, nowMillis: () => clock });
+  assert.ok(Object.values(state.driveScan).every(c => c.modifiedCursor === date && c.scannedCount === 1));
+  round = 2; queries.length = 0;
+  await scanDrive({ google, state, nowMillis: () => clock });
+  assert.ok(queries.every(q => q.token === null && q.q.includes(`modifiedTime <= '${date}'`)));
+  assert.ok(Object.values(state.driveScan).every(c => c.scannedCount === 3 && c.modifiedCursor === older && c.completedAt));
+  round = 3; queries.length = 0;
+  await scanDrive({ google, state, nowMillis: () => clock });
+  assert.ok(queries.every(q => q.q.includes('modifiedTime >')));
+});
+
+test('a previously redacted timestamp is never sent to Drive and forces a conservative new baseline',async()=>{
+ const state={knownExternalShares:[],driveScan:{[USERS[0]]:{version:2,modifiedCursor:'2026-10-09T08:09:11.[REDACTED]Z',inProgress:true,completedAt:'2026-10-01'}}};
+ const queries=[];const r=await scanDrive({state,google:{request:async u=>{queries.push(new URL(u).searchParams.get('q'));return{files:[]};}}});
+ assert.ok(queries.every(q=>!q.includes('[REDACTED]')));assert.ok(Object.values(r.sources).every(s=>s.status==='ok'));assert.ok(r.findings.every(f=>f.severity==='info'));
 });

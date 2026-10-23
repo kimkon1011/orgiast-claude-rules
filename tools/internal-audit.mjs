@@ -5,10 +5,13 @@ import path from 'node:path';
 import os from 'node:os';
 import { isEntry } from './is-entry.mjs';
 import { notifyKim } from './notify-kim.mjs';
-import { ROOT, DAY, dateOnly, USERS, UNAVAILABLE_USERS, SEVERITIES, cell, parseEnv, safeText, maskNumbers, readJson, writePrivate, scrub, reason, auditError, runProcess } from './lib/internal-audit/common.mjs';
+import { ROOT, DAY, dateOnly, USERS, UNAVAILABLE_USERS, SEVERITIES, cell, parseEnv, envSecretValues, safeText, maskNumbers, readJson, writePrivate, scrub, reason, auditError, runProcess } from './lib/internal-audit/common.mjs';
 import { collectFreee, getReadOnlyToken } from './lib/internal-audit/collect-freee.mjs';
 import { runPaymentRules } from './lib/internal-audit/rules-payments.mjs';
-import { createGoogle, createGmailSource, createDriveSource, createDiscord, buildFootprint, cachedStaff, normalizeSavedFootprint } from './lib/internal-audit/footprint.mjs';
+import { createGoogle, createGmailSource, createDriveSource, createDiscord, buildFootprint, cachedStaff, normalizeSavedFootprint, summarizeFootprint, footprintExclusions } from './lib/internal-audit/footprint.mjs';
+import { collectPayeeSheets } from './lib/internal-audit/sheets-source.mjs';
+import { collectPurchasing, resolvePayees, runPayeeRules } from './lib/internal-audit/resolve-payees.mjs';
+import { renderPayees, renderR10 } from './lib/internal-audit/payee-report.mjs';
 import { scanDrive, scanAdmin } from './lib/internal-audit/exfil.mjs';
 import { searchLeaks, webSearch, askJson, safeUrl } from './lib/internal-audit/leak-search.mjs';
 import { refreshPatterns } from './lib/internal-audit/patterns-refresh.mjs';
@@ -55,25 +58,29 @@ export function renderReport({ snapshot, findings, unverified = [], sources, can
     `対象: ${snapshot.window.start}〜${snapshot.window.end} / snapshot取得: ${at}${replay ? ' / 再評価（保存された形跡を使用）' : ''}`,
     `取引先 ${snapshot.partners.length} / 経費取引 ${snapshot.deals.length}（比較履歴を含む） / 対象期間の決済 ${payments.length} / 口座明細 ${snapshot.wallet_txns.length}`,
     `high ${counts.high} / medium ${counts.medium} / info ${counts.info}`, '', '## データソースの状態', '', '| ソース | 状態 | 件数 | 理由・範囲 |', '|---|---|---:|---|'];
-  for (const [name, s] of Object.entries(sources)) lines.push(`| ${[name, ({ ok: 'OK', unverified: '未確認', failed: '失敗' })[s.status] || s.status, s.count ?? '—', s.reason || ''].map(cell).join(' | ')} |`);
+  for (const [name, s] of Object.entries(sources)) lines.push(`| ${[name, s.status === 'partial' ? `一部失敗${s.eligible ? `（${s.failed}/${s.eligible} 社）` : ''}` : ({ ok: 'OK', unverified: '未確認', failed: '失敗' })[s.status] || s.status, s.count ?? '—', s.reason || ''].map(cell).join(' | ')} |`);
   lines.push('', '## 未確認データソース', '');
   const missing = Object.entries(sources).filter(([, s]) => s.status !== 'ok');
   if (!missing.length) lines.push('なし（取得範囲内）');
   for (const [name, s] of missing) lines.push(`- ${cell(name)}: ${cell(s.reason)}`);
   lines.push('', '## 取得範囲と制約', '', ...[...(snapshot.coverage?.limitations || []), `Gmail 未照合ユーザー（既知の権限制限のため試行しない）: ${UNAVAILABLE_USERS.join(', ')}`, 'Drive は指定3ユーザーの所有ファイルのみ。初回と走査未完了ユーザーはベースライン構築中。', 'レポートはローカル保存。--notify 時のみ自社 Drive にアップロードしてDMで通知。'].map(s => `- ${cell(s)}`));
   lines.push('', '## ルール別件数', '', '| ルール | 件数 |', '|---|---:|');
-  for (const rule of [...Array.from({ length: 15 }, (_, i) => `R${String(i + 1).padStart(2, '0')}`), 'exfil', 'exfil-admin', 'leak-search']) lines.push(`| ${rule} | ${findings.filter(f => f.rule === rule).length} |`);
+  for (const rule of [...Array.from({ length: 18 }, (_, i) => `R${String(i + 1).padStart(2, '0')}`), 'exfil', 'exfil-admin', 'leak-search']) lines.push(`| ${rule} | ${findings.filter(f => f.rule === rule).length} |`);
   for (const severity of SEVERITIES.slice(0, SEVERITIES.indexOf(minSeverity) + 1)) {
     lines.push('', `## ${severity}`, '', '| ルール | 対象 | 確認の手掛かり |', '|---|---|---|');
-    const rows = findings.filter(f => f.severity === severity);
+    const rows = findings.filter(f => f.severity === severity && f.rule !== 'R10');
     const visible = rows.length > 200 ? rows.slice(0, 199) : rows;
     for (const f of visible) lines.push(`| ${cell(f.rule)} | ${cell(f.subject)} | ${cell(f.detail)}${f.url ? ` ${link('出典', f.url)}${f.owner ? `（**${cell(f.owner)}** で開く）` : ''}` : ''} |`);
     if (rows.length > visible.length) lines.push(`| — | 他 ${rows.length - visible.length} 件 | ${cell(findingsFile)} 参照 |`);
   }
+  renderR10(lines, findings, findingsFile, minSeverity);
+  renderPayees(lines, snapshot, findingsFile === 'findings.jsonl' ? 'payees.jsonl' : findingsFile.replace(/(?:\.findings)?\.jsonl$/, '.payees.jsonl'));
+  lines.push('', '## 形跡照合の対象外', '', '| 取引先名 | 理由 | 期間合計 |', '|---|---|---:|');
+  for (const r of footprintExclusions(snapshot, patterns)) lines.push(`| ${cell(r.name)} | ${cell(r.reason)} | ${r.amount.toLocaleString('en-US')}円 |`);
   renderSharingBaseline(lines, snapshot.externalSharing);
   lines.push('', '## 支払先の仕事の形跡', '', '| 取引先 | Gmail | Drive | Discord |', '|---|---|---|---|');
   for (const p of snapshot.partners) {
-    const fp = snapshot.footprint?.[String(p.id)]; if (!fp) continue;
+    const fp = snapshot.footprint?.[String(p.id)]; if (!fp || Object.values(fp).every(r => r.excluded)) continue;
     lines.push(`| ${cell(p.name)} | ${['gmail','drive','discord'].map(k => { const f = fp[k] || {}; return cell(`${f.countKind?.includes('推定') ? '未確認（旧推定値）' : `${f.count ?? '未照合'}${f.lowerBound ? '+' : ''}`}件 / ${f.status || 'unverified'} / ${f.latest || ''} / ${f.representative || ''} / ${f.reason || ''}${f.controlVerified ? '（対照確認済）' : ''}`); }).join(' | ')} |`);
   }
   lines.push('', '## 支払い判定の未照合', '', '| ルール | 対象 | 理由 |', '|---|---|---|');
@@ -82,7 +89,7 @@ export function renderReport({ snapshot, findings, unverified = [], sources, can
   for (const p of patterns.patterns) lines.push(`| ${cell(p.id)} | ${cell(p.name)} | ${p.status === 'rule' ? `ルール化済み(${p.rules.join(', ')})` : `未ルール化（${p.data_sources.join(', ')} の確認が必要）`} |`);
   lines.push('', '## 今回の新規パターン候補', '', '| パターン | 兆候・判定案 | 実装状況 | 出典 |', '|---|---|---|---|');
   for (const p of candidates) lines.push(`| ${cell(p.name)} | ${cell(`${p.signal} / ${p.rule_sketch}`)} | ${p.rules.length ? `ルール化済み(${p.rules.join(', ')})` : '未ルール化'} | ${link('出典', p.source_url)} |`);
-  return safeText(lines.join('\n') + '\n', secrets);
+  return maskNumbers(safeText(lines.join('\n') + '\n', secrets).replace(/\d{7,}(?=円)/g, n => Number(n).toLocaleString('en-US')));
 }
 export function renderSharingBaseline(lines, baseline) {
   lines.push('', '## 外部共有の現状（ベースライン）', '', baseline?.building ? 'ベースライン構築中（ファイル単位の初回警告は省略）' : '取得済みベースライン', '');
@@ -109,16 +116,17 @@ export function notificationText(findings, reportPath, date) {
 }
 async function checkPaths(options, daily) {
   const sidecar = daily.replace(/\.md$/, '.findings.jsonl');
-  const outputs = [options.out, options.json, daily, sidecar].filter(Boolean).map(p => path.resolve(p));
-  const protectedPaths = [options.snapshot, path.join(ROOT, '.env.local'), path.join(ROOT, 'tools/internal-audit-patterns.json'), ...['state.json','footprint-cache.json','discord-cache.json','pattern-candidates.jsonl','run.lock'].map(n => path.join(options['state-dir'], n))].filter(Boolean).map(p => path.resolve(p));
-  if ([options.out, options.json].filter(Boolean).some(p => path.resolve(p) === path.resolve(sidecar))) throw auditError('検出結果JSONLと出力先が衝突');
+  const payeesFile = daily.replace(/\.md$/, '.payees.jsonl');
+  const outputs = [options.out, options.json, daily, sidecar, payeesFile].filter(Boolean).map(p => path.resolve(p));
+  const protectedPaths = [options.snapshot, path.join(ROOT, '.env.local'), path.join(ROOT, 'tools/internal-audit-patterns.json'), ...['state.json','footprint-cache.json','discord-cache.json','pattern-candidates.jsonl','payee-sheet-cache.json','run.lock'].map(n => path.join(options['state-dir'], n))].filter(Boolean).map(p => path.resolve(p));
+  if ([options.out, options.json].filter(Boolean).some(p => [sidecar, payeesFile].some(f => path.resolve(p) === path.resolve(f)))) throw auditError('検出結果JSONLと出力先が衝突');
   const identities = new Map();
   for (const p of [...protectedPaths, ...outputs]) {
     if (/(^|[/\\])(?:\.env(?:\.[^/\\]*)?|\.git)(?:[/\\]|$)/.test(p)) { if (outputs.includes(p)) throw auditError('資格情報・Git 管理ファイルへの出力は禁止'); }
     try { const stat = await fs.lstat(p); if (stat.isSymbolicLink()) throw auditError('入出力 symlink は使用できません'); identities.set(p, `${stat.dev}:${stat.ino}`); } catch (e) { if (e.code !== 'ENOENT') throw e; }
   }
   for (const output of [options.out, options.json].filter(Boolean).map(p => path.resolve(p))) {
-    if (identities.has(output) && identities.get(output) === identities.get(path.resolve(sidecar))) throw auditError('検出結果JSONLと出力先が衝突');
+    if (identities.has(output) && [sidecar, payeesFile].some(f => identities.get(output) === identities.get(path.resolve(f)))) throw auditError('検出結果JSONLと出力先が衝突');
   }
   for (const output of outputs) if (protectedPaths.some(p => p === output || identities.has(p) && identities.get(p) === identities.get(output))) throw auditError('入力・状態・出力ファイルの衝突');
   if (options.json && (path.resolve(options.json) === path.resolve(daily) || identities.has(path.resolve(options.json)) && identities.get(path.resolve(options.json)) === identities.get(path.resolve(daily)))) throw auditError('JSON と日次レポートは別ファイルを指定');
@@ -131,10 +139,10 @@ export async function main(argv = process.argv.slice(2)) {
   await checkPaths(options, daily);
   const defaultHome = process.platform === 'win32' ? os.homedir() : '/mnt/c/Users/uers';
   // The weekly task runs from ~/.claude/nightly-repo, which has no .env.local: fall back to the
-  // main working tree the same way tools/lib/freee-auth.mjs does. Every value read is a secret.
-  const env = parseEnv(await optionalText(path.join(ROOT, '.env.local'))), secrets = Object.values(env).filter(Boolean);
+  // main working tree the same way tools/lib/freee-auth.mjs does. Credentials and non-port env values are treated as secrets.
+  const env = parseEnv(await optionalText(path.join(ROOT, '.env.local'))), secrets = envSecretValues(env);
   const fallbackEnv = parseEnv(await optionalText(path.join(defaultHome, 'orgiast-main', '.env.local')));
-  secrets.push(...Object.values(fallbackEnv).filter(Boolean));
+  secrets.push(...envSecretValues(fallbackEnv));
   const databaseUrl = process.env.PURCHASING_APP_DATABASE_URL || env.PURCHASING_APP_DATABASE_URL || fallbackEnv.PURCHASING_APP_DATABASE_URL;
   if (databaseUrl) secrets.push(databaseUrl);
   const keyPath = process.env.GOOGLE_SA_KEY || path.join(defaultHome, 'Downloads/CLAUDE.md配布/aujust-sales-automation/.gcp/sheets-sa.json');
@@ -182,15 +190,6 @@ export async function main(argv = process.argv.slice(2)) {
       const paidPartners = snapshot.partners.filter(p => active.has(p.id));
       console.error(`internal-audit: 形跡照合 ${paidPartners.length}取引先`);
       const discord = createDiscord({ token, stateDir, partners: paidPartners, now, signal });
-      const adapters = { gmail: createGmailSource({ google, signal }), drive: createDriveSource({ google, now }), discord: discord.search };
-      for (const k of options.skip) delete adapters[k];
-      snapshot.footprint = await buildFootprint(paidPartners, { window: options['window-days'], sources: adapters, patterns, state: { secrets }, stateDir, now });
-      for (const source of ['gmail','drive','discord']) {
-        const results = Object.values(snapshot.footprint).map(f => f[source]);
-        const bad = results.filter(r => r.status !== 'ok');
-        sources[source] = { status: !results.length || bad.length || options.skip.includes(source) ? 'unverified' : 'ok', count: results.reduce((s, r) => s + (r.count || 0), 0), reason: options.skip.includes(source) ? 'skip 指定' : bad.length ? [...new Set(bad.map(r => r.reason))].join('; ') : results.length ? `${paidPartners.length}取引先を照合。正の対照確認済み` : '支払い対象の取引先がありません' };
-      }
-      await checkpoint();
       if (!options.skip.includes('discord')) {
         let cached = [];
         try { cached = await cachedStaff(defaultHome, now); } catch { /* Invalid cache is replaced by the read-only guild listing. */ }
@@ -201,6 +200,25 @@ export async function main(argv = process.argv.slice(2)) {
           sources['discord:members'] = { status: 'ok', count: snapshot.staff.length, reason: `既存検索名簿 ${cached.length}件を先に利用しguild一覧で補完。社員属性・未登録メールは未確認` };
         } catch (e) { sources['discord:members'] = { status: 'unverified', count: cached.length, reason: `${reason(e)}。既存検索名簿のみ使用（全員名簿ではない）` }; }
       }
+      const sheets = await collectPayeeSheets({ google, stateDir, now, signal, secrets });
+      Object.assign(sources, sheets.sources);
+      snapshot.payeeSheetRows = sheets.rows;
+      try {
+        snapshot.purchasing = await collectPurchasing({ databaseUrl });
+        sources.purchasing = { status: 'ok', count: snapshot.purchasing.purchase_records.length, reason: '4テーブルをSELECTのみ。transaction_read_only=on' };
+      } catch (e) { snapshot.purchasing = {}; sources.purchasing = { status: 'failed', count: 0, reason: reason(e) }; }
+      const payeeSources = Object.fromEntries(Object.entries(sources).filter(([k]) => k.startsWith('payee-sheet:') || k === 'purchasing'));
+      snapshot.payeeResolution = resolvePayees(snapshot, { patterns, sheetRows: sheets.rows, purchasing: snapshot.purchasing, sources: payeeSources });
+      await checkpoint();
+      const lookupPartners = [...paidPartners, ...snapshot.payeeResolution.payees.filter(p => !p.internal)];
+      const lookupDiscord = createDiscord({ token, stateDir, partners: lookupPartners, now, signal });
+      console.error(`internal-audit: 汎用名 ${snapshot.payeeResolution.payments.length}件 / 実名候補 ${snapshot.payeeResolution.payees.length}先`);
+      const adapters = { gmail: createGmailSource({ google, signal }), drive: createDriveSource({ google, now }), discord: lookupDiscord.search };
+      for (const k of options.skip) delete adapters[k];
+      snapshot.footprint = await buildFootprint(lookupPartners, { window: options['window-days'], sources: adapters, patterns, state: { secrets }, stateDir, now,
+        onProgress: (done, total) => { if (done % 10 === 0 || done === total) console.error(`internal-audit: 形跡照合 ${done}/${total}完了`); } });
+      Object.assign(sources, summarizeFootprint(lookupPartners, snapshot.footprint, patterns));
+      await checkpoint();
       if (!options.skip.includes('admin')) {
         let clientId; try { clientId = JSON.parse(await fs.readFile(keyPath, 'utf8')).client_id; } catch { /* Report missing credentials through scanAdmin. */ }
         const result = await scanAdmin({ google, state, clientId, thresholds: patterns.thresholds, now }); for (const finding of result.findings) findings.push(finding); Object.assign(sources, result.sources); state.knownOAuth = result.knownOAuth; state.adminCursors = result.cursors;
@@ -221,6 +239,8 @@ export async function main(argv = process.argv.slice(2)) {
       snapshot.coverage.limitations = [...(snapshot.coverage.limitations || []), '前回の中断を検出。停止済みまたは3時間超のrun.lockを回復して続行'];
     }
     const payments = runPaymentRules(snapshot, snapshot.footprint, patterns); for (const finding of payments.findings) findings.push(finding); for (const row of payments.unverified) unverified.push(row);
+    const payeeRules = runPayeeRules(snapshot, patterns);
+    findings.push(...payeeRules.findings); unverified.push(...payeeRules.unverified);
     for (const key of Object.keys(sources)) if (/^(web(?:[:]|$)|github$|patterns(?:[:]|$))/.test(key)) delete sources[key];
     if (!options.skip.includes('web')) {
       const result = await searchLeaks({ state, search, ask, run: budgetRun }); for (const finding of result.findings) findings.push(finding); Object.assign(sources, result.sources); state.knownLeakUrls = result.knownLeakUrls;
@@ -232,6 +252,10 @@ export async function main(argv = process.argv.slice(2)) {
     snapshot.sources = sources; snapshot.runStatus = 'complete';
     const findingsFile = path.join(stateDir, 'reports', `${date}.findings.jsonl`);
     await writePrivate(findingsFile, findings.map(f => JSON.stringify(scrub(f, secrets))).join('\n') + '\n', secrets);
+    await writePrivate(findingsFile.replace(/(?:\.findings)?\.jsonl$/, '.payees.jsonl'), [
+      ...(snapshot.payeeResolution?.payees || []).map(r => ({ type: 'payee', ...r })),
+      ...(snapshot.payeeResolution?.payments || []).map(r => ({ type: 'payment', ...r })),
+    ].map(r => JSON.stringify(scrub(r, secrets))).join('\n') + '\n', secrets);
     const report = renderReport({ snapshot, findings, unverified, sources, candidates, patterns, minSeverity: options['min-severity'], secrets, replay: !!options.snapshot, findingsFile });
     await writePrivate(daily, report, secrets);
     if (options.out && path.resolve(options.out) !== daily) await writePrivate(path.resolve(options.out), report, secrets);

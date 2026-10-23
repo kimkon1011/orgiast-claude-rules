@@ -101,3 +101,14 @@ test('修理報告だけでは失敗後の本体実装を免除しない',t=>{
   const r=evaluate(t,[...failure,use('Edit',{file_path:'a.js'})],{text:repair});
   assert.equal(r.decision,'block');assert.equal(r.code,'LANE-ABANDON');
 });
+
+for (const prefix of ['✔ ', '✖ ', 'ok 1 - ', 'not ok 2 - ', 'ℹ ', '# Subtest: ', '  ✔ ', '\x1b[32m✔ ']) {
+  test(`test runner line ${JSON.stringify(prefix)} is not a lane failure`, t => {
+    const text = `${prefix}detectQuotaLimit: 枠切れメッセージ (You've hit your usage limit) を検出する (1.176ms)`;
+    assert.equal(failureSignal(text, 'node --test tools/codex-do.test.mjs'), '');
+    const r = evaluate(t, [use('Bash', {command:'node --test tools/codex-do.test.mjs'}, 'tests'), result(text, 'tests'), use('Edit', {file_path:'tools/a.mjs'})]);
+    assert.equal(r.decision, 'pass');
+    assert.deepEqual(r.signals, []);
+    assert.match(failureSignal(`${text}\nYou've hit your usage limit`, 'node tools/codex-do.mjs'), /usage limit/);
+  });
+}

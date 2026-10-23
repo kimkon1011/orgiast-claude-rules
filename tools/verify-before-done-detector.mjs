@@ -22,7 +22,28 @@ function script(command) {
   while (/^-(?:NoProfile|NonInteractive|File)$/i.test(t[i] || '')) i++;
   return t[i] && !t[i].startsWith('-') ? normalize(t[i]) : '';
 }
-const sameFile = (a, b) => a === b || a.endsWith('/' + b) || b.endsWith('/' + a);
+// Worktrees may already be deleted: compare repository identity without stat().
+const repoPath = value => {
+  const file = normalize(value).replace(/^[ab]\//, '');
+  const tools = file.lastIndexOf('/tools/');
+  return tools >= 0 ? file.slice(tools + 1) : file.split('/').slice(-2).join('/');
+};
+const sameFile = (a, b) => repoPath(a) === repoPath(b);
+const resolveScript = (cwd, file) => path.resolve(cwd, file.replace(/^~(?=[/\\])/, process.env.HOME || '~'));
+function childScripts(source) {
+  // Count literal interpreter child-process calls (including literal const aliases).
+  const literals = new Map([...source.matchAll(/\b(?:const|let)\s+(\w+)\s*=\s*(['"`])([^'"`\n]+)\2/g)].map(m => [m[1], m[3]]));
+  const literal = value => {
+    const quoted = value.trim().match(/^(['"`])([^'"`]+)\1$/);
+    return quoted ? quoted[2] : literals.get(value.trim());
+  };
+  return [...source.matchAll(/\b(?:spawn|spawnSync|execFile|execFileSync)\s*\(\s*([^,]+),\s*\[\s*([^,\]]+)/g)].flatMap(m => {
+    const interpreter = literal(m[1]);
+    if (m[1].trim() !== 'process.execPath' && !/^(?:node|python3?|pwsh|powershell)(?:\.exe)?$/i.test(path.posix.basename(normalize(interpreter || '')))) return [];
+    const target = literal(m[2]);
+    return target && !target.startsWith('-') ? [normalize(target)] : [];
+  });
+}
 function realUser(e) {
   if (e.isSidechain || e.isMeta || (e.type !== 'user' && e.message?.role !== 'user')) return false;
   const c = e.message?.content;
@@ -45,7 +66,7 @@ export function evaluateVerification(entries, assistantText, { cwd = process.cwd
   const files = new Map();
   let changed = false, sensitive = false, lastChange = -1;
   const calls = [];
-  const addFiles = (text, index) => { for (const file of paths(text)) if (!excluded(file)) files.set(file, index); };
+  const addFiles = (text, index) => { for (const file of paths(text)) if (file.replace(/^[ab]\//, '').includes('/') && !excluded(file)) files.set(file.replace(/^[ab]\//, ''), index); };
   turn.forEach((e, index) => {
     for (const b of Array.isArray(e.message?.content) ? e.message.content : []) {
       if (b.type !== 'tool_use') continue;
@@ -75,16 +96,17 @@ export function evaluateVerification(entries, assistantText, { cwd = process.cwd
   if (!changed) return null;
   const executed = new Map();
   for (const call of calls) {
-    if (call.name !== 'Bash' || !call.ok || call.index <= lastChange || /--test\b|--dry[-_]?run\b/.test(call.command)) continue;
+    if (call.name !== 'Bash' || !call.ok || call.index < lastChange || /--test\b|--dry[-_]?run\b/.test(call.command)) continue;
     const invoked = script(call.command);
-    if (!invoked) continue;
+    if (!invoked || (call.index === lastChange && !/codex-do\.mjs$/.test(invoked))) continue;
     let imports = [];
     if (/scratchpad/.test(invoked)) {
       try {
-        const source = readFile(path.resolve(cwd, invoked));
+        const source = readFile(resolveScript(cwd, invoked));
         // Dependency injection and test doubles cannot establish live execution.
         if (/fetchImpl|sendImpl|mock|stub|fake|(?:fetch|send\w*)\s*[:=]|vi\.|sinon\./i.test(source)) continue;
-        imports = [...source.matchAll(/(?:from\s*|import\s*\()(['"])([^'"]+)\1/g)].map(m => normalize(path.resolve(path.dirname(path.resolve(cwd, invoked)), m[2])));
+        imports = [...source.matchAll(/(?:from\s*|import\s*\()(['"])([^'"]+)\1/g)].map(m => normalize(path.resolve(path.dirname(resolveScript(cwd, invoked)), m[2])));
+        imports.push(...childScripts(source));
       } catch { continue; }
     }
     for (const file of files.keys()) if ((!excluded(invoked) && sameFile(invoked, file)) || imports.some(p => sameFile(p, file))) executed.set(file, call.index);

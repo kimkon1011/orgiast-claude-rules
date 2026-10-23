@@ -46,6 +46,9 @@ export function resultText(content) {
 }
 export function failureSignal(text, command = '') {
   for (const line of String(text).split(/\r?\n/)) {
+    // Test descriptions quote failure messages; they are not provider output.
+    const plain = line.replace(/\x1b\[[0-9;]*m/g, '').trimStart();
+    if (/^(?:[✔✖ℹ]\s|(?:not )?ok\s+\d+\s+-\s|# Subtest:)/.test(plain)) continue;
     if (/全候補が失敗|demote中|usage limit|credits are depleted|RESOURCE_EXHAUSTED|PreToolUse:Bash hook error: このターンで Fable\/Opus 本体が直接/i.test(line)
       || /WSL ディストリが見つかりません|spawn \S+ ENOENT/.test(line)
       || ((delegated.test(command) || /(?:^|[\s/\\])(?:codex-do|cheap-code|llm-ask|gemini|qwen)(?:\.mjs)?(?=[\s"']|$)/i.test(command)) && /is not recognized as an internal or external command|command not found/i.test(line))

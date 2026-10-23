@@ -70,3 +70,44 @@ test('Stop CLIを実起動し、transcriptからblock/passのJSONを読み戻す
     if (blocked) assert.equal(JSON.parse(run.stdout).decision, 'block'); else assert.equal(run.stdout, '');
   }
 });
+
+test('PR diff paths strip a/b prefixes and ignore bare identifiers and test fragments', () => {
+  const rows = [...bash('gh pr diff 1025', '--- a/tools/check.mjs\n+++ b/tools/check.mjs\nrow.ts test.mjs .mjs a/row.ts b/test.mjs\n tools/check.test.mjs | 3 ++'), ...edit('tools/check.mjs'), ...bash('node /production/tools/check.mjs')];
+  assert.equal(check(rows, '修正しました'), null);
+});
+test('repository path matches deployments but distinguishes different directories', () => {
+  for (const file of ['C:/clone/tools/check.mjs', 'C:\\clone\\tools\\check.mjs', '/clone/src/check.mjs']) {
+    const deployed = file.includes('src/') ? '/production/src/check.mjs' : '/production/tools/check.mjs';
+    assert.equal(check([...edit(file), ...bash(`node ${deployed}`)], '完了'), null);
+    assert.ok(check([...edit(file), ...bash('node /production/other/check.mjs')], '完了'));
+  }
+});
+for (const method of ['spawn', 'spawnSync', 'execFile', 'execFileSync']) {
+  test(`scratchpad ${method} counts real child execution but rejects doubles and non-interpreters`, () => {
+    const rows = [...edit('tools/check.mjs'), ...bash('node scratchpad/replay.mjs')];
+    const source = `import { ${method} } from 'node:child_process'; const target = '/production/tools/check.mjs'; ${method}(process.execPath, [target], { encoding: 'utf8' });`;
+    assert.equal(check(rows, '完了', { readFile: () => source }), null);
+    assert.ok(check(rows, '完了', { readFile: () => source + '\nconst fetchImpl = fake;' }));
+    assert.ok(check(rows, '完了', { readFile: () => source.replace('process.execPath', "'echo'") }));
+    assert.ok(check(rows, '完了', { readFile: () => source.replace('[target]', "['--test', target]") }));
+  });
+}
+test('deleted worktree edits verified through nightly-repo codex and scratchpad replay (CLI)', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-replay-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const worktree = path.join(dir, 'ocr-verify-gate');
+  const scratch = path.join(dir, 'scratchpad/replay.mjs');
+  fs.mkdirSync(worktree);
+  fs.mkdirSync(path.dirname(scratch));
+  fs.writeFileSync(scratch, `import { spawnSync } from 'node:child_process';\nspawnSync(process.execPath, ['~/.claude/nightly-repo/tools/verify-before-done-detector.mjs'], { input: '{}' });`);
+  const rows = [human('修正して'), ...edit(`${worktree}/tools/verify-before-done-detector.mjs`), ...edit(`${worktree}/tools/codex-do.mjs`), ...bash('gh pr diff 1025', 'tools/verify-before-done-detector.mjs | 4 ++\ntools/codex-do.mjs | 2 ++\ntest.mjs row.ts .mjs'), ...bash(`rm -rf ${worktree}`), ...bash('node C:/Users/uers/.claude/nightly-repo/tools/codex-do.mjs --prompt task', 'MAKELOOP=no'), ...bash(`node ${scratch}`, '{"decision":"pass"}')];
+  fs.rmSync(worktree, { recursive: true });
+  assert.equal(check(rows, '修正しました'), null);
+  const transcript = path.join(dir, 'transcript.jsonl');
+  fs.writeFileSync(transcript, [...rows, { type: 'assistant', message: { content: [{ type: 'text', text: '修正しました' }] } }].map(JSON.stringify).join('\n'));
+  const run = spawnSync(process.execPath, [path.resolve('tools/verify-before-done-detector.mjs')], { input: JSON.stringify({ transcript_path: transcript, cwd: dir, session_id: 'deployment-regression' }), encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: dir } });
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stderr, '');
+  assert.equal(run.stdout, '', 'successful Stop gate produces no block output');
+  console.log(`deployment replay: exit=${run.status}, stdout=${JSON.stringify(run.stdout)}, stderr=${JSON.stringify(run.stderr)}`);
+});

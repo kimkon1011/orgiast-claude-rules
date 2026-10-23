@@ -122,6 +122,16 @@ export function filterWindowsForCurrentAuth(all, state) {
   return filtered;
 }
 
+// oauth/usage の一時障害だけを再試行対象にする。429(レート制限)・408・5xx・ネットワーク断は
+// 数十秒で回復しうるが、401/403（トークン失効）や形式不一致は読み直しても直らない。
+// 2026-10-23T07:10Z/07:25Z の window-info 失敗は、直前に読めていた窓が1回の読み取り失敗で
+// ticks=0 failed になり、delegation-health にレーン全滅と誤判定された。
+export function isTransientWindowReadError(reason) {
+  return /^(?:network:|HTTP (?:408|429|5\d{2})\b)/i.test(String(reason ?? '').trim());
+}
+
+const defaultSleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
 export function commandRunner(spawnImpl = spawnSync, log = () => {}) {
   return (exe, args, cwd) => {
     const network = exe === 'git' && ['fetch', 'push'].includes(args[0]);
@@ -230,9 +240,15 @@ export async function runSweep(decision, context) {
     if (tree && run('git', ['branch', '--show-current'], tree) !== branch) {
       record.branchChanged = true; log('Worktree branch changed externally; stop and preserve it'); return stopWith('failed', 'branch-changed', '作業ブランチが外部で変更された');
     }
-    const all = await refresh(), own = all.filter(w => w.provider === provider);
+    let all = await refresh(), own = all.filter(w => w.provider === provider), why = all?.reasons?.[provider];
+    // 一時的な読み取り失敗は1回だけ読み直す。タダの blip で ticks=0 failed にすると、
+    // 15分後の次回も同じ窓で失敗して detector が「レーン全滅」を起票してしまう。
+    if (!own.length && isTransientWindowReadError(why)) {
+      log(`${provider}: window read failed (${why}); retry 1/1`);
+      await (context.sleep ?? defaultSleep)(context.windowReadRetryDelayMs ?? 2000);
+      all = await refresh(); own = all.filter(w => w.provider === provider); why = all?.reasons?.[provider];
+    }
     usedAfter = own.find(w => w.window === decision.window)?.usedPercent ?? null;
-    const why = all?.reasons?.[provider];
     if ((provider === 'claude' && !['5h', '7d'].every(k => own.some(w => w.window === k))) || !own.length || own.some(w => !Number.isFinite(w.resetsAt) && w.usedPercent !== 0 && !w.exhausted)) return stopWith('failed', 'window-info', `利用窓情報が不足または不正: ${JSON.stringify(own)}${why ? ` (${why})` : ''}`);
     if (own.some(w => w.exhausted)) return stopWith('exhausted', 'quota-exhausted', '利用枠を使い切った');
     if (shouldStopTick({ windows: all, provider })) return stopWith('ceiling', 'usage-ceiling', '利用率が停止上限に達した');
@@ -377,8 +393,18 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   if (env.ORGIAST_QUOTA_SWEEP === '0') return emit({ skipped: true, reason: 'ORGIAST_QUOTA_SWEEP=0' });
   const requestedHomes = io.wslHome ?? (argv.includes('--home') ? [] : passiveWslHomes());
   const wslHomes = Array.isArray(requestedHomes) ? [...requestedHomes] : [requestedHomes];
+  // 1回のスイープは decision 用・開始前 check 用・再取得用と同じ oauth/usage を数十秒に3回叩く。
+  // 2026-10-23T07:10Z の window-info 失敗はその直後に起きた。成功した読み取りだけを短時間
+  // 再利用し、失敗はキャッシュしない（checkConditions の再試行を妨げない）。
+  const claudeReadTtlMs = io.claudeReadTtlMs ?? 15_000;
+  let claudeCache = null, claudeCachedAt = 0;
   const windows = io.readWindows ?? (async () => {
-    const claude = await readClaudeWindows({ home, fetchImpl: io.fetchImpl });
+    const at = now();
+    let claude = claudeCache && at - claudeCachedAt < claudeReadTtlMs ? claudeCache : null;
+    if (!claude) {
+      claude = await readClaudeWindows({ home, fetchImpl: io.fetchImpl });
+      if (claude.length) { claudeCache = claude; claudeCachedAt = at; }
+    }
     const codex = readCodexWindows({ home, wslHome: wslHomes, now: now() });
     const all = [...claude, ...codex]; all.reasons = { claude: claude.reason, codex: codex.reason }; return all;
   });
@@ -412,7 +438,11 @@ export async function main(argv = process.argv.slice(2), io = {}) {
     const currentWindows = async () => filterWindowsForCurrentAuth(await windows(), state);
     const observed = await currentWindows();
     const decisions = decideSweep({ windows: observed, now: now(), ...options }).filter(d => (options.provider === 'all' || options.provider === d.provider) && canRunWindow(state, d));
-    if (!decisions.length) log('skip: no eligible reset window');
+    if (!decisions.length) {
+      // 読み取り自体が失敗していた場合、これまでは「窓が無い」とだけ出て原因が残らなかった。
+      const readIssues = Object.entries(observed.reasons ?? {}).filter(([, r]) => r).map(([p, r]) => `${p}: ${r}`);
+      log(`skip: no eligible reset window${readIssues.length ? ` (${readIssues.join('; ')})` : ''}`);
+    }
     for (const decision of decisions) {
       if (await active(decision.provider)) { log(`skip: interactive ${decision.provider}`); continue; }
       await runSweep(decision, { ...io, leadMinutes: options.leadMinutes, minRemainingPercent: options.minRemainingPercent, home, state, save: () => atomic(stateFile, state), windows: currentWindows, active, log, env, now, spawnImpl, wsl });

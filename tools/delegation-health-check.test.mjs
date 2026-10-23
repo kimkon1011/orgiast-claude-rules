@@ -744,6 +744,24 @@ test('quota-sweep の失敗行は reason を証跡に出す（no_output と誤�
   assert.ok(outage.evidence.some(e => /EPERM/.test(e)), outage.evidence.join(' / '));
   assert.ok(!outage.evidence.some(e => /no_output/.test(e)));
 });
+test('quota-sweep の正常停止（deadline/ceiling 等）は全滅判定にも cooldown 表示にも入れない', () => {
+  const dir = home();
+  const rows = [0, 1, 2].map(i => ({ t: `2026-09-09T10:0${i}:00Z`, provider: 'quota-sweep:claude', model: 'sonnet', in: 0, out: 0, tokens: 0, status: 'deadline', reason: '利用窓の一時的な取得失敗' }));
+  write(dir, 'executor-usage.jsonl', rows.map(row).join(''));
+  const findings = collectFindings({ home: dir, now: NOW });
+  assert.deepEqual(findings.filter(f => f.id === 'lane_outage_unrepaired'), []);
+  assert.deepEqual(findings.filter(f => f.id === 'provider_cooldown_skipped'), []);
+});
+test('quota-sweep の全滅は failed だけを分母に数え、正常停止行は混ぜない', () => {
+  const dir = home();
+  const failed = [0, 1, 2].map(i => ({ t: `2026-09-09T10:0${i}:00Z`, provider: 'quota-sweep:claude', in: 0, out: 0, tokens: 0, status: 'failed', reason: '利用窓情報が不足または不正: [] (HTTP 429)' }));
+  const benign = { t: '2026-09-09T10:03:00Z', provider: 'quota-sweep:claude', in: 0, out: 0, tokens: 0, status: 'deadline' };
+  write(dir, 'executor-usage.jsonl', [...failed, benign].map(row).join(''));
+  const outage = collectFindings({ home: dir, now: NOW }).find(f => f.id === 'lane_outage_unrepaired');
+  assert.equal(outage.provider, 'quota-sweep:claude');
+  assert.equal(outage.evidence[0], '3件すべて失敗');
+  assert.ok(outage.evidence.some(e => /HTTP 429/.test(e)));
+});
 test('全レーンの未修理全滅は provider ごとに集計し集計窓外を除く', () => {
   const dir = home();
   write(dir, 'executor-usage.jsonl', ['gemini', 'qwen'].flatMap(provider => Array.from({length:3}, (_,i) => row({t:`2026-09-09T10:0${i}:00Z`,provider,status:'error',out:5,stderrTail:'HTTP 402'}))).join('') + row({t:'2020-01-01T00:00:00Z',provider:'gemini',status:'ok',out:10}));

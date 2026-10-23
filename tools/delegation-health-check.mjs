@@ -195,6 +195,14 @@ export function quotaSweepProgressRow(row = {}) {
   return Number(row.in) > 0 || Number(row.out) > 0;
 }
 
+// quota-sweep の status は停止理由そのもの。`failed` 以外（deadline/ceiling/exhausted/no-goal 等）は
+// レーンが正常に判断して止まった記録で、トークン0でも故障ではない。これを含めると
+// 「窓が無いので見送った」が3回続いただけで lane_outage_unrepaired(high) になる
+// (2026-10-22 の起票は failed 4件が実体だが、正常停止も同じ分母に入る構造だった)。
+export function isQuotaSweepBenignRow(row = {}) {
+  return String(row?.provider ?? '').startsWith('quota-sweep:') && String(row?.status ?? '').toLowerCase() !== 'failed';
+}
+
 // fallback バックエンド自体は走って応答を返した(chain の outcome が ok)のに、作業ツリーを
 // 1行も変えなかった行。codex-do が reason:'empty_diff' を付ける。
 // これはレーン(バックエンド)の全滅ではなく、昇格元(codex sol→astra)が空diffだった作業を
@@ -460,11 +468,15 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
     // 分母から外す。外さないと上限到達の実体が「N件すべて失敗」の high 未修理全滅に見える
     // (2026-10-13 診断: glm の11件 = cooldown 5件 + http_429 6件)。
     const emptyDiffRows = rows.filter(isEmptyDiffEscalationRow);
-    const attempts = rows.filter((row) => !isCooldownSkippedRow(row) && !isEmptyDiffEscalationRow(row));
+    // quota-sweep は停止理由を status に書くので、failed 以外（deadline/ceiling/exhausted/no-goal）は
+    // 正常停止。トークン0でも分母に入れない（入れると「窓が無いので見送った」3回で high 起票になる）。
+    const attempts = rows.filter((row) => !isCooldownSkippedRow(row) && !isEmptyDiffEscalationRow(row) && !isQuotaSweepBenignRow(row));
     // 24h 窓が cooldown だけで埋まる＝上限中で一度も試行していない。レーンは止まっているが
     // 原因は上限側で、コードの欠陥ではない。low の可視化だけ残す(high にすると上限が明けるまで
     // 毎晩同じ偽の修理タスクが積まれる。黙って消すと止まっている事実自体が見えなくなる)。
     if (!attempts.length) {
+      // quota-sweep の正常停止は cooldown ではないので、cooldown の low 表示も付けない。
+      if (rows.every(isQuotaSweepBenignRow)) continue;
       // 窓が「代替は応答したが1行も変えなかった」行だけで埋まった場合も、レーン障害ではない。
       // 止まっている事実は low で可視化し、修理タスク(high)にはしない。
       if (emptyDiffRows.length === rows.length && rows.length >= 3) {

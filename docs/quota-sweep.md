@@ -87,6 +87,10 @@ git fetch/push は1回300秒、失敗時に1回だけ再試行します。他の
 
 `executor-usage.jsonl` の `quota-sweep:<provider>` 行にも同じ `reason` / `failureKey` を書きます。これは `delegation-health` が `executor-usage.jsonl` しか読まないためです。`quota-sweep.jsonl` にだけ理由を置くと、全滅行が `no_output`（原因不明）と表示され、EPERM・窓情報不足・対話検出のどれだったのかを追えません（2026-10-21 の codex 6連続 failed がこの状態でした）。
 
+利用窓の読み取り（`api.anthropic.com/api/oauth/usage`）は、1回のスイープで decision 用・開始前 check 用・再取得用と短時間に繰り返し呼びます。成功した読み取りは15秒だけ再利用し、失敗はキャッシュしません。読み取り理由が一時障害（HTTP 408/429/5xx、`network:`）で窓が0件のときは1回だけ読み直します。それでも失敗した場合は、空配列だけを残さず読み取り理由付きの `window-info` failed として記録します（2026-10-23T07:10Z/07:25Z の ticks=0 failed がこの形で、理由が落ちて原因を追えませんでした）。
+
+`delegation-health` の全滅判定は、`quota-sweep:<provider>` では `status: failed` の行だけを分母にします。`deadline` / `ceiling` / `exhausted` / `no-goal` は「窓が無いので見送った」等の正常停止で、トークン0でもレーン故障ではありません（3回続くと high 起票になっていたため区別します）。
+
 ### 2026-10-23 調査証跡
 
 - kim-PC `quota-sweep.log` 2026-10-21T12:55:55.781Z: `spawnSync git ETIMEDOUT`。旧commandRunnerは全コマンド60秒固定、再試行なし。旧ログにはサブコマンドがなくfetch等のどのgit操作だったかは確定不能。

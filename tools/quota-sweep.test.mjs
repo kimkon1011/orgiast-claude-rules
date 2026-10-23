@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { filterWindowsForCurrentAuth, commandRunner, queueRepeatedFailure, writeWorktreePointer, prepareTree, DEFAULT_GOAL, MAX_TICKS, selectGoal, tickPrompt, contractPrompt, canRunWindow, interactiveClaude, main, makeLedger, runSweep, parseOutput, acquireLock, readWorktreePointer } from './quota-sweep.mjs';
+import { filterWindowsForCurrentAuth, isTransientWindowReadError, commandRunner, queueRepeatedFailure, writeWorktreePointer, prepareTree, DEFAULT_GOAL, MAX_TICKS, selectGoal, tickPrompt, contractPrompt, canRunWindow, interactiveClaude, main, makeLedger, runSweep, parseOutput, acquireLock, readWorktreePointer } from './quota-sweep.mjs';
 import { runBounded, killTree } from './lib/quota-sweep-process.mjs';
 import { interactiveCodex, wslPath } from './lib/quota-sweep-host.mjs';
 import { decideSweep, resetKey, sameReset } from './lib/quota-windows.mjs';
@@ -123,7 +123,7 @@ function context(t, child) {
   const home = temp(t), tree = path.join(home, 'tree'); fs.mkdirSync(path.join(home, '.claude')); fs.mkdirSync(tree);
   fs.writeFileSync(path.join(home, '.claude/quota-sweep-goals.md'), `- [ ] ${DEFAULT_GOAL}\n`);
   const state = {};
-  return { home, tree, state, save: () => {}, windows: async () => windows, active: async () => false, log: () => {}, env: {}, now: () => now, claudeExe: 'fixture',
+  return { home, tree, state, save: () => {}, windows: async () => windows, active: async () => false, log: () => {}, env: {}, now: () => now, claudeExe: 'fixture', sleep: async () => {},
     prepareTree: () => ({ tree, branch: 'quota-sweep/test', base: 'base' }), command: (_exe, args) => args[0] === 'branch' ? 'quota-sweep/test' : '0', runChild: child, notify: async () => {} };
 }
 test('fallback contract after generator failure, then final; ledger and usage persisted', async t => {
@@ -166,6 +166,29 @@ test('fresh remaining below minimum blocks Phase A even before ceiling', async t
   let calls = 0; const ctx = context(t, async () => { calls++; });
   ctx.windows = async () => windows.map(w => ({ ...w, usedPercent: 90 }));
   await runSweep(decision, ctx); assert.equal(calls, 0); assert.equal(ctx.state.lastRun.claude[decision.resetsAt].outcome, 'exhausted');
+});
+// 2026-10-23T07:10Z/07:25Z 実測: 直前に窓が読めていたのに1回の読み取り失敗で ticks=0 failed になった。
+test('利用窓の一時的な読み取り失敗は1回読み直して続行する', async t => {
+  let reads = 0, calls = 0;
+  const ctx = context(t, async () => { calls++; return { code: 0, stdout: JSON.stringify({ result: 'FINAL' }) }; });
+  ctx.windows = async () => (++reads === 1 ? Object.assign([], { reasons: { claude: 'HTTP 429' } }) : windows);
+  await runSweep(decision, ctx);
+  const row = JSON.parse(fs.readFileSync(path.join(ctx.home, '.claude/quota-sweep.jsonl'), 'utf8').trim());
+  assert.equal(row.outcome, 'final'); assert.ok(reads >= 2); assert.ok(calls >= 1);
+});
+test('利用窓の一時的な読み取り失敗が続く場合は理由付きで failed にする', async t => {
+  let calls = 0; const ctx = context(t, async () => { calls++; });
+  ctx.windows = async () => Object.assign([], { reasons: { claude: 'HTTP 503' } });
+  await runSweep(decision, ctx);
+  const row = JSON.parse(fs.readFileSync(path.join(ctx.home, '.claude/quota-sweep.jsonl'), 'utf8').trim());
+  assert.equal(row.outcome, 'failed'); assert.equal(row.failureKey, 'window-info');
+  assert.match(row.reason, /HTTP 503/); assert.equal(calls, 0);
+  const usage = JSON.parse(fs.readFileSync(path.join(ctx.home, '.claude/executor-usage.jsonl'), 'utf8').trim());
+  assert.match(usage.reason, /HTTP 503/);
+});
+test('一時障害の判定は 429/5xx/network だけで、認証・形式不一致は再試行しない', () => {
+  for (const reason of ['HTTP 429', 'HTTP 503', 'HTTP 408', 'network: TimeoutError']) assert.equal(isTransientWindowReadError(reason), true);
+  for (const reason of ['HTTP 401', 'HTTP 403', 'accessToken 未設定', 'credentials: ENOENT', 'usage response の形式が未対応', '', undefined]) assert.equal(isTransientWindowReadError(reason), false);
 });
 test('new reset archives old state and starts again, same-window retry keeps cumulative budget', async t => {
   let calls = 0; const ctx = context(t, async () => { calls++; return { code: 0, stdout: JSON.stringify({ result: 'FINAL' }) }; });

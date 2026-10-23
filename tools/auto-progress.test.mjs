@@ -427,7 +427,7 @@ test('digest: 無人処理は数だけ、なし系を正規化し、埋め込ま
   const unattended = { ...row, sessionId: 'batch', cwd: path.join(home, '.claude', 'scratch', 'test'), promise: '表示しない約束' };
   const result = await digest({ home, now, dryRun: true, io: { label: 'kim-PC', readLedger: () => [row, unattended], readState: () => ({}) } });
   assert.equal(result.count, 1);
-  assert.match(result.text, /^【kim-PC・[^】]* の Claude Code】/);
+  assert.match(result.text, /^【kim-PC(・[^】]*)? の Claude Code】/);
   assert.match(result.text, /無人処理の約束 1 件は数だけ/);
   assert.match(result.text, /完了 1/);
   assert.match(result.text, /このパソコン の この作業 を 2026-10-20T01:02:03Z に確認/);

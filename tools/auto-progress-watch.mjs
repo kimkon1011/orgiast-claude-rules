@@ -358,6 +358,13 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
           if (delivery?.delivered !== 'dm') throw new Error(delivery?.reason || 'DM not delivered');
           patch(rowKey(row), { ownerNotifiedAt: new Date(now).toISOString() });
         } catch (error) { summary.errors.push(`notify-owner: ${String(error?.message ?? error).slice(0, 120)}`); }
+      } else if (kimAction(row) === 'なし' && !unattended && !dryRun && now - (Date.parse(row.ownerNotifiedAt || 0) || 0) >= 24 * 3600 * 1000) {
+        try {
+          const message = `⏳ 待ち状況（自動確認）\n約束: ${String(row.promise || '').slice(0, 160)}\n待っている理由: ${String(row.reason || '').slice(0, 240)}\n最終確認: ${row.lastCheckedAt || '不明'}\nuser の操作は不要です。進展があれば自動で再開します。`;
+          const delivery = await (io.notifyOwner ?? notifyOwner)(ownerOf(row), message, { home });
+          if (delivery?.delivered !== 'dm') throw new Error(delivery?.reason || 'DM not delivered');
+          patch(rowKey(row), { ownerNotifiedAt: new Date(now).toISOString() });
+        } catch (error) { summary.errors.push(`notify-owner: ${String(error?.message ?? error).slice(0, 120)}`); }
       }
       summary.inProgress += 1;
       continue;

@@ -874,3 +874,24 @@ test('watch: 完了DMの送信に失敗した行は次の巡回で再送し、�
   // 3回目は送らない。
   await watch({ home, now: now + 2 * H, io: noEvidenceIo({ resume: () => assert.fail('must not resume'), notifyOwner: () => assert.fail('must not notify') }) });
 });
+
+test('watch: 他者待ちの通知は成功後24時間抑制し、失敗時は再試行する', async () => {
+  const home = tmp(), now = Date.now(), calls = [];
+  const row = { sessionId: 'other-wait', owner: 'a', nextKim: 'なし', status: 'waiting_user', promise: '返事を待って作業を再開', reason: '他PCの返信待ち', lastCheckedAt: new Date(now - H).toISOString(), cwd: home, ts: new Date(now - 3 * H).toISOString() };
+  seed(home, [row]);
+  let delivered = 'none';
+  const io = baseIo({ notifyOwner: async (...args) => { calls.push(args); return { delivered }; } });
+  const failed = await watch({ home, now, io });
+  assert.deepEqual(failed.errors, ['notify-owner: DM not delivered']);
+  assert.equal(readLedger(ledgerFile(home))[0].ownerNotifiedAt, undefined);
+  calls.length = 0;
+  delivered = 'dm';
+  assert.deepEqual((await watch({ home, now, io })).errors, []);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0], ['a', `⏳ 待ち状況（自動確認）\n約束: ${row.promise}\n待っている理由: ${row.reason}\n最終確認: ${row.lastCheckedAt}\nuser の操作は不要です。進展があれば自動で再開します。`, { home }]);
+  assert.equal(readLedger(ledgerFile(home))[0].ownerNotifiedAt, new Date(now).toISOString());
+  await watch({ home, now: now + 24 * H - 1, io });
+  assert.equal(calls.length, 1);
+  await watch({ home, now: now + 24 * H, io });
+  assert.equal(calls.length, 2);
+});

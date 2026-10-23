@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { collectStatus, main, processDirective, targetMatches } from './fleet-agent.mjs';
+import { collectStatus, main, processDirective, targetMatches, redactSecrets } from './fleet-agent.mjs';
 
 function tempHome() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-agent-'));
@@ -346,4 +346,12 @@ test('processDirective は解決済みの claude 実行ファイルで起動す�
   assert.equal(result.action, 'prompt');
   assert.equal(invocation.exe, 'C:/resolved/claude.exe');
   assert.equal(resolved.length, 1, '解決は spawn の直前に1回だけ');
+});
+
+test('redactSecrets preserves missing environment diagnostics and redacts assigned or spaced secrets', () => {
+  assert.equal(redactSecrets('process.env.EXTERNAL_API_TOKEN not set'), 'process.env.EXTERNAL_API_TOKEN not set');
+  for (const [input, secret] of [['GITHUB_TOKEN=ghp_abcdef123', 'ghp_abcdef123'], ['token abc123xyz', 'abc123xyz'], ['api_key: sk-xxx', 'sk-xxx']]) {
+    assert.ok(!redactSecrets(input).includes(secret));
+    assert.match(redactSecrets(input), /\[REDACTED\]/);
+  }
 });

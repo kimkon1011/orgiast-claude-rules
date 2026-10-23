@@ -679,6 +679,7 @@ export function parseArgs(argv) {
   if (options['--send']) {
     for (const key of ['--to', '--kind', '--body-file', '--why']) if (!options[key]?.trim()) throw new Error(`${key} 必須`);
     if (!['prompt', 'note'].includes(options['--kind'])) throw new Error('--kind must be prompt or note');
+    if (options['--kind'] === 'note' && /^\s*\[作業依頼\]/.test(options['--why'])) throw new Error('[作業依頼] は受信側で実行されるよう --kind prompt で送ってください（note は表示のみで実行されません）');
     if (options['--to'].length > 128 || options['--why'].length > 1000) throw new Error('宛先または理由が長すぎます');
     if (options['--exec'] !== undefined) {
       if (!EXEC_KINDS.includes(options['--exec'])) throw new Error(`--exec は ${EXEC_KINDS.join(' / ')} のみ対応`);

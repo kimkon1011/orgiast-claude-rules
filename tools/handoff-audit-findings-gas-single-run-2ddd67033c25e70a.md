@@ -544,7 +544,10 @@ node tools/handoff-audit-gas-execution-scan.mjs --since 2026-10-20T00:00:00Z
 ### ④ 配備
 
 - ブランチを `origin/main` 起点に載せ替え、`auto/20261024-handoff-gas-single-run` として push。
-- `stop-gate-runner.mjs` の再評価修正＋テスト＋再走査器を PR にまとめ、`automerge` ラベルを付与。
+- `stop-gate-runner.mjs` の再評価修正＋テスト＋再走査器を **PR #1047** にまとめ、`automerge` ラベルを付与
+  （2026-10-24 00:4x JST 時点: open・mergeable=true・label=automerge）。
+- 回帰テスト: `env -u CLAUDE_HEADLESS -u ORGIAST_HEADLESS_JOB node --test …` → **100/100 pass**。
+  （headless env 付きでは既存の起床手段テスト1件が main でも赤。env を外すと main でも 59/59 pass＝本修正起因ではない）
 - マージ後の確認: nightly-repo が origin/main を取り込んだ次の Stop で
   `node tools/handoff-audit-rescan.mjs --since <時刻>` が `handoff-wording-judged-with-provider` を返すこと。
   （未確認。次セッションの検証1行として next-session に残す）

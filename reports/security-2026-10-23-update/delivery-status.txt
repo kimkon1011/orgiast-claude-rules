@@ -1,0 +1,5 @@
+Reply target: mail-1792730749130-11162976
+Command: ORGIAST_HOME=/mnt/c/Users/user timeout 20 node tools/fleet-mail.mjs --reply mail-1792730749130-11162976 --body-file reports/security-2026-10-23-update/reply.txt
+Exit: 1
+Output: fleet-mail: EROFS: read-only file system, open '/mnt/c/Users/user/.claude/fleet-inbox/mail-1792730749130-11162976.json.lock'
+Status: 未送信。受信箱ロック作成時点で失敗。GAS疎通の判定ではない。

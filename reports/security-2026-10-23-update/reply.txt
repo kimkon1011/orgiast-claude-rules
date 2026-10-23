@@ -1,0 +1,11 @@
+2026-10-23実測（REPORTER_LABEL=DESKTOP-BDOAK99）。更新・build・コミット・PR・マージ・再デプロイは未実施。
+
+|対象|更新前の版|更新後の版|証拠（コマンド出力・PR URL・本番 URL と HTTP）|できなかった理由|
+|---|---|---|---|---|
+|Windows / WSL Node|WSL v24.21.0、Windows未確認|変更なし|node --version → v24.21.0|依頼どおり更新対象外|
+|event-shop / stagecue / 購買管理アプリ|未確認|未更新|user・root配下の深さ制限付きmanifest探索では検出なし。gh → command not found。curl api.github.com → exit 6: Could not resolve host|対象clone未検出、GitHub接続不可|
+|cafe-checklist-app|未確認|未更新|同探索で検出なし。draft PRなし|対象clone未検出、取得不可のためcodemod・build未実施|
+|TETSUKOローカル4コピー|Next 15.5.20|変更なし|各web/package-lock.jsonを実読。unifiedのorigin=genbateamtoho-ctrl/tetsuko-unified。ほか3コピーはgit remote get-url originでWindows形式worktree参照のfatal|コード変更禁止を遵守。cloneは書込許可範囲外でpull不可。GitHubもDNS失敗。本番HTTP未確認|
+|その他kimkon1011指定7案件|未確認|変更なし|深さ4の対象名探索でclone検出なし|pull対象未検出|
+
+探索は全ディスク・全アカウントの網羅ではありません。本番更新済みとは判定していません。

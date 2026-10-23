@@ -5,6 +5,28 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 
+test('setup converge timeout covers Node updates on new and existing PCs, idempotently', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-node-runtime-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const repo = path.resolve('.');
+  const settingsFile = path.join(home, '.claude', 'settings.json');
+  const run = () => execFileSync(process.execPath, [path.join(repo, 'tools/register-hooks.mjs'), '--hooks-only'], {
+    encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo },
+  });
+  run();
+  const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  const hooks = settings.hooks.SessionStart.flatMap((group) => group.hooks).filter((hook) => hook.command.includes('setup.mjs'));
+  assert.equal(hooks.length, 1);
+  assert.equal(hooks[0].timeout, 1200);
+  hooks[0].timeout = 60;
+  fs.writeFileSync(settingsFile, JSON.stringify(settings));
+  run();
+  const repaired = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  assert.equal(repaired.hooks.SessionStart.flatMap((group) => group.hooks).find((hook) => hook.command.includes('setup.mjs')).timeout, 1200);
+  run();
+  assert.deepEqual(JSON.parse(fs.readFileSync(settingsFile, 'utf8')), repaired);
+});
+
 test('既存PowerShell hookへExecutionPolicy Bypassを補いcost-loopをmjsへ移行する', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-'));
   const repo = path.resolve('.');

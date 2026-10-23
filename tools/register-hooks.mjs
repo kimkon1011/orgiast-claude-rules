@@ -217,7 +217,7 @@ try {
     ['fleet-convergence-sync.mjs', 360, true, ''],
     // あるべき状態への収束(検査→修復→再検査)。onboarding-sync が repo を新しくした後に走る。
     // リポジトリ直接参照・コピー配布なし = main を変えれば全PC追従(配り直し不要)。
-    ['setup.mjs', 60, true, ' --converge'],
+    ['setup.mjs', 1200, true, ' --converge'],
     ['claude-cost-reporter.mjs', 15, true, ''],
     ['tool-adoption-check.mjs', 60, true, ' --fix'],
     ['cost-loop.mjs', 15, false, ''],
@@ -238,6 +238,9 @@ try {
     if (async) hook.async = true;
     if (add(settings.hooks.SessionStart, name, { hooks: [hook] })) added += 1;
   }
+  // Node security downloads/MSI/WSL + UAC read-back exceed the old 60s limit.
+  // Migrate existing PCs too; changing the initial registration alone leaves them at 60s.
+  added += setTimeoutFor(settings.hooks.SessionStart, 'setup.mjs', 1200);
   added += setTimeoutFor(settings.hooks.SessionStart, 'tool-adoption-check', 60);
   added += migrate(settings.hooks.SessionStart, 'sessionstart-lane-health.mjs', 'sessionstart-lane-health.mjs', command('sessionstart-lane-health.mjs', ' --hook'));
   if (add(settings.hooks.SessionStart, 'sessionstart-lane-health.mjs', { hooks: [{ type: 'command', command: command('sessionstart-lane-health.mjs', ' --hook'), timeout: 5 }] })) added += 1;

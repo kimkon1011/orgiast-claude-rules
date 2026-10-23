@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { fleetHubNeedsConfiguration } from './register-fleet-mail.mjs';
 import { convergeAllowRules } from './allow-rules.mjs';
 import { convergeMobileStandby } from './mobile-standby.mjs';
+import { convergeNodeRuntimeSecurity } from './setup-node-runtime-security.mjs';
 
 const TYPES = new Set(['command', 'file-contains', 'file-nonempty', 'json-valid', 'scheduled-task']);
 const SEVERITIES = new Set(['required', 'optional', 'manual']);
@@ -180,6 +181,11 @@ if (manifest) {
       results.push({ item, status: outcome.ok ? 'OK' : 'NG', checked: true, repaired: Boolean(outcome.config?.changed || outcome.settings?.changed || outcome.extension?.status === 'installed' || outcome.rcPrefix?.changed),
         reason: outcome.ok ? '' : outcome.lines.filter((line) => /失敗|NG/.test(line)).join(' / ') });
     } catch { results.push({ item, status: 'NG', checked: true, repaired: false }); }
+  }
+  // 実機の更新は通常の converge のみ。verify / カスタム manifest は副作用なし。
+  if (converge && !valueAfter('--manifest')) {
+    const { description, ...outcome } = await convergeNodeRuntimeSecurity();
+    results.push({ item: { id: 'node-runtime-security', severity: 'optional', description }, ...outcome });
   }
   emit(results);
   // fleet ビーコン: converge の結果を GAS へ送る。fail-open（exit code に一切影響させない）。

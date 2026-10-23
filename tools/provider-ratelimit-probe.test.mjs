@@ -130,3 +130,15 @@ test('formatProbeLine は上限を1行で読める形にする', () => {
   assert.match(line, /残 7927/);
   assert.match(line, /RPD 1000/);
 });
+
+test('DeepSeek probe は Flash の推論を無効化し Pro は既定を保つ', async () => {
+  for (const model of [undefined, 'deepseek-v4-pro']) {
+    let body;
+    const result = await probeRateLimits({ provider: 'deepseek', model, key: 'test', fetchImpl: async (_url, init) => {
+      body = JSON.parse(init.body); return response({});
+    } });
+    assert.equal(result.ok, true);
+    assert.equal(body.model, model || 'deepseek-flash');
+    assert.deepEqual(body.thinking, model ? undefined : { type: 'disabled' });
+  }
+});

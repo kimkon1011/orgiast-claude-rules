@@ -801,3 +801,11 @@ test('real compliance worker entrypoint completes without circular-import deadlo
   assert.ok(saved.rulesHead.length >= 40);
   assert.equal(saved.rules[f.rule.id].applicable, 0);
 });
+
+test('parseArgs rejects work requests as notes but accepts prompts', () => {
+  for (const why of ['[作業依頼] 調査', '  [作業依頼] 調査']) {
+    const args = ['--send', '--to', 'PC', '--body-file', 'x', '--why', why, '--kind'];
+    assert.throws(() => parseArgs([...args, 'note']), { message: '[作業依頼] は受信側で実行されるよう --kind prompt で送ってください（note は表示のみで実行されません）' });
+    assert.doesNotThrow(() => parseArgs([...args, 'prompt']));
+  }
+});

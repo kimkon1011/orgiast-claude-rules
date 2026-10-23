@@ -1,4 +1,7 @@
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { isEntry } from '../is-entry.mjs';
 import {
   DEFAULT_ENV_PATH,
@@ -22,11 +25,13 @@ const USAGE = `使い方:
   --username <name>     プロフィール検証対象のユーザー名 (既定: lahaina_ushimado)
   --expect <text>       投稿本文またはメタデータに含まれるべき期待テキスト
   --env <path>          環境変数ファイルのパス (既定: ${DEFAULT_ENV_PATH})
-  --via <auto|graph|html>
-                        検証経路。graph=Graph API の /me/media を正本にする（推奨）
-                        auto=トークンがあれば graph、無ければ html（既定）
+  --via <auto|graph|render|html>
+                        検証経路。render=ヘッドレスChromeで公開ページを描画して実表示を読む
+                        （ログイン不要・2026-10-20 実測で動作確認済み）
+                        graph=Graph API の /me/media を正本にする
+                        auto=トークンがあれば graph、無ければ render（既定）
                         html=素の HTTP 取得。ログアウト状態では JS シェルしか返らず
-                        実表示を確認できないため、人が目視する場合のみ使う
+                        実表示を確認できない（後方互換のため残置）
   --json                JSON形式で結果を出力
   --help                このヘルプを表示`;
 
@@ -62,8 +67,8 @@ export function parseArgs(argv) {
       else if (arg === '--expect') options.expect = val;
       else if (arg === '--env') options.env = val;
       else if (arg === '--via') {
-        if (!['auto', 'graph', 'html'].includes(val)) {
-          throw new Error(`--via は auto|graph|html のいずれかです: ${val}`);
+        if (!['auto', 'graph', 'render', 'html'].includes(val)) {
+          throw new Error(`--via は auto|graph|render|html のいずれかです: ${val}`);
         }
         options.via = val;
       }
@@ -207,6 +212,173 @@ export function judgeProfile(html, username = 'lahaina_ushimado') {
     verdict: 'unverified',
     evidence: `プロフィール情報 (${username}) を特定できませんでした`,
   };
+}
+
+// --- ヘッドレスChromeによる実表示の読み戻し -------------------------------
+// 素の HTTP はログインウォール/JS シェルしか返さないが、公開ページをブラウザで
+// 「描画」すればログイン不要で実表示が読める（2026-10-20 実測:
+//  /lahaina_ushimado/ は og:title/og:description と「フォロワー1,149人・投稿166件」、
+//  /p/Ddf_thXPDK_/ は描画後DOMに "caption":{"text":"ラハイナPVです…"} を検出）。
+// これは「ログインにブラウザを使う」ことではなく、公開ページの閲覧なので §7 に該当しない。
+export const RENDER_EVIDENCE_FALLBACK =
+  '描画後DOMにも実表示が見つかりません（ログインウォール／削除済み／Chrome起動失敗の可能性）';
+
+// 公開ページをヘッドレスChromeで描画し、描画後DOMを返す（ログイン操作は一切しない）。
+// execFile は「非0終了＝失敗」として stdout を捨てるが、Chrome は正常描画後も
+// updater 等の ERROR で非0を返すことがあるため、spawn で stdout を確保し、
+// 描画結果が取れていれば成功として扱う（2026-10-20 実測）。
+export function renderPublicPage(url, { chromePath, timeoutMs = 90000, spawnImpl = spawn } = {}) {
+  const executable = chromePath || findChromeExecutable();
+  if (!executable) {
+    return Promise.reject(
+      new Error('ヘッドレスChromeが見つかりません（CHROME_PATH で指定してください）')
+    );
+  }
+  const profileDir = path.join(
+    os.tmpdir(),
+    `ig-verify-${process.pid}-${Date.now()}`
+  );
+  const args = [
+    '--headless=new',
+    '--disable-gpu',
+    '--no-sandbox',
+    '--no-first-run',
+    '--disable-extensions',
+    '--disable-background-networking',
+    '--virtual-time-budget=15000',
+    '--dump-dom',
+    `--user-data-dir=${profileDir}`,
+    url,
+  ];
+  return new Promise((resolve, reject) => {
+    const child = spawnImpl(executable, args, {
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error(`描画がタイムアウトしました（${timeoutMs}ms）`));
+    }, timeoutMs);
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk;
+    });
+    child.on('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (stdout.trim()) {
+        resolve(stdout);
+        return;
+      }
+      reject(new Error(`描画結果が空です (exit=${code}) ${stderr.slice(-300)}`));
+    });
+  });
+}
+
+const CHROME_CANDIDATES = [
+  'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+  'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+  'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+];
+
+export function findChromeExecutable({
+  env = process.env,
+  exists = fs.existsSync,
+  platform = process.platform,
+} = {}) {
+  if (env.CHROME_PATH && exists(env.CHROME_PATH)) return env.CHROME_PATH;
+  const candidates = platform === 'win32' ? CHROME_CANDIDATES : [];
+  for (const candidate of candidates) {
+    if (exists(candidate)) return candidate;
+  }
+  for (const name of ['google-chrome', 'chromium', 'chrome']) {
+    const pathEnv = env.PATH ?? '';
+    for (const dir of pathEnv.split(platform === 'win32' ? ';' : ':')) {
+      if (!dir) continue;
+      const candidate = `${dir}${platform === 'win32' ? '\\' : '/'}${name}`;
+      const withExt = platform === 'win32' ? `${candidate}.exe` : candidate;
+      if (exists(withExt)) return withExt;
+    }
+  }
+  return '';
+}
+
+// 描画後DOMから投稿本文を取り出す。Instagram は "caption":{"text":"..."} を
+// JSON 文字列（非ASCIIは \uXXXX）で埋め込むため、JSON.parse で復号する。
+export function extractRenderedCaption(html) {
+  if (!html) return '';
+  const match = html.match(/"caption":\{"text":"((?:[^"\\]|\\.)*)"/);
+  if (!match) return '';
+  try {
+    return JSON.parse(`"${match[1]}"`);
+  } catch {
+    return match[1];
+  }
+}
+
+export function judgeRenderedPost(html, { expect } = {}) {
+  if (!html) {
+    return { verdict: 'unverified', evidence: 'HTMLが空です' };
+  }
+  const caption = extractRenderedCaption(html);
+  const hasImage = Boolean(extractMetaContent(html, 'image'));
+  // 描画後DOMは常に /accounts/login/ 等の文字列を含むため、先に実表示の有無で判定する。
+  if (!caption && !hasImage) {
+    if (isLoginWall(html)) {
+      return { verdict: 'unverified', evidence: 'ログインウォールを検出しました' };
+    }
+    return { verdict: 'unverified', evidence: RENDER_EVIDENCE_FALLBACK };
+  }
+  if (expect) {
+    if (caption.includes(expect) || html.includes(expect)) {
+      return {
+        verdict: 'verified',
+        evidence: `描画後DOMに期待文字列 '${expect}' を検出 (caption: '${caption.slice(0, 80)}')`,
+      };
+    }
+    return {
+      verdict: 'mismatch',
+      evidence: `描画後DOMに '${expect}' が見つかりません (caption: '${caption.slice(0, 80)}')`,
+    };
+  }
+  return {
+    verdict: 'verified',
+    evidence: `描画後DOMに投稿の実表示を検出 (og:image=${hasImage ? 'あり' : 'なし'} / caption: '${caption.slice(0, 80)}')`,
+  };
+}
+
+export function judgeRenderedProfile(html, username = 'lahaina_ushimado') {
+  if (!html) {
+    return { verdict: 'unverified', evidence: 'HTMLが空です' };
+  }
+  const ogTitle = extractMetaContent(html, 'title');
+  const ogDescription = extractMetaContent(html, 'description');
+  const titleMatch = html.match(/<title>([^<]*)<\/title>/i);
+  const title = titleMatch ? titleMatch[1] : '';
+  const combined = `${ogTitle} ${ogDescription} ${title}`.toLowerCase();
+  const handle = `@${String(username).toLowerCase()}`;
+  // 描画後DOMは常に /accounts/login/ 等の文字列を含むため、先に実表示の有無で判定する。
+  if (
+    combined.includes(handle) ||
+    combined.includes('フォロワー') ||
+    combined.includes('followers')
+  ) {
+    return {
+      verdict: 'verified',
+      evidence: `描画後DOMにプロフィール表示を検出 (title: '${ogTitle || title}', desc: '${ogDescription.slice(0, 80)}')`,
+    };
+  }
+  if (isLoginWall(html)) {
+    return { verdict: 'unverified', evidence: 'ログインウォールを検出しました' };
+  }
+  return { verdict: 'unverified', evidence: RENDER_EVIDENCE_FALLBACK };
 }
 
 // --- Graph API 読み戻し ---------------------------------------------------
@@ -377,6 +549,38 @@ export async function runCli(argv, dependencies = {}) {
     if (options.json) stdout.write(`${JSON.stringify(graphResult, null, 2)}\n`);
     else stdout.write(`${graphResult.verdict}: ${judgement.evidence}\n`);
     return graphResult.verdict === 'verified' ? 0 : 1;
+  }
+
+  // 描画経路: 公開ページをヘッドレスChromeで描画し、実表示（ogメタ・投稿本文）を読む。
+  if (options.via === 'render') {
+    let renderedHtml = '';
+    try {
+      renderedHtml = await (dependencies.renderImpl ?? renderPublicPage)(targetUrl, {
+        chromePath: dependencies.chromePath,
+      });
+    } catch (error) {
+      const failResult = {
+        verdict: 'unverified',
+        evidence: `描画エラー: ${error.message}`,
+        url: targetUrl,
+        via: 'render',
+      };
+      if (options.json) stdout.write(`${JSON.stringify(failResult, null, 2)}\n`);
+      else stderr.write(`unverified: ${targetUrl} (描画エラー: ${error.message})\n`);
+      return 1;
+    }
+    const judgement = options.profile
+      ? judgeRenderedProfile(renderedHtml, options.username)
+      : judgeRenderedPost(renderedHtml, { expect: options.expect });
+    const renderResult = {
+      verdict: judgement.verdict,
+      evidence: judgement.evidence,
+      url: targetUrl,
+      via: 'render',
+    };
+    if (options.json) stdout.write(`${JSON.stringify(renderResult, null, 2)}\n`);
+    else stdout.write(`${renderResult.verdict}: ${targetUrl} (${judgement.evidence})\n`);
+    return renderResult.verdict === 'verified' ? 0 : 1;
   }
 
   let html = '';

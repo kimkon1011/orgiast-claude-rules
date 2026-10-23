@@ -30,12 +30,15 @@ const GH_API_COMMENT = /(?:^|[\s;&|("'`])gh\s+api\b[^\n]*\/comments\b/i;
 // 境界付きハンドル抽出。直後が英数/- なら長い別ハンドルの一部、直前がメールのローカル部
 // （[A-Za-z0-9._%+-]）ならメールアドレスなので拾わない。
 const MENTION = /(?<![\w.%+-])@([A-Za-z0-9][A-Za-z0-9-]{0,38})(?![A-Za-z0-9-])/g;
+const EMAIL_ADDRESS = /[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+/gi;
+const GMAIL_REST_WRITE_ENDPOINT = /https?:\/\/gmail\.googleapis\.com\/(?:upload\/)?gmail\/v1\/users\/[^/\s"'?]+\/(?:drafts|messages\/send)\b/i;
+const GMAIL_REST_WRITE_INTENT = /(?:-X\s*POST\b|--request(?:[ =])POST\b|-d\b|--data(?:-raw|-binary)?\b|\/messages\/send\b)/i;
 
 export function extractAddresses(toolInput) {
   const addresses = new Set();
   function visit(value, recipient = false) {
     if (typeof value === 'string') {
-      if (recipient) for (const match of value.matchAll(/[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+/gi)) addresses.add(match[0].toLowerCase());
+      if (recipient) for (const match of value.matchAll(new RegExp(EMAIL_ADDRESS.source, EMAIL_ADDRESS.flags))) addresses.add(match[0].toLowerCase());
     } else if (Array.isArray(value)) {
       for (const item of value) visit(item, recipient);
     } else if (value && typeof value === 'object') {
@@ -146,9 +149,32 @@ export function extractMentions(command) {
   return [...handles];
 }
 
+export function isGmailRestWriteCommand(command) {
+  const raw = String(command ?? '');
+  return GMAIL_REST_WRITE_ENDPOINT.test(raw) && GMAIL_REST_WRITE_INTENT.test(raw);
+}
+
+export function extractCommandAddresses(command) {
+  const addresses = new Set();
+  for (const match of String(command ?? '').matchAll(new RegExp(EMAIL_ADDRESS.source, EMAIL_ADDRESS.flags))) {
+    // form/query 風の `to=address@example.com` は、`=` が RFC 上ローカル部に使えるため
+    // 素のメール正規表現では `to=address@example.com` 全体になる。宛先キーだけを除く。
+    addresses.add(match[0].replace(/^(?:to|cc|bcc)=/i, '').toLowerCase());
+  }
+  return [...addresses];
+}
+
 export function judgeBash(hookInput, ledger) {
   if (!SHELL_TOOL.test(hookInput?.tool_name || '')) return { decision: 'pass', mentions: [], internal: [] };
   const command = String(hookInput?.tool_input?.command ?? '');
+  if (isGmailRestWriteCommand(command)) {
+    const addresses = extractCommandAddresses(command);
+    const internal = addresses.filter((addr) => isInternal(addr, ledger));
+    if (internal.length) {
+      const reason = `[INTERNAL-RECIPIENT] ${internal.join(', ')} は内部（社内・グループ会社・スタッフ）宛です。Gmail REST API を使った下書き・送信は行わず、Claude が Discord の DM で送ってください。Discord で送れない時だけ、チャット本文に「宛先／用件／本文」をコピペできる完成形で表示してください。台帳: ~/.claude/internal-recipients.json`;
+      return { decision: 'block', addresses, internal, reason };
+    }
+  }
   if (!isGhWriteCommand(command)) return { decision: 'pass', mentions: [], internal: [] };
   const mentions = extractMentions(command);
   const internal = mentions.filter((handle) => githubHandles(ledger).includes(handle));

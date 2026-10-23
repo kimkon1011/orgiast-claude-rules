@@ -195,7 +195,8 @@ function analyze(file, headRaw, tailRaw, headEvents, tailEvents, tailBytes) {
       lastMessageText = textOf(content);
       lastMessageEvent = event;
       endedWithError = false;
-    } else if (event?.type === 'assistant' && event?.message?.role === 'assistant') {
+    } else if (event?.type === 'assistant' && event?.message?.role === 'assistant' &&
+      event?.isApiErrorMessage !== true && event?.message?.model !== '<synthetic>') {
       const assistantText = textOf(content);
       if (assistantText) lastAssistantText = assistantText;
       lastRole = 'assistant';
@@ -232,11 +233,12 @@ function analyze(file, headRaw, tailRaw, headEvents, tailEvents, tailBytes) {
     sessionId, file: file.path, cwd, projectDir: path.basename(path.dirname(file.path)),
     mtime: new Date(file.mtimeMs).toISOString(), sizeMB: Number((file.size / 1024 / 1024).toFixed(2)),
     gitBranch, displayTitle, titleSource,
-    firstPrompt: shorten(firstPrompt || '(プロンプトなし)', 1500), llmTitle: shorten(firstPrompt || '(プロンプトなし)', 1500), lastTs, lastRole,
+    firstPrompt: shorten(firstPrompt || '(プロンプトなし)', 1500), llmTitle: shorten(firstPrompt || '(プロンプトなし)', 1500), lastTs, lastRole, endedWithError,
     lastAssistantText: shorten(lastAssistantText, 1500), ageDays: Number(ageDays.toFixed(1)),
     messageCountEstimate: messageCount, score, status: status.name, emoji: status.emoji, reasons,
     signals: {
       lastUserUnanswered: lastRole === 'user',
+      lastUserUnansweredByApiError: lastRole === 'user' && endedWithError,
       interrupted: /\[Request interrupted by user\]|request interrupted|interrupted by user|リクエストはユーザーにより中断/i.test(interruptionText),
       pendingToolUse: pendingTools.size,
     },

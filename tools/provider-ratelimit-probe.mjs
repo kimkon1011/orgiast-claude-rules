@@ -15,7 +15,7 @@ export const PROBE_PROVIDERS = Object.freeze({
   groq: { base: 'https://api.groq.com/openai/v1/chat/completions', keyEnv: 'GROQ_API_KEY', keyFile: 'groq.env', model: 'openai/gpt-oss-120b' },
   openrouter: { base: 'https://openrouter.ai/api/v1/chat/completions', keyEnv: 'OPENROUTER_API_KEY', keyFile: 'openrouter.env', model: 'openai/gpt-oss-120b' },
   cerebras: { base: 'https://api.cerebras.ai/v1/chat/completions', keyEnv: 'CEREBRAS_API_KEY', keyFile: 'cerebras.env', model: 'zai-glm-4.7' },
-  deepseek: { base: 'https://api.deepseek.com/chat/completions', keyEnv: 'DEEPSEEK_API_KEY', keyFile: 'deepseek.env', model: 'deepseek-chat' },
+  deepseek: { base: 'https://api.deepseek.com/chat/completions', keyEnv: 'DEEPSEEK_API_KEY', keyFile: 'deepseek.env', model: 'deepseek-flash' },
   grok: { base: 'https://api.x.ai/v1/chat/completions', keyEnv: 'XAI_API_KEY', keyFile: 'xai.env', model: 'grok-3' },
   kimi: { base: 'https://api.moonshot.ai/v1/chat/completions', keyEnv: 'MOONSHOT_API_KEY', keyFile: 'kimi-api.env', model: 'kimi-k3' },
 });
@@ -48,7 +48,7 @@ export async function probeRateLimits({ provider, model, key, fetchImpl = fetch,
     const response = await fetchImpl(config.base, {
       method: 'POST',
       headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: useModel, messages: [{ role: 'user', content: 'ping' }], max_tokens: 1 }),
+      body: JSON.stringify({ model: useModel, ...(provider === 'deepseek' && useModel === 'deepseek-flash' ? { thinking: { type: 'disabled' } } : {}), messages: [{ role: 'user', content: 'ping' }], max_tokens: 1 }),
     });
     const limits = parseRateLimitHeaders(response.headers);
     const usage = response.ok ? (await response.json().catch(() => null))?.usage ?? null : null;

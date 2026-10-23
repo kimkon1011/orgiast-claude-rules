@@ -90,10 +90,11 @@ export function detectFailedJob(rows, now = Date.now()) {
   });
 }
 export function detectStalledSession(sessions, now = Date.now()) {
-  return sessions.filter(s => age(s.mtime, now) >= 3 && s.lastRole === 'assistant' &&
-    /(?:これから|続いて|次に|それでは)[^。\n]{0,160}(?:します|進めます|行います)[。！!\s]*$/.test(s.lastAssistantText || ''))
+  return sessions.filter(s => age(s.mtime, now) >= 3 && ((s.lastRole === 'assistant' &&
+    /(?:これから|続いて|次に|それでは)[^。\n]{0,160}(?:します|進めます|行います)[。！!\s]*$/.test(s.lastAssistantText || '')) ||
+    (s.lastRole === 'user' && s.endedWithError === true)))
     .map(s => item('stalled_session', s.sessionId, s.displayTitle || s.sessionId, s.file, age(s.mtime, now),
-      'Codexで会話の依頼と現状を確認して再開', 'assistantが実行予告したまま終了', { cwd: localPath(s.cwd), eventTime: s.mtime }));
+      'Codexで会話の依頼と現状を確認して再開', s.lastRole === 'user' && s.endedWithError === true ? 'API エラーで未返答' : 'assistantが実行予告したまま終了', { cwd: localPath(s.cwd), eventTime: s.mtime }));
 }
 export function detectUnverifiedDelegation(logs, now = Date.now()) {
   return logs.filter(l => l.exit === 0 && l.commitVerified === false)

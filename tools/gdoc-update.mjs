@@ -29,9 +29,10 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
+import { defaultDriveKeyPath } from './lib/drive-auth.mjs';
 
-const DEFAULT_KEY =
-  'C:/Users/uers/Downloads/CLAUDE.md配布/aujust-sales-automation/.gcp/sheets-sa.json';
+// 既定パスはハードコードしない（旧既定値はディレクトリ名の打ち間違いで鍵を見失っていた。2026-10-23 実測）。
+const DEFAULT_KEY = process.env.GOOGLE_SA_KEY ?? defaultDriveKeyPath();
 const DEFAULT_SUBJECT = 'kim@orgiast.jp';
 const SCOPE = 'https://www.googleapis.com/auth/drive';
 

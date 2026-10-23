@@ -8,6 +8,10 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
 import { main, pollOnce, readInbox, syncMailState, resolveMailTarget, mailId, parseArgs, waitForReply, createClient, TERMINAL_STATUSES, hasDecisionRequest, updateInbox, presentMail, ACK_BATCH_LIMIT, SERVER_MAX_ATTEMPTS, CAPABILITY_BACKOFF_MS, INTERRUPTED_PROMPT_MS, INTERRUPTED_PROMPT_BODY, INBOX_LOCK_RETRIES, INBOX_LOCK_DELAY_MS, INBOX_LOCK_STALE_MS, COMMAND_LOCK_RETRIES, COMMAND_LOCK_DELAY_MS, LOCK_BUSY_EXIT, notifyPendingArrivals } from './fleet-mail.mjs';
+// --answer は headless 実行中（CLAUDE_HEADLESS=1 / ORGIAST_HEADLESS_JOB）に判断代行を拒否して 2 を返す。
+// このテストを headless セッション（夜間 auto-session / CI 外の手動実行）から回すと answer 系だけが
+// 環境依存で落ちるため、テストプロセス側で無効化する。本番の安全弁そのものは変更しない。
+for (const key of ['CLAUDE_HEADLESS', 'ORGIAST_HEADLESS_JOB']) delete process.env[key];
 const pcMap = JSON.parse(fs.readFileSync(new URL('../fleet-pc-map.json', import.meta.url), 'utf8'));
 const labels = Object.keys(pcMap).filter(key => !key.startsWith('_'));
 const receiver = labels[0], sender = labels.find(label => label !== receiver && pcMap[label].hostname);
@@ -1221,6 +1225,25 @@ test('821 sent status counts an empty mail response as a lookup failure and rese
   cached = JSON.parse(fs.readFileSync(path.join(f.dir, 'fleet-mail-sent-status.json')));
   assert.equal(cached['mail-late'].status, 'delivered');
   assert.equal(cached['mail-late'].lookupFailures, undefined);
+});
+test('821 sent status never abandons a freshly sent id on transient timeouts', async t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.dir, 'fleet-mail-sent.jsonl'), JSON.stringify({ action: 'sent', id: `mail-${Date.now()}-deadbeef` }) + '\n');
+  let calls = 0;
+  const request = async () => { calls++; throw new Error('timeout'); };
+  for (let i = 0; i < SENT_STATUS_MAX_LOOKUP_FAILURES + 1; i++) await refreshSentStatus({ home: f.home, request, stderr: () => {} });
+  assert.equal(calls, SENT_STATUS_MAX_LOOKUP_FAILURES + 1, 'sent 行がある id は一時的な失敗で打ち切らない');
+});
+test('821 sent status abandons an expired sent id so the retry noise stops', async t => {
+  const f = fixture(t);
+  const id = `mail-${Date.now() - 9 * 24 * 3600000}-abcd1234`;
+  fs.writeFileSync(path.join(f.dir, 'fleet-mail-sent.jsonl'), JSON.stringify({ action: 'sent', id }) + '\n');
+  let calls = 0;
+  const request = async () => { calls++; throw new Error('timeout'); };
+  for (let i = 0; i < SENT_STATUS_MAX_LOOKUP_FAILURES; i++) await refreshSentStatus({ home: f.home, request, stderr: () => {} });
+  assert.equal(calls, SENT_STATUS_MAX_LOOKUP_FAILURES);
+  await refreshSentStatus({ home: f.home, request, stderr: () => {} });
+  assert.equal(calls, SENT_STATUS_MAX_LOOKUP_FAILURES, '期限切れ相当の id は打ち切り後 mail-get を呼ばない');
 });
 test('802 warning stripping keeps real answers and removes known configuration lines', () => {
   assert.equal(stripClaudeWarnings('Permission allow rule (settings.json): warning\r\nWarning: Invalid configuration entry\nanswer\nUnknown permission rule'), 'answer');

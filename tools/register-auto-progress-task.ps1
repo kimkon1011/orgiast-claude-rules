@@ -19,9 +19,11 @@ if ($ValidateOnly) {
   Write-Host 'validate only: OK (no registration)'
   return
 }
-$node = (Get-Command node -ErrorAction Stop).Source
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 120)
+$node = (Get-Command node -CommandType Application -ErrorAction Stop | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source
+if (-not $node) { throw 'node.exe not found' }
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 55)
 
+# Bound the hourly watch below its interval: IgnoreNew otherwise refuses overlapping starts.
 $watchAction = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($watch) -WorkingDirectory $repo
 $watchTriggers = @((New-ScheduledTaskTrigger -Once -At '00:00' -RepetitionInterval (New-TimeSpan -Hours 1)))
 Register-ScheduledTask -TaskName $names[0] -Action $watchAction -Trigger $watchTriggers -Settings $settings -Description 'Check declared auto-progress promises hourly; resume stalled ones after two hours and report to the owner and fleet sheet.' -Force | Out-Null

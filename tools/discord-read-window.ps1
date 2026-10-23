@@ -29,6 +29,11 @@ Add-Type -AssemblyName System.Windows.Forms
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $AE = [System.Windows.Automation.AutomationElement]
 $Scope = [System.Windows.Automation.TreeScope]
+Add-Type -Namespace Win32 -Name Native -MemberDefinition @'
+[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
+[DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+'@
 
 function Find-DiscordWindow {
   $root = $AE::RootElement
@@ -67,11 +72,6 @@ if ($Chat) {
     Start-Sleep -Seconds 2
   } else {
     # フォールバック: DM 一覧は仮想化リストで画面外だとリンクが無い → クイックスイッチャー Ctrl+K で検索して開く
-    Add-Type -Namespace Win32 -Name Native -MemberDefinition @'
-[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
-[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
-[DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-'@
     $hwnd = [IntPtr]$win.Current.NativeWindowHandle
     [void][Win32.Native]::ShowWindow($hwnd, 9)
     [void][Win32.Native]::SetForegroundWindow($hwnd)
@@ -163,3 +163,27 @@ $lines.Add('')
 foreach ($o in $sorted) { $lines.Add('- ' + $o.t) }
 $lines | Out-File -FilePath $Out -Encoding utf8
 Write-Output ("OUT: $Out (" + $sorted.Count + " messages)")
+
+# 読み取り中のスクロールキーが入力欄に効くと、Discord は直前投稿を編集モードにする。
+# 編集モードのまま終えると次の操作が意図しない編集になるため、検出したら Esc で解除する。
+try {
+  $inEdit = $false
+  foreach ($e in $win.FindAll($Scope::Descendants, [System.Windows.Automation.Condition]::TrueCondition)) {
+    if ($e.Current.Name -match 'Escキーでキャンセル') { $inEdit = $true; break }
+  }
+  if ($inEdit) {
+    $hwnd2 = [IntPtr]$win.Current.NativeWindowHandle
+    [void][Win32.Native]::ShowWindow($hwnd2, 9)
+    [void][Win32.Native]::SetForegroundWindow($hwnd2)
+    Start-Sleep -Milliseconds 500
+    if ([Win32.Native]::GetForegroundWindow() -eq $hwnd2) {
+      [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+      Start-Sleep -Milliseconds 500
+      $stillEdit = $false
+      foreach ($e in $win.FindAll($Scope::Descendants, [System.Windows.Automation.Condition]::TrueCondition)) {
+        if ($e.Current.Name -match 'Escキーでキャンセル') { $stillEdit = $true; break }
+      }
+      if ($stillEdit) { Write-Output 'WARN: edit mode remains after Esc' } else { Write-Output 'EDITMODE: cleared' }
+    } else { Write-Output 'WARN: edit mode detected but Discord is not foreground' }
+  }
+} catch { Write-Output 'WARN: edit-mode check failed' }

@@ -1,10 +1,11 @@
+// 旧モデル名は過去の executor-usage.jsonl の照合・集計を回帰検証するため保持する。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { parseHandoff } from './auto-session.mjs';
-import { applyAutoHeal, authRestoredAfter, collectFindings, emptyOutputReason, isCooldownSkippedRow, isEmptyDiffEscalationRow, isQuotaLimitedRow, lowYieldBackends, parseRateLimitsFromText, readCodexUsedPercent, timeoutWasteSummary, upsertFixTasks, windowResetsAfterLimit } from './delegation-health-check.mjs';
+import { applyAutoHeal, authRestoredAfter, collectFindings, dedupeLimitEvents, emptyOutputReason, isCooldownSkippedRow, isEmptyDiffEscalationRow, isQuotaLimitedRow, lowYieldBackends, metricFromLaterWindow, parseRateLimitsFromText, policyStallAttempts, quotaSweepProgressRow, readCodexUsedPercent, timeoutWasteSummary, upsertFixTasks, windowResetsAfterLimit } from './delegation-health-check.mjs';
 
 const NOW = new Date('2026-09-09T12:00:00.000Z');
 const homes = [];
@@ -184,6 +185,37 @@ test('emptyOutputReason は U+2019 と U+0027 の両方の usage limit 行を us
   // 対照群: stderrTail なしの status:1 は従来どおり exit_1、{secs:0} は no_output（張りすぎ検出）
   assert.equal(emptyOutputReason({ status: 1 }), 'exit_1');
   assert.equal(emptyOutputReason({ secs: 0 }), 'no_output');
+});
+
+// 2026-10-21T00:32Z 実測: stderrTail は末尾200字の切り詰め(codex-do.mjs の slice(-200))なので、
+// "You've hit" の先頭が欠けて "t your usage limit." から始まる行が2件出た。旧パターンは
+// 先頭を要求していたため一致せず、no_output(2件) として codex_empty_output が起票された。
+const TRUNCATED_USAGE_LIMIT_STDERR = 't your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits or try again at 1:22 PM.';
+
+test('先頭が切り詰められた usage limit 行も usage_limit に分類する', () => {
+  assert.equal(emptyOutputReason({
+    status: 'error', exitCode: 1, launched: true, timedOut: false, secs: 39, stderrTail: TRUNCATED_USAGE_LIMIT_STDERR,
+  }), 'usage_limit');
+  // 対照群: 上限メッセージを含まない status:'error' + exitCode:1 は従来どおり no_output。
+  assert.equal(emptyOutputReason({ status: 'error', exitCode: 1, launched: true, timedOut: false, secs: 39, stderrTail: 't something else went wrong' }), 'no_output');
+});
+
+test('先頭切り詰めの usage limit 2件で codex_empty_output を出さない', () => {
+  const dir = home();
+  const realRow = (t, model, lane, secs) => ({
+    t, provider: 'codex', model, lane, escalated: false, in: 5781, out: 0,
+    launched: true, timedOut: false, status: 'error', origin: 'interactive', kind: 'implement',
+    exitCode: 1, fastFail: true, attempts: 2, secs, stderrTail: TRUNCATED_USAGE_LIMIT_STDERR,
+  });
+  write(dir, 'executor-usage.jsonl',
+    row(realRow('2026-10-21T00:32:59.024Z', 'codex-cli/gpt-6-astra', 'complex_task', 38.998))
+    + row(realRow('2026-10-21T00:33:04.003Z', 'codex-cli/gpt-5.6-sol', 'astra_usage_limit', 4.972)));
+  const findings = collectFindings({ home: dir, now: new Date('2026-10-21T01:00:00.000Z'), codexUsedPercent: null });
+  const ids = findings.map((item) => item.id);
+  assert.ok(!ids.includes('codex_empty_output'), JSON.stringify(ids));
+  const limit = findings.find((item) => item.id === 'codex_usage_limit');
+  assert.equal(limit.severity, 'low');
+  assert.deepEqual(limit.evidence, ['2件', 'usage_limit(2件)']);
 });
 
 test('実台帳行の Codex 上限到達行で collectFindings が codex_empty_output を出さず codex_usage_limit を出す', () => {
@@ -543,6 +575,35 @@ test('同じ窓のまま低い使用率なら従来どおり偽陽性として�
   assert.match(findings[0].evidence.join('/'), /used_percent 67/);
 });
 
+// 2026-10-20T19:15Z の実測データ。本物の上限(primary:null / credits 0)だが until のパースが
+// 壊れて 2026-10-21T09:05Z になり、翌夜は 02:52Z 開始の 300 分窓の used_percent 8 を読んだ。
+test('2026-10-20 の実測: 後から始まった窓の低使用率を偽陽性の根拠にしない', () => {
+  const dir = home();
+  const now = new Date('2026-10-21T18:09:49.000Z');
+  write(dir, 'codex-limit-history.jsonl', [
+    { t: '2026-10-20T19:15:41.089Z', until: 1792573500000, reason: 'usage_limit' },
+    { t: '2026-10-20T19:24:44.528Z', until: 1792573500000, reason: 'usage_limit_no_fallback' },
+  ].map(row).join(''));
+  const findings = collectFindings({ home: dir, now, codexUsedPercent: { usedPercent: 8, windowMinutes: 300, resetsAt: 1792569159 } });
+  assert.equal(findings.some((item) => item.id === 'codex_false_usage_limit'), false);
+});
+
+test('metricFromLaterWindow: 短い窓が検出より後に始まった時だけ true', () => {
+  const rows = [{ t: '2026-10-20T19:15:41.000Z', until: 1792573500000 }];
+  assert.equal(metricFromLaterWindow(rows, { usedPercent: 8, windowMinutes: 300, resetsAt: 1792569159 }), true);
+  assert.equal(metricFromLaterWindow(rows, { usedPercent: 67, windowMinutes: 10080, resetsAt: 1791982428 }), false);
+  assert.equal(metricFromLaterWindow(rows, { usedPercent: 8, windowMinutes: 300, resetsAt: 1792530000 }), false);
+  assert.equal(metricFromLaterWindow(rows, { usedPercent: 8, windowMinutes: null, resetsAt: 1792569159 }), false);
+});
+
+test('dedupeLimitEvents: until が同じ usage_limit と usage_limit_no_fallback を1件に数える', () => {
+  assert.equal(dedupeLimitEvents([
+    { until: 1792573500000, reason: 'usage_limit' },
+    { until: 1792573500000, reason: 'usage_limit_no_fallback' },
+    { reason: 'usage_limit' },
+  ]).length, 2);
+});
+
 test('windowResetsAfterLimit: 窓が進んだ時だけ true、until 不明なら判定しない', () => {
   assert.equal(windowResetsAfterLimit([{ reason: 'usage_limit' }], { usedPercent: 1, resetsAt: 1794249388 }), false);
   assert.equal(windowResetsAfterLimit([{ reason: 'usage_limit' }], null), false);
@@ -582,7 +643,7 @@ test('chain のタイムアウトが2件あれば fallback_chain_timeout を出�
       out: 800, status: 0, secs: 640, stderrTail: '',
       chain: [
         { backend: 'gemini-cli', model: 'gemini-3.7-flash', status: 124, timedOut: true, spawnFailed: false, out: 0, secs: 600, stderrTail: '', outcome: 'timeout' },
-        { backend: 'cheap-code:deepseek', model: 'deepseek-v4-flash', status: 0, timedOut: false, spawnFailed: false, out: 800, secs: 40, stderrTail: '', outcome: 'ok' }
+        { backend: 'cheap-code:deepseek', model: 'deepseek-v4-flash', status: 0, timedOut: false, spawnFailed: false, out: 800, secs: 40, stderrTail: '', outcome: 'ok' } // 過去ログの旧名を保持して履歴集計を検証。
       ]
     }) +
     row({
@@ -590,7 +651,7 @@ test('chain のタイムアウトが2件あれば fallback_chain_timeout を出�
       out: 800, status: 0, secs: 640, stderrTail: '',
       chain: [
         { backend: 'gemini-cli', model: 'gemini-3.7-flash', status: 124, timedOut: true, spawnFailed: false, out: 0, secs: 600, stderrTail: '', outcome: 'timeout' },
-        { backend: 'cheap-code:deepseek', model: 'deepseek-v4-flash', status: 0, timedOut: false, spawnFailed: false, out: 800, secs: 40, stderrTail: '', outcome: 'ok' }
+        { backend: 'cheap-code:deepseek', model: 'deepseek-v4-flash', status: 0, timedOut: false, spawnFailed: false, out: 800, secs: 40, stderrTail: '', outcome: 'ok' } // 過去ログの旧名を保持して履歴集計を検証。
       ]
     })
   );
@@ -612,7 +673,7 @@ test('chain のタイムアウトが1件だけなら fallback_chain_timeout を�
       out: 800, status: 0, secs: 640, stderrTail: '',
       chain: [
         { backend: 'gemini-cli', model: 'gemini-3.7-flash', status: 124, timedOut: true, spawnFailed: false, out: 0, secs: 600, stderrTail: '', outcome: 'timeout' },
-        { backend: 'cheap-code:deepseek', model: 'deepseek-v4-flash', status: 0, timedOut: false, spawnFailed: false, out: 800, secs: 40, stderrTail: '', outcome: 'ok' }
+        { backend: 'cheap-code:deepseek', model: 'deepseek-v4-flash', status: 0, timedOut: false, spawnFailed: false, out: 800, secs: 40, stderrTail: '', outcome: 'ok' } // 過去ログの旧名を保持して履歴集計を検証。
       ]
     })
   );
@@ -658,6 +719,20 @@ test('文字列 status の WSL 不在3件は high の環境故障と未修理全
   const outage = findings.find(f => f.id === 'lane_outage_unrepaired');
   assert.equal(outage.provider, 'codex'); assert.equal(outage.severity, 'high');
   assert.deepEqual(outage.evidence, ['3件すべて失敗', '最初 2026-09-09T10:00:00Z', '最後 2026-09-09T10:02:00Z', 'WSL ディストリが見つかりませんでした(3件)']);
+});
+test('quota-sweep:codex は失敗の後に exhausted(トークン消費)が1件あれば全滅にしない', () => {
+  const dir = home();
+  const failed = ['2026-09-09T08:48:58.750Z', '2026-09-09T09:04:00.145Z', '2026-09-09T10:33:57.577Z', '2026-09-09T10:48:57.518Z']
+    .map(t => ({ t, provider: 'quota-sweep:codex', model: 'codex', in: 0, out: 0, tokens: 0, status: 'failed' }));
+  const progressed = { t: '2026-09-09T11:55:43.783Z', provider: 'quota-sweep:codex', model: 'codex', in: 1126575, out: 10422, tokens: 1136997, status: 'exhausted' };
+  write(dir, 'executor-usage.jsonl', [...failed, progressed].map(row).join(''));
+  assert.equal(quotaSweepProgressRow(progressed), true);
+  assert.equal(quotaSweepProgressRow(failed[0]), false);
+  assert.deepEqual(collectFindings({ home: dir, now: NOW }).filter(f => f.id === 'lane_outage_unrepaired'), []);
+  // 対照群: 走った行が無ければ同じ4件で全滅を出す（キーが増えても検出は鈍らない）。
+  write(dir, 'executor-usage.jsonl', failed.map(row).join(''));
+  const outage = collectFindings({ home: dir, now: NOW }).find(f => f.id === 'lane_outage_unrepaired');
+  assert.equal(outage.provider, 'quota-sweep:codex'); assert.equal(outage.severity, 'high');
 });
 test('全レーンの未修理全滅は provider ごとに集計し集計窓外を除く', () => {
   const dir = home();
@@ -887,20 +962,20 @@ test('低成果は実際に秒数を使ったバックエンドへ帰属する�
     { provider: 'fallback', model: 'cheap-code:deepseek/deepseek-v4-flash', secs: 6153, out: 0, status: 'timeout',
       chain: [
         { backend: 'gemini-cli', model: 'gemini-3.7-flash', secs: 4953, out: 0, outcome: 'timeout' },
-        { backend: 'cheap-code:deepseek', model: 'deepseek-v4-flash', secs: 600, out: 0, outcome: 'timeout' }] },
+        { backend: 'cheap-code:deepseek', model: 'deepseek-v4-flash', secs: 600, out: 0, outcome: 'timeout' }] }, // 過去ログの旧名を保持して履歴集計を検証。
     { provider: 'fallback', model: 'cheap-code:deepseek/deepseek-v4-flash', secs: 1425, out: 98, status: 'ok',
       chain: [
         { backend: 'gemini-cli', model: 'gemini-3.7-flash', secs: 637, out: 1149, outcome: 'timeout' },
-        { backend: 'cheap-code:deepseek', model: 'deepseek-v4-flash', secs: 187, out: 98, outcome: 'ok' }] },
+        { backend: 'cheap-code:deepseek', model: 'deepseek-v4-flash', secs: 187, out: 98, outcome: 'ok' }] }, // 過去ログの旧名を保持して履歴集計を検証。
   ];
   assert.equal(lowYieldBackends(rows).size, 0);
 });
 
 test('低成果の帰属先は実際に長時間だったバックエンドになる', () => {
   const slow = (secs) => ({ provider: 'fallback', model: 'cheap-code:deepseek/deepseek-v4-flash', secs, out: 5,
-    chain: [{ backend: 'cheap-code:deepseek', model: 'deepseek-v4-flash', secs, out: 5, outcome: 'ok' }] });
+    chain: [{ backend: 'cheap-code:deepseek', model: 'deepseek-v4-flash', secs, out: 5, outcome: 'ok' }] }); // 過去ログの旧名を保持して履歴集計を検証。
   const counts = lowYieldBackends([slow(1200), slow(1300), { provider: 'codex', model: 'gpt-5', secs: 5000, out: 0 }]);
-  assert.equal(counts.get('deepseek-v4-flash'), 2);
+  assert.equal(counts.get('deepseek-v4-flash'), 2); // 過去ログの旧名を保持して履歴集計を検証。
   assert.equal(counts.size, 1);
 });
 
@@ -914,10 +989,10 @@ test('低成果の chain 行だけでは fallback_low_yield を起票しない',
   write(dir, 'executor-usage.jsonl', [
     { t: '2026-09-09T10:00:00Z', provider: 'fallback', model: 'cheap-code:deepseek/deepseek-v4-flash', secs: 1425, out: 98,
       chain: [{ backend: 'gemini-cli', model: 'gemini-3.7-flash', secs: 637, out: 1149, outcome: 'timeout' },
-        { backend: 'cheap-code:deepseek', model: 'deepseek-v4-flash', secs: 187, out: 98, outcome: 'ok' }] },
+        { backend: 'cheap-code:deepseek', model: 'deepseek-v4-flash', secs: 187, out: 98, outcome: 'ok' }] }, // 過去ログの旧名を保持して履歴集計を検証。
     { t: '2026-09-09T10:30:00Z', provider: 'fallback', model: 'cheap-code:deepseek/deepseek-v4-flash', secs: 953, out: 102,
       chain: [{ backend: 'gemini-cli', model: 'gemini-3.7-flash', secs: 846, out: 2289, outcome: 'timeout' },
-        { backend: 'cheap-code:deepseek', model: 'deepseek-v4-flash', secs: 106, out: 102, outcome: 'ok' }] },
+        { backend: 'cheap-code:deepseek', model: 'deepseek-v4-flash', secs: 106, out: 102, outcome: 'ok' }] }, // 過去ログの旧名を保持して履歴集計を検証。
   ].map(row).join(''));
   const findings = collectFindings({ home: dir, now: NOW });
   assert.equal(findings.filter((f) => f.id === 'fallback_low_yield').length, 0);
@@ -932,7 +1007,7 @@ test('#773 以降の timeout が上限を超えたら夜間に high で検出す
   const findings = collectFindings({ home: dir, now: new Date('2026-10-19T12:00:00Z'), codexUsedPercent: null });
   const finding = findings.find((f) => f.id === 'timeout_waste_exceeds_cap');
   assert.equal(finding?.severity, 'high');
-  assert.deepEqual(finding.evidence, ['1件', '最大試行 1500秒', '上限 900秒']);
+  assert.deepEqual(finding.evidence, ['1件', '最大試行 1500秒', '上限 900秒', '超過: gemini-cli フォールバック 1500秒/予算900秒']);
 });
 
 test('#773 以降の timeout が上限内なら timeout_waste_exceeds_cap を出さない', () => {
@@ -954,4 +1029,44 @@ test('timeoutWasteSummary は上限内でも配備後の timeout を report に�
   assert.equal(summary.overCapRows, 0);
   assert.equal(summary.maxAttemptSecs, 900);
   assert.equal(summary.lastPostDeployTimeoutAt, '2026-10-19T17:34:53.000Z');
+});
+
+test('policyStallAttempts は chain 試行ごとに拒否痕跡を抽出し outcome を引き継ぐ', () => {
+  const rows = [
+    { t: '2026-10-22T00:00:00Z', provider: 'fallback', chain: [
+      { backend: 'gemini-cli', model: 'gemini-3.7-flash', secs: 305.2, out: 120, budgetSecs: 600, stderrTail: 'Tool execution denied by policy. Tool execution denied by policy.', outcome: 'blocked' },
+      { backend: 'cheap-code:deepseek', secs: 40, out: 900, stderrTail: 'ok', outcome: 'ok' },
+    ] },
+    { t: '2026-10-22T01:00:00Z', provider: 'gemini', secs: 12, out: 50, stderrTail: 'no denial here' },
+  ];
+  const attempts = policyStallAttempts(rows);
+  assert.equal(attempts.length, 1);
+  assert.equal(attempts[0].backend, 'gemini-cli');
+  assert.equal(attempts[0].outcome, 'blocked');
+  assert.equal(attempts[0].denials, 2);
+  assert.equal(attempts[0].budgetSecs, 600);
+});
+
+test('#964 以降で打ち切られずに300秒以上消費した policy 停滞を起票し、打ち切り済み・配備前は起票しない', () => {
+  const stall = (t, outcome, secs) => row({ t, provider: 'fallback', chain: [{ backend: 'gemini-cli', secs, out: 200, budgetSecs: 600, stderrTail: 'Tool execution denied by policy. Tool execution denied by policy. Tool execution denied by policy.', outcome }] });
+  const unaborted = home();
+  write(unaborted, 'executor-usage.jsonl', stall('2026-10-22T03:00:00Z', 'ok', 880));
+  const found = collectFindings({ home: unaborted, now: new Date('2026-10-22T12:00:00Z'), codexUsedPercent: null });
+  const finding = found.find((item) => item.id === 'policy_stall_not_aborted');
+  assert.ok(finding, `起票されるべき: ${JSON.stringify(found.map((f) => f.id))}`);
+  assert.match(finding.evidence.join(' '), /1件.*最大 880秒/);
+
+  const aborted = home();
+  write(aborted, 'executor-usage.jsonl', stall('2026-10-22T03:00:00Z', 'blocked', 301));
+  assert.equal(collectFindings({ home: aborted, now: new Date('2026-10-22T12:00:00Z'), codexUsedPercent: null }).some((item) => item.id === 'policy_stall_not_aborted'), false);
+
+  const preDeploy = home();
+  write(preDeploy, 'executor-usage.jsonl', stall('2026-10-21T02:27:07Z', 'timeout', 900));
+  assert.equal(collectFindings({ home: preDeploy, now: new Date('2026-10-22T12:00:00Z'), codexUsedPercent: null }).some((item) => item.id === 'policy_stall_not_aborted'), false);
+});
+
+test('新名 Flash も過去ログと同様に低成果バックエンドとして集計する', () => {
+  const counts = lowYieldBackends([{ provider: 'fallback', model: 'cheap-code:deepseek/deepseek-flash',
+    chain: [{ backend: 'cheap-code:deepseek', model: 'deepseek-flash', secs: 1000, out: 5, outcome: 'ok' }] }]);
+  assert.equal(counts.get('deepseek-flash'), 1);
 });

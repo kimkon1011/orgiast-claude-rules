@@ -987,9 +987,22 @@ test('transcriptPath は小文字ドライブのバケットを維持する', ()
 test('buildPrompt は実リポジトリで git -C を使うよう指示する', () => {
   const repoCwd = String.raw`C:\Users\example\Downloads\repo`;
   const prompt = buildPrompt('実装する', {}, repoCwd, '/tmp/run.summary.md', 60, new Date('2026-08-26T00:00:00Z'));
-  assert.ok(prompt.includes(`git -C ${repoCwd}`));
-  assert.ok(prompt.includes(`--cwd ${repoCwd}`));
+  assert.ok(prompt.includes(`git -C "${repoCwd}"`));
+  assert.ok(prompt.includes(`--cwd "${repoCwd}"`));
   assert.ok(prompt.indexOf('セッションの作業ディレクトリは履歴を揃えるため') < prompt.indexOf('実装本体は'));
+});
+
+test('全 auto-session プロンプトは Windows の --cwd をダブルクォートする', () => {
+  const repoCwd = String.raw`C:\Users\example\Downloads\repo`;
+  const prompts = [
+    buildPrompt('実装する', {}, repoCwd, '/tmp/run.summary.md'),
+    buildFeedbackPrompt({ number: 1, title: '報告', url: 'https://example.test/1', body: '' }, 'owner/repo', repoCwd, '/tmp/run.summary.md'),
+    buildRolePrompt('tester', repoCwd, '/tmp/run.summary.md'),
+  ];
+  for (const prompt of prompts) {
+    assert.ok(prompt.includes(`--cwd "${repoCwd}"`));
+    assert.ok(!prompt.includes(`--cwd ${repoCwd}`));
+  }
 });
 
 test('buildPrompt は PR に automerge ラベルを付け、CI 緑を待たずに自動マージさせる', () => {

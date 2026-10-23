@@ -43,10 +43,22 @@ node tools/purge-sessions.mjs --restore '<sessionId>'
 
 ## スマホ／claude.ai の「Code」一覧（サーバー側）
 
-**自動実行は停止中（2026-10-18）。** 以前は `--hook` が `tools/purge-remote-sessions.mjs` を6時間ごとに起動し、
-切断済み・最終イベントから24時間以上のリモートセッションを時間だけで判定してアーカイブしていた。
-この判定ではクローズしていないセッションまで消える（10/16〜17 に未クローズ28件を誤アーカイブ。全件 `/unarchive` で復元済み）。
-サーバ側セッション ID（`cse_…`）とローカルのクローズ記録を結ぶ手段ができるまで、自動では動かさない。
+`--hook` は `tools/purge-remote-sessions.mjs` を6時間ごとに起動し、明示的に閉じたセッションだけをアーカイブする。
+クローズ記録は `~/.claude/closed-sessions.json` の `ids` と、`archived-sessions.jsonl` の `reason` が
+`closed` または `approved` の行。`abandoned`・`empty` は対象にしない。
+帳簿の行は transcript がまだ `projects-archive/` にあるときだけ数える（`--restore` で再開したものは外す）。
+帳簿が closed でも、最後の発言の「このセッション:」行が閉じてよい以外（「まだ閉じない」等）なら外す
+（2026-10-22 実例: close-session 後に作業を続けたセッションが closed 扱いになっていた）。
+
+対象のローカル transcript を `projects/*/` と `projects-archive/*/` から探し、末尾512 KiBの完全な行だけから
+user/assistant のメッセージ UUID を収集する。リモートが未アーカイブ・切断済み・10分以上更新なしの場合、
+最新20イベントを取得し、その中で最も新しい UUID 付き user/assistant メッセージを照合する。
+その UUID がクローズ済み transcript にある場合だけ退避する。新しい未照合メッセージがある場合や、
+UUID がない・取得に失敗した場合は保持する。
+
+イベント取得は1回150件まで、実行時間は約60秒までとし、残りは次回に扱う。
+ログには `localSessionId` と `reason: 'closed'` も記録する。
+`--dry-run` は一致したタイトルとローカル ID を表示し、POST や状態・ログの書き込みは行わない。
 
 手動確認は `node tools/purge-remote-sessions.mjs --dry-run`。誤ってアーカイブしたものは
 `POST /v1/code/sessions/{id}/unarchive` で戻せる（記録は `~/.claude/archived-remote-sessions.jsonl`）。

@@ -5,6 +5,8 @@
     "DESKTOP-2D0R4LI"
   ],
   "gates": {
+    "recipient-domain-gate": { "rollout": "deny", "immediatePolicy": "2026-10-23 名刺OCR誤読による不存在ドメイン送信防止" },
+    "pretooluse-line-broadcast-guard": { "rollout": "deny", "immediatePolicy": "2026-10-23 kim 指示: LINE broadcast による宛先違い誤送信の再発防止" },
     "share-before-send-gate": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-10-17T00:00:00Z", "denyAfter": "2026-10-24T00:00:00Z" },
     "gmail-connector-url-gate": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-10-18T00:00:00Z", "denyAfter": "2026-10-25T00:00:00Z" },
     "api-billing-guard": { "rollout": "deny", "immediatePolicy": "2026-10-17 kim 厳命: 従量課金停止", "distributedAt": "2026-10-17T00:00:00Z" },
@@ -36,6 +38,13 @@
     "feedback-form-gate": {
       "rollout": "deny",
       "legacy": true
+    },
+    "bihin-kcol-gate": { "rollout": "deny", "immediatePolicy": "2026-10-23 古川さん依頼: 備品管理表K列のデータ破損防止", "distributedAt": "2026-10-23T00:00:00Z" },
+    "handover-doc-gate": {
+      "rollout": "deny",
+      "distributedAt": "2026-10-22T00:00:00Z",
+      "denyAfter": "2026-10-29T00:00:00Z",
+      "pilotDeny": true
     },
     "gh-handoff-gate": {
       "rollout": "deny",
@@ -146,6 +155,11 @@
     "settings-quality-guard": {
       "rollout": "deny",
       "legacy": true
+    },
+    "japanese-response-gate": {
+      "rollout": "deny",
+      "distributedAt": "2026-10-18T00:00:00Z",
+      "denyAfter": "2026-10-25T00:00:00Z"
     },
     "shallow-answer-gate": {
       "rollout": "deny",

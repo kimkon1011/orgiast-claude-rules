@@ -178,6 +178,12 @@ test('同梱の tools/feedback-apps.json にカフェアプリが登録されて
   assert.equal(isRegistered('カフェ業務チェック', new URL('./feedback-apps.json', import.meta.url), {}), true);
 });
 
+test('同梱の tools/feedback-apps.json にブース制作アプリが登録されている', () => {
+  // zero 監視（feedback-zero-registry.json）にだけ登録され、台帳側が漏れていると
+  // 投稿が Issue 化されず完了報告も届かない（2026-10-18 の rescue 枝から回収）。
+  assert.equal(isRegistered('ブース制作アプリ', new URL('./feedback-apps.json', import.meta.url), {}), true);
+});
+
 test('Git Bash の /d/... 形式の cd を Windows パスに読み替える', { skip: process.platform !== 'win32' }, () => {
   assert.equal(resolveTargetDir('cd /d/Claude/x && vercel deploy', 'C:/tmp').toLowerCase(), path.normalize('D:/Claude/x').toLowerCase());
 });

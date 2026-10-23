@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { laneDoctorQuick, laneDoctorProbe, atomicJson, notificationText, freshProbe, summarize } from './lane-doctor.mjs';
+import { laneDoctorQuick, laneDoctorProbe, atomicJson, notificationText, freshProbe, summarize, nativeWriteProbeArgs } from './lane-doctor.mjs';
+import { classifyTaskKind } from './lib/task-kind.mjs';
 const now = Date.parse('2026-10-08T06:00:00Z');
 function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-doctor-'));
@@ -16,6 +17,17 @@ function fixture(t) {
 }
 const write = (h, f, s) => atomicJson(path.join(h, '.claude', f), s);
 const read = (h, f) => JSON.parse(fs.readFileSync(path.join(h, '.claude', f)));
+test('native write probe forces implement routing while preserving its arguments', () => {
+  const instruction = 'WRITE_OK.txt を作成し、内容を WRITE_OK にしてください。その後ファイルを読み返して確認してください。';
+  const args = nativeWriteProbeArgs({ repo: 'test-repo', cwd: 'test-cwd', timeoutMs: 90_999, instruction });
+  const kind = args.indexOf('--kind');
+  assert.equal(args[kind + 1], 'implement');
+  assert.ok(args.includes('--force-native'));
+  assert.ok(args.includes('--no-fallback'));
+  assert.ok(args.includes('--timeout'));
+  assert.ok(args.includes(instruction));
+  assert.equal(classifyTaskKind(instruction), 'investigate');
+});
 test('quick removes expired demote/cooldown atomically, preserves unrelated providers and reads history', t => {
   const h = fixture(t);
   write(h, 'routing-overrides.json', { extra: 7, demote: { codex: new Date(now - 1).toISOString(), groq: new Date(now + 1000).toISOString() } });

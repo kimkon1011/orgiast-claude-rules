@@ -7,3 +7,4 @@
 | [DEC-0001](DEC-0001-adopt-commander-protocols.md) | 2026-09-17 | ACTIVE | 司令塔型プロトコルは未導入4要素だけを既存体系へ追加する |
 | [DEC-0002](DEC-0002-r640-linux-guacamole.md) | 2026-10-15 | ACTIVE | 社員用リモート環境を Windows デスクトップ20台から R640 Linux + Guacamole へ集約する |
 | [DEC-0003](DEC-0003-memoryserve-split.md) | 2026-10-15 | ACTIVE | memory 配信口を keyserve から分離し、認証を /api/keys へ委譲する |
+| [DEC-0004](DEC-0004-warehouse-feedback-shared-form.md) | 2026-10-15 | ACTIVE | 倉庫アプリの不具合・要望は中継 secret 不要の方式B（共通フォームへのリンク）で通知を届ける |

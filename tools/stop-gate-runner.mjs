@@ -39,6 +39,7 @@ import { currentTurnEntries, blocks } from './state-claim-evidence.mjs';
 import { judgeSideEffectLeft } from './side-effect-left-gate.mjs';
 import { judge as judgeDeferralWait } from './deferral-wait-gate.mjs';
 import { evaluateShallowAnswer } from './shallow-answer-gate.mjs';
+import { judge as judgeJapaneseResponse } from './japanese-response-gate.mjs';
 import { appendStopLedger, registerStopViolation, CAP_CONTEXT } from './lib/stop-recheck.mjs';
 
 
@@ -52,6 +53,7 @@ function fullStepsReason(missing) {
 
 export async function evaluateGates(ctx, auditOptions = {}) {
   const gates = [
+    ['japanese-response-gate', () => judgeJapaneseResponse(ctx.assistantText)],
     ['past-log-search-gate', () => evaluatePastLogSearch({ text: ctx.assistantText, humanText: ctx.humanText, transcriptRaw: ctx.transcriptRaw, playbookNames: listPlaybookNames(home()) })],
     ['handoff-quality-gate', () => evaluateQuality({ ...ctx.input, assistant_text: ctx.assistantText, transcript_raw: ctx.transcriptRaw })],
     ['handoff-action-gate', () => evaluateHandoffActionFromRaw({ text: ctx.assistantText, transcriptRaw: ctx.transcriptRaw })],
@@ -78,7 +80,7 @@ export async function evaluateGates(ctx, auditOptions = {}) {
     ['report-length-gate', () => reportLengthEnabled() ? judgeReportLengthWithLlm(ctx.assistantText, ctx.humanText) : { decision: 'pass' }],
     ['side-effect-left-gate', () => judgeSideEffectLeft(ctx.assistantText, blocks(currentTurnEntries(ctx.transcriptRaw), 'tool_use'))],
     ['deferral-wait-gate', () => judgeDeferralWait(ctx.assistantText)],
-    ['next-action-gate', () => judgeNextAction(ctx.assistantText, ctx.transcriptRaw)],
+    ['next-action-gate', () => judgeNextAction(ctx.assistantText, ctx.transcriptRaw, ctx.input)],
     ['user-burden-gate', () => judgeUserBurden(ctx.assistantText, ctx.humanText)],
     ['substitute-capability-gate', () => judgeSubstituteCapability(ctx.assistantText)],
     ['doc-link-drive-guard', () => { const hits = findLocalDocLinks(ctx.assistantText); if (hits.length) return { decision: 'block', reason: formatDocLink(hits), code: 'DOC-LINK' }; const bare = findBareLocalDocPaths(ctx.assistantText); return bare.length ? { decision: 'block', reason: formatBarePathMessage(bare), code: 'DOC-LINK' } : { decision: 'pass' }; }],
@@ -129,6 +131,11 @@ export async function run(input, context, auditOptions = {}) {
   const handoffKind = classifyHandoff(assistantText);
   const demoted = handoffKind === 'manual-steps' ? [] : effective.filter(({ name }) => FORM_GATES.includes(name)).map(({ name }) => name);
   evaluated.results = effective.filter(({ name }) => !demoted.includes(name));
+  // 先行 gate が発火して第2段を飛ばしたのに、policy/demote で全て無効化された場合は、監査を素通りさせず第2段を改めて評価する。
+  if (audit.record.skipped === 'regex-blocked' && !evaluated.results.length) {
+    const second = await evaluateAudit({ text: assistantText, transcriptRaw: context.raw, sessionId, regexBlocked: false }, { home: home(), ...auditOptions });
+    if (second.decision === 'block') evaluated.results.push({ name: 'handoff-audit-gate', ...second });
+  }
   const systemMessage = warnings.length ? warnings.join('\n') : undefined;
   const blockedBy = evaluated.results.map(({ name }) => name);
   const reasonCodes = [...evaluated.results.map(({ code, name }) => code || name), ...evaluated.errors];

@@ -68,8 +68,15 @@ function register(home, pending) {
 const day = now => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Tokyo' }).format(now);
 const unique = values => [...new Map(values.map(v => [JSON.stringify(v), v])).values()];
 function mergeCost(old, incoming) {
-  return { ...old, evidence: unique([...old.evidence, ...incoming.evidence]),
-    proposal: { ...old.proposal, changes: unique([...old.proposal.changes, ...incoming.proposal.changes]),
+  // 同じPC・問題は最新の観測で置換する。未再観測の別項目は保持する。
+  const changes = [...new Map([...old.proposal.changes, ...incoming.proposal.changes]
+    .map(change => [change.setting || change.file, change])).values()];
+  const settings = changes.map(change => change.setting || change.file);
+  const evidenceKey = value => settings.find(setting => value.startsWith(`${setting} / `)) || value;
+  const evidence = [...new Map([...old.evidence, ...incoming.evidence]
+    .map(value => [evidenceKey(value), value])).values()];
+  return { ...old, evidence,
+    proposal: { ...old.proposal, changes,
       risks: unique([...old.proposal.risks, ...incoming.proposal.risks]) } };
 }
 export async function submitProposal(input, { home = proposalHome(), dryRun = false, now = new Date(), promptText,

@@ -16,12 +16,13 @@
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { isEntry } from './is-entry.mjs';
+import { defaultDriveKeyPath } from './lib/drive-auth.mjs';
 import { loadLedger, isInternal } from './internal-recipient-gmail-guard.mjs';
 
 export const GMAIL_COMPOSE_SCOPE = 'https://www.googleapis.com/auth/gmail.compose';
 export const DEFAULT_USER = 'seisaku-team@orgiast.jp';
-const DEFAULT_KEY = process.env.GOOGLE_SA_KEY ??
-  'C:/Users/uers/Downloads/CLAUDE.md配布/aujust-sales-automation/.gcp/sheets-sa.json';
+// 既定パスはハードコードしない（旧既定値はディレクトリ名の打ち間違いで鍵を見失っていた。2026-10-23 実測）。
+const DEFAULT_KEY = process.env.GOOGLE_SA_KEY ?? defaultDriveKeyPath();
 const SCOPES = ['gmail.readonly', 'gmail.compose', 'gmail.send'].map(s => `https://www.googleapis.com/auth/${s}`);
 const b64url = value => Buffer.from(value).toString('base64url');
 const configError = () => Object.assign(new Error('設定を確認してください（引数・入力ファイル・SA キー）。'), { errorKind: 'configuration_error' });

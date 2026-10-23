@@ -26,6 +26,14 @@ tools/course-corrections.json の該当ルールに従い訂正後の手順を�
 
 `node tools/feedback-kit/install.mjs --app <root> --upgrade` を実行してから再デプロイ（kit 未導入・版が古い・必須6機能の欠落のいずれかで deny）。方式BのリンクをHTMLへ追加、または方式Aのテンプレート/Next FeedbackWidgetを導入。台帳へアプリ名を登録。
 
+## bihin-kcol-gate
+
+備品管理表（全体）「備品在庫管理表」の K列は K4 の ArrayFormula の展開先。倉庫在庫数は E列へ書き、K を跨ぐ範囲は C:J と L:N に分けるか K 位置を null にする（空文字も禁止）。復旧時は K5 以降だけを clear し、K4 に `=ArrayFormula(IF(E4:E="","",E4:E-J4:J))` を戻せる。緊急時のみ BIHIN_KCOL_GATE_SKIP=1（stderr に記録）。データ破損防止のため全PCで初回から deny。
+
+## handover-doc-gate
+
+リポジトリ直下に HANDOVER.md を置いてから再デプロイ（ひな形: rules-extracted/project-launch-playbook.md §1.12.1。リソース一覧・env の所在・再デプロイ手順・移管チェックリスト）。全プロジェクトは別アカウントへ移管できる前提で作る決まり。緊急時のみ HANDOVER_GATE_SKIP=1。
+
 ## gh-handoff-gate
 
 PR URL と対象ブランチ、CI/マージ状態、次の操作を書く。
@@ -106,6 +114,7 @@ Agent/Task の model を sonnet/haiku に明示。実装は node tools/codex-do.
 ## next-action-gate
 
 次にすること・自動進行・セッション終了可否を末尾に明記する。
+「この後の自動進行」が空・「なし」で始まる値以外なら、CronCreate で毎時の進捗チェックを登録する（:00/:30 を避け、未完了項目を確認し、変化時だけ報告、完了で CronDelete）。現在ターンのバックグラウンド Agent/Bash/PowerShell も可。subagents と CLAUDE_HEADLESS=1 はこの検査の対象外。
 人に作業を残す時は、このターンで実装・設定・依頼送信・ルール追加した具体物を `恒久策:` 行に書く。初回だけなら `恒久策: 一回限り: <理由>`。
 例外は `[PERMANENT-FIX-OK: <10文字以上の理由>]`。倉庫作業の依頼送信の検査は免除しない。
 倉庫の物理作業は `node tools/discord-dm.mjs <倉庫担当> --body-file <本文>` で依頼し、「倉庫担当へ依頼済み」と報告して kim の次の作業から外す。
@@ -128,6 +137,8 @@ run_in_background を外し前景実行、ScheduleWakeup を使わず timeout �
 
 ## pretooluse-lane-guard
 
+GUI operator・承認済み送信スクリプトは回数制限の対象外（Codex に委譲できない PC 操作を送信途中で止めないため）。
+
 node tools/lane-doctor.mjs --probe で状態更新し、node tools/codex-do.mjs --prompt-file <指示> --cwd <対象>。
 
 ## report-length-gate
@@ -141,6 +152,10 @@ node tools/lane-doctor.mjs --probe で状態更新し、node tools/codex-do.mjs 
 ## self-check-before-asking-guard
 
 質問対象を既存のAPI/ファイル/CLIで調べ、取得済み情報を提示する。
+
+## japanese-response-gate
+
+同じ内容を日本語で書き直す。コード・コマンド・固有名詞・URL は英字のままでよい。user が英語での返答を明示した場合だけ本文に [EN-OK] を書く。応答言語は settings.json の `"language": "japanese"`（register-hooks が全PCへ配布）でも固定している。
 
 ## shallow-answer-gate
 
@@ -176,6 +191,7 @@ URLを単独行に置くかMarkdownリンクにし、直後に括弧・句読点
 ## user-burden-gate
 
 手作業は自動化し、不可避なら1クリックの起動手段と確認方法を用意。
+本番デプロイだけは例外なし: `npx vercel deploy --prod --yes` を Claude 側で実行し、`vercel inspect` で id/created とエイリアス先を確認する。ターミナルへのコマンド手渡しも1クリック起爆ファイルも不可（`PROD-DEPLOY-HANDOFF`）。user が自分で実行すると明示した場合だけ `[PROD-DEPLOY-HANDOFF-OK] <user の文言の引用>`。
 
 ## verify-before-done-detector
 
@@ -199,6 +215,8 @@ URLを単独行に置くかMarkdownリンクにし、直後に括弧・句読点
 「上書きして消してしまいました」「元に戻せません」だけの報告も副作用の放置として差し戻す。
 版履歴・フォーム回答などから自分で復元して検証し、同じ行か直後の行に対処結果を書く。
 
+「権限が reader なので招待していません」のように、1経路の権限不足を理由にやらなかったことを報告する文も差し戻す（権限語と未実施語が同じ行にある時）。権限は経路ごとに違うので、登録済みの別経路（DWD 鍵 `~/.claude/keys/*.json`・GAS・CLI・別アカウントのコネクタ）を当ターンに試し、通ればその場で実施して読み戻す。全経路の失敗を記録した時だけ `[SIDE-EFFECT-OK] <試した経路と失敗>` を書く（2026-10-23: Calendar コネクタの accessRole=reader だけで先方招待を残したが、DWD 鍵の calendar.events では通った）。
+
 副作用・影響・残作業はこのターンで修正→検証し、該当行または直後の行に結果を書く。影響なしの場合は実測・確認・読み戻しの根拠も同じ行または直後の行に書く。単なる tool_use や予定は完了の証拠ではない。user の承認・権限・支払いが必要な場合だけ `[SIDE-EFFECT-OK] <理由>` を付ける（空の理由は不可）。コードブロック・引用行は対象外。
 
 既存 Stop runner から呼ぶため Stop hook 設定 の追加登録は不要。`ORGIAST_SIDE_EFFECT_LEFT_GATE=0` で無効化できる。既存 rollout に従い pilot PC は即時 block、他PCは配布日と初回受領から7日間の観察後に block。
@@ -214,3 +232,11 @@ URLを単独行に置くかMarkdownリンクにし、直後に括弧・句読点
 
 ## claude-impl-approval
 実装は `node tools/codex-do.mjs` へ委譲する。user の `[CLAUDE-IMPL-OK]` または `[LANE-OK]` のみ同一セッション60分許可。
+
+## recipient-domain-gate
+
+名刺画像・元データで宛先ドメインの綴りを確認し、宛先引数または送信元データを修正してから送信する。意図的な送信でも修正前は送らない。DNS が一時的に確認できない場合は警告のみで通過する。
+
+## pretooluse-line-broadcast-guard
+
+LINE の全員配信が本当に必要なら、kim が同じセッションで全員配信を明示したことを確認し、assistant の応答に `[LINE-BROADCAST-OK]` と書いてから再実行する。個人宛ては broadcast/narrowcast を使わず、userId を指定する `claude-mobile/scripts/line-send.mjs` から push 送信する。友だち数を宛先の身元確認に使わない。

@@ -27,7 +27,7 @@ const CATEGORIES = new Set(PROFILES.ai.categories);
 export const PROVIDERS = {
   groq: { url: 'https://api.groq.com/openai/v1/chat/completions', env: 'GROQ_API_KEY', file: 'groq.env', model: 'openai/gpt-oss-120b' },
   cerebras: { url: 'https://api.cerebras.ai/v1/chat/completions', env: 'CEREBRAS_API_KEY', file: 'cerebras.env', model: 'zai-glm-4.7' },
-  deepseek: { url: 'https://api.deepseek.com/chat/completions', env: 'DEEPSEEK_API_KEY', file: 'deepseek.env', model: 'deepseek-chat' },
+  deepseek: { url: 'https://api.deepseek.com/chat/completions', env: 'DEEPSEEK_API_KEY', file: 'deepseek.env', model: 'deepseek-flash' },
   openrouter: { url: 'https://openrouter.ai/api/v1/chat/completions', env: 'OPENROUTER_API_KEY', file: 'openrouter.env', model: 'openai/gpt-oss-120b', extraHeaders: { 'HTTP-Referer': 'https://orgiast.jp', 'X-Title': 'orgiast' } },
   gemini: { url: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', env: 'GEMINI_API_KEY', file: 'gemini.env', model: 'gemini-3.7-flash' },
   kimi: { url: 'https://api.moonshot.ai/v1/chat/completions', env: 'MOONSHOT_API_KEY', file: 'kimi-api.env', model: 'kimi-k3', special: 'kimi' },
@@ -185,6 +185,7 @@ export function createLlmClient({ home = os.homedir(), fetchImpl = fetch, sleep 
         if (!p || !key) return null;
         const body = { model: candidate.model || p.model, messages, max_tokens: maxTokens, stream: false };
         if (format) body.response_format = format;
+        if (candidate.provider === 'deepseek' && body.model === 'deepseek-flash') body.thinking = { type: 'disabled' };
         if (p.special === 'kimi') Object.assign(body, { reasoning_effort: 'none', temperature: 0.6 });
         return { url: p.url, init: { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', ...(p.extraHeaders || {}) }, body: JSON.stringify(body) } };
       },

@@ -82,7 +82,7 @@ const LLM_PROVIDERS = {
 // (2026-10-09 実測)ので、返信だけは日本語に強いモデルの連鎖に固定する。DISCORD_AUTOREPLY_PROVIDER で先頭を差し替え可。
 export const REPLY_CHAIN = Object.freeze([
   { provider: 'gemini', model: 'gemini-3.7-flash' },
-  { provider: 'deepseek', model: 'deepseek-chat' },
+  { provider: 'deepseek', model: 'deepseek-flash' },
   { provider: 'kimi', model: 'kimi-k3' },
   { provider: 'genspark', model: 'gpt-5.6-luna' },
 ]);
@@ -108,6 +108,7 @@ export function createLlm({ home, fetchImpl, sleepImpl = sleep, env = process.en
         if (!key) return null;
         const body = { model: candidate.model || p.model, stream: false, max_tokens: 6000,
           messages: [{ role: 'system', content: system }, { role: 'user', content: JSON.stringify(input) }] };
+        if (candidate.provider === 'deepseek' && body.model === 'deepseek-flash') body.thinking = { type: 'disabled' };
         if (p.special === 'kimi') Object.assign(body, { reasoning_effort: 'none', temperature: 0.6 });
         return { url: p.url, init: { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', ...p.extraHeaders }, body: JSON.stringify(body), signal: AbortSignal.timeout(60000) } };
       },

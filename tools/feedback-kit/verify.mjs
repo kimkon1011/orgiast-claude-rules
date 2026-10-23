@@ -31,7 +31,9 @@ export function verifyApp(app, {registryFile = registryPath} = {}) {
   const title = inputs.find(s => /(?:name|id)=["']title["']/.test(s)) || '';
   const body = (markup.match(/<textarea\b[^>]*>/g) || []).find(s => /(?:name|id)=["']body["']/.test(s)) || '';
   const entry = registry.apps?.find(e => e.appName === meta.appName);
-  const registered = Boolean(entry && ['gas-sheet','supabase','booth-sheet','relay'].includes(entry.intake) && ['url','secret','repo','appDir'].every(k => /^[A-Z][A-Z0-9_]*$/.test(entry.refs?.[k] || '')));
+  // refs の各値は env 名の文字列、または env 名候補の配列（例: aujust／営業自動化 の url/secret）。配列を文字列扱いして未登録と誤判定していた（2026-10-23 実害: 本番デプロイが止まった）
+  const validRef = v => { const list = [].concat(v ?? []); return list.length > 0 && list.every(s => /^[A-Z][A-Z0-9_]*$/.test(s)); };
+  const registered = Boolean(entry && ['gas-sheet','supabase','booth-sheet','relay'].includes(entry.intake) && ['url','secret','repo','appDir'].every(k => validRef(entry.refs?.[k])));
   const checks = {
     'image-attach': Object.values(imageChecks).every(Boolean),
     'kind-toggle': /不具合/.test(markup) && /要望/.test(markup) && /(?:name|id)=["']kind["']/.test(markup),

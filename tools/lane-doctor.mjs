@@ -112,16 +112,21 @@ export function listWslDistros() {
   const r = spawnSync('wsl', ['-l', '-q'], { encoding: 'utf16le', windowsHide: true, timeout: 15000 });
   return r.status === 0 ? String(r.stdout || '').replace(/\0/g, '').trim() : null;
 }
+export function nativeWriteProbeArgs({ repo, cwd, timeoutMs, instruction }) {
+  // --kind を明示しないと codex-do が investigate と判定し llm-ask へ流れ、書き込み不能でレーン死亡と誤判定する（2026-10-22 実測）。
+  return [path.join(repo, 'tools/codex-do.mjs'), instruction, '--cwd', cwd, '--kind', 'implement', '--force-native', '--no-fallback', '--no-escalate', '--timeout', String(Math.max(1, Math.floor(timeoutMs / 1000)))];
+}
 export async function runNativeWriteProbe({ home, timeoutMs }) {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-codex-write-'));
-  const run = (cmd, args) => new Promise(resolve => execFile(cmd, args, { cwd, env: { ...process.env, ORGIAST_HOME: home }, timeout: timeoutMs, windowsHide: true, maxBuffer: 256 * 1024 }, (e) => resolve({ code: e ? 1 : 0 })));
+  const run = (cmd, args) => new Promise(resolve => execFile(cmd, args, { cwd, env: { ...process.env, ORGIAST_HOME: home }, timeout: timeoutMs, windowsHide: true, maxBuffer: 256 * 1024 }, (e, stdout, stderr) => resolve({ code: e ? 1 : 0, text: `${stdout}\n${stderr}` })));
   try {
     const init = await run('git', ['init', '--quiet']);
     if (init.code) return init;
-    const result = await run(process.execPath, [path.join(repo, 'tools/codex-do.mjs'), 'WRITE_OK.txt を作成し、内容を WRITE_OK にしてください。その後ファイルを読み返して確認してください。', '--cwd', cwd, '--force-native', '--no-fallback', '--no-escalate', '--timeout', String(Math.max(1, Math.floor(timeoutMs / 1000)))]);
+    const instruction = 'WRITE_OK.txt を作成し、内容を WRITE_OK にしてください。その後ファイルを読み返して確認してください。';
+    const result = await run(process.execPath, nativeWriteProbeArgs({ repo, cwd, timeoutMs, instruction }));
     let ok = false;
     try { ok = fs.readFileSync(path.join(cwd, 'WRITE_OK.txt'), 'utf8').trim() === 'WRITE_OK'; } catch {}
-    return { code: result.code === 0 && ok ? 0 : 1, text: ok ? 'WRITE_OK' : '書き込み確認失敗' };
+    return { code: result.code === 0 && ok ? 0 : 1, text: ok ? 'WRITE_OK' : `書き込み確認失敗 ${result.text || ''}` };
   } finally { fs.rmSync(cwd, { recursive: true, force: true }); }
 }
 export function runProbe(provider, { home, timeoutMs, dryRun = false } = {}) {
@@ -189,12 +194,15 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
     } else {
       const payment = /HTTP\s*402\b|credits are depleted|insufficient/i.test(text);
       const limited = /HTTP\s*429\b|usage limit|RESOURCE_EXHAUSTED|rate.limit/i.test(text);
-      health.lanes[p] = { ...probeHistory(previous.lanes?.[p]), alive: false, reason: payment ? 'dead:payment_required' : limited ? 'cooldown' : /HTTP\s*401|unauthorized|login required|token.*expired/i.test(text) ? (p === 'codex' ? 'dead:oauth_consent' : 'auth_invalid') : /Read-only file system|EROFS/i.test(text) ? 'execution_unavailable:read_only' : 'probe_failed', probedAt: stamp, ...(result.authOk ? { authOk: true } : {}) };
+      // codex-do が利用枠クールダウンで保留(exit 75)した場合は WSL 問題ではなく枠切れ。クールダウン自体は既存のまま触らない。
+      const deferred = /codex_cooldown/.test(text);
+      health.lanes[p] = { ...probeHistory(previous.lanes?.[p]), alive: false, reason: payment ? 'dead:payment_required' : (limited || deferred) ? 'cooldown' : /HTTP\s*401|unauthorized|login required|token.*expired/i.test(text) ? (p === 'codex' ? 'dead:oauth_consent' : 'auth_invalid') : /Read-only file system|EROFS/i.test(text) ? 'execution_unavailable:read_only' : 'probe_failed', probedAt: stamp, ...(result.authOk ? { authOk: true } : {}) };
       // 失敗の中身を必ず残す（2026-10-15 作業用011: 理由が記録されず原因を追えなかった）
       health.lanes[p].error = String(text || '').replace(/(sk-|eyJ)[A-Za-z0-9._-]{8,}/g, '$1***').replace(/\s+/g, ' ').trim().slice(-400);
       // native の失敗でも、認証・上限・課金が原因なら physical_operation（再起動が要る）と誤判定しない
       if (result.nativeRepair && health.lanes[p].reason === 'probe_failed') Object.assign(health.lanes[p], { reason: 'dead:physical_operation', tried: 'Windows ネイティブ(danger-full-access)でファイル作成・read-back', userFix: '管理者 PowerShell で wsl.exe --install --no-distribution を実行して Windows を再起動する。' });
       health.lanes[p].probeReason = health.lanes[p].reason;
+      if (deferred && cooldown[p]?.until) health.lanes[p].until = cooldown[p].until;
       if (limited && !payment) { const until = providerResetUntil(text, now); cooldown[p] = { until, at: now, reason: 'lane_doctor_usage_limit' }; cooldownChanged = true; health.lanes[p].until = until; }
     }
   }

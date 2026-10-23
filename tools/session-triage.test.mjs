@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { parseLlmResult } from './session-triage.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -61,6 +62,23 @@ test('parseLlmResult: 完了のnextは空にしconfidenceを丸める', () => {
     parseLlmResult('{"verdict":"完了","confidence":99.6,"next":"不要な追加提案"}'),
     { verdict: '完了', confidence: 100, next: '' },
   );
+});
+
+test('合成APIエラー行はassistant返答に数えず末尾user未応答になる', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-triage-api-error-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const project = path.join(root, 'projects', 'fixture');
+  await fs.mkdir(project, { recursive: true });
+  const transcript = [
+    { type: 'user', timestamp: '2026-10-22T00:00:00Z', cwd: root, message: { role: 'user', content: '依頼です' } },
+    { type: 'assistant', timestamp: '2026-10-22T00:01:00Z', isApiErrorMessage: true, error: 'rate_limit', message: { role: 'assistant', model: '<synthetic>', content: 'limit' } },
+  ];
+  await fs.writeFile(path.join(project, 'f84f4059-586b-4161-a9ab-c026ad9adb7f.jsonl'), `${transcript.map(JSON.stringify).join('\n')}\n`);
+  const { stdout } = await execFileAsync(process.execPath, [fileURLToPath(new URL('./session-triage.mjs', import.meta.url)), '--all', '--include-current', '--include-closed', '--include-completed', '--json'], {
+    env: { ...process.env, CLAUDE_PROJECTS_DIR: path.join(root, 'projects') },
+  });
+  const session = JSON.parse(stdout).sessions[0];
+  assert.equal(session.lastRole, 'user'); assert.equal(session.signals.lastUserUnanswered, true);
 });
 
 // 実CLIと変更していないworkerを動かし、外部LLMだけを固定応答に差し替える。

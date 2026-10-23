@@ -22,7 +22,7 @@
 
 1. `~/.claude/quota-sweep-goals.md` の最初の未完了行
 2. `~/.claude/next-session.md` の実行可能な残TODO（「なし」や完了済みを除く）
-3. テスト・import・構文エラーの修正。全部緑なら `docs/` の相対リンク修正
+実行可能な目標がなければ `outcome=no-goal` を記録し、子プロセスもDMも起動しません。「なし（完了）」「none (done)」なども空目標です。組み込みの保守目標への暗黙フォールバックはありません。
 
 ```markdown
 - [ ] tools の既知のテスト失敗を修正し node --test tools/ を緑にする
@@ -76,3 +76,20 @@ node --test tools/lib/quota-windows.test.mjs tools/quota-sweep.test.mjs tools/in
 Codex の利用率は API ポーリングではなくセッションログの最新ファイルの最終 `rate_limits` です。Windows とアクセス可能な WSL の両方から mtime 最新を採用し、6時間超は stale と明示します。最新ファイルに枠が無ければ過去の値に戻さず起動しません。ログの値は取得したアカウントのものなので、アカウント切替直後は新しいログが必要です。全PC間のロック共有や同一アカウントの排他はありません。
 
 Claude の直近10分の対話記録、Codex の TUI プロセスがある間はその provider を使いません。Codex は監督ジョブ自身が `exec` の場合は対話扱いしません。Windows から到達できない WSL ホームは観測できません。読み書き権限・認証・git/gh の利用権限が不足した場合は成功扱いせず証跡を残します。
+
+## 失敗診断と自動修復
+
+台帳には `reason`（例外または停止条件）、`failureKey`（同じ原因の識別子）、`stopOutcome`、`deliveryError` を保存します。DMにも理由を表示し、PRが存在する未完了実行は `partial`（成果あり・未完了）と表示します。再試行可否は元の `stopOutcome` で判定します。
+
+git fetch/push は1回300秒、失敗時に1回だけ再試行します。他のgit操作は120秒です。エラーにはサブコマンドを含めます。相対 `.git` ポインタは書き換えず、絶対ポインタの書込みがEPERM/EACCESで再試行しても失敗した場合は一時ファイルから置換します。既存ブランチ・未コミット作業は削除しません。
+
+同じproviderで同じ原因が2回連続したら、既存の `handoff-audit-nightly.enqueueTodos` と `next-session-rotate.writeHandoff` で `next-session.md` に調査・回帰テスト・修正PRのタスクを重複なく起票します。利用窓が変わっても失敗回数は保持し、失敗以外の結果でリセットします。配布は既存の同期リポ・setup converge経路を使用します。
+
+### 2026-10-23 調査証跡
+
+- kim-PC `quota-sweep.log` 2026-10-21T12:55:55.781Z: `spawnSync git ETIMEDOUT`。旧commandRunnerは全コマンド60秒固定、再試行なし。旧ログにはサブコマンドがなくfetch等のどのgit操作だったかは確定不能。
+- 同18:56:48.811Z: `.claude/quota-sweep-repo/.git` open EPERM。旧prepareTreeの絶対ポインタ書換え経路と一致。OS側の拒否要因（属性・共有ロック等）はログから確定不能。最新mainのchmod再試行/native継続策を保持し、置換を追加した。調査時点のポインタは既に相対。
+- 2026-10-22T04:19:49.134Z、19:50:36.883Z: 理由なしfailed/ticks=0。checkの窓情報不足・対話検出分岐が理由を返さず、台帳・DMにも理由欄がなかった。どちらの条件だったかは過去ログから復元不能。
+- 同14:21:18.934Z: child exit=1 stop=deadline、その後14:58:02.896ZにPR delivery ETIMEDOUT。finallyが元の停止結果をfailedで上書きし、例外を台帳に含めていなかった。
+- 台帳2026-10-21T18:57:16.846Z: goal=なし（完了）。旧フィルタは「なし」単体だけ除外し、空の場合も組み込み目標へフォールバックしていた。
+- PR #1014のブランチとCI全成功をGitHubで確認。WSL列挙結果はUbuntuのみ、`/home/kim/.claude` にquota-sweep台帳・両ログは存在せず、Windows台帳にも該当行なし。特定実行の停止理由は未確認。旧実装はPR作成後にもfailedを維持することをコードで確認し、回帰テストで再現・修正した。

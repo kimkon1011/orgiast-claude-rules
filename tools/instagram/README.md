@@ -134,10 +134,31 @@ unverified: https://www.instagram.com/lahaina_ushimado/
    `"httpErrorPage"` を検出していたこと。この文字列は Instagram の**通常ページの JS バンドルにも入っている**
    ため誤検知だった（修正済み・回帰テストあり）。
 
-**帰結（次段の宿題）**: 投稿後の「実表示」検証は次のいずれかが必要。
-- (a) 人がブラウザで `https://www.instagram.com/lahaina_ushimado/` を開いて目視する（最も確実・追加実装ゼロ）、
-- (b) ログイン済みセッションを持つヘッドレスブラウザで読む（**§7 の禁止事項は「ログインにブラウザを使うこと」であり、公開ページの閲覧は該当しない**が、実装と検証が別途必要）、
-- (c) Graph API の `GET /{ig-user-id}/media?fields=id,permalink,caption,timestamp` で**投稿の存在**を確認する（ただしこれは API 応答であり、引継書 §5 が「だけで判断するな」と言っている当のもの。補助証拠としてのみ使う）。
+**帰結（2026-10-20 に解決）**: 投稿後の「実表示」検証は次の3案を比較し、**(b) の派生＝ログイン不要のヘッドレスChrome描画**を採用した。
 
-**この点は未解決のまま残す**（「検証できていないものを完了と書かない」）。`verify-post.mjs` は嘘をつかず
-`unverified` を返すよう作ってあり、この制約下でも正しく振る舞う。
+| 案 | 判定 | 理由 |
+|---|---|---|
+| (a) 人の目視 | 不採用（補助） | 追加実装ゼロだが毎回の手作業になる。§1.1（user の手間ゼロ）に反する |
+| (b) ヘッドレスブラウザで公開ページを描画 | **採用** | ログイン不要・追加トークン不要。§7 の禁止事項は「ログインにブラウザを使うこと」であり、公開ページの閲覧は該当しない |
+| (c) Graph API `/me/media` | 補助として併用 | API 応答だけでは「実表示」の証拠にならない（引継書 §5）。`--via graph` として残置 |
+
+**実測（2026-10-20・このPC）**: Chrome `--headless=new --dump-dom` で
+`https://www.instagram.com/lahaina_ushimado/` を描画すると `og:title`・`og:description`
+（「フォロワー1,149人、投稿166件」）が取れ、`/p/Ddf_thXPDK_/` では描画後DOMに
+`"caption":{"text":"ラハイナPVです…"}` が入っていた。素の HTTP では両方とも JS シェル/`httpErrorPage` のまま。
+
+使い方:
+
+```bash
+# 投稿の実表示を描画して読み戻す（ログイン・トークン不要）
+node tools/instagram/verify-post.mjs --permalink "https://www.instagram.com/p/XXXX/" --via render --expect "ラハイナ"
+
+# プロフィールの実表示を描画して読み戻す
+node tools/instagram/verify-post.mjs --profile --via render
+
+# トークンがある場合は API を正本にできる（補助証拠）
+node tools/instagram/verify-post.mjs --permalink "https://www.instagram.com/p/XXXX/" --via graph
+```
+
+`--via auto` は従来どおり「トークンがあれば graph、無ければ html」で、`render` は明示指定。
+描画に失敗した場合（Chrome 不在・削除済み等）は `unverified` を返し、成功扱いにしない。

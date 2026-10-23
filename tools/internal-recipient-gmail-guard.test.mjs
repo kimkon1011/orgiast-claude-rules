@@ -151,6 +151,34 @@ test('既存の古い matcher を重複なしで昇格し、再実行しても�
 // --- GitHub @メンション（gh の書き込み系を Bash/PowerShell 経由で叩く経路） ---
 const shellHook = (command, tool = 'Bash') => ({ tool_name: tool, tool_input: { command } });
 
+// --- Gmail REST API（Bash/PowerShell 経由の ad-hoc 書き込み） ---
+test('curl POST drafts の内部アドレスを拒否する', () => {
+  const command = `curl -s -X POST https://gmail.googleapis.com/gmail/v1/users/me/drafts -d '{"message":{"raw":"To: keiri.orgiast@gmail.com"}}'`;
+  const result = judgeBash(shellHook(command), ledger);
+  assert.equal(result.decision, 'block');
+  assert.deepEqual(result.internal, ['keiri.orgiast@gmail.com']);
+  assert.match(result.reason, /\[INTERNAL-RECIPIENT\].*台帳: ~\/\.claude\/internal-recipients\.json$/);
+});
+test('curl POST drafts の外部アドレスは実プロセスでも無出力で通す', (t) => {
+  const home = homeFor(t);
+  const input = shellHook(`curl -X POST https://gmail.googleapis.com/gmail/v1/users/me/drafts -d 'To: customer@example.com'`);
+  assert.equal(judgeBash(input, ledger).decision, 'pass');
+  const result = run(input, home);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, '');
+  assert.equal(result.stderr, '');
+});
+test('GET drafts の読み取りは通す', () => {
+  assert.equal(judgeBash(shellHook('curl https://gmail.googleapis.com/gmail/v1/users/me/drafts/abc123'), ledger).decision, 'pass');
+});
+test('node fetch messages/send の内部アドレスを拒否する', () => {
+  const command = `node -e 'fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {body:"to=keiri.orgiast@gmail.com"})'`;
+  assert.equal(judgeBash(shellHook(command), ledger).decision, 'block');
+});
+test('Gmail endpoint の無い Bash は内部アドレス文字列だけでは拒否しない', () => {
+  assert.equal(judgeBash(shellHook('echo keiri.orgiast@gmail.com'), ledger).decision, 'pass');
+});
+
 test('gh pr comment の内部ハンドル @メンションを拒否する', () => {
   const result = judgeBash(shellHook("gh pr comment 529 --body 'LGTM @kimkon1011 確認お願いします'"), ledger);
   assert.equal(result.decision, 'block');

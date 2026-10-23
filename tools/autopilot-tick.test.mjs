@@ -6,13 +6,14 @@ import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { spawnSync } from 'node:child_process';
 import { runAutopilot, sendNotice, autopilotPaths, parseControl, capReason, dateKey, acquireLock } from './autopilot-tick.mjs';
+import { toastSummary } from './autopilot-local-notice.mjs';
 
 const NOW = new Date('2026-09-21T01:00:00Z');
 const snow = (offset) => String((BigInt(NOW.getTime() - 1420070400000 + offset) << 22n));
 function fixture(t, overrides = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'autopilot-test-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  const opts = { home, dir: path.join(home, 'state'), now: NOW, token: '', userId: '', hostname: 'test-pc', fetchImpl: async () => { throw new Error('unexpected network'); }, ...overrides };
+  const opts = { home, platform: 'linux', dir: path.join(home, 'state'), now: NOW, token: '', userId: '', hostname: 'test-pc', fetchImpl: async () => { throw new Error('unexpected network'); }, ...overrides };
   const call = (command, args = {}, extra = {}) => runAutopilot(command, args, { ...opts, ...extra });
   return { opts, call, paths: autopilotPaths(opts) };
 }
@@ -704,7 +705,8 @@ function mirrorSpawn(calls, outcome = 0) {
 test('no mirror config never spawns a child', async t => {
   const f = fixture(t), calls = [], sent = [];
   const result = await sendNotice('本文', { ...f.opts, spawnImpl: mirrorSpawn(calls), notifyImpl: async text => { sent.push(text); return { delivered: 'dm' }; } });
-  assert.deepEqual(result, { delivered: 'dm' });
+  assert.equal(result.delivered, 'dm');
+  assert.equal(result.channels.file.status, 'written');
   assert.deepEqual(calls, []);
   assert.deepEqual(sent, ['本文']);
 });
@@ -725,7 +727,7 @@ for (const outcome of [2, 'timeout', 'error', 'stdin']) {
     const f = fixture(t), calls = [], dmResult = { delivered: 'dm' };
     mirrorConfig(f);
     const result = await sendNotice('本文', { ...f.opts, mirrorTimeoutMs: 10, spawnImpl: mirrorSpawn(calls, outcome), notifyImpl: async () => dmResult });
-    assert.strictEqual(result, dmResult);
+    assert.equal(result.delivered, dmResult.delivered);
     assert.equal(calls.length, 1);
     const log = JSON.parse(fs.readFileSync(path.join(f.paths.dir, 'run.log'), 'utf8'));
     assert.match(log.mirrorError, /mirror_exit:2|mirror_timeout|spawn_failed|broken_pipe/);
@@ -736,7 +738,8 @@ test('DM exception still attempts mirror and returns none', async t => {
   const f = fixture(t), calls = [];
   mirrorConfig(f);
   const result = await sendNotice('本文', { ...f.opts, spawnImpl: mirrorSpawn(calls), notifyImpl: async () => { throw new Error('offline'); } });
-  assert.deepEqual(result, { delivered: 'none' });
+  assert.equal(result.delivered, 'none');
+  assert.equal(result.channels.dm.reason, 'offline');
   assert.equal(calls.length, 1);
 });
 test('asking a question does not override manual, control, cap or runner-error pauses', async t => {
@@ -749,4 +752,135 @@ test('asking a question does not override manual, control, cap or runner-error p
     assert.equal(state.status, 'paused');
     assert.equal(state.pausedReason, reason);
   }
+});
+
+function ownerConfig(f, owner) {
+  fs.mkdirSync(path.join(f.opts.home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(f.opts.home, '.claude/autopilot-owner.json'), JSON.stringify(owner));
+}
+test('kim DM is explicitly not the nishi owner; unknown and kim owners retain legacy result', async t => {
+  const f = fixture(t), kim = '715210673642012733';
+  const ctx = { ...f.opts, userId: kim, notifyImpl: async () => ({ delivered: 'dm' }) };
+  assert.equal((await sendNotice('本文', ctx)).delivered, 'dm');
+  ownerConfig(f, { email: 'nishi@orgiast.jp', discordUserId: null });
+  const result = await sendNotice('本文', ctx);
+  assert.equal(result.delivered, 'dm-not-owner');
+  assert.equal(result.channels.dm.status, 'dm-not-owner');
+  ownerConfig(f, { email: 'kim@orgiast.jp', discordUserId: null });
+  assert.equal((await sendNotice('本文', ctx)).delivered, 'dm');
+});
+test('owner discordUserId overrides legacy file and injected recipient', async t => {
+  const f = fixture(t), recipients = [];
+  ownerConfig(f, { email: 'nishi@orgiast.jp', discordUserId: '123456789' });
+  fs.writeFileSync(path.join(f.opts.home, '.claude/orgiast-discord-user-id.txt'), '715210673642012733');
+  const ctx = { ...f.opts, userId: '715210673642012733', notifyImpl: async (_text, options) => { recipients.push(options.userId); return { delivered: 'dm' }; } };
+  const direct = await sendNotice('本文', ctx);
+  await f.call('start', { objective: '進捗' });
+  const digest = await f.call('digest', {}, { ...ctx, now: new Date('2026-10-23T03:00:00Z') });
+  assert.equal(direct.delivered, 'dm');
+  assert.equal(digest.delivered, 'dm');
+  assert.deepEqual(recipients, ['123456789', '123456789']);
+});
+test('toast passes Japanese via UTF-8 file, cleans temporary payload, and file retains full text', async t => {
+  const f = fixture(t), calls = [];
+  const body = '一行目<&>\n二行目\n三行目\n四行目';
+  const result = await sendNotice(body, { ...f.opts, platform: 'win32', notifyImpl: async () => ({ delivered: 'dm' }), execFileImpl: async (executable, args, options) => {
+    const payloadPath = args.at(-1);
+    calls.push({ executable, args, options, payloadPath, payload: JSON.parse(fs.readFileSync(payloadPath, 'utf8')) });
+    return { stdout: 'submitted' };
+  } });
+  assert.equal(result.channels.toast.status, 'submitted');
+  assert.equal(result.channels.file.status, 'written');
+  assert.equal(fs.readFileSync(result.channels.file.path, 'utf8'), body);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].executable, 'powershell.exe');
+  assert.ok(calls[0].args.includes('-File'));
+  assert.equal(calls[0].args.some(arg => arg.includes('一行目')), false);
+  assert.deepEqual(calls[0].payload, { title: 'Claude 進捗（test-pc）', body: '一行目<&>\n二行目\n三行目' });
+  assert.equal(fs.existsSync(calls[0].payloadPath), false);
+  assert.equal(calls[0].options.timeout, 20_000);
+});
+test('toast failure is returned, Linux skips it, and file failure does not stop DM', async t => {
+  const f = fixture(t);
+  const ctx = { ...f.opts, notifyImpl: async () => ({ delivered: 'dm' }), execFileImpl: async () => { throw new Error('powershell_failed'); } };
+  const failed = await sendNotice('本文', { ...ctx, platform: 'win32' });
+  assert.deepEqual(failed.channels.toast, { status: 'failed', error: 'powershell_failed' });
+  const skipped = await sendNotice('本文', ctx);
+  assert.deepEqual(skipped.channels.toast, { status: 'skipped', reason: 'non-win32' });
+  fs.rmSync(path.join(f.opts.home, '.claude/autopilot'), { recursive: true });
+  fs.writeFileSync(path.join(f.opts.home, '.claude/autopilot'), 'blocked');
+  const fileFailure = await sendNotice('本文', ctx);
+  assert.equal(fileFailure.delivered, 'dm');
+  assert.equal(fileFailure.channels.file.status, 'failed');
+});
+test('digest dry-run includes waiting section without delivery or state/ledger consumption', async t => {
+  const f = fixture(t), sent = [];
+  await f.call('start', { objective: '進捗' });
+  const ledger = path.join(f.opts.home, '.claude/waiting-on-user.json');
+  fs.mkdirSync(path.dirname(ledger), { recursive: true });
+  fs.writeFileSync(ledger, JSON.stringify([{ id: 'token', title: 'トークン登録', since: '2026-10-10', nextStep: '登録する', check: { cmd: 'node check.mjs', doneWhenStdoutIncludes: 'complete' } }]));
+  const before = fs.readFileSync(f.paths.state, 'utf8'), ledgerBefore = fs.readFileSync(ledger, 'utf8');
+  const options = { now: new Date('2026-10-23T03:00:00Z'), notifyImpl: async text => { sent.push(text); return { delivered: 'dm' }; }, checkImpl: async () => ({ stdout: 'pending' }) };
+  const preview = await f.call('digest', { 'dry-run': true }, options);
+  assert.match(preview.text, /user 作業待ち\n待ち 13 日: トークン登録 — 次の一手: 登録する/);
+  assert.equal(fs.readFileSync(f.paths.state, 'utf8'), before);
+  assert.equal(fs.readFileSync(ledger, 'utf8'), ledgerBefore);
+  assert.deepEqual(sent, []);
+  assert.equal(fs.existsSync(path.join(f.opts.home, '.claude/autopilot/latest-digest.md')), false);
+  const completed = await f.call('digest', {}, { ...options, checkImpl: async () => ({ stdout: 'complete' }) });
+  const next = await f.call('digest', {}, { ...options, now: new Date('2026-10-23T12:00:00Z') });
+  assert.match(completed.text, /完了しました: トークン登録/);
+  assert.doesNotMatch(next.text, /user 作業待ち|トークン登録/);
+  assert.equal(sent.length, 2);
+});
+test('periodic DM preserves waiting action and days despite notify-kim handoff/failure rewriting', async t => {
+  const f = discord(t);
+  await f.call('start', { objective: '報告' });
+  fs.writeFileSync(path.join(f.opts.home, '.claude/waiting-on-user.json'), JSON.stringify([{ id: 'a', title: '登録', since: '2026-10-10', nextStep: '接続して確認してください' }]));
+  const result = await f.call('digest', {}, { now: new Date('2026-10-23T03:00:00Z') });
+  assert.equal(f.sent[0], result.text);
+  assert.match(f.sent[0], /待ち 13 日.*接続して確認してください/);
+  assert.equal(fs.readFileSync(result.channels.file.path, 'utf8'), result.text);
+});
+test('corrupt waiting ledger never silences the digest and is recorded', async t => {
+  const f = fixture(t), sent = [];
+  await f.call('start', { objective: '報告' });
+  fs.mkdirSync(path.join(f.opts.home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(f.opts.home, '.claude/waiting-on-user.json'), '{not json');
+  const result = await f.call('digest', {}, { now: new Date('2026-10-23T03:00:00Z'), notifyImpl: async text => { sent.push(text); return { delivered: 'dm' }; } });
+  assert.equal(result.ok, true);
+  assert.equal(result.delivered, 'dm');
+  assert.equal(sent.length, 1);
+  assert.doesNotMatch(result.text, /user 作業待ち/);
+  const log = fs.readFileSync(path.join(f.paths.dir, 'run.log'), 'utf8');
+  assert.match(log, /waitingError/);
+});
+test('invalid owner config falls back to legacy delivery instead of stopping autopilot', async t => {
+  const f = fixture(t);
+  fs.mkdirSync(path.join(f.opts.home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(f.opts.home, '.claude/autopilot-owner.json'), '{broken');
+  const result = await sendNotice('本文', { ...f.opts, userId: '715210673642012733', notifyImpl: async () => ({ delivered: 'dm' }) });
+  assert.equal(result.delivered, 'dm');
+  assert.equal(result.channels.file.status, 'written');
+});
+test('legacy notifier without return value is unknown; explicitly disabled DM remains disabled', async t => {
+  const f = fixture(t), recipients = [];
+  const result = await sendNotice('本文', { ...f.opts, userId: '', notifyImpl: async (_text, options) => { recipients.push(options.userId); } });
+  assert.equal(result.delivered, 'unknown');
+  assert.deepEqual(recipients, ['']);
+  assert.equal(result.channels.file.status, 'written');
+});
+
+test('toast summary puts owner actions before the long objective line', () => {
+  const text = `📢 定時進捗報告: ${'長い目的文'.repeat(60)}\n状態: 止まっています\n前回報告以降の周回: 0周\n判断待ち: 空室案内を送ってよいか\n\nuser 作業待ち\n待ち 13 日: ラハイナ Instagram トークン登録 — 次の一手: 貼る`;
+  const summary = toastSummary(text).split('\n');
+  assert.equal(summary.length, 3);
+  assert.match(summary[0], /^判断待ち/);
+  assert.match(summary[1], /^待ち 13 日/);
+  assert.match(summary[2], /^状態:/);
+  assert.ok(summary.every((line) => line.length <= 120));
+});
+
+test('toast summary falls back to the first three lines', () => {
+  assert.equal(toastSummary('a\nb\nc\nd'), 'a\nb\nc');
 });

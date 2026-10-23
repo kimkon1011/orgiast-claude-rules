@@ -6,6 +6,9 @@ import { redact, cell, parseEnv } from '../../fraud-audit.mjs';
 export { cell, parseEnv };
 export const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 export const DAY = 86400000;
+// A numeric network port is public configuration, not a credential. Redacting it
+// inside ISO milliseconds corrupts persisted resume cursors (e.g. .993Z).
+export const envSecretValues = env => Object.entries(env).filter(([key, value]) => value && !(/_PORT$/.test(key) && /^\d+$/.test(value) && +value > 0 && +value <= 65535)).map(([, value]) => value);
 export const USERS = ['kim@orgiast.jp', 'seisaku-team@orgiast.jp', 'cr@orgiast.jp'];
 export const UNAVAILABLE_USERS = ['satou@orgiast.jp', 'eigyou@orgiast.jp', 'keiri2@orgiast.jp'];
 export const SEVERITIES = ['high', 'medium', 'info'];

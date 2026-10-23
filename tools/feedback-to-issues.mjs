@@ -182,7 +182,7 @@ export function runGh(args, options = {}) {
 }
 
 // 夜間巡回の一時的な 5xx / rate limit / ネットワーク断を吸収する。読み取り専用なので再試行してよい。
-function defaultSleep(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
+export function defaultSleep(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
 
 export function lookupFeedbackIssue(messageId, repo, gh, { attempts = 3, delayMs = 2000, sleep = defaultSleep } = {}) {
   let detail = 'no attempt';

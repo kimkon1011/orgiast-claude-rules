@@ -16,6 +16,18 @@ import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 
 const repo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 export const delegated = /pr-merge\.mjs|lane-doctor\.mjs|codex-do\.mjs|autopilot-tick\.mjs|llm-ask\.mjs|batch-(?:enqueue|run)\.mjs|(?:^|\s)gemini\s|(?:^|\s)codex\s|wsl[^\r\n]*\bcodex\b|claude\s+-p|node[^\r\n]*usage-stats\.mjs/i;
+export const operator = /line-pc-act\.ps1|line-send\.ps1|make-desktop-launcher\.mjs|notify-kim\.mjs|discord-dm\.mjs|fleet-mail\.mjs/i;
+function isOperatorWrapper(command, home) {
+  // Accept a single script invocation, never a compound shell command.
+  if (/[;|<>`$\r\n]/.test(command)) return false;
+  const match = command.trim().match(/^(?:(?:powershell|pwsh)(?:\.exe)?\s+(?:(?:-STA|-NoProfile|-NonInteractive|-NoLogo|-ExecutionPolicy\s+Bypass)\s+)*(?:-File\s+)?|&\s*)?(?:"([^"\n]+\.ps1)"|'([^'\n]+\.ps1)'|([^\s"'&]+\.ps1))(?:\s+[^&]*)?$/i);
+  if (!match) return false;
+  let file = (match[1] || match[2] || match[3]).replace(/\\/g, '/');
+  if (file.startsWith('~/')) file = path.join(home, file.slice(2));
+  file = path.normalize(file);
+  if (!/(?:^|\/)scratchpad\//i.test(file.replace(/\\/g, '/'))) return false;
+  try { return /line-pc-act\.ps1/i.test(fs.readFileSync(file, 'utf8')); } catch { return false; }
+}
 function output(value) { console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', ...value } })); }
 function editPath(input) { return String(input.file_path || input.path || ''); }
 function isDocEdit(name, input, home) {
@@ -32,6 +44,7 @@ export async function main() {
     if (implApproved(home, input.session_id)) return;
     const name = String(input.tool_name || ''), tool = input.tool_input || {}, command = String(tool.command || tool.script || '');
     if (isPastLogSearchToolUse(name, tool)) return;
+    if (/^(?:Bash|PowerShell)$/.test(name) && (operator.test(command) || isOperatorWrapper(command, home))) return;
     if (/^(?:Bash|PowerShell)$/.test(name) && (delegated.test(command) || (command.length < 300 && ['read-only', 'git'].includes(classifyBashCommand(command))))) return;
     if (isDocEdit(name, tool, home)) return;
     const dir = path.join(home, '.claude', 'session-lane'), file = path.join(dir, `${input.session_id || 'unknown'}.json`);

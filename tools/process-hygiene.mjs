@@ -125,6 +125,8 @@ export function classifyVscodeIdle(processes, now = Date.now(), opts = {}) {
     try { session = opts.readSession?.(pid) ?? null; } catch { session = null; }
     if (!session || typeof session !== 'object') continue;
     if (session.entrypoint !== 'claude-vscode' || session.status === 'busy') continue;
+    // Remote Control 接続中（スマホ待機タブ・スマホ利用中）は無操作が正常。止めるとスマホ側が exit code 1 で切れる。
+    if (session.bridgeSessionId) continue;
     const activity = Math.max(Number(session.statusUpdatedAt) || 0, Number(session.updatedAt) || 0);
     if (!activity) continue;
     let lastMs = activity;

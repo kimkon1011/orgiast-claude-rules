@@ -45,6 +45,32 @@ test('gate denies old version and real UI regressions despite stamped metadata',
 test('registry missing is not zero-backlog registered',t=>{const f=fixture(t);installApp(f);fs.unlinkSync(f.registryFile);assert.ok(verifyApp(f.app,f).missing.includes('zero-backlog-registered'));});
 test('scan finds clasp root only and skips backups and node_modules',t=>{const f=fixture(t);installApp(f);fs.writeFileSync(path.join(f.app,'src/appsscript.json'),'{}');assert.deepEqual(scanApps([f.root,f.app]),[f.app]);});
 test('semver numeric comparison and malformed versions fail closed',()=>{assert.equal(atLeast('1.10.0','1.2.0'),true);for(const v of ['1.0','garbage','1.0.0-beta','01.0.0'])assert.equal(atLeast(v,'1.0.0'),false);});
+// GAS の ContentService.createTextOutput にも append があるため、append の有無だけでは
+// JSON と HTML を区別できない。API の JSON 応答に launcher の HTML が混ざると JSON.parse が落ちる。
+test('GAS integration never appends launcher HTML to a JSON doGet response',t=>{
+  const f=fixture(t);
+  fs.writeFileSync(path.join(f.app,'src/Code.gs'),'function doGet(e) {\n  return ContentService.createTextOutput(JSON.stringify({ok: true})).setMimeType(ContentService.MimeType.JSON);\n}\n');
+  installApp({...f,name:'API アプリ'});
+  const outputs=[{mime:'application/json'},{mime:''}].map(({mime})=>({content:'{"ok":true}',appends:0,append(s){this.appends+=1;this.content+=s;return this;},setMimeType(){return this;},getContent(){return this.content;},...(mime?{getMimeType:()=>mime}:{})}));
+  for(const json of outputs){
+    const ctx=vm.createContext({ContentService:{createTextOutput:()=>json,MimeType:{JSON:'application/json'}},HtmlService:{createTemplateFromFile:()=>({evaluate:()=>({getContent:()=>'<div id="feedbackKitOpen">'})})},FeedbackRelay_serveForm:()=>({getContent:()=>'<form>'})});
+    vm.runInContext(fs.readFileSync(path.join(f.app,'src/Code.gs'),'utf8'),ctx);
+    vm.runInContext(fs.readFileSync(path.join(f.app,'src/FeedbackKitIntegration.gs'),'utf8'),ctx);
+    assert.equal(ctx.doGet({parameter:{}}),json);
+    assert.equal(json.appends,0);
+    assert.equal(json.content,'{"ok":true}');
+  }
+});
+test('GAS integration still appends the launcher to HTML pages',t=>{
+  const f=fixture(t);installApp({...f,name:'画面アプリ'});
+  const html={content:'<html>app</html>',appends:0,append(s){this.appends+=1;this.content+=s;return this;},setTitle(){return this;},getContent(){return this.content;},getMimeType:()=>'text/html'};
+  const ctx=vm.createContext({HtmlService:{createHtmlOutput:()=>html,createTemplateFromFile:()=>({evaluate:()=>({getContent:()=>'<div id="feedbackKitOpen">'})})},FeedbackRelay_serveForm:()=>({getContent:()=>'<form>'})});
+  vm.runInContext(fs.readFileSync(path.join(f.app,'src/Code.gs'),'utf8'),ctx);
+  vm.runInContext(fs.readFileSync(path.join(f.app,'src/FeedbackKitIntegration.gs'),'utf8'),ctx);
+  assert.equal(ctx.doGet({parameter:{}}),html);
+  assert.equal(html.appends,1);
+  assert.match(html.content,/feedbackKitOpen/);
+});
 test('GAS backend rejects title-only and too many images before saving',()=>{
   const code=fs.readFileSync(new URL('./gas/templates/FeedbackRelay.js',import.meta.url),'utf8');
   const ctx=vm.createContext({});vm.runInContext(code,ctx);ctx._FeedbackRelay_checkRateLimit=()=>true;

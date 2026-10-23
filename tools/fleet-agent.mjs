@@ -17,7 +17,7 @@ const RUN_TASKS = Object.freeze({
   'cost-self-heal': [['node', ['tools/tool-adoption-check.mjs', '--fix']], ['node', ['tools/hook-selfcheck.mjs']], ['node', ['tools/onboarding-sync.mjs']]]
 });
 const DEFAULT_URL = 'https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/fleet-directives.json';
-const SECRET_PATTERN = /(https?:\/\/[^\s]*?(?:webhook|token|key)[^\s]*|(?:api[_-]?key|token|secret|webhook)[\s=:]+[^\s]+)/gi;
+const SECRET_PATTERN = /(https?:\/\/[^\s]*?(?:webhook|token|key)[^\s]*|[A-Za-z0-9_]*(?:api[_-]?key|token|secret|webhook)\s*[=:]\s*[^\s]+|(?<![A-Za-z0-9_])(?:api[_-]?key|token|secret|webhook)\s+[^\s]+)/gi;
 const STATUS_TEXT_LIMIT = 1800;
 const NON_FAILURE_TASK_RESULTS = new Set([0, 267009, 267011]);
 

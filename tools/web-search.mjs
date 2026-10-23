@@ -9,10 +9,10 @@ import { isEntry } from './is-entry.mjs';
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const DEFAULT_MODELS = { gemini: 'gemini-3.6-flash', groq: 'groq/compound-mini', openrouter: 'openai/gpt-oss-120b:online', gsk: 'gsk' };
+const DEFAULT_MODELS = { gemini: 'gemini-3.6-flash', groq: 'groq/compound-mini', openrouter: 'openai/gpt-oss-120b:online', deepseek: 'search-api', gsk: 'gsk' };
 // グラウンディング検索は実測で 50 秒超えることがある(2026-08-30)。60 秒だと惜しいところで Groq へ落ちる。
 const DEFAULT_TIMEOUT_SECONDS = 120;
-const USAGE = '使い方: node tools/web-search.mjs "<調べたいこと>" [--provider auto|gemini|groq|openrouter|gsk] [--model <id>] [--json] [--timeout <秒>] [--raw] [--crawl <url>]';
+const USAGE = '使い方: node tools/web-search.mjs "<調べたいこと>" [--provider auto|gemini|groq|openrouter|deepseek|gsk] [--model <id>] [--json] [--timeout <秒>] [--raw] [--crawl <url>]';
 
 export function appendExecutorUsage(row, { homeDir = process.env.ORGIAST_HOME || os.homedir(), usageFile } = {}) {
   const file = usageFile || path.join(homeDir, '.claude', 'executor-usage.jsonl');
@@ -42,6 +42,10 @@ export function loadOpenRouterApiKey({ env = process.env, homeDir = os.homedir()
 
 export function loadGskApiKey({ env = process.env, homeDir = os.homedir() } = {}) {
   return env.GSK_API_KEY || readEnvValue(path.join(homeDir, '.claude', 'genspark.env'), 'GSK_API_KEY');
+}
+
+export function loadDeepseekApiKey({ env = process.env, homeDir = os.homedir() } = {}) {
+  return env.DEEPSEEK_API_KEY || readEnvValue(path.join(homeDir, '.claude', 'deepseek.env'), 'DEEPSEEK_API_KEY');
 }
 
 function collectUrls(value, found) {
@@ -88,7 +92,7 @@ export function parseArgs(argv) {
       if (arg === '--model') options.model = value;
       else if (arg === '--crawl') options.crawlUrl = value;
       else if (arg === '--provider') {
-        if (!['auto', 'gemini', 'groq', 'openrouter', 'gsk'].includes(value)) throw new Error('--provider は auto|gemini|groq|openrouter|gsk で指定してください');
+        if (!['auto', 'gemini', 'groq', 'openrouter', 'deepseek', 'gsk'].includes(value)) throw new Error('--provider は auto|gemini|groq|openrouter|deepseek|gsk で指定してください');
         options.provider = value;
       } else {
         options.timeoutSeconds = Number(value);
@@ -207,6 +211,40 @@ async function fetchWithTimeout(url, init, timeoutSeconds, fetchImpl) {
   }
 }
 
+async function requestDeepseekTool(endpoint, body, { timeoutSeconds = DEFAULT_TIMEOUT_SECONDS, apiKey, fetchImpl = globalThis.fetch }) {
+  const started = Date.now();
+  const response = await fetchWithTimeout(`https://api.deepseek.com/v1/tools/${endpoint}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }, timeoutSeconds, fetchImpl);
+  if (!response.ok) throw await httpError('DeepSeek', response);
+  return { raw: await response.json(), elapsedMs: Date.now() - started };
+}
+
+export async function requestDeepseekSearch({ query, ...options }) {
+  const result = await requestDeepseekTool('search', { query, count: 8, need_content: false }, options);
+  const results = result.raw?.results;
+  if (!Array.isArray(results) || !results.length) throw new Error('DeepSeek Search API の results が空でした');
+  const ranked = [...results].sort((a, b) => (Number(b.rerank_score) || 0) - (Number(a.rerank_score) || 0)).slice(0, 8);
+  const answer = ranked.map((item, i) => [
+    `${i + 1}. ${item.title || '(タイトルなし)'}`,
+    item.summary || item.snippet,
+    item.url,
+    item.date ? `日付: ${item.date}` : '',
+  ].filter(Boolean).join('\n')).join('\n\n');
+  const urls = ranked.filter(item => item.url).map(item => ({ title: item.title || '', url: item.url }));
+  return { ...result, answer, urls };
+}
+
+export async function requestDeepseekFetch({ url, ...options }) {
+  const safeUrl = normalizeCrawlUrl(url);
+  const result = await requestDeepseekTool('fetch', { url: safeUrl }, options);
+  const answer = result.raw?.content;
+  if (typeof answer !== 'string' || !answer.trim()) throw new Error('DeepSeek Fetch API の content が空でした');
+  return { ...result, answer, urls: [{ title: result.raw.title || '', url: safeUrl }] };
+}
+
 export async function requestGeminiSearch({ query, model = DEFAULT_MODELS.gemini, timeoutSeconds = DEFAULT_TIMEOUT_SECONDS, apiKey, fetchImpl = globalThis.fetch }) {
   const started = Date.now();
   const url = `${GEMINI_API_URL}/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
@@ -296,26 +334,30 @@ export async function search(query, options = {}) {
     gemini: options.geminiApiKey ?? loadGeminiApiKey(keyOptions),
     groq: options.groqApiKey ?? options.apiKey ?? loadGroqApiKey(keyOptions),
     openrouter: options.openrouterApiKey ?? loadOpenRouterApiKey(keyOptions),
+    deepseek: options.deepseekApiKey ?? loadDeepseekApiKey(keyOptions),
     gsk: options.gskApiKey ?? loadGskApiKey(keyOptions),
   };
-  const providers = options.crawlUrl ? ['gsk'] : providerOption === 'auto' ? ['gemini', 'groq', 'openrouter', 'gsk'] : [providerOption];
-  const keyNames = { gemini: 'GEMINI_API_KEY', groq: 'GROQ_API_KEY', openrouter: 'OPENROUTER_API_KEY', gsk: 'GSK_API_KEY' };
+  const providers = options.crawlUrl ? (providerOption === 'auto' ? ['deepseek', 'gsk'] : [providerOption]) : providerOption === 'auto' ? ['gemini', 'groq', 'openrouter', 'deepseek', 'gsk'] : [providerOption];
+  if (options.crawlUrl && providers.some(provider => !['deepseek', 'gsk'].includes(provider))) throw new Error('--crawl の --provider は auto|deepseek|gsk で指定してください');
+  const keyNames = { gemini: 'GEMINI_API_KEY', groq: 'GROQ_API_KEY', openrouter: 'OPENROUTER_API_KEY', deepseek: 'DEEPSEEK_API_KEY', gsk: 'GSK_API_KEY' };
   if (providers.every((provider) => !keys[provider])) {
-    const error = new Error(`${providers.map((provider) => `${keyNames[provider]} がありません`).join('。')}。環境変数、~/.gemini/.env、~/.claude.json、~/.claude/groq.env、~/.claude/openrouter.env または ~/.claude/genspark.env を確認してください。`);
+    const error = new Error(`${providers.map((provider) => `${keyNames[provider]} がありません`).join('。')}。環境変数、~/.gemini/.env、~/.claude.json、~/.claude/groq.env、~/.claude/openrouter.env、~/.claude/deepseek.env または ~/.claude/genspark.env を確認してください。`);
     error.code = 2;
     throw error;
   }
 
   const failures = [];
-  const requests = { gemini: requestGeminiSearch, groq: requestGroqSearch, openrouter: requestOpenRouterSearch, gsk: options.crawlUrl ? requestGskCrawl : requestGskSearch };
+  const requests = { gemini: requestGeminiSearch, groq: requestGroqSearch, openrouter: requestOpenRouterSearch, deepseek: options.crawlUrl ? requestDeepseekFetch : requestDeepseekSearch, gsk: options.crawlUrl ? requestGskCrawl : requestGskSearch };
   for (const provider of providers) {
     if (!keys[provider]) { failures.push(`${provider}: APIキーなし`); continue; }
-    const model = options.model || DEFAULT_MODELS[provider];
+    const model = provider === 'deepseek' ? (options.crawlUrl ? 'fetch-api' : 'search-api') : options.model || DEFAULT_MODELS[provider];
     try {
       const request = requests[provider];
       const result = await request({ query, url: options.crawlUrl, ...options, model, apiKey: keys[provider], fetchImpl: options.fetchImpl ?? globalThis.fetch, spawnImpl: options.spawnImpl ?? spawn });
       const usage = result.raw?.usageMetadata || result.raw?.usage || {};
-      const row = provider === 'gemini'
+      const row = provider === 'deepseek'
+        ? { t: new Date().toISOString(), provider, model, calls: 1, usd: 0.00075, secs: result.elapsedMs / 1000 }
+        : provider === 'gemini'
         ? { t: new Date().toISOString(), provider, model, in: usage.promptTokenCount || 0, out: usage.candidatesTokenCount || 0, secs: result.elapsedMs / 1000, grounded: result.raw?.candidates?.[0]?.groundingMetadata != null }
         : { t: new Date().toISOString(), provider, model, in: usage.prompt_tokens || 0, out: usage.completion_tokens || 0, secs: result.elapsedMs / 1000 };
       try {

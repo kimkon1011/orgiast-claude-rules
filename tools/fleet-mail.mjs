@@ -199,13 +199,15 @@ export async function dailyLaneHealth({ dir, label, request, now = Date.now, pla
   const marker = path.join(dir, '.fleet-lane-health-day');
   const day = new Date(now()).toISOString().slice(0, 10);
   let last = ''; try { last = fs.readFileSync(marker, 'utf8').trim(); } catch {}
-  if (last === day) return { skipped: 'today' };
-  fs.writeFileSync(marker, day);
+  const cached = readJson(path.join(dir, 'lane-health.json'), {});
+  const stale = Object.values(cached?.lanes || {}).some(lane => /:stale$/.test(lane.reason || ''));
+  if (last === day && !stale) return { skipped: 'today' };
   const doctor = path.join(repo, 'tools', 'lane-doctor.mjs');
   if (!fs.existsSync(doctor)) return { skipped: 'no-script' };
-  const r = spawnSyncImpl(process.execPath, [doctor, '--probe', '--json'], { encoding: 'utf8', windowsHide: true, timeout: 120_000, stdio: ['ignore', 'pipe', 'pipe'] });
+  const r = spawnSyncImpl(process.execPath, [doctor, '--probe', '--json'], { encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: path.dirname(dir) }, windowsHide: true, timeout: 120_000, stdio: ['ignore', 'pipe', 'pipe'] });
   const health = parseLaneDoctorOutput(r?.stdout);
-  if (!health) return { skipped: 'probe-failed' };
+  if (!health || r.error || r.status !== 0) return { skipped: 'probe-failed' };
+  fs.writeFileSync(marker, day);
   const dead = deadLanes(health);
   const stateFile = path.join(dir, '.fleet-lane-health-sent.json');
   const state = readJson(stateFile, {}) || {};
@@ -553,12 +555,20 @@ export async function refreshSentStatus({ home, request, stderr = console.error 
   try { lines = fs.readFileSync(path.join(dir, 'fleet-mail-sent.jsonl'), 'utf8').trim().split('\n'); } catch { return; }
   const file = path.join(dir, 'fleet-mail-sent-status.json');
   const cache = readJson(file, {});
-  const ids = [...new Set(lines.flatMap(line => { try { const r = JSON.parse(line); return ['sent', 'send-attempt'].includes(r.action) && r.id ? [r.id] : []; } catch { return []; } }))];
+  const rows = lines.flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } });
+  const entries = rows.filter(r => ['sent', 'send-attempt'].includes(r.action) && r.id);
+  const ids = [...new Set(entries.map(r => r.id))];
+  const sentIds = new Set(entries.filter(r => r.action === 'sent').map(r => r.id));
   const deadline = Date.now() + 10000;
   // 送信前に失敗した send-attempt のように、サーバーに一度も現れない id は
   // 毎回 mail-get が失敗して「再試行待ち」が永久に出続ける。連続失敗が上限に達したら
   // 自動取得を打ち切る（--sent-status <id> の明示照会は今までどおり動く）。
-  const abandoned = id => (cache[id]?.lookupFailures || 0) >= SENT_STATUS_MAX_LOOKUP_FAILURES;
+  // ただし sent 行がある id は実際に送信できているため、一時的なタイムアウトで打ち切ると
+  // 生きているメールの状態を永久に取れなくなる。期限切れ相当（8日）を過ぎるまでは打ち切らない。
+  const SENT_STATUS_ABANDON_AFTER_MS = 8 * 24 * 3600000;
+  const idAgeMs = id => { const m = /^mail-(\d{10,})-/.exec(id); return m ? Date.now() - Number(m[1]) : 0; };
+  const abandonable = id => !sentIds.has(id) || idAgeMs(id) > SENT_STATUS_ABANDON_AFTER_MS;
+  const abandoned = id => abandonable(id) && (cache[id]?.lookupFailures || 0) >= SENT_STATUS_MAX_LOOKUP_FAILURES;
   for (const id of ids.reverse().filter(id => !['done', 'expired'].includes(cache[id]?.status) && !abandoned(id)).sort((a, b) => (cache[a]?.checkedAt || 0) - (cache[b]?.checkedAt || 0)).slice(0, 5)) {
     if (Date.now() >= deadline) break;
     const previous = cache[id] || {};
@@ -566,7 +576,7 @@ export async function refreshSentStatus({ home, request, stderr = console.error 
     const failed = () => {
       const lookupFailures = (previous.lookupFailures || 0) + 1;
       cache[id] = { ...cache[id], lookupFailures };
-      if (lookupFailures >= SENT_STATUS_MAX_LOOKUP_FAILURES) stderr(`fleet-mail: 送信状態を取得できないため自動取得を打ち切り=1 (${id})`);
+      if (lookupFailures >= SENT_STATUS_MAX_LOOKUP_FAILURES && abandonable(id)) stderr(`fleet-mail: 送信状態を取得できないため自動取得を打ち切り=1 (${id})`);
       else stderr('fleet-mail: 送信状態取得再試行待ち=1');
     };
     try {
@@ -669,6 +679,7 @@ export function parseArgs(argv) {
   if (options['--send']) {
     for (const key of ['--to', '--kind', '--body-file', '--why']) if (!options[key]?.trim()) throw new Error(`${key} 必須`);
     if (!['prompt', 'note'].includes(options['--kind'])) throw new Error('--kind must be prompt or note');
+    if (options['--kind'] === 'note' && /^\s*\[作業依頼\]/.test(options['--why'])) throw new Error('[作業依頼] は受信側で実行されるよう --kind prompt で送ってください（note は表示のみで実行されません）');
     if (options['--to'].length > 128 || options['--why'].length > 1000) throw new Error('宛先または理由が長すぎます');
     if (options['--exec'] !== undefined) {
       if (!EXEC_KINDS.includes(options['--exec'])) throw new Error(`--exec は ${EXEC_KINDS.join(' / ')} のみ対応`);

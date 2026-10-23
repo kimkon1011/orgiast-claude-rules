@@ -7,7 +7,7 @@
   ],
   "models": [
     { "id": "groq-gpt-oss-120b", "provider": "groq", "model": "openai/gpt-oss-120b", "params": { "reasoning_effort": "low" } },
-    { "id": "deepseek-chat", "provider": "deepseek", "model": "deepseek-chat" }
+    { "id": "deepseek-flash", "provider": "deepseek", "model": "deepseek-flash" }
   ],
   "tasks": [
     { "id": "minutes-decisions", "category": "抽出", "input": "9/18 定例議事録\n・佐藤: 見積書の再提出が必要。9/25まで。\n・田中: 在庫確認を9/22までに実施。\n・鈴木: 来週の展示会は参加見送りで合意。", "plainAsk": "次の議事録から決定事項をまとめてください。", "workflowSpec": "次の議事録から決定事項だけを抽出し、JSONで出力してください。\n出力契約: {\"decisions\":[{\"owner\":\"<担当者>\",\"due\":\"<M/D>\"}]} 以外の文字列を出力しないこと。\n規則: 「決定事項」以外（見送り・合意のみの行）は含めない。並び順は議事録の登場順。", "expect": { "type": "json_path", "value": { "decisions": [{ "owner": "佐藤", "due": "9/25" }, { "owner": "田中", "due": "9/22" }] } } },

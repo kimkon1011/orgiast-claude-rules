@@ -103,10 +103,15 @@ Stop の `user-burden-gate` が依頼のある最終応答を監査する。本�
 - 事例: 複合機スキャン→Drive 自動アップで FAX フォルダを「対象に含めた」と報告し、テストは別フォルダだけで合格とした。初期調査で FAX の「直近30日 0件・最終 2024/3」を取得していたのに報告せず、複合機入替で FAX 保存設定が消えていたことを user の問い合わせで初めて発見した。
 
 **🔴 社内メンバーへの連絡は Discord DM で送る（tools/discord-dm.mjs）。Gmail下書きは内部宛に禁止・外部宛のみ。送れない時はチャットに完成形を表示。**
+メール送信の前に recipient-domain-gate が宛先ドメインの実在（MX/A）を検査し、存在しないドメイン宛は止める（2026-10-23 名刺OCR誤読でバウンス2件）。
 
 内部判定: 社内・グループ会社（東邦鋼業 genbateam.toho@gmail.com、Reブース、NEXTForward）・スタッフ。orgiast.jp / toho-kogyo.com と `~/.claude/internal-recipients.json`（既定 `tools/internal-recipients.default.json`）を使い、`internal-recipient-gmail-guard` が宛先を照合する。
 
 社内メンバーへの送り方: `node ~/orgiast-claude-rules/tools/discord-dm.mjs "<名前 or メール>" --body "<本文>"`（`--dry-run` で送信せず解決結果だけ確認できる）。宛先の名前→Discord ID 解決は Bot が行うので user に ID やチャンネルを聞かない。宛先が曖昧・不明なら送らずに終了する（推測で送らない）。Bot トークンが無いPCなど送れない場合だけ、チャットに「宛先／用件／本文」をコピペできる完成形で表示する。外部宛のGmail下書きは、本文と下書き件名もチャットに併記する。
+
+**🔴 外部との日程調整はこちらから候補日時（日付・時刻を3〜5枠）を出す。「ご都合をお知らせください」と先方に丸投げしない（2026-10-23 cr）。**
+
+候補は担当者のカレンダー（Calendar コネクタの suggest_time / list_events）で空きを確かめて作り、所要時間・形式（オンライン／訪問）・「決まり次第URLを送る」を添える。空きが読めない時は仮の候補を書かず、担当者へ確認してから出す。例:「・10月28日（水）14:00〜15:00 ・10月29日（木）11:00〜12:00 ・10月30日（金）16:00〜17:00 のいずれかでご都合はいかがでしょうか。難しい場合は別の候補をお出しします」。理由: 先方に候補出しを任せると返信待ちが1往復増え、未回答のまま日程が決まらない（2026-10-23 展示会案件の返信下書きで丸投げ文面を書き、cr が全社ルール化を指示）。
 
 **🔂 手作業を頼むなら「二度と発生しない状態」までを同じ依頼に含める（2026-08-26 kim厳命・絶対）**
 「今回だけ手でお願いします」で済ませ、**恒久化を後から提案するのは違反**（その時点で余計な1回を取らせている）。kim の指摘: 「**ユーザーの手間を掛けさせないということを甘く見すぎ**」。
@@ -224,6 +229,8 @@ GASはclaspとGitHubで管理し、実行・read-backまでClaudeが行う。
 Apps Script Web エディタに直接コードを書かない。ソースはGitHub管理、`.clasp.json`で`clasp push -f`反映。Web Appデプロイは既存 `deploymentId` を再利用（URL維持）。手作業コピペ・「エディタで保存→再デプロイしてください」案内は禁止。
 bound scriptのscriptId不明時はDrive MCPで`mimeType='application/vnd.google-apps.script'`検索等の発見手順あり。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/gas-clasp-workflow.md`
 
+**GAS のテンプレート .html はコメント内でも `<?` `?>` を書かない（2026-10-15 倉庫アプリ本番@64が約1.5時間全停止）**: テンプレートは場所を問わず `<?= ?>` を評価するため、JSコメント内の記述でも `evaluate()` が SyntaxError になり全画面が落ちる。push 前に `grep -nE '<\?' current-app/*.html` と `test/template-scriptlet.test.js` で検査し、deploy 直後は実ブラウザで JS エラーが無いことを確認する。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/gas-clasp-workflow.md`
+
 **1.4 GAS の実行を Claude 側で完結させる**
 
 `clasp push -f`だけでなく関数実行も自動化しないと「▶実行してください」が繰り返し発生する。初回1clickのOAuth同意でtime-basedトリガーを仕込めば以降は無人化できる。
@@ -231,6 +238,7 @@ bound scriptのscriptId不明時はDrive MCPで`mimeType='application/vnd.google
 **Driveコマンドキュー方式は全GASプロジェクト必須（絶対ルール）**: 専用Driveフォルダを1分ごとのトリガーで監視し `cmd_*.json`→`result_*.txt` で処理。ホワイトリスト方式（`eval`禁止）。**`setupOnce()` 1つに全初期化を集約**（分割禁止）。トリガー削除は必ず`handlerFunction`名でフィルタ（`processCommandQueue`を巻き添え削除しない）。全文テンプレ・appsscript.json scope・past cases: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/gas-clasp-workflow.md`
 
 **実行→検証→完了報告のサイクルもClaude側で完結**（GAS/Web/cron/デプロイ共通）: push後、コマンドキュー/Web App endpoint/clasp run のいずれかで強制発火→ログ/DB read-backで検証→OKと確認できてから「完了」と言う。「次回cron発火で確認できます」は禁止。詳細・検証導線一覧表: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/verify-before-done.md`
+委譲・マージした変更も、本番経路で実行し、送信・通知・外部反映はAPIで読み戻すまで完了報告しない。
 
 **すべての変更後、テストして実際に直っていることを確認してから報告する（絶対ルール）**: typecheckだけ・「ブラウザで確認してください」丸投げは違反。UI変更はLayer1(ロジックNode再現)+Layer2(Playwright実描画)の2段必須、GAS/Sheets書き込みは戻り値でなく**read-back verify**必須（merge cellのnon-top-left等はsilent ignoreされる）、Frontend変更も「browserでしか動かない」を言い訳にせず`test/*.test.js`をNodeで書く。報告テンプレ・頻発失敗パターン表・past cases: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/verify-before-done.md`
 
@@ -545,6 +553,21 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
 
 新規プロジェクト着手の初手で、GCP/Supabase/Vercel/GitHub/Anthropic等をどのアカウントで作るか宣言してから着手する（デフォルトはチーム共有=seisaku-team@orgiast.jp、Workspace Admin操作のみkim@orgiast.jp）。詳細・標準応答テンプレ・recover手順: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/project-launch-playbook.md`
 
+**🔴 全プロジェクトは「後で別アカウント（例: cr@orgiast.jp）へ管理を移す」前提で作る（kim 2026-10-22 厳命・全PC全アカウント）。外部リソースは最小、個人依存値は env/Binding、リポ直下に HANDOVER.md 必須、移管は「招待＋オーナー変更」だけで終わる構成にする。**
+
+**1.12.1 移管前提の設計ルール（kim 2026-10-22・全PC全アカウント全 Claude Code）**
+
+背景: 2026-10 に古川さん退職に伴うアプリ5本の cr@orgiast.jp への移管、ブース制作アプリの cr-PC 移管で、個人アカウント依存（Vercel Hobby のメンバー不可・個人 Discord ID のハードコード・env の所在不明・引き継ぎ文書なし）が移管コストの大半だった。作る時点で移管を設計に入れれば、移管は数十分で終わる。
+
+- **着手時の所有権宣言（§1.12）に「移管先候補」と「移管手順の所要（分）」を1行添える**。移管先が未定でも「cr@orgiast.jp 等の社内アカウント」と書く。
+- **外部リソースは最小**: 原則 GitHub + Cloudflare（§1.10.1。DB は D1）。Vercel / Supabase / GCP / 有料 SaaS を足すときは理由を1行書き、HANDOVER.md のリソース一覧に移管手順まで書く。
+- **個人アカウントに紐づく値はコードに書かない**: Discord ID・メールアドレス・トークン・Webhook URL・スプレッドシート ID は env / Binding / Script Properties に置き、`.env.example` に全項目を説明付きで列挙する。
+- **リポジトリ直下に `HANDOVER.md`**（ひな形: project-launch-playbook.md §1.12.1）: リソース一覧（種別／現オーナー／URL／移管手順／移管後に書き換える箇所）、env 一覧（値は書かず所在のみ）、再デプロイ手順、ローカル起動手順、定期ジョブ・Webhook・外部連携の一覧。非エンジニアの後任が読んで移管を完了できる粒度。README に「引き継ぎは HANDOVER.md」と1行書く。
+- **移管操作が「招待してオーナー変更」で終わる構成にする**: GitHub = Settings → Transfer ownership（または Org 配下で Owner 追加）、Cloudflare = Members に追加 → Super Administrator、Google（Sheets/Drive/GAS）= 同一ドメイン内の所有権移転、GAS = §1.3 の clasp + GitHub 管理。**個人の有料プランでしか成立しない構成（Vercel Pro のメンバー招待等）や、個人 PC のローカルにしか無い秘密・定期ジョブは作らない**（定期処理は GitHub Actions / Cloudflare Cron Triggers / GAS トリガーへ）。
+- **デプロイ前ゲート**: `tools/handover-doc-gate.mjs` が `wrangler deploy` / `vercel deploy` / `clasp push` 直前に HANDOVER.md の有無を確認し、無ければ deny する（feedback-form-gate と同じ型）。
+- **既存アプリ**は大きな改修のついでに同じ形へ寄せる。HANDOVER.md の追加だけなら改修を待たずその場で行う。
+- 完了報告の検証表に「HANDOVER.md あり／移管手順の所要（分）」の行を入れる。
+
 ### 1.13 トークン効率
 
 出力を簡潔にし、入力キャッシュと用途別委譲でトークンを節約する。
@@ -612,7 +635,7 @@ kim 宛の自動通知は「何が起きたか／次に自動でやること／k
 
 「すすめて」と打たせない。完了報告の後は自動で次のTODO（git commit/vercel prod deploy/Layer2 e2e/memory反映等）に着手する。設計判断・破壊的操作・未承認prod送信・大型リファクタのみAskUserQuestionで待つ。報告末尾に「残TODO」セクションを付ける。詳細・自動着手チェックリスト: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/autonomy-and-reporting.md`
 
-**「この後の自動進行: <内容>」の宣言は台帳に記録され、止まれば自動で拾われる（2026-10-14 追加）**。Stop hook `tools/auto-progress-ledger.mjs` が宣言（「なし」以外）を `~/.claude/auto-progress-ledger.jsonl` に記録する（同一セッションは最新で置換）。各PCの定期タスク `OrgiastAutoProgressWatch` が毎時台帳を巡回し、宣言から1時間以降のものを判定する。stalled は前回から2時間以上空けて累計8回まで最終成果へ向けて自動再開し、共有 Sheet（タブ「自動進行」）へ行を足す。全PCが朝08:40と巡回後に自PC分をDiscord DMする（0件は送らない）。だから宣言は「実際に自動で進む内容」だけ書く。Sheet 側の追加手順は `docs/auto-progress-gas-patch.gs.txt`。
+**「この後の自動進行: <内容>」の宣言は台帳に記録され、止まれば自動で拾われる（2026-10-14 追加）**。Stop hook `tools/auto-progress-ledger.mjs` が宣言（「なし」以外）を `~/.claude/auto-progress-ledger.jsonl` に記録する（同一セッションは最新で置換）。各PCの定期タスク `OrgiastAutoProgressWatch` が毎時台帳を巡回し、宣言から1時間以降のものを判定する。stalled は前回から2時間以上空けて累計8回まで最終成果へ向けて自動再開し、共有 Sheet（タブ「自動進行」）へ行を足す。全PCが1日2回まで・変化分のみ自PC分をDiscord DMする（変化0件は送らない）。だから宣言は「実際に自動で進む内容」だけ書く。API エラー（利用上限など）で返答できずに終わった依頼も、毎時の巡回が transcript から見つけて台帳へ起票し、持ち主へ DM したうえで別モデルで自動再開する。Sheet 側の追加手順は `docs/auto-progress-gas-patch.gs.txt`。
 
 自動進行の結果はセッションの持ち主に DM とセッション内表示で必ず届く。user に「進捗どう？」と聞かせたら違反（2026-10-19 cr 指摘）。
 
@@ -1147,6 +1170,8 @@ Stop ゲートは差し戻し後の書き直しも検査する（素通り禁止
 ### 2.1 データ・文書・外部ツール（§2.1〜2.7）
 
 データを捏造せず、辞書・仕様を実装と一致させ、各外部ツールの操作規約を守る。
+
+- 備品管理表（全体）『備品在庫管理表』の K列（現在在庫数）は関数列。K には何も書かない（在庫数は E列）。K を跨ぐ範囲は分けて書く。bihin-kcol-gate が止める（2026-10-23 古川さん依頼）。
 
 **2.1 経営データに無い属性をハルシネーションしない**
 

@@ -238,3 +238,19 @@ test('CLI without SA key exits successfully with one line and no scan or notific
   assert.equal(result.status, 0); assert.equal(result.stdout, 'skip: no-sa-key\n'); assert.equal(result.stderr, '');
   assert.deepEqual(fs.readdirSync(home), []);
 });
+
+test('一時的な接続障害は自動再試行し、永続エラーは宛先と安全なコードを残す', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'receipt-repair-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  let calls = 0;
+  const options = { home, config: { ...config, accounts: ['kim@orgiast.jp'] }, now, appendLedger: false };
+  const recovered = await scanAiReceipts({ ...options, searchImpl: async () => {
+    if (++calls === 1) throw Object.assign(new Error('secret upstream'), { cause: { code: 'ECONNRESET' } });
+    return { messages: [], estimate: 0 };
+  } });
+  assert.equal(calls, 2); assert.deepEqual(recovered.errors, []);
+  const failed = await scanAiReceipts({ ...options, searchImpl: async () => { throw Object.assign(new Error('secret path'), { code: 'ENOENT' }); } });
+  assert.deepEqual(failed.errors, [{ account: 'kim@orgiast.jp', reason: '取得失敗: ENOENT' }]);
+  assert.match(failed.report, /kim@orgiast.jp（取得失敗: ENOENT）/);
+  assert.doesNotMatch(failed.report, /secret path|認証・接続を確認/);
+});

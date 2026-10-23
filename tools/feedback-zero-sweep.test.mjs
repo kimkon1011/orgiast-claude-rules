@@ -3,7 +3,49 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { sweep, sweepExitCode, unknownRowsLine, fetchPending, normalizeItem, appConfig, appDirectory } from './feedback-zero-sweep.mjs';
+import { sweep, sweepExitCode, unknownRowsLine, fetchPending, normalizeItem, appConfig, appDirectory, issueState } from './feedback-zero-sweep.mjs';
+
+test('Issue状態は一時失敗後に再試行して成功する', () => {
+  const calls = [], sleeps = [];
+  const issue = { state: 'OPEN', url: 'u', title: 't' };
+  const gh = args => {
+    calls.push(args);
+    return calls.length === 1 ? { status: 1 } : { status: 0, stdout: JSON.stringify(issue) };
+  };
+  assert.deepEqual(issueState({ number: 42, repo: 'o/r' }, gh, { sleep: ms => sleeps.push(ms) }), issue);
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[0], ['issue', 'view', '42', '--repo', 'o/r', '--json', 'state,url,title']);
+  assert.deepEqual(calls[1], calls[0]);
+  assert.deepEqual(sleeps, [2000]);
+});
+
+test('Issue状態は3回失敗すると理由を含む例外を返す', () => {
+  for(const [result, detail] of [
+    [{ status: 1 }, 'status=1'],
+    [{ status: 1, error: new Error('network down') }, 'status=1 / network down'],
+    [{ error: new Error('spawn failed') }, 'spawn failed'],
+  ]) {
+    let calls = 0;
+    const sleeps = [];
+    assert.throws(() => issueState({ number: 42, repo: 'o/r' }, () => { calls++; return result; }, {
+      sleep: ms => sleeps.push(ms),
+    }), { message: `Issue状態 未取得 (${detail})` });
+    assert.equal(calls, 3);
+    assert.deepEqual(sleeps, [2000, 4000]);
+  }
+});
+
+test('Issue状態は不正なJSONやstateを再試行しない', () => {
+  for(const [stdout, message] of [['invalid JSON', /JSON/], ['{"state":"UNKNOWN"}', /Issue状態 不正/]]) {
+    let calls = 0;
+    const sleeps = [];
+    assert.throws(() => issueState({ number: 42, repo: 'o/r' }, () => { calls++; return { status: 0, stdout }; }, {
+      sleep: ms => sleeps.push(ms),
+    }), message);
+    assert.equal(calls, 1);
+    assert.deepEqual(sleeps, []);
+  }
+});
 
 const entry = { appName: 'テストアプリ', kind: 'next', intake: 'relay', refs: { url: 'T_URL', secret: 'T_SECRET', repo: 'T_REPO', appDir: 'T_DIR' } };
 
@@ -253,4 +295,64 @@ test('unknownRowsLine は失敗したアプリと理由を1行にまとめ、成
     ] }),
     'unknown_rows=A:Issue化失敗: Issue lookup failed (status=1); B:未取得',
   );
+});
+
+test('空の原票でも台帳のIssue照合が一時失敗する：回復後はunknownを残さずexit 0', async () => {
+  for (const dryRun of [true, false]) {
+    const { home, opts, calls } = setup([]);
+    fs.mkdirSync(path.join(home, '.claude'));
+    fs.writeFileSync(path.join(home, '.claude', 'feedback-issue-ledger.json'), JSON.stringify({
+      items: [{ app_name: entry.appName, message_id: 'resolved', repo: 'o/r', number: 42 }],
+    }));
+    let attempts = 0;
+    try {
+      const result = await sweep({ ...opts, dryRun, gh: () => ++attempts === 1
+        ? { status: 1 }
+        : { status: 0, stdout: JSON.stringify({ state: 'CLOSED' }) } });
+      assert.equal(sweepExitCode(result), 0);
+      assert.equal(attempts, 2);
+      assert.equal(result.remaining, 0);
+      assert.equal(result.unknown, 0);
+      assert.deepEqual(result.rows[0].errors, []);
+      assert.equal(result.rows[0].queued, 0);
+      assert.equal(result.rows[0].deferred, 0);
+      assert.deepEqual(result.notification, { delivered: 'none' });
+      assert.equal(sweepExitCode(result), 0);
+      assert.equal(unknownRowsLine(result), '');
+      assert.equal(calls.issue + calls.exec + calls.notify.length, 0);
+    } finally { fs.rmSync(home, { recursive: true, force: true }); }
+  }
+});
+
+test('queued/deferredが0でもIssue照合の再試行枯渇はexit 1', async () => {
+  const { home, opts } = setup([]);
+  fs.mkdirSync(path.join(home, '.claude'));
+  fs.writeFileSync(path.join(home, '.claude', 'feedback-issue-ledger.json'), JSON.stringify({
+    items: [{ app_name: entry.appName, message_id: 'unresolved', repo: 'o/r', number: 42 }],
+  }));
+  let attempts = 0;
+  try {
+    const result = await sweep({ ...opts, dryRun: true, gh: () => { attempts++; return { status: 1 }; } });
+    assert.equal(attempts, 3);
+    assert.equal(result.unknown, 1);
+    assert.equal(result.rows[0].queued, 0);
+    assert.equal(result.rows[0].deferred, 0);
+    assert.equal(sweepExitCode(result), 1);
+    assert.match(unknownRowsLine(result), /Issue状態 未取得 \(status=1\)/);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test('queued/deferredが0でもAPI恒久失敗はdry-run・通常ともexit 1', async () => {
+  for (const dryRun of [true, false]) {
+    const { home, opts, calls } = setup([]);
+    try {
+      const result = await sweep({ ...opts, dryRun, fetchImpl: async () => ({ ok: false, status: 403 }) });
+      assert.equal(result.unknown, 1);
+      assert.equal(result.rows[0].queued, 0);
+      assert.equal(result.rows[0].deferred, 0);
+      assert.deepEqual(result.rows[0].errors, ['HTTP 403']);
+      assert.equal(sweepExitCode(result), 1);
+      assert.equal(calls.issue + calls.exec, 0);
+    } finally { fs.rmSync(home, { recursive: true, force: true }); }
+  }
 });

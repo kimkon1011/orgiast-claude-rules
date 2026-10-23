@@ -406,6 +406,20 @@ try {
         } catch { Write-NightlyLog 'delegation-health-check' ("error:" + $_.Exception.Message + ' (警告・後続処理続行): ' + (Format-NightlyDetail $delegationHealthOutput)) }
     } else { Write-NightlyLog 'delegation-health-check' 'skip:ファイルなし' }
 
+    $timeoutWasteJudge = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\timeout-waste-judge.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $timeoutWasteJudge = $candidate; break }
+    }
+    if ($timeoutWasteJudge) {
+        $timeoutWasteJudgeOutput = $null
+        try {
+            $timeoutWasteJudgeOutput = @(& $node.Source $timeoutWasteJudge 2>&1)
+            $timeoutWasteJudgeExit = $LASTEXITCODE
+            Write-NightlyStepResult 'timeout-waste-judge' $timeoutWasteJudgeExit $timeoutWasteJudgeOutput ' (警告・後続処理続行)'
+        } catch { Write-NightlyLog 'timeout-waste-judge' ("error:" + $_.Exception.Message + ' (警告・後続処理続行): ' + (Format-NightlyDetail $timeoutWasteJudgeOutput)) }
+    } else { Write-NightlyLog 'timeout-waste-judge' 'skip:ファイルなし' }
+
     # アプリ内フォームの報告(kim の DM に届いたもの)を GitHub Issue 化する。
     # 失敗しても既存の夜間処理を止めない。未 ack のものは次回そのまま再試行される。
     $feedbackToIssues = $null

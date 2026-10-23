@@ -19,6 +19,18 @@ if ($PSScriptRoot) { $repoCandidates += (Split-Path -Parent $PSScriptRoot) }
 $repoCandidates += @("$H\orgiast-claude-rules", "$H\Downloads\orgiast-claude-rules")
 $repo = @($repoCandidates | Select-Object -Unique) | Where-Object { Test-Path $_ } | Select-Object -First 1
 
+# Existing LINE receiver hosts also acquire new tasks without reinstallation.
+try {
+  $scheduleInstaller = Join-Path $repo 'tools\register-schedule-sync-task.ps1'
+  if ($repo -and (Test-Path -LiteralPath $scheduleInstaller)) {
+    if ($Dry) { DrySkip 'register-schedule-sync-task.ps1 -Ensure (LINE receiver host only)' }
+    else {
+      & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $scheduleInstaller -Ensure
+      if ($LASTEXITCODE -ne 0) { throw "register-schedule-sync-task.ps1 exit $LASTEXITCODE" }
+    }
+  }
+} catch { Write-Warning ("schedule-sync self-repair failed: " + $_.Exception.Message) }
+
 # 自己修復: 対話セッションのGUI監視を既存PCにも導入する。
 try {
   $dialogInstaller = Join-Path $repo 'tools\register-stuck-dialog-task.mjs'

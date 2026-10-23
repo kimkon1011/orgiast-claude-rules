@@ -9,7 +9,7 @@ import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 
 export const PROVIDERS = {
-  deepseek: { model: 'deepseek-chat' }, gemini: { model: 'gemini-3.7-flash' },
+  deepseek: { model: 'deepseek-flash' }, gemini: { model: 'gemini-3.7-flash' },
   openrouter: { model: 'meta-llama/llama-3.3-70b-instruct' }, groq: { model: 'openai/gpt-oss-120b' },
   kimi: { model: 'kimi-k3' }, anthropic: { model: 'claude-haiku-4-5-20251001' },
 };

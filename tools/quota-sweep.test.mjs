@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { DEFAULT_GOAL, MAX_TICKS, selectGoal, tickPrompt, contractPrompt, canRunWindow, interactiveClaude, main, makeLedger, runSweep, parseOutput, acquireLock, prepareTree, readWorktreePointer, writeWorktreePointer } from './quota-sweep.mjs';
+import { commandRunner, queueRepeatedFailure, writeWorktreePointer, prepareTree, DEFAULT_GOAL, MAX_TICKS, selectGoal, tickPrompt, contractPrompt, canRunWindow, interactiveClaude, main, makeLedger, runSweep, parseOutput, acquireLock, readWorktreePointer } from './quota-sweep.mjs';
 import { runBounded, killTree } from './lib/quota-sweep-process.mjs';
 import { interactiveCodex, wslPath } from './lib/quota-sweep-host.mjs';
 import { decideSweep, resetKey, sameReset } from './lib/quota-windows.mjs';
@@ -17,7 +17,7 @@ test('goal selection priority and none fallback', () => {
   const handoff = '## 残TODO\n1. fix import\n';
   assert.deepEqual(selectGoal({ goals: '- [x] done\n- [ ] test goal', handoff }), { goal: 'test goal', goalSource: 'quota-sweep-goals.md' });
   assert.equal(selectGoal({ handoff }).goal, 'fix import');
-  assert.equal(selectGoal({ handoff: '## 残TODO\n1. なし\n' }).goal, DEFAULT_GOAL);
+  assert.equal(selectGoal({ handoff: '## 残TODO\n1. なし\n' }).goal, null);
 });
 test('prompt binds slug, cumulative cap and proven FINAL', () => {
   assert.match(tickPrompt('quota-sweep-claude'), /^\[headless:quota-sweep\]/);
@@ -55,7 +55,7 @@ test('dry run calls no spawn and creates no state, even with eligible windows', 
 });
 test('ledger schema preserves unknown usage and elapsed seconds', () => {
   const row = makeLedger({ decision, startedAt: now, endedAt: now + 2000, goal: 'test', goalSource: 'builtin', outcome: 'deadline' });
-  assert.deepEqual(Object.keys(row), ['ts', 'provider', 'window', 'resetsAt', 'usedBefore', 'usedAfter', 'ticks', 'outcome', 'goal', 'goalSource', 'branch', 'prUrl', 'durationSec']);
+  assert.deepEqual(Object.keys(row), ['ts', 'provider', 'window', 'resetsAt', 'usedBefore', 'usedAfter', 'ticks', 'outcome', 'goal', 'goalSource', 'branch', 'prUrl', 'reason', 'failureKey', 'stopOutcome', 'deliveryError', 'durationSec']);
   assert.equal(row.durationSec, 2); assert.equal(row.usedAfter, null);
 });
 test('deadline kills process tree, never spawns after deadline', async () => {
@@ -121,6 +121,7 @@ test('prepareTree は書き込み不能でも native git なら落とさず、WS
 });
 function context(t, child) {
   const home = temp(t), tree = path.join(home, 'tree'); fs.mkdirSync(path.join(home, '.claude')); fs.mkdirSync(tree);
+  fs.writeFileSync(path.join(home, '.claude/quota-sweep-goals.md'), `- [ ] ${DEFAULT_GOAL}\n`);
   const state = {};
   return { home, tree, state, save: () => {}, windows: async () => windows, active: async () => false, log: () => {}, env: {}, now: () => now, claudeExe: 'fixture',
     prepareTree: () => ({ tree, branch: 'quota-sweep/test', base: 'base' }), command: (_exe, args) => args[0] === 'branch' ? 'quota-sweep/test' : '0', runChild: child, notify: async () => {} };
@@ -258,4 +259,88 @@ test('unused window without resets_at does not block the resetting window', () =
   assert.equal(decisions[0].resetsAt, resetKey(weekly.resetsAt));
   // Unknown usage (non-finite reset with consumption) stays conservative.
   assert.equal(decideSweep({ windows: [{ ...idle5h, usedPercent: 30 }, weekly], now: at }).length, 0);
+});
+
+test('empty and completed goals never start work or send DM', async t => {
+  for (const goal of ['', 'なし（完了）', 'なし', 'none (done)', '完了']) {
+    const ctx = context(t, () => assert.fail('child started'));
+    fs.writeFileSync(path.join(ctx.home, '.claude/quota-sweep-goals.md'), goal ? `- [ ] ${goal}\n` : '');
+    fs.writeFileSync(path.join(ctx.home, '.claude/next-session.md'), `## 残TODO\n1. ${goal}\n`);
+    ctx.prepareTree = () => assert.fail('prepared'); ctx.notify = () => assert.fail('DM');
+    await runSweep(decision, ctx);
+    assert.equal(ctx.state.lastRun.claude[decision.resetsAt].outcome, 'no-goal');
+  }
+});
+test('fetch and push get a longer timeout and exactly one retry', () => {
+  for (const verb of ['fetch', 'push', 'status']) {
+    let calls = 0;
+    const run = commandRunner((_exe, _args, options) => {
+      calls++; assert.equal(options.timeout, verb === 'status' ? 120_000 : 300_000);
+      return { error: Object.assign(new Error('spawnSync git ETIMEDOUT'), { code: 'ETIMEDOUT' }), status: null };
+    });
+    assert.throws(() => run('git', [verb], '/tmp'), new RegExp(`git ${verb}:.*ETIMEDOUT`));
+    assert.equal(calls, verb === 'status' ? 1 : 2);
+  }
+  let calls = 0;
+  assert.equal(commandRunner(() => ++calls === 1 ? { status: 1 } : { status: 0, stdout: 'ok' })('git', ['fetch']), 'ok');
+});
+test('check failures and exceptions survive in ledger and DM', async t => {
+  for (const kind of ['window-info', 'interactive-active', 'monitor-error', 'prepare']) {
+    const ctx = context(t, () => assert.fail('child started')); let dm;
+    if (kind === 'window-info') ctx.windows = async () => [];
+    if (kind === 'interactive-active') ctx.active = async () => true;
+    if (kind === 'monitor-error') ctx.windows = async () => { throw new Error('usage offline'); };
+    if (kind === 'prepare') ctx.prepareTree = () => { throw new Error('git fetch timed out'); };
+    ctx.notify = async text => { dm = text; };
+    await runSweep(decision, ctx);
+    const row = JSON.parse(fs.readFileSync(path.join(ctx.home, '.claude/quota-sweep.jsonl')));
+    assert.equal(row.outcome, 'failed'); assert.ok(row.reason); assert.ok(row.failureKey);
+    assert.ok(dm.includes(row.reason));
+  }
+});
+test('PR with failed child is partial, retaining exit reason', async t => {
+  const ctx = context(t, async () => ({ code: 1, stderr: 'model unavailable' })); let dm;
+  ctx.command = (_exe, args) => args[0] === 'branch' ? 'quota-sweep/test' : args[0] === 'rev-list' ? '1' : args[0] === 'pr' ? 'https://github.com/example/repo/pull/1' : '';
+  ctx.notify = async text => { dm = text; };
+  await runSweep(decision, ctx);
+  const row = ctx.state.lastRun.claude[decision.resetsAt];
+  assert.equal(row.outcome, 'partial'); assert.equal(row.stopOutcome, 'failed');
+  assert.match(row.reason, /model unavailable/); assert.match(dm, /成果あり・未完了/);
+});
+test('delivery error retains original stop reason and is recorded', async t => {
+  const ctx = context(t, async () => ({ code: 1, timedOut: true, stopReason: 'deadline', stderr: 'child timeout' }));
+  ctx.command = (_exe, args) => {
+    if (args[0] === 'branch') return 'quota-sweep/test';
+    if (args[0] === 'rev-list') return '1';
+    throw new Error('push timeout');
+  };
+  await runSweep(decision, ctx);
+  const row = ctx.state.lastRun.claude[decision.resetsAt];
+  assert.equal(row.outcome, 'failed'); assert.match(row.reason, /child timeout.*push timeout/);
+  assert.equal(row.deliveryError, 'push timeout');
+});
+test('repeated cause enqueues one existing handoff task across reset windows', t => {
+  const home = temp(t); fs.mkdirSync(path.join(home, '.claude'));
+  const state = {}, file = path.join(home, '.claude/next-session.md');
+  const row = { provider: 'claude', failureKey: 'git-fetch-ETIMEDOUT', reason: 'timeout' };
+  queueRepeatedFailure(home, state, row); assert.equal(fs.existsSync(file), false);
+  queueRepeatedFailure(home, state, row);
+  const text = fs.readFileSync(file, 'utf8'); assert.match(text, /handoff-audit:/);
+  queueRepeatedFailure(home, state, { ...row, reason: 'different timestamp' });
+  assert.equal(fs.readFileSync(file, 'utf8'), text);
+  queueRepeatedFailure(home, state, { ...row, failureKey: null });
+  assert.equal(state.failureStreaks.claude.count, 0);
+});
+test('persistent EPERM on opening pointer recovers through replacement', t => {
+  const file = path.join(temp(t), '.git'); fs.writeFileSync(file, 'gitdir: /absolute\n');
+  writeWorktreePointer(file, 'gitdir: ../relative\n', {
+    writeFile: (target, ...args) => { if (target === file) throw Object.assign(new Error('locked open'), { code: 'EPERM' }); return fs.writeFileSync(target, ...args); }, chmod: () => {}
+  });
+  assert.equal(fs.readFileSync(file, 'utf8'), 'gitdir: ../relative\n');
+});
+test('relative pointer is not rewritten', t => {
+  const home = temp(t), tree = path.join(home, '.claude/quota-sweep-repo'); fs.mkdirSync(tree, { recursive: true });
+  prepareTree({ home, provider: 'claude', run: (_exe, args) => args[0] === 'status' ? '' : 'base', io: {
+    readFile: () => 'gitdir: ../nightly-repo/.git/worktrees/sweep\n', writeFile: () => assert.fail('rewrote relative pointer')
+  } });
 });

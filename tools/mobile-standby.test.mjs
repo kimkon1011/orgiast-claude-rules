@@ -5,7 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import pool from './lib/mobile-state.cjs';
 import {
-  convergeMobileConfig, removeMobileTabsZero, convergeMobileExtension, convergeMobileStandby,
+  convergeMobileConfig, removeMobileTabsZero, ensureMobileRefreshDisabled, convergeMobileExtension, convergeMobileStandby,
   convergeRcNamePrefix, RC_NAME_PREFIX, readMobileRefreshConfig,
 } from './mobile-standby.mjs';
 
@@ -198,11 +198,14 @@ test('convergeMobileStandby は 3 ステップを通し冪等', () => {
   assert.equal(first.ok, true);
   assert.equal(first.config.changed, true);
   assert.equal(first.settings.changed, true);
+  assert.equal(first.refreshSetting.changed, true);
+  assert.ok(first.lines.some((line) => line.startsWith('[mobile-standby] VSCode refresh:')));
   assert.equal(first.extension.status, 'installed');
   fs.mkdirSync(path.join(f.home, '.vscode', 'extensions', 'orgiast.next-session-0.3.7'), { recursive: true });
   const second = convergeMobileStandby({ ...f, settingsPath, rcPrefix });
   assert.equal(second.config.changed, false);
   assert.equal(second.settings.changed, false);
+  assert.equal(second.refreshSetting.changed, false);
   assert.equal(second.extension.status, 'ok');
 });
 
@@ -282,4 +285,57 @@ test('同梱 VSIX の最新版と package.json の版が一致する', () => {
   const dir = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..', 'packages', 'vscode-next-session');
   const version = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')).version;
   assert.ok(fs.existsSync(path.join(dir, `orgiast-next-session-${version}.vsix`)));
+});
+
+for (const [name, before, after] of [
+  ['未設定→挿入', '{\n  "editor.x": 1\n}\n', '{\n  "orgiast.nextSession.mobileRefreshMinutes": 0,\n  "editor.x": 1\n}\n'],
+  ['60→0', '{\n  "orgiast.nextSession.mobileRefreshMinutes": 60\n}\n', '{\n  "orgiast.nextSession.mobileRefreshMinutes": 0\n}\n'],
+  ['JSONC・CRLF・コメント保持', '// { header\r\n{\r\n  /* "orgiast.nextSession.mobileRefreshMinutes": 99 */\r\n  "orgiast.nextSession.mobileRefreshMinutes": 60, // keep\r\n  "url": "https://example.test",\r\n}\r\n', '// { header\r\n{\r\n  /* "orgiast.nextSession.mobileRefreshMinutes": 99 */\r\n  "orgiast.nextSession.mobileRefreshMinutes": 0, // keep\r\n  "url": "https://example.test",\r\n}\r\n'],
+  ['コメント内だけの設定は未設定', '{\n // "orgiast.nextSession.mobileRefreshMinutes": 60\n}\n', '{\n  "orgiast.nextSession.mobileRefreshMinutes": 0,\n // "orgiast.nextSession.mobileRefreshMinutes": 60\n}\n'],
+]) {
+  test(`VSCode refresh: ${name}、変更前バックアップと冪等性`, (t) => {
+    const dir = temp('ms-norefresh-');
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const file = path.join(dir, 'settings.json');
+    fs.writeFileSync(file, before);
+    assert.equal(ensureMobileRefreshDisabled(file).changed, true);
+    assert.equal(fs.readFileSync(file, 'utf8'), after);
+    const backups = fs.readdirSync(dir).filter((name) => /\.bak-norefresh-\d{14}\.json$/.test(name));
+    assert.equal(backups.length, 1);
+    assert.equal(fs.readFileSync(path.join(dir, backups[0]), 'utf8'), before);
+    const write = t.mock.method(fs, 'writeFileSync', () => assert.fail('冪等時に書き込み'));
+    assert.equal(ensureMobileRefreshDisabled(file).changed, false);
+    assert.equal(write.mock.callCount(), 0);
+    write.mock.restore();
+  });
+}
+
+test('VSCode refresh: 既に0・ファイル無し・危険な形式は書かない', (t) => {
+  const dir = temp('ms-norefresh-skip-');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'settings.json');
+  assert.match(ensureMobileRefreshDisabled(file).note, /なし/);
+  for (const raw of [
+    '{"orgiast.nextSession.mobileRefreshMinutes":0}',
+    '{"orgiast.nextSession.mobileRefreshMinutes":60}',
+    '{broken',
+    '[]',
+    '{"nested":{"orgiast.nextSession.mobileRefreshMinutes":60}}',
+    '{\n"orgiast.nextSession.mobileRefreshMinutes":0,\n"orgiast.nextSession.mobileRefreshMinutes":60\n}',
+  ]) {
+    fs.writeFileSync(file, raw);
+    const write = t.mock.method(fs, 'writeFileSync', () => assert.fail('変更不要時に書き込み'));
+    assert.equal(ensureMobileRefreshDisabled(file).changed, false);
+    assert.equal(write.mock.callCount(), 0);
+    write.mock.restore();
+    assert.equal(fs.readFileSync(file, 'utf8'), raw);
+    assert.deepEqual(fs.readdirSync(dir), ['settings.json']);
+  }
+});
+
+test('convergeMobileStandby: refresh 設定の例外で ok=false', () => {
+  const f = extFixture();
+  const run = convergeMobileStandby({ ...f, settingsPath: f.home, rcPrefix: { platform: 'linux' } });
+  assert.equal(run.ok, false);
+  assert.ok(run.lines.some((line) => /VSCode refresh: 失敗/.test(line)));
 });

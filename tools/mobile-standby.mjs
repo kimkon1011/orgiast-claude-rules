@@ -101,6 +101,54 @@ export function removeMobileTabsZero(settingsPath) {
   return { changed: true, note: 'orgiast.nextSession.mobileTabs=0 を除去' };
 }
 
+// JSONC のコメント・既存書式を保持し、判定できない設定は変更しない。
+export function ensureMobileRefreshDisabled(settingsPath) {
+  let raw;
+  try { raw = fs.readFileSync(settingsPath, 'utf8'); }
+  catch (error) {
+    if (error.code === 'ENOENT') return { changed: false, note: 'settings.json なし' };
+    throw error;
+  }
+  const unsafe = () => ({ changed: false, note: 'mobileRefreshMinutes を安全に編集できないため変更しません' });
+  // 文字列中の // や /* はコメントではない。文字位置と改行は維持する。
+  const clean = raw.replace(/"(?:\\.|[^"\\])*"|\/\/[^\r\n]*|\/\*[\s\S]*?\*\//g,
+    (token) => token.startsWith('"') ? token : token.replace(/[^\r\n]/g, ' '));
+  let parsed;
+  try {
+    const json = clean.replace(/"(?:\\.|[^"\\])*"|,(?=\s*[}\]])/g,
+      (token) => token === ',' ? ' ' : token);
+    parsed = JSON.parse(json.replace(/^\uFEFF/, ''));
+  } catch { return unsafe(); }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return unsafe();
+  const key = 'orgiast.nextSession.mobileRefreshMinutes';
+  const keys = [...clean.matchAll(/"(?:\\.|[^"\\])*"\s*:/g)]
+    .filter((match) => JSON.parse(match[0].slice(0, match[0].lastIndexOf(':')).trim()) === key);
+  let out;
+  if (Object.hasOwn(parsed, key)) {
+    if (keys.length !== 1) return unsafe();
+    if (parsed[key] === 0) return { changed: false, note: 'mobileRefreshMinutes=0（変更なし）' };
+    const start = keys[0].index;
+    const lineStart = raw.lastIndexOf('\n', start - 1) + 1;
+    const lineEnd = raw.indexOf('\n', start);
+    const end = lineEnd < 0 ? raw.length : lineEnd;
+    const line = raw.slice(lineStart, end);
+    const match = line.match(/^(\s*"orgiast\.nextSession\.mobileRefreshMinutes"\s*:\s*)(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null|"(?:\\.|[^"\\])*")(\s*,?\s*(?:\/\/[^\r\n]*)?\r?)$/);
+    if (!match) return unsafe();
+    out = raw.slice(0, lineStart) + match[1] + '0' + match[3] + raw.slice(end);
+  } else {
+    if (keys.length) return unsafe();
+    const opening = clean.indexOf('{');
+    const newline = raw.includes('\r\n') ? '\r\n' : '\n';
+    const tail = raw.slice(opening + 1);
+    out = raw.slice(0, opening + 1) + newline + `  "${key}": 0,` +
+      (/^\r?\n/.test(tail) ? tail : newline + tail);
+  }
+  const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14);
+  fs.copyFileSync(settingsPath, `${settingsPath}.bak-norefresh-${stamp}.json`, fs.constants.COPYFILE_EXCL);
+  fs.writeFileSync(settingsPath, out, 'utf8');
+  return { changed: true, note: 'orgiast.nextSession.mobileRefreshMinutes=0 を設定' };
+}
+
 // powershell.exe を -EncodedCommand(UTF-16LE の Base64)で呼ぶ。日本語が化けないための必須手順。
 function runPowershell(script) {
   const encoded = Buffer.from(script, 'utf16le').toString('base64');
@@ -194,13 +242,18 @@ export function convergeMobileStandby({ home, repoRoot = path.dirname(toolsDir),
   try {
     const desired = readMobileRefreshConfig(repoRoot);
     if (desired?.error) { result.ok = false; lines.push(`[mobile-standby] mobile-refresh.json: NG ${desired.error}`); }
-    else { const r = convergeMobileConfig(home, MOBILE_STANDBY_COUNT, desired); note('mobile-sessions.json', r); result.config = r; }
+    // mobile-refresh.json が無い PC でも refreshMinutes=0 を配る（拡張は VS Code 設定より json を優先する。作業中のスマホ会話タブを閉じる事故の再発防止）
+    else { const r = convergeMobileConfig(home, MOBILE_STANDBY_COUNT, desired ?? { minutes: 0 }); note('mobile-sessions.json', r); result.config = r; }
   }
   catch (error) { result.ok = false; lines.push(`[mobile-standby] mobile-sessions.json: 失敗 ${error.message}`); }
   try {
     const target = settingsPath ?? path.join(home, 'AppData', 'Roaming', 'Code', 'User', 'settings.json');
     const r = removeMobileTabsZero(target); note('VSCode settings', r); result.settings = r;
   } catch (error) { result.ok = false; lines.push(`[mobile-standby] VSCode settings: 失敗 ${error.message}`); }
+  try {
+    const target = settingsPath ?? path.join(home, 'AppData', 'Roaming', 'Code', 'User', 'settings.json');
+    const r = ensureMobileRefreshDisabled(target); note('VSCode refresh', r); result.refreshSetting = r;
+  } catch (error) { result.ok = false; lines.push(`[mobile-standby] VSCode refresh: 失敗 ${error.message}`); }
   try {
     const r = convergeMobileExtension({ home, repoRoot, env, runCodeCli, exists, readdir, regQuery }); note('拡張', r.status === 'ng' ? { note: `NG ${r.note}` } : r); result.extension = r;
     if (r.status === 'ng') result.ok = false;

@@ -22,7 +22,7 @@ function readSnapshot(home, now = Date.now()) {
   } catch { return null; }
 }
 // --- 定期リフレッシュ設定（古い待機タブを閉じて作り直し、スマホ一覧の上に出す） ---
-const DEFAULT_REFRESH_MINUTES = 60;
+const DEFAULT_REFRESH_MINUTES = 0;
 const DEFAULT_REFRESH_HOURS = '06-24';
 function refreshMinutes(value) {
   const minutes = Number(value);

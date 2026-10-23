@@ -57,3 +57,13 @@ assistant/user 本文に `script.new|clasp run|▶実行` を含む行（窓内�
 tests 6231 / pass 6203 / fail 17 / skipped 11。内訳は既知の fleet-mail-v2 11 件、ai-news-inject 5 件（日付依存）、
 distribution-coverage 1 件（未追跡の `.loop/` が未分類として検出。`.loop/` は本ループの作業物でコミットしない）。
 本変更は docs のみ。fail は変更前から存在する（`.loop/` 起因の1件を除く）。
+
+## §7 追記（2026-10-23 02:25Z・台帳更新後の再走査）
+
+台帳は 02:21Z まで更新済み（handoff-audit 1253 行 / runner 518 行）。窓内の語彙ヒットは本ループ自身の出力 echo のみで、再発 0 件。
+
+C3 の判定材料（原文セッション 0395ca72、行数は台帳実測）:
+- handoff-audit-ledger: `script.new` を含む excerpt の行 12 件が全て verdict=pass（violations 空、provider=null・latencyMs=0。LLM 判定ではなく即 pass の経路）。最終行 04:48Z も pass。
+- stop-gate-runner-ledger: 同様の行 12 件のうち blockedBy 空が 4 件。残りは他の gate（next-action / user-burden 等）が止めたが、手渡し自体を理由に止めた記録はない。
+- 判定: ライブの handoff-audit は原文を検出できず、夜間監査（18:01Z）で初めて block になった。検出器の欠陥は「あり」（ライブ gate が provider=null で pass を返している）。
+- 未修正: provider=null / latencyMs=0 の pass 経路の原因は未調査。次ループで fired=true かつ provider=null の行の発生条件を調べる。

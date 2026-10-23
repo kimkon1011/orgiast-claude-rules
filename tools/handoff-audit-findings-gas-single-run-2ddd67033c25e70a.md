@@ -280,3 +280,65 @@ excerpt は「発送キットは seisaku-team@orgiast.jp（kim本人）で開い
 - 発生条件: **確定**（上記 2 条件の同時成立のみ）。
 - 修正要否: **要る。修正は f94ee7a に実装済み・テスト済み。追加のコード変更は不要**（述語は母集団と一致し、非発火行では無コスト）。
 - 残る作業は **f94ee7a の main マージ 1 点のみ**（未マージのため本番の 298 行と同型の素通りは継続中）。
+
+## §14 追記（2026-10-23 06:1xZ・宣言どおり夜間監査後に再確認 → 監査は未実行。ただし再走査器が FINAL を誤判定する 2 経路を発見し修正）
+
+### ① 夜間監査はまだ走っていない（実測）
+
+`~/.claude/handoff-audit-nightly-ledger.jsonl` の最終行は **2026-10-22T18:01:30.352Z**。
+日次実行なので次回は 2026-10-23T18:01Z 前後＝**このセッション（06:09Z）時点では約 12 時間先**。
+したがって宣言の「夜間監査のあと」という前提条件は、文字どおりには**まだ成立していない**。
+夜間監査に依存しない部分（本番 Stop gate が手渡し文言に provider 判定を付けているか）だけを、ライブ台帳で更新した。
+
+### ② 再走査の結果（窓 2026-10-23T02:24:55Z 〜 06:09Z・修正済み分類器）
+
+```
+node tools/handoff-audit-rescan.mjs --since 2026-10-23T02:24:55Z
+verdict: handoff-wording-without-provider
+totals: rowsMatched=17 handoffWording=17 handoffWordingWithProviderVerdict=0
+        handoffWordingProviderUnavailable=2 handoffWordingBlockedByHandoffAuditGate=0
+        syntheticReplaysExcluded=6
+```
+
+- 手渡し文言行は **17 件**（§13 の 5 件から増加）。**provider 付きの判定は 0 件**。
+- うち **2 件は `provider=deepseek` だが `verdict=audit-unavailable`**
+  （05:22:22.087Z / 05:43:41.481Z, `error=timeout-or-provider-unavailable`）
+  ＝ LLM には届いていない。**判定ではない。**
+- `blockedBy=handoff-audit-gate` の行は依然 **0 件**。
+
+### ③ 修正前の再走査器が FINAL を誤判定していた（本節の主目的）
+
+分類器の欠陥を 2 つ特定し、`tools/handoff-audit-rescan.mjs` を修正した（テスト 9→11 本）。
+
+1. **`provider` 名の有無だけで「判定済み」にしていた。**
+   修正前は `hasProviderVerdict = Boolean(provider) && fired!==false && skipped!=='regex-blocked'`。
+   これだと上記 2 行（deepseek に届かず audit-unavailable）が判定済みに数えられ、
+   **verdict が `handoff-wording-judged-with-provider` に反転して「FINAL」と誤報する**。
+   実際に修正前の実行でこの反転が起きた（06:09Z の初回実行）。
+   → `Boolean(submitted) && submitted !== 'audit-unavailable'` を条件に追加し、
+     到達失敗の行は `handoffWordingProviderUnavailable` として別掲する。
+2. **反実仮想ハーネスの行が本番台帳に混入していた。**
+   `.loop/counterfactual-latest.mjs` は `sessionId` を `cf-PRODUCTION` / `cf-FIXED` / `cf-FIXED-pass` にして
+   **本番の `handoff-audit-ledger.jsonl` へ 3 行書く**（06:05:17Z）。本番トラフィックではない。
+   → `isSyntheticReplay()`（`cf-` 接頭辞）で除外し、`syntheticReplaysExcluded` に計上。
+   台帳そのものは書き換えない（読み取り専用の原則を維持）。
+
+- 追加テスト: 上記 2 経路をそのまま回帰テスト化。`node --test tools/handoff-audit-rescan.test.mjs` → **11/11 pass**。
+- 注意: この混入を止めるには、ハーネス側（`.loop/`・追跡外）が別 `--ledger-dir` を使うのが本筋。
+  本節では読み取り側で除外したが、**台帳の汚染自体は残っている**（次に誰かが生の行数を数えると同じ罠を踏む）。
+
+### ④ マージ状況（変化なし）
+
+- `git fetch` 後の origin/main = `2757964`。`git merge-base --is-ancestor f94ee7a origin/main` → **NO**（未着地）。
+- 本ブランチは origin/main に対し **ahead 10 / behind 8**。
+- 本番 hook（nightly-repo）は引き続き未修正版を実行しており、17 件の手渡し文言は 1 件も provider 判定を受けていない。
+
+### ⑤ 判定
+
+- 宣言の分岐（provider 付き verdict が出れば FINAL）: **出ていない → FINAL にしない**。
+- 夜間監査後の再確認: **未実行可能**（監査自体が未実行）。監査後は同じコマンドの `--since` を監査時刻に変えるだけでよい。
+- 残件は変わらず **f94ee7a を main へ載せること**の 1 点（人の判断）。本ループの brief は
+  「送信・権限変更・本番デプロイ・GAS 実行はしない」なので、main へのマージは実施していない。
+- 環境メモ: `node --test tools/`（brief 記載のゲート表記・Node v24.19.0）は
+  `Cannot find module '...\tools'` で失敗する。エラーはテストファイルに到達する前のモジュール解決段階で出るため、
+  本節の変更内容には依存しない。実行するときは `node --test tools/*.test.mjs` か対象ファイルの明示が必要。

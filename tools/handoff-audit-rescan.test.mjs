@@ -51,6 +51,33 @@ test('窓内に手渡し文言があるのに provider 判定が無ければ wit
   assert.equal(s.verdict, 'handoff-wording-without-provider');
 });
 
+test('provider 名はあるが verdict=audit-unavailable の行は判定済みに数えない', () => {
+  // 2026-10-23T05:22:22Z / 05:43:41Z の実台帳行。deepseek に届かず判定は無い。
+  const rows = [
+    { ts: T0, sessionId: 'a', fired: true, provider: 'deepseek', latencyMs: 6000, verdict: 'audit-unavailable', error: 'timeout-or-provider-unavailable', excerpt: '▶ 実行してください' },
+  ];
+  const s = summarize([{ name: 'x', hits: scanRows(rows).hits }]);
+  assert.equal(s.totals.handoffWordingWithProviderVerdict, 0);
+  assert.equal(s.totals.handoffWordingProviderUnavailable, 1);
+  assert.equal(s.verdict, 'handoff-wording-without-provider');
+});
+
+test('反実仮想ハーネスの cf-* 行は本番トラフィックとして数えず、除外数を出す', () => {
+  // 2026-10-23T06:05Z に .loop/counterfactual-latest.mjs が本番台帳へ書いた 3 行。
+  const rows = [
+    { ts: T0, sessionId: 'cf-PRODUCTION', fired: true, provider: null, skipped: 'regex-blocked', verdict: 'pass', excerpt: '次に kim がすること: 支払う' },
+    { ts: T0, sessionId: 'cf-FIXED', fired: true, provider: null, skipped: 'regex-blocked', verdict: 'pass', excerpt: '次に kim がすること: 支払う' },
+    { ts: T0, sessionId: '2bb98fd7', fired: true, provider: null, skipped: 'regex-blocked', verdict: 'pass', excerpt: '次に kim がすること: 支払う' },
+  ];
+  const r = scanRows(rows);
+  assert.equal(r.synthetic, 2);
+  assert.equal(r.hits.length, 1);
+  const s = summarize([{ name: 'x', ...r }]);
+  assert.equal(s.totals.handoffWording, 1);
+  assert.equal(s.totals.syntheticReplaysExcluded, 2);
+  assert.equal(s.verdict, 'handoff-wording-without-provider');
+});
+
 test('runner 台帳で handoff-audit-gate が止めた行も判定済みとして数える', () => {
   const rows = [
     { ts: T0, sessionId: 'a', blockedBy: ['handoff-audit-gate'], demoted: [], verdict: 'block', excerpt: '▶ 実行してください' },

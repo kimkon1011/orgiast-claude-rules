@@ -50,18 +50,35 @@ export function matchHandoff(text) {
   return hits;
 }
 
+// 反実仮想ハーネス（.loop/counterfactual*.mjs）は sessionId を `cf-` で始めて本番台帳へ行を書く。
+// これは本番トラフィックではないので、台帳を読む側で除外する（除外数は totals に出す）。
+// 2026-10-23 06:05Z の 3 行（cf-PRODUCTION / cf-FIXED / cf-FIXED-pass）が実際に混入した。
+export function isSyntheticReplay(row) {
+  const id = row?.sessionId;
+  return typeof id === 'string' && id.startsWith('cf-');
+}
+
 export function verdictOf(row) {
   // handoff-audit-ledger: provider が入っていれば LLM 判定が走った行。
   // stop-gate-runner-ledger: blockedBy に handoff-audit-gate が入っていれば手渡し検査が止めた行。
   const provider = row.provider ?? null;
   const blockedBy = Array.isArray(row.blockedBy) ? row.blockedBy : [];
-  const hasProviderVerdict = Boolean(provider) && row.fired !== false && row.skipped !== 'regex-blocked';
+  const submitted = row.verdict ?? row.decision ?? null;
+  // provider 名が入っていても verdict=audit-unavailable は「LLM に届かなかった」であって判定ではない。
+  // これを判定済みに数えると、修正未着地のまま FINAL と誤認する（05:22:22Z / 05:43:41Z の 2 行が該当）。
+  const providerUnavailable = submitted === 'audit-unavailable';
+  const hasProviderVerdict = Boolean(provider)
+    && row.fired !== false
+    && row.skipped !== 'regex-blocked'
+    && Boolean(submitted)
+    && !providerUnavailable;
   return {
     provider,
     latencyMs: row.latencyMs ?? 0,
     fired: row.fired ?? null,
     skipped: row.skipped ?? null,
-    verdict: row.verdict ?? row.decision ?? null,
+    verdict: submitted,
+    providerUnavailable,
     blockedBy,
     blockedByHandoffAudit: blockedBy.includes('handoff-audit-gate'),
     hasProviderVerdict,
@@ -74,21 +91,25 @@ export function scanRows(rows, opts = {}) {
   if (Number.isNaN(since) || Number.isNaN(until)) throw new Error('since/until は ISO 8601 で指定する');
   const hits = [];
   let inWindow = 0;
+  let synthetic = 0;
   for (const row of rows) {
     const ts = Date.parse(row?.ts);
     if (Number.isNaN(ts) || ts < since || ts > until) continue;
     inWindow += 1;
+    if (isSyntheticReplay(row)) { synthetic += 1; continue; }
     const matched = matchHandoff(row.excerpt ?? row.text ?? '');
     if (!matched.length) continue;
     hits.push({ ts: row.ts, sessionId: row.sessionId ?? null, ...verdictOf(row), hits: matched });
   }
-  return { inWindow, hits };
+  return { inWindow, synthetic, hits };
 }
 
 export function summarize(results, opts = {}) {
   const all = results.flatMap(r => r.hits);
+  const syntheticExcluded = results.reduce((n, r) => n + (r.synthetic ?? 0), 0);
   const handoffHits = all.filter(h => h.hits.some(m => !m.selfReport));
   const withProvider = handoffHits.filter(h => h.hasProviderVerdict);
+  const providerUnavailable = handoffHits.filter(h => h.providerUnavailable);
   const blocked = handoffHits.filter(h => h.blockedByHandoffAudit);
   let verdict;
   if (!all.length) verdict = 'no-handoff-wording-in-window';
@@ -103,7 +124,9 @@ export function summarize(results, opts = {}) {
       selfReportEchoes: all.length - handoffHits.length,
       handoffWording: handoffHits.length,
       handoffWordingWithProviderVerdict: withProvider.length,
+      handoffWordingProviderUnavailable: providerUnavailable.length,
       handoffWordingBlockedByHandoffAuditGate: blocked.length,
+      syntheticReplaysExcluded: syntheticExcluded,
     },
     handoffHits,
   };
@@ -122,9 +145,9 @@ export function scanFiles(dir, opts = {}) {
   const names = opts.ledgers ?? LEDGERS;
   return names.map(name => {
     const file = path.join(dir, name);
-    if (!fs.existsSync(file)) return { file, name, missing: true, inWindow: 0, hits: [] };
-    const { inWindow, hits } = scanRows(readJsonl(file), opts);
-    return { file, name, missing: false, inWindow, hits };
+    if (!fs.existsSync(file)) return { file, name, missing: true, inWindow: 0, synthetic: 0, hits: [] };
+    const { inWindow, synthetic, hits } = scanRows(readJsonl(file), opts);
+    return { file, name, missing: false, inWindow, synthetic, hits };
   });
 }
 
@@ -157,13 +180,13 @@ export function main(argv = process.argv.slice(2), env = process.env) {
   const report = {
     ...summary,
     ledgerDir: dir,
-    ledgers: results.map(r => ({ name: r.name, missing: r.missing, inWindow: r.inWindow, hits: r.hits.length })),
+    ledgers: results.map(r => ({ name: r.name, missing: r.missing, inWindow: r.inWindow, hits: r.hits.length, syntheticExcluded: r.synthetic ?? 0 })),
   };
   if (args.json) console.log(JSON.stringify(report, null, 2));
   else {
     console.log(`ledger dir: ${dir}`);
     console.log(`window: ${opts.since ?? '-inf'} .. ${opts.until ?? 'now'}`);
-    for (const l of report.ledgers) console.log(`  ${l.name}: inWindow=${l.inWindow} hits=${l.hits}${l.missing ? ' (missing)' : ''}`);
+    for (const l of report.ledgers) console.log(`  ${l.name}: inWindow=${l.inWindow} hits=${l.hits} syntheticExcluded=${l.syntheticExcluded ?? 0}${l.missing ? ' (missing)' : ''}`);
     console.log(`verdict: ${report.verdict}`);
     console.log(`totals: ${JSON.stringify(report.totals)}`);
     for (const h of report.handoffHits) {

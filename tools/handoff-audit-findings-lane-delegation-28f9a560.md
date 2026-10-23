@@ -186,3 +186,59 @@ node tools/handoff-audit-lane-delegation-scan.mjs --since 2026-10-21T18:00:00Z
 - 直近の真の再発は §6 の `7e568bc0`（2026-10-21T07:04Z）のまま。以後 2 日間、同型は出ていない。
 - 恒久策は前進（#988 で 7 言い回し中 3 が block）。残る穴は §7.3 の 4 言い回し＝**裸の「実行中です」でターンを閉じる型**で、
   ゲート単体では解けない（完了マーカー併用判定が必要）。次に着手するならここ。
+
+## 8. 追検証（2026-10-24, handoff-audit:265bc10605108fd0）: 前回 §7 の「0 件」は検出語彙漏れの偽陰性だった
+
+検証セッション: auto-session 2026-10-24-1。実装は Codex（`codex-do.mjs` 前景・1回）へ委譲し、監督がレビュー・テスト実行・走査を行った。
+送信なし・権限変更なし・kim への DM なし。
+
+### 8.1 修正前の走査（従来語彙）
+
+```
+node tools/handoff-audit-lane-delegation-scan.mjs --selftest            → 13/13 pass
+node tools/handoff-audit-lane-delegation-scan.mjs --since 2026-10-22T16:00:00Z
+→ hits 0 / recurrences 0 / inTurnHits 0
+```
+
+この 0 は「測った 0」ではなかった。`~/.claude/projects/*/*.jsonl` を実物で読むと、
+2026-10-23T05:33:28Z / 07:41:14Z（session `b822034d` / HP）に
+`オフィスステーション用エクセルの出力ボタンを Codex が実装中です。` /
+`Codex が実装中です。作る内容は次のとおりです。` があった。
+`RUNNING` 配列に「実装中」「作業中」が無いため `detect()` が false を返していた（**偽陰性**）。
+§7.3 が「残る穴」として挙げた言い回し以前に、検出器の語彙自体が実データに追いついていなかった。
+
+### 8.2 語彙修正後の再走査（実測）
+
+`RUNNING` に `実装中 / 作業中 / 対応中 / 作成中 / 構築中 / 修正中` を追加し、対照を P8/P9/N7 の 3 件追加。
+
+```
+node tools/handoff-audit-lane-delegation-scan.mjs --selftest            → 16/16 pass
+node --test tools/handoff-audit-lane-delegation-scan.test.mjs          → 20 pass / 0 fail
+node tools/handoff-audit-lane-delegation-scan.mjs --since 2026-10-22T16:00:00Z
+→ hits 3 / recurrences 3 / inTurnHits 0（b822034d の 2 ターン）
+node tools/handoff-audit-lane-delegation-scan.mjs --since 2026-10-21T18:00:00Z
+→ hits 33 / recurrences 33 / inTurnHits 0（同一 turn の重複行を含む。セッションは 3 つ）
+```
+
+行をセッション・ターンに束ね、各 hit の直後の user レコードで「ターンが閉じたか」を分類した結果:
+
+| session | ターンが閉じた時刻（task-notification / 人間の発話で再開） | 閉じた数 |
+|---|---|---|
+| `41a63819` | 10-22T04:50:49Z / 04:57:14Z / 05:12:31Z / 05:13:00Z | 4 |
+| `af5884c5` | 10-22T00:31:15Z / 00:36:32Z | 2 |
+| `b822034d` | 10-22T01:07:29Z / 01:21:02Z / 10-23T05:33:44Z / 10-23T07:41:30Z | 4 |
+
+- 当窓（2026-10-22T16:00Z〜）の真の再発は **2 ターン**（`b822034d` の 10-23T05:33 / 07:41）。
+- 広窓（10-21T18:00Z〜）では **3 セッション・10 ターン**。§7 の「新規再発 0」は成立しない。
+- ただし 10 ターンはいずれも後続の foreground 作業・別ゲートの block を経て同一セッション内で成果物まで到達している（`b822034d` は 07:59Z に本番反映・e2e 9件 pass）。「委譲したまま実測せず終える」型ではなく、**ターンを『実行中』で閉じる型**の再発。
+
+### 8.3 検出器の残る穴（今回わかったこと）
+
+1. **`inTurn` は背景起動の ack を完了と誤認する。** 今回の `codex-do.mjs` は `run_in_background` で起動され、tool_result は
+   `You will be notified when it completes.` という起動 ack だった（所要 1.5 秒）。`completedCodexDoInTurn()` は
+   「codex-do の tool_use の後に tool_result がある」だけで true にするため、**完了していない背景起動も inTurn 扱いになりうる**。
+   foreground 実行を強制するには tool_result の本文が起動 ack でないことまで見る必要がある。
+2. **`deferral-wait-gate` の `AGENT_RUNNING` に「実装中」が無い。** さらに裸の状態文は `FUTURE_WORK` 非併存なら pass する設計
+   （`c1e05b232e9e04c9` の意図的な設計境界テスト）。今回の実文 `Codex が実装中です。作る内容は次のとおりです。` は
+   judge=pass のまま。§6(b)・§7.3 の「完了マーカー併用判定」が必要で、今回は設計判断を伴うため変更していない。
+3. 前回同様、headless auto-session は `projects/` に transcript を残さないため、auto-session の再発は summary 走査が唯一の証跡。

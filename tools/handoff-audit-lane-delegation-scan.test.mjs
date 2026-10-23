@@ -6,11 +6,11 @@ import path from 'node:path';
 import { detect, firstMatch, selftest, scan, stripBanners, CONTROLS } from './handoff-audit-lane-delegation-scan.mjs';
 
 // 走査結果の「0 件」は、検出器が動いていなければ意味を持たない。
-// 対照（陽性7・陰性6）が全通過することを先に固定する。
-test('検出器の対照が全通過する（陽性7・陰性6）', () => {
+// 対照（陽性9・陰性7）が全通過することを先に固定する。
+test('検出器の対照が全通過する（陽性9・陰性7）', () => {
   const r = selftest();
   assert.equal(r.passed, r.total, JSON.stringify(r.failures));
-  assert.equal(r.total, 13);
+  assert.equal(r.total, 16);
   assert.ok(CONTROLS.some((c) => c.want === true), '陽性対照が無いと 0 件が無意味になる');
   assert.ok(CONTROLS.some((c) => c.want === false), '陰性対照が無いと常時 true の検出器を見逃す');
 });
@@ -20,6 +20,12 @@ test('委譲語と実行中語が近接したときだけ陽性', () => {
   assert.equal(detect('実装は Codex レーンに渡して実行中です。完了通知を待ちます。'), true);
   assert.equal(detect('委譲実行中です（executor=fallback:cheap-code:deepseek）。'), true);
   assert.equal(detect('サブエージェントに実装を委譲して実行中です。次に kim がすること: なし（待機）。'), true);
+});
+
+test('実装中・作業中の委譲は陽性（2026-10-23 実文の回帰）', () => {
+  assert.equal(detect('オフィスステーション用エクセルの出力ボタンを Codex が実装中です。作る内容は次のとおりです。'), true);
+  assert.equal(detect('送付欄の表記変更は Codex が作業中です。終わったら本番まで出して確認します。'), true);
+  assert.equal(detect('この機能を実装中に気をつける点は、既存データとの互換性です。'), false);
 });
 
 test('委譲しても完了していれば陽性にしない（実行中語が無い）', () => {

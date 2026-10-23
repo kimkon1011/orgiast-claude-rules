@@ -8,6 +8,7 @@ import { notifyKim } from './notify-kim.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 
 import { formatKimNotice } from './lib/kim-notice.mjs';
+import { clearStaleIndexLock } from './dirty-worktree-guard.mjs';
 
 const RETRY_MS = 6 * 60 * 60 * 1000;
 export const WORK_DIRECTORY_EXCLUDES = ['scratch/', '.work/', '.work-*/', '.fleet-mail-work/'];
@@ -93,6 +94,9 @@ export async function rescueTree(tree, home, { now = Date.now(), notify = notify
   const events = [];
   let dirtyCount;
   const log = (step, message) => events.push({ step, message });
+  // 5分より古い index.lock は落ちた git の残骸。消さないと毎晩「専用indexで保全」だけを繰り返し、
+  // 作業ツリーが main に戻れない（2026-10-21〜23 DESKTOP-PPD5V8I で2日停止）。新しいロックは残す。
+  clearStaleIndexLock(tree, { log: message => log('STALE_INDEX_LOCK', message) });
   const dir = path.join(home, '.claude');
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, 'nightly-rescue-state.json');

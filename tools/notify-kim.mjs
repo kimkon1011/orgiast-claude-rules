@@ -45,14 +45,14 @@ const normalizeFailure = text => String(text).replace(/\d{4}-\d{2}-\d{2}(?:[T ][
 // Use the existing next-session TODO consumer; no separate repair queue.
 export async function notifyKim(text, options = {}) {
   const raw = redactSecrets(String(text ?? ''));
-  const humanEvidence = /^(?:試行|試した内容|試した修復)[:：]\s*\S.+$/m.test(raw)
-    && /^証拠[:：]\s*\S.+$/m.test(raw) && /^必要な操作[:：]\s*\S.+$/m.test(raw);
+  const humanEvidence = /^(?:試行|試した内容|試した修復)[:：][ \t]*\S.+$/m.test(raw)
+    && /^証拠[:：][ \t]*\S.+$/m.test(raw) && /^必要な操作[:：][ \t]*\S.+$/m.test(raw);
   const failure = FAILURE.test(raw), handoff = !humanEvidence && HANDOFF.test(raw);
   if (!failure && !handoff) return deliverKim(raw, options);
   const home = options.home || process.env.ORGIAST_HOME || os.homedir();
   const now = options.now ?? Date.now();
   const source = options.source || raw.split('\n').find(line => line.trim()) || '通知';
-  const cause = options.cause || raw.match(/原因[:：]\s*([^\n]+)/)?.[1] || raw.split('\n').filter(line => FAILURE.test(line)).join('\n') || source;
+  const cause = options.cause || raw.match(/原因[:：][ \t]*([^\n]+)/)?.[1] || raw.split('\n').filter(line => FAILURE.test(line)).join('\n') || source;
   const key = createHash('sha256').update(`${options.userId || KIM_DISCORD_USER_ID}\n${normalizeFailure(source)}\n${normalizeFailure(cause)}`).digest('hex').slice(0, 20);
   const dir = path.join(home, '.claude', 'notify-kim');
   const stateFile = path.join(dir, `${key}.json`);
@@ -84,7 +84,7 @@ export async function notifyKim(text, options = {}) {
     if (state.sentAt != null && now >= state.sentAt && now - state.sentAt < 86_400_000) return { delivered: 'suppressed', reason: 'same-source-cause-24h' };
     let suffix = '';
     let body = raw;
-    const needsTask = handoff || !/^原因[:：]\s*\S.+$/m.test(raw) || !/^対処[:：]\s*\S.+$/m.test(raw);
+    const needsTask = handoff || !/^原因[:：][ \t]*\S.+$/m.test(raw) || !/^対処[:：][ \t]*\S.+$/m.test(raw);
     if (needsTask) {
       const file = path.join(home, '.claude', 'next-session.md');
       const marker = `<!-- notify-kim:${key} -->`;
@@ -96,7 +96,7 @@ export async function notifyKim(text, options = {}) {
         fs.appendFileSync(file, `\n<!-- NEXT-SESSION v1 -->\n## 次の1目的\n通知の原因調査と修復\n## 残TODO\n${item}`);
       }
       if (handoff) body = raw.split('\n').filter(line => !HANDOFF.test(line) && !/^\s*[123][.．]\s/.test(line)).join('\n');
-      suffix = `\n原因: ${raw.match(/^原因[:：]\s*(.+)$/m)?.[1]?.slice(0, 240) || '未確定（実ログの調査を起票）'}\n対処: 原因調査と修復を自動起票しました。\n自動起票: ${file}（通知修復 ${key}）`;
+      suffix = `\n原因: ${raw.match(/^原因[:：][ \t]*(.+)$/m)?.[1]?.slice(0, 240) || '未確定（実ログの調査を起票）'}\n対処: 原因調査と修復を自動起票しました。\n自動起票: ${file}（通知修復 ${key}）`;
     } else {
       // Preserve evidence across LLM rewriting and Discord's content limit.
       suffix = '\n' + ['原因', '対処'].map(label => raw.split('\n').find(line => line.startsWith(label + ':') || line.startsWith(label + '：')).slice(0, 400)).join('\n');

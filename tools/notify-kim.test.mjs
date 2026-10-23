@@ -90,10 +90,10 @@ test('原因・対処の欠落は既存TODOへ起票、日時・回数が変わ�
   assert.equal(fs.readFileSync(path.join(dir, '.claude/next-session.md'), 'utf8').match(/1\. \[ \]/g).length, 1);
 });
 test('原因か対処の片方だけでも起票、両方がある場合は起票不要', async () => {
-  for (const tail of ['原因: DNS不通', '対処: 再実行済み', '原因: DNS不通\n対処: 再実行済み']) {
+  for (const tail of ['原因: DNS不通', '対処: 再実行済み', '原因:\n対処: 再実行済み', '原因: DNS不通\n対処: 再実行済み']) {
     const dir = home(), s = sender(dir);
     await notifyKim(`取得失敗\n${tail}`, s.options);
-    assert.equal(fs.existsSync(path.join(dir, '.claude/next-session.md')), !tail.includes('\n'));
+    assert.equal(fs.existsSync(path.join(dir, '.claude/next-session.md')), !tail.startsWith('原因: DNS不通\n対処:'));
   }
 });
 test('異なる発生元・原因は抑止しない', async () => {

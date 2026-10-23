@@ -644,6 +644,11 @@ export function countPolicyDenials(text) {
   return typeof text === 'string' ? (text.match(POLICY_DENIAL_PATTERN) || []).length : 0;
 }
 
+// 実時間待ちのテストを避けるため、閾値秒と再評価間隔は環境変数で注入できる（正の数だけ採用）。
+const positiveEnv = (value, fallback) => Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : fallback;
+export const policyStallMinElapsedSecs = (env = {}) => positiveEnv(env.CODEX_DO_POLICY_STALL_MIN_ELAPSED_SECS, POLICY_STALL_MIN_ELAPSED_SECS);
+export const policyStallCheckMs = (env = {}) => positiveEnv(env.CODEX_DO_POLICY_STALL_CHECK_MS, 5000);
+
 export function shouldAbortPolicyStall({
   elapsedSecs,
   outputChars,
@@ -945,7 +950,8 @@ function execute(command, commandArgs, options = {}) {
       const mocks = JSON.parse(process.env.CODEX_DO_MOCK_RESULTS);
       const mock = mocks[mockIndex++];
       if (!mock) throw new Error('CODEX_DO_MOCK_RESULTS exhausted');
-      if (mock) {
+      // real:true は mock を使わず実プロセスを起動する（偽 CLI で実行ループ自体を検証するテスト用）。
+      if (mock && !mock.real) {
         if (mock.output) process.stdout.write(mock.output);
         if (mock.stderr) process.stderr.write(mock.stderr);
         return Promise.resolve({
@@ -980,21 +986,33 @@ function execute(command, commandArgs, options = {}) {
       killProcessTree(child);
     }, callTimeoutSeconds * 1000);
     timer.unref?.();
+    // 拒否が閾値秒より前に出尽くして以後 stderr が静かになる停滞（2026-10-23 実測: gemini が拒否3回後に
+    // 無音で600秒）は chunk 到着時の判定では再評価されないため、周期タイマーでも同じ判定を回す。
+    const checkPolicyStall = () => {
+      if (abortedPolicyStall
+        || options.abortPolicyStall !== true
+        || process.env.CODEX_DO_POLICY_STALL_ABORT === '0'
+        || !shouldAbortPolicyStall({
+          elapsedSecs: (Date.now() - callStarted) / 1000,
+          outputChars,
+          stderr,
+          minElapsedSecs: policyStallMinElapsedSecs(process.env)
+        })) return;
+      abortedPolicyStall = true;
+      console.error(`
+[codex-do] ${command} はポリシー拒否が続き、出力 ${outputChars} 文字のまま停滞したため停止します`);
+      killProcessTree(child);
+    };
+    const stallTimer = setInterval(checkPolicyStall, policyStallCheckMs(process.env));
+    stallTimer.unref?.();
     child.stdout.on('data', (chunk) => { outputChars += chunk.length; output += chunk.toString(); process.stdout.write(chunk); });
     child.stderr.on('data', (chunk) => {
       stderr += chunk.toString();
       process.stderr.write(chunk);
-      if (!abortedPolicyStall
-        && options.abortPolicyStall === true
-        && process.env.CODEX_DO_POLICY_STALL_ABORT !== '0'
-        && shouldAbortPolicyStall({ elapsedSecs: (Date.now() - callStarted) / 1000, outputChars, stderr })) {
-        abortedPolicyStall = true;
-        console.error(`\n[codex-do] ${command} はポリシー拒否が続き、出力 ${outputChars} 文字のまま停滞したため停止します`);
-        killProcessTree(child);
-      }
+      checkPolicyStall();
     });
-    child.on('error', (error) => { clearTimeout(timer); resolve({ status: null, error, outputChars, output, stderr, timedOut, aborted: abortedPolicyStall ? 'policy_stall' : null }); });
-    child.on('close', (status) => { clearTimeout(timer); resolve({ status: timedOut ? 124 : status, outputChars, output, stderr, timedOut, aborted: abortedPolicyStall ? 'policy_stall' : null }); });
+    child.on('error', (error) => { clearTimeout(timer); clearInterval(stallTimer); resolve({ status: null, error, outputChars, output, stderr, timedOut, aborted: abortedPolicyStall ? 'policy_stall' : null }); });
+    child.on('close', (status) => { clearTimeout(timer); clearInterval(stallTimer); resolve({ status: timedOut ? 124 : status, outputChars, output, stderr, timedOut, aborted: abortedPolicyStall ? 'policy_stall' : null }); });
     // 指示は stdin で渡し、必ず閉じる。閉じないと codex が
     // "Reading additional input from stdin..." のまま永久に待つ。
     child.stdin.end(prompt);

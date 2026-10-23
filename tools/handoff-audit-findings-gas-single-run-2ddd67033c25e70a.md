@@ -173,3 +173,61 @@ PRODUCTION の出力（demoted 3件・blockedBy 空）は、実台帳 05:11:50.9
 **残件（1点・人の判断が要る / §10 と同じ）**: f94ee7a を main へ載せること。ループ brief の
 「push/PR/merge は行わない」制約があるため未実施。マージ後、nightly-repo が origin/main を取り込んだ次の
 Stop イベントで、本再走査器の verdict が `handoff-wording-judged-with-provider` に変わるかを同じコマンドで確認できる。
+
+## §12 追記（2026-10-23 05:2xZ・夜間監査前のライブ再走査 — 実物が 2 件増え、判定は変わらない）
+
+夜間監査（次回 2026-10-23T18:01Z、未実行）を待たずに `tools/handoff-audit-rescan.mjs` で再走査した。
+このループの宣言「夜間監査後に再走査して provider 付き verdict を確認する」のうち、
+**夜間監査に依存しない部分（本番 Stop gate が手渡し文言に provider 判定を付けているか）は実物で更新できた**。
+
+### ① 窓（修正 f94ee7a のコミット時刻 02:24:55Z 以降〜05:21Z）の実測
+
+```
+node tools/handoff-audit-rescan.mjs --since 2026-10-23T02:24:55Z
+verdict: handoff-wording-without-provider
+totals: rowsMatched=4 handoffWording=4 withProviderVerdict=0 blockedByHandoffAuditGate=0
+```
+
+手渡し文言行は §11 の 2 件から **4 件**に増えた。すべて session `2bb98fd7`（Makuake アイアンコースター発送/化粧箱発注）で、
+**4 件とも `fired=true` / `provider=null` / `skipped=regex-blocked` / `verdict=pass` / `blockedBy=[]`**:
+
+| ts (Z) | excerpt 長 | 手渡し文言（引用） |
+|---|---|---|
+| 05:10:52.536 | 988 | 次に kim がすること: デスクトップ「アイアンコースター_発送_20261023」を開き 箱53782の在庫が36個以上あるか確認する |
+| 05:11:50.866 | 988 | （同上） |
+| 05:19:42.883 | 1565 | 次に kim がすること: 今日中に化粧箱net(ID 517087)にログインし 53782と58572と58245を各1カートして支払い確定する |
+| 05:20:59.246 | 1802 | （同上） |
+
+### ② 同一 Stop の runner 台帳との突き合わせ（今回初めて取れた「同時刻ペア」）
+
+05:20:59 の Stop イベントは、audit 台帳と runner 台帳の両方に行がある:
+
+```
+handoff-audit-ledger 2026-10-23T05:20:59.246Z fired=true provider=null skipped=regex-blocked verdict=pass
+stop-gate-runner-ledger 2026-10-23T05:20:59.374Z verdict=block blockedBy=["decision-research-gate"]
+                          demoted=[] handoffKind=manual-steps excerpt=200字
+```
+
+読み取れること:
+- runner 側は `handoffKind=manual-steps` ＝ **手渡し文言だと認識している**（認識漏れではない）。
+- それでも `blockedBy` に `handoff-audit-gate` が入らない。同時刻の audit 行が `provider=null / skipped=regex-blocked / pass` を返しているため。
+- ＝ §8 で特定した経路（regex-blocked で第1段を飛ばす → demote で 0 件 → 第2段が走らない）が、
+  **合成入力ではなく同一イベントの 2 台帳ペアとして実物で確認できた**。§10 の決定論的証明と一致する。
+- なお runner の excerpt は 200 字に切り詰められており、audit 側（1802 字）とは長さが違う。文言一致での突き合わせはできないため、
+  対応付けは `sessionId` + 時刻（128ms 差）で行った。
+
+### ③ マージ可否の再測定（origin/main が進んだため）
+
+- `git fetch` 後の origin/main = `2757964`（§10 時点の fd767b8 から前進）。`git merge-base --is-ancestor f94ee7a origin/main` は **不一致のまま**＝修正は未着地。
+- 本ブランチは origin/main に対し **ahead 10 / behind 6**（§10 時点は ahead 4 / behind 7）。
+- `git merge-tree --write-tree origin/main HEAD` → **exit 0（衝突なし）**。main 側の `stop-gate-runner.mjs` はブランチ分岐後に変更なし（差分は本ブランチ側の +5 行のみ）。
+
+### ④ 判定
+
+- 手渡し文言行への provider 付き verdict: **本番では依然として出ていない**（実物 4 件・0 件が provider 付き）。
+- 夜間監査（18:01Z）後の再走査は**まだ実行できない**（05:2xZ 時点で未実行）。同じコマンド
+  `node tools/handoff-audit-rescan.mjs --since <夜間監査時刻>` で、監査後にそのまま確認できる。
+- 回帰テスト: `node --test tools/handoff-audit-rescan.test.mjs` → **9/9 pass**（変更なし・再確認）。
+
+**残件（1点・人の判断が要る / §10・§11 と同じ）**: f94ee7a を main へ載せること。
+ループ brief の「push/PR/merge は行わない」制約があるため未実施。マージは技術的に安全（衝突なし・対象ファイルの main 側変更なし）。

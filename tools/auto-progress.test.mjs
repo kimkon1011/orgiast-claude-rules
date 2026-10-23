@@ -6,7 +6,7 @@ import test, { after } from 'node:test';
 import vm from 'node:vm';
 import { main as registerTasks } from './register-auto-progress-task.mjs';
 import { isNoopPromise, extractPromise, extractNextKim, applyPromise, buildRecord, record, readLedger, ledgerFile, rowKey, originLine } from './auto-progress-ledger.mjs';
-import { run as watch, parseVerdict, deterministicVerdict, judge, GRACE_MS, RESUME_INTERVAL_MS, MAX_RESUMES, postSheet, resumeSession, recentFiles, EXPIRE_UNATTENDED_MS, FALLBACK_STALL_MS } from './auto-progress-watch.mjs';
+import { run as watch, parseVerdict, deterministicVerdict, judge, GRACE_MS, RESUME_INTERVAL_MS, MAX_RESUMES, postSheet, resumeSession, recentFiles, EXPIRE_UNATTENDED_MS, FALLBACK_STALL_MS, formatDoneMessage, readableReason } from './auto-progress-watch.mjs';
 import { run as digest, selectRows, formatDigest, isUnattendedRow, WINDOW_MS, MAX_ITEMS, needsDm, verdictOf } from './auto-progress-digest.mjs';
 import { runRegisterPs1 } from './lib/run-register-ps1.mjs';
 
@@ -82,7 +82,7 @@ function seed(home, rows) {
   fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
   fs.writeFileSync(ledgerFile(home), rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
 }
-const baseIo = (extra = {}) => ({ sheetConfig: () => ({ url: 'u', token: 't' }), cwdExists: () => true, digest: async () => ({ sent: false, count: 0 }), ...extra });
+const baseIo = (extra = {}) => ({ sheetConfig: () => ({ url: 'u', token: 't' }), cwdExists: () => true, digest: async () => ({ sent: false, count: 0 }), notifyOwner: async () => ({ delivered: 'none', reason: 'mock' }), ...extra });
 const evAny = (now) => ({ transcript: { count: 1, lastAt: now - 8 * H, snippets: [] }, files: { names: [], lastAt: 0 }, runs: { names: [] }, lastEvidenceAt: now - 8 * H, any: true });
 
 test('watch: 猶予1時間未満は判定しない', async () => {
@@ -657,4 +657,220 @@ test('watch: 判断待ち通知に出どころ行が付き、owner 空なら自P
   assert.equal(sent[0].owner, 'cr@orgiast.jp');
   assert.match(sent[0].text, /^【作業用001（PC）・cr@orgiast\.jp の Claude Code】プロジェクト: 案件A/);
   assert.match(sent[0].text, /自動進行が判断待ちです: 62社へ送信\nOK 待ち/);
+});
+
+test('watch: 自動進行完了時に結果の中身つきDMを1通送り、2回目は送らない（doneNotifiedAtで重複防止）', async () => {
+  // (a) resume が done を返すと notifyOwner が1回呼ばれ、本文に「結果:」と成果物パスが含まれる
+  // (b) 2回目の巡回では送られない（doneNotifiedAt）
+  const home = tmp();
+  const now = Date.parse('2026-10-23T12:00:00Z');
+  seed(home, [{
+    sessionId: 'session-done-1',
+    ts: new Date(now - 10 * H).toISOString(),
+    status: 'open',
+    promise: 'テストの自動完了',
+    cwd: home,
+    pc: 'PC-test',
+    user: 'u-test',
+  }]);
+
+  const notices = [];
+  const appendLogs = [];
+  const io = noEvidenceIo({
+    resume: async () => ({
+      outcome: 'done',
+      state: 'done',
+      reason: 'テスト実行に成功し、全件パスしました。\n詳細はログを確認。',
+      artifact: 'reports/summary.md',
+    }),
+    notifyOwner: async (owner, text) => {
+      notices.push({ owner, text });
+      return { delivered: 'dm' };
+    },
+    appendFileSync: (file, content) => {
+      appendLogs.push({ file, content });
+    },
+  });
+
+  const first = await watch({ home, now, io });
+  assert.equal(notices.length, 1);
+  const msg = notices[0].text;
+  assert.match(msg, /✅ 自動進行が完了しました/);
+  assert.match(msg, /約束: テストの自動完了/);
+  assert.match(msg, /結果: テスト実行に成功し、全件パスしました。\n詳細はログを確認。/);
+  assert.match(msg, /成果物: reports\/summary\.md/);
+  assert.match(msg, /kim がすること: なし/);
+
+  // 台帳に doneNotifiedAt が記録されていること
+  const rowsAfterFirst = readLedger(ledgerFile(home));
+  assert.equal(rowsAfterFirst[0].status, 'done');
+  assert.equal(rowsAfterFirst[0].doneNotifiedAt, new Date(now).toISOString());
+
+  // sent.jsonl に記録されていること
+  const sentLog = appendLogs.find(l => l.file.endsWith('auto-progress-done-dm.sent.jsonl'));
+  assert.ok(sentLog, 'sent.jsonl logged');
+  const loggedRecord = JSON.parse(sentLog.content.trim());
+  assert.equal(loggedRecord.sessionId, 'session-done-1');
+  assert.equal(loggedRecord.delivered, 'dm');
+  assert.equal(loggedRecord.at, new Date(now).toISOString());
+  assert.ok(loggedRecord.text.startsWith(msg.slice(0, 50)));
+
+  // (b) 2回目の巡回では送られない（doneNotifiedAt）
+  const second = await watch({ home, now: now + H, io });
+  assert.equal(notices.length, 1, '2回目の巡回では送られない');
+});
+
+test('watch: delivered!==dm なら doneNotifiedAt が付かず、errors に notify-done が入る', async () => {
+  // (c) delivered!=='dm' なら doneNotifiedAt が付かず、errors に notify-done が入る
+  const home = tmp();
+  const now = Date.parse('2026-10-23T12:00:00Z');
+  seed(home, [{
+    sessionId: 'session-fail-1',
+    ts: new Date(now - 10 * H).toISOString(),
+    status: 'open',
+    promise: '通知失敗のテスト',
+    cwd: home,
+    pc: 'PC-test',
+    user: 'u-test',
+  }]);
+
+  const notices = [];
+  const appendLogs = [];
+  const io = noEvidenceIo({
+    resume: async () => ({
+      outcome: 'done',
+      state: 'done',
+      reason: '処理は完了',
+      artifact: '',
+    }),
+    notifyOwner: async (owner, text) => {
+      notices.push({ owner, text });
+      return { delivered: 'none', reason: 'Discord rate limit' };
+    },
+    appendFileSync: (file, content) => {
+      appendLogs.push({ file, content });
+    },
+  });
+
+  const result = await watch({ home, now, io });
+  assert.equal(notices.length, 1);
+  assert.ok(result.errors.some(e => e.includes('notify-done: Discord rate limit')));
+
+  const rows = readLedger(ledgerFile(home));
+  assert.equal(rows[0].status, 'done');
+  assert.equal(rows[0].doneNotifiedAt, undefined);
+
+  // sent.jsonl には delivered: 'none' で記録されること
+  const sentLog = appendLogs.find(l => l.file.endsWith('auto-progress-done-dm.sent.jsonl'));
+  assert.ok(sentLog);
+  const loggedRecord = JSON.parse(sentLog.content.trim());
+  assert.equal(loggedRecord.delivered, 'none');
+});
+
+test('watch: judge 経由の done でも通知され、成果物は「なし」になる', async () => {
+  // (d) judge 経由の done でも送られる
+  const home = tmp();
+  const now = Date.parse('2026-10-23T12:00:00Z');
+  seed(home, [{
+    sessionId: 'session-judge-1',
+    ts: new Date(now - 10 * H).toISOString(),
+    status: 'open',
+    promise: '判定完了テスト',
+    cwd: home,
+    pc: 'PC-test',
+    user: 'u-test',
+  }]);
+
+  const notices = [];
+  const io = baseIo({
+    transcriptEvidence: () => ({ count: 1, lastAt: now - 8 * H, snippets: ['完了しました'] }),
+    recentFiles: () => ({ lastAt: 0, names: [] }),
+    autoSessionRuns: () => ({ lastAt: 0, names: [] }),
+    askLlm: () => 'done | 全て完了している',
+    notifyOwner: async (owner, text) => {
+      notices.push({ owner, text });
+      return { delivered: 'dm' };
+    },
+  });
+
+  const result = await watch({ home, now, io });
+  assert.equal(result.done, 1);
+  assert.equal(notices.length, 1);
+  const msg = notices[0].text;
+  assert.match(msg, /✅ 自動進行が完了しました/);
+  assert.match(msg, /約束: 判定完了テスト/);
+  assert.match(msg, /結果: 全て完了している/);
+  assert.match(msg, /成果物: なし/);
+  assert.match(msg, /kim がすること: なし/);
+
+  const rows = readLedger(ledgerFile(home));
+  assert.equal(rows[0].status, 'done');
+  assert.equal(rows[0].doneNotifiedAt, new Date(now).toISOString());
+});
+
+test('formatDoneMessage: 1900字を超えず、readableで改行を保ちpc/sessionIdを置換する', () => {
+  // (e) 1900 字を超えない
+  const longReason = 'PC-SECRET の session-xyz で1行目の結果説明\n2行目の長いテキスト: ' + 'あ'.repeat(2000);
+  const longPromise = '長い約束: ' + 'い'.repeat(500);
+  const row = {
+    sessionId: 'session-xyz',
+    pc: 'PC-SECRET',
+    promise: longPromise,
+    cwd: '/path/to/project',
+  };
+  const reasonResult = readableReason(longReason, row, 1200);
+  assert.ok(reasonResult.includes('このパソコン'));
+  assert.ok(reasonResult.includes('この作業'));
+  assert.ok(!reasonResult.includes('PC-SECRET'));
+  assert.ok(!reasonResult.includes('session-xyz'));
+  assert.match(reasonResult, /このパソコン の この作業 で1行目の結果説明\n2行目の長いテキスト/);
+
+  const message = formatDoneMessage(row, {
+    reason: longReason,
+    artifact: 'path/to/' + 'う'.repeat(200),
+    home: '/tmp/test',
+  });
+  assert.ok(message.length <= 1900, `Message length ${message.length} exceeds 1900`);
+});
+
+test('watch: 完了DMの送信に失敗した行は次の巡回で再送し、成功したら doneNotifiedAt を付ける', async () => {
+  const home = tmp();
+  const now = Date.parse('2026-10-23T12:00:00Z');
+  seed(home, [{
+    sessionId: 'session-retry-1',
+    ts: new Date(now - 10 * H).toISOString(),
+    status: 'open',
+    promise: '再送テスト',
+    cwd: home,
+    pc: 'PC-test',
+    user: 'u-test',
+  }]);
+
+  const first = await watch({ home, now, io: noEvidenceIo({
+    resume: async () => ({ outcome: 'done', state: 'done', reason: '完了しました', artifact: 'out/result.md' }),
+    notifyOwner: async () => ({ delivered: 'none', reason: 'network down' }),
+  }) });
+  assert.ok(first.errors.some(e => e.includes('notify-done: network down')));
+  let rows = readLedger(ledgerFile(home));
+  assert.equal(rows[0].status, 'done');
+  assert.equal(rows[0].doneNotifyPending, true);
+  assert.equal(rows[0].doneNotifiedAt, undefined);
+
+  // done は open の集合から外れるので、印が無いと二度と拾えない＝ここで再送されること。
+  const notices = [];
+  const second = await watch({ home, now: now + H, io: noEvidenceIo({
+    resume: () => assert.fail('must not resume again'),
+    notifyOwner: async (owner, text) => { notices.push({ owner, text }); return { delivered: 'dm' }; },
+  }) });
+  assert.equal(second.errors.length, 0);
+  assert.equal(notices.length, 1);
+  assert.match(notices[0].text, /✅ 自動進行が完了しました/);
+  assert.match(notices[0].text, /結果: 完了しました/);
+  assert.match(notices[0].text, /成果物: out\/result\.md/);
+  rows = readLedger(ledgerFile(home));
+  assert.equal(rows[0].doneNotifiedAt, new Date(now + H).toISOString());
+  assert.equal(rows[0].doneNotifyPending, false);
+
+  // 3回目は送らない。
+  await watch({ home, now: now + 2 * H, io: noEvidenceIo({ resume: () => assert.fail('must not resume'), notifyOwner: () => assert.fail('must not notify') }) });
 });

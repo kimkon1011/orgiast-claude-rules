@@ -3,9 +3,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { scanRescueBranches } from './rescue-review-scan.mjs';
+import { isNoisePath, scanRescueBranches } from './rescue-review-scan.mjs';
 
-export const SWEEPABLE_STATUSES = ['covered', 'covered-in-main', 'duplicate', 'covered-by-branch', 'ignored-only'];
+export const SWEEPABLE_STATUSES = ['covered', 'covered-in-main', 'duplicate', 'covered-by-branch', 'ignored-only', 'noise-only'];
 
 const TODO_RE = /^\s*(\d+)\.\s+\[ \]\s+rescue ブランチ\s+`?([^`\s]+)`?\s+に退避した変更のレビューが必要（(.+?);\s*([0-9a-f]{7,40})）/;
 
@@ -32,13 +32,23 @@ export function sweepLines(text, scanResultsByBranch, { date } = {}) {
     : new Map(Object.entries(scanResultsByBranch || {}));
   for (const todo of todos) {
     const result = statusByBranch.get(todo.branch);
-    const status = typeof result === 'string' ? result : result?.status;
+    const scannedStatus = typeof result === 'string' ? result : result?.status;
+    const names = typeof result === 'object' && result !== null ? result.names : undefined;
+    const status = scannedStatus === 'unique'
+      && Array.isArray(names)
+      && names.length > 0
+      && names.every(isNoisePath)
+      ? 'noise-only'
+      : scannedStatus;
     if (!SWEEPABLE_STATUSES.includes(status)) {
       kept.push(todo.branch);
       continue;
     }
     const body = todo.line.replace(/^\s*\d+\.\s+\[ \]\s+/, '');
-    parts[todo.lineIndex * 2] = `${todo.number}. ~~${body}~~ → ✅ ${date} rescue-review-scan: ${status}（main に取り込み済み・マージ不要）`;
+    const reason = status === 'noise-only'
+      ? '台帳・実行時成果物のみでレビュー不要'
+      : 'main に取り込み済み・マージ不要';
+    parts[todo.lineIndex * 2] = `${todo.number}. ~~${body}~~ → ✅ ${date} rescue-review-scan: ${status}（${reason}）`;
     swept.push({ branch: todo.branch, status });
   }
   const output = parts.join('');

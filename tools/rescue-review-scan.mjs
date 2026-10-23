@@ -56,14 +56,16 @@ function sumNumstat(text) {
   let files = 0;
   let added = 0;
   let deleted = 0;
-  for (const line of String(text).split('\n')) {
+  const names = [];
+  for (const line of String(text).split(/\r?\n/)) {
     if (!line.trim()) continue;
     files += 1;
-    const [a, d] = line.split('\t');
+    const [a, d, name] = line.split('\t');
     if (/^\d+$/.test(a)) added += Number(a);
     if (/^\d+$/.test(d)) deleted += Number(d);
+    if (name !== undefined) names.push(name);
   }
-  return { files, added, deleted };
+  return { files, added, deleted, names };
 }
 
 // 差分の全ファイルが main 側の .gitignore 対象なら、その一覧を返す。
@@ -224,10 +226,10 @@ export function scanRescueBranches({
       results.push({ branch, files: 0, added: 0, deleted: 0, fingerprint: null, status: 'error', error: message });
       continue;
     }
-    const { files, added, deleted } = sumNumstat(numstat);
+    const { files, added, deleted, names } = sumNumstat(numstat);
     const fingerprint = fingerprintOf(patch);
     if (patch === '') {
-      results.push({ branch, files, added, deleted, fingerprint, status: 'covered', reason: 'no-commits' });
+      results.push({ branch, files, added, deleted, names, fingerprint, status: 'covered', reason: 'no-commits' });
       continue;
     }
     let alreadyUpstream = false;
@@ -238,27 +240,27 @@ export function scanRescueBranches({
       // 判定不能なら既存の分類にフォールバックし、レビュー対象を残す。
     }
     if (alreadyUpstream) {
-      results.push({ branch, files, added, deleted, fingerprint, status: 'covered', reason: 'already-upstream' });
+      results.push({ branch, files, added, deleted, names, fingerprint, status: 'covered', reason: 'already-upstream' });
       continue;
     }
     if (ignoreCheck) {
       const ignored = ignoredOnlyFiles({ git, dir, main, branch });
       if (ignored) {
-        results.push({ branch, files, added, deleted, fingerprint, status: 'ignored-only', ignoredFiles: ignored.names });
+        results.push({ branch, files, added, deleted, names, fingerprint, status: 'ignored-only', ignoredFiles: ignored.names });
         continue;
       }
     }
     if (firstByFingerprint.has(fingerprint)) {
-      results.push({ branch, files, added, deleted, fingerprint, status: 'duplicate', duplicateOf: firstByFingerprint.get(fingerprint) });
+      results.push({ branch, files, added, deleted, names, fingerprint, status: 'duplicate', duplicateOf: firstByFingerprint.get(fingerprint) });
       continue;
     }
     firstByFingerprint.set(fingerprint, branch);
     const coveredBy = coveredByFingerprint.get(fingerprint);
     if (coveredBy) {
-      results.push({ branch, files, added, deleted, fingerprint, status: 'covered-by-branch', coveredBy });
+      results.push({ branch, files, added, deleted, names, fingerprint, status: 'covered-by-branch', coveredBy });
     } else {
       const coveredInMain = coverageInMain({ git, dir, main, patch, files });
-      results.push({ branch, files, added, deleted, fingerprint, status: coveredInMain ? 'covered-in-main' : 'unique', ...(coveredInMain ? { coveredInMain } : {}) });
+      results.push({ branch, files, added, deleted, names, fingerprint, status: coveredInMain ? 'covered-in-main' : 'unique', ...(coveredInMain ? { coveredInMain } : {}) });
     }
   }
   results.sort((a, b) => (a.branch < b.branch ? -1 : a.branch > b.branch ? 1 : 0));

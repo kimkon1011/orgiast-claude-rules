@@ -323,9 +323,19 @@ function launchMobileStandbyStatus() {
   child.on('error', () => {});
   child.unref();
 }
+// Remote Control の会話名をサーバーから PC の一覧へ写す（スマホと PC で名前が食い違って探せなくなるため）。
+function launchRemoteTitleSync() {
+  if (Date.now() - (json(path.join(root(), 'sync-remote-titles-state.json')).at ?? 0) < 15 * MINUTE) return;
+  const script = path.join(path.dirname(fileURLToPath(import.meta.url)), 'sync-remote-titles.mjs');
+  if (!fs.existsSync(script)) return;
+  const child = spawn(process.execPath, [script], { detached: true, windowsHide: true, stdio: 'ignore' });
+  child.on('error', () => {});
+  child.unref();
+}
 export function launchPurge() {
   // 明示的に閉じたセッションだけをアーカイブする。
   launchRemotePurge();
+  launchRemoteTitleSync();
   launchMobileStandbyStatus();
   if (Date.now() - json(path.join(root(), 'purge-sessions-state.json')).at < 5 * MINUTE) return;
   const child = spawn(process.execPath, [fileURLToPath(import.meta.url)], { detached: true, windowsHide: true, stdio: 'ignore' });

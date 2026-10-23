@@ -362,6 +362,12 @@
       "reason": "purge-sessions.mjs --hook（SessionStart/Stop）が起動する。ユーザー設定は組織 UUID の読み取りのみ"
     },
     {
+      "path": "tools/sync-remote-titles.mjs",
+      "scope": "fleet",
+      "step": "settings:purge-sessions-SessionStart",
+      "reason": "purge-sessions.mjs --hook（SessionStart/Stop）が15分間隔で起動し、Remote Control の会話名をサーバーから PC の一覧へ写す"
+    },
+    {
       "path": "tools/mobile-standby-status.mjs",
       "scope": "fleet",
       "step": "settings:purge-sessions-SessionStart",

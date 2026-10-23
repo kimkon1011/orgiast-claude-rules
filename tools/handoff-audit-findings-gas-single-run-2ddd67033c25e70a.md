@@ -396,3 +396,49 @@ totals: rowsMatched=17 handoffWording=17 handoffWordingWithProviderVerdict=0
 - 最終成果に必要な残りは 1 つ: **f94ee7a〜6ff9ae5 を main へ入れる承認**。
   承認後の 18:01Z 以降に `node tools/handoff-audit-rescan.mjs --since 2026-10-23T18:01:30Z` を再実行し、
   verdict が `handoff-wording-judged-with-provider` に変わるかを確認すれば C3 完了＝FINAL。
+
+## §15 追記（2026-10-23 07:1xZ・マージ競合を解消し、配備を「1手」にした）
+
+宣言「次のイテレーションで夜間監査後の台帳を見て、修正が本番で効いたかを確認する」を再実行した。
+**トリガーは依然未成立**（nightly 台帳の最終行は 2026-10-22T18:01:30.352Z、次回 2026-10-23T18:01Z＝約11時間先）。
+ただし「本番で効いたか」の答えは既に確定しており（§10〜§14: **効いていない／未配備**）、
+残る作業は配備1点なので、その配備を**承認1回で終わる状態**にした。
+
+### ① 再走査（窓 02:24:55Z〜07:11Z）
+
+```
+node tools/handoff-audit-rescan.mjs --since 2026-10-23T02:24:55Z
+verdict: handoff-wording-without-provider
+totals: rowsMatched=17 handoffWording=17 handoffWordingWithProviderVerdict=0
+        handoffWordingProviderUnavailable=2 handoffWordingBlockedByHandoffAuditGate=0
+        syntheticReplaysExcluded=6
+```
+判定は §14 から**不変**。最終の手渡し文言行は 05:43:41.481Z で、06:09Z 以降の新しい実トラフィックは 0 件
+（台帳末尾は readonly/off 行）。provider 付きの判定は引き続き 0 件、`blockedBy=handoff-audit-gate` も 0 件。
+
+### ② 唯一のマージ競合だった `.gitignore` を解消（本節の実作業）
+
+- origin/main は `5d4d3cf` → **`4e7fb92`** に前進（本ブランチは ahead 11 / behind 16）。
+- `git cat-file -p origin/main:.gitignore` の実測: main は `.loop/` に加えて
+  `/evidence/internal-audit-v13/` `/evidence/internal-audit-v14/` を持つ。**本ブランチ側の固有追加は `.loop/` のみ**で、
+  これは main が既に持つ＝main の `.gitignore` が上位集合。
+- 対応: `git checkout origin/main -- .gitignore` で main 側を採用（6行追加・削除なし、他セッションの追加を落とさない）。
+- 検証: コミット後に `git merge-tree --write-tree origin/main HEAD` → **exit 0（競合なし）**。
+  修正前は exit 1（`.gitignore` の1ファイルのみ競合）だったので、**マージ阻害要因はゼロになった**。
+- 対象ファイルの両側差分: merge-base(`7e78e62`)→origin/main で `stop-gate-runner.mjs` / `handoff-audit-gate.mjs` の変更は**なし**
+  （main 側は `.gitignore` のみ +6行）。origin/main→HEAD のコード差分は `stop-gate-runner.mjs` の **+5行のみ**＝修正そのもの。
+- 回帰テスト: `node --test tools/stop-gate-runner.test.mjs tools/stop-gate-runner-audit-reeval.test.mjs
+  tools/handoff-audit-gate.test.mjs tools/handoff-audit-rescan.test.mjs` → **99/99 pass**（27.3s）。
+
+### ③ 判定と、人にしかできない残り1手
+
+- C3: 夜間監査に依存しない部分は**確定**（欠陥あり／修正は実装・テスト済み／**本番未配備**）。
+- 夜間監査が 18:01Z に走っても、本番 hook が未修正版のままなら §13 の素通り経路は検出されない
+  ＝**待っても C3 の最後の1点は埋まらない**。埋まるのは配備後。
+- 残りは `HEAD` を main へ載せることの**承認のみ**（brief の「送信・権限変更・本番デプロイはしない」に該当）。
+  承認後の手順は既製の2コマンドで足りる:
+  1. `git push origin HEAD`
+  2. `~/.claude/tools/gh-login-oneclick.ps1`（REST で PR 作成＋`automerge` ラベル）
+  → マージ後 nightly-repo が origin/main を取り込んだ次の Stop で、
+     `node tools/handoff-audit-rescan.mjs --since <その時刻>` の verdict が
+     `handoff-wording-judged-with-provider` に変わるかを確認すれば C3 完了。

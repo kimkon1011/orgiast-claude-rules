@@ -29,6 +29,10 @@ export const KNOWN_CHEAP_PROVIDERS = Object.freeze([
 ]);
 
 const ROUTING_TABLE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'routing-table.json');
+const GATEWAY_MODELS = Object.freeze({
+  deepseek: 'deepseek/deepseek-v4-flash',
+  kimi: 'moonshotai/kimi-k3',
+});
 
 // eval 実測のルーティング表(tools/routing-table.json)から、指定カテゴリで最安の候補を返す。
 // 表が無い・カテゴリが無い・暫定計測(provisional)のどれでも null を返し、既定の連鎖を使わせる。
@@ -138,31 +142,35 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, allowGat
   if (cost > hard) throw new Error(`本日の従量上限 $${hard.toFixed(2)} に達したため停止しました（概算 $${cost.toFixed(2)}）。ORGIAST_LLM_DAILY_HARD_USD で変更可`);
   if (cost > warn) console.error(`[cost] 本日の安いAI実行者 概算 $${cost.toFixed(2)} が警告値 $${warn.toFixed(2)} を超過`);
 
-  const candidates = [];
-  const seen = new Set();
-  const deepseekGateway = { provider: 'openrouter', model: 'deepseek/deepseek-v4-flash' };
-  const expanded = allowGatewayFallback && start?.provider === 'deepseek' ? [start, deepseekGateway, ...chain] : [start, ...chain];
-  for (const candidate of expanded.filter(Boolean)) {
-    if (seen.has(candidate.provider)) continue;
-    seen.add(candidate.provider);
-    candidates.push(candidate);
-  }
-
   // routing-overrides.json の demote 有効期限が切れるまで、該当 provider を連鎖の末尾へ回す
   // (cost-improve-loop が provider_unhealthy を検出した時に書く。B4 2026-09-07)。
   // start として明示された provider は呼び出し元の意思なので先頭のまま。
   // cooldown と同じく node --test 配下では実環境のファイルを読まない。
   let demotedProviders = [];
+  let overrides = {};
   if (cooldownFile != null || !process.env.NODE_TEST_CONTEXT) {
     const overridesPath = cooldownFile
       ? path.join(path.dirname(cooldownFile), 'routing-overrides.json')
       : path.join(home, '.claude', 'routing-overrides.json');
     try {
-      const overrides = JSON.parse(fs.readFileSync(overridesPath, 'utf8'));
+      overrides = JSON.parse(fs.readFileSync(overridesPath, 'utf8'));
       demotedProviders = Object.entries(overrides?.demote || {})
         .filter(([, until]) => Number(Date.parse(until)) > timestamp)
         .map(([provider]) => String(provider).toLowerCase());
     } catch {}
+  }
+  const candidates = [];
+  const seen = new Set();
+  const overrideModel = overrides?.gatewayBeforeDirect?.[start?.provider];
+  const gatewayModel = typeof overrideModel === 'string' && overrideModel.trim()
+    ? overrideModel : GATEWAY_MODELS[start?.provider];
+  // 明示された直APIを先頭に保ち、失敗時は同モデルのgatewayを通常チェーンより先に試す。
+  const expanded = allowGatewayFallback && gatewayModel
+    ? [start, { provider: 'openrouter', model: gatewayModel }, ...chain] : [start, ...chain];
+  for (const candidate of expanded.filter(Boolean)) {
+    if (seen.has(candidate.provider)) continue;
+    seen.add(candidate.provider);
+    candidates.push(candidate);
   }
   if (demotedProviders.length) {
     const rank = (candidate) => (demotedProviders.includes(candidate.provider) && candidate.provider !== start.provider ? 1 : 0);

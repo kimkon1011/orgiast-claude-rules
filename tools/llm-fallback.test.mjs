@@ -172,6 +172,56 @@ test('DeepSeek直叩き402はOpenRouterの同モデルへ直ちに回す', async
   assert.equal(result.candidate.provider, 'openrouter');
 });
 
+test('Kimi直APIの429後は通常チェーンより先にOpenRouterのKimiを呼ぶ', async (t) => {
+  const attempted = [], fetched = [];
+  const result = await callWithFallback({
+    start: { provider: 'kimi', model: 'kimi-k3' }, ...temporaryFiles(t),
+    payloadFor(candidate) {
+      attempted.push(candidate);
+      return { url: candidate.provider, init: {} };
+    },
+    fetchImpl: async (provider) => {
+      fetched.push(provider);
+      return provider === 'kimi' ? new Response('insufficient balance', { status: 429 }) : new Response('2');
+    },
+    sleepImpl: async () => {},
+  });
+  assert.deepEqual(attempted, [
+    { provider: 'kimi', model: 'kimi-k3' },
+    { provider: 'openrouter', model: 'moonshotai/kimi-k3' },
+  ]);
+  assert.deepEqual(fetched, ['kimi', 'kimi', 'kimi', 'openrouter']);
+  assert.deepEqual(result.candidate, attempted[1]);
+});
+
+for (const provider of ['kimi', 'deepseek']) {
+  test(`${provider}のgatewayモデルはrouting-overridesを優先する`, async (t) => {
+    const files = temporaryFiles(t), attempted = [];
+    const model = `${provider}/custom-model`;
+    fs.writeFileSync(path.join(path.dirname(files.cooldownFile), 'routing-overrides.json'),
+      JSON.stringify({ gatewayBeforeDirect: { [provider]: model } }));
+    const result = await callWithFallback({
+      start: { provider, model: 'direct-model' }, ...files,
+      payloadFor(candidate) { attempted.push(candidate); return { url: candidate.provider, init: {} }; },
+      fetchImpl: async (name) => name === provider ? new Response('payment', { status: 402 }) : new Response('2'),
+    });
+    assert.deepEqual(attempted, [{ provider, model: 'direct-model' }, { provider: 'openrouter', model }]);
+    assert.deepEqual(result.candidate, attempted[1]);
+  });
+}
+
+test('Kimiのno-fallbackはgateway overrideがあっても直APIのみ呼ぶ', async (t) => {
+  const files = temporaryFiles(t), attempted = [];
+  fs.writeFileSync(path.join(path.dirname(files.cooldownFile), 'routing-overrides.json'),
+    JSON.stringify({ gatewayBeforeDirect: { kimi: 'moonshotai/custom-model' } }));
+  await assert.rejects(callWithFallback({
+    start: { provider: 'kimi', model: 'kimi-k3' }, chain: [], allowGatewayFallback: false, ...files,
+    payloadFor(candidate) { attempted.push(candidate.provider); return requestFor(); },
+    fetchImpl: async () => new Response('payment', { status: 402 }),
+  }));
+  assert.deepEqual(attempted, ['kimi']);
+});
+
 test('クールダウン中のプロバイダは payloadFor を呼ばずにスキップする', async (t) => {
   const files = temporaryFiles(t), timestamp = 1_700_000_000_000, payloads = [];
   fs.writeFileSync(files.cooldownFile, JSON.stringify({ groq: { until: timestamp + 60_000, reason: 'http_429', at: timestamp } }));

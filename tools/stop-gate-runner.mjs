@@ -131,6 +131,11 @@ export async function run(input, context, auditOptions = {}) {
   const handoffKind = classifyHandoff(assistantText);
   const demoted = handoffKind === 'manual-steps' ? [] : effective.filter(({ name }) => FORM_GATES.includes(name)).map(({ name }) => name);
   evaluated.results = effective.filter(({ name }) => !demoted.includes(name));
+  // 先行 gate が発火して第2段を飛ばしたのに、policy/demote で全て無効化された場合は、監査を素通りさせず第2段を改めて評価する。
+  if (audit.record.skipped === 'regex-blocked' && !evaluated.results.length) {
+    const second = await evaluateAudit({ text: assistantText, transcriptRaw: context.raw, sessionId, regexBlocked: false }, { home: home(), ...auditOptions });
+    if (second.decision === 'block') evaluated.results.push({ name: 'handoff-audit-gate', ...second });
+  }
   const systemMessage = warnings.length ? warnings.join('\n') : undefined;
   const blockedBy = evaluated.results.map(({ name }) => name);
   const reasonCodes = [...evaluated.results.map(({ code, name }) => code || name), ...evaluated.errors];

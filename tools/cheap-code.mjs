@@ -53,6 +53,16 @@ export function resolveProvider(name = 'deepseek') {
   return config;
 }
 
+// 子 CLI の API 応答ヘッダ待ちの上限。既定の 600s だと API が無応答のまま 600s ハングし、
+// 900s の cap 内で再試行に入れず timeout になる(delegation-health fallback_chain_timeout)。
+// 短縮するとハング時に SDK 再試行へ早く回れる(識別実験: 5000ms 指定で 5s ごとに再送を確認)。
+export const DEFAULT_CHILD_API_TIMEOUT_MS = 240000;
+
+export function resolveChildApiTimeoutMs(parentEnv = process.env) {
+  const value = Number(parentEnv.CHEAP_CODE_API_TIMEOUT_MS);
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : DEFAULT_CHILD_API_TIMEOUT_MS;
+}
+
 export function buildChildEnv(config, key, parentEnv = process.env, { configDir } = {}) {
   // 先に親 env を浄化する。デスクトップ版 Claude から呼ばれると CLAUDECODE / CLAUDE_CODE_* /
   // CLAUDE_AGENT_SDK_* / MCP_* / ANTHROPIC_* が子へ漏れ、DeepSeek の Anthropic 互換 API が
@@ -65,6 +75,7 @@ export function buildChildEnv(config, key, parentEnv = process.env, { configDir 
   // 子が「connectors を無効化した」と警告する。2026-09-10 実測)。
   delete env.ANTHROPIC_API_KEY;
   if (config.maxContextTokens) env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(config.maxContextTokens);
+  env.API_TIMEOUT_MS = String(resolveChildApiTimeoutMs(parentEnv));
   // 委譲先は監督ではなく実行役なので、全社 hook を読まない専用の設定ディレクトリを渡す。
   if (configDir) env.CLAUDE_CONFIG_DIR = configDir;
   return env;

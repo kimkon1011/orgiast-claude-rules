@@ -115,3 +115,61 @@ C3 の判定材料（原文セッション 0395ca72、行数は台帳実測）:
 - 回帰テスト: `node --test tools/stop-gate-runner-audit-reeval.test.mjs` → 2/2 pass。
 
 **残件（1点・人の判断が要る）**: f94ee7a を main へ載せること。ループ brief の「push/PR/merge は行わない」制約があるため未実施。マージ後に nightly-repo が origin/main を取り込めば（数分〜次回同期）、本番の Stop gate は自動で修正版になる。
+
+## §11 追記（2026-10-23 05:1xZ・再走査の仕組みを実装し、ライブで実測）
+
+宣言「夜間監査後に再走査して、手渡し文言の行に provider 付きの verdict が出るかを確認する」の
+**未確認2点**（①再走査を実行する仕組みが動くか ②手渡し文言行に provider 付き verdict が出るか）を、当ターンに実測した。
+
+### ① 再走査の仕組み（新規・テスト付き）
+
+これまで再走査は毎回その場の ad-hoc な読み取りで、手順が残っていなかった。CLI に落とした。
+
+- `tools/handoff-audit-rescan.mjs` — 4台帳を読み、窓内の行を手渡し語彙で照合し、各行に
+  provider / skipped / blockedBy を突き合わせて verdict を1語で返す（読み取りのみ）。
+  `verdict` は `no-handoff-wording-in-window` / `only-self-report-echoes` /
+  `handoff-wording-judged-with-provider` / `handoff-wording-without-provider` の4値。
+- `tools/handoff-audit-rescan.test.mjs` — 合成行で 9 tests / 9 pass。
+  実際に踏んだ2つの偽陽性を回帰テスト化した: (a) lookahead のバックトラックで
+  「次に kim がすること: なし」を拾ってしまう件、(b) 案件名「GAS 1回実行の手渡し再発検証」を
+  手渡し命令として拾ってしまう件。
+- 実行例: `node tools/handoff-audit-rescan.mjs --since 2026-10-23T02:24:55.000Z`
+
+### ② ライブ実測 — 本番では provider 付き verdict が出ていない（実物で確定）
+
+窓（修正 f94ee7a のコミット時刻 02:24:55Z 以降〜now）を実走査した結果、
+**本物の手渡し文言行が 2 件あり、どちらも provider=null・skipped=regex-blocked・blockedBy=[]・verdict=pass**:
+
+```
+2026-10-23T05:10:52.536Z session=2bb98fd7  provider=null verdict=pass blockedBy=[]
+  "次に kim がすること: デスクトップ「アイアンコースター_発送_20261023」を開き 箱53782の在庫が36個以上あるか確認する"
+2026-10-23T05:11:50.866Z session=2bb98fd7  provider=null verdict=pass blockedBy=[]
+  （同上）
+```
+runner 台帳の同時刻 05:11:50.939Z は `blockedBy=[]` /
+`demoted=[manual-request-fullsteps-gate, handoff-investigation-gate, user-burden-gate]`。
+= §8 で特定した「regex-blocked で第1段を飛ばし、demote で 0 件になり、第2段が走らない」経路が
+**推測ではなく 2026-10-23 05:11Z の実トラフィックでそのまま再現している**（§10 の合成入力による証明の実物版）。
+
+### ③ 実 excerpt での反実仮想（PRODUCTION vs FIXED）
+
+§10 の合成入力ではなく、上記 05:11:50.866Z の**実 excerpt（988字）**を両実装に通した（`ask` 注入・実 provider 非呼び出し）:
+
+| 実装 | decision | blockedBy | auditCalls |
+|---|---|---|---|
+| PRODUCTION（nightly-repo HEAD） | pass | `[]` | 0 |
+| FIXED（本ブランチ） | **block** | `["handoff-audit-gate"]` | 1 |
+| FIXED（provider が pass を返した場合） | pass | `[]` | 1 |
+
+PRODUCTION の出力（demoted 3件・blockedBy 空）は、実台帳 05:11:50.939Z の行と一致した
+＝この反実仮想ハーネスは本番の挙動を正しく再現している。FIXED は同じ実 excerpt を 1 回だけ provider に掛けて止める。
+
+### ④ 判定
+
+- ①再走査の仕組み: **動く**（CLI・9/9 test・実台帳で完走）。
+- ②手渡し文言行の provider 付き verdict: **本番では出ていない**（実物2件が provider=null）。
+  修正 f94ee7a は依然 origin/main に無く、本番 hook は未修正版を実行している。
+
+**残件（1点・人の判断が要る / §10 と同じ）**: f94ee7a を main へ載せること。ループ brief の
+「push/PR/merge は行わない」制約があるため未実施。マージ後、nightly-repo が origin/main を取り込んだ次の
+Stop イベントで、本再走査器の verdict が `handoff-wording-judged-with-provider` に変わるかを同じコマンドで確認できる。

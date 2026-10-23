@@ -207,7 +207,9 @@ const CODEX_MODEL_AUTH_MISMATCH = /is not supported when using codex with a chat
 
 // Codex の利用上限到達。コードの欠陥ではなく上限到達による停止。
 // アポストロフィは U+2019(’) と U+0027(') の両方に一致させる。
-const CODEX_USAGE_LIMIT = /You[’']ve hit your usage limit/i;
+// 2026-10-21 の2行は stderrTail の切り詰めで先頭が "t your usage limit"。
+// 後続の定型案内も要求し、単なる usage limit への言及では分類しない。
+const CODEX_USAGE_LIMIT = /You[’']ve hit your usage limit|^t your usage limit\. Upgrade to Pro \(https:\/\/chatgpt\.com\/explore\/pro\)/i;
 
 export function emptyOutputReason(row) {
   if (row?.timedOut === true) return 'timeout';

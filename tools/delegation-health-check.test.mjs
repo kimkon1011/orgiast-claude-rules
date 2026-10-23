@@ -186,6 +186,20 @@ test('emptyOutputReason は U+2019 と U+0027 の両方の usage limit 行を us
   assert.equal(emptyOutputReason({ secs: 0 }), 'no_output');
 });
 
+test('切り詰められた2026-10-21の上限2件を出力ゼロとして起票しない', () => {
+  const dir = home();
+  const stderrTail = 't your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits or try again at 1:22 PM.';
+  write(dir, 'executor-usage.jsonl', [
+    { t: '2026-10-21T00:32:59.024Z', model: 'codex-cli/gpt-6-astra', secs: 38.998 },
+    { t: '2026-10-21T00:33:04.003Z', model: 'codex-cli/gpt-5.6-sol', secs: 4.972 },
+  ].map((item) => row({ ...item, provider: 'codex', out: 0, status: 'error', exitCode: 1, launched: true, timedOut: false, stderrTail })).join(''));
+  const findings = collectFindings({ home: dir, now: new Date('2026-10-21T18:28:40.610Z'), codexUsedPercent: null });
+  assert.equal(findings.some((item) => item.id === 'codex_empty_output'), false);
+  assert.deepEqual(findings.find((item) => item.id === 'codex_usage_limit')?.evidence, ['2件', 'usage_limit(2件)']);
+  assert.equal(emptyOutputReason({ stderrTail: 't your usage limit while investigating a bug' }), 'no_output');
+  assert.equal(emptyOutputReason({ status: 'error', exitCode: 1, launched: true, timedOut: false, stderrTail: '' }), 'no_output');
+});
+
 test('実台帳行の Codex 上限到達行で collectFindings が codex_empty_output を出さず codex_usage_limit を出す', () => {
   const dir = home();
   const realUsageRow = {

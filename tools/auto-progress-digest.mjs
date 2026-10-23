@@ -279,9 +279,13 @@ export function formatDigest(rows, now = Date.now(), label = '', {
   return render(wLimit, dLimit, sLimit, pLimit);
 }
 
+// 枠と日付キーは日本時間で決める。PCやCIのタイムゾーンに左右させると、
+// 同じ朝でも実行環境によって「枠外」判定や日付キーがずれる（CI は UTC で動く）。
+const JST_OFFSET_MS = 9 * 3600 * 1000;
+const jstDate = (now) => new Date(now + JST_OFFSET_MS);
+
 export function slotOf(now = Date.now()) {
-  const d = new Date(now);
-  const h = d.getHours();
+  const h = jstDate(now).getUTCHours();
   // 朝枠: 08:00〜11:59 (8, 9, 10, 11)
   if (h >= 8 && h < 12) return '朝';
   // 夕枠: 17:00〜20:59 (17, 18, 19, 20)
@@ -363,7 +367,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   }
 
   // 重複判定キー
-  const dateStr = new Date(now).toLocaleDateString('sv-SE');
+  const dateStr = jstDate(now).toISOString().slice(0, 10);
   const slotKey = currentSlot ? `${dateStr}|${currentSlot}` : null;
   if (slotKey && (state.sentKeys || []).includes(slotKey)) {
     return { skipped: 'already-sent', sent: false, count: 0 };

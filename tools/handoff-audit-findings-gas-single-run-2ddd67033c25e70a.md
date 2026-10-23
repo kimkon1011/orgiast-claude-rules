@@ -442,3 +442,57 @@ totals: rowsMatched=17 handoffWording=17 handoffWordingWithProviderVerdict=0
   → マージ後 nightly-repo が origin/main を取り込んだ次の Stop で、
      `node tools/handoff-audit-rescan.mjs --since <その時刻>` の verdict が
      `handoff-wording-judged-with-provider` に変わるかを確認すれば C3 完了。
+
+## §16 追記（2026-10-23 07:1xZ・宣言「夜間監査後の再走査」のトリガー確認と、配備待ちの確定）
+
+前セッションの宣言「夜間監査（18:01Z 頃）の後に再走査し、手渡し文言の行に provider 付きの verdict が出るかを確認する」を
+実行しようとしたが、**トリガーは今回も未成立**（`handoff-audit-nightly-ledger.jsonl` の窓内行 = 0、
+nightly の最終行は 2026-10-22T18:01:30.352Z、次回は 2026-10-23T18:01Z＝約11時間先）。待たずに取れる実測だけを取り直した。
+
+### ① 再走査（窓 02:24:55Z〜07:14Z）— 判定は不変
+
+```
+node tools/handoff-audit-rescan.mjs --since 2026-10-23T02:24:55Z
+verdict: handoff-wording-without-provider
+totals: rowsMatched=17 handoffWording=17 handoffWordingWithProviderVerdict=0
+        handoffWordingProviderUnavailable=2 handoffWordingBlockedByHandoffAuditGate=0
+```
+
+- 最終の手渡し文言行は **05:43:41.481Z**（§15 と同一）。05:43Z 以降の新規トラフィックは 0 件で、増分なし。
+- provider 列が埋まっている2行（05:22:22.087Z / 05:43:41.481Z, provider=deepseek）は verdict が
+  **audit-unavailable**＝監査プロバイダが判定を返せなかった行であり、**provider 付きの verdict ではない**。
+  したがって `handoffWordingWithProviderVerdict=0` は動かない。
+
+### ② 本番 hook は今も未修正版（配備されていない）
+
+- `C:\Users\kimko\.claude\nightly-repo` の HEAD = **4e7fb92**（= origin/main と同一コミット）。
+- 本ブランチの修正は `tools/stop-gate-runner.mjs` の **+5行のみ**
+  （`audit.record.skipped === 'regex-blocked' && !evaluated.results.length` のとき第2段を再評価）。
+  `grep -rn "regex-blocked" tools/*.mjs` は nightly-repo では `handoff-audit-gate.mjs:185` のみに当たり、
+  `stop-gate-runner.mjs` には当たらない＝**修正は本番に存在しない**。
+- 結論: 18:01Z の夜間監査が走っても、本番 hook が未修正版のままなら §13 の素通り経路は検出されない。
+  **待っても C3 の最後の1点は埋まらない**（§15 ③ の判断を実測で再確認）。
+
+### ③ 配備の前提は整ったまま
+
+- `origin/main = 4e7fb92`、`git rev-list --left-right --count origin/main...HEAD` = **behind 16 / ahead 13**。
+- `git merge-tree --write-tree origin/main HEAD` → **exit 0（競合なし）**。
+- 差分の内訳（origin/main...HEAD, 7ファイル +841行）: 実コードは `stop-gate-runner.mjs +5` のみ。
+  残りは findings 文書・再走査器とそのテスト・fleet-scope 登録・`.gitignore`（main 側採用）。
+- 回帰テスト: `node --test tools/stop-gate-runner.test.mjs tools/stop-gate-runner-audit-reeval.test.mjs tools/handoff-audit-gate.test.mjs tools/handoff-audit-rescan.test.mjs`
+  → **99/99 pass**（25.7s、今回の実測）。
+
+### ④ 判定
+
+- C1〜C2: 確定（§1〜§2）。
+- C3: 夜間監査に依存しない部分は**確定＝本番に欠陥あり／修正は実装・テスト済み／本番未配備**。
+  夜間監査待ちで埋まる見込みは ① の理由で**ゼロ**。
+- C4: 修正は実装済み・回帰テストあり。
+- 残りは **HEAD を main へ載せることの承認1点のみ**。brief の「送信・権限変更・本番デプロイはしない」に該当するため、
+  このループからは push / PR / merge を行わない（**needs_user**）。
+  承認後の手順は既製の2コマンド（§15 ③ と同じ）:
+  1. `git push origin HEAD`
+  2. `~/.claude/tools/gh-login-oneclick.ps1`（REST で PR 作成＋`automerge` ラベル）
+  → マージ後、nightly-repo が origin/main を取り込んだ次の Stop で
+    `node tools/handoff-audit-rescan.mjs --since <その時刻>` の verdict が
+    `handoff-wording-judged-with-provider` に変わるかを確認すれば C3 完了。

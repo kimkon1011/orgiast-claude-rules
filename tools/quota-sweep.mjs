@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import os from 'node:os';
+import { enqueueTodos } from './handoff-audit-nightly.mjs';
+import { writeHandoff } from './next-session-rotate.mjs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
@@ -21,11 +23,12 @@ const json = (file, fallback = {}) => { const text = read(file); return text ? J
 const atomic = (file, value) => { const tmp = `${file}.${process.pid}.tmp`; fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n'); fs.renameSync(tmp, file); };
 
 export function selectGoal({ goals = '', handoff = '' } = {}) {
-  const explicit = goals.match(/^\s*- \[ \]\s+(.+)$/m)?.[1]?.trim();
+  const actionable = value => value && !/^(?:なし|無し|none|完了|済|done)(?:\s*[（(][^）)]*[）)])?\s*[。.]?$/i.test(value.trim()) && !/^\s*(?:\[x\]|~~)/i.test(value);
+  const explicit = [...goals.matchAll(/^\s*- \[ \]\s+(.+)$/gm)].map(m => m[1].trim()).find(actionable);
   if (explicit) return { goal: explicit, goalSource: 'quota-sweep-goals.md' };
-  const todos = parseHandoff(handoff).todos.filter(t => !/^(?:なし|無し|none)\s*[。.]?$/i.test(t.trim()) && !/^\s*(?:\[x\]|~~)/i.test(t));
+  const todos = parseHandoff(handoff).todos.filter(actionable);
   const first = selectTodoLanes(todos, { count: 1, slaCount: 0 }).selected[0];
-  return first ? { goal: first, goalSource: 'next-session.md' } : { goal: DEFAULT_GOAL, goalSource: 'builtin' };
+  return { goal: first || null, goalSource: 'next-session.md' };
 }
 
 export function tickPrompt(slug) {
@@ -36,7 +39,7 @@ export function contractPrompt(provider, slug, goal) {
 }
 export function canRunWindow(state, decision) {
   const prior = state.lastRun?.[decision.provider]?.[decision.resetsAt];
-  return !prior || (!terminal.has(prior.outcome) && (prior.attempts || 1) < 2);
+  return !prior || (!terminal.has(prior.stopOutcome || prior.outcome) && (prior.attempts || 1) < 2);
 }
 export function interactiveClaude({ home, now = Date.now() }) {
   return jsonlFiles(path.join(home, '.claude', 'projects')).some(file => {
@@ -54,9 +57,9 @@ export function interactiveClaude({ home, now = Date.now() }) {
     } catch { return true; }
   });
 }
-export function makeLedger({ decision, startedAt, endedAt, usedAfter = null, ticks = 0, outcome, goal, goalSource, branch = null, prUrl = null }) {
+export function makeLedger({ decision, startedAt, endedAt, usedAfter = null, ticks = 0, outcome, goal, goalSource, branch = null, prUrl = null, reason = null, failureKey = null, stopOutcome = outcome, deliveryError = null }) {
   return { ts: new Date(endedAt).toISOString(), provider: decision.provider, window: decision.window, resetsAt: decision.resetsAt,
-    usedBefore: decision.usedPercent, usedAfter, ticks, outcome, goal, goalSource, branch, prUrl, durationSec: Math.max(0, (endedAt - startedAt) / 1000) };
+    usedBefore: decision.usedPercent, usedAfter, ticks, outcome, goal, goalSource, branch, prUrl, reason, failureKey, stopOutcome, deliveryError, durationSec: Math.max(0, (endedAt - startedAt) / 1000) };
 }
 export function parseOutput(stdout) {
   let message = '', input = 0, output = 0;
@@ -111,13 +114,21 @@ export function parseArgs(argv) {
   return o;
 }
 
-function commandRunner(spawnImpl = spawnSync) {
+export function commandRunner(spawnImpl = spawnSync, log = () => {}) {
   return (exe, args, cwd) => {
-    const r = spawnImpl(exe, args, { cwd, encoding: 'utf8', windowsHide: true, timeout: 60_000 });
-    if (r.error || r.status !== 0) throw r.error || new Error(`${exe}: ${String(r.stderr || '').slice(-1000)} (exit ${r.status})`);
-    return String(r.stdout || '').trim();
+    const network = exe === 'git' && ['fetch', 'push'].includes(args[0]);
+    const timeout = exe === 'git' ? (network ? 300_000 : 120_000) : 60_000;
+    for (let attempt = 0; ; attempt++) {
+      const r = spawnImpl(exe, args, { cwd, encoding: 'utf8', windowsHide: true, timeout, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
+      if (!r.error && r.status === 0) return String(r.stdout || '').trim();
+      const error = new Error(`${exe} ${args[0]}: ${r.error?.message || String(r.stderr || '').slice(-1000)} (exit ${r.status}, timeout ${timeout}ms)`);
+      error.failureKey = `${exe}-${args[0]}-${r.error?.code || r.status}`;
+      if (!network || attempt === 1) throw error;
+      log(`${error.message}; retry 1/1`);
+    }
   };
 }
+
 const pointerFile = tree => path.join(tree, '.git');
 const accessDenied = error => error && (error.code === 'EPERM' || error.code === 'EACCES');
 
@@ -134,11 +145,16 @@ export function readWorktreePointer(file, { readFile = fs.readFileSync, chmod = 
   }
 }
 
-export function writeWorktreePointer(file, value, { writeFile = fs.writeFileSync, chmod = fs.chmodSync, attempts = 3 } = {}) {
+export function writeWorktreePointer(file, value, { writeFile = fs.writeFileSync, chmod = fs.chmodSync, attempts = 3, rename = fs.renameSync, remove = fs.rmSync } = {}) {
   for (let attempt = 1; ; attempt++) {
     try { writeFile(file, value); return; }
     catch (error) {
-      if (!accessDenied(error) || attempt >= attempts) throw error;
+      if (!accessDenied(error)) throw error;
+      if (attempt >= attempts) {
+        const tmp = `${file}.${process.pid}.tmp`;
+        try { writeFile(tmp, value, { flag: 'wx' }); rename(tmp, file); return; }
+        finally { remove(tmp, { force: true }); }
+      }
       try { chmod(file, 0o666); } catch { /* best effort */ }
     }
   }
@@ -175,40 +191,60 @@ export function prepareTree({ home, provider, run, previous, needRelativePointer
   return { tree, branch, base: run('git', ['rev-parse', 'HEAD'], tree), ...(pointerWarning ? { pointerWarning } : {}) };
 }
 
+export function queueRepeatedFailure(home, state, row) {
+  state.failureStreaks ??= {};
+  const prior = state.failureStreaks[row.provider];
+  const count = row.failureKey ? (prior?.key === row.failureKey ? prior.count + 1 : 1) : 0;
+  state.failureStreaks[row.provider] = { key: row.failureKey, count };
+  if (count < 2) return;
+  const file = path.join(home, '.claude', 'next-session.md');
+  const before = read(file);
+  const after = enqueueTodos(before, [{ pattern: `quota-sweep ${row.provider}: ${row.failureKey} の連続失敗`,
+    route: `tools/quota-sweep.mjs の ${row.failureKey} を quota-sweep.jsonl とログで調査し、回帰テスト付きで修正してPRを作成する` }]);
+  if (after !== before) writeHandoff(file, after);
+}
+
 export async function runSweep(decision, context) {
   const { home, state, save, windows: refresh, active, log, env, now = Date.now, spawnImpl = spawnSync, runChild = runBounded, notify = notifyKim } = context;
-  const run = context.command ?? commandRunner(spawnImpl), provider = decision.provider;
+  const run = context.command ?? commandRunner(spawnImpl, log), provider = decision.provider;
   const startedAt = now(), slug = `quota-sweep-${provider}`;
   const selection = selectGoal({ goals: read(path.join(home, '.claude', 'quota-sweep-goals.md')), handoff: read(path.join(home, '.claude', 'next-session.md')) });
   state.lastRun ??= {}; state.lastRun[provider] ??= {};
   const previous = state.lastRun[provider][decision.resetsAt];
-  const record = { ...previous, ...selection, attempts: (previous?.attempts || 0) + 1, outcome: 'running', startedAt, ticks: previous?.ticks || 0 };
+  const record = { ...previous, ...selection, attempts: (previous?.attempts || 0) + 1, outcome: 'running', deliveryError: null, startedAt, ticks: previous?.ticks || 0 };
   state.lastRun[provider][decision.resetsAt] = record; save();
+  let reason = null, failureKey = null;
+  const stopWith = (outcome, key, detail) => { reason = detail; failureKey = outcome === 'failed' ? key : null; log(`${provider}: ${key}: ${detail}`); return outcome; };
   let outcome = 'failed', usedBefore = decision.usedPercent, usedAfter = null, inputTokens = 0, outputTokens = 0, tree, branch = record.branch, prUrl = record.prUrl;
   log(`${provider} goal (${selection.goalSource}): ${selection.goal}`);
-  const check = async () => {
-    if (now() >= decision.deadline) return 'deadline';
+  const checkConditions = async () => {
+    if (now() >= decision.deadline) return stopWith('deadline', 'deadline', '利用窓の終了時刻に到達');
     if (tree && run('git', ['branch', '--show-current'], tree) !== branch) {
-      record.branchChanged = true; log('Worktree branch changed externally; stop and preserve it'); return 'failed';
+      record.branchChanged = true; log('Worktree branch changed externally; stop and preserve it'); return stopWith('failed', 'branch-changed', '作業ブランチが外部で変更された');
     }
     const all = await refresh(), own = all.filter(w => w.provider === provider);
     usedAfter = own.find(w => w.window === decision.window)?.usedPercent ?? null;
-    if ((provider === 'claude' && !['5h', '7d'].every(k => own.some(w => w.window === k))) || !own.length || own.some(w => !Number.isFinite(w.resetsAt) && w.usedPercent !== 0 && !w.exhausted)) return 'failed';
-    if (own.some(w => w.exhausted)) return 'exhausted';
-    if (shouldStopTick({ windows: all, provider })) return 'ceiling';
-    if (own.some(w => Number.isFinite(w.resetsAt) && w.resetsAt - 3 * 60_000 <= now()) || !own.some(w => sameReset(w.resetsAt, decision.resetsAt))) return 'deadline';
-    if (await active(provider)) return 'failed';
+    if ((provider === 'claude' && !['5h', '7d'].every(k => own.some(w => w.window === k))) || !own.length || own.some(w => !Number.isFinite(w.resetsAt) && w.usedPercent !== 0 && !w.exhausted)) return stopWith('failed', 'window-info', `利用窓情報が不足または不正: ${JSON.stringify(own)}`);
+    if (own.some(w => w.exhausted)) return stopWith('exhausted', 'quota-exhausted', '利用枠を使い切った');
+    if (shouldStopTick({ windows: all, provider })) return stopWith('ceiling', 'usage-ceiling', '利用率が停止上限に達した');
+    if (own.some(w => Number.isFinite(w.resetsAt) && w.resetsAt - 3 * 60_000 <= now()) || !own.some(w => sameReset(w.resetsAt, decision.resetsAt))) return stopWith('deadline', 'reset-window', 'リセット直前または利用窓が切り替わった');
+    if (await active(provider)) return stopWith('failed', 'interactive-active', '対話セッションの使用を検出');
     return null;
   };
+  const check = async () => {
+    try { return await checkConditions(); }
+    catch (error) { return stopWith('failed', error.failureKey || error.code || 'monitor-error', error.message); }
+  };
   try {
+    if (!selection.goal) { outcome = 'no-goal'; reason = '実行対象の未完了目標なし'; return; }
     let stop = await check();
     if (!stop) {
       const initial = await refresh();
       const eligible = decideSweep({ windows: initial, now: now(), leadMinutes: context.leadMinutes ?? 90, minRemainingPercent: context.minRemainingPercent ?? 15 }).find(d => d.provider === provider && sameReset(d.resetsAt, decision.resetsAt));
-      if (!eligible) stop = 'exhausted'; else usedBefore = eligible.usedPercent;
+      if (!eligible) stop = stopWith('exhausted', 'no-eligible-window', '再取得した利用窓が残枠・開始時刻の条件を満たさない'); else usedBefore = eligible.usedPercent;
     }
     if (stop) { outcome = stop; return; }
-    const prepared = (context.prepareTree ?? prepareTree)({ home, provider, run, previous, needRelativePointer: Boolean(context.wsl), log, io: context.treeIo });
+    const prepared = (context.prepareTree ?? prepareTree)({ home, provider, run, previous, needRelativePointer: provider === 'codex' && Boolean(context.wsl), log, io: context.treeIo });
     ({ tree, branch } = prepared); Object.assign(record, prepared); save();
     const model = env.ORGIAST_QUOTA_SWEEP_MODEL || 'sonnet';
     if (/opus|fable/i.test(model)) throw new Error('Supervisor model is not permitted for quota sweep');
@@ -227,6 +263,7 @@ export async function runSweep(decision, context) {
     // No API-key billing fallback. Both hosts must use their existing plan authentication.
     for (const k of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'OPENAI_API_KEY', 'CODEX_API_KEY']) delete childEnv[k];
     const launch = async (prompt, timeoutMs) => {
+      reason = null; failureKey = null;
       const stopAt = Math.min(decision.deadline, now() + timeoutMs);
       if (stopAt <= now()) return { timedOut: true, code: null, stdout: '' };
       const seconds = Math.floor((stopAt - now()) / 1000);
@@ -236,7 +273,11 @@ export async function runSweep(decision, context) {
         ? nativeCommand(executable, args) : { executable, args };
       const result = await runChild(invocation.executable, invocation.args, { cwd: tree, input: prompt, env: childEnv, deadline: stopAt, timeoutMs, monitor: check });
       const parsed = parseOutput(result.stdout || ''); inputTokens += parsed.input; outputTokens += parsed.output;
-      log(`${provider} child exit=${result.code} stop=${result.stopReason || ''}`);
+      if (result.code !== 0 || result.timedOut || result.stopReason) {
+        reason = reason || `${provider} child exit=${result.code} stop=${result.stopReason || (result.timedOut ? 'timeout' : 'exit')}: ${String(result.stderr || parsed.message || '詳細出力なし').slice(-1000)}`;
+        failureKey ||= `child-${result.stopReason || (result.timedOut ? 'timeout' : result.code)}`;
+      }
+      log(`${provider} child exit=${result.code} stop=${result.stopReason || ''}${reason ? ` reason=${reason}` : ''}`);
       return { ...result, final: parsed.final };
     };
     const loopDir = path.join(tree, '.loop'); fs.mkdirSync(loopDir, { recursive: true });
@@ -274,12 +315,12 @@ export async function runSweep(decision, context) {
       if (result.stopReason || result.timedOut || now() >= decision.deadline) {
         outcome = result.stopReason === 'deadline' ? (now() >= decision.deadline ? 'deadline' : 'failed') : result.stopReason || (now() >= decision.deadline ? 'deadline' : 'failed'); break;
       }
-      if (result.code === 0 && result.final) { budget.final = true; atomic(budgetFile, budget); outcome = 'final'; break; }
+      if (result.code === 0 && result.final) { budget.final = true; atomic(budgetFile, budget); outcome = 'final'; reason = null; failureKey = null; break; }
       errors = result.code === 0 ? 0 : errors + 1;
       if (errors >= 2) { outcome = 'failed'; break; }
       outcome = 'exhausted'; // cumulative iteration budget exhausted, not verified success
     }
-  } catch (error) { log(`${provider} failed: ${error.message}`); outcome = 'failed'; }
+  } catch (error) { reason = error.message; failureKey = error.failureKey || `${error.code || error.name}:${error.message.replaceAll(home, '~')}`; log(`${provider} failed: ${reason}`); outcome = 'failed'; }
   finally {
     if (tree && branch) {
       try {
@@ -289,16 +330,23 @@ export async function runSweep(decision, context) {
           prUrl = run('gh', ['pr', 'list', '--head', branch, '--state', 'all', '--json', 'url', '--jq', '.[0].url // empty'], tree);
           if (!prUrl) prUrl = run('gh', ['pr', 'create', '--base', 'main', '--head', branch, '--fill'], tree);
         }
-      } catch (error) { log(`PR delivery failed: ${error.message}`); record.deliveryError = error.message; outcome = 'failed'; }
+      } catch (error) { log(`PR delivery failed: ${error.message}`); record.deliveryError = error.message; reason = [reason, `PR delivery: ${error.message}`].filter(Boolean).join('; '); failureKey = error.failureKey || 'pr-delivery'; outcome = 'failed'; }
     }
     try { const after = await refresh(); usedAfter = after.find(w => w.provider === provider && w.window === decision.window)?.usedPercent ?? usedAfter; } catch { /* unknown */ }
-    const row = makeLedger({ decision: { ...decision, usedPercent: usedBefore }, startedAt, endedAt: now(), usedAfter, ticks: record.ticks, outcome, ...selection, branch, prUrl });
+    const stopOutcome = outcome;
+    if (prUrl && !['final', 'no-goal'].includes(outcome)) outcome = 'partial';
+    reason ||= { failed: '停止理由を取得できなかった', deadline: '利用窓または子プロセスの制限時間に到達', ceiling: '利用率の上限に到達', exhausted: '利用枠または累積試行上限に到達', 'no-goal': '実行対象の未完了目標なし' }[stopOutcome] || null;
+    if (stopOutcome === 'failed') failureKey ||= 'unknown-failure';
+    else failureKey = null;
+    const row = makeLedger({ decision: { ...decision, usedPercent: usedBefore }, startedAt, endedAt: now(), usedAfter, ticks: record.ticks, outcome, ...selection, branch, prUrl, reason, failureKey, stopOutcome, deliveryError: record.deliveryError || null });
+    try { queueRepeatedFailure(home, state, row); }
+    catch (error) { log(`修復タスク起票失敗: ${error.message}`); row.remediationError = error.message; }
     Object.assign(record, row); save();
     fs.appendFileSync(path.join(home, '.claude', 'quota-sweep.jsonl'), JSON.stringify(row) + '\n');
     fs.appendFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), JSON.stringify({ t: row.ts, provider: `quota-sweep:${provider}`, model: provider === 'claude' ? env.ORGIAST_QUOTA_SWEEP_MODEL || 'sonnet' : 'codex', in: inputTokens, out: outputTokens, tokens: inputTokens + outputTokens, secs: row.durationSec, status: outcome, attempt: record.attempts, failover: false }) + '\n');
-    log(`${provider}: ${outcome}, ticks=${record.ticks}`);
+    log(`${provider}: ${outcome}, ticks=${record.ticks}, reason=${reason || '完了'}`);
     const oneLine = value => String(value).replace(/[\r\n]+/g, ' ').slice(0, 250);
-    try { await notify([`${provider}/${decision.window}`, `${usedBefore}% → ${usedAfter ?? '?'}%`, `tick: ${record.ticks}`, oneLine(selection.goal), prUrl || '変更なし', outcome].join('\n'), { home }); }
+    try { if (outcome !== 'no-goal') await notify([`${provider}/${decision.window}`, `${usedBefore}% → ${usedAfter ?? '?'}%`, `tick: ${record.ticks}`, oneLine(selection.goal), prUrl || '変更なし', outcome === 'partial' ? '成果あり・未完了' : outcome, reason ? `理由: ${oneLine(reason)}` : '検証完了'].join('\n'), { home }); }
     catch (error) { log(`DM failed: ${error.message}`); }
   }
 }

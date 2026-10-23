@@ -9,7 +9,7 @@ import { runAutopilot, acquireLock } from './autopilot-tick.mjs';
 function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'autopilot-run-test-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  return { home, dir: path.join(home, 'state'), token: '', userId: '', now: new Date('2026-09-21T01:00:00Z'), fetchImpl: async () => { throw new Error('unexpected network'); } };
+  return { home, platform: 'linux', dir: path.join(home, 'state'), token: '', userId: '', now: new Date('2026-09-21T01:00:00Z'), fetchImpl: async () => { throw new Error('unexpected network'); } };
 }
 
 test('runner does not invoke Claude when unstarted, paused, stopped, or done', async (t) => {

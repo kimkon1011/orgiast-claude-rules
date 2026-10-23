@@ -47,6 +47,10 @@ test('既存PowerShell hookへExecutionPolicy Bypassを補いcost-loopをmjsへ�
   assert.match(stdout, /hook修復: 実行ポリシー1件 \/ cost-loop移行1件/);
   const shareGroups = settings.hooks.PreToolUse.filter(group => group.hooks.some(hook => hook.command.includes('share-before-send-gate.mjs')));
   assert.equal(shareGroups.length, 1);
+  const domainGroups = settings.hooks.PreToolUse.filter(group => group.hooks.some(hook => hook.command.includes('recipient-domain-gate.mjs')));
+  assert.equal(domainGroups.length, 1);
+  for (const name of ['Bash', 'PowerShell', 'mcp__claude_ai_Gmail_2__send_message']) assert.match(name, new RegExp(domainGroups[0].matcher));
+  assert.equal(domainGroups[0].hooks.find(hook => hook.command.includes('recipient-domain-gate.mjs')).timeout, 30);
   assert.match('mcp__claude_ai_Discord__send_dm', new RegExp(shareGroups[0].matcher));
   assert.match('mcp__claude_ai_Gmail__create_draft', new RegExp(shareGroups[0].matcher));
   assert.equal(fs.readFileSync(path.join(home, '.claude/share-ledger.jsonl'), 'utf8'), '');

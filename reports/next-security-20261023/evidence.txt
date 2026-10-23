@@ -1,0 +1,46 @@
+2026-10-23 nishi-PC / DESKTOP-04U31RG
+Original working directories were not edited. Clean local clones used:
+/tmp/event-shop-next-security
+/tmp/stagecue-next-security
+/tmp/cafe-next15-security
+
+Observed package.json next versions:
+event-shop 16.2.10
+stagecue 16.3.4
+cafe-checklist-app 14.2.35
+purchasing-management-app package.json ^15.0.0; pnpm-lock.yaml 15.5.18
+
+Both event-shop and stagecue:
+$ npm_config_cache=/tmp/next-security-npm npm_config_fetch_retries=0 npm_config_fetch_timeout=15000 npm install --save-exact next@16.4.1 --package-lock-only --ignore-scripts
+exit 1
+npm error code EAI_AGAIN
+npm error syscall getaddrinfo
+npm error errno EAI_AGAIN
+npm error reason: getaddrinfo EAI_AGAIN registry.npmjs.org
+Subsequent git status --short: empty for both copies.
+
+cafe-checklist-app:
+$ npx --yes @next/codemod@canary upgrade 15
+exit 1
+npm error code EAI_AGAIN
+npm error request to https://registry.npmjs.org/@next%2fcodemod failed, reason: getaddrinfo EAI_AGAIN registry.npmjs.org
+$ npm run build
+> cafe-checklist-app@1.0.0 build
+> next build
+sh: 1: next: not found
+No successful migration/build. No draft PR created.
+
+$ git -C /mnt/d/Claude/purchasing-management-app pull --ff-only
+error: cannot open '.git/FETCH_HEAD': Read-only file system
+
+$ git ls-remote https://github.com/nishiOrgiast/cafe-checklist-app.git HEAD
+fatal: unable to access 'https://github.com/nishiOrgiast/cafe-checklist-app.git/': Could not resolve host: github.com
+
+$ gh.exe auth status
+WSL ERROR: UtilBindVsockAnyPort:317: socket failed 1
+
+$ ORGIAST_HOME=/tmp/next-security-mail-home node tools/fleet-mail.mjs --reply mail-1792730749130-11162976 --body-file reports/next-security-20261023/reply.md
+exit 1
+fleet-mail: fetch failed
+Reply not sent. Temporary mail home copied only transport configuration, reporter label and original inbox record; no credentials recorded here.
+No Node installation changes; no commits, PRs, merges, or deployments.

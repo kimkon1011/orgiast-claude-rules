@@ -1,0 +1,24 @@
+2026-10-23 actual command results
+node -v -> v22.23.3
+php -v / java -version / go version / mysql --version -> command not found
+powershell.exe -NoProfile -Command ... -> WSL ERROR UtilBindVsockAnyPort:317: socket failed 1
+cmd.exe /c ver -> same WSL socket error
+/mnt/d/Claude/tools/gh/bin/gh.exe repo list --limit 200 -> same WSL socket error
+/mnt/d/Claude/tools/node-v24.18.0-win-x64/node.exe -v -> same WSL socket error
+/mnt/c/Users/user/AppData/Local/Microsoft/WindowsApps/winget.exe list --disable-interactivity -> same WSL socket error
+vercel projects ls -> timeout; no project list
+node /mnt/d/Claude/tools/node-v24.18.0-win-x64/node_modules/vercel/dist/index.js projects ls -> timeout; no project list
+curl -I https://nodejs.org/dist/index.json -> curl (6) Could not resolve host
+curl --noproxy '*' -sSI https://nodejs.org/dist/v22.23.4/SHASUMS256.txt -> curl (6) Could not resolve host
+curl -sSI https://api.github.com -> curl (6) Could not resolve host
+curl -sSI https://stagecue.vercel.app -> curl (6) Could not resolve host
+curl -sSI https://event-shop.vercel.app -> curl (6) Could not resolve host
+curl -sSI https://cafe-checklist-app.vercel.app -> curl (6) Could not resolve host
+These deployment hostnames are candidates; canonical production domains were not verified.
+command -v gh, netlify, wrangler, winget -> no Linux command found
+GAS local .clasp.json present: mimamori-call-gas, event-shop-mail-relay, 案件一覧マスター; deployments/accounts not verified.
+No package updates, builds, PRs, merges, installations or redeployments were performed.
+Fixed versions and EOL classifications in reply.md follow the request; official advisories could not be verified using curl due to DNS failure.
+Reply attempted: node tools/fleet-mail.mjs --reply mail-1792728697015-961f1c89 --body-file reports/security-2026-10-23/reply.md
+Used isolated temporary ORGIAST_HOME with original configuration and prior-sent log because real home is read-only.
+Result: exit 1, fleet-mail: fetch failed. Delivery NOT confirmed; no successful reply claimed.

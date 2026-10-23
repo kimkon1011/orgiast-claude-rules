@@ -1,0 +1,266 @@
+{
+  "date": "2026-10-23",
+  "scope": "local snapshots; remote/live unverified",
+  "github_cached_user": "nishiOrgiast (authentication not verified)",
+  "runtime_node": "v22.23.3",
+  "repositories": [
+    {
+      "path": "/mnt/d/Claude/event-shop",
+      "package.json": {
+        "name": "event-shop",
+        "version": "0.1.0",
+        "dependencies": {
+          "@supabase/supabase-js": "^2.110.7",
+          "adm-zip": "^0.6.0",
+          "next": "16.2.10",
+          "pdf-to-img": "^6.2.0",
+          "react": "19.2.4",
+          "react-dom": "19.2.4",
+          "sharp": "^0.35.3"
+        },
+        "devDependencies": {
+          "@playwright/test": "^1.61.1",
+          "@tailwindcss/postcss": "^4",
+          "@types/node": "^20",
+          "@types/react": "^19",
+          "@types/react-dom": "^19",
+          "eslint": "^9",
+          "eslint-config-next": "16.2.10",
+          "tailwindcss": "^4",
+          "typescript": "^5"
+        },
+        "engines": null
+      },
+      "node_modules/next/package.json": {
+        "version": "16.2.10"
+      },
+      "origin": "https://github.com/seisaku-team-org/event-shop.git",
+      "other_manifests": [],
+      "lockfiles": [
+        "package-lock.json"
+      ]
+    },
+    {
+      "path": "/mnt/d/Claude/event-shop-aujust",
+      "package.json": {
+        "name": "event-shop",
+        "version": "0.1.0",
+        "dependencies": {
+          "@supabase/supabase-js": "^2.110.7",
+          "adm-zip": "^0.6.0",
+          "next": "16.2.10",
+          "pdf-to-img": "^6.2.0",
+          "react": "19.2.4",
+          "react-dom": "19.2.4",
+          "sharp": "^0.35.3"
+        },
+        "devDependencies": {
+          "@playwright/test": "^1.61.1",
+          "@tailwindcss/postcss": "^4",
+          "@types/node": "^20",
+          "@types/react": "^19",
+          "@types/react-dom": "^19",
+          "eslint": "^9",
+          "eslint-config-next": "16.2.10",
+          "tailwindcss": "^4",
+          "typescript": "^5"
+        },
+        "engines": null
+      },
+      "origin": "",
+      "other_manifests": [],
+      "lockfiles": [
+        "package-lock.json"
+      ]
+    },
+    {
+      "path": "/mnt/d/Claude/stagecue",
+      "package.json": {
+        "name": "stagecue",
+        "version": "0.1.0",
+        "dependencies": {
+          "next": "16.3.4",
+          "react": "19.2.8",
+          "react-dom": "19.2.8",
+          "@supabase/supabase-js": "^2",
+          "@supabase/ssr": "^0.5",
+          "zod": "^3"
+        },
+        "devDependencies": {
+          "@tailwindcss/postcss": "^4",
+          "@types/node": "^20",
+          "@types/react": "^19",
+          "@types/react-dom": "^19",
+          "eslint": "^9",
+          "eslint-config-next": "16.3.4",
+          "tailwindcss": "^4",
+          "typescript": "^5",
+          "vitest": "^2"
+        },
+        "engines": null
+      },
+      "node_modules/next/package.json": {
+        "version": "16.3.4"
+      },
+      "origin": "https://github.com/nishiOrgiast/stagecue.git",
+      "other_manifests": [],
+      "lockfiles": [
+        "package-lock.json"
+      ]
+    },
+    {
+      "path": "/mnt/c/Users/user/dev/cafe-checklist-app",
+      "package.json": {
+        "name": "cafe-checklist-app",
+        "version": "1.0.0",
+        "dependencies": {
+          "next": "14.2.35",
+          "react": "18.3.1",
+          "react-dom": "18.3.1"
+        },
+        "devDependencies": {
+          "@types/node": "^20.19.43",
+          "@types/react": "^18.3.31",
+          "playwright-core": "^1.49.0",
+          "typescript": "^5.9.3"
+        },
+        "engines": null
+      },
+      "node_modules/next/package.json": {
+        "version": "14.2.35"
+      },
+      "origin": "https://github.com/nishiOrgiast/cafe-checklist-app.git",
+      "other_manifests": [],
+      "lockfiles": [
+        "package-lock.json"
+      ]
+    },
+    {
+      "path": "/mnt/d/Claude/purchasing-management-app",
+      "package.json": {
+        "name": "purchasing-management-app",
+        "version": "0.1.0",
+        "dependencies": {
+          "@auth/drizzle-adapter": "^1.7.0",
+          "@electric-sql/pglite": "^0.4.5",
+          "@hookform/resolvers": "^3.9.0",
+          "@supabase/supabase-js": "^2.45.0",
+          "@vercel/blob": "^0.27.0",
+          "clsx": "^2.1.1",
+          "date-fns": "^3.6.0",
+          "date-fns-tz": "^3.2.0",
+          "drizzle-orm": "^0.36.0",
+          "googleapis": "^144.0.0",
+          "lucide-react": "^0.460.0",
+          "next": "^15.0.0",
+          "next-auth": "5.0.0-beta.25",
+          "openapi-fetch": "^0.13.0",
+          "postgres": "^3.4.0",
+          "react": "^19.0.0",
+          "react-dom": "^19.0.0",
+          "react-hook-form": "^7.53.0",
+          "swr": "^2.2.5",
+          "tailwind-merge": "^2.5.0",
+          "zod": "^3.23.0"
+        },
+        "devDependencies": {
+          "@playwright/test": "^1.48.0",
+          "@types/node": "^22.9.0",
+          "@types/react": "^19.0.0",
+          "@types/react-dom": "^19.0.0",
+          "@vitejs/plugin-react": "^4.3.0",
+          "@vitest/coverage-v8": "^2.1.0",
+          "autoprefixer": "^10.4.20",
+          "dotenv": "^17.4.2",
+          "drizzle-kit": "^0.28.0",
+          "eslint": "^9.14.0",
+          "eslint-config-next": "^15.0.0",
+          "eslint-plugin-import": "^2.31.0",
+          "husky": "^9.1.0",
+          "lint-staged": "^15.2.0",
+          "msw": "^2.6.0",
+          "postcss": "^8.4.0",
+          "prettier": "^3.3.0",
+          "prettier-plugin-tailwindcss": "^0.6.0",
+          "tailwindcss": "^3.4.0",
+          "tsx": "^4.19.0",
+          "typescript": "^5.6.0",
+          "vitest": "^2.1.0"
+        },
+        "engines": {
+          "node": ">=20.0.0",
+          "pnpm": ">=9.0.0"
+        }
+      },
+      "node_modules/next/package.json": {
+        "version": "15.5.18"
+      },
+      "origin": "https://github.com/kimkon1011/purchasing-management-app.git",
+      "other_manifests": [],
+      "lockfiles": [
+        "pnpm-lock.yaml"
+      ]
+    },
+    {
+      "path": "/mnt/d/Claude/mimamori-call-gas",
+      "package.json": {
+        "name": "mimamori-call-gas",
+        "version": "1.0.0",
+        "dependencies": null,
+        "devDependencies": null,
+        "engines": null
+      },
+      "origin": "https://github.com/nishiOrgiast/mimamori-call-gas.git",
+      "other_manifests": [],
+      "lockfiles": []
+    },
+    {
+      "path": "/mnt/d/Claude/persol-booth-3d",
+      "package.json": {
+        "name": "booth",
+        "version": "1.0.0",
+        "dependencies": {
+          "playwright": "^1.64.1"
+        },
+        "devDependencies": null,
+        "engines": null
+      },
+      "origin": "",
+      "other_manifests": [],
+      "lockfiles": [
+        "package-lock.json"
+      ]
+    },
+    {
+      "path": "/mnt/c/Users/user/.claude/nightly-repo",
+      "package.json": {
+        "name": "orgiast-claude-rules",
+        "version": null,
+        "dependencies": {
+          "playwright-core": "^1.49.0",
+          "postgres": "^3.4.9"
+        },
+        "devDependencies": null,
+        "engines": null
+      },
+      "origin": "https://github.com/kimkon1011/orgiast-claude-rules.git",
+      "other_manifests": [],
+      "lockfiles": []
+    },
+    {
+      "path": "/mnt/c/Users/user/.claude/nightly-repo/packages/vscode-next-session",
+      "package.json": {
+        "name": "next-session",
+        "version": "0.3.7",
+        "dependencies": null,
+        "devDependencies": null,
+        "engines": {
+          "vscode": "^1.80.0"
+        }
+      },
+      "origin": "https://github.com/kimkon1011/orgiast-claude-rules.git",
+      "other_manifests": [],
+      "lockfiles": []
+    }
+  ]
+}

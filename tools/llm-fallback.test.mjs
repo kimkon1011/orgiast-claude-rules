@@ -190,7 +190,9 @@ test('Kimi直APIの429後は通常チェーンより先にOpenRouterのKimiを�
     { provider: 'kimi', model: 'kimi-k3' },
     { provider: 'openrouter', model: 'moonshotai/kimi-k3' },
   ]);
-  assert.deepEqual(fetched, ['kimi', 'kimi', 'kimi', 'openrouter']);
+  // "insufficient balance" は恒久課金切れなので同一候補をリトライせず、直ちに OpenRouter へ回す
+  // （残高切れの口座を叩き続けない。2026-10-24 に本枝の恒久課金切れ判定と整合させた）。
+  assert.deepEqual(fetched, ['kimi', 'openrouter']);
   assert.deepEqual(result.candidate, attempted[1]);
 });
 

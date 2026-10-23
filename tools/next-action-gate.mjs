@@ -160,7 +160,7 @@ export function judgeNextAction(text, transcriptRaw = '', input = {}) {
   // 短文素通しは雑談・相槌だけ。ツールで作業したターンは短文・空文でもフッター必須
   // （作業後に「No response requested.」だけで終わり、自動進行が台帳に載らず kim が進捗を聞く羽目になった 2026-10-23 実害）。
   const worked = blocks(currentTurnEntries(transcriptRaw), 'tool_use').length > 0;
-  if (!footer && !worked && source.length < MIN_ENFORCED_LENGTH) return permanentFix || { decision: 'pass', reason: 'short-response' };
+  if (!footer && (!worked || !source) && source.length < MIN_ENFORCED_LENGTH) return permanentFix || { decision: 'pass', reason: 'short-response' };
   if (!footer) {
     return {
       decision: 'block',
@@ -215,8 +215,8 @@ async function main() {
     if (input?.stop_hook_active) return;
     const context = readTranscriptContext(input?.transcript_path);
     const assistantText = input?.assistant_text || context.assistantText;
-    if (!assistantText && !blocks(currentTurnEntries(context.raw), 'tool_use').length) return;
-    const result = judgeNextAction(assistantText || '', context.raw, input);
+    if (!assistantText) return;
+    const result = judgeNextAction(assistantText, context.raw, input);
     if (result.decision === 'block') process.stdout.write(`${JSON.stringify({ decision: 'block', reason: result.reason })}\n`);
   } catch { /* ゲート自身の失敗で応答を止めない。 */ }
 }

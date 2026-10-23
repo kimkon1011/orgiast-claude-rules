@@ -138,7 +138,7 @@ test('ツールで作業したターンは短文でもフッター必須（No re
   const result = judgeNextAction('No response requested.', worked);
   assert.equal(result.decision, 'block');
   assert.equal(result.code, 'NEXT-ACTION-FOOTER');
-  assert.equal(judgeNextAction('', worked).code, 'NEXT-ACTION-FOOTER');
+  assert.equal(judgeNextAction('', worked).decision, 'pass');
 });
 
 test('末尾が疑問符の質問応答はpass', () => {

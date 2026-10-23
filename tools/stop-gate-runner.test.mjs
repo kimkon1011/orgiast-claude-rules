@@ -150,7 +150,7 @@ test('assistant_text と transcript_path の併用でも直接照会証拠を読
     { type: 'user', message: { role: 'user', content: 'GA4 を確認して' } },
     { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'gcloud projects list' } }] } },
   ].map(entry => JSON.stringify(entry)).join('\n'));
-  const output = invoke(home, 'evidence', 'GA4 は存在しない', { transcript_path: transcript });
+  const output = invoke(home, 'evidence', 'GA4 は存在しない\n次に kim がすること: なし\nこの後の自動進行: なし（完了）\nこのセッション: /session-close は不要なので、このセッションを閉じてよい', { transcript_path: transcript });
   assert.equal(output.status, 0, output.stderr);
   assert.equal(output.stdout, '');
 });

@@ -84,7 +84,7 @@ const BANNER = /\*\*\[(?:委譲判定|夜間判定)\]\*\*[^\n]*/g;
 
 /** 定型バナー行を空白に置換した本文（判定・根拠表示はこちらを使う）。 */
 export function stripBanners(text) {
-  return String(text || '').replace(BANNER, ' ');
+  return String(text || '').replace(BANNER, ' ').replace(/待機プロセス/g, ' ');
 }
 
 /** 1 turn の本文が「委譲して実行中で終えた」型かを判定する。 */
@@ -132,27 +132,57 @@ export function selftest() {
 function isRealUserPrompt(rec) {
   if (rec?.type !== 'user') return false;
   const c = rec?.message?.content;
-  if (typeof c === 'string') return true;
+  if (typeof c === 'string') {
+    return ![
+      'Stop hook feedback:',
+      '<task-notification>',
+      '<system-reminder>',
+      '[HANDOFF-REGRET]',
+    ].some((prefix) => c.startsWith(prefix));
+  }
   return Array.isArray(c)
     && c.some((b) => b?.type === 'text')
     && !c.some((b) => b?.type === 'tool_result');
 }
 
-/** hit 後、同じ user-turn 内で codex-do の前景実行が完了したか。 */
+/** 同じ user-turn 内で委譲を起動し、hit 後にその完了結果または完了通知を受け取ったか。 */
 function completedCodexDoInTurn(records, hitIndex) {
+  let start = 0;
+  for (let i = hitIndex - 1; i >= 0; i--) {
+    if (isRealUserPrompt(records[i])) {
+      start = i + 1;
+      break;
+    }
+  }
   const end = records.findIndex((rec, i) => i > hitIndex && isRealUserPrompt(rec));
   const limit = end < 0 ? records.length : end;
-  let toolUseSeen = false;
-  for (let i = hitIndex; i < limit; i++) {
+  const delegationToolUseIds = new Set();
+  for (let i = start; i < limit; i++) {
     const rec = records[i];
     const c = rec?.message?.content;
     if (rec?.type === 'assistant' && Array.isArray(c)) {
-      if (c.some((b) => b?.type === 'tool_use'
-        && b?.name === 'Bash'
-        && /codex-do\.mjs/.test(String(b?.input?.command || '')))) toolUseSeen = true;
+      for (const b of c) {
+        if (b?.type === 'tool_use'
+          && b?.name === 'Bash'
+          && /codex-do\.mjs|codex\s+exec\b|cheap-code\.mjs/.test(String(b?.input?.command || ''))) {
+          delegationToolUseIds.add(b.id || '*');
+        }
+      }
     }
-    if (toolUseSeen && rec?.type === 'user' && Array.isArray(c)
-      && c.some((b) => b?.type === 'tool_result')) return true;
+  }
+  for (let i = hitIndex + 1; i < limit; i++) {
+    const rec = records[i];
+    const c = rec?.message?.content;
+    if (rec?.type === 'user' && Array.isArray(c)
+      && c.some((b) => b?.type === 'tool_result'
+        && !/(?:\b(?:running in background|background with ID)\b|バックグラウンドで実行中\s*ID)/i.test(String(b?.content || ''))
+        && (b.tool_use_id ? delegationToolUseIds.has(b.tool_use_id) : delegationToolUseIds.size > 0))) return true;
+    if (rec?.type === 'user' && typeof c === 'string'
+      && c.includes('<task-notification>')
+      && c.includes('<status>completed</status>')) {
+      const toolUseId = c.match(/<tool-use-id>([^<]+)<\/tool-use-id>/)?.[1];
+      if (toolUseId && delegationToolUseIds.has(toolUseId)) return true;
+    }
   }
   return false;
 }

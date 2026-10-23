@@ -123,6 +123,10 @@ test('stripBanners はバナー行だけを落とし、他の行は残す', () =
   assert.ok(out.includes('前の行') && out.includes('後の行'), '前後の本文は残る');
 });
 
+test('待機プロセスの完了報告は陽性にしない', () => {
+  assert.equal(detect('ブラウザログイン用の待機プロセスが後から閉じただけで、cheap-code の修正は完了しています。'), false);
+});
+
 // scan 側は改行を潰す前に判定する。潰した後だとバナーの行末が拾えず FP が戻る。
 test('scan はバナー付き turn を FP 計上しない（改行を潰す前に判定する）', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-delegation-scan-'));
@@ -189,4 +193,55 @@ test('codex-do の tool_use 後に tool_result が無ければ完了扱いにし
   ]);
   assert.equal(r.rows[0].inTurn, false);
   assert.equal(r.recurrences, 1);
+});
+
+test('hit より前に起動した codex exec の tool_result が hit 後に返れば完了扱いにする', () => {
+  const r = scanInTurnCase([
+    { type: 'user', message: { role: 'user', content: [{ type: 'text', text: '実装して' }] } },
+    { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'timeout 1800 codex exec --approve-for-me -C "X" - < task.md' } }] } },
+    { type: 'assistant', message: { content: [{ type: 'text', text: 'Codex に実装を投げました（背景実行）。完了通知を待つ間に仕様を置きます。' }] }, timestamp: new Date().toISOString() },
+    { type: 'user', message: { content: [{ type: 'tool_result', content: 'done' }] } },
+  ]);
+  assert.equal(r.rows[0].inTurn, true);
+  assert.equal(r.recurrences, 0);
+});
+
+test('hit より前に codex exec を起動しても hit 後に tool_result が無ければ再発扱いにする', () => {
+  const r = scanInTurnCase([
+    { type: 'user', message: { role: 'user', content: [{ type: 'text', text: '実装して' }] } },
+    { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'timeout 1800 codex exec --approve-for-me -C "X" - < task.md' } }] } },
+    { type: 'assistant', message: { content: [{ type: 'text', text: 'Codex に実装を投げました（背景実行）。完了通知を待つ間に仕様を置きます。' }] }, timestamp: new Date().toISOString() },
+  ]);
+  assert.equal(r.rows[0].inTurn, false);
+  assert.equal(r.recurrences, 1);
+});
+
+test('Stop hook feedback 文字列は turn を切らない', () => {
+  const r = scanInTurnCase([
+    hitAssistant,
+    { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'node tools/codex-do.mjs task.md' } }] } },
+    { type: 'user', message: { role: 'user', content: 'Stop hook feedback:\n### next-action-gate ...' } },
+    { type: 'user', message: { content: [{ type: 'tool_result', content: '完了' }] } },
+  ]);
+  assert.equal(r.rows[0].inTurn, true);
+});
+
+test('背景起動の完了は task-notification completed で拾う', () => {
+  const r = scanInTurnCase([
+    hitAssistant,
+    { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'toolu_abc', name: 'Bash', input: { command: 'timeout 1800 codex exec --approve-for-me -C "X" - < task.md' } }] } },
+    { type: 'user', message: { content: [{ type: 'tool_result', content: 'Command running in background with ID: b1' }] } },
+    { type: 'user', message: { role: 'user', content: '<task-notification>\n<tool-use-id>toolu_abc</tool-use-id>\n<status>completed</status>\n</task-notification>' } },
+  ]);
+  assert.equal(r.rows[0].inTurn, true);
+});
+
+test('task-notification が completed でなければ再発扱いにする', () => {
+  const r = scanInTurnCase([
+    hitAssistant,
+    { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'toolu_abc', name: 'Bash', input: { command: 'timeout 1800 codex exec --approve-for-me -C "X" - < task.md' } }] } },
+    { type: 'user', message: { content: [{ type: 'tool_result', content: 'Command running in background with ID: b1' }] } },
+    { type: 'user', message: { role: 'user', content: '<task-notification>\n<tool-use-id>toolu_abc</tool-use-id>\n<status>failed</status>\n</task-notification>' } },
+  ]);
+  assert.equal(r.rows[0].inTurn, false);
 });

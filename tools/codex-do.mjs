@@ -97,8 +97,12 @@ export function decideCodexLane({ lane = 'auto', model, promptText = '', timeout
   return { slug, effort, reason };
 }
 
+// makeloop plugin is distributed for quota-sweep; for delegated tasks it hijacks the run into "contract only" (2026-10-23).
+// -c splits keys on dots, so a quoted "makeloop@makeloop" key is not addressable; override the table as TOML.
+export const DISABLE_MAKELOOP = ['-c', 'plugins={"makeloop@makeloop"={enabled=false}}'];
+
 export function buildCodexExecArgs({ slug, effort, review = false } = {}) {
-  return ['exec', ...(slug ? ['-m', slug] : []), ...(effort ? ['-c', `model_reasoning_effort="${effort}"`] : []), '-s', review ? 'read-only' : 'workspace-write', '-'];
+  return ['exec', ...(slug ? ['-m', slug] : []), ...(effort ? ['-c', `model_reasoning_effort="${effort}"`] : []), ...DISABLE_MAKELOOP, '-s', review ? 'read-only' : 'workspace-write', '-'];
 }
 
 // Windows ネイティブの codex は `-s workspace-write` を渡しても必ず read-only に倒れ、

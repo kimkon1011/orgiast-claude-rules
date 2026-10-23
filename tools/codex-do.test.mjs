@@ -1303,9 +1303,9 @@ test('probeChatGptAuth: WSL 側の distro 一覧・cat が失敗したら null(�
 
 test('buildCodexExecArgs: model, effort, sandbox and stdin without spaces', () => {
   const args = buildCodexExecArgs({ slug: ASTRA, effort: 'high' });
-  assert.deepEqual(args, ['exec', '-m', ASTRA, '-c', 'model_reasoning_effort="high"', '-s', 'workspace-write', '-']);
+  assert.deepEqual(args, ['exec', '-m', ASTRA, '-c', 'model_reasoning_effort="high"', '-c', 'plugins={"makeloop@makeloop"={enabled=false}}', '-s', 'workspace-write', '-']);
   assert.ok(args.every((arg) => !/\s/.test(arg)));
-  assert.deepEqual(buildCodexExecArgs({ slug: SOL, review: true }), ['exec', '-m', SOL, '-s', 'read-only', '-']);
+  assert.deepEqual(buildCodexExecArgs({ slug: SOL, review: true }), ['exec', '-m', SOL, '-c', 'plugins={"makeloop@makeloop"={enabled=false}}', '-s', 'read-only', '-']);
 });
 
 // Fixtures may live below the checkout (custom TMPDIR); their parent repo is not part of this test.
@@ -1359,7 +1359,7 @@ test('wslCodexArgs: 非リポジトリだけ stdin マーカー直前に skip �
   const cwd = '/work/task';
   const codexArgs = buildCodexExecArgs({ slug: SOL });
   assert.deepEqual(wslCodexArgs({ distro: 'Ubuntu', cwd, codexArgs, inGitRepo: false }),
-    ['-d', 'Ubuntu', '--cd', cwd, '--', 'codex', 'exec', '-m', SOL, '-s', 'workspace-write', '--skip-git-repo-check', '-']);
+    ['-d', 'Ubuntu', '--cd', cwd, '--', 'codex', 'exec', '-m', SOL, '-c', 'plugins={"makeloop@makeloop"={enabled=false}}', '-s', 'workspace-write', '--skip-git-repo-check', '-']);
   assert.deepEqual(wslCodexArgs({ distro: 'Ubuntu', cwd, codexArgs, inGitRepo: true }),
     ['-d', 'Ubuntu', '--cd', cwd, '--', 'codex', ...codexArgs]);
 });

@@ -235,3 +235,7 @@ URLを単独行に置くかMarkdownリンクにし、直後に括弧・句読点
 ## recipient-domain-gate
 
 名刺画像・元データで宛先ドメインの綴りを確認し、宛先引数または送信元データを修正してから送信する。意図的な送信でも修正前は送らない。DNS が一時的に確認できない場合は警告のみで通過する。
+
+## pretooluse-line-broadcast-guard
+
+LINE の全員配信が本当に必要なら、kim が同じセッションで全員配信を明示したことを確認し、assistant の応答に `[LINE-BROADCAST-OK]` と書いてから再実行する。個人宛ては broadcast/narrowcast を使わず、userId を指定する `claude-mobile/scripts/line-send.mjs` から push 送信する。友だち数を宛先の身元確認に使わない。

@@ -698,16 +698,16 @@ test('buildQwenArgs は既定値と上書き値の両方で正しい引数を返
   const defaults = buildQwenArgs();
   assert.deepEqual(defaults, [
     '--auth-type', 'openai',
-    '-m', 'deepseek-chat',
+    '-m', 'deepseek-flash',
     '-y',
     '--max-wall-time', '1800',
     '--max-tool-calls', '80',
     '-p', 'Follow-the-instructions-provided-on-stdin.'
   ]);
-  const custom = buildQwenArgs({ model: 'deepseek-reasoner', timeoutSecs: 300, maxToolCalls: 40 });
+  const custom = buildQwenArgs({ model: 'deepseek-flash', timeoutSecs: 300, maxToolCalls: 40 });
   assert.deepEqual(custom, [
     '--auth-type', 'openai',
-    '-m', 'deepseek-reasoner',
+    '-m', 'deepseek-flash',
     '-y',
     '--max-wall-time', '300',
     '--max-tool-calls', '40',
@@ -721,7 +721,7 @@ test('buildQwenEnv は OPENAI_* を設定し GEMINI/GOOGLE キーを削除し ba
   const env = buildQwenEnv(base, 'deepseek-key');
   assert.equal(env.OPENAI_API_KEY, 'deepseek-key');
   assert.equal(env.OPENAI_BASE_URL, 'https://api.deepseek.com/v1');
-  assert.equal(env.OPENAI_MODEL, 'deepseek-chat');
+  assert.equal(env.OPENAI_MODEL, 'deepseek-flash');
   assert.equal(env.QWEN_CODE_SUPPRESS_YOLO_WARNING, '1');
   assert.ok(!('GEMINI_API_KEY' in env));
   assert.ok(!('GOOGLE_API_KEY' in env));
@@ -729,8 +729,8 @@ test('buildQwenEnv は OPENAI_* を設定し GEMINI/GOOGLE キーを削除し ba
 });
 
 test('buildQwenEnv は model と baseUrl を上書きできる', () => {
-  const env = buildQwenEnv({}, 'key', { model: 'deepseek-reasoner', baseUrl: 'https://example.com/v1' });
-  assert.equal(env.OPENAI_MODEL, 'deepseek-reasoner');
+  const env = buildQwenEnv({}, 'key', { model: 'deepseek-flash', baseUrl: 'https://example.com/v1' });
+  assert.equal(env.OPENAI_MODEL, 'deepseek-flash');
   assert.equal(env.OPENAI_BASE_URL, 'https://example.com/v1');
 });
 

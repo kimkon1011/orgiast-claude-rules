@@ -48,7 +48,7 @@ export function resolveSupervisorAuth({ home = process.env.ORGIAST_HOME || os.ho
     }
   } catch {}
   if (!key) return { lane: 'none', model: null, env };
-  return { lane: 'deepseek', model: 'deepseek-v4-flash', env: { ...env, ANTHROPIC_BASE_URL: 'https://api.deepseek.com/anthropic', ANTHROPIC_AUTH_TOKEN: key, CLAUDE_CODE_MAX_CONTEXT_TOKENS: '1000000' } };
+  return { lane: 'deepseek', model: 'deepseek-flash', env: { ...env, ANTHROPIC_BASE_URL: 'https://api.deepseek.com/anthropic', ANTHROPIC_AUTH_TOKEN: key, CLAUDE_CODE_MAX_CONTEXT_TOKENS: '1000000' } };
 }
 export function invokeClaude({ executable, args, prompt, cwd, timeoutMs, env = process.env, onProgress = () => {} }) {
   return new Promise((resolve) => {

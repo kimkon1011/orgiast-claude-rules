@@ -351,7 +351,7 @@ test('resolveSupervisorAuth: OAuth が死んでいる時だけ deepseek.env の�
   const dead = files({ '.credentials.json': creds(''), 'deepseek.env': 'DEEPSEEK_API_KEY="sk-test"\n' });
   const fallback = resolveSupervisorAuth({ home: 'H', env: { PATH: 'p' }, readFile: dead });
   assert.equal(fallback.lane, 'deepseek');
-  assert.equal(fallback.model, 'deepseek-v4-flash');
+  assert.equal(fallback.model, 'deepseek-flash');
   assert.equal(fallback.env.ANTHROPIC_AUTH_TOKEN, 'sk-test');
   assert.equal(fallback.env.ANTHROPIC_BASE_URL, 'https://api.deepseek.com/anthropic');
   assert.equal(fallback.env.PATH, 'p');

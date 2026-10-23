@@ -12,7 +12,7 @@ export const FALLBACK_CHAIN = Object.freeze([
   // Genspark Pro は前払いクレジットなので従量課金プロバイダより先に使う。
   { provider: 'genspark', model: 'gpt-5.6-luna' },
   { provider: 'openrouter', model: 'openai/gpt-oss-120b' },
-  { provider: 'deepseek', model: 'deepseek-chat' },
+  { provider: 'deepseek', model: 'deepseek-flash' },
   { provider: 'gemini', model: 'gemini-3.7-flash' },
   { provider: 'grok', model: 'grok-3' },
   { provider: 'kimi', model: 'kimi-k3' },
@@ -34,6 +34,13 @@ const GATEWAY_MODELS = Object.freeze({
   kimi: 'moonshotai/kimi-k3',
 });
 
+// 会議・通話・Podcastの文字起こしでは話者と発言の帰属を優先し、DeepSeekを使わない。
+// OpenRouter経由でも同じモデルなので、直接APIからの迂回も防ぐ。
+export function allowedForCategory(candidate, category) {
+  return String(category || '').trim().toLowerCase() !== 'transcript'
+    || (candidate?.provider !== 'deepseek' && !String(candidate?.model || '').startsWith('deepseek/'));
+}
+
 // eval 実測のルーティング表(tools/routing-table.json)から、指定カテゴリで最安の候補を返す。
 // 表が無い・カテゴリが無い・暫定計測(provisional)のどれでも null を返し、既定の連鎖を使わせる。
 export function preferredForCategory(category) {
@@ -42,7 +49,7 @@ export function preferredForCategory(category) {
   try {
     const table = JSON.parse(fs.readFileSync(ROUTING_TABLE, 'utf8'));
     const entry = table?.categories?.[name];
-    if (!entry || !entry.provider) return null;
+    if (!entry || !entry.provider || !allowedForCategory(entry, name)) return null;
     return { provider: entry.provider, model: entry.model, ...(entry.provisional ? { provisional: true } : {}) };
   } catch {
     return null;
@@ -132,7 +139,7 @@ async function fetchBeforeDeadline(fetchImpl, request, deadline) {
   } finally { clearTimeout(timer); }
 }
 
-export async function callWithFallback({ start, chain = FALLBACK_CHAIN, allowGatewayFallback = true, payloadFor, fetchImpl = fetch, onAttempt, onFailover, validateResponse, sleepImpl = defaultSleep, cooldownFile, ledgerFile, budgetFile, persistState = true, perProviderTimeoutMs, now = () => Date.now() }) {
+export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category = '', allowGatewayFallback = true, payloadFor, fetchImpl = fetch, onAttempt, onFailover, validateResponse, sleepImpl = defaultSleep, cooldownFile, ledgerFile, budgetFile, persistState = true, perProviderTimeoutMs, now = () => Date.now() }) {
   if (perProviderTimeoutMs != null && (!Number.isSafeInteger(perProviderTimeoutMs) || perProviderTimeoutMs <= 0 || perProviderTimeoutMs > 2147483647)) throw new Error('perProviderTimeoutMs must be a positive timer-safe integer');
   const home = process.env.ORGIAST_HOME || os.homedir();
   const timestamp = now();
@@ -141,6 +148,8 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, allowGat
   const hard = threshold('ORGIAST_LLM_DAILY_HARD_USD', 5);
   if (cost > hard) throw new Error(`本日の従量上限 $${hard.toFixed(2)} に達したため停止しました（概算 $${cost.toFixed(2)}）。ORGIAST_LLM_DAILY_HARD_USD で変更可`);
   if (cost > warn) console.error(`[cost] 本日の安いAI実行者 概算 $${cost.toFixed(2)} が警告値 $${warn.toFixed(2)} を超過`);
+
+  if (start && !allowedForCategory(start, category)) console.error('[routing] transcript は話者・発言の取り違えを避けるため DeepSeek を除外し、次の候補を使います');
 
   // routing-overrides.json の demote 有効期限が切れるまで、該当 provider を連鎖の末尾へ回す
   // (cost-improve-loop が provider_unhealthy を検出した時に書く。B4 2026-09-07)。
@@ -168,6 +177,7 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, allowGat
   const expanded = allowGatewayFallback && gatewayModel
     ? [start, { provider: 'openrouter', model: gatewayModel }, ...chain] : [start, ...chain];
   for (const candidate of expanded.filter(Boolean)) {
+    if (!allowedForCategory(candidate, category)) continue;
     if (seen.has(candidate.provider)) continue;
     seen.add(candidate.provider);
     candidates.push(candidate);

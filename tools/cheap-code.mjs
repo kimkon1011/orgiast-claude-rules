@@ -28,9 +28,9 @@ const PROVIDERS = Object.freeze({
     base: 'https://api.deepseek.com/anthropic',
     envFile: 'deepseek.env',
     keyName: 'DEEPSEEK_API_KEY',
-    // 別名 deepseek-chat ではなく実モデル名を既定にする(別名は将来どの世代に張り替わるか読めない)。
+    // DeepSeek直APIの現行モデル名を使い、既定の推論ありを維持する。
     // 高品質が要るときだけ --model deepseek-v4-pro。
-    defaultModel: 'deepseek-v4-flash',
+    defaultModel: 'deepseek-flash',
     // Claude Code のモデルカタログに無い名前だと窓を 200k と仮定して早期に auto-compact する。
     // DeepSeek v4 系は実測 1M なので明示する(公式 pricing: context 1M / max output 384K)。
     maxContextTokens: 1000000,

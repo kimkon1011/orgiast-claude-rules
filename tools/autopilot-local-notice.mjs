@@ -32,6 +32,18 @@ export function noticeRecipient(home, fallback) {
     || KIM_DISCORD_USER_ID);
   return { userId, notOwner: userId === KIM_DISCORD_USER_ID && Boolean(owner) && owner.email.trim().toLowerCase() !== 'kim@orgiast.jp' };
 }
+// 定時報告の1行目は長い目的文なので、先頭3行では持ち主が動くべき行がトーストに出ない。
+// 判断待ち・作業待ち・状態の行を優先し、無ければ先頭3行に戻す。
+export function toastSummary(text) {
+  const lines = String(text).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const clip = (line) => (line.length > 120 ? `${line.slice(0, 119)}…` : line);
+  const picked = [
+    ...lines.filter((line) => line.startsWith('判断待ち')),
+    ...lines.filter((line) => /^-?\s*待ち \d+ 日/.test(line) || line.startsWith('完了')),
+    ...lines.filter((line) => line.startsWith('状態:')),
+  ];
+  return (picked.length ? picked : lines).slice(0, 3).map(clip).join('\n').slice(0, 500);
+}
 export async function sendToast(text, { home, hostname = os.hostname(), platform = process.platform, execFileImpl = promisify(execFile) } = {}) {
   if (platform !== 'win32') return { status: 'skipped', reason: 'non-win32' };
   let temp;
@@ -40,7 +52,7 @@ export async function sendToast(text, { home, hostname = os.hostname(), platform
     fs.mkdirSync(dir, { recursive: true });
     temp = fs.mkdtempSync(path.join(dir, 'toast-'));
     const bodyPath = path.join(temp, 'body.json');
-    fs.writeFileSync(bodyPath, JSON.stringify({ title: `Claude 進捗（${hostname}）`, body: String(text).split(/\r?\n/).slice(0, 3).join('\n').slice(0, 500) }), 'utf8');
+    fs.writeFileSync(bodyPath, JSON.stringify({ title: `Claude 進捗（${hostname}）`, body: toastSummary(text) }), 'utf8');
     await execFileImpl('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', fileURLToPath(new URL('./autopilot-toast.ps1', import.meta.url)), '-BodyPath', bodyPath], { timeout: 20_000, windowsHide: true, encoding: 'utf8', maxBuffer: 64 * 1024 });
     return { status: 'submitted' };
   } catch (error) { return { status: 'failed', error: String(error.code || error.message) }; }

@@ -6,6 +6,7 @@ import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { spawnSync } from 'node:child_process';
 import { runAutopilot, sendNotice, autopilotPaths, parseControl, capReason, dateKey, acquireLock } from './autopilot-tick.mjs';
+import { toastSummary } from './autopilot-local-notice.mjs';
 
 const NOW = new Date('2026-09-21T01:00:00Z');
 const snow = (offset) => String((BigInt(NOW.getTime() - 1420070400000 + offset) << 22n));
@@ -868,4 +869,18 @@ test('legacy notifier without return value is unknown; explicitly disabled DM re
   assert.equal(result.delivered, 'unknown');
   assert.deepEqual(recipients, ['']);
   assert.equal(result.channels.file.status, 'written');
+});
+
+test('toast summary puts owner actions before the long objective line', () => {
+  const text = `📢 定時進捗報告: ${'長い目的文'.repeat(60)}\n状態: 止まっています\n前回報告以降の周回: 0周\n判断待ち: 空室案内を送ってよいか\n\nuser 作業待ち\n待ち 13 日: ラハイナ Instagram トークン登録 — 次の一手: 貼る`;
+  const summary = toastSummary(text).split('\n');
+  assert.equal(summary.length, 3);
+  assert.match(summary[0], /^判断待ち/);
+  assert.match(summary[1], /^待ち 13 日/);
+  assert.match(summary[2], /^状態:/);
+  assert.ok(summary.every((line) => line.length <= 120));
+});
+
+test('toast summary falls back to the first three lines', () => {
+  assert.equal(toastSummary('a\nb\nc\nd'), 'a\nb\nc');
 });

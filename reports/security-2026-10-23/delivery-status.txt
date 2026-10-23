@@ -1,0 +1,5 @@
+Reply target: mail-1792728697015-961f1c89
+Command: ORGIAST_HOME=/mnt/c/Users/user timeout 25 node tools/fleet-mail.mjs --reply mail-1792728697015-961f1c89 --body-file reports/security-2026-10-23/reply.txt
+Exit: 1
+Result: EROFS: read-only file system, open '/mnt/c/Users/user/.claude/fleet-inbox/mail-1792728697015-961f1c89.json.lock'
+Not sent. No successful update, PR, merge, deployment or MSI verification claimed.

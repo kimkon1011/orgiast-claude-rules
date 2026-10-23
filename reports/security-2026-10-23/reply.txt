@@ -1,0 +1,13 @@
+2026-10-23実測。更新・PR・再デプロイは未実施。ローカル版と本番版を区別。
+
+|対象|URL|アカウント|技術と現在の版|修正版|状態|対応日と証拠|
+|---|---|---|---|---|---|---|
+|このPC・WSL|—|root|Node 24.21.0|24.22.1|要更新|10/23 node -v。nodejs.org DNS失敗で取得・SHA256照合不可|
+|Windows PC|—|user|Node/Java/MySQL/GitLab・Windows Update不明|指定修正版/最新|未確認|10/23 winget.exe・PowerShellがWSL socket failed 1。MSI実行不可|
+|WSLランタイム|—|root|PHP/Java/Go/MySQL不明|PHP各系列修正版、Java CPU10月、Go 1.27.3/1.26.10、MySQL CPU10月|未確認|10/23 全4コマンドnot found。Windows側の不在を意味しない|
+|TETSUKOローカル4コピー|https://github.com/genbateamtoho-ctrl/tetsuko-unified|genbateamtoho-ctrl（origin）|Next 15.5.20、engines.node未指定、RSC独立依存なし|15.5.28|要更新|10/23 各package-lock.json。unified HEAD 4592dcb。最新remote・本番版未確認|
+|TETSUKO公開サイト|https://tetsuko.co.jp/|未確認|HTTP/PHP版不明|該当版による|未確認|10/23 curl -sSI: DNS失敗。ヘッダー取得不可|
+|nightly-repo|https://github.com/kimkon1011/orgiast-claude-rules|kimkon1011（origin）|package.jsonにNext/RSCなし|—|該当なし（当該依存）|10/23 HEAD 2a50524。GAS task-sheet/fleet-status-sheetのローカル設定あり、公開状態未確認|
+|全管理対象・顧客案件の網羅|—|未確認|Vercel/GitHub/Netlify/Cloudflare/レンタル/WP/GAS|指定修正版|未確認|10/23 gh/netlify/wranglerなし。Vercel認証未検出・fetch失敗、GitHub DNS失敗。ローカルmanifest 50件の探索ではLaravel/Go/Java定義なし。全PC調査完了ではない|
+
+Node修正版公式: https://nodejs.org/en/blog/release/v24.22.1

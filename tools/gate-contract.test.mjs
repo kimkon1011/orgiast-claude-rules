@@ -28,6 +28,11 @@ test('new rollout entries must declare the seven day window; legacy inventory is
       assert.equal(row.immediatePolicy, '2026-10-17 kim 厳命: 従量課金停止');
       continue; // Direct synchronous policy hook, outside staged rollout.
     }
+    if (name === 'bihin-kcol-gate') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-10-23 古川さん依頼: 備品管理表K列のデータ破損防止');
+      continue; // Explicit data-corruption prevention policy, immediate on all PCs.
+    }
     if (!row.legacy) {
       assert.ok(Number.isFinite(Date.parse(row.distributedAt)));
       if (row.rollout === 'deny') assert.ok(Date.parse(row.denyAfter) >= Date.parse(row.distributedAt) + 7*86400000);

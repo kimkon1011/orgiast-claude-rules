@@ -30,6 +30,10 @@ kim が読む Doc は `tools/gdoc-publish.mjs --authuser <開く人のメール>
 
 ---
 
+## 備品管理表の関数列（ONBOARDING §2.1）
+
+- 「備品在庫管理表」の K列は関数列。K には書かず在庫数は E列へ。K を跨ぐ範囲は分ける（bihin-kcol-gate、2026-10-23 古川さん依頼）。
+
 ## GAS 開発
 
 - `.gs` / `appsscript.json` を触ると **rules/gas.md** が自動適用される（clasp 統一・コマンドキュー絶対ルール・read-back verify）

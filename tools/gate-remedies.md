@@ -26,6 +26,10 @@ tools/course-corrections.json の該当ルールに従い訂正後の手順を�
 
 `node tools/feedback-kit/install.mjs --app <root> --upgrade` を実行してから再デプロイ（kit 未導入・版が古い・必須6機能の欠落のいずれかで deny）。方式BのリンクをHTMLへ追加、または方式Aのテンプレート/Next FeedbackWidgetを導入。台帳へアプリ名を登録。
 
+## bihin-kcol-gate
+
+備品管理表（全体）「備品在庫管理表」の K列は K4 の ArrayFormula の展開先。倉庫在庫数は E列へ書き、K を跨ぐ範囲は C:J と L:N に分けるか K 位置を null にする（空文字も禁止）。復旧時は K5 以降だけを clear し、K4 に `=ArrayFormula(IF(E4:E="","",E4:E-J4:J))` を戻せる。緊急時のみ BIHIN_KCOL_GATE_SKIP=1（stderr に記録）。データ破損防止のため全PCで初回から deny。
+
 ## handover-doc-gate
 
 リポジトリ直下に HANDOVER.md を置いてから再デプロイ（ひな形: rules-extracted/project-launch-playbook.md §1.12.1。リソース一覧・env の所在・再デプロイ手順・移管チェックリスト）。全プロジェクトは別アカウントへ移管できる前提で作る決まり。緊急時のみ HANDOVER_GATE_SKIP=1。

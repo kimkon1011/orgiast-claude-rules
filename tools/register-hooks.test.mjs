@@ -405,3 +405,20 @@ test('billing and implementation approval register synchronously, globally and i
     const hook = groups[0].hooks.find(h => h.command.includes(name)); assert.equal(hook.timeout, 5); assert.ok(!hook.async);
   }
 });
+
+test('bihin K-column gate registers once with Sheets writes and both shells', async t => {
+  const { HOOK_MATCHER } = await import('./bihin-kcol-gate.mjs');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-bihin-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  // Reproduce the path/name collision even in CI checkouts named differently.
+  const repo = path.join(home, 'bihin-kcol-gate');
+  fs.symlinkSync(path.resolve('.'), repo, 'junction');
+  const env = { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo };
+  for (let n = 0; n < 2; n++) execFileSync(process.execPath, [path.join(repo, 'tools/register-hooks.mjs'), '--hooks-only'], { env, encoding: 'utf8' });
+  const settings = JSON.parse(fs.readFileSync(path.join(home, '.claude/settings.json'), 'utf8'));
+  const groups = settings.hooks.PreToolUse.filter(g => g.hooks.some(h => h.command.includes('bihin-kcol-gate.mjs')));
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].matcher, HOOK_MATCHER);
+  assert.equal(groups[0].hooks[0].timeout, 15); // runner adds its five-second budget
+  assert.match(groups[0].hooks[0].command, /gate-hook-runner/);
+});

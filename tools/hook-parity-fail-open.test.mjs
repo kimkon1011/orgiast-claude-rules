@@ -25,6 +25,7 @@ const hooks = [
   'pipe-stage-permissions.mjs',
   'feedback-form-gate.mjs',
   'handover-doc-gate.mjs',
+  'bihin-kcol-gate.mjs',
 ];
 
 function run(name, input, home) {

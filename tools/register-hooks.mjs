@@ -36,6 +36,11 @@ try {
   ({ HOOK_MATCHER: SHARE_BEFORE_SEND_MATCHER } = await import('./share-before-send-gate.mjs'));
 } catch { /* 同期途中でも既存登録を維持 */ }
 
+let BIHIN_KCOL_MATCHER = 'mcp__.*Google_Sheets__(update_values|append_values|update_formulas|batch_clear_values|update_spreadsheet|batch_update)$|Bash|PowerShell';
+try {
+  ({ HOOK_MATCHER: BIHIN_KCOL_MATCHER } = await import('./bihin-kcol-gate.mjs'));
+} catch { /* 同期途中でも登録を継続する */ }
+
 const hooksOnly = process.argv.includes('--hooks-only');
 const expectedJson = process.argv.includes('--expected-json');
 const home = process.env.ORGIAST_HOME || os.homedir();
@@ -131,7 +136,12 @@ function add(groups, scriptName, group) {
   // 既存PCは .ps1 版が登録済みのことがある(Windows install)。拡張子を無視して重複判定しないと
   // .mjs と .ps1 の二重登録になり、同じ context が2回注入される。
   const base = scriptName.replace(/\.(mjs|ps1)$/, '');
-  if (commands(groups).some((cmd) => cmd.includes(base))) return false;
+  // A worktree/directory may itself be named after the gate. Compare script
+  // filenames, not arbitrary path substrings, or every prior hook looks equal.
+  const fileBase = path.posix.basename(base.replace(/\\/g, '/'));
+  const escaped = fileBase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const scriptPattern = new RegExp(`(?:^|[\\\\/\\s"'])${escaped}\\.(?:mjs|ps1)(?=["'\\s]|$)`);
+  if (commands(groups).some((cmd) => scriptPattern.test(cmd))) return false;
   groups.push(group); return true;
 }
 function migrate(groups, oldName, newName, newCommand) {
@@ -351,6 +361,8 @@ try {
   if (add(settings.hooks.PreToolUse, 'pipe-stage-permissions.mjs', { matcher: 'Bash', hooks: [{ type: 'command', command: command('pipe-stage-permissions.mjs'), timeout: 5 }] })) added += 1;
   // 社内アプリを不具合・要望フォーム未搭載のまま本番反映させない(§2.11・2026-10-08 カフェアプリ事故の再発防止)。
   if (add(settings.hooks.PreToolUse, 'feedback-form-gate.mjs', { matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command: command('feedback-form-gate.mjs'), timeout: 10 }] })) added += 1;
+  // 備品管理表K列は配列式の展開先。値を書いて全在庫表示を壊す事故を防ぐ。
+  if (add(settings.hooks.PreToolUse, 'bihin-kcol-gate.mjs', { matcher: BIHIN_KCOL_MATCHER, hooks: [{ type: 'command', command: command('bihin-kcol-gate.mjs'), timeout: 10 }] })) added += 1;
   // 全プロジェクトを「別アカウントへ移管できる前提」で作らせる。HANDOVER.md 無しの本番反映を止める(§1.12.1・2026-10-22 kim 厳命)。
   if (add(settings.hooks.PreToolUse, 'handover-doc-gate.mjs', { matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command: command('handover-doc-gate.mjs'), timeout: 10 }] })) added += 1;
   added += migrate(settings.hooks.Stop, 'verify-before-done-detector.ps1', 'verify-before-done-detector.mjs', command('verify-before-done-detector.mjs'));

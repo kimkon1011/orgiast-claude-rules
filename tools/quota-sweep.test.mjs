@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { commandRunner, queueRepeatedFailure, writeWorktreePointer, prepareTree, DEFAULT_GOAL, MAX_TICKS, selectGoal, tickPrompt, contractPrompt, canRunWindow, interactiveClaude, main, makeLedger, runSweep, parseOutput, acquireLock, readWorktreePointer } from './quota-sweep.mjs';
+import { filterWindowsForCurrentAuth, commandRunner, queueRepeatedFailure, writeWorktreePointer, prepareTree, DEFAULT_GOAL, MAX_TICKS, selectGoal, tickPrompt, contractPrompt, canRunWindow, interactiveClaude, main, makeLedger, runSweep, parseOutput, acquireLock, readWorktreePointer } from './quota-sweep.mjs';
 import { runBounded, killTree } from './lib/quota-sweep-process.mjs';
 import { interactiveCodex, wslPath } from './lib/quota-sweep-host.mjs';
 import { decideSweep, resetKey, sameReset } from './lib/quota-windows.mjs';
@@ -283,6 +283,21 @@ test('fetch and push get a longer timeout and exactly one retry', () => {
   }
   let calls = 0;
   assert.equal(commandRunner(() => ++calls === 1 ? { status: 1 } : { status: 0, stdout: 'ok' })('git', ['fetch']), 'ok');
+});
+test('filtering current windows keeps provider read reasons', () => {
+  const all = Object.assign([{ provider: 'claude', window: '5h', usedPercent: 0, resetsAt: null }, { provider: 'codex', observedAt: 2, window: 'primary' }], { reasons: { claude: 'HTTP 401', codex: null } });
+  const filtered = filterWindowsForCurrentAuth(all, { codexAuthChangedAt: 1 });
+  assert.deepEqual([...filtered], [{ provider: 'claude', window: '5h', usedPercent: 0, resetsAt: null }, { provider: 'codex', observedAt: 2, window: 'primary' }]);
+  assert.deepEqual(filtered.reasons, { claude: 'HTTP 401', codex: null });
+});
+test('window-info failure records why the window read was empty', async t => {
+  const ctx = context(t, () => assert.fail('child started'));
+  ctx.windows = async () => Object.assign([], { reasons: { claude: 'HTTP 401', codex: null } });
+  await runSweep(decision, ctx);
+  const row = JSON.parse(fs.readFileSync(path.join(ctx.home, '.claude/quota-sweep.jsonl')));
+  assert.equal(row.outcome, 'failed');
+  assert.equal(row.failureKey, 'window-info');
+  assert.match(row.reason, /HTTP 401/);
 });
 test('check failures and exceptions survive in ledger and DM', async t => {
   for (const kind of ['window-info', 'interactive-active', 'monitor-error', 'prepare']) {

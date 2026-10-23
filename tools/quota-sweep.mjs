@@ -114,6 +114,14 @@ export function parseArgs(argv) {
   return o;
 }
 
+// .filter() は新しい配列を返すので、windows() が配列に付けたプロバイダ別の読み取り理由
+// （all.reasons）が落ちる。利用窓が 0 件だったときに「なぜ 0 件か」を台帳へ残すため引き継ぐ。
+export function filterWindowsForCurrentAuth(all, state) {
+  const filtered = all.filter(w => w.provider !== 'codex' || !state.codexAuthChangedAt || w.observedAt > state.codexAuthChangedAt);
+  if (all?.reasons) filtered.reasons = all.reasons;
+  return filtered;
+}
+
 export function commandRunner(spawnImpl = spawnSync, log = () => {}) {
   return (exe, args, cwd) => {
     const network = exe === 'git' && ['fetch', 'push'].includes(args[0]);
@@ -224,7 +232,8 @@ export async function runSweep(decision, context) {
     }
     const all = await refresh(), own = all.filter(w => w.provider === provider);
     usedAfter = own.find(w => w.window === decision.window)?.usedPercent ?? null;
-    if ((provider === 'claude' && !['5h', '7d'].every(k => own.some(w => w.window === k))) || !own.length || own.some(w => !Number.isFinite(w.resetsAt) && w.usedPercent !== 0 && !w.exhausted)) return stopWith('failed', 'window-info', `利用窓情報が不足または不正: ${JSON.stringify(own)}`);
+    const why = all?.reasons?.[provider];
+    if ((provider === 'claude' && !['5h', '7d'].every(k => own.some(w => w.window === k))) || !own.length || own.some(w => !Number.isFinite(w.resetsAt) && w.usedPercent !== 0 && !w.exhausted)) return stopWith('failed', 'window-info', `利用窓情報が不足または不正: ${JSON.stringify(own)}${why ? ` (${why})` : ''}`);
     if (own.some(w => w.exhausted)) return stopWith('exhausted', 'quota-exhausted', '利用枠を使い切った');
     if (shouldStopTick({ windows: all, provider })) return stopWith('ceiling', 'usage-ceiling', '利用率が停止上限に達した');
     if (own.some(w => Number.isFinite(w.resetsAt) && w.resetsAt - 3 * 60_000 <= now()) || !own.some(w => sameReset(w.resetsAt, decision.resetsAt))) return stopWith('deadline', 'reset-window', 'リセット直前または利用窓が切り替わった');
@@ -394,7 +403,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
         log('Codex account changed; new authenticated session log required');
       }
     }
-    const currentWindows = async () => (await windows()).filter(w => w.provider !== 'codex' || !state.codexAuthChangedAt || w.observedAt > state.codexAuthChangedAt);
+    const currentWindows = async () => filterWindowsForCurrentAuth(await windows(), state);
     const observed = await currentWindows();
     const decisions = decideSweep({ windows: observed, now: now(), ...options }).filter(d => (options.provider === 'all' || options.provider === d.provider) && canRunWindow(state, d));
     if (!decisions.length) log('skip: no eligible reset window');

@@ -79,3 +79,23 @@ C3 の判定材料（原文セッション 0395ca72、行数は台帳実測）:
 検証: stop-gate-runner.test.mjs 58/58、handoff-audit-gate.test.mjs を含む 86/86 pass。
 未検証: 再評価が実 provider で block を返す統合テストは追加していない（テストは ORGIAST_HANDOFF_AUDIT=off 固定で、provider を呼ぶ経路を作れない）。
 残件: 本番での効果は次の夜間監査以降の台帳（skipped=regex-blocked の後に provider 付き行が続くか）で確認する。
+
+## §9 追記（2026-10-23 04:01Z・台帳更新待ちの再走査と回帰テスト）
+
+**トリガー未成立。** 宣言「夜間監査で台帳が更新されたら再走査して C3 を判定」は、次の夜間監査がまだ実行されていないため完了できない。
+- handoff-audit-nightly-ledger: 末尾 2026-10-22T18:01:30Z のまま（最終8行は全て `audit-unavailable` / provider=deepseek / `timeout-or-provider-unavailable`。うち session 0395ca72 は行22-23で block、行24-25は再試行が timeout）。
+- handoff-audit-ledger: 末尾 2026-10-23T02:28:24Z のまま（02:28Z 以降の新規行なし＝評価対象のセッションが無い）。
+- stop-gate-runner-ledger: 末尾 2026-10-23T02:28:24Z のまま。
+
+同じ語彙（`script.new|GAS|clasp|Apps Script|.gs` × `実行してください|貼り付け|▶|kim がすること|1回実行`）で窓 2026-10-22T18:01:30Z〜04:01Z を再走査:
+- 台帳4本の窓内ヒットは6件（live ledger）/6件（runner）。全て本ループ自身の ITERATING 報告（session 759da206 / de54c8dd / 89f7f92e / 6e4a9518 / 085c8530 / 8dcc79a8）で、本物の手渡し文言ではない。provider 付き verdict の手渡し文言行は **0件**。
+- 夜間台帳・deferral 台帳の窓内ヒットは 0件。
+
+**C3 の状態（不変）**: 検出器の欠陥は「あり」で原因（regex-blocked スキップ後の demote 素通り）は §8 で特定・修正済み。未取得なのは「修正後に本物の手渡し文言が provider 付きで判定される」ライブ実測のみ。
+
+**C4 追補（未検証ギャップを1つ閉じた）**: §8 の「provider を呼ぶ経路のテストが無い」を、監査 provider を注入した決定論的テストで解消した。
+- 追加: `tools/stop-gate-runner-audit-reeval.test.mjs`（2 tests）。`evaluateAudit` が `options.ask` を `requestAudit` へ透過することを利用し、実 provider を呼ばずに第2段の再評価を検証。
+- 検証内容: ①先行 gate（user-burden-gate）が block → regex-blocked で第1段スキップ → demote で 0 件 → 第2段が provider 1回だけ呼ばれ block なら `blockedBy=['handoff-audit-gate']` で素通りしない。②第2段が pass なら通す（block を握りつぶさない）。
+- 実行: `node --test tools/stop-gate-runner-audit-reeval.test.mjs tools/stop-gate-runner.test.mjs tools/handoff-audit-gate.test.mjs` → **88/88 pass**（既存86＋新規2）。
+
+**残件（変わらず）**: ライブ実測は次の夜間監査 2026-10-23T18:01Z 以降。台帳に手渡し文言の行が出たとき、`skipped=regex-blocked` の後に provider 付き verdict が付くかを確認する。夜間監査の再試行が `audit-unavailable` で落ちる事象（10-22 18:01Z の8行）も、判定材料が揃わない要因として残る。

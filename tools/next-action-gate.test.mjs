@@ -130,6 +130,17 @@ test('200文字未満の短い応答はpass', () => {
   assert.equal(judgeNextAction('承知しました。').decision, 'pass');
 });
 
+test('ツールで作業したターンは短文でもフッター必須（No response requested. で終わった 2026-10-23 実害）', () => {
+  const worked = [
+    JSON.stringify({ type: 'user', message: { role: 'user', content: '原因を調べて' } }),
+    JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash', input: { command: 'ls' } }] } }),
+  ].join('\n');
+  const result = judgeNextAction('No response requested.', worked);
+  assert.equal(result.decision, 'block');
+  assert.equal(result.code, 'NEXT-ACTION-FOOTER');
+  assert.equal(judgeNextAction('', worked).code, 'NEXT-ACTION-FOOTER');
+});
+
 test('末尾が疑問符の質問応答はpass', () => {
   assert.equal(judgeNextAction(`${body}この方針で進めてもよいですか？`).decision, 'pass');
 });

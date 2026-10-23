@@ -63,3 +63,9 @@ codex-do へ3回委譲（指示ファイルは `.loop/quota-sweep-claude-c4*-ins
 - `inAuditQuote` は開き括弧を本文先頭まで遡るため、audit 引用行より後の行にある本来の検出対象文を過剰除外し得る。現行テスト範囲では影響なし。将来の同型再発がこの経路で漏れたら bracket の閉じ判定を戻す。
 - 窓が狭いため、時間が経った後の再走査で再発なしを確認する。
 - upstream（origin/main）の .gitignore にも `.loop/` が無く、quota-sweep.mjs が worktree 作成時に .gitignore へ書き込まないため、ループ作業先では必ず distribution-coverage が落ちる。根本直し（worktree 作成時の自動追記）は別変更として残す。
+
+## §6 再走査と最終受け入れ（2026-10-23 quota-sweep 再実行）
+
+- 修正 e9e65f7 を本ブランチへ cherry-pick（c324e08。前回ブランチは未マージだった）。`node --test tools/deferral-wait-gate.test.mjs` → 52/52 pass。
+- C2 再走査（窓 2026-10-22T18:00Z 〜 実行時点）: stop-gate 1014（窓 7）/ audit 876（窓 87）/ nightly 167（窓 3）/ deferral 38（窓 1）。語彙ヒットは引用 3 行（966ac0df・ae73200c＝本検証自身の文面）と原文 2 行のみ。逐語再発 0・同型再発 0。`permanent-fix-deferral-scan.mjs --since` は P1〜P4/W すべて 0。
+- C6: `env -u CLAUDE_HEADLESS -u ORGIAST_HEADLESS_JOB -u ORGIAST_HOME node --test "tools/**/*.test.mjs"` → **exit 0**（6238 tests / 6230 pass / fail 0）。ORGIAST_HOME が設定された環境では ai-news-inject.test の5件が失敗する（コードが HOME より ORGIAST_HOME を優先するがテストは HOME のみ設定）。本修正と無関係の環境干渉で、今回は環境変数を外して実測した。

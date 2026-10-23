@@ -80,7 +80,7 @@ export async function evaluateGates(ctx, auditOptions = {}) {
     ['report-length-gate', () => reportLengthEnabled() ? judgeReportLengthWithLlm(ctx.assistantText, ctx.humanText) : { decision: 'pass' }],
     ['side-effect-left-gate', () => judgeSideEffectLeft(ctx.assistantText, blocks(currentTurnEntries(ctx.transcriptRaw), 'tool_use'))],
     ['deferral-wait-gate', () => judgeDeferralWait(ctx.assistantText)],
-    ['next-action-gate', () => judgeNextAction(ctx.assistantText, ctx.transcriptRaw)],
+    ['next-action-gate', () => judgeNextAction(ctx.assistantText, ctx.transcriptRaw, ctx.input)],
     ['user-burden-gate', () => judgeUserBurden(ctx.assistantText, ctx.humanText)],
     ['substitute-capability-gate', () => judgeSubstituteCapability(ctx.assistantText)],
     ['doc-link-drive-guard', () => { const hits = findLocalDocLinks(ctx.assistantText); if (hits.length) return { decision: 'block', reason: formatDocLink(hits), code: 'DOC-LINK' }; const bare = findBareLocalDocPaths(ctx.assistantText); return bare.length ? { decision: 'block', reason: formatBarePathMessage(bare), code: 'DOC-LINK' } : { decision: 'pass' }; }],

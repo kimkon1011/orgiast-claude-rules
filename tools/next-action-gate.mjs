@@ -120,7 +120,35 @@ export function reportsCloseSteps(text) {
   return numbered('1') && numbered('2') && numbered('3');
 }
 
-export function judgeNextAction(text, transcriptRaw = '') {
+// Cron evidence survives user turns; background evidence belongs only to this turn.
+// Use the conservative latest-create/latest-delete fallback when job ids vary.
+function hasSessionWakeup(raw) {
+  let cronActive = false;
+  let background = false;
+  for (const line of String(raw || '').split(/\r?\n/)) {
+    let entry;
+    try { entry = JSON.parse(line); } catch { continue; }
+    if (!entry || entry.isSidechain === true) continue;
+    const role = entry.message?.role || entry.type;
+    const content = entry.message?.content;
+    const parts = Array.isArray(content) ? content : [];
+    const text = typeof content === 'string' ? content : parts.filter(b => b?.type === 'text').map(b => b.text || '').join('\n');
+    if (role === 'user' && !entry.isMeta && !parts.some(b => b?.type === 'tool_result')
+      && !/^\s*<task-notification>/.test(text)) background = false;
+    if (role !== 'assistant') continue;
+    for (const tool of parts) {
+      if (tool?.type !== 'tool_use') continue;
+      if (tool.name === 'CronCreate') cronActive = true;
+      if (tool.name === 'CronDelete') cronActive = false;
+      // Completion detection is deliberately conservative: any current-turn call counts.
+      if ((tool.name === 'Agent' && tool.input?.run_in_background !== false)
+        || (/^(?:Bash|PowerShell)$/.test(tool.name || '') && tool.input?.run_in_background === true)) background = true;
+    }
+  }
+  return cronActive || background;
+}
+
+export function judgeNextAction(text, transcriptRaw = '', input = {}) {
   const source = String(text || '').trimEnd();
   if (!enabled()) return { decision: 'pass', reason: 'disabled' };
   const permanentFix = permanentFixViolation(source, transcriptRaw);
@@ -143,9 +171,6 @@ export function judgeNextAction(text, transcriptRaw = '') {
   if (footer.nextAction !== 'なし' && MULTIPLE_ACTIONS_PATTERN.test(footer.nextAction)) {
     return { decision: 'block', code: 'NEXT-ACTION-MULTIPLE', reason: 'kim への手渡しが2件以上あります。§1.1 最上位原則に従い、まず自分で潰して1件以下にしてください。' };
   }
-  if (!footer.autopilot) {
-    return { decision: 'block', code: 'AUTOPILOT-EMPTY', reason: '「この後の自動進行:」の値が空です。誰が・何を・いつ・どうやって kim に届けるかを書いてください。' };
-  }
   if (!footer.session) {
     return { decision: 'block', code: 'SESSION-EMPTY', reason: `「このセッション:」の値が空です。${SESSION_PHRASE_LIST}のいずれかを一字一句そのまま書いてください。` };
   }
@@ -155,7 +180,8 @@ export function judgeNextAction(text, transcriptRaw = '') {
   }
   const body = source.slice(0, source.lastIndexOf('次に kim がすること:'));
   const isComplete = COMPLETE_PATTERN.test(footer.autopilot);
-  if (!isComplete && footer.autopilot.length < 10) {
+  const hasAutopilot = !!footer.autopilot && !footer.autopilot.startsWith('なし');
+  if (hasAutopilot && footer.autopilot.length < 10) {
     return { decision: 'block', code: 'AUTOPILOT-TOO-SHORT', reason: '「この後の自動進行:」が10文字未満です。誰が・何を・いつ・どうやって kim に届けるかを具体化してください。' };
   }
   if (isComplete && WAITING_PATTERN.test(body)) {
@@ -170,6 +196,10 @@ export function judgeNextAction(text, transcriptRaw = '') {
   if (footer.nextAction !== 'なし' && (DEFERRAL_PATTERN.test(footer.nextAction) || (IMPLEMENTATION_PATTERN.test(footer.nextAction) && DELIVERY_PATTERN.test(body)))) {
     return { decision: 'block', code: 'NEXT-ACTION-DEFERRAL', reason: DEFERRAL_REASON };
   }
+  if (!permanentFix && hasAutopilot && process.env.CLAUDE_HEADLESS !== '1'
+    && !/subagents/i.test(input.transcript_path || '') && !hasSessionWakeup(transcriptRaw)) {
+    return { decision: 'block', code: 'AUTOPILOT-NO-SESSION-WAKEUP', reason: '「この後の自動進行」が残っていますが、このセッションを定期的に起こす仕組みがありません。CronCreate で毎時の進捗チェック（:00/:30 を避ける・未完了項目・変化時だけ報告・完了で CronDelete）を登録してから終えてください。自動進行が無いなら「この後の自動進行: なし」と書いてください。' };
+  }
   return permanentFix || { decision: 'pass', reason: 'valid-footer' };
 }
 
@@ -183,7 +213,7 @@ async function main() {
     const context = readTranscriptContext(input?.transcript_path);
     const assistantText = input?.assistant_text || context.assistantText;
     if (!assistantText) return;
-    const result = judgeNextAction(assistantText, context.raw);
+    const result = judgeNextAction(assistantText, context.raw, input);
     if (result.decision === 'block') process.stdout.write(`${JSON.stringify({ decision: 'block', reason: result.reason })}\n`);
   } catch { /* ゲート自身の失敗で応答を止めない。 */ }
 }

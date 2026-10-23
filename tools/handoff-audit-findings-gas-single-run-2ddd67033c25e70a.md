@@ -67,3 +67,15 @@ C3 の判定材料（原文セッション 0395ca72、行数は台帳実測）:
 - stop-gate-runner-ledger: 同様の行 12 件のうち blockedBy 空が 4 件。残りは他の gate（next-action / user-burden 等）が止めたが、手渡し自体を理由に止めた記録はない。
 - 判定: ライブの handoff-audit は原文を検出できず、夜間監査（18:01Z）で初めて block になった。検出器の欠陥は「あり」（ライブ gate が provider=null で pass を返している）。
 - 未修正: provider=null / latencyMs=0 の pass 経路の原因は未調査。次ループで fired=true かつ provider=null の行の発生条件を調べる。
+
+## §8 追記（2026-10-23・provider=null 経路の原因と修正）
+
+原因（台帳実測）: handoff-audit-ledger の fired=true かつ provider=null は 278 件で、全件 `skipped: regex-blocked`。
+原文セッション 0395ca72 の 12 件も全て同じ。`stop-gate-runner.mjs` は先行 gate が block/warn を1件でも出すと第2段監査を飛ばす（`regexBlocked: results.length > 0`）。
+その後 policy/demote/retry-cap で先行 gate が全て無効化されると、runner の blockedBy が空になり、手渡しは誰にも検査されずに通る
+（runner 台帳で原文 12 件中 4 件が blockedBy=[]）。§7 の「LLM 判定ではなく即 pass」は検出器欠陥ではなく、この経路の帰結。
+
+修正（C4）: `tools/stop-gate-runner.mjs` run() で、監査が regex-blocked で skip され、かつ demote 後の有効 block が 0 件なら、第2段を regexBlocked=false で再評価して block なら結果に加える。
+検証: stop-gate-runner.test.mjs 58/58、handoff-audit-gate.test.mjs を含む 86/86 pass。
+未検証: 再評価が実 provider で block を返す統合テストは追加していない（テストは ORGIAST_HANDOFF_AUDIT=off 固定で、provider を呼ぶ経路を作れない）。
+残件: 本番での効果は次の夜間監査以降の台帳（skipped=regex-blocked の後に provider 付き行が続くか）で確認する。

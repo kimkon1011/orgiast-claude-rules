@@ -185,7 +185,10 @@ export function preserveDirtyTree({ tree, run, log = () => {}, now = Date.now })
     branch = `quota-sweep/rescue-${stamp}`;
     run('git', ['switch', '-c', branch], tree);
   }
-  run('git', ['add', '-A', '--', '.', ':!.loop'], tree);
+  // 除外 pathspec を付けると git 2.55 (Windows) は「.loop は .gitignore で無視されている」と
+  // exit 1 で拒否し、救済 commit が作られない（2026-10-24T14:18Z/14:34Z の final dirty-tree
+  // preservation failed）。.loop/ は .gitignore 済みなので `-A .` だけで十分に除外される。
+  run('git', ['add', '-A', '--', '.'], tree);
   run('git', ['-c', 'user.name=quota-sweep', '-c', 'user.email=quota-sweep@localhost', 'commit', '--no-verify', '-m', `chore(quota-sweep): preserve uncommitted work ${stamp}`], tree);
   let pushed = true, warning = null;
   try { run('git', ['push', '-u', 'origin', branch], tree); }
@@ -217,7 +220,17 @@ export function prepareTree({ home, provider, run, previous, needRelativePointer
     }
   }
   if (previous?.branch && previous.outcome !== 'final') {
-    if (run('git', ['branch', '--show-current'], tree) !== previous.branch) throw new Error('Interrupted branch changed; preserve worktree for recovery');
+    if (run('git', ['branch', '--show-current'], tree) !== previous.branch) {
+      // codex と claude は同じ worktree を共有する。同一窓の再開前に他レーンが別ブランチへ切り替えていても、
+      // 前回ブランチがローカルに残っていれば dirty を救済してから戻る（2026-10-24T10:02Z claude が5秒で failed）。
+      if (!run('git', ['branch', '--list', previous.branch], tree)) throw new Error('Interrupted branch changed; preserve worktree for recovery');
+      if (run('git', ['status', '--porcelain', '--', '.', ':!.loop'], tree)) {
+        preserveDirtyTree({ tree, run, log });
+        if (run('git', ['status', '--porcelain', '--', '.', ':!.loop'], tree)) throw new Error('Interrupted branch changed; preserve worktree for recovery');
+      }
+      run('git', ['switch', previous.branch], tree);
+      log(`quota-sweep: resumed ${previous.branch} (tree was on another branch)`);
+    }
     return { tree, branch: previous.branch, base: previous.base, ...(pointerWarning ? { pointerWarning } : {}) };
   }
   let dirty = run('git', ['status', '--porcelain', '--', '.', ':!.loop'], tree);
@@ -296,7 +309,10 @@ export async function runSweep(decision, context) {
     if (own.some(w => w.exhausted)) return stopWith('exhausted', 'quota-exhausted', '利用枠を使い切った');
     if (shouldStopTick({ windows: all, provider })) return stopWith('ceiling', 'usage-ceiling', '利用率が停止上限に達した');
     if (own.some(w => Number.isFinite(w.resetsAt) && w.resetsAt - 3 * 60_000 <= now()) || !own.some(w => sameReset(w.resetsAt, decision.resetsAt))) return stopWith('deadline', 'reset-window', 'リセット直前または利用窓が切り替わった');
-    if (await active(provider)) return stopWith('failed', 'interactive-active', '対話セッションの使用を検出');
+    // 対話セッションの使用中は「レーンの故障」ではなく「今は使えないだけ」。failed にすると
+    // delegation-health が 3 件で lane_outage_unrepaired(high) を起票する（2026-10-24T09:38Z 実測）。
+    // 非終端の deferred にして次回 tick へ回し、3 連続なら queueRepeatedDeferral が TODO 化する。
+    if (await active(provider)) return stopWith('deferred', 'interactive-active', '対話セッションの使用中のため次回へ延期');
     return null;
   };
   const check = async () => {

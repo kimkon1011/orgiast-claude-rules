@@ -105,7 +105,25 @@ test('prepareTree は dirty を commit・push してから新ブランチへ進�
   assert.ok(verbs.indexOf('commit') < verbs.indexOf('push'));
   assert.ok(verbs.indexOf('push') < verbs.indexOf('checkout'));
   assert.equal(statuses, 2);
-  assert.deepEqual(calls.find(args => args[0] === 'add'), ['add', '-A', '--', '.', ':!.loop']);
+  // :!.loop を付けると git 2.55 は exit 1 で拒否し救済 commit が作られない（2026-10-24 実測）。
+  assert.deepEqual(calls.find(args => args[0] === 'add'), ['add', '-A', '--', '.']);
+});
+test('prepareTree は他レーンが別ブランチへ切り替えていても前回ブランチへ戻って再開する', t => {
+  const { home } = worktreeFixture(t); const calls = [];
+  const run = (_exe, args) => {
+    calls.push(args);
+    if (args[0] === 'branch' && args[1] === '--show-current') return 'quota-sweep/other-lane';
+    if (args[0] === 'branch' && args[1] === '--list') return '  quota-sweep/prior';
+    return '';
+  };
+  const prepared = prepareTree({ home, provider: 'claude', run, previous: { branch: 'quota-sweep/prior', base: 'b1', outcome: 'failed' } });
+  assert.equal(prepared.branch, 'quota-sweep/prior');
+  assert.deepEqual(calls.find(args => args[0] === 'switch'), ['switch', 'quota-sweep/prior']);
+});
+test('prepareTree は前回ブランチが消えていれば従来メッセージで停止する', t => {
+  const { home } = worktreeFixture(t);
+  const run = (_exe, args) => args[0] === 'branch' && args[1] === '--show-current' ? 'quota-sweep/other-lane' : '';
+  assert.throws(() => prepareTree({ home, provider: 'claude', run, previous: { branch: 'quota-sweep/prior', base: 'b1', outcome: 'failed' } }), /Interrupted branch changed/);
 });
 test('prepareTree は救済 commit 後も dirty なら従来メッセージで停止する', t => {
   const { home } = worktreeFixture(t);
@@ -426,7 +444,7 @@ test('window-info failure records why the window read was empty', async t => {
   assert.match(row.reason, /HTTP 401/);
 });
 test('check failures and exceptions survive in ledger and DM', async t => {
-  for (const kind of ['window-info', 'interactive-active', 'monitor-error', 'prepare']) {
+  for (const kind of ['window-info', 'monitor-error', 'prepare']) {
     const ctx = context(t, () => assert.fail('child started')); let dm;
     if (kind === 'window-info') ctx.windows = async () => [];
     if (kind === 'interactive-active') ctx.active = async () => true;
@@ -438,6 +456,19 @@ test('check failures and exceptions survive in ledger and DM', async t => {
     assert.equal(row.outcome, 'failed'); assert.ok(row.reason); assert.ok(row.failureKey);
     assert.ok(dm.includes(row.reason));
   }
+});
+// 2026-10-24T09:38Z 実測: 利用者が対話で Claude を使っている最中に sweep が走り
+// 「対話セッションの使用を検出」で failed になった。レーンの故障ではないので failed にせず、
+// 非終端の deferred にして delegation-health の lane_outage_unrepaired に数えさせない。
+test('対話セッション使用中は failed ではなく deferred にする', async t => {
+  const ctx = context(t, () => assert.fail('child started'));
+  ctx.active = async () => true;
+  await runSweep(decision, ctx);
+  const row = JSON.parse(fs.readFileSync(path.join(ctx.home, '.claude/quota-sweep.jsonl')));
+  assert.equal(row.outcome, 'deferred');
+  assert.equal(row.stopOutcome, 'deferred');
+  assert.equal(row.failureKey, null);
+  assert.match(row.reason, /対話セッションの使用中/);
 });
 test('PR with failed child is partial, retaining exit reason', async t => {
   const ctx = context(t, async () => ({ code: 1, stderr: 'model unavailable' })); let dm;

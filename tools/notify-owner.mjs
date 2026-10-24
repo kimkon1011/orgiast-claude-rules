@@ -39,5 +39,8 @@ export async function notifyOwner(owner, text, options = {}) {
   }
   const userId = options.userId ?? resolveOwnerDiscordId(owner, options);
   if (userId) return (options.notify ?? notifyKim)(text, { ...options, userId, webhookFallback: false });
-  return (options.notify ?? notifyKim)(`宛先: ${owner || '不明'}（DM 未解決）\n${text}`, { ...options, userId: KIM_DISCORD_USER_ID, webhookFallback: false });
+  // 持ち主がそもそも未設定の PC では、kim へは実際に届く。従来は「宛先: 不明（DM 未解決）」と
+  // 書いていたため、届いているのに未達に見える本文が通知・TODOへ流れていた（2026-10-25 実測）。
+  const fallbackNote = owner ? `宛先: ${owner}（DM 未解決）` : '宛先: 不明（このPCの持ち主が未設定・kim へ送付）';
+  return (options.notify ?? notifyKim)(`${fallbackNote}\n${text}`, { ...options, userId: KIM_DISCORD_USER_ID, webhookFallback: false });
 }

@@ -140,3 +140,41 @@ test('人の操作が必要な試行と証拠がある場合は具体的な操�
   assert.match(s.messages[0], /必要な操作: 管理画面に接続して同意してください/);
   assert.doesNotMatch(s.messages[0], /自動起票:/);
 });
+
+test('完了報告に failed/失敗 が引用されても修復TODOを起票しない（自己増殖ループの回帰）', async () => {
+  const dir = home(), s = sender(dir);
+  const done = [
+    '宛先: 不明（DM 未解決）',
+    '【DESKTOP-BDOAK99・user の Claude Code】プロジェクト: quota-sweep-repo ／ 作業ID: 175e831d',
+    '✅ 自動進行が完了しました',
+    '約束: PR #1060 がマージされると再試行が効きます。',
+    '結果: 429 を failed にせず deferred で延期。既存の失敗検知とは別に確認が必要です。',
+    '成果物: tools/quota-sweep.mjs',
+    'kim がすること: なし',
+  ].join('\n');
+  assert.equal((await notifyKim(done, s.options)).delivered, 'dm');
+  assert.equal(fs.existsSync(path.join(dir, '.claude/next-session.md')), false);
+  assert.doesNotMatch(s.messages[0], /自動起票:/);
+});
+
+test('定時ダイジェストは失敗語を含んでも起票しない', async () => {
+  const dir = home(), s = sender(dir);
+  const digest = '【DESKTOP-BDOAK99 の自動進行】 完了 1件・止まっている 1件・あなたの判断待ち 0件\n・止まっている: p — 前回の失敗から自動再開していません';
+  assert.equal((await notifyKim(digest, s.options)).delivered, 'dm');
+  assert.equal(fs.existsSync(path.join(dir, '.claude/next-session.md')), false);
+});
+
+test('起票済みマーカーを含む本文を再通知しても二重起票しない', async () => {
+  const dir = home(), s = sender(dir);
+  await notifyKim('収集失敗', { ...s.options, cause: '一次原因' });
+  const filed = fs.readFileSync(path.join(dir, '.claude/next-session.md'), 'utf8');
+  assert.equal(filed.match(/1\. \[ \]/g).length, 1);
+  await notifyKim(`収集失敗\n${filed}`, { ...s.options, cause: '別経路からの再通知' });
+  assert.equal(fs.readFileSync(path.join(dir, '.claude/next-session.md'), 'utf8').match(/1\. \[ \]/g).length, 1);
+});
+
+test('従来どおり失敗通知は起票する（完了報告ガードで塞がない）', async () => {
+  const dir = home(), s = sender(dir);
+  await notifyKim('quota-sweep claude が直近 4 件すべて失敗している', s.options);
+  assert.match(fs.readFileSync(path.join(dir, '.claude/next-session.md'), 'utf8'), /通知の原因調査・修復:/);
+});

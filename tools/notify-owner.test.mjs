@@ -28,3 +28,11 @@ test('owner空の旧行はローカル持ち主を解決して通知する', asy
   assert.equal(call.text, '自動進行');
   assert.equal(call.options.userId, KIM_DISCORD_USER_ID);
 });
+
+test('持ち主未設定でも kim へ届く場合は「DM 未解決」と書かない', async () => {
+  let call;
+  await notifyOwner('', '自動進行', { home: 'Z:/missing', label: 'DESKTOP-X', pcMap: {}, gitEmail: '', directory: {}, notify: async (text, options) => { call = { text, options }; return { delivered: 'dm' }; } });
+  assert.match(call.text, /^宛先: 不明（このPCの持ち主が未設定・kim へ送付）\n自動進行$/);
+  assert.doesNotMatch(call.text, /DM 未解決/);
+  assert.equal(call.options.userId, KIM_DISCORD_USER_ID);
+});

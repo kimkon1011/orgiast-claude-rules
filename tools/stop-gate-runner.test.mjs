@@ -8,6 +8,11 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const runner = fileURLToPath(new URL('./stop-gate-runner.mjs', import.meta.url));
+
+// invoke() は process.env を子プロセスへそのまま渡す。自動セッション（CLAUDE_HEADLESS=1）の中で
+// 走らせると規則が伝播し、AUTOPILOT-NO-SESSION-WAKEUP の検査がskipされて「起床手段が無いのに
+// 通る」ケースが落ちる（2026-10-25 実測）。このファイルは通常セッションの判定を検証するので外す。
+delete process.env.CLAUDE_HEADLESS;
 const request = 'GitHub の画面で Merge をクリックしてください。';
 
 function invoke(home, sessionId, text, extra = {}) {

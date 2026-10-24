@@ -180,6 +180,19 @@ test('unique / duplicate / covered を分類し、元の変更だけを unique �
   assert.equal(m['rescue/u1'].fingerprint, m['rescue/u2'].fingerprint);
 });
 
+test('injected git の numstat 3列目を result.names に返す', () => {
+  const git = (_dir, args) => {
+    if (args[0] === 'for-each-ref') return args[2] === 'refs/heads/rescue/' ? 'rescue/names\n' : '';
+    if (args[0] === 'diff' && args[1] === '--numstat') return '2\t1\ttools/a.mjs\n-\t-\tassets/image.bin\n';
+    if (args[0] === 'diff') return 'diff --git a/tools/a.mjs b/tools/a.mjs\n+++ b/tools/a.mjs\n@@ -1 +1,2 @@\n-old\n+new\n+line\n';
+    if (args[0] === 'cherry') return '+ abcdef1\n';
+    if (args[0] === 'show') throw new Error('not present in main');
+    throw new Error(`unexpected git args: ${args.join(' ')}`);
+  };
+  const [result] = scanRescueBranches({ repo: '/repo', main: 'main', compareRefs: [], ignoreCheck: false, git });
+  assert.deepEqual(result.names, ['tools/a.mjs', 'assets/image.bin']);
+});
+
 test('戻り値はブランチ名昇順', t => {
   const f = fixture(t);
   const names = scanRescueBranches({ repo: f.repo, main: 'main' }).map(b => b.branch);

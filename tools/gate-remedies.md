@@ -191,6 +191,7 @@ URLを単独行に置くかMarkdownリンクにし、直後に括弧・句読点
 ## user-burden-gate
 
 手作業は自動化し、不可避なら1クリックの起動手段と確認方法を用意。
+本番デプロイだけは例外なし: `npx vercel deploy --prod --yes` を Claude 側で実行し、`vercel inspect` で id/created とエイリアス先を確認する。ターミナルへのコマンド手渡しも1クリック起爆ファイルも不可（`PROD-DEPLOY-HANDOFF`）。user が自分で実行すると明示した場合だけ `[PROD-DEPLOY-HANDOFF-OK] <user の文言の引用>`。
 
 ## verify-before-done-detector
 

@@ -263,6 +263,7 @@ async function registerUnanswered(home, now, rows, dryRun, summary, ownerOf, io)
     rows.push(row);
     writeLedger(ledgerFile(home), rows);
     summary.discovered += 1;
+    if (isUnattendedRow(row, home)) continue;
     try {
       const message = `${originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: row.owner, home })}\nエラーで止まっていた依頼を見つけ、自動で再開します。\n依頼: ${requestText}`;
       const delivery = await (io.notifyOwner ?? notifyOwner)(row.owner, message, { home });
@@ -306,7 +307,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   };
   const rows = readLedger(file);
   await registerUnanswered(home, now, rows, dryRun, summary, ownerOf, io);
-  const candidates = latestOpenPromises(rows);
+  let candidates = latestOpenPromises(rows);
   const selected = new Set(candidates);
   const pendingChecks = rows.filter(row => row.check && row.status === 'done' && row.checkResult === 'done' && row.checkNotifiedResult !== 'done');
   // 送信に失敗した完了DMは doneNotifiedAt が無いまま done で閉じるため、ここで拾い直して再送する。
@@ -319,6 +320,18 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   // Update by row identity: equal timestamps share rowKey, so patch(key) would
   // also supersede the selected latest row. No await occurs between read/write.
   if (!dryRun && summary.superseded) writeLedger(file, normalized);
+  // Expiration is cheap maintenance: never let checks/resumes exhaust its time budget.
+  const expired = new Set(candidates.filter(row => isUnattendedRow(row, home) &&
+    Number.isFinite(Date.parse(row.ts)) && now - Date.parse(row.ts) >= EXPIRE_UNATTENDED_MS));
+  for (const row of expired) patch(rowKey(row), { status: 'expired' });
+  summary.expired += expired.size;
+  candidates = candidates.filter(row => !expired.has(row));
+  if (dryRun) summary.notifications = {
+    unattendedExcluded: rows.filter(row => isUnattendedRow(row, home)).length,
+    responseProbes: rows.filter(row => /^(?:OK|了解)\s*とだけ/.test(row.requestText || '')).map(row => ({
+      sessionId: row.sessionId, status: row.status, dmEligible: !isUnattendedRow(row, home),
+    })),
+  };
   const needsKim = row => !['', 'なし'].includes(String(row.nextKim ?? '').trim());
   candidates.sort((a, b) => Number(needsKim(a)) - Number(needsKim(b)) || Date.parse(a.ts) - Date.parse(b.ts));
   // Checks run first, before the potentially lengthy legacy resume lane.
@@ -350,7 +363,6 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     const recorded = Date.parse(row.ts);
     if (!Number.isFinite(recorded)) continue;
     const unattended = isUnattendedRow(row, home);
-    if (unattended && now - recorded >= EXPIRE_UNATTENDED_MS) { patch(rowKey(row), { status: 'expired' }); summary.expired += 1; continue; }
     if (row.status === 'waiting_user') {
       if (kimAction(row) !== 'なし' && !unattended && !dryRun && now - (Date.parse(row.ownerNotifiedAt || 0) || 0) >= 24 * 3600 * 1000) {
         try {

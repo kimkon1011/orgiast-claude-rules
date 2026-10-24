@@ -2,6 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { judgeNextAction, reportsCloseSteps, SESSION_PHRASES } from './next-action-gate.mjs';
 
+// 自動セッション（CLAUDE_HEADLESS=1）の中でテストを走らせても、このファイルは通常セッションの
+// 判定を検証する。ヘッドレスでは起床手段の検査をskipする仕様なので、環境変数を外しておかないと
+// AUTOPILOT-NO-SESSION-WAKEUP を期待する4件が undefined で落ちる（2026-10-25 実測）。
+// ヘッドレス側の挙動は末尾のテストが明示的に '1' を設定して検証し、終了時に元へ戻す。
+delete process.env.CLAUDE_HEADLESS;
+
 const body = '調査と実装と検証が完了しました。'.repeat(15);
 const twoLineFooter = '次に kim がすること: なし\nこの後の自動進行: なし（完了）';
 const footer = `${twoLineFooter}\nこのセッション: /session-close は不要なので、このセッションを閉じてよい`;
@@ -63,6 +69,18 @@ test('本文の着地語と nextAction の修正語が揃う実文はblock', () 
   const result = judgeNextAction(text);
   assert.equal(result.decision, 'block');
   assert.equal(result.code, 'NEXT-ACTION-DEFERRAL');
+});
+
+test('具体的なcommitのmainマージ判断をkimに渡す文はblock', () => {
+  const text = `${body}\n次に kim がすること: \`f94ee7a\` を main にマージするか判断してください\nこの後の自動進行: なし（完了）\nこのセッション: ${SESSION_PHRASES.delete}`;
+  const result = judgeNextAction(text);
+  assert.equal(result.decision, 'block');
+  assert.equal(result.code, 'NEXT-ACTION-DEFERRAL');
+});
+
+test('PR番号だけのマージ判断確認はblockしない', () => {
+  const text = `${body}\n恒久策: 一回限り: Vercel Preview の目視確認が必要\n次に kim がすること: PR #14 を確認（マージ判断のみ）。Vercel Previewでの動作確認も可能です\nこの後の自動進行: なし（完了）\nこのセッション: ${SESSION_PHRASES.delete}`;
+  assert.equal(judgeNextAction(text).decision, 'pass');
 });
 
 test('印刷所への電話は正当な人専用タスクとしてpass', () => {

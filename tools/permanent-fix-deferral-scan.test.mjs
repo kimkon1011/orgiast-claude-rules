@@ -111,6 +111,21 @@ test('太字ラベル直後の恒久修正の先送りは引き続きP3で検出
   const excerpt = '**次に kim がすること:** 自動修復の恒久化を次回に回す';
   assert.equal(detect(excerpt)[0].pattern, 'P3');
 });
+test('具体的なcommitまたはbranchのmain着地承認をkimに渡す文はP3で検出する', () => {
+  for (const excerpt of [
+    '次に kim がすること: `f94ee7a` を main にマージするか判断して承認する（承認が出るまでこのループは進まない）。',
+    '次に kim がすること: `f94ee7a`（ブランチ `quota-sweep/20261023-0202-claude-mvkbrycs`）を main に着地させるか承認してください。それまでは据え置きです。',
+    '次に kim がすること: f94ee7a を main にマージするかどうかを判断してください。'
+  ]) assert.equal(detect(excerpt)[0].pattern, 'P3', excerpt);
+});
+test('着地承認ではない手渡しとなし表記はP3で検出しない', () => {
+  for (const excerpt of [
+    '次に kim がすること: PR #14 を確認（マージ判断のみ）。Vercel Previewでの動作確認も可能です',
+    '次に kim がすること: なし（f94ee7a の main マージ承認は、次のループ周回で別途確認します）',
+    '次に kim がすること: デスクトップの『GitHub認証（1回だけ）（ダブルクリック）.cmd』を1回実行してください',
+    '次に kim がすること: f94ee7a の内容を確認して記録する'
+  ]) assert.ok(!detect(excerpt).some(found => found.pattern === 'P3'), excerpt);
+});
 test('先送りを名詞句で説明した自己言及はP1と誤検出しない', () => {
   for (const quote of [
     '**[本セッションの目的]** handoff-audit が検出した「恒久修正の先送り文」が再発していないかを実物で検証し、結果を記録する。',

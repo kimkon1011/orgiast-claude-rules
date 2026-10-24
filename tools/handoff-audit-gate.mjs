@@ -136,11 +136,34 @@ export function parseAudit(raw) {
     || value.learned.some(v => !v || typeof v.pattern !== 'string' || !v.pattern.trim() || typeof v.route !== 'string' || !v.route.trim() || !['high', 'medium'].includes(v.confidence))) throw new Error('invalid-json');
   return value;
 }
-export function askCli({ provider, prompt, signal, home }) {
+// Windows の CreateProcess はコマンドライン約32,000字で ENAMETOOLONG になる（2026-10-23 実測: 32,000字OK / 33,000字で spawn 失敗）。
+// 監査プロンプトは knowledge/routes/capabilities 込みで 30,000〜35,000字に達するため、argv ではなく一時ファイルで渡す
+// （llm-ask.mjs は --prompt-file を読む）。argv 渡しのままだと provider 3つすべてが数msで即失敗し、
+// 台帳には timeout-or-provider-unavailable と誤記録される（2026-10-23 実測）。
+export function writePromptFile(prompt, { dir = os.tmpdir() } = {}) {
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `orgiast-audit-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`);
+  fs.writeFileSync(file, String(prompt ?? ''), 'utf8');
+  return file;
+}
+export function askCli({ provider, prompt, signal, home }, { exec = execFile, tmpDir = os.tmpdir() } = {}) {
   return new Promise((resolve, reject) => {
-    execFile(process.execPath, [fileURLToPath(new URL('./llm-ask.mjs', import.meta.url)), '--provider', provider, '--no-fallback', '--max', '4000', prompt],
+    let promptFile;
+    try {
+      promptFile = writePromptFile(prompt, { dir: tmpDir });
+    } catch (error) {
+      reject(new Error(`prompt-file-write-failed:${error.message}`));
+      return;
+    }
+    const cleanup = () => { try { fs.rmSync(promptFile, { force: true }); } catch { /* 一時ファイルの消し残しは無視 */ } };
+    const args = [fileURLToPath(new URL('./llm-ask.mjs', import.meta.url)), '--provider', provider, '--no-fallback', '--max', '4000', '--prompt-file', promptFile];
+    exec(process.execPath, args,
       { windowsHide: true, encoding: 'utf8', signal, maxBuffer: 1024 * 1024, env: { ...process.env, ORGIAST_HOME: home } },
-      (error, stdout, stderr) => error ? reject(new Error(signal.aborted ? 'timeout' : `provider-unavailable:${provider}`)) : resolve({ text: stdout, usage: stderr.match(/in=(\d+)/)?.[1] }));
+      (error, stdout, stderr) => {
+        cleanup();
+        if (error) reject(new Error(signal?.aborted ? 'timeout' : `provider-unavailable:${provider}`));
+        else resolve({ text: stdout, usage: stderr.match(/in=(\d+)/)?.[1] });
+      });
   });
 }
 export async function requestAudit(prompt, { ask = askCli, timeoutMs = 20000, providers = PROVIDERS, home = auditHome() } = {}) {

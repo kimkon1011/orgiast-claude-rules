@@ -1140,3 +1140,43 @@ test('watch: 他者待ちの通知は成功後24時間抑制し、失敗時は�
   await watch({ home, now: now + 24 * H, io });
   assert.equal(calls.length, 2);
 });
+
+test('疎通確認だけを無人扱いし、通常の依頼とパス境界は保持する', () => {
+  for (const cwd of ['C:\\WINDOWS\\system32', 'c:/Windows/System32/probe', '/mnt/c/WINDOWS/system32']) {
+    assert.equal(isUnattendedRow({ cwd }, '/home/user'), true);
+  }
+  assert.equal(isUnattendedRow({ cwd: 'C:/Windows/System32-other' }, '/home/user'), false);
+  for (const requestText of ['OK とだけ返してください', '了解とだけ返して', '「OK」とだけ返信してください。']) {
+    assert.equal(isUnattendedRow({ requestText }, '/home/user'), true);
+    assert.equal(isUnattendedRow({ promise: `API エラー（authentication_failed）で返答できなかった依頼: ${requestText}` }, '/home/user'), true);
+  }
+  assert.equal(isUnattendedRow({ requestText: 'OK とだけ返してください。その後デプロイして' }, '/home/user'), false);
+});
+
+test('watch: 疎通確認の登録・完了再送でDMせず、digestは件数に集約する', async () => {
+  const home = tmp(), now = Date.now();
+  const found = { sessionId: 'probe', cwd: home, transcriptPath: '/probe', requestText: 'OK とだけ返してください', errorAt: new Date(now).toISOString() };
+  let notifications = 0;
+  const io = noEvidenceIo({ transcriptFiles: ['/probe'], findUnansweredRequest: () => found,
+    notifyOwner: async () => { notifications++; return { delivered: 'dm' }; } });
+  await watch({ home, now, io });
+  const rows = readLedger(ledgerFile(home));
+  seed(home, rows.map(row => ({ ...row, status: 'done', doneNotifyPending: true })));
+  await watch({ home, now, io });
+  assert.equal(notifications, 0);
+  assert.equal(readLedger(ledgerFile(home)).length, 1);
+  const normal = { ...rows[0], sessionId: 'normal', promise: '通常の作業', requestText: '', status: 'stalled' };
+  const result = await digest({ home, now, slot: '朝', dryRun: true, io: { readLedger: () => [normal, ...rows], readState: () => ({}) } });
+  assert.doesNotMatch(result.text, /OK とだけ/);
+  assert.match(result.text, /無人処理: 1件/);
+});
+
+test('watch: 時間切れでも無人openとcheck行を48時間で期限切れにする', async () => {
+  const home = tmp(), now = Date.now();
+  seed(home, [false, true].map((check, i) => ({ sessionId: `old-${i}`, status: 'open', ts: new Date(now - EXPIRE_UNATTENDED_MS).toISOString(),
+    cwd: path.join(home, '.claude', 'nightly-repo'), source: 'api-error-unanswered', ...(check ? { check: { command: 'unused' } } : {}) })));
+  let clocks = 0;
+  const result = await watch({ home, now, io: noEvidenceIo({ clock: () => clocks++ === 0 ? now : now + 46 * H / 60 }) });
+  assert.equal(result.expired, 2);
+  assert.deepEqual(readLedger(ledgerFile(home)).map(row => row.status), ['expired', 'expired']);
+});

@@ -40,14 +40,32 @@ async function postWebhook(url, content, fetchImpl, signal) {
 
 const FAILURE = /failed|failure|失敗|停止|異常|エラー|timeout|timed out|タイムアウト|未計測|取得不可/i;
 const HANDOFF = /接続し[て、]|接続して確認|どれを選|選んでほしい|原因調査.*(?:選択|選ん)|(?:ログ|結果|接続|認証).*確認(?:して|するよう|してください)/;
+// 完了報告・定時ダイジェストは「結果の知らせ」であって失敗通知ではない。本文には経過説明として
+// failed / 失敗 が引用されることが多く、それを失敗とみなして next-session.md へ修復TODOを起票すると、
+// そのTODO（目的が「通知の原因調査と修復」になる）が次の自動セッションを生み、その完了報告が
+// また起票される自己増殖ループになる（2026-10-24 実測: 06:15 と 12:05 の完了DMが
+// next-session.md の第5・第6ブロックとして起票され、同じ目的のセッションが繰り返された）。
+const STATUS_REPORT = /✅\s*自動進行が完了しました|^【[^\n]*の自動進行】\s*完了/m;
+// 既に起票した本文（マーカー付き）を別経路が再通知しても二重起票しない。
+const ALREADY_FILED = /<!--\s*notify-kim:[0-9a-f]{20}\s*-->/;
+const RESUME_REPORT = /^夜間セッション再開 \([^\n)]*\)$/m;
+const RESUME_ROW = /\([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\): (?:progressed|no-progress|error)$/mi;
+const RESUME_ERROR = /\([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\): error$/mi;
+// 目的文に引用された過去の失敗ではなく、今回の結果と中止の有無で判定する。
+// 結果行が1行も無い本文は再開レポートとみなさない（見出しだけの失敗通知を塞がない）。
+function isSuccessfulResumeReport(text) {
+  return RESUME_REPORT.test(text) && RESUME_ROW.test(text) && !RESUME_ERROR.test(text)
+    && !text.includes('連続2件エラーのため今晩は中止');
+}
 const normalizeFailure = text => String(text).replace(/\d{4}-\d{2}-\d{2}(?:[T ][\d:.]+Z?)?/g, '<日時>').replace(/\d+\s*(?:回|件|日|時間|分|秒)/g, '<回数>').replace(/\s+/g, ' ').trim();
 
 // Use the existing next-session TODO consumer; no separate repair queue.
 export async function notifyKim(text, options = {}) {
   const raw = redactSecrets(String(text ?? ''));
+  if (STATUS_REPORT.test(raw) || ALREADY_FILED.test(raw) || isSuccessfulResumeReport(raw)) return deliverKim(raw, options);
   const humanEvidence = /^(?:試行|試した内容|試した修復)[:：][ \t]*\S.+$/m.test(raw)
     && /^証拠[:：][ \t]*\S.+$/m.test(raw) && /^必要な操作[:：][ \t]*\S.+$/m.test(raw);
-  const failure = FAILURE.test(raw), handoff = !humanEvidence && HANDOFF.test(raw);
+  const failure = FAILURE.test(raw) || (RESUME_REPORT.test(raw) && RESUME_ERROR.test(raw)), handoff = !humanEvidence && HANDOFF.test(raw);
   if (!failure && !handoff) return deliverKim(raw, options);
   const home = options.home || process.env.ORGIAST_HOME || os.homedir();
   const now = options.now ?? Date.now();

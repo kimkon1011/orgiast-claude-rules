@@ -114,6 +114,24 @@ export function parseArgs(argv) {
   return o;
 }
 
+// .filter() は新しい配列を返すので、windows() が配列に付けたプロバイダ別の読み取り理由
+// （all.reasons）が落ちる。利用窓が 0 件だったときに「なぜ 0 件か」を台帳へ残すため引き継ぐ。
+export function filterWindowsForCurrentAuth(all, state) {
+  const filtered = all.filter(w => w.provider !== 'codex' || !state.codexAuthChangedAt || w.observedAt > state.codexAuthChangedAt);
+  if (all?.reasons) filtered.reasons = all.reasons;
+  return filtered;
+}
+
+// oauth/usage の一時障害だけを再試行対象にする。429(レート制限)・408・5xx・ネットワーク断は
+// 数十秒で回復しうるが、401/403（トークン失効）や形式不一致は読み直しても直らない。
+// 2026-10-23T07:10Z/07:25Z の window-info 失敗は、直前に読めていた窓が1回の読み取り失敗で
+// ticks=0 failed になり、delegation-health にレーン全滅と誤判定された。
+export function isTransientWindowReadError(reason) {
+  return /^(?:network:|HTTP (?:408|429|5\d{2})\b)/i.test(String(reason ?? '').trim());
+}
+
+const defaultSleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
 export function commandRunner(spawnImpl = spawnSync, log = () => {}) {
   return (exe, args, cwd) => {
     const network = exe === 'git' && ['fetch', 'push'].includes(args[0]);
@@ -160,6 +178,28 @@ export function writeWorktreePointer(file, value, { writeFile = fs.writeFileSync
   }
 }
 
+export function preserveDirtyTree({ tree, run, log = () => {}, now = Date.now }) {
+  const stamp = new Date(now()).toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+  let branch = run('git', ['branch', '--show-current'], tree);
+  if (!branch) {
+    branch = `quota-sweep/rescue-${stamp}`;
+    run('git', ['switch', '-c', branch], tree);
+  }
+  // 除外 pathspec を付けると git 2.55 (Windows) は「.loop は .gitignore で無視されている」と
+  // exit 1 で拒否し、救済 commit が作られない（2026-10-24T14:18Z/14:34Z の final dirty-tree
+  // preservation failed）。.loop/ は .gitignore 済みなので `-A .` だけで十分に除外される。
+  run('git', ['add', '-A', '--', '.'], tree);
+  run('git', ['-c', 'user.name=quota-sweep', '-c', 'user.email=quota-sweep@localhost', 'commit', '--no-verify', '-m', `chore(quota-sweep): preserve uncommitted work ${stamp}`], tree);
+  let pushed = true, warning = null;
+  try { run('git', ['push', '-u', 'origin', branch], tree); }
+  catch (error) {
+    pushed = false;
+    warning = `preserved locally but push failed: ${error.message}`;
+    log(`quota-sweep: ${warning}`);
+  }
+  return { branch, pushed, warning };
+}
+
 export function prepareTree({ home, provider, run, previous, needRelativePointer = false, io = {}, log = () => {} }) {
   const shared = path.join(home, '.claude', 'nightly-repo'), tree = path.join(home, '.claude', 'quota-sweep-repo');
   run('git', ['fetch', 'origin', 'main', '--quiet'], shared);
@@ -180,11 +220,26 @@ export function prepareTree({ home, provider, run, previous, needRelativePointer
     }
   }
   if (previous?.branch && previous.outcome !== 'final') {
-    if (run('git', ['branch', '--show-current'], tree) !== previous.branch) throw new Error('Interrupted branch changed; preserve worktree for recovery');
+    if (run('git', ['branch', '--show-current'], tree) !== previous.branch) {
+      // codex と claude は同じ worktree を共有する。同一窓の再開前に他レーンが別ブランチへ切り替えていても、
+      // 前回ブランチがローカルに残っていれば dirty を救済してから戻る（2026-10-24T10:02Z claude が5秒で failed）。
+      if (!run('git', ['branch', '--list', previous.branch], tree)) throw new Error('Interrupted branch changed; preserve worktree for recovery');
+      if (run('git', ['status', '--porcelain', '--', '.', ':!.loop'], tree)) {
+        preserveDirtyTree({ tree, run, log });
+        if (run('git', ['status', '--porcelain', '--', '.', ':!.loop'], tree)) throw new Error('Interrupted branch changed; preserve worktree for recovery');
+      }
+      run('git', ['switch', previous.branch], tree);
+      log(`quota-sweep: resumed ${previous.branch} (tree was on another branch)`);
+    }
     return { tree, branch: previous.branch, base: previous.base, ...(pointerWarning ? { pointerWarning } : {}) };
   }
-  const dirty = run('git', ['status', '--porcelain', '--', '.', ':!.loop'], tree);
-  if (dirty) throw new Error('Uncommitted prior work preserved in quota-sweep-repo; reconcile before starting a new branch');
+  let dirty = run('git', ['status', '--porcelain', '--', '.', ':!.loop'], tree);
+  if (dirty) {
+    const preserved = preserveDirtyTree({ tree, run, log });
+    dirty = run('git', ['status', '--porcelain', '--', '.', ':!.loop'], tree);
+    if (dirty) throw new Error('Uncommitted prior work preserved in quota-sweep-repo; reconcile before starting a new branch');
+    log(`quota-sweep: preserved uncommitted work on ${preserved.branch}${preserved.pushed ? '' : ' (local only)'}`);
+  }
   run('git', ['checkout', '--detach', 'origin/main'], tree);
   const branch = `quota-sweep/${new Date().toISOString().replace(/[-:]/g, '').slice(0, 13).replace('T', '-')}-${provider}-${Date.now().toString(36)}`;
   run('git', ['switch', '-c', branch], tree);
@@ -201,6 +256,22 @@ export function queueRepeatedFailure(home, state, row) {
   const before = read(file);
   const after = enqueueTodos(before, [{ pattern: `quota-sweep ${row.provider}: ${row.failureKey} の連続失敗`,
     route: `tools/quota-sweep.mjs の ${row.failureKey} を quota-sweep.jsonl とログで調査し、回帰テスト付きで修正してPRを作成する` }]);
+  if (after !== before) writeHandoff(file, after);
+}
+
+// deferred は失敗ではない（failureStreaks を汚さず detector にレーン全滅と誤判定させない）が、
+// これが続くと窓が読めないままレーンが一度も走らない状態が静かに続く。delegation-health は
+// quota-sweep の status が failed 以外を失敗として扱わないため、jsonl を人が見るまで気付けない。
+// 失敗検知とは別のカウンタで数え、閾値で次回セッションのTODOに渡す。
+export function queueRepeatedDeferral(home, state, row) {
+  state.deferredStreaks ??= {};
+  const count = row.stopOutcome === 'deferred' ? (state.deferredStreaks[row.provider]?.count || 0) + 1 : 0;
+  state.deferredStreaks[row.provider] = { count };
+  if (count < 3) return;
+  const file = path.join(home, '.claude', 'next-session.md');
+  const before = read(file);
+  const after = enqueueTodos(before, [{ pattern: `quota-sweep ${row.provider}: deferred が ${count} 回連続`,
+    route: `quota-sweep.jsonl の deferred 行（${row.reason || '理由なし'}）を確認し、利用窓が読めない原因を特定して回帰テスト付きで修正しPRを作成する` }]);
   if (after !== before) writeHandoff(file, after);
 }
 
@@ -222,13 +293,26 @@ export async function runSweep(decision, context) {
     if (tree && run('git', ['branch', '--show-current'], tree) !== branch) {
       record.branchChanged = true; log('Worktree branch changed externally; stop and preserve it'); return stopWith('failed', 'branch-changed', '作業ブランチが外部で変更された');
     }
-    const all = await refresh(), own = all.filter(w => w.provider === provider);
+    let all = await refresh(), own = all.filter(w => w.provider === provider), why = all?.reasons?.[provider];
+    // 一時的な読み取り失敗は間隔を空けて読み直す。2秒1回だけだと 429 が続く間に ticks 消化後の
+    // 確認で failed になり、2026-10-24T03:54Z に再発した。それでも読めなければ failed ではなく
+    // deferred（非終端・次回再試行）で止め、detector に「レーン全滅」と誤判定させない。
+    const delays = context.windowReadRetryDelaysMs ?? [2000, 15_000, 30_000];
+    for (let i = 0; !own.length && isTransientWindowReadError(why) && i < delays.length; i++) {
+      log(`${provider}: window read failed (${why}); retry ${i + 1}/${delays.length}`);
+      await (context.sleep ?? defaultSleep)(delays[i]);
+      all = await refresh(); own = all.filter(w => w.provider === provider); why = all?.reasons?.[provider];
+    }
+    if (!own.length && isTransientWindowReadError(why)) return stopWith('deferred', 'window-unreadable', `利用窓を読めない一時障害のため次回へ延期: ${why}`);
     usedAfter = own.find(w => w.window === decision.window)?.usedPercent ?? null;
-    if ((provider === 'claude' && !['5h', '7d'].every(k => own.some(w => w.window === k))) || !own.length || own.some(w => !Number.isFinite(w.resetsAt) && w.usedPercent !== 0 && !w.exhausted)) return stopWith('failed', 'window-info', `利用窓情報が不足または不正: ${JSON.stringify(own)}`);
+    if ((provider === 'claude' && !['5h', '7d'].every(k => own.some(w => w.window === k))) || !own.length || own.some(w => !Number.isFinite(w.resetsAt) && w.usedPercent !== 0 && !w.exhausted)) return stopWith('failed', 'window-info', `利用窓情報が不足または不正: ${JSON.stringify(own)}${why ? ` (${why})` : ''}`);
     if (own.some(w => w.exhausted)) return stopWith('exhausted', 'quota-exhausted', '利用枠を使い切った');
     if (shouldStopTick({ windows: all, provider })) return stopWith('ceiling', 'usage-ceiling', '利用率が停止上限に達した');
     if (own.some(w => Number.isFinite(w.resetsAt) && w.resetsAt - 3 * 60_000 <= now()) || !own.some(w => sameReset(w.resetsAt, decision.resetsAt))) return stopWith('deadline', 'reset-window', 'リセット直前または利用窓が切り替わった');
-    if (await active(provider)) return stopWith('failed', 'interactive-active', '対話セッションの使用を検出');
+    // 対話セッションの使用中は「レーンの故障」ではなく「今は使えないだけ」。failed にすると
+    // delegation-health が 3 件で lane_outage_unrepaired(high) を起票する（2026-10-24T09:38Z 実測）。
+    // 非終端の deferred にして次回 tick へ回し、3 連続なら queueRepeatedDeferral が TODO 化する。
+    if (await active(provider)) return stopWith('deferred', 'interactive-active', '対話セッションの使用中のため次回へ延期');
     return null;
   };
   const check = async () => {
@@ -324,6 +408,16 @@ export async function runSweep(decision, context) {
   finally {
     if (tree && branch) {
       try {
+        // Another session may have switched branches; only preserve this run's work.
+        const currentBranch = run('git', ['branch', '--show-current'], tree);
+        if (currentBranch === branch && run('git', ['status', '--porcelain', '--', '.', ':!.loop'], tree)) {
+          const preserved = preserveDirtyTree({ tree, run, log, now });
+          log(`quota-sweep: preserved final uncommitted work on ${preserved.branch}${preserved.pushed ? '' : ' (local only)'}`);
+        }
+      } catch (error) { log(`quota-sweep: final dirty-tree preservation failed: ${error.message}`); }
+    }
+    if (tree && branch) {
+      try {
         if (run('git', ['branch', '--show-current'], tree) !== branch) throw new Error('Worktree branch changed externally; no push attempted');
         if (Number(run('git', ['rev-list', '--count', `${record.base}..HEAD`], tree)) > 0) {
           run('git', ['push', '-u', 'origin', branch], tree);
@@ -339,11 +433,17 @@ export async function runSweep(decision, context) {
     if (stopOutcome === 'failed') failureKey ||= 'unknown-failure';
     else failureKey = null;
     const row = makeLedger({ decision: { ...decision, usedPercent: usedBefore }, startedAt, endedAt: now(), usedAfter, ticks: record.ticks, outcome, ...selection, branch, prUrl, reason, failureKey, stopOutcome, deliveryError: record.deliveryError || null });
-    try { queueRepeatedFailure(home, state, row); }
+    try { queueRepeatedFailure(home, state, row); queueRepeatedDeferral(home, state, row); }
     catch (error) { log(`修復タスク起票失敗: ${error.message}`); row.remediationError = error.message; }
     Object.assign(record, row); save();
     fs.appendFileSync(path.join(home, '.claude', 'quota-sweep.jsonl'), JSON.stringify(row) + '\n');
-    fs.appendFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), JSON.stringify({ t: row.ts, provider: `quota-sweep:${provider}`, model: provider === 'claude' ? env.ORGIAST_QUOTA_SWEEP_MODEL || 'sonnet' : 'codex', in: inputTokens, out: outputTokens, tokens: inputTokens + outputTokens, secs: row.durationSec, status: outcome, attempt: record.attempts, failover: false }) + '\n');
+    // 停止理由と failureKey は executor-usage 側にも残す。quota-sweep.jsonl だけに置いていたため、
+    // executor-usage しか読まない delegation-health では全滅行が no_output と表示され、原因
+    // （EPERM・窓情報不足・対話検出）が見えなかった（2026-10-21 の codex 6連続 failed が該当）。
+    const usageRow = { t: row.ts, provider: `quota-sweep:${provider}`, model: provider === 'claude' ? env.ORGIAST_QUOTA_SWEEP_MODEL || 'sonnet' : 'codex', in: inputTokens, out: outputTokens, tokens: inputTokens + outputTokens, secs: row.durationSec, status: outcome, attempt: record.attempts, failover: false };
+    if (reason) usageRow.reason = reason;
+    if (failureKey) usageRow.failureKey = failureKey;
+    fs.appendFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), JSON.stringify(usageRow) + '\n');
     log(`${provider}: ${outcome}, ticks=${record.ticks}, reason=${reason || '完了'}`);
     const oneLine = value => String(value).replace(/[\r\n]+/g, ' ').slice(0, 250);
     try { if (outcome !== 'no-goal') await notify([`${provider}/${decision.window}`, `${usedBefore}% → ${usedAfter ?? '?'}%`, `tick: ${record.ticks}`, oneLine(selection.goal), prUrl || '変更なし', outcome === 'partial' ? '成果あり・未完了' : outcome, reason ? `理由: ${oneLine(reason)}` : '検証完了'].join('\n'), { home }); }
@@ -362,8 +462,18 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   if (env.ORGIAST_QUOTA_SWEEP === '0') return emit({ skipped: true, reason: 'ORGIAST_QUOTA_SWEEP=0' });
   const requestedHomes = io.wslHome ?? (argv.includes('--home') ? [] : passiveWslHomes());
   const wslHomes = Array.isArray(requestedHomes) ? [...requestedHomes] : [requestedHomes];
+  // 1回のスイープは decision 用・開始前 check 用・再取得用と同じ oauth/usage を数十秒に3回叩く。
+  // 2026-10-23T07:10Z の window-info 失敗はその直後に起きた。成功した読み取りだけを短時間
+  // 再利用し、失敗はキャッシュしない（checkConditions の再試行を妨げない）。
+  const claudeReadTtlMs = io.claudeReadTtlMs ?? 15_000;
+  let claudeCache = null, claudeCachedAt = 0;
   const windows = io.readWindows ?? (async () => {
-    const claude = await readClaudeWindows({ home, fetchImpl: io.fetchImpl });
+    const at = now();
+    let claude = claudeCache && at - claudeCachedAt < claudeReadTtlMs ? claudeCache : null;
+    if (!claude) {
+      claude = await readClaudeWindows({ home, fetchImpl: io.fetchImpl });
+      if (claude.length) { claudeCache = claude; claudeCachedAt = at; }
+    }
     const codex = readCodexWindows({ home, wslHome: wslHomes, now: now() });
     const all = [...claude, ...codex]; all.reasons = { claude: claude.reason, codex: codex.reason }; return all;
   });
@@ -394,10 +504,14 @@ export async function main(argv = process.argv.slice(2), io = {}) {
         log('Codex account changed; new authenticated session log required');
       }
     }
-    const currentWindows = async () => (await windows()).filter(w => w.provider !== 'codex' || !state.codexAuthChangedAt || w.observedAt > state.codexAuthChangedAt);
+    const currentWindows = async () => filterWindowsForCurrentAuth(await windows(), state);
     const observed = await currentWindows();
     const decisions = decideSweep({ windows: observed, now: now(), ...options }).filter(d => (options.provider === 'all' || options.provider === d.provider) && canRunWindow(state, d));
-    if (!decisions.length) log('skip: no eligible reset window');
+    if (!decisions.length) {
+      // 読み取り自体が失敗していた場合、これまでは「窓が無い」とだけ出て原因が残らなかった。
+      const readIssues = Object.entries(observed.reasons ?? {}).filter(([, r]) => r).map(([p, r]) => `${p}: ${r}`);
+      log(`skip: no eligible reset window${readIssues.length ? ` (${readIssues.join('; ')})` : ''}`);
+    }
     for (const decision of decisions) {
       if (await active(decision.provider)) { log(`skip: interactive ${decision.provider}`); continue; }
       await runSweep(decision, { ...io, leadMinutes: options.leadMinutes, minRemainingPercent: options.minRemainingPercent, home, state, save: () => atomic(stateFile, state), windows: currentWindows, active, log, env, now, spawnImpl, wsl });

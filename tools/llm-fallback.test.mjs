@@ -190,7 +190,9 @@ test('Kimi直APIの429後は通常チェーンより先にOpenRouterのKimiを�
     { provider: 'kimi', model: 'kimi-k3' },
     { provider: 'openrouter', model: 'moonshotai/kimi-k3' },
   ]);
-  assert.deepEqual(fetched, ['kimi', 'kimi', 'kimi', 'openrouter']);
+  // "insufficient balance" は恒久課金切れなので同一候補をリトライせず、直ちに OpenRouter へ回す
+  // （残高切れの口座を叩き続けない。2026-10-24 に本枝の恒久課金切れ判定と整合させた）。
+  assert.deepEqual(fetched, ['kimi', 'openrouter']);
   assert.deepEqual(result.candidate, attempted[1]);
 });
 
@@ -275,14 +277,14 @@ test('恒久的な課金切れの429はリトライせず次候補へ進む', as
   assert.equal(result.candidate.provider, 'openrouter');
 });
 
-test('恒久的な課金切れの429にも上限を適用する', async (t) => {
+test('恒久的な課金切れの429は24時間 cooldown にする', async (t) => {
   const files = temporaryFiles(t), timestamp = 1_700_000_000_000; let calls = 0;
   await callWithFallback({ start, chain: [second], payloadFor: requestFor, ...files, now: () => timestamp,
     fetchImpl: async () => ++calls === 1
       ? new Response('{"error":{"message":"insufficient_quota"}}', { status: 429 })
       : new Response('{}', { status: 200 }) });
   const state = JSON.parse(fs.readFileSync(files.cooldownFile, 'utf8'));
-  assert.deepEqual(state.groq, { until: timestamp + 60_000, reason: 'http_429', at: timestamp });
+  assert.deepEqual(state.groq, { until: timestamp + 24 * 60 * 60 * 1000, reason: 'http_429', at: timestamp, permanentBilling: true });
 });
 
 test('成功したプロバイダのクールダウンを削除する', async (t) => {

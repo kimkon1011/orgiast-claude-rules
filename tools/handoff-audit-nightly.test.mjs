@@ -19,6 +19,14 @@ const item = { pattern: 'API 確認', route: 'gh api', confidence: 'high' };
 test('promotionFileはhome配下のgit管理外台帳を返す', () => {
   assert.equal(promotionFile('/example/home'), path.join('/example/home', '.claude', 'handoff-audit-promotions.jsonl'));
 });
+test('同一route・別patternは昇格しない（rescue枝の量産源を断つ）', () => {
+  const known = [{ pattern: '既存の確認', route: 'gh api', confidence: 'high', source: 'manual' }];
+  const merged = mergeKnowledge(known, [{ pattern: '別ラベルの確認', route: 'ｇｈ　 api ', confidence: 'high' }], [], 'obs');
+  assert.equal(merged.knowledge.length, 1);
+  assert.equal(merged.promoted.length, 0);
+  const medium = mergeKnowledge(known, [{ pattern: '別ラベルの確認', route: 'gh api', confidence: 'medium' }], [], 'obs');
+  assert.equal(medium.candidates.length, 0);
+});
 test('patternキーで重複排除、mediumは候補、別観測でhighへ', () => {
   const first = mergeKnowledge([], [item, item], [], 'one');
   assert.equal(first.knowledge.length, 1);
@@ -134,6 +142,25 @@ test('同じ窓で再実行してもTODOは増えず、窓の実測行だけが�
   const ledger = readJsonl(deferralLedgerFile(filed.home));
   assert.equal(ledger.filter(r => r.kind === 'hit').length, 1);
   assert.equal(ledger.filter(r => r.kind === 'window').length, 2);
+});
+// 1つの先送りが同一セッションで繰り返し検出されると、検出行ごとに別IDのTODOが積まれ、
+// 「検証の検証」セッションが検出行数だけ増殖する（2026-10-23T07:23 の 9310953f は4行＝4本）。
+// 台帳の検出行は全部残したまま、TODOは (sessionId, pattern) ごとに1本へ畳む。
+test('同一セッションの同じパターンが窓内で複数検出されても監査TODOは1本にまとめる', async t => {
+  const quote = '恒久修正は次セッションで行う';
+  const ts = new Date(2026, 8, 11, 10).toISOString();
+  const second = `${quote}（2回目）`;
+  const filed = deferralHome(t, [
+    { ts, sessionId: 'deadbeefcafe', verdict: 'pass', fired: false, excerpt: quote, violations: [{ quote }] },
+    { ts: new Date(2026, 8, 11, 10, 0, 5).toISOString(), sessionId: 'deadbeefcafe', verdict: 'pass', fired: false, excerpt: second, violations: [{ quote: second }] },
+    { ts: new Date(2026, 8, 11, 10, 0, 9).toISOString(), sessionId: 'feedfacecafe', verdict: 'pass', fired: false, excerpt: quote, violations: [{ quote }] }
+  ]);
+  const result = await runNightly(filed.options);
+  assert.equal(result.deferral.hits, 3);
+  assert.equal(result.deferral.enqueued, 2);
+  const handoff = fs.readFileSync(path.join(filed.dir, 'next-session.md'), 'utf8');
+  assert.equal(parseHandoff(handoff).todos.length, 2);
+  assert.equal(readJsonl(deferralLedgerFile(filed.home)).filter(r => r.kind === 'hit').length, 3);
 });
 test('先送り文が無い窓でも hits:0 の実測行を残す', async t => {
   const filed = deferralHome(t, [{ ts: new Date(2026, 8, 11, 10).toISOString(), sessionId: 'feedface', verdict: 'pass', fired: false, excerpt: '修正が完了しました' }]);

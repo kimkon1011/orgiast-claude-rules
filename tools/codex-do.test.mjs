@@ -1851,3 +1851,63 @@ test('buildUsageRow は timeoutSecs が無ければ行に生やさない（旧�
   assert.equal('timeoutSecs' in row, false);
   assert.equal(row.status, 'ok');
 });
+
+// 2026-10-23 実測: gemini が拒否を3回出して以後無音のまま600秒 timeout になった（打ち切り未発火3件）。
+// chunk 到着時だけの判定では再評価されないため、周期タイマーで無音停滞も打ち切る。
+function fakeGeminiEnv(body) {
+  const dir = workDir();
+  fs.writeFileSync(path.join(dir, 'fake-gemini.mjs'), body, 'utf8');
+  if (process.platform === 'win32') {
+    fs.writeFileSync(path.join(dir, 'gemini.CMD'), '@echo off\r\nnode "%~dp0fake-gemini.mjs" %*\r\n', 'utf8');
+  } else {
+    fs.writeFileSync(path.join(dir, 'gemini'), `#!/bin/sh\nexec node "${path.join(dir, 'fake-gemini.mjs')}" "$@"\n`, { mode: 0o755 });
+  }
+  const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === 'PATH') || 'PATH';
+  return { PATH: `${dir}${path.delimiter}${process.env[pathKey] || ''}` };
+}
+
+function runFakeGemini(body, extraEnv = {}, timeoutSecs = 60) {
+  const mockResults = [
+    { status: 1, output: "You've hit your usage limit. Please try again later.", stderr: '' },
+    { real: true },
+    { status: 0, output: 'DeepSeek edited the files.', stderr: '' }
+  ];
+  const started = Date.now();
+  const result = run(['--force-native', '--cwd', workDir(), '--timeout', String(timeoutSecs), '指示内容'], {
+    env: {
+      ...fakeGeminiEnv(body),
+      CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults),
+      GEMINI_API_KEY: 'gemini-test',
+      DEEPSEEK_API_KEY: 'deepseek-test',
+      CODEX_DO_POLICY_STALL_MIN_ELAPSED_SECS: '1',
+      CODEX_DO_POLICY_STALL_CHECK_MS: '200',
+      ...extraEnv
+    }
+  });
+  return { result, elapsedSecs: (Date.now() - started) / 1000 };
+}
+
+const DENY = 'Error executing tool run_shell_command: Tool execution denied by policy.\n';
+const silentAfter = (stderrText, stdoutText = '') =>
+  `process.stdout.write(${JSON.stringify(stdoutText)}); process.stderr.write(${JSON.stringify(stderrText)}); setInterval(() => {}, 1000);`;
+
+test('gemini が拒否3回の後に無音で停滞しても周期判定で打ち切り次のバックエンドへ進む', () => {
+  const { result, elapsedSecs } = runFakeGemini(silentAfter(DENY.repeat(3)));
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /ポリシー拒否が続き/);
+  assert.match(result.stdout, /executor=fallback:cheap-code:deepseek/);
+  assert.ok(elapsedSecs < 50, `無音停滞が打ち切られず ${elapsedSecs} 秒かかった`);
+});
+
+test('ポリシー停滞の打ち切りは出力400字以上・拒否3回未満・無効化指定では発火しない', () => {
+  const cases = [
+    { name: '出力400字以上', body: silentAfter(DENY.repeat(3), 'x'.repeat(400)) },
+    { name: '拒否2回', body: silentAfter(DENY.repeat(2)) },
+    { name: '無効化', body: silentAfter(DENY.repeat(3)), env: { CODEX_DO_POLICY_STALL_ABORT: '0' } }
+  ];
+  for (const c of cases) {
+    const { result } = runFakeGemini(c.body, c.env, 8);
+    assert.doesNotMatch(result.stderr, /ポリシー拒否が続き/, c.name);
+    assert.match(result.stderr, /秒で応答を終えなかった/, c.name);
+  }
+});

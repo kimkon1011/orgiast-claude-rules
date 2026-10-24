@@ -218,6 +218,39 @@ test('先頭切り詰めの usage limit 2件で codex_empty_output を出さな�
   assert.deepEqual(limit.evidence, ['2件', 'usage_limit(2件)']);
 });
 
+test('emptyOutputReason はモデル容量超過を model_capacity に分類する', () => {
+  assert.equal(emptyOutputReason({
+    status: 'error',
+    exitCode: 1,
+    launched: true,
+    timedOut: false,
+    stderrTail: 'ERROR: selected MODEL is AT capacity. PLEASE try a DIFFERENT model.',
+  }), 'model_capacity');
+});
+
+test('実台帳行のモデル容量超過で collectFindings が codex_empty_output を出さない', () => {
+  const dir = home();
+  const realCapacityRow = {
+    t: '2026-10-21T10:00:00.000Z',
+    provider: 'codex',
+    model: 'codex-cli/default',
+    lane: 'chatgpt_auth_default:default_sol',
+    in: 3531,
+    out: 0,
+    launched: true,
+    timedOut: false,
+    status: 'error',
+    exitCode: 1,
+    fastFail: true,
+    attempts: 1,
+    secs: 2.193,
+    stderrTail: 'ERROR: Selected model is at capacity. Please try a different model.',
+  };
+  write(dir, 'executor-usage.jsonl', row(realCapacityRow));
+  const findings = collectFindings({ home: dir, now: new Date('2026-10-21T10:00:03.000Z'), codexUsedPercent: null });
+  assert.ok(!findings.some((finding) => finding.id === 'codex_empty_output'));
+});
+
 test('実台帳行の Codex 上限到達行で collectFindings が codex_empty_output を出さず codex_usage_limit を出す', () => {
   const dir = home();
   const realUsageRow = {
@@ -733,6 +766,34 @@ test('quota-sweep:codex は失敗の後に exhausted(トークン消費)が1件�
   write(dir, 'executor-usage.jsonl', failed.map(row).join(''));
   const outage = collectFindings({ home: dir, now: NOW }).find(f => f.id === 'lane_outage_unrepaired');
   assert.equal(outage.provider, 'quota-sweep:codex'); assert.equal(outage.severity, 'high');
+});
+test('quota-sweep の失敗行は reason を証跡に出す（no_output と誤診しない）', () => {
+  const dir = home();
+  const reason = "codex child exit=1 stop=failed: EPERM: operation not permitted, open '.git'";
+  const rows = [0, 1, 2].map(i => ({ t: `2026-09-09T10:0${i}:00Z`, provider: 'quota-sweep:codex', model: 'codex', in: 0, out: 0, tokens: 0, status: 'failed', reason, failureKey: 'child-1' }));
+  write(dir, 'executor-usage.jsonl', rows.map(row).join(''));
+  const outage = collectFindings({ home: dir, now: NOW }).find(f => f.id === 'lane_outage_unrepaired');
+  assert.equal(outage.provider, 'quota-sweep:codex');
+  assert.ok(outage.evidence.some(e => /EPERM/.test(e)), outage.evidence.join(' / '));
+  assert.ok(!outage.evidence.some(e => /no_output/.test(e)));
+});
+test('quota-sweep の正常停止（deadline/ceiling 等）は全滅判定にも cooldown 表示にも入れない', () => {
+  const dir = home();
+  const rows = [0, 1, 2].map(i => ({ t: `2026-09-09T10:0${i}:00Z`, provider: 'quota-sweep:claude', model: 'sonnet', in: 0, out: 0, tokens: 0, status: 'deadline', reason: '利用窓の一時的な取得失敗' }));
+  write(dir, 'executor-usage.jsonl', rows.map(row).join(''));
+  const findings = collectFindings({ home: dir, now: NOW });
+  assert.deepEqual(findings.filter(f => f.id === 'lane_outage_unrepaired'), []);
+  assert.deepEqual(findings.filter(f => f.id === 'provider_cooldown_skipped'), []);
+});
+test('quota-sweep の全滅は failed だけを分母に数え、正常停止行は混ぜない', () => {
+  const dir = home();
+  const failed = [0, 1, 2].map(i => ({ t: `2026-09-09T10:0${i}:00Z`, provider: 'quota-sweep:claude', in: 0, out: 0, tokens: 0, status: 'failed', reason: '利用窓情報が不足または不正: [] (HTTP 429)' }));
+  const benign = { t: '2026-09-09T10:03:00Z', provider: 'quota-sweep:claude', in: 0, out: 0, tokens: 0, status: 'deadline' };
+  write(dir, 'executor-usage.jsonl', [...failed, benign].map(row).join(''));
+  const outage = collectFindings({ home: dir, now: NOW }).find(f => f.id === 'lane_outage_unrepaired');
+  assert.equal(outage.provider, 'quota-sweep:claude');
+  assert.equal(outage.evidence[0], '3件すべて失敗');
+  assert.ok(outage.evidence.some(e => /HTTP 429/.test(e)));
 });
 test('全レーンの未修理全滅は provider ごとに集計し集計窓外を除く', () => {
   const dir = home();

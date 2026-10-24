@@ -8,6 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { normalizeExecutorStatus } from './executor-status.mjs';
 import { isEntry } from './is-entry.mjs';
 import { judgeTimeoutRows } from './timeout-waste-judge.mjs';
+import { isPermanentBillingDetail } from './llm-fallback.mjs';
 
 const DAY = 86_400_000;
 const HOUR = 3_600_000;
@@ -170,6 +171,11 @@ export function isQuotaLimitedRow(row = {}) {
   return /^http_?(402|429)$/.test(String(row?.status ?? '').toLowerCase());
 }
 
+export function isBillingSuspendedRow(row = {}) {
+  return /^http_?(402|429)$/.test(String(row?.status ?? '').toLowerCase())
+    && isPermanentBillingDetail(row?.reason);
+}
+
 // cooldown の行は「上限/レート制限中なのでリクエストを投げなかった」記録(cheap-code.mjs が
 // status:'cooldown' で残す)。失敗ではなく未試行なので、全滅判定の分母に入れてはならない。
 // 入れると (a) 実体が上限到達でも証拠が「N件すべて失敗」の high 未修理全滅になり、
@@ -187,6 +193,14 @@ export function quotaSweepProgressRow(row = {}) {
   if (!String(row?.provider ?? '').startsWith('quota-sweep:')) return false;
   if (String(row?.status ?? '').toLowerCase() === 'failed') return false;
   return Number(row.in) > 0 || Number(row.out) > 0;
+}
+
+// quota-sweep の status は停止理由そのもの。`failed` 以外（deadline/ceiling/exhausted/no-goal 等）は
+// レーンが正常に判断して止まった記録で、トークン0でも故障ではない。これを含めると
+// 「窓が無いので見送った」が3回続いただけで lane_outage_unrepaired(high) になる
+// (2026-10-22 の起票は failed 4件が実体だが、正常停止も同じ分母に入る構造だった)。
+export function isQuotaSweepBenignRow(row = {}) {
+  return String(row?.provider ?? '').startsWith('quota-sweep:') && String(row?.status ?? '').toLowerCase() !== 'failed';
 }
 
 // fallback バックエンド自体は走って応答を返した(chain の outcome が ok)のに、作業ツリーを
@@ -224,11 +238,15 @@ const CODEX_MODEL_AUTH_MISMATCH = /is not supported when using codex with a chat
 // 最後の砦として ChatGPT の購入URL)も一致させる。
 const CODEX_USAGE_LIMIT = /You(?:[’']ve| have) hit your usage limit|your usage limit[.!]?\s*Upgrade to Pro|Upgrade to Pro \(https:\/\/chatgpt\.com\/explore\/pro\)|Usage limit (?:reached|exceeded)/i;
 
+// 選択モデルが一時的に満員のときは、codex 自体の出力異常ではない。
+const CODEX_MODEL_CAPACITY = /Selected model is at capacity\. Please try a different model\./i;
+
 export function emptyOutputReason(row) {
   if (row?.timedOut === true) return 'timeout';
   // 旧行(timedOut 未記録)は経過秒数から推定する。codex の正常終了は実測で中央値~100秒、
   // 打ち切りは --timeout 到達時にのみ現れ、実測値は 300 秒以上だった。
   if (row?.timedOut == null && Number(row?.secs) >= 300) return 'timeout';
+  if (String(row?.status ?? '').toLowerCase() === 'network') return 'infra_transient';
   if (WSL_LANE_ABSENT.test(String(row?.stderrTail || ''))) return 'launch_failed';
   // 起動前のゲートが「意図的に止めた」行。launched:false だが codex は一度も起動されておらず、
   // 起動失敗ではない。codex-do が書く行の status は必ず数値で、起動前ゲートは文字列の番兵を書く
@@ -250,6 +268,7 @@ export function emptyOutputReason(row) {
   if (CODEX_AUTH_FAILED.test(String(row?.stderrTail || ''))) return 'auth_failed';
   if (CODEX_MODEL_AUTH_MISMATCH.test(String(row?.stderrTail || ''))) return 'model_auth_mismatch';
   if (CODEX_USAGE_LIMIT.test(String(row?.stderrTail || ''))) return 'usage_limit';
+  if (CODEX_MODEL_CAPACITY.test(String(row?.stderrTail || ''))) return 'model_capacity';
   if (INFRA_TRANSIENT.test(String(row?.stderrTail || ''))) return 'infra_transient';
   // 台帳の status は数値(終了コード)だけではない。llm-fallback / cheap-code は失敗の種類を
   // そのまま文字列で書く(http_429 / http_402 / cooldown)。これを知らずに catch-all の
@@ -413,7 +432,7 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
     const lastFailureTime = Math.max(...failures.map((row) => Date.parse(row.t)));
     return codexSuccessTimes.some((time) => time > lastFailureTime);
   };
-  const realEmpty = empty.filter((item) => !['infra_transient', 'launch_failed', 'auth_failed', 'model_auth_mismatch', 'preflight_blocked', 'spawn_failed', 'usage_limit'].includes(item.reason));
+  const realEmpty = empty.filter((item) => !['infra_transient', 'launch_failed', 'auth_failed', 'model_auth_mismatch', 'preflight_blocked', 'spawn_failed', 'usage_limit', 'model_capacity'].includes(item.reason));
   const launchFailed = empty.filter((item) => item.reason === 'launch_failed');
   const authFailed = empty.filter((item) => item.reason === 'auth_failed');
   const modelAuthMismatch = empty.filter((item) => item.reason === 'model_auth_mismatch');
@@ -453,11 +472,15 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
     // 分母から外す。外さないと上限到達の実体が「N件すべて失敗」の high 未修理全滅に見える
     // (2026-10-13 診断: glm の11件 = cooldown 5件 + http_429 6件)。
     const emptyDiffRows = rows.filter(isEmptyDiffEscalationRow);
-    const attempts = rows.filter((row) => !isCooldownSkippedRow(row) && !isEmptyDiffEscalationRow(row));
+    // quota-sweep は停止理由を status に書くので、failed 以外（deadline/ceiling/exhausted/no-goal）は
+    // 正常停止。トークン0でも分母に入れない（入れると「窓が無いので見送った」3回で high 起票になる）。
+    const attempts = rows.filter((row) => !isCooldownSkippedRow(row) && !isEmptyDiffEscalationRow(row) && !isQuotaSweepBenignRow(row));
     // 24h 窓が cooldown だけで埋まる＝上限中で一度も試行していない。レーンは止まっているが
     // 原因は上限側で、コードの欠陥ではない。low の可視化だけ残す(high にすると上限が明けるまで
     // 毎晩同じ偽の修理タスクが積まれる。黙って消すと止まっている事実自体が見えなくなる)。
     if (!attempts.length) {
+      // quota-sweep の正常停止は cooldown ではないので、cooldown の low 表示も付けない。
+      if (rows.every(isQuotaSweepBenignRow)) continue;
       // 窓が「代替は応答したが1行も変えなかった」行だけで埋まった場合も、レーン障害ではない。
       // 止まっている事実は low で可視化し、修理タスク(high)にはしない。
       if (emptyDiffRows.length === rows.length && rows.length >= 3) {
@@ -479,7 +502,20 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
     // 起票すると、上限が続く限り毎晩同じ偽の修理タスクが積まれる（2026-10-13 診断: glm の
     // 3件は 1 リクエストの再試行で、実体は Coding Plan の週次/月次上限到達）。
     // codex の usage_limit と同じく low・fixTask なしの可視化だけにする。
-    if (attempts.every(isQuotaLimitedRow)) {
+    // 上限・課金切れ・一過性ネットワークだけで全滅した行は「レーンが壊れている」証拠ではない。
+    // 実測 2026-10-22: kimi の 24h 449 行 = http_429 440 + status:'network' 9(10.7秒で
+    // タイムアウト) で、network を no_output 扱いしていたため毎日 high になっていた。
+    const benign = attempts.filter((row) => isQuotaLimitedRow(row) || emptyOutputReason(row) === 'infra_transient');
+    const billingSuspended = attempts.filter(isBillingSuspendedRow);
+    // 行に reason が無い旧記録でも、llm-fallback が残した 24h の恒久課金切れ cooldown で判別できる。
+    const billingCooldown = cooldown[provider]?.permanentBilling === true && Number(cooldown[provider]?.until) > nowMs;
+    if ((billingSuspended.length || billingCooldown) && benign.length === attempts.length) {
+      findings.push({ id: 'provider_billing_suspended', provider, severity: 'low', title: `${provider} は残高切れで停止（チャージ待ち・コードでは直せない）`,
+        evidence: [`${billingSuspended.length}件が恒久課金切れ`, ...(billingCooldown ? [`cooldown ${cooldown[provider].reason} until ${new Date(Number(cooldown[provider].until)).toISOString()}`] : []),
+          ...reasonTop(billingSuspended.map(row => ({ reason: row.reason || row.stderrTail || emptyOutputReason(row) })))] });
+      continue;
+    }
+    if (benign.length === attempts.length) {
       findings.push({ id: 'provider_usage_limit', provider, severity: 'low', title: `${provider} は上限/レート制限で停止（欠陥ではない）`,
         evidence: [`${attempts.length}件すべて失敗`, ...reasonTop(attempts.map(row => ({ reason: row.stderrTail || row.reason || emptyOutputReason(row) })))] });
       continue;

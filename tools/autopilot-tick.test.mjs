@@ -13,7 +13,7 @@ const snow = (offset) => String((BigInt(NOW.getTime() - 1420070400000 + offset) 
 function fixture(t, overrides = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'autopilot-test-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  const opts = { home, platform: 'linux', dir: path.join(home, 'state'), now: NOW, token: '', userId: '', hostname: 'test-pc', fetchImpl: async () => { throw new Error('unexpected network'); }, ...overrides };
+  const opts = { home, askJevImpl: async () => ({ ok: false, reason: 'test_offline' }), platform: 'linux', dir: path.join(home, 'state'), now: NOW, token: '', userId: '', hostname: 'test-pc', fetchImpl: async () => { throw new Error('unexpected network'); }, ...overrides };
   const call = (command, args = {}, extra = {}) => runAutopilot(command, args, { ...opts, ...extra });
   return { opts, call, paths: autopilotPaths(opts) };
 }
@@ -758,16 +758,39 @@ function ownerConfig(f, owner) {
   fs.mkdirSync(path.join(f.opts.home, '.claude'), { recursive: true });
   fs.writeFileSync(path.join(f.opts.home, '.claude/autopilot-owner.json'), JSON.stringify(owner));
 }
-test('kim DM is explicitly not the nishi owner; unknown and kim owners retain legacy result', async t => {
+test('missing nishi Discord ID skips DM; unknown and kim owners retain legacy result', async t => {
   const f = fixture(t), kim = '715210673642012733';
-  const ctx = { ...f.opts, userId: kim, notifyImpl: async () => ({ delivered: 'dm' }) };
+  let sent = 0;
+  const ctx = { ...f.opts, userId: kim, notifyImpl: async () => { sent++; return { delivered: 'dm' }; } };
   assert.equal((await sendNotice('本文', ctx)).delivered, 'dm');
   ownerConfig(f, { email: 'nishi@orgiast.jp', discordUserId: null });
   const result = await sendNotice('本文', ctx);
-  assert.equal(result.delivered, 'dm-not-owner');
-  assert.equal(result.channels.dm.status, 'dm-not-owner');
+  assert.equal(result.delivered, 'no-owner-dm');
+  assert.equal(result.reason, 'owner_discord_id_missing');
+  assert.deepEqual(result.channels.dm, { status: 'no-owner-dm', reason: 'owner_discord_id_missing' });
+  assert.equal(sent, 1);
   ownerConfig(f, { email: 'kim@orgiast.jp', discordUserId: null });
   assert.equal((await sendNotice('本文', ctx)).delivered, 'dm');
+  assert.equal(sent, 2);
+});
+test('owner without Discord ID keeps digest file and toast without calling notifier', async t => {
+  const f = fixture(t);
+  ownerConfig(f, { email: ' NISHI@orgiast.jp ' });
+  fs.writeFileSync(path.join(f.opts.home, '.claude/orgiast-discord-user-id.txt'), '715210673642012733');
+  let sent = 0, toasts = 0;
+  await f.call('start', { objective: '進捗' });
+  const result = await f.call('digest', {}, {
+    now: new Date('2026-10-23T03:00:00Z'), platform: 'win32',
+    notifyImpl: async () => { sent++; return { delivered: 'dm' }; },
+    execFileImpl: async () => { toasts++; return { stdout: 'submitted' }; },
+  });
+  assert.equal(result.delivered, 'no-owner-dm');
+  assert.equal(result.channels.dm.reason, 'owner_discord_id_missing');
+  assert.equal(sent, 0);
+  assert.equal(toasts, 1);
+  assert.equal(result.channels.toast.status, 'submitted');
+  assert.equal(result.channels.file.status, 'written');
+  assert.equal(fs.readFileSync(result.channels.file.path, 'utf8'), result.text);
 });
 test('owner discordUserId overrides legacy file and injected recipient', async t => {
   const f = fixture(t), recipients = [];
@@ -883,4 +906,42 @@ test('toast summary puts owner actions before the long objective line', () => {
 
 test('toast summary falls back to the first three lines', () => {
   assert.equal(toastSummary('a\nb\nc\nd'), 'a\nb\nc');
+});
+
+test('Jev 失敗・不正応答・未検証 COMPLETE は既存の続行に戻る', async t => {
+  for (const response of [{ ok: false, reason: 'timeout' }, { ok: true, answers: { action: { type: 'choice', choice: 'COMPLETE' } } }, { ok: true, answers: {} }, null]) {
+    const f = fixture(t, { askJevImpl: async () => response });
+    await f.call('start', { objective: 'test' });
+    const result = await f.call('post', { summary: 'work', progress: 10 });
+    assert.equal(result.status, 'running'); assert.equal(result.jevDecision, null);
+  }
+  const f = fixture(t, { askJevImpl: async () => { throw new Error('offline'); } });
+  await f.call('start', { objective: 'test' });
+  assert.equal((await f.call('post', { summary: 'work', progress: 10 })).status, 'running');
+});
+test('Jev の続行・やり直し・停止を保存して次の pre へ渡す', async t => {
+  for (const action of ['CONTINUE', 'RETRY', 'ESCALATE']) {
+    const f = fixture(t, { askJevImpl: async request => {
+      assert.equal(request.timeoutMs, 3000); assert.equal(request.label, 'autopilot');
+      assert.deepEqual(Object.keys(request.questions.action.criteria), ['CONTINUE', 'RETRY', 'ESCALATE', 'COMPLETE']);
+      return { ok: true, answers: { action: { type: 'choice', choice: action } } };
+    } });
+    await f.call('start', { objective: 'test' });
+    const result = await f.call('post', { summary: 'work', progress: 10 });
+    assert.equal(result.status, action === 'ESCALATE' ? 'paused' : 'running');
+    assert.equal((await f.call('pre')).jevDecision.action, action);
+  }
+});
+test('決定論的な完了・テスト失敗・noop・上限では Jev を呼ばない', async t => {
+  let calls = 0;
+  const f = fixture(t, { askJevImpl: async () => { calls++; return { ok: false }; } });
+  await f.call('start', { objective: 'test', 'max-iter-per-day': 3 });
+  assert.equal((await f.call('post', { summary: 'tests failed', progress: 100, tests: 'failed', evidence: 'bad' })).error, 'tests_failed');
+  assert.equal((await f.call('post', { summary: 'tests failed', progress: 10, tests: 'failed' })).status, 'running');
+  assert.equal((await f.call('post', { summary: 'no diff', progress: 10, noop: true })).status, 'running');
+  assert.equal((await f.call('post', { summary: 'work', progress: 20 })).watchdog.reason, 'daily_iter_cap');
+  const done = fixture(t, { askJevImpl: async () => { calls++; return { ok: false }; } });
+  await done.call('start', { objective: 'test' });
+  assert.equal((await done.call('post', { summary: 'done', progress: 100, evidence: 'verified' })).status, 'done');
+  assert.equal(calls, 0);
 });

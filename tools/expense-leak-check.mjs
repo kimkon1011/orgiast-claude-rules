@@ -23,6 +23,8 @@ export const RULES = {
   alwaysExpense: ['PC', 'パソコン', '電子機器', '炭酸水', '文房具', '事務用品', '消耗品', '電池'],
 };
 export const LIMITS = { gmail: 300, yahoo: 150, runtimeMs: 40 * 60_000, reserveMs: 90_000 };
+export const WEB23_ADDRESS = 'web23@orgiast.jp';
+export const WEB23_LOOKBACK_DAYS = 7;
 const USERS = ['kim@orgiast.jp', 'seisaku-team@orgiast.jp'];
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DAY = 86_400_000;
@@ -111,6 +113,22 @@ export function parseYahoo(text, txn, today) {
     } else unverified++;
   }
   return { evidence, unverified };
+}
+export function web23Query(days = WEB23_LOOKBACK_DAYS) {
+  if (!Number.isInteger(Number(days)) || Number(days) < 1) throw new Error('days must be a positive integer');
+  return `to:${WEB23_ADDRESS} newer_than:${days}d`;
+}
+// web23@ is a Google group; seisaku-team@ receives the copies the weekly check depends on.
+// Zero hits in a full week means the copy path silently broke, not that no mail was sent.
+export async function checkWeb23Delivery(deps, days = WEB23_LOOKBACK_DAYS) {
+  if (deps.timeLeft && !deps.timeLeft()) return { status: 'unverified', reason: '時間上限' };
+  const result = await deps.search(join(HERE, 'gmail-search.mjs'), ['--user', 'seisaku-team@orgiast.jp', '--query', web23Query(days), '--max', '5'], deps.timeout());
+  if (result.code !== 0) return { status: 'unverified', reason: `Gmail exit ${result.code}` };
+  let parsed;
+  try { parsed = JSON.parse(result.stdout); } catch { return { status: 'unverified', reason: 'invalid JSON' }; }
+  if (!Array.isArray(parsed.messages)) return { status: 'unverified', reason: 'invalid JSON' };
+  if (parsed.skipped) return { status: 'unverified', reason: `${parsed.skipped}件取得不可` };
+  return parsed.messages.length === 0 ? { status: 'zero', count: 0 } : { status: 'ok', count: parsed.messages.length };
 }
 export function childSearch(script, args, timeout) {
   return new Promise((resolveChild) => {
@@ -220,6 +238,8 @@ export function dmText(result) {
   const text = [`経費漏れチェック ${result.today}`, `候補総数 ${result.candidateTotal} / 今回 ${result.results.length} / 証跡あり ${result.results.filter((r) => r.evidence.length).length} / 不明 ${counts('不明(要確認)')} / 私用 ${counts('私用(自動)')} / 確認不要 ${counts('経費(確認不要)')} / 未完了 ${result.results.filter((r) => r.deferred).length}`,
     ...unknown.map((r) => `${r.date} ${r.description.replace(/\s+/g, ' ').slice(0, 60)} ${r.amount.toLocaleString('ja-JP')}円`),
     `${SHEET_LINK}?authuser=${encodeURIComponent('kim@orgiast.jp')}`, 'kim@orgiast.jp で開いてください'];
+  if (result.web23?.status === 'zero') text.push(`⚠ ${WEB23_ADDRESS} 宛メールが過去${WEB23_LOOKBACK_DAYS}日0件。seisaku-team@ へのグループ配信が止まった可能性があり、Amazon 領収書の証跡が黙って抜けます。`);
+  else if (result.web23?.status === 'unverified') text.push(`${WEB23_ADDRESS} の受信確認はできませんでした（${result.web23.reason}）。0件とは判定していません。`);
   if (result.yahooUnavailable) text.push('デスクトップ『ヤフオク再ログイン（ダブルクリック）』をお願いします');
   if (result.issues.length) text.push(`一部検索を完了できませんでした (${result.issues.length}件)。結果JSONを確認してください。`);
   return text.join('\n');
@@ -277,6 +297,10 @@ export async function runCheck(opts, injected = {}) {
       await checkpoint();
     }
     result.yahooUnavailable = budget.yahooUnavailable;
+    if (opts.weekly) {
+      result.web23 = await checkWeb23Delivery({ search: injected.search || childSearch, timeLeft, timeout });
+      if (result.web23.status === 'unverified') result.issues.push(`web23@: ${result.web23.reason}`);
+    }
     result.complete = inventory.complete && !result.results.some((r) => r.deferred) && result.results.length === inventory.candidates.length;
     result.deferredTotal = result.results.filter((r) => r.deferred).length;
     if (!opts.dryRun) {

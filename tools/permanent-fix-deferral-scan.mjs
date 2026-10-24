@@ -83,6 +83,19 @@ const FIX = '実装|修正|改修|恒久|恒久化|修復|作り直';
 const HANDOFF_LINE = /次に\s*kim\s*がすること[:：][ \t*_`]*([^\r\n]*)/;
 // 2026-10-17T06:40:46.164Z / session 3694d684: 太字ラベル直後の「特になし」を P3 と誤検出した。
 const HANDOFF_EMPTY = /^[\s*_`]*(?:なし|ありません|ありません。|特になし|無し)/;
+// 「main へのマージ／着地の承認」を kim に渡す手渡しも P3 とする。FIX 語（修正・実装…）が無くても、
+// 具体的なコミット/branch を名指しして着地の承認を求める文は Claude が PR+automerge で実行できる作業で、
+// 人に渡すべき手順ではない。実測（2026-10-23T07:23:51Z / 342a5479、2026-10-24T04:36:20Z / 61af55b9）では
+// FIX 語が無いため P3 も next-action-gate も素通りし、同じ先送りが 2 日続いた。
+// 対象語を「具体的な識別子（7桁以上の hex / slash を含む branch 風トークン）」に限るのは、
+// 既存の非該当例 `PR #14 を確認（マージ判断のみ）`（確認作業の依頼）を巻き込まないため。
+const LANDING_DEFERRAL = /(マージ|着地|取り込|merge)/i;
+const LANDING_TARGET = /\b[0-9a-f]{7,40}\b|[\w.-]+\/[\w.-]+/;
+const LANDING_APPROVAL = /(承認|判断|決め|指示|ください|返す|据え置き|待ち)/;
+export function isLandingDeferral(value) {
+  const text = String(value ?? '');
+  return LANDING_DEFERRAL.test(text) && LANDING_TARGET.test(text) && LANDING_APPROVAL.test(text);
+}
 // 「可否」は裸では実現可能性の名詞（実行可否/利用可否/復旧の可否）で誤検出になるため、
 // 許可要求の形（疑問節「か」＋可否）に限定する。
 const ASK_PERMISSION = /(やりますか|進めますか|進めてよいか|よろしいですか|(?<=か)の?可否|判断してください|決めてください|選んでください)/;
@@ -90,7 +103,7 @@ const ASK_CONTEXT = /(恒久|配布|自動修復|実装|修正|改修|恒久化)
 const P3 = {
   find(text) {
     for (const match of text.matchAll(new RegExp(HANDOFF_LINE, 'g'))) {
-      if (!isAuditCitation(text, match.index) && !HANDOFF_EMPTY.test(match[1]) && new RegExp(FIX).test(match[1])) return match;
+      if (!isAuditCitation(text, match.index) && !HANDOFF_EMPTY.test(match[1]) && (new RegExp(FIX).test(match[1]) || isLandingDeferral(match[1]))) return match;
     }
     return null;
   }

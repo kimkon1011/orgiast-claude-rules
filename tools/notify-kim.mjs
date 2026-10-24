@@ -56,7 +56,8 @@ export async function notifyKim(text, options = {}) {
   if (STATUS_REPORT.test(raw) || ALREADY_FILED.test(raw)) return deliverKim(raw, options);
   const humanEvidence = /^(?:試行|試した内容|試した修復)[:：][ \t]*\S.+$/m.test(raw)
     && /^証拠[:：][ \t]*\S.+$/m.test(raw) && /^必要な操作[:：][ \t]*\S.+$/m.test(raw);
-  const failure = FAILURE.test(raw), handoff = !humanEvidence && HANDOFF.test(raw);
+  const benignQuotaReport = benignQuotaSweepReport(raw);
+  const failure = !benignQuotaReport && FAILURE.test(raw), handoff = !benignQuotaReport && !humanEvidence && HANDOFF.test(raw);
   if (!failure && !handoff) return deliverKim(raw, options);
   const home = options.home || process.env.ORGIAST_HOME || os.homedir();
   const now = options.now ?? Date.now();
@@ -121,6 +122,23 @@ export async function notifyKim(text, options = {}) {
   } finally {
     if (fd !== undefined) { fs.closeSync(fd); fs.unlinkSync(lock); }
   }
+}
+
+// quota-sweep の進捗通知は outcome 行が結果の正本。目的文には過去の失敗説明
+// （例:「window-info の連続失敗」）が引用されるため本文全体で判定すると、deferred
+// （一時的な 429 で次回へ延期）や final（完了）まで失敗と誤判定して修復TODOを起票する。
+// 2026-10-25 実測: 10:41/10:56 の deferred 通知は 04:13:45 と同一キーの24時間抑制に
+// 守られていただけで、抑制が切れれば同じ「通知の原因調査と修復」TODOが再生成される。
+const QUOTA_SWEEP_OUTCOME = /^(?:failed|deferred|final|deadline|ceiling|exhausted|成果あり・未完了)$/;
+const QUOTA_SWEEP_BENIGN = new Set(['final', 'deferred', '成果あり・未完了']);
+function benignQuotaSweepReport(text) {
+  const lines = String(text ?? '').split('\n').map(line => line.trim());
+  if (lines.length < 6) return false;
+  if (!/^[^\s/]+\/[^\s/]+$/.test(lines[0])) return false;
+  if (!/^\d+% → (?:\d+|\?)%$/.test(lines[1])) return false;
+  if (!/^tick: \d+$/.test(lines[2])) return false;
+  const outcome = lines.find((line, index) => index >= 4 && QUOTA_SWEEP_OUTCOME.test(line));
+  return QUOTA_SWEEP_BENIGN.has(outcome);
 }
 
 export async function deliverKim(text, {

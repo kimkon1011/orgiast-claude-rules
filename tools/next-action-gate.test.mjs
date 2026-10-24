@@ -2,6 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { judgeNextAction, reportsCloseSteps, SESSION_PHRASES } from './next-action-gate.mjs';
 
+// 自動セッション（CLAUDE_HEADLESS=1）の中でテストを走らせても、このファイルは通常セッションの
+// 判定を検証する。ヘッドレスでは起床手段の検査をskipする仕様なので、環境変数を外しておかないと
+// AUTOPILOT-NO-SESSION-WAKEUP を期待する4件が undefined で落ちる（2026-10-25 実測）。
+// ヘッドレス側の挙動は末尾のテストが明示的に '1' を設定して検証し、終了時に元へ戻す。
+delete process.env.CLAUDE_HEADLESS;
+
 const body = '調査と実装と検証が完了しました。'.repeat(15);
 const twoLineFooter = '次に kim がすること: なし\nこの後の自動進行: なし（完了）';
 const footer = `${twoLineFooter}\nこのセッション: /session-close は不要なので、このセッションを閉じてよい`;

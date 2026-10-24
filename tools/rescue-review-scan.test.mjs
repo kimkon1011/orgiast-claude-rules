@@ -240,6 +240,50 @@ test('CLI 既定出力はサマリ行を先頭に出す', t => {
   assert.equal(lines.length, 5);
 });
 
+// 2026-10-25 の事故: `--todo` を付けずに生出力の "unique" だけを読み、
+// 生成物(handoff-audit-knowledge.json)だけを変えた枝を「PR 化が必要」と誤起票した。
+// 生出力でもレビュー対象外だと分かるように印を付ける。
+test('unique でも全ファイルがノイズなら既定出力にレビュー対象外の印を付ける', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rescue-review-scan-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const repo = path.join(root, 'repo');
+  fs.mkdirSync(repo);
+  const git = (...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  git('init', '-b', 'main');
+  git('config', 'user.name', 'Test');
+  git('config', 'user.email', 'test@example.invalid');
+  fs.writeFileSync(path.join(repo, 'a.txt'), 'base');
+  git('add', '.');
+  git('commit', '-m', 'base');
+
+  // ノイズのみ: tools/handoff-audit-knowledge.json
+  git('checkout', '-b', 'rescue/knowledge-only', 'main');
+  fs.mkdirSync(path.join(repo, 'tools'));
+  fs.writeFileSync(path.join(repo, 'tools', 'handoff-audit-knowledge.json'), '[]\n');
+  git('add', '.');
+  git('commit', '-m', 'knowledge only');
+  git('checkout', 'main');
+
+  // ノイズ + 通常ファイル: 印を付けてはいけない
+  git('checkout', '-b', 'rescue/mixed', 'main');
+  fs.mkdirSync(path.join(repo, 'tools'), { recursive: true });
+  fs.writeFileSync(path.join(repo, 'tools', 'handoff-audit-knowledge.json'), '[1]\n');
+  fs.writeFileSync(path.join(repo, 'a.txt'), 'changed');
+  git('add', '.');
+  git('commit', '-m', 'mixed');
+  git('checkout', 'main');
+
+  const script = path.join(dirOf(import.meta.url), 'rescue-review-scan.mjs');
+  const out = execFileSync(process.execPath, [script, '--repo', repo, '--main', 'main'], { encoding: 'utf8' });
+  const lines = out.trim().split('\n');
+  const knowledgeLine = lines.find(l => l.includes('rescue/knowledge-only'));
+  const mixedLine = lines.find(l => l.includes('rescue/mixed'));
+  assert.match(knowledgeLine, /^unique\t/);
+  assert.match(knowledgeLine, /\(no review target: all 1 file\(s\) are generated\/ignored\)$/);
+  assert.match(mixedLine, /^unique\t/);
+  assert.doesNotMatch(mixedLine, /no review target/);
+});
+
 test('別名の枝(feat/*)に同一変更があれば covered-by-branch に落とし unique を減らす', t => {
   const f = fixture(t, { featureBranch: true });
   const m = byBranch(scanRescueBranches({ repo: f.repo, main: 'main' }));

@@ -349,6 +349,11 @@ function formatLine(b) {
     return `${base}\t(added ${c.addedInMain}/${c.addedLines} in main, deleted ${c.deletedStillInMain}/${c.deletedLines} still in main)`;
   }
   if (b.status === 'error' && b.error) return `${base}\t(${b.error})`;
+  // unique でも全ファイルがノイズ(生成物・実行時成果物)なら --todo ではレビュー対象から外れる。
+  // 生出力だけを見て「unique だから PR 化が必要」と誤読する事故(2026-10-25)を防ぐため、印を付ける。
+  if (b.status === 'unique' && Array.isArray(b.names) && b.names.length > 0 && b.names.every(isNoisePath)) {
+    return `${base}\t(no review target: all ${b.names.length} file(s) are generated/ignored)`;
+  }
   return base;
 }
 

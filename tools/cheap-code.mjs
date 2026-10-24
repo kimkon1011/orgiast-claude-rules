@@ -75,7 +75,9 @@ export function buildChildEnv(config, key, parentEnv = process.env, { configDir 
   // 子が「connectors を無効化した」と警告する。2026-09-10 実測)。
   delete env.ANTHROPIC_API_KEY;
   if (config.maxContextTokens) env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(config.maxContextTokens);
-  env.API_TIMEOUT_MS = String(resolveChildApiTimeoutMs(parentEnv));
+  // 契約 RULES「他バックエンドの挙動を変えない」に従い、delegation-health が観測した
+  // backend=cheap-code:deepseek に限定する(glm は既定のまま。必要になったら別途実測して広げる)。
+  if (config.provider === 'deepseek') env.API_TIMEOUT_MS = String(resolveChildApiTimeoutMs(parentEnv));
   // 委譲先は監督ではなく実行役なので、全社 hook を読まない専用の設定ディレクトリを渡す。
   if (configDir) env.CLAUDE_CONFIG_DIR = configDir;
   return env;

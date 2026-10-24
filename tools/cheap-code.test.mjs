@@ -133,6 +133,14 @@ test('buildChildEnv は子の API_TIMEOUT_MS を 600s 既定より短く注入�
   assert.equal(resolveChildApiTimeoutMs({ CHEAP_CODE_API_TIMEOUT_MS: '-5' }), DEFAULT_CHILD_API_TIMEOUT_MS);
 });
 
+// 契約 RULES「他バックエンドの挙動を変えない」: glm は既定のまま(注入しない)。
+test('buildChildEnv は glm へ API_TIMEOUT_MS を注入しない', () => {
+  const glm = resolveProvider('glm');
+  assert.equal(buildChildEnv(glm, 'k', {}).API_TIMEOUT_MS, undefined);
+  // 親が明示的に持っている値は従来どおり継承する(挙動を変えない)。
+  assert.equal(buildChildEnv(glm, 'k', { API_TIMEOUT_MS: '600000' }).API_TIMEOUT_MS, '600000');
+});
+
 test('prepareWorkerConfigDir は hooks を書かず deny を引き継ぎ disableAllHooks を立てる', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cheap-code-worker-'));
   try {

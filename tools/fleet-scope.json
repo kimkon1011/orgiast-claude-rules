@@ -1,6 +1,9 @@
 {
   "version": 1,
   "entries": [
+    {"path": "tools/lib/scheduled-task.mjs", "scope": "fleet", "step": "settings:lane-health-SessionStart", "reason": "全PC無人ジョブ監査のタスク取得・修復依存"},
+    {"path": "tools/unattended-job-audit.mjs", "scope": "fleet", "step": "settings:lane-health-SessionStart", "reason": "全PCの無人ジョブ自動監査"},
+    {"path": "tools/unattended-jobs.json", "scope": "fleet", "step": "settings:lane-health-SessionStart", "reason": "全PCの無人ジョブ自動監査"},
     {
       "path": "tools/register-schedule-sync-task.ps1",
       "scope": "kim-only",

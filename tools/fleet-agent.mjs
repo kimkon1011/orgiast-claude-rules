@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { launchAudit } from './unattended-job-audit.mjs';
 import { codexAuthStatus } from './codex-auth-status.mjs';
 import os from 'node:os';
 import path from 'node:path';
@@ -145,7 +146,7 @@ function fitStatusLines({ header, hostLine, codexLine, repoLine, memoryLine, job
   return [header, hostLine, codexLine, repoLine, memoryLine, jobLine, syncLine, todoLine];
 }
 
-export function collectStatus({ home, repo, label, hostname, run = runSync, platform = process.platform }) {
+export function collectStatus({ home, repo, label, hostname, run = runSync, platform = process.platform, auditLaunch = launchAudit }) {
   const account = getClaudeAccountEmail(home) || '未設定';
   const codex = codexAuthStatus(home);
   const git = repoInfo(repo, run);
@@ -163,6 +164,7 @@ export function collectStatus({ home, repo, label, hostname, run = runSync, plat
   } catch {}
   const accepts = loadOptin(path.join(home, '.claude', 'fleet-agent-optin.json'));
   const jobStatus = platform === 'win32' ? scheduledTaskStatus(run) : { tasks: [], failures: [] };
+  auditLaunch({ home, platform, intervalHours: 24 });
   const failures = jobStatus.failures ?? [];
   const sharedMemory = sharedMemoryStatus(home);
   const lines = fitStatusLines({
@@ -239,7 +241,7 @@ export async function processDirective(directive, context) {
     return { action: 'denied', message };
   }
   if (kind === 'status') {
-    const status = collectStatus({ home, repo, label, hostname, run });
+    const status = collectStatus({ home, repo, label, hostname, run, platform: context.platform, auditLaunch: dryRun ? () => false : context.auditLaunch });
     if (!dryRun) {
       fs.writeFileSync(path.join(home, '.claude', 'fleet-agent-last-status.json'), `${JSON.stringify(status.data, null, 2)}\n`);
       await post(status.text);
@@ -311,6 +313,12 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
     if (!webhook) return;
     try { await fetch(webhook, { method: 'POST', headers: { 'content-type': 'application/json', 'user-agent': 'DiscordBot (https://github.com/kimkon1011/orgiast-claude-rules, 1.0) OrgiastFleetAgent' }, body: JSON.stringify({ content: message }), signal: AbortSignal.timeout(20_000) }); } catch {}
   });
+  // Polls without directives (or with an offline hub) must still audit local jobs.
+  const platform = dependencies.platform || process.platform;
+  if (!dryRun && platform === 'win32') {
+    scheduledTaskStatus(dependencies.run || runSync);
+    (dependencies.auditLaunch || launchAudit)({ home, platform, intervalHours: 24 });
+  }
   let payload;
   try {
     const base = process.env.ORGIAST_FLEET_DIRECTIVES_URL || DEFAULT_URL;
@@ -331,7 +339,7 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
       fs.appendFileSync(processedFile, `${id}\n`);
       processed.add(id);
     }
-    results.push({ id, ...(await processDirective(directive, { home, repo, label, hostname, dryRun, post, spawnImpl: dependencies.spawnImpl, run: dependencies.run })) });
+    results.push({ id, ...(await processDirective(directive, { home, repo, label, hostname, dryRun, post, spawnImpl: dependencies.spawnImpl, run: dependencies.run, platform, auditLaunch: dependencies.auditLaunch })) });
   }
   if (json) console.log(JSON.stringify(results));
   return results;

@@ -4,7 +4,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { collectStatus, main, processDirective, targetMatches, redactSecrets } from './fleet-agent.mjs';
+import { collectStatus as realCollectStatus, main as realMain, processDirective, targetMatches, redactSecrets } from './fleet-agent.mjs';
+
+const collectStatus = options => realCollectStatus({ auditLaunch: () => false, ...options });
+const main = (argv, options) => realMain(argv, { platform: 'linux', auditLaunch: () => false, ...options });
 
 function tempHome() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-agent-'));
@@ -354,4 +357,26 @@ test('redactSecrets preserves missing environment diagnostics and redacts assign
     assert.ok(!redactSecrets(input).includes(secret));
     assert.match(redactSecrets(input), /\[REDACTED\]/);
   }
+});
+
+test('fleet status invokes daily unattended audit after task measurement', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-audit-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  let measured = false, launched;
+  collectStatus({ home, repo: process.cwd(), label: 'PC', hostname: 'host', platform: 'win32',
+    run: (exe) => { if (exe === 'powershell') measured = true; return { status: 0, stdout: '[]' }; },
+    auditLaunch: options => { assert.equal(measured, true); launched = options; }
+  });
+  assert.equal(launched.intervalHours, 24); assert.equal(launched.home, home);
+});
+
+test('headless fleet poll audits even when hub fetch fails; dry-run does not launch', async t => {
+  const home = tempHome(); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const old = process.env.ORGIAST_HOME; process.env.ORGIAST_HOME = home;
+  t.after(() => { if (old === undefined) delete process.env.ORGIAST_HOME; else process.env.ORGIAST_HOME = old; });
+  const calls = [];
+  const dependencies = { platform: 'win32', run: () => ({ status: 0, stdout: '[]' }),
+    fetch: async () => { throw Error('offline'); }, auditLaunch: options => calls.push(options) };
+  await main([], dependencies); await main(['--dry-run'], dependencies);
+  assert.equal(calls.length, 1); assert.equal(calls[0].intervalHours, 24);
 });

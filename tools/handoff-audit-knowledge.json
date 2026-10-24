@@ -166,5 +166,11 @@
     "route": "2026-10-25 実測（HP）: Discord DM は Bot トークン不在で実送信できない（node tools/discord-dm.mjs 宮地麻里 --body … --dry-run → SEND_FAILED、resolveDiscordBotToken=false）。社内連絡は宛先/用件/本文をチャット本文に完成形で表示する（既定・送信なし）。内部宛の Gmail 下書き/送信は tools/internal-recipient-gmail-guard.mjs が deny し、tools/gmail-draft.mjs はチャット表示を出して exit 3（実測）。「送って」の返信を前提にしない。再発走査は tools/handoff-audit-discord-dm-premise-scan.mjs。送信・権限変更は既存の承認範囲のみ",
     "confidence": "high",
     "source": "handoff-audit-nightly:4780e59fbe87f4260f1d0b82be7a8a420d8b538b7b16dd8e25927240d7d41f37 / 2026-10-25 再発検証（tools/handoff-audit-findings-discord-dm-premise-60e9dd3b.md）"
+  },
+  {
+    "pattern": "Vercel 本番環境変数の未登録を kim の返信待ちにする",
+    "route": "**2026-10-25 実測（HP）: 登録は Claude 側で完結できる。kim に設定を依頼しない。** `vercel` は PATH に無い → npx キャッシュ `%LOCALAPPDATA%\npm-cache_npx\u00069f9afb961c37556\node_modules\u000berceldistindex.js`（65.2.0）。keiri-hub の `.env.local` から `VERCEL_TOKEN` を読み、`VERCEL_TOKEN=... node <cache>/vercel/dist/index.js whoami` = `seisaku-team-5867`（exit 0）、`env ls --environment production` = 22 件（exit 0・値は非出力）。トークン無しは `Logged out.` でも **exit 0** なので終了コードで未ログインを判定しない。登録は `env add <name> --environment production`（設定変更なので既存の承認範囲のみ）。未登録の判定は keiri-hub の `node scripts/set-shoyo-discord-token.mjs --check`（読み取りのみ）で行う。値そのもの（例: Discord Bot トークン）は secret で、API からは type=sensitive のため読めない → 値の提供だけが rule 3 の正当な手渡し。詳細 docs/handoff-audit-2026-10-25-vercel-env-recheck.md / 前回 docs/handoff-audit-2026-10-23-vercel-env.md",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:4780e59fbe87f4260f1d0b82be7a8a420d8b538b7b16dd8e25927240d7d41f37 / 2026-10-25 再発検証（docs/handoff-audit-2026-10-25-vercel-env-recheck.md）"
   }
 ]

@@ -186,12 +186,25 @@ export async function runNightly(options = {}) {
       // hits が 0 でも必ず書く（「0 は測った 0」を後から証明できるようにする）。
       appendJsonl(ledgerFile, { ts, kind: 'window', since: from, until: to, total, hits: rows.length, byPattern, detector: usedDetector, detectorDiffers: detector.differs });
       for (const row of fresh) appendJsonl(ledgerFile, { ts, kind: 'hit', observation: deferralObservation(row), ...row });
+      // 同じ違反セッションの同じパターンは1つの窓で何度も検出される（ループがイテレーションごとに
+      // 同じ先送り文を書き続ける）。検出行ごとに別IDの監査TODOが積まれると、1つの先送りが
+      // 8本の「検証の検証」セッションに増殖した（2026-10-23T07:23 の session 9310953f が実例:
+      // 07:23:09〜07:23:19 の4行が別TODOになり、e2de84a9 の検証ループが8周した）。
+      // 台帳には全検出行を残し、TODOは (sessionId, pattern) ごとに窓内の先頭1件だけ積む。
+      const enqueueRows = [];
+      const enqueuedKeys = new Set();
+      for (const row of fresh) {
+        const groupKey = `${row.sessionId ?? ''}\u0000${row.pattern}`;
+        if (enqueuedKeys.has(groupKey)) continue;
+        enqueuedKeys.add(groupKey);
+        enqueueRows.push(row);
+      }
       let enqueued = 0;
-      if (fresh.length > 0) {
+      if (enqueueRows.length > 0) {
         const nextFile = path.join(dir, 'next-session.md');
         let previous = ''; try { previous = fs.readFileSync(nextFile, 'utf8'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
-        const updated = enqueueTodos(previous, fresh.map(deferralTodo));
-        if (updated !== previous) { writeHandoff(nextFile, updated); enqueued = fresh.length; }
+        const updated = enqueueTodos(previous, enqueueRows.map(deferralTodo));
+        if (updated !== previous) { writeHandoff(nextFile, updated); enqueued = enqueueRows.length; }
       }
       deferral = { total, hits: rows.length, byPattern, enqueued, detector: usedDetector, detectorDiffers: detector.differs };
     } catch (error) { deferral = { ...deferral, error: error.message }; }

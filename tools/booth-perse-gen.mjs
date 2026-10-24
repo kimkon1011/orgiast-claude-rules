@@ -7,7 +7,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 
 const USAGE = '使い方: node tools/booth-perse-gen.mjs --brief <brief.txt> --plans <plans.json> --out <dir> [--ref <image> ...]';
 const MODEL = 'openai/gpt-5.4-image-2';
@@ -74,6 +74,6 @@ async function main() {
   if (results.some((r) => !r.ok)) process.exit(1);
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isEntry(import.meta.url)) {
   main().catch((e) => { console.error(e.message || e); process.exit(1); });
 }

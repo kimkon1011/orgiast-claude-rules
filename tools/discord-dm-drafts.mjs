@@ -17,11 +17,14 @@ export function readRows(file = ledger) {
 }
 export function append(row, file = ledger) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.appendFileSync(file, JSON.stringify(row) + '\n', { mode: 0o600 }); }
 export function parseMessages(text, chat) {
+  const headerDate = (text.match(/取得:\s*(\d{4})-(\d\d)-(\d\d)/) || []).slice(1);
   return text.replace(/^\uFEFF/, '').split(/\r?\n(?=- )/).flatMap(line => {
-    const m = line.match(/^- (.+?) , ([\s\S]+) , (\d{4})\/(\d\d)\/(\d\d) (\d{1,2}):(\d\d)\s*$/);
+    const m = line.match(/^- (.+?) , ([\s\S]+) , (?:(\d{4})\/(\d\d)\/(\d\d) )?(\d{1,2}):(\d\d)\s*$/);
     if (!m) return [];
     const from = m[1].replace(/ が .+ に返信中$/, '').trim();
-    const ts = `${m[3]}-${m[4]}-${m[5]}T${m[6].padStart(2, '0')}:${m[7]}:00+09:00`;
+    const d = m[3] ? [m[3], m[4], m[5]] : headerDate;
+    if (!d || d.length !== 3) return [];
+    const ts = `${d[0]}-${d[1]}-${d[2]}T${m[6].padStart(2, '0')}:${m[7]}:00+09:00`;
     const question = m[2].trim();
     const id = createHash('sha256').update(JSON.stringify([chat, from, ts, question])).digest('hex').slice(0, 20);
     return [{ id, chat, from, ts, question }];

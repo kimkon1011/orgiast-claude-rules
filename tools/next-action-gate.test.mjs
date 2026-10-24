@@ -71,6 +71,18 @@ test('本文の着地語と nextAction の修正語が揃う実文はblock', () 
   assert.equal(result.code, 'NEXT-ACTION-DEFERRAL');
 });
 
+test('具体的なcommitのmainマージ判断をkimに渡す文はblock', () => {
+  const text = `${body}\n次に kim がすること: \`f94ee7a\` を main にマージするか判断してください\nこの後の自動進行: なし（完了）\nこのセッション: ${SESSION_PHRASES.delete}`;
+  const result = judgeNextAction(text);
+  assert.equal(result.decision, 'block');
+  assert.equal(result.code, 'NEXT-ACTION-DEFERRAL');
+});
+
+test('PR番号だけのマージ判断確認はblockしない', () => {
+  const text = `${body}\n恒久策: 一回限り: Vercel Preview の目視確認が必要\n次に kim がすること: PR #14 を確認（マージ判断のみ）。Vercel Previewでの動作確認も可能です\nこの後の自動進行: なし（完了）\nこのセッション: ${SESSION_PHRASES.delete}`;
+  assert.equal(judgeNextAction(text).decision, 'pass');
+});
+
 test('印刷所への電話は正当な人専用タスクとしてpass', () => {
   const text = `${body}\n恒久策: 一回限り: 今回の納期は本人から印刷所への電話確認が必要\n次に kim がすること: 印刷所へ電話して納期を確認する\nこの後の自動進行: なし（完了）\nこのセッション: ${SESSION_PHRASES.delete}`;
   assert.equal(judgeNextAction(text).decision, 'pass');

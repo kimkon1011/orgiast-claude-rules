@@ -7,11 +7,18 @@ import { notifyOwner, resolveOwner } from './notify-owner.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 
 export const CHECK_TIMEOUT_MS = 30000;
+export const MAX_CHECK_TIMEOUT_MS = 300000;
+// GitHub ログ取得のようにネットワーク待ちが支配的な check は行ごとに延ばせる。
+// 行の値が不正・過大なときは既定（30秒）と上限（300秒）へ丸める。check 自体を無制限にはしない。
+export function resolveCheckTimeout(row) {
+  const value = Number(row?.checkTimeoutMs);
+  return Number.isFinite(value) && value > 0 ? Math.min(value, MAX_CHECK_TIMEOUT_MS) : CHECK_TIMEOUT_MS;
+}
 export const oneLine = (value, limit = 240) => String(value || '').split(/\r?\n/, 1)[0].trim().slice(0, limit);
 export function executeCheck(row, { home, spawnImpl = spawnSync } = {}) {
   const result = spawnImpl(row.check, { shell: true, cwd: row.checkCwd || row.cwd, encoding: 'utf8',
-    timeout: CHECK_TIMEOUT_MS, maxBuffer: 64 * 1024, windowsHide: true,
-    env: { ...process.env, ORGIAST_HOME: home } });
+    timeout: resolveCheckTimeout(row), maxBuffer: 64 * 1024, windowsHide: true,
+    env: { ...process.env, ORGIAST_HOME: home, ORGIAST_CHECK_TIMEOUT_MS: String(resolveCheckTimeout(row)) } });
   const code = result.error || result.signal ? null : result.status;
   return { code, text: oneLine(result.stdout) || (code === 0 ? '達成を確認' : code === 1 ? '未達' : `check エラー: ${oneLine(result.error?.message || result.stderr) || code}`) };
 }

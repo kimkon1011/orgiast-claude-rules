@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test, { after } from 'node:test';
 import { addCheck } from './auto-progress.mjs';
-import { executeCheck, CHECK_TIMEOUT_MS } from './auto-progress-check.mjs';
+import { executeCheck, CHECK_TIMEOUT_MS, MAX_CHECK_TIMEOUT_MS } from './auto-progress-check.mjs';
 import { readLedger, writeLedger, ledgerFile } from './auto-progress-ledger.mjs';
 import { run as watch } from './auto-progress-watch.mjs';
 import { run as digest } from './auto-progress-digest.mjs';
@@ -67,6 +67,15 @@ test('executeCheck honors exit contract, first line and bounded execution', () =
     return { status: null, error: new Error('timeout'), stdout: '' };
   } });
   assert.equal(result.code, null); assert.match(result.text, /timeout/);
+});
+test('executeCheck lets a row extend its timeout for network-bound checks, bounded and validated', () => {
+  const seen = [];
+  const spawnImpl = (_, options) => { seen.push(options.timeout); assert.equal(options.env.ORGIAST_CHECK_TIMEOUT_MS, String(options.timeout)); return { status: 0, stdout: 'ok' }; };
+  executeCheck({ check: 'gh run view', checkTimeoutMs: 180000 }, { home: tmp(), spawnImpl });
+  executeCheck({ check: 'gh run view', checkTimeoutMs: 999999 }, { home: tmp(), spawnImpl });
+  executeCheck({ check: 'gh run view', checkTimeoutMs: 0 }, { home: tmp(), spawnImpl });
+  executeCheck({ check: 'gh run view', checkTimeoutMs: 'soon' }, { home: tmp(), spawnImpl });
+  assert.deepEqual(seen, [180000, MAX_CHECK_TIMEOUT_MS, CHECK_TIMEOUT_MS, CHECK_TIMEOUT_MS]);
 });
 test('WeChat counts current/previous month only, inclusive since, ignores empty/invalid/unrelated data without exposing text', () => {
   const home = tmp(), dir = path.join(home, '.claude', 'line-openchat'); fs.mkdirSync(dir, { recursive: true });

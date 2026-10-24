@@ -1,0 +1,14 @@
+{
+  "auditId": "handoff-audit:a93da162b2b260c0",
+  "since": "2026-09-26T00:00:00Z",
+  "transcriptRows": 98389,
+  "assistantTurns": 2159,
+  "ledgerRows": 1593,
+  "recurrence": true,
+  "confirmedOccurrence": {
+    "timestamp": "2026-10-13T02:56:17.583Z",
+    "sessionId": "2bb98fd7-237a-4cca-ba5a-060f78bb9a86",
+    "reason": "未確認の商品をuserに実物確認させ、違えばClaudeへ戻す往復型が再発"
+  },
+  "detailFile": "C:\\Users\\kimko\\.claude\\nightly-repo\\evidence\\handoff-audit-a93da162b2b260c0-20261025.md"
+}

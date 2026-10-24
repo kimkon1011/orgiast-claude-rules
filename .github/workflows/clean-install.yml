@@ -80,7 +80,17 @@ jobs:
           $nightly = Join-Path $env:USERPROFILE '.claude\nightly-repo'
           # onboarding-sync の hook 登録(setup --converge)が CLAUDE.md 更新後に完走するようになり、
           # 先行ステップで nightly-repo が作られることがある。フィクスチャは必ず作り直す（冪等）。
-          if (Test-Path -LiteralPath $nightly) { Remove-Item -LiteralPath $nightly -Recurse -Force }
+          # 背後の git が .git\index.lock を掴んだままだと Remove-Item が即死する（run 39914346756 attempt 3）。
+          # ロック解放を待って再試行し、それでも消えなければ同じ例外で落とす。
+          if (Test-Path -LiteralPath $nightly) {
+            for ($attempt = 1; ; $attempt++) {
+              try { Remove-Item -LiteralPath $nightly -Recurse -Force -ErrorAction Stop; break }
+              catch {
+                if ($attempt -ge 5) { throw }
+                Start-Sleep -Seconds 3
+              }
+            }
+          }
           git clone --no-hardlinks --no-checkout . $nightly
           if ($LASTEXITCODE -ne 0) { throw 'nightly fixture clone failed' }
           # Model the PR commit as the fetched main tip, then use bootstrap's checkout command.

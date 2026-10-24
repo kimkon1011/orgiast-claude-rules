@@ -51,9 +51,9 @@ export function mergeKnowledge(knowledge, learned, candidates, observation) {
   }
   return { knowledge: next, candidates: pending, promoted };
 }
-export function enqueueTodos(markdown, items) {
+export function enqueueTodos(markdown, items, knownRoutes = []) {
   let output = markdown;
-  const routes = new Set();
+  const routes = new Set((knownRoutes || []).map(key));
   for (const line of output.split(/\r?\n/)) {
     const body = line.match(/^\s*\d+\. \[handoff-audit:[^\]]+\] (.*)$/)?.[1];
     if (!body) continue;
@@ -139,6 +139,7 @@ export async function runNightly(options = {}) {
       reviewed++;
       // 既知経路にない生成文を自動実行キューへ流さない。
       const learned = result.learned.filter(l => knownRoutes.has(l.route));
+      const priorRoutes = knowledge.map(k => k.route);
       const merged = mergeKnowledge(knowledge, learned, candidates, observation);
       if (merged.knowledge.length !== knowledge.length) fs.writeFileSync(knowledgeFile, JSON.stringify(merged.knowledge, null, 2) + '\n');
       // nightly-bootstrap が毎回 reset --hard する tree の外に置く。reset で route 文が消えないようにするため。
@@ -149,7 +150,7 @@ export async function runNightly(options = {}) {
       for (const candidate of merged.candidates.slice(candidates.length)) appendJsonl(candidateFile, candidate);
       const nextFile = path.join(dir, 'next-session.md');
       let previous = ''; try { previous = fs.readFileSync(nextFile, 'utf8'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
-      const updated = enqueueTodos(previous, learned.filter(l => l.confidence === 'high' || merged.promoted.some(p => key(p.pattern) === key(l.pattern))));
+      const updated = enqueueTodos(previous, learned.filter(l => l.confidence === 'high' || merged.promoted.some(p => key(p.pattern) === key(l.pattern))), priorRoutes);
       if (updated !== previous) writeHandoff(nextFile, updated);
       added += merged.promoted.length;
       knowledge = merged.knowledge; candidates = merged.candidates;

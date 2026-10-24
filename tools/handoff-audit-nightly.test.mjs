@@ -46,6 +46,11 @@ test('残TODO書式はauto-sessionで読める・既存本文保持・重複防�
   assert.equal(enqueueTodos(after, [item]), after);
   assert.equal(parseHandoff(enqueueTodos('', [item])).todos.length, 1);
 });
+test('knowledgeに記録済みのrouteは抑制し、新規routeは追加する', () => {
+  assert.equal(parseHandoff(enqueueTodos('', [item], ['gh api'])).todos.length, 0);
+  assert.equal(parseHandoff(enqueueTodos('', [item], ['ｇｈ　 api'])).todos.length, 0);
+  assert.equal(parseHandoff(enqueueTodos('', [{ ...item, route: 'codex-do.mjs' }], ['gh api'])).todos.length, 1);
+});
 test('同一route・別patternは1行だけ追加し、新書式の既存routeも正規化して重複防止', () => {
   const after = enqueueTodos('', [item, { ...item, pattern: '別のAPI確認' }]);
   assert.equal(parseHandoff(after).todos.length, 1);

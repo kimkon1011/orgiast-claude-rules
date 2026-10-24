@@ -6,6 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { run } from './stop-gate-runner.mjs';
 
 const runner = fileURLToPath(new URL('./stop-gate-runner.mjs', import.meta.url));
 
@@ -492,4 +493,43 @@ test('自動進行の起床手段をtranscript_pathから検査しsubagentsは�
     const records = fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
     assert.equal(records.at(-1).reasonCodes.includes('AUTOPILOT-NO-SESSION-WAKEUP'), blocked, result.stdout);
   }
+});
+
+test('先行ゲートが全て降格された場合は第2段の監査で手渡しを止める', async t => {
+  // f94ee7a（2026-10-23T02:24:55Z）の再発防止。regex-blocked で第2段を飛ばした後に
+  // policy/demote で block が0件になると、手渡しが無検査で通っていた。原文の先送り
+  // （2026-10-23T02:25:45.629Z / 7e3e8cde）が「修正が本番で効いたか」を次回へ回した分を、
+  // ここでは実際に第2段が走って block することを固定する。
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-second-'));
+  const previousHome = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  t.after(() => {
+    if (previousHome === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previousHome;
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  // 手渡しは reply-only（manual-steps ではない）ので FORM_GATES は全て降格される。
+  // 第1段は regex で skipped='regex-blocked'、残る block が0件のとき第2段だけが止められる。
+  const text = [
+    '本文です。結果をまとめました。',
+    '',
+    '恒久策: 一回限り: この判断だけは kim に確認する。',
+    '',
+    '次に kim がすること: A案とB案のどちらを選ぶか教えてください。',
+    'この後の自動進行: なし',
+    'このセッション: /session-close は不要なので、このセッションを閉じてよい',
+  ].join('\n');
+  const asks = [];
+  const ask = async ({ provider }) => {
+    asks.push(provider);
+    return { text: JSON.stringify({ verdict: 'block', violations: [{ rule: 3, quote: 'A案とB案のどちらを選ぶか教えてください', fix: '推奨案を自分で決めて当ターン内に実行する' }], learned: [] }) };
+  };
+  const result = await run(
+    { session_id: 'second-stage', assistant_text: text },
+    { assistantText: text, humanText: '', raw: '' },
+    { mode: 'block', ask, home },
+  );
+  assert.equal(asks.length, 1, '第2段の監査が1回だけ走る');
+  assert.equal(result.record.verdict, 'block');
+  assert.deepEqual(result.record.blockedBy, ['handoff-audit-gate']);
 });

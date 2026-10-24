@@ -518,6 +518,19 @@ test('consecutive deferred enqueues a separate handoff without touching failure 
   queueRepeatedDeferral(home, state, { ...row, stopOutcome: 'final' });
   assert.equal(state.deferredStreaks.claude.count, 0);
 });
+test('対話セッションへの譲りは deferred 連続に数えず handoff も作らない', t => {
+  const home = temp(t); fs.mkdirSync(path.join(home, '.claude'));
+  const state = {}, file = path.join(home, '.claude/next-session.md');
+  const yieldRow = { provider: 'claude', stopOutcome: 'deferred', failureKey: null, reason: '対話セッションの使用中のため次回へ延期' };
+  for (let i = 0; i < 5; i++) queueRepeatedDeferral(home, state, yieldRow);
+  assert.equal(fs.existsSync(file), false);
+  assert.equal(state.deferredStreaks.claude, undefined);
+  // 窓読取不能の deferred は従来どおり数えて 3 回で起票する
+  const unreadable = { ...yieldRow, reason: '利用窓を読めない一時障害のため次回へ延期: HTTP 429' };
+  queueRepeatedDeferral(home, state, unreadable); queueRepeatedDeferral(home, state, unreadable);
+  assert.deepEqual(state.deferredStreaks.claude, { count: 2 });
+  assert.equal(fs.existsSync(file), false);
+});
 test('persistent EPERM on opening pointer recovers through replacement', t => {
   const file = path.join(temp(t), '.git'); fs.writeFileSync(file, 'gitdir: /absolute\n');
   writeWorktreePointer(file, 'gitdir: ../relative\n', {

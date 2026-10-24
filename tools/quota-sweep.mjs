@@ -265,6 +265,9 @@ export function queueRepeatedFailure(home, state, row) {
 // 失敗検知とは別のカウンタで数え、閾値で次回セッションのTODOに渡す。
 export function queueRepeatedDeferral(home, state, row) {
   state.deferredStreaks ??= {};
+  // 対話セッションへ譲った deferred は「窓が読めない」連続とは別物。数えると 3 回で
+  // 「利用窓が読めない原因を特定」という的外れな TODO が出る。カウンタにも載せない。
+  if (row.stopOutcome === 'deferred' && /対話セッション/.test(row.reason || '')) return;
   const count = row.stopOutcome === 'deferred' ? (state.deferredStreaks[row.provider]?.count || 0) + 1 : 0;
   state.deferredStreaks[row.provider] = { count };
   if (count < 3) return;

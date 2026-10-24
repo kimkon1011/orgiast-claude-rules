@@ -27,6 +27,9 @@ export function noticeOwner(home) {
 }
 export function noticeRecipient(home, fallback) {
   const owner = noticeOwner(home);
+  if (owner && owner.email.trim().toLowerCase() !== 'kim@orgiast.jp' && !owner.discordUserId) {
+    return { userId: null, notOwner: true, reason: 'owner_discord_id_missing' };
+  }
   const userId = owner?.discordUserId || (fallback !== undefined ? fallback : process.env.ORGIAST_DISCORD_USER_ID?.trim()
     || (() => { try { return fs.readFileSync(path.join(home, '.claude/orgiast-discord-user-id.txt'), 'utf8').trim(); } catch (e) { if (e.code !== 'ENOENT') throw e; return ''; } })()
     || KIM_DISCORD_USER_ID);

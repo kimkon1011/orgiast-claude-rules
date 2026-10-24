@@ -758,16 +758,39 @@ function ownerConfig(f, owner) {
   fs.mkdirSync(path.join(f.opts.home, '.claude'), { recursive: true });
   fs.writeFileSync(path.join(f.opts.home, '.claude/autopilot-owner.json'), JSON.stringify(owner));
 }
-test('kim DM is explicitly not the nishi owner; unknown and kim owners retain legacy result', async t => {
+test('missing nishi Discord ID skips DM; unknown and kim owners retain legacy result', async t => {
   const f = fixture(t), kim = '715210673642012733';
-  const ctx = { ...f.opts, userId: kim, notifyImpl: async () => ({ delivered: 'dm' }) };
+  let sent = 0;
+  const ctx = { ...f.opts, userId: kim, notifyImpl: async () => { sent++; return { delivered: 'dm' }; } };
   assert.equal((await sendNotice('本文', ctx)).delivered, 'dm');
   ownerConfig(f, { email: 'nishi@orgiast.jp', discordUserId: null });
   const result = await sendNotice('本文', ctx);
-  assert.equal(result.delivered, 'dm-not-owner');
-  assert.equal(result.channels.dm.status, 'dm-not-owner');
+  assert.equal(result.delivered, 'no-owner-dm');
+  assert.equal(result.reason, 'owner_discord_id_missing');
+  assert.deepEqual(result.channels.dm, { status: 'no-owner-dm', reason: 'owner_discord_id_missing' });
+  assert.equal(sent, 1);
   ownerConfig(f, { email: 'kim@orgiast.jp', discordUserId: null });
   assert.equal((await sendNotice('本文', ctx)).delivered, 'dm');
+  assert.equal(sent, 2);
+});
+test('owner without Discord ID keeps digest file and toast without calling notifier', async t => {
+  const f = fixture(t);
+  ownerConfig(f, { email: ' NISHI@orgiast.jp ' });
+  fs.writeFileSync(path.join(f.opts.home, '.claude/orgiast-discord-user-id.txt'), '715210673642012733');
+  let sent = 0, toasts = 0;
+  await f.call('start', { objective: '進捗' });
+  const result = await f.call('digest', {}, {
+    now: new Date('2026-10-23T03:00:00Z'), platform: 'win32',
+    notifyImpl: async () => { sent++; return { delivered: 'dm' }; },
+    execFileImpl: async () => { toasts++; return { stdout: 'submitted' }; },
+  });
+  assert.equal(result.delivered, 'no-owner-dm');
+  assert.equal(result.channels.dm.reason, 'owner_discord_id_missing');
+  assert.equal(sent, 0);
+  assert.equal(toasts, 1);
+  assert.equal(result.channels.toast.status, 'submitted');
+  assert.equal(result.channels.file.status, 'written');
+  assert.equal(fs.readFileSync(result.channels.file.path, 'utf8'), result.text);
 });
 test('owner discordUserId overrides legacy file and injected recipient', async t => {
   const f = fixture(t), recipients = [];

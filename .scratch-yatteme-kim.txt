@@ -1,0 +1,833 @@
+{
+  "estimate": 49,
+  "messages": [
+    {
+      "id": "19636df6b8214bcd",
+      "internalDate": "1744677326000",
+      "threadId": "19636df6b8214bcd",
+      "date": "15 Apr 2025 09:35:26 +0900",
+      "from": "no-reply@service.muumuu-domain.com",
+      "to": "kimkongyong@gmail.com",
+      "subject": "【重要】【ムームードメイン】《yatteme.jp》（期限切れドメイン）の更新について",
+      "listUnsubscribe": "<mailto:googlegroups-manage+1024540281556+unsubscribe@googlegroups.com>, <https://groups.google.com/a/orgiast.jp/group/kanri/subscribe>",
+      "snippet": "平素はムームードメインをご利用頂き、誠にありがとうございます。 2025/03/31 をもちまして『 yatteme.jp 』のご契約が終了 いたしました。 契約期間が終了した後も「 19日以内 」でしたら コントロールパネル内のメニュー項目【各種お支払い】より更新手続きの お申し込みを行うことができます。 ※ただし、別途費用として「 登録回復手数料（13280円） 」が発生いたします。 契約更新を",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_UPDATES"
+      ],
+      "body": "平素はムームードメインをご利用頂き、誠にありがとうございます。\r\n\r\n2025/03/31 をもちまして『 yatteme.jp 』のご契約が終了\r\nいたしました。\r\n\r\n契約期間が終了した後も「 19日以内 」でしたら\r\nコントロールパネル内のメニュー項目【各種お支払い】より更新手続きの\r\nお申し込みを行うことができます。\r\n※ただし、別途費用として「 登録回復手数料（13,280円） 」が発生いたします。\r\n\r\n契約更新をご希望の場合はコントロールパネル内のメニュー項目\r\n【各種お支払い】より更新お手続きをご検討ください。\r\n\r\n◎対象のドメイン\r\n========================================================\r\n【 ムームーＩＤ 】orgiast\r\n【 ド　メ　イ　ン 】yatteme.jp\r\n【 契　約　期　間 】2024/04/01 ～ 2025/03/31\r\n========================================================\r\n\r\n更新費用のご入金については「 契約更新可能日：2025/04/19 」までに、\r\n弊社にて更新費用の着金が確認出来るようご入金をお願いいたします。\r\n\r\n　【 期限切れドメインの再契約方法 】\r\n　 https://muumuu-domain.com/?mode=guide&state=reverse\r\n　\r\n　【 コントロールパネル 】\r\n　 https://muumuu-domain.com/?mode=conpane\r\n\r\nより良いサービスを提供していける様努めてまいりますので\r\n今後ともどうぞよろしくお願いいたします。\r\n\r\n--------------------------------------------------------------------------\r\n◇お電話によるお問い合わせは受け付けておりません。予めご了承ください。\r\n\r\n◇お問い合わせは、お問い合わせフォームよりご連絡ください。\r\n https://muumuu-domain.com/?mode=inq\r\n\r\nムームードメイン https://muumuu-domain.com\r\nGMOペパボ株式会社 https://pepabo.com/company/overview/\r\n--------------------------------------------------------------------------\r\nおかげさまで29周年　すべての人にインターネット\r\n当社はGMOインターネットグループ（東証プライム上場 9449）のメンバーです。\r\n■GMO INTERNET GROUP■ https://www.gmo.jp/\r\n--------------------------------------------------------------------------\r\n機密情報に関する注意事項：このE-mailは、発信者が意図した\r\n受信者による閲覧・利用を目的としたものです。万一、貴殿が\r\n意図された受信者でない場合には、直ちに送信者に連絡のうえ、\r\nこのE-mailを破棄願います。"
+    },
+    {
+      "id": "1962f9939a2bbfee",
+      "internalDate": "1744555292000",
+      "threadId": "1962f9939a2bbfee",
+      "date": "Sun, 13 Apr 2025 07:41:32 -0700",
+      "from": "Google Search Console Team <sc-noreply@google.com>",
+      "to": "kim@orgiast.jp",
+      "subject": "サイト https://yatteme.fun/ のページがインデックスに登録されない新しい要因\n",
+      "listUnsubscribe": "<https://notifications.google.com/g/p/ANiao5rwL6pAwqxJIqsN9YuJrxZ90fo69skqCCQ3TK0G04wSsBSe78RsN0HFWhQsHTQzZnYSYcRaE8DmVBpwV5b-nOEyxMRPjQ9QdtwUntITBpdsygDmq_9T9VeTdJUoPem8RY662PkMOav1D6Ip4CTkiFByyGDHYZgalr8y0ODIIIlu-kc6eH4aivzIMUikHGxXKdu5vL2469ENx4Zl3cD25bpPLLOOqeZDb1YMaL5r5vWt8nySD0x7dAEivpD4_UCAjIbqEdEYJdApNq72T36srbRnG3Mx6IsZIasDaAEtcWILgoTPDS_BFJM4yb_3ryEWAx2Lt_fsSuVEejsYsdCUJ0zd97sAoZgPagbgTlnRiFUev8AE7HUTPXSysVICrr9yPVAa8hxJsv0QdSyc>",
+      "snippet": "ページ がインデックスに登録されない新しい要因 Search Console で、貴サイトのいくつかの ページ がインデックスに登録されていないことが検出されました。以下がその要因となっています。 robots.txt によりブロックされました robots.txt によりブロックされましたが、インデックスに登録しました これらが意図したものでない場合は、修正することをおすすめします。それにより、",
+      "labels": [
+        "UNREAD",
+        "Label_3",
+        "CATEGORY_UPDATES"
+      ],
+      "body": "送信元: Google Search Console\r\n\r\n件名:\r\nページ がインデックスに登録されない新しい要因\r\n\r\n\r\n\r\nSearch Console で、貴サイトのいくつかの ページ がインデックスに登録されてい \r\nないことが検出されました。以下がその要因となっています。\r\n* robots.txt によりブロックされました\r\n* robots.txt によりブロックされましたが、インデックスに登録しました\r\n\r\nこれらが意図したものでない場合は、修正することをおすすめします。それにより、 \r\n影響を受けていた ページ がインデックスに登録され、Google に表示されるように \r\nなる可能性があります。\r\n\r\n**インデックス登録レポートを開く**: \r\nhttps://notifications.google.com/g/p/ANiao5rHiVai1PIW6UmjTfSYZ1B8s2Wi81VpkT0IedVQMpDfGAG1dqpbPFQu2AkriCYiC_-dWP9JjqCYYmb7PZFhuN8ZNeO2y904LcedCSbk-rCpiGqEX0qnbAsnqyiHaQOYsz07xUaf2wHtNFtIzsFNJyHOOGg9hZR250MV0epuTzaqPvTk60S4Jn2omxHMloktFd9QVg-dut29M61iovrk5ruxYjofbuHTgLBPcxhtr4Rzhz8tu_npyRnm4lo-6mvqRwUYzlvC8PhS9IFdNj5mA2YvfVJnNp6x2-C8vDAQh7IvgJHIrX8n0HUx2LUE369xlYJU0KZ1yPK1coQ9Xg\r\n\r\n\r\n----------\r\nGoogle LLC, 1600 Amphitheatre Parkway Mountain View, CA 94043\r\nこのメールは、Google Search Console にサイトが登録されているすべてのお客様に \r\nお送りしています。.\r\nこのようなメールの配信停止をご希望の場合は、次のページをご覧ください。 \r\n<https://notifications.google.com/g/p/ANiao5pNAwmPkoacnfNoz0ZKmAFDnK7vcuClCPmFUEB0CI53cRfqp_4g2_i6wmbOGQWWJxYLVSjgwyaxQDOB3CLISc20a2HDMx2Yj-XolxD3ICki5rYknj8UfMLs28rTdMzS1Ik5W4X80oYx17NYVxlN0GLQun_jTe8CbXW3O_8JP24PfdhCXmUp5cToHc1xSsqG2DmY13iZ8bTBzjD40SEiZNRaLtuePzkV68EBp1TRyLX0anDcC6MxtXasPa_WokgE3xA6yPs18LS__Sj1e7eYU_bEQaH2BibR1fsPvo4zh0TfwZvDM8-pIfSH1q9ASgQB7R_o9zIFRybLbwzXhDhSSnlO2it35s4DNGWKGXEWXan6EzmT_-HiAbdRM-hMDnMqYugpthnP58Um8Q>\r\nこの Search Console アカウントのメッセージを受信するパートナーを追加する: \r\nhttps://notifications.google.com/g/p/ANiao5qbMWhPKojaQHy3AUrdGIMIRTkXGk_LMqdHI1l2VhDNKRYJ7JqmOdrju09zjJ2OSmKeipsxb5BCzgNMxwVIYPvHgxiAy3SJICbGZrwkJ0yrMyCMBOefg1oNDFzreZNZ0Rt7xI2C7QJ2T-Gv4KsIXhr_0PeFEhUy6ZhYtolf1W9duj2coXAHgmDT27Zrpbg394uE_4rkWgxBejYD3GsnUW430Itry47uuQROiFuxVfmWpx7JIjPfffivx9ib6-QW367ZkXxbJuwsmQ0NGpWcKhQHHubyZd_xsjaV67oADOyCBaXovNR80SP12PfNOIr7YecofA7iJwkxiqTbZEn_vgHKo8HFkreEkProew\r\n\r\nMessage type: [WNC-20237597]"
+    },
+    {
+      "id": "19612d0ba138d964",
+      "internalDate": "1744072384000",
+      "threadId": "19612d0ba138d964",
+      "date": "8 Apr 2025 09:33:04 +0900",
+      "from": "no-reply@service.muumuu-domain.com",
+      "to": "kimkongyong@gmail.com",
+      "subject": "【重要】【ムームードメイン】《yatteme.jp》（期限切れドメイン）の更新について",
+      "listUnsubscribe": "<mailto:googlegroups-manage+1024540281556+unsubscribe@googlegroups.com>, <https://groups.google.com/a/orgiast.jp/group/kanri/subscribe>",
+      "snippet": "平素はムームードメインをご利用頂き、誠にありがとうございます。 2025/03/31 をもちまして『 yatteme.jp 』のご契約が終了 いたしました。 契約期間が終了した後も「 19日以内 」でしたら コントロールパネル内のメニュー項目【各種お支払い】より更新手続きの お申し込みを行うことができます。 ※ただし、別途費用として「 登録回復手数料（13280円） 」が発生いたします。 契約更新を",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_UPDATES"
+      ],
+      "body": "平素はムームードメインをご利用頂き、誠にありがとうございます。\r\n\r\n2025/03/31 をもちまして『 yatteme.jp 』のご契約が終了\r\nいたしました。\r\n\r\n契約期間が終了した後も「 19日以内 」でしたら\r\nコントロールパネル内のメニュー項目【各種お支払い】より更新手続きの\r\nお申し込みを行うことができます。\r\n※ただし、別途費用として「 登録回復手数料（13,280円） 」が発生いたします。\r\n\r\n契約更新をご希望の場合はコントロールパネル内のメニュー項目\r\n【各種お支払い】より更新お手続きをご検討ください。\r\n\r\n◎対象のドメイン\r\n========================================================\r\n【 ムームーＩＤ 】orgiast\r\n【 ド　メ　イ　ン 】yatteme.jp\r\n【 契　約　期　間 】2024/04/01 ～ 2025/03/31\r\n========================================================\r\n\r\n更新費用のご入金については「 契約更新可能日：2025/04/19 」までに、\r\n弊社にて更新費用の着金が確認出来るようご入金をお願いいたします。\r\n\r\n　【 期限切れドメインの再契約方法 】\r\n　 https://muumuu-domain.com/?mode=guide&state=reverse\r\n　\r\n　【 コントロールパネル 】\r\n　 https://muumuu-domain.com/?mode=conpane\r\n\r\nより良いサービスを提供していける様努めてまいりますので\r\n今後ともどうぞよろしくお願いいたします。\r\n\r\n--------------------------------------------------------------------------\r\n◇お電話によるお問い合わせは受け付けておりません。予めご了承ください。\r\n\r\n◇お問い合わせは、お問い合わせフォームよりご連絡ください。\r\n https://muumuu-domain.com/?mode=inq\r\n\r\nムームードメイン https://muumuu-domain.com\r\nGMOペパボ株式会社 https://pepabo.com/company/overview/\r\n--------------------------------------------------------------------------\r\nおかげさまで29周年　すべての人にインターネット\r\n当社はGMOインターネットグループ（東証プライム上場 9449）のメンバーです。\r\n■GMO INTERNET GROUP■ https://www.gmo.jp/\r\n--------------------------------------------------------------------------\r\n機密情報に関する注意事項：このE-mailは、発信者が意図した\r\n受信者による閲覧・利用を目的としたものです。万一、貴殿が\r\n意図された受信者でない場合には、直ちに送信者に連絡のうえ、\r\nこのE-mailを破棄願います。"
+    },
+    {
+      "id": "1960358f472670d3",
+      "internalDate": "1743812876000",
+      "threadId": "1960358f472670d3",
+      "date": "5 Apr 2025 09:27:56 +0900",
+      "from": "no-reply@service.muumuu-domain.com",
+      "to": "kimkongyong@gmail.com",
+      "subject": "【重要】【ムームードメイン】《yatteme.jp》（期限切れドメイン）の更新について",
+      "listUnsubscribe": "<mailto:googlegroups-manage+1024540281556+unsubscribe@googlegroups.com>, <https://groups.google.com/a/orgiast.jp/group/kanri/subscribe>",
+      "snippet": "平素はムームードメインをご利用頂き、誠にありがとうございます。 2025/03/31 をもちまして『 yatteme.jp 』のご契約が終了 いたしました。 契約期間が終了した後も「 19日以内 」でしたら コントロールパネル内のメニュー項目【各種お支払い】より更新手続きの お申し込みを行うことができます。 ※ただし、別途費用として「 登録回復手数料（13280円） 」が発生いたします。 契約更新を",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_UPDATES"
+      ],
+      "body": "平素はムームードメインをご利用頂き、誠にありがとうございます。\r\n\r\n2025/03/31 をもちまして『 yatteme.jp 』のご契約が終了\r\nいたしました。\r\n\r\n契約期間が終了した後も「 19日以内 」でしたら\r\nコントロールパネル内のメニュー項目【各種お支払い】より更新手続きの\r\nお申し込みを行うことができます。\r\n※ただし、別途費用として「 登録回復手数料（13,280円） 」が発生いたします。\r\n\r\n契約更新をご希望の場合はコントロールパネル内のメニュー項目\r\n【各種お支払い】より更新お手続きをご検討ください。\r\n\r\n◎対象のドメイン\r\n========================================================\r\n【 ムームーＩＤ 】orgiast\r\n【 ド　メ　イ　ン 】yatteme.jp\r\n【 契　約　期　間 】2024/04/01 ～ 2025/03/31\r\n========================================================\r\n\r\n更新費用のご入金については「 契約更新可能日：2025/04/19 」までに、\r\n弊社にて更新費用の着金が確認出来るようご入金をお願いいたします。\r\n\r\n　【 期限切れドメインの再契約方法 】\r\n　 https://muumuu-domain.com/?mode=guide&state=reverse\r\n　\r\n　【 コントロールパネル 】\r\n　 https://muumuu-domain.com/?mode=conpane\r\n\r\nより良いサービスを提供していける様努めてまいりますので\r\n今後ともどうぞよろしくお願いいたします。\r\n\r\n--------------------------------------------------------------------------\r\n◇お電話によるお問い合わせは受け付けておりません。予めご了承ください。\r\n\r\n◇お問い合わせは、お問い合わせフォームよりご連絡ください。\r\n https://muumuu-domain.com/?mode=inq\r\n\r\nムームードメイン https://muumuu-domain.com\r\nGMOペパボ株式会社 https://pepabo.com/company/overview/\r\n--------------------------------------------------------------------------\r\nおかげさまで29周年　すべての人にインターネット\r\n当社はGMOインターネットグループ（東証プライム上場 9449）のメンバーです。\r\n■GMO INTERNET GROUP■ https://www.gmo.jp/\r\n--------------------------------------------------------------------------\r\n機密情報に関する注意事項：このE-mailは、発信者が意図した\r\n受信者による閲覧・利用を目的としたものです。万一、貴殿が\r\n意図された受信者でない場合には、直ちに送信者に連絡のうえ、\r\nこのE-mailを破棄願います。"
+    },
+    {
+      "id": "195eebc6ae5cb85f",
+      "internalDate": "1743467073000",
+      "threadId": "195eebc6ae5cb85f",
+      "date": "1 Apr 2025 09:24:33 +0900",
+      "from": "no-reply@service.muumuu-domain.com",
+      "to": "kimkongyong@gmail.com",
+      "subject": "【重要】【ムームードメイン】《yatteme.jp》（期限切れドメイン）の更新について",
+      "listUnsubscribe": "<mailto:googlegroups-manage+1024540281556+unsubscribe@googlegroups.com>, <https://groups.google.com/a/orgiast.jp/group/kanri/subscribe>",
+      "snippet": "平素はムームードメインをご利用頂き、誠にありがとうございます。 2025/03/31 をもちまして『 yatteme.jp 』のご契約が終了 いたしました。 契約期間が終了した後も「 19日以内 」でしたら コントロールパネル内のメニュー項目【各種お支払い】より更新手続きの お申し込みを行うことができます。 ※ただし、別途費用として「 登録回復手数料（13280円） 」が発生いたします。 契約更新を",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_UPDATES"
+      ],
+      "body": "平素はムームードメインをご利用頂き、誠にありがとうございます。\r\n\r\n2025/03/31 をもちまして『 yatteme.jp 』のご契約が終了\r\nいたしました。\r\n\r\n契約期間が終了した後も「 19日以内 」でしたら\r\nコントロールパネル内のメニュー項目【各種お支払い】より更新手続きの\r\nお申し込みを行うことができます。\r\n※ただし、別途費用として「 登録回復手数料（13,280円） 」が発生いたします。\r\n\r\n契約更新をご希望の場合はコントロールパネル内のメニュー項目\r\n【各種お支払い】より更新お手続きをご検討ください。\r\n\r\n◎対象のドメイン\r\n========================================================\r\n【 ムームーＩＤ 】orgiast\r\n【 ド　メ　イ　ン 】yatteme.jp\r\n【 契　約　期　間 】2024/04/01 ～ 2025/03/31\r\n========================================================\r\n\r\n更新費用のご入金については「 契約更新可能日：2025/04/19 」までに、\r\n弊社にて更新費用の着金が確認出来るようご入金をお願いいたします。\r\n\r\n　【 期限切れドメインの再契約方法 】\r\n　 https://muumuu-domain.com/?mode=guide&state=reverse\r\n　\r\n　【 コントロールパネル 】\r\n　 https://muumuu-domain.com/?mode=conpane\r\n\r\nより良いサービスを提供していける様努めてまいりますので\r\n今後ともどうぞよろしくお願いいたします。\r\n\r\n--------------------------------------------------------------------------\r\n◇お電話によるお問い合わせは受け付けておりません。予めご了承ください。\r\n\r\n◇お問い合わせは、お問い合わせフォームよりご連絡ください。\r\n https://muumuu-domain.com/?mode=inq\r\n\r\nムームードメイン https://muumuu-domain.com\r\nGMOペパボ株式会社 https://pepabo.com/company/overview/\r\n--------------------------------------------------------------------------\r\nおかげさまで29周年　すべての人にインターネット\r\n当社はGMOインターネットグループ（東証プライム上場 9449）のメンバーです。\r\n■GMO INTERNET GROUP■ https://www.gmo.jp/\r\n--------------------------------------------------------------------------\r\n機密情報に関する注意事項：このE-mailは、発信者が意図した\r\n受信者による閲覧・利用を目的としたものです。万一、貴殿が\r\n意図された受信者でない場合には、直ちに送信者に連絡のうえ、\r\nこのE-mailを破棄願います。"
+    },
+    {
+      "id": "195ecbde6e3ba4a8",
+      "internalDate": "1743433613000",
+      "threadId": "195ecbde6e3ba4a8",
+      "date": "1 Apr 2025 00:06:53 +0900",
+      "from": "no-reply@service.muumuu-domain.com",
+      "to": "kimkongyong@gmail.com",
+      "subject": "【ムームードメイン】破棄ＪＰドメイン登録回復のご案内",
+      "listUnsubscribe": "<mailto:googlegroups-manage+1024540281556+unsubscribe@googlegroups.com>, <https://groups.google.com/a/orgiast.jp/group/kanri/subscribe>",
+      "snippet": "=================================================================== このメッセージは、ムームードメインより自動的に送信されています。 このメールに心当たりのない場合やご不明な点がある場合は、 https://muumuu-domain.com/?mode=inq までご連絡ください。 ========================",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_UPDATES"
+      ],
+      "body": "===================================================================\r\nこのメッセージは、ムームードメインより自動的に送信されています。\r\nこのメールに心当たりのない場合やご不明な点がある場合は、\r\n https://muumuu-domain.com/?mode=inq までご連絡ください。\r\n===================================================================\r\n\r\n平素は、弊社サービスをご利用いただきましてありがとうございます。\r\n期限切れドメインの契約更新についてのお知らせです。\r\n\r\nyatteme.jp　は、有効期限内に弊社の入金確認が行えませんでしたので、\r\n先月末をもちまして、有効期限切れとなっております。\r\n\r\n有効期限が切れた、汎用・都道府県jpドメインの更新には、\r\n通常費用と合わせて、登録回復手数料 ￥13,280 が別途発生するため、\r\nご請求額は 【 ￥17,400 】 となります。\r\n\r\n==================================================================\r\n【 ドメイン 】yatteme.jp\r\n【 ご請求額 】￥17,400\r\n【入金締切日】2025/04/15\r\n==================================================================\r\n\r\n更新手続きをご希望の場合は、コントロールパネルにログインを行って頂き、\r\nご請求金額の確認ならびに、入金締切日までに弊社にて入金確認が取れますよう、\r\nお早めにお手続きをお願いいたします。\r\n\r\n ▼コントロールパネル\r\n https://muumuu-domain.com/?mode=conpane&state=conpane\r\n\r\n※お支払い後、ご入金の確認はリアルタイムでの確認が行えません。\r\n　ご入金の確認には週末を除き数日程度お待ち頂く場合がございます。\r\n\r\n※コンビニ決済をご利用のお客様で、￥17,400 の請求額で払込票を\r\n　プリントアウトされているお客様は、お手数ではございますが\r\n　「各種お支払い」にて、新しく「払込票」を取得ください。\r\n\r\nお手続きの手順は以下のマニュアルをご参照くださいませ。\r\n\r\n ▼期限切れドメインの契約更新について\r\n https://muumuu-domain.com/?mode=guide&state=reverse\r\n\r\n弊社にて、回復手数料の入金の確認ができましたら、ドメインの更新を\r\n行わせて頂きます。\r\n\r\n以上更新のご検討をお願いいたします。\r\n\r\n\r\n\r\n--------------------------------------------------------------------------\r\n◇お問い合わせは、【お問い合わせフォーム】にて承ります。\r\n　フォーム以外からお問い合わせの場合、ご回答が遅れる場合や、お返事が出来な\r\n　い場合がございます。\r\n\r\n　【お問い合わせフォーム】https://muumuu-domain.com/?mode=inq\r\n\r\n◇ユーザーの方でお問い合わせの際は、お名前・ご契約ドメイン名を必ずご明記下\r\n　さい。\r\n\r\n◇お電話によるお問い合わせは受け付けておりません。ご了承ください。\r\n\r\n┏ PR ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\r\n ★『ロリポップ！レンタルサーバ』は月額99円から利用可能。容量最大1TB！\r\n　　 http://lolipop.jp/?ref=muupr\r\n┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\r\n\r\n--------------------------------------------------------------------------\r\nムームードメイン： https://muumuu-domain.com/\r\n\r\nGMOペパボ株式会社 https://pepabo.com/company/overview/\r\n--------------------------------------------------------------------------\r\nおかげさまで29周年　すべての人にインターネット\r\n当社はGMOインターネットグループ（東証プライム上場 9449）のメンバーです。\r\n■GMO INTERNET GROUP■ https://www.gmo.jp/\r\n--------------------------------------------------------------------------\r\n機密情報に関する注意事項：このE-mailは、発信者が意図した\r\n受信者による閲覧・利用を目的としたものです。万一、貴殿が\r\n意図された受信者でない場合には、直ちに送信者に連絡のうえ、\r\nこのE-mailを破棄願います。"
+    },
+    {
+      "id": "195e9d3693c18156",
+      "internalDate": "1743384693000",
+      "threadId": "195e9d3693c18156",
+      "date": "Mon, 31 Mar 2025 10:31:33 +0900",
+      "from": "no-reply@service.muumuu-domain.com",
+      "to": "kimkongyong@gmail.com",
+      "subject": "【重要】ドメインの有効期限日です。更新手続きをお急ぎください。[yatteme.jp]",
+      "listUnsubscribe": "<mailto:googlegroups-manage+1024540281556+unsubscribe@googlegroups.com>, <https://groups.google.com/a/orgiast.jp/group/kanri/subscribe>",
+      "snippet": "ドメインの有効期限当日のお知らせ ドメインの失効が迫っています。 有効期限日までに、更新手続きを行ってください。 yatteme.jp 有効期限日：2025年03月31日 今すぐ更新する ・ 支払先銀行口座を表示する コンビニ払込票やその他お支払いはコントロールパネルからお手続きくださいますようお願いいたします。 ドメインの失効リスクについて ・ 復旧費用は最大29800円発生する場合があります",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_UPDATES"
+      ],
+      "body": "━━━━━━━━━━━━━━━━━━\r\nこのメールは、ムームードメインより自動的に送信されています。\r\n━━━━━━━━━━━━━━━━━━\r\n\r\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\r\nドメインの有効期限当日のお知らせ\r\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\r\n\r\nドメインの失効が迫っています。\r\n有効期限日までに、更新手続きを行ってください。\r\n\r\n================================\r\n■ yatteme.jp\r\n■ 有効期限日：2025年03月31日\r\n================================\r\n\r\n\r\n▼ かんたん更新で更新する\r\nhttps://muumuu-domain.com/checkout/renew/domain/easy?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.Ijg0MDExMjMyLTVjODAtNGJlMy1hMjcyLWIzMDBhNzIyODViNyI.yww9m57R5i8nIrCaGyI8xE3qYq7Nu7i68UoRa7KKM8s&utm_campaign=text000&utm_content=easy&utm_medium=email&utm_source=renewal_letter\r\n\r\n　・コントロールパネルにログイン不要\r\n　・クレジットカード、おさいぽ！決済ですぐに着金\r\n\r\n▼ 支払先銀行口座を表示する\r\nhttps://muumuu-domain.com/?cid=zlnbnmvv&mode=payment_info&pid=0\r\n\r\nコンビニ払込票やその他のお支払いはコントロールパネルからお手続きくださいますようお願いいたします。\r\n\r\n▼ コントロールパネルへ\r\nhttps://muumuu-domain.com/?mode=conpane&state=payment&utm_campaign=text000&utm_content=easy&utm_medium=email&utm_source=renewal_letter\r\n\r\n------------------------------------------------------\r\nドメインの失効リスクについて\r\n------------------------------------------------------\r\n\r\n■ 復旧費用は最大29,800円発生する場合があります\r\nドメインの有効期限が切れた場合、所定の期間内に更新手続きを行うことで引き続きご利用いただくことができますが、復旧手続きには更新費用に加え復旧費用が別途必要になる場合がございます。また、一部ドメインは復旧自体ができません。\r\n\r\n■ 同じドメインを取り戻すことは非常に困難です\r\nドメインが失効すると、第三者に取得されてしまうケースが多く、再度同じドメインをご利用いただくことが難しくなります。お早めのドメイン更新手続きをお勧めします。\r\n\r\n------------------------------------------------------\r\nドメインの更新について\r\n------------------------------------------------------\r\n\r\nドメインを使い続けるには、更新手続きが必要です。\r\n更新に関する詳細や、自動更新・手動更新それぞれのメリットや更新方法ついては、ドメインの更新についてページよりご確認いただけます。\r\n\r\n▼ 更新についてページを見る\r\nhttps://muumuu-domain.com/supports/renew-domain&utm_campaign=text000&utm_content=easy&utm_medium=email&utm_source=renewal_letter\r\n\r\n\r\n※ドメインの失効により発生する損害につきましては、損害賠償責任その他一切の責任を負いません。\r\n※ドメインの更新に関してご不明な点がございましたら、お問い合わせフォームよりご連絡ください。\r\n\r\n━━━━━━━━━━━━━━━━━━\r\nこのメールに心当たりのない場合やご不明な点がある場合は、お問い合わせフォームよりご連絡下さい。\r\nhttps://muumuu-domain.com/?mode=inq\r\n\r\nムームードメイン https://muumuu-domain.com\r\nGMOペパボ株式会社 https://pepabo.com/company/overview/\r\n━━━━━━━━━━━━━━━━━━\r\nおかげさまで29周年 すべての人にインターネット\r\n当社はGMOインターネットグループ（東証プライム上場 9449）のメンバーです。\r\n■GMO INTERNET GROUP■ https://www.gmo.jp/\r\n━━━━━━━━━━━━━━━━━━\r\n機密情報に関する注意事項：このE-mailは、発信者が意図した\r\n受信者による閲覧・利用を目的としたものです。万一、貴殿が\r\n意図された受信者でない場合には、直ちに送信者に連絡のうえ、\r\nこのE-mailを破棄願います。"
+    },
+    {
+      "id": "195e4a848ca5ce51",
+      "internalDate": "1743297981000",
+      "threadId": "195e4a848ca5ce51",
+      "date": "Sun, 30 Mar 2025 10:26:21 +0900",
+      "from": "no-reply@service.muumuu-domain.com",
+      "to": "kimkongyong@gmail.com",
+      "subject": "【重要】ドメインの有効期限1日前です。更新手続きをお急ぎください。[yatteme.jp]",
+      "listUnsubscribe": "<mailto:googlegroups-manage+1024540281556+unsubscribe@googlegroups.com>, <https://groups.google.com/a/orgiast.jp/group/kanri/subscribe>",
+      "snippet": "ドメインの有効期限1日前のお知らせ ドメインの失効が迫っています。 有効期限日までに、更新手続きを行ってください。 yatteme.jp 有効期限日：2025年03月31日 今すぐ更新する ・ 支払先銀行口座を表示する コンビニ払込票やその他お支払いはコントロールパネルからお手続きくださいますようお願いいたします。 ドメインの失効リスクについて ・ 復旧費用は最大29800円発生する場合があります",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_UPDATES"
+      ],
+      "body": "━━━━━━━━━━━━━━━━━━\r\nこのメールは、ムームードメインより自動的に送信されています。\r\n━━━━━━━━━━━━━━━━━━\r\n\r\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\r\nドメインの有効期限1日前のお知らせ\r\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\r\n\r\nドメインの失効が迫っています。\r\n有効期限日までに、更新手続きを行ってください。\r\n\r\n================================\r\n■ yatteme.jp\r\n■ 有効期限日：2025年03月31日\r\n================================\r\n\r\n\r\n▼ かんたん更新で更新する\r\nhttps://muumuu-domain.com/checkout/renew/domain/easy?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.Ijg0MDExMjMyLTVjODAtNGJlMy1hMjcyLWIzMDBhNzIyODViNyI.yww9m57R5i8nIrCaGyI8xE3qYq7Nu7i68UoRa7KKM8s&utm_campaign=text001&utm_content=easy&utm_medium=email&utm_source=renewal_letter\r\n\r\n　・コントロールパネルにログイン不要\r\n　・クレジットカード、おさいぽ！決済ですぐに着金\r\n\r\n▼ 支払先銀行口座を表示する\r\nhttps://muumuu-domain.com/?cid=zlnbnmvv&mode=payment_info&pid=0\r\n\r\nコンビニ払込票やその他のお支払いはコントロールパネルからお手続きくださいますようお願いいたします。\r\n\r\n▼ コントロールパネルへ\r\nhttps://muumuu-domain.com/?mode=conpane&state=payment&utm_campaign=text001&utm_content=easy&utm_medium=email&utm_source=renewal_letter\r\n\r\n------------------------------------------------------\r\nドメインの失効リスクについて\r\n------------------------------------------------------\r\n\r\n■ 復旧費用は最大29,800円発生する場合があります\r\nドメインの有効期限が切れた場合、所定の期間内に更新手続きを行うことで引き続きご利用いただくことができますが、復旧手続きには更新費用に加え復旧費用が別途必要になる場合がございます。また、一部ドメインは復旧自体ができません。\r\n\r\n■ 同じドメインを取り戻すことは非常に困難です\r\nドメインが失効すると、第三者に取得されてしまうケースが多く、再度同じドメインをご利用いただくことが難しくなります。お早めのドメイン更新手続きをお勧めします。\r\n\r\n------------------------------------------------------\r\nドメインの更新について\r\n------------------------------------------------------\r\n\r\nドメインを使い続けるには、更新手続きが必要です。\r\n更新に関する詳細や、自動更新・手動更新それぞれのメリットや更新方法ついては、ドメインの更新についてページよりご確認いただけます。\r\n\r\n▼ 更新についてページを見る\r\nhttps://muumuu-domain.com/supports/renew-domain&utm_campaign=text001&utm_content=easy&utm_medium=email&utm_source=renewal_letter\r\n\r\n\r\n※ドメインの失効により発生する損害につきましては、損害賠償責任その他一切の責任を負いません。\r\n※ドメインの更新に関してご不明な点がございましたら、お問い合わせフォームよりご連絡ください。\r\n\r\n━━━━━━━━━━━━━━━━━━\r\nこのメールに心当たりのない場合やご不明な点がある場合は、お問い合わせフォームよりご連絡下さい。\r\nhttps://muumuu-domain.com/?mode=inq\r\n\r\nムームードメイン https://muumuu-domain.com\r\nGMOペパボ株式会社 https://pepabo.com/company/overview/\r\n━━━━━━━━━━━━━━━━━━\r\nおかげさまで29周年 すべての人にインターネット\r\n当社はGMOインターネットグループ（東証プライム上場 9449）のメンバーです。\r\n■GMO INTERNET GROUP■ https://www.gmo.jp/\r\n━━━━━━━━━━━━━━━━━━\r\n機密情報に関する注意事項：このE-mailは、発信者が意図した\r\n受信者による閲覧・利用を目的としたものです。万一、貴殿が\r\n意図された受信者でない場合には、直ちに送信者に連絡のうえ、\r\nこのE-mailを破棄願います。"
+    },
+    {
+      "id": "195df82f486e9a76",
+      "internalDate": "1743211648000",
+      "threadId": "195df82f486e9a76",
+      "date": "Sat, 29 Mar 2025 10:27:28 +0900",
+      "from": "no-reply@service.muumuu-domain.com",
+      "to": "kimkongyong@gmail.com",
+      "subject": "【重要】ドメインの有効期限2日前です。更新手続きをお急ぎください。[yatteme.jp]",
+      "listUnsubscribe": "<mailto:googlegroups-manage+1024540281556+unsubscribe@googlegroups.com>, <https://groups.google.com/a/orgiast.jp/group/kanri/subscribe>",
+      "snippet": "ドメインの有効期限2日前のお知らせ ドメインの失効が迫っています。 有効期限日までに、更新手続きを行ってください。 yatteme.jp 有効期限日：2025年03月31日 今すぐ更新する ・ 支払先銀行口座を表示する コンビニ払込票やその他お支払いはコントロールパネルからお手続きくださいますようお願いいたします。 ドメインの失効リスクについて ・ 復旧費用は最大29800円発生する場合があります",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_UPDATES"
+      ],
+      "body": "━━━━━━━━━━━━━━━━━━\r\nこのメールは、ムームードメインより自動的に送信されています。\r\n━━━━━━━━━━━━━━━━━━\r\n\r\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\r\nドメインの有効期限2日前のお知らせ\r\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\r\n\r\nドメインの失効が迫っています。\r\n有効期限日までに、更新手続きを行ってください。\r\n\r\n================================\r\n■ yatteme.jp\r\n■ 有効期限日：2025年03月31日\r\n================================\r\n\r\n\r\n▼ かんたん更新で更新する\r\nhttps://muumuu-domain.com/checkout/renew/domain/easy?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.Ijg0MDExMjMyLTVjODAtNGJlMy1hMjcyLWIzMDBhNzIyODViNyI.yww9m57R5i8nIrCaGyI8xE3qYq7Nu7i68UoRa7KKM8s&utm_campaign=text002&utm_content=easy&utm_medium=email&utm_source=renewal_letter\r\n\r\n　・コントロールパネルにログイン不要\r\n　・クレジットカード、おさいぽ！決済ですぐに着金\r\n\r\n▼ 支払先銀行口座を表示する\r\nhttps://muumuu-domain.com/?mode=conpane&state=payment\r\n\r\nコンビニ払込票やその他のお支払いはコントロールパネルからお手続きくださいますようお願いいたします。\r\n\r\n▼ コントロールパネルへ\r\nhttps://muumuu-domain.com/?mode=conpane&state=payment&utm_campaign=text002&utm_content=easy&utm_medium=email&utm_source=renewal_letter\r\n\r\n------------------------------------------------------\r\nドメインの失効リスクについて\r\n------------------------------------------------------\r\n\r\n■ 復旧費用は最大29,800円発生する場合があります\r\nドメインの有効期限が切れた場合、所定の期間内に更新手続きを行うことで引き続きご利用いただくことができますが、復旧手続きには更新費用に加え復旧費用が別途必要になる場合がございます。また、一部ドメインは復旧自体ができません。\r\n\r\n■ 同じドメインを取り戻すことは非常に困難です\r\nドメインが失効すると、第三者に取得されてしまうケースが多く、再度同じドメインをご利用いただくことが難しくなります。お早めのドメイン更新手続きをお勧めします。\r\n\r\n------------------------------------------------------\r\nドメインの更新について\r\n------------------------------------------------------\r\n\r\nドメインを使い続けるには、更新手続きが必要です。\r\n更新に関する詳細や、自動更新・手動更新それぞれのメリットや更新方法ついては、ドメインの更新についてページよりご確認いただけます。\r\n\r\n▼ 更新についてページを見る\r\nhttps://muumuu-domain.com/supports/renew-domain&utm_campaign=text002&utm_content=easy&utm_medium=email&utm_source=renewal_letter\r\n\r\n\r\n※ドメインの失効により発生する損害につきましては、損害賠償責任その他一切の責任を負いません。\r\n※ドメインの更新に関してご不明な点がございましたら、お問い合わせフォームよりご連絡ください。\r\n\r\n━━━━━━━━━━━━━━━━━━\r\nこのメールに心当たりのない場合やご不明な点がある場合は、お問い合わせフォームよりご連絡下さい。\r\nhttps://muumuu-domain.com/?mode=inq\r\n\r\nムームードメイン https://muumuu-domain.com\r\nGMOペパボ株式会社 https://pepabo.com/company/overview/\r\n━━━━━━━━━━━━━━━━━━\r\nおかげさまで29周年 すべての人にインターネット\r\n当社はGMOインターネットグループ（東証プライム上場 9449）のメンバーです。\r\n■GMO INTERNET GROUP■ https://www.gmo.jp/\r\n━━━━━━━━━━━━━━━━━━\r\n機密情報に関する注意事項：このE-mailは、発信者が意図した\r\n受信者による閲覧・利用を目的としたものです。万一、貴殿が\r\n意図された受信者でない場合には、直ちに送信者に連絡のうえ、\r\nこのE-mailを破棄願います。"
+    },
+    {
+      "id": "195b63b6dc9555a3",
+      "internalDate": "1742519092000",
+      "threadId": "195b63b6dc9555a3",
+      "date": "Fri, 21 Mar 2025 10:04:52 +0900",
+      "from": "no-reply@service.muumuu-domain.com",
+      "to": "kimkongyong@gmail.com",
+      "subject": "ドメインの有効期限10日前です。[yatteme.jp]",
+      "listUnsubscribe": "<mailto:googlegroups-manage+1024540281556+unsubscribe@googlegroups.com>, <https://groups.google.com/a/orgiast.jp/group/kanri/subscribe>",
+      "snippet": "ドメインの有効期限10日前のお知らせ ドメインの失効が迫っています。 有効期限日までに、更新手続きを行ってください。 yatteme.jp 有効期限日：2025年03月31日 今すぐ更新する ・ 支払先銀行口座を表示する コンビニ払込票やその他お支払いはコントロールパネルからお手続きくださいますようお願いいたします。 ドメインの失効リスクについて ・ 復旧費用は最大29800円発生する場合があります",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_UPDATES"
+      ],
+      "body": "━━━━━━━━━━━━━━━━━━\r\nこのメールは、ムームードメインより自動的に送信されています。\r\n━━━━━━━━━━━━━━━━━━\r\n\r\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\r\nドメインの有効期限10日前のお知らせ\r\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\r\n\r\nドメインの失効が迫っています。\r\n有効期限日までに、更新手続きを行ってください。\r\n\r\n================================\r\n■ yatteme.jp\r\n■ 有効期限日：2025年03月31日\r\n================================\r\n\r\n\r\n▼ かんたん更新で更新する\r\nhttps://muumuu-domain.com/checkout/renew/domain/easy?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.Ijg0MDExMjMyLTVjODAtNGJlMy1hMjcyLWIzMDBhNzIyODViNyI.yww9m57R5i8nIrCaGyI8xE3qYq7Nu7i68UoRa7KKM8s&utm_campaign=text010&utm_content=easy&utm_medium=email&utm_source=renewal_letter\r\n\r\n　・コントロールパネルにログイン不要\r\n　・クレジットカード、おさいぽ！決済ですぐに着金\r\n\r\n▼ 支払先銀行口座を表示する\r\nhttps://muumuu-domain.com/?cid=zlbbkvkl&mode=payment_info&pid=0\r\n\r\nコンビニ払込票やその他のお支払いはコントロールパネルからお手続きくださいますようお願いいたします。\r\n\r\n▼ コントロールパネルへ\r\nhttps://muumuu-domain.com/?mode=conpane&state=payment&utm_campaign=text010&utm_content=easy&utm_medium=email&utm_source=renewal_letter\r\n\r\n------------------------------------------------------\r\nドメインの失効リスクについて\r\n------------------------------------------------------\r\n\r\n■ 復旧費用は最大29,800円発生する場合があります\r\nドメインの有効期限が切れた場合、所定の期間内に更新手続きを行うことで引き続きご利用いただくことができますが、復旧手続きには更新費用に加え復旧費用が別途必要になる場合がございます。また、一部ドメインは復旧自体ができません。\r\n\r\n■ 同じドメインを取り戻すことは非常に困難です\r\nドメインが失効すると、第三者に取得されてしまうケースが多く、再度同じドメインをご利用いただくことが難しくなります。お早めのドメイン更新手続きをお勧めします。\r\n\r\n------------------------------------------------------\r\nドメインの更新について\r\n------------------------------------------------------\r\n\r\nドメインを使い続けるには、更新手続きが必要です。\r\n更新に関する詳細や、自動更新・手動更新それぞれのメリットや更新方法ついては、ドメインの更新についてページよりご確認いただけます。\r\n\r\n▼ 更新についてページを見る\r\nhttps://muumuu-domain.com/supports/renew-domain&utm_campaign=text010&utm_content=easy&utm_medium=email&utm_source=renewal_letter\r\n\r\n\r\n※ドメインの失効により発生する損害につきましては、損害賠償責任その他一切の責任を負いません。\r\n※ドメインの更新に関してご不明な点がございましたら、お問い合わせフォームよりご連絡ください。\r\n\r\n━━━━━━━━━━━━━━━━━━\r\nこのメールに心当たりのない場合やご不明な点がある場合は、お問い合わせフォームよりご連絡下さい。\r\nhttps://muumuu-domain.com/?mode=inq\r\n\r\nムームードメイン https://muumuu-domain.com\r\nGMOペパボ株式会社 https://pepabo.com/company/overview/\r\n━━━━━━━━━━━━━━━━━━\r\nおかげさまで29周年 すべての人にインターネット\r\n当社はGMOインターネットグループ（東証プライム上場 9449）のメンバーです。\r\n■GMO INTERNET GROUP■ https://www.gmo.jp/\r\n━━━━━━━━━━━━━━━━━━\r\n機密情報に関する注意事項：このE-mailは、発信者が意図した\r\n受信者による閲覧・利用を目的としたものです。万一、貴殿が\r\n意図された受信者でない場合には、直ちに送信者に連絡のうえ、\r\nこのE-mailを破棄願います。"
+    },
+    {
+      "id": "195a1739079f1a03",
+      "internalDate": "1742170453000",
+      "threadId": "195a1739079f1a03",
+      "date": "17 Mar 2025 09:14:13 +0900",
+      "from": "no-reply@service.muumuu-domain.com",
+      "to": "kimkongyong@gmail.com",
+      "subject": "【重要】【ムームードメイン】《yatteme.fun》（期限切れドメイン）の更新について",
+      "listUnsubscribe": "<mailto:googlegroups-manage+1024540281556+unsubscribe@googlegroups.com>, <https://groups.google.com/a/orgiast.jp/group/kanri/subscribe>",
+      "snippet": "平素はムームードメインをご利用頂き、誠にありがとうございます。 2025/03/09 をもちまして『 yatteme.fun 』のご契約が終了いたしました。 ドメインの更新を希望される場合は、下記ご参照の上コントロールパネルにてお手続きください。 ▼契約期間が終了して「 20日以内 」の場合契約期間が終了した後も「 20日以内 」でしたらコントロールパネル内【各種お支払い】より通常費用にて、更新",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_UPDATES"
+      ],
+      "body": "平素はムームードメインをご利用頂き、誠にありがとうございます。\r\n\r\n2025/03/09 をもちまして『 yatteme.fun 』のご契約が終了\r\nいたしました。\r\nドメインの更新を希望される場合は、下記ご参照の上\r\nコントロールパネルにてお手続きください。\r\n\r\n\r\n▼契約期間が終了して「 20日以内 」の場合\r\n\r\n契約期間が終了した後も「 20日以内 」でしたら\r\nコントロールパネル内【各種お支払い】より\r\n通常費用にて、更新手続きのお申し込みを行うことができます。\r\n\r\n契約更新をご希望の場合はコントロールパネル内のメニュー項目\r\n【ドメイン契約お支払い】＞【各種お支払い】より更新お手続きをご検討ください。\r\n\r\n 【コントロールパネル - 各種お支払い】\r\n https://muumuu-domain.com/?mode=conpane&state=payment \r\n\r\n 【期限切れドメインの再契約方法】\r\n https://muumuu-domain.com/?mode=guide&state=reverse\r\n\r\n◎対象のドメイン\r\n========================================================\r\n【 ムームーＩＤ 】orgiast\r\n【 ド　メ　イ　ン 】yatteme.fun\r\n【 契　約　期　間 】2024/03/10 ～ 2025/03/09\r\n========================================================\r\n\r\n更新費用のご入金については「 契約更新可能日：2025/03/29 」までに、\r\n弊社にて更新費用の着金が確認出来るようご入金をお願いいたします。\r\n\r\n\r\n▼契約期間が終了して「 20日超過 」の場合\r\n\r\n通常費用での更新が可能な「 契約更新可能日（20日以内） 」を経過しても、\r\n契約期間終了後「 30日以内 」でしたら、コントロールパネル内\r\n【ドメイン契約お支払い】＞【各種お支払い】より\r\n更新手続きのお申し込みを行うことができます。\r\n\r\nこちらのお手続きでは、更新費用とは別に「 回復手数料（29,800円） 」がかかります。\r\n\r\n契約更新をご希望の場合は、コントロールパネル内のメニュー項目\r\n【ドメイン契約お支払い】＞【各種お支払い】より更新お手続きをご検討ください。\r\n\r\n 【コントロールパネル - 各種お支払い】\r\n https://muumuu-domain.com/?mode=conpane&state=payment \r\n\r\n 【期限切れドメインの再契約方法】\r\n https://muumuu-domain.com/?mode=guide&state=reverse\r\n\r\n\r\nより良いサービスを提供していける様努めてまいりますので\r\n今後ともどうぞよろしくお願いいたします。\r\n\r\n--------------------------------------------------------------------------\r\n◇お電話によるお問い合わせは受け付けておりません。予めご了承ください。\r\n\r\n◇お問い合わせは、お問い合わせフォームよりご連絡ください。\r\n https://muumuu-domain.com/?mode=inq\r\n\r\nムームードメイン https://muumuu-domain.com\r\nGMOペパボ株式会社 https://pepabo.com/company/overview/\r\n--------------------------------------------------------------------------\r\nおかげさまで29周年　すべての人にインターネット\r\n当社はGMOインターネットグループ（東証プライム上場 9449）のメンバーです。\r\n■GMO INTERNET GROUP■ https://www.gmo.jp/\r\n--------------------------------------------------------------------------\r\n機密情報に関する注意事項：このE-mailは、発信者が意図した\r\n受信者による閲覧・利用を目的としたものです。万一、貴殿が\r\n意図された受信者でない場合には、直ちに送信者に連絡のうえ、\r\nこのE-mailを破棄願います。"
+    },
+    {
+      "id": "1959c7aea5bc4728",
+      "internalDate": "1742087048000",
+      "threadId": "1959c7aea5bc4728",
+      "date": "Sun, 16 Mar 2025 10:04:08 +0900",
+      "from": "no-reply@service.muumuu-domain.com",
+      "to": "kimkongyong@gmail.com",
+      "subject": "ドメインの有効期限15日前です。[yatteme.jp]",
+      "listUnsubscribe": "<mailto:googlegroups-manage+1024540281556+unsubscribe@googlegroups.com>, <https://groups.google.com/a/orgiast.jp/group/kanri/subscribe>",
+      "snippet": "ドメインの有効期限15日前のお知らせ ドメインの失効が迫っています。 有効期限日までに、更新手続きを行ってください。 yatteme.jp 有効期限日：2025年03月31日 今すぐ更新する ・ 支払先銀行口座を表示する コンビニ払込票やその他お支払いはコントロールパネルからお手続きくださいますようお願いいたします。 ドメインの失効リスクについて ・ 復旧費用は最大29800円発生する場合があります",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_UPDATES"
+      ],
+      "body": "━━━━━━━━━━━━━━━━━━\r\nこのメールは、ムームードメインより自動的に送信されています。\r\n━━━━━━━━━━━━━━━━━━\r\n\r\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\r\nドメインの有効期限15日前のお知らせ\r\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\r\n\r\nドメインの失効が迫っています。\r\n有効期限日までに、更新手続きを行ってください。\r\n\r\n================================\r\n■ yatteme.jp\r\n■ 有効期限日：2025年03月31日\r\n================================\r\n\r\n\r\n▼ かんたん更新で更新する\r\nhttps://muumuu-domain.com/checkout/renew/domain/easy?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.Ijg0MDExMjMyLTVjODAtNGJlMy1hMjcyLWIzMDBhNzIyODViNyI.yww9m57R5i8nIrCaGyI8xE3qYq7Nu7i68UoRa7KKM8s&utm_campaign=text015&utm_content=easy&utm_medium=email&utm_source=renewal_letter\r\n\r\n　・コントロールパネルにログイン不要\r\n　・クレジットカード、おさいぽ！決済ですぐに着金\r\n\r\n▼ 支払先銀行口座を表示する\r\nhttps://muumuu-domain.com/?cid=zlbbkvkl&mode=payment_info&pid=0\r\n\r\nコンビニ払込票やその他のお支払いはコントロールパネルからお手続きくださいますようお願いいたします。\r\n\r\n▼ コントロールパネルへ\r\nhttps://muumuu-domain.com/?mode=conpane&state=payment&utm_campaign=text015&utm_content=easy&utm_medium=email&utm_source=renewal_letter\r\n\r\n------------------------------------------------------\r\nドメインの失効リスクについて\r\n------------------------------------------------------\r\n\r\n■ 復旧費用は最大29,800円発生する場合があります\r\nドメインの有効期限が切れた場合、所定の期間内に更新手続きを行うことで引き続きご利用いただくことができますが、復旧手続きには更新費用に加え復旧費用が別途必要になる場合がございます。また、一部ドメインは復旧自体ができません。\r\n\r\n■ 同じドメインを取り戻すことは非常に困難です\r\nドメインが失効すると、第三者に取得されてしまうケースが多く、再度同じドメインをご利用いただくことが難しくなります。お早めのドメイン更新手続きをお勧めします。\r\n\r\n------------------------------------------------------\r\nドメインの更新について\r\n------------------------------------------------------\r\n\r\nドメインを使い続けるには、更新手続きが必要です。\r\n更新に関する詳細や、自動更新・手動更新それぞれのメリットや更新方法ついては、ドメインの更新についてページよりご確認いただけます。\r\n\r\n▼ 更新についてページを見る\r\nhttps://muumuu-domain.com/supports/renew-domain&utm_campaign=text015&utm_content=easy&utm_medium=email&utm_source=renewal_letter\r\n\r\n\r\n※ドメインの失効により発生する損害につきましては、損害賠償責任その他一切の責任を負いません。\r\n※ドメインの更新に関してご不明な点がございましたら、お問い合わせフォームよりご連絡ください。\r\n\r\n━━━━━━━━━━━━━━━━━━\r\nこのメールに心当たりのない場合やご不明な点がある場合は、お問い合わせフォームよりご連絡下さい。\r\nhttps://muumuu-domain.com/?mode=inq\r\n\r\nムームードメイン https://muumuu-domain.com\r\nGMOペパボ株式会社 https://pepabo.com/company/overview/\r\n━━━━━━━━━━━━━━━━━━\r\nおかげさまで29周年 すべての人にインターネット\r\n当社はGMOインターネットグループ（東証プライム上場 9449）のメンバーです。\r\n■GMO INTERNET GROUP■ https://www.gmo.jp/\r\n━━━━━━━━━━━━━━━━━━\r\n機密情報に関する注意事項：このE-mailは、発信者が意図した\r\n受信者による閲覧・利用を目的としたものです。万一、貴殿が\r\n意図された受信者でない場合には、直ちに送信者に連絡のうえ、\r\nこのE-mailを破棄願います。"
+    },
+    {
+      "id": "19591fe239960403",
+      "internalDate": "1741911098000",
+      "threadId": "19591fe239960403",
+      "date": "14 Mar 2025 09:11:38 +0900",
+      "from": "no-reply@service.muumuu-domain.com",
+      "to": "kimkongyong@gmail.com",
+      "subject": "【重要】【ムームードメイン】《yatteme.fun》（期限切れドメイン）の更新について",
+      "listUnsubscribe": "<mailto:googlegroups-manage+1024540281556+unsubscribe@googlegroups.com>, <https://groups.google.com/a/orgiast.jp/group/kanri/subscribe>",
+      "snippet": "平素はムームードメインをご利用頂き、誠にありがとうございます。 2025/03/09 をもちまして『 yatteme.fun 』のご契約が終了いたしました。 ドメインの更新を希望される場合は、下記ご参照の上コントロールパネルにてお手続きください。 ▼契約期間が終了して「 20日以内 」の場合契約期間が終了した後も「 20日以内 」でしたらコントロールパネル内【各種お支払い】より通常費用にて、更新",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_UPDATES"
+      ],
+      "body": "平素はムームードメインをご利用頂き、誠にありがとうございます。\r\n\r\n2025/03/09 をもちまして『 yatteme.fun 』のご契約が終了\r\nいたしました。\r\nドメインの更新を希望される場合は、下記ご参照の上\r\nコントロールパネルにてお手続きください。\r\n\r\n\r\n▼契約期間が終了して「 20日以内 」の場合\r\n\r\n契約期間が終了した後も「 20日以内 」でしたら\r\nコントロールパネル内【各種お支払い】より\r\n通常費用にて、更新手続きのお申し込みを行うことができます。\r\n\r\n契約更新をご希望の場合はコントロールパネル内のメニュー項目\r\n【ドメイン契約お支払い】＞【各種お支払い】より更新お手続きをご検討ください。\r\n\r\n 【コントロールパネル - 各種お支払い】\r\n https://muumuu-domain.com/?mode=conpane&state=payment \r\n\r\n 【期限切れドメインの再契約方法】\r\n https://muumuu-domain.com/?mode=guide&state=reverse\r\n\r\n◎対象のドメイン\r\n========================================================\r\n【 ムームーＩＤ 】orgiast\r\n【 ド　メ　イ　ン 】yatteme.fun\r\n【 契　約　期　間 】2024/03/10 ～ 2025/03/09\r\n========================================================\r\n\r\n更新費用のご入金については「 契約更新可能日：2025/03/29 」までに、\r\n弊社にて更新費用の着金が確認出来るようご入金をお願いいたします。\r\n\r\n\r\n▼契約期間が終了して「 20日超過 」の場合\r\n\r\n通常費用での更新が可能な「 契約更新可能日（20日以内） 」を経過しても、\r\n契約期間終了後「 30日以内 」でしたら、コントロールパネル内\r\n【ドメイン契約お支払い】＞【各種お支払い】より\r\n更新手続きのお申し込みを行うことができます。\r\n\r\nこちらのお手続きでは、更新費用とは別に「 回復手数料（29,800円） 」がかかります。\r\n\r\n契約更新をご希望の場合は、コントロールパネル内のメニュー項目\r\n【ドメイン契約お支払い】＞【各種お支払い】より更新お手続きをご検討ください。\r\n\r\n 【コントロールパネル - 各種お支払い】\r\n https://muumuu-domain.com/?mode=conpane&state=payment \r\n\r\n 【期限切れドメインの再契約方法】\r\n https://muumuu-domain.com/?mode=guide&state=reverse\r\n\r\n\r\nより良いサービスを提供していける様努めてまいりますので\r\n今後ともどうぞよろしくお願いいたします。\r\n\r\n--------------------------------------------------------------------------\r\n◇お電話によるお問い合わせは受け付けておりません。予めご了承ください。\r\n\r\n◇お問い合わせは、お問い合わせフォームよりご連絡ください。\r\n https://muumuu-domain.com/?mode=inq\r\n\r\nムームードメイン https://muumuu-domain.com\r\nGMOペパボ株式会社 https://pepabo.com/company/overview/\r\n--------------------------------------------------------------------------\r\nおかげさまで29周年　すべての人にインターネット\r\n当社はGMOインターネットグループ（東証プライム上場 9449）のメンバーです。\r\n■GMO INTERNET GROUP■ https://www.gmo.jp/\r\n--------------------------------------------------------------------------\r\n機密情報に関する注意事項：このE-mailは、発信者が意図した\r\n受信者による閲覧・利用を目的としたものです。万一、貴殿が\r\n意図された受信者でない場合には、直ちに送信者に連絡のうえ、\r\nこのE-mailを破棄願います。"
+    },
+    {
+      "id": "1957d5e05543af04",
+      "internalDate": "1741565061000",
+      "threadId": "1957d5e05543af04",
+      "date": "10 Mar 2025 09:04:21 +0900",
+      "from": "no-reply@service.muumuu-domain.com",
+      "to": "kimkongyong@gmail.com",
+      "subject": "【重要】【ムームードメイン】《yatteme.fun》（期限切れドメイン）の更新について",
+      "listUnsubscribe": "<mailto:googlegroups-manage+1024540281556+unsubscribe@googlegroups.com>, <https://groups.google.com/a/orgiast.jp/group/kanri/subscribe>",
+      "snippet": "平素はムームードメインをご利用頂き、誠にありがとうございます。 2025/03/09 をもちまして『 yatteme.fun 』のご契約が終了いたしました。 ドメインの更新を希望される場合は、下記ご参照の上コントロールパネルにてお手続きください。 ▼契約期間が終了して「 20日以内 」の場合契約期間が終了した後も「 20日以内 」でしたらコントロールパネル内【各種お支払い】より通常費用にて、更新",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_UPDATES"
+      ],
+      "body": "平素はムームードメインをご利用頂き、誠にありがとうございます。\r\n\r\n2025/03/09 をもちまして『 yatteme.fun 』のご契約が終了\r\nいたしました。\r\nドメインの更新を希望される場合は、下記ご参照の上\r\nコントロールパネルにてお手続きください。\r\n\r\n\r\n▼契約期間が終了して「 20日以内 」の場合\r\n\r\n契約期間が終了した後も「 20日以内 」でしたら\r\nコントロールパネル内【各種お支払い】より\r\n通常費用にて、更新手続きのお申し込みを行うことができます。\r\n\r\n契約更新をご希望の場合はコントロールパネル内のメニュー項目\r\n【ドメイン契約お支払い】＞【各種お支払い】より更新お手続きをご検討ください。\r\n\r\n 【コントロールパネル - 各種お支払い】\r\n https://muumuu-domain.com/?mode=conpane&state=payment \r\n\r\n 【期限切れドメインの再契約方法】\r\n https://muumuu-domain.com/?mode=guide&state=reverse\r\n\r\n◎対象のドメイン\r\n========================================================\r\n【 ムームーＩＤ 】orgiast\r\n【 ド　メ　イ　ン 】yatteme.fun\r\n【 契　約　期　間 】2024/03/10 ～ 2025/03/09\r\n========================================================\r\n\r\n更新費用のご入金については「 契約更新可能日：2025/03/29 」までに、\r\n弊社にて更新費用の着金が確認出来るようご入金をお願いいたします。\r\n\r\n\r\n▼契約期間が終了して「 20日超過 」の場合\r\n\r\n通常費用での更新が可能な「 契約更新可能日（20日以内） 」を経過しても、\r\n契約期間終了後「 30日以内 」でしたら、コントロールパネル内\r\n【ドメイン契約お支払い】＞【各種お支払い】より\r\n更新手続きのお申し込みを行うことができます。\r\n\r\nこちらのお手続きでは、更新費用とは別に「 回復手数料（29,800円） 」がかかります。\r\n\r\n契約更新をご希望の場合は、コントロールパネル内のメニュー項目\r\n【ドメイン契約お支払い】＞【各種お支払い】より更新お手続きをご検討ください。\r\n\r\n 【コントロールパネル - 各種お支払い】\r\n https://muumuu-domain.com/?mode=conpane&state=payment \r\n\r\n 【期限切れドメインの再契約方法】\r\n https://muumuu-domain.com/?mode=guide&state=reverse\r\n\r\n\r\nより良いサービスを提供していける様努めてまいりますので\r\n今後ともどうぞよろしくお願いいたします。\r\n\r\n--------------------------------------------------------------------------\r\n◇お電話によるお問い合わせは受け付けておりません。予めご了承ください。\r\n\r\n◇お問い合わせは、お問い合わせフォームよりご連絡ください。\r\n https://muumuu-domain.com/?mode=inq\r\n\r\nムームードメイン https://muumuu-domain.com\r\nGMOペパボ株式会社 https://pepabo.com/company/overview/\r\n--------------------------------------------------------------------------\r\nおかげさまで29周年　すべての人にインターネット\r\n当社はGMOインターネットグループ（東証プライム上場 9449）のメンバーです。\r\n■GMO INTERNET GROUP■ https://www.gmo.jp/\r\n--------------------------------------------------------------------------\r\n機密情報に関する注意事項：このE-mailは、発信者が意図した\r\n受信者による閲覧・利用を目的としたものです。万一、貴殿が\r\n意図された受信者でない場合には、直ちに送信者に連絡のうえ、\r\nこのE-mailを破棄願います。"
+    },
+    {
+      "id": "1957883c0d395361",
+      "internalDate": "1741483648000",
+      "threadId": "1957883c0d395361",
+      "date": "Sun, 09 Mar 2025 10:27:28 +0900",
+      "from": "no-reply@service.muumuu-domain.com",
+      "to": "kimkongyong@gmail.com",
+      "subject": "【重要】ドメインの有効期限日です。更新手続きをお急ぎください。[yatteme.fun]",
+      "listUnsubscribe": "<mailto:googlegroups-manage+1024540281556+unsubscribe@googlegroups.com>, <https://groups.google.com/a/orgiast.jp/group/kanri/subscribe>",
+      "snippet": "ドメインの有効期限当日のお知らせ ドメインの失効が迫っています。 有効期限日までに、更新手続きを行ってください。 yatteme.fun 有効期限日：2025年03月09日 今すぐ更新する ・ 支払先銀行口座を表示する コンビニ払込票やその他お支払いはコントロールパネルからお手続きくださいますようお願いいたします。 ドメインの失効リスクについて ・ 復旧費用は最大29800円発生する場合があります",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_UPDATES"
+      ],
+      "body": "━━━━━━━━━━━━━━━━━━\r\nこのメールは、ムームードメインより自動的に送信されています。\r\n━━━━━━━━━━━━━━━━━━\r\n\r\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\r\nドメインの有効期限当日のお知らせ\r\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\r\n\r\nドメインの失効が迫っています。\r\n有効期限日までに、更新手続きを行ってください。\r\n\r\n================================\r\n■ yatteme.fun\r\n■ 有効期限日：2025年03月09日\r\n================================\r\n\r\n\r\n▼ かんたん更新で更新する\r\nhttps://muumuu-domain.com/checkout/renew/domain/easy?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.IjRiYzA0MzQzLTEzODgtNGU5NS04MGVhLWEyOTI5OWJhZGYwMSI.IwN6ZH7aMs26VN7ncP77jha8NwAa0_vuH2zPnyDqlzk&utm_campaign=text000&utm_content=easy&utm_medium=email&utm_source=renewal_letter\r\n\r\n　・コントロールパネルにログイン不要\r\n　・クレジットカード、おさいぽ！決済ですぐに着金\r\n\r\n▼ 支払先銀行口座を表示する\r\nhttps://muumuu-domain.com/?cid=zlnkjjnc&mode=payment_info&pid=0\r\n\r\nコンビニ払込票やその他のお支払いはコントロールパネルからお手続きくださいますようお願いいたします。\r\n\r\n▼ コントロールパネルへ\r\nhttps://muumuu-domain.com/?mode=conpane&state=payment&utm_campaign=text000&utm_content=easy&utm_medium=email&utm_source=renewal_letter\r\n\r\n------------------------------------------------------\r\nドメインの失効リスクについて\r\n------------------------------------------------------\r\n\r\n■ 復旧費用は最大29,800円発生する場合があります\r\nドメインの有効期限が切れた場合、所定の期間内に更新手続きを行うことで引き続きご利用いただくことができますが、復旧手続きには更新費用に加え復旧費用が別途必要になる場合がございます。また、一部ドメインは復旧自体ができません。\r\n\r\n■ 同じドメインを取り戻すことは非常に困難です\r\nドメインが失効すると、第三者に取得されてしまうケースが多く、再度同じドメインをご利用いただくことが難しくなります。お早めのドメイン更新手続きをお勧めします。\r\n\r\n------------------------------------------------------\r\nドメインの更新について\r\n------------------------------------------------------\r\n\r\nドメインを使い続けるには、更新手続きが必要です。\r\n更新に関する詳細や、自動更新・手動更新それぞれのメリットや更新方法ついては、ドメインの更新についてページよりご確認いただけます。\r\n\r\n▼ 更新についてページを見る\r\nhttps://muumuu-domain.com/supports/renew-domain&utm_campaign=text000&utm_content=easy&utm_medium=email&utm_source=renewal_letter\r\n\r\n\r\n※ドメインの失効により発生する損害につきましては、損害賠償責任その他一切の責任を負いません。\r\n※ドメインの更新に関してご不明な点がございましたら、お問い合わせフォームよりご連絡ください。\r\n\r\n━━━━━━━━━━━━━━━━━━\r\nこのメールに心当たりのない場合やご不明な点がある場合は、お問い合わせフォームよりご連絡下さい。\r\nhttps://muumuu-domain.com/?mode=inq\r\n\r\nムームードメイン https://muumuu-domain.com\r\nGMOペパボ株式会社 https://pepabo.com/company/overview/\r\n━━━━━━━━━━━━━━━━━━\r\nおかげさまで29周年 すべての人にインターネット\r\n当社はGMOインターネットグループ（東証プライム上場 9449）のメンバーです。\r\n■GMO INTERNET GROUP■ https://www.gmo.jp/\r\n━━━━━━━━━━━━━━━━━━\r\n機密情報に関する注意事項：このE-mailは、発信者が意図した\r\n受信者による閲覧・利用を目的としたものです。万一、貴殿が\r\n意図された受信者でない場合には、直ちに送信者に連絡のうえ、\r\nこのE-mailを破棄願います。"
+    },
+    {
+      "id": "195735d577f3f953",
+      "internalDate": "1741397244000",
+      "threadId": "195735d577f3f953",
+      "date": "Sat, 08 Mar 2025 10:27:24 +0900",
+      "from": "no-reply@service.muumuu-domain.com",
+      "to": "kimkongyong@gmail.com",
+      "subject": "【重要】ドメインの有効期限1日前です。更新手続きをお急ぎください。[yatteme.fun]",
+      "listUnsubscribe": "<mailto:googlegroups-manage+1024540281556+unsubscribe@googlegroups.com>, <https://groups.google.com/a/orgiast.jp/group/kanri/subscribe>",
+      "snippet": "ドメインの有効期限1日前のお知らせ ドメインの失効が迫っています。 有効期限日までに、更新手続きを行ってください。 yatteme.fun 有効期限日：2025年03月09日 今すぐ更新する ・ 支払先銀行口座を表示する コンビニ払込票やその他お支払いはコントロールパネルからお手続きくださいますようお願いいたします。 ドメインの失効リスクについて ・ 復旧費用は最大29800円発生する場合があります",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_UPDATES"
+      ],
+      "body": "━━━━━━━━━━━━━━━━━━\r\nこのメールは、ムームードメインより自動的に送信されています。\r\n━━━━━━━━━━━━━━━━━━\r\n\r\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\r\nドメインの有効期限1日前のお知らせ\r\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\r\n\r\nドメインの失効が迫っています。\r\n有効期限日までに、更新手続きを行ってください。\r\n\r\n================================\r\n■ yatteme.fun\r\n■ 有効期限日：2025年03月09日\r\n================================\r\n\r\n\r\n▼ かんたん更新で更新する\r\nhttps://muumuu-domain.com/checkout/renew/domain/easy?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.IjRiYzA0MzQzLTEzODgtNGU5NS04MGVhLWEyOTI5OWJhZGYwMSI.IwN6ZH7aMs26VN7ncP77jha8NwAa0_vuH2zPnyDqlzk&utm_campaign=text001&utm_content=easy&utm_medium=email&utm_source=renewal_letter\r\n\r\n　・コントロールパネルにログイン不要\r\n　・クレジットカード、おさいぽ！決済ですぐに着金\r\n\r\n▼ 支払先銀行口座を表示する\r\nhttps://muumuu-domain.com/?cid=zlnkjjnc&mode=payment_info&pid=0\r\n\r\nコンビニ払込票やその他のお支払いはコントロールパネルからお手続きくださいますようお願いいたします。\r\n\r\n▼ コントロールパネルへ\r\nhttps://muumuu-domain.com/?mode=conpane&state=payment&utm_campaign=text001&utm_content=easy&utm_medium=email&utm_source=renewal_letter\r\n\r\n------------------------------------------------------\r\nドメインの失効リスクについて\r\n------------------------------------------------------\r\n\r\n■ 復旧費用は最大29,800円発生する場合があります\r\nドメインの有効期限が切れた場合、所定の期間内に更新手続きを行うことで引き続きご利用いただくことができますが、復旧手続きには更新費用に加え復旧費用が別途必要になる場合がございます。また、一部ドメインは復旧自体ができません。\r\n\r\n■ 同じドメインを取り戻すことは非常に困難です\r\nドメインが失効すると、第三者に取得されてしまうケースが多く、再度同じドメインをご利用いただくことが難しくなります。お早めのドメイン更新手続きをお勧めします。\r\n\r\n------------------------------------------------------\r\nドメインの更新について\r\n------------------------------------------------------\r\n\r\nドメインを使い続けるには、更新手続きが必要です。\r\n更新に関する詳細や、自動更新・手動更新それぞれのメリットや更新方法ついては、ドメインの更新についてページよりご確認いただけます。\r\n\r\n▼ 更新についてページを見る\r\nhttps://muumuu-domain.com/supports/renew-domain&utm_campaign=text001&utm_content=easy&utm_medium=email&utm_source=renewal_letter\r\n\r\n\r\n※ドメインの失効により発生する損害につきましては、損害賠償責任その他一切の責任を負いません。\r\n※ドメインの更新に関してご不明な点がございましたら、お問い合わせフォームよりご連絡ください。\r\n\r\n━━━━━━━━━━━━━━━━━━\r\nこのメールに心当たりのない場合やご不明な点がある場合は、お問い合わせフォームよりご連絡下さい。\r\nhttps://muumuu-domain.com/?mode=inq\r\n\r\nムームードメイン https://muumuu-domain.com\r\nGMOペパボ株式会社 https://pepabo.com/company/overview/\r\n━━━━━━━━━━━━━━━━━━\r\nおかげさまで29周年 すべての人にインターネット\r\n当社はGMOインターネットグループ（東証プライム上場 9449）のメンバーです。\r\n■GMO INTERNET GROUP■ https://www.gmo.jp/\r\n━━━━━━━━━━━━━━━━━━\r\n機密情報に関する注意事項：このE-mailは、発信者が意図した\r\n受信者による閲覧・利用を目的としたものです。万一、貴殿が\r\n意図された受信者でない場合には、直ちに送信者に連絡のうえ、\r\nこのE-mailを破棄願います。"
+    },
+    {
+      "id": "1956e38009f0978c",
+      "internalDate": "1741310910000",
+      "threadId": "1956e38009f0978c",
+      "date": "Fri, 07 Mar 2025 10:28:30 +0900",
+      "from": "no-reply@service.muumuu-domain.com",
+      "to": "kimkongyong@gmail.com",
+      "subject": "【重要】ドメインの有効期限2日前です。更新手続きをお急ぎください。[yatteme.fun]",
+      "listUnsubscribe": "<mailto:googlegroups-manage+1024540281556+unsubscribe@googlegroups.com>, <https://groups.google.com/a/orgiast.jp/group/kanri/subscribe>",
+      "snippet": "ドメインの有効期限2日前のお知らせ ドメインの失効が迫っています。 有効期限日までに、更新手続きを行ってください。 yatteme.fun 有効期限日：2025年03月09日 今すぐ更新する ・ 支払先銀行口座を表示する コンビニ払込票やその他お支払いはコントロールパネルからお手続きくださいますようお願いいたします。 ドメインの失効リスクについて ・ 復旧費用は最大29800円発生する場合があります",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_UPDATES"
+      ],
+      "body": "━━━━━━━━━━━━━━━━━━\r\nこのメールは、ムームードメインより自動的に送信されています。\r\n━━━━━━━━━━━━━━━━━━\r\n\r\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\r\nドメインの有効期限2日前のお知らせ\r\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\r\n\r\nドメインの失効が迫っています。\r\n有効期限日までに、更新手続きを行ってください。\r\n\r\n================================\r\n■ yatteme.fun\r\n■ 有効期限日：2025年03月09日\r\n================================\r\n\r\n\r\n▼ かんたん更新で更新する\r\nhttps://muumuu-domain.com/checkout/renew/domain/easy?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.IjRiYzA0MzQzLTEzODgtNGU5NS04MGVhLWEyOTI5OWJhZGYwMSI.IwN6ZH7aMs26VN7ncP77jha8NwAa0_vuH2zPnyDqlzk&utm_campaign=text002&utm_content=easy&utm_medium=email&utm_source=renewal_letter\r\n\r\n　・コントロールパネルにログイン不要\r\n　・クレジットカード、おさいぽ！決済ですぐに着金\r\n\r\n▼ 支払先銀行口座を表示する\r\nhttps://muumuu-domain.com/?mode=conpane&state=payment\r\n\r\nコンビニ払込票やその他のお支払いはコントロールパネルからお手続きくださいますようお願いいたします。\r\n\r\n▼ コントロールパネルへ\r\nhttps://muumuu-domain.com/?mode=conpane&state=payment&utm_campaign=text002&utm_content=easy&utm_medium=email&utm_source=renewal_letter\r\n\r\n------------------------------------------------------\r\nドメインの失効リスクについて\r\n------------------------------------------------------\r\n\r\n■ 復旧費用は最大29,800円発生する場合があります\r\nドメインの有効期限が切れた場合、所定の期間内に更新手続きを行うことで引き続きご利用いただくことができますが、復旧手続きには更新費用に加え復旧費用が別途必要になる場合がございます。また、一部ドメインは復旧自体ができません。\r\n\r\n■ 同じドメインを取り戻すことは非常に困難です\r\nドメインが失効すると、第三者に取得されてしまうケースが多く、再度同じドメインをご利用いただくことが難しくなります。お早めのドメイン更新手続きをお勧めします。\r\n\r\n------------------------------------------------------\r\nドメインの更新について\r\n------------------------------------------------------\r\n\r\nドメインを使い続けるには、更新手続きが必要です。\r\n更新に関する詳細や、自動更新・手動更新それぞれのメリットや更新方法ついては、ドメインの更新についてページよりご確認いただけます。\r\n\r\n▼ 更新についてページを見る\r\nhttps://muumuu-domain.com/supports/renew-domain&utm_campaign=text002&utm_content=easy&utm_medium=email&utm_source=renewal_letter\r\n\r\n\r\n※ドメインの失効により発生する損害につきましては、損害賠償責任その他一切の責任を負いません。\r\n※ドメインの更新に関してご不明な点がございましたら、お問い合わせフォームよりご連絡ください。\r\n\r\n━━━━━━━━━━━━━━━━━━\r\nこのメールに心当たりのない場合やご不明な点がある場合は、お問い合わせフォームよりご連絡下さい。\r\nhttps://muumuu-domain.com/?mode=inq\r\n\r\nムームードメイン https://muumuu-domain.com\r\nGMOペパボ株式会社 https://pepabo.com/company/overview/\r\n━━━━━━━━━━━━━━━━━━\r\nおかげさまで29周年 すべての人にインターネット\r\n当社はGMOインターネットグループ（東証プライム上場 9449）のメンバーです。\r\n■GMO INTERNET GROUP■ https://www.gmo.jp/\r\n━━━━━━━━━━━━━━━━━━\r\n機密情報に関する注意事項：このE-mailは、発信者が意図した\r\n受信者による閲覧・利用を目的としたものです。万一、貴殿が\r\n意図された受信者でない場合には、直ちに送信者に連絡のうえ、\r\nこのE-mailを破棄願います。"
+    },
+    {
+      "id": "19544ecef4c1f5b5",
+      "internalDate": "1740618129000",
+      "threadId": "19544ecef4c1f5b5",
+      "date": "Thu, 27 Feb 2025 10:02:09 +0900",
+      "from": "no-reply@service.muumuu-domain.com",
+      "to": "kanri@orgiast.jp",
+      "subject": "ドメインの有効期限10日前です。[yatteme.fun]",
+      "listUnsubscribe": "<mailto:googlegroups-manage+1024540281556+unsubscribe@googlegroups.com>, <https://groups.google.com/a/orgiast.jp/group/kanri/subscribe>",
+      "snippet": "ドメインの有効期限10日前のお知らせ ドメインの失効が迫っています。 有効期限日までに、更新手続きを行ってください。 yatteme.fun 有効期限日：2025年03月09日 今すぐ更新する ・ 支払先銀行口座を表示する コンビニ払込票やその他お支払いはコントロールパネルからお手続きくださいますようお願いいたします。 ドメインの失効リスクについて ・ 復旧費用は最大29800円発生する場合が",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_UPDATES"
+      ],
+      "body": "━━━━━━━━━━━━━━━━━━\r\nこのメールは、ムームードメインより自動的に送信されています。\r\n━━━━━━━━━━━━━━━━━━\r\n\r\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\r\nドメインの有効期限10日前のお知らせ\r\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\r\n\r\nドメインの失効が迫っています。\r\n有効期限日までに、更新手続きを行ってください。\r\n\r\n================================\r\n■ yatteme.fun\r\n■ 有効期限日：2025年03月09日\r\n================================\r\n\r\n\r\n▼ かんたん更新で更新する\r\nhttps://muumuu-domain.com/checkout/renew/domain/easy?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.IjRiYzA0MzQzLTEzODgtNGU5NS04MGVhLWEyOTI5OWJhZGYwMSI.IwN6ZH7aMs26VN7ncP77jha8NwAa0_vuH2zPnyDqlzk&utm_campaign=text010&utm_content=easy&utm_medium=email&utm_source=renewal_letter\r\n\r\n　・コントロールパネルにログイン不要\r\n　・クレジットカード、おさいぽ！決済ですぐに着金\r\n\r\n▼ 支払先銀行口座を表示する\r\nhttps://muumuu-domain.com/?cid=zlvmnmck&mode=payment_info&pid=0\r\n\r\nコンビニ払込票やその他のお支払いはコントロールパネルからお手続きくださいますようお願いいたします。\r\n\r\n▼ コントロールパネルへ\r\nhttps://muumuu-domain.com/?mode=conpane&state=payment&utm_campaign=text010&utm_content=easy&utm_medium=email&utm_source=renewal_letter\r\n\r\n------------------------------------------------------\r\nドメインの失効リスクについて\r\n------------------------------------------------------\r\n\r\n■ 復旧費用は最大29,800円発生する場合があります\r\nドメインの有効期限が切れた場合、所定の期間内に更新手続きを行うことで引き続きご利用いただくことができますが、復旧手続きには更新費用に加え復旧費用が別途必要になる場合がございます。また、一部ドメインは復旧自体ができません。\r\n\r\n■ 同じドメインを取り戻すことは非常に困難です\r\nドメインが失効すると、第三者に取得されてしまうケースが多く、再度同じドメインをご利用いただくことが難しくなります。お早めのドメイン更新手続きをお勧めします。\r\n\r\n------------------------------------------------------\r\nドメインの更新について\r\n------------------------------------------------------\r\n\r\nドメインを使い続けるには、更新手続きが必要です。\r\n更新に関する詳細や、自動更新・手動更新それぞれのメリットや更新方法ついては、ドメインの更新についてページよりご確認いただけます。\r\n\r\n▼ 更新についてページを見る\r\nhttps://muumuu-domain.com/supports/renew-domain&utm_campaign=text010&utm_content=easy&utm_medium=email&utm_source=renewal_letter\r\n\r\n\r\n※ドメインの失効により発生する損害につきましては、損害賠償責任その他一切の責任を負いません。\r\n※ドメインの更新に関してご不明な点がございましたら、お問い合わせフォームよりご連絡ください。\r\n\r\n━━━━━━━━━━━━━━━━━━\r\nこのメールに心当たりのない場合やご不明な点がある場合は、お問い合わせフォームよりご連絡下さい。\r\nhttps://muumuu-domain.com/?mode=inq\r\n\r\nムームードメイン https://muumuu-domain.com\r\nGMOペパボ株式会社 https://pepabo.com/company/overview/\r\n━━━━━━━━━━━━━━━━━━\r\nおかげさまで29周年 すべての人にインターネット\r\n当社はGMOインターネットグループ（東証プライム上場 9449）のメンバーです。\r\n■GMO INTERNET GROUP■ https://www.gmo.jp/\r\n━━━━━━━━━━━━━━━━━━\r\n機密情報に関する注意事項：このE-mailは、発信者が意図した\r\n受信者による閲覧・利用を目的としたものです。万一、貴殿が\r\n意図された受信者でない場合には、直ちに送信者に連絡のうえ、\r\nこのE-mailを破棄願います。"
+    },
+    {
+      "id": "1952b2c40079ee0c",
+      "internalDate": "1740186071000",
+      "threadId": "1952b2c40079ee0c",
+      "date": "Sat, 22 Feb 2025 10:01:11 +0900",
+      "from": "no-reply@service.muumuu-domain.com",
+      "to": "kanri@orgiast.jp",
+      "subject": "ドメインの有効期限15日前です。[yatteme.fun]",
+      "listUnsubscribe": "<mailto:googlegroups-manage+1024540281556+unsubscribe@googlegroups.com>, <https://groups.google.com/a/orgiast.jp/group/kanri/subscribe>",
+      "snippet": "ドメインの有効期限15日前のお知らせ ドメインの失効が迫っています。 有効期限日までに、更新手続きを行ってください。 yatteme.fun 有効期限日：2025年03月09日 今すぐ更新する ・ 支払先銀行口座を表示する コンビニ払込票やその他お支払いはコントロールパネルからお手続きくださいますようお願いいたします。 ドメインの失効リスクについて ・ 復旧費用は最大29800円発生する場合が",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_UPDATES"
+      ],
+      "body": "━━━━━━━━━━━━━━━━━━\r\nこのメールは、ムームードメインより自動的に送信されています。\r\n━━━━━━━━━━━━━━━━━━\r\n\r\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\r\nドメインの有効期限15日前のお知らせ\r\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\r\n\r\nドメインの失効が迫っています。\r\n有効期限日までに、更新手続きを行ってください。\r\n\r\n================================\r\n■ yatteme.fun\r\n■ 有効期限日：2025年03月09日\r\n================================\r\n\r\n\r\n▼ かんたん更新で更新する\r\nhttps://muumuu-domain.com/checkout/renew/domain/easy?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.IjRiYzA0MzQzLTEzODgtNGU5NS04MGVhLWEyOTI5OWJhZGYwMSI.IwN6ZH7aMs26VN7ncP77jha8NwAa0_vuH2zPnyDqlzk&utm_campaign=text015&utm_content=easy&utm_medium=email&utm_source=renewal_letter\r\n\r\n　・コントロールパネルにログイン不要\r\n　・クレジットカード、おさいぽ！決済ですぐに着金\r\n\r\n▼ 支払先銀行口座を表示する\r\nhttps://muumuu-domain.com/?cid=zlvmnmck&mode=payment_info&pid=0\r\n\r\nコンビニ払込票やその他のお支払いはコントロールパネルからお手続きくださいますようお願いいたします。\r\n\r\n▼ コントロールパネルへ\r\nhttps://muumuu-domain.com/?mode=conpane&state=payment&utm_campaign=text015&utm_content=easy&utm_medium=email&utm_source=renewal_letter\r\n\r\n------------------------------------------------------\r\nドメインの失効リスクについて\r\n------------------------------------------------------\r\n\r\n■ 復旧費用は最大29,800円発生する場合があります\r\nドメインの有効期限が切れた場合、所定の期間内に更新手続きを行うことで引き続きご利用いただくことができますが、復旧手続きには更新費用に加え復旧費用が別途必要になる場合がございます。また、一部ドメインは復旧自体ができません。\r\n\r\n■ 同じドメインを取り戻すことは非常に困難です\r\nドメインが失効すると、第三者に取得されてしまうケースが多く、再度同じドメインをご利用いただくことが難しくなります。お早めのドメイン更新手続きをお勧めします。\r\n\r\n------------------------------------------------------\r\nドメインの更新について\r\n------------------------------------------------------\r\n\r\nドメインを使い続けるには、更新手続きが必要です。\r\n更新に関する詳細や、自動更新・手動更新それぞれのメリットや更新方法ついては、ドメインの更新についてページよりご確認いただけます。\r\n\r\n▼ 更新についてページを見る\r\nhttps://muumuu-domain.com/supports/renew-domain&utm_campaign=text015&utm_content=easy&utm_medium=email&utm_source=renewal_letter\r\n\r\n\r\n※ドメインの失効により発生する損害につきましては、損害賠償責任その他一切の責任を負いません。\r\n※ドメインの更新に関してご不明な点がございましたら、お問い合わせフォームよりご連絡ください。\r\n\r\n━━━━━━━━━━━━━━━━━━\r\nこのメールに心当たりのない場合やご不明な点がある場合は、お問い合わせフォームよりご連絡下さい。\r\nhttps://muumuu-domain.com/?mode=inq\r\n\r\nムームードメイン https://muumuu-domain.com\r\nGMOペパボ株式会社 https://pepabo.com/company/overview/\r\n━━━━━━━━━━━━━━━━━━\r\nおかげさまで29周年 すべての人にインターネット\r\n当社はGMOインターネットグループ（東証プライム上場 9449）のメンバーです。\r\n■GMO INTERNET GROUP■ https://www.gmo.jp/\r\n━━━━━━━━━━━━━━━━━━\r\n機密情報に関する注意事項：このE-mailは、発信者が意図した\r\n受信者による閲覧・利用を目的としたものです。万一、貴殿が\r\n意図された受信者でない場合には、直ちに送信者に連絡のうえ、\r\nこのE-mailを破棄願います。"
+    },
+    {
+      "id": "194ea33edf8f86d7",
+      "internalDate": "1739095965000",
+      "threadId": "194ea33edf8f86d7",
+      "date": "Sun,  9 Feb 2025 19:12:45 +0900 (JST)",
+      "from": "info@muumuu-domain.com",
+      "to": "kanri@orgiast.jp",
+      "subject": "【重要】Whois情報 正確性確認 yatteme.fun ",
+      "listUnsubscribe": "<mailto:googlegroups-manage+1024540281556+unsubscribe@googlegroups.com>, <https://groups.google.com/a/orgiast.jp/group/kanri/subscribe>",
+      "snippet": "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ■ ムームードメイン ■ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ※本メールに心当たりの無い方は、本メールの破棄をお願いいたします。 ─────────────────────────────────── ■Whois情報正確性確認■ ───────────────────────────────",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_UPDATES"
+      ],
+      "body": "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\r\n■ ムームードメイン ■\r\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\r\n※本メールに心当たりの無い方は、本メールの破棄をお願いいたします。\r\n\r\n───────────────────────────────────\r\n■Whois情報正確性確認■\r\n───────────────────────────────────\r\nドメイン名..................：：yatteme.fun\r\nドメイン登録日............：：2023年3月9日\r\nドメイン登録期限日.....：：2025年3月9日\r\n───────────────────────────────────\r\n\r\n本メールはICANNのWhois情報正確性確認方針に基づき、ドメイン名の管理\r\n担当者(Admin)のメールアドレスへ宛に送信しております。\r\n\r\nドメイン名登録業務やIPアドレスなどの管理責任を持つ非営利団体である\r\nThe Internet Corporation for Assigned Names and Numbers (ICANN)は、\r\n2003年に「Whois情報正確性確認方針（Whois Data Reminder Policy）」を\r\n採択いたしました。\r\n\r\nこの方針は、最低一年に一度すべてのドメイン登録者（管理担当者）に対し、\r\nWhois情報正確性の確認ならびに正確な情報への修正を促すことを通知する\r\nというものです。\r\n\r\n本メールに現在お預かりしているお客様のドメインWhois情報を記載いたし\r\nます。\r\n\r\n記載されている情報をご確認のうえ、情報修正が必要な場合にはご利用の\r\n管理会社を介して情報修正のお手続きを行ってください。\r\n\r\n※現在ご登録されている情報が既に正しい場合は、特にお手続きは必要は\r\n　ございません。\r\n※Whois情報公開代行をご利用中のドメインにつきましては、本来のWhois\r\n　情報（代行前のWhois情報）に対して本方針を適用いたします。\r\n※ICANNのWhois情報正確性確認方針はgTLDドメインを対象としております\r\n　が.jp/.uk/.be/日本語.org以外のすべてのドメインに対して本メールを\r\n　お送りしております。\r\n※Whois情報が不正確なドメインは、登録抹消や使用停止の対象となること\r\n　がございますのでご注意ください。\r\n\r\n───────────────────────────────────\r\n[登録者情報](Registrant)\r\n氏名........................：Kongyong Kim\r\n組織名......................：orgiast\r\n種別........................：個人\r\n建物名等....................：rittupuraimu102\r\n町村番地....................：samon-cho7-9\r\n市区........................：shinjuku-ku\r\n都道府県....................：Tokyo\r\n郵便番号....................：160-0017\r\n国..........................：JP\r\n電話番号....................：+81.333521015\r\nファックス..................：+81.5035886670\r\nメールアドレス..............：kanri@orgiast.jp\r\n\r\n[管理担当者情報](Admin)\r\n氏名........................：Kongyong Kim\r\n組織名......................：orgiast\r\n種別........................：個人\r\n建物名等....................：rittupuraimu102\r\n町村番地....................：samon-cho7-9\r\n市区........................：shinjuku-ku\r\n都道府県....................：Tokyo\r\n郵便番号....................：160-0017\r\n国..........................：JP\r\n電話番号....................：+81.333521015\r\nファックス..................：+81.5035886670\r\nメールアドレス..............：kanri@orgiast.jp\r\n\r\n[技術担当者情報] (Tech) \r\n氏名........................：Kongyong Kim \r\n組織名......................：orgiast \r\n種別........................：個人 \r\n建物名等....................：rittupuraimu102 \r\n町村番地....................：samon-cho7-9 \r\n市区........................：shinjuku-ku \r\n都道府県....................：Tokyo \r\n郵便番号....................：160-0017 \r\n国..........................：JP \r\n電話番号....................：+81.333521015 \r\nファックス..................：+81.5035886670 \r\nメールアドレス..............：kanri@orgiast.jp\r\n\r\n[経理担当者情報] (Billing) \r\n氏名........................：Kongyong Kim \r\n組織名......................：orgiast \r\n種別........................：個人 \r\n建物名等....................：rittupuraimu102 \r\n町村番地....................：samon-cho7-9 \r\n市区........................：shinjuku-ku \r\n都道府県....................：Tokyo \r\n郵便番号....................：160-0017\r\n 国..........................：JP \r\n電話番号....................：+81.333521015 \r\nファックス..................：+81.5035886670 \r\nメールアドレス..............：kanri@orgiast.jp\r\n\r\n[ネームサーバー情報]\r\nns1.dns.ne.jp\r\nns2.dns.ne.jp\r\n\r\n\r\n[管理レジストラ]\r\nGMO internet, Inc.\r\n\r\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\r\n・お問い合わせ先(Contact Us) https://muumuu-domain.com/?mode=inq \r\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\r\n■ ムームードメイン ■\r\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    },
+    {
+      "id": "194e28a2dfb1f9fc",
+      "internalDate": "1738967490000",
+      "threadId": "194e28a2dfb1f9fc",
+      "date": "8 Feb 2025 07:31:30 +0900",
+      "from": "no-reply@service.muumuu-domain.com",
+      "to": "kanri@orgiast.jp",
+      "subject": "【ムームードメイン】自動更新できませんでした",
+      "listUnsubscribe": "<mailto:googlegroups-manage+1024540281556+unsubscribe@googlegroups.com>, <https://groups.google.com/a/orgiast.jp/group/kanri/subscribe>",
+      "snippet": "====================================================================== このメッセージは、ムームードメインより自動的に送信されています。このメールに心当たりのない場合やご不明な点がある場合は、 https://muumuu-domain.com/?mode=inq までご連絡ください。 ======================",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_UPDATES"
+      ],
+      "body": "======================================================================\r\nこのメッセージは、ムームードメインより自動的に送信されて\r\nいます。このメールに心当たりのない場合やご不明な点がある場合は、\r\n https://muumuu-domain.com/?mode=inq までご連絡ください。\r\n======================================================================\r\n\r\nこの度は、ムームードメインをご利用いただき、\r\n誠にありがとうございます。\r\n\r\n自動更新設定より、次回契約分を請求させていただきましたが、\r\nおさいぽ！ポイント引き落としに失敗したため、\r\n下記ドメインの自動更新処理ができませんでした。\r\nコントロールパネル内の【各種お支払い】より、\r\nご入金頂きますようお願いいたします。\r\n\r\n▽おさいぽ！オートチャージをご利用のお客様へ\r\nおさいぽ！に登録いただいているクレジットカードにおいて何らかのエラーが発生している可能性がございます。\r\nお手数ですが、おさいぽ！コントロールパネルよりクレジットカードの変更をお願いいたします。\r\n\r\n▼『おさいぽ！コントロールパネル』＞『クレジットオートチャージ』\r\nhttps://osaipo.jp/conpane/auto\r\n\r\n2024年12月1日より、おさいぽ！残高が不足している場合、\r\nお支払いの都度、ご利用金額分（または不足金額分）がご登録のクレジットカードより決済されるよう仕様が変更となりました。\r\n詳しくはおさいぽ！のインフォメーション(https://osaipo.jp/info/news/id/619/)をご確認ください。\r\n\r\n【 お支払い未完了ドメイン 】\r\n===================================================================\r\nyatteme.fun(4,900円 1年)\r\n\r\n===================================================================\r\n\r\n【入金締切日】\r\n2025年02月27日\r\n\r\n※ご入金方法につきましては【お支払い方法】をご参照下さい。\r\n　https://muumuu-domain.com/?mode=guide&state=pay_howto\r\n\r\nお客様のご入金状況は【コントロールパネル】にてご確認頂けます。\r\n　https://muumuu-domain.com/?mode=conpane\r\n\r\nお支払い締切日までにご入金の確認がとれない場合、利用規約に基づき、\r\n自動的に契約終了となります。ご了承ください。\r\n\r\n本メールと入れ違いにご入金頂いている場合、またご入金方法やご請求金額、\r\n振込人名義が弊社でご登録されているものと異なっている場合は、\r\n大変お手数ですが、【お問い合わせフォーム】より、その旨をご連絡ください。\r\n\r\n\r\n--------------------------------------------------------------------------\r\n◇お問い合わせは、【お問い合わせフォーム】にて承ります。\r\n　フォーム以外からお問い合わせの場合、ご回答が遅れる場合や、お返事が出来な\r\n　い場合がございます。\r\n\r\n　【お問い合わせフォーム】https://muumuu-domain.com/?mode=inq\r\n\r\n◇ユーザーの方でお問い合わせの際は、お名前・ご契約ドメイン名を必ずご明記下\r\n　さい。\r\n\r\n◇お電話によるお問い合わせは受け付けておりません。ご了承ください。\r\n\r\n┏ PR ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\r\n ★『ロリポップ！レンタルサーバ』は月額99円から利用可能。容量最大1TB！\r\n　　 http://lolipop.jp/?ref=muupr\r\n┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\r\n\r\n--------------------------------------------------------------------------\r\nムームードメイン： https://muumuu-domain.com/\r\n\r\nGMOペパボ株式会社 https://pepabo.com/company/overview/\r\n--------------------------------------------------------------------------\r\nおかげさまで29周年　すべての人にインターネット\r\n当社はGMOインターネットグループ（東証プライム上場 9449）のメンバーです。\r\n■GMO INTERNET GROUP■ https://www.gmo.jp/\r\n--------------------------------------------------------------------------\r\n機密情報に関する注意事項：このE-mailは、発信者が意図した\r\n受信者による閲覧・利用を目的としたものです。万一、貴殿が\r\n意図された受信者でない場合には、直ちに送信者に連絡のうえ、\r\nこのE-mailを破棄願います。"
+    },
+    {
+      "id": "19165ea931fb7ec0",
+      "internalDate": "1723991757000",
+      "threadId": "19165ea931fb7ec0",
+      "date": "Sun, 18 Aug 2024 07:35:57 -0700",
+      "from": "Google Search Console Team <sc-noreply@google.com>",
+      "to": "kim@orgiast.jp",
+      "subject": "サイト https://yatteme.fun/ のページがインデックスに登録されない新しい要因\n",
+      "listUnsubscribe": "<https://notifications.google.com/g/p/ANiao5plBRryOgnMB4q9UDxTR95ouShWyXVHOGmJvXT2ATlBssXtSEwPSgAUuPPexxziaqr4mhM9-7yCwc2dnOsfz6nZx4vciAISiK9_st2sa5YR-B8AmN32k0CdLnd6DksDs15C74KG0fJy2mxaGT9HoyZ3Me5tZ8F-gIaxPlgtVSrAe5VDqeZZCdvrOQr9khyEYzKPK4J2EA5pUG6gsvgvnQtNA1H7c6aVrpkzux1r3X-U4Nsg0oOHY-9Fo8hs6eLffEo61KIhrHAWT_GHzU_KTkYTT2GPflCTKxImcInAY_SWlT-wM-Pu8rtSTSb1YZ6-DED3pCN6Hu6-4NSY-fQtj-pQ6KH2-6NZFPbvO6FmfggfXvgorLqf0HGQJ26LDv-CDlPiMJOk7GXIFrEvZOPXr-5a0hn-Ehn-psoVb2tnC3i8muMHUtoB83YRh5K9yzztWeBMMjoisDtGKt3_xQk1gHq13xLXnb8gsu-s>",
+      "snippet": "Message type: [WNC-20237597] Search Console ページ がインデックスに登録されない新しい要因 Search Console で、貴サイトのいくつかの ページ がインデックスに登録されていないことが検出されました。以下がその要因となっています。 noindex タグによって除外されました これが意図したものでない場合は、修正することをおすすめします。それにより",
+      "labels": [
+        "UNREAD",
+        "IMPORTANT",
+        "Label_3",
+        "CATEGORY_UPDATES"
+      ],
+      "body": "送信元: Google Search Console\r\n\r\n件名:\r\nページ がインデックスに登録されない新しい要因\r\n\r\n\r\n\r\nSearch Console で、貴サイトのいくつかの ページ がインデックスに登録されてい \r\nないことが検出されました。以下がその要因となっています。\r\n\r\n* noindex タグによって除外されました\r\n\r\nこれが意図したものでない場合は、修正することをおすすめします。それにより、影 \r\n響を受けていた ページ がインデックスに登録され、Google に表示されるようにな \r\nる可能性があります。\r\n\r\n**インデックス登録レポートを開く**: \r\nhttps://notifications.google.com/g/p/ANiao5oRNY0jLD0ENklCpMAQIw95fVLUy1Sc_IpJ6eQCnDpT_zr6ff9N5pwWXRr7p6vldkaWab_M4w4kWMq_gt6nRwzwgxDn-ZN0aoVMG8yC9f_vw6xkg4v0scJvlkLkCgL6HiO8NTHV5M1U98S1nm6ZP5D_A7zAWLn3gmlrpmMjFgChOApoiAYW2HAIZP8VH44dUZPMogwO4R4bls1TfB5JDqL6uUCubVoLYL3-PeZEPCWFyyWRpBa9Msp9ztCbFfDiWDWGOO4RbbP3W4cZuXQUAIQkL8mogcmXe7fMsEHnD9vgnyahndKHcnDNvoWz5qQOcPMZEgewfOLiS40jf-U1kAlHjrtP1s6OLJYjmQq49nY1lACX-Nzufzhvo6ALqL7p-jwvV_t6AAtIonZBTq5ys2ckDYb7keQ2_8pE8w\r\n\r\n\r\n----------\r\nGoogle LLC, 1600 Amphitheatre Parkway Mountain View, CA 94043\r\nこのメールは、Google Search Console にサイトが登録されているすべてのお客様に \r\nお送りしています。.\r\nこのようなメールの配信停止をご希望の場合は、次のページをご覧ください。 \r\n<https://notifications.google.com/g/p/ANiao5p2A-nRpCsVwqyUL0ciiQEkMUbYzZlnUh3FVVq_cIT-QnY3yetbo_9cyKyn4R8FJi37KSmUJwaMFRcqngp8di560wgcjUkJoTBFWh8RWcQPVlzELtO1fkuSQICIC1YkXcc2MdaFL8xoi-r9tkdFqYMzFnRn0BY7L8YH2oHoh-L5fRDWgdSt39CD2Sm_GdRkB5Gr_u5-53NszxofZHswwJJi4euuKpnusQqHkq5YoQOBJ1xSuoF0Mw35ELn4IBonCxjs7UsPTsWuDX2HohIdF7h5qQ0J7A9eq-waWkO2bZP2dmCV9X9KGJ3DCHm5blaViPS_MVTZ2xZSAx8T6V2RuSHA2s_5TSCWu53t2kk8xZOrA9SebluMQggxH1C653wrb4j5aKGiiiDkekvbnnP6n8YxjayMlqOkRx0MpYotY12hgvYH4_Z-hempd87QU-RTbm1FfxvA4ub7KQKa95iGaLPW8ZbuzxEmBg>\r\nこの Search Console アカウントのメッセージを受信するパートナーを追加する: \r\nhttps://notifications.google.com/g/p/ANiao5q7haAS0lLWOpwoywGSEUuVhKy7hpR9jm04O0WCRcaQmfTxmClPBG0dZ1Lec6yvi3aPJW57E2SHoUO00sqEqQoI8aDs2ZCIowk99LbB5PhRxArSD4HlSzTw-9CiI-Q7BlK1OJGBLnhGtsDdm0UbaF9a_I3vU0bjg62cT57uGHKQjKAqCKnXLTMUPAo_t-dtPtUkSEHoGgwJ64oFtrhVhw9QvY6UwcTkznp3AzNdmyvyoMSZvvysnN_PtFLiLuHYxFNex1lmAuXGeAqUrVecEw_YTacj71Ev14xAbyZeugCspJ74AO3F4ftqedO1COZgYolA_ScN_l9vXNydThw4kwsYQhbmlHldh1saBypR1QbX9zKZmztEcch8YztxoQ8n980TvGwtqpNkBt6OR8oGn_R82qf6eIgHZOW_Q2-O54tYyX5rqOTL2JU70g\r\n\r\nMessage type: [WNC-20237597]"
+    },
+    {
+      "id": "19106f58dcf25eab",
+      "internalDate": "1722398640000",
+      "threadId": "19106f58dcf25eab",
+      "date": "Tue, 30 Jul 2024 21:04:00 -0700",
+      "from": "Google Search Console Team <sc-noreply@google.com>",
+      "to": "kim@orgiast.jp",
+      "subject": "過去 28 日間でクリック数が 10 クリックに到達しました。",
+      "listUnsubscribe": "<https://notifications.google.com/g/p/ANiao5raUrIbqYgJC9Aji5yURtTC_zRGhftiV8iMAwwksq2yLi18pik7_Te8qoIVygeGILgssJ6b1mAaDoazzFpOOmNfJai5JgZSOoCUFZeV277xzzKXkIHCEZejGk9G_IPgXA5WxHEp7QPefSgwJsIOIYCBxD3Jd7EXxczfPoUptOLxPZ0wvLUyrBXxjJDCK7yAgeiqK0LrpTT3yWYaEWzd-AWBiP79TZem0lPIlAnqkDu9xVyQBBpkEKCU_Tdegia8oKwDjccf2MA3VrL7HNU2Pij5KPHejAo4DRVzuOEnsDip5LpQkiFhjUTauCcGt24OguDjj963WMDKeNqWTHxLguy6RQ7aubfyTwoz8n4kvc2GjN5fMZYPkR8pCPk0DdcQRNhlZHWjv8cW_2vmB2XDIwW5NAhLuHmTlacxm24aNRgiokaZOtmtLYNgIE5rdUIiIi6Ip4tSe8xsfEzv_HFuMky1wdFyRjNexgA>",
+      "snippet": "Google 検索の影響 10 https://yatteme.fun/ おめでとうございます。過去 28 日間で Google 検索におけるお客様のサイトへのクリック数が 10 クリックに到達しました 7月 28, 2024 サイトの実績を確認 すばらしい結果ではありませんか？ このニュースをぜひ共有しましょう このメールについてどう思いましたか？改善にご協力ください。 このメールは、Google",
+      "labels": [
+        "UNREAD",
+        "Label_3",
+        "CATEGORY_UPDATES"
+      ],
+      "body": "Subject: Congrats on reaching 10 clicks in 28 days!\r\n\r\nCongratulations! On 7月 28, 2024 your site https://yatteme.fun/ reached 10 \r\nfrom Google Search in the past 28 days.\r\nThink this is awesome? Go ahead and share the good news\r\n\r\nTo see insights for your site, visit \r\nhttps://search.google.com/search-console/insights?id=https://yatteme.fun/\r\nHow do you feel about this email? Help us improve! Visit \r\nhttps://notifications.google.com/g/p/ANiao5oX5gvn-M5ZnmG7quCmvn7oEVZrDXKkL--emSs9tuQf2UhaXAHsbe7E8eQM5Pz61dlBQ9initQPkp7OsKdunae2SxQPs-njuyRK5aTS0OxGg5xSUGbbYsL2FZii2HEM0sHwdIs6jRdcwxgZp2IovZQtPCKwf3sjl36VwCMJrivlM_KI_Id35Gil4VhwqAcJuUuovZmXo0mfDXehA9tnXfx2RRL_FfPPJ3dhawpgXOJBvY7q4WiBbSJ7R8dzGNMELSEHn3g0OIbXkA5nWoq48Op-v6W86VaVwM6V72JL9dGLe9j-pmyfOfzcT6j1CwNS5FFBE0r--ta9BqdkZZAubn_QHC1Z5sycl4RAWg5jJkAWP2OHxOHmVkTA7A\r\n\r\n------------------\r\n\r\nTo opt out of this message in the future, visit: \r\n<https://notifications.google.com/g/p/ANiao5pXxn1mA7IYnCVfMc0QWvvkf7Y99LXtXXfGQ9hd3BGx60WjcQQVd9MZMlwXFB013xP9Ep2OluwiZGbhAr-a7lFAm1pX5ZT0kvl5R2yw0kUWhlMjCwaVpD9IJYUOl-mhFSNpXTD9sV2C94pYWZ1vbSBSSi3rOyeotxatagVCUf09Xn7VhEzGGG2YiLNuTjwtVFgbhg2ojV2qPpvorgLkuzQ_K5z8qHJ0lhGQbhEecA9SUvHpmM_LmwqQdcb11lXTGbqzEslBsCwx3-_innGCCzRGN2KmcR6WOAhXswh34I_rpn589j8C2z2GGhY1ptt7NzPN2UWq7_uzJzIbo2Ylgs_nhRogz29diQXtU5dT4h2LocYJXetgKYr8pnhdCyjuE0tuNF1PTi5e5ujlc9qFqSdaF3s7JfqtR4EHsnmzh3LY91jGyz7AXoMhIIhEdeBkCMmr1Ms8J1xKZMNvPg8ZdudtdS7sT9OV>\r\nAdd partners who should receive messages for this Search Console account: \r\nhttps://notifications.google.com/g/p/ANiao5oL2grdizOyUw8tsK1v3syt_uM3GduQtXeaLJuhoe3VZBPvFvN43vr0MtZkzWSVcdQu_c03n_CJRWX9R495Q92ZbUnp5kktee8Uefp6C4IE1ZJfBz4v6UqtIdi0L48INfUbyaPC1197cjb8zJxwPJv_QnTqyn_MRFh2AVVWxdvRfIVIhOOb0E0MSFgGpRRdtapKuKO2LC2Sv-u6-1eNhHTQJ0uxCz_Sl--VMUnDqAMFdcQrwZwKW6EnHlIw0bQpS90hVzfKztvIFcvbdwUraIPNLwG1y1kflge4TO1ZO11lTFpVCMIgW74bcWDCfMQVzI7SVuMH9q0Mu1nz3aastjqvQ7GabW1kg7Ey-ROPtn_u6Tp8LHF_WSwTKqEXfGi_lmzSn3a78yyL-nbWT4gJAI3cMY9hitYTkhXF-IdsxwPd2evQsaBt8XPy\r\nGoogle LLC, 1600 Amphitheatre Parkway Mountain View, CA 94043"
+    },
+    {
+      "id": "18e9408c7b9e586b",
+      "internalDate": "1711880586000",
+      "threadId": "18e9408c7b9e586b",
+      "date": "Sun, 31 Mar 2024 03:23:06 -0700",
+      "from": "Google Search Console Team <sc-noreply@google.com>",
+      "to": "kim@orgiast.jp",
+      "subject": "サイト https://yatteme.fun/ のページがインデックスに登録されない新しい要因\n",
+      "listUnsubscribe": "<https://notifications.google.com/g/p/ANiao5qifK4T2lB9DgtRmD3RkXjtjt0Q6QeXMEWWT0vm2w3vAvPAHkLPCyJnHdgeYOldog7AjkH1De7xW48tVNUBOIfzmbsO4t_ljv0ulOsof1dpyP86Wd_ez3hi__--0bRUSFy6eiV56ldefpgoIoPVO6jvWWpp_nFnpSSEPXqAqr-FKr06efH8DPZv-kCX0CFsCsiXtlLDsAsClXlx5X_bkokSMkYHKwwrkpI0uHH18UU4y5OEaBLrYKYQeC590okKfVxkkt8zbOPNSXXKDHCQPLephvKrjLMeXQJ1WISrsE_TpnJQoP4Qt7XjDNBnUQ9C3o66UClYSkFThqrBxXz0T5uq77DGqSVryWNJryb_u2R9bdGwJDvGUlBlI6sQRuFbyA-KxiA_s_OOwt6RLz-n-6jRnxje6-kO4VWMnOE7820OYRogA54ZXw2AZWzHnFkHrOr5Ijm25VEdWp1RXWEKqqqAW3R4A0shOi5x>",
+      "snippet": "Message type: [WNC-20237597] Search Console ページ がインデックスに登録されない新しい要因 Search Console で、貴サイトのいくつかの ページ がインデックスに登録されていないことが検出されました。以下がその要因となっています。 見つかりませんでした（404） これが意図したものでない場合は、修正することをおすすめします。それにより、影響を受け",
+      "labels": [
+        "UNREAD",
+        "IMPORTANT",
+        "Label_3",
+        "CATEGORY_UPDATES"
+      ],
+      "body": "送信元: Google Search Console\r\n\r\n件名:\r\nページ がインデックスに登録されない新しい要因\r\n\r\n\r\n\r\nSearch Console で、貴サイトのいくつかの ページ がインデックスに登録されてい \r\nないことが検出されました。以下がその要因となっています。\r\n\r\n* 見つかりませんでした（404）\r\n\r\nこれが意図したものでない場合は、修正することをおすすめします。それにより、影 \r\n響を受けていた ページ がインデックスに登録され、Google に表示されるようにな \r\nる可能性があります。\r\n\r\n**インデックス登録レポートを開く**: \r\nhttps://notifications.google.com/g/p/ANiao5ookmCDfTYKCuWsetxQmd8HJVEpXBhyl_PDMHbUgYBpXb4Z6NJ_eCJUTgYNyYA4qprgQnJIUSWf40QzOeVT5IvlASSQFl1jblSyCnell_mpPi9-j12Kp0nrmeP_AcQMMXlV8pLH_4MNIPljDgfd9VHcJ-UvA_yQvEbx8zty4zdOBzGVsOpTs7fuVZ-yIQecBP6IVE3ePM6La5k-KNlFlq9_xtlyb4s_cnS-fLynhpG4ktrc39wkbaVX7MGJiZyIgR1py_x68RAXiMHHUsaQ83DVGXfWTkXMiF2YUjW6ZpiwXxQr2REinr4PzqVxXdxqimSIO9S8NCuk3dava3XliSQEVZrkZb0nbnuRF9-EpsE9KjChLkp_NH0gD42e1f5XXrqbbRvYbf8k62CA6n2RDlJ3SiQX4uB9RvHAPQ\r\n\r\n\r\n----------\r\nGoogle LLC, 1600 Amphitheatre Parkway Mountain View, CA 94043\r\nこのメールは、Google Search Console にサイトが登録されているすべてのお客様に \r\nお送りしています。.\r\nこのようなメールの配信停止をご希望の場合は、次のページをご覧ください。 \r\n<https://notifications.google.com/g/p/ANiao5pN0pv2EMcvsNHn8Su-30BAHUMKrpeP_YMkC54ES_-42rpa9NiOMTvZOuQhZaENYKBGGd9OdiNAnCj3hcKP1rsq1oat5BA1npiHuYyKIcaJowULZHwFSDIKOdRkKLnN95RK0PbhiH-rhYwOEySLCxXPYio8FC_w4qi55H1EW2inaN5n6gdy59HOIwqIyyaJ0SdVOnj49BvMOYKh9Y7ddX0Fc1vvtchT2CEHlu1tcr7jj2TDkAj6kSTgOYv9E97VwpAU8QDMTd-dICJPL40lPyS965Hg8ysGMlX9YZU5lN4iQys01uUaETGBDoqIyqePlTVS8gMOzQtJ6d05GEPdPS-9lJ4lfMjkwAs_XcQImtjgETx5qeqWjLoKsU71KP1O-7DneB7_XarlNsT9vxuqyaRoajA68xofHog57ZwmL9c2BsXMavvCDIAilnggTP0BwCeGCGlUEdr-QON3yll9Kgat4Ys-ThfNOg>\r\nこの Search Console アカウントのメッセージを受信するパートナーを追加する: \r\nhttps://notifications.google.com/g/p/ANiao5pBfXNmYyXPUwpyZgLTOIDyM6_MVcmOtWdUAZcOzhesapd5I2Fbaiv6PlRQ7rD-1awaRR3e1xP7Kx0ddju9AewzRDb-L9iZTU6EamT75BI5LkYM7Uam87jBVlR1guiecRcgTwq1tx0DIf3EQF-D_Mug-JvbJgsfsxPrcTRy1pJXpWLIld0HKOYu8Cznniz09Isv4CnJATXhL78buy-Z69mLXNu_xeOHlDXsoT5_QdsC8GXb19Fn5jINsCsyb1BQ7RfdCvCCeX-2f_8Q-0Dizo1dUy692XU6yTHZTX456vltKHAPBQCkEI2Hl4hXFeUwT2ZQQz104Y6N3zDjDnL3XaPMLFvLrJu3vDrxibCqY7o8OlAWVLp4rHb1eA4dIMd18rtCOh7R9S41dsMDmI5j2aVwJWDp_tMRdu1ZImpdDjsZ6eaOw3PxCfeFQg\r\n\r\nMessage type: [WNC-20237597]"
+    },
+    {
+      "id": "18dfc61602519661",
+      "internalDate": "1709336253000",
+      "threadId": "18dfc61602519661",
+      "date": "2 Mar 2024 08:37:33 +0900",
+      "from": "no-reply@service.muumuu-domain.com",
+      "to": "kanri@orgiast.jp",
+      "subject": "【ムームードメイン】自動更新が完了しました",
+      "listUnsubscribe": "<mailto:googlegroups-manage+1024540281556+unsubscribe@googlegroups.com>, <https://groups.google.com/a/orgiast.jp/group/kanri/subscribe>",
+      "snippet": "====================================================================== このメッセージは、ムームードメインより自動的に送信されています。このメールに心当たりのない場合やご不明な点がある場合は、 https://muumuu-domain.com/?mode=inq までご連絡ください。 ======================",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_UPDATES"
+      ],
+      "body": "======================================================================\r\nこのメッセージは、ムームードメインより自動的に送信されて\r\nいます。このメールに心当たりのない場合やご不明な点がある場合は、\r\n https://muumuu-domain.com/?mode=inq までご連絡ください。\r\n======================================================================\r\n\r\nこの度は自動更新設定をご利用いただき、誠にありがとうございます。\r\n\r\n◎以下のご契約についての入金確認処理が完了しましたので\r\n　内容をお知らせいたします。\r\n==================================================================\r\n【 ムームーID 】 orgiast\r\n【 ご契約内容 】 ムームードメイン ドメイン利用料金（サービス維持調整費を含む） \r\n【 お支払方法 】 おさいぽ！決済\r\n【 おさいぽ！ID 】 orgiast123\r\n【 引 落 日 】 2024/03/02\r\n【 ご請求金額(10％対象) 】 4,096円　（うち消費税 372円）\r\n【 おさいぽ！ポイント支払 】 4,096円\r\n【 ご入金額 】 0円\r\n【 適格請求書発行事業者 】GMOペパボ株式会社（T5011001042496）\r\n　※ポイント数はおさいぽ！サイト内の「ポイント通帳」にてご確認ください。\r\n　　https://osaipo.jp/conpane \r\n==================================================================\r\n■更新ドメイン\r\n　yatteme.jp (4,096円, 1年)\r\n　　契約期間: 2024/03/31 - 2025/03/31\r\n==================================================================\r\n※今回入金確認が完了となりましたのは、ムームードメインのドメイン利\r\n　用料金でございます。こちらにはサーバー料金は含まれておりません。\r\n　レンタルサーバーご利用の場合は、別途ご契約と料金が必要となります。\r\n　ご注意ください。\r\n==================================================================\r\n\r\n契約内容の詳細はムームードメインコントロールパネルをご覧ください。\r\nhttps://muumuu-domain.com/?mode=conpane \r\n\r\n\r\n\r\n--------------------------------------------------------------------------\r\n◇お問い合わせは、【お問い合わせフォーム】にて承ります。\r\n　フォーム以外からお問い合わせの場合、ご回答が遅れる場合や、お返事が出来な\r\n　い場合がございます。\r\n\r\n　【お問い合わせフォーム】https://muumuu-domain.com/?mode=inq\r\n\r\n◇ユーザーの方でお問い合わせの際は、お名前・ご契約ドメイン名を必ずご明記下\r\n　さい。\r\n\r\n◇お電話によるお問い合わせは受け付けておりません。ご了承ください。\r\n\r\n┏ PR ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\r\n ★『ロリポップ！レンタルサーバ』は月額99円から利用可能。容量最大1TB！\r\n　　 http://lolipop.jp/?ref=muupr\r\n┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\r\n\r\n--------------------------------------------------------------------------\r\nムームードメイン： https://muumuu-domain.com/\r\n\r\nGMOペパボ株式会社 https://pepabo.com/company/overview/\r\n--------------------------------------------------------------------------\r\nおかげさまで28周年　すべての人にインターネット\r\n当社はGMOインターネットグループ（東証プライム上場 9449）のメンバーです。\r\n■GMO INTERNET GROUP■ https://www.gmo.jp/\r\n--------------------------------------------------------------------------\r\n機密情報に関する注意事項：このE-mailは、発信者が意図した\r\n受信者による閲覧・利用を目的としたものです。万一、貴殿が\r\n意図された受信者でない場合には、直ちに送信者に連絡のうえ、\r\nこのE-mailを破棄願います。"
+    },
+    {
+      "id": "18d8d6b97649f996",
+      "internalDate": "1707474610000",
+      "threadId": "18d8d6b97649f996",
+      "date": "Fri,  9 Feb 2024 19:30:10 +0900 (JST)",
+      "from": "info@muumuu-domain.com",
+      "to": "kanri@orgiast.jp",
+      "subject": "【重要】Whois情報 正確性確認 yatteme.fun ",
+      "listUnsubscribe": "<mailto:googlegroups-manage+1024540281556+unsubscribe@googlegroups.com>, <https://groups.google.com/a/orgiast.jp/group/kanri/subscribe>",
+      "snippet": "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ■ ムームードメイン ■ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ※本メールに心当たりの無い方は、本メールの破棄をお願いいたします。 ─────────────────────────────────── ■Whois情報正確性確認■ ───────────────────────────────",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_UPDATES"
+      ],
+      "body": "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\r\n■ ムームードメイン ■\r\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\r\n※本メールに心当たりの無い方は、本メールの破棄をお願いいたします。\r\n\r\n───────────────────────────────────\r\n■Whois情報正確性確認■\r\n───────────────────────────────────\r\nドメイン名..................：：yatteme.fun\r\nドメイン登録日............：：2023年3月9日\r\nドメイン登録期限日.....：：2025年3月9日\r\n───────────────────────────────────\r\n\r\n本メールはICANNのWhois情報正確性確認方針に基づき、ドメイン名の管理\r\n担当者(Admin)のメールアドレスへ宛に送信しております。\r\n\r\nドメイン名登録業務やIPアドレスなどの管理責任を持つ非営利団体である\r\nThe Internet Corporation for Assigned Names and Numbers (ICANN)は、\r\n2003年に「Whois情報正確性確認方針（Whois Data Reminder Policy）」を\r\n採択いたしました。\r\n\r\nこの方針は、最低一年に一度すべてのドメイン登録者（管理担当者）に対し、\r\nWhois情報正確性の確認ならびに正確な情報への修正を促すことを通知する\r\nというものです。\r\n\r\n本メールに現在お預かりしているお客様のドメインWhois情報を記載いたし\r\nます。\r\n\r\n記載されている情報をご確認のうえ、情報修正が必要な場合にはご利用の\r\n管理会社を介して情報修正のお手続きを行ってください。\r\n\r\n※現在ご登録されている情報が既に正しい場合は、特にお手続きは必要は\r\n　ございません。\r\n※Whois情報公開代行をご利用中のドメインにつきましては、本来のWhois\r\n　情報（代行前のWhois情報）に対して本方針を適用いたします。\r\n※ICANNのWhois情報正確性確認方針はgTLDドメインを対象としております\r\n　が.jp/.uk/.be/日本語.org以外のすべてのドメインに対して本メールを\r\n　お送りしております。\r\n※Whois情報が不正確なドメインは、登録抹消や使用停止の対象となること\r\n　がございますのでご注意ください。\r\n\r\n───────────────────────────────────\r\n[登録者情報](Registrant)\r\n氏名........................：Kongyong Kim\r\n組織名......................：orgiast\r\n種別........................：個人\r\n建物名等....................：rittupuraimu102\r\n町村番地....................：samon-cho7-9\r\n市区........................：shinjuku-ku\r\n都道府県....................：Tokyo\r\n郵便番号....................：160-0017\r\n国..........................：JP\r\n電話番号....................：+81.333521015\r\nファックス..................：+81.5035886670\r\nメールアドレス..............：kanri@orgiast.jp\r\n\r\n[管理担当者情報](Admin)\r\n氏名........................：Kongyong Kim\r\n組織名......................：orgiast\r\n種別........................：個人\r\n建物名等....................：rittupuraimu102\r\n町村番地....................：samon-cho7-9\r\n市区........................：shinjuku-ku\r\n都道府県....................：Tokyo\r\n郵便番号....................：160-0017\r\n国..........................：JP\r\n電話番号....................：+81.333521015\r\nファックス..................：+81.5035886670\r\nメールアドレス..............：kanri@orgiast.jp\r\n\r\n[技術担当者情報] (Tech) \r\n氏名........................：Kongyong Kim \r\n組織名......................：orgiast \r\n種別........................：個人 \r\n建物名等....................：rittupuraimu102 \r\n町村番地....................：samon-cho7-9 \r\n市区........................：shinjuku-ku \r\n都道府県....................：Tokyo \r\n郵便番号....................：160-0017 \r\n国..........................：JP \r\n電話番号....................：+81.333521015 \r\nファックス..................：+81.5035886670 \r\nメールアドレス..............：kanri@orgiast.jp\r\n\r\n[経理担当者情報] (Billing) \r\n氏名........................：Kongyong Kim \r\n組織名......................：orgiast \r\n種別........................：個人 \r\n建物名等....................：rittupuraimu102 \r\n町村番地....................：samon-cho7-9 \r\n市区........................：shinjuku-ku \r\n都道府県....................：Tokyo \r\n郵便番号....................：160-0017\r\n 国..........................：JP \r\n電話番号....................：+81.333521015 \r\nファックス..................：+81.5035886670 \r\nメールアドレス..............：kanri@orgiast.jp\r\n\r\n[ネームサーバー情報]\r\nns1.dns.ne.jp\r\nns2.dns.ne.jp\r\n\r\n\r\n[管理レジストラ]\r\nGMO internet group, Inc.\r\n\r\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\r\n・お問い合わせ先(Contact Us) https://muumuu-domain.com/?mode=inq \r\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\r\n■ ムームードメイン ■\r\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    },
+    {
+      "id": "18d8b52d58610861",
+      "internalDate": "1707439475000",
+      "threadId": "18d8b52d58610861",
+      "date": "Fri, 09 Feb 2024 09:44:35 +0900",
+      "from": "\"ムームードメイン\" <no-reply@service.muumuu-domain.com>",
+      "to": "kanri@orgiast.jp",
+      "subject": "【ムームードメイン】ご入金ありがとうございます",
+      "listUnsubscribe": "<mailto:googlegroups-manage+1024540281556+unsubscribe@googlegroups.com>, <https://groups.google.com/a/orgiast.jp/group/kanri/subscribe>",
+      "snippet": "ムームードメインをご利用いただき、誠にありがとうございます。 以下のご契約についての入金確認が完了いたしました。 ◎ご契約内容================================================================== 【 ムームーID 】orgiast 【 ドメイン 】yatteme.fun 【 契約期間 】2024/03/10～2025/03/09 【",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_UPDATES"
+      ],
+      "body": "ムームードメインをご利用いただき、誠にありがとうございます。\r\n以下のご契約についての入金確認が完了いたしました。\r\n\r\n◎ご契約内容\r\n==================================================================\r\n【 ムームーID 】orgiast\r\n【 ドメイン 】yatteme.fun\r\n【 契約期間 】2024/03/10～2025/03/09\r\n【 支払方法 】おさいぽ！\r\n【 請求額 】ドメイン利用料金 10％対象 ￥ 3,990 （うち消費税 ￥ 362）※サービス維持調整費を含む\r\n【 ご入金額 】￥ 0\r\n【 おさいぽ！ポイント支払 】￥ 3,990\r\n【 適格請求書発行事業者 】GMOペパボ株式会社（T5011001042496）\r\n==================================================================\r\n\r\n契約内容の詳細はムームードメインコントロールパネルをご覧ください。\r\n\r\n【コントロールパネル】\r\nhttps://muumuu-domain.com/?mode=conpane\r\n\r\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\r\n　　　　　　　レンタルサーバーのご契約はお済みでしょうか？\r\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\r\n\r\nお客様が取得されたドメインを利用してホームページやブログを作成するには\r\nレンタルサーバーのご契約が必要になります。\r\n\r\nもし、まだレンタルサーバーのご契約をされていないのでしたら、弊社提供の\r\nレンタルサーバーサービス『 ロリポップ！』『 ヘテムル 』をオススメ致します。\r\n\r\n\r\n ┌────────────────────────────────┐\r\n │lolipop! -ロリポップ！- │\r\n │────────────────────────────────│\r\n │ │\r\n │★ 月額100円(税抜)からご利用できます（容量最大４００ＧＢ）。 │\r\n │ │\r\n │★ マルチドメイン、複数データベース、共有SSL、SSHの利用も可能。 │\r\n │ ブログ、ＳＮＳ、ショッピングカートも付いてます。 │\r\n │▼ロリポップ！レンタルサーバー │\r\n │ http://lolipop.jp/?banner_id=muumuu02 │\r\n │ │\r\n └────────────────────────────────┘\r\n\r\n ┌────────────────────────────────┐\r\n │heteml -ヘテムル- │\r\n │────────────────────────────────│\r\n │ │\r\n │★ 大容量256ＧＢが月額1,500円(税抜) ！ │\r\n │ │\r\n │★ 独自ドメイン設定無制限、データベース100個まで追加費用なし！ │\r\n │ 共用ＳＳＬ、独自ＳＳＬ、アクセス解析など多彩な機能を搭載 │\r\n │ │\r\n │▼ヘテムル │\r\n │ http://heteml.jp/ │\r\n │ │\r\n │※初期費用半額をご希望の場合は必ずムームーコントロールパネルから│\r\n │ お申し込みください。詳しくは以下のページをご確認下さい。 │\r\n │ https://muumuu-domain.com/?mode=guide&state=server#heteml │\r\n └────────────────────────────────┘\r\n\r\n\r\n＜サーバー契約について＞\r\n　今回入金確認が完了となりましたのは、ムームードメインのドメイン利用料金\r\n　でございます。レンタルサーバーやメールといった各種サービスについては、\r\n　別契約となりますのでご注意ください。\r\n\r\n　ご契約中のドメインでこれらのサービスをご利用いただいている場合は、\r\n　各サービスの更新期限も併せてご確認ください。\r\n\r\n----------------------------------------------------------------------\r\n◇お問い合わせは、【お問い合わせフォーム】にて承ります。\r\n\r\nお問い合わせフォーム： https://muumuu-domain.com/?mode=inq\r\n\r\n◇お電話によるお問い合わせは受け付けておりません。ご了承ください。\r\n\r\nムームードメイン： https://muumuu-domain.com/\r\n----------------------------------------------------------------------\r\nおかげさまで28周年　すべての人にインターネット\r\n当社はGMOインターネットグループ（東証プライム上場 9449）のメンバーです。\r\n■GMO INTERNET GROUP■ https://www.gmo.jp/\r\n----------------------------------------------------------------------\r\n機密情報に関する注意事項：このE-mailは、発信者が意図した\r\n受信者による閲覧・利用を目的としたものです。万一、貴殿が\r\n意図された受信者でない場合には、直ちに送信者に連絡のうえ、\r\nこのE-mailを破棄願います。"
+    },
+    {
+      "id": "18ca1dc0ec8d8efb",
+      "internalDate": "1703522602000",
+      "threadId": "18ca1dc0ec8d8efb",
+      "date": "Mon, 25 Dec 2023 08:43:22 -0800",
+      "from": "Google Search Console Team <sc-noreply@google.com>",
+      "to": "kim@orgiast.jp",
+      "subject": "サイト https://yatteme.fun/ のページがインデックスに登録されない新しい要因\n",
+      "listUnsubscribe": "<https://notifications.google.com/g/p/ANiao5qU7v8LBGWQM_Xp3QpeZ6q6L3HRsNyECQW2BYHn3eoAX-4YxF8dCCum1Fxm40iuoq8zoM1sz7pDNZ0Y8AgXhEDtNhyjPNu07J_7_RzdqXMVc7BVyjqH-TB_BeQvF0TaL7RChqT52PUQHPD3Aql-JIM5JM75G3bdsuoFqw7I56WiS4xjK6q6EbdjUBs6yvLoQApCQ9pHD_RccrXKZx-LwlByqKhg7ITj48fRuOuMHx6BBLLMaKB66PTnep_QoywvDXI7y0ogL0sZ0lkkmLFSk31mVSseLb9VBrDc5KsPybBZB0fEP97aTQ5b-AkqX0fN1a2rJ50EGy24DNVBxw4_9ALZCvP4h0raLNkXHalUaorqV9BmjIheeuSkv-rKpYnstw9xOO_BU_j4Jv5M5sH7fXJuPbVRW_ejdkby2JtPnzvfKcLnetiYvbQbckSOIDWA0wia7iSWXEzJ3G2moOxjbyNH2Y9VrHn8AVwI>",
+      "snippet": "Message type: [WNC-20237597] Search Console ページ がインデックスに登録されない新しい要因 Search Console で、貴サイトのいくつかの ページ がインデックスに登録されていないことが検出されました。以下がその要因となっています。 ページにリダイレクトがあります これが意図したものでない場合は、修正することをおすすめします。それにより、影響を受け",
+      "labels": [
+        "UNREAD",
+        "Label_3",
+        "CATEGORY_UPDATES"
+      ],
+      "body": "送信元: Google Search Console\r\n\r\n件名:\r\nページ がインデックスに登録されない新しい要因\r\n\r\n\r\n\r\nSearch Console で、貴サイトのいくつかの ページ がインデックスに登録されてい \r\nないことが検出されました。以下がその要因となっています。\r\n\r\n* ページにリダイレクトがあります\r\n\r\nこれが意図したものでない場合は、修正することをおすすめします。それにより、影 \r\n響を受けていた ページ がインデックスに登録され、Google に表示されるようにな \r\nる可能性があります。\r\n\r\n**インデックス登録レポートを開く**: \r\nhttps://notifications.google.com/g/p/ANiao5pPUrisitpGG-nIHNtytbYoyDG7TwuYxWyX6yFtHP8uUjgW78glFybTdUGrGOtj6ywIpAbl1jOFHD41rW4aGooMEMQtiG7dnGEwJcFx6WgeWaGT5cCdnqHCXuRY880KASWhpSoT3Aj8k_0YuJ-MzPYClUSgyEtLt9Cl87-XXhObV-Jwy5ePvY-LwaZUhp3xNqk4xubtwYK6BkE_AldTPK6ODQpB0trRiI9M5tfMKJDCxJ33a15L52cJR0HAVdUBuORx1XV_bH8IKu23asYoKs9hmjWtiqi1TqPDUsbGpAxpGQPXbyZs0ehcIjYnFDqYIhyFaXsJRheZpi5wZANA1vxfvpOwdd9KOolnHIR64IjGXSAfbmHTSas49T4fsqa0NtyqGwjA-E506Qy5yKlZqTgZL0JBVaRaRyKMMg\r\n\r\n\r\n----------\r\nGoogle LLC, 1600 Amphitheatre Parkway Mountain View, CA 94043\r\nこのメールは、Google Search Console にサイトが登録されているすべてのお客様に \r\nお送りしています。.\r\nこのようなメールの配信停止をご希望の場合は、次のページをご覧ください。 \r\n<https://notifications.google.com/g/p/ANiao5r3EnhRebeY69KCteSrzK1B_FbW4aArk9_PNqbrOrzcE_laBxK7ypRiqIP1Vo1ssPg6iYajThBFbjBuWeyNuCsL8SPtmZbj8FK3Rufyh4amrDvFe_HOmgoRq4CDkDR_qmydXKaxV2NT8eIF2O1DiVS9Bt_PCbF_9oWF6uOrYN2FosurOTeiG_yKnvvxyWuI8YdB3aNZpc2DIiLFDYTlFV1PPILTt-XLObmHa1SgeJTS3lbDRj-GZ8AwEM2cFRVEzVfy1gkMiU9gmXObjMgK9uVpoX7_mAQaQdCxRHnng8zLlsHydEY8e-P-O8pWOjMGMpXGY4XMrJCqmatwGcxF1iWXrgP_dzSB10M4KlaMJ1zPAQt1oQ6YFTCXYu9yvpwo5kbxO8RarpifcquRg93KNbHOfdKHnWwWunp1XQhaC9jkr539cRfEZ1078b8qMuae1U0c5I6Ap8W004VPcUY0eI-T84FmFGprGQ>\r\nこの Search Console アカウントのメッセージを受信するパートナーを追加する: \r\nhttps://notifications.google.com/g/p/ANiao5qJoNziT9XQ4xQWD_qpPLhan1wYWmR3v-hXwidzlvlO1_HpOBgbSYFf44ckbNZ70g9sd1JWHvLI__hzyOKH-3AGZnt0-ruMuV28qf7NgCZWLObUAyEvXeMtEU3VwvBlOsqHtkGKuDeeJBEsqf7aW2H5_-ukUaSMsNG6v7fc58e6fJS3cf_p7DItDXNE2OYOA1jNhEoYrbknlVlYlwMo7hdCui1BX6iMYwO4vKMjjGofBbti62H8PLoCBMxR2tFfm1tbnjMprYahxUrDYMrHueGKcHXuT6gFq7Vi8pEATLDEyCNbvYbxnIIdW2gvBWT5DXa0OM9rytaQ608tzSCgXkMynXLlRxyTeN-D2yPlYUgAON12R0RQK6tZwJZ8sQoqmA9gWW7nzxaOxa90KLgJExQJ9dX_pwSNnvUzFvPr57Ld-iDLTzvh6HKWhA\r\n\r\nMessage type: [WNC-20237597]"
+    },
+    {
+      "id": "18c890ca06cea1fc",
+      "internalDate": "1703106355000",
+      "threadId": "18c890ca06cea1fc",
+      "date": "Wed, 20 Dec 2023 13:05:55 -0800",
+      "from": "Google Search Console Team <sc-noreply@google.com>",
+      "to": "kim@orgiast.jp",
+      "subject": "サイト https://yatteme.fun/ のページがインデックスに登録されない新しい要因\n",
+      "listUnsubscribe": "<https://notifications.google.com/g/p/ANiao5ru7bpN20RY2j8ID9fHY-daPD3MVeyeFLIddAvCrUQkRKZJE1W2TAuJAaqfUH5m7EFBLrLnXpl1thdcyRacKajGlV00G0cfxbvyT-rlmqU2LZmGefh9sVDJlCz3z-Onv5idRboSSXHFmf1Okm3LF6QqSwzpP7UWxLc7eOBbzuaTJ0VYDpplPdAzmb69M_6QvoibybWg60KcluopL-gvq5uYFCZpI0WumVbs_hrgK6RSyYVCCDgvhKdYBg_jLaKgkNtm9ByMSGVamTKZ2qLxhzYGdi-V-eTs3oW_9mb0ioemS6qOtQKo4dN5Gwklyua82C3McCTDXvQ6m41EWX4q0l2HKDjMrLA4wbnoESfaX77lHJFIV_cML7QJBV20rcbsOt3bLMeivxw2lJNYb6xnQ2-5-R2ayUhJK-4aEpgVGjyM5hu54msTiKWf-S0_QQah83ie_up1VDXZjnyyERp2auvhuwHYl1fEfeAw>",
+      "snippet": "Message type: [WNC-20237597] Search Console ページ がインデックスに登録されない新しい要因 Search Console で、貴サイトのいくつかの ページ がインデックスに登録されていないことが検出されました。以下がその要因となっています。 noindex タグによって除外されました これが意図したものでない場合は、修正することをおすすめします。それにより",
+      "labels": [
+        "UNREAD",
+        "Label_3",
+        "CATEGORY_UPDATES"
+      ],
+      "body": "送信元: Google Search Console\r\n\r\n件名:\r\nページ がインデックスに登録されない新しい要因\r\n\r\n\r\n\r\nSearch Console で、貴サイトのいくつかの ページ がインデックスに登録されてい \r\nないことが検出されました。以下がその要因となっています。\r\n\r\n* noindex タグによって除外されました\r\n\r\nこれが意図したものでない場合は、修正することをおすすめします。それにより、影 \r\n響を受けていた ページ がインデックスに登録され、Google に表示されるようにな \r\nる可能性があります。\r\n\r\n**インデックス登録レポートを開く**: \r\nhttps://notifications.google.com/g/p/ANiao5pJbQpLtItlojamr-nS_3dhHPNZSdzhDDPZO0OPgwd7oYvgJRrGyCkIROCKF2usMlTfsFvAJciWs4jiemWD5SWvNeEGw8pbywnDfjATdOSC8O-7eWeL2KcDYKDso1DPMSFaEk7HTwS3Ad31uzXyxTNMSziE1YDcIkQprBownA9utgvKxNa-DxTvnbmaZAihg8hk4_4MMUn0E0ZprDvlQ64H-BrAMYedpjNmyHfazg5yKiJxpBCfcKzVSgwkZ4rBcClx6xrCbF2GfEAh7gyJTa6yzzBxSC4Thm1NKbYG6GKYKPNqCXxiT1CoLfqFc8eFC4INI86VOEQtuvxWRC-bDAfQDOXiGK9DxSeU6KzL65plkfo0FmI5ZqW18MsazubsC0t6MNGnQqbcdcq9PahbUXUuVvr9HOBKToXJvg\r\n\r\n\r\n----------\r\nGoogle LLC, 1600 Amphitheatre Parkway Mountain View, CA 94043\r\nこのメールは、Google Search Console にサイトが登録されているすべてのお客様に \r\nお送りしています。.\r\nこのようなメールの配信停止をご希望の場合は、次のページをご覧ください。 \r\n<https://notifications.google.com/g/p/ANiao5rWJXE-yJpoyKzN3q0zB4xm2HLwDJw__yQCfaKFYOlCA_l3Cd4nnDmJBnfJgXNb1DrKneeqpqhbcdaJTZqkuqFkLhi_wpb9Pr6xcnffqxouFWUmcuvLElosIyVeZpUxBADEIaySBJKUc5wkfD8f4d7zfVfsL9kSnIgCu-Ns0TQUSWO9yHGKTfLjjGmSH2z0S5R8a0XHiHmf3oFfx__7uz_3npUAwPEcfbtykUJQyzYZbdPblRQuhqfASAyOFA9-Xkus3mKbU1ZomX81XQFMJNhvINdsE1pwKKg-O7ZHQor4y7XEW62txBnmoK-n_ktOro5KZPNlsNPMmfRnoTir-f-2NxJ5P418TBPJW6AnPNiw3RHxm4deyymCK-xIJgIT-RcIdSkF-xI9ha6kVHBaxPUOcVwKUugV8QFv2HVz83K9OhcHWznisRXeGEVqdpGAKC5nUWZRT4IQhh9uZ9Klr_JceV8cnRumbQ>\r\nこの Search Console アカウントのメッセージを受信するパートナーを追加する: \r\nhttps://notifications.google.com/g/p/ANiao5rOVsxaIkFsKyhFFMOsTEzwLsXx7dWQ2lI97QDsSePRK2Bm0qfrPQ_XVdco_8O6P-uehtyOKlwAh7K90vSNXGwR5KuQq4nDx44_75vjOJAa89u3MOl1lOuLBwDuc1jD6EPM6Mm3etsVUW4hM4M7u7n-yymqibOS0lGS7mPmCh9hTWrxsEZBqxifxveyM6PRdedANFUZ-XFLmCBIzYmHHy5EHPNDKKiHGKkmOAVD9xAkmsN5IYtIcA4Ahl4VEbV1Te5LkP-LsxqLymG1xQCfG6EslTI0FPSMgcjAHhqKGMJuGI3-emqlqC1xR70BxR0c5zpXyQbHsRn9k4WMcSSTpxITn4g205toZTh3bxk854JIg5ODQDpuV98ut5PE1P4ML2XYMtuy-k4A3oWfXqelBEjsmcGbMtRStxC7zIUHGU4CaxDPPw0b-3L3Gw\r\n\r\nMessage type: [WNC-20237597]"
+    },
+    {
+      "id": "18a69fd801e48e55",
+      "internalDate": "1693995335000",
+      "threadId": "18a69fd801e48e55",
+      "date": "Wed, 06 Sep 2023 03:15:35 -0700",
+      "from": "Google Search Console Team <sc-noreply@google.com>",
+      "to": "kim@orgiast.jp",
+      "subject": "https://yatteme.fun/ で新しい ページのインデックス登録 の問題が検出されました\n",
+      "listUnsubscribe": "<https://notifications.google.com/g/p/ANiao5p-SVt-K0S9u8ZTGU2TvxlAouBzWzDfUA5rttmvZ_UcACof61Rhpnt7XEQ9ff7Z1HzWhem5u6cykA2lzK5zafTXvZe-74oEMkNQyd682NmQnffsiR12X5a04SGAO5ECy4p1FUXAD6Uy9BR_D5NOpudlrMXBctkIIgCABJk6q-_WvlymxcYpjgVpMmWH3HV6vjCL4Lbay7TDblXqrm4eS1HwnUcmEoA43DVjO-DWy9EaVmTfR8jPlqTjnOrMflb95LEf0kHmThnR8ZDu84D7Ev6lO0S530RlTg6GkwBKFyH37uPzs8k0jqmvvkugsiMvyErXRdgsMyDf-xALGQlCE3CvGqOaon3rPbWqGe8LIUhAWoGYReBl4F1TjM2G0Xo9WMNQ6TO0zp9kxbgLUeUt1nnrd22fMtxJQ6n-mfQYXFaSuBVBjxTUOI4VIDXaZLu92QXisRISMDmKWKoHglipwzzo-B5TcPNEckrX>",
+      "snippet": "Message type: [WNC-10030322] Search Console https://yatteme.fun/ で ページのインデックス登録 の問題が検出されました https://yatteme.fun/ のオーナー様: Search Console で、貴サイトが 1 件の ページのインデックス登録 の問題に影響を受けていることが検出されました。サイトから検出された問題は以下の",
+      "labels": [
+        "UNREAD",
+        "Label_3",
+        "CATEGORY_UPDATES"
+      ],
+      "body": "送信元: Google Search Console\r\n\r\n件名:\r\nhttps://yatteme.fun/ で ページのインデックス登録 の問題が検出されました\r\n\r\n\r\n https://yatteme.fun/ のオーナー様:\r\n\r\nSearch Console で、貴サイトが 1 件の ページのインデックス登録 の問題に影響を \r\n受けていることが検出されました。サイトから検出された問題は以下のとおりです。 \r\nこれらの問題をできる限り解決されることをおすすめします。問題を解決すること \r\nで、サイトのエクスペリエンスや Google 検索結果での表示を最適化できます。\r\n\r\n*主な問題*\r\n\r\n\r\n * 見つかりませんでした（404）\r\n\r\n\r\n**ページのインデックス登録 の問題を修正する**: \r\nhttps://notifications.google.com/g/p/ANiao5rLT_1GK3BZNHq5pw3Is-PuMbqc9HsnSuSPIvKA3z6f2w7ILmGiWJuUPFxpyjiUwp3YrkoiaYQ3oph7fWphuurldli4DoSQQphv_j6C_Mwh1A2GCvSHvy-mK0QbGfDbmm_-t65sOpvooQ_WucPqAve4HZCUNOdiFlUBtzz-NFk7-HyeMe8kzsGDhkumjZFnD1rRTpKT4ctKCvrZTZvZ3FzYcthucfDEQETB5ojIriqxkZWmNJKchomK1_6Rc9Uqt8USXSEE9rNRJ6chqSdknafNV1Irk_R3cpTAS4kUfMxMVlvWFztYy-m9GeWR-UKZu3_QXxFYz9L67PVp2dwBNk9WGYHnJLFZw2EMjOaqWfzSWwJgQp-HeM6fV2lM2JFxadhzs3jzT6RwGsSHmfltuiXyt8pWY4XdG7_fph9tvhP-ECmQ03B7A1PwBWH6jC7LlKszEXAhYg\r\n\r\n\r\n----------\r\nGoogle LLC, 1600 Amphitheatre Parkway Mountain View, CA 94043\r\nこのメールは、Google Search Console にサイトが登録されているすべてのお客様に \r\nお送りしています。.\r\nこのようなメールの配信停止をご希望の場合は、次のページをご覧ください。 \r\n<https://notifications.google.com/g/p/ANiao5o4fGO3_nXlObWjFCxkYWDU1RkI3nhBX5duO9Td28HkcxOStuOiRpt_LF2DhNf17q--Dnt_ZT0YHiALBhK_EBLZgnkGGu10NjpB5ePnJSdD4xNCaikExBj531EHCV-Cjo_4nhOLMC8VkzS086-1yJCIfIJ8oWUOPoEopU6sBfMGL-n29s0XFgKE97ZrfTO0t7RuOA2C7A0FLICV5ue3kwuvfD21g4ewrM4PBvBHvPbxiUJDhgrN50Szv_2gtXSjhCZGXHXU7gfzqM6iqXe5qwrTEooIbuoSsDRWjKzLCVMJwzMHLiE-m3eH2ALU2VZM3W3CjV6VuLijh5ubz4OjduRBhPYH4RAAQ1BuSDiBbqdkwY_YtOc0VdLM79EunDYG7kU5TIOClWgwA6zaiiDSDrcpGvc0otucY6ElCkTO8Edvv1-wPcdRe2Z42s4lvUJcL4GSD_zEMJACorSA9Le7_SVTx5R16CFbIA>\r\nこの Search Console アカウントのメッセージを受信するパートナーを追加する: \r\nhttps://notifications.google.com/g/p/ANiao5oXYtxpzWL4MERuzgY9DRG8F4u_IAd_PX4dpg2tM4POCp8NXZ6or3QX5cR7zZkKenSCzZgrMJ2-WZKnSOyFg07QRtc1uRTnMkSzRjT6NZFFMBfRFlPpg_rLsSAssNlkPzz-pgXJdOBOMNgn6mVwvXttsSOUzRiYWclHoe7oxSRAyA0rz-wtg-vvAA9Mps9sMfCrJVHrIqNggU2B43zK9j7r6eBMakvvKBntrvBcDQG9QEzD2NNV9ZZgyv_TIc2itGRl_cmRNlhpPV_zyHwbWFeFBSOW9v5elVDhcuPyoKYFpTsudxVLJqoOQtwgZpu1djUZ3yCB859uNngSUSC15f1yRr7b4UL6vZLHZKw-gL1Wfzkwh8nWDJcOt-8XBAahvvwIHtUVM122ZVc340LlZLPYvz9oJJ-B5x-jq7Z470p1JDkkXT26o966jA\r\n\r\nMessage type: [WNC-10030322]"
+    },
+    {
+      "id": "189b50028a09570c",
+      "internalDate": "1690958834000",
+      "threadId": "189b50028a09570c",
+      "date": "Wed, 02 Aug 2023 15:47:14 +0900",
+      "from": "\"ヤッテミ！\" <test@orgiast-product.jp>",
+      "to": "kimkon1011@yahoo.co.jp",
+      "subject": "【ヤッテミ！】クーポンが発行されました！",
+      "listUnsubscribe": "",
+      "snippet": "金功勇様 この度、ヤッテミ！をご利用いただきありがとうございます。 以下内容にてクーポンの本発行が完了致しましたのでお知らせ致します。 ――――――――□■□ クーポン内容 □■□――――――― ※タイトル：「8月2日」クーポン2 ※ポイント： 1000 ※有効期間： 2023/08/02 15:45 ~ ――――――――――――――――――――――――――― ▼ 下記URLにてクーポンをご確認",
+      "labels": [
+        "UNREAD",
+        "IMPORTANT",
+        "CATEGORY_PERSONAL",
+        "INBOX"
+      ],
+      "body": "金功勇様 \r\n この度、ヤッテミ！をご利用いただきありがとうございます。 \r\n 以下内容にてクーポンの本発行が完了致しましたのでお知らせ致します。 \r\n――――――――□■□　クーポン内容　□■□―――――――\r\n \r\n ※タイトル：「8月2日」クーポン2 \r\n ※ポイント： 1000 \r\n ※有効期間： 2023/08/02 15:45 ~ \r\n―――――――――――――――――――――――――――\r\n \r\n▼ 下記URLにてクーポンをご確認ください。\r\n \r\n URL: https://yatemi.test-development.work/coupon \r\n 金功勇様のご利用を心よりお待ち申し上げます。 \r\n また、ご不明な点がございましたら、下記までお気軽にお問い合せくださいませ。 \r\nURL: https://yatemi.test-development.work/contacts/create"
+    },
+    {
+      "id": "189a48a9abb760ef",
+      "internalDate": "1690682693000",
+      "threadId": "189a48a9abb760ef",
+      "date": "Sat, 29 Jul 2023 19:04:53 -0700",
+      "from": "Google Search Console Team <sc-noreply@google.com>",
+      "to": "kim@orgiast.jp",
+      "subject": "https://yatteme.fun/ で新しい ページのインデックス登録 の問題が検出されました\n",
+      "listUnsubscribe": "<https://notifications.google.com/g/p/ADa0GC-69StrkwQYCUowB28TRRIaAag0Df8i3ApRI_kW7Fc1z9sxOeR92hFaLLAaZelyz8mMCjYwsLf5zJu3dIwlKuSlSBzo69CqyjkJzHnx-japqq6W6gatvyPwwPUeZlcXKpCxdi-SGPHWmVqi3eCW-znDASM7HnohZQ8r-4-JQj5fcj4yYC_GJpJkYocPHy7JF2xnIdMA6yRMcH-3Xk1ejdEzpIKUcXuXwBFo0nZySc9jbVGgkQOUd6fkhN1yAvO9fvgmlOqBBIZLjPbKwpXTR1OJAp0MZb3MBLCH1MC9Da0GFzKDIPhSEufnmyaQLqhXJaorD9uZuAILuIbhXyZ1l2EtTqxy-V5KI_ieTrZs2qMjlAbmymlBBU_7CHs2E_thrs-vT20Klzm-Iu12sj3HhzUhyi48uq_386PvfDbtfC46An1S3ENcp-RGaY74WhJLtmUwAZl4uZRP9oQArl3sXSDGTWhKzA>",
+      "snippet": "Message type: [WNC-10030322] Search Console https://yatteme.fun/ で ページのインデックス登録 の問題が検出されました https://yatteme.fun/ のオーナー様: Search Console で、貴サイトが 1 件の ページのインデックス登録 の問題に影響を受けていることが検出されました。サイトから検出された問題は以下の",
+      "labels": [
+        "UNREAD",
+        "Label_3",
+        "CATEGORY_UPDATES"
+      ],
+      "body": "送信元: Google Search Console\r\n\r\n件名:\r\nhttps://yatteme.fun/ で ページのインデックス登録 の問題が検出されました\r\n\r\n\r\n https://yatteme.fun/ のオーナー様:\r\n\r\nSearch Console で、貴サイトが 1 件の ページのインデックス登録 の問題に影響を \r\n受けていることが検出されました。サイトから検出された問題は以下のとおりです。 \r\nこれらの問題をできる限り解決されることをおすすめします。問題を解決すること \r\nで、サイトのエクスペリエンスや Google 検索結果での表示を最適化できます。\r\n\r\n*主な問題*\r\n\r\n\r\n * 重複しています。ユーザーにより、正規ページとして選択されていません\r\n\r\n\r\n**ページのインデックス登録 の問題を修正する**: \r\nhttps://notifications.google.com/g/p/ADa0GC8cPbNiS6wH63mqF-p6tvIp9szdZZe4erq0VkfRJVRaa22yHGmhuD9lRJCTnd7dhw7FnXBHtIihyNIgpeVpwxECQupNPfOsMPsp4vhpdZljFj4WCxjvs8j62ndQzwnwLRsY-4KS0uWjH2BZpusvYCNEtWm32NoQnmVNS6Y7h1ooLnahIMDlPG4LiQFggpEeTEc6g09rw3aAqcpbmsSViTw93IvwRMFrgZRjjryOHCULz2odwBEpqMiMTpF6NnEdnd9Eaa-H3NJUCa6EmRQZRmhhOluEvHYhjQkReTgfPaQoAWAH5TrDnP3rcMx2rayhmc0prL1XuSAWWXOWf5XkMtdumqDTxnDHGbMRh7cm82AKl8eELpf4MJnnxqatGZ1szuDVCQXTqC253Y7evPV9bPDPoPy4VCoVbEvJj6evmoUq0TbW-hnvEgntA8dUMzjwN0k\r\n\r\n\r\n----------\r\nGoogle LLC, 1600 Amphitheatre Parkway Mountain View, CA 94043\r\nこのメールは、Google Search Console にサイトが登録されているすべてのお客様に \r\nお送りしています。.\r\nこのようなメールの配信停止をご希望の場合は、次のページをご覧ください。 \r\n<https://notifications.google.com/g/p/ADa0GC_UIHHOtT5fm4UbmRUwaQyUclEfSWlpdR-ycOJGvwCaiyEactZtJFqPRHICZtHL6iFvb02lQTirYtP7tv51JfZiSiRyFkamNZF6hdm9ce17jek_JYefEXX4QyCbcfQ6sklaDsoYsg5E2qBYlJfytR2P3PuQyyDFsKb6ShCYXxXVrtavbaTGn0SxCVgO9kTuY01TGjZnrJdTDhwfrtOI3YWdnPVyh_sZr7CR3NqcbcaUq-gRoNlIRFR5BQUayXjE9o05AnxM38kC2AvGJNSZ2KYFtC5h0jf2UBR9R_63SlQCvsaCZrTfwypPukk-s0935zCzDqMEd2Xqdl9xXlFUeUpO0F1FdMLt-xIMcUOx41_HshkvKCeXlSDnbXvfbWLujpFZptNGdVMXXzSBC52GlepADkrWrMcZQGupQ3btvHuVKL5BEH4TWDrsJIKE9MAmhxJYCBYbeeQCLZ-lxcm1zQDSl_E>\r\nこの Search Console アカウントのメッセージを受信するパートナーを追加する: \r\nhttps://notifications.google.com/g/p/ADa0GC9yeLeamboudmoQ7m9irA5bn0-NCGyxIsAd1_y1EIuIOpQQFc2lYpgsxZzYtPq4doAiz23hi3dpM5OW4JmSLDejQT-qsrnzHsprdC2JASm26hFDfqS668-hZJu4oOpvl8lObMxenbXKwy9cmwr689cnbjhSwY-Xu81bbDFoOKtq9Wi22Dq5k-v2gi_55dTZiEhS8yzJRVQg2Clf4ssOA0DF8BFuBHNwtSCgwHaUoRBzDemNNd3R0HmBXGKTC77dKKdpJzwKdMe6U_PYsa4ya71VYCS0FapvvS-ocaeEt0joboRq8fPqkdbOpaTdUFJh4le0b3nGEG57zfaspKyiK4I_wcciKY0lqrJ2DQis6DvFJSahNIqyIo-zJyXa3cZirERJHsfxvurymkY9cIM5atLkrel0wA9uTzmAFB8fennMIEhgg4g\r\n\r\nMessage type: [WNC-10030322]"
+    },
+    {
+      "id": "18980b282ca6d77f",
+      "internalDate": "1690081329000",
+      "threadId": "18980b282ca6d77f",
+      "date": "Sat, 22 Jul 2023 20:02:09 -0700",
+      "from": "Google Search Console Team <sc-noreply@google.com>",
+      "to": "kim@orgiast.jp",
+      "subject": "https://yatteme.fun/ で新しい ページのインデックス登録 の問題が検出されました\n",
+      "listUnsubscribe": "<https://notifications.google.com/g/p/ADa0GC8rJcCHdpt1PgiOJ8kb2L5lMf51aBwWcwd-fiZ0eMEQ9DNn8PakzU9qkcPOLlG8YFILZFmMGO0W9VZMbFrgn4GTrnzzm06q0yWHiBRfJ4A0buI-IwM9B2OWsps-iKjE7q93lAtvLbUeH0_yYXyWkJP7YRgNPrI62kQrvuOYYesEHy_f33Xyb2Xoxl6QnpqeECZXaGOeiKnV3Qi8UqwRHRQhX4eRoCbS4lIo-HpqcGR_4ZqKaJtOTVfYfieuNT3iRuWqqefwdEiicyyb3g44Ec0c6b2n8h91gjY5l0eFWodb6Zvcp5zuFbulQEydkjfeVqyelXdr7qqJzbgIhYgnKJY_7C2ujZcIOLq53qOJsAzOdUIREURArb0AXk2WfUtYkEwmAPg0EsBJr6jKI2AGTpKa5qtPuE46GsgGajsFVW9B4mPz7wVyelrfcgJD3Mm_3mkmOlxSS5spQKgjn1bFL8l9FfeA>",
+      "snippet": "Message type: [WNC-10030322] Search Console https://yatteme.fun/ で ページのインデックス登録 の問題が検出されました https://yatteme.fun/ のオーナー様: Search Console で、貴サイトが 1 件の ページのインデックス登録 の問題に影響を受けていることが検出されました。サイトから検出された問題は以下の",
+      "labels": [
+        "UNREAD",
+        "Label_3",
+        "CATEGORY_UPDATES"
+      ],
+      "body": "送信元: Google Search Console\r\n\r\n件名:\r\nhttps://yatteme.fun/ で ページのインデックス登録 の問題が検出されました\r\n\r\n\r\n https://yatteme.fun/ のオーナー様:\r\n\r\nSearch Console で、貴サイトが 1 件の ページのインデックス登録 の問題に影響を \r\n受けていることが検出されました。サイトから検出された問題は以下のとおりです。 \r\nこれらの問題をできる限り解決されることをおすすめします。問題を解決すること \r\nで、サイトのエクスペリエンスや Google 検索結果での表示を最適化できます。\r\n\r\n*主な問題*\r\n\r\n\r\n * ソフト 404\r\n\r\n\r\n**ページのインデックス登録 の問題を修正する**: \r\nhttps://notifications.google.com/g/p/ADa0GC8PblpUOUb3vOOkAPWvBr7rDJPNtqj45hZs_19EmHGU4mWRuKoHfYsjVWp8Dm7KctXr8kQm8br_9e1KLv-mZYlRdYZPl7t2lgN_fzS_EYAgCD6Vr7B5yqjHl2m4VMJJ9few5yz6FYdoVsheFZbU3i52FTcWCeCrTePhKdsUVvv5pJOET1cXGo7zPbo0kpSfUyl5pgEsemXRhvmCFCA8LoSiW_CdbTcdfbNxHZUyoFA3fi74h6eAC3-x1ncUPnKMSTcXFN_sR8EPm1-5WKx4o1PBix8bZnUIviDFiUNa_bGWUiX84Zeh83_aVNzIpqdMJc_7JM2NwWYWpPw-ll2WKLCYujkQNxTb_FU5VvuMscWe38fGkP8YJ1jZGZFbkUFZzWOA3c0_9Ih4VKHAajMeQf-CF2AXGyc46FsnoPOgTWZ5zcm5mP7e8oAmoGYsvXIffw\r\n\r\n\r\n----------\r\nGoogle LLC, 1600 Amphitheatre Parkway Mountain View, CA 94043\r\nこのメールは、Google Search Console にサイトが登録されているすべてのお客様に \r\nお送りしています。.\r\nこのようなメールの配信停止をご希望の場合は、次のページをご覧ください。 \r\n<https://notifications.google.com/g/p/ADa0GC8fdhL_ke4dtkd-pIJOFZI_nUKghyfgmMfx-CBOPMe1CXg94so4cYlDNN5uaeiYI0TfA9rQleT_eK9L6pyT9dIlOEIVAXHmHmN3Y7XUlx2SbDBoM9DVSJCOX0nD25UtZKSgivtxPPSCGRBcy-DU0UbrIuVPY9J9QhQUaCmlddzM2U4oMj14-E1h3dnlib6evhBMDnf13jla0Qb_ahhMZg9NdhhO9OXCqlcVA-Sc18WaDa_Q6vZAgtpVq9qlRUbaANUMGK9GuvUVymm2oTrre0mhJPLlT_v4EGzUsZDxK3cu5hd8LWTxpT1u37Itfu6ph-qfU2BA3_mEBN-YEPhgYUyJIF8vwAqw-UHnJohfJbHA_v7o6KP_N4XOxx8k__rbGUTvMMRk2ZDvKxEqzdjboQNRK5viB4muhDnNx3YlShlm_1FqPwy1d6U9gecpHGf8sniKAaXtDG9_mpeYHyvBZToXUA>\r\nこの Search Console アカウントのメッセージを受信するパートナーを追加する: \r\nhttps://notifications.google.com/g/p/ADa0GC-z06puqRCnnicM35XCaCMPk8EyisLxx56mW0gShJ4HfM7Ti1Cnih3P7Her1bfsAKA0vVsm7I38j9eBTG2zttPKBuXhMeHNYrNC2cPFapZEuROUyQv1vfZI2e1HPurYmaBb1mP5mAPXJxys5ef4cAzFST8K_gbldnBpumprJaG5200CrraOgmTwEPOSJgN9_RcLI9r8oiTO0g5Hrr73DaLTaMTyhZOZxnwwQoAtnJdwUyDRP3pGzs5B30JrDcBLvGCOkZ3avV0lQxNUQ81BaaQ9fPHQRf7Qt4EW2BQbVnpw-TKYnHUWtTX7YPzy0udbPSHgSJtY5f5lQ_wBlLf3ch5QW2wycSKFkhhFISSRpd7TqCklFJ0om0w0q7ax5glFSelxl8hv3Iv5tOVeRXfrlEYKOmYjXLQwxXjMENdER5aAte53sA\r\n\r\nMessage type: [WNC-10030322]"
+    },
+    {
+      "id": "1897658e23ef6ad7",
+      "internalDate": "1689907684000",
+      "threadId": "1897658e23ef6ad7",
+      "date": "Fri, 21 Jul 2023 11:48:04 +0900",
+      "from": "\"ヤッテミ！\" <test@orgiast-product.jp>",
+      "to": "kimkon1011@yahoo.co.jp",
+      "subject": "【ヤッテミ！】クーポンが発行されました！",
+      "listUnsubscribe": "",
+      "snippet": "金功勇様 この度、ヤッテミ！をご利用いただきありがとうございます。 以下内容にてクーポンの本発行が完了致しましたのでお知らせ致します。 ――――――――□■□ クーポン内容 □■□――――――― ※タイトル：[7月21日]クーポン2 ※ポイント： 2000 ※有効期間： 2023/07/21 11:48 ~ ――――――――――――――――――――――――――― ▼ 下記URLにてクーポンをご確認",
+      "labels": [
+        "UNREAD",
+        "IMPORTANT",
+        "CATEGORY_PERSONAL",
+        "INBOX"
+      ],
+      "body": "金功勇様 \r\n この度、ヤッテミ！をご利用いただきありがとうございます。 \r\n 以下内容にてクーポンの本発行が完了致しましたのでお知らせ致します。 \r\n――――――――□■□　クーポン内容　□■□―――――――\r\n \r\n ※タイトル：[7月21日]クーポン2 \r\n ※ポイント： 2000 \r\n ※有効期間： 2023/07/21 11:48 ~ \r\n―――――――――――――――――――――――――――\r\n \r\n▼ 下記URLにてクーポンをご確認ください。\r\n \r\n URL: https://yatemi.test-development.work/coupon \r\n 金功勇様のご利用を心よりお待ち申し上げます。 \r\n また、ご不明な点がございましたら、下記までお気軽にお問い合せくださいませ。 \r\nURL: https://yatemi.test-development.work/contacts/create"
+    },
+    {
+      "id": "1896dacbe2252255",
+      "internalDate": "1689762185000",
+      "threadId": "1896d9b5694c58b3",
+      "date": "Wed, 19 Jul 2023 19:23:05 +0900",
+      "from": "\"ヤッテミ！\" <test@orgiast-product.jp>",
+      "to": "kimkon1011@yahoo.co.jp",
+      "subject": "【ヤッテミ！】クーポンが発行されました！",
+      "listUnsubscribe": "",
+      "snippet": "金功勇様 この度、ヤッテミ！をご利用いただきありがとうございます。 以下内容にてクーポンの本発行が完了致しましたのでお知らせ致します。 ――――――――□■□ クーポン内容 □■□――――――― ※タイトル：「7月19日」クーポン2 ※ポイント： 2000 ※有効期間： 2023/07/19 19:23 ~ ――――――――――――――――――――――――――― ▼ 下記URLにてクーポンをご確認",
+      "labels": [
+        "UNREAD",
+        "IMPORTANT",
+        "CATEGORY_PERSONAL",
+        "INBOX"
+      ],
+      "body": "金功勇様 \r\n この度、ヤッテミ！をご利用いただきありがとうございます。 \r\n 以下内容にてクーポンの本発行が完了致しましたのでお知らせ致します。 \r\n――――――――□■□　クーポン内容　□■□―――――――\r\n \r\n ※タイトル：「7月19日」クーポン2 \r\n ※ポイント： 2000 \r\n ※有効期間： 2023/07/19 19:23 ~ \r\n―――――――――――――――――――――――――――\r\n \r\n▼ 下記URLにてクーポンをご確認ください。\r\n \r\n URL: https://yatemi.test-development.work/coupon \r\n 金功勇様のご利用を心よりお待ち申し上げます。 \r\n また、ご不明な点がございましたら、下記までお気軽にお問い合せくださいませ。 \r\nURL: https://yatemi.test-development.work/contacts/create"
+    },
+    {
+      "id": "1896d9d2a60b1ea4",
+      "internalDate": "1689761164000",
+      "threadId": "1896d9b5694c58b3",
+      "date": "Wed, 19 Jul 2023 19:06:04 +0900",
+      "from": "\"ヤッテミ！\" <test@orgiast-product.jp>",
+      "to": "kimkon1011@yahoo.co.jp",
+      "subject": "【ヤッテミ！】クーポンが発行されました！",
+      "listUnsubscribe": "",
+      "snippet": "金功勇様 この度、ヤッテミ！をご利用いただきありがとうございます。 以下内容にてクーポンの本発行が完了致しましたのでお知らせ致します。 ――――――――□■□ クーポン内容 □■□――――――― ※タイトル：「7月19日」クーポン１ ※ポイント： 1000 ※有効期間： 2023/07/19 19:06 ~ ――――――――――――――――――――――――――― ▼ 下記URLにてクーポンをご確認",
+      "labels": [
+        "UNREAD",
+        "IMPORTANT",
+        "CATEGORY_PERSONAL",
+        "INBOX"
+      ],
+      "body": "金功勇様 \r\n この度、ヤッテミ！をご利用いただきありがとうございます。 \r\n 以下内容にてクーポンの本発行が完了致しましたのでお知らせ致します。 \r\n――――――――□■□　クーポン内容　□■□―――――――\r\n \r\n ※タイトル：「7月19日」クーポン１ \r\n ※ポイント： 1000 \r\n ※有効期間： 2023/07/19 19:06 ~ \r\n―――――――――――――――――――――――――――\r\n \r\n▼ 下記URLにてクーポンをご確認ください。\r\n \r\n URL: https://yatemi.test-development.work/coupon \r\n 金功勇様のご利用を心よりお待ち申し上げます。 \r\n また、ご不明な点がございましたら、下記までお気軽にお問い合せくださいませ。 \r\nURL: https://yatemi.test-development.work/contacts/create"
+    },
+    {
+      "id": "1896d9b5694c58b3",
+      "internalDate": "1689761044000",
+      "threadId": "1896d9b5694c58b3",
+      "date": "Wed, 19 Jul 2023 19:04:04 +0900",
+      "from": "\"ヤッテミ！\" <test@orgiast-product.jp>",
+      "to": "kimkon1011@yahoo.co.jp",
+      "subject": "【ヤッテミ！】クーポンが発行されました！",
+      "listUnsubscribe": "",
+      "snippet": "金功勇様 この度、ヤッテミ！をご利用いただきありがとうございます。 以下内容にてクーポンの本発行が完了致しましたのでお知らせ致します。 ――――――――□■□ クーポン内容 □■□――――――― ※タイトル：テストクーポン ※ポイント： 100 ※有効期間： 2023/07/13 10:50 ~ ――――――――――――――――――――――――――― ▼ 下記URLにてクーポンをご確認ください。",
+      "labels": [
+        "UNREAD",
+        "IMPORTANT",
+        "CATEGORY_PERSONAL",
+        "INBOX"
+      ],
+      "body": "金功勇様 \r\n この度、ヤッテミ！をご利用いただきありがとうございます。 \r\n 以下内容にてクーポンの本発行が完了致しましたのでお知らせ致します。 \r\n――――――――□■□　クーポン内容　□■□―――――――\r\n \r\n ※タイトル：テストクーポン \r\n ※ポイント： 100 \r\n ※有効期間： 2023/07/13 10:50 ~ \r\n―――――――――――――――――――――――――――\r\n \r\n▼ 下記URLにてクーポンをご確認ください。\r\n \r\n URL: https://yatemi.test-development.work/coupon \r\n 金功勇様のご利用を心よりお待ち申し上げます。 \r\n また、ご不明な点がございましたら、下記までお気軽にお問い合せくださいませ。 \r\nURL: https://yatemi.test-development.work/contacts/create"
+    },
+    {
+      "id": "18957492f98729e0",
+      "internalDate": "1689386560000",
+      "threadId": "18957492f98729e0",
+      "date": "Fri, 14 Jul 2023 19:02:40 -0700",
+      "from": "Google Search Console Team <sc-noreply@google.com>",
+      "to": "kim@orgiast.jp",
+      "subject": "https://yatteme.fun/ への Google 検索トラフィックを監視する",
+      "listUnsubscribe": "<https://notifications.google.com/g/p/ADa0GC8JMX3qVwGocUuI1iNoHqo4P6-RInSWUNOsi4anyowj-Ioy6sgnszNWF3swPcsUdWI3SRn606SkVau1KpS7cunqvO_g9zZAZpaWQnf-L-7Gl5FrD6JFZ1oT74YN0x--JAnRvSHWxV5AuGMcMfzTV6J--P-rNmmf9UEqS_kooh6hdBnlwH3j2Rbv8tyzokdyYGTycwU3MzkJuCYV-OTGXp1GbJmQhNZDq2KdMHL5pq4mswhxU7hL5s95ICelaqjxhzX3HPtnSKLLhbW75z7EoIti5ojnsTwTVNL9iaZza-D1RlVPMLEfW9MEkWM-LBO-nh6wXzS2IpqE9T-KfrahkD3HEKO_MpmMK9hkQ28-Wnkjw_YAnYELLqKiN_FphD6lrHbkrvuqbVIVG6efXO6ymcL-GXnT4lK5Z6iUczYQMfAF9NxRDpN7SbuSAlSiiidSdhCZp1_CL0g60G0>",
+      "snippet": "Message type: [WNC-756200] Search Console https://yatteme.fun/ への Google 検索トラフィックを監視する https://yatteme.fun/ の所有者様 7月 12, 2023より Search Console でお客様のウェブサイトの Google 検索におけるインプレッション数が収集され始めましたことを、Google",
+      "labels": [
+        "UNREAD",
+        "Label_3",
+        "CATEGORY_UPDATES"
+      ],
+      "body": "送信元: Google Search Console\r\n\r\n件名:\r\nhttps://yatteme.fun/ への Google 検索トラフィックを監視する\r\n\r\n\r\nhttps://yatteme.fun/ の所有者様\r\n\r\n7月 12, 2023より Search Console でお客様のウェブサイトの Google 検索における \r\nインプレッション数が収集され始めましたことを、Google システムが確認しました \r\nのでお知らせいたします。同時に、お客様のウェブサイトのページが、一部のクエリ \r\nに対する Google 検索結果に表示されるようになりました。Search Console を使用 \r\nしてサイトの検索結果での掲載順位を確認する方法をご紹介いたします。\r\n\r\n**ウェブサイトの掲載結果の追跡:**\r\n\r\n1. Google 検索で上位のページを確認する\r\n上位のページを確認 \r\n(https://notifications.google.com/g/p/ADa0GC8-ihSYUYLHlsfRQE6hzP5_CsPn_gNVph-4vFQ3kb3oj5qWhiGRnWkG6fndr-7wAX1qxI34JmawauWcgSMYCH9aTikIyRK-eh_y489W0PalNpqmkBE-uyq9TGZpIhRpuFKG5apMmKf1FnlNKxssuKYi8Yc6sCC2920izbK9PInZCZ0iDwMqm6q0PVyU_OntQVmT1_L5bd3tNyArpZE-VALJCR4cej2Kak0oC--pxFaCW50x0wPlDiL1Nkm_s_VA4-fP-8_-NXOIWTiMyNb980gIpZ09Phn6zG9H_wseM0df98S6aHBxfbsW9-VSBreyenkEcmFEvWHtP-xXbupA_bn4VoGd00LlXCCOIdTLXRATDGQ8oJsnNCcN49QPwpOjQMyQ_PROfjHJg4eD--HbqQsRrWMfyMXxbUlzFwuZPkO-wwwDeB9_DkKOUaKPeCO6IPrLxDNYhVqYesK8dA)\r\n掲載結果レポートで上位のページを確認し、インプレッション数を追跡していただけ \r\nます。\r\n\r\n2. サイトにつながるクエリを確認する\r\n上位のクエリを確認 \r\n(https://notifications.google.com/g/p/ADa0GC9BzG0sSLaXV_rAFv8HlIWMM1gf8pXMwTT1TVwdI0MmVCt8rypsh47p4oAEmQDbJhYEdHTluZrs2hbPZX66CBe3SSSdXXo0XSGXruxLbcc8emIHG8OSCpeVWDb00qkkdnriRNMXc0smjzwnT1H7OhyL6QWyMDi8_F9-eJoeqa1tpR7HFtxRdcZnFw8v266Al4JoVHZa0JAJiKBmrF778WoFRa1CscoG6MSymxlqUP4ntIiyroSZCx5DoD1_WIDVfh-EAcKWOToMOjOS3_RWSxmZe5irqX84WeJyDj2Ndcd4_oWmNdiRo_H13FRYylAsAz7TSQ62ZZqnxns_WWtx5CTvHDJAj2r9SG6i2m_8hgW4nYCnmSw-1yrqYFzItKj-a_aAoS1AcnKfIy4QBmZ_K9F9cO-ampIBxlEs_g6j26gsR6dd27glWUpk-8hXhNhey2fbVFTQeGmsc6LbyY-o3_0)\r\nGoogle 検索結果でウェブサイトのページを表示するクエリをご確認いただけます。\r\n\r\n3. ページ上のエラーを追跡する\r\nエラーを確認 \r\n(https://notifications.google.com/g/p/ADa0GC8DGaInNC4Tby6nbOBKuWIV0MmU7G2isWp_xd0e9tlE7-NKVTkNoXccP9H0VimaNdza2ft2g51c5834KVuWzIEo5JW4dXO_9i1zi9GWcQIxOY8uaMZTSJ-EogjratNoaN0oXHBMSV983XrnmkUQiVpVbwdfL-R2RNq28qRtRjNBU3Z-Ol8rS_VVdtet3TGe3t9LmbfpRkeAzKkwpgwl97j5_-h2zMppTbVDWWy7ibjRchEPdH0FNV9OGjN2TXWVQ7jqQEqArkiXEggjSmrt9W5BfKSQYGtyw-A9Ja2IV-UjhY_VldrrMFKQ--HE8W4JMA-KSPE3uATCKfuggKIE0-SaL30sYbPqrJow4h8vSy_RmLszjXKMA9bT1xvZpKZRrpLPQqgnDpDP)\r\nエラーのあるページは検索結果に表示されない場合や、ユーザーの利便性を低下させ \r\nる場合がございます。クロールのエラーレポートを確認して、問題が見つかった場合 \r\nは、その問題を修正してください。\r\n\r\n**弊社のヘルプ記事をご覧いただくこともおすすめいたします。**\r\n* 検索アナリティクス レポート \r\n(https://notifications.google.com/g/p/ADa0GC8BEvgEYqSwoGV5S_nbFCSV3QIGg5udxB1Rz8tfLxy9wbLESdlc0o9HGV25lhQlLKWfiLJUfKpv0Qh1OtvwWV0G8XJ8ZovIAqJeZcVpJCGW9anelzLrEmauevUrGukuP5Gra5hxf7oHtFBRp59HRFS7AVxxHlaEfLFLTRU4gVLxqwK55uqDEE1-CeM45R_UrCo6HIthxcHY0fuUNImDE0ga-5ywLEN7-aW5w8INbvdv3gr0gRNCAIEpWYYEXutoKH9YvyUmrfDQRgSOa3LVY75a7G0X9yr2nj1QO0xXtTzURKpcckOglkVsAWoCwdzHi3T86OuK6DHH9uldbW3UM5pJH8jMyTZRYxsTPMHfB47aEn04QcI)を \r\n最大限に活用する方法につきましては、ヘルプセンターをご参照ください。\r\n* ご質問がございましたらフォーラムにご投稿ください \r\n(https://notifications.google.com/g/p/ADa0GC_hJdwNlJFGYXWz9nVHmeWebXTTjzP9B9i2KyF4JsjtA2IlD9tQCAfxrDdXOIwsxr_ZRo4yZbZCk2KTi_DBaykVjgIKrQXMrh3IP-to-2783oTskaxTo_mCSELgyaypufjL-oXt8HqkRmly9b-H9il9pEpGUWrlJG6tmY5-yvCwseffMYtCAGqUoC6t92Zou7vOJ7Nb2n8px0yfH_FW5vThG6uhpbYShZKGUM1O3HUc-o10acAm7xnYxzdlNUyhs9Sg7bQqLJDyQ5yqCP8ZqXnwrseOGo6VvD67CYZ1HDhG-vuSlDutVr50VPeWQv7QQQ1btE-4kf_zBVj2QkB9B_UB3oamcXLNX4azna_-R3NONzaAsugG)。 \r\nその際は、メッセージ タイプ [[WNC-756200] の件であることをお知らせください。\r\n\r\n----------\r\nGoogle LLC, 1600 Amphitheatre Parkway Mountain View, CA 94043\r\nこのメールは、Google Search Console にサイトが登録されているすべてのお客様に \r\nお送りしています。.\r\nこのようなメールの配信停止をご希望の場合は、次のページをご覧ください。 \r\n<https://notifications.google.com/g/p/ADa0GC-qWt2XlBbf0TEhjNX5vA9MnirUQwI54pWavk9Wl58EyEu3UU4FeUKkRFV7umtx35KYG3AjL1NgSut7vK9vO9P4Mtx20nZE5tOOKn5qykQZO5NqAQIzNdyPfpmjCIaWNEtzJBLavv1QOU7HYbaiwD0brl5o-fFwXQjJt4ZqznqVWJ6x0zfAM7684BarKKps-oqWnBP_uWJaVqsQsHN686-CL8wWDUe_gS-SUdw4s1iQ24ywDzS9GJC0tffJNg2jGQ73IKE-deudUikR8DDHvdZTV2UfJkV4Q6v9DlOHAwBNxtxMA0cLXJM4R_ucySoZxMqRsudi_an-i6xFZH5dM7-6NxXBcUicBZ611DMGc-RDeCcpXMeDqP9amELFQ-5QoDYs-PnQgE588_LsO5AyFmxsti9i409gpYj198_lJ1MzDYLu2hOAlhO41SKY77GQWObISrDohdVm>\r\nこの Search Console アカウントのメッセージを受信するパートナーを追加する: \r\nhttps://notifications.google.com/g/p/ADa0GC-XdERYDVnuaal0MN1gLEIhsQXkHksn4pRggX8hZf6xE-Cw1iVjtVmRcIRAzTrHQlHeDfnxuoWDozQYSsLYDzd7Xgh-_"
+    },
+    {
+      "id": "18900d58b92126f2",
+      "internalDate": "1687936142000",
+      "threadId": "18900d58b92126f2",
+      "date": "Wed, 28 Jun 2023 16:09:02 +0900",
+      "from": "\"ヤッテミ！\" <test@orgiast-product.jp>",
+      "to": "kimkon1011@yahoo.co.jp",
+      "subject": "【ヤッテミ！】クーポンが発行されました！",
+      "listUnsubscribe": "",
+      "snippet": "金功勇様 この度、ヤッテミ！をご利用いただきありがとうございます。 以下内容にてクーポンの本発行が完了致しましたのでお知らせ致します。 ――――――――□■□ クーポン内容 □■□――――――― ※タイトル：「新規会員」1000円の発行 ※ポイント： 1000 ※有効期間： 2023/06/28 16:09 ~ 2023/07/08 16:07 ―――――――――――――――――――――――――――",
+      "labels": [
+        "UNREAD",
+        "IMPORTANT",
+        "CATEGORY_PERSONAL",
+        "INBOX"
+      ],
+      "body": "金功勇様 \r\n この度、ヤッテミ！をご利用いただきありがとうございます。 \r\n 以下内容にてクーポンの本発行が完了致しましたのでお知らせ致します。 \r\n――――――――□■□　クーポン内容　□■□―――――――\r\n \r\n ※タイトル：「新規会員」1000円の発行 \r\n ※ポイント： 1000 \r\n ※有効期間： 2023/06/28 16:09 ~ 2023/07/08 16:07 \r\n―――――――――――――――――――――――――――\r\n \r\n▼ 下記URLにてクーポンをご確認ください。\r\n \r\n URL: https://yatemi.test-development.work/coupon \r\n 金功勇様のご利用を心よりお待ち申し上げます。 \r\n また、ご不明な点がございましたら、下記までお気軽にお問い合せくださいませ。 \r\nURL: https://yatemi.test-development.work/contacts/create"
+    },
+    {
+      "id": "188bd10c227ed120",
+      "internalDate": "1686799171000",
+      "threadId": "188bd10c227ed120",
+      "date": "Wed, 14 Jun 2023 20:19:31 -0700",
+      "from": "Google Search Console Team <sc-noreply@google.com>",
+      "to": "kim@orgiast.jp",
+      "subject": "https://yatteme.fun/ の新しい所有者を追加しました",
+      "listUnsubscribe": "<https://notifications.google.com/g/p/ACUgQrFw3ZMXfdUNWbzCELmlxyAbUREMeDpqoIkZJrtvtyj0m2LmrzaOjQlcFWjGfvPsuGDASLfiT_tWPKiqzW_7ccHghSb7eKybExbqbaHAx5s2SAM40uNYG1iTWaNn9-tvNECbazfVKhM1x-IHdeqr7yHjAlL_BYq2wRd276WfmsN967Z8zfoOz9F5MnJlFzf8ISZwVcXm2o-6lKM5yqdsGTZDIQJyL9UfVckhwrdaiqMQNbp6lvpYaqkvXA3UXo2GMOJiCPIDeS8OC0mWKtTYy_bSmMQLjeGgdk-rCrPc05usQPbXAyCuC72YQsa2mqwoVW6WpCYbe-TQ3nNUCYzAen2QmO8kqDQR6QzOYtcKaLzwWaFNh-m4He7x81BFVE9LV6CVF2A6t5445kMpktP5tFB56xJbnJQhCIbaeC4rbgGL6cMNWwrvfjZp2skv7Gt7dZdTcRFnbdZdog>",
+      "snippet": "Message type: [WNC-627102] Search Console https://yatteme.fun/ の新しい所有者を追加しました https://yatteme.fun/ の所有者様、 yam.chiemi@gmail.com が https://yatteme.fun/ の所有者として追加されたことを確認しました。 プロパティの所有者は、Google 検索でのサイトの表示",
+      "labels": [
+        "UNREAD",
+        "IMPORTANT",
+        "Label_3",
+        "CATEGORY_UPDATES"
+      ],
+      "body": "Message type: [WNC-627102]\r\n\r\n\r\nSearch Console\r\n\r\nhttps://yatteme.fun/ の新しい所有者を追加しました\r\n\r\n\r\nhttps://yatteme.fun/ の所有者様、\r\n\r\nyam.chiemi@gmail.com が https://yatteme.fun/ の所有者として追加されたことを \r\n確認しました。\r\n\r\nプロパティの所有者は、Google 検索でのサイトの表示に影響する重要な設定を変更 \r\nできます。必ず適切なユーザーにのみ所有者のステータスを付与し、不要になった \r\nユーザーのステータスは解除するようにしてください。\r\n\r\n\r\n推奨される対処:\r\n\r\n\r\n1\r\nプロパティ ユーザーと権限を管理する\r\n\r\nプロパティ ユーザーと権限を管理するには、Search Console の [ユーザーとプロパ \r\nティ所有者] ページにアクセスします。\r\n\r\n\r\nユーザーを管理\r\n\r\n\r\n\r\n2\r\nこの所有者に覚えがない場合\r\n\r\n新しい所有者に覚えがない場合は、詳しい調査が必要となる場合がございます。\r\n\r\n\r\nこの所有者に覚えがない\r\n\r\n\r\n\r\nヘルプリソースを活用する:\r\n\r\n\r\n• 複数のユーザーの管理とユーザーの権限レベルの詳細をご確認ください。\r\n\r\n• サポートが必要な場合は、プロダクト フォーラムに質問を投稿してください。そ \r\nの際はメッセージ タイプ [WNC-627102] の件である旨をお知らせください。\r\n\r\n\r\nGoogle LLC, 1600 Amphitheatre Parkway Mountain View, CA 94043 | このメール \r\nは、Google Search Console にサイトが登録されているすべてのお客様にお送りして \r\nいます | この種類のメッセージの配信を停止する\r\nパートナーを追加 この Search Console アカウントについてのメッセージを受信す \r\nるパートナーを追加できます"
+    },
+    {
+      "id": "188bd0eb7f70fa37",
+      "internalDate": "1686799038000",
+      "threadId": "188bd0eb7f70fa37",
+      "date": "Wed, 14 Jun 2023 20:17:18 -0700",
+      "from": "Google Search Console Team <sc-noreply@google.com>",
+      "to": "kim@orgiast.jp",
+      "subject": "https://yatteme.fun/ で Search Console を使用する",
+      "listUnsubscribe": "<https://notifications.google.com/g/p/ACUgQrEByJiTOLzKeycz3HuIvokMSvTLNdR0yM_t9o94Y96-cRo-bbSucjF_w5uqqll3UDOtm7cnlZWuG_SG2-o4cLhmI8cRENRRwQIcLMtFYTDvy9c9aVONg9UMia4v0vK7HgNNig_x0E3G_RvAimvYynEJoVtoBgZ04faE2Ouw5Kp6x2bSagRGx-3A8woUFYWqMsNSOLp6InYGOLXL_fF1Ro1TqJPS_kyeDVRszEQoKnWKlcM6w0SU1g8SuTGoZaJLBVketg9lFofU-88ws3-U88fAuWdhnw7fsorq5qYMWDdXr3oLiE1fd6dNmLAa2EMD4-fwbavT-wYikK3TZxbmQdVfGoLLG0CECLTCiL6tb46OIwXoMRm75adOmwBPyWe56rfXAIW2ZVxmPHZ1IsnFS1BtOlmrB2U8doFLMI1Bd3cUwXhrBl4Z-j8fC4SVEfTRr9Ryjqk3EMfvRhk>",
+      "snippet": "Message type: [WNC-376106] Search Console Get started using Search Console with https://yatteme.fun/ Search Console でサイトの確認が完了しました。（または、サイトが確認される Blogger や Google サイトでサイトを作成した場合）Search Console をより効果的に",
+      "labels": [
+        "UNREAD",
+        "IMPORTANT",
+        "Label_3",
+        "CATEGORY_UPDATES"
+      ],
+      "body": "Message type: [WNC-376106]\r\n\r\n\r\nSearch Console\r\n\r\nGet started using Search Console with https://yatteme.fun/\r\n\r\n\r\nSearch Console でサイトの確認が完了しました。（または、サイトが確認される \r\nBlogger や Google サイトでサイトを作成した場合）Search Console をより効果的 \r\nに使用するためのヒントをいくつかご紹介します。\r\n\r\n\r\nSearch Console を使用する:\r\n\r\n\r\n1\r\nすべての URL が含まれていることを確認する\r\n\r\nサイトのすべてのページが Search Console に含まれるようにするには、ドメイン \r\nプロパティを作成する（推奨）か、サイトに対応しているすべての https、http、 \r\nwww、www 以外のバリエーションに対して別々の Search Console プロパティを追加 \r\nします。\r\n\r\n\r\nサイトのバリエーションを追加する\r\n\r\n\r\n\r\n2\r\n同僚にアクセス権を付与する\r\n\r\nSearch Console 内のエラーレポートや検索アナリティクスに他のユーザーがアクセ \r\nスできるようにするには、そのユーザーに Search Console プロパティへのアクセス \r\n権を付与します。\r\n\r\n\r\nサイトユーザーを追加する\r\n\r\n\r\n\r\n3\r\nサイトマップ ファイルを送信する\r\n\r\nサイトマップを送信すると、Google がサイトに存在する URL をより正確に把握でき \r\nるようになります。ウェブサイト ホスティング サービスを使用している場合は、こ \r\nれらのサービスがサイトマップの管理と送信を代行することがあります。\r\n\r\n\r\nサイトマップを送信\r\n\r\n\r\n\r\n4\r\nSearch Console の操作方法を確認する\r\n\r\nお時間がない場合は、こちらのヘルプ ドキュメントをご覧ください。\r\n\r\n\r\nSearch Console の基本的な使用方法\r\n\r\n\r\n\r\nご不明な点がありましたら、Google のヘルプリソースをご覧ください。\r\n\r\n\r\n• あらゆるレベル向けのスタートガイドが用意されています。\r\n\r\n• サイトの確認や、他のユーザーの権限設定について詳細をご確認ください。\r\n\r\n• サイトマップとその管理方法についてご確認ください。\r\n\r\n• サポートが必要な場合は、プロダクト フォーラムに質問を投稿してください。そ \r\nの際はメッセージ タイプ [WNC-376106] の件である旨をお知らせください。\r\n\r\n\r\nGoogle LLC, 1600 Amphitheatre Parkway Mountain View, CA 94043 | このメール \r\nは、Google Search Console にサイトが登録されているすべてのお客様にお送りして \r\nいます | この種類のメッセージの配信を停止する\r\nパートナーを追加 この Search Console アカウントについてのメッセージを受信す \r\nるパートナーを追加できます"
+    },
+    {
+      "id": "1889e3a13de71cf9",
+      "internalDate": "1686281786000",
+      "threadId": "1889e39b4a5e1cbb",
+      "date": "Fri, 09 Jun 2023 12:36:26 +0900",
+      "from": "\"ヤッテミ！\" <test@orgiast-product.jp>",
+      "to": "kimkon1011@yahoo.co.jp",
+      "subject": "【ヤッテミ！】クーポンが発行されました！",
+      "listUnsubscribe": "",
+      "snippet": "金功勇様 この度、ヤッテミ！をご利用いただきありがとうございます。 以下内容にてクーポンの本発行が完了致しましたのでお知らせ致します。 ――――――――□■□ クーポン内容 □■□――――――― ※タイトル：「3月21日」1000ポイント ※ポイント： 1000 ※有効期間： 2023/03/21 23:31 ~ ――――――――――――――――――――――――――― ▼ 下記URLにてクーポンをご",
+      "labels": [
+        "UNREAD",
+        "IMPORTANT",
+        "CATEGORY_PERSONAL",
+        "INBOX"
+      ],
+      "body": "金功勇様 \r\n この度、ヤッテミ！をご利用いただきありがとうございます。 \r\n 以下内容にてクーポンの本発行が完了致しましたのでお知らせ致します。 \r\n――――――――□■□　クーポン内容　□■□―――――――\r\n \r\n ※タイトル：「3月21日」1000ポイント \r\n ※ポイント： 1000 \r\n ※有効期間： 2023/03/21 23:31 ~ \r\n―――――――――――――――――――――――――――\r\n \r\n▼ 下記URLにてクーポンをご確認ください。\r\n \r\n URL: https://yatteme.fun/coupon \r\n 金功勇様のご利用を心よりお待ち申し上げます。 \r\n また、ご不明な点がございましたら、下記までお気軽にお問い合せくださいませ。 \r\nURL: https://yatteme.fun/contacts/create"
+    },
+    {
+      "id": "1889e39e2eed43fc",
+      "internalDate": "1686281774000",
+      "threadId": "1889e39b4a5e1cbb",
+      "date": "Fri, 09 Jun 2023 12:36:14 +0900",
+      "from": "\"ヤッテミ！\" <test@orgiast-product.jp>",
+      "to": "kimkon1011@yahoo.co.jp",
+      "subject": "【ヤッテミ！】クーポンが発行されました！",
+      "listUnsubscribe": "",
+      "snippet": "金功勇様 この度、ヤッテミ！をご利用いただきありがとうございます。 以下内容にてクーポンの本発行が完了致しましたのでお知らせ致します。 ――――――――□■□ クーポン内容 □■□――――――― ※タイトル：「3月20日」1000ポイント ※ポイント： 1000 ※有効期間： 2023/03/20 21:50 ~ ――――――――――――――――――――――――――― ▼ 下記URLにてクーポンをご",
+      "labels": [
+        "UNREAD",
+        "IMPORTANT",
+        "CATEGORY_PERSONAL",
+        "INBOX"
+      ],
+      "body": "金功勇様 \r\n この度、ヤッテミ！をご利用いただきありがとうございます。 \r\n 以下内容にてクーポンの本発行が完了致しましたのでお知らせ致します。 \r\n――――――――□■□　クーポン内容　□■□―――――――\r\n \r\n ※タイトル：「3月20日」1000ポイント \r\n ※ポイント： 1000 \r\n ※有効期間： 2023/03/20 21:50 ~ \r\n―――――――――――――――――――――――――――\r\n \r\n▼ 下記URLにてクーポンをご確認ください。\r\n \r\n URL: https://yatteme.fun/coupon \r\n 金功勇様のご利用を心よりお待ち申し上げます。 \r\n また、ご不明な点がございましたら、下記までお気軽にお問い合せくださいませ。 \r\nURL: https://yatteme.fun/contacts/create"
+    },
+    {
+      "id": "1889e39b4a5e1cbb",
+      "internalDate": "1686281762000",
+      "threadId": "1889e39b4a5e1cbb",
+      "date": "Fri, 09 Jun 2023 12:36:02 +0900",
+      "from": "\"ヤッテミ！\" <test@orgiast-product.jp>",
+      "to": "kimkon1011@yahoo.co.jp",
+      "subject": "【ヤッテミ！】クーポンが発行されました！",
+      "listUnsubscribe": "",
+      "snippet": "金功勇様 この度、ヤッテミ！をご利用いただきありがとうございます。 以下内容にてクーポンの本発行が完了致しましたのでお知らせ致します。 ――――――――□■□ クーポン内容 □■□――――――― ※タイトル：新規会員クーポン ※ポイント： 1000 ※有効期間： 2023/03/10 19:08 ~ ――――――――――――――――――――――――――― ▼ 下記URLにてクーポンをご確認ください。",
+      "labels": [
+        "UNREAD",
+        "IMPORTANT",
+        "CATEGORY_PERSONAL",
+        "INBOX"
+      ],
+      "body": "金功勇様 \r\n この度、ヤッテミ！をご利用いただきありがとうございます。 \r\n 以下内容にてクーポンの本発行が完了致しましたのでお知らせ致します。 \r\n――――――――□■□　クーポン内容　□■□―――――――\r\n \r\n ※タイトル：新規会員クーポン \r\n ※ポイント： 1000 \r\n ※有効期間： 2023/03/10 19:08 ~ \r\n―――――――――――――――――――――――――――\r\n \r\n▼ 下記URLにてクーポンをご確認ください。\r\n \r\n URL: https://yatteme.fun/coupon \r\n 金功勇様のご利用を心よりお待ち申し上げます。 \r\n また、ご不明な点がございましたら、下記までお気軽にお問い合せくださいませ。 \r\nURL: https://yatteme.fun/contacts/create"
+    },
+    {
+      "id": "1884689e5f6d6cd5",
+      "internalDate": "1684810622000",
+      "threadId": "1884689e5d96a9ad",
+      "date": "Tue, 23 May 2023 11:57:02 +0900",
+      "from": "\"ヤッテミ！\" <test@orgiast-product.jp>",
+      "to": "kimkon1011@yahoo.co.jp",
+      "subject": "【ヤッテミ！】クーポンが発行されました！",
+      "listUnsubscribe": "",
+      "snippet": "金功勇様 この度、ヤッテミ！をご利用いただきありがとうございます。 以下内容にてクーポンの本発行が完了致しましたのでお知らせ致します。 ――――――――□■□ クーポン内容 □■□――――――― ※タイトル：「3月21日」1000ポイント ※ポイント： 1000 ※有効期間： 2023/03/21 14:31 ~ ――――――――――――――――――――――――――― ▼ 下記URLにてクーポンをご",
+      "labels": [
+        "UNREAD",
+        "IMPORTANT",
+        "CATEGORY_PERSONAL",
+        "INBOX"
+      ],
+      "body": "金功勇様 \r\n この度、ヤッテミ！をご利用いただきありがとうございます。 \r\n 以下内容にてクーポンの本発行が完了致しましたのでお知らせ致します。 \r\n――――――――□■□　クーポン内容　□■□―――――――\r\n \r\n ※タイトル：「3月21日」1000ポイント \r\n ※ポイント： 1000 \r\n ※有効期間： 2023/03/21 14:31 ~ \r\n―――――――――――――――――――――――――――\r\n \r\n▼ 下記URLにてクーポンをご確認ください。\r\n \r\n URL: https://yatemi.test-development.work/coupon \r\n 金功勇様のご利用を心よりお待ち申し上げます。 \r\n また、ご不明な点がございましたら、下記までお気軽にお問い合せくださいませ。 \r\nURL: https://yatemi.test-development.work/contacts/create"
+    },
+    {
+      "id": "1884689e5d96a9ad",
+      "internalDate": "1684810622000",
+      "threadId": "1884689e5d96a9ad",
+      "date": "Tue, 23 May 2023 11:57:02 +0900",
+      "from": "\"ヤッテミ！\" <test@orgiast-product.jp>",
+      "to": "kimkon1011@yahoo.co.jp",
+      "subject": "【ヤッテミ！】クーポンが発行されました！",
+      "listUnsubscribe": "",
+      "snippet": "金功勇様 この度、ヤッテミ！をご利用いただきありがとうございます。 以下内容にてクーポンの本発行が完了致しましたのでお知らせ致します。 ――――――――□■□ クーポン内容 □■□――――――― ※タイトル：新規会員クーポン ※ポイント： 1000 ※有効期間： 2023/03/10 10:08 ~ ――――――――――――――――――――――――――― ▼ 下記URLにてクーポンをご確認ください。",
+      "labels": [
+        "UNREAD",
+        "IMPORTANT",
+        "CATEGORY_PERSONAL",
+        "INBOX"
+      ],
+      "body": "金功勇様 \r\n この度、ヤッテミ！をご利用いただきありがとうございます。 \r\n 以下内容にてクーポンの本発行が完了致しましたのでお知らせ致します。 \r\n――――――――□■□　クーポン内容　□■□―――――――\r\n \r\n ※タイトル：新規会員クーポン \r\n ※ポイント： 1000 \r\n ※有効期間： 2023/03/10 10:08 ~ \r\n―――――――――――――――――――――――――――\r\n \r\n▼ 下記URLにてクーポンをご確認ください。\r\n \r\n URL: https://yatemi.test-development.work/coupon \r\n 金功勇様のご利用を心よりお待ち申し上げます。 \r\n また、ご不明な点がございましたら、下記までお気軽にお問い合せくださいませ。 \r\nURL: https://yatemi.test-development.work/contacts/create"
+    },
+    {
+      "id": "1884689e4fda75fb",
+      "internalDate": "1684810622000",
+      "threadId": "1884689e5d96a9ad",
+      "date": "Tue, 23 May 2023 11:57:02 +0900",
+      "from": "\"ヤッテミ！\" <test@orgiast-product.jp>",
+      "to": "kimkon1011@yahoo.co.jp",
+      "subject": "【ヤッテミ！】クーポンが発行されました！",
+      "listUnsubscribe": "",
+      "snippet": "金功勇様 この度、ヤッテミ！をご利用いただきありがとうございます。 以下内容にてクーポンの本発行が完了致しましたのでお知らせ致します。 ――――――――□■□ クーポン内容 □■□――――――― ※タイトル：「3月20日」1000ポイント ※ポイント： 1000 ※有効期間： 2023/03/20 12:50 ~ ――――――――――――――――――――――――――― ▼ 下記URLにてクーポンをご",
+      "labels": [
+        "UNREAD",
+        "IMPORTANT",
+        "CATEGORY_PERSONAL",
+        "INBOX"
+      ],
+      "body": "金功勇様 \r\n この度、ヤッテミ！をご利用いただきありがとうございます。 \r\n 以下内容にてクーポンの本発行が完了致しましたのでお知らせ致します。 \r\n――――――――□■□　クーポン内容　□■□―――――――\r\n \r\n ※タイトル：「3月20日」1000ポイント \r\n ※ポイント： 1000 \r\n ※有効期間： 2023/03/20 12:50 ~ \r\n―――――――――――――――――――――――――――\r\n \r\n▼ 下記URLにてクーポンをご確認ください。\r\n \r\n URL: https://yatemi.test-development.work/coupon \r\n 金功勇様のご利用を心よりお待ち申し上げます。 \r\n また、ご不明な点がございましたら、下記までお気軽にお問い合せくださいませ。 \r\nURL: https://yatemi.test-development.work/contacts/create"
+    },
+    {
+      "id": "18846895f1025787",
+      "internalDate": "1684810588000",
+      "threadId": "18846895f1025787",
+      "date": "Tue, 23 May 2023 11:56:28 +0900",
+      "from": "\"ヤッテミ！\" <test@orgiast-product.jp>",
+      "to": "kimkon1011@yahoo.co.jp",
+      "subject": "【ヤッテミ！】会員登録の確認",
+      "listUnsubscribe": "",
+      "snippet": "この度は、【ヤッテミ！】の会員にご登録いただき、誠にありがとうございます。 このメールは、ご登録時に確認のため送信させていただいております。 ご登録いただいた内容は下記になります。 ―――――――――□■□ 登録内容 □■□――――――――― 1．名前：金功勇 2．自己紹介： テスト 3．メールアドレス： kimkon1011@yahoo.co.jp 4．興味： 悟り 5．好きなジャンネル：",
+      "labels": [
+        "UNREAD",
+        "IMPORTANT",
+        "CATEGORY_PERSONAL",
+        "INBOX"
+      ],
+      "body": "この度は、【ヤッテミ！】の会員にご登録いただき、誠にありがとうございます。 \r\n このメールは、ご登録時に確認のため送信させていただいております。 \r\n ご登録いただいた内容は下記になります。 \r\n \r\n―――――――――□■□　登録内容　□■□―――――――――\r\n \r\n 1．名前：金功勇 \r\n 2．自己紹介： テスト \r\n 3．メールアドレス： kimkon1011@yahoo.co.jp \r\n 4．興味： 悟り \r\n 5．好きなジャンネル： ビジネス・キャリア \r\n 6．郵便番号： 537-0001 \r\n 7．都道府県： 大阪府 \r\n\r\n\r\n\r\n\r\n―――――――――――――――――――――――――――\r\n \r\n▼ 会員完了のため、下記URLをご確認ください。\r\n URL: https://yatemi.test-development.work/verify/80/kimkon1011@yahoo.co.jp/1684814188?expires=1684814188&amp;signature=8b9b8329e693120c803a22f2198160f5aff8c96fa7ae10edb2235bceae56415f \r\n \r\n ※URLの期限は 1 時間です。 \r\n \r\n 金功勇 様のご利用を心よりお待ち申し上げます。 \r\n また、ご不明な点がございましたら、下記までお気軽にお問い合せくださいませ。 \r\nURL: https://yatemi.test-development.work/contacts/create"
+    },
+    {
+      "id": "186c485ec390c1a1",
+      "internalDate": "1678334354000",
+      "threadId": "186c485ec390c1a1",
+      "date": "Thu, 09 Mar 2023 12:59:14 +0900",
+      "from": "no-reply@service.muumuu-domain.com",
+      "to": "kanri@orgiast.jp",
+      "subject": "【ムームードメイン】申し込み結果：取得完了（2件）／未取得（0件）",
+      "listUnsubscribe": "<mailto:googlegroups-manage+1024540281556+unsubscribe@googlegroups.com>, <https://groups.google.com/a/orgiast.jp/group/kanri/subscribe>",
+      "snippet": "━━━━━━━━━━━━━━━━━━ このメールは、ムームードメインより自動的に送信されています。 ━━━━━━━━━━━━━━━━━━ この度は、ムームードメインをご利用いただき、誠にありがとうございます。 お申し込み結果は以下となります。ご確認ください。 ---------------------------------------- 取得完了： yatteme.fun / 1年 ¥259(税込",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_UPDATES"
+      ],
+      "body": "━━━━━━━━━━━━━━━━━━\r\nこのメールは、ムームードメインより自動的に送信されています。\r\n━━━━━━━━━━━━━━━━━━\r\n\r\nこの度は、ムームードメインをご利用いただき、誠にありがとうございます。\r\nお申し込み結果は以下となります。ご確認ください。\r\n\r\n----------------------------------------\r\n取得完了：\r\n\r\nyatteme.fun / 1年 ¥259(税込)\r\nyatteme.jp / 1年 ¥2,401(税込)\r\n\r\n----------------------------------------\r\nお支払い金額合計： ¥2,660(税込)\r\n----------------------------------------\r\n\r\nムームーID： orgiast\r\nお支払い方法： おさいぽ！決済※未取得分は返金されます。\r\n\r\n※ご契約は全て自動更新が設定されています。\r\n自動更新を希望されないご契約はコントロールパネルより、自動更新設定の決済方法を「未設定」に変更してください。\r\n自動更新設定：https://muumuu-domain.com/?mode=conpane&state=autorenew_list\r\n\r\n━━━━━━━━━━━━━━━━━━\r\nこのメールに心当たりのない場合やご不明な点がある場合は、お問い合わせフォームよりご連絡下さい。\r\nhttps://muumuu-domain.com/?mode=inq\r\n\r\nムームードメイン https://muumuu-domain.com\r\nGMOペパボ株式会社 https://pepabo.com/company/overview/\r\n━━━━━━━━━━━━━━━━━━\r\nおかげさまで27周年 すべての人にインターネット\r\n当社はGMOインターネットグループ（東証プライム上場 9449）のメンバーです。\r\n■GMO INTERNET GROUP■ https://www.gmo.jp/\r\n━━━━━━━━━━━━━━━━━━\r\n機密情報に関する注意事項：このE-mailは、発信者が意図した\r\n受信者による閲覧・利用を目的としたものです。万一、貴殿が\r\n意図された受信者でない場合には、直ちに送信者に連絡のうえ、\r\nこのE-mailを破棄願います。"
+    }
+  ],
+  "skipped": 0,
+  "nextPageToken": null
+}

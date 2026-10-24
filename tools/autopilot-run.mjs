@@ -135,7 +135,7 @@ export async function runOnce(options = {}) {
     const repo = options.repo || REPO;
     const executable = options.executable || (await resolveClaudeExecutableFromDisk()).executable;
     const timeoutMs = options.timeoutMs ?? 25 * 60_000;
-    const result = await (options.invokeImpl || invokeClaude)({ executable, args: ['-p', '--model', model, '--output-format', 'stream-json', '--verbose'], prompt: buildPrompt(repo), cwd: repo, timeoutMs, onProgress: progress => record({ progress }),
+    const result = await (options.invokeImpl || invokeClaude)({ executable, args: ['-p', '--model', model, '--output-format', 'stream-json', '--verbose'], prompt: buildPrompt(repo) + (pre.jevDecision?.action === 'RETRY' ? '\n前回の Jev 判断: RETRY。直前の作業を検証し、必要な修正をやり直す。\n' : ''), cwd: repo, timeoutMs, onProgress: progress => record({ progress }),
       env: { ...auth.env, AUTOPILOT_HOME: paths.dir, ORGIAST_HOME: paths.home } });
     record({ model, authLane: auth.lane, ...result, stdout: String(result.stdout || '').slice(-4000) });
     const after = await runAutopilot('status', {}, options);

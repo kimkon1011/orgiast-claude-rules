@@ -9,7 +9,7 @@ import { runAutopilot, acquireLock } from './autopilot-tick.mjs';
 function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'autopilot-run-test-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  return { home, platform: 'linux', dir: path.join(home, 'state'), token: '', userId: '', now: new Date('2026-09-21T01:00:00Z'), fetchImpl: async () => { throw new Error('unexpected network'); } };
+  return { home, askJevImpl: async () => ({ ok: false, reason: 'test_offline' }), platform: 'linux', dir: path.join(home, 'state'), token: '', userId: '', now: new Date('2026-09-21T01:00:00Z'), fetchImpl: async () => { throw new Error('unexpected network'); } };
 }
 
 test('runner does not invoke Claude when unstarted, paused, stopped, or done', async (t) => {
@@ -371,4 +371,17 @@ test('streaming records tool stage before timeout without persisting tool argume
   assert.equal(result.lastStage, 'tool:Bash');
   assert.deepEqual(events, [{ stage: 'tool:Bash' }]);
   assert.doesNotMatch(JSON.stringify(result), /SECRET/);
+});
+
+test('Jev RETRY は次の監督プロンプトへ渡し、runner 失敗は既存処理で停止', async t => {
+  const opts = fixture(t);
+  opts.askJevImpl = async () => ({ ok: true, answers: { action: { type: 'choice', choice: 'RETRY' } } });
+  await runAutopilot('start', { objective: 'test' }, opts);
+  await runAutopilot('post', { summary: 'work', progress: 10 }, opts);
+  const result = await runOnce({ ...opts, executable: 'fake-claude', policy: {}, invokeImpl: async invocation => {
+    assert.match(invocation.prompt, /前回の Jev 判断: RETRY/);
+    return { exitCode: 1, stderr: '', stdout: '', timedOut: false };
+  } });
+  assert.equal(result.status, 'paused');
+  assert.equal((await runAutopilot('status', {}, opts)).state.pausedReason, 'runner_error');
 });

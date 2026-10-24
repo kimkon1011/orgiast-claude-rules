@@ -290,8 +290,13 @@ export function emptyOutputReason(row) {
   return 'no_output';
 }
 
-// #964 が入ったマージ時刻。これ以前の停滞は打ち切り実装が無かったので対象外。
-export const POLICY_STALL_SINCE = '2026-10-21T17:04:12Z';
+// 停滞の打ち切りを「実装として期待できる」最も早い時刻。これ以前の停滞は対象外。
+// #964（2026-10-21T17:04:12Z マージ）は stderr の chunk 到着時にしか判定しておらず、
+// 拒否3回の後に無音になる停滞を拾えなかった。それを #1059（2026-10-23T20:03:24Z マージ）が
+// 周期タイマーへ直したので、期待できる起点は #1059。ここを #964 のままにすると、
+// #1059 で直した症状の過去行が永久に「未修理」として毎晩起票され続け、完了判定ができなくなる
+// （2026-10-25 実測: 打ち切り未発火の最終行は 2026-10-23T10:43:58Z で #1059 より前）。
+export const POLICY_STALL_SINCE = '2026-10-23T20:03:24Z';
 // 打ち切り判定（POLICY_STALL_MIN_ELAPSED_SECS=300）に届いた停滞だけを「打ち切られるべきだった」と数える。
 export const POLICY_STALL_MIN_ABORTABLE_SECS = 300;
 export const POLICY_DENIAL_RE = /tool execution denied by policy/gi;

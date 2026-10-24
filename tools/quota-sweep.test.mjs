@@ -264,6 +264,31 @@ test('利用窓の一時的な読み取り失敗が続く場合は理由付き�
   const usage = JSON.parse(fs.readFileSync(path.join(ctx.home, '.claude/executor-usage.jsonl'), 'utf8').trim());
   assert.match(usage.reason, /HTTP 503/);
 });
+// 実ログの持続429と、再取得中に認証エラーへ変わる境界を区別する。
+test('window-info は再取得上限と最終理由を両台帳で保持する', async t => {
+  for (const reasons of [['HTTP 429', 'HTTP 429'], ['HTTP 429', 'HTTP 401'], ['HTTP 401']]) {
+    await t.test(reasons.join(' → '), async t => {
+      let reads = 0, waits = 0, calls = 0;
+      const ctx = context(t, async () => { calls++; throw new Error('unexpected child'); });
+      ctx.windows = async () => {
+        assert.ok(reads < reasons.length, '窓取得の上限を超えない');
+        return Object.assign([], { reasons: { claude: reasons[reads++] } });
+      };
+      ctx.sleep = async ms => { waits++; assert.equal(ms, 2000); };
+      await runSweep(decision, ctx);
+      assert.equal(reads, reasons.length);
+      assert.equal(waits, reasons.length - 1);
+      assert.equal(calls, 0);
+      for (const name of ['quota-sweep', 'executor-usage']) {
+        const rows = fs.readFileSync(path.join(ctx.home, `.claude/${name}.jsonl`), 'utf8').trim().split('\n').map(JSON.parse);
+        assert.equal(rows.length, 1);
+        assert.equal(rows[0].failureKey, 'window-info');
+        assert.ok(rows[0].reason.endsWith(`(${reasons.at(-1)})`));
+        assert.equal(name === 'quota-sweep' ? rows[0].outcome : rows[0].status, 'failed');
+      }
+    });
+  }
+});
 test('一時障害の判定は 429/5xx/network だけで、認証・形式不一致は再試行しない', () => {
   for (const reason of ['HTTP 429', 'HTTP 503', 'HTTP 408', 'network: TimeoutError']) assert.equal(isTransientWindowReadError(reason), true);
   for (const reason of ['HTTP 401', 'HTTP 403', 'accessToken 未設定', 'credentials: ENOENT', 'usage response の形式が未対応', '', undefined]) assert.equal(isTransientWindowReadError(reason), false);

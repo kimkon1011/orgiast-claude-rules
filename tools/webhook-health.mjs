@@ -164,10 +164,31 @@ async function postSheet(result, checkedAt, fetchImpl) {
   const resolved = resolveReporterLabel({ envText, hostname: os.hostname() });
   if (resolved.nextEnvText !== envText) await fs.writeFile(envFile, resolved.nextEnvText, 'utf8');
   const payload = buildWebhookSheetPayload(result, { label: resolved.label, checkedAt: checkedAt.slice(0, 10) });
-  const response = await fetchImpl(env.FLEET_SHEET_URL, { method:'POST', redirect:'follow', headers:{'content-type':'application/json'}, body:JSON.stringify({ token:env.FLEET_SHEET_TOKEN, kind:'webhooks', ...payload }) });
-  const text = await response.text(); if (!response.ok) throw new Error(`fleet sheet HTTP ${response.status}`);
-  let body; try { body=JSON.parse(text); } catch { throw new Error('fleet sheet returned invalid JSON'); }
-  if (!body.ok) throw new Error(`fleet sheet rejected request: ${body.error || 'unknown error'}`); return body;
+  return postWebhookSheet(env.FLEET_SHEET_URL, { token:env.FLEET_SHEET_TOKEN, kind:'webhooks', ...payload }, { fetchImpl });
+}
+
+export async function postWebhookSheet(url, payload, {
+  fetchImpl = fetch,
+  sleepImpl = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+} = {}) {
+  const request = { method:'POST', redirect:'follow', headers:{'content-type':'application/json'}, body:JSON.stringify(payload) };
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const response = await fetchImpl(url, request);
+    const text = await response.text();
+    let body; try { body = JSON.parse(text); } catch {
+      if (!response.ok) throw new Error(`fleet sheet HTTP ${response.status}`);
+      throw new Error('fleet sheet returned invalid JSON');
+    }
+    // GAS returns busy in JSON (normally HTTP 200) before modifying the sheet
+    // when its shared script lock cannot be acquired within 20 seconds.
+    if (body?.ok === false && body.error === 'busy' && (response.ok || response.status === 503) && attempt < 2) {
+      await sleepImpl(1_000 * 2 ** attempt);
+      continue;
+    }
+    if (!response.ok) throw new Error(`fleet sheet HTTP ${response.status}`);
+    if (!body?.ok) throw new Error(`fleet sheet rejected request: ${redactSecrets(body?.error || 'unknown error')}`);
+    return body;
+  }
 }
 
 async function notify(target, deadResults, fetchImpl) {

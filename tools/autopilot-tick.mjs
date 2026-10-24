@@ -368,7 +368,9 @@ export async function sendNotice(text, ctx) {
   let result, recipient;
   try {
     recipient = noticeRecipient(ctx.home, ctx.userId);
-    result = await ctx.notifyImpl(text, { home: ctx.home, token: ctx.token, userId: recipient.userId, fetchImpl: ctx.fetchImpl, webhookFallback: false, ...(command || ctx.periodicDigest ? { plainJa: false } : {}) });
+    result = recipient.reason === 'owner_discord_id_missing'
+      ? { delivered: 'no-owner-dm', reason: recipient.reason }
+      : await ctx.notifyImpl(text, { home: ctx.home, token: ctx.token, userId: recipient.userId, fetchImpl: ctx.fetchImpl, webhookFallback: false, ...(command || ctx.periodicDigest ? { plainJa: false } : {}) });
   } catch (error) { result = { delivered: 'none', reason: error.code || error.message }; }
   result ||= { delivered: 'unknown' };
   if (result.delivered === 'dm' && recipient?.notOwner) result = { ...result, delivered: 'dm-not-owner' };

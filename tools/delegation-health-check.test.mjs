@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { parseHandoff } from './auto-session.mjs';
-import { applyAutoHeal, authRestoredAfter, collectFindings, dedupeLimitEvents, emptyOutputReason, isCooldownSkippedRow, isEmptyDiffEscalationRow, isQuotaLimitedRow, lowYieldBackends, metricFromLaterWindow, parseRateLimitsFromText, policyStallAttempts, quotaSweepPartialProgressRow, quotaSweepProgressRow, readCodexUsedPercent, timeoutWasteSummary, upsertFixTasks, windowResetsAfterLimit } from './delegation-health-check.mjs';
+import { applyAutoHeal, authRestoredAfter, collectFindings, dedupeLimitEvents, emptyOutputReason, isCooldownSkippedRow, isEmptyDiffEscalationRow, isQuotaLimitedRow, lowYieldBackends, metricFromLaterWindow, parseRateLimitsFromText, POLICY_STALL_SINCE, policyStallAttempts, quotaSweepPartialProgressRow, quotaSweepProgressRow, readCodexUsedPercent, timeoutWasteSummary, upsertFixTasks, windowResetsAfterLimit } from './delegation-health-check.mjs';
 
 const NOW = new Date('2026-09-09T12:00:00.000Z');
 const homes = [];
@@ -1136,22 +1136,35 @@ test('policyStallAttempts は chain 試行ごとに拒否痕跡を抽出し outc
   assert.equal(attempts[0].budgetSecs, 600);
 });
 
-test('#964 以降で打ち切られずに300秒以上消費した policy 停滞を起票し、打ち切り済み・配備前は起票しない', () => {
+test('#1059 以降で打ち切られずに300秒以上消費した policy 停滞を起票し、打ち切り済み・修正前は起票しない', () => {
   const stall = (t, outcome, secs) => row({ t, provider: 'fallback', chain: [{ backend: 'gemini-cli', secs, out: 200, budgetSecs: 600, stderrTail: 'Tool execution denied by policy. Tool execution denied by policy. Tool execution denied by policy.', outcome }] });
   const unaborted = home();
-  write(unaborted, 'executor-usage.jsonl', stall('2026-10-22T03:00:00Z', 'ok', 880));
-  const found = collectFindings({ home: unaborted, now: new Date('2026-10-22T12:00:00Z'), codexUsedPercent: null });
+  write(unaborted, 'executor-usage.jsonl', stall('2026-10-24T03:00:00Z', 'ok', 880));
+  const found = collectFindings({ home: unaborted, now: new Date('2026-10-24T12:00:00Z'), codexUsedPercent: null });
   const finding = found.find((item) => item.id === 'policy_stall_not_aborted');
   assert.ok(finding, `起票されるべき: ${JSON.stringify(found.map((f) => f.id))}`);
   assert.match(finding.evidence.join(' '), /1件.*最大 880秒/);
 
   const aborted = home();
-  write(aborted, 'executor-usage.jsonl', stall('2026-10-22T03:00:00Z', 'blocked', 301));
-  assert.equal(collectFindings({ home: aborted, now: new Date('2026-10-22T12:00:00Z'), codexUsedPercent: null }).some((item) => item.id === 'policy_stall_not_aborted'), false);
+  write(aborted, 'executor-usage.jsonl', stall('2026-10-24T03:00:00Z', 'blocked', 301));
+  assert.equal(collectFindings({ home: aborted, now: new Date('2026-10-24T12:00:00Z'), codexUsedPercent: null }).some((item) => item.id === 'policy_stall_not_aborted'), false);
 
-  const preDeploy = home();
-  write(preDeploy, 'executor-usage.jsonl', stall('2026-10-21T02:27:07Z', 'timeout', 900));
-  assert.equal(collectFindings({ home: preDeploy, now: new Date('2026-10-22T12:00:00Z'), codexUsedPercent: null }).some((item) => item.id === 'policy_stall_not_aborted'), false);
+  // #1059 マージ前の実測行（2026-10-23T10:43:58Z gemini 601秒 timeout）は、周期判定が無かった
+  // 時点のものなので「未修理」に数えない。#964 起点のままだとこれが永久に起票され続けた。
+  const preFix = home();
+  write(preFix, 'executor-usage.jsonl', stall('2026-10-23T10:43:58Z', 'timeout', 601));
+  assert.equal(collectFindings({ home: preFix, now: new Date('2026-10-24T12:00:00Z'), codexUsedPercent: null }).some((item) => item.id === 'policy_stall_not_aborted'), false);
+});
+
+test('policy 停滞の起票境界は #1059 のマージ時刻で、その前後で判定が分かれる', () => {
+  const at = (t) => {
+    const dir = home();
+    write(dir, 'executor-usage.jsonl', row({ t, provider: 'fallback', chain: [{ backend: 'gemini-cli', secs: 601, out: 0, budgetSecs: 600, stderrTail: 'Tool execution denied by policy. Tool execution denied by policy.', outcome: 'timeout' }] }));
+    return collectFindings({ home: dir, now: new Date('2026-10-24T12:00:00Z'), codexUsedPercent: null }).some((item) => item.id === 'policy_stall_not_aborted');
+  };
+  assert.equal(at('2026-10-23T20:03:23Z'), false, 'マージ1秒前は対象外');
+  assert.equal(at('2026-10-23T20:03:24Z'), true, 'マージ時刻ちょうどは対象');
+  assert.equal(POLICY_STALL_SINCE, '2026-10-23T20:03:24Z');
 });
 
 test('新名 Flash も過去ログと同様に低成果バックエンドとして集計する', () => {

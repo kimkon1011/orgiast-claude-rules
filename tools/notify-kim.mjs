@@ -48,6 +48,17 @@ const HANDOFF = /接続し[て、]|接続して確認|どれを選|選んでほ�
 const STATUS_REPORT = /✅\s*自動進行が完了しました|^【[^\n]*の自動進行】\s*完了/m;
 // 既に起票した本文（マーカー付き）を別経路が再通知しても二重起票しない。
 const ALREADY_FILED = /<!--\s*notify-kim:[0-9a-f]{20}\s*-->/;
+// notify-owner.mjs は本文の先頭に「宛先: ...」行を付ける。これは通知経路のメタ情報で、
+// 失敗の同一性（重複起票のキー）や本文の分類には含めない（2026-10-25 実測: 宛先文言の差で
+// 同じ freee トークン依頼が2件に分かれた）。
+const OWNER_ADDRESS_LINE = /^宛先[:：][^\n]{0,80}$/;
+export function stripOwnerAddress(text) {
+  return String(text ?? '').split('\n').filter((line) => !OWNER_ADDRESS_LINE.test(line.trim())).join('\n');
+}
+// 利用者への判断依頼は「失敗」ではない。無人レーンでは実行できないので [判断待ち] として起票する。
+const JUDGMENT_REQUEST = /^自動進行が判断待ちです[:：]/m;
+// auto-progress が API エラーで止まった依頼を自動再開したときの案内。修復対象ではない。
+const AUTO_RESUME_NOTICE = /^エラーで止まっていた依頼を見つけ、自動で再開します。?$/m;
 const RESUME_REPORT = /^夜間セッション再開 \([^\n)]*\)$/m;
 const RESUME_ROW = /\([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\): (?:progressed|no-progress|error)$/mi;
 const RESUME_ERROR = /\([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\): error$/mi;
@@ -62,17 +73,21 @@ const normalizeFailure = text => String(text).replace(/\d{4}-\d{2}-\d{2}(?:[T ][
 // Use the existing next-session TODO consumer; no separate repair queue.
 export async function notifyKim(text, options = {}) {
   const raw = redactSecrets(String(text ?? ''));
-  if (STATUS_REPORT.test(raw) || ALREADY_FILED.test(raw) || isSuccessfulResumeReport(raw)) return deliverKim(raw, options);
-  const humanEvidence = /^(?:試行|試した内容|試した修復)[:：][ \t]*\S.+$/m.test(raw)
-    && /^証拠[:：][ \t]*\S.+$/m.test(raw) && /^必要な操作[:：][ \t]*\S.+$/m.test(raw);
-  const benignQuotaReport = benignQuotaSweepReport(raw);
-  const failure = !benignQuotaReport && (FAILURE.test(raw) || (RESUME_REPORT.test(raw) && RESUME_ERROR.test(raw)));
-  const handoff = !benignQuotaReport && !humanEvidence && HANDOFF.test(raw);
-  if (!failure && !handoff) return deliverKim(raw, options);
+  const bodyText = stripOwnerAddress(raw);
+  if (STATUS_REPORT.test(bodyText) || ALREADY_FILED.test(bodyText) || isSuccessfulResumeReport(bodyText) || AUTO_RESUME_NOTICE.test(bodyText)) return deliverKim(raw, options);
+  const judgment = JUDGMENT_REQUEST.test(bodyText);
+  const humanEvidence = /^(?:試行|試した内容|試した修復)[:：][ \t]*\S.+$/m.test(bodyText)
+    && /^証拠[:：][ \t]*\S.+$/m.test(bodyText) && /^必要な操作[:：][ \t]*\S.+$/m.test(bodyText);
+  const benignQuotaReport = benignQuotaSweepReport(bodyText);
+  const failure = !judgment && !benignQuotaReport && (FAILURE.test(bodyText) || (RESUME_REPORT.test(bodyText) && RESUME_ERROR.test(bodyText)));
+  const handoff = !judgment && !benignQuotaReport && !humanEvidence && HANDOFF.test(bodyText);
+  if (!judgment && !failure && !handoff) return deliverKim(raw, options);
   const home = options.home || process.env.ORGIAST_HOME || os.homedir();
   const now = options.now ?? Date.now();
-  const source = options.source || raw.split('\n').find(line => line.trim()) || '通知';
-  const cause = options.cause || raw.match(/原因[:：][ \t]*([^\n]+)/)?.[1] || raw.split('\n').filter(line => FAILURE.test(line)).join('\n') || source;
+  const source = options.source ? stripOwnerAddress(options.source) : bodyText.split('\n').find(line => line.trim()) || '通知';
+  const cause = options.cause || (judgment
+    ? bodyText.match(/^自動進行が判断待ちです[:：][ \t]*([^\n]+)$/m)?.[1] || source
+    : bodyText.match(/原因[:：][ \t]*([^\n]+)/)?.[1] || bodyText.split('\n').filter(line => FAILURE.test(line)).join('\n') || source);
   const key = createHash('sha256').update(`${options.userId || KIM_DISCORD_USER_ID}\n${normalizeFailure(source)}\n${normalizeFailure(cause)}`).digest('hex').slice(0, 20);
   const dir = path.join(home, '.claude', 'notify-kim');
   const stateFile = path.join(dir, `${key}.json`);
@@ -104,19 +119,24 @@ export async function notifyKim(text, options = {}) {
     if (state.sentAt != null && now >= state.sentAt && now - state.sentAt < 86_400_000) return { delivered: 'suppressed', reason: 'same-source-cause-24h' };
     let suffix = '';
     let body = raw;
-    const needsTask = handoff || !/^原因[:：][ \t]*\S.+$/m.test(raw) || !/^対処[:：][ \t]*\S.+$/m.test(raw);
-    if (needsTask) {
+    const needsTask = !judgment && (handoff || !/^原因[:：][ \t]*\S.+$/m.test(bodyText) || !/^対処[:：][ \t]*\S.+$/m.test(bodyText));
+    if (judgment || needsTask) {
       const file = path.join(home, '.claude', 'next-session.md');
       const marker = `<!-- notify-kim:${key} -->`;
       let todo = '';
       try { todo = fs.readFileSync(file, 'utf8'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
       if (!todo.split('\n').some(line => line.includes(marker) && /\[ \]/.test(line))) {
-        const item = `1. [ ] 通知の原因調査・修復: ${raw.replace(/\s+/g, ' ').slice(0, 1400)}。実ログで原因を確定し、修正・再検証する。人の操作が不可欠なら試行と証拠を記録する。 ${marker}\n`;
+        const item = judgment
+          ? `1. [ ] [判断待ち] ${bodyText.replace(/\s+/g, ' ').slice(0, 1400)} ${marker}\n`
+          : `1. [ ] 通知の原因調査・修復: ${bodyText.replace(/\s+/g, ' ').slice(0, 1400)}。実ログで原因を確定し、修正・再検証する。人の操作が不可欠なら試行と証拠を記録する。 ${marker}\n`;
         // Append in one write so other sessions' new TODOs are never overwritten.
-        fs.appendFileSync(file, `\n<!-- NEXT-SESSION v1 -->\n## 次の1目的\n通知の原因調査と修復\n## 残TODO\n${item}`);
+        fs.appendFileSync(file, `\n<!-- NEXT-SESSION v1 -->\n## 残TODO\n${item}`);
       }
-      if (handoff) body = raw.split('\n').filter(line => !HANDOFF.test(line) && !/^\s*[123][.．]\s/.test(line)).join('\n');
-      suffix = `\n原因: ${raw.match(/^原因[:：][ \t]*(.+)$/m)?.[1]?.slice(0, 240) || '未確定（実ログの調査を起票）'}\n対処: 原因調査と修復を自動起票しました。\n自動起票: ${file}（通知修復 ${key}）`;
+      if (judgment) suffix = `\n自動起票: ${file}（判断待ち ${key}）`;
+      else {
+        if (handoff) body = raw.split('\n').filter(line => !HANDOFF.test(line) && !/^\s*[123][.．]\s/.test(line)).join('\n');
+        suffix = `\n原因: ${bodyText.match(/^原因[:：][ \t]*(.+)$/m)?.[1]?.slice(0, 240) || '未確定（実ログの調査を起票）'}\n対処: 原因調査と修復を自動起票しました。\n自動起票: ${file}（通知修復 ${key}）`;
+      }
     } else {
       // Preserve evidence across LLM rewriting and Discord's content limit.
       suffix = '\n' + ['原因', '対処'].map(label => raw.split('\n').find(line => line.startsWith(label + ':') || line.startsWith(label + '：')).slice(0, 400)).join('\n');

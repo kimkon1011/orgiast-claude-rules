@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { notifyKim } from './notify-kim.mjs';
-import { parseHandoff } from './auto-session.mjs';
+import { parseHandoff, todoExclusionReason } from './auto-session.mjs';
+import { planRotation } from './next-session-rotate.mjs';
 
 function home() { return fs.mkdtempSync(path.join(os.tmpdir(), 'notify-kim-')); }
 function response({ ok = true, status = 200, json = {} } = {}) { return { ok, status, json: async () => json }; }
@@ -206,4 +207,48 @@ test('再開レポートの見出しがなければ progressed 行があって�
   const dir = home(), s = sender(dir);
   await notifyKim('quota-sweep:claude が直近 4 件すべて失敗している (12345678-1234-1234-1234-123456789abc): progressed', s.options);
   assert.match(fs.readFileSync(path.join(dir, '.claude/next-session.md'), 'utf8'), /通知の原因調査・修復:/);
+});
+
+test('判断待ちの自動進行通知は[判断待ち]として起票し、修復TODOにしない', async () => {
+  const dir = home(), s = sender(dir);
+  const notice = [
+    '宛先: 不明（DM 未解決）',
+    '【HP・test の Claude Code】プロジェクト: Desktop ／ 作業ID: 8b90fb50',
+    '自動進行が判断待ちです: cr@ の認可コードを保存してください',
+    '【停止点1】 freee_tokens(id=cr-filebox) がありません。',
+  ].join('\n');
+  await notifyKim(notice, s.options);
+  const filed = fs.readFileSync(path.join(dir, '.claude/next-session.md'), 'utf8');
+  assert.match(filed, /\[判断待ち\]/);
+  assert.doesNotMatch(filed, /通知の原因調査・修復/);
+  assert.equal(todoExclusionReason(parseHandoff(filed).todos[0]), '判断待ち');
+});
+
+test('自動再開の案内は起票しない', async () => {
+  const dir = home(), s = sender(dir);
+  const notice = [
+    '宛先: 不明（DM 未解決）',
+    '【HP・test の Claude Code】プロジェクト: verify-run ／ 作業ID: 15359cb6',
+    'エラーで止まっていた依頼を見つけ、自動で再開します。',
+    '依頼: [headless:cheap-code] これは Claude(監督)が蓄積したコンテキスト。',
+  ].join('\n');
+  await notifyKim(notice, s.options);
+  assert.equal(fs.existsSync(path.join(dir, '.claude/next-session.md')), false);
+});
+
+test('宛先文言だけが違う同じ失敗を二重起票しない', async () => {
+  const dir = home(), s = sender(dir);
+  const failure = '【HP・test の Claude Code】プロジェクト: Desktop ／ 作業ID: 8b90fb50\nfreee トークン取得失敗';
+  await notifyKim(`宛先: 不明（DM 未解決）\n${failure}`, s.options);
+  await notifyKim(`宛先: 不明（このPCの持ち主が未設定・kim へ送付）\n${failure}`, { ...s.options, now: 86_400_000 });
+  const filed = fs.readFileSync(path.join(dir, '.claude/next-session.md'), 'utf8');
+  assert.equal(filed.match(/<!-- notify-kim:/g).length, 1);
+});
+
+test('起票しても次の1目的を作らない（目的の乗っ取り回帰）', async () => {
+  const dir = home(), s = sender(dir);
+  await notifyKim('収集失敗', s.options);
+  const filed = fs.readFileSync(path.join(dir, '.claude/next-session.md'), 'utf8');
+  assert.doesNotMatch(filed, /## 次の1目的/);
+  assert.doesNotMatch(planRotation(filed).text, /1\. 通知の原因調査と修復/);
 });

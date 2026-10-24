@@ -178,3 +178,32 @@ test('従来どおり失敗通知は起票する（完了報告ガードで塞�
   await notifyKim('quota-sweep claude が直近 4 件すべて失敗している', s.options);
   assert.match(fs.readFileSync(path.join(dir, '.claude/next-session.md'), 'utf8'), /通知の原因調査・修復:/);
 });
+
+test('夜間セッション再開は目的文に失敗を含んでも全行 progressed なら起票しない', async () => {
+  const dir = home(), s = sender(dir);
+  const report = '夜間セッション再開 (test-host)\nquota-sweep:claude が直近 4 件すべて失敗している (12345678-1234-1234-1234-123456789abc): progressed\n別の目的 (abcdef12-1234-1234-1234-123456789abc): progressed';
+  assert.equal((await notifyKim(report, s.options)).delivered, 'dm');
+  assert.equal(fs.existsSync(path.join(dir, '.claude/next-session.md')), false);
+  assert.equal(s.messages[0], report);
+});
+
+test('夜間セッション再開に1行でも error があれば目的文の失敗語によらず起票する', async () => {
+  for (const title of ['quota-sweep:claude が直近 4 件すべて失敗している', '通常の作業']) {
+    const dir = home(), s = sender(dir);
+    const report = `夜間セッション再開 (test-host)\n別の目的 (abcdef12-1234-1234-1234-123456789abc): progressed\n${title} (12345678-1234-1234-1234-123456789abc): error`;
+    assert.equal((await notifyKim(report, s.options)).delivered, 'dm');
+    assert.match(fs.readFileSync(path.join(dir, '.claude/next-session.md'), 'utf8'), /通知の原因調査・修復:/);
+  }
+});
+
+test('夜間セッション再開の中止行があれば起票する', async () => {
+  const dir = home(), s = sender(dir);
+  await notifyKim('夜間セッション再開 (test-host)\n作業 (12345678-1234-1234-1234-123456789abc): progressed\n連続2件エラーのため今晩は中止', s.options);
+  assert.match(fs.readFileSync(path.join(dir, '.claude/next-session.md'), 'utf8'), /通知の原因調査・修復:/);
+});
+
+test('再開レポートの見出しがなければ progressed 行があっても通常の失敗通知として起票する', async () => {
+  const dir = home(), s = sender(dir);
+  await notifyKim('quota-sweep:claude が直近 4 件すべて失敗している (12345678-1234-1234-1234-123456789abc): progressed', s.options);
+  assert.match(fs.readFileSync(path.join(dir, '.claude/next-session.md'), 'utf8'), /通知の原因調査・修復:/);
+});

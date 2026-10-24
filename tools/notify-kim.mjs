@@ -48,15 +48,24 @@ const HANDOFF = /接続し[て、]|接続して確認|どれを選|選んでほ�
 const STATUS_REPORT = /✅\s*自動進行が完了しました|^【[^\n]*の自動進行】\s*完了/m;
 // 既に起票した本文（マーカー付き）を別経路が再通知しても二重起票しない。
 const ALREADY_FILED = /<!--\s*notify-kim:[0-9a-f]{20}\s*-->/;
+const RESUME_REPORT = /^夜間セッション再開 \([^\n)]*\)$/m;
+const RESUME_ROW = /\([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\): (?:progressed|no-progress|error)$/mi;
+const RESUME_ERROR = /\([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\): error$/mi;
+// 目的文に引用された過去の失敗ではなく、今回の結果と中止の有無で判定する。
+// 結果行が1行も無い本文は再開レポートとみなさない（見出しだけの失敗通知を塞がない）。
+function isSuccessfulResumeReport(text) {
+  return RESUME_REPORT.test(text) && RESUME_ROW.test(text) && !RESUME_ERROR.test(text)
+    && !text.includes('連続2件エラーのため今晩は中止');
+}
 const normalizeFailure = text => String(text).replace(/\d{4}-\d{2}-\d{2}(?:[T ][\d:.]+Z?)?/g, '<日時>').replace(/\d+\s*(?:回|件|日|時間|分|秒)/g, '<回数>').replace(/\s+/g, ' ').trim();
 
 // Use the existing next-session TODO consumer; no separate repair queue.
 export async function notifyKim(text, options = {}) {
   const raw = redactSecrets(String(text ?? ''));
-  if (STATUS_REPORT.test(raw) || ALREADY_FILED.test(raw)) return deliverKim(raw, options);
+  if (STATUS_REPORT.test(raw) || ALREADY_FILED.test(raw) || isSuccessfulResumeReport(raw)) return deliverKim(raw, options);
   const humanEvidence = /^(?:試行|試した内容|試した修復)[:：][ \t]*\S.+$/m.test(raw)
     && /^証拠[:：][ \t]*\S.+$/m.test(raw) && /^必要な操作[:：][ \t]*\S.+$/m.test(raw);
-  const failure = FAILURE.test(raw), handoff = !humanEvidence && HANDOFF.test(raw);
+  const failure = FAILURE.test(raw) || (RESUME_REPORT.test(raw) && RESUME_ERROR.test(raw)), handoff = !humanEvidence && HANDOFF.test(raw);
   if (!failure && !handoff) return deliverKim(raw, options);
   const home = options.home || process.env.ORGIAST_HOME || os.homedir();
   const now = options.now ?? Date.now();

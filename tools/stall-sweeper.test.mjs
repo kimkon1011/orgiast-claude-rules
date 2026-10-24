@@ -69,6 +69,19 @@ test('CLI: dryが既定、件数検証、モード競合拒否', () => {
   assert.throws(() => parseArgs(['--apply', '--dry-run']));
   for (const n of ['0', '-1', 'NaN', '1.5']) assert.throws(() => parseArgs(['--max', n]));
 });
+test('既定の確認先: ホーム配下から導き、特定PCのユーザー名を埋め込まない', () => {
+  const prev = process.env.ORGIAST_HOME;
+  const home = path.join(os.tmpdir(), 'stall-sweeper-home-test');
+  process.env.ORGIAST_HOME = home;
+  try {
+    const out = parseArgs([]);
+    assert.equal(out.repos.length, 4);
+    for (const repo of out.repos) assert.ok(repo.startsWith(path.resolve(home)), repo);
+    assert.ok(!out.repos.some(repo => /[\\/]Users[\\/]uers[\\/]/.test(repo)));
+  } finally {
+    if (prev === undefined) delete process.env.ORGIAST_HOME; else process.env.ORGIAST_HOME = prev;
+  }
+});
 test('排他: 同時実行を拒否、終了後に次世代を取得、削除不要', () => {
   const dir = temp(), fd = acquireLock(dir);
   assert.throws(() => acquireLock(dir)); releaseLock(fd);

@@ -42,6 +42,21 @@ test('interactive transcript detection distinguishes headless, age and first pro
   write('help'); assert.equal(interactiveClaude({ home, now }), true);
   assert.equal(interactiveClaude({ home, now: now + 11 * minute }), false);
 });
+test('SDK の単発実行（entrypoint=sdk-cli）は対話利用として数えない', t => {
+  const home = temp(t), dir = path.join(home, '.claude/projects/repo'); fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, 'probe.jsonl');
+  const write = rows => { fs.writeFileSync(file, rows.map(r => JSON.stringify(r)).join('\n') + '\n'); fs.utimesSync(file, now / 1000, now / 1000); };
+  // 2026-10-24T16:11Z の failed(interactive-active) の再現: cwd=C:\WINDOWS\system32 で
+  // "OK とだけ返してください" を1回だけ実行した sdk-cli の記録。対話セッションではない。
+  write([
+    { type: 'attachment', entrypoint: 'sdk-cli', cwd: 'C:\\WINDOWS\\system32' },
+    { type: 'user', message: { content: [{ type: 'text', text: 'OK とだけ返してください' }] } },
+  ]);
+  assert.equal(interactiveClaude({ home, now }), false);
+  // cli の対話セッションは従来どおり検出する
+  write([{ type: 'attachment', entrypoint: 'cli' }, { type: 'user', message: { content: [{ type: 'text', text: 'help' }] } }]);
+  assert.equal(interactiveClaude({ home, now }), true);
+});
 test('Codex TUI vs exec and host path conversion', () => {
   assert.equal(interactiveCodex('/usr/bin/node /usr/bin/codex --model model'), true);
   assert.equal(interactiveCodex('/usr/bin/codex exec -s workspace-write -'), false);

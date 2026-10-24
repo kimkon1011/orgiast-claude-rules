@@ -49,12 +49,19 @@ export function canRunWindow(state, decision) {
   const prior = state.lastRun?.[decision.provider]?.[decision.resetsAt];
   return !prior || (!terminal.has(prior.stopOutcome || prior.outcome) && (prior.attempts || 1) < 2);
 }
+// SDK/IDE からの単発呼び出し（ヘルスチェック等）は対話利用ではない。2026-10-24T16:11:33Z の
+// failed(interactive-active) は cwd=C:\WINDOWS\system32 で "OK とだけ返してください" を実行した
+// sdk-cli の記録を、プロンプト接頭辞だけの判定で対話と誤認して起きた。
+const PROGRAMMATIC_ENTRYPOINTS = new Set(['sdk-cli', 'sdk-ide']);
 export function interactiveClaude({ home, now = Date.now() }) {
   return jsonlFiles(path.join(home, '.claude', 'projects')).some(file => {
     try {
       if (now - fs.statSync(file).mtimeMs > 10 * 60_000) return false;
-      for (const line of read(file).split(/\r?\n/)) {
-        let row; try { row = JSON.parse(line); } catch { continue; }
+      const rows = [];
+      for (const line of read(file).split(/\r?\n/)) { try { rows.push(JSON.parse(line)); } catch { /* skip */ } }
+      const entrypoint = rows.map(row => row.entrypoint || row.entryPoint).find(Boolean);
+      if (PROGRAMMATIC_ENTRYPOINTS.has(entrypoint)) return false;
+      for (const row of rows) {
         if (row.type !== 'user' || row.isMeta) continue;
         const c = row.message?.content;
         const text = typeof c === 'string' ? c : Array.isArray(c) ? c.filter(b => b.type === 'text').map(b => b.text).join('\n') : '';

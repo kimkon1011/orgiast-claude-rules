@@ -160,5 +160,11 @@
     "route": "**2026-10-23 実測（このPC=HP）**: 「Discord MCP で送る」は実行できない（`~/.claude.json` の mcpServers は gemini-cli のみ。settings.json の `mcp__claude_ai_Discord…` matcher はツールが無いため latent）。`node tools/discord-dm.mjs <名前> --body … --dry-run` は「Discord Bot トークンが見つかりません」→ SEND_FAILED（env DISCORD_BOT_TOKEN も `~/.claude/orgiast-discord-bot-token.txt` も無い）。`tools/discord-channel-id.mjs` は `~/.claude/fleet-sheet.env` 不在で ENOENT（ローカル台帳フォールバック無し）。実行可能なのは ①宛先/用件/本文の完成形をチャット表示（既定・送信なし） ②kim 宛なら fleet-mail（2026-10-22 実測成功） ③keiri-hub `/shoyo` の #経理チーム 投稿（2026-10-22 実送信・アプリ専用で汎用の送信口ではない）。汎用 DM の実送信はトークン設置後に未検証。送信・権限変更は既存の承認範囲のみ",
     "confidence": "high",
     "source": "handoff-audit-nightly:a3ba93d328a2f82cbed847fbd90be4d9b58b51ce3850d934b545c230243d89a7 / 2026-10-23 再発検証（docs/handoff-audit-2026-10-23-internal-staff-discord.md）"
+  },
+  {
+    "pattern": "Discord DM 送信を前提にした社内連絡",
+    "route": "2026-10-25 実測（HP）: Discord DM は Bot トークン不在で実送信できない（node tools/discord-dm.mjs 宮地麻里 --body … --dry-run → SEND_FAILED、resolveDiscordBotToken=false）。社内連絡は宛先/用件/本文をチャット本文に完成形で表示する（既定・送信なし）。内部宛の Gmail 下書き/送信は tools/internal-recipient-gmail-guard.mjs が deny し、tools/gmail-draft.mjs はチャット表示を出して exit 3（実測）。「送って」の返信を前提にしない。再発走査は tools/handoff-audit-discord-dm-premise-scan.mjs。送信・権限変更は既存の承認範囲のみ",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:4780e59fbe87f4260f1d0b82be7a8a420d8b538b7b16dd8e25927240d7d41f37 / 2026-10-25 再発検証（tools/handoff-audit-findings-discord-dm-premise-60e9dd3b.md）"
   }
 ]

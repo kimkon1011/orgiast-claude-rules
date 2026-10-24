@@ -254,15 +254,26 @@ test('利用窓の一時的な読み取り失敗は1回読み直して続行す�
   const row = JSON.parse(fs.readFileSync(path.join(ctx.home, '.claude/quota-sweep.jsonl'), 'utf8').trim());
   assert.equal(row.outcome, 'final'); assert.ok(reads >= 2); assert.ok(calls >= 1);
 });
-test('利用窓の一時的な読み取り失敗が続く場合は理由付きで failed にする', async t => {
-  let calls = 0; const ctx = context(t, async () => { calls++; });
-  ctx.windows = async () => Object.assign([], { reasons: { claude: 'HTTP 503' } });
+// 2026-10-24T03:54Z 再発: 429 が2秒1回の再試行を越えて続き failed になった。
+test('429 が続いても間隔を空けて3回読み直し、読めなければ failed でなく deferred で理由を残す', async t => {
+  let calls = 0, reads = 0; const sleeps = []; const ctx = context(t, async () => { calls++; });
+  ctx.sleep = async ms => { sleeps.push(ms); };
+  ctx.windows = async () => { reads++; return Object.assign([], { reasons: { claude: 'HTTP 429' } }); };
   await runSweep(decision, ctx);
   const row = JSON.parse(fs.readFileSync(path.join(ctx.home, '.claude/quota-sweep.jsonl'), 'utf8').trim());
-  assert.equal(row.outcome, 'failed'); assert.equal(row.failureKey, 'window-info');
-  assert.match(row.reason, /HTTP 503/); assert.equal(calls, 0);
+  assert.equal(row.outcome, 'deferred'); assert.equal(row.failureKey, null);
+  assert.match(row.reason, /HTTP 429/); assert.equal(calls, 0);
+  assert.deepEqual(sleeps, [2000, 15000, 30000]);
   const usage = JSON.parse(fs.readFileSync(path.join(ctx.home, '.claude/executor-usage.jsonl'), 'utf8').trim());
-  assert.match(usage.reason, /HTTP 503/);
+  assert.equal(usage.status, 'deferred'); assert.match(usage.reason, /HTTP 429/); assert.equal(usage.failureKey, undefined);
+  assert.equal(canRunWindow(ctx.state, decision), true);
+});
+test('一時障害でない窓情報不足は従来どおり failed(window-info)', async t => {
+  const ctx = context(t, async () => {});
+  ctx.windows = async () => Object.assign([], { reasons: { claude: 'HTTP 401' } });
+  await runSweep(decision, ctx);
+  const row = JSON.parse(fs.readFileSync(path.join(ctx.home, '.claude/quota-sweep.jsonl'), 'utf8').trim());
+  assert.equal(row.outcome, 'failed'); assert.equal(row.failureKey, 'window-info'); assert.match(row.reason, /HTTP 401/);
 });
 test('一時障害の判定は 429/5xx/network だけで、認証・形式不一致は再試行しない', () => {
   for (const reason of ['HTTP 429', 'HTTP 503', 'HTTP 408', 'network: TimeoutError']) assert.equal(isTransientWindowReadError(reason), true);

@@ -265,13 +265,16 @@ export async function runSweep(decision, context) {
       record.branchChanged = true; log('Worktree branch changed externally; stop and preserve it'); return stopWith('failed', 'branch-changed', '作業ブランチが外部で変更された');
     }
     let all = await refresh(), own = all.filter(w => w.provider === provider), why = all?.reasons?.[provider];
-    // 一時的な読み取り失敗は1回だけ読み直す。タダの blip で ticks=0 failed にすると、
-    // 15分後の次回も同じ窓で失敗して detector が「レーン全滅」を起票してしまう。
-    if (!own.length && isTransientWindowReadError(why)) {
-      log(`${provider}: window read failed (${why}); retry 1/1`);
-      await (context.sleep ?? defaultSleep)(context.windowReadRetryDelayMs ?? 2000);
+    // 一時的な読み取り失敗は間隔を空けて読み直す。2秒1回だけだと 429 が続く間に ticks 消化後の
+    // 確認で failed になり、2026-10-24T03:54Z に再発した。それでも読めなければ failed ではなく
+    // deferred（非終端・次回再試行）で止め、detector に「レーン全滅」と誤判定させない。
+    const delays = context.windowReadRetryDelaysMs ?? [2000, 15_000, 30_000];
+    for (let i = 0; !own.length && isTransientWindowReadError(why) && i < delays.length; i++) {
+      log(`${provider}: window read failed (${why}); retry ${i + 1}/${delays.length}`);
+      await (context.sleep ?? defaultSleep)(delays[i]);
       all = await refresh(); own = all.filter(w => w.provider === provider); why = all?.reasons?.[provider];
     }
+    if (!own.length && isTransientWindowReadError(why)) return stopWith('deferred', 'window-unreadable', `利用窓を読めない一時障害のため次回へ延期: ${why}`);
     usedAfter = own.find(w => w.window === decision.window)?.usedPercent ?? null;
     if ((provider === 'claude' && !['5h', '7d'].every(k => own.some(w => w.window === k))) || !own.length || own.some(w => !Number.isFinite(w.resetsAt) && w.usedPercent !== 0 && !w.exhausted)) return stopWith('failed', 'window-info', `利用窓情報が不足または不正: ${JSON.stringify(own)}${why ? ` (${why})` : ''}`);
     if (own.some(w => w.exhausted)) return stopWith('exhausted', 'quota-exhausted', '利用枠を使い切った');

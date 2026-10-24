@@ -444,11 +444,32 @@ export function markTodoDone(md, todoText, note) {
 export function isTodoAlreadyDone(md, todoText) {
   const firstLine = String(todoText).split(/\r?\n/, 1)[0];
   if (!firstLine.trim()) return false;
+  const source = String(md);
   const escaped = firstLine.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   // 2026-09-28: 完了印の書き方が `~~…~~` 以外（`[完了 …] 本文`）でも「済み」と判定する。
   // 印の形が増えるたびに再実行保護が片方だけ効かなくなるのを避ける。
   const lineRe = new RegExp(`^\\s*\\d+[.)、]\\s+(?:~~${escaped}~~|\\[完了[^\\]]*\\]\\s+${escaped})`, 'm');
-  return lineRe.test(String(md));
+  if (lineRe.test(source)) return true;
+  // 2026-10-25 実測: バッチ選定（15:30Z）の後に別セッションが該当行の**行末**へ注記と
+  // 「→ ✅ 完了」を足したため、原文の完全一致では完了を見失い、既に片付いた TODO に
+  // セッションを1本消費した（runs/2026-10-25-manifest.json の selectedTodos[5]
+  // = notify-kim:961e… を run 2026-10-25-6 が実行）。番号を除いた本文を比べ、原文と
+  // ほぼ同一（注記の挿入分だけ差）で完了印のある行があれば起動しない。
+  // 40文字キーで比べると同文頭の別TODO（同夜の notify-kim 2件など）まで巻き込むため、
+  // 共通接頭辞の長さで判定する。
+  const normalize = value => String(value).replace(/[\*~`]/g, '').replace(/[\s　]+/g, '');
+  const original = normalize(firstLine);
+  if (!original) return false;
+  const hasDoneMark = body => /~~[^~]*~~/.test(body) || /^(?:\*\*)?\s*(?:\[完了|\[[xX]\]|✅)/.test(body);
+  return source.split(/\r?\n/).some((line) => {
+    const body = line.replace(/^\s*\d+[a-z]?[.)、]\s*/i, '');
+    if (body === line || !hasDoneMark(body)) return false; // 番号付きの TODO 行だけを対象にする
+    const current = normalize(body);
+    let shared = 0;
+    const limit = Math.min(original.length, current.length);
+    while (shared < limit && original[shared] === current[shared]) shared += 1;
+    return shared >= Math.min(original.length, 40) && shared >= original.length * 0.9;
+  });
 }
 
 // 台帳タスクも同じ穴が空く。選定（0:30）〜起動の間に、シート側の完了や

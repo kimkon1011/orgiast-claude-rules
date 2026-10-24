@@ -686,8 +686,18 @@ export function recordLaneMode(mode, sandbox, { home = process.env.ORGIAST_HOME 
   try { state = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { if (e.code !== 'ENOENT') throw e; }
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = file + '.' + process.pid + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify({ ...state, codex: { mode, sandbox, verifiedAt: now.toISOString() } }, null, 2) + '\n');
-  fs.renameSync(tmp, file);
+  const body = JSON.stringify({ ...state, codex: { mode, sandbox, verifiedAt: now.toISOString() } }, null, 2) + '\n';
+  fs.writeFileSync(tmp, body);
+  // Windows では他プロセス(並行 codex-do・ウイルス対策)が開いていると rename が EPERM/EBUSY になる。
+  // ただの記録なので短く再試行し、駄目なら直接上書きし、それも駄目なら諦めて起動を止めない(2026-10-24 実測)。
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try { fs.renameSync(tmp, file); return; } catch (e) {
+      if (!['EPERM', 'EBUSY', 'EACCES'].includes(e.code)) throw e;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50 * (attempt + 1));
+    }
+  }
+  try { fs.writeFileSync(file, body); } catch (e) { console.error(`[codex-do] lane-mode.json を記録できませんでした(${e.code})。起動は続けます`); }
+  try { fs.unlinkSync(tmp); } catch {}
 }
 
 export function wslCodexLaunchPlan({ distroFound, codexPresent, versionOk, installAttempted, retried, nativeAvailable = false, requireWsl = false, allowNative = false }) {

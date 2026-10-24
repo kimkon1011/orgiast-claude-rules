@@ -1,6 +1,8 @@
 {
   "version": 1,
   "entries": [
+    {"path": "tools/lib/owner-identity.mjs", "scope": "fleet", "step": "hook:auto-progress-inbox", "reason": "台帳 hook の軽量な持ち主判定依存"},
+    {"path": "tools/lib/fleet-chase-policy.mjs", "scope": "fleet", "step": "hook:auto-progress-inbox", "reason": "hook の軽量な台帳判定依存"},
     {
       "path": "tools/register-fleet-chase.ps1",
       "scope": "kim-only",
@@ -934,6 +936,18 @@
       "path": "tools/rescue-review-findings.md",
       "scope": "kim-only",
       "reason": "ドキュメントで実行体なし（~/.claude 設定名の記載による誤検出を許容）"
+    },
+    {
+      "path": "tools/kim-awaiting.mjs",
+      "scope": "fleet",
+      "step": "hook:auto-progress-inbox",
+      "reason": "kim の返事待ちの集約と回答配送"
+    },
+    {
+      "path": "tools/kim-awaiting-context.mjs",
+      "scope": "fleet",
+      "step": "hook:auto-progress-inbox",
+      "reason": "kim の返事待ちの集約と回答配送"
     }
   ]
 }

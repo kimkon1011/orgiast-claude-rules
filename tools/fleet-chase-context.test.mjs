@@ -70,6 +70,7 @@ test('decisions never instruct headless to answer, secrets are masked, malicious
   const f = fixture(t); f.add('decision', 3, 'inbound', { category: CATEGORY.decision }); f.save();
   await f.run('SessionStart', NOW, '../../escape');
   assert.match(f.outputs[0].hookSpecificOutput.additionalContext, /ヘッドレスは代行禁止/);
+  assert.match(f.outputs[0].hookSpecificOutput.additionalContext, /判断依頼は 📌 kim の返事待ち に表示済み/);
   assert.ok(!fs.existsSync(path.join(f.home, '.claude/escape.json')));
   const item = makeItem({ id: 'mail-sensitive', from: 'token=private', to: 'kim-PC', why: 'api_key=secret',
     body: 'https://discord.com/api/webhooks/123/private', createdAt: iso(NOW) }, 'inbound', NOW);

@@ -139,7 +139,7 @@ export async function resumeSession(row, { timeoutMs = 20 * 60000, home = os.hom
   const { runChild, resolveClaudeExe } = await import('./auto-session.mjs');
   const resultFile = path.join(home, '.claude', `auto-progress-resume-${String(row.sessionId).slice(0, 8)}.json`);
   fs.rmSync(resultFile, { force: true }); // Never reuse a report from an earlier attempt.
-  const prompt = `以前このセッションで宣言した「この後の自動進行」が止まっています。宣言: 「${row.promise}」。\n元の会話は ${row.transcriptPath} にあります。宣言の最終成果まで進めてください。user の判断・承認が必要な地点では、判断材料を揃えて止まり needs_user を返してください。推測で目的を広げず、他セッションの変更を上書きせず、権限や確認待ちを迂回しないでください。期限は${timeoutMs / 60000}分です。\n結果を ${resultFile} に JSON で保存: {"state":"progressed|done|needs_user|blocked","evidence":"成果物パスと検証結果、または進めない理由","artifact":"成果物パス（任意）"}`;
+  const prompt = `以前このセッションで宣言した「この後の自動進行」が止まっています。宣言: 「${row.promise}」。\n${row.kimAnswer ? `kim の返事: 「${row.kimAnswer}」。これを前提に続きを進めてください。\n` : ''}元の会話は ${row.transcriptPath} にあります。宣言の最終成果まで進めてください。user の判断・承認が必要な地点では、判断材料を揃えて止まり needs_user を返してください。推測で目的を広げず、他セッションの変更を上書きせず、権限や確認待ちを迂回しないでください。期限は${timeoutMs / 60000}分です。\n結果を ${resultFile} に JSON で保存: {"state":"progressed|done|needs_user|blocked","evidence":"成果物パスと検証結果、または進めない理由","artifact":"成果物パス（任意）"}`;
   const result = await (io.runChild ?? runChild)(io.executable ?? resolveClaudeExe(), prompt, row.cwd, row.cwd, timeoutMs, { resumeSessionId: row.sessionId });
   if (result.status !== 'success') return { outcome: 'error', reason: String(result.status) };
   let report = null; try { report = JSON.parse(fs.readFileSync(resultFile, 'utf8')); } catch { /* 成果記録なし */ }
@@ -199,6 +199,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       summary.noop += 1;
       continue;
     }
+    const answered = Boolean(row.kimAnswer && !row.resumedAt);
     const recorded = Date.parse(row.ts);
     if (!Number.isFinite(recorded)) continue;
     const unattended = isUnattendedRow(row, home);
@@ -214,17 +215,17 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       summary.inProgress += 1;
       continue;
     }
-    if (now - recorded < GRACE_MS) { summary.graced += 1; continue; }
-    if (now - recorded >= EXPIRE_MS) { patch(rowKey(row), { status: 'expired' }); summary.expired += 1; continue; }
+    if (!answered && now - recorded < GRACE_MS) { summary.graced += 1; continue; }
+    if (!answered && now - recorded >= EXPIRE_MS) { patch(rowKey(row), { status: 'expired' }); summary.expired += 1; continue; }
     summary.checked += 1;
     const evidence = gatherEvidence(row, home, io);
-    const verdict = judge(row, evidence, now, io);
+    const verdict = answered ? { verdict: 'stalled', reason: 'kim の返事を受領' } : judge(row, evidence, now, io);
     if (verdict.verdict === 'done') { patch(rowKey(row), { status: 'done', verdict: 'done', doneAt: new Date(now).toISOString(), reason: verdict.reason }); summary.done += 1; continue; }
     if (verdict.verdict === 'in_progress') { patch(rowKey(row), { verdict: 'in_progress', lastCheckedAt: new Date(now).toISOString(), reason: verdict.reason }); summary.inProgress += 1; continue; }
     summary.stalled += 1;
     patch(rowKey(row), { ...((row.resumeCount ?? 0) >= MAX_RESUMES ? { status: 'stalled' } : {}), verdict: 'stalled', lastCheckedAt: new Date(now).toISOString(), reason: verdict.reason });
     let current = { ...row };
-    const canResume = !unattended && !dryRun && summary.resumed < MAX_RESUMES_PER_RUN &&(row.resumeCount ?? 0) < MAX_RESUMES && now - (Date.parse(row.resumedAt || 0) || 0) >= RESUME_INTERVAL_MS
+    const canResume = !unattended && !dryRun && summary.resumed < MAX_RESUMES_PER_RUN &&(answered || (row.resumeCount ?? 0) < MAX_RESUMES) && now - (Date.parse(row.resumedAt || 0) || 0) >= RESUME_INTERVAL_MS
       && row.cwd && (io.cwdExists ?? fs.existsSync)(row.cwd);
     if (canResume) {
       // Persist the attempt before launching: crashes must not allow another same-day resume.

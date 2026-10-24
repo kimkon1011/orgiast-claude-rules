@@ -7,7 +7,7 @@ import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 import { readAssistantText } from './lib/assistant-text.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
-import { resolveOwner } from './notify-owner.mjs';
+import { resolveOwner } from './lib/owner-identity.mjs';
 
 const NONE = /^(?:なし|無し|ナシ|—|–|-|－|ー|―|n\/a|none)$/i;
 // 「**この後の自動進行**: text」「- この後の自動進行：text」など装飾付きにも一致させる。
@@ -132,3 +132,10 @@ export function isUnattendedRow(row, home) {
     return cwd === base || cwd.startsWith(`${base}/`);
   });
 }
+
+export const kimAction = row => {
+  const value = String(row.nextKim || '').trim();
+  const action = /^(?:(?:特に)?なし|無し|ナシ|(?:対応(?:は)?)?不要(?:です)?|(?:特に)?ありません|none|n\/a|[-—–－ー―])(?:[（(].*[）)])?[。．]?$/i.test(value) || !value ? 'なし' : value;
+  return action === 'なし' && row.status === 'waiting_user'
+    ? String(row.reason || row.resumeOutcome || '判断内容を確認してください').replace(/^needs_user:\s*/, '').slice(0, 80) : action;
+};

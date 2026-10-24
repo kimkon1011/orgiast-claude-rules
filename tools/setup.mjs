@@ -141,7 +141,9 @@ if (manifest) {
       // Let the registrar select the dedicated main anchor unless explicitly overridden.
       execFileSync(process.execPath, [path.join(scriptDir, 'register-hooks.mjs'), '--hooks-only'], {
         env: { ...process.env, ORGIAST_HOME: home },
-        timeout: 30_000, stdio: 'pipe', windowsHide: true,
+        // Registration also computes the expected hook set in a child process.
+        // Match other repairs on slow Windows/WSL filesystems.
+        timeout: 120_000, stdio: 'pipe', windowsHide: true,
       });
       const repaired = convergeAllowRules(home);
       settingsMigration = { item, status: 'OK', checked: true, repaired };

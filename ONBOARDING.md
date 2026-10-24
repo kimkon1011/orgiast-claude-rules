@@ -622,6 +622,7 @@ deny/warnはPC・ゲート・復旧手段の到達状況だけを既存通知経
 kim 宛の自動通知は「何が起きたか／次に自動でやること／kim がすること」の 3 点を必ず含む（`tools/lib/kim-notice.mjs`）。
 全件羅列・内部 ID のみの通知は禁止。
 平易化で語を削除しない（原文保持）。
+kim の返事待ちは SessionStart と各セッションで「📌 kim の返事待ち」として冒頭に表示し、答えは tools/kim-awaiting.mjs --answer で元の作業へ届ける。
 
 **1.15 完了報告で stop せず自律進行する**
 

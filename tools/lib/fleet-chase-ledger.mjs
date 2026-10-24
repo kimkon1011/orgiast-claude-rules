@@ -5,22 +5,19 @@ import { readInbox, mailCategory, hasDecisionRequest, resolveFleetLabel, findPri
 import { redactSecrets } from '../fleet-agent.mjs';
 import { listDecisions } from '../pending-decisions.mjs';
 
-export const HOUR = 3600_000;
-export const DAY = 24 * HOUR;
+import { HOUR, DAY, CATEGORY, active } from './fleet-chase-policy.mjs';
+export { HOUR, DAY, CATEGORY, active } from './fleet-chase-policy.mjs';
 // stale: 初回取込（バックフィル）で 7 日より古い依頼は自動追跡せず stale に置く。過去の未完了を一斉再送すると
 // 相手PCに古い依頼の嵐が届く（2026-10-18 実測: 23 日前の「着手不要」訂正まで 60 件）。必要なものは --revive で個別に蘇生する。
 export const POLICY = Object.freeze({ stale: 7 * DAY, resend: 3 * DAY, ownerDm: DAY,
   reminder: DAY, escalate: 2 * DAY, finalReminder: 3 * DAY, workRetry: 6 * HOUR,
   workLimit: 2, workAttempts: 5, workSeconds: 20 * 60, checkLimit: 20 });
-export const CATEGORY = Object.freeze({ decision: mailCategory({ why: '[判断依頼]' }),
-  task: mailCategory({ why: '[作業依頼]' }) });
 export const BLOCKER = /権限がない|権限なし|できません|未オプトイン|承諾コマンド|判断待ち|BLOCKED|FAILED|exit=[1-9]|マージ権限|push.*権限/i;
 export const outboundTracking = item => item.kind === 'outbound'
   || item.kind === 'rollout' && item.direction === 'outbound' && item.subkind !== 'convergence';
 export const trackedMailIds = item => item.kind === 'rollout'
   ? [...new Set([...item.chaseMailIds, ...(item.pendingSend ? [item.pendingSend.payload.id] : [])])]
   : [item.mailId, ...item.chaseMailIds];
-export const active = item => ['open', 'waiting', 'blocked'].includes(item.status);
 export const iso = time => new Date(time).toISOString();
 export const millis = value => typeof value === 'number' ? value : Date.parse(value) || 0;
 export const oldest = (a, b) => millis(a.createdAt) - millis(b.createdAt) || a.id.localeCompare(b.id);

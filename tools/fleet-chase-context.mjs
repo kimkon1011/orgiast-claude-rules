@@ -40,7 +40,7 @@ export function selectContext(ledger, { home, sessionId = '', now = Date.now() }
   for (const item of [...inbound, ...outbound]) {
     const age = Math.floor((now - millis(item.createdAt)) / DAY);
     const deferred = millis(item.deferredUntil) > now ? ` 保留中:${item.deferredUntil} ${item.deferReason.slice(0, 35)}` : '';
-    const instruction = item.category === CATEGORY.decision ? 'kim本人がDiscordで判断。ヘッドレスは代行禁止。'
+    const instruction = item.category === CATEGORY.decision ? '判断依頼は 📌 kim の返事待ち に表示済み。ヘッドレスは代行禁止。'
       : `完了: node tools/fleet-mail.mjs --reply ${item.mailId} --body-file <file>`;
     const line = item.kind === 'inbound'
       ? `受信(最古) ${age}日 from=${item.from} id=${item.mailId} why=${item.title.slice(0, 40)}${deferred} → ${instruction} ／ 保留: node tools/fleet-chase.mjs --defer ${item.id} --until +3d --reason "<理由>"\n`
@@ -53,7 +53,7 @@ export function selectContext(ledger, { home, sessionId = '', now = Date.now() }
 export async function main({ home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now,
   readStdin = readStdinWithTimeout, stdout = console.log, stderr = console.error } = {}) {
   try {
-    if (resolveFleetLabel(home) !== 'kim-PC') return;
+    if (resolveFleetLabel(home, { hostname: os.hostname() }) !== 'kim-PC') return;
     const input = JSON.parse(await readStdin(100));
     const event = input.hook_event_name;
     if (!['SessionStart', 'UserPromptSubmit'].includes(event)) return;

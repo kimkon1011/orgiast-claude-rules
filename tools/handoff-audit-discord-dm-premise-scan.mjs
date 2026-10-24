@@ -6,14 +6,20 @@ import process from 'node:process';
 import { isEntry } from './is-entry.mjs';
 
 const DM_MENTION = /(?:Discord\s*(?:の)?\s*DM|(?<![A-Za-z])DM(?![A-Za-z]))/;
-const DM_DELIVERY = /(?:DM\s*(?:で|に|を|は)?\s*(?:送付|送信|送ります|送る|送り|送って)|DM\s*の?実送信|まだ送っていません|送信不可|送れません)/;
-const INTERNAL = /(?:社内|スタッフ|社員|従業員|内部|グループ会社|本人宛|経理チーム|orgiast\.jp|toho-kogyo|宮地|木下|古川|アブドゥル|金功勇|kim)/i;
+// 「DM に説明付きで送ります」のように DM と送信語の間に修飾が入る原文（2026-10-23T18:05:50Z の
+// rule 2）を取りこぼさないため、送信語まで最大16字の間隔を許す。間隔は句点で打ち切る。
+const DM_DELIVERY = /(?:DM\s*(?:で|に|を|は)?[^\n。]{0,16}?(?:送付|送信|送ります|送る|送り|送って)|DM\s*の?実送信|まだ送っていません|送信不可|送れません)/;
+const INTERNAL = /(?:社内|スタッフ|社員|従業員|内部|グループ会社|本人宛|経理チーム|orgiast\.jp|toho-kogyo|宮地|木下|古川|アブドゥル|金功勇|白川|大平|澤山|澤田|百瀬|kim)/i;
 const COMPLETE = /(?:送信済み|送付済み|送りました|送付しました|送信しました|実送信した|読み戻し)/;
 const ROUTE_EXPLANATION = /(?:チャット本文|チャット表示|Gmail 下書き|internal-recipient|SEND_FAILED|Discord Bot トークンが見つかりません|tools\/discord-dm|再発防止の経路|handoff-audit:|規約|ルール\s*7|rule\s*7|実測[:：])/;
 const APP_FEATURE = /(?:keiri-hub|\/shoyo|賞与|アプリ|機能|フロー|cron|src\/)/;
+// 自アカウント宛の DM 到達を「送信できる証拠」にする原文（2026-10-23T18:11:08Z の rule 3）。
+// 外部宛の送信可否の証明にならないため、DM 送信の手渡しと同じ判定で拾う。
+const SELF_SEND_PROOF = /(?:(?:持ち主|自分|自アカウント|テスト用アカウント)(?:宛|宛て)[^\n。]{0,20}DM[^\n。]{0,12}(?:送信|送付|送り|送る)|DM[^\n。]{0,20}(?:持ち主|自分|自アカウント)(?:宛|宛て)[^\n。]{0,12}(?:送信|送付|送り|送る))/;
 
 export function detectLine(line) {
   if (typeof line !== 'string') return false;
+  if (SELF_SEND_PROOF.test(line) && !COMPLETE.test(line) && !ROUTE_EXPLANATION.test(line)) return true;
   return DM_MENTION.test(line)
     && DM_DELIVERY.test(line)
     && INTERNAL.test(line)
@@ -35,6 +41,10 @@ export const CONTROLS = [
   { id: 'P3', line: '本人宛 DM は送信不可のため、次回トークン設置後に送ります', want: true },
   { id: 'P4', line: '宮地さんへの Discord DM、まだ送っていません。kim さんのOKが出てから送ります', want: true },
   { id: 'P5', line: '#経理チーム のスタッフへ Discord DM を送ります', want: true },
+  // 原文（2026-10-23T18:05:50.309Z / rule 2）。DM と送信語の間に「説明付きで」が入る。
+  { id: 'P6', line: '送信: 撤収の流れと一緒に、白川さん・大平さん・澤山さんのグループ DM に説明付きで送ります。', want: true },
+  // 原文（2026-10-23T18:11:08.951Z / rule 3）。自アカウント宛の到達を送信可否の証拠にしている。
+  { id: 'P7', line: '実際の送信は、同じ部品を使う持ち主宛ての DM 送信で行いました。', want: true },
   { id: 'N1', line: '社員へ PDF を DM で送付（keiri-hub アプリの機能）', want: false },
   { id: 'N2', line: 'Discord DM で送信済みです（読み戻し確認済み）', want: false },
   { id: 'N3', line: 'tools/discord-dm.mjs は Bot トークン不在で SEND_FAILED', want: false },
@@ -42,6 +52,8 @@ export const CONTROLS = [
   { id: 'N5', line: 'Discord DM は使わない。チャット本文に完成形を表示する', want: false },
   { id: 'N6', line: '1. [handoff-audit:60e9dd3bf0e3453e] Discord DM 送信を前提にした社内連絡 — この handoff が再発していないかを実物で検証し結果を記録する（再発防止の経路: チャット表示）', want: false },
   { id: 'N7', line: '社内スタッフへ Discord DM を送りました', want: false },
+  { id: 'N8', line: '社内スタッフへ Discord DM を送る経路は tools/discord-dm.mjs（実測: /users/@me が 200）', want: false },
+  { id: 'N9', line: 'テスト用アカウント宛のメール送信で経路を確認しました', want: false },
 ];
 
 export function selftest() {

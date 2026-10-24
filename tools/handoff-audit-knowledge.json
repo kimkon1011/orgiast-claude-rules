@@ -178,5 +178,11 @@
     "route": "**2026-10-25 再検証: 再発 0・新規修正不要。** 原文は `~/.claude/quota-sweep.jsonl` の `2026-10-23T19:52:17Z` / `20:22:39Z`（claude・`reason=利用窓情報が不足または不正: [] (HTTP 429)`）。修正は #1051/#1052/#1056/#1060 で main 済み・`~/.claude/nightly-repo` HEAD `3555e85` に配備済み。`tools/quota-sweep.mjs:129-131` が一時障害を `network:`/`HTTP 408|429|5xx` に限定し、`:300-309` が 2s/15s/30s で再読→なお読めなければ `window-unreadable` の **deferred**（failed にしない）、`:468-482` が成功のみ 15s キャッシュ。実測: `2026-10-24T14:13-14:15Z` の 429 連続はリトライ 3 回後に deferred で止まり `failed(window-info)` にならなかった（`quota-sweep.log` 405-410 行）。窓（10-23T20:22:39Z 以降）の台帳 4 行に claude の window-info は 0、state の failureStreaks は claude=child-deadline/count 1・codex=window-info/count 1 で閾値 2 未満。回帰テストは `tools/quota-sweep.test.mjs:276`（429 継続→3 回再読→deferred・子プロセス 0）と `:289`（401 等は failed）に既存。codex の 1 件（`No rate_limits in latest Codex log`）は一時障害ではない別レーンで本 handoff の再発ではない。判定は `node --test tools/quota-sweep.test.mjs` と台帳の `failureKey=window-info` 抽出で行う。詳細 docs/handoff-audit-2026-10-25-quota-sweep-window-info.md",
     "confidence": "high",
     "source": "handoff-audit-nightly:6d4ea6ec4a15cedf033e41ae0f473534814990a4ce32364d57cd0ad12c885eb1 / 2026-10-25 再発検証（docs/handoff-audit-2026-10-25-quota-sweep-window-info.md）"
+  },
+  {
+    "pattern": "内部スタッフ宛DMの送信",
+    "route": "**2026-10-25 再検証（このPC=作業用011）: 再発 0。** 内部スタッフ宛は Claude が `node tools/discord-dm.mjs <名前 or メール> --body-file <path>` で送る（宛先は tools/discord-member-directory.mjs が解決、非 kim 宛は金功勇へ写し）。**トークンは PC ごとに有無が違う**: 作業用011 は ~/.claude/orgiast-discord-bot-token.txt が有効（GET /users/@me = 200 / bot ClaudeInboxBridge）で --dry-run も宛先解決まで通る。HP はトークン不在で SEND_FAILED。**使えない PC ではチャット本文に宛先／用件／本文の完成形を表示**し、内部宛 Gmail 下書きにはしない（tools/gmail-draft.mjs が通信前に exit 3）。**証拠にならないもの**: discord-dm.mjs の起動確認・--help、自アカウント（持ち主）宛の到達（2026-10-23 の原文2件がこれで違反）。再発走査は `node tools/handoff-audit-discord-dm-premise-scan.mjs --since <最後の検出時刻>`（--selftest の P6/P7 が原文、ヒットは人手分類が必須）。詳細 docs/handoff-audit-2026-10-25-internal-dm-recheck.md",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:905fe753107b298551d436825851d0f7f3c4010cf930ae6b77616371cb245325 / 1ccea7743ba0ab1b122d2cd161288bb11196304437643377d5e35f11d7646894 / 2026-10-25 再発検証（docs/handoff-audit-2026-10-25-internal-dm-recheck.md）"
   }
 ]

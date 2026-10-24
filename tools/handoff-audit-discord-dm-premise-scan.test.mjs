@@ -36,6 +36,13 @@ test('scanText truncates matching lines to 400 characters', () => {
   assert.equal(hit.line.length, 400);
 });
 
+// 2026-10-23 の原文（handoff-audit:c91e35b4bc3b7ee2「内部スタッフ宛DMの送信」）は
+// 拡張前の判定では 1 つも拾えなかった（修飾語入りの送信宣言・自アカウント宛の証拠）。
+test('原文（内部スタッフ宛DMの送信）を検出する', () => {
+  assert.equal(detectLine('送信: 撤収の流れと一緒に、白川さん・大平さん・澤山さんのグループ DM に説明付きで送ります。'), true);
+  assert.equal(detectLine('実際の送信は、同じ部品を使う持ち主宛ての DM 送信で行いました。'), true);
+});
+
 test('--selftest exits successfully', () => {
   const script = fileURLToPath(new URL('./handoff-audit-discord-dm-premise-scan.mjs', import.meta.url));
   const result = spawnSync(process.execPath, [script, '--selftest'], { encoding: 'utf8', timeout: 10_000 });

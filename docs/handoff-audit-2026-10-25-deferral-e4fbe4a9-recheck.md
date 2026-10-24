@@ -64,12 +64,14 @@ node tools/permanent-fix-deferral-scan.mjs --since 2026-10-23T07:23:09Z
 - ライブの Stop ゲート `tools/next-action-gate.mjs` にも同判定が配線されている。
 - 本記録の数値（14 + 3 行）は、この着地済み検出器で再走査して得たもの。
 
-### 残る条件（未了）
+### 残る条件（人の操作は不要）
 
 - 本番の Stop hook と夜間監査が実行する `~/.claude/nightly-repo` は測定時点で `c973dea` のまま/
-  `isLandingDeferral` が 0 件だった。マージ後の同期（`onboarding-sync` / `git pull --ff-only`）が
-  済むまで、本番経路では同型を検出できない。**同期後の初回 nightly で hits が増えることが、
-  検出器が効いていることの本番実測**になる（コード変更は不要）。
+  `isLandingDeferral` が 0 件だった。ただし `~/.claude/tools/nightly-bootstrap.ps1:170-177` は
+  `fetch origin main` → `checkout --detach origin/main` → `reset --hard origin/main` を
+  ツリーがクリーンなとき実行する（nightly-repo はクリーンであることを実測）。
+  ∴ **次回 bootstrap で `89f3eea` に同期し、追加の人の操作なしに本番経路へ届く。**
+  **同期後の初回 nightly でこの型の hits が増えることが、検出器が効いていることの本番実測**になる。
 - 修正後の走査でも 10-25 の再発は 0 行（台帳の最終更新 2026-10-24T19:33Z 時点）。
 
 ## 4. 操作の範囲

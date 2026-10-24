@@ -195,6 +195,15 @@ export function quotaSweepProgressRow(row = {}) {
   return Number(row.in) > 0 || Number(row.out) > 0;
 }
 
+// quota-sweep は子処理が成果を返した後の終了処理で失敗しても status:'failed' を記録する。
+// 2026-10-23/24 実測の quota-sweep:claude は failed でも in/out が
+// 62/19609、172/35469 あり、レーン全滅ではなく「作業後に失敗」した行だった。
+export function quotaSweepPartialProgressRow(row = {}) {
+  return String(row?.provider ?? '').startsWith('quota-sweep:')
+    && String(row?.status ?? '').toLowerCase() === 'failed'
+    && (Number(row.in) > 0 || Number(row.out) > 0);
+}
+
 // quota-sweep の status は停止理由そのもの。`failed` 以外（deadline/ceiling/exhausted/no-goal 等）は
 // レーンが正常に判断して止まった記録で、トークン0でも故障ではない。これを含めると
 // 「窓が無いので見送った」が3回続いただけで lane_outage_unrepaired(high) になる
@@ -466,8 +475,16 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
   }
   for (const [provider, rows] of providers) {
     // llm-ask は status:'ok'、cheap-code は ok、codex-do は終了状態と出力を記録する。
-    const succeeded = rows.some(row => (normalizeExecutorStatus(row) === 'ok' && Number(row.out) > 0) || quotaSweepProgressRow(row));
-    if (succeeded) continue;
+    const partialProgress = rows.filter(quotaSweepPartialProgressRow);
+    const succeeded = rows.some(row => (normalizeExecutorStatus(row) === 'ok' && Number(row.out) > 0) || quotaSweepProgressRow(row)) || partialProgress.length > 0;
+    if (succeeded) {
+      if (partialProgress.length > 0) {
+        const times = partialProgress.map(row => row.t).sort((a, b) => Date.parse(a) - Date.parse(b));
+        findings.push({ id: 'quota_sweep_failed_after_progress', provider, severity: 'low', title: `${provider} は作業後に失敗（レーン全滅ではない・要観察）`,
+          evidence: [`${partialProgress.length}件`, `最初 ${times[0]}`, `最後 ${times.at(-1)}`, ...reasonTop(partialProgress)] });
+      }
+      continue;
+    }
     // 全滅の分母は「実際に投げた回(attempts)」。cooldown 行は上限中で投げなかった記録なので
     // 分母から外す。外さないと上限到達の実体が「N件すべて失敗」の high 未修理全滅に見える
     // (2026-10-13 診断: glm の11件 = cooldown 5件 + http_429 6件)。

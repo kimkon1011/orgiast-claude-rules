@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { parseHandoff } from './auto-session.mjs';
-import { applyAutoHeal, authRestoredAfter, collectFindings, dedupeLimitEvents, emptyOutputReason, isCooldownSkippedRow, isEmptyDiffEscalationRow, isQuotaLimitedRow, lowYieldBackends, metricFromLaterWindow, parseRateLimitsFromText, policyStallAttempts, quotaSweepProgressRow, readCodexUsedPercent, timeoutWasteSummary, upsertFixTasks, windowResetsAfterLimit } from './delegation-health-check.mjs';
+import { applyAutoHeal, authRestoredAfter, collectFindings, dedupeLimitEvents, emptyOutputReason, isCooldownSkippedRow, isEmptyDiffEscalationRow, isQuotaLimitedRow, lowYieldBackends, metricFromLaterWindow, parseRateLimitsFromText, policyStallAttempts, quotaSweepPartialProgressRow, quotaSweepProgressRow, readCodexUsedPercent, timeoutWasteSummary, upsertFixTasks, windowResetsAfterLimit } from './delegation-health-check.mjs';
 
 const NOW = new Date('2026-09-09T12:00:00.000Z');
 const homes = [];
@@ -766,6 +766,34 @@ test('quota-sweep:codex は失敗の後に exhausted(トークン消費)が1件�
   write(dir, 'executor-usage.jsonl', failed.map(row).join(''));
   const outage = collectFindings({ home: dir, now: NOW }).find(f => f.id === 'lane_outage_unrepaired');
   assert.equal(outage.provider, 'quota-sweep:codex'); assert.equal(outage.severity, 'high');
+});
+test('quota-sweep:claude は failed でも入出力があれば部分進捗として low で可視化する', () => {
+  const dir = home();
+  const rows = [
+    { t: '2026-09-09T10:02:00Z', provider: 'quota-sweep:claude', status: 'failed', in: 62, out: 19609, reason: '終了処理に失敗' },
+    { t: '2026-09-09T10:00:00Z', provider: 'quota-sweep:claude', status: 'failed', in: 172, out: 35469, reason: '終了処理に失敗' },
+    { t: '2026-09-09T10:01:00Z', provider: 'quota-sweep:claude', status: 'failed', in: 1, out: 0, reason: '後処理に失敗' }
+  ];
+  write(dir, 'executor-usage.jsonl', rows.map(row).join(''));
+  assert.ok(rows.every(quotaSweepPartialProgressRow));
+  const findings = collectFindings({ home: dir, now: NOW });
+  assert.equal(findings.some(f => f.id === 'lane_outage_unrepaired'), false);
+  const partial = findings.find(f => f.id === 'quota_sweep_failed_after_progress');
+  assert.equal(partial?.severity, 'low');
+  assert.equal(partial?.provider, 'quota-sweep:claude');
+  assert.equal(partial?.fixTask, undefined);
+  assert.deepEqual(partial?.evidence.slice(0, 3), ['3件', '最初 2026-09-09T10:00:00Z', '最後 2026-09-09T10:02:00Z']);
+});
+test('quota-sweep:claude の failed 3件が入出力ゼロなら従来どおり high の全滅にする', () => {
+  const dir = home();
+  const rows = [0, 1, 2].map(i => ({ t: `2026-09-09T10:0${i}:00Z`, provider: 'quota-sweep:claude', status: 'failed', in: 0, out: 0, reason: '子処理に失敗' }));
+  write(dir, 'executor-usage.jsonl', rows.map(row).join(''));
+  assert.ok(rows.every(item => !quotaSweepPartialProgressRow(item)));
+  const findings = collectFindings({ home: dir, now: NOW });
+  const outage = findings.find(f => f.id === 'lane_outage_unrepaired');
+  assert.equal(outage?.provider, 'quota-sweep:claude');
+  assert.equal(outage?.severity, 'high');
+  assert.equal(findings.some(f => f.id === 'quota_sweep_failed_after_progress'), false);
 });
 test('quota-sweep の失敗行は reason を証跡に出す（no_output と誤診しない）', () => {
   const dir = home();

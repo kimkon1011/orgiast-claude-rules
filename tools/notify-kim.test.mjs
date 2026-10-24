@@ -90,6 +90,18 @@ test('原因・対処の欠落は既存TODOへ起票、日時・回数が変わ�
   assert.equal((await notifyKim('収集失敗 2026-10-23 4回', { ...s.options, now: 86400000 })).delivered, 'dm');
   assert.equal(fs.readFileSync(path.join(dir, '.claude/next-session.md'), 'utf8').match(/1\. \[ \]/g).length, 1);
 });
+test('delegation-health通知はquota割合とtickだけが変わっても修復TODOを増やさない', async () => {
+  const dir = home(), s = sender(dir);
+  const notice = (before, after, tick) => [
+    `claude/5h ${before}% → ${after}% tick: ${tick}`,
+    '[delegation-health:lane_outage_unrepaired]',
+    'quota-sweep:claude が直近 4 件すべて失敗している。原因: 不明。対処: 未定',
+  ].join('\n');
+  assert.equal((await notifyKim(notice(5, 5, 0), { ...s.options, now: 0 })).delivered, 'dm');
+  assert.equal(fs.readFileSync(path.join(dir, '.claude/next-session.md'), 'utf8').match(/1\. \[ \]/g).length, 1);
+  assert.equal((await notifyKim(notice(17, 17, 8), { ...s.options, now: 1000 })).delivered, 'suppressed');
+  assert.equal(fs.readFileSync(path.join(dir, '.claude/next-session.md'), 'utf8').match(/1\. \[ \]/g).length, 1);
+});
 test('原因か対処の片方だけでも起票、両方がある場合は起票不要', async () => {
   for (const tail of ['原因: DNS不通', '対処: 再実行済み', '原因:\n対処: 再実行済み', '原因: DNS不通\n対処: 再実行済み']) {
     const dir = home(), s = sender(dir);

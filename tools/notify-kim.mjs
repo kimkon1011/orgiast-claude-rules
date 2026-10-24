@@ -68,7 +68,7 @@ function isSuccessfulResumeReport(text) {
   return RESUME_REPORT.test(text) && RESUME_ROW.test(text) && !RESUME_ERROR.test(text)
     && !text.includes('連続2件エラーのため今晩は中止');
 }
-const normalizeFailure = text => String(text).replace(/\d{4}-\d{2}-\d{2}(?:[T ][\d:.]+Z?)?/g, '<日時>').replace(/\d+\s*(?:回|件|日|時間|分|秒)/g, '<回数>').replace(/\s+/g, ' ').trim();
+const normalizeFailure = text => String(text).replace(/\d{4}-\d{2}-\d{2}(?:[T ][\d:.]+Z?)?/g, '<日時>').replace(/\d+\s*(?:回|件|日|時間|分|秒)/g, '<回数>').replace(/\d+(?:\.\d+)?%/g, '<割合>').replace(/\btick\s*:\s*\d+\b/gi, 'tick: <番号>').replace(/\s+/g, ' ').trim();
 
 // Use the existing next-session TODO consumer; no separate repair queue.
 export async function notifyKim(text, options = {}) {

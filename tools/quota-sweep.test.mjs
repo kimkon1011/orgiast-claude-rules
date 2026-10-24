@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { filterWindowsForCurrentAuth, isTransientWindowReadError, commandRunner, queueRepeatedFailure, writeWorktreePointer, prepareTree, preserveDirtyTree, DEFAULT_GOAL, MAX_TICKS, selectGoal, tickPrompt, contractPrompt, canRunWindow, interactiveClaude, main, makeLedger, runSweep, parseOutput, acquireLock, readWorktreePointer } from './quota-sweep.mjs';
+import { filterWindowsForCurrentAuth, isTransientWindowReadError, commandRunner, queueRepeatedFailure, queueRepeatedDeferral, writeWorktreePointer, prepareTree, preserveDirtyTree, DEFAULT_GOAL, MAX_TICKS, selectGoal, tickPrompt, contractPrompt, canRunWindow, interactiveClaude, main, makeLedger, runSweep, parseOutput, acquireLock, readWorktreePointer } from './quota-sweep.mjs';
 import { runBounded, killTree } from './lib/quota-sweep-process.mjs';
 import { interactiveCodex, wslPath } from './lib/quota-sweep-host.mjs';
 import { decideSweep, resetKey, sameReset } from './lib/quota-windows.mjs';
@@ -471,6 +471,21 @@ test('repeated cause enqueues one existing handoff task across reset windows', t
   assert.equal(fs.readFileSync(file, 'utf8'), text);
   queueRepeatedFailure(home, state, { ...row, failureKey: null });
   assert.equal(state.failureStreaks.claude.count, 0);
+});
+test('consecutive deferred enqueues a separate handoff without touching failure streaks', t => {
+  const home = temp(t); fs.mkdirSync(path.join(home, '.claude'));
+  const state = {}, file = path.join(home, '.claude/next-session.md');
+  const row = { provider: 'claude', stopOutcome: 'deferred', failureKey: null, reason: 'HTTP 429' };
+  queueRepeatedDeferral(home, state, row); queueRepeatedDeferral(home, state, row);
+  assert.equal(fs.existsSync(file), false);
+  assert.deepEqual(state.deferredStreaks.claude, { count: 2 });
+  assert.equal(state.failureStreaks, undefined);
+  queueRepeatedDeferral(home, state, row);
+  const text = fs.readFileSync(file, 'utf8');
+  assert.match(text, /quota-sweep claude: deferred が 3 回連続/);
+  assert.match(text, /HTTP 429/);
+  queueRepeatedDeferral(home, state, { ...row, stopOutcome: 'final' });
+  assert.equal(state.deferredStreaks.claude.count, 0);
 });
 test('persistent EPERM on opening pointer recovers through replacement', t => {
   const file = path.join(temp(t), '.git'); fs.writeFileSync(file, 'gitdir: /absolute\n');

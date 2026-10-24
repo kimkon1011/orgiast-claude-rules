@@ -246,6 +246,22 @@ export function queueRepeatedFailure(home, state, row) {
   if (after !== before) writeHandoff(file, after);
 }
 
+// deferred は失敗ではない（failureStreaks を汚さず detector にレーン全滅と誤判定させない）が、
+// これが続くと窓が読めないままレーンが一度も走らない状態が静かに続く。delegation-health は
+// quota-sweep の status が failed 以外を失敗として扱わないため、jsonl を人が見るまで気付けない。
+// 失敗検知とは別のカウンタで数え、閾値で次回セッションのTODOに渡す。
+export function queueRepeatedDeferral(home, state, row) {
+  state.deferredStreaks ??= {};
+  const count = row.stopOutcome === 'deferred' ? (state.deferredStreaks[row.provider]?.count || 0) + 1 : 0;
+  state.deferredStreaks[row.provider] = { count };
+  if (count < 3) return;
+  const file = path.join(home, '.claude', 'next-session.md');
+  const before = read(file);
+  const after = enqueueTodos(before, [{ pattern: `quota-sweep ${row.provider}: deferred が ${count} 回連続`,
+    route: `quota-sweep.jsonl の deferred 行（${row.reason || '理由なし'}）を確認し、利用窓が読めない原因を特定して回帰テスト付きで修正しPRを作成する` }]);
+  if (after !== before) writeHandoff(file, after);
+}
+
 export async function runSweep(decision, context) {
   const { home, state, save, windows: refresh, active, log, env, now = Date.now, spawnImpl = spawnSync, runChild = runBounded, notify = notifyKim } = context;
   const run = context.command ?? commandRunner(spawnImpl, log), provider = decision.provider;
@@ -401,7 +417,7 @@ export async function runSweep(decision, context) {
     if (stopOutcome === 'failed') failureKey ||= 'unknown-failure';
     else failureKey = null;
     const row = makeLedger({ decision: { ...decision, usedPercent: usedBefore }, startedAt, endedAt: now(), usedAfter, ticks: record.ticks, outcome, ...selection, branch, prUrl, reason, failureKey, stopOutcome, deliveryError: record.deliveryError || null });
-    try { queueRepeatedFailure(home, state, row); }
+    try { queueRepeatedFailure(home, state, row); queueRepeatedDeferral(home, state, row); }
     catch (error) { log(`修復タスク起票失敗: ${error.message}`); row.remediationError = error.message; }
     Object.assign(record, row); save();
     fs.appendFileSync(path.join(home, '.claude', 'quota-sweep.jsonl'), JSON.stringify(row) + '\n');

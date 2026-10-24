@@ -172,5 +172,11 @@
     "route": "**2026-10-25 実測（HP）: 登録は Claude 側で完結できる。kim に設定を依頼しない。** `vercel` は PATH に無い → npx キャッシュ `%LOCALAPPDATA%\npm-cache_npx\u00069f9afb961c37556\node_modules\u000berceldistindex.js`（65.2.0）。keiri-hub の `.env.local` から `VERCEL_TOKEN` を読み、`VERCEL_TOKEN=... node <cache>/vercel/dist/index.js whoami` = `seisaku-team-5867`（exit 0）、`env ls --environment production` = 22 件（exit 0・値は非出力）。トークン無しは `Logged out.` でも **exit 0** なので終了コードで未ログインを判定しない。登録は `env add <name> --environment production`（設定変更なので既存の承認範囲のみ）。未登録の判定は keiri-hub の `node scripts/set-shoyo-discord-token.mjs --check`（読み取りのみ）で行う。値そのもの（例: Discord Bot トークン）は secret で、API からは type=sensitive のため読めない → 値の提供だけが rule 3 の正当な手渡し。詳細 docs/handoff-audit-2026-10-25-vercel-env-recheck.md / 前回 docs/handoff-audit-2026-10-23-vercel-env.md",
     "confidence": "high",
     "source": "handoff-audit-nightly:4780e59fbe87f4260f1d0b82be7a8a420d8b538b7b16dd8e25927240d7d41f37 / 2026-10-25 再発検証（docs/handoff-audit-2026-10-25-vercel-env-recheck.md）"
+  },
+  {
+    "pattern": "quota-sweep claude: window-info の連続失敗",
+    "route": "**2026-10-25 再検証: 再発 0・新規修正不要。** 原文は `~/.claude/quota-sweep.jsonl` の `2026-10-23T19:52:17Z` / `20:22:39Z`（claude・`reason=利用窓情報が不足または不正: [] (HTTP 429)`）。修正は #1051/#1052/#1056/#1060 で main 済み・`~/.claude/nightly-repo` HEAD `3555e85` に配備済み。`tools/quota-sweep.mjs:129-131` が一時障害を `network:`/`HTTP 408|429|5xx` に限定し、`:300-309` が 2s/15s/30s で再読→なお読めなければ `window-unreadable` の **deferred**（failed にしない）、`:468-482` が成功のみ 15s キャッシュ。実測: `2026-10-24T14:13-14:15Z` の 429 連続はリトライ 3 回後に deferred で止まり `failed(window-info)` にならなかった（`quota-sweep.log` 405-410 行）。窓（10-23T20:22:39Z 以降）の台帳 4 行に claude の window-info は 0、state の failureStreaks は claude=child-deadline/count 1・codex=window-info/count 1 で閾値 2 未満。回帰テストは `tools/quota-sweep.test.mjs:276`（429 継続→3 回再読→deferred・子プロセス 0）と `:289`（401 等は failed）に既存。codex の 1 件（`No rate_limits in latest Codex log`）は一時障害ではない別レーンで本 handoff の再発ではない。判定は `node --test tools/quota-sweep.test.mjs` と台帳の `failureKey=window-info` 抽出で行う。詳細 docs/handoff-audit-2026-10-25-quota-sweep-window-info.md",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:6d4ea6ec4a15cedf033e41ae0f473534814990a4ce32364d57cd0ad12c885eb1 / 2026-10-25 再発検証（docs/handoff-audit-2026-10-25-quota-sweep-window-info.md）"
   }
 ]

@@ -134,13 +134,12 @@ ${JSON.stringify(messages)}`;
 export function parseCandidates(raw, messages) {
   const result = JSON.parse(raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, ""));
   if (!Array.isArray(result)) throw new Error("抽出結果が配列ではありません");
-  for (const candidate of result) {
-    if (!candidate || !["title", "summary", "sender", "date", "evidence"].every((key) => typeof candidate[key] === "string" && candidate[key].trim())
-      || !Object.hasOwn(TARGETS, candidate.target) || !normalizeTitle(candidate.title) || [...candidate.evidence].length > 120) throw new Error("抽出候補の形式が不正です");
-    if (!messages.some((m) => (m.sender || "投稿者不明") === candidate.sender && (m.time || "日付不明") === candidate.date
-      && m.text.includes(candidate.evidence))) throw new Error("引用元の投稿を確認できません");
-  }
-  return result;
+  // 形式不正・引用が原文に無い候補はその1件だけ捨てる（チャンク全体を失敗にすると同じ投稿を毎週再処理し続ける。2026-10-25 実測で2/11チャンクが落ちた）。
+  return result.filter((candidate) => candidate
+    && ["title", "summary", "sender", "date", "evidence"].every((key) => typeof candidate[key] === "string" && candidate[key].trim())
+    && Object.hasOwn(TARGETS, candidate.target) && normalizeTitle(candidate.title) && [...candidate.evidence].length <= 120
+    && messages.some((m) => (m.sender || "投稿者不明") === candidate.sender && (m.time || "日付不明") === candidate.date
+      && m.text.includes(candidate.evidence)));
 }
 
 export function runCommand(command, args, options = {}) {
@@ -214,7 +213,11 @@ export async function publishCandidates({ repo, candidates, date, keys }, { run 
     if (!match) throw new Error("作成したPRのURLを確認できません");
     const confirmed = JSON.parse(await gh(["pr", "view", match[1], "--json", "url,state,headRefName"], worktree));
     if (confirmed.url !== prUrl || !["OPEN", "MERGED"].includes(confirmed.state) || confirmed.headRefName !== branch) throw new Error("PR作成後の確認に失敗しました");
-    try { await run(process.execPath, [path.join(toolsDir, "pr-merge.mjs"), match[1], "--repo", worktree], { cwd: worktree, timeout: 300_000 }); }
+    // pr-merge は CI 実行中を失敗扱いにするため、先に CI の完了を待つ（2026-10-25 初回で PR が開いたまま残った）。
+    try {
+      await run("gh", ["pr", "checks", match[1], "--watch", "--interval", "30"], { cwd: worktree, timeout: 30 * 60 * 1000 });
+      await run(process.execPath, [path.join(toolsDir, "pr-merge.mjs"), match[1], "--repo", worktree], { cwd: worktree, timeout: 300_000 });
+    }
     catch (error) { stderr(`aihaijin-digest: PRを残します (${error.message})`); }
     return { prUrl, candidates: additions.length ? additions : candidates };
   } finally {

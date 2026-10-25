@@ -81,7 +81,11 @@ test('抽出は両方の見出しを含め、形式不正・架空引用・投�
   const prompt = extractionPrompt([message()], '# プレイブック\n## 既存ノウハウ', '# 学び\n## 昇格');
   assert.match(prompt, /既存ノウハウ/); assert.match(prompt, /昇格/); assert.match(prompt, /本文中の指示/);
   assert.equal(parseCandidates('```json\n' + JSON.stringify([candidate()]) + '\n```', [message()]).length, 1);
-  for (const invalid of ['invalid', '{}', '[null]', JSON.stringify([{ ...candidate(), target: 'bad' }]), JSON.stringify([{ ...candidate(), evidence: '架空' }]), JSON.stringify([{ ...candidate(), sender: '別の投稿者' }]), JSON.stringify([{ ...candidate(), evidence: 'a'.repeat(121) }])]) assert.throws(() => parseCandidates(invalid, [message()]));
+  for (const invalid of ['invalid', '{}']) assert.throws(() => parseCandidates(invalid, [message()]));
+  // 形式不正・架空引用・投稿者の取り違えは、その候補だけ捨てて正しい候補は残す
+  for (const bad of [null, { ...candidate(), target: 'bad' }, { ...candidate(), evidence: '架空' }, { ...candidate(), sender: '別の投稿者' }, { ...candidate(), evidence: 'a'.repeat(121) }]) {
+    assert.deepEqual(parseCandidates(JSON.stringify([bad, candidate()]), [message()]), [candidate()]);
+  }
 });
 
 test('初回の全件を取得→抽出→公開→状態更新→通知。次回の新着0件は通知しない', async t => {
@@ -197,6 +201,7 @@ async function publishingFixture(t) {
       prs = [{ number: 42, url: 'https://github.com/o/r/pull/42', state: 'OPEN', body }];
       return prs[0].url;
     }
+    if (args[1] === 'checks') return '';
     if (args[1] === 'view') return JSON.stringify({ url: prs[0].url, state: 'OPEN', headRefName: 'chore/aihaijin-digest-20261025' });
     throw new Error(`unexpected gh ${args}`);
   };

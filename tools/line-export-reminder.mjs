@@ -52,7 +52,7 @@ function readSentAt(file) {
   }
 }
 
-async function sendDiscordDm({ home, message, fetchImpl = fetch }) {
+export async function sendDiscordDm({ home, message, fetchImpl = fetch }) {
   let token = process.env.DISCORD_BOT_TOKEN?.trim();
   if (!token) {
     try { token = fs.readFileSync(path.join(home, '.claude', 'orgiast-discord-bot-token.txt'), 'utf8').trim(); }
@@ -75,6 +75,7 @@ async function sendDiscordDm({ home, message, fetchImpl = fetch }) {
     method: 'POST', headers, body: JSON.stringify({ content: message }), signal: AbortSignal.timeout(20_000),
   });
   if (!sent.ok) throw new Error(`DM送信が HTTP ${sent.status}`);
+  return { ...(await sent.json()), channel_id: channelId };
 }
 
 export async function main(argv = process.argv.slice(2), options = {}) {

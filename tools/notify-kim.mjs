@@ -8,6 +8,7 @@ import { isEntry } from './is-entry.mjs';
 import { toPlainJa } from './lib/plain-ja.mjs';
 import { classifyKimDm } from './lib/kim-dm-policy.mjs';
 import { redactSecrets } from './webhook-health.mjs';
+import { annotateAccounts } from './url-account-gate.mjs';
 
 const API = 'https://discord.com/api/v10';
 const MAX_CONTENT = 2_000;
@@ -198,7 +199,8 @@ export async function deliverKim(text, {
   const resolvedToken = token !== undefined ? token : resolveDiscordBotToken(home);
   // kim 宛の全通知を、システムを知らない人でも読める日本語にしてから送る。
   // 失敗しても送信は止めない(plainJaImpl は例外を投げない契約)。
-  const translated = plainJa ? await plainJaImpl(String(text ?? '')) : text;
+  // 平易化の書き換えでアカウント表記が落ちることがあるため、書き換え後の本文で補う。
+  const translated = annotateAccounts(plainJa ? await plainJaImpl(String(text ?? '')) : text);
   const body = suffix && !allowHumanRequest ? String(translated).split('\n').filter(line => !HANDOFF.test(line)).join('\n') : translated;
   const content = suffix ? String(body).slice(0, Math.max(0, MAX_CONTENT - suffix.length)) + suffix : clipDiscordContent(body);
   let dmReason = '';

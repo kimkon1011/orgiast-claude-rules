@@ -869,6 +869,30 @@
       "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
     },
     {
+      "path": "tools/url-account-gate.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "notify-kim が送信直前に URL の開くアカウントを補う実行時 import 依存（再帰検査対象）"
+    },
+    {
+      "path": "tools/provider-catalog.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "url-account-gate の実行時 import 依存（再帰検査対象）"
+    },
+    {
+      "path": "tools/ai-subscription-catalog.json",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "provider-catalog が import 時に読む外部サービスの所有アカウント台帳"
+    },
+    {
+      "path": "tools/lib/assistant-text.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "url-account-gate の実行時 import 依存（再帰検査対象）"
+    },
+    {
       "path": "tools/pending-decisions.mjs",
       "scope": "fleet",
       "step": "task:fleet-mail",

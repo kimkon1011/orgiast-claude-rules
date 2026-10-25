@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
 import { sendDiscordDm } from './line-export-reminder.mjs';
 const SIX_HOURS = 6 * 3600_000;
-export async function probe({ base, token, fetchImpl = fetch }) {
+export async function probe({ base, token, fetchImpl = fetch, onCheck = () => {} }) {
   const problems = [];
   const checks = [
     ['manifest', '/manifest.json', {}, async r => r.status === 200 && Boolean((await r.json()).share_target)],
@@ -15,12 +15,14 @@ export async function probe({ base, token, fetchImpl = fetch }) {
     ['authenticated', '/share?healthcheck=1', { method: 'POST', headers: { Cookie: `cm_token=${token}` }, body: (() => { const f = new FormData(); f.set('probe', 'line-share-health-v1'); return f; })() }, async r => { const j = r.status === 200 ? await r.json() : {}; return j.ok === true && j.probe === 'line-share-health-v1'; }],
   ];
   for (const [name, route, options, validate] of checks) {
+    onCheck({ check: name, phase: 'start' });
     try {
       if (name === 'authenticated' && !token) throw new Error('ACCESS_TOKEN missing');
       const response = await fetchImpl(new URL(route, base), { ...options, redirect: 'manual', signal: AbortSignal.timeout(25_000) });
       if (!await validate(response)) problems.push({ key: name, detail: `HTTP ${response.status}` });
       await response.body?.cancel().catch(() => {});
-    } catch (e) { problems.push({ key: name, detail: e.message }); }
+      onCheck({ check: name, status: response.status });
+    } catch (e) { problems.push({ key: name, detail: e.message }); onCheck({ check: name, error: e.message }); }
   }
   return problems;
 }
@@ -67,7 +69,9 @@ export async function main(argv = process.argv.slice(2)) {
   const app = process.env.CLAUDE_MOBILE_DIR || path.join(home, 'Downloads', 'claude-mobile');
   createRequire(path.join(app, 'package.json'))('@next/env').loadEnvConfig(app);
   const store = process.env.LINE_STORE_DIR || path.join(home, '.claude', 'line-openchat');
-  const result = await runHealth({ home, base: process.env.LINE_SHARE_BASE_URL || 'https://claude-pc.tailc5d751.ts.net', token: process.env.ACCESS_TOKEN,
+  const onCheck = record => console.log(JSON.stringify({ at: new Date().toISOString(), ...record }));
+  onCheck({ phase: 'started', node: process.version });
+  const result = await runHealth({ home, onCheck, base: process.env.LINE_SHARE_BASE_URL || 'https://claude-pc.tailc5d751.ts.net', token: process.env.ACCESS_TOKEN,
     stateFile: path.join(store, 'share-health-state.json'), debugFile: path.join(store, 'debug.jsonl'), dryRun: argv.includes('--dry-run'),
     restart: async () => {
       if (process.platform !== 'win32') throw new Error('Windows recovery required');

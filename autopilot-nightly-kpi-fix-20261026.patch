@@ -1,0 +1,107 @@
+From ad363dfe09f43def2be53e75939620389f8b545b Mon Sep 17 00:00:00 2001
+From: Codex <codex@users.noreply.github.com>
+Date: Mon, 26 Oct 2026 08:20:54 +0900
+Subject: [PATCH] fix(nightly): preserve lookup diagnostics and qualify
+ incomplete snapshots
+
+---
+ tools/feedback-to-issues.mjs      | 10 +++++++++-
+ tools/feedback-to-issues.test.mjs | 19 ++++++++++++++++++-
+ tools/nightly-kpi.mjs             |  2 +-
+ tools/nightly-kpi.test.mjs        | 11 +++++++++++
+ 4 files changed, 39 insertions(+), 3 deletions(-)
+
+diff --git a/tools/feedback-to-issues.mjs b/tools/feedback-to-issues.mjs
+index 6fffa05..3bd299f 100644
+--- a/tools/feedback-to-issues.mjs
++++ b/tools/feedback-to-issues.mjs
+@@ -6,6 +6,7 @@ import path from 'node:path';
+ import { spawnSync } from 'node:child_process';
+ import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
+ import { isEntry } from './is-entry.mjs';
++import { redactSecrets } from './redact-secrets.mjs';
+ 
+ // アプリ名→リポの台帳。新アプリはここに1行足すと Issue 化と完了報告(feedback-done-notify)の対象に入る。
+ // 追加漏れは feedback-form-gate.mjs が本番反映時に止める(§2.11)。
+@@ -191,7 +192,14 @@ export function lookupFeedbackIssue(messageId, repo, gh, { attempts = 3, delayMs
+     let lookup;
+     try { lookup = gh(['issue','list','--repo',repo,'--state','all','--search',`"feedback-dm:${messageId}" in:body`,'--json','number,url,body','--limit','100']); }
+     catch (error) { detail = error.message; continue; }
+-    if (lookup?.error || lookup?.status !== 0) { detail = lookup?.error?.message || `status=${lookup?.status}`; continue; }
++    if (lookup?.error || lookup?.status !== 0) {
++      // Preserve the cause without copying credentials or unbounded CLI output into alerts.
++      const diagnostic = redactSecrets(String(lookup?.error?.message || lookup?.stderr || ''))
++        .replace(/https?:\/\/[^\s<>"']+/gi, '[URL REDACTED]')
++        .replace(/\s+/g, ' ').trim().slice(0, 500);
++      detail = `status=${lookup?.status}${diagnostic ? `: ${diagnostic}` : ''}`;
++      continue;
++    }
+     try { return JSON.parse(lookup.stdout); } catch (error) { detail = `invalid JSON: ${error.message}`; }
+   }
+   throw new Error(`Issue lookup failed (${detail})`);
+diff --git a/tools/feedback-to-issues.test.mjs b/tools/feedback-to-issues.test.mjs
+index 09bccd9..b0e2de2 100644
+--- a/tools/feedback-to-issues.test.mjs
++++ b/tools/feedback-to-issues.test.mjs
+@@ -250,8 +250,25 @@ test('ensureFeedbackIssue は Issue lookup が連続失敗すると理由付き
+   try {
+     assert.throws(
+       () => ensureFeedbackIssue({ message_id: 'm-fail', kind: 'bug', title: 't' }, 'o/r', { home, gh, sleep: () => {} }),
+-      /Issue lookup failed \(status=1\)/,
++      /Issue lookup failed \(status=1: HTTP 502\)/,
+     );
+     assert.equal(listCalls, 3);
+   } finally { fs.rmSync(home, { recursive: true, force: true }); }
+ });
++
++
++test('Issue lookup diagnostics redact secrets and URLs before limiting output', () => {
++  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fti-diagnostic-'));
++  const secret = 'ghp_' + 'a'.repeat(36);
++  const gh = () => ({ status: 1, stderr: `HTTP 401\n${secret} https://example.test/?credential=private ${'x'.repeat(800)}` });
++  try {
++    assert.throws(() => ensureFeedbackIssue({ message_id: 'm-diagnostic', title: 't' }, 'o/r', {
++      home, gh, sleep: () => {},
++    }), (error) => {
++      assert.match(error.message, /status=1: HTTP 401/);
++      assert.doesNotMatch(error.message, /private|a{36}|\n/);
++      assert.ok(error.message.length < 550);
++      return true;
++    });
++  } finally { fs.rmSync(home, { recursive: true, force: true }); }
++});
+diff --git a/tools/nightly-kpi.mjs b/tools/nightly-kpi.mjs
+index a8e4cfa..a676e98 100644
+--- a/tools/nightly-kpi.mjs
++++ b/tools/nightly-kpi.mjs
+@@ -275,7 +275,7 @@ const usd = (value) => value === null ? '不明' : `$${value.toFixed(2)}`;
+ export function improvementTodos(kpi, previous = null) {
+   const todos = [];
+   if (!kpi.batchRan) todos.push(`P0: 夜間バッチが起動直後に死んでログを1行も書いていない（${kpi.date}）。OrgiastNightlyBatch と同時刻に走る他タスクとの競合を疑う`);
+-  else if (!kpi.batchCompleted) todos.push(`P0: 夜間バッチが途中で停止（サマリ行なし）。最終ステップ = ${kpi.lastStep ?? '不明'}`);
++  else if (!kpi.batchCompleted) todos.push(`P0: 夜間バッチは集計時点で完了未確認（サマリ行なし・実行中の可能性あり）。最終ステップ = ${kpi.lastStep ?? '不明'}`);
+   if (kpi.failedSteps.length) todos.push(`P1: 夜間バッチのステップ失敗: ${kpi.failedSteps.join('、')}`);
+   if (kpi.noOpRate !== null && kpi.noOpRate > 0.3) todos.push(`P1: 空回り率 ${pct(kpi.noOpRate)}。完了済みTODOが引き継ぎ票に残り再配布されている。next-session.md の ✅ 済みブロックを刈る`);
+   const lowPrYieldStreak = [kpi, previous].slice(0, PR_YIELD_LOW_STREAK_DAYS).every((day) => (
+diff --git a/tools/nightly-kpi.test.mjs b/tools/nightly-kpi.test.mjs
+index 46bd35e..ccfc8bb 100644
+--- a/tools/nightly-kpi.test.mjs
++++ b/tools/nightly-kpi.test.mjs
+@@ -273,3 +273,14 @@ test('topicConcentration はJSONにもtextにも現れない', () => {
+   assert.doesNotMatch(formatText(kpi), /topicConcentration|テーマ集中/);
+   assert.match(formatText(kpi), /成果 1PR\/1セッション = 100\.0%/);
+ });
++
++
++test('an in-progress snapshot is not reported as a confirmed stopped batch', () => {
++  const prefix = '2026-10-23 07:08:48 / batch-run / ok:0件処理';
++  const base = { date: '2026-10-23', noOpRate: null, closeRate: null };
++  const pending = improvementTodos({ ...base, ...parseBatchLog(prefix) });
++  assert.match(pending.join('\n'), /集計時点で完了未確認/);
++  assert.doesNotMatch(pending.join('\n'), /途中で停止/);
++  const complete = parseBatchLog(prefix + '\n2026-10-23 07:11:22 / サマリ / nightly-batch 完了');
++  assert.deepEqual(improvementTodos({ ...base, ...complete }), []);
++});
+-- 
+2.53.0
+

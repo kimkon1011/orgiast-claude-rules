@@ -49,6 +49,11 @@ export async function runHealth(options) {
   if (ageDays === null || ageDays >= 7) problems.push({ key: 'stale-export', detail: ageDays === null ? 'export-stored record missing' : `${Math.floor(ageDays)} days since export-stored` });
   state.sent ??= {};
   const due = problems.filter(p => !state.sent[p.key] || now - state.sent[p.key] >= SIX_HOURS);
+  // Persist the diagnosis even if Discord is unavailable. Unsent alerts remain due.
+  if (!dryRun) {
+    fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+    fs.writeFileSync(stateFile, JSON.stringify({ ...state, checkedAt: now, problems, ageDays, recovery }));
+  }
   if (due.length && !dryRun) {
     await sendDm({ home: options.home, message: `⚠️ LINE共有の監視で異常を検出しました。\n${due.map(p => `${p.key}: ${p.detail}`).join('\n')}\n自動復旧: ${recovery}\n${options.base}` });
     for (const p of due) state.sent[p.key] = now;
@@ -66,7 +71,7 @@ export async function main(argv = process.argv.slice(2)) {
     stateFile: path.join(store, 'share-health-state.json'), debugFile: path.join(store, 'debug.jsonl'), dryRun: argv.includes('--dry-run'),
     restart: async () => {
       if (process.platform !== 'win32') throw new Error('Windows recovery required');
-      const p = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(app, 'scripts', 'restart-webserver.ps1')], { encoding: 'utf8', windowsHide: true, timeout: 90_000 });
+      const p = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(app, 'scripts', 'restart-webserver.ps1')], { encoding: 'utf8', windowsHide: true, timeout: 180_000 });
       if (p.error || p.status !== 0) throw new Error('ClaudeMobile-WebServer restart failed');
     },
   });

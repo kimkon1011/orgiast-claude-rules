@@ -1,0 +1,137 @@
+{
+  "timestamp": "2026-10-25T19:21:24.081Z",
+  "task": "next-session.md:a1deae0c0001310214c1",
+  "description": "[ラハイナ] 伊藤氏LINE返答・資料受領・PayPay準備書更新",
+  "status": "BLOCKED_WAITING_ON_EXTERNAL_INPUT",
+  "findings": {
+    "gmail": {
+      "kim@orgiast.jp": {
+        "totalEstimate": 2,
+        "messages": [
+          {
+            "id": "1a11560bd7b97661",
+            "date": "Wed, 07 Oct 2026 08:00:23 +0000",
+            "subject": "「【旧版・空欄あり】覚書ご相談 ー 伊藤和晃様宛（最終版を参照のこと）」の共有リクエスト",
+            "labels": [
+              "UNREAD",
+              "IMPORTANT",
+              "CATEGORY_UPDATES",
+              "INBOX"
+            ]
+          },
+          {
+            "id": "1a1102b0fe4a599c",
+            "date": "Tue, 06 Oct 2026 07:43:39 +0000",
+            "subject": "共有されたフォルダ: 「ラハイナPJ」",
+            "labels": [
+              "UNREAD",
+              "IMPORTANT",
+              "CATEGORY_UPDATES",
+              "INBOX"
+            ]
+          }
+        ]
+      },
+      "seisaku-team@orgiast.jp": {
+        "totalEstimate": 4,
+        "messages": [
+          {
+            "id": "1a16ed59710c5f8e",
+            "date": "Sat, 24 Oct 2026 09:54:13 -0700",
+            "subject": "【ラハイナ】書類のお礼と、口座・保健所・会議URL・Facebookのご連絡（10/25）",
+            "labels": [
+              "DRAFT"
+            ]
+          },
+          {
+            "id": "1a11560cc291dc20",
+            "date": "Wed, 07 Oct 2026 08:00:23 +0000",
+            "subject": "「【旧版・空欄あり】覚書ご相談 ー 伊藤和晃様宛（最終版を参照のこと）」の共有リクエスト",
+            "labels": [
+              "Label_3285627267495604910",
+              "CATEGORY_UPDATES"
+            ]
+          },
+          {
+            "id": "1a1102b1f133d84f",
+            "date": "Tue, 06 Oct 2026 07:43:39 +0000",
+            "subject": "共有されたフォルダ: 「ラハイナPJ」",
+            "labels": [
+              "UNREAD",
+              "Label_3285627267495604910",
+              "CATEGORY_UPDATES"
+            ]
+          },
+          {
+            "id": "19e1a85cd3e73672",
+            "date": "Tue, 12 May 2026 04:50:29 +0000",
+            "subject": "【署名完了】株式会社オージャスト百瀬かなう様から「【伊藤 和晃様】秘密保持契約書の署名が完了いたしました。",
+            "labels": [
+              "Label_4028150131268365656",
+              "IMPORTANT",
+              "CATEGORY_UPDATES",
+              "INBOX"
+            ]
+          }
+        ]
+      },
+      "nishi@orgiast.jp": {
+        "totalEstimate": 0,
+        "messages": []
+      }
+    },
+    "draft": {
+      "count": 1,
+      "messages": [
+        {
+          "id": "1a16ed59710c5f8e",
+          "date": "Sat, 24 Oct 2026 09:54:13 -0700",
+          "subject": "【ラハイナ】書類のお礼と、口座・保健所・会議URL・Facebookのご連絡（10/25）",
+          "to": "ito@k-ikou.co.jp",
+          "snippet": "伊藤さんお世話になっております。株式会社ラハイナの野村です。LINEの「ラハイナ PJ」と「Facebook 復旧」の内容（10/23 午前まで）を拝見し、まとめてご連絡します。 1. 書類の発送、ありがとうございます実印・銀行印・謄本1通・印鑑証明1通・印鑑カード・原始定款をレターパックでお送りいただいた件、岡崎が受け取り、実印と銀行印は金庫で保管します。謄本の追加通数は急ぎません。 2. 保険・"
+        }
+      ]
+    },
+    "driveFolders": [
+      {
+        "folderId": "1IMrLGhGHjWmo8-g8t04k9DSF8oljqwo0",
+        "folderName": "ラハイナPJ",
+        "files": [
+          {
+            "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "id": "1i-r2K_MslMSeOckkD0HT6fz_mRKaKd2o",
+            "name": "株式会社ラハイナ定款.docx",
+            "modifiedTime": "2026-10-07T02:43:18.170Z"
+          }
+        ]
+      }
+    ],
+    "calendarEvents": [
+      {
+        "id": "aho5o6ntb7k07e9pgh26f04obo_20261026T000000Z",
+        "summary": "【ラハイナ】週次オートパイロットのレポート確認（15分）",
+        "start": {
+          "dateTime": "2026-10-26T09:00:00+09:00",
+          "timeZone": "Asia/Tokyo"
+        }
+      },
+      {
+        "id": "1u9t85glrnslga6csgdi3br82o",
+        "summary": "【ラハイナ】全社ミーティング（引き継ぎ・10/26 12:00）",
+        "start": {
+          "dateTime": "2026-10-26T12:00:00+09:00",
+          "timeZone": "Asia/Tokyo"
+        },
+        "hangoutLink": "https://meet.google.com/wxc-gkav-xcb"
+      },
+      {
+        "id": "5p0qh8b28ufmotseuanuru8evs",
+        "summary": "【ラハイナ】全社mtg",
+        "start": {
+          "dateTime": "2026-10-26T12:00:00+09:00",
+          "timeZone": "Asia/Tokyo"
+        }
+      }
+    ]
+  }
+}

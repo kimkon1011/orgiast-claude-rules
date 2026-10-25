@@ -103,6 +103,10 @@ Stop の `user-burden-gate` が依頼のある最終応答を監査する。本�
 - 事例: 複合機スキャン→Drive 自動アップで FAX フォルダを「対象に含めた」と報告し、テストは別フォルダだけで合格とした。初期調査で FAX の「直近30日 0件・最終 2024/3」を取得していたのに報告せず、複合機入替で FAX 保存設定が消えていたことを user の問い合わせで初めて発見した。
 
 **🔴 社内メンバーへの連絡は Discord で金功勇を必ず入れる（既存グループDM→kim-PC、無ければ Bot DM＋写し）。内部宛Gmail下書きは禁止。送れなければチャットに完成形を表示。**
+**🔴 kim への Discord DM は「kim の操作が要る／警告・リマインド／定期レポート」だけ。PR マージ依頼・他PCへの作業依頼・作業共有は fleet-mail で kim-PC へ送り Discord に送らない（2026-10-25 cr）。**
+対象は、支払い・権限付与・OAuth 同意・物理操作・判断など kim 本人の対応が不可欠なもの、期限・障害・未対応の警告や督促、kim が定期的に依頼した日次・週次・月次レポートに限る。
+PR マージ依頼と他PCへの作業依頼は `node tools/fleet-mail.mjs --send --to kim-PC --kind note --body-file <本文> --why "[作業依頼] ..."` で送り、kim は各PCのセッションを直接見るため作業内容・完了の共有DMは不要。
+送信ゲート `tools/lib/kim-dm-policy.mjs` が `notify-kim` / `discord-dm` のマージ依頼を止める。kim の操作が本当に必要な例外だけ `--kim-action-required` を付ける。
 メール送信の前に recipient-domain-gate が宛先ドメインの実在（MX/A）を検査し、存在しないドメイン宛は止める（2026-10-23 名刺OCR誤読でバウンス2件）。
 
 内部判定: 社内・グループ会社（東邦鋼業 genbateam.toho@gmail.com、Reブース、NEXTForward）・スタッフ。orgiast.jp / toho-kogyo.com と `~/.claude/internal-recipients.json`（既定 `tools/internal-recipients.default.json`）を使い、`internal-recipient-gmail-guard` が宛先を照合する。

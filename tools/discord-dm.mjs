@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { getDiscordMembers, matchMember } from './discord-member-directory.mjs';
 import { isEntry } from './is-entry.mjs';
-import { clipDiscordContent, resolveDiscordBotToken } from './notify-kim.mjs';
+import { clipDiscordContent, KIM_DISCORD_USER_ID, resolveDiscordBotToken } from './notify-kim.mjs';
+import { classifyKimDm } from './lib/kim-dm-policy.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 
 const API = 'https://discord.com/api/v10';
@@ -48,7 +49,16 @@ export async function sendDiscordDm(target, body, options = {}) {
       copyToKim = { delivered: false, error: error.message };
     }
   }
-  const isKim = kimRecipient && String(kimRecipient.id) === String(recipient.id);
+  const recipientName = recipient.displayName ?? recipient.label ?? recipient.username ?? '';
+  const isKim = Boolean((kimRecipient && String(kimRecipient.id) === String(recipient.id))
+    || String(recipient.id) === KIM_DISCORD_USER_ID || recipientName === '金功勇');
+  if (isKim && options.kimActionRequired !== true) {
+    const policy = classifyKimDm(body);
+    if (!policy.allowed) {
+      console.error(`kim への Discord DM を止めました（${policy.reason}）。PR のマージ・他PCへの依頼は fleet-mail --to kim-PC で送ってください`);
+      return { delivered: 'blocked', category: policy.category, reason: policy.reason };
+    }
+  }
   if (options.dryRun) {
     if (kimRecipient && !isKim) copyToKim = { dryRun: true, recipient: kimRecipient };
     return { dryRun: true, recipient, content, copyToKim };
@@ -97,17 +107,19 @@ function parseArgs(args) {
   let bodyFile;
   let dryRun = false;
   let noCopyKim = false;
+  let kimActionRequired = false;
   for (let i = 1; i < args.length; i += 1) {
     if (args[i] === '--body') body = args[++i];
     else if (args[i] === '--body-file') bodyFile = args[++i];
     else if (args[i] === '--dry-run') dryRun = true;
     else if (args[i] === '--no-copy-kim') noCopyKim = true;
+    else if (args[i] === '--kim-action-required') kimActionRequired = true;
     else throw new Error(`不明な引数です: ${args[i]}`);
   }
   if (!target || (body === undefined) === (bodyFile === undefined)) {
-    throw new Error('usage: discord-dm.mjs <名前 or メール> (--body <本文> | --body-file <path>) [--dry-run] [--no-copy-kim]');
+    throw new Error('usage: discord-dm.mjs <名前 or メール> (--body <本文> | --body-file <path>) [--dry-run] [--no-copy-kim] [--kim-action-required]');
   }
-  return { target, body: bodyFile === undefined ? body : fs.readFileSync(bodyFile, 'utf8'), dryRun, noCopyKim };
+  return { target, body: bodyFile === undefined ? body : fs.readFileSync(bodyFile, 'utf8'), dryRun, noCopyKim, kimActionRequired };
 }
 
 export async function main(args = process.argv.slice(2), options = {}) {
@@ -115,9 +127,9 @@ export async function main(args = process.argv.slice(2), options = {}) {
   try { parsed = parseArgs(args); }
   catch (error) { console.error(`discord-dm: ${error.message}`); return 1; }
   try {
-    const result = await sendDiscordDm(parsed.target, parsed.body, { ...options, dryRun: parsed.dryRun, noCopyKim: parsed.noCopyKim });
+    const result = await sendDiscordDm(parsed.target, parsed.body, { ...options, dryRun: parsed.dryRun, noCopyKim: parsed.noCopyKim, kimActionRequired: parsed.kimActionRequired });
     console.log(JSON.stringify(result));
-    return 0;
+    return result.delivered === 'blocked' ? 3 : 0;
   } catch (error) {
     const exitCode = error.code === 'RECIPIENT_UNRESOLVED' ? 3 : error.code === 'DISCORD_TOKEN_MISSING' ? 2 : 1;
     console.error(`discord-dm: ${error.message}`);

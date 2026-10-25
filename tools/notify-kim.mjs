@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { readEnvValue } from './env-kv.mjs';
 import { isEntry } from './is-entry.mjs';
 import { toPlainJa } from './lib/plain-ja.mjs';
+import { classifyKimDm } from './lib/kim-dm-policy.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 
 const API = 'https://discord.com/api/v10';
@@ -72,6 +73,13 @@ const normalizeFailure = text => String(text).replace(/\d{4}-\d{2}-\d{2}(?:[T ][
 
 // Use the existing next-session TODO consumer; no separate repair queue.
 export async function notifyKim(text, options = {}) {
+  if (options.kimActionRequired !== true) {
+    const policy = classifyKimDm(text);
+    if (!policy.allowed) {
+      console.error(`kim への Discord DM を止めました（${policy.reason}）。PR のマージ・他PCへの依頼は fleet-mail --to kim-PC で送ってください`);
+      return { delivered: 'blocked', category: policy.category, reason: policy.reason };
+    }
+  }
   const raw = redactSecrets(String(text ?? ''));
   const bodyText = stripOwnerAddress(raw);
   if (STATUS_REPORT.test(bodyText) || ALREADY_FILED.test(bodyText) || isSuccessfulResumeReport(bodyText) || AUTO_RESUME_NOTICE.test(bodyText)) return deliverKim(raw, options);
@@ -239,9 +247,11 @@ export async function deliverKim(text, {
   return { delivered: 'none', reason: dmReason };
 }
 
-async function main() {
-  await notifyKim(process.argv.slice(2).join(' '));
-  return 0;
+export async function main(args = process.argv.slice(2), options = {}) {
+  const kimActionRequired = args.includes('--kim-action-required');
+  const text = args.filter(arg => arg !== '--kim-action-required').join(' ');
+  const result = await notifyKim(text, { ...options, kimActionRequired });
+  return result.delivered === 'blocked' ? 3 : 0;
 }
 
 if (isEntry(import.meta.url)) process.exitCode = await main();

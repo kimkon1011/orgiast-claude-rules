@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { notifyKim } from './notify-kim.mjs';
+import { main, notifyKim } from './notify-kim.mjs';
 import { parseHandoff, todoExclusionReason } from './auto-session.mjs';
 import { planRotation } from './next-session-rotate.mjs';
 
@@ -263,4 +263,35 @@ test('起票しても次の1目的を作らない（目的の乗っ取り回帰�
   const filed = fs.readFileSync(path.join(dir, '.claude/next-session.md'), 'utf8');
   assert.doesNotMatch(filed, /## 次の1目的/);
   assert.doesNotMatch(planRotation(filed).text, /1\. 通知の原因調査と修復/);
+});
+
+test('PRマージ依頼は送信せずblockedを返す', async () => {
+  let fetches = 0;
+  const originalError = console.error;
+  let errorLine = '';
+  console.error = value => { errorLine = value; };
+  try {
+    const result = await notifyKim('PR #943 をマージしてください', {
+      fetchImpl: async () => { fetches += 1; throw new Error('unexpected fetch'); },
+    });
+    assert.deepEqual(result, {
+      delivered: 'blocked', category: 'merge-request', reason: 'PR のマージ依頼は fleet-mail で扱います',
+    });
+    assert.equal(fetches, 0);
+    assert.match(errorLine, /fleet-mail --to kim-PC/);
+  } finally { console.error = originalError; }
+});
+
+test('notify-kim CLIはblockedでexit 3、明示例外なら送信する', async () => {
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    assert.equal(await main(['PR #943 をマージしてください']), 3);
+    const calls = [];
+    assert.equal(await main(['PR #943 をマージしてください', '--kim-action-required'], {
+      token: 'token', userId: 'user', plainJa: false,
+      fetchImpl: async () => { calls.push(1); return calls.length === 1 ? response({ json: { id: 'dm' } }) : response(); },
+    }), 0);
+    assert.equal(calls.length, 2);
+  } finally { console.error = originalError; }
 });

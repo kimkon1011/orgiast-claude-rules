@@ -77,6 +77,41 @@ test('相手が金功勇本人なら写しを送らない', async () => {
   assert.equal(result.copyToKim, 'skipped');
 });
 
+test('金功勇本人へのPRマージ依頼は送信せずblockedを返す', async () => {
+  const kim = { id: 'kim-id', label: '金功勇' };
+  let fetches = 0;
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    const result = await sendDiscordDm('金功勇', 'PR #943 をマージしてください', {
+      token: 'test-token', resolve: async () => kim,
+      fetchImpl: async () => { fetches += 1; throw new Error('unexpected fetch'); },
+    });
+    assert.equal(result.delivered, 'blocked');
+    assert.equal(result.category, 'merge-request');
+    assert.equal(fetches, 0);
+  } finally { console.error = originalError; }
+});
+
+test('discord-dm CLIはblockedでexit 3、明示例外なら送信する', async () => {
+  const kim = { id: 'kim-id', label: '金功勇' };
+  const originalLog = console.log;
+  const originalError = console.error;
+  console.log = () => {}; console.error = () => {};
+  try {
+    const options = { token: 'test-token', resolve: async () => kim };
+    assert.equal(await main(['金功勇', '--body', 'PR #943 をマージしてください'], {
+      ...options, fetchImpl: async () => { throw new Error('unexpected fetch'); },
+    }), 3);
+    const calls = [];
+    assert.equal(await main(['金功勇', '--body', 'PR #943 をマージしてください', '--kim-action-required'], {
+      ...options,
+      fetchImpl: async () => { calls.push(1); return calls.length === 1 ? response({ json: { id: 'dm' } }) : response(); },
+    }), 0);
+    assert.equal(calls.length, 2);
+  } finally { console.log = originalLog; console.error = originalError; }
+});
+
 test('--no-copy-kim は写し先を解決せず送らない', async () => {
   const targets = [];
   const calls = [];
@@ -152,7 +187,10 @@ test('送信本文からAPIキーとAuthorization付きURLを除去する', asyn
 test('新しい絶対ルール行はmakeIndexの出力に全文残る', () => {
   const repo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
   const body = fs.readFileSync(path.join(repo, 'ONBOARDING.md'), 'utf8');
-  const rule = body.split(/\r?\n/).find((line) => line.startsWith('**🔴 社内メンバー'));
-  assert.ok(rule);
-  assert.ok(makeIndex(body).split('\n').includes(rule));
+  const index = makeIndex(body).split('\n');
+  for (const prefix of ['**🔴 社内メンバー', '**🔴 kim への Discord DM']) {
+    const rule = body.split(/\r?\n/).find((line) => line.startsWith(prefix));
+    assert.ok(rule);
+    assert.ok(index.some(line => line.startsWith(prefix)));
+  }
 });

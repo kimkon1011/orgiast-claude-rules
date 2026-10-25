@@ -661,7 +661,10 @@ export function makeIndex(body) {
     // 絶対ルール・上限規定の行は全文のまま残す。原文は `**🛑 上限…` のように強調記号が先に来るので
     // 先頭の `*` を許容する(ここを `**🔴` だけにすると 🛑/⚙️/🔁 の4行が索引から落ちる)。
     // 行末の日付付き由来（2026-10-23 cr 等）だけは全文へ委ねる。文中の由来は適用範囲を含むので残す。
-    if (/^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u.test(line) && kept.at(-1) !== line) kept.push(line.replace(/（(?:kim\s+)?\d{4}-\d{2}-\d{2}[^）]*）(?=。?\*\*$)/u, ''));
+    // kim 宛を含む旧 Discord 原則は直後の新ルールが包含・限定するため、索引では新ルールだけを残す。
+    const supersededKimDmRule = line.startsWith('**🔴 社内メンバーへの連絡は Discord')
+      && body.includes('**🔴 kim への Discord DM は');
+    if (!supersededKimDmRule && /^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u.test(line) && kept.at(-1) !== line) kept.push(line.replace(/（(?:kim\s+)?\d{4}-\d{2}-\d{2}[^）]*）(?=。?\*\*$)/u, ''));
   }
   return kept.join('\n');
 }

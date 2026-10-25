@@ -188,9 +188,9 @@ test('新しい絶対ルール行はmakeIndexの出力に全文残る', () => {
   const repo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
   const body = fs.readFileSync(path.join(repo, 'ONBOARDING.md'), 'utf8');
   const index = makeIndex(body).split('\n');
-  for (const prefix of ['**🔴 社内メンバー', '**🔴 kim への Discord DM']) {
-    const rule = body.split(/\r?\n/).find((line) => line.startsWith(prefix));
-    assert.ok(rule);
-    assert.ok(index.some(line => line.startsWith(prefix)));
-  }
+  const prefix = '**🔴 kim への Discord DM';
+  const rule = body.split(/\r?\n/).find((line) => line.startsWith(prefix));
+  assert.ok(rule);
+  assert.ok(index.some(line => line.startsWith(prefix)));
+  assert.ok(!index.some(line => line.startsWith('**🔴 社内メンバー')));
 });

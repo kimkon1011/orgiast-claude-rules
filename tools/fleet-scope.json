@@ -833,6 +833,12 @@
       "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
     },
     {
+      "path": "tools/lib/kim-dm-policy.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "kim 宛 Discord DM の送信ゲートを全PCへ配布する実行時 import 依存"
+    },
+    {
       "path": "tools/lib/plain-ja.mjs",
       "scope": "fleet",
       "step": "task:fleet-mail",

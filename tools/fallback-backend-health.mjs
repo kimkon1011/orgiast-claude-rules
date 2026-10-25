@@ -45,9 +45,10 @@ export function readFallbackBackendHistory(homeDir) {
 }
 
 // backend ごとに「最後に記録された outcome」だけを見る。
-// それが 'timeout' または 'blocked' で、かつ now - t < cooldownMs なら冷却中とみなして Set に入れる。
+// それが 'timeout' または 'blocked' で、かつ now - t < cooldownMs なら冷却中とみなす。
 // timeout/blocked 以外（ok 等）が最後なら冷却しない＝復帰させる。
-export function coolingBackendNames(homeDir, { now = Date.now(), cooldownMs = FALLBACK_BACKEND_COOLDOWN_MS } = {}) {
+// 戻り値は 名前 → 最後に失敗した時刻(epoch ms) の Map（失敗時刻が古い順の選別に使う）。
+export function coolingBackendLastAt(homeDir, { now = Date.now(), cooldownMs = FALLBACK_BACKEND_COOLDOWN_MS } = {}) {
   const last = new Map();
   for (const row of readFallbackBackendHistory(homeDir)) {
     const name = typeof row.backend === 'string' ? row.backend.trim() : '';
@@ -57,28 +58,58 @@ export function coolingBackendNames(homeDir, { now = Date.now(), cooldownMs = FA
     // 追記順に走査しているので、後から来た行で上書きすれば「最後の outcome」が残る。
     last.set(name, { t, outcome: String(row.outcome) });
   }
-  const cooling = new Set();
+  const cooling = new Map();
   for (const [name, entry] of last) {
-    if ((entry.outcome === 'timeout' || entry.outcome === 'blocked') && now - entry.t < cooldownMs) cooling.add(name);
+    if ((entry.outcome === 'timeout' || entry.outcome === 'blocked') && now - entry.t < cooldownMs) cooling.set(name, entry.t);
   }
   return cooling;
 }
 
+export function coolingBackendNames(homeDir, options = {}) {
+  return new Set(coolingBackendLastAt(homeDir, options).keys());
+}
+
 // name が cooling に含まれる backend を除いた配列を返す。
-// keepAtLeastOne が true（既定）で除外した結果が空になる場合は、元の配列をそのまま返す
-// （＝候補ゼロで詰むのを防ぐ）。除外した backend は1件につき1行 console.error で出す。
+// 除外した backend は1件につき1行 console.error で出す。
+//
+// keepAtLeastOne が true（既定）で全員が冷却中になったときは「1件だけ」を残す。
+// 以前は元の配列をそのまま返していたが、それだと冷却が丸ごと無効になり、
+// 直近で全滅した3バックエンドを毎回最初から全部やり直して1回30分を捨てていた
+// （2026-10-23 実測: 04:23 に3件とも timeout/blocked を記録した後も 05:16〜10:43 の
+//   各連鎖が gemini-cli 600秒 → cheap-code:deepseek 900秒 を繰り返し、8件/8022秒を浪費）。
+// 残す1件は「最後の失敗が最も古い＝冷却明けが最も近い」backend とする。
+// 冷却時刻が分からない Set しか無いときは順序先頭を1件だけ残す（全員は復活させない）。
 export function skipCoolingBackends(backends, cooling, { keepAtLeastOne = true } = {}) {
   const list = Array.isArray(backends) ? backends : [];
-  const names = cooling instanceof Set ? cooling : new Set(cooling || []);
+  const lastAt = cooling instanceof Map ? cooling : null;
+  const names = lastAt ? new Set(lastAt.keys()) : new Set(cooling || []);
   const kept = [];
+  const skipped = [];
   for (const backend of list) {
     const name = backend && backend.name;
     if (names.has(name)) {
-      console.error(`[codex-do] fallback backend=${name} は直近でタイムアウトしたため冷却中としてスキップします`);
+      skipped.push(name);
       continue;
     }
     kept.push(backend);
   }
-  if (keepAtLeastOne && kept.length === 0 && list.length > 0) return list;
-  return kept;
+  for (const name of skipped) {
+    console.error(`[codex-do] fallback backend=${name} は直近でタイムアウトしたため冷却中としてスキップします`);
+  }
+  if (kept.length) return kept;
+  if (!keepAtLeastOne || list.length === 0) return kept;
+  // 全員冷却中: 冷却明けが最も近い1件だけを試す。
+  let pick = list[0];
+  if (lastAt) {
+    let oldest = Infinity;
+    for (const backend of list) {
+      const t = lastAt.get(backend && backend.name);
+      if (Number.isFinite(t) && t < oldest) {
+        oldest = t;
+        pick = backend;
+      }
+    }
+  }
+  console.error(`[codex-do] fallback backend は全て冷却中です。冷却明けが最も近い ${pick && pick.name} の1件だけを試します`);
+  return [pick];
 }

@@ -10,6 +10,7 @@ const {
   recordFallbackBackendOutcome,
   readFallbackBackendHistory,
   coolingBackendNames,
+  coolingBackendLastAt,
   skipCoolingBackends,
 } = await import('./fallback-backend-health.mjs');
 
@@ -61,14 +62,38 @@ test('cooldownMs を過ぎた古い timeout は冷却しない', () => {
   assert.equal(beyond.has('y'), false);
 });
 
-test('skipCoolingBackends は冷却中を除き、全滅する場合は元の配列を返す', () => {
+test('skipCoolingBackends は冷却中を除いた配列を返す', () => {
   const backends = [{ name: 'a' }, { name: 'b' }, { name: 'c' }];
-  const kept = skipCoolingBackends(backends, new Set(['b']));
+  const kept = skipCoolingBackends(backends, new Map([['b', 1]]));
   assert.deepEqual(kept.map((x) => x.name), ['a', 'c']);
-  // keepAtLeastOne により、全部冷却中でも候補ゼロにせず元の配列をそのまま返す
-  const all = skipCoolingBackends(backends, new Set(['a', 'b', 'c']));
-  assert.equal(all, backends);
-  assert.deepEqual(all.map((x) => x.name), ['a', 'b', 'c']);
+});
+
+test('全員冷却中でも全件は復活させず、最後の失敗が最も古い1件だけを残す', () => {
+  // 2026-10-23 実測の再発防止: 3件とも timeout/blocked のあと元の配列を丸ごと返していたため、
+  // 冷却が無効化されて gemini-cli 600秒 → cheap-code:deepseek 900秒 を毎回捨てていた。
+  const backends = [{ name: 'a' }, { name: 'b' }, { name: 'c' }];
+  const kept = skipCoolingBackends(backends, new Map([['a', 300], ['b', 100], ['c', 200]]));
+  assert.deepEqual(kept.map((x) => x.name), ['b']);
+  assert.equal(kept.length, 1);
+});
+
+test('冷却時刻が無い Set でも全員冷却中なら1件だけ残す（全件復活させない）', () => {
+  const backends = [{ name: 'a' }, { name: 'b' }, { name: 'c' }];
+  const kept = skipCoolingBackends(backends, new Set(['a', 'b', 'c']));
+  assert.equal(kept.length, 1);
+  assert.deepEqual(kept.map((x) => x.name), ['a']);
+});
+
+test('coolingBackendLastAt は冷却中の backend と最後の失敗時刻を返し、ok で消える', () => {
+  const home = tmpHome();
+  const now = 4_000_000;
+  recordFallbackBackendOutcome(home, { backend: 'gemini-cli', outcome: 'timeout', now });
+  recordFallbackBackendOutcome(home, { backend: 'cheap-code:deepseek', outcome: 'blocked', now: now + 50 });
+  const cooling = coolingBackendLastAt(home, { now: now + 100 });
+  assert.equal(cooling.get('gemini-cli'), now);
+  assert.equal(cooling.get('cheap-code:deepseek'), now + 50);
+  recordFallbackBackendOutcome(home, { backend: 'gemini-cli', outcome: 'ok', now: now + 200 });
+  assert.equal(coolingBackendLastAt(home, { now: now + 300 }).has('gemini-cli'), false);
 });
 
 test('skipCoolingBackends は除外した backend を1行だけ console.error で報告する', () => {

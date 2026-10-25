@@ -15,7 +15,7 @@ import { parseCodexResetUntil, providerCooldownMs, writeCodexCooldown } from './
 import { classifyTaskKind, CODEX_KINDS, TASK_KINDS } from './lib/task-kind.mjs';
 import { syncWslCodexAuth } from './lib/codex-wsl-auth-sync.mjs';
 import { EX_TEMPFAIL, budgetSummary, claudeFile, decideCodexGate, deferredPayload, isUsageLimitText, parseUsageLimitUntil, providerLimitedUntil, writeCodexCooldownFile } from './lib/executor-gate.mjs';
-import { coolingBackendNames, recordFallbackBackendOutcome, skipCoolingBackends } from './fallback-backend-health.mjs';
+import { coolingBackendLastAt, recordFallbackBackendOutcome, skipCoolingBackends } from './fallback-backend-health.mjs';
 
 // Windows の shell 経由起動では引数がクォートされないため、この値に空白を入れると
 // -p の値が割れて Gemini が使い方(ヘルプ)を出して終わる。空白を入れないこと。
@@ -571,7 +571,6 @@ export function resolveFallbackBackends(homeDir, options = {}) {
   const geminiKey = loadGeminiKey(homeDir);
   const openrouterKey = loadEnvKey(homeDir, 'openrouter.env', 'OPENROUTER_API_KEY');
   const deepseekKey = loadDeepseekKey(homeDir);
-  const preferFree = process.env.CODEX_DO_PREFER_FREE === '1';
   const geminiAvailable = !geminiKey || executableAvailable('gemini');
   const qwenAvailable = !(deepseekKey || openrouterKey) || executableAvailable('qwen');
   if (geminiKey && !geminiAvailable) console.error('[codex-do] gemini-cli の CLI(gemini) が見つからないため候補から外します');
@@ -598,7 +597,14 @@ export function resolveFallbackBackends(homeDir, options = {}) {
   }
   const ccDeepseek = cheapCodeBackend('cheap-code:deepseek', homeDir);
   const ccGlm = cheapCodeBackend('cheap-code:glm', homeDir);
-  const ordered = preferFree ? [ccDeepseek, ccGlm, gemini] : [gemini, ccDeepseek, ccGlm];
+  // 2026-10-25: 既定順を gemini-cli 先頭から cheap-code:deepseek 先頭へ変更した。
+  // 2026-10-18〜10-23 の executor-usage 実測（fallback の chain 付き試行）:
+  //   cheap-code:deepseek = 成功10 / timeout5（成功率67%、成功の中央値259秒）
+  //   gemini-cli         = 成功10 / timeout9 / blocked4（成功率43%、中央値295秒）
+  // さらに timeout した連鎖 22 件のうち 19 件で gemini-cli が先頭で 600〜4953 秒を捨てた後に
+  // cheap-code:deepseek が成功しており（2026-10-23 は 600秒×5回）、先頭に置くほど損をしていた。
+  // CODEX_DO_PREFER_FREE=1 が選んでいた並びをそのまま既定にしたので、この env は順序に影響しない。
+  const ordered = [ccDeepseek, ccGlm, gemini];
   return ordered.filter(Boolean);
 }
 
@@ -1298,7 +1304,7 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
     console.error(`[codex-do] Falling back to an agentic CLI...`);
 
     const resolvedBackends = resolveFallbackBackends(home);
-    const backends = skipCoolingBackends(resolvedBackends, coolingBackendNames(home));
+    const backends = skipCoolingBackends(resolvedBackends, coolingBackendLastAt(home));
     if (backends.length === 0) {
       console.error('GEMINI_API_KEY、DEEPSEEK_API_KEY、OPENROUTER_API_KEY が無いためフォールバックを実行できません');
       result.status = 1;
@@ -1359,7 +1365,10 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
           outcome
         });
 
-        if (outcome === 'timeout' || outcome === 'cli_missing' || outcome === 'blocked') recordFallbackBackendOutcome(home, { backend: backend.name, outcome });
+        // 'ok' も記録する。冷却判定は「最後の outcome」を見るので、成功を書かないと
+        // timeout を1回出した backend が成功しても6時間ずっと冷却中扱いのままになる
+        // （fallback-backend-health.mjs の coolingBackendLastAt の前提）。
+        if (outcome === 'ok' || outcome === 'timeout' || outcome === 'cli_missing' || outcome === 'blocked') recordFallbackBackendOutcome(home, { backend: backend.name, outcome });
         if (outcome === 'blocked') {
           console.error(`[codex-do] backend=${backend.name} がポリシー拒否で停滞しているため ${fallbackChain.at(-1).secs} 秒で打ち切って次へ`);
         } else if (outcome === 'timeout') {

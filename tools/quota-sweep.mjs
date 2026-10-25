@@ -119,8 +119,35 @@ export function parseArgs(argv) {
 export function filterWindowsForCurrentAuth(all, state) {
   const filtered = all.filter(w => w.provider !== 'codex' || !state.codexAuthChangedAt || w.observedAt > state.codexAuthChangedAt);
   if (all?.reasons) filtered.reasons = all.reasons;
+  if (all?.retryAfterMs) filtered.retryAfterMs = all.retryAfterMs;
   return filtered;
 }
+
+// 2026-10-25 実測: oauth/usage は約5秒に5回で 429 + `Retry-After: 300` を返す。claude-plan-usage は
+// reason=HTTP 429 しか返さないので Retry-After が失われ、47秒の再試行は必ず窓内で再び 429 になり、
+// 窓内の再試行自体も呼出回数を増やしていた。fetch を包んで Retry-After を記録し、窓内は API を
+// 叩かず残り秒数を retryAfterMs で返す。成功した読み取りだけを短時間再利用する（失敗はキャッシュしない）。
+export function claudeWindowReader({ home, fetchImpl, now = Date.now, ttlMs = 15_000, read = readClaudeWindows } = {}) {
+  let cache = null, cachedAt = 0, blockedUntil = 0;
+  const base = fetchImpl ?? ((url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(15_000) }));
+  const wrapped = async (url, init) => {
+    const response = await base(url, init);
+    const seconds = Number(response?.headers?.get?.('retry-after'));
+    if (response?.status === 429 && Number.isFinite(seconds) && seconds > 0) blockedUntil = now() + seconds * 1000;
+    return response;
+  };
+  return async () => {
+    const at = now();
+    if (cache && at - cachedAt < ttlMs) return cache;
+    if (at < blockedUntil) return Object.assign([], { reason: 'HTTP 429', retryAfterMs: blockedUntil - at });
+    const claude = await read({ home, fetchImpl: wrapped });
+    if (claude.length) { cache = claude; cachedAt = at; }
+    else if (blockedUntil > now()) claude.retryAfterMs = blockedUntil - now();
+    return claude;
+  };
+}
+
+const RETRY_AFTER_CAP_MS = 10 * 60_000;
 
 // oauth/usage の一時障害だけを再試行対象にする。429(レート制限)・408・5xx・ネットワーク断は
 // 数十秒で回復しうるが、401/403（トークン失効）や形式不一致は読み直しても直らない。
@@ -301,9 +328,13 @@ export async function runSweep(decision, context) {
     // 確認で failed になり、2026-10-24T03:54Z に再発した。それでも読めなければ failed ではなく
     // deferred（非終端・次回再試行）で止め、detector に「レーン全滅」と誤判定させない。
     const delays = context.windowReadRetryDelaysMs ?? [2000, 15_000, 30_000];
+    // Retry-After が分かる 429 は、その秒数が過ぎるまで読み直しても必ず 429 なので待ち時間を延ばす。
+    // 上限を超える場合は待たずに deferred（次回 tick）へ回す。
     for (let i = 0; !own.length && isTransientWindowReadError(why) && i < delays.length; i++) {
-      log(`${provider}: window read failed (${why}); retry ${i + 1}/${delays.length}`);
-      await (context.sleep ?? defaultSleep)(delays[i]);
+      const retryAfter = all?.retryAfterMs ?? 0;
+      if (retryAfter > RETRY_AFTER_CAP_MS) break;
+      log(`${provider}: window read failed (${why}); retry ${i + 1}/${delays.length}${retryAfter ? ` (Retry-After ${Math.ceil(retryAfter / 1000)}s)` : ''}`);
+      await (context.sleep ?? defaultSleep)(Math.max(delays[i], retryAfter));
       all = await refresh(); own = all.filter(w => w.provider === provider); why = all?.reasons?.[provider];
     }
     if (!own.length && isTransientWindowReadError(why)) return stopWith('deferred', 'window-unreadable', `利用窓を読めない一時障害のため次回へ延期: ${why}`);
@@ -466,19 +497,15 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   const requestedHomes = io.wslHome ?? (argv.includes('--home') ? [] : passiveWslHomes());
   const wslHomes = Array.isArray(requestedHomes) ? [...requestedHomes] : [requestedHomes];
   // 1回のスイープは decision 用・開始前 check 用・再取得用と同じ oauth/usage を数十秒に3回叩く。
-  // 2026-10-23T07:10Z の window-info 失敗はその直後に起きた。成功した読み取りだけを短時間
-  // 再利用し、失敗はキャッシュしない（checkConditions の再試行を妨げない）。
-  const claudeReadTtlMs = io.claudeReadTtlMs ?? 15_000;
-  let claudeCache = null, claudeCachedAt = 0;
+  // 2026-10-23T07:10Z の window-info 失敗はその直後に起きた。読み取りの再利用と 429 の
+  // Retry-After 尊重は claudeWindowReader に集約する。
+  const readClaude = claudeWindowReader({ home, fetchImpl: io.fetchImpl, now, ttlMs: io.claudeReadTtlMs });
   const windows = io.readWindows ?? (async () => {
-    const at = now();
-    let claude = claudeCache && at - claudeCachedAt < claudeReadTtlMs ? claudeCache : null;
-    if (!claude) {
-      claude = await readClaudeWindows({ home, fetchImpl: io.fetchImpl });
-      if (claude.length) { claudeCache = claude; claudeCachedAt = at; }
-    }
+    const claude = await readClaude();
     const codex = readCodexWindows({ home, wslHome: wslHomes, now: now() });
-    const all = [...claude, ...codex]; all.reasons = { claude: claude.reason, codex: codex.reason }; return all;
+    const all = [...claude, ...codex]; all.reasons = { claude: claude.reason, codex: codex.reason };
+    if (claude.retryAfterMs) all.retryAfterMs = claude.retryAfterMs;
+    return all;
   });
   // A dry-run only reads files/API; no locks, processes, notifications or state mutations.
   if (options['dry-run']) {

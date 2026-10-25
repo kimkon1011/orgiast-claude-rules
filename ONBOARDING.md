@@ -113,9 +113,10 @@ PR マージ依頼と他PCへの作業依頼は `node tools/fleet-mail.mjs --sen
 
 社内メンバーへの送り方は次の順序を守る。(1) まず相手と金功勇が入っている既存グループDMへ kim 名義で投稿する。kim-PC 以外からは `node tools/discord-group-dm-request.mjs "<相手名>" --body-file <本文> [--chat "<グループDM名>"]` で kim-PC に依頼する。(2) グループDMが見つからない、kim-PC の Discord が未起動、または投稿を読み戻して確認できない時は、`node tools/discord-dm.mjs "<名前 or メール>" --body-file <本文>` で相手へ Bot DM を送り、金功勇へ同文の写しを自動送信する。(3) 当日中に読んでほしい、または2時間以内に返事が要るなど急ぎの場合や kim-PC に頼めない場合は、最初から Bot DM＋写しを使う。各ツールの `--dry-run` は送信せず内容と解決結果を確認する。宛先の名前→Discord ID 解決は Bot が行うので user に ID やチャンネルを聞かない。宛先が曖昧・不明なら送らずに終了する（推測で送らない）。Bot トークンが無いPCなど送れない場合だけ、チャットに「宛先／用件／本文」をコピペできる完成形で表示する。外部宛のGmail下書きは、本文と下書き件名もチャットに併記する。根拠（2026-10-24 cr）: Bot の個人DMだけでは金さんが見られず、受け手にも誰からの依頼か分かりにくい。
 
-**🔴 メールは下書きまで。「送って」で重複・矛盾照会→送信**
-2026-10-25 kim: 送信後は送信済みを読み戻す。
-- 既定: `create_draft` / `update_draft` までで止める。user が「送って」「送信して」など、その下書き（または返信チェックの番号）を指して送信を明示した時だけ、`send_message`（draftId 指定）で送る。「送ってよいですか」と聞き返したり、送信ボタンを押すよう user に頼み返したりしない。
+**🔴 メールの下書きは全て seisaku-team@orgiast.jp に作る（tools/gmail-draft.mjs）。「送って」で重複・矛盾照会→送信**
+2026-10-25 kim: 全アカウント・全PC共通。Gmail MCP の create_draft／update_draft／send_message／reply／forward は個人アカウント名義になるので使わない（mail-draft-account-gate が止める）。作成 `node tools/gmail-draft.mjs --to … --subject … --body-file … --json`、返信は `--thread-id` `--in-reply-to` を付ける、読み戻し `node tools/gmail-search.mjs --user seisaku-team@orgiast.jp --query "in:drafts …"`、送信 `node tools/gmail-draft.mjs --send <draftId> --json`。重複照会（in:sent）も seisaku-team@ 側で行う。下書きのリンクは「seisaku-team@orgiast.jp で開く」と併記する。社内宛は従来どおり Discord（内部宛の Gmail 下書き禁止は変わらない）。送信後は同アカウントの送信済みを読み戻す。
+- 下書きを作る前に: `node tools/gmail-search.mjs --user seisaku-team@orgiast.jp --query "<宛先アドレス> -in:drafts" --json` で送信済み・受信を照会する。既に送っていれば新しい下書きは作らず「送信済み・返信待ち〇日」と報告する（2026-10-25 鹿沼案件で、kim@ だけ照会して「履歴なし」とし、10/22 に seisaku-team@ から送信済みの打診を二重に下書きした）。
+- 既定: `node tools/gmail-draft.mjs --to … --subject … --body-file … --json`（修正は新規作成・読み戻し後に旧下書きを `--delete <旧draftId>` で削除） までで止める。user が「送って」「送信して」など、その下書き（または返信チェックの番号）を指して送信を明示した時だけ、`node tools/gmail-draft.mjs --send <draftId> --json`で送る。「送ってよいですか」と聞き返したり、送信ボタンを押すよう user に頼み返したりしない。
 - 送信直前のチェック（毎回・省略禁止）:
   1. **重複**: 同じスレッドと同じ宛先について、送信済み（`in:sent`）と直近の受信を検索する。本人や別のセッションがすでに送っていたら送らない。送信済みの日時・本文の要点を報告する。
   2. **矛盾**: 同じスレッドで過去に送った本文と、相手の最新メールを開いて読む。日程・金額・数量・約束・名義が食い違っていないか照合する。候補日時はカレンダーで空きを照会し直す。仮押さえも重複に数える。相手がすでに候補を出していたら、その候補を優先する。食い違いがあれば、下書きを直してから送る。直した点は報告に書く。

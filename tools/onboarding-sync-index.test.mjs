@@ -84,3 +84,9 @@ test('管理ブロックが固定共有memoryを @ 参照する', async () => {
   assert.match(updated, /BEGIN: オージャスト共通ルール[\s\S]*@~\/\.claude\/shared-memory\/MEMORY\.md[\s\S]*END: オージャスト共通ルール/);
   assert.match(updated, /index\/\*\.md/);
 });
+
+test('メールの共有アカウント必須見出しを圧縮索引にも保持する', async () => {
+  const { makeIndex } = await import('./onboarding-sync.mjs');
+  const body = fs.readFileSync(new URL('../ONBOARDING.md', import.meta.url), 'utf8');
+  assert.ok(makeIndex(body).includes('**🔴 メールの下書きは全て seisaku-team@orgiast.jp に作る（tools/gmail-draft.mjs）。「送って」で重複・矛盾照会→送信**'));
+});

@@ -10,7 +10,29 @@ handoff-audit:e2715c224377adaa。元の手渡しは「共有アカウント seis
 - サービスアカウントの **DWD（ドメイン全体の委任）に `gmail.compose` が既に登録済み**だった（実測）。
   下書き作成に必要な Admin Console 操作・スコープ追加は**不要**。
 - 下書き作成の常設ツールが無かったことだけが障害だったので、`tools/gmail-draft.mjs` を作った。
-- **`gmail.send` も同時に委任済み**であることが判明した。ただし本ツールは**送信 API を実装しない**（下書きまでが承認範囲）。
+- **`gmail.send` も同時に委任済み**であることが判明した。2026-10-25 に `--send <draftId>` を追加。送信には user の明示指示が必要。
+
+## 全アカウント・全PC共通ルール（2026-10-25）
+
+メール下書きは全て **seisaku-team@orgiast.jp** に作る。Gmail MCP の create_draft／update_draft／send_message／reply／forward は個人名義になるため `mail-draft-account-gate` が拒否する。緊急退避のみ `ORGIAST_MAIL_ACCOUNT_GATE=off`。
+
+```bash
+node tools/gmail-draft.mjs --to customer@example.com --subject "件名" --body-file body.txt --json
+# 返信: thread-id は共有アカウント内のスレッドID、in-reply-to は元メールの Message-ID
+node tools/gmail-draft.mjs --to customer@example.com --subject "Re: 件名" --body-file reply.txt --thread-id <id> --in-reply-to '<Message-ID>' --json
+node tools/gmail-search.mjs --user seisaku-team@orgiast.jp --query "in:drafts subject:件名" --json
+# user が「送って」と明示した場合のみ、重複・矛盾照会後に送信
+node tools/gmail-search.mjs --user seisaku-team@orgiast.jp --query "in:sent to:customer@example.com" --json
+node tools/gmail-draft.mjs --send <draftId> --json
+node tools/gmail-search.mjs --user seisaku-team@orgiast.jp --query "in:sent to:customer@example.com" --json
+```
+
+返信は In-Reply-To / References と threadId を付ける。件名は元メールに合わせる。修正は新規下書きを作成して読み戻した後、旧下書きを `--delete <旧draftId>` で削除する。
+送信直前に同じスレッドの送信済み・最新受信を読み、重複と日程・金額・数量・約束・名義の矛盾を照合する。送信後も宛先・件名・日時を読み戻す。下書きリンクには「seisaku-team@orgiast.jp で開く」と併記する。社内宛は Discord。
+
+`--send` は指定アカウント（既定 seisaku-team@、既存互換用の `--user` も可）の下書きを取得し、To/Cc/Bcc を既存台帳で照合する。内部宛は exit 3 で送信しない。JSON は `sentMessageId`, `threadId`, `to`, `subject` を含む。作成時の内部宛は認証前に拒否し、送信時は下書きの読み取り後に拒否する。送信 API の自動再試行は行わない。
+
+以下の実測記録は 2026-09-22 時点。今回追加した送信・返信機能はモックで検証し、実メールは送信していない。
 
 ## 実測（核心）: DWD スコープの委任状況
 
@@ -24,7 +46,7 @@ node tools/gmail-draft.mjs --check --json
 |---|---|---|
 | `gmail.readonly` | **ok** | 読み取りは従来どおり可（`tools/gmail-search.mjs` と一致） |
 | `gmail.compose` | **ok** | **下書き作成・更新・削除が可**（本件の本丸） |
-| `gmail.send` | **ok** | 送信も技術的には可。**本ツールでは未実装**（承認範囲外） |
+| `gmail.send` | **ok** | 送信も技術的には可。本ツールの送信は `gmail.compose` で実行 |
 
 トークン発行が成功した = DWD の許可リストにそのスコープが入っている、が一次証拠。
 `unauthorized_client` になる場合は `errorKind: scope_not_delegated` として「Admin Console で SA client_id に追加が要る」と案内する実装にしてある（`tools/google-property-check.mjs` と同じ分類語）。
@@ -56,12 +78,11 @@ node tools/gmail-draft.mjs --delete <draftId>
 - 依存パッケージなし（Node 18+ / `node:crypto` の自己署名 JWT + `fetch`）。`tools/google-property-check.mjs` と同じ流儀。
 - 日本語の件名・本文は MIME の B エンコード + base64 本文で壊れない。
 - 終了コード: `0` 成功 / `3` 内部宛でブロック / `2` 設定エラー / `1` その他。
-- **送信 API（`users.messages.send` / `drafts.send`）は実装していない。**
+- **`--send <draftId>` は既存下書きを `users.drafts.send` で送信する。**
 
 ### 内部宛ガードをツール自身に持たせた（既存の穴2を塞ぐ）
 
-`tools/internal-recipient-gmail-guard.mjs` は PreToolUse フックで、**MCP の Gmail ツール名にしかマッチしない**。
-Bash 経由の Gmail REST は素通りする（`tools/handoff-audit-knowledge.json` の同エントリ「穴2」）。
+`tools/internal-recipient-gmail-guard.mjs` は PreToolUse フックで、MCP と Bash/PowerShell の書き込みを検査する。ツール自身も内部宛を検査する。
 `gmail-draft.mjs` は `loadLedger` / `isInternal` を **import して再利用**し、
 内部宛（`orgiast.jp` / `toho-kogyo.com` / 台帳のアドレス）が To/Cc に 1 件でもあれば
 **Gmail API を一度も呼ばず**、「宛先／用件／本文」をコピペできる完成形を stdout に出して exit 3 で止まる。
@@ -108,7 +129,7 @@ DWD のスコープが委任済みであれば `drafts.create` は当該ユー�
 
 1. **フックの穴1**: claude.ai コネクタが無効な環境では MCP の Gmail ツール自体が存在せず、`internal-recipient-gmail-guard.mjs` は発火しない。今回のツール内ガードはこの穴も同時に埋める。
 2. **フックの穴3**: 台帳(`~/.claude/internal-recipients.json`)に無いフリーメールの社内スタッフは、依然として内部判定できない（`isInternal` はドメインと台帳アドレスのみ）。台帳への追加は人の手が要る。
-3. **`gmail.send` が委任済み**であること自体は統制上の論点。本ツールは送信を実装しないが、委任を外すかは別途判断（**権限変更は本セッションの承認範囲外なので触っていない**）。
+3. **`gmail.send` が委任済み**であること自体は統制上の論点。本ツールの送信は `gmail.compose` だけを使う。委任を外すかは別途判断（**権限変更は本セッションの承認範囲外なので触っていない**）。
 4. `--delete` は下書きのみ。**送信済みメッセージは消せない**（`gmail.compose` の範囲外）。
 
 ## 関連

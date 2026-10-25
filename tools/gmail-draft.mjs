@@ -3,9 +3,11 @@
  * gmail-draft.mjs — 共有アカウントの外部宛 Gmail 下書きを作る常設経路。
  * なぜ要るか: アドホックなコードや手作業をなくし、内部宛はチャット表示に戻す。
  * 方式: DWD + 自己署名 JWT（Node 18+ / 標準 crypto と fetch、依存なし）。
- *       内部宛は認証前に停止。送信機能は持たない。
+ *       作成時の内部宛は認証前に停止。送信時は下書きの宛先を再検査。
  * 使い方:
  *   node tools/gmail-draft.mjs --check [--user <addr>] [--json]
+ *   node tools/gmail-draft.mjs --send <draftId> [--user <addr>] [--json]
+ *   返信作成: --thread-id <id> --in-reply-to <Message-ID>
  *   node tools/gmail-draft.mjs --delete <draftId> [--user <addr>] [--json]
  *   node tools/gmail-draft.mjs --to <addr> [--cc <addr>] --subject <件名>
  *     (--body <本文> | --body-file <path>) [--user <addr>] [--dry-run] [--json]
@@ -17,7 +19,7 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { isEntry } from './is-entry.mjs';
 import { defaultDriveKeyPath } from './lib/drive-auth.mjs';
-import { loadLedger, isInternal } from './internal-recipient-gmail-guard.mjs';
+import { loadLedger, isInternal, extractAddresses } from './internal-recipient-gmail-guard.mjs';
 
 export const GMAIL_COMPOSE_SCOPE = 'https://www.googleapis.com/auth/gmail.compose';
 export const DEFAULT_USER = 'seisaku-team@orgiast.jp';
@@ -37,7 +39,8 @@ function addresses(value, required = false) {
   return list;
 }
 
-export function buildRawMessage({ from, to, cc, subject, body }) {
+export function buildRawMessage({ from, to, cc, subject, body, inReplyTo }) {
+  if (inReplyTo !== undefined && (typeof inReplyTo !== 'string' || !/^<[^<>\s]+@[^<>\s]+>$/u.test(inReplyTo))) throw configError();
   const sender = addresses(from, true);
   if (sender.length !== 1 || typeof subject !== 'string' || /[\r\n]/u.test(subject) || typeof body !== 'string') throw configError();
   // encoded-word は UTF-8 文字の途中で切らず、RFC の 75 文字制限内で折り返す。
@@ -53,7 +56,8 @@ export function buildRawMessage({ from, to, cc, subject, body }) {
   const headers = [
     `From: ${sender[0]}`, `To: ${addresses(to, true).join(', ')}`,
     ...(copy.length ? [`Cc: ${copy.join(', ')}`] : []),
-    `Subject: ${encodedSubject}`, 'MIME-Version: 1.0',
+    `Subject: ${encodedSubject}`,
+    ...(inReplyTo ? [`In-Reply-To: ${inReplyTo}`, `References: ${inReplyTo}`] : []), 'MIME-Version: 1.0',
     'Content-Type: text/plain; charset="UTF-8"', 'Content-Transfer-Encoding: base64',
   ];
   const encodedBody = Buffer.from(body.replace(/\r\n|\r|\n/gu, '\r\n')).toString('base64');
@@ -131,13 +135,13 @@ export async function probeScopes({ user = DEFAULT_USER, keyPath = DEFAULT_KEY, 
   return results;
 }
 
-export async function createDraft({ user = DEFAULT_USER, raw, fetchImpl = globalThis.fetch, getToken }) {
+export async function createDraft({ user = DEFAULT_USER, raw, threadId, fetchImpl = globalThis.fetch, getToken }) {
   try {
     const token = await (getToken ?? (args => mintDwdToken({ ...args, fetchImpl })))({ user, scope: GMAIL_COMPOSE_SCOPE });
     const res = await fetchImpl('https://gmail.googleapis.com/gmail/v1/users/me/drafts', {
       method: 'POST', signal: AbortSignal.timeout(25000),
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: { raw } }),
+      body: JSON.stringify({ message: { raw, ...(threadId ? { threadId } : {}) } }),
     });
     if (!res.ok) throw Object.assign(new Error('Gmail API 失敗'), {
       errorKind: res.status === 403 ? 'forbidden_no_access' : res.status === 401 ? 'unauthorized' : 'error',
@@ -165,12 +169,39 @@ export async function deleteDraft({ user = DEFAULT_USER, id, fetchImpl = globalT
   } catch (error) { throw Object.assign(new Error(safeFailure(error).error), safeFailure(error)); }
 }
 
+/** Read the existing MIME headers before sending; include hidden Bcc recipients. */
+export async function sendDraft({ user = DEFAULT_USER, id, ledger = loadLedger(), fetchImpl = globalThis.fetch, getToken }) {
+  if (typeof id !== 'string' || !/^[A-Za-z0-9_-]+$/u.test(id)) throw configError();
+  const token = await (getToken ?? (args => mintDwdToken({ ...args, fetchImpl })))({ user, scope: GMAIL_COMPOSE_SCOPE });
+  const request = async (url, options = {}) => {
+    const res = await fetchImpl(url, { ...options, signal: AbortSignal.timeout(25000),
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } });
+    if (!res.ok) throw Object.assign(new Error('Gmail API 失敗'), {
+      errorKind: res.status === 403 ? 'forbidden_no_access' : res.status === 401 ? 'unauthorized' : 'error',
+    });
+    return res.json();
+  };
+  const draft = await request(`https://gmail.googleapis.com/gmail/v1/users/me/drafts/${id}?format=full`);
+  const headers = draft?.message?.payload?.headers;
+  if (!Array.isArray(headers)) throw new Error('下書きの宛先を取得できません');
+  const values = name => headers.filter(h => String(h.name).toLowerCase() === name).map(h => h.value);
+  const recipients = extractAddresses({ to: values('to'), cc: values('cc'), bcc: values('bcc') });
+  if (!recipients.length) throw new Error('下書きの宛先がありません');
+  const internal = recipients.filter(addr => isInternal(addr, ledger));
+  if (internal.length) throw Object.assign(new Error('内部宛は Discord で連絡してください。'), { errorKind: 'internal_recipient', internal });
+  const sent = await request('https://gmail.googleapis.com/gmail/v1/users/me/drafts/send', {
+    method: 'POST', body: JSON.stringify({ id }),
+  });
+  if (!sent?.id || !sent?.threadId) throw new Error('送信結果の ID がありません');
+  return { sentMessageId: sent.id, threadId: sent.threadId, to: values('to').join(', '), subject: values('subject').join(' ') };
+}
+
 function parseArgs(argv) {
   const args = {};
   for (let i = 0; i < argv.length; i++) {
     const name = argv[i];
     if (['--check', '--json', '--dry-run'].includes(name)) { args[name.slice(2)] = true; continue; }
-    if (!['--to', '--cc', '--subject', '--body', '--body-file', '--user', '--delete'].includes(name) || i + 1 >= argv.length || argv[i + 1].startsWith('--')) throw configError();
+    if (!['--to', '--cc', '--subject', '--body', '--body-file', '--user', '--delete', '--send', '--thread-id', '--in-reply-to'].includes(name) || i + 1 >= argv.length || argv[i + 1].startsWith('--')) throw configError();
     const field = name.slice(2);
     const value = argv[++i];
     if (field === 'to' || field === 'cc') (args[field] ??= []).push(value);
@@ -184,7 +215,7 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
   const stdout = deps.stdout ?? (text => console.log(text));
   const jsonMode = argv.includes('--json');
   let user = DEFAULT_USER;
-  let action = argv.includes('--delete') ? 'delete' : argv.includes('--check') ? 'check' : argv.includes('--dry-run') ? 'dry-run' : 'create-draft';
+  let action = argv.includes('--send') ? 'send' : argv.includes('--delete') ? 'delete' : argv.includes('--check') ? 'check' : argv.includes('--dry-run') ? 'dry-run' : 'create-draft';
   let deletionId;
   const emit = (report, human) => stdout(jsonMode ? JSON.stringify({ action, user, ...report }) : human);
   try {
@@ -195,8 +226,16 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
     user = senders[0];
     const fetchImpl = deps.fetchImpl ?? globalThis.fetch;
     const mintToken = deps.mintToken ?? (options => mintDwdToken({ ...options, fetchImpl }));
+    if (Object.hasOwn(args, 'send')) {
+      if (['delete', 'check', 'to', 'cc', 'subject', 'body', 'body-file', 'dry-run', 'thread-id', 'in-reply-to'].some(k => Object.hasOwn(args, k))) throw configError();
+      const result = await sendDraft({ user, id: args.send, ledger: (deps.loadLedger ?? loadLedger)(), fetchImpl,
+        getToken: deps.getToken ?? (options => mintToken({ ...options, keyPath: DEFAULT_KEY })),
+      });
+      emit({ ok: true, ...result }, `送信しました: ${result.sentMessageId} (${user})`);
+      return 0;
+    }
     if (Object.hasOwn(args, 'delete')) {
-      if (['check', 'to', 'cc', 'subject', 'body', 'body-file', 'dry-run'].some(k => Object.hasOwn(args, k))) throw configError();
+      if (['check', 'to', 'cc', 'subject', 'body', 'body-file', 'dry-run', 'thread-id', 'in-reply-to'].some(k => Object.hasOwn(args, k))) throw configError();
       const result = await deleteDraft({ user, id: args.delete, fetchImpl,
         getToken: deps.getToken ?? (options => mintToken({ ...options, keyPath: DEFAULT_KEY })),
       });
@@ -206,7 +245,7 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
       return 0;
     }
     if (args.check) {
-      if (['to', 'cc', 'subject', 'body', 'body-file', 'dry-run'].some(k => Object.hasOwn(args, k))) throw configError();
+      if (['to', 'cc', 'subject', 'body', 'body-file', 'dry-run', 'thread-id', 'in-reply-to'].some(k => Object.hasOwn(args, k))) throw configError();
       const results = await probeScopes({ user, keyPath: DEFAULT_KEY, scopes: SCOPES, mintToken });
       const failed = results.filter(r => !r.ok);
       emit({ ok: !failed.length, results, ...(failed.length ? { errorKind: failed[0].errorKind } : {}) },
@@ -219,7 +258,8 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
       try { body = (deps.readFile ?? (p => fs.readFileSync(p, 'utf8')))(args['body-file']); }
       catch { throw configError(); }
     }
-    const input = { from: user, to: args.to, cc: args.cc, subject: args.subject, body };
+    if (args['thread-id'] !== undefined && !/^[A-Za-z0-9_-]+$/u.test(args['thread-id'])) throw configError();
+    const input = { inReplyTo: args['in-reply-to'], from: user, to: args.to, cc: args.cc, subject: args.subject, body };
     const guard = guardRecipients(input, (deps.loadLedger ?? loadLedger)());
     if (guard.blocked) {
       action = 'chat-display';
@@ -232,12 +272,16 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
       emit({ ok: true, raw, headers }, `${headers}\n\nraw: ${raw}`);
       return 0;
     }
-    const result = await createDraft({ user, raw, fetchImpl,
+    const result = await createDraft({ user, raw, threadId: args['thread-id'], fetchImpl,
       getToken: deps.getToken ?? (options => mintToken({ ...options, keyPath: DEFAULT_KEY })),
     });
     emit({ ok: true, ...result }, `下書きを作成しました: ${result.id} (${user})`);
     return 0;
   } catch (error) {
+    if (error?.errorKind === 'internal_recipient') {
+      emit({ ok: false, errorKind: error.errorKind, internal: error.internal }, error.message);
+      return 3;
+    }
     const failure = safeFailure(error);
     emit({ ok: false, ...(action === 'delete' ? { deleted: false, id: deletionId } : {}), ...failure }, failure.error);
     return failure.errorKind === 'configuration_error' ? 2 : 1;

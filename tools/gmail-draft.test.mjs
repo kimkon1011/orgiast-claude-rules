@@ -307,3 +307,76 @@ test('削除 ID の欠落・重複・不正なパスは認証前に設定エラ�
     assert.equal(result.calls + result.tokens, 0);
   }
 });
+
+test('返信ヘッダと threadId を作成 API に渡す・注入を拒否する', async () => {
+  const result = await cli([...args, '--thread-id', 'thread123', '--in-reply-to', '<original@example.com>', '--json'], {
+    getToken: async () => 't', fetchImpl: async (_url, options) => {
+      const { message } = JSON.parse(options.body);
+      assert.equal(message.threadId, 'thread123');
+      const raw = Buffer.from(message.raw, 'base64url').toString();
+      assert.match(raw, /In-Reply-To: <original@example.com>\r\nReferences: <original@example.com>/);
+      return response({ id: 'draft' });
+    },
+  });
+  assert.equal(result.code, 0);
+  for (const flags of [['--in-reply-to', '<x@y>\r\nBcc: a@b.com'], ['--thread-id', '../send']]) {
+    const bad = await cli([...args, ...flags]);
+    assert.equal(bad.code, 2);
+    assert.equal(bad.calls + bad.tokens, 0);
+  }
+});
+const draftHeaders = extra => ({ message: { payload: { headers: [
+  { name: 'To', value: 'Customer <customer@example.com>' }, { name: 'Subject', value: '確認' }, ...extra,
+] } } });
+test('送信は指定アカウントの下書きを取得後 compose で送信し JSON を返す', async () => {
+  const requests = [];
+  const result = await cli(['--send', 'draft-123', '--user', 'shared@orgiast.jp', '--json'], {
+    getToken: async options => { assert.deepEqual(options, { user: 'shared@orgiast.jp', scope: GMAIL_COMPOSE_SCOPE }); return 't'; },
+    fetchImpl: async (url, options) => {
+      requests.push(url);
+      if (requests.length === 1) { assert.match(url, /drafts\/draft-123\?format=full$/); return response(draftHeaders([])); }
+      assert.match(url, /drafts\/send$/);
+      assert.equal(options.method, 'POST');
+      assert.deepEqual(JSON.parse(options.body), { id: 'draft-123' });
+      return response({ id: 'sent', threadId: 'thread' });
+    },
+  });
+  assert.equal(result.code, 0);
+  assert.equal(requests.length, 2);
+  assert.deepEqual(JSON.parse(result.output[0]), { action: 'send', user: 'shared@orgiast.jp', ok: true, sentMessageId: 'sent', threadId: 'thread', to: 'Customer <customer@example.com>', subject: '確認' });
+});
+test('送信前に To/Cc/Bcc の内部宛を拒否する（表示名・大小文字・台帳アドレス）', async () => {
+  for (const name of ['To', 'cC', 'BCC']) {
+    for (const value of ['Staff <STAFF@ORGIAST.JP>', 'staff@gmail.com']) {
+      let calls = 0;
+      const result = await cli(['--send', 'draft', '--json'], { getToken: async () => 't', fetchImpl: async () => {
+        calls++; return response(draftHeaders([{ name, value }]));
+      } });
+      assert.equal(result.code, 3);
+      assert.equal(calls, 1);
+      assert.equal(JSON.parse(result.output[0]).errorKind, 'internal_recipient');
+    }
+  }
+});
+test('送信引数の不正・競合は無通信、宛先不明・取得失敗では送らない', async () => {
+  for (const flags of [['--send'], ['--send', '../send'], ['--send', 'd', '--delete', 'd'], ['--send', 'd', '--check'], ['--send', 'd', '--dry-run'], ['--send', 'd', ...args], ['--send', 'd', '--thread-id', 't']]) {
+    const result = await cli([...flags, '--json']);
+    assert.equal(result.code, 2);
+    assert.equal(result.calls + result.tokens, 0);
+  }
+  for (const resp of [() => response({}, 404), () => response({}), () => response({ message: { payload: { headers: [] } } })]) {
+    let calls = 0;
+    const result = await cli(['--send', 'd', '--json'], { getToken: async () => 't', fetchImpl: async () => { calls++; return resp(); } });
+    assert.equal(result.code, 1);
+    assert.equal(calls, 1);
+  }
+});
+test('送信 API の失敗は再試行せず秘密を出さない', async () => {
+  let calls = 0;
+  const result = await cli(['--send', 'd', '--json'], { getToken: async () => 'SECRET', fetchImpl: async () => {
+    calls++; return calls === 1 ? response(draftHeaders([])) : response({ error: 'SECRET' }, 403);
+  } });
+  assert.equal(result.code, 1);
+  assert.equal(calls, 2);
+  assert.equal(result.output[0].includes('SECRET'), false);
+});

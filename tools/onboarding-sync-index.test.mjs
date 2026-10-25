@@ -88,5 +88,5 @@ test('管理ブロックが固定共有memoryを @ 参照する', async () => {
 test('メールの共有アカウント必須見出しを圧縮索引にも保持する', async () => {
   const { makeIndex } = await import('./onboarding-sync.mjs');
   const body = fs.readFileSync(new URL('../ONBOARDING.md', import.meta.url), 'utf8');
-  assert.ok(makeIndex(body).includes('**🔴 メールの下書きは全て seisaku-team@orgiast.jp に作る（tools/gmail-draft.mjs）。「送って」で重複・矛盾照会→送信**'));
+  assert.ok(makeIndex(body).includes('**🔴 下書き: seisaku-team@orgiast.jp。送信指示時は重複・矛盾照会**'));
 });

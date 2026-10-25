@@ -12,7 +12,7 @@ import { defaultOutPath, readJsonl } from "./messenger-thread-export.mjs";
 import { notifyKim } from "./notify-kim.mjs";
 
 export const THREAD_ID = "1432754484636685";
-export const CHUNK_LIMIT = 40_000;
+export const CHUNK_LIMIT = 25_000;
 const toolsDir = path.dirname(fileURLToPath(import.meta.url));
 const PLAYBOOK = "rules/ai-ops-playbook.md";
 const LEDGER = "protocols/LEARNING-LEDGER.md";
@@ -273,7 +273,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       fs.writeFileSync(promptFile, extractionPrompt(chunk, playbook, ledger), { mode: 0o600 });
       for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
-          const raw = await run(process.execPath, [path.join(toolsDir, "llm-ask.mjs"), "--provider", "gemini", "--category", "extraction", "--prefer-provider", "--prompt-file", promptFile], { timeout: 5 * 60 * 1000, env: { ...process.env, ORGIAST_HOME: home } });
+          const raw = await run(process.execPath, [path.join(toolsDir, "llm-ask.mjs"), "--provider", "gemini", "--category", "extraction", "--prefer-provider", "--max", "16000", "--prompt-file", promptFile], { timeout: 5 * 60 * 1000, env: { ...process.env, ORGIAST_HOME: home } });
           extracted.push(...parseCandidates(raw, chunk));
           successful.add(index); break;
         } catch (error) { stderr(`aihaijin-digest: チャンク ${index + 1} 試行 ${attempt + 1} 失敗 (${error.message})`); }

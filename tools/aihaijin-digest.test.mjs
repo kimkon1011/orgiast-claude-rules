@@ -127,7 +127,7 @@ test('JSON解析は1回再試行し、成功したら反映済みにする', asy
 });
 
 test('一部のチャンクが2回失敗しても成功分だけを反映済みにする', async t => {
-  const messages = [message('a', 'あ'.repeat(30000)), message('b', 'い'.repeat(30000))];
+  const messages = [message('a', 'あ'.repeat(20000)), message('b', 'い'.repeat(20000))];
   const f = fixture(t, messages), run = f.deps.run; let attempts = 0;
   f.deps.run = async (...args) => {
     if (args[1].includes('--prompt-file')) { attempts += 1; return attempts === 1 ? '[]' : 'invalid'; }

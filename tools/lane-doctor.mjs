@@ -55,7 +55,14 @@ function executable(name) {
 function orders(health) {
   health.implementOrder = ['codex', 'deepseek', 'glm', 'gemini-cli'].filter(p => health.lanes[p]?.alive);
   health.askOrder = ['gemini', 'deepseek', 'groq', 'openrouter'].filter(p => health.lanes[p]?.alive);
-  health.deadNeedsUser = Object.entries(health.lanes).filter(([p, s]) => PROVIDERS.includes(p) && /^(?:dead:)?(?:payment_required|oauth_consent|account_creation|physical_operation)$/.test(s.reason))
+  // オートチャージが存在しないサービスの残高切れは、kim に頼める操作が無い（手動チャージは禁止ルール）。
+  // llm-ask の failover（OpenRouter 経由）で代替済みなので通知しない（2026-10-25 DeepSeek に存在しない設定を依頼した）。
+  const billing = readJson(path.join(repo, 'tools/provider-billing.json'));
+  const needsUser = ([p, s]) => PROVIDERS.includes(p) && /^(?:dead:)?(?:payment_required|oauth_consent|account_creation|physical_operation)$/.test(s.reason)
+    && !(s.reason.includes('payment') && billing[p]?.autoTopUp === false);
+  health.substituted = Object.entries(health.lanes).filter(([p, s]) => PROVIDERS.includes(p) && s.reason?.includes('payment') && billing[p]?.autoTopUp === false)
+    .map(([provider]) => ({ provider, via: 'openrouter' }));
+  health.deadNeedsUser = Object.entries(health.lanes).filter(needsUser)
     .map(([provider, s]) => ({ provider, reason: s.reason, tried: s.tried, fix: s.userFix || (s.reason.includes('payment') ? '請求設定でオートチャージ ON。手動チャージは禁止ルール。' : '本人アカウントで認証画面を開き OAuth 同意を完了する。') }));
   return health;
 }

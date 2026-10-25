@@ -79,6 +79,15 @@ test('notify-time annotation adds the catalog account and splits a URL glued to 
   assert.match(out,/開くアカウント: \*\*seisaku-team@orgiast\.jp\*\*/);
   assert.equal(annotateAccounts('停止しました'),'停止しました');
 });
+test('payment stop of a service without auto top-up is substituted, not handed to kim',async t=>{
+  const h=fixture(t);const sent=[];
+  const probe=async p=>p==='deepseek'?{code:1,text:'HTTP 402 Insufficient Balance'}:{code:0,text:'PONG'};
+  const r=await laneDoctorProbe({home:h,now,probe,notify:async text=>{sent.push(text);return {delivered:'dm'};},listWsl:async()=>'Ubuntu'});
+  assert.equal(r.lanes.deepseek.reason,'dead:payment_required');
+  assert.ok(!r.deadNeedsUser.some(x=>x.provider==='deepseek'));
+  assert.deepEqual(r.substituted,[{provider:'deepseek',via:'openrouter'}]);
+  assert.ok(!sent.some(text=>/deepseek/i.test(text)));
+});
 test('notification reports key owner only from comments',t=>{const h=fixture(t);fs.appendFileSync(path.join(h,'.claude/gemini.env'),'# owner: owner@example.com\n');const text=notificationText({provider:'gemini',reason:'dead:payment_required'},h);assert.match(text,/owner@example.com/);assert.ok(!text.includes('test-fixture'));});
 test('successful probe supersedes older limit history; expired cooldown cache does not revive',t=>{
   const h=fixture(t),stamp=new Date(now-1000).toISOString();

@@ -250,8 +250,25 @@ test('ensureFeedbackIssue は Issue lookup が連続失敗すると理由付き�
   try {
     assert.throws(
       () => ensureFeedbackIssue({ message_id: 'm-fail', kind: 'bug', title: 't' }, 'o/r', { home, gh, sleep: () => {} }),
-      /Issue lookup failed \(status=1\)/,
+      /Issue lookup failed \(status=1: HTTP 502\)/,
     );
     assert.equal(listCalls, 3);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+
+test('Issue lookup diagnostics redact secrets and URLs before limiting output', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fti-diagnostic-'));
+  const secret = 'ghp_' + 'a'.repeat(36);
+  const gh = () => ({ status: 1, stderr: `HTTP 401\n${secret} https://example.test/?credential=private ${'x'.repeat(800)}` });
+  try {
+    assert.throws(() => ensureFeedbackIssue({ message_id: 'm-diagnostic', title: 't' }, 'o/r', {
+      home, gh, sleep: () => {},
+    }), (error) => {
+      assert.match(error.message, /status=1: HTTP 401/);
+      assert.doesNotMatch(error.message, /private|a{36}|\n/);
+      assert.ok(error.message.length < 550);
+      return true;
+    });
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });

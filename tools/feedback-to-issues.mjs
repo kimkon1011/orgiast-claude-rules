@@ -6,6 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
 import { isEntry } from './is-entry.mjs';
+import { redactSecrets } from './redact-secrets.mjs';
 
 // アプリ名→リポの台帳。新アプリはここに1行足すと Issue 化と完了報告(feedback-done-notify)の対象に入る。
 // 追加漏れは feedback-form-gate.mjs が本番反映時に止める(§2.11)。
@@ -191,7 +192,14 @@ export function lookupFeedbackIssue(messageId, repo, gh, { attempts = 3, delayMs
     let lookup;
     try { lookup = gh(['issue','list','--repo',repo,'--state','all','--search',`"feedback-dm:${messageId}" in:body`,'--json','number,url,body','--limit','100']); }
     catch (error) { detail = error.message; continue; }
-    if (lookup?.error || lookup?.status !== 0) { detail = lookup?.error?.message || `status=${lookup?.status}`; continue; }
+    if (lookup?.error || lookup?.status !== 0) {
+      // Preserve the cause without copying credentials or unbounded CLI output into alerts.
+      const diagnostic = redactSecrets(String(lookup?.error?.message || lookup?.stderr || ''))
+        .replace(/https?:\/\/[^\s<>"']+/gi, '[URL REDACTED]')
+        .replace(/\s+/g, ' ').trim().slice(0, 500);
+      detail = `status=${lookup?.status}${diagnostic ? `: ${diagnostic}` : ''}`;
+      continue;
+    }
     try { return JSON.parse(lookup.stdout); } catch (error) { detail = `invalid JSON: ${error.message}`; }
   }
   throw new Error(`Issue lookup failed (${detail})`);

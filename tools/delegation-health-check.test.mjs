@@ -251,6 +251,24 @@ test('実台帳行のモデル容量超過で collectFindings が codex_empty_ou
   assert.ok(!findings.some((finding) => finding.id === 'codex_empty_output'));
 });
 
+test('2026-10-22 起票の実台帳4件を rate limit と古い CLI に分離し codex_empty_output を出さない', () => {
+  const dir = home();
+  const rows = [
+    ['2026-10-21T02:52:27.000Z', 5.145, 'ERROR: exceeded retry limit, last status: 429 Too Many Requests ERROR: exceeded retry limit, last status: 429 Too Many Requests'],
+    ['2026-10-21T02:52:33.000Z', 6.240, `ERROR: {"type":"invalid_request_error","message":"The 'gpt-6-astra' model requires a newer version of Codex. Please upgrade to the latest app or CLI and try again."}`],
+    ['2026-10-22T00:10:03.357Z', 5.262, 'ERROR: exceeded retry limit, last status: 429 Too Many Requests ERROR: exceeded retry limit, last status: 429 Too Many Requests'],
+    ['2026-10-22T00:10:09.350Z', 5.990, `ERROR: {"type":"invalid_request_error","message":"The 'gpt-6-astra' model requires a newer version of Codex. Please upgrade to the latest app or CLI and try again."}`],
+  ].map(([t, secs, stderrTail]) => ({
+    t, provider: 'codex', out: 0, launched: true, timedOut: false, status: 'error', exitCode: 1, secs, stderrTail,
+  }));
+  write(dir, 'executor-usage.jsonl', rows.map(row).join(''));
+
+  const findings = collectFindings({ home: dir, now: new Date('2026-10-22T00:27:49.475Z'), codexUsedPercent: null });
+  assert.ok(!findings.some((finding) => finding.id === 'codex_empty_output'), JSON.stringify(findings));
+  assert.deepEqual(findings.find((finding) => finding.id === 'codex_usage_limit')?.evidence, ['2件', 'usage_limit(2件)']);
+  assert.deepEqual(findings.find((finding) => finding.id === 'codex_launch_failed')?.evidence, ['2件', 'launch_failed(2件)']);
+});
+
 test('実台帳行の Codex 上限到達行で collectFindings が codex_empty_output を出さず codex_usage_limit を出す', () => {
   const dir = home();
   const realUsageRow = {

@@ -247,6 +247,14 @@ const CODEX_MODEL_AUTH_MISMATCH = /is not supported when using codex with a chat
 // 最後の砦として ChatGPT の購入URL)も一致させる。
 const CODEX_USAGE_LIMIT = /You(?:[’']ve| have) hit your usage limit|your usage limit[.!]?\s*Upgrade to Pro|Upgrade to Pro \(https:\/\/chatgpt\.com\/explore\/pro\)|Usage limit (?:reached|exceeded)/i;
 
+// API 側の短期レート制限。codex CLI は本文を返す前に再試行を使い切るため out=0 になるが、
+// 「何も出さずに正常終了」ではない（2026-10-21/22 実測の4件中2件）。
+const CODEX_RATE_LIMIT = /exceeded retry limit, last status:\s*429 Too Many Requests/i;
+
+// 選択モデルに対して CLI が古く、セッション開始前に拒否された起動互換性エラー。
+// 実装出力ゼロではなく起動経路の故障として分ける（同4件中2件）。
+const CODEX_CLI_OUTDATED = /model requires a newer version of Codex\. Please upgrade to the latest app or CLI/i;
+
 // 選択モデルが一時的に満員のときは、codex 自体の出力異常ではない。
 const CODEX_MODEL_CAPACITY = /Selected model is at capacity\. Please try a different model\./i;
 
@@ -257,6 +265,7 @@ export function emptyOutputReason(row) {
   if (row?.timedOut == null && Number(row?.secs) >= 300) return 'timeout';
   if (String(row?.status ?? '').toLowerCase() === 'network') return 'infra_transient';
   if (WSL_LANE_ABSENT.test(String(row?.stderrTail || ''))) return 'launch_failed';
+  if (CODEX_CLI_OUTDATED.test(String(row?.stderrTail || ''))) return 'launch_failed';
   // 起動前のゲートが「意図的に止めた」行。launched:false だが codex は一度も起動されておらず、
   // 起動失敗ではない。codex-do が書く行の status は必ず数値で、起動前ゲートは文字列の番兵を書く
   // (2026-09-23 実測: status:"spec-missing-context" / stderrTail 空)。これを launch_failed に
@@ -277,6 +286,7 @@ export function emptyOutputReason(row) {
   if (CODEX_AUTH_FAILED.test(String(row?.stderrTail || ''))) return 'auth_failed';
   if (CODEX_MODEL_AUTH_MISMATCH.test(String(row?.stderrTail || ''))) return 'model_auth_mismatch';
   if (CODEX_USAGE_LIMIT.test(String(row?.stderrTail || ''))) return 'usage_limit';
+  if (CODEX_RATE_LIMIT.test(String(row?.stderrTail || ''))) return 'usage_limit';
   if (CODEX_MODEL_CAPACITY.test(String(row?.stderrTail || ''))) return 'model_capacity';
   if (INFRA_TRANSIENT.test(String(row?.stderrTail || ''))) return 'infra_transient';
   // 台帳の status は数値(終了コード)だけではない。llm-fallback / cheap-code は失敗の種類を

@@ -118,3 +118,31 @@ test('環境変数で無効化できる', t => {
 test('裸の待機文（c1e05b23 の原文）は後続作業が無いので pass する', () => {
   assert.deepEqual(judge('Codex の完了を待っています。'), { decision: 'pass' });
 });
+
+// handoff-audit:d1237245b7711cd0（2026-10-24T04:12Z / session 175e831d）の原文。
+// PR のレビューとマージを「通常のPR運用に任せる」として閉じた文面は、Stop gate を pass していた。
+const mergeDeferrals = [
+  '次に kim がすること: なし（PR #1060 のレビューとマージは通常のPR運用に任せます。kim への DM は送っていません）\nこのセッション: /session-close は不要なので、このセッションを閉じてよい',
+  'PR を作成しました。マージは通常運用に任せます。',
+  'PR #12 の merge は通常のマージ運用へ委ねます。',
+];
+
+for (const [index, text] of mergeDeferrals.entries()) {
+  test(`マージを通常運用に任せる文面を block する ${index + 1}`, () => {
+    const result = judge(text);
+    assert.equal(result.decision, 'block');
+    assert.equal(result.code, 'DEFERRAL-WAIT');
+    assert.match(result.reason, /gh pr view/);
+  });
+}
+
+const mergeNonDeferrals = [
+  'PR #1060 は gh pr merge で squash マージ済みです（mergedAt を gh pr view で確認）。',
+  'マージは通常運用に任せず、当ターンで実行しました。',
+  '[handoff-audit:d1237245b7711cd0] 再発検証「PR #1060 のレビューとマージは通常のPR運用に任せます」を引用した行',
+  '通常運用の手順は README にあります。',
+];
+
+for (const [index, text] of mergeNonDeferrals.entries()) {
+  test(`マージ済み報告・否定・引用は pass する ${index + 1}`, () => assert.deepEqual(judge(text), { decision: 'pass' }));
+}

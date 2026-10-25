@@ -88,6 +88,13 @@ test('payment stop of a service without auto top-up is substituted, not handed t
   assert.deepEqual(r.substituted,[{provider:'deepseek',via:'openrouter'}]);
   assert.ok(!sent.some(text=>/deepseek/i.test(text)));
 });
+test('a fresh failed Codex probe is re-measured instead of being reused',async t=>{
+  const h=fixture(t);
+  write(h,'lane-health.json',{lanes:{codex:{alive:false,reason:'probe_failed',probedAt:new Date(now-60_000).toISOString()}}});
+  const probe=async()=>({code:0,text:'PONG'});
+  const r=await laneDoctorProbe({home:h,now,probe,notify:async()=>({delivered:'dm'}),listWsl:async()=>'Ubuntu'});
+  assert.equal(r.lanes.codex.alive,true);
+});
 test('notification reports key owner only from comments',t=>{const h=fixture(t);fs.appendFileSync(path.join(h,'.claude/gemini.env'),'# owner: owner@example.com\n');const text=notificationText({provider:'gemini',reason:'dead:payment_required'},h);assert.match(text,/owner@example.com/);assert.ok(!text.includes('test-fixture'));});
 test('successful probe supersedes older limit history; expired cooldown cache does not revive',t=>{
   const h=fixture(t),stamp=new Date(now-1000).toISOString();

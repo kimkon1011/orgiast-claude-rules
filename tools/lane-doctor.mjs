@@ -188,7 +188,8 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
       }
       const dry = await probe(p, { home, timeoutMs: Math.min(15000, probeBudget), dryRun: true });
       if (dry.code !== 0) return [p, dry];
-      if (freshProbe(previous.lanes?.codex?.probedAt, now)) return [p, { cached: previous.lanes.codex }];
+      // 再利用は成功結果だけ。失敗を30分使い回すと直後に直ったレーンが停止のまま残る（2026-10-25 実測: 直接実行は PONG なのに probe_failed）。
+      if (previous.lanes?.codex?.alive && freshProbe(previous.lanes.codex.probedAt, now)) return [p, { cached: previous.lanes.codex }];
     }
     return [p, { ...await probe(p, { home, timeoutMs: Math.max(1, probeBudget - (Date.now() - started)) }), ...(p === 'codex' ? { authOk: true } : {}) }];
   }));

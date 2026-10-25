@@ -311,6 +311,7 @@ test('削除 ID の欠落・重複・不正なパスは認証前に設定エラ�
 test('返信ヘッダと threadId を作成 API に渡す・注入を拒否する', async () => {
   const result = await cli([...args, '--thread-id', 'thread123', '--in-reply-to', '<original@example.com>', '--json'], {
     getToken: async () => 't', fetchImpl: async (_url, options) => {
+      if (options.method === 'GET') return response({ messages: [{ payload: { headers: [{ name: 'Message-ID', value: '<original@example.com>' }] } }] });
       const { message } = JSON.parse(options.body);
       assert.equal(message.threadId, 'thread123');
       const raw = Buffer.from(message.raw, 'base64url').toString();
@@ -379,4 +380,103 @@ test('送信 API の失敗は再試行せず秘密を出さない', async () => 
   assert.equal(result.code, 1);
   assert.equal(calls, 2);
   assert.equal(result.output[0].includes('SECRET'), false);
+});
+
+const replyMessage = (id, subject, references, labelIds = []) => ({ labelIds, payload: { headers: [
+  { name: 'message-id', value: id }, { name: 'sUbJeCt', value: subject },
+  ...(references ? [{ name: 'References', value: references }] : []),
+] } });
+
+test('スレッド取得で最後の非 DRAFT へ返信し、References と件名を引き継ぐ', async () => {
+  for (const trailingDraft of [false, true]) {
+    for (const subject of ['日程調整', 'Re: 日程調整', 're: 日程調整']) {
+      for (const explicit of [false, true]) {
+        const requests = [];
+        const scopes = [];
+        const messages = [replyMessage('<old@example.com>', '古い件名'),
+          replyMessage('<parent@example.com>', subject, '<root@example.com> <old@example.com>')];
+        if (trailingDraft) messages.push(replyMessage('<draft@example.com>', '下書き', '', ['DRAFT']));
+        const result = await cli(['--to', input.to, '--body', input.body, '--thread-id', 'thread123', '--json',
+          ...(explicit ? ['--subject', '指定件名'] : [])], {
+          getToken: async options => { scopes.push(options.scope); assert.equal(options.user, DEFAULT_USER); return 't'; },
+          fetchImpl: async (url, options) => {
+            requests.push(url);
+            if (requests.length === 1) {
+              const parsed = new URL(url);
+              assert.equal(parsed.pathname, '/gmail/v1/users/me/threads/thread123');
+              assert.equal(parsed.searchParams.get('format'), 'metadata');
+              assert.deepEqual(parsed.searchParams.getAll('metadataHeaders'), ['Message-ID', 'References', 'Subject']);
+              assert.equal(options.method, 'GET');
+              assert.equal(options.headers.Authorization, 'Bearer t');
+              return response({ messages });
+            }
+            assert.equal(url, 'https://gmail.googleapis.com/gmail/v1/users/me/drafts');
+            const { message } = JSON.parse(options.body);
+            assert.equal(message.threadId, 'thread123');
+            const raw = Buffer.from(message.raw, 'base64url').toString();
+            assert.ok(raw.includes('In-Reply-To: <parent@example.com>\r\n'));
+            assert.ok(raw.includes('References: <root@example.com> <old@example.com> <parent@example.com>\r\n'));
+            const decodedSubject = [...raw.matchAll(/=\?UTF-8\?B\?([^?]*)\?=/gu)].map(m => Buffer.from(m[1], 'base64').toString()).join('');
+            assert.equal(decodedSubject, explicit ? '指定件名' : /^re:/i.test(subject) ? subject : `Re: ${subject}`);
+            return response({ id: 'draft' });
+          },
+        });
+        assert.equal(result.code, 0);
+        assert.equal(requests.length, 2);
+        assert.deepEqual(scopes, ['https://www.googleapis.com/auth/gmail.readonly', GMAIL_COMPOSE_SCOPE]);
+      }
+    }
+  }
+});
+
+test('thread-id の dry-run は認証・APIなしで予定ヘッダを表示する', async () => {
+  for (const json of [false, true]) {
+    const result = await cli(['--to', input.to, '--body', input.body, '--thread-id', 'thread123', '--dry-run', ...(json ? ['--json'] : [])]);
+    assert.equal(result.code, 0);
+    assert.equal(result.calls + result.tokens, 0);
+    const report = json ? JSON.parse(result.output[0]) : { headers: result.output[0] };
+    assert.ok(report.headers.includes('In-Reply-To: (取得予定)'));
+    assert.ok(report.headers.includes('References:'));
+    assert.ok(result.output[0].includes('thread123'));
+    if (json) assert.equal(report.threadId, 'thread123');
+  }
+});
+
+test('thread-id なしは取得を行わず従来と同一の MIME を POST する', async () => {
+  let calls = 0;
+  const result = await cli([...args, '--json'], {
+    getToken: async () => 't', fetchImpl: async (url, options) => {
+      calls++;
+      assert.equal(url, 'https://gmail.googleapis.com/gmail/v1/users/me/drafts');
+      assert.deepEqual(JSON.parse(options.body), { message: { raw: buildRawMessage(input) } });
+      return response({ id: 'draft' });
+    },
+  });
+  assert.equal(result.code, 0);
+  assert.equal(calls, 1);
+});
+
+test('スレッド返信も内部宛は認証前に停止する', async () => {
+  const result = await cli(['--to', 'staff@orgiast.jp', '--body', '本文', '--thread-id', 'thread123']);
+  assert.equal(result.code, 3);
+  assert.equal(result.calls + result.tokens, 0);
+});
+
+test('返信先なし・Message-ID 欠落・ヘッダ注入・取得失敗なら下書きを作らない', async () => {
+  for (const [thread, status] of [
+    [{ messages: [] }, 200],
+    [{ messages: [replyMessage('<draft@example.com>', '件名', '', ['DRAFT'])] }, 200],
+    [{ messages: [{ payload: { headers: [] } }] }, 200],
+    [{ messages: [replyMessage('<parent@example.com>', '件名', '<root@example.com>\r\nBcc: evil@example.com')] }, 200],
+    [{ messages: [replyMessage('<parent@example.com>\r\nBcc: evil@example.com', '件名')] }, 200],
+    [{ error: 'SECRET' }, 403],
+  ]) {
+    let calls = 0;
+    const result = await cli(['--to', input.to, '--body', input.body, '--thread-id', 'thread123', '--json'], {
+      getToken: async () => 't', fetchImpl: async () => { calls++; return response(thread, status); },
+    });
+    assert.notEqual(result.code, 0);
+    assert.equal(calls, 1);
+    assert.equal(result.output[0].includes('SECRET'), false);
+  }
 });

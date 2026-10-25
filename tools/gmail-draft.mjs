@@ -7,10 +7,10 @@
  * 使い方:
  *   node tools/gmail-draft.mjs --check [--user <addr>] [--json]
  *   node tools/gmail-draft.mjs --send <draftId> [--user <addr>] [--json]
- *   返信作成: --thread-id <id> --in-reply-to <Message-ID>
+ *   返信作成: --thread-id <threadId>（返信先ヘッダ・省略時の件名を自動取得）
  *   node tools/gmail-draft.mjs --delete <draftId> [--user <addr>] [--json]
  *   node tools/gmail-draft.mjs --to <addr> [--cc <addr>] --subject <件名>
- *     (--body <本文> | --body-file <path>) [--user <addr>] [--dry-run] [--json]
+ *     (--body <本文> | --body-file <path>) [--thread-id <threadId>] [--user <addr>] [--dry-run] [--json]
  *   宛先は裸のメールアドレス（複数はカンマ区切り、またはオプションを反復）。
  *   --check はトークン取得だけ。--dry-run は認証も API 呼び出しもしない。
  * 終了コード: 0 成功 / 3 内部宛 / 2 設定エラー / 1 その他。
@@ -39,8 +39,9 @@ function addresses(value, required = false) {
   return list;
 }
 
-export function buildRawMessage({ from, to, cc, subject, body, inReplyTo }) {
+export function buildRawMessage({ from, to, cc, subject, body, inReplyTo, references }) {
   if (inReplyTo !== undefined && (typeof inReplyTo !== 'string' || !/^<[^<>\s]+@[^<>\s]+>$/u.test(inReplyTo))) throw configError();
+  if (references !== undefined && (typeof references !== 'string' || /[\r\n]/u.test(references))) throw configError();
   const sender = addresses(from, true);
   if (sender.length !== 1 || typeof subject !== 'string' || /[\r\n]/u.test(subject) || typeof body !== 'string') throw configError();
   // encoded-word は UTF-8 文字の途中で切らず、RFC の 75 文字制限内で折り返す。
@@ -57,7 +58,7 @@ export function buildRawMessage({ from, to, cc, subject, body, inReplyTo }) {
     `From: ${sender[0]}`, `To: ${addresses(to, true).join(', ')}`,
     ...(copy.length ? [`Cc: ${copy.join(', ')}`] : []),
     `Subject: ${encodedSubject}`,
-    ...(inReplyTo ? [`In-Reply-To: ${inReplyTo}`, `References: ${inReplyTo}`] : []), 'MIME-Version: 1.0',
+    ...(inReplyTo ? [`In-Reply-To: ${inReplyTo}`, `References: ${references || inReplyTo}`] : []), 'MIME-Version: 1.0',
     'Content-Type: text/plain; charset="UTF-8"', 'Content-Transfer-Encoding: base64',
   ];
   const encodedBody = Buffer.from(body.replace(/\r\n|\r|\n/gu, '\r\n')).toString('base64');
@@ -133,6 +134,27 @@ export async function probeScopes({ user = DEFAULT_USER, keyPath = DEFAULT_KEY, 
     } catch (error) { results.push({ scope, ok: false, ...safeFailure(error) }); }
   }
   return results;
+}
+
+async function getReplyHeaders({ user, threadId, fetchImpl, getToken }) {
+  const token = await getToken({ user, scope: SCOPES[0] });
+  const query = new URLSearchParams({ format: 'metadata' });
+  for (const name of ['Message-ID', 'References', 'Subject']) query.append('metadataHeaders', name);
+  const res = await fetchImpl(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${threadId}?${query}`, {
+    method: 'GET', signal: AbortSignal.timeout(25000), headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw Object.assign(new Error('Gmail API 失敗'), {
+    errorKind: res.status === 403 ? 'forbidden_no_access' : res.status === 401 ? 'unauthorized' : 'error',
+  });
+  const thread = await res.json();
+  const parent = thread.messages?.findLast(message => !message.labelIds?.includes('DRAFT'));
+  const headers = parent?.payload?.headers;
+  if (!Array.isArray(headers)) throw new Error('返信先がありません');
+  const header = name => headers.find(h => String(h.name).toLowerCase() === name)?.value;
+  const inReplyTo = header('message-id');
+  if (!inReplyTo) throw new Error('返信先の Message-ID がありません');
+  const references = header('references');
+  return { inReplyTo, references: references ? `${references} ${inReplyTo}` : inReplyTo, subject: header('subject') ?? '' };
 }
 
 export async function createDraft({ user = DEFAULT_USER, raw, threadId, fetchImpl = globalThis.fetch, getToken }) {
@@ -252,28 +274,41 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
         results.map(r => `${r.ok ? 'OK' : 'NG'} ${r.scope}${r.ok ? '' : ` ${r.errorKind}: ${r.error}`}`).join('\n'));
       return failed.some(r => r.errorKind === 'configuration_error') ? 2 : failed.length ? 1 : 0;
     }
-    if (!Object.hasOwn(args, 'subject') || Object.hasOwn(args, 'body') === Object.hasOwn(args, 'body-file')) throw configError();
+    if ((!Object.hasOwn(args, 'subject') && !Object.hasOwn(args, 'thread-id')) || Object.hasOwn(args, 'body') === Object.hasOwn(args, 'body-file')) throw configError();
     let body = args.body;
     if (args['body-file'] !== undefined) {
       try { body = (deps.readFile ?? (p => fs.readFileSync(p, 'utf8')))(args['body-file']); }
       catch { throw configError(); }
     }
     if (args['thread-id'] !== undefined && !/^[A-Za-z0-9_-]+$/u.test(args['thread-id'])) throw configError();
-    const input = { inReplyTo: args['in-reply-to'], from: user, to: args.to, cc: args.cc, subject: args.subject, body };
+    const input = { inReplyTo: args['in-reply-to'], from: user, to: args.to, cc: args.cc, subject: args.subject ?? 'Re: (取得予定)', body };
     const guard = guardRecipients(input, (deps.loadLedger ?? loadLedger)());
     if (guard.blocked) {
       action = 'chat-display';
       emit({ ok: false, errorKind: 'internal_recipient', internal: guard.internal, chatDisplay: guard.chatDisplay }, guard.chatDisplay);
       return 3;
     }
-    const raw = buildRawMessage(input);
+    // 入力の検証と内部宛の停止を、認証・スレッド取得より先に行う。
+    let raw = buildRawMessage(input);
     if (args['dry-run']) {
-      const headers = Buffer.from(raw, 'base64url').toString('utf8').split('\r\n\r\n')[0];
-      emit({ ok: true, raw, headers }, `${headers}\n\nraw: ${raw}`);
+      let headers = Buffer.from(raw, 'base64url').toString('utf8').split('\r\n\r\n')[0];
+      if (args['thread-id']) {
+        headers = headers.replace(/\r\n(?:In-Reply-To|References):[^\r\n]*/gu, '');
+        headers += '\r\nIn-Reply-To: (取得予定)\r\nReferences: (返信先の References を取得予定) (取得予定)';
+      }
+      emit({ ok: true, raw, headers, ...(args['thread-id'] ? { threadId: args['thread-id'] } : {}) },
+        `${args['thread-id'] ? `threadId: ${args['thread-id']}\n` : ''}${headers}\n\nraw: ${raw}`);
       return 0;
     }
+    const getToken = deps.getToken ?? (options => mintToken({ ...options, keyPath: DEFAULT_KEY }));
+    if (args['thread-id']) {
+      const reply = await getReplyHeaders({ user, threadId: args['thread-id'], fetchImpl, getToken });
+      raw = buildRawMessage({ ...input, ...reply,
+        subject: args.subject ?? (/^Re:/iu.test(reply.subject) ? reply.subject : `Re: ${reply.subject}`),
+      });
+    }
     const result = await createDraft({ user, raw, threadId: args['thread-id'], fetchImpl,
-      getToken: deps.getToken ?? (options => mintToken({ ...options, keyPath: DEFAULT_KEY })),
+      getToken,
     });
     emit({ ok: true, ...result }, `下書きを作成しました: ${result.id} (${user})`);
     return 0;

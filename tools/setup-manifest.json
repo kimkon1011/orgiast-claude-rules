@@ -1,6 +1,7 @@
 {
   "version": 1,
   "items": [
+    { "id": "task:aihaijin-digest", "type": "scheduled-task", "severity": "optional", "spec": { "name": "OrgiastAihaijinDigest", "ifPresent": ".claude/messenger-profile" }, "description": "kim-PC: AI廃人部の週次取り込み(日曜03:20、Messengerプロファイル設定済PCのみ)", "repair": ["register-aihaijin-digest.mjs"] },
     {"id": "task:quota-sweep", "type": "scheduled-task", "severity": "optional", "spec": {"name": "OrgiastQuotaSweep"}, "description": "Claude/Codex の枠リセット直前に残枠を makeloop で消化(15分ごと判定)", "repair": ["register-quota-sweep.mjs"]},
     {"id": "plugin:makeloop", "type": "file-contains", "severity": "optional", "spec": {"path": ".claude/.makeloop-installed.json", "regex": "\"claude\"\\s*:\\s*true"}, "description": "makeloop プラグイン(Claude Code/Codex)導入", "repair": ["install-makeloop.mjs"]},
     {"id": "tool:quota-sweep", "type": "file-nonempty", "severity": "optional", "spec": {"paths": [".claude/nightly-repo/tools/quota-sweep.mjs", "orgiast-claude-rules/tools/quota-sweep.mjs", "Downloads/orgiast-claude-rules/tools/quota-sweep.mjs"]}, "description": "残枠掃除ジョブ(repo直参照)", "repair": ["onboarding-sync.mjs", "--force"]},

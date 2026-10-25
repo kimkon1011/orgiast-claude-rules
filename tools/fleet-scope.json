@@ -527,6 +527,12 @@
       "reason": "販管費オートパイロット。DWD 鍵と kim の Discord DM が前提のため kim-PC 専用"
     },
     {
+      "path": "tools/register-aihaijin-digest.ps1",
+      "scope": "kim-only",
+      "step": "task:aihaijin-digest",
+      "reason": "setup --converge 経由。Messenger専用プロファイルがあるPCだけ週次取り込みを登録する"
+    },
+    {
       "path": "tools/register-messenger-watch.ps1",
       "scope": "kim-only",
       "step": null,

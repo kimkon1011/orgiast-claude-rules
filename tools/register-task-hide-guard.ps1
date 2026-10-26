@@ -1,8 +1,12 @@
 ﻿$ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'ensure-run-hidden.ps1')
+. (Join-Path $PSScriptRoot 'resolve-synced-repo.ps1')
 $repo = if ($env:ORGIAST_NIGHTLY_REPO) { $env:ORGIAST_NIGHTLY_REPO } else { Join-Path $env:USERPROFILE '.claude\nightly-repo' }
-$tools = Join-Path $repo 'tools'
-if (-not (Test-Path -LiteralPath (Join-Path $tools 'task-hide-guard.ps1'))) { $tools = $PSScriptRoot }
+$previousRepo = $env:ORGIAST_NIGHTLY_REPO
+try {
+  $env:ORGIAST_NIGHTLY_REPO = $repo
+  $tools = Resolve-RegisterToolsDir -Fallback $PSScriptRoot -RequiredLeaves @('task-hide-guard.ps1')
+} finally { $env:ORGIAST_NIGHTLY_REPO = $previousRepo }
 $user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
 $logon = New-ScheduledTaskTrigger -AtLogOn -User $user

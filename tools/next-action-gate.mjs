@@ -152,7 +152,7 @@ function hasSessionWakeup(raw) {
         || (/^(?:Bash|PowerShell)$/.test(tool.name || '') && tool.input?.run_in_background === true)) background = true;
     }
   }
-  return autoProgress || background;
+  return { autoProgress, background };
 }
 
 export function judgeNextAction(text, transcriptRaw = '', input = {}) {
@@ -212,8 +212,13 @@ export function judgeNextAction(text, transcriptRaw = '', input = {}) {
   if (footer.nextAction !== 'なし' && (DEFERRAL_PATTERN.test(footer.nextAction) || isLandingDeferral(footer.nextAction) || (IMPLEMENTATION_PATTERN.test(footer.nextAction) && DELIVERY_PATTERN.test(body)))) {
     return { decision: 'block', code: 'NEXT-ACTION-DEFERRAL', reason: DEFERRAL_REASON };
   }
+  const wakeup = hasSessionWakeup(transcriptRaw);
+  if (hasAutopilot && footer.nextAction !== 'なし' && !wakeup.autoProgress
+    && process.env.CLAUDE_HEADLESS !== '1' && !/subagents/i.test(input.transcript_path || '')) {
+    return { decision: 'block', code: 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK', reason: '人待ちの自動進行は台帳の定期チェックに載せる: node tools/auto-progress.mjs --add-check --session <id> --check "<exit0=達成/1=未達のコマンド>" --deadline +7d --label "<名前>"' };
+  }
   if (!permanentFix && hasAutopilot && process.env.CLAUDE_HEADLESS !== '1'
-    && !/subagents/i.test(input.transcript_path || '') && !hasSessionWakeup(transcriptRaw)) {
+    && !/subagents/i.test(input.transcript_path || '') && !wakeup.autoProgress && !wakeup.background) {
     return { decision: 'block', code: 'AUTOPILOT-NO-SESSION-WAKEUP', reason: '「この後の自動進行」が残っていますが、このセッションを定期的に起こす仕組みがありません。node tools/auto-progress.mjs --add-check --session <id> --check "<cmd>" --deadline +24h --label "<名前>" --next-claude "<次の手>" で進捗確認を登録してから終えてください。自動進行が無いなら「この後の自動進行: なし」と書いてください。' };
   }
   return permanentFix || { decision: 'pass', reason: 'valid-footer' };

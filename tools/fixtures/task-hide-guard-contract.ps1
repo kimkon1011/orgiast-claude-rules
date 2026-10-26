@@ -2,7 +2,11 @@
 param([Parameter(Mandatory=$true)][string]$TestHome)
 $ErrorActionPreference = 'Stop'
 # Load constructors before defining mocks: module autoload can replace local functions.
-Import-Module ScheduledTasks, Microsoft.PowerShell.Management, Microsoft.PowerShell.Utility, Microsoft.PowerShell.Security
+# Import only when absent: re-importing Microsoft.PowerShell.Security on the GitHub
+# Windows runner fails with "TypeData ObjectSecurity: member already present".
+foreach ($m in 'ScheduledTasks', 'Microsoft.PowerShell.Management', 'Microsoft.PowerShell.Utility', 'Microsoft.PowerShell.Security') {
+  if (-not (Get-Module -Name $m)) { Import-Module $m -ErrorAction SilentlyContinue -WarningAction SilentlyContinue }
+}
 $PSModuleAutoLoadingPreference = 'None'
 $env:USERPROFILE = $TestHome
 $contractTools = Split-Path $PSScriptRoot

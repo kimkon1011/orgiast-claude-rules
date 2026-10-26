@@ -190,5 +190,11 @@
     "route": "PR は作成時に `gh pr create --label automerge` で出す（ラベル無しの PR は auto-merge.yml が eligible=false と判定し、永久に着地しない）。作成後は同じセッションで `gh pr view <N> --json state,mergedAt` を叩き、MERGED になるまで追う。自分の PC でラベルを付けられない場合は、fleet-mail で write 権限のある PC へ automerge ラベルの付与を依頼し、MERGED を read-back するまで完了にしない。実証: 2026-10-26 #1141/#1133 は依頼から 16〜43 分で MERGED（a74a6bf0）。rescue/auto-session-20261025-030203 では route が道具名だけの `gh pr create` だったため手順文に置換した。",
     "confidence": "high",
     "source": "handoff-audit-nightly:3de88bab689d3bd74aff43895daa8a61d59e192040a3af1efff71ca78d2876cb / 2026-10-26 rescue e7c10a2 レビューで route を手順化"
+  },
+  {
+    "pattern": "外部メール受信状態確認",
+    "route": "Gmail MCP",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:9128587e47aa6dab158749822a339704dcfdec1e3f255088253997d5c3a52943"
   }
 ]

@@ -7,7 +7,10 @@ import { calculateDelegation, calculateLinesDelegation, classifyBashCommand, cla
 
 test('non-Claude models count in the non-Claude delegation numerator', () => {
   assert.equal(modelTier('glm-5.3'), 'nonclaude');
+  // 過去ログの旧名も新名も同じ区分で集計する。
   assert.equal(modelTier('deepseek-v4-flash'), 'nonclaude');
+  assert.equal(modelTier('deepseek-chat'), 'nonclaude');
+  assert.equal(modelTier('deepseek-flash'), 'nonclaude');
   const value = calculateDelegation({ byModel: { nonclaude: 40, opus: 60 } });
   assert.equal(value.execOut, 40); assert.equal(value.nonClaudeDelegRatio, .4);
 });

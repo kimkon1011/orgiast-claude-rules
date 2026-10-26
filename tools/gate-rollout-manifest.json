@@ -5,7 +5,12 @@
     "DESKTOP-2D0R4LI"
   ],
   "gates": {
+    "mail-consistency-gate": { "rollout": "deny", "immediatePolicy": "2026-10-26 博展見積: 合意済み『設営スタッフ不要』が見積に反映されないまま請求へ進みかけた", "distributedAt": "2026-10-26T00:00:00Z", "denyAfter": "2026-11-02T00:00:00Z" },
+    "mail-draft-account-gate": { "rollout": "deny", "immediatePolicy": "2026-10-25 kim 指示: 全PCのメール下書きは seisaku-team@orgiast.jp に統一" },
+    "recipient-domain-gate": { "rollout": "deny", "immediatePolicy": "2026-10-23 名刺OCR誤読による不存在ドメイン送信防止" },
+    "pretooluse-line-broadcast-guard": { "rollout": "deny", "immediatePolicy": "2026-10-23 kim 指示: LINE broadcast による宛先違い誤送信の再発防止" },
     "share-before-send-gate": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-10-17T00:00:00Z", "denyAfter": "2026-10-24T00:00:00Z" },
+    "message-locator-gate": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-10-26T00:00:00Z", "denyAfter": "2026-11-02T00:00:00Z" },
     "gmail-connector-url-gate": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-10-18T00:00:00Z", "denyAfter": "2026-10-25T00:00:00Z" },
     "api-billing-guard": { "rollout": "deny", "immediatePolicy": "2026-10-17 kim 厳命: 従量課金停止", "distributedAt": "2026-10-17T00:00:00Z" },
     "askuser-selfcheck-gate": {
@@ -36,6 +41,13 @@
     "feedback-form-gate": {
       "rollout": "deny",
       "legacy": true
+    },
+    "bihin-kcol-gate": { "rollout": "deny", "immediatePolicy": "2026-10-23 古川さん依頼: 備品管理表K列のデータ破損防止", "distributedAt": "2026-10-23T00:00:00Z" },
+    "handover-doc-gate": {
+      "rollout": "deny",
+      "distributedAt": "2026-10-22T00:00:00Z",
+      "denyAfter": "2026-10-29T00:00:00Z",
+      "pilotDeny": true
     },
     "gh-handoff-gate": {
       "rollout": "deny",
@@ -147,6 +159,11 @@
       "rollout": "deny",
       "legacy": true
     },
+    "japanese-response-gate": {
+      "rollout": "deny",
+      "distributedAt": "2026-10-18T00:00:00Z",
+      "denyAfter": "2026-10-25T00:00:00Z"
+    },
     "shallow-answer-gate": {
       "rollout": "deny",
       "distributedAt": "2026-10-10T00:00:00Z",
@@ -180,6 +197,12 @@
     "verify-before-done-detector": {
       "rollout": "deny",
       "legacy": true
+    },
+    "merge-handoff-gate": {
+      "rollout": "deny",
+      "distributedAt": "2026-10-25T00:00:00Z",
+      "denyAfter": "2026-11-01T00:00:00Z",
+      "pilotDeny": true
     },
     "side-effect-left-gate": {
       "rollout": "deny",

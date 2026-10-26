@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import fs from 'node:fs';
+import { runAudit } from './unattended-job-audit.mjs';
 import { scan as scanStalls, asAnomalies } from './stall-scan.mjs';
 import { expectationLog, logIsStale } from './lib/health-signals.mjs';
 import { runConvergenceWatch } from './fleet-convergence-watch.mjs';
@@ -314,6 +315,7 @@ export async function runNightlyHealth({
   streakNotifyImpl,
   gasDrift = checkGasMasterDrift,
   convergenceWatch = runConvergenceWatch,
+  unattendedAudit = runAudit,
   stallScan = scanStalls
 } = {}) {
   const dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -324,6 +326,15 @@ export async function runNightlyHealth({
   const newOffsets = { ...oldOffsets };
   const anomalies = [];
   const dedicatedStreakAnomalies = new Set();
+  try {
+    const audit = await unattendedAudit({ home, now: now.getTime(), platform, dryRun: dryRun || prime });
+    for (const finding of audit.unresolved || []) {
+      const anomaly = { type: 'unattended_unresolved', label: '無人ジョブ監査', message: `未修復: ${finding.name}（${finding.reason}）` };
+      anomalies.push(anomaly);
+      dedicatedStreakAnomalies.add(anomaly);
+    }
+    if (audit.error) anomalies.push({ type: 'unattended_audit_error', label: '無人ジョブ監査', message: '計測不能' });
+  } catch { anomalies.push({ type: 'unattended_audit_error', label: '無人ジョブ監査', message: '計測不能' }); }
   try { anomalies.push(...asAnomalies(await stallScan({ home, now: now.getTime(), platform, expectations, save: !dryRun }))); }
   catch (error) { anomalies.push({ type: 'stall_scan_error', label: '停滞診断', message: error.message }); }
   try {

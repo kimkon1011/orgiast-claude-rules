@@ -12,7 +12,7 @@ export const FALLBACK_CHAIN = Object.freeze([
   // Genspark Pro は前払いクレジットなので従量課金プロバイダより先に使う。
   { provider: 'genspark', model: 'gpt-5.6-luna' },
   { provider: 'openrouter', model: 'openai/gpt-oss-120b' },
-  { provider: 'deepseek', model: 'deepseek-chat' },
+  { provider: 'deepseek', model: 'deepseek-flash' },
   { provider: 'gemini', model: 'gemini-3.7-flash' },
   { provider: 'grok', model: 'grok-3' },
   { provider: 'kimi', model: 'kimi-k3' },
@@ -29,6 +29,17 @@ export const KNOWN_CHEAP_PROVIDERS = Object.freeze([
 ]);
 
 const ROUTING_TABLE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'routing-table.json');
+const GATEWAY_MODELS = Object.freeze({
+  deepseek: 'deepseek/deepseek-v4-flash',
+  kimi: 'moonshotai/kimi-k3',
+});
+
+// 会議・通話・Podcastの文字起こしでは話者と発言の帰属を優先し、DeepSeekを使わない。
+// OpenRouter経由でも同じモデルなので、直接APIからの迂回も防ぐ。
+export function allowedForCategory(candidate, category) {
+  return String(category || '').trim().toLowerCase() !== 'transcript'
+    || (candidate?.provider !== 'deepseek' && !String(candidate?.model || '').startsWith('deepseek/'));
+}
 
 // eval 実測のルーティング表(tools/routing-table.json)から、指定カテゴリで最安の候補を返す。
 // 表が無い・カテゴリが無い・暫定計測(provisional)のどれでも null を返し、既定の連鎖を使わせる。
@@ -38,7 +49,7 @@ export function preferredForCategory(category) {
   try {
     const table = JSON.parse(fs.readFileSync(ROUTING_TABLE, 'utf8'));
     const entry = table?.categories?.[name];
-    if (!entry || !entry.provider) return null;
+    if (!entry || !entry.provider || !allowedForCategory(entry, name)) return null;
     return { provider: entry.provider, model: entry.model, ...(entry.provisional ? { provisional: true } : {}) };
   } catch {
     return null;
@@ -79,6 +90,10 @@ export function classifyFailure(status) {
   return 'next';
 }
 
+export function isPermanentBillingDetail(detail) {
+  return /prepayment credits are depleted|insufficient_quota|exceeded your current quota|insufficient balance|insufficient_balance|exceeded_current_quota|is suspended due to|please recharge your account/i.test(String(detail || ''));
+}
+
 function retryAfterMs(response, now = Date.now()) {
   const value = response?.headers?.get?.('retry-after');
   if (!value) return null;
@@ -99,7 +114,37 @@ function reasonForLog(reason, maxLength = 140) {
   return singleLine.length <= maxLength ? singleLine : `${singleLine.slice(0, maxLength - 1)}…`;
 }
 
-export async function callWithFallback({ start, chain = FALLBACK_CHAIN, allowGatewayFallback = true, payloadFor, fetchImpl = fetch, onAttempt, onFailover, validateResponse, sleepImpl = defaultSleep, cooldownFile, ledgerFile, budgetFile, now = () => Date.now() }) {
+// Bound both headers and body consumption; abort the real HTTP request and also
+// settle when a custom transport ignores AbortSignal. Retried requests share the
+// candidate's deadline rather than receiving a fresh budget each time.
+async function fetchBeforeDeadline(fetchImpl, request, deadline) {
+  if (deadline == null) return fetchImpl(request.url, request.init);
+  const controller = new AbortController();
+  const timeout = new Error('per-provider timeout');
+  timeout.code = 'PROVIDER_TIMEOUT';
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw timeout;
+  const upstream = request.init?.signal;
+  const signal = upstream ? AbortSignal.any([upstream, controller.signal]) : controller.signal;
+  let timer;
+  try {
+    return await Promise.race([
+      new Promise((_, reject) => {
+        timer = setTimeout(() => { controller.abort(timeout); reject(timeout); }, remaining);
+      }),
+      (async () => {
+        const response = await fetchImpl(request.url, { ...request.init, signal });
+        const body = await response.arrayBuffer();
+        return new Response([101, 204, 205, 304].includes(response.status) ? null : body, {
+          status: response.status, statusText: response.statusText, headers: response.headers,
+        });
+      })(),
+    ]);
+  } finally { clearTimeout(timer); }
+}
+
+export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category = '', allowGatewayFallback = true, payloadFor, fetchImpl = fetch, onAttempt, onFailover, validateResponse, sleepImpl = defaultSleep, cooldownFile, ledgerFile, budgetFile, persistState = true, perProviderTimeoutMs, now = () => Date.now() }) {
+  if (perProviderTimeoutMs != null && (!Number.isSafeInteger(perProviderTimeoutMs) || perProviderTimeoutMs <= 0 || perProviderTimeoutMs > 2147483647)) throw new Error('perProviderTimeoutMs must be a positive timer-safe integer');
   const home = process.env.ORGIAST_HOME || os.homedir();
   const timestamp = now();
   const cost = dailyCost(ledgerFile || path.join(home, '.claude', 'executor-usage.jsonl'), timestamp);
@@ -108,31 +153,38 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, allowGat
   if (cost > hard) throw new Error(`本日の従量上限 $${hard.toFixed(2)} に達したため停止しました（概算 $${cost.toFixed(2)}）。ORGIAST_LLM_DAILY_HARD_USD で変更可`);
   if (cost > warn) console.error(`[cost] 本日の安いAI実行者 概算 $${cost.toFixed(2)} が警告値 $${warn.toFixed(2)} を超過`);
 
-  const candidates = [];
-  const seen = new Set();
-  const deepseekGateway = { provider: 'openrouter', model: 'deepseek/deepseek-v4-flash' };
-  const expanded = allowGatewayFallback && start?.provider === 'deepseek' ? [start, deepseekGateway, ...chain] : [start, ...chain];
-  for (const candidate of expanded.filter(Boolean)) {
-    if (seen.has(candidate.provider)) continue;
-    seen.add(candidate.provider);
-    candidates.push(candidate);
-  }
+  if (start && !allowedForCategory(start, category)) console.error('[routing] transcript は話者・発言の取り違えを避けるため DeepSeek を除外し、次の候補を使います');
 
   // routing-overrides.json の demote 有効期限が切れるまで、該当 provider を連鎖の末尾へ回す
   // (cost-improve-loop が provider_unhealthy を検出した時に書く。B4 2026-09-07)。
   // start として明示された provider は呼び出し元の意思なので先頭のまま。
   // cooldown と同じく node --test 配下では実環境のファイルを読まない。
   let demotedProviders = [];
+  let overrides = {};
   if (cooldownFile != null || !process.env.NODE_TEST_CONTEXT) {
     const overridesPath = cooldownFile
       ? path.join(path.dirname(cooldownFile), 'routing-overrides.json')
       : path.join(home, '.claude', 'routing-overrides.json');
     try {
-      const overrides = JSON.parse(fs.readFileSync(overridesPath, 'utf8'));
+      overrides = JSON.parse(fs.readFileSync(overridesPath, 'utf8'));
       demotedProviders = Object.entries(overrides?.demote || {})
         .filter(([, until]) => Number(Date.parse(until)) > timestamp)
         .map(([provider]) => String(provider).toLowerCase());
     } catch {}
+  }
+  const candidates = [];
+  const seen = new Set();
+  const overrideModel = overrides?.gatewayBeforeDirect?.[start?.provider];
+  const gatewayModel = typeof overrideModel === 'string' && overrideModel.trim()
+    ? overrideModel : GATEWAY_MODELS[start?.provider];
+  // 明示された直APIを先頭に保ち、失敗時は同モデルのgatewayを通常チェーンより先に試す。
+  const expanded = allowGatewayFallback && gatewayModel
+    ? [start, { provider: 'openrouter', model: gatewayModel }, ...chain] : [start, ...chain];
+  for (const candidate of expanded.filter(Boolean)) {
+    if (!allowedForCategory(candidate, category)) continue;
+    if (seen.has(candidate.provider)) continue;
+    seen.add(candidate.provider);
+    candidates.push(candidate);
   }
   if (demotedProviders.length) {
     const rank = (candidate) => (demotedProviders.includes(candidate.provider) && candidate.provider !== start.provider ? 1 : 0);
@@ -152,7 +204,7 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, allowGat
   let cooldownDirty = false;
   // Bound legacy 429 entries from their original start, not from every read.
   for (const state of Object.values(cooldowns)) {
-    if (state?.reason !== 'http_429') continue;
+    if (state?.reason !== 'http_429' || state?.permanentBilling === true) continue;
     const began = Number.isFinite(state.at) ? state.at : timestamp;
     const until = Math.min(Number(state.until), began + cooldownMax);
     if (until < Number(state.until)) { state.until = until; cooldownDirty = true; }
@@ -174,12 +226,12 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, allowGat
   function setCooldown(provider, status, response, permanentBilling = false) {
     if (!useCooldown) return;
     let duration = 0;
-    if (status === 429) duration = Math.min(cooldownMax, Math.max(cooldownMin, retryAfterMs(response, now()) ?? cooldownMin));
-    else if (status === 402 || permanentBilling) duration = 24 * 60 * 60 * 1000;
+    if (status === 402 || permanentBilling) duration = 24 * 60 * 60 * 1000;
+    else if (status === 429) duration = Math.min(cooldownMax, Math.max(cooldownMin, retryAfterMs(response, now()) ?? cooldownMin));
     else if ([401, 403].includes(status)) duration = 6 * 60 * 60 * 1000;
     if (!duration) return;
     const at = now();
-    cooldowns[provider] = { until: at + duration, reason: `http_${status}`, at };
+    cooldowns[provider] = { until: at + duration, reason: `http_${status}`, at, ...(permanentBilling ? { permanentBilling: true } : {}) };
     cooldownDirty = true;
     saveCooldowns();
   }
@@ -187,7 +239,7 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, allowGat
     if (useCooldown && cooldowns?.[provider]) { delete cooldowns[provider]; cooldownDirty = true; }
   }
   function saveCooldowns() {
-    if (!cooldownDirty) return;
+    if (!cooldownDirty || !persistState) return;
     try { fs.mkdirSync(path.dirname(cooldownPath), { recursive: true }); fs.writeFileSync(cooldownPath, `${JSON.stringify(cooldowns, null, 2)}\n`); } catch {}
   }
 
@@ -229,17 +281,19 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, allowGat
       continue;
     }
     let lastReason = '';
+    const deadline = perProviderTimeoutMs == null ? null : Date.now() + perProviderTimeoutMs;
     for (let attempt = 0; attempt < 3; attempt++) {
       lastAttempt = attempt;
       const began = Date.now();
       let response;
       let status;
       let detail = '';
+      let timedOut = false;
       try {
-        response = await fetchImpl(request.url, request.init);
+        response = await fetchBeforeDeadline(fetchImpl, request, deadline);
         status = response.status;
         // 残量ヘッダを下限として記録する。次に同じ provider を選ぶ時、この値で事前に絞れる。
-        if (useBudget && response?.headers && noteResponse(budgetStore, candidate.provider, response.headers, now())) writeBudget(budgetPath, budgetStore);
+        if (useBudget && response?.headers && noteResponse(budgetStore, candidate.provider, response.headers, now()) && persistState) writeBudget(budgetPath, budgetStore);
         if (response.ok) {
           if (validateResponse) {
             const json = await response.clone().json().catch(() => null);
@@ -260,20 +314,24 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, allowGat
         detail = (await response.clone().text().catch(() => '')).slice(0, 400);
         lastReason = `HTTP${status}${detail ? `: ${detail}` : ''}`;
       } catch (error) {
-        lastReason = `network: ${error?.message || String(error)}`;
+        timedOut = error?.code === 'PROVIDER_TIMEOUT';
+        lastReason = timedOut ? `timeout after ${perProviderTimeoutMs}ms` : `network: ${error?.message || String(error)}`;
       }
       attempted++;
-      await onAttempt?.({ candidate, attempt, status: statusName(status), response, reason: lastReason, secs: (Date.now() - began) / 1000, failover: candidate.provider !== start.provider });
+      await onAttempt?.({ candidate, attempt, status: timedOut ? 'timeout' : statusName(status), response, reason: lastReason, secs: (Date.now() - began) / 1000, failover: candidate.provider !== start.provider });
       // groq の通常429の本文には `https://console.groq.com/settings/billing` が含まれるため、
       // 素の `billing` で判定すると日次上限(TPD)を恒久障害と誤判定する。恒久障害の文面だけを拾う。
-      const permanentBilling = status === 429 && /prepayment credits are depleted|insufficient_quota|exceeded your current quota/i.test(detail);
+      const permanentBilling = status === 429 && isPermanentBillingDetail(detail);
       setCooldown(candidate.provider, status, response, permanentBilling);
 
+      if (timedOut) break; // A hung candidate must not consume three timeout windows.
       const kind = classifyFailure(status);
       if (permanentBilling || kind !== 'retry' || attempt === 2) break;
       const specified = retryAfterMs(response);
       if (specified != null && specified > 60000) break;
-      await sleepImpl(specified ?? 1000 * 2 ** attempt);
+      const delay = specified ?? 1000 * 2 ** attempt;
+      if (deadline != null && delay >= deadline - Date.now()) break;
+      await sleepImpl(delay);
     }
     const reason = lastReason || 'unknown failure';
     failures.push({ candidate, reason, attempt: lastAttempt });

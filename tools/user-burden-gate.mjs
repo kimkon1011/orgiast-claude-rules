@@ -14,6 +14,15 @@ const directAttempt = /Claude|自身|直接|①|CLI|PowerShell|Bash/i;
 const alternateAttempt = /MCP|CLI|定期ジョブ|fleet|自己修復|別経路|②/i;
 const unresolvedFact = /未確認|不明|わからない|分からない|要確認|持ち主|未特定/;
 
+// 本番デプロイは Claude 側の認証済み Vercel CLI で完結する（docs/production-deploy-claude-side-route.md）。
+// ターミナルへのコマンド貼り付けも、デスクトップの1クリック起爆ファイルも、同じ「手渡し」として止める。
+// 2026-09-28 に「本番に出してよいならダブルクリック」で再発した型（handoff-audit:ce2d358c446f2e49）。
+const prodDeployCommand = /(?:^|[\s`"'])(?:npx\s+|pnpm\s+)?vercel\s+(?:deploy\s+)?[^\r\n]{0,40}--prod|(?:^|[\s`"'])(?:npx\s+)?deploy\s+--prod/i;
+const prodDeployWord = /本番(?:デプロイ|反映|公開|配備|に出す)/;
+const prodDeployWordCue = /本番(?:デプロイ|反映|公開|配備|に出す)(?:を|は)[^\r\n]{0,12}(?:(?:実行|貼り付け|貼っ|打っ|起動|ダブルクリック|押)(?:して|し)|して)(?:ください|下さい|ほしい|もらえ)/;
+const handoffCue = /(?:実行|貼り付け|貼っ|打っ|入力|起動|ダブルクリック|押)(?:して|し)(?:ください|下さい|ほしい|もらえ)|お願いします/;
+const prodDeployOverride = /\[PROD-DEPLOY-HANDOFF-OK\][ \t]+\S[^\r\n]*/;
+
 function unresolvedHandoffLines(prose, nextActions) {
   const lines = prose.split(/\r?\n/);
   const handoff = new Set(nextActions.map(match => match[0].trim()));
@@ -51,6 +60,23 @@ export function judgeUserBurden(text, humanText = '') {
     || /(?:確認|選択|保存|送信|ダウンロード|インストール|再起動|操作|コピー|貼り付け)(?:し)?て[ \t]*(?:ください|下さい|ほしい|もらえ)/.test(prose)
     || /(?:開いて|押して|貼って|選んで|進んで)[ \t]*(?:ください|下さい|ほしい|もらえ)/.test(prose);
   if (!triggered) return { decision: 'pass', triggered: false, missing: [] };
+
+  // 本番デプロイの手渡しは、手順が揃っていても・1クリック起爆ファイルでも通さない。
+  // Claude 側で `npx vercel deploy --prod --yes` を実行し、`vercel inspect` で id/created/alias を
+  // 確認するのが恒久経路（docs/production-deploy-claude-side-route.md）。同意が要る場合は
+  // チャットで1回可否を確認し、実行は Claude が行う。user にコマンドを打たせない。
+  const prodDeployHandoff = (prodDeployCommand.test(source) && handoffCue.test(prose))
+    || (desktopLauncherPattern.test(source) && prodDeployWord.test(prose))
+    || prodDeployWordCue.test(prose);
+  if (prodDeployHandoff && !prodDeployOverride.test(prose)) {
+    const reason = '[PROD-DEPLOY-HANDOFF] 本番デプロイを user のターミナル操作・1クリック起爆ファイルに手渡しています。'
+      + 'Vercel CLI は認証済みなので、Claude 側で対象リポジトリのルートから `npx vercel deploy --prod --yes` を実行してください。'
+      + '反映確認は exit code ではなく `npx vercel inspect <本番URL>` の id/created とエイリアス先で行います。'
+      + '外向けの同意が要る場合はチャットで可否を1回確認し、実行は Claude が行ってください（§1.1・rule 2）。'
+      + 'user が自分で実行すると明示した場合だけ、本文に [PROD-DEPLOY-HANDOFF-OK] <user の文言の引用> を書いてください。';
+    return { decision: 'block', triggered: true, missing: ['本番デプロイは Claude 側の Vercel CLI で完結させる'], code: 'PROD-DEPLOY-HANDOFF', reason };
+  }
+
   const unresolved = unresolvedHandoffLines(prose, nextActions);
   if (unresolved.length) {
     const missing = unresolved.map(line => `[UNRESOLVED-IN-HANDOFF] 手渡しの中に未確認の事実が残っています: 「${line}」。user に調べさせず、Gmail（業者名で receipts/notifications/invoice を検索）・memory の reference_*・keyserve・vendor API で特定してから渡してください。`);

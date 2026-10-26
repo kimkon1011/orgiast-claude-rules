@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { wslInstalled } from './lib/wsl-present.mjs';
 // 委譲台帳の症状を実測と照合し、即時修復と次回 auto-session への根本修正起票を行う。
 import fs from 'node:fs';
 import { writeHandoff } from './next-session-rotate.mjs';
@@ -8,6 +9,7 @@ import { spawnSync } from 'node:child_process';
 import { normalizeExecutorStatus } from './executor-status.mjs';
 import { isEntry } from './is-entry.mjs';
 import { judgeTimeoutRows } from './timeout-waste-judge.mjs';
+import { isPermanentBillingDetail } from './llm-fallback.mjs';
 
 const DAY = 86_400_000;
 const HOUR = 3_600_000;
@@ -25,6 +27,35 @@ export function windowResetsAfterLimit(limitRows, metric) {
   // until を持つ行が無い(旧形式・不明)ときは判定しない＝従来どおり起票する側に倒す。
   if (!untils.length) return false;
   return metric.resetsAt * 1000 > Math.max(...untils) + HOUR;
+}
+
+// 測定値が「上限を記録した時点より後に始まった短い窓」のものなら、その低い使用率は反証にならない。
+// 2026-10-20 19:15Z の実測: 本物の上限を検出したが until のパースが壊れて 13.8 時間後になり、
+// 翌夜の 300 分窓(02:52Z 開始)の 8% を windowResetsAfterLimit が弾けず偽陽性を起票した。
+// 5〜6 時間窓は検出時刻より後に始まっていれば必ず別の窓なので、until の値に依存せず判定できる。
+// 7 日窓などの長い窓はこの判定を使わない（従来どおり until 比較だけで判断する）。
+export function metricFromLaterWindow(limitRows, metric) {
+  if (!metric || metric.resetsAt === null || metric.resetsAt === undefined) return false;
+  const windowMinutes = Number(metric.windowMinutes);
+  if (!Number.isFinite(windowMinutes) || windowMinutes <= 0 || windowMinutes > 6 * 60) return false;
+  const detectedTimes = limitRows.map((row) => Date.parse(row.t)).filter((time) => Number.isFinite(time));
+  if (!detectedTimes.length) return false;
+  const windowStart = Number(metric.resetsAt) * 1000 - windowMinutes * 60_000;
+  return windowStart > Math.max(...detectedTimes) + HOUR;
+}
+
+// 同じ1回の上限検出は usage_limit と usage_limit_no_fallback の2行になる。until が同じなら1件と数える。
+export function dedupeLimitEvents(limitRows) {
+  const seen = new Set();
+  const events = [];
+  for (const row of limitRows) {
+    const until = Number(row.until);
+    if (!Number.isFinite(until)) { events.push(row); continue; }
+    if (seen.has(until)) continue;
+    seen.add(until);
+    events.push(row);
+  }
+  return events;
 }
 
 function readJson(file, fallback = {}) {
@@ -81,12 +112,13 @@ export function parseRateLimitsFromText(text) {
 
 export function readCodexUsedPercent(options = {}) {
   const spawnImpl = options.spawnImpl || spawnSync;
+  if (!(options.wslInstalled ?? wslInstalled)({ platform: options.platform ?? process.platform })) return null;
   // 単体テストでは OS に依存せず、注入した偽 spawn の出力を検証できるようにする。
   if (!options.spawnImpl && process.platform !== 'win32' && !process.env.WSL_DISTRO_NAME) return null;
   try {
     // ログ1本が数MBあるので全文 cat せず primary ブロックだけ抜く(ENOBUFS 再発防止)。新しいファイルほど後ろに並べ、最後の行を最新値にする。
     const script = `find ~/.codex/sessions -type f -name "*.jsonl" -printf "%T@ %p\n" 2>/dev/null | sort -nr | head -n 3 | sort -n | cut -d" " -f2- | xargs -r grep -ho "\\"primary\\":{[^}]*}\\|\\"primary\\":null" 2>/dev/null | tail -n 40`;
-    const result = spawnImpl('wsl', ['-d', 'Ubuntu', '--', 'bash', '-c', script], { encoding: 'utf8', timeout: 20_000, maxBuffer: 16 * 1024 * 1024 });
+    const result = spawnImpl('wsl', ['-d', 'Ubuntu', '--', 'bash', '-c', script], { encoding: 'utf8', windowsHide: true, timeout: 20_000, maxBuffer: 16 * 1024 * 1024 });
     if (result?.error || (result?.status != null && result.status !== 0)) return null;
     return parseRateLimitsFromText(result.stdout);
   } catch { return null; }
@@ -138,7 +170,12 @@ const WSL_LANE_ABSENT = /WSL ディストリが見つかりません/;
 // 実体は z.ai Coding Plan の weekly/monthly 上限到達(HTTP 429 / error.code 1310,
 // "Weekly/Monthly Limit Exhausted")。レーンは壊れておらず、上限リセットで自動回復する。
 export function isQuotaLimitedRow(row = {}) {
-  return /^http_?(402|429)$/.test(String(row?.status ?? '').toLowerCase());
+  return /^(?:http_?)?(402|429)$/.test(String(row?.status ?? '').toLowerCase());
+}
+
+export function isBillingSuspendedRow(row = {}) {
+  return /^(?:http_?)?(402|429)$/.test(String(row?.status ?? '').toLowerCase())
+    && isPermanentBillingDetail(row?.reason);
 }
 
 // cooldown の行は「上限/レート制限中なのでリクエストを投げなかった」記録(cheap-code.mjs が
@@ -148,6 +185,33 @@ export function isQuotaLimitedRow(row = {}) {
 // (2026-10-13 診断: glm の11件 = cooldown 5件 + http_429 6件。実体は Coding Plan の上限到達)。
 export function isCooldownSkippedRow(row = {}) {
   return String(row?.status ?? '').toLowerCase() === 'cooldown';
+}
+
+// quota-sweep は終了状態をそのまま status に書く(final/exhausted/ceiling/deadline/no-goal/failed)。
+// exhausted は「累積上限まで走り切った」＝レーンは動いている。トークンを消費した行を成功証拠に
+// 数えないと、8 tick 走った翌晩も 24h 窓の過去失敗だけで「全滅」の high 起票が続く
+// (2026-10-22T02:55Z 実測: exhausted / in=1,126,575 / out=10,422 の翌日に再起票)。
+export function quotaSweepProgressRow(row = {}) {
+  if (!String(row?.provider ?? '').startsWith('quota-sweep:')) return false;
+  if (String(row?.status ?? '').toLowerCase() === 'failed') return false;
+  return Number(row.in) > 0 || Number(row.out) > 0;
+}
+
+// quota-sweep は子処理が成果を返した後の終了処理で失敗しても status:'failed' を記録する。
+// 2026-10-23/24 実測の quota-sweep:claude は failed でも in/out が
+// 62/19609、172/35469 あり、レーン全滅ではなく「作業後に失敗」した行だった。
+export function quotaSweepPartialProgressRow(row = {}) {
+  return String(row?.provider ?? '').startsWith('quota-sweep:')
+    && String(row?.status ?? '').toLowerCase() === 'failed'
+    && (Number(row.in) > 0 || Number(row.out) > 0);
+}
+
+// quota-sweep の status は停止理由そのもの。`failed` 以外（deadline/ceiling/exhausted/no-goal 等）は
+// レーンが正常に判断して止まった記録で、トークン0でも故障ではない。これを含めると
+// 「窓が無いので見送った」が3回続いただけで lane_outage_unrepaired(high) になる
+// (2026-10-22 の起票は failed 4件が実体だが、正常停止も同じ分母に入る構造だった)。
+export function isQuotaSweepBenignRow(row = {}) {
+  return String(row?.provider ?? '').startsWith('quota-sweep:') && String(row?.status ?? '').toLowerCase() !== 'failed';
 }
 
 // fallback バックエンド自体は走って応答を返した(chain の outcome が ok)のに、作業ツリーを
@@ -178,13 +242,22 @@ const CODEX_MODEL_AUTH_MISMATCH = /is not supported when using codex with a chat
 
 // Codex の利用上限到達。コードの欠陥ではなく上限到達による停止。
 // アポストロフィは U+2019(’) と U+0027(') の両方に一致させる。
-const CODEX_USAGE_LIMIT = /You[’']ve hit your usage limit/i;
+// 台帳の stderrTail は codex-do.mjs が末尾200字へ切り詰める(slice(-200))ため、上限メッセージの
+// 先頭が欠けて "t your usage limit. Upgrade to Pro ..." だけが残ることがある。
+// 実測 2026-10-21T00:32Z の2件(astra→sol 退避)が旧パターンに一致せず no_output に落ち、
+// codex_empty_output が毎晩起票された。先頭欠落を許容する語("your usage limit" + "Upgrade to Pro"、
+// 最後の砦として ChatGPT の購入URL)も一致させる。
+const CODEX_USAGE_LIMIT = /You(?:[’']ve| have) hit your usage limit|your usage limit[.!]?\s*Upgrade to Pro|Upgrade to Pro \(https:\/\/chatgpt\.com\/explore\/pro\)|Usage limit (?:reached|exceeded)/i;
+
+// 選択モデルが一時的に満員のときは、codex 自体の出力異常ではない。
+const CODEX_MODEL_CAPACITY = /Selected model is at capacity\. Please try a different model\./i;
 
 export function emptyOutputReason(row) {
   if (row?.timedOut === true) return 'timeout';
   // 旧行(timedOut 未記録)は経過秒数から推定する。codex の正常終了は実測で中央値~100秒、
   // 打ち切りは --timeout 到達時にのみ現れ、実測値は 300 秒以上だった。
   if (row?.timedOut == null && Number(row?.secs) >= 300) return 'timeout';
+  if (String(row?.status ?? '').toLowerCase() === 'network') return 'infra_transient';
   if (WSL_LANE_ABSENT.test(String(row?.stderrTail || ''))) return 'launch_failed';
   // 起動前のゲートが「意図的に止めた」行。launched:false だが codex は一度も起動されておらず、
   // 起動失敗ではない。codex-do が書く行の status は必ず数値で、起動前ゲートは文字列の番兵を書く
@@ -206,6 +279,7 @@ export function emptyOutputReason(row) {
   if (CODEX_AUTH_FAILED.test(String(row?.stderrTail || ''))) return 'auth_failed';
   if (CODEX_MODEL_AUTH_MISMATCH.test(String(row?.stderrTail || ''))) return 'model_auth_mismatch';
   if (CODEX_USAGE_LIMIT.test(String(row?.stderrTail || ''))) return 'usage_limit';
+  if (CODEX_MODEL_CAPACITY.test(String(row?.stderrTail || ''))) return 'model_capacity';
   if (INFRA_TRANSIENT.test(String(row?.stderrTail || ''))) return 'infra_transient';
   // 台帳の status は数値(終了コード)だけではない。llm-fallback / cheap-code は失敗の種類を
   // そのまま文字列で書く(http_429 / http_402 / cooldown)。これを知らずに catch-all の
@@ -218,12 +292,58 @@ export function emptyOutputReason(row) {
   return 'no_output';
 }
 
+// 停滞の打ち切りを「実装として期待できる」最も早い時刻。これ以前の停滞は対象外。
+// #964（2026-10-21T17:04:12Z マージ）は stderr の chunk 到着時にしか判定しておらず、
+// 拒否3回の後に無音になる停滞を拾えなかった。それを #1059（2026-10-23T20:03:24Z マージ）が
+// 周期タイマーへ直したので、期待できる起点は #1059。ここを #964 のままにすると、
+// #1059 で直した症状の過去行が永久に「未修理」として毎晩起票され続け、完了判定ができなくなる
+// （2026-10-25 実測: 打ち切り未発火の最終行は 2026-10-23T10:43:58Z で #1059 より前）。
+export const POLICY_STALL_SINCE = '2026-10-23T20:03:24Z';
+// 打ち切り判定（POLICY_STALL_MIN_ELAPSED_SECS=300）に届いた停滞だけを「打ち切られるべきだった」と数える。
+export const POLICY_STALL_MIN_ABORTABLE_SECS = 300;
+export const POLICY_DENIAL_RE = /tool execution denied by policy/gi;
+
+export function countPolicyDenial(text) {
+  return typeof text === 'string' ? (String(text).match(POLICY_DENIAL_RE) || []).length : 0;
+}
+
+// 台帳1行（chain があれば試行ごと）から、ポリシー拒否の痕跡がある試行を抽出する。
+// stderrTail は末尾200字へ切り詰められているため回数は下限値。outcome は #964 以降
+// 'blocked'（早期打ち切り）, 'timeout'（締切）, 'ok'/'failed' のいずれか。
+export function policyStallAttempts(rows) {
+  const attempts = [];
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (!row || typeof row !== 'object') continue;
+    const chain = Array.isArray(row.chain) && row.chain.length ? row.chain : null;
+    const list = chain ?? [null];
+    for (const attempt of list) {
+      const stderr = String(attempt?.stderrTail ?? (chain ? '' : row.stderrTail) ?? '');
+      const denials = countPolicyDenial(stderr);
+      if (!denials) continue;
+      const secs = Number(attempt?.secs ?? row.secs);
+      const out = Number(attempt?.out ?? row.out);
+      attempts.push({
+        t: String(row.t || ''),
+        backend: attempt?.backend ?? row.provider ?? null,
+        model: attempt?.model ?? row.model ?? null,
+        outcome: attempt?.outcome ?? (row.timedOut === true || row.status === 'timeout' ? 'timeout' : 'ok'),
+        secs: Number.isFinite(secs) ? secs : 0,
+        out: Number.isFinite(out) ? out : 0,
+        budgetSecs: Number(attempt?.budgetSecs ?? row.timeoutSecs) || null,
+        denials,
+      });
+    }
+  }
+  return attempts;
+}
+
 export function collectFindings({ home, now = new Date(), codexUsedPercent = null }) {
   const current = now instanceof Date ? now : new Date(now);
   const nowMs = current.getTime(), cutoff = nowMs - DAY;
   const claudeDir = path.join(home, '.claude');
   const recent = (rows) => rows.filter((row) => { const t = Date.parse(row.t || ''); return Number.isFinite(t) && t >= cutoff && t <= nowMs; });
   const limitRows = recent(readJsonl(path.join(claudeDir, 'codex-limit-history.jsonl'))).filter((row) => String(row.reason || '').includes('usage_limit'));
+  const limitEvents = dedupeLimitEvents(limitRows);
   const usageRows = recent(readJsonl(path.join(claudeDir, 'executor-usage.jsonl')));
   const cooldown = readJson(path.join(claudeDir, 'provider-cooldown.json'), {});
   // 上限到達中の codex は primary を null で返す＝実測値は「不明」であって「58%」ではない。
@@ -232,23 +352,54 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
   //  「偽陽性」と誤判定し、生きていた cooldown を解除していた)。
   const metric = measured(codexUsedPercent);
   // 上限後に別の窓へ進んでいたら、その低い使用率は反証にならない（windowResetsAfterLimit の説明を参照）。
-  const supersededWindow = windowResetsAfterLimit(limitRows, metric);
+  const supersededWindow = windowResetsAfterLimit(limitRows, metric) || metricFromLaterWindow(limitRows, metric);
   const findings = [];
   // #773(600→900秒＋連鎖予算)以降の timeout が上限を超えて秒数を捨てたかは、
   // Claude セッションを待たず夜間で判定する。判定器は台帳全体（配備前を含む）を見る必要が
   // あるため、24時間窓の usageRows ではなく executor-usage.jsonl を全件読む。
   // (2026-10-20: 判定器が CLI 専用で、台帳が伸びても人手で実行するまで判定が止まっていた)
+  // 予算は試行ごとに判定する: フォールバック試行は与えた budgetSecs（無い旧行は 900 秒）、
+  // 主経路は与えた --timeout の timeoutSecs（無い旧行は 1800 秒）。900 秒固定で主経路を見ると
+  // 既定 1800 秒を使い切っただけの行を回帰と誤検出する（2026-10-20 実測 / 2026-10-22 修正）。
   const timeoutWaste = judgeTimeoutRows(readJsonl(path.join(claudeDir, 'executor-usage.jsonl')));
-  if (timeoutWaste.verdict === 'waste-exceeds-cap') findings.push({
-    id: 'timeout_waste_exceeds_cap',
-    severity: 'high',
-    title: 'タイムアウトで捨てた秒数が上限超過（#773 の回帰）',
-    evidence: [`${timeoutWaste.overCapRows}件`, `最大試行 ${timeoutWaste.maxAttemptSecs}秒`, `上限 ${timeoutWaste.capSecs}秒`],
-    fixTask: 'killProcessTree と fallbackBackendTimeoutSecs(#773)が効いていない。timeout 行の chain[].secs を実測し、上限を超えた試行のバックエンドと起動経路を特定して修正・テスト追加',
-  });
+  if (timeoutWaste.verdict === 'waste-exceeds-cap') {
+    const overCap = (timeoutWaste.overCapAttempts || []).map((a) => {
+      const label = a.path === 'primary' ? '主経路' : 'フォールバック';
+      const name = a.model ? `${a.backend ?? '不明'}(${a.model})` : (a.backend ?? '不明');
+      return `超過: ${name} ${label} ${Math.round(a.secs)}秒/予算${Math.round(a.budgetSecs)}秒`;
+    });
+    findings.push({
+      id: 'timeout_waste_exceeds_cap',
+      severity: 'high',
+      title: 'タイムアウトで捨てた秒数が上限超過（#773 の回帰）',
+      evidence: [`${timeoutWaste.overCapRows}件`, `最大試行 ${timeoutWaste.maxAttemptSecs}秒`, `上限 ${timeoutWaste.capSecs}秒`, ...overCap],
+      fixTask: 'killProcessTree と fallbackBackendTimeoutSecs(#773)が効いていない。timeout 行の chain[].secs を実測し、上限を超えた試行のバックエンドと起動経路を特定して修正・テスト追加',
+    });
+  }
+  // #964（2026-10-21T17:04Z マージ）は、gemini CLI が run_shell_command をポリシー拒否し続けて
+  // 900 秒締切まで空回りする症状に早期打ち切り（300秒・拒否3回・出力400字未満で outcome='blocked'）と
+  // 1試行600秒上限を入れた。効果は「実 chain が policy 拒否で停滞した時」しか観測できないため、
+  // 台帳を毎晩ここで走査し、打ち切られずに時間を消費した停滞だけを起票する（Claude の手動再計測を不要にする）。
+  const policyStalls = policyStallAttempts(readJsonl(path.join(claudeDir, 'executor-usage.jsonl')))
+    .filter((a) => a.t >= POLICY_STALL_SINCE);
+  const unabortedStalls = policyStalls.filter((a) => a.outcome !== 'blocked' && a.secs >= POLICY_STALL_MIN_ABORTABLE_SECS);
+  if (unabortedStalls.length) {
+    findings.push({
+      id: 'policy_stall_not_aborted',
+      severity: 'medium',
+      title: 'ポリシー拒否の停滞が打ち切られずに時間を消費（#964 の回帰）',
+      evidence: [
+        `${unabortedStalls.length}件`,
+        `最大 ${Math.round(Math.max(...unabortedStalls.map((a) => a.secs)))}秒`,
+        `打ち切り済み ${policyStalls.filter((a) => a.outcome === 'blocked').length}件`,
+        ...unabortedStalls.slice(-3).map((a) => `${a.t} ${a.backend ?? '不明'} ${Math.round(a.secs)}秒/予算${a.budgetSecs ?? '不明'}秒 out${a.out} outcome=${a.outcome}`),
+      ],
+      fixTask: 'codex-do の shouldAbortPolicyStall が実 chain で発火していない。stderrTail の拒否回数・経過秒・出力字数を実測し、打ち切り判定が実行ループ（stderr 逐次監視）に繋がっているか確認して修正・テスト追加',
+    });
+  }
   if (limitRows.length && metric && !supersededWindow && metric.usedPercent < 90) findings.push({
     id: 'codex_false_usage_limit', severity: 'high', title: 'Codex 上限検出の偽陽性',
-    evidence: [`usage_limit記録 ${limitRows.length}件`, `実測 used_percent ${metric.usedPercent}`, `window ${metric.windowMinutes ?? '不明'}分`, `resets_at ${metric.resetsAt ?? '不明'}`],
+    evidence: [`usage_limit記録 ${limitEvents.length}件`, `実測 used_percent ${metric.usedPercent}`, `window ${metric.windowMinutes ?? '不明'}分`, `resets_at ${metric.resetsAt ?? '不明'}`],
     autoHealed: Number(cooldown.codex?.until) > nowMs ? 'codex cooldown を解除' : undefined,
     fixTask: 'codex-do.mjs の上限検出が偽陽性。検出ロジック(detectQuotaLimit)と直近の codex 出力を照合し、誤検出パターンを特定して修正、テスト追加',
   });
@@ -297,7 +448,7 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
     const lastFailureTime = Math.max(...failures.map((row) => Date.parse(row.t)));
     return codexSuccessTimes.some((time) => time > lastFailureTime);
   };
-  const realEmpty = empty.filter((item) => !['infra_transient', 'launch_failed', 'auth_failed', 'model_auth_mismatch', 'preflight_blocked', 'spawn_failed', 'usage_limit'].includes(item.reason));
+  const realEmpty = empty.filter((item) => !['infra_transient', 'launch_failed', 'auth_failed', 'model_auth_mismatch', 'preflight_blocked', 'spawn_failed', 'usage_limit', 'model_capacity'].includes(item.reason));
   const launchFailed = empty.filter((item) => item.reason === 'launch_failed');
   const authFailed = empty.filter((item) => item.reason === 'auth_failed');
   const modelAuthMismatch = empty.filter((item) => item.reason === 'model_auth_mismatch');
@@ -331,17 +482,39 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
   }
   for (const [provider, rows] of providers) {
     // llm-ask は status:'ok'、cheap-code は ok、codex-do は終了状態と出力を記録する。
-    const succeeded = rows.some(row => normalizeExecutorStatus(row) === 'ok' && Number(row.out) > 0);
-    if (succeeded) continue;
+    const partialProgress = rows.filter(quotaSweepPartialProgressRow);
+    const succeeded = rows.some(row => (normalizeExecutorStatus(row) === 'ok' && Number(row.out) > 0) || quotaSweepProgressRow(row)) || partialProgress.length > 0;
+    if (succeeded) {
+      if (partialProgress.length > 0) {
+        const times = partialProgress.map(row => row.t).sort((a, b) => Date.parse(a) - Date.parse(b));
+        findings.push({ id: 'quota_sweep_failed_after_progress', provider, severity: 'low', title: `${provider} は作業後に失敗（レーン全滅ではない・要観察）`,
+          evidence: [`${partialProgress.length}件`, `最初 ${times[0]}`, `最後 ${times.at(-1)}`, ...reasonTop(partialProgress)] });
+      }
+      continue;
+    }
     // 全滅の分母は「実際に投げた回(attempts)」。cooldown 行は上限中で投げなかった記録なので
     // 分母から外す。外さないと上限到達の実体が「N件すべて失敗」の high 未修理全滅に見える
     // (2026-10-13 診断: glm の11件 = cooldown 5件 + http_429 6件)。
     const emptyDiffRows = rows.filter(isEmptyDiffEscalationRow);
-    const attempts = rows.filter((row) => !isCooldownSkippedRow(row) && !isEmptyDiffEscalationRow(row));
+    // quota-sweep は停止理由を status に書くので、failed 以外（deadline/ceiling/exhausted/no-goal）は
+    // 正常停止。トークン0でも分母に入れない（入れると「窓が無いので見送った」3回で high 起票になる）。
+    // 'skipped' 行(auto-session-executor の no-cheap-executor)は「cheap-code/<provider> exit 3」と書く。
+    // exit 3 の実体は cheap-code が cooldown/残高切れで起動を省いた記録で、その cooldown が行の時刻に
+    // 有効だったなら、投げていない行であって全滅の証拠ではない(2026-10-25 実測: deepseek HTTP402 の
+    // 24h cooldown 中に積まれた32件が lane_outage_unrepaired になった)。cooldown が切れた後の行は対象外。
+    const skippedByCooldown = (row) => {
+      if (row.provider !== 'skipped' || row.status !== 'no-cheap-executor') return false;
+      const name = /^cheap-code\/([\w-]+) exit 3$/.exec(String(row.reason || ''))?.[1];
+      const until = Number(cooldown[name]?.until);
+      return Number.isFinite(until) && Date.parse(row.t) <= until;
+    };
+    const attempts = rows.filter((row) => !isCooldownSkippedRow(row) && !skippedByCooldown(row) && !isEmptyDiffEscalationRow(row) && !isQuotaSweepBenignRow(row));
     // 24h 窓が cooldown だけで埋まる＝上限中で一度も試行していない。レーンは止まっているが
     // 原因は上限側で、コードの欠陥ではない。low の可視化だけ残す(high にすると上限が明けるまで
     // 毎晩同じ偽の修理タスクが積まれる。黙って消すと止まっている事実自体が見えなくなる)。
     if (!attempts.length) {
+      // quota-sweep の正常停止は cooldown ではないので、cooldown の low 表示も付けない。
+      if (rows.every(isQuotaSweepBenignRow)) continue;
       // 窓が「代替は応答したが1行も変えなかった」行だけで埋まった場合も、レーン障害ではない。
       // 止まっている事実は low で可視化し、修理タスク(high)にはしない。
       if (emptyDiffRows.length === rows.length && rows.length >= 3) {
@@ -363,7 +536,20 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
     // 起票すると、上限が続く限り毎晩同じ偽の修理タスクが積まれる（2026-10-13 診断: glm の
     // 3件は 1 リクエストの再試行で、実体は Coding Plan の週次/月次上限到達）。
     // codex の usage_limit と同じく low・fixTask なしの可視化だけにする。
-    if (attempts.every(isQuotaLimitedRow)) {
+    // 上限・課金切れ・一過性ネットワークだけで全滅した行は「レーンが壊れている」証拠ではない。
+    // 実測 2026-10-22: kimi の 24h 449 行 = http_429 440 + status:'network' 9(10.7秒で
+    // タイムアウト) で、network を no_output 扱いしていたため毎日 high になっていた。
+    const benign = attempts.filter((row) => isQuotaLimitedRow(row) || emptyOutputReason(row) === 'infra_transient');
+    const billingSuspended = attempts.filter(isBillingSuspendedRow);
+    // 行に reason が無い旧記録でも、llm-fallback が残した 24h の恒久課金切れ cooldown で判別できる。
+    const billingCooldown = cooldown[provider]?.permanentBilling === true && Number(cooldown[provider]?.until) > nowMs;
+    if ((billingSuspended.length || billingCooldown) && benign.length === attempts.length) {
+      findings.push({ id: 'provider_billing_suspended', provider, severity: 'low', title: `${provider} は残高切れで停止（チャージ待ち・コードでは直せない）`,
+        evidence: [`${billingSuspended.length}件が恒久課金切れ`, ...(billingCooldown ? [`cooldown ${cooldown[provider].reason} until ${new Date(Number(cooldown[provider].until)).toISOString()}`] : []),
+          ...reasonTop(billingSuspended.map(row => ({ reason: row.reason || row.stderrTail || emptyOutputReason(row) })))] });
+      continue;
+    }
+    if (benign.length === attempts.length) {
       findings.push({ id: 'provider_usage_limit', provider, severity: 'low', title: `${provider} は上限/レート制限で停止（欠陥ではない）`,
         evidence: [`${attempts.length}件すべて失敗`, ...reasonTop(attempts.map(row => ({ reason: row.stderrTail || row.reason || emptyOutputReason(row) })))] });
       continue;

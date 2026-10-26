@@ -1,7 +1,8 @@
+import { wslInstalled } from './lib/wsl-present.mjs';
 import { spawnSync } from 'node:child_process';
 
 // Read back reported artifacts; prose saying "implemented" or an old PR is not evidence.
-export function verifyExternalWork({ output = '', cwd, started, status, timedOut }, { spawnImpl = spawnSync, platform = process.platform } = {}) {
+export function verifyExternalWork({ output = '', cwd, started, status, timedOut }, { spawnImpl = spawnSync, platform = process.platform, wslPresent = wslInstalled } = {}) {
   if (status !== 0 || timedOut || !Number.isFinite(started)) return null;
   const deadline = Date.now() + 10000;
   const run = (command, args) => {
@@ -26,7 +27,7 @@ export function verifyExternalWork({ output = '', cwd, started, status, timedOut
   for (const repo of paths) {
     // Windows Codex runs in WSL; its /tmp clone is not a Windows filesystem path.
     const git = args => platform === 'win32' && repo.startsWith('/') && !repo.startsWith('//')
-      ? run('wsl', ['--exec', 'git', '-C', repo, ...args])
+      ? (wslPresent({ platform }) ? run('wsl', ['--exec', 'git', '-C', repo, ...args]) : null)
       : run('git', ['-C', repo, ...args]);
     for (const hash of hashes) {
       const info = git(['show', '-s', '--format=%H%n%ct', hash, '--']);

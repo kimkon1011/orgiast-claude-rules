@@ -9,6 +9,9 @@ import { fileURLToPath } from 'node:url';
 import { fleetHubNeedsConfiguration } from './register-fleet-mail.mjs';
 import { convergeAllowRules } from './allow-rules.mjs';
 import { convergeMobileStandby } from './mobile-standby.mjs';
+export { classifyTaskActions } from './setup-task-hidden-actions.mjs';
+import { inspectTaskHiddenActions } from './setup-task-hidden-actions.mjs';
+import { convergeNodeRuntimeSecurity } from './setup-node-runtime-security.mjs';
 
 const TYPES = new Set(['command', 'file-contains', 'file-nonempty', 'json-valid', 'scheduled-task']);
 const SEVERITIES = new Set(['required', 'optional', 'manual']);
@@ -81,7 +84,9 @@ function check(item) {
       const parsed = JSON.parse(raw);
       if (spec.hookEvent) {
         const hooks = parsed.hooks?.[spec.hookEvent]?.flatMap(group => group.hooks || []) || [];
-        const expected = `node "${path.join(scriptDir, spec.hookScript)}"${spec.hookArgs ?? ' --hook'}`;
+        const expected = spec.hookRunner
+          ? `node "${path.join(scriptDir, spec.hookRunner)}" "${path.join(scriptDir, spec.hookScript)}"${spec.hookArgs ?? ''}`
+          : `node "${path.join(scriptDir, spec.hookScript)}"${spec.hookArgs ?? ' --hook'}`;
         return hooks.some(hook => hook.type === 'command' && hook.command === expected
           && (spec.async !== false ? hook.async === true : hook.async === undefined || hook.async === false)
           && hook.timeout === (spec.timeout ?? 5));
@@ -180,6 +185,15 @@ if (manifest) {
       results.push({ item, status: outcome.ok ? 'OK' : 'NG', checked: true, repaired: Boolean(outcome.config?.changed || outcome.settings?.changed || outcome.extension?.status === 'installed' || outcome.rcPrefix?.changed),
         reason: outcome.ok ? '' : outcome.lines.filter((line) => /失敗|NG/.test(line)).join(' / ') });
     } catch { results.push({ item, status: 'NG', checked: true, repaired: false }); }
+  }
+  // 実機の更新は通常の converge のみ。verify / カスタム manifest は副作用なし。
+  if (converge && !valueAfter('--manifest')) {
+    const { description, ...outcome } = await convergeNodeRuntimeSecurity();
+    results.push({ item: { id: 'node-runtime-security', severity: 'optional', description }, ...outcome });
+  }
+  if (converge && !valueAfter('--manifest')) {
+    const { description, ...outcome } = inspectTaskHiddenActions();
+    results.push({ item: { id: 'task-hidden-actions', severity: 'optional', description }, ...outcome });
   }
   emit(results);
   // fleet ビーコン: converge の結果を GAS へ送る。fail-open（exit code に一切影響させない）。

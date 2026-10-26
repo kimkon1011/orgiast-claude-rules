@@ -43,8 +43,15 @@ test('ジョブ: 最新実行のみ、後続成功・実行中・未実行は失
 test('会話: 最後のassistantの実行予告のみ', () => {
   const s = { sessionId: 's1', file: '/log', mtime: ago(3), lastRole: 'assistant', lastAssistantText: 'これから修正します。' };
   assert.equal(detectStalledSession([s], now).length, 1);
-  for (const delta of [{ lastRole: 'user' }, { lastAssistantText: 'これから修正します。\n修正完了しました。' }, { mtime: ago(2) }])
+  for (const delta of [{ lastAssistantText: 'これから修正します。\n修正完了しました。' }, { mtime: ago(2) }])
     assert.equal(detectStalledSession([{ ...s, ...delta }], now).length, 0);
+});
+test('会話: エラー無しの末尾userは拾わない', () => {
+  assert.equal(detectStalledSession([{ sessionId: 's3', file: '/log', mtime: ago(3), lastRole: 'user', endedWithError: false, lastAssistantText: '' }], now).length, 0);
+});
+test('会話: 末尾user未応答をAPIエラー理由で拾う', () => {
+  const found = detectStalledSession([{ sessionId: 's2', file: '/log', mtime: ago(3), lastRole: 'user', endedWithError: true, lastAssistantText: '' }], now);
+  assert.equal(found.length, 1); assert.equal(found[0].reason, 'API エラーで未返答');
 });
 test('委譲: exit=0かつ対応コミットなしのみ。未確認は分ける', () => {
   const l = { file: '/codex.log', t: ago(2), exit: 0, commitVerified: false };

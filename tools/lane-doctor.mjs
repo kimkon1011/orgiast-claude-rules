@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { wslInstalled } from './lib/wsl-present.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -10,6 +11,7 @@ import { loadEnvKey, loadGeminiKey, loadDeepseekKey } from './codex-do.mjs';
 import { providerResetUntil } from './codex-cooldown.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { redactAll } from './lib/redact.mjs';
+import { catalog } from './provider-catalog.mjs';
 
 export const PROVIDERS = ['codex', 'gemini', 'deepseek', 'glm', 'groq', 'openrouter'];
 export const laneHome = () => process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || os.homedir();
@@ -54,7 +56,14 @@ function executable(name) {
 function orders(health) {
   health.implementOrder = ['codex', 'deepseek', 'glm', 'gemini-cli'].filter(p => health.lanes[p]?.alive);
   health.askOrder = ['gemini', 'deepseek', 'groq', 'openrouter'].filter(p => health.lanes[p]?.alive);
-  health.deadNeedsUser = Object.entries(health.lanes).filter(([p, s]) => PROVIDERS.includes(p) && /^(?:dead:)?(?:payment_required|oauth_consent|account_creation|physical_operation)$/.test(s.reason))
+  // オートチャージが存在しないサービスの残高切れは、kim に頼める操作が無い（手動チャージは禁止ルール）。
+  // llm-ask の failover（OpenRouter 経由）で代替済みなので通知しない（2026-10-25 DeepSeek に存在しない設定を依頼した）。
+  const billing = readJson(path.join(repo, 'tools/provider-billing.json'));
+  const needsUser = ([p, s]) => PROVIDERS.includes(p) && /^(?:dead:)?(?:payment_required|oauth_consent|account_creation|physical_operation)$/.test(s.reason)
+    && !(s.reason.includes('payment') && billing[p]?.autoTopUp === false);
+  health.substituted = Object.entries(health.lanes).filter(([p, s]) => PROVIDERS.includes(p) && s.reason?.includes('payment') && billing[p]?.autoTopUp === false)
+    .map(([provider]) => ({ provider, via: 'openrouter' }));
+  health.deadNeedsUser = Object.entries(health.lanes).filter(needsUser)
     .map(([provider, s]) => ({ provider, reason: s.reason, tried: s.tried, fix: s.userFix || (s.reason.includes('payment') ? '請求設定でオートチャージ ON。手動チャージは禁止ルール。' : '本人アカウントで認証画面を開き OAuth 同意を完了する。') }));
   return health;
 }
@@ -109,19 +118,25 @@ export function laneDoctorQuick({ home = laneHome(), now = Date.now(), save = tr
 }
 // WSL の列挙失敗はディストリ無しと決めつけない。
 export function listWslDistros() {
+  if (!wslInstalled()) return '';
   const r = spawnSync('wsl', ['-l', '-q'], { encoding: 'utf16le', windowsHide: true, timeout: 15000 });
   return r.status === 0 ? String(r.stdout || '').replace(/\0/g, '').trim() : null;
 }
+export function nativeWriteProbeArgs({ repo, cwd, timeoutMs, instruction }) {
+  // --kind を明示しないと codex-do が investigate と判定し llm-ask へ流れ、書き込み不能でレーン死亡と誤判定する（2026-10-22 実測）。
+  return [path.join(repo, 'tools/codex-do.mjs'), instruction, '--cwd', cwd, '--kind', 'implement', '--force-native', '--no-fallback', '--no-escalate', '--timeout', String(Math.max(1, Math.floor(timeoutMs / 1000)))];
+}
 export async function runNativeWriteProbe({ home, timeoutMs }) {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-codex-write-'));
-  const run = (cmd, args) => new Promise(resolve => execFile(cmd, args, { cwd, env: { ...process.env, ORGIAST_HOME: home }, timeout: timeoutMs, windowsHide: true, maxBuffer: 256 * 1024 }, (e) => resolve({ code: e ? 1 : 0 })));
+  const run = (cmd, args) => new Promise(resolve => execFile(cmd, args, { cwd, env: { ...process.env, ORGIAST_HOME: home }, timeout: timeoutMs, windowsHide: true, maxBuffer: 256 * 1024 }, (e, stdout, stderr) => resolve({ code: e ? 1 : 0, text: `${stdout}\n${stderr}` })));
   try {
     const init = await run('git', ['init', '--quiet']);
     if (init.code) return init;
-    const result = await run(process.execPath, [path.join(repo, 'tools/codex-do.mjs'), 'WRITE_OK.txt を作成し、内容を WRITE_OK にしてください。その後ファイルを読み返して確認してください。', '--cwd', cwd, '--force-native', '--no-fallback', '--no-escalate', '--timeout', String(Math.max(1, Math.floor(timeoutMs / 1000)))]);
+    const instruction = 'WRITE_OK.txt を作成し、内容を WRITE_OK にしてください。その後ファイルを読み返して確認してください。';
+    const result = await run(process.execPath, nativeWriteProbeArgs({ repo, cwd, timeoutMs, instruction }));
     let ok = false;
     try { ok = fs.readFileSync(path.join(cwd, 'WRITE_OK.txt'), 'utf8').trim() === 'WRITE_OK'; } catch {}
-    return { code: result.code === 0 && ok ? 0 : 1, text: ok ? 'WRITE_OK' : '書き込み確認失敗' };
+    return { code: result.code === 0 && ok ? 0 : 1, text: ok ? 'WRITE_OK' : `書き込み確認失敗 ${result.text || ''}` };
   } finally { fs.rmSync(cwd, { recursive: true, force: true }); }
 }
 export function runProbe(provider, { home, timeoutMs, dryRun = false } = {}) {
@@ -147,8 +162,16 @@ export function notificationText(item, home) {
 根拠: https://ai.google.dev/gemini-api/docs/billing`;
   }
   const urls = { codex: 'https://chatgpt.com/', deepseek: 'https://platform.deepseek.com/', glm: 'https://z.ai/', groq: 'https://console.groq.com/', openrouter: 'https://openrouter.ai/' };
-  const account = item.provider === 'codex' ? codexAuthStatus(home).email || 'kim@orgiast.jp（保存認証のアカウントは未確認）' : '契約したアカウント（キー所有者は未確認）';
-  return `${item.provider} が停止しています（${item.reason}）。1. ${urls[item.provider]} を ${account} で開く。2. アカウント表示を確認する。3. ${item.reason.includes('payment') ? '請求設定を開き支払い方法を確認し、オートチャージ ON を設定して保存する（手動チャージは禁止ルール）。' : 'Codex を開きログインを選択する。ブラウザーで同じアカウントを選び、OAuth の同意内容を確認して許可する。'}4. 完了後は Claude が lane-doctor --probe で復旧を確認します。`;
+  // 所有アカウントはカタログを正本にする。固定文の「未確認」で送ると kim がどこで開くか分からない（2026-10-25 DeepSeek 停止通知）。
+  const owner = catalog.find(s => s.id === item.provider)?.account;
+  const account = item.provider === 'codex' ? codexAuthStatus(home).email || 'kim@orgiast.jp（保存認証のアカウントは未確認）'
+    : owner || '[ACCOUNT-UNKNOWN] 契約アカウント（tools/ai-subscription-catalog.json に account 未登録）';
+  // URL は行末に置き、直後に日本語を続けない（Discord のリンク範囲が日本語まで伸びて壊れる）。
+  return `${item.provider} が停止しています（${item.reason}）。
+1. **${account}** で開く: ${urls[item.provider]}
+2. 右上のアカウント表示が **${account}** か確認する。
+3. ${item.reason.includes('payment') ? '請求設定を開き支払い方法を確認し、オートチャージ ON を設定して保存する（手動チャージは禁止ルール）。' : 'Codex を開きログインを選択する。ブラウザーで同じアカウントを選び、OAuth の同意内容を確認して許可する。'}
+4. 完了後は Claude が lane-doctor --probe で復旧を確認します。`;
 }
 export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), probe = runProbe, notify = notifyKim, budgetMs = 90_000, platform = process.platform, listWsl = listWslDistros, nativeWriteProbe = runNativeWriteProbe } = {}) {
   const started = Date.now(), dir = path.join(home, '.claude');
@@ -167,7 +190,8 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
       }
       const dry = await probe(p, { home, timeoutMs: Math.min(15000, probeBudget), dryRun: true });
       if (dry.code !== 0) return [p, dry];
-      if (freshProbe(previous.lanes?.codex?.probedAt, now)) return [p, { cached: previous.lanes.codex }];
+      // 再利用は成功結果だけ。失敗を30分使い回すと直後に直ったレーンが停止のまま残る（2026-10-25 実測: 直接実行は PONG なのに probe_failed）。
+      if (previous.lanes?.codex?.alive && freshProbe(previous.lanes.codex.probedAt, now)) return [p, { cached: previous.lanes.codex }];
     }
     return [p, { ...await probe(p, { home, timeoutMs: Math.max(1, probeBudget - (Date.now() - started)) }), ...(p === 'codex' ? { authOk: true } : {}) }];
   }));
@@ -189,12 +213,15 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
     } else {
       const payment = /HTTP\s*402\b|credits are depleted|insufficient/i.test(text);
       const limited = /HTTP\s*429\b|usage limit|RESOURCE_EXHAUSTED|rate.limit/i.test(text);
-      health.lanes[p] = { ...probeHistory(previous.lanes?.[p]), alive: false, reason: payment ? 'dead:payment_required' : limited ? 'cooldown' : /HTTP\s*401|unauthorized|login required|token.*expired/i.test(text) ? (p === 'codex' ? 'dead:oauth_consent' : 'auth_invalid') : /Read-only file system|EROFS/i.test(text) ? 'execution_unavailable:read_only' : 'probe_failed', probedAt: stamp, ...(result.authOk ? { authOk: true } : {}) };
+      // codex-do が利用枠クールダウンで保留(exit 75)した場合は WSL 問題ではなく枠切れ。クールダウン自体は既存のまま触らない。
+      const deferred = /codex_cooldown/.test(text);
+      health.lanes[p] = { ...probeHistory(previous.lanes?.[p]), alive: false, reason: payment ? 'dead:payment_required' : (limited || deferred) ? 'cooldown' : /HTTP\s*401|unauthorized|login required|token.*expired/i.test(text) ? (p === 'codex' ? 'dead:oauth_consent' : 'auth_invalid') : /Read-only file system|EROFS/i.test(text) ? 'execution_unavailable:read_only' : 'probe_failed', probedAt: stamp, ...(result.authOk ? { authOk: true } : {}) };
       // 失敗の中身を必ず残す（2026-10-15 作業用011: 理由が記録されず原因を追えなかった）
       health.lanes[p].error = String(text || '').replace(/(sk-|eyJ)[A-Za-z0-9._-]{8,}/g, '$1***').replace(/\s+/g, ' ').trim().slice(-400);
       // native の失敗でも、認証・上限・課金が原因なら physical_operation（再起動が要る）と誤判定しない
       if (result.nativeRepair && health.lanes[p].reason === 'probe_failed') Object.assign(health.lanes[p], { reason: 'dead:physical_operation', tried: 'Windows ネイティブ(danger-full-access)でファイル作成・read-back', userFix: '管理者 PowerShell で wsl.exe --install --no-distribution を実行して Windows を再起動する。' });
       health.lanes[p].probeReason = health.lanes[p].reason;
+      if (deferred && cooldown[p]?.until) health.lanes[p].until = cooldown[p].until;
       if (limited && !payment) { const until = providerResetUntil(text, now); cooldown[p] = { until, at: now, reason: 'lane_doctor_usage_limit' }; cooldownChanged = true; health.lanes[p].until = until; }
     }
   }

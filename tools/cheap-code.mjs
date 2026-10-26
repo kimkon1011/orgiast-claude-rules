@@ -28,9 +28,9 @@ const PROVIDERS = Object.freeze({
     base: 'https://api.deepseek.com/anthropic',
     envFile: 'deepseek.env',
     keyName: 'DEEPSEEK_API_KEY',
-    // 別名 deepseek-chat ではなく実モデル名を既定にする(別名は将来どの世代に張り替わるか読めない)。
+    // DeepSeek直APIの現行モデル名を使い、既定の推論ありを維持する。
     // 高品質が要るときだけ --model deepseek-v4-pro。
-    defaultModel: 'deepseek-v4-flash',
+    defaultModel: 'deepseek-flash',
     // Claude Code のモデルカタログに無い名前だと窓を 200k と仮定して早期に auto-compact する。
     // DeepSeek v4 系は実測 1M なので明示する(公式 pricing: context 1M / max output 384K)。
     maxContextTokens: 1000000,
@@ -53,6 +53,16 @@ export function resolveProvider(name = 'deepseek') {
   return config;
 }
 
+// 子 CLI の API 応答ヘッダ待ちの上限。既定の 600s だと API が無応答のまま 600s ハングし、
+// 900s の cap 内で再試行に入れず timeout になる(delegation-health fallback_chain_timeout)。
+// 短縮するとハング時に SDK 再試行へ早く回れる(識別実験: 5000ms 指定で 5s ごとに再送を確認)。
+export const DEFAULT_CHILD_API_TIMEOUT_MS = 240000;
+
+export function resolveChildApiTimeoutMs(parentEnv = process.env) {
+  const value = Number(parentEnv.CHEAP_CODE_API_TIMEOUT_MS);
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : DEFAULT_CHILD_API_TIMEOUT_MS;
+}
+
 export function buildChildEnv(config, key, parentEnv = process.env, { configDir } = {}) {
   // 先に親 env を浄化する。デスクトップ版 Claude から呼ばれると CLAUDECODE / CLAUDE_CODE_* /
   // CLAUDE_AGENT_SDK_* / MCP_* / ANTHROPIC_* が子へ漏れ、DeepSeek の Anthropic 互換 API が
@@ -65,6 +75,9 @@ export function buildChildEnv(config, key, parentEnv = process.env, { configDir 
   // 子が「connectors を無効化した」と警告する。2026-09-10 実測)。
   delete env.ANTHROPIC_API_KEY;
   if (config.maxContextTokens) env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(config.maxContextTokens);
+  // 契約 RULES「他バックエンドの挙動を変えない」に従い、delegation-health が観測した
+  // backend=cheap-code:deepseek に限定する(glm は既定のまま。必要になったら別途実測して広げる)。
+  if (config.provider === 'deepseek') env.API_TIMEOUT_MS = String(resolveChildApiTimeoutMs(parentEnv));
   // 委譲先は監督ではなく実行役なので、全社 hook を読まない専用の設定ディレクトリを渡す。
   if (configDir) env.CLAUDE_CONFIG_DIR = configDir;
   return env;
@@ -140,11 +153,14 @@ export function autoProvider({ home = process.env.ORGIAST_HOME || os.homedir(), 
 }
 
 function parseArgs(args) {
-  const options = { provider: 'deepseek', model: '', cwd: process.cwd(), promptFile: '', dryRun: false };
+  const options = { provider: 'deepseek', model: '', cwd: process.cwd(), promptFile: '', dryRun: false, help: false };
   const positional = [];
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === '--dry-run') { options.dryRun = true; continue; }
+    // --help は「使い方を見たい」という正常な要求。不明オプションとして弾くと exit 2 になり、
+    // 指示文として解釈させると有料セッションが起動する(2026-10-15 実測)。
+    if (arg === '-h' || arg === '--help') { options.help = true; continue; }
     if (['--provider', '--model', '--cwd', '--prompt-file'].includes(arg)) {
       const value = args[index + 1];
       if (!value || value.startsWith('--')) throw new Error(`${arg} に値が必要です`);
@@ -216,7 +232,12 @@ async function main(args) {
     console.error(`${error.message}\n${usage}`);
     return 2;
   }
-  if (!instruction) { console.error(usage); return 2; }
+  if (!instruction) {
+    // --help 単独なら正常終了(0)として使い方を stdout に出す。指示文が併記されているときは
+    // help を無視して通常実行する(「--help を実装して」等の指示を乗っ取らないため)。
+    (parsed.help ? console.log : console.error)(usage);
+    return parsed.help ? 0 : 2;
+  }
 
   const cwd = path.resolve(parsed.cwd);
   const home = process.env.ORGIAST_HOME || os.homedir();

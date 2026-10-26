@@ -28,6 +28,25 @@ function defaultGit(dir, args) {
   return result.stdout;
 }
 
+// 人間のレビュー対象にならない「ノイズ」パス。fleet 指令ファイル・実行時成果物など、
+// rescue に巻き込まれても中身を読む価値がないものを列挙する。
+const NOISE_FILES = new Set(['fleet-directives.json', 'fleet-command.json', 'tools/handoff-audit-knowledge.json']);
+const NOISE_DIR_PREFIXES = ['.stall-sweeper/', '.work/', 'runs/', 'logs/', '.codex-prompts/'];
+
+export function isNoisePath(p) {
+  if (typeof p !== 'string') return false;
+  const normalized = p.trim().replace(/\\/g, '/').replace(/^\.\//, '');
+  if (!normalized) return false;
+  if (NOISE_FILES.has(normalized)) return true;
+  if (normalized.split('/').some(segment => segment.startsWith('.tmp-'))) return true;
+  return NOISE_DIR_PREFIXES.some(prefix => normalized.startsWith(prefix));
+}
+
+// rescue/sync-* 系(自動同期枝。枝名 typo の rescue/syncs-* も拾う)はレビュー対象外。
+export function isNoiseBranch(name) {
+  return typeof name === 'string' && /(^|\/)rescue[s]?\/sync-/.test(name);
+}
+
 function fingerprintOf(patch) {
   return crypto.createHash('sha256').update(patch).digest('hex');
 }
@@ -37,14 +56,16 @@ function sumNumstat(text) {
   let files = 0;
   let added = 0;
   let deleted = 0;
-  for (const line of String(text).split('\n')) {
+  const names = [];
+  for (const line of String(text).split(/\r?\n/)) {
     if (!line.trim()) continue;
     files += 1;
-    const [a, d] = line.split('\t');
+    const [a, d, name] = line.split('\t');
     if (/^\d+$/.test(a)) added += Number(a);
     if (/^\d+$/.test(d)) deleted += Number(d);
+    if (name !== undefined) names.push(name);
   }
-  return { files, added, deleted };
+  return { files, added, deleted, names };
 }
 
 // 差分の全ファイルが main 側の .gitignore 対象なら、その一覧を返す。
@@ -205,10 +226,10 @@ export function scanRescueBranches({
       results.push({ branch, files: 0, added: 0, deleted: 0, fingerprint: null, status: 'error', error: message });
       continue;
     }
-    const { files, added, deleted } = sumNumstat(numstat);
+    const { files, added, deleted, names } = sumNumstat(numstat);
     const fingerprint = fingerprintOf(patch);
     if (patch === '') {
-      results.push({ branch, files, added, deleted, fingerprint, status: 'covered', reason: 'no-commits' });
+      results.push({ branch, files, added, deleted, names, fingerprint, status: 'covered', reason: 'no-commits' });
       continue;
     }
     let alreadyUpstream = false;
@@ -219,27 +240,27 @@ export function scanRescueBranches({
       // 判定不能なら既存の分類にフォールバックし、レビュー対象を残す。
     }
     if (alreadyUpstream) {
-      results.push({ branch, files, added, deleted, fingerprint, status: 'covered', reason: 'already-upstream' });
+      results.push({ branch, files, added, deleted, names, fingerprint, status: 'covered', reason: 'already-upstream' });
       continue;
     }
     if (ignoreCheck) {
       const ignored = ignoredOnlyFiles({ git, dir, main, branch });
       if (ignored) {
-        results.push({ branch, files, added, deleted, fingerprint, status: 'ignored-only', ignoredFiles: ignored.names });
+        results.push({ branch, files, added, deleted, names, fingerprint, status: 'ignored-only', ignoredFiles: ignored.names });
         continue;
       }
     }
     if (firstByFingerprint.has(fingerprint)) {
-      results.push({ branch, files, added, deleted, fingerprint, status: 'duplicate', duplicateOf: firstByFingerprint.get(fingerprint) });
+      results.push({ branch, files, added, deleted, names, fingerprint, status: 'duplicate', duplicateOf: firstByFingerprint.get(fingerprint) });
       continue;
     }
     firstByFingerprint.set(fingerprint, branch);
     const coveredBy = coveredByFingerprint.get(fingerprint);
     if (coveredBy) {
-      results.push({ branch, files, added, deleted, fingerprint, status: 'covered-by-branch', coveredBy });
+      results.push({ branch, files, added, deleted, names, fingerprint, status: 'covered-by-branch', coveredBy });
     } else {
       const coveredInMain = coverageInMain({ git, dir, main, patch, files });
-      results.push({ branch, files, added, deleted, fingerprint, status: coveredInMain ? 'covered-in-main' : 'unique', ...(coveredInMain ? { coveredInMain } : {}) });
+      results.push({ branch, files, added, deleted, names, fingerprint, status: coveredInMain ? 'covered-in-main' : 'unique', ...(coveredInMain ? { coveredInMain } : {}) });
     }
   }
   results.sort((a, b) => (a.branch < b.branch ? -1 : a.branch > b.branch ? 1 : 0));
@@ -257,12 +278,50 @@ function summarize(branches) {
   return summary;
 }
 
+// --todo 用: 枝の three-dot 差分の変更ファイル一覧。失敗時は null(判定不能)。
+function changedFiles({ git, dir, main, branch }) {
+  try {
+    return git(dir, ['diff', '--name-only', `${main}...${branch}`])
+      .split(/\r?\n/)
+      .map(name => name.trim())
+      .filter(Boolean);
+  } catch {
+    return null;
+  }
+}
+
+function formatTodoLine({ branch, names }) {
+  const head = `- [ ] ${branch.branch} — ${branch.files} files ${branch.added}+/${branch.deleted}-`;
+  if (names.length === 0) return head;
+  const shown = names.slice(0, 3).join(', ');
+  const trailer = names.length > 3 ? `, …` : '';
+  return `${head} (${shown}${trailer})`;
+}
+
+// unique のうち、同期枝と「全ファイルがノイズ」の枝を落としたレビュー TODO を組み立てる。
+// ファイル一覧が取れなかった枝はレビューを落とさない側(残す)に倒す。
+export function todoLines({ branches, git, dir, main }) {
+  const unique = branches.filter(b => b.status === 'unique');
+  const targets = [];
+  for (const b of unique) {
+    if (isNoiseBranch(b.branch)) continue;
+    const names = changedFiles({ git, dir, main, branch: b.branch });
+    if (names && names.length > 0 && names.every(isNoisePath)) continue;
+    targets.push({ branch: b, names: names || [] });
+  }
+  const lines = [`## rescue レビュー TODO (unique ${unique.length} → 実対象 ${targets.length})`];
+  if (targets.length === 0) lines.push('- (なし)');
+  for (const target of targets) lines.push(formatTodoLine(target));
+  return lines;
+}
+
 function parseArgs(argv) {
   const opts = {
     repo: '.',
     main: 'origin/main',
     includeRemote: false,
     json: false,
+    todo: false,
     compareRefs: ['refs/heads/', 'refs/remotes/origin/'],
     ignoreCheck: true,
   };
@@ -275,6 +334,7 @@ function parseArgs(argv) {
     else if (a === '--no-compare-refs') opts.compareRefs = [];
     else if (a === '--no-ignore-check') opts.ignoreCheck = false;
     else if (a === '--json') opts.json = true;
+    else if (a === '--todo') opts.todo = true;
   }
   return opts;
 }
@@ -289,10 +349,15 @@ function formatLine(b) {
     return `${base}\t(added ${c.addedInMain}/${c.addedLines} in main, deleted ${c.deletedStillInMain}/${c.deletedLines} still in main)`;
   }
   if (b.status === 'error' && b.error) return `${base}\t(${b.error})`;
+  // unique でも全ファイルがノイズ(生成物・実行時成果物)なら --todo ではレビュー対象から外れる。
+  // 生出力だけを見て「unique だから PR 化が必要」と誤読する事故(2026-10-25)を防ぐため、印を付ける。
+  if (b.status === 'unique' && Array.isArray(b.names) && b.names.length > 0 && b.names.every(isNoisePath)) {
+    return `${base}\t(no review target: all ${b.names.length} file(s) are generated/ignored)`;
+  }
   return base;
 }
 
-function run(argv) {
+function run(argv, { git = defaultGit } = {}) {
   const opts = parseArgs(argv);
   let branches;
   try {
@@ -302,14 +367,21 @@ function run(argv) {
       includeRemote: opts.includeRemote,
       compareRefs: opts.compareRefs,
       ignoreCheck: opts.ignoreCheck,
+      git,
     });
   } catch (err) {
     process.stderr.write(`rescue-review-scan: ${err && err.message ? err.message : err}\n`);
     return;
   }
   const summary = summarize(branches);
+  // --json 併用時は --json を優先する。
   if (opts.json) {
     process.stdout.write(`${JSON.stringify({ repo: opts.repo, main: opts.main, summary, branches }, null, 2)}\n`);
+    return;
+  }
+  if (opts.todo) {
+    const lines = todoLines({ branches, git, dir: opts.repo || '.', main: opts.main });
+    process.stdout.write(`${lines.join('\n')}\n`);
     return;
   }
   const lines = [

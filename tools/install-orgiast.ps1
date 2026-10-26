@@ -467,6 +467,17 @@ try {
   } else { Warn "register-fleet-poller.ps1 未取得=スキップ(他機能は動作)" }
 } catch { Warn ("フリート点検の登録に失敗(他機能は動作): " + $_.Exception.Message) }
 
+# --- Auto-progress: new installs and daily fleet repair use the same registrar. ---
+Step "Auto-progress watch/digest registration"
+try {
+  $autoProgressInstaller = Join-Path $REPO 'tools\register-auto-progress-task.ps1'
+  if (Test-Path $autoProgressInstaller) {
+    & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $autoProgressInstaller
+    if ($LASTEXITCODE -ne 0) { throw "register-auto-progress-task.ps1 exit $LASTEXITCODE" }
+    OK "Auto-progress watch/digest registered"
+  } else { Warn "register-auto-progress-task.ps1 missing" }
+} catch { Warn ("Auto-progress registration failed: " + $_.Exception.Message) }
+
 # --- Claude 環境の Google Drive バックアップ(毎日03:40) ---
 Step "Claude 環境バックアップを登録 (毎日03:40)"
 try {
@@ -477,6 +488,15 @@ try {
     OK "Claude 環境バックアップ 登録完了(毎日03:40 ClaudeDailyDriveBackup)"
   } else { Warn "register-claude-backup-task.ps1 未取得=スキップ(他機能は動作)" }
 } catch { Warn ("Claude 環境バックアップの登録に失敗(他機能は動作): " + $_.Exception.Message) }
+
+# Schedule sync is personal to the LINE receiver host; -Ensure skips other PCs.
+try {
+  $scheduleInstaller = Join-Path $REPO 'tools\register-schedule-sync-task.ps1'
+  if (Test-Path -LiteralPath $scheduleInstaller) {
+    & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $scheduleInstaller -Ensure
+    if ($LASTEXITCODE -ne 0) { throw "register-schedule-sync-task.ps1 exit $LASTEXITCODE" }
+  }
+} catch { Warn ("schedule-sync registration failed: " + $_.Exception.Message) }
 
 # --- フリート管制エージェントの定時起動(15分ごと) ---
 Step "フリート管制エージェントを登録 (15分ごと)"

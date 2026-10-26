@@ -19,9 +19,20 @@ export function runBounded(command, args, { cwd, input = '', env = process.env, 
   if (!Number.isFinite(stopAt) || stopAt <= now()) return Promise.resolve({ code: null, stdout: '', stderr: '', timedOut: true });
   return new Promise((resolve) => {
     let child, guard, timer, poll, done = false, timedOut = false, stopReason, stdout = '', stderr = '';
+    // 最初に決めた停止理由が勝つ。monitor が 'deferred'（対話セッション使用中・利用窓の一時的な
+    // 読み取り失敗）を返したあと、taskkill が効かず子が残ると期限タイマーが後から 'deadline' で
+    // 上書きし、理由が deferred なのに status=failed / failureKey=child-deadline の行ができていた
+    // （2026-10-24T14:59Z 実測: 40分待たされたうえレーン全滅として起票対象になった）。
     const stop = (reason) => {
+      if (stopReason) return;
       stopReason = reason;
       timedOut = reason === 'deadline';
+      try { kill(child.pid); } catch (error) { stderr += `\nkill: ${error.message}`; }
+    };
+    // 期限到達時、既に停止理由が決まっていても子が生き残っていれば再度 kill する。
+    // （理由は変えない。stop() は first-wins なので stopReason は保持される）
+    const rekillAtDeadline = () => {
+      if (!stopReason) { stop('deadline'); return; }
       try { kill(child.pid); } catch (error) { stderr += `\nkill: ${error.message}`; }
     };
     const finish = (code) => {
@@ -36,7 +47,7 @@ export function runBounded(command, args, { cwd, input = '', env = process.env, 
     };
     try {
       child = spawnImpl(command, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, detached: platform !== 'win32' });
-      timer = setTimer(() => stop('deadline'), Math.max(0, stopAt - now()));
+      timer = setTimer(rekillAtDeadline, Math.max(0, stopAt - now()));
       // Independent watchdog survives a parent crash. WSL also has its own SIGKILL timeout.
       // Windows では detached にしない（新しいコンソールが可視化される。no-visible-console-window.test が禁止）。
       // Windows は親が死んでも子は生き残るので、attached のままでも watchdog は親クラッシュ後に動く。

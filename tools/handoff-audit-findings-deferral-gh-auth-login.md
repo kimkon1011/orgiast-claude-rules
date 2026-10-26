@@ -173,3 +173,15 @@ node tools/permanent-fix-deferral-scan.mjs --since 2026-10-15T18:00:00Z
 `looksLikeInstallRequest` ガード（exit 5「全PCの設定変更は setup --converge 経由」）と
 本文 20,000 文字上限（patch が 28KB）で今回は積めなかった。
 → 資格情報のある PC（例: w018-PC／kim-PC）での `git am` + push + PR が必要（残TODOに記録）。
+
+## 追検証（e738f943 / handoff-audit:753a8077c03f51bc・2026-10-18）
+
+- 走査: `node tools/permanent-fix-deferral-scan.mjs --since 2026-10-15T16:51:11Z`
+  → stop-gate-runner-ledger 365行中 hits=2（P2:1 = 2026-10-15T17:09:28Z 462a3318 / P3:1 = 2026-10-15T17:34:52Z 18464345）。
+  いずれも修正着地（PR #829 = commit 6bf3194、2026-10-16T18:52Z マージ）より前の別セッションで、e738f943 原文の再出現ではない。
+  2026-10-16 / 10-17 / 10-18 は 0 件。handoff-audit-ledger 719行 0件、handoff-audit-nightly-ledger 2行 0件。＝再発なし。
+- 検出器の生存: `--since 2026-10-14T00:00:00Z --until 2026-10-15T18:00:00Z` → 6件（P3:5 / P2:1）を再検出し、e738f943 の行も含まれる。0件は空振りではない。
+- 書込み時ゲート: e738f943 の原文フッター（3行・`SESSION_PHRASES.pending`）を `judgeNextAction` に渡すと `block` / `NEXT-ACTION-DEFERRAL`。実測（2026-10-18）。
+- 既知の穴: フッターを書かない200字未満の短い応答は `short-response` で素通りする（既存 §5 U2 のまま。本修正の対象外）。
+- 着地状況: 修正は origin/main に着地済み（`git merge-base --is-ancestor 6bf3194 origin/main` = exit 0）。origin/main の `tools/auto-session.mjs` は「`gh auth login` を kim に頼まず … `--exec codex` 便で移送」の修正版で、ライブの `C:\Users\kimko\.claude\nightly-repo\tools\auto-session.mjs` とも一致。
+- 1クリック経路: `C:\Users\kimko\.claude\tools\gh-login-oneclick.ps1` は UTF-8 BOM 付き（先頭 ef bb bf）で、デスクトップ `GitHub認証（1回だけ）（ダブルクリック）.cmd` から呼ばれる。`~/.claude/github-landing-queue.txt` に未着地枝を登録済み。＝「このPCの修正が main に着地しない」は、1回の認証同意以外を自動化済み。

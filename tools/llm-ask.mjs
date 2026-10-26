@@ -1,7 +1,7 @@
 // 複数プロバイダのLLMを1本で叩く統合CLIヘルパー。
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
 import { readEnvValue } from './env-kv.mjs';
-import { callWithFallback, FALLBACK_CHAIN, preferredForCategory } from './llm-fallback.mjs';
+import { allowedForCategory, callWithFallback, FALLBACK_CHAIN, preferredForCategory } from './llm-fallback.mjs';
 import { geminiUsage, recordGeminiUsage } from './gemini-usage-ledger.mjs';
 
 const PROVIDERS = {
@@ -15,7 +15,7 @@ const PROVIDERS = {
   // Genspark Pro の前払いクレジット枠。OpenAI 互換の LLM proxy で claude-opus-5 等36モデルが1キーで叩ける。
   genspark: { base: 'https://www.genspark.ai/api/llm_proxy/v1/chat/completions', keyEnv: 'GSK_PROXY_KEY', keyFile: 'genspark-proxy.env', model: 'gpt-5.6-luna' },
   gemini: { base: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', keyEnv: 'GEMINI_API_KEY', keyFile: 'gemini.env', model: 'gemini-3.7-flash' },
-  deepseek: { base: 'https://api.deepseek.com/chat/completions', keyEnv: 'DEEPSEEK_API_KEY', keyFile: 'deepseek.env', model: 'deepseek-chat' },
+  deepseek: { base: 'https://api.deepseek.com/chat/completions', keyEnv: 'DEEPSEEK_API_KEY', keyFile: 'deepseek.env', model: 'deepseek-flash' },
   grok: { base: 'https://api.x.ai/v1/chat/completions', keyEnv: 'XAI_API_KEY', keyFile: 'xai.env', model: 'grok-3' },
   kimi: { base: 'https://api.moonshot.ai/v1/chat/completions', keyEnv: 'MOONSHOT_API_KEY', keyFile: 'kimi-api.env', model: 'kimi-k3', special: 'kimi' },
   mistral: { base: 'https://api.mistral.ai/v1/chat/completions', keyEnv: 'MISTRAL_API_KEY', keyFile: 'mistral.env', model: 'mistral-large-latest' },
@@ -25,25 +25,35 @@ const args = process.argv.slice(2);
 function opt(name, def) { const i = args.indexOf(name); return (i >= 0 && args[i + 1]) ? args[i + 1] : def; }
 const provider = (opt('--provider', '') || '').toLowerCase();
 const selected = PROVIDERS[provider];
-if (!selected) { console.error('使い方: node llm-ask.mjs --provider <openrouter|groq|glm|cerebras|genspark|gemini|deepseek|grok|kimi|mistral> "指示" [--model X] [--system S] [--max N] [--category <classification|extraction|summarize|jp_reply|code>] [--no-fallback]'); process.exit(2); }
+if (!selected) { console.error('使い方: node llm-ask.mjs --provider <openrouter|groq|glm|cerebras|genspark|gemini|deepseek|grok|kimi|mistral> "指示" [--model X] [--system S] [--max N] [--category <classification|extraction|summarize|jp_reply|code|transcript>] [--prompt-file PATH] [--no-fallback] [--prefer-provider] [--per-provider-timeout-ms N]'); process.exit(2); }
 const model = opt('--model', selected.model);
 // claude-fable-5 系は別課金枠のため組織ルールで全用途禁止。
 if (/fable/i.test(model)) { console.error('fable を含むモデルは組織ルールにより使用できません'); process.exit(2); }
 const category = (opt('--category', '') || '').toLowerCase();
 const system = opt('--system', '');
 const maxTok = parseInt(opt('--max', '4000'), 10) || 4000;
+const timeoutArg = opt('--per-provider-timeout-ms', '');
+const perProviderTimeoutMs = args.includes('--per-provider-timeout-ms') ? Number(timeoutArg) : undefined;
+if (perProviderTimeoutMs !== undefined && (!Number.isSafeInteger(perProviderTimeoutMs) || perProviderTimeoutMs <= 0 || perProviderTimeoutMs > 2147483647)) { console.error('--per-provider-timeout-ms requires a positive timer-safe integer'); process.exit(2); }
 const skip = new Set();
-['--provider', '--model', '--system', '--max', '--category'].forEach((flag) => { const i = args.indexOf(flag); if (i >= 0) { skip.add(i); skip.add(i + 1); } });
-const prompt = args.filter((arg, i) => !arg.startsWith('--') && !skip.has(i)).join(' ').trim();
+['--provider', '--model', '--system', '--max', '--category', '--prompt-file', '--per-provider-timeout-ms'].forEach((flag) => { const i = args.indexOf(flag); if (i >= 0) { skip.add(i); skip.add(i + 1); } });
+const promptFile = opt('--prompt-file', '');
+if (args.includes('--prompt-file') && (!promptFile || promptFile.startsWith('--'))) { console.error('--prompt-file requires a path'); process.exit(2); }
+const prompt = promptFile ? fs.readFileSync(promptFile, 'utf8') : args.filter((arg, i) => !arg.startsWith('--') && !skip.has(i)).join(' ').trim();
 const home = process.env.ORGIAST_HOME || os.homedir();
 
 // --category 指定時は eval 実測のルーティング表(routing-table.json)の最安候補を先頭にする。
 // 表に無い・暫定の場合は指定された provider をそのまま使い、フォールバック連鎖は維持する。
-const routedStart = category ? preferredForCategory(category) : null;
+const preferProvider = args.includes('--prefer-provider');
+const routedStart = category && !preferProvider ? preferredForCategory(category) : null;
 const start = routedStart && PROVIDERS[routedStart.provider]
   ? { provider: routedStart.provider, model: routedStart.model || selected.model }
   : { provider, model };
-if (category && routedStart) {
+if (!allowedForCategory({ provider, model }, category)) {
+  console.error('[routing] transcript は話者・発言の取り違えを避けるため、指定された DeepSeek を除外します');
+} else if (preferProvider) {
+  console.error(`[routing] --prefer-provider: ${provider}/${model} を先頭にします`);
+} else if (category && routedStart) {
   console.error(`[routing] カテゴリ ${category} は実測表から ${routedStart.provider}/${routedStart.model} を先頭にします${routedStart.provisional ? ' (暫定)' : ''}`);
 } else if (category) {
   console.error(`[routing] カテゴリ ${category} の実測候補が無いため --provider ${provider} を使います`);
@@ -67,6 +77,7 @@ if (system) messages.push({ role: 'system', content: system });
 messages.push({ role: 'user', content: prompt });
 const ledger = path.join(home, '.claude', 'executor-usage.jsonl');
 function appendAttempt(info, usage = {}) {
+  if (args.includes('--no-persist')) return;
   if (info.candidate.provider === 'gemini') {
     const measured = geminiUsage({ usage });
     try {
@@ -82,19 +93,25 @@ function appendAttempt(info, usage = {}) {
     } catch {}
     return;
   }
-  const rec = { t: new Date().toISOString(), provider: info.candidate.provider, model: info.candidate.model, in: usage.prompt_tokens || 0, out: usage.completion_tokens || 0, secs: Number(info.secs.toFixed(3)), status: info.status, attempt: info.attempt, failover: info.failover };
+  // 失敗理由も残す。reason が無いと delegation-health 側で「残高切れ」と「ただの rate limit」を
+  // 区別できず、直せない全滅として毎日起票される（2026-10-22 実測: kimi の 2337 行が reason 欠落）。
+  const rec = { t: new Date().toISOString(), provider: info.candidate.provider, model: info.candidate.model, in: usage.prompt_tokens || 0, out: usage.completion_tokens || 0, secs: Number(info.secs.toFixed(3)), status: info.status, attempt: info.attempt, failover: info.failover, ...(info.status !== 'ok' && info.reason ? { reason: String(info.reason).slice(0, 400) } : {}) };
   try { fs.mkdirSync(path.dirname(ledger), { recursive: true }); fs.appendFileSync(ledger, JSON.stringify(rec) + '\n'); } catch {}
 }
 
 try {
   const result = await callWithFallback({
+    persistState: !args.includes('--no-persist'),
     start,
+    category,
+    perProviderTimeoutMs,
     chain: args.includes('--no-fallback') ? [] : FALLBACK_CHAIN,
     allowGatewayFallback: !args.includes('--no-fallback'),
     payloadFor(candidate) {
       const P = PROVIDERS[candidate.provider]; const key = loadKey(candidate.provider);
       if (!P || !key) return null;
       const payload = { model: candidate.model || P.model, messages, max_tokens: maxTok, stream: false };
+      if (candidate.provider === 'deepseek' && payload.model === 'deepseek-flash') payload.thinking = { type: 'disabled' };
       if (P.special === 'kimi') Object.assign(payload, { reasoning_effort: 'none', temperature: 0.6 });
       return { url: P.base, init: { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', ...(P.extraHeaders || {}) }, body: JSON.stringify(payload) } };
     },

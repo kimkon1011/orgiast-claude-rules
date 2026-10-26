@@ -102,11 +102,39 @@ Stop の `user-burden-gate` が依頼のある最終応答を監査する。本�
 - できていない・未検証の行には「原因（事実と推測を分ける）→ 次の一手（実行者・手順）」を併記し、Claude が実行できる分は報告前に着手する。
 - 事例: 複合機スキャン→Drive 自動アップで FAX フォルダを「対象に含めた」と報告し、テストは別フォルダだけで合格とした。初期調査で FAX の「直近30日 0件・最終 2024/3」を取得していたのに報告せず、複合機入替で FAX 保存設定が消えていたことを user の問い合わせで初めて発見した。
 
-**🔴 社内メンバーへの連絡は Discord DM で送る（tools/discord-dm.mjs）。Gmail下書きは内部宛に禁止・外部宛のみ。送れない時はチャットに完成形を表示。**
+**🔴 社内連絡はDiscordで金功勇同席（既存グループDM→kim-PC、無ければBotDM＋写し）。kim宛DM=要対応・警告/督促・定期報告のみ。PRマージ/他PC依頼=fleet-mail。内部Gmail下書き禁止。**
+送れなければチャットに完成形を表示。
+対象は、支払い・権限付与・OAuth 同意・物理操作・判断など kim 本人の対応が不可欠なもの、期限・障害・未対応の警告や督促、kim が定期的に依頼した日次・週次・月次レポートに限る。
+PR マージ依頼と他PCへの作業依頼は `node tools/fleet-mail.mjs --send --to kim-PC --kind note --body-file <本文> --why "[作業依頼] ..."` で送り、kim は各PCのセッションを直接見るため作業内容・完了の共有DMは不要。
+送信ゲート `tools/lib/kim-dm-policy.mjs` が `notify-kim` / `discord-dm` のマージ依頼を止める。kim の操作が本当に必要な例外だけ `--kim-action-required` を付ける。
+メール送信の前に recipient-domain-gate が宛先ドメインの実在（MX/A）を検査し、存在しないドメイン宛は止める（2026-10-23 名刺OCR誤読でバウンス2件）。
 
 内部判定: 社内・グループ会社（東邦鋼業 genbateam.toho@gmail.com、Reブース、NEXTForward）・スタッフ。orgiast.jp / toho-kogyo.com と `~/.claude/internal-recipients.json`（既定 `tools/internal-recipients.default.json`）を使い、`internal-recipient-gmail-guard` が宛先を照合する。
+既存メールの社内宛転送は可（`node tools/gmail-draft.mjs --forward <messageId> --to <宛先>`→`--send <draftId>`）。社内宛の新規作成・返信は従来どおり Discord。
 
-社内メンバーへの送り方: `node ~/orgiast-claude-rules/tools/discord-dm.mjs "<名前 or メール>" --body "<本文>"`（`--dry-run` で送信せず解決結果だけ確認できる）。宛先の名前→Discord ID 解決は Bot が行うので user に ID やチャンネルを聞かない。宛先が曖昧・不明なら送らずに終了する（推測で送らない）。Bot トークンが無いPCなど送れない場合だけ、チャットに「宛先／用件／本文」をコピペできる完成形で表示する。外部宛のGmail下書きは、本文と下書き件名もチャットに併記する。
+社内メンバーへの送り方は次の順序を守る。(1) まず相手と金功勇が入っている既存グループDMへ kim 名義で投稿する。kim-PC 以外からは `node tools/discord-group-dm-request.mjs "<相手名>" --body-file <本文> [--chat "<グループDM名>"]` で kim-PC に依頼する。(2) グループDMが見つからない、kim-PC の Discord が未起動、または投稿を読み戻して確認できない時は、`node tools/discord-dm.mjs "<名前 or メール>" --body-file <本文>` で相手へ Bot DM を送り、金功勇へ同文の写しを自動送信する。(3) 当日中に読んでほしい、または2時間以内に返事が要るなど急ぎの場合や kim-PC に頼めない場合は、最初から Bot DM＋写しを使う。各ツールの `--dry-run` は送信せず内容と解決結果を確認する。宛先の名前→Discord ID 解決は Bot が行うので user に ID やチャンネルを聞かない。宛先が曖昧・不明なら送らずに終了する（推測で送らない）。Bot トークンが無いPCなど送れない場合だけ、チャットに「宛先／用件／本文」をコピペできる完成形で表示する。外部宛のGmail下書きは、本文と下書き件名もチャットに併記する。根拠（2026-10-24 cr）: Bot の個人DMだけでは金さんが見られず、受け手にも誰からの依頼か分かりにくい。
+
+**🔴 下書き: seisaku-team@orgiast.jp。送信指示時は重複・矛盾照会**
+2026-10-25 kim: 全アカウント・全PC共通。Gmail MCP の create_draft／update_draft／send_message／reply／forward は個人アカウント名義になるので使わない（mail-draft-account-gate が止める）。作成 `node tools/gmail-draft.mjs --to … --subject … --body-file … --json`、返信は `--thread-id` `--in-reply-to` を付ける、読み戻し `node tools/gmail-search.mjs --user seisaku-team@orgiast.jp --query "in:drafts …"`、送信 `node tools/gmail-draft.mjs --send <draftId> --json`。重複照会（in:sent）も seisaku-team@ 側で行う。下書きのリンクは「seisaku-team@orgiast.jp で開く」と併記する。社内宛の新規作成・返信は従来どおり Discord。既存メールの社内宛転送だけは上記の専用経路で可。送信後は同アカウントの送信済みを読み戻す。
+- 下書きを作る前に: `node tools/gmail-search.mjs --user seisaku-team@orgiast.jp --query "<宛先アドレス> -in:drafts" --json` で送信済み・受信を照会する。既に送っていれば新しい下書きは作らず「送信済み・返信待ち〇日」と報告する（2026-10-25 鹿沼案件で、kim@ だけ照会して「履歴なし」とし、10/22 に seisaku-team@ から送信済みの打診を二重に下書きした）。
+- 既定: `node tools/gmail-draft.mjs --to … --subject … --body-file … --json`（修正は新規作成・読み戻し後に旧下書きを `--delete <旧draftId>` で削除） までで止める。user が「送って」「送信して」など、その下書き（または返信チェックの番号）を指して送信を明示した時だけ、`node tools/gmail-draft.mjs --send <draftId> --json`で送る。「送ってよいですか」と聞き返したり、送信ボタンを押すよう user に頼み返したりしない。
+- 送信直前のチェック（毎回・省略禁止）:
+  1. **重複**: 同じスレッドと同じ宛先について、送信済み（`in:sent`）と直近の受信を検索する。本人や別のセッションがすでに送っていたら送らない。送信済みの日時・本文の要点を報告する。
+  2. **矛盾**: 相手の最新メールだけでなく、スレッド全体の合意を読む。金額（税抜・税込・見積番号）、数量、人件費／設営／撤去の要否、納品形態、日程、名義・宛先、支払条件・請求タイミング、約束を下書きと照合する。見積・請求の金額を書くときは、見積明細（人件費・運搬・買取・割引）を合意と1行ずつ突き合わせる。候補日時はカレンダーで空きを照会し直す。`gmail-draft.mjs --send` は `mail-consistency-check.mjs` を自動実行する。block は下書きを直してから送る。どうしても送る場合だけ `--ack-consistency "<理由>"` を付け、理由を完了報告に書く。生の Gmail API 送信スクリプトは禁止（mail-consistency-gate が止める）。
+  3. **送信後**: 送信済みフォルダで読み戻し、宛先・件名・日時を報告する。
+- 根拠: 2026-10-22 に、返信チェックで OK が出た川口様（スタイルビー）宛ての返信を「下書きまで」のルールで止めていた。10/23 に先方から【再送】が届いた。10/25 に別の経路から先に送信され、こちらの送信は「下書きではない」エラーで止まった。照合しなければ二重送信になるところだった。
+- 補足: 下書きの候補日（10/30 10:00）は、作成したあとに入った仮押さえと重なっていた。
+- 根拠（2026-10-26 博展様）: 9/25 に先方が「設営スタッフ不要・納品のみ」、9/26 にこちらが「承知」と合意したのに、10/25 の返信は人件費40,560円（税抜）入りの見積214,879円を前提に「レンタル費用のみ請求」と書き、請求タブも214,879円のまま進みかけた。
+
+**🔴 外部との日程調整はこちらから候補日時（日付・時刻を3〜5枠）を出す。「ご都合をお知らせください」と先方に丸投げしない（2026-10-23 cr）。**
+
+候補は担当者のカレンダー（Calendar コネクタの suggest_time / list_events）で空きを確かめて作り、所要時間・形式（オンライン／訪問）・「決まり次第URLを送る」を添える。空きが読めない時は仮の候補を書かず、担当者へ確認してから出す。例:「・10月28日（水）14:00〜15:00 ・10月29日（木）11:00〜12:00 ・10月30日（金）16:00〜17:00 のいずれかでご都合はいかがでしょうか。難しい場合は別の候補をお出しします」。理由: 先方に候補出しを任せると返信待ちが1往復増え、未回答のまま日程が決まらない（2026-10-23 展示会案件の返信下書きで丸投げ文面を書き、cr が全社ルール化を指示）。
+
+**日程が決まったら「予定・Meet・社内招待・返信メール」を1セットで行う（2026-10-25 kim）。** 相手が候補を選んだときも、こちらが相手の候補から選ぶときも、次の4つをまとめて行う。どれか1つだけで止めない。
+1. カレンダーで空きを照会し直す。仮押さえも埋まりとして扱う。そのうえで、調整したアカウントのカレンダーに予定を作る（Calendar コネクタの `create_event`、`addGoogleMeetUrl: true`）。件名は `M:<会社名> <氏名>様（<用件>）`、説明欄に相手の連絡先・紹介者・経緯を書く。同じ件の【仮押さえ】は本予定に置き換え、残りの候補は削除する。
+2. 社内の招待者を必ず入れる。**seisaku-team@orgiast.jp で調整したときは kim@orgiast.jp を、kim@orgiast.jp など他のアカウントで調整したときは seisaku-team@orgiast.jp と kim@orgiast.jp の両方を**入れる（調整したアカウント自身は主催者なので除く）。社外の相手は、kim の指示がない限りカレンダー招待には入れず、メールで Meet URL を送る。
+3. 返信メールの下書きに、確定日時（開始〜終了）、Meet URL、電話参加の番号と PIN を入れる。URL を含むので Gmail コネクタは使わず `node tools/gmail-draft.mjs --user <調整したアカウント> --thread-id <threadId> --to … --cc … --body-file …` で、元のスレッドへの返信として作る（コネクタは URL を google.com/url?q= に書き換える。2026-10-18 実測）。古い下書きは `--delete <draftId>` で消す。
+4. 送信は「メールは下書きまで。「送って」で重複・矛盾照会→送信」のルールに従う。報告には、予定の日時・招待者・Meet URL・下書きの draftId を書く。
 
 **🔂 手作業を頼むなら「二度と発生しない状態」までを同じ依頼に含める（2026-08-26 kim厳命・絶対）**
 「今回だけ手でお願いします」で済ませ、**恒久化を後から提案するのは違反**（その時点で余計な1回を取らせている）。kim の指摘: 「**ユーザーの手間を掛けさせないということを甘く見すぎ**」。
@@ -224,6 +252,8 @@ GASはclaspとGitHubで管理し、実行・read-backまでClaudeが行う。
 Apps Script Web エディタに直接コードを書かない。ソースはGitHub管理、`.clasp.json`で`clasp push -f`反映。Web Appデプロイは既存 `deploymentId` を再利用（URL維持）。手作業コピペ・「エディタで保存→再デプロイしてください」案内は禁止。
 bound scriptのscriptId不明時はDrive MCPで`mimeType='application/vnd.google-apps.script'`検索等の発見手順あり。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/gas-clasp-workflow.md`
 
+**GAS のテンプレート .html はコメント内でも `<?` `?>` を書かない（2026-10-15 倉庫アプリ本番@64が約1.5時間全停止）**: テンプレートは場所を問わず `<?= ?>` を評価するため、JSコメント内の記述でも `evaluate()` が SyntaxError になり全画面が落ちる。push 前に `grep -nE '<\?' current-app/*.html` と `test/template-scriptlet.test.js` で検査し、deploy 直後は実ブラウザで JS エラーが無いことを確認する。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/gas-clasp-workflow.md`
+
 **1.4 GAS の実行を Claude 側で完結させる**
 
 `clasp push -f`だけでなく関数実行も自動化しないと「▶実行してください」が繰り返し発生する。初回1clickのOAuth同意でtime-basedトリガーを仕込めば以降は無人化できる。
@@ -231,6 +261,7 @@ bound scriptのscriptId不明時はDrive MCPで`mimeType='application/vnd.google
 **Driveコマンドキュー方式は全GASプロジェクト必須（絶対ルール）**: 専用Driveフォルダを1分ごとのトリガーで監視し `cmd_*.json`→`result_*.txt` で処理。ホワイトリスト方式（`eval`禁止）。**`setupOnce()` 1つに全初期化を集約**（分割禁止）。トリガー削除は必ず`handlerFunction`名でフィルタ（`processCommandQueue`を巻き添え削除しない）。全文テンプレ・appsscript.json scope・past cases: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/gas-clasp-workflow.md`
 
 **実行→検証→完了報告のサイクルもClaude側で完結**（GAS/Web/cron/デプロイ共通）: push後、コマンドキュー/Web App endpoint/clasp run のいずれかで強制発火→ログ/DB read-backで検証→OKと確認できてから「完了」と言う。「次回cron発火で確認できます」は禁止。詳細・検証導線一覧表: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/verify-before-done.md`
+委譲・マージした変更も、本番経路で実行し、送信・通知・外部反映はAPIで読み戻すまで完了報告しない。
 
 **すべての変更後、テストして実際に直っていることを確認してから報告する（絶対ルール）**: typecheckだけ・「ブラウザで確認してください」丸投げは違反。UI変更はLayer1(ロジックNode再現)+Layer2(Playwright実描画)の2段必須、GAS/Sheets書き込みは戻り値でなく**read-back verify**必須（merge cellのnon-top-left等はsilent ignoreされる）、Frontend変更も「browserでしか動かない」を言い訳にせず`test/*.test.js`をNodeで書く。報告テンプレ・頻発失敗パターン表・past cases: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/verify-before-done.md`
 
@@ -545,6 +576,21 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
 
 新規プロジェクト着手の初手で、GCP/Supabase/Vercel/GitHub/Anthropic等をどのアカウントで作るか宣言してから着手する（デフォルトはチーム共有=seisaku-team@orgiast.jp、Workspace Admin操作のみkim@orgiast.jp）。詳細・標準応答テンプレ・recover手順: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/project-launch-playbook.md`
 
+**🔴 全プロジェクトは「後で別アカウント（例: cr@orgiast.jp）へ管理を移す」前提で作る（kim 2026-10-22 厳命・全PC全アカウント）。外部リソースは最小、個人依存値は env/Binding、リポ直下に HANDOVER.md 必須、移管は「招待＋オーナー変更」だけで終わる構成にする。**
+
+**1.12.1 移管前提の設計ルール（kim 2026-10-22・全PC全アカウント全 Claude Code）**
+
+背景: 2026-10 に古川さん退職に伴うアプリ5本の cr@orgiast.jp への移管、ブース制作アプリの cr-PC 移管で、個人アカウント依存（Vercel Hobby のメンバー不可・個人 Discord ID のハードコード・env の所在不明・引き継ぎ文書なし）が移管コストの大半だった。作る時点で移管を設計に入れれば、移管は数十分で終わる。
+
+- **着手時の所有権宣言（§1.12）に「移管先候補」と「移管手順の所要（分）」を1行添える**。移管先が未定でも「cr@orgiast.jp 等の社内アカウント」と書く。
+- **外部リソースは最小**: 原則 GitHub + Cloudflare（§1.10.1。DB は D1）。Vercel / Supabase / GCP / 有料 SaaS を足すときは理由を1行書き、HANDOVER.md のリソース一覧に移管手順まで書く。
+- **個人アカウントに紐づく値はコードに書かない**: Discord ID・メールアドレス・トークン・Webhook URL・スプレッドシート ID は env / Binding / Script Properties に置き、`.env.example` に全項目を説明付きで列挙する。
+- **リポジトリ直下に `HANDOVER.md`**（ひな形: project-launch-playbook.md §1.12.1）: リソース一覧（種別／現オーナー／URL／移管手順／移管後に書き換える箇所）、env 一覧（値は書かず所在のみ）、再デプロイ手順、ローカル起動手順、定期ジョブ・Webhook・外部連携の一覧。非エンジニアの後任が読んで移管を完了できる粒度。README に「引き継ぎは HANDOVER.md」と1行書く。
+- **移管操作が「招待してオーナー変更」で終わる構成にする**: GitHub = Settings → Transfer ownership（または Org 配下で Owner 追加）、Cloudflare = Members に追加 → Super Administrator、Google（Sheets/Drive/GAS）= 同一ドメイン内の所有権移転、GAS = §1.3 の clasp + GitHub 管理。**個人の有料プランでしか成立しない構成（Vercel Pro のメンバー招待等）や、個人 PC のローカルにしか無い秘密・定期ジョブは作らない**（定期処理は GitHub Actions / Cloudflare Cron Triggers / GAS トリガーへ）。
+- **デプロイ前ゲート**: `tools/handover-doc-gate.mjs` が `wrangler deploy` / `vercel deploy` / `clasp push` 直前に HANDOVER.md の有無を確認し、無ければ deny する（feedback-form-gate と同じ型）。
+- **既存アプリ**は大きな改修のついでに同じ形へ寄せる。HANDOVER.md の追加だけなら改修を待たずその場で行う。
+- 完了報告の検証表に「HANDOVER.md あり／移管手順の所要（分）」の行を入れる。
+
 ### 1.13 トークン効率
 
 出力を簡潔にし、入力キャッシュと用途別委譲でトークンを節約する。
@@ -612,13 +658,17 @@ kim 宛の自動通知は「何が起きたか／次に自動でやること／k
 
 「すすめて」と打たせない。完了報告の後は自動で次のTODO（git commit/vercel prod deploy/Layer2 e2e/memory反映等）に着手する。設計判断・破壊的操作・未承認prod送信・大型リファクタのみAskUserQuestionで待つ。報告末尾に「残TODO」セクションを付ける。詳細・自動着手チェックリスト: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/autonomy-and-reporting.md`
 
-**「この後の自動進行: <内容>」の宣言は台帳に記録され、止まれば自動で拾われる（2026-10-14 追加）**。Stop hook `tools/auto-progress-ledger.mjs` が宣言（「なし」以外）を `~/.claude/auto-progress-ledger.jsonl` に記録する（同一セッションは最新で置換）。各PCの定期タスク `OrgiastAutoProgressWatch` が毎時台帳を巡回し、宣言から1時間以降のものを判定する。stalled は前回から2時間以上空けて累計8回まで最終成果へ向けて自動再開し、共有 Sheet（タブ「自動進行」）へ行を足す。全PCが朝08:40と巡回後に自PC分をDiscord DMする（0件は送らない）。だから宣言は「実際に自動で進む内容」だけ書く。Sheet 側の追加手順は `docs/auto-progress-gas-patch.gs.txt`。
+**「この後の自動進行: <内容>」の宣言は台帳に記録され、止まれば自動で拾われる（2026-10-14 追加）**。Stop hook `tools/auto-progress-ledger.mjs` が宣言（「なし」以外）を `~/.claude/auto-progress-ledger.jsonl` に記録する（同一セッションは最新で置換）。各PCの定期タスク `OrgiastAutoProgressWatch` が毎時台帳を巡回し、宣言から1時間以降のものを判定する。stalled は前回から2時間以上空けて累計8回まで最終成果へ向けて自動再開し、共有 Sheet（タブ「自動進行」）へ行を足す。全PCが1日2回まで・変化分のみ自PC分をDiscord DMする（変化0件は送らない）。だから宣言は「実際に自動で進む内容」だけ書く。API エラー（利用上限など）で返答できずに終わった依頼も、毎時の巡回が transcript から見つけて台帳へ起票し、持ち主へ DM したうえで別モデルで自動再開する。Sheet 側の追加手順は `docs/auto-progress-gas-patch.gs.txt`。
 
 自動進行の結果はセッションの持ち主に DM とセッション内表示で必ず届く。user に「進捗どう？」と聞かせたら違反（2026-10-19 cr 指摘）。
 
 PR は原則 `gh pr create ... --label automerge` で作り、CI が赤なら Claude が直す。「マージしてください」と user に頼まない。
 workflow・keyserve・secrets・env・fleet 指令ファイルに触る時だけ label を付けず、PR 冒頭に kim の手動マージが必要な理由を書く。
 完了結論は 3 行以内、詳細はファイルへのリンク 1 本とし、応答末尾を必ず `**次に kim がすること: なし**` または 1 件だけの行動で終える。
+
+**開いて確かめるだけの項目は書かない**（2026-10-26 cr 指摘）: PR・リンク・ファイルを開いて確認/レビュー/マージする類は、開く手間そのものが user の負担。状態は Claude が照会し（済んでいれば書かない）、未了なら Claude が実行するか「この後の自動進行」に回す。この行に書けるのは人にしかできない操作（支払い・OAuth 同意・アカウント作成・物理作業・選択肢を示した判断）だけ。next-action-gate が NEXT-ACTION-OPEN で block する。
+
+**メッセージ・通知を案内するときは一発で見つかる目印を書く**（2026-10-26 kim 指摘・全プロジェクト全PC全アカウント）: 「Discord に送りました」「メールが届いています」と書くときは、①アプリと開くアカウント ②送信者（Bot 名・人・メール） ③場所（DM 相手・チャンネル・ラベル） ④日時（日付と時:分） ⑤先頭行か件名の原文＋そのメッセージへの直接リンクをそろえ、できれば要点も本文に書く（毎日1000件以上届く中から探させない）。message-locator-gate が MSG-LOCATOR で block する。
 
 **目的を1つ与えた継続運転は `/autopilot start "<目的>"` を使う（2026-09-22 追加）**。毎回セッションを開閉して施策を指示させない。各PCへは SessionStart の `onboarding-sync` で `~/.claude/skills/autopilot/` を配布する。
 
@@ -1147,6 +1197,8 @@ Stop ゲートは差し戻し後の書き直しも検査する（素通り禁止
 ### 2.1 データ・文書・外部ツール（§2.1〜2.7）
 
 データを捏造せず、辞書・仕様を実装と一致させ、各外部ツールの操作規約を守る。
+
+- 備品管理表（全体）『備品在庫管理表』の K列（現在在庫数）は関数列。K には何も書かない（在庫数は E列）。K を跨ぐ範囲は分けて書く。bihin-kcol-gate が止める（2026-10-23 古川さん依頼）。
 
 **2.1 経営データに無い属性をハルシネーションしない**
 

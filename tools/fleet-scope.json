@@ -1,6 +1,16 @@
 {
   "version": 1,
   "entries": [
+    {"path": "tools/register-line-share-health.ps1", "scope": "kim-only", "step": null, "reason": "kim-PC の LINE 共有受信サーバーを監視・再起動する専用タスク"},
+    {"path": "tools/lib/scheduled-task.mjs", "scope": "fleet", "step": "settings:lane-health-SessionStart", "reason": "全PC無人ジョブ監査のタスク取得・修復依存"},
+    {"path": "tools/unattended-job-audit.mjs", "scope": "fleet", "step": "settings:lane-health-SessionStart", "reason": "全PCの無人ジョブ自動監査"},
+    {"path": "tools/unattended-jobs.json", "scope": "fleet", "step": "settings:lane-health-SessionStart", "reason": "全PCの無人ジョブ自動監査"},
+    {
+      "path": "tools/register-schedule-sync-task.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "kim の個人カレンダー同期。LINE 受信機だけで登録し、他の fleet PC では収集しない"
+    },
     {
       "path": "tools/register-fleet-chase.ps1",
       "scope": "kim-only",
@@ -92,6 +102,18 @@
       "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
     },
     {
+      "path": "tools/rescue-todo-sweep.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "auto-session.mjs が import する実行時依存（rescue TODO の自動掃除）。D8 再帰検査の対象"
+    },
+    {
+      "path": "tools/rescue-review-scan.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "rescue-todo-sweep.mjs が import する実行時依存（rescue 枝の分類）。D8 再帰検査の対象"
+    },
+    {
       "path": "tools/backup-claude-to-drive.ps1",
       "scope": "kim-only",
       "step": null,
@@ -170,13 +192,49 @@
       "reason": "要確認"
     },
     {
+      "path": "tools/handoff-audit-findings-gas-single-run-2ddd67033c25e70a.md",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "ドキュメントで実行体なし（~/.claude 配下の台帳パス記載による誤検出を許容）"
+    },
+    {
+      "path": "tools/handoff-audit-findings-deferral-3423fc16.md",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "ドキュメントで実行体なし（~/.claude 設定名の記載による誤検出を許容）"
+    },
+    {
       "path": "tools/handoff-audit-findings-deferral-362119db.md",
       "scope": "kim-only",
       "step": null,
       "reason": "ドキュメントで実行体なし（~/.claude 設定名の記載による誤検出を許容）"
     },
     {
+      "path": "tools/handoff-audit-findings-deferral-52be4096.md",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "ドキュメントで実行体なし（~/.claude 設定名の記載による誤検出を許容）"
+    },
+    {
+      "path": "tools/handoff-audit-findings-deferral-e50806fb.md",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "ドキュメントで実行体なし（~/.claude 設定名の記載による誤検出を許容）"
+    },
+    {
+      "path": "tools/handoff-audit-findings-deferral-e524c1f7.md",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "ドキュメントで実行体なし（~/.claude 設定名の記載による誤検出を許容）"
+    },
+    {
       "path": "tools/handoff-audit-findings-deferral-ec4f1e5f.md",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "ドキュメントで実行体なし（~/.claude 設定名の記載による誤検出を許容）"
+    },
+    {
+      "path": "tools/handoff-audit-findings-lane-delegation-28f9a560.md",
       "scope": "kim-only",
       "step": null,
       "reason": "ドキュメントで実行体なし（~/.claude 設定名の記載による誤検出を許容）"
@@ -216,6 +274,12 @@
       "scope": "kim-only",
       "step": null,
       "reason": "要確認"
+    },
+    {
+      "path": "tools/gate-remedies.md",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "ドキュメントで実行体なし（~/.claude 設定名の記載による誤検出を許容）"
     },
     {
       "path": "tools/install-handoff-gate.mjs",
@@ -318,6 +382,12 @@
       "scope": "fleet",
       "step": "settings:purge-sessions-SessionStart",
       "reason": "purge-sessions.mjs --hook（SessionStart/Stop）が起動する。ユーザー設定は組織 UUID の読み取りのみ"
+    },
+    {
+      "path": "tools/sync-remote-titles.mjs",
+      "scope": "fleet",
+      "step": "settings:purge-sessions-SessionStart",
+      "reason": "purge-sessions.mjs --hook（SessionStart/Stop）が15分間隔で起動し、Remote Control の会話名をサーバーから PC の一覧へ写す"
     },
     {
       "path": "tools/mobile-standby-status.mjs",
@@ -450,6 +520,18 @@
       "scope": "kim-only",
       "step": null,
       "reason": "要確認"
+    },
+    {
+      "path": "tools/register-sga-autopilot.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "販管費オートパイロット。DWD 鍵と kim の Discord DM が前提のため kim-PC 専用"
+    },
+    {
+      "path": "tools/register-aihaijin-digest.ps1",
+      "scope": "kim-only",
+      "step": "task:aihaijin-digest",
+      "reason": "setup --converge 経由。Messenger専用プロファイルがあるPCだけ週次取り込みを登録する"
     },
     {
       "path": "tools/register-messenger-watch.ps1",
@@ -758,6 +840,12 @@
       "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
     },
     {
+      "path": "tools/lib/kim-dm-policy.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "kim 宛 Discord DM の送信ゲートを全PCへ配布する実行時 import 依存"
+    },
+    {
       "path": "tools/lib/plain-ja.mjs",
       "scope": "fleet",
       "step": "task:fleet-mail",
@@ -786,6 +874,30 @@
       "scope": "fleet",
       "step": "task:fleet-mail",
       "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
+    },
+    {
+      "path": "tools/url-account-gate.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "notify-kim が送信直前に URL の開くアカウントを補う実行時 import 依存（再帰検査対象）"
+    },
+    {
+      "path": "tools/provider-catalog.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "url-account-gate の実行時 import 依存（再帰検査対象）"
+    },
+    {
+      "path": "tools/ai-subscription-catalog.json",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "provider-catalog が import 時に読む外部サービスの所有アカウント台帳"
+    },
+    {
+      "path": "tools/lib/assistant-text.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "url-account-gate の実行時 import 依存（再帰検査対象）"
     },
     {
       "path": "tools/pending-decisions.mjs",

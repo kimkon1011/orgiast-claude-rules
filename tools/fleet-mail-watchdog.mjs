@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 import { parseEnvText } from './env-kv.mjs';
-import { createClient, capabilityClient } from './fleet-mail.mjs';
+import { createClient, capabilityClient, readInbox, syncMailState } from './fleet-mail.mjs';
+import { parseLaneHealthMail } from './lib/lane-health.mjs';
 import { redactSecrets } from './fleet-agent.mjs';
 import { notifyKim, resolveDiscordBotToken } from './notify-kim.mjs';
 import { CHANNEL, KIM_USER_ID, postToChannel } from './lib/fleet-mail-discord.mjs';
@@ -19,6 +20,16 @@ export function formatAlert(entry) {
     next: '受け取り役の再起動を自動で依頼し、48 時間届かなければもう一度お知らせします',
     kim: 'なし', detail: clean(entry.id),
   });
+}
+// [lane-health] note は集計に取り込んだ時点で既読にする（人が開く連絡ではないため、放置すると未読のまま残る）。
+export async function markLaneHealthSeen({ home, request, readInboxImpl = readInbox, sync = syncMailState, stderr = console.error }) {
+  let marked = 0;
+  for (const mail of readInboxImpl(home, { unreadOnly: false })) {
+    if (mail.seenAt || ['seen', 'done', 'expired', 'failed'].includes(mail.status) || !parseLaneHealthMail(mail)) continue;
+    try { if (await sync({ home, id: mail.id, action: 'seen', request, seenBy: 'lane-health-watch', stderr })) marked++; }
+    catch { stderr('fleet-mail-watchdog: lane-health 既読化失敗=1'); }
+  }
+  return marked;
 }
 export async function main(argv = process.argv.slice(2), deps = {}) {
   const home = deps.home ?? process.env.ORGIAST_HOME ?? os.homedir();
@@ -37,6 +48,7 @@ ${lane.table}`);
   if (!config.FLEET_SHEET_URL || !config.FLEET_SHEET_TOKEN) { err('fleet-mail-watchdog: 未設定=1'); return 0; }
   const transport = deps.request ?? createClient({ url: config.FLEET_SHEET_URL, token: config.FLEET_SHEET_TOKEN, fetchImpl: deps.fetch });
   const request = capabilityClient(transport, { home, now: deps.now ?? Date.now, stderr: err, readOnly: dryRun });
+  if (!dryRun) await (deps.markLaneHealthSeen ?? markLaneHealthSeen)({ home, request: transport, stderr: err });
   let response;
   try { response = await request('mail-alerts', {}); }
   catch (error) {

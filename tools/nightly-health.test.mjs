@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runNightlyHealth as realRunNightlyHealth, defaultRunTests, formatDate, extractFailCount, isFailureLine, extractHookToolPaths, nativePath, getPlatform, evaluateScheduledTaskHealth } from './nightly-health.mjs';
 
-const runNightlyHealth = options => realRunNightlyHealth({ stallScan: async () => ({ rows: [] }), ...options });
+const runNightlyHealth = options => realRunNightlyHealth({ unattendedAudit: async () => ({ unresolved: [] }), stallScan: async () => ({ rows: [] }), ...options });
 
 function createTempHome() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'nightly-health-test-'));
@@ -861,4 +861,15 @@ test('daily stall scan findings reach remediation input and suppress normal cool
     assert.ok(input.anomalies.some(a => a.type === 'watcher_dead'));
     assert.ok(!input.anomalies.some(a => a.type === 'cooldown'));
   } finally { removeDir(home); }
+});
+
+test('nightly audit passes prime/dry-run and saves unresolved in existing report', async t => {
+  const home = createTempHome(); t.after(() => removeDir(home)); let seen;
+  const result = await runNightlyHealth({ home, prime: true, expectations: [], runTests: async () => healthyTests(),
+    unattendedAudit: async options => { seen = options; return { unresolved: [{ name: 'OrgiastTest', reason: 'missed' }] }; },
+    stallScan: async () => ({ rows: [] }), gasDrift: async () => {}, convergenceWatch: async () => {}, streakWatch: async () => ({ detected: [] })
+  });
+  assert.equal(seen.dryRun, true); assert.equal(seen.home, home);
+  assert.ok(result.anomalies.some(a => a.type === 'unattended_unresolved'));
+  assert.match(fs.readFileSync(path.join(home, '.claude/.nightly-health-last.json'), 'utf8'), /OrgiastTest/);
 });

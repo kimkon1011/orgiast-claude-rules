@@ -6,8 +6,14 @@ import path from 'node:path';
 import test from 'node:test';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { run } from './stop-gate-runner.mjs';
 
 const runner = fileURLToPath(new URL('./stop-gate-runner.mjs', import.meta.url));
+
+// invoke() は process.env を子プロセスへそのまま渡す。自動セッション（CLAUDE_HEADLESS=1）の中で
+// 走らせると規則が伝播し、AUTOPILOT-NO-SESSION-WAKEUP の検査がskipされて「起床手段が無いのに
+// 通る」ケースが落ちる（2026-10-25 実測）。このファイルは通常セッションの判定を検証するので外す。
+delete process.env.CLAUDE_HEADLESS;
 const request = 'GitHub の画面で Merge をクリックしてください。';
 
 function invoke(home, sessionId, text, extra = {}) {
@@ -150,7 +156,7 @@ test('assistant_text と transcript_path の併用でも直接照会証拠を読
     { type: 'user', message: { role: 'user', content: 'GA4 を確認して' } },
     { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'gcloud projects list' } }] } },
   ].map(entry => JSON.stringify(entry)).join('\n'));
-  const output = invoke(home, 'evidence', 'GA4 は存在しない', { transcript_path: transcript });
+  const output = invoke(home, 'evidence', 'GA4 は存在しない\n次に kim がすること: なし\nこの後の自動進行: なし（完了）\nこのセッション: /session-close は不要なので、このセッションを閉じてよい', { transcript_path: transcript });
   assert.equal(output.status, 0, output.stderr);
   assert.equal(output.stdout, '');
 });
@@ -467,4 +473,64 @@ test('完了待ちと将来作業をStopで差し戻し、完了報告なら通�
   const repaired = invoke(home, 'deferral', '作業はすべて完了しました。テストは全件 PASS、本番反映済みです。');
   assert.equal(repaired.status, 0, repaired.stderr);
   assert.equal(repaired.stdout, '');
+});
+
+test('自動進行の起床手段をtranscript_pathから検査しsubagentsは免除する', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-wakeup-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const text = '確認を続けます。\n次に kim がすること: なし\nこの後の自動進行: 私が毎時進捗を確認して変化時に報告します\nこのセッション: まだ閉じない（作業中）';
+  for (const [name, raw, subagent, blocked] of [
+    ['missing', '', false, true],
+    ['cron', JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', name: 'CronCreate', input: { cron: '17 * * * *' } }] } }), false, true],
+    ['add-check', JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash', input: { command: 'node tools/auto-progress.mjs --add-check --session s --check "cmd" --deadline +24h --label "l"' } }] } }), false, false],
+    ['subagent', '', true, false],
+  ]) {
+    const dir = subagent ? path.join(home, 'subagents') : home;
+    fs.mkdirSync(dir, { recursive: true });
+    const transcript_path = path.join(dir, `${name}.jsonl`);
+    fs.writeFileSync(transcript_path, raw);
+    const result = invoke(home, name, text, { transcript_path });
+    assert.equal(result.status, 0, result.stderr);
+    const records = fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+    assert.equal(records.at(-1).reasonCodes.includes('AUTOPILOT-NO-SESSION-WAKEUP'), blocked, result.stdout);
+  }
+});
+
+test('先行ゲートが全て降格された場合は第2段の監査で手渡しを止める', async t => {
+  // f94ee7a（2026-10-23T02:24:55Z）の再発防止。regex-blocked で第2段を飛ばした後に
+  // policy/demote で block が0件になると、手渡しが無検査で通っていた。原文の先送り
+  // （2026-10-23T02:25:45.629Z / 7e3e8cde）が「修正が本番で効いたか」を次回へ回した分を、
+  // ここでは実際に第2段が走って block することを固定する。
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-second-'));
+  const previousHome = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  t.after(() => {
+    if (previousHome === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previousHome;
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  // 手渡しは reply-only（manual-steps ではない）ので FORM_GATES は全て降格される。
+  // 第1段は regex で skipped='regex-blocked'、残る block が0件のとき第2段だけが止められる。
+  const text = [
+    '本文です。結果をまとめました。',
+    '',
+    '恒久策: 一回限り: この判断だけは kim に確認する。',
+    '',
+    '次に kim がすること: A案とB案のどちらを選ぶか教えてください。',
+    'この後の自動進行: なし',
+    'このセッション: /session-close は不要なので、このセッションを閉じてよい',
+  ].join('\n');
+  const asks = [];
+  const ask = async ({ provider }) => {
+    asks.push(provider);
+    return { text: JSON.stringify({ verdict: 'block', violations: [{ rule: 3, quote: 'A案とB案のどちらを選ぶか教えてください', fix: '推奨案を自分で決めて当ターン内に実行する' }], learned: [] }) };
+  };
+  const result = await run(
+    { session_id: 'second-stage', assistant_text: text },
+    { assistantText: text, humanText: '', raw: '' },
+    { mode: 'block', ask, home },
+  );
+  assert.equal(asks.length, 1, '第2段の監査が1回だけ走る');
+  assert.equal(result.record.verdict, 'block');
+  assert.deepEqual(result.record.blockedBy, ['handoff-audit-gate']);
 });

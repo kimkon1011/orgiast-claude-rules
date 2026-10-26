@@ -321,3 +321,17 @@ test('inbox verifier accepts nightly runtime with old bootstrap main and still r
   write(mf, JSON.stringify(manifest([{ ...entry, spec: { paths: entry.spec.paths.filter(p => !p.startsWith('.claude/')) } }])));
   assert.equal(run(['--verify', '--home', home, '--manifest', mf]).status, 1);
 });
+
+test('verify-before-done manifest validates synchronous wrapped Stop registration', t => {
+  const home = temp('setup-verify-done-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const entry = JSON.parse(fs.readFileSync(path.join(toolsDir, 'setup-manifest.json'), 'utf8')).items.find(e => e.id === 'settings:verify-before-done');
+  const mf = path.join(home, 'manifest.json');
+  write(mf, JSON.stringify(manifest([entry])));
+  const hook = { type: 'command', command: `node "${path.join(toolsDir, 'gate-hook-runner.mjs')}" "${path.join(toolsDir, 'verify-before-done-detector.mjs')}"`, timeout: 15 };
+  for (const [change, event, expected] of [[{}, 'Stop', 0], [{ async: true }, 'Stop', 1], [{ command: 'pwsh -File verify-before-done-detector.ps1' }, 'Stop', 1], [{}, 'SessionStart', 1]]) {
+    write(path.join(home, '.claude/settings.json'), JSON.stringify({ hooks: { [event]: [{ hooks: [{ ...hook, ...change }] }] } }));
+    const result = run(['--verify', '--home', home, '--manifest', mf]);
+    assert.equal(result.status, expected, result.stdout + result.stderr);
+  }
+});

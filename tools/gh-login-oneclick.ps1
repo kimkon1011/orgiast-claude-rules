@@ -82,8 +82,62 @@ if (-not (Test-Path $queueFile)) {
 $token = ($probeLine -replace '^password=', '').Trim()
 if (-not $token) { Write-Host 'NG: トークンを取り出せませんでした'; exit 1 }
 
-$lines = Get-Content -LiteralPath $queueFile -Encoding UTF8 |
-  Where-Object { $_.Trim() -ne '' -and -not $_.Trim().StartsWith('#') }
+$lines = @(Get-Content -LiteralPath $queueFile -Encoding UTF8 |
+  Where-Object { $_.Trim() -ne '' -and -not $_.Trim().StartsWith('#') })
+
+# --- STEP 4a: 一覧に書き忘れた未push枝を自動で拾う ---
+# 2026-10-22 追加。枝を作ったセッションが一覧への追記を忘れると、その成果は永久に着地しない
+# （実例: auto/20261022-kimi-billing-lane は作成済みなのに一覧に無かった）。
+# 誤爆を避けるため「前回このスクリプトを実行した時刻より新しい枝」だけを対象にする。
+# 初回（状態ファイルが無い）は何も拾わず、基準時刻を置くだけ。過去の放棄枝を一斉に push しない。
+$stateFile = Join-Path $env:USERPROFILE '.claude\gh-login-oneclick.state.json'
+$runStartedUnix = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+$discoverRoots = @(
+  (Join-Path $env:USERPROFILE '.claude\auto-session-repo'),
+  (Join-Path $env:USERPROFILE '.claude\nightly-repo')
+)
+$worktreeRoot = Join-Path $env:USERPROFILE '.claude\auto-session'
+if (Test-Path $worktreeRoot) {
+  $discoverRoots += @(Get-ChildItem -LiteralPath $worktreeRoot -Directory -ErrorAction SilentlyContinue |
+    Where-Object { Test-Path (Join-Path $_.FullName '.git') } | ForEach-Object { $_.FullName })
+}
+
+$sinceUnix = 0L
+if (Test-Path $stateFile) {
+  try {
+    $state = Get-Content -LiteralPath $stateFile -Raw -Encoding UTF8 | ConvertFrom-Json
+    $sinceUnix = [int64]$state.lastRunUnix
+  } catch { $sinceUnix = 0L }
+}
+$seenBranch = @{}
+foreach ($l in $lines) {
+  $p = "$l".Split('|')
+  if ($p.Count -ge 2) { $seenBranch[$p[1].Trim()] = $true }
+}
+if ($sinceUnix -le 0) {
+  Write-Host 'INFO: 初回のため一覧に無い枝の自動追加は行いません（基準時刻だけ記録します）。'
+} else {
+  foreach ($root in $discoverRoots) {
+    if (-not (Test-Path (Join-Path $root '.git'))) { continue }
+    $localRefs = @(& git -C $root for-each-ref refs/heads/auto --format='%(refname:short)|%(committerdate:unix)' 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $localRefs.Count -eq 0) { continue }
+    $remoteRefs = @(& git @gitNoPrompt -C $root ls-remote --heads origin 'refs/heads/auto/*' 2>$null)
+    $remoteSet = @{}
+    foreach ($r in $remoteRefs) { if ("$r" -match 'refs/heads/(.+)$') { $remoteSet[$matches[1]] = $true } }
+    foreach ($ref in $localRefs) {
+      $parts2 = "$ref".Split('|')
+      if ($parts2.Count -lt 2) { continue }
+      $b = $parts2[0].Trim(); $t = [int64]$parts2[1]
+      if (-not $b -or $t -le $sinceUnix) { continue }
+      if ($seenBranch.ContainsKey($b) -or $remoteSet.ContainsKey($b)) { continue }
+      & git -C $root diff --quiet "origin/main..$b" 2>$null
+      if ($LASTEXITCODE -eq 0) { continue }   # main と同じ内容＝着地させるものが無い
+      $lines += "$root|$b"
+      $seenBranch[$b] = $true
+      Write-Host "INFO: 一覧に無い新しい枝を自動で追加: $b ($root)"
+    }
+  }
+}
 
 $done = 0; $failed = 0
 foreach ($line in $lines) {
@@ -173,5 +227,12 @@ foreach ($line in $lines) {
 
 Write-Host ''
 Write-Host "完了: 着地=$done / 失敗=$failed"
+# 次回の自動追加の基準時刻。実行開始時刻を書く（実行中に作られた枝を取りこぼさない）。
+try {
+  @{ lastRunUnix = $runStartedUnix; lastRunAt = [DateTimeOffset]::FromUnixTimeSeconds($runStartedUnix).ToString('o') } |
+    ConvertTo-Json -Compress | Set-Content -LiteralPath $stateFile -Encoding UTF8
+} catch {
+  Write-Host "WARN: 状態ファイルを書けませんでした（次回も自動追加は行われません）: $($_.Exception.Message)"
+}
 if ($failed -gt 0) { exit 1 }
 exit 0

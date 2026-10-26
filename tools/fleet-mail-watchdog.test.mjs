@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { main, formatAlert, CHANNEL } from './fleet-mail-watchdog.mjs';
+import { main, formatAlert, CHANNEL, markLaneHealthSeen } from './fleet-mail-watchdog.mjs';
 import { KIM_USER_ID, notifyArrival, postToChannel } from './lib/fleet-mail-discord.mjs';
 import { createClient, CAPABILITY_BACKOFF_MS } from './fleet-mail.mjs';
 function fixture(t, alerts = [{ id: 'mail-one', to: 'kim-PC', from: 'PC', kind: 'unseen', why: '確認', notifiedCount: 0 }]) {
@@ -111,4 +111,19 @@ test('D6 arrival forwards the bounded abort signal to both Discord transports', 
     assert.equal(calls[0][1].signal, controller.signal);
     controller.abort(); assert.equal(calls[0][1].signal.aborted, true);
   }
+});
+test('lane-health notes are marked seen once; other and already-seen mail are left alone', async () => {
+  const body = JSON.stringify({ kind: 'lane-health', pc: 'PC', dead: [] });
+  const inbox = [
+    { id: 'mail-lh', status: 'delivered', why: '[lane-health] PC glm dead', body },
+    { id: 'mail-lh-seen', status: 'seen', seenAt: 'x', why: '[lane-health] PC', body },
+    { id: 'mail-human', status: 'delivered', why: '確認お願いします', body: 'hi' },
+  ];
+  const synced = [];
+  const marked = await markLaneHealthSeen({ home: 'h', request: async () => ({}), readInboxImpl: () => inbox, sync: async args => { synced.push([args.id, args.action, args.seenBy]); return true; }, stderr() {} });
+  assert.equal(marked, 1); assert.deepEqual(synced, [['mail-lh', 'seen', 'lane-health-watch']]);
+});
+test('dry run never marks lane-health notes seen', async t => {
+  const f = fixture(t); let called = 0; await main(['--dry-run'], { ...f.deps, markLaneHealthSeen: async () => { called++; } }); assert.equal(called, 0);
+  await main([], { ...f.deps, markLaneHealthSeen: async () => { called++; } }); assert.equal(called, 1);
 });

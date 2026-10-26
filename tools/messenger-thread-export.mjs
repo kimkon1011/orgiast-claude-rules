@@ -29,7 +29,7 @@ export const DAY_PATTERN =
   /(?:^|\s)(昨日|今日|月曜日|火曜日|水曜日|木曜日|金曜日|土曜日|日曜日|Mon|Tue|Wed|Thu|Fri|Sat|Sun)(?=\s|$)/;
 
 export function parseArgs(argv) {
-  const args = { threadId: "", maxScrolls: DEFAULT_MAX_SCROLLS, out: null, error: null };
+  const args = { threadId: "", maxScrolls: DEFAULT_MAX_SCROLLS, out: null, untilKnown: false, error: null };
   const list = Array.isArray(argv) ? argv : [];
   for (let i = 0; i < list.length; i += 1) {
     const arg = String(list[i] ?? "");
@@ -50,6 +50,8 @@ export function parseArgs(argv) {
       }
       args.out = value;
       if (!arg.includes("=")) i += 1;
+    } else if (arg === "--until-known") {
+      args.untilKnown = true;
     } else if (arg.startsWith("-")) {
       args.error = `不明なオプション: ${arg}`;
       return args;
@@ -190,12 +192,13 @@ export function mergeMessages(existing, snapshot) {
 }
 
 // スクロール終了判定の状態機械。件数が stagnantLimit 回連続で増えなければ先頭到達とみなす。
-export function createScrollTracker({ stagnantLimit = STAGNANT_LIMIT, maxScrolls = DEFAULT_MAX_SCROLLS } = {}) {
+export function createScrollTracker({ stagnantLimit = STAGNANT_LIMIT, maxScrolls = DEFAULT_MAX_SCROLLS, knownKeys = [] } = {}) {
+  const known = new Set(knownKeys);
   let best = 0;
   let stagnant = 0;
   let scrolls = 0;
   return {
-    record(count) {
+    record(count, snapshot = []) {
       const value = Number.isFinite(count) ? count : 0;
       scrolls += 1;
       if (value > best) {
@@ -204,6 +207,9 @@ export function createScrollTracker({ stagnantLimit = STAGNANT_LIMIT, maxScrolls
       } else {
         stagnant += 1;
       }
+      // 累計ではなく、このスクロールで見えた保存済みキーの種類数で止める。
+      const overlap = new Set(snapshot.filter((m) => known.has(m.key)).map((m) => m.key));
+      if (overlap.size >= 20) return { stop: true, reason: "known-reached", scrolls, stagnant, count: best };
       if (scrolls >= maxScrolls) return { stop: true, reason: "max-scrolls", scrolls, stagnant, count: best };
       if (stagnant >= stagnantLimit) return { stop: true, reason: "top-reached", scrolls, stagnant, count: best };
       return { stop: false, reason: null, scrolls, stagnant, count: best };
@@ -225,6 +231,22 @@ export function writeJsonl(file, messages) {
   const temp = `${file}.${randomUUID()}.tmp`;
   fs.writeFileSync(temp, toJsonl(messages), { mode: 0o600 });
   fs.renameSync(temp, file);
+}
+
+export function readJsonl(file) {
+  let raw;
+  try { raw = fs.readFileSync(file, "utf8"); } catch (error) {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  }
+  // 壊れた保存ファイルを空扱いして上書きしない。
+  return raw.split(/\r?\n/).filter((line) => line.trim()).map((line) => {
+    const message = JSON.parse(line);
+    if (!message || typeof message.key !== "string" || !message.key || typeof message.text !== "string") {
+      throw new Error("保存済みメッセージの形式が不正です");
+    }
+    return message;
+  });
 }
 
 export function formatSummary(messages) {
@@ -398,18 +420,24 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       return 2;
     }
 
-    const tracker = createScrollTracker({ maxScrolls: args.maxScrolls });
+    const existing = readJsonl(outFile);
+    const tracker = createScrollTracker({ maxScrolls: args.maxScrolls, knownKeys: args.untilKnown ? existing.map((m) => m.key) : [] });
     const startedAt = now();
-    let messages = [];
+    // 上へスクロールすると最新行が DOM から消えるため、最初の画面も先に回収する。
+    let collected = parseMessageRows(await collectMessageRows(page));
+    let messages = mergeMessages(existing, collected);
     let reason = null;
     let scrolls = 0;
     for (;;) {
       await scrollMessagesToTop(page);
       await sleep(randomDelayMs(MIN_WAIT_MS, MAX_WAIT_MS, random));
-      messages = mergeMessages(messages, parseMessageRows(await collectMessageRows(page)));
-      const decision = tracker.record(messages.length);
+      const snapshot = parseMessageRows(await collectMessageRows(page));
+      collected = mergeMessages(collected, snapshot);
+      messages = mergeMessages(messages, snapshot);
+      const decision = tracker.record(collected.length, snapshot);
       scrolls = decision.scrolls;
-      if (scrolls % SAVE_EVERY_SCROLLS === 0) writeJsonl(outFile, messages);
+      // 差分モードの途中結果を既知キーに混ぜると、次回その位置で止まり未回収の区間を飛ばす。
+      if (!args.untilKnown && scrolls % SAVE_EVERY_SCROLLS === 0) writeJsonl(outFile, messages);
       if (decision.stop) {
         reason = decision.reason;
         break;
@@ -420,6 +448,13 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       }
     }
 
+    if (args.untilKnown && (collected.length === 0 || isLoginUrl(page.url(), await hasPasswordField(page)))) {
+      throw new Error("メッセージを取得できないか、取得中にログインが切れました");
+    }
+    if (args.untilKnown && ["max-scrolls", "runtime-limit"].includes(reason)) {
+      stderr(`messenger-thread-export: 差分取得が途中です (${reason})。保存済みログを維持します`);
+      return 1;
+    }
     writeJsonl(outFile, messages);
     stdout(formatSummary(messages));
     stdout(`messenger-thread-export: ${scrolls}回スクロール / 終了理由 ${reason} / 出力 ${outFile}`);

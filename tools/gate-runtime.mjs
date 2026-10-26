@@ -14,6 +14,13 @@ function readRollout() { try { return JSON.parse(fs.readFileSync(path.join(tools
 const hostName = () => process.env.ORGIAST_HOSTNAME || os.hostname();
 export function rolloutMode(name, { manifest = readRollout(), home = homeDir(), hostname = hostName(), now = Date.now() } = {}) {
   const entry = manifest?.gates?.[name];
+  // データ破損防止の明示ポリシー: 初受信・非pilot PCも即時deny。
+  if (name === 'recipient-domain-gate' && entry?.rollout === 'deny'
+    && entry.immediatePolicy === '2026-10-23 名刺OCR誤読による不存在ドメイン送信防止') return 'deny';
+  if (name === 'bihin-kcol-gate' && entry?.rollout === 'deny'
+    && entry.immediatePolicy === '2026-10-23 古川さん依頼: 備品管理表K列のデータ破損防止') return 'deny';
+  if (name === 'mail-draft-account-gate' && entry?.rollout === 'deny'
+    && entry.immediatePolicy === '2026-10-25 kim 指示: 全PCのメール下書きは seisaku-team@orgiast.jp に統一') return 'deny';
   if (entry?.legacy === true && entry.rollout === 'deny') return 'deny';
   if (entry?.pilotDeny === true && (manifest?.pilotHosts || []).some(h => h.toLowerCase() === hostname.toLowerCase())) return 'deny';
   if (entry?.rollout === 'warn') return 'warn';

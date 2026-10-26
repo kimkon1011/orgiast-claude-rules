@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit } = await import('./codex-do.mjs');
+const { needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -54,6 +54,31 @@ function writePrompt(body) {
   fs.writeFileSync(file, body, 'utf8');
   return file;
 }
+
+test('validateCwd は存在・不存在・壊れた Windows パス・省略を判定する', () => {
+  const existing = validateCwd('/work', { resolveImpl: (value) => value, existsImpl: () => true, statImpl: () => ({ isDirectory: () => true }), platform: 'linux' });
+  assert.deepEqual(existing, { cwd: '/work', ok: true });
+
+  const missing = validateCwd('/missing', { resolveImpl: (value) => value, existsImpl: () => false, platform: 'linux' });
+  assert.deepEqual(missing, { cwd: '/missing', ok: false, reason: 'cwd_not_found' });
+
+  const mangled = validateCwd(String.raw`C:Userskimko.claudeauto-session-repo`, { resolveImpl: (value) => `resolved/${value}`, existsImpl: () => false, platform: 'win32' });
+  assert.deepEqual(mangled, { cwd: 'resolved/C:Userskimko.claudeauto-session-repo', ok: false, reason: 'cwd_mangled' });
+
+  const omitted = validateCwd(undefined, { processCwd: '/current', resolveImpl: (value) => value, existsImpl: () => true, statImpl: () => ({ isDirectory: () => true }) });
+  assert.deepEqual(omitted, { cwd: '/current', ok: true });
+});
+
+test('存在しない --cwd は起動せず status 2 で具体的な案内を出す', () => {
+  const home = workDir();
+  const missing = path.join(home, 'missing');
+  const result = run(['--dry-run', '--cwd', missing, '実装する'], { home });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /cwd_not_found/);
+  assert.match(result.stderr, /--cwd のディレクトリが存在しません/);
+  assert.doesNotMatch(result.stdout, /executor=codex/);
+  assert.equal(fs.existsSync(path.join(home, '.claude', 'executor-usage.jsonl')), false);
+});
 
 test('即時の出力ゼロ失敗を1回だけ再試行し、成功と試行回数を台帳に記録する', (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-fastfail-'));
@@ -153,6 +178,31 @@ test('chainBackendBudgetSecs は連鎖の残り予算を超えない（全体枠
   assert.equal(chainBackendBudgetSecs(1800, 1500, { CODEX_DO_FALLBACK_BACKEND_TIMEOUT_SECS: '900' }), 300);
 });
 
+test('backendSpecificTimeoutSecs は gemini-cli だけに既定600秒と正の上書きを適用する', () => {
+  assert.equal(backendSpecificTimeoutSecs('gemini-cli', {}), 600);
+  assert.equal(backendSpecificTimeoutSecs('gemini-cli', { CODEX_DO_GEMINI_TIMEOUT_SECS: '450' }), 450);
+  assert.equal(backendSpecificTimeoutSecs('gemini-cli', { CODEX_DO_GEMINI_TIMEOUT_SECS: 'garbage' }), 600);
+  assert.equal(backendSpecificTimeoutSecs('gemini-cli', { CODEX_DO_GEMINI_TIMEOUT_SECS: '0' }), 600);
+  assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', {}), null);
+});
+
+test('countPolicyDenials は大文字小文字を区別せず拒否回数を数える', () => {
+  assert.equal(countPolicyDenials('通常のエラー'), 0);
+  assert.equal(countPolicyDenials('Tool execution denied by policy.\ntool execution denied by policy'), 2);
+  assert.equal(countPolicyDenials('TOOL EXECUTION DENIED BY POLICY'), 1);
+});
+
+test('shouldAbortPolicyStall は長時間・低出力・拒否3回が揃ったときだけ中断する', () => {
+  const denied3 = 'tool execution denied by policy\n'.repeat(3);
+  assert.equal(shouldAbortPolicyStall({ elapsedSecs: 900, outputChars: 164, stderr: denied3 }), true);
+  assert.equal(shouldAbortPolicyStall({ elapsedSecs: 452, outputChars: 4048, stderr: denied3 }), false);
+  assert.equal(shouldAbortPolicyStall({ elapsedSecs: 299, outputChars: 164, stderr: denied3 }), false);
+  assert.equal(shouldAbortPolicyStall({ elapsedSecs: 900, outputChars: 400, stderr: denied3 }), false);
+  assert.equal(shouldAbortPolicyStall({ elapsedSecs: 900, outputChars: 164, stderr: denied3.replace(/[^\n]+\n$/, '') }), false);
+  assert.equal(shouldAbortPolicyStall({ elapsedSecs: '900', outputChars: 164, stderr: denied3 }), false);
+  assert.equal(shouldAbortPolicyStall({ elapsedSecs: 900, outputChars: NaN, stderr: denied3 }), false);
+});
+
 // 実測（2026-10-12〜10-14 の executor-usage.jsonl）: fallback 行が毎回 secs≈600.05 で
 // cheap-code:deepseek を打ち切っていた（chain の1本目が必ず600秒）。同時期の成功runは
 // 507/517/524/576 秒に分布＝600 の直下で切られていた。--timeout 900 のセッションが最も多く
@@ -223,6 +273,15 @@ test('detectQuotaLimit: 実機の usage limit 行(U+2019/URL/AM PM)を検出す�
   // executor-usage.jsonl は stderr の末尾200字しか残さないため、先頭が切れた断片は検出できない。
   // 台帳の stderrTail だけを見て「検出漏れ」と誤診しないための記録。
   assert.equal(detectQuotaLimit('', `M. ${real}`, 1, '').matched, false);
+});
+
+// 2026-10-20 19:15Z の実測メッセージ全文。この検出自体は正しく（同セッションの rate_limits は
+// "primary":null / credits 0）、偽陽性だったのは再開時刻のパースと delegation-health の突き合わせ。
+test('detectQuotaLimit: 2026-10-20 実測の日付なし再開時刻を含む全文を検出する', () => {
+  const message = "ERROR: You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits or try again at 8:20 AM.";
+  const check = detectQuotaLimit('', message, 1, 'do something');
+  assert.equal(check.matched, true);
+  assert.equal(check.pattern, "You've hit your usage limit");
 });
 
 test('detectQuotaLimit: テストランナー、コード、行番号の疑似一致を除外する', () => {
@@ -639,16 +698,16 @@ test('buildQwenArgs は既定値と上書き値の両方で正しい引数を返
   const defaults = buildQwenArgs();
   assert.deepEqual(defaults, [
     '--auth-type', 'openai',
-    '-m', 'deepseek-chat',
+    '-m', 'deepseek-flash',
     '-y',
     '--max-wall-time', '1800',
     '--max-tool-calls', '80',
     '-p', 'Follow-the-instructions-provided-on-stdin.'
   ]);
-  const custom = buildQwenArgs({ model: 'deepseek-reasoner', timeoutSecs: 300, maxToolCalls: 40 });
+  const custom = buildQwenArgs({ model: 'deepseek-flash', timeoutSecs: 300, maxToolCalls: 40 });
   assert.deepEqual(custom, [
     '--auth-type', 'openai',
-    '-m', 'deepseek-reasoner',
+    '-m', 'deepseek-flash',
     '-y',
     '--max-wall-time', '300',
     '--max-tool-calls', '40',
@@ -662,7 +721,7 @@ test('buildQwenEnv は OPENAI_* を設定し GEMINI/GOOGLE キーを削除し ba
   const env = buildQwenEnv(base, 'deepseek-key');
   assert.equal(env.OPENAI_API_KEY, 'deepseek-key');
   assert.equal(env.OPENAI_BASE_URL, 'https://api.deepseek.com/v1');
-  assert.equal(env.OPENAI_MODEL, 'deepseek-chat');
+  assert.equal(env.OPENAI_MODEL, 'deepseek-flash');
   assert.equal(env.QWEN_CODE_SUPPRESS_YOLO_WARNING, '1');
   assert.ok(!('GEMINI_API_KEY' in env));
   assert.ok(!('GOOGLE_API_KEY' in env));
@@ -670,8 +729,8 @@ test('buildQwenEnv は OPENAI_* を設定し GEMINI/GOOGLE キーを削除し ba
 });
 
 test('buildQwenEnv は model と baseUrl を上書きできる', () => {
-  const env = buildQwenEnv({}, 'key', { model: 'deepseek-reasoner', baseUrl: 'https://example.com/v1' });
-  assert.equal(env.OPENAI_MODEL, 'deepseek-reasoner');
+  const env = buildQwenEnv({}, 'key', { model: 'deepseek-flash', baseUrl: 'https://example.com/v1' });
+  assert.equal(env.OPENAI_MODEL, 'deepseek-flash');
   assert.equal(env.OPENAI_BASE_URL, 'https://example.com/v1');
 });
 
@@ -927,6 +986,7 @@ test('isBackendCliMissing は CLI 欠落だけを検出する', () => {
 });
 
 test('shouldAdvanceToNextBackend は次のバックエンドへ進む結果を分類する', () => {
+  assert.deepEqual(shouldAdvanceToNextBackend({ aborted: true, timedOut: true }), { advance: true, outcome: 'blocked' });
   assert.deepEqual(shouldAdvanceToNextBackend({ cliMissing: true, status: 1 }), { advance: true, outcome: 'cli_missing' });
   assert.deepEqual(shouldAdvanceToNextBackend({ exhausted: true, status: 1 }), { advance: true, outcome: 'exhausted' });
   assert.deepEqual(shouldAdvanceToNextBackend({ timedOut: true }), { advance: true, outcome: 'timeout' });
@@ -1268,9 +1328,9 @@ test('probeChatGptAuth: WSL 側の distro 一覧・cat が失敗したら null(�
 
 test('buildCodexExecArgs: model, effort, sandbox and stdin without spaces', () => {
   const args = buildCodexExecArgs({ slug: ASTRA, effort: 'high' });
-  assert.deepEqual(args, ['exec', '-m', ASTRA, '-c', 'model_reasoning_effort="high"', '-s', 'workspace-write', '-']);
+  assert.deepEqual(args, ['exec', '-m', ASTRA, '-c', 'model_reasoning_effort="high"', '-c', 'plugins={"makeloop@makeloop"={enabled=false}}', '-s', 'workspace-write', '-']);
   assert.ok(args.every((arg) => !/\s/.test(arg)));
-  assert.deepEqual(buildCodexExecArgs({ slug: SOL, review: true }), ['exec', '-m', SOL, '-s', 'read-only', '-']);
+  assert.deepEqual(buildCodexExecArgs({ slug: SOL, review: true }), ['exec', '-m', SOL, '-c', 'plugins={"makeloop@makeloop"={enabled=false}}', '-s', 'read-only', '-']);
 });
 
 // Fixtures may live below the checkout (custom TMPDIR); their parent repo is not part of this test.
@@ -1324,7 +1384,7 @@ test('wslCodexArgs: 非リポジトリだけ stdin マーカー直前に skip �
   const cwd = '/work/task';
   const codexArgs = buildCodexExecArgs({ slug: SOL });
   assert.deepEqual(wslCodexArgs({ distro: 'Ubuntu', cwd, codexArgs, inGitRepo: false }),
-    ['-d', 'Ubuntu', '--cd', cwd, '--', 'codex', 'exec', '-m', SOL, '-s', 'workspace-write', '--skip-git-repo-check', '-']);
+    ['-d', 'Ubuntu', '--cd', cwd, '--', 'codex', 'exec', '-m', SOL, '-c', 'plugins={"makeloop@makeloop"={enabled=false}}', '-s', 'workspace-write', '--skip-git-repo-check', '-']);
   assert.deepEqual(wslCodexArgs({ distro: 'Ubuntu', cwd, codexArgs, inGitRepo: true }),
     ['-d', 'Ubuntu', '--cd', cwd, '--', 'codex', ...codexArgs]);
 });
@@ -1763,4 +1823,91 @@ test('WSL 不在はネイティブ既定、require-wsl は中断、allow-native 
   assert.equal(resolveNativeCodex({platform:'win32',env:{APPDATA:'C:/fixture'},existsImpl:()=>true}).prefixArgs.length,1);
   const h=fs.mkdtempSync(path.join(os.tmpdir(),'lane-mode-'));
   try {recordLaneMode('native','danger-full-access',{home:h});const m=JSON.parse(fs.readFileSync(path.join(h,'.claude/lane-mode.json'),'utf8'));assert.equal(m.codex.mode,'native');assert.ok(Date.parse(m.codex.verifiedAt));} finally {fs.rmSync(h,{recursive:true,force:true});}
+});
+
+test('buildUsageRow は timeoutSecs と chain[].budgetSecs を台帳へ残す', () => {
+  const now = new Date('2026-10-22T00:00:00Z');
+  const row = buildUsageRow({
+    result: { status: 124, timedOut: true, outputChars: 0, stderr: '' },
+    model: 'codex-cli/gpt-5.6-sol', seconds: 1800.28, provider: 'codex',
+    timeoutSecs: 1800, lane: 'default_sol', promptChars: 400, origin: 'interactive', kind: 'implement', cwd: 'C:/repo', now,
+  });
+  assert.equal(row.timeoutSecs, 1800);
+  assert.equal(row.secs, 1800.28);
+  assert.equal(row.lane, 'default_sol');
+  assert.equal(row.in, 100);
+
+  const chained = buildUsageRow({
+    result: { status: 124, timedOut: true, outputChars: 0, stderr: '' }, model: 'x',
+    seconds: 950, timeoutSecs: 1800, now,
+    chain: [{ backend: 'gemini-cli', outcome: 'timeout', secs: 950, budgetSecs: 900 }],
+  });
+  assert.deepEqual(chained.chain.map((a) => a.budgetSecs), [900]);
+  assert.equal(chained.timeoutSecs, 1800);
+});
+
+test('buildUsageRow は timeoutSecs が無ければ行に生やさない（旧形式との互換）', () => {
+  const row = buildUsageRow({ result: { status: 0, outputChars: 4 }, model: 'm', seconds: 1, now: new Date('2026-10-22T00:00:00Z') });
+  assert.equal('timeoutSecs' in row, false);
+  assert.equal(row.status, 'ok');
+});
+
+// 2026-10-23 実測: gemini が拒否を3回出して以後無音のまま600秒 timeout になった（打ち切り未発火3件）。
+// chunk 到着時だけの判定では再評価されないため、周期タイマーで無音停滞も打ち切る。
+function fakeGeminiEnv(body) {
+  const dir = workDir();
+  fs.writeFileSync(path.join(dir, 'fake-gemini.mjs'), body, 'utf8');
+  if (process.platform === 'win32') {
+    fs.writeFileSync(path.join(dir, 'gemini.CMD'), '@echo off\r\nnode "%~dp0fake-gemini.mjs" %*\r\n', 'utf8');
+  } else {
+    fs.writeFileSync(path.join(dir, 'gemini'), `#!/bin/sh\nexec node "${path.join(dir, 'fake-gemini.mjs')}" "$@"\n`, { mode: 0o755 });
+  }
+  const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === 'PATH') || 'PATH';
+  return { PATH: `${dir}${path.delimiter}${process.env[pathKey] || ''}` };
+}
+
+function runFakeGemini(body, extraEnv = {}, timeoutSecs = 60) {
+  const mockResults = [
+    { status: 1, output: "You've hit your usage limit. Please try again later.", stderr: '' },
+    { real: true },
+    { status: 0, output: 'DeepSeek edited the files.', stderr: '' }
+  ];
+  const started = Date.now();
+  const result = run(['--force-native', '--cwd', workDir(), '--timeout', String(timeoutSecs), '指示内容'], {
+    env: {
+      ...fakeGeminiEnv(body),
+      CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults),
+      GEMINI_API_KEY: 'gemini-test',
+      DEEPSEEK_API_KEY: 'deepseek-test',
+      CODEX_DO_POLICY_STALL_MIN_ELAPSED_SECS: '1',
+      CODEX_DO_POLICY_STALL_CHECK_MS: '200',
+      ...extraEnv
+    }
+  });
+  return { result, elapsedSecs: (Date.now() - started) / 1000 };
+}
+
+const DENY = 'Error executing tool run_shell_command: Tool execution denied by policy.\n';
+const silentAfter = (stderrText, stdoutText = '') =>
+  `process.stdout.write(${JSON.stringify(stdoutText)}); process.stderr.write(${JSON.stringify(stderrText)}); setInterval(() => {}, 1000);`;
+
+test('gemini が拒否3回の後に無音で停滞しても周期判定で打ち切り次のバックエンドへ進む', () => {
+  const { result, elapsedSecs } = runFakeGemini(silentAfter(DENY.repeat(3)));
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /ポリシー拒否が続き/);
+  assert.match(result.stdout, /executor=fallback:cheap-code:deepseek/);
+  assert.ok(elapsedSecs < 50, `無音停滞が打ち切られず ${elapsedSecs} 秒かかった`);
+});
+
+test('ポリシー停滞の打ち切りは出力400字以上・拒否3回未満・無効化指定では発火しない', () => {
+  const cases = [
+    { name: '出力400字以上', body: silentAfter(DENY.repeat(3), 'x'.repeat(400)) },
+    { name: '拒否2回', body: silentAfter(DENY.repeat(2)) },
+    { name: '無効化', body: silentAfter(DENY.repeat(3)), env: { CODEX_DO_POLICY_STALL_ABORT: '0' } }
+  ];
+  for (const c of cases) {
+    const { result } = runFakeGemini(c.body, c.env, 8);
+    assert.doesNotMatch(result.stderr, /ポリシー拒否が続き/, c.name);
+    assert.match(result.stderr, /秒で応答を終えなかった/, c.name);
+  }
 });

@@ -637,12 +637,20 @@ function save(hash, now) {
 export function makeIndex(body) {
   const lines = body.replace(/\r\n/g, '\n').split('\n');
   const kept = [indexLead];
+  let previousNonempty = '';
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    // 絶対ルール直後の太字小見出しは参照先として残す。通常の詳細見出しは展開しない。
+    if (/^\*\*\d+(?:\.\d+)+\s+.+\*\*$/.test(line)
+      && /^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u.test(previousNonempty)) {
+      kept.push(line.replace(/（(?:kim\s+)?\d{4}-\d{2}-\d{2}[^）]*）/g, ''));
+    }
+    if (line.trim()) previousNonempty = line;
     if (/^#{1,3}(?:\s|$)/.test(line)) {
       // 索引は規約の見出しを残し、日付・由来は全文へ委ねて配布上限内に収める。
       kept.push(line.replace(/（(?:kim\s+)?\d{4}-\d{2}-\d{2}[^）]*）/g, ''));
-      for (let j = i + 1; j < lines.length && !/^#{1,3}(?:\s|$)/.test(lines[j]); j++) {
+      // 大見出しは案内だけにし、個別規約（###）の結論と絶対ルールを優先する。
+      for (let j = i + 1; /^###\s/.test(line) && j < lines.length && !/^#{1,3}(?:\s|$)/.test(lines[j]); j++) {
         const candidate = lines[j].trim();
         if (!candidate) continue;
         const end = candidate.indexOf('。');
@@ -652,7 +660,8 @@ export function makeIndex(body) {
     }
     // 絶対ルール・上限規定の行は全文のまま残す。原文は `**🛑 上限…` のように強調記号が先に来るので
     // 先頭の `*` を許容する(ここを `**🔴` だけにすると 🛑/⚙️/🔁 の4行が索引から落ちる)。
-    if (/^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u.test(line) && kept.at(-1) !== line) kept.push(line);
+    // 行末の日付付き由来（2026-10-23 cr 等）だけは全文へ委ねる。文中の由来は適用範囲を含むので残す。
+    if (/^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u.test(line) && kept.at(-1) !== line) kept.push(line.replace(/（(?:kim\s+)?\d{4}-\d{2}-\d{2}[^）]*）(?=。?\*\*$)/u, ''));
   }
   return kept.join('\n');
 }

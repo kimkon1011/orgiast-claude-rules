@@ -987,9 +987,22 @@ test('transcriptPath は小文字ドライブのバケットを維持する', ()
 test('buildPrompt は実リポジトリで git -C を使うよう指示する', () => {
   const repoCwd = String.raw`C:\Users\example\Downloads\repo`;
   const prompt = buildPrompt('実装する', {}, repoCwd, '/tmp/run.summary.md', 60, new Date('2026-08-26T00:00:00Z'));
-  assert.ok(prompt.includes(`git -C ${repoCwd}`));
-  assert.ok(prompt.includes(`--cwd ${repoCwd}`));
+  assert.ok(prompt.includes(`git -C "${repoCwd}"`));
+  assert.ok(prompt.includes(`--cwd "${repoCwd}"`));
   assert.ok(prompt.indexOf('セッションの作業ディレクトリは履歴を揃えるため') < prompt.indexOf('実装本体は'));
+});
+
+test('全 auto-session プロンプトは Windows の --cwd をダブルクォートする', () => {
+  const repoCwd = String.raw`C:\Users\example\Downloads\repo`;
+  const prompts = [
+    buildPrompt('実装する', {}, repoCwd, '/tmp/run.summary.md'),
+    buildFeedbackPrompt({ number: 1, title: '報告', url: 'https://example.test/1', body: '' }, 'owner/repo', repoCwd, '/tmp/run.summary.md'),
+    buildRolePrompt('tester', repoCwd, '/tmp/run.summary.md'),
+  ];
+  for (const prompt of prompts) {
+    assert.ok(prompt.includes(`--cwd "${repoCwd}"`));
+    assert.ok(!prompt.includes(`--cwd ${repoCwd}`));
+  }
 });
 
 test('buildPrompt は PR に automerge ラベルを付け、CI 緑を待たずに自動マージさせる', () => {
@@ -1150,6 +1163,18 @@ test('isTodoAlreadyDone は正規表現メタ文字をタイトルの文字と�
   const md = `1. ~~P1: axb c d~~ → ✅ 完了\n2) ~~P1: a.b (c) [d]~~ → ✅ 完了\n`;
   assert.equal(isTodoAlreadyDone(md, 'P1: a.b (c) [d]'), true);
   assert.equal(isTodoAlreadyDone(md, 'P1: a.b (c) [x]'), false);
+});
+
+test('isTodoAlreadyDone は行末に注記と ✅ を後付けされた完了 TODO も検出する(2026-10-25)', () => {
+  // 実物: バッチ選定後に別セッションが行末へ注記を足したため、原文の完全一致では
+  // 完了を見失い、済んだ TODO にセッションを1本消費した
+  // (runs/2026-10-25-manifest.json の selectedTodos[5] / notify-kim:961e…)。
+  const original = '[ ] 通知の原因調査・修復: 宛先: 不明（DM 未解決） 【DESKTOP-BDOAK99・user の Claude Code】プロジェクト: quota-sweep-repo';
+  const md = `## 残TODO\n1. ${original} 記録する。 ~~（完了DMを失敗通知として再起票していた不具合・PR #1068 で修正）~~ → ✅ 2026-10-25 完了 <!-- notify-kim:961e726d2b526028578e -->\n2. [ ] 未着手の別作業\n`;
+  assert.equal(isTodoAlreadyDone(md, original), true);
+  // 文頭だけ同じで別の作業の TODO は完了扱いにしない（共通接頭辞が短い）。
+  assert.equal(isTodoAlreadyDone(md, '[ ] 通知の原因調査・修復: 宛先: 別PC の Claude Code'), false);
+  assert.equal(isTodoAlreadyDone(md, '[ ] 未着手の別作業'), false);
 });
 
 test('writeTodoDone は書く直前の再読込内容へ完了印を付け、並行追加行を維持する', () => {

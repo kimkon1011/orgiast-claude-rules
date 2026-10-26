@@ -220,3 +220,38 @@ test('submitterマーカーはJSONで復元でき、コメント終端をエス�
   assert.deepEqual(JSON.parse(marker), { submitter, submitter_discord_id: '42' });
   assert.ok(!marker.includes('-->'));
 });
+
+test('ensureFeedbackIssue は Issue lookup の一時失敗を再試行して成功する', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fti-home-'));
+  const calls = [];
+  const gh = (args) => {
+    calls.push(args);
+    if (args[0] === 'issue' && args[1] === 'list') {
+      if (calls.filter((a) => a[1] === 'list').length === 1) return { status: 1, stderr: 'HTTP 502' };
+      return { status: 0, stdout: '[]' };
+    }
+    if (args[0] === 'issue' && args[1] === 'create') return { status: 0, stdout: 'https://github.com/o/r/issues/9\n' };
+    return { status: 0, stdout: '' };
+  };
+  try {
+    const item = { message_id: 'm-retry', kind: 'bug', title: 't' };
+    assert.equal(ensureFeedbackIssue(item, 'o/r', { home, gh, sleep: () => {} }).number, 9);
+    assert.equal(calls.filter((a) => a[1] === 'list').length, 2);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test('ensureFeedbackIssue は Issue lookup が連続失敗すると理由付きで失敗する', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fti-home-'));
+  let listCalls = 0;
+  const gh = (args) => {
+    if (args[1] === 'list') { listCalls++; return { status: 1, stderr: 'HTTP 502' }; }
+    return { status: 0, stdout: '' };
+  };
+  try {
+    assert.throws(
+      () => ensureFeedbackIssue({ message_id: 'm-fail', kind: 'bug', title: 't' }, 'o/r', { home, gh, sleep: () => {} }),
+      /Issue lookup failed \(status=1\)/,
+    );
+    assert.equal(listCalls, 3);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});

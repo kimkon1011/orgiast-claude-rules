@@ -174,15 +174,28 @@ export function readReceiptLedger(home) {
 // Never include upstream error messages: authentication errors can contain credentials or mail content.
 function safeReason(error) {
   if (/unauthorized_client/.test(String(error?.message))) return 'unauthorized_client';
-  return Number.isInteger(error?.status) ? `HTTP ${error.status}` : '取得失敗（認証・接続を確認）';
+  if (/invalid_grant/.test(String(error?.message))) return 'invalid_grant';
+  const code = error?.code || error?.cause?.code || error?.name;
+  if (/^(?:ENOENT|EACCES|ENOTFOUND|EAI_AGAIN|ECONNRESET|ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT|TimeoutError|AbortError)$/.test(code)) return `取得失敗: ${code}`;
+  return Number.isInteger(error?.status) ? `HTTP ${error.status}` : '取得失敗: 未分類（自動調査対象）';
 }
+const transientReceiptError = error => /^(?:ENOTFOUND|EAI_AGAIN|ECONNRESET|ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT|TimeoutError|AbortError)$/.test(error?.code || error?.cause?.code || error?.name)
+  || error?.status === 429 || error?.status >= 500 || error?.message === 'fetch failed';
 export async function scanAiReceipts({ home = defaultHome(), days = 3, config = defaultConfig(), now = new Date(), appendLedger = true, searchImpl = searchGmail } = {}) {
   const dir = path.join(home, '.claude'), stateFile = path.join(dir, 'ai-receipts-alert-state.json');
   const existing = readReceiptLedger(home), seen = new Set(existing.map(row => row.messageId)), rows = [], errors = [];
   const query = buildReceiptQuery(config, days);
   for (const account of config.accounts) {
     try {
-      const result = await searchImpl({ user: account, query, max: 100, withBody: true, bodyLimit: 6000 });
+      const request = { user: account, query, max: 100, withBody: true, bodyLimit: 6000 };
+      let result;
+      try { result = await searchImpl(request); }
+      catch (error) {
+        if (!transientReceiptError(error)) throw error;
+        await new Promise(resolve => setTimeout(resolve, 250));
+        try { result = await searchImpl(request); }
+        catch (retryError) { retryError.receiptRetried = true; throw retryError; }
+      }
       for (const message of result.messages) {
         const row = parseReceiptMail({ ...message, account }, config);
         if (!row.messageId || !row.date) { errors.push({ account, reason: 'IDまたは日時不明のメールあり' }); continue; }
@@ -190,7 +203,7 @@ export async function scanAiReceipts({ home = defaultHome(), days = 3, config = 
       }
       if (result.messages.length >= 100 || result.estimate > result.messages.length + (result.skipped || 0)) errors.push({ account, reason: '取得上限100件・一部未計測' });
       if (result.skipped) errors.push({ account, reason: `${result.skipped}件取得不可` });
-    } catch (error) { errors.push({ account, reason: safeReason(error) }); }
+    } catch (error) { errors.push({ account, reason: safeReason(error), ...(error.receiptRetried ? { tried: '一時障害として再取得したが失敗' } : {}) }); }
   }
   const summary = summarizeReceipts([...existing, ...rows], { now, config });
   const evaluated = evaluateReceiptAlerts(summary, readJson(stateFile, {}), config.thresholds, { now });

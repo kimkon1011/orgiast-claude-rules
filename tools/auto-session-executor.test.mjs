@@ -4,12 +4,16 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  EXECUTOR_SYNC_TTL_MS,
   autoSessionExecutor,
   buildCheapCodeArgs,
   buildClaudeHeadlessArgs,
   claudeFallbackEnabled,
   alternateCheapProvider,
+  executorWorktreePath,
   parseAutoSessionEnvText,
+  planExecutorWorktreeSync,
+  prepareExecutorRoot,
   recordFallbackToClaude,
   recordSkippedNoExecutor,
 } from './auto-session-executor.mjs';
@@ -109,6 +113,66 @@ test('buildCheapCodeArgs は cheap-code.mjs がない repoRoot を明示的に�
       /cheap-code\.mjs が見つかりません/
     );
   } finally { fs.rmSync(repoRoot, { recursive: true, force: true }); }
+});
+
+// 2026-10-25: PR #1091 の修正が main に入った後も、実行役を pinned tree(セッションが作業ブランチを
+// 切る tree)から読んでいたため、同じ夜の後続セッションが修正前 cheap-code で走った。
+// 実行役は origin/main の専用 worktree から読み、セッション開始ごとに同期する。
+test('planExecutorWorktreeSync は worktree が無ければ origin/main から detached で作る', () => {
+  const commands = planExecutorWorktreeSync({ repoRoot: 'C:/repo', executorRoot: 'C:/home/.claude/auto-session-executor', hasTree: false });
+  assert.equal(commands.length, 1);
+  assert.equal(commands[0].cwd, 'C:/repo');
+  assert.deepEqual(commands[0].args, ['worktree', 'add', '--detach', 'C:/home/.claude/auto-session-executor', 'origin/main']);
+});
+
+test('planExecutorWorktreeSync は既存 worktree を fetch→reset→clean で origin/main に合わせる', () => {
+  const commands = planExecutorWorktreeSync({ repoRoot: 'C:/repo', executorRoot: 'C:/exec', hasTree: true });
+  assert.deepEqual(commands.map((command) => command.label), ['fetch executor origin/main', 'reset executor', 'clean executor']);
+  // fetch だけは ref を共有する repoRoot 側で行い、reset/clean は専用 worktree だけを触る。
+  assert.equal(commands[0].cwd, 'C:/repo');
+  assert.equal(commands[1].cwd, 'C:/exec');
+  assert.deepEqual(commands[1].args, ['reset', '--hard', 'origin/main', '--quiet']);
+});
+
+test('prepareExecutorRoot は同期した専用 worktree を返し、TTL 内は再実行しない', () => {
+  const calls = [];
+  const state = { root: '', at: 0 };
+  let created = false;
+  const exists = (file) => created && String(file).endsWith(path.join('tools', 'cheap-code.mjs'));
+  const run = (command, args, options) => {
+    calls.push({ command, args, cwd: options?.cwd });
+    if (args[0] === 'worktree') created = true;
+    return { status: 0, stderr: '' };
+  };
+  const options = { repoRoot: 'C:/repo', home: 'C:/home', env: {}, now: 1000, exists, run, state };
+  const root = prepareExecutorRoot(options);
+  assert.equal(root, executorWorktreePath('C:/home'));
+  assert.equal(calls.length, 1); // 初回は worktree 作成のみ
+  assert.equal(prepareExecutorRoot({ ...options, now: 1000 + EXECUTOR_SYNC_TTL_MS - 1 }), root);
+  assert.equal(calls.length, 1); // TTL 内はキャッシュ
+  prepareExecutorRoot({ ...options, now: 1000 + EXECUTOR_SYNC_TTL_MS });
+  assert.equal(calls.length, 4); // 次は fetch/reset/clean
+});
+
+test('prepareExecutorRoot は同期に失敗しても repoRoot で続行し、例外を投げない', () => {
+  const logs = [];
+  const root = prepareExecutorRoot({
+    repoRoot: 'C:/repo', home: 'C:/home', env: {}, state: { root: '', at: 0 },
+    exists: () => false,
+    run: () => ({ status: 1, stderr: 'network down' }),
+    log: (message) => logs.push(message),
+  });
+  assert.equal(root, 'C:/repo');
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], /network down/);
+});
+
+test('prepareExecutorRoot は ORGIAST_EXECUTOR_ROOT の明示指定を最優先する', () => {
+  const root = prepareExecutorRoot({
+    repoRoot: 'C:/repo', home: 'C:/home', env: { ORGIAST_EXECUTOR_ROOT: 'D:/pinned-executor' },
+    state: { root: '', at: 0 }, run: () => assert.fail('明示指定では git を実行しない'),
+  });
+  assert.equal(root, 'D:/pinned-executor');
 });
 
 test('buildClaudeHeadlessArgs は既定 sonnet で cwd 違いのときだけ add-dir を増やす', () => {

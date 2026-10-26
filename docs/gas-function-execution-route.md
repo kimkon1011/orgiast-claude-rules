@@ -1,5 +1,7 @@
 # handoff-audit 再発検証: 「GAS の関数実行が要る」（2026-09-25 実測）
 
+> 最新の実測と route の是正: `tools/handoff-audit-findings-gas-function-execution-20261020.md`（2026-10-20 実打ち: `clasp run` は不可・コマンドキュー投入は成立）
+
 対象 TODO: `[handoff-audit:2a521d8efb465e3a] GAS の関数実行が要る — この handoff が再発していないかを
 実物で検証し結果を記録する`
 正本エントリ: `tools/handoff-audit-knowledge.json`

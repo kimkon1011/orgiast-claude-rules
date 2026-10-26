@@ -1,5 +1,7 @@
 # handoff-audit 検証記録: 「GAS の関数実行が要る」（2026-09-29 再検証・窓 2026-09-25〜09-29）
 
+> 続き: `tools/handoff-audit-findings-gas-function-execution-20261020.md`（2026-10-20 再検証・route 是正済み）
+
 対象 TODO: `[handoff-audit:2a521d8efb465e3a] GAS の関数実行が要る — この handoff が再発していないかを
 実物で検証し結果を記録する`（`~/.claude/next-session.md`）
 前回記録: `docs/gas-function-execution-route.md`（2026-09-25・窓 **〜2026-09-24**・結論「再発 0 件」）

@@ -39,6 +39,10 @@ export function mergeKnowledge(knowledge, learned, candidates, observation) {
   const promoted = [];
   for (const item of learned) {
     if (next.some(k => key(k.pattern) === key(item.pattern))) continue;
+    // 同じ経路を別ラベルで再学習すると route 重複エントリが毎晩増え、knowledge.json が dirty になって
+    // rescue 枝が量産される（2026-10-22 実測: 3d8c172 は route が既存 entry と完全一致）。
+    // enqueueTodos も route 正規化キーで重複を落としているので、昇格側も同じ規則に揃える。
+    if (next.some(k => key(k.route) === key(item.route))) continue;
     const prior = pending.find(c => key(c.pattern) === key(item.pattern) && key(c.route) === key(item.route) && c.observation !== observation);
     if (item.confidence === 'high' || prior) {
       const entry = { ...item, confidence: 'high', source: `handoff-audit-nightly:${observation}` };
@@ -47,9 +51,9 @@ export function mergeKnowledge(knowledge, learned, candidates, observation) {
   }
   return { knowledge: next, candidates: pending, promoted };
 }
-export function enqueueTodos(markdown, items) {
+export function enqueueTodos(markdown, items, knownRoutes = []) {
   let output = markdown;
-  const routes = new Set();
+  const routes = new Set((knownRoutes || []).map(key));
   for (const line of output.split(/\r?\n/)) {
     const body = line.match(/^\s*\d+\. \[handoff-audit:[^\]]+\] (.*)$/)?.[1];
     if (!body) continue;
@@ -135,6 +139,7 @@ export async function runNightly(options = {}) {
       reviewed++;
       // 既知経路にない生成文を自動実行キューへ流さない。
       const learned = result.learned.filter(l => knownRoutes.has(l.route));
+      const priorRoutes = knowledge.map(k => k.route);
       const merged = mergeKnowledge(knowledge, learned, candidates, observation);
       if (merged.knowledge.length !== knowledge.length) fs.writeFileSync(knowledgeFile, JSON.stringify(merged.knowledge, null, 2) + '\n');
       // nightly-bootstrap が毎回 reset --hard する tree の外に置く。reset で route 文が消えないようにするため。
@@ -145,7 +150,7 @@ export async function runNightly(options = {}) {
       for (const candidate of merged.candidates.slice(candidates.length)) appendJsonl(candidateFile, candidate);
       const nextFile = path.join(dir, 'next-session.md');
       let previous = ''; try { previous = fs.readFileSync(nextFile, 'utf8'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
-      const updated = enqueueTodos(previous, learned.filter(l => l.confidence === 'high' || merged.promoted.some(p => key(p.pattern) === key(l.pattern))));
+      const updated = enqueueTodos(previous, learned.filter(l => l.confidence === 'high' || merged.promoted.some(p => key(p.pattern) === key(l.pattern))), priorRoutes);
       if (updated !== previous) writeHandoff(nextFile, updated);
       added += merged.promoted.length;
       knowledge = merged.knowledge; candidates = merged.candidates;
@@ -182,12 +187,25 @@ export async function runNightly(options = {}) {
       // hits が 0 でも必ず書く（「0 は測った 0」を後から証明できるようにする）。
       appendJsonl(ledgerFile, { ts, kind: 'window', since: from, until: to, total, hits: rows.length, byPattern, detector: usedDetector, detectorDiffers: detector.differs });
       for (const row of fresh) appendJsonl(ledgerFile, { ts, kind: 'hit', observation: deferralObservation(row), ...row });
+      // 同じ違反セッションの同じパターンは1つの窓で何度も検出される（ループがイテレーションごとに
+      // 同じ先送り文を書き続ける）。検出行ごとに別IDの監査TODOが積まれると、1つの先送りが
+      // 8本の「検証の検証」セッションに増殖した（2026-10-23T07:23 の session 9310953f が実例:
+      // 07:23:09〜07:23:19 の4行が別TODOになり、e2de84a9 の検証ループが8周した）。
+      // 台帳には全検出行を残し、TODOは (sessionId, pattern) ごとに窓内の先頭1件だけ積む。
+      const enqueueRows = [];
+      const enqueuedKeys = new Set();
+      for (const row of fresh) {
+        const groupKey = `${row.sessionId ?? ''}\u0000${row.pattern}`;
+        if (enqueuedKeys.has(groupKey)) continue;
+        enqueuedKeys.add(groupKey);
+        enqueueRows.push(row);
+      }
       let enqueued = 0;
-      if (fresh.length > 0) {
+      if (enqueueRows.length > 0) {
         const nextFile = path.join(dir, 'next-session.md');
         let previous = ''; try { previous = fs.readFileSync(nextFile, 'utf8'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
-        const updated = enqueueTodos(previous, fresh.map(deferralTodo));
-        if (updated !== previous) { writeHandoff(nextFile, updated); enqueued = fresh.length; }
+        const updated = enqueueTodos(previous, enqueueRows.map(deferralTodo));
+        if (updated !== previous) { writeHandoff(nextFile, updated); enqueued = enqueueRows.length; }
       }
       deferral = { total, hits: rows.length, byPattern, enqueued, detector: usedDetector, detectorDiffers: detector.differs };
     } catch (error) { deferral = { ...deferral, error: error.message }; }

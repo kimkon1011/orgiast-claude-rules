@@ -49,7 +49,8 @@ export async function runLaneHealthWatch({ home, now = Date.now, notify = notify
   const notified = [];
   for (const row of rows) {
     if (state[row.key]) { next[row.key] = state[row.key]; continue; }
-    if (dryRun) continue;
+    // 一時的な probe 失敗は DM しない（表には残る）。
+    if (dryRun || row.silent) continue;
     try {
       const result = await notify(laneHealthDm(row), { home, webhookFallback: false });
       if (result?.delivered && result.delivered !== 'none') { next[row.key] = new Date(now()).toISOString(); notified.push(row.key); }

@@ -6,9 +6,13 @@ import path from 'node:path';
 import { execFile, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parseArgs, promisify } from 'node:util';
+import { askJev } from './jev.mjs';
 import { isEntry } from './is-entry.mjs';
 import { toPlainJa } from './lib/plain-ja.mjs';
-import { notifyKim, clipDiscordContent } from './notify-kim.mjs';
+import { notifyKim, deliverKim, clipDiscordContent } from './notify-kim.mjs';
+
+import { localNotice, noticeRecipient } from './autopilot-local-notice.mjs';
+import { waitingDigest, acknowledgeWaiting } from './waiting-on-user.mjs';
 
 const API = 'https://discord.com/api/v10';
 const DEFAULTS = { maxIterPerDay: 20, maxHoursPerDay: 6, maxNoop: 3, maxTotalIter: 200 };
@@ -62,6 +66,19 @@ export function capReason(state, objective, today) {
   if (state.iterationsToday >= objective.maxIterPerDay) return 'daily_iter_cap';
   if (today.hours >= objective.maxHoursPerDay) return 'daily_hours_cap';
   if (state.consecutiveNoop >= objective.maxNoop) return 'noop_streak';
+  return null;
+}
+// 完了・失敗・進捗なし・上限は既存の決定論的判定が担当する。
+// 未検証の COMPLETE は提案としても採用せず、従来の続行へ戻す。
+export async function decideTickWithJev(summary, { askJevImpl = askJev, home } = {}) {
+  try {
+    const result = await askJevImpl({ state: summary, timeoutMs: 3000, label: 'autopilot', home,
+      questions: { action: { type: 'choice', instructions: '次の周回の方針を選ぶ。完了は検証済みのときのみ。', criteria: {
+        CONTINUE: '次の作業へ進む', RETRY: '現在の作業をやり直す', ESCALATE: '判断が必要なので一時停止', COMPLETE: '完了条件を検証済み',
+      } } } });
+    const answer = result?.answers?.action;
+    if (result?.ok && answer?.type === 'choice' && ['CONTINUE', 'RETRY', 'ESCALATE'].includes(answer.choice)) return answer.choice;
+  } catch { /* 失敗・不正な応答は従来どおり続行。 */ }
   return null;
 }
 export function parseControl(text) {
@@ -346,10 +363,18 @@ export async function sendNotice(text, ctx) {
     }
   } catch (error) { mirrorError = error.message; }
   // Normalize once so both destinations receive the exact same final DM body.
-  if (command) text = clipDiscordContent(process.env.NOTIFY_PLAIN_JA === '0' ? text : await toPlainJa(String(text)));
-  let result;
-  try { result = await ctx.notifyImpl(text, { home: ctx.home, token: ctx.token, userId: ctx.userId, fetchImpl: ctx.fetchImpl, webhookFallback: false, ...(command ? { plainJa: false } : {}) }); }
-  catch { result = { delivered: 'none' }; }
+  if (command && !ctx.periodicDigest) text = clipDiscordContent(process.env.NOTIFY_PLAIN_JA === '0' ? text : await toPlainJa(String(text)));
+  const channels = await localNotice(text, ctx);
+  let result, recipient;
+  try {
+    recipient = noticeRecipient(ctx.home, ctx.userId);
+    result = recipient.reason === 'owner_discord_id_missing'
+      ? { delivered: 'no-owner-dm', reason: recipient.reason }
+      : await ctx.notifyImpl(text, { home: ctx.home, token: ctx.token, userId: recipient.userId, fetchImpl: ctx.fetchImpl, webhookFallback: false, ...(command || ctx.periodicDigest ? { plainJa: false } : {}) });
+  } catch (error) { result = { delivered: 'none', reason: error.code || error.message }; }
+  result ||= { delivered: 'unknown' };
+  if (result.delivered === 'dm' && recipient?.notOwner) result = { ...result, delivered: 'dm-not-owner' };
+  result = { ...result, channels: { dm: { status: result.delivered, ...(result.reason ? { reason: result.reason } : {}) }, ...channels } };
   if (command) {
     try { await mirrorNotice(command, text, ctx); }
     catch (error) { mirrorError = error.message; }
@@ -376,6 +401,7 @@ function resumeState(state) {
   state.status = 'running'; state.pausedReason = null; state.pendingQuestion = null; state.pendingQuestionExpiresAt = null;
   // Explicit human continuation gives a stalled objective one fresh attempt.
   state.consecutiveNoop = 0;
+  state.jevDecision = null;
   state.consecutiveRunnerErrors = 0;
   state.runnerErrorRetryAt = null;
 }
@@ -499,6 +525,7 @@ async function execute(command, args, ctx) {
         state.pausedReason = null;
         state.runnerErrorRetryAt = null;
         state.consecutiveNoop = 0;
+        state.jevDecision = null;
       }
     }
     // A question that carries its own reply deadline must not freeze the run forever
@@ -557,7 +584,7 @@ async function execute(command, args, ctx) {
     const due = watchesDue(state, now);
     if (due.length) { for (const w of due) w.lastListedAt = now.toISOString(); writeJson(paths.state, state); }
     return { verdict: { running: 'run', paused: 'pause', stopped: 'stop', done: 'done' }[state.status], reason: state.pausedReason,
-      objective, pendingQuestion: state.pendingQuestion || null, decision: state.lastDecision || null, budget: { iterationsLeftToday: Math.max(0, objective.maxIterPerDay - state.iterationsToday), hoursLeftToday: Math.max(0, objective.maxHoursPerDay - today.hours), consecutiveNoop: state.consecutiveNoop }, control, recentLog: currentLog().slice(-5), controlErrors: result.errors, watchesDue: due };
+      objective, pendingQuestion: state.pendingQuestion || null, decision: state.lastDecision || null, budget: { iterationsLeftToday: Math.max(0, objective.maxIterPerDay - state.iterationsToday), hoursLeftToday: Math.max(0, objective.maxHoursPerDay - today.hours), consecutiveNoop: state.consecutiveNoop }, control, recentLog: currentLog().slice(-5), controlErrors: result.errors, watchesDue: due, jevDecision: state.jevDecision || null };
   }
   if (command === 'post') {
     if (state.status !== 'running') return { error: 'not_running', status: state.status };
@@ -567,6 +594,7 @@ async function execute(command, args, ctx) {
     // 完了(100)は「実際に起きた結果」を確認した証拠が要る。未確認なら --unverified で見張りに回す。
     const evidence = String(args.evidence ?? '').trim();
     const unverified = String(args.unverified ?? '').trim();
+    if (args.tests === 'failed' && progress >= 100) return { error: 'tests_failed' };
     if (progress >= 100 && !evidence && !unverified) return { error: 'evidence_required' };
     const noop = Boolean(args.noop) || progress <= (currentLog().at(-1)?.progress ?? 0);
     const row = { ts: now.toISOString(), host: ctx.hostname, iteration: state.totalIterations + 1, summary: args.summary.trim(), progress, noop, codexUsed: Boolean(args.codex), nextDelaySec: noop ? Math.max(1800, nextDelaySec) : nextDelaySec };
@@ -583,8 +611,15 @@ async function execute(command, args, ctx) {
       save(); await notify(null, true, { evidence, unverified });
       return { ok: true, watchdog: null, status: 'done', noop, nextDelaySec: row.nextDelaySec, watch: unverified ? state.watches.at(-1).id : null };
     }
-    const fired = await watchdog(); save();
-    return { ok: true, watchdog: fired, status: state.status, noop, nextDelaySec: row.nextDelaySec };
+    const fired = await watchdog();
+    state.jevDecision = null;
+    if (!fired && !noop && args.tests !== 'failed') {
+      const action = await decideTickWithJev({ objective: objective.objective.slice(0, 500), done: String(objective.done || '').slice(0, 500), summary: row.summary.slice(0, 1000), progress, tests: args.tests || 'unknown' }, ctx);
+      if (action) state.jevDecision = { action, iteration: row.iteration };
+      if (action === 'ESCALATE') { state.status = 'paused'; state.pausedReason = 'jev_escalate'; }
+    }
+    save();
+    return { ok: true, watchdog: fired, status: state.status, noop, nextDelaySec: row.nextDelaySec, jevDecision: state.jevDecision };
   }
   if (command === 'watch') {
     const id = String(args.id ?? '').trim();
@@ -630,11 +665,22 @@ async function execute(command, args, ctx) {
   if (command === 'digest') {
     if (!state) return { ok: false, reason: 'not_started' };
     const slot = digestSlot(now);
-    if (!slot || state.lastDigestSlot === slot) return { ok: false, skipped: 'not_due_or_already_sent' };
+    if (!args['dry-run'] && (!slot || state.lastDigestSlot === slot)) return { ok: false, skipped: 'not_due_or_already_sent' };
     const rowsSince = (state.lastDigestIteration !== undefined)
       ? log.filter((r) => r.iteration > state.lastDigestIteration)
       : log.filter((r) => !state.lastDigestAt || Date.parse(r.ts) > Date.parse(state.lastDigestAt));
-    const text = formatPeriodicDigest({ hostname: ctx.hostname, objective, state, rowsSince });
+    let waiting = { text: '', completedIds: [] };
+    try {
+      waiting = await waitingDigest({ home: ctx.home, now, checkImpl: ctx.checkImpl, persist: !args['dry-run'] });
+    } catch (error) {
+      // 台帳が壊れていても定時報告そのものは止めない。原因は run.log に残す。
+      try {
+        fs.mkdirSync(paths.dir, { recursive: true });
+        fs.appendFileSync(path.join(paths.dir, 'run.log'), `${JSON.stringify({ ts: now.toISOString(), waitingError: error.code || error.message })}\n`, 'utf8');
+      } catch { /* 記録失敗で報告を落とさない */ }
+    }
+    const text = formatPeriodicDigest({ hostname: ctx.hostname, objective, state, rowsSince }) + waiting.text;
+    if (args['dry-run']) return { ok: true, dryRun: true, text };
     state.lastDigestSlot = slot;
     state.lastDigestAt = now.toISOString();
     state.lastDigestIteration = state.totalIterations;
@@ -643,10 +689,20 @@ async function execute(command, args, ctx) {
     // sendNotice swallows delivery failures, so "no error in run.log" is not
     // evidence that the DM arrived (2026-10-17 実測)。呼び出し側が run.log に
     // delivered を残せるよう、結果を戻り値と state の両方に載せる。
-    const delivery = await sendNotice(text, ctx);
+    const delivery = await sendNotice(text, { ...ctx, periodicDigest: true });
+    if (delivery.delivered === 'dm' || delivery.channels.toast.status === 'submitted' || delivery.channels.file.status === 'written') {
+      // 送信済みの報告を、後片付けの失敗で「失敗した周」にしない。
+      try { await acknowledgeWaiting(waiting.completedIds, { home: ctx.home, now }); }
+      catch (error) {
+        try {
+          fs.appendFileSync(path.join(paths.dir, 'run.log'), `${JSON.stringify({ ts: now.toISOString(), waitingAckError: error.code || error.message })}\n`, 'utf8');
+        } catch { /* 記録失敗で報告を落とさない */ }
+      }
+    }
+    state.lastDigestChannels = delivery.channels;
     state.lastDigestDelivered = delivery?.delivered ?? 'unknown';
     save();
-    return { ok: true, slot, text, delivered: state.lastDigestDelivered };
+    return { ok: true, slot, text, delivered: state.lastDigestDelivered, channels: delivery.channels };
   }
   if (['stop', 'pause', 'resume'].includes(command)) {
     if (command === 'resume') {
@@ -717,16 +773,16 @@ export async function runAutopilot(command, args = {}, options = {}) {
     if (!release) return { error: 'busy' };
     const home = paths.home;
     const token = options.token ?? (process.env.DISCORD_BOT_TOKEN?.trim() || readText(path.join(home, '.claude', 'orgiast-discord-bot-token.txt')));
-    const userId = options.userId ?? (process.env.ORGIAST_DISCORD_USER_ID?.trim() || readText(path.join(home, '.claude', 'orgiast-discord-user-id.txt')));
-    return await execute(command, args, { paths, home, token, userId, now: options.now || new Date(), hostname: options.hostname || os.hostname(), fetchImpl: options.fetchImpl || globalThis.fetch, askImpl: options.askImpl || askCandidate, notifyImpl: options.notifyImpl || notifyKim, spawnImpl: options.spawnImpl, mirrorTimeoutMs: options.mirrorTimeoutMs });
+    const userId = noticeRecipient(home, options.userId ?? (process.env.ORGIAST_DISCORD_USER_ID?.trim() || readText(path.join(home, '.claude', 'orgiast-discord-user-id.txt')))).userId;
+    return await execute(command, args, { paths, home, token, userId, now: options.now || new Date(), hostname: options.hostname || os.hostname(), askJevImpl: options.askJevImpl || askJev, fetchImpl: options.fetchImpl || globalThis.fetch, askImpl: options.askImpl || askCandidate, notifyImpl: options.notifyImpl || (command === 'digest' ? deliverKim : notifyKim), platform: options.platform, execFileImpl: options.execFileImpl, checkImpl: options.checkImpl, spawnImpl: options.spawnImpl, mirrorTimeoutMs: options.mirrorTimeoutMs });
   } catch (error) { return { error: error.code || error.message || 'autopilot_error' }; }
   finally { release?.(); }
 }
 
 export async function main(argv = process.argv.slice(2)) {
   try {
-    const options = Object.fromEntries(['objective', 'done', 'max-iter-per-day', 'max-hours-per-day', 'max-noop', 'max-total-iter', 'summary', 'progress', 'tokens-out', 'next-delay', 'reason', 'question', 'question-deadline', 'evidence', 'unverified', 'id', 'result', 'note', 'detail'].map((key) => [key, { type: 'string' }]));
-    for (const key of ['noop', 'codex', 'pretty']) options[key] = { type: 'boolean' };
+    const options = Object.fromEntries(['objective', 'done', 'max-iter-per-day', 'max-hours-per-day', 'max-noop', 'max-total-iter', 'summary', 'progress', 'tests', 'tokens-out', 'next-delay', 'reason', 'question', 'question-deadline', 'evidence', 'unverified', 'id', 'result', 'note', 'detail'].map((key) => [key, { type: 'string' }]));
+    for (const key of ['noop', 'codex', 'pretty', 'dry-run']) options[key] = { type: 'boolean' };
     const { values, positionals } = parseArgs({ args: argv, options, allowPositionals: true });
     const result = await runAutopilot(positionals[0], values);
     if (values.pretty && result.state) result.text = `autopilot: ${result.state.status} / ${result.objective.objective}\n今日 ${result.today.iterations}周 / 合計 ${result.state.totalIterations}周 / 進捗 ${result.today.progressTo}% / ${result.state.pausedReason || '制限内'}`;

@@ -90,6 +90,20 @@ export function formatReason(urls, { services = catalog } = {}) {
   return accounts.join('\n') + '\nアカウントは人が分かるメール/ラベルで書く。\n' + '[URL-ACCOUNT] 次の URL に「どのアカウントで開くか」が書かれていません（ONBOARDING §1.5.0・kim 2026-10-04 厳命）。推奨形式: **<アカウント>** で開く: [表示名](URL)。生 URL を書くなら直前の行に「**<アカウント名>** で開いてください。」、次の行に URL だけを置く（URL の直後に括弧・句読点・全角文字を続けない。スマホでリンク範囲がずれて 404 になる・2026-10-18 実害）。既定アカウントと違うなら「シークレットウィンドウで開く」も併記。本文の URL が全部同じアカウントなら「以下の URL はすべて **x@y** で開く」の1行でよい。Workspace は authuser=<開く人のメール> が必須（既存クエリには &authuser= を追加）。URL の同じ行か直前に「<同じメール> で開いてください」を書く。前の行にアカウントを書き、次の行を Markdown リンク単独にする形も可。/a/orgiast.jp/ は不可。自分宛は環境の userEmail、他人宛は共有済みの相手メール。script.google.com/home/ 系は従来どおり除外。Workspace には離れた全体宣言は使えない。例外は [URL-ACCOUNT-OK]。\n' + urls.join('\n');
 }
 
+// 無人スクリプトの通知は Stop フックを通らないため、送信直前に同じ判定で補う（2026-10-25 DeepSeek 停止通知で所有アカウント未記載・URL 直後の日本語でリンク破損）。
+export function annotateAccounts(text, { services = catalog } = {}) {
+  const spaced = String(text ?? '').replace(/(https?:\/\/[\x21-\x7E]+?)(?=[^\x00-\x7F])/g, '$1 ');
+  const lines = spaced.split('\n');
+  // カタログ未登録でも、送信元が同じ行で実アカウント（認証情報のメール等）を示していれば補わない。
+  const missing = judge(spaced, { services }).missing.filter(raw => !email.test(lines.find(line => line.includes(raw))?.replace(raw, '') || ''));
+  if (!missing.length) return spaced;
+  const notes = missing.map(raw => {
+    const account = providerForHost(new URL(raw).hostname.toLowerCase().replace(/\.$/, ''), services)?.account;
+    return account ? `開くアカウント: **${account}** → ${raw}` : `開くアカウント: 未登録（tools/ai-subscription-catalog.json に account を足す） → ${raw}`;
+  });
+  return `${spaced}\n${notes.join('\n')}`;
+}
+
 export const REMEDY_EXAMPLES = [
   '**kim@orgiast.jp** で開く: [Google Drive](https://drive.google.com/drive/u/0/?authuser=kim%40orgiast.jp)',
   '**kim の GitHub アカウント** で開く: [GitHub](https://github.com/org/repo)',

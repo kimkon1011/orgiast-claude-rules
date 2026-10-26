@@ -8,6 +8,8 @@
 
 Workspace の URL は authuser=開く人のメール を付け、本文に開くアカウントを書く。自分宛はその Claude 環境の userEmail、他人宛は共有済みの相手メールを使い、特定個人をハードコードしない。既存クエリには &authuser= を追加し、#gid 等のフラグメントより前に置く。本文の同じ行か直前に「<メール> で開いてください」と書く。script.google.com の /home/ 系だけは素URL＋アカウント切替案内の例外を維持する。
 
+**🔴 seisaku-team@ のメール送信は `gmail-draft.mjs --send` の自動チェックを通す。矛盾照会は最新メールだけでなくスレッド全体の合意×見積明細（金額・数量・人件費・納品形態・日程等）。block は修正し、生の Gmail API 送信は禁止。**
+
 2026-10-10、nishi@orgiast.jp が `/a/orgiast.jp/` 形式の Doc を開けなかった。ブラウザの既定アカウントが別だとドメイン指定だけでは解決しないため、nishi の原文「リンクを出すときは必ずどのアカウントで開くかを明記して、ブラウザもそのアカウントで開くように設定して」に従い、URL と本文の両方で受け手を指定する。
 
 `/a/orgiast.jp/` を使わない。authuser は権限付与ではないため、他人に渡す前に相手へ共有する。
@@ -30,6 +32,10 @@ kim が読む Doc は `tools/gdoc-publish.mjs --authuser <開く人のメール>
 
 ---
 
+## 備品管理表の関数列（ONBOARDING §2.1）
+
+- 「備品在庫管理表」の K列は関数列。K には書かず在庫数は E列へ。K を跨ぐ範囲は分ける（bihin-kcol-gate、2026-10-23 古川さん依頼）。
+
 ## GAS 開発
 
 - `.gs` / `appsscript.json` を触ると **rules/gas.md** が自動適用される（clasp 統一・コマンドキュー絶対ルール・read-back verify）
@@ -47,6 +53,7 @@ kim が読む Doc は `tools/gdoc-publish.mjs --authuser <開く人のメール>
 ## 変更後の検証
 
 デプロイ・UI・cron 等の変更は **/deploy-verify** skill の2段検証（Layer1 ロジック再現 + Layer2 Playwright 実描画）を通してから完了報告。
+委譲・マージした変更も、本番経路で実行し、送信・通知・外部反映はAPIで読み戻すまで完了報告しない。
 
 見せる資料はハイブリッド企画書モデル（Claude組版×Gemini写真×Genspark参照）で作り、**/design-deck** skill を使う。
 

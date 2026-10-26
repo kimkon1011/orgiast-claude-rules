@@ -88,3 +88,21 @@ user にコマンドを打たせない（rule 2 は「最後の1ステップだ�
 - 台帳スキャン: `node ~/.claude/auto-session/runs/2026-10-01-1-recurrence-scan.mjs`
 - transcript スキャン: `node ~/.claude/auto-session/runs/2026-10-01-1-transcript-scan.mjs`
 - 各セッションの該当発言: `node ~/.claude/auto-session/runs/2026-10-01-1-detail.mjs`
+
+## 再発検証（2026-10-24 / handoff-audit:ce2d358c446f2e49）
+
+**前回検証（2026-10-01）以降の再発は 0 件。** transcript 185 ファイル・assistant 本文 1,564 件
+（2026-10-01T00:00Z 以降）と 3 台帳（合計 1,349 行）を走査し、「本番デプロイ／反映」×
+「ターミナル・コマンド貼り付け・1クリック起爆」×「user への実行依頼」の同時該当は 0 件だった。
+デスクトップにもデプロイ用の起爆ファイルは無い。台帳は 2026-10-17 開始のため、10-01〜10-16 は
+transcript のみで判定した。台帳の `verdict=pass` は再発 0 の根拠にしていない。
+
+**Claude 側の経路はこの PC（hostname `HP`）でも生きている。** keiri-hub の `VERCEL_TOKEN` を子プロセスに渡すと
+`vercel whoami` = `seisaku-team-5867`（exit 0）、`vercel env ls production` = 22 件（exit 0）。
+トークン無しは `Logged out`（exit 1）。**user にコマンドを打たせる理由は無い。**
+
+**ゲートの穴を塞いだ。** `tools/user-burden-gate.mjs` はコマンド手渡しを止める一方、
+デスクトップの1クリック起爆ファイルは手間監査が揃えば通していた（2026-09-28 の再発経路そのもの）。
+本番デプロイに限り、ターミナル手渡しも起爆ファイルも `PROD-DEPLOY-HANDOFF` で block するようにした
+（脱出は `[PROD-DEPLOY-HANDOFF-OK] <user の文言の引用>` のみ）。`tools/user-burden-gate.test.mjs` = 19 件 pass。
+詳細: `tools/handoff-audit-findings-production-deploy-terminal-20261024.md`。

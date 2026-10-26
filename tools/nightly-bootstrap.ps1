@@ -341,7 +341,8 @@ try {
         & $shellCommand -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $targetPath @forwardArgs
         $targetExitCode = $LASTEXITCODE
     } elseif ($extension -eq '.mjs' -or $extension -eq '.js') {
-        $node = Get-Command node -ErrorAction SilentlyContinue
+        # WSL 経由で起動されると PATH に Linux 版の拡張子なし node が混ざり、掴むと「アプリの選択」が出る（2026-10-18 実測）。.exe に限定する。
+        $node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1
         if (-not $node) { Stop-Nightly 'node確認' 'error:nodeが見つからない' 1 }
         & $node.Source $targetPath @forwardArgs
         $targetExitCode = $LASTEXITCODE

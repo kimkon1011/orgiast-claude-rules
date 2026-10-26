@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { appendUsageLedger, autoProvider, buildChildEnv, cooldownUntilFromText, detectBillingFailure, detectUsageLimitText, readInstruction, resolveProvider, writeProviderCooldown } from './cheap-code.mjs';
+import { DEFAULT_CHILD_API_TIMEOUT_MS, appendUsageLedger, autoProvider, buildChildEnv, cooldownUntilFromText, detectBillingFailure, detectUsageLimitText, readInstruction, resolveChildApiTimeoutMs, resolveProvider, writeProviderCooldown } from './cheap-code.mjs';
 import { prepareWorkerConfigDir } from './claude-exe.mjs';
 
 const tool = fileURLToPath(new URL('./cheap-code.mjs', import.meta.url));
@@ -117,6 +117,28 @@ test('buildChildEnv は親 env を浄化してから provider 値を入れ、wor
   assert.equal(childEnv.CLAUDE_CONFIG_DIR, 'C:\\worker\\dir');
   // 親の 200000 は浄化で消え、provider の実窓に置き換わる。
   assert.equal(childEnv.CLAUDE_CODE_MAX_CONTEXT_TOKENS, '1000000');
+});
+
+// API 無応答ハングが既定 600s だと 900s cap 内で再試行に入れない(fallback_chain_timeout)。
+test('buildChildEnv は子の API_TIMEOUT_MS を 600s 既定より短く注入し env で上書きできる', () => {
+  const config = resolveProvider('deepseek');
+  assert.equal(DEFAULT_CHILD_API_TIMEOUT_MS < 600000, true);
+  // 900s の cap 内で最低 3 回は試行できる値にしておく(1 回のハングで cap を使い切らない)。
+  assert.equal(DEFAULT_CHILD_API_TIMEOUT_MS * 3 <= 900000, true);
+  assert.equal(buildChildEnv(config, 'k', {}).API_TIMEOUT_MS, String(DEFAULT_CHILD_API_TIMEOUT_MS));
+  // 親が API_TIMEOUT_MS=600000 を持っていても短縮値で置き換える。
+  assert.equal(buildChildEnv(config, 'k', { API_TIMEOUT_MS: '600000' }).API_TIMEOUT_MS, String(DEFAULT_CHILD_API_TIMEOUT_MS));
+  assert.equal(buildChildEnv(config, 'k', { CHEAP_CODE_API_TIMEOUT_MS: '90000' }).API_TIMEOUT_MS, '90000');
+  assert.equal(resolveChildApiTimeoutMs({ CHEAP_CODE_API_TIMEOUT_MS: 'abc' }), DEFAULT_CHILD_API_TIMEOUT_MS);
+  assert.equal(resolveChildApiTimeoutMs({ CHEAP_CODE_API_TIMEOUT_MS: '-5' }), DEFAULT_CHILD_API_TIMEOUT_MS);
+});
+
+// 契約 RULES「他バックエンドの挙動を変えない」: glm は既定のまま(注入しない)。
+test('buildChildEnv は glm へ API_TIMEOUT_MS を注入しない', () => {
+  const glm = resolveProvider('glm');
+  assert.equal(buildChildEnv(glm, 'k', {}).API_TIMEOUT_MS, undefined);
+  // 親が明示的に持っている値は従来どおり継承する(挙動を変えない)。
+  assert.equal(buildChildEnv(glm, 'k', { API_TIMEOUT_MS: '600000' }).API_TIMEOUT_MS, '600000');
 });
 
 test('prepareWorkerConfigDir は hooks を書かず deny を引き継ぎ disableAllHooks を立てる', () => {

@@ -7,8 +7,9 @@ import { spawn, spawnSync } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
 import { DEFAULT_REPO_MAP, parseRepoMap } from './feedback-to-issues.mjs';
 import { ledgerRows, runTaskLedger } from './task-ledger.mjs';
-import { alternateCheapProvider, autoSessionExecutor, buildClaudeHeadlessArgs, buildCheapCodeArgs, claudeFallbackEnabled, recordFallbackToClaude, recordSkippedNoExecutor } from './auto-session-executor.mjs';
+import { alternateCheapProvider, autoSessionExecutor, buildClaudeHeadlessArgs, buildCheapCodeArgs, claudeFallbackEnabled, prepareExecutorRoot, recordFallbackToClaude, recordSkippedNoExecutor } from './auto-session-executor.mjs';
 import { findClaudeInVersionedDir, sanitizeClaudeSupervisorEnv } from './claude-exe.mjs';
+import { sweepFile as sweepRescueTodoFile } from './rescue-todo-sweep.mjs';
 
 export { autoSessionExecutor } from './auto-session-executor.mjs';
 
@@ -443,11 +444,32 @@ export function markTodoDone(md, todoText, note) {
 export function isTodoAlreadyDone(md, todoText) {
   const firstLine = String(todoText).split(/\r?\n/, 1)[0];
   if (!firstLine.trim()) return false;
+  const source = String(md);
   const escaped = firstLine.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   // 2026-09-28: 完了印の書き方が `~~…~~` 以外（`[完了 …] 本文`）でも「済み」と判定する。
   // 印の形が増えるたびに再実行保護が片方だけ効かなくなるのを避ける。
   const lineRe = new RegExp(`^\\s*\\d+[.)、]\\s+(?:~~${escaped}~~|\\[完了[^\\]]*\\]\\s+${escaped})`, 'm');
-  return lineRe.test(String(md));
+  if (lineRe.test(source)) return true;
+  // 2026-10-25 実測: バッチ選定（15:30Z）の後に別セッションが該当行の**行末**へ注記と
+  // 「→ ✅ 完了」を足したため、原文の完全一致では完了を見失い、既に片付いた TODO に
+  // セッションを1本消費した（runs/2026-10-25-manifest.json の selectedTodos[5]
+  // = notify-kim:961e… を run 2026-10-25-6 が実行）。番号を除いた本文を比べ、原文と
+  // ほぼ同一（注記の挿入分だけ差）で完了印のある行があれば起動しない。
+  // 40文字キーで比べると同文頭の別TODO（同夜の notify-kim 2件など）まで巻き込むため、
+  // 共通接頭辞の長さで判定する。
+  const normalize = value => String(value).replace(/[\*~`]/g, '').replace(/[\s　]+/g, '');
+  const original = normalize(firstLine);
+  if (!original) return false;
+  const hasDoneMark = body => /~~[^~]*~~/.test(body) || /^(?:\*\*)?\s*(?:\[完了|\[[xX]\]|✅)/.test(body);
+  return source.split(/\r?\n/).some((line) => {
+    const body = line.replace(/^\s*\d+[a-z]?[.)、]\s*/i, '');
+    if (body === line || !hasDoneMark(body)) return false; // 番号付きの TODO 行だけを対象にする
+    const current = normalize(body);
+    let shared = 0;
+    const limit = Math.min(original.length, current.length);
+    while (shared < limit && original[shared] === current[shared]) shared += 1;
+    return shared >= Math.min(original.length, 40) && shared >= original.length * 0.9;
+  });
 }
 
 // 台帳タスクも同じ穴が空く。選定（0:30）〜起動の間に、シート側の完了や
@@ -496,8 +518,9 @@ export function buildPrompt(todo, sections, repoCwd, summaryFile, timeoutMin = 6
     `## 目的\n${todo}`,
     attached,
     `## 固定の作業規約
-- セッションの作業ディレクトリは履歴を揃えるためのフォルダであり、実際の作業対象リポジトリは ${repoCwd} である。git は必ず \`git -C ${repoCwd}\` の形で実行し、codex-do.mjs は \`--cwd ${repoCwd}\` を付ける。裸の \`git status\` / \`git checkout\` は使わない。
-- 実装本体は \`node tools/codex-do.mjs "<指示>" --cwd ${repoCwd} --origin unattended\` で Codex に委譲する（§1.18）。監督は設計・レビュー・検証だけ。調査・分類・要約だけの作業は \`--kind investigate|classify|summarize\` を付けて llm-ask(gemini/deepseek/groq)へ回し、Codex は実装・テスト実行だけに使う。終了コード75（stdout が \`{"status":"deferred"}\`）は失敗ではなく保留（Codex 上限中または無人割当超過）なので、\`retryAt\` 以降まで同じ項目を再試行せず、${summaryFile} に「保留」と記録して次の項目へ進む。
+- セッションの作業ディレクトリは履歴を揃えるためのフォルダであり、実際の作業対象リポジトリは ${repoCwd} である。git は必ず \`git -C "${repoCwd}"\` の形で実行し、codex-do.mjs は \`--cwd "${repoCwd}"\` を付ける。裸の \`git status\` / \`git checkout\` は使わない。
+- Windows パスをシェルに渡すときは必ずダブルクォートで囲む。bash はクォート無しの \\ を食うため、--cwd C:\\... は壊れた相対パスになる（2026-10-20 に spawn_failed 6件の実害）。
+- 実装本体は \`node tools/codex-do.mjs "<指示>" --cwd "${repoCwd}" --origin unattended\` で Codex に委譲する（§1.18）。監督は設計・レビュー・検証だけ。調査・分類・要約だけの作業は \`--kind investigate|classify|summarize\` を付けて llm-ask(gemini/deepseek/groq)へ回し、Codex は実装・テスト実行だけに使う。終了コード75（stdout が \`{"status":"deferred"}\`）は失敗ではなく保留（Codex 上限中または無人割当超過）なので、\`retryAt\` 以降まで同じ項目を再試行せず、${summaryFile} に「保留」と記録して次の項目へ進む。
 - このセッションは \`claude -p\` の1回きりのヘッドレス実行である。ターンを終えた瞬間にプロセスごと終了し、起動中の子プロセスはすべて kill される。\`run_in_background: true\` と \`ScheduleWakeup\` は使用禁止で、フックでも deny される。「バックグラウンドで走らせて完了を待つ」と書いてターンを終えてはいけない。
 - \`codex-do.mjs\` は必ず前景で実行し、\`--timeout <秒>\` にセッションの残り時間より短い秒数を渡す。時間内に終わらない見込みなら待たず、そこまでの状態を ${summaryFile} に書き、作りかけのブランチを push して draft PR にするか、次回へ引き継いで終了する。
 - 他セッションと作業ツリーを共有している。\`git add -A\` / \`git commit -a\` / \`git stash\` / \`git checkout -- .\` は禁止。自分が作成・変更したファイルだけをパス指定で \`git add\` する。着手前とコミット直前に \`git status --porcelain\` を撮り、差分が自分の変更だけであることを確認する。
@@ -556,7 +579,7 @@ ${issue.body || '（本文なし）'}
 - 秘匿値をコード、PR、ログへ書かない。
 
 ## 実行環境
-- 実リポジトリは ${repoCwd}。git は \`git -C ${repoCwd}\`、実装委譲は \`node tools/codex-do.mjs "<指示>" --cwd ${repoCwd} --origin unattended\`（調査・分類・要約だけなら \`--kind investigate|classify|summarize\`）のように対象を明示する。終了コード75は失敗ではなく保留で、\`retryAt\` まで再試行しない。
+- 実リポジトリは ${repoCwd}。git は \`git -C "${repoCwd}"\`、実装委譲は \`node tools/codex-do.mjs "<指示>" --cwd "${repoCwd}" --origin unattended\`（調査・分類・要約だけなら \`--kind investigate|classify|summarize\`）のように対象を明示する。終了コード75は失敗ではなく保留で、\`retryAt\` まで再試行しない。
 - このセッションは \`claude -p\` の1回きりのヘッドレス実行である。ターンを終えた瞬間にプロセスごと終了し、起動中の子プロセスはすべて kill される。\`run_in_background: true\` と \`ScheduleWakeup\` は使用禁止で、フックでも deny される。「バックグラウンドで走らせて完了を待つ」と書いてターンを終えてはいけない。
 - \`codex-do.mjs\` は必ず前景で実行し、\`--timeout <秒>\` にセッションの残り時間より短い秒数を渡す。時間内に終わらない見込みなら待たず、そこまでの状態を ${summaryFile} に書き、作りかけのブランチを push して draft PR にするか、次回へ引き継いで終了する。
 - 作業経過を ${summaryFile} に逐次追記する。PR URL・PRタイトル・CI結果を必ず最後に記録する。
@@ -575,9 +598,9 @@ export function buildRolePrompt(roleName, repoCwd, summaryFile, timeoutMin = 30,
   return `${roleBody}
 
 ## 実行環境
-- 実際の作業対象リポジトリは ${repoCwd}。git は必ず \`git -C ${repoCwd}\` の形で実行し、裸の \`git status\` / \`git log\` は使わない。
+- 実際の作業対象リポジトリは ${repoCwd}。git は必ず \`git -C "${repoCwd}"\` の形で実行し、裸の \`git status\` / \`git log\` は使わない。
 - このセッションは1回きりのヘッドレス実行である。\`run_in_background: true\` と \`ScheduleWakeup\` は使用禁止。ターンを終える前に必要な前景処理を完了する。
-- \`codex-do.mjs\` を使う場合は必ず前景で実行し、\`--cwd ${repoCwd}\` と \`--origin unattended\` とセッション残り時間より短い \`--timeout <秒>\` を付ける。終了コード75は失敗ではなく保留（\`retryAt\` まで再試行しない）。
+- \`codex-do.mjs\` を使う場合は必ず前景で実行し、\`--cwd "${repoCwd}"\` と \`--origin unattended\` とセッション残り時間より短い \`--timeout <秒>\` を付ける。終了コード75は失敗ではなく保留（\`retryAt\` まで再試行しない）。
 - 作業経過と結論は ${summaryFile} に追記する。追記は \`>>\` 相当とし、全文を上書きしない。
 - 外部処理を5分を超えてポーリングしない。待ちが必要なら未検証としてレポートと残TODOに記録して終了する。
 - 開始から ${Math.max(1, timeoutMin - 5)} 分でまとめに入り、結論をレポートと ${summaryFile} に書いて終了する。
@@ -706,11 +729,16 @@ function extensionExecutables() {
   } catch { return []; }
 }
 
-export function runChild(executable, prompt, repoCwd, historyCwd, timeoutMs, runOptions = {}) {
+export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutMs, runOptions = {}) {
+  // 実行役のコードは origin/main の専用 worktree から読む。pinned tree はセッションが作業ブランチを
+  // 切るため、夜間に main へ入った修正が同じ夜の後続セッションへ届かない(2026-10-25 実測)。
+  const executorRoot = runOptions.executorRoot ?? prepareExecutorRoot({ repoRoot: REPO_ROOT });
   return new Promise((resolve) => {
     const startedAt = new Date();
     const configuredChoice = autoSessionExecutor();
-    const choice = runOptions.executor === 'cheap-code'
+    const choice = runOptions.model
+      ? { ...configuredChoice, executor: 'claude' }
+      : runOptions.executor === 'cheap-code'
       ? { ...configuredChoice, executor: 'cheap-code' }
       : configuredChoice;
     let cheapProvider = choice.provider;
@@ -721,8 +749,8 @@ export function runChild(executable, prompt, repoCwd, historyCwd, timeoutMs, run
       const cheap = choice.executor === 'cheap-code' && !fallback;
       let child;
       try { child = spawn(cheap ? process.execPath : executable, cheap
-        ? buildCheapCodeArgs({ repoRoot: REPO_ROOT, provider: cheapProvider, promptFile, cwd: historyCwd })
-        : buildClaudeHeadlessArgs({ repoCwd, historyCwd, resumeSessionId: runOptions.resumeSessionId }), { detached: process.platform !== 'win32', cwd: historyCwd,
+        ? buildCheapCodeArgs({ repoRoot: executorRoot, provider: cheapProvider, promptFile, cwd: historyCwd })
+        : buildClaudeHeadlessArgs({ repoCwd, historyCwd, resumeSessionId: runOptions.resumeSessionId, ...(runOptions.model ? { model: runOptions.model } : {}) }), { detached: process.platform !== 'win32', cwd: historyCwd,
         // cheap-code 側でも浄化するが、claude フォールバック(監督セッション)はここで
         // デスクトップ由来の CLAUDECODE / CLAUDE_CODE_* / MCP_* を外しておく。
         env: { ...sanitizeClaudeSupervisorEnv(process.env), CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: cheap ? `auto-session:cheap-code:${cheapProvider}` : 'auto-session:fallback-claude' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }); }
@@ -1049,6 +1077,10 @@ export async function main(argv = process.argv.slice(2), io = {}) {
 
   const nextFile = path.join(claudeDir, 'next-session.md');
   if (!readOnly && fs.existsSync(nextFile) && fs.statSync(nextFile).size > MAX_BYTES) rotate(nextFile);
+  if (fs.existsSync(nextFile)) {
+    try { sweepRescueTodoFile(nextFile, { dryRun: readOnly }); }
+    catch (error) { console.error(`[rescue-todo-sweep] ${error?.message ?? error}`); }
+  }
   // フォーム報告は next-session.md と独立した入力源なので、片方が無くてももう片方を止めない。
   const parsed = fs.existsSync(nextFile) ? parseHandoff(fs.readFileSync(nextFile, 'utf8')) : { block: '', todos: [], todoBlocks: [], sections: {} };
   const feedbackIssues = await listIssues();

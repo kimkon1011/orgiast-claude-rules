@@ -70,11 +70,39 @@ function auditAwareFind(regex, text) {
 const P2 = { find: text => auditAwareFind(/(次セッション|次回セッション|次回に|後日)[^」"'\n]{0,60}(実装|対応|修正|改修|恒久)/, text) };
 // 2026-10-19 の実測3件で「〜のを待っています」と「終わると知らせが届きます」が素通りしたため、
 // 名詞化した待機と完了通知待ちも W に含める。
-const W  = { find: text => auditAwareFind(/(数分|しばらく|少し|少々)[^」"'\n]{0,20}(お?待ち|待って)|完了を?待って|完了待ちで|[^\s」"'\n]{0,30}?のを待って(?:います|ます|いる|おります)|(?:終わると|完了すると)[^」"'\n]{0,12}(?:自動で)?(?:知らせ|通知)が届/, text) };
+// 2026-10-21T05:14:03.146Z（handoff-audit:38fe891783fc6ce2 / 4d7e4383）の原文は
+// 「完了待ちです」で拾えていたが、同じセッションが以後 7 ターン（05:15:06〜06:00:15）
+// 「完了はまだです」「〜しているところです」「結果を待っています」と言い換えて待機し、
+// W に一致せず全部 pass した。他レーン（別セッション・Codex）の名前の近くに完了待ちを
+// 表す言い回しがある形も W に含める。レーン名から 60 字以内に限るのは、離れた言及
+// （レポート本文の前置き）と結び付けて誤検出しないため。素の「サブエージェントの
+// 結果を待っています」は自分のサブエージェント待ちなので対象外（レーン名に一致しない）。
+// 2026-10-23T06:54:05.630Z（handoff-audit:05b1b5a651a474e1 / 017b465e / W）の原文
+// 「ルール側の PR のマージと、Codex の実装完了の両方を待っています。どちらも終わると通知が
+// 来るので、届き次第検証に入ります。」は、`Codex` と `完了` が同じ文にあったため偶然
+// LANE_STATUS_WAIT に当たっていた。レーン名・「完了」・「のを待って」のどれかを落とす
+// （例:「PR のマージを待っています。終わると通知が来るので…」）だけで全部素通りするので、
+// **完了通知の到着待ち・マージ待ちの言い回し自体**を W に含める。
+const ARRIVAL_WAIT = /(?:終わる|終わった|完了する|完了した|マージされ(?:る|た))[^」"'\n]{0,20}(?:自動で)?(?:知らせ|通知|連絡)が(?:届|来|着)|(?:知らせ|通知|連絡)が(?:届|来|着)[^」"'\n]{0,20}(?:まで)?待|届き次第(?:検証|確認|対応|報告)|(?:PR|マージ|取り込み)[^」"'\n]{0,20}を待って(?:います|いる|ます|おります)/;
+const LANE_STATUS_WAIT = /(?:セッション|Codex|codex-do|他AI|レーン)[^\n」"']{0,60}?(?:完了は?まだ|まだ完了|完了待ち|結果を待って|(?:している|ている|待っている|動いている|走っている)ところです|(?:している|ている)最中|を待っています|を待っている)/;
+const W  = { find: text => auditAwareFind(new RegExp(`(数分|しばらく|少し|少々)[^」"'\\n]{0,20}(お?待ち|待って)|完了を?待って|完了待ちで|[^\\s」"'\\n]{0,30}?のを待って(?:います|ます|いる|おります)|${ARRIVAL_WAIT.source}|${LANE_STATUS_WAIT.source}`), text) };
 const FIX = '実装|修正|改修|恒久|恒久化|修復|作り直';
 const HANDOFF_LINE = /次に\s*kim\s*がすること[:：][ \t*_`]*([^\r\n]*)/;
 // 2026-10-17T06:40:46.164Z / session 3694d684: 太字ラベル直後の「特になし」を P3 と誤検出した。
 const HANDOFF_EMPTY = /^[\s*_`]*(?:なし|ありません|ありません。|特になし|無し)/;
+// 「main へのマージ／着地の承認」を kim に渡す手渡しも P3 とする。FIX 語（修正・実装…）が無くても、
+// 具体的なコミット/branch を名指しして着地の承認を求める文は Claude が PR+automerge で実行できる作業で、
+// 人に渡すべき手順ではない。実測（2026-10-23T07:23:51Z / 342a5479、2026-10-24T04:36:20Z / 61af55b9）では
+// FIX 語が無いため P3 も next-action-gate も素通りし、同じ先送りが 2 日続いた。
+// 対象語を「具体的な識別子（7桁以上の hex / slash を含む branch 風トークン）」に限るのは、
+// 既存の非該当例 `PR #14 を確認（マージ判断のみ）`（確認作業の依頼）を巻き込まないため。
+const LANDING_DEFERRAL = /(マージ|着地|取り込|merge)/i;
+const LANDING_TARGET = /\b[0-9a-f]{7,40}\b|[\w.-]+\/[\w.-]+/;
+const LANDING_APPROVAL = /(承認|判断|決め|指示|ください|返す|据え置き|待ち)/;
+export function isLandingDeferral(value) {
+  const text = String(value ?? '');
+  return LANDING_DEFERRAL.test(text) && LANDING_TARGET.test(text) && LANDING_APPROVAL.test(text);
+}
 // 「可否」は裸では実現可能性の名詞（実行可否/利用可否/復旧の可否）で誤検出になるため、
 // 許可要求の形（疑問節「か」＋可否）に限定する。
 const ASK_PERMISSION = /(やりますか|進めますか|進めてよいか|よろしいですか|(?<=か)の?可否|判断してください|決めてください|選んでください)/;
@@ -82,7 +110,7 @@ const ASK_CONTEXT = /(恒久|配布|自動修復|実装|修正|改修|恒久化)
 const P3 = {
   find(text) {
     for (const match of text.matchAll(new RegExp(HANDOFF_LINE, 'g'))) {
-      if (!isAuditCitation(text, match.index) && !HANDOFF_EMPTY.test(match[1]) && new RegExp(FIX).test(match[1])) return match;
+      if (!isAuditCitation(text, match.index) && !HANDOFF_EMPTY.test(match[1]) && (new RegExp(FIX).test(match[1]) || isLandingDeferral(match[1]))) return match;
     }
     return null;
   }

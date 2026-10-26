@@ -28,6 +28,9 @@ tools/.ps.tmp.ps1
 # Isolated CI verification home and evidence
 /.tmp-home-ci/
 
+# quota-sweep ループのローカル状態（tools/quota-sweep.mjs が「コミット対象外」と設計）
+.loop/
+
 # 夜間 eval-harness が ~/.claude/eval-results.jsonl から再生成するマシンローカル生成物。
 # 追跡すると毎晩 dirty になり dirty-worktree-guard が rescue ブランチを作るため追跡しない。
 tools/routing-table.json
@@ -43,8 +46,32 @@ scratch/
 .wt/
 /evidence/internal-audit-v11/
 
+# IG 投稿用の機械ローカル作業ディレクトリ。未登録だったため rescue が
+# part1.b64 / part2.b64 を拾い、重複 PR (#819) の遠因になっていた。
+.fleet-ig-post/
+
+# headless セッションが repo 直下に置く使い捨て作業ファイル（.tmp-extract-session.mjs 等）。
+# 未登録だったため rescue が拾い、内部のセッション要約 (.tmp-session-digest.txt) が
+# 公開リポジトリの rescue ブランチに push された（2026-10-20 実測）。
+/.tmp-*
+
 # Local feedback-kit state and supervisor report
 tools/.feedback-zero-local.json
 FEEDBACK_KIT_REPORT.md
 .feedback-kit-backup/
+
+# 2026-10-21〜22 実測: origin の rescue 枝に機械ローカルの作業/証跡ディレクトリが
+# そのまま push され続けていた（.landing/ 14 ファイル・.gate-rollout-check/ 18・
+# .expense-leak-evidence/ 156・.scratch-lahaina/ 6・.scratch/ 4・.qwen/ 4）。
+# いずれも main に追跡ファイルが無く、どのツールからも参照されない使い捨て成果物なので
+# リポジトリには入れない。dirty-worktree-guard の status は ignore 済みパスを見ないため、
+# ここに登録すると救済ブランチ自体が作られなくなる。
+/.landing/
+/.gate-rollout-check/
+/.expense-leak-evidence/
+/.scratch*/
+/.qwen/
 .work/
+/evidence/internal-audit-v13/
+
+/evidence/internal-audit-v14/

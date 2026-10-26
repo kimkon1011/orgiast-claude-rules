@@ -10,6 +10,7 @@ const required = {
   'git が無ければ導入する': /winget install --id Git\.Git/,
   '承諾を書く': /fleet-agent-optin\.json/,
   'setup --converge を実行する': /setup\.mjs'\) --converge/,
+  'node-runtime-security を含む全ステップの結果を表示する': /Say \("setup --converge: exit=" \+ \$LASTEXITCODE \+ "`n" \+ \$setupOut\.TrimEnd\(\)\)/,
   '受信タスクを再登録する': /register-fleet-mail\.ps1/,
   'Codex の担当を名簿と照合する': /codexAccount/,
   'Codex をシークレットウィンドウでログインする': /--incognito/,

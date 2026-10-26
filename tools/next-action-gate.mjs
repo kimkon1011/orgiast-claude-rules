@@ -4,10 +4,14 @@ import { isEntry } from './is-entry.mjs';
 import { readTranscriptContext } from './lib/assistant-text.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { currentTurnEntries, blocks } from './state-claim-evidence.mjs';
+import { isLandingDeferral } from './permanent-fix-deferral-scan.mjs';
 
 export const MIN_ENFORCED_LENGTH = 200;
 const FOOTER_PATTERN = /(?:^|\n)次に kim がすること:[ \t]*([^\r\n]*)\r?\n(?:[ \t]*\r?\n)?この後の自動進行:[ \t]*([^\r\n]*)\r?\n(?:[ \t]*\r?\n)?このセッション:[ \t]*([^\r\n]*)$/;
 const MULTIPLE_ACTIONS_PATTERN = /[、,，・]/;
+const OPEN_ACTION_PATTERN = /マージ|merge|\bPR\b|#\d+|https?:\/\/|\]\(|開く|開いて|ひらいて|確認(?:する|して|を)|見る|見て|目を通|レビュー|チェック(?:する|して)|読む|読んで|反映を確か/i;
+const HUMAN_ONLY_PATTERN = /支払|入金|決済|課金|OAuth|同意|ログインして許可|アカウント(?:を)?作成|物理|現地|署名|押印|電話(?:する|して)|口頭|選んで|選ぶ|決めて|決める|判断/;
+const OPEN_ACTION_REASON = '[NEXT-ACTION-OPEN] 「次に kim がすること」に、開いて見る・確認する・マージする・レビューするなど、Claude や自動処理で済む項目が入っています。開く手間そのものが user の負担です（2026-10-26 cr 指摘）。(1) 状態は自分で照会する（例: gh pr view <N> --json state,mergedAt）。済んでいれば書かない (2) 未了なら自分で実行するか（gh pr merge <N> --squash --auto 等）「この後の自動進行」に回す (3) この行は「なし」にする。書いてよいのは人にしかできない操作（支払い・OAuth 同意・アカウント作成・物理作業・本文で選択肢を示した判断）だけ。例外は [NEXT-ACTION-OPEN-OK: <理由>]。';
 const WAITING_PATTERN = /(完了通知|待ち|実行中|バックグラウンド|cron|定期実行|CI)/i;
 const BACKGROUND_PATTERN = /(バックグラウンド|実行中|完了通知|Codex が|走ってい)/i;
 const COMPLETE_PATTERN = /^なし\s*[（(]\s*完了\s*[）)]$/;
@@ -120,7 +124,38 @@ export function reportsCloseSteps(text) {
   return numbered('1') && numbered('2') && numbered('3');
 }
 
-export function judgeNextAction(text, transcriptRaw = '') {
+// auto-progress --add-check survives user turns (the ledger carries the check forward); background evidence belongs only to this turn.
+function hasSessionWakeup(raw) {
+  let autoProgress = false;
+  let background = false;
+  for (const line of String(raw || '').split(/\r?\n/)) {
+    let entry;
+    try { entry = JSON.parse(line); } catch { continue; }
+    if (!entry || entry.isSidechain === true) continue;
+    const role = entry.message?.role || entry.type;
+    const content = entry.message?.content;
+    const parts = Array.isArray(content) ? content : [];
+    const text = typeof content === 'string' ? content : parts.filter(b => b?.type === 'text').map(b => b.text || '').join('\n');
+    if (role === 'user' && !entry.isMeta && !parts.some(b => b?.type === 'tool_result')
+      && !/^\s*<task-notification>/.test(text)) background = false;
+    if (role !== 'assistant') continue;
+    for (const tool of parts) {
+      if (tool?.type !== 'tool_use') continue;
+      if (/^(?:Bash|PowerShell)$/.test(tool.name || '')) {
+        const cmd = String(tool.input?.command || tool.input?.script || '');
+        if (/\bauto-progress(?:\.mjs)?\b/.test(cmd) && /--add-check\b/.test(cmd) && !/--help\b/.test(cmd)) {
+          autoProgress = true;
+        }
+      }
+      // Completion detection is deliberately conservative: any current-turn call counts.
+      if ((tool.name === 'Agent' && tool.input?.run_in_background !== false)
+        || (/^(?:Bash|PowerShell)$/.test(tool.name || '') && tool.input?.run_in_background === true)) background = true;
+    }
+  }
+  return autoProgress || background;
+}
+
+export function judgeNextAction(text, transcriptRaw = '', input = {}) {
   const source = String(text || '').trimEnd();
   if (!enabled()) return { decision: 'pass', reason: 'disabled' };
   const permanentFix = permanentFixViolation(source, transcriptRaw);
@@ -129,7 +164,10 @@ export function judgeNextAction(text, transcriptRaw = '') {
 
   const footer = footerValues(source);
   // フッターを書いた短文も定型文を検査する（短文素通しで『閉じてOKです』が通った 2026-10-09 実害）。
-  if (!footer && source.length < MIN_ENFORCED_LENGTH) return permanentFix || { decision: 'pass', reason: 'short-response' };
+  // 短文素通しは雑談・相槌だけ。ツールで作業したターンは短文・空文でもフッター必須
+  // （作業後に「No response requested.」だけで終わり、自動進行が台帳に載らず kim が進捗を聞く羽目になった 2026-10-23 実害）。
+  const worked = blocks(currentTurnEntries(transcriptRaw), 'tool_use').length > 0;
+  if (!footer && (!worked || !source) && source.length < MIN_ENFORCED_LENGTH) return permanentFix || { decision: 'pass', reason: 'short-response' };
   if (!footer) {
     return {
       decision: 'block',
@@ -143,8 +181,11 @@ export function judgeNextAction(text, transcriptRaw = '') {
   if (footer.nextAction !== 'なし' && MULTIPLE_ACTIONS_PATTERN.test(footer.nextAction)) {
     return { decision: 'block', code: 'NEXT-ACTION-MULTIPLE', reason: 'kim への手渡しが2件以上あります。§1.1 最上位原則に従い、まず自分で潰して1件以下にしてください。' };
   }
-  if (!footer.autopilot) {
-    return { decision: 'block', code: 'AUTOPILOT-EMPTY', reason: '「この後の自動進行:」の値が空です。誰が・何を・いつ・どうやって kim に届けるかを書いてください。' };
+  const openActionOverride = [...source.matchAll(/\[NEXT-ACTION-OPEN-OK:[ \t]*([^\]\r\n]*)\]/g)]
+    .some(([, reason]) => [...reason.trim()].length >= 5);
+  if (footer.nextAction !== 'なし' && OPEN_ACTION_PATTERN.test(footer.nextAction)
+    && !HUMAN_ONLY_PATTERN.test(footer.nextAction) && !openActionOverride) {
+    return { decision: 'block', code: 'NEXT-ACTION-OPEN', reason: OPEN_ACTION_REASON };
   }
   if (!footer.session) {
     return { decision: 'block', code: 'SESSION-EMPTY', reason: `「このセッション:」の値が空です。${SESSION_PHRASE_LIST}のいずれかを一字一句そのまま書いてください。` };
@@ -155,7 +196,8 @@ export function judgeNextAction(text, transcriptRaw = '') {
   }
   const body = source.slice(0, source.lastIndexOf('次に kim がすること:'));
   const isComplete = COMPLETE_PATTERN.test(footer.autopilot);
-  if (!isComplete && footer.autopilot.length < 10) {
+  const hasAutopilot = !!footer.autopilot && !footer.autopilot.startsWith('なし');
+  if (hasAutopilot && footer.autopilot.length < 10) {
     return { decision: 'block', code: 'AUTOPILOT-TOO-SHORT', reason: '「この後の自動進行:」が10文字未満です。誰が・何を・いつ・どうやって kim に届けるかを具体化してください。' };
   }
   if (isComplete && WAITING_PATTERN.test(body)) {
@@ -167,8 +209,12 @@ export function judgeNextAction(text, transcriptRaw = '') {
   if (sessionState === 'closed' && !hasSessionCloseEvidence(source, transcriptRaw)) {
     return { decision: 'block', code: 'SESSION-CLOSE-NO-EVIDENCE', reason: `「このセッション: ${SESSION_PHRASES.closed}」とありますが、本文または会話に /session-close を実行した形跡がありません。/session-close を実行するか、「${SESSION_PHRASES.pending}」にしてください。` };
   }
-  if (footer.nextAction !== 'なし' && (DEFERRAL_PATTERN.test(footer.nextAction) || (IMPLEMENTATION_PATTERN.test(footer.nextAction) && DELIVERY_PATTERN.test(body)))) {
+  if (footer.nextAction !== 'なし' && (DEFERRAL_PATTERN.test(footer.nextAction) || isLandingDeferral(footer.nextAction) || (IMPLEMENTATION_PATTERN.test(footer.nextAction) && DELIVERY_PATTERN.test(body)))) {
     return { decision: 'block', code: 'NEXT-ACTION-DEFERRAL', reason: DEFERRAL_REASON };
+  }
+  if (!permanentFix && hasAutopilot && process.env.CLAUDE_HEADLESS !== '1'
+    && !/subagents/i.test(input.transcript_path || '') && !hasSessionWakeup(transcriptRaw)) {
+    return { decision: 'block', code: 'AUTOPILOT-NO-SESSION-WAKEUP', reason: '「この後の自動進行」が残っていますが、このセッションを定期的に起こす仕組みがありません。node tools/auto-progress.mjs --add-check --session <id> --check "<cmd>" --deadline +24h --label "<名前>" --next-claude "<次の手>" で進捗確認を登録してから終えてください。自動進行が無いなら「この後の自動進行: なし」と書いてください。' };
   }
   return permanentFix || { decision: 'pass', reason: 'valid-footer' };
 }
@@ -183,7 +229,7 @@ async function main() {
     const context = readTranscriptContext(input?.transcript_path);
     const assistantText = input?.assistant_text || context.assistantText;
     if (!assistantText) return;
-    const result = judgeNextAction(assistantText, context.raw);
+    const result = judgeNextAction(assistantText, context.raw, input);
     if (result.decision === 'block') process.stdout.write(`${JSON.stringify({ decision: 'block', reason: result.reason })}\n`);
   } catch { /* ゲート自身の失敗で応答を止めない。 */ }
 }

@@ -64,6 +64,8 @@ const DELEG = [
 const RUNNING = [
   '実行中', 'バックグラウンドで実行', 'バックグラウンド実行', '稼働開始',
   '完了通知を待', '完了待ち', '完了を待っ', '終了通知を待', '待機', '走らせて',
+  // 2026-10-23 実測: 『Codex が実装中です』が語彙漏れで false になっていたため追加。
+  '実装中', '作業中', '対応中', '作成中', '構築中', '修正中',
 ].join('|');
 
 // 委譲語と実行中語の許容距離（文字数）
@@ -84,7 +86,7 @@ const BANNER = /\*\*\[(?:委譲判定|夜間判定)\]\*\*[^\n]*/g;
 
 /** 定型バナー行を空白に置換した本文（判定・根拠表示はこちらを使う）。 */
 export function stripBanners(text) {
-  return String(text || '').replace(BANNER, ' ');
+  return String(text || '').replace(BANNER, ' ').replace(/待機プロセス/g, ' ');
 }
 
 /** 1 turn の本文が「委譲して実行中で終えた」型かを判定する。 */
@@ -101,7 +103,7 @@ export function firstMatch(text) {
   return m ? m[0] : '';
 }
 
-/** 陽性5件・陰性5件。走査の前に必ず通す。 */
+/** 陽性9件・陰性7件。走査の前に必ず通す。 */
 export const CONTROLS = [
   { name: 'P1 バックグラウンド実行中 ID', text: 'Codex に委譲しました（バックグラウンド実行中 ID: b3kw1ixab）。', want: true },
   { name: 'P2 レーンに渡して実行中', text: '実装は Codex レーンに渡して実行中です。完了通知を待ちます。', want: true },
@@ -117,6 +119,9 @@ export const CONTROLS = [
   { name: 'P6 バナー＋本物の委譲実行中は陽性のまま', text: '**[委譲判定]** 実装=Codex（理由: 定型の量産）\n**[夜間判定]** 即時実行（理由: 待機理由なし）\nCodex に委譲しました（バックグラウンド実行中 ID: b3kw1ixab）。\n', want: true },
   // 2026-10-15 02:14:23Z / 700b6033 の実文（従来語彙では「完了通知を待」に一致せず取りこぼしていた）。
   { name: 'P7 レーン完了待ち（通知を挟まない variant）', text: '実装レーン（codex-do → Gemini フォールバック）の完了待ちです。Gemini 側はシェル実行が拒否されているため、終了後に成果物を確認します。', want: true },
+  { name: 'P8 実装中（2026-10-23 実文）', text: 'オフィスステーション用エクセルの出力ボタンを Codex が実装中です。作る内容は次のとおりです。', want: true },
+  { name: 'P9 作業中（2026-10-22 実文）', text: '送付欄の表記変更は Codex が作業中です。終わったら本番まで出して確認します。', want: true },
+  { name: 'N7 実装中の一般文（委譲語なし）', text: 'この機能を実装中に気をつける点は、既存データとの互換性です。', want: false },
 ];
 
 export function selftest() {
@@ -132,27 +137,57 @@ export function selftest() {
 function isRealUserPrompt(rec) {
   if (rec?.type !== 'user') return false;
   const c = rec?.message?.content;
-  if (typeof c === 'string') return true;
+  if (typeof c === 'string') {
+    return ![
+      'Stop hook feedback:',
+      '<task-notification>',
+      '<system-reminder>',
+      '[HANDOFF-REGRET]',
+    ].some((prefix) => c.startsWith(prefix));
+  }
   return Array.isArray(c)
     && c.some((b) => b?.type === 'text')
     && !c.some((b) => b?.type === 'tool_result');
 }
 
-/** hit 後、同じ user-turn 内で codex-do の前景実行が完了したか。 */
+/** 同じ user-turn 内で委譲を起動し、hit 後にその完了結果または完了通知を受け取ったか。 */
 function completedCodexDoInTurn(records, hitIndex) {
+  let start = 0;
+  for (let i = hitIndex - 1; i >= 0; i--) {
+    if (isRealUserPrompt(records[i])) {
+      start = i + 1;
+      break;
+    }
+  }
   const end = records.findIndex((rec, i) => i > hitIndex && isRealUserPrompt(rec));
   const limit = end < 0 ? records.length : end;
-  let toolUseSeen = false;
-  for (let i = hitIndex; i < limit; i++) {
+  const delegationToolUseIds = new Set();
+  for (let i = start; i < limit; i++) {
     const rec = records[i];
     const c = rec?.message?.content;
     if (rec?.type === 'assistant' && Array.isArray(c)) {
-      if (c.some((b) => b?.type === 'tool_use'
-        && b?.name === 'Bash'
-        && /codex-do\.mjs/.test(String(b?.input?.command || '')))) toolUseSeen = true;
+      for (const b of c) {
+        if (b?.type === 'tool_use'
+          && b?.name === 'Bash'
+          && /codex-do\.mjs|codex\s+exec\b|cheap-code\.mjs/.test(String(b?.input?.command || ''))) {
+          delegationToolUseIds.add(b.id || '*');
+        }
+      }
     }
-    if (toolUseSeen && rec?.type === 'user' && Array.isArray(c)
-      && c.some((b) => b?.type === 'tool_result')) return true;
+  }
+  for (let i = hitIndex + 1; i < limit; i++) {
+    const rec = records[i];
+    const c = rec?.message?.content;
+    if (rec?.type === 'user' && Array.isArray(c)
+      && c.some((b) => b?.type === 'tool_result'
+        && !/(?:\b(?:running in background|background with ID)\b|バックグラウンドで実行中\s*ID)/i.test(String(b?.content || ''))
+        && (b.tool_use_id ? delegationToolUseIds.has(b.tool_use_id) : delegationToolUseIds.size > 0))) return true;
+    if (rec?.type === 'user' && typeof c === 'string'
+      && c.includes('<task-notification>')
+      && c.includes('<status>completed</status>')) {
+      const toolUseId = c.match(/<tool-use-id>([^<]+)<\/tool-use-id>/)?.[1];
+      if (toolUseId && delegationToolUseIds.has(toolUseId)) return true;
+    }
   }
   return false;
 }

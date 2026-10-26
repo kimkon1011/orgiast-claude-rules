@@ -75,6 +75,9 @@ test('FLEET_NO_SELF_HEAL=1 で無効、kim-PC 自身は mail を送らない、�
 test('repairAdvice: 自動修復と人の操作の区別', () => {
   assert.equal(repairAdvice('codex', 'native_failed:wsl').auto, true);
   assert.equal(repairAdvice('codex', 'dead:oauth_consent').auto, false);
+  assert.equal(repairAdvice('gemini', 'probe_failed:stale').silent, true);
+  assert.equal(repairAdvice('gemini', 'probe_failed:stale').human, null);
+  assert.equal(repairAdvice('gemini', 'auth_invalid').auto, false);
   assert.equal(repairAdvice('codex', 'dead:oauth_consent').fixNow, true);
   assert.match(repairAdvice('codex', 'dead:physical_operation').human, /wsl/);
   assert.equal(repairAdvice('deepseek', 'dead:payment_required').fixNow, false);
@@ -123,4 +126,19 @@ test('配信失敗(delivered:none)は未通知のまま残り次回再試行す�
   const notify = async () => ({ delivered: n++ ? 'dm' : 'none' });
   assert.equal((await runLaneHealthWatch({ home, now, notify, selfLabel: 'kim-PC', pcMap: {}, readInboxImpl })).notified.length, 0);
   assert.equal((await runLaneHealthWatch({ home, now, notify, selfLabel: 'kim-PC', pcMap: {}, readInboxImpl })).notified.length, 1);
+});
+
+test('probe起動失敗は当日済みにせず次回再試行する', async t => {
+  const r = run(t, { codex: alive });
+  assert.deepEqual(await r.call({ spawnSyncImpl: () => ({ status: null, error: new Error('timeout'), stdout: '' }) }), { skipped: 'probe-failed' });
+  assert.equal(fs.existsSync(path.join(r.dir, '.fleet-lane-health-day')), false);
+  assert.deepEqual(await r.call(), { healthy: true });
+});
+test('同日でもstaleがあればprobeを再実行する', async t => {
+  const r = run(t, { codex: alive });
+  await r.call();
+  fs.writeFileSync(path.join(r.dir, 'lane-health.json'), JSON.stringify({ lanes: { codex: { alive: false, reason: 'probe_failed:stale' } } }));
+  assert.deepEqual(await r.call(), { healthy: true });
+  assert.equal(r.spawns.length, 2);
+  assert.equal(r.spawns[1].opts.env.ORGIAST_HOME, path.dirname(r.dir));
 });

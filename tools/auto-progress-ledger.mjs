@@ -9,7 +9,7 @@ import { readAssistantText } from './lib/assistant-text.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { resolveOwner } from './notify-owner.mjs';
 
-const NONE = /^(?:なし|無し|ナシ|—|–|-|－|ー|―|n\/a|none)$/i;
+const NONE = /^(?:なし|無し|ナシ|ありません|—|–|-|－|ー|―|n\/a|none)$/i;
 // 「**この後の自動進行**: text」「- この後の自動進行：text」など装飾付きにも一致させる。
 const PROMISE_RE = /この後の自動進行[\s*`_)）」』]*[:：][ \t]*([^\r\n]*)/g;
 const NEXT_KIM_RE = /次に\s*kim\s*がすること[\s*`_)）」』]*[:：][ \t]*([^\r\n]*)/gi;
@@ -81,9 +81,28 @@ export function latestOpenPromises(rows) {
 }
 
 // 同一 sessionId の open 行は最新で置換する（旧行は superseded）。resumed も「進行中の宣言」なので置換対象。
+// 同じ session に open の check 付き行があるときは、新しい約束行に check 情報を引き継ぐ。
 export function applyPromise(rows, record) {
-  const next = rows.map((row) => (row.sessionId === record.sessionId && OPEN_STATUSES.has(row.status) ? { ...row, status: 'superseded' } : row));
-  next.push(record);
+  let toAdd = record;
+  if (!toAdd.check) {
+    const existing = rows
+      .filter((row) => row.sessionId === record.sessionId && OPEN_STATUSES.has(row.status) && row.check)
+      .sort((a, b) => (Date.parse(b.ts) || 0) - (Date.parse(a.ts) || 0))[0];
+    if (existing) {
+      toAdd = {
+        ...toAdd,
+        check: existing.check,
+        checkCwd: existing.checkCwd ?? toAdd.cwd,
+        deadlineAt: existing.deadlineAt,
+        label: existing.label,
+        nextClaude: existing.nextClaude,
+        ...(existing.checkTimeoutMs ? { checkTimeoutMs: existing.checkTimeoutMs } : {}),
+        ...(existing.lastUnmetNotifiedAt ? { lastUnmetNotifiedAt: existing.lastUnmetNotifiedAt } : {}),
+      };
+    }
+  }
+  const next = rows.map((row) => (row.sessionId === toAdd.sessionId && OPEN_STATUSES.has(row.status) ? { ...row, status: 'superseded' } : row));
+  next.push(toAdd);
   return next;
 }
 
@@ -101,6 +120,22 @@ export function buildRecord(input, text, { now = Date.now(), hostname = os.hostn
 
 function safeUser() { try { return os.userInfo().username; } catch { return ''; } }
 
+// 通知の出どころ1行。DM 本文だけで「どの PC・アカウント・プロジェクトの Claude Code か」を判別できるようにする（2026-10-23 kim 指示）。
+export function originLine(row, { label = '', localOwner = '', home = '' } = {}) {
+  const pc = label && row.pc && label !== row.pc ? `${label}（${row.pc}）` : (label || row.pc || '不明なPC');
+  const account = row.owner || localOwner || row.user || '不明';
+  const project = String(row.cwd || '').split(/[\\/]+/).filter(Boolean).pop() || '不明';
+  let purpose = row.purpose || row.sessionPurpose || row.objective || '';
+  if (!purpose && home && row.sessionId) {
+    try { purpose = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'session-purpose', `${row.sessionId}.json`), 'utf8')).purpose || ''; } catch {}
+  }
+  purpose = String(purpose).replace(/\s+/g, ' ').trim();
+  const parts = [`プロジェクト: ${project}`];
+  if (purpose) parts.push(`セッションの目的: ${purpose.length > 50 ? `${purpose.slice(0, 50)}…` : purpose}`);
+  if (row.sessionId) parts.push(`作業ID: ${String(row.sessionId).slice(0, 8)}`);
+  return `【${pc}・${account} の Claude Code】${parts.join(' ／ ')}`;
+}
+
 export function record(input, { home, now, hostname, user, owner, readText = (p) => readAssistantText(p).text } = {}) {
   const text = typeof input?.last_assistant_message === 'string' && input.last_assistant_message.trim()
     ? input.last_assistant_message
@@ -108,8 +143,9 @@ export function record(input, { home, now, hostname, user, owner, readText = (p)
   const row = buildRecord(input, text, { now, hostname, user, owner: owner ?? resolveOwner({ home }) });
   if (!row) return null;
   const file = ledgerFile(home);
-  writeLedger(file, applyPromise(readLedger(file), row));
-  return row;
+  const rows = applyPromise(readLedger(file), row);
+  writeLedger(file, rows);
+  return rows.at(-1);
 }
 
 async function main() {
@@ -127,7 +163,9 @@ export const rowKey = (row) => `${row.pc}|${row.user}|${row.sessionId}|${row.ts}
 export function isUnattendedRow(row, home) {
   const normalize = value => String(value || '').replace(/\\/g, '/').replace(/^\/mnt\/([a-z])\//i, '$1:/').replace(/\/+$/, '').toLowerCase();
   const cwd = normalize(row.cwd), root = normalize(home);
-  return /(?:^|\/)\.stall-sweeper(?:\/|$)/.test(cwd) || ['nightly-repo', 'auto-session', 'scratch'].some(name => {
+  const request = cleanValue(row.requestText || String(row.promise || '').replace(/^API エラー（.*?）で返答できなかった依頼:\s*/, ''));
+  const probe = /^(?:[「『"']?)(?:OK|了解)(?:[」』"']?)\s*とだけ\s*(?:返して(?:ください)?|返信して(?:ください)?|答えて(?:ください)?)[。.!！\s]*$/i.test(request);
+  return probe || /^c:\/windows\/system32(?:\/|$)/.test(cwd) || /(?:^|\/)\.stall-sweeper(?:\/|$)/.test(cwd) || ['nightly-repo', 'auto-session', 'scratch'].some(name => {
     const base = `${root}/.claude/${name}`;
     return cwd === base || cwd.startsWith(`${base}/`);
   });

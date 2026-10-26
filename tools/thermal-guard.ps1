@@ -372,8 +372,16 @@ switch ($Mode) {
         $taskName = "OrgiastThermalGuard"
         $scriptPath = $PSCommandPath
         try {
-            $arg = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $scriptPath + '"'
-            $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arg
+            # -WindowStyle Hidden は起動後に隠すだけで、重いと空の青い窓が残る(2026-10-26 実測)。
+            # wscript 経由の run-hidden.vbs で最初から窓を作らない。
+            $hiddenHelper = Join-Path $PSScriptRoot 'ensure-run-hidden.ps1'
+            if (Test-Path -LiteralPath $hiddenHelper) {
+                . $hiddenHelper
+                $action = New-HiddenScheduledTaskAction -Execute 'powershell.exe' -ChildArgument @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath)
+            } else {
+                $arg = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $scriptPath + '"'
+                $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arg
+            }
             # -Once + -RepetitionInterval で「5分ごとに無期限」。PS5.1 では期間を明示しないと
             # 1回で終わることがあるため、十分長い期間を渡す。
             $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650)

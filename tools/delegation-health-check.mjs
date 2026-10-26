@@ -168,11 +168,11 @@ const WSL_LANE_ABSENT = /WSL ディストリが見つかりません/;
 // 実体は z.ai Coding Plan の weekly/monthly 上限到達(HTTP 429 / error.code 1310,
 // "Weekly/Monthly Limit Exhausted")。レーンは壊れておらず、上限リセットで自動回復する。
 export function isQuotaLimitedRow(row = {}) {
-  return /^http_?(402|429)$/.test(String(row?.status ?? '').toLowerCase());
+  return /^(?:http_?)?(402|429)$/.test(String(row?.status ?? '').toLowerCase());
 }
 
 export function isBillingSuspendedRow(row = {}) {
-  return /^http_?(402|429)$/.test(String(row?.status ?? '').toLowerCase())
+  return /^(?:http_?)?(402|429)$/.test(String(row?.status ?? '').toLowerCase())
     && isPermanentBillingDetail(row?.reason);
 }
 
@@ -496,7 +496,17 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
     const emptyDiffRows = rows.filter(isEmptyDiffEscalationRow);
     // quota-sweep は停止理由を status に書くので、failed 以外（deadline/ceiling/exhausted/no-goal）は
     // 正常停止。トークン0でも分母に入れない（入れると「窓が無いので見送った」3回で high 起票になる）。
-    const attempts = rows.filter((row) => !isCooldownSkippedRow(row) && !isEmptyDiffEscalationRow(row) && !isQuotaSweepBenignRow(row));
+    // 'skipped' 行(auto-session-executor の no-cheap-executor)は「cheap-code/<provider> exit 3」と書く。
+    // exit 3 の実体は cheap-code が cooldown/残高切れで起動を省いた記録で、その cooldown が行の時刻に
+    // 有効だったなら、投げていない行であって全滅の証拠ではない(2026-10-25 実測: deepseek HTTP402 の
+    // 24h cooldown 中に積まれた32件が lane_outage_unrepaired になった)。cooldown が切れた後の行は対象外。
+    const skippedByCooldown = (row) => {
+      if (row.provider !== 'skipped' || row.status !== 'no-cheap-executor') return false;
+      const name = /^cheap-code\/([\w-]+) exit 3$/.exec(String(row.reason || ''))?.[1];
+      const until = Number(cooldown[name]?.until);
+      return Number.isFinite(until) && Date.parse(row.t) <= until;
+    };
+    const attempts = rows.filter((row) => !isCooldownSkippedRow(row) && !skippedByCooldown(row) && !isEmptyDiffEscalationRow(row) && !isQuotaSweepBenignRow(row));
     // 24h 窓が cooldown だけで埋まる＝上限中で一度も試行していない。レーンは止まっているが
     // 原因は上限側で、コードの欠陥ではない。low の可視化だけ残す(high にすると上限が明けるまで
     // 毎晩同じ偽の修理タスクが積まれる。黙って消すと止まっている事実自体が見えなくなる)。

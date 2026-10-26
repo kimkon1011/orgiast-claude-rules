@@ -1024,6 +1024,37 @@ test('cooldown だけで埋まった窓は可視化だけ残し high の起票�
   assert.equal(skippedFinding.evidence[3], 'cooldown lane_doctor_usage_limit / until 2026-09-09T13:00:00.000Z');
 });
 
+const SKIPPED_ROW = (i, provider = 'deepseek') => ({ t: `2026-09-09T10:2${i}:10.987Z`, provider: 'skipped', category: 'unrouted', model: 'none', status: 'no-cheap-executor', reason: `cheap-code/${provider} exit 3` });
+
+test('残高切れ cooldown 中に積まれた skipped(cheap-code exit 3) は全滅の high にしない', () => {
+  const dir = home();
+  write(dir, 'provider-cooldown.json', { deepseek: { until: NOW.getTime() + 3_600_000, reason: 'http_402' } });
+  write(dir, 'executor-usage.jsonl', [0, 1, 2, 3].map((i) => SKIPPED_ROW(i)).map(row).join(''));
+  const findings = collectFindings({ home: dir, now: NOW });
+  assert.equal(findings.some((f) => f.id === 'lane_outage_unrepaired'), false);
+  assert.equal(findings.find((f) => f.id === 'provider_cooldown_skipped').severity, 'low');
+  assert.equal(findings.find((f) => f.id === 'provider_balance_exhausted').evidence[0], 'provider deepseek');
+});
+
+test('cooldown が切れた後の skipped(exit 3) や cooldown の無い provider は high の未修理全滅のまま', () => {
+  const dir = home();
+  // deepseek の cooldown は行より前に切れている。glm は cooldown 記録なし。
+  write(dir, 'provider-cooldown.json', { deepseek: { until: Date.parse('2026-09-09T09:00:00Z'), reason: 'http_402' } });
+  write(dir, 'executor-usage.jsonl', [0, 1].map((i) => SKIPPED_ROW(i)).concat([SKIPPED_ROW(2, 'glm')]).map(row).join(''));
+  const outage = collectFindings({ home: dir, now: NOW }).find((f) => f.id === 'lane_outage_unrepaired');
+  assert.equal(outage.severity, 'high');
+  assert.equal(outage.evidence[0], '3件すべて失敗');
+});
+
+test('status が数値 402 の旧形式行(http_ 接頭辞なし)も残高切れとして扱い high にしない', () => {
+  const dir = home();
+  const rows = [0, 1, 2].map((i) => ({ t: `2026-09-09T10:2${i}:10.987Z`, provider: 'deepseek', model: 'deepseek-flash', in: 3932, out: 22, secs: 3.1, ok: false, status: 402 }));
+  write(dir, 'executor-usage.jsonl', rows.map(row).join(''));
+  const findings = collectFindings({ home: dir, now: NOW });
+  assert.equal(findings.some((f) => f.id === 'lane_outage_unrepaired'), false);
+  assert.equal(findings.find((f) => f.id === 'provider_usage_limit').provider, 'deepseek');
+});
+
 test('cooldown 行が混ざっても上限以外の失敗があれば high の未修理全滅のままにする', () => {
   const dir = home();
   const rows = [0, 1].map(COOLDOWN_ROW).concat(

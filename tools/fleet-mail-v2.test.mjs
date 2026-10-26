@@ -1158,14 +1158,17 @@ for (const thrown of [false, true]) {
 
 for (const error of ['busy', 'fleet-mail read-back mismatch']) {
   test(`J real client ${error} retains send diagnostics and id`, async t => {
-    const f = fixture(t);
+    const f = fixture(t); const sleeps = [];
     delete f.deps.request;
+    f.deps.sleep = async ms => { sleeps.push(ms); };
     f.deps.fetch = async (_url, options) => {
       f.calls.push(JSON.parse(options.body));
       return { ok: true, json: async () => ({ ok: false, error }) };
     };
     assert.equal(await main(sendArgs(f), f.deps), 1);
-    assert.equal(f.calls.length, 1);
+    // GAS の busy はシートを書く前に返るので createClient が 3 試行まで再送する（1s/2s）。他の拒否は再送しない。
+    assert.equal(f.calls.length, error === 'busy' ? 3 : 1);
+    assert.deepEqual(sleeps, error === 'busy' ? [1000, 2000] : []);
     if (error === 'busy') assert.match(f.errors.at(-1), /送信されていない/);
     else assert.ok(f.errors.at(-1).includes(`--sent-status ${f.calls[0].id}`));
   });

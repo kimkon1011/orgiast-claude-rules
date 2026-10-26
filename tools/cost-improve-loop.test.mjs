@@ -877,6 +877,19 @@ test('名簿16行は除外し計測不能3行だけを①と④に表示する',
 });
 
 // ---- 保留(deferred): Codex の上限・無人割当は失敗ではない ----
+test('runAutoCodexIsolated: PR 作成には --label automerge を付ける', async () => {
+  const { runAutoCodexIsolated } = await import('./cost-improve-loop.mjs');
+  const calls = [];
+  const acts = [{ kind: 'x', pc: 'p', specContent: '修正する' }];
+  runAutoCodexIsolated({ acts, specFile: 'spec.md', repoPath: os.tmpdir(), spawnSync: autoCodexSpawnMocks(calls) });
+  const creates = calls.filter(({ program, args }) => program === 'gh' && args[0] === 'pr' && args[1] === 'create');
+  assert.equal(creates.length, 1);
+  const args = creates[0].args;
+  assert.ok(args.includes('--label'));
+  assert.equal(args[args.indexOf('--label') + 1], 'automerge');
+  assert.equal(acts[0].pr, 'https://github.com/orgiast/orgiast-claude-rules/pull/123');
+});
+
 test('runAutoCodexIsolated: codex-do が保留(75)を返したら failed にせず deferred と retryAt を記録する', async () => {
   const { runAutoCodexIsolated } = await import('./cost-improve-loop.mjs');
   const retryAt = Date.now() + 3600000;

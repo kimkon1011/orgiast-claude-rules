@@ -111,6 +111,22 @@ test('Growi 中継はハブでなければ処理しない', async t => {
   const f = growiFixture(t, { hub: false }); await pollOnce(f.deps);
   assert.equal(f.calls.some(call => call.kind === 'mail-send'), false); assert.equal(f.read('mail-original').growiAppendDoneAt, undefined);
 });
+test('Growi 中継は FLEET_HUB 未設定でもハブ本体なら処理して返信する', async t => {
+  const f = growiFixture(t);
+  fs.writeFileSync(path.join(f.dir, 'fleet-sheet.env'), 'FLEET_SHEET_URL=https://example.invalid/mail\nFLEET_SHEET_TOKEN=fixture\n');
+  f.deps.label = 'kim-PC';
+  await pollOnce(f.deps);
+  const sent = f.calls.find(call => call.kind === 'mail-send');
+  assert.equal(sent.payload.replyTo, 'mail-original'); assert.match(sent.payload.body, /"ok":true/);
+  assert.ok(f.read('mail-original').growiAppendDoneAt);
+});
+test('Growi 中継は FLEET_HUB 未設定かつハブ本体以外なら処理しない', async t => {
+  const f = growiFixture(t);
+  fs.writeFileSync(path.join(f.dir, 'fleet-sheet.env'), 'FLEET_SHEET_URL=https://example.invalid/mail\nFLEET_SHEET_TOKEN=fixture\n');
+  f.deps.label = sender;
+  await pollOnce(f.deps);
+  assert.equal(f.calls.some(call => call.kind === 'mail-send'), false); assert.equal(f.read('mail-original').growiAppendDoneAt, undefined);
+});
 test('Growi 中継は処理済みメールを二重処理しない', async t => {
   const f = growiFixture(t); await pollOnce(f.deps); await pollOnce(f.deps);
   assert.equal(f.calls.filter(call => call.kind === 'mail-send').length, 1);

@@ -11,12 +11,16 @@ import { machineIdentity } from './machine-identity.mjs';
 import { addDecision, listDecisions } from './pending-decisions.mjs';
 import { loadOptin, redactSecrets, consentCommand, validExecCwd, truncateAnswer } from './fleet-agent.mjs';
 import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
-import { relayQuestions, readQuestion, clearResume, reconcileResumes, collectQuestions, validSessionId, RESUME_LIMIT_MS } from './fleet-question-relay.mjs';
+import { relayQuestions, readQuestion, clearResume, reconcileResumes, collectQuestions, validSessionId, RESUME_LIMIT_MS, HUB_LABEL } from './fleet-question-relay.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { LANE_HEALTH_KIM_PC, parseLaneDoctorOutput, deadLanes, repairAdvice, laneHealthSignature, buildLaneHealthMail } from './lib/lane-health.mjs';
 import { dailyRuleCompliance } from './fleet-rule-compliance-daily.mjs';
 import { appendAfterFromEnv } from './growi-manual.mjs';
 export { resolveFleetLabel, dailyRuleCompliance };
+
+export function isFleetHub(label, config) {
+  return label === (config.FLEET_HUB || HUB_LABEL);
+}
 
 const ownRepo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -965,7 +969,7 @@ export async function pollOnce(deps = {}) {
           }
           continue;
         }
-        const growiRequest = Object.hasOwn(fleetMembers, mail.from) && label === config.FLEET_HUB && fs.existsSync(path.join(dir, 'growi.env'))
+        const growiRequest = Object.hasOwn(fleetMembers, mail.from) && isFleetHub(label, config) && fs.existsSync(path.join(dir, 'growi.env'))
           && mail.kind === 'note' && /^\[growi-append\]/.test(String(mail.why ?? '')) && !mail.growiAppendDoneAt;
         if (growiRequest && !growiAppendHandled) {
           growiAppendHandled = true;

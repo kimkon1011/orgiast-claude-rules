@@ -634,9 +634,28 @@ function save(hash, now) {
   if (dryRun) return;
   try { fs.mkdirSync(path.dirname(statePath), { recursive: true }); fs.writeFileSync(statePath, `${JSON.stringify({ lastCheck: now.toISOString(), hash }, null, 2)}\n`, 'utf8'); } catch {}
 }
+export const INDEX_BUDGET_BYTES = 8000;
+export const INDEX_PROTECTED = [
+  /副作用・影響は報告で終わらせず、その場で直す/,
+  /effortLevel.*medium/,
+  /planIncluded.*監督.*全用途禁止/,
+  /setup --converge.*allow/,
+];
+
 export function makeIndex(body) {
-  const lines = body.replace(/\r\n/g, '\n').split('\n');
+  let fence = null;
+  const lines = body.replace(/\r\n/g, '\n').split('\n').filter(line => {
+    const marker = line.match(/^\s*(`{3,}|~{3,})(.*)$/);
+    if (fence) {
+      if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length && !marker[2].trim()) fence = null;
+      return false;
+    }
+    if (!marker) return true;
+    fence = marker[1];
+    return false;
+  });
   const kept = [indexLead];
+  const conclusions = new Map();
   let previousNonempty = '';
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -654,7 +673,15 @@ export function makeIndex(body) {
         const candidate = lines[j].trim();
         if (!candidate) continue;
         const end = candidate.indexOf('。');
-        kept.push(end >= 0 ? candidate.slice(0, end + 1) : candidate);
+        // 結論文の日付付き由来も見出しと同じく全文へ委ねる(予算の常時の余裕を作る)。
+        const conclusion = (end >= 0 ? candidate.slice(0, end + 1) : candidate).replace(/（(?:kim\s+)?\d{4}-\d{2}-\d{2}[^）]*）/g, '');
+        // 結論として拾った絶対ルール・太字小見出しも短縮対象にしない。
+        if (!/^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u.test(candidate)
+          && !/^\*\*\d+(?:\.\d+)+\s+.+\*\*$/.test(candidate)
+          && !INDEX_PROTECTED.some(pattern => pattern.test(conclusion))) {
+          conclusions.set(kept.length, [...conclusion]);
+        }
+        kept.push(conclusion);
         break;
       }
     }
@@ -663,7 +690,18 @@ export function makeIndex(body) {
     // 行末の日付付き由来（2026-10-23 cr 等）だけは全文へ委ねる。文中の由来は適用範囲を含むので残す。
     if (/^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u.test(line) && kept.at(-1) !== line) kept.push(line.replace(/（(?:kim\s+)?\d{4}-\d{2}-\d{2}[^）]*）(?=。?\*\*$)/u, ''));
   }
-  return kept.join('\n');
+  const original = kept.join('\n');
+  if (Buffer.byteLength(original) <= INDEX_BUDGET_BYTES || !conclusions.size) return original;
+  // 文書内の位置ではなく結論の長さ順に、必要な件数だけ短縮する。
+  for (const [i, chars] of [...conclusions].sort((a, b) => b[1].length - a[1].length)) {
+    const comma = chars.indexOf('、');
+    const shortened = chars.slice(0, comma >= 0 ? comma : 20).join('') + '…';
+    if (Buffer.byteLength(shortened) >= Buffer.byteLength(kept[i])) continue;
+    kept[i] = shortened;
+    const result = kept.join('\n');
+    if (Buffer.byteLength(result) <= INDEX_BUDGET_BYTES) return result;
+  }
+  return original;
 }
 export function build(current, body, label) {
   const block = `${beginPrefix} (自動同期 ${label}) -->\n${body}\n- 全社共有の知見（kim-PC の memory を毎日自動配布・読み取り専用）: @~/.claude/shared-memory/MEMORY.md ／ 詳細は同ディレクトリの index/*.md と各ファイルを Read で辿る\n${endMarker}`;

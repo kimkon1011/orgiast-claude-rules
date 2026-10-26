@@ -103,6 +103,15 @@ try {
             Write-NightlyStepResult 'expense-leak-check' $expenseExit $expenseOutput
         } catch { Write-NightlyLog 'expense-leak-check' ('error:' + $_.Exception.Message) }
     } else { Write-NightlyLog 'expense-leak-check' 'skip:script missing' }
+    # 窓を出す起動方式で(再)登録された定期タスクを毎晩 run-hidden.vbs へ包み直す。
+    $hideTasks = Join-Path $PSScriptRoot 'hide-task-windows.ps1'
+    if (Test-Path -LiteralPath $hideTasks -PathType Leaf) {
+        try {
+            $hideOutput = @(& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $hideTasks 2>&1)
+            $hideExit = $LASTEXITCODE
+            Write-NightlyStepResult 'hide-task-windows' $hideExit $hideOutput ' (警告・後続処理続行)'
+        } catch { Write-NightlyLog 'hide-task-windows' ('error:' + $_.Exception.Message) }
+    } else { Write-NightlyLog 'hide-task-windows' 'skip:script missing' }
 
     Write-NightlyLog 'node確認' 'ok'
     try {

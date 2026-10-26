@@ -405,6 +405,30 @@ const addCheckCmd = 'node tools/auto-progress.mjs --add-check --session test --c
 const addCheckBash = use('Bash', { command: addCheckCmd });
 const addCheckPs = use('PowerShell', { command: addCheckCmd });
 
+const humanWaitText = `恒久策: 一回限り: 初回トークン保存は本人の操作が必要
+次に kim がすること: 西さんがトークンを保存する
+この後の自動進行: 私が保存を定期確認して結果を報告します
+このセッション: ${SESSION_PHRASES.open}`;
+
+test('人待ちの自動進行はbackgroundだけではblockし台帳チェックを要求する', () => {
+  for (const transcript of ['', use('Bash', { run_in_background: true }), use('PowerShell', { run_in_background: true }), use('Agent', { run_in_background: true })]) {
+    const result = judgeNextAction(humanWaitText, transcript);
+    assert.equal(result.decision, 'block');
+    assert.equal(result.code, 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK');
+    assert.ok(result.reason.includes('人待ちの自動進行は台帳の定期チェックに載せる: node tools/auto-progress.mjs --add-check --session <id> --check "<exit0=達成/1=未達のコマンド>" --deadline +7d --label "<名前>"'));
+  }
+});
+
+test('人待ちの自動進行はこのターンまたは過去ターンの台帳チェック登録でpass', () => {
+  for (const transcript of [addCheckBash, addCheckPs, `${addCheckBash}\n${row('user', '進捗どう？')}`]) {
+    assert.equal(judgeNextAction(humanWaitText, transcript).decision, 'pass');
+  }
+});
+
+test('人待ちがなければbackground Bashだけで自動進行を認める', () => {
+  assert.equal(judgeNextAction(promiseText, use('Bash', { run_in_background: true })).decision, 'pass');
+});
+
 test('自動進行の約束だけではblock、CronCreateだけもblock、ブロック文にauto-progress.mjs --add-checkを含む', () => {
   const blocked = judgeNextAction(promiseText);
   assert.equal(blocked.code, 'AUTOPILOT-NO-SESSION-WAKEUP');

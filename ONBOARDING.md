@@ -1156,7 +1156,7 @@ Bashは1呼び出し1コマンドとし、専用ツールとallow済みの経路
 gh api repos/kimkon1011/orgiast-claude-rules --jq .permissions   # push:true を確認
 git push origin HEAD:refs/heads/<branch>
 gh pr create --repo kimkon1011/orgiast-claude-rules --base main --head <branch> --title ... --body-file - --label automerge
-# 作成時に付け損ねた PR だけ: gh pr edit <番号> --repo kimkon1011/orgiast-claude-rules --add-label automerge
+gh pr edit <番号> --repo kimkon1011/orgiast-claude-rules --add-label automerge   # 作成時に付け損ねた PR だけ
 gh pr view <番号> --repo kimkon1011/orgiast-claude-rules --json autoMergeRequest   # null でないこと
 ```
 

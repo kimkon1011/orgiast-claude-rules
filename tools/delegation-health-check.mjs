@@ -167,8 +167,19 @@ const WSL_LANE_ABSENT = /WSL ディストリが見つかりません/;
 // 2026-10-13 診断: glm の「3件すべて失敗」は 1 リクエストの再試行(attempt 0/1/2)で、
 // 実体は z.ai Coding Plan の weekly/monthly 上限到達(HTTP 429 / error.code 1310,
 // "Weekly/Monthly Limit Exhausted")。レーンは壊れておらず、上限リセットで自動回復する。
+// cheap-code の台帳行は status が数値の 402/429(http_ 接頭辞なし)で残る。
 export function isQuotaLimitedRow(row = {}) {
-  return /^http_?(402|429)$/.test(String(row?.status ?? '').toLowerCase());
+  return /^(http_?)?(402|429)$/.test(String(row?.status ?? '').toLowerCase());
+}
+
+// auto-session が cheap-code の exit 3(cheap-code が課金/上限 cooldown を記録済みの終了)を
+// provider:'skipped' で台帳に残す行。実体は上流 provider の停止で、'skipped' というレーンの全滅ではない。
+// 上流 provider の cooldown が今も有効なときだけ、その provider 名を返す。
+const SKIPPED_CHEAP_EXIT3 = /^cheap-code\/([a-z0-9_-]+) exit 3$/;
+export function skippedUpstreamProvider(row = {}, cooldown = {}, nowMs = Date.now()) {
+  if (row?.provider !== 'skipped') return null;
+  const upstream = SKIPPED_CHEAP_EXIT3.exec(String(row?.reason ?? ''))?.[1];
+  return upstream && Number(cooldown?.[upstream]?.until) > nowMs ? upstream : null;
 }
 
 export function isBillingSuspendedRow(row = {}) {
@@ -527,13 +538,17 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
     // 上限・課金切れ・一過性ネットワークだけで全滅した行は「レーンが壊れている」証拠ではない。
     // 実測 2026-10-22: kimi の 24h 449 行 = http_429 440 + status:'network' 9(10.7秒で
     // タイムアウト) で、network を no_output 扱いしていたため毎日 high になっていた。
-    const benign = attempts.filter((row) => isQuotaLimitedRow(row) || emptyOutputReason(row) === 'infra_transient');
+    const upstreamOf = (row) => skippedUpstreamProvider(row, cooldown, nowMs);
+    const benign = attempts.filter((row) => isQuotaLimitedRow(row) || upstreamOf(row) || emptyOutputReason(row) === 'infra_transient');
     const billingSuspended = attempts.filter(isBillingSuspendedRow);
     // 行に reason が無い旧記録でも、llm-fallback が残した 24h の恒久課金切れ cooldown で判別できる。
-    const billingCooldown = cooldown[provider]?.permanentBilling === true && Number(cooldown[provider]?.until) > nowMs;
+    // cheap-code が書く 402 の cooldown は permanentBilling を持たず reason:http_402 だけなので、それも課金切れとして扱う。
+    const isBillingCooldown = (name) => (cooldown[name]?.permanentBilling === true || cooldown[name]?.reason === 'http_402') && Number(cooldown[name]?.until) > nowMs;
+    const billingCooldownProvider = isBillingCooldown(provider) ? provider : attempts.map(upstreamOf).find((name) => name && isBillingCooldown(name));
+    const billingCooldown = Boolean(billingCooldownProvider);
     if ((billingSuspended.length || billingCooldown) && benign.length === attempts.length) {
       findings.push({ id: 'provider_billing_suspended', provider, severity: 'low', title: `${provider} は残高切れで停止（チャージ待ち・コードでは直せない）`,
-        evidence: [`${billingSuspended.length}件が恒久課金切れ`, ...(billingCooldown ? [`cooldown ${cooldown[provider].reason} until ${new Date(Number(cooldown[provider].until)).toISOString()}`] : []),
+        evidence: [`${billingSuspended.length}件が恒久課金切れ`, ...(billingCooldown ? [`cooldown ${billingCooldownProvider === provider ? '' : `${billingCooldownProvider} `}${cooldown[billingCooldownProvider].reason} until ${new Date(Number(cooldown[billingCooldownProvider].until)).toISOString()}`] : []),
           ...reasonTop(billingSuspended.map(row => ({ reason: row.reason || row.stderrTail || emptyOutputReason(row) })))] });
       continue;
     }

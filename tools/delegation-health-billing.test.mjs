@@ -77,3 +77,38 @@ test('24h の恒久課金切れ cooldown があれば reason 無しの 429 で�
   assert.equal(finding?.severity, 'low');
   assert.match(finding.evidence.join(' '), /cooldown http_429/);
 });
+
+// 2026-10-26 実測: cheap-code が書く台帳行は status:402(数値・reason 無し)で、cooldown も http_402 のみ
+// (permanentBilling 無し)。http_ 接頭辞が無いため全滅(high)扱いになっていた。
+test('cheap-code の数値 status 402 と http_402 cooldown は残高切れとして low にする', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', [0, 1, 2].map((n) => row({
+    t: new Date(NOW.getTime() - n * 60_000).toISOString(), provider: 'deepseek', status: 402, out: 0,
+  })).join(''));
+  write(dir, 'provider-cooldown.json', { deepseek: { until: NOW.getTime() + 86_400_000, at: NOW.getTime(), reason: 'http_402' } });
+  const findings = collectFindings({ home: dir, now: NOW });
+  assert.equal(findings.some((item) => item.id === 'lane_outage_unrepaired'), false);
+  assert.equal(findings.find((item) => item.id === 'provider_billing_suspended')?.severity, 'low');
+});
+
+// auto-session が cheap-code の exit 3(課金/上限 cooldown 記録済み)を provider:'skipped' で台帳に残す行。
+// 実体は上流 provider の残高切れで、「skipped」というレーンの全滅ではない。
+test("provider:'skipped' の cheap-code exit 3 は上流 provider の http_402 cooldown で残高切れとして low にする", () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', [0, 1, 2].map((n) => row({
+    t: new Date(NOW.getTime() - n * 3_600_000).toISOString(), provider: 'skipped', category: 'unrouted', model: 'none', status: 'no-cheap-executor', reason: 'cheap-code/deepseek exit 3',
+  })).join(''));
+  write(dir, 'provider-cooldown.json', { deepseek: { until: NOW.getTime() + 86_400_000, at: NOW.getTime(), reason: 'http_402' } });
+  const findings = collectFindings({ home: dir, now: NOW });
+  assert.equal(findings.some((item) => item.id === 'lane_outage_unrepaired'), false);
+  assert.equal(findings.find((item) => item.id === 'provider_billing_suspended')?.severity, 'low');
+});
+
+test("provider:'skipped' の exit 3 でも上流 cooldown が無ければ従来どおり全滅(high)のまま", () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', [0, 1, 2].map((n) => row({
+    t: new Date(NOW.getTime() - n * 3_600_000).toISOString(), provider: 'skipped', category: 'unrouted', model: 'none', status: 'no-cheap-executor', reason: 'cheap-code/deepseek exit 3',
+  })).join(''));
+  const findings = collectFindings({ home: dir, now: NOW });
+  assert.equal(findings.find((item) => item.id === 'lane_outage_unrepaired')?.severity, 'high');
+});

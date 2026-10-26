@@ -157,7 +157,7 @@ function hasSessionWakeup(raw) {
 
 // 直近の human prompt 以降の全エントリ。task-notification・hook 由来の user エントリはターン境界にしない
 // （background 通知の後の空ターンで tool_use が 0 件に見え、作業済みなのに素通りした 2026-10-26 実害）。
-const SYSTEM_USER_PATTERN = /^s*(?:<task-notification>|<system-reminder>|Stop hook feedback|[Subagent hand-back])/;
+const SYSTEM_USER_PATTERN = /^\s*(?:<task-notification>|<system-reminder>|Stop hook feedback|\[Subagent hand-back\])/;
 export function workedTurnEntries(raw) {
   let entries = [];
   for (const line of String(raw || '').split(/?

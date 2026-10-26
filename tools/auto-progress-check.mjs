@@ -16,10 +16,22 @@ export function resolveCheckTimeout(row) {
   return Number.isFinite(value) && value > 0 ? Math.min(value, MAX_CHECK_TIMEOUT_MS) : CHECK_TIMEOUT_MS;
 }
 export const oneLine = (value, limit = 240) => String(value || '').split(/\r?\n/, 1)[0].trim().slice(0, limit);
-export function executeCheck(row, { home, spawnImpl = spawnSync } = {}) {
-  const result = spawnImpl(row.check, { shell: true, cwd: row.checkCwd || row.cwd, encoding: 'utf8',
+export function resolveCheckShell({ platform = process.platform, env = process.env, exists = fs.existsSync } = {}) {
+  if (platform !== 'win32') return null;
+  if (env.ORGIAST_CHECK_SHELL) return env.ORGIAST_CHECK_SHELL;
+  const candidates = [
+    env.ProgramFiles && path.win32.join(env.ProgramFiles, 'Git', 'bin', 'bash.exe'),
+    env['ProgramFiles(x86)'] && path.win32.join(env['ProgramFiles(x86)'], 'Git', 'bin', 'bash.exe'),
+    env.LOCALAPPDATA && path.win32.join(env.LOCALAPPDATA, 'Programs', 'Git', 'bin', 'bash.exe'),
+  ];
+  return candidates.find(candidate => candidate && exists(candidate)) || null;
+}
+export function executeCheck(row, { home, spawnImpl = spawnSync, shellPath = resolveCheckShell() } = {}) {
+  const options = { cwd: row.checkCwd || row.cwd, encoding: 'utf8',
     timeout: resolveCheckTimeout(row), maxBuffer: 64 * 1024, windowsHide: true,
-    env: { ...process.env, ORGIAST_HOME: home, ORGIAST_CHECK_TIMEOUT_MS: String(resolveCheckTimeout(row)) } });
+    env: { ...process.env, ORGIAST_HOME: home, ORGIAST_CHECK_TIMEOUT_MS: String(resolveCheckTimeout(row)) } };
+  const result = shellPath ? spawnImpl(shellPath, ['-c', row.check], options)
+    : spawnImpl(row.check, { ...options, shell: true });
   const code = result.error || result.signal ? null : result.status;
   return { code, text: oneLine(result.stdout) || (code === 0 ? '達成を確認' : code === 1 ? '未達' : `check エラー: ${oneLine(result.error?.message || result.stderr) || code}`) };
 }

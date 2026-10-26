@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test, { after } from 'node:test';
 import { addCheck } from './auto-progress.mjs';
-import { executeCheck, CHECK_TIMEOUT_MS, MAX_CHECK_TIMEOUT_MS } from './auto-progress-check.mjs';
+import { executeCheck, resolveCheckShell, CHECK_TIMEOUT_MS, MAX_CHECK_TIMEOUT_MS } from './auto-progress-check.mjs';
 import { readLedger, writeLedger, ledgerFile } from './auto-progress-ledger.mjs';
 import { run as watch } from './auto-progress-watch.mjs';
 import { run as digest } from './auto-progress-digest.mjs';
@@ -100,7 +100,7 @@ test('check errors do not mark done; repeated errors notify once', async () => {
 test('executeCheck honors exit contract, first line and bounded execution', () => {
   const command = `"${process.execPath}" -e "console.log('first');console.log('second');process.exit(1)"`;
   assert.deepEqual(executeCheck({ check: command }, { home: tmp() }), { code: 1, text: 'first' });
-  const result = executeCheck({ check: 'anything' }, { home: tmp(), spawnImpl: (_, options) => {
+  const result = executeCheck({ check: 'anything' }, { home: tmp(), shellPath: null, spawnImpl: (_, options) => {
     assert.equal(options.timeout, CHECK_TIMEOUT_MS); assert.equal(options.windowsHide, true);
     return { status: null, error: new Error('timeout'), stdout: '' };
   } });
@@ -109,10 +109,10 @@ test('executeCheck honors exit contract, first line and bounded execution', () =
 test('executeCheck lets a row extend its timeout for network-bound checks, bounded and validated', () => {
   const seen = [];
   const spawnImpl = (_, options) => { seen.push(options.timeout); assert.equal(options.env.ORGIAST_CHECK_TIMEOUT_MS, String(options.timeout)); return { status: 0, stdout: 'ok' }; };
-  executeCheck({ check: 'gh run view', checkTimeoutMs: 180000 }, { home: tmp(), spawnImpl });
-  executeCheck({ check: 'gh run view', checkTimeoutMs: 999999 }, { home: tmp(), spawnImpl });
-  executeCheck({ check: 'gh run view', checkTimeoutMs: 0 }, { home: tmp(), spawnImpl });
-  executeCheck({ check: 'gh run view', checkTimeoutMs: 'soon' }, { home: tmp(), spawnImpl });
+  executeCheck({ check: 'gh run view', checkTimeoutMs: 180000 }, { home: tmp(), shellPath: null, spawnImpl });
+  executeCheck({ check: 'gh run view', checkTimeoutMs: 999999 }, { home: tmp(), shellPath: null, spawnImpl });
+  executeCheck({ check: 'gh run view', checkTimeoutMs: 0 }, { home: tmp(), shellPath: null, spawnImpl });
+  executeCheck({ check: 'gh run view', checkTimeoutMs: 'soon' }, { home: tmp(), shellPath: null, spawnImpl });
   assert.deepEqual(seen, [180000, MAX_CHECK_TIMEOUT_MS, CHECK_TIMEOUT_MS, CHECK_TIMEOUT_MS]);
 });
 test('WeChat counts current/previous month only, inclusive since, ignores empty/invalid/unrelated data without exposing text', () => {
@@ -155,3 +155,50 @@ test('digest: hundreds of rows across three categories stay within one DM and 18
   assert.ok(messages[0].length < 1800);
   assert.equal((await digest({ home, now: now + 3600000, slot: '朝', io })).sent, false);
 });
+
+test('resolveCheckShell selects Git Bash in candidate order and honors override', () => {
+  const env = { ProgramFiles: 'C:\\Program Files', 'ProgramFiles(x86)': 'C:\\Program Files (x86)', LOCALAPPDATA: 'C:\\Users\\test\\AppData\\Local' };
+  const candidates = [path.win32.join(env.ProgramFiles, 'Git', 'bin', 'bash.exe'),
+    path.win32.join(env['ProgramFiles(x86)'], 'Git', 'bin', 'bash.exe'),
+    path.win32.join(env.LOCALAPPDATA, 'Programs', 'Git', 'bin', 'bash.exe')];
+  candidates.forEach((expected, index) => {
+    assert.equal(resolveCheckShell({ platform: 'win32', env, exists: candidate => candidates.slice(index).includes(candidate) }), expected);
+  });
+  assert.equal(resolveCheckShell({ platform: 'win32', env: { ...env, ORGIAST_CHECK_SHELL: 'custom-bash' }, exists: () => assert.fail('override must win') }), 'custom-bash');
+  assert.equal(resolveCheckShell({ platform: 'win32', env, exists: () => false }), null);
+  assert.equal(resolveCheckShell({ platform: 'win32', env: {}, exists: () => assert.fail('no candidate') }), null);
+  assert.equal(resolveCheckShell({ platform: 'linux', env: { ORGIAST_CHECK_SHELL: 'custom-bash' }, exists: () => assert.fail('non-Windows') }), null);
+});
+test('executeCheck invokes explicit Bash without shell and preserves execution options', () => {
+  const home = tmp(), check = 'gh pr view 1145 --jq .state | grep -q MERGED';
+  assert.deepEqual(executeCheck({ check, checkCwd: home }, { home, shellPath: 'git-bash', spawnImpl: (shell, args, opts) => {
+    assert.equal(shell, 'git-bash'); assert.deepEqual(args, ['-c', check]);
+    assert.equal(Object.hasOwn(opts, 'shell'), false); assert.equal(opts.cwd, home);
+    assert.equal(opts.timeout, CHECK_TIMEOUT_MS); assert.equal(opts.maxBuffer, 64 * 1024);
+    assert.equal(opts.windowsHide, true); assert.equal(opts.encoding, 'utf8'); assert.equal(opts.env.ORGIAST_HOME, home);
+    return { status: 1, stdout: '' };
+  } }), { code: 1, text: '未達' });
+});
+test('executeCheck with null shell retains the shell:true invocation', () => {
+  executeCheck({ check: 'check command' }, { shellPath: null, spawnImpl: (...args) => {
+    assert.equal(args.length, 2); assert.equal(args[0], 'check command'); assert.equal(args[1].shell, true);
+    return { status: 0, stdout: 'ok' };
+  } });
+});
+for (const { code, allowMet, accepted } of [
+  { code: 1, accepted: true }, { code: 0, accepted: false },
+  { code: 0, allowMet: true, accepted: true }, { code: null, accepted: false }, { code: 2, accepted: false },
+]) {
+  test(`addCheck probe code=${code} allowMet=${!!allowMet}`, () => {
+    const home = tmp(); register(home);
+    const file = ledgerFile(home), before = fs.readFileSync(file, 'utf8');
+    const cwd = home;
+    const add = () => addCheck({ home, now: now + 1, session: 'session', check: 'check command', label: 'test', deadline: '+24h', cwd, allowMet,
+      probe: row => { assert.deepEqual(row, { check: 'check command', checkCwd: cwd, cwd }); return { code, text: 'probe result' }; } });
+    if (accepted) { add(); assert.equal(readLedger(file).length, 2); }
+    else {
+      assert.throws(add, code === 0 ? /既に達成.*probe result/ : /この PC で実行できません.*probe result/);
+      assert.equal(fs.readFileSync(file, 'utf8'), before);
+    }
+  });
+}

@@ -188,18 +188,22 @@ export function runGh(args, options = {}, spawn = spawnSync) {
 // 夜間巡回の一時的な 5xx / rate limit / ネットワーク断を吸収する。読み取り専用なので再試行してよい。
 export function defaultSleep(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
 
+function lookupDiagnostic(...values) {
+  return redactSecrets(values.filter(Boolean).join(' | '))
+    .replace(/https?:\/\/[^\s<>"']+/gi, '[URL REDACTED]')
+    .replace(/\s+/g, ' ').trim().slice(0, 500);
+}
+
 export function lookupFeedbackIssue(messageId, repo, gh, { attempts = 3, delayMs = 2000, sleep = defaultSleep } = {}) {
   let detail = 'no attempt';
   for (let i = 0; i < attempts; i++) {
     if (i > 0) sleep(delayMs * 2 ** (i - 1));
     let lookup;
     try { lookup = gh(['issue','list','--repo',repo,'--state','all','--search',`"feedback-dm:${messageId}" in:body`,'--json','number,url,body','--limit','100']); }
-    catch (error) { detail = error.message; continue; }
+    catch (error) { detail = lookupDiagnostic(error?.message || String(error)); continue; }
     if (lookup?.error || lookup?.status !== 0) {
       // Preserve the cause without copying credentials or unbounded CLI output into alerts.
-      const diagnostic = redactSecrets(String(lookup?.error?.message || lookup?.stderr || ''))
-        .replace(/https?:\/\/[^\s<>"']+/gi, '[URL REDACTED]')
-        .replace(/\s+/g, ' ').trim().slice(0, 500);
+      const diagnostic = lookupDiagnostic(lookup?.error?.message, lookup?.stderr);
       detail = `status=${lookup?.status}${diagnostic ? `: ${diagnostic}` : ''}`;
       continue;
     }

@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   ensureFeedbackIssue,
+  lookupFeedbackIssue,
   appendFeedbackIssueLedger,
   buildIssueBody,
   chainBoothFeedbackIntake,
@@ -297,4 +298,19 @@ test('Issue lookup diagnostics redact secrets and URLs before limiting output', 
       return true;
     });
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+ test('Issue lookup preserves stderr alongside spawn errors and sanitizes thrown errors', () => {
+  assert.throws(() => lookupFeedbackIssue('id', 'o/r', () => ({
+    status: null, error: new Error('spawn ETIMEDOUT'), stderr: 'HTTP 502 upstream unavailable',
+  }), { attempts: 1 }), /status=null: spawn ETIMEDOUT \| HTTP 502 upstream unavailable/);
+  const secret = 'ghp_' + 'z'.repeat(36);
+  assert.throws(() => lookupFeedbackIssue('id', 'o/r', () => {
+    throw new Error(`network failure ${secret} https://example.test/private\n${'x'.repeat(800)}`);
+  }, { attempts: 1 }), error => {
+    assert.match(error.message, /network failure/);
+    assert.doesNotMatch(error.message, /z{36}|private|\n/);
+    assert.ok(error.message.length < 550);
+    return true;
+  });
 });

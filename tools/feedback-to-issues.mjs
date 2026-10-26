@@ -276,13 +276,40 @@ function increment(reasons, reason) {
   reasons[reason] = (reasons[reason] || 0) + 1;
 }
 
-export async function main(args = process.argv.slice(2)) {
+// Cache belongs to one invocation; duplicate app/host mappings share a single probe.
+export function precheckRepositories(repos, gh = runGh) {
+  const statuses = new Map();
+  for (const repo of new Set(repos)) {
+    let result;
+    try { result = gh(['api', `repos/${repo}`]); }
+    catch { statuses.set(repo, 'spawn-error'); continue; }
+    const http = String(result?.stderr || '').match(/HTTP\s+(\d{3})\b/i)?.[1];
+    statuses.set(repo, result?.error ? 'spawn-error'
+      : result?.status === 0 ? 'OK' : http || 'gh-error');
+  }
+  return statuses;
+}
+
+export function warnUnreachableRepositories(statuses, gh = runGh) {
+  const unreachableRepos = [...statuses].filter(([, status]) => status !== 'OK')
+    .map(([repo, status]) => ({ repo, status }));
+  if (!unreachableRepos.length) return;
+  let account = 'unknown';
+  try {
+    const result = gh(['api', 'user', '--jq', '.login']);
+    if (!result?.error && result?.status === 0) account = clean(result.stdout) || 'unknown';
+  } catch {}
+  console.warn(lookupDiagnostic(`[feedback-to-issues] 到達不能リポジトリ: ${unreachableRepos.map(({ repo, status }) => `${repo}(${status})`).join(', ')} / 実行アカウント: ${account} / 対処: 該当 repo に実行アカウントをコラボレーター招待するか feedback-apps.json を修正`));
+}
+
+export async function main(args = process.argv.slice(2), {
+  gh = runGh, request = relayRequest, config = loadRelayConfig(), home = os.homedir(),
+} = {}) {
   const dry = args.includes('--dry') || args.includes('--dry-run');
   const dismissId = parseDismissId(args);
   const limitIndex = args.indexOf('--limit');
   const requestedLimit = limitIndex >= 0 ? Number.parseInt(args[limitIndex + 1], 10) : 5;
   const limit = Number.isInteger(requestedLimit) && requestedLimit > 0 ? requestedLimit : 5;
-  const config = loadRelayConfig();
   if (!config.url || !config.secret) {
     console.log('feedback-to-issues: 中継が未設定なのでスキップ');
     return 0;
@@ -298,7 +325,7 @@ export async function main(args = process.argv.slice(2)) {
     }
     const urls = relayUrls(config.url);
     try {
-      const ack = await relayRequest(urls.ack, config.secret, {
+      const ack = await request(urls.ack, config.secret, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message_id: dismissId }),
@@ -311,27 +338,27 @@ export async function main(args = process.argv.slice(2)) {
     console.log(`feedback-to-issues: 対象外にしました message_id=${dismissId}`);
     return 0;
   }
-  const probe = runGh(['--version']);
-  if (probe.error || probe.status !== 0) {
-    console.log('feedback-to-issues: gh が無いのでスキップ');
-    return 0;
-  }
-
   const repoMapValue = process.env.FEEDBACK_REPO_MAP || '';
   const hostMapValue = process.env.FEEDBACK_HOST_MAP || '';
+  const statuses = precheckRepositories([
+    ...Object.values(DEFAULT_REPO_MAP), ...Object.values(parseRepoMap(repoMapValue)),
+    ...Object.values(parseHostMap(hostMapValue)),
+  ], gh);
   const reasons = {};
   let items;
   const urls = relayUrls(config.url);
   try {
-    const data = await relayRequest(urls.pending, config.secret);
+    const data = await request(urls.pending, config.secret);
     if (!Array.isArray(data.items)) throw new Error('items が配列ではない応答');
     items = data.items;
   } catch (error) {
     console.error(`feedback-to-issues: 中継からの取得に失敗 (${error.message})`);
+    warnUnreachableRepositories(statuses, gh);
     return 1;
   }
 
-  const { selected, remaining: overLimit } = selectCandidates(items, limit, repoMapValue, hostMapValue);
+  const reachableItems = items.filter((item) => statuses.get(resolveRepoForItem(item, repoMapValue, hostMapValue)) === 'OK');
+  const { selected, remaining: overLimit } = selectCandidates(reachableItems, limit, repoMapValue, hostMapValue);
   const selectedIds = new Set(selected.map((item) => String(item.message_id)));
   let created = 0;
   let acked = 0;
@@ -356,6 +383,10 @@ export async function main(args = process.argv.slice(2)) {
       increment(reasons, '未マッピング');
       continue;
     }
+    if (statuses.get(repo) !== 'OK') {
+      increment(reasons, '到達不能リポジトリ');
+      continue;
+    }
     if (!appRepo) {
       let hostname = '';
       try { hostname = new URL(clean(item?.source_url)).hostname; } catch {}
@@ -377,11 +408,11 @@ export async function main(args = process.argv.slice(2)) {
     }
 
     try {
-      ensureFeedbackIssue(item, repo);
+      ensureFeedbackIssue(item, repo, { gh, home });
       created += 1;
       console.log(`feedback-to-issues: 作成済み repo=${repo} title=${title} message_id=${messageId}`);
       try {
-        const ack = await relayRequest(urls.ack, config.secret, {
+        const ack = await request(urls.ack, config.secret, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ message_id: item.message_id }),
@@ -404,6 +435,7 @@ export async function main(args = process.argv.slice(2)) {
   // dry-run と未 ack の項目はすべて中継に残るため、取得範囲内の残件として明示する。
   const remaining = dry ? items.length : items.length - acked;
   console.log(`作成: ${dry ? 0 : created}件 / スキップ: ${skipped}件（${details}）/ 残り: ${remaining}件`);
+  warnUnreachableRepositories(statuses, gh);
   return 0;
 }
 

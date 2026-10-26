@@ -75,7 +75,8 @@ test('既定の確認先: ホーム配下から導き、特定PCのユーザー�
   process.env.ORGIAST_HOME = home;
   try {
     const out = parseArgs([]);
-    assert.equal(out.repos.length, 4);
+    assert.equal(out.repos.length, 5);
+    assert.ok(out.repos.includes(path.join(path.resolve(home), '.claude', 'nightly-repo')));
     for (const repo of out.repos) assert.ok(repo.startsWith(path.resolve(home)), repo);
     assert.ok(!out.repos.some(repo => /[\\/]Users[\\/]uers[\\/]/.test(repo)));
   } finally {

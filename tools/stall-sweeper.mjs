@@ -414,7 +414,7 @@ export function parseArgs(args) {
   if (out.kind && !KINDS.includes(out.kind)) throw new Error('--kind が不正です');
   out.home = localPath(out.home);
   // 既定の確認先は利用者のホームから導く（PC 名を固定すると、その名前以外の PC では 0 件になる）
-  if (!out.repos.length) out.repos = ['orgiast-main', 'orgiast-claude-rules', path.join('Downloads', 'orgiast-claude-rules'), path.join('Downloads', 'ブース制作アプリ')]
+  if (!out.repos.length) out.repos = ['orgiast-main', 'orgiast-claude-rules', path.join('Downloads', 'orgiast-claude-rules'), path.join('Downloads', 'ブース制作アプリ'), path.join('.claude', 'nightly-repo')]
     .map(name => localPath(path.join(out.home, name)));
   out.outputDir = path.resolve(localPath(out.outputDir || path.join(out.home, '.claude')));
   out.repos = out.repos.map(repo => path.resolve(repo));

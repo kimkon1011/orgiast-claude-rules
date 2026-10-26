@@ -528,7 +528,7 @@ test('digest: 無人処理は数だけ、なし系を正規化し、埋め込ま
 
 test('isUnattendedRow: WindowsとPOSIX、境界を区別', () => {
   for (const home of ['C:\\Users\\kim', '/home/kim']) {
-    for (const dir of ['nightly-repo', 'auto-session', 'scratch']) {
+    for (const dir of ['auto-session', 'scratch']) {
       for (const suffix of ['', '/sub']) assert.equal(isUnattendedRow({ cwd: `${home}/.claude/${dir}${suffix}` }, home), true);
       assert.equal(isUnattendedRow({ cwd: `${home}/.claude/${dir}-other` }, home), false);
     }
@@ -539,7 +539,7 @@ test('isUnattendedRow: WindowsとPOSIX、境界を区別', () => {
 
 test('watch: 無人行は再開もDMもしない、48時間で判断待ちも期限切れ、Sheetは維持', async () => {
   const home = tmp(), now = Date.now();
-  const rows = ['stalled', 'waiting_user'].flatMap(status => [H * 2, EXPIRE_UNATTENDED_MS].map(age => ({ status, sessionId: `${status}${age}`, ts: new Date(now - age).toISOString(), cwd: path.join(home, '.claude', 'nightly-repo') })));
+  const rows = ['stalled', 'waiting_user'].flatMap(status => [H * 2, EXPIRE_UNATTENDED_MS].map(age => ({ status, sessionId: `${status}${age}`, ts: new Date(now - age).toISOString(), cwd: path.join(home, '.claude', 'auto-session') })));
   seed(home, rows);
   let posts = 0;
   const result = await watch({ home, now, io: noEvidenceIo({ resume: () => assert.fail('must not resume'), notifyOwner: () => assert.fail('must not notify'), postSheet: async () => { posts++; return { ok: true }; } }) });
@@ -1326,9 +1326,18 @@ test('watch: 疎通確認の登録・完了再送でDMせず、digestは件数�
 test('watch: 時間切れでも無人openとcheck行を48時間で期限切れにする', async () => {
   const home = tmp(), now = Date.now();
   seed(home, [false, true].map((check, i) => ({ sessionId: `old-${i}`, status: 'open', ts: new Date(now - EXPIRE_UNATTENDED_MS).toISOString(),
-    cwd: path.join(home, '.claude', 'nightly-repo'), source: 'api-error-unanswered', ...(check ? { check: { command: 'unused' } } : {}) })));
+    cwd: path.join(home, '.claude', 'auto-session'), source: 'api-error-unanswered', ...(check ? { check: { command: 'unused' } } : {}) })));
   let clocks = 0;
   const result = await watch({ home, now, io: noEvidenceIo({ clock: () => clocks++ === 0 ? now : now + 46 * H / 60 }) });
   assert.equal(result.expired, 2);
   assert.deepEqual(readLedger(ledgerFile(home)).map(row => row.status), ['expired', 'expired']);
 });
+
+ test('nightly-repo の対話行は完了通知の対象', async () => {
+  const home = tmp(), now = Date.parse('2026-10-26T03:00:00Z');
+  seed(home, [{ sessionId: 'interactive-nightly', status: 'done', promise: '依頼を完了', ts: new Date(now).toISOString(), doneAt: new Date(now).toISOString(), cwd: path.join(home, '.claude', 'nightly-repo') }]);
+  let calls = 0;
+  await watch({ home, now, io: noEvidenceIo({ notifyOwner: async () => { calls++; return { delivered: 'toast', channel: 'toast' }; } }) });
+  assert.equal(calls, 1);
+  assert.ok(readLedger(ledgerFile(home))[0].doneNotifiedAt);
+ });

@@ -14,7 +14,7 @@ export const POLICY = Object.freeze({ stale: 7 * DAY, resend: 3 * DAY, ownerDm: 
   workLimit: 2, workAttempts: 5, workSeconds: 20 * 60, checkLimit: 20 });
 export const CATEGORY = Object.freeze({ decision: mailCategory({ why: '[判断依頼]' }),
   task: mailCategory({ why: '[作業依頼]' }) });
-export const BLOCKER = /権限がない|権限なし|できません|未オプトイン|承諾コマンド|判断待ち|BLOCKED|FAILED|exit=[1-9]|マージ権限|push.*権限/i;
+export const BLOCKER = /判定不能|未実施|権限がない|権限なし|できません|未オプトイン|承諾コマンド|判断待ち|BLOCKED|FAILED|exit=[1-9]|マージ権限|push.*権限/i;
 export const outboundTracking = item => item.kind === 'outbound'
   || item.kind === 'rollout' && item.direction === 'outbound' && item.subkind !== 'convergence';
 export const trackedMailIds = item => item.kind === 'rollout'

@@ -77,3 +77,38 @@ test('24h の恒久課金切れ cooldown があれば reason 無しの 429 で�
   assert.equal(finding?.severity, 'low');
   assert.match(finding.evidence.join(' '), /cooldown http_429/);
 });
+
+const DEEPSEEK_402 = '{"error":{"message":"Insufficient Balance (request_id: x)","type":"insufficient_balance_error"}}';
+
+test('deepseek: 数値 status:402（reason なし）が混ざっても残高切れとして low にする', () => {
+  const dir = home();
+  // 実測 2026-10-25/26: http_402 7件 + status:402(数値) 1件。数値行が benign から漏れて high になっていた。
+  write(dir, 'executor-usage.jsonl',
+    row({ t: new Date(NOW.getTime() - 3 * 60_000).toISOString(), provider: 'deepseek', ok: false, status: 402, out: 22 })
+    + [0, 1].map((n) => row({ t: new Date(NOW.getTime() - n * 60_000).toISOString(), provider: 'deepseek', status: 'http_402', reason: `HTTP402: ${DEEPSEEK_402}`, out: 0 })).join(''));
+  const findings = collectFindings({ home: dir, now: NOW });
+  assert.equal(findings.some((item) => item.id === 'lane_outage_unrepaired' && item.provider === 'deepseek'), false);
+  assert.equal(findings.find((item) => item.id === 'provider_billing_suspended' && item.provider === 'deepseek')?.severity, 'low');
+});
+
+test('provider=skipped の cheap-code/<p> exit 3 は p が http_402 cooldown 中なら残高切れ由来として low にする', () => {
+  const dir = home();
+  write(dir, 'provider-cooldown.json', { deepseek: { until: NOW.getTime() + 3600_000, reason: 'http_402', at: NOW.toISOString() } });
+  write(dir, 'executor-usage.jsonl', [0, 1, 2].map((n) => row({
+    t: new Date(NOW.getTime() - n * 60_000).toISOString(), provider: 'skipped', category: 'unrouted', model: 'none', status: 'no-cheap-executor', reason: 'cheap-code/deepseek exit 3',
+  })).join(''));
+  const findings = collectFindings({ home: dir, now: NOW });
+  assert.equal(findings.some((item) => item.id === 'lane_outage_unrepaired'), false);
+  const finding = findings.find((item) => item.id === 'unrouted_blocked_by_billing');
+  assert.equal(finding?.severity, 'low');
+  assert.equal('fixTask' in finding, false);
+  assert.match(finding.evidence.join(' '), /deepseek/);
+});
+
+test('provider=skipped でも cooldown が無い exit 3 は従来どおり lane_outage_unrepaired', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', [0, 1, 2].map((n) => row({
+    t: new Date(NOW.getTime() - n * 60_000).toISOString(), provider: 'skipped', category: 'unrouted', model: 'none', status: 'no-cheap-executor', reason: 'cheap-code/deepseek exit 3',
+  })).join(''));
+  assert.equal(collectFindings({ home: dir, now: NOW }).some((item) => item.id === 'lane_outage_unrepaired' && item.provider === 'skipped'), true);
+});

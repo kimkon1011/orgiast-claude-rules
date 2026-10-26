@@ -168,7 +168,8 @@ const WSL_LANE_ABSENT = /WSL ディストリが見つかりません/;
 // 実体は z.ai Coding Plan の weekly/monthly 上限到達(HTTP 429 / error.code 1310,
 // "Weekly/Monthly Limit Exhausted")。レーンは壊れておらず、上限リセットで自動回復する。
 export function isQuotaLimitedRow(row = {}) {
-  return /^http_?(402|429)$/.test(String(row?.status ?? '').toLowerCase());
+  // cheap-code が数値のまま残した status:402/429(reason なし)も同じ上限・課金切れ。
+  return /^(?:http_?)?(402|429)$/.test(String(row?.status ?? '').toLowerCase());
 }
 
 export function isBillingSuspendedRow(row = {}) {
@@ -479,6 +480,16 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
     rows.push(row); providers.set(row.provider, rows);
   }
   for (const [provider, rows] of providers) {
+    // provider:'skipped' の `cheap-code/<p> exit 3` は p が http_402 cooldown 中に実行枠が無かった記録。
+    // p 自身の残高切れ finding と原因が同じなので、別レーンの全滅(high)にせず low で紐づける。
+    if (provider === 'skipped') {
+      const blocked = [...new Set(rows.map((row) => /^cheap-code\/([\w-]+) exit 3$/.exec(String(row.reason || ''))?.[1]))];
+      if (rows.length >= 3 && blocked.length === 1 && blocked[0] && cooldown[blocked[0]]?.reason === 'http_402' && Number(cooldown[blocked[0]].until) > nowMs) {
+        findings.push({ id: 'unrouted_blocked_by_billing', provider, severity: 'low', title: `cheap-code/${blocked[0]} の残高切れで実行枠なし（チャージ待ち・コードでは直せない）`,
+          evidence: [`${rows.length}件すべて cheap-code/${blocked[0]} exit 3`, `cooldown ${cooldown[blocked[0]].reason} until ${new Date(Number(cooldown[blocked[0]].until)).toISOString()}`] });
+        continue;
+      }
+    }
     // llm-ask は status:'ok'、cheap-code は ok、codex-do は終了状態と出力を記録する。
     const partialProgress = rows.filter(quotaSweepPartialProgressRow);
     const succeeded = rows.some(row => (normalizeExecutorStatus(row) === 'ok' && Number(row.out) > 0) || quotaSweepProgressRow(row)) || partialProgress.length > 0;

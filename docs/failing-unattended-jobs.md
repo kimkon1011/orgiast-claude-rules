@@ -55,3 +55,8 @@ CI初回で既存のusage-statsキャッシュテストが失敗した。固定�
 ## 残作業
 
 本番用の1行起票は [適用待ち一覧](failing-unattended-jobs-followup.md) に保存。ホームへの書込可能な実行環境で、PRの修正を適用し、非破壊の退避・索引修復・タスク配布と再検証を行う。マージはしていない。既存タスクやファイルの削除・無効化、mainへの直接pushは実施していない。
+
+定期タスクの窓は `setup.mjs --converge` で登録する TaskHideGuard がログオン時・30分ごとに非表示化します。
+窓が出たら `Select-String -Path ~/.claude/logs/window-spawn-watch.events.log -CaseSensitive '^=== |  WINDOW '` で原因を確認します。
+GUI 表示が必須のタスクは `~/.claude/task-hide-guard.exclude.txt` に1行1タスク名（`#` コメント可）で指定します。
+除外は以後の修復を止めます。既に非表示化したタスクのアクションは自動では戻しません。

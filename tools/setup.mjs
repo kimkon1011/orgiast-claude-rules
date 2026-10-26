@@ -192,7 +192,7 @@ if (manifest) {
     results.push({ item: { id: 'node-runtime-security', severity: 'optional', description }, ...outcome });
   }
   if (converge && !valueAfter('--manifest')) {
-    const { description, ...outcome } = inspectTaskHiddenActions();
+    const { description, ...outcome } = inspectTaskHiddenActions({ converge });
     results.push({ item: { id: 'task-hidden-actions', severity: 'optional', description }, ...outcome });
   }
   emit(results);

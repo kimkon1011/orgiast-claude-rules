@@ -176,10 +176,13 @@ export function shellQuote(value) {
   return `'${text.replace(/'/g, `'"'"'`)}'`;
 }
 
-export function runGh(args, options = {}) {
-  // Windows の gh.cmd は直接 spawn できないため shell を使い、値はすべて個別に quote する。
+export function runGh(args, options = {}, spawn = spawnSync) {
+  // shell を通すと Windows で `"feedback-dm:x" in:body` の引用符が壊れ gh が unknown argument で落ちる(2026-10-23〜26 実害)。
+  // gh.exe は直接起動し、gh.cmd しか無い環境(ENOENT/EINVAL)だけ従来の quote 付き shell 経由に戻す。
+  const direct = spawn('gh', args, { ...options, encoding: 'utf8', windowsHide: true });
+  if (!['ENOENT', 'EINVAL'].includes(direct?.error?.code)) return direct;
   const command = ['gh', ...args].map(shellQuote).join(' ');
-  return spawnSync(command, { ...options, shell: true, encoding: 'utf8', windowsHide: true });
+  return spawn(command, { ...options, shell: true, encoding: 'utf8', windowsHide: true });
 }
 
 // 夜間巡回の一時的な 5xx / rate limit / ネットワーク断を吸収する。読み取り専用なので再試行してよい。

@@ -16,8 +16,34 @@ import {
   resolveRepo,
   resolveRepoForItem,
   resolveRepoFromUrl,
+  runGh,
   selectCandidates,
 } from './feedback-to-issues.mjs';
+
+test('runGh は gh を shell なしで起動し、検索語の引用符と空白をそのまま渡す', () => {
+  const calls = [];
+  const search = '"feedback-dm:123" in:body';
+  const result = runGh(['issue', 'list', '--search', search], {}, (cmd, args, opts) => {
+    calls.push({ cmd, args, opts });
+    return { status: 0, stdout: '[]' };
+  });
+  assert.equal(result.stdout, '[]');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].cmd, 'gh');
+  assert.deepEqual(calls[0].args, ['issue', 'list', '--search', search]);
+  assert.notEqual(calls[0].opts.shell, true);
+});
+
+test('runGh は gh を直接起動できない環境だけ shell 経由に戻す', () => {
+  const calls = [];
+  runGh(['--version'], {}, (cmd, argsOrOpts, opts) => {
+    calls.push({ cmd, opts: opts ?? argsOrOpts });
+    return calls.length === 1 ? { error: Object.assign(new Error('spawn gh ENOENT'), { code: 'ENOENT' }) } : { status: 0 };
+  });
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].opts.shell, true);
+  assert.match(calls[1].cmd, /gh.+--version/);
+});
 
 test('Issue 台帳は同じ message_id を重複追記しない', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'feedback-ledger-test-'));

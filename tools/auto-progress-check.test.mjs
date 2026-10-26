@@ -115,6 +115,21 @@ test('executeCheck lets a row extend its timeout for network-bound checks, bound
   executeCheck({ check: 'gh run view', checkTimeoutMs: 'soon' }, { home: tmp(), shellPath: null, spawnImpl });
   assert.deepEqual(seen, [180000, MAX_CHECK_TIMEOUT_MS, CHECK_TIMEOUT_MS, CHECK_TIMEOUT_MS]);
 });
+test('executeCheck reports a timeout as the bound and how to extend it, not as a shell failure', () => {
+  const error = Object.assign(new Error('spawnSync C:\Program Files\Git\bin\bash.exe ETIMEDOUT'), { code: 'ETIMEDOUT' });
+  const result = executeCheck({ check: 'slow', checkTimeoutMs: 45000 }, { home: tmp(), shellPath: null, spawnImpl: () => ({ status: null, error, stdout: '' }) });
+  assert.equal(result.code, null);
+  assert.match(result.text, /45 秒の上限/); assert.match(result.text, /--timeout/); assert.doesNotMatch(result.text, /bash.exe/);
+});
+test('addCheck --timeout stores checkTimeoutMs, probes with it, and rejects out-of-range values', () => {
+  const home = tmp(), probed = [];
+  const row = addCheck({ home, now, session: 'slow-session', check: 'node slow.mjs', label: '遅い check', deadline: '+24h', timeout: '180',
+    probe: r => { probed.push(r.checkTimeoutMs); return { code: 1, text: '未達' }; } });
+  assert.equal(row.checkTimeoutMs, 180000); assert.deepEqual(probed, [180000]);
+  assert.equal(readLedger(ledgerFile(home)).at(-1).checkTimeoutMs, 180000);
+  assert.equal('checkTimeoutMs' in addCheck({ home, now, session: 'plain', check: 'x', label: 'x', deadline: '+24h' }), false);
+  for (const timeout of ['0', '301', 'soon']) assert.throws(() => addCheck({ home, now, session: 'bad', check: 'x', label: 'x', deadline: '+24h', timeout }), /--timeout/);
+});
 test('WeChat counts current/previous month only, inclusive since, ignores empty/invalid/unrelated data without exposing text', () => {
   const home = tmp(), dir = path.join(home, '.claude', 'line-openchat'); fs.mkdirSync(dir, { recursive: true });
   const since = '2026-09-30T12:30:00Z';

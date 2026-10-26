@@ -33,7 +33,11 @@ export function executeCheck(row, { home, spawnImpl = spawnSync, shellPath = res
   const result = shellPath ? spawnImpl(shellPath, ['-c', row.check], options)
     : spawnImpl(row.check, { ...options, shell: true });
   const code = result.error || result.signal ? null : result.status;
-  return { code, text: oneLine(result.stdout) || (code === 0 ? '達成を確認' : code === 1 ? '未達' : `check エラー: ${oneLine(result.error?.message || result.stderr) || code}`) };
+  // spawnSync の生メッセージ（… bash.exe ETIMEDOUT）はシェル故障に見えるため、上限超過と延長方法を書く。
+  const failure = result.error?.code === 'ETIMEDOUT'
+    ? `check が ${options.timeout / 1000} 秒の上限を超えました（遅い check は --add-check --timeout <秒> で延長・最大 ${MAX_CHECK_TIMEOUT_MS / 1000} 秒）`
+    : oneLine(result.error?.message || result.stderr) || code;
+  return { code, text: oneLine(result.stdout) || (code === 0 ? '達成を確認' : code === 1 ? '未達' : `check エラー: ${failure}`) };
 }
 export function queueCheckFollowup(home, row, result) {
   const file = path.join(home, '.claude', 'next-session.md');

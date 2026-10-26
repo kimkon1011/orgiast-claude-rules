@@ -339,3 +339,57 @@ test('convergeMobileStandby: refresh 設定の例外で ok=false', () => {
   assert.equal(run.ok, false);
   assert.ok(run.lines.some((line) => /VSCode refresh: 失敗/.test(line)));
 });
+
+test('disabled config remains byte identical and converge preserves/writes mobileTabs zero', () => {
+  for (const settings of ['{\n "orgiast.nextSession.mobileTabs": 0\n}', '{\n // comment\n "editor.fontSize": 14,\n}']) {
+    const home = temp('ms-disabled-');
+    fs.mkdirSync(path.dirname(cfg(home)), { recursive: true });
+    const raw = '{ "enabled": false, "count": 1, "refreshMinutes": 45, "other": "keep" }';
+    fs.writeFileSync(cfg(home), raw);
+    const settingsPath = path.join(home, 'settings.json'); fs.writeFileSync(settingsPath, settings);
+    const result = convergeMobileStandby({ home, repoRoot: home, settingsPath, exists: () => false, readdir: () => [], rcPrefix: { platform: 'linux' } });
+    assert.equal(result.ok, true);
+    assert.equal(fs.readFileSync(cfg(home), 'utf8'), raw);
+    assert.match(fs.readFileSync(settingsPath, 'utf8'), /"orgiast.nextSession.mobileTabs": 0/);
+    assert.ok(result.lines.includes('[mobile-standby] 無効（mobile-sessions.json enabled:false）'));
+    assert.equal(pool.isMobileEnabled(home), false);
+  }
+});
+test('disable/enable CLI round trip preserves config keys', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const home = temp('ms-cli-');
+  fs.mkdirSync(path.dirname(cfg(home)), { recursive: true });
+  fs.writeFileSync(cfg(home), '{"count":1,"custom":"keep"}');
+  const run = arg => execFileSync(process.execPath, [fileURLToPath(new URL('./mobile-standby.mjs', import.meta.url)), arg], { env: { ...process.env, ORGIAST_HOME: home }, encoding: 'utf8' });
+  assert.match(run('--disable'), /ユーザーが手で閉じてください/);
+  const settings = path.join(home, 'AppData', 'Roaming', 'Code', 'User', 'settings.json');
+  assert.match(fs.readFileSync(settings, 'utf8'), /"orgiast.nextSession.mobileTabs": 0/);
+  assert.equal(pool.isMobileEnabled(home), false);
+  run('--enable');
+  assert.equal(pool.isMobileEnabled(home), true);
+  assert.doesNotMatch(fs.readFileSync(settings, 'utf8'), /mobileTabs/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(cfg(home))), { enabled: true, count: 1, custom: 'keep' });
+});
+
+test('disabled mobile-sessions direct entry never resolves CLI or spawns', async () => {
+  const { main } = await import('./mobile-sessions.mjs');
+  const home = temp('ms-direct-disabled-');
+  fs.mkdirSync(path.dirname(cfg(home)), { recursive: true });
+  fs.writeFileSync(cfg(home), '{"enabled":false,"count":1}');
+  assert.equal(await main([], { homedir: home, env: {}, exists() { assert.fail(); }, spawn() { assert.fail(); } }), 0);
+});
+test('mobileTabs editing backs up JSONC and leaves ambiguous input unchanged', async () => {
+  const { ensureMobileTabsDisabled } = await import('./mobile-standby.mjs');
+  const home = temp('ms-safe-disable-');
+  const settings = path.join(home, 'settings.json');
+  const raw = '{\n // keep comment\n "orgiast.nextSession.mobileTabs": 3,\n}';
+  fs.writeFileSync(settings, raw);
+  assert.equal(ensureMobileTabsDisabled(settings).changed, true);
+  const backup = fs.readdirSync(home).find(name => name.includes('.bak-nomobile-'));
+  assert.equal(fs.readFileSync(path.join(home, backup), 'utf8'), raw);
+  assert.match(fs.readFileSync(settings, 'utf8'), /keep comment/);
+  fs.writeFileSync(settings, '{ broken');
+  assert.equal(ensureMobileTabsDisabled(settings).changed, false);
+  assert.equal(fs.readFileSync(settings, 'utf8'), '{ broken');
+});

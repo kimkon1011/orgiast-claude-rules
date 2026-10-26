@@ -290,3 +290,11 @@ test('replenish does nothing when the goal is already met, but records the coold
   assert.equal(opened, 0);
   assert.deepEqual(state, { at: Date.parse('2026-10-18T00:00:00Z'), standby: 2, goal: 2 });
 });
+
+test('disabled PC never opens standby tabs or fetches remote status for replenishment', async () => {
+  const { openStandbyTabs } = await import('./mobile-standby-status.mjs');
+  const home = tempHome();
+  fs.writeFileSync(path.join(home, '.claude', 'mobile-sessions.json'), '{"enabled":false}');
+  assert.equal(await openStandbyTabs({ home, count: 3, codeCli: 'code.cmd', spawnProcess() { assert.fail(); } }), 0);
+  assert.deepEqual(await replenishStandby({ home, fetchImpl() { assert.fail(); }, open() { assert.fail(); } }), { action: 'skipped', reason: 'disabled' });
+});

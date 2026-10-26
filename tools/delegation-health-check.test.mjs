@@ -537,8 +537,8 @@ test('rollout ログ断片から最後の primary rate_limits を読む', () => 
 
 test('注入した WSL spawn の実測値を読み、失敗時は null にする', () => {
   const output = '{"rate_limits":{"primary":{"used_percent":7,"window_minutes":300,"resets_at":42}}}';
-  assert.deepEqual(readCodexUsedPercent({ spawnImpl: () => ({ status: 0, stdout: output }) }), { usedPercent: 7, windowMinutes: 300, resetsAt: 42 });
-  assert.equal(readCodexUsedPercent({ spawnImpl: () => ({ status: 1, stdout: output }) }), null);
+  assert.deepEqual(readCodexUsedPercent({ wslInstalled: () => true, spawnImpl: () => ({ status: 0, stdout: output }) }), { usedPercent: 7, windowMinutes: 300, resetsAt: 42 });
+  assert.equal(readCodexUsedPercent({ wslInstalled: () => true, spawnImpl: () => ({ status: 1, stdout: output }) }), null);
 });
 
 // 2026-10-10 18:23 JST の実測: codex は本物の usage_limit を出した(rollout に
@@ -582,7 +582,7 @@ const REAL_20261010_REPLAY = [
 
 test('実機ログ(2026-10-10): 最新セッションが primary:null なら古い 67% を実測値にしない', () => {
   assert.deepEqual(parseRateLimitsFromText(REAL_20261010_REPLAY), { exhausted: true });
-  assert.deepEqual(readCodexUsedPercent({ spawnImpl: () => ({ status: 0, stdout: REAL_20261010_REPLAY }) }), { exhausted: true });
+  assert.deepEqual(readCodexUsedPercent({ wslInstalled: () => true, spawnImpl: () => ({ status: 0, stdout: REAL_20261010_REPLAY }) }), { exhausted: true });
 });
 
 // 上限到達(12:16Z, until 1791982380000)の後、codex は別の窓(43200分=30日枠 / resets_at

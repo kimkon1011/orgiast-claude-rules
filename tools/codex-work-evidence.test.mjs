@@ -61,7 +61,7 @@ test('Windows reads a WSL clone using argv, without shell interpolation', () => 
   const started = Date.now();
   const calls = [];
   const found = verifyExternalWork({ output: `/tmp/isolated\n[fix/work ${sha.slice(0, 7)}] 修正`, started, status: 0 }, {
-    platform: 'win32', spawnImpl(command, args, options) {
+    platform: 'win32', wslPresent: () => true, spawnImpl(command, args, options) {
       calls.push([command, args]);
       assert.equal(options.shell, undefined);
       return { status: 0, stdout: args.includes('show') ? `${sha}\n${Math.floor(started / 1000)}` : '' };

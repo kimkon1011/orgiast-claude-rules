@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { wslInstalled } from './lib/wsl-present.mjs';
 // 委譲台帳の症状を実測と照合し、即時修復と次回 auto-session への根本修正起票を行う。
 import fs from 'node:fs';
 import { writeHandoff } from './next-session-rotate.mjs';
@@ -111,12 +112,13 @@ export function parseRateLimitsFromText(text) {
 
 export function readCodexUsedPercent(options = {}) {
   const spawnImpl = options.spawnImpl || spawnSync;
+  if (!(options.wslInstalled ?? wslInstalled)({ platform: options.platform ?? process.platform })) return null;
   // 単体テストでは OS に依存せず、注入した偽 spawn の出力を検証できるようにする。
   if (!options.spawnImpl && process.platform !== 'win32' && !process.env.WSL_DISTRO_NAME) return null;
   try {
     // ログ1本が数MBあるので全文 cat せず primary ブロックだけ抜く(ENOBUFS 再発防止)。新しいファイルほど後ろに並べ、最後の行を最新値にする。
     const script = `find ~/.codex/sessions -type f -name "*.jsonl" -printf "%T@ %p\n" 2>/dev/null | sort -nr | head -n 3 | sort -n | cut -d" " -f2- | xargs -r grep -ho "\\"primary\\":{[^}]*}\\|\\"primary\\":null" 2>/dev/null | tail -n 40`;
-    const result = spawnImpl('wsl', ['-d', 'Ubuntu', '--', 'bash', '-c', script], { encoding: 'utf8', timeout: 20_000, maxBuffer: 16 * 1024 * 1024 });
+    const result = spawnImpl('wsl', ['-d', 'Ubuntu', '--', 'bash', '-c', script], { encoding: 'utf8', windowsHide: true, timeout: 20_000, maxBuffer: 16 * 1024 * 1024 });
     if (result?.error || (result?.status != null && result.status !== 0)) return null;
     return parseRateLimitsFromText(result.stdout);
   } catch { return null; }

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import pool from './lib/mobile-state.cjs';
 // スマホ Claude アプリの「Code」一覧に並ぶ待機セッションを、PC 側の帳簿ではなく
 // サーバー側 /v1/code/sessions で数える。不足していれば VSCode のタブを不足分だけ開き、
 // 30 秒後に再照会して増えたことを確認する。それでも足りなければ kim に DM する。
@@ -126,7 +127,8 @@ function runPlan(plan, spawnProcess = spawn) {
   });
 }
 
-export async function openStandbyTabs({ count, codeCli, spawnProcess = spawn }) {
+export async function openStandbyTabs({ count, codeCli, spawnProcess = spawn, home = os.homedir() }) {
+  if (!pool.isMobileEnabled(home)) return 0;
   const plan = planOpenCommand({ codeCli });
   if (!plan) throw new Error('VSCode CLI (code.cmd) が見つかりません');
   let opened = 0;
@@ -142,6 +144,7 @@ export async function replenishStandby({
   spawnProcess = spawn, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   notify = notifyKim, codeCli, open = openStandbyTabs, stateFile,
 } = {}) {
+  if (!pool.isMobileEnabled(home ?? os.homedir())) return { action: 'skipped', reason: 'disabled' };
   const state = stateFile ? json(stateFile) : {};
   const startedAt = now();
   const before = await checkStandby({ home, fetchImpl, goal, localIds });
@@ -153,7 +156,7 @@ export async function replenishStandby({
   const cli = codeCli ?? resolveVscodeCli({ env: process.env, exists: fs.existsSync, homedir: home ?? os.homedir() });
   if (!cli) return { action: 'skipped', reason: 'no-vscode-cli', before };
   let opened;
-  try { opened = await open({ count: before.shortfall, codeCli: cli, spawnProcess }); }
+  try { opened = await open({ home, count: before.shortfall, codeCli: cli, spawnProcess }); }
   catch (error) { return { action: 'failed', reason: `open failed: ${error.message}`, before }; }
   await sleep(waitMs);
   const after = await checkStandby({ home, fetchImpl, goal, localIds });

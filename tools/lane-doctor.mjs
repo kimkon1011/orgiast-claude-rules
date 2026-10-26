@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { wslInstalled } from './lib/wsl-present.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -117,6 +118,7 @@ export function laneDoctorQuick({ home = laneHome(), now = Date.now(), save = tr
 }
 // WSL の列挙失敗はディストリ無しと決めつけない。
 export function listWslDistros() {
+  if (!wslInstalled()) return '';
   const r = spawnSync('wsl', ['-l', '-q'], { encoding: 'utf16le', windowsHide: true, timeout: 15000 });
   return r.status === 0 ? String(r.stdout || '').replace(/\0/g, '').trim() : null;
 }

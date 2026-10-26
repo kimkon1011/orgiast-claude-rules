@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { wslInstalled } from './lib/wsl-present.mjs';
 import { isReadonlyCommand } from './readonly-command.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -268,7 +269,7 @@ export function codexSessionDirs(home = process.env.ORGIAST_HOME || os.homedir()
   // `//wsl.localhost/` itself cannot be enumerated, so ask wsl.exe for distro names.
   if (process.platform === 'win32') {
     let distros = [];
-    try { distros = execSync('wsl.exe -l -q', { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], timeout: 15000 }).toString('utf16le').split(/\r?\n/).map((s) => s.trim()).filter(Boolean); } catch {}
+    try { if (wslInstalled()) distros = execSync('wsl.exe -l -q', { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], timeout: 15000 }).toString('utf16le').split(/\r?\n/).map((s) => s.trim()).filter(Boolean); } catch {}
     for (const distro of distros) { addUsers(`//wsl.localhost/${distro}/home`); addUsers(`//wsl$/${distro}/home`); }
   }
   if (process.platform === 'linux') addUsers('/home');

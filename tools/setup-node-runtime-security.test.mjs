@@ -22,6 +22,7 @@ async function fixture(t, options = {}) {
   const launcher = path.join(desktop, 'Node更新-test user.cmd');
   const io = {
     platform: 'win32', arch: 'x64', home: root, temp: root, account: 'test user', fs,
+    wslInstalled: () => true, msiBusy: () => false,
     now: () => now,
     sleep: async (ms) => { sleeps.push(ms); now += ms; },
     async download(url) {
@@ -280,6 +281,7 @@ test('setup integration emits exactly one runtime result, skips verify and custo
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   await fs.mkdir(path.join(root, 'lib'));
   await fs.copyFile(new URL('./setup.mjs', import.meta.url), path.join(root, 'setup.mjs'));
+  await fs.copyFile(new URL('./setup-task-hidden-actions.mjs', import.meta.url), path.join(root, 'setup-task-hidden-actions.mjs'));
   const files = {
     'setup-manifest.json': '{"version":1,"items":[]}',
     'lib/playbook-distribution.mjs': 'export const distributePlaybooks = () => 0;',
@@ -293,9 +295,79 @@ test('setup integration emits exactly one runtime result, skips verify and custo
   for (const [name, content] of Object.entries(files)) await fs.writeFile(path.join(root, name), content);
   const run = (args) => execFileSync(process.execPath, [path.join(root, 'setup.mjs'), '--home', root, '--no-beacon', ...args], { encoding: 'utf8' });
   const output = run(['--converge']);
+  assert.equal(output.split('\n').filter(line => line.includes('task-hidden-actions')).length, 1);
   assert.equal(output.split('\n').filter((line) => line.includes('node-runtime-security')).length, 1);
   assert.match(output, /^\[OK \] node-runtime-security - Windows v24\.22\.1 \/ WSL v22\.23\.4$/m);
   assert.equal(JSON.parse(run(['--converge', '--json'])).items.find((item) => item.id === 'node-runtime-security').status, 'OK');
-  assert.doesNotMatch(run(['--verify']), /node-runtime-security/);
-  assert.doesNotMatch(run(['--converge', '--manifest', path.join(root, 'setup-manifest.json')]), /node-runtime-security/);
+  assert.doesNotMatch(run(['--verify']), /node-runtime-security|task-hidden-actions/);
+  assert.doesNotMatch(run(['--converge', '--manifest', path.join(root, 'setup-manifest.json')]), /node-runtime-security|task-hidden-actions/);
+});
+
+const lockPath = f => path.join(f.root, '.claude', 'state', 'node-runtime-security.lock');
+async function seedLock(f, startedAt) {
+  await fs.mkdir(path.dirname(lockPath(f)), { recursive: true });
+  await fs.writeFile(lockPath(f), JSON.stringify({ pid: 123, startedAt }));
+}
+test('held lock skips all downloads, installers and launches', async t => {
+  const f = await fixture(t);
+  await seedLock(f, 0);
+  const result = await convergeNodeRuntimeSecurity(f.io);
+  assert.equal(result.status, 'NOTICE'); assert.match(result.description, /他の converge/);
+  assert.equal(f.downloads.length, 0); assert.equal(f.calls.length, 0); assert.equal(f.launches, 0);
+  await fs.access(lockPath(f));
+});
+test('stale lock is reacquired and success removes the lock', async t => {
+  const f = await fixture(t);
+  await seedLock(f, -30 * 60 * 1000);
+  assert.equal((await convergeNodeRuntimeSecurity(f.io)).status, 'OK');
+  assert.equal(f.calls.filter(c => c.file === 'msiexec.exe').length, 1);
+  await assert.rejects(fs.access(lockPath(f)));
+});
+test('failed read-back cools down for six hours without download or launcher', async t => {
+  const f = await fixture(t, { keepOld: true });
+  await convergeNodeRuntimeSecurity(f.io);
+  await assert.rejects(fs.access(lockPath(f)));
+  const before = f.downloads.length;
+  const result = await convergeNodeRuntimeSecurity(f.io);
+  assert.match(result.description, /前回の更新試行から6時間以内/);
+  assert.equal(f.downloads.length, before + 1);
+  assert.equal(f.calls.filter(c => c.file === 'msiexec.exe').length, 1); assert.equal(f.launches, 0);
+  await assert.rejects(fs.access(f.launcher));
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(path.dirname(lockPath(f)), 'node-runtime-security.json'))), { lastAttemptAt: 0, target: 'v24.22.1' });
+  f.io.now = () => 6 * 60 * 60 * 1000;
+  await convergeNodeRuntimeSecurity(f.io);
+  assert.equal(f.calls.filter(c => c.file === 'msiexec.exe').length, 2);
+});
+test('busy MSI skips update before artifact download', async t => {
+  const f = await fixture(t); f.io.msiBusy = () => true;
+  assert.match((await convergeNodeRuntimeSecurity(f.io)).description, /Installer が実行中/);
+  assert.equal(f.downloads.length, 1); assert.equal(f.launches, 0);
+  assert.equal(f.calls.some(c => c.file === 'msiexec.exe'), false);
+  await assert.rejects(fs.access(lockPath(f)));
+});
+test('parallel converge calls execute only one MSI', async t => {
+  const f = await fixture(t);
+  const results = await Promise.all([convergeNodeRuntimeSecurity(f.io), convergeNodeRuntimeSecurity(f.io)]);
+  assert.equal(f.calls.filter(c => c.file === 'msiexec.exe').length, 1);
+  assert.equal(results.filter(r => /他の converge/.test(r.description)).length, 1);
+});
+test('UAC launch retains lock and a failed launch releases it', async t => {
+  const f = await fixture(t, { elevated: false, ignoreUac: true });
+  await convergeNodeRuntimeSecurity(f.io); await fs.access(lockPath(f));
+  const fail = await fixture(t, { elevated: false, launchError: true });
+  await convergeNodeRuntimeSecurity(fail.io); await assert.rejects(fs.access(lockPath(fail)));
+});
+test('registry absence prevents any WSL invocation', async t => {
+  const f = await fixture(t); f.io.wslInstalled = () => false;
+  assert.match((await convergeNodeRuntimeSecurity(f.io)).description, /WSL なし/);
+  assert.equal(f.calls.some(c => c.file === 'wsl.exe'), false);
+});
+
+test('parallel stale recovery cannot remove a newly acquired lock', async t => {
+  const f = await fixture(t);
+  await seedLock(f, -30 * 60 * 1000);
+  const results = await Promise.all([convergeNodeRuntimeSecurity(f.io), convergeNodeRuntimeSecurity(f.io)]);
+  assert.equal(f.calls.filter(c => c.file === 'msiexec.exe').length, 1);
+  assert.equal(results.filter(r => /他の converge/.test(r.description)).length, 1);
+  await assert.rejects(fs.access(lockPath(f)));
 });

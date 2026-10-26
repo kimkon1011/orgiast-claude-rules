@@ -9,6 +9,8 @@ import { fileURLToPath } from 'node:url';
 import { fleetHubNeedsConfiguration } from './register-fleet-mail.mjs';
 import { convergeAllowRules } from './allow-rules.mjs';
 import { convergeMobileStandby } from './mobile-standby.mjs';
+export { classifyTaskActions } from './setup-task-hidden-actions.mjs';
+import { inspectTaskHiddenActions } from './setup-task-hidden-actions.mjs';
 import { convergeNodeRuntimeSecurity } from './setup-node-runtime-security.mjs';
 
 const TYPES = new Set(['command', 'file-contains', 'file-nonempty', 'json-valid', 'scheduled-task']);
@@ -188,6 +190,10 @@ if (manifest) {
   if (converge && !valueAfter('--manifest')) {
     const { description, ...outcome } = await convergeNodeRuntimeSecurity();
     results.push({ item: { id: 'node-runtime-security', severity: 'optional', description }, ...outcome });
+  }
+  if (converge && !valueAfter('--manifest')) {
+    const { description, ...outcome } = inspectTaskHiddenActions();
+    results.push({ item: { id: 'task-hidden-actions', severity: 'optional', description }, ...outcome });
   }
   emit(results);
   // fleet ビーコン: converge の結果を GAS へ送る。fail-open（exit code に一切影響させない）。

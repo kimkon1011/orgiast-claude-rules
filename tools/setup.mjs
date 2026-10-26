@@ -56,6 +56,38 @@ function readNonempty(target, kind) {
   }
 }
 function nested(value, dotted) { return dotted.split('.').reduce((v, key) => v?.[key], value); }
+function checkTaskDetails(spec, info) {
+  if (spec.requireActionTarget) {
+    for (const action of info.actions || []) {
+      // 引用された空白入りパスも拾い、exe や相対引数は検査対象にしない。
+      const tokens = String(action).match(/"[^"]*"|'[^']*'|[^\s"']+/g) || [];
+      for (const token of tokens) {
+        const target = token.replace(/^["']|["']$/g, '');
+        if ((path.isAbsolute(target) || path.win32.isAbsolute(target))
+          && /\.(mjs|js|ps1|vbs|cmd|bat)$/i.test(target) && !fs.existsSync(target)) return false;
+      }
+    }
+  }
+  if (typeof spec.maxRunAgeHours === 'number') {
+    const lastRun = Date.parse(info.lastRunTime);
+    // 初回実行前は登録直後にも起こるため、修復対象ではなく NOTICE にする。
+    if (!Number.isFinite(lastRun) || lastRun < Date.UTC(2000, 0, 1)) return null;
+    if (Date.now() - lastRun > spec.maxRunAgeHours * 3600000) return false;
+  }
+  return true;
+}
+function readTaskDetails(name) {
+  const quotedName = "'" + name.replaceAll("'", "''") + "'";
+  const command = `[Console]::OutputEncoding=[Text.Encoding]::UTF8; $ErrorActionPreference='Stop'; $task=Get-ScheduledTask -TaskName ${quotedName}; $info=$task | Get-ScheduledTaskInfo; [pscustomobject]@{actions=@($task.Actions | ForEach-Object { $_.Execute + ' ' + $_.Arguments }); lastRunTime=$info.LastRunTime.ToUniversalTime().ToString('o')} | ConvertTo-Json -Compress`;
+  try {
+    return JSON.parse(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, timeout: 15000,
+    }).replace(/^\uFEFF/, ''));
+  } catch {
+    // 詳細取得だけの失敗で NG を増やさず、従来の登録有無の判定を残す。
+    return null;
+  }
+}
 function check(item) {
   try {
     if (item.scope === 'kim-only' && resolveFleetLabel(home) !== 'kim-PC') return null;
@@ -107,9 +139,16 @@ function check(item) {
       }
       if (spec.hubMode && fleetHubNeedsConfiguration({ home })) return false;
       if (spec.migrationMarker && !fs.existsSync(resolveHome(spec.migrationMarker))) return false;
+      if (process.env.ORGIAST_SETUP_TASK_INFO_FIXTURE) {
+        const fixture = JSON.parse(fs.readFileSync(process.env.ORGIAST_SETUP_TASK_INFO_FIXTURE, 'utf8'));
+        const info = fixture[spec.name];
+        return info?.registered === true ? checkTaskDetails(spec, info) : false;
+      }
       if (process.platform !== 'win32') return false;
       execFileSync('schtasks.exe', ['/Query', '/TN', spec.name], { stdio: 'ignore', timeout: 10000, windowsHide: true });
-      return true;
+      if (!spec.requireActionTarget && typeof spec.maxRunAgeHours !== 'number') return true;
+      const info = readTaskDetails(spec.name);
+      return info ? checkTaskDetails(spec, info) : true;
     }
   } catch { return false; }
   return false;

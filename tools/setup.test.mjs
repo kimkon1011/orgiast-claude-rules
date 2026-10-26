@@ -11,7 +11,7 @@ const toolsDir = path.dirname(fileURLToPath(import.meta.url));
 const setup = path.join(toolsDir, 'setup.mjs');
 const temp = (name) => fs.mkdtempSync(path.join(os.tmpdir(), name));
 const write = (file, value) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, value); };
-const run = (args) => spawnSync(process.execPath, [setup, ...args], { encoding: 'utf8', env: { ...process.env, ORGIAST_REPO: path.dirname(toolsDir), FLEET_BEACON: '0' } });
+const run = (args, env = {}) => spawnSync(process.execPath, [setup, ...args], { encoding: 'utf8', env: { ...process.env, ORGIAST_REPO: path.dirname(toolsDir), FLEET_BEACON: '0', ...env } });
 const manifest = (items) => ({ version: 1, items });
 const item = (id, type, spec, severity = 'required', extra = {}) => ({ id, type, severity, spec, description: id, ...extra });
 
@@ -335,3 +335,35 @@ test('verify-before-done manifest validates synchronous wrapped Stop registratio
     assert.equal(result.status, expected, result.stdout + result.stderr);
   }
 });
+
+for (const [name, change, expected] of [
+  ['existing action targets and recent run are OK', {}, 'OK'],
+  ['missing mjs in Arguments is NG', { missing: true }, 'NG'],
+  ['run older than maxRunAgeHours is NG', { age: 60 }, 'NG'],
+  ['never run required task is NOTICE and verify succeeds', { lastRunTime: '' }, 'NOTICE'],
+  ['pre-2000 last run is NOTICE', { lastRunTime: '1999-12-31T00:00:00Z' }, 'NOTICE'],
+  ['unregistered fixture task is NG', { registered: false }, 'NG'],
+  ['task absent from fixture is NG', { absent: true }, 'NG'],
+  ['legacy spec only checks registration with fixture', { legacy: true, missing: true, age: 60 }, 'OK'],
+]) {
+  test(`scheduled-task: ${name}`, (t) => {
+    const home = temp('setup-task-info-');
+    t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+    const mf = path.join(home, 'manifest.json');
+    const fixture = path.join(home, 'task-info.json');
+    const wrapper = path.join(home, 'space dir', 'run-hidden.vbs');
+    const script = path.join(home, 'space dir', 'stall-sweeper.mjs');
+    write(wrapper, 'wrapper');
+    if (!change.missing) write(script, 'script');
+    const spec = { name: 'TestTask', ...(change.legacy ? {} : { requireActionTarget: true, maxRunAgeHours: 50 }) };
+    write(mf, JSON.stringify(manifest([item('task:test', 'scheduled-task', spec)])));
+    write(fixture, JSON.stringify(change.absent ? {} : { TestTask: {
+      registered: change.registered ?? true,
+      actions: [`wscript.exe //nologo "${wrapper}" "C:\\Program Files\\nodejs\\node.exe" "${script}" "--apply"`],
+      lastRunTime: change.lastRunTime ?? new Date(Date.now() - (change.age ?? 1) * 3600000).toISOString(),
+    } }));
+    const result = run(['--verify', '--json', '--home', home, '--manifest', mf], { ORGIAST_SETUP_TASK_INFO_FIXTURE: fixture });
+    assert.equal(result.status, expected === 'NG' ? 1 : 0, result.stdout + result.stderr);
+    assert.equal(JSON.parse(result.stdout).items[0].status, expected);
+  });
+}

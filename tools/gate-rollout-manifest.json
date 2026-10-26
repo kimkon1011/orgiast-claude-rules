@@ -5,6 +5,7 @@
     "DESKTOP-2D0R4LI"
   ],
   "gates": {
+    "exec-tree-edit-guard": { "rollout": "deny", "immediatePolicy": "2026-10-26 user 指示: 実行ツリーの直接編集を即時拒否" },
     "mail-consistency-gate": { "rollout": "deny", "immediatePolicy": "2026-10-26 博展見積: 合意済み『設営スタッフ不要』が見積に反映されないまま請求へ進みかけた", "distributedAt": "2026-10-26T00:00:00Z", "denyAfter": "2026-11-02T00:00:00Z" },
     "mail-draft-account-gate": { "rollout": "deny", "immediatePolicy": "2026-10-25 kim 指示: 全PCのメール下書きは seisaku-team@orgiast.jp に統一" },
     "recipient-domain-gate": { "rollout": "deny", "immediatePolicy": "2026-10-23 名刺OCR誤読による不存在ドメイン送信防止" },

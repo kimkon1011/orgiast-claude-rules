@@ -366,6 +366,7 @@ try {
   // ヘッドレス実行で消失するバックグラウンド処理を実行前に拒否する。
   if (add(settings.hooks.PreToolUse, 'pretooluse-headless-background.mjs', { matcher: 'Bash|PowerShell|ScheduleWakeup', hooks: [{ type: 'command', command: command('pretooluse-headless-background.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.PreToolUse, 'pretooluse-line-broadcast-guard.mjs', { matcher: 'Bash|PowerShell|Write|Edit|MultiEdit', hooks: [{ type: 'command', command: command('pretooluse-line-broadcast-guard.mjs'), timeout: 5 }] })) added += 1;
+  if (add(settings.hooks.PreToolUse, 'exec-tree-edit-guard.mjs', { matcher: 'Write|Edit|MultiEdit|NotebookEdit', hooks: [{ type: 'command', command: command('exec-tree-edit-guard.mjs'), timeout: 5 }] })) added += 1;
   // read-only調査の逐次実行を検知し、まとめて調査するよう同期注入する。
   if (add(settings.hooks.PreToolUse, 'pretooluse-serial-investigation.mjs', { hooks: [{ type: 'command', command: command('pretooluse-serial-investigation.mjs'), timeout: 5 }] })) added += 1;
   // Gemini MCP(gemini-cli) の応答から実トークンを台帳(executor-usage.jsonl)へ記録する。

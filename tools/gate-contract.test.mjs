@@ -23,6 +23,11 @@ test('new rollout entries must declare the seven day window; legacy inventory is
     const row = manifest.gates[name];
     assert.ok(row, `${name}: missing rollout entry`);
     assert.ok(['warn','deny'].includes(row.rollout));
+    if (name === 'exec-tree-edit-guard') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-10-26 user 指示: 実行ツリーの直接編集を即時拒否');
+      continue; // Direct synchronous policy hook, outside staged rollout.
+    }
     if (name === 'mail-draft-account-gate') {
       assert.equal(row.rollout, 'deny');
       assert.equal(row.immediatePolicy, '2026-10-25 kim 指示: 全PCのメール下書きは seisaku-team@orgiast.jp に統一');

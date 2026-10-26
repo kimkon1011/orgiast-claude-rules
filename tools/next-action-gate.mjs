@@ -160,8 +160,7 @@ function hasSessionWakeup(raw) {
 const SYSTEM_USER_PATTERN = /^\s*(?:<task-notification>|<system-reminder>|Stop hook feedback|\[Subagent hand-back\])/;
 export function workedTurnEntries(raw) {
   let entries = [];
-  for (const line of String(raw || '').split(/?
-/)) {
+  for (const line of String(raw || '').split(/\r?\n/)) {
     let entry; try { entry = JSON.parse(line); } catch { continue; }
     if (!entry || entry.isSidechain === true) continue;
     const content = entry.message?.content;

@@ -213,7 +213,8 @@ export function judgeNextAction(text, transcriptRaw = '', input = {}) {
     return { decision: 'block', code: 'NEXT-ACTION-DEFERRAL', reason: DEFERRAL_REASON };
   }
   const wakeup = hasSessionWakeup(transcriptRaw);
-  if (hasAutopilot && footer.nextAction !== 'なし' && !wakeup.autoProgress) {
+  if (hasAutopilot && footer.nextAction !== 'なし' && !wakeup.autoProgress
+    && process.env.CLAUDE_HEADLESS !== '1' && !/subagents/i.test(input.transcript_path || '')) {
     return { decision: 'block', code: 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK', reason: '人待ちの自動進行は台帳の定期チェックに載せる: node tools/auto-progress.mjs --add-check --session <id> --check "<exit0=達成/1=未達のコマンド>" --deadline +7d --label "<名前>"' };
   }
   if (!permanentFix && hasAutopilot && process.env.CLAUDE_HEADLESS !== '1'

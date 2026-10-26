@@ -2,12 +2,11 @@
 param([Parameter(Mandatory=$true)][string]$TestHome)
 $ErrorActionPreference = 'Stop'
 # Load constructors before defining mocks: module autoload can replace local functions.
-# Import only when absent: re-importing Microsoft.PowerShell.Security on the GitHub
-# Windows runner fails with "TypeData ObjectSecurity: member already present".
-# The TypeData collision is a terminating FormatXmlUpdateException, so -ErrorAction
-# cannot suppress it; swallow it and verify the commands we need are present instead.
+# pwsh -> node -> powershell.exe inherits PowerShell 7's PSModulePath.
+# Load PS5.1's own modules explicitly: name-based imports can select incompatible
+# PS7 modules (Get-FileHash disappears and Security reports duplicate TypeData).
 foreach ($m in 'ScheduledTasks', 'Microsoft.PowerShell.Management', 'Microsoft.PowerShell.Utility', 'Microsoft.PowerShell.Security') {
-  try { if (-not (Get-Module -Name $m)) { Import-Module $m -ErrorAction Stop -WarningAction SilentlyContinue } } catch { }
+  Import-Module (Join-Path $PSHOME "Modules\$m\$m.psd1") -ErrorAction Stop
 }
 foreach ($c in 'New-ScheduledTaskAction', 'New-ScheduledTaskTrigger', 'New-ScheduledTaskSettingsSet', 'New-ScheduledTaskPrincipal', 'Get-FileHash', 'Join-Path') {
   if (-not (Get-Command $c -ErrorAction SilentlyContinue)) { throw "contract fixture: required command missing after import: $c" }

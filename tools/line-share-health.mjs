@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
 import { sendDiscordDm } from './line-export-reminder.mjs';
-import { readJsonLines, desktopProblems } from './line-desktop-health.mjs';
+import { readJsonLines, desktopProblems, desktopStartupProblems, desktopDailyReport, localDate } from './line-desktop-health.mjs';
 const SIX_HOURS = 6 * 3600_000;
 export async function probe({ base, token, fetchImpl = fetch, onCheck = () => {} }) {
   const problems = [];
@@ -51,10 +51,17 @@ export async function runHealth(options) {
   const ageDays = latestExportAge(debug, now);
   if (ageDays === null || ageDays >= 7) problems.push({ key: 'stale-export', detail: ageDays === null ? '補助監視（7日）: export-stored記録なし' : `補助監視（7日）: 最終export-storedから${Math.floor(ageDays)}日` });
   let desktopRecovery = 'not-needed';
+  const runs = readJsonLines(options.desktopRunsFile), events = readJsonLines(debugFile);
   if (options.desktopRunsFile) {
-    const desktop = desktopProblems({ runs: readJsonLines(options.desktopRunsFile), attempts: readJsonLines(options.desktopAttemptsFile), events: readJsonLines(debugFile), now });
+    let task = {};
+    if (options.getDesktopTask) {
+      try { task = await options.getDesktopTask(); }
+      catch (e) { problems.push({ key: 'desktop-task-query', detail: e.message }); }
+    }
+    const desktop = desktopProblems({ runs, attempts: readJsonLines(options.desktopAttemptsFile), events, now });
+    desktop.push(...desktopStartupProblems({ runs, task, now }));
     problems.push(...desktop);
-    if (desktop.some(p => p.key === 'desktop-stale') && !dryRun && options.kickDesktop && (!state.desktopKickAt || now - state.desktopKickAt >= SIX_HOURS)) {
+    if (desktop.some(p => ['desktop-stale', 'desktop-not-starting'].includes(p.key)) && !dryRun && options.kickDesktop && (!state.desktopKickAt || now - state.desktopKickAt >= SIX_HOURS)) {
       state.desktopKickAt = now;
       fs.mkdirSync(path.dirname(stateFile), { recursive: true });
       fs.writeFileSync(stateFile, JSON.stringify(state));
@@ -62,6 +69,8 @@ export async function runHealth(options) {
       catch (e) { desktopRecovery = 'failed'; problems.push({ key: 'desktop-kick', detail: e.message }); }
     }
   }
+  const dailyReport = options.desktopRunsFile ? desktopDailyReport({ runs, events, now, problems }) : null;
+  if (dryRun && dailyReport) (options.output || console.log)(dailyReport);
   state.sent ??= {};
   const due = problems.filter(p => !state.sent[p.key] || now - state.sent[p.key] >= SIX_HOURS);
   // Persist the diagnosis even if Discord is unavailable. Unsent alerts remain due.
@@ -70,11 +79,27 @@ export async function runHealth(options) {
     fs.writeFileSync(stateFile, JSON.stringify({ ...state, checkedAt: now, problems, ageDays, recovery, desktopRecovery }));
   }
   if (due.length && !dryRun) {
-    await sendDm({ home: options.home, message: `⚠️ LINE取り込みの監視（PC経路36時間・補助7日）で異常を検出しました。\n${due.map(p => `${p.key}: ${p.detail}`).join('\n')}\n自動復旧: ${recovery} / PCタスク: ${desktopRecovery}\n${options.base}` });
+    await sendDm({ home: options.home, message: `⚠️ LINE取り込みの監視（未起動3時間・PC経路36時間・補助7日）で異常を検出しました。\n${due.map(p => `${p.key}: ${p.detail}`).join('\n')}\n自動復旧: ${recovery} / PCタスク: ${desktopRecovery}\n${options.base}` });
     for (const p of due) state.sent[p.key] = now;
   }
   if (!dryRun) { fs.mkdirSync(path.dirname(stateFile), { recursive: true }); fs.writeFileSync(stateFile, JSON.stringify({ ...state, checkedAt: now, problems, ageDays, recovery, desktopRecovery })); }
-  return { problems, ageDays, recovery, desktopRecovery, notified: !dryRun && due.length > 0 };
+  if (!dryRun && dailyReport && new Date(now).getHours() >= 21 && state.dailyReportDate !== localDate(now)) {
+    await sendDm({ home: options.home, message: dailyReport });
+    state.dailyReportDate = localDate(now);
+    fs.writeFileSync(stateFile, JSON.stringify({ ...state, checkedAt: now, problems, ageDays, recovery, desktopRecovery }));
+  }
+  return { dailyReport, problems, ageDays, recovery, desktopRecovery, notified: !dryRun && due.length > 0 };
+}
+export function desktopPowerShell(command, spawn = spawnSync) {
+  const p = spawn('powershell.exe', ['-NoProfile', '-Command', "$ErrorActionPreference='Stop'; " + command], { encoding: 'utf8', windowsHide: true, timeout: 30_000 });
+  if (p.error || p.status !== 0) throw new Error(`ClaudeMobile-LineDesktopExport: ${p.error?.message || p.stderr || 'PowerShell failed'}`);
+  return p.stdout.trim();
+}
+export function getDesktopTask(spawn = spawnSync) {
+  return JSON.parse(desktopPowerShell("$t=Get-ScheduledTask -TaskName 'ClaudeMobile-LineDesktopExport'; $i=$t | Get-ScheduledTaskInfo; @{lastRunTime=$i.LastRunTime.ToString('o');runOnlyIfIdle=$t.Settings.RunOnlyIfIdle;enabled=$t.Settings.Enabled;state=$t.State.ToString()} | ConvertTo-Json -Compress", spawn));
+}
+export function recoverDesktopTask(spawn = spawnSync) {
+  desktopPowerShell("$t=Get-ScheduledTask -TaskName 'ClaudeMobile-LineDesktopExport'; if($t.Settings.RunOnlyIfIdle){$t.Settings.RunOnlyIfIdle=$false; Set-ScheduledTask -TaskName $t.TaskName -Settings $t.Settings | Out-Null}; if((Get-ScheduledTask -TaskName $t.TaskName).Settings.RunOnlyIfIdle){throw 'RunOnlyIfIdle remains true'}; Start-ScheduledTask -TaskName $t.TaskName", spawn);
 }
 export async function main(argv = process.argv.slice(2)) {
   if (argv.some(a => a !== '--dry-run')) throw new Error('Only --dry-run is supported');
@@ -87,11 +112,8 @@ export async function main(argv = process.argv.slice(2)) {
   const result = await runHealth({ home, onCheck, base: process.env.LINE_SHARE_BASE_URL || 'https://claude-pc.tailc5d751.ts.net', token: process.env.ACCESS_TOKEN,
     stateFile: path.join(store, 'share-health-state.json'), debugFile: path.join(store, 'debug.jsonl'), dryRun: argv.includes('--dry-run'),
     desktopRunsFile: path.join(store, 'desktop-runs.jsonl'), desktopAttemptsFile: path.join(store, 'desktop-attempts.jsonl'),
-    kickDesktop: async () => {
-      if (process.platform !== 'win32') throw new Error('Windows recovery required');
-      const p = spawnSync('powershell.exe', ['-NoProfile', '-Command', "$ErrorActionPreference='Stop'; Start-ScheduledTask -TaskName 'ClaudeMobile-LineDesktopExport'"], { encoding: 'utf8', windowsHide: true, timeout: 30_000 });
-      if (p.error || p.status !== 0) throw new Error('ClaudeMobile-LineDesktopExport start failed');
-    },
+    getDesktopTask: () => getDesktopTask(),
+    kickDesktop: () => recoverDesktopTask(),
     restart: async () => {
       if (process.platform !== 'win32') throw new Error('Windows recovery required');
       const p = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(app, 'scripts', 'restart-webserver.ps1')], { encoding: 'utf8', windowsHide: true, timeout: 180_000 });

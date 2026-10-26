@@ -48,3 +48,35 @@ export function desktopProblems({ runs, attempts = [], events = [], now = Date.n
   }
   return [...new Map(problems.map(p => [p.key, p])).values()];
 }
+
+export function desktopStartupProblems({ runs, task = {}, now = Date.now() }) {
+  const date = new Date(now);
+  if (date.getHours() * 60 + date.getMinutes() < 150) return [];
+  const latest = Math.max(0, ...[task.lastRunTime, ...runs.map(r => r.startedAt)]
+    .map(t => Date.parse(t)).filter(t => Number.isFinite(t) && t <= now));
+  if (latest && now - latest < 3 * 3600_000) return [];
+  return [{ key: 'desktop-not-starting', detail: `ClaudeMobile-LineDesktopExport: ${latest ? `最終起動 ${new Date(latest).toISOString()}` : '起動記録なし'} / RunOnlyIfIdle=${task.runOnlyIfIdle ?? 'unknown'} / Enabled=${task.enabled ?? 'unknown'} / 状態=${task.state ?? 'unknown'}` }];
+}
+export function localDate(now) {
+  const d = new Date(now);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+export function desktopDailyReport({ runs, events = [], now = Date.now(), problems = [] }) {
+  const today = localDate(now), counts = { completed: 0, partial: 0, skipped: 0, failed: 0 }, reasons = new Map();
+  const addReason = reason => { if (reason) reasons.set(reason, (reasons.get(reason) || 0) + 1); };
+  for (const r of runs.filter(r => Date.parse(r.startedAt) <= now && localDate(Date.parse(r.startedAt)) === today)) {
+    const status = r.status === 'success' ? 'completed' : r.status;
+    if (status in counts) counts[status]++;
+    if (status === 'skipped') addReason(r.reason || 'unknown');
+    for (const c of r.chats || []) if (c.status === 'skipped') addReason(`${c.chat}: ${c.reason || 'unknown'}`);
+  }
+  const chats = new Map(DESKTOP_CHATS.map(c => [c, { stored: 0, duplicates: 0, unresolvedSender: 0 }]));
+  for (const e of events.filter(e => e.source === 'desktop' && ['export-stored','export-empty'].includes(e.kind) && Number(e.ts) <= now && localDate(Number(e.ts)) === today)) {
+    const total = chats.get(e.chat) || { stored: 0, duplicates: 0, unresolvedSender: 0 };
+    for (const k of Object.keys(total)) total[k] += Number(e[k] ?? e.stats?.[k] ?? 0) || 0;
+    chats.set(e.chat || '(unknown)', total);
+  }
+  const latest = Math.max(0, ...runs.filter(r => ['completed','success'].includes(r.status) && DESKTOP_CHATS.every(chat => r.chats?.some(c => c.chat === chat && c.status === 'imported'))).map(r => Date.parse(r.finishedAt || r.startedAt)).filter(t => t <= now));
+  const stored = [...chats.values()].reduce((n,c) => n+c.stored,0);
+  return `${stored ? '' : '⚠️ '}LINE日次進捗 ${today}\n実行: ${Object.entries(counts).map(([k,v]) => `${k} ${v}`).join(' / ')}\nskip理由: ${[...reasons].map(([k,v]) => `${k} ${v}回`).join(' / ') || 'なし'}\n${[...chats].map(([chat,c]) => `${chat}: 新規${c.stored} / 重複${c.duplicates} / 未確定${c.unresolvedSender}`).join('\n')}\n最終成功: ${latest ? new Date(latest).toLocaleString('ja-JP', { hour12: false }) : '記録なし'}\n毎時監視: ${problems.length ? `異常あり（${problems.map(p => p.key).join(', ')}）` : '異常なし'}`;
+}

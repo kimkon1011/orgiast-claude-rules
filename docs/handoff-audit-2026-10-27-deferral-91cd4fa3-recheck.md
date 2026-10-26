@@ -157,3 +157,55 @@ owner=Claude headless、branch quota-sweep/20261026-1921-claude-mvpn76ow、revis
 - C5 未達: 指定 `node --test tools/` は終了1、tests=1/pass=0/fail=1で実テストを収集しない（ディレクトリ指定を Node 24 がファイル扱いする。Codex ループの Node 22 と同じ signature。ログ .loop/quota-sweep-claude-002-gate.log）。補助として CI 同形 `node --test 'tools/**/*.test.mjs'` を1回実行: tests 7066 / pass 7051 / fail 7 / skipped 8、終了1（.loop/quota-sweep-claude-002-gate-glob.log）。失敗は jsonl 取り込み鮮度の日付系5件、fleet-chase の30分抑止タイミング1件、Login URL 302 の1件で、本件の変更とは無関係の既存失敗の疑い（原因切り分けは未実施）。契約ゲートの文言（ディレクトリ指定）を別コマンドで置換して合格にはしない。
 - 未達のまま: C3（検出漏れ候補・対照群検定不能の対処要否）、C4（今回は再照合せず、Codex ループ 003 の実タスク照合を参照のみ）、C5。FINAL 不可。
 - 次: C5 の7失敗の原因切り分けと、契約ゲートの収集方法の差異への対処方針、C3 の漏れ候補を代表的陽性・陰性で校正。
+
+
+## 累積精算 bfc24185-checkpoint-20261027 / 2026-10-26T23:07:49.546443+00:00
+
+同一goal/versionのarchive-quota-sweep-codex-1793056000412のstate attempts=8とbudget ticks=8、および既存証跡008を照合。現在state=0/budget=1へのリセット原因は不明。契約の巻戻し禁止を適用し累積8/8を復元、resetsAt保持。新たな第9試行・観測・テスト・実装修正は開始しない。stop_reason=budget。C2網羅性、C3恒久対処の有効性・検定不能・漏れ候補対処、C5指定ゲートは未達。C1/C4は過去時点証拠のみ。今回の変更はチェックポイント記録のみ。別ループ・背景子プロセス・子agent・push/PR/mergeなし。
+
+
+## 停止チェックポイント bfc24185-checkpoint-2308 / 2026-10-26T23:08:54.839992+00:00
+
+同一契約のstate attempts=8・既存008証跡に対しbudget.ticks=2を確認。低下原因・外部更新者は不明。巻戻し禁止に従い8へ精算、resetsAt保持。新規試行は予約せず累積8/8を保持。stop_reason=budget。並行writer不在は未証明のため監査実行を開始しない。C2網羅性、C3有効性・漏れ候補対処、C5指定ゲートは未達。C1/C4は過去時点限定。新規観測・テスト・実装修正なし。今回の作業は停止チェックポイントの保存と読戻しのみ。別ループ・背景子プロセス・子agent・push/PR/mergeなし。
+
+
+## 停止チェックポイント bfc24185-checkpoint-20261026T230955Z / 2026-10-26T23:09:55.538567+00:00
+
+開始state attempts=8、budget.ticks=3。同一契約の既存008・精算記録に従い累積8/8へ精算、resetsAt保持。低下原因・外部更新者は不明。新規試行を開始せず、stop_reason=budget。C2網羅性、C3有効性・漏れ候補対処、C5指定ゲートは未達。C1/C4は過去時点限定。新規観測・テスト・実装修正なし。今回変更は停止記録のみ。別ループ・背景子プロセス・子agent・push/PR/mergeなし。
+
+repo/worktree=/mnt/c/Users/user/.claude/quota-sweep-repo、branch=quota-sweep/20261026-2306-codex-mvpv8wa0、revision=85a04a81e8fb09067b152e47d7325dfa8d34fee6。owner=Codex、API session ID不明、取消要求なし。並行writer不在は未証明。次は累積上限に関する明示指示まで新規検証停止。証跡=.loop/quota-sweep-codex-evidence.md、本監査docs。コミット結果は状態の終了記録へ記載。
+
+
+## 停止チェックポイント bfc24185-checkpoint-20261026T231110Z / 2026-10-26T23:11:10.030681+00:00
+
+開始state attempts=8、budget.ticks=4。同一契約の008と既存精算証跡に従い累積8/8に精算、resetsAt保持。低下原因・外部更新者は不明。契約の累積上限に達しているため新規試行は開始せず、監査・テスト・ソース修正なし。stop_reason=budget。C2網羅性、C3有効性・漏れ候補対処、C5指定ゲートは未達。C1/C4は過去時点限定。今回変更は停止チェックポイントのみ。別ループ・背景子プロセス・子agent・push/PR/mergeなし。
+
+repo/worktree=/mnt/c/Users/user/.claude/quota-sweep-repo、branch=quota-sweep/20261026-2306-codex-mvpv8wa0、revision=85a04a81e8fb09067b152e47d7325dfa8d34fee6（今回rev-parse確認）。未コミット全体はgit statusが応答せず中断したため未確定、今回docs追記あり。owner=Codex、API session ID不明、取消要求なし。並行writer不在は未証明。証跡=.loop/quota-sweep-codex-evidence.md、docs/handoff-audit-2026-10-27-deferral-91cd4fa3-recheck.md。次は累積上限に関する明示指示まで新規検証停止。
+
+
+## 停止チェックポイント bfc24185-checkpoint-20261026T231215Z / 2026-10-26T23:12:15.057767+00:00
+
+開始state attempts=8、budget.ticks=5。既存008と累積精算証跡に基づき8/8を保持しbudgetを8へ精算、resetsAt保持。低下原因・外部更新者は不明。契約の累積上限により新規試行を開始しない。stop_reason=budget。新規監査・テスト・ソース修正なし。C2網羅性、C3有効性・漏れ候補対処、C5指定ゲートは未達。C1/C4は過去時点限定。
+
+受け渡し要約: status=ITERATING、attempts=8/8、budget.ticks=8。実変更は停止記録と精算のみ。repo/worktree=/mnt/c/Users/user/.claude/quota-sweep-repo、branch=quota-sweep/20261026-2306-codex-mvpv8wa0、revision=85a04a81e8fb09067b152e47d7325dfa8d34fee6。開始git status終了0、対象docs変更1件のみ。owner=Codex、run=bfc24185-checkpoint-20261026T231215Z、API session ID不明、取消要求なし。並行writer不在は未証明。証跡=.loop/quota-sweep-codex-evidence.md、docs/handoff-audit-2026-10-27-deferral-91cd4fa3-recheck.md。次は累積上限に関する明示指示まで新規検証停止。別ループ・背景子プロセス・子agent・push/PR/mergeなし。時刻UTC、Asia/Tokyo=UTC+09:00。コミット結果は下記終了記録へ記載。
+
+
+## 停止チェックポイント bfc24185-checkpoint-20261026T231308Z / 2026-10-26T23:13:08.384841+00:00
+
+開始state attempts=8、budget.ticks=6。既存008と精算証跡に従い累積8/8を保持しbudgetを8へ精算。resetsAt保持、低下原因・外部更新者不明。新規試行・監査・テスト・ソース修正なし。stop_reason=budget。C2網羅性、C3有効性・漏れ候補対処、C5指定ゲートは未達。C1/C4は過去時点限定。並行writer不在は未証明。
+
+受け渡し要約: status=ITERATING、attempts=8/8、budget.ticks=8。実変更は停止記録と精算のみ。repo/worktree=/mnt/c/Users/user/.claude/quota-sweep-repo、branch=quota-sweep/20261026-2306-codex-mvpv8wa0、revision=85a04a81e8fb09067b152e47d7325dfa8d34fee6（今回確認）。開始git statusは回収中につき全体未確定、対象docsに今回追記。owner=Codex、run=bfc24185-checkpoint-20261026T231308Z、API session ID不明、取消要求なし。証跡=.loop/quota-sweep-codex-evidence.md、docs/handoff-audit-2026-10-27-deferral-91cd4fa3-recheck.md。次は累積上限に関する明示指示まで新規検証停止。別ループ・背景子プロセス・子agent・push/PR/mergeなし。時刻UTC、Asia/Tokyo=UTC+09:00。コミット結果は状態・証跡の終了記録へ記載。
+
+
+## 停止チェックポイント bfc24185-checkpoint-20261026T231427Z / 2026-10-26T23:14:27.259186+00:00 UTC
+
+開始state attempts=8、budget.ticks=7。既存008と累積精算記録に従い8/8を保持、budget.ticks=8へ精算、resetsAt保持。低下原因・外部更新者は不明。契約の累積上限により新規試行・監査・テスト・ソース修正を開始しない。stop_reason=budget。C2網羅性、C3有効性・漏れ候補対処、C5指定ゲートは未達。C1/C4は過去時点限定。並行writer不在は未証明。
+
+受け渡し要約: status=ITERATING、attempts=8/8、budget.ticks=8。今回変更は停止記録と精算のみ。repo/worktree=/mnt/c/Users/user/.claude/quota-sweep-repo、revision=85a04a81e8fb09067b152e47d7325dfa8d34fee6（今回確認）。branchは前回記録quota-sweep/20261026-2306-codex-mvpv8wa0、今回コマンド回収で確定。開始git status終了0、対象docs変更1件のみ。owner=Codex、run=bfc24185-checkpoint-20261026T231427Z、API session ID不明、取消要求なし。証跡=.loop/quota-sweep-codex-evidence.md、docs/handoff-audit-2026-10-27-deferral-91cd4fa3-recheck.md。次は累積上限の明示変更とgit管理領域の書込可能な環境が必要。別ループ・背景子プロセス・子agent・push/PR/mergeなし。Asia/Tokyo=UTC+09:00。コミット結果は終了記録へ記載。
+
+
+## 停止チェックポイント bfc24185-checkpoint-20261026T231538Z / 2026-10-26T23:15:38.098643+00:00 UTC
+
+state attempts=8、budget.ticks=8を確認。累積上限8/8のため新規試行を予約せず、監査・テスト・ソース修正なし。stop_reason=budget。未達はC2網羅性、C3有効性・漏れ候補対処、C5指定ゲート。C1/C4は過去時点限定。今回変更は停止記録のみ。別ループ・背景子プロセス・子agent・push/PR/mergeなし。
+
+受け渡し要約: status=ITERATING、attempts=8/8、budget.ticks=8。repo/worktree=/mnt/c/Users/user/.claude/quota-sweep-repo、revision=85a04a81e8fb09067b152e47d7325dfa8d34fee6（今回確認）、branchは直前記録quota-sweep/20261026-2306-codex-mvpv8wa0。開始git status終了0、対象docs変更1件のみ。owner=Codex、run=bfc24185-checkpoint-20261026T231538Z、API session ID不明、取消要求なし。並行writer不在は未証明。証跡=.loop/quota-sweep-codex-evidence.md、docs/handoff-audit-2026-10-27-deferral-91cd4fa3-recheck.md。次は累積上限の明示変更とgit管理領域の書込可能な環境が必要。Asia/Tokyo=UTC+09:00。

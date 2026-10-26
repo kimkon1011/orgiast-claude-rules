@@ -88,6 +88,9 @@ export async function execute(record, { timeoutMs, resultFile, previous = [] }, 
 実行した成果を ${resultFile} にJSONで保存してください: {"progressed":true/false,"evidence":"変更した成果物と検証結果、または進めない理由"}。
 単なる進捗確認・計画・終了コード0は成果に含めません。\n当初依頼: ${record.firstPrompt}\n直近: ${record.lastAssistantText}`;
   const result = await (io.runChild ?? runChild)(io.executable ?? resolveClaudeExe(), prompt, record.cwd, record.cwd, timeoutMs, { resumeSessionId: record.sessionId });
+  // 実行役が1つも起動できない(cheap-code 全レーン停止・Claude フォールバック無効)のはセッションの失敗ではない。
+  // 2026-10-26 実測: deepseek payment_required で2件が1秒で error 扱い→「連続2件エラーで中止」の誤通知と noProgress 消費。
+  if (result.skippedNoExecutor) return { outcome: 'no-executor', reason: `実行役なし: ${String(result.stderr ?? '').trim().slice(-300) || result.executorUsed || 'cheap-code'}` };
   if (result.status !== 'success') return { outcome: 'error', reason: result.status };
   const report = await (io.readReport ?? readJson)(resultFile, null);
   return { outcome: report?.progressed === true && typeof report.evidence === 'string' && report.evidence.trim() ? 'progressed' : 'no-progress', reason: report?.evidence || '成果記録なし', executor: result.executorUsed };
@@ -115,6 +118,7 @@ export async function run(config = options(), io = {}) {
     const records = (await (io.detect ?? detect)()).filter(r => ['要対応', '要確認'].includes(r.status)).sort((a, b) => b.score - a.score || a.ageDays - b.ageDays);
     const rows = [], results = [];
     const state = ledger.nights[night] ?? { count: 0, errors: 0, aborted: false };
+    if (!readonly) delete state.noExecutor;
     for (const record of records) {
       const parentId = resumedParentId(record.firstPrompt);
       // 連鎖の子は、祖先が積んだ noProgress を引き継いでから数える（夜ごとに id が変わっても
@@ -155,8 +159,18 @@ export async function run(config = options(), io = {}) {
         const resultFile = path.join(dir, `stalled-result-${record.sessionId}-${night}.json`);
         await fs.rm(resultFile, { force: true });
         result = await (io.execute ?? execute)(record, { timeoutMs: config.timeoutMs, resultFile, previous: entry.attempts.slice(-4, -1) });
-        if (!['progressed', 'no-progress', 'error'].includes(result?.outcome)) throw new Error('Invalid execution outcome');
+        if (!['progressed', 'no-progress', 'error', 'no-executor'].includes(result?.outcome)) throw new Error('Invalid execution outcome');
       } catch (error) { result = { outcome: 'error', reason: String(error.message) }; }
+      if (result.outcome === 'no-executor') {
+        // 起動前に消費した試行を戻す(このセッションは何も試されていない)。レーン停止の通知は
+        // delegation-health の担当なのでここでは通知せず、後続も同じ理由で落ちるため今晩は打ち切る。
+        entry.attempts.pop();
+        entry.noProgress--;
+        state.count--;
+        state.noExecutor = redactSecrets(String(result.reason ?? '')).slice(0, 500);
+        await saveJson(ledgerFile, ledger);
+        break;
+      }
       Object.assign(attempt, result, { reason: redactSecrets(String(result.reason ?? '')).slice(0, 2000), endedAt: new Date(now()).toISOString() });
       const ancestors = chainAncestors(ledger, entry.parentSessionId);
       if (result.outcome === 'progressed') {
@@ -183,7 +197,7 @@ export async function run(config = options(), io = {}) {
       state.notification = await (io.notify ?? notifyKim)(message, { home });
       await saveJson(ledgerFile, ledger);
     }
-    return { rows, results, aborted: state.aborted };
+    return { rows, results, aborted: state.aborted, ...(state.noExecutor ? { noExecutor: state.noExecutor } : {}) };
   } finally {
     if (lock) lock();
   }

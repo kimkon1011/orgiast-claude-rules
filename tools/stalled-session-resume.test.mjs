@@ -35,6 +35,20 @@ test('two consecutive errors abort night, including subsequent invocations', asy
   assert.equal((await run(options([], {}), f.io)).aborted, true);
   await run(options([], {}), f.io); assert.equal(calls, 2); assert.match(message, /連続2件エラー/);
 });
+test('no executor stops the night without error, notice, or consuming budget', async t => {
+  const f = await fixture(t); let calls = 0;
+  f.io.execute = async () => { calls++; return { outcome: 'no-executor', reason: '実行役なし: cheap-code/deepseek exit 3' }; };
+  const r = await run(options([], {}), f.io);
+  assert.equal(calls, 1); assert.equal(r.aborted, false); assert.equal(r.results.length, 0); assert.equal(f.notices(), 0);
+  assert.match(r.noExecutor, /deepseek exit 3/);
+  const ledger = await f.ledger();
+  assert.deepEqual(ledger.sessions['session-0'].attempts, []); assert.equal(ledger.sessions['session-0'].noProgress, 0);
+  assert.equal(ledger.nights['2026-09-24'].count, 0); assert.equal(ledger.nights['2026-09-24'].errors, 0);
+  // レーンが同じ晩に戻れば、同じセッションを再開できる。
+  f.io.execute = async () => { calls++; return { outcome: 'progressed', reason: 'artifact verified' }; };
+  const again = await run(options([], {}), f.io);
+  assert.equal(again.results[0].outcome, 'progressed'); assert.equal(again.noExecutor, undefined);
+});
 test('recently active sessions excluded using injected stat', async t => {
   const f = await fixture(t); f.io.stat = async () => ({ mtimeMs: f.io.now() - 60000 });
   assert.ok((await run(options([], {}), f.io)).rows.every(r => r.skip === 'active')); assert.equal(f.calls(), 0);
@@ -83,6 +97,9 @@ test('adapter forwards deadline/resume and requires progress evidence', async ()
   assert.equal((await execute(r, { timeoutMs: 123 }, io)).outcome, 'progressed');
   io.runChild = async () => ({ status: 'timeout' });
   assert.equal((await execute(r, { timeoutMs: 123 }, io)).outcome, 'error');
+  io.runChild = async () => ({ status: 'failure', skippedNoExecutor: true, executorUsed: 'cheap-code:deepseek', stderr: 'payment_required' });
+  const lane = await execute(r, { timeoutMs: 123 }, io);
+  assert.equal(lane.outcome, 'no-executor'); assert.match(lane.reason, /payment_required/);
   assert.ok(buildClaudeHeadlessArgs({ repoCwd: '/fixture', historyCwd: '/fixture', resumeSessionId: 'abc' }).includes('--resume'));
 });
 test('invalid CLI/env values rejected', () => {

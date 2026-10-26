@@ -1,8 +1,8 @@
 {
   "version": 1,
   "items": [
-    { "id": "task:task-hide-guard", "type": "scheduled-task", "severity": "optional", "spec": { "name": "Claude-TaskHideGuard" }, "description": "全PC: 定期タスクを非表示起動へ修復(ログオン時・30分ごと)", "repair": ["register-task-hide-guard.mjs"] },
-    { "id": "task:window-spawn-watch", "type": "scheduled-task", "severity": "optional", "spec": { "name": "OrgiastWindowSpawnWatch" }, "description": "全PC: 可視コンソール窓の出現を記録(ログオン時・常駐)", "repair": ["register-task-hide-guard.mjs"] },
+    { "id": "task:task-hide-guard", "type": "scheduled-task", "severity": "optional", "spec": { "name": "Claude-TaskHideGuard", "migrationMarker": ".claude/.task-hide-guard-v1" }, "description": "全PC: 定期タスクを非表示起動へ修復(ログオン時・30分ごと)", "repair": ["register-task-hide-guard.mjs"] },
+    { "id": "task:window-spawn-watch", "type": "scheduled-task", "severity": "optional", "spec": { "name": "OrgiastWindowSpawnWatch", "migrationMarker": ".claude/.task-hide-guard-v1" }, "description": "全PC: 可視コンソール窓の出現を記録(ログオン時・常駐)", "repair": ["register-task-hide-guard.mjs"] },
     { "id": "task:aihaijin-digest", "type": "scheduled-task", "severity": "optional", "spec": { "name": "OrgiastAihaijinDigest", "ifPresent": ".claude/messenger-profile" }, "description": "kim-PC: AI廃人部の週次取り込み(日曜03:20、Messengerプロファイル設定済PCのみ)", "repair": ["register-aihaijin-digest.mjs"] },
     {"id": "task:quota-sweep", "type": "scheduled-task", "severity": "optional", "spec": {"name": "OrgiastQuotaSweep"}, "description": "Claude/Codex の枠リセット直前に残枠を makeloop で消化(15分ごと判定)", "repair": ["register-quota-sweep.mjs"]},
     {"id": "plugin:makeloop", "type": "file-contains", "severity": "optional", "spec": {"path": ".claude/.makeloop-installed.json", "regex": "\"claude\"\\s*:\\s*true"}, "description": "makeloop プラグイン(Claude Code/Codex)導入", "repair": ["install-makeloop.mjs"]},

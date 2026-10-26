@@ -67,4 +67,11 @@ Assert ($watch.Settings.ExecutionTimeLimit -eq 'PT0S') 'watch timeout'
 Assert ($watch.Settings.MultipleInstances -eq 2) 'watch overlapping'
 Assert ($guard.Principal.LogonType -eq 3 -and $guard.Principal.RunLevel -eq 0) 'principal'
 Assert (($global:contractStarted -join ',') -eq 'Claude-TaskHideGuard') 'startup must not restart watcher'
+$marker=Join-Path $TestHome '.claude\.task-hide-guard-v1'
+Assert (Test-Path $marker) 'manual task migration not marked'
+Remove-Item $marker
+Remove-Item (Join-Path $env:ORGIAST_NIGHTLY_REPO 'tools\task-hide-guard.ps1')
+& (Join-Path $contractTools 'register-task-hide-guard.ps1') | Out-Null
+Assert ($global:contractRegistered[2].Action.Arguments.Contains($contractTools)) 'install fallback missing'
+Assert (-not (Test-Path $marker)) 'fallback must retry migration when stable tools arrive'
 'PASS: guard exclusion, wrapping, access denial, SHA256, idempotency; stable registration, triggers and settings'

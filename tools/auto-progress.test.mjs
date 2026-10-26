@@ -7,7 +7,7 @@ import vm from 'node:vm';
 import { main as registerTasks } from './register-auto-progress-task.mjs';
 import { isNoopPromise, extractPromise, extractNextKim, applyPromise, buildRecord, record, readLedger, ledgerFile, rowKey, originLine } from './auto-progress-ledger.mjs';
 import { run as watch, parseVerdict, deterministicVerdict, judge, GRACE_MS, RESUME_INTERVAL_MS, MAX_RESUMES, postSheet, resumeSession, recentFiles, EXPIRE_UNATTENDED_MS, FALLBACK_STALL_MS, formatDoneMessage, readableReason } from './auto-progress-watch.mjs';
-import { run as digest, selectRows, formatDigest, isUnattendedRow, WINDOW_MS, MAX_ITEMS, needsDm, verdictOf, cleanText } from './auto-progress-digest.mjs';
+import { run as digest, selectRows, formatDigest, isUnattendedRow, WINDOW_MS, MAX_ITEMS, needsDm, verdictOf, cleanText, isHumanActionRequired, waitingNotificationKey } from './auto-progress-digest.mjs';
 import { runRegisterPs1 } from './lib/run-register-ps1.mjs';
 
 const tempHomes = [];
@@ -676,6 +676,60 @@ test('digest(要件5): 判断待ちの新規は枠外でも1回だけ送る（�
   const second = await digest({ home, now: now + 3600000, io });
   assert.deepEqual(second, { skipped: 'outside-slot', sent: false, count: 0 });
   assert.equal(calls, 1);
+});
+
+test('digest: urgentを3回呼んでも1回だけで、行の可変状態が変わっても再送しない', async () => {
+  const now = Date.parse('2026-10-15T14:00:00+09:00');
+  const home = tmp();
+  let row = { sessionId: 'stable-session', status: 'waiting_user', nextKim: '承認してください', promise: '見積を確定', ts: new Date(now - H).toISOString() };
+  let calls = 0;
+  const io = { readLedger: () => [row], notify: async () => { calls++; return { delivered: 'dm' }; } };
+  assert.equal((await digest({ home, now, io })).sent, true);
+  row = { ...row, status: 'resumed', resumeOutcome: 'needs_user: 承認待ち', resumedAt: new Date(now + H).toISOString(), lastCheckedAt: new Date(now + H).toISOString(), ts: new Date(now + H).toISOString() };
+  assert.equal((await digest({ home, now: now + H, io })).sent, false);
+  assert.equal((await digest({ home, now: now + 2 * H, io })).sent, false);
+  assert.equal(calls, 1);
+  const state = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'state', 'auto-progress-digest.json'), 'utf8'));
+  assert.deepEqual(state.notifiedUrgentKeys, [waitingNotificationKey(row)]);
+});
+
+test('digest: urgent本文は未通知項目だけで、既知の判断待ちを載せない', async () => {
+  const now = Date.parse('2026-10-15T14:00:00+09:00');
+  const home = tmp();
+  const known = { sessionId: 'known', status: 'waiting_user', nextKim: '既知を承認', promise: '既知の判断待ち', ts: new Date(now - H).toISOString() };
+  const fresh = { sessionId: 'fresh', status: 'waiting_user', nextKim: '新規を承認', promise: '新規の判断待ち', ts: new Date(now).toISOString() };
+  let text = '';
+  const io = {
+    readLedger: () => [known, fresh],
+    readState: () => ({ notifiedUrgentKeys: [waitingNotificationKey(known)] }),
+    notify: async value => { text = value; return { delivered: 'dm' }; },
+  };
+  await digest({ home, now, io });
+  assert.match(text, /新規の判断待ち/);
+  assert.doesNotMatch(text, /既知の判断待ち/);
+  assert.doesNotMatch(text, /・進行中:|・完了:|・止まっている:/);
+});
+
+test('digest: JST 03:00はurgentを保留し、翌朝枠の先頭に夜間項目として載せる', async () => {
+  const night = Date.parse('2026-10-15T03:00:00+09:00');
+  const morning = Date.parse('2026-10-15T08:00:00+09:00');
+  const home = tmp();
+  const row = { sessionId: 'night', status: 'waiting_user', nextKim: '内容を承認', promise: '夜間発生の確認', ts: new Date(night).toISOString() };
+  let calls = 0, text = '';
+  const io = { readLedger: () => [row], notify: async value => { calls++; text = value; return { delivered: 'dm' }; } };
+  assert.deepEqual(await digest({ home, now: night, io }), { skipped: 'quiet-hours', sent: false, count: 0 });
+  assert.equal(calls, 0);
+  assert.equal((await digest({ home, now: morning, io })).sent, true);
+  assert.equal(calls, 1);
+  assert.match(text.split('\n')[1], /^・夜間に出た判断待ち: 夜間発生の確認/);
+});
+
+test('isHumanActionRequired: 相手や承認到着を待つ文言は人の操作と判定しない', () => {
+  for (const nextKim of ['森下さんから返信が来たら作業を再開', '「送信OK」が来たら送る', '先方の返信待ち', '返事を待つ']) {
+    assert.equal(isHumanActionRequired({ status: 'waiting_user', nextKim }), false, nextKim);
+  }
+  assert.equal(isHumanActionRequired({ status: 'waiting_user', nextKim: '見積金額を承認してください' }), true);
+  assert.equal(isHumanActionRequired({ status: 'open', nextKim: 'なし', resumeOutcome: 'needs_user: 選択してください' }), true);
 });
 
 test('digest(要件5): 変化0件なら送らない', async () => {

@@ -59,7 +59,8 @@ export const kimAction = row => {
   // 「なし / 0件」「なし（…」のように補足付き・途中で切れた「なし」も人の操作は不要として扱う。
   if (/^(?:特に)?(?:なし|無し|ナシ)/.test(value)) return 'なし';
   const action = /^(?:(?:特に)?なし|無し|ナシ|(?:対応(?:は)?)?不要(?:です)?|(?:特に)?ありません|none|n\/a|[-—–－ー―])(?:[（(].*[）)])?[。．]?$/i.test(value) || !value ? 'なし' : value;
-  return /^(?:待機|待つ|返事待ち|返信待ち|確認待ち|判断待ち)/.test(action) ? 'なし' : action;
+  // 相手・別処理からの到着を待つ条件は kim の操作ではない。
+  return /(?:待機|待つ|返事待ち|返信待ち|確認待ち|判断待ち|(?:が|から).*来たら|(?:が|を).*したら)/.test(action) ? 'なし' : action;
 };
 
 export const isHumanActionRequired = (row) => {
@@ -162,6 +163,7 @@ export function formatDigest(rows, now = Date.now(), label = '', {
   inProgressCount,
   unattended = 0,
   owner = '',
+  nightWaitingKeys = new Set(),
 } = {}) {
   const filtered = (allRows || rows || []).filter(row => !isNoopPromise(row.promise));
   if (!filtered.length && !(waitingRows?.length || doneRows?.length || stalledRows?.length || inProgressRows?.length)) return '';
@@ -217,7 +219,8 @@ export function formatDigest(rows, now = Date.now(), label = '', {
     // 1. あなたの判断待ち
     for (const row of waiting.slice(0, wL)) {
       const what = cleanText(row.label || row.promise || '約束した作業', row);
-      lines.push(itemLine(`・あなたの判断待ち: ${projectOf(row)}`, what, ` — ${actionOf(row)}`));
+      const night = nightWaitingKeys.has(waitingNotificationKey(row)) ? '夜間に出た判断待ち: ' : 'あなたの判断待ち: ';
+      lines.push(itemLine(`・${night}${projectOf(row)}`, what, ` — ${actionOf(row)}`));
     }
     if (waiting.length > wL) {
       lines.push(`・あなたの判断待ち: ほか ${waiting.length - wL}件`);
@@ -284,6 +287,16 @@ export function formatDigest(rows, now = Date.now(), label = '', {
 const JST_OFFSET_MS = 9 * 3600 * 1000;
 const jstDate = (now) => new Date(now + JST_OFFSET_MS);
 
+export const waitingNotificationKey = row => JSON.stringify([
+  String(row?.sessionId || '').trim(),
+  String(row?.promise || '').trim().replace(/\s+/g, ' '),
+]);
+
+export function isQuietHours(now = Date.now()) {
+  const h = jstDate(now).getUTCHours();
+  return h >= 21 || h < 8;
+}
+
 export function slotOf(now = Date.now()) {
   const h = jstDate(now).getUTCHours();
   // 朝枠: 08:00〜11:59 (8, 9, 10, 11)
@@ -314,6 +327,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   const lastResumedAt = { ...(state.lastResumedAt || {}) };
   const lastWaiting = { ...(state.lastWaiting || {}) };
   const notifiedUrgentKeys = new Set(state.notifiedUrgentKeys || []);
+  const pendingNightKeys = new Set(state.pendingNightKeys || []);
   const lastSuccessAt = state.lastSuccessAt ? Date.parse(state.lastSuccessAt) : 0;
 
   const waitingRows = [];
@@ -342,7 +356,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       waitingRows.push(row);
       // 枠内の「変化」は判断依頼の新規発生・内容変更と、まだ一度も知らせていない項目。
       // 一度配信した項目のキーは notifiedUrgentKeys に入るので、再送にはならない。
-      if (!prevWait || prevKim !== kimAction(row) || !notifiedUrgentKeys.has(key)) {
+      if (!prevWait || prevKim !== kimAction(row) || !notifiedUrgentKeys.has(waitingNotificationKey(row))) {
         newlyWaitingRows.push(row);
       }
     } else if (row.status === 'stalled' || v === 'stalled' || (row.status === 'resumed' && Number(row.resumeCount) >= MAX_RESUMES)) {
@@ -359,10 +373,15 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   }
 
   // 枠外の判定: 新たに人の判断・操作が要る項目がある時だけ即時1通
+  const urgentItems = newlyWaitingRows.filter(r => !notifiedUrgentKeys.has(waitingNotificationKey(r)));
   if (isOutside) {
-    const urgentItems = newlyWaitingRows.filter(r => !notifiedUrgentKeys.has(rowKey(r)));
     if (!urgentItems.length) {
       return { skipped: 'outside-slot', sent: false, count: 0 };
+    }
+    if (isQuietHours(now)) {
+      for (const row of urgentItems) pendingNightKeys.add(waitingNotificationKey(row));
+      if (!dryRun) (io.writeState ?? writeState)(home, { ...state, pendingNightKeys: [...pendingNightKeys] });
+      return { skipped: 'quiet-hours', sent: false, count: 0 };
     }
   }
 
@@ -381,7 +400,9 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
 
   // 送信の宛先は「変化のあった行」の持ち主だけ。既知の判断待ちは本文の一覧には載せるが、
   // 宛先の決定には使わない（成功済みの宛先へ再送しないため）。
-  const changedRows = [...new Set([...newlyWaitingRows, ...newlyDoneRows, ...newlyStalledRows, ...newlyResumedRows])];
+  const changedRows = isOutside
+    ? [...new Set(urgentItems)]
+    : [...new Set([...newlyWaitingRows, ...newlyDoneRows, ...newlyStalledRows, ...newlyResumedRows])];
   const groups = new Map();
   for (const row of changedRows) {
     const owner = ownerOf(row);
@@ -391,10 +412,10 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
 
   const deliveries = [...groups].map(([owner, rows]) => {
     const owned = activeRows.filter(r => ownerOf(r) === owner);
-    const ownedWaiting = waitingRows.filter(r => ownerOf(r) === owner);
-    const ownedDone = newlyDoneRows.filter(r => ownerOf(r) === owner);
-    const ownedStalled = [...new Set([...newlyStalledRows, ...newlyResumedRows])].filter(r => ownerOf(r) === owner);
-    const ownedInProgress = inProgressRows.filter(r => ownerOf(r) === owner);
+    const ownedWaiting = (isOutside ? rows : waitingRows).filter(r => ownerOf(r) === owner);
+    const ownedDone = isOutside ? [] : newlyDoneRows.filter(r => ownerOf(r) === owner);
+    const ownedStalled = isOutside ? [] : [...new Set([...newlyStalledRows, ...newlyResumedRows])].filter(r => ownerOf(r) === owner);
+    const ownedInProgress = isOutside ? [] : inProgressRows.filter(r => ownerOf(r) === owner);
     const message = formatDigest(rows, now, label, {
       allRows: owned.filter(r => !isUnattendedRow(r, home)),
       waitingRows: ownedWaiting,
@@ -404,6 +425,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       inProgressCount: ownedInProgress.length,
       unattended: owned.filter(r => isUnattendedRow(r, home)).length,
       owner,
+      nightWaitingKeys: isOutside ? new Set() : pendingNightKeys,
     });
     return { owner, rows, message };
   }).filter(d => Boolean(d.message));
@@ -429,8 +451,12 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       if (row.resumedAt) lastResumedAt[key] = row.resumedAt;
     }
     // 判断待ちは枠内・枠外を問わず、一度知らせた項目を二度送らない（枠外の即時通知は新規のみ）。
-    for (const row of waitingRows) {
-      if (ownerOf(row) === owner) notifiedUrgentKeys.add(rowKey(row));
+    for (const row of (isOutside ? rows : waitingRows)) {
+      if (ownerOf(row) === owner) {
+        const notificationKey = waitingNotificationKey(row);
+        notifiedUrgentKeys.add(notificationKey);
+        pendingNightKeys.delete(notificationKey);
+      }
     }
     // 部分失敗後の再試行を防止するため各オーナー配信ごとに保存
     (io.writeState ?? writeState)(home, {
@@ -439,7 +465,8 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       lastKim,
       lastWaiting,
       lastResumedAt,
-      notifiedUrgentKeys: [...notifiedUrgentKeys].slice(-200),
+      notifiedUrgentKeys: [...notifiedUrgentKeys],
+      pendingNightKeys: [...pendingNightKeys],
     });
   }
 
@@ -465,7 +492,8 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     lastKim,
     lastWaiting,
     lastResumedAt,
-    notifiedUrgentKeys: [...notifiedUrgentKeys].slice(-200),
+    notifiedUrgentKeys: [...notifiedUrgentKeys],
+    pendingNightKeys: [...pendingNightKeys],
     lastSuccessAt: new Date(now).toISOString(),
     sentKeys: nextSentKeys,
   };

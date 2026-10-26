@@ -146,3 +146,14 @@ C1/C4は既存時点証拠を再利用、C2は固定窓更新と補助一致に�
 - 開始git statusは対象docs未追跡のみ。直前記録のbranch/revisionを保持し、今回再確認なし。owner Codex、API session ID不明、取消要求なし、退出時解放。送信・push/PR/merge・別ループ・背景子プロセス・子agentなし。
 
 - 008終了 / 2026-10-26T18:42:53.841271+00:00: git add終了128（実gitdirのindex.lock作成がRead-only file system）。指定 git commit -F /tmp/bfc24185-008-commit-msg -- docs/handoff-audit-2026-10-27-deferral-91cd4fa3-recheck.md は終了1（未追跡pathspec）。コミット未作成、.loop/除外、迂回なし。stop_reason=budget、全基準未成立。
+
+
+## Claude 実行 試行2（quota-sweep-claude / 2026-10-26T19:26〜19:45Z）
+
+owner=Claude headless、branch quota-sweep/20261026-1921-claude-mvpn76ow、revision 952907f、Windows ネイティブ Node v24.22.1、home=C:\Users\user。ソース・テスト変更なし。開始時 state=0/budget.ticks=1 の不一致は大きい値1を暫定消費とし、今回を2として予約した。
+
+- C1 成立（再測）: stop-gate-runner-ledger 1434行目、ts=2026-10-26T11:26:28.622Z、sessionId=91cd4fa3-b4f7-4d3f-8e74-3aafc70305cc、verdict=block。現行 detect() は W を返し、一致語「Codex に任せていて、今その結果を待って」、index=7。
+- C2 固定窓の更新: (2026-10-26T11:26:28.622Z, 2026-10-26T19:26:40.009Z)。3台帳とも可読、不正JSON 0。総行/窓内行は runner 1538/104、audit 1508/123、nightly 230/55。scan({home,since,until}) と独立集計が一致し、W は runner 1435/1436/1437行の同セッション3件のみ（Codex ループ固定窓 18:25Z 以降に runner +6行・新規W 0）。audit.excerpt には同セッションの同文3件（1386〜1388行）。nightly は 0。他セッションの同型は 0。無再発ではなく、同セッションの再発3件は実在。網羅性（セッション全文）は未証明。
+- C5 未達: 指定 `node --test tools/` は終了1、tests=1/pass=0/fail=1で実テストを収集しない（ディレクトリ指定を Node 24 がファイル扱いする。Codex ループの Node 22 と同じ signature。ログ .loop/quota-sweep-claude-002-gate.log）。補助として CI 同形 `node --test 'tools/**/*.test.mjs'` を1回実行: tests 7066 / pass 7051 / fail 7 / skipped 8、終了1（.loop/quota-sweep-claude-002-gate-glob.log）。失敗は jsonl 取り込み鮮度の日付系5件、fleet-chase の30分抑止タイミング1件、Login URL 302 の1件で、本件の変更とは無関係の既存失敗の疑い（原因切り分けは未実施）。契約ゲートの文言（ディレクトリ指定）を別コマンドで置換して合格にはしない。
+- 未達のまま: C3（検出漏れ候補・対照群検定不能の対処要否）、C4（今回は再照合せず、Codex ループ 003 の実タスク照合を参照のみ）、C5。FINAL 不可。
+- 次: C5 の7失敗の原因切り分けと、契約ゲートの収集方法の差異への対処方針、C3 の漏れ候補を代表的陽性・陰性で校正。

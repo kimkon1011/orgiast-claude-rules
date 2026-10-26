@@ -402,6 +402,20 @@ test('fleet inbox is registered synchronously for both events, idempotently, wit
   }
 });
 
+test('auto-progress-autoregister is registered once on UserPromptSubmit and matches the manifest', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-autoreg-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const repo = path.resolve('.');
+  fs.mkdirSync(path.join(home, '.claude'));
+  const env = { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo };
+  for (let i = 0; i < 2; i++) execFileSync(process.execPath, [path.join(repo, 'tools/register-hooks.mjs'), '--hooks-only'], { env, stdio: 'pipe' });
+  const settings = JSON.parse(fs.readFileSync(path.join(home, '.claude/settings.json'), 'utf8'));
+  const hooks = settings.hooks.UserPromptSubmit.flatMap(group => group.hooks || []).filter(h => h.command.includes('auto-progress-autoregister.mjs'));
+  assert.equal(hooks.length, 1); assert.equal(hooks[0].timeout, 5);
+  const manifest = JSON.parse(fs.readFileSync(path.join(repo, 'tools/setup-manifest.json'), 'utf8'));
+  assert.ok(manifest.items.some(i => i.spec.hookScript === 'auto-progress-autoregister.mjs' && i.spec.hookEvent === 'UserPromptSubmit'));
+});
+
 test('E fleet-question-relay Stop hook is synchronous, bounded and idempotent', t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-relay-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));

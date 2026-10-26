@@ -189,8 +189,7 @@ test('task-notification を挟んだ後の空ターンも作業済みとして b
     JSON.stringify({ type: 'user', message: { role: 'user', content: '原因を調べて' } }),
     JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash', input: { command: 'sleep 1', run_in_background: true } }] } }),
     JSON.stringify({ type: 'user', message: { role: 'user', content: '<task-notification>done</task-notification>' } }),
-  ].join('
-');
+  ].join('\n');
   const result = judgeNextAction('', raw);
   assert.equal(result.decision, 'block');
   assert.equal(result.code, 'NEXT-ACTION-FOOTER');

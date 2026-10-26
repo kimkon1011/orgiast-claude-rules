@@ -68,7 +68,10 @@ function Start-ScheduledTask($TaskName) { $global:contractStarted += $TaskName }
 Assert ($global:contractRegistered.Count -eq 2) ('registration count: ' + $global:contractRegistered.Count + ' started=' + $global:contractStarted.Count)
 $guard=$global:contractRegistered[0]; $watch=$global:contractRegistered[1]
 Assert ($guard.Action.Execute -match 'wscript.exe$') 'visible action'
-Assert ($guard.Action.Arguments.Contains($env:ORGIAST_NIGHTLY_REPO)) 'stable path not used'
+# Normalize like the resolver does: on GitHub runners os.tmpdir() is an 8.3 path (RUNNER~1)
+# and [IO.Path]::GetFullPath expands it, so the registered path uses the long form.
+$stableRoot = [IO.Path]::GetFullPath($env:ORGIAST_NIGHTLY_REPO)
+Assert ($guard.Action.Arguments.Contains($stableRoot)) 'stable path not used'
 Assert ($guard.Trigger.Count -eq 2 -and $guard.Trigger[0].Delay -eq 'PT1M' -and $guard.Trigger[1].Repetition.Interval -eq 'PT30M') 'guard triggers'
 Assert ($guard.Settings.ExecutionTimeLimit -eq 'PT10M') 'guard timeout'
 Assert ($watch.Settings.ExecutionTimeLimit -eq 'PT0S') 'watch timeout'
@@ -80,6 +83,6 @@ Assert (Test-Path $marker) 'manual task migration not marked'
 Remove-Item $marker
 Remove-Item (Join-Path $env:ORGIAST_NIGHTLY_REPO 'tools\task-hide-guard.ps1')
 & (Join-Path $contractTools 'register-task-hide-guard.ps1') | Out-Null
-Assert ($global:contractRegistered[2].Action.Arguments.Contains($contractTools)) 'install fallback missing'
+Assert ($global:contractRegistered[2].Action.Arguments.Contains([IO.Path]::GetFullPath($contractTools))) 'install fallback missing'
 Assert (-not (Test-Path $marker)) 'fallback must retry migration when stable tools arrive'
 'PASS: guard exclusion, wrapping, access denial, SHA256, idempotency; stable registration, triggers and settings'

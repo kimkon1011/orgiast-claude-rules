@@ -666,6 +666,8 @@ PR は原則 `gh pr create ... --label automerge` で作り、CI が赤なら Cl
 workflow・keyserve・secrets・env・fleet 指令ファイルに触る時だけ label を付けず、PR 冒頭に kim の手動マージが必要な理由を書く。
 完了結論は 3 行以内、詳細はファイルへのリンク 1 本とし、応答末尾を必ず `**次に kim がすること: なし**` または 1 件だけの行動で終える。
 
+**開いて確かめるだけの項目は書かない**（2026-10-26 cr 指摘）: PR・リンク・ファイルを開いて確認/レビュー/マージする類は、開く手間そのものが user の負担。状態は Claude が照会し（済んでいれば書かない）、未了なら Claude が実行するか「この後の自動進行」に回す。この行に書けるのは人にしかできない操作（支払い・OAuth 同意・アカウント作成・物理作業・選択肢を示した判断）だけ。next-action-gate が NEXT-ACTION-OPEN で block する。
+
 **目的を1つ与えた継続運転は `/autopilot start "<目的>"` を使う（2026-09-22 追加）**。毎回セッションを開閉して施策を指示させない。各PCへは SessionStart の `onboarding-sync` で `~/.claude/skills/autopilot/` を配布する。
 
 - 1周は `tools/autopilot-tick.mjs pre`（上限・Discord指示判定）→次の1施策を決定→`tools/codex-do.mjs` に実装委譲→Claudeが検証→`post` で記録→次回起床予約。既定上限は日20周・日6時間・noop連続3・総200周。超過時は自動一時停止し、`notify-kim` 経由でhostname付きDiscord DMと毎朝のダイジェストを送る。

@@ -9,6 +9,9 @@ import { isLandingDeferral } from './permanent-fix-deferral-scan.mjs';
 export const MIN_ENFORCED_LENGTH = 200;
 const FOOTER_PATTERN = /(?:^|\n)次に kim がすること:[ \t]*([^\r\n]*)\r?\n(?:[ \t]*\r?\n)?この後の自動進行:[ \t]*([^\r\n]*)\r?\n(?:[ \t]*\r?\n)?このセッション:[ \t]*([^\r\n]*)$/;
 const MULTIPLE_ACTIONS_PATTERN = /[、,，・]/;
+const OPEN_ACTION_PATTERN = /マージ|merge|\bPR\b|#\d+|https?:\/\/|\]\(|開く|開いて|ひらいて|確認(?:する|して|を)|見る|見て|目を通|レビュー|チェック(?:する|して)|読む|読んで|反映を確か/i;
+const HUMAN_ONLY_PATTERN = /支払|入金|決済|課金|OAuth|同意|ログインして許可|アカウント(?:を)?作成|物理|現地|署名|押印|電話(?:する|して)|口頭|選んで|選ぶ|決めて|決める|判断/;
+const OPEN_ACTION_REASON = '[NEXT-ACTION-OPEN] 「次に kim がすること」に、開いて見る・確認する・マージする・レビューするなど、Claude や自動処理で済む項目が入っています。開く手間そのものが user の負担です（2026-10-26 cr 指摘）。(1) 状態は自分で照会する（例: gh pr view <N> --json state,mergedAt）。済んでいれば書かない (2) 未了なら自分で実行するか（gh pr merge <N> --squash --auto 等）「この後の自動進行」に回す (3) この行は「なし」にする。書いてよいのは人にしかできない操作（支払い・OAuth 同意・アカウント作成・物理作業・本文で選択肢を示した判断）だけ。例外は [NEXT-ACTION-OPEN-OK: <理由>]。';
 const WAITING_PATTERN = /(完了通知|待ち|実行中|バックグラウンド|cron|定期実行|CI)/i;
 const BACKGROUND_PATTERN = /(バックグラウンド|実行中|完了通知|Codex が|走ってい)/i;
 const COMPLETE_PATTERN = /^なし\s*[（(]\s*完了\s*[）)]$/;
@@ -174,6 +177,12 @@ export function judgeNextAction(text, transcriptRaw = '', input = {}) {
   }
   if (footer.nextAction !== 'なし' && MULTIPLE_ACTIONS_PATTERN.test(footer.nextAction)) {
     return { decision: 'block', code: 'NEXT-ACTION-MULTIPLE', reason: 'kim への手渡しが2件以上あります。§1.1 最上位原則に従い、まず自分で潰して1件以下にしてください。' };
+  }
+  const openActionOverride = [...source.matchAll(/\[NEXT-ACTION-OPEN-OK:[ \t]*([^\]\r\n]*)\]/g)]
+    .some(([, reason]) => [...reason.trim()].length >= 5);
+  if (footer.nextAction !== 'なし' && OPEN_ACTION_PATTERN.test(footer.nextAction)
+    && !HUMAN_ONLY_PATTERN.test(footer.nextAction) && !openActionOverride) {
+    return { decision: 'block', code: 'NEXT-ACTION-OPEN', reason: OPEN_ACTION_REASON };
   }
   if (!footer.session) {
     return { decision: 'block', code: 'SESSION-EMPTY', reason: `「このセッション:」の値が空です。${SESSION_PHRASE_LIST}のいずれかを一字一句そのまま書いてください。` };

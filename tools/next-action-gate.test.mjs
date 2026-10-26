@@ -43,6 +43,25 @@ test('kimの作業が2件ならblock', () => {
   assert.equal(result.code, 'NEXT-ACTION-MULTIPLE');
 });
 
+const openActionReport = (action, prefix = '') => `${prefix}${body}\n次に kim がすること: ${action}\nこの後の自動進行: なし（完了）\nこのセッション: ${SESSION_PHRASES.delete}`;
+
+test('マージ依頼とリンクの確認依頼はNEXT-ACTION-OPENでblock', () => {
+  for (const action of ['PR #893 をマージする', '上のリンクを開いて内容を確認する']) {
+    assert.equal(judgeNextAction(openActionReport(action)).code, 'NEXT-ACTION-OPEN', action);
+  }
+});
+
+test('なしと人にしかできない操作はNEXT-ACTION-OPENでblockしない', () => {
+  for (const action of ['なし', '請求書の支払いを銀行で行う', 'OAuth の同意画面を開いて許可する']) {
+    assert.notEqual(judgeNextAction(openActionReport(action)).code, 'NEXT-ACTION-OPEN', action);
+  }
+});
+
+test('5文字以上の例外マーカーが本文にあればNEXT-ACTION-OPENでblockしない', () => {
+  const result = judgeNextAction(openActionReport('PR #893 をマージする', '[NEXT-ACTION-OPEN-OK: 本人の操作が必須なため]\n'));
+  assert.notEqual(result.code, 'NEXT-ACTION-OPEN');
+});
+
 test('唯一の恒久策を kim に渡す実文はblock', () => {
   const text = `${body}\n次に kim がすること: 本PCで gh auth login を1回実行する（唯一の恒久策）\nこの後の自動進行: なし（完了）\nこのセッション: ${SESSION_PHRASES.delete}`;
   const result = judgeNextAction(text);

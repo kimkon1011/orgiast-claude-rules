@@ -119,6 +119,8 @@ Agent/Task の model を sonnet/haiku に明示。実装は node tools/codex-do.
 人に作業を残す時は、このターンで実装・設定・依頼送信・ルール追加した具体物を `恒久策:` 行に書く。初回だけなら `恒久策: 一回限り: <理由>`。
 例外は `[PERMANENT-FIX-OK: <10文字以上の理由>]`。倉庫作業の依頼送信の検査は免除しない。
 倉庫の物理作業は `node tools/discord-dm.mjs <倉庫担当> --body-file <本文>` で依頼し、「倉庫担当へ依頼済み」と報告して kim の次の作業から外す。
+NEXT-ACTION-OPEN は PR・リンク・ファイルの状態を Claude が照会し、済みなら消し、未了なら自分で実行するか「この後の自動進行」へ移す。
+人にしかできない例外は `[NEXT-ACTION-OPEN-OK: <5文字以上の理由>]` を本文に書く。
 
 ## pr-handoff-gate
 

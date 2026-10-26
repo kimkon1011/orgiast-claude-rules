@@ -1341,3 +1341,18 @@ test('watch: 時間切れでも無人openとcheck行を48時間で期限切れ�
   assert.equal(calls, 1);
   assert.ok(readLedger(ledgerFile(home))[0].doneNotifiedAt);
  });
+
+test('digest: toast delivery is saved and failure stays retryable', async () => {
+ const home = tmp(), now = Date.now();
+ let state = {}, attempts = 0;
+ const io = {
+   label: 'nishi-PC', readState: () => state, writeState: (_home, value) => { state = value; },
+   appendFileSync: () => {}, mkdirSync: () => {},
+   readLedger: () => [{ owner: 'nishi@orgiast.jp', sessionId: 'toast-session', status: 'resumed', nextKim: '確認', promise: 'p', ts: new Date(now - H).toISOString(), resumedAt: new Date(now).toISOString() }],
+   notify: async () => { attempts++; return { delivered: attempts === 1 ? 'none' : 'toast' }; },
+ };
+ assert.equal((await digest({ home, slot: '朝', now, io })).sent, false);
+ assert.equal((await digest({ home, slot: '朝', now, io })).sent, true);
+ await digest({ home, slot: '朝', now, io });
+ assert.equal(attempts, 2);
+});

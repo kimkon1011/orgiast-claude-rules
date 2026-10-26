@@ -12,8 +12,8 @@ test('owner 解決は fleet account を使う', () => {
 test('owner Discord ID をメールで解決する', () => {
   assert.equal(resolveOwnerDiscordId('cr@orgiast.jp', { directory: { x: { members: [{ id: '42', emails: ['cr@orgiast.jp'] }] } } }), '42');
 });
-test('DM 解決不能時は未達にして他人へ送らない', async () => {
-  const result = await notifyOwner('cr@orgiast.jp', '結果', { home: 'Z:/missing', directory: {}, notify: async () => { assert.fail('must not send'); } });
+test('DM 解決不能時は未達にして他人へ送らない', async t => {
+  const result = await notifyOwner('cr@orgiast.jp', '結果', { home: testHome(t), directory: {}, notify: async () => { assert.fail('must not send'); } });
   assert.equal(result.delivered, 'none');
 });
 
@@ -31,9 +31,9 @@ test('owner空の旧行はローカル持ち主を解決して通知する', asy
   assert.equal(call.options.userId, KIM_DISCORD_USER_ID);
 });
 
-test('持ち主未設定・別ownerへのkim ID流用はいずれも未達', async () => {
+test('持ち主未設定・別ownerへのkim ID流用はいずれも未達', async t => {
   for (const owner of ['', 'nishi@orgiast.jp']) {
-    const result = await notifyOwner(owner, '自動進行', { home: 'Z:/missing', label: 'DESKTOP-X', pcMap: {}, gitEmail: '', userId: KIM_DISCORD_USER_ID, notify: async () => { assert.fail('must not send'); } });
+    const result = await notifyOwner(owner, '自動進行', { home: testHome(t), label: 'DESKTOP-X', pcMap: {}, gitEmail: '', userId: KIM_DISCORD_USER_ID, notify: async () => { assert.fail('must not send'); } });
     assert.equal(result.delivered, 'none');
   }
 });
@@ -99,3 +99,9 @@ test('PowerShell exit code / payload / full notice / channel controls', async t 
  options.spawn = () => ({ status: 3 });
  assert.equal((await notifyOwner('nishi@orgiast.jp', text, options)).delivered, 'none');
 });
+
+function testHome(t) {
+ const home = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-test-'));
+ t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+ return home;
+}

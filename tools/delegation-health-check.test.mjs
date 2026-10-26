@@ -1187,6 +1187,17 @@ test('#1059 以降で打ち切られずに300秒以上消費した policy 停滞
   assert.equal(collectFindings({ home: preFix, now: new Date('2026-10-24T12:00:00Z'), codexUsedPercent: null }).some((item) => item.id === 'policy_stall_not_aborted'), false);
 });
 
+test('出力400字以上で進捗のあった policy 拒否つき試行は打ち切り対象外なので起票しない（2026-10-26 実測 out620/776/924 の偽陽性）', () => {
+  const at = (out) => {
+    const dir = home();
+    write(dir, 'executor-usage.jsonl', row({ t: '2026-10-26T09:01:52.687Z', provider: 'fallback', chain: [{ backend: 'gemini-cli', secs: 526, out, budgetSecs: 600, stderrTail: 'Tool execution denied by policy. Tool execution denied by policy. Tool execution denied by policy.', outcome: 'ok' }] }));
+    return collectFindings({ home: dir, now: new Date('2026-10-27T12:00:00Z'), codexUsedPercent: null }).some((item) => item.id === 'policy_stall_not_aborted');
+  };
+  assert.equal(at(776), false);
+  assert.equal(at(400), false, '境界: 400字ちょうどは codex-do も打ち切らない');
+  assert.equal(at(399), true);
+});
+
 test('policy 停滞の起票境界は #1059 のマージ時刻で、その前後で判定が分かれる', () => {
   const at = (t) => {
     const dir = home();

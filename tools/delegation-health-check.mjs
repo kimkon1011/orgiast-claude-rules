@@ -301,6 +301,8 @@ export function emptyOutputReason(row) {
 export const POLICY_STALL_SINCE = '2026-10-23T20:03:24Z';
 // 打ち切り判定（POLICY_STALL_MIN_ELAPSED_SECS=300）に届いた停滞だけを「打ち切られるべきだった」と数える。
 export const POLICY_STALL_MIN_ABORTABLE_SECS = 300;
+// codex-do の POLICY_STALL_MIN_OUTPUT_CHARS と同値。出力がこれ以上出た試行は進捗ありで打ち切り対象外（偽陽性防止）。
+export const POLICY_STALL_MAX_ABORTABLE_OUT = 400;
 export const POLICY_DENIAL_RE = /tool execution denied by policy/gi;
 
 export function countPolicyDenial(text) {
@@ -382,7 +384,7 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
   // 台帳を毎晩ここで走査し、打ち切られずに時間を消費した停滞だけを起票する（Claude の手動再計測を不要にする）。
   const policyStalls = policyStallAttempts(readJsonl(path.join(claudeDir, 'executor-usage.jsonl')))
     .filter((a) => a.t >= POLICY_STALL_SINCE);
-  const unabortedStalls = policyStalls.filter((a) => a.outcome !== 'blocked' && a.secs >= POLICY_STALL_MIN_ABORTABLE_SECS);
+  const unabortedStalls = policyStalls.filter((a) => a.outcome !== 'blocked' && a.secs >= POLICY_STALL_MIN_ABORTABLE_SECS && a.out < POLICY_STALL_MAX_ABORTABLE_OUT);
   if (unabortedStalls.length) {
     findings.push({
       id: 'policy_stall_not_aborted',

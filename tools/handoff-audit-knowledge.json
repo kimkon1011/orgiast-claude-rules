@@ -184,5 +184,11 @@
     "route": "**2026-10-25 再検証（このPC=作業用011）: 再発 0。** 内部スタッフ宛は Claude が `node tools/discord-dm.mjs <名前 or メール> --body-file <path>` で送る（宛先は tools/discord-member-directory.mjs が解決、非 kim 宛は金功勇へ写し）。**トークンは PC ごとに有無が違う**: 作業用011 は ~/.claude/orgiast-discord-bot-token.txt が有効（GET /users/@me = 200 / bot ClaudeInboxBridge）で --dry-run も宛先解決まで通る。HP はトークン不在で SEND_FAILED。**使えない PC ではチャット本文に宛先／用件／本文の完成形を表示**し、内部宛 Gmail 下書きにはしない（tools/gmail-draft.mjs が通信前に exit 3）。**証拠にならないもの**: discord-dm.mjs の起動確認・--help、自アカウント（持ち主）宛の到達（2026-10-23 の原文2件がこれで違反）。再発走査は `node tools/handoff-audit-discord-dm-premise-scan.mjs --since <最後の検出時刻>`（--selftest の P6/P7 が原文、ヒットは人手分類が必須）。詳細 docs/handoff-audit-2026-10-25-internal-dm-recheck.md",
     "confidence": "high",
     "source": "handoff-audit-nightly:905fe753107b298551d436825851d0f7f3c4010cf930ae6b77616371cb245325 / 1ccea7743ba0ab1b122d2cd161288bb11196304437643377d5e35f11d7646894 / 2026-10-25 再発検証（docs/handoff-audit-2026-10-25-internal-dm-recheck.md）"
+  },
+  {
+    "pattern": "PRマージを『通常運用に任せる』としてClaude側で完結しない",
+    "route": "PR は作成時に `gh pr create --label automerge` で出す（ラベル無しの PR は auto-merge.yml が eligible=false と判定し、永久に着地しない）。作成後は同じセッションで `gh pr view <N> --json state,mergedAt` を叩き、MERGED になるまで追う。自分の PC でラベルを付けられない場合は、fleet-mail で write 権限のある PC へ automerge ラベルの付与を依頼し、MERGED を read-back するまで完了にしない。実証: 2026-10-26 #1141/#1133 は依頼から 16〜43 分で MERGED（a74a6bf0）。rescue/auto-session-20261025-030203 では route が道具名だけの `gh pr create` だったため手順文に置換した。",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:3de88bab689d3bd74aff43895daa8a61d59e192040a3af1efff71ca78d2876cb / 2026-10-26 rescue e7c10a2 レビューで route を手順化"
   }
 ]

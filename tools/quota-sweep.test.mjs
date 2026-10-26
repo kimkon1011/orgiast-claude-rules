@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { filterWindowsForCurrentAuth, isTransientWindowReadError, commandRunner, queueRepeatedFailure, queueRepeatedDeferral, writeWorktreePointer, prepareTree, preserveDirtyTree, DEFAULT_GOAL, MAX_TICKS, selectGoal, tickPrompt, contractPrompt, canRunWindow, interactiveClaude, main, makeLedger, runSweep, parseOutput, acquireLock, readWorktreePointer } from './quota-sweep.mjs';
+import { filterWindowsForCurrentAuth, isTransientWindowReadError, claudeWindowReader, commandRunner, queueRepeatedFailure, queueRepeatedDeferral, writeWorktreePointer, prepareTree, preserveDirtyTree, DEFAULT_GOAL, MAX_TICKS, selectGoal, tickPrompt, contractPrompt, canRunWindow, interactiveClaude, main, makeLedger, runSweep, parseOutput, acquireLock, readWorktreePointer } from './quota-sweep.mjs';
 import { runBounded, killTree } from './lib/quota-sweep-process.mjs';
 import { interactiveCodex, wslPath } from './lib/quota-sweep-host.mjs';
 import { decideSweep, resetKey, sameReset } from './lib/quota-windows.mjs';
@@ -562,4 +562,33 @@ test('relative pointer is not rewritten', t => {
   prepareTree({ home, provider: 'claude', run: (_exe, args) => args[0] === 'status' ? '' : 'base', io: {
     readFile: () => 'gitdir: ../nightly-repo/.git/worktrees/sweep\n', writeFile: () => assert.fail('rewrote relative pointer')
   } });
+});
+const rateLimited = (retryAfter) => ({ ok: false, status: 429, headers: { get: k => (k === 'retry-after' ? retryAfter : null) } });
+const okWindows = Object.assign([{ provider: 'claude', window: '5h', usedPercent: 10 }], {});
+test('claudeWindowReader: 429 の Retry-After の間は API を叩かず残り秒数を返す', async () => {
+  let at = now, calls = 0;
+  const read = async ({ fetchImpl }) => { calls++; const r = await fetchImpl('u', {}); return r.ok ? [...okWindows] : Object.assign([], { reason: `HTTP ${r.status}` }); };
+  const reader = claudeWindowReader({ read, fetchImpl: async () => rateLimited('300'), now: () => at });
+  const first = await reader();
+  assert.equal(first.length, 0); assert.equal(first.retryAfterMs, 300_000); assert.equal(calls, 1);
+  at += 47_000;
+  const second = await reader();
+  assert.equal(calls, 1, '窓内で再度 oauth/usage を叩いてはいけない');
+  assert.equal(second.reason, 'HTTP 429'); assert.equal(second.retryAfterMs, 253_000);
+  assert.ok(isTransientWindowReadError(second.reason), '連続 deferred の検知は残る');
+  at += 254_000;
+  await reader();
+  assert.equal(calls, 2, 'Retry-After 経過後は読み直す');
+});
+test('claudeWindowReader: 成功した読み取りだけ TTL 内で再利用し、失敗はキャッシュしない', async () => {
+  let at = now, calls = 0, ok = true;
+  const read = async () => { calls++; return ok ? [...okWindows] : Object.assign([], { reason: 'HTTP 500' }); };
+  const reader = claudeWindowReader({ read, now: () => at, ttlMs: 15_000 });
+  await reader(); at += 5_000; await reader();
+  assert.equal(calls, 1);
+  at += 20_000; ok = false;
+  assert.equal((await reader()).length, 0);
+  at += 1_000;
+  assert.equal((await reader()).length, 0);
+  assert.equal(calls, 3, '失敗結果は再利用しない');
 });

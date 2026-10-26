@@ -328,9 +328,60 @@ test('PR only for new commits; notification failure is nonfatal', async t => {
   ctx.notify = async () => { throw new Error('offline'); };
   await runSweep(decision, ctx);
   assert.ok(commands.some(c => c[1] === 'push'));
-  assert.ok(commands.some(c => c[1] === 'pr' && c[2] === 'create'));
+  assert.deepEqual(commands.find(c => c[1] === 'pr' && c[2] === 'create'),
+    ['gh', 'pr', 'create', '--base', 'main', '--head', 'quota-sweep/test', '--fill', '--label', 'automerge']);
   assert.equal(commands.some(c => c.includes('merge')), false);
   assert.equal(ctx.state.lastRun.claude[decision.resetsAt].outcome, 'final');
+});
+test('label create failure with no PR retries without label and records URL', async t => {
+  const commands = [], logs = [];
+  const ctx = context(t, async () => ({ code: 0, stdout: JSON.stringify({ result: 'FINAL' }) }));
+  ctx.log = message => logs.push(message);
+  ctx.command = (exe, args) => {
+    commands.push([exe, ...args]);
+    if (args[0] === 'branch') return 'quota-sweep/test';
+    if (args[0] === 'rev-list') return '1';
+    if (args[0] === 'pr' && args[1] === 'create') {
+      if (args.includes('--label')) throw new Error('label unavailable');
+      return 'https://github.com/example/repo/pull/2';
+    }
+    return '';
+  };
+  await runSweep(decision, ctx);
+  assert.deepEqual(commands.filter(c => c[1] === 'pr'), [
+    ['gh', 'pr', 'list', '--head', 'quota-sweep/test', '--state', 'all', '--json', 'url', '--jq', '.[0].url // empty'],
+    ['gh', 'pr', 'create', '--base', 'main', '--head', 'quota-sweep/test', '--fill', '--label', 'automerge'],
+    ['gh', 'pr', 'list', '--head', 'quota-sweep/test', '--state', 'all', '--json', 'url', '--jq', '.[0].url // empty'],
+    ['gh', 'pr', 'create', '--base', 'main', '--head', 'quota-sweep/test', '--fill'],
+  ]);
+  assert.equal(ctx.state.lastRun.claude[decision.resetsAt].prUrl, 'https://github.com/example/repo/pull/2');
+  assert.equal(ctx.state.lastRun.claude[decision.resetsAt].outcome, 'final');
+  assert.ok(logs.includes('quota-sweep: automerge label unavailable; retrying pr create without label: label unavailable'));
+});
+test('label create failure with existing PR reuses URL without another create', async t => {
+  const commands = [], logs = []; let created = false;
+  const ctx = context(t, async () => ({ code: 0, stdout: JSON.stringify({ result: 'FINAL' }) }));
+  ctx.log = message => logs.push(message);
+  ctx.command = (exe, args) => {
+    commands.push([exe, ...args]);
+    if (args[0] === 'branch') return 'quota-sweep/test';
+    if (args[0] === 'rev-list') return '1';
+    if (args[0] === 'pr' && args[1] === 'create') {
+      created = true;
+      throw new Error('label failed');
+    }
+    if (args[0] === 'pr' && args[1] === 'list' && created) return 'https://github.com/example/repo/pull/3';
+    return '';
+  };
+  await runSweep(decision, ctx);
+  assert.deepEqual(commands.filter(c => c[1] === 'pr'), [
+    ['gh', 'pr', 'list', '--head', 'quota-sweep/test', '--state', 'all', '--json', 'url', '--jq', '.[0].url // empty'],
+    ['gh', 'pr', 'create', '--base', 'main', '--head', 'quota-sweep/test', '--fill', '--label', 'automerge'],
+    ['gh', 'pr', 'list', '--head', 'quota-sweep/test', '--state', 'all', '--json', 'url', '--jq', '.[0].url // empty'],
+  ]);
+  assert.equal(ctx.state.lastRun.claude[decision.resetsAt].prUrl, 'https://github.com/example/repo/pull/3');
+  assert.equal(ctx.state.lastRun.claude[decision.resetsAt].outcome, 'final');
+  assert.ok(logs.includes('quota-sweep: automerge label failed; PR created without label: label failed'));
 });
 test('disable guard precedes observation and locking', async t => {
   const home = temp(t); fs.mkdirSync(path.join(home, '.claude'));

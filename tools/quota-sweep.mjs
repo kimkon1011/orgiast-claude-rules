@@ -305,6 +305,21 @@ export function queueRepeatedDeferral(home, state, row) {
   if (after !== before) writeHandoff(file, after);
 }
 
+function createPullRequest({ run, tree, branch, log }) {
+  const args = ['pr', 'create', '--base', 'main', '--head', branch, '--fill'];
+  try {
+    return run('gh', [...args, '--label', 'automerge'], tree);
+  } catch (error) {
+    const prUrl = run('gh', ['pr', 'list', '--head', branch, '--state', 'all', '--json', 'url', '--jq', '.[0].url // empty'], tree);
+    if (prUrl) {
+      log(`quota-sweep: automerge label failed; PR created without label: ${error.message}`);
+      return prUrl;
+    }
+    log(`quota-sweep: automerge label unavailable; retrying pr create without label: ${error.message}`);
+    return run('gh', args, tree);
+  }
+}
+
 export async function runSweep(decision, context) {
   const { home, state, save, windows: refresh, active, log, env, now = Date.now, spawnImpl = spawnSync, runChild = runBounded, notify = notifyKim } = context;
   const run = context.command ?? commandRunner(spawnImpl, log), provider = decision.provider;
@@ -456,7 +471,7 @@ export async function runSweep(decision, context) {
         if (Number(run('git', ['rev-list', '--count', `${record.base}..HEAD`], tree)) > 0) {
           run('git', ['push', '-u', 'origin', branch], tree);
           prUrl = run('gh', ['pr', 'list', '--head', branch, '--state', 'all', '--json', 'url', '--jq', '.[0].url // empty'], tree);
-          if (!prUrl) prUrl = run('gh', ['pr', 'create', '--base', 'main', '--head', branch, '--fill'], tree);
+          if (!prUrl) prUrl = createPullRequest({ run, tree, branch, log });
         }
       } catch (error) { log(`PR delivery failed: ${error.message}`); record.deliveryError = error.message; reason = [reason, `PR delivery: ${error.message}`].filter(Boolean).join('; '); failureKey = error.failureKey || 'pr-delivery'; outcome = 'failed'; }
     }

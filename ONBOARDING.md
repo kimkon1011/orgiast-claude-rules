@@ -779,7 +779,7 @@ kim:「**kim@orgiast.jp のパソコンで実行している内容が ONBOARDING
 `gh auth login` も GitHub トークンの発行依頼も不要で、**credential helper に入っている PAT を使う**:
 
     GH_TOKEN=$(printf 'protocol=https\nhost=github.com\n\n' | git credential fill | sed -n 's/^password=//p') \
-      gh pr create --base main --head <branch> --title "<題>" --body-file <本文ファイル>
+      gh pr create --base main --head <branch> --title "<題>" --body-file <本文ファイル> --label automerge
 
 `git push` が通る機体なら credential helper に PAT が入っているので、この経路は必ず使える
 （2026-09-23 実測: `gh auth status` が未認証の機体で PR #534 を作成）。トークンは変数に入れたまま
@@ -1155,8 +1155,8 @@ Bashは1呼び出し1コマンドとし、専用ツールとallow済みの経路
 ```
 gh api repos/kimkon1011/orgiast-claude-rules --jq .permissions   # push:true を確認
 git push origin HEAD:refs/heads/<branch>
-gh pr create --repo kimkon1011/orgiast-claude-rules --base main --head <branch> --title ... --body-file -
-gh pr edit <番号> --repo kimkon1011/orgiast-claude-rules --add-label automerge
+gh pr create --repo kimkon1011/orgiast-claude-rules --base main --head <branch> --title ... --body-file - --label automerge
+# 作成時に付け損ねた PR だけ: gh pr edit <番号> --repo kimkon1011/orgiast-claude-rules --add-label automerge
 gh pr view <番号> --repo kimkon1011/orgiast-claude-rules --json autoMergeRequest   # null でないこと
 ```
 

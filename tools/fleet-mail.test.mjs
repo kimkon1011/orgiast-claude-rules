@@ -809,3 +809,90 @@ test('parseArgs rejects work requests as notes but accepts prompts', () => {
     assert.doesNotThrow(() => parseArgs([...args, 'prompt']));
   }
 });
+
+test('createClient retries GAS busy with backoff then succeeds', async () => {
+  let calls = 0; const delays = [];
+  const request = createClient({ url: 'https://example.invalid', token: 'x',
+    fetchImpl: async () => { calls++; return { ok: true, json: async () => calls < 3 ? { ok: false, error: 'busy' } : { ok: true, messages: [] } }; },
+    sleepImpl: async ms => delays.push(ms) });
+  assert.deepEqual(await request('mail-poll', {}), { ok: true, messages: [] });
+  assert.equal(calls, 3);
+  assert.deepEqual(delays, [1000, 2000]);
+});
+test('createClient gives up after three busy responses', async () => {
+  for (const status of [200, 503]) {
+    let calls = 0; const delays = [];
+    const request = createClient({ url: 'https://example.invalid', token: 'x',
+      fetchImpl: async () => { calls++; return { ok: status === 200, status, json: async () => ({ ok: false, error: 'busy' }) }; },
+      sleepImpl: async ms => delays.push(ms) });
+    await assert.rejects(request('mail-poll', {}), { message: /^fleet-mail: busy$/, code: 'SERVER_BUSY' });
+    assert.equal(calls, 3);
+    assert.deepEqual(delays, [1000, 2000]);
+  }
+});
+test('createClient does not retry non-busy rejections', async () => {
+  let calls = 0; const delays = [];
+  const request = createClient({ url: 'https://example.invalid', token: 'x',
+    fetchImpl: async () => { calls++; return { ok: true, json: async () => ({ ok: false, error: 'unauthorized' }) }; },
+    sleepImpl: async ms => delays.push(ms) });
+  await assert.rejects(request('mail-poll', {}), /unauthorized/);
+  assert.equal(calls, 1);
+  assert.deepEqual(delays, []);
+});
+test('createClient preserves HTTP errors for non-busy 503 and other HTTP statuses', async () => {
+  for (const response of [
+    { ok: false, status: 503, json: async () => { throw new SyntaxError('HTML'); } },
+    { ok: false, status: 503, json: async () => ({ ok: false, error: 'unauthorized' }) },
+    { ok: false, status: 403, json: async () => ({ ok: false, error: 'busy' }) },
+  ]) {
+    let calls = 0;
+    const request = createClient({ url: 'https://example.invalid', token: 'x',
+      fetchImpl: async () => { calls++; return response; }, sleepImpl: () => assert.fail('must not retry') });
+    await assert.rejects(request('mail-poll', {}), { message: `fleet-mail HTTP ${response.status}` });
+    assert.equal(calls, 1);
+  }
+});
+test('poll defers on server busy and resets after success', async t => {
+  const f = fixture(t); const request = f.deps.request;
+  const file = path.join(f.dir, '.fleet-mail-last-poll.json');
+  const prior = { at: '2026-10-25T00:00:00.000Z', serverCapabilities: { version: 2 }, sentStatus: { cached: true } };
+  fs.writeFileSync(file, JSON.stringify(prior));
+  f.deps.now = () => Date.parse('2026-10-26T00:00:00Z');
+  f.deps.request = async (kind, payload) => {
+    if (kind === 'mail-poll') throw Object.assign(new Error('fleet-mail: busy'), { code: 'SERVER_BUSY' });
+    return request(kind, payload);
+  };
+  for (let busyStreak = 1; busyStreak < 5; busyStreak++) {
+    assert.equal(await main(['--poll'], f.deps), 0);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { ...prior, busyStreak, busyAt: '2026-10-26T00:00:00.000Z' });
+    assert.match(f.errors.at(-1), /延期/);
+  }
+  await assert.rejects(main(['--poll'], f.deps), { message: /5回連続（約10分）/, code: 'SERVER_BUSY' });
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).busyStreak, 5);
+  f.deps.request = request;
+  assert.equal(await main(['--poll'], f.deps), 0);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), {
+    ...prior, at: '2026-10-26T00:00:00.000Z', busyStreak: 0, busyAt: '2026-10-26T00:00:00.000Z',
+  });
+});
+test('poll still fails on non-busy transport errors', async t => {
+  const f = fixture(t); const request = f.deps.request;
+  f.deps.request = async (kind, payload) => {
+    if (kind === 'mail-poll') throw new Error('fleet-mail: unauthorized');
+    return request(kind, payload);
+  };
+  await assert.rejects(main(['--poll'], f.deps), /unauthorized/);
+  assert.equal(fs.existsSync(path.join(f.dir, '.fleet-mail-last-poll.json')), false);
+});
+test('poll dry-run defers on busy messages without changing state', async t => {
+  const f = fixture(t); const file = path.join(f.dir, '.fleet-mail-last-poll.json');
+  for (const message of ['busy', 'fleet-mail: busy']) {
+    const before = fs.readdirSync(f.dir);
+    const prior = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
+    f.deps.request = async () => { throw new Error(message); };
+    assert.equal(await main(['--poll', '--dry-run'], f.deps), 0);
+    assert.deepEqual(fs.readdirSync(f.dir), before);
+    assert.equal(fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null, prior);
+    fs.writeFileSync(file, JSON.stringify({ busyStreak: 2, serverCapabilities: { version: 2 } }));
+  }
+});

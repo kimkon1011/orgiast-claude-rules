@@ -317,6 +317,7 @@ export const COMMAND_LOCK_DELAY_MS = 200;
 export const LOCK_BUSY_EXIT = 6;
 export const ACK_BATCH_LIMIT = 100;
 export const SENT_STATUS_MAX_LOOKUP_FAILURES = 5;
+export const FLEET_POLL_BUSY_STREAK_LIMIT = 5;
 export const CAPABILITY_BACKOFF_MS = 3600000;
 export const SERVER_MAX_ATTEMPTS = 5;
 export const INTERRUPTED_PROMPT_MS = 35 * 60000;
@@ -705,16 +706,29 @@ export function parseArgs(argv) {
   if (options['--wait-for'] && (!['seen', 'done'].includes(options['--wait-for']) || options['--wait'] === undefined)) throw new Error('invalid --wait-for');
   return options;
 }
-export function createClient({ url, token, fetchImpl = fetch }) {
+export function createClient({ url, token, fetchImpl = fetch, sleepImpl = sleep }) {
   return async (kind, payload, timeoutMs = 60_000) => {
-    const response = await fetchImpl(url, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, redirect: 'follow',
-      body: JSON.stringify({ ...payload, kind, token }), signal: AbortSignal.timeout(Math.max(1, Math.ceil(timeoutMs)))
-    });
-    if (!response.ok) throw new Error(`fleet-mail HTTP ${response.status}`);
-    const result = await response.json();
-    if (result?.ok !== true) throw new Error(`fleet-mail: ${result?.reason || result?.error || 'invalid response'}`);
-    return validateMailResponse(kind, payload, result);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const response = await fetchImpl(url, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, redirect: 'follow',
+        body: JSON.stringify({ ...payload, kind, token }), signal: AbortSignal.timeout(Math.max(1, Math.ceil(timeoutMs)))
+      });
+      if (!response.ok && response.status !== 503) throw new Error(`fleet-mail HTTP ${response.status}`);
+      let result;
+      try { result = await response.json(); }
+      catch (error) {
+        if (!response.ok) throw new Error(`fleet-mail HTTP ${response.status}`);
+        throw error;
+      }
+      if (result?.ok === false && result.error === 'busy') {
+        if (attempt === 2) throw Object.assign(new Error('fleet-mail: busy'), { code: 'SERVER_BUSY' });
+        await sleepImpl(1_000 * 2 ** attempt);
+        continue;
+      }
+      if (!response.ok) throw new Error(`fleet-mail HTTP ${response.status}`);
+      if (result?.ok !== true) throw new Error(`fleet-mail: ${result?.reason || result?.error || 'invalid response'}`);
+      return validateMailResponse(kind, payload, result);
+    }
   };
 }
 export async function waitForReply(id, seconds, { request, now = Date.now, sleepImpl = sleep, waitFor = 'done' }) {
@@ -824,7 +838,7 @@ export async function pollOnce(deps = {}) {
   if (!config.FLEET_SHEET_URL || !config.FLEET_SHEET_TOKEN) { err('fleet-mail: fleet-sheet.env 未設定のためスキップ'); return { skipped: 'unconfigured' }; }
   const identity = deps.identity ?? machineIdentity();
   const label = deps.label ?? resolveFleetLabel(home, identity);
-  const request = deps.request ?? createClient({ url: config.FLEET_SHEET_URL, token: config.FLEET_SHEET_TOKEN, fetchImpl: deps.fetch });
+  const request = deps.request ?? createClient({ url: config.FLEET_SHEET_URL, token: config.FLEET_SHEET_TOKEN, fetchImpl: deps.fetch, sleepImpl: deps.sleep });
   const release = dryRun ? () => {} : acquireLock(path.join(dir, 'fleet-mail.lock'), { now });
   if (!release) { err('fleet-mail: 別の受信処理が実行中'); return { skipped: 'locked' }; }
   const fileOf = id => inboxPath(home, id);
@@ -882,9 +896,23 @@ export async function pollOnce(deps = {}) {
     const pollFile = path.join(dir, '.fleet-mail-poll.json');
     const batch = dryRun ? {} : readJson(pollFile) || { requestId: randomUUID(), successfulIds: [], quarantinedIds: [] };
     if (!dryRun) writeJson(pollFile, batch);
-    const response = checked(await request('mail-poll', { to: label, hostname: identity.hostname, dryRun, requestId: batch.requestId,
-      // Broadcast remains pending for presentation; the inbox itself is the durable delivery receipt.
-      processedIds: readInbox(home, { unreadOnly: false }).filter(m => m.to === 'all' && Date.parse(m.expiresAt) > now()).map(m => m.id) }));
+    const lastPollFile = path.join(dir, '.fleet-mail-last-poll.json');
+    let response;
+    try {
+      response = checked(await request('mail-poll', { to: label, hostname: identity.hostname, dryRun, requestId: batch.requestId,
+        // Broadcast remains pending for presentation; the inbox itself is the durable delivery receipt.
+        processedIds: readInbox(home, { unreadOnly: false }).filter(m => m.to === 'all' && Date.parse(m.expiresAt) > now()).map(m => m.id) }));
+    } catch (error) {
+      if (error.code !== 'SERVER_BUSY' && !/^(?:fleet-mail: )?busy$/.test(error.message)) throw error;
+      const previous = readJson(lastPollFile, {});
+      const busyStreak = (previous.busyStreak || 0) + 1;
+      if (!dryRun) writeJson(lastPollFile, { ...previous, busyStreak, busyAt: new Date(now()).toISOString() });
+      if (busyStreak >= FLEET_POLL_BUSY_STREAK_LIMIT) {
+        throw Object.assign(new Error(`fleet-mail: サーバ混雑が${busyStreak}回連続（約${busyStreak * 2}分）。GAS のロック競合を確認`), { code: 'SERVER_BUSY' });
+      }
+      err(`fleet-mail: サーバ混雑のため受信を次回へ延期=1 (連続${busyStreak})`);
+      return { skipped: 'busy', busyStreak };
+    }
     if (dryRun) {
       const messages = response.messages.map(m => ({ ...m, from: redactSecrets(m.from), why: redactSecrets(m.why), body: redactSecrets(m.body), resultBody: redactSecrets(m.resultBody) }));
       out(JSON.stringify(messages)); return { messages };
@@ -932,8 +960,7 @@ export async function pollOnce(deps = {}) {
     if (!undurable) fs.unlinkSync(pollFile);
     else err(`fleet-mail: 保存再試行待ち=${undurable}`);
     if (legacy) err(`fleet-mail: 旧形式宛先受信=${legacy}`);
-    const lastPollFile = path.join(dir, '.fleet-mail-last-poll.json');
-    writeJson(lastPollFile, { ...readJson(lastPollFile, {}), at: new Date(now()).toISOString() });
+    writeJson(lastPollFile, { ...readJson(lastPollFile, {}), at: new Date(now()).toISOString(), busyStreak: 0 });
     let promptHandled = false;
     let growiAppendHandled = false;
     const fleetMembers = deps.pcMap ?? readJson(new URL('../fleet-pc-map.json', import.meta.url), {});
@@ -1105,7 +1132,7 @@ async function runMain(argv, deps) {
   const configured = !!(config.FLEET_SHEET_URL && config.FLEET_SHEET_TOKEN);
   const identity = deps.identity ?? machineIdentity();
   const label = resolveFleetLabel(home, identity);
-  const request = configured ? deps.request ?? createClient({ url: config.FLEET_SHEET_URL, token: config.FLEET_SHEET_TOKEN, fetchImpl: deps.fetch })
+  const request = configured ? deps.request ?? createClient({ url: config.FLEET_SHEET_URL, token: config.FLEET_SHEET_TOKEN, fetchImpl: deps.fetch, sleepImpl: deps.sleep })
     : async () => { throw new Error('fleet-sheet.env 未設定'); };
   const state = (id, action, extra = {}) => syncMailState({ home, id, action, request, now, from: label, stderr: err, ...extra });
   if (options['--sync-pending']) {

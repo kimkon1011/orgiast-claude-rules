@@ -22,7 +22,8 @@ Register-ScheduledTask -TaskName 'OrgiastWindowSpawnWatch' -Action $action -Trig
 Start-ScheduledTask -TaskName 'Claude-TaskHideGuard'
 # Existing manually installed tasks also need migration. Do not mark the
 # install fallback complete: converge must retry after nightly-repo is updated.
-if ($tools -eq (Join-Path $repo 'tools')) {
+# Compare normalized paths: the resolver expands 8.3 segments (GetFullPath), $repo does not.
+if ((Normalize-RepoRoot $tools) -eq (Normalize-RepoRoot (Join-Path $repo 'tools'))) {
   Set-Content -LiteralPath (Join-Path $env:USERPROFILE '.claude\.task-hide-guard-v1') -Value '1' -Encoding ASCII
 }
 Write-Output 'OK: Claude-TaskHideGuard and OrgiastWindowSpawnWatch registered'

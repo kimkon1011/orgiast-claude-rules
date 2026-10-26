@@ -6,7 +6,7 @@ import test, { after } from 'node:test';
 import vm from 'node:vm';
 import { main as registerTasks } from './register-auto-progress-task.mjs';
 import { isNoopPromise, extractPromise, extractNextKim, applyPromise, buildRecord, record, readLedger, writeLedger, ledgerFile, rowKey, originLine } from './auto-progress-ledger.mjs';
-import { run as watch, parseVerdict, deterministicVerdict, judge, GRACE_MS, RESUME_INTERVAL_MS, MAX_RESUMES, postSheet, resumeSession, recentFiles, EXPIRE_UNATTENDED_MS, FALLBACK_STALL_MS, formatDoneMessage, readableReason, formatDoneBacklogMessages } from './auto-progress-watch.mjs';
+import { run as watch, parseVerdict, deterministicVerdict, judge, GRACE_MS, RESUME_INTERVAL_MS, MAX_RESUMES, postSheet, resumeSession, recentFiles, EXPIRE_UNATTENDED_MS, FALLBACK_STALL_MS, formatDoneMessage, readableReason, formatDoneLine, formatDoneBacklogMessages } from './auto-progress-watch.mjs';
 import { run as digest, selectRows, formatDigest, isUnattendedRow, WINDOW_MS, MAX_ITEMS, needsDm, verdictOf, cleanText, isHumanActionRequired, waitingNotificationKey } from './auto-progress-digest.mjs';
 import { runRegisterPs1 } from './lib/run-register-ps1.mjs';
 
@@ -1049,8 +1049,9 @@ test('watch: 自動進行完了時に結果の中身つきDMを1通送り、2回
   assert.equal(notices.length, 1);
   const msg = notices[0].text;
   assert.match(msg, /✅ 自動進行が完了しました/);
-  assert.match(msg, /約束: テストの自動完了/);
-  assert.match(msg, /結果: テスト実行に成功し、全件パスしました。\n詳細はログを確認。/);
+  assert.match(msg, /✅ 完了:/);
+  assert.doesNotMatch(msg, /約束: テストの自動完了/);
+  assert.match(msg, /— テスト実行に成功し、全件パスしました。 詳細はログを確認。/);
   assert.match(msg, /成果物: reports\/summary\.md/);
   assert.match(msg, /kim がすること: なし/);
 
@@ -1152,7 +1153,7 @@ test('watch: judge 経由の done でも通知され、成果物は「なし」�
   const msg = notices[0].text;
   assert.match(msg, /✅ 自動進行が完了しました/);
   assert.match(msg, /約束: 判定完了テスト/);
-  assert.match(msg, /結果: 全て完了している/);
+  assert.match(msg, /— 全て完了している/);
   assert.match(msg, /成果物: なし/);
   assert.match(msg, /kim がすること: なし/);
 
@@ -1218,7 +1219,7 @@ test('watch: 完了DMの送信に失敗した行は次の巡回で再送し、�
   assert.equal(second.errors.length, 0);
   assert.equal(notices.length, 1);
   assert.match(notices[0].text, /✅ 自動進行が完了しました/);
-  assert.match(notices[0].text, /結果: 完了しました/);
+  assert.match(notices[0].text, /— 完了しました/);
   assert.match(notices[0].text, /成果物: out\/result\.md/);
   rows = readLedger(ledgerFile(home));
   assert.equal(rows[0].doneNotifiedAt, new Date(now + H).toISOString());
@@ -1241,7 +1242,8 @@ test('watch: 経路外の未通知doneを拾い、古い完了は一覧化し、
   assert.deepEqual(result.doneNotifications, { recent: 1, backlog: 20 });
   assert.equal(notices.filter(text => text.includes('✅ 自動進行が完了しました')).length, 1);
   const backlog = notices.filter(text => text.includes('未通知だった自動進行の完了一覧'));
-  assert.equal(backlog.length, 1);
+  assert.ok(backlog.length >= 1 && backlog.length <= 3);
+  assert.equal(backlog.join("\n").match(/✅ 完了:/g).length, 20);
   assert.ok(backlog[0].length <= 1800);
   assert.match(backlog[0], /過去作業0/);
   const rows = readLedger(ledgerFile(home));
@@ -1331,4 +1333,43 @@ test('watch: 時間切れでも無人openとcheck行を48時間で期限切れ�
   const result = await watch({ home, now, io: noEvidenceIo({ clock: () => clocks++ === 0 ? now : now + 46 * H / 60 }) });
   assert.equal(result.expired, 2);
   assert.deepEqual(readLedger(ledgerFile(home)).map(row => row.status), ['expired', 'expired']);
+});
+
+
+test('完了通知: resume の結果を優先し予告文を個別DM・バックログに出さない', () => {
+  const home = tmp();
+  const row = { sessionId: 'd14902f9-example', cwd: 'C:\\projects\\event-shop',
+    promise: 'Claude が DB 列の確認、ビルドとコミット、本番デプロイを行います。https://event-shop.jp',
+    doneAt: '2026-10-25T16:30:00Z', reason: '古い判定理由' };
+  fs.mkdirSync(path.join(home, '.claude', 'auto-progress-inbox'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', 'auto-progress-resume-d14902f9.json'), JSON.stringify({
+    state: 'done', evidence: 'DB列を確認し、ビルド成功・コミット・本番デプロイを完了。', artifact: 'https://event-shop.jp',
+  }));
+  const expected = '✅ 完了: event-shop — DB列を確認し、ビルド成功・コミット・本番デプロイを完了。（成果物: https://event-shop.jp）（2026/10/26 JST）';
+  assert.equal(formatDoneLine(row, { home }), expected);
+  for (const text of [formatDoneMessage(row, { home }), formatDoneBacklogMessages([row], { home })[0].text]) {
+    assert.ok(text.includes(expected));
+    assert.ok(!text.includes(row.promise));
+    assert.doesNotMatch(text, /行います|古い判定理由/);
+  }
+});
+
+test('完了通知: 破損resumeからinboxの最新doneへフォールバックし他のstateを除外する', () => {
+  const home = tmp(), sessionId = 'inbox-example';
+  const dir = path.join(home, '.claude', 'auto-progress-inbox');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', 'auto-progress-resume-inbox-ex.json'), '{broken');
+  fs.writeFileSync(path.join(dir, `${sessionId}.jsonl`), [
+    JSON.stringify({ state: 'done', evidence: '古い結果' }), 'broken',
+    JSON.stringify({ state: 'done', evidence: '検証済み' + 'あ'.repeat(150), artifact: 'out/result.html' }),
+    JSON.stringify({ state: 'blocked', evidence: '承認待ち', artifact: 'wrong' }),
+  ].join('\n'));
+  const line = formatDoneLine({ sessionId, projectName: '店舗', cwd: '/project', promise: '作業します', doneAt: '2026-10-26T00:00:00Z' }, { home });
+  assert.ok(line.includes('検証済み' + 'あ'.repeat(116) + '（成果物: out/result.html）'));
+  assert.doesNotMatch(line, /古い結果|承認待ち|wrong|作業します/);
+});
+
+test('完了通知: 結果記録がないときだけ宣言文と明示する', () => {
+  const line = formatDoneLine({ cwd: '/projects/shop', promise: '確認します', doneAt: '2026-10-26T00:00:00Z' }, { home: tmp() });
+  assert.equal(line, '✅ 完了: shop — （結果記録なし・宣言文）確認します（成果物: なし）（2026/10/26 JST）');
 });

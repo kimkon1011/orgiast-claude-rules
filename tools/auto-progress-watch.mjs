@@ -170,15 +170,10 @@ export function readableReason(value, row, limit = 1200) {
 
 export function formatDoneMessage(row, { reason = '', artifact = '', home = process.env.ORGIAST_HOME || os.homedir(), io = {}, ownerOf } = {}) {
   const origin = originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: ownerOf ? ownerOf(row) : row.owner, home });
-  const promise = String(row.promise ?? '').slice(0, 200);
-  const formattedReason = readableReason(reason, row, 1200);
-  const formattedArtifact = artifact && String(artifact).trim() ? String(artifact).trim() : 'なし';
   const lines = [
     origin,
     '✅ 自動進行が完了しました',
-    `約束: ${promise}`,
-    `結果: ${formattedReason}`,
-    `成果物: ${formattedArtifact}`,
+    formatDoneLine(row, { reason, artifact, home }),
     'kim がすること: なし',
   ];
   return lines.join('\n').slice(0, 1900);
@@ -233,12 +228,32 @@ const jstDay = value => new Intl.DateTimeFormat('ja-JP', {
   timeZone: 'Asia/Tokyo', year: 'numeric', month: '2-digit', day: '2-digit',
 }).format(new Date(value));
 
-export function formatDoneBacklogMessages(rows) {
+export function formatDoneLine(row, { home = process.env.ORGIAST_HOME || os.homedir(), reason = '', artifact = '' } = {}) {
+  const reports = [];
+  if (row.sessionId && !/[\\/]/.test(row.sessionId)) {
+    try {
+      const report = JSON.parse(fs.readFileSync(path.join(home, '.claude', `auto-progress-resume-${String(row.sessionId).slice(0, 8)}.json`), 'utf8'));
+      if (report?.state === 'done') reports.push(report);
+    } catch { /* inboxへフォールバック */ }
+    try {
+      const lines = fs.readFileSync(path.join(home, '.claude', 'auto-progress-inbox', `${row.sessionId}.jsonl`), 'utf8').split(/\r?\n/).reverse();
+      for (const line of lines) {
+        try { const report = JSON.parse(line); if (report?.state === 'done') reports.push(report); } catch { /* 壊れた行は無視 */ }
+      }
+    } catch { /* 記録なし */ }
+  }
+  const clean = value => readableReason(value, row).replace(/\s+/g, ' ').trim();
+  const report = reports.find(item => typeof item.evidence === 'string' && item.evidence.trim());
+  const evidence = clean(report?.evidence || reason || row.evidence || row.reason);
+  const summary = evidence ? evidence.slice(0, 120) : `（結果記録なし・宣言文）${clean(row.promise).slice(0, 120) || '(宣言なし)'}`;
+  const project = clean(row.projectName || row.project || String(row.cwd || '').replace(/\\/g, '/').replace(/\/+$/, '').split('/').pop() || '作業').slice(0, 80);
+  const output = clean(report?.artifact || reports.find(item => item.artifact)?.artifact || artifact || row.artifact || row.doneNotifyArtifact || 'なし').slice(0, 300);
+  return `✅ 完了: ${project} — ${summary}（成果物: ${output}）（${jstDay(doneTime(row))} JST）`;
+}
+
+export function formatDoneBacklogMessages(rows, { home = process.env.ORGIAST_HOME || os.homedir() } = {}) {
   const header = '📋 未通知だった自動進行の完了一覧\n過去に完了していたものをまとめてお知らせします。';
-  const entries = rows.map(row => ({
-    row,
-    line: `・${String(row.promise ?? '').replace(/\s+/g, ' ').trim().slice(0, 60) || '(約束なし)'}（${jstDay(doneTime(row))}）`,
-  }));
+  const entries = rows.map(row => ({ row, line: formatDoneLine(row, { home }) }));
   const messages = [];
   let current = { text: header, rows: [] };
   for (const entry of entries) {
@@ -447,7 +462,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     await notifyDone(row, row.reason || '', row.doneNotifyArtifact || '');
   }
   if (!dryRun && !isQuietHours(now) && clock() + 60000 < stopAt) {
-    for (const group of formatDoneBacklogMessages(doneSweep.backlog)) {
+    for (const group of formatDoneBacklogMessages(doneSweep.backlog, { home })) {
       let delivery = null;
       try {
         delivery = await (io.notifyOwner ?? notifyOwner)(ownerOf(group.rows[0]), group.text, { home });

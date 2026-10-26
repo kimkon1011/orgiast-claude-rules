@@ -1065,7 +1065,7 @@ test('watch: 判断待ち通知に出どころ行が付き、owner 空なら自P
 });
 
 test('watch: 自動進行完了時に結果の中身つきDMを1通送り、2回目は送らない（doneNotifiedAtで重複防止）', async () => {
-  // (a) resume が done を返すと notifyOwner が1回呼ばれ、本文に「結果:」と成果物パスが含まれる
+  // (a) resume が done を返すと notifyOwner が1回呼ばれ、本文に完了結果と成果物パスが含まれる
   // (b) 2回目の巡回では送られない（doneNotifiedAt）
   const home = tmp();
   const now = Date.parse('2026-10-23T03:00:00Z');
@@ -1101,8 +1101,8 @@ test('watch: 自動進行完了時に結果の中身つきDMを1通送り、2回
   assert.equal(notices.length, 1);
   const msg = notices[0].text;
   assert.match(msg, /✅ 自動進行が完了しました/);
-  assert.match(msg, /約束: テストの自動完了/);
-  assert.match(msg, /結果: テスト実行に成功し、全件パスしました。\n詳細はログを確認。/);
+  assert.match(msg, /✅ 完了:/);
+  assert.match(msg, /— テスト実行に成功し、全件パスしました。 詳細はログを確認。/);
   assert.match(msg, /成果物: reports\/summary\.md/);
   assert.match(msg, /kim がすること: なし/);
 
@@ -1203,8 +1203,8 @@ test('watch: judge 経由の done でも通知され、成果物は「なし」�
   assert.equal(notices.length, 1);
   const msg = notices[0].text;
   assert.match(msg, /✅ 自動進行が完了しました/);
-  assert.match(msg, /約束: 判定完了テスト/);
-  assert.match(msg, /結果: 全て完了している/);
+  assert.match(msg, /✅ 完了:/);
+  assert.match(msg, /— 全て完了している/);
   assert.match(msg, /成果物: なし/);
   assert.match(msg, /kim がすること: なし/);
 
@@ -1270,7 +1270,7 @@ test('watch: 完了DMの送信に失敗した行は次の巡回で再送し、�
   assert.equal(second.errors.length, 0);
   assert.equal(notices.length, 1);
   assert.match(notices[0].text, /✅ 自動進行が完了しました/);
-  assert.match(notices[0].text, /結果: 完了しました/);
+  assert.match(notices[0].text, /— 完了しました/);
   assert.match(notices[0].text, /成果物: out\/result\.md/);
   rows = readLedger(ledgerFile(home));
   assert.equal(rows[0].doneNotifiedAt, new Date(now + H).toISOString());
@@ -1293,7 +1293,8 @@ test('watch: 経路外の未通知doneを拾い、古い完了は一覧化し、
   assert.deepEqual(result.doneNotifications, { recent: 1, backlog: 20 });
   assert.equal(notices.filter(text => text.includes('✅ 自動進行が完了しました')).length, 1);
   const backlog = notices.filter(text => text.includes('未通知だった自動進行の完了一覧'));
-  assert.equal(backlog.length, 1);
+  assert.ok(backlog.length >= 1 && backlog.length <= 3);
+  assert.equal(backlog.join("\n").match(/✅ 完了:/g).length, 20);
   assert.ok(backlog[0].length <= 1800);
   assert.match(backlog[0], /過去作業0/);
   const rows = readLedger(ledgerFile(home));

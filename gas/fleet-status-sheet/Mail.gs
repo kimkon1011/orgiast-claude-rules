@@ -297,6 +297,8 @@ const FLEET_MAIL_SLA_ = { undelivered: 30 * 60 * 1000, urgent: 2 * 60 * 60 * 100
 function _fleetMailAlertKind_(mail, now) {
   if (Date.parse(mail.expiresAt) <= now) return '';
   if (mail.status === 'new' && !mail.deliveredAt && now - Date.parse(mail.createdAt) > FLEET_MAIL_SLA_.undelivered) return 'undelivered';
+  // auto=true は PC 間の機械報告（[lane-health] 等）。人が読む連絡ではないので未読 SLA の対象外（未配達の監視は残す）。
+  if (mail.auto === true || mail.auto === 'true') return '';
   if (mail.status === 'delivered' && !mail.seenAt && now - Date.parse(mail.deliveredAt) > FLEET_MAIL_SLA_[mail.priority === 'urgent' ? 'urgent' : 'normal']) return 'unseen';
   return '';
 }

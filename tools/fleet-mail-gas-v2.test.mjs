@@ -174,6 +174,13 @@ test('sweep observes strict undelivered and urgent/normal unseen SLA thresholds'
     assert.equal(alerts.length, 1); assert.equal(alerts[0].kind, status === 'new' ? 'undelivered' : 'unseen'); assert.equal(alerts[0].notifiedCount, 0);
   }
 });
+test('auto mail is excluded from unseen SLA but still alerts when undelivered', () => {
+  const h = harness(); send(h, { auto: true }); poll(h);
+  h.advance(h.sla.normal + 1); assert.equal(h.fleetMailSweep().active, 0);
+  assert.deepEqual(h.getFleetMailAlerts({}).alerts, []);
+  const u = harness(); send(u, { auto: true }); u.advance(u.sla.undelivered + 1);
+  assert.equal(u.fleetMailSweep().active, 1); assert.equal(u.getFleetMailAlerts({}).alerts[0].kind, 'undelivered');
+});
 test('alert upsert is one row per id; read is not acknowledgement and resolved mail is excluded', () => {
   const h = harness(); send(h); h.advance(h.sla.undelivered + 1); h.fleetMailSweep();
   const first = h.getFleetMailAlerts({}).alerts[0];

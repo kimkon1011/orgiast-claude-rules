@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
+import fs from 'node:fs';
+import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { evaluateExecTreeEditGuard } from './exec-tree-edit-guard.mjs';
@@ -25,9 +27,9 @@ test('Windows 区切り・大文字違い・混在区切りも deny', () => {
   }
 });
 
-test('nightly-repo・無関係パス・似た名前・対象外ツールは通す', () => {
+test('無関係パス・似た名前・対象外ツールは通す', () => {
   const home = os.homedir();
-  for (const file of [`${home}/.claude/nightly-repo/tools/file.mjs`, '/tmp/file.mjs', `${home}/orgiast-claude-rules-other/file.mjs`, `${home}/other/orgiast-claude-rules/file.mjs`, `${home}/orgiast-claude-rules/../other/file.mjs`]) {
+  for (const file of [`${home}/.claude/nightly-repo-other/tools/file.mjs`, '/tmp/file.mjs', `${home}/orgiast-claude-rules-other/file.mjs`, `${home}/other/orgiast-claude-rules/file.mjs`, `${home}/orgiast-claude-rules/../other/file.mjs`]) {
     assert.equal(evaluate(input('Write', file)), null);
   }
   assert.equal(evaluate(input('Read', `${home}/orgiast-claude-rules/file.mjs`)), null);
@@ -49,5 +51,48 @@ test('CLI は deny JSON を出力し、対象外・解除時・壊れたJSONは�
     assert.equal(result.stderr, '');
     if (denied) assert.equal(JSON.parse(result.stdout).hookSpecificOutput.permissionDecision, 'deny');
     else assert.equal(result.stdout, '');
+  }
+});
+
+test('nightly-repo 本体の編集4種・Windows 区切り・大文字違いは deny', () => {
+  for (const home of [os.homedir(), 'C:/Users/User']) {
+    for (const tool of ['Write', 'Edit', 'MultiEdit', 'NotebookEdit']) {
+      for (const file of [`${home}/.claude/nightly-repo/tools/x.mjs`, `${home}/.claude/nightly-repo`]) {
+        for (const target of [file, file.toUpperCase().replaceAll('/', '\\')]) {
+          const value = input(tool, target);
+          const options = { home, fs: { existsSync: () => false } };
+          const output = evaluate(value, options).hookSpecificOutput;
+          assert.equal(output.permissionDecision, 'deny');
+          assert.match(output.permissionDecisionReason, /2 分ごとに origin\/main へ reset/);
+          assert.match(output.permissionDecisionReason, /rescue\/auto-session-\*/);
+          assert.match(output.permissionDecisionReason, /worktree add <別ディレクトリ> -b <branch> origin\/main/);
+          assert.match(output.permissionDecisionReason, /gh pr create --label automerge/);
+          assert.equal(evaluate(value, { ...options, env: { ORGIAST_ALLOW_EXEC_TREE_EDIT: '1' } }), null);
+        }
+      }
+    }
+  }
+});
+
+test('nightly-repo の作業ディレクトリと .git ファイル・ディレクトリを持つ入れ子は通す', t => {
+  // Windows の tmpdir は `\` 区切り。ガードは `/` に正規化した経路で existsSync を呼ぶので、期待値も `/` で組む。
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'exec-tree-guard-')).replace(/\\/g, '/');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const root = `${home}/.claude/nightly-repo`;
+  for (const first of ['.wt/foo', 'scratch', '.work', '.work-abc', '.fleet-mail-work']) {
+    assert.equal(evaluate(input('Write', `${root}/${first}/tools/x.mjs`), { home }), null);
+  }
+  for (const [first, directory] of [['NestedClone', true], ['LinkedWorktree', false]]) {
+    fs.mkdirSync(`${root}/${first}`, { recursive: true });
+    if (directory) fs.mkdirSync(`${root}/${first}/.git`);
+    else fs.writeFileSync(`${root}/${first}/.git`, 'gitdir: elsewhere');
+    const checked = [];
+    assert.equal(evaluate(input('Edit', `${root}/${first}/tools/x.mjs`), {
+      home, fs: { existsSync: p => { checked.push(p); return fs.existsSync(p); } },
+    }), null);
+    assert.deepEqual(checked, [`${root}/${first}/.git`]);
+  }
+  for (const first of ['scratch-other', '.worker', 'tools/.work-abc', 'ordinary']) {
+    assert.equal(evaluate(input('Edit', `${root}/${first}/x.mjs`), { home }).hookSpecificOutput.permissionDecision, 'deny');
   }
 });

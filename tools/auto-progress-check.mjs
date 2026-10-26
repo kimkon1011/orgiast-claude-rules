@@ -61,7 +61,7 @@ export async function checkPromise(row, { home, now, patch, io = {} }) {
     const owner = row.owner || resolveOwner({ home });
     const origin = originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: owner, home });
     const delivery = await (io.notifyOwner ?? notifyOwner)(owner, `${origin}\n${message}`, { home });
-    if (delivery?.delivered !== 'dm') throw new Error(delivery?.reason || 'DM not delivered');
+    if (!['dm', 'toast'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'DM not delivered');
     const notifyChanges = { lastUnmetNotifiedAt: new Date(now).toISOString() };
     patch(rowKey(row), notifyChanges);
     Object.assign(row, notifyChanges);
@@ -75,7 +75,7 @@ export async function checkPromise(row, { home, now, patch, io = {} }) {
   const owner = row.owner || resolveOwner({ home });
   const origin = originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: owner, home });
   const delivery = await (io.notifyOwner ?? notifyOwner)(owner, `${origin}\n${message}`, { home });
-  if (delivery?.delivered !== 'dm') throw new Error(delivery?.reason || 'DM not delivered');
+  if (!['dm', 'toast'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'DM not delivered');
   patch(rowKey(row), { checkNotifiedResult: state });
   return state;
 }

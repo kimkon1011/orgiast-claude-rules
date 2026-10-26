@@ -222,7 +222,9 @@ export async function deliverKim(text, {
         method: 'POST', headers, body: JSON.stringify({ content }), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20_000)]) : AbortSignal.timeout(20_000),
       });
       if (!sent.ok) throw new Error(`DM送信が HTTP ${sent.status}`);
-      return { delivered: 'dm' };
+      const receipt = await sent.json();
+      if (!receipt?.id) throw new Error('DMメッセージIDを取得できません');
+      return { delivered: 'dm', httpStatus: sent.status, messageId: receipt.id, channelId, recipientId: resolvedUserId };
     } catch (error) {
       dmReason = redactSecrets(error?.message ?? error);
     }
@@ -253,7 +255,7 @@ export async function main(args = process.argv.slice(2), options = {}) {
   const kimActionRequired = args.includes('--kim-action-required');
   const text = args.filter(arg => arg !== '--kim-action-required').join(' ');
   const result = await notifyKim(text, { ...options, kimActionRequired });
-  return result.delivered === 'blocked' ? 3 : 0;
+  return result.delivered === 'blocked' ? 3 : ['dm', 'webhook', 'suppressed'].includes(result.delivered) ? 0 : 1;
 }
 
 if (isEntry(import.meta.url)) process.exitCode = await main();

@@ -165,7 +165,7 @@ export function isUnattendedRow(row, home) {
   const cwd = normalize(row.cwd), root = normalize(home);
   const request = cleanValue(row.requestText || String(row.promise || '').replace(/^API エラー（.*?）で返答できなかった依頼:\s*/, ''));
   const probe = /^(?:[「『"']?)(?:OK|了解)(?:[」』"']?)\s*とだけ\s*(?:返して(?:ください)?|返信して(?:ください)?|答えて(?:ください)?)[。.!！\s]*$/i.test(request);
-  return probe || /^c:\/windows\/system32(?:\/|$)/.test(cwd) || /(?:^|\/)\.stall-sweeper(?:\/|$)/.test(cwd) || ['nightly-repo', 'auto-session', 'scratch'].some(name => {
+  return probe || /^c:\/windows\/system32(?:\/|$)/.test(cwd) || /(?:^|\/)\.stall-sweeper(?:\/|$)/.test(cwd) || ['auto-session', 'scratch'].some(name => {
     const base = `${root}/.claude/${name}`;
     return cwd === base || cwd.startsWith(`${base}/`);
   });

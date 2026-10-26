@@ -43,7 +43,7 @@ test('masks secrets before clipping, including sender and reason', () => {
 });
 test('expired and terminal messages never appear; expired count includes cached expired state', () => {
   const result = buildContext([mail('expired', { expiresAt: new Date(NOW - 1).toISOString() }), mail('expired-cached', { status: 'expired' }), mail('done', { status: 'done' }), mail('live')], { now: NOW });
-  assert.doesNotMatch(result, /id=mail-(?:expired|done)/); assert.match(result, /期限切れ 2 件は fleet-chase が追跡中/); assert.match(result, /id=mail-live/);
+  assert.doesNotMatch(result, /id=mail-(?:expired|done)/); assert.match(result, /期限切れ 2 件は このPCの auto-progress-watch が毎時チェックし通知/); assert.match(result, /id=mail-live/);
 });
 test('headless decisions remain pending and cannot be acted on', () => {
   const { shown, context } = selectContext([mail('decision', { why: '[判断依頼] 承認' }), mail('normal')], { headless: true });
@@ -175,7 +175,7 @@ test('D5 hook launches receive-only polling with no-exec', async t => {
 test('D10 failed messages never inflate the expired footer count', () => {
   const messages = [mail('failed', { status: 'failed', expiresAt: new Date(NOW - 1).toISOString() }), mail('expired', { status: 'expired' }), mail('live')];
   const result = selectContext(messages, { now: NOW });
-  assert.match(result.context, /期限切れ 1 件は fleet-chase が追跡中/); assert.doesNotMatch(result.context, /id=mail-failed/);
+  assert.match(result.context, /期限切れ 1 件は このPCの auto-progress-watch が毎時チェックし通知/); assert.doesNotMatch(result.context, /id=mail-failed/);
 });
 
 import { updateQuestion } from './fleet-question-relay.mjs';
@@ -253,4 +253,10 @@ test('failed prompts are hidden only after 72 hours from failedAt', () => {
     assert.equal(result.shown.length, visible ? 1 : 0);
     if (!visible) assert.equal(result.context, '');
   }
+});
+
+test('期限切れの追跡案内をPCごとに切り替える', () => {
+  const messages = [mail('expired', { status: 'expired' })];
+  assert.match(buildContext(messages, { label: 'kim-PC', now: NOW }), /fleet-chase が追跡中/);
+  assert.match(buildContext(messages, { label: 'nishi-PC', now: NOW }), /このPCの auto-progress-watch が毎時チェックし通知/);
 });

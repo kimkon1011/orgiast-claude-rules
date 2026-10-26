@@ -8,6 +8,7 @@ import { resolveFleetLabel } from './lib/fleet-label.mjs';
 
 export const CHECK_TIMEOUT_MS = 30000;
 export const MAX_CHECK_TIMEOUT_MS = 300000;
+export const UNMET_INTERVAL_MS = 6 * 3600000;
 // GitHub ログ取得のようにネットワーク待ちが支配的な check は行ごとに延ばせる。
 // 行の値が不正・過大なときは既定（30秒）と上限（300秒）へ丸める。check 自体を無制限にはしない。
 export function resolveCheckTimeout(row) {
@@ -40,7 +41,20 @@ export async function checkPromise(row, { home, now, patch, io = {} }) {
     verdict: state === 'done' ? 'done' : state === 'error' ? 'check_error' : overdue ? 'unmet' : 'in_progress',
     ...(state === 'done' ? { status: 'done', doneAt: row.doneAt || new Date(now).toISOString() } : {}) };
   patch(rowKey(row), changes);
-  if (state === 'unmet' && !overdue) return state;
+  if (state === 'unmet' && !overdue) {
+    const lastNotified = Date.parse(row.lastUnmetNotifiedAt || row.ts) || 0;
+    if (now - lastNotified < UNMET_INTERVAL_MS) return state;
+    const next = oneLine(row.nextClaude || 'check の実行ログと対象の受け口を調査し、原因を修正して再確認する');
+    const message = `未達: ${changes.checkText} / 次の手: ${next}`;
+    const owner = row.owner || resolveOwner({ home });
+    const origin = originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: owner, home });
+    const delivery = await (io.notifyOwner ?? notifyOwner)(owner, `${origin}\n${message}`, { home });
+    if (delivery?.delivered !== 'dm') throw new Error(delivery?.reason || 'DM not delivered');
+    const notifyChanges = { lastUnmetNotifiedAt: new Date(now).toISOString() };
+    patch(rowKey(row), notifyChanges);
+    Object.assign(row, notifyChanges);
+    return state;
+  }
   if (state !== 'done') (io.queueCheckFollowup ?? queueCheckFollowup)(home, row, result);
   // State, not volatile stdout/count/timestamps, determines duplicate delivery.
   if (row.checkNotifiedResult === state) return state;

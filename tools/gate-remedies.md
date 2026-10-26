@@ -115,7 +115,7 @@ Agent/Task の model を sonnet/haiku に明示。実装は node tools/codex-do.
 ## next-action-gate
 
 次にすること・自動進行・セッション終了可否を末尾に明記する。
-「この後の自動進行」が空・「なし」で始まる値以外なら、CronCreate で毎時の進捗チェックを登録する（:00/:30 を避け、未完了項目を確認し、変化時だけ報告、完了で CronDelete）。現在ターンのバックグラウンド Agent/Bash/PowerShell も可。subagents と CLAUDE_HEADLESS=1 はこの検査の対象外。
+「この後の自動進行」が空・「なし」で始まる値以外なら、node tools/auto-progress.mjs --add-check --session <id> --check "<cmd>" --deadline +24h --label "<名前>" --next-claude "<次の手>" で進捗チェックを登録する。現在ターンのバックグラウンド Agent/Bash/PowerShell も可。subagents と CLAUDE_HEADLESS=1 はこの検査の対象外。
 人に作業を残す時は、このターンで実装・設定・依頼送信・ルール追加した具体物を `恒久策:` 行に書く。初回だけなら `恒久策: 一回限り: <理由>`。
 例外は `[PERMANENT-FIX-OK: <10文字以上の理由>]`。倉庫作業の依頼送信の検査は免除しない。
 倉庫の物理作業は `node tools/discord-dm.mjs <倉庫担当> --body-file <本文>` で依頼し、「倉庫担当へ依頼済み」と報告して kim の次の作業から外す。

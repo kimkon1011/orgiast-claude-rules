@@ -81,9 +81,28 @@ export function latestOpenPromises(rows) {
 }
 
 // 同一 sessionId の open 行は最新で置換する（旧行は superseded）。resumed も「進行中の宣言」なので置換対象。
+// 同じ session に open の check 付き行があるときは、新しい約束行に check 情報を引き継ぐ。
 export function applyPromise(rows, record) {
-  const next = rows.map((row) => (row.sessionId === record.sessionId && OPEN_STATUSES.has(row.status) ? { ...row, status: 'superseded' } : row));
-  next.push(record);
+  let toAdd = record;
+  if (!toAdd.check) {
+    const existing = rows
+      .filter((row) => row.sessionId === record.sessionId && OPEN_STATUSES.has(row.status) && row.check)
+      .sort((a, b) => (Date.parse(b.ts) || 0) - (Date.parse(a.ts) || 0))[0];
+    if (existing) {
+      toAdd = {
+        ...toAdd,
+        check: existing.check,
+        checkCwd: existing.checkCwd ?? toAdd.cwd,
+        deadlineAt: existing.deadlineAt,
+        label: existing.label,
+        nextClaude: existing.nextClaude,
+        ...(existing.checkTimeoutMs ? { checkTimeoutMs: existing.checkTimeoutMs } : {}),
+        ...(existing.lastUnmetNotifiedAt ? { lastUnmetNotifiedAt: existing.lastUnmetNotifiedAt } : {}),
+      };
+    }
+  }
+  const next = rows.map((row) => (row.sessionId === toAdd.sessionId && OPEN_STATUSES.has(row.status) ? { ...row, status: 'superseded' } : row));
+  next.push(toAdd);
   return next;
 }
 
@@ -124,8 +143,9 @@ export function record(input, { home, now, hostname, user, owner, readText = (p)
   const row = buildRecord(input, text, { now, hostname, user, owner: owner ?? resolveOwner({ home }) });
   if (!row) return null;
   const file = ledgerFile(home);
-  writeLedger(file, applyPromise(readLedger(file), row));
-  return row;
+  const rows = applyPromise(readLedger(file), row);
+  writeLedger(file, rows);
+  return rows.at(-1);
 }
 
 async function main() {

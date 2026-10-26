@@ -124,10 +124,9 @@ export function reportsCloseSteps(text) {
   return numbered('1') && numbered('2') && numbered('3');
 }
 
-// Cron evidence survives user turns; background evidence belongs only to this turn.
-// Use the conservative latest-create/latest-delete fallback when job ids vary.
+// auto-progress --add-check survives user turns (the ledger carries the check forward); background evidence belongs only to this turn.
 function hasSessionWakeup(raw) {
-  let cronActive = false;
+  let autoProgress = false;
   let background = false;
   for (const line of String(raw || '').split(/\r?\n/)) {
     let entry;
@@ -142,14 +141,18 @@ function hasSessionWakeup(raw) {
     if (role !== 'assistant') continue;
     for (const tool of parts) {
       if (tool?.type !== 'tool_use') continue;
-      if (tool.name === 'CronCreate') cronActive = true;
-      if (tool.name === 'CronDelete') cronActive = false;
+      if (/^(?:Bash|PowerShell)$/.test(tool.name || '')) {
+        const cmd = String(tool.input?.command || tool.input?.script || '');
+        if (/\bauto-progress(?:\.mjs)?\b/.test(cmd) && /--add-check\b/.test(cmd) && !/--help\b/.test(cmd)) {
+          autoProgress = true;
+        }
+      }
       // Completion detection is deliberately conservative: any current-turn call counts.
       if ((tool.name === 'Agent' && tool.input?.run_in_background !== false)
         || (/^(?:Bash|PowerShell)$/.test(tool.name || '') && tool.input?.run_in_background === true)) background = true;
     }
   }
-  return cronActive || background;
+  return autoProgress || background;
 }
 
 export function judgeNextAction(text, transcriptRaw = '', input = {}) {
@@ -211,7 +214,7 @@ export function judgeNextAction(text, transcriptRaw = '', input = {}) {
   }
   if (!permanentFix && hasAutopilot && process.env.CLAUDE_HEADLESS !== '1'
     && !/subagents/i.test(input.transcript_path || '') && !hasSessionWakeup(transcriptRaw)) {
-    return { decision: 'block', code: 'AUTOPILOT-NO-SESSION-WAKEUP', reason: '「この後の自動進行」が残っていますが、このセッションを定期的に起こす仕組みがありません。CronCreate で毎時の進捗チェック（:00/:30 を避ける・未完了項目・変化時だけ報告・完了で CronDelete）を登録してから終えてください。自動進行が無いなら「この後の自動進行: なし」と書いてください。' };
+    return { decision: 'block', code: 'AUTOPILOT-NO-SESSION-WAKEUP', reason: '「この後の自動進行」が残っていますが、このセッションを定期的に起こす仕組みがありません。node tools/auto-progress.mjs --add-check --session <id> --check "<cmd>" --deadline +24h --label "<名前>" --next-claude "<次の手>" で進捗確認を登録してから終えてください。自動進行が無いなら「この後の自動進行: なし」と書いてください。' };
   }
   return permanentFix || { decision: 'pass', reason: 'valid-footer' };
 }

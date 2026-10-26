@@ -401,17 +401,26 @@ test('短文・質問でも明示した次の作業には恒久策が必要', ()
 const promiseText = `確認を続けます。\n次に kim がすること: なし\nこの後の自動進行: 私が毎時進捗を確認して変化時に報告します\nこのセッション: ${SESSION_PHRASES.open}`;
 const use = (name, input = {}) => row('assistant', [{ type: 'tool_use', name, input }]);
 const cron = use('CronCreate', { cron: '17 * * * *', recurring: true });
+const addCheckCmd = 'node tools/auto-progress.mjs --add-check --session test --check "cmd" --deadline +24h --label "test" --next-claude "retry"';
+const addCheckBash = use('Bash', { command: addCheckCmd });
+const addCheckPs = use('PowerShell', { command: addCheckCmd });
 
-test('自動進行の約束だけではblock、CronCreateがあればpass', () => {
-  assert.equal(judgeNextAction(promiseText).code, 'AUTOPILOT-NO-SESSION-WAKEUP');
-  assert.equal(judgeNextAction(promiseText, cron).decision, 'pass');
-  assert.equal(judgeNextAction(promiseText, `${cron}\n${row('user', '続けて')}`).decision, 'pass');
+test('自動進行の約束だけではblock、CronCreateだけもblock、ブロック文にauto-progress.mjs --add-checkを含む', () => {
+  const blocked = judgeNextAction(promiseText);
+  assert.equal(blocked.code, 'AUTOPILOT-NO-SESSION-WAKEUP');
+  assert.match(blocked.reason, /auto-progress\.mjs --add-check/);
+  assert.doesNotMatch(blocked.reason, /変化時だけ報告/);
+  // CronCreate だけのターンはブロックされる（セッション内のみで user に届かないため）
+  assert.equal(judgeNextAction(promiseText, cron).code, 'AUTOPILOT-NO-SESSION-WAKEUP');
+  assert.equal(judgeNextAction(promiseText, `${cron}\n${row('user', '続けて')}`).code, 'AUTOPILOT-NO-SESSION-WAKEUP');
 });
 
-test('CronDelete後はblock、再作成後はpass', () => {
-  const deleted = `${cron}\n${use('CronDelete', { id: 'job-1' })}`;
-  assert.equal(judgeNextAction(promiseText, deleted).code, 'AUTOPILOT-NO-SESSION-WAKEUP');
-  assert.equal(judgeNextAction(promiseText, `${deleted}\n${cron}`).decision, 'pass');
+test('auto-progress --add-check 実行があればpass、登録は次ターン以降も有効（台帳が check を引き継ぐ）', () => {
+  assert.equal(judgeNextAction(promiseText, addCheckBash).decision, 'pass');
+  assert.equal(judgeNextAction(promiseText, addCheckPs).decision, 'pass');
+  assert.equal(judgeNextAction(promiseText, `${addCheckBash}\n${row('user', [{ type: 'tool_result', content: 'registered' }])}`).decision, 'pass');
+  assert.equal(judgeNextAction(promiseText, `${addCheckBash}\n${row('user', '新たな依頼')}`).decision, 'pass');
+  assert.equal(judgeNextAction(promiseText, row('user', '新たな依頼')).code, 'AUTOPILOT-NO-SESSION-WAKEUP');
 });
 
 test('空・なし・なしで始まる値には起床手段は不要', () => {

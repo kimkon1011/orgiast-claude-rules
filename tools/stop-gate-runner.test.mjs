@@ -481,7 +481,8 @@ test('自動進行の起床手段をtranscript_pathから検査しsubagentsは�
   const text = '確認を続けます。\n次に kim がすること: なし\nこの後の自動進行: 私が毎時進捗を確認して変化時に報告します\nこのセッション: まだ閉じない（作業中）';
   for (const [name, raw, subagent, blocked] of [
     ['missing', '', false, true],
-    ['cron', JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', name: 'CronCreate', input: { cron: '17 * * * *' } }] } }), false, false],
+    ['cron', JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', name: 'CronCreate', input: { cron: '17 * * * *' } }] } }), false, true],
+    ['add-check', JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash', input: { command: 'node tools/auto-progress.mjs --add-check --session s --check "cmd" --deadline +24h --label "l"' } }] } }), false, false],
     ['subagent', '', true, false],
   ]) {
     const dir = subagent ? path.join(home, 'subagents') : home;

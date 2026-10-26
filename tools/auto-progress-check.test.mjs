@@ -40,10 +40,48 @@ test('watch: before deadline stays open; overdue queues once and retries DM; rec
   await watch({ home, now: later, io }); await watch({ home, now: later, io });
   assert.equal(deliveries, 3);
   const row = readLedger(ledgerFile(home))[0];
-  assert.equal(row.status, 'done'); assert.equal(row.checkText, '確認結果');
+  assert.equal(readLedger(ledgerFile(home))[0].status, 'done'); assert.equal(row.checkText, '確認結果');
   assert.equal((await digest({ home, now: later, io: { notify: () => assert.fail('duplicate digest') } })).sent, false);
-});
-test('watch: failed completion delivery retries without running check again; dry run has no side effects', async () => {
+  });
+  test('watch: 未達（code=1）でも6時間ごとに owner へ定期的に状況を DM する', async () => {
+  const home = tmp();
+  addCheck({ home, now, session: 'unmet-session', check: 'node check.mjs', label: '着信確認', deadline: '+24h', nextClaude: '再試行する' });
+  const messages = [];
+  const io = {
+    ...baseIo,
+    executeCheck: () => ({ code: 1, text: '未達: まだ届いていません' }),
+    notifyOwner: async (_, text) => {
+      messages.push(text);
+      return { delivered: 'dm' };
+    },
+  };
+  // 登録直後（0h）: 6時間未満なのでDMしない
+  await watch({ home, now, io });
+  assert.equal(messages.length, 0);
+
+  // 1時間後: 6時間未満なのでDMしない
+  await watch({ home, now: now + 3600000, io });
+  assert.equal(messages.length, 0);
+
+  // 6時間後: 1回目の定期DMが送信される
+  await watch({ home, now: now + 6 * 3600000, io });
+  assert.equal(messages.length, 1);
+  assert.match(messages[0], /未達: 未達: まだ届いていません \/ 次の手: 再試行する/);
+
+  // 7時間後: 前回DMから1時間なので再送しない
+  await watch({ home, now: now + 7 * 3600000, io });
+  assert.equal(messages.length, 1);
+
+  // 12時間後: 前回DMから6時間経過で2回目の定期DM
+  await watch({ home, now: now + 12 * 3600000, io });
+  assert.equal(messages.length, 2);
+
+  // 24時間後（期限切れ）: overdue の未達（期限超過）通知
+  await watch({ home, now: now + 24 * 3600000, io });
+  assert.equal(messages.length, 3);
+  assert.match(messages[2], /未達（期限超過）/);
+  });
+  test('watch: failed completion delivery retries without running check again; dry run has no side effects', async () => {
   const home = tmp(); register(home); let checks = 0, sends = 0;
   const io = { ...baseIo, executeCheck: () => { checks++; return { code: 0, text: '完了' }; }, notifyOwner: async () => ({ delivered: ++sends === 1 ? 'none' : 'dm' }) };
   const before = fs.readFileSync(ledgerFile(home), 'utf8');

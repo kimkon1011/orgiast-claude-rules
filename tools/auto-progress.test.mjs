@@ -5,7 +5,7 @@ import path from 'node:path';
 import test, { after } from 'node:test';
 import vm from 'node:vm';
 import { main as registerTasks } from './register-auto-progress-task.mjs';
-import { isNoopPromise, extractPromise, extractNextKim, applyPromise, buildRecord, record, readLedger, ledgerFile, rowKey, originLine } from './auto-progress-ledger.mjs';
+import { isNoopPromise, extractPromise, extractNextKim, applyPromise, buildRecord, record, readLedger, writeLedger, ledgerFile, rowKey, originLine } from './auto-progress-ledger.mjs';
 import { run as watch, parseVerdict, deterministicVerdict, judge, GRACE_MS, RESUME_INTERVAL_MS, MAX_RESUMES, postSheet, resumeSession, recentFiles, EXPIRE_UNATTENDED_MS, FALLBACK_STALL_MS, formatDoneMessage, readableReason, formatDoneBacklogMessages } from './auto-progress-watch.mjs';
 import { run as digest, selectRows, formatDigest, isUnattendedRow, WINDOW_MS, MAX_ITEMS, needsDm, verdictOf, cleanText, isHumanActionRequired, waitingNotificationKey } from './auto-progress-digest.mjs';
 import { runRegisterPs1 } from './lib/run-register-ps1.mjs';
@@ -41,6 +41,35 @@ test('applyPromise: 同一 sessionId の open は superseded になり新行が 
   assert.equal(next[3].status, 'open');
 });
 
+test('applyPromise: check付き行の後にStopが約束行を書いても最新open行にcheckを引き継ぐ', () => {
+  const checkRow = {
+    sessionId: 's-check',
+    ts: '2026-10-26T00:00:00Z',
+    status: 'open',
+    check: 'node check.mjs',
+    checkCwd: '/app',
+    deadlineAt: '2026-10-27T00:00:00Z',
+    label: '着信確認',
+    nextClaude: '再試行',
+  };
+  const stopRow = {
+    sessionId: 's-check',
+    ts: '2026-10-26T00:05:00Z',
+    status: 'open',
+    promise: 'この後の自動進行テキスト',
+    nextKim: 'なし',
+  };
+  const rows = applyPromise([checkRow], stopRow);
+  assert.equal(rows[0].status, 'superseded');
+  assert.equal(rows[1].status, 'open');
+  assert.equal(rows[1].check, 'node check.mjs');
+  assert.equal(rows[1].checkCwd, '/app');
+  assert.equal(rows[1].deadlineAt, '2026-10-27T00:00:00Z');
+  assert.equal(rows[1].label, '着信確認');
+  assert.equal(rows[1].nextClaude, '再試行');
+  assert.equal(rows[1].promise, 'この後の自動進行テキスト');
+});
+
 test('record: hook 入力から台帳へ追記し、再記録で置換。なしは書かない', () => {
   const home = tmp();
   const input = { session_id: 'sess', cwd: '/w', transcript_path: '/t.jsonl', last_assistant_message: '次に kim がすること: なし\nこの後の自動進行: 明朝に再実行' };
@@ -51,6 +80,31 @@ test('record: hook 入力から台帳へ追記し、再記録で置換。なし�
   assert.deepEqual(rows.map((r) => r.status), ['superseded', 'open']);
   assert.equal(record({ ...input, last_assistant_message: 'この後の自動進行: なし' }, { home }), null);
   assert.equal(readLedger(ledgerFile(home)).length, 2);
+});
+
+test('record: check付き行の後にStop hookがrecordを実行しても最新open行にcheckが残る', () => {
+  const home = tmp();
+  const file = ledgerFile(home);
+  writeLedger(file, [{
+    sessionId: 's-stop',
+    ts: '2026-10-26T00:00:00Z',
+    status: 'open',
+    check: 'node check.mjs',
+    checkCwd: '/app',
+    deadlineAt: '2026-10-27T00:00:00Z',
+    label: '着信確認',
+    nextClaude: '再試行',
+  }]);
+  const input = { session_id: 's-stop', cwd: '/app', last_assistant_message: '次に kim がすること: なし\nこの後の自動進行: 明朝に再確認' };
+  const recorded = record(input, { home, hostname: 'PC', user: 'u', now: Date.parse('2026-10-26T00:05:00Z') });
+  assert.equal(recorded.check, 'node check.mjs');
+  const rows = readLedger(file);
+  const openRows = rows.filter(r => r.sessionId === 's-stop' && r.status === 'open');
+  assert.equal(openRows.length, 1);
+  assert.equal(openRows[0].check, 'node check.mjs');
+  assert.equal(openRows[0].checkCwd, '/app');
+  assert.equal(openRows[0].label, '着信確認');
+  assert.equal(openRows[0].nextClaude, '再試行');
 });
 
 test('buildRecord: sessionId が無ければ transcript 名から補う', () => {

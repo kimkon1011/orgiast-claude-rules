@@ -35,6 +35,7 @@ export function verifyApp(app, {registryFile = registryPath} = {}) {
   const validRef = v => { const list = [].concat(v ?? []); return list.length > 0 && list.every(s => /^[A-Z][A-Z0-9_]*$/.test(s)); };
   const registered = Boolean(entry && ['gas-sheet','supabase','booth-sheet','relay'].includes(entry.intake) && ['url','secret','repo','appDir'].every(k => validRef(entry.refs?.[k])));
   const checks = {
+    'submitter-history-link': /<a\b[^>]*\bdata-feedback-history-link(?:\s|=|>)/.test(markup),
     'image-attach': Object.values(imageChecks).every(Boolean),
     'kind-toggle': /不具合/.test(markup) && /要望/.test(markup) && /(?:name|id)=["']kind["']/.test(markup),
     'title-optional-body-required': Boolean(title && body && !/\brequired\b/.test(title) && /\brequired\b/.test(body) && /if\s*\(!(?:payload\.)?body\)/.test(backend)),
@@ -43,6 +44,7 @@ export function verifyApp(app, {registryFile = registryPath} = {}) {
     'zero-backlog-registered': registered,
   };
   for (const feature of kit.requiredFeatures) if (!checks[feature]) missing.push(feature);
+  if (missing.includes('submitter-history-link')) details['submitter-history-link'] = 'フォームに送信内容を見るリンクがありません';
   const integrated = kind === 'gas' ? all.some(f => /FeedbackKitIntegration\.gs$/.test(f) && /function doGet\(/.test(read(f)) && /FeedbackRelay_serveForm/.test(read(f))) : all.some(f => /[/\\]layout\.(tsx|jsx)$/.test(f) && /<FeedbackWidget\b/.test(read(f)) && /import.*FeedbackWidget/.test(read(f)));
   if (!integrated) missing.push('ui-integration');
   return {ok:!missing.length, appName:meta.appName || path.basename(root), kind, kitVersion:meta.kitVersion || null, requiredVersion:kit.version, missing, details};
@@ -51,6 +53,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   const args=process.argv.slice(2);
   try {
     if (![2,4].includes(args.length) || args[0]!=='--app' || (args.length===4 && args[2]!=='--registry')) throw new Error('--app <dir> が必要です');
-    const result=verifyApp(args[1], args[3] ? {registryFile:args[3]} : {}); console.log(JSON.stringify(result,null,2)); process.exitCode=result.ok?0:1;
-  } catch(e) {console.log(JSON.stringify({ok:false,missing:['verification-error'],error:e.message}));process.exitCode=1;}
+    // ゲートが同期子プロセスとして読むJSONを、終了前に確実に出力する。
+    const result=verifyApp(args[1], args[3] ? {registryFile:args[3]} : {}); fs.writeSync(1, JSON.stringify(result,null,2) + '\n'); process.exitCode=result.ok?0:1;
+  } catch(e) {fs.writeSync(1, JSON.stringify({ok:false,missing:['verification-error'],error:e.message}) + '\n');process.exitCode=1;}
 }

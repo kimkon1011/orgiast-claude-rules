@@ -89,7 +89,9 @@
     </label>
 
     <button type="button" id="submitBtn">送信</button>
+    <p><a data-feedback-history-link href="<?= historyUrl ?>" target="_blank" rel="noopener noreferrer">送信した内容・対応状況を見る</a></p>
     <div id="status"></div>
+    <p id="successHistory" hidden><a data-feedback-history-link href="<?= historyUrl ?>" target="_blank" rel="noopener noreferrer">送信した内容・対応状況を見る</a></p>
   </form>
 
   <script>
@@ -220,6 +222,7 @@
             btn.disabled = false;
             if (res && res.ok) {
               setStatus(res.notified === false ? '記録しました。通知は未達のため担当者が確認します。' : '送信しました。ご協力ありがとうございます。', 'ok');
+              document.getElementById('successHistory').hidden = false;
               clearForm();
             } else {
               setStatus('エラー: ' + (res && res.error ? res.error : '送信に失敗しました'), 'err');

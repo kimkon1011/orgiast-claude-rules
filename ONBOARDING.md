@@ -1353,7 +1353,7 @@ Claude新規作成は標準フォルダ「作業ファイル」直下（既存�
 
 **社員が使う自社 Web アプリは、アプリ内から不具合・要望を投稿できる窓口を必ず持たせる**（社員→kim→開発者 の手動橋渡しを廃止するため）。新規アプリを作る時・既存アプリを触る時に未搭載なら、その場で導入する。実装は都度書かず**標準パッケージ `tools/feedback-kit/`** を使う。kit は GAS / Next.js の両方を1コマンドで導入する入口で、内部で `tools/feedback-kit/gas/`（GAS）と `tools/feedback-kit/widget/`（Next.js）を呼ぶ（ドロップイン・npm依存ゼロ・Tailwind非依存のinline style・Supabase無しでもDiscord通知のみで動く3モード）。
 
-**必須6機能（`tools/feedback-kit/kit.json` の `requiredFeatures`。1つでも欠けたら未導入扱い）**:
+**必須7機能（`tools/feedback-kit/kit.json` の `requiredFeatures`。1つでも欠けたら未導入扱い）**:
 
 | 機能 | 内容 |
 |---|---|
@@ -1363,6 +1363,7 @@ Claude新規作成は標準フォルダ「作業ファイル」直下（既存�
 | `notify-on-submit` | 投稿時に kim と開発者（`FEEDBACK_OWNER_DISCORD_ID`）へ DM |
 | `dm-submitter-on-done` | 対応完了時に投稿者本人へ DM |
 | `zero-backlog-registered` | 滞留ゼロ巡回（`tools/feedback-zero-registry.json`）に登録済み |
+| `submitter-history-link` | フォームと送信完了表示に「送信した内容・対応状況を見る」リンク（`data-feedback-history-link`）。送信者が自分の投稿と状態を後から確認できる（Next.js は `/feedback/mine`、GAS は記録シートか `FEEDBACK_HISTORY_URL`）。「送った内容はどこで見られる？」という問い合わせを起こさないため（2026-10-27 辻さん質問・nishi 指示） |
 
 1行導入（正本リポジトリ orgiast-claude-rules、または `tools/` が自動配布された各PCの共通ルールフォルダで実行。kit は `tools/feedback-kit/` 一式で動くため単体ファイルの取得では動かない）:
 
@@ -1370,7 +1371,7 @@ Claude新規作成は標準フォルダ「作業ファイル」直下（既存�
 node tools/feedback-kit/install.mjs --app <対象アプリのパス> --name "<アプリ名>"
 ```
 
-既存アプリの更新は `node tools/feedback-kit/install.mjs --app <対象アプリのパス> --upgrade`（旧フォームは `.feedback-kit-backup/` へ退避してから置換）。導入後は `node tools/feedback-kit/verify.mjs --app <対象アプリのパス>` が必須6機能の欠落を JSON で返す（欠落があれば exit 1）。実投稿+read-back検証は `node tools/feedback-kit/widget/verify.mjs --url <本番URL>`（Next.js）まで通してから完了とする（§1.4）。開発側の対応キューは `node scripts/list-feedback.mjs`。**任意staffの自由記述が本番コードを無人で駆動しない**（実装はkimトリガ or レビューゲート付き）。仕様・手移植手順（Pages Router/Remix等）: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/tools/feedback-kit/widget/INSTALL.md`
+既存アプリの更新は `node tools/feedback-kit/install.mjs --app <対象アプリのパス> --upgrade`（旧フォームは `.feedback-kit-backup/` へ退避してから置換）。導入後は `node tools/feedback-kit/verify.mjs --app <対象アプリのパス>` が必須7機能の欠落を JSON で返す（欠落があれば exit 1）。実投稿+read-back検証は `node tools/feedback-kit/widget/verify.mjs --url <本番URL>`（Next.js）まで通してから完了とする（§1.4）。開発側の対応キューは `node scripts/list-feedback.mjs`。**任意staffの自由記述が本番コードを無人で駆動しない**（実装はkimトリガ or レビューゲート付き）。仕様・手移植手順（Pages Router/Remix等）: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/tools/feedback-kit/widget/INSTALL.md`
 
 **GAS（Apps Script / スプレッドシート業務アプリ）は `tools/feedback-kit/gas/` を使う**。方式Aは `FeedbackRelay.js` / `FeedbackForm.html` と `doGet` への追加、方式Bは社員が開く HTML に共通フォームへのリンクを1本置く方式。機微データを持つアプリは INSTALL.md の方式Bを使い、公開範囲やスコープを変更しない。共通フォーム URL は public リポには書かず、非公開 keyserve から `~/.claude/feedback-relay.env` の `FEEDBACK_SHARED_FORM_URL` へ配布する。新規PCはインストール時、既存PCは SessionStart の `onboarding-sync.mjs` で取得・キー単位マージされる。即時取得: 正本リポジトリで `node tools/onboarding-sync.mjs --keys-only --force`。ゲートを再実行すれば、その場で貼れる方式Bリンク（フォルダ名をアプリ名としてエンコード済み）が表示される。手順・検証: `tools/feedback-kit/gas/INSTALL.md`。
 

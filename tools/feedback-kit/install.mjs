@@ -44,6 +44,7 @@ function FeedbackKit_isHtmlOutput_(output) {
 }
 function doGet(e) {
   var params = (e && e.parameter) || {};
+  if (params.view === 'mine') return FeedbackRelay_serveHistory();
   if (params.form === 'feedback') return FeedbackRelay_serveForm({app: ${JSON.stringify(appName)}, src: params.src || ''});
   ${hasOriginal ? "var output = FeedbackKit_originalDoGet(e);\n  if (!FeedbackKit_isHtmlOutput_(output)) return output;" : `var output = FeedbackRelay_serveForm({app: ${JSON.stringify(appName)}});`}
   var template = HtmlService.createTemplateFromFile('FeedbackKitLauncher');
@@ -103,7 +104,7 @@ export function installApp({ app, name, upgrade = false, dryRun = false, registr
     writes.set(path.join(base, 'FeedbackKitLauncher.html'), launcher);
   }
   const changes = [...writes].filter(([f, text]) => !fs.existsSync(f) || source(f) !== text);
-  const widgetFiles = kind === 'next' ? files(root).filter(f => /Feedback(Widget|TriggerButton)|[/\\](layout\.(tsx|jsx)|api[/\\]feedback[/\\].*|feedback[/\\]page\.tsx|list-feedback\.mjs)$/.test(f)) : [];
+  const widgetFiles = kind === 'next' ? files(root).filter(f => /Feedback(Widget|TriggerButton)|[/\\](layout\.(tsx|jsx)|api[/\\]feedback[/\\].*|feedback[/\\](?:mine[/\\])?page\.tsx|list-feedback\.mjs)$/.test(f)) : [];
   const overwrite = changes.some(([f]) => fs.existsSync(f) && /FeedbackForm|FeedbackRelay|\.html$/i.test(f)) || widgetFiles.some(f => /FeedbackWidget/.test(path.basename(f)));
   if (overwrite && !previous.kitVersion && !upgrade) throw new Error('既存フォームがあります。--upgrade を指定してください（変更前にバックアップします）');
   if (previous.kitVersion && previous.kitVersion !== kit.version && !upgrade) throw new Error('版の更新には --upgrade が必要です');

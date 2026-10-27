@@ -8,7 +8,7 @@ import { parseHandoff, todoExclusionReason } from './auto-session.mjs';
 import { planRotation } from './next-session-rotate.mjs';
 
 function home() { return fs.mkdtempSync(path.join(os.tmpdir(), 'notify-kim-')); }
-function response({ ok = true, status = 200, json = {} } = {}) { return { ok, status, json: async () => json }; }
+function response({ ok = true, status = 200, json = { id: 'message' } } = {}) { return { ok, status, json: async () => json }; }
 
 test('token と userId で DM チャンネルを開いて投稿する', async () => {
   const calls = [];
@@ -294,4 +294,20 @@ test('notify-kim CLIはblockedでexit 3、明示例外なら送信する', async
     }), 0);
     assert.equal(calls.length, 2);
   } finally { console.error = originalError; }
+});
+
+ test('HTTP 2xxでもmessage idがなければ未達・CLIは失敗終了する', async () => {
+  const options = { home: home(), token: 'token', userId: 'user', plainJa: false, webhookFallback: false,
+    fetchImpl: async () => response({ json: { id: 'channel' } }) };
+  let calls = 0;
+  options.fetchImpl = async () => response({ json: ++calls % 2 ? { id: 'channel' } : {} });
+  assert.equal((await notifyKim('hello', options)).delivered, 'none');
+  assert.equal(await main(['hello'], options), 1);
+});
+test('DMの受領証に宛先・HTTP・message idを残す', async () => {
+  const result = await notifyKim('hello', { home: home(), token: 'token', userId: 'user', plainJa: false,
+    fetchImpl: async () => response({ json: { id: 'receipt' } }) });
+  assert.equal(result.httpStatus, 200);
+  assert.equal(result.messageId, 'receipt');
+  assert.equal(result.recipientId, 'user');
 });

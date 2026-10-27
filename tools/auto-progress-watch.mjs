@@ -17,6 +17,7 @@ import { isQuietHours, kimAction } from './auto-progress-digest.mjs';
 import { checkPromise } from './auto-progress-check.mjs';
 import { appendInbox } from './auto-progress-inbox-hook.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
+import { BLOCKER, readJson as readFleetJson, saveJson as saveFleetJson } from './lib/fleet-chase-ledger.mjs';
 import { errorKind, findUnansweredRequest } from './lib/unanswered-request.mjs';
 
 export const GRACE_MS = 1 * 3600 * 1000;
@@ -191,6 +192,8 @@ export function logDoneDm(home, row, delivery, message, now = Date.now(), io = {
       at: new Date(now).toISOString(),
       sessionId: row.sessionId,
       delivered: delivery?.delivered ?? null,
+      reason: delivery?.reason,
+      httpStatus: delivery?.httpStatus, messageId: delivery?.messageId, recipientId: delivery?.recipientId,
       text: message.slice(0, 200),
     });
     (io.appendFileSync ?? fs.appendFileSync)(file, `${payload}\n`);
@@ -321,9 +324,43 @@ async function registerUnanswered(home, now, rows, dryRun, summary, ownerOf, io)
     try {
       const message = `${originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: row.owner, home })}\nエラーで止まっていた依頼を見つけ、自動で再開します。\n依頼: ${requestText}`;
       const delivery = await (io.notifyOwner ?? notifyOwner)(row.owner, message, { home });
-      if (delivery?.delivered !== 'dm') throw new Error(delivery?.reason || 'DM not delivered');
+      if (!['dm', 'toast'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'DM not delivered');
     } catch (error) { summary.errors.push(`api-error-notify: ${String(error?.message ?? error).slice(0, 120)}`); }
   }
+}
+
+export async function watchFleetMail({ home, now, dryRun = false, io = {} }) {
+  const dir = path.join(home, '.claude');
+  const sent = readFleetJson(path.join(dir, 'fleet-mail-sent-status.json'), {});
+  const file = path.join(dir, 'auto-progress-fleet-notified.json');
+  const notified = readFleetJson(file, {});
+  const summary = { fleetExpired: 0, fleetBlocked: 0 };
+  const label = io.label ?? resolveFleetLabel(home);
+  // Only recent outbound requests: old history would flood the owner on first run.
+  const WINDOW = 7 * 24 * 3600000;
+  const due = [];
+  for (const [key, mail] of Object.entries(sent)) {
+    const id = mail?.id || key;
+    if (!mail || (mail.from && mail.from !== label) || id.startsWith('mail-reply-') || mail.replyTo) continue;
+    if (!(now - Date.parse(mail.expiresAt || mail.createdAt) < WINDOW)) continue;
+    const expired = mail.status === 'expired';
+    // A note never gets a result body, so "empty result" only means something for prompts.
+    const empty = mail.kind === 'prompt' && !String(mail.resultBody || '').trim();
+    const blocked = mail.status === 'failed' || mail.status === 'done' && (empty || BLOCKER.test(mail.resultBody || ''));
+    if (!expired && !blocked) continue;
+    summary[expired ? 'fleetExpired' : 'fleetBlocked']++;
+    if (dryRun || (Number.isFinite(notified[id]) && now - notified[id] < 24 * 3600000)) continue;
+    due.push({ id, line: `・${id}（${mail.to || '宛先不明'}）${mail.status}${blocked && mail.status === 'done' ? '（回答が空または未実施）' : ''}: ${String(mail.why || '').slice(0, 60)}` });
+  }
+  if (!due.length) return summary;
+  // One notification per run, not one per mail.
+  const message = redactSecrets(`他PCへの依頼 ${due.length} 件が止まっています。再送が必要です。\n${due.slice(0, 10).map(d => d.line).join('\n')}${due.length > 10 ? `\n…ほか ${due.length - 10} 件` : ''}\n再送: fleet-mail --send を同じ body で`);
+  const result = await (io.notifyOwner ?? notifyOwner)(io.localOwner ?? resolveOwner({ home }), message, { home });
+  if (['dm', 'toast'].includes(result?.delivered)) {
+    for (const { id } of due) notified[id] = now;
+    saveFleetJson(file, notified);
+  }
+  return summary;
 }
 
 // ---- 本体 ----------------------------------------------------------------
@@ -337,6 +374,8 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     writeLedger(file, rows.map((r) => rowKey(r) === key ? { ...r, ...changes, status: WATCHED.has(r.status) ? (changes.status ?? r.status) : r.status } : r));
   };
   const summary = { checked: 0, done: 0, noop: 0, inProgress: 0, stalled: 0, resumed: 0, reported: 0, expired: 0, graced: 0, superseded: 0, discovered: 0, errors: [] };
+  try { Object.assign(summary, await watchFleetMail({ home, now, dryRun, io })); }
+  catch { summary.fleetExpired ??= 0; summary.fleetBlocked ??= 0; summary.errors.push('fleet-mail monitoring failed'); }
   const config = (io.sheetConfig ?? sheetConfig)(home);
   // owner 未記録の行は自PCの持ち主へ。空のまま渡すと「宛先: 不明（DM 未解決）」だけになり出どころが分からない（2026-10-23 実測）。
   let localOwner;
@@ -350,7 +389,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     let delivery = null;
     try {
       delivery = await (io.notifyOwner ?? notifyOwner)(ownerOf(row), message, { home });
-      if (delivery?.delivered !== 'dm') throw new Error(delivery?.reason || 'DM not delivered');
+      if (!['dm', 'toast'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'DM not delivered');
       patch(rowKey(row), { doneNotifiedAt: new Date(now).toISOString(), doneNotifyPending: false });
     } catch (error) {
       // done は open の集合から外れるので、印を残さないと次回の巡回で拾えず結果が消える。
@@ -358,7 +397,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       summary.errors.push(`notify-done: ${String(error?.message ?? error).slice(0, 120)}`);
     }
     logDoneDm(home, row, delivery, message, now, io);
-    return delivery?.delivered === 'dm';
+    return ['dm', 'toast'].includes(delivery?.delivered);
   };
   const rows = readLedger(file);
   await registerUnanswered(home, now, rows, dryRun, summary, ownerOf, io);
@@ -412,7 +451,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       let delivery = null;
       try {
         delivery = await (io.notifyOwner ?? notifyOwner)(ownerOf(group.rows[0]), group.text, { home });
-        if (delivery?.delivered !== 'dm') throw new Error(delivery?.reason || 'DM not delivered');
+        if (!['dm', 'toast'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'DM not delivered');
         for (const row of group.rows) patch(rowKey(row), { doneNotifiedAt: new Date(now).toISOString(), doneNotifyMode: 'backlog', doneNotifyPending: false });
       } catch (error) {
         summary.errors.push(`notify-done-backlog: ${String(error?.message ?? error).slice(0, 120)}`);
@@ -435,14 +474,14 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       if (kimAction(row) !== 'なし' && !unattended && !dryRun && now - (Date.parse(row.ownerNotifiedAt || 0) || 0) >= 24 * 3600 * 1000) {
         try {
           const delivery = await askKim(row, row.reason);
-          if (delivery?.delivered !== 'dm') throw new Error(delivery?.reason || 'DM not delivered');
+          if (!['dm', 'toast'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'DM not delivered');
           patch(rowKey(row), { ownerNotifiedAt: new Date(now).toISOString() });
         } catch (error) { summary.errors.push(`notify-owner: ${String(error?.message ?? error).slice(0, 120)}`); }
       } else if (kimAction(row) === 'なし' && !unattended && !dryRun && now - (Date.parse(row.ownerNotifiedAt || 0) || 0) >= 24 * 3600 * 1000) {
         try {
           const message = `⏳ 待ち状況（自動確認）\n約束: ${String(row.promise || '').slice(0, 160)}\n待っている理由: ${String(row.reason || '').slice(0, 240)}\n最終確認: ${row.lastCheckedAt || '不明'}\nuser の操作は不要です。進展があれば自動で再開します。`;
           const delivery = await (io.notifyOwner ?? notifyOwner)(ownerOf(row), message, { home });
-          if (delivery?.delivered !== 'dm') throw new Error(delivery?.reason || 'DM not delivered');
+          if (!['dm', 'toast'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'DM not delivered');
           patch(rowKey(row), { ownerNotifiedAt: new Date(now).toISOString() });
         } catch (error) { summary.errors.push(`notify-owner: ${String(error?.message ?? error).slice(0, 120)}`); }
       }
@@ -486,7 +525,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       if (state === 'needs_user' && kimAction(current) !== 'なし' && now - (Date.parse(row.ownerNotifiedAt || 0) || 0) >= 24 * 3600 * 1000) {
         try {
           const delivery = await askKim(row, outcome.reason);
-          if (delivery?.delivered !== 'dm') throw new Error(delivery?.reason || 'DM not delivered');
+          if (!['dm', 'toast'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'DM not delivered');
           patch(rowKey(row), { ownerNotifiedAt: new Date(now).toISOString() });
         } catch (error) { summary.errors.push(`notify-owner: ${String(error?.message ?? error).slice(0, 120)}`); }
       }

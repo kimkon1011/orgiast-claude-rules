@@ -437,12 +437,14 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   if (dryRun) return { sent: false, count, text, messages };
 
   let error = '';
+  const receipts = [];
   for (const { owner, rows, message } of deliveries) {
     let result;
     try {
       result = io.notify ? await io.notify(message, { home, webhookFallback: false, owner }) : await (io.notifyOwner ?? notifyOwner)(owner, message, { home });
     } catch (cause) { result = { reason: cause?.message || String(cause) }; }
-    if (result?.delivered !== 'dm') { error = result?.reason || 'DM not delivered'; break; }
+    if (!['dm', 'toast'].includes(result?.delivered)) { error = result?.reason || 'DM not delivered'; break; }
+    receipts.push({ owner, recipientId: result.recipientId, httpStatus: result.httpStatus, messageId: result.messageId, channelId: result.channelId });
     for (const row of rows) {
       const key = rowKey(row);
       lastVerdicts[key] = verdictOf(row, now);
@@ -471,8 +473,8 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   }
 
   if (error) {
-    appendLog(home, { at: now, label, slot: slotKey || 'urgent', sent: false, count, error }, io);
-    appendSentLog(home, { at: now, label, slot: slotKey || 'urgent', sent: false, count, parts: messages.length, text: redactSecrets(text) }, io);
+    appendLog(home, { at: now, label, slot: slotKey || 'urgent', sent: false, count, error, receipts }, io);
+    appendSentLog(home, { at: now, label, slot: slotKey || 'urgent', sent: false, count, parts: messages.length, receipts, text: redactSecrets(text) }, io);
     return { sent: false, count, error };
   }
 
@@ -498,8 +500,8 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     sentKeys: nextSentKeys,
   };
   (io.writeState ?? writeState)(home, next);
-  appendLog(home, { at: now, label, slot: slotKey || 'urgent', sent: true, count, parts: messages.length }, io);
-  appendSentLog(home, { at: now, label, slot: slotKey || 'urgent', sent: true, count, parts: messages.length, text: redactSecrets(text) }, io);
+  appendLog(home, { at: now, label, slot: slotKey || 'urgent', sent: true, count, parts: messages.length, receipts }, io);
+  appendSentLog(home, { at: now, label, slot: slotKey || 'urgent', sent: true, count, parts: messages.length, receipts, text: redactSecrets(text) }, io);
   return { sent: true, count, parts: messages.length };
 }
 

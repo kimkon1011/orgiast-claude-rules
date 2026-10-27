@@ -313,3 +313,9 @@ repo/worktree=/mnt/c/Users/user/.claude/quota-sweep-repo、branch=quota-sweep/20
 - C3: 原文と同型の「検証は Codex に任せています。結果が出たらここに報告します。」は以前 detect()=[] の検出漏れだったが、46274e0（#1175 経由で HEAD に含まれる）で ARRIVAL_WAIT を拡張済み。現 HEAD で原文・同型とも W 検出、「検証が完了し結果を確認して報告します」（完了文）は [] を確認。除外は広げていない。
 - C4: 検出経路（nightly→scan）は上記 2026-10-26 記録のコード照合から変更なし。スケジューラの稼働・直近実行の実物は今回も未確認＝未達のまま。
 - C5: 単一 `node --test tools/` の1回 exit 0 は未取得（前景上限600sのため。分割 3 shard の全緑 7074 件は試行5〜7で記録）。厳密には未達。
+
+## 累積試行3（C4 夜間経路の稼働実物）
+- スケジューラ: OrgiastNightlyBatch（Ready、LastRun 2026-10-27 03:00 JST、結果 0）。実行は tools/nightly-batch.ps1 で、L122 が handoff-audit-nightly.mjs を呼び、非0なら error をログに残す。
+- 実行記録: logs/nightly-batch-2026-10-24〜27 の4日分すべてで `handoff-audit-nightly / ok`（10-27 は 03:06:33）。nightly 台帳に 2026-10-26T18:06Z の 55 行が追記されている。
+- 限界: 同回の 91cd4fa3 の1行は provider timeout で verdict=audit-unavailable（LLM 監査の欠損であり、scan 経路の検出漏れとは別）。「ok」はプロセス終了を示すだけで、全セッションの監査成功を保証しない。
+- C5 は引き続き、単一コマンドの完走が前景上限で取得できず未達（分割全緑は試行5〜7）。

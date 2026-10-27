@@ -11,10 +11,11 @@ import { isEntry } from './is-entry.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-export function buildPrompt(repo = REPO, { preFile } = {}) {
+export function buildPrompt(repo = REPO, { preFile, deadline } = {}) {
   const skill = fs.readFileSync(path.join(repo, 'skills', 'autopilot', 'SKILL.md'), 'utf8').replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '');
   const preContext = preFile ? `手順1の pre は runner が実行済み。結果は ${preFile} にある。この JSON を読んで verdict 以降の手順に進む。pre を再実行しない（重く、二重実行になる）。\n` : '';
-  return `${skill}\n\n<実行コンテキスト>\nrepo: ${repo}\n/autopilot tick を1周だけ実行する。ヘッドレスモード。ScheduleWakeup と /loop は使用しない。Codex はフォアグラウンドで完了まで待ち、post と必要な handoff を書いて終了する。次の起床はタスクスケジューラが担う。pre が error なら実装せず終了する。\n${preContext}fleet-mail の受信メールに [判断依頼] を含む依頼へは返信も判断も行わない。kim の判断待ちとして放置すること（ヘッドレスでは未読注入からも除外される）。自分が送った判断依頼への回答（[回答・返信不要] 付き）は読んで作業に使ってよいが、返信はしない。\n</実行コンテキスト>\n`;
+  const deadlineContext = deadline ? `この周は ${deadline}（UTC）に強制終了される。codex-do の --timeout は『期限までの残り秒数 − 480』以下にする（post と検証の時間を残す）。残りが 10 分を切ったら新しい委譲を始めず、ここまでの成果で post して終える。\n` : '';
+  return `${skill}\n\n<実行コンテキスト>\nrepo: ${repo}\n/autopilot tick を1周だけ実行する。ヘッドレスモード。ScheduleWakeup と /loop は使用しない。Codex はフォアグラウンドで完了まで待ち、post と必要な handoff を書いて終了する。次の起床はタスクスケジューラが担う。pre が error なら実装せず終了する。\n${preContext}${deadlineContext}fleet-mail の受信メールに [判断依頼] を含む依頼へは返信も判断も行わない。kim の判断待ちとして放置すること（ヘッドレスでは未読注入からも除外される）。自分が送った判断依頼への回答（[回答・返信不要] 付き）は読んで作業に使ってよいが、返信はしない。\n</実行コンテキスト>\n`;
 }
 export async function sampleCpuBusy({ sampleMs = 5000, cpusImpl = os.cpus, sleep } = {}) {
   const sleepFn = sleep || (ms => new Promise(resolve => setTimeout(resolve, ms)));
@@ -172,8 +173,11 @@ export async function runOnce(options = {}) {
     const model = auth.model || (fableAllowedForSupervisor(policy) ? 'claude-fable-5-1' : 'claude-opus-5');
     const repo = options.repo || REPO;
     const executable = options.executable || (await resolveClaudeExecutableFromDisk()).executable;
-    const timeoutMs = options.timeoutMs ?? 25 * 60_000;
-    const result = await (options.invokeImpl || invokeClaude)({ executable, args: ['-p', '--model', model, '--output-format', 'stream-json', '--verbose'], prompt: buildPrompt(repo, { preFile }) + (pre.jevDecision?.action === 'RETRY' ? '\n前回の Jev 判断: RETRY。直前の作業を検証し、必要な修正をやり直す。\n' : ''), cwd: repo, timeoutMs, onProgress: progress => record({ progress }),
+    const timeoutMs = options.timeoutMs ?? 40 * 60_000;
+    const rawNow = typeof options.now === 'function' ? options.now() : options.now;
+    const startMs = rawNow ? new Date(rawNow).getTime() : Date.now();
+    const deadline = new Date(startMs + timeoutMs).toISOString();
+    const result = await (options.invokeImpl || invokeClaude)({ executable, args: ['-p', '--model', model, '--output-format', 'stream-json', '--verbose'], prompt: buildPrompt(repo, { preFile, deadline }) + (pre.jevDecision?.action === 'RETRY' ? '\n前回の Jev 判断: RETRY。直前の作業を検証し、必要な修正をやり直す。\n' : ''), cwd: repo, timeoutMs, onProgress: progress => record({ progress }),
       env: { ...auth.env, AUTOPILOT_HOME: paths.dir, ORGIAST_HOME: paths.home } });
     record({ model, authLane: auth.lane, ...result, stdout: String(result.stdout || '').slice(-4000) });
     const after = await runAutopilot('status', {}, options);

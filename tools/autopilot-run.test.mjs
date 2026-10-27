@@ -45,7 +45,7 @@ test('models follow planIncluded; prompt comes from skill and headless uses one 
       assert.deepEqual(invocation.args, ['-p', '--model', model, '--output-format', 'stream-json', '--verbose']);
       assert.match(invocation.prompt, /codex-do\.mjs/);
       assert.match(invocation.prompt, /ScheduleWakeup と \/loop は使用しない/);
-      assert.equal(invocation.timeoutMs, 25 * 60_000);
+      assert.equal(invocation.timeoutMs, 40 * 60_000);
       await runAutopilot('post', { summary: 'work verified', progress: 10, codex: true }, opts);
       return { exitCode: 0, stdout: 'tail test' };
     } });
@@ -481,4 +481,49 @@ test('AUTOPILOT_SKIP_BUSY_CHECK=1 で高負荷チェックを無効化できる'
   });
   assert.equal(invoked, true);
   assert.notEqual(result.skipped, 'host_busy');
+});
+
+test('invokeImpl が受け取る timeoutMs が、options.timeoutMs 未指定時に 40*60_000 になる', async (t) => {
+  const opts = fixture(t);
+  await runAutopilot('start', { objective: 'test default timeout' }, opts);
+  let capturedTimeoutMs;
+  await runOnce({
+    ...opts,
+    invokeImpl: async (invocation) => {
+      capturedTimeoutMs = invocation.timeoutMs;
+      await runAutopilot('post', { summary: 'done', progress: 10 }, opts);
+      return { exitCode: 0 };
+    },
+  });
+  assert.equal(capturedTimeoutMs, 40 * 60_000);
+});
+
+test('invokeImpl が受け取る prompt に deadline の ISO 文字列と「残り秒数 − 480」が入る（options.now を固定して期待値を計算）', async (t) => {
+  const opts = fixture(t);
+  const now = new Date('2026-10-27T08:00:00.000Z');
+  const expectedDeadline = new Date(now.getTime() + 40 * 60_000).toISOString();
+  await runAutopilot('start', { objective: 'test prompt deadline' }, opts);
+  let capturedPrompt;
+  await runOnce({
+    ...opts,
+    now,
+    invokeImpl: async (invocation) => {
+      capturedPrompt = invocation.prompt;
+      await runAutopilot('post', { summary: 'done', progress: 10 }, opts);
+      return { exitCode: 0 };
+    },
+  });
+  assert.match(capturedPrompt, new RegExp(expectedDeadline));
+  assert.match(capturedPrompt, /残り秒数 − 480/);
+});
+
+test('buildPrompt(repo) と buildPrompt(repo, { preFile }) の出力に deadline の文言が入らない', () => {
+  const repo = path.resolve('.');
+  const promptRepoOnly = buildPrompt(repo);
+  assert.doesNotMatch(promptRepoOnly, /強制終了される/);
+  assert.doesNotMatch(promptRepoOnly, /残り秒数 − 480/);
+
+  const promptWithPreFile = buildPrompt(repo, { preFile: 'pre-latest.json' });
+  assert.doesNotMatch(promptWithPreFile, /強制終了される/);
+  assert.doesNotMatch(promptWithPreFile, /残り秒数 − 480/);
 });

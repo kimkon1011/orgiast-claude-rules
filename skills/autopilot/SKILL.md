@@ -22,6 +22,7 @@ description: '/autopilot start "<目的>" で自律ループ開始。/autopilot 
 3. `run` なら recentLog と objective から **次の1施策だけ** を選ぶ。前回の続きを優先し、同じことを2周続けない。実装・調査は必ず `tools/codex-do.mjs` に委譲する。指示を UTF-8 BOM なしのファイルに書き、目的・完了条件・対象 cwd・直近成果・今回の1施策・検証方法を含める。
 
    `node "<repo>/tools/codex-do.mjs" --prompt-file "<指示ファイル>" --cwd "<対象ディレクトリ>" --timeout 1200`
+   ヘッドレスでは <実行コンテキスト> の期限から逆算した値を使う。
 
    監督モデルが Fable / Opus のどちらでも自分で実装しない。Codex の結果を Claude 側でテスト実行と read-back により検証し、目的の完了条件に基づいて進捗 0〜100 を判定する。失敗・委譲不能も必ず post まで記録する。
 4. `node "<repo>/tools/autopilot-tick.mjs" post --summary "<何をしたか1〜2行>" --progress <0-100> --next-delay <秒> [--noop] [--codex]` を実行する。Codex を利用したら `--codex`。進捗が前周と同じ・後退・施策が実行できなかった周は必ず `--noop`。単にコマンドが成功したことを進捗として数えない。
